@@ -34,15 +34,15 @@ with a modern visual editor, live reload, and console-accurate preview modes.
 
 ## Status
 
-🚧 **Early development — Fase 1 (PC 2D) done.** The roadmap with per-phase
-acceptance criteria lives in [PLANO_EXECUCAO_TRINO.md](PLANO_EXECUCAO_TRINO.md).
+🚧 **Early development — Fase 2 (asset pipeline + live reload) done.** The roadmap with
+per-phase acceptance criteria lives in [PLANO_EXECUCAO_TRINO.md](PLANO_EXECUCAO_TRINO.md).
 
 | | PC | Nintendo 64 | Nintendo 3DS |
 |---|---|---|---|
 | Window/boot | ✅ | 🚧 Fase 4 | 🚧 Fase 5 |
 | 2D sprites, input, audio | ✅ | 🚧 Fase 4 | 🚧 Fase 5 |
 | Console-sim resolutions + golden tests | ✅ | 🚧 Fase 4 | 🚧 Fase 5 |
-| Asset pipeline + live reload | 🚧 Fase 2 | 🚧 Fase 4 | 🚧 Fase 5 |
+| Asset pipeline + live reload | ✅ | 🚧 Fase 4 | 🚧 Fase 5 |
 | Visual editor | 🚧 Fase 3 | — | — |
 | 3D | 🚧 Fase 7 | 🚧 Fase 7 | 🚧 Fase 7 |
 

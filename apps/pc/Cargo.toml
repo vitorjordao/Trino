@@ -10,9 +10,18 @@ repository.workspace = true
 name = "trino-pc"
 path = "src/main.rs"
 
+[features]
+default = []
+# Live reload: game code hot-swaps as a dylib, assets rebake+reupload on
+# save. Dev-only; console/release builds link everything statically.
+reload = ["dep:hot-lib-reloader", "trino-asset-pipeline/watch"]
+
 [dependencies]
 trino-core = { workspace = true }
+trino-game-api = { workspace = true }
 trino-platform-pc = { workspace = true }
+trino-asset-pipeline = { workspace = true }
 hello-sprite = { workspace = true }
 winit = { workspace = true }
 pollster = { workspace = true }
+hot-lib-reloader = { workspace = true, optional = true }

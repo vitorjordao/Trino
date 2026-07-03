@@ -50,9 +50,20 @@ jobs:
         if: runner.os != 'Linux'
         run: cargo test --workspace
       - run: cargo build -p trino-app-pc
+      - run: cargo build -p trino-app-pc --features reload
       - name: Smoke run (Linux, headless)
         if: runner.os == 'Linux'
         run: TRINO_SMOKE_FRAMES=60 xvfb-run -a cargo run -p trino-app-pc
+
+  hot-reload:
+    name: Hot reload E2E
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Builds the game dylib twice and swaps them under a live state.
+      - run: cargo test -p xtask --test hot_reload -- --ignored
 
   # Fase 4 adds: n64 job in the libdragon container (digest-pinned) building
   # ROMs and running ares/mupen64plus tests under xvfb.

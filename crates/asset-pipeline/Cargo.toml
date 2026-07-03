@@ -1,0 +1,24 @@
+[package]
+name = "trino-asset-pipeline"
+description = "Asset baking for Trino: manifest parsing, hybrid shared/per-platform resolution, bake to native formats, loading and hot-reload watching."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = []
+# File watching for live reload (dev-only; console builds never enable it).
+watch = ["dep:notify", "dep:notify-debouncer-full"]
+
+[dependencies]
+trino-core = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }
+png = { workspace = true }
+hound = { workspace = true }
+notify = { workspace = true, optional = true }
+notify-debouncer-full = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

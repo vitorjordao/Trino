@@ -1,0 +1,15 @@
+# Every asset the engine knows about, under a logical path.
+# Handle = fnv1a(logical path); games use SpriteId::from_path("sprites/player").
+#
+# Masters live in shared/; a file at <platform>/<same path> overrides the
+# master for that platform only. Formats are per-platform; N64 has no safe
+# default (TMEM is 4 KB) so its format must be declared explicitly.
+
+version = 1
+
+[sprites.player]
+file = "sprites/player.png"
+formats = { n64 = "CI4" }
+
+[sounds.beep]
+file = "sounds/beep.wav"

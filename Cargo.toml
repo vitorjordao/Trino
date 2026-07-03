@@ -13,6 +13,7 @@ rust-version = "1.93"
 trino-core = { path = "crates/core" }
 trino-game-api = { path = "crates/game-api" }
 trino-platform-pc = { path = "crates/platform-pc" }
+trino-asset-pipeline = { path = "crates/asset-pipeline" }
 hello-sprite = { path = "examples/hello-sprite" }
 winit = "0.30"
 # wgpu 29 = what egui-wgpu 0.35 (the editor UI, Fase 3) resolves to. Keep in
@@ -23,6 +24,14 @@ pollster = "0.4"
 bytemuck = { version = "1", features = ["derive"] }
 png = "0.18"
 serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+toml = "1"
+hound = "3"
+notify = "8"
+notify-debouncer-full = "0.6"
+hot-lib-reloader = "0.8.2"
+libloading = "0.9"
+tempfile = "3"
 
 [profile.dev]
 opt-level = 1

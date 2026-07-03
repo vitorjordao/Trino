@@ -5,9 +5,22 @@
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct SoundId(pub u32);
 
+impl SoundId {
+    /// Handle from a logical asset path, e.g. `SoundId::from_path("sounds/beep")`.
+    pub const fn from_path(logical_path: &str) -> Self {
+        SoundId(crate::asset::asset_id(logical_path))
+    }
+}
+
 /// Handle to a baked music track (`.xm64` on N64, streamed elsewhere).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct MusicId(pub u32);
+
+impl MusicId {
+    pub const fn from_path(logical_path: &str) -> Self {
+        MusicId(crate::asset::asset_id(logical_path))
+    }
+}
 
 pub trait Audio {
     /// Fire-and-forget playback of a sound effect.

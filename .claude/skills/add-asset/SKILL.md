@@ -1,39 +1,46 @@
 ---
 name: add-asset
-description: Add a new asset (sprite, sound, music, model) to a Trino game — where to put masters, how to write the per-platform manifest, and how to rebake.
+description: Add a new asset (sprite, sound) to a Trino game — master file placement, manifest declaration, per-platform formats, baking and live reload.
 ---
 
 # add-asset
 
-> The asset pipeline lands in **Fase 2** (see PLANO_EXECUCAO_TRINO.md). Until then this
-> skill documents the layout so files land in the right place.
+## Steps
 
-## Layout
-
-- Master files go in `assets/shared/<category>/<name>.<ext>` (PNG, WAV, GLTF).
-- A platform-specific replacement goes in `assets/<platform>/<same relative path>` and
-  **wins over** the shared master for that platform only.
-- Each asset directory may have a `manifest.toml` declaring per-platform formats:
+1. Put the master file under `assets/shared/<category>/<name>.<ext>`:
+   - sprites: PNG (RGB or RGBA)
+   - sounds: WAV (PCM 16-bit or float, mono or stereo)
+2. Declare it in `assets/manifest.toml` under a logical path:
 
 ```toml
-[sprites.player]
-n64 = { format = "CI4" }      # 4-bit palettized, fits TMEM
-3ds = { format = "RGBA8" }
-# pc defaults to RGBA8
+[sprites.enemy]
+file = "sprites/enemy.png"
+formats = { n64 = "CI4" }   # REQUIRED for n64: CI4, CI8 or RGBA5551
+
+[sounds.jump]
+file = "sounds/jump.wav"
 ```
+
+3. Reference it from game code by logical path (const, checked nowhere at
+   compile time — bake validates):
+
+```rust
+pub const ENEMY: SpriteId = SpriteId::from_path("sprites/enemy");
+pub const JUMP: SoundId = SoundId::from_path("sounds/jump");
+```
+
+4. Bake and verify: `cargo xtask assets pc` (and `n64`/`3ds` once those
+   phases land) — any format/resolution problem is a bake **error**.
+5. Run `cargo xtask test` — pipeline tests must stay green.
 
 ## Rules
 
-- N64 texture budget is 4 KB TMEM. `Caps::N64.validate_texture` is the check the
-  pipeline applies; prefer CI4/CI8 formats and small sprites.
-- An asset that a platform cannot represent is a **build error**, never a silent
-  fallback.
-- Handles (`SpriteId` etc.) derive from the logical path (`sprites/player`), so renaming
-  a file is a breaking change for scenes referencing it.
-
-## After adding (from Fase 2 on)
-
-```
-cargo xtask assets <platform>   # bake
-cargo xtask test                # pipeline snapshot tests must still pass
-```
+- N64 textures must declare an explicit format; TMEM is 4 KB
+  (`Caps::N64.validate_texture`). Prefer CI4/CI8, keep sprites small.
+- A platform-specific replacement goes at `assets/<platform>/<same path>`
+  and silently wins **for that platform only**. A missing source anywhere
+  is a bake error, never a fallback.
+- Renaming a logical path changes the handle — breaking for scenes/code
+  referencing it. Renames are refactors, not edits.
+- With `cargo xtask watch pc` (or `--features reload`), saving a master
+  rebakes and re-uploads it live under the same handle — no restart.

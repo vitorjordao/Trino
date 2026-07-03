@@ -17,6 +17,14 @@ use crate::math::{Color, Vec2, Vec3};
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct SpriteId(pub u32);
 
+impl SpriteId {
+    /// Handle from a logical asset path, e.g. `SpriteId::from_path("sprites/player")`.
+    /// `const` — use it for game constants.
+    pub const fn from_path(logical_path: &str) -> Self {
+        SpriteId(crate::asset::asset_id(logical_path))
+    }
+}
+
 /// Handle to a baked 3D model (Fase 7).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct ModelId(pub u32);

@@ -1,18 +1,21 @@
 //! Minimal example game: a sprite that moves with stick/d-pad and beeps on A.
 //!
-//! `no_std` and dependency-free on purpose — this exact crate must compile
-//! for PC, N64 and 3DS. The platform app uploads the actual pixel/sample
-//! data for [`PLAYER_SPRITE`] and [`BEEP`] (until the asset pipeline arrives
-//! in Fase 2, handles are agreed constants).
+//! Dependency-free on purpose — this exact crate must compile for PC, N64
+//! and 3DS. `no_std` is enforced on bare-metal targets (N64); on PC the
+//! dylib build links std only for its panic handler — game code itself must
+//! never use std APIs (console CI builds catch violations).
+//!
+//! Handles come from logical asset paths (see `assets/manifest.toml`); the
+//! platform app uploads the baked data behind them.
 
-#![cfg_attr(not(test), no_std)]
+#![cfg_attr(target_os = "none", no_std)]
 
 use trino_core::{
     Audio, Button, Color, Game, InputState, Renderer, SoundId, SpriteId, SpriteParams, Vec2,
 };
 
-pub const PLAYER_SPRITE: SpriteId = SpriteId(1);
-pub const BEEP: SoundId = SoundId(1);
+pub const PLAYER_SPRITE: SpriteId = SpriteId::from_path("sprites/player");
+pub const BEEP: SoundId = SoundId::from_path("sounds/beep");
 pub const PLAYER_SIZE: u32 = 32;
 const SPEED: f32 = 120.0; // pixels per second
 
@@ -76,6 +79,9 @@ impl Game for HelloGame {
         renderer.end_frame();
     }
 }
+
+// Hot-reload exports (trino_game_update / trino_game_render / version).
+trino_game_api::export_game!(HelloGame);
 
 #[cfg(test)]
 mod tests {

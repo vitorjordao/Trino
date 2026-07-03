@@ -18,6 +18,7 @@
 
 #![cfg_attr(not(test), no_std)]
 
+pub mod asset;
 pub mod audio;
 pub mod caps;
 pub mod game;
@@ -25,6 +26,8 @@ pub mod input;
 pub mod math;
 pub mod platform;
 pub mod render;
+
+pub use asset::asset_id;
 
 pub use audio::{Audio, MusicId, SoundId};
 pub use caps::{Caps, CapsError};

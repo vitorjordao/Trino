@@ -6,7 +6,12 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+# rlib = static link (consoles, release); dylib = hot reload on PC dev.
+[lib]
+crate-type = ["rlib", "dylib"]
+
 # Game crates may depend only on trino-core / trino-game-api
 # (enforced by xtask/tests/dep_graph.rs).
 [dependencies]
 trino-core = { workspace = true }
+trino-game-api = { workspace = true }

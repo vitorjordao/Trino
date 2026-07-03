@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/*", "apps/*", "xtask"]
+members = ["crates/*", "apps/*", "examples/*", "xtask"]
 
 [workspace.package]
 version = "0.1.0"
@@ -12,7 +12,16 @@ rust-version = "1.93"
 [workspace.dependencies]
 trino-core = { path = "crates/core" }
 trino-game-api = { path = "crates/game-api" }
+trino-platform-pc = { path = "crates/platform-pc" }
+hello-sprite = { path = "examples/hello-sprite" }
 winit = "0.30"
+# wgpu 29 = what egui-wgpu 0.35 (the editor UI, Fase 3) resolves to. Keep in
+# lockstep with the egui upgrade cadence, never bump one without the other.
+wgpu = "29"
+cpal = "0.18"
+pollster = "0.4"
+bytemuck = { version = "1", features = ["derive"] }
+png = "0.18"
 serde_json = "1"
 
 [profile.dev]

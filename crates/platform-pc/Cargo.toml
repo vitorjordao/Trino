@@ -1,0 +1,20 @@
+[package]
+name = "trino-platform-pc"
+description = "PC backend for Trino: wgpu 2D renderer with console-simulation profiles, cpal audio, keyboard input."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Within the workspace this crate may depend only on trino-core
+# (enforced by xtask/tests/dep_graph.rs). External crates are fine.
+[dependencies]
+trino-core = { workspace = true }
+wgpu = { workspace = true }
+cpal = { workspace = true }
+winit = { workspace = true }
+bytemuck = { workspace = true }
+pollster = { workspace = true }
+
+[dev-dependencies]
+png = { workspace = true }

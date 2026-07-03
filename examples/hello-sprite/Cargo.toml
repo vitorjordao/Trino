@@ -1,0 +1,12 @@
+[package]
+name = "hello-sprite"
+description = "Minimal Trino example game: move a sprite, play a sound. Depends only on trino-core — portable to all targets by construction."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Game crates may depend only on trino-core / trino-game-api
+# (enforced by xtask/tests/dep_graph.rs).
+[dependencies]
+trino-core = { workspace = true }

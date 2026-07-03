@@ -9,8 +9,14 @@ Original architecture rationale: `PLANO_ENGINE_TRINO.md` (Portuguese).
 
 ## Current state
 
-**Fase 0 (scaffold) complete.** Only the PC path works: an empty window. The build
-proceeds phase by phase — check `PLANO_EXECUCAO_TRINO.md` for what exists vs. planned.
+**Fase 1 (PC 2D) complete.** The PC path renders sprites through wgpu with
+console-simulation resolutions (offscreen 320x240 + nearest integer upscale), plays
+audio through cpal, reads keyboard input, and has golden-image tests. Consoles, asset
+pipeline, live reload and editor are still ahead — check `PLANO_EXECUCAO_TRINO.md` for
+what exists vs. planned.
+
+PC keyboard mapping: A/B = Z/X, X/Y = C/V, L/R = Q/E, Start = Enter,
+Select = Right Shift, D-pad = arrows, stick = WASD (see `crates/platform-pc/src/input.rs`).
 
 ## Repository map
 

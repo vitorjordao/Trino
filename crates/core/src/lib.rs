@@ -29,7 +29,7 @@ pub mod render;
 pub use audio::{Audio, MusicId, SoundId};
 pub use caps::{Caps, CapsError};
 pub use game::Game;
-pub use input::{Button, InputState};
+pub use input::{Button, Input, InputState};
 pub use math::{Color, Rect, Vec2, Vec3};
 pub use platform::Platform;
 pub use render::{Material, MaterialId, ModelId, Renderer, SpriteId, SpriteParams, Transform3};

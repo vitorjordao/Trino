@@ -1,0 +1,11 @@
+[package]
+name = "trino-core"
+description = "Platform-agnostic traits and math for the Trino engine. no_std, zero dependencies."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# INVARIANT: this crate must never gain a dependency.
+# Enforced by xtask/tests/dep_graph.rs, which fails CI if one is added.
+[dependencies]

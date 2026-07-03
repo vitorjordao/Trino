@@ -1,0 +1,22 @@
+[workspace]
+resolver = "2"
+members = ["crates/*", "apps/*", "xtask"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/OWNER/trino"
+rust-version = "1.93"
+
+[workspace.dependencies]
+trino-core = { path = "crates/core" }
+trino-game-api = { path = "crates/game-api" }
+winit = "0.30"
+serde_json = "1"
+
+[profile.dev]
+opt-level = 1
+
+[profile.release]
+lto = "thin"

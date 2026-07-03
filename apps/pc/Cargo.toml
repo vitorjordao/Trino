@@ -1,0 +1,15 @@
+[package]
+name = "trino-app-pc"
+description = "PC glue binary: winit window + platform-pc backend + the game."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "trino-pc"
+path = "src/main.rs"
+
+[dependencies]
+trino-core = { workspace = true }
+winit = { workspace = true }

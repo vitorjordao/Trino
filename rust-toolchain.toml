@@ -1,0 +1,5 @@
+[toolchain]
+# Stable for the workspace. Console targets (N64/3DS) pin their own nightly
+# via per-target configs introduced in Fase 4/5 — see PLANO_EXECUCAO_TRINO.md.
+channel = "stable"
+components = ["rustfmt", "clippy"]

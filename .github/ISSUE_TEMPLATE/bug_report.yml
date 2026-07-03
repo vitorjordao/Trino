@@ -1,0 +1,54 @@
+name: Bug report
+description: Something in Trino is broken
+labels: [bug]
+body:
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      description: Where does the bug happen?
+      options:
+        - PC (native)
+        - Nintendo 64
+        - Nintendo 3DS
+        - Editor
+        - Asset pipeline / xtask
+        - CI / build system
+    validations:
+      required: true
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Emulator or hardware?
+      description: For console bugs — where did you observe it?
+      options:
+        - Not a console bug
+        - Emulator — ares
+        - Emulator — mupen64plus
+        - Emulator — Azahar / Citra
+        - Real hardware
+        - Both emulator and hardware
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you expect, and what did you get instead?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. cargo xtask run n64
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: versions
+    attributes:
+      label: Versions
+      description: OS, `rustc --version`, emulator version, commit hash.
+      render: text

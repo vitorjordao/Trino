@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    name: Lint (fmt + clippy + dep graph)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  desktop:
+    name: Test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # Labels pinned on purpose: GitHub runner images are migrating through
+        # 2026 and `-latest` moves under you. macos-latest is Apple Silicon.
+        os: [ubuntu-24.04, windows-2025, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace
+      - run: cargo build -p trino-app-pc
+      # Window smoke test (Fase 1 adds rendering assertions on top of this).
+      - name: Smoke run (Linux, headless)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update && sudo apt-get install -y xvfb
+          TRINO_SMOKE_FRAMES=60 xvfb-run -a cargo run -p trino-app-pc
+
+  # Fase 4 adds: n64 job in the libdragon container (digest-pinned) building
+  # ROMs and running ares/mupen64plus tests under xvfb.
+  # Fase 5 adds: 3ds job in devkitpro/devkitarm with rust3ds/actions run-tests.

@@ -1,0 +1,29 @@
+name: Feature request
+description: Suggest an idea for Trino
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+    validations:
+      required: true
+  - type: dropdown
+    id: ceiling
+    attributes:
+      label: N64 feasibility
+      description: >
+        Trino's design ceiling is the N64 — features must be implementable on
+        all three targets. Can this work on N64 hardware?
+      options:
+        - "Yes, fits the N64"
+        - "Unsure"
+        - "No — probably out of scope"
+    validations:
+      required: true

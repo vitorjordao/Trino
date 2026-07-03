@@ -1,0 +1,10 @@
+[package]
+name = "trino-game-api"
+description = "Stable ABI boundary between the host (PC app/editor) and the hot-reloadable game dylib."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+trino-core = { workspace = true }

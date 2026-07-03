@@ -14,6 +14,7 @@ trino-core = { path = "crates/core" }
 trino-game-api = { path = "crates/game-api" }
 trino-platform-pc = { path = "crates/platform-pc" }
 trino-asset-pipeline = { path = "crates/asset-pipeline" }
+trino-scene = { path = "crates/scene" }
 hello-sprite = { path = "examples/hello-sprite" }
 winit = "0.30"
 # wgpu 29 = what egui-wgpu 0.35 (the editor UI, Fase 3) resolves to. Keep in
@@ -32,6 +33,15 @@ notify-debouncer-full = "0.6"
 hot-lib-reloader = "0.8.2"
 libloading = "0.9"
 tempfile = "3"
+ron = "0.12"
+# Editor UI. egui-wgpu 0.35 <-> wgpu 29: bump only in lockstep.
+eframe = { version = "0.35", default-features = false, features = [
+    "wgpu",
+    "default_fonts",
+    "x11",
+    "wayland",
+] }
+egui_dock = "0.20"
 
 [profile.dev]
 opt-level = 1

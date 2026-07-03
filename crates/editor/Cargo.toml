@@ -1,0 +1,20 @@
+[package]
+name = "trino-editor"
+description = "Trino's visual editor: dockable viewport with console-simulation preview, scene hierarchy, inspector, asset browser, play mode."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "trino-editor"
+path = "src/main.rs"
+
+[dependencies]
+trino-core = { workspace = true }
+trino-scene = { workspace = true }
+trino-platform-pc = { workspace = true }
+trino-asset-pipeline = { workspace = true, features = ["watch"] }
+eframe = { workspace = true }
+egui_dock = { workspace = true }
+wgpu = { workspace = true }

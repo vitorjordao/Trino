@@ -92,10 +92,17 @@ impl PcRenderer {
         .await
     }
 
-    /// Offscreen-only renderer for tests and the editor viewport.
+    /// Offscreen-only renderer for tests and tooling.
     pub async fn new_headless(profile: SimProfile) -> Result<Self, RendererError> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         Self::init(instance, None, profile).await
+    }
+
+    /// Offscreen renderer on an existing device — the editor viewport path:
+    /// sharing eframe's device lets the offscreen texture be registered
+    /// directly as an egui texture (render-to-texture, zero copies).
+    pub fn with_device(device: wgpu::Device, queue: wgpu::Queue, profile: SimProfile) -> Self {
+        Self::build(device, queue, None, profile)
     }
 
     async fn init(
@@ -121,9 +128,6 @@ impl PcRenderer {
             .await
             .map_err(|e| RendererError::Device(e.to_string()))?;
 
-        let internal_size = profile.internal_resolution();
-        let caps = profile.caps();
-
         let surface = surface.map(|(surface, width, height)| {
             let surface_caps = surface.get_capabilities(&adapter);
             // Prefer a non-sRGB format so 8-bit colors pass through the blit
@@ -147,6 +151,18 @@ impl PcRenderer {
             surface.configure(&device, &config);
             SurfaceState { surface, config }
         });
+
+        Ok(Self::build(device, queue, surface, profile))
+    }
+
+    fn build(
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        surface: Option<SurfaceState>,
+        profile: SimProfile,
+    ) -> Self {
+        let internal_size = profile.internal_resolution();
+        let caps = profile.caps();
 
         let offscreen_tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("trino-offscreen"),
@@ -359,7 +375,7 @@ impl PcRenderer {
             mapped_at_creation: false,
         });
 
-        Ok(PcRenderer {
+        PcRenderer {
             device,
             queue,
             surface,
@@ -378,7 +394,13 @@ impl PcRenderer {
             clear: Color::BLACK,
             caps,
             internal_size,
-        })
+        }
+    }
+
+    /// View of the internal framebuffer — the editor registers this as an
+    /// egui texture to show the game inside a viewport panel.
+    pub fn offscreen_view(&self) -> &wgpu::TextureView {
+        &self.offscreen_view
     }
 
     /// Upload an RGBA8 texture for `id`. Re-uploading the same id replaces

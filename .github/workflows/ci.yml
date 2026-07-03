@@ -51,9 +51,13 @@ jobs:
         run: cargo test --workspace
       - run: cargo build -p trino-app-pc
       - run: cargo build -p trino-app-pc --features reload
+      - run: cargo build -p trino-editor
       - name: Smoke run (Linux, headless)
         if: runner.os == 'Linux'
         run: TRINO_SMOKE_FRAMES=60 xvfb-run -a cargo run -p trino-app-pc
+      - name: Editor smoke (Linux, headless)
+        if: runner.os == 'Linux'
+        run: TRINO_EDITOR_SMOKE_FRAMES=30 xvfb-run -a cargo run -p trino-editor
 
   hot-reload:
     name: Hot reload E2E

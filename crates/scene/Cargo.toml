@@ -1,0 +1,12 @@
+[package]
+name = "trino-scene"
+description = "Trino's scene format: versioned RON, entities + components. The contract between editor, runtime spawning and tooling."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+trino-core = { workspace = true }
+serde = { workspace = true }
+ron = { workspace = true }

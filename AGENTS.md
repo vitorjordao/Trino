@@ -9,7 +9,7 @@ Original architecture rationale: `PLANO_ENGINE_TRINO.md` (Portuguese).
 
 ## Current state
 
-**Fase 2 (asset pipeline + live reload) complete.** Working today:
+**Fase 3 (editor v1) complete.** Working today:
 
 - PC 2D rendering (wgpu, console-sim resolutions, golden tests), audio, input.
 - Asset pipeline: `assets/manifest.toml` + shared masters + per-platform overrides →
@@ -17,8 +17,15 @@ Original architecture rationale: `PLANO_ENGINE_TRINO.md` (Portuguese).
 - Live reload: `cargo xtask watch pc` — saving a master rebakes + re-uploads it live;
   saving game source rebuilds the dylib and hot-lib-reloader swaps functions under the
   running state (`apps/pc` feature `reload`).
+- Editor (`cargo xtask editor`): dockable Viewport (render-to-texture via the real
+  `PcRenderer` on eframe's wgpu device) + Hierarchy/Inspector/Assets/Console, scene
+  save/load, sim-profile switcher, Play = separate `trino-app-pc` process, live asset
+  reload inside the editor. No gizmo yet — see `docs/adr/0001-defer-transform-gizmo.md`.
+- Scene format: **versioned RON** in `scenes/*.scene.ron` (`trino-scene` crate).
+  Removing/renaming a field bumps `SCENE_VERSION` and requires a migration in
+  `Scene::from_ron`; adding an optional defaulted field does not.
 
-Consoles and the editor are still ahead — check `PLANO_EXECUCAO_TRINO.md`.
+Consoles are still ahead — check `PLANO_EXECUCAO_TRINO.md`.
 
 PC keyboard mapping: A/B = Z/X, X/Y = C/V, L/R = Q/E, Start = Enter,
 Select = Right Shift, D-pad = arrows, stick = WASD (see `crates/platform-pc/src/input.rs`).
@@ -73,6 +80,7 @@ cargo xtask run pc        # build + launch (TRINO_SMOKE_FRAMES=60 auto-exits, fo
 cargo xtask test          # full workspace test suite (same as CI); --bless regens goldens
 cargo xtask assets pc     # bake assets into target/assets/pc
 cargo xtask watch pc      # live-reload session (code dylib + assets)
+cargo xtask editor        # launch the visual editor
 cargo xtask gen-assets    # regenerate sample masters (dev utility)
 cargo xtask build n64     # Fase 4 (Docker + libdragon)
 cargo xtask build 3ds     # Fase 5 (devkitARM + cargo-3ds)

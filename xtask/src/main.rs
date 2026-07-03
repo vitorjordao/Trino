@@ -20,6 +20,7 @@ commands:
                        --bless regenerates golden images
   assets <pc|n64|3ds>  bake assets into target/assets/<platform>
   watch pc             live-reload session: app + code & asset watching
+  editor               launch the Trino editor
   new <name>           scaffold a new game project        (Fase 8)
   gen-assets           regenerate the sample master assets (dev utility)
 ";
@@ -50,6 +51,7 @@ fn main() -> ExitCode {
             }
         },
         (Some("watch"), Some("pc")) => watch_pc(),
+        (Some("editor"), _) => cargo(&["run", "-p", "trino-editor"], &[]),
         (Some("gen-assets"), _) => gen_assets(),
 
         (Some("build" | "run" | "test" | "watch"), Some(p @ ("n64" | "3ds"))) => {

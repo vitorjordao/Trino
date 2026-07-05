@@ -37,10 +37,11 @@ and a native window on PC. (Animated editor + three-console GIF coming with Fase
 
 ## Status
 
-🚧 **Early development — Fase 7 (3D) done: a complete platformer (tilemap, physics,
-coins, music) plus vertex-lit 3D models run identically on all three targets.** Real
-ROMs boot in ares and Azahar, with automated in-emulator test harnesses. The roadmap
-with per-phase acceptance criteria lives in [PLANO_EXECUCAO_TRINO.md](PLANO_EXECUCAO_TRINO.md).
+**All 9 roadmap phases implemented** — a complete platformer (tilemap, physics, coins,
+music) plus vertex-lit 3D models run identically on all three targets; real ROMs boot
+in ares and Azahar with automated in-emulator test harnesses; `cargo xtask new`
+scaffolds AI-friendly game crates; releases are automated. The roadmap with per-phase
+acceptance criteria lives in [PLANO_EXECUCAO_TRINO.md](PLANO_EXECUCAO_TRINO.md).
 
 | | PC | Nintendo 64 | Nintendo 3DS |
 |---|---|---|---|
@@ -99,6 +100,17 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for setup details.
   represent is a build error, never a silent fallback.
 - **Everything goes through `cargo xtask`** — build, run, test, bake assets, watch,
   scaffold. No per-platform incantations to memorize.
+
+## Creating a game
+
+```sh
+cargo xtask new my-game    # scaffolds examples/my-game (game code + AGENTS.md)
+cargo test -p my-game      # its tests join the workspace suite immediately
+```
+
+Game crates depend only on `trino-core` — the dependency-direction test enforces it —
+so anything you build runs on all three targets by construction. Standalone project
+scaffolding (outside this repo) lands once the engine crates are published.
 
 ## Working on Trino (humans & AIs)
 

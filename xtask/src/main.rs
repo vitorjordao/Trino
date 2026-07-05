@@ -25,7 +25,7 @@ commands:
   watch <pc|n64>       live-reload session (pc: dylib hot swap; n64: rebuild
                        ROM + relaunch ares)
   editor               launch the Trino editor
-  new <name>           scaffold a new game project        (Fase 8)
+  new <name>           scaffold a new game crate under examples/
   gen-assets           regenerate the sample master assets (dev utility)
 ";
 
@@ -83,7 +83,11 @@ fn main() -> ExitCode {
         (Some("run"), Some("3ds")) => n3ds::run(),
         (Some("test"), Some("3ds")) => n3ds::test(),
         (Some("watch"), Some("3ds")) => n3ds::watch(),
-        (Some("new"), _) => not_yet("new", "Fase 8"),
+        (Some("new"), Some(name)) => new_game(name),
+        (Some("new"), None) => {
+            eprintln!("xtask: usage: cargo xtask new <kebab-case-name>");
+            ExitCode::FAILURE
+        }
 
         (Some("help") | None, _) => {
             print!("{HELP}");
@@ -611,7 +615,120 @@ fn cargo(args: &[&str], envs: &[(&str, &str)]) -> ExitCode {
     }
 }
 
-fn not_yet(what: &str, phase: &str) -> ExitCode {
-    eprintln!("xtask: `{what}` arrives in {phase} — see PLANO_EXECUCAO_TRINO.md");
-    ExitCode::FAILURE
+/// Scaffold a new game crate from `templates/new-game/` into `examples/`.
+/// The workspace member glob picks it up automatically; every generated
+/// project ships its own AGENTS.md (AI-friendly by construction).
+fn new_game(name: &str) -> ExitCode {
+    match scaffold_game(&repo_root(), name) {
+        Ok(dir) => {
+            println!("created {}", dir.display());
+            println!("\nnext steps:");
+            println!("  cargo test -p {name}     # its unit tests join the workspace suite");
+            println!(
+                "  edit apps/* to launch {name} instead of the platformer (see its AGENTS.md)"
+            );
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("xtask: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Testable core of `new_game`: render the template into `<root>/examples/<name>`.
+fn scaffold_game(root: &Path, name: &str) -> Result<PathBuf, String> {
+    let valid = !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        && name.chars().next().is_some_and(|c| c.is_ascii_lowercase());
+    if !valid {
+        return Err(format!(
+            "`{name}` is not a valid crate name — use kebab-case (e.g. my-game)"
+        ));
+    }
+    let dest = root.join("examples").join(name);
+    if dest.exists() {
+        return Err(format!("{} already exists", dest.display()));
+    }
+    let snake = name.replace('-', "_");
+    let camel: String = name
+        .split('-')
+        .map(|w| {
+            let mut c = w.chars();
+            match c.next() {
+                Some(f) => f.to_ascii_uppercase().to_string() + c.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect();
+
+    copy_template(
+        &root.join("templates/new-game"),
+        &dest,
+        name,
+        &snake,
+        &camel,
+    )?;
+    Ok(dest)
+}
+
+fn copy_template(
+    from: &Path,
+    to: &Path,
+    name: &str,
+    snake: &str,
+    camel: &str,
+) -> Result<(), String> {
+    std::fs::create_dir_all(to).map_err(|e| e.to_string())?;
+    for entry in std::fs::read_dir(from).map_err(|e| format!("{}: {e}", from.display()))? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let src = entry.path();
+        let dst = to.join(entry.file_name());
+        if src.is_dir() {
+            copy_template(&src, &dst, name, snake, camel)?;
+        } else {
+            let text =
+                std::fs::read_to_string(&src).map_err(|e| format!("{}: {e}", src.display()))?;
+            let rendered = text
+                .replace("{{name}}", name)
+                .replace("{{name_snake}}", snake)
+                .replace("{{name_camel}}", camel);
+            std::fs::write(&dst, rendered).map_err(|e| format!("{}: {e}", dst.display()))?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{copy_template, repo_root, scaffold_game};
+
+    #[test]
+    fn scaffold_renders_placeholders() {
+        let temp = std::env::temp_dir().join(format!("trino-scaffold-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        // Give the fake root a verbatim copy of the real template.
+        copy_template(
+            &repo_root().join("templates/new-game"),
+            &temp.join("templates/new-game"),
+            "{{name}}",
+            "{{name_snake}}",
+            "{{name_camel}}",
+        )
+        .unwrap();
+
+        let dir = scaffold_game(&temp, "my-game").unwrap();
+        let lib = std::fs::read_to_string(dir.join("src/lib.rs")).unwrap();
+        assert!(lib.contains("MyGameGame"), "camel-case game struct");
+        assert!(!lib.contains("{{"), "no placeholders left");
+        let manifest = std::fs::read_to_string(dir.join("Cargo.toml")).unwrap();
+        assert!(manifest.contains("name = \"my-game\""));
+        assert!(dir.join("AGENTS.md").exists());
+
+        assert!(scaffold_game(&temp, "my-game").is_err(), "already exists");
+        assert!(scaffold_game(&temp, "Bad_Name").is_err(), "invalid name");
+        let _ = std::fs::remove_dir_all(&temp);
+    }
 }

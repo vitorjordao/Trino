@@ -1,0 +1,145 @@
+# Release automation: when main's workspace version has no tag yet, tag it
+# and publish a GitHub release with the editor binaries (3 OSes), the demo
+# ROM (.z64), the demo 3DS app (.3dsx) and SHA256SUMS.
+#
+# NOTE: this workflow has not run yet (the repo has no GitHub remote so far);
+# expect a shakedown on the first release. Upgrade path documented in
+# PLANO_EXECUCAO_TRINO.md: release-plz (crates.io) and cargo-dist
+# (installers) once the project publishes crates.
+
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    name: Tag if version is new
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      created: ${{ steps.tag.outputs.created }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Read workspace version
+        id: version
+        run: |
+          VERSION=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)"/\1/')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+      - name: Create tag when missing
+        id: tag
+        run: |
+          TAG="v${{ steps.version.outputs.version }}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "created=false" >> "$GITHUB_OUTPUT"
+          else
+            git tag "$TAG"
+            git push origin "$TAG"
+            echo "created=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  editor:
+    name: Editor (${{ matrix.os }})
+    needs: tag
+    if: needs.tag.outputs.created == 'true'
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            artifact: trino-editor-linux-x86_64
+            binary: trino-editor
+          - os: windows-2025
+            artifact: trino-editor-windows-x86_64
+            binary: trino-editor.exe
+          - os: macos-latest
+            artifact: trino-editor-macos-arm64
+            binary: trino-editor
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Linux system deps
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - run: cargo build --release -p trino-editor
+      - name: Stage artifact
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp "target/release/${{ matrix.binary }}" "dist/${{ matrix.artifact }}${{ runner.os == 'Windows' && '.exe' || '' }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/*
+
+  demo-n64:
+    name: Demo ROM (N64)
+    needs: tag
+    if: needs.tag.outputs.created == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Cache toolchain image
+        id: image-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/trino-n64.tar
+          key: trino-n64-image-${{ hashFiles('docker/n64/Dockerfile') }}
+      - name: Load cached toolchain image
+        if: steps.image-cache.outputs.cache-hit == 'true'
+        run: docker load -i ~/trino-n64.tar
+      - run: cargo xtask build n64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: trino-demo-n64
+          path: target/n64/trino.z64
+
+  demo-3ds:
+    name: Demo app (3DS)
+    needs: tag
+    if: needs.tag.outputs.created == 'true'
+    runs-on: ubuntu-24.04
+    container: devkitpro/devkitarm:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust (nightly + rust-src)
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --profile minimal --default-toolchain nightly --component rust-src
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo xtask build 3ds
+      - uses: actions/upload-artifact@v4
+        with:
+          name: trino-demo-3ds
+          path: target/3ds/trino.3dsx
+
+  release:
+    name: Publish release
+    needs: [tag, editor, demo-n64, demo-3ds]
+    if: needs.tag.outputs.created == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: cd dist && sha256sum * > SHA256SUMS
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.tag.outputs.version }}
+          generate_release_notes: true
+          files: dist/*

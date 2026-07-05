@@ -1,28 +1,33 @@
 # Contributing to Trino
 
-Thanks for your interest! Trino is early — the roadmap in `PLANO_EXECUCAO_TRINO.md`
-(Portuguese) tells you exactly what exists and what is coming, phase by phase.
+Thanks for your interest! The roadmap in `PLANO_EXECUCAO_TRINO.md` (Portuguese) and
+the current-state section of [AGENTS.md](AGENTS.md) tell you exactly what exists.
 
 ## Getting set up
 
 ### PC development (all you need for most work)
 
 1. Install Rust via [rustup](https://rustup.rs). The workspace builds on stable;
-   `rust-toolchain.toml` picks the right one automatically.
+   `rust-toolchain.toml` picks the right one automatically. Console builds also
+   need nightly: `rustup toolchain install nightly --component rust-src`.
 2. `cargo xtask run pc` — if a window opens, you are set.
 
-### N64 (from Fase 4)
+### N64
 
-- Docker (Desktop on Windows/macOS). `cargo xtask build n64` runs the official
-  libdragon container for you — no manual toolchain setup.
-- Testing: [ares](https://ares-emu.net) for accuracy, mupen64plus for screenshot tests.
+- Docker reachable from the shell (on Windows, WSL2 with dockerd is enough — no
+  Docker Desktop required). `cargo xtask build n64` builds the pinned libdragon
+  toolchain image and the ROM for you — no manual toolchain setup.
+- Testing: [ares](https://ares-emu.net) at `ares-v148/` in the repo root;
+  `cargo xtask test n64` drives it automatically.
 - Real hardware (optional): a flashcart (SummerCart64 / EverDrive) + UNFLoader.
 
-### 3DS (from Fase 5)
+### 3DS
 
 - [devkitPro](https://devkitpro.org/wiki/Getting_Started) with the `3ds-dev` group
-  (Windows has a graphical installer), plus `cargo install cargo-3ds`.
-- Testing: [Azahar](https://azahar-emu.org) locally; CI runs a headless Citra fork.
+  (Windows has a graphical installer). No cargo-3ds needed — xtask drives the
+  built-in `armv6k-nintendo-3ds` target directly.
+- Testing: [Azahar](https://azahar-emu.org) (auto-detected, or set `TRINO_AZAHAR`);
+  `cargo xtask test 3ds` drives it automatically.
 
 ## Workflow
 

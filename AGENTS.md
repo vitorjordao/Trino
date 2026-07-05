@@ -9,7 +9,7 @@ Original architecture rationale: `PLANO_ENGINE_TRINO.md` (Portuguese).
 
 ## Current state
 
-**Fase 7 (3D) complete.** Working today:
+**All 9 roadmap phases (0–8) implemented.** Working today:
 
 - PC 2D rendering (wgpu, console-sim resolutions, golden tests), audio, input.
 - Asset pipeline: `assets/manifest.toml` + shared masters + per-platform overrides →
@@ -70,8 +70,18 @@ Original architecture rationale: `PLANO_ENGINE_TRINO.md` (Portuguese).
   v1 limits (in the ADR): painter's sort (no z-buffer), vertex colors only,
   no near-plane clipping. Deferred: editor 3D viewport/gizmo.
 
-Next: Fase 8 (release 1.0: `trino new`, release.yml, docs) — check
-`PLANO_EXECUCAO_TRINO.md`.
+- **Scaffolding + release**: `cargo xtask new <name>` renders
+  `templates/new-game/` into `examples/<name>` (game crate + its own
+  AGENTS.md; the workspace glob picks it up). `release.yml` tags new
+  workspace versions on main and publishes editor binaries + demo
+  `.z64`/`.3dsx` + SHA256SUMS — written but never exercised (no GitHub
+  remote yet; expect a shakedown on the first release).
+
+Deferred backlog (each with a note where it lives): transform gizmo
+(ADR-0001), mupen64plus goldens + VI stage (AGENTS Fase 4 notes), editor
+tilemap painting + animated README GIF (Fase 6 notes), z-buffer/textured
+3D/near clipping + editor 3D viewport (ADR-0003), emulators in CI,
+standalone (out-of-repo) game scaffolding.
 
 PC keyboard mapping: A/B = Z/X, X/Y = C/V, L/R = Q/E, Start = Enter,
 Select = Right Shift, D-pad = arrows, stick = WASD (see `crates/platform-pc/src/input.rs`).
@@ -136,7 +146,7 @@ cargo xtask build 3ds     # .3dsx via local devkitPro -> target/3ds/trino.3dsx
 cargo xtask run 3ds       # build + open in Azahar (auto-detected)
 cargo xtask test 3ds      # build test app + assert magic strings (Azahar log)
 cargo xtask watch 3ds     # rebuild .3dsx + relaunch Azahar on save
-cargo xtask new <name>    # Fase 8 (scaffold a game)
+cargo xtask new <name>    # scaffold a game crate under examples/
 ```
 
 Before committing, always run the CI-equivalent locally:

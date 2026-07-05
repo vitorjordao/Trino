@@ -1,6 +1,8 @@
 [workspace]
 resolver = "2"
 members = ["crates/*", "apps/*", "examples/*", "xtask"]
+# The scaffold template carries a Cargo.toml with placeholders — never build it.
+exclude = ["templates/new-game"]
 
 [workspace.package]
 version = "0.1.0"

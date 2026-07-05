@@ -204,8 +204,24 @@ impl PcRenderer {
         });
         let offscreen_view = offscreen_tex.create_view(&wgpu::TextureViewDescriptor::default());
 
+        // The 3DS GPU samples textures bilinearly by default (citro2d), so
+        // its sim profile does too; N64/native use nearest (the N64's
+        // 3-point filter is emulated in the shader instead).
+        let sprite_filter = if profile == SimProfile::N3ds {
+            wgpu::FilterMode::Linear
+        } else {
+            wgpu::FilterMode::Nearest
+        };
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("trino-nearest"),
+            label: Some("trino-sprite-sampler"),
+            mag_filter: sprite_filter,
+            min_filter: sprite_filter,
+            ..Default::default()
+        });
+        // The window blit stays nearest: consoles output at native
+        // resolution; the integer upscale is a PC artifact and must not blur.
+        let blit_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("trino-blit-sampler"),
             mag_filter: wgpu::FilterMode::Nearest,
             min_filter: wgpu::FilterMode::Nearest,
             ..Default::default()
@@ -387,7 +403,7 @@ impl PcRenderer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
+                    resource: wgpu::BindingResource::Sampler(&blit_sampler),
                 },
             ],
         });

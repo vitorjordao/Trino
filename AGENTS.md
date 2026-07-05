@@ -9,7 +9,7 @@ Original architecture rationale: `PLANO_ENGINE_TRINO.md` (Portuguese).
 
 ## Current state
 
-**Fase 4 (Nintendo 64) complete.** Working today:
+**Fase 5 (Nintendo 3DS) complete.** Working today:
 
 - PC 2D rendering (wgpu, console-sim resolutions, golden tests), audio, input.
 - Asset pipeline: `assets/manifest.toml` + shared masters + per-platform overrides →
@@ -36,8 +36,18 @@ Original architecture rationale: `PLANO_ENGINE_TRINO.md` (Portuguese).
   `PcRenderer::set_strict`) panics with an actionable message when content
   busts the profile's `Caps`. Deferred: mupen64plus golden screenshots (ares
   is the reference emulator for now) and the VI post stage (dedither/divot).
+- **3DS**: `cargo xtask build 3ds` produces `target/3ds/trino.3dsx` — all
+  local (devkitPro install auto-detected; built-in `armv6k-nintendo-3ds`
+  Tier 3 target, C shim over libctru + citro2d in
+  `crates/platform-3ds/shim/`); `run 3ds` opens it in Azahar (auto-detected
+  or `$TRINO_AZAHAR`); `test 3ds` asserts the TRINO_TEST_* magic strings by
+  tailing Azahar's log (`svcOutputDebugString` channel); `watch 3ds`
+  rebuilds + relaunches on save. The `SimProfile::N3ds` PC renderer samples
+  sprites bilinearly (the 3DS GPU default). Skills: `build-3ds`,
+  `run-emulator`.
 
-3DS is still ahead — check `PLANO_EXECUCAO_TRINO.md`.
+Next: Fase 6 (complete platformer on all three targets) — check
+`PLANO_EXECUCAO_TRINO.md`.
 
 PC keyboard mapping: A/B = Z/X, X/Y = C/V, L/R = Q/E, Start = Enter,
 Select = Right Shift, D-pad = arrows, stick = WASD (see `crates/platform-pc/src/input.rs`).
@@ -98,7 +108,10 @@ cargo xtask build n64     # ROM via Docker toolchain -> target/n64/trino.z64
 cargo xtask run n64       # build + open in ares (ares-v148/ at repo root)
 cargo xtask test n64      # build test ROM + assert ISViewer TRINO_TEST_PASS
 cargo xtask watch n64     # rebuild ROM + relaunch ares on save
-cargo xtask build 3ds     # Fase 5 (devkitARM + cargo-3ds)
+cargo xtask build 3ds     # .3dsx via local devkitPro -> target/3ds/trino.3dsx
+cargo xtask run 3ds       # build + open in Azahar (auto-detected)
+cargo xtask test 3ds      # build test app + assert magic strings (Azahar log)
+cargo xtask watch 3ds     # rebuild .3dsx + relaunch Azahar on save
 cargo xtask new <name>    # Fase 8 (scaffold a game)
 ```
 
@@ -118,20 +131,23 @@ cargo test --workspace
   `#![cfg_attr(not(test), no_std)]` so tests can use std.
 - Golden-image tests (Fase 1+) live in `tests/golden/`; regenerate only via
   `cargo xtask test --bless` and review the diff in the PR.
-- Console tests report through debug channels (ISViewer magic strings on N64 —
-  see `apps/n64/src/lib.rs::run_self_test`; GDB-stub exit codes on 3DS in
-  Fase 5). N64 emulator tests run locally via `cargo xtask test n64`; CI
-  builds the ROM but does not run ares yet (no Linux release binary).
+- Console tests report through debug channels — ISViewer magic strings on
+  N64 (`apps/n64/src/lib.rs::run_self_test`), `svcOutputDebugString` on 3DS
+  (`apps/3ds/src/main.rs::run_self_test`, read from Azahar's log file).
+  Emulator tests run locally via `cargo xtask test n64|3ds`; CI builds the
+  ROM/.3dsx but does not boot emulators yet.
 
 ## Toolchain notes
 
-- Workspace builds on **stable** (see `rust-toolchain.toml`). The N64 target build
-  runs on **nightly** (`cargo +nightly` with `-Zbuild-std=core,alloc
-  -Zjson-target-spec`) against `platforms/n64/mips-nintendo64-none.json` — never
-  change pins or the target spec casually; they are verified combinations.
+- Workspace builds on **stable** (see `rust-toolchain.toml`). Console target
+  builds run on **nightly** with `-Zbuild-std=core,alloc`: the N64 against
+  `platforms/n64/mips-nintendo64-none.json` (plus `-Zjson-target-spec`), the
+  3DS against the built-in `armv6k-nintendo-3ds` — never change pins or the
+  target spec casually; they are verified combinations.
 - Windows: N64 builds need Docker reachable from WSL2 (Docker Desktop optional —
-  a plain in-WSL dockerd works; xtask calls `wsl docker ...`). PC development
-  needs nothing beyond Rust.
+  a plain in-WSL dockerd works; xtask calls `wsl docker ...`). 3DS builds need
+  a local devkitPro install (`3ds-dev` packages). PC development needs nothing
+  beyond Rust.
 
 ## Pitfalls
 
@@ -146,11 +162,13 @@ cargo test --workspace
   `trino_game_api::export_game!` — see `crates/game-api/src/lib.rs`. `cargo xtask watch pc`
   deliberately watches only `examples/`: a change to `crates/core` can change type
   layouts, and swapping a dylib across a layout change is UB.
-- Game crates use `#![cfg_attr(target_os = "none", no_std)]` — std exists on PC only for
-  the dylib's panic handler; game code must never call std APIs.
-- N64 FFI goes **only** through the C shim (`crates/platform-n64/shim/trino_shim.c`
-  + `crates/platform-n64/src/ffi.rs`, kept in matching pairs), and every entry
-  must stay within ≤4 scalar/pointer args, no by-value structs, no variadics,
-  no 64-bit values across the boundary — the Rust side is o32, libdragon is
-  o64, and that subset is where the two ABIs agree
-  (`docs/adr/0002-n64-abi-o32-staticlib.md`). Never call libdragon from Rust.
+- Game crates use `#![cfg_attr(any(target_os = "none", target_os = "horizon"), no_std)]`
+  (N64 is `none`, 3DS is `horizon`) — std exists on PC only for the dylib's
+  panic handler; game code must never call std APIs.
+- Console FFI goes **only** through the C shims (`crates/platform-{n64,3ds}/shim/`
+  + the matching `src/ffi.rs`, kept in pairs), and every entry must stay
+  within ≤4 scalar/pointer args, no by-value structs, no variadics, no 64-bit
+  values across the boundary. On the N64 this is a hard ABI requirement
+  (Rust is o32, libdragon is o64 — `docs/adr/0002-n64-abi-o32-staticlib.md`);
+  on the 3DS it is convention (citro2d is static-inline C, and symmetry keeps
+  the backends maintainable). Never call libdragon/libctru/citro2d from Rust.

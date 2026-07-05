@@ -3091,6 +3091,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "db97caf9d906fbde555dd62fa95ddba9eecfd14cb388e4f491a66d74cd5fb79a"
 
 [[package]]
+name = "trino-app-3ds"
+version = "0.1.0"
+dependencies = [
+ "hello-sprite",
+ "trino-core",
+ "trino-platform-3ds",
+]
+
+[[package]]
 name = "trino-app-n64"
 version = "0.1.0"
 dependencies = [
@@ -3146,6 +3155,13 @@ dependencies = [
 
 [[package]]
 name = "trino-game-api"
+version = "0.1.0"
+dependencies = [
+ "trino-core",
+]
+
+[[package]]
+name = "trino-platform-3ds"
 version = "0.1.0"
 dependencies = [
  "trino-core",

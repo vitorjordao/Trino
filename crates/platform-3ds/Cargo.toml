@@ -1,0 +1,13 @@
+[package]
+name = "trino-platform-3ds"
+description = "Nintendo 3DS backend for Trino: Rust over a thin C shim (shim/trino_shim_3ds.c) compiled against the installed devkitPro libctru + citro2d."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Within the workspace this crate may depend only on trino-core
+# (enforced by xtask/tests/dep_graph.rs). No external crates at all here:
+# everything native comes from the C shim at link time.
+[dependencies]
+trino-core = { workspace = true }

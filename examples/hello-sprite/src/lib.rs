@@ -1,14 +1,15 @@
 //! Minimal example game: a sprite that moves with stick/d-pad and beeps on A.
 //!
 //! Dependency-free on purpose — this exact crate must compile for PC, N64
-//! and 3DS. `no_std` is enforced on bare-metal targets (N64); on PC the
-//! dylib build links std only for its panic handler — game code itself must
-//! never use std APIs (console CI builds catch violations).
+//! and 3DS. `no_std` is enforced on console targets (N64 `target_os = "none"`,
+//! 3DS `target_os = "horizon"`); on PC the dylib build links std only for its
+//! panic handler — game code itself must never use std APIs (console CI
+//! builds catch violations).
 //!
 //! Handles come from logical asset paths (see `assets/manifest.toml`); the
 //! platform app uploads the baked data behind them.
 
-#![cfg_attr(target_os = "none", no_std)]
+#![cfg_attr(any(target_os = "none", target_os = "horizon"), no_std)]
 
 use trino_core::{
     Audio, Button, Color, Game, InputState, Renderer, SoundId, SpriteId, SpriteParams, Vec2,

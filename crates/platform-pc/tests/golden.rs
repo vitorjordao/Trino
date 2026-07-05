@@ -73,10 +73,10 @@ fn read_png(path: &std::path::Path) -> (u32, u32, Vec<u8>) {
     (info.width, info.height, buf)
 }
 
-/// Headless N64-profile renderer, or None on GPU-less machines (unless
-/// TRINO_REQUIRE_GPU insists).
-fn headless_renderer() -> Option<PcRenderer> {
-    match pollster::block_on(PcRenderer::new_headless(SimProfile::N64)) {
+/// Headless renderer for a sim profile, or None on GPU-less machines
+/// (unless TRINO_REQUIRE_GPU insists).
+fn headless_renderer(profile: SimProfile) -> Option<PcRenderer> {
+    match pollster::block_on(PcRenderer::new_headless(profile)) {
         Ok(r) => Some(r),
         Err(e) => {
             if std::env::var("TRINO_REQUIRE_GPU").is_ok() {
@@ -182,7 +182,7 @@ fn check_golden(renderer: &PcRenderer, name: &str, max_channel_diff: u8) {
 
 #[test]
 fn basic_scene_matches_golden() {
-    let Some(mut renderer) = headless_renderer() else {
+    let Some(mut renderer) = headless_renderer(SimProfile::N64) else {
         return;
     };
     // This golden checks the raw sprite pass; the output emulation has its
@@ -194,7 +194,7 @@ fn basic_scene_matches_golden() {
 
 #[test]
 fn n64_look_scene_matches_golden() {
-    let Some(mut renderer) = headless_renderer() else {
+    let Some(mut renderer) = headless_renderer(SimProfile::N64) else {
         return;
     };
     // Explicit (it already defaults to on for the N64 profile) so the test
@@ -205,8 +205,18 @@ fn n64_look_scene_matches_golden() {
 }
 
 #[test]
+fn n3ds_scene_matches_golden() {
+    // 400x240 + bilinear sprite sampling (the 3DS GPU default).
+    let Some(mut renderer) = headless_renderer(SimProfile::N3ds) else {
+        return;
+    };
+    draw_test_scene(&mut renderer);
+    check_golden(&renderer, "n3ds_scene", MAX_CHANNEL_DIFF);
+}
+
+#[test]
 fn strict_mode_rejects_texture_over_budget() {
-    let Some(mut renderer) = headless_renderer() else {
+    let Some(mut renderer) = headless_renderer(SimProfile::N64) else {
         return;
     };
     renderer.set_strict(true);

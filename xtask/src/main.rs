@@ -4,6 +4,7 @@
 //! target. Wraps cargo, the asset pipeline, Docker (N64) and emulators so
 //! contributors and CI never memorize per-platform incantations.
 
+mod n3ds;
 mod n64;
 
 use std::path::{Path, PathBuf};
@@ -53,6 +54,15 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        (Some("assets"), Some("3ds" | "n3ds")) => {
+            match n3ds::bake_assets(&n3ds::repo_root(), false) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("[3ds] {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         (Some("assets"), Some(platform)) => match Platform::parse(platform) {
             Some(p) => assets(p),
             None => {
@@ -69,7 +79,10 @@ fn main() -> ExitCode {
         (Some("test"), Some("n64")) => n64::test(),
         (Some("watch"), Some("n64")) => n64::watch(),
 
-        (Some("build" | "run" | "test" | "watch"), Some("3ds")) => not_yet("3ds", "Fase 5"),
+        (Some("build"), Some("3ds")) => n3ds::build(false),
+        (Some("run"), Some("3ds")) => n3ds::run(),
+        (Some("test"), Some("3ds")) => n3ds::test(),
+        (Some("watch"), Some("3ds")) => n3ds::watch(),
         (Some("new"), _) => not_yet("new", "Fase 8"),
 
         (Some("help") | None, _) => {

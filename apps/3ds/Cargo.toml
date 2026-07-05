@@ -1,0 +1,16 @@
+[package]
+name = "trino-app-3ds"
+description = "3DS glue binary: libctru boot (via platform-3ds shim) + game + main loop. Builds only for the armv6k-nintendo-3ds target via `cargo xtask build 3ds`."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "trino-3ds"
+path = "src/main.rs"
+
+[dependencies]
+trino-core = { workspace = true }
+trino-platform-3ds = { workspace = true }
+hello-sprite = { workspace = true }

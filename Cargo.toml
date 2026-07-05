@@ -14,6 +14,7 @@ trino-core = { path = "crates/core" }
 trino-game-api = { path = "crates/game-api" }
 trino-platform-pc = { path = "crates/platform-pc" }
 trino-platform-n64 = { path = "crates/platform-n64" }
+trino-platform-3ds = { path = "crates/platform-3ds" }
 trino-asset-pipeline = { path = "crates/asset-pipeline" }
 trino-scene = { path = "crates/scene" }
 hello-sprite = { path = "examples/hello-sprite" }

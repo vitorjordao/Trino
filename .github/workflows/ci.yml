@@ -103,4 +103,24 @@ jobs:
       # ares ships no Linux release binary. Candidate follow-up: build ares
       # once in a cached step (or use a libretro core) and run under xvfb.
 
-  # Fase 5 adds: 3ds job in devkitpro/devkitarm with rust3ds/actions run-tests.
+  n3ds:
+    name: 3DS app (devkitARM container)
+    runs-on: ubuntu-24.04
+    container: devkitpro/devkitarm:latest
+    steps:
+      - uses: actions/checkout@v4
+      # The image ships devkitARM + libctru/citro2d/citro3d + tools at
+      # /opt/devkitpro; only Rust is missing. rust-toolchain.toml pulls
+      # stable for xtask; the target build is `cargo +nightly` w/ build-std.
+      - name: Install Rust (nightly + rust-src)
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --profile minimal --default-toolchain nightly --component rust-src
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+      - uses: Swatinem/rust-cache@v2
+      - name: Build .3dsx
+        run: cargo xtask build 3ds
+      - name: App produced
+        run: ls -l target/3ds/trino.3dsx
+      # Emulator tests (`cargo xtask test 3ds`) run locally with Azahar for
+      # now (GUI app; the harness tails its log for the magic strings).

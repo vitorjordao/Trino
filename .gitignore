@@ -17,3 +17,6 @@ Thumbs.db
 tests/**/actual/
 
 ares-v148
+
+# devkitPro installer leftovers
+install-devkitpro-pacman*

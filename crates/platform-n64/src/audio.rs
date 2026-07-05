@@ -53,16 +53,18 @@ impl Audio for N64Audio {
         if let Some(&wav) = self.sounds.get(&sound.0) {
             let channel = self.next_channel;
             self.next_channel = (self.next_channel + 1) % SFX_CHANNELS;
-            unsafe { ffi::trino_wav_play(wav, channel) }
+            unsafe { ffi::trino_wav_play(wav, channel, 0) }
         }
     }
 
-    fn play_music(&mut self, music: MusicId, _looped: bool) {
-        // Looping comes from the wav64 conversion flags (Fase 6 wires it).
+    fn play_music(&mut self, music: MusicId, looped: bool) {
+        // On the N64 looping actually comes from the wav64 file
+        // (audioconv64 --wav-loop at bake time); the flag is passed for
+        // shim-API symmetry.
         if let Some(&wav) = self.music.get(&music.0) {
             unsafe {
                 ffi::trino_channel_stop(MUSIC_CHANNEL);
-                ffi::trino_wav_play(wav, MUSIC_CHANNEL);
+                ffi::trino_wav_play(wav, MUSIC_CHANNEL, looped as u32);
             }
         }
     }

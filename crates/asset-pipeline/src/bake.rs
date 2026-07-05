@@ -37,7 +37,7 @@ impl std::error::Error for BakeError {}
 pub struct BakedEntry {
     pub logical: String,
     pub id: u32,
-    pub kind: &'static str, // "sprite" | "sound"
+    pub kind: &'static str, // "sprite" | "sound" | "music"
     pub file: String,       // output file name
     pub format: String,
     /// True if this bake changed the output bytes on disk.
@@ -116,37 +116,45 @@ pub fn bake_all(
         }
     }
 
-    for (name, decl) in &manifest.sounds {
-        let logical = format!("sounds/{name}");
-        let id = asset_id(&logical);
-        if let Some(other) = by_id.insert(id, logical.clone()) {
-            errors.push(format!("hash collision between `{other}` and `{logical}`"));
-            continue;
-        }
-        let result = (|| -> Result<BakedEntry, String> {
-            let source = resolve_source(assets_root, platform, &decl.file)?;
-            let (rate, samples) = decode_wav(&source)?;
-            let mut blob = Vec::with_capacity(12 + samples.len() * 4);
-            blob.extend_from_slice(b"TSND");
-            blob.extend_from_slice(&rate.to_le_bytes());
-            blob.extend_from_slice(&(samples.len() as u32).to_le_bytes());
-            for s in &samples {
-                blob.extend_from_slice(&s.to_le_bytes());
+    // Sounds and music share the blob format; the kind drives which audio
+    // registry they land in at load time.
+    let audio_sections = [
+        ("sounds", "sound", &manifest.sounds),
+        ("music", "music", &manifest.music),
+    ];
+    for (prefix, kind, section) in audio_sections {
+        for (name, decl) in section {
+            let logical = format!("{prefix}/{name}");
+            let id = asset_id(&logical);
+            if let Some(other) = by_id.insert(id, logical.clone()) {
+                errors.push(format!("hash collision between `{other}` and `{logical}`"));
+                continue;
             }
-            let file = format!("{id:08x}.sound");
-            let changed = write_if_changed(&out_dir.join(&file), &blob)?;
-            Ok(BakedEntry {
-                logical: logical.clone(),
-                id,
-                kind: "sound",
-                file,
-                format: "F32_MONO".into(),
-                changed,
-            })
-        })();
-        match result {
-            Ok(entry) => report.entries.push(entry),
-            Err(e) => errors.push(e),
+            let result = (|| -> Result<BakedEntry, String> {
+                let source = resolve_source(assets_root, platform, &decl.file)?;
+                let (rate, samples) = decode_wav(&source)?;
+                let mut blob = Vec::with_capacity(12 + samples.len() * 4);
+                blob.extend_from_slice(b"TSND");
+                blob.extend_from_slice(&rate.to_le_bytes());
+                blob.extend_from_slice(&(samples.len() as u32).to_le_bytes());
+                for s in &samples {
+                    blob.extend_from_slice(&s.to_le_bytes());
+                }
+                let file = format!("{id:08x}.sound");
+                let changed = write_if_changed(&out_dir.join(&file), &blob)?;
+                Ok(BakedEntry {
+                    logical: logical.clone(),
+                    id,
+                    kind,
+                    file,
+                    format: "F32_MONO".into(),
+                    changed,
+                })
+            })();
+            match result {
+                Ok(entry) => report.entries.push(entry),
+                Err(e) => errors.push(e),
+            }
         }
     }
 

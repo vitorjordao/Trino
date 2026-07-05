@@ -2356,6 +2356,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
+name = "platformer"
+version = "0.1.0"
+dependencies = [
+ "trino-core",
+ "trino-game-api",
+]
+
+[[package]]
 name = "png"
 version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3094,7 +3102,7 @@ checksum = "db97caf9d906fbde555dd62fa95ddba9eecfd14cb388e4f491a66d74cd5fb79a"
 name = "trino-app-3ds"
 version = "0.1.0"
 dependencies = [
- "hello-sprite",
+ "platformer",
  "trino-core",
  "trino-platform-3ds",
 ]
@@ -3103,7 +3111,7 @@ dependencies = [
 name = "trino-app-n64"
 version = "0.1.0"
 dependencies = [
- "hello-sprite",
+ "platformer",
  "trino-core",
  "trino-platform-n64",
 ]
@@ -3112,8 +3120,8 @@ dependencies = [
 name = "trino-app-pc"
 version = "0.1.0"
 dependencies = [
- "hello-sprite",
  "hot-lib-reloader",
+ "platformer",
  "pollster",
  "trino-asset-pipeline",
  "trino-core",
@@ -3180,6 +3188,7 @@ version = "0.1.0"
 dependencies = [
  "bytemuck",
  "cpal",
+ "platformer",
  "png",
  "pollster",
  "trino-core",
@@ -4229,12 +4238,15 @@ dependencies = [
  "libloading 0.9.0",
  "notify 8.2.0",
  "notify-debouncer-full 0.6.0",
+ "platformer",
  "png",
+ "pollster",
  "serde_json",
  "tempfile",
  "trino-asset-pipeline",
  "trino-core",
  "trino-game-api",
+ "trino-platform-pc",
 ]
 
 [[package]]

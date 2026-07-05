@@ -10,7 +10,10 @@ with a modern visual editor, live reload, and console-accurate preview modes.
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-MIT)
 [![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](rust-toolchain.toml)
 
-*(hero GIF coming in Fase 6: the editor and the same scene running on all three consoles)*
+<img src="docs/media/platformer.png" width="640" alt="Trino's showcase platformer rendered with the N64 look (3-point filtering + RGBA5551 dither)" />
+
+*The showcase platformer — one Rust crate, boots as a `.z64` on N64, a `.3dsx` on 3DS
+and a native window on PC. (Animated editor + three-console GIF coming with Fase 8.)*
 
 </div>
 
@@ -34,15 +37,16 @@ with a modern visual editor, live reload, and console-accurate preview modes.
 
 ## Status
 
-🚧 **Early development — Fase 5 (Nintendo 3DS) done: the same game runs on all three
-targets.** Real ROMs boot in ares and Azahar, with automated in-emulator test
-harnesses. The roadmap with per-phase acceptance criteria lives in
-[PLANO_EXECUCAO_TRINO.md](PLANO_EXECUCAO_TRINO.md).
+🚧 **Early development — Fase 6 (complete platformer) done: a real game — tilemap,
+physics, coins, goal, music — runs identically on all three targets.** Real ROMs boot
+in ares and Azahar, with automated in-emulator test harnesses. The roadmap with
+per-phase acceptance criteria lives in [PLANO_EXECUCAO_TRINO.md](PLANO_EXECUCAO_TRINO.md).
 
 | | PC | Nintendo 64 | Nintendo 3DS |
 |---|---|---|---|
 | Window/boot | ✅ | ✅ `.z64` in ares | ✅ `.3dsx` in Azahar |
 | 2D sprites, input, audio | ✅ | ✅ | ✅ |
+| Tilemap, collision, camera, music | ✅ | ✅ | ✅ |
 | Console-sim + golden tests | ✅ | ✅ N64 look (3-point, RGBA5551 dither) | ✅ 400×240 + bilinear |
 | Asset pipeline + live reload | ✅ | ✅ (rebuild + relaunch loop) | ✅ (rebuild + relaunch loop) |
 | Emulator test harness | — | ✅ ISViewer magic strings | ✅ svcOutputDebugString |

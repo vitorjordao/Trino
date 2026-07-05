@@ -9,7 +9,7 @@ Original architecture rationale: `PLANO_ENGINE_TRINO.md` (Portuguese).
 
 ## Current state
 
-**Fase 5 (Nintendo 3DS) complete.** Working today:
+**Fase 6 (complete platformer) complete.** Working today:
 
 - PC 2D rendering (wgpu, console-sim resolutions, golden tests), audio, input.
 - Asset pipeline: `assets/manifest.toml` + shared masters + per-platform overrides →
@@ -46,8 +46,20 @@ Original architecture rationale: `PLANO_ENGINE_TRINO.md` (Portuguese).
   sprites bilinearly (the 3DS GPU default). Skills: `build-3ds`,
   `run-emulator`.
 
-Next: Fase 6 (complete platformer on all three targets) — check
-`PLANO_EXECUCAO_TRINO.md`.
+- **Showcase platformer** (`examples/platformer`, the default game in all
+  three `apps/*`): tilemap + AABB physics from `trino_core::{tilemap,collide}`
+  (ASCII levels, zero-alloc parse, substepped collision — deterministic
+  across targets, verified by unit tests and the console self-tests), coins,
+  goal, camera with bounds, chiptune music loop + SFX. Music flows through
+  the whole pipeline (`[music.*]` in the manifest → TSND on PC, wav64
+  `--wav-loop` on N64, looped ndsp wavebuf on 3DS). `hello-sprite` stays as
+  the minimal example (the hot-reload E2E builds it standalone).
+  Deferred to later phases: tilemap painting + entity placement in the
+  editor (levels are ASCII files for now), the animated README GIF (a static
+  hero shot exists — regenerate with `cargo test -p xtask --test hero_shot
+  -- --ignored`).
+
+Next: Fase 7 (3D) — check `PLANO_EXECUCAO_TRINO.md`.
 
 PC keyboard mapping: A/B = Z/X, X/Y = C/V, L/R = Q/E, Start = Enter,
 Select = Right Shift, D-pad = arrows, stick = WASD (see `crates/platform-pc/src/input.rs`).

@@ -38,7 +38,7 @@ unsafe extern "C" {
     pub fn trino_joypad_stick() -> u32;
 
     pub fn trino_wav_load(romfs_path: *const c_char) -> *mut c_void;
-    pub fn trino_wav_play(wav: *mut c_void, channel: u32);
+    pub fn trino_wav_play(wav: *mut c_void, channel: u32, looped: u32);
     pub fn trino_channel_stop(channel: u32);
     pub fn trino_audio_poll();
 

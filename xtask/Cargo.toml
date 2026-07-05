@@ -22,3 +22,6 @@ tempfile = { workspace = true }
 trino-core = { workspace = true }
 trino-game-api = { workspace = true }
 hello-sprite = { workspace = true }
+platformer = { workspace = true }
+trino-platform-pc = { workspace = true }
+pollster = { workspace = true }

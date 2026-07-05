@@ -25,7 +25,7 @@ mod n3ds {
     extern crate alloc;
 
     use alloc::format;
-    use trino_core::{Game, Input, InputState, Vec2};
+    use trino_core::{Button, Game, Input, InputState, Vec2};
     use trino_platform_3ds::{N3dsAssets, N3dsAudio, N3dsInput, N3dsRenderer, runtime};
 
     #[unsafe(no_mangle)]
@@ -39,7 +39,7 @@ mod n3ds {
         N3dsAssets::load_all(&mut renderer, &mut audio);
 
         // Top screen: 400x240.
-        let mut game = hello_sprite::HelloGame::new(Vec2::new(400.0, 240.0));
+        let mut game = platformer::PlatformerGame::new(Vec2::new(400.0, 240.0));
 
         if N3dsAssets::exists("/test_mode") {
             run_self_test(&mut game, &mut renderer, &mut audio);
@@ -59,34 +59,70 @@ mod n3ds {
         }
     }
 
-    /// Deterministic self-check exercising update + render + assets,
-    /// reporting through the debug channel.
+    /// Deterministic self-check exercising physics + render + assets,
+    /// reporting through the debug channel: settle on the ground, walk,
+    /// then jump and land back.
     fn run_self_test(
-        game: &mut hello_sprite::HelloGame,
+        game: &mut platformer::PlatformerGame,
         renderer: &mut N3dsRenderer,
         audio: &mut N3dsAudio,
     ) {
-        let start = game.pos;
-
-        // Simulate 60 frames of holding D-pad right at fixed dt.
-        let mut held = InputState::default();
-        held.set(trino_core::Button::DpadRight, true);
-        for _ in 0..60 {
-            game.update(&held, audio, 1.0 / 60.0);
+        const DT: f32 = 1.0 / 60.0;
+        let mut frame = |game: &mut platformer::PlatformerGame, input: &InputState| {
+            game.update(input, audio, DT);
             game.render(renderer);
             audio.poll();
-        }
+        };
+        let idle = InputState::default();
+        let mut right = InputState::default();
+        right.set(Button::DpadRight, true);
+        let mut jump = InputState::default();
+        jump.set(Button::A, true);
 
-        let moved = game.pos.x - start.x;
-        // 120 px/s * 1 s = 120 px (clamp-free from the center of 400x240).
-        if (moved - 120.0).abs() < 0.5 {
-            runtime::log("TRINO_TEST_PASS\n");
+        let fail = |msg: alloc::string::String| {
+            runtime::log(&format!("TRINO_TEST_FAIL:{msg}\n"));
+        };
+
+        // 1) Gravity settles the player on the floor.
+        for _ in 0..60 {
+            frame(game, &idle);
+        }
+        if !game.on_ground || game.vel.y != 0.0 {
+            fail(format!("did not settle: on_ground={}", game.on_ground));
         } else {
-            runtime::log(&format!("TRINO_TEST_FAIL:moved {moved} expected 120\n"));
+            let ground_y = game.pos.y;
+            let x0 = game.pos.x;
+            // 2) Walking moves right.
+            for _ in 0..30 {
+                frame(game, &right);
+            }
+            let walked = game.pos.x - x0;
+            // 3) Jump rises and lands back at the same height.
+            frame(game, &jump);
+            let mut peak = ground_y;
+            let mut landed = false;
+            for _ in 0..150 {
+                frame(game, &idle);
+                if game.pos.y < peak {
+                    peak = game.pos.y;
+                }
+                if game.on_ground {
+                    landed = true;
+                    break;
+                }
+            }
+            if walked < 40.0 {
+                fail(format!("walked only {walked}"));
+            } else if peak > ground_y - 30.0 {
+                fail(format!("jump peak {peak} vs ground {ground_y}"));
+            } else if !landed || (game.pos.y - ground_y).abs() > 0.01 {
+                fail(format!("landing y {} vs {ground_y}", game.pos.y));
+            } else {
+                runtime::log("TRINO_TEST_PASS\n");
+            }
         }
         while runtime::running() {
-            game.render(renderer);
-            audio.poll();
+            frame(game, &idle);
         }
     }
 }

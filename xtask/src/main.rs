@@ -194,7 +194,7 @@ fn watch_pc() -> ExitCode {
             while rx.try_recv().is_ok() {}
             println!("xtask watch: game source changed, rebuilding dylib...");
             let status = Command::new(cargo_bin())
-                .args(["build", "-p", "hello-sprite"])
+                .args(["build", "-p", "platformer"])
                 .current_dir(&root)
                 .status();
             match status {
@@ -212,10 +212,12 @@ fn gen_assets() -> ExitCode {
     let root = repo_root();
     let sprites = root.join("assets/shared/sprites");
     let sounds = root.join("assets/shared/sounds");
+    let music = root.join("assets/shared/music");
     std::fs::create_dir_all(&sprites).unwrap();
     std::fs::create_dir_all(&sounds).unwrap();
+    std::fs::create_dir_all(&music).unwrap();
 
-    // player.png: 32x32 red/white checkerboard.
+    // player.png: 32x32 red/white checkerboard (hello-sprite's sprite).
     let size = 32u32;
     let cell = size / 4;
     let mut pixels = Vec::with_capacity((size * size * 4) as usize);
@@ -231,28 +233,271 @@ fn gen_assets() -> ExitCode {
     }
     write_png(&sprites.join("player.png"), size, size, &pixels);
 
-    // beep.wav: 440 Hz sine, 150 ms, 44.1 kHz mono 16-bit, fade-out.
+    gen_platformer_sprites(&sprites);
+    gen_wav(&sounds.join("beep.wav"), &[(440.0, 0.15, Wave::Sine)], 0.25);
+    gen_wav(
+        &sounds.join("jump.wav"),
+        &[
+            (220.0, 0.05, Wave::SweepTo(660.0)),
+            (660.0, 0.08, Wave::Square),
+        ],
+        0.2,
+    );
+    gen_wav(
+        &sounds.join("coin.wav"),
+        &[(988.0, 0.06, Wave::Square), (1319.0, 0.1, Wave::Square)],
+        0.18,
+    );
+    gen_wav(
+        &sounds.join("win.wav"),
+        &[
+            (523.0, 0.12, Wave::Square),
+            (659.0, 0.12, Wave::Square),
+            (784.0, 0.12, Wave::Square),
+            (1047.0, 0.3, Wave::Square),
+        ],
+        0.2,
+    );
+    gen_theme(&music.join("theme.wav"));
+
+    println!("sample assets regenerated under assets/shared/");
+    ExitCode::SUCCESS
+}
+
+/// 16x16 sprites for the platformer, drawn as readable ASCII art.
+fn gen_platformer_sprites(dir: &Path) {
+    let put = |name: &str, art: [&str; 16], palette: &[(u8, [u8; 4])]| {
+        let mut rgba = Vec::with_capacity(16 * 16 * 4);
+        for row in art {
+            assert_eq!(row.len(), 16, "{name}: row width");
+            for b in row.bytes() {
+                let color = palette
+                    .iter()
+                    .find(|(k, _)| *k == b)
+                    .map(|(_, c)| *c)
+                    .unwrap_or([0, 0, 0, 0]); // '.' and unknown = transparent
+                rgba.extend_from_slice(&color);
+            }
+        }
+        write_png(&dir.join(name), 16, 16, &rgba);
+    };
+
+    put(
+        "hero.png",
+        [
+            "................",
+            "....HHHHHHH.....",
+            "...HHHHHHHHH....",
+            "...HSSSSSSSH....",
+            "...SSKSSKSSS....",
+            "...SSSSSSSSS....",
+            "....SSSSSS......",
+            "...BBBBBBBBB....",
+            "..BBBYBBYBBBB...",
+            "..SBBBBBBBBS....",
+            "..SBBBBBBBBS....",
+            "...BBBBBBBB.....",
+            "...BBB..BBB.....",
+            "...BBB..BBB.....",
+            "..GGGG..GGGG....",
+            "................",
+        ],
+        &[
+            (b'H', [84, 50, 25, 255]),
+            (b'S', [255, 205, 148, 255]),
+            (b'K', [20, 20, 20, 255]),
+            (b'B', [40, 80, 200, 255]),
+            (b'Y', [250, 210, 60, 255]),
+            (b'G', [90, 60, 30, 255]),
+        ],
+    );
+    put(
+        "ground.png",
+        [
+            "GGGGGGGGGGGGGGGG",
+            "GgGGGGgGGGGGGgGG",
+            "DDDDDDDDDDDDDDDD",
+            "DDDdDDDDDDDdDDDD",
+            "DDDDDDDdDDDDDDDD",
+            "DdDDDDDDDDDDDdDD",
+            "DDDDDDdDDDdDDDDD",
+            "DDdDDDDDDDDDDDDD",
+            "DDDDDdDDDDDDdDDD",
+            "DDDDDDDDDdDDDDDD",
+            "DdDDDdDDDDDDDDdD",
+            "DDDDDDDDdDDDDDDD",
+            "DDdDDDDDDDDdDDDD",
+            "DDDDDdDDDDDDDDDD",
+            "DDDDDDDDDdDDDDdD",
+            "DdDDDDDdDDDDDDDD",
+        ],
+        &[
+            (b'G', [106, 190, 48, 255]),
+            (b'g', [140, 214, 80, 255]),
+            (b'D', [143, 86, 59, 255]),
+            (b'd', [102, 57, 49, 255]),
+        ],
+    );
+    // brick.png: generated in code (regular pattern beats hand-typed art).
+    let mut brick = Vec::with_capacity(16 * 16 * 4);
+    for y in 0..16u32 {
+        for x in 0..16u32 {
+            let mortar_h = y % 4 == 3;
+            let offset = if (y / 4) % 2 == 0 { 0 } else { 4 };
+            let mortar_v = (x + offset) % 8 == 7;
+            let c: [u8; 4] = if mortar_h || mortar_v {
+                [96, 44, 44, 255]
+            } else {
+                [172, 50, 50, 255]
+            };
+            brick.extend_from_slice(&c);
+        }
+    }
+    write_png(&dir.join("brick.png"), 16, 16, &brick);
+
+    // coin.png: circle with a rim and a highlight.
+    let mut coin = Vec::with_capacity(16 * 16 * 4);
+    for y in 0..16i32 {
+        for x in 0..16i32 {
+            let dx = x - 8;
+            let dy = y - 8;
+            let d2 = dx * dx + dy * dy;
+            let c: [u8; 4] = if d2 <= 25 {
+                if dx <= -2 && dy <= -2 {
+                    [255, 246, 160, 255] // highlight
+                } else {
+                    [252, 224, 40, 255]
+                }
+            } else if d2 <= 36 {
+                [216, 140, 20, 255] // rim
+            } else {
+                [0, 0, 0, 0]
+            };
+            coin.extend_from_slice(&c);
+        }
+    }
+    write_png(&dir.join("coin.png"), 16, 16, &coin);
+
+    put(
+        "flag.png",
+        [
+            "..M.............",
+            "..MFFFFFFF......",
+            "..MFFFFFFFFF....",
+            "..MFFFFFFFFFFF..",
+            "..MFFFFFFFFF....",
+            "..MFFFFFFF......",
+            "..M.............",
+            "..M.............",
+            "..M.............",
+            "..M.............",
+            "..M.............",
+            "..M.............",
+            "..M.............",
+            "..M.............",
+            ".MMM............",
+            "................",
+        ],
+        &[(b'M', [120, 120, 130, 255]), (b'F', [60, 200, 80, 255])],
+    );
+}
+
+enum Wave {
+    Sine,
+    Square,
+    /// Linear frequency sweep from the note's own frequency to this one.
+    SweepTo(f32),
+}
+
+/// Note sequence -> mono 16-bit wav at 44.1 kHz with a soft per-note decay.
+fn gen_wav(path: &Path, notes: &[(f32, f32, Wave)], volume: f32) {
     let rate = 44_100u32;
-    let frames = (rate as f32 * 0.15) as usize;
     let spec = hound::WavSpec {
         channels: 1,
         sample_rate: rate,
         bits_per_sample: 16,
         sample_format: hound::SampleFormat::Int,
     };
-    let mut writer = hound::WavWriter::create(sounds.join("beep.wav"), spec).unwrap();
-    for i in 0..frames {
-        let t = i as f32 / rate as f32;
-        let fade = 1.0 - i as f32 / frames as f32;
-        let sample = (t * 440.0 * std::f32::consts::TAU).sin() * 0.25 * fade;
-        writer
-            .write_sample((sample * i16::MAX as f32) as i16)
-            .unwrap();
+    let mut writer = hound::WavWriter::create(path, spec).unwrap();
+    for (freq, dur, wave) in notes {
+        let frames = (rate as f32 * dur) as usize;
+        let mut phase = 0.0f32;
+        for i in 0..frames {
+            let t = i as f32 / frames as f32;
+            let f = match wave {
+                Wave::SweepTo(to) => freq + (to - freq) * t,
+                _ => *freq,
+            };
+            phase += f * std::f32::consts::TAU / rate as f32;
+            let s = match wave {
+                Wave::Sine => phase.sin(),
+                _ => {
+                    if phase.sin() >= 0.0 {
+                        1.0
+                    } else {
+                        -1.0
+                    }
+                }
+            };
+            let fade = 1.0 - t * t;
+            writer
+                .write_sample((s * volume * fade * i16::MAX as f32) as i16)
+                .unwrap();
+        }
     }
     writer.finalize().unwrap();
+}
 
-    println!("sample assets regenerated under assets/shared/");
-    ExitCode::SUCCESS
+/// theme.wav: a 3.2 s seamless-ish chiptune loop (square lead + pulse bass).
+fn gen_theme(path: &Path) {
+    let rate = 44_100u32;
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: rate,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    // (lead Hz, bass Hz) per 0.2 s step, 16 steps.
+    let steps: [(f32, f32); 16] = [
+        (262.0, 131.0),
+        (330.0, 131.0),
+        (392.0, 165.0),
+        (330.0, 165.0),
+        (440.0, 175.0),
+        (392.0, 175.0),
+        (330.0, 165.0),
+        (294.0, 165.0),
+        (262.0, 131.0),
+        (330.0, 131.0),
+        (392.0, 165.0),
+        (523.0, 165.0),
+        (440.0, 175.0),
+        (494.0, 196.0),
+        (523.0, 196.0),
+        (392.0, 131.0),
+    ];
+    let mut writer = hound::WavWriter::create(path, spec).unwrap();
+    let step_frames = (rate as f32 * 0.2) as usize;
+    let mut lead_phase = 0.0f32;
+    let mut bass_phase = 0.0f32;
+    for (lead, bass) in steps {
+        for i in 0..step_frames {
+            let t = i as f32 / step_frames as f32;
+            lead_phase += lead * std::f32::consts::TAU / rate as f32;
+            bass_phase += bass * std::f32::consts::TAU / rate as f32;
+            let l = if lead_phase.sin() >= 0.0 { 1.0 } else { -1.0 };
+            // Narrow pulse for the bass (25% duty).
+            let b = if (bass_phase / std::f32::consts::TAU).fract() < 0.25 {
+                1.0
+            } else {
+                -1.0
+            };
+            let env = if t < 0.05 { t / 0.05 } else { 1.0 - t * 0.3 };
+            let s = (l * 0.10 + b * 0.05) * env;
+            writer.write_sample((s * i16::MAX as f32) as i16).unwrap();
+        }
+    }
+    writer.finalize().unwrap();
 }
 
 fn write_png(path: &Path, width: u32, height: u32, rgba: &[u8]) {

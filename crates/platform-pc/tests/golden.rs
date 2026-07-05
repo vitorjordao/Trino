@@ -215,6 +215,66 @@ fn n3ds_scene_matches_golden() {
 }
 
 #[test]
+fn platformer_scene_matches_golden() {
+    // The real showcase game after a deterministic input script, rendered
+    // with procedural stand-in sprites (goldens must not depend on the
+    // committed PNG masters).
+    let Some(mut renderer) = headless_renderer(SimProfile::N64) else {
+        return;
+    };
+    renderer.set_n64_look(false);
+
+    renderer.upload_sprite(
+        platformer::HERO,
+        16,
+        16,
+        &checkerboard(16, [40, 80, 200, 255], [255, 205, 148, 255]),
+    );
+    renderer.upload_sprite(
+        platformer::GROUND,
+        16,
+        16,
+        &checkerboard(16, [106, 190, 48, 255], [143, 86, 59, 255]),
+    );
+    renderer.upload_sprite(
+        platformer::BRICK,
+        16,
+        16,
+        &checkerboard(16, [172, 50, 50, 255], [96, 44, 44, 255]),
+    );
+    renderer.upload_sprite(platformer::COIN, 16, 16, &gradient(16));
+    renderer.upload_sprite(
+        platformer::FLAG,
+        16,
+        16,
+        &checkerboard(16, [60, 200, 80, 255], [120, 120, 130, 255]),
+    );
+
+    struct NullAudio;
+    impl trino_core::Audio for NullAudio {
+        fn play_sound(&mut self, _: trino_core::SoundId) {}
+        fn play_music(&mut self, _: trino_core::MusicId, _: bool) {}
+        fn stop_music(&mut self) {}
+        fn set_master_volume(&mut self, _: f32) {}
+    }
+
+    use trino_core::{Button, Game, InputState};
+    let mut game = platformer::PlatformerGame::new(Vec2::new(320.0, 240.0));
+    let mut audio = NullAudio;
+    let mut right = InputState::default();
+    right.set(Button::DpadRight, true);
+    let mut jump = right;
+    jump.set(Button::A, true);
+    for i in 0..90 {
+        let input = if i == 60 { &jump } else { &right };
+        game.update(input, &mut audio, 1.0 / 60.0);
+    }
+    game.render(&mut renderer);
+
+    check_golden(&renderer, "platformer_scene", MAX_CHANNEL_DIFF);
+}
+
+#[test]
 fn strict_mode_rejects_texture_over_budget() {
     let Some(mut renderer) = headless_renderer(SimProfile::N64) else {
         return;

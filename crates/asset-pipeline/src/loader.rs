@@ -38,6 +38,7 @@ pub struct LoadedSound {
 pub struct LoadedAssets {
     pub sprites: Vec<LoadedSprite>,
     pub sounds: Vec<LoadedSound>,
+    pub music: Vec<LoadedSound>,
 }
 
 /// Load every baked asset from `out_dir`. `only` filters by handle (used by
@@ -81,7 +82,7 @@ pub fn load_dir(out_dir: &Path, only: Option<&[u32]>) -> Result<LoadedAssets, St
                     rgba,
                 });
             }
-            "sound" => {
+            "sound" | "music" => {
                 let (magic, rest) = bytes.split_at(4);
                 if magic != b"TSND" || rest.len() < 8 {
                     return Err(format!("{}: bad sound blob", path.display()));
@@ -96,12 +97,17 @@ pub fn load_dir(out_dir: &Path, only: Option<&[u32]>) -> Result<LoadedAssets, St
                     .chunks_exact(4)
                     .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
                     .collect();
-                out.sounds.push(LoadedSound {
+                let loaded = LoadedSound {
                     logical: entry.logical,
                     id: entry.id,
                     sample_rate,
                     samples,
-                });
+                };
+                if entry.kind == "music" {
+                    out.music.push(loaded);
+                } else {
+                    out.sounds.push(loaded);
+                }
             }
             other => return Err(format!("unknown asset kind `{other}`")),
         }

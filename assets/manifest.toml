@@ -11,5 +11,37 @@ version = 1
 file = "sprites/player.png"
 formats = { n64 = "CI4" }
 
+[sprites.hero]
+file = "sprites/hero.png"
+formats = { n64 = "CI4" }
+
+[sprites.ground]
+file = "sprites/ground.png"
+formats = { n64 = "CI4" }
+
+[sprites.brick]
+file = "sprites/brick.png"
+formats = { n64 = "CI4" }
+
+[sprites.coin]
+file = "sprites/coin.png"
+formats = { n64 = "CI4" }
+
+[sprites.flag]
+file = "sprites/flag.png"
+formats = { n64 = "CI4" }
+
 [sounds.beep]
 file = "sounds/beep.wav"
+
+[sounds.jump]
+file = "sounds/jump.wav"
+
+[sounds.coin]
+file = "sounds/coin.wav"
+
+[sounds.win]
+file = "sounds/win.wav"
+
+[music.theme]
+file = "music/theme.wav"

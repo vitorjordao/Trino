@@ -61,6 +61,10 @@ pub struct Manifest {
     pub sprites: BTreeMap<String, SpriteDecl>,
     #[serde(default)]
     pub sounds: BTreeMap<String, SoundDecl>,
+    /// Like sounds, but baked with loop metadata (N64) and played on the
+    /// music channel. Logical paths are `music/<name>`.
+    #[serde(default)]
+    pub music: BTreeMap<String, SoundDecl>,
 }
 
 #[derive(Debug, Deserialize)]

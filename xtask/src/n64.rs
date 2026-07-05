@@ -180,6 +180,18 @@ pub fn bake_assets(root: &Path, test_mode: bool) -> Result<(), String> {
         ));
         index.push_str(&format!("{id:08x}\tsound\t{id:08x}.wav64\n"));
     }
+    for (name, decl) in &manifest.music {
+        let logical = format!("music/{name}");
+        let id = trino_core::asset_id(&logical);
+        let source = resolve_source(&root.join("assets"), Platform::N64, &decl.file)?;
+        std::fs::copy(&source, stage.join(format!("{id:08x}.wav"))).map_err(|e| e.to_string())?;
+        // Loop metadata is baked into the wav64 on the N64; the runtime's
+        // `looped` flag is a no-op there (see the shim).
+        script.push_str(&format!(
+            "audioconv64 --wav-loop true -o target/n64/filesystem target/n64/stage/{id:08x}.wav\n"
+        ));
+        index.push_str(&format!("{id:08x}\tmusic\t{id:08x}.wav64\n"));
+    }
 
     std::fs::write(fsdir.join("index.tsv"), index).map_err(|e| e.to_string())?;
     if test_mode {

@@ -1,0 +1,17 @@
+[package]
+name = "platformer"
+description = "Trino's showcase game: a complete 2D platformer (tilemap, physics, coins, goal, music) running identically on PC, N64 and 3DS. Depends only on trino-core — portable by construction."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# rlib = static link (consoles, release); dylib = hot reload on PC dev.
+[lib]
+crate-type = ["rlib", "dylib"]
+
+# Game crates may depend only on trino-core / trino-game-api
+# (enforced by xtask/tests/dep_graph.rs).
+[dependencies]
+trino-core = { workspace = true }
+trino-game-api = { workspace = true }

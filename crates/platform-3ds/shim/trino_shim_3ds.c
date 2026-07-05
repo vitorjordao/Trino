@@ -219,7 +219,7 @@ void* trino_wav_load(const char* romfs_path)
     return wav;
 }
 
-void trino_wav_play(void* wav_ptr, uint32_t channel)
+void trino_wav_play(void* wav_ptr, uint32_t channel, uint32_t looped)
 {
     trino_wav_t* wav = wav_ptr;
     if (channel >= TRINO_NDSP_CHANNELS) return;
@@ -232,7 +232,7 @@ void trino_wav_play(void* wav_ptr, uint32_t channel)
     memset(buf, 0, sizeof(*buf));
     buf->data_vaddr = wav->data;
     buf->nsamples = wav->nsamples;
-    buf->looping = false;
+    buf->looping = looped != 0;
     ndspChnWaveBufAdd(channel, buf);
 }
 

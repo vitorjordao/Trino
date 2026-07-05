@@ -158,8 +158,11 @@ void* trino_wav_load(const char* dfs_path)
     return wav;
 }
 
-void trino_wav_play(void* wav, uint32_t channel)
+// `looped` is accepted for cross-platform symmetry but ignored here: on the
+// N64, looping is baked into the wav64 file (audioconv64 --wav-loop).
+void trino_wav_play(void* wav, uint32_t channel, uint32_t looped)
 {
+    (void)looped;
     wav64_play((wav64_t*)wav, (int)channel);
 }
 

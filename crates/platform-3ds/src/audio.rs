@@ -55,16 +55,15 @@ impl Audio for N3dsAudio {
         if let Some(&wav) = self.sounds.get(&sound.0) {
             let channel = self.next_channel;
             self.next_channel = (self.next_channel + 1) % SFX_CHANNELS;
-            unsafe { ffi::trino_wav_play(wav, channel) }
+            unsafe { ffi::trino_wav_play(wav, channel, 0) }
         }
     }
 
-    fn play_music(&mut self, music: MusicId, _looped: bool) {
-        // Looping lands with the platformer (Fase 6): the wavebuf loop flag.
+    fn play_music(&mut self, music: MusicId, looped: bool) {
         if let Some(&wav) = self.music.get(&music.0) {
             unsafe {
                 ffi::trino_channel_stop(MUSIC_CHANNEL);
-                ffi::trino_wav_play(wav, MUSIC_CHANNEL);
+                ffi::trino_wav_play(wav, MUSIC_CHANNEL, looped as u32);
             }
         }
     }

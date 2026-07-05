@@ -9,7 +9,7 @@ Original architecture rationale: `PLANO_ENGINE_TRINO.md` (Portuguese).
 
 ## Current state
 
-**Fase 6 (complete platformer) complete.** Working today:
+**Fase 7 (3D) complete.** Working today:
 
 - PC 2D rendering (wgpu, console-sim resolutions, golden tests), audio, input.
 - Asset pipeline: `assets/manifest.toml` + shared masters + per-platform overrides →
@@ -58,8 +58,20 @@ Original architecture rationale: `PLANO_ENGINE_TRINO.md` (Portuguese).
   editor (levels are ASCII files for now), the animated README GIF (a static
   hero shot exists — regenerate with `cargo test -p xtask --test hero_shot
   -- --ignored`).
+- **3D (`draw_model`)**: engine-side software T&L (`trino_core::render3d` —
+  see `docs/adr/0003-software-tnl-3d.md`): glTF masters bake to the portable
+  TMDL format (`[models.*]` in the manifest); the core transforms, lights
+  (gouraud, directional + ambient), culls and depth-sorts on the CPU with
+  deterministic f32 (own no_std sin/cos/sqrt); backends only rasterize
+  screen-space colored triangles (`rdpq_triangle` shade / `C2D_DrawTriangle`
+  / a wgpu vertex-color pipeline interleaved with sprites). `set_camera` +
+  `draw_model(Material::VertexLit)` on all three targets; strict mode
+  enforces `max_tris_per_frame`. The platformer shows a spinning cube.
+  v1 limits (in the ADR): painter's sort (no z-buffer), vertex colors only,
+  no near-plane clipping. Deferred: editor 3D viewport/gizmo.
 
-Next: Fase 7 (3D) — check `PLANO_EXECUCAO_TRINO.md`.
+Next: Fase 8 (release 1.0: `trino new`, release.yml, docs) — check
+`PLANO_EXECUCAO_TRINO.md`.
 
 PC keyboard mapping: A/B = Z/X, X/Y = C/V, L/R = Q/E, Start = Enter,
 Select = Right Shift, D-pad = arrows, stick = WASD (see `crates/platform-pc/src/input.rs`).

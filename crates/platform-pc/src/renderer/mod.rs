@@ -12,12 +12,15 @@ mod batch;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use trino_core::render3d::{Camera3, DEFAULT_LIGHT, Mesh, ScreenTri};
 use trino_core::{
     Caps, Color, Material, ModelId, Renderer, SpriteId, SpriteParams, Transform3, Vec2,
 };
 
 use crate::sim::SimProfile;
-use batch::{DrawCommand, INSTANCE_STRIDE, build_batches, make_command};
+use batch::{
+    Cmd, INSTANCE_STRIDE, Segment, TRI_VERTEX_STRIDE, TriVertex, build_segments, make_command,
+};
 
 const OFFSCREEN_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
@@ -57,6 +60,7 @@ pub struct PcRenderer {
     offscreen_view: wgpu::TextureView,
     offscreen_tex: wgpu::Texture,
     sprite_pipeline: wgpu::RenderPipeline,
+    tri_pipeline: wgpu::RenderPipeline,
     blit_pipeline: wgpu::RenderPipeline,
     blit_bind_group: wgpu::BindGroup,
     sprite_bgl: wgpu::BindGroupLayout,
@@ -65,8 +69,14 @@ pub struct PcRenderer {
     globals_buf: wgpu::Buffer,
     instance_buf: wgpu::Buffer,
     instance_capacity: u64,
+    tri_buf: wgpu::Buffer,
+    tri_capacity: u64,
     sprites: HashMap<u32, SpriteEntry>,
-    commands: Vec<DrawCommand>,
+    meshes: HashMap<u32, Vec<u8>>,
+    commands: Vec<Cmd>,
+    tri_verts: Vec<TriVertex>,
+    tri_scratch: Vec<ScreenTri>,
+    camera: Camera3,
     clear: Color,
     caps: Caps,
     profile: SimProfile,
@@ -358,6 +368,54 @@ impl PcRenderer {
             cache: None,
         });
 
+        // 3D triangle pipeline: same offscreen target, vertex colors only.
+        let tri_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("trino-tri-layout"),
+            bind_group_layouts: &[Some(&globals_bgl)],
+            immediate_size: 0,
+        });
+        let tri_attrs = [
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x2,
+                offset: 0,
+                shader_location: 0,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x4,
+                offset: 8,
+                shader_location: 1,
+            },
+        ];
+        let tri_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("trino-tri-pipeline"),
+            layout: Some(&tri_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_tri"),
+                compilation_options: Default::default(),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: TRI_VERTEX_STRIDE,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &tri_attrs,
+                }],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_tri"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: OFFSCREEN_FORMAT,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+
         let blit_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("trino-blit-layout"),
             bind_group_layouts: &[Some(&texture_bgl)],
@@ -415,6 +473,13 @@ impl PcRenderer {
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let tri_capacity = 3 * 1024 * TRI_VERTEX_STRIDE;
+        let tri_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("trino-tri-verts"),
+            size: tri_capacity,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
 
         PcRenderer {
             device,
@@ -423,6 +488,7 @@ impl PcRenderer {
             offscreen_view,
             offscreen_tex,
             sprite_pipeline,
+            tri_pipeline,
             blit_pipeline,
             blit_bind_group,
             sprite_bgl: texture_bgl,
@@ -431,8 +497,14 @@ impl PcRenderer {
             globals_buf,
             instance_buf,
             instance_capacity,
+            tri_buf,
+            tri_capacity,
             sprites: HashMap::new(),
+            meshes: HashMap::new(),
             commands: Vec::new(),
+            tri_verts: Vec::new(),
+            tri_scratch: Vec::new(),
+            camera: Camera3::default(),
             clear: Color::BLACK,
             caps,
             profile,
@@ -440,6 +512,15 @@ impl PcRenderer {
             n64_look,
             strict,
         }
+    }
+
+    /// Register a baked TMDL mesh under a stable handle. Re-uploading the
+    /// same id replaces the content (live reload).
+    pub fn upload_mesh(&mut self, id: ModelId, tmdl: Vec<u8>) {
+        if let Err(e) = Mesh::from_tmdl(&tmdl) {
+            panic!("mesh {id:?}: invalid TMDL blob: {e:?}");
+        }
+        self.meshes.insert(id.0, tmdl);
     }
 
     /// Toggle the N64 output emulation (3-point filtering, RGBA5551 +
@@ -635,16 +716,26 @@ impl PcRenderer {
     }
 
     fn flush(&mut self) {
-        if self.strict && self.commands.len() as u32 > self.caps.max_sprites_per_frame {
-            panic!(
-                "strict mode: {} sprites this frame busts the {:?} profile budget \
-                 of {} — reduce overdraw or batch static content.",
-                self.commands.len(),
-                self.profile,
-                self.caps.max_sprites_per_frame
-            );
+        if self.strict {
+            if self.commands.len() as u32 > self.caps.max_sprites_per_frame {
+                panic!(
+                    "strict mode: {} sprites this frame busts the {:?} profile budget \
+                     of {} — reduce overdraw or batch static content.",
+                    self.commands.len(),
+                    self.profile,
+                    self.caps.max_sprites_per_frame
+                );
+            }
+            let tris = (self.tri_verts.len() / 3) as u32;
+            if tris > self.caps.max_tris_per_frame {
+                panic!(
+                    "strict mode: {tris} 3D triangles this frame busts the {:?} \
+                     profile budget of {} — simplify the meshes.",
+                    self.profile, self.caps.max_tris_per_frame
+                );
+            }
         }
-        let (instances, runs) = build_batches(&self.commands);
+        let (instances, segments) = build_segments(&self.commands);
         self.commands.clear();
 
         let bytes: &[u8] = bytemuck::cast_slice(&instances);
@@ -660,6 +751,21 @@ impl PcRenderer {
         if !bytes.is_empty() {
             self.queue.write_buffer(&self.instance_buf, 0, bytes);
         }
+
+        let tri_bytes: &[u8] = bytemuck::cast_slice(&self.tri_verts);
+        if tri_bytes.len() as u64 > self.tri_capacity {
+            self.tri_capacity = (tri_bytes.len() as u64).next_power_of_two();
+            self.tri_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("trino-tri-verts"),
+                size: self.tri_capacity,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+        }
+        if !tri_bytes.is_empty() {
+            self.queue.write_buffer(&self.tri_buf, 0, tri_bytes);
+        }
+        self.tri_verts.clear();
 
         // In N64 look the framebuffer is 16-bit: quantize the clear color to
         // 5 bits per channel (sprites are dithered+quantized in the shader).
@@ -697,13 +803,22 @@ impl PcRenderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_pipeline(&self.sprite_pipeline);
             pass.set_bind_group(0, &self.globals_bg, &[]);
-            pass.set_vertex_buffer(0, self.instance_buf.slice(..));
-            for run in &runs {
-                if let Some(entry) = self.sprites.get(&run.sprite) {
-                    pass.set_bind_group(1, &entry.bind_group, &[]);
-                    pass.draw(0..4, run.instances.clone());
+            for segment in &segments {
+                match segment {
+                    Segment::Sprites { sprite, instances } => {
+                        if let Some(entry) = self.sprites.get(sprite) {
+                            pass.set_pipeline(&self.sprite_pipeline);
+                            pass.set_vertex_buffer(0, self.instance_buf.slice(..));
+                            pass.set_bind_group(1, &entry.bind_group, &[]);
+                            pass.draw(0..4, instances.clone());
+                        }
+                    }
+                    Segment::Tris { first, count } => {
+                        pass.set_pipeline(&self.tri_pipeline);
+                        pass.set_vertex_buffer(0, self.tri_buf.slice(..));
+                        pass.draw(*first..*first + *count, 0..1);
+                    }
                 }
             }
         }
@@ -778,6 +893,7 @@ impl Renderer for PcRenderer {
     fn begin_frame(&mut self, clear: Color) {
         self.clear = clear;
         self.commands.clear();
+        self.tri_verts.clear();
     }
 
     fn draw_sprite(&mut self, sprite: SpriteId, pos: Vec2, params: &SpriteParams) {
@@ -787,11 +903,57 @@ impl Renderer for PcRenderer {
             return;
         };
         self.commands
-            .push(make_command(sprite.0, pos, entry.size, params));
+            .push(Cmd::Sprite(make_command(sprite.0, pos, entry.size, params)));
     }
 
-    fn draw_model(&mut self, _model: ModelId, _transform: &Transform3, _material: Material) {
-        unimplemented!("draw_model lands in Fase 7 (3D)");
+    fn set_camera(&mut self, camera: &Camera3) {
+        self.camera = *camera;
+    }
+
+    fn draw_model(&mut self, model: ModelId, transform: &Transform3, _material: Material) {
+        let Some(tmdl) = self.meshes.get(&model.0) else {
+            return; // unknown handle: skip, like sprites
+        };
+        let mesh = Mesh::from_tmdl(tmdl).expect("validated on upload");
+        let max_tris = mesh.index_count / 3;
+        self.tri_scratch.resize(
+            max_tris,
+            ScreenTri {
+                pts: [Vec2::ZERO; 3],
+                colors: [Color::WHITE; 3],
+                depth: 0.0,
+            },
+        );
+        let screen = Vec2::new(self.internal_size.0 as f32, self.internal_size.1 as f32);
+        let n = trino_core::render3d::tessellate(
+            &mesh,
+            &transform.matrix(),
+            &self.camera,
+            &DEFAULT_LIGHT,
+            screen,
+            &mut self.tri_scratch,
+        );
+        if n == 0 {
+            return;
+        }
+        let first = self.tri_verts.len() as u32;
+        for tri in &self.tri_scratch[..n] {
+            for (p, c) in tri.pts.iter().zip(tri.colors.iter()) {
+                self.tri_verts.push(TriVertex {
+                    pos: [p.x, p.y],
+                    color: [
+                        c.r as f32 / 255.0,
+                        c.g as f32 / 255.0,
+                        c.b as f32 / 255.0,
+                        c.a as f32 / 255.0,
+                    ],
+                });
+            }
+        }
+        self.commands.push(Cmd::Tris {
+            first,
+            count: (n * 3) as u32,
+        });
     }
 
     fn end_frame(&mut self) {

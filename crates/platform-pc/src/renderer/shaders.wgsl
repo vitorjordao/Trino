@@ -102,6 +102,41 @@ fn fs_sprite(in: VsOut) -> @location(0) vec4<f32> {
 }
 
 // ---------------------------------------------------------------------------
+// Triangle pass (3D): screen-space vertex-colored triangles produced by the
+// engine's software T&L (trino_core::render3d). Same offscreen target and
+// N64-look quantization as sprites.
+
+struct TriIn {
+    @location(0) pos: vec2<f32>,   // pixels, internal resolution
+    @location(1) color: vec4<f32>,
+};
+
+struct TriOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) color: vec4<f32>,
+};
+
+@vertex
+fn vs_tri(in: TriIn) -> TriOut {
+    let ndc = vec2<f32>(
+        in.pos.x / globals.screen.x * 2.0 - 1.0,
+        1.0 - in.pos.y / globals.screen.y * 2.0,
+    );
+    var out: TriOut;
+    out.clip = vec4<f32>(ndc, 0.0, 1.0);
+    out.color = in.color;
+    return out;
+}
+
+@fragment
+fn fs_tri(in: TriOut) -> @location(0) vec4<f32> {
+    if globals.look == 1u {
+        return quantize_5551(in.color, vec2<u32>(in.clip.xy));
+    }
+    return in.color;
+}
+
+// ---------------------------------------------------------------------------
 // Blit pass: offscreen framebuffer -> window surface, nearest-neighbor.
 // Integer scaling and letterboxing are done with the render-pass viewport.
 

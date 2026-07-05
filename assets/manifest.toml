@@ -45,3 +45,6 @@ file = "sounds/win.wav"
 
 [music.theme]
 file = "music/theme.wav"
+
+[models.cube]
+file = "models/cube.glb"

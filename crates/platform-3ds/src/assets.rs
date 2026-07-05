@@ -66,13 +66,18 @@ impl N3dsAssets {
                         audio.register_music(id, ptr);
                     }
                 }
+                "model" => {
+                    if let Some(bytes) = read_bytes(&path) {
+                        renderer.register_mesh(id, bytes);
+                    }
+                }
                 _ => {}
             }
         }
     }
 }
 
-fn read_text(romfs_path: &str) -> Option<String> {
+fn read_bytes(romfs_path: &str) -> Option<Vec<u8>> {
     let cpath = CString::new(romfs_path).ok()?;
     let mut size: u32 = 0;
     let ptr = unsafe { ffi::trino_asset_load(cpath.as_ptr(), &mut size) };
@@ -80,7 +85,11 @@ fn read_text(romfs_path: &str) -> Option<String> {
         return None;
     }
     let bytes = unsafe { core::slice::from_raw_parts(ptr as *const u8, size as usize) };
-    let text = String::from_utf8(Vec::from(bytes)).ok();
+    let out = Vec::from(bytes);
     unsafe { ffi::trino_free(ptr) };
-    text
+    Some(out)
+}
+
+fn read_text(romfs_path: &str) -> Option<String> {
+    String::from_utf8(read_bytes(romfs_path)?).ok()
 }

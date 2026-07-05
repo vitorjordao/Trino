@@ -1,8 +1,11 @@
-//! citro2d sprite renderer (top screen, 400x240) via the shim.
+//! citro2d sprite renderer (top screen, 400x240) via the shim, plus gouraud
+//! triangles for the engine's software-T&L 3D (`trino_core::render3d`).
 
 use alloc::collections::BTreeMap;
+use alloc::vec::Vec;
 use core::ffi::c_void;
 
+use trino_core::render3d::{Camera3, DEFAULT_LIGHT, Mesh, ScreenTri};
 use trino_core::{
     Caps, Color, Material, ModelId, Renderer, SpriteId, SpriteParams, Transform3, Vec2,
 };
@@ -15,6 +18,9 @@ struct SpriteEntry {
 
 pub struct N3dsRenderer {
     sprites: BTreeMap<u32, SpriteEntry>,
+    meshes: BTreeMap<u32, Vec<u8>>,
+    tri_scratch: Vec<ScreenTri>,
+    camera: Camera3,
     caps: Caps,
 }
 
@@ -22,6 +28,9 @@ impl N3dsRenderer {
     pub fn new() -> Self {
         N3dsRenderer {
             sprites: BTreeMap::new(),
+            meshes: BTreeMap::new(),
+            tri_scratch: Vec::new(),
+            camera: Camera3::default(),
             caps: Caps::N3DS,
         }
     }
@@ -30,6 +39,13 @@ impl N3dsRenderer {
     /// handle.
     pub(crate) fn register(&mut self, id: u32, ptr: *mut c_void) {
         self.sprites.insert(id, SpriteEntry { ptr });
+    }
+
+    /// Register a TMDL mesh blob under a stable handle.
+    pub(crate) fn register_mesh(&mut self, id: u32, tmdl: Vec<u8>) {
+        if Mesh::from_tmdl(&tmdl).is_ok() {
+            self.meshes.insert(id, tmdl);
+        }
     }
 }
 
@@ -69,8 +85,51 @@ impl Renderer for N3dsRenderer {
         unsafe { ffi::trino_sprite_blit(entry.ptr, &blit) }
     }
 
-    fn draw_model(&mut self, _model: ModelId, _transform: &Transform3, _material: Material) {
-        unimplemented!("draw_model lands in Fase 7 (3D/citro3d)");
+    fn set_camera(&mut self, camera: &Camera3) {
+        self.camera = *camera;
+    }
+
+    fn draw_model(&mut self, model: ModelId, transform: &Transform3, _material: Material) {
+        let Some(tmdl) = self.meshes.get(&model.0) else {
+            return;
+        };
+        let mesh = Mesh::from_tmdl(tmdl).expect("validated on register");
+        let max_tris = mesh.index_count / 3;
+        self.tri_scratch.resize(
+            max_tris,
+            ScreenTri {
+                pts: [Vec2::ZERO; 3],
+                colors: [Color::WHITE; 3],
+                depth: 0.0,
+            },
+        );
+        let n = trino_core::render3d::tessellate(
+            &mesh,
+            &transform.matrix(),
+            &self.camera,
+            &DEFAULT_LIGHT,
+            Vec2::new(400.0, 240.0),
+            &mut self.tri_scratch,
+        );
+        if n == 0 {
+            return;
+        }
+        unsafe { ffi::trino_3d_begin() }
+        for tri in &self.tri_scratch[..n] {
+            let pts = [
+                tri.pts[0].x,
+                tri.pts[0].y,
+                tri.pts[1].x,
+                tri.pts[1].y,
+                tri.pts[2].x,
+                tri.pts[2].y,
+            ];
+            let mut colors = [0u8; 12];
+            for (i, c) in tri.colors.iter().enumerate() {
+                colors[i * 4..i * 4 + 4].copy_from_slice(&[c.r, c.g, c.b, c.a]);
+            }
+            unsafe { ffi::trino_tri(pts.as_ptr(), colors.as_ptr()) }
+        }
     }
 
     fn end_frame(&mut self) {

@@ -103,6 +103,9 @@ fn upload_assets(
         let samples = resample(&track.samples, track.sample_rate, audio.sample_rate());
         audio.upload_music(trino_core::MusicId(track.id), samples);
     }
+    for model in assets.models {
+        renderer.upload_mesh(trino_core::ModelId(model.id), model.tmdl);
+    }
     Ok(())
 }
 

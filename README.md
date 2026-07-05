@@ -37,10 +37,10 @@ and a native window on PC. (Animated editor + three-console GIF coming with Fase
 
 ## Status
 
-🚧 **Early development — Fase 6 (complete platformer) done: a real game — tilemap,
-physics, coins, goal, music — runs identically on all three targets.** Real ROMs boot
-in ares and Azahar, with automated in-emulator test harnesses. The roadmap with
-per-phase acceptance criteria lives in [PLANO_EXECUCAO_TRINO.md](PLANO_EXECUCAO_TRINO.md).
+🚧 **Early development — Fase 7 (3D) done: a complete platformer (tilemap, physics,
+coins, music) plus vertex-lit 3D models run identically on all three targets.** Real
+ROMs boot in ares and Azahar, with automated in-emulator test harnesses. The roadmap
+with per-phase acceptance criteria lives in [PLANO_EXECUCAO_TRINO.md](PLANO_EXECUCAO_TRINO.md).
 
 | | PC | Nintendo 64 | Nintendo 3DS |
 |---|---|---|---|
@@ -51,7 +51,7 @@ per-phase acceptance criteria lives in [PLANO_EXECUCAO_TRINO.md](PLANO_EXECUCAO_
 | Asset pipeline + live reload | ✅ | ✅ (rebuild + relaunch loop) | ✅ (rebuild + relaunch loop) |
 | Emulator test harness | — | ✅ ISViewer magic strings | ✅ svcOutputDebugString |
 | Visual editor | ✅ v1 | — | — |
-| 3D | 🚧 Fase 7 | 🚧 Fase 7 | 🚧 Fase 7 |
+| 3D (vertex-lit `draw_model`) | ✅ | ✅ | ✅ |
 
 ## Quickstart
 

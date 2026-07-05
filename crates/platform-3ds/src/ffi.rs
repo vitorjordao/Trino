@@ -33,6 +33,11 @@ unsafe extern "C" {
     pub fn trino_sprite_size(sheet: *mut c_void) -> u32;
     pub fn trino_sprite_blit(sheet: *mut c_void, params: *const TrinoBlit);
 
+    /// No-op on 3DS (shim-API symmetry with the N64).
+    pub fn trino_3d_begin();
+    /// pts: 6 floats (x/y per vertex); colors: 12 bytes (rgba per vertex).
+    pub fn trino_tri(pts: *const f32, colors: *const u8);
+
     pub fn trino_joypad_buttons() -> u32;
     /// (x as i16 as u16) << 16 | (y as i16 as u16).
     pub fn trino_joypad_stick() -> u32;

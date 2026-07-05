@@ -18,6 +18,7 @@ pollster = { workspace = true }
 
 [dev-dependencies]
 png = { workspace = true }
-# Golden test of the real showcase game (dev-only: the dep-graph rule about
-# platform crates concerns normal dependencies).
+# Golden tests of the real showcase game + baked 3D models (dev-only: the
+# dep-graph rule about platform crates concerns normal dependencies).
 platformer = { workspace = true }
+trino-asset-pipeline = { workspace = true }

@@ -172,6 +172,15 @@ pub fn bake_assets(root: &Path, test_mode: bool) -> Result<(), String> {
         bake_pcm16(&source, &out)?;
         index.push_str(&format!("{id:08x}\tmusic\t{id:08x}.pcm16\n"));
     }
+    for (name, decl) in &manifest.models {
+        let logical = format!("models/{name}");
+        let id = trino_core::asset_id(&logical);
+        let source = resolve_source(&root.join("assets"), Platform::N3ds, &decl.file)?;
+        // TMDL is portable: same blob on every platform, no container tool.
+        let blob = trino_asset_pipeline::bake_model_tmdl(&source)?;
+        std::fs::write(romfs.join(format!("{id:08x}.tmdl")), blob).map_err(|e| e.to_string())?;
+        index.push_str(&format!("{id:08x}\tmodel\t{id:08x}.tmdl\n"));
+    }
 
     std::fs::write(romfs.join("index.tsv"), index).map_err(|e| e.to_string())?;
     if test_mode {

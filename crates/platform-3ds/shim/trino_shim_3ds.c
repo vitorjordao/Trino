@@ -146,6 +146,24 @@ void trino_sprite_blit(void* sheet, const trino_blit_t* p)
 }
 
 // ---------------------------------------------------------------------------
+// 3D triangles: the engine transforms and lights on the CPU
+// (trino_core::render3d); citro2d only rasterizes gouraud-shaded tris.
+
+// Symmetry with the N64 shim (no mode switch needed on citro2d).
+void trino_3d_begin(void)
+{
+}
+
+// pts: 6 floats (x0,y0,x1,y1,x2,y2) in screen pixels;
+// colors: 12 bytes (r,g,b,a per vertex).
+void trino_tri(const float* pts, const uint8_t* c)
+{
+    C2D_DrawTriangle(pts[0], pts[1], C2D_Color32(c[0], c[1], c[2], c[3]),
+                     pts[2], pts[3], C2D_Color32(c[4], c[5], c[6], c[7]),
+                     pts[4], pts[5], C2D_Color32(c[8], c[9], c[10], c[11]), 0.5f);
+}
+
+// ---------------------------------------------------------------------------
 // Input — bit positions match trino_core::input::Button discriminants.
 
 uint32_t trino_joypad_buttons(void)

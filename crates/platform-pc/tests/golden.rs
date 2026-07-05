@@ -135,6 +135,18 @@ fn draw_test_scene(renderer: &mut PcRenderer) {
 
 /// Bless-or-compare the renderer's framebuffer against `tests/golden/pc/<name>.png`.
 fn check_golden(renderer: &PcRenderer, name: &str, max_channel_diff: u8) {
+    check_golden_tolerant(renderer, name, max_channel_diff, 0);
+}
+
+/// Like [`check_golden`], allowing up to `allowed_bad` channel values to
+/// exceed the tolerance — for content with GPU-rasterized triangle edges,
+/// where fill-rule ties can flip a few boundary pixels across drivers.
+fn check_golden_tolerant(
+    renderer: &PcRenderer,
+    name: &str,
+    max_channel_diff: u8,
+    allowed_bad: usize,
+) {
     let (w, h) = renderer.internal_size();
     let actual = renderer.read_offscreen();
     assert_eq!(actual.len(), (w * h * 4) as usize);
@@ -169,12 +181,13 @@ fn check_golden(renderer: &PcRenderer, name: &str, max_channel_diff: u8) {
             }
         }
     }
-    if bad_pixels > 0 {
+    if bad_pixels > allowed_bad {
         let actual_path = golden_dir().join(format!("actual/{name}.png"));
         write_png(&actual_path, w, h, &actual);
         panic!(
             "golden mismatch: {bad_pixels} channel values differ by more than \
-             {max_channel_diff} (worst {worst}); actual written to {}",
+             {max_channel_diff} (allowed {allowed_bad}, worst {worst}); actual \
+             written to {}",
             actual_path.display()
         );
     }
@@ -272,6 +285,39 @@ fn platformer_scene_matches_golden() {
     game.render(&mut renderer);
 
     check_golden(&renderer, "platformer_scene", MAX_CHANNEL_DIFF);
+}
+
+#[test]
+fn cube3d_scene_matches_golden() {
+    // The 3D pipeline end to end: glTF master -> TMDL bake -> upload ->
+    // software T&L -> triangle rasterization.
+    let Some(mut renderer) = headless_renderer(SimProfile::N64) else {
+        return;
+    };
+    renderer.set_n64_look(false);
+
+    let glb = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/shared/models/cube.glb");
+    let tmdl = trino_asset_pipeline::bake_model_tmdl(&glb).expect("cube.glb bakes");
+    let cube = trino_core::ModelId(1);
+    renderer.upload_mesh(cube, tmdl);
+
+    use trino_core::render3d::Camera3;
+    use trino_core::{Renderer as _, Transform3, Vec3};
+    renderer.begin_frame(Color::rgb(24, 26, 40));
+    renderer.set_camera(&Camera3::default());
+    renderer.draw_model(
+        cube,
+        &Transform3 {
+            rotation: Vec3::new(0.5, 0.8, 0.0),
+            ..Default::default()
+        },
+        trino_core::Material::VertexLit,
+    );
+    renderer.end_frame();
+
+    // Triangle edges may flip a pixel across drivers: allow a small number
+    // of out-of-tolerance channel values.
+    check_golden_tolerant(&renderer, "cube3d_scene", MAX_CHANNEL_DIFF, 512);
 }
 
 #[test]

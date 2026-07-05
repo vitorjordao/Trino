@@ -25,9 +25,16 @@ impl SpriteId {
     }
 }
 
-/// Handle to a baked 3D model (Fase 7).
+/// Handle to a baked 3D model.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct ModelId(pub u32);
+
+impl ModelId {
+    /// Handle from a logical asset path, e.g. `ModelId::from_path("models/cube")`.
+    pub const fn from_path(logical_path: &str) -> Self {
+        ModelId(crate::asset::asset_id(logical_path))
+    }
+}
 
 /// Handle to a material preset declared in `platforms/*.toml`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -68,7 +75,7 @@ impl Default for SpriteParams {
     }
 }
 
-/// 3D placement. Euler rotation in radians (XYZ order). Fase 7 material.
+/// 3D placement. Euler rotation in radians (XYZ order).
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Transform3 {
     pub position: Vec3,
@@ -86,6 +93,17 @@ impl Default for Transform3 {
     }
 }
 
+impl Transform3 {
+    /// Model matrix for the software T&L pipeline.
+    pub fn matrix(&self) -> crate::math3d::Mat34 {
+        crate::math3d::Mat34::from_rotation_scale_translation(
+            self.rotation,
+            self.scale,
+            self.position,
+        )
+    }
+}
+
 /// What every platform backend implements.
 ///
 /// Call order per frame: `begin_frame` → any number of draws → `end_frame`.
@@ -100,7 +118,11 @@ pub trait Renderer {
     /// resolution).
     fn draw_sprite(&mut self, sprite: SpriteId, pos: Vec2, params: &SpriteParams);
 
-    /// Draw a 3D model. Signature fixed now; backends implement in Fase 7.
+    /// Set the 3D camera for subsequent `draw_model` calls this frame.
+    /// Backends without 3D content may keep the default no-op.
+    fn set_camera(&mut self, _camera: &crate::render3d::Camera3) {}
+
+    /// Draw a 3D model (vertex-lit, engine-side T&L — see `render3d`).
     fn draw_model(&mut self, model: ModelId, transform: &Transform3, material: Material);
 
     fn end_frame(&mut self);

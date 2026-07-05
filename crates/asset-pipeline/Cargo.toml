@@ -17,6 +17,7 @@ serde = { workspace = true }
 toml = { workspace = true }
 png = { workspace = true }
 hound = { workspace = true }
+gltf = { workspace = true }
 notify = { workspace = true, optional = true }
 notify-debouncer-full = { workspace = true, optional = true }
 

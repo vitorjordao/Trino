@@ -117,6 +117,30 @@ void trino_sprite_blit(void* sprite, const trino_blit_t* p)
 }
 
 // ---------------------------------------------------------------------------
+// 3D triangles: the engine transforms and lights on the CPU
+// (trino_core::render3d); the RDP only rasterizes gouraud-shaded tris.
+
+// Call once before a batch of trino_tri (sets the shade combiner).
+void trino_3d_begin(void)
+{
+    rdpq_set_mode_standard();
+    rdpq_mode_combiner(RDPQ_COMBINER_SHADE);
+}
+
+// pts: 6 floats (x0,y0,x1,y1,x2,y2) in screen pixels;
+// colors: 12 bytes (r,g,b,a per vertex).
+void trino_tri(const float* pts, const uint8_t* colors)
+{
+    const float v0[] = { pts[0], pts[1], colors[0] / 255.0f, colors[1] / 255.0f,
+                         colors[2] / 255.0f, colors[3] / 255.0f };
+    const float v1[] = { pts[2], pts[3], colors[4] / 255.0f, colors[5] / 255.0f,
+                         colors[6] / 255.0f, colors[7] / 255.0f };
+    const float v2[] = { pts[4], pts[5], colors[8] / 255.0f, colors[9] / 255.0f,
+                         colors[10] / 255.0f, colors[11] / 255.0f };
+    rdpq_triangle(&TRIFMT_SHADE, v0, v1, v2);
+}
+
+// ---------------------------------------------------------------------------
 // Input — bit positions match trino_core::input::Button discriminants.
 
 uint32_t trino_joypad_buttons(void)

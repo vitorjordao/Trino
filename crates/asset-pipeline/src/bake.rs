@@ -158,6 +158,33 @@ pub fn bake_all(
         }
     }
 
+    for (name, decl) in &manifest.models {
+        let logical = format!("models/{name}");
+        let id = asset_id(&logical);
+        if let Some(other) = by_id.insert(id, logical.clone()) {
+            errors.push(format!("hash collision between `{other}` and `{logical}`"));
+            continue;
+        }
+        let result = (|| -> Result<BakedEntry, String> {
+            let source = resolve_source(assets_root, platform, &decl.file)?;
+            let blob = crate::model::bake_model_tmdl(&source)?;
+            let file = format!("{id:08x}.model");
+            let changed = write_if_changed(&out_dir.join(&file), &blob)?;
+            Ok(BakedEntry {
+                logical: logical.clone(),
+                id,
+                kind: "model",
+                file,
+                format: "TMDL".into(),
+                changed,
+            })
+        })();
+        match result {
+            Ok(entry) => report.entries.push(entry),
+            Err(e) => errors.push(e),
+        }
+    }
+
     if !errors.is_empty() {
         return Err(BakeError(errors));
     }

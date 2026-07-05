@@ -34,11 +34,32 @@ pub struct Instance {
 
 pub const INSTANCE_STRIDE: u64 = core::mem::size_of::<Instance>() as u64;
 
-/// A contiguous range of instances sharing one sprite texture.
+/// One recorded draw call: a sprite quad or a run of 3D triangle vertices
+/// (already transformed/lit by `trino_core::render3d`; the vertices live in
+/// the renderer's triangle vertex list).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Cmd {
+    Sprite(DrawCommand),
+    Tris { first: u32, count: u32 },
+}
+
+/// GPU triangle vertex. Must match `shaders.wgsl` (`TriIn`).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct TriVertex {
+    pub pos: [f32; 2],
+    pub color: [f32; 4],
+}
+
+pub const TRI_VERTEX_STRIDE: u64 = core::mem::size_of::<TriVertex>() as u64;
+
+/// A contiguous stretch of same-pipeline work, in draw order.
 #[derive(Clone, Debug, PartialEq)]
-pub struct BatchRun {
-    pub sprite: u32,
-    pub instances: Range<u32>,
+pub enum Segment {
+    /// Sprite instances sharing one texture (one instanced draw call).
+    Sprites { sprite: u32, instances: Range<u32> },
+    /// Vertex range into the triangle vertex buffer.
+    Tris { first: u32, count: u32 },
 }
 
 /// Resolve a `draw_sprite` call into a command: apply scale to the sprite's
@@ -77,32 +98,51 @@ pub fn make_command(
     }
 }
 
-/// Pack commands into instances plus batch runs. Consecutive commands with
-/// the same sprite share a run (one draw call); draw order is preserved.
-pub fn build_batches(commands: &[DrawCommand]) -> (Vec<Instance>, Vec<BatchRun>) {
-    let mut instances = Vec::with_capacity(commands.len());
-    let mut runs: Vec<BatchRun> = Vec::new();
+/// Pack commands into sprite instances plus draw segments. Consecutive
+/// same-texture sprite draws share an instanced call; consecutive triangle
+/// runs merge; draw order is preserved across pipeline switches.
+pub fn build_segments(commands: &[Cmd]) -> (Vec<Instance>, Vec<Segment>) {
+    let mut instances = Vec::new();
+    let mut segments: Vec<Segment> = Vec::new();
 
     for cmd in commands {
-        let index = instances.len() as u32;
-        instances.push(Instance {
-            pos: [cmd.pos.x, cmd.pos.y],
-            size: [cmd.size.x, cmd.size.y],
-            rotation: cmd.rotation,
-            _pad: 0.0,
-            uv0: cmd.uv0,
-            uv1: cmd.uv1,
-            tint: cmd.tint,
-        });
-        match runs.last_mut() {
-            Some(run) if run.sprite == cmd.sprite => run.instances.end = index + 1,
-            _ => runs.push(BatchRun {
-                sprite: cmd.sprite,
-                instances: index..index + 1,
-            }),
+        match cmd {
+            Cmd::Sprite(cmd) => {
+                let index = instances.len() as u32;
+                instances.push(Instance {
+                    pos: [cmd.pos.x, cmd.pos.y],
+                    size: [cmd.size.x, cmd.size.y],
+                    rotation: cmd.rotation,
+                    _pad: 0.0,
+                    uv0: cmd.uv0,
+                    uv1: cmd.uv1,
+                    tint: cmd.tint,
+                });
+                match segments.last_mut() {
+                    Some(Segment::Sprites { sprite, instances }) if *sprite == cmd.sprite => {
+                        instances.end = index + 1;
+                    }
+                    _ => segments.push(Segment::Sprites {
+                        sprite: cmd.sprite,
+                        instances: index..index + 1,
+                    }),
+                }
+            }
+            Cmd::Tris { first, count } => match segments.last_mut() {
+                Some(Segment::Tris {
+                    first: seg_first,
+                    count: seg_count,
+                }) if *seg_first + *seg_count == *first => {
+                    *seg_count += count;
+                }
+                _ => segments.push(Segment::Tris {
+                    first: *first,
+                    count: *count,
+                }),
+            },
         }
     }
-    (instances, runs)
+    (instances, segments)
 }
 
 #[cfg(test)]
@@ -110,29 +150,61 @@ mod tests {
     use super::*;
     use trino_core::Color;
 
-    fn cmd(sprite: u32) -> DrawCommand {
-        make_command(sprite, Vec2::ZERO, (16, 16), &SpriteParams::default())
+    fn cmd(sprite: u32) -> Cmd {
+        Cmd::Sprite(make_command(
+            sprite,
+            Vec2::ZERO,
+            (16, 16),
+            &SpriteParams::default(),
+        ))
     }
 
     #[test]
     fn consecutive_same_sprite_draws_share_a_run() {
-        let (instances, runs) = build_batches(&[cmd(1), cmd(1), cmd(2), cmd(1)]);
+        let (instances, segments) = build_segments(&[cmd(1), cmd(1), cmd(2), cmd(1)]);
         assert_eq!(instances.len(), 4);
         assert_eq!(
-            runs,
+            segments,
             vec![
-                BatchRun {
+                Segment::Sprites {
                     sprite: 1,
                     instances: 0..2
                 },
-                BatchRun {
+                Segment::Sprites {
                     sprite: 2,
                     instances: 2..3
                 },
-                BatchRun {
+                Segment::Sprites {
                     sprite: 1,
                     instances: 3..4
                 },
+            ]
+        );
+    }
+
+    #[test]
+    fn tris_interleave_and_merge_with_order_preserved() {
+        let (instances, segments) = build_segments(&[
+            cmd(1),
+            Cmd::Tris { first: 0, count: 3 },
+            Cmd::Tris { first: 3, count: 6 },
+            cmd(1),
+            Cmd::Tris { first: 9, count: 3 },
+        ]);
+        assert_eq!(instances.len(), 2);
+        assert_eq!(
+            segments,
+            vec![
+                Segment::Sprites {
+                    sprite: 1,
+                    instances: 0..1
+                },
+                Segment::Tris { first: 0, count: 9 },
+                Segment::Sprites {
+                    sprite: 1,
+                    instances: 1..2
+                },
+                Segment::Tris { first: 9, count: 3 },
             ]
         );
     }

@@ -12,8 +12,8 @@
 
 use trino_core::tilemap::tile;
 use trino_core::{
-    Audio, Button, Color, Game, InputState, MusicId, Renderer, SoundId, SpriteId, SpriteParams,
-    TILE_SIZE, Tilemap, Vec2, move_and_collide,
+    Audio, Button, Camera3, Color, Game, InputState, Material, ModelId, MusicId, Renderer, SoundId,
+    SpriteId, SpriteParams, TILE_SIZE, Tilemap, Transform3, Vec2, Vec3, move_and_collide,
 };
 
 pub const LEVEL: &str = include_str!("level1.txt");
@@ -27,6 +27,7 @@ pub const SND_JUMP: SoundId = SoundId::from_path("sounds/jump");
 pub const SND_COIN: SoundId = SoundId::from_path("sounds/coin");
 pub const SND_WIN: SoundId = SoundId::from_path("sounds/win");
 pub const MUSIC: MusicId = MusicId::from_path("music/theme");
+pub const CUBE: ModelId = ModelId::from_path("models/cube");
 
 /// Collision box (the hero sprite is 16x16; the box is slightly narrower
 /// so the player does not snag on tile seams).
@@ -271,6 +272,19 @@ impl Game for PlatformerGame {
                 flip_x: self.face_left,
                 ..Default::default()
             },
+        );
+
+        // Showcase 3D (Fase 7): a spinning vertex-lit cube, fixed camera,
+        // drawn over the scene and under the HUD.
+        renderer.set_camera(&Camera3::default());
+        renderer.draw_model(
+            CUBE,
+            &Transform3 {
+                position: Vec3::new(2.4, 1.5, 0.0),
+                rotation: Vec3::new(self.time * 0.7, self.time, 0.0),
+                scale: Vec3::new(0.7, 0.7, 0.7),
+            },
+            Material::VertexLit,
         );
 
         // HUD: one coin icon per collected coin (no font needed).

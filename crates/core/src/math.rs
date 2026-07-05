@@ -105,6 +105,30 @@ impl Vec3 {
     }
 }
 
+impl Add for Vec3 {
+    type Output = Vec3;
+    #[inline]
+    fn add(self, rhs: Vec3) -> Vec3 {
+        Vec3::new(self.x + rhs.x, self.y + rhs.y, self.z + rhs.z)
+    }
+}
+
+impl Sub for Vec3 {
+    type Output = Vec3;
+    #[inline]
+    fn sub(self, rhs: Vec3) -> Vec3 {
+        Vec3::new(self.x - rhs.x, self.y - rhs.y, self.z - rhs.z)
+    }
+}
+
+impl Mul<f32> for Vec3 {
+    type Output = Vec3;
+    #[inline]
+    fn mul(self, rhs: f32) -> Vec3 {
+        Vec3::new(self.x * rhs, self.y * rhs, self.z * rhs)
+    }
+}
+
 /// Axis-aligned rectangle: position of the top-left corner plus size.
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub struct Rect {

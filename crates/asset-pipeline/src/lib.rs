@@ -22,11 +22,13 @@
 pub mod bake;
 pub mod loader;
 pub mod manifest;
+pub mod model;
 pub mod resolve;
 #[cfg(feature = "watch")]
 pub mod watch;
 
 pub use bake::{BakeError, BakeReport, bake_all};
-pub use loader::{LoadedAssets, LoadedSound, LoadedSprite, load_dir};
+pub use loader::{LoadedAssets, LoadedModel, LoadedSound, LoadedSprite, load_dir};
 pub use manifest::{Manifest, Platform};
+pub use model::bake_model_tmdl;
 pub use resolve::resolve_source;

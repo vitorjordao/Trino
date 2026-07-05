@@ -65,6 +65,17 @@ pub struct Manifest {
     /// music channel. Logical paths are `music/<name>`.
     #[serde(default)]
     pub music: BTreeMap<String, SoundDecl>,
+    /// 3D models: glTF masters baked to the portable TMDL format.
+    /// Logical paths are `models/<name>`.
+    #[serde(default)]
+    pub models: BTreeMap<String, ModelDecl>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelDecl {
+    /// Source `.gltf`/`.glb`, relative to `assets/shared/` (or an override).
+    pub file: String,
 }
 
 #[derive(Debug, Deserialize)]

@@ -49,6 +49,9 @@ fn regenerate_readme_hero_shot() {
             &sprite.rgba,
         );
     }
+    for model in assets.models {
+        renderer.upload_mesh(trino_core::ModelId(model.id), model.tmdl);
+    }
 
     let mut game = platformer::PlatformerGame::new(Vec2::new(320.0, 240.0));
     let mut audio = NullAudio;

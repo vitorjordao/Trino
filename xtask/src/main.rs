@@ -260,8 +260,91 @@ fn gen_assets() -> ExitCode {
     );
     gen_theme(&music.join("theme.wav"));
 
+    let models = root.join("assets/shared/models");
+    std::fs::create_dir_all(&models).unwrap();
+    gen_cube_glb(&models.join("cube.glb"));
+
     println!("sample assets regenerated under assets/shared/");
     ExitCode::SUCCESS
+}
+
+/// cube.glb: a unit cube with per-face normals and colors — the 3D pipeline
+/// master. Hand-assembled GLB (JSON + BIN chunks) so the sample stays
+/// reproducible from code.
+fn gen_cube_glb(path: &Path) {
+    use trino_core::Vec3;
+
+    let faces: [(Vec3, [u8; 4]); 6] = [
+        (Vec3::new(0.0, 0.0, -1.0), [230, 80, 80, 255]),
+        (Vec3::new(0.0, 0.0, 1.0), [80, 230, 80, 255]),
+        (Vec3::new(-1.0, 0.0, 0.0), [80, 80, 230, 255]),
+        (Vec3::new(1.0, 0.0, 0.0), [230, 230, 80, 255]),
+        (Vec3::new(0.0, -1.0, 0.0), [230, 80, 230, 255]),
+        (Vec3::new(0.0, 1.0, 0.0), [80, 230, 230, 255]),
+    ];
+    let mut positions: Vec<f32> = Vec::new();
+    let mut normals: Vec<f32> = Vec::new();
+    let mut colors: Vec<u8> = Vec::new();
+    let mut indices: Vec<u16> = Vec::new();
+    for (f, (n, c)) in faces.iter().enumerate() {
+        let u = if n.y.abs() > 0.9 {
+            Vec3::new(1.0, 0.0, 0.0)
+        } else {
+            Vec3::new(0.0, 1.0, 0.0).cross(*n).normalized()
+        };
+        let v = n.cross(u);
+        let base = (f * 4) as u16;
+        for (su, sv) in [(-0.5, -0.5), (0.5, -0.5), (0.5, 0.5), (-0.5, 0.5)] {
+            let p = *n * 0.5 + u * su + v * sv;
+            positions.extend_from_slice(&[p.x, p.y, p.z]);
+            normals.extend_from_slice(&[n.x, n.y, n.z]);
+            colors.extend_from_slice(c);
+        }
+        indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+
+    let mut bin: Vec<u8> = Vec::new();
+    for v in positions.iter().chain(normals.iter()) {
+        bin.extend_from_slice(&v.to_le_bytes());
+    }
+    let colors_offset = bin.len();
+    bin.extend_from_slice(&colors);
+    let indices_offset = bin.len();
+    for i in &indices {
+        bin.extend_from_slice(&i.to_le_bytes());
+    }
+    while !bin.len().is_multiple_of(4) {
+        bin.push(0);
+    }
+
+    let vcount = positions.len() / 3;
+    let normals_offset = positions.len() * 4;
+    let json = format!(
+        r#"{{"asset":{{"version":"2.0","generator":"trino gen-assets"}},"scene":0,"scenes":[{{"nodes":[0]}}],"nodes":[{{"mesh":0,"name":"cube"}}],"meshes":[{{"primitives":[{{"attributes":{{"POSITION":0,"NORMAL":1,"COLOR_0":2}},"indices":3}}]}}],"buffers":[{{"byteLength":{}}}],"bufferViews":[{{"buffer":0,"byteOffset":0,"byteLength":{}}},{{"buffer":0,"byteOffset":{normals_offset},"byteLength":{}}},{{"buffer":0,"byteOffset":{colors_offset},"byteLength":{}}},{{"buffer":0,"byteOffset":{indices_offset},"byteLength":{}}}],"accessors":[{{"bufferView":0,"componentType":5126,"count":{vcount},"type":"VEC3","min":[-0.5,-0.5,-0.5],"max":[0.5,0.5,0.5]}},{{"bufferView":1,"componentType":5126,"count":{vcount},"type":"VEC3"}},{{"bufferView":2,"componentType":5121,"normalized":true,"count":{vcount},"type":"VEC4"}},{{"bufferView":3,"componentType":5123,"count":{},"type":"SCALAR"}}]}}"#,
+        bin.len(),
+        positions.len() * 4,
+        normals.len() * 4,
+        colors.len(),
+        indices.len() * 2,
+        indices.len(),
+    );
+    let mut json_bytes = json.into_bytes();
+    while !json_bytes.len().is_multiple_of(4) {
+        json_bytes.push(b' ');
+    }
+
+    let total = 12 + 8 + json_bytes.len() + 8 + bin.len();
+    let mut glb: Vec<u8> = Vec::with_capacity(total);
+    glb.extend_from_slice(b"glTF");
+    glb.extend_from_slice(&2u32.to_le_bytes());
+    glb.extend_from_slice(&(total as u32).to_le_bytes());
+    glb.extend_from_slice(&(json_bytes.len() as u32).to_le_bytes());
+    glb.extend_from_slice(b"JSON");
+    glb.extend_from_slice(&json_bytes);
+    glb.extend_from_slice(&(bin.len() as u32).to_le_bytes());
+    glb.extend_from_slice(b"BIN\0");
+    glb.extend_from_slice(&bin);
+    std::fs::write(path, glb).unwrap();
 }
 
 /// 16x16 sprites for the platformer, drawn as readable ASCII art.

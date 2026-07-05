@@ -34,11 +34,19 @@ pub struct LoadedSound {
     pub samples: Vec<f32>,
 }
 
+pub struct LoadedModel {
+    pub logical: String,
+    pub id: u32,
+    /// The whole TMDL blob (parsed lazily by `trino_core::render3d::Mesh`).
+    pub tmdl: Vec<u8>,
+}
+
 #[derive(Default)]
 pub struct LoadedAssets {
     pub sprites: Vec<LoadedSprite>,
     pub sounds: Vec<LoadedSound>,
     pub music: Vec<LoadedSound>,
+    pub models: Vec<LoadedModel>,
 }
 
 /// Load every baked asset from `out_dir`. `only` filters by handle (used by
@@ -108,6 +116,16 @@ pub fn load_dir(out_dir: &Path, only: Option<&[u32]>) -> Result<LoadedAssets, St
                 } else {
                     out.sounds.push(loaded);
                 }
+            }
+            "model" => {
+                if !bytes.starts_with(b"TMDL") {
+                    return Err(format!("{}: bad model blob", path.display()));
+                }
+                out.models.push(LoadedModel {
+                    logical: entry.logical,
+                    id: entry.id,
+                    tmdl: bytes,
+                });
             }
             other => return Err(format!("unknown asset kind `{other}`")),
         }

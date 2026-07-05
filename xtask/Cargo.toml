@@ -8,6 +8,7 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+trino-core = { workspace = true }
 trino-asset-pipeline = { workspace = true, features = ["watch"] }
 notify = { workspace = true }
 notify-debouncer-full = { workspace = true }

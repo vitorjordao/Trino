@@ -4,7 +4,9 @@
 struct Globals {
     // Internal framebuffer resolution in pixels.
     screen: vec2<f32>,
-    _pad: vec2<f32>,
+    // 0 = native, 1 = N64 look (3-point filtering + RGBA5551 dither).
+    look: u32,
+    _pad: u32,
 };
 
 @group(0) @binding(0) var<uniform> globals: Globals;
@@ -48,9 +50,55 @@ fn vs_sprite(in: VsIn) -> VsOut {
 @group(1) @binding(0) var t_sprite: texture_2d<f32>;
 @group(1) @binding(1) var s_sprite: sampler;
 
+// N64 three-point bilinear: the RDP interpolates the 3 texels of the
+// triangle half that contains the sample point, not a 2x2 quad — the
+// source of the "N64 smear" on magnified textures.
+fn sample_3point(uv: vec2<f32>) -> vec4<f32> {
+    let dims = textureDimensions(t_sprite);
+    let st = uv * vec2<f32>(dims) - vec2<f32>(0.5, 0.5);
+    let base = floor(st);
+    let f = st - base;
+    let b = vec2<i32>(base);
+    let hi = vec2<i32>(dims) - vec2<i32>(1, 1);
+    let lo = vec2<i32>(0, 0);
+    let t00 = textureLoad(t_sprite, clamp(b, lo, hi), 0);
+    let t10 = textureLoad(t_sprite, clamp(b + vec2<i32>(1, 0), lo, hi), 0);
+    let t01 = textureLoad(t_sprite, clamp(b + vec2<i32>(0, 1), lo, hi), 0);
+    let t11 = textureLoad(t_sprite, clamp(b + vec2<i32>(1, 1), lo, hi), 0);
+    if f.x + f.y < 1.0 {
+        return t00 + f.x * (t10 - t00) + f.y * (t01 - t00);
+    }
+    return t11 + (1.0 - f.x) * (t01 - t11) + (1.0 - f.y) * (t10 - t11);
+}
+
+// 16-bit framebuffer approximation: RDP magic-square ordered dither, then
+// RGBA5551 quantization (5 bits per channel, 1-bit alpha).
+fn quantize_5551(color: vec4<f32>, px: vec2<u32>) -> vec4<f32> {
+    var magic = array<f32, 16>(
+        0.0, 6.0, 1.0, 7.0,
+        4.0, 2.0, 5.0, 3.0,
+        3.0, 5.0, 2.0, 4.0,
+        7.0, 1.0, 6.0, 0.0,
+    );
+    let d = (magic[(px.y % 4u) * 4u + (px.x % 4u)] - 3.5) / 8.0;
+    let rgb = clamp(
+        floor(clamp(color.rgb, vec3<f32>(0.0), vec3<f32>(1.0)) * 31.0 + 0.5 + d) / 31.0,
+        vec3<f32>(0.0),
+        vec3<f32>(1.0),
+    );
+    let a = select(0.0, 1.0, color.a >= 0.5);
+    return vec4<f32>(rgb, a);
+}
+
 @fragment
 fn fs_sprite(in: VsOut) -> @location(0) vec4<f32> {
-    return textureSample(t_sprite, s_sprite, in.uv) * in.tint;
+    // Sampled unconditionally: textureSample requires uniform control flow.
+    let plain = textureSample(t_sprite, s_sprite, in.uv) * in.tint;
+    if globals.look == 1u {
+        let c = sample_3point(in.uv) * in.tint;
+        return quantize_5551(c, vec2<u32>(in.clip.xy));
+    }
+    return plain;
 }
 
 // ---------------------------------------------------------------------------

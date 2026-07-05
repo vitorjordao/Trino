@@ -69,6 +69,38 @@ jobs:
       # Builds the game dylib twice and swaps them under a live state.
       - run: cargo test -p xtask --test hot_reload -- --ignored
 
-  # Fase 4 adds: n64 job in the libdragon container (digest-pinned) building
-  # ROMs and running ares/mupen64plus tests under xvfb.
+  n64:
+    name: N64 ROM (libdragon container)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      # xtask itself builds on stable (rust-toolchain.toml); the MIPS target
+      # build is invoked as `cargo +nightly` with build-std, hence rust-src.
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # The toolchain image compiles libdragon from a pinned commit (~10 min);
+      # cache the built image keyed on the Dockerfile.
+      - name: Cache toolchain image
+        id: image-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/trino-n64.tar
+          key: trino-n64-image-${{ hashFiles('docker/n64/Dockerfile') }}
+      - name: Load cached toolchain image
+        if: steps.image-cache.outputs.cache-hit == 'true'
+        run: docker load -i ~/trino-n64.tar
+      - name: Build ROM
+        run: cargo xtask build n64
+      - name: Save toolchain image
+        if: steps.image-cache.outputs.cache-hit != 'true'
+        run: docker save trino-n64 -o ~/trino-n64.tar
+      - name: ROM produced
+        run: ls -l target/n64/trino.z64
+      # Emulator tests (`cargo xtask test n64`) run locally with ares for now:
+      # ares ships no Linux release binary. Candidate follow-up: build ares
+      # once in a cached step (or use a libretro core) and run under xvfb.
+
   # Fase 5 adds: 3ds job in devkitpro/devkitarm with rust3ds/actions run-tests.

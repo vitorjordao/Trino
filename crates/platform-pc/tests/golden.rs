@@ -16,6 +16,9 @@ use trino_core::{Color, Renderer, SpriteId, SpriteParams, Vec2};
 use trino_platform_pc::{PcRenderer, SimProfile};
 
 const MAX_CHANNEL_DIFF: u8 = 2;
+// The N64-look golden tolerates one RGBA5551 quantization step (255/31 ≈ 8.2):
+// dither ties may round differently across GPU drivers.
+const MAX_CHANNEL_DIFF_5551: u8 = 9;
 
 fn golden_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/golden/pc")
@@ -70,20 +73,24 @@ fn read_png(path: &std::path::Path) -> (u32, u32, Vec<u8>) {
     (info.width, info.height, buf)
 }
 
-#[test]
-fn basic_scene_matches_golden() {
-    let renderer = pollster::block_on(PcRenderer::new_headless(SimProfile::N64));
-    let mut renderer = match renderer {
-        Ok(r) => r,
+/// Headless N64-profile renderer, or None on GPU-less machines (unless
+/// TRINO_REQUIRE_GPU insists).
+fn headless_renderer() -> Option<PcRenderer> {
+    match pollster::block_on(PcRenderer::new_headless(SimProfile::N64)) {
+        Ok(r) => Some(r),
         Err(e) => {
             if std::env::var("TRINO_REQUIRE_GPU").is_ok() {
                 panic!("TRINO_REQUIRE_GPU set but renderer init failed: {e}");
             }
             eprintln!("skipping golden test: {e}");
-            return;
+            None
         }
-    };
+    }
+}
 
+/// The reference scene both goldens render: plain draw, integer upscale +
+/// tint, flip, and alpha blending.
+fn draw_test_scene(renderer: &mut PcRenderer) {
     let checker = SpriteId(1);
     let grad = SpriteId(2);
     renderer.upload_sprite(
@@ -95,9 +102,7 @@ fn basic_scene_matches_golden() {
     renderer.upload_sprite(grad, 8, 8, &gradient(8));
 
     renderer.begin_frame(Color::rgb(24, 26, 40));
-    // Plain draw.
     renderer.draw_sprite(checker, Vec2::new(10.0, 10.0), &SpriteParams::default());
-    // Integer upscale + tint.
     renderer.draw_sprite(
         checker,
         Vec2::new(100.0, 40.0),
@@ -107,7 +112,6 @@ fn basic_scene_matches_golden() {
             ..Default::default()
         },
     );
-    // Flips.
     renderer.draw_sprite(
         grad,
         Vec2::new(200.0, 100.0),
@@ -117,7 +121,6 @@ fn basic_scene_matches_golden() {
             ..Default::default()
         },
     );
-    // Alpha blending over the previous draws.
     renderer.draw_sprite(
         checker,
         Vec2::new(210.0, 110.0),
@@ -128,12 +131,15 @@ fn basic_scene_matches_golden() {
         },
     );
     renderer.end_frame();
+}
 
+/// Bless-or-compare the renderer's framebuffer against `tests/golden/pc/<name>.png`.
+fn check_golden(renderer: &PcRenderer, name: &str, max_channel_diff: u8) {
     let (w, h) = renderer.internal_size();
     let actual = renderer.read_offscreen();
     assert_eq!(actual.len(), (w * h * 4) as usize);
 
-    let golden_path = golden_dir().join("basic_scene.png");
+    let golden_path = golden_dir().join(format!("{name}.png"));
     if std::env::var("TRINO_BLESS").is_ok() {
         write_png(&golden_path, w, h, &actual);
         eprintln!("blessed golden: {}", golden_path.display());
@@ -152,7 +158,7 @@ fn basic_scene_matches_golden() {
     let mut worst = 0u8;
     for (i, (a, e)) in actual.iter().zip(expected.iter()).enumerate() {
         let diff = a.abs_diff(*e);
-        if diff > MAX_CHANNEL_DIFF {
+        if diff > max_channel_diff {
             bad_pixels += 1;
             worst = worst.max(diff);
             if bad_pixels == 1 {
@@ -164,12 +170,57 @@ fn basic_scene_matches_golden() {
         }
     }
     if bad_pixels > 0 {
-        let actual_path = golden_dir().join("actual/basic_scene.png");
+        let actual_path = golden_dir().join(format!("actual/{name}.png"));
         write_png(&actual_path, w, h, &actual);
         panic!(
             "golden mismatch: {bad_pixels} channel values differ by more than \
-             {MAX_CHANNEL_DIFF} (worst {worst}); actual written to {}",
+             {max_channel_diff} (worst {worst}); actual written to {}",
             actual_path.display()
         );
     }
+}
+
+#[test]
+fn basic_scene_matches_golden() {
+    let Some(mut renderer) = headless_renderer() else {
+        return;
+    };
+    // This golden checks the raw sprite pass; the output emulation has its
+    // own golden below.
+    renderer.set_n64_look(false);
+    draw_test_scene(&mut renderer);
+    check_golden(&renderer, "basic_scene", MAX_CHANNEL_DIFF);
+}
+
+#[test]
+fn n64_look_scene_matches_golden() {
+    let Some(mut renderer) = headless_renderer() else {
+        return;
+    };
+    // Explicit (it already defaults to on for the N64 profile) so the test
+    // does not depend on the TRINO_LOOK env override.
+    renderer.set_n64_look(true);
+    draw_test_scene(&mut renderer);
+    check_golden(&renderer, "n64_look_scene", MAX_CHANNEL_DIFF_5551);
+}
+
+#[test]
+fn strict_mode_rejects_texture_over_budget() {
+    let Some(mut renderer) = headless_renderer() else {
+        return;
+    };
+    renderer.set_strict(true);
+    // 64x64 @ RGBA5551 (2 bytes/pixel on N64) = 8192 bytes > 4096 TMEM.
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        renderer.upload_sprite(SpriteId(3), 64, 64, &vec![255u8; 64 * 64 * 4]);
+    }));
+    let err = result.expect_err("strict mode must reject a 64x64 sprite on N64");
+    let msg = err
+        .downcast_ref::<String>()
+        .cloned()
+        .unwrap_or_else(|| "non-string panic".into());
+    assert!(
+        msg.contains("strict mode") && msg.contains("manifest.toml"),
+        "panic message must be actionable, got: {msg}"
+    );
 }

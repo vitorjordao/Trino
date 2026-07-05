@@ -1,0 +1,13 @@
+[package]
+name = "trino-platform-n64"
+description = "Nintendo 64 backend for Trino: Rust over a thin C shim (shim/trino_shim.c) compiled against pinned libdragon inside the Docker toolchain image."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Within the workspace this crate may depend only on trino-core
+# (enforced by xtask/tests/dep_graph.rs). No external crates at all here:
+# everything native comes from the C shim at link time.
+[dependencies]
+trino-core = { workspace = true }

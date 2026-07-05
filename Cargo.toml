@@ -13,6 +13,7 @@ rust-version = "1.93"
 trino-core = { path = "crates/core" }
 trino-game-api = { path = "crates/game-api" }
 trino-platform-pc = { path = "crates/platform-pc" }
+trino-platform-n64 = { path = "crates/platform-n64" }
 trino-asset-pipeline = { path = "crates/asset-pipeline" }
 trino-scene = { path = "crates/scene" }
 hello-sprite = { path = "examples/hello-sprite" }

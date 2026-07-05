@@ -4,6 +4,8 @@
 //! target. Wraps cargo, the asset pipeline, Docker (N64) and emulators so
 //! contributors and CI never memorize per-platform incantations.
 
+mod n64;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
@@ -19,7 +21,8 @@ commands:
                        run the test suite (default: everything testable);
                        --bless regenerates golden images
   assets <pc|n64|3ds>  bake assets into target/assets/<platform>
-  watch pc             live-reload session: app + code & asset watching
+  watch <pc|n64>       live-reload session (pc: dylib hot swap; n64: rebuild
+                       ROM + relaunch ares)
   editor               launch the Trino editor
   new <name>           scaffold a new game project        (Fase 8)
   gen-assets           regenerate the sample master assets (dev utility)
@@ -43,6 +46,13 @@ fn main() -> ExitCode {
             let envs: &[(&str, &str)] = if bless { &[("TRINO_BLESS", "1")] } else { &[] };
             cargo(&["test", "--workspace"], envs)
         }
+        (Some("assets"), Some("n64")) => match n64::bake_assets(&n64::repo_root(), false) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("[n64] {e}");
+                ExitCode::FAILURE
+            }
+        },
         (Some("assets"), Some(platform)) => match Platform::parse(platform) {
             Some(p) => assets(p),
             None => {
@@ -54,9 +64,12 @@ fn main() -> ExitCode {
         (Some("editor"), _) => cargo(&["run", "-p", "trino-editor"], &[]),
         (Some("gen-assets"), _) => gen_assets(),
 
-        (Some("build" | "run" | "test" | "watch"), Some(p @ ("n64" | "3ds"))) => {
-            not_yet(p, if p == "n64" { "Fase 4" } else { "Fase 5" })
-        }
+        (Some("build"), Some("n64")) => n64::build(false),
+        (Some("run"), Some("n64")) => n64::run(),
+        (Some("test"), Some("n64")) => n64::test(),
+        (Some("watch"), Some("n64")) => n64::watch(),
+
+        (Some("build" | "run" | "test" | "watch"), Some("3ds")) => not_yet("3ds", "Fase 5"),
         (Some("new"), _) => not_yet("new", "Fase 8"),
 
         (Some("help") | None, _) => {

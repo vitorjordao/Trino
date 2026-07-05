@@ -62,13 +62,26 @@ pub struct PcRenderer {
     sprite_bgl: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     globals_bg: wgpu::BindGroup,
+    globals_buf: wgpu::Buffer,
     instance_buf: wgpu::Buffer,
     instance_capacity: u64,
     sprites: HashMap<u32, SpriteEntry>,
     commands: Vec<DrawCommand>,
     clear: Color,
     caps: Caps,
+    profile: SimProfile,
     internal_size: (u32, u32),
+    n64_look: bool,
+    strict: bool,
+}
+
+/// Uniform buffer contents; layout mirrored by `Globals` in shaders.wgsl.
+fn globals_bytes(width: u32, height: u32, n64_look: bool) -> [u8; 16] {
+    let mut b = [0u8; 16];
+    b[0..4].copy_from_slice(&(width as f32).to_le_bytes());
+    b[4..8].copy_from_slice(&(height as f32).to_le_bytes());
+    b[8..12].copy_from_slice(&(n64_look as u32).to_le_bytes());
+    b
 }
 
 impl PcRenderer {
@@ -163,6 +176,15 @@ impl PcRenderer {
     ) -> Self {
         let internal_size = profile.internal_resolution();
         let caps = profile.caps();
+        // The N64 profile emulates the console's output (3-point filtering,
+        // RGBA5551 + dither) by default; TRINO_LOOK=off|n64 overrides.
+        let n64_look = match std::env::var("TRINO_LOOK").as_deref() {
+            Ok("off" | "0" | "native") => false,
+            Ok("n64" | "1" | "on") => true,
+            _ => profile == SimProfile::N64,
+        };
+        // Strict mode: enforce the profile's Caps at development time.
+        let strict = matches!(std::env::var("TRINO_STRICT").as_deref(), Ok("1" | "true"));
 
         let offscreen_tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("trino-offscreen"),
@@ -196,7 +218,7 @@ impl PcRenderer {
             label: Some("trino-globals-bgl"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
@@ -205,14 +227,17 @@ impl PcRenderer {
                 count: None,
             }],
         });
-        let globals: [f32; 4] = [internal_size.0 as f32, internal_size.1 as f32, 0.0, 0.0];
         let globals_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("trino-globals"),
             size: 16,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        queue.write_buffer(&globals_buf, 0, bytemuck::cast_slice(&globals));
+        queue.write_buffer(
+            &globals_buf,
+            0,
+            &globals_bytes(internal_size.0, internal_size.1, n64_look),
+        );
         let globals_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("trino-globals-bg"),
             layout: &globals_bgl,
@@ -387,14 +412,42 @@ impl PcRenderer {
             sprite_bgl: texture_bgl,
             sampler,
             globals_bg,
+            globals_buf,
             instance_buf,
             instance_capacity,
             sprites: HashMap::new(),
             commands: Vec::new(),
             clear: Color::BLACK,
             caps,
+            profile,
             internal_size,
+            n64_look,
+            strict,
         }
+    }
+
+    /// Toggle the N64 output emulation (3-point filtering, RGBA5551 +
+    /// ordered dither). Defaults to on for [`SimProfile::N64`].
+    pub fn set_n64_look(&mut self, on: bool) {
+        if self.n64_look != on {
+            self.n64_look = on;
+            self.queue.write_buffer(
+                &self.globals_buf,
+                0,
+                &globals_bytes(self.internal_size.0, self.internal_size.1, on),
+            );
+        }
+    }
+
+    pub fn n64_look(&self) -> bool {
+        self.n64_look
+    }
+
+    /// Toggle strict mode: content that busts the profile's [`Caps`] panics
+    /// with an actionable message instead of silently working on PC only.
+    /// Defaults to off; `TRINO_STRICT=1` enables it.
+    pub fn set_strict(&mut self, on: bool) {
+        self.strict = on;
     }
 
     /// View of the internal framebuffer — the editor registers this as an
@@ -412,6 +465,28 @@ impl PcRenderer {
             (width * height * 4) as usize,
             "sprite {id:?}: pixel data does not match {width}x{height} RGBA8"
         );
+        if self.strict {
+            // Console formats are 16-bit (RGBA5551) or smaller; indexed
+            // formats (CI4/CI8) are validated at bake time where the real
+            // format is known — this is the worst-case direct-color check.
+            let bpp = if self.caps.color_depth_bits <= 16 {
+                2
+            } else {
+                4
+            };
+            if let Err(e) = self.caps.validate_texture(
+                width.min(u16::MAX as u32) as u16,
+                height.min(u16::MAX as u32) as u16,
+                bpp,
+            ) {
+                panic!(
+                    "strict mode: sprite {id:?} ({width}x{height}) busts the {:?} \
+                     profile budget: {e:?}. Shrink the sprite or pick an indexed \
+                     format (CI4/CI8) in assets/manifest.toml.",
+                    self.profile
+                );
+            }
+        }
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("trino-sprite"),
             size: wgpu::Extent3d {
@@ -544,6 +619,15 @@ impl PcRenderer {
     }
 
     fn flush(&mut self) {
+        if self.strict && self.commands.len() as u32 > self.caps.max_sprites_per_frame {
+            panic!(
+                "strict mode: {} sprites this frame busts the {:?} profile budget \
+                 of {} — reduce overdraw or batch static content.",
+                self.commands.len(),
+                self.profile,
+                self.caps.max_sprites_per_frame
+            );
+        }
         let (instances, runs) = build_batches(&self.commands);
         self.commands.clear();
 
@@ -561,10 +645,19 @@ impl PcRenderer {
             self.queue.write_buffer(&self.instance_buf, 0, bytes);
         }
 
+        // In N64 look the framebuffer is 16-bit: quantize the clear color to
+        // 5 bits per channel (sprites are dithered+quantized in the shader).
+        let ch = |v: u8| -> f64 {
+            if self.n64_look {
+                ((v as f64 / 255.0 * 31.0).round() / 31.0).clamp(0.0, 1.0)
+            } else {
+                v as f64 / 255.0
+            }
+        };
         let clear = wgpu::Color {
-            r: self.clear.r as f64 / 255.0,
-            g: self.clear.g as f64 / 255.0,
-            b: self.clear.b as f64 / 255.0,
+            r: ch(self.clear.r),
+            g: ch(self.clear.g),
+            b: ch(self.clear.b),
             a: self.clear.a as f64 / 255.0,
         };
 

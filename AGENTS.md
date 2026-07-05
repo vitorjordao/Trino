@@ -9,7 +9,7 @@ Original architecture rationale: `PLANO_ENGINE_TRINO.md` (Portuguese).
 
 ## Current state
 
-**Fase 3 (editor v1) complete.** Working today:
+**Fase 4 (Nintendo 64) complete.** Working today:
 
 - PC 2D rendering (wgpu, console-sim resolutions, golden tests), audio, input.
 - Asset pipeline: `assets/manifest.toml` + shared masters + per-platform overrides →
@@ -24,8 +24,20 @@ Original architecture rationale: `PLANO_ENGINE_TRINO.md` (Portuguese).
 - Scene format: **versioned RON** in `scenes/*.scene.ron` (`trino-scene` crate).
   Removing/renaming a field bumps `SCENE_VERSION` and requires a migration in
   `Scene::from_ron`; adding an optional defaulted field does not.
+- **N64**: `cargo xtask build n64` produces `target/n64/trino.z64` (Docker
+  toolchain image + C shim + Rust staticlib — ABI story in
+  `docs/adr/0002-n64-abi-o32-staticlib.md`); `run n64` opens it in ares
+  (expected at `ares-v148/` in the repo root, gitignored); `test n64` boots a
+  test ROM and asserts on ISViewer magic strings (`TRINO_TEST_PASS/FAIL`);
+  `watch n64` rebuilds + relaunches on save. Skills: `build-n64`, `run-emulator`.
+- **N64 look on PC**: the `SimProfile::N64` renderer emulates the console
+  output — 3-point filtering + RGBA5551 quantization with the RDP magic-square
+  dither (`TRINO_LOOK=off|n64` overrides). Strict mode (`TRINO_STRICT=1` or
+  `PcRenderer::set_strict`) panics with an actionable message when content
+  busts the profile's `Caps`. Deferred: mupen64plus golden screenshots (ares
+  is the reference emulator for now) and the VI post stage (dedither/divot).
 
-Consoles are still ahead — check `PLANO_EXECUCAO_TRINO.md`.
+3DS is still ahead — check `PLANO_EXECUCAO_TRINO.md`.
 
 PC keyboard mapping: A/B = Z/X, X/Y = C/V, L/R = Q/E, Start = Enter,
 Select = Right Shift, D-pad = arrows, stick = WASD (see `crates/platform-pc/src/input.rs`).
@@ -82,7 +94,10 @@ cargo xtask assets pc     # bake assets into target/assets/pc
 cargo xtask watch pc      # live-reload session (code dylib + assets)
 cargo xtask editor        # launch the visual editor
 cargo xtask gen-assets    # regenerate sample masters (dev utility)
-cargo xtask build n64     # Fase 4 (Docker + libdragon)
+cargo xtask build n64     # ROM via Docker toolchain -> target/n64/trino.z64
+cargo xtask run n64       # build + open in ares (ares-v148/ at repo root)
+cargo xtask test n64      # build test ROM + assert ISViewer TRINO_TEST_PASS
+cargo xtask watch n64     # rebuild ROM + relaunch ares on save
 cargo xtask build 3ds     # Fase 5 (devkitARM + cargo-3ds)
 cargo xtask new <name>    # Fase 8 (scaffold a game)
 ```
@@ -103,16 +118,20 @@ cargo test --workspace
   `#![cfg_attr(not(test), no_std)]` so tests can use std.
 - Golden-image tests (Fase 1+) live in `tests/golden/`; regenerate only via
   `cargo xtask test --bless` and review the diff in the PR.
-- Console tests (Fase 4/5) report through debug channels (ISViewer magic strings on N64,
-  GDB-stub exit codes on 3DS) and run in emulators in CI.
+- Console tests report through debug channels (ISViewer magic strings on N64 —
+  see `apps/n64/src/lib.rs::run_self_test`; GDB-stub exit codes on 3DS in
+  Fase 5). N64 emulator tests run locally via `cargo xtask test n64`; CI
+  builds the ROM but does not run ares yet (no Linux release binary).
 
 ## Toolchain notes
 
-- Workspace builds on **stable** (see `rust-toolchain.toml`). Console targets pin their
-  own nightly in later phases — never change pins casually; they are verified
-  combinations.
-- Windows: N64 builds (Fase 4) require Docker Desktop. PC development needs nothing
-  beyond Rust.
+- Workspace builds on **stable** (see `rust-toolchain.toml`). The N64 target build
+  runs on **nightly** (`cargo +nightly` with `-Zbuild-std=core,alloc
+  -Zjson-target-spec`) against `platforms/n64/mips-nintendo64-none.json` — never
+  change pins or the target spec casually; they are verified combinations.
+- Windows: N64 builds need Docker reachable from WSL2 (Docker Desktop optional —
+  a plain in-WSL dockerd works; xtask calls `wsl docker ...`). PC development
+  needs nothing beyond Rust.
 
 ## Pitfalls
 
@@ -129,3 +148,9 @@ cargo test --workspace
   layouts, and swapping a dylib across a layout change is UB.
 - Game crates use `#![cfg_attr(target_os = "none", no_std)]` — std exists on PC only for
   the dylib's panic handler; game code must never call std APIs.
+- N64 FFI goes **only** through the C shim (`crates/platform-n64/shim/trino_shim.c`
+  + `crates/platform-n64/src/ffi.rs`, kept in matching pairs), and every entry
+  must stay within ≤4 scalar/pointer args, no by-value structs, no variadics,
+  no 64-bit values across the boundary — the Rust side is o32, libdragon is
+  o64, and that subset is where the two ABIs agree
+  (`docs/adr/0002-n64-abi-o32-staticlib.md`). Never call libdragon from Rust.

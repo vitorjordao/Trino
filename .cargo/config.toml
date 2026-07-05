@@ -1,2 +1,10 @@
 [alias]
 xtask = "run --quiet -p xtask --"
+
+# N64 target. Build via `cargo xtask build n64`: Rust compiles to a
+# staticlib (o32, no abicalls); the final link happens INSIDE the Docker
+# toolchain image with mips64-elf-gcc + libdragon's n64.ld.
+# ABI note: libdragon is -mabi=o64 and LLVM has no o64, so Rust codegens o32
+# and GNU ld links the mix with --no-warn-mismatch. That is safe because the
+# only cross-ABI calls are through the shim (crates/platform-n64/shim), which
+# is restricted to <=4 scalar/pointer args — identical in o32 and o64.

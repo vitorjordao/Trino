@@ -1,0 +1,15 @@
+[package]
+name = "trino-app-n64"
+description = "N64 glue binary: libdragon boot (via platform-n64 shim) + game + main loop. Builds only for the mips-nintendo64-none target via `cargo xtask build n64`."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["staticlib"]
+
+[dependencies]
+trino-core = { workspace = true }
+trino-platform-n64 = { workspace = true }
+hello-sprite = { workspace = true }

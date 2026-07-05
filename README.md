@@ -34,15 +34,17 @@ with a modern visual editor, live reload, and console-accurate preview modes.
 
 ## Status
 
-🚧 **Early development — Fase 3 (visual editor v1) done.** The roadmap with per-phase
-acceptance criteria lives in [PLANO_EXECUCAO_TRINO.md](PLANO_EXECUCAO_TRINO.md).
+🚧 **Early development — Fase 4 (Nintendo 64) done.** Real ROMs boot in ares, with an
+automated in-emulator test harness. The roadmap with per-phase acceptance criteria
+lives in [PLANO_EXECUCAO_TRINO.md](PLANO_EXECUCAO_TRINO.md).
 
 | | PC | Nintendo 64 | Nintendo 3DS |
 |---|---|---|---|
-| Window/boot | ✅ | 🚧 Fase 4 | 🚧 Fase 5 |
-| 2D sprites, input, audio | ✅ | 🚧 Fase 4 | 🚧 Fase 5 |
-| Console-sim resolutions + golden tests | ✅ | 🚧 Fase 4 | 🚧 Fase 5 |
-| Asset pipeline + live reload | ✅ | 🚧 Fase 4 | 🚧 Fase 5 |
+| Window/boot | ✅ | ✅ `.z64` in ares | 🚧 Fase 5 |
+| 2D sprites, input, audio | ✅ | ✅ | 🚧 Fase 5 |
+| Console-sim + golden tests | ✅ | ✅ N64 look (3-point, RGBA5551 dither) | 🚧 Fase 5 |
+| Asset pipeline + live reload | ✅ | ✅ (rebuild + relaunch loop) | 🚧 Fase 5 |
+| Emulator test harness | — | ✅ ISViewer magic strings | 🚧 Fase 5 |
 | Visual editor | ✅ v1 | — | — |
 | 3D | 🚧 Fase 7 | 🚧 Fase 7 | 🚧 Fase 7 |
 
@@ -55,8 +57,16 @@ cargo xtask run pc     # opens the (for now, empty) engine window
 cargo xtask test       # full test suite — same gates as CI
 ```
 
-That's it for PC. Console toolchains (Docker for N64, devkitPro for 3DS) are only needed
-from Fases 4/5 — see [CONTRIBUTING.md](CONTRIBUTING.md) for setup.
+That's it for PC. For N64 you need Docker and the [ares](https://ares-emu.net/)
+emulator at `ares-v148/` in the repo root, then:
+
+```sh
+cargo xtask run n64    # build target/n64/trino.z64 + open it in ares
+cargo xtask test n64   # boot a test ROM, assert on ISViewer debug output
+cargo xtask watch n64  # rebuild + relaunch on every save
+```
+
+devkitPro for 3DS arrives in Fase 5 — see [CONTRIBUTING.md](CONTRIBUTING.md) for setup.
 
 ## How it works
 

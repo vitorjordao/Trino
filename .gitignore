@@ -15,3 +15,5 @@ Thumbs.db
 
 # Golden test scratch output (actual images produced during a failing run)
 tests/**/actual/
+
+ares-v148

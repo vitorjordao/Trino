@@ -53,17 +53,22 @@ pub struct Tilemap<'a> {
 }
 
 impl<'a> Tilemap<'a> {
-    /// Parse a rectangular ASCII level. Trailing newline optional; `\r` is
-    /// rejected (bake normalizes line endings).
+    /// Parse a rectangular ASCII level. Trailing newline optional. CRLF
+    /// levels parse too, but only when every line uses it — `stride` must
+    /// be uniform (git checkouts with `core.autocrlf` produce exactly that).
     pub fn parse(level: &'a str) -> Result<Self, TilemapError> {
         let bytes = level.as_bytes();
         let mut width = 0usize;
         let mut height = 0usize;
         let mut current = 0usize;
-        for &b in bytes {
+        // Bytes per row including the terminator(s): width+1 for LF levels,
+        // width+2 for CRLF. Uniform line endings make it constant.
+        let mut stride = 0usize;
+        for (i, &b) in bytes.iter().enumerate() {
             if b == b'\n' {
                 if width == 0 {
                     width = current;
+                    stride = i + 1;
                 } else if current != width {
                     return Err(TilemapError::NotRectangular {
                         row: height,
@@ -74,11 +79,7 @@ impl<'a> Tilemap<'a> {
                 height += 1;
                 current = 0;
             } else if b == b'\r' {
-                return Err(TilemapError::NotRectangular {
-                    row: height,
-                    expected: width,
-                    found: current,
-                });
+                // Tolerated (Windows checkouts); not counted as a tile.
             } else {
                 current += 1;
             }
@@ -87,6 +88,7 @@ impl<'a> Tilemap<'a> {
         if current > 0 {
             if width == 0 {
                 width = current;
+                stride = width + 1;
             } else if current != width {
                 return Err(TilemapError::NotRectangular {
                     row: height,
@@ -101,7 +103,7 @@ impl<'a> Tilemap<'a> {
         }
         Ok(Tilemap {
             lines: bytes,
-            stride: width + 1,
+            stride,
             width,
             height,
         })
@@ -182,6 +184,19 @@ mod tests {
         let without = Tilemap::parse("..\n##").unwrap();
         assert_eq!((with.width, with.height), (2, 2));
         assert_eq!((without.width, without.height), (2, 2));
+    }
+
+    #[test]
+    fn crlf_levels_parse_identically() {
+        // Windows git checkouts (core.autocrlf) hand the game CRLF levels.
+        let lf = Tilemap::parse(".C.\n###\n").unwrap();
+        let crlf = Tilemap::parse(".C.\r\n###\r\n").unwrap();
+        assert_eq!((crlf.width, crlf.height), (lf.width, lf.height));
+        for ty in 0..lf.height as i32 {
+            for tx in 0..lf.width as i32 {
+                assert_eq!(crlf.tile(tx, ty), lf.tile(tx, ty), "({tx},{ty})");
+            }
+        }
     }
 
     #[test]

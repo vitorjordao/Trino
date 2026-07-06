@@ -1,0 +1,17 @@
+# Level files are parsed byte-for-byte on consoles: keep them LF everywhere
+# (the tilemap parser tolerates CRLF, but LF is the canonical form).
+*.txt text eol=lf
+*.ron text eol=lf
+*.toml text eol=lf
+*.rs text eol=lf
+*.wgsl text eol=lf
+*.c text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.md text eol=lf
+
+# Binary assets.
+*.png binary
+*.gif binary
+*.wav binary
+*.glb binary

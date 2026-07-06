@@ -6,14 +6,15 @@
 A game engine that ships the same game to **Nintendo 64**, **Nintendo 3DS** and **PC** —
 with a modern visual editor, live reload, and console-accurate preview modes.
 
-[![CI](https://github.com/OWNER/trino/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/trino/actions/workflows/ci.yml)
+[![CI](https://github.com/vitorjordao/Trino/actions/workflows/ci.yml/badge.svg)](https://github.com/vitorjordao/Trino/actions/workflows/ci.yml)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-MIT)
 [![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](rust-toolchain.toml)
 
-<img src="docs/media/platformer.png" width="640" alt="Trino's showcase platformer rendered with the N64 look (3-point filtering + RGBA5551 dither)" />
+<img src="docs/media/platformer.gif" width="640" alt="Trino's showcase platformer being played, rendered with the N64 look (3-point filtering + RGBA5551 dither)" />
 
-*The showcase platformer — one Rust crate, boots as a `.z64` on N64, a `.3dsx` on 3DS
-and a native window on PC. (Animated editor + three-console GIF coming with Fase 8.)*
+*The showcase platformer, played by the engine's test bot and recorded straight from the
+real renderer with the N64 look — one Rust crate, boots as a `.z64` on N64, a `.3dsx`
+on 3DS and a native window on PC.*
 
 </div>
 
@@ -22,18 +23,26 @@ and a native window on PC. (Animated editor + three-console GIF coming with Fase
 ## Why Trino?
 
 - 🕹️ **Write once, run on real retro hardware.** Your game code depends on one small,
-  `no_std` crate — the engine maps it to libdragon (N64), citro (3DS) and wgpu (PC).
-- 🖥️ **A real editor.** Unity-style viewport, scene hierarchy, inspector and asset
-  browser, built with egui. Press play, edit assets, watch them hot-reload.
+  `no_std` crate — the engine maps it to libdragon (N64), libctru/citro2d (3DS) and
+  wgpu (PC).
+- 🖥️ **A real editor.** Unity-style viewport, scene hierarchy, inspector, asset
+  browser and a tilemap **Level painter**, built with egui. Press play, edit assets,
+  watch them hot-reload.
+- 🔀 **Two-way file sync.** Levels are plain ASCII and scenes are RON: paint in the
+  editor and the file saves instantly; let an AI agent (or any tool) edit the file and
+  the editor updates live. The file is always the source of truth.
 - 📺 **Console simulation on PC.** Preview with N64 3-point filtering, RGBA5551 dither
-  and 320×240 output — or strict mode, which *fails the build* when a texture would not
-  fit in the N64's 4 KB TMEM.
+  and 320×240 output — or strict mode, which *fails the frame* when content busts the
+  N64's 4 KB TMEM or triangle budgets.
 - 🔁 **Live reload everywhere.** Game code reloads as a dylib on PC; ROMs rebuild and
-  relaunch in the emulator (or re-upload to a flashcart) on file save.
-- 🧪 **Emulator-tested.** CI boots your game in ares, mupen64plus and Citra and asserts
-  on debug output and golden screenshots.
-- 🤖 **AI-friendly by default.** The repo — and every game scaffolded by `trino new` —
-  ships `AGENTS.md` and Claude Code skills, so AI agents are productive from clone.
+  relaunch in the emulator on file save (`cargo xtask watch n64|3ds`).
+- 🧪 **Emulator-tested.** `cargo xtask test n64|3ds` boots your game in ares/Azahar and
+  asserts on the debug channel; golden-image tests cover the renderer.
+- 🎲 **Vertex-lit 3D** on all three targets from one deterministic software T&L
+  pipeline (glTF masters → portable TMDL meshes).
+- 🤖 **AI-friendly by default.** The repo — and every game scaffolded by
+  `cargo xtask new` — ships `AGENTS.md` and Claude Code skills, so AI agents are
+  productive from clone.
 
 ## Status
 
@@ -51,15 +60,23 @@ acceptance criteria lives in [PLANO_EXECUCAO_TRINO.md](PLANO_EXECUCAO_TRINO.md).
 | Console-sim + golden tests | ✅ | ✅ N64 look (3-point, RGBA5551 dither) | ✅ 400×240 + bilinear |
 | Asset pipeline + live reload | ✅ | ✅ (rebuild + relaunch loop) | ✅ (rebuild + relaunch loop) |
 | Emulator test harness | — | ✅ ISViewer magic strings | ✅ svcOutputDebugString |
-| Visual editor | ✅ v1 | — | — |
+| Visual editor + Level painter (two-way file sync) | ✅ | — | — |
 | 3D (vertex-lit `draw_model`) | ✅ | ✅ | ✅ |
+
+### In pictures
+
+| N64 look on PC | Software-T&L 3D |
+|---|---|
+| <img src="docs/media/n64-look.png" width="320" alt="The renderer test scene with 3-point filtering and RGBA5551 ordered dither" /> | <img src="docs/media/cube3d.png" width="320" alt="A vertex-lit cube: glTF to TMDL to CPU transform and lighting to plain rasterized triangles" /> |
+| 3-point filtering + the RDP's magic-square dither, quantized to RGBA5551 — emulated in the PC shader so what you see is what the console shows. | glTF → TMDL → deterministic CPU transform & lighting; the consoles only rasterize colored triangles (`rdpq_triangle` / `C2D_DrawTriangle`). |
 
 ## Quickstart
 
 ```sh
-git clone https://github.com/OWNER/trino
-cd trino
-cargo xtask run pc     # opens the (for now, empty) engine window
+git clone https://github.com/vitorjordao/Trino
+cd Trino
+cargo xtask run pc     # play the platformer (N64 look by default)
+cargo xtask editor     # open the visual editor
 cargo xtask test       # full test suite — same gates as CI
 ```
 
@@ -79,6 +96,22 @@ cargo xtask watch n64  # rebuild + relaunch on every save (3ds too)
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for setup details.
+
+## The editor — built for humans *and* AI agents
+
+<img src="docs/media/editor-level.png" width="720" alt="The Trino editor with the Level tab open: tile palette, the level grid, hierarchy, inspector, assets and console panels" />
+
+The **Level** tab paints the platformer's tilemap. Every stroke saves straight to
+`examples/platformer/src/level1.txt` — plain ASCII, one character per tile. That file
+is the single source of truth, and the sync is **two-way**: edit it with any tool (or
+ask an AI agent to redesign the level) and the editor picks the change up live through
+its file watcher. The scene file (`scenes/*.scene.ron`) gets the same treatment.
+
+```text
+..P............C............C..............C..............F.
+####################...#################...#################
+```
+*A level is just text — trivially diffable, reviewable and AI-editable.*
 
 ## How it works
 

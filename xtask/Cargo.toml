@@ -25,3 +25,4 @@ hello-sprite = { workspace = true }
 platformer = { workspace = true }
 trino-platform-pc = { workspace = true }
 pollster = { workspace = true }
+gif = { workspace = true }

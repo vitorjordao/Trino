@@ -8,7 +8,7 @@ exclude = ["templates/new-game"]
 version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/OWNER/trino"
+repository = "https://github.com/vitorjordao/Trino"
 rust-version = "1.93"
 
 [workspace.dependencies]
@@ -35,6 +35,8 @@ toml = "1"
 hound = "3"
 # glTF 2.0 import for the 3D model pipeline (Fase 7).
 gltf = "1"
+# README gameplay recording (dev utility in xtask).
+gif = "0.13"
 notify = "8"
 notify-debouncer-full = "0.6"
 hot-lib-reloader = "0.8.2"

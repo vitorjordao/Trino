@@ -8,6 +8,7 @@
 //!
 //! Smoke-test hook: `TRINO_EDITOR_SMOKE_FRAMES=N` closes after N frames.
 
+mod level_editor;
 mod viewport;
 
 use std::path::PathBuf;
@@ -18,9 +19,11 @@ use trino_asset_pipeline as pipeline;
 use trino_platform_pc::SimProfile;
 use trino_scene::{Entity, Scene, SpriteComponent};
 
+use level_editor::LevelEditor;
 use viewport::Viewport;
 
 const SCENE_PATH: &str = "scenes/main.scene.ron";
+const LEVEL_PATH: &str = "examples/platformer/src/level1.txt";
 
 fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
@@ -40,6 +43,7 @@ fn main() -> eframe::Result {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Tab {
     Viewport,
+    Level,
     Hierarchy,
     Inspector,
     Assets,
@@ -58,6 +62,12 @@ struct EditorApp {
     dirty: bool,
     asset_events: std::sync::mpsc::Receiver<Vec<u32>>,
     _asset_watcher: Box<dyn std::any::Any>,
+    level: LevelEditor,
+    /// What the scene file contained when we last loaded/saved it — the
+    /// echo guard for external-change detection.
+    scene_saved_text: String,
+    file_events: std::sync::mpsc::Receiver<()>,
+    _file_watcher: Box<dyn std::any::Any>,
     frames: u64,
     smoke_frames: Option<u64>,
 }
@@ -69,7 +79,14 @@ impl EditorApp {
             .clone()
             .expect("editor requires the wgpu backend");
 
-        let mut dock = egui_dock::DockState::new(vec![Tab::Viewport]);
+        // Dev hook (screenshots/tests): TRINO_EDITOR_TAB=level opens with
+        // the Level tab focused.
+        let tabs = if std::env::var("TRINO_EDITOR_TAB").as_deref() == Ok("level") {
+            vec![Tab::Level, Tab::Viewport]
+        } else {
+            vec![Tab::Viewport, Tab::Level]
+        };
+        let mut dock = egui_dock::DockState::new(tabs);
         let surface = dock.main_surface_mut();
         let [viewport_node, right] =
             surface.split_right(egui_dock::NodeIndex::root(), 0.78, vec![Tab::Hierarchy]);
@@ -112,6 +129,30 @@ impl EditorApp {
                 default_scene()
             }
         };
+        let scene_saved_text = std::fs::read_to_string(&scene_path).unwrap_or_default();
+
+        // Two-way sync: watch the scene and level files so external edits
+        // (AI agents, other tools) land in the UI live.
+        let level = LevelEditor::load(PathBuf::from(LEVEL_PATH));
+        let (ftx, file_events) = std::sync::mpsc::channel();
+        let mut file_watcher = notify_debouncer_full::new_debouncer(
+            std::time::Duration::from_millis(250),
+            None,
+            move |result: notify_debouncer_full::DebounceEventResult| {
+                if let Ok(events) = result
+                    && !events.is_empty()
+                {
+                    let _ = ftx.send(());
+                }
+            },
+        )
+        .expect("failed to start file watcher");
+        use notify_debouncer_full::notify::RecursiveMode;
+        for dir in ["scenes", "examples/platformer/src"] {
+            if let Err(e) = file_watcher.watch(PathBuf::from(dir), RecursiveMode::NonRecursive) {
+                log.push(format!("watch {dir} failed: {e}"));
+            }
+        }
 
         EditorApp {
             dock,
@@ -125,6 +166,10 @@ impl EditorApp {
             dirty: false,
             asset_events,
             _asset_watcher: Box::new(watcher),
+            level,
+            scene_saved_text,
+            file_events,
+            _file_watcher: Box::new(file_watcher),
             frames: 0,
             smoke_frames: std::env::var("TRINO_EDITOR_SMOKE_FRAMES")
                 .ok()
@@ -193,10 +238,52 @@ impl EditorApp {
         match self.scene.save(&self.scene_path) {
             Ok(()) => {
                 self.dirty = false;
+                // Echo guard: remember what we wrote so the file watcher
+                // does not treat our own save as an external change.
+                self.scene_saved_text =
+                    std::fs::read_to_string(&self.scene_path).unwrap_or_default();
                 self.log
                     .push(format!("saved {}", self.scene_path.display()));
             }
             Err(e) => self.log.push(format!("save failed: {e}")),
+        }
+    }
+
+    /// Two-way sync: pull external file changes (AI agents editing the
+    /// scene RON or the level ASCII) into the live UI.
+    fn sync_external_edits(&mut self) {
+        let mut any_event = false;
+        while self.file_events.try_recv().is_ok() {
+            any_event = true;
+        }
+        if !any_event {
+            return;
+        }
+
+        if self.level.maybe_external_reload() {
+            self.log.push("level reloaded (external change)".into());
+        }
+
+        if let Ok(text) = std::fs::read_to_string(&self.scene_path)
+            && text != self.scene_saved_text
+        {
+            if self.dirty {
+                self.log.push(
+                    "scene changed on disk but the editor has unsaved changes — \
+                     save or reload to resolve"
+                        .into(),
+                );
+            } else {
+                match Scene::load(&self.scene_path) {
+                    Ok(scene) => {
+                        self.scene = scene;
+                        self.selected = None;
+                        self.scene_saved_text = text;
+                        self.log.push("scene reloaded (external change)".into());
+                    }
+                    Err(e) => self.log.push(format!("external scene change invalid: {e}")),
+                }
+            }
         }
     }
 }
@@ -252,6 +339,9 @@ impl eframe::App for EditorApp {
             }
         }
 
+        // Two-way file sync (scene + level).
+        self.sync_external_edits();
+
         // Reap a finished play process.
         if let Some(child) = &mut self.play
             && let Ok(Some(status)) = child.try_wait()
@@ -300,6 +390,7 @@ impl egui_dock::TabViewer for TabView<'_> {
     fn title(&mut self, tab: &mut Tab) -> egui::WidgetText {
         match tab {
             Tab::Viewport => "Viewport".into(),
+            Tab::Level => "Level".into(),
             Tab::Hierarchy => "Hierarquia".into(),
             Tab::Inspector => "Inspector".into(),
             Tab::Assets => "Assets".into(),
@@ -318,6 +409,10 @@ impl egui_dock::TabViewer for TabView<'_> {
                 if let Some(clicked) = app.viewport.show(ui, &app.scene) {
                     app.selected = Some(clicked);
                 }
+            }
+            Tab::Level => {
+                let lines = app.level.ui(ui);
+                app.log.extend(lines);
             }
             Tab::Hierarchy => {
                 if ui.button("+ Entidade").clicked() {

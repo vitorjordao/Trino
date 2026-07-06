@@ -54,10 +54,9 @@ Original architecture rationale: `PLANO_ENGINE_TRINO.md` (Portuguese).
   the whole pipeline (`[music.*]` in the manifest → TSND on PC, wav64
   `--wav-loop` on N64, looped ndsp wavebuf on 3DS). `hello-sprite` stays as
   the minimal example (the hot-reload E2E builds it standalone).
-  Deferred to later phases: tilemap painting + entity placement in the
-  editor (levels are ASCII files for now), the animated README GIF (a static
-  hero shot exists — regenerate with `cargo test -p xtask --test hero_shot
-  -- --ignored`).
+  README media: hero shot via `cargo test -p xtask --test hero_shot --
+  --ignored`; gameplay GIF (a bot plays the level on the real renderer) via
+  `cargo test -p xtask --test record_gif -- --ignored`.
 - **3D (`draw_model`)**: engine-side software T&L (`trino_core::render3d` —
   see `docs/adr/0003-software-tnl-3d.md`): glTF masters bake to the portable
   TMDL format (`[models.*]` in the manifest); the core transforms, lights
@@ -74,14 +73,22 @@ Original architecture rationale: `PLANO_ENGINE_TRINO.md` (Portuguese).
   `templates/new-game/` into `examples/<name>` (game crate + its own
   AGENTS.md; the workspace glob picks it up). `release.yml` tags new
   workspace versions on main and publishes editor binaries + demo
-  `.z64`/`.3dsx` + SHA256SUMS — written but never exercised (no GitHub
-  remote yet; expect a shakedown on the first release).
+  `.z64`/`.3dsx` + SHA256SUMS.
+- **Editor two-way file sync** (`crates/editor/src/level_editor.rs` + the
+  file watcher in `main.rs`): the **Level** tab paints the platformer's
+  ASCII tilemap; every stroke saves immediately to
+  `examples/platformer/src/level1.txt`, and external writes to that file or
+  to `scenes/*.scene.ron` (AI agents, other tools) reload live in the UI —
+  the file is the source of truth, with an echo guard so the editor's own
+  saves don't bounce. A dirty scene is protected: external scene changes are
+  logged, not force-loaded, until saved. Dev hook: `TRINO_EDITOR_TAB=level`
+  opens with the Level tab focused (used for screenshots).
 
 Deferred backlog (each with a note where it lives): transform gizmo
-(ADR-0001), mupen64plus goldens + VI stage (AGENTS Fase 4 notes), editor
-tilemap painting + animated README GIF (Fase 6 notes), z-buffer/textured
-3D/near clipping + editor 3D viewport (ADR-0003), emulators in CI,
-standalone (out-of-repo) game scaffolding.
+(ADR-0001), mupen64plus goldens + VI stage (AGENTS Fase 4 notes),
+z-buffer/textured 3D/near clipping + editor 3D viewport (ADR-0003),
+emulators in CI, standalone (out-of-repo) game scaffolding, entity
+placement in the Level tab (spawn/flag paint as tiles today).
 
 PC keyboard mapping: A/B = Z/X, X/Y = C/V, L/R = Q/E, Start = Enter,
 Select = Right Shift, D-pad = arrows, stick = WASD (see `crates/platform-pc/src/input.rs`).

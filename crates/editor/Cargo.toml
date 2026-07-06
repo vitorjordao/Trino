@@ -18,3 +18,4 @@ trino-asset-pipeline = { workspace = true, features = ["watch"] }
 eframe = { workspace = true }
 egui_dock = { workspace = true }
 wgpu = { workspace = true }
+notify-debouncer-full = { workspace = true }

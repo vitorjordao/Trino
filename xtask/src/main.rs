@@ -23,7 +23,8 @@ commands:
                        --bless regenerates golden images
   assets <pc|n64|3ds>  bake assets into target/assets/<platform>
   watch <pc|n64>       live-reload session (pc: dylib hot swap; n64: rebuild
-                       ROM + relaunch ares)
+                       ROM + relaunch ares). pc: --game <crate> picks the
+                       game dylib to rebuild (default: platformer)
   editor               launch the Trino editor
   new <name>           scaffold a new game crate under examples/
   gen-assets           regenerate the sample master assets (dev utility)
@@ -33,6 +34,19 @@ fn main() -> ExitCode {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let bless = args.iter().any(|a| a == "--bless");
     args.retain(|a| a != "--bless");
+    // `watch pc --game <crate>`: which game crate feeds the hot-reload dylib.
+    let game = match args.iter().position(|a| a == "--game") {
+        Some(i) => {
+            if i + 1 >= args.len() {
+                eprintln!("xtask: --game needs a crate name (e.g. --game platformer)");
+                return ExitCode::FAILURE;
+            }
+            let name = args.remove(i + 1);
+            args.remove(i);
+            name
+        }
+        None => "platformer".into(),
+    };
     let mut it = args.iter().map(String::as_str);
 
     match (it.next(), it.next()) {
@@ -70,7 +84,7 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
-        (Some("watch"), Some("pc")) => watch_pc(),
+        (Some("watch"), Some("pc")) => watch_pc(&game),
         (Some("editor"), _) => cargo(&["run", "-p", "trino-editor"], &[]),
         (Some("gen-assets"), _) => gen_assets(),
 
@@ -131,11 +145,13 @@ fn assets(platform: Platform) -> ExitCode {
 /// Live-reload session: launches the app with the `reload` feature (which
 /// watches assets itself) and rebuilds the game dylib whenever game source
 /// changes — hot-lib-reloader inside the app picks up the new library.
+/// `game` is the crate that produces the dylib (`--game`, default
+/// `platformer`) — it must match the crate `apps/pc` links and hot-loads.
 ///
 /// Only `examples/` is watched on purpose: changes to `crates/core` or other
 /// host-linked crates can change type layouts, and swapping a dylib across a
 /// layout change is undefined behavior. Those changes require a restart.
-fn watch_pc() -> ExitCode {
+fn watch_pc(game: &str) -> ExitCode {
     use std::sync::mpsc;
     use std::time::Duration;
 
@@ -182,7 +198,7 @@ fn watch_pc() -> ExitCode {
     }
 
     println!(
-        "xtask watch: editing examples/ rebuilds the game dylib; Ctrl+C or close the window to stop"
+        "xtask watch: editing examples/ rebuilds the `{game}` dylib; Ctrl+C or close the window to stop"
     );
     loop {
         // Stop when the app window is closed.
@@ -198,7 +214,7 @@ fn watch_pc() -> ExitCode {
             while rx.try_recv().is_ok() {}
             println!("xtask watch: game source changed, rebuilding dylib...");
             let status = Command::new(cargo_bin())
-                .args(["build", "-p", "platformer"])
+                .args(["build", "-p", game])
                 .current_dir(&root)
                 .status();
             match status {

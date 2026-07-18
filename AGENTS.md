@@ -146,6 +146,8 @@ cargo xtask run pc        # build + launch (TRINO_SMOKE_FRAMES=60 auto-exits, fo
 cargo xtask test          # full workspace test suite (same as CI); --bless regens goldens
 cargo xtask assets pc     # bake assets into target/assets/pc
 cargo xtask watch pc      # live-reload session (code dylib + assets)
+                          #   --game <crate> picks the game dylib to rebuild
+                          #   (default: platformer; must match apps/pc)
 cargo xtask editor        # launch the visual editor
 cargo xtask gen-assets    # regenerate sample masters (dev utility)
 cargo xtask build n64     # ROM via Docker toolchain -> target/n64/trino.z64

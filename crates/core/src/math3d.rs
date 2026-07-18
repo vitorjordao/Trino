@@ -30,6 +30,29 @@ pub fn cos(x: f32) -> f32 {
     sin(x + core::f32::consts::FRAC_PI_2)
 }
 
+/// atan2(y, x) in (-PI, PI], octant-reduced polynomial (max error ~5e-3 —
+/// far below what a yaw-from-direction needs at console resolutions).
+/// Every 3D game needs it for "face where I'm walking"; keeping it here
+/// keeps games deterministic across PC/N64/3DS like the rest of the module.
+pub fn atan2(y: f32, x: f32) -> f32 {
+    use core::f32::consts::{FRAC_PI_2, PI};
+    let abs = |v: f32| if v < 0.0 { -v } else { v };
+    let (ax, ay) = (abs(x), abs(y));
+    if ax == 0.0 && ay == 0.0 {
+        return 0.0;
+    }
+    let a = if ax >= ay { ay / ax } else { ax / ay };
+    let s = a * a;
+    let mut r = ((-0.046_496_474 * s + 0.159_314_22) * s - 0.327_622_76) * s * a + a;
+    if ay > ax {
+        r = FRAC_PI_2 - r;
+    }
+    if x < 0.0 {
+        r = PI - r;
+    }
+    if y < 0.0 { -r } else { r }
+}
+
 /// sqrt via one reciprocal-sqrt bit trick + two Newton iterations.
 pub fn sqrt(x: f32) -> f32 {
     if x <= 0.0 {
@@ -179,6 +202,23 @@ mod tests {
             assert!((sin(x) - x.sin()).abs() < 2e-3, "sin({x})");
             assert!((cos(x) - x.cos()).abs() < 2e-3, "cos({x})");
         }
+    }
+
+    #[test]
+    fn atan2_is_close_to_std() {
+        for i in 0..256 {
+            let a = i as f32 / 256.0 * core::f32::consts::TAU - core::f32::consts::PI;
+            for r in [0.001f32, 1.0, 300.0] {
+                let (y, x) = (a.sin() * r, a.cos() * r);
+                let d = (atan2(y, x) - y.atan2(x)).abs();
+                assert!(d < 6e-3, "atan2({y}, {x}): diff {d}");
+            }
+        }
+        assert_eq!(atan2(0.0, 0.0), 0.0);
+        // Axes hit the exact quadrant boundaries.
+        assert!((atan2(1.0, 0.0) - core::f32::consts::FRAC_PI_2).abs() < 1e-6);
+        assert!((atan2(-1.0, 0.0) + core::f32::consts::FRAC_PI_2).abs() < 1e-6);
+        assert!((atan2(0.0, -1.0) - core::f32::consts::PI).abs() < 1e-6);
     }
 
     #[test]

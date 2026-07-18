@@ -129,6 +129,28 @@ impl Mul<f32> for Vec3 {
     }
 }
 
+impl AddAssign for Vec3 {
+    #[inline]
+    fn add_assign(&mut self, rhs: Vec3) {
+        *self = *self + rhs;
+    }
+}
+
+impl SubAssign for Vec3 {
+    #[inline]
+    fn sub_assign(&mut self, rhs: Vec3) {
+        *self = *self - rhs;
+    }
+}
+
+impl Neg for Vec3 {
+    type Output = Vec3;
+    #[inline]
+    fn neg(self) -> Vec3 {
+        Vec3::new(-self.x, -self.y, -self.z)
+    }
+}
+
 /// Axis-aligned rectangle: position of the top-left corner plus size.
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub struct Rect {
@@ -217,6 +239,16 @@ mod tests {
         assert_eq!(a * 2.0, Vec2::new(2.0, 4.0));
         assert_eq!(-a, Vec2::new(-1.0, -2.0));
         assert_eq!(a.dot(b), 1.0);
+    }
+
+    #[test]
+    fn vec3_ops() {
+        let mut a = Vec3::new(1.0, 2.0, 3.0);
+        a += Vec3::new(1.0, 1.0, 1.0);
+        assert_eq!(a, Vec3::new(2.0, 3.0, 4.0));
+        a -= Vec3::new(2.0, 2.0, 2.0);
+        assert_eq!(a, Vec3::new(0.0, 1.0, 2.0));
+        assert_eq!(-a, Vec3::new(0.0, -1.0, -2.0));
     }
 
     #[test]

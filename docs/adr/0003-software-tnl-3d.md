@@ -54,6 +54,15 @@ Transform & lighting is **engine code, not backend code**
   draws, camera changes and `end_frame`). Games no longer sort model draws;
   the remaining limit is per-triangle: interpenetrating geometry can still
   mis-sort (that fix is a z-buffer, still deferred).
+- Update (2026-07, third pass — play-testing found floors painting over the
+  player and doors vanishing behind wall quads): painter keys were triangle
+  centroids, which misrepresent large triangles. `tessellate` now (a)
+  bisects any edge spanning more than 3 units of view depth (the rule is
+  per-edge, so neighbors split shared edges identically — no cracks) and
+  (b) keys the sort on the triangle's **farthest** vertex, so a surface
+  extending behind an object always draws before it. Output count no longer
+  has a static bound, so `tessellate` emits through a callback and backends
+  push straight into the batch buffer.
 - Strict mode enforces `max_tris_per_frame` so PC development stays honest
   about console budgets.
 - If a future phase needs more (textured 3D, z-buffered scenes), the

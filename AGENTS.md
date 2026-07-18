@@ -69,12 +69,14 @@ Original architecture rationale: `PLANO_ENGINE_TRINO.md` (Portuguese).
   pulses) so color variants don't need separate baked meshes; strict mode
   enforces `max_tris_per_frame`. The platformer shows a spinning cube.
   Triangles are clipped against the near plane + a 1.5x guard-band frustum
-  (bounded coordinates — RDP fixed-point safe); `math3d` ships deterministic
-  `sin/cos/sqrt/atan2`. Consecutive `draw_model` calls form a batch whose
-  triangles depth-sort together (painter across meshes; flushed on sprite
-  draws, camera changes and `end_frame`). v1 limits (in the ADR): no
-  z-buffer (interpenetrating triangles still mis-sort), vertex colors only.
-  Deferred: editor 3D viewport/gizmo.
+  (bounded coordinates — RDP fixed-point safe); edges spanning > 3 units of
+  view depth are bisected and the painter key is the farthest vertex, so
+  floors/walls layer correctly under objects standing on them; `math3d`
+  ships deterministic `sin/cos/sqrt/atan2`. Consecutive `draw_model` calls
+  form a batch whose triangles depth-sort together (painter across meshes;
+  flushed on sprite draws, camera changes and `end_frame`). v1 limits (in
+  the ADR): no z-buffer (interpenetrating triangles still mis-sort), vertex
+  colors only. Deferred: editor 3D viewport/gizmo.
 
 - **Scaffolding + release**: `cargo xtask new <name>` renders
   `templates/new-game/` into `examples/<name>` (game crate + its own

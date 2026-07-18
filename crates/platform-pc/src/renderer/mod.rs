@@ -75,7 +75,6 @@ pub struct PcRenderer {
     meshes: HashMap<u32, Vec<u8>>,
     commands: Vec<Cmd>,
     tri_verts: Vec<TriVertex>,
-    tri_scratch: Vec<ScreenTri>,
     /// Triangles of the current model batch: consecutive `draw_model` calls
     /// accumulate here and depth-sort together (painter across meshes) when
     /// a sprite draw, a camera change or `end_frame` flushes the batch.
@@ -507,7 +506,6 @@ impl PcRenderer {
             meshes: HashMap::new(),
             commands: Vec::new(),
             tri_verts: Vec::new(),
-            tri_scratch: Vec::new(),
             pending_tris: Vec::new(),
             camera: Camera3::default(),
             clear: Color::BLACK,
@@ -961,27 +959,17 @@ impl Renderer for PcRenderer {
             return; // unknown handle: skip, like sprites
         };
         let mesh = Mesh::from_tmdl(tmdl).expect("validated on upload");
-        // Frustum clipping can fan one triangle into up to 6.
-        let max_tris = mesh.index_count / 3 * 6;
-        self.tri_scratch.resize(
-            max_tris,
-            ScreenTri {
-                pts: [Vec2::ZERO; 3],
-                colors: [Color::WHITE; 3],
-                depth: 0.0,
-            },
-        );
         let screen = Vec2::new(self.internal_size.0 as f32, self.internal_size.1 as f32);
-        let n = trino_core::render3d::tessellate(
+        let pending = &mut self.pending_tris;
+        trino_core::render3d::tessellate(
             &mesh,
             &transform.matrix(),
             &self.camera,
             &DEFAULT_LIGHT,
             params.tint,
             screen,
-            &mut self.tri_scratch,
+            &mut |tri| pending.push(tri),
         );
-        self.pending_tris.extend_from_slice(&self.tri_scratch[..n]);
     }
 
     fn end_frame(&mut self) {

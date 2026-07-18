@@ -9,14 +9,28 @@
 //! gouraud lighting, backface cull, painter's sort — lives here, in pure
 //! deterministic f32, identical on every target.
 //!
-//! Limits (v1, on purpose): no z-buffer (per-mesh painter's sort), no
-//! textures on 3D geometry (vertex colors only).
+//! Limits (v1, on purpose): no z-buffer (painter's sort), no textures on 3D
+//! geometry (vertex colors only).
 //!
 //! Triangles are clipped against the near plane and a guard-band frustum
 //! (1.5x the screen), so geometry that crosses the near plane stays visible
 //! and every projected coordinate stays bounded — important for the N64 RDP,
 //! whose edge coefficients are fixed-point and overflow on huge offscreen
 //! coordinates.
+//!
+//! Painter correctness for a z-bufferless renderer hinges on two things
+//! done here (both found play-testing a 3D game — huge floor triangles
+//! painted over the player, doors vanished behind wall quads):
+//!
+//! - Edges spanning more than [`DEPTH_SPLIT`] units of view depth are
+//!   recursively bisected, so a 40-unit floor becomes depth-uniform strips
+//!   instead of one triangle whose single sort key misrepresents most of
+//!   its surface. The split rule depends only on the edge's endpoints, so
+//!   neighboring triangles split shared edges at identical points — no
+//!   T-junction cracks.
+//! - The sort key ([`ScreenTri::depth`]) is the triangle's **farthest**
+//!   vertex, not its centroid: a surface that extends behind an object
+//!   standing on it always draws first.
 //!
 //! Cross-mesh ordering: backends collect the triangles of consecutive
 //! `draw_model` calls into a batch and depth-sort the whole batch before
@@ -160,7 +174,10 @@ pub const DEFAULT_LIGHT: Light = Light {
 pub struct ScreenTri {
     pub pts: [Vec2; 3],
     pub colors: [Color; 3],
-    /// View-space depth of the triangle center (larger = farther).
+    /// Painter sort key: view-space depth of the triangle's **farthest**
+    /// vertex (larger = farther). Farthest-vertex keys make a surface that
+    /// extends behind an object draw before the object standing on it —
+    /// centroid keys painted floors over players and walls over doors.
     pub depth: f32,
 }
 
@@ -170,6 +187,13 @@ const NEAR: f32 = 0.05;
 const GUARD: f32 = 1.5;
 /// A triangle clipped by up to 5 planes gains at most one vertex per plane.
 const MAX_POLY: usize = 8;
+/// Edges spanning more than this much view depth are bisected before
+/// projection: painter sorting is only as good as how depth-uniform each
+/// triangle is. The rule looks at one edge at a time, so neighbors split
+/// shared edges identically (no cracks).
+pub const DEPTH_SPLIT: f32 = 3.0;
+/// Subdivision work stack; overflow emits the triangle unsplit (graceful).
+const SPLIT_STACK: usize = 48;
 
 /// Linear blend of two already-lit vertex colors (gouraud interpolation for
 /// clip-generated vertices).
@@ -210,12 +234,12 @@ fn clip_plane(
     n_out
 }
 
-/// Transform, light, clip, project, cull and depth-sort `mesh` into `out`.
-/// Returns how many triangles were written (front-to-back callers draw the
-/// slice in order: it is sorted far-to-near for painter's rendering).
-/// Triangles beyond `out.len()` are dropped — size the scratch for the mesh:
-/// clipping fans a triangle into at most 6 (an 8-gon after 5 planes), so
-/// `index_count / 3 * 6` never drops anything.
+/// Transform, light, clip, depth-subdivide, project and cull `mesh`,
+/// handing each visible triangle to `emit`. Triangles are **not** sorted
+/// here: backends batch the triangles of consecutive `draw_model` calls and
+/// depth-sort the whole batch (see the module docs). The callback API exists
+/// because clipping + subdivision have no static output bound — backends
+/// push into a growable buffer.
 pub fn tessellate(
     mesh: &Mesh,
     model: &Mat34,
@@ -223,8 +247,8 @@ pub fn tessellate(
     light: &Light,
     tint: Color,
     screen: Vec2,
-    out: &mut [ScreenTri],
-) -> usize {
+    emit: &mut dyn FnMut(ScreenTri),
+) {
     let view = camera.view();
     let mv = view.mul(model);
     let ldir = light.dir.normalized();
@@ -236,12 +260,8 @@ pub fn tessellate(
     let lim_x = center.x * GUARD / focal;
     let lim_y = center.y * GUARD / focal;
 
-    let mut count = 0usize;
     let tri_count = mesh.index_count / 3;
     for t in 0..tri_count {
-        if count >= out.len() {
-            break;
-        }
         let (i0, i1, i2) = (
             mesh.index(t * 3) as usize,
             mesh.index(t * 3 + 1) as usize,
@@ -305,43 +325,62 @@ pub fn tessellate(
                 center.y - v.y * focal / v.z, // world Y-up -> screen Y-down
             )
         };
-        // Fan-triangulate the clipped polygon.
+        // Fan-triangulate the clipped polygon, then depth-subdivide each
+        // fan triangle (DFS with a fixed stack): any edge spanning more
+        // than DEPTH_SPLIT of view depth is bisected, recursively, so every
+        // emitted triangle is depth-uniform enough for painter sorting.
         for k in 1..n_poly - 1 {
-            if count >= out.len() {
-                break;
+            let mut stack = [[(Vec3::ZERO, Color::WHITE); 3]; SPLIT_STACK];
+            stack[0] = [poly_a[0], poly_a[k], poly_a[k + 1]];
+            let mut top = 1usize;
+            while top > 0 {
+                top -= 1;
+                let tri = stack[top];
+                // Worst depth-spanning edge (cyclic: 0-1, 1-2, 2-0).
+                let span = |a: usize, b: usize| {
+                    let d = tri[a].0.z - tri[b].0.z;
+                    if d < 0.0 { -d } else { d }
+                };
+                let (s01, s12, s20) = (span(0, 1), span(1, 2), span(2, 0));
+                let worst = if s01 >= s12 && s01 >= s20 {
+                    (s01, 0)
+                } else if s12 >= s20 {
+                    (s12, 1)
+                } else {
+                    (s20, 2)
+                };
+                if worst.0 > DEPTH_SPLIT && top + 2 <= SPLIT_STACK {
+                    // Rotate so the split edge is (a, b); bisect keeping the
+                    // CCW winding: (a, m, c) + (m, b, c).
+                    let (a, b, c) = match worst.1 {
+                        0 => (tri[0], tri[1], tri[2]),
+                        1 => (tri[1], tri[2], tri[0]),
+                        _ => (tri[2], tri[0], tri[1]),
+                    };
+                    let mid = ((a.0 + b.0) * 0.5, lerp_color(a.1, b.1, 0.5));
+                    stack[top] = [a, mid, c];
+                    stack[top + 1] = [mid, b, c];
+                    top += 2;
+                    continue;
+                }
+                let [(v0, c0), (v1, c1), (v2, c2)] = tri;
+                let pts = [project(v0), project(v1), project(v2)];
+                // Backface cull: front faces are CCW in world space, which
+                // lands as positive signed area in Y-down screen space.
+                let area = (pts[1].x - pts[0].x) * (pts[2].y - pts[0].y)
+                    - (pts[2].x - pts[0].x) * (pts[1].y - pts[0].y);
+                if area <= 0.0 {
+                    continue;
+                }
+                let depth = v0.z.max(v1.z).max(v2.z);
+                emit(ScreenTri {
+                    pts,
+                    colors: [c0, c1, c2],
+                    depth,
+                });
             }
-            let (v0, c0) = poly_a[0];
-            let (v1, c1) = poly_a[k];
-            let (v2, c2) = poly_a[k + 1];
-            let pts = [project(v0), project(v1), project(v2)];
-            // Backface cull: front faces are CCW in world space, which lands
-            // as positive signed area in Y-down screen space.
-            let area = (pts[1].x - pts[0].x) * (pts[2].y - pts[0].y)
-                - (pts[2].x - pts[0].x) * (pts[1].y - pts[0].y);
-            if area <= 0.0 {
-                continue;
-            }
-            out[count] = ScreenTri {
-                pts,
-                colors: [c0, c1, c2],
-                depth: (v0.z + v1.z + v2.z) * (1.0 / 3.0),
-            };
-            count += 1;
         }
     }
-
-    // Painter's sort: farthest first. Insertion sort — no alloc, and the
-    // counts are small by design (Caps budgets).
-    for i in 1..count {
-        let key = out[i];
-        let mut j = i;
-        while j > 0 && out[j - 1].depth < key.depth {
-            out[j] = out[j - 1];
-            j -= 1;
-        }
-        out[j] = key;
-    }
-    count
 }
 
 #[cfg(test)]
@@ -416,33 +455,35 @@ mod tests {
         assert!(matches!(Mesh::from_tmdl(&blob), Err(MeshError::Truncated)));
     }
 
+    /// Roda o tessellate coletando os triângulos emitidos.
+    fn collect(
+        mesh: &Mesh,
+        model: &Mat34,
+        camera: &Camera3,
+        tint: Color,
+    ) -> std::vec::Vec<ScreenTri> {
+        let mut v = std::vec::Vec::new();
+        tessellate(
+            mesh,
+            model,
+            camera,
+            &DEFAULT_LIGHT,
+            tint,
+            Vec2::new(320.0, 240.0),
+            &mut |t| v.push(t),
+        );
+        v
+    }
+
     #[test]
-    fn cube_in_front_produces_sorted_visible_tris() {
+    fn cube_in_front_produces_visible_tris() {
         let blob = cube_tmdl();
         let mesh = Mesh::from_tmdl(&blob).unwrap();
-        let camera = Camera3::default();
-        let mut out = [ScreenTri {
-            pts: [Vec2::ZERO; 3],
-            colors: [Color::WHITE; 3],
-            depth: 0.0,
-        }; 64];
-        let n = tessellate(
-            &mesh,
-            &Mat34::IDENTITY,
-            &camera,
-            &DEFAULT_LIGHT,
-            Color::WHITE,
-            Vec2::new(320.0, 240.0),
-            &mut out,
-        );
-        // A cube facing the camera: between 1 and 3 visible faces = 2..6 tris.
-        assert!((2..=6).contains(&n), "visible tris: {n}");
-        // Painter's order: depth non-increasing.
-        for w in out[..n].windows(2) {
-            assert!(w[0].depth >= w[1].depth);
-        }
-        // Everything projects on-screen for this setup.
-        for tri in &out[..n] {
+        let out = collect(&mesh, &Mat34::IDENTITY, &Camera3::default(), Color::WHITE);
+        // A cube facing the camera: between 1 and 3 visible faces = 2..6
+        // tris (the unit cube's edges never trip the depth subdivision).
+        assert!((2..=6).contains(&out.len()), "visible tris: {}", out.len());
+        for tri in &out {
             for p in tri.pts {
                 assert!((0.0..320.0).contains(&p.x) && (0.0..240.0).contains(&p.y));
             }
@@ -467,24 +508,14 @@ mod tests {
             target: Vec3::ZERO,
             ..Default::default()
         };
-        let mut out = [ScreenTri {
-            pts: [Vec2::ZERO; 3],
-            colors: [Color::WHITE; 3],
-            depth: 0.0,
-        }; 128];
-        let n = tessellate(
-            &mesh,
-            &model,
-            &camera,
-            &DEFAULT_LIGHT,
-            Color::WHITE,
-            Vec2::new(320.0, 240.0),
-            &mut out,
-        );
-        assert!(n > 0, "near-crossing ground vanished");
+        let out = collect(&mesh, &model, &camera, Color::WHITE);
+        assert!(!out.is_empty(), "near-crossing ground vanished");
+        // Depth subdivision: the receding floor must arrive as depth-thin
+        // strips, not one giant triangle pair.
+        assert!(out.len() > 6, "floor not subdivided: {} tris", out.len());
         // Guard band keeps every projected coordinate bounded (the N64 RDP
         // works in fixed point; huge offscreen coordinates overflow it).
-        for tri in &out[..n] {
+        for tri in &out {
             for p in tri.pts {
                 assert!(
                     p.x.abs() <= 320.0 * 2.0 && p.y.abs() <= 240.0 * 2.0,
@@ -495,36 +526,23 @@ mod tests {
     }
 
     #[test]
-    fn clip_output_fits_the_documented_bound() {
-        // One triangle fans into at most 6 after clipping — the bound the
-        // backends use to size their scratch buffers.
+    fn farther_mesh_sorts_behind_a_nearer_one() {
+        // depth = farthest vertex: every triangle of a cube 6 units behind
+        // another must carry a strictly larger sort key.
         let blob = cube_tmdl();
         let mesh = Mesh::from_tmdl(&blob).unwrap();
-        let model = Mat34::from_rotation_scale_translation(
-            Vec3::ZERO,
-            Vec3::new(100.0, 100.0, 100.0),
-            Vec3::ZERO,
+        let camera = Camera3::default();
+        let near = collect(&mesh, &Mat34::IDENTITY, &camera, Color::WHITE);
+        let far_model =
+            Mat34::from_rotation_scale_translation(Vec3::ZERO, Vec3::ONE, Vec3::new(0.0, 0.0, 6.0));
+        let far = collect(&mesh, &far_model, &camera, Color::WHITE);
+        assert!(!near.is_empty() && !far.is_empty());
+        let near_max = near.iter().map(|t| t.depth).fold(0.0f32, f32::max);
+        let far_min = far.iter().map(|t| t.depth).fold(f32::MAX, f32::min);
+        assert!(
+            near_max < far_min,
+            "near max {near_max} vs far min {far_min}"
         );
-        let camera = Camera3 {
-            eye: Vec3::new(3.0, 40.0, -49.0),
-            target: Vec3::new(-1.0, -2.0, 3.0),
-            ..Default::default()
-        };
-        let mut out = [ScreenTri {
-            pts: [Vec2::ZERO; 3],
-            colors: [Color::WHITE; 3],
-            depth: 0.0,
-        }; 128];
-        let n = tessellate(
-            &mesh,
-            &model,
-            &camera,
-            &DEFAULT_LIGHT,
-            Color::WHITE,
-            Vec2::new(320.0, 240.0),
-            &mut out,
-        );
-        assert!(n <= mesh.index_count / 3 * 6, "clip bound exceeded: {n}");
     }
 
     #[test]
@@ -536,21 +554,8 @@ mod tests {
             target: Vec3::new(0.0, 0.0, -10.0),
             ..Default::default()
         };
-        let mut out = [ScreenTri {
-            pts: [Vec2::ZERO; 3],
-            colors: [Color::WHITE; 3],
-            depth: 0.0,
-        }; 64];
-        let n = tessellate(
-            &mesh,
-            &Mat34::IDENTITY,
-            &camera,
-            &DEFAULT_LIGHT,
-            Color::WHITE,
-            Vec2::new(320.0, 240.0),
-            &mut out,
-        );
-        assert_eq!(n, 0);
+        let out = collect(&mesh, &Mat34::IDENTITY, &camera, Color::WHITE);
+        assert!(out.is_empty());
     }
 
     #[test]
@@ -558,35 +563,12 @@ mod tests {
         let blob = cube_tmdl();
         let mesh = Mesh::from_tmdl(&blob).unwrap();
         let camera = Camera3::default();
-        let blank = ScreenTri {
-            pts: [Vec2::ZERO; 3],
-            colors: [Color::WHITE; 3],
-            depth: 0.0,
-        };
-        let (mut white, mut dark) = ([blank; 96], [blank; 96]);
-        let screen = Vec2::new(320.0, 240.0);
-        let n1 = tessellate(
-            &mesh,
-            &Mat34::IDENTITY,
-            &camera,
-            &DEFAULT_LIGHT,
-            Color::WHITE,
-            screen,
-            &mut white,
-        );
-        let n2 = tessellate(
-            &mesh,
-            &Mat34::IDENTITY,
-            &camera,
-            &DEFAULT_LIGHT,
-            Color::rgb(128, 128, 128),
-            screen,
-            &mut dark,
-        );
-        assert_eq!(n1, n2);
-        assert!(n1 > 0);
+        let white = collect(&mesh, &Mat34::IDENTITY, &camera, Color::WHITE);
+        let dark = collect(&mesh, &Mat34::IDENTITY, &camera, Color::rgb(128, 128, 128));
+        assert_eq!(white.len(), dark.len());
+        assert!(!white.is_empty());
         // Every emitted channel is (rounding aside) halved by the 50% tint.
-        for (w, d) in white[..n1].iter().zip(dark[..n2].iter()) {
+        for (w, d) in white.iter().zip(dark.iter()) {
             for (cw, cd) in w.colors.iter().zip(d.colors.iter()) {
                 assert!((cd.r as i32 - cw.r as i32 / 2).abs() <= 2);
                 assert!((cd.g as i32 - cw.g as i32 / 2).abs() <= 2);

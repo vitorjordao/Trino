@@ -19,7 +19,6 @@ struct SpriteEntry {
 pub struct N3dsRenderer {
     sprites: BTreeMap<u32, SpriteEntry>,
     meshes: BTreeMap<u32, Vec<u8>>,
-    tri_scratch: Vec<ScreenTri>,
     /// Current model batch: consecutive `draw_model` calls depth-sort
     /// together; flushed on sprite draws, camera changes and `end_frame`.
     pending_tris: Vec<ScreenTri>,
@@ -32,7 +31,6 @@ impl N3dsRenderer {
         N3dsRenderer {
             sprites: BTreeMap::new(),
             meshes: BTreeMap::new(),
-            tri_scratch: Vec::new(),
             pending_tris: Vec::new(),
             camera: Camera3::default(),
             caps: Caps::N3DS,
@@ -136,26 +134,16 @@ impl Renderer for N3dsRenderer {
             return;
         };
         let mesh = Mesh::from_tmdl(tmdl).expect("validated on register");
-        // Frustum clipping can fan one triangle into up to 6.
-        let max_tris = mesh.index_count / 3 * 6;
-        self.tri_scratch.resize(
-            max_tris,
-            ScreenTri {
-                pts: [Vec2::ZERO; 3],
-                colors: [Color::WHITE; 3],
-                depth: 0.0,
-            },
-        );
-        let n = trino_core::render3d::tessellate(
+        let pending = &mut self.pending_tris;
+        trino_core::render3d::tessellate(
             &mesh,
             &transform.matrix(),
             &self.camera,
             &DEFAULT_LIGHT,
             params.tint,
             Vec2::new(400.0, 240.0),
-            &mut self.tri_scratch,
+            &mut |tri| pending.push(tri),
         );
-        self.pending_tris.extend_from_slice(&self.tri_scratch[..n]);
     }
 
     fn end_frame(&mut self) {

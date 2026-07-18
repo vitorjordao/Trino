@@ -12,8 +12,9 @@
 
 use trino_core::tilemap::tile;
 use trino_core::{
-    Audio, Button, Camera3, Color, Game, InputState, Material, ModelId, MusicId, Renderer, SoundId,
-    SpriteId, SpriteParams, TILE_SIZE, Tilemap, Transform3, Vec2, Vec3, move_and_collide,
+    Audio, Button, Camera3, Color, Game, InputState, Material, ModelId, ModelParams, MusicId,
+    Renderer, SoundId, SpriteId, SpriteParams, TILE_SIZE, Tilemap, Transform3, Vec2, Vec3,
+    move_and_collide,
 };
 
 pub const LEVEL: &str = include_str!("level1.txt");
@@ -285,6 +286,7 @@ impl Game for PlatformerGame {
                 scale: Vec3::new(0.7, 0.7, 0.7),
             },
             Material::VertexLit,
+            &ModelParams::default(),
         );
 
         // HUD: one coin icon per collected coin (no font needed).

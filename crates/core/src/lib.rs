@@ -41,6 +41,8 @@ pub use input::{Button, Input, InputState};
 pub use math::{Color, Rect, Vec2, Vec3};
 pub use math3d::Mat34;
 pub use platform::Platform;
-pub use render::{Material, MaterialId, ModelId, Renderer, SpriteId, SpriteParams, Transform3};
+pub use render::{
+    Material, MaterialId, ModelId, ModelParams, Renderer, SpriteId, SpriteParams, Transform3,
+};
 pub use render3d::{Camera3, DEFAULT_LIGHT, Light, Mesh, MeshError, ScreenTri, tessellate};
 pub use tilemap::{TILE_SIZE, Tilemap, TilemapError};

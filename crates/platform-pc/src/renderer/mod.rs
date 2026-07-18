@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use trino_core::render3d::{Camera3, DEFAULT_LIGHT, Mesh, ScreenTri};
 use trino_core::{
-    Caps, Color, Material, ModelId, Renderer, SpriteId, SpriteParams, Transform3, Vec2,
+    Caps, Color, Material, ModelId, ModelParams, Renderer, SpriteId, SpriteParams, Transform3, Vec2,
 };
 
 use crate::sim::SimProfile;
@@ -76,6 +76,10 @@ pub struct PcRenderer {
     commands: Vec<Cmd>,
     tri_verts: Vec<TriVertex>,
     tri_scratch: Vec<ScreenTri>,
+    /// Triangles of the current model batch: consecutive `draw_model` calls
+    /// accumulate here and depth-sort together (painter across meshes) when
+    /// a sprite draw, a camera change or `end_frame` flushes the batch.
+    pending_tris: Vec<ScreenTri>,
     camera: Camera3,
     clear: Color,
     caps: Caps,
@@ -504,6 +508,7 @@ impl PcRenderer {
             commands: Vec::new(),
             tri_verts: Vec::new(),
             tri_scratch: Vec::new(),
+            pending_tris: Vec::new(),
             camera: Camera3::default(),
             clear: Color::BLACK,
             caps,
@@ -715,6 +720,38 @@ impl PcRenderer {
         self.internal_size
     }
 
+    /// Depth-sort the pending model batch and enqueue it as one triangle
+    /// command (painter's order across every mesh of the batch).
+    fn flush_model_batch(&mut self) {
+        if self.pending_tris.is_empty() {
+            return;
+        }
+        self.pending_tris.sort_unstable_by(|a, b| {
+            b.depth
+                .partial_cmp(&a.depth)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let first = self.tri_verts.len() as u32;
+        for tri in &self.pending_tris {
+            for (p, c) in tri.pts.iter().zip(tri.colors.iter()) {
+                self.tri_verts.push(TriVertex {
+                    pos: [p.x, p.y],
+                    color: [
+                        c.r as f32 / 255.0,
+                        c.g as f32 / 255.0,
+                        c.b as f32 / 255.0,
+                        c.a as f32 / 255.0,
+                    ],
+                });
+            }
+        }
+        self.commands.push(Cmd::Tris {
+            first,
+            count: (self.pending_tris.len() * 3) as u32,
+        });
+        self.pending_tris.clear();
+    }
+
     fn flush(&mut self) {
         if self.strict {
             if self.commands.len() as u32 > self.caps.max_sprites_per_frame {
@@ -894,9 +931,11 @@ impl Renderer for PcRenderer {
         self.clear = clear;
         self.commands.clear();
         self.tri_verts.clear();
+        self.pending_tris.clear();
     }
 
     fn draw_sprite(&mut self, sprite: SpriteId, pos: Vec2, params: &SpriteParams) {
+        self.flush_model_batch();
         let Some(entry) = self.sprites.get(&sprite.0) else {
             // Unknown handle: skip. The asset pipeline (Fase 2) turns this
             // into a hard error at bake time instead.
@@ -907,10 +946,17 @@ impl Renderer for PcRenderer {
     }
 
     fn set_camera(&mut self, camera: &Camera3) {
+        self.flush_model_batch();
         self.camera = *camera;
     }
 
-    fn draw_model(&mut self, model: ModelId, transform: &Transform3, _material: Material) {
+    fn draw_model(
+        &mut self,
+        model: ModelId,
+        transform: &Transform3,
+        _material: Material,
+        params: &ModelParams,
+    ) {
         let Some(tmdl) = self.meshes.get(&model.0) else {
             return; // unknown handle: skip, like sprites
         };
@@ -931,33 +977,15 @@ impl Renderer for PcRenderer {
             &transform.matrix(),
             &self.camera,
             &DEFAULT_LIGHT,
+            params.tint,
             screen,
             &mut self.tri_scratch,
         );
-        if n == 0 {
-            return;
-        }
-        let first = self.tri_verts.len() as u32;
-        for tri in &self.tri_scratch[..n] {
-            for (p, c) in tri.pts.iter().zip(tri.colors.iter()) {
-                self.tri_verts.push(TriVertex {
-                    pos: [p.x, p.y],
-                    color: [
-                        c.r as f32 / 255.0,
-                        c.g as f32 / 255.0,
-                        c.b as f32 / 255.0,
-                        c.a as f32 / 255.0,
-                    ],
-                });
-            }
-        }
-        self.commands.push(Cmd::Tris {
-            first,
-            count: (n * 3) as u32,
-        });
+        self.pending_tris.extend_from_slice(&self.tri_scratch[..n]);
     }
 
     fn end_frame(&mut self) {
+        self.flush_model_batch();
         self.flush();
     }
 }

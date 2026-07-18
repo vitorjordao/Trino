@@ -46,6 +46,14 @@ Transform & lighting is **engine code, not backend code**
   visible under the camera, and projected coordinates stay bounded, which
   the N64 RDP's fixed-point edge walker requires. One triangle fans into at
   most 6; backends size their scratch as `index_count / 3 * 6`.
+- Update (2026-07, second pass): `draw_model` takes `&ModelParams` with a
+  per-draw `tint` (multiplied into vertex colors before lighting — color
+  variants of a mesh no longer need separate bakes), and backends batch the
+  triangles of consecutive `draw_model` calls, depth-sorting the whole batch
+  before rasterizing (painter across meshes; the batch flushes on sprite
+  draws, camera changes and `end_frame`). Games no longer sort model draws;
+  the remaining limit is per-triangle: interpenetrating geometry can still
+  mis-sort (that fix is a z-buffer, still deferred).
 - Strict mode enforces `max_tris_per_frame` so PC development stays honest
   about console budgets.
 - If a future phase needs more (textured 3D, z-buffered scenes), the

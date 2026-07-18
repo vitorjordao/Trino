@@ -64,12 +64,16 @@ Original architecture rationale: `PLANO_ENGINE_TRINO.md` (Portuguese).
   deterministic f32 (own no_std sin/cos/sqrt); backends only rasterize
   screen-space colored triangles (`rdpq_triangle` shade / `C2D_DrawTriangle`
   / a wgpu vertex-color pipeline interleaved with sprites). `set_camera` +
-  `draw_model(Material::VertexLit)` on all three targets; strict mode
+  `draw_model(Material::VertexLit, &ModelParams)` on all three targets —
+  `ModelParams::tint` multiplies vertex colors per draw (locked doors, glow
+  pulses) so color variants don't need separate baked meshes; strict mode
   enforces `max_tris_per_frame`. The platformer shows a spinning cube.
   Triangles are clipped against the near plane + a 1.5x guard-band frustum
   (bounded coordinates — RDP fixed-point safe); `math3d` ships deterministic
-  `sin/cos/sqrt/atan2`. v1 limits (in the ADR): painter's sort (no z-buffer;
-  cross-mesh order is the game's job — draw far-to-near), vertex colors only.
+  `sin/cos/sqrt/atan2`. Consecutive `draw_model` calls form a batch whose
+  triangles depth-sort together (painter across meshes; flushed on sprite
+  draws, camera changes and `end_frame`). v1 limits (in the ADR): no
+  z-buffer (interpenetrating triangles still mis-sort), vertex colors only.
   Deferred: editor 3D viewport/gizmo.
 
 - **Scaffolding + release**: `cargo xtask new <name>` renders

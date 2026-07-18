@@ -18,10 +18,10 @@
 //! whose edge coefficients are fixed-point and overflow on huge offscreen
 //! coordinates.
 //!
-//! Cross-mesh draw order is the caller's job: each `tessellate` call sorts
-//! its own triangles, but separate `draw_model` calls are rasterized in call
-//! order. Games with overlapping models should issue draws far-to-near
-//! (sort by `camera.view().transform_point(position).z`).
+//! Cross-mesh ordering: backends collect the triangles of consecutive
+//! `draw_model` calls into a batch and depth-sort the whole batch before
+//! rasterizing (flushed on sprite draws, camera changes and `end_frame`),
+//! so overlapping models layer correctly without the game sorting draws.
 
 use crate::math::{Color, Vec2, Vec3};
 use crate::math3d::Mat34;
@@ -221,6 +221,7 @@ pub fn tessellate(
     model: &Mat34,
     camera: &Camera3,
     light: &Light,
+    tint: Color,
     screen: Vec2,
     out: &mut [ScreenTri],
 ) -> usize {
@@ -255,15 +256,21 @@ pub fn tessellate(
         if vs[0].z <= NEAR && vs[1].z <= NEAR && vs[2].z <= NEAR {
             continue;
         }
-        // Gouraud: per-vertex intensity from the world-space normal.
+        // Gouraud: per-vertex intensity from the world-space normal, with
+        // the per-draw tint multiplied in before lighting.
         let shade = |i: usize| {
             let n = model.transform_dir(mesh.normal(i)).normalized();
             let diffuse = -n.dot(ldir);
             let diffuse = if diffuse > 0.0 { diffuse } else { 0.0 };
             let intensity = light.ambient + (1.0 - light.ambient) * diffuse;
             let c = mesh.color(i);
-            let mul = |v: u8| (v as f32 * intensity) as u8;
-            Color::rgba(mul(c.r), mul(c.g), mul(c.b), c.a)
+            let mul = |v: u8, t: u8| (v as f32 * (t as f32 / 255.0) * intensity) as u8;
+            Color::rgba(
+                mul(c.r, tint.r),
+                mul(c.g, tint.g),
+                mul(c.b, tint.b),
+                (c.a as f32 * (tint.a as f32 / 255.0)) as u8,
+            )
         };
 
         let inside = |v: Vec3| {
@@ -424,6 +431,7 @@ mod tests {
             &Mat34::IDENTITY,
             &camera,
             &DEFAULT_LIGHT,
+            Color::WHITE,
             Vec2::new(320.0, 240.0),
             &mut out,
         );
@@ -469,6 +477,7 @@ mod tests {
             &model,
             &camera,
             &DEFAULT_LIGHT,
+            Color::WHITE,
             Vec2::new(320.0, 240.0),
             &mut out,
         );
@@ -511,6 +520,7 @@ mod tests {
             &model,
             &camera,
             &DEFAULT_LIGHT,
+            Color::WHITE,
             Vec2::new(320.0, 240.0),
             &mut out,
         );
@@ -536,10 +546,54 @@ mod tests {
             &Mat34::IDENTITY,
             &camera,
             &DEFAULT_LIGHT,
+            Color::WHITE,
             Vec2::new(320.0, 240.0),
             &mut out,
         );
         assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn tint_multiplies_vertex_colors() {
+        let blob = cube_tmdl();
+        let mesh = Mesh::from_tmdl(&blob).unwrap();
+        let camera = Camera3::default();
+        let blank = ScreenTri {
+            pts: [Vec2::ZERO; 3],
+            colors: [Color::WHITE; 3],
+            depth: 0.0,
+        };
+        let (mut white, mut dark) = ([blank; 96], [blank; 96]);
+        let screen = Vec2::new(320.0, 240.0);
+        let n1 = tessellate(
+            &mesh,
+            &Mat34::IDENTITY,
+            &camera,
+            &DEFAULT_LIGHT,
+            Color::WHITE,
+            screen,
+            &mut white,
+        );
+        let n2 = tessellate(
+            &mesh,
+            &Mat34::IDENTITY,
+            &camera,
+            &DEFAULT_LIGHT,
+            Color::rgb(128, 128, 128),
+            screen,
+            &mut dark,
+        );
+        assert_eq!(n1, n2);
+        assert!(n1 > 0);
+        // Every emitted channel is (rounding aside) halved by the 50% tint.
+        for (w, d) in white[..n1].iter().zip(dark[..n2].iter()) {
+            for (cw, cd) in w.colors.iter().zip(d.colors.iter()) {
+                assert!((cd.r as i32 - cw.r as i32 / 2).abs() <= 2);
+                assert!((cd.g as i32 - cw.g as i32 / 2).abs() <= 2);
+                assert!((cd.b as i32 - cw.b as i32 / 2).abs() <= 2);
+                assert_eq!(cd.a, cw.a, "alpha tinted only by tint.a");
+            }
+        }
     }
 
     #[test]

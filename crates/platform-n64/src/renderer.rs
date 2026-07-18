@@ -7,7 +7,7 @@ use core::ffi::c_void;
 
 use trino_core::render3d::{Camera3, DEFAULT_LIGHT, Mesh, ScreenTri};
 use trino_core::{
-    Caps, Color, Material, ModelId, Renderer, SpriteId, SpriteParams, Transform3, Vec2,
+    Caps, Color, Material, ModelId, ModelParams, Renderer, SpriteId, SpriteParams, Transform3, Vec2,
 };
 
 use crate::ffi;
@@ -20,6 +20,9 @@ pub struct N64Renderer {
     sprites: BTreeMap<u32, SpriteEntry>,
     meshes: BTreeMap<u32, Vec<u8>>,
     tri_scratch: Vec<ScreenTri>,
+    /// Current model batch: consecutive `draw_model` calls depth-sort
+    /// together; flushed on sprite draws, camera changes and `end_frame`.
+    pending_tris: Vec<ScreenTri>,
     camera: Camera3,
     caps: Caps,
 }
@@ -30,9 +33,40 @@ impl N64Renderer {
             sprites: BTreeMap::new(),
             meshes: BTreeMap::new(),
             tri_scratch: Vec::new(),
+            pending_tris: Vec::new(),
             camera: Camera3::default(),
             caps: Caps::N64,
         }
+    }
+
+    /// Depth-sort and rasterize the pending model batch (painter's order
+    /// across every mesh of the batch).
+    fn flush_model_batch(&mut self) {
+        if self.pending_tris.is_empty() {
+            return;
+        }
+        self.pending_tris.sort_unstable_by(|a, b| {
+            b.depth
+                .partial_cmp(&a.depth)
+                .unwrap_or(core::cmp::Ordering::Equal)
+        });
+        unsafe { ffi::trino_3d_begin() }
+        for tri in &self.pending_tris {
+            let pts = [
+                tri.pts[0].x,
+                tri.pts[0].y,
+                tri.pts[1].x,
+                tri.pts[1].y,
+                tri.pts[2].x,
+                tri.pts[2].y,
+            ];
+            let mut colors = [0u8; 12];
+            for (i, c) in tri.colors.iter().enumerate() {
+                colors[i * 4..i * 4 + 4].copy_from_slice(&[c.r, c.g, c.b, c.a]);
+            }
+            unsafe { ffi::trino_tri(pts.as_ptr(), colors.as_ptr()) }
+        }
+        self.pending_tris.clear();
     }
 
     /// Register a `sprite_t` loaded from the DFS under a stable handle.
@@ -68,6 +102,7 @@ impl Renderer for N64Renderer {
     }
 
     fn draw_sprite(&mut self, sprite: SpriteId, pos: Vec2, params: &SpriteParams) {
+        self.flush_model_batch();
         let Some(entry) = self.sprites.get(&sprite.0) else {
             return;
         };
@@ -85,10 +120,17 @@ impl Renderer for N64Renderer {
     }
 
     fn set_camera(&mut self, camera: &Camera3) {
+        self.flush_model_batch();
         self.camera = *camera;
     }
 
-    fn draw_model(&mut self, model: ModelId, transform: &Transform3, _material: Material) {
+    fn draw_model(
+        &mut self,
+        model: ModelId,
+        transform: &Transform3,
+        _material: Material,
+        params: &ModelParams,
+    ) {
         let Some(tmdl) = self.meshes.get(&model.0) else {
             return;
         };
@@ -108,31 +150,15 @@ impl Renderer for N64Renderer {
             &transform.matrix(),
             &self.camera,
             &DEFAULT_LIGHT,
+            params.tint,
             Vec2::new(320.0, 240.0),
             &mut self.tri_scratch,
         );
-        if n == 0 {
-            return;
-        }
-        unsafe { ffi::trino_3d_begin() }
-        for tri in &self.tri_scratch[..n] {
-            let pts = [
-                tri.pts[0].x,
-                tri.pts[0].y,
-                tri.pts[1].x,
-                tri.pts[1].y,
-                tri.pts[2].x,
-                tri.pts[2].y,
-            ];
-            let mut colors = [0u8; 12];
-            for (i, c) in tri.colors.iter().enumerate() {
-                colors[i * 4..i * 4 + 4].copy_from_slice(&[c.r, c.g, c.b, c.a]);
-            }
-            unsafe { ffi::trino_tri(pts.as_ptr(), colors.as_ptr()) }
-        }
+        self.pending_tris.extend_from_slice(&self.tri_scratch[..n]);
     }
 
     fn end_frame(&mut self) {
+        self.flush_model_batch();
         unsafe { ffi::trino_frame_end() }
     }
 }

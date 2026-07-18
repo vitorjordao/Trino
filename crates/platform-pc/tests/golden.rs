@@ -312,6 +312,7 @@ fn cube3d_scene_matches_golden() {
             ..Default::default()
         },
         trino_core::Material::VertexLit,
+        &trino_core::ModelParams::default(),
     );
     renderer.end_frame();
 

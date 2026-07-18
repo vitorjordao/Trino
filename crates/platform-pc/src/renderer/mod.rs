@@ -915,7 +915,8 @@ impl Renderer for PcRenderer {
             return; // unknown handle: skip, like sprites
         };
         let mesh = Mesh::from_tmdl(tmdl).expect("validated on upload");
-        let max_tris = mesh.index_count / 3;
+        // Frustum clipping can fan one triangle into up to 6.
+        let max_tris = mesh.index_count / 3 * 6;
         self.tri_scratch.resize(
             max_tris,
             ScreenTri {

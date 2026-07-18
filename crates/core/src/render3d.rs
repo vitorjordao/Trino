@@ -10,8 +10,18 @@
 //! deterministic f32, identical on every target.
 //!
 //! Limits (v1, on purpose): no z-buffer (per-mesh painter's sort), no
-//! textures on 3D geometry (vertex colors only), no near-plane clipping
-//! (triangles crossing the near plane are dropped).
+//! textures on 3D geometry (vertex colors only).
+//!
+//! Triangles are clipped against the near plane and a guard-band frustum
+//! (1.5x the screen), so geometry that crosses the near plane stays visible
+//! and every projected coordinate stays bounded — important for the N64 RDP,
+//! whose edge coefficients are fixed-point and overflow on huge offscreen
+//! coordinates.
+//!
+//! Cross-mesh draw order is the caller's job: each `tessellate` call sorts
+//! its own triangles, but separate `draw_model` calls are rasterized in call
+//! order. Games with overlapping models should issue draws far-to-near
+//! (sort by `camera.view().transform_point(position).z`).
 
 use crate::math::{Color, Vec2, Vec3};
 use crate::math3d::Mat34;
@@ -155,11 +165,57 @@ pub struct ScreenTri {
 }
 
 const NEAR: f32 = 0.05;
+/// Guard band: side planes sit at 1.5x the screen so clipped coordinates stay
+/// bounded (RDP fixed-point safety) without visible clipping at the borders.
+const GUARD: f32 = 1.5;
+/// A triangle clipped by up to 5 planes gains at most one vertex per plane.
+const MAX_POLY: usize = 8;
 
-/// Transform, light, project, cull and depth-sort `mesh` into `out`.
+/// Linear blend of two already-lit vertex colors (gouraud interpolation for
+/// clip-generated vertices).
+fn lerp_color(a: Color, b: Color, t: f32) -> Color {
+    let mix = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t) as u8;
+    Color::rgba(mix(a.r, b.r), mix(a.g, b.g), mix(a.b, b.b), mix(a.a, b.a))
+}
+
+/// Clip a view-space polygon against `dist(v) >= 0` (Sutherland-Hodgman).
+/// Returns the new vertex count.
+fn clip_plane(
+    verts: &[(Vec3, Color); MAX_POLY],
+    n_in: usize,
+    out: &mut [(Vec3, Color); MAX_POLY],
+    dist: impl Fn(Vec3) -> f32,
+) -> usize {
+    let mut n_out = 0;
+    for i in 0..n_in {
+        let (a, ca) = verts[i];
+        let (b, cb) = verts[(i + 1) % n_in];
+        let (da, db) = (dist(a), dist(b));
+        if da >= 0.0 {
+            if n_out == MAX_POLY {
+                return n_out;
+            }
+            out[n_out] = (a, ca);
+            n_out += 1;
+        }
+        if (da >= 0.0) != (db >= 0.0) {
+            if n_out == MAX_POLY {
+                return n_out;
+            }
+            let t = da / (da - db);
+            out[n_out] = (a + (b - a) * t, lerp_color(ca, cb, t));
+            n_out += 1;
+        }
+    }
+    n_out
+}
+
+/// Transform, light, clip, project, cull and depth-sort `mesh` into `out`.
 /// Returns how many triangles were written (front-to-back callers draw the
 /// slice in order: it is sorted far-to-near for painter's rendering).
-/// Triangles beyond `out.len()` are dropped — size the scratch for the mesh.
+/// Triangles beyond `out.len()` are dropped — size the scratch for the mesh:
+/// clipping fans a triangle into at most 6 (an 8-gon after 5 planes), so
+/// `index_count / 3 * 6` never drops anything.
 pub fn tessellate(
     mesh: &Mesh,
     model: &Mat34,
@@ -175,6 +231,9 @@ pub fn tessellate(
     let half_fov = camera.fov_y * 0.5;
     let focal = crate::math3d::cos(half_fov) / crate::math3d::sin(half_fov) * screen.y * 0.5;
     let center = screen * 0.5;
+    // Guard-band frustum half-extents per unit of view depth.
+    let lim_x = center.x * GUARD / focal;
+    let lim_y = center.y * GUARD / focal;
 
     let mut count = 0usize;
     let tri_count = mesh.index_count / 3;
@@ -192,22 +251,8 @@ pub fn tessellate(
             mv.transform_point(mesh.position(i1)),
             mv.transform_point(mesh.position(i2)),
         ];
-        // No near-plane clipping in v1: drop the whole triangle.
-        if vs[0].z <= NEAR || vs[1].z <= NEAR || vs[2].z <= NEAR {
-            continue;
-        }
-        let project = |v: Vec3| {
-            Vec2::new(
-                center.x + v.x * focal / v.z,
-                center.y - v.y * focal / v.z, // world Y-up -> screen Y-down
-            )
-        };
-        let pts = [project(vs[0]), project(vs[1]), project(vs[2])];
-        // Backface cull: front faces are CCW in world space, which lands as
-        // positive signed area in Y-down screen space.
-        let area = (pts[1].x - pts[0].x) * (pts[2].y - pts[0].y)
-            - (pts[2].x - pts[0].x) * (pts[1].y - pts[0].y);
-        if area <= 0.0 {
+        // Entirely behind the near plane: gone.
+        if vs[0].z <= NEAR && vs[1].z <= NEAR && vs[2].z <= NEAR {
             continue;
         }
         // Gouraud: per-vertex intensity from the world-space normal.
@@ -220,12 +265,62 @@ pub fn tessellate(
             let mul = |v: u8| (v as f32 * intensity) as u8;
             Color::rgba(mul(c.r), mul(c.g), mul(c.b), c.a)
         };
-        out[count] = ScreenTri {
-            pts,
-            colors: [shade(i0), shade(i1), shade(i2)],
-            depth: (vs[0].z + vs[1].z + vs[2].z) * (1.0 / 3.0),
+
+        let inside = |v: Vec3| {
+            v.z > NEAR
+                && v.x >= -lim_x * v.z
+                && v.x <= lim_x * v.z
+                && v.y >= -lim_y * v.z
+                && v.y <= lim_y * v.z
         };
-        count += 1;
+        let mut poly_a = [(Vec3::ZERO, Color::WHITE); MAX_POLY];
+        let mut poly_b = [(Vec3::ZERO, Color::WHITE); MAX_POLY];
+        poly_a[0] = (vs[0], shade(i0));
+        poly_a[1] = (vs[1], shade(i1));
+        poly_a[2] = (vs[2], shade(i2));
+        let mut n_poly = 3;
+        if !(inside(vs[0]) && inside(vs[1]) && inside(vs[2])) {
+            // Clip against near plane + the 4 guard-band side planes.
+            n_poly = clip_plane(&poly_a, n_poly, &mut poly_b, |v| v.z - NEAR);
+            n_poly = clip_plane(&poly_b, n_poly, &mut poly_a, |v| lim_x * v.z - v.x);
+            n_poly = clip_plane(&poly_a, n_poly, &mut poly_b, |v| lim_x * v.z + v.x);
+            n_poly = clip_plane(&poly_b, n_poly, &mut poly_a, |v| lim_y * v.z - v.y);
+            n_poly = clip_plane(&poly_a, n_poly, &mut poly_b, |v| lim_y * v.z + v.y);
+            poly_a = poly_b;
+            if n_poly < 3 {
+                continue;
+            }
+        }
+
+        let project = |v: Vec3| {
+            Vec2::new(
+                center.x + v.x * focal / v.z,
+                center.y - v.y * focal / v.z, // world Y-up -> screen Y-down
+            )
+        };
+        // Fan-triangulate the clipped polygon.
+        for k in 1..n_poly - 1 {
+            if count >= out.len() {
+                break;
+            }
+            let (v0, c0) = poly_a[0];
+            let (v1, c1) = poly_a[k];
+            let (v2, c2) = poly_a[k + 1];
+            let pts = [project(v0), project(v1), project(v2)];
+            // Backface cull: front faces are CCW in world space, which lands
+            // as positive signed area in Y-down screen space.
+            let area = (pts[1].x - pts[0].x) * (pts[2].y - pts[0].y)
+                - (pts[2].x - pts[0].x) * (pts[1].y - pts[0].y);
+            if area <= 0.0 {
+                continue;
+            }
+            out[count] = ScreenTri {
+                pts,
+                colors: [c0, c1, c2],
+                depth: (v0.z + v1.z + v2.z) * (1.0 / 3.0),
+            };
+            count += 1;
+        }
     }
 
     // Painter's sort: farthest first. Insertion sort — no alloc, and the
@@ -344,6 +439,82 @@ mod tests {
                 assert!((0.0..320.0).contains(&p.x) && (0.0..240.0).contains(&p.y));
             }
         }
+    }
+
+    #[test]
+    fn ground_crossing_the_near_plane_is_clipped_not_dropped() {
+        // A big flat "ground" passing under the camera used to vanish
+        // entirely (any vertex behind the near plane dropped the triangle).
+        let blob = cube_tmdl();
+        let mesh = Mesh::from_tmdl(&blob).unwrap();
+        // 40x1x40 slab whose top face is just below the camera and extends
+        // far behind it.
+        let model = Mat34::from_rotation_scale_translation(
+            Vec3::ZERO,
+            Vec3::new(40.0, 1.0, 40.0),
+            Vec3::new(0.0, -1.5, 0.0),
+        );
+        let camera = Camera3 {
+            eye: Vec3::new(0.0, 0.0, -5.0),
+            target: Vec3::ZERO,
+            ..Default::default()
+        };
+        let mut out = [ScreenTri {
+            pts: [Vec2::ZERO; 3],
+            colors: [Color::WHITE; 3],
+            depth: 0.0,
+        }; 128];
+        let n = tessellate(
+            &mesh,
+            &model,
+            &camera,
+            &DEFAULT_LIGHT,
+            Vec2::new(320.0, 240.0),
+            &mut out,
+        );
+        assert!(n > 0, "near-crossing ground vanished");
+        // Guard band keeps every projected coordinate bounded (the N64 RDP
+        // works in fixed point; huge offscreen coordinates overflow it).
+        for tri in &out[..n] {
+            for p in tri.pts {
+                assert!(
+                    p.x.abs() <= 320.0 * 2.0 && p.y.abs() <= 240.0 * 2.0,
+                    "unbounded coord {p:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn clip_output_fits_the_documented_bound() {
+        // One triangle fans into at most 6 after clipping — the bound the
+        // backends use to size their scratch buffers.
+        let blob = cube_tmdl();
+        let mesh = Mesh::from_tmdl(&blob).unwrap();
+        let model = Mat34::from_rotation_scale_translation(
+            Vec3::ZERO,
+            Vec3::new(100.0, 100.0, 100.0),
+            Vec3::ZERO,
+        );
+        let camera = Camera3 {
+            eye: Vec3::new(3.0, 40.0, -49.0),
+            target: Vec3::new(-1.0, -2.0, 3.0),
+            ..Default::default()
+        };
+        let mut out = [ScreenTri {
+            pts: [Vec2::ZERO; 3],
+            colors: [Color::WHITE; 3],
+            depth: 0.0,
+        }; 128];
+        let n = tessellate(
+            &mesh,
+            &model,
+            &camera,
+            &DEFAULT_LIGHT,
+            Vec2::new(320.0, 240.0),
+            &mut out,
+        );
+        assert!(n <= mesh.index_count / 3 * 6, "clip bound exceeded: {n}");
     }
 
     #[test]

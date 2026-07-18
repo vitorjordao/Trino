@@ -39,8 +39,13 @@ Transform & lighting is **engine code, not backend code**
   libdragon image stays on `trunk`.
 - v1 limits: no z-buffer (per-mesh painter's sort — meshes are sorted
   internally, but interpenetrating meshes will not sort against each other),
-  no textured 3D (vertex colors only), no near-plane clipping (triangles
-  touching the near plane are dropped), CPU-bound triangle throughput.
+  no textured 3D (vertex colors only), CPU-bound triangle throughput.
+- Update (2026-07, castle64 stress test): triangles crossing the near plane
+  are now clipped (Sutherland-Hodgman) against the near plane plus a 1.5x
+  guard-band frustum instead of being dropped — large ground planes stay
+  visible under the camera, and projected coordinates stay bounded, which
+  the N64 RDP's fixed-point edge walker requires. One triangle fans into at
+  most 6; backends size their scratch as `index_count / 3 * 6`.
 - Strict mode enforces `max_tris_per_frame` so PC development stays honest
   about console budgets.
 - If a future phase needs more (textured 3D, z-buffered scenes), the

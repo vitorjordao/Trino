@@ -66,8 +66,11 @@ Original architecture rationale: `PLANO_ENGINE_TRINO.md` (Portuguese).
   / a wgpu vertex-color pipeline interleaved with sprites). `set_camera` +
   `draw_model(Material::VertexLit)` on all three targets; strict mode
   enforces `max_tris_per_frame`. The platformer shows a spinning cube.
-  v1 limits (in the ADR): painter's sort (no z-buffer), vertex colors only,
-  no near-plane clipping. Deferred: editor 3D viewport/gizmo.
+  Triangles are clipped against the near plane + a 1.5x guard-band frustum
+  (bounded coordinates — RDP fixed-point safe); `math3d` ships deterministic
+  `sin/cos/sqrt/atan2`. v1 limits (in the ADR): painter's sort (no z-buffer;
+  cross-mesh order is the game's job — draw far-to-near), vertex colors only.
+  Deferred: editor 3D viewport/gizmo.
 
 - **Scaffolding + release**: `cargo xtask new <name>` renders
   `templates/new-game/` into `examples/<name>` (game crate + its own

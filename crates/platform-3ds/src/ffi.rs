@@ -15,6 +15,8 @@ pub struct TrinoBlit {
     pub flip_x: u32,
     pub flip_y: u32,
     pub tint: u32,
+    /// citro2d z (larger = nearer): layers sprites above/below the 3D band.
+    pub depth: f32,
 }
 
 unsafe extern "C" {
@@ -35,8 +37,9 @@ unsafe extern "C" {
 
     /// No-op on 3DS (shim-API symmetry with the N64).
     pub fn trino_3d_begin();
-    /// pts: 6 floats (x/y per vertex); colors: 12 bytes (rgba per vertex).
-    pub fn trino_tri(pts: *const f32, colors: *const u8);
+    /// pts: 6 floats (x/y per vertex); colors: 12 bytes (rgba per vertex);
+    /// depth: citro2d z for the whole triangle (larger = nearer).
+    pub fn trino_tri(pts: *const f32, colors: *const u8, depth: f32);
 
     pub fn trino_joypad_buttons() -> u32;
     /// (x as i16 as u16) << 16 | (y as i16 as u16).

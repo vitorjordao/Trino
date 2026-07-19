@@ -9,8 +9,7 @@
 //! gouraud lighting, backface cull, painter's sort — lives here, in pure
 //! deterministic f32, identical on every target.
 //!
-//! Limits (v1, on purpose): no z-buffer (painter's sort), no textures on 3D
-//! geometry (vertex colors only).
+//! Limits (v1, on purpose): no textures on 3D geometry (vertex colors only).
 //!
 //! Triangles are clipped against the near plane and a guard-band frustum
 //! (1.5x the screen), so geometry that crosses the near plane stays visible
@@ -18,24 +17,19 @@
 //! whose edge coefficients are fixed-point and overflow on huge offscreen
 //! coordinates.
 //!
-//! Painter correctness for a z-bufferless renderer hinges on two things
-//! done here (both found play-testing a 3D game — huge floor triangles
-//! painted over the player, doors vanished behind wall quads):
+//! Occlusion is **z-buffered**: every vertex carries a normalized depth
+//! ([`ScreenTri::z`]) that the PC writes to a wgpu depth buffer, the N64 to
+//! the RDP hardware z-buffer and the 3DS to citro2d's per-draw depth (one
+//! value per triangle there). Interpenetrating geometry resolves per pixel
+//! — something no painter's sort can do. On top of that:
 //!
 //! - Edges spanning more than [`DEPTH_SPLIT`] units of view depth are
-//!   recursively bisected, so a 40-unit floor becomes depth-uniform strips
-//!   instead of one triangle whose single sort key misrepresents most of
-//!   its surface. The split rule depends only on the edge's endpoints, so
-//!   neighboring triangles split shared edges at identical points — no
-//!   T-junction cracks.
-//! - The sort key ([`ScreenTri::depth`]) is the triangle's **farthest**
-//!   vertex, not its centroid: a surface that extends behind an object
-//!   standing on it always draws first.
-//!
-//! Cross-mesh ordering: backends collect the triangles of consecutive
-//! `draw_model` calls into a batch and depth-sort the whole batch before
-//! rasterizing (flushed on sprite draws, camera changes and `end_frame`),
-//! so overlapping models layer correctly without the game sorting draws.
+//!   recursively bisected (per-edge rule — neighbors split shared edges at
+//!   identical points, no T-junction cracks), which keeps the 3DS's
+//!   per-triangle depth honest and the N64's 16-bit z precise.
+//! - Backends still batch consecutive `draw_model` calls and sort the batch
+//!   far-to-near by [`ScreenTri::depth`] (farthest vertex) — the tie-break
+//!   for equal depths and the correct blending order.
 
 use crate::math::{Color, Vec2, Vec3};
 use crate::math3d::Mat34;
@@ -179,6 +173,13 @@ pub struct ScreenTri {
     /// extends behind an object draw before the object standing on it —
     /// centroid keys painted floors over players and walls over doors.
     pub depth: f32,
+    /// Per-vertex normalized depth for z-buffered rasterizers:
+    /// `1 - NEAR/z` — 0.0 at the near plane rising toward 1.0 at infinity
+    /// (hyperbolic: more precision close up, where it matters). PC writes it
+    /// to the wgpu depth buffer, the N64 to the RDP z-buffer; the 3DS uses
+    /// the per-triangle average (citro2d has one depth per draw). Painter
+    /// order (the batch sort) stays as the tie-break for equal depths.
+    pub z: [f32; 3],
 }
 
 const NEAR: f32 = 0.05;
@@ -373,10 +374,12 @@ pub fn tessellate(
                     continue;
                 }
                 let depth = v0.z.max(v1.z).max(v2.z);
+                let zn = |v: Vec3| 1.0 - NEAR / v.z;
                 emit(ScreenTri {
                     pts,
                     colors: [c0, c1, c2],
                     depth,
+                    z: [zn(v0), zn(v1), zn(v2)],
                 });
             }
         }

@@ -63,6 +63,17 @@ Transform & lighting is **engine code, not backend code**
   extending behind an object always draws before it. Output count no longer
   has a static bound, so `tessellate` emits through a callback and backends
   push straight into the batch buffer.
+- Update (2026-07, fourth pass — painter alone could never resolve
+  interpenetrating meshes, e.g. a cap box through a head box): occlusion is
+  now **z-buffered** on all three targets. `ScreenTri` carries per-vertex
+  normalized depth (`1 - NEAR/z`, hyperbolic); the PC writes it to a wgpu
+  Depth32Float attachment (LessEqual; sprites test Always/no-write), the
+  N64 to the RDP hardware z-buffer (`TRIFMT_ZBUF_SHADE`, zbuf surface
+  attached and cleared per frame — the shim builds vertices from the
+  trifmt's own offsets), and the 3DS passes citro2d's per-draw depth
+  (one value per triangle, banded so background sprites < 3D < HUD). The
+  depth-sorted batch remains as tie-break and blending order. This ADR's
+  original "no z-buffer" limit is retired; "vertex colors only" stands.
 - Strict mode enforces `max_tris_per_frame` so PC development stays honest
   about console budgets.
 - If a future phase needs more (textured 3D, z-buffered scenes), the

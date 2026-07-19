@@ -31,10 +31,12 @@ unsafe extern "C" {
     pub fn trino_sprite_size(sprite: *mut c_void) -> u32;
     pub fn trino_sprite_blit(sprite: *mut c_void, params: *const TrinoBlit);
 
-    /// Set the RDP shade combiner; call once before a `trino_tri` batch.
+    /// Set the RDP shade combiner + z-test; call once before a `trino_tri`
+    /// batch.
     pub fn trino_3d_begin();
-    /// pts: 6 floats (x/y per vertex); colors: 12 bytes (rgba per vertex).
-    pub fn trino_tri(pts: *const f32, colors: *const u8);
+    /// pts: 6 floats (x/y per vertex); colors: 12 bytes (rgba per vertex);
+    /// zs: 3 floats (normalized depth 0..1, 0 = near) for the RDP z-buffer.
+    pub fn trino_tri(pts: *const f32, colors: *const u8, zs: *const f32);
 
     pub fn trino_joypad_buttons() -> u32;
     /// (x as i16 as u16) << 16 | (y as i16 as u16).

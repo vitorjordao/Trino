@@ -49,6 +49,10 @@ pub enum Cmd {
 pub struct TriVertex {
     pub pos: [f32; 2],
     pub color: [f32; 4],
+    /// Normalized depth (0 = near) written to the depth buffer — real
+    /// per-pixel occlusion; the painter batch sort is only a tie-break.
+    pub depth: f32,
+    pub _pad: f32,
 }
 
 pub const TRI_VERTEX_STRIDE: u64 = core::mem::size_of::<TriVertex>() as u64;

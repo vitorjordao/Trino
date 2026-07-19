@@ -59,6 +59,7 @@ pub struct PcRenderer {
     surface: Option<SurfaceState>,
     offscreen_view: wgpu::TextureView,
     offscreen_tex: wgpu::Texture,
+    depth_view: wgpu::TextureView,
     sprite_pipeline: wgpu::RenderPipeline,
     tri_pipeline: wgpu::RenderPipeline,
     blit_pipeline: wgpu::RenderPipeline,
@@ -217,6 +218,23 @@ impl PcRenderer {
         });
         let offscreen_view = offscreen_tex.create_view(&wgpu::TextureViewDescriptor::default());
 
+        // Depth buffer for the 3D triangle pipeline (sprites test Always).
+        let depth_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("trino-depth"),
+            size: wgpu::Extent3d {
+                width: internal_size.0,
+                height: internal_size.1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth32Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let depth_view = depth_tex.create_view(&wgpu::TextureViewDescriptor::default());
+
         // The 3DS GPU samples textures bilinearly by default (citro2d), so
         // its sim profile does too; N64/native use nearest (the N64's
         // 3-point filter is emulated in the shader instead).
@@ -365,7 +383,15 @@ impl PcRenderer {
                 topology: wgpu::PrimitiveTopology::TriangleStrip,
                 ..Default::default()
             },
-            depth_stencil: None,
+            // Sprites are 2D overlay: draw in submission order, never test
+            // or write depth (matches the N64's rdpq sprite path).
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::Always),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
             multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,
             cache: None,
@@ -387,6 +413,11 @@ impl PcRenderer {
                 format: wgpu::VertexFormat::Float32x4,
                 offset: 8,
                 shader_location: 1,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32,
+                offset: 24,
+                shader_location: 2,
             },
         ];
         let tri_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -413,7 +444,15 @@ impl PcRenderer {
                 })],
             }),
             primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
+            // Real per-pixel occlusion: interpenetrating meshes (a cap
+            // through a head) resolve correctly, which no painter sort can.
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
             multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,
             cache: None,
@@ -490,6 +529,7 @@ impl PcRenderer {
             surface,
             offscreen_view,
             offscreen_tex,
+            depth_view,
             sprite_pipeline,
             tri_pipeline,
             blit_pipeline,
@@ -731,7 +771,8 @@ impl PcRenderer {
         });
         let first = self.tri_verts.len() as u32;
         for tri in &self.pending_tris {
-            for (p, c) in tri.pts.iter().zip(tri.colors.iter()) {
+            for i in 0..3 {
+                let (p, c) = (tri.pts[i], tri.colors[i]);
                 self.tri_verts.push(TriVertex {
                     pos: [p.x, p.y],
                     color: [
@@ -740,6 +781,8 @@ impl PcRenderer {
                         c.b as f32 / 255.0,
                         c.a as f32 / 255.0,
                     ],
+                    depth: tri.z[i],
+                    _pad: 0.0,
                 });
             }
         }
@@ -833,7 +876,14 @@ impl PcRenderer {
                     },
                     depth_slice: None,
                 })],
-                depth_stencil_attachment: None,
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
                 timestamp_writes: None,
                 occlusion_query_set: None,
                 multiview_mask: None,

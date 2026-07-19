@@ -111,6 +111,7 @@ typedef struct {
     uint32_t flip_x;      // 0/1
     uint32_t flip_y;      // 0/1
     uint32_t tint;        // RGBA8888; 0xFFFFFFFF = no tint
+    float depth;          // citro2d z (larger = nearer; layers 2D vs 3D)
 } trino_blit_t;
 
 void trino_sprite_blit(void* sheet, const trino_blit_t* p)
@@ -129,7 +130,7 @@ void trino_sprite_blit(void* sheet, const trino_blit_t* p)
             p->flip_y ? -h : h,
         },
         .center = { 0.0f, 0.0f }, // rotation around the top-left, like rdpq
-        .depth = 0.5f,
+        .depth = p->depth,
         .angle = p->theta,
     };
 
@@ -155,12 +156,13 @@ void trino_3d_begin(void)
 }
 
 // pts: 6 floats (x0,y0,x1,y1,x2,y2) in screen pixels;
-// colors: 12 bytes (r,g,b,a per vertex).
-void trino_tri(const float* pts, const uint8_t* c)
+// colors: 12 bytes (r,g,b,a per vertex);
+// depth: citro2d z coordinate (larger = nearer; depth-tested by citro3d).
+void trino_tri(const float* pts, const uint8_t* c, float depth)
 {
     C2D_DrawTriangle(pts[0], pts[1], C2D_Color32(c[0], c[1], c[2], c[3]),
                      pts[2], pts[3], C2D_Color32(c[4], c[5], c[6], c[7]),
-                     pts[4], pts[5], C2D_Color32(c[8], c[9], c[10], c[11]), 0.5f);
+                     pts[4], pts[5], C2D_Color32(c[8], c[9], c[10], c[11]), depth);
 }
 
 // ---------------------------------------------------------------------------

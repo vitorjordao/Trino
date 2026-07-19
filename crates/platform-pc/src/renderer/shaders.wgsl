@@ -109,6 +109,7 @@ fn fs_sprite(in: VsOut) -> @location(0) vec4<f32> {
 struct TriIn {
     @location(0) pos: vec2<f32>,   // pixels, internal resolution
     @location(1) color: vec4<f32>,
+    @location(2) depth: f32,       // normalized (0 = near), z-buffer value
 };
 
 struct TriOut {
@@ -123,7 +124,7 @@ fn vs_tri(in: TriIn) -> TriOut {
         1.0 - in.pos.y / globals.screen.y * 2.0,
     );
     var out: TriOut;
-    out.clip = vec4<f32>(ndc, 0.0, 1.0);
+    out.clip = vec4<f32>(ndc, in.depth, 1.0);
     out.color = in.color;
     return out;
 }

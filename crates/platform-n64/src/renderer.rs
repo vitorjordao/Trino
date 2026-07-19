@@ -62,7 +62,7 @@ impl N64Renderer {
             for (i, c) in tri.colors.iter().enumerate() {
                 colors[i * 4..i * 4 + 4].copy_from_slice(&[c.r, c.g, c.b, c.a]);
             }
-            unsafe { ffi::trino_tri(pts.as_ptr(), colors.as_ptr()) }
+            unsafe { ffi::trino_tri(pts.as_ptr(), colors.as_ptr(), tri.z.as_ptr()) }
         }
         self.pending_tris.clear();
     }

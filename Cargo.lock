@@ -317,6 +317,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "castle64"
+version = "0.1.0"
+dependencies = [
+ "trino-core",
+ "trino-game-api",
+]
+
+[[package]]
 name = "cc"
 version = "1.2.65"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3183,7 +3191,7 @@ checksum = "db97caf9d906fbde555dd62fa95ddba9eecfd14cb388e4f491a66d74cd5fb79a"
 name = "trino-app-3ds"
 version = "0.1.0"
 dependencies = [
- "platformer",
+ "castle64",
  "trino-core",
  "trino-platform-3ds",
 ]
@@ -3192,7 +3200,7 @@ dependencies = [
 name = "trino-app-n64"
 version = "0.1.0"
 dependencies = [
- "platformer",
+ "castle64",
  "trino-core",
  "trino-platform-n64",
 ]
@@ -3201,8 +3209,8 @@ dependencies = [
 name = "trino-app-pc"
 version = "0.1.0"
 dependencies = [
+ "castle64",
  "hot-lib-reloader",
- "platformer",
  "pollster",
  "trino-asset-pipeline",
  "trino-core",
@@ -4323,6 +4331,7 @@ checksum = "3ae8337f8a065cfc972643663ea4279e04e7256de865aa66fe25cec5fb912d3f"
 name = "xtask"
 version = "0.1.0"
 dependencies = [
+ "castle64",
  "gif",
  "hello-sprite",
  "hound",

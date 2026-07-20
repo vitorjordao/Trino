@@ -12,4 +12,4 @@ crate-type = ["staticlib"]
 [dependencies]
 trino-core = { workspace = true }
 trino-platform-n64 = { workspace = true }
-platformer = { workspace = true }
+castle64 = { workspace = true }

@@ -13,4 +13,4 @@ path = "src/main.rs"
 [dependencies]
 trino-core = { workspace = true }
 trino-platform-3ds = { workspace = true }
-platformer = { workspace = true }
+castle64 = { workspace = true }

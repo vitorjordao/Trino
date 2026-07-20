@@ -4,6 +4,7 @@
 //! target. Wraps cargo, the asset pipeline, Docker (N64) and emulators so
 //! contributors and CI never memorize per-platform incantations.
 
+mod castle64_assets;
 mod n3ds;
 mod n64;
 
@@ -24,7 +25,7 @@ commands:
   assets <pc|n64|3ds>  bake assets into target/assets/<platform>
   watch <pc|n64>       live-reload session (pc: dylib hot swap; n64: rebuild
                        ROM + relaunch ares). pc: --game <crate> picks the
-                       game dylib to rebuild (default: platformer)
+                       game dylib to rebuild (default: castle64)
   editor               launch the Trino editor
   new <name>           scaffold a new game crate under examples/
   gen-assets           regenerate the sample master assets (dev utility)
@@ -45,7 +46,8 @@ fn main() -> ExitCode {
             args.remove(i);
             name
         }
-        None => "platformer".into(),
+        // Must match the game crate apps/pc links (the 3D showcase).
+        None => "castle64".into(),
     };
     let mut it = args.iter().map(String::as_str);
 
@@ -283,6 +285,9 @@ fn gen_assets() -> ExitCode {
     let models = root.join("assets/shared/models");
     std::fs::create_dir_all(&models).unwrap();
     gen_cube_glb(&models.join("cube.glb"));
+
+    // castle64 (the 3D showcase): blocks, articulated player, boar, doors.
+    castle64_assets::gen_all(&root, &|path, w, h, rgba| write_png(path, w, h, rgba));
 
     println!("sample assets regenerated under assets/shared/");
     ExitCode::SUCCESS

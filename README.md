@@ -46,11 +46,14 @@ on 3DS and a native window on PC.*
 
 ## Status
 
-**All 9 roadmap phases implemented** — a complete platformer (tilemap, physics, coins,
-music) plus vertex-lit 3D models run identically on all three targets; real ROMs boot
-in ares and Azahar with automated in-emulator test harnesses; `cargo xtask new`
-scaffolds AI-friendly game crates; releases are automated. The roadmap with per-phase
-acceptance criteria lives in [PLANO_EXECUCAO_TRINO.md](PLANO_EXECUCAO_TRINO.md).
+**All 9 roadmap phases implemented** — a complete 2D platformer plus **castle64**, a
+SM64-style 3D showcase (hub + 3 stages, articulated character with inertial movement,
+z-buffered software T&L, a CC0 KayKit prop baked from textured glTF), run identically
+on all three targets; real ROMs boot in ares and Azahar with automated in-emulator
+test harnesses — including a bot that *plays* a full castle64 stage inside the
+emulators; `cargo xtask new` scaffolds AI-friendly game crates; releases are
+automated. The roadmap with per-phase acceptance criteria lives in
+[PLANO_EXECUCAO_TRINO.md](PLANO_EXECUCAO_TRINO.md).
 
 | | PC | Nintendo 64 | Nintendo 3DS |
 |---|---|---|---|
@@ -70,12 +73,16 @@ acceptance criteria lives in [PLANO_EXECUCAO_TRINO.md](PLANO_EXECUCAO_TRINO.md).
 | <img src="docs/media/n64-look.png" width="320" alt="The renderer test scene with 3-point filtering and RGBA5551 ordered dither" /> | <img src="docs/media/cube3d.png" width="320" alt="A vertex-lit cube: glTF to TMDL to CPU transform and lighting to plain rasterized triangles" /> |
 | 3-point filtering + the RDP's magic-square dither, quantized to RGBA5551 — emulated in the PC shader so what you see is what the console shows. | glTF → TMDL → deterministic CPU transform & lighting; the consoles only rasterize colored triangles (`rdpq_triangle` / `C2D_DrawTriangle`). |
 
+| castle64 — the 3D showcase | |
+|---|---|
+| <img src="docs/media/castle64.png" width="320" alt="castle64: the SM64-style 3D showcase — articulated character mid-jump over the castle courtyard, blob shadow on the grass" /> | Hub + 3 platforming stages on all three consoles: z-buffered occlusion, per-draw tint, an articulated character, and a real CC0 KayKit doorway baked from textured glTF into vertex colors. A deterministic bot plays it end-to-end in the test suite (`docs/media/castle64.gif`). |
+
 ## Quickstart
 
 ```sh
 git clone https://github.com/vitorjordao/Trino
 cd Trino
-cargo xtask run pc     # play the platformer (N64 look by default)
+cargo xtask run pc     # play castle64, the 3D showcase (N64 look by default)
 cargo xtask editor     # open the visual editor
 cargo xtask test       # full test suite — same gates as CI
 ```

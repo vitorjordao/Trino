@@ -46,8 +46,8 @@ Original architecture rationale: `PLANO_ENGINE_TRINO.md` (Portuguese).
   sprites bilinearly (the 3DS GPU default). Skills: `build-3ds`,
   `run-emulator`.
 
-- **Showcase platformer** (`examples/platformer`, the default game in all
-  three `apps/*`): tilemap + AABB physics from `trino_core::{tilemap,collide}`
+- **Showcase platformer** (`examples/platformer`, the 2D showcase):
+  tilemap + AABB physics from `trino_core::{tilemap,collide}`
   (ASCII levels, zero-alloc parse, substepped collision — deterministic
   across targets, verified by unit tests and the console self-tests), coins,
   goal, camera with bounds, chiptune music loop + SFX. Music flows through
@@ -57,6 +57,21 @@ Original architecture rationale: `PLANO_ENGINE_TRINO.md` (Portuguese).
   README media: hero shot via `cargo test -p xtask --test hero_shot --
   --ignored`; gameplay GIF (a bot plays the level on the real renderer) via
   `cargo test -p xtask --test record_gif -- --ignored`.
+- **castle64** (`examples/castle64`, the 3D showcase and the default game in
+  all three `apps/*`): SM64-style hub + 3 platforming stages + throne room.
+  Own 3D AABB physics (axis-resolved with a contact skin — `physics.rs`),
+  inertial movement with variable-height jumps, an articulated 5-part purple
+  player (torso/arms/legs pivoted at shoulders/hips, real walk cycle),
+  patrol boars with stomp kills, lava, moving platforms that carry the
+  player, an orbit camera clamped by raycast, tinted doors and a HUD with
+  generated digit sprites. The castle entrance is a REAL low-poly doorway
+  from KayKit's Dungeon Remastered pack (CC0, vendored with its license) —
+  it exercises the glTF bake on a textured multi-primitive model. A
+  deterministic waypoint bot (`castle64::bot`) plays the entire game in the
+  PC test suite and a full stage inside the ares/Azahar self-tests.
+  Generated masters regenerate via `cargo xtask gen-assets`
+  (`xtask/src/castle64_assets.rs`); screenshots/GIF via
+  `cargo test -p xtask --test c64_shots|c64_gif -- --ignored`.
 - **3D (`draw_model`)**: engine-side software T&L (`trino_core::render3d` —
   see `docs/adr/0003-software-tnl-3d.md`): glTF masters bake to the portable
   TMDL format (`[models.*]` in the manifest); the core transforms, lights
@@ -154,7 +169,7 @@ cargo xtask test          # full workspace test suite (same as CI); --bless rege
 cargo xtask assets pc     # bake assets into target/assets/pc
 cargo xtask watch pc      # live-reload session (code dylib + assets)
                           #   --game <crate> picks the game dylib to rebuild
-                          #   (default: platformer; must match apps/pc)
+                          #   (default: castle64; must match apps/pc)
 cargo xtask editor        # launch the visual editor
 cargo xtask gen-assets    # regenerate sample masters (dev utility)
 cargo xtask build n64     # ROM via Docker toolchain -> target/n64/trino.z64

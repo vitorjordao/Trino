@@ -31,7 +31,7 @@ mod n64 {
         let mut input = N64Input;
         N64Assets::load_all(&mut renderer, &mut audio);
 
-        let mut game = platformer::PlatformerGame::new(Vec2::new(320.0, 240.0));
+        let mut game = castle64::Castle64Game::new(Vec2::new(320.0, 240.0));
 
         if N64Assets::exists("/test_mode") {
             run_self_test(&mut game, &mut renderer, &mut audio);
@@ -50,23 +50,30 @@ mod n64 {
         }
     }
 
-    /// Deterministic self-check exercising physics + render + assets,
-    /// reporting through the ISViewer channel: settle on the ground, walk,
-    /// then jump and land back.
+    /// Deterministic self-check exercising 3D physics + render + assets,
+    /// reporting through the ISViewer channel: settle on the ground, walk
+    /// toward the castle (+Z), then jump and land back.
     fn run_self_test(
-        game: &mut platformer::PlatformerGame,
+        game: &mut castle64::Castle64Game,
         renderer: &mut N64Renderer,
         audio: &mut N64Audio,
     ) -> ! {
         const DT: f32 = 1.0 / 60.0;
-        let mut frame = |game: &mut platformer::PlatformerGame, input: &InputState| {
+        // Render 1:4 — a lógica roda todo frame (determinismo intacto); o
+        // T&L em software da cena completa a cada frame estourava o timeout
+        // do harness no emulador.
+        let mut frame_no = 0u32;
+        let mut frame = |game: &mut castle64::Castle64Game, input: &InputState| {
             game.update(input, audio, DT);
-            game.render(renderer);
+            if frame_no % 4 == 0 {
+                game.render(renderer);
+            }
+            frame_no += 1;
             audio.poll();
         };
         let idle = InputState::default();
-        let mut right = InputState::default();
-        right.set(Button::DpadRight, true);
+        let mut fwd = InputState::default();
+        fwd.set(Button::DpadUp, true);
         let mut jump = InputState::default();
         jump.set(Button::A, true);
 
@@ -74,7 +81,7 @@ mod n64 {
             runtime::log(&format!("TRINO_TEST_FAIL:{msg}\n"));
         };
 
-        // 1) Gravity settles the player on the floor.
+        // 1) Gravity settles the player on the hub floor.
         for _ in 0..60 {
             frame(game, &idle);
         }
@@ -82,19 +89,23 @@ mod n64 {
             fail(format!("did not settle: on_ground={}", game.on_ground));
         } else {
             let ground_y = game.pos.y;
-            let x0 = game.pos.x;
-            // 2) Walking moves right.
+            let z0 = game.pos.z;
+            // 2) Walking moves toward the castle (+Z, world units).
             for _ in 0..30 {
-                frame(game, &right);
+                frame(game, &fwd);
             }
-            let walked = game.pos.x - x0;
-            // 3) Jump rises and lands back at the same height.
-            frame(game, &jump);
+            let walked = game.pos.z - z0;
+            // 3) Jump rises (Y-up) and lands back at the same height.
+            // Hold A through the ascent: releasing early cuts the jump
+            // (variable-height jumps).
+            for _ in 0..14 {
+                frame(game, &jump);
+            }
             let mut peak = ground_y;
             let mut landed = false;
             for _ in 0..150 {
                 frame(game, &idle);
-                if game.pos.y < peak {
+                if game.pos.y > peak {
                     peak = game.pos.y;
                 }
                 if game.on_ground {
@@ -102,14 +113,36 @@ mod n64 {
                     break;
                 }
             }
-            if walked < 40.0 {
+            if walked < 1.5 {
                 fail(format!("walked only {walked}"));
-            } else if peak > ground_y - 30.0 {
+            } else if peak < ground_y + 1.0 {
                 fail(format!("jump peak {peak} vs ground {ground_y}"));
             } else if !landed || (game.pos.y - ground_y).abs() > 0.01 {
                 fail(format!("landing y {} vs {ground_y}", game.pos.y));
             } else {
-                runtime::log("TRINO_TEST_PASS\n");
+                // 4) E2E: o bot joga hub → green hills inteira → estrela.
+                let mut bot = castle64::bot::Bot::new(castle64::bot::GREEN_RUN);
+                let mut frames = 0u32;
+                let mut bot_ok = true;
+                while !bot.done() {
+                    let input = bot.drive(game);
+                    frame(game, &input);
+                    frames += 1;
+                    if bot.frames_in_step() > 1800 || frames > 60 * 120 {
+                        fail(format!("bot stuck at step {}", bot.step_index()));
+                        bot_ok = false;
+                        break;
+                    }
+                }
+                if bot_ok && (game.star_count() != 1 || game.level != 0) {
+                    fail(format!(
+                        "bot run ended with {} stars, level {}",
+                        game.star_count(),
+                        game.level
+                    ));
+                } else if bot_ok {
+                    runtime::log("TRINO_TEST_PASS\n");
+                }
             }
         }
         loop {

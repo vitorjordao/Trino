@@ -48,3 +48,96 @@ file = "music/theme.wav"
 
 [models.cube]
 file = "models/cube.glb"
+
+# ---- castle64 (jogo de stress-test local; diff nao commitado) ----
+
+[sprites.c64_star]
+file = "sprites/castle64/star.png"
+formats = { n64 = "CI4" }
+
+[sprites.c64_digit0]
+file = "sprites/castle64/digit0.png"
+formats = { n64 = "CI4" }
+
+[sprites.c64_digit1]
+file = "sprites/castle64/digit1.png"
+formats = { n64 = "CI4" }
+
+[sprites.c64_digit2]
+file = "sprites/castle64/digit2.png"
+formats = { n64 = "CI4" }
+
+[sprites.c64_digit3]
+file = "sprites/castle64/digit3.png"
+formats = { n64 = "CI4" }
+
+[sprites.c64_digit4]
+file = "sprites/castle64/digit4.png"
+formats = { n64 = "CI4" }
+
+[sprites.c64_digit5]
+file = "sprites/castle64/digit5.png"
+formats = { n64 = "CI4" }
+
+[sprites.c64_digit6]
+file = "sprites/castle64/digit6.png"
+formats = { n64 = "CI4" }
+
+[sprites.c64_digit7]
+file = "sprites/castle64/digit7.png"
+formats = { n64 = "CI4" }
+
+[sprites.c64_digit8]
+file = "sprites/castle64/digit8.png"
+formats = { n64 = "CI4" }
+
+[sprites.c64_digit9]
+file = "sprites/castle64/digit9.png"
+formats = { n64 = "CI4" }
+
+[models.c64_block_grass]
+file = "models/castle64/block_grass.glb"
+
+[models.c64_block_stone]
+file = "models/castle64/block_stone.glb"
+
+[models.c64_block_brick]
+file = "models/castle64/block_brick.glb"
+
+[models.c64_block_castle]
+file = "models/castle64/block_castle.glb"
+
+[models.c64_block_roof]
+file = "models/castle64/block_roof.glb"
+
+[models.c64_block_lava]
+file = "models/castle64/block_lava.glb"
+
+[models.c64_coin]
+file = "models/castle64/coin.glb"
+
+[models.c64_star]
+file = "models/castle64/star.glb"
+
+[models.c64_player_torso]
+file = "models/castle64/player_torso.glb"
+
+[models.c64_player_arm]
+file = "models/castle64/player_arm.glb"
+
+[models.c64_player_leg]
+file = "models/castle64/player_leg.glb"
+
+[models.c64_boar]
+file = "models/castle64/boar.glb"
+
+[models.c64_shadow]
+file = "models/castle64/shadow.glb"
+
+[models.c64_door_frame]
+file = "models/castle64/door_frame.glb"
+
+# Porta real low-poly: KayKit Dungeon Remastered (CC0, Kay Lousberg) —
+# textura de paleta amostrada para vertex colors no bake; tint por destino.
+[models.c64_door]
+file = "models/castle64/door_kaykit.glb"

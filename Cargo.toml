@@ -21,6 +21,7 @@ trino-asset-pipeline = { path = "crates/asset-pipeline" }
 trino-scene = { path = "crates/scene" }
 hello-sprite = { path = "examples/hello-sprite" }
 platformer = { path = "examples/platformer" }
+castle64 = { path = "examples/castle64" }
 winit = "0.30"
 # wgpu 29 = what egui-wgpu 0.35 (the editor UI, Fase 3) resolves to. Keep in
 # lockstep with the egui upgrade cadence, never bump one without the other.

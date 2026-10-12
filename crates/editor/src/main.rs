@@ -23,6 +23,7 @@ mod gizmo;
 mod level_editor;
 mod log;
 mod panels;
+mod play;
 mod project;
 mod theme;
 mod viewport;

@@ -14,6 +14,8 @@ path = "src/main.rs"
 trino-core = { workspace = true }
 trino-scene = { workspace = true }
 trino-platform-pc = { workspace = true }
+# Play in editor: the scene runtime (tag rules: player / coin / goal).
+showcase = { workspace = true }
 trino-asset-pipeline = { workspace = true, features = ["watch"] }
 eframe = { workspace = true }
 egui_dock = { workspace = true }

@@ -93,6 +93,8 @@ pub struct Viewport {
     /// Game view: the console budget overlay (tris / sprites / texture vs
     /// the selected profile's Caps).
     pub show_budget: bool,
+    /// Game view: a scene running in the editor (Play ▸ Play here).
+    pub play: Option<crate::play::PlaySession>,
     pub gizmo: GizmoMode,
     pub snap: bool,
     drag: Option<(Vec<usize>, Drag)>,
@@ -137,6 +139,7 @@ impl Viewport {
             show_grid: true,
             show_colliders: true,
             show_budget: true,
+            play: None,
             gizmo: GizmoMode::Translate,
             snap: false,
             drag: None,
@@ -186,6 +189,11 @@ impl Viewport {
     pub fn upload(&mut self, project: &Project, changed: &[String]) {
         project.upload_some(&mut self.renderer, changed);
         self.rendered = None;
+    }
+
+    /// Internal resolution of this view's renderer.
+    pub fn internal_size(&self) -> (u32, u32) {
+        self.renderer.internal_size()
     }
 
     pub fn profile_key(&self) -> &'static str {
@@ -372,7 +380,27 @@ impl Viewport {
             anim_time,
         );
         let size_changed = self.rendered.as_ref().map(|r| r.1) != Some(internal);
-        if self.rendered.as_ref() != Some(&key) || flashing || cam_moving {
+        if let Some(session) = self.play.as_mut() {
+            // Playing: the game updates and draws every frame, fed by the
+            // keyboard (unless a text field has focus).
+            let dt = session.tick();
+            let typing = ui.ctx().egui_wants_keyboard_input();
+            let input_state =
+                ui.input(|i| crate::play::input_from_keys(|k| !typing && i.key_down(k)));
+            use trino_core::Game as _;
+            session
+                .game
+                .update(&input_state, &mut crate::play::NullAudio, dt);
+            session.game.render(&mut self.renderer);
+            self.stats = Stats {
+                items: input.resolved.items.len(),
+                tris: self.renderer.stats().tris as usize,
+                ms: dt * 1000.0,
+                frame: self.renderer.stats(),
+            };
+            self.rendered = None;
+            ui.ctx().request_repaint();
+        } else if self.rendered.as_ref() != Some(&key) || flashing || cam_moving {
             self.render(input, internal);
             if size_changed {
                 self.reregister();
@@ -484,11 +512,14 @@ impl Viewport {
         }
 
         // ---- overlays -------------------------------------------------------
+        // While playing, the Game view shows only the game.
+        let playing = self.play.is_some();
         if self.kind == ViewKind::Scene && self.show_colliders {
             colliders(&painter, &proj, input);
         }
         if let Some(h) = &self.hover
             && Some(h.as_slice()) != input.selected
+            && !playing
         {
             outline(
                 &painter,
@@ -498,10 +529,12 @@ impl Viewport {
                 Stroke::new(1.0, Color32::from_white_alpha(90)),
             );
         }
-        if let Some(sel) = input.selected {
+        if let Some(sel) = input.selected.filter(|_| !playing) {
             outline(&painter, &proj, input, sel, Stroke::new(1.6, c::ACCENT));
         }
-        markers(&painter, &proj, input, self.hover.as_deref());
+        if !playing {
+            markers(&painter, &proj, input, self.hover.as_deref());
+        }
         if self.kind == ViewKind::Scene
             && let Some(g) = &gizmo
         {

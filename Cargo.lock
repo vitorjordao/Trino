@@ -3272,6 +3272,7 @@ dependencies = [
  "notify-debouncer-full 0.6.0",
  "png",
  "ron",
+ "showcase",
  "tempfile",
  "trino-asset-pipeline",
  "trino-core",

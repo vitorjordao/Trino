@@ -64,6 +64,9 @@ pub struct Project {
     pub models: BTreeMap<String, ModelAsset>,
     pub sounds: Vec<String>,
     pub music: Vec<String>,
+    /// Font glyph tables by logical path (`fonts/x` -> (id, TFNT)); the
+    /// atlas is in `sprites` under the same logical path.
+    pub fonts: BTreeMap<String, (u32, Vec<u8>)>,
     /// Bumped whenever asset content changes (viewports re-upload, caches
     /// invalidate).
     pub generation: u64,
@@ -77,6 +80,7 @@ impl Project {
             models: BTreeMap::new(),
             sounds: Vec::new(),
             music: Vec::new(),
+            fonts: BTreeMap::new(),
             generation: 0,
         }
     }
@@ -191,6 +195,10 @@ impl Project {
             };
             self.models.insert(m.logical, asset);
         }
+        for f in assets.fonts {
+            n += 1;
+            self.fonts.insert(f.logical, (f.id, f.table));
+        }
         if ids.is_none() {
             self.sounds = assets.sounds.into_iter().map(|s| s.logical).collect();
             self.music = assets.music.into_iter().map(|s| s.logical).collect();
@@ -214,6 +222,9 @@ impl Project {
         for m in self.models.values() {
             r.upload_mesh(ModelId(m.id), m.tmdl.clone());
         }
+        for (id, table) in self.fonts.values() {
+            r.upload_font(trino_core::FontId(*id), table.clone());
+        }
     }
 
     /// Upload only the given logical paths.
@@ -224,6 +235,9 @@ impl Project {
             }
             if let Some(m) = self.models.get(l) {
                 r.upload_mesh(ModelId(m.id), m.tmdl.clone());
+            }
+            if let Some((id, table)) = self.fonts.get(l) {
+                r.upload_font(trino_core::FontId(*id), table.clone());
             }
         }
     }

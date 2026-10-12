@@ -158,6 +158,10 @@ pub struct App {
     pub fps: f32,
     pub show_shortcuts: bool,
     dock: Option<egui_dock::DockState<Tab>>,
+    /// A tab to bring to front on the next frame (Play here -> Game).
+    focus_tab: Option<Tab>,
+    /// Dev hook `TRINO_EDITOR_PLAY=here`: start Play here on the first frame.
+    play_here_on_start: bool,
 }
 
 impl App {
@@ -355,6 +359,8 @@ impl App {
             fps: 0.0,
             show_shortcuts: false,
             dock: Some(default_dock()),
+            focus_tab: None,
+            play_here_on_start: std::env::var("TRINO_EDITOR_PLAY").as_deref() == Ok("here"),
         }
     }
 
@@ -1080,7 +1086,7 @@ impl App {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
             // Play / Stop.
-            let playing = self.play.is_some();
+            let playing = self.play.is_some() || self.game_view.play.is_some();
             let t = ui
                 .ctx()
                 .animate_bool_with_time(egui::Id::new("play-anim"), playing, 0.25);
@@ -1108,10 +1114,28 @@ impl App {
                 })
                 .clicked()
             {
-                self.toggle_play(!self.doc.is_prefab());
+                if self.game_view.play.is_some() {
+                    self.stop_play_here();
+                } else {
+                    self.toggle_play(!self.doc.is_prefab());
+                }
             }
             if !playing {
                 ui.menu_button(RichText::new(icon::CARET_DOWN).color(c::TEXT_WEAK), |ui| {
+                    if ui
+                        .button(format!(
+                            "{}  Play here (in the Game view)",
+                            icon::PLAY_CIRCLE
+                        ))
+                        .on_hover_text(
+                            "Run this scene inside the editor — unsaved edits included. \
+                             Tags drive it: `player` walks (WASD/arrows, Space jumps), \
+                             `coin` collects, `goal` wins (Ctrl+Shift+P)",
+                        )
+                        .clicked()
+                    {
+                        self.start_play_here();
+                    }
                     if ui
                         .button(format!("{}  Play this scene", icon::CUBE_TRANSPARENT))
                         .clicked()
@@ -1255,6 +1279,34 @@ impl App {
         });
     }
 
+    /// Play the open scene inside the Game view (same process).
+    fn start_play_here(&mut self) {
+        let screen = self.game_view.internal_size();
+        match crate::play::PlaySession::start(&self.doc.scene, &self.lib, screen) {
+            Ok(session) => {
+                self.game_view.play = Some(session);
+                self.focus_tab = Some(Tab::Game);
+                self.log.toast(
+                    Level::Ok,
+                    format!(
+                        "{} playing in the Game view — Stop or Esc ends it",
+                        icon::PLAY
+                    ),
+                );
+            }
+            Err(e) => self.log.toast(Level::Error, e),
+        }
+    }
+
+    fn stop_play_here(&mut self) {
+        if let Some(s) = self.game_view.play.take() {
+            self.log.info(format!(
+                "play here stopped after {} frames ({}/{} coins)",
+                s.frames, s.game.coins, s.game.total_coins
+            ));
+        }
+    }
+
     /// Start/stop play mode. `scene`: play the open scene (`TRINO_SCENE`,
     /// live-reloading) instead of the game crate linked into the PC app.
     fn toggle_play(&mut self, scene: bool) {
@@ -1303,6 +1355,16 @@ impl App {
         }
         if sc(Modifiers::COMMAND, Key::Z) {
             self.cmds.push(Cmd::Undo);
+        }
+        if sc(Modifiers::COMMAND | Modifiers::SHIFT, Key::P) {
+            if self.game_view.play.is_some() {
+                self.stop_play_here();
+            } else {
+                self.start_play_here();
+            }
+        }
+        if self.game_view.play.is_some() && sc(Modifiers::NONE, Key::Escape) {
+            self.stop_play_here();
         }
         if sc(Modifiers::COMMAND, Key::P) {
             let scene = !self.doc.is_prefab();
@@ -1366,7 +1428,9 @@ impl App {
                             ("Del", "Delete"),
                             ("F2", "Rename"),
                             ("Shift+A", "Create a fake object"),
-                            ("Ctrl+P", "Play / stop"),
+                            ("Ctrl+P", "Play / stop (separate process)"),
+                            ("Ctrl+Shift+P", "Play here (in the Game view) / stop"),
+                            ("Esc", "Stop playing here"),
                             ("W / E / R", "Move / rotate / scale gizmo (scene view)"),
                             ("Ctrl (while dragging)", "Toggle snapping"),
                             ("F", "Frame selection"),
@@ -1526,6 +1590,9 @@ impl eframe::App for App {
 
         self.sync_files();
         self.handle_paste(&ctx);
+        if std::mem::take(&mut self.play_here_on_start) {
+            self.start_play_here();
+        }
         if let Some(child) = &mut self.play
             && let Ok(Some(status)) = child.try_wait()
         {
@@ -1571,6 +1638,11 @@ impl eframe::App for App {
             .show(ui, |ui| self.status_bar(ui));
 
         let mut dock = self.dock.take().unwrap_or_else(default_dock);
+        if let Some(tab) = self.focus_tab.take()
+            && let Some(path) = dock.find_tab(&tab)
+        {
+            let _ = dock.set_active_tab(path);
+        }
         let style = theme::dock_style(ui.style());
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(c::BG0))

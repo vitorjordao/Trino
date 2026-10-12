@@ -190,7 +190,9 @@ static void trino_check_trifmt(void)
 // perspective correction and the RDP's native 3-point filter.
 static float trino_tex_w = 1.0f, trino_tex_h = 1.0f;
 
-void trino_3d_texture(void* sprite)
+// clamp != 0: billboard mode — no tiling (a sprite region must not bleed
+// into its neighbours) and a half-alpha cutout for soft-edged sprites.
+void trino_3d_texture(void* sprite, uint32_t clamp)
 {
     sprite_t* sp = (sprite_t*)sprite;
     rdpq_set_mode_standard();
@@ -198,10 +200,11 @@ void trino_3d_texture(void* sprite)
     rdpq_mode_zbuf(true, true);
     rdpq_mode_persp(true);
     rdpq_mode_filter(FILTER_BILINEAR);
-    rdpq_mode_alphacompare(1);
+    rdpq_mode_alphacompare(clamp ? 128 : 1);
+    float repeats = clamp ? 1.0f : REPEAT_INFINITE;
     rdpq_texparms_t parms = {
-        .s.repeats = REPEAT_INFINITE,
-        .t.repeats = REPEAT_INFINITE,
+        .s.repeats = repeats,
+        .t.repeats = repeats,
     };
     rdpq_sprite_upload(TILE0, sp, &parms);
     trino_tex_w = (float)sp->width;

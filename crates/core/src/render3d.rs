@@ -1037,9 +1037,149 @@ fn tessellate_joints<const SKINNED: bool>(
     }
 }
 
+/// Normalized `[u0, v0, u1, v1]` of a sprite region (pixels) inside a
+/// `tex_w` x `tex_h` texture; the whole texture for `None`.
+pub fn region_uv(region: Option<crate::math::Rect>, tex_w: f32, tex_h: f32) -> [f32; 4] {
+    match region {
+        Some(r) if tex_w > 0.0 && tex_h > 0.0 => [
+            r.pos.x / tex_w,
+            r.pos.y / tex_h,
+            (r.pos.x + r.size.x) / tex_w,
+            (r.pos.y + r.size.y) / tex_h,
+        ],
+        _ => [0.0, 0.0, 1.0, 1.0],
+    }
+}
+
+/// Camera-facing quad ("billboard") as two screen triangles: a sprite in 3D
+/// space — coins, smoke, sparks, distant trees. `params.size` is in world
+/// units, `params.rotation` rolls the quad in screen space (radians), `uv`
+/// is the sprite sub-rectangle `[u0, v0, u1, v1]` (normalized; flipbook
+/// frames — backends derive it from `params.region`). Colors are the tint
+/// with the light's distance fog (billboards are unlit). Returns `None`
+/// when the quad is behind the near plane or entirely off screen.
+pub fn billboard(
+    camera: &Camera3,
+    light: &Light,
+    screen: Vec2,
+    pos: Vec3,
+    params: &crate::render::BillboardParams,
+    uv: [f32; 4],
+) -> Option<[ScreenTri; 2]> {
+    let (size, rotation, tint) = (params.size, params.rotation, params.tint);
+    let view = camera.view();
+    let c = view.transform_point(pos);
+    // Keep the whole quad comfortably in front of the near plane: its
+    // corners share the center's depth (screen-aligned), so no clipping.
+    if c.z <= NEAR * 2.0 {
+        return None;
+    }
+    let half_fov = camera.fov_y * 0.5;
+    let focal = crate::math3d::cos(half_fov) / crate::math3d::sin(half_fov) * screen.y * 0.5;
+    let center = screen * 0.5;
+    let (sn, cs) = (crate::math3d::sin(rotation), crate::math3d::cos(rotation));
+    let (hw, hh) = (size.x * 0.5, size.y * 0.5);
+    // Corners in view space (x right, y up): TL, TR, BR, BL.
+    let corner = |x: f32, y: f32| {
+        let (rx, ry) = (x * cs - y * sn, x * sn + y * cs);
+        Vec2::new(
+            center.x + (c.x + rx) * focal / c.z,
+            center.y - (c.y + ry) * focal / c.z,
+        )
+    };
+    let pts = [
+        corner(-hw, hh),
+        corner(hw, hh),
+        corner(hw, -hh),
+        corner(-hw, -hh),
+    ];
+    let (min_x, max_x) = pts
+        .iter()
+        .fold((f32::MAX, f32::MIN), |(a, b), p| (a.min(p.x), b.max(p.x)));
+    let (min_y, max_y) = pts
+        .iter()
+        .fold((f32::MAX, f32::MIN), |(a, b), p| (a.min(p.y), b.max(p.y)));
+    if max_x < 0.0 || max_y < 0.0 || min_x > screen.x || min_y > screen.y {
+        return None;
+    }
+    // Bounded coordinates (RDP fixed point): very close, huge quads skip.
+    let limit = screen.x.max(screen.y) * 4.0;
+    if min_x < -limit || min_y < -limit || max_x > limit || max_y > limit {
+        return None;
+    }
+    let mut color = tint;
+    let fog = light.fog;
+    if fog.enabled() {
+        let f = ((c.z - fog.near) / (fog.far - fog.near)).clamp(0.0, 1.0);
+        color = lerp_color(tint, fog.color, f);
+        color.a = tint.a;
+    }
+    let z = 1.0 - NEAR / c.z;
+    let uvs = [
+        Vec2::new(uv[0], uv[1]),
+        Vec2::new(uv[2], uv[1]),
+        Vec2::new(uv[2], uv[3]),
+        Vec2::new(uv[0], uv[3]),
+    ];
+    let tri = |a: usize, b: usize, d: usize| ScreenTri {
+        pts: [pts[a], pts[b], pts[d]],
+        colors: [color; 3],
+        depth: c.z,
+        z: [z; 3],
+        uv: [uvs[a], uvs[b], uvs[d]],
+        w: [c.z; 3],
+    };
+    Some([tri(0, 1, 2), tri(0, 2, 3)])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn billboards_face_the_camera_and_cull() {
+        let cam = Camera3::default(); // at z = -5 looking at the origin
+        let screen = Vec2::new(320.0, 240.0);
+        let [a, b] = billboard(
+            &cam,
+            &DEFAULT_LIGHT,
+            screen,
+            Vec3::ZERO,
+            &crate::render::BillboardParams::DEFAULT,
+            [0.0, 0.0, 1.0, 1.0],
+        )
+        .unwrap();
+        // Centered on screen, front-facing (positive area), one depth.
+        let area = |t: &ScreenTri| {
+            let p = t.pts;
+            (p[1].x - p[0].x) * (p[2].y - p[0].y) - (p[2].x - p[0].x) * (p[1].y - p[0].y)
+        };
+        assert!(area(&a) > 0.0 && area(&b) > 0.0);
+        let cx = (a.pts[0].x + a.pts[1].x) * 0.5;
+        assert!((cx - 160.0).abs() < 1e-3);
+        assert_eq!(a.uv[0], Vec2::new(0.0, 0.0), "top-left corner samples v0");
+        assert!(a.pts[0].y < a.pts[2].y, "v0 is the top of the screen quad");
+        assert!((a.w[0] - 5.0).abs() < 1e-4 && a.z[0] == a.z[2]);
+        // Behind the camera / off screen: nothing.
+        let behind = billboard(
+            &cam,
+            &DEFAULT_LIGHT,
+            screen,
+            Vec3::new(0.0, 0.0, -10.0),
+            &crate::render::BillboardParams::DEFAULT,
+            [0.0, 0.0, 1.0, 1.0],
+        );
+        assert!(behind.is_none());
+        let aside = billboard(
+            &cam,
+            &DEFAULT_LIGHT,
+            screen,
+            Vec3::new(50.0, 0.0, 0.0),
+            &crate::render::BillboardParams::DEFAULT,
+            [0.0, 0.0, 1.0, 1.0],
+        );
+        assert!(aside.is_none());
+    }
 
     /// Unit cube TMDL built in memory (24 verts, 36 indices, per-face
     /// normals/colors) — mirrors what the asset pipeline bakes.

@@ -483,6 +483,23 @@ fn textures(dir: &Path, write_png: crate::castle64_assets::PngWriter) {
         }
     }
     write_png(&dir.join("tex_bricks.png"), 32, 32, &bricks);
+
+    // 16x16 four-point sparkle (particles: coin pickup). White with alpha:
+    // the emitter's colors tint it.
+    let mut spark = Vec::with_capacity(16 * 16 * 4);
+    for y in 0..16i32 {
+        for x in 0..16i32 {
+            let (dx, dy) = ((x - 8).abs() as f32 + 0.5, (y - 8).abs() as f32 + 0.5);
+            let star = dx * dy < 3.0 && dx + dy < 9.0;
+            let core = dx + dy < 4.0;
+            spark.extend_from_slice(if core || star {
+                &[255, 255, 255, 255]
+            } else {
+                &[0, 0, 0, 0]
+            });
+        }
+    }
+    write_png(&dir.join("fx_spark.png"), 16, 16, &spark);
 }
 
 pub fn gen_all(repo_root: &Path, write_png: crate::castle64_assets::PngWriter) {

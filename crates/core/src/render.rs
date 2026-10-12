@@ -146,6 +146,35 @@ impl Default for TextParams {
     }
 }
 
+/// Per-draw billboard parameters (see [`Renderer::draw_billboard`]).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct BillboardParams {
+    /// World-space size of the quad.
+    pub size: Vec2,
+    /// Screen-space roll, radians.
+    pub rotation: f32,
+    /// Multiplies the texture (alpha too) — fades, color variation.
+    pub tint: Color,
+    /// Sprite sub-rectangle in pixels (flipbook frames); `None` = whole
+    /// sprite.
+    pub region: Option<Rect>,
+}
+
+impl BillboardParams {
+    pub const DEFAULT: BillboardParams = BillboardParams {
+        size: Vec2::ONE,
+        rotation: 0.0,
+        tint: Color::WHITE,
+        region: None,
+    };
+}
+
+impl Default for BillboardParams {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
 /// What the previous frame cost — read by budget HUDs (the editor's Game
 /// view) and compared against [`Caps`]. Backends that don't count return
 /// zeros.
@@ -371,6 +400,13 @@ pub trait Renderer {
     }
 
     fn end_frame(&mut self);
+
+    /// Draw `sprite` as a camera-facing quad at world position `pos` (its
+    /// center) — z-tested and fogged like the 3D around it, batched with
+    /// the current model batch. The texture is clamped (not tiled) and must
+    /// fit texture memory as a whole (N64 TMEM: 4 KB); use `region` for
+    /// flipbook frames of a small atlas. Unknown sprites draw nothing.
+    fn draw_billboard(&mut self, _sprite: SpriteId, _pos: Vec3, _params: &BillboardParams) {}
 
     /// Draw `text` with a baked bitmap font, its top-left corner at `pos`
     /// (alignment shifts each line around `pos.x`). `\n` starts a new line.

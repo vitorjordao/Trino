@@ -141,10 +141,18 @@ fn showcase_gameplay_shots() {
     let mut game = showcase::ShowcaseGame::new();
     let mut frame_no = 0u32;
     let mut shots = 0;
+    let mut coins = 0;
+    let mut sparkle_at = None;
     showcase::run_demo(&mut game, |g, input| {
         g.update(input, &mut NullAudio, 1.0 / 60.0);
         frame_no += 1;
-        if frame_no.is_multiple_of(240) {
+        // A shot every 4 s, plus one a few frames after each pickup (the
+        // sparkle particles).
+        if g.coins != coins {
+            coins = g.coins;
+            sparkle_at = Some(frame_no + 6);
+        }
+        if frame_no.is_multiple_of(240) || sparkle_at == Some(frame_no) {
             g.render(&mut r);
             let (w, h) = r.internal_size();
             let path = out.join(format!("run{shots:02}.png"));

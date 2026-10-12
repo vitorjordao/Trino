@@ -34,8 +34,9 @@ use trino_core::math3d::{atan2, cos, sin, sqrt};
 use trino_core::physics::{Aabb, move_aabb};
 use trino_core::scene::{BakedScene, SceneNode};
 use trino_core::{
-    Audio, BlobId, Button, Camera3, Color, EntityId, EntityStore, FontId, Game, InputState, Light,
-    Mat34, Material, Platform, Renderer, TextAlign, TextBuf, TextParams, Vec2, Vec3,
+    Audio, BlobId, Button, Camera3, Color, Emitter, EntityId, EntityStore, FontId, Game,
+    InputState, Light, Mat34, Material, ParticleSystem, Platform, Renderer, SpriteId, TextAlign,
+    TextBuf, TextParams, Vec2, Vec3,
 };
 
 #[allow(clippy::all)]
@@ -60,6 +61,20 @@ const HERO_HALF: Vec3 = Vec3::new(0.35, 0.6, 0.35);
 const GRAVITY: f32 = 22.0;
 const JUMP: f32 = 8.0;
 const SPEED: f32 = 4.5;
+/// Coin pickup sparkles: a short, bright burst that rises and fades.
+const SPARKS: Emitter = Emitter {
+    sprite: SpriteId::from_path("sprites/fx_spark"),
+    rate: 0.0,
+    life: (0.35, 0.6),
+    speed: (1.5, 3.0),
+    direction: Vec3::new(0.0, 1.0, 0.0),
+    spread: 1.1,
+    gravity: Vec3::new(0.0, -6.0, 0.0),
+    size: (0.35, 0.05),
+    color: (Color::rgb(255, 240, 120), Color::rgba(255, 160, 40, 255)),
+    ..Emitter::DEFAULT
+};
+
 /// Physics substep: small steps keep fast falls from tunneling.
 const STEP: f32 = 1.0 / 120.0;
 
@@ -85,6 +100,8 @@ pub struct ShowcaseGame {
     camera_fov: f32,
     light: Light,
     clear: Color,
+    /// Coin pickup particles (billboards).
+    sparks: ParticleSystem<32>,
 }
 
 impl ShowcaseGame {
@@ -148,6 +165,7 @@ impl ShowcaseGame {
             camera_fov: camera.fov_y,
             light,
             clear,
+            sparks: ParticleSystem::new(SPARKS, 0x5EED),
         };
         game.world.spawn_iter(nodes);
         game.hero = game.world.with_tag("player").next();
@@ -213,6 +231,8 @@ impl ShowcaseGame {
                 continue;
             };
             if e.has_tag("coin") {
+                self.sparks.origin = e.position();
+                self.sparks.burst(12);
                 self.world.despawn(id);
                 self.coins += 1;
             } else if e.has_tag("goal") && self.coins == self.total_coins {
@@ -259,6 +279,7 @@ impl Game for ShowcaseGame {
         if len2 > 1.0 {
             wish = wish * (1.0 / sqrt(len2));
         }
+        self.sparks.update(dt);
         let jump = input.just_pressed(&self.prev, Button::A);
         self.prev = *input;
         if !self.reached_goal {
@@ -307,6 +328,7 @@ impl Game for ShowcaseGame {
             };
             r.draw_model_matrix(model, &m, Material::VertexLit, &params);
         }
+        self.sparks.draw(r);
         let mut hud = TextBuf::<24>::new();
         let _ = write!(hud, "COINS {}/{}", self.coins, self.total_coins);
         r.draw_text(

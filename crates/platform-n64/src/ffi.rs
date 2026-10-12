@@ -43,8 +43,9 @@ unsafe extern "C" {
     /// zs: 3 floats (normalized depth 0..1, 0 = near) for the RDP z-buffer.
     pub fn trino_tri(pts: *const f32, colors: *const u8, zs: *const f32);
     /// Select a `sprite_t` as the texture for `trino_tri_tex` (TMEM upload,
-    /// wrapping, TEX0 * SHADE, perspective).
-    pub fn trino_3d_texture(sprite: *mut c_void);
+    /// TEX0 * SHADE, perspective). `clamp` != 0: billboard mode (no tiling,
+    /// half-alpha cutout); 0: tiled.
+    pub fn trino_3d_texture(sprite: *mut c_void, clamp: u32);
     /// 30 floats: per vertex x, y, z, u, v, w, r, g, b, a (colors 0..1,
     /// u/v normalized, w = view depth).
     pub fn trino_tri_tex(verts: *const f32);

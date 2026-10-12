@@ -158,6 +158,26 @@ fn sample_3point_wrap(uv: vec2<f32>) -> vec4<f32> {
     return t11 + (1.0 - f.x) * (t01 - t11) + (1.0 - f.y) * (t10 - t11);
 }
 
+// Billboards: clamped sampling of a sprite region (no bleeding from the
+// neighbouring flipbook frame).
+// Transparent texels are cut out (alpha test, like the N64/3DS paths), so
+// they neither cover nor write depth over what is behind them.
+@fragment
+fn fs_tri_clamp(in: TriOut) -> @location(0) vec4<f32> {
+    let texel = textureSample(t_sprite, s_sprite, in.uv);
+    var c = texel * in.color;
+    if globals.look == 1u {
+        c = sample_3point(in.uv) * in.color;
+    }
+    if texel.a < 0.5 {
+        discard;
+    }
+    if globals.look == 1u {
+        return quantize_5551(c, vec2<u32>(in.clip.xy));
+    }
+    return c;
+}
+
 @fragment
 fn fs_tri(in: TriOut) -> @location(0) vec4<f32> {
     // Sampled unconditionally: textureSample requires uniform control flow.

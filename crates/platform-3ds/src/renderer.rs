@@ -9,11 +9,14 @@ use core::ffi::c_void;
 use trino_core::render3d::{Camera3, DEFAULT_LIGHT, Light, Mesh, ScreenTri};
 use trino_core::text::BitmapFont;
 use trino_core::{
-    Caps, Color, FontId, FrameStats, Mat34, Material, ModelId, ModelParams, Renderer, SpriteId,
-    SpriteParams, TextParams, Transform3, Vec2,
+    BillboardParams, Caps, Color, FontId, FrameStats, Mat34, Material, ModelId, ModelParams,
+    Renderer, SpriteId, SpriteParams, TextParams, Transform3, Vec2, Vec3,
 };
 
 use crate::ffi;
+
+/// Internal resolution the T&L projects to.
+const SCREEN: Vec2 = Vec2::new(400.0, 240.0);
 
 struct SpriteEntry {
     ptr: *mut c_void,
@@ -39,7 +42,8 @@ pub struct N3dsRenderer {
     pending_tris: Vec<ScreenTri>,
     /// Texture per pending triangle (parallel; filled once a textured draw
     /// joins the batch).
-    pending_tex: Vec<Option<u32>>,
+    /// (sprite handle, clamp) — clamp = billboard addressing.
+    pending_tex: Vec<Option<(u32, bool)>>,
     /// Depth for the next sprite draw (background before 3D, HUD after).
     sprite_depth: f32,
     camera: Camera3,
@@ -87,7 +91,7 @@ impl N3dsRenderer {
                 emit_tri(tri);
             }
         } else {
-            let mut order: Vec<(Option<u32>, ScreenTri)> = self
+            let mut order: Vec<(Option<(u32, bool)>, ScreenTri)> = self
                 .pending_tex
                 .iter()
                 .copied()
@@ -98,9 +102,11 @@ impl N3dsRenderer {
                     .partial_cmp(&a.1.depth)
                     .unwrap_or(core::cmp::Ordering::Equal)
             });
-            order.sort_by_key(|(t, _)| t.map_or(0u64, |t| t as u64 + 1));
+            order.sort_by_key(|(t, _)| {
+                t.map_or(0u64, |(id, clamp)| ((id as u64) << 1 | clamp as u64) + 1)
+            });
             // Sorted by texture: open a citro3d batch per textured group.
-            let mut current: Option<Option<u32>> = None;
+            let mut current: Option<Option<(u32, bool)>> = None;
             let mut open = false;
             unsafe { ffi::trino_3d_begin() }
             for (tex, tri) in &order {
@@ -109,8 +115,10 @@ impl N3dsRenderer {
                         unsafe { ffi::trino_3d_tex_end() }
                         open = false;
                     }
-                    if let Some(entry) = tex.and_then(|t| self.sprites.get(&t)) {
-                        unsafe { ffi::trino_3d_tex_begin(entry.ptr) }
+                    if let Some((entry, clamp)) =
+                        tex.and_then(|(t, clamp)| self.sprites.get(&t).map(|e| (e, clamp)))
+                    {
+                        unsafe { ffi::trino_3d_tex_begin(entry.ptr, clamp as u32) }
                         open = true;
                     }
                     current = Some(*tex);
@@ -135,6 +143,15 @@ impl N3dsRenderer {
     /// handle.
     pub(crate) fn register(&mut self, id: u32, ptr: *mut c_void) {
         self.sprites.insert(id, SpriteEntry { ptr });
+    }
+
+    /// Record the texture of the `added` triangles appended at `before`
+    /// (the tag list is only materialized once a textured draw joins).
+    fn tag_pending(&mut self, before: usize, added: usize, key: Option<(u32, bool)>) {
+        if key.is_some() || !self.pending_tex.is_empty() {
+            self.pending_tex.resize(before, None);
+            self.pending_tex.extend(core::iter::repeat_n(key, added));
+        }
     }
 
     /// Register a TMDL mesh blob under a stable handle.
@@ -294,15 +311,29 @@ impl Renderer for N3dsRenderer {
             &self.camera,
             &self.light,
             params,
-            Vec2::new(400.0, 240.0),
+            SCREEN,
             &mut |tri| pending.push(tri),
         );
         let added = self.pending_tris.len() - before;
-        if texture.is_some() || !self.pending_tex.is_empty() {
-            self.pending_tex.resize(before, None);
-            self.pending_tex
-                .extend(core::iter::repeat_n(texture.map(|t| t.0), added));
-        }
+        self.tag_pending(before, added, texture.map(|t| (t.0, false)));
+    }
+
+    fn draw_billboard(&mut self, sprite: SpriteId, pos: Vec3, params: &BillboardParams) {
+        let Some(entry) = self.sprites.get(&sprite.0) else {
+            return;
+        };
+        let size = unsafe { ffi::trino_sprite_size(entry.ptr) };
+        let (w, h) = ((size >> 16) as f32, (size & 0xFFFF) as f32);
+        let uv = trino_core::render3d::region_uv(params.region, w, h);
+        let Some(tris) =
+            trino_core::render3d::billboard(&self.camera, &self.light, SCREEN, pos, params, uv)
+        else {
+            return;
+        };
+        self.frame_stats.sprites += 1;
+        let before = self.pending_tris.len();
+        self.pending_tris.extend_from_slice(&tris);
+        self.tag_pending(before, 2, Some((sprite.0, true)));
     }
 
     fn end_frame(&mut self) {

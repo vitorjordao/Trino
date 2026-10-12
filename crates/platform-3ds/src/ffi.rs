@@ -62,7 +62,8 @@ unsafe extern "C" {
 
     /// Textured 3D batch (citro3d): bind the sheet's image as a wrapping
     /// texture, then `trino_tri_tex` per triangle, then `trino_3d_tex_end`.
-    pub fn trino_3d_tex_begin(sheet: *mut c_void);
+    /// `clamp` != 0: billboard mode (clamped, half-alpha cutout).
+    pub fn trino_3d_tex_begin(sheet: *mut c_void, clamp: u32);
     /// 30 floats: per vertex x, y, depth (citro2d z), u, v, w, r, g, b, a.
     pub fn trino_tri_tex(verts: *const f32);
     pub fn trino_3d_tex_end();

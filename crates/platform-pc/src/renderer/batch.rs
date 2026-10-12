@@ -34,6 +34,14 @@ pub struct Instance {
 
 pub const INSTANCE_STRIDE: u64 = core::mem::size_of::<Instance>() as u64;
 
+/// Texture of a triangle run: a sprite handle and its addressing — tiled
+/// (models: UVs repeat) or clamped (billboards: a sprite region).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TexKey {
+    pub id: u32,
+    pub clamp: bool,
+}
+
 /// One recorded draw call: a sprite quad or a run of 3D triangle vertices
 /// (already transformed/lit by `trino_core::render3d`; the vertices live in
 /// the renderer's triangle vertex list).
@@ -45,7 +53,7 @@ pub enum Cmd {
     Tris {
         first: u32,
         count: u32,
-        texture: Option<u32>,
+        texture: Option<TexKey>,
     },
 }
 
@@ -75,7 +83,7 @@ pub enum Segment {
     Tris {
         first: u32,
         count: u32,
-        texture: Option<u32>,
+        texture: Option<TexKey>,
     },
 }
 
@@ -231,7 +239,10 @@ mod tests {
             Cmd::Tris {
                 first: 12,
                 count: 3,
-                texture: Some(5),
+                texture: Some(TexKey {
+                    id: 5,
+                    clamp: false,
+                }),
             },
         ]);
         assert_eq!(instances.len(), 2);
@@ -259,7 +270,10 @@ mod tests {
                 Segment::Tris {
                     first: 12,
                     count: 3,
-                    texture: Some(5)
+                    texture: Some(TexKey {
+                        id: 5,
+                        clamp: false
+                    })
                 },
             ]
         );

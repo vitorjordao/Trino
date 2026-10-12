@@ -8,8 +8,9 @@
 
 use trino_core::math3d::{cos, sin};
 use trino_core::{
-    BlobId, Camera3, Color, DEFAULT_LIGHT, FontId, Material, ModelId, ModelParams, Platform,
-    Renderer, Shading, TextParams, Transform3, Vec2, Vec3,
+    BillboardParams, BlobId, Camera3, Color, DEFAULT_LIGHT, Emitter, FontId, Material, ModelId,
+    ModelParams, ParticleSystem, Platform, Rect, Renderer, Shading, SpriteId, TextParams,
+    Transform3, Vec2, Vec3,
 };
 
 /// The HUD font (also what the checks measure).
@@ -37,6 +38,10 @@ pub fn engine_checks(
         platform.log("TRINO_STEP:textured_3d probed 4 quadrants\n");
     } else {
         platform.log("TRINO_STEP:textured_3d skipped (no read_pixel)\n");
+    }
+    platform.log("TRINO_STEP:billboards\n");
+    if billboards(renderer)? {
+        platform.log("TRINO_STEP:billboards probed\n");
     }
     platform.log("TRINO_STEP:engine ok\n");
     Ok(())
@@ -132,4 +137,77 @@ pub fn save(platform: &mut dyn Platform) -> Result<(), &'static str> {
         return Err("save read-back mismatch");
     }
     Ok(())
+}
+
+/// The quadrant texture as a sprite (billboards sample regions of it).
+pub const QUADRANTS: SpriteId = SpriteId::from_path("sprites/selftest_quadrants");
+
+/// Billboards + particles: two camera-facing quads showing single texture
+/// quadrants (a sprite region, clamped — no bleeding from the neighbour),
+/// probed by pixel; then a particle burst must emit one billboard per
+/// particle. `Ok(false)` where `read_pixel` is unsupported.
+pub fn billboards(renderer: &mut dyn Renderer) -> Result<bool, &'static str> {
+    let caps = *renderer.caps();
+    let screen = Vec2::new(caps.screen_width as f32, caps.screen_height as f32);
+    let camera = Camera3 {
+        eye: Vec3::new(0.0, 0.0, -4.0),
+        target: Vec3::ZERO,
+        fov_y: 60.0 * core::f32::consts::PI / 180.0,
+    };
+    let quad = |region: Rect| BillboardParams {
+        size: Vec2::new(1.2, 1.2),
+        region: Some(region),
+        ..BillboardParams::DEFAULT
+    };
+    let left = Vec3::new(-1.0, 0.0, 0.0);
+    let right = Vec3::new(1.0, 0.0, 0.0);
+    for _ in 0..3 {
+        renderer.begin_frame(Color::BLACK);
+        renderer.set_camera(&camera);
+        renderer.set_light(&DEFAULT_LIGHT);
+        // Top-left quadrant (red) on the left, bottom-right (white) right.
+        renderer.draw_billboard(QUADRANTS, left, &quad(Rect::new(0.0, 0.0, 8.0, 8.0)));
+        renderer.draw_billboard(QUADRANTS, right, &quad(Rect::new(8.0, 8.0, 8.0, 8.0)));
+        renderer.end_frame();
+    }
+    let view = camera.view();
+    let half = camera.fov_y * 0.5;
+    let focal = cos(half) / sin(half) * screen.y * 0.5;
+    let mut probed = true;
+    for (world, want) in [(left, [255u8, 0, 0]), (right, [255, 255, 255])] {
+        let v = view.transform_point(world);
+        let x = screen.x * 0.5 + v.x * focal / v.z;
+        let y = screen.y * 0.5 - v.y * focal / v.z;
+        let Some(got) = renderer.read_pixel(x as u32, y as u32) else {
+            probed = false;
+            break;
+        };
+        let close = |a: u8, b: u8| (a as i32 - b as i32).abs() <= 48;
+        if !(close(got.r, want[0]) && close(got.g, want[1]) && close(got.b, want[2])) {
+            return Err("billboard: wrong color (region or clamp broken)");
+        }
+    }
+    // Particles: a burst of 12 draws 12 billboards (all in front of the
+    // camera: a slow upward puff at the origin).
+    let mut puff: ParticleSystem<16> = ParticleSystem::new(
+        Emitter {
+            sprite: QUADRANTS,
+            rate: 0.0,
+            life: (1.0, 1.0),
+            speed: (0.1, 0.2),
+            size: (0.3, 0.3),
+            ..Emitter::DEFAULT
+        },
+        5,
+    );
+    puff.burst(12);
+    puff.update(0.1);
+    renderer.begin_frame(Color::BLACK);
+    renderer.set_camera(&camera);
+    puff.draw(renderer);
+    renderer.end_frame();
+    if renderer.stats().sprites != 12 {
+        return Err("particles: expected one billboard per particle");
+    }
+    Ok(probed)
 }

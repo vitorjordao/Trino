@@ -185,6 +185,11 @@ formats = { n64 = "CI8" }
 file = "sprites/textures/tex_bricks.png"
 formats = { n64 = "CI8" }
 
+# Particle sprite (billboards): white sparkle tinted by the emitter.
+[sprites.fx_spark]
+file = "sprites/textures/fx_spark.png"
+formats = { n64 = "CI4" }
+
 # ---- self-test content (castle64::selftest::textured_3d) ----
 
 [sprites.selftest_quadrants]

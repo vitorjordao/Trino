@@ -253,8 +253,9 @@ int32_t trino_save_store(const uint8_t* src, uint32_t len)
     return rename(TRINO_SAVE_TMP, TRINO_SAVE_PATH) == 0 ? 0 : -1;
 }
 
-// Start a textured batch: bind `sheet`'s image as a wrapping texture.
-void trino_3d_tex_begin(void* sheet)
+// Start a textured batch: bind `sheet`'s image as a texture — tiled, or
+// clamped with a half-alpha cutout (clamp != 0: billboards).
+void trino_3d_tex_begin(void* sheet, uint32_t clamp)
 {
     C2D_Flush();
     C3D_BindProgram(&s_tri3d);
@@ -267,7 +268,13 @@ void trino_3d_tex_begin(void* sheet)
     C3D_CullFace(GPU_CULL_NONE); // the engine already culled
     C2D_Image img = C2D_SpriteSheetGetImage((C2D_SpriteSheet)sheet, 0);
     C3D_TexSetFilter(img.tex, GPU_LINEAR, GPU_LINEAR);
-    C3D_TexSetWrap(img.tex, GPU_REPEAT, GPU_REPEAT);
+    if (clamp) {
+        C3D_TexSetWrap(img.tex, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
+        C3D_AlphaTest(true, GPU_GREATER, 127);
+    } else {
+        C3D_TexSetWrap(img.tex, GPU_REPEAT, GPU_REPEAT);
+        C3D_AlphaTest(true, GPU_GREATER, 0);
+    }
     C3D_TexBind(0, img.tex);
     // UVs map through the image's sub-texture (tex3ds stores rows flipped
     // and pads to power-of-two; POT images span the whole texture).

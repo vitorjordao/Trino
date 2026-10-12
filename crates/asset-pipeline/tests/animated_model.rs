@@ -112,10 +112,7 @@ fn node_animation_bakes_to_a_rigid_skeleton() {
     // End of the clip: the arm turned 90 degrees around its own origin, so
     // its (1, 0, 0) vertex now points up from x = 2.
     mesh.pose(
-        Some(AnimRef {
-            clip: clip.id,
-            time: 5.0, // clamps: one-shot clip
-        }),
+        Some(AnimRef::new(clip.id, 5.0)), // clamps: one-shot clip
         &mut skin,
     );
     let tip = arm_tip(&skin);

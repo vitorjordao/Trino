@@ -134,6 +134,26 @@ fn rd_trs(d: &[u8], at: usize) -> (Vec3, Quat, Vec3) {
     (rd_vec3(d, at), rd_quat(d, at + 12), rd_vec3(d, at + 28))
 }
 
+/// Where a clip time falls: clip byte offset, bracketing frames, blend.
+#[derive(Clone, Copy)]
+struct ClipSample {
+    at: usize,
+    f0: usize,
+    f1: usize,
+    k: f32,
+}
+
+/// Interpolate two local transforms (rotations by normalized lerp — the
+/// shortest arc, see [`Quat::nlerp`]).
+#[inline]
+fn lerp_trs(a: (Vec3, Quat, Vec3), b: (Vec3, Quat, Vec3), k: f32) -> (Vec3, Quat, Vec3) {
+    (
+        a.0 + (b.0 - a.0) * k,
+        a.1.nlerp(b.1, k),
+        a.2 + (b.2 - a.2) * k,
+    )
+}
+
 /// Metadata of one baked clip.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct ClipInfo {
@@ -342,47 +362,26 @@ impl<'a> Mesh<'a> {
         };
         let j_count = skel.joint_count;
 
-        // Locate the clip and the two samples to blend.
-        let mut sample: Option<(usize, usize, usize, f32)> = None; // (clip at, f0, f1, t)
-        if let Some(anim) = anim {
-            let mut at = 0;
-            for _ in 0..skel.clip_count {
-                let frames = rd_u32(skel.clips, at + 8) as usize;
-                if rd_u32(skel.clips, at) == anim.clip.0 {
-                    let fps = rd_f32(skel.clips, at + 4);
-                    let looping = rd_u32(skel.clips, at + 12) & 1 != 0;
-                    let last = (frames - 1) as f32;
-                    let mut f = if fps > 0.0 { anim.time * fps } else { 0.0 };
-                    if looping && last > 0.0 {
-                        f %= last;
-                        if f < 0.0 {
-                            f += last;
-                        }
-                    } else {
-                        f = f.clamp(0.0, last);
-                    }
-                    let f0 = f as usize;
-                    let f1 = (f0 + 1).min(frames - 1);
-                    sample = Some((at, f0, f1, f - f0 as f32));
-                    break;
-                }
-                at += CLIP_HEADER + frames * j_count * SAMPLE_BYTES;
-            }
-        }
+        // Locate the clip(s) and the two frames of each to interpolate.
+        let main = anim.and_then(|a| Self::locate(&skel, a.clip, a.time));
+        let blend = anim
+            .and_then(|a| a.blend)
+            .filter(|_| main.is_some())
+            .and_then(|b| {
+                let w = b.weight.clamp(0.0, 1.0);
+                Self::locate(&skel, b.clip, b.time).map(|s| (s, w))
+            });
 
         // World (model-space) matrix per joint; parents precede children.
         for j in 0..j_count {
             let jat = j * JOINT_BYTES;
-            let (t, q, s) = match sample {
-                Some((at, f0, f1, k)) => {
-                    let base = at + CLIP_HEADER;
-                    let a = rd_trs(skel.clips, base + (f0 * j_count + j) * SAMPLE_BYTES);
-                    let b = rd_trs(skel.clips, base + (f1 * j_count + j) * SAMPLE_BYTES);
-                    (
-                        a.0 + (b.0 - a.0) * k,
-                        a.1.nlerp(b.1, k),
-                        a.2 + (b.2 - a.2) * k,
-                    )
+            let (t, q, s) = match main {
+                Some(m) => {
+                    let a = Self::sample_joint(&skel, m, j);
+                    match blend {
+                        Some((b, w)) => lerp_trs(a, Self::sample_joint(&skel, b, j), w),
+                        None => a,
+                    }
                 }
                 None => rd_trs(skel.joints, jat + 4 + 48),
             };
@@ -406,6 +405,53 @@ impl<'a> Mesh<'a> {
             *m = m.mul(&inv);
         }
         j_count
+    }
+
+    /// Clip byte offset + the two frames around `time` and the blend factor
+    /// between them (`None` if the clip is not in this mesh).
+    fn locate(skel: &Skeleton, clip: ClipId, time: f32) -> Option<ClipSample> {
+        let mut at = 0;
+        for _ in 0..skel.clip_count {
+            let frames = rd_u32(skel.clips, at + 8) as usize;
+            if rd_u32(skel.clips, at) == clip.0 {
+                let fps = rd_f32(skel.clips, at + 4);
+                let looping = rd_u32(skel.clips, at + 12) & 1 != 0;
+                let last = (frames - 1) as f32;
+                let mut f = if fps > 0.0 { time * fps } else { 0.0 };
+                if looping && last > 0.0 {
+                    f %= last;
+                    if f < 0.0 {
+                        f += last;
+                    }
+                } else {
+                    f = f.clamp(0.0, last);
+                }
+                let f0 = f as usize;
+                let f1 = (f0 + 1).min(frames - 1);
+                return Some(ClipSample {
+                    at,
+                    f0,
+                    f1,
+                    k: f - f0 as f32,
+                });
+            }
+            at += CLIP_HEADER + frames * skel.joint_count * SAMPLE_BYTES;
+        }
+        None
+    }
+
+    /// Local `(t, q, s)` of joint `j` at a located clip time.
+    fn sample_joint(skel: &Skeleton, s: ClipSample, j: usize) -> (Vec3, Quat, Vec3) {
+        let base = s.at + CLIP_HEADER;
+        let a = rd_trs(
+            skel.clips,
+            base + (s.f0 * skel.joint_count + j) * SAMPLE_BYTES,
+        );
+        let b = rd_trs(
+            skel.clips,
+            base + (s.f1 * skel.joint_count + j) * SAMPLE_BYTES,
+        );
+        lerp_trs(a, b, s.k)
     }
 
     /// Joint driving vertex `i` (0 for static meshes).
@@ -1046,7 +1092,7 @@ mod tests {
         }
         section(&mut blob, b"SKEL", &skel);
         let mut anim = std::vec::Vec::new();
-        anim.extend_from_slice(&1u32.to_le_bytes());
+        anim.extend_from_slice(&2u32.to_le_bytes());
         anim.extend_from_slice(&ClipId::from_name("lift").0.to_le_bytes());
         f32s(&mut anim, &[2.0]); // fps
         anim.extend_from_slice(&3u32.to_le_bytes()); // frames
@@ -1055,6 +1101,17 @@ mod tests {
             for j in 0..2 {
                 let y = if j == 1 { f as f32 } else { 0.0 };
                 f32s(&mut anim, &[0.0, y, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0]);
+            }
+        }
+        // "slide": one-shot, joint 1 moves along +X by 4 per frame.
+        anim.extend_from_slice(&ClipId::from_name("slide").0.to_le_bytes());
+        f32s(&mut anim, &[1.0]); // fps
+        anim.extend_from_slice(&2u32.to_le_bytes()); // frames
+        anim.extend_from_slice(&0u32.to_le_bytes()); // once
+        for f in 0..2 {
+            for j in 0..2 {
+                let x = if j == 1 { 4.0 * f as f32 } else { 0.0 };
+                f32s(&mut anim, &[x, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0]);
             }
         }
         section(&mut blob, b"ANIM", &anim);
@@ -1322,12 +1379,35 @@ mod tests {
         let blob = skinned_cube();
         let mesh = Mesh::from_tmdl(&blob).unwrap();
         assert_eq!(mesh.joint_count(), 2);
-        assert_eq!(mesh.clip_count(), 1);
+        assert_eq!(mesh.clip_count(), 2);
         let clip = mesh.find_clip(ClipId::from_name("lift")).unwrap();
         assert!(clip.looping);
         assert_eq!(clip.frame_count, 3);
         assert!((clip.duration() - 1.0).abs() < 1e-6);
         assert!(mesh.find_clip(ClipId::from_name("nope")).is_none());
+    }
+
+    #[test]
+    fn crossfade_interpolates_between_clips() {
+        let blob = skinned_cube();
+        let mesh = Mesh::from_tmdl(&blob).unwrap();
+        let lift = ClipId::from_name("lift");
+        let slide = ClipId::from_name("slide");
+        let pose = |a: AnimRef| {
+            let mut m = [Mat34::IDENTITY; MAX_JOINTS];
+            mesh.pose(Some(a), &mut m);
+            (m[1].m[0][3], m[1].m[1][3])
+        };
+        // lift @0.5 s = frame 1 (y = 1); slide @1 s = last frame (x = 4).
+        let base = AnimRef::new(lift, 0.5);
+        assert_eq!(pose(base), (0.0, 1.0));
+        assert_eq!(pose(base.blend_to(slide, 1.0, 0.0)), (0.0, 1.0));
+        assert_eq!(pose(base.blend_to(slide, 1.0, 1.0)), (4.0, 0.0));
+        let (x, y) = pose(base.blend_to(slide, 1.0, 0.25));
+        assert!((x - 1.0).abs() < 1e-5 && (y - 0.75).abs() < 1e-5, "{x} {y}");
+        // Weights clamp; an unknown blend clip leaves the main clip alone.
+        assert_eq!(pose(base.blend_to(slide, 1.0, 7.0)), (4.0, 0.0));
+        assert_eq!(pose(base.blend_to(ClipId(1), 0.0, 0.5)), (0.0, 1.0));
     }
 
     #[test]
@@ -1339,22 +1419,13 @@ mod tests {
         assert_eq!(mesh.pose(None, &mut m), 2);
         assert_eq!(m[1], Mat34::IDENTITY);
         // t = 0.25 s at 2 fps = frame 0.5: joint 1 raised by 0.5.
-        let anim = Some(AnimRef {
-            clip: ClipId::from_name("lift"),
-            time: 0.25,
-        });
+        let anim = Some(AnimRef::new(ClipId::from_name("lift"), 0.25));
         mesh.pose(anim, &mut m);
         assert!((m[1].m[1][3] - 0.5).abs() < 1e-5);
         assert_eq!(m[0], Mat34::IDENTITY);
         // Looping wraps: t = 1.25 s == t = 0.25 s.
         let mut w = [Mat34::IDENTITY; MAX_JOINTS];
-        mesh.pose(
-            Some(AnimRef {
-                clip: ClipId::from_name("lift"),
-                time: 1.25,
-            }),
-            &mut w,
-        );
+        mesh.pose(Some(AnimRef::new(ClipId::from_name("lift"), 1.25)), &mut w);
         assert!((w[1].m[1][3] - 0.5).abs() < 1e-4);
         // The posed draw differs from the bind-pose draw.
         let camera = Camera3::default();

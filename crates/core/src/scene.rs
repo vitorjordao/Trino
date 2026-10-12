@@ -51,10 +51,7 @@ pub fn draw_nodes(renderer: &mut dyn Renderer, nodes: &[SceneNode], root: &Mat34
         };
         let mut params = node.params;
         if let Some((clip, speed)) = node.anim {
-            params.anim = Some(AnimRef {
-                clip,
-                time: time * speed,
-            });
+            params.anim = Some(AnimRef::new(clip, time * speed));
         }
         renderer.draw_model_matrix(model, &root.mul(&node.matrix), Material::VertexLit, &params);
     }

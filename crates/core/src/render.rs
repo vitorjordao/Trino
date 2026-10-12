@@ -189,10 +189,44 @@ impl ClipId {
 
 /// Which pose to draw an animated model in: a clip and a time in seconds.
 /// Looping clips wrap; one-shot clips clamp to their last frame.
+///
+/// `blend` crossfades toward a second clip (idle → walk → run without
+/// popping): each joint's translation/rotation/scale is interpolated
+/// between the two sampled poses by `weight` before the hierarchy is
+/// composed — two extra sample reads per joint, no extra vertex work.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct AnimRef {
     pub clip: ClipId,
     pub time: f32,
+    pub blend: Option<AnimBlend>,
+}
+
+/// Second clip of a crossfade (see [`AnimRef::blend`]).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct AnimBlend {
+    pub clip: ClipId,
+    pub time: f32,
+    /// 0 = only [`AnimRef::clip`], 1 = only this clip. Clamped to 0..1.
+    pub weight: f32,
+}
+
+impl AnimRef {
+    /// Play `clip` at `time` seconds.
+    pub const fn new(clip: ClipId, time: f32) -> Self {
+        AnimRef {
+            clip,
+            time,
+            blend: None,
+        }
+    }
+
+    /// Crossfade toward `clip` (at its own `time`) by `weight` (0..1).
+    pub const fn blend_to(self, clip: ClipId, time: f32, weight: f32) -> Self {
+        AnimRef {
+            blend: Some(AnimBlend { clip, time, weight }),
+            ..self
+        }
+    }
 }
 
 /// Per-draw model parameters — the **surface material** of a 3D draw.

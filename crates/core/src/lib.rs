@@ -45,8 +45,8 @@ pub use math::{Color, Rect, Vec2, Vec3};
 pub use math3d::{Mat34, Quat};
 pub use platform::{BlobId, Platform, SaveError};
 pub use render::{
-    AnimRef, ClipId, FontId, FrameStats, Material, MaterialId, ModelId, ModelParams, Renderer,
-    Shading, SpriteId, SpriteParams, TextAlign, TextParams, Transform3,
+    AnimBlend, AnimRef, ClipId, FontId, FrameStats, Material, MaterialId, ModelId, ModelParams,
+    Renderer, Shading, SpriteId, SpriteParams, TextAlign, TextParams, Transform3,
 };
 pub use render3d::{
     Camera3, ClipInfo, DEFAULT_LIGHT, Fog, Light, MAX_JOINTS, Mesh, MeshError, ScreenTri,

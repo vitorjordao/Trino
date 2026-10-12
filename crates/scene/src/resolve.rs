@@ -128,10 +128,7 @@ fn visit(
         };
         material = m.material.clone();
         if let Some(a) = &m.anim {
-            params.anim = Some(AnimRef {
-                clip: ClipId::from_name(&a.clip),
-                time: ctx.time * a.speed,
-            });
+            params.anim = Some(AnimRef::new(ClipId::from_name(&a.clip), ctx.time * a.speed));
         }
         (m.model_id(), m.path.clone())
     });

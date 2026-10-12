@@ -374,10 +374,7 @@ impl MeshData {
             for n in 0..mesh.clip_count() {
                 let clip = mesh.clip(n).unwrap();
                 for f in 0..clip.frame_count {
-                    poses.push(Some(AnimRef {
-                        clip: clip.id,
-                        time: f as f32 / clip.fps.max(1e-6),
-                    }));
+                    poses.push(Some(AnimRef::new(clip.id, f as f32 / clip.fps.max(1e-6))));
                 }
             }
             let mut lo = [f32::MAX; 3];

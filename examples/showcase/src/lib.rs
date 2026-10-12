@@ -122,25 +122,20 @@ impl ShowcaseGame {
         clear: Color,
         screen: Vec2,
     ) -> Self {
-        let mut world = EntityStore::new();
-        world.spawn_iter(nodes);
-        let hero = world.with_tag("player").next();
-        let spawn = world
-            .find("spawn")
-            .and_then(|id| world.get(id))
-            .map_or(Vec3::ZERO, |e| e.position());
         // Start from the scene's own camera, expressed as an orbit.
         let d = camera.eye - camera.target;
         let dist = sqrt(d.dot(d).max(1e-6));
-        let total_coins = world.with_tag("coin").count() as u32;
-        ShowcaseGame {
-            world,
-            hero,
-            pos: spawn + Vec3::new(0.0, HERO_HALF.y, 0.0),
+        // Build the store inside the game value (no temporary copy): the
+        // store is the bulk of the state, and console stacks are small (the
+        // N64 main stack is 64 KB).
+        let mut game = ShowcaseGame {
+            world: EntityStore::new(),
+            hero: None,
+            pos: Vec3::ZERO,
             vel: Vec3::ZERO,
             on_ground: false,
             coins: 0,
-            total_coins,
+            total_coins: 0,
             reached_goal: false,
             facing: 0.0,
             time: 0.0,
@@ -149,11 +144,21 @@ impl ShowcaseGame {
             dist: dist * 0.7,
             prev: InputState::default(),
             screen,
-            spawn,
+            spawn: Vec3::ZERO,
             camera_fov: camera.fov_y,
             light,
             clear,
-        }
+        };
+        game.world.spawn_iter(nodes);
+        game.hero = game.world.with_tag("player").next();
+        game.spawn = game
+            .world
+            .find("spawn")
+            .and_then(|id| game.world.get(id))
+            .map_or(Vec3::ZERO, |e| e.position());
+        game.pos = game.spawn + Vec3::new(0.0, HERO_HALF.y, 0.0);
+        game.total_coins = game.world.with_tag("coin").count() as u32;
+        game
     }
 
     pub fn camera(&self) -> Camera3 {

@@ -108,6 +108,7 @@ impl Dialog {
     }
 
     pub fn show(&mut self, ctx: &egui::Context, app: &mut App) -> Outcome {
+        let sprite_names: Vec<String> = app.project.sprites.keys().cloned().collect();
         let mut outcome = Outcome::Keep;
         let title = self.title();
         let modal = egui::Modal::new(egui::Id::new("trino-dialog")).show(ctx, |ui| {
@@ -152,7 +153,7 @@ impl Dialog {
                 Dialog::NewMaterial { name, def } => {
                     name_field(ui, name, "stone");
                     ui.add_space(4.0);
-                    crate::panels::inspector::material_editor(ui, def);
+                    crate::panels::inspector::material_editor(ui, def, &sprite_names);
                     valid(name)
                 }
                 Dialog::MakePrefab { name, .. } => {

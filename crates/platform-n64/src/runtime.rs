@@ -18,6 +18,11 @@ pub fn log(msg: &str) {
     }
 }
 
+/// Deepest main-stack use since boot (bytes; the stack is 64 KB).
+pub fn stack_used() -> u32 {
+    unsafe { ffi::trino_stack_used() }
+}
+
 /// Monotonic microseconds (wraps every ~71 minutes; diff arithmetic only).
 pub fn now_us() -> u32 {
     unsafe { ffi::trino_ticks_us() }

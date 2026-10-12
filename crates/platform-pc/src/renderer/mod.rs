@@ -46,6 +46,8 @@ impl std::error::Error for RendererError {}
 
 struct SpriteEntry {
     bind_group: wgpu::BindGroup,
+    /// Kept for the 3D (wrapping) bind group, created on first 3D use.
+    view: wgpu::TextureView,
     size: (u32, u32),
 }
 
@@ -75,6 +77,11 @@ pub struct PcRenderer {
     tri_buf: wgpu::Buffer,
     tri_capacity: u64,
     sprites: HashMap<u32, SpriteEntry>,
+    /// Sprite textures as 3D textures (wrapping sampler), by handle.
+    tex3d: HashMap<u32, wgpu::BindGroup>,
+    tex3d_sampler: wgpu::Sampler,
+    /// 1x1 white: what untextured triangles "sample" (×1 = unchanged).
+    white_bg: wgpu::BindGroup,
     meshes: HashMap<u32, Vec<u8>>,
     /// Glyph tables (`TFNT`) by font handle; the atlas is the sprite with
     /// the same handle. `Arc` so `draw_text` can lay out while drawing.
@@ -88,6 +95,9 @@ pub struct PcRenderer {
     /// accumulate here and depth-sort together (painter across meshes) when
     /// a sprite draw, a camera change or `end_frame` flushes the batch.
     pending_tris: Vec<ScreenTri>,
+    /// Texture of each pending triangle (parallel to `pending_tris`; only
+    /// allocated into when the batch has textured draws).
+    pending_tex: Vec<Option<u32>>,
     camera: Camera3,
     light: Light,
     clear: Color,
@@ -295,6 +305,16 @@ impl PcRenderer {
             min_filter: sprite_filter,
             ..Default::default()
         });
+        // 3D textures tile (wrap); same filter policy as sprites (the N64
+        // 3-point filter is emulated in the shader).
+        let tex3d_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("trino-tex3d-sampler"),
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            mag_filter: sprite_filter,
+            min_filter: sprite_filter,
+            ..Default::default()
+        });
         // The window blit stays nearest: consoles output at native
         // resolution; the integer upscale is a PC artifact and must not blur.
         let blit_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -443,10 +463,11 @@ impl PcRenderer {
             cache: None,
         });
 
-        // 3D triangle pipeline: same offscreen target, vertex colors only.
+        // 3D triangle pipeline: same offscreen target; vertex colors
+        // modulated by one texture per segment (white when untextured).
         let tri_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("trino-tri-layout"),
-            bind_group_layouts: &[Some(&globals_bgl)],
+            bind_group_layouts: &[Some(&globals_bgl), Some(&texture_bgl)],
             immediate_size: 0,
         });
         let tri_attrs = [
@@ -464,6 +485,16 @@ impl PcRenderer {
                 format: wgpu::VertexFormat::Float32,
                 offset: 24,
                 shader_location: 2,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32,
+                offset: 28,
+                shader_location: 3,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x2,
+                offset: 32,
+                shader_location: 4,
             },
         ];
         let tri_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -542,6 +573,42 @@ impl PcRenderer {
         let blit_bind_group =
             create_blit_bind_group(&device, &texture_bgl, &offscreen_view, &blit_sampler);
 
+        let white_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("trino-white"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: OFFSCREEN_FORMAT,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &white_tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &[255, 255, 255, 255],
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+        );
+        let white_view = white_tex.create_view(&wgpu::TextureViewDescriptor::default());
+        let white_bg = create_blit_bind_group(&device, &texture_bgl, &white_view, &tex3d_sampler);
+
         let instance_capacity = 1024 * INSTANCE_STRIDE;
         let instance_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("trino-instances"),
@@ -578,6 +645,9 @@ impl PcRenderer {
             tri_buf,
             tri_capacity,
             sprites: HashMap::new(),
+            tex3d: HashMap::new(),
+            tex3d_sampler,
+            white_bg,
             meshes: HashMap::new(),
             fonts: HashMap::new(),
             commands: Vec::new(),
@@ -585,6 +655,7 @@ impl PcRenderer {
             last_stats: FrameStats::default(),
             tri_verts: Vec::new(),
             pending_tris: Vec::new(),
+            pending_tex: Vec::new(),
             camera: Camera3::default(),
             light: DEFAULT_LIGHT,
             clear: Color::BLACK,
@@ -726,10 +797,12 @@ impl PcRenderer {
                 },
             ],
         });
+        self.tex3d.remove(&id.0);
         self.sprites.insert(
             id.0,
             SpriteEntry {
                 bind_group,
+                view,
                 size: (width, height),
             },
         );
@@ -809,19 +882,53 @@ impl PcRenderer {
         self.internal_size
     }
 
-    /// Depth-sort the pending model batch and enqueue it as one triangle
-    /// command (painter's order across every mesh of the batch).
+    /// Depth-sort the pending model batch and enqueue it as triangle
+    /// commands (painter's order across every mesh of the batch). Batches
+    /// with textured draws are then grouped by texture (stable: depth order
+    /// holds within each texture) — one texture bind per group, the same
+    /// grouping the N64 needs to load TMEM once per texture.
     fn flush_model_batch(&mut self) {
         if self.pending_tris.is_empty() {
             return;
         }
-        self.pending_tris.sort_unstable_by(|a, b| {
-            b.depth
-                .partial_cmp(&a.depth)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-        let first = self.tri_verts.len() as u32;
-        for tri in &self.pending_tris {
+        let textured = self.pending_tex.iter().any(Option::is_some);
+        let order: Vec<(Option<u32>, ScreenTri)> = if !textured {
+            // Untextured fast path: exactly the historical sort (goldens).
+            self.pending_tris.sort_unstable_by(|a, b| {
+                b.depth
+                    .partial_cmp(&a.depth)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            self.pending_tris.iter().map(|t| (None, *t)).collect()
+        } else {
+            let mut v: Vec<(Option<u32>, ScreenTri)> = self
+                .pending_tex
+                .iter()
+                .copied()
+                .zip(self.pending_tris.iter().copied())
+                .collect();
+            v.sort_by(|a, b| {
+                b.1.depth
+                    .partial_cmp(&a.1.depth)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            v.sort_by_key(|(t, _)| t.map_or(0u64, |t| t as u64 + 1));
+            v
+        };
+        let mut run_start = self.tri_verts.len() as u32;
+        let mut run_tex = order.first().and_then(|(t, _)| *t);
+        for (tex, tri) in &order {
+            if *tex != run_tex {
+                let first = run_start;
+                let count = self.tri_verts.len() as u32 - first;
+                self.commands.push(Cmd::Tris {
+                    first,
+                    count,
+                    texture: run_tex,
+                });
+                run_start = self.tri_verts.len() as u32;
+                run_tex = *tex;
+            }
             for i in 0..3 {
                 let (p, c) = (tri.pts[i], tri.colors[i]);
                 self.tri_verts.push(TriVertex {
@@ -833,15 +940,35 @@ impl PcRenderer {
                         c.a as f32 / 255.0,
                     ],
                     depth: tri.z[i],
-                    _pad: 0.0,
+                    w: if tex.is_some() { tri.w[i] } else { 1.0 },
+                    uv: [tri.uv[i].x, tri.uv[i].y],
                 });
             }
         }
+        let count = self.tri_verts.len() as u32 - run_start;
         self.commands.push(Cmd::Tris {
-            first,
-            count: (self.pending_tris.len() * 3) as u32,
+            first: run_start,
+            count,
+            texture: run_tex,
         });
         self.pending_tris.clear();
+        self.pending_tex.clear();
+    }
+
+    /// Bind group of sprite `id` as a wrapping 3D texture (created once,
+    /// dropped when the sprite is re-uploaded).
+    fn tex3d_group(&mut self, id: u32) -> Option<&wgpu::BindGroup> {
+        if !self.tex3d.contains_key(&id) {
+            let entry = self.sprites.get(&id)?;
+            let bg = create_blit_bind_group(
+                &self.device,
+                &self.sprite_bgl,
+                &entry.view,
+                &self.tex3d_sampler,
+            );
+            self.tex3d.insert(id, bg);
+        }
+        self.tex3d.get(&id)
     }
 
     fn flush(&mut self) {
@@ -866,6 +993,15 @@ impl PcRenderer {
         }
         let (instances, segments) = build_segments(&self.commands);
         self.commands.clear();
+        // 3D texture bind groups must exist before the pass borrows self.
+        for seg in &segments {
+            if let Segment::Tris {
+                texture: Some(t), ..
+            } = seg
+            {
+                let _ = self.tex3d_group(*t);
+            }
+        }
 
         let bytes: &[u8] = bytemuck::cast_slice(&instances);
         if bytes.len() as u64 > self.instance_capacity {
@@ -950,9 +1086,17 @@ impl PcRenderer {
                             pass.draw(0..4, instances.clone());
                         }
                     }
-                    Segment::Tris { first, count } => {
+                    Segment::Tris {
+                        first,
+                        count,
+                        texture,
+                    } => {
                         pass.set_pipeline(&self.tri_pipeline);
                         pass.set_vertex_buffer(0, self.tri_buf.slice(..));
+                        let bg = texture
+                            .and_then(|t| self.tex3d.get(&t))
+                            .unwrap_or(&self.white_bg);
+                        pass.set_bind_group(1, bg, &[]);
                         pass.draw(*first..*first + *count, 0..1);
                     }
                 }
@@ -1031,6 +1175,7 @@ impl Renderer for PcRenderer {
         self.commands.clear();
         self.tri_verts.clear();
         self.pending_tris.clear();
+        self.pending_tex.clear();
         self.frame_stats = FrameStats::default();
     }
 
@@ -1112,7 +1257,39 @@ impl Renderer for PcRenderer {
         };
         let mesh = Mesh::from_tmdl(tmdl).expect("validated on upload");
         self.frame_stats.models += 1;
+        let texture = mesh
+            .texture_for(params)
+            .filter(|t| self.sprites.contains_key(&t.0));
+        if let Some(t) = texture {
+            let (w, h) = self.sprites[&t.0].size;
+            // One texture per draw lives in texture memory as a whole
+            // (TMEM on N64) — worst-case 16-bit texels, like sprites.
+            let bpp = if self.caps.color_depth_bits <= 16 {
+                2
+            } else {
+                4
+            };
+            self.frame_stats.max_texture_bytes =
+                self.frame_stats.max_texture_bytes.max(w * h * bpp);
+            if self.strict {
+                if !w.is_power_of_two() || !h.is_power_of_two() {
+                    panic!(
+                        "strict mode: texture {t:?} ({w}x{h}) is used on a 3D model but is \
+                         not power-of-two sized — consoles can only tile POT textures."
+                    );
+                }
+                if let Err(e) = self.caps.validate_texture(w as u16, h as u16, bpp) {
+                    panic!(
+                        "strict mode: 3D texture {t:?} ({w}x{h}) busts the {:?} profile \
+                         budget: {e:?}. One texture per draw must fit texture memory \
+                         (N64 TMEM: 4 KB — e.g. 32x32 RGBA16 or 64x64 CI4).",
+                        self.profile
+                    );
+                }
+            }
+        }
         let screen = Vec2::new(self.internal_size.0 as f32, self.internal_size.1 as f32);
+        let before = self.pending_tris.len();
         let pending = &mut self.pending_tris;
         trino_core::render3d::tessellate(
             &mesh,
@@ -1123,6 +1300,13 @@ impl Renderer for PcRenderer {
             screen,
             &mut |tri| pending.push(tri),
         );
+        // Texture tags only matter once a textured draw joins the batch.
+        let added = self.pending_tris.len() - before;
+        if texture.is_some() || !self.pending_tex.is_empty() {
+            self.pending_tex.resize(before, None);
+            self.pending_tex
+                .extend(std::iter::repeat_n(texture.map(|t| t.0), added));
+        }
     }
 
     fn end_frame(&mut self) {
@@ -1156,5 +1340,20 @@ impl Renderer for PcRenderer {
 
     fn stats(&self) -> FrameStats {
         self.last_stats
+    }
+
+    fn read_pixel(&mut self, x: u32, y: u32) -> Option<Color> {
+        let (w, h) = self.internal_size;
+        if x >= w || y >= h {
+            return None;
+        }
+        let rgba = self.read_offscreen();
+        let at = ((y * w + x) * 4) as usize;
+        Some(Color::rgba(
+            rgba[at],
+            rgba[at + 1],
+            rgba[at + 2],
+            rgba[at + 3],
+        ))
     }
 }

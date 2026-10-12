@@ -109,11 +109,15 @@ file = "models/castle64/door_kaykit.glb"
 [models.ground]
 file = "models/proxies/ground.prim.ron"
 
+# Textured fake objects: UVs are generated (one repeat per meter) and
+# the default texture is baked in; materials can override it.
 [models.crate]
 file = "models/proxies/crate.prim.ron"
+texture = "sprites/tex_planks"
 
 [models.pillar]
 file = "models/proxies/pillar.prim.ron"
+texture = "sprites/tex_bricks"
 
 [models.rock]
 file = "models/proxies/rock.prim.ron"
@@ -171,3 +175,23 @@ file = "data/selftest.txt"
 # BakedScene::parse(platform.blob(BlobId::from_path("scenes/showcase"))).
 [scenes.showcase]
 file = "scenes/showcase.scene.ron"
+
+# 32x32 grayscale tiles for textured 3D (tinted by vertex color/material).
+[sprites.tex_planks]
+file = "sprites/textures/tex_planks.png"
+formats = { n64 = "CI8" }
+
+[sprites.tex_bricks]
+file = "sprites/textures/tex_bricks.png"
+formats = { n64 = "CI8" }
+
+# ---- self-test content (castle64::selftest::textured_3d) ----
+
+[sprites.selftest_quadrants]
+file = "sprites/selftest_quadrants.png"
+formats = { n64 = "CI4" }
+
+# Textured fake object: UVs kept, default texture baked in.
+[models.selftest_card]
+file = "models/proxies/selftest-card.prim.ron"
+texture = "sprites/selftest_quadrants"

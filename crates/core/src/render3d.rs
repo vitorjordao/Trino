@@ -9,7 +9,14 @@
 //! gouraud lighting, backface cull, painter's sort — lives here, in pure
 //! deterministic f32, identical on every target.
 //!
-//! Limits (v1, on purpose): no textures on 3D geometry (vertex colors only).
+//! Textures (v2): a mesh with a `TXUV` section carries one UV per vertex
+//! and may name a default texture (`TXID`, a sprite handle); `ModelParams::
+//! texture` overrides it per draw. **One texture per draw** — the N64 TMEM
+//! holds one ≤ 4 KB texture at a time — sampled with wrap-around (tiling)
+//! and modulated by the lit vertex color. UVs are interpolated through
+//! clipping and depth subdivision; each [`ScreenTri`] carries per-vertex
+//! `uv` and view depth `w`, so every backend rasterizes perspective-correct
+//! (RDP with W on N64, clip-space w on PC/3DS).
 //!
 //! Surface materials ([`ModelParams`]: tint, emissive, flat/gouraud/unlit
 //! shading, double-sided), the light (colored directional + ambient) and
@@ -40,7 +47,7 @@
 
 use crate::math::{Color, Vec2, Vec3};
 use crate::math3d::{Mat34, Quat};
-use crate::render::{AnimRef, ClipId, ModelParams, Shading};
+use crate::render::{AnimRef, ClipId, ModelParams, Shading, SpriteId};
 
 /// Mesh blob format ("TMDL", little-endian):
 /// `u32 vertex_count, u32 index_count`, then `positions f32*3*v`,
@@ -59,6 +66,9 @@ use crate::render::{AnimRef, ClipId, ModelParams, Shading};
 ///   ([`ClipId`]), `f32 fps`, `u32 frame_count`, `u32 flags (bit0 = loop)`,
 ///   then `frame_count * joint_count` samples of `t3 q4 s3` f32,
 ///   frame-major.
+/// - `TXUV`: texture coordinates, `f32 u, f32 v` per vertex (0..1 spans the
+///   texture once; values outside repeat).
+/// - `TXID`: `u32` sprite handle of the default texture.
 pub const TMDL_MAGIC: &[u8; 4] = b"TMDL";
 
 /// Most joints a skeleton may have. Joint matrices live on the stack during
@@ -81,6 +91,8 @@ pub struct Mesh<'a> {
     pub index_count: usize,
     bounds: Option<(Vec3, f32)>,
     skeleton: Option<Skeleton<'a>>,
+    uvs: Option<&'a [u8]>,
+    texture: Option<SpriteId>,
 }
 
 /// Rigid skeleton + clips (borrowed from the blob).
@@ -202,6 +214,8 @@ impl<'a> Mesh<'a> {
             index_count: i,
             bounds: None,
             skeleton: None,
+            uvs: None,
+            texture: None,
         };
 
         // Optional sections.
@@ -244,6 +258,13 @@ impl<'a> Mesh<'a> {
                     skel.clips = &body[4..];
                     skel.clip_count = count;
                 }
+                b"TXUV" => {
+                    if len < v * 8 {
+                        return Err(MeshError::BadSection);
+                    }
+                    mesh.uvs = Some(&body[..v * 8]);
+                }
+                b"TXID" if len >= 4 => mesh.texture = Some(SpriteId(rd_u32(body, 0))),
                 _ => {} // unknown section: skip
             }
             at = body_at + len;
@@ -282,6 +303,31 @@ impl<'a> Mesh<'a> {
     #[inline]
     pub fn position(&self, i: usize) -> Vec3 {
         rd_vec3(self.positions, i * 12)
+    }
+
+    /// Texture coordinate of vertex `i` (zero when the mesh has no UVs).
+    #[inline]
+    pub fn uv(&self, i: usize) -> Vec2 {
+        match self.uvs {
+            Some(uv) => Vec2::new(rd_f32(uv, i * 8), rd_f32(uv, i * 8 + 4)),
+            None => Vec2::ZERO,
+        }
+    }
+
+    pub fn has_uvs(&self) -> bool {
+        self.uvs.is_some()
+    }
+
+    /// The baked default texture (`TXID`).
+    pub fn default_texture(&self) -> Option<SpriteId> {
+        self.texture
+    }
+
+    /// Texture a draw of this mesh samples: the per-draw override, else the
+    /// baked default — `None` for meshes without UVs.
+    pub fn texture_for(&self, params: &ModelParams) -> Option<SpriteId> {
+        self.uvs?;
+        params.texture.or(self.texture)
     }
 
     #[inline]
@@ -566,6 +612,11 @@ pub struct ScreenTri {
     /// the per-triangle average (citro2d has one depth per draw). Painter
     /// order (the batch sort) stays as the tie-break for equal depths.
     pub z: [f32; 3],
+    /// Texture coordinates (zero for untextured draws).
+    pub uv: [Vec2; 3],
+    /// View-space depth per vertex (> 0): perspective-correct texturing
+    /// (RDP W on N64, clip-space w on PC/3DS).
+    pub w: [f32; 3],
 }
 
 const NEAR: f32 = 0.05;
@@ -589,24 +640,29 @@ fn lerp_color(a: Color, b: Color, t: f32) -> Color {
     Color::rgba(mix(a.r, b.r), mix(a.g, b.g), mix(a.b, b.b), mix(a.a, b.a))
 }
 
+/// A view-space vertex on its way to the screen: position, lit color, UV.
+type ClipVert = (Vec3, Color, Vec2);
+
+const NO_VERT: ClipVert = (Vec3::ZERO, Color::WHITE, Vec2::ZERO);
+
 /// Clip a view-space polygon against `dist(v) >= 0` (Sutherland-Hodgman).
 /// Returns the new vertex count.
 fn clip_plane(
-    verts: &[(Vec3, Color); MAX_POLY],
+    verts: &[ClipVert; MAX_POLY],
     n_in: usize,
-    out: &mut [(Vec3, Color); MAX_POLY],
+    out: &mut [ClipVert; MAX_POLY],
     dist: impl Fn(Vec3) -> f32,
 ) -> usize {
     let mut n_out = 0;
     for i in 0..n_in {
-        let (a, ca) = verts[i];
-        let (b, cb) = verts[(i + 1) % n_in];
+        let (a, ca, ua) = verts[i];
+        let (b, cb, ub) = verts[(i + 1) % n_in];
         let (da, db) = (dist(a), dist(b));
         if da >= 0.0 {
             if n_out == MAX_POLY {
                 return n_out;
             }
-            out[n_out] = (a, ca);
+            out[n_out] = (a, ca, ua);
             n_out += 1;
         }
         if (da >= 0.0) != (db >= 0.0) {
@@ -614,7 +670,7 @@ fn clip_plane(
                 return n_out;
             }
             let t = da / (da - db);
-            out[n_out] = (a + (b - a) * t, lerp_color(ca, cb, t));
+            out[n_out] = (a + (b - a) * t, lerp_color(ca, cb, t), ua + (ub - ua) * t);
             n_out += 1;
         }
     }
@@ -816,6 +872,7 @@ fn tessellate_joints<const SKINNED: bool>(
         pos: [Vec3::ZERO; VCACHE],
         col: [Color::WHITE; VCACHE],
     };
+    let textured = mesh.has_uvs();
     // (view-space position, shaded color — unused when flat).
     let mut vertex = |i: usize| -> (Vec3, Color) {
         let slot = i % VCACHE;
@@ -873,10 +930,15 @@ fn tessellate_joints<const SKINNED: bool>(
                 && v.y >= -lim_y * v.z
                 && v.y <= lim_y * v.z
         };
-        let mut poly_a = [(Vec3::ZERO, Color::WHITE); MAX_POLY];
-        let mut poly_b = [(Vec3::ZERO, Color::WHITE); MAX_POLY];
+        let mut poly_a = [NO_VERT; MAX_POLY];
+        let mut poly_b = [NO_VERT; MAX_POLY];
         for k in 0..3 {
-            poly_a[k] = (vs[k], colors[k]);
+            let uv = if textured {
+                mesh.uv(idx[k])
+            } else {
+                Vec2::ZERO
+            };
+            poly_a[k] = (vs[k], colors[k], uv);
         }
         let mut n_poly = 3;
         if !(inside(vs[0]) && inside(vs[1]) && inside(vs[2])) {
@@ -903,7 +965,7 @@ fn tessellate_joints<const SKINNED: bool>(
         // than DEPTH_SPLIT of view depth is bisected, recursively, so every
         // emitted triangle is depth-uniform enough for painter sorting.
         for k in 1..n_poly - 1 {
-            let mut stack = [[(Vec3::ZERO, Color::WHITE); 3]; SPLIT_STACK];
+            let mut stack = [[NO_VERT; 3]; SPLIT_STACK];
             stack[0] = [poly_a[0], poly_a[k], poly_a[k + 1]];
             let mut top = 1usize;
             while top > 0 {
@@ -930,13 +992,21 @@ fn tessellate_joints<const SKINNED: bool>(
                         1 => (tri[1], tri[2], tri[0]),
                         _ => (tri[2], tri[0], tri[1]),
                     };
-                    let mid = ((a.0 + b.0) * 0.5, lerp_color(a.1, b.1, 0.5));
+                    let mid = (
+                        (a.0 + b.0) * 0.5,
+                        lerp_color(a.1, b.1, 0.5),
+                        (a.2 + b.2) * 0.5,
+                    );
                     stack[top] = [a, mid, c];
                     stack[top + 1] = [mid, b, c];
                     top += 2;
                     continue;
                 }
-                let [(mut v0, mut c0), (mut v1, mut c1), (v2, c2)] = tri;
+                let [
+                    (mut v0, mut c0, mut u0),
+                    (mut v1, mut c1, mut u1),
+                    (v2, c2, u2),
+                ] = tri;
                 let mut pts = [project(v0), project(v1), project(v2)];
                 // Backface cull: front faces are CCW in world space, which
                 // lands as positive signed area in Y-down screen space.
@@ -949,6 +1019,7 @@ fn tessellate_joints<const SKINNED: bool>(
                     // Double-sided: emit the back face with flipped winding.
                     core::mem::swap(&mut v0, &mut v1);
                     core::mem::swap(&mut c0, &mut c1);
+                    core::mem::swap(&mut u0, &mut u1);
                     pts.swap(0, 1);
                 }
                 let depth = v0.z.max(v1.z).max(v2.z);
@@ -958,6 +1029,8 @@ fn tessellate_joints<const SKINNED: bool>(
                     colors: [c0, c1, c2],
                     depth,
                     z: [zn(v0), zn(v1), zn(v2)],
+                    uv: [u0, u1, u2],
+                    w: [v0.z, v1.z, v2.z],
                 });
             }
         }
@@ -1132,6 +1205,78 @@ mod tests {
         }
         section(&mut blob, b"ANIM", &anim);
         blob
+    }
+
+    /// The unit cube with planar UVs (u = x + 0.5, v = y + 0.5) and a
+    /// default texture.
+    fn textured_cube() -> std::vec::Vec<u8> {
+        let mut blob = cube_tmdl();
+        let mesh_blob = cube_tmdl();
+        let mesh = Mesh::from_tmdl(&mesh_blob).unwrap();
+        let mut uv = std::vec::Vec::new();
+        for i in 0..mesh.vertex_count {
+            let p = mesh.position(i);
+            f32s(&mut uv, &[p.x + 0.5, p.y + 0.5]);
+        }
+        section(&mut blob, b"TXUV", &uv);
+        section(&mut blob, b"TXID", &SpriteId(42).0.to_le_bytes());
+        blob
+    }
+
+    #[test]
+    fn textured_meshes_carry_uvs_and_view_depth() {
+        let blob = textured_cube();
+        let mesh = Mesh::from_tmdl(&blob).unwrap();
+        assert!(mesh.has_uvs());
+        assert_eq!(mesh.default_texture(), Some(SpriteId(42)));
+        assert_eq!(mesh.texture_for(&ModelParams::DEFAULT), Some(SpriteId(42)));
+        let over = ModelParams {
+            texture: Some(SpriteId(7)),
+            ..ModelParams::DEFAULT
+        };
+        assert_eq!(mesh.texture_for(&over), Some(SpriteId(7)));
+        // A mesh without UVs never samples a texture.
+        let plain = cube_tmdl();
+        assert_eq!(Mesh::from_tmdl(&plain).unwrap().texture_for(&over), None);
+
+        let tris = collect(&mesh, &Mat34::IDENTITY, &Camera3::default(), Color::WHITE);
+        assert!(!tris.is_empty());
+        for t in &tris {
+            for k in 0..3 {
+                let ok = |x: f32| (-1e-4..=1.0001).contains(&x);
+                assert!(ok(t.uv[k].x) && ok(t.uv[k].y), "{:?}", t.uv[k]);
+                // Camera at z = -5 looking at a unit cube: depth ~4.5..5.5.
+                assert!((4.4..5.6).contains(&t.w[k]), "w = {}", t.w[k]);
+                // z and w agree: z = 1 - NEAR / w.
+                assert!((t.z[k] - (1.0 - NEAR / t.w[k])).abs() < 1e-5);
+            }
+        }
+    }
+
+    #[test]
+    fn clipping_interpolates_uvs() {
+        // A long textured slab crossing the near plane: clipped vertices
+        // get UVs between their edge endpoints, never outside 0..1 here.
+        let blob = textured_cube();
+        let mesh = Mesh::from_tmdl(&blob).unwrap();
+        let model = Mat34::from_rotation_scale_translation(
+            Vec3::ZERO,
+            Vec3::new(1.0, 1.0, 40.0),
+            Vec3::new(0.0, -1.5, 0.0),
+        );
+        let camera = Camera3 {
+            eye: Vec3::new(0.0, 0.0, 0.0),
+            target: Vec3::new(0.0, -0.2, 1.0),
+            fov_y: 1.0,
+        };
+        let tris = collect(&mesh, &model, &camera, Color::WHITE);
+        assert!(!tris.is_empty());
+        for t in &tris {
+            for k in 0..3 {
+                assert!(t.w[k] >= NEAR * 0.999, "clipped at the near plane");
+                assert!((-1e-4..=1.0001).contains(&t.uv[k].x), "{:?}", t.uv[k]);
+            }
+        }
     }
 
     #[test]

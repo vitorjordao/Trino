@@ -105,12 +105,13 @@ impl SceneNode {
 ///   name (u32 offset, u32 len) and tags (u32 offset, u32 len) into the
 ///   string table — tags are `\n`-separated
 ///   matrix f32*12 (row-major 3x4)
-///   flags u32: bit0 model, bit1 anim, bit2 double_sided, bits 8..10 shading
+///   flags u32: bit0 model, bit1 anim, bit2 double_sided, bit3 texture,
+///     bits 8..10 shading
 ///     (0 gouraud, 1 flat, 2 unlit), bits 12..14 collider shape (0 none,
 ///     1 box, 2 sphere, 3 capsule), bit15 collider trigger
 ///   model u32, tint rgba, emissive rgba, clip u32, speed f32
 ///   collider a f32 b f32 c f32 (box half xyz / sphere r / capsule r,h)
-///   collider offset f32*3
+///   collider offset f32*3, texture u32 (sprite handle)
 /// string table: UTF-8 bytes to the end of the blob
 /// ```
 ///
@@ -120,7 +121,7 @@ pub const TSCN_MAGIC: &[u8; 4] = b"TSCN";
 pub const TSCN_VERSION: u16 = 1;
 pub const TSCN_HEADER: usize = 12;
 pub const TSCN_ENV_BYTES: usize = 68;
-pub const TSCN_NODE_BYTES: usize = 16 + 48 + 4 + 4 + 4 + 4 + 4 + 4 + 12 + 12;
+pub const TSCN_NODE_BYTES: usize = 16 + 48 + 4 + 4 + 4 + 4 + 4 + 4 + 12 + 12 + 4;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SceneError {
@@ -272,6 +273,7 @@ impl BakedScene {
             shading,
             double_sided: flags & 4 != 0,
             anim: None,
+            texture: (flags & 8 != 0).then(|| crate::render::SpriteId(rd_u32(d, b + 48))),
         };
         let (x, y, z) = (rd_f32(d, b + 24), rd_f32(d, b + 28), rd_f32(d, b + 32));
         let shape = match (flags >> 12) & 7 {
@@ -461,6 +463,7 @@ mod tests {
         b.extend_from_slice(&[255, 0, 0, 255, 0, 0, 0, 255]); // tint, emissive
         b.extend_from_slice(&9u32.to_le_bytes()); // clip
         f(&mut b, &[2.0, 0.5, 1.0, 0.5, 0.0, 1.0, 0.0]);
+        b.extend_from_slice(&0u32.to_le_bytes()); // texture (flag off)
         b.extend_from_slice(b"a/doordoor\nx");
         std::boxed::Box::leak(b.into_boxed_slice())
     }

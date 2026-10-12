@@ -42,6 +42,14 @@ unsafe extern "C" {
     /// pts: 6 floats (x/y per vertex); colors: 12 bytes (rgba per vertex);
     /// zs: 3 floats (normalized depth 0..1, 0 = near) for the RDP z-buffer.
     pub fn trino_tri(pts: *const f32, colors: *const u8, zs: *const f32);
+    /// Select a `sprite_t` as the texture for `trino_tri_tex` (TMEM upload,
+    /// wrapping, TEX0 * SHADE, perspective).
+    pub fn trino_3d_texture(sprite: *mut c_void);
+    /// 30 floats: per vertex x, y, z, u, v, w, r, g, b, a (colors 0..1,
+    /// u/v normalized, w = view depth).
+    pub fn trino_tri_tex(verts: *const f32);
+    /// Test hook: RGBA8888 of the last frame at (x, y); 0 = unavailable.
+    pub fn trino_debug_pixel(x: u32, y: u32) -> u32;
 
     pub fn trino_joypad_buttons() -> u32;
     /// (x as i16 as u16) << 16 | (y as i16 as u16).
@@ -62,6 +70,9 @@ unsafe extern "C" {
     pub fn trino_save_capacity() -> u32;
     pub fn trino_save_read(dest: *mut u8, start: u32, len: u32);
     pub fn trino_save_write(src: *const u8, start: u32, len: u32);
+
+    /// Deepest main-stack use since boot, in bytes (64 KB total).
+    pub fn trino_stack_used() -> u32;
 
     // newlib, for the global allocator.
     pub fn memalign(align: usize, size: usize) -> *mut c_void;

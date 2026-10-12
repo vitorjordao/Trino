@@ -11,8 +11,13 @@
 //!     shading: Flat,
 //!     emissive: (0, 0, 0),
 //!     double_sided: false,
+//!     texture: Some("sprites/brick"),
 //! )
 //! ```
+//!
+//! `texture` is a sprite (logical path) sampled by meshes that carry UVs —
+//! one texture per draw, power-of-two sized; on the N64 it must fit TMEM
+//! (4 KB: 32x32 RGBA16, 64x64 CI4, ...).
 
 use serde::{Deserialize, Serialize};
 use trino_core::{Color, ModelParams, Shading};
@@ -64,6 +69,10 @@ pub struct MaterialDef {
     pub emissive: [u8; 3],
     #[serde(default)]
     pub double_sided: bool,
+    /// Texture (sprite logical path) for meshes with UVs; overrides the
+    /// model's baked default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub texture: Option<String>,
 }
 
 impl Default for MaterialDef {
@@ -74,6 +83,7 @@ impl Default for MaterialDef {
             shading: ShadingDef::Gouraud,
             emissive: [0; 3],
             double_sided: false,
+            texture: None,
         }
     }
 }
@@ -119,6 +129,7 @@ impl MaterialDef {
             shading: self.shading.core(),
             double_sided: self.double_sided,
             anim: None,
+            texture: self.texture.as_deref().map(trino_core::SpriteId::from_path),
         }
     }
 }

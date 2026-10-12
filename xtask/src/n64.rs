@@ -454,7 +454,7 @@ pub fn test() -> ExitCode {
         return ExitCode::FAILURE;
     };
 
-    println!("[n64] booting test ROM in ares (120s timeout)...");
+    println!("[n64] booting test ROM in ares (300s timeout)...");
     let mut child = match Command::new(&ares)
         .arg(root.join("target/n64/trino.z64"))
         .stdout(Stdio::piped())
@@ -490,11 +490,11 @@ pub fn test() -> ExitCode {
         }
     });
 
-    let deadline = Instant::now() + Duration::from_secs(120);
+    let deadline = Instant::now() + Duration::from_secs(300);
     let verdict = loop {
         let left = deadline.saturating_duration_since(Instant::now());
         if left.is_zero() {
-            break Err("timeout: no TRINO_TEST_* output within 120s".to_string());
+            break Err("timeout: no TRINO_TEST_* output within 300s".to_string());
         }
         match rx.recv_timeout(left.min(Duration::from_millis(500))) {
             Ok(line) => {

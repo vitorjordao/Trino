@@ -40,7 +40,13 @@ pub const INSTANCE_STRIDE: u64 = core::mem::size_of::<Instance>() as u64;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Cmd {
     Sprite(DrawCommand),
-    Tris { first: u32, count: u32 },
+    /// `texture`: sprite handle sampled by these triangles (None = vertex
+    /// colors only).
+    Tris {
+        first: u32,
+        count: u32,
+        texture: Option<u32>,
+    },
 }
 
 /// GPU triangle vertex. Must match `shaders.wgsl` (`TriIn`).
@@ -52,7 +58,10 @@ pub struct TriVertex {
     /// Normalized depth (0 = near) written to the depth buffer — real
     /// per-pixel occlusion; the painter batch sort is only a tie-break.
     pub depth: f32,
-    pub _pad: f32,
+    /// Clip-space w: the view depth for textured triangles (perspective-
+    /// correct UVs), 1.0 for vertex-color-only ones (affine, as always).
+    pub w: f32,
+    pub uv: [f32; 2],
 }
 
 pub const TRI_VERTEX_STRIDE: u64 = core::mem::size_of::<TriVertex>() as u64;
@@ -62,8 +71,12 @@ pub const TRI_VERTEX_STRIDE: u64 = core::mem::size_of::<TriVertex>() as u64;
 pub enum Segment {
     /// Sprite instances sharing one texture (one instanced draw call).
     Sprites { sprite: u32, instances: Range<u32> },
-    /// Vertex range into the triangle vertex buffer.
-    Tris { first: u32, count: u32 },
+    /// Vertex range into the triangle vertex buffer, one texture.
+    Tris {
+        first: u32,
+        count: u32,
+        texture: Option<u32>,
+    },
 }
 
 /// Resolve a `draw_sprite` call into a command: apply scale to the sprite's
@@ -141,16 +154,22 @@ pub fn build_segments(commands: &[Cmd]) -> (Vec<Instance>, Vec<Segment>) {
                     }),
                 }
             }
-            Cmd::Tris { first, count } => match segments.last_mut() {
+            Cmd::Tris {
+                first,
+                count,
+                texture,
+            } => match segments.last_mut() {
                 Some(Segment::Tris {
                     first: seg_first,
                     count: seg_count,
-                }) if *seg_first + *seg_count == *first => {
+                    texture: seg_tex,
+                }) if *seg_first + *seg_count == *first && seg_tex == texture => {
                     *seg_count += count;
                 }
                 _ => segments.push(Segment::Tris {
                     first: *first,
                     count: *count,
+                    texture: *texture,
                 }),
             },
         }
@@ -197,12 +216,23 @@ mod tests {
 
     #[test]
     fn tris_interleave_and_merge_with_order_preserved() {
+        let tris = |first, count| Cmd::Tris {
+            first,
+            count,
+            texture: None,
+        };
         let (instances, segments) = build_segments(&[
             cmd(1),
-            Cmd::Tris { first: 0, count: 3 },
-            Cmd::Tris { first: 3, count: 6 },
+            tris(0, 3),
+            tris(3, 6),
             cmd(1),
-            Cmd::Tris { first: 9, count: 3 },
+            tris(9, 3),
+            // Same vertex run continues but with a texture: new segment.
+            Cmd::Tris {
+                first: 12,
+                count: 3,
+                texture: Some(5),
+            },
         ]);
         assert_eq!(instances.len(), 2);
         assert_eq!(
@@ -212,12 +242,25 @@ mod tests {
                     sprite: 1,
                     instances: 0..1
                 },
-                Segment::Tris { first: 0, count: 9 },
+                Segment::Tris {
+                    first: 0,
+                    count: 9,
+                    texture: None
+                },
                 Segment::Sprites {
                     sprite: 1,
                     instances: 1..2
                 },
-                Segment::Tris { first: 9, count: 3 },
+                Segment::Tris {
+                    first: 9,
+                    count: 3,
+                    texture: None
+                },
+                Segment::Tris {
+                    first: 12,
+                    count: 3,
+                    texture: Some(5)
+                },
             ]
         );
     }

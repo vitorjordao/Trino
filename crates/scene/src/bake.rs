@@ -93,6 +93,9 @@ pub fn to_tscn(scene: &Scene, lib: &Library) -> (Vec<u8>, Vec<String>) {
         if p.double_sided {
             flags |= 4;
         }
+        if p.texture.is_some() {
+            flags |= 8;
+        }
         flags |= match p.shading {
             Shading::Gouraud => 0,
             Shading::Flat => 1,
@@ -117,6 +120,7 @@ pub fn to_tscn(scene: &Scene, lib: &Library) -> (Vec<u8>, Vec<String>) {
         f32s(&mut out, &abc);
         let off = item.collider.map_or(trino_core::Vec3::ZERO, |c| c.offset);
         f32s(&mut out, &[off.x, off.y, off.z]);
+        out.extend_from_slice(&p.texture.map_or(0, |t| t.0).to_le_bytes());
         debug_assert_eq!(out.len() - start, TSCN_NODE_BYTES);
     }
     out.extend_from_slice(&strings);

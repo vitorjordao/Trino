@@ -23,6 +23,8 @@
 // ---------------------------------------------------------------------------
 // Boot + logging
 
+static void trino_check_trifmt(void);
+
 void trino_init(void)
 {
     debug_init_isviewer();
@@ -34,6 +36,7 @@ void trino_init(void)
     dfs_init(DFS_DEFAULT_LOCATION);
     audio_init(44100, 4);
     mixer_init(16);
+    trino_check_trifmt();
 }
 
 void trino_log(const char* msg)
@@ -64,9 +67,13 @@ uint32_t trino_ticks_us(void)
 static surface_t trino_zbuf;
 static int trino_zbuf_ready = 0;
 
+// Last frame's framebuffer, for the trino_debug_pixel test hook.
+static surface_t* trino_last_fb = NULL;
+
 void trino_frame_begin(uint32_t rgba8888)
 {
     surface_t* fb = display_get();
+    trino_last_fb = fb;
     if (!trino_zbuf_ready) {
         trino_zbuf = surface_alloc(FMT_RGBA16, display_get_width(), display_get_height());
         trino_zbuf_ready = 1;
@@ -150,7 +157,8 @@ void trino_3d_begin(void)
 // layout change is a behavior-preserving recompile, not silent corruption.
 void trino_tri(const float* pts, const uint8_t* colors, const float* zs)
 {
-    float v[3][8];
+    // Sized past any TRIFMT layout: the offsets come from libdragon.
+    float v[3][16];
     for (int i = 0; i < 3; i++) {
         v[i][TRIFMT_ZBUF_SHADE.pos_offset + 0] = pts[i * 2 + 0];
         v[i][TRIFMT_ZBUF_SHADE.pos_offset + 1] = pts[i * 2 + 1];
@@ -161,6 +169,82 @@ void trino_tri(const float* pts, const uint8_t* colors, const float* zs)
         v[i][TRIFMT_ZBUF_SHADE.shade_offset + 3] = colors[i * 4 + 3] / 255.0f;
     }
     rdpq_triangle(&TRIFMT_ZBUF_SHADE, v[0], v[1], v[2]);
+}
+
+// Startup self-check of the vertex layouts the trino_tri* buffers assume.
+static void trino_check_trifmt(void)
+{
+    const rdpq_trifmt_t* f = &TRIFMT_ZBUF_SHADE_TEX;
+    int top = f->pos_offset + 2;
+    if (f->z_offset + 1 > top) top = f->z_offset + 1;
+    if (f->tex_offset + 3 > top) top = f->tex_offset + 3;
+    if (f->shade_offset + 4 > top) top = f->shade_offset + 4;
+    if (top > 16) {
+        debugf("TRINO_PANIC: TRIFMT_ZBUF_SHADE_TEX needs %d floats\n", top);
+    }
+}
+
+// Textured 3D: select `sprite` as the texture of the next trino_tri_tex
+// calls. One texture per draw lives in TMEM (TILE0, wrapping both ways);
+// the combiner modulates it by the lit vertex color (TEX0 * SHADE), with
+// perspective correction and the RDP's native 3-point filter.
+static float trino_tex_w = 1.0f, trino_tex_h = 1.0f;
+
+void trino_3d_texture(void* sprite)
+{
+    sprite_t* sp = (sprite_t*)sprite;
+    rdpq_set_mode_standard();
+    rdpq_mode_combiner(RDPQ_COMBINER_TEX_SHADE);
+    rdpq_mode_zbuf(true, true);
+    rdpq_mode_persp(true);
+    rdpq_mode_filter(FILTER_BILINEAR);
+    rdpq_mode_alphacompare(1);
+    rdpq_texparms_t parms = {
+        .s.repeats = REPEAT_INFINITE,
+        .t.repeats = REPEAT_INFINITE,
+    };
+    rdpq_sprite_upload(TILE0, sp, &parms);
+    trino_tex_w = (float)sp->width;
+    trino_tex_h = (float)sp->height;
+}
+
+// v: 3 vertices x 10 floats (x, y, z, u, v, w, r, g, b, a), colors 0..1,
+// u/v normalized (scaled to texels here), w = view depth (> 0).
+void trino_tri_tex(const float* in)
+{
+    // Sized past any TRIFMT layout: the offsets come from libdragon.
+    float v[3][16];
+    const rdpq_trifmt_t* fmt = &TRIFMT_ZBUF_SHADE_TEX;
+    for (int i = 0; i < 3; i++) {
+        const float* s = in + i * 10;
+        v[i][fmt->pos_offset + 0] = s[0];
+        v[i][fmt->pos_offset + 1] = s[1];
+        v[i][fmt->z_offset] = s[2];
+        v[i][fmt->tex_offset + 0] = s[3] * trino_tex_w;
+        v[i][fmt->tex_offset + 1] = s[4] * trino_tex_h;
+        v[i][fmt->tex_offset + 2] = 1.0f / s[5];
+        v[i][fmt->shade_offset + 0] = s[6];
+        v[i][fmt->shade_offset + 1] = s[7];
+        v[i][fmt->shade_offset + 2] = s[8];
+        v[i][fmt->shade_offset + 3] = s[9];
+    }
+    rdpq_triangle(fmt, v[0], v[1], v[2]);
+}
+
+// Test hook: RGBA8888 of the last frame at (x, y); 0 if unavailable. Waits
+// for the RDP, then reads the RGBA5551 framebuffer through the uncached
+// segment (the RDP wrote it behind the CPU cache).
+uint32_t trino_debug_pixel(uint32_t x, uint32_t y)
+{
+    if (!trino_last_fb || x >= trino_last_fb->width || y >= trino_last_fb->height) return 0;
+    rspq_wait();
+    const uint8_t* base = UncachedAddr(trino_last_fb->buffer);
+    uint16_t px = *(const uint16_t*)(base + y * trino_last_fb->stride + x * 2);
+    uint32_t r = (px >> 11) & 31, g = (px >> 6) & 31, b = (px >> 1) & 31;
+    r = (r << 3) | (r >> 2);
+    g = (g << 3) | (g >> 2);
+    b = (b << 3) | (b >> 2);
+    return (r << 24) | (g << 16) | (b << 8) | 0xFF;
 }
 
 // ---------------------------------------------------------------------------
@@ -284,12 +368,43 @@ void trino_save_write(const uint8_t* src, uint32_t start, uint32_t len)
 }
 
 // ---------------------------------------------------------------------------
+// Stack watermark (diagnostics): libdragon's main stack is a fixed 64 KB at
+// the top of RDRAM. trino_stack_paint() fills the unused part with a
+// pattern at boot; trino_stack_used() reports the deepest use since.
+
+#define TRINO_STACK_SIZE (64 * 1024)
+#define TRINO_STACK_MAGIC 0x5EEDF00Du
+static uint32_t* trino_stack_low = NULL;
+static uint32_t trino_stack_top = 0;
+
+void trino_stack_paint(void)
+{
+    uint32_t sp;
+    __asm__ volatile("move %0, $sp" : "=r"(sp));
+    // The stack occupies [top - 64K, top); `top` is above the current sp.
+    trino_stack_top = (sp + 0xFFFF) & ~0xFFFFu;
+    trino_stack_low = (uint32_t*)(trino_stack_top - TRINO_STACK_SIZE + 256);
+    for (uint32_t* p = trino_stack_low; (uint32_t)p < sp - 256; p++) {
+        *p = TRINO_STACK_MAGIC;
+    }
+}
+
+uint32_t trino_stack_used(void)
+{
+    if (!trino_stack_low) return 0;
+    uint32_t* p = trino_stack_low;
+    while ((uint32_t)p < trino_stack_top && *p == TRINO_STACK_MAGIC) p++;
+    return trino_stack_top - (uint32_t)p;
+}
+
+// ---------------------------------------------------------------------------
 // Entry: libdragon's crt calls main(); Rust takes over immediately.
 
 void trino_rust_main(void);
 
 int main(void)
 {
+    trino_stack_paint();
     trino_rust_main();
     return 0;
 }

@@ -39,7 +39,7 @@ pub fn to_rust(scene: &Scene, lib: &Library) -> (String, Vec<String>) {
     );
     let _ = writeln!(
         out,
-        "#[allow(unused_imports)]\nuse trino_core::{{\n    Camera3, ClipId, Collider, Color, Fog, Light, Mat34, ModelId, ModelParams, SceneNode,\n    Shading, Shape, Tags, Vec3,\n}};\n"
+        "#[allow(unused_imports)]\nuse trino_core::{{\n    Camera3, ClipId, Collider, Color, Fog, Light, Mat34, ModelId, ModelParams, SceneNode,\n    Shading, Shape, SpriteId, Tags, Vec3,\n}};\n"
     );
     let env = &scene.environment;
     let cam = env.core_camera();
@@ -135,7 +135,7 @@ pub fn to_rust(scene: &Scene, lib: &Library) -> (String, Vec<String>) {
             .collect();
         let _ = writeln!(
             out,
-            "    SceneNode {{\n        name: \"{}\",\n        tags: Tags::List(&[{}]),\n        matrix: Mat34 {{\n            m: [{}],\n        }},\n        model: {},\n        params: ModelParams {{\n            tint: {},\n            emissive: {},\n            shading: Shading::{},\n            double_sided: {},\n            anim: None,\n        }},\n        anim: {},\n        collider: {},\n    }},",
+            "    SceneNode {{\n        name: \"{}\",\n        tags: Tags::List(&[{}]),\n        matrix: Mat34 {{\n            m: [{}],\n        }},\n        model: {},\n        params: ModelParams {{\n            tint: {},\n            emissive: {},\n            shading: Shading::{},\n            double_sided: {},\n            anim: None,\n            texture: {},\n        }},\n        anim: {},\n        collider: {},\n    }},",
             esc(&item.name),
             tags.join(", "),
             rows.join(", "),
@@ -144,6 +144,10 @@ pub fn to_rust(scene: &Scene, lib: &Library) -> (String, Vec<String>) {
             color(p.emissive),
             shading,
             p.double_sided,
+            match p.texture {
+                Some(t) => format!("Some(SpriteId({:#010x}))", t.0),
+                None => "None".into(),
+            },
             anim,
             collider
         );

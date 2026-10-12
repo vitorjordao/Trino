@@ -143,6 +143,23 @@ pub fn gen_all(repo_root: &Path, write_png: crate::castle64_assets::PngWriter) {
     let path = repo_root.join("assets/shared/fonts/trino5x7.png");
     std::fs::create_dir_all(path.parent().unwrap()).expect("create fonts dir");
     write_png(&path, w, h, &rgba);
+
+    // Self-test texture: 16x16, one solid color per quadrant (TL red, TR
+    // green, BL blue, BR white) — `castle64::selftest::textured_3d` probes
+    // each quadrant on screen, catching flipped or unbound textures.
+    let mut tex = Vec::with_capacity(16 * 16 * 4);
+    for y in 0..16 {
+        for x in 0..16 {
+            tex.extend_from_slice(match (x < 8, y < 8) {
+                (true, true) => &[255, 0, 0, 255],
+                (false, true) => &[0, 255, 0, 255],
+                (true, false) => &[0, 0, 255, 255],
+                (false, false) => &[255, 255, 255, 255],
+            });
+        }
+    }
+    let path = repo_root.join("assets/shared/sprites/selftest_quadrants.png");
+    write_png(&path, 16, 16, &tex);
 }
 
 #[cfg(test)]

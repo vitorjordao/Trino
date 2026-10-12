@@ -24,6 +24,33 @@
 #include <3ds.h>
 #include <citro2d.h>
 
+// tri3d.v.pica compiled by picasso and embedded as a C array by
+// `cargo xtask build 3ds` (target/3ds/tri3d_shbin.h).
+#include "tri3d_shbin.h"
+
+// ---------------------------------------------------------------------------
+// Textured 3D (citro3d): citro2d draws untextured triangles fine but cannot
+// map UVs, so textured triangles take a tiny citro3d path of their own:
+// our shader (tri3d.v.pica), immediate-mode vertices, one texture per batch,
+// TEXTURE0 * vertex color. C2D_Flush before, C2D_Prepare after (citro2d's
+// documented way to share the GPU).
+
+static DVLB_s* s_tri3d_dvlb = NULL;
+static shaderProgram_s s_tri3d;
+static int s_tri3d_proj = -1;
+static C3D_Mtx s_proj_top;
+static float s_uv_l, s_uv_t, s_uv_r, s_uv_b;
+
+static void trino_tex3d_init(void)
+{
+    s_tri3d_dvlb = DVLB_ParseFile((u32*)tri3d_shbin, tri3d_shbin_size);
+    shaderProgramInit(&s_tri3d);
+    shaderProgramSetVsh(&s_tri3d, &s_tri3d_dvlb->DVLE[0]);
+    s_tri3d_proj = shaderInstanceGetUniformLocation(s_tri3d.vertexShader, "projection");
+    // Same projection citro2d builds for the top screen.
+    Mtx_OrthoTilt(&s_proj_top, 0.0f, 400.0f, 240.0f, 0.0f, 1.0f, -1.0f, true);
+}
+
 // ---------------------------------------------------------------------------
 // Boot + logging
 
@@ -46,6 +73,7 @@ void trino_init(void)
     C2D_SetTintMode(C2D_TintMult);
     s_top = C2D_CreateScreenTarget(GFX_TOP, GFX_LEFT);
     ndspInit();
+    trino_tex3d_init();
 }
 
 // svcOutputDebugString: shows up in Azahar/Citra logs and GDB.
@@ -223,6 +251,82 @@ int32_t trino_save_store(const uint8_t* src, uint32_t len)
     if (fclose(f) != 0 || put != len) return -1;
     remove(TRINO_SAVE_PATH);
     return rename(TRINO_SAVE_TMP, TRINO_SAVE_PATH) == 0 ? 0 : -1;
+}
+
+// Start a textured batch: bind `sheet`'s image as a wrapping texture.
+void trino_3d_tex_begin(void* sheet)
+{
+    C2D_Flush();
+    C3D_BindProgram(&s_tri3d);
+    C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, s_tri3d_proj, &s_proj_top);
+    C3D_AttrInfo* attr = C3D_GetAttrInfo();
+    AttrInfo_Init(attr);
+    AttrInfo_AddLoader(attr, 0, GPU_FLOAT, 4); // x, y, depth, w
+    AttrInfo_AddLoader(attr, 1, GPU_FLOAT, 2); // u, v
+    AttrInfo_AddLoader(attr, 2, GPU_FLOAT, 4); // r, g, b, a
+    C3D_CullFace(GPU_CULL_NONE); // the engine already culled
+    C2D_Image img = C2D_SpriteSheetGetImage((C2D_SpriteSheet)sheet, 0);
+    C3D_TexSetFilter(img.tex, GPU_LINEAR, GPU_LINEAR);
+    C3D_TexSetWrap(img.tex, GPU_REPEAT, GPU_REPEAT);
+    C3D_TexBind(0, img.tex);
+    // UVs map through the image's sub-texture (tex3ds stores rows flipped
+    // and pads to power-of-two; POT images span the whole texture).
+    s_uv_l = img.subtex->left;
+    s_uv_t = img.subtex->top;
+    s_uv_r = img.subtex->right;
+    s_uv_b = img.subtex->bottom;
+    C3D_TexEnv* env = C3D_GetTexEnv(0);
+    C3D_TexEnvInit(env);
+    C3D_TexEnvSrc(env, C3D_Both, GPU_TEXTURE0, GPU_PRIMARY_COLOR, 0);
+    C3D_TexEnvFunc(env, C3D_Both, GPU_MODULATE);
+    for (int i = 1; i < 6; i++) {
+        C3D_TexEnvInit(C3D_GetTexEnv(i));
+    }
+    C3D_ImmDrawBegin(GPU_TRIANGLES);
+}
+
+// 30 floats: per vertex x, y, depth (citro2d z), u, v, w, r, g, b, a.
+void trino_tri_tex(const float* v)
+{
+    for (int i = 0; i < 3; i++) {
+        const float* s = v + i * 10;
+        C3D_ImmSendAttrib(s[0], s[1], s[2], s[5]);
+        C3D_ImmSendAttrib(s_uv_l + s[3] * (s_uv_r - s_uv_l),
+                          s_uv_t + s[4] * (s_uv_b - s_uv_t), 0.0f, 0.0f);
+        C3D_ImmSendAttrib(s[6], s[7], s[8], s[9]);
+    }
+}
+
+// End the textured batch and hand the GPU back to citro2d.
+void trino_3d_tex_end(void)
+{
+    C3D_ImmDrawEnd();
+    C2D_Prepare();
+}
+
+// Test hook: RGBA8888 of the top screen at (x, y) (landscape, y down) from
+// the LCD back buffer; 0 if unavailable. Waits two vblanks so the frame's
+// display transfer has landed; callers draw the probed frame several times
+// so both LCD buffers hold it. The LCD buffer is column-major, bottom-up.
+uint32_t trino_debug_pixel(uint32_t x, uint32_t y)
+{
+    if (x >= 400 || y >= 240) return 0;
+    gspWaitForVBlank();
+    gspWaitForVBlank();
+    u16 w = 0, h = 0;
+    const u8* fb = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, &w, &h);
+    if (!fb || w != 240) return 0;
+    GSPGPU_FramebufferFormat fmt = gfxGetScreenFormat(GFX_TOP);
+    u32 bpp = fmt == GSP_RGBA8_OES ? 4 : (fmt == GSP_BGR8_OES ? 3 : 0);
+    if (!bpp) return 0;
+    const u8* p = fb + (x * 240 + (239 - y)) * bpp;
+    u32 r, g, b;
+    if (bpp == 4) { // ABGR in memory
+        r = p[3]; g = p[2]; b = p[1];
+    } else {        // BGR
+        r = p[2]; g = p[1]; b = p[0];
+    }
+    return (r << 24) | (g << 16) | (b << 8) | 0xFF;
 }
 
 // ---------------------------------------------------------------------------

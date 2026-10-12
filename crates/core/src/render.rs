@@ -248,6 +248,11 @@ pub struct ModelParams {
     pub double_sided: bool,
     /// Pose for models with a baked skeleton; `None` = bind pose.
     pub anim: Option<AnimRef>,
+    /// Texture for meshes with UVs (overrides the model's baked default;
+    /// `None` = use the default). One texture per draw: on the N64 it must
+    /// fit TMEM (4 KB) and be power-of-two sized to tile. Ignored by meshes
+    /// without UVs.
+    pub texture: Option<SpriteId>,
 }
 
 impl ModelParams {
@@ -257,6 +262,7 @@ impl ModelParams {
         shading: Shading::Gouraud,
         double_sided: false,
         anim: None,
+        texture: None,
     };
 
     /// Default surface with a tint — the common case in game code.
@@ -380,5 +386,14 @@ pub trait Renderer {
     /// Counters of the last finished frame (see [`FrameStats`]).
     fn stats(&self) -> FrameStats {
         FrameStats::default()
+    }
+
+    /// **Test hook** (slow, never per frame): color of the last finished
+    /// frame at internal pixel `(x, y)`, or `None` if this backend cannot
+    /// read back. Lets self-tests check rendering on the real targets (PC
+    /// offscreen readback, N64 framebuffer, 3DS LCD framebuffer — on the
+    /// 3DS draw the probed frame a few times: the LCD is double-buffered).
+    fn read_pixel(&mut self, _x: u32, _y: u32) -> Option<Color> {
+        None
     }
 }

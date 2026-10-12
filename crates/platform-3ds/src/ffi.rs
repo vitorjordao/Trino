@@ -60,6 +60,15 @@ unsafe extern "C" {
     pub fn trino_asset_load(romfs_path: *const c_char, size_out: *mut u32) -> *mut c_void;
     pub fn trino_free(ptr: *mut c_void);
 
+    /// Textured 3D batch (citro3d): bind the sheet's image as a wrapping
+    /// texture, then `trino_tri_tex` per triangle, then `trino_3d_tex_end`.
+    pub fn trino_3d_tex_begin(sheet: *mut c_void);
+    /// 30 floats: per vertex x, y, depth (citro2d z), u, v, w, r, g, b, a.
+    pub fn trino_tri_tex(verts: *const f32);
+    pub fn trino_3d_tex_end();
+    /// Test hook: RGBA8888 of the top screen at (x, y); 0 = unavailable.
+    pub fn trino_debug_pixel(x: u32, y: u32) -> u32;
+
     /// Save file on the SD card: returns its size (0 = none, -1 = error),
     /// copying up to `cap` bytes into `dest`.
     pub fn trino_save_load(dest: *mut u8, cap: u32) -> i32;

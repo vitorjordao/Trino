@@ -104,6 +104,11 @@ pub struct ModelDecl {
     /// Clip names that play once and hold the last frame (default: loop).
     #[serde(default)]
     pub once: Vec<String>,
+    /// Textured model: a sprite logical path (`sprites/brick`) baked as the
+    /// default texture; UVs are kept (glTF `TEXCOORD_0`, generated for fake
+    /// objects). Without it textures are sampled into vertex colors.
+    #[serde(default)]
+    pub texture: Option<String>,
 }
 
 impl ModelDecl {
@@ -113,6 +118,7 @@ impl ModelDecl {
             opts.anim_fps = fps;
         }
         opts.once = self.once.clone();
+        opts.texture = self.texture.clone();
         opts
     }
 }

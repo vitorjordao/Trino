@@ -35,6 +35,9 @@ fn engine_checks_pass_on_pc() {
     for f in assets.fonts {
         renderer.upload_font(trino_core::FontId(f.id), f.table);
     }
+    for m in assets.models {
+        renderer.upload_mesh(trino_core::ModelId(m.id), m.tmdl);
+    }
     for b in assets.blobs {
         platform.insert_blob(trino_core::BlobId(b.id), b.bytes);
     }

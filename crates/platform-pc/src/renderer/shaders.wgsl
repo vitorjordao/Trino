@@ -102,19 +102,23 @@ fn fs_sprite(in: VsOut) -> @location(0) vec4<f32> {
 }
 
 // ---------------------------------------------------------------------------
-// Triangle pass (3D): screen-space vertex-colored triangles produced by the
-// engine's software T&L (trino_core::render3d). Same offscreen target and
+// Triangle pass (3D): screen-space triangles produced by the engine's
+// software T&L (trino_core::render3d): lit vertex colors × one texture per
+// segment (a 1x1 white texture when untextured). Same offscreen target and
 // N64-look quantization as sprites.
 
 struct TriIn {
     @location(0) pos: vec2<f32>,   // pixels, internal resolution
     @location(1) color: vec4<f32>,
     @location(2) depth: f32,       // normalized (0 = near), z-buffer value
+    @location(3) w: f32,           // view depth (textured) or 1.0
+    @location(4) uv: vec2<f32>,
 };
 
 struct TriOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) color: vec4<f32>,
+    @location(1) uv: vec2<f32>,
 };
 
 @vertex
@@ -124,17 +128,44 @@ fn vs_tri(in: TriIn) -> TriOut {
         1.0 - in.pos.y / globals.screen.y * 2.0,
     );
     var out: TriOut;
-    out.clip = vec4<f32>(ndc, in.depth, 1.0);
+    // Scaling by w undoes itself in the perspective divide but makes the
+    // rasterizer interpolate varyings perspective-correctly (textured
+    // triangles carry their view depth; untextured ones w = 1 = affine).
+    out.clip = vec4<f32>(ndc, in.depth, 1.0) * in.w;
     out.color = in.color;
+    out.uv = in.uv;
     return out;
+}
+
+fn wrap_texel(p: vec2<i32>, dims: vec2<i32>) -> vec2<i32> {
+    return ((p % dims) + dims) % dims;
+}
+
+// 3-point sampling for wrapping (tiled) 3D textures.
+fn sample_3point_wrap(uv: vec2<f32>) -> vec4<f32> {
+    let dims = vec2<i32>(textureDimensions(t_sprite));
+    let st = uv * vec2<f32>(dims) - vec2<f32>(0.5, 0.5);
+    let base = floor(st);
+    let f = st - base;
+    let b = vec2<i32>(base);
+    let t00 = textureLoad(t_sprite, wrap_texel(b, dims), 0);
+    let t10 = textureLoad(t_sprite, wrap_texel(b + vec2<i32>(1, 0), dims), 0);
+    let t01 = textureLoad(t_sprite, wrap_texel(b + vec2<i32>(0, 1), dims), 0);
+    let t11 = textureLoad(t_sprite, wrap_texel(b + vec2<i32>(1, 1), dims), 0);
+    if f.x + f.y < 1.0 {
+        return t00 + f.x * (t10 - t00) + f.y * (t01 - t00);
+    }
+    return t11 + (1.0 - f.x) * (t01 - t11) + (1.0 - f.y) * (t10 - t11);
 }
 
 @fragment
 fn fs_tri(in: TriOut) -> @location(0) vec4<f32> {
+    // Sampled unconditionally: textureSample requires uniform control flow.
+    let plain = textureSample(t_sprite, s_sprite, in.uv) * in.color;
     if globals.look == 1u {
-        return quantize_5551(in.color, vec2<u32>(in.clip.xy));
+        return quantize_5551(sample_3point_wrap(in.uv) * in.color, vec2<u32>(in.clip.xy));
     }
-    return in.color;
+    return plain;
 }
 
 // ---------------------------------------------------------------------------

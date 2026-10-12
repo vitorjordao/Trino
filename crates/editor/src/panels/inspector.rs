@@ -256,7 +256,7 @@ fn entity(app: &mut App, ui: &mut egui::Ui, path: &[usize]) {
                                 .size(11.5)
                                 .color(c::TEXT_FAINT),
                         );
-                        if material_editor(ui, def) {
+                        if material_editor(ui, def, &sprite_names) {
                             cmds.push(Cmd::SaveMaterial(name.clone()));
                         }
                     });
@@ -683,7 +683,8 @@ fn override_editor(
 }
 
 /// Material fields. Returns true on change.
-pub fn material_editor(ui: &mut egui::Ui, def: &mut MaterialDef) -> bool {
+/// `textures`: sprite logical paths offered as material textures.
+pub fn material_editor(ui: &mut egui::Ui, def: &mut MaterialDef, textures: &[String]) -> bool {
     let mut changed = false;
     theme::prop(ui, "Tint", |ui| {
         changed |= theme::color_rgba(ui, &mut def.tint)
@@ -710,6 +711,36 @@ pub fn material_editor(ui: &mut egui::Ui, def: &mut MaterialDef) -> bool {
     });
     theme::prop(ui, "Sides", |ui| {
         changed |= ui.checkbox(&mut def.double_sided, "Double-sided").changed();
+    });
+    theme::prop(ui, "Texture", |ui| {
+        let current = def.texture.clone().unwrap_or_else(|| "None".into());
+        egui::ComboBox::from_id_salt("mat-texture")
+            .selected_text(current)
+            .width(ui.available_width() - 8.0)
+            .show_ui(ui, |ui| {
+                if ui
+                    .selectable_label(
+                        def.texture.is_none(),
+                        "None (model default / vertex colors)",
+                    )
+                    .clicked()
+                {
+                    def.texture = None;
+                    changed = true;
+                }
+                for t in textures {
+                    let sel = def.texture.as_deref() == Some(t.as_str());
+                    if ui.selectable_label(sel, t).clicked() && !sel {
+                        def.texture = Some(t.clone());
+                        changed = true;
+                    }
+                }
+            })
+            .response
+            .on_hover_text(
+                "Sampled by models with UVs (manifest `texture = ...`). Power-of-two \
+                 sizes; on N64 one texture must fit 4 KB TMEM (32x32 RGBA16, 64x64 CI4).",
+            );
     });
     changed
 }
@@ -999,6 +1030,7 @@ pub fn primitive_editor(ui: &mut egui::Ui, p: &mut Primitive) -> bool {
 
 fn material_asset(app: &mut App, ui: &mut egui::Ui, logical: &str) {
     let users = app.material_users(logical);
+    let sprite_names: Vec<String> = app.project.sprites.keys().cloned().collect();
     let thumb = app.material_thumbs.get(logical).map(|(_, t)| t.clone());
     let Some(def) = app.lib.materials.get_mut(logical) else {
         theme::empty_state(ui, icon::PALETTE, "Material not found", logical);
@@ -1014,7 +1046,7 @@ fn material_asset(app: &mut App, ui: &mut egui::Ui, logical: &str) {
     big_thumb(ui, thumb.as_ref(), icon::PALETTE);
     let mut changed = false;
     theme::component(ui, "c-mat", icon::PALETTE, c::MATERIAL, "Surface", |ui| {
-        changed = material_editor(ui, def);
+        changed = material_editor(ui, def, &sprite_names);
     });
     card().show(ui, |ui| {
         ui.label(RichText::new(format!("Used by {users} entit{} in this scene", if users == 1 { "y" } else { "ies" })).color(c::TEXT_WEAK));

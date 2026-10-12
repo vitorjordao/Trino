@@ -280,6 +280,11 @@ pub struct MeshData {
     pub colors: Vec<[u8; 4]>,
     pub indices: Vec<u32>,
     pub skeleton: Option<SkeletonData>,
+    /// Texture coordinates (one per vertex) — written as `TXUV` only when
+    /// the model is textured (`texture` set).
+    pub uvs: Vec<[f32; 2]>,
+    /// Default texture (sprite handle) -> `TXID`; UVs are kept iff set.
+    pub texture: Option<u32>,
 }
 
 fn section(blob: &mut Vec<u8>, tag: &[u8; 4], body: &[u8]) {
@@ -366,6 +371,22 @@ impl MeshData {
             }
         }
 
+        if let Some(tex) = self.texture {
+            if self.uvs.len() != self.positions.len() {
+                return Err(format!(
+                    "textured model has {} UVs for {} vertices (export TEXCOORD_0)",
+                    self.uvs.len(),
+                    self.positions.len()
+                ));
+            }
+            let mut body = Vec::with_capacity(self.uvs.len() * 8);
+            for uv in &self.uvs {
+                put_f32s(&mut body, uv);
+            }
+            section(&mut blob, b"TXUV", &body);
+            section(&mut blob, b"TXID", &tex.to_le_bytes());
+        }
+
         // Bounds over the bind pose and every sampled frame, evaluated by
         // the engine's own pose code (what the runtime will draw).
         let (center, radius) = {
@@ -426,6 +447,10 @@ pub struct ModelOptions {
     pub anim_fps: f32,
     /// Clip names that play once (clamp) instead of looping.
     pub once: Vec<String>,
+    /// Textured model: keep UVs and bake this sprite (logical path) as the
+    /// default texture. `None` = vertex colors only (textures are sampled
+    /// into vertex colors at bake time).
+    pub texture: Option<String>,
 }
 
 impl Default for ModelOptions {
@@ -433,6 +458,7 @@ impl Default for ModelOptions {
         ModelOptions {
             anim_fps: 15.0,
             once: Vec::new(),
+            texture: None,
         }
     }
 }
@@ -450,11 +476,15 @@ pub fn bake_model(path: &Path, opts: &ModelOptions) -> Result<Vec<u8>, String> {
         .file_name()
         .map(|n| n.to_string_lossy())
         .unwrap_or_default();
-    let data = if name.ends_with(".prim.ron") {
+    let mut data = if name.ends_with(".prim.ron") {
         crate::primitive::Primitive::load(path)?.build()
     } else {
         load_gltf(path, opts)?
     };
+    data.texture = opts.texture.as_deref().map(trino_core::asset_id);
+    if data.texture.is_none() {
+        data.uvs.clear();
+    }
     data.encode().map_err(|e| err(&e))
 }
 
@@ -661,8 +691,18 @@ fn load_gltf(path: &Path, opts: &ModelOptions) -> Result<MeshData, String> {
                     (c[3] as f32 * factor[3]) as u8,
                 ]
             };
+            // Textured models keep UVs and sample at runtime; the vertex
+            // color is then COLOR_0 or the factor (the texture modulates it).
+            let textured = opts.texture.is_some();
+            let tex_set = pbr.base_color_texture().map_or(0, |i| i.tex_coord());
+            let prim_uv: Vec<[f32; 2]> = reader
+                .read_tex_coords(tex_set)
+                .map(|t| t.into_f32().collect())
+                .unwrap_or_default();
             let prim_col: Vec<[u8; 4]> = if let Some(c) = reader.read_colors(0) {
                 c.into_rgba_u8().collect()
+            } else if textured {
+                vec![fmul([255, 255, 255, 255]); prim_pos.len()]
             } else {
                 let tex = pbr.base_color_texture().and_then(|info| {
                     let image = images.get(info.texture().source().index())?;
@@ -729,6 +769,12 @@ fn load_gltf(path: &Path, opts: &ModelOptions) -> Result<MeshData, String> {
             data.normals
                 .extend(prim_nrm.iter().map(|n| mat_dir(&xform, *n)));
             data.colors.extend(prim_col);
+            if prim_uv.len() == prim_pos.len() {
+                data.uvs.extend(prim_uv);
+            } else {
+                data.uvs
+                    .extend(std::iter::repeat_n([0.0, 0.0], prim_pos.len()));
+            }
             match reader.read_indices() {
                 Some(idx) => data.indices.extend(idx.into_u32().map(|i| base + i)),
                 None => data.indices.extend(base..data.positions.len() as u32),
@@ -925,6 +971,34 @@ pub fn manifest_model_bounds(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn textured_gltf_keeps_texcoords() {
+        // A real-world textured asset (KayKit, CC0): with `texture` the
+        // bake keeps TEXCOORD_0 instead of sampling the atlas into colors.
+        let door = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/shared/models/castle64/door_kaykit.glb");
+        let opts = ModelOptions {
+            texture: Some("sprites/brick".into()),
+            ..ModelOptions::default()
+        };
+        let blob = bake_model(&door, &opts).unwrap();
+        let mesh = Mesh::from_tmdl(&blob).unwrap();
+        assert!(mesh.has_uvs());
+        assert_eq!(
+            mesh.default_texture(),
+            Some(trino_core::SpriteId::from_path("sprites/brick"))
+        );
+        let distinct = (0..mesh.vertex_count)
+            .map(|i| mesh.uv(i))
+            .filter(|uv| uv.x != 0.0 || uv.y != 0.0)
+            .count();
+        assert!(distinct > mesh.vertex_count / 2, "UVs were read");
+        // Untextured bake of the same file: no UV section at all.
+        let plain = bake_model(&door, &ModelOptions::default()).unwrap();
+        assert!(!Mesh::from_tmdl(&plain).unwrap().has_uvs());
+        assert!(plain.len() < blob.len());
+    }
 
     #[test]
     fn affine_inverse_undoes_the_matrix() {

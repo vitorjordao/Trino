@@ -484,6 +484,26 @@ impl Primitive {
             }
         }
 
+        // Planar UVs per vertex from its normal's dominant axis (before the
+        // pivot shift, so a unit face maps 0..1 either way): one
+        // texture repeat per meter in world units (level blocks tile
+        // evenly at any size); kept only for textured models.
+        b.data.uvs = b
+            .data
+            .positions
+            .iter()
+            .zip(&b.data.normals)
+            .map(|(p, n)| {
+                let (ax, ay, az) = (n[0].abs(), n[1].abs(), n[2].abs());
+                if ay >= ax && ay >= az {
+                    [p[0] + 0.5, p[2] + 0.5]
+                } else if ax >= az {
+                    [p[2] + 0.5, 0.5 - p[1]]
+                } else {
+                    [p[0] + 0.5, 0.5 - p[1]]
+                }
+            })
+            .collect();
         if self.pivot == Pivot::Bottom {
             for p in &mut b.data.positions {
                 p[1] -= bottom;
@@ -544,6 +564,27 @@ mod tests {
                 })
             })
             .collect()
+    }
+
+    #[test]
+    fn fake_objects_get_planar_uvs_when_textured() {
+        let mut data = Primitive::default().build();
+        assert_eq!(data.uvs.len(), data.positions.len());
+        // Unit box: every face maps 0..1.
+        assert!(
+            data.uvs
+                .iter()
+                .flatten()
+                .all(|&c| (-1e-6..=1.0 + 1e-6).contains(&c))
+        );
+        data.texture = Some(trino_core::asset_id("sprites/brick"));
+        let blob = data.encode().unwrap();
+        let mesh = Mesh::from_tmdl(&blob).unwrap();
+        assert!(mesh.has_uvs());
+        assert_eq!(
+            mesh.default_texture(),
+            Some(trino_core::SpriteId::from_path("sprites/brick"))
+        );
     }
 
     #[test]

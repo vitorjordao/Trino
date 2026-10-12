@@ -69,6 +69,12 @@ mod n64 {
                 trino_core::Renderer::end_frame(renderer);
             }
         }
+        runtime::log(&format!(
+            "TRINO_STACK:{} bytes t={}ms\n",
+            runtime::stack_used(),
+            runtime::now_us() / 1000
+        ));
+        runtime::log("TRINO_STEP:showcase demo\n");
         // 0b) Collision from scenes + runtime entities: the showcase demo
         // (editor scene exported to code) plays through every coin to the goal.
         {
@@ -76,7 +82,9 @@ mod n64 {
             let mut n = 0u32;
             let result = showcase::run_demo(&mut demo, |g, input| {
                 g.update(input, audio, 1.0 / 60.0);
-                if n % 8 == 0 {
+                // Physics every frame; render 1:32 — the emulators run the
+                // full-scene software T&L well below real time.
+                if n % 32 == 0 {
                     g.render(renderer);
                 }
                 n += 1;
@@ -89,13 +97,21 @@ mod n64 {
                 }
             }
         }
+        runtime::log(&format!(
+            "TRINO_STACK:{} bytes t={}ms\n",
+            runtime::stack_used(),
+            runtime::now_us() / 1000
+        ));
+        runtime::log("TRINO_STEP:baked scene\n");
         // 0c) The same level baked as data ([scenes.showcase] -> TSCN blob),
         // parsed at runtime, must equal the exported code and play through.
         {
             let mut n = 0u32;
             let result = showcase::check_baked(platform, |g, input| {
                 g.update(input, audio, 1.0 / 60.0);
-                if n % 8 == 0 {
+                // Physics every frame; render 1:32 — the emulators run the
+                // full-scene software T&L well below real time.
+                if n % 32 == 0 {
                     g.render(renderer);
                 }
                 n += 1;

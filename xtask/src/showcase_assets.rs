@@ -435,9 +435,62 @@ fn windmill(dir: &Path) {
     write_glb(&dir.join("windmill.glb"), &nodes, &[0], &clips);
 }
 
-pub fn gen_all(repo_root: &Path) {
+/// Deterministic 0..1 hash noise (texture grain).
+fn noise(x: u32, y: u32, seed: u32) -> f32 {
+    let mut h = x.wrapping_mul(374_761_393) ^ y.wrapping_mul(668_265_263) ^ seed;
+    h = (h ^ (h >> 13)).wrapping_mul(1_274_126_177);
+    (h ^ (h >> 16)) as f32 / u32::MAX as f32
+}
+
+/// 32x32 grayscale tiles for textured 3D (material/vertex color tints
+/// them): crate planks and stone bricks. Power-of-two, 2 KB at 16-bit —
+/// fits the N64's 4 KB TMEM.
+fn textures(dir: &Path, write_png: crate::castle64_assets::PngWriter) {
+    let gray = |v: f32| {
+        let g = (v.clamp(0.0, 1.0) * 255.0) as u8;
+        [g, g, g, 255]
+    };
+    let mut planks = Vec::with_capacity(32 * 32 * 4);
+    for y in 0..32u32 {
+        for x in 0..32u32 {
+            let frame = !(2..=29).contains(&x) || !(2..=29).contains(&y);
+            let seam = y % 8 == 0;
+            let grain = 0.78 + 0.12 * noise(x / 3, y, 7) + 0.06 * noise(x, y, 11);
+            let v = if frame {
+                0.62 + 0.08 * noise(x, y, 3)
+            } else if seam {
+                0.45
+            } else {
+                grain
+            };
+            planks.extend_from_slice(&gray(v));
+        }
+    }
+    write_png(&dir.join("tex_planks.png"), 32, 32, &planks);
+
+    let mut bricks = Vec::with_capacity(32 * 32 * 4);
+    for y in 0..32u32 {
+        for x in 0..32u32 {
+            let row = y / 8;
+            let offset = if row % 2 == 0 { 0 } else { 8 };
+            let mortar = y % 8 == 7 || (x + offset) % 16 == 15;
+            let v = if mortar {
+                0.55
+            } else {
+                0.8 + 0.15 * noise(x / 2, y / 2, row * 13 + (x + offset) / 16)
+            };
+            bricks.extend_from_slice(&gray(v));
+        }
+    }
+    write_png(&dir.join("tex_bricks.png"), 32, 32, &bricks);
+}
+
+pub fn gen_all(repo_root: &Path, write_png: crate::castle64_assets::PngWriter) {
     let dir = repo_root.join("assets/shared/models/showcase");
     std::fs::create_dir_all(&dir).unwrap();
     robot(&dir);
     windmill(&dir);
+    let tex = repo_root.join("assets/shared/sprites/textures");
+    std::fs::create_dir_all(&tex).unwrap();
+    textures(&tex, write_png);
 }

@@ -89,6 +89,7 @@ fn node_animation_bakes_to_a_rigid_skeleton() {
         &ModelOptions {
             anim_fps: 10.0,
             once: vec!["wave".into()],
+            ..ModelOptions::default()
         },
     )
     .unwrap();

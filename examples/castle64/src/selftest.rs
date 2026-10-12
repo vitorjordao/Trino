@@ -6,23 +6,91 @@
 //! only, so a pass on a console proves the backend wiring (shim, asset
 //! bake, loader) end to end.
 
-use trino_core::{BlobId, Color, FontId, Platform, Renderer, TextParams, Vec2};
+use trino_core::math3d::{cos, sin};
+use trino_core::{
+    BlobId, Camera3, Color, DEFAULT_LIGHT, FontId, Material, ModelId, ModelParams, Platform,
+    Renderer, Shading, TextParams, Transform3, Vec2, Vec3,
+};
 
 /// The HUD font (also what the checks measure).
 pub const FONT: FontId = FontId::from_path("fonts/trino5x7");
 /// `assets/shared/data/selftest.txt`, declared as `[blobs.selftest]`.
 pub const BLOB: BlobId = BlobId::from_path("blobs/selftest");
 pub const BLOB_CONTENT: &[u8] = b"trino-blob-ok\n";
+/// A 1x1 card textured with four colored quadrants (`[models.selftest_card]`).
+pub const CARD: ModelId = ModelId::from_path("models/selftest_card");
 
 /// Run every engine check; `Err` names the first failure.
 pub fn engine_checks(
     renderer: &mut dyn Renderer,
     platform: &mut dyn Platform,
 ) -> Result<(), &'static str> {
+    // Progress markers make an emulator hang/crash point obvious in logs.
+    platform.log("TRINO_STEP:text\n");
     text(renderer)?;
+    platform.log("TRINO_STEP:blob\n");
     blob(platform)?;
+    platform.log("TRINO_STEP:save\n");
     save(platform)?;
+    platform.log("TRINO_STEP:textured_3d\n");
+    if textured_3d(renderer)? {
+        platform.log("TRINO_STEP:textured_3d probed 4 quadrants\n");
+    } else {
+        platform.log("TRINO_STEP:textured_3d skipped (no read_pixel)\n");
+    }
+    platform.log("TRINO_STEP:engine ok\n");
     Ok(())
+}
+
+/// Textured 3D: draw the quadrant card face-on and read back one pixel per
+/// quadrant. Catches unbound textures, flipped/rotated UVs and broken
+/// texture paths per backend. Skipped (Ok) where `read_pixel` is
+/// unsupported (returns `Ok(false)`; `Ok(true)` = probed). Uses `caps()`
+/// for the screen size (console profiles).
+pub fn textured_3d(renderer: &mut dyn Renderer) -> Result<bool, &'static str> {
+    let caps = *renderer.caps();
+    let screen = Vec2::new(caps.screen_width as f32, caps.screen_height as f32);
+    let camera = Camera3 {
+        eye: Vec3::new(0.0, 0.0, -1.2),
+        target: Vec3::ZERO,
+        fov_y: 60.0 * core::f32::consts::PI / 180.0,
+    };
+    let params = ModelParams {
+        shading: Shading::Unlit,
+        ..ModelParams::DEFAULT
+    };
+    // Several identical frames: the 3DS LCD is double-buffered.
+    for _ in 0..3 {
+        renderer.begin_frame(Color::BLACK);
+        renderer.set_camera(&camera);
+        renderer.set_light(&DEFAULT_LIGHT);
+        renderer.draw_model(CARD, &Transform3::default(), Material::VertexLit, &params);
+        renderer.end_frame();
+    }
+    // Project probe points exactly like the T&L does.
+    let view = camera.view();
+    let half = camera.fov_y * 0.5;
+    let focal = cos(half) / sin(half) * screen.y * 0.5;
+    // Front face at z = -0.05; planar UVs u = x + 0.5, v = 0.5 - y.
+    let probes = [
+        (Vec3::new(-0.25, 0.25, -0.05), [255, 0, 0]), // u,v = .25,.25: TL red
+        (Vec3::new(0.25, 0.25, -0.05), [0, 255, 0]),  // TR green
+        (Vec3::new(-0.25, -0.25, -0.05), [0, 0, 255]), // BL blue
+        (Vec3::new(0.25, -0.25, -0.05), [255, 255, 255]), // BR white
+    ];
+    for (world, want) in probes {
+        let v = view.transform_point(world);
+        let x = screen.x * 0.5 + v.x * focal / v.z;
+        let y = screen.y * 0.5 - v.y * focal / v.z;
+        let Some(got) = renderer.read_pixel(x as u32, y as u32) else {
+            return Ok(false); // backend cannot read back
+        };
+        let close = |a: u8, b: u8| (a as i32 - b as i32).abs() <= 48;
+        if !(close(got.r, want[0]) && close(got.g, want[1]) && close(got.b, want[2])) {
+            return Err("textured 3D: wrong color in a texture quadrant");
+        }
+    }
+    Ok(true)
 }
 
 /// Bitmap text: the font's glyph table loaded (metrics) and drawing emits

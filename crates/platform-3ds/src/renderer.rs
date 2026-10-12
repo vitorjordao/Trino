@@ -37,6 +37,9 @@ pub struct N3dsRenderer {
     /// Current model batch: consecutive `draw_model` calls depth-sort
     /// together; flushed on sprite draws, camera changes and `end_frame`.
     pending_tris: Vec<ScreenTri>,
+    /// Texture per pending triangle (parallel; filled once a textured draw
+    /// joins the batch).
+    pending_tex: Vec<Option<u32>>,
     /// Depth for the next sprite draw (background before 3D, HUD after).
     sprite_depth: f32,
     camera: Camera3,
@@ -53,6 +56,7 @@ impl N3dsRenderer {
             frame_stats: FrameStats::default(),
             last_stats: FrameStats::default(),
             pending_tris: Vec::new(),
+            pending_tex: Vec::new(),
             sprite_depth: SPRITE_DEPTH_BG,
             camera: Camera3::default(),
             light: DEFAULT_LIGHT,
@@ -62,37 +66,67 @@ impl N3dsRenderer {
 
     /// Depth-sort (painter tie-break) and rasterize the pending model batch;
     /// each triangle carries a citro2d depth from its view-space nearness so
-    /// the GPU depth test resolves overlap per pixel-ish (per triangle).
+    /// the GPU depth test resolves overlap. Batches with textured draws are
+    /// grouped by texture (stable: depth order within a texture); textured
+    /// groups go through the citro3d path (per-vertex depth, perspective-
+    /// correct UVs).
     fn flush_model_batch(&mut self) {
         if self.pending_tris.is_empty() {
             return;
         }
-        self.pending_tris.sort_unstable_by(|a, b| {
-            b.depth
-                .partial_cmp(&a.depth)
-                .unwrap_or(core::cmp::Ordering::Equal)
-        });
         self.frame_stats.tris += self.pending_tris.len() as u32;
-        unsafe { ffi::trino_3d_begin() }
-        for tri in &self.pending_tris {
-            let pts = [
-                tri.pts[0].x,
-                tri.pts[0].y,
-                tri.pts[1].x,
-                tri.pts[1].y,
-                tri.pts[2].x,
-                tri.pts[2].y,
-            ];
-            let mut colors = [0u8; 12];
-            for (i, c) in tri.colors.iter().enumerate() {
-                colors[i * 4..i * 4 + 4].copy_from_slice(&[c.r, c.g, c.b, c.a]);
+        let textured = self.pending_tex.iter().any(Option::is_some);
+        if !textured {
+            self.pending_tris.sort_unstable_by(|a, b| {
+                b.depth
+                    .partial_cmp(&a.depth)
+                    .unwrap_or(core::cmp::Ordering::Equal)
+            });
+            unsafe { ffi::trino_3d_begin() }
+            for tri in &self.pending_tris {
+                emit_tri(tri);
             }
-            // z normalizado (0 perto..1 longe) -> nearness na banda 3D.
-            let avg = (tri.z[0] + tri.z[1] + tri.z[2]) * (1.0 / 3.0);
-            let depth = TRI_DEPTH_BASE + TRI_DEPTH_RANGE * (1.0 - avg).clamp(0.0, 1.0);
-            unsafe { ffi::trino_tri(pts.as_ptr(), colors.as_ptr(), depth) }
+        } else {
+            let mut order: Vec<(Option<u32>, ScreenTri)> = self
+                .pending_tex
+                .iter()
+                .copied()
+                .zip(self.pending_tris.iter().copied())
+                .collect();
+            order.sort_by(|a, b| {
+                b.1.depth
+                    .partial_cmp(&a.1.depth)
+                    .unwrap_or(core::cmp::Ordering::Equal)
+            });
+            order.sort_by_key(|(t, _)| t.map_or(0u64, |t| t as u64 + 1));
+            // Sorted by texture: open a citro3d batch per textured group.
+            let mut current: Option<Option<u32>> = None;
+            let mut open = false;
+            unsafe { ffi::trino_3d_begin() }
+            for (tex, tri) in &order {
+                if current != Some(*tex) {
+                    if open {
+                        unsafe { ffi::trino_3d_tex_end() }
+                        open = false;
+                    }
+                    if let Some(entry) = tex.and_then(|t| self.sprites.get(&t)) {
+                        unsafe { ffi::trino_3d_tex_begin(entry.ptr) }
+                        open = true;
+                    }
+                    current = Some(*tex);
+                }
+                if open {
+                    emit_tri_tex(tri);
+                } else {
+                    emit_tri(tri);
+                }
+            }
+            if open {
+                unsafe { ffi::trino_3d_tex_end() }
+            }
         }
         self.pending_tris.clear();
+        self.pending_tex.clear();
         // Sprites depois do 3D (HUD) ficam por cima da banda 3D.
         self.sprite_depth = SPRITE_DEPTH_HUD;
     }
@@ -122,6 +156,50 @@ impl Default for N3dsRenderer {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Normalized depth (0 near .. 1 far) -> nearness inside the 3D band.
+fn band_depth(z: f32) -> f32 {
+    TRI_DEPTH_BASE + TRI_DEPTH_RANGE * (1.0 - z).clamp(0.0, 1.0)
+}
+
+/// citro2d gouraud triangle (one depth per triangle: citro2d's limit).
+fn emit_tri(tri: &ScreenTri) {
+    let pts = [
+        tri.pts[0].x,
+        tri.pts[0].y,
+        tri.pts[1].x,
+        tri.pts[1].y,
+        tri.pts[2].x,
+        tri.pts[2].y,
+    ];
+    let mut colors = [0u8; 12];
+    for (i, c) in tri.colors.iter().enumerate() {
+        colors[i * 4..i * 4 + 4].copy_from_slice(&[c.r, c.g, c.b, c.a]);
+    }
+    let avg = (tri.z[0] + tri.z[1] + tri.z[2]) * (1.0 / 3.0);
+    unsafe { ffi::trino_tri(pts.as_ptr(), colors.as_ptr(), band_depth(avg)) }
+}
+
+/// citro3d textured triangle (per-vertex depth, perspective-correct UVs).
+fn emit_tri_tex(tri: &ScreenTri) {
+    let mut v = [0f32; 30];
+    for i in 0..3 {
+        let c = tri.colors[i];
+        v[i * 10..i * 10 + 10].copy_from_slice(&[
+            tri.pts[i].x,
+            tri.pts[i].y,
+            band_depth(tri.z[i]),
+            tri.uv[i].x,
+            tri.uv[i].y,
+            tri.w[i],
+            c.r as f32 / 255.0,
+            c.g as f32 / 255.0,
+            c.b as f32 / 255.0,
+            c.a as f32 / 255.0,
+        ]);
+    }
+    unsafe { ffi::trino_tri_tex(v.as_ptr()) }
 }
 
 fn pack_color(c: Color) -> u32 {
@@ -205,6 +283,10 @@ impl Renderer for N3dsRenderer {
         };
         let mesh = Mesh::from_tmdl(tmdl).expect("validated on register");
         self.frame_stats.models += 1;
+        let texture = mesh
+            .texture_for(params)
+            .filter(|t| self.sprites.contains_key(&t.0));
+        let before = self.pending_tris.len();
         let pending = &mut self.pending_tris;
         trino_core::render3d::tessellate(
             &mesh,
@@ -215,6 +297,12 @@ impl Renderer for N3dsRenderer {
             Vec2::new(400.0, 240.0),
             &mut |tri| pending.push(tri),
         );
+        let added = self.pending_tris.len() - before;
+        if texture.is_some() || !self.pending_tex.is_empty() {
+            self.pending_tex.resize(before, None);
+            self.pending_tex
+                .extend(core::iter::repeat_n(texture.map(|t| t.0), added));
+        }
     }
 
     fn end_frame(&mut self) {
@@ -248,5 +336,10 @@ impl Renderer for N3dsRenderer {
 
     fn stats(&self) -> FrameStats {
         self.last_stats
+    }
+
+    fn read_pixel(&mut self, x: u32, y: u32) -> Option<Color> {
+        let c = unsafe { ffi::trino_debug_pixel(x, y) };
+        (c != 0).then(|| Color::rgba((c >> 24) as u8, (c >> 16) as u8, (c >> 8) as u8, c as u8))
     }
 }

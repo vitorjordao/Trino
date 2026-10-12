@@ -33,6 +33,11 @@ pub enum Dialog {
     Export {
         out: String,
     },
+    /// Array: copies of the active entity, `step` apart.
+    Array {
+        count: usize,
+        step: [f32; 3],
+    },
 }
 
 pub enum Outcome {
@@ -80,6 +85,13 @@ impl Dialog {
         Dialog::MakePrefab { path, name }
     }
 
+    pub fn array() -> Self {
+        Dialog::Array {
+            count: 4,
+            step: [2.0, 0.0, 0.0],
+        }
+    }
+
     pub fn new_scene() -> Self {
         Dialog::NewScene {
             name: String::new(),
@@ -104,6 +116,7 @@ impl Dialog {
             Dialog::MakePrefab { .. } => format!("{}  Create prefab", icon::PACKAGE),
             Dialog::NewScene { .. } => format!("{}  New scene", icon::FILE_PLUS),
             Dialog::Export { .. } => format!("{}  Export scene to game code", icon::CODE),
+            Dialog::Array { .. } => format!("{}  Array", icon::DOTS_THREE),
         }
     }
 
@@ -166,6 +179,14 @@ impl Dialog {
                     name_field(ui, name, "level-2");
                     valid(name)
                 }
+                Dialog::Array { count, step } => {
+                    ui.label(RichText::new("Copies of the active entity as its next siblings, each one step further (parent's local units).").size(12.0).color(c::TEXT_WEAK));
+                    theme::prop(ui, "Copies", |ui| {
+                        ui.add(egui::DragValue::new(count).range(1..=256));
+                    });
+                    theme::vec3_row(ui, "Step", step, 0.05, "");
+                    true
+                }
                 Dialog::Export { out } => {
                     ui.label(RichText::new("Writes the scene as no_std Rust data (trino_core::SceneNode) that runs on PC, N64 and 3DS. Include it from a game crate.").size(12.0).color(c::TEXT_WEAK));
                     theme::prop(ui, "File", |ui| {
@@ -203,6 +224,10 @@ impl Dialog {
             Dialog::MakePrefab { path, name } => Cmd::MakePrefab(path.clone(), name.clone()),
             Dialog::NewScene { name } => Cmd::NewScene(name.clone()),
             Dialog::Export { out } => Cmd::Export(PathBuf::from(out.trim())),
+            Dialog::Array { count, step } => Cmd::ArrayCopies {
+                count: *count,
+                step: *step,
+            },
         }
     }
 }

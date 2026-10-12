@@ -154,13 +154,15 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
     let mut expand_toggle: Option<(Vec<usize>, bool)> = None;
     let mut rename_commit: Option<(Vec<usize>, String)> = None;
     let selected = app.doc.selected.clone();
+    let extra = app.doc.extra.clone();
     let row_h = 24.0;
     for row in &rows {
         let (rect, resp) = ui.allocate_exact_size(
             Vec2::new(ui.available_width(), row_h),
             Sense::click_and_drag(),
         );
-        let is_sel = !row.ghost && selected.as_ref() == Some(&row.path);
+        let is_sel =
+            !row.ghost && (selected.as_ref() == Some(&row.path) || extra.contains(&row.path));
         let id = ui.id().with(("row", &row.path, row.ghost, &row.name));
         let t_sel = ui
             .ctx()
@@ -325,7 +327,12 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
             continue;
         }
         if resp.clicked() {
-            app.cmds.push(Cmd::Select(Some(row.path.clone())));
+            let additive = ui.input(|i| i.modifiers.shift || i.modifiers.command);
+            app.cmds.push(if additive {
+                Cmd::ToggleSelect(row.path.clone())
+            } else {
+                Cmd::Select(Some(row.path.clone()))
+            });
         }
         if resp.double_clicked() {
             app.renaming = Some((row.path.clone(), row.name.clone()));

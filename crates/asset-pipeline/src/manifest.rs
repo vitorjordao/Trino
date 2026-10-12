@@ -202,6 +202,32 @@ pub mod edit {
         Ok(out)
     }
 
+    /// Append `[sprites.<name>]` with `file` and an explicit N64 format
+    /// (the N64 has no safe default). Errors if the name exists.
+    pub fn add_sprite(text: &str, name: &str, file: &str, n64: &str) -> Result<String, String> {
+        if has_table(text, "sprites", name) {
+            return Err(format!("sprite `{name}` already exists in the manifest"));
+        }
+        let mut out = text.trim_end().to_string();
+        out.push_str(&format!(
+            "\n\n[sprites.{name}]\nfile = \"{file}\"\nformats = {{ n64 = \"{n64}\" }}\n"
+        ));
+        Ok(out)
+    }
+
+    /// A valid logical name from a file stem (`My Rock 2` -> `my-rock-2`).
+    pub fn name_from_stem(stem: &str) -> String {
+        let mut out = String::new();
+        for c in stem.chars() {
+            if c.is_ascii_alphanumeric() {
+                out.push(c.to_ascii_lowercase());
+            } else if !out.ends_with('-') && !out.is_empty() {
+                out.push('-');
+            }
+        }
+        out.trim_end_matches('-').to_string()
+    }
+
     /// Point `[models.<name>]` at a new `file` (placeholder → real art).
     pub fn set_model_file(text: &str, name: &str, file: &str) -> Result<String, String> {
         let header = format!("[models.{name}]");
@@ -259,6 +285,13 @@ pub mod edit {
             let parsed: super::super::Manifest = toml::from_str(&moved).unwrap();
             assert_eq!(parsed.models["crate"].file, "models/crate.glb");
             assert!(valid_name("rock-02") && !valid_name("Rock") && !valid_name(""));
+            let with_sprite =
+                add_sprite(&moved, "bark", "sprites/imported/bark.png", "CI8").unwrap();
+            let parsed: super::super::Manifest = toml::from_str(&with_sprite).unwrap();
+            assert_eq!(parsed.sprites["bark"].formats["n64"], "CI8");
+            assert!(add_sprite(&with_sprite, "bark", "x", "CI4").is_err());
+            assert_eq!(name_from_stem("My Rock (2)"), "my-rock-2");
+            assert!(valid_name(&name_from_stem("KayKit_Door v1")));
         }
     }
 }

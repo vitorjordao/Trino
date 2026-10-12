@@ -478,6 +478,41 @@ fn entity(app: &mut App, ui: &mut egui::Ui, path: &[usize]) {
                         "Overrides (this instance only)",
                     );
                     override_editor(ui, root, "", inst, &material_names);
+                    if !inst.overrides.is_empty()
+                        && ui
+                            .button(format!("{} Apply overrides to prefab", icon::UPLOAD_SIMPLE))
+                            .on_hover_text(
+                                "Write these overrides into the prefab itself: every \
+                                 instance gets them, this one's overrides are cleared",
+                            )
+                            .clicked()
+                    {
+                        cmds.push(Cmd::ApplyOverrides(path.to_vec()));
+                    }
+                    // In-place prefab editing: the source, from the scene.
+                    egui::CollapsingHeader::new(
+                        RichText::new(format!(
+                            "{}  Edit prefab parts in place (all instances)",
+                            icon::PENCIL_SIMPLE
+                        ))
+                        .color(c::PREFAB),
+                    )
+                    .id_salt("prefab-in-place")
+                    .show(ui, |ui| {
+                        ui.label(
+                            RichText::new(
+                                "Changes write prefabs/… on the spot — every instance in \
+                                 every scene follows.",
+                            )
+                            .size(11.5)
+                            .color(c::TEXT_FAINT),
+                        );
+                        if let Some(prefab) = lib.prefabs.get_mut(&inst.path)
+                            && part_source_editor(ui, &mut prefab.root, "", &material_names)
+                        {
+                            cmds.push(Cmd::SavePrefab(inst.path.clone()));
+                        }
+                    });
                 } else {
                     ui.label(
                         RichText::new(format!("{} prefab not found", icon::WARNING)).color(c::WARN),
@@ -647,6 +682,63 @@ fn entity(app: &mut App, ui: &mut egui::Ui, path: &[usize]) {
                 ui.ctx().copy_text(text);
             }
         });
+}
+
+/// The prefab's own parts (in-place editing): transform and material per
+/// part, recursively. Returns true when something changed.
+fn part_source_editor(
+    ui: &mut egui::Ui,
+    e: &mut Entity,
+    target: &str,
+    materials: &[String],
+) -> bool {
+    let mut changed = false;
+    let label = if target.is_empty() {
+        format!("{} (root)", e.name)
+    } else {
+        target.to_string()
+    };
+    egui::CollapsingHeader::new(RichText::new(label).size(12.0))
+        .id_salt(("part-src", target))
+        .show(ui, |ui| {
+            let before = e.transform;
+            theme::vec3_row(ui, "Position", &mut e.transform.pos, 0.05, "");
+            theme::vec3_row(ui, "Rotation", &mut e.transform.rot, 0.5, "°");
+            theme::vec3_row(ui, "Scale", &mut e.transform.scale, 0.01, "");
+            changed |= e.transform != before;
+            if let Some(m) = &mut e.model {
+                theme::prop(ui, "Material", |ui| {
+                    let cur = m.material.clone().unwrap_or_else(|| "Default".into());
+                    egui::ComboBox::from_id_salt(("part-mat", target))
+                        .selected_text(cur)
+                        .show_ui(ui, |ui| {
+                            if ui
+                                .selectable_label(m.material.is_none(), "Default")
+                                .clicked()
+                            {
+                                m.material = None;
+                                changed = true;
+                            }
+                            for name in materials {
+                                let sel = m.material.as_deref() == Some(name.as_str());
+                                if ui.selectable_label(sel, name).clicked() && !sel {
+                                    m.material = Some(name.clone());
+                                    changed = true;
+                                }
+                            }
+                        });
+                });
+            }
+        });
+    for child in &mut e.children {
+        let t = if target.is_empty() {
+            child.name.clone()
+        } else {
+            format!("{target}/{}", child.name)
+        };
+        changed |= part_source_editor(ui, child, &t, materials);
+    }
+    changed
 }
 
 /// Per-instance overrides: one row per prefab part with a model.

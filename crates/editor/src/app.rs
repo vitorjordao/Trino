@@ -100,6 +100,35 @@ pub enum Cmd {
     Save,
     Undo,
     Redo,
+    /// Ctrl/Shift+click: add to / remove from the selection.
+    ToggleSelect(Vec<usize>),
+    SelectMany(Vec<Vec<usize>>),
+    SelectAll,
+    /// Delete / duplicate everything selected.
+    DeleteSelection,
+    DuplicateSelection,
+    Align(usize, crate::ops::AlignTo),
+    Distribute(usize),
+    /// Array: `count` copies of the active entity, `step` apart.
+    ArrayCopies {
+        count: usize,
+        step: [f32; 3],
+    },
+    /// Drop the selection onto the surface below (End).
+    DropToSurface,
+    /// Push an instance's overrides into its prefab.
+    ApplyOverrides(Vec<usize>),
+    /// The in-memory library prefab changed (in-place editing): write it.
+    SavePrefab(String),
+    PlayHere,
+    StopPlayHere,
+    /// Files dropped on the window: models / sprites to import.
+    ImportFiles(Vec<PathBuf>),
+    FocusTab(Tab),
+    /// Scene tabs: bring open scene `n` (index into `open_docs`) to front,
+    /// or close it.
+    SwitchScene(usize),
+    CloseScene(usize),
 }
 
 pub struct App {
@@ -108,6 +137,10 @@ pub struct App {
     pub doc: Doc,
     /// Scene document (and its camera) parked while a prefab is open.
     pub parked: Option<Doc>,
+    /// Other open scenes (tabs), not in front.
+    pub open_docs: Vec<Doc>,
+    /// Command palette (Ctrl+K): open + query.
+    pub palette: Option<String>,
     parked_cam: Option<crate::gizmo::OrbitCam>,
     pub asset_sel: Option<AssetSel>,
     pub resolved: Resolved,
@@ -213,15 +246,19 @@ impl App {
             }
         };
         let mut doc = Doc::scene(scene_path, scene, text);
-        // Dev hook (screenshots/tests): TRINO_EDITOR_SELECT=<entity name>
-        // selects it and frames it in the Scene view.
+        // Dev hook (screenshots/tests): TRINO_EDITOR_SELECT=<name>[,<name>…]
+        // selects them (the first is active) and frames it in the Scene view.
         let mut cmds = Vec::new();
-        if let Ok(name) = std::env::var("TRINO_EDITOR_SELECT") {
-            doc.scene.walk(|p, e| {
-                if e.name == name && doc.selected.is_none() {
-                    doc.selected = Some(p.to_vec());
-                }
-            });
+        if let Ok(names) = std::env::var("TRINO_EDITOR_SELECT") {
+            let mut picked: Vec<Vec<usize>> = Vec::new();
+            for name in names.split(',').map(str::trim) {
+                doc.scene.walk(|p, e| {
+                    if e.name == name && !picked.iter().any(|q| q == p) {
+                        picked.push(p.to_vec());
+                    }
+                });
+            }
+            doc.select_many(picked);
             if let Some(p) = &doc.selected {
                 cmds.push(Cmd::Focus(p.clone()));
             }
@@ -242,6 +279,7 @@ impl App {
                 cmds.push(Cmd::EditPrefab(l.to_string()));
             }
             _ if open == "fake-object" => cmds.push(Cmd::Open(Dialog::fake_object(&project))),
+            _ if open == "array" => cmds.push(Cmd::Open(Dialog::array())),
             _ => {}
         }
 
@@ -360,6 +398,9 @@ impl App {
             show_shortcuts: false,
             dock: Some(default_dock()),
             focus_tab: None,
+            open_docs: Vec::new(),
+            // Dev hook: TRINO_EDITOR_PALETTE=<query> opens the palette.
+            palette: std::env::var("TRINO_EDITOR_PALETTE").ok(),
             play_here_on_start: std::env::var("TRINO_EDITOR_PLAY").as_deref() == Ok("here"),
         }
     }
@@ -374,6 +415,7 @@ impl App {
             resolved: &self.resolved,
             project: &self.project,
             selected: self.doc.selected.as_deref(),
+            extra: &self.doc.extra,
             rev: self.rev,
             time: self.time(),
             animate: self.animate,
@@ -563,10 +605,169 @@ impl App {
     fn run(&mut self, cmd: Cmd, ctx: &egui::Context) -> Result<(), String> {
         match cmd {
             Cmd::Select(path) => {
-                self.doc.selected = path;
+                self.doc.select_only(path);
                 if self.doc.selected.is_some() {
                     self.asset_sel = None;
                 }
+            }
+            Cmd::ToggleSelect(path) => {
+                self.doc.toggle(path);
+                self.asset_sel = None;
+            }
+            Cmd::SelectMany(paths) => {
+                let n = paths.len();
+                self.doc.select_many(paths);
+                if n > 0 {
+                    self.asset_sel = None;
+                    self.log.info(format!("selected {n} entities"));
+                }
+            }
+            Cmd::SelectAll => {
+                let mut all = Vec::new();
+                for (i, _) in self.doc.scene.entities.iter().enumerate() {
+                    all.push(vec![i]);
+                }
+                self.doc.select_many(all);
+            }
+            Cmd::DeleteSelection => {
+                let mut sel = self.doc.selection();
+                if self.doc.is_prefab() {
+                    sel.retain(|p| p != &[0]);
+                }
+                let gone = crate::ops::remove_many(&mut self.doc.scene, &sel);
+                self.doc.select_only(None);
+                self.log.info(format!("deleted {}", gone.join(", ")));
+            }
+            Cmd::DuplicateSelection => {
+                let mut sel = self.doc.selection();
+                if self.doc.is_prefab() {
+                    sel.retain(|p| p != &[0]);
+                }
+                // Back to front so earlier paths stay valid.
+                sel.sort();
+                let mut new = Vec::new();
+                for path in sel.iter().rev() {
+                    let copies = crate::ops::array(&mut self.doc.scene, path, 1, [1.0, 0.0, 0.0]);
+                    new.extend(copies);
+                }
+                self.doc.select_many(new);
+            }
+            Cmd::Align(axis, to) => {
+                let sel = self.doc.selection();
+                let n = crate::ops::align(&mut self.doc.scene, &sel, axis, to);
+                if n == 0 {
+                    return Err("align needs at least two selected entities".into());
+                }
+            }
+            Cmd::Distribute(axis) => {
+                let sel = self.doc.selection();
+                let n = crate::ops::distribute(&mut self.doc.scene, &sel, axis);
+                if n == 0 {
+                    return Err("distribute needs at least three selected entities".into());
+                }
+            }
+            Cmd::ArrayCopies { count, step } => {
+                let sel = self
+                    .doc
+                    .selected
+                    .clone()
+                    .ok_or("select an entity to array")?;
+                let new = crate::ops::array(&mut self.doc.scene, &sel, count, step);
+                self.log.info(format!("array: {} copies", new.len()));
+                let mut all = vec![sel];
+                all.extend(new);
+                self.doc.select_many(all);
+            }
+            Cmd::DropToSurface => {
+                self.resolved = resolve(&self.doc.scene, &self.lib, self.time());
+                let boxes: Vec<(Vec<usize>, trino_core::Aabb)> = self
+                    .resolved
+                    .items
+                    .iter()
+                    .filter_map(|item| {
+                        let (id, _) = item.model.as_ref()?;
+                        let m = self.project.model_by_id(*id)?;
+                        let local = trino_core::Aabb::new(
+                            trino_core::Vec3::new(m.min[0], m.min[1], m.min[2]),
+                            trino_core::Vec3::new(m.max[0], m.max[1], m.max[2]),
+                        );
+                        Some((item.owner.clone(), local.transformed(&item.matrix)))
+                    })
+                    .collect();
+                for path in self.doc.selection() {
+                    let own = boxes
+                        .iter()
+                        .filter(|(o, _)| o.starts_with(&path))
+                        .map(|(_, b)| *b)
+                        .reduce(|a, b| a.union(&b));
+                    let others: Vec<trino_core::Aabb> = boxes
+                        .iter()
+                        .filter(|(o, _)| !o.starts_with(&path))
+                        .map(|(_, b)| *b)
+                        .collect();
+                    crate::ops::drop_to_surface(&mut self.doc.scene, &path, own, &others);
+                }
+            }
+            Cmd::ApplyOverrides(path) => {
+                let (logical, prefab, stale) = self
+                    .lib
+                    .apply_overrides_to_prefab(&mut self.doc.scene, &path)?;
+                let file = Library::prefab_file(Path::new(""), &logical);
+                self.write_echo(file, prefab.to_ron())?;
+                self.mark_lib_changed();
+                for s in stale {
+                    self.log.warn(format!("dropped stale override `{s}`"));
+                }
+                self.log.toast(
+                    Level::Ok,
+                    format!(
+                        "{} overrides applied to {logical} — every instance follows",
+                        icon::PACKAGE
+                    ),
+                );
+            }
+            Cmd::SavePrefab(logical) => {
+                let prefab = self
+                    .lib
+                    .prefabs
+                    .get(&logical)
+                    .ok_or("unknown prefab")?
+                    .clone();
+                let file = Library::prefab_file(Path::new(""), &logical);
+                self.write_echo(file, prefab.to_ron())?;
+                self.mark_lib_changed();
+            }
+            Cmd::PlayHere => self.start_play_here(),
+            Cmd::StopPlayHere => self.stop_play_here(),
+            Cmd::ImportFiles(files) => {
+                for f in files {
+                    match self.import_file(&f) {
+                        Ok(msg) => self.log.toast(Level::Ok, msg),
+                        Err(e) => self.log.toast(Level::Error, e),
+                    }
+                }
+            }
+            Cmd::FocusTab(tab) => self.focus_tab = Some(tab),
+            Cmd::SwitchScene(i) => {
+                if i >= self.open_docs.len() {
+                    return Ok(());
+                }
+                if self.doc.is_prefab() {
+                    self.run(Cmd::ExitPrefab, ctx)?;
+                }
+                std::mem::swap(&mut self.doc, &mut self.open_docs[i]);
+                let cam = self.doc.scene.environment.core_camera();
+                self.scene_view.cam.look_from(cam.eye, cam.target);
+            }
+            Cmd::CloseScene(i) => {
+                if i >= self.open_docs.len() {
+                    return Ok(());
+                }
+                if self.open_docs[i].dirty() {
+                    self.open_docs[i].save()?;
+                }
+                let d = self.open_docs.remove(i);
+                self.log.info(format!("closed {}", d.path.display()));
             }
             Cmd::SelectAsset(a) => {
                 self.asset_sel = Some(a);
@@ -806,12 +1007,17 @@ impl App {
                 if self.doc.is_prefab() {
                     self.run(Cmd::ExitPrefab, ctx)?;
                 }
-                if self.doc.dirty() {
-                    self.save_doc()?;
+                // Already open in a tab: bring it to front.
+                if let Some(i) = self.open_docs.iter().position(|d| d.path == path) {
+                    return self.run(Cmd::SwitchScene(i), ctx);
+                }
+                if self.doc.path == path {
+                    return Ok(());
                 }
                 let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
                 let scene = Scene::from_ron(&text)?;
-                self.doc = Doc::scene(path.clone(), scene, text);
+                let old = std::mem::replace(&mut self.doc, Doc::scene(path.clone(), scene, text));
+                self.open_docs.push(old);
                 let cam = self.doc.scene.environment.core_camera();
                 self.scene_view.cam.look_from(cam.eye, cam.target);
                 self.log
@@ -1022,7 +1228,7 @@ impl App {
                     )
                     .clicked()
                 {
-                    self.cmds.push(Cmd::Duplicate(sel.clone().unwrap()));
+                    self.cmds.push(Cmd::DuplicateSelection);
                 }
                 if ui
                     .add_enabled(
@@ -1050,9 +1256,29 @@ impl App {
                     )
                     .clicked()
                 {
-                    self.cmds.push(Cmd::Delete(sel.unwrap()));
+                    self.cmds.push(Cmd::DeleteSelection);
+                }
+                ui.separator();
+                if ui
+                    .add(
+                        egui::Button::new(format!("{}  Select all", icon::SELECTION_ALL))
+                            .shortcut_text("Ctrl+A"),
+                    )
+                    .clicked()
+                {
+                    self.cmds.push(Cmd::SelectAll);
+                }
+                if ui
+                    .add(
+                        egui::Button::new(format!("{}  Command palette", icon::COMMAND))
+                            .shortcut_text("Ctrl+K"),
+                    )
+                    .clicked()
+                {
+                    self.palette = Some(String::new());
                 }
             });
+            ui.menu_button("Arrange", |ui| self.arrange_menu(ui));
             ui.menu_button("Create", |ui| {
                 crate::panels::hierarchy::create_menu(self, ui, None);
             });
@@ -1213,6 +1439,34 @@ impl App {
                 ui.label(RichText::new("●").color(c::WARN.gamma_multiply(t)))
                     .on_hover_text("Unsaved changes");
             }
+            // Other open scenes (tabs): click to switch, × to close.
+            for (i, d) in self.open_docs.iter().enumerate() {
+                ui.add_space(6.0);
+                let label = format!(
+                    "{} {}{}",
+                    icon::CUBE_TRANSPARENT,
+                    d.scene.name,
+                    if d.dirty() { " ●" } else { "" }
+                );
+                if ui
+                    .add(egui::Button::new(RichText::new(label).color(c::TEXT_WEAK)).small())
+                    .on_hover_text(format!("{} — switch to this scene", d.path.display()))
+                    .clicked()
+                {
+                    self.cmds.push(Cmd::SwitchScene(i));
+                }
+                if ui
+                    .add(
+                        egui::Button::new(RichText::new(icon::X).size(10.0))
+                            .small()
+                            .frame(false),
+                    )
+                    .on_hover_text("Close (saves it first)")
+                    .clicked()
+                {
+                    self.cmds.push(Cmd::CloseScene(i));
+                }
+            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(
                     RichText::new(self.doc.path.display().to_string())
@@ -1277,6 +1531,290 @@ impl App {
                 }
             });
         });
+    }
+
+    /// The *Arrange* menu (also reachable from the command palette).
+    fn arrange_menu(&mut self, ui: &mut egui::Ui) {
+        use crate::ops::AlignTo;
+        let n = self.doc.selection().len();
+        ui.label(
+            RichText::new(format!("{n} selected (Ctrl/Shift+click, Shift+drag)"))
+                .size(11.5)
+                .color(c::TEXT_FAINT),
+        );
+        for (axis, name) in [(0, "X"), (1, "Y"), (2, "Z")] {
+            ui.menu_button(format!("{}  Align {name}", icon::ALIGN_LEFT), |ui| {
+                for (to, label) in [
+                    (AlignTo::Min, "min"),
+                    (AlignTo::Center, "center"),
+                    (AlignTo::Max, "max"),
+                ] {
+                    if ui.add_enabled(n >= 2, egui::Button::new(label)).clicked() {
+                        self.cmds.push(Cmd::Align(axis, to));
+                    }
+                }
+            });
+        }
+        for (axis, name) in [(0, "X"), (1, "Y"), (2, "Z")] {
+            if ui
+                .add_enabled(
+                    n >= 3,
+                    egui::Button::new(format!("{}  Distribute {name}", icon::DOTS_THREE)),
+                )
+                .clicked()
+            {
+                self.cmds.push(Cmd::Distribute(axis));
+            }
+        }
+        ui.separator();
+        if ui
+            .add_enabled(n >= 1, egui::Button::new(format!("{}  Array…", icon::COPY)))
+            .clicked()
+        {
+            self.cmds.push(Cmd::Open(Dialog::array()));
+        }
+        if ui
+            .add_enabled(
+                n >= 1,
+                egui::Button::new(format!("{}  Drop to surface", icon::ARROW_LINE_DOWN))
+                    .shortcut_text("End"),
+            )
+            .clicked()
+        {
+            self.cmds.push(Cmd::DropToSurface);
+        }
+    }
+
+    /// Every action, for the command palette: (label, hint, command).
+    fn palette_items(&self) -> Vec<crate::palette::Item<Cmd>> {
+        use crate::ops::AlignTo;
+        let mut v: Vec<crate::palette::Item<Cmd>> = Vec::new();
+        let mut add = |label: String, hint: &str, cmd: Cmd| {
+            v.push(crate::palette::Item {
+                label,
+                hint: hint.to_string(),
+                payload: cmd,
+            })
+        };
+        add("Save".into(), "Ctrl+S", Cmd::Save);
+        add("Undo".into(), "Ctrl+Z", Cmd::Undo);
+        add("Redo".into(), "Ctrl+Y", Cmd::Redo);
+        add(
+            "Play here (in the Game view)".into(),
+            "Ctrl+Shift+P",
+            Cmd::PlayHere,
+        );
+        add("Stop playing here".into(), "Esc", Cmd::StopPlayHere);
+        add("New scene…".into(), "File", Cmd::Open(Dialog::new_scene()));
+        add(
+            "Create fake object…".into(),
+            "Shift+A",
+            Cmd::Open(Dialog::fake_object(&self.project)),
+        );
+        add(
+            "New material…".into(),
+            "Create",
+            Cmd::Open(Dialog::new_material()),
+        );
+        add(
+            "Export scene to game code…".into(),
+            "File",
+            Cmd::Open(Dialog::export(&self.doc.scene.name)),
+        );
+        add("Select all".into(), "Ctrl+A", Cmd::SelectAll);
+        add("Deselect".into(), "Esc", Cmd::Select(None));
+        add(
+            "Duplicate selection".into(),
+            "Ctrl+D",
+            Cmd::DuplicateSelection,
+        );
+        add("Delete selection".into(), "Del", Cmd::DeleteSelection);
+        add("Drop to surface".into(), "End", Cmd::DropToSurface);
+        add("Array…".into(), "Arrange", Cmd::Open(Dialog::array()));
+        for (axis, name) in [(0, "X"), (1, "Y"), (2, "Z")] {
+            for (to, t) in [
+                (AlignTo::Min, "min"),
+                (AlignTo::Center, "center"),
+                (AlignTo::Max, "max"),
+            ] {
+                add(
+                    format!("Align {name} — {t}"),
+                    "Arrange",
+                    Cmd::Align(axis, to),
+                );
+            }
+            add(
+                format!("Distribute {name}"),
+                "Arrange",
+                Cmd::Distribute(axis),
+            );
+        }
+        if let Some(sel) = &self.doc.selected
+            && let Some(e) = self.doc.scene.get(sel)
+        {
+            if let Some(inst) = &e.prefab {
+                if !inst.overrides.is_empty() {
+                    add(
+                        format!("Apply overrides to {}", inst.path),
+                        "Prefab",
+                        Cmd::ApplyOverrides(sel.clone()),
+                    );
+                }
+                add(
+                    format!("Edit prefab {}", inst.path),
+                    "Prefab",
+                    Cmd::EditPrefab(inst.path.clone()),
+                );
+                add(
+                    "Unpack prefab instance".into(),
+                    "Prefab",
+                    Cmd::Unpack(sel.clone()),
+                );
+            } else {
+                add(
+                    "Make prefab from selection…".into(),
+                    "Prefab",
+                    Cmd::Open(Dialog::make_prefab(sel.clone(), &e.name)),
+                );
+            }
+            add("Frame selection".into(), "F", Cmd::Focus(sel.clone()));
+        }
+        for (tab, name) in [
+            (Tab::Scene, "Scene"),
+            (Tab::Game, "Game"),
+            (Tab::Level, "Level"),
+            (Tab::Assets, "Assets"),
+            (Tab::Console, "Console"),
+        ] {
+            add(format!("Go to {name} view"), "View", Cmd::FocusTab(tab));
+        }
+        let mut scenes: Vec<PathBuf> = std::fs::read_dir("scenes")
+            .map(|d| {
+                d.flatten()
+                    .map(|e| e.path())
+                    .filter(|p| p.to_string_lossy().ends_with(".scene.ron"))
+                    .collect()
+            })
+            .unwrap_or_default();
+        scenes.sort();
+        for s in scenes {
+            add(
+                format!("Open scene {}", s.display()),
+                "File",
+                Cmd::OpenScene(s),
+            );
+        }
+        v
+    }
+
+    /// Ctrl+K: type to filter every action, Enter runs the best match.
+    fn palette_window(&mut self, ctx: &egui::Context) {
+        let Some(mut query) = self.palette.take() else {
+            return;
+        };
+        let items = self.palette_items();
+        let hits = crate::palette::filter(&items, &query);
+        let mut run: Option<usize> = None;
+        let mut keep = true;
+        egui::Window::new(format!("{}  Command palette", icon::COMMAND))
+            .collapsible(false)
+            .resizable(false)
+            .title_bar(false)
+            .anchor(egui::Align2::CENTER_TOP, [0.0, 80.0])
+            .default_width(460.0)
+            .min_height(60.0)
+            .show(ctx, |ui| {
+                let r = ui.add(
+                    egui::TextEdit::singleline(&mut query)
+                        .hint_text(format!("{}  Type a command…", icon::MAGNIFYING_GLASS))
+                        .desired_width(f32::INFINITY),
+                );
+                r.request_focus();
+                if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    keep = false;
+                }
+                if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    run = hits.first().copied();
+                }
+                ui.add_space(4.0);
+                egui::ScrollArea::vertical()
+                    .max_height(360.0)
+                    .show(ui, |ui| {
+                        for &i in hits.iter().take(40) {
+                            let it = &items[i];
+                            ui.horizontal(|ui| {
+                                if ui.selectable_label(false, &it.label).clicked() {
+                                    run = Some(i);
+                                }
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        ui.label(
+                                            RichText::new(&it.hint).size(11.0).color(c::TEXT_FAINT),
+                                        );
+                                    },
+                                );
+                            });
+                        }
+                        if hits.is_empty() {
+                            ui.label(RichText::new("no matching command").color(c::TEXT_FAINT));
+                        }
+                    });
+            });
+        if let Some(i) = run {
+            let mut items = items;
+            self.cmds.push(items.swap_remove(i).payload);
+        } else if keep {
+            self.palette = Some(query);
+        }
+    }
+
+    /// Import a file dropped on the window: `.glb`/`.gltf` become models,
+    /// `.png` sprites — copied under `assets/shared/<kind>/imported/` and
+    /// declared in the manifest; the asset watcher bakes them.
+    fn import_file(&mut self, file: &Path) -> Result<String, String> {
+        use pipeline::manifest::edit;
+        let ext = file
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let stem = file
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .ok_or("file has no name")?;
+        let name = edit::name_from_stem(stem);
+        if !edit::valid_name(&name) {
+            return Err(format!("cannot derive an asset name from `{stem}`"));
+        }
+        let (kind, sub) = match ext.as_str() {
+            "glb" | "gltf" => ("models", "models/imported"),
+            "png" => ("sprites", "sprites/imported"),
+            other => {
+                return Err(format!(
+                    "cannot import `.{other}` (models: .glb/.gltf, sprites: .png)"
+                ));
+            }
+        };
+        let rel = format!("{sub}/{name}.{ext}");
+        let dest = self.project.assets_dir().join("shared").join(&rel);
+        if let Some(dir) = dest.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        }
+        std::fs::copy(file, &dest).map_err(|e| format!("copy {}: {e}", file.display()))?;
+        let manifest_path = self.project.manifest_path();
+        let text = std::fs::read_to_string(&manifest_path).map_err(|e| e.to_string())?;
+        let new = if kind == "models" {
+            edit::add_model(&text, &name, &rel)?
+        } else {
+            // CI8: a safe N64 format for imported art (≤256 colors).
+            edit::add_sprite(&text, &name, &rel, "CI8")?
+        };
+        std::fs::write(&manifest_path, new).map_err(|e| e.to_string())?;
+        Ok(format!(
+            "{} imported {kind}/{name} ({rel}) — baking",
+            icon::DOWNLOAD_SIMPLE
+        ))
     }
 
     /// Play the open scene inside the Game view (same process).
@@ -1373,15 +1911,24 @@ impl App {
         if sc(Modifiers::COMMAND, Key::V) {
             self.cmds.push(Cmd::Paste);
         }
+        if sc(Modifiers::COMMAND, Key::K) {
+            self.palette = Some(String::new());
+        }
+        if sc(Modifiers::COMMAND, Key::A) {
+            self.cmds.push(Cmd::SelectAll);
+        }
         if let Some(sel) = self.doc.selected.clone() {
             if sc(Modifiers::COMMAND, Key::D) {
-                self.cmds.push(Cmd::Duplicate(sel.clone()));
+                self.cmds.push(Cmd::DuplicateSelection);
+            }
+            if sc(Modifiers::NONE, Key::End) {
+                self.cmds.push(Cmd::DropToSurface);
             }
             if sc(Modifiers::COMMAND, Key::C) {
                 self.cmds.push(Cmd::Copy(sel.clone()));
             }
             if sc(Modifiers::NONE, Key::Delete) {
-                self.cmds.push(Cmd::Delete(sel.clone()));
+                self.cmds.push(Cmd::DeleteSelection);
             }
             if sc(Modifiers::NONE, Key::F2) {
                 let name = self
@@ -1428,6 +1975,11 @@ impl App {
                             ("Del", "Delete"),
                             ("F2", "Rename"),
                             ("Shift+A", "Create a fake object"),
+                            ("Ctrl+K", "Command palette (every action, searchable)"),
+                            ("Ctrl/Shift+click", "Add to / remove from the selection"),
+                            ("Shift+drag", "Box select (Scene view)"),
+                            ("Ctrl+A", "Select all"),
+                            ("End", "Drop the selection onto the surface below"),
                             ("Ctrl+P", "Play / stop (separate process)"),
                             ("Ctrl+Shift+P", "Play here (in the Game view) / stop"),
                             ("Esc", "Stop playing here"),
@@ -1590,6 +2142,17 @@ impl eframe::App for App {
 
         self.sync_files();
         self.handle_paste(&ctx);
+        // Files dropped on the window: import (models / sprites).
+        let dropped: Vec<PathBuf> = ctx.input(|i| {
+            i.raw
+                .dropped_files
+                .iter()
+                .filter_map(|f| f.path.clone())
+                .collect()
+        });
+        if !dropped.is_empty() {
+            self.cmds.push(Cmd::ImportFiles(dropped));
+        }
         if std::mem::take(&mut self.play_here_on_start) {
             self.start_play_here();
         }
@@ -1666,6 +2229,7 @@ impl eframe::App for App {
             }
         }
         self.shortcuts_window(&ctx);
+        self.palette_window(&ctx);
         self.shortcuts(&ctx);
         self.run_cmds(&ctx);
 
@@ -1760,6 +2324,7 @@ impl egui_dock::TabViewer for TabView<'_> {
                     resolved: &app.resolved,
                     project: &app.project,
                     selected: app.doc.selected.as_deref(),
+                    extra: &app.doc.extra,
                     rev: app.rev,
                     time: app.anim_start.elapsed().as_secs_f32(),
                     animate: app.animate,
@@ -1773,9 +2338,34 @@ impl egui_dock::TabViewer for TabView<'_> {
                 for a in actions {
                     match a {
                         ViewAction::Select(p) => app.cmds.push(Cmd::Select(p)),
+                        ViewAction::ToggleSelect(p) => app.cmds.push(Cmd::ToggleSelect(p)),
+                        ViewAction::SelectMany(ps) => app.cmds.push(Cmd::SelectMany(ps)),
                         ViewAction::SetTransform(path, t) => {
+                            // Multi-select: the others follow the active
+                            // entity's world move (position only).
+                            let before = crate::ops::world_position(&app.doc.scene, &path);
                             if let Some(e) = app.doc.scene.get_mut(&path) {
                                 e.transform = t;
+                            }
+                            let after = crate::ops::world_position(&app.doc.scene, &path);
+                            if let (Some(b), Some(a)) = (before, after) {
+                                let d = a - b;
+                                if d.dot(d) > 0.0 {
+                                    for p in app.doc.extra.clone() {
+                                        if p.starts_with(&path) {
+                                            continue; // a child moves with it
+                                        }
+                                        if let Some(w) =
+                                            crate::ops::world_position(&app.doc.scene, &p)
+                                        {
+                                            crate::ops::set_world_position(
+                                                &mut app.doc.scene,
+                                                &p,
+                                                w + d,
+                                            );
+                                        }
+                                    }
+                                }
                             }
                         }
                         ViewAction::Drop(payload, at) => {

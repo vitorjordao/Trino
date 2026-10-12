@@ -157,6 +157,34 @@ impl Library {
         Ok(())
     }
 
+    /// Push the per-instance overrides of the instance at `path` into its
+    /// prefab (Unity's *Apply overrides*): the prefab changes for every
+    /// instance, this instance's overrides are cleared. Returns the prefab's
+    /// logical path and new content for the caller to save. Stale overrides
+    /// (targets renamed away) are dropped and reported in the error-free
+    /// path as part of the returned list.
+    pub fn apply_overrides_to_prefab(
+        &mut self,
+        scene: &mut Scene,
+        path: &[usize],
+    ) -> Result<(String, Prefab, Vec<String>), String> {
+        let entity = scene.get_mut(path).ok_or("no entity at that path")?;
+        let instance = entity
+            .prefab
+            .as_mut()
+            .ok_or("entity is not a prefab instance")?;
+        if instance.overrides.is_empty() {
+            return Err("this instance has no overrides to apply".into());
+        }
+        let prefab = self
+            .prefabs
+            .get_mut(&instance.path)
+            .ok_or_else(|| format!("unknown prefab `{}`", instance.path))?;
+        let stale = apply_overrides(&mut prefab.root, &instance.overrides);
+        instance.overrides.clear();
+        Ok((instance.path.clone(), prefab.clone(), stale))
+    }
+
     /// Turn the entity at `path` into a new prefab `logical` (returned, for
     /// the caller to save), replacing it in the scene with an instance at
     /// the same place. The prefab root gets an identity transform; the
@@ -226,6 +254,49 @@ mod tests {
             .push(Entity::new("leaves").with_model(ModelComponent::new("models/leaves")));
         root.children.push(trunk);
         root
+    }
+
+    #[test]
+    fn apply_overrides_pushes_them_into_the_prefab() {
+        let mut lib = Library::default();
+        lib.prefabs
+            .insert("prefabs/tree".into(), Prefab::new(tree()));
+        let mut scene = Scene::new("s");
+        let mut inst = Entity::new("tree-1");
+        let mut pi = PrefabInstance::new("prefabs/tree");
+        pi.overrides.push(crate::Override {
+            target: "trunk/leaves".into(),
+            tint: Some([10, 200, 10, 255]),
+            ..Default::default()
+        });
+        pi.overrides.push(crate::Override {
+            target: "gone".into(),
+            visible: Some(false),
+            ..Default::default()
+        });
+        inst.prefab = Some(pi);
+        scene.entities.push(inst);
+        let (logical, prefab, stale) = lib.apply_overrides_to_prefab(&mut scene, &[0]).unwrap();
+        assert_eq!(logical, "prefabs/tree");
+        assert_eq!(stale, vec!["gone".to_string()]);
+        let leaves = &prefab.root.children[0].children[0];
+        assert_eq!(
+            leaves.model.as_ref().unwrap().tint,
+            Some([10, 200, 10, 255])
+        );
+        assert_eq!(lib.prefabs["prefabs/tree"], prefab, "library updated");
+        assert!(
+            scene.entities[0]
+                .prefab
+                .as_ref()
+                .unwrap()
+                .overrides
+                .is_empty()
+        );
+        assert!(
+            lib.apply_overrides_to_prefab(&mut scene, &[0]).is_err(),
+            "nothing left"
+        );
     }
 
     #[test]

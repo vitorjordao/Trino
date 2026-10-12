@@ -29,7 +29,11 @@ pub struct Doc {
     pub kind: DocKind,
     pub path: PathBuf,
     pub scene: Scene,
+    /// The active (primary) selection: the inspector and the gizmo follow it.
     pub selected: Option<Vec<usize>>,
+    /// Additional selected entities (Ctrl/Shift+click, box select). Group
+    /// operations (delete, duplicate, align, move) act on all of them.
+    pub extra: Vec<Vec<usize>>,
     committed: Scene,
     saved: Scene,
     /// File text we last wrote/read (echo guard for the file watcher).
@@ -47,6 +51,7 @@ impl Doc {
             saved: scene.clone(),
             scene,
             selected: None,
+            extra: Vec::new(),
             disk_text,
             undo: Vec::new(),
             redo: Vec::new(),
@@ -61,6 +66,61 @@ impl Doc {
         doc.kind = DocKind::Prefab { logical };
         doc.selected = Some(vec![0]);
         doc
+    }
+
+    /// Every selected path, primary first.
+    pub fn selection(&self) -> Vec<Vec<usize>> {
+        self.selected
+            .iter()
+            .chain(self.extra.iter())
+            .cloned()
+            .collect()
+    }
+
+    /// Plain click: select only `path` (or nothing).
+    pub fn select_only(&mut self, path: Option<Vec<usize>>) {
+        self.selected = path;
+        self.extra.clear();
+    }
+
+    /// Ctrl/Shift+click: add `path` (becoming the active one) or remove it.
+    pub fn toggle(&mut self, path: Vec<usize>) {
+        if self.selected.as_ref() == Some(&path) {
+            self.selected = if self.extra.is_empty() {
+                None
+            } else {
+                Some(self.extra.remove(0))
+            };
+        } else if let Some(i) = self.extra.iter().position(|p| *p == path) {
+            self.extra.remove(i);
+        } else {
+            if let Some(old) = self.selected.take() {
+                self.extra.push(old);
+            }
+            self.selected = Some(path);
+        }
+    }
+
+    /// Box select / select all: the first path becomes the active one.
+    pub fn select_many(&mut self, mut paths: Vec<Vec<usize>>) {
+        paths.dedup();
+        self.selected = if paths.is_empty() {
+            None
+        } else {
+            Some(paths.remove(0))
+        };
+        self.extra = paths;
+    }
+
+    /// Drop selections that no longer point at an entity.
+    fn prune_selection(&mut self) {
+        if let Some(sel) = &self.selected
+            && self.scene.get(sel).is_none()
+        {
+            self.selected = None;
+        }
+        let scene = &self.scene;
+        self.extra.retain(|p| scene.get(p).is_some());
     }
 
     pub fn is_prefab(&self) -> bool {
@@ -114,11 +174,7 @@ impl Doc {
         self.committed = scene.clone();
         self.saved = scene;
         self.disk_text = text;
-        if let Some(sel) = &self.selected
-            && self.scene.get(sel).is_none()
-        {
-            self.selected = None;
-        }
+        self.prune_selection();
     }
 
     fn push_undo(&mut self) {
@@ -158,7 +214,9 @@ impl Doc {
         self.redo.push((self.scene.clone(), self.selected.clone()));
         self.scene = scene.clone();
         self.committed = scene;
-        self.selected = sel.filter(|s| self.scene.get(s).is_some());
+        self.selected = sel;
+        self.extra.clear();
+        self.prune_selection();
         true
     }
 
@@ -169,7 +227,9 @@ impl Doc {
         self.undo.push((self.scene.clone(), self.selected.clone()));
         self.scene = scene.clone();
         self.committed = scene;
-        self.selected = sel.filter(|s| self.scene.get(s).is_some());
+        self.selected = sel;
+        self.extra.clear();
+        self.prune_selection();
         true
     }
 }
@@ -207,6 +267,27 @@ mod tests {
         assert_eq!(d.scene.entities.len(), 1);
         assert!(d.redo());
         assert_eq!(d.scene.entities.len(), 2);
+    }
+
+    #[test]
+    fn multi_selection_toggles_and_prunes() {
+        let mut d = doc();
+        d.scene.entities.push(Entity::new("b"));
+        d.scene.entities.push(Entity::new("c"));
+        d.commit(true);
+        d.select_only(Some(vec![0]));
+        d.toggle(vec![1]);
+        assert_eq!(d.selected, Some(vec![1]), "last clicked is active");
+        assert_eq!(d.selection(), vec![vec![1], vec![0]]);
+        d.toggle(vec![1]);
+        assert_eq!(d.selection(), vec![vec![0]]);
+        d.select_many(vec![vec![2], vec![0]]);
+        let sel = d.selection();
+        assert!(sel.contains(&vec![0]) && sel.contains(&vec![2]) && !sel.contains(&vec![1]));
+        d.scene.entities.truncate(1);
+        d.commit(true);
+        assert!(d.undo());
+        assert!(d.extra.is_empty(), "undo resets to the primary selection");
     }
 
     #[test]

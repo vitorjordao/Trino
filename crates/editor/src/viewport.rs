@@ -57,6 +57,8 @@ pub struct ViewInput<'a> {
     pub resolved: &'a Resolved,
     pub project: &'a Project,
     pub selected: Option<&'a [usize]>,
+    /// Additional selected entities (multi-select).
+    pub extra: &'a [Vec<usize>],
     /// Bumped by the app on any content change.
     pub rev: u64,
     pub time: f32,
@@ -65,6 +67,10 @@ pub struct ViewInput<'a> {
 
 pub enum ViewAction {
     Select(Option<Vec<usize>>),
+    /// Ctrl/Shift+click: add or remove from the selection.
+    ToggleSelect(Vec<usize>),
+    /// Shift+drag box select.
+    SelectMany(Vec<Vec<usize>>),
     /// Live gizmo edit (the app's undo coalesces until release).
     SetTransform(Vec<usize>, Transform),
     Drop(AssetPayload, Vec3),
@@ -106,6 +112,8 @@ pub struct Viewport {
     grid: ModelId,
     pub stats: Stats,
     hover: Option<Vec<usize>>,
+    /// Box select in progress (Shift+drag on the Scene view): start point.
+    box_start: Option<Pos2>,
 }
 
 const GRID_EXTENT: i32 = 40;
@@ -156,6 +164,7 @@ impl Viewport {
                 frame: trino_core::FrameStats::default(),
             },
             hover: None,
+            box_start: None,
         }
     }
 
@@ -479,6 +488,39 @@ impl Viewport {
             let delta = response.drag_delta();
             let pan = (response.dragged_by(egui::PointerButton::Middle) && shift)
                 || (response.dragged_by(egui::PointerButton::Secondary) && shift);
+            // Shift + left drag on empty space: box select.
+            if response.drag_started_by(egui::PointerButton::Primary)
+                && shift
+                && hot_handle.is_none()
+            {
+                self.box_start = response.interact_pointer_pos();
+            }
+            if let Some(start) = self.box_start {
+                let now = ui.input(|i| i.pointer.interact_pos()).unwrap_or(start);
+                let rect = Rect::from_two_pos(start, now);
+                painter.rect_filled(rect, CornerRadius::ZERO, c::ACCENT.gamma_multiply(0.12));
+                painter.rect_stroke(
+                    rect,
+                    CornerRadius::ZERO,
+                    Stroke::new(1.0, c::ACCENT),
+                    egui::StrokeKind::Inside,
+                );
+                if !ui.input(|i| i.pointer.primary_down()) {
+                    self.box_start = None;
+                    let mut hits: Vec<Vec<usize>> = Vec::new();
+                    for item in &input.resolved.items {
+                        let origin = gizmo::translation(&item.matrix);
+                        if let Some(p) = proj.project(origin)
+                            && rect.contains(p)
+                            && !hits.contains(&item.owner)
+                        {
+                            hits.push(item.owner.clone());
+                        }
+                    }
+                    actions.push(ViewAction::SelectMany(hits));
+                }
+                ui.ctx().request_repaint();
+            }
             let orbit = (response.dragged_by(egui::PointerButton::Middle) && !shift)
                 || (response.dragged_by(egui::PointerButton::Secondary) && !shift)
                 || (response.dragged_by(egui::PointerButton::Primary) && alt);
@@ -508,7 +550,11 @@ impl Viewport {
         };
         if response.clicked_by(egui::PointerButton::Primary) && hot_handle.is_none() {
             let hit = response.interact_pointer_pos().and_then(pick);
-            actions.push(ViewAction::Select(hit));
+            let additive = ui.input(|i| i.modifiers.shift || i.modifiers.command);
+            match hit {
+                Some(path) if additive => actions.push(ViewAction::ToggleSelect(path)),
+                hit => actions.push(ViewAction::Select(hit)),
+            }
         }
 
         // ---- overlays -------------------------------------------------------
@@ -531,6 +577,17 @@ impl Viewport {
         }
         if let Some(sel) = input.selected.filter(|_| !playing) {
             outline(&painter, &proj, input, sel, Stroke::new(1.6, c::ACCENT));
+        }
+        if !playing {
+            for extra in input.extra {
+                outline(
+                    &painter,
+                    &proj,
+                    input,
+                    extra,
+                    Stroke::new(1.2, c::ACCENT.gamma_multiply(0.7)),
+                );
+            }
         }
         if !playing {
             markers(&painter, &proj, input, self.hover.as_deref());

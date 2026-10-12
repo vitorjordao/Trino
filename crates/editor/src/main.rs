@@ -22,6 +22,8 @@ mod doc;
 mod gizmo;
 mod level_editor;
 mod log;
+mod ops;
+mod palette;
 mod panels;
 mod play;
 mod project;

@@ -4,7 +4,7 @@
 #[allow(unused_imports)]
 use trino_core::{
     Camera3, ClipId, Collider, Color, Fog, Light, Mat34, ModelId, ModelParams, SceneNode,
-    Shading, Shape, Vec3,
+    Shading, Shape, Tags, Vec3,
 };
 
 pub const CLEAR: Color = Color::rgb(132, 178, 226);
@@ -24,7 +24,7 @@ pub const LIGHT: Light = Light {
 pub static NODES: &[SceneNode] = &[
     SceneNode {
         name: "ground",
-        tags: &[],
+        tags: Tags::List(&[]),
         matrix: Mat34 {
             m: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]],
         },
@@ -45,7 +45,7 @@ pub static NODES: &[SceneNode] = &[
     },
     SceneNode {
         name: "pond",
-        tags: &[],
+        tags: Tags::List(&[]),
         matrix: Mat34 {
             m: [[1.0, 0.0, 0.0, 6.0], [0.0, 1.0, 0.0, 0.02], [0.0, 0.0, 1.0, -5.0]],
         },
@@ -62,7 +62,7 @@ pub static NODES: &[SceneNode] = &[
     },
     SceneNode {
         name: "tree-1",
-        tags: &["foliage"],
+        tags: Tags::List(&["foliage"]),
         matrix: Mat34 {
             m: [[1.0, 0.0, 0.0, -6.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 4.0]],
         },
@@ -79,7 +79,7 @@ pub static NODES: &[SceneNode] = &[
     },
     SceneNode {
         name: "tree-1/tree",
-        tags: &[],
+        tags: Tags::List(&[]),
         matrix: Mat34 {
             m: [[1.0, 0.0, 0.0, -6.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 4.0]],
         },
@@ -96,7 +96,7 @@ pub static NODES: &[SceneNode] = &[
     },
     SceneNode {
         name: "tree-1/tree/trunk",
-        tags: &[],
+        tags: Tags::List(&[]),
         matrix: Mat34 {
             m: [[1.0, 0.0, 0.0, -6.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 4.0]],
         },
@@ -117,7 +117,7 @@ pub static NODES: &[SceneNode] = &[
     },
     SceneNode {
         name: "tree-1/tree/leaves",
-        tags: &[],
+        tags: Tags::List(&[]),
         matrix: Mat34 {
             m: [[1.0, 0.0, 0.0, -6.0], [0.0, 1.0, 0.0, 1.1], [0.0, 0.0, 1.0, 4.0]],
         },
@@ -134,7 +134,7 @@ pub static NODES: &[SceneNode] = &[
     },
     SceneNode {
         name: "tree-2",
-        tags: &["foliage"],
+        tags: Tags::List(&["foliage"]),
         matrix: Mat34 {
             m: [[1.1266667, 0.0, 0.65, -8.0], [0.0, 1.3, 0.0, 0.0], [-0.65, 0.0, 1.1266667, 1.0]],
         },
@@ -151,7 +151,7 @@ pub static NODES: &[SceneNode] = &[
     },
     SceneNode {
         name: "tree-2/tree",
-        tags: &[],
+        tags: Tags::List(&[]),
         matrix: Mat34 {
             m: [[1.1266667, 0.0, 0.65, -8.0], [0.0, 1.3, 0.0, 0.0], [-0.65, 0.0, 1.1266667, 1.0]],
         },
@@ -168,7 +168,7 @@ pub static NODES: &[SceneNode] = &[
     },
     SceneNode {
         name: "tree-2/tree/trunk",
-        tags: &[],
+        tags: Tags::List(&[]),
         matrix: Mat34 {
             m: [[1.1266667, 0.0, 0.65, -8.0], [0.0, 1.3, 0.0, 0.0], [-0.65, 0.0, 1.1266667, 1.0]],
         },
@@ -189,7 +189,7 @@ pub static NODES: &[SceneNode] = &[
     },
     SceneNode {
         name: "tree-2/tree/leaves",
-        tags: &[],
+        tags: Tags::List(&[]),
         matrix: Mat34 {
             m: [[1.1266667, 0.0, 0.65, -8.0], [0.0, 1.3, 0.0, 1.43], [-0.65, 0.0, 1.1266667, 1.0]],
         },
@@ -206,7 +206,7 @@ pub static NODES: &[SceneNode] = &[
     },
     SceneNode {
         name: "tree-3",
-        tags: &["foliage"],
+        tags: Tags::List(&["foliage"]),
         matrix: Mat34 {
             m: [[0.45, 0.0, 0.78000003, -5.0], [0.0, 0.9, 0.0, 0.0], [-0.78000003, 0.0, 0.45, -3.0]],
         },
@@ -223,7 +223,7 @@ pub static NODES: &[SceneNode] = &[
     },
     SceneNode {
         name: "tree-3/tree",
-        tags: &[],
+        tags: Tags::List(&[]),
         matrix: Mat34 {
             m: [[0.45, 0.0, 0.78000003, -5.0], [0.0, 0.9, 0.0, 0.0], [-0.78000003, 0.0, 0.45, -3.0]],
         },
@@ -240,7 +240,7 @@ pub static NODES: &[SceneNode] = &[
     },
     SceneNode {
         name: "tree-3/tree/trunk",
-        tags: &[],
+        tags: Tags::List(&[]),
         matrix: Mat34 {
             m: [[0.45, 0.0, 0.78000003, -5.0], [0.0, 0.9, 0.0, 0.0], [-0.78000003, 0.0, 0.45, -3.0]],
         },
@@ -261,7 +261,7 @@ pub static NODES: &[SceneNode] = &[
     },
     SceneNode {
         name: "tree-3/tree/leaves",
-        tags: &[],
+        tags: Tags::List(&[]),
         matrix: Mat34 {
             m: [[0.45, 0.0, 0.78000003, -5.0], [0.0, 0.9, 0.0, 0.99], [-0.78000003, 0.0, 0.45, -3.0]],
         },
@@ -278,7 +278,7 @@ pub static NODES: &[SceneNode] = &[
     },
     SceneNode {
         name: "tree-4",
-        tags: &["foliage"],
+        tags: Tags::List(&["foliage"]),
         matrix: Mat34 {
             m: [[1.1818929, 0.0, 0.2070782, 8.0], [0.0, 1.2, 0.0, 0.0], [-0.2070782, 0.0, 1.1818929, 5.0]],
         },
@@ -295,7 +295,7 @@ pub static NODES: &[SceneNode] = &[
     },
     SceneNode {
         name: "tree-4/tree",
-        tags: &[],
+        tags: Tags::List(&[]),
         matrix: Mat34 {
             m: [[1.1818929, 0.0, 0.2070782, 8.0], [0.0, 1.2, 0.0, 0.0], [-0.2070782, 0.0, 1.1818929, 5.0]],
         },
@@ -312,7 +312,7 @@ pub static NODES: &[SceneNode] = &[
     },
     SceneNode {
         name: "tree-4/tree/trunk",
-        tags: &[],
+        tags: Tags::List(&[]),
         matrix: Mat34 {
             m: [[1.1818929, 0.0, 0.2070782, 8.0], [0.0, 1.2, 0.0, 0.0], [-0.2070782, 0.0, 1.1818929, 5.0]],
         },
@@ -333,7 +333,7 @@ pub static NODES: &[SceneNode] = &[
     },
     SceneNode {
         name: "tree-4/tree/leaves",
-        tags: &[],
+        tags: Tags::List(&[]),
         matrix: Mat34 {
             m: [[1.1818929, 0.0, 0.2070782, 8.0], [0.0, 1.2, 0.0, 1.32], [-0.2070782, 0.0, 1.1818929, 5.0]],
         },
@@ -350,7 +350,7 @@ pub static NODES: &[SceneNode] = &[
     },
     SceneNode {
         name: "tree-5",
-        tags: &["foliage"],
+        tags: Tags::List(&["foliage"]),
         matrix: Mat34 {
             m: [[0.7078128, 0.0, 0.7078125, 10.0], [0.0, 1.0, 0.0, 0.0], [-0.7078125, 0.0, 0.7078128, -1.0]],
         },
@@ -367,7 +367,7 @@ pub static NODES: &[SceneNode] = &[
     },
     SceneNode {
         name: "tree-5/tree",
-        tags: &[],
+        tags: Tags::List(&[]),
         matrix: Mat34 {
             m: [[0.7078128, 0.0, 0.7078125, 10.0], [0.0, 1.0, 0.0, 0.0], [-0.7078125, 0.0, 0.7078128, -1.0]],
         },
@@ -384,7 +384,7 @@ pub static NODES: &[SceneNode] = &[
     },
     SceneNode {
         name: "tree-5/tree/trunk",
-        tags: &[],
+        tags: Tags::List(&[]),
         matrix: Mat34 {
             m: [[0.7078128, 0.0, 0.7078125, 10.0], [0.0, 1.0, 0.0, 0.0], [-0.7078125, 0.0, 0.7078128, -1.0]],
         },
@@ -405,7 +405,7 @@ pub static NODES: &[SceneNode] = &[
     },
     SceneNode {
         name: "tree-5/tree/leaves",
-        tags: &[],
+        tags: Tags::List(&[]),
         matrix: Mat34 {
             m: [[0.7078128, 0.0, 0.7078125, 10.0], [0.0, 1.0, 0.0, 1.1], [-0.7078125, 0.0, 0.7078128, -1.0]],
         },
@@ -422,7 +422,7 @@ pub static NODES: &[SceneNode] = &[
     },
     SceneNode {
         name: "crates",
-        tags: &[],
+        tags: Tags::List(&[]),
         matrix: Mat34 {
             m: [[1.0, 0.0, 0.0, -3.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 2.0]],
         },
@@ -439,7 +439,7 @@ pub static NODES: &[SceneNode] = &[
     },
     SceneNode {
         name: "crates/crate-a",
-        tags: &[],
+        tags: Tags::List(&[]),
         matrix: Mat34 {
             m: [[1.0, 0.0, 0.0, -3.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 2.0]],
         },
@@ -460,7 +460,7 @@ pub static NODES: &[SceneNode] = &[
     },
     SceneNode {
         name: "crates/crate-b",
-        tags: &[],
+        tags: Tags::List(&[]),
         matrix: Mat34 {
             m: [[0.9782933, 0.0, 0.20682666, -1.95], [0.0, 1.0, 0.0, 0.0], [-0.20682666, 0.0, 0.9782933, 2.1]],
         },
@@ -481,7 +481,7 @@ pub static NODES: &[SceneNode] = &[
     },
     SceneNode {
         name: "crates/crate-c",
-        tags: &[],
+        tags: Tags::List(&[]),
         matrix: Mat34 {
             m: [[0.94005483, 0.0, -0.3412894, -2.5], [0.0, 1.0, 0.0, 1.0], [0.3412894, 0.0, 0.94005483, 2.05]],
         },
@@ -502,7 +502,7 @@ pub static NODES: &[SceneNode] = &[
     },
     SceneNode {
         name: "pillar-1",
-        tags: &[],
+        tags: Tags::List(&[]),
         matrix: Mat34 {
             m: [[1.0, 0.0, 0.0, -2.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 7.0]],
         },
@@ -523,7 +523,7 @@ pub static NODES: &[SceneNode] = &[
     },
     SceneNode {
         name: "pillar-2",
-        tags: &[],
+        tags: Tags::List(&[]),
         matrix: Mat34 {
             m: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 7.0]],
         },
@@ -544,7 +544,7 @@ pub static NODES: &[SceneNode] = &[
     },
     SceneNode {
         name: "pillar-3",
-        tags: &[],
+        tags: Tags::List(&[]),
         matrix: Mat34 {
             m: [[1.0, 0.0, 0.0, 2.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 7.0]],
         },
@@ -565,7 +565,7 @@ pub static NODES: &[SceneNode] = &[
     },
     SceneNode {
         name: "pillar-4",
-        tags: &[],
+        tags: Tags::List(&[]),
         matrix: Mat34 {
             m: [[1.0, 0.0, 0.0, 4.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 7.0]],
         },
@@ -586,7 +586,7 @@ pub static NODES: &[SceneNode] = &[
     },
     SceneNode {
         name: "ramp",
-        tags: &[],
+        tags: Tags::List(&[]),
         matrix: Mat34 {
             m: [[-1.0000001, 0.0, 0.0, 3.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, -1.0000001, 1.5]],
         },
@@ -603,7 +603,7 @@ pub static NODES: &[SceneNode] = &[
     },
     SceneNode {
         name: "rock-1",
-        tags: &[],
+        tags: Tags::List(&[]),
         matrix: Mat34 {
             m: [[1.2, 0.0, 0.0, 5.0], [0.0, 0.7, 0.0, 0.3], [0.0, 0.0, 1.0, 8.0]],
         },
@@ -624,7 +624,7 @@ pub static NODES: &[SceneNode] = &[
     },
     SceneNode {
         name: "rock-2",
-        tags: &[],
+        tags: Tags::List(&[]),
         matrix: Mat34 {
             m: [[1.0, 0.0, 0.0, -9.0], [0.0, 0.6, 0.0, 0.25], [0.0, 0.0, 1.4, -4.0]],
         },
@@ -645,7 +645,7 @@ pub static NODES: &[SceneNode] = &[
     },
     SceneNode {
         name: "rock-3",
-        tags: &[],
+        tags: Tags::List(&[]),
         matrix: Mat34 {
             m: [[0.8, 0.0, 0.0, 1.0], [0.0, 0.5, 0.0, 0.2], [0.0, 0.0, 0.8, -7.0]],
         },
@@ -666,7 +666,7 @@ pub static NODES: &[SceneNode] = &[
     },
     SceneNode {
         name: "lamp-1",
-        tags: &[],
+        tags: Tags::List(&[]),
         matrix: Mat34 {
             m: [[1.0, 0.0, 0.0, -1.5], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, -2.0]],
         },
@@ -683,7 +683,7 @@ pub static NODES: &[SceneNode] = &[
     },
     SceneNode {
         name: "lamp-1/lamp",
-        tags: &[],
+        tags: Tags::List(&[]),
         matrix: Mat34 {
             m: [[1.0, 0.0, 0.0, -1.5], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, -2.0]],
         },
@@ -700,7 +700,7 @@ pub static NODES: &[SceneNode] = &[
     },
     SceneNode {
         name: "lamp-1/lamp/post",
-        tags: &[],
+        tags: Tags::List(&[]),
         matrix: Mat34 {
             m: [[1.0, 0.0, 0.0, -1.5], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, -2.0]],
         },
@@ -717,7 +717,7 @@ pub static NODES: &[SceneNode] = &[
     },
     SceneNode {
         name: "lamp-1/lamp/bulb",
-        tags: &[],
+        tags: Tags::List(&[]),
         matrix: Mat34 {
             m: [[1.0, 0.0, 0.0, -1.5], [0.0, 1.0, 0.0, 2.5], [0.0, 0.0, 1.0, -2.0]],
         },
@@ -734,7 +734,7 @@ pub static NODES: &[SceneNode] = &[
     },
     SceneNode {
         name: "lamp-2",
-        tags: &[],
+        tags: Tags::List(&[]),
         matrix: Mat34 {
             m: [[1.0, 0.0, 0.0, 2.5], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, -2.0]],
         },
@@ -751,7 +751,7 @@ pub static NODES: &[SceneNode] = &[
     },
     SceneNode {
         name: "lamp-2/lamp",
-        tags: &[],
+        tags: Tags::List(&[]),
         matrix: Mat34 {
             m: [[1.0, 0.0, 0.0, 2.5], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, -2.0]],
         },
@@ -768,7 +768,7 @@ pub static NODES: &[SceneNode] = &[
     },
     SceneNode {
         name: "lamp-2/lamp/post",
-        tags: &[],
+        tags: Tags::List(&[]),
         matrix: Mat34 {
             m: [[1.0, 0.0, 0.0, 2.5], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, -2.0]],
         },
@@ -785,7 +785,7 @@ pub static NODES: &[SceneNode] = &[
     },
     SceneNode {
         name: "lamp-2/lamp/bulb",
-        tags: &[],
+        tags: Tags::List(&[]),
         matrix: Mat34 {
             m: [[1.0, 0.0, 0.0, 2.5], [0.0, 1.0, 0.0, 2.5], [0.0, 0.0, 1.0, -2.0]],
         },
@@ -802,7 +802,7 @@ pub static NODES: &[SceneNode] = &[
     },
     SceneNode {
         name: "robot-walker",
-        tags: &["npc"],
+        tags: Tags::List(&["npc"]),
         matrix: Mat34 {
             m: [[-0.94005495, 0.0, -0.34128943, 0.5], [0.0, 1.0, 0.0, 0.0], [0.34128943, 0.0, -0.94005495, -0.5]],
         },
@@ -819,7 +819,7 @@ pub static NODES: &[SceneNode] = &[
     },
     SceneNode {
         name: "robot-greeter",
-        tags: &["npc"],
+        tags: Tags::List(&["npc"]),
         matrix: Mat34 {
             m: [[-0.9400548, 0.0, 0.34128967, -2.0], [0.0, 1.0, 0.0, 0.0], [-0.34128967, 0.0, -0.9400548, -4.5]],
         },
@@ -836,7 +836,7 @@ pub static NODES: &[SceneNode] = &[
     },
     SceneNode {
         name: "windmill",
-        tags: &[],
+        tags: Tags::List(&[]),
         matrix: Mat34 {
             m: [[-0.94005495, 0.0, -0.34128943, -7.0], [0.0, 1.0, 0.0, 0.0], [0.34128943, 0.0, -0.94005495, -8.0]],
         },
@@ -853,7 +853,7 @@ pub static NODES: &[SceneNode] = &[
     },
     SceneNode {
         name: "castle-door",
-        tags: &[],
+        tags: Tags::List(&[]),
         matrix: Mat34 {
             m: [[-1.0000001, 0.0, 0.0, -3.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, -1.0000001, 11.0]],
         },
@@ -874,7 +874,7 @@ pub static NODES: &[SceneNode] = &[
     },
     SceneNode {
         name: "coin-1",
-        tags: &["coin"],
+        tags: Tags::List(&["coin"]),
         matrix: Mat34 {
             m: [[1.0, 0.0, 0.0, -1.0], [0.0, 0.0, -1.0, 0.8], [0.0, 1.0, 0.0, 3.5]],
         },
@@ -895,7 +895,7 @@ pub static NODES: &[SceneNode] = &[
     },
     SceneNode {
         name: "coin-2",
-        tags: &["coin"],
+        tags: Tags::List(&["coin"]),
         matrix: Mat34 {
             m: [[0.9513599, 0.0, 0.30816, -0.1], [0.30816, 0.0, -0.9513599, 0.8], [0.0, 1.0, 0.0, 3.5]],
         },
@@ -916,7 +916,7 @@ pub static NODES: &[SceneNode] = &[
     },
     SceneNode {
         name: "coin-3",
-        tags: &["coin"],
+        tags: Tags::List(&["coin"]),
         matrix: Mat34 {
             m: [[0.8097599, 0.0, 0.58816, 0.8], [0.58816, 0.0, -0.8097599, 0.8], [0.0, 1.0, 0.0, 3.5]],
         },
@@ -937,7 +937,7 @@ pub static NODES: &[SceneNode] = &[
     },
     SceneNode {
         name: "coin-4",
-        tags: &["coin"],
+        tags: Tags::List(&["coin"]),
         matrix: Mat34 {
             m: [[0.58815986, 0.0, 0.80976003, 1.7], [0.80976003, 0.0, -0.58815986, 0.8], [0.0, 1.0, 0.0, 3.5]],
         },
@@ -958,7 +958,7 @@ pub static NODES: &[SceneNode] = &[
     },
     SceneNode {
         name: "coin-5",
-        tags: &["coin"],
+        tags: Tags::List(&["coin"]),
         matrix: Mat34 {
             m: [[0.3081599, 0.0, 0.95136, 2.6], [0.95136, 0.0, -0.3081599, 0.8], [0.0, 1.0, 0.0, 3.5]],
         },
@@ -979,7 +979,7 @@ pub static NODES: &[SceneNode] = &[
     },
     SceneNode {
         name: "gameplay",
-        tags: &[],
+        tags: Tags::List(&[]),
         matrix: Mat34 {
             m: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]],
         },
@@ -996,7 +996,7 @@ pub static NODES: &[SceneNode] = &[
     },
     SceneNode {
         name: "gameplay/spawn",
-        tags: &["spawn"],
+        tags: Tags::List(&["spawn"]),
         matrix: Mat34 {
             m: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, -6.0]],
         },
@@ -1013,7 +1013,7 @@ pub static NODES: &[SceneNode] = &[
     },
     SceneNode {
         name: "gameplay/hero",
-        tags: &["player"],
+        tags: Tags::List(&["player"]),
         matrix: Mat34 {
             m: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, -6.0]],
         },
@@ -1030,7 +1030,7 @@ pub static NODES: &[SceneNode] = &[
     },
     SceneNode {
         name: "gameplay/goal",
-        tags: &["goal"],
+        tags: Tags::List(&["goal"]),
         matrix: Mat34 {
             m: [[1.0, 0.0, 0.0, 6.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 9.0]],
         },

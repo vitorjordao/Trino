@@ -39,7 +39,7 @@ pub fn to_rust(scene: &Scene, lib: &Library) -> (String, Vec<String>) {
     );
     let _ = writeln!(
         out,
-        "#[allow(unused_imports)]\nuse trino_core::{{\n    Camera3, ClipId, Collider, Color, Fog, Light, Mat34, ModelId, ModelParams, SceneNode,\n    Shading, Shape, Vec3,\n}};\n"
+        "#[allow(unused_imports)]\nuse trino_core::{{\n    Camera3, ClipId, Collider, Color, Fog, Light, Mat34, ModelId, ModelParams, SceneNode,\n    Shading, Shape, Tags, Vec3,\n}};\n"
     );
     let env = &scene.environment;
     let cam = env.core_camera();
@@ -135,7 +135,7 @@ pub fn to_rust(scene: &Scene, lib: &Library) -> (String, Vec<String>) {
             .collect();
         let _ = writeln!(
             out,
-            "    SceneNode {{\n        name: \"{}\",\n        tags: &[{}],\n        matrix: Mat34 {{\n            m: [{}],\n        }},\n        model: {},\n        params: ModelParams {{\n            tint: {},\n            emissive: {},\n            shading: Shading::{},\n            double_sided: {},\n            anim: None,\n        }},\n        anim: {},\n        collider: {},\n    }},",
+            "    SceneNode {{\n        name: \"{}\",\n        tags: Tags::List(&[{}]),\n        matrix: Mat34 {{\n            m: [{}],\n        }},\n        model: {},\n        params: ModelParams {{\n            tint: {},\n            emissive: {},\n            shading: Shading::{},\n            double_sided: {},\n            anim: None,\n        }},\n        anim: {},\n        collider: {},\n    }},",
             esc(&item.name),
             tags.join(", "),
             rows.join(", "),
@@ -188,7 +188,7 @@ mod tests {
         assert_eq!(a, b);
         assert!(warnings.is_empty());
         assert!(a.contains("name: \"robot\""));
-        assert!(a.contains("tags: &[\"enemy\"]"));
+        assert!(a.contains("tags: Tags::List(&[\"enemy\"])"));
         assert!(a.contains(&format!(
             "ModelId({:#010x})",
             trino_core::asset_id("models/robot")

@@ -3,7 +3,8 @@
 //! - **runtime**: `trino_scene::resolve` over the RON scene + prefabs +
 //!   materials (editor viewport, `TRINO_SCENE` player);
 //! - **codegen**: the `no_std` `SceneNode` data exported for consoles
-//!   (`examples/showcase`).
+//!   (`examples/showcase`);
+//! - **baked**: the `TSCN` blob games load at runtime (`BakedScene`).
 //!
 //! Same renderer, same camera, t = 0. GPU-gated like the goldens.
 
@@ -69,6 +70,22 @@ fn runtime_scene_and_exported_code_render_identically() {
     draw_nodes(&mut r, showcase::NODES, &Mat34::IDENTITY, 0.0);
     r.end_frame();
     let codegen = r.read_offscreen();
+
+    // Baked-blob path (TSCN, what games load at runtime).
+    let (blob, warnings) = trino_scene::bake::to_tscn(&scene, &lib);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let blob: &'static [u8] = Box::leak(blob.into_boxed_slice());
+    let baked = trino_core::BakedScene::parse(blob).unwrap();
+    r.begin_frame(baked.clear());
+    r.set_camera(&baked.camera());
+    r.set_light(&baked.light());
+    let nodes: Vec<trino_core::SceneNode> = baked.nodes().collect();
+    draw_nodes(&mut r, &nodes, &Mat34::IDENTITY, 0.0);
+    r.end_frame();
+    assert!(
+        r.read_offscreen() == runtime,
+        "baked TSCN renders differently from the runtime scene"
+    );
 
     let differing = runtime
         .as_chunks::<4>()

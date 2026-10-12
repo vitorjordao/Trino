@@ -38,8 +38,10 @@ pub trait Platform {
     fn log(&self, message: &str);
 
     /// Bytes of a baked blob, or `None` if the handle is unknown. Blobs are
-    /// loaded at boot and live as long as the platform.
-    fn blob(&self, _id: BlobId) -> Option<&[u8]> {
+    /// loaded at boot and never freed, hence `'static`: game state can keep
+    /// borrowing them (a `BakedScene`, its node names and tags) across
+    /// frames. On PC a live reload leaks the previous version (dev only).
+    fn blob(&self, _id: BlobId) -> Option<&'static [u8]> {
         None
     }
 

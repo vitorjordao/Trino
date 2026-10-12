@@ -56,6 +56,6 @@ pub use render3d::{
     Camera3, ClipInfo, DEFAULT_LIGHT, Fog, Light, MAX_JOINTS, Mesh, MeshError, ScreenTri,
     tessellate,
 };
-pub use scene::SceneNode;
+pub use scene::{BakedScene, SceneNode, Tags};
 pub use text::{BitmapFont, TextBuf};
 pub use tilemap::{TILE_SIZE, Tilemap, TilemapError};

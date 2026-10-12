@@ -40,3 +40,35 @@ fn engine_checks_pass_on_pc() {
     }
     castle64::selftest::engine_checks(&mut renderer, &mut platform).unwrap();
 }
+
+/// `[scenes.showcase]` baked by the PC pipeline, served by `PcPlatform`,
+/// parsed by `BakedScene`: identical to the exported code, and playable
+/// (the same `check_baked` the console self-tests run). No GPU needed.
+#[test]
+fn baked_showcase_matches_code_and_plays() {
+    use trino_core::{Audio, Game};
+    struct NullAudio;
+    impl Audio for NullAudio {
+        fn play_sound(&mut self, _: trino_core::SoundId) {}
+        fn play_music(&mut self, _: trino_core::MusicId, _: bool) {}
+        fn stop_music(&mut self) {}
+        fn set_master_volume(&mut self, _: f32) {}
+    }
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+    let baked = tempfile::tempdir().unwrap();
+    trino_asset_pipeline::bake_all(
+        &root.join("assets"),
+        trino_asset_pipeline::Platform::Pc,
+        baked.path(),
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let assets = trino_asset_pipeline::load_dir(baked.path(), None).unwrap();
+    let mut platform = PcPlatform::new(&SimProfile::N64.caps());
+    for b in assets.blobs {
+        platform.insert_blob(trino_core::BlobId(b.id), b.bytes);
+    }
+    showcase::check_baked(&platform, |g, input| {
+        g.update(input, &mut NullAudio, 1.0 / 60.0)
+    })
+    .unwrap();
+}

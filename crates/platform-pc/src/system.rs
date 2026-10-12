@@ -14,7 +14,9 @@ use trino_core::{BlobId, Caps, Platform, SaveError};
 
 pub struct PcPlatform {
     start: Instant,
-    blobs: HashMap<u32, Vec<u8>>,
+    /// Leaked on insert: blobs are `'static` (see `Platform::blob`). A live
+    /// reload leaks the previous version — dev-only, bounded by edits.
+    blobs: HashMap<u32, &'static [u8]>,
     save_path: Option<PathBuf>,
     save_capacity: usize,
 }
@@ -39,7 +41,7 @@ impl PcPlatform {
 
     /// Register (or replace — live reload) a blob.
     pub fn insert_blob(&mut self, id: BlobId, bytes: Vec<u8>) {
-        self.blobs.insert(id.0, bytes);
+        self.blobs.insert(id.0, Box::leak(bytes.into_boxed_slice()));
     }
 }
 
@@ -52,8 +54,8 @@ impl Platform for PcPlatform {
         println!("{message}");
     }
 
-    fn blob(&self, id: BlobId) -> Option<&[u8]> {
-        self.blobs.get(&id.0).map(Vec::as_slice)
+    fn blob(&self, id: BlobId) -> Option<&'static [u8]> {
+        self.blobs.get(&id.0).copied()
     }
 
     fn save_capacity(&self) -> usize {

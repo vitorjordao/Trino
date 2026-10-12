@@ -873,6 +873,24 @@ fn load_gltf(path: &Path, opts: &ModelOptions) -> Result<MeshData, String> {
     Ok(data)
 }
 
+/// Bake the scene `decl.file` (relative to the project root, the parent of
+/// `assets_root`) into a `TSCN` blob, resolving prefabs, materials and
+/// `Auto` colliders exactly like the editor and `scene export`.
+pub fn bake_scene(assets_root: &Path, file: &str) -> Result<Vec<u8>, String> {
+    let project = assets_root.parent().unwrap_or(Path::new(""));
+    let scene = trino_scene::Scene::load(&project.join(file))?;
+    let mut lib = trino_scene::Library::load(project);
+    if let Some(e) = lib.errors.first() {
+        return Err(format!("scene `{file}`: library error: {e}"));
+    }
+    lib.model_bounds = manifest_model_bounds(assets_root);
+    let (blob, warnings) = trino_scene::bake::to_tscn(&scene, &lib);
+    if let Some(w) = warnings.first() {
+        return Err(format!("scene `{file}`: {w}"));
+    }
+    Ok(blob)
+}
+
 /// Bind-pose bounding box `(min, max)` of every model in
 /// `<assets_root>/manifest.toml`, keyed by logical path (`models/<name>`)
 /// — what `Auto` scene colliders use. Models that fail to bake are skipped

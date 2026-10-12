@@ -12,7 +12,8 @@ use trino_core::{BlobId, Platform, SaveError};
 use crate::{ffi, runtime};
 
 pub struct N64Platform {
-    blobs: BTreeMap<u32, Vec<u8>>,
+    /// Loaded at boot and never freed: `'static` (see `Platform::blob`).
+    blobs: BTreeMap<u32, &'static [u8]>,
     /// The hardware tick counter is 32-bit µs (wraps every ~71 min);
     /// widen it to the trait's u64 by tracking wraps.
     last_us: Cell<u32>,
@@ -29,7 +30,8 @@ impl N64Platform {
     }
 
     pub(crate) fn insert_blob(&mut self, id: u32, bytes: Vec<u8>) {
-        self.blobs.insert(id, bytes);
+        self.blobs
+            .insert(id, alloc::boxed::Box::leak(bytes.into_boxed_slice()));
     }
 
     fn eeprom_bytes(&self) -> usize {
@@ -57,8 +59,8 @@ impl Platform for N64Platform {
         runtime::log(message);
     }
 
-    fn blob(&self, id: BlobId) -> Option<&[u8]> {
-        self.blobs.get(&id.0).map(Vec::as_slice)
+    fn blob(&self, id: BlobId) -> Option<&'static [u8]> {
+        self.blobs.get(&id.0).copied()
     }
 
     fn save_capacity(&self) -> usize {

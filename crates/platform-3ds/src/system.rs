@@ -13,7 +13,8 @@ use trino_core::{BlobId, Caps, Platform, SaveError};
 use crate::{ffi, runtime};
 
 pub struct N3dsPlatform {
-    blobs: BTreeMap<u32, Vec<u8>>,
+    /// Loaded at boot and never freed: `'static` (see `Platform::blob`).
+    blobs: BTreeMap<u32, &'static [u8]>,
     last_us: Cell<u32>,
     high: Cell<u64>,
 }
@@ -28,7 +29,8 @@ impl N3dsPlatform {
     }
 
     pub(crate) fn insert_blob(&mut self, id: u32, bytes: Vec<u8>) {
-        self.blobs.insert(id, bytes);
+        self.blobs
+            .insert(id, alloc::boxed::Box::leak(bytes.into_boxed_slice()));
     }
 }
 
@@ -52,8 +54,8 @@ impl Platform for N3dsPlatform {
         runtime::log(message);
     }
 
-    fn blob(&self, id: BlobId) -> Option<&[u8]> {
-        self.blobs.get(&id.0).map(Vec::as_slice)
+    fn blob(&self, id: BlobId) -> Option<&'static [u8]> {
+        self.blobs.get(&id.0).copied()
     }
 
     fn save_capacity(&self) -> usize {

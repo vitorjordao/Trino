@@ -19,7 +19,8 @@
 //!
 //! [`resolve`] flattens a scene + library into a draw list (what the editor
 //! viewport renders); [`codegen`] turns it into `no_std` Rust data so console
-//! games can ship editor-made scenes today.
+//! games can ship editor-made scenes, and [`bake`] into a `TSCN` blob that
+//! games load at runtime (`trino_core::scene::BakedScene`).
 //!
 //! ## Versioning contract
 //!
@@ -29,6 +30,7 @@
 //! - Removing/renaming a field or changing its meaning bumps the version
 //!   and adds a migration. Adding an optional field with a default does not.
 
+pub mod bake;
 pub mod codegen;
 pub mod library;
 pub mod material;

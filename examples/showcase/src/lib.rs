@@ -32,10 +32,10 @@
 use core::fmt::Write as _;
 use trino_core::math3d::{atan2, cos, sin, sqrt};
 use trino_core::physics::{Aabb, move_aabb};
-use trino_core::scene::find;
+use trino_core::scene::{BakedScene, SceneNode};
 use trino_core::{
-    Audio, Button, Camera3, Color, EntityId, EntityStore, FontId, Game, InputState, Mat34,
-    Material, Renderer, TextAlign, TextBuf, TextParams, Vec2, Vec3,
+    Audio, BlobId, Button, Camera3, Color, EntityId, EntityStore, FontId, Game, InputState, Light,
+    Mat34, Material, Platform, Renderer, TextAlign, TextBuf, TextParams, Vec2, Vec3,
 };
 
 #[allow(clippy::all)]
@@ -54,6 +54,8 @@ pub mod scene_consts {
 /// Live entities: the whole exported scene fits with room to spare.
 pub const CAPACITY: usize = 96;
 const FONT: FontId = FontId::from_path("fonts/trino5x7");
+/// The same scene baked as data (`[scenes.showcase]` in the manifest).
+pub const BAKED: BlobId = BlobId::from_path("scenes/showcase");
 const HERO_HALF: Vec3 = Vec3::new(0.35, 0.6, 0.35);
 const GRAVITY: f32 = 22.0;
 const JUMP: f32 = 8.0;
@@ -79,6 +81,10 @@ pub struct ShowcaseGame {
     dist: f32,
     prev: InputState,
     screen: Vec2,
+    spawn: Vec3,
+    camera_fov: f32,
+    light: Light,
+    clear: Color,
 }
 
 impl ShowcaseGame {
@@ -86,20 +92,51 @@ impl ShowcaseGame {
         Self::with_screen(Vec2::new(320.0, 240.0))
     }
 
+    /// The level from the exported code (`showcase_gen.rs`).
     pub fn with_screen(screen: Vec2) -> Self {
+        Self::from_scene(
+            NODES.iter().copied(),
+            scene::CAMERA,
+            scene::LIGHT,
+            scene::CLEAR,
+            screen,
+        )
+    }
+
+    /// The level from the baked `TSCN` blob — the same scene loaded at
+    /// runtime (data-driven levels; no rebuild to change the layout).
+    pub fn from_baked(baked: &BakedScene, screen: Vec2) -> Self {
+        Self::from_scene(
+            baked.nodes(),
+            baked.camera(),
+            baked.light(),
+            baked.clear(),
+            screen,
+        )
+    }
+
+    pub fn from_scene(
+        nodes: impl IntoIterator<Item = SceneNode>,
+        camera: Camera3,
+        light: Light,
+        clear: Color,
+        screen: Vec2,
+    ) -> Self {
         let mut world = EntityStore::new();
-        world.spawn_nodes(NODES);
+        world.spawn_iter(nodes);
         let hero = world.with_tag("player").next();
-        let start = find(NODES, "spawn").map_or(Vec3::ZERO, |n| n.position());
+        let spawn = world
+            .find("spawn")
+            .and_then(|id| world.get(id))
+            .map_or(Vec3::ZERO, |e| e.position());
         // Start from the scene's own camera, expressed as an orbit.
-        let c = scene::CAMERA;
-        let d = c.eye - c.target;
+        let d = camera.eye - camera.target;
         let dist = sqrt(d.dot(d).max(1e-6));
         let total_coins = world.with_tag("coin").count() as u32;
         ShowcaseGame {
             world,
             hero,
-            pos: start + Vec3::new(0.0, HERO_HALF.y, 0.0),
+            pos: spawn + Vec3::new(0.0, HERO_HALF.y, 0.0),
             vel: Vec3::ZERO,
             on_ground: false,
             coins: 0,
@@ -112,6 +149,10 @@ impl ShowcaseGame {
             dist: dist * 0.7,
             prev: InputState::default(),
             screen,
+            spawn,
+            camera_fov: camera.fov_y,
+            light,
+            clear,
         }
     }
 
@@ -122,7 +163,7 @@ impl ShowcaseGame {
             eye: target
                 + Vec3::new(cp * sin(self.yaw), sin(self.pitch), -cp * cos(self.yaw)) * self.dist,
             target,
-            fov_y: scene::CAMERA.fov_y,
+            fov_y: self.camera_fov,
         }
     }
 
@@ -151,8 +192,7 @@ impl ShowcaseGame {
         }
         // Fell off the world: back to the spawn.
         if self.pos.y < -10.0 {
-            let start = find(NODES, "spawn").map_or(Vec3::ZERO, |n| n.position());
-            self.pos = start + Vec3::new(0.0, HERO_HALF.y, 0.0);
+            self.pos = self.spawn + Vec3::new(0.0, HERO_HALF.y, 0.0);
             self.vel = Vec3::ZERO;
         }
     }
@@ -235,9 +275,9 @@ impl Game for ShowcaseGame {
     }
 
     fn render(&mut self, r: &mut dyn Renderer) {
-        r.begin_frame(scene::CLEAR);
+        r.begin_frame(self.clear);
         r.set_camera(&self.camera());
-        r.set_light(&scene::LIGHT);
+        r.set_light(&self.light);
         // Everything the editor placed (animated clips included), coins
         // spinning and bobbing on top — game logic driven by tags.
         for (_, e) in self.world.iter() {
@@ -308,11 +348,14 @@ pub fn run_demo(
     // Coins in scene order, then the goal.
     let mut targets = [Vec3::ZERO; 8];
     let mut n = 0;
-    for node in NODES.iter().filter(|n| n.has_tag("coin")) {
-        targets[n] = node.position();
+    for (_, e) in game.world.iter().filter(|(_, e)| e.has_tag("coin")) {
+        if n + 1 == targets.len() {
+            return Err("too many coins for the demo route");
+        }
+        targets[n] = e.position();
         n += 1;
     }
-    let Some(goal) = find(NODES, "goal") else {
+    let Some(goal) = game.world.find("goal").and_then(|id| game.world.get(id)) else {
         return Err("no goal node");
     };
     targets[n] = goal.position();
@@ -365,12 +408,42 @@ pub fn run_demo(
     Ok(frames)
 }
 
+/// The baked scene (from the platform) must match the exported code node
+/// for node, and must play: build the game from the blob and run the demo.
+/// Console self-tests call this — it proves `[scenes.*]` baking, blob
+/// loading and `BakedScene` parsing on the real target.
+pub fn check_baked(
+    platform: &dyn Platform,
+    mut frame: impl FnMut(&mut ShowcaseGame, &InputState),
+) -> Result<(), &'static str> {
+    let bytes = platform.blob(BAKED).ok_or("baked scene blob missing")?;
+    let baked = BakedScene::parse(bytes).map_err(|_| "baked scene does not parse")?;
+    if baked.node_count() != NODES.len() {
+        return Err("baked scene node count differs from the exported code");
+    }
+    for (a, b) in baked.nodes().zip(NODES) {
+        if a.name != b.name
+            || a.model != b.model
+            || a.matrix != b.matrix
+            || a.collider != b.collider
+            || a.anim != b.anim
+            || a.params != b.params
+            || !a.tags.iter().eq(b.tags.iter())
+        {
+            return Err("baked node differs from the exported code");
+        }
+    }
+    let mut game = ShowcaseGame::from_baked(&baked, Vec2::new(320.0, 240.0));
+    run_demo(&mut game, &mut frame).map(|_| ())
+}
+
 #[cfg(feature = "hot-reload")]
 trino_game_api::export_game!(ShowcaseGame);
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use trino_core::scene::find;
 
     struct NullAudio;
     impl Audio for NullAudio {
@@ -430,7 +503,7 @@ mod tests {
     #[test]
     fn scripted_run_collects_every_coin_and_wins() {
         let mut g = ShowcaseGame::new();
-        let frames = run_demo(&mut g, |g, input| {
+        let frames = run_demo(&mut g, |g: &mut ShowcaseGame, input: &InputState| {
             g.update(input, &mut NullAudio, 1.0 / 60.0);
         })
         .unwrap();

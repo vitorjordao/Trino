@@ -260,6 +260,33 @@ pub fn bake_all(
         }
     }
 
+    for (name, decl) in &manifest.scenes {
+        let logical = format!("scenes/{name}");
+        let id = asset_id(&logical);
+        if let Some(other) = by_id.insert(id, logical.clone()) {
+            errors.push(format!("hash collision between `{other}` and `{logical}`"));
+            continue;
+        }
+        let result = (|| -> Result<BakedEntry, String> {
+            let blob = crate::model::bake_scene(assets_root, &decl.file)?;
+            let file = format!("{id:08x}.blob");
+            let changed = write_if_changed(&out_dir.join(&file), &blob)?;
+            // A baked scene is a blob to every loader (`Platform::blob`).
+            Ok(BakedEntry {
+                logical: logical.clone(),
+                id,
+                kind: "blob",
+                file,
+                format: "TSCN".into(),
+                changed,
+            })
+        })();
+        match result {
+            Ok(entry) => report.entries.push(entry),
+            Err(e) => errors.push(e),
+        }
+    }
+
     if !errors.is_empty() {
         return Err(BakeError(errors));
     }

@@ -164,3 +164,10 @@ cell = [6, 10]
 # Read back by the console self-tests (castle64::selftest).
 [blobs.selftest]
 file = "data/selftest.txt"
+
+# ---- scenes (editor scenes baked to TSCN, loaded at runtime) ----
+
+# Paths are relative to the project root. Games read them with
+# BakedScene::parse(platform.blob(BlobId::from_path("scenes/showcase"))).
+[scenes.showcase]
+file = "scenes/showcase.scene.ron"

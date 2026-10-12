@@ -102,6 +102,26 @@ mod n3ds {
                 return;
             }
         }
+        // 0c) The same level baked as data ([scenes.showcase] -> TSCN blob),
+        // parsed at runtime, must equal the exported code and play through.
+        {
+            let mut n = 0u32;
+            let result = showcase::check_baked(platform, |g, input| {
+                g.update(input, audio, 1.0 / 60.0);
+                if n % 8 == 0 {
+                    g.render(renderer);
+                }
+                n += 1;
+            });
+            if let Err(e) = result {
+                runtime::log(&format!("TRINO_TEST_FAIL:baked scene: {e}\n"));
+                while runtime::running() {
+                    trino_core::Renderer::begin_frame(renderer, trino_core::Color::BLACK);
+                    trino_core::Renderer::end_frame(renderer);
+                }
+                return;
+            }
+        }
         // Render 1:4 — a lógica roda todo frame (determinismo intacto); o
         // Azahar emula a cena 3D cheia abaixo do tempo real.
         let mut frame_no = 0u32;

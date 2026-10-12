@@ -3255,6 +3255,7 @@ dependencies = [
  "tempfile",
  "toml",
  "trino-core",
+ "trino-scene",
 ]
 
 [[package]]

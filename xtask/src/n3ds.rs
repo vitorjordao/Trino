@@ -222,6 +222,14 @@ pub fn bake_assets(root: &Path, test_mode: bool) -> Result<(), String> {
         std::fs::copy(&source, romfs.join(format!("{id:08x}.blob"))).map_err(|e| e.to_string())?;
         index.push_str(&format!("{id:08x}\tblob\t{id:08x}.blob\n"));
     }
+    for (name, decl) in &manifest.scenes {
+        let logical = format!("scenes/{name}");
+        let id = trino_core::asset_id(&logical);
+        // TSCN is portable: the same blob on every platform.
+        let blob = trino_asset_pipeline::bake_scene(&root.join("assets"), &decl.file)?;
+        std::fs::write(romfs.join(format!("{id:08x}.blob")), blob).map_err(|e| e.to_string())?;
+        index.push_str(&format!("{id:08x}\tblob\t{id:08x}.blob\n"));
+    }
 
     std::fs::write(romfs.join("index.tsv"), index).map_err(|e| e.to_string())?;
     if test_mode {

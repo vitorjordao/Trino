@@ -77,12 +77,18 @@ pub struct Manifest {
     /// (`Platform::blob`). Logical paths are `blobs/<name>`.
     #[serde(default)]
     pub blobs: BTreeMap<String, BlobDecl>,
+    /// Editor scenes baked to `TSCN` blobs for runtime loading
+    /// (`trino_core::scene::BakedScene`). Logical paths are `scenes/<name>`;
+    /// `file` is relative to the **project root** (`scenes/x.scene.ron`).
+    #[serde(default)]
+    pub scenes: BTreeMap<String, BlobDecl>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BlobDecl {
-    /// Source file, relative to `assets/shared/` (or a platform override).
+    /// Source file: relative to `assets/shared/` (or a platform override)
+    /// for `[blobs.*]`, to the project root for `[scenes.*]`.
     pub file: String,
 }
 

@@ -25,7 +25,7 @@ use crate::math::Vec3;
 use crate::math3d::Mat34;
 use crate::physics::{Aabb, Collider};
 use crate::render::{AnimRef, ClipId, Material, ModelId, ModelParams, Renderer};
-use crate::scene::SceneNode;
+use crate::scene::{SceneNode, Tags};
 
 /// One live entity. Plain data; game logic lives in the game, keyed by
 /// `user` (a kind or an index into game-side arrays) or by tags.
@@ -33,7 +33,7 @@ use crate::scene::SceneNode;
 pub struct Entity {
     /// `/`-joined name path (scene entities) or any static name.
     pub name: &'static str,
-    pub tags: &'static [&'static str],
+    pub tags: Tags,
     /// World matrix.
     pub matrix: Mat34,
     pub model: Option<ModelId>,
@@ -50,7 +50,7 @@ pub struct Entity {
 impl Entity {
     pub const EMPTY: Entity = Entity {
         name: "",
-        tags: &[],
+        tags: Tags::NONE,
         matrix: Mat34::IDENTITY,
         model: None,
         params: ModelParams::DEFAULT,
@@ -95,7 +95,7 @@ impl Entity {
     }
 
     pub fn has_tag(&self, tag: &str) -> bool {
-        self.tags.contains(&tag)
+        self.tags.contains(tag)
     }
 
     /// World box of the collider, if any.
@@ -173,8 +173,14 @@ impl<const N: usize> EntityStore<N> {
 
     /// Spawn every node of an exported scene; returns how many fit.
     pub fn spawn_nodes(&mut self, nodes: &[SceneNode]) -> usize {
+        self.spawn_iter(nodes.iter().copied())
+    }
+
+    /// Spawn nodes from any source — e.g. `BakedScene::nodes()` for a scene
+    /// loaded at runtime. Returns how many fit.
+    pub fn spawn_iter(&mut self, nodes: impl IntoIterator<Item = SceneNode>) -> usize {
         nodes
-            .iter()
+            .into_iter()
             .take_while(|n| self.spawn(Entity::from_node(n)).is_some())
             .count()
     }
@@ -324,7 +330,7 @@ mod tests {
         matrix.m[0][3] = x;
         SceneNode {
             name,
-            tags,
+            tags: Tags::List(tags),
             matrix,
             model: None,
             params: ModelParams::DEFAULT,

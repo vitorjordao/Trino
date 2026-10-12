@@ -923,18 +923,34 @@ fn load_gltf(path: &Path, opts: &ModelOptions) -> Result<MeshData, String> {
 /// `assets_root`) into a `TSCN` blob, resolving prefabs, materials and
 /// `Auto` colliders exactly like the editor and `scene export`.
 pub fn bake_scene(assets_root: &Path, file: &str) -> Result<Vec<u8>, String> {
+    bake_scene_with_bounds(assets_root, file, manifest_model_bounds(assets_root))
+}
+
+/// [`bake_scene`] with model bounds the caller already has (the bake loop
+/// collects them while baking models — no second model bake).
+pub fn bake_scene_with_bounds(
+    assets_root: &Path,
+    file: &str,
+    bounds: std::collections::BTreeMap<String, ([f32; 3], [f32; 3])>,
+) -> Result<Vec<u8>, String> {
     let project = assets_root.parent().unwrap_or(Path::new(""));
     let scene = trino_scene::Scene::load(&project.join(file))?;
     let mut lib = trino_scene::Library::load(project);
     if let Some(e) = lib.errors.first() {
         return Err(format!("scene `{file}`: library error: {e}"));
     }
-    lib.model_bounds = manifest_model_bounds(assets_root);
+    lib.model_bounds = bounds;
     let (blob, warnings) = trino_scene::bake::to_tscn(&scene, &lib);
     if let Some(w) = warnings.first() {
         return Err(format!("scene `{file}`: {w}"));
     }
     Ok(blob)
+}
+
+/// Bind-pose AABB of a baked TMDL blob.
+pub fn tmdl_bounds(blob: &[u8]) -> Option<([f32; 3], [f32; 3])> {
+    let (min, max) = trino_core::render3d::Mesh::from_tmdl(blob).ok()?.aabb()?;
+    Some(([min.x, min.y, min.z], [max.x, max.y, max.z]))
 }
 
 /// Bind-pose bounding box `(min, max)` of every model in
@@ -955,14 +971,8 @@ pub fn manifest_model_bounds(
         let Ok(blob) = bake_model(&source, &decl.options()) else {
             continue;
         };
-        if let Some((min, max)) = trino_core::render3d::Mesh::from_tmdl(&blob)
-            .ok()
-            .and_then(|m| m.aabb())
-        {
-            out.insert(
-                format!("models/{name}"),
-                ([min.x, min.y, min.z], [max.x, max.y, max.z]),
-            );
+        if let Some(b) = tmdl_bounds(&blob) {
+            out.insert(format!("models/{name}"), b);
         }
     }
     out

@@ -158,6 +158,9 @@ pub fn bake_all(
         }
     }
 
+    // Model bounds for baked scenes' `Auto` colliders, collected as models
+    // bake (no second bake per scene).
+    let mut model_bounds = BTreeMap::new();
     for (name, decl) in &manifest.models {
         let logical = format!("models/{name}");
         let id = asset_id(&logical);
@@ -168,6 +171,9 @@ pub fn bake_all(
         let result = (|| -> Result<BakedEntry, String> {
             let source = resolve_source(assets_root, platform, &decl.file)?;
             let blob = crate::model::bake_model(&source, &decl.options())?;
+            if let Some(b) = crate::model::tmdl_bounds(&blob) {
+                model_bounds.insert(logical.clone(), b);
+            }
             let file = format!("{id:08x}.model");
             let changed = write_if_changed(&out_dir.join(&file), &blob)?;
             Ok(BakedEntry {
@@ -268,7 +274,11 @@ pub fn bake_all(
             continue;
         }
         let result = (|| -> Result<BakedEntry, String> {
-            let blob = crate::model::bake_scene(assets_root, &decl.file)?;
+            let blob = crate::model::bake_scene_with_bounds(
+                assets_root,
+                &decl.file,
+                model_bounds.clone(),
+            )?;
             let file = format!("{id:08x}.blob");
             let changed = write_if_changed(&out_dir.join(&file), &blob)?;
             // A baked scene is a blob to every loader (`Platform::blob`).

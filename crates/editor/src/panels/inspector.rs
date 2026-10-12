@@ -312,6 +312,63 @@ fn entity(app: &mut App, ui: &mut egui::Ui, path: &[usize]) {
                     });
                 }
             }
+            // Distance LOD: cheaper models (fake objects) or nothing, far away.
+            egui::CollapsingHeader::new(
+                RichText::new(format!("{}  LOD ({})", icon::STACK, m.lod.len()))
+                    .color(c::TEXT_WEAK),
+            )
+            .id_salt("model-lod")
+            .default_open(!m.lod.is_empty())
+            .show(ui, |ui| {
+                let mut remove = None;
+                for (i, level) in m.lod.iter_mut().enumerate() {
+                    ui.horizontal(|ui| {
+                        ui.add(
+                            egui::DragValue::new(&mut level.distance)
+                                .speed(0.25)
+                                .range(0.0..=10_000.0)
+                                .suffix(" m"),
+                        )
+                        .on_hover_text("Camera distance where this level starts");
+                        let label = level.path.clone().unwrap_or_else(|| "None (cull)".into());
+                        egui::ComboBox::from_id_salt(("lod-path", i))
+                            .selected_text(label)
+                            .width(ui.available_width() - 30.0)
+                            .show_ui(ui, |ui| {
+                                if ui
+                                    .selectable_label(level.path.is_none(), "None (cull)")
+                                    .clicked()
+                                {
+                                    level.path = None;
+                                }
+                                for (name, proxy) in &model_names {
+                                    let g = if *proxy { icon::GHOST } else { icon::CUBE };
+                                    let sel = level.path.as_deref() == Some(name.as_str());
+                                    if ui.selectable_label(sel, format!("{g}  {name}")).clicked() {
+                                        level.path = Some(name.clone());
+                                    }
+                                }
+                            });
+                        if theme::icon_button(ui, icon::X, "Remove level").clicked() {
+                            remove = Some(i);
+                        }
+                    });
+                }
+                if let Some(i) = remove {
+                    m.lod.remove(i);
+                }
+                if ui
+                    .small_button(format!("{} Add level", icon::PLUS))
+                    .on_hover_text("Fake objects make good far levels (Create › Fake object)")
+                    .clicked()
+                {
+                    let next = m.lod.last().map_or(15.0, |l| l.distance + 15.0);
+                    m.lod.push(trino_scene::LodDef {
+                        distance: next,
+                        path: None,
+                    });
+                }
+            });
             ui.horizontal(|ui| {
                 ui.add_space(64.0);
                 if ui

@@ -301,13 +301,15 @@ impl Game for ShowcaseGame {
     }
 
     fn render(&mut self, r: &mut dyn Renderer) {
+        let camera = self.camera();
         r.begin_frame(self.clear);
-        r.set_camera(&self.camera());
+        r.set_camera(&camera);
         r.set_light(&self.light);
         // Everything the editor placed (animated clips included), coins
         // spinning and bobbing on top — game logic driven by tags.
         for (_, e) in self.world.iter() {
-            let Some(model) = e.model.filter(|_| e.visible) else {
+            // LOD from the scene: far trees swap to cheaper fake objects.
+            let Some(model) = e.model_from(camera.eye).filter(|_| e.visible) else {
                 continue;
             };
             let mut params = e.params;
@@ -456,6 +458,7 @@ pub fn check_baked(
             || a.anim != b.anim
             || a.params != b.params
             || !a.tags.iter().eq(b.tags.iter())
+            || !a.lod.iter().eq(b.lod.iter())
         {
             return Err("baked node differs from the exported code");
         }
@@ -499,6 +502,19 @@ mod tests {
         assert!(find(NODES, "coin-1").unwrap().collider.unwrap().trigger);
         assert!(!find(NODES, "crate-a").unwrap().collider.unwrap().trigger);
         assert!(g.world.len() == NODES.len(), "every node is a live entity");
+    }
+
+    #[test]
+    fn far_trees_switch_to_cheaper_lods() {
+        let leaves = find(NODES, "tree-1/tree/leaves").unwrap();
+        let p = leaves.position();
+        let near = p + Vec3::new(0.0, 0.0, 5.0);
+        let mid = p + Vec3::new(0.0, 0.0, 20.0);
+        let far = p + Vec3::new(0.0, 0.0, 50.0);
+        let id = trino_core::ModelId::from_path;
+        assert_eq!(leaves.model_from(near), Some(id("models/tree-top")));
+        assert_eq!(leaves.model_from(mid), Some(id("models/tree-top-far")));
+        assert_eq!(leaves.model_from(far), None, "culled past the fog");
     }
 
     #[test]

@@ -153,18 +153,19 @@ impl ScenePlayer {
         let c = env.clear;
         r.begin_frame(Color::rgb(c[0], c[1], c[2]));
         let cp = self.pitch.cos();
-        r.set_camera(&Camera3 {
+        let camera = Camera3 {
             eye: self.target
                 + Vec3::new(cp * self.yaw.sin(), self.pitch.sin(), -cp * self.yaw.cos())
                     * self.dist,
             target: self.target,
             fov_y: self.fov,
-        });
+        };
+        r.set_camera(&camera);
         r.set_light(&env.core_light());
         let resolved = resolve(&self.scene, &self.lib, self.time);
         for item in &resolved.items {
-            if let Some((id, _)) = &item.model {
-                r.draw_model_matrix(*id, &item.matrix, Material::VertexLit, &item.params);
+            if let Some(id) = item.model_from(camera.eye) {
+                r.draw_model_matrix(id, &item.matrix, Material::VertexLit, &item.params);
             }
         }
         for item in &resolved.items {

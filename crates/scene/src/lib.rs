@@ -307,6 +307,21 @@ pub struct ModelComponent {
     /// Animation clip to play (models with a baked skeleton).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub anim: Option<AnimComponent>,
+    /// Distance levels: from `distance` on, draw `path` (a cheaper model —
+    /// fake objects make good far levels) or nothing (`None`). Sorted by
+    /// distance on resolve.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lod: Vec<LodDef>,
+}
+
+/// One LOD level of a [`ModelComponent`].
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct LodDef {
+    /// Camera distance (world units) where this level starts.
+    pub distance: f32,
+    /// Model logical path (`models/tree-far`); `None` = culled.
+    #[serde(default)]
+    pub path: Option<String>,
 }
 
 impl ModelComponent {
@@ -316,6 +331,7 @@ impl ModelComponent {
             material: None,
             tint: None,
             anim: None,
+            lod: Vec::new(),
         }
     }
 

@@ -12,7 +12,7 @@
 //! let mut solids = [Aabb::EMPTY; 128];
 //! let n = world.solids(&mut solids, None);
 //! let out = move_aabb(pos, half, vel, dt, &solids[..n]);
-//! world.draw(renderer, &Mat34::IDENTITY, time);
+//! world.draw(renderer, &Mat34::IDENTITY, time, camera.eye);
 //! ```
 //!
 //! Handles are generational ([`EntityId`]): a despawned slot reused by a
@@ -25,7 +25,7 @@ use crate::math::Vec3;
 use crate::math3d::Mat34;
 use crate::physics::{Aabb, Collider};
 use crate::render::{AnimRef, ClipId, Material, ModelId, ModelParams, Renderer};
-use crate::scene::{SceneNode, Tags};
+use crate::scene::{Lods, SceneNode, Tags};
 
 /// One live entity. Plain data; game logic lives in the game, keyed by
 /// `user` (a kind or an index into game-side arrays) or by tags.
@@ -42,6 +42,8 @@ pub struct Entity {
     /// also set `params.anim` directly for full control (crossfades).
     pub anim: Option<(ClipId, f32)>,
     pub collider: Option<Collider>,
+    /// Distance levels (see [`crate::scene::LodLevel`]).
+    pub lod: Lods,
     pub visible: bool,
     /// Game-defined payload.
     pub user: u32,
@@ -56,6 +58,7 @@ impl Entity {
         params: ModelParams::DEFAULT,
         anim: None,
         collider: None,
+        lod: Lods::NONE,
         visible: true,
         user: 0,
     };
@@ -70,6 +73,7 @@ impl Entity {
             params: node.params,
             anim: node.anim,
             collider: node.collider,
+            lod: node.lod,
             visible: true,
             user: 0,
         }
@@ -92,6 +96,15 @@ impl Entity {
     pub fn translate(&mut self, d: Vec3) {
         let p = self.position();
         self.set_position(p + d);
+    }
+
+    /// Model to draw seen from `eye` (LOD applied).
+    pub fn model_from(&self, eye: Vec3) -> Option<ModelId> {
+        if self.lod.is_empty() {
+            return self.model;
+        }
+        let d = self.position() - eye;
+        self.lod.select(self.model, d.dot(d))
     }
 
     pub fn has_tag(&self, tag: &str) -> bool {
@@ -305,10 +318,11 @@ impl<const N: usize> EntityStore<N> {
     }
 
     /// Draw every visible model entity under `root`, looping clips at
-    /// `time` seconds (entities with `params.anim` set keep it).
-    pub fn draw(&self, renderer: &mut dyn Renderer, root: &Mat34, time: f32) {
+    /// `time` seconds (entities with `params.anim` set keep it), with LOD
+    /// levels chosen for a camera at `eye`.
+    pub fn draw(&self, renderer: &mut dyn Renderer, root: &Mat34, time: f32, eye: Vec3) {
         for (_, e) in self.iter() {
-            let Some(model) = e.model.filter(|_| e.visible) else {
+            let Some(model) = e.model_from(eye).filter(|_| e.visible) else {
                 continue;
             };
             let mut params = e.params;
@@ -336,6 +350,7 @@ mod tests {
             params: ModelParams::DEFAULT,
             anim: None,
             collider: None,
+            lod: Lods::NONE,
         }
     }
 

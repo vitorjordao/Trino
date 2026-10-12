@@ -131,6 +131,10 @@ file = "models/proxies/tree-trunk.prim.ron"
 [models.tree-top]
 file = "models/proxies/tree-top.prim.ron"
 
+# Far LOD of tree-top (a cheaper fake object), used by prefabs/tree.
+[models.tree-top-far]
+file = "models/proxies/tree-top-far.prim.ron"
+
 [models.lamp-post]
 file = "models/proxies/lamp-post.prim.ron"
 

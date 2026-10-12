@@ -61,15 +61,15 @@ pub fn to_tscn(scene: &Scene, lib: &Library) -> (Vec<u8>, Vec<String>) {
     debug_assert_eq!(out.len(), TSCN_HEADER + TSCN_ENV_BYTES);
 
     let mut strings = Vec::new();
-    let mut intern = |s: &str| -> (u32, u32) {
+    fn intern(strings: &mut Vec<u8>, s: &str) -> (u32, u32) {
         let at = strings.len() as u32;
         strings.extend_from_slice(s.as_bytes());
         (at, s.len() as u32)
-    };
+    }
     for item in &items {
         let start = out.len();
-        let (no, nl) = intern(&item.name);
-        let (to, tl) = intern(&item.tags.join("\n"));
+        let (no, nl) = intern(&mut strings, &item.name);
+        let (to, tl) = intern(&mut strings, &item.tags.join("\n"));
         for v in [no, nl, to, tl] {
             out.extend_from_slice(&v.to_le_bytes());
         }
@@ -121,6 +121,15 @@ pub fn to_tscn(scene: &Scene, lib: &Library) -> (Vec<u8>, Vec<String>) {
         let off = item.collider.map_or(trino_core::Vec3::ZERO, |c| c.offset);
         f32s(&mut out, &[off.x, off.y, off.z]);
         out.extend_from_slice(&p.texture.map_or(0, |t| t.0).to_le_bytes());
+        // LOD records live in the data table (4-aligned offsets are not
+        // required: readers decode bytes, never cast).
+        let lod_at = strings.len() as u32;
+        for (d, m) in &item.lod {
+            strings.extend_from_slice(&d.to_le_bytes());
+            strings.extend_from_slice(&m.as_ref().map_or(0, |(id, _)| id.0).to_le_bytes());
+        }
+        out.extend_from_slice(&lod_at.to_le_bytes());
+        out.extend_from_slice(&(item.lod.len() as u32).to_le_bytes());
         debug_assert_eq!(out.len() - start, TSCN_NODE_BYTES);
     }
     out.extend_from_slice(&strings);
@@ -132,6 +141,39 @@ mod tests {
     use super::*;
     use crate::{AnimComponent, ColliderComponent, Entity, ModelComponent, ShapeDef};
     use trino_core::scene::BakedScene;
+
+    #[test]
+    fn lod_levels_bake_sorted_and_select_by_distance() {
+        let mut scene = Scene::new("t");
+        scene
+            .entities
+            .push(Entity::new("tree").with_model(ModelComponent {
+                lod: vec![
+                    crate::LodDef {
+                        distance: 40.0,
+                        path: None,
+                    },
+                    crate::LodDef {
+                        distance: 15.0,
+                        path: Some("models/tree-far".into()),
+                    },
+                ],
+                ..ModelComponent::new("models/tree")
+            }));
+        let (blob, _) = to_tscn(&scene, &Library::default());
+        let blob: &'static [u8] = Box::leak(blob.into_boxed_slice());
+        let n = BakedScene::parse(blob).unwrap().find("tree").unwrap();
+        assert_eq!(n.lod.len(), 2);
+        assert_eq!(n.lod.get(0).unwrap().distance, 15.0, "sorted");
+        let eye = |z: f32| trino_core::Vec3::new(0.0, 0.0, z);
+        let id = trino_core::ModelId::from_path;
+        assert_eq!(n.model_from(eye(5.0)), Some(id("models/tree")));
+        assert_eq!(n.model_from(eye(20.0)), Some(id("models/tree-far")));
+        assert_eq!(n.model_from(eye(50.0)), None);
+        // The editor-side resolve agrees.
+        let item = &crate::resolve(&scene, &Library::default(), 0.0).items[0];
+        assert_eq!(item.model_from(eye(20.0)), Some(id("models/tree-far")));
+    }
 
     #[test]
     fn round_trips_through_the_core_reader() {
@@ -182,6 +224,7 @@ mod tests {
                 height: 1.8
             }
         );
+        assert!(r.lod.is_empty());
         let m = baked.find("group/marker").unwrap();
         assert!(m.model.is_none() && m.tags.is_empty());
         assert_eq!(m.position().y, 5.0);

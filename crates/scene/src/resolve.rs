@@ -27,8 +27,32 @@ pub struct DrawItem {
     pub sprite: Option<SpriteDraw>,
     /// Collision shape (local to `matrix`), `Auto` already resolved.
     pub collider: Option<Collider>,
+    /// LOD levels sorted by distance: (distance, model or culled).
+    pub lod: Vec<(f32, Option<(ModelId, String)>)>,
     /// True for parts that come from a prefab (not editable in place).
     pub from_prefab: bool,
+}
+
+impl DrawItem {
+    /// Model to draw for a camera at `eye` (LOD applied).
+    pub fn model_from(&self, eye: trino_core::Vec3) -> Option<ModelId> {
+        let base = self.model.as_ref().map(|(id, _)| *id);
+        if self.lod.is_empty() {
+            return base;
+        }
+        let p = self.matrix.transform_point(trino_core::Vec3::ZERO);
+        let d = p - eye;
+        let dist_sq = d.dot(d);
+        let mut model = base;
+        for (distance, m) in &self.lod {
+            if dist_sq >= distance * distance {
+                model = m.as_ref().map(|(id, _)| *id);
+            } else {
+                break;
+            }
+        }
+        model
+    }
 }
 
 /// A sprite in screen space (2D accumulation of the entity chain).
@@ -145,6 +169,24 @@ fn visit(
         flip_x: s.flip_x,
         flip_y: s.flip_y,
     });
+    let mut lod: Vec<(f32, Option<(ModelId, String)>)> = e
+        .model
+        .as_ref()
+        .map(|m| {
+            m.lod
+                .iter()
+                .map(|l| {
+                    (
+                        l.distance,
+                        l.path
+                            .as_ref()
+                            .map(|p| (ModelId(trino_core::asset_id(p)), p.clone())),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    lod.sort_by(|a, b| a.0.total_cmp(&b.0));
     let collider = e
         .collider
         .as_ref()
@@ -159,6 +201,7 @@ fn visit(
         material,
         sprite,
         collider,
+        lod,
         from_prefab,
     });
 

@@ -8,6 +8,8 @@
                 model: Some((
                     path: "models/tree-trunk",
                     material: Some("materials/wood"),
+                    // Past the fog the trunk is invisible anyway: skip it.
+                    lod: [(distance: 30.0, path: None)],
                 )),
                 collider: Some(()),
             ),
@@ -21,6 +23,10 @@
                 model: Some((
                     path: "models/tree-top",
                     material: Some("materials/grass"),
+                    lod: [
+                        (distance: 14.0, path: Some("models/tree-top-far")),
+                        (distance: 40.0, path: None),
+                    ],
                 )),
             ),
         ],

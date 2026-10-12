@@ -39,7 +39,7 @@ pub fn to_rust(scene: &Scene, lib: &Library) -> (String, Vec<String>) {
     );
     let _ = writeln!(
         out,
-        "#[allow(unused_imports)]\nuse trino_core::{{\n    Camera3, ClipId, Collider, Color, Fog, Light, Mat34, ModelId, ModelParams, SceneNode,\n    Shading, Shape, SpriteId, Tags, Vec3,\n}};\n"
+        "#[allow(unused_imports)]\nuse trino_core::{{\n    Camera3, ClipId, Collider, Color, Fog, Light, LodLevel, Lods, Mat34, ModelId, ModelParams,\n    SceneNode, Shading, Shape, SpriteId, Tags, Vec3,\n}};\n"
     );
     let env = &scene.environment;
     let cam = env.core_camera();
@@ -128,6 +128,24 @@ pub fn to_rust(scene: &Scene, lib: &Library) -> (String, Vec<String>) {
             }
             None => "None".into(),
         };
+        let lod = if item.lod.is_empty() {
+            "Lods::NONE".to_string()
+        } else {
+            let levels: Vec<String> = item
+                .lod
+                .iter()
+                .map(|(d, m)| {
+                    let model = match m {
+                        Some((id, path)) => {
+                            format!("Some(ModelId({:#010x})) /* {} */", id.0, esc(path))
+                        }
+                        None => "None".into(),
+                    };
+                    format!("LodLevel {{ distance: {}, model: {model} }}", f(*d))
+                })
+                .collect();
+            format!("Lods::List(&[{}])", levels.join(", "))
+        };
         let tags: Vec<String> = item
             .tags
             .iter()
@@ -135,7 +153,7 @@ pub fn to_rust(scene: &Scene, lib: &Library) -> (String, Vec<String>) {
             .collect();
         let _ = writeln!(
             out,
-            "    SceneNode {{\n        name: \"{}\",\n        tags: Tags::List(&[{}]),\n        matrix: Mat34 {{\n            m: [{}],\n        }},\n        model: {},\n        params: ModelParams {{\n            tint: {},\n            emissive: {},\n            shading: Shading::{},\n            double_sided: {},\n            anim: None,\n            texture: {},\n        }},\n        anim: {},\n        collider: {},\n    }},",
+            "    SceneNode {{\n        name: \"{}\",\n        tags: Tags::List(&[{}]),\n        matrix: Mat34 {{\n            m: [{}],\n        }},\n        model: {},\n        params: ModelParams {{\n            tint: {},\n            emissive: {},\n            shading: Shading::{},\n            double_sided: {},\n            anim: None,\n            texture: {},\n        }},\n        anim: {},\n        collider: {},\n        lod: {},\n    }},",
             esc(&item.name),
             tags.join(", "),
             rows.join(", "),
@@ -149,7 +167,8 @@ pub fn to_rust(scene: &Scene, lib: &Library) -> (String, Vec<String>) {
                 None => "None".into(),
             },
             anim,
-            collider
+            collider,
+            lod
         );
     }
     let _ = writeln!(out, "];");

@@ -55,6 +55,73 @@ impl Tags {
     }
 }
 
+/// One distance level of a model: from `distance` (world units from the
+/// camera eye) on, draw `model` instead — `None` draws nothing (culled).
+/// Fake objects make natural far levels: a 6-sided cone for a tree, a box
+/// for a house.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LodLevel {
+    pub distance: f32,
+    pub model: Option<ModelId>,
+}
+
+/// A node's LOD levels, sorted by distance: a static list (exported code)
+/// or 8-byte little-endian records (`f32 distance, u32 model`, 0 = none)
+/// borrowed from a baked scene blob.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Lods {
+    List(&'static [LodLevel]),
+    Packed(&'static [u8]),
+}
+
+impl Lods {
+    pub const NONE: Lods = Lods::List(&[]);
+
+    pub fn len(&self) -> usize {
+        match self {
+            Lods::List(l) => l.len(),
+            Lods::Packed(b) => b.len() / 8,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn get(&self, i: usize) -> Option<LodLevel> {
+        match self {
+            Lods::List(l) => l.get(i).copied(),
+            Lods::Packed(b) => {
+                let r = b.get(i * 8..i * 8 + 8)?;
+                let id = u32::from_le_bytes([r[4], r[5], r[6], r[7]]);
+                Some(LodLevel {
+                    distance: f32::from_le_bytes([r[0], r[1], r[2], r[3]]),
+                    model: (id != 0).then_some(ModelId(id)),
+                })
+            }
+        }
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = LodLevel> + '_ {
+        (0..self.len()).filter_map(|i| self.get(i))
+    }
+
+    /// Model to draw at squared distance `dist_sq` from the eye: the last
+    /// level whose distance is reached, else `base`. Squared distances
+    /// keep `sqrt` (software on consoles) out of the per-node cost.
+    pub fn select(&self, base: Option<ModelId>, dist_sq: f32) -> Option<ModelId> {
+        let mut model = base;
+        for level in self.iter() {
+            if dist_sq >= level.distance * level.distance {
+                model = level.model;
+            } else {
+                break;
+            }
+        }
+        model
+    }
+}
+
 /// One flattened entity (prefabs expanded, world matrix precomputed).
 #[derive(Clone, Copy, Debug)]
 pub struct SceneNode {
@@ -69,6 +136,8 @@ pub struct SceneNode {
     pub anim: Option<(ClipId, f32)>,
     /// Collision shape (local to `matrix`); see [`crate::physics`].
     pub collider: Option<Collider>,
+    /// Distance levels replacing `model` far from the camera.
+    pub lod: Lods,
 }
 
 impl SceneNode {
@@ -88,6 +157,15 @@ impl SceneNode {
     /// World box of the collider, if any.
     pub fn world_aabb(&self) -> Option<Aabb> {
         self.collider.map(|c| c.world_aabb(&self.matrix))
+    }
+
+    /// Model to draw seen from `eye` (LOD applied).
+    pub fn model_from(&self, eye: Vec3) -> Option<ModelId> {
+        if self.lod.is_empty() {
+            return self.model;
+        }
+        let d = self.position() - eye;
+        self.lod.select(self.model, d.dot(d))
     }
 }
 
@@ -111,8 +189,10 @@ impl SceneNode {
 ///     1 box, 2 sphere, 3 capsule), bit15 collider trigger
 ///   model u32, tint rgba, emissive rgba, clip u32, speed f32
 ///   collider a f32 b f32 c f32 (box half xyz / sphere r / capsule r,h)
-///   collider offset f32*3, texture u32 (sprite handle)
-/// string table: UTF-8 bytes to the end of the blob
+///   collider offset f32*3, texture u32 (sprite handle),
+///   LOD levels (u32 offset, u32 count) into the data table — 8-byte
+///   records `f32 distance, u32 model` (0 = none), sorted by distance
+/// data table: UTF-8 strings and LOD records, to the end of the blob: UTF-8 bytes to the end of the blob
 /// ```
 ///
 /// [`BakedScene::parse`] validates everything up front (bounds, UTF-8), so
@@ -121,7 +201,7 @@ pub const TSCN_MAGIC: &[u8; 4] = b"TSCN";
 pub const TSCN_VERSION: u16 = 1;
 pub const TSCN_HEADER: usize = 12;
 pub const TSCN_ENV_BYTES: usize = 68;
-pub const TSCN_NODE_BYTES: usize = 16 + 48 + 4 + 4 + 4 + 4 + 4 + 4 + 12 + 12 + 4;
+pub const TSCN_NODE_BYTES: usize = 16 + 48 + 4 + 4 + 4 + 4 + 4 + 4 + 12 + 12 + 4 + 8;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SceneError {
@@ -190,6 +270,8 @@ impl BakedScene {
             for field in [at, at + 8] {
                 scene.string(rd_u32(bytes, field), rd_u32(bytes, field + 4))?;
             }
+            let lod = at + 64 + 52;
+            scene.data(rd_u32(bytes, lod), rd_u32(bytes, lod + 4).saturating_mul(8))?;
         }
         Ok(scene)
     }
@@ -202,7 +284,8 @@ impl BakedScene {
         TSCN_HEADER + TSCN_ENV_BYTES + i * TSCN_NODE_BYTES
     }
 
-    fn string(&self, offset: u32, len: u32) -> Result<&'static str, SceneError> {
+    /// Raw bytes `offset..offset+len` of the data table.
+    fn data(&self, offset: u32, len: u32) -> Result<&'static [u8], SceneError> {
         let start = self
             .strings
             .checked_add(offset as usize)
@@ -211,8 +294,11 @@ impl BakedScene {
             .checked_add(len as usize)
             .ok_or(SceneError::BadString)?;
         let bytes: &'static [u8] = self.bytes;
-        let raw = bytes.get(start..end).ok_or(SceneError::BadString)?;
-        core::str::from_utf8(raw).map_err(|_| SceneError::BadString)
+        bytes.get(start..end).ok_or(SceneError::BadString)
+    }
+
+    fn string(&self, offset: u32, len: u32) -> Result<&'static str, SceneError> {
+        core::str::from_utf8(self.data(offset, len)?).map_err(|_| SceneError::BadString)
     }
 
     pub fn clear(&self) -> Color {
@@ -287,9 +373,14 @@ impl BakedScene {
             }),
             _ => None,
         };
+        let lod_at = b + 52;
+        let lod = self
+            .data(rd_u32(d, lod_at), rd_u32(d, lod_at + 4) * 8)
+            .expect("validated in parse");
         SceneNode {
             name,
             tags: Tags::Packed(tags),
+            lod: Lods::Packed(lod),
             matrix,
             model: (flags & 1 != 0).then(|| ModelId(rd_u32(d, b + 4))),
             params,
@@ -337,10 +428,17 @@ pub fn solids(nodes: &[SceneNode], out: &mut [Aabb]) -> usize {
     n
 }
 
-/// Draw every model node under `root`, animating clips at `time` seconds.
-pub fn draw_nodes(renderer: &mut dyn Renderer, nodes: &[SceneNode], root: &Mat34, time: f32) {
+/// Draw every model node under `root`, animating clips at `time` seconds,
+/// with LOD levels chosen for a camera at `eye` (pass `camera.eye`).
+pub fn draw_nodes(
+    renderer: &mut dyn Renderer,
+    nodes: &[SceneNode],
+    root: &Mat34,
+    time: f32,
+    eye: Vec3,
+) {
     for node in nodes {
-        let Some(model) = node.model else {
+        let Some(model) = node.model_from(eye) else {
             continue;
         };
         let mut params = node.params;
@@ -374,6 +472,7 @@ mod tests {
             params: ModelParams::DEFAULT,
             anim: None,
             collider: None,
+            lod: Lods::NONE,
         },
         SceneNode {
             name: "spawn",
@@ -389,6 +488,7 @@ mod tests {
             params: ModelParams::DEFAULT,
             anim: None,
             collider: None,
+            lod: Lods::NONE,
         },
     ];
 
@@ -464,7 +564,11 @@ mod tests {
         b.extend_from_slice(&9u32.to_le_bytes()); // clip
         f(&mut b, &[2.0, 0.5, 1.0, 0.5, 0.0, 1.0, 0.0]);
         b.extend_from_slice(&0u32.to_le_bytes()); // texture (flag off)
+        b.extend_from_slice(&12u32.to_le_bytes()); // LOD records at 12
+        b.extend_from_slice(&1u32.to_le_bytes()); // one level
         b.extend_from_slice(b"a/doordoor\nx");
+        f(&mut b, &[30.0]);
+        b.extend_from_slice(&0u32.to_le_bytes()); // culled beyond 30
         std::boxed::Box::leak(b.into_boxed_slice())
     }
 
@@ -491,6 +595,37 @@ mod tests {
             }
         );
         assert_eq!(c.offset, Vec3::new(0.0, 1.0, 0.0));
+        // LOD: model 7 up close, nothing beyond 30 units.
+        assert_eq!(n.model_from(Vec3::new(3.0, 0.0, 0.0)), Some(ModelId(7)));
+        assert_eq!(n.model_from(Vec3::new(3.0, 0.0, 40.0)), None);
+    }
+
+    #[test]
+    fn lod_selection() {
+        const LEVELS: &[LodLevel] = &[
+            LodLevel {
+                distance: 10.0,
+                model: Some(ModelId(2)),
+            },
+            LodLevel {
+                distance: 20.0,
+                model: None,
+            },
+        ];
+        let lods = Lods::List(LEVELS);
+        assert_eq!(lods.select(Some(ModelId(1)), 5.0 * 5.0), Some(ModelId(1)));
+        assert_eq!(lods.select(Some(ModelId(1)), 10.0 * 10.0), Some(ModelId(2)));
+        assert_eq!(lods.select(Some(ModelId(1)), 25.0 * 25.0), None);
+        assert_eq!(Lods::NONE.select(Some(ModelId(1)), 1e9), Some(ModelId(1)));
+        let mut packed = std::vec::Vec::new();
+        for l in LEVELS {
+            packed.extend_from_slice(&l.distance.to_le_bytes());
+            packed.extend_from_slice(&l.model.map_or(0, |m| m.0).to_le_bytes());
+        }
+        let packed: &'static [u8] = std::boxed::Box::leak(packed.into_boxed_slice());
+        let p = Lods::Packed(packed);
+        assert_eq!(p.len(), 2);
+        assert!(p.iter().eq(lods.iter()));
     }
 
     #[test]

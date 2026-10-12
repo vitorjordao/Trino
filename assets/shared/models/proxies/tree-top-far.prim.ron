@@ -1,0 +1,11 @@
+// Trino placeholder model ("fake object"). Edit and save: it hot-reloads.
+// Far LOD of tree-top: same silhouette, 4 sides instead of 8 (half the
+// triangles) — swapped in by distance (prefabs/tree.prefab.ron `lod`).
+(
+    shape: Cone(radius: 0.95, height: 2.2),
+    color: (52, 128, 70, 255),
+    top_color: Some((120, 196, 98, 255)),
+    pivot: Bottom,
+    segments: 4,
+    smooth: false,
+)

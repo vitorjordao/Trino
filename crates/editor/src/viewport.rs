@@ -250,9 +250,11 @@ impl Viewport {
             .map(|(p, t)| (p.clone(), t.elapsed().as_secs_f32()));
         let mut tris = 0;
         for item in &input.resolved.items {
-            let Some((id, _)) = &item.model else {
+            // LOD as the game sees it, from this view's camera.
+            let Some(lod_id) = item.model_from(camera.eye) else {
                 continue;
             };
+            let id = &lod_id;
             let mut params = item.params;
             if !input.animate {
                 params.anim = None;

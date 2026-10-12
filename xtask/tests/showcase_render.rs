@@ -55,9 +55,10 @@ fn runtime_scene_and_exported_code_render_identically() {
     r.set_camera(&env.core_camera());
     r.set_light(&env.core_light());
     let resolved = trino_scene::resolve(&scene, &lib, 0.0);
+    let eye = env.core_camera().eye;
     for item in &resolved.items {
-        if let Some((id, _)) = &item.model {
-            r.draw_model_matrix(*id, &item.matrix, Material::VertexLit, &item.params);
+        if let Some(id) = item.model_from(eye) {
+            r.draw_model_matrix(id, &item.matrix, Material::VertexLit, &item.params);
         }
     }
     r.end_frame();
@@ -67,7 +68,13 @@ fn runtime_scene_and_exported_code_render_identically() {
     r.begin_frame(showcase::scene_consts::CLEAR);
     r.set_camera(&showcase::scene_consts::CAMERA);
     r.set_light(&showcase::scene_consts::LIGHT);
-    draw_nodes(&mut r, showcase::NODES, &Mat34::IDENTITY, 0.0);
+    draw_nodes(
+        &mut r,
+        showcase::NODES,
+        &Mat34::IDENTITY,
+        0.0,
+        showcase::scene_consts::CAMERA.eye,
+    );
     r.end_frame();
     let codegen = r.read_offscreen();
 
@@ -80,7 +87,7 @@ fn runtime_scene_and_exported_code_render_identically() {
     r.set_camera(&baked.camera());
     r.set_light(&baked.light());
     let nodes: Vec<trino_core::SceneNode> = baked.nodes().collect();
-    draw_nodes(&mut r, &nodes, &Mat34::IDENTITY, 0.0);
+    draw_nodes(&mut r, &nodes, &Mat34::IDENTITY, 0.0, baked.camera().eye);
     r.end_frame();
     assert!(
         r.read_offscreen() == runtime,

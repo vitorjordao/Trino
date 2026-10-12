@@ -21,6 +21,9 @@ pub struct Caps {
     pub max_tris_per_frame: u32,
     /// Output color depth in bits.
     pub color_depth_bits: u8,
+    /// Save-data budget in bytes (`Platform::save_capacity`). The N64 value
+    /// is a 16 Kbit cartridge EEPROM; design saves to fit it.
+    pub save_bytes: u32,
 }
 
 /// Why a piece of content does not fit in a target's [`Caps`].
@@ -46,6 +49,7 @@ impl Caps {
         max_sprites_per_frame: 512,
         max_tris_per_frame: 4000,
         color_depth_bits: 16,
+        save_bytes: 2048,
     };
 
     /// Nintendo 3DS (top screen): 400x240, 24-bit.
@@ -57,6 +61,7 @@ impl Caps {
         max_sprites_per_frame: 4096,
         max_tris_per_frame: 60_000,
         color_depth_bits: 24,
+        save_bytes: 64 * 1024,
     };
 
     /// PC: generous defaults; the internal resolution follows the active
@@ -69,6 +74,7 @@ impl Caps {
         max_sprites_per_frame: u32::MAX,
         max_tris_per_frame: u32::MAX,
         color_depth_bits: 32,
+        save_bytes: 1024 * 1024,
     };
 
     /// Validate a texture of `width`x`height` at `bytes_per_pixel` against

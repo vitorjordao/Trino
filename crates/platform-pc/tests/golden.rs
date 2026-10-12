@@ -328,8 +328,20 @@ fn strict_mode_rejects_texture_over_budget() {
     };
     renderer.set_strict(true);
     // 64x64 @ RGBA5551 (2 bytes/pixel on N64) = 8192 bytes > 4096 TMEM.
+    // The check runs per draw, on what that draw loads: a 32x32 region of
+    // the same sprite (2 KB) fits; the whole sprite does not.
+    renderer.upload_sprite(SpriteId(3), 64, 64, &vec![255u8; 64 * 64 * 4]);
+    renderer.begin_frame(Color::BLACK);
+    renderer.draw_sprite(
+        SpriteId(3),
+        Vec2::ZERO,
+        &SpriteParams {
+            region: Some(trino_core::Rect::new(0.0, 0.0, 32.0, 32.0)),
+            ..SpriteParams::DEFAULT
+        },
+    );
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        renderer.upload_sprite(SpriteId(3), 64, 64, &vec![255u8; 64 * 64 * 4]);
+        renderer.draw_sprite(SpriteId(3), Vec2::ZERO, &SpriteParams::DEFAULT);
     }));
     let err = result.expect_err("strict mode must reject a 64x64 sprite on N64");
     let msg = err

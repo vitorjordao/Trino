@@ -69,6 +69,21 @@ pub struct Manifest {
     /// Logical paths are `models/<name>`.
     #[serde(default)]
     pub models: BTreeMap<String, ModelDecl>,
+    /// Bitmap fonts (PNG glyph grid or TTF) → atlas sprite + glyph table.
+    /// Logical paths are `fonts/<name>`.
+    #[serde(default)]
+    pub fonts: BTreeMap<String, crate::font::FontDecl>,
+    /// Raw data delivered byte-for-byte on every target
+    /// (`Platform::blob`). Logical paths are `blobs/<name>`.
+    #[serde(default)]
+    pub blobs: BTreeMap<String, BlobDecl>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BlobDecl {
+    /// Source file, relative to `assets/shared/` (or a platform override).
+    pub file: String,
 }
 
 #[derive(Debug, Deserialize)]

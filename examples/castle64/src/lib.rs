@@ -15,13 +15,16 @@
 pub mod bot;
 mod levels;
 mod physics;
+pub mod selftest;
 
+use core::fmt::Write as _;
 use levels::{BlockKind, DoorColor, LEVELS, Level, TOTAL_STARS};
 use physics::{Aabb, move_aabb};
 use trino_core::math3d::{atan2, cos, sin};
 use trino_core::{
-    Audio, Button, Camera3, Color, Game, InputState, Material, ModelId, ModelParams, MusicId,
-    Renderer, SoundId, SpriteId, SpriteParams, Transform3, Vec2, Vec3,
+    Audio, Button, Camera3, Color, FontId, Game, InputState, Material, ModelId, ModelParams,
+    MusicId, Renderer, SoundId, SpriteId, SpriteParams, TextAlign, TextBuf, TextParams, Transform3,
+    Vec2, Vec3,
 };
 
 // ------------------------------------------------------------ handles ----
@@ -47,18 +50,8 @@ const M_DOOR_KAYKIT: ModelId = ModelId::from_path("models/c64_door");
 
 const S_COIN: SpriteId = SpriteId::from_path("sprites/coin");
 const S_STAR: SpriteId = SpriteId::from_path("sprites/c64_star");
-const S_DIGITS: [SpriteId; 10] = [
-    SpriteId::from_path("sprites/c64_digit0"),
-    SpriteId::from_path("sprites/c64_digit1"),
-    SpriteId::from_path("sprites/c64_digit2"),
-    SpriteId::from_path("sprites/c64_digit3"),
-    SpriteId::from_path("sprites/c64_digit4"),
-    SpriteId::from_path("sprites/c64_digit5"),
-    SpriteId::from_path("sprites/c64_digit6"),
-    SpriteId::from_path("sprites/c64_digit7"),
-    SpriteId::from_path("sprites/c64_digit8"),
-    SpriteId::from_path("sprites/c64_digit9"),
-];
+/// HUD text: the engine's default pixel font (atlas + glyph table).
+const F_HUD: FontId = selftest::FONT;
 
 const SND_JUMP: SoundId = SoundId::from_path("sounds/jump");
 const SND_COIN: SoundId = SoundId::from_path("sounds/coin");
@@ -779,28 +772,33 @@ impl Game for Castle64Game {
         }
 
         // ---- HUD (sprites por cima do 3D) ----
-        let digits = |renderer: &mut dyn Renderer, value: u32, x: f32, y: f32| {
-            let v = value.min(99);
-            let scale = SpriteParams {
-                scale: Vec2::new(2.0, 2.0),
-                ..Default::default()
-            };
-            renderer.draw_sprite(S_DIGITS[(v / 10) as usize], Vec2::new(x, y), &scale);
-            renderer.draw_sprite(S_DIGITS[(v % 10) as usize], Vec2::new(x + 18.0, y), &scale);
+        // Counters as bitmap text (no allocator: fixed TextBuf + write!).
+        let hud = TextParams {
+            scale: 2.0,
+            ..TextParams::DEFAULT
         };
+        let mut buf = TextBuf::<8>::new();
+        let _ = write!(buf, "x{:02}", self.total_coins().min(99));
         renderer.draw_sprite(S_COIN, Vec2::new(6.0, 6.0), &SpriteParams::default());
-        digits(renderer, self.total_coins(), 26.0, 6.0);
+        renderer.draw_text(F_HUD, Vec2::new(26.0, 6.0), buf.as_str(), &hud);
         renderer.draw_sprite(
             S_STAR,
-            Vec2::new(self.screen.x - 60.0, 6.0),
+            Vec2::new(self.screen.x - 70.0, 6.0),
             &SpriteParams {
                 scale: Vec2::new(2.0, 2.0),
                 ..Default::default()
             },
         );
-        digits(renderer, self.star_count(), self.screen.x - 40.0, 6.0);
+        buf.clear();
+        let _ = write!(buf, "x{:02}", self.star_count().min(99));
+        renderer.draw_text(
+            F_HUD,
+            Vec2::new(self.screen.x - 50.0, 6.0),
+            buf.as_str(),
+            &hud,
+        );
 
-        // Star get: estrela grande no centro da tela.
+        // Star get: estrela grande no centro da tela + legenda.
         if matches!(self.state, State::StarGet(_)) {
             renderer.draw_sprite(
                 S_STAR,
@@ -808,6 +806,16 @@ impl Game for Castle64Game {
                 &SpriteParams {
                     scale: Vec2::new(8.0, 8.0),
                     ..Default::default()
+                },
+            );
+            renderer.draw_text(
+                F_HUD,
+                Vec2::new(self.screen.x * 0.5, self.screen.y * 0.5 + 24.0),
+                "STAR GET!",
+                &TextParams {
+                    scale: 2.0,
+                    tint: Color::rgb(255, 230, 90),
+                    align: TextAlign::Center,
                 },
             );
         }

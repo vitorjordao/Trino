@@ -9,7 +9,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::ffi;
-use crate::{N3dsAudio, N3dsRenderer, runtime};
+use crate::{N3dsAudio, N3dsPlatform, N3dsRenderer, runtime};
 
 pub struct N3dsAssets;
 
@@ -22,9 +22,13 @@ impl N3dsAssets {
         unsafe { ffi::trino_file_exists(cpath.as_ptr()) != 0 }
     }
 
-    /// Read `romfs:/index.tsv` and register every asset with the renderer
-    /// and audio backends.
-    pub fn load_all(renderer: &mut N3dsRenderer, audio: &mut N3dsAudio) {
+    /// Read `romfs:/index.tsv` and register every asset with the renderer,
+    /// audio and platform (blobs) backends.
+    pub fn load_all(
+        renderer: &mut N3dsRenderer,
+        audio: &mut N3dsAudio,
+        platform: &mut N3dsPlatform,
+    ) {
         if !Self::exists("/index.tsv") {
             runtime::log("TRINO_ASSETS: no index.tsv in RomFS\n");
             return;
@@ -69,6 +73,16 @@ impl N3dsAssets {
                 "model" => {
                     if let Some(bytes) = read_bytes(&path) {
                         renderer.register_mesh(id, bytes);
+                    }
+                }
+                "font" => {
+                    if let Some(bytes) = read_bytes(&path) {
+                        renderer.register_font(id, bytes);
+                    }
+                }
+                "blob" => {
+                    if let Some(bytes) = read_bytes(&path) {
+                        platform.insert_blob(id, bytes);
                     }
                 }
                 _ => {}

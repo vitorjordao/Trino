@@ -20,6 +20,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <3ds.h>
 #include <citro2d.h>
 
@@ -112,11 +113,28 @@ typedef struct {
     uint32_t flip_y;      // 0/1
     uint32_t tint;        // RGBA8888; 0xFFFFFFFF = no tint
     float depth;          // citro2d z (larger = nearer; layers 2D vs 3D)
+    int32_t src_x, src_y; // source sub-rect (sprite pixels)
+    int32_t src_w, src_h; // 0 = whole sprite
 } trino_blit_t;
 
 void trino_sprite_blit(void* sheet, const trino_blit_t* p)
 {
     C2D_Image img = C2D_SpriteSheetGetImage((C2D_SpriteSheet)sheet, 0);
+    // Sub-rect (atlases, glyphs): a sub-texture whose UVs are interpolated
+    // inside the image's own (works whatever way tex3ds oriented them).
+    Tex3DS_SubTexture sub;
+    if (p->src_w > 0 && p->src_h > 0) {
+        const Tex3DS_SubTexture* full = img.subtex;
+        float fw = (float)full->width, fh = (float)full->height;
+        float du = full->right - full->left, dv = full->bottom - full->top;
+        sub.width = (u16)p->src_w;
+        sub.height = (u16)p->src_h;
+        sub.left = full->left + du * ((float)p->src_x / fw);
+        sub.right = full->left + du * ((float)(p->src_x + p->src_w) / fw);
+        sub.top = full->top + dv * ((float)p->src_y / fh);
+        sub.bottom = full->top + dv * ((float)(p->src_y + p->src_h) / fh);
+        img.subtex = &sub;
+    }
     float w = (float)img.subtex->width * p->scale_x;
     float h = (float)img.subtex->height * p->scale_y;
 
@@ -163,6 +181,43 @@ void trino_tri(const float* pts, const uint8_t* c, float depth)
     C2D_DrawTriangle(pts[0], pts[1], C2D_Color32(c[0], c[1], c[2], c[3]),
                      pts[2], pts[3], C2D_Color32(c[4], c[5], c[6], c[7]),
                      pts[4], pts[5], C2D_Color32(c[8], c[9], c[10], c[11]), depth);
+}
+
+// ---------------------------------------------------------------------------
+// Save data: one file on the SD card, replaced atomically (write a temp
+// file, then rename). Framing/checksums live on the Rust side.
+
+#define TRINO_SAVE_DIR "sdmc:/3ds/trino"
+#define TRINO_SAVE_PATH TRINO_SAVE_DIR "/save.bin"
+#define TRINO_SAVE_TMP TRINO_SAVE_DIR "/save.tmp"
+
+// Reads up to `cap` bytes; returns the file size, 0 if there is no save,
+// -1 on error.
+int32_t trino_save_load(uint8_t* dest, uint32_t cap)
+{
+    FILE* f = fopen(TRINO_SAVE_PATH, "rb");
+    if (!f) return 0;
+    fseek(f, 0, SEEK_END);
+    long size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    size_t want = (size_t)size < cap ? (size_t)size : cap;
+    size_t got = fread(dest, 1, want, f);
+    fclose(f);
+    if (size < 0 || got != want) return -1;
+    return (int32_t)size;
+}
+
+// Returns 0 on success, -1 on error.
+int32_t trino_save_store(const uint8_t* src, uint32_t len)
+{
+    mkdir("sdmc:/3ds", 0777);
+    mkdir(TRINO_SAVE_DIR, 0777);
+    FILE* f = fopen(TRINO_SAVE_TMP, "wb");
+    if (!f) return -1;
+    size_t put = fwrite(src, 1, len, f);
+    if (fclose(f) != 0 || put != len) return -1;
+    remove(TRINO_SAVE_PATH);
+    return rename(TRINO_SAVE_TMP, TRINO_SAVE_PATH) == 0 ? 0 : -1;
 }
 
 // ---------------------------------------------------------------------------

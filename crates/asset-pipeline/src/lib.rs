@@ -20,6 +20,7 @@
 //! by snapshot tests).
 
 pub mod bake;
+pub mod font;
 pub mod loader;
 pub mod manifest;
 pub mod model;
@@ -29,7 +30,10 @@ pub mod resolve;
 pub mod watch;
 
 pub use bake::{BakeError, BakeReport, bake_all};
-pub use loader::{LoadedAssets, LoadedModel, LoadedSound, LoadedSprite, load_dir};
+pub use font::{BakedFont, FontDecl, bake_font};
+pub use loader::{
+    LoadedAssets, LoadedBlob, LoadedFont, LoadedModel, LoadedSound, LoadedSprite, load_dir,
+};
 pub use manifest::{Manifest, Platform};
 pub use model::{MeshData, ModelOptions, bake_model, bake_model_tmdl, clip_names};
 pub use primitive::{Pivot, Primitive, Shape};

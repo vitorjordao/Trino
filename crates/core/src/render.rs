@@ -18,7 +18,7 @@
 //! any backend yet.
 
 use crate::caps::Caps;
-use crate::math::{Color, Vec2, Vec3};
+use crate::math::{Color, Rect, Vec2, Vec3};
 use crate::math3d::Mat34;
 
 /// Handle to a baked sprite/texture. Stable across live reloads: the ID is
@@ -71,18 +71,95 @@ pub struct SpriteParams {
     pub tint: Color,
     pub flip_x: bool,
     pub flip_y: bool,
+    /// Sub-rectangle of the sprite to draw, in sprite pixels (atlases,
+    /// glyphs, animation strips). `None` draws the whole sprite. The drawn
+    /// size is `region.size * scale`. Every backend maps it natively (rdpq
+    /// blit `s0/t0/width/height` on N64, a sub-texture on 3DS, UVs on PC).
+    pub region: Option<Rect>,
+}
+
+impl SpriteParams {
+    pub const DEFAULT: SpriteParams = SpriteParams {
+        scale: Vec2::ONE,
+        rotation: 0.0,
+        tint: Color::WHITE,
+        flip_x: false,
+        flip_y: false,
+        region: None,
+    };
 }
 
 impl Default for SpriteParams {
     fn default() -> Self {
-        SpriteParams {
-            scale: Vec2::ONE,
-            rotation: 0.0,
-            tint: Color::WHITE,
-            flip_x: false,
-            flip_y: false,
+        Self::DEFAULT
+    }
+}
+
+/// Handle to a baked bitmap font (`[fonts.*]` in the manifest; logical path
+/// `fonts/<name>`). The font's atlas is registered as a sprite under the
+/// same numeric handle, so `SpriteId(font.0)` draws the raw atlas.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct FontId(pub u32);
+
+impl FontId {
+    pub const fn from_path(logical_path: &str) -> Self {
+        FontId(crate::asset::asset_id(logical_path))
+    }
+}
+
+/// Horizontal alignment of each text line relative to the draw position.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+pub enum TextAlign {
+    #[default]
+    Left,
+    Center,
+    Right,
+}
+
+/// Per-draw text parameters. `Default` draws white, 1:1, left-aligned.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct TextParams {
+    /// Pixel scale (integer scales stay crisp on every target).
+    pub scale: f32,
+    pub tint: Color,
+    pub align: TextAlign,
+}
+
+impl TextParams {
+    pub const DEFAULT: TextParams = TextParams {
+        scale: 1.0,
+        tint: Color::WHITE,
+        align: TextAlign::Left,
+    };
+
+    pub const fn tinted(tint: Color) -> Self {
+        TextParams {
+            tint,
+            ..Self::DEFAULT
         }
     }
+}
+
+impl Default for TextParams {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+/// What the previous frame cost — read by budget HUDs (the editor's Game
+/// view) and compared against [`Caps`]. Backends that don't count return
+/// zeros.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct FrameStats {
+    /// 3D triangles rasterized (after culling/clipping/subdivision).
+    pub tris: u32,
+    /// Sprite draws (text glyphs and billboards included).
+    pub sprites: u32,
+    /// `draw_model*` calls that reached the T&L (culled or not).
+    pub models: u32,
+    /// Largest single texture (bytes, at the target's texel size) bound
+    /// this frame — the TMEM pressure on N64.
+    pub max_texture_bytes: u32,
 }
 
 /// How a 3D surface reacts to light. Evaluated per vertex by the engine's
@@ -254,4 +331,20 @@ pub trait Renderer {
     }
 
     fn end_frame(&mut self);
+
+    /// Draw `text` with a baked bitmap font, its top-left corner at `pos`
+    /// (alignment shifts each line around `pos.x`). `\n` starts a new line.
+    /// Built on sprite regions, so it costs one sprite draw per glyph.
+    /// Unknown fonts draw nothing.
+    fn draw_text(&mut self, _font: FontId, _pos: Vec2, _text: &str, _params: &TextParams) {}
+
+    /// Size in pixels `text` would cover at `scale` (zero for unknown fonts).
+    fn measure_text(&self, _font: FontId, _text: &str, _scale: f32) -> Vec2 {
+        Vec2::ZERO
+    }
+
+    /// Counters of the last finished frame (see [`FrameStats`]).
+    fn stats(&self) -> FrameStats {
+        FrameStats::default()
+    }
 }

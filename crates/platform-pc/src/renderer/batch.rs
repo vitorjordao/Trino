@@ -74,12 +74,21 @@ pub fn make_command(
     sprite_size: (u32, u32),
     params: &SpriteParams,
 ) -> DrawCommand {
-    let size = Vec2::new(
-        sprite_size.0 as f32 * params.scale.x,
-        sprite_size.1 as f32 * params.scale.y,
-    );
-    let (mut u0, mut u1) = (0.0, 1.0);
-    let (mut v0, mut v1) = (0.0, 1.0);
+    let (tw, th) = (sprite_size.0 as f32, sprite_size.1 as f32);
+    // Region in sprite pixels (clamped to the texture), else the whole sprite.
+    let (rx, ry, rw, rh) = match params.region {
+        Some(r) => {
+            let x0 = r.pos.x.clamp(0.0, tw);
+            let y0 = r.pos.y.clamp(0.0, th);
+            let x1 = (r.pos.x + r.size.x).clamp(x0, tw);
+            let y1 = (r.pos.y + r.size.y).clamp(y0, th);
+            (x0, y0, x1 - x0, y1 - y0)
+        }
+        None => (0.0, 0.0, tw, th),
+    };
+    let size = Vec2::new(rw * params.scale.x, rh * params.scale.y);
+    let (mut u0, mut u1) = (rx / tw.max(1.0), (rx + rw) / tw.max(1.0));
+    let (mut v0, mut v1) = (ry / th.max(1.0), (ry + rh) / th.max(1.0));
     if params.flip_x {
         core::mem::swap(&mut u0, &mut u1);
     }
@@ -221,6 +230,27 @@ mod tests {
         };
         let c = make_command(1, Vec2::ZERO, (16, 32), &params);
         assert_eq!(c.size, Vec2::new(32.0, 16.0));
+    }
+
+    #[test]
+    fn region_selects_uvs_and_size() {
+        let params = SpriteParams {
+            region: Some(trino_core::Rect::new(8.0, 4.0, 8.0, 12.0)),
+            scale: Vec2::new(2.0, 1.0),
+            ..Default::default()
+        };
+        let c = make_command(1, Vec2::ZERO, (32, 16), &params);
+        assert_eq!(c.size, Vec2::new(16.0, 12.0));
+        assert_eq!(c.uv0, [0.25, 0.25]);
+        assert_eq!(c.uv1, [0.5, 1.0]);
+        // Regions past the texture edge clamp instead of sampling garbage.
+        let params = SpriteParams {
+            region: Some(trino_core::Rect::new(24.0, 0.0, 16.0, 16.0)),
+            ..Default::default()
+        };
+        let c = make_command(1, Vec2::ZERO, (32, 16), &params);
+        assert_eq!(c.size, Vec2::new(8.0, 16.0));
+        assert_eq!(c.uv1, [1.0, 1.0]);
     }
 
     #[test]

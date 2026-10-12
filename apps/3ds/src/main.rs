@@ -26,7 +26,9 @@ mod n3ds {
 
     use alloc::format;
     use trino_core::{Button, Game, Input, InputState, Vec2};
-    use trino_platform_3ds::{N3dsAssets, N3dsAudio, N3dsInput, N3dsRenderer, runtime};
+    use trino_platform_3ds::{
+        N3dsAssets, N3dsAudio, N3dsInput, N3dsPlatform, N3dsRenderer, runtime,
+    };
 
     #[unsafe(no_mangle)]
     pub extern "C" fn trino_rust_main() {
@@ -36,13 +38,14 @@ mod n3ds {
         let mut renderer = N3dsRenderer::new();
         let mut audio = N3dsAudio::new();
         let mut input = N3dsInput;
-        N3dsAssets::load_all(&mut renderer, &mut audio);
+        let mut platform = N3dsPlatform::new();
+        N3dsAssets::load_all(&mut renderer, &mut audio, &mut platform);
 
         // Top screen: 400x240.
         let mut game = castle64::Castle64Game::new(Vec2::new(400.0, 240.0));
 
         if N3dsAssets::exists("/test_mode") {
-            run_self_test(&mut game, &mut renderer, &mut audio);
+            run_self_test(&mut game, &mut renderer, &mut audio, &mut platform);
             return;
         }
 
@@ -53,7 +56,7 @@ mod n3ds {
             last = now;
 
             let state = input.poll();
-            game.update(&state, &mut audio, dt);
+            game.update_with(&mut platform, &state, &mut audio, dt);
             game.render(&mut renderer);
             audio.poll();
         }
@@ -66,8 +69,18 @@ mod n3ds {
         game: &mut castle64::Castle64Game,
         renderer: &mut N3dsRenderer,
         audio: &mut N3dsAudio,
+        platform: &mut N3dsPlatform,
     ) {
         const DT: f32 = 1.0 / 60.0;
+        // 0) Engine services through the portable traits (text, blobs, save).
+        if let Err(e) = castle64::selftest::engine_checks(renderer, platform) {
+            runtime::log(&format!("TRINO_TEST_FAIL:engine: {e}\n"));
+            while runtime::running() {
+                trino_core::Renderer::begin_frame(renderer, trino_core::Color::BLACK);
+                trino_core::Renderer::end_frame(renderer);
+            }
+            return;
+        }
         // Render 1:4 — a lógica roda todo frame (determinismo intacto); o
         // Azahar emula a cena 3D cheia abaixo do tempo real.
         let mut frame_no = 0u32;

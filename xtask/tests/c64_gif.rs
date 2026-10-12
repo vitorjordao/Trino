@@ -52,6 +52,9 @@ fn record_castle64_gameplay_gif() {
     for model in assets.models {
         renderer.upload_mesh(trino_core::ModelId(model.id), model.tmdl);
     }
+    for font in assets.fonts {
+        renderer.upload_font(trino_core::FontId(font.id), font.table);
+    }
 
     let mut game = castle64::Castle64Game::new(Vec2::new(320.0, 240.0));
     let mut bot = castle64::bot::Bot::new(castle64::bot::GREEN_RUN);

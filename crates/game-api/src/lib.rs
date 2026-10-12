@@ -23,7 +23,7 @@
 
 /// Version handshake between host and game dylib. Bump on ANY change to the
 /// exported function signatures or to types crossing the boundary.
-pub const GAME_API_VERSION: u32 = 1;
+pub const GAME_API_VERSION: u32 = 2;
 
 /// Generates the hot-reload exports for a game state type implementing
 /// `trino_core::Game`:
@@ -47,11 +47,12 @@ macro_rules! export_game {
         #[unsafe(no_mangle)]
         pub fn trino_game_update(
             state: &mut $state,
+            platform: &mut dyn ::trino_core::Platform,
             input: &::trino_core::InputState,
             audio: &mut dyn ::trino_core::Audio,
             dt: f32,
         ) {
-            ::trino_core::Game::update(state, input, audio, dt)
+            ::trino_core::Game::update_with(state, platform, input, audio, dt)
         }
 
         #[unsafe(no_mangle)]

@@ -17,6 +17,11 @@ pub struct TrinoBlit {
     pub tint: u32,
     /// citro2d z (larger = nearer): layers sprites above/below the 3D band.
     pub depth: f32,
+    /// Source sub-rect in sprite pixels; `src_w == 0` = whole sprite.
+    pub src_x: i32,
+    pub src_y: i32,
+    pub src_w: i32,
+    pub src_h: i32,
 }
 
 unsafe extern "C" {
@@ -54,6 +59,12 @@ unsafe extern "C" {
     pub fn trino_file_exists(romfs_relative_path: *const c_char) -> i32;
     pub fn trino_asset_load(romfs_path: *const c_char, size_out: *mut u32) -> *mut c_void;
     pub fn trino_free(ptr: *mut c_void);
+
+    /// Save file on the SD card: returns its size (0 = none, -1 = error),
+    /// copying up to `cap` bytes into `dest`.
+    pub fn trino_save_load(dest: *mut u8, cap: u32) -> i32;
+    /// Atomically replace the save file; 0 = ok, -1 = error.
+    pub fn trino_save_store(src: *const u8, len: u32) -> i32;
 
     // newlib, for the global allocator.
     pub fn memalign(align: usize, size: usize) -> *mut c_void;

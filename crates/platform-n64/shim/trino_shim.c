@@ -104,6 +104,8 @@ typedef struct {
     uint32_t flip_x;      // 0/1
     uint32_t flip_y;      // 0/1
     uint32_t tint;        // RGBA8888; 0xFFFFFFFF = no tint
+    int32_t src_x, src_y; // source sub-rect (sprite pixels)
+    int32_t src_w, src_h; // 0 = whole sprite
 } trino_blit_t;
 
 void trino_sprite_blit(void* sprite, const trino_blit_t* p)
@@ -116,6 +118,10 @@ void trino_sprite_blit(void* sprite, const trino_blit_t* p)
         rdpq_mode_combiner(RDPQ_COMBINER1((TEX0, 0, PRIM, 0), (TEX0, 0, PRIM, 0)));
     }
     rdpq_blitparms_t parms = {
+        .s0 = p->src_x,
+        .t0 = p->src_y,
+        .width = p->src_w,
+        .height = p->src_h,
         .scale_x = p->scale_x,
         .scale_y = p->scale_y,
         .theta = p->theta,
@@ -253,6 +259,28 @@ void* trino_asset_load(const char* dfs_path, uint32_t* size_out)
 void trino_free(void* ptr)
 {
     free(ptr);
+}
+
+// ---------------------------------------------------------------------------
+// Save data: the cartridge EEPROM (4 Kbit = 512 B, 16 Kbit = 2 KB). The ROM
+// header declares it (ed64romconfig --savetype eeprom16k) so emulators and
+// flashcarts attach one. Framing/checksums live on the Rust side.
+
+// Bytes of EEPROM present (0 = none detected).
+uint32_t trino_save_capacity(void)
+{
+    if (eeprom_present() == EEPROM_NONE) return 0;
+    return (uint32_t)(eeprom_total_blocks() * EEPROM_BLOCK_SIZE);
+}
+
+void trino_save_read(uint8_t* dest, uint32_t start, uint32_t len)
+{
+    eeprom_read_bytes(dest, start, len);
+}
+
+void trino_save_write(const uint8_t* src, uint32_t start, uint32_t len)
+{
+    eeprom_write_bytes(src, start, len);
 }
 
 // ---------------------------------------------------------------------------

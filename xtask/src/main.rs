@@ -6,6 +6,7 @@
 
 mod agents;
 mod castle64_assets;
+mod font_assets;
 mod model;
 mod n3ds;
 mod n64;
@@ -322,6 +323,8 @@ fn gen_assets() -> ExitCode {
     // castle64 (the 3D showcase): blocks, articulated player, boar, doors.
     castle64_assets::gen_all(&root, &|path, w, h, rgba| write_png(path, w, h, rgba));
     showcase_assets::gen_all(&root);
+    // trino5x7: the default pixel font (bitmap text on every target).
+    font_assets::gen_all(&root, &|path, w, h, rgba| write_png(path, w, h, rgba));
 
     println!("sample assets regenerated under assets/shared/");
     ExitCode::SUCCESS

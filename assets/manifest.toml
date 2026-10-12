@@ -55,46 +55,6 @@ file = "models/cube.glb"
 file = "sprites/castle64/star.png"
 formats = { n64 = "CI4" }
 
-[sprites.c64_digit0]
-file = "sprites/castle64/digit0.png"
-formats = { n64 = "CI4" }
-
-[sprites.c64_digit1]
-file = "sprites/castle64/digit1.png"
-formats = { n64 = "CI4" }
-
-[sprites.c64_digit2]
-file = "sprites/castle64/digit2.png"
-formats = { n64 = "CI4" }
-
-[sprites.c64_digit3]
-file = "sprites/castle64/digit3.png"
-formats = { n64 = "CI4" }
-
-[sprites.c64_digit4]
-file = "sprites/castle64/digit4.png"
-formats = { n64 = "CI4" }
-
-[sprites.c64_digit5]
-file = "sprites/castle64/digit5.png"
-formats = { n64 = "CI4" }
-
-[sprites.c64_digit6]
-file = "sprites/castle64/digit6.png"
-formats = { n64 = "CI4" }
-
-[sprites.c64_digit7]
-file = "sprites/castle64/digit7.png"
-formats = { n64 = "CI4" }
-
-[sprites.c64_digit8]
-file = "sprites/castle64/digit8.png"
-formats = { n64 = "CI4" }
-
-[sprites.c64_digit9]
-file = "sprites/castle64/digit9.png"
-formats = { n64 = "CI4" }
-
 [models.c64_block_grass]
 file = "models/castle64/block_grass.glb"
 
@@ -191,3 +151,16 @@ once = ["wave"]
 
 [models.windmill]
 file = "models/showcase/windmill.glb"
+
+# ---- fonts (bitmap text: atlas sprite + glyph table under one handle) ----
+
+# trino5x7: the engine's default pixel font (xtask gen-assets draws it).
+[fonts.trino5x7]
+file = "fonts/trino5x7.png"
+cell = [6, 10]
+
+# ---- blobs (raw bytes by handle: Platform::blob) ----
+
+# Read back by the console self-tests (castle64::selftest).
+[blobs.selftest]
+file = "data/selftest.txt"

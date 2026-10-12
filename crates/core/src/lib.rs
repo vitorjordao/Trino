@@ -29,7 +29,9 @@ pub mod math3d;
 pub mod platform;
 pub mod render;
 pub mod render3d;
+pub mod save;
 pub mod scene;
+pub mod text;
 pub mod tilemap;
 
 pub use asset::asset_id;
@@ -41,14 +43,15 @@ pub use game::Game;
 pub use input::{Button, Input, InputState};
 pub use math::{Color, Rect, Vec2, Vec3};
 pub use math3d::{Mat34, Quat};
-pub use platform::Platform;
+pub use platform::{BlobId, Platform, SaveError};
 pub use render::{
-    AnimRef, ClipId, Material, MaterialId, ModelId, ModelParams, Renderer, Shading, SpriteId,
-    SpriteParams, Transform3,
+    AnimRef, ClipId, FontId, FrameStats, Material, MaterialId, ModelId, ModelParams, Renderer,
+    Shading, SpriteId, SpriteParams, TextAlign, TextParams, Transform3,
 };
 pub use render3d::{
     Camera3, ClipInfo, DEFAULT_LIGHT, Fog, Light, MAX_JOINTS, Mesh, MeshError, ScreenTri,
     tessellate,
 };
 pub use scene::SceneNode;
+pub use text::{BitmapFont, TextBuf};
 pub use tilemap::{TILE_SIZE, Tilemap, TilemapError};

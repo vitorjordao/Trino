@@ -39,6 +39,8 @@ mod input;
 mod renderer;
 #[cfg(target_os = "none")]
 pub mod runtime;
+#[cfg(target_os = "none")]
+mod system;
 
 #[cfg(target_os = "none")]
 pub use assets::N64Assets;
@@ -48,3 +50,5 @@ pub use audio::N64Audio;
 pub use input::N64Input;
 #[cfg(target_os = "none")]
 pub use renderer::N64Renderer;
+#[cfg(target_os = "none")]
+pub use system::N64Platform;

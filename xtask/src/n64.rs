@@ -202,6 +202,36 @@ pub fn bake_assets(root: &Path, test_mode: bool) -> Result<(), String> {
         index.push_str(&format!("{id:08x}\tmodel\t{id:08x}.tmdl\n"));
     }
 
+    for (name, decl) in &manifest.fonts {
+        let logical = format!("fonts/{name}");
+        let id = trino_core::asset_id(&logical);
+        let format = decl.format_for(&logical, Platform::N64)?;
+        let mksprite_format = match format.as_str() {
+            "RGBA5551" => "RGBA16",
+            other => other,
+        };
+        let source = resolve_source(&root.join("assets"), Platform::N64, &decl.file)?;
+        let font = trino_asset_pipeline::bake_font(&source, decl)
+            .map_err(|e| format!("font `{logical}`: {e}"))?;
+        // Atlas -> sprite (mksprite, same handle); table -> verbatim TFNT.
+        let png = trino_asset_pipeline::font::encode_png(font.width, font.height, &font.rgba)?;
+        std::fs::write(stage.join(format!("{id:08x}.png")), png).map_err(|e| e.to_string())?;
+        script.push_str(&format!(
+            "mksprite --format {mksprite_format} -o target/n64/filesystem target/n64/stage/{id:08x}.png\n"
+        ));
+        std::fs::write(fsdir.join(format!("{id:08x}.font")), &font.table)
+            .map_err(|e| e.to_string())?;
+        index.push_str(&format!("{id:08x}\tsprite\t{id:08x}.sprite\n"));
+        index.push_str(&format!("{id:08x}\tfont\t{id:08x}.font\n"));
+    }
+    for (name, decl) in &manifest.blobs {
+        let logical = format!("blobs/{name}");
+        let id = trino_core::asset_id(&logical);
+        let source = resolve_source(&root.join("assets"), Platform::N64, &decl.file)?;
+        std::fs::copy(&source, fsdir.join(format!("{id:08x}.blob"))).map_err(|e| e.to_string())?;
+        index.push_str(&format!("{id:08x}\tblob\t{id:08x}.blob\n"));
+    }
+
     std::fs::write(fsdir.join("index.tsv"), index).map_err(|e| e.to_string())?;
     if test_mode {
         std::fs::write(fsdir.join("test_mode"), "1").map_err(|e| e.to_string())?;
@@ -262,7 +292,8 @@ fn pack_rom(root: &Path) -> Result<(), String> {
          n64elfcompress -o . -c 1 trino.elf.stripped\n\
          mkdfs trino.dfs filesystem >/dev/null\n\
          n64tool --title Trino --toc --output trino.z64 --align 256 trino.elf.stripped \
-         --align 8 trino.elf.sym --align 16 trino.dfs\n"
+         --align 8 trino.elf.sym --align 16 trino.dfs\n\
+         ed64romconfig --savetype eeprom16k trino.z64\n"
     );
     let status = docker_sh(root, &script).map_err(|e| format!("docker: {e}"))?;
     if !status.success() {

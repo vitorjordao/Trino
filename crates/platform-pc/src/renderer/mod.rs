@@ -14,8 +14,8 @@ use std::sync::Arc;
 
 use trino_core::render3d::{Camera3, DEFAULT_LIGHT, Light, Mesh, ScreenTri};
 use trino_core::{
-    Caps, Color, Mat34, Material, ModelId, ModelParams, Renderer, SpriteId, SpriteParams,
-    Transform3, Vec2,
+    Caps, Color, FontId, FrameStats, Mat34, Material, ModelId, ModelParams, Renderer, SpriteId,
+    SpriteParams, TextParams, Transform3, Vec2,
 };
 
 use crate::sim::SimProfile;
@@ -76,7 +76,13 @@ pub struct PcRenderer {
     tri_capacity: u64,
     sprites: HashMap<u32, SpriteEntry>,
     meshes: HashMap<u32, Vec<u8>>,
+    /// Glyph tables (`TFNT`) by font handle; the atlas is the sprite with
+    /// the same handle. `Arc` so `draw_text` can lay out while drawing.
+    fonts: HashMap<u32, Arc<[u8]>>,
     commands: Vec<Cmd>,
+    /// Counters of the frame being recorded / the last finished frame.
+    frame_stats: FrameStats,
+    last_stats: FrameStats,
     tri_verts: Vec<TriVertex>,
     /// Triangles of the current model batch: consecutive `draw_model` calls
     /// accumulate here and depth-sort together (painter across meshes) when
@@ -573,7 +579,10 @@ impl PcRenderer {
             tri_capacity,
             sprites: HashMap::new(),
             meshes: HashMap::new(),
+            fonts: HashMap::new(),
             commands: Vec::new(),
+            frame_stats: FrameStats::default(),
+            last_stats: FrameStats::default(),
             tri_verts: Vec::new(),
             pending_tris: Vec::new(),
             camera: Camera3::default(),
@@ -594,6 +603,16 @@ impl PcRenderer {
             panic!("mesh {id:?}: invalid TMDL blob: {e:?}");
         }
         self.meshes.insert(id.0, tmdl);
+    }
+
+    /// Register a baked font's glyph table (`TFNT`) under its handle; the
+    /// atlas must be uploaded as the sprite with the same handle.
+    /// Re-uploading replaces it (live reload).
+    pub fn upload_font(&mut self, id: FontId, table: Vec<u8>) {
+        if let Err(e) = trino_core::text::BitmapFont::parse(&table) {
+            panic!("font {id:?}: invalid TFNT table: {e:?}");
+        }
+        self.fonts.insert(id.0, table.into());
     }
 
     /// Toggle the N64 output emulation (3-point filtering, RGBA5551 +
@@ -659,28 +678,6 @@ impl PcRenderer {
             (width * height * 4) as usize,
             "sprite {id:?}: pixel data does not match {width}x{height} RGBA8"
         );
-        if self.strict {
-            // Console formats are 16-bit (RGBA5551) or smaller; indexed
-            // formats (CI4/CI8) are validated at bake time where the real
-            // format is known — this is the worst-case direct-color check.
-            let bpp = if self.caps.color_depth_bits <= 16 {
-                2
-            } else {
-                4
-            };
-            if let Err(e) = self.caps.validate_texture(
-                width.min(u16::MAX as u32) as u16,
-                height.min(u16::MAX as u32) as u16,
-                bpp,
-            ) {
-                panic!(
-                    "strict mode: sprite {id:?} ({width}x{height}) busts the {:?} \
-                     profile budget: {e:?}. Shrink the sprite or pick an indexed \
-                     format (CI4/CI8) in assets/manifest.toml.",
-                    self.profile
-                );
-            }
-        }
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("trino-sprite"),
             size: wgpu::Extent3d {
@@ -1034,6 +1031,7 @@ impl Renderer for PcRenderer {
         self.commands.clear();
         self.tri_verts.clear();
         self.pending_tris.clear();
+        self.frame_stats = FrameStats::default();
     }
 
     fn draw_sprite(&mut self, sprite: SpriteId, pos: Vec2, params: &SpriteParams) {
@@ -1043,8 +1041,42 @@ impl Renderer for PcRenderer {
             // into a hard error at bake time instead.
             return;
         };
-        self.commands
-            .push(Cmd::Sprite(make_command(sprite.0, pos, entry.size, params)));
+        let cmd = make_command(sprite.0, pos, entry.size, params);
+        // Texture pressure at the profile's texel size: what a console
+        // must stream into texture memory for this draw (the region only —
+        // sub-rect blits load just that on N64/3DS).
+        let bpp = if self.caps.color_depth_bits <= 16 {
+            2
+        } else {
+            4
+        };
+        let (tw, th) = (entry.size.0 as f32, entry.size.1 as f32);
+        let (rw, rh) = (
+            ((cmd.uv1[0] - cmd.uv0[0]).abs() * tw).round() as u32,
+            ((cmd.uv1[1] - cmd.uv0[1]).abs() * th).round() as u32,
+        );
+        let texels = rw * rh;
+        if self.strict {
+            // Console formats are 16-bit (RGBA5551) or smaller; indexed
+            // formats (CI4/CI8) are validated at bake time where the real
+            // format is known — this is the worst-case direct-color check
+            // of what one draw loads into texture memory.
+            if let Err(e) = self.caps.validate_texture(
+                rw.min(u16::MAX as u32) as u16,
+                rh.min(u16::MAX as u32) as u16,
+                bpp,
+            ) {
+                panic!(
+                    "strict mode: sprite {sprite:?} drawn at {rw}x{rh} busts the {:?} \
+                     profile budget: {e:?}. Shrink the sprite, draw it in regions (atlas), \
+                     or pick an indexed format (CI4/CI8) in assets/manifest.toml.",
+                    self.profile
+                );
+            }
+        }
+        self.frame_stats.sprites += 1;
+        self.frame_stats.max_texture_bytes = self.frame_stats.max_texture_bytes.max(texels * bpp);
+        self.commands.push(Cmd::Sprite(cmd));
     }
 
     fn set_camera(&mut self, camera: &Camera3) {
@@ -1079,6 +1111,7 @@ impl Renderer for PcRenderer {
             return; // unknown handle: skip, like sprites
         };
         let mesh = Mesh::from_tmdl(tmdl).expect("validated on upload");
+        self.frame_stats.models += 1;
         let screen = Vec2::new(self.internal_size.0 as f32, self.internal_size.1 as f32);
         let pending = &mut self.pending_tris;
         trino_core::render3d::tessellate(
@@ -1094,6 +1127,34 @@ impl Renderer for PcRenderer {
 
     fn end_frame(&mut self) {
         self.flush_model_batch();
+        self.frame_stats.tris = (self.tri_verts.len() / 3) as u32;
+        self.last_stats = self.frame_stats;
         self.flush();
+    }
+
+    fn draw_text(&mut self, font: FontId, pos: Vec2, text: &str, params: &TextParams) {
+        let Some(table) = self.fonts.get(&font.0).cloned() else {
+            return;
+        };
+        let parsed = trino_core::text::BitmapFont::parse(&table).expect("validated on upload");
+        trino_core::text::draw(
+            self,
+            trino_core::text::atlas_of(font),
+            &parsed,
+            pos,
+            text,
+            params,
+        );
+    }
+
+    fn measure_text(&self, font: FontId, text: &str, scale: f32) -> Vec2 {
+        self.fonts
+            .get(&font.0)
+            .and_then(|t| trino_core::text::BitmapFont::parse(t).ok())
+            .map_or(Vec2::ZERO, |f| f.measure(text, scale))
+    }
+
+    fn stats(&self) -> FrameStats {
+        self.last_stats
     }
 }

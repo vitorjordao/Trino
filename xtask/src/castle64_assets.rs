@@ -1,6 +1,6 @@
 //! Master-asset generator for the castle64 example (the 3D showcase game):
 //! vertex-colored GLB models (blocks, articulated player parts, boar, coin,
-//! star, doors, shadow) and the HUD sprites (digits + star). Called from
+//! star, doors, shadow) and the HUD star icon. Called from
 //! `cargo xtask gen-assets` so every generated master stays reproducible
 //! from code, like the platformer's assets.
 //!
@@ -15,7 +15,7 @@ use trino_core::Vec3;
 
 type Rgba = [u8; 4];
 /// PNG writer callback (borrowed from `main.rs::write_png`).
-type PngWriter<'a> = &'a dyn Fn(&Path, u32, u32, &[u8]);
+pub type PngWriter<'a> = &'a dyn Fn(&Path, u32, u32, &[u8]);
 
 #[derive(Default)]
 struct MeshBuf {
@@ -258,35 +258,8 @@ fn boar(dir: &Path) {
     m.write_glb(&dir.join("boar.glb"));
 }
 
-/// 8x8 HUD digit sprites (classic 3x5 font) + the star icon.
+/// The HUD star icon (counters are bitmap text: `fonts/trino5x7`).
 fn hud_sprites(dir: &Path, write_png: PngWriter) {
-    const FONT: [[u8; 5]; 10] = [
-        [0b111, 0b101, 0b101, 0b101, 0b111],
-        [0b010, 0b110, 0b010, 0b010, 0b111],
-        [0b111, 0b001, 0b111, 0b100, 0b111],
-        [0b111, 0b001, 0b111, 0b001, 0b111],
-        [0b101, 0b101, 0b111, 0b001, 0b001],
-        [0b111, 0b100, 0b111, 0b001, 0b111],
-        [0b111, 0b100, 0b111, 0b101, 0b111],
-        [0b111, 0b001, 0b010, 0b010, 0b010],
-        [0b111, 0b101, 0b111, 0b101, 0b111],
-        [0b111, 0b101, 0b111, 0b001, 0b111],
-    ];
-    for (d, rows) in FONT.iter().enumerate() {
-        let mut rgba = vec![0u8; 8 * 8 * 4];
-        for (ry, bits) in rows.iter().enumerate() {
-            for rx in 0..3 {
-                if bits & (0b100 >> rx) != 0 {
-                    for sx in 0..2 {
-                        let at = ((1 + ry) * 8 + 1 + rx * 2 + sx) * 4;
-                        rgba[at..at + 4].copy_from_slice(&[255, 255, 255, 255]);
-                    }
-                }
-            }
-        }
-        write_png(&dir.join(format!("digit{d}.png")), 8, 8, &rgba);
-    }
-
     let art = [
         "...##...", "...##...", "########", ".######.", "..####..", ".######.", ".##..##.",
         "........",

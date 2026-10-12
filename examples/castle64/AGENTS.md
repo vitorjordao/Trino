@@ -26,7 +26,7 @@ this file covers what is specific to this crate.
   Audio calls are fire-and-forget and excluded from determinism.
 - Assets are declared in the repo's `assets/manifest.toml` under `c64_*`
   logical names. Generated masters (blocks, player parts, boar, doors,
-  HUD digits) regenerate via `cargo xtask gen-assets`
+  HUD star) regenerate via `cargo xtask gen-assets`
   (`xtask/src/castle64_assets.rs`). The castle entrance
   (`door_kaykit.glb`) is a REAL low-poly asset — KayKit Dungeon Remastered,
   CC0, license vendored next to the file — baked from textured glTF by the

@@ -182,6 +182,47 @@ pub fn bake_assets(root: &Path, test_mode: bool) -> Result<(), String> {
         index.push_str(&format!("{id:08x}\tmodel\t{id:08x}.tmdl\n"));
     }
 
+    for (name, decl) in &manifest.fonts {
+        let logical = format!("fonts/{name}");
+        let id = trino_core::asset_id(&logical);
+        let format = decl.format_for(&logical, Platform::N3ds)?;
+        let tex3ds_format = match format.as_str() {
+            "RGBA8" => "rgba8",
+            "RGB565" => "rgb565",
+            other => return Err(format!("{logical}: no tex3ds mapping for format {other}")),
+        };
+        let source = resolve_source(&root.join("assets"), Platform::N3ds, &decl.file)?;
+        let font = trino_asset_pipeline::bake_font(&source, decl)
+            .map_err(|e| format!("font `{logical}`: {e}"))?;
+        // Atlas -> t3x (same handle as the font); table -> verbatim TFNT.
+        let staged = stage.join(format!("{id:08x}.png"));
+        let png = trino_asset_pipeline::font::encode_png(font.width, font.height, &font.rgba)?;
+        std::fs::write(&staged, png).map_err(|e| e.to_string())?;
+        let out = romfs.join(format!("{id:08x}.t3x"));
+        let status = Command::new(&tex3ds)
+            .arg("-f")
+            .arg(tex3ds_format)
+            .arg("-o")
+            .arg(&out)
+            .arg(&staged)
+            .status()
+            .map_err(|e| format!("tex3ds: {e}"))?;
+        if !status.success() {
+            return Err(format!("tex3ds failed for {logical}"));
+        }
+        std::fs::write(romfs.join(format!("{id:08x}.font")), &font.table)
+            .map_err(|e| e.to_string())?;
+        index.push_str(&format!("{id:08x}\tsprite\t{id:08x}.t3x\n"));
+        index.push_str(&format!("{id:08x}\tfont\t{id:08x}.font\n"));
+    }
+    for (name, decl) in &manifest.blobs {
+        let logical = format!("blobs/{name}");
+        let id = trino_core::asset_id(&logical);
+        let source = resolve_source(&root.join("assets"), Platform::N3ds, &decl.file)?;
+        std::fs::copy(&source, romfs.join(format!("{id:08x}.blob"))).map_err(|e| e.to_string())?;
+        index.push_str(&format!("{id:08x}\tblob\t{id:08x}.blob\n"));
+    }
+
     std::fs::write(romfs.join("index.tsv"), index).map_err(|e| e.to_string())?;
     if test_mode {
         std::fs::write(romfs.join("test_mode"), "1").map_err(|e| e.to_string())?;
@@ -336,24 +377,53 @@ fn which(name: &str) -> Option<PathBuf> {
         .find(|p| p.exists())
 }
 
-/// Azahar's rotating log file (svcOutputDebugString ends up here).
-fn azahar_log() -> Option<PathBuf> {
-    let base = if cfg!(windows) {
-        PathBuf::from(std::env::var("APPDATA").ok()?)
+/// Azahar's rotating log file (svcOutputDebugString ends up here) and its
+/// `qt-config.ini`. Windows keeps both under `%APPDATA%/Azahar`; Linux
+/// builds use XDG dirs named `azahar-emu` (older builds: `~/.local/share/
+/// Azahar`). The first candidate whose config exists wins.
+fn azahar_paths() -> Option<(PathBuf, PathBuf)> {
+    let candidates: Vec<(PathBuf, PathBuf)> = if cfg!(windows) {
+        let base = PathBuf::from(std::env::var("APPDATA").ok()?).join("Azahar");
+        vec![(
+            base.join("log/azahar_log.txt"),
+            base.join("config/qt-config.ini"),
+        )]
     } else {
-        PathBuf::from(std::env::var("HOME").ok()?).join(".local/share")
+        let home = PathBuf::from(std::env::var("HOME").ok()?);
+        let data = std::env::var("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| home.join(".local/share"));
+        let config = std::env::var("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| home.join(".config"));
+        vec![
+            (
+                data.join("azahar-emu/log/azahar_log.txt"),
+                config.join("azahar-emu/qt-config.ini"),
+            ),
+            (
+                data.join("Azahar/log/azahar_log.txt"),
+                data.join("Azahar/config/qt-config.ini"),
+            ),
+        ]
     };
-    Some(base.join("Azahar/log/azahar_log.txt"))
+    let first = candidates.first().cloned();
+    candidates
+        .into_iter()
+        .find(|(_, ini)| ini.exists())
+        .or(first)
+}
+
+fn azahar_log() -> Option<PathBuf> {
+    azahar_paths().map(|(log, _)| log)
 }
 
 /// svcOutputDebugString logs under `Debug.Emulated` at Debug level, which
 /// Azahar's default `*:Info` filter drops — the harness would time out.
 /// Idempotently widen the filter in qt-config.ini.
 fn ensure_azahar_log_filter() -> Result<(), String> {
-    let Some(ini) =
-        azahar_log().and_then(|l| Some(l.parent()?.parent()?.join("config/qt-config.ini")))
-    else {
-        return Ok(()); // no config yet: first run logs everything it needs? no — warn below
+    let Some((_, ini)) = azahar_paths() else {
+        return Ok(()); // no HOME/APPDATA: nothing to patch
     };
     let Ok(content) = std::fs::read_to_string(&ini) else {
         // No config yet (Azahar never ran): the default filter hides the

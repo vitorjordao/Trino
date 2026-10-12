@@ -52,6 +52,9 @@ fn regenerate_readme_hero_shot() {
     for model in assets.models {
         renderer.upload_mesh(trino_core::ModelId(model.id), model.tmdl);
     }
+    for font in assets.fonts {
+        renderer.upload_font(trino_core::FontId(font.id), font.table);
+    }
 
     let mut game = platformer::PlatformerGame::new(Vec2::new(320.0, 240.0));
     let mut audio = NullAudio;

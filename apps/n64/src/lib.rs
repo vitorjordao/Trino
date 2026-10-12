@@ -19,7 +19,7 @@ mod n64 {
 
     use alloc::format;
     use trino_core::{Button, Game, Input, InputState, Vec2};
-    use trino_platform_n64::{N64Assets, N64Audio, N64Input, N64Renderer, runtime};
+    use trino_platform_n64::{N64Assets, N64Audio, N64Input, N64Platform, N64Renderer, runtime};
 
     #[unsafe(no_mangle)]
     pub extern "C" fn trino_rust_main() {
@@ -29,12 +29,13 @@ mod n64 {
         let mut renderer = N64Renderer::new();
         let mut audio = N64Audio::new();
         let mut input = N64Input;
-        N64Assets::load_all(&mut renderer, &mut audio);
+        let mut platform = N64Platform::new();
+        N64Assets::load_all(&mut renderer, &mut audio, &mut platform);
 
         let mut game = castle64::Castle64Game::new(Vec2::new(320.0, 240.0));
 
         if N64Assets::exists("/test_mode") {
-            run_self_test(&mut game, &mut renderer, &mut audio);
+            run_self_test(&mut game, &mut renderer, &mut audio, &mut platform);
         }
 
         let mut last = runtime::now_us();
@@ -44,7 +45,7 @@ mod n64 {
             last = now;
 
             let state = input.poll();
-            game.update(&state, &mut audio, dt);
+            game.update_with(&mut platform, &state, &mut audio, dt);
             game.render(&mut renderer);
             audio.poll();
         }
@@ -57,8 +58,17 @@ mod n64 {
         game: &mut castle64::Castle64Game,
         renderer: &mut N64Renderer,
         audio: &mut N64Audio,
+        platform: &mut N64Platform,
     ) -> ! {
         const DT: f32 = 1.0 / 60.0;
+        // 0) Engine services through the portable traits (text, blobs, save).
+        if let Err(e) = castle64::selftest::engine_checks(renderer, platform) {
+            runtime::log(&format!("TRINO_TEST_FAIL:engine: {e}\n"));
+            loop {
+                trino_core::Renderer::begin_frame(renderer, trino_core::Color::BLACK);
+                trino_core::Renderer::end_frame(renderer);
+            }
+        }
         // Render 1:4 — a lógica roda todo frame (determinismo intacto); o
         // T&L em software da cena completa a cada frame estourava o timeout
         // do harness no emulador.

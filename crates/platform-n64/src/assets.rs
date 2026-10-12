@@ -9,7 +9,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::ffi;
-use crate::{N64Audio, N64Renderer, runtime};
+use crate::{N64Audio, N64Platform, N64Renderer, runtime};
 
 pub struct N64Assets;
 
@@ -22,9 +22,9 @@ impl N64Assets {
         unsafe { ffi::trino_file_exists(cpath.as_ptr()) != 0 }
     }
 
-    /// Read `rom:/index.tsv` and register every asset with the renderer
-    /// and audio backends.
-    pub fn load_all(renderer: &mut N64Renderer, audio: &mut N64Audio) {
+    /// Read `rom:/index.tsv` and register every asset with the renderer,
+    /// audio and platform (blobs) backends.
+    pub fn load_all(renderer: &mut N64Renderer, audio: &mut N64Audio, platform: &mut N64Platform) {
         if !Self::exists("/index.tsv") {
             runtime::log("TRINO_ASSETS: no index.tsv in DFS\n");
             return;
@@ -69,6 +69,16 @@ impl N64Assets {
                 "model" => {
                     if let Some(bytes) = read_bytes(&path) {
                         renderer.register_mesh(id, bytes);
+                    }
+                }
+                "font" => {
+                    if let Some(bytes) = read_bytes(&path) {
+                        renderer.register_font(id, bytes);
+                    }
+                }
+                "blob" => {
+                    if let Some(bytes) = read_bytes(&path) {
+                        platform.insert_blob(id, bytes);
                     }
                 }
                 _ => {}

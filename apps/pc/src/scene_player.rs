@@ -172,6 +172,7 @@ impl ScenePlayer {
                         tint: Color::rgba(t[0], t[1], t[2], t[3]),
                         flip_x: s.flip_x,
                         flip_y: s.flip_y,
+                        ..SpriteParams::DEFAULT
                     },
                 );
             }

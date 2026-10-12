@@ -15,6 +15,11 @@ pub struct TrinoBlit {
     pub flip_x: u32,
     pub flip_y: u32,
     pub tint: u32,
+    /// Source sub-rect in sprite pixels; `src_w == 0` = whole sprite.
+    pub src_x: i32,
+    pub src_y: i32,
+    pub src_w: i32,
+    pub src_h: i32,
 }
 
 unsafe extern "C" {
@@ -52,6 +57,11 @@ unsafe extern "C" {
     pub fn trino_file_exists(dfs_relative_path: *const c_char) -> i32;
     pub fn trino_asset_load(dfs_path: *const c_char, size_out: *mut u32) -> *mut c_void;
     pub fn trino_free(ptr: *mut c_void);
+
+    /// Bytes of cartridge EEPROM (0 = none).
+    pub fn trino_save_capacity() -> u32;
+    pub fn trino_save_read(dest: *mut u8, start: u32, len: u32);
+    pub fn trino_save_write(src: *const u8, start: u32, len: u32);
 
     // newlib, for the global allocator.
     pub fn memalign(align: usize, size: usize) -> *mut c_void;

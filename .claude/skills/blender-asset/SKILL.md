@@ -13,12 +13,14 @@ If you learn something new, update this skill and `tools/blender/` in the same s
 
 | Topic | Trino reality | Consequence in Blender |
 |---|---|---|
-| Color | **Vertex colors only** (N64 ceiling). Bake priority per vertex: `COLOR_0` → base-color **texture sampled at the vertex UV** (nearest) → base-color **factor**, always × factor | No painted 512 px textures, no text decals. Detail = geometry or per-face color. A palette atlas (flat color cells) works. |
+| Color | **Vertex colors** by default. Bake priority per vertex: `COLOR_0` → base-color **texture sampled at the vertex UV** (nearest) → base-color **factor**, always × factor. **Textured models** (manifest `texture = "sprites/x"`): UVs (`TEXCOORD_0`) are kept and one small texture is sampled at runtime, modulated by the vertex color | Default: detail = geometry or per-face color; a palette atlas (flat color cells) works. Textured: one power-of-two texture per model, ≤ 4 KB on N64 (32x32 RGBA16, 64x64 CI4) — tiling surfaces (walls, floors, crates), not painted 512 px skins. |
 | Lighting | Engine-side, per vertex: `Gouraud`, `Flat` or `Unlit` materials (`assets/materials/*.material.ron`) | Model for the faceted look; the material (not Blender) decides shading. |
 | Animation | **Rigid skeleton**: each vertex follows exactly one joint. Skins: heaviest weight wins. No skin + animations: **every scene node is a joint** | Rigid parts (one object per moving part) or an armature with weight 1.0 per vertex. Blended weights crack at joints. |
 | Limits | ≤ **32 joints**, **one skin**, ≤ **65 535 vertices**, triangles only, no morph targets, CUBICSPLINE tangents dropped | Merge static parts into their parent; LINEAR keys. |
 | Budget | `Caps::N64.max_tris_per_frame` for the **whole frame** | Props: tens–few hundred tris. Hero character: ≤ ~800. `model inspect` prints the percentage. |
 | Format | glTF 2.0 (`.glb`), Y-up, meters | Export with the exporter's Y-up option; 1 Blender unit = 1 m. |
+| Facing | **Blender −Y = Trino +Z** (verified by `cargo xtask blender smoke`) | Model the front looking at Blender's −Y (Front view, numpad 1, looks at it). |
+| Clip timing | Each clip starts at its **first keyframe** (Blender exports from frame 1 = 1/24 s; the bake removes the offset) | Key from frame 1 (or 0); close loops by repeating the first key `length` frames later. |
 | Clips | Sampled at manifest `anim_fps` (default 15); loop unless listed in `once` | Close loops (last key = first). Name actions/NLA tracks exactly like the clips the game uses. |
 
 Reference models built exactly this way (generated in `xtask/src/showcase_assets.rs`):
@@ -47,10 +49,20 @@ result = {"ok": True}   # some Blender MCP servers require `result` to be a dict
 | `rig_tools.py` | `part_report` (joints vs 32), `set_pivot`, `key_rot`, `key_loc`, `make_clip`, `rigid_check`, `snap_rigid`, `bake_to_deform` |
 | `trino_export.py` | `stash_clips` (one NLA track per clip), `export_glb` (version-tolerant options), `inspect` (runs the engine's bake) |
 
-> **Status:** these scripts are adapted from a production Blender pipeline but have not
-> been run in this repository's CI (no Blender there). Exporter option names drift
-> between Blender versions — `export_glb` drops unknown options and reports them in
-> `skipped_options`. **`inspect` and the editor's Scene view are the gates that count.**
+> **Status:** validated end to end on **Blender 4.5.14 LTS** (headless) by
+> `cargo xtask blender smoke` (`tools/blender/smoke_test.py`): a static prop and a
+> rigid-part character built from scratch with these tools, exported, and gated by the
+> engine's bake (triangles, size, joints, clips, loop flags, facing), plus QA renders
+> (turntable, orient mode, clip sheet) in `target/blender_smoke/`. The command skips
+> cleanly where Blender is not installed (`$TRINO_BLENDER`, PATH, `~/.local/opt/blender*`).
+> Exporter option names drift between versions — `export_glb` drops unknown options and
+> reports them in `skipped_options` (4.5: only the legacy `export_colors`).
+> **`inspect` and the editor's Scene view are the gates that count.**
+
+Fixed while validating (keep in mind on other versions): after `stash_clips` and after
+`export_glb` the parts are put back in their **rest pose** (`restore_rest`) — before, the
+viewport and QA renders kept the last sampled pose; `clip_sheet` plays the clip on **every**
+part that has a `<clip>__<object>` action, not only the object passed.
 
 Working with an AI agent: any Blender MCP server that can run Python works
 (`execute_blender_code`-style tools). Without MCP, run the same snippets in Blender's
@@ -60,9 +72,9 @@ Python console or `blender --background file.blend --python script.py`.
 
 1. List objects, vertex/face counts, modifiers, materials, color attributes, armatures,
    actions. `ns["report"]("Obj")`, `ns["part_report"]("Root")`.
-2. `turntable` + close-ups. Note **where the object faces** (decide: models face **+Z in
-   Trino** = −Y in Blender after the exporter's axis conversion — verify once with
-   `inspect` + the editor and write the answer into this skill) and its right side.
+2. `turntable` + close-ups. Note **where the object faces**: models face **+Z in Trino**
+   = **−Y in Blender** (verified: `cargo xtask blender smoke`, gate
+   `facing_minus_y_is_plus_z`) — and its right side.
 3. If it replaces a **fake object** (`assets/shared/models/proxies/*.prim.ron`), read the
    proxy's dimensions: the real model should occupy the same box so gameplay keeps working.
 4. Decide: **static**, **animated prop** (rigid parts), or **character** (rigid parts or
@@ -73,7 +85,8 @@ Python console or `blender --background file.blend --python script.py`.
 - Apply Mirror (or let the exporter apply modifiers), merge by distance (1e-4), recalc
   normals outside. Gate: 0 non-manifold edges on closed parts, no stray vertices.
 - Low-poly faceted style: details that are just color go to the color stage, not geometry —
-  but **anything that must read in-game needs geometry or face color** (no textures).
+  **anything that must read in-game needs geometry, face color or (textured models) the
+  one small tiling texture**.
 - Moving parts as **separate objects** with the origin at the pivot (`set_pivot`): shoulder,
   hip, hinge, axle. Static decorations: join them into their parent (Ctrl+J) to save joints.
 - Scale: real meters (`proxies/hero-capsule` is 1.7 m). Root origin at the base (y = 0).
@@ -143,7 +156,11 @@ about the origin.
    Give it a material (`Flat` for the faceted look) — materials are text files too.
 3. `cargo xtask model inspect` again if anything changed; `cargo xtask test` before commit.
 4. Game code: `ModelId::from_path("models/robot")`, pose with
-   `ModelParams { anim: Some(AnimRef { clip: ClipId::from_name("walk"), time }), .. }`.
+   `ModelParams { anim: Some(AnimRef::new(ClipId::from_name("walk"), time)), ..ModelParams::DEFAULT }`
+   — crossfade idle→walk with `AnimRef::new(idle, t).blend_to(walk, t, weight)`.
+5. Textured model: add `texture = "sprites/<tile>"` to its `[models.*]` entry (UVs from
+   `TEXCOORD_0`), declare the sprite (`formats = { n64 = "CI4" }` or `CI8`), or set
+   `texture` in a material to swap it per entity.
 
 ## Variants
 

@@ -1,7 +1,9 @@
 # Vertex-color painting for Trino assets.
 #
-# Trino's 3D is vertex-colored (the N64 ceiling: no textures on 3D geometry).
-# The asset bake resolves each vertex color in this priority order:
+# Trino's 3D is vertex-colored by default; textured models (manifest
+# `texture = "sprites/x"`) add ONE small tiling texture modulated by these
+# colors. For untextured models the bake resolves each vertex color in this
+# priority order:
 #   1. COLOR_0 (the mesh's color attribute)            <- what these tools write
 #   2. else the material's base-color TEXTURE sampled at the vertex UV
 #      (nearest texel — palette atlases collapse to flat colors)
@@ -32,7 +34,7 @@
 # - Small detail that does not fit as color needs geometry (an extra edge loop), not a
 #   texture. Budget: keep props tens to a few hundred triangles; see `cargo xtask model inspect`.
 #
-# STATUS: written for Blender 4.2+/5.x; not executed in this repository's CI.
+# STATUS: validated on Blender 4.5 LTS by `cargo xtask blender smoke`.
 import bpy, math
 import numpy as np
 

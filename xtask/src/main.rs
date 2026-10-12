@@ -5,6 +5,7 @@
 //! contributors and CI never memorize per-platform incantations.
 
 mod agents;
+mod blender;
 mod castle64_assets;
 mod font_assets;
 mod model;
@@ -40,6 +41,10 @@ commands:
   model inspect <file> [--fps N] [--once a,b] [--json]
                        bake a .glb/.gltf/.prim.ron like the engine and report
                        tris, joints, clips, bounds, N64 budget (art gate)
+  blender smoke [--no-render]
+                       run the Blender toolkit end to end (prop + rigid
+                       character -> export -> model inspect gates); skips
+                       when Blender is not installed
   agents <sync|check>  mirror .agents/skills/ into tool-specific folders
                        (.claude/skills/) / verify the mirrors are in sync
 ";
@@ -103,6 +108,10 @@ fn main() -> ExitCode {
         (Some("editor"), _) => cargo(&["run", "-p", "trino-editor"], &[]),
         (Some("gen-assets"), _) => gen_assets(),
         (Some("agents"), sub) => agents::run(&repo_root(), sub),
+        (Some("blender"), _) => {
+            let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
+            blender::run(&repo_root(), &rest)
+        }
         (Some("model"), _) => {
             let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
             model::run(&repo_root(), &rest)

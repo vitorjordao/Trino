@@ -27,6 +27,12 @@ fn b64(bytes: &[u8]) -> String {
 /// One triangle mesh (positions, normals, indices), plus animation
 /// input/output data, packed into one buffer.
 fn write_gltf(path: &std::path::Path, anim_name: &str) {
+    write_gltf_at(path, anim_name, 0.0);
+}
+
+/// Same model, with the clip's keyframes at `start` and `start + 1` s
+/// (exporters like Blender's start at frame 1 = 1/24 s).
+fn write_gltf_at(path: &std::path::Path, anim_name: &str, start: f32) {
     let mut buf: Vec<u8> = Vec::new();
     let f = |buf: &mut Vec<u8>, vals: &[f32]| {
         for v in vals {
@@ -39,7 +45,7 @@ fn write_gltf(path: &std::path::Path, anim_name: &str) {
     for i in [0u16, 1, 2, 0] {
         buf.extend_from_slice(&i.to_le_bytes()); // 72..80 indices (+pad)
     }
-    f(&mut buf, &[0.0, 1.0]); // 80..88 times
+    f(&mut buf, &[start, start + 1.0]); // 80..88 times
     let h = std::f32::consts::FRAC_PI_4; // 90 degrees around Z at t = 1
     f(&mut buf, &[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, h.sin(), h.cos()]); // 88..120 rotations
     let json = format!(
@@ -69,12 +75,14 @@ fn write_gltf(path: &std::path::Path, anim_name: &str) {
     {{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "min": [0,0,0], "max": [1,1,0]}},
     {{"bufferView": 1, "componentType": 5126, "count": 3, "type": "VEC3"}},
     {{"bufferView": 2, "componentType": 5123, "count": 3, "type": "SCALAR"}},
-    {{"bufferView": 3, "componentType": 5126, "count": 2, "type": "SCALAR", "min": [0], "max": [1]}},
+    {{"bufferView": 3, "componentType": 5126, "count": 2, "type": "SCALAR", "min": [{t0}], "max": [{t1}]}},
     {{"bufferView": 4, "componentType": 5126, "count": 2, "type": "VEC4"}}
   ]
 }}"#,
         len = buf.len(),
-        data = b64(&buf)
+        data = b64(&buf),
+        t0 = start,
+        t1 = start + 1.0,
     );
     std::fs::write(path, json).unwrap();
 }
@@ -128,6 +136,27 @@ fn node_animation_bakes_to_a_rigid_skeleton() {
     let (c, r) = mesh.bounds().unwrap();
     let d = tip - c;
     assert!(d.dot(d).sqrt() <= r);
+}
+
+#[test]
+fn clips_start_at_their_first_keyframe() {
+    // Blender-style timeline offset: keys at 1/24 s and 1 + 1/24 s. The
+    // clip must still be exactly 1 s (no held duplicate of the first pose).
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("offset.gltf");
+    write_gltf_at(&path, "spin", 1.0 / 24.0);
+    let blob = bake_model(
+        &path,
+        &ModelOptions {
+            anim_fps: 10.0,
+            ..ModelOptions::default()
+        },
+    )
+    .unwrap();
+    let mesh = Mesh::from_tmdl(&blob).unwrap();
+    let clip = mesh.find_clip(ClipId::from_name("spin")).unwrap();
+    assert_eq!(clip.frame_count, 11);
+    assert!((clip.duration() - 1.0).abs() < 1e-6);
 }
 
 #[test]

@@ -16,9 +16,9 @@
 #                                           red = back faces) in EEVEE
 #   vertex_color_mode(True/False)        -> Workbench showing the vertex colors Trino will use
 #
-# STATUS: adapted from a production pipeline; not executed in this repository's
-# CI (no Blender there). If Blender's API moved, fix this file and note it in
-# .agents/skills/blender-asset/SKILL.md.
+# STATUS: validated on Blender 4.5 LTS (headless, EEVEE/Workbench) by
+# `cargo xtask blender smoke`. If Blender's API moves, fix this file and note it
+# in .agents/skills/blender-asset/SKILL.md.
 #
 # Lessons that shaped this file:
 # - Compose images inside Blender with numpy (bpy.data.images + pixels): some agent
@@ -103,12 +103,25 @@ def set_action(obj, action):
 
 
 def clip_sheet(obj, action, frames, views, out, target=(0, 0, 1), ortho=3.0, res=220):
+    """Frames of a clip. Rigid-part clips are one action per object named
+    `<clip>__<object>` (rig_tools.make_clip): every object with such an
+    action plays it, so the whole character moves, not just `obj`."""
     set_action(obj, action)
+    clip = action.name.split("__")[0] if "__" in action.name else None
+    playing = [obj]
+    if clip:
+        for o in bpy.data.objects:
+            a = bpy.data.actions.get(f"{clip}__{o.name}")
+            if a is not None and o is not obj:
+                set_action(o, a)
+                playing.append(o)
     tiles = []
     for az, el in views:
         for f in frames:
             bpy.context.scene.frame_set(int(f), subframe=float(f) - int(f))
             tiles.append(shot(os.path.join(SCRATCH, "_qa_tile.png"), az, el, target, ortho, res=res))
+    for o in playing:
+        o.animation_data.action = None
     return sheet(os.path.join(SCRATCH, out), tiles, len(frames))
 
 

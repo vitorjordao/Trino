@@ -15,9 +15,10 @@ notify = { workspace = true }
 notify-debouncer-full = { workspace = true }
 png = { workspace = true }
 hound = { workspace = true }
+# `blender smoke` parses the toolkit's JSON report.
+serde_json = { workspace = true }
 
 [dev-dependencies]
-serde_json = { workspace = true }
 libloading = { workspace = true }
 tempfile = { workspace = true }
 trino-core = { workspace = true }

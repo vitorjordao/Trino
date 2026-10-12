@@ -19,7 +19,8 @@
 #
 # Exporter option names changed across Blender versions; `_supported` drops keys the
 # running exporter does not know and returns them so you can see what was skipped.
-# STATUS: not executed in this repository's CI — `inspect` is the gate that matters.
+# STATUS: validated on Blender 4.5 LTS by `cargo xtask blender smoke` — `inspect`
+# is still the gate that matters.
 import bpy, json, os, subprocess
 
 REPO = globals().get("REPO")
@@ -61,7 +62,22 @@ def stash_clips(clips, objects):
                 pass
             tr.mute = True
             done.append((obj_name, clip))
+    restore_rest(objects)
     return done
+
+
+def restore_rest(objects):
+    """Put rigid parts back in their rest pose (key_rot/key_loc remember it).
+    Without an active action an object keeps the last evaluated pose — after
+    keying, or after the exporter sampled the animation."""
+    from mathutils import Quaternion
+    for name in objects:
+        o = bpy.data.objects[name]
+        if "_rest_q" in o:
+            o.rotation_mode = 'QUATERNION'
+            o.rotation_quaternion = Quaternion(o["_rest_q"])
+        if "_rest_t" in o:
+            o.location = o["_rest_t"]
 
 
 def _select_tree(roots):
@@ -124,6 +140,7 @@ def export_glb(roots, out_path, animations=True, nla=True):
     finally:
         for t in muted:
             t.mute = True
+        restore_rest(picked)
     return {"path": out_path, "objects": picked, "skipped_options": skipped}
 
 

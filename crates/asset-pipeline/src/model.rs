@@ -848,7 +848,12 @@ fn load_gltf(path: &Path, opts: &ModelOptions) -> Result<MeshData, String> {
             Option<(Vec<f32>, Vec<[f32; N]>, gltf::animation::Interpolation)>;
         let mut tracks: Vec<(Track<3>, Track<4>, Track<3>)> =
             vec![(None, None, None); joint_nodes.len()];
-        let mut duration = 0.0f32;
+        // Clips start at their first keyframe: exporters offset the
+        // timeline (Blender's starts at frame 1 = 1/24 s), and sampling from
+        // t = 0 put a held duplicate of the first pose into every loop — a
+        // visible hitch at the seam.
+        let mut start = f32::MAX;
+        let mut end = 0.0f32;
         for channel in anim.channels() {
             let Some(&j) = joint_of_node.get(&channel.target().node().index()) else {
                 continue; // animates a node outside the rig
@@ -857,7 +862,8 @@ fn load_gltf(path: &Path, opts: &ModelOptions) -> Result<MeshData, String> {
             let Some(times) = reader.read_inputs().map(|i| i.collect::<Vec<f32>>()) else {
                 continue;
             };
-            duration = duration.max(times.last().copied().unwrap_or(0.0));
+            start = start.min(times.first().copied().unwrap_or(0.0));
+            end = end.max(times.last().copied().unwrap_or(0.0));
             let interp = channel.sampler().interpolation();
             use gltf::animation::util::ReadOutputs;
             match reader.read_outputs() {
@@ -871,12 +877,16 @@ fn load_gltf(path: &Path, opts: &ModelOptions) -> Result<MeshData, String> {
                 _ => {} // morph weights: not supported (rigid skeleton only)
             }
         }
+        if start > end {
+            start = 0.0; // no channel targets the rig
+        }
+        let duration = end - start;
         let frame_count = ((duration * fps).round() as usize).max(1) + 1;
         let lerp3 =
             |a: [f32; 3], b: [f32; 3], t: f32| std::array::from_fn(|i| a[i] + (b[i] - a[i]) * t);
         let mut frames = Vec::with_capacity(frame_count);
         for f in 0..frame_count {
-            let t = (f as f32 / fps).min(duration);
+            let t = start + (f as f32 / fps).min(duration);
             let mut frame: Vec<Trs> = joint_nodes
                 .iter()
                 .enumerate()

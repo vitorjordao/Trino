@@ -75,6 +75,8 @@ pub struct Stats {
     pub items: usize,
     pub tris: usize,
     pub ms: f32,
+    /// What the renderer counted for the last frame (budget overlay).
+    pub frame: trino_core::FrameStats,
 }
 
 pub struct Viewport {
@@ -88,6 +90,9 @@ pub struct Viewport {
     /// Draw collider wireframes (world boxes — exactly what the physics
     /// uses): green = solid, yellow = trigger.
     pub show_colliders: bool,
+    /// Game view: the console budget overlay (tris / sprites / texture vs
+    /// the selected profile's Caps).
+    pub show_budget: bool,
     pub gizmo: GizmoMode,
     pub snap: bool,
     drag: Option<(Vec<usize>, Drag)>,
@@ -131,6 +136,7 @@ impl Viewport {
             cam: OrbitCam::default(),
             show_grid: true,
             show_colliders: true,
+            show_budget: true,
             gizmo: GizmoMode::Translate,
             snap: false,
             drag: None,
@@ -144,6 +150,7 @@ impl Viewport {
                 items: 0,
                 tris: 0,
                 ms: 0.0,
+                frame: trino_core::FrameStats::default(),
             },
             hover: None,
         }
@@ -292,6 +299,7 @@ impl Viewport {
             items: input.resolved.items.len(),
             tris,
             ms: started.elapsed().as_secs_f32() * 1000.0,
+            frame: r.stats(),
         };
     }
 
@@ -561,6 +569,11 @@ impl Viewport {
             egui::FontId::monospace(11.0),
             Color32::from_white_alpha(120),
         );
+        if self.kind == ViewKind::Game && self.show_budget {
+            // Panel-wide painter: the overlay sits over the letterbox area
+            // when there is room, never clipped by the game image.
+            self.budget_overlay(&ui.painter_at(avail), avail);
+        }
 
         // ---- keyboard (when hovered) ------------------------------------------
         if response.hovered()
@@ -616,6 +629,72 @@ impl Viewport {
             }
         }
         actions
+    }
+
+    /// Console budget panel (top right of the Game view).
+    fn budget_overlay(&self, painter: &egui::Painter, avail: Rect) {
+        let caps = *self.renderer.caps();
+        let rows = crate::budget::rows(&self.stats.frame, &caps);
+        let w = 210.0;
+        let row_h = 18.0;
+        let rect = Rect::from_min_size(
+            Pos2::new(avail.max.x - w - 10.0, avail.min.y + 50.0),
+            Vec2::new(w, 24.0 + rows.len() as f32 * row_h),
+        );
+        painter.rect_filled(rect, CornerRadius::same(6), c::BG1.gamma_multiply(0.88));
+        painter.text(
+            rect.min + Vec2::new(8.0, 6.0),
+            egui::Align2::LEFT_TOP,
+            format!(
+                "{} budget",
+                match self.profile {
+                    SimProfile::N64 => "N64",
+                    SimProfile::N3ds => "3DS",
+                    SimProfile::Native => "PC",
+                }
+            ),
+            egui::FontId::proportional(11.5),
+            c::TEXT_WEAK,
+        );
+        for (i, row) in rows.iter().enumerate() {
+            let y = rect.min.y + 24.0 + i as f32 * row_h;
+            let color = match row.level {
+                crate::budget::Level::Ok => c::OK,
+                crate::budget::Level::Near => c::WARN,
+                crate::budget::Level::Over => c::ERROR,
+            };
+            let value = if row.limit == u64::MAX {
+                format!("{}{}", row.used, row.unit)
+            } else {
+                format!("{}{} / {}{}", row.used, row.unit, row.limit, row.unit)
+            };
+            painter.text(
+                Pos2::new(rect.min.x + 8.0, y),
+                egui::Align2::LEFT_TOP,
+                row.label,
+                egui::FontId::proportional(11.0),
+                c::TEXT,
+            );
+            painter.text(
+                Pos2::new(rect.max.x - 8.0, y),
+                egui::Align2::RIGHT_TOP,
+                value,
+                egui::FontId::monospace(10.5),
+                color,
+            );
+            if row.limit != u64::MAX {
+                let bar = Rect::from_min_size(
+                    Pos2::new(rect.min.x + 8.0, y + 13.0),
+                    Vec2::new(w - 16.0, 2.0),
+                );
+                painter.rect_filled(bar, CornerRadius::ZERO, c::BORDER);
+                let filled = Rect::from_min_size(
+                    bar.min,
+                    Vec2::new(bar.width() * row.fraction().min(1.0), 2.0),
+                );
+                painter.rect_filled(filled, CornerRadius::ZERO, color);
+            }
+        }
     }
 
     fn toolbar(
@@ -730,6 +809,16 @@ impl Viewport {
                                 self.set_profile(profile, input.project);
                             }
                             ui.separator();
+                            if theme::toggle_icon(
+                                ui,
+                                self.show_budget,
+                                icon::GAUGE,
+                                "Console budget: tris / sprites / texture vs the profile's Caps",
+                            )
+                            .clicked()
+                            {
+                                self.show_budget = !self.show_budget;
+                            }
                             if self.profile == SimProfile::N64 {
                                 let mut look = self.renderer.n64_look();
                                 if theme::toggle_icon(

@@ -16,6 +16,7 @@
 //! opens with the Level tab focused.
 
 mod app;
+mod budget;
 mod dialogs;
 mod doc;
 mod gizmo;

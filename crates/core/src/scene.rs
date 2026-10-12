@@ -12,6 +12,7 @@
 
 use crate::math::Vec3;
 use crate::math3d::Mat34;
+use crate::physics::{Aabb, Collider};
 use crate::render::{AnimRef, ClipId, Material, ModelId, ModelParams, Renderer};
 
 /// One flattened entity (prefabs expanded, world matrix precomputed).
@@ -26,6 +27,8 @@ pub struct SceneNode {
     pub params: ModelParams,
     /// Clip to loop and its playback speed.
     pub anim: Option<(ClipId, f32)>,
+    /// Collision shape (local to `matrix`); see [`crate::physics`].
+    pub collider: Option<Collider>,
 }
 
 impl SceneNode {
@@ -41,6 +44,29 @@ impl SceneNode {
     pub fn has_tag(&self, tag: &str) -> bool {
         self.tags.contains(&tag)
     }
+
+    /// World box of the collider, if any.
+    pub fn world_aabb(&self) -> Option<Aabb> {
+        self.collider.map(|c| c.world_aabb(&self.matrix))
+    }
+}
+
+/// World boxes of every **solid** collider in `nodes`, written to `out`;
+/// returns how many (stops at `out.len()`). Static level collision without
+/// an [`crate::entity::EntityStore`].
+pub fn solids(nodes: &[SceneNode], out: &mut [Aabb]) -> usize {
+    let mut n = 0;
+    for node in nodes {
+        let Some(c) = node.collider.filter(|c| !c.trigger) else {
+            continue;
+        };
+        if n == out.len() {
+            break;
+        }
+        out[n] = c.world_aabb(&node.matrix);
+        n += 1;
+    }
+    n
 }
 
 /// Draw every model node under `root`, animating clips at `time` seconds.
@@ -84,6 +110,7 @@ mod tests {
             model: None,
             params: ModelParams::DEFAULT,
             anim: None,
+            collider: None,
         },
         SceneNode {
             name: "spawn",
@@ -98,6 +125,7 @@ mod tests {
             model: None,
             params: ModelParams::DEFAULT,
             anim: None,
+            collider: None,
         },
     ];
 
@@ -111,5 +139,22 @@ mod tests {
             Vec3::new(3.0, 0.0, -2.0)
         );
         assert_eq!(with_tag(NODES, "door").count(), 1);
+    }
+
+    #[test]
+    fn solids_skip_triggers() {
+        let mut nodes = [NODES[0], NODES[1]];
+        nodes[0].collider = Some(Collider::solid_box(Vec3::ONE));
+        nodes[1].collider = Some(Collider {
+            trigger: true,
+            ..Collider::solid_box(Vec3::ONE)
+        });
+        let mut out = [Aabb::EMPTY; 4];
+        assert_eq!(solids(&nodes, &mut out), 1);
+        assert_eq!(out[0].max, Vec3::ONE);
+        assert_eq!(
+            nodes[1].world_aabb().unwrap().min,
+            Vec3::new(2.0, -1.0, -3.0)
+        );
     }
 }

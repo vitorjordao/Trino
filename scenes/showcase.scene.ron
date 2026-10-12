@@ -29,6 +29,7 @@
         scale: (1.0, 1.0, 1.0),
     ),
     model: Some((path: "models/ground", material: Some("materials/grass"))),
+    collider: Some((shape: Box(size: (40.0, 1.0, 40.0)), offset: (0.0, -0.5, 0.0))),
 ),
 (
     name: "pond",
@@ -105,6 +106,7 @@
         scale: (1.0, 1.0, 1.0),
     ),
     model: Some((path: "models/crate", material: Some("materials/wood"))),
+    collider: Some(()),
 ),
 (
     name: "crate-b",
@@ -114,6 +116,7 @@
         scale: (1.0, 1.0, 1.0),
     ),
     model: Some((path: "models/crate", material: Some("materials/wood"))),
+    collider: Some(()),
 ),
 (
     name: "crate-c",
@@ -123,6 +126,7 @@
         scale: (1.0, 1.0, 1.0),
     ),
     model: Some((path: "models/crate", material: Some("materials/wood"), tint: Some((255, 220, 200, 255)))),
+    collider: Some(()),
 )
     ],
 ),
@@ -134,6 +138,7 @@
         scale: (1.0, 1.0, 1.0),
     ),
     model: Some((path: "models/pillar", material: Some("materials/stone"))),
+    collider: Some(()),
 ),
 (
     name: "pillar-2",
@@ -143,6 +148,7 @@
         scale: (1.0, 1.0, 1.0),
     ),
     model: Some((path: "models/pillar", material: Some("materials/stone"))),
+    collider: Some(()),
 ),
 (
     name: "pillar-3",
@@ -152,6 +158,7 @@
         scale: (1.0, 1.0, 1.0),
     ),
     model: Some((path: "models/pillar", material: Some("materials/stone"))),
+    collider: Some(()),
 ),
 (
     name: "pillar-4",
@@ -161,6 +168,7 @@
         scale: (1.0, 1.0, 1.0),
     ),
     model: Some((path: "models/pillar", material: Some("materials/stone"))),
+    collider: Some(()),
 ),
 (
     name: "ramp",
@@ -179,6 +187,7 @@
         scale: (1.2, 0.7, 1.0),
     ),
     model: Some((path: "models/rock", material: Some("materials/stone"))),
+    collider: Some(()),
 ),
 (
     name: "rock-2",
@@ -188,6 +197,7 @@
         scale: (1.0, 0.6, 1.4),
     ),
     model: Some((path: "models/rock", material: Some("materials/stone"))),
+    collider: Some(()),
 ),
 (
     name: "rock-3",
@@ -197,6 +207,7 @@
         scale: (0.8, 0.5, 0.8),
     ),
     model: Some((path: "models/rock", material: Some("materials/stone"))),
+    collider: Some(()),
 ),
 (
     name: "lamp-1",
@@ -253,6 +264,7 @@
         scale: (1.0, 1.0, 1.0),
     ),
     model: Some((path: "models/c64_door")),
+    collider: Some(()),
 ),
 (
     name: "coin-1",
@@ -263,6 +275,7 @@
     ),
     tags: ["coin"],
     model: Some((path: "models/coin-ring", material: Some("materials/glow"))),
+    collider: Some((shape: Sphere(radius: 0.5), trigger: true)),
 ),
 (
     name: "coin-2",
@@ -273,6 +286,7 @@
     ),
     tags: ["coin"],
     model: Some((path: "models/coin-ring", material: Some("materials/glow"))),
+    collider: Some((shape: Sphere(radius: 0.5), trigger: true)),
 ),
 (
     name: "coin-3",
@@ -283,6 +297,7 @@
     ),
     tags: ["coin"],
     model: Some((path: "models/coin-ring", material: Some("materials/glow"))),
+    collider: Some((shape: Sphere(radius: 0.5), trigger: true)),
 ),
 (
     name: "coin-4",
@@ -293,6 +308,7 @@
     ),
     tags: ["coin"],
     model: Some((path: "models/coin-ring", material: Some("materials/glow"))),
+    collider: Some((shape: Sphere(radius: 0.5), trigger: true)),
 ),
 (
     name: "coin-5",
@@ -303,6 +319,7 @@
     ),
     tags: ["coin"],
     model: Some((path: "models/coin-ring", material: Some("materials/glow"))),
+    collider: Some((shape: Sphere(radius: 0.5), trigger: true)),
 ),
 (
     name: "gameplay",
@@ -339,6 +356,7 @@
         scale: (1.0, 1.0, 1.0),
     ),
     tags: ["goal"],
+    collider: Some((shape: Box(size: (2.0, 2.0, 2.0)), offset: (0.0, 1.0, 0.0), trigger: true)),
 )
     ],
 )

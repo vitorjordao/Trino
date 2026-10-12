@@ -13,10 +13,17 @@ pub const PREFABS_DIR: &str = "prefabs";
 pub const MATERIAL_EXT: &str = ".material.ron";
 pub const PREFAB_EXT: &str = ".prefab.ron";
 
+/// Local bounding box of a baked model (`min`, `max`), for `Auto`
+/// colliders. Filled by tools that can bake models (xtask, editor);
+/// [`Library::load`] leaves it empty.
+pub type ModelBounds = ([f32; 3], [f32; 3]);
+
 #[derive(Clone, Debug, Default)]
 pub struct Library {
     pub materials: BTreeMap<String, MaterialDef>,
     pub prefabs: BTreeMap<String, Prefab>,
+    /// `models/<name>` -> local AABB (see [`ModelBounds`]).
+    pub model_bounds: BTreeMap<String, ModelBounds>,
     /// Files that failed to parse (path: error) — shown, never fatal.
     pub errors: Vec<String>,
 }

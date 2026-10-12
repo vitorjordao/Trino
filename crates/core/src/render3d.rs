@@ -306,6 +306,22 @@ impl<'a> Mesh<'a> {
     }
 
     /// Model-space bounding sphere `(center, radius)`, when baked.
+    /// Bind-pose bounding box `(min, max)` in model space (`None` for an
+    /// empty mesh). Walks every vertex — a tool/load-time query.
+    pub fn aabb(&self) -> Option<(Vec3, Vec3)> {
+        if self.vertex_count == 0 {
+            return None;
+        }
+        let mut min = self.position(0);
+        let mut max = min;
+        for i in 1..self.vertex_count {
+            let p = self.position(i);
+            min = Vec3::new(min.x.min(p.x), min.y.min(p.y), min.z.min(p.z));
+            max = Vec3::new(max.x.max(p.x), max.y.max(p.y), max.z.max(p.z));
+        }
+        Some((min, max))
+    }
+
     pub fn bounds(&self) -> Option<(Vec3, f32)> {
         self.bounds
     }

@@ -13,3 +13,6 @@ crate-type = ["staticlib"]
 trino-core = { workspace = true }
 trino-platform-n64 = { workspace = true }
 castle64 = { workspace = true }
+# Scene-driven demo (collision from scenes + EntityStore), played by the
+# self-test.
+showcase = { workspace = true }

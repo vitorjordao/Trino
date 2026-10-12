@@ -69,6 +69,26 @@ mod n64 {
                 trino_core::Renderer::end_frame(renderer);
             }
         }
+        // 0b) Collision from scenes + runtime entities: the showcase demo
+        // (editor scene exported to code) plays through every coin to the goal.
+        {
+            let mut demo = showcase::ShowcaseGame::with_screen(Vec2::new(320.0, 240.0));
+            let mut n = 0u32;
+            let result = showcase::run_demo(&mut demo, |g, input| {
+                g.update(input, audio, 1.0 / 60.0);
+                if n % 8 == 0 {
+                    g.render(renderer);
+                }
+                n += 1;
+            });
+            if let Err(e) = result {
+                runtime::log(&format!("TRINO_TEST_FAIL:showcase: {e}\n"));
+                loop {
+                    trino_core::Renderer::begin_frame(renderer, trino_core::Color::BLACK);
+                    trino_core::Renderer::end_frame(renderer);
+                }
+            }
+        }
         // Render 1:4 — a lógica roda todo frame (determinismo intacto); o
         // T&L em software da cena completa a cada frame estourava o timeout
         // do harness no emulador.

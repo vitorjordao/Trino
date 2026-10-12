@@ -38,6 +38,9 @@ pub mod c {
     pub const MODEL: Color32 = Color32::from_rgb(255, 172, 92);
     pub const SPRITE: Color32 = Color32::from_rgb(240, 120, 200);
     pub const MATERIAL: Color32 = Color32::from_rgb(120, 220, 200);
+    /// Solid colliders (wireframes + inspector); triggers use [`TRIGGER`].
+    pub const COLLIDER: Color32 = Color32::from_rgb(110, 235, 120);
+    pub const TRIGGER: Color32 = Color32::from_rgb(255, 210, 80);
 }
 
 pub const RADIUS: u8 = 6;

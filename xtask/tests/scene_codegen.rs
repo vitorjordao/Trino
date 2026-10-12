@@ -12,7 +12,8 @@ use std::path::PathBuf;
 fn showcase_codegen_matches_the_scene() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
     let scene = trino_scene::Scene::load(&root.join("scenes/showcase.scene.ron")).unwrap();
-    let lib = trino_scene::Library::load(&root);
+    let mut lib = trino_scene::Library::load(&root);
+    lib.model_bounds = trino_asset_pipeline::manifest_model_bounds(&root.join("assets"));
     assert!(lib.errors.is_empty(), "{:?}", lib.errors);
     let (code, warnings) = trino_scene::codegen::to_rust(&scene, &lib);
     assert!(warnings.is_empty(), "scene has issues: {warnings:?}");

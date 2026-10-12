@@ -39,7 +39,7 @@ pub fn to_rust(scene: &Scene, lib: &Library) -> (String, Vec<String>) {
     );
     let _ = writeln!(
         out,
-        "#[allow(unused_imports)]\nuse trino_core::{{\n    Camera3, ClipId, Color, Fog, Light, Mat34, ModelId, ModelParams, SceneNode, Shading, Vec3,\n}};\n"
+        "#[allow(unused_imports)]\nuse trino_core::{{\n    Camera3, ClipId, Collider, Color, Fog, Light, Mat34, ModelId, ModelParams, SceneNode,\n    Shading, Shape, Vec3,\n}};\n"
     );
     let env = &scene.environment;
     let cam = env.core_camera();
@@ -104,6 +104,30 @@ pub fn to_rust(scene: &Scene, lib: &Library) -> (String, Vec<String>) {
             }
             None => "None".into(),
         };
+        let v3 = |v: trino_core::Vec3| format!("Vec3::new({}, {}, {})", f(v.x), f(v.y), f(v.z));
+        let collider = match item.collider {
+            Some(c) => {
+                let shape = match c.shape {
+                    trino_core::Shape::Box { half } => {
+                        format!("Shape::Box {{ half: {} }}", v3(half))
+                    }
+                    trino_core::Shape::Sphere { radius } => {
+                        format!("Shape::Sphere {{ radius: {} }}", f(radius))
+                    }
+                    trino_core::Shape::Capsule { radius, height } => format!(
+                        "Shape::Capsule {{ radius: {}, height: {} }}",
+                        f(radius),
+                        f(height)
+                    ),
+                };
+                format!(
+                    "Some(Collider {{\n            shape: {shape},\n            offset: {},\n            trigger: {},\n        }})",
+                    v3(c.offset),
+                    c.trigger
+                )
+            }
+            None => "None".into(),
+        };
         let tags: Vec<String> = item
             .tags
             .iter()
@@ -111,7 +135,7 @@ pub fn to_rust(scene: &Scene, lib: &Library) -> (String, Vec<String>) {
             .collect();
         let _ = writeln!(
             out,
-            "    SceneNode {{\n        name: \"{}\",\n        tags: &[{}],\n        matrix: Mat34 {{\n            m: [{}],\n        }},\n        model: {},\n        params: ModelParams {{\n            tint: {},\n            emissive: {},\n            shading: Shading::{},\n            double_sided: {},\n            anim: None,\n        }},\n        anim: {},\n    }},",
+            "    SceneNode {{\n        name: \"{}\",\n        tags: &[{}],\n        matrix: Mat34 {{\n            m: [{}],\n        }},\n        model: {},\n        params: ModelParams {{\n            tint: {},\n            emissive: {},\n            shading: Shading::{},\n            double_sided: {},\n            anim: None,\n        }},\n        anim: {},\n        collider: {},\n    }},",
             esc(&item.name),
             tags.join(", "),
             rows.join(", "),
@@ -120,7 +144,8 @@ pub fn to_rust(scene: &Scene, lib: &Library) -> (String, Vec<String>) {
             color(p.emissive),
             shading,
             p.double_sided,
-            anim
+            anim,
+            collider
         );
     }
     let _ = writeln!(out, "];");

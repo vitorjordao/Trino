@@ -29,6 +29,11 @@
 
 static C3D_RenderTarget* s_top = NULL;
 
+// Main-thread stack. libctru's weak default is 32 KB; game states live in
+// one struct (fixed-capacity stores like EntityStore, no allocator in game
+// code) and console self-tests run two games, so give Rust real headroom.
+u32 __stacksize__ = 256 * 1024;
+
 void trino_init(void)
 {
     gfxInitDefault();

@@ -441,6 +441,101 @@ fn entity(app: &mut App, ui: &mut egui::Ui, path: &[usize]) {
         e.prefab = None;
     }
 
+    // Collider.
+    let mut remove_collider = false;
+    if let Some(col) = &mut e.collider {
+        let color = if col.trigger { c::TRIGGER } else { c::COLLIDER };
+        let has_model = e.model.is_some();
+        theme::component(
+            ui,
+            "c-collider",
+            icon::BOUNDING_BOX,
+            color,
+            "Collider",
+            |ui| {
+                use trino_scene::ShapeDef;
+                theme::prop(ui, "Shape", |ui| {
+                    let label = match col.shape {
+                        ShapeDef::Auto => "Auto (model box)",
+                        ShapeDef::Box { .. } => "Box",
+                        ShapeDef::Sphere { .. } => "Sphere",
+                        ShapeDef::Capsule { .. } => "Capsule",
+                    };
+                    egui::ComboBox::from_id_salt("collider-shape")
+                        .selected_text(label)
+                        .show_ui(ui, |ui| {
+                            let options = [
+                                ("Auto (model box)", ShapeDef::Auto),
+                                (
+                                    "Box",
+                                    ShapeDef::Box {
+                                        size: [1.0, 1.0, 1.0],
+                                    },
+                                ),
+                                ("Sphere", ShapeDef::Sphere { radius: 0.5 }),
+                                (
+                                    "Capsule",
+                                    ShapeDef::Capsule {
+                                        radius: 0.4,
+                                        height: 1.8,
+                                    },
+                                ),
+                            ];
+                            for (name, shape) in options {
+                                let same = core::mem::discriminant(&col.shape)
+                                    == core::mem::discriminant(&shape);
+                                if ui.selectable_label(same, name).clicked() && !same {
+                                    col.shape = shape;
+                                }
+                            }
+                        });
+                });
+                match &mut col.shape {
+                    ShapeDef::Auto => {
+                        if !has_model {
+                            ui.label(
+                                RichText::new(format!(
+                                    "{} Auto needs a Model component (falls back to 1×1×1)",
+                                    icon::WARNING
+                                ))
+                                .color(c::WARN),
+                            );
+                        }
+                    }
+                    ShapeDef::Box { size } => {
+                        theme::vec3_row(ui, "Size", size, 0.05, "");
+                    }
+                    ShapeDef::Sphere { radius } => {
+                        theme::prop(ui, "Radius", |ui| {
+                            ui.add(egui::DragValue::new(radius).speed(0.02).range(0.01..=100.0));
+                        });
+                    }
+                    ShapeDef::Capsule { radius, height } => {
+                        theme::prop(ui, "Radius", |ui| {
+                            ui.add(egui::DragValue::new(radius).speed(0.02).range(0.01..=100.0));
+                        });
+                        theme::prop(ui, "Height", |ui| {
+                            ui.add(egui::DragValue::new(height).speed(0.02).range(0.01..=100.0));
+                        });
+                    }
+                }
+                theme::vec3_row(ui, "Offset", &mut col.offset, 0.05, "");
+                theme::prop(ui, "Trigger", |ui| {
+                    ui.checkbox(&mut col.trigger, "overlap only (coins, doors, zones)");
+                });
+                if ui
+                    .small_button(RichText::new(format!("{} Remove", icon::TRASH)).color(c::ERROR))
+                    .clicked()
+                {
+                    remove_collider = true;
+                }
+            },
+        );
+    }
+    if remove_collider {
+        e.collider = None;
+    }
+
     // Add component.
     ui.add_space(4.0);
     ui.vertical_centered(|ui| {
@@ -468,6 +563,13 @@ fn entity(app: &mut App, ui: &mut egui::Ui, path: &[usize]) {
                         .clicked()
                 {
                     e.prefab = Some(PrefabInstance::new(prefab_names[0].clone()));
+                }
+                if e.collider.is_none()
+                    && ui
+                        .button(format!("{}  Collider", icon::BOUNDING_BOX))
+                        .clicked()
+                {
+                    e.collider = Some(trino_scene::ColliderComponent::default());
                 }
             },
         );

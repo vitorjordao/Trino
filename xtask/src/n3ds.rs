@@ -289,6 +289,8 @@ fn cargo_build(root: &Path, dkp: &Path) -> Result<(), String> {
         .current_dir(root)
         .env("PATH", path)
         .env("RUSTFLAGS", rustflags)
+        // apps/3ds/build.rs watches it: a shim-only edit still relinks.
+        .env("TRINO_3DS_SHIM", &shim)
         .env_remove("CARGO")
         .env_remove("RUSTC")
         .status()

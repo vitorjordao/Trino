@@ -44,7 +44,8 @@ fn runtime_scene_and_exported_code_render_identically() {
         return;
     };
     let scene = trino_scene::Scene::load(&root.join("scenes/showcase.scene.ron")).unwrap();
-    let lib = trino_scene::Library::load(&root);
+    let mut lib = trino_scene::Library::load(&root);
+    lib.model_bounds = trino_asset_pipeline::manifest_model_bounds(&root.join("assets"));
     let env = &scene.environment;
 
     // Runtime path.
@@ -89,4 +90,60 @@ fn runtime_scene_and_exported_code_render_identically() {
         .filter(|p| p[..3] != bg)
         .count();
     assert!(drawn > 10_000, "only {drawn} pixels drawn");
+}
+
+/// Screenshots of the showcase *game* mid-run (local visual check, docs):
+/// `cargo test -p xtask --test showcase_render -- --ignored` writes
+/// `target/showcase_shots/*.png`.
+#[test]
+#[ignore = "local utility: needs a GPU; writes target/showcase_shots"]
+fn showcase_gameplay_shots() {
+    use trino_core::{Audio, Game};
+    struct NullAudio;
+    impl Audio for NullAudio {
+        fn play_sound(&mut self, _: trino_core::SoundId) {}
+        fn play_music(&mut self, _: trino_core::MusicId, _: bool) {}
+        fn stop_music(&mut self) {}
+        fn set_master_volume(&mut self, _: f32) {}
+    }
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+    let Some(mut r) = renderer(&root) else {
+        return;
+    };
+    let baked = root.join("target/assets/pc");
+    let assets = trino_asset_pipeline::load_dir(&baked, None).unwrap();
+    for f in assets.fonts {
+        r.upload_font(trino_core::FontId(f.id), f.table);
+    }
+    for s in assets.sprites {
+        r.upload_sprite(trino_core::SpriteId(s.id), s.width, s.height, &s.rgba);
+    }
+    r.set_n64_look(true);
+    let out = root.join("target/showcase_shots");
+    std::fs::create_dir_all(&out).unwrap();
+    let mut game = showcase::ShowcaseGame::new();
+    let mut frame_no = 0u32;
+    let mut shots = 0;
+    showcase::run_demo(&mut game, |g, input| {
+        g.update(input, &mut NullAudio, 1.0 / 60.0);
+        frame_no += 1;
+        if frame_no.is_multiple_of(240) {
+            g.render(&mut r);
+            let (w, h) = r.internal_size();
+            let path = out.join(format!("run{shots:02}.png"));
+            let file = std::fs::File::create(&path).unwrap();
+            let mut enc = png::Encoder::new(std::io::BufWriter::new(file), w, h);
+            enc.set_color(png::ColorType::Rgba);
+            enc.set_depth(png::BitDepth::Eight);
+            enc.write_header()
+                .unwrap()
+                .write_image_data(&r.read_offscreen())
+                .unwrap();
+            eprintln!("screenshot: {}", path.display());
+            shots += 1;
+        }
+    })
+    .unwrap();
+    // Final frame: everything collected, goal reached.
+    game.render(&mut r);
 }

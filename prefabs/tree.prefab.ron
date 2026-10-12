@@ -9,6 +9,7 @@
                     path: "models/tree-trunk",
                     material: Some("materials/wood"),
                 )),
+                collider: Some(()),
             ),
             (
                 name: "leaves",

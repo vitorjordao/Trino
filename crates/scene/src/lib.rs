@@ -35,7 +35,7 @@ pub mod material;
 pub mod prefab;
 pub mod resolve;
 
-pub use library::Library;
+pub use library::{Library, ModelBounds};
 pub use material::{MaterialDef, ShadingDef};
 pub use prefab::{Override, Prefab, PrefabInstance};
 pub use resolve::{DrawItem, Resolved, resolve};
@@ -183,6 +183,10 @@ pub struct Entity {
     pub model: Option<ModelComponent>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prefab: Option<PrefabInstance>,
+    /// Collision shape (solid or trigger) — exported to
+    /// `SceneNode::collider` for `trino_core::physics`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collider: Option<ColliderComponent>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<Entity>,
 }
@@ -205,6 +209,7 @@ impl Entity {
             sprite: None,
             model: None,
             prefab: None,
+            collider: None,
             children: Vec::new(),
         }
     }
@@ -315,6 +320,59 @@ impl ModelComponent {
     pub fn model_id(&self) -> trino_core::ModelId {
         trino_core::ModelId(trino_core::asset_id(&self.path))
     }
+}
+
+/// Collision shape of an entity, local to its transform (the transform
+/// scales/rotates it; collision uses the resulting world box — see
+/// `trino_core::physics`).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct ColliderComponent {
+    #[serde(default)]
+    pub shape: ShapeDef,
+    /// Center offset from the entity origin (local units).
+    #[serde(default, skip_serializing_if = "is_zero3")]
+    pub offset: [f32; 3],
+    /// Overlap-only (coins, doors, kill zones) instead of solid.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub trigger: bool,
+}
+
+impl Default for ColliderComponent {
+    fn default() -> Self {
+        ColliderComponent {
+            shape: ShapeDef::Auto,
+            offset: [0.0; 3],
+            trigger: false,
+        }
+    }
+}
+
+fn is_zero3(v: &[f32; 3]) -> bool {
+    *v == [0.0; 3]
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default)]
+pub enum ShapeDef {
+    /// The bounding box of the entity's model (fake objects collide as
+    /// their shape's box) — resolved from [`Library::model_bounds`].
+    #[default]
+    Auto,
+    /// Full size (not half extents), local units.
+    Box {
+        size: [f32; 3],
+    },
+    Sphere {
+        radius: f32,
+    },
+    /// Y-aligned; `height` includes the caps.
+    Capsule {
+        radius: f32,
+        height: f32,
+    },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]

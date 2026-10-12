@@ -9,10 +9,12 @@ this file covers what is specific to this crate.
 
 - `lib.rs` — game state, inertial movement (accel/turn/variable jump),
   pickups, portals, stomp combat, articulated-player rendering, HUD.
-- `physics.rs` — 3D AABB collision, axis-resolved with a contact **skin**
-  (regression-tested: without it, f32 rounding made landed players snag on
-  the side faces of the block they stand on) + a slab raycast for the
-  camera.
+- Collision is the engine's `trino_core::physics` (it started here):
+  axis-resolved AABB mover with a contact **skin** (regression-tested:
+  without it, f32 rounding made landed players snag on the side faces of
+  the block they stand on) + a slab raycast for the camera.
+- `selftest.rs` — engine feature checks shared by the PC tests and the
+  N64/3DS emulator self-tests.
 - `levels.rs` — const level data (blocks/movers/boars/coins/stars/portals).
 - `bot.rs` — deterministic waypoint bot that PLAYS the game: the PC test
   suite runs the full 4-star playthrough; the console self-tests run the

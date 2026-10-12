@@ -501,7 +501,7 @@ pub fn create_menu(app: &mut App, ui: &mut egui::Ui, parent: Option<Vec<usize>>)
     if ui.button(format!("{}  Empty", icon::MAP_PIN)).clicked() {
         app.cmds.push(Cmd::Create {
             parent: parent.clone(),
-            entity: Entity::new("empty").at(at(app)),
+            entity: Box::new(Entity::new("empty").at(at(app))),
         });
     }
     if ui
@@ -512,7 +512,7 @@ pub fn create_menu(app: &mut App, ui: &mut egui::Ui, parent: Option<Vec<usize>>)
         e.tags.push("spawn".into());
         app.cmds.push(Cmd::Create {
             parent: parent.clone(),
-            entity: e,
+            entity: Box::new(e),
         });
     }
     ui.separator();
@@ -561,7 +561,7 @@ pub fn create_menu(app: &mut App, ui: &mut egui::Ui, parent: Option<Vec<usize>>)
                         e.transform.pos = at(app);
                         app.cmds.push(Cmd::Create {
                             parent: parent.clone(),
-                            entity: e,
+                            entity: Box::new(e),
                         });
                     }
                 }
@@ -580,7 +580,7 @@ pub fn create_menu(app: &mut App, ui: &mut egui::Ui, parent: Option<Vec<usize>>)
                 e.prefab = Some(PrefabInstance::new(l.clone()));
                 app.cmds.push(Cmd::Create {
                     parent: parent.clone(),
-                    entity: e,
+                    entity: Box::new(e),
                 });
             }
         }
@@ -596,7 +596,7 @@ pub fn create_menu(app: &mut App, ui: &mut egui::Ui, parent: Option<Vec<usize>>)
                 e.transform.pos = [144.0, 104.0, 0.0];
                 app.cmds.push(Cmd::Create {
                     parent: parent.clone(),
-                    entity: e,
+                    entity: Box::new(e),
                 });
             }
         }

@@ -2,7 +2,8 @@
 //! materials, expanded prefab instances. The editor viewport renders this
 //! list every frame; [`crate::codegen`] bakes it into game code.
 
-use trino_core::{AnimRef, ClipId, Mat34, ModelId, ModelParams, SpriteId};
+use trino_core::physics::{Collider, Shape};
+use trino_core::{AnimRef, ClipId, Mat34, ModelId, ModelParams, SpriteId, Vec3};
 
 use crate::{Entity, Library, Scene};
 
@@ -24,6 +25,8 @@ pub struct DrawItem {
     /// Material logical path, when the entity uses one.
     pub material: Option<String>,
     pub sprite: Option<SpriteDraw>,
+    /// Collision shape (local to `matrix`), `Auto` already resolved.
+    pub collider: Option<Collider>,
     /// True for parts that come from a prefab (not editable in place).
     pub from_prefab: bool,
 }
@@ -142,6 +145,10 @@ fn visit(
         flip_x: s.flip_x,
         flip_y: s.flip_y,
     });
+    let collider = e
+        .collider
+        .as_ref()
+        .map(|c| resolve_collider(ctx, &name, e, c));
     ctx.out.items.push(DrawItem {
         owner: owner.to_vec(),
         name: name.clone(),
@@ -151,6 +158,7 @@ fn visit(
         params,
         material,
         sprite,
+        collider,
         from_prefab,
     });
 
@@ -189,6 +197,66 @@ fn visit(
             p
         };
         visit(ctx, child, &child_owner, &matrix, here, &name, from_prefab);
+    }
+}
+
+/// Authored collider -> engine collider (`Auto` = the model's box).
+fn resolve_collider(
+    ctx: &mut Ctx,
+    name: &str,
+    e: &Entity,
+    c: &crate::ColliderComponent,
+) -> Collider {
+    let offset = Vec3::new(c.offset[0], c.offset[1], c.offset[2]);
+    let (shape, offset) = match c.shape {
+        crate::ShapeDef::Box { size } => (
+            Shape::Box {
+                half: Vec3::new(size[0] * 0.5, size[1] * 0.5, size[2] * 0.5),
+            },
+            offset,
+        ),
+        crate::ShapeDef::Sphere { radius } => (Shape::Sphere { radius }, offset),
+        crate::ShapeDef::Capsule { radius, height } => (Shape::Capsule { radius, height }, offset),
+        crate::ShapeDef::Auto => {
+            let bounds = e
+                .model
+                .as_ref()
+                .and_then(|m| ctx.lib.model_bounds.get(&m.path));
+            match bounds {
+                Some((min, max)) => (
+                    Shape::Box {
+                        half: Vec3::new(
+                            (max[0] - min[0]) * 0.5,
+                            (max[1] - min[1]) * 0.5,
+                            (max[2] - min[2]) * 0.5,
+                        ),
+                    },
+                    offset
+                        + Vec3::new(
+                            (max[0] + min[0]) * 0.5,
+                            (max[1] + min[1]) * 0.5,
+                            (max[2] + min[2]) * 0.5,
+                        ),
+                ),
+                None => {
+                    ctx.out.warnings.push(format!(
+                        "{name}: `Auto` collider needs a model with known bounds — \
+                         using a 1x1x1 box (give it an explicit shape)"
+                    ));
+                    (
+                        Shape::Box {
+                            half: Vec3::new(0.5, 0.5, 0.5),
+                        },
+                        offset,
+                    )
+                }
+            }
+        }
+    };
+    Collider {
+        shape,
+        offset,
+        trigger: c.trigger,
     }
 }
 
@@ -267,6 +335,37 @@ mod tests {
         );
         assert!(r.warnings.iter().any(|w| w.contains("unknown material")));
         assert!(r.warnings.iter().any(|w| w.contains("unknown prefab")));
+    }
+
+    #[test]
+    fn colliders_resolve_auto_from_model_bounds() {
+        let mut lib = Library::default();
+        lib.model_bounds
+            .insert("models/crate".into(), ([-1.0, 0.0, -1.0], [1.0, 2.0, 1.0]));
+        let mut scene = Scene::new("s");
+        let mut a = Entity::new("crate").with_model(ModelComponent::new("models/crate"));
+        a.collider = Some(crate::ColliderComponent::default());
+        let mut b = Entity::new("coin");
+        b.collider = Some(crate::ColliderComponent {
+            shape: crate::ShapeDef::Sphere { radius: 0.5 },
+            offset: [0.0, 1.0, 0.0],
+            trigger: true,
+        });
+        let mut c = Entity::new("mystery");
+        c.collider = Some(crate::ColliderComponent::default());
+        scene.entities.extend([a, b, c]);
+        let r = resolve(&scene, &lib, 0.0);
+        let crate_c = r.items[0].collider.unwrap();
+        assert_eq!(
+            crate_c.shape,
+            Shape::Box {
+                half: Vec3::new(1.0, 1.0, 1.0)
+            }
+        );
+        assert_eq!(crate_c.offset, Vec3::new(0.0, 1.0, 0.0));
+        assert!(r.items[1].collider.unwrap().trigger);
+        assert_eq!(r.warnings.len(), 1, "{:?}", r.warnings);
+        assert!(r.warnings[0].contains("mystery"));
     }
 
     #[test]

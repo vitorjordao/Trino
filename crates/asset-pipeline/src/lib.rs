@@ -35,6 +35,8 @@ pub use loader::{
     LoadedAssets, LoadedBlob, LoadedFont, LoadedModel, LoadedSound, LoadedSprite, load_dir,
 };
 pub use manifest::{Manifest, Platform};
-pub use model::{MeshData, ModelOptions, bake_model, bake_model_tmdl, clip_names};
+pub use model::{
+    MeshData, ModelOptions, bake_model, bake_model_tmdl, clip_names, manifest_model_bounds,
+};
 pub use primitive::{Pivot, Primitive, Shape};
 pub use resolve::resolve_source;

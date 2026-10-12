@@ -3209,6 +3209,7 @@ name = "trino-app-3ds"
 version = "0.1.0"
 dependencies = [
  "castle64",
+ "showcase",
  "trino-core",
  "trino-platform-3ds",
 ]
@@ -3218,6 +3219,7 @@ name = "trino-app-n64"
 version = "0.1.0"
 dependencies = [
  "castle64",
+ "showcase",
  "trino-core",
  "trino-platform-n64",
 ]

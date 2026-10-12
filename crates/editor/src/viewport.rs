@@ -85,6 +85,9 @@ pub struct Viewport {
     pub profile: SimProfile,
     pub cam: OrbitCam,
     pub show_grid: bool,
+    /// Draw collider wireframes (world boxes — exactly what the physics
+    /// uses): green = solid, yellow = trigger.
+    pub show_colliders: bool,
     pub gizmo: GizmoMode,
     pub snap: bool,
     drag: Option<(Vec<usize>, Drag)>,
@@ -127,6 +130,7 @@ impl Viewport {
             profile,
             cam: OrbitCam::default(),
             show_grid: true,
+            show_colliders: true,
             gizmo: GizmoMode::Translate,
             snap: false,
             drag: None,
@@ -470,6 +474,9 @@ impl Viewport {
         }
 
         // ---- overlays -------------------------------------------------------
+        if self.kind == ViewKind::Scene && self.show_colliders {
+            colliders(&painter, &proj, input);
+        }
         if let Some(h) = &self.hover
             && Some(h.as_slice()) != input.selected
         {
@@ -662,6 +669,16 @@ impl Viewport {
                             }
                             if theme::toggle_icon(
                                 ui,
+                                self.show_colliders,
+                                icon::BOUNDING_BOX,
+                                "Colliders (green = solid, yellow = trigger)",
+                            )
+                            .clicked()
+                            {
+                                self.show_colliders = !self.show_colliders;
+                            }
+                            if theme::toggle_icon(
+                                ui,
                                 input.animate,
                                 icon::FILM_STRIP,
                                 "Preview animations",
@@ -794,6 +811,27 @@ fn outline(
             for [a, b] in gizmo::box_lines(proj, &item.matrix, m.min, m.max) {
                 painter.line_segment([a, b], stroke);
             }
+        }
+    }
+}
+
+/// Collider wireframes: the world box each collider resolves to (what
+/// `trino_core::physics` collides against).
+fn colliders(painter: &egui::Painter, proj: &Proj, input: &ViewInput) {
+    for item in &input.resolved.items {
+        let Some(col) = item.collider else {
+            continue;
+        };
+        let w = col.world_aabb(&item.matrix);
+        let color = if col.trigger { c::TRIGGER } else { c::COLLIDER };
+        let stroke = Stroke::new(1.0, color.gamma_multiply(0.85));
+        for [a, b] in gizmo::box_lines(
+            proj,
+            &trino_core::Mat34::IDENTITY,
+            [w.min.x, w.min.y, w.min.z],
+            [w.max.x, w.max.y, w.max.z],
+        ) {
+            painter.line_segment([a, b], stroke);
         }
     }
 }

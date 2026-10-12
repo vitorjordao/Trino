@@ -55,10 +55,17 @@ fn fingerprint(scene: &Path) -> u128 {
     sum
 }
 
+/// Materials + prefabs + baked model bounds (for `Auto` colliders).
+fn load_library() -> Library {
+    let mut lib = Library::load(Path::new(""));
+    lib.model_bounds = trino_asset_pipeline::manifest_model_bounds(Path::new("assets"));
+    lib
+}
+
 impl ScenePlayer {
     pub fn load(path: PathBuf) -> Result<Self, String> {
         let scene = Scene::load(&path)?;
-        let lib = Library::load(Path::new(""));
+        let lib = load_library();
         for e in &lib.errors {
             eprintln!("library: {e}");
         }
@@ -109,7 +116,7 @@ impl ScenePlayer {
         match Scene::load(&self.path) {
             Ok(scene) => {
                 self.scene = scene;
-                self.lib = Library::load(Path::new(""));
+                self.lib = load_library();
                 println!("scene reloaded ({})", self.path.display());
                 self.report();
             }

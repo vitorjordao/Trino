@@ -22,10 +22,12 @@ pub mod asset;
 pub mod audio;
 pub mod caps;
 pub mod collide;
+pub mod entity;
 pub mod game;
 pub mod input;
 pub mod math;
 pub mod math3d;
+pub mod physics;
 pub mod platform;
 pub mod render;
 pub mod render3d;
@@ -39,10 +41,12 @@ pub use asset::asset_id;
 pub use audio::{Audio, MusicId, SoundId};
 pub use caps::{Caps, CapsError};
 pub use collide::{MoveResult, move_and_collide};
+pub use entity::{Entity, EntityId, EntityStore};
 pub use game::Game;
 pub use input::{Button, Input, InputState};
 pub use math::{Color, Rect, Vec2, Vec3};
 pub use math3d::{Mat34, Quat};
+pub use physics::{Aabb, Collider, Shape};
 pub use platform::{BlobId, Platform, SaveError};
 pub use render::{
     AnimBlend, AnimRef, ClipId, FontId, FrameStats, Material, MaterialId, ModelId, ModelParams,

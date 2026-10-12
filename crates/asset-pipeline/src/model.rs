@@ -873,6 +873,37 @@ fn load_gltf(path: &Path, opts: &ModelOptions) -> Result<MeshData, String> {
     Ok(data)
 }
 
+/// Bind-pose bounding box `(min, max)` of every model in
+/// `<assets_root>/manifest.toml`, keyed by logical path (`models/<name>`)
+/// — what `Auto` scene colliders use. Models that fail to bake are skipped
+/// (the bake itself reports them).
+pub fn manifest_model_bounds(
+    assets_root: &Path,
+) -> std::collections::BTreeMap<String, ([f32; 3], [f32; 3])> {
+    let mut out = std::collections::BTreeMap::new();
+    let Ok(manifest) = crate::Manifest::load(&assets_root.join("manifest.toml")) else {
+        return out;
+    };
+    for (name, decl) in &manifest.models {
+        let Ok(source) = crate::resolve_source(assets_root, crate::Platform::Pc, &decl.file) else {
+            continue;
+        };
+        let Ok(blob) = bake_model(&source, &decl.options()) else {
+            continue;
+        };
+        if let Some((min, max)) = trino_core::render3d::Mesh::from_tmdl(&blob)
+            .ok()
+            .and_then(|m| m.aabb())
+        {
+            out.insert(
+                format!("models/{name}"),
+                ([min.x, min.y, min.z], [max.x, max.y, max.z]),
+            );
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

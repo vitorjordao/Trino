@@ -1,9 +1,10 @@
 //! castle64 — um "Mario 64 de bolso" para estressar o pipeline 3D do Trino.
 //!
 //! Hub (pátio do castelo) + 3 fases de plataforma + sala do trono, tudo em
-//! geometria de cubos vertex-lit (`draw_model`), com física 3D própria
-//! (`physics.rs`), câmera orbital, moedas, estrelas, inimigos com stomp,
-//! lava, plataformas móveis e HUD de sprites — zero alocação, `no_std`,
+//! geometria de cubos vertex-lit (`draw_model`), com a física AABB do
+//! engine (`trino_core::physics`), câmera orbital, moedas, estrelas,
+//! inimigos com stomp, lava, plataformas móveis e HUD com texto bitmap —
+//! zero alocação, `no_std`,
 //! determinístico nas três plataformas.
 //!
 //! Controles (PC entre parênteses): stick/d-pad move relativo à câmera,
@@ -14,13 +15,12 @@
 
 pub mod bot;
 mod levels;
-mod physics;
 pub mod selftest;
 
 use core::fmt::Write as _;
 use levels::{BlockKind, DoorColor, LEVELS, Level, TOTAL_STARS};
-use physics::{Aabb, move_aabb};
 use trino_core::math3d::{atan2, cos, sin};
+use trino_core::physics::{self, Aabb, move_aabb};
 use trino_core::{
     Audio, Button, Camera3, Color, FontId, Game, InputState, Material, ModelId, ModelParams,
     MusicId, Renderer, SoundId, SpriteId, SpriteParams, TextAlign, TextBuf, TextParams, Transform3,
@@ -524,7 +524,7 @@ impl Game for Castle64Game {
         );
         let want = trino_core::math3d::sqrt(back.dot(back));
         let dir = back * (1.0 / want);
-        let hit = physics::raycast_aabbs(target, dir, want, &boxes[..n_solids]);
+        let hit = physics::raycast_distance(target, dir, want, &boxes[..n_solids]);
         let cam_dist = (hit - 0.4).clamp(CAM_MIN_DIST, want);
         let camera = Camera3 {
             eye: target + dir * cam_dist,

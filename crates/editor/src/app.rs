@@ -69,7 +69,7 @@ pub enum Cmd {
     SelectAsset(AssetSel),
     Create {
         parent: Option<Vec<usize>>,
-        entity: Entity,
+        entity: Box<Entity>,
     },
     Delete(Vec<usize>),
     Duplicate(Vec<usize>),
@@ -178,7 +178,8 @@ impl App {
                 Err(e) => log.error(e),
             }
         }
-        let lib = Library::load(&root);
+        let mut lib = Library::load(&root);
+        lib.model_bounds = project.model_bounds();
         for e in &lib.errors {
             log.error(e.clone());
         }
@@ -409,6 +410,8 @@ impl App {
         if !changed_ids.is_empty() {
             match self.project.reload(Some(&changed_ids)) {
                 Ok(n) => {
+                    // `Auto` colliders follow model edits.
+                    self.lib.model_bounds = self.project.model_bounds();
                     let logicals = self.project.logicals_for_ids(&changed_ids);
                     self.scene_view.upload(&self.project, &logicals);
                     self.game_view.upload(&self.project, &logicals);
@@ -563,7 +566,8 @@ impl App {
                 self.asset_sel = Some(a);
                 self.doc.selected = None;
             }
-            Cmd::Create { parent, mut entity } => {
+            Cmd::Create { parent, entity } => {
+                let mut entity = *entity;
                 // Prefab documents have exactly one root.
                 let parent = if self.doc.is_prefab() && parent.is_none() {
                     Some(vec![0])
@@ -743,7 +747,7 @@ impl App {
                 }
                 self.cmds.push(Cmd::Create {
                     parent: None,
-                    entity,
+                    entity: Box::new(entity),
                 });
             }
             Cmd::SaveMaterial(logical) => {
@@ -917,7 +921,10 @@ impl App {
                         p.pop();
                         (!p.is_empty()).then_some(p)
                     });
-                    self.cmds.push(Cmd::Create { parent, entity: e });
+                    self.cmds.push(Cmd::Create {
+                        parent,
+                        entity: Box::new(e),
+                    });
                 }
                 Err(e) => self.log.toast(
                     Level::Warn,

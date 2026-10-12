@@ -154,8 +154,10 @@ impl App {
         let player = std::env::var("TRINO_SCENE").ok().map(|p| {
             scene_player::ScenePlayer::load(PathBuf::from(p)).unwrap_or_else(|e| panic!("{e}"))
         });
-        let showcase = (std::env::var("TRINO_GAME").as_deref() == Ok("showcase"))
-            .then(showcase::ShowcaseGame::new);
+        let showcase = (std::env::var("TRINO_GAME").as_deref() == Ok("showcase")).then(|| {
+            let (w, h) = self.profile.internal_resolution();
+            showcase::ShowcaseGame::with_screen(Vec2::new(w as f32, h as f32))
+        });
         let title = match (&player, &showcase) {
             (Some(p), _) => p.title(),
             (None, Some(_)) => "Trino — showcase (exported scene)".to_string(),

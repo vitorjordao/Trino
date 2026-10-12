@@ -81,6 +81,14 @@ impl Project {
         }
     }
 
+    /// Bind-pose AABB per model logical path (`Auto` scene colliders).
+    pub fn model_bounds(&self) -> BTreeMap<String, trino_scene::ModelBounds> {
+        self.models
+            .iter()
+            .map(|(k, m)| (k.clone(), (m.min, m.max)))
+            .collect()
+    }
+
     pub fn assets_dir(&self) -> PathBuf {
         self.root.join("assets")
     }

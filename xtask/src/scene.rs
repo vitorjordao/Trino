@@ -28,8 +28,16 @@ pub fn run(root: &Path, args: &[&str]) -> ExitCode {
     }
 }
 
+/// Materials + prefabs from disk, plus baked model bounds (`Auto`
+/// colliders resolve against them).
+pub fn load_library(root: &Path) -> Library {
+    let mut lib = Library::load(root);
+    lib.model_bounds = trino_asset_pipeline::manifest_model_bounds(&root.join("assets"));
+    lib
+}
+
 fn check(root: &Path, files: &[&str]) -> ExitCode {
-    let lib = Library::load(root);
+    let lib = load_library(root);
     let mut problems = lib.errors.clone();
     let scenes: Vec<PathBuf> = if files.is_empty() {
         let mut v: Vec<PathBuf> = std::fs::read_dir(root.join("scenes"))
@@ -83,7 +91,7 @@ fn export(root: &Path, input: &Path, output: &Path) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let lib = Library::load(root);
+    let lib = load_library(root);
     let (code, warnings) = codegen::to_rust(&scene, &lib);
     for w in &warnings {
         eprintln!("warning: {w}");

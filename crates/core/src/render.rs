@@ -3,14 +3,23 @@
 //! Games never touch wgpu, libdragon or citro directly — they call these
 //! methods with handles. Backends translate to their native API.
 //!
-//! Materials are **presets** (an enum), not free shaders: the N64 RDP cannot
-//! run arbitrary shaders, so neither can Trino. `Material::Named` points at a
-//! preset declared in `platforms/*.toml`; a platform missing a definition for
-//! a named material is a build error in the asset pipeline, never a runtime
-//! fallback.
+//! Materials are **presets**, not free shaders: the N64 RDP cannot run
+//! arbitrary shaders, so neither can Trino. Two layers:
+//!
+//! - [`Material`] picks the pipeline (`Sprite` / `VertexLit`).
+//! - [`ModelParams`] carries the per-draw **surface** of a 3D draw — tint,
+//!   emissive, [`Shading`] mode, double-sided, animation pose. All of it is
+//!   evaluated by the engine's software T&L (`render3d::tessellate`), so
+//!   every property works identically on PC, N64 and 3DS by construction.
+//!   Material *files* (`assets/materials/*.material.ron`, editor + text) are
+//!   resolved into `ModelParams` by the scene layer (`trino-scene`).
+//!
+//! `Material::Named` is reserved for per-platform presets and not wired to
+//! any backend yet.
 
 use crate::caps::Caps;
 use crate::math::{Color, Vec2, Vec3};
+use crate::math3d::Mat34;
 
 /// Handle to a baked sprite/texture. Stable across live reloads: the ID is
 /// derived from the asset's logical path, so a rebake swaps content in place.
@@ -46,9 +55,10 @@ pub enum Material {
     /// Textured 2D quad, alpha-blended.
     #[default]
     Sprite,
-    /// 3D geometry with per-vertex lighting (Fase 7).
+    /// 3D geometry with per-vertex lighting (Fase 7). Surface properties
+    /// come from [`ModelParams`].
     VertexLit,
-    /// A preset defined per-platform in `platforms/*.toml`.
+    /// Reserved for per-platform presets (not wired to a backend yet).
     Named(MaterialId),
 }
 
@@ -75,22 +85,81 @@ impl Default for SpriteParams {
     }
 }
 
-/// Per-draw model parameters. `Default` draws the model as-is.
+/// How a 3D surface reacts to light. Evaluated per vertex by the engine's
+/// software T&L — identical on every target.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+pub enum Shading {
+    /// Smooth per-vertex lighting from the mesh normals.
+    #[default]
+    Gouraud,
+    /// One light value per triangle (face normal): the faceted low-poly look,
+    /// whatever normals the mesh was exported with.
+    Flat,
+    /// No lighting: vertex color × tint, full bright (signs, sky, glow).
+    Unlit,
+}
+
+/// Handle to an animation clip baked into a model (`ClipId::from_name("walk")`).
+/// Same FNV-1a identity as asset handles, over the clip name.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct ClipId(pub u32);
+
+impl ClipId {
+    pub const fn from_name(name: &str) -> Self {
+        ClipId(crate::asset::asset_id(name))
+    }
+}
+
+/// Which pose to draw an animated model in: a clip and a time in seconds.
+/// Looping clips wrap; one-shot clips clamp to their last frame.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct AnimRef {
+    pub clip: ClipId,
+    pub time: f32,
+}
+
+/// Per-draw model parameters — the **surface material** of a 3D draw.
+/// `Default` draws the model as-is (lit, opaque, back faces culled).
 ///
 /// Found stress-testing a cube-world game: without a per-draw tint every
 /// color variation of a model needs its own baked mesh (five identical
-/// doors differing only in slab color). `tint` is the 3D analog of
-/// [`SpriteParams::tint`].
+/// doors differing only in slab color). The other fields grew from the same
+/// principle: a material is data applied at draw time, never a new mesh.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct ModelParams {
     /// Multiplies the mesh's vertex colors (white = unchanged), applied
     /// before lighting. Alpha multiplies vertex alpha.
     pub tint: Color,
+    /// Added after lighting (black = none): glow that ignores the light.
+    pub emissive: Color,
+    pub shading: Shading,
+    /// Draw back faces too (thin geometry: leaves, flags, planes).
+    pub double_sided: bool,
+    /// Pose for models with a baked skeleton; `None` = bind pose.
+    pub anim: Option<AnimRef>,
+}
+
+impl ModelParams {
+    pub const DEFAULT: ModelParams = ModelParams {
+        tint: Color::WHITE,
+        emissive: Color::BLACK,
+        shading: Shading::Gouraud,
+        double_sided: false,
+        anim: None,
+    };
+
+    /// Default surface with a tint — the common case in game code.
+    pub const fn tinted(tint: Color) -> Self {
+        ModelParams {
+            tint,
+            ..Self::DEFAULT
+        }
+    }
 }
 
 impl Default for ModelParams {
     fn default() -> Self {
-        ModelParams { tint: Color::WHITE }
+        Self::DEFAULT
     }
 }
 
@@ -141,6 +210,11 @@ pub trait Renderer {
     /// Backends without 3D content may keep the default no-op.
     fn set_camera(&mut self, _camera: &crate::render3d::Camera3) {}
 
+    /// Set the light (direction, colors, ambient) and fog used by
+    /// subsequent `draw_model` calls. Persists across frames until changed;
+    /// starts as [`crate::render3d::DEFAULT_LIGHT`].
+    fn set_light(&mut self, _light: &crate::render3d::Light) {}
+
     /// Draw a 3D model (vertex-lit, engine-side T&L — see `render3d`).
     ///
     /// Models drawn back-to-back form a batch: the backend depth-sorts all
@@ -153,6 +227,31 @@ pub trait Renderer {
         material: Material,
         params: &ModelParams,
     );
+
+    /// Draw a 3D model with an arbitrary model matrix — what hierarchies
+    /// (prefab parts, attached props) need, since composed transforms are
+    /// not always expressible as one [`Transform3`]. Backends override this
+    /// with the exact path; the default decomposes the matrix (exact for
+    /// rotation + scale, approximate only for sheared matrices).
+    fn draw_model_matrix(
+        &mut self,
+        model: ModelId,
+        matrix: &Mat34,
+        material: Material,
+        params: &ModelParams,
+    ) {
+        let (rotation, scale, position) = matrix.decompose();
+        self.draw_model(
+            model,
+            &Transform3 {
+                position,
+                rotation,
+                scale,
+            },
+            material,
+            params,
+        );
+    }
 
     fn end_frame(&mut self);
 }

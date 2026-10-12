@@ -14,8 +14,23 @@ the canonical reference; this file covers what is specific to game code.
   (`SpriteId::from_path("sprites/hero")`) and declared in the repo's
   `assets/manifest.toml`.
 - Screen space is X-right, **Y-down**, origin top-left; stick input is Y-up.
+- 3D levels: author them in the editor or as RON (`scenes/*.scene.ron`, skill
+  `scene-authoring`), then `cargo xtask scene export scenes/<x>.scene.ron
+  examples/{{name}}/src/<x>_gen.rs` and `include!` the result — the scene is
+  plain `no_std` data (`trino_core::SceneNode`): `scene::draw_nodes`,
+  `scene::find(NODES, "spawn")`, `scene::with_tag(NODES, "enemy")`. See
+  `examples/showcase/src/lib.rs`; add a drift test like
+  `xtask/tests/scene_codegen.rs`.
+- Surfaces are data: `ModelParams::tinted(c)` or
+  `ModelParams { shading: Shading::Flat, ..ModelParams::DEFAULT }`; animated
+  models take `anim: Some(AnimRef { clip: ClipId::from_name("walk"), time })`.
 - Hot-reload boundary: no statics (they reset on reload), no `TypeId`
   across the boundary, and state layout must not change between reloads.
+
+## Skills
+
+Workflows (adding assets, Blender models, scenes, editor, console builds,
+tests) live as open-format skills in the repository's `.agents/skills/`.
 
 ## Commands
 
@@ -24,6 +39,8 @@ cargo test -p {{name}}          # this game's unit tests
 cargo xtask run pc              # run the workspace's default game on PC
 cargo xtask watch pc --game {{name}}   # hot-reload session for THIS game
 cargo xtask test n64|3ds        # console emulator suites
+cargo xtask scene check         # validate scenes / prefabs / materials
+cargo xtask model inspect <glb> # check a model against the engine's limits
 ```
 
 To make this game the one the apps launch, point `apps/*` at

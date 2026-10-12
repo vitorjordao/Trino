@@ -10,3 +10,6 @@ repository.workspace = true
 trino-core = { workspace = true }
 serde = { workspace = true }
 ron = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

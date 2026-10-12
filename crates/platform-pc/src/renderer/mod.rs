@@ -12,9 +12,10 @@ mod batch;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use trino_core::render3d::{Camera3, DEFAULT_LIGHT, Mesh, ScreenTri};
+use trino_core::render3d::{Camera3, DEFAULT_LIGHT, Light, Mesh, ScreenTri};
 use trino_core::{
-    Caps, Color, Material, ModelId, ModelParams, Renderer, SpriteId, SpriteParams, Transform3, Vec2,
+    Caps, Color, Mat34, Material, ModelId, ModelParams, Renderer, SpriteId, SpriteParams,
+    Transform3, Vec2,
 };
 
 use crate::sim::SimProfile;
@@ -64,6 +65,7 @@ pub struct PcRenderer {
     tri_pipeline: wgpu::RenderPipeline,
     blit_pipeline: wgpu::RenderPipeline,
     blit_bind_group: wgpu::BindGroup,
+    blit_sampler: wgpu::Sampler,
     sprite_bgl: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     globals_bg: wgpu::BindGroup,
@@ -81,12 +83,73 @@ pub struct PcRenderer {
     /// a sprite draw, a camera change or `end_frame` flushes the batch.
     pending_tris: Vec<ScreenTri>,
     camera: Camera3,
+    light: Light,
     clear: Color,
     caps: Caps,
     profile: SimProfile,
     internal_size: (u32, u32),
     n64_look: bool,
     strict: bool,
+}
+
+/// Offscreen color target + its view + the matching depth buffer.
+fn create_targets(
+    device: &wgpu::Device,
+    size: (u32, u32),
+) -> (wgpu::Texture, wgpu::TextureView, wgpu::TextureView) {
+    let extent = wgpu::Extent3d {
+        width: size.0,
+        height: size.1,
+        depth_or_array_layers: 1,
+    };
+    let offscreen_tex = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("trino-offscreen"),
+        size: extent,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: OFFSCREEN_FORMAT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let offscreen_view = offscreen_tex.create_view(&wgpu::TextureViewDescriptor::default());
+    // Depth buffer for the 3D triangle pipeline (sprites test Always).
+    let depth_tex = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("trino-depth"),
+        size: extent,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Depth32Float,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    let depth_view = depth_tex.create_view(&wgpu::TextureViewDescriptor::default());
+    (offscreen_tex, offscreen_view, depth_view)
+}
+
+fn create_blit_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    view: &wgpu::TextureView,
+    sampler: &wgpu::Sampler,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("trino-blit-bg"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(sampler),
+            },
+        ],
+    })
 }
 
 /// Uniform buffer contents; layout mirrored by `Globals` in shaders.wgsl.
@@ -159,11 +222,21 @@ impl PcRenderer {
             let surface_caps = surface.get_capabilities(&adapter);
             // Prefer a non-sRGB format so 8-bit colors pass through the blit
             // unchanged (retro palettes must not get gamma-shifted twice).
-            let format = surface_caps
-                .formats
-                .iter()
-                .copied()
-                .find(|f| !f.is_srgb())
+            // 8-bit formats first: some compositors (Wayland) list 16-bit
+            // normalized formats ahead of them, and those need a device
+            // feature (TEXTURE_FORMAT_16BIT_NORM) the renderer does not
+            // request — picking one panicked at pipeline creation.
+            use wgpu::TextureFormat as F;
+            let format = [F::Bgra8Unorm, F::Rgba8Unorm]
+                .into_iter()
+                .find(|f| surface_caps.formats.contains(f))
+                .or_else(|| {
+                    surface_caps
+                        .formats
+                        .iter()
+                        .copied()
+                        .find(|f| !f.is_srgb() && f.required_features().is_empty())
+                })
                 .unwrap_or(surface_caps.formats[0]);
             let config = wgpu::SurfaceConfiguration {
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -200,40 +273,7 @@ impl PcRenderer {
         // Strict mode: enforce the profile's Caps at development time.
         let strict = matches!(std::env::var("TRINO_STRICT").as_deref(), Ok("1" | "true"));
 
-        let offscreen_tex = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("trino-offscreen"),
-            size: wgpu::Extent3d {
-                width: internal_size.0,
-                height: internal_size.1,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: OFFSCREEN_FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-        let offscreen_view = offscreen_tex.create_view(&wgpu::TextureViewDescriptor::default());
-
-        // Depth buffer for the 3D triangle pipeline (sprites test Always).
-        let depth_tex = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("trino-depth"),
-            size: wgpu::Extent3d {
-                width: internal_size.0,
-                height: internal_size.1,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Depth32Float,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        });
-        let depth_view = depth_tex.create_view(&wgpu::TextureViewDescriptor::default());
+        let (offscreen_tex, offscreen_view, depth_view) = create_targets(&device, internal_size);
 
         // The 3DS GPU samples textures bilinearly by default (citro2d), so
         // its sim profile does too; N64/native use nearest (the N64's
@@ -493,20 +533,8 @@ impl PcRenderer {
             cache: None,
         });
 
-        let blit_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("trino-blit-bg"),
-            layout: &texture_bgl,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&offscreen_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&blit_sampler),
-                },
-            ],
-        });
+        let blit_bind_group =
+            create_blit_bind_group(&device, &texture_bgl, &offscreen_view, &blit_sampler);
 
         let instance_capacity = 1024 * INSTANCE_STRIDE;
         let instance_buf = device.create_buffer(&wgpu::BufferDescriptor {
@@ -534,6 +562,7 @@ impl PcRenderer {
             tri_pipeline,
             blit_pipeline,
             blit_bind_group,
+            blit_sampler,
             sprite_bgl: texture_bgl,
             sampler,
             globals_bg,
@@ -548,6 +577,7 @@ impl PcRenderer {
             tri_verts: Vec::new(),
             pending_tris: Vec::new(),
             camera: Camera3::default(),
+            light: DEFAULT_LIGHT,
             clear: Color::BLACK,
             caps,
             profile,
@@ -588,6 +618,30 @@ impl PcRenderer {
     /// Defaults to off; `TRINO_STRICT=1` enables it.
     pub fn set_strict(&mut self, on: bool) {
         self.strict = on;
+    }
+
+    /// Change the internal framebuffer resolution (the editor renders its
+    /// viewport at the panel's pixel size). Recreates the offscreen color
+    /// and depth targets; sprites, meshes and pipelines are kept. Callers
+    /// holding [`offscreen_view`](Self::offscreen_view) must re-fetch it.
+    /// Budgets ([`Caps`]) still come from the profile.
+    pub fn set_internal_size(&mut self, width: u32, height: u32) {
+        let size = (width.clamp(16, 4096), height.clamp(16, 4096));
+        if size == self.internal_size {
+            return;
+        }
+        let (tex, view, depth) = create_targets(&self.device, size);
+        self.blit_bind_group =
+            create_blit_bind_group(&self.device, &self.sprite_bgl, &view, &self.blit_sampler);
+        self.offscreen_tex = tex;
+        self.offscreen_view = view;
+        self.depth_view = depth;
+        self.internal_size = size;
+        self.queue.write_buffer(
+            &self.globals_buf,
+            0,
+            &globals_bytes(size.0, size.1, self.n64_look),
+        );
     }
 
     /// View of the internal framebuffer — the editor registers this as an
@@ -998,10 +1052,26 @@ impl Renderer for PcRenderer {
         self.camera = *camera;
     }
 
+    fn set_light(&mut self, light: &Light) {
+        // Lighting is resolved into vertex colors at tessellation time, so
+        // a change needs no batch flush.
+        self.light = *light;
+    }
+
     fn draw_model(
         &mut self,
         model: ModelId,
         transform: &Transform3,
+        material: Material,
+        params: &ModelParams,
+    ) {
+        self.draw_model_matrix(model, &transform.matrix(), material, params);
+    }
+
+    fn draw_model_matrix(
+        &mut self,
+        model: ModelId,
+        matrix: &Mat34,
         _material: Material,
         params: &ModelParams,
     ) {
@@ -1013,10 +1083,10 @@ impl Renderer for PcRenderer {
         let pending = &mut self.pending_tris;
         trino_core::render3d::tessellate(
             &mesh,
-            &transform.matrix(),
+            matrix,
             &self.camera,
-            &DEFAULT_LIGHT,
-            params.tint,
+            &self.light,
+            params,
             screen,
             &mut |tri| pending.push(tri),
         );

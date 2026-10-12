@@ -1,0 +1,5 @@
+(
+    version: 1,
+    tint: (255, 150, 60, 255),
+    shading: Flat,
+)

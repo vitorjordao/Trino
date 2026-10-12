@@ -177,7 +177,7 @@ pub fn bake_assets(root: &Path, test_mode: bool) -> Result<(), String> {
         let id = trino_core::asset_id(&logical);
         let source = resolve_source(&root.join("assets"), Platform::N3ds, &decl.file)?;
         // TMDL is portable: same blob on every platform, no container tool.
-        let blob = trino_asset_pipeline::bake_model_tmdl(&source)?;
+        let blob = trino_asset_pipeline::bake_model(&source, &decl.options())?;
         std::fs::write(romfs.join(format!("{id:08x}.tmdl")), blob).map_err(|e| e.to_string())?;
         index.push_str(&format!("{id:08x}\tmodel\t{id:08x}.tmdl\n"));
     }
@@ -527,7 +527,7 @@ pub fn watch() -> ExitCode {
         None,
         move |result: DebounceEventResult| {
             if let Ok(events) = result
-                && !events.is_empty()
+                && crate::real_change(&events)
             {
                 let _ = tx.send(());
             }

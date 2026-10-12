@@ -74,6 +74,21 @@ Transform & lighting is **engine code, not backend code**
   (one value per triangle, banded so background sprites < 3D < HUD). The
   depth-sorted batch remains as tie-break and blending order. This ADR's
   original "no z-buffer" limit is retired; "vertex colors only" stands.
+- Update (2026-10, fifth pass — editor + real-project readiness): the T&L
+  grew a per-draw **surface** (`ModelParams`: tint, emissive,
+  `Shading::{Gouraud, Flat, Unlit}`, double-sided), a configurable **light**
+  (`Renderer::set_light`: colored directional + ambient, distance **fog**),
+  **matrix draws** (`draw_model_matrix`, for hierarchies; the trait default
+  decomposes to `Transform3` so third-party backends keep working) and a
+  **rigid skeleton** (TMDL `SKEL`/`ANIM` sections, ≤ 32 joints on the
+  stack; ADR 0004). All of it is evaluated here, so the three backends only
+  had to pass `&ModelParams` and the light through. TMDL became extensible
+  through tagged sections (`BNDS` = bounding sphere for whole-mesh frustum
+  culling; unknown tags skipped). A per-draw 32-entry vertex cache lights
+  shared vertices once. Measured with `xtask/tests/bench_tnl.rs` (castle64
+  bot playthrough through a CPU-only backend): 0.428 ms/frame vs 0.419 before
+  the pass on the host — parity while adding the features; console gains are
+  expected (fewer software normalizations) but unmeasured on hardware.
 - Strict mode enforces `max_tris_per_frame` so PC development stays honest
   about console budgets.
 - If a future phase needs more (textured 3D, z-buffered scenes), the

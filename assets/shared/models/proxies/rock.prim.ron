@@ -1,0 +1,9 @@
+// Trino placeholder model ("fake object"). Edit and save: it hot-reloads.
+// Replace with real art by pointing the manifest `file` at a .glb —
+// the logical path (and every reference to it) stays the same.
+(
+    shape: Sphere(radius: 0.6),
+    color: (120, 120, 128, 255),
+    segments: 7,
+    smooth: false,
+)

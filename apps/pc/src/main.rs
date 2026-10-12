@@ -9,6 +9,13 @@
 //! Env knobs:
 //! - `TRINO_SMOKE_FRAMES=N` — exit cleanly after N frames (CI smoke tests).
 //! - `TRINO_SIM=native|n64|3ds` — console simulation profile (default n64).
+//! - `TRINO_SCENE=scenes/x.scene.ron` — play an editor scene instead of the
+//!   game (reloads on scene/prefab/material edits; see `scene_player`).
+//! - `TRINO_GAME=showcase` — run `examples/showcase` (the editor's demo
+//!   scene exported to `no_std` code — the exact path console builds take)
+//!   instead of castle64.
+
+mod scene_player;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -65,6 +72,10 @@ struct Ctx {
     audio: PcAudio,
     input: PcInput,
     game: castle64::Castle64Game,
+    /// `TRINO_SCENE` mode: play an editor scene instead of the game.
+    player: Option<scene_player::ScenePlayer>,
+    /// `TRINO_GAME=showcase`: the codegen showcase instead of castle64.
+    showcase: Option<showcase::ShowcaseGame>,
     last_frame: Instant,
     #[cfg(feature = "reload")]
     asset_events: std::sync::mpsc::Receiver<Vec<u32>>,
@@ -131,8 +142,18 @@ fn resample(samples: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
 
 impl App {
     fn init(&mut self, event_loop: &ActiveEventLoop) -> Ctx {
+        let player = std::env::var("TRINO_SCENE").ok().map(|p| {
+            scene_player::ScenePlayer::load(PathBuf::from(p)).unwrap_or_else(|e| panic!("{e}"))
+        });
+        let showcase = (std::env::var("TRINO_GAME").as_deref() == Ok("showcase"))
+            .then(showcase::ShowcaseGame::new);
+        let title = match (&player, &showcase) {
+            (Some(p), _) => p.title(),
+            (None, Some(_)) => "Trino — showcase (exported scene)".to_string(),
+            _ => "Trino — castle64".to_string(),
+        };
         let attrs = Window::default_attributes()
-            .with_title("Trino — castle64")
+            .with_title(title)
             .with_inner_size(LogicalSize::new(1280.0, 720.0));
         let window = Arc::new(
             event_loop
@@ -179,6 +200,8 @@ impl App {
             audio,
             input: PcInput::new(),
             game,
+            player,
+            showcase,
             last_frame: Instant::now(),
             #[cfg(feature = "reload")]
             asset_events,
@@ -235,21 +258,30 @@ impl ApplicationHandler for App {
 
                 let input = ctx.input.poll();
 
-                #[cfg(feature = "reload")]
-                {
-                    let version = hot_game::trino_game_api_version();
-                    assert_eq!(
-                        version,
-                        trino_game_api::GAME_API_VERSION,
-                        "game dylib was built against a different game-api version — restart"
-                    );
-                    hot_game::trino_game_update(&mut ctx.game, &input, &mut ctx.audio, dt);
-                    hot_game::trino_game_render(&mut ctx.game, &mut ctx.renderer);
-                }
-                #[cfg(not(feature = "reload"))]
-                {
-                    ctx.game.update(&input, &mut ctx.audio, dt);
-                    ctx.game.render(&mut ctx.renderer);
+                if let Some(player) = &mut ctx.player {
+                    player.update(&input, dt);
+                    player.render(&mut ctx.renderer);
+                } else if let Some(game) = &mut ctx.showcase {
+                    use trino_core::Game as _;
+                    game.update(&input, &mut ctx.audio, dt);
+                    game.render(&mut ctx.renderer);
+                } else {
+                    #[cfg(feature = "reload")]
+                    {
+                        let version = hot_game::trino_game_api_version();
+                        assert_eq!(
+                            version,
+                            trino_game_api::GAME_API_VERSION,
+                            "game dylib was built against a different game-api version — restart"
+                        );
+                        hot_game::trino_game_update(&mut ctx.game, &input, &mut ctx.audio, dt);
+                        hot_game::trino_game_render(&mut ctx.game, &mut ctx.renderer);
+                    }
+                    #[cfg(not(feature = "reload"))]
+                    {
+                        ctx.game.update(&input, &mut ctx.audio, dt);
+                        ctx.game.render(&mut ctx.renderer);
+                    }
                 }
 
                 self.frames += 1;

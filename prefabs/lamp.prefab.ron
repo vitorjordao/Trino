@@ -1,0 +1,27 @@
+(
+    version: 1,
+    root: (
+        name: "lamp",
+        children: [
+            (
+                name: "post",
+                model: Some((
+                    path: "models/lamp-post",
+                    material: Some("materials/metal"),
+                )),
+            ),
+            (
+                name: "bulb",
+                transform: (
+                    pos: (0.0, 2.5, 0.0),
+                    rot: (0.0, 0.0, 0.0),
+                    scale: (1.0, 1.0, 1.0),
+                ),
+                model: Some((
+                    path: "models/lamp-bulb",
+                    material: Some("materials/glow"),
+                )),
+            ),
+        ],
+    ),
+)

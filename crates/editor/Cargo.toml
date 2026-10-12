@@ -17,5 +17,11 @@ trino-platform-pc = { workspace = true }
 trino-asset-pipeline = { workspace = true, features = ["watch"] }
 eframe = { workspace = true }
 egui_dock = { workspace = true }
+egui-phosphor = { workspace = true }
 wgpu = { workspace = true }
 notify-debouncer-full = { workspace = true }
+ron = { workspace = true }
+png = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

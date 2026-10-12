@@ -10,6 +10,7 @@ publish = false
 [dependencies]
 trino-core = { workspace = true }
 trino-asset-pipeline = { workspace = true, features = ["watch"] }
+trino-scene = { workspace = true }
 notify = { workspace = true }
 notify-debouncer-full = { workspace = true }
 png = { workspace = true }
@@ -24,6 +25,7 @@ trino-game-api = { workspace = true }
 hello-sprite = { workspace = true }
 platformer = { workspace = true }
 castle64 = { workspace = true }
+showcase = { workspace = true }
 trino-platform-pc = { workspace = true }
 pollster = { workspace = true }
 gif = { workspace = true }

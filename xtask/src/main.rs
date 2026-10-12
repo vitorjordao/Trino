@@ -4,9 +4,13 @@
 //! target. Wraps cargo, the asset pipeline, Docker (N64) and emulators so
 //! contributors and CI never memorize per-platform incantations.
 
+mod agents;
 mod castle64_assets;
+mod model;
 mod n3ds;
 mod n64;
+mod scene;
+mod showcase_assets;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -29,6 +33,14 @@ commands:
   editor               launch the Trino editor
   new <name>           scaffold a new game crate under examples/
   gen-assets           regenerate the sample master assets (dev utility)
+  scene check [file..] validate scenes/prefabs/materials (text-first loop)
+  scene export <scene.ron> <out.rs>
+                       bake a scene into no_std Rust data for games
+  model inspect <file> [--fps N] [--once a,b] [--json]
+                       bake a .glb/.gltf/.prim.ron like the engine and report
+                       tris, joints, clips, bounds, N64 budget (art gate)
+  agents <sync|check>  mirror .agents/skills/ into tool-specific folders
+                       (.claude/skills/) / verify the mirrors are in sync
 ";
 
 fn main() -> ExitCode {
@@ -89,6 +101,15 @@ fn main() -> ExitCode {
         (Some("watch"), Some("pc")) => watch_pc(&game),
         (Some("editor"), _) => cargo(&["run", "-p", "trino-editor"], &[]),
         (Some("gen-assets"), _) => gen_assets(),
+        (Some("agents"), sub) => agents::run(&repo_root(), sub),
+        (Some("model"), _) => {
+            let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
+            model::run(&repo_root(), &rest)
+        }
+        (Some("scene"), _) => {
+            let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
+            scene::run(&repo_root(), &rest)
+        }
 
         (Some("build"), Some("n64")) => n64::build(false),
         (Some("run"), Some("n64")) => n64::run(),
@@ -117,6 +138,18 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// True when a debounced batch holds a real filesystem change. Reading a
+/// file emits inotify *access* events; reacting to those turns every build
+/// (which reads the sources) into the trigger for the next one.
+pub fn real_change(events: &[notify_debouncer_full::DebouncedEvent]) -> bool {
+    events.iter().any(|e| {
+        !matches!(
+            e.event.kind,
+            notify_debouncer_full::notify::EventKind::Access(_)
+        )
+    })
 }
 
 fn repo_root() -> PathBuf {
@@ -180,7 +213,7 @@ fn watch_pc(game: &str) -> ExitCode {
         None,
         move |result: DebounceEventResult| {
             if let Ok(events) = result
-                && !events.is_empty()
+                && crate::real_change(&events)
             {
                 let _ = tx.send(());
             }
@@ -288,6 +321,7 @@ fn gen_assets() -> ExitCode {
 
     // castle64 (the 3D showcase): blocks, articulated player, boar, doors.
     castle64_assets::gen_all(&root, &|path, w, h, rgba| write_png(path, w, h, rgba));
+    showcase_assets::gen_all(&root);
 
     println!("sample assets regenerated under assets/shared/");
     ExitCode::SUCCESS

@@ -167,7 +167,7 @@ pub fn bake_all(
         }
         let result = (|| -> Result<BakedEntry, String> {
             let source = resolve_source(assets_root, platform, &decl.file)?;
-            let blob = crate::model::bake_model_tmdl(&source)?;
+            let blob = crate::model::bake_model(&source, &decl.options())?;
             let file = format!("{id:08x}.model");
             let changed = write_if_changed(&out_dir.join(&file), &blob)?;
             Ok(BakedEntry {
@@ -220,8 +220,10 @@ fn decode_png(path: &Path) -> Result<(u32, u32, Vec<u8>), String> {
     let rgba = match info.color_type {
         png::ColorType::Rgba => buf,
         png::ColorType::Rgb => buf
-            .chunks_exact(3)
-            .flat_map(|px| [px[0], px[1], px[2], 255])
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .flat_map(|&[r, g, b]| [r, g, b, 255])
             .collect(),
         other => {
             return Err(format!(
@@ -241,8 +243,10 @@ fn decode_wav(path: &Path) -> Result<(u32, Vec<f32>), String> {
     let to_mono = |samples: Vec<f32>| -> Vec<f32> {
         if spec.channels == 2 {
             samples
-                .chunks_exact(2)
-                .map(|c| (c[0] + c[1]) * 0.5)
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|&[l, r]| (l + r) * 0.5)
                 .collect()
         } else {
             samples

@@ -22,6 +22,7 @@ trino-scene = { path = "crates/scene" }
 hello-sprite = { path = "examples/hello-sprite" }
 platformer = { path = "examples/platformer" }
 castle64 = { path = "examples/castle64" }
+showcase = { path = "examples/showcase" }
 winit = "0.30"
 # wgpu 29 = what egui-wgpu 0.35 (the editor UI, Fase 3) resolves to. Keep in
 # lockstep with the egui upgrade cadence, never bump one without the other.
@@ -52,6 +53,9 @@ eframe = { version = "0.35", default-features = false, features = [
     "wayland",
 ] }
 egui_dock = "0.20"
+# Icon font for the editor. 0.13 is the line built on egui 0.35 — bump in
+# lockstep with eframe/egui (0.14 already requires egui 0.36).
+egui-phosphor = "0.13"
 
 [profile.dev]
 opt-level = 1

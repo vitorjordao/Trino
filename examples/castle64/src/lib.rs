@@ -565,9 +565,7 @@ impl Game for Castle64Game {
             // Lava pulsa via tint por draw (ModelParams).
             let params = if b.kind == BlockKind::Lava {
                 let glow = 190 + (65.0 * tri_wave(self.level_time * 0.6)) as u8;
-                ModelParams {
-                    tint: Color::rgb(255, glow, glow),
-                }
+                ModelParams::tinted(Color::rgb(255, glow, glow))
             } else {
                 plain
             };
@@ -618,11 +616,9 @@ impl Game for Castle64Game {
                 ),
             };
             let params = if locked {
-                ModelParams {
-                    tint: Color::rgb(115, 115, 120),
-                }
+                ModelParams::tinted(Color::rgb(115, 115, 120))
             } else {
-                ModelParams { tint: open_tint }
+                ModelParams::tinted(open_tint)
             };
             renderer.draw_model(
                 model,
@@ -681,9 +677,7 @@ impl Game for Castle64Game {
                     scale: Vec3::new(4.0, 4.0, 4.0),
                 },
                 Material::VertexLit,
-                &ModelParams {
-                    tint: Color::rgb(255, 255, warm),
-                },
+                &ModelParams::tinted(Color::rgb(255, 255, warm)),
             );
         }
 

@@ -681,6 +681,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "egui-phosphor"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "249826f9529c1757d71dbbb3a22ec101b21110ab663c45fb771c2b86121379e4"
+dependencies = [
+ "egui",
+]
+
+[[package]]
 name = "egui-wgpu"
 version = "0.35.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2835,6 +2844,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
+name = "showcase"
+version = "0.1.0"
+dependencies = [
+ "trino-core",
+ "trino-game-api",
+]
+
+[[package]]
 name = "simd-adler32"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3212,10 +3229,12 @@ dependencies = [
  "castle64",
  "hot-lib-reloader",
  "pollster",
+ "showcase",
  "trino-asset-pipeline",
  "trino-core",
  "trino-game-api",
  "trino-platform-pc",
+ "trino-scene",
  "winit",
 ]
 
@@ -3228,6 +3247,7 @@ dependencies = [
  "notify 8.2.0",
  "notify-debouncer-full 0.6.0",
  "png",
+ "ron",
  "serde",
  "tempfile",
  "toml",
@@ -3243,8 +3263,12 @@ name = "trino-editor"
 version = "0.1.0"
 dependencies = [
  "eframe",
+ "egui-phosphor",
  "egui_dock",
  "notify-debouncer-full 0.6.0",
+ "png",
+ "ron",
+ "tempfile",
  "trino-asset-pipeline",
  "trino-core",
  "trino-platform-pc",
@@ -3294,6 +3318,7 @@ version = "0.1.0"
 dependencies = [
  "ron",
  "serde",
+ "tempfile",
  "trino-core",
 ]
 
@@ -4342,11 +4367,13 @@ dependencies = [
  "png",
  "pollster",
  "serde_json",
+ "showcase",
  "tempfile",
  "trino-asset-pipeline",
  "trino-core",
  "trino-game-api",
  "trino-platform-pc",
+ "trino-scene",
 ]
 
 [[package]]

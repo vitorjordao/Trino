@@ -102,8 +102,10 @@ pub fn load_dir(out_dir: &Path, only: Option<&[u32]>) -> Result<LoadedAssets, St
                     return Err(format!("{}: truncated sound data", path.display()));
                 }
                 let samples = data
-                    .chunks_exact(4)
-                    .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|&c| f32::from_le_bytes(c))
                     .collect();
                 let loaded = LoadedSound {
                     logical: entry.logical,

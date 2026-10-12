@@ -1,0 +1,1758 @@
+//! The editor application: state, the command queue panels talk through,
+//! menus / toolbar / status bar, file sync (hot reload of scenes, prefabs,
+//! materials and assets), shortcuts and undo.
+
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command};
+use std::sync::mpsc::Receiver;
+use std::time::Instant;
+
+use eframe::egui::{self, CornerRadius, Margin, RichText, Stroke, Vec2};
+use trino_asset_pipeline as pipeline;
+use trino_core::Vec3;
+use trino_platform_pc::SimProfile;
+use trino_scene::{
+    Entity, Library, MaterialDef, ModelComponent, Prefab, PrefabInstance, Resolved, Scene,
+    SpriteComponent, resolve,
+};
+
+use crate::dialogs::Dialog;
+use crate::doc::{Doc, DocKind};
+use crate::level_editor::LevelEditor;
+use crate::log::{Level, Log};
+use crate::project::{Project, Thumbnailer};
+use crate::theme::{self, c, icon};
+use crate::viewport::{AssetPayload, ViewAction, ViewInput, ViewKind, Viewport};
+
+pub const DEFAULT_SCENE: &str = "scenes/showcase.scene.ron";
+const LEVEL_PATH: &str = "examples/platformer/src/level1.txt";
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Tab {
+    Scene,
+    Game,
+    Level,
+    Hierarchy,
+    Inspector,
+    Assets,
+    Console,
+}
+
+impl Tab {
+    pub fn title(self) -> String {
+        let (glyph, name) = match self {
+            Tab::Scene => (icon::CUBE_TRANSPARENT, "Scene"),
+            Tab::Game => (icon::GAME_CONTROLLER, "Game"),
+            Tab::Level => (icon::GRID_FOUR, "Level"),
+            Tab::Hierarchy => (icon::TREE_STRUCTURE, "Hierarchy"),
+            Tab::Inspector => (icon::SLIDERS_HORIZONTAL, "Inspector"),
+            Tab::Assets => (icon::FOLDER_OPEN, "Assets"),
+            Tab::Console => (icon::TERMINAL, "Console"),
+        };
+        format!("{glyph}  {name}")
+    }
+}
+
+/// Asset selected in the Assets panel (shown in the Inspector).
+#[derive(Clone, Debug, PartialEq)]
+pub enum AssetSel {
+    Model(String),
+    Material(String),
+    Prefab(String),
+    Sprite(String),
+}
+
+/// Everything panels ask the app to do (applied after the UI pass).
+pub enum Cmd {
+    Select(Option<Vec<usize>>),
+    SelectAsset(AssetSel),
+    Create {
+        parent: Option<Vec<usize>>,
+        entity: Entity,
+    },
+    Delete(Vec<usize>),
+    Duplicate(Vec<usize>),
+    Reparent {
+        from: Vec<usize>,
+        to: Option<Vec<usize>>,
+    },
+    MakePrefab(Vec<usize>, String),
+    Unpack(Vec<usize>),
+    EditPrefab(String),
+    ExitPrefab,
+    Focus(Vec<usize>),
+    Copy(Vec<usize>),
+    Paste,
+    Open(Dialog),
+    AddAsset(AssetPayload, Option<Vec3>),
+    /// Asset dropped on a hierarchy row: create it as that entity's child,
+    /// at the parent's origin.
+    AddAssetUnder(AssetPayload, Vec<usize>),
+    SaveMaterial(String),
+    NewMaterial(String, MaterialDef),
+    CreateProxy(String, pipeline::Primitive, bool),
+    SaveProxy(String, pipeline::Primitive),
+    RetargetModel(String, String),
+    OpenScene(PathBuf),
+    NewScene(String),
+    Export(PathBuf),
+    Save,
+    Undo,
+    Redo,
+}
+
+pub struct App {
+    pub project: Project,
+    pub lib: Library,
+    pub doc: Doc,
+    /// Scene document (and its camera) parked while a prefab is open.
+    pub parked: Option<Doc>,
+    parked_cam: Option<crate::gizmo::OrbitCam>,
+    pub asset_sel: Option<AssetSel>,
+    pub resolved: Resolved,
+    pub scene_view: Viewport,
+    pub game_view: Viewport,
+    pub thumbs: Thumbnailer,
+    pub material_thumbs: std::collections::HashMap<String, (MaterialDef, egui::TextureHandle)>,
+    /// Prefab previews keyed by logical path, with the library revision and
+    /// asset generation they were rendered at.
+    pub prefab_thumbs: std::collections::HashMap<String, ((u64, u64), egui::TextureHandle)>,
+    /// Edits waiting for the user to finish interacting before they hit the
+    /// disk (dragging a color must not write a file — and rebake — per frame).
+    pending_materials: HashSet<String>,
+    pending_proxies: std::collections::HashMap<String, pipeline::Primitive>,
+    /// Bumped when saved content settles: prefab thumbnails key on it.
+    thumb_rev: u64,
+    pub log: Log,
+    pub cmds: Vec<Cmd>,
+    pub dialog: Option<Dialog>,
+    pub collapsed: HashSet<Vec<usize>>,
+    /// Prefab instances expanded in the hierarchy (collapsed by default).
+    pub expanded: HashSet<Vec<usize>>,
+    pub renaming: Option<(Vec<usize>, String)>,
+    pub hierarchy_filter: String,
+    pub assets_tab: crate::panels::assets::AssetTab,
+    pub assets_filter: String,
+    pub level: LevelEditor,
+    pub animate: bool,
+    anim_start: Instant,
+    rev: u64,
+    rev_scene: Option<Scene>,
+    lib_rev: u64,
+    seen_lib_rev: u64,
+    play: Option<Child>,
+    asset_events: Receiver<Vec<u32>>,
+    _asset_watcher: Box<dyn std::any::Any>,
+    file_events: Receiver<Vec<PathBuf>>,
+    _file_watcher: Box<dyn std::any::Any>,
+    /// Last known text per watched file — our own writes and what we
+    /// loaded (echo guard + "did the content actually change" filter).
+    written: std::collections::HashMap<PathBuf, String>,
+    clipboard_note: Option<String>,
+    frames: u64,
+    smoke_frames: Option<u64>,
+    screenshot: Option<(u64, PathBuf)>,
+    screenshot_requested: bool,
+    last_frame: Instant,
+    pub fps: f32,
+    pub show_shortcuts: bool,
+    dock: Option<egui_dock::DockState<Tab>>,
+}
+
+impl App {
+    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        theme::install(&cc.egui_ctx);
+        let render_state = cc
+            .wgpu_render_state
+            .clone()
+            .expect("editor requires the wgpu backend");
+        // Relative to the working directory, *without* a `./` prefix: watcher
+        // paths are compared component-wise against these.
+        let root = PathBuf::new();
+        let mut log = Log::new();
+        let mut project = Project::new(root.clone());
+        for line in project.bake_and_load() {
+            match line {
+                Ok(l) => log.info(l),
+                Err(e) => log.error(e),
+            }
+        }
+        let lib = Library::load(&root);
+        for e in &lib.errors {
+            log.error(e.clone());
+        }
+        log.info(format!(
+            "library: {} material(s), {} prefab(s)",
+            lib.materials.len(),
+            lib.prefabs.len()
+        ));
+
+        let scene_path = PathBuf::from(
+            std::env::var("TRINO_EDITOR_SCENE").unwrap_or_else(|_| DEFAULT_SCENE.to_string()),
+        );
+        let (scene, text) = match std::fs::read_to_string(&scene_path) {
+            Ok(text) => match Scene::from_ron(&text) {
+                Ok(s) => {
+                    log.info(format!("opened {}", scene_path.display()));
+                    (s, text)
+                }
+                Err(e) => {
+                    log.error(e);
+                    (Scene::new("main"), String::new())
+                }
+            },
+            Err(_) => {
+                log.warn("no scene found — starting an empty one");
+                (Scene::new("main"), String::new())
+            }
+        };
+        let mut doc = Doc::scene(scene_path, scene, text);
+        // Dev hook (screenshots/tests): TRINO_EDITOR_SELECT=<entity name>
+        // selects it and frames it in the Scene view.
+        let mut cmds = Vec::new();
+        if let Ok(name) = std::env::var("TRINO_EDITOR_SELECT") {
+            doc.scene.walk(|p, e| {
+                if e.name == name && doc.selected.is_none() {
+                    doc.selected = Some(p.to_vec());
+                }
+            });
+            if let Some(p) = &doc.selected {
+                cmds.push(Cmd::Focus(p.clone()));
+            }
+        }
+        // Dev hook: TRINO_EDITOR_OPEN=fake-object | material:<logical> |
+        // model:<logical> | prefab:<logical> (edit mode) — screenshots of
+        // dialogs and asset inspectors.
+        let mut assets_tab = crate::panels::assets::AssetTab::Models;
+        let open = std::env::var("TRINO_EDITOR_OPEN").unwrap_or_default();
+        match open.split_once(':') {
+            Some(("material", l)) => {
+                assets_tab = crate::panels::assets::AssetTab::Materials;
+                cmds.push(Cmd::SelectAsset(AssetSel::Material(l.to_string())));
+            }
+            Some(("model", l)) => cmds.push(Cmd::SelectAsset(AssetSel::Model(l.to_string()))),
+            Some(("prefab", l)) => {
+                assets_tab = crate::panels::assets::AssetTab::Prefabs;
+                cmds.push(Cmd::EditPrefab(l.to_string()));
+            }
+            _ if open == "fake-object" => cmds.push(Cmd::Open(Dialog::fake_object(&project))),
+            _ => {}
+        }
+
+        let mut scene_view =
+            Viewport::new(render_state.clone(), ViewKind::Scene, SimProfile::Native);
+        let game_view = Viewport::new(render_state.clone(), ViewKind::Game, SimProfile::N64);
+        let cam = doc.scene.environment.core_camera();
+        scene_view.cam.look_from(cam.eye, cam.target);
+        let thumbs = Thumbnailer::new(
+            wgpu::Device::clone(&render_state.device),
+            wgpu::Queue::clone(&render_state.queue),
+        );
+
+        // Asset pipeline watcher: masters → rebake → changed handles.
+        let (tx, asset_events) = std::sync::mpsc::channel();
+        let watcher = pipeline::watch::watch(
+            project.assets_dir(),
+            pipeline::Platform::Pc,
+            project.baked_dir(),
+            move |changed| {
+                let _ = tx.send(changed);
+            },
+        )
+        .expect("failed to start asset watcher");
+
+        // Text sources: scenes, prefabs, materials, the platformer level.
+        let (ftx, file_events) = std::sync::mpsc::channel();
+        let mut file_watcher = notify_debouncer_full::new_debouncer(
+            std::time::Duration::from_millis(200),
+            None,
+            move |result: notify_debouncer_full::DebounceEventResult| {
+                if let Ok(events) = result {
+                    // Reading a file emits inotify *access* events; reacting to
+                    // those would make every reload trigger the next one.
+                    use notify_debouncer_full::notify::EventKind;
+                    let paths: Vec<PathBuf> = events
+                        .into_iter()
+                        .filter(|e| !matches!(e.event.kind, EventKind::Access(_)))
+                        .flat_map(|e| e.event.paths.clone())
+                        .collect();
+                    if !paths.is_empty() {
+                        let _ = ftx.send(paths);
+                    }
+                }
+            },
+        )
+        .expect("failed to start file watcher");
+        use notify_debouncer_full::notify::RecursiveMode;
+        for dir in [
+            "scenes",
+            "prefabs",
+            "assets/materials",
+            "examples/platformer/src",
+        ] {
+            let _ = std::fs::create_dir_all(dir);
+            if let Err(e) = file_watcher.watch(Path::new(dir), RecursiveMode::Recursive) {
+                log.warn(format!("cannot watch {dir}: {e}"));
+            }
+        }
+
+        let screenshot = std::env::var("TRINO_EDITOR_SCREENSHOT").ok().map(|p| {
+            let frames = std::env::var("TRINO_EDITOR_SCREENSHOT_FRAME")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(30);
+            (frames, PathBuf::from(p))
+        });
+
+        App {
+            project,
+            lib,
+            doc,
+            parked: None,
+            parked_cam: None,
+            asset_sel: None,
+            resolved: Resolved::default(),
+            scene_view,
+            game_view,
+            thumbs,
+            material_thumbs: Default::default(),
+            prefab_thumbs: Default::default(),
+            pending_materials: HashSet::new(),
+            pending_proxies: Default::default(),
+            thumb_rev: 0,
+            log,
+            cmds,
+            dialog: None,
+            collapsed: HashSet::new(),
+            expanded: HashSet::new(),
+            renaming: None,
+            hierarchy_filter: String::new(),
+            assets_tab,
+            assets_filter: String::new(),
+            level: LevelEditor::load(PathBuf::from(LEVEL_PATH)),
+            animate: true,
+            anim_start: Instant::now(),
+            rev: 0,
+            rev_scene: None,
+            lib_rev: 0,
+            seen_lib_rev: 0,
+            play: None,
+            asset_events,
+            _asset_watcher: Box::new(watcher),
+            file_events,
+            _file_watcher: Box::new(file_watcher),
+            written: Default::default(),
+            clipboard_note: None,
+            frames: 0,
+            smoke_frames: std::env::var("TRINO_EDITOR_SMOKE_FRAMES")
+                .ok()
+                .and_then(|v| v.parse().ok()),
+            screenshot,
+            screenshot_requested: false,
+            last_frame: Instant::now(),
+            fps: 0.0,
+            show_shortcuts: false,
+            dock: Some(default_dock()),
+        }
+    }
+
+    pub fn time(&self) -> f32 {
+        self.anim_start.elapsed().as_secs_f32()
+    }
+
+    pub fn view_input(&self) -> ViewInput<'_> {
+        ViewInput {
+            scene: &self.doc.scene,
+            resolved: &self.resolved,
+            project: &self.project,
+            selected: self.doc.selected.as_deref(),
+            rev: self.rev,
+            time: self.time(),
+            animate: self.animate,
+        }
+    }
+
+    /// Entities using a material (inspector "shared by N").
+    pub fn material_users(&self, logical: &str) -> usize {
+        let mut n = 0;
+        self.doc.scene.walk(|_, e| {
+            if e.model.as_ref().and_then(|m| m.material.as_deref()) == Some(logical) {
+                n += 1;
+            }
+        });
+        n
+    }
+
+    pub fn mark_lib_changed(&mut self) {
+        self.lib_rev += 1;
+    }
+
+    // ------------------------------------------------------------ files --
+
+    fn write_echo(&mut self, path: PathBuf, text: String) -> Result<(), String> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        std::fs::write(&path, &text)
+            .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+        self.written.insert(path, text);
+        Ok(())
+    }
+
+    fn sync_files(&mut self) {
+        // Assets (rebaked by the pipeline watcher).
+        let mut changed_ids: Vec<u32> = Vec::new();
+        while let Ok(ids) = self.asset_events.try_recv() {
+            changed_ids.extend(ids);
+        }
+        if !changed_ids.is_empty() {
+            match self.project.reload(Some(&changed_ids)) {
+                Ok(n) => {
+                    let logicals = self.project.logicals_for_ids(&changed_ids);
+                    self.scene_view.upload(&self.project, &logicals);
+                    self.game_view.upload(&self.project, &logicals);
+                    // Brand-new assets (not in the old catalog) need a full
+                    // reload so every view uploads them.
+                    if logicals.len() < n {
+                        let _ = self.project.reload(None);
+                    }
+                    self.log.toast(
+                        Level::Ok,
+                        format!(
+                            "{} {}",
+                            icon::ARROWS_CLOCKWISE,
+                            if logicals.len() == 1 {
+                                format!("reloaded {}", logicals[0])
+                            } else {
+                                format!("reloaded {} assets", logicals.len().max(n))
+                            }
+                        ),
+                    );
+                }
+                Err(e) => self
+                    .log
+                    .toast(Level::Error, format!("asset reload failed: {e}")),
+            }
+        }
+
+        // Text files.
+        let mut paths: Vec<PathBuf> = Vec::new();
+        while let Ok(p) = self.file_events.try_recv() {
+            paths.extend(p);
+        }
+        if paths.is_empty() {
+            return;
+        }
+        paths.sort();
+        paths.dedup();
+        let cwd = std::env::current_dir().unwrap_or_default();
+        let cwd_canon = std::fs::canonicalize(&cwd).unwrap_or_else(|_| cwd.clone());
+        let mut level_checked = false;
+        for abs in paths {
+            let p = relative_to(&abs, &cwd, &cwd_canon);
+            let text = std::fs::read_to_string(&p).ok();
+            if let Some(t) = &text
+                && self.written.get(&p) == Some(t)
+            {
+                continue; // our own write, or content we already loaded
+            }
+            if let Some(t) = &text {
+                self.written.insert(p.clone(), t.clone());
+            }
+            let s = p.to_string_lossy().replace('\\', "/");
+            if s.ends_with(".material.ron") || s.ends_with(".prefab.ron") {
+                match self.lib.reload_file(Path::new(""), &p) {
+                    Ok(Some(logical)) => {
+                        self.mark_lib_changed();
+                        self.material_thumbs.remove(&logical);
+                        // An open prefab that changed on disk.
+                        if self.doc.path == p
+                            && self.doc.disk_text != text.clone().unwrap_or_default()
+                        {
+                            self.external_doc_change(&p, text.clone());
+                        }
+                        self.log.toast(
+                            Level::Ok,
+                            format!("{} {logical} updated", icon::ARROWS_CLOCKWISE),
+                        );
+                    }
+                    Ok(None) => {}
+                    Err(e) => self.log.toast(Level::Error, e),
+                }
+            } else if s.ends_with(".scene.ron") {
+                if p == self.doc.path || self.parked.as_ref().is_some_and(|d| d.path == p) {
+                    self.external_doc_change(&p, text);
+                }
+            } else if s.ends_with("level1.txt") && !level_checked {
+                level_checked = true;
+                if self.level.maybe_external_reload() {
+                    self.log
+                        .toast(Level::Ok, "level reloaded (external change)");
+                }
+            }
+        }
+    }
+
+    fn external_doc_change(&mut self, path: &Path, text: Option<String>) {
+        let Some(text) = text else {
+            return;
+        };
+        let doc = if self.doc.path == path {
+            &mut self.doc
+        } else if let Some(d) = self.parked.as_mut().filter(|d| d.path == path) {
+            d
+        } else {
+            return;
+        };
+        if text == doc.disk_text {
+            return;
+        }
+        if doc.dirty() {
+            self.log.toast(
+                Level::Warn,
+                format!(
+                    "{} changed on disk, but you have unsaved edits — save to overwrite or reopen to load it",
+                    path.display()
+                ),
+            );
+            return;
+        }
+        let parsed = match &doc.kind {
+            DocKind::Scene => Scene::from_ron(&text),
+            DocKind::Prefab { logical } => Prefab::from_ron(&text).map(|p| {
+                let mut s = Scene::new(logical.clone());
+                s.entities.push(p.root);
+                s
+            }),
+        };
+        match parsed {
+            Ok(scene) => {
+                doc.reload_from(scene, text);
+                self.log.toast(
+                    Level::Ok,
+                    format!("{} reloaded (external change)", path.display()),
+                );
+            }
+            Err(e) => self
+                .log
+                .toast(Level::Error, format!("external change is invalid: {e}")),
+        }
+    }
+
+    // --------------------------------------------------------- commands --
+
+    fn run_cmds(&mut self, ctx: &egui::Context) {
+        let cmds = std::mem::take(&mut self.cmds);
+        for cmd in cmds {
+            if let Err(e) = self.run(cmd, ctx) {
+                self.log.toast(Level::Error, e);
+            }
+        }
+    }
+
+    fn run(&mut self, cmd: Cmd, ctx: &egui::Context) -> Result<(), String> {
+        match cmd {
+            Cmd::Select(path) => {
+                self.doc.selected = path;
+                if self.doc.selected.is_some() {
+                    self.asset_sel = None;
+                }
+            }
+            Cmd::SelectAsset(a) => {
+                self.asset_sel = Some(a);
+                self.doc.selected = None;
+            }
+            Cmd::Create { parent, mut entity } => {
+                // Prefab documents have exactly one root.
+                let parent = if self.doc.is_prefab() && parent.is_none() {
+                    Some(vec![0])
+                } else {
+                    parent
+                };
+                entity.name = self.doc.scene.unique_name(&entity.name);
+                let path = self
+                    .doc
+                    .scene
+                    .insert(parent.as_deref(), entity)
+                    .ok_or("cannot create there")?;
+                if let Some(p) = &parent {
+                    self.collapsed.remove(p);
+                }
+                self.doc.selected = Some(path);
+                self.asset_sel = None;
+            }
+            Cmd::Delete(path) => {
+                if self.doc.is_prefab() && path == [0] {
+                    return Err("the prefab root cannot be deleted".into());
+                }
+                let e = self.doc.scene.remove(&path).ok_or("nothing to delete")?;
+                self.doc.selected = None;
+                self.log.info(format!("deleted {}", e.name));
+            }
+            Cmd::Duplicate(path) => {
+                if self.doc.is_prefab() && path == [0] {
+                    return Err("duplicate the prefab's children, not its root".into());
+                }
+                let mut e = self
+                    .doc
+                    .scene
+                    .get(&path)
+                    .cloned()
+                    .ok_or("nothing to duplicate")?;
+                e.name = self.doc.scene.unique_name(&e.name);
+                e.transform.pos[0] += 1.0;
+                let list = self.doc.scene.siblings_mut(&path).ok_or("bad path")?;
+                let at = path.last().unwrap() + 1;
+                list.insert(at, e);
+                let mut new = path.clone();
+                *new.last_mut().unwrap() = at;
+                self.doc.selected = Some(new);
+            }
+            Cmd::Reparent { from, to } => {
+                if self.doc.is_prefab() && (from == [0] || to.is_none()) {
+                    return Err("a prefab has a single root".into());
+                }
+                let new = self
+                    .doc
+                    .scene
+                    .reparent(&from, to.as_deref())
+                    .ok_or("cannot move an entity into itself")?;
+                self.doc.selected = Some(new);
+            }
+            Cmd::MakePrefab(path, name) => {
+                if !pipeline::manifest::edit::valid_name(&name) {
+                    return Err(format!("`{name}` is not a valid prefab name"));
+                }
+                let logical = format!("prefabs/{name}");
+                if self.lib.prefabs.contains_key(&logical) {
+                    return Err(format!("{logical} already exists"));
+                }
+                let prefab = self.lib.make_prefab(&mut self.doc.scene, &path, &logical)?;
+                let file = Library::prefab_file(Path::new(""), &logical);
+                self.write_echo(file, prefab.to_ron())?;
+                self.mark_lib_changed();
+                self.log
+                    .toast(Level::Ok, format!("{} created {logical}", icon::PACKAGE));
+            }
+            Cmd::Unpack(path) => {
+                self.lib.unpack(&mut self.doc.scene, &path)?;
+                self.collapsed.remove(&path);
+                self.log
+                    .toast(Level::Ok, "prefab unpacked (instance made real)");
+            }
+            Cmd::EditPrefab(logical) => {
+                if self.doc.is_prefab() {
+                    self.run(Cmd::ExitPrefab, ctx)?;
+                }
+                let prefab = self
+                    .lib
+                    .prefabs
+                    .get(&logical)
+                    .ok_or("unknown prefab")?
+                    .clone();
+                let path = Library::prefab_file(Path::new(""), &logical);
+                let text = std::fs::read_to_string(&path).unwrap_or_default();
+                let doc = Doc::prefab(logical.clone(), path, &prefab, text);
+                self.parked = Some(std::mem::replace(&mut self.doc, doc));
+                self.parked_cam = Some(self.scene_view.cam);
+                self.asset_sel = None;
+                // Frame the prefab once it has been resolved this frame.
+                self.cmds.push(Cmd::Focus(vec![0]));
+                self.log.info(format!(
+                    "editing {logical} — every instance updates on save"
+                ));
+            }
+            Cmd::ExitPrefab => {
+                if !self.doc.is_prefab() {
+                    return Ok(());
+                }
+                if self.doc.dirty() {
+                    self.save_doc()?;
+                }
+                if let Some(scene) = self.parked.take() {
+                    self.doc = scene;
+                }
+                if let Some(cam) = self.parked_cam.take() {
+                    self.scene_view.cam = cam;
+                }
+            }
+            Cmd::Focus(path) => {
+                // Resolve now: the document may have just changed (prefab mode).
+                self.resolved = resolve(&self.doc.scene, &self.lib, self.time());
+                let input = self.view_input();
+                if let Some((c, r)) = crate::viewport::selection_sphere(&input, &path) {
+                    self.scene_view.cam.focus(c, r);
+                }
+            }
+            Cmd::Copy(path) => {
+                let e = self.doc.scene.get(&path).ok_or("nothing selected")?;
+                let text = ron::ser::to_string_pretty(e, ron::ser::PrettyConfig::default())
+                    .map_err(|e| e.to_string())?;
+                ctx.copy_text(text);
+                self.log.toast(
+                    Level::Ok,
+                    format!("{} copied {} as RON", icon::COPY, e.name),
+                );
+            }
+            Cmd::Paste => {
+                self.clipboard_note = Some(String::new());
+                ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+            }
+            Cmd::Open(d) => self.dialog = Some(d),
+            Cmd::AddAssetUnder(payload, parent) => {
+                self.run(Cmd::AddAsset(payload, None), ctx)?;
+                // Re-target the Create just queued at the requested parent.
+                if let Some(Cmd::Create { parent: p, entity }) = self.cmds.last_mut() {
+                    *p = Some(parent);
+                    if entity.sprite.is_none() {
+                        entity.transform.pos = [0.0; 3];
+                    }
+                }
+            }
+            Cmd::AddAsset(payload, at) => {
+                let at = at.unwrap_or(self.scene_view.cam.target);
+                let at = [snap_half(at.x), snap_half(at.y.max(0.0)), snap_half(at.z)];
+                let entity = match &payload {
+                    AssetPayload::Model(l) => {
+                        let name = l.rsplit('/').next().unwrap_or("model").to_string();
+                        let mut e = Entity::new(name).with_model(ModelComponent::new(l.clone()));
+                        e.transform.pos = at;
+                        e
+                    }
+                    AssetPayload::Prefab(l) => {
+                        let name = l.rsplit('/').next().unwrap_or("prefab").to_string();
+                        let mut e = Entity::new(name);
+                        e.prefab = Some(PrefabInstance::new(l.clone()));
+                        e.transform.pos = at;
+                        e
+                    }
+                    AssetPayload::Sprite(l) => {
+                        let name = l.rsplit('/').next().unwrap_or("sprite").to_string();
+                        let mut e = Entity::new(name);
+                        e.sprite = Some(SpriteComponent::new(l.clone()));
+                        e.transform.pos = [144.0, 104.0, 0.0];
+                        e
+                    }
+                };
+                if let (AssetPayload::Prefab(l), DocKind::Prefab { logical }) =
+                    (&payload, &self.doc.kind)
+                    && l == logical
+                {
+                    return Err("a prefab cannot contain itself".into());
+                }
+                self.cmds.push(Cmd::Create {
+                    parent: None,
+                    entity,
+                });
+            }
+            Cmd::SaveMaterial(logical) => {
+                // The in-memory library already has the edit (views update
+                // live); the file is written once the interaction settles.
+                self.pending_materials.insert(logical);
+                self.mark_lib_changed();
+            }
+            Cmd::NewMaterial(name, def) => {
+                if !pipeline::manifest::edit::valid_name(&name) {
+                    return Err(format!("`{name}` is not a valid material name"));
+                }
+                let logical = format!("materials/{name}");
+                if self.lib.materials.contains_key(&logical) {
+                    return Err(format!("{logical} already exists"));
+                }
+                self.lib.materials.insert(logical.clone(), def);
+                self.run(Cmd::SaveMaterial(logical.clone()), ctx)?;
+                self.asset_sel = Some(AssetSel::Material(logical.clone()));
+                self.doc.selected = None;
+                self.log
+                    .toast(Level::Ok, format!("{} created {logical}", icon::PALETTE));
+            }
+            Cmd::CreateProxy(name, prim, add) => {
+                let logical = self.project.create_proxy(&name, &prim)?;
+                self.log.toast(
+                    Level::Ok,
+                    format!("{} fake object {logical} created", icon::GHOST),
+                );
+                // The asset watcher bakes it (~200 ms) and every view
+                // uploads it; baking here too would race that thread.
+                if add {
+                    self.run(Cmd::AddAsset(AssetPayload::Model(logical), None), ctx)?;
+                }
+            }
+            Cmd::SaveProxy(logical, prim) => {
+                if let Some(m) = self.project.models.get_mut(&logical) {
+                    m.proxy = Some(prim.clone());
+                }
+                self.pending_proxies.insert(logical, prim);
+            }
+            Cmd::RetargetModel(name, file) => {
+                self.project.retarget_model(&name, &file)?;
+                self.log.toast(
+                    Level::Ok,
+                    format!("models/{name} now uses {file} — same handle, every reference kept"),
+                );
+            }
+            Cmd::OpenScene(path) => {
+                if self.doc.is_prefab() {
+                    self.run(Cmd::ExitPrefab, ctx)?;
+                }
+                if self.doc.dirty() {
+                    self.save_doc()?;
+                }
+                let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+                let scene = Scene::from_ron(&text)?;
+                self.doc = Doc::scene(path.clone(), scene, text);
+                let cam = self.doc.scene.environment.core_camera();
+                self.scene_view.cam.look_from(cam.eye, cam.target);
+                self.log
+                    .toast(Level::Ok, format!("opened {}", path.display()));
+            }
+            Cmd::NewScene(name) => {
+                if !pipeline::manifest::edit::valid_name(&name) {
+                    return Err(format!("`{name}` is not a valid scene name"));
+                }
+                let path = PathBuf::from(format!("scenes/{name}.scene.ron"));
+                if path.exists() {
+                    return Err(format!("{} already exists", path.display()));
+                }
+                if self.doc.dirty() {
+                    self.save_doc()?;
+                }
+                let mut scene = Scene::new(name);
+                let mut ground = Entity::new("spawn");
+                ground.tags.push("spawn".into());
+                scene.entities.push(ground);
+                self.doc = Doc::scene(path, scene, String::new());
+                self.save_doc()?;
+            }
+            Cmd::Export(out) => {
+                let (code, warnings) = trino_scene::codegen::to_rust(&self.doc.scene, &self.lib);
+                for w in warnings {
+                    self.log.warn(w);
+                }
+                std::fs::write(&out, code).map_err(|e| e.to_string())?;
+                self.log.toast(
+                    Level::Ok,
+                    format!("{} exported {}", icon::CODE, out.display()),
+                );
+            }
+            Cmd::Save => self.save_doc()?,
+            Cmd::Undo => {
+                if self.doc.undo() {
+                    self.log.info("undo");
+                }
+            }
+            Cmd::Redo => {
+                if self.doc.redo() {
+                    self.log.info("redo");
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Write pending material / fake-object edits (called once input settles).
+    fn flush_pending(&mut self) {
+        let mats: Vec<String> = self.pending_materials.drain().collect();
+        for logical in &mats {
+            if let Some(def) = self.lib.materials.get(logical).cloned() {
+                let file = Library::material_file(Path::new(""), logical);
+                if let Err(e) = self.write_echo(file, def.to_ron()) {
+                    self.log.toast(Level::Error, e);
+                }
+            }
+        }
+        let proxies: Vec<(String, pipeline::Primitive)> = self.pending_proxies.drain().collect();
+        for (logical, prim) in &proxies {
+            let saved = self
+                .project
+                .models
+                .get(logical)
+                .map(|m| self.project.save_proxy(m, prim));
+            if let Some(Err(e)) = saved {
+                self.log.toast(Level::Error, e);
+            }
+        }
+        if !mats.is_empty() || !proxies.is_empty() {
+            self.thumb_rev += 1;
+        }
+    }
+
+    pub fn save_doc(&mut self) -> Result<(), String> {
+        let path = self.doc.path.clone();
+        self.doc.save()?;
+        self.written
+            .insert(path.clone(), self.doc.disk_text.clone());
+        if let DocKind::Prefab { logical } = &self.doc.kind {
+            if let Some(root) = self.doc.scene.entities.first() {
+                self.lib
+                    .prefabs
+                    .insert(logical.clone(), Prefab::new(root.clone()));
+            }
+            self.mark_lib_changed();
+        }
+        self.log.toast(
+            Level::Ok,
+            format!("{} saved {}", icon::FLOPPY_DISK, path.display()),
+        );
+        Ok(())
+    }
+
+    fn handle_paste(&mut self, ctx: &egui::Context) {
+        if self.clipboard_note.is_none() {
+            return;
+        }
+        let pasted = ctx.input(|i| {
+            i.events.iter().find_map(|e| match e {
+                egui::Event::Paste(t) => Some(t.clone()),
+                _ => None,
+            })
+        });
+        if let Some(text) = pasted {
+            self.clipboard_note = None;
+            match ron::from_str::<Entity>(&text) {
+                Ok(e) => {
+                    let parent = self.doc.selected.as_ref().and_then(|p| {
+                        let mut p = p.clone();
+                        p.pop();
+                        (!p.is_empty()).then_some(p)
+                    });
+                    self.cmds.push(Cmd::Create { parent, entity: e });
+                }
+                Err(e) => self.log.toast(
+                    Level::Warn,
+                    format!("clipboard is not an entity (RON): {e}"),
+                ),
+            }
+        }
+    }
+
+    // ------------------------------------------------------------- chrome --
+
+    fn menu_bar(&mut self, ui: &mut egui::Ui) {
+        egui::MenuBar::new().ui(ui, |ui| {
+            ui.label(
+                RichText::new(format!("{} Trino", icon::CUBE))
+                    .family(theme::bold())
+                    .color(c::ACCENT_TEXT),
+            );
+            ui.add_space(6.0);
+            ui.menu_button("File", |ui| {
+                if ui
+                    .button(format!("{}  New scene…", icon::FILE_PLUS))
+                    .clicked()
+                {
+                    self.cmds.push(Cmd::Open(Dialog::new_scene()));
+                }
+                ui.menu_button(format!("{}  Open scene", icon::FOLDER_OPEN), |ui| {
+                    let mut scenes: Vec<PathBuf> = std::fs::read_dir("scenes")
+                        .map(|d| {
+                            d.flatten()
+                                .map(|e| e.path())
+                                .filter(|p| p.to_string_lossy().ends_with(".scene.ron"))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    scenes.sort();
+                    for s in scenes {
+                        if ui.button(s.display().to_string()).clicked() {
+                            self.cmds.push(Cmd::OpenScene(s));
+                        }
+                    }
+                });
+                ui.separator();
+                if ui
+                    .add(
+                        egui::Button::new(format!("{}  Save", icon::FLOPPY_DISK))
+                            .shortcut_text("Ctrl+S"),
+                    )
+                    .clicked()
+                {
+                    self.cmds.push(Cmd::Save);
+                }
+                if ui
+                    .button(format!("{}  Export scene to game code…", icon::CODE))
+                    .clicked()
+                {
+                    self.cmds
+                        .push(Cmd::Open(Dialog::export(&self.doc.scene.name)));
+                }
+            });
+            ui.menu_button("Edit", |ui| {
+                if ui
+                    .add_enabled(
+                        self.doc.can_undo(),
+                        egui::Button::new(format!("{}  Undo", icon::ARROW_U_UP_LEFT))
+                            .shortcut_text("Ctrl+Z"),
+                    )
+                    .clicked()
+                {
+                    self.cmds.push(Cmd::Undo);
+                }
+                if ui
+                    .add_enabled(
+                        self.doc.can_redo(),
+                        egui::Button::new(format!("{}  Redo", icon::ARROW_U_UP_RIGHT))
+                            .shortcut_text("Ctrl+Y"),
+                    )
+                    .clicked()
+                {
+                    self.cmds.push(Cmd::Redo);
+                }
+                ui.separator();
+                let sel = self.doc.selected.clone();
+                if ui
+                    .add_enabled(
+                        sel.is_some(),
+                        egui::Button::new(format!("{}  Duplicate", icon::COPY))
+                            .shortcut_text("Ctrl+D"),
+                    )
+                    .clicked()
+                {
+                    self.cmds.push(Cmd::Duplicate(sel.clone().unwrap()));
+                }
+                if ui
+                    .add_enabled(
+                        sel.is_some(),
+                        egui::Button::new(format!("{}  Copy as RON", icon::CODE))
+                            .shortcut_text("Ctrl+C"),
+                    )
+                    .clicked()
+                {
+                    self.cmds.push(Cmd::Copy(sel.clone().unwrap()));
+                }
+                if ui
+                    .add(
+                        egui::Button::new(format!("{}  Paste entity", icon::DOWNLOAD_SIMPLE))
+                            .shortcut_text("Ctrl+V"),
+                    )
+                    .clicked()
+                {
+                    self.cmds.push(Cmd::Paste);
+                }
+                if ui
+                    .add_enabled(
+                        sel.is_some(),
+                        egui::Button::new(format!("{}  Delete", icon::TRASH)).shortcut_text("Del"),
+                    )
+                    .clicked()
+                {
+                    self.cmds.push(Cmd::Delete(sel.unwrap()));
+                }
+            });
+            ui.menu_button("Create", |ui| {
+                crate::panels::hierarchy::create_menu(self, ui, None);
+            });
+            ui.menu_button("View", |ui| {
+                ui.checkbox(&mut self.scene_view.show_grid, "Grid");
+                ui.checkbox(&mut self.animate, "Preview animations");
+                ui.checkbox(&mut self.scene_view.snap, "Snap");
+                ui.separator();
+                if ui
+                    .button(format!("{}  Keyboard shortcuts", icon::INFO))
+                    .clicked()
+                {
+                    self.show_shortcuts = true;
+                }
+            });
+            ui.menu_button("Help", |ui| {
+                if ui
+                    .button(format!("{}  Keyboard shortcuts", icon::INFO))
+                    .clicked()
+                {
+                    self.show_shortcuts = true;
+                }
+                ui.label(
+                    RichText::new("AGENTS.md documents every file format.").color(c::TEXT_WEAK),
+                );
+            });
+        });
+    }
+
+    fn toolbar(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            // Play / Stop.
+            let playing = self.play.is_some();
+            let t = ui
+                .ctx()
+                .animate_bool_with_time(egui::Id::new("play-anim"), playing, 0.25);
+            let (glyph, label, color) = if playing {
+                (icon::STOP, "Stop", c::ERROR)
+            } else {
+                (icon::PLAY, "Play", c::PLAY)
+            };
+            let fill = theme::mix(c::BG2, color.gamma_multiply(0.25), t.max(0.35));
+            if ui
+                .add(
+                    egui::Button::new(
+                        RichText::new(format!("{glyph}  {label}"))
+                            .color(color)
+                            .family(theme::bold()),
+                    )
+                    .fill(fill)
+                    .stroke(Stroke::new(1.0, color.gamma_multiply(0.6)))
+                    .min_size(Vec2::new(84.0, 28.0)),
+                )
+                .on_hover_text(if self.doc.is_prefab() {
+                    "Run the game in a separate process (Ctrl+P)"
+                } else {
+                    "Play this scene in a separate process — it live-reloads as you edit (Ctrl+P)"
+                })
+                .clicked()
+            {
+                self.toggle_play(!self.doc.is_prefab());
+            }
+            if !playing {
+                ui.menu_button(RichText::new(icon::CARET_DOWN).color(c::TEXT_WEAK), |ui| {
+                    if ui
+                        .button(format!("{}  Play this scene", icon::CUBE_TRANSPARENT))
+                        .clicked()
+                    {
+                        self.toggle_play(true);
+                    }
+                    if ui
+                        .button(format!(
+                            "{}  Play the game (castle64)",
+                            icon::GAME_CONTROLLER
+                        ))
+                        .clicked()
+                    {
+                        self.toggle_play(false);
+                    }
+                });
+            }
+            if playing {
+                let pulse = (self.time() * 3.0).sin() * 0.5 + 0.5;
+                theme::pill(
+                    ui,
+                    &format!("{} running", icon::LIGHTNING),
+                    c::PLAY,
+                    c::PLAY.gamma_multiply(0.12 + 0.1 * pulse),
+                );
+                ui.ctx().request_repaint();
+            }
+            ui.separator();
+            if theme::icon_button(ui, icon::ARROW_U_UP_LEFT, "Undo (Ctrl+Z)").clicked() {
+                self.cmds.push(Cmd::Undo);
+            }
+            if theme::icon_button(ui, icon::ARROW_U_UP_RIGHT, "Redo (Ctrl+Y)").clicked() {
+                self.cmds.push(Cmd::Redo);
+            }
+            if theme::icon_button(ui, icon::FLOPPY_DISK, "Save (Ctrl+S)").clicked() {
+                self.cmds.push(Cmd::Save);
+            }
+            ui.separator();
+            // Breadcrumb: Scene › prefab.
+            match &self.doc.kind {
+                DocKind::Scene => {
+                    ui.label(RichText::new(icon::CUBE_TRANSPARENT).color(c::TEXT_WEAK));
+                    ui.label(RichText::new(&self.doc.scene.name).family(theme::bold()));
+                }
+                DocKind::Prefab { logical } => {
+                    let parked = self
+                        .parked
+                        .as_ref()
+                        .map(|d| d.scene.name.clone())
+                        .unwrap_or_default();
+                    if ui
+                        .add(
+                            egui::Button::new(format!("{}  {parked}", icon::CARET_LEFT))
+                                .frame_when_inactive(false),
+                        )
+                        .on_hover_text("Back to the scene (saves the prefab)")
+                        .clicked()
+                    {
+                        self.cmds.push(Cmd::ExitPrefab);
+                    }
+                    ui.label(RichText::new(icon::CARET_RIGHT).color(c::TEXT_FAINT));
+                    theme::pill(
+                        ui,
+                        &format!("{} {logical}", icon::PACKAGE),
+                        c::PREFAB,
+                        c::PREFAB.gamma_multiply(0.15),
+                    );
+                }
+            }
+            let dirty = self.doc.dirty();
+            let t = ui
+                .ctx()
+                .animate_bool_with_time(egui::Id::new("dirty-dot"), dirty, 0.3);
+            if t > 0.01 {
+                ui.label(RichText::new("●").color(c::WARN.gamma_multiply(t)))
+                    .on_hover_text("Unsaved changes");
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(
+                    RichText::new(self.doc.path.display().to_string())
+                        .color(c::TEXT_FAINT)
+                        .size(12.0),
+                );
+            });
+        });
+    }
+
+    fn status_bar(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 14.0;
+            if let Some(last) = self.log.last() {
+                ui.label(RichText::new(last.level.glyph()).color(last.level.color()));
+                let text: String = last
+                    .text
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .chars()
+                    .take(120)
+                    .collect();
+                ui.label(RichText::new(text).color(c::TEXT_WEAK).size(12.0));
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let (w, e) = self.log.counts();
+                ui.label(
+                    RichText::new(format!("{:.0} fps", self.fps))
+                        .monospace()
+                        .color(c::TEXT_FAINT),
+                );
+                ui.label(
+                    RichText::new(format!("{} {}", icon::TRIANGLE, self.scene_view.stats.tris))
+                        .color(c::TEXT_FAINT),
+                )
+                .on_hover_text(format!(
+                    "Triangles in the scene view (N64 budget: {}/frame, enforced in strict mode)",
+                    trino_core::Caps::N64.max_tris_per_frame
+                ));
+                let mut n = 0;
+                self.doc.scene.walk(|_, _| n += 1);
+                ui.label(
+                    RichText::new(format!("{} {n}", icon::TREE_STRUCTURE)).color(c::TEXT_FAINT),
+                );
+                if e > 0 {
+                    ui.label(RichText::new(format!("{} {e}", icon::X_CIRCLE)).color(c::ERROR));
+                }
+                if w > 0 {
+                    ui.label(RichText::new(format!("{} {w}", icon::WARNING)).color(c::WARN));
+                }
+                if !self.resolved.warnings.is_empty() {
+                    ui.label(
+                        RichText::new(format!(
+                            "{} {} scene issue(s)",
+                            icon::WARNING,
+                            self.resolved.warnings.len()
+                        ))
+                        .color(c::WARN),
+                    )
+                    .on_hover_text(self.resolved.warnings.join("\n"));
+                }
+            });
+        });
+    }
+
+    /// Start/stop play mode. `scene`: play the open scene (`TRINO_SCENE`,
+    /// live-reloading) instead of the game crate linked into the PC app.
+    fn toggle_play(&mut self, scene: bool) {
+        if let Some(mut child) = self.play.take() {
+            let _ = child.kill();
+            self.log.info("play stopped");
+            return;
+        }
+        if self.doc.dirty()
+            && let Err(e) = self.save_doc()
+        {
+            self.log.error(e);
+        }
+        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+        let mut cmd = Command::new(cargo);
+        cmd.args(["run", "-p", "trino-app-pc"])
+            .env("TRINO_SIM", self.game_view.profile_key());
+        if scene {
+            cmd.env("TRINO_SCENE", &self.doc.path);
+        }
+        match cmd.spawn() {
+            Ok(child) => {
+                self.play = Some(child);
+                self.log.toast(
+                    Level::Ok,
+                    format!("{} game started (separate process)", icon::PLAY),
+                );
+            }
+            Err(e) => self.log.toast(Level::Error, format!("play failed: {e}")),
+        }
+    }
+
+    fn shortcuts(&mut self, ctx: &egui::Context) {
+        if ctx.egui_wants_keyboard_input() {
+            return;
+        }
+        use egui::{Key, KeyboardShortcut, Modifiers};
+        let sc = |m: Modifiers, k: Key| {
+            ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(m, k)))
+        };
+        if sc(Modifiers::COMMAND, Key::S) {
+            self.cmds.push(Cmd::Save);
+        }
+        if sc(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z) || sc(Modifiers::COMMAND, Key::Y) {
+            self.cmds.push(Cmd::Redo);
+        }
+        if sc(Modifiers::COMMAND, Key::Z) {
+            self.cmds.push(Cmd::Undo);
+        }
+        if sc(Modifiers::COMMAND, Key::P) {
+            let scene = !self.doc.is_prefab();
+            self.toggle_play(scene);
+        }
+        if sc(Modifiers::COMMAND, Key::V) {
+            self.cmds.push(Cmd::Paste);
+        }
+        if let Some(sel) = self.doc.selected.clone() {
+            if sc(Modifiers::COMMAND, Key::D) {
+                self.cmds.push(Cmd::Duplicate(sel.clone()));
+            }
+            if sc(Modifiers::COMMAND, Key::C) {
+                self.cmds.push(Cmd::Copy(sel.clone()));
+            }
+            if sc(Modifiers::NONE, Key::Delete) {
+                self.cmds.push(Cmd::Delete(sel.clone()));
+            }
+            if sc(Modifiers::NONE, Key::F2) {
+                let name = self
+                    .doc
+                    .scene
+                    .get(&sel)
+                    .map(|e| e.name.clone())
+                    .unwrap_or_default();
+                self.renaming = Some((sel.clone(), name));
+            }
+            if sc(Modifiers::NONE, Key::Escape) {
+                self.cmds.push(Cmd::Select(None));
+            }
+        }
+        if sc(Modifiers::SHIFT, Key::A) {
+            self.cmds
+                .push(Cmd::Open(Dialog::fake_object(&self.project)));
+        }
+        if sc(Modifiers::NONE, Key::F1) {
+            self.show_shortcuts = !self.show_shortcuts;
+        }
+    }
+
+    fn shortcuts_window(&mut self, ctx: &egui::Context) {
+        let mut open = self.show_shortcuts;
+        egui::Window::new(format!("{}  Keyboard shortcuts", icon::INFO))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+            .show(ctx, |ui| {
+                egui::Grid::new("shortcuts")
+                    .num_columns(2)
+                    .spacing([24.0, 6.0])
+                    .show(ui, |ui| {
+                        for (k, what) in [
+                            ("Ctrl+S", "Save scene / prefab"),
+                            ("Ctrl+Z / Ctrl+Y", "Undo / redo"),
+                            ("Ctrl+D", "Duplicate"),
+                            (
+                                "Ctrl+C / Ctrl+V",
+                                "Copy / paste entity as RON text (works with AI chats)",
+                            ),
+                            ("Del", "Delete"),
+                            ("F2", "Rename"),
+                            ("Shift+A", "Create a fake object"),
+                            ("Ctrl+P", "Play / stop"),
+                            ("W / E / R", "Move / rotate / scale gizmo (scene view)"),
+                            ("Ctrl (while dragging)", "Toggle snapping"),
+                            ("F", "Frame selection"),
+                            ("G", "Toggle grid"),
+                            ("1 / 3 / 7 (+Ctrl)", "Front / right / top view (opposite)"),
+                            ("MMB / RMB drag", "Orbit (Alt+LMB too)"),
+                            ("Shift + MMB/RMB drag", "Pan"),
+                            ("Wheel", "Zoom"),
+                            ("F1", "This window"),
+                        ] {
+                            ui.label(RichText::new(k).monospace().color(c::ACCENT_TEXT));
+                            ui.label(what);
+                            ui.end_row();
+                        }
+                    });
+            });
+        self.show_shortcuts = open;
+    }
+
+    fn update_thumbnails(&mut self, ctx: &egui::Context) {
+        // A few per frame keeps startup smooth.
+        let mut budget = 3;
+        let missing: Vec<String> = self
+            .project
+            .models
+            .values()
+            .filter(|m| m.thumb.is_none())
+            .map(|m| m.logical.clone())
+            .take(budget)
+            .collect();
+        for l in missing {
+            let img = self.thumbs.model(&self.project.models[&l]);
+            let tex = ctx.load_texture(format!("thumb:{l}"), img, egui::TextureOptions::LINEAR);
+            self.project.models.get_mut(&l).unwrap().thumb = Some(tex);
+            budget -= 1;
+        }
+        for s in self
+            .project
+            .sprites
+            .values_mut()
+            .filter(|s| s.thumb.is_none())
+        {
+            let img = egui::ColorImage::from_rgba_unmultiplied(
+                [s.width as usize, s.height as usize],
+                &s.rgba,
+            );
+            s.thumb = Some(ctx.load_texture(
+                format!("sprite:{}", s.logical),
+                img,
+                egui::TextureOptions::NEAREST,
+            ));
+        }
+        let stale: Vec<(String, MaterialDef)> = self
+            .lib
+            .materials
+            .iter()
+            .filter(|(l, d)| {
+                self.material_thumbs
+                    .get(*l)
+                    .is_none_or(|(old, _)| old != *d)
+            })
+            .map(|(l, d)| (l.clone(), d.clone()))
+            .take(budget.max(1))
+            .collect();
+        for (l, d) in stale {
+            let img = self.thumbs.material(&d.params(None));
+            let tex = ctx.load_texture(format!("mat:{l}"), img, egui::TextureOptions::LINEAR);
+            self.material_thumbs.insert(l, (d, tex));
+        }
+        let stamp = (self.thumb_rev, self.project.generation);
+        let stale: Vec<String> = self
+            .lib
+            .prefabs
+            .keys()
+            .filter(|l| self.prefab_thumbs.get(*l).is_none_or(|(s, _)| *s != stamp))
+            .take(2)
+            .cloned()
+            .collect();
+        for l in stale {
+            let mut scene = Scene::new("thumb");
+            let mut e = Entity::new("p");
+            e.prefab = Some(PrefabInstance::new(l.clone()));
+            scene.entities.push(e);
+            let items = resolve(&scene, &self.lib, 0.0).items;
+            let img = self.thumbs.items(&items, &self.project);
+            let tex = ctx.load_texture(format!("prefab:{l}"), img, egui::TextureOptions::LINEAR);
+            self.prefab_thumbs.insert(l, (stamp, tex));
+        }
+        if self.project.models.values().any(|m| m.thumb.is_none())
+            || self.prefab_thumbs.len() < self.lib.prefabs.len()
+        {
+            ctx.request_repaint();
+        }
+    }
+
+    fn handle_screenshot(&mut self, ctx: &egui::Context) {
+        let Some((frame, path)) = self.screenshot.clone() else {
+            return;
+        };
+        if self.frames >= frame && !self.screenshot_requested {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+            self.screenshot_requested = true;
+        }
+        let shot = ctx.input(|i| {
+            i.events.iter().find_map(|e| match e {
+                egui::Event::Screenshot { image, .. } => Some(image.clone()),
+                _ => None,
+            })
+        });
+        if let Some(image) = shot {
+            let [w, h] = image.size;
+            let file = std::fs::File::create(&path).expect("screenshot file");
+            let mut enc = png::Encoder::new(std::io::BufWriter::new(file), w as u32, h as u32);
+            enc.set_color(png::ColorType::Rgba);
+            enc.set_depth(png::BitDepth::Eight);
+            let mut writer = enc.write_header().expect("png header");
+            writer.write_image_data(image.as_raw()).expect("png data");
+            eprintln!("screenshot saved to {}", path.display());
+            self.screenshot = None;
+            if self.smoke_frames.is_none() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        }
+        ctx.request_repaint();
+    }
+}
+
+/// `abs` relative to the working directory. Watchers may report
+/// canonicalized paths (`/private/var/...` on macOS, `\\?\C:\...` on
+/// Windows), so fall back to comparing canonical forms — for deleted files,
+/// canonicalize the parent and re-append the name.
+fn relative_to(abs: &Path, cwd: &Path, cwd_canon: &Path) -> PathBuf {
+    if let Ok(r) = abs.strip_prefix(cwd) {
+        return r.to_path_buf();
+    }
+    let canon = std::fs::canonicalize(abs).ok().or_else(|| {
+        let parent = std::fs::canonicalize(abs.parent()?).ok()?;
+        Some(parent.join(abs.file_name()?))
+    });
+    canon
+        .and_then(|c| c.strip_prefix(cwd_canon).ok().map(Path::to_path_buf))
+        .unwrap_or_else(|| abs.to_path_buf())
+}
+
+fn snap_half(v: f32) -> f32 {
+    (v * 2.0).round() / 2.0
+}
+
+impl eframe::App for App {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
+        let dt = self.last_frame.elapsed().as_secs_f32();
+        self.last_frame = Instant::now();
+        if dt > 0.0 {
+            self.fps = self.fps * 0.9 + (1.0 / dt) * 0.1;
+        }
+
+        self.sync_files();
+        self.handle_paste(&ctx);
+        if let Some(child) = &mut self.play
+            && let Ok(Some(status)) = child.try_wait()
+        {
+            self.log.info(format!("game exited: {status}"));
+            self.play = None;
+        }
+        self.update_thumbnails(&ctx);
+
+        // Resolve once per frame; bump the revision when content changed.
+        self.resolved = resolve(&self.doc.scene, &self.lib, self.time());
+        if self.rev_scene.as_ref() != Some(&self.doc.scene) || self.lib_rev != self.seen_lib_rev {
+            self.rev += 1;
+            self.rev_scene = Some(self.doc.scene.clone());
+            self.seen_lib_rev = self.lib_rev;
+        }
+        let has_anim = self.resolved.items.iter().any(|i| i.params.anim.is_some());
+        if self.animate && has_anim {
+            self.rev += 1; // animated content re-renders every frame
+            ctx.request_repaint();
+        }
+
+        egui::Panel::top("menu")
+            .frame(
+                egui::Frame::new()
+                    .fill(c::BG0)
+                    .inner_margin(Margin::symmetric(8, 4)),
+            )
+            .show(ui, |ui| self.menu_bar(ui));
+        egui::Panel::top("toolbar")
+            .frame(
+                egui::Frame::new()
+                    .fill(c::BG0)
+                    .inner_margin(Margin::symmetric(10, 4)),
+            )
+            .show(ui, |ui| self.toolbar(ui));
+        egui::Panel::bottom("status")
+            .frame(
+                egui::Frame::new()
+                    .fill(c::BG0)
+                    .inner_margin(Margin::symmetric(10, 3))
+                    .stroke(Stroke::new(1.0, c::BG1)),
+            )
+            .show(ui, |ui| self.status_bar(ui));
+
+        let mut dock = self.dock.take().unwrap_or_else(default_dock);
+        let style = theme::dock_style(ui.style());
+        egui::CentralPanel::default()
+            .frame(egui::Frame::new().fill(c::BG0))
+            .show(ui, |ui| {
+                egui_dock::DockArea::new(&mut dock)
+                    .style(style)
+                    .show_close_buttons(false)
+                    .show_leaf_close_all_buttons(false)
+                    .show_leaf_collapse_buttons(false)
+                    .show_secondary_button_hint(false)
+                    .show_inside(ui, &mut TabView { app: self });
+            });
+        self.dock = Some(dock);
+
+        // Dialogs and floating windows.
+        if let Some(mut d) = self.dialog.take() {
+            match d.show(&ctx, self) {
+                crate::dialogs::Outcome::Keep => self.dialog = Some(d),
+                crate::dialogs::Outcome::Close => {}
+                crate::dialogs::Outcome::Run(cmd) => self.cmds.push(*cmd),
+            }
+        }
+        self.shortcuts_window(&ctx);
+        self.shortcuts(&ctx);
+        self.run_cmds(&ctx);
+
+        // Undo + pending file writes: once the user is done interacting.
+        let settled = !ctx.input(|i| i.pointer.any_down()) && !ctx.egui_wants_keyboard_input();
+        self.doc.commit(settled);
+        if settled {
+            self.flush_pending();
+        }
+
+        if self.log.show_toasts(&ctx) {
+            ctx.request_repaint();
+        }
+        self.handle_screenshot(&ctx);
+
+        self.frames += 1;
+        if let Some(max) = self.smoke_frames {
+            ctx.request_repaint();
+            if self.frames >= max {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        }
+    }
+
+    fn on_exit(&mut self) {
+        self.flush_pending();
+        if let Some(mut child) = self.play.take() {
+            let _ = child.kill();
+        }
+    }
+}
+
+fn default_dock() -> egui_dock::DockState<Tab> {
+    // Dev hook (screenshots): TRINO_EDITOR_TAB=scene|game|level picks the
+    // focused center tab.
+    let tabs = match std::env::var("TRINO_EDITOR_TAB").as_deref() {
+        Ok("level") => vec![Tab::Level, Tab::Scene, Tab::Game],
+        Ok("game") => vec![Tab::Game, Tab::Scene, Tab::Level],
+        _ => vec![Tab::Scene, Tab::Game, Tab::Level],
+    };
+    let mut dock = egui_dock::DockState::new(tabs);
+    let surface = dock.main_surface_mut();
+    let [center, _left] =
+        surface.split_left(egui_dock::NodeIndex::root(), 0.17, vec![Tab::Hierarchy]);
+    let [center, _right] = surface.split_right(center, 0.75, vec![Tab::Inspector]);
+    let [_, _bottom] = surface.split_below(center, 0.70, vec![Tab::Assets, Tab::Console]);
+    dock
+}
+
+struct TabView<'a> {
+    app: &'a mut App,
+}
+
+impl egui_dock::TabViewer for TabView<'_> {
+    type Tab = Tab;
+
+    fn title(&mut self, tab: &mut Tab) -> egui::WidgetText {
+        let mut t = tab.title();
+        if *tab == Tab::Console {
+            let (w, e) = self.app.log.counts();
+            if e > 0 {
+                t = format!("{t}  {} {e}", icon::X_CIRCLE);
+            } else if w > 0 {
+                t = format!("{t}  {} {w}", icon::WARNING);
+            }
+        }
+        t.into()
+    }
+
+    fn closeable(&mut self, _tab: &mut Tab) -> bool {
+        false
+    }
+
+    fn scroll_bars(&self, tab: &Tab) -> [bool; 2] {
+        match tab {
+            Tab::Scene | Tab::Game | Tab::Console | Tab::Assets | Tab::Level => [false, false],
+            _ => [false, true],
+        }
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Tab) {
+        let app = &mut *self.app;
+        match tab {
+            Tab::Scene | Tab::Game => {
+                let kind = if *tab == Tab::Scene {
+                    ViewKind::Scene
+                } else {
+                    ViewKind::Game
+                };
+                let input = ViewInput {
+                    scene: &app.doc.scene,
+                    resolved: &app.resolved,
+                    project: &app.project,
+                    selected: app.doc.selected.as_deref(),
+                    rev: app.rev,
+                    time: app.anim_start.elapsed().as_secs_f32(),
+                    animate: app.animate,
+                };
+                let view = if kind == ViewKind::Scene {
+                    &mut app.scene_view
+                } else {
+                    &mut app.game_view
+                };
+                let actions = view.show(ui, &input);
+                for a in actions {
+                    match a {
+                        ViewAction::Select(p) => app.cmds.push(Cmd::Select(p)),
+                        ViewAction::SetTransform(path, t) => {
+                            if let Some(e) = app.doc.scene.get_mut(&path) {
+                                e.transform = t;
+                            }
+                        }
+                        ViewAction::Drop(payload, at) => {
+                            app.cmds.push(Cmd::AddAsset(payload, Some(at)))
+                        }
+                        ViewAction::ToggleAnimate => app.animate = !app.animate,
+                    }
+                }
+            }
+            Tab::Level => {
+                let lines = app.level.ui(ui);
+                for l in lines {
+                    app.log.info(l);
+                }
+            }
+            Tab::Hierarchy => crate::panels::hierarchy::ui(app, ui),
+            Tab::Inspector => crate::panels::inspector::ui(app, ui),
+            Tab::Assets => crate::panels::assets::ui(app, ui),
+            Tab::Console => app.log.ui(ui),
+        }
+    }
+}
+
+/// Card frame used by panels.
+pub fn card() -> egui::Frame {
+    egui::Frame::new()
+        .fill(c::BG2.gamma_multiply(0.5))
+        .stroke(Stroke::new(1.0, c::BORDER))
+        .corner_radius(CornerRadius::same(8))
+        .inner_margin(Margin::same(10))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn watcher_paths_resolve_relative_even_when_canonicalized() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::create_dir_all(root.join("prefabs")).unwrap();
+        std::fs::write(root.join("prefabs/a.prefab.ron"), "x").unwrap();
+        let canon = std::fs::canonicalize(&root).unwrap();
+        // Plain absolute path.
+        assert_eq!(
+            relative_to(&root.join("prefabs/a.prefab.ron"), &root, &canon),
+            PathBuf::from("prefabs/a.prefab.ron")
+        );
+        // Canonical form, and a deleted file (only its parent exists).
+        assert_eq!(
+            relative_to(&canon.join("prefabs/a.prefab.ron"), &root, &canon),
+            PathBuf::from("prefabs/a.prefab.ron")
+        );
+        assert_eq!(
+            relative_to(&canon.join("prefabs/gone.prefab.ron"), &root, &canon),
+            PathBuf::from("prefabs/gone.prefab.ron")
+        );
+    }
+}

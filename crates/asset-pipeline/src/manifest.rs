@@ -74,8 +74,26 @@ pub struct Manifest {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModelDecl {
-    /// Source `.gltf`/`.glb`, relative to `assets/shared/` (or an override).
+    /// Source `.gltf`/`.glb` (or a `.prim.ron` placeholder), relative to
+    /// `assets/shared/` (or an override).
     pub file: String,
+    /// Animation clip sampling rate (frames per second). Default 15.
+    #[serde(default)]
+    pub anim_fps: Option<f32>,
+    /// Clip names that play once and hold the last frame (default: loop).
+    #[serde(default)]
+    pub once: Vec<String>,
+}
+
+impl ModelDecl {
+    pub fn options(&self) -> crate::model::ModelOptions {
+        let mut opts = crate::model::ModelOptions::default();
+        if let Some(fps) = self.anim_fps {
+            opts.anim_fps = fps;
+        }
+        opts.once = self.once.clone();
+        opts
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -140,6 +158,80 @@ impl SpriteDecl {
                         platform.key()
                     )
                 }),
+        }
+    }
+}
+
+/// Text-level manifest edits that keep the file's comments and layout —
+/// what the editor (and scripts) use to add or retarget models.
+pub mod edit {
+    /// Append `[models.<name>]` with `file`. Errors if the name exists.
+    pub fn add_model(text: &str, name: &str, file: &str) -> Result<String, String> {
+        if has_table(text, "models", name) {
+            return Err(format!("model `{name}` already exists in the manifest"));
+        }
+        let mut out = text.trim_end().to_string();
+        out.push_str(&format!("\n\n[models.{name}]\nfile = \"{file}\"\n"));
+        Ok(out)
+    }
+
+    /// Point `[models.<name>]` at a new `file` (placeholder → real art).
+    pub fn set_model_file(text: &str, name: &str, file: &str) -> Result<String, String> {
+        let header = format!("[models.{name}]");
+        let mut lines: Vec<String> = text.lines().map(String::from).collect();
+        let start = lines
+            .iter()
+            .position(|l| l.trim() == header)
+            .ok_or_else(|| format!("model `{name}` not found in the manifest"))?;
+        for line in lines.iter_mut().skip(start + 1) {
+            let t = line.trim_start();
+            if t.starts_with('[') {
+                break;
+            }
+            if t.starts_with("file") && t[4..].trim_start().starts_with('=') {
+                *line = format!("file = \"{file}\"");
+                let mut out = lines.join("\n");
+                out.push('\n');
+                return Ok(out);
+            }
+        }
+        Err(format!("model `{name}` has no `file` line"))
+    }
+
+    pub fn has_table(text: &str, kind: &str, name: &str) -> bool {
+        let header = format!("[{kind}.{name}]");
+        text.lines().any(|l| l.trim() == header)
+    }
+
+    /// Valid logical name: lowercase ASCII letters, digits, `_` and `-`.
+    pub fn valid_name(name: &str) -> bool {
+        !name.is_empty()
+            && name
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn add_and_retarget_keep_comments() {
+            let text =
+                "# header comment\nversion = 1\n\n[models.cube]\nfile = \"models/cube.glb\"\n";
+            let added = add_model(text, "crate", "models/proxies/crate.prim.ron").unwrap();
+            assert!(added.starts_with("# header comment"));
+            assert!(has_table(&added, "models", "crate"));
+            assert!(add_model(&added, "crate", "x").is_err());
+            let moved = set_model_file(&added, "crate", "models/crate.glb").unwrap();
+            assert!(moved.contains("[models.crate]\nfile = \"models/crate.glb\""));
+            assert!(
+                moved.contains("file = \"models/cube.glb\""),
+                "other tables untouched"
+            );
+            let parsed: super::super::Manifest = toml::from_str(&moved).unwrap();
+            assert_eq!(parsed.models["crate"].file, "models/crate.glb");
+            assert!(valid_name("rock-02") && !valid_name("Rock") && !valid_name(""));
         }
     }
 }

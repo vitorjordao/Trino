@@ -1,6 +1,11 @@
 # ADR 0001 — Defer the viewport transform gizmo
 
-**Status:** accepted (2026-07-03)
+**Status:** superseded (2026-10-12) — the editor now ships its own move/rotate/scale
+gizmo (`crates/editor/src/gizmo.rs`, ~300 lines on top of the projection math the
+Scene view already needed), so no external crate gates the egui version. Original
+record kept below.
+
+**Original status:** accepted (2026-07-03)
 
 ## Context
 

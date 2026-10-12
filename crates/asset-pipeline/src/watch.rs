@@ -9,7 +9,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use notify_debouncer_full::notify::RecursiveMode;
+use notify_debouncer_full::notify::{EventKind, RecursiveMode};
 use notify_debouncer_full::{DebounceEventResult, new_debouncer};
 
 use crate::bake::bake_all;
@@ -25,12 +25,25 @@ pub fn watch(
     on_change: impl Fn(Vec<u32>) + Send + 'static,
 ) -> Result<impl Sized, String> {
     let watched_root = assets_root.clone();
+    // Event paths arrive absolute: compare against the absolute directory.
+    let materials_dir = std::fs::canonicalize(&assets_root)
+        .unwrap_or_else(|_| assets_root.clone())
+        .join("materials");
 
     let mut debouncer = new_debouncer(
         Duration::from_millis(150),
         None,
         move |result: DebounceEventResult| match result {
-            Ok(events) if !events.is_empty() => {
+            // Only real changes rebake. Reading a master emits inotify
+            // *access* events — reacting to those made every bake trigger the
+            // next one (a full rebake every ~150 ms, forever, while idle).
+            // `assets/materials/` holds scene-layer RON, not bake inputs.
+            Ok(events)
+                if events.iter().any(|e| {
+                    !matches!(e.event.kind, EventKind::Access(_))
+                        && e.event.paths.iter().any(|p| !p.starts_with(&materials_dir))
+                }) =>
+            {
                 match bake_all(&assets_root, platform, &out_dir) {
                     Ok(report) => {
                         let changed = report.changed_ids();

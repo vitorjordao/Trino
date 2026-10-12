@@ -1,0 +1,24 @@
+[package]
+name = "showcase"
+description = "Editor showcase: a scene authored in the Trino editor, exported to no_std Rust data, running on PC, N64 and 3DS."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["rlib", "dylib"]
+
+[features]
+default = []
+# Hot-reload exports (`trino_game_api::export_game!`). Off by default: apps/pc
+# links castle64 *and* showcase statically, and two games exporting the same
+# `#[no_mangle]` symbols cannot share one binary. Enable it when this crate is
+# the one `cargo xtask watch pc --game showcase` hot-swaps.
+hot-reload = []
+
+# Game crates may depend only on trino-core / trino-game-api
+# (enforced by xtask/tests/dep_graph.rs).
+[dependencies]
+trino-core = { workspace = true }
+trino-game-api = { workspace = true }

@@ -5,9 +5,10 @@ use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use core::ffi::c_void;
 
-use trino_core::render3d::{Camera3, DEFAULT_LIGHT, Mesh, ScreenTri};
+use trino_core::render3d::{Camera3, DEFAULT_LIGHT, Light, Mesh, ScreenTri};
 use trino_core::{
-    Caps, Color, Material, ModelId, ModelParams, Renderer, SpriteId, SpriteParams, Transform3, Vec2,
+    Caps, Color, Mat34, Material, ModelId, ModelParams, Renderer, SpriteId, SpriteParams,
+    Transform3, Vec2,
 };
 
 use crate::ffi;
@@ -33,6 +34,7 @@ pub struct N3dsRenderer {
     /// Depth for the next sprite draw (background before 3D, HUD after).
     sprite_depth: f32,
     camera: Camera3,
+    light: Light,
     caps: Caps,
 }
 
@@ -44,6 +46,7 @@ impl N3dsRenderer {
             pending_tris: Vec::new(),
             sprite_depth: SPRITE_DEPTH_BG,
             camera: Camera3::default(),
+            light: DEFAULT_LIGHT,
             caps: Caps::N3DS,
         }
     }
@@ -142,10 +145,26 @@ impl Renderer for N3dsRenderer {
         self.camera = *camera;
     }
 
+    fn set_light(&mut self, light: &Light) {
+        // Lighting is resolved into vertex colors at tessellation time, so
+        // a change needs no batch flush.
+        self.light = *light;
+    }
+
     fn draw_model(
         &mut self,
         model: ModelId,
         transform: &Transform3,
+        material: Material,
+        params: &ModelParams,
+    ) {
+        self.draw_model_matrix(model, &transform.matrix(), material, params);
+    }
+
+    fn draw_model_matrix(
+        &mut self,
+        model: ModelId,
+        matrix: &Mat34,
         _material: Material,
         params: &ModelParams,
     ) {
@@ -156,10 +175,10 @@ impl Renderer for N3dsRenderer {
         let pending = &mut self.pending_tris;
         trino_core::render3d::tessellate(
             &mesh,
-            &transform.matrix(),
+            matrix,
             &self.camera,
-            &DEFAULT_LIGHT,
-            params.tint,
+            &self.light,
+            params,
             Vec2::new(400.0, 240.0),
             &mut |tri| pending.push(tri),
         );

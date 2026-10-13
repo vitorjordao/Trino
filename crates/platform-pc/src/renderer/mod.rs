@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use trino_core::render3d::{
-    Camera3, DEFAULT_LIGHT, Light, Mesh, ScreenTri, TnlContext, TnlScratch,
+    Camera3, DEFAULT_LIGHT, Light, Mesh, MeshLayout, ScreenTri, TnlContext, TnlScratch,
 };
 use trino_core::{
     Caps, Color, FontId, FrameStats, Mat34, Material, ModelId, ModelParams, Renderer, SpriteId,
@@ -89,7 +89,8 @@ pub struct PcRenderer {
     clamp_sampler: wgpu::Sampler,
     /// 1x1 white: what untextured triangles "sample" (×1 = unchanged).
     white_bg: wgpu::BindGroup,
-    meshes: HashMap<u32, Vec<u8>>,
+    /// TMDL blobs with their validated layout (parsed once, at register).
+    meshes: HashMap<u32, (Vec<u8>, MeshLayout)>,
     /// Glyph tables (`TFNT`) by font handle; the atlas is the sprite with
     /// the same handle. `Arc` so `draw_text` can lay out while drawing.
     fonts: HashMap<u32, Arc<[u8]>>,
@@ -751,10 +752,11 @@ impl PcRenderer {
     /// Register a baked TMDL mesh under a stable handle. Re-uploading the
     /// same id replaces the content (live reload).
     pub fn upload_mesh(&mut self, id: ModelId, tmdl: Vec<u8>) {
-        if let Err(e) = Mesh::from_tmdl(&tmdl) {
-            panic!("mesh {id:?}: invalid TMDL blob: {e:?}");
-        }
-        self.meshes.insert(id.0, tmdl);
+        let layout = match Mesh::from_tmdl(&tmdl) {
+            Ok(m) => m.layout(&tmdl),
+            Err(e) => panic!("mesh {id:?}: invalid TMDL blob: {e:?}"),
+        };
+        self.meshes.insert(id.0, (tmdl, layout));
     }
 
     /// Register a baked font's glyph table (`TFNT`) under its handle; the
@@ -1445,10 +1447,10 @@ impl Renderer for PcRenderer {
         _material: Material,
         params: &ModelParams,
     ) {
-        let Some(tmdl) = self.meshes.get(&model.0) else {
+        let Some((tmdl, layout)) = self.meshes.get(&model.0) else {
             return; // unknown handle: skip, like sprites
         };
-        let mesh = Mesh::from_tmdl(tmdl).expect("validated on upload");
+        let mesh = Mesh::from_layout(tmdl, layout);
         self.frame_stats.models += 1;
         let texture = mesh
             .texture_for(params)

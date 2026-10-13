@@ -9,8 +9,8 @@ use core::ffi::c_void;
 
 use trino_core::perf::RenderProfile;
 use trino_core::render3d::{
-    Camera3, DEFAULT_LIGHT, Light, Mesh, ScreenTri, TnlContext, TnlScratch, painter_index,
-    painter_key,
+    Camera3, DEFAULT_LIGHT, Light, Mesh, MeshLayout, ScreenTri, TnlContext, TnlScratch,
+    painter_index, painter_key,
 };
 use trino_core::text::BitmapFont;
 use trino_core::{
@@ -30,7 +30,8 @@ struct SpriteEntry {
 
 pub struct N64Renderer {
     sprites: BTreeMap<u32, SpriteEntry>,
-    meshes: BTreeMap<u32, Vec<u8>>,
+    /// TMDL blobs with their validated layout (parsed once, at register).
+    meshes: BTreeMap<u32, (Vec<u8>, MeshLayout)>,
     /// Glyph tables by font handle (atlas = sprite with the same handle).
     fonts: BTreeMap<u32, Rc<[u8]>>,
     frame_stats: FrameStats,
@@ -209,11 +210,11 @@ impl N64Renderer {
     /// or a test building meshes in code). `false` = invalid blob, not
     /// registered.
     pub fn register_mesh(&mut self, id: u32, tmdl: Vec<u8>) -> bool {
-        let ok = Mesh::from_tmdl(&tmdl).is_ok();
-        if ok {
-            self.meshes.insert(id, tmdl);
-        }
-        ok
+        let Ok(layout) = Mesh::from_tmdl(&tmdl).map(|m| m.layout(&tmdl)) else {
+            return false;
+        };
+        self.meshes.insert(id, (tmdl, layout));
+        true
     }
 
     /// Register a font's glyph table (its atlas is the sprite `id`).
@@ -324,10 +325,10 @@ impl Renderer for N64Renderer {
         _material: Material,
         params: &ModelParams,
     ) {
-        let Some(tmdl) = self.meshes.get(&model.0) else {
+        let Some((tmdl, layout)) = self.meshes.get(&model.0) else {
             return;
         };
-        let mesh = Mesh::from_tmdl(tmdl).expect("validated on register");
+        let mesh = Mesh::from_layout(tmdl, layout);
         self.frame_stats.models += 1;
         let texture = mesh
             .texture_for(params)

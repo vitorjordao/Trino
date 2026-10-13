@@ -353,13 +353,20 @@ Edit this file as you go.
 - Phase 1:
   - [x] 1a per-frame setup — kept: culled draw 33 → 16 µs, frame neutral (±2%, layout)
   - [x] 1b scratch — kept: frame −12…−15% in all five scenes, visible setup 248 → 58 µs
-  - [ ] 1c parse once
+  - [x] 1c parse once — kept: `game` −13…−20% in all five scenes; T&L +10% from layout
+    (unchanged code), frame neutral
   - [ ] 1d fetch
   - [ ] 1e divisions
   - [ ] 1f submit
-  - [ ] 1g sort
+  - [x] 1g sort — skipped: sort ≤ 4 ms per scene, 2.4 µs per emitted triangle (Phase 0)
   - [ ] 1h transform fast path
 - [ ] N64_COST recalibrated, skill tables updated
+- [ ] Candidate after Phase 1: group the T&L hot code in the link (a `.text` section
+  ahead of the rest via a wrapped `n64.ld`). The hot set (`tessellate_with` with the
+  static path inlined, the vertex closure, the emit closure, `Vec::push`, `memcpy`)
+  is close to the 16 KB direct-mapped I-cache, and unchanged code moves ±10–20% per
+  stage between builds (1a: `Transform3::matrix` 12.5 → 36 µs; 1c: T&L +10%).
+  Decide after Phase 1.
 - [ ] 2a coins · [ ] 2b chunks · [ ] 2c player (decide)
 - [ ] 3a split policy · [ ] 3b reciprocals · [ ] 3c model-space light · [ ] 3d Caps cost budget
 - [ ] Phase 4 spike result + ADR (or a written "not needed")

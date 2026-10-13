@@ -8,8 +8,8 @@ use alloc::vec::Vec;
 use core::ffi::c_void;
 
 use trino_core::render3d::{
-    Camera3, DEFAULT_LIGHT, Light, Mesh, ScreenTri, TnlContext, TnlScratch, painter_index,
-    painter_key,
+    Camera3, DEFAULT_LIGHT, Light, Mesh, MeshLayout, ScreenTri, TnlContext, TnlScratch,
+    painter_index, painter_key,
 };
 use trino_core::text::BitmapFont;
 use trino_core::{
@@ -36,7 +36,8 @@ const TRI_DEPTH_RANGE: f32 = 0.35;
 
 pub struct N3dsRenderer {
     sprites: BTreeMap<u32, SpriteEntry>,
-    meshes: BTreeMap<u32, Vec<u8>>,
+    /// TMDL blobs with their validated layout (parsed once, at register).
+    meshes: BTreeMap<u32, (Vec<u8>, MeshLayout)>,
     /// Glyph tables by font handle (atlas = sprite with the same handle).
     fonts: BTreeMap<u32, Rc<[u8]>>,
     frame_stats: FrameStats,
@@ -169,8 +170,8 @@ impl N3dsRenderer {
 
     /// Register a TMDL mesh blob under a stable handle.
     pub(crate) fn register_mesh(&mut self, id: u32, tmdl: Vec<u8>) {
-        if Mesh::from_tmdl(&tmdl).is_ok() {
-            self.meshes.insert(id, tmdl);
+        if let Ok(layout) = Mesh::from_tmdl(&tmdl).map(|m| m.layout(&tmdl)) {
+            self.meshes.insert(id, (tmdl, layout));
         }
     }
 
@@ -297,10 +298,10 @@ impl Renderer for N3dsRenderer {
         _material: Material,
         params: &ModelParams,
     ) {
-        let Some(tmdl) = self.meshes.get(&model.0) else {
+        let Some((tmdl, layout)) = self.meshes.get(&model.0) else {
             return;
         };
-        let mesh = Mesh::from_tmdl(tmdl).expect("validated on register");
+        let mesh = Mesh::from_layout(tmdl, layout);
         self.frame_stats.models += 1;
         let texture = mesh
             .texture_for(params)

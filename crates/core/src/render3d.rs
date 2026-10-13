@@ -111,6 +111,58 @@ struct Skeleton<'a> {
     clip_count: usize,
 }
 
+/// Where each part of a validated TMDL blob lives (byte spans), so a
+/// backend can rebuild its [`Mesh`] on every draw without parsing or
+/// validating again ([`Mesh::layout`] at register, [`Mesh::from_layout`] per
+/// draw). Only valid for the blob it was taken from.
+#[derive(Clone, Copy, Debug)]
+pub struct MeshLayout {
+    positions: Span,
+    normals: Span,
+    colors: Span,
+    indices: Span,
+    vertex_count: usize,
+    index_count: usize,
+    bounds: Option<(Vec3, f32)>,
+    skeleton: Option<SkeletonLayout>,
+    uvs: Option<Span>,
+    texture: Option<SpriteId>,
+    blend: Option<Span>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct SkeletonLayout {
+    joint_of_vertex: Span,
+    joints: Span,
+    joint_count: usize,
+    clips: Span,
+    clip_count: usize,
+}
+
+/// A byte range of the blob.
+#[derive(Clone, Copy, Debug)]
+struct Span {
+    at: usize,
+    len: usize,
+}
+
+impl Span {
+    /// `part` must be a sub-slice of `blob` (or empty).
+    fn of(blob: &[u8], part: &[u8]) -> Span {
+        if part.is_empty() {
+            return Span { at: 0, len: 0 };
+        }
+        Span {
+            at: part.as_ptr() as usize - blob.as_ptr() as usize,
+            len: part.len(),
+        }
+    }
+
+    fn get(self, blob: &[u8]) -> &[u8] {
+        &blob[self.at..self.at + self.len]
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MeshError {
     BadMagic,
@@ -292,6 +344,56 @@ impl<'a> Mesh<'a> {
             at = body_at + len;
         }
         Ok(mesh)
+    }
+
+    /// This mesh's layout inside `blob`, the bytes it was parsed from.
+    pub fn layout(&self, blob: &[u8]) -> MeshLayout {
+        let span = |part: &[u8]| Span::of(blob, part);
+        MeshLayout {
+            positions: span(self.positions),
+            normals: span(self.normals),
+            colors: span(self.colors),
+            indices: span(self.indices),
+            vertex_count: self.vertex_count,
+            index_count: self.index_count,
+            bounds: self.bounds,
+            skeleton: self.skeleton.map(|k| SkeletonLayout {
+                joint_of_vertex: span(k.joint_of_vertex),
+                joints: span(k.joints),
+                joint_count: k.joint_count,
+                clips: span(k.clips),
+                clip_count: k.clip_count,
+            }),
+            uvs: self.uvs.map(span),
+            texture: self.texture,
+            blend: self.blend.map(span),
+        }
+    }
+
+    /// The mesh [`Mesh::from_tmdl`] parsed from `blob`, rebuilt from its
+    /// [`MeshLayout`] without validating again: a draw's mesh for the cost
+    /// of a few slice bounds checks. `blob` must be the bytes the layout was
+    /// taken from (a shorter blob panics, a different one draws garbage).
+    pub fn from_layout(blob: &'a [u8], l: &MeshLayout) -> Mesh<'a> {
+        Mesh {
+            positions: l.positions.get(blob),
+            normals: l.normals.get(blob),
+            colors: l.colors.get(blob),
+            indices: l.indices.get(blob),
+            vertex_count: l.vertex_count,
+            index_count: l.index_count,
+            bounds: l.bounds,
+            skeleton: l.skeleton.map(|k| Skeleton {
+                joint_of_vertex: k.joint_of_vertex.get(blob),
+                joints: k.joints.get(blob),
+                joint_count: k.joint_count,
+                clips: k.clips.get(blob),
+                clip_count: k.clip_count,
+            }),
+            uvs: l.uvs.map(|u| u.get(blob)),
+            texture: l.texture,
+            blend: l.blend.map(|b| b.get(blob)),
+        }
     }
 
     fn parse_skeleton(body: &'a [u8], v: usize) -> Result<Skeleton<'a>, MeshError> {
@@ -1520,6 +1622,15 @@ mod tests {
         assert_eq!(mesh.index_count, 36);
         assert_eq!(mesh.color(0), Color::rgba(230, 80, 80, 255));
         assert!((mesh.normal(4).z - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn layout_rebuilds_the_same_mesh() {
+        for blob in [cube_tmdl(), skinned_cube(), textured_cube()] {
+            let parsed = Mesh::from_tmdl(&blob).unwrap();
+            let rebuilt = Mesh::from_layout(&blob, &parsed.layout(&blob));
+            assert_eq!(format!("{parsed:?}"), format!("{rebuilt:?}"));
+        }
     }
 
     #[test]

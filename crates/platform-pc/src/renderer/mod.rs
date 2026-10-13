@@ -12,7 +12,9 @@ mod batch;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use trino_core::render3d::{Camera3, DEFAULT_LIGHT, Light, Mesh, ScreenTri, TnlContext};
+use trino_core::render3d::{
+    Camera3, DEFAULT_LIGHT, Light, Mesh, ScreenTri, TnlContext, TnlScratch,
+};
 use trino_core::{
     Caps, Color, FontId, FrameStats, Mat34, Material, ModelId, ModelParams, Renderer, SpriteId,
     SpriteParams, TextParams, Transform3, Vec2,
@@ -108,6 +110,8 @@ pub struct PcRenderer {
     /// T&L constants of `camera` + `light` at the current internal size
     /// (rebuilt when any of them changes).
     tnl_ctx: Option<TnlContext>,
+    /// The T&L's working memory, reused by every draw (boxed: ~9 KB).
+    tnl_scratch: Box<TnlScratch>,
     clear: Color,
     caps: Caps,
     profile: SimProfile,
@@ -731,6 +735,7 @@ impl PcRenderer {
             camera: Camera3::default(),
             light: DEFAULT_LIGHT,
             tnl_ctx: None,
+            tnl_scratch: Box::new(TnlScratch::new()),
             clear: Color::BLACK,
             caps,
             profile,
@@ -1470,9 +1475,14 @@ impl Renderer for PcRenderer {
                 .insert(TnlContext::new(&self.camera, &self.light, screen)),
         };
         let pending = &mut self.pending_tris;
-        let tnl = trino_core::render3d::tessellate_with(&ctx, &mesh, matrix, params, &mut |tri| {
-            pending.push(tri)
-        });
+        let tnl = trino_core::render3d::tessellate_with(
+            &ctx,
+            &mut self.tnl_scratch,
+            &mesh,
+            matrix,
+            params,
+            &mut |tri| pending.push(tri),
+        );
         self.frame_stats.tnl.add(&tnl);
         let added = self.pending_tris.len() - before;
         self.tag_pending(

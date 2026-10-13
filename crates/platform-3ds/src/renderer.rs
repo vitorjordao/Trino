@@ -1,13 +1,15 @@
 //! citro2d sprite renderer (top screen, 400x240) via the shim, plus gouraud
 //! triangles for the engine's software-T&L 3D (`trino_core::render3d`).
 
+use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::rc::Rc;
 use alloc::vec::Vec;
 use core::ffi::c_void;
 
 use trino_core::render3d::{
-    Camera3, DEFAULT_LIGHT, Light, Mesh, ScreenTri, TnlContext, painter_index, painter_key,
+    Camera3, DEFAULT_LIGHT, Light, Mesh, ScreenTri, TnlContext, TnlScratch, painter_index,
+    painter_key,
 };
 use trino_core::text::BitmapFont;
 use trino_core::{
@@ -56,6 +58,8 @@ pub struct N3dsRenderer {
     light: Light,
     /// T&L constants of `camera` + `light`, rebuilt when either changes.
     tnl_ctx: TnlContext,
+    /// The T&L's working memory, reused by every draw (boxed: ~9 KB).
+    tnl_scratch: Box<TnlScratch>,
     caps: Caps,
 }
 
@@ -74,6 +78,7 @@ impl N3dsRenderer {
             sprite_depth: SPRITE_DEPTH_BG,
             camera: Camera3::default(),
             tnl_ctx: TnlContext::new(&Camera3::default(), &DEFAULT_LIGHT, SCREEN),
+            tnl_scratch: Box::new(TnlScratch::new()),
             light: DEFAULT_LIGHT,
             caps: Caps::N3DS,
         }
@@ -304,6 +309,7 @@ impl Renderer for N3dsRenderer {
         let pending = &mut self.pending_tris;
         let tnl = trino_core::render3d::tessellate_with(
             &self.tnl_ctx,
+            &mut self.tnl_scratch,
             &mesh,
             matrix,
             params,

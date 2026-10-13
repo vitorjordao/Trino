@@ -1,6 +1,7 @@
 //! RDP sprite renderer via the shim's `rdpq` wrappers, plus gouraud
 //! triangles for the engine's software-T&L 3D (`trino_core::render3d`).
 
+use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::rc::Rc;
 use alloc::vec::Vec;
@@ -8,7 +9,8 @@ use core::ffi::c_void;
 
 use trino_core::perf::RenderProfile;
 use trino_core::render3d::{
-    Camera3, DEFAULT_LIGHT, Light, Mesh, ScreenTri, TnlContext, painter_index, painter_key,
+    Camera3, DEFAULT_LIGHT, Light, Mesh, ScreenTri, TnlContext, TnlScratch, painter_index,
+    painter_key,
 };
 use trino_core::text::BitmapFont;
 use trino_core::{
@@ -46,6 +48,8 @@ pub struct N64Renderer {
     light: Light,
     /// T&L constants of `camera` + `light`, rebuilt when either changes.
     tnl_ctx: TnlContext,
+    /// The T&L's working memory, reused by every draw (boxed: ~9 KB).
+    tnl_scratch: Box<TnlScratch>,
     caps: Caps,
     /// Stage/model timing on the console clock while profiling is on.
     profile: Option<RenderProfile>,
@@ -93,6 +97,7 @@ impl N64Renderer {
             order: Vec::new(),
             camera: Camera3::default(),
             tnl_ctx: TnlContext::new(&Camera3::default(), &DEFAULT_LIGHT, SCREEN),
+            tnl_scratch: Box::new(TnlScratch::new()),
             light: DEFAULT_LIGHT,
             caps: Caps::N64,
             profile: None,
@@ -332,6 +337,7 @@ impl Renderer for N64Renderer {
         let pending = &mut self.pending_tris;
         let tnl = trino_core::render3d::tessellate_with(
             &self.tnl_ctx,
+            &mut self.tnl_scratch,
             &mesh,
             matrix,
             params,

@@ -865,12 +865,64 @@ pub fn tessellate(
     emit: &mut dyn FnMut(ScreenTri),
 ) -> TnlStats {
     let ctx = TnlContext::new(camera, light, screen);
-    tessellate_with(&ctx, mesh, model, params, emit)
+    let mut scratch = TnlScratch::new();
+    tessellate_with(&ctx, &mut scratch, mesh, model, params, emit)
 }
 
-/// [`tessellate`] with the per-frame constants precomputed.
+/// Working memory of one [`tessellate_with`] call — the vertex cache, the
+/// clipping polygons, the depth-split stack and the skinned path's joint
+/// matrices, ~9 KB — owned by the caller and reused across draws without
+/// being cleared. Initializing it on every draw was most of a visible
+/// draw's fixed cost on the N64: thousands of stores through an 8 KB
+/// direct-mapped data cache before the first vertex. Every slot is written
+/// before it is read (only the vertex-cache tags are reset per draw), so
+/// reuse changes no output. Backends keep one (boxed: the N64 main stack is
+/// 64 KB).
+pub struct TnlScratch {
+    tri: TriScratch,
+    skin: [Mat34; MAX_JOINTS],
+    world: [Mat34; MAX_JOINTS],
+    viewm: [Mat34; MAX_JOINTS],
+}
+
+impl TnlScratch {
+    pub const fn new() -> TnlScratch {
+        TnlScratch {
+            tri: TriScratch {
+                cache_pos: [Vec3::ZERO; VCACHE],
+                cache_col: [Color::WHITE; VCACHE],
+                poly_a: [NO_VERT; MAX_POLY],
+                poly_b: [NO_VERT; MAX_POLY],
+                stack: [[NO_VERT; 3]; SPLIT_STACK],
+            },
+            skin: [Mat34::IDENTITY; MAX_JOINTS],
+            world: [Mat34::IDENTITY; MAX_JOINTS],
+            viewm: [Mat34::IDENTITY; MAX_JOINTS],
+        }
+    }
+}
+
+/// The per-triangle half of [`TnlScratch`] (vertex cache payload, clip
+/// polygons, split stack).
+struct TriScratch {
+    cache_pos: [Vec3; VCACHE],
+    cache_col: [Color; VCACHE],
+    poly_a: [ClipVert; MAX_POLY],
+    poly_b: [ClipVert; MAX_POLY],
+    stack: [[ClipVert; 3]; SPLIT_STACK],
+}
+
+impl Default for TnlScratch {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// [`tessellate`] with the per-frame constants precomputed and the
+/// caller's scratch memory.
 pub fn tessellate_with(
     ctx: &TnlContext,
+    scratch: &mut TnlScratch,
     mesh: &Mesh,
     model: &Mat34,
     params: &ModelParams,
@@ -925,21 +977,21 @@ pub fn tessellate_with(
     if mesh.joint_count() == 0 {
         // Static mesh: one "joint" (the model matrix) and no joint arrays —
         // the common case stays as cheap as before skeletons existed.
-        tessellate_joints::<false, false>(mesh, &[*model], &[mv], &setup, emit)
+        tessellate_joints::<false, false>(mesh, &[*model], &[mv], &setup, &mut scratch.tri, emit)
     } else {
-        let mut skin = [Mat34::IDENTITY; MAX_JOINTS];
-        let joints = mesh.pose(params.anim, &mut skin);
-        let mut world = [Mat34::IDENTITY; MAX_JOINTS];
-        let mut viewm = [Mat34::IDENTITY; MAX_JOINTS];
+        // Only the first `joints` matrices are written (pose included) and
+        // read.
+        let joints = mesh.pose(params.anim, &mut scratch.skin);
         for j in 0..joints {
-            world[j] = model.mul(&skin[j]);
-            viewm[j] = view.mul(&world[j]);
+            scratch.world[j] = model.mul(&scratch.skin[j]);
+            scratch.viewm[j] = view.mul(&scratch.world[j]);
         }
-        let (world, viewm) = (&world[..joints], &viewm[..joints]);
+        let (world, viewm) = (&scratch.world[..joints], &scratch.viewm[..joints]);
+        let tri = &mut scratch.tri;
         if mesh.has_blend() {
-            tessellate_joints::<true, true>(mesh, world, viewm, &setup, emit)
+            tessellate_joints::<true, true>(mesh, world, viewm, &setup, tri, emit)
         } else {
-            tessellate_joints::<true, false>(mesh, world, viewm, &setup, emit)
+            tessellate_joints::<true, false>(mesh, world, viewm, &setup, tri, emit)
         }
     }
 }
@@ -1024,12 +1076,6 @@ impl Setup<'_> {
 /// recomputing (same inputs, same operations).
 const VCACHE: usize = 32;
 
-struct VertexCache {
-    tag: [u32; VCACHE],
-    pos: [Vec3; VCACHE],
-    col: [Color; VCACHE],
-}
-
 /// `SKINNED` / `SMOOTH` are const parameters so the static and rigid paths
 /// compile without any per-vertex joint or blend lookup.
 fn tessellate_joints<const SKINNED: bool, const SMOOTH: bool>(
@@ -1037,24 +1083,30 @@ fn tessellate_joints<const SKINNED: bool, const SMOOTH: bool>(
     world: &[Mat34],
     viewm: &[Mat34],
     s: &Setup,
+    scratch: &mut TriScratch,
     emit: &mut dyn FnMut(ScreenTri),
 ) -> TnlStats {
+    let TriScratch {
+        cache_pos,
+        cache_col,
+        poly_a,
+        poly_b,
+        stack,
+    } = scratch;
     let mut stats = TnlStats::default();
     let mut verts = 0u32;
     let joint = |i: usize| if SKINNED { mesh.joint_of(i) } else { 0 };
     let flat = s.params.shading == Shading::Flat;
     let (lim_x, lim_y, focal, center) = (s.lim_x, s.lim_y, s.focal, s.center);
-    let mut cache = VertexCache {
-        tag: [u32::MAX; VCACHE],
-        pos: [Vec3::ZERO; VCACHE],
-        col: [Color::WHITE; VCACHE],
-    };
+    // Only the tags start empty: the payload (`cache_pos` / `cache_col`,
+    // in the caller's scratch) is written on every miss.
+    let mut tag = [u32::MAX; VCACHE];
     let textured = mesh.has_uvs();
     // (view-space position, shaded color — unused when flat).
     let mut vertex = |i: usize| -> (Vec3, Color) {
         let slot = i % VCACHE;
-        if cache.tag[slot] == i as u32 {
-            return (cache.pos[slot], cache.col[slot]);
+        if tag[slot] == i as u32 {
+            return (cache_pos[slot], cache_col[slot]);
         }
         verts += 1;
         let j = joint(i);
@@ -1077,19 +1129,17 @@ fn tessellate_joints<const SKINNED: bool, const SMOOTH: bool>(
                 s.shade(mesh.color(i), n.normalized(), p.z)
             }
         };
-        cache.tag[slot] = i as u32;
-        cache.pos[slot] = p;
-        cache.col[slot] = col;
+        tag[slot] = i as u32;
+        cache_pos[slot] = p;
+        cache_col[slot] = col;
         (p, col)
     };
 
-    // Scratch buffers live across the whole draw: initializing them per
-    // triangle (3.8 KB of stores, most of the VR4300's 8 KB data cache)
-    // was the N64's single largest T&L cost. Every slot is written before
-    // it is read, so reuse changes no output.
-    let mut poly_a = [NO_VERT; MAX_POLY];
-    let mut poly_b = [NO_VERT; MAX_POLY];
-    let mut stack = [[NO_VERT; 3]; SPLIT_STACK];
+    // `poly_a` / `poly_b` / `stack` come from the caller's scratch and are
+    // never cleared: initializing them per triangle (3.8 KB of stores, most
+    // of the VR4300's 8 KB data cache) was once the N64's single largest
+    // T&L cost, and per draw still most of a draw's fixed cost. Every slot
+    // is written before it is read, so reuse changes no output.
     let tri_count = mesh.index_count / 3;
     stats.tris_in = tri_count as u32;
     for t in 0..tri_count {
@@ -1156,12 +1206,12 @@ fn tessellate_joints<const SKINNED: bool, const SMOOTH: bool>(
         if !(inside(vs[0]) && inside(vs[1]) && inside(vs[2])) {
             stats.clipped += 1;
             // Clip against near plane + the 4 guard-band side planes.
-            n_poly = clip_plane(&poly_a, n_poly, &mut poly_b, |v| v.z - NEAR);
-            n_poly = clip_plane(&poly_b, n_poly, &mut poly_a, |v| lim_x * v.z - v.x);
-            n_poly = clip_plane(&poly_a, n_poly, &mut poly_b, |v| lim_x * v.z + v.x);
-            n_poly = clip_plane(&poly_b, n_poly, &mut poly_a, |v| lim_y * v.z - v.y);
-            n_poly = clip_plane(&poly_a, n_poly, &mut poly_b, |v| lim_y * v.z + v.y);
-            poly_a = poly_b;
+            n_poly = clip_plane(poly_a, n_poly, poly_b, |v| v.z - NEAR);
+            n_poly = clip_plane(poly_b, n_poly, poly_a, |v| lim_x * v.z - v.x);
+            n_poly = clip_plane(poly_a, n_poly, poly_b, |v| lim_x * v.z + v.x);
+            n_poly = clip_plane(poly_b, n_poly, poly_a, |v| lim_y * v.z - v.y);
+            n_poly = clip_plane(poly_a, n_poly, poly_b, |v| lim_y * v.z + v.y);
+            *poly_a = *poly_b;
             if n_poly < 3 {
                 continue;
             }

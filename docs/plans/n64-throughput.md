@@ -352,7 +352,7 @@ Edit this file as you go.
     adds ROM, and the castle64 code is unchanged.
 - Phase 1:
   - [x] 1a per-frame setup — kept: culled draw 33 → 16 µs, frame neutral (±2%, layout)
-  - [ ] 1b scratch
+  - [x] 1b scratch — kept: frame −12…−15% in all five scenes, visible setup 248 → 58 µs
   - [ ] 1c parse once
   - [ ] 1d fetch
   - [ ] 1e divisions

@@ -355,7 +355,8 @@ Edit this file as you go.
   - [x] 1b scratch — kept: frame −12…−15% in all five scenes, visible setup 248 → 58 µs
   - [x] 1c parse once — kept: `game` −13…−20% in all five scenes; T&L +10% from layout
     (unchanged code), frame neutral
-  - [ ] 1d fetch
+  - [x] 1d fetch — kept: frame −5…−14%, T&L −10…−20%; Gouraud vertex 21.7 → 15.8 µs.
+    No byte swap at register: the byte assembly is ~100 of ~1 500 cycles per vertex
   - [ ] 1e divisions
   - [ ] 1f submit
   - [x] 1g sort — skipped: sort ≤ 4 ms per scene, 2.4 µs per emitted triangle (Phase 0)

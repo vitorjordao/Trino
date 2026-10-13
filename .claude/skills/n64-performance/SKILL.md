@@ -140,22 +140,22 @@ cost, a 30 fps frame affords roughly 300–400 triangles, fewer with many draws.
 original KayKit door (1068 tris) read "27% of budget" and cost ~64 ms, two whole
 frames. Trust the cost model.
 
-## Where the time goes (2026-10-13, Phase 1 after 1a–1c)
+## Where the time goes (2026-10-13, Phase 1 after 1a–1d)
 
 | Scene | Frame (ms) | ≈ fps | T&L (ms) | sort + submit (ms) | game (ms) | Draws |
 |---|---|---|---|---|---|---|
-| hub | 71.0 | 14 | 51.2 | 15.9 | 2.9 | 34 |
-| green-hills | 34.4 | 29 | 25.9 | 5.4 | 2.1 | 23 |
-| lava-land | 45.3 | 22 | 31.1 | 11.2 | 2.1 | 22 |
-| sky-tower | 28.8 | **35** | 21.6 | 4.2 | 2.1 | 26 |
-| throne | 39.3 | 25 | 25.9 | 10.6 | 1.9 | 19 |
+| hub | 64.9 | 15 | 44.7 | 15.8 | 3.4 | 34 |
+| green-hills | 29.5 | **34** | 20.8 | 5.3 | 2.4 | 23 |
+| lava-land | 42.4 | 24 | 27.7 | 11.3 | 2.4 | 22 |
+| sky-tower | 25.2 | **40** | 17.7 | 4.1 | 2.4 | 26 |
+| throne | 37.4 | 27 | 23.4 | 10.8 | 2.2 | 19 |
 
 - Hub T&L by model (ms, calls):
-  door_frame ×3: 8.8; block_brick ×7: 6.3; door ×1: 5.3; coin ×8: 5.3; boar ×1: 4.8; block_grass ×1: 4.8; player_leg ×2: 3.1; player_torso ×1: 3.1; player_arm ×2: 3.0; block_roof ×3: 2.5; block_castle ×3: 2.5; star ×1: 0.9; shadow ×1: 0.8.
-- A visible draw now costs ~63 µs before its first vertex (was 280 µs at Phase 0)
-  plus ~16–31 µs outside the T&L timer. Per-draw overhead is no longer the lever;
-  vertices (~2 000 cycles each) and submit (~22 µs per emitted triangle) are.
-- **The enemy is not the problem.** A boar costs ~4.8 ms, and all game logic ~0.3 ms.
+  door_frame ×3: 7.5; block_grass ×1: 6.3; block_brick ×7: 5.4; door ×1: 4.6; coin ×8: 4.1; boar ×1: 4.1; player_leg ×2: 2.7; player_arm ×2: 2.4; player_torso ×1: 2.3; block_roof ×3: 2.2; block_castle ×3: 2.0; star ×1: 0.7; shadow ×1: 0.6.
+- A visible draw costs ~45 µs before its first vertex (280 µs at Phase 0) plus
+  ~16–32 µs outside the T&L timer. A Gouraud vertex ~16 µs (~1 500 cycles), a
+  front-facing emitted triangle ~33 µs, submit ~22 µs per emitted triangle.
+- **The enemy is not the problem.** A boar costs ~4 ms, and all game logic ~0.3 ms.
 
 ## What worked, what didn't (keep this list honest)
 
@@ -171,6 +171,7 @@ frames. Trust the cost model.
 | Per-vertex cached projection + no-copy fast path in `tessellate` | neutral (±2%) — reverted |
 | Hot loop compacted (`#[inline(never)]` vertex/flat/general paths) | +3…+17% worse — reverted |
 | `opt-level = "s"` for the ROM | worse everywhere — not adopted |
+| **1d** Vertex fetch through fixed-size records (`as_chunks`: `&[[u8; 12]]` positions/normals, `[[u8; 4]]` colors, whole-triangle index records): one bounds check per attribute instead of one per byte, none per triangle | frame −5…−14% (green-hills 34.4 → 29.5 ms, sky-tower 28.8 → 25.2); T&L −10…−20%; Gouraud per vertex 21.7 → 15.8 µs. Goldens identical. The floats are still assembled from bytes (24 `lbu` + shifts per vertex, ~100 cycles of ~1 500); byte-swapping at register was not worth its RAM |
 | **1c** `MeshLayout`: each TMDL validated once at register, the draw's `Mesh` rebuilt from byte spans (`Mesh::from_layout`) instead of `Mesh::from_tmdl` per draw (all three backends) | `game` −13…−20% in every scene; culled draw outside the T&L 25 → 16 µs. T&L +8…+12% with unchanged `tessellate` code and submit −17%: layout. Frame −0.1…+3.8% (green-hills). Kept on the `game` stage win |
 | **1b** `TnlScratch`: vertex-cache payload, clip polygons, split stack and the skinned joint matrices (~9 KB) owned by the backend and never cleared; only the 32 cache tags reset per draw | **frame −12…−15% in every scene** (hub 80.0 → 70.2 ms, green-hills 38.8 → 33.2); T&L −19…−22%; visible-draw setup 248 → 58 µs. `submit` +20% from layout. Goldens identical |
 | **1a** `TnlContext`: view, focal (software sin/cos), guard band, `ldir`, light factors once per `set_camera`/`set_light` instead of per draw (all three backends; `tessellate_with`) | culled draw T&L 33 → 16 µs, visible setup 280 → 248 µs; scene T&L −0.5…−2.6% (throne +1%), but `game` +15…+22% from layout: `Transform3::matrix`, which didn't change, went 12.5 → 36 µs per draw (micro-trs). Frame −1.2…+1.9%: neutral, kept because the work it removes is measured |

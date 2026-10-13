@@ -87,15 +87,18 @@ const CLIP_HEADER: usize = 16;
 /// A parsed (borrowed) mesh — zero-copy over the baked blob.
 #[derive(Clone, Copy, Debug)]
 pub struct Mesh<'a> {
-    positions: &'a [u8],
-    normals: &'a [u8],
-    colors: &'a [u8],
-    indices: &'a [u8],
+    // Per-vertex records as fixed-size arrays: a fetch is one bounds check
+    // plus constant-index byte loads, not one check per byte (the hot T&L
+    // loop reads three of them per vertex).
+    positions: &'a [[u8; 12]],
+    normals: &'a [[u8; 12]],
+    colors: &'a [[u8; 4]],
+    indices: &'a [[u8; 2]],
     pub vertex_count: usize,
     pub index_count: usize,
     bounds: Option<(Vec3, f32)>,
     skeleton: Option<Skeleton<'a>>,
-    uvs: Option<&'a [u8]>,
+    uvs: Option<&'a [[u8; 8]]>,
     texture: Option<SpriteId>,
     /// `SKW2`: (joint2, weight2) per vertex.
     blend: Option<&'a [u8]>,
@@ -188,6 +191,21 @@ fn rd_vec3(d: &[u8], at: usize) -> Vec3 {
     Vec3::new(rd_f32(d, at), rd_f32(d, at + 4), rd_f32(d, at + 8))
 }
 
+#[inline(always)]
+fn le_f32(b: [u8; 4]) -> f32 {
+    f32::from_bits(u32::from_le_bytes(b))
+}
+
+/// A little-endian `f32 * 3` record (constant indices: no bounds checks).
+#[inline(always)]
+fn vec3_of(c: &[u8; 12]) -> Vec3 {
+    Vec3::new(
+        le_f32([c[0], c[1], c[2], c[3]]),
+        le_f32([c[4], c[5], c[6], c[7]]),
+        le_f32([c[8], c[9], c[10], c[11]]),
+    )
+}
+
 #[inline]
 fn rd_quat(d: &[u8], at: usize) -> Quat {
     Quat::new(
@@ -264,10 +282,10 @@ impl<'a> Mesh<'a> {
         let col_at = nrm_at + nrm_len;
         let idx_at = col_at + col_len;
         let mut mesh = Mesh {
-            positions: &bytes[pos_at..pos_at + pos_len],
-            normals: &bytes[nrm_at..nrm_at + nrm_len],
-            colors: &bytes[col_at..col_at + col_len],
-            indices: &bytes[idx_at..idx_at + idx_len],
+            positions: bytes[pos_at..pos_at + pos_len].as_chunks().0,
+            normals: bytes[nrm_at..nrm_at + nrm_len].as_chunks().0,
+            colors: bytes[col_at..col_at + col_len].as_chunks().0,
+            indices: bytes[idx_at..idx_at + idx_len].as_chunks().0,
             vertex_count: v,
             index_count: i,
             bounds: None,
@@ -321,7 +339,7 @@ impl<'a> Mesh<'a> {
                     if len < v * 8 {
                         return Err(MeshError::BadSection);
                     }
-                    mesh.uvs = Some(&body[..v * 8]);
+                    mesh.uvs = Some(body[..v * 8].as_chunks().0);
                 }
                 b"TXID" if len >= 4 => mesh.texture = Some(SpriteId(rd_u32(body, 0))),
                 b"SKW2" => {
@@ -350,10 +368,10 @@ impl<'a> Mesh<'a> {
     pub fn layout(&self, blob: &[u8]) -> MeshLayout {
         let span = |part: &[u8]| Span::of(blob, part);
         MeshLayout {
-            positions: span(self.positions),
-            normals: span(self.normals),
-            colors: span(self.colors),
-            indices: span(self.indices),
+            positions: span(self.positions.as_flattened()),
+            normals: span(self.normals.as_flattened()),
+            colors: span(self.colors.as_flattened()),
+            indices: span(self.indices.as_flattened()),
             vertex_count: self.vertex_count,
             index_count: self.index_count,
             bounds: self.bounds,
@@ -364,7 +382,7 @@ impl<'a> Mesh<'a> {
                 clips: span(k.clips),
                 clip_count: k.clip_count,
             }),
-            uvs: self.uvs.map(span),
+            uvs: self.uvs.map(|u| span(u.as_flattened())),
             texture: self.texture,
             blend: self.blend.map(span),
         }
@@ -376,10 +394,10 @@ impl<'a> Mesh<'a> {
     /// taken from (a shorter blob panics, a different one draws garbage).
     pub fn from_layout(blob: &'a [u8], l: &MeshLayout) -> Mesh<'a> {
         Mesh {
-            positions: l.positions.get(blob),
-            normals: l.normals.get(blob),
-            colors: l.colors.get(blob),
-            indices: l.indices.get(blob),
+            positions: l.positions.get(blob).as_chunks().0,
+            normals: l.normals.get(blob).as_chunks().0,
+            colors: l.colors.get(blob).as_chunks().0,
+            indices: l.indices.get(blob).as_chunks().0,
             vertex_count: l.vertex_count,
             index_count: l.index_count,
             bounds: l.bounds,
@@ -390,7 +408,7 @@ impl<'a> Mesh<'a> {
                 clips: k.clips.get(blob),
                 clip_count: k.clip_count,
             }),
-            uvs: l.uvs.map(|u| u.get(blob)),
+            uvs: l.uvs.map(|u| u.get(blob).as_chunks().0),
             texture: l.texture,
             blend: l.blend.map(|b| b.get(blob)),
         }
@@ -426,14 +444,20 @@ impl<'a> Mesh<'a> {
 
     #[inline]
     pub fn position(&self, i: usize) -> Vec3 {
-        rd_vec3(self.positions, i * 12)
+        vec3_of(&self.positions[i])
     }
 
     /// Texture coordinate of vertex `i` (zero when the mesh has no UVs).
     #[inline]
     pub fn uv(&self, i: usize) -> Vec2 {
         match self.uvs {
-            Some(uv) => Vec2::new(rd_f32(uv, i * 8), rd_f32(uv, i * 8 + 4)),
+            Some(uv) => {
+                let c = &uv[i];
+                Vec2::new(
+                    le_f32([c[0], c[1], c[2], c[3]]),
+                    le_f32([c[4], c[5], c[6], c[7]]),
+                )
+            }
             None => Vec2::ZERO,
         }
     }
@@ -456,23 +480,18 @@ impl<'a> Mesh<'a> {
 
     #[inline]
     pub fn normal(&self, i: usize) -> Vec3 {
-        rd_vec3(self.normals, i * 12)
+        vec3_of(&self.normals[i])
     }
 
     #[inline]
     pub fn color(&self, i: usize) -> Color {
-        let at = i * 4;
-        Color::rgba(
-            self.colors[at],
-            self.colors[at + 1],
-            self.colors[at + 2],
-            self.colors[at + 3],
-        )
+        let [r, g, b, a] = self.colors[i];
+        Color::rgba(r, g, b, a)
     }
 
     #[inline]
     pub fn index(&self, i: usize) -> u16 {
-        u16::from_le_bytes([self.indices[i * 2], self.indices[i * 2 + 1]])
+        u16::from_le_bytes(self.indices[i])
     }
 
     /// Model-space bounding sphere `(center, radius)`, when baked.
@@ -1242,13 +1261,15 @@ fn tessellate_joints<const SKINNED: bool, const SMOOTH: bool>(
     // of the VR4300's 8 KB data cache) was once the N64's single largest
     // T&L cost, and per draw still most of a draw's fixed cost. Every slot
     // is written before it is read, so reuse changes no output.
-    let tri_count = mesh.index_count / 3;
-    stats.tris_in = tri_count as u32;
-    for t in 0..tri_count {
+    // Whole triangles of the index buffer: iterating them needs no bounds
+    // checks at all.
+    let tris = mesh.indices.as_flattened().as_chunks::<6>().0;
+    stats.tris_in = tris.len() as u32;
+    for t in tris {
         let idx = [
-            mesh.index(t * 3) as usize,
-            mesh.index(t * 3 + 1) as usize,
-            mesh.index(t * 3 + 2) as usize,
+            u16::from_le_bytes([t[0], t[1]]) as usize,
+            u16::from_le_bytes([t[2], t[3]]) as usize,
+            u16::from_le_bytes([t[4], t[5]]) as usize,
         ];
         let v = [vertex(idx[0]), vertex(idx[1]), vertex(idx[2])];
         let vs = [v[0].0, v[1].0, v[2].0];

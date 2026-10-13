@@ -8,9 +8,9 @@
 
 use trino_core::math3d::{cos, sin};
 use trino_core::{
-    BillboardParams, BlobId, Camera3, Color, DEFAULT_LIGHT, Emitter, FontId, Material, ModelId,
-    ModelParams, ParticleSystem, Platform, Rect, Renderer, Shading, SpriteId, TextParams,
-    Transform3, Vec2, Vec3,
+    BakedScene, BillboardParams, BlobId, Camera3, Cells, Color, DEFAULT_LIGHT, Emitter,
+    EntityStore, FontId, Material, ModelId, ModelParams, ParticleSystem, Platform, Rect, Renderer,
+    Shading, SpriteId, TextParams, Transform3, Vec2, Vec3,
 };
 
 /// The HUD font (also what the checks measure).
@@ -45,6 +45,8 @@ pub fn engine_checks(
     }
     platform.log("TRINO_STEP:smooth skin\n");
     smooth_skin(renderer)?;
+    platform.log("TRINO_STEP:portals\n");
+    portals(renderer, platform)?;
     platform.log("TRINO_STEP:engine ok\n");
     Ok(())
 }
@@ -274,6 +276,63 @@ pub fn smooth_skin(renderer: &mut dyn Renderer) -> Result<(), &'static str> {
     renderer.end_frame();
     if renderer.stats().tris == 0 {
         return Err("smooth-skinned model drew nothing (SKW2 path)");
+    }
+    Ok(())
+}
+
+/// The baked portal/cell demo (`scenes/interior.scene.ron`).
+pub const INTERIOR: BlobId = BlobId::from_path("scenes/interior");
+
+/// Portal visibility end to end: the interior scene baked by the pipeline,
+/// parsed on the target, cells and portals rebuilt, masks computed from
+/// two cameras in the first room, and the draw counts the backend saw.
+pub fn portals(
+    renderer: &mut dyn Renderer,
+    platform: &mut dyn Platform,
+) -> Result<(), &'static str> {
+    let bytes = platform
+        .blob(INTERIOR)
+        .ok_or("interior scene blob missing")?;
+    let baked = BakedScene::parse(bytes).map_err(|_| "interior scene does not parse")?;
+    let cells: Cells<4> = Cells::from_nodes(baked.nodes());
+    if (cells.cell_count(), cells.portal_count()) != (3, 2) {
+        return Err("interior: expected 3 cells and 2 portals");
+    }
+    let mut world: EntityStore<32> = EntityStore::new();
+    world.spawn_iter(baked.nodes());
+    let caps = *renderer.caps();
+    let screen = Vec2::new(caps.screen_width as f32, caps.screen_height as f32);
+    let eye = Vec3::new(1.0, 1.6, 4.0);
+    let mut models = |target: Vec3, cull: bool| {
+        let camera = Camera3 {
+            eye,
+            target,
+            fov_y: 1.05,
+        };
+        let mask = if cull {
+            cells.visible(&camera, screen)
+        } else {
+            u64::MAX
+        };
+        renderer.begin_frame(Color::BLACK);
+        renderer.set_camera(&camera);
+        renderer.set_light(&DEFAULT_LIGHT);
+        world.draw_in(renderer, &trino_core::Mat34::IDENTITY, 0.0, eye, mask);
+        renderer.end_frame();
+        (mask & 0b111, renderer.stats().models)
+    };
+    // Down the doorways: every room is visible, nothing is culled.
+    let east = Vec3::new(23.0, 1.4, 4.0);
+    let (mask, through) = models(east, true);
+    if mask != 0b111 || through != models(east, false).1 {
+        return Err("portals: the doorway chain should show all three rooms");
+    }
+    // Facing the back wall: rooms B and C (3 models each) are skipped.
+    let west = Vec3::new(-10.0, 1.6, 4.0);
+    let (mask, away) = models(west, true);
+    let all = models(west, false).1;
+    if mask != 0b001 || all - away != 6 {
+        return Err("portals: facing away should cull the two far rooms");
     }
     Ok(())
 }

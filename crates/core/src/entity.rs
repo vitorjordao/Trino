@@ -46,6 +46,8 @@ pub struct Entity {
     pub lod: Lods,
     /// Positional looping sound (see [`crate::audio::Ambience`]).
     pub sound: Option<crate::audio::SoundSource>,
+    /// Interior cell (see [`crate::vis`]); [`crate::vis::NO_CELL`] = none.
+    pub cell: u8,
     pub visible: bool,
     /// Game-defined payload.
     pub user: u32,
@@ -62,6 +64,7 @@ impl Entity {
         collider: None,
         lod: Lods::NONE,
         sound: None,
+        cell: crate::vis::NO_CELL,
         visible: true,
         user: 0,
     };
@@ -78,6 +81,7 @@ impl Entity {
             collider: node.collider,
             lod: node.lod,
             sound: node.sound,
+            cell: node.cell,
             visible: true,
             user: 0,
         }
@@ -336,7 +340,23 @@ impl<const N: usize> EntityStore<N> {
     /// `time` seconds (entities with `params.anim` set keep it), with LOD
     /// levels chosen for a camera at `eye`.
     pub fn draw(&self, renderer: &mut dyn Renderer, root: &Mat34, time: f32, eye: Vec3) {
+        self.draw_in(renderer, root, time, eye, u64::MAX);
+    }
+
+    /// [`Self::draw`] limited to the cells set in `visible` (see
+    /// [`crate::vis::Cells::visible`]).
+    pub fn draw_in(
+        &self,
+        renderer: &mut dyn Renderer,
+        root: &Mat34,
+        time: f32,
+        eye: Vec3,
+        visible: u64,
+    ) {
         for (_, e) in self.iter() {
+            if !crate::vis::in_view(e.cell, visible) {
+                continue;
+            }
             let Some(model) = e.model_from(eye).filter(|_| e.visible) else {
                 continue;
             };
@@ -367,6 +387,8 @@ mod tests {
             collider: None,
             lod: Lods::NONE,
             sound: None,
+            cell: crate::vis::NO_CELL,
+            vis: None,
         }
     }
 

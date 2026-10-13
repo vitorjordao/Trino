@@ -163,7 +163,13 @@ impl ScenePlayer {
         r.set_camera(&camera);
         r.set_light(&env.core_light());
         let resolved = resolve(&self.scene, &self.lib, self.time);
+        let caps = r.caps();
+        let screen = Vec2::new(caps.screen_width as f32, caps.screen_height as f32);
+        let visible = resolved.visible_cells(&camera, screen);
         for item in &resolved.items {
+            if !trino_core::vis::in_view(item.cell, visible) {
+                continue;
+            }
             if let Some(id) = item.model_from(camera.eye) {
                 r.draw_model_matrix(id, &item.matrix, Material::VertexLit, &item.params);
             }

@@ -22,11 +22,7 @@ fn rgba(out: &mut Vec<u8>, c: Color) {
 /// (blob, warnings).
 pub fn to_tscn(scene: &Scene, lib: &Library) -> (Vec<u8>, Vec<String>) {
     let resolved = resolve(scene, lib, 0.0);
-    let items: Vec<_> = resolved
-        .items
-        .iter()
-        .filter(|i| i.sprite.is_none() || i.model.is_some())
-        .collect();
+    let items: Vec<_> = resolved.items.iter().filter(|i| i.exported()).collect();
 
     let mut out = Vec::new();
     out.extend_from_slice(TSCN_MAGIC);
@@ -139,6 +135,13 @@ pub fn to_tscn(scene: &Scene, lib: &Library) -> (Vec<u8>, Vec<String>) {
             &mut out,
             &[snd.map_or(0.0, |s| s.radius), snd.map_or(0.0, |s| s.volume)],
         );
+        let (kind, a, b, half) = match item.vis {
+            Some(trino_core::VisVolume::Cell { half }) => (1u8, 0, 0, half),
+            Some(trino_core::VisVolume::Portal { half, a, b }) => (2, a, b, half),
+            None => (0, 0, 0, trino_core::Vec3::ZERO),
+        };
+        out.extend_from_slice(&[item.cell, kind, a, b]);
+        f32s(&mut out, &[half.x, half.y, half.z]);
         debug_assert_eq!(out.len() - start, TSCN_NODE_BYTES);
     }
     out.extend_from_slice(&strings);
@@ -246,5 +249,96 @@ mod tests {
         assert!(m.sound.is_none());
         assert!(m.model.is_none() && m.tags.is_empty());
         assert_eq!(m.position().y, 5.0);
+    }
+
+    #[test]
+    fn cells_and_portals_bake_and_cull() {
+        use crate::VisComponent;
+        use trino_core::{Camera3, Cells, NO_CELL, Vec2, Vec3, VisVolume};
+        let mut scene = Scene::new("t");
+        // The doorway comes first: portal names resolve after the walk.
+        let mut door = Entity::new("door").at([4.0, 1.0, 2.0]);
+        door.vis = Some(VisComponent::Portal {
+            size: [0.2, 2.0, 1.0],
+            a: "hall".into(),
+            b: "house/kitchen".into(),
+        });
+        scene.entities.push(door);
+        let mut bad = Entity::new("bad").at([0.0, 0.0, 0.0]);
+        bad.vis = Some(VisComponent::Portal {
+            size: [1.0; 3],
+            a: "hall".into(),
+            b: "attic".into(),
+        });
+        scene.entities.push(bad);
+        let mut house = Entity::new("house");
+        for (name, x) in [("hall", 2.0), ("kitchen", 6.0)] {
+            let mut room = Entity::new(name).at([x, 1.5, 2.0]);
+            room.vis = Some(VisComponent::Cell {
+                size: [4.0, 3.0, 4.0],
+            });
+            room.children.push(
+                Entity::new("lamp")
+                    .at([0.0, 1.0, 0.0])
+                    .with_model(ModelComponent::new("models/lamp")),
+            );
+            house.children.push(room);
+        }
+        scene.entities.push(house);
+        scene
+            .entities
+            .push(Entity::new("sky").with_model(ModelComponent::new("models/sky")));
+
+        let (blob, warnings) = to_tscn(&scene, &Library::default());
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("attic"), "{warnings:?}");
+        let blob: &'static [u8] = Box::leak(blob.into_boxed_slice());
+        let baked = BakedScene::parse(blob).unwrap();
+        let nodes: Vec<_> = baked.nodes().collect();
+        let node = |n: &str| nodes.iter().find(|x| x.name == n).unwrap();
+        assert_eq!(
+            node("door").vis,
+            Some(VisVolume::Portal {
+                half: Vec3::new(0.1, 1.0, 0.5),
+                a: 0,
+                b: 1
+            })
+        );
+        assert_eq!(node("bad").vis, None);
+        assert_eq!(node("house/hall/lamp").cell, 0);
+        assert_eq!(node("house/kitchen/lamp").cell, 1);
+        assert_eq!(node("sky").cell, NO_CELL);
+
+        let cells: Cells<4> = Cells::from_nodes(&nodes);
+        assert_eq!((cells.cell_count(), cells.portal_count()), (2, 1));
+        let cam = |target: Vec3| Camera3 {
+            eye: Vec3::new(1.0, 1.0, 2.0),
+            target,
+            fov_y: 1.0,
+        };
+        let screen = Vec2::new(320.0, 240.0);
+        let through = cells.visible(&cam(Vec3::new(8.0, 1.0, 2.0)), screen);
+        let away = cells.visible(&cam(Vec3::new(-8.0, 1.0, 2.0)), screen);
+        assert_eq!((through & 3, away & 3), (3, 1));
+        // The editor-side resolve and codegen agree on the same numbers.
+        let r = crate::resolve(&scene, &Library::default(), 0.0);
+        let lamp = r
+            .items
+            .iter()
+            .find(|i| i.name == "house/kitchen/lamp")
+            .unwrap();
+        assert_eq!(lamp.cell, 1);
+        let away_cam = cam(Vec3::new(-8.0, 1.0, 2.0));
+        assert_eq!(r.visible_cells(&away_cam, screen) & 3, 1);
+        let no_cells = crate::resolve(&Scene::new("e"), &Library::default(), 0.0);
+        assert_eq!(no_cells.visible_cells(&away_cam, screen), u64::MAX);
+        let (code, _) = crate::codegen::to_rust(&scene, &Library::default());
+        assert!(
+            code.contains(
+                "vis: Some(VisVolume::Portal { half: Vec3::new(0.1, 1.0, 0.5), a: 0, b: 1 })"
+            ),
+            "{code}"
+        );
+        assert!(code.contains("cell: NO_CELL"));
     }
 }

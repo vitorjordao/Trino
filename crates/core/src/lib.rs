@@ -36,6 +36,7 @@ pub mod save;
 pub mod scene;
 pub mod text;
 pub mod tilemap;
+pub mod vis;
 
 pub use asset::asset_id;
 
@@ -63,3 +64,4 @@ pub use render3d::{
 pub use scene::{BakedScene, LodLevel, Lods, SceneNode, Tags};
 pub use text::{BitmapFont, TextBuf};
 pub use tilemap::{TILE_SIZE, Tilemap, TilemapError};
+pub use vis::{Cells, MAX_CELLS, NO_CELL, Portal, VisVolume};

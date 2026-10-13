@@ -39,7 +39,7 @@ pub fn to_rust(scene: &Scene, lib: &Library) -> (String, Vec<String>) {
     );
     let _ = writeln!(
         out,
-        "#[allow(unused_imports)]\nuse trino_core::{{\n    Camera3, ClipId, Collider, Color, Fog, Light, LodLevel, Lods, Mat34, ModelId, ModelParams,\n    SceneNode, Shading, Shape, SoundId, SoundSource, SpriteId, Tags, Vec3,\n}};\n"
+        "#[allow(unused_imports)]\nuse trino_core::{{\n    Camera3, ClipId, Collider, Color, Fog, Light, LodLevel, Lods, Mat34, ModelId, ModelParams,\n    NO_CELL, SceneNode, Shading, Shape, SoundId, SoundSource, SpriteId, Tags, Vec3, VisVolume,\n}};\n"
     );
     let env = &scene.environment;
     let cam = env.core_camera();
@@ -75,11 +75,7 @@ pub fn to_rust(scene: &Scene, lib: &Library) -> (String, Vec<String>) {
     );
 
     let _ = writeln!(out, "pub static NODES: &[SceneNode] = &[");
-    for item in resolved
-        .items
-        .iter()
-        .filter(|i| i.sprite.is_none() || i.model.is_some())
-    {
+    for item in resolved.items.iter().filter(|i| i.exported()) {
         let m = &item.matrix.m;
         let rows: Vec<String> = m
             .iter()
@@ -153,7 +149,7 @@ pub fn to_rust(scene: &Scene, lib: &Library) -> (String, Vec<String>) {
             .collect();
         let _ = writeln!(
             out,
-            "    SceneNode {{\n        name: \"{}\",\n        tags: Tags::List(&[{}]),\n        matrix: Mat34 {{\n            m: [{}],\n        }},\n        model: {},\n        params: ModelParams {{\n            tint: {},\n            emissive: {},\n            shading: Shading::{},\n            double_sided: {},\n            anim: None,\n            texture: {},\n        }},\n        anim: {},\n        collider: {},\n        lod: {},\n        sound: {},\n    }},",
+            "    SceneNode {{\n        name: \"{}\",\n        tags: Tags::List(&[{}]),\n        matrix: Mat34 {{\n            m: [{}],\n        }},\n        model: {},\n        params: ModelParams {{\n            tint: {},\n            emissive: {},\n            shading: Shading::{},\n            double_sided: {},\n            anim: None,\n            texture: {},\n        }},\n        anim: {},\n        collider: {},\n        lod: {},\n        sound: {},\n        cell: {},\n        vis: {},\n    }},",
             esc(&item.name),
             tags.join(", "),
             rows.join(", "),
@@ -175,6 +171,21 @@ pub fn to_rust(scene: &Scene, lib: &Library) -> (String, Vec<String>) {
                     snd.sound.0,
                     f(snd.radius),
                     f(snd.volume)
+                ),
+                None => "None".into(),
+            },
+            if item.cell == trino_core::NO_CELL {
+                "NO_CELL".to_string()
+            } else {
+                item.cell.to_string()
+            },
+            match item.vis {
+                Some(trino_core::VisVolume::Cell { half }) => {
+                    format!("Some(VisVolume::Cell {{ half: {} }})", v3(half))
+                }
+                Some(trino_core::VisVolume::Portal { half, a, b }) => format!(
+                    "Some(VisVolume::Portal {{ half: {}, a: {a}, b: {b} }})",
+                    v3(half)
                 ),
                 None => "None".into(),
             }

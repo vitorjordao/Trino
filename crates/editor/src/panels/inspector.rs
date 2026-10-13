@@ -12,7 +12,7 @@ use trino_asset_pipeline::{Pivot, Primitive, Shape};
 use trino_core::Caps;
 use trino_scene::{
     AnimComponent, Entity, MaterialDef, ModelComponent, Override, PrefabInstance, ShadingDef,
-    SpriteComponent,
+    SpriteComponent, VisComponent,
 };
 
 use crate::app::{App, AssetSel, Cmd, card};
@@ -52,6 +52,12 @@ fn entity(app: &mut App, ui: &mut egui::Ui, path: &[usize]) {
     let material_names: Vec<String> = app.lib.materials.keys().cloned().collect();
     let prefab_names: Vec<String> = app.lib.prefabs.keys().cloned().collect();
     let is_prefab_doc = app.doc.is_prefab();
+    let mut cell_names: Vec<String> = Vec::new();
+    app.doc.scene.walk(|_, e| {
+        if matches!(e.vis, Some(VisComponent::Cell { .. })) {
+            cell_names.push(e.name.clone());
+        }
+    });
 
     let App {
         doc,
@@ -682,6 +688,66 @@ fn entity(app: &mut App, ui: &mut egui::Ui, path: &[usize]) {
         e.sound = None;
     }
 
+    // Interior visibility (cell / portal).
+    let mut remove_vis = false;
+    if let Some(vis) = &mut e.vis {
+        let is_cell = matches!(vis, VisComponent::Cell { .. });
+        theme::component(
+            ui,
+            "c-vis",
+            if is_cell {
+                icon::CUBE_TRANSPARENT
+            } else {
+                icon::DOOR_OPEN
+            },
+            if is_cell { c::CELL } else { c::PORTAL },
+            if is_cell {
+                "Cell (room)"
+            } else {
+                "Portal (doorway)"
+            },
+            |ui| {
+                match vis {
+                    VisComponent::Cell { size } => {
+                        theme::vec3_row(ui, "Size", size, 0.1, "");
+                        ui.label(
+                            RichText::new(
+                                "Children belong to this room and draw only while a chain of                                  portals makes it visible from the camera's room.",
+                            )
+                            .size(11.5)
+                            .color(c::TEXT_FAINT),
+                        );
+                    }
+                    VisComponent::Portal { size, a, b } => {
+                        theme::vec3_row(ui, "Size", size, 0.05, "");
+                        for (label, value) in [("Cell A", a), ("Cell B", b)] {
+                            theme::prop(ui, label, |ui| {
+                                egui::ComboBox::from_id_salt(("portal-cell", label))
+                                    .selected_text(value.as_str())
+                                    .show_ui(ui, |ui| {
+                                        for name in &cell_names {
+                                            if ui.selectable_label(value == name, name).clicked() {
+                                                *value = name.clone();
+                                            }
+                                        }
+                                    });
+                            });
+                        }
+                    }
+                }
+                if ui
+                    .small_button(RichText::new(format!("{} Remove", icon::TRASH)).color(c::ERROR))
+                    .clicked()
+                {
+                    remove_vis = true;
+                }
+            },
+        );
+    }
+    if remove_vis {
+        e.vis = None;
+    }
+
     // Add component.
     ui.add_space(4.0);
     ui.vertical_centered(|ui| {
@@ -727,6 +793,27 @@ fn entity(app: &mut App, ui: &mut egui::Ui, path: &[usize]) {
                         .cloned()
                         .unwrap_or_else(|| "sounds/beep".into());
                     e.sound = Some(trino_scene::SoundComponent::new(first));
+                }
+                if e.vis.is_none() {
+                    if ui
+                        .button(format!("{}  Cell (room)", icon::CUBE_TRANSPARENT))
+                        .clicked()
+                    {
+                        e.vis = Some(VisComponent::Cell {
+                            size: [8.0, 4.0, 8.0],
+                        });
+                    }
+                    if ui
+                        .button(format!("{}  Portal (doorway)", icon::DOOR_OPEN))
+                        .clicked()
+                    {
+                        let name = |i: usize| cell_names.get(i).cloned().unwrap_or_default();
+                        e.vis = Some(VisComponent::Portal {
+                            size: [1.5, 2.5, 0.2],
+                            a: name(0),
+                            b: name(1),
+                        });
+                    }
                 }
             },
         );

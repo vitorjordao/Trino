@@ -4,7 +4,7 @@
 #[allow(unused_imports)]
 use trino_core::{
     Camera3, ClipId, Collider, Color, Fog, Light, LodLevel, Lods, Mat34, ModelId, ModelParams,
-    SceneNode, Shading, Shape, SoundId, SoundSource, SpriteId, Tags, Vec3,
+    NO_CELL, SceneNode, Shading, Shape, SoundId, SoundSource, SpriteId, Tags, Vec3, VisVolume,
 };
 
 pub const CLEAR: Color = Color::rgb(132, 178, 226);
@@ -45,6 +45,8 @@ pub static NODES: &[SceneNode] = &[
         }),
         lod: Lods::NONE,
         sound: None,
+        cell: NO_CELL,
+        vis: None,
     },
     SceneNode {
         name: "pond",
@@ -65,6 +67,8 @@ pub static NODES: &[SceneNode] = &[
         collider: None,
         lod: Lods::NONE,
         sound: Some(SoundSource { sound: SoundId(0x181aca89), radius: 9.0, volume: 0.8 }),
+        cell: NO_CELL,
+        vis: None,
     },
     SceneNode {
         name: "tree-1",
@@ -85,6 +89,8 @@ pub static NODES: &[SceneNode] = &[
         collider: None,
         lod: Lods::NONE,
         sound: None,
+        cell: NO_CELL,
+        vis: None,
     },
     SceneNode {
         name: "tree-1/tree",
@@ -105,6 +111,8 @@ pub static NODES: &[SceneNode] = &[
         collider: None,
         lod: Lods::NONE,
         sound: None,
+        cell: NO_CELL,
+        vis: None,
     },
     SceneNode {
         name: "tree-1/tree/trunk",
@@ -129,6 +137,8 @@ pub static NODES: &[SceneNode] = &[
         }),
         lod: Lods::List(&[LodLevel { distance: 30.0, model: None }]),
         sound: None,
+        cell: NO_CELL,
+        vis: None,
     },
     SceneNode {
         name: "tree-1/tree/leaves",
@@ -149,6 +159,8 @@ pub static NODES: &[SceneNode] = &[
         collider: None,
         lod: Lods::List(&[LodLevel { distance: 14.0, model: Some(ModelId(0xcdd16dfe)) /* models/tree-top-far */ }, LodLevel { distance: 40.0, model: None }]),
         sound: None,
+        cell: NO_CELL,
+        vis: None,
     },
     SceneNode {
         name: "tree-2",
@@ -169,6 +181,8 @@ pub static NODES: &[SceneNode] = &[
         collider: None,
         lod: Lods::NONE,
         sound: None,
+        cell: NO_CELL,
+        vis: None,
     },
     SceneNode {
         name: "tree-2/tree",
@@ -189,6 +203,8 @@ pub static NODES: &[SceneNode] = &[
         collider: None,
         lod: Lods::NONE,
         sound: None,
+        cell: NO_CELL,
+        vis: None,
     },
     SceneNode {
         name: "tree-2/tree/trunk",
@@ -213,6 +229,8 @@ pub static NODES: &[SceneNode] = &[
         }),
         lod: Lods::List(&[LodLevel { distance: 30.0, model: None }]),
         sound: None,
+        cell: NO_CELL,
+        vis: None,
     },
     SceneNode {
         name: "tree-2/tree/leaves",
@@ -233,6 +251,8 @@ pub static NODES: &[SceneNode] = &[
         collider: None,
         lod: Lods::List(&[LodLevel { distance: 14.0, model: Some(ModelId(0xcdd16dfe)) /* models/tree-top-far */ }, LodLevel { distance: 40.0, model: None }]),
         sound: None,
+        cell: NO_CELL,
+        vis: None,
     },
     SceneNode {
         name: "tree-3",
@@ -253,6 +273,8 @@ pub static NODES: &[SceneNode] = &[
         collider: None,
         lod: Lods::NONE,
         sound: None,
+        cell: NO_CELL,
+        vis: None,
     },
     SceneNode {
         name: "tree-3/tree",
@@ -273,6 +295,8 @@ pub static NODES: &[SceneNode] = &[
         collider: None,
         lod: Lods::NONE,
         sound: None,
+        cell: NO_CELL,
+        vis: None,
     },
     SceneNode {
         name: "tree-3/tree/trunk",
@@ -297,6 +321,8 @@ pub static NODES: &[SceneNode] = &[
         }),
         lod: Lods::List(&[LodLevel { distance: 30.0, model: None }]),
         sound: None,
+        cell: NO_CELL,
+        vis: None,
     },
     SceneNode {
         name: "tree-3/tree/leaves",
@@ -317,6 +343,8 @@ pub static NODES: &[SceneNode] = &[
         collider: None,
         lod: Lods::List(&[LodLevel { distance: 14.0, model: Some(ModelId(0xcdd16dfe)) /* models/tree-top-far */ }, LodLevel { distance: 40.0, model: None }]),
         sound: None,
+        cell: NO_CELL,
+        vis: None,
     },
     SceneNode {
         name: "tree-4",
@@ -337,6 +365,8 @@ pub static NODES: &[SceneNode] = &[
         collider: None,
         lod: Lods::NONE,
         sound: None,
+        cell: NO_CELL,
+        vis: None,
     },
     SceneNode {
         name: "tree-4/tree",
@@ -357,6 +387,8 @@ pub static NODES: &[SceneNode] = &[
         collider: None,
         lod: Lods::NONE,
         sound: None,
+        cell: NO_CELL,
+        vis: None,
     },
     SceneNode {
         name: "tree-4/tree/trunk",
@@ -381,6 +413,8 @@ pub static NODES: &[SceneNode] = &[
         }),
         lod: Lods::List(&[LodLevel { distance: 30.0, model: None }]),
         sound: None,
+        cell: NO_CELL,
+        vis: None,
     },
     SceneNode {
         name: "tree-4/tree/leaves",
@@ -401,6 +435,8 @@ pub static NODES: &[SceneNode] = &[
         collider: None,
         lod: Lods::List(&[LodLevel { distance: 14.0, model: Some(ModelId(0xcdd16dfe)) /* models/tree-top-far */ }, LodLevel { distance: 40.0, model: None }]),
         sound: None,
+        cell: NO_CELL,
+        vis: None,
     },
     SceneNode {
         name: "tree-5",
@@ -421,6 +457,8 @@ pub static NODES: &[SceneNode] = &[
         collider: None,
         lod: Lods::NONE,
         sound: None,
+        cell: NO_CELL,
+        vis: None,
     },
     SceneNode {
         name: "tree-5/tree",
@@ -441,6 +479,8 @@ pub static NODES: &[SceneNode] = &[
         collider: None,
         lod: Lods::NONE,
         sound: None,
+        cell: NO_CELL,
+        vis: None,
     },
     SceneNode {
         name: "tree-5/tree/trunk",
@@ -465,6 +505,8 @@ pub static NODES: &[SceneNode] = &[
         }),
         lod: Lods::List(&[LodLevel { distance: 30.0, model: None }]),
         sound: None,
+        cell: NO_CELL,
+        vis: None,
     },
     SceneNode {
         name: "tree-5/tree/leaves",
@@ -485,6 +527,8 @@ pub static NODES: &[SceneNode] = &[
         collider: None,
         lod: Lods::List(&[LodLevel { distance: 14.0, model: Some(ModelId(0xcdd16dfe)) /* models/tree-top-far */ }, LodLevel { distance: 40.0, model: None }]),
         sound: None,
+        cell: NO_CELL,
+        vis: None,
     },
     SceneNode {
         name: "crates",
@@ -505,6 +549,8 @@ pub static NODES: &[SceneNode] = &[
         collider: None,
         lod: Lods::NONE,
         sound: None,
+        cell: NO_CELL,
+        vis: None,
     },
     SceneNode {
         name: "crates/crate-a",
@@ -529,6 +575,8 @@ pub static NODES: &[SceneNode] = &[
         }),
         lod: Lods::NONE,
         sound: None,
+        cell: NO_CELL,
+        vis: None,
     },
     SceneNode {
         name: "crates/crate-b",
@@ -553,6 +601,8 @@ pub static NODES: &[SceneNode] = &[
         }),
         lod: Lods::NONE,
         sound: None,
+        cell: NO_CELL,
+        vis: None,
     },
     SceneNode {
         name: "crates/crate-c",
@@ -577,6 +627,8 @@ pub static NODES: &[SceneNode] = &[
         }),
         lod: Lods::NONE,
         sound: None,
+        cell: NO_CELL,
+        vis: None,
     },
     SceneNode {
         name: "pillar-1",
@@ -601,6 +653,8 @@ pub static NODES: &[SceneNode] = &[
         }),
         lod: Lods::NONE,
         sound: None,
+        cell: NO_CELL,
+        vis: None,
     },
     SceneNode {
         name: "pillar-2",
@@ -625,6 +679,8 @@ pub static NODES: &[SceneNode] = &[
         }),
         lod: Lods::NONE,
         sound: None,
+        cell: NO_CELL,
+        vis: None,
     },
     SceneNode {
         name: "pillar-3",
@@ -649,6 +705,8 @@ pub static NODES: &[SceneNode] = &[
         }),
         lod: Lods::NONE,
         sound: None,
+        cell: NO_CELL,
+        vis: None,
     },
     SceneNode {
         name: "pillar-4",
@@ -673,6 +731,8 @@ pub static NODES: &[SceneNode] = &[
         }),
         lod: Lods::NONE,
         sound: None,
+        cell: NO_CELL,
+        vis: None,
     },
     SceneNode {
         name: "ramp",
@@ -693,6 +753,8 @@ pub static NODES: &[SceneNode] = &[
         collider: None,
         lod: Lods::NONE,
         sound: None,
+        cell: NO_CELL,
+        vis: None,
     },
     SceneNode {
         name: "rock-1",
@@ -717,6 +779,8 @@ pub static NODES: &[SceneNode] = &[
         }),
         lod: Lods::NONE,
         sound: None,
+        cell: NO_CELL,
+        vis: None,
     },
     SceneNode {
         name: "rock-2",
@@ -741,6 +805,8 @@ pub static NODES: &[SceneNode] = &[
         }),
         lod: Lods::NONE,
         sound: None,
+        cell: NO_CELL,
+        vis: None,
     },
     SceneNode {
         name: "rock-3",
@@ -765,6 +831,8 @@ pub static NODES: &[SceneNode] = &[
         }),
         lod: Lods::NONE,
         sound: None,
+        cell: NO_CELL,
+        vis: None,
     },
     SceneNode {
         name: "lamp-1",
@@ -785,6 +853,8 @@ pub static NODES: &[SceneNode] = &[
         collider: None,
         lod: Lods::NONE,
         sound: None,
+        cell: NO_CELL,
+        vis: None,
     },
     SceneNode {
         name: "lamp-1/lamp",
@@ -805,6 +875,8 @@ pub static NODES: &[SceneNode] = &[
         collider: None,
         lod: Lods::NONE,
         sound: None,
+        cell: NO_CELL,
+        vis: None,
     },
     SceneNode {
         name: "lamp-1/lamp/post",
@@ -825,6 +897,8 @@ pub static NODES: &[SceneNode] = &[
         collider: None,
         lod: Lods::NONE,
         sound: None,
+        cell: NO_CELL,
+        vis: None,
     },
     SceneNode {
         name: "lamp-1/lamp/bulb",
@@ -845,6 +919,8 @@ pub static NODES: &[SceneNode] = &[
         collider: None,
         lod: Lods::NONE,
         sound: None,
+        cell: NO_CELL,
+        vis: None,
     },
     SceneNode {
         name: "lamp-2",
@@ -865,6 +941,8 @@ pub static NODES: &[SceneNode] = &[
         collider: None,
         lod: Lods::NONE,
         sound: None,
+        cell: NO_CELL,
+        vis: None,
     },
     SceneNode {
         name: "lamp-2/lamp",
@@ -885,6 +963,8 @@ pub static NODES: &[SceneNode] = &[
         collider: None,
         lod: Lods::NONE,
         sound: None,
+        cell: NO_CELL,
+        vis: None,
     },
     SceneNode {
         name: "lamp-2/lamp/post",
@@ -905,6 +985,8 @@ pub static NODES: &[SceneNode] = &[
         collider: None,
         lod: Lods::NONE,
         sound: None,
+        cell: NO_CELL,
+        vis: None,
     },
     SceneNode {
         name: "lamp-2/lamp/bulb",
@@ -925,6 +1007,8 @@ pub static NODES: &[SceneNode] = &[
         collider: None,
         lod: Lods::NONE,
         sound: None,
+        cell: NO_CELL,
+        vis: None,
     },
     SceneNode {
         name: "robot-walker",
@@ -945,6 +1029,8 @@ pub static NODES: &[SceneNode] = &[
         collider: None,
         lod: Lods::NONE,
         sound: None,
+        cell: NO_CELL,
+        vis: None,
     },
     SceneNode {
         name: "robot-greeter",
@@ -965,6 +1051,8 @@ pub static NODES: &[SceneNode] = &[
         collider: None,
         lod: Lods::NONE,
         sound: None,
+        cell: NO_CELL,
+        vis: None,
     },
     SceneNode {
         name: "windmill",
@@ -985,6 +1073,8 @@ pub static NODES: &[SceneNode] = &[
         collider: None,
         lod: Lods::NONE,
         sound: None,
+        cell: NO_CELL,
+        vis: None,
     },
     SceneNode {
         name: "castle-door",
@@ -1009,6 +1099,8 @@ pub static NODES: &[SceneNode] = &[
         }),
         lod: Lods::NONE,
         sound: None,
+        cell: NO_CELL,
+        vis: None,
     },
     SceneNode {
         name: "coin-1",
@@ -1033,6 +1125,8 @@ pub static NODES: &[SceneNode] = &[
         }),
         lod: Lods::NONE,
         sound: None,
+        cell: NO_CELL,
+        vis: None,
     },
     SceneNode {
         name: "coin-2",
@@ -1057,6 +1151,8 @@ pub static NODES: &[SceneNode] = &[
         }),
         lod: Lods::NONE,
         sound: None,
+        cell: NO_CELL,
+        vis: None,
     },
     SceneNode {
         name: "coin-3",
@@ -1081,6 +1177,8 @@ pub static NODES: &[SceneNode] = &[
         }),
         lod: Lods::NONE,
         sound: None,
+        cell: NO_CELL,
+        vis: None,
     },
     SceneNode {
         name: "coin-4",
@@ -1105,6 +1203,8 @@ pub static NODES: &[SceneNode] = &[
         }),
         lod: Lods::NONE,
         sound: None,
+        cell: NO_CELL,
+        vis: None,
     },
     SceneNode {
         name: "coin-5",
@@ -1129,6 +1229,8 @@ pub static NODES: &[SceneNode] = &[
         }),
         lod: Lods::NONE,
         sound: None,
+        cell: NO_CELL,
+        vis: None,
     },
     SceneNode {
         name: "gameplay",
@@ -1149,6 +1251,8 @@ pub static NODES: &[SceneNode] = &[
         collider: None,
         lod: Lods::NONE,
         sound: None,
+        cell: NO_CELL,
+        vis: None,
     },
     SceneNode {
         name: "gameplay/spawn",
@@ -1169,6 +1273,8 @@ pub static NODES: &[SceneNode] = &[
         collider: None,
         lod: Lods::NONE,
         sound: None,
+        cell: NO_CELL,
+        vis: None,
     },
     SceneNode {
         name: "gameplay/hero",
@@ -1189,6 +1295,8 @@ pub static NODES: &[SceneNode] = &[
         collider: None,
         lod: Lods::NONE,
         sound: None,
+        cell: NO_CELL,
+        vis: None,
     },
     SceneNode {
         name: "gameplay/goal",
@@ -1213,5 +1321,7 @@ pub static NODES: &[SceneNode] = &[
         }),
         lod: Lods::NONE,
         sound: None,
+        cell: NO_CELL,
+        vis: None,
     },
 ];

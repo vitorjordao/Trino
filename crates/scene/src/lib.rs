@@ -193,6 +193,11 @@ pub struct Entity {
     /// `trino_core::audio::Ambience` near the listener.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sound: Option<SoundComponent>,
+    /// Interior visibility: this entity is a **cell** (a room; everything
+    /// under it belongs to it) or a **portal** (a doorway between two
+    /// cells) — see `trino_core::vis`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vis: Option<VisComponent>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<Entity>,
 }
@@ -217,6 +222,7 @@ impl Entity {
             prefab: None,
             collider: None,
             sound: None,
+            vis: None,
             children: Vec::new(),
         }
     }
@@ -376,6 +382,22 @@ fn is_zero3(v: &[f32; 3]) -> bool {
 
 fn is_false(b: &bool) -> bool {
     !*b
+}
+
+/// Interior visibility volume. Sizes are **full** box sizes in local
+/// units, centered on the entity origin (rotation/scale give the world box
+/// that encloses the result).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub enum VisComponent {
+    /// A room. Its descendants are drawn only while it is visible.
+    Cell { size: [f32; 3] },
+    /// A doorway joining the cells named `a` and `b` (entity names or
+    /// name paths, like `house/kitchen`). Make it cover the opening.
+    Portal {
+        size: [f32; 3],
+        a: String,
+        b: String,
+    },
 }
 
 /// A positional sound source (a looping sound effect; on the N64 declare

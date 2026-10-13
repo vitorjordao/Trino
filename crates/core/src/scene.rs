@@ -22,6 +22,7 @@ use crate::math3d::Mat34;
 use crate::physics::{Aabb, Collider, Shape};
 use crate::render::{AnimRef, ClipId, Material, ModelId, ModelParams, Renderer, Shading};
 use crate::render3d::{Camera3, Fog, Light};
+use crate::vis::VisVolume;
 
 /// An entity's tags: a static list (exported code) or a packed,
 /// `\n`-separated string borrowed from a baked scene blob.
@@ -141,6 +142,11 @@ pub struct SceneNode {
     pub lod: Lods,
     /// Positional looping sound (see [`crate::audio::Ambience`]).
     pub sound: Option<SoundSource>,
+    /// Interior cell this node belongs to ([`crate::vis::NO_CELL`] = none:
+    /// drawn regardless of portal visibility).
+    pub cell: u8,
+    /// Cell or portal volume (see [`crate::vis`]).
+    pub vis: Option<VisVolume>,
 }
 
 impl SceneNode {
@@ -195,7 +201,9 @@ impl SceneNode {
 ///   collider offset f32*3, texture u32 (sprite handle),
 ///   LOD levels (u32 offset, u32 count) into the data table — 8-byte
 ///   records `f32 distance, u32 model` (0 = none), sorted by distance,
-///   sound source: u32 sound (flag bit4), f32 radius, f32 volume
+///   sound source: u32 sound (flag bit4), f32 radius, f32 volume,
+///   visibility: u8 cell (0xFF none), u8 volume kind (0 none, 1 cell,
+///   2 portal), u8 portal a, u8 portal b, f32*3 world half extents
 /// data table: UTF-8 strings and LOD records, to the end of the blob: UTF-8 bytes to the end of the blob
 /// ```
 ///
@@ -205,7 +213,7 @@ pub const TSCN_MAGIC: &[u8; 4] = b"TSCN";
 pub const TSCN_VERSION: u16 = 1;
 pub const TSCN_HEADER: usize = 12;
 pub const TSCN_ENV_BYTES: usize = 68;
-pub const TSCN_NODE_BYTES: usize = 16 + 48 + 4 + 4 + 4 + 4 + 4 + 4 + 12 + 12 + 4 + 8 + 12;
+pub const TSCN_NODE_BYTES: usize = 16 + 48 + 4 + 4 + 4 + 4 + 4 + 4 + 12 + 12 + 4 + 8 + 12 + 16;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SceneError {
@@ -386,9 +394,22 @@ impl BakedScene {
             radius: rd_f32(d, b + 64),
             volume: rd_f32(d, b + 68),
         });
+        let v = b + 72;
+        let half = rd_vec3(d, v + 4);
+        let vis = match d[v + 1] {
+            1 => Some(VisVolume::Cell { half }),
+            2 => Some(VisVolume::Portal {
+                half,
+                a: d[v + 2],
+                b: d[v + 3],
+            }),
+            _ => None,
+        };
         SceneNode {
             name,
             tags: Tags::Packed(tags),
+            cell: d[v],
+            vis,
             lod: Lods::Packed(lod),
             sound,
             matrix,
@@ -447,7 +468,23 @@ pub fn draw_nodes(
     time: f32,
     eye: Vec3,
 ) {
+    draw_nodes_in(renderer, nodes, root, time, eye, u64::MAX);
+}
+
+/// [`draw_nodes`] limited to the cells set in `visible` (a mask from
+/// [`crate::vis::Cells::visible`]); nodes outside every cell always draw.
+pub fn draw_nodes_in(
+    renderer: &mut dyn Renderer,
+    nodes: &[SceneNode],
+    root: &Mat34,
+    time: f32,
+    eye: Vec3,
+    visible: u64,
+) {
     for node in nodes {
+        if !crate::vis::in_view(node.cell, visible) {
+            continue;
+        }
         let Some(model) = node.model_from(eye) else {
             continue;
         };
@@ -472,6 +509,7 @@ pub fn with_tag<'a>(nodes: &'a [SceneNode], tag: &'a str) -> impl Iterator<Item 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::vis::NO_CELL;
 
     const NODES: &[SceneNode] = &[
         SceneNode {
@@ -484,6 +522,8 @@ mod tests {
             collider: None,
             lod: Lods::NONE,
             sound: None,
+            cell: NO_CELL,
+            vis: None,
         },
         SceneNode {
             name: "spawn",
@@ -501,6 +541,8 @@ mod tests {
             collider: None,
             lod: Lods::NONE,
             sound: None,
+            cell: NO_CELL,
+            vis: None,
         },
     ];
 
@@ -579,6 +621,8 @@ mod tests {
         b.extend_from_slice(&12u32.to_le_bytes()); // LOD records at 12
         b.extend_from_slice(&1u32.to_le_bytes()); // one level
         b.extend_from_slice(&[0; 12]); // sound (flag off)
+        b.extend_from_slice(&[3, 2, 1, 4]); // cell 3, portal 1 <-> 4
+        f(&mut b, &[0.5, 1.0, 0.25]);
         b.extend_from_slice(b"a/doordoor\nx");
         f(&mut b, &[30.0]);
         b.extend_from_slice(&0u32.to_le_bytes()); // culled beyond 30
@@ -611,6 +655,15 @@ mod tests {
         // LOD: model 7 up close, nothing beyond 30 units.
         assert_eq!(n.model_from(Vec3::new(3.0, 0.0, 0.0)), Some(ModelId(7)));
         assert_eq!(n.model_from(Vec3::new(3.0, 0.0, 40.0)), None);
+        assert_eq!(n.cell, 3);
+        assert_eq!(
+            n.vis,
+            Some(VisVolume::Portal {
+                half: Vec3::new(0.5, 1.0, 0.25),
+                a: 1,
+                b: 4
+            })
+        );
     }
 
     #[test]

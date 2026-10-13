@@ -3,7 +3,9 @@
 //! list every frame; [`crate::codegen`] bakes it into game code.
 
 use trino_core::physics::{Collider, Shape};
-use trino_core::{AnimRef, ClipId, Mat34, ModelId, ModelParams, SpriteId, Vec3};
+use trino_core::{
+    AnimRef, ClipId, MAX_CELLS, Mat34, ModelId, ModelParams, NO_CELL, SpriteId, Vec3, VisVolume,
+};
 
 use crate::{Entity, Library, Scene};
 
@@ -31,11 +33,21 @@ pub struct DrawItem {
     pub lod: Vec<(f32, Option<(ModelId, String)>)>,
     /// Positional looping sound.
     pub sound: Option<trino_core::SoundSource>,
+    /// Interior cell index ([`trino_core::NO_CELL`] = outside every cell).
+    pub cell: u8,
+    /// Cell or portal volume (world half extents; cell indices resolved).
+    pub vis: Option<VisVolume>,
     /// True for parts that come from a prefab (not editable in place).
     pub from_prefab: bool,
 }
 
 impl DrawItem {
+    /// Whether this item becomes a game-side `SceneNode` (codegen, TSCN):
+    /// 2D-only sprites stay in the editor.
+    pub fn exported(&self) -> bool {
+        self.sprite.is_none() || self.model.is_some() || self.vis.is_some()
+    }
+
     /// Model to draw for a camera at `eye` (LOD applied).
     pub fn model_from(&self, eye: trino_core::Vec3) -> Option<ModelId> {
         let base = self.model.as_ref().map(|(id, _)| *id);
@@ -78,11 +90,37 @@ pub struct Resolved {
     pub warnings: Vec<String>,
 }
 
+impl Resolved {
+    /// The scene's cells and portals (see `trino_core::vis`).
+    pub fn cells(&self) -> trino_core::Cells<256> {
+        trino_core::Cells::from_volumes(
+            self.items
+                .iter()
+                .filter_map(|i| i.vis.map(|v| (i.matrix.transform_point(Vec3::ZERO), v))),
+        )
+    }
+
+    /// Visibility mask from `camera` on a `screen`-sized view — what the
+    /// game computes with `Cells::visible` (all set without cells).
+    pub fn visible_cells(&self, camera: &trino_core::Camera3, screen: trino_core::Vec2) -> u64 {
+        if !self.items.iter().any(|i| i.vis.is_some()) {
+            return u64::MAX;
+        }
+        self.cells().visible(camera, screen)
+    }
+}
+
 struct Ctx<'a> {
     lib: &'a Library,
     time: f32,
     out: Resolved,
     stack: Vec<String>,
+    /// Cell the entities being visited belong to.
+    cell: u8,
+    /// Name paths of the cells so far, in index order.
+    cells: Vec<String>,
+    /// Portals waiting for cell names: (item index, a, b).
+    portals: Vec<(usize, String, String)>,
 }
 
 #[derive(Clone, Copy)]
@@ -100,6 +138,9 @@ pub fn resolve(scene: &Scene, lib: &Library, time: f32) -> Resolved {
         time,
         out: Resolved::default(),
         stack: Vec::new(),
+        cell: NO_CELL,
+        cells: Vec::new(),
+        portals: Vec::new(),
     };
     let p2 = Parent2D {
         pos: [0.0; 2],
@@ -109,7 +150,44 @@ pub fn resolve(scene: &Scene, lib: &Library, time: f32) -> Resolved {
     for (i, e) in scene.entities.iter().enumerate() {
         visit(&mut ctx, e, &[i], &Mat34::IDENTITY, p2, "", false);
     }
+    link_portals(&mut ctx);
     ctx.out
+}
+
+/// World half extents of a local box (`size` = full size) under `m`: the
+/// axis-aligned box enclosing the transformed one.
+fn world_half(m: &Mat34, size: [f32; 3]) -> Vec3 {
+    let h = [size[0] * 0.5, size[1] * 0.5, size[2] * 0.5];
+    let row = |r: usize| (0..3).map(|c| m.m[r][c].abs() * h[c]).sum::<f32>();
+    Vec3::new(row(0), row(1), row(2))
+}
+
+fn name_matches(full: &str, name: &str) -> bool {
+    full == name || full.ends_with(&format!("/{name}"))
+}
+
+/// Resolve portal cell names to indices (cells may come after portals).
+fn link_portals(ctx: &mut Ctx) {
+    let portals = std::mem::take(&mut ctx.portals);
+    for (at, a, b) in portals {
+        let find = |n: &str| ctx.cells.iter().position(|c| name_matches(c, n));
+        let item = &mut ctx.out.items[at];
+        match (find(&a), find(&b)) {
+            (Some(ia), Some(ib)) => {
+                if let Some(VisVolume::Portal { a, b, .. }) = &mut item.vis {
+                    (*a, *b) = (ia as u8, ib as u8);
+                }
+            }
+            (fa, _) => {
+                let missing = if fa.is_none() { a } else { b };
+                ctx.out.warnings.push(format!(
+                    "{}: portal names unknown cell `{missing}` — portal ignored",
+                    item.name
+                ));
+                item.vis = None;
+            }
+        }
+    }
 }
 
 fn visit(
@@ -193,6 +271,33 @@ fn visit(
         .collider
         .as_ref()
         .map(|c| resolve_collider(ctx, &name, e, c));
+    let outer_cell = ctx.cell;
+    let vis = match &e.vis {
+        Some(crate::VisComponent::Cell { size }) => {
+            if ctx.cells.len() < MAX_CELLS {
+                ctx.cell = ctx.cells.len() as u8;
+                ctx.cells.push(name.clone());
+                Some(VisVolume::Cell {
+                    half: world_half(&matrix, *size),
+                })
+            } else {
+                ctx.out.warnings.push(format!(
+                    "{name}: more than {MAX_CELLS} cells — this one is ignored"
+                ));
+                None
+            }
+        }
+        Some(crate::VisComponent::Portal { size, a, b }) => {
+            ctx.portals
+                .push((ctx.out.items.len(), a.clone(), b.clone()));
+            Some(VisVolume::Portal {
+                half: world_half(&matrix, *size),
+                a: 0,
+                b: 0,
+            })
+        }
+        None => None,
+    };
     ctx.out.items.push(DrawItem {
         owner: owner.to_vec(),
         name: name.clone(),
@@ -209,6 +314,8 @@ fn visit(
             radius: s.radius,
             volume: s.volume,
         }),
+        cell: ctx.cell,
+        vis,
         from_prefab,
     });
 
@@ -248,6 +355,7 @@ fn visit(
         };
         visit(ctx, child, &child_owner, &matrix, here, &name, from_prefab);
     }
+    ctx.cell = outer_cell;
 }
 
 /// Authored collider -> engine collider (`Auto` = the model's box).

@@ -1,0 +1,8 @@
+// Trino placeholder model ("fake object"). Edit and save: it hot-reloads.
+// A 1 m stone block, scaled into walls and floors by the interior scene.
+(
+    shape: Box(size: (1.0, 1.0, 1.0)),
+    color: (150, 146, 160, 255),
+    top_color: Some((186, 180, 196, 255)),
+    pivot: Bottom,
+)

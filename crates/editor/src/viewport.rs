@@ -266,7 +266,22 @@ impl Viewport {
             .as_ref()
             .map(|(p, t)| (p.clone(), t.elapsed().as_secs_f32()));
         let mut tris = 0;
+        // The Game view culls interior cells like the game does; the Scene
+        // view shows everything (it is for editing).
+        let visible = match self.kind {
+            ViewKind::Game => {
+                let (w, h) = self.renderer.internal_size();
+                input
+                    .resolved
+                    .visible_cells(&camera, trino_core::Vec2::new(w as f32, h as f32))
+            }
+            ViewKind::Scene => u64::MAX,
+        };
+        let r = &mut self.renderer;
         for item in &input.resolved.items {
+            if !trino_core::vis::in_view(item.cell, visible) {
+                continue;
+            }
             // LOD as the game sees it, from this view's camera.
             let Some(lod_id) = item.model_from(camera.eye) else {
                 continue;
@@ -562,6 +577,7 @@ impl Viewport {
         let playing = self.play.is_some();
         if self.kind == ViewKind::Scene && self.show_colliders {
             colliders(&painter, &proj, input);
+            vis_volumes(&painter, &proj, input);
         }
         if let Some(h) = &self.hover
             && Some(h.as_slice()) != input.selected
@@ -1011,6 +1027,27 @@ fn colliders(painter: &egui::Painter, proj: &Proj, input: &ViewInput) {
             &trino_core::Mat34::IDENTITY,
             [w.min.x, w.min.y, w.min.z],
             [w.max.x, w.max.y, w.max.z],
+        ) {
+            painter.line_segment([a, b], stroke);
+        }
+    }
+}
+
+/// Cell and portal wireframes: the world boxes `trino_core::vis` uses.
+fn vis_volumes(painter: &egui::Painter, proj: &Proj, input: &ViewInput) {
+    for item in &input.resolved.items {
+        let (half, color) = match item.vis {
+            Some(trino_core::VisVolume::Cell { half }) => (half, c::CELL),
+            Some(trino_core::VisVolume::Portal { half, .. }) => (half, c::PORTAL),
+            None => continue,
+        };
+        let p = gizmo::translation(&item.matrix);
+        let stroke = Stroke::new(1.0, color.gamma_multiply(0.7));
+        for [a, b] in gizmo::box_lines(
+            proj,
+            &trino_core::Mat34::IDENTITY,
+            [p.x - half.x, p.y - half.y, p.z - half.z],
+            [p.x + half.x, p.y + half.y, p.z + half.z],
         ) {
             painter.line_segment([a, b], stroke);
         }

@@ -120,6 +120,9 @@ file = "models/castle64/door_kaykit.glb"
 [models.ground]
 file = "models/proxies/ground.prim.ron"
 
+[models.wall]
+file = "models/proxies/wall.prim.ron"
+
 # Textured fake objects: UVs are generated (one repeat per meter) and
 # the default texture is baked in; materials can override it.
 [models.crate]
@@ -190,6 +193,10 @@ file = "data/selftest.txt"
 # BakedScene::parse(platform.blob(BlobId::from_path("scenes/showcase"))).
 [scenes.showcase]
 file = "scenes/showcase.scene.ron"
+
+# Portal/cell demo (three rooms); loaded by the console self-tests.
+[scenes.interior]
+file = "scenes/interior.scene.ron"
 
 # 32x32 grayscale tiles for textured 3D (tinted by vertex color/material).
 [sprites.tex_planks]

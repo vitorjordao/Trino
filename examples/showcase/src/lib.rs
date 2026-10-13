@@ -488,6 +488,9 @@ pub fn check_baked(
             || a.params != b.params
             || !a.tags.iter().eq(b.tags.iter())
             || !a.lod.iter().eq(b.lod.iter())
+            || a.sound != b.sound
+            || a.cell != b.cell
+            || a.vis != b.vis
         {
             return Err("baked node differs from the exported code");
         }

@@ -41,6 +41,9 @@ pub mod c {
     /// Solid colliders (wireframes + inspector); triggers use [`TRIGGER`].
     pub const COLLIDER: Color32 = Color32::from_rgb(110, 235, 120);
     pub const TRIGGER: Color32 = Color32::from_rgb(255, 210, 80);
+    /// Interior cells (rooms) and portals (doorways) — see `trino_core::vis`.
+    pub const CELL: Color32 = Color32::from_rgb(120, 170, 255);
+    pub const PORTAL: Color32 = Color32::from_rgb(255, 140, 90);
 }
 
 pub const RADIUS: u8 = 6;

@@ -51,6 +51,8 @@ unsafe extern "C" {
     pub fn trino_tri_tex(verts: *const f32);
     /// Test hook: RGBA8888 of the last frame at (x, y); 0 = unavailable.
     pub fn trino_debug_pixel(x: u32, y: u32) -> u32;
+    /// Test hook: print the last framebuffer over ISViewer (golden images).
+    pub fn trino_debug_fb_dump();
 
     pub fn trino_joypad_buttons() -> u32;
     /// (x as i16 as u16) << 16 | (y as i16 as u16).

@@ -25,11 +25,25 @@
 
 static void trino_check_trifmt(void);
 
+// Standard render mode + magic-square RGB dither into the 16-bit
+// framebuffer (libdragon's standard mode disables dithering).
+static void trino_mode_standard(void)
+{
+    rdpq_set_mode_standard();
+    rdpq_mode_dithering(DITHER_SQUARE_NONE);
+}
+
 void trino_init(void)
 {
     debug_init_isviewer();
     debug_init_usblog();
-    display_init(RESOLUTION_320x240, DEPTH_16_BPP, 2, GAMMA_NONE, FILTERS_RESAMPLE);
+    // The VI's dedither ("restore") filter rebuilds smooth color from the
+    // RDP's magic-square dither (see trino_mode_standard). Coverage is
+    // always full (standard mode zaps it), so the VI AA/divot stages that
+    // come with this option leave pixels untouched. PC emulates the same
+    // pair (PcRenderer: quantize_5551 + fs_vi_dedither).
+    display_init(RESOLUTION_320x240, DEPTH_16_BPP, 2, GAMMA_NONE,
+                 FILTERS_RESAMPLE_ANTIALIAS_DEDITHER);
     rdpq_init();
     joypad_init();
     timer_init();
@@ -117,7 +131,7 @@ typedef struct {
 
 void trino_sprite_blit(void* sprite, const trino_blit_t* p)
 {
-    rdpq_set_mode_standard();
+    trino_mode_standard();
     rdpq_mode_alphacompare(1);
     if (p->tint != 0xFFFFFFFFu) {
         rdpq_set_prim_color(RGBA32((p->tint >> 24) & 0xFF, (p->tint >> 16) & 0xFF,
@@ -145,7 +159,7 @@ void trino_sprite_blit(void* sprite, const trino_blit_t* p)
 // Call once before a batch of trino_tri (shade combiner + hardware z-test).
 void trino_3d_begin(void)
 {
-    rdpq_set_mode_standard();
+    trino_mode_standard();
     rdpq_mode_combiner(RDPQ_COMBINER_SHADE);
     rdpq_mode_zbuf(true, true);
 }
@@ -195,7 +209,7 @@ static float trino_tex_w = 1.0f, trino_tex_h = 1.0f;
 void trino_3d_texture(void* sprite, uint32_t clamp)
 {
     sprite_t* sp = (sprite_t*)sprite;
-    rdpq_set_mode_standard();
+    trino_mode_standard();
     rdpq_mode_combiner(RDPQ_COMBINER_TEX_SHADE);
     rdpq_mode_zbuf(true, true);
     rdpq_mode_persp(true);
@@ -424,3 +438,38 @@ int main(void)
     trino_rust_main();
     return 0;
 }
+
+// Test hook: print the last framebuffer (RGBA5551) over ISViewer for the
+// emulator golden image (`cargo xtask test n64` rebuilds the PNG):
+// "TRINO_FBR:<y>:<x0>:<hex>" rows of 64 pixels, then
+// "TRINO_FB_END:<w>x<h>:<fnv1a32 of the pixels>".
+void trino_debug_fb_dump(void)
+{
+    if (!trino_last_fb) return;
+    rspq_wait();
+    const uint8_t* base = UncachedAddr(trino_last_fb->buffer);
+    uint32_t w = trino_last_fb->width, h = trino_last_fb->height;
+    uint32_t hash = 2166136261u;
+    static char line[64 * 4 + 1];
+    static const char hex[] = "0123456789abcdef";
+    for (uint32_t y = 0; y < h; y++) {
+        const uint16_t* row = (const uint16_t*)(base + y * trino_last_fb->stride);
+        for (uint32_t x0 = 0; x0 < w; x0 += 64) {
+            uint32_t n = (w - x0 < 64) ? (w - x0) : 64;
+            for (uint32_t i = 0; i < n; i++) {
+                uint16_t px = row[x0 + i];
+                hash = (hash ^ (px >> 8)) * 16777619u;
+                hash = (hash ^ (px & 0xFF)) * 16777619u;
+                line[i * 4 + 0] = hex[(px >> 12) & 15];
+                line[i * 4 + 1] = hex[(px >> 8) & 15];
+                line[i * 4 + 2] = hex[(px >> 4) & 15];
+                line[i * 4 + 3] = hex[px & 15];
+            }
+            line[n * 4] = 0;
+            debugf("TRINO_FBR:%lu:%lu:%s\n", (unsigned long)y, (unsigned long)x0, line);
+        }
+    }
+    debugf("TRINO_FB_END:%lux%lu:%08lx\n", (unsigned long)w, (unsigned long)h,
+           (unsigned long)hash);
+}
+

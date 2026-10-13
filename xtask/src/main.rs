@@ -7,6 +7,7 @@
 mod agents;
 mod blender;
 mod castle64_assets;
+mod fbgolden;
 mod font_assets;
 mod model;
 mod n3ds;
@@ -127,7 +128,7 @@ fn main() -> ExitCode {
 
         (Some("build"), Some("n64")) => n64::build(false),
         (Some("run"), Some("n64")) => n64::run(),
-        (Some("test"), Some("n64")) => n64::test(),
+        (Some("test"), Some("n64")) => n64::test(bless),
         (Some("watch"), Some("n64")) => n64::watch(),
 
         (Some("build"), Some("3ds")) => n3ds::build(false),

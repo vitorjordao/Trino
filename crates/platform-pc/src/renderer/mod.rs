@@ -110,6 +110,11 @@ pub struct PcRenderer {
     profile: SimProfile,
     internal_size: (u32, u32),
     n64_look: bool,
+    /// N64 Video Interface dedither ("restore") filter, run on the 16-bit
+    /// look at `end_frame` — see [`PcRenderer::set_vi_dedither`].
+    vi_dedither: bool,
+    vi_pipeline: wgpu::RenderPipeline,
+    vi_tex: wgpu::Texture,
     strict: bool,
 }
 
@@ -132,7 +137,8 @@ fn create_targets(
         format: OFFSCREEN_FORMAT,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT
             | wgpu::TextureUsages::TEXTURE_BINDING
-            | wgpu::TextureUsages::COPY_SRC,
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
     let offscreen_view = offscreen_tex.create_view(&wgpu::TextureViewDescriptor::default());
@@ -149,6 +155,24 @@ fn create_targets(
     });
     let depth_view = depth_tex.create_view(&wgpu::TextureViewDescriptor::default());
     (offscreen_tex, offscreen_view, depth_view)
+}
+
+/// Scratch target of the VI pass (copied back into the offscreen target).
+fn create_vi_target(device: &wgpu::Device, size: (u32, u32)) -> wgpu::Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("trino-vi"),
+        size: wgpu::Extent3d {
+            width: size.0,
+            height: size.1,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: OFFSCREEN_FORMAT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    })
 }
 
 fn create_blit_bind_group(
@@ -587,6 +611,34 @@ impl PcRenderer {
 
         let blit_bind_group =
             create_blit_bind_group(&device, &texture_bgl, &offscreen_view, &blit_sampler);
+        // VI pass: reads the offscreen target (through the blit bind group)
+        // into a scratch texture of the same format.
+        let vi_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("trino-vi-pipeline"),
+            layout: Some(&blit_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_blit"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_vi_dedither"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: OFFSCREEN_FORMAT,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+        let vi_tex = create_vi_target(&device, internal_size);
 
         let white_tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("trino-white"),
@@ -680,6 +732,9 @@ impl PcRenderer {
             profile,
             internal_size,
             n64_look,
+            vi_dedither: true,
+            vi_pipeline,
+            vi_tex,
             strict,
         }
     }
@@ -743,12 +798,27 @@ impl PcRenderer {
         self.offscreen_tex = tex;
         self.offscreen_view = view;
         self.depth_view = depth;
+        self.vi_tex = create_vi_target(&self.device, size);
         self.internal_size = size;
         self.queue.write_buffer(
             &self.globals_buf,
             0,
             &globals_bytes(size.0, size.1, self.n64_look),
         );
+    }
+
+    /// Toggle the N64 VI dedither filter (on by default; it only runs with
+    /// the N64 look). The console enables the same filter
+    /// (`FILTERS_RESAMPLE_ANTIALIAS_DEDITHER` in the N64 shim): each
+    /// pixel's 5-bit channels move one 8-bit step toward each of its 8
+    /// neighbours that differ — the restore filter that turns the RDP's
+    /// magic-square dither back into smooth gradients.
+    pub fn set_vi_dedither(&mut self, on: bool) {
+        self.vi_dedither = on;
+    }
+
+    pub fn vi_dedither(&self) -> bool {
+        self.vi_dedither
     }
 
     /// View of the internal framebuffer — the editor registers this as an
@@ -1059,11 +1129,13 @@ impl PcRenderer {
         }
         self.tri_verts.clear();
 
-        // In N64 look the framebuffer is 16-bit: quantize the clear color to
-        // 5 bits per channel (sprites are dithered+quantized in the shader).
+        // In N64 look the framebuffer is 16-bit: the clear (an RDP fill, no
+        // dither) keeps the top 5 bits, stored expanded like a 5551 readback
+        // (sprites/triangles are dithered+quantized in the shader).
         let ch = |v: u8| -> f64 {
             if self.n64_look {
-                ((v as f64 / 255.0 * 31.0).round() / 31.0).clamp(0.0, 1.0)
+                let c5 = v >> 3;
+                ((c5 << 3) | (c5 >> 2)) as f64 / 255.0
             } else {
                 v as f64 / 255.0
             }
@@ -1133,6 +1205,45 @@ impl PcRenderer {
                     }
                 }
             }
+        }
+
+        // N64 Video Interface: dedither the finished 16-bit frame, then put
+        // it back where every consumer (window blit, editor, readback)
+        // reads it.
+        if self.n64_look && self.vi_dedither {
+            let vi_view = self
+                .vi_tex
+                .create_view(&wgpu::TextureViewDescriptor::default());
+            {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("trino-vi-pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &vi_view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: wgpu::StoreOp::Store,
+                        },
+                        depth_slice: None,
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_pipeline(&self.vi_pipeline);
+                pass.set_bind_group(0, &self.blit_bind_group, &[]);
+                pass.draw(0..3, 0..1);
+            }
+            encoder.copy_texture_to_texture(
+                self.vi_tex.as_image_copy(),
+                self.offscreen_tex.as_image_copy(),
+                wgpu::Extent3d {
+                    width: self.internal_size.0,
+                    height: self.internal_size.1,
+                    depth_or_array_layers: 1,
+                },
+            );
         }
 
         fn acquire(frame: wgpu::CurrentSurfaceTexture) -> Result<wgpu::SurfaceTexture, bool> {

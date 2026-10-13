@@ -71,8 +71,11 @@ fn sample_3point(uv: vec2<f32>) -> vec4<f32> {
     return t11 + (1.0 - f.x) * (t01 - t11) + (1.0 - f.y) * (t10 - t11);
 }
 
-// 16-bit framebuffer approximation: RDP magic-square ordered dither, then
-// RGBA5551 quantization (5 bits per channel, 1-bit alpha).
+// 16-bit framebuffer write, as the RDP does it (angrylion-rdp-plus
+// rdp/dither.c): per channel, 8-bit c rounds up to the next multiple of 8
+// when its low 3 bits exceed the magic-square dither value, then keeps the
+// top 5 bits; alpha is 1 bit. Stored expanded like a 5551 readback
+// ((c5 << 3) | (c5 >> 2)), which is what the N64 golden dumps decode to.
 fn quantize_5551(color: vec4<f32>, px: vec2<u32>) -> vec4<f32> {
     var magic = array<f32, 16>(
         0.0, 6.0, 1.0, 7.0,
@@ -80,14 +83,18 @@ fn quantize_5551(color: vec4<f32>, px: vec2<u32>) -> vec4<f32> {
         3.0, 5.0, 2.0, 4.0,
         7.0, 1.0, 6.0, 0.0,
     );
-    let d = (magic[(px.y % 4u) * 4u + (px.x % 4u)] - 3.5) / 8.0;
-    let rgb = clamp(
-        floor(clamp(color.rgb, vec3<f32>(0.0), vec3<f32>(1.0)) * 31.0 + 0.5 + d) / 31.0,
-        vec3<f32>(0.0),
-        vec3<f32>(1.0),
-    );
+    let m = magic[(px.y % 4u) * 4u + (px.x % 4u)];
+    let c8 = floor(clamp(color.rgb, vec3<f32>(0.0), vec3<f32>(1.0)) * 255.0 + 0.5);
+    let hi = floor(c8 / 8.0);
+    let up = select(vec3<f32>(0.0), vec3<f32>(1.0), c8 - hi * 8.0 > vec3<f32>(m));
+    let c5 = min(hi + up, vec3<f32>(31.0));
     let a = select(0.0, 1.0, color.a >= 0.5);
-    return vec4<f32>(rgb, a);
+    return vec4<f32>(expand5(c5), a);
+}
+
+// 5-bit channel values -> the stored 8-bit expansion, normalized.
+fn expand5(c5: vec3<f32>) -> vec3<f32> {
+    return (c5 * 8.0 + floor(c5 / 4.0)) / 255.0;
 }
 
 @fragment
@@ -213,4 +220,32 @@ fn vs_blit(@builtin(vertex_index) vi: u32) -> BlitOut {
 @fragment
 fn fs_blit(in: BlitOut) -> @location(0) vec4<f32> {
     return textureSample(t_frame, s_frame, in.uv);
+}
+
+// N64 Video Interface dedither ("restore") filter, as angrylion-rdp-plus
+// implements it (vi/restore.c): for each channel, the pixel's 5-bit value
+// x8 plus, for each of its 8 neighbours, +1 if the neighbour's 5-bit value
+// is higher and -1 if lower (on top of the stored expansion, see
+// quantize_5551).
+fn vi_c5(c: vec4<f32>) -> vec3<f32> {
+    return floor(floor(clamp(c.rgb, vec3<f32>(0.0), vec3<f32>(1.0)) * 255.0 + 0.5) / 8.0);
+}
+
+@fragment
+fn fs_vi_dedither(in: BlitOut) -> @location(0) vec4<f32> {
+    let p = vec2<i32>(in.clip.xy);
+    let hi = vec2<i32>(textureDimensions(t_frame)) - vec2<i32>(1, 1);
+    let center = textureLoad(t_frame, p, 0);
+    let c5 = vi_c5(center);
+    var sum = vec3<f32>(0.0);
+    for (var dy = -1; dy <= 1; dy++) {
+        for (var dx = -1; dx <= 1; dx++) {
+            if dx == 0 && dy == 0 {
+                continue;
+            }
+            let q = clamp(p + vec2<i32>(dx, dy), vec2<i32>(0, 0), hi);
+            sum += sign(vi_c5(textureLoad(t_frame, q, 0)) - c5);
+        }
+    }
+    return vec4<f32>(clamp(expand5(c5) + sum / 255.0, vec3<f32>(0.0), vec3<f32>(1.0)), center.a);
 }

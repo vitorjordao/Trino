@@ -485,7 +485,7 @@ pub fn watch() -> ExitCode {
 
 /// Boot the test ROM in ares and watch stdout for the ISViewer magic
 /// strings. Kills the emulator on verdict or timeout.
-pub fn test() -> ExitCode {
+pub fn test(bless: bool) -> ExitCode {
     let code = build(true);
     if code != ExitCode::SUCCESS {
         return code;
@@ -497,7 +497,14 @@ pub fn test() -> ExitCode {
     };
 
     println!("[n64] booting test ROM in ares (300s timeout)...");
-    let mut child = match Command::new(&ares)
+    let mut cmd = Command::new(&ares);
+    // Native-resolution RDP (the golden frame is compared pixel-exactly);
+    // headless runs (CI containers) also mute audio.
+    cmd.args(["--no-file-prompt", "--setting", "Video/Quality=SD"]);
+    if std::env::var_os("TRINO_HEADLESS").is_some() {
+        cmd.args(["--setting", "Audio/Driver=None"]);
+    }
+    let mut child = match cmd
         .arg(root.join("target/n64/trino.z64"))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -533,6 +540,7 @@ pub fn test() -> ExitCode {
     });
 
     let deadline = Instant::now() + Duration::from_secs(300);
+    let mut fb = crate::fbgolden::FbCapture::default();
     let verdict = loop {
         let left = deadline.saturating_duration_since(Instant::now());
         if left.is_zero() {
@@ -540,6 +548,10 @@ pub fn test() -> ExitCode {
         }
         match rx.recv_timeout(left.min(Duration::from_millis(500))) {
             Ok(line) => {
+                // Framebuffer dump rows are collected, not echoed.
+                if fb.feed(&line) {
+                    continue;
+                }
                 println!("[ares] {line}");
                 if line.contains("TRINO_TEST_PASS") {
                     break Ok(());
@@ -555,6 +567,14 @@ pub fn test() -> ExitCode {
         }
     };
     let _ = child.kill();
+
+    // Emulator golden image (the showcase's first frame).
+    let verdict = verdict.and_then(|()| {
+        let img = fb.image().map_err(|e| format!("golden frame: {e}"))?;
+        let msg = crate::fbgolden::check(&root, "n64", "showcase", img, bless)?;
+        println!("[n64] golden frame: {msg}");
+        Ok(())
+    });
 
     match verdict {
         Ok(()) => {

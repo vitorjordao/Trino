@@ -42,6 +42,13 @@ pub struct N64Renderer {
 }
 
 impl N64Renderer {
+    /// Test hook: print the last presented framebuffer over ISViewer as
+    /// `TRINO_FBR:` hex rows — `cargo xtask test n64` turns them into the
+    /// emulator golden image (`tests/golden/n64/`).
+    pub fn dump_framebuffer(&mut self) {
+        unsafe { ffi::trino_debug_fb_dump() }
+    }
+
     pub fn new() -> Self {
         N64Renderer {
             sprites: BTreeMap::new(),

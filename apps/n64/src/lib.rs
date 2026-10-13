@@ -133,6 +133,15 @@ mod n64 {
                 }
             }
         }
+        // 0d) Emulator golden image: the showcase's first frame (fixed state,
+        // deterministic T&L), dumped over ISViewer; `cargo xtask test n64`
+        // compares it with tests/golden/n64/showcase.png (--bless writes it).
+        runtime::log("TRINO_STEP:golden frame\n");
+        {
+            let mut g = showcase::ShowcaseGame::with_screen(Vec2::new(320.0, 240.0));
+            g.render(renderer);
+            renderer.dump_framebuffer();
+        }
         // Render 1:4 — a lógica roda todo frame (determinismo intacto); o
         // T&L em software da cena completa a cada frame estourava o timeout
         // do harness no emulador.

@@ -52,7 +52,7 @@ pub static NODES: &[SceneNode] = &[
         name: "pond",
         tags: Tags::List(&[]),
         matrix: Mat34 {
-            m: [[1.0, 0.0, 0.0, 6.0], [0.0, 1.0, 0.0, 0.02], [0.0, 0.0, 1.0, -5.0]],
+            m: [[1.0, 0.0, 0.0, 6.0], [0.0, 1.0, 0.0, 0.1], [0.0, 0.0, 1.0, -5.0]],
         },
         model: Some(ModelId(0x26f5498b)) /* models/water */,
         params: ModelParams {

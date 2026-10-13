@@ -1400,10 +1400,13 @@ fn tessellate_joints<const SKINNED: bool, const SMOOTH: bool>(
             }
         }
 
-        let project = |v: Vec3| {
+        // One division per vertex: `inv` = 1 / view depth serves the
+        // projection and the z-buffer depth (`1 - NEAR / z`).
+        let project = |v: Vec3, inv: f32| {
+            let k = focal * inv;
             Vec2::new(
-                center.x + v.x * focal / v.z,
-                center.y - v.y * focal / v.z, // world Y-up -> screen Y-down
+                center.x + v.x * k,
+                center.y - v.y * k, // world Y-up -> screen Y-down
             )
         };
         // Fan-triangulate the clipped polygon, then depth-subdivide each
@@ -1457,7 +1460,12 @@ fn tessellate_joints<const SKINNED: bool, const SMOOTH: bool>(
                     (mut v1, mut c1, mut u1),
                     (v2, c2, u2),
                 ] = tri;
-                let mut pts = [project(v0), project(v1), project(v2)];
+                let mut inv = [1.0 / v0.z, 1.0 / v1.z, 1.0 / v2.z];
+                let mut pts = [
+                    project(v0, inv[0]),
+                    project(v1, inv[1]),
+                    project(v2, inv[2]),
+                ];
                 // Backface cull: front faces are CCW in world space, which
                 // lands as positive signed area in Y-down screen space.
                 let area = (pts[1].x - pts[0].x) * (pts[2].y - pts[0].y)
@@ -1472,15 +1480,16 @@ fn tessellate_joints<const SKINNED: bool, const SMOOTH: bool>(
                     core::mem::swap(&mut c0, &mut c1);
                     core::mem::swap(&mut u0, &mut u1);
                     pts.swap(0, 1);
+                    inv.swap(0, 1);
                 }
                 let depth = v0.z.max(v1.z).max(v2.z);
-                let zn = |v: Vec3| 1.0 - NEAR / v.z;
+                let zn = |inv: f32| 1.0 - NEAR * inv;
                 stats.emitted += 1;
                 emit(ScreenTri {
                     pts,
                     colors: [c0, c1, c2],
                     depth,
-                    z: [zn(v0), zn(v1), zn(v2)],
+                    z: [zn(inv[0]), zn(inv[1]), zn(inv[2])],
                     uv: [u0, u1, u2],
                     w: [v0.z, v1.z, v2.z],
                 });

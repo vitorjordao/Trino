@@ -408,7 +408,8 @@ Edit this file as you go.
     Frame hub 53.0 → 44.0, lava-land 34.0 → 23.7, throne 29.4 → 16.3 ms. 3DS golden
     re-blessed (a few pixels); the N64 showcase golden is identical (fogged).
     `N64_COST` estimates stay within ±6%, so no refit.
-  - [ ] 3b reciprocals
+  - [x] 3b reciprocals — kept: frame −2.5…−3.5% in all five scenes; every golden stayed
+    byte-identical (the normalize and fog divisions are left alone)
   - [ ] 3c model-space light
   - [ ] 3d Caps cost budget
 - [ ] Phase 4 spike result + ADR (or a written "not needed")

@@ -24,9 +24,13 @@ TRINO_PERF_MODEL:hub model=e2dd959e calls=3 us=8659 verts=264 tris_in=132 emitte
   `rdpq_triangle`: at the pinned libdragon it is `rdpq_triangle_rsp`, so the CPU only
   converts floats and writes the rspq command, and the RSP does edge setup). Those
   writes are the cost: 3 × 8 + 2 = 26 words per triangle through a `volatile` pointer
-  into the rspq buffer, which libdragon allocates with `malloc_uncached`. Removing
-  the shim's 12 `div.s` per triangle didn't make it faster (1f). Only fewer words
-  per triangle would. `begin` = framebuffer acquire, **mostly waiting** (vsync/RDP — it
+  into the rspq buffer, which libdragon allocates with `malloc_uncached`. Measured with
+  a throwaway shim that skips `rdpq_triangle` during the perf scenes: submit fell from
+  22.4 to 10.0 µs per triangle, so `rdpq_triangle` is ~12.4 µs (~1 160 cycles, ~45 per
+  uncached word). The Rust repack and the shim's conversion are the other ~10 µs, but
+  they overlap the write-buffer drain of the previous triangle: removing the 12
+  `div.s` per triangle made submit slower, not faster (1f). Only fewer words per
+  triangle would help. `begin` = framebuffer acquire, **mostly waiting** (vsync/RDP — it
   swings 0.1–9 ms between runs, never judge on it), `game` = castle64's own render
   code, `vblanks` = VI interrupts during the frames (independent clock check).
 - **Work** (deterministic, identical on every target): `verts` = vertex
@@ -178,7 +182,7 @@ frames. Trust the cost model.
 | Hot loop compacted (`#[inline(never)]` vertex/flat/general paths) | +3…+17% worse — reverted |
 | `opt-level = "s"` for the ROM | worse everywhere — not adopted |
 | **1h** `Mat34::from_rotation_scale_translation` skips the software sin/cos for `+0.0` angles (`sin(0) = 0`, `cos(0) = 1` bit-exactly, pinned by a test) | `game` −15…−18% in every scene; `Transform3::matrix` 26 → 7 µs per draw with zero rotation, 26 → 12 µs with a yaw. T&L +4% in two scenes (layout). Frame −1.4…+1.6%. Kept on the `game` stage win |
-| 1f One `trino_tris(ptr, n)` FFI call per batch (packed 48-byte triangles) and a 256-entry `c / 255.0f` table instead of 12 `div.s` per triangle in the shim | submit **+3…+6%** in every scene, frame −1.5…+4.6%: reverted. The submit is store-bound, not compute-bound: `rdpq_triangle_rsp` writes 26 words per triangle into the rspq buffer, which is `malloc_uncached`, and the divisions ran while the write buffer drained |
+| 1f One `trino_tris(ptr, n)` FFI call per batch (packed 48-byte triangles) and a 256-entry `c / 255.0f` table instead of 12 `div.s` per triangle in the shim | submit **+3…+6%** in every scene, frame −1.5…+4.6%: reverted. The submit is store-bound, not compute-bound: `rdpq_triangle_rsp` writes 26 words per triangle into the rspq buffer, which is `malloc_uncached`, and the divisions ran while the write buffer drained (likely; consistent with the skip-`rdpq_triangle` experiment above) |
 | **1e** Tint quotients `tint / 255.0` hoisted from `Setup::finish` (per vertex) into `Setup` (per draw); same operations, same order | frame −8…−14%, T&L −12…−20% in every scene (hub 64.9 → 56.8 ms, sky-tower 25.2 → 21.6). `div.s` in the static vertex closure 15 → 3 (the normalize and fog remain). Goldens identical |
 | **1d** Vertex fetch through fixed-size records (`as_chunks`: `&[[u8; 12]]` positions/normals, `[[u8; 4]]` colors, whole-triangle index records): one bounds check per attribute instead of one per byte, none per triangle | frame −5…−14% (green-hills 34.4 → 29.5 ms, sky-tower 28.8 → 25.2); T&L −10…−20%; Gouraud per vertex 21.7 → 15.8 µs. Goldens identical. The floats are still assembled from bytes (24 `lbu` + shifts per vertex, ~100 cycles of ~1 500); byte-swapping at register was not worth its RAM |
 | **1c** `MeshLayout`: each TMDL validated once at register, the draw's `Mesh` rebuilt from byte spans (`Mesh::from_layout`) instead of `Mesh::from_tmdl` per draw (all three backends) | `game` −13…−20% in every scene; culled draw outside the T&L 25 → 16 µs. T&L +8…+12% with unchanged `tessellate` code and submit −17%: layout. Frame −0.1…+3.8% (green-hills). Kept on the `game` stage win |

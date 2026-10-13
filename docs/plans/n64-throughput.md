@@ -361,7 +361,8 @@ Edit this file as you go.
     15 → 3
   - [x] 1f submit — reverted: one FFI call per batch plus the `/255` table made submit
     +3…+6%. Submit is bound by the 26 uncached rspq words per triangle, not by the
-    conversion math. Packing `RDPQ_CMD_TRIANGLE_DATA` ourselves would write the same
+    conversion math: a throwaway shim that skipped `rdpq_triangle` measured 22.4 →
+    10.0 µs per triangle, and the remaining conversion work overlaps the store drain. Packing `RDPQ_CMD_TRIANGLE_DATA` ourselves would write the same
     words, so the optional step is dropped too. Fewer words per triangle means a custom
     RSP command or RSP T&L with shared vertices (Phase 4).
   - [x] 1g sort — skipped: sort ≤ 4 ms per scene, 2.4 µs per emitted triangle (Phase 0)
@@ -379,6 +380,8 @@ Edit this file as you go.
   is close to the 16 KB direct-mapped I-cache, and unchanged code moves ±10–20% per
   stage between builds (1a: `Transform3::matrix` 12.5 → 36 µs; 1c: T&L +10%).
   Decide after Phase 1.
+  - Decision (Phase 1 exit): deferred to just before the Phase 4 spike. 2a and 3a are
+    large enough to read through the ±5% frame noise.
 - [ ] 2a coins · [ ] 2b chunks · [ ] 2c player (decide)
 - [ ] 3a split policy · [ ] 3b reciprocals · [ ] 3c model-space light · [ ] 3d Caps cost budget
 - [ ] Phase 4 spike result + ADR (or a written "not needed")

@@ -13,19 +13,30 @@ shipping a 3D game first**, then by cost:
 
 ### P0 — blocks a real N64 release
 
-1. **N64 render throughput** (L).
-   - `cargo xtask test n64` prints `TRINO_PERF`. A full castle64 hub frame costs about
-     **670 ms of emulated N64 time** in render (CPU T&L + RDP submit), against 0.3 ms
-     for update. That is ~1.5 fps against a 30 fps target (33 ms).
-   - The engine's frustum culling, LOD and portals help, but not by 20×.
+1. **N64 render throughput** (L). Measured per stage and per model since the
+   2026-10-13 pass (`n64-performance` skill):
+   - castle64 hub: render **175 ms** of emulated N64 time per frame (640 ms before the
+     pass), update 0.3 ms. T&L 130 ms, RDP submit 24, sort 9. Still ~5× from 30 fps.
+   - Calibrated cost: T&L ≈ 9.0 µs/vertex + 44.2 µs/triangle + 0.42 ms/draw +
+     14.7 µs/split, plus ~30 µs per emitted triangle (`trino_core::perf::N64_COST`).
+     A 30 fps frame affords ~200–300 triangles of CPU T&L.
    - Options, best first:
-     - **(a)** Profile per stage on the console clock: transform, light, clip, sort,
-       submit. Every claim below needs that breakdown first.
-     - **(b)** Move vertex transform and lighting to the RSP. A small ucode, or
-       tiny3d's, behind the same `draw_model` contract (ADR 0003 allows it).
-     - **(c)** Cache transformed static geometry across frames when the camera is still.
-     - **(d)** Fixed-point T&L paths for the VR4300.
-   - Judge every change on the `TRINO_PERF` number, not on `bench_tnl` (host CPU).
+     - **(a)** Move vertex transform and lighting to the RSP. A small ucode, or
+       tiny3d's, behind the same `draw_model` contract (ADR 0003 allows it). Of the
+       levers below, only this one is the size of the gap.
+     - **(b)** castle64 content (S): the KayKit door is ~64 ms (half the hub's T&L,
+       1068 tris). Decimate it to ~200 tris or give it a `lod` level.
+     - **(c)** DEPTH_SPLIT policy (S–M): every target z-buffers now (the 3DS too, since
+       this pass), so splits mostly buy painter-order quality. They cost 14.7 µs each
+       and inflate emitted triangles (hub grass 12 → 198, throne castle 60 → 273).
+       Relaxing them moves goldens: a deliberate renderer change.
+     - **(d)** Replace `Caps::N64.max_tris_per_frame = 4000` (an RDP-era number) with
+       a cost budget from `N64_COST`. Strict mode and `model inspect` then warn
+       honestly.
+     - **(e)** Cache transformed static geometry while the camera is still.
+     - **(f)** Fixed-point T&L paths for the VR4300.
+   - Judge every change on the `test n64` scene table, on identical code apart from
+     the change: code layout alone moves a stage ~20%. Bless the baselines afterward.
 2. **Freeze `TSCN` v1 at the first release** (S). Until then the layout may still grow.
    Afterwards, every change bumps the version and adds a migration (ADR 0005 §3).
 
@@ -52,17 +63,17 @@ shipping a 3D game first**, then by cost:
      already set in the shim would then antialias edges and run the divot filter.
    - The PC look would need coverage, for example from MSAA resolve.
    - Then extend the ares golden and the `n64_parity` bound to cover it.
-7. **3DS emulator goldens** (M).
-   - Azahar renders on the host GPU, so its pixels are not stable across machines.
-   - Options:
-     - Azahar's software renderer, if it becomes scriptable from the config.
-     - A tolerance-based golden like `n64_parity`.
-   - Until then the 3DS self-test probes pixels.
+7. **3DS performance numbers** (M). The 3DS renderer has no stage profile, and
+   Azahar is not cycle-accurate. The work counters are identical to the N64 anyway
+   (`tests/perf/castle64_work.toml`). Add a profile only once there is a timing
+   source worth trusting (hardware, or Azahar's CPU clock scaled).
 8. **Run the new CI jobs on GitHub** (S). The emulator jobs were verified in local
    containers that replicate each job, not on Actions. Watch the first runs:
    - ares image build time and cache;
    - lavapipe speed under the 300 s harness timeout;
-   - Azahar under Xvfb.
+   - Azahar under Xvfb (the 3DS golden matched exactly with llvmpipe in the local
+     replica);
+   - the N64 perf ceilings with CI's nightly (layout shifts should fit the headroom).
 9. **A second N64 emulator cross-check** (M). mupen64plus with angrylion-plus, as an
    independent check of the ares golden. Skipped in this pass: ares's parallel-RDP is
    bit-exact and already the reference.
@@ -83,10 +94,34 @@ shipping a 3D game first**, then by cost:
 
 - Keep `docs/adr/` current: every format change gets a version bump, a migration and
   an ADR line.
-- Console performance changes cite `TRINO_PERF` (emulated N64 time). Host benches stay
-  as regression guards only.
+- Console performance changes cite the `cargo xtask test n64` scene table (emulated N64
+  time) and bless `tests/perf/` on purpose. Host benches stay as regression guards only.
 
 ---
+
+## Done — performance & stability pass (2026-10-13, branch `backlog/full-pass`)
+
+It was triggered by "N64 runs at a deplorable fps, maybe the enemy" and "on 3DS the
+models' vertices overlap the floor".
+
+| Item | Evidence |
+|---|---|
+| Per-stage / per-model N64 profiling (`trino_core::perf`, `TRINO_PERF_SCENE/MODEL`, 5 deterministic `castle64::perf` scenes, VI-count clock check, exact µs conversion) | ares report every `test n64` |
+| T&L scratch buffers initialized per draw, not per triangle | hub render 640 → 259 ms; goldens byte-identical |
+| Batch sort by 8-byte keys with an explicit tie-break (all backends) | 259 → 190 ms; same order everywhere |
+| newlib `mem*` instead of Rust's weak generic ones (link order, `check_mem_symbols`) | update −10%, T&L −1% (A/B on identical code) |
+| **3DS depth bug**: all 3D through citro3d with per-vertex depth (`trino_3d_draw`, vertex buffer) instead of citro2d's one depth per triangle | new `occlusion` step **failed** in Azahar before, passes after (and on PC, ares) |
+| castle64 declares its light every frame (it inherited the showcase's fogged light on consoles) | 3DS parity mean diff 24.5 → 0.6; hub 190 → 175 ms |
+| Work gate: `perf_budget` pins every scene's T&L counters; `test n64` requires the ROM's counters to equal them | all 5 scenes equal on ares |
+| Time gate: `tests/perf/castle64_n64.toml` ceilings (+20% frame, +35% stages — code layout moves a stage ~20%) | passes un-blessed |
+| Calibrated `N64_COST` in `model inspect`, the editor budget HUD and the `test n64` table | ±11% per model, ±2% on 4 of 5 scenes |
+| 3DS golden frame (castle64 hub, tolerance) + `n3ds_parity` (PC N3ds look vs Azahar) | local + CI replica (llvmpipe): mean diff 0.00 |
+| **N64 stack overflow** (present since the baked-scene step): the self-test stacked two ~22 KB `ShowcaseGame` frames past libdragon's 64 KB stack and hung at random. Each showcase step now runs out of line; `check_stack` fails the self-test above 60 KB | peak >64 KB → 47.6 KB; same ROM passed 4/4 runs (it had hung 4 times in a row before) |
+
+Tried and reverted, because it was neutral or worse on the scenes: a per-vertex
+projection cache with a no-copy fast path (±2%), compacting the hot loop with
+`#[inline(never)]` (+3…+17%), and `opt-level = "s"` (worse). The enemy was not the
+cause: a boar costs ~8 ms, and all game logic 0.3 ms.
 
 ## Done — October 2026 pass (branch `backlog/full-pass`, one commit per item)
 

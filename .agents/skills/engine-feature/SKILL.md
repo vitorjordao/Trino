@@ -61,8 +61,10 @@ A feature is done only when **PC, N64 and 3DS** all run it and an emulator has s
 1. The `test-all` gates: fmt, clippy `-D warnings`, `cargo test --workspace` (with a GPU).
 2. Console type-checks (the nightly commands in `test-all`). Host `cargo check`
    proves nothing for cfg-gated console code.
-3. `cargo xtask test n64` and `cargo xtask test 3ds` (`run-emulator`). Quote the
-   `TRINO_PERF` line when render or T&L code changed (`n64-performance`).
+3. `cargo xtask test n64` and `cargo xtask test 3ds` (`run-emulator`). When render
+   or T&L code changed, quote the `test n64` perf table before/after and bless the
+   baselines (`n64-performance`); a change in `perf_budget`'s work counters is a
+   cost decision, say so in the commit.
 4. `cargo xtask scene check` when content changed.
 
 The emulators catch what PC tests can't:
@@ -70,6 +72,17 @@ The emulators catch what PC tests can't:
 - **16-bit z-fighting**: the ares golden caught the showcase pond 2 cm above the ground.
 - **Output mismatches**: PC rounded where the RDP truncates; the ares golden and
   `n64_parity` caught it.
+- **Rasterizer semantics**: the 3DS drew 3D with citro2d's one-depth-per-triangle,
+  so floors covered characters. PC/N64 z-buffers hid it; the `occlusion` step
+  (pixels read back on every target) fails on it. A new backend path that changes
+  depth, blending or interpolation needs a read-back step like that.
+- **Stack overflows**: the N64 main stack is 64 KB. A ~22 KB game struct built by
+  value inside the self-test overflowed it and hung the ROM at random; PC (8 MB
+  stacks) and the 3DS (256 KB) never notice. `check_stack` fails the N64 self-test
+  above 60 KB. Keep big values out of long-lived frames (`run-emulator` › N64 stack).
+- **State leaking between users of a renderer**: castle64 rendered with the
+  showcase's fogged light on consoles; `n3ds_parity` caught it. Games set their
+  own camera and light every frame.
 
 ## 5. Record it
 

@@ -12,9 +12,9 @@ description: Understand, change, debug or locally replicate Trino's GitHub Actio
 | `lint` | ubuntu | fmt, clippy `-D warnings`, the dependency graph |
 | `desktop` | Linux, Windows, macOS | `cargo test --workspace`, with GPU goldens required on Linux. Linux also runs headless smokes: game, scene player, exported scene, editor, editor UI tests (`--ignored --test-threads=1`), Play here, standalone project |
 | `hot-reload` | ubuntu | the dylib swap end to end |
-| `n64` | ubuntu-24.04 | builds the ROM in `trino-n64`, then runs `test n64` in the `trino-ares` image (self-test plus the pixel-exact golden). On failure it uploads `tests/golden/n64/actual/` |
+| `n64` | ubuntu-24.04 | builds the ROM in `trino-n64`, then runs `test n64` in the `trino-ares` image (self-test, the pixel-exact golden, and the perf gates: T&L counters equal `tests/perf/castle64_work.toml`, emulated times under `tests/perf/castle64_n64.toml`). On failure it uploads `tests/golden/n64/actual/` |
 | `n3ds` | `devkitpro/devkitarm` container | builds the `.3dsx`, then `build 3ds --selftest`, and uploads the result as an artifact |
-| `n3ds-emulator` | ubuntu-24.04 | downloads that artifact, runs `emulators setup azahar`, then `xvfb-run … test 3ds --no-build` |
+| `n3ds-emulator` | ubuntu-24.04 | downloads that artifact, runs `emulators setup azahar`, then `xvfb-run … test 3ds --no-build` (self-test + the castle64 hub golden within a tolerance; on failure uploads `tests/golden/3ds/actual/` as `n3ds-golden-actual`) |
 
 `release.yml` tags new workspace versions on main and publishes editor binaries, demo
 ROMs and SHA256SUMS.
@@ -57,6 +57,14 @@ not in the repo. Rebuild them from the job definitions when needed.
 
 - **The golden mismatch artifact** (`n64-golden-actual`): diff it against
   `tests/golden/n64/showcase.png`. Re-bless only when the change was intended.
+- **A perf gate failure** (`n64` job, `perf gate:` table): a `ROM X, PC baseline Y`
+  line is a determinism or stale-baseline problem, never noise. A time over its
+  ceiling: check whether the CI nightly differs from yours first — code layout
+  alone moves a stage ~20% (`n64-performance`), which the stage headroom (35%)
+  should absorb; a frame-total breach (20%) is worth a real look.
+- **`n3ds-golden-actual`:** Azahar under Xvfb renders with llvmpipe; the 3DS golden
+  was blessed on a desktop GPU (mean 0.00 locally). If CI's first run lands just
+  over the tolerance, look at the image before widening `check_close`'s limits.
 - **An emulator timeout:** look for `TRINO_PANIC:` or the last `TRINO_STEP:`. Then
   suspect a modal dialog. ares with a read-only save path pops one, which is why the
   Docker mode passes `Paths/Saves=/tmp/`. Screenshot the Xvfb display with
@@ -72,6 +80,9 @@ not in the repo. Rebuild them from the job definitions when needed.
 ## Status to keep current
 
 The emulator jobs (`n64` ares step, `n3ds-emulator`) were first verified in local
-replica containers on 2026-10-12. Until a green GitHub run is recorded here, treat
-their first runs as BACKLOG P1 #8. Check image build time, cache hits and run time
+replica containers on 2026-10-12. The perf gates and the 3DS golden (2026-10-13)
+were verified the same way: `TRINO_ARES=docker` gives µs identical to native ares,
+and in the `trino-ci3ds-boot` replica (ubuntu 24.04, Xvfb, llvmpipe, `--cpus 4`) the 3DS
+golden matched with mean diff 0.00 (the Azahar boot took ~90 s). Until a green GitHub
+run is recorded here, treat their first runs as BACKLOG P1 #8. Check image build time, cache hits and run time
 against the timeout.

@@ -41,7 +41,8 @@ Keys worth knowing (F1 lists all):
   manifest entry.
 
 The Game view shows a **budget HUD** (tris, sprites, texture bytes vs the console's
-`Caps`) and culls interior cells like the game does. The Scene view draws collider,
+`Caps`; under the N64 profile also **N64 3D time** — this frame's T&L work through the
+calibrated cost model `trino_core::perf::N64_COST`, against one 30 fps frame) and culls interior cells like the game does. The Scene view draws collider,
 cell and portal wireframes.
 
 Live-edit check: start the editor with `TRINO_EDITOR_ECHO_LOG=1` in the background, edit a

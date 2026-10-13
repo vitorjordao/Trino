@@ -58,7 +58,12 @@ once = ["wave"]             # optional: clips that play once (default: loop)
   that crack. That costs ~3% CPU per draw; check with `model inspect --smooth`.
 - Full rules and the Blender workflow: the `blender-asset` skill.
 - **Gate:** `cargo xtask model inspect assets/shared/models/robot.glb [--json]` — bakes
-  like the engine and reports tris, joints, clips, size, N64 budget.
+  like the engine and reports tris, joints, clips, size, N64 budget and an **N64 cost
+  estimate per draw** (calibrated `trino_core::perf::N64_COST`; warns above 25% of a
+  30 fps frame). Trust the estimate over the triangle percentage: the 1068-tri KayKit
+  door reads "27% of budget" and costs ~64 ms (two frames) on the N64's CPU T&L.
+  Adding a model to castle64 changes `tests/perf/castle64_work.toml` (bless it,
+  `n64-performance`).
 - Code: `ModelId::from_path("models/robot")`; animate with
   `ModelParams { anim: Some(AnimRef { clip: ClipId::from_name("walk"), time }), .. }`.
 

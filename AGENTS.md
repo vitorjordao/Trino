@@ -33,7 +33,7 @@ What to build next (ranked): `docs/BACKLOG.md`.
 | `run-emulator` | ares / Azahar runs, emulator test harness, watch loops |
 | `test-all` | the CI gates + guard tests, console type-checks, T&L benchmark |
 | `engine-feature` | adding/changing an engine service or format end to end: all backends, self-test step, docs, the closing knowledge loop |
-| `n64-performance` | `TRINO_PERF` (emulated N64 frame cost), before/after workflow, perf levers |
+| `n64-performance` | per-stage/per-model N64 frame cost (emulated, ares), perf gates, the calibrated cost model, before/after workflow, what worked |
 | `ci` | the GitHub Actions jobs, why they're shaped that way, replicating a job locally, debugging red runs |
 | `new-project` | `cargo xtask new` (in-repo or `--standalone`), maintaining the templates and `trino-runner-pc` |
 
@@ -85,15 +85,18 @@ new skill when none fits. Then run `cargo xtask agents sync`. The steps are in
   joints, each vertex follows one joint — the N64-era limb model) + clips sampled at
   `anim_fps`; `ModelParams::anim` poses a draw; evaluated in `trino_core` on the stack,
   so all three targets animate with no backend code. `cargo xtask model inspect` is the
-  art acceptance gate (tris, joints, clips, bounds, N64 budget).
+  art acceptance gate (tris, joints, clips, bounds, N64 budget and calibrated
+  N64 cost per draw).
 - **N64**: `cargo xtask build n64` produces `target/n64/trino.z64` (Docker
   toolchain image + C shim + Rust staticlib — ABI story in
   `docs/adr/0002-n64-abi-o32-staticlib.md`); `run n64` opens it in ares
   (expected at `ares-v148/` in the repo root, gitignored); `test n64` boots a
   test ROM and asserts on ISViewer magic strings (`TRINO_TEST_PASS/FAIL`), on
   a pixel-exact **emulator golden** (`tests/golden/n64/showcase.png`, from a
-  framebuffer dump; `--bless` rewrites it) and prints `TRINO_PERF` (frame cost
-  in emulated N64 time). `TRINO_ARES=docker` runs ares from the
+  framebuffer dump; `--bless` rewrites it) and on **perf gates**: per-scene,
+  per-stage, per-model frame cost in emulated N64 time (`TRINO_PERF_SCENE` /
+  `TRINO_PERF_MODEL`), whose T&L work counters must equal the PC baseline and
+  whose times must stay under `tests/perf/castle64_n64.toml`. `TRINO_ARES=docker` runs ares from the
   `docker/ares` image (`cargo xtask emulators setup ares`) — what CI does.
   `watch n64` rebuilds + relaunches on save. Skills: `build-n64`, `run-emulator`.
 - **N64 look on PC**: the `SimProfile::N64` renderer emulates the console
@@ -112,7 +115,9 @@ new skill when none fits. Then run `cargo xtask agents sync`. The steps are in
   or `$TRINO_AZAHAR`, or the pinned AppImage from `cargo xtask emulators
   setup azahar`); `test 3ds` asserts the TRINO_TEST_* magic strings by
   tailing Azahar's log (`svcOutputDebugString` channel; the harness seeds or
-  patches Azahar's config). `build 3ds --selftest` + `test 3ds --no-build`
+  patches Azahar's config) and compares a castle64 frame with
+  `tests/golden/3ds/castle64_hub.png` within a tolerance. All 3D is drawn
+  by citro3d with **per-vertex depth** (`trino_3d_draw`). `build 3ds --selftest` + `test 3ds --no-build`
   split build and boot, as CI does. `watch 3ds`
   rebuilds + relaunches on save. The `SimProfile::N3ds` PC renderer samples
   sprites bilinearly (the 3DS GPU default). Skills: `build-3ds`,
@@ -149,8 +154,8 @@ new skill when none fits. Then run `cargo xtask agents sync`. The steps are in
   TMDL format (`[models.*]` in the manifest); the core transforms, lights
   (gouraud, directional + ambient), culls and depth-sorts on the CPU with
   deterministic f32 (own no_std sin/cos/sqrt); backends only rasterize
-  screen-space colored triangles (`rdpq_triangle` shade / `C2D_DrawTriangle`
-  / a wgpu vertex-color pipeline interleaved with sprites). `set_camera` +
+  screen-space colored triangles (`rdpq_triangle` shade / a citro3d vertex
+  buffer / a wgpu vertex-color pipeline interleaved with sprites). `set_camera` +
   `set_light` (colored directional + ambient + distance fog) + `draw_model` /
   `draw_model_matrix` (hierarchies) on all three targets — `ModelParams` is the
   per-draw surface: tint (locked doors, glow pulses — no separate baked meshes),
@@ -164,8 +169,8 @@ new skill when none fits. Then run `cargo xtask agents sync`. The steps are in
   view depth are bisected; `math3d` ships deterministic `sin/cos/sqrt/atan2`.
   Occlusion is **z-buffered** on every target (per-vertex normalized depth
   in `ScreenTri::z`: wgpu depth buffer on PC, RDP hardware z-buffer on N64,
-  citro2d per-draw depth on 3DS) — interpenetrating geometry resolves per
-  pixel. Consecutive `draw_model` calls still form a depth-sorted batch
+  per-vertex depth through citro3d on 3DS) — interpenetrating geometry
+  resolves per pixel; the `occlusion` self-test step proves it on every target. Consecutive `draw_model` calls still form a depth-sorted batch
   (tie-break + blending order; flushed on sprite draws, camera changes and
   `end_frame`). **Textured 3D**: one texture per draw (TMDL `TXUV`/`TXID`,
   `ModelParams.texture`, material `texture`), on all three targets.
@@ -228,8 +233,24 @@ new skill when none fits. Then run `cargo xtask agents sync`. The steps are in
     under Xvfb.
   - Both jobs were verified in local containers replicating each job.
 
-Ranked next steps: `docs/BACKLOG.md`. The top one is N64 render throughput: castle64's
-hub costs ~670 ms of emulated N64 time per frame (`TRINO_PERF`).
+- **Performance & stability pass** (2026-10-13, `docs/BACKLOG.md` › Done, ADR
+  `docs/adr/0006-performance-and-visual-gates.md`):
+  - **Measurement**: N64 per-stage/per-model profiling (`trino_core::perf`) over five
+    deterministic `castle64::perf` scenes.
+  - **Gates**: exact T&L work counters on PC (`perf_budget`) and in the ROM; N64
+    time ceilings.
+  - **Cost model**: calibrated `N64_COST` in `model inspect` and the editor HUD.
+  - **N64 fixes**: hub render 640 → 175 ms. T&L scratch per draw, sort keys, newlib
+    `mem*`.
+  - **3DS fixes**: per-vertex depth (floors no longer cover characters).
+  - **castle64 fix**: the game declares its own light.
+  - **Visual checks**: a 3DS golden frame and `n3ds_parity`.
+  - **Stability**: the N64 self-test stack overflow is fixed, and a guard
+    (`check_stack`) catches the next one.
+
+Ranked next steps: `docs/BACKLOG.md`. The top one is N64 render throughput. castle64's
+hub costs ~175 ms of emulated N64 time per frame; 130 ms of that is CPU T&L, half of it
+one 1068-tri door. RSP T&L is the lever of the needed size.
 
 PC keyboard mapping: A/B = Z/X, X/Y = C/V, L/R = Q/E, Start = Enter,
 Select = Right Shift, D-pad = arrows, stick = WASD (see `crates/platform-pc/src/input.rs`).
@@ -312,7 +333,9 @@ cargo xtask model inspect <file> [--json]       # bake a model like the engine; 
 cargo xtask agents sync   # mirror .agents/skills/ into .claude/skills/ (check: agents check)
 cargo xtask new <name> --standalone <dir> [--git <url> --rev <r>]   # project outside this repo
 cargo xtask emulators setup ares|azahar          # headless ares image / pinned Azahar AppImage
-cargo xtask test n64 --bless                     # rewrite the ares golden frame (review the PNG!)
+cargo xtask test n64 --bless                     # rewrite the ares golden frame + N64 perf ceilings (review!)
+cargo xtask test 3ds --bless                     # rewrite the Azahar golden frame (review the PNG!)
+TRINO_BLESS=1 cargo test -p xtask --test perf_budget   # rewrite the T&L work baseline (review the TOML!)
 cargo xtask build 3ds --selftest && cargo xtask test 3ds --no-build   # CI's build/boot split
 cargo xtask blender smoke                        # Blender toolkit end to end (needs Blender)
 ```
@@ -352,8 +375,14 @@ cargo test --workspace
 - Emulator golden: `tests/golden/n64/showcase.png` is compared pixel-exactly
   by `test n64`. A renderer change on the N64 path re-blesses it
   (`--bless`), and the PNG diff gets reviewed like any golden.
-- Console performance: quote `TRINO_PERF` (emulated N64 time) for T&L
-  changes. `bench_tnl` measures host CPU only.
+- 3DS golden: `tests/golden/3ds/castle64_hub.png`, compared within a
+  tolerance by `test 3ds` (Azahar's pixels depend on the host OpenGL);
+  `n3ds_parity` holds the PC's N3ds look to it.
+- Performance is gated: `xtask/tests/perf_budget.rs` pins castle64's T&L
+  work per scene (`tests/perf/castle64_work.toml`), and `test n64` pins
+  the emulated frame cost (`tests/perf/castle64_n64.toml`). Quote the
+  scene table before/after for T&L or backend changes, and bless on
+  purpose. `bench_tnl` measures host CPU only.
 
 ## Toolchain notes
 
@@ -380,6 +409,27 @@ cargo test --workspace
   The ares golden catches it.
 - **Azahar's file log flushes only on errors.** The harness turns on
   `instant_debug_log`, so don't remove it.
+- **N64 link: Rust's `compiler_builtins` defines `memcpy/memset/memmove/memcmp`
+  as weak generic loops and wins over newlib** once its object is linked.
+  `-Wl,-u,<sym> -Wl,-lc` ahead of the staticlib fixes it. The gcc driver
+  silently drops a repeated plain `-lc`, so it must be `-Wl,-lc`. Read the map's
+  memory section, not "Discarded input sections". `check_mem_symbols` guards it.
+- **Code layout moves N64 timings ~20% per stage** (ares is reproducible per ROM,
+  but I-cache conflicts are not). Never claim a small win from one build: A/B on
+  identical code and judge on the scene table, not on a synthetic bench.
+- **3DS: never draw 3D with `C2D_DrawTriangle`.** It takes one depth per triangle,
+  so big floors cover what stands on them. Everything goes through
+  `trino_3d_draw` (per-vertex depth).
+- **The N64 main stack is 64 KB and an overflow is silent** (memory corruption, random
+  hangs; interrupts push onto it too). A ~22 KB struct built by value (`ShowcaseGame`)
+  overflowed it in the self-test. `Box::new(big())` still builds the temporary in the
+  caller's frame, so put such steps in their own `#[inline(never)]` function.
+  `check_stack` fails the self-test above 60 KB.
+- **Renderer state (camera, light) outlives frames and games.** A game that never
+  calls `set_light` inherits the last one. On consoles the self-test's showcase
+  fog leaked into castle64. Set both every frame.
+- **`Caps::N64.max_tris_per_frame` is not the CPU T&L budget.** A 30 fps frame
+  affords ~200–300 triangles today. Use `model inspect`'s N64 cost estimate.
 - **Template manifests are `Cargo.toml.tmpl`.** A placeholder `Cargo.toml` anywhere in
   the repo breaks every git-dependency user, because cargo scans the whole repository.
 

@@ -113,26 +113,55 @@ fn ensure_image(root: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Compile the C shim inside the image (real libdragon headers + o64 ABI).
+/// `true` when `obj` exists and is newer than every source.
+fn up_to_date(obj: &Path, sources: &[std::path::PathBuf]) -> bool {
+    let time = |p: &Path| p.metadata().and_then(|m| m.modified()).ok();
+    let Some(obj_time) = time(obj) else {
+        return false;
+    };
+    sources
+        .iter()
+        .all(|s| time(s).is_some_and(|t| t <= obj_time))
+}
+
+/// Compile the C shim inside the image (real libdragon headers + o64 ABI),
+/// and the RSP overlay (`rsp_trino.S`) the way libdragon's `n64.mk` builds
+/// RSP ucode: assemble against `rsp.ld`, cut `.text`/`.data` to binaries,
+/// wrap each in an object exposing `rsp_trino_{text,data}_{start,end}`
+/// (what `DEFINE_RSP_UCODE` expects).
 fn compile_shim(root: &Path) -> Result<(), String> {
-    let shim_src = root.join("crates/platform-n64/shim/trino_shim.c");
-    let shim_obj = root.join("target/n64/shim.o");
-    if let (Ok(src_meta), Ok(obj_meta)) = (shim_src.metadata(), shim_obj.metadata())
-        && let (Ok(src_time), Ok(obj_time)) = (src_meta.modified(), obj_meta.modified())
-        && obj_time >= src_time
+    let shim_dir = root.join("crates/platform-n64/shim");
+    let shim_src = shim_dir.join("trino_shim.c");
+    let rsp_src = shim_dir.join("rsp_trino.S");
+    if !up_to_date(&root.join("target/n64/shim.o"), &[shim_src])
+        || !up_to_date(&root.join("target/n64/rsp_trino.o"), &[rsp_src])
     {
-        return Ok(());
-    }
-    println!("[n64] compiling C shim...");
-    let script = "set -e\n\
-        mkdir -p target/n64\n\
-        mips64-elf-gcc -c -std=gnu17 -march=vr4300 -mtune=vr4300 -mabi=o64 -O2 -G0 \
-        -ffunction-sections -fdata-sections -DN64 \
-        -I$N64_INST/mips64-elf/include \
-        crates/platform-n64/shim/trino_shim.c -o target/n64/shim.o";
-    let status = docker_sh(root, script).map_err(|e| format!("docker: {e}"))?;
-    if !status.success() {
-        return Err("shim compilation failed".into());
+        println!("[n64] compiling C shim + RSP overlay...");
+        let script = "set -e\n\
+            mkdir -p target/n64/rsp\n\
+            mips64-elf-gcc -c -std=gnu17 -march=vr4300 -mtune=vr4300 -mabi=o64 -O2 -G0 \
+            -ffunction-sections -fdata-sections -DN64 \
+            -I$N64_INST/mips64-elf/include \
+            crates/platform-n64/shim/trino_shim.c -o target/n64/shim.o\n\
+            cd target/n64/rsp\n\
+            mips64-elf-gcc -march=mips1 -mabi=32 -Wa,--fatal-warnings \
+            -I$N64_INST/mips64-elf/include -L$N64_INST/mips64-elf/lib -nostartfiles \
+            -Wl,-Trsp.ld -Wl,--gc-sections -Wl,-Map=rsp_trino.map \
+            -o rsp_trino.elf ../../../crates/platform-n64/shim/rsp_trino.S\n\
+            mips64-elf-size -G rsp_trino.elf\n\
+            mips64-elf-objcopy -O binary -j .text rsp_trino.elf rsp_trino.text.bin\n\
+            mips64-elf-objcopy -O binary -j .data rsp_trino.elf rsp_trino.data.bin\n\
+            for s in text data; do mips64-elf-objcopy -I binary -O elf32-bigmips -B mips4300 \
+              --redefine-sym _binary_rsp_trino_${s}_bin_start=rsp_trino_${s}_start \
+              --redefine-sym _binary_rsp_trino_${s}_bin_end=rsp_trino_${s}_end \
+              --redefine-sym _binary_rsp_trino_${s}_bin_size=rsp_trino_${s}_size \
+              --set-section-alignment .data=8 --rename-section .text=.data \
+              rsp_trino.${s}.bin rsp_trino.${s}.o; done\n\
+            mips64-elf-ld -relocatable rsp_trino.text.o rsp_trino.data.o -o ../rsp_trino.o";
+        let status = docker_sh(root, script).map_err(|e| format!("docker: {e}"))?;
+        if !status.success() {
+            return Err("shim / RSP overlay compilation failed".into());
+        }
     }
     Ok(())
 }
@@ -337,7 +366,7 @@ fn pack_rom(root: &Path) -> Result<(), String> {
     println!("[n64] linking + packing ROM...");
     let script = format!(
         "set -e\n\
-         mips64-elf-g++ -o target/n64/trino.elf target/n64/shim.o \
+         mips64-elf-g++ -o target/n64/trino.elf target/n64/shim.o target/n64/rsp_trino.o \
          -Wl,-u,memcpy -Wl,-u,memset -Wl,-u,memmove -Wl,-u,memcmp -Wl,-lc \
          {STATICLIB} -lc -mabi=o64 -Wl,-g -Wl,-L$N64_INST/mips64-elf/lib \
          -Wl,-ldragon -Wl,-lm -Wl,-ldragonsys -Wl,-Tn64.ld \
@@ -618,7 +647,9 @@ pub fn test(bless: bool) -> ExitCode {
 
     let deadline = Instant::now() + Duration::from_secs(timeout);
     let mut fb = crate::fbgolden::FbCapture::default();
+    let mut frames: Vec<crate::fbgolden::FbCapture> = Vec::new();
     let mut perf_scenes = Vec::new();
+    let mut micro_scenes = Vec::new();
     let verdict = loop {
         let left = deadline.saturating_duration_since(Instant::now());
         if left.is_zero() {
@@ -626,13 +657,23 @@ pub fn test(bless: bool) -> ExitCode {
         }
         match rx.recv_timeout(left.min(Duration::from_millis(500))) {
             Ok(line) => {
-                // Framebuffer dump rows are collected, not echoed.
+                // Framebuffer dump rows are collected, not echoed; each
+                // TRINO_FB_END closes one image (they arrive in order).
                 if fb.feed(&line) {
+                    if fb.done() {
+                        frames.push(std::mem::take(&mut fb));
+                    }
                     continue;
                 }
                 println!("[ares] {line}");
                 if let Some(scene) = crate::perf::SceneLine::parse(&line) {
-                    perf_scenes.push(scene);
+                    // Micro scenes measure fixed costs: reported, never
+                    // gated or blessed.
+                    if crate::perf::is_micro(&scene.name) {
+                        micro_scenes.push(scene);
+                    } else {
+                        perf_scenes.push(scene);
+                    }
                 }
                 if line.contains("TRINO_TEST_PASS") {
                     break Ok(());
@@ -656,11 +697,18 @@ pub fn test(bless: bool) -> ExitCode {
             .status();
     }
 
-    // Emulator golden image (the showcase's first frame).
+    // Emulator golden images, in dump order: the showcase's first frame
+    // (fogged: the CPU T&L path) and castle64's hub (the RSP T&L path).
     let verdict = verdict.and_then(|()| {
-        let img = fb.image().map_err(|e| format!("golden frame: {e}"))?;
-        let msg = crate::fbgolden::check(&root, "n64", "showcase", img, bless)?;
-        println!("[n64] golden frame: {msg}");
+        for (n, name) in ["showcase", "castle64_hub"].iter().enumerate() {
+            let img = frames
+                .get(n)
+                .ok_or_else(|| format!("golden frame {name}: not dumped"))?
+                .image()
+                .map_err(|e| format!("golden frame {name}: {e}"))?;
+            let msg = crate::fbgolden::check(&root, "n64", name, img, bless)?;
+            println!("[n64] golden frame: {msg}");
+        }
         Ok(())
     });
     // Performance gates: same T&L work as the PC baseline, frame costs
@@ -669,6 +717,16 @@ pub fn test(bless: bool) -> ExitCode {
         let table = crate::perf::gate(&root, &perf_scenes, bless)
             .map_err(|e| format!("perf gate:\n{e}"))?;
         println!("[n64] perf (emulated us per frame):\n{table}");
+        Ok(())
+    });
+    let verdict = verdict.and_then(|()| {
+        let ab = crate::perf::rsp_ab_report(&perf_scenes, &micro_scenes);
+        if !ab.is_empty() {
+            println!("[n64] castle64, RSP T&L vs CPU T&L (same ROM, emulated us per frame):\n{ab}");
+        }
+        let table = crate::perf::micro_report(&micro_scenes)
+            .map_err(|e| format!("micro perf scenes:\n{e}"))?;
+        println!("[n64] T&L fixed costs (micro scenes, ungated):\n{table}");
         Ok(())
     });
 

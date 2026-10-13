@@ -1,6 +1,7 @@
 //! RDP sprite renderer via the shim's `rdpq` wrappers, plus gouraud
 //! triangles for the engine's software-T&L 3D (`trino_core::render3d`).
 
+use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::rc::Rc;
 use alloc::vec::Vec;
@@ -8,7 +9,8 @@ use core::ffi::c_void;
 
 use trino_core::perf::RenderProfile;
 use trino_core::render3d::{
-    Camera3, DEFAULT_LIGHT, Light, Mesh, ScreenTri, painter_index, painter_key,
+    Camera3, DEFAULT_LIGHT, Light, Mesh, MeshLayout, NEAR_PLANE, ScreenTri, TnlContext, TnlScratch,
+    TnlStats, painter_index, painter_key, rsp_eligible, rsp_mesh_supported,
 };
 use trino_core::text::BitmapFont;
 use trino_core::{
@@ -17,6 +19,7 @@ use trino_core::{
 };
 
 use crate::ffi;
+use crate::rsp::{self, RspMesh};
 use crate::runtime::now_us;
 
 /// Internal resolution the T&L projects to.
@@ -28,7 +31,8 @@ struct SpriteEntry {
 
 pub struct N64Renderer {
     sprites: BTreeMap<u32, SpriteEntry>,
-    meshes: BTreeMap<u32, Vec<u8>>,
+    /// TMDL blobs with their validated layout (parsed once, at register).
+    meshes: BTreeMap<u32, (Vec<u8>, MeshLayout)>,
     /// Glyph tables by font handle (atlas = sprite with the same handle).
     fonts: BTreeMap<u32, Rc<[u8]>>,
     frame_stats: FrameStats,
@@ -44,9 +48,25 @@ pub struct N64Renderer {
     order: Vec<(u64, u64)>,
     camera: Camera3,
     light: Light,
+    /// T&L constants of `camera` + `light`, rebuilt when either changes.
+    tnl_ctx: TnlContext,
+    /// The T&L's working memory, reused by every draw (boxed: ~9 KB).
+    tnl_scratch: Box<TnlScratch>,
     caps: Caps,
     /// Stage/model timing on the console clock while profiling is on.
     profile: Option<RenderProfile>,
+    /// RSP copies of the meshes the overlay can draw (`rsp.rs`).
+    rsp_meshes: BTreeMap<u32, RspMesh>,
+    /// Send eligible draws to the RSP overlay (`set_rsp`; on by default).
+    rsp_on: bool,
+    /// RSP draw commands of the pending batch: submitted right after the
+    /// batch's CPU triangles, so on equal depth they win like the last
+    /// drawn surfaces of a painter-sorted batch do (a door on a wall).
+    pending_rsp: Vec<[u32; rsp::DRAW_WORDS]>,
+    /// The overlay's cull mode for back faces: `RDPQ_Triangle_Send_Async`'s
+    /// v0, where 0 culls Trino's back faces (its "front" is the opposite
+    /// winding; 1 culled every front face, measured) and 2 culls nothing.
+    rsp_cull: u32,
 }
 
 impl N64Renderer {
@@ -90,9 +110,15 @@ impl N64Renderer {
             pending_tex: Vec::new(),
             order: Vec::new(),
             camera: Camera3::default(),
+            tnl_ctx: TnlContext::new(&Camera3::default(), &DEFAULT_LIGHT, SCREEN),
+            tnl_scratch: Box::new(TnlScratch::new()),
             light: DEFAULT_LIGHT,
             caps: Caps::N64,
             profile: None,
+            rsp_meshes: BTreeMap::new(),
+            rsp_on: true,
+            pending_rsp: Vec::new(),
+            rsp_cull: 0,
         }
     }
 
@@ -101,6 +127,19 @@ impl N64Renderer {
     /// grouped by texture (stable: depth order within a texture) so TMEM is
     /// loaded once per texture per batch.
     fn flush_model_batch(&mut self) {
+        self.flush_cpu_batch();
+        if !self.pending_rsp.is_empty() {
+            let t0 = self.tick();
+            for w in &self.pending_rsp {
+                unsafe { ffi::trino_rsp_draw(w.as_ptr()) };
+            }
+            self.pending_rsp.clear();
+            self.charge(t0, |s| &mut s.submit);
+        }
+    }
+
+    /// The CPU-tessellated part of the batch: sort + submit.
+    fn flush_cpu_batch(&mut self) {
         if self.pending_tris.is_empty() {
             return;
         }
@@ -197,10 +236,110 @@ impl N64Renderer {
         }
     }
 
-    /// Register a TMDL mesh blob under a stable handle.
-    pub(crate) fn register_mesh(&mut self, id: u32, tmdl: Vec<u8>) {
-        if Mesh::from_tmdl(&tmdl).is_ok() {
-            self.meshes.insert(id, tmdl);
+    /// RSP overlay self-check: a frame with one fixed triangle drawn by
+    /// `rsp_trino.S`, then the pixel at its center (`None` = unreadable).
+    pub fn rsp_selftest(&mut self) -> Option<Color> {
+        self.begin_frame(Color::BLACK);
+        unsafe {
+            ffi::trino_3d_begin();
+            ffi::trino_rsp_test_tri();
+        }
+        self.end_frame();
+        self.read_pixel(50, 50)
+    }
+
+    /// Register a TMDL mesh blob under a stable handle (the asset loader,
+    /// or a test building meshes in code). `false` = invalid blob, not
+    /// registered.
+    pub fn register_mesh(&mut self, id: u32, tmdl: Vec<u8>) -> bool {
+        let Ok(layout) = Mesh::from_tmdl(&tmdl).map(|m| m.layout(&tmdl)) else {
+            return false;
+        };
+        let mesh = Mesh::from_layout(&tmdl, &layout);
+        if rsp_mesh_supported(&mesh)
+            && let Some(rm) = rsp::build(&mesh)
+        {
+            self.rsp_meshes.insert(id, rm);
+        }
+        self.meshes.insert(id, (tmdl, layout));
+        true
+    }
+
+    /// Send eligible static draws to the RSP T&L overlay (`rsp_trino.S`)
+    /// instead of the CPU's `tessellate`.
+    pub fn set_rsp(&mut self, on: bool) {
+        self.rsp_on = on;
+    }
+
+    /// Override the overlay's back-face cull mode (tests).
+    pub fn set_rsp_cull(&mut self, cull: u32) {
+        self.rsp_cull = cull;
+    }
+
+    /// RSP oracle: draw `model` through the overlay with its screen
+    /// vertices copied back, and compare them with the CPU path's
+    /// projection and lighting. `Ok` carries the worst differences.
+    pub fn rsp_oracle(
+        &mut self,
+        model: ModelId,
+        matrix: &Mat34,
+        params: &ModelParams,
+    ) -> Result<alloc::string::String, alloc::string::String> {
+        // A copy: the frame below needs `self` mutably (a test, not a hot path).
+        let Some((tmdl, layout)) = self.meshes.get(&model.0).cloned() else {
+            return Err("mesh not registered".into());
+        };
+        let mesh = Mesh::from_layout(&tmdl, &layout);
+        let Some(rm) = self.rsp_meshes.get(&model.0) else {
+            return Err("mesh has no RSP copy".into());
+        };
+        let Some(d) = rsp_eligible(&self.tnl_ctx, &mesh, matrix, params) else {
+            return Err("draw not RSP-eligible".into());
+        };
+        let seg0 = rm.seg0.clone();
+        let n = seg0.len();
+        let buf = unsafe { ffi::trino_alloc_uncached((n * 24) as u32) } as *mut u8;
+        let phys = unsafe { ffi::trino_phys_addr(buf as *const c_void) };
+        let cull = if d.cull_back { self.rsp_cull } else { 2 };
+        let words = rsp::draw_words(&self.tnl_ctx, matrix, &d, params.tint, rm, cull, phys);
+        self.begin_frame(Color::BLACK);
+        unsafe { ffi::trino_rsp_draw(words.as_ptr()) };
+        self.end_frame();
+        unsafe { ffi::trino_drain() };
+        let (view, focal, screen) = self.tnl_ctx.projection();
+        let mv = view.mul(matrix);
+        let (cx, cy) = (screen.x * 0.5, screen.y * 0.5);
+        let (mut dxy, mut dz, mut dc) = (0i32, 0i32, 0i32);
+        for (k, &g) in seg0.iter().enumerate() {
+            let g = g as usize;
+            let rd = |o: usize| unsafe { buf.add(k * 24 + o).read_volatile() };
+            let rd16 = |o: usize| i16::from_be_bytes([rd(o), rd(o + 1)]) as i32;
+            let p = mv.transform_point(mesh.position(g));
+            let ex = ((cx + p.x * focal / p.z) * 4.0) as i32;
+            let ey = ((cy - p.y * focal / p.z) * 4.0) as i32;
+            let ez = ((1.0 - NEAR_PLANE / p.z) * 32767.0) as i32;
+            dxy = dxy.max((rd16(0) - ex).abs()).max((rd16(2) - ey).abs());
+            dz = dz.max((rd16(4) - ez).abs());
+            let n = mesh.normal(g);
+            let lit = n.dot(d.light);
+            let k = d.ambient + (1.0 - d.ambient) * if lit > 0.0 { lit } else { 0.0 };
+            let c = mesh.color(g);
+            let t = params.tint;
+            let want = [
+                c.r as f32 * (t.r as f32 / 255.0) * k,
+                c.g as f32 * (t.g as f32 / 255.0) * k,
+                c.b as f32 * (t.b as f32 / 255.0) * k,
+                c.a as f32 * (t.a as f32 / 255.0),
+            ];
+            for (ch, w) in want.iter().enumerate() {
+                dc = dc.max((rd(8 + ch) as i32 - *w as i32).abs());
+            }
+        }
+        let msg = alloc::format!("{n} vertices: xy {dxy}/4 px, z {dz}/32767, color {dc}/255");
+        if dxy > 2 || dz > 64 || dc > 3 {
+            Err(msg)
+        } else {
+            Ok(msg)
         }
     }
 
@@ -285,12 +424,14 @@ impl Renderer for N64Renderer {
     fn set_camera(&mut self, camera: &Camera3) {
         self.flush_model_batch();
         self.camera = *camera;
+        self.tnl_ctx = TnlContext::new(&self.camera, &self.light, SCREEN);
     }
 
     fn set_light(&mut self, light: &Light) {
         // Lighting is resolved into vertex colors at tessellation time, so
         // a change needs no batch flush.
         self.light = *light;
+        self.tnl_ctx = TnlContext::new(&self.camera, &self.light, SCREEN);
     }
 
     fn draw_model(
@@ -310,24 +451,44 @@ impl Renderer for N64Renderer {
         _material: Material,
         params: &ModelParams,
     ) {
-        let Some(tmdl) = self.meshes.get(&model.0) else {
+        let Some((tmdl, layout)) = self.meshes.get(&model.0) else {
             return;
         };
-        let mesh = Mesh::from_tmdl(tmdl).expect("validated on register");
+        let mesh = Mesh::from_layout(tmdl, layout);
         self.frame_stats.models += 1;
+        if self.rsp_on
+            && let Some(rm) = self.rsp_meshes.get(&model.0)
+            && let Some(d) = rsp_eligible(&self.tnl_ctx, &mesh, matrix, params)
+        {
+            // The overlay transforms, lights and rasterizes the whole draw;
+            // the command goes out with the batch (flush_model_batch).
+            let t0 = self.tick();
+            let cull = if d.cull_back { self.rsp_cull } else { 2 };
+            let words = rsp::draw_words(&self.tnl_ctx, matrix, &d, params.tint, rm, cull, 0);
+            self.pending_rsp.push(words);
+            let tnl = TnlStats {
+                rsp_draws: 1,
+                rsp_tris: (mesh.index_count / 3) as u32,
+                ..TnlStats::default()
+            };
+            self.frame_stats.tnl.add(&tnl);
+            if let Some(p) = &mut self.profile {
+                p.record_model(model, now_us().wrapping_sub(t0), &tnl);
+            }
+            return;
+        }
         let texture = mesh
             .texture_for(params)
             .filter(|t| self.sprites.contains_key(&t.0));
         let before = self.pending_tris.len();
         let t0 = self.tick();
         let pending = &mut self.pending_tris;
-        let tnl = trino_core::render3d::tessellate(
+        let tnl = trino_core::render3d::tessellate_with(
+            &self.tnl_ctx,
+            &mut self.tnl_scratch,
             &mesh,
             matrix,
-            &self.camera,
-            &self.light,
             params,
-            SCREEN,
             &mut |tri| pending.push(tri),
         );
         self.frame_stats.tnl.add(&tnl);
@@ -345,8 +506,7 @@ impl Renderer for N64Renderer {
         let size = unsafe { ffi::trino_sprite_size(entry.ptr) };
         let (w, h) = ((size >> 16) as f32, (size & 0xFFFF) as f32);
         let uv = trino_core::render3d::region_uv(params.region, w, h);
-        let Some(tris) =
-            trino_core::render3d::billboard(&self.camera, &self.light, SCREEN, pos, params, uv)
+        let Some(tris) = trino_core::render3d::billboard_with(&self.tnl_ctx, pos, params, uv)
         else {
             return;
         };
@@ -361,6 +521,11 @@ impl Renderer for N64Renderer {
         self.last_stats = self.frame_stats;
         let t0 = self.tick();
         unsafe { ffi::trino_frame_end() }
+        // Profiling: charge the RSP/RDP work this frame queued to the frame
+        // itself (with RSP T&L it is no longer CPU time).
+        if self.profile.is_some() {
+            unsafe { ffi::trino_drain() }
+        }
         self.charge(t0, |s| &mut s.end);
     }
 

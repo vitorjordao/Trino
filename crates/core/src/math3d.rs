@@ -108,9 +108,20 @@ impl Mat34 {
     /// Model matrix from Euler XYZ rotation (radians), scale and translation
     /// (applied in that order).
     pub fn from_rotation_scale_translation(rot: Vec3, scale: Vec3, pos: Vec3) -> Mat34 {
-        let (sx, cx) = (sin(rot.x), cos(rot.x));
-        let (sy, cy) = (sin(rot.y), cos(rot.y));
-        let (sz, cz) = (sin(rot.z), cos(rot.z));
+        // Most draws leave some axes unrotated (blocks all three, coins and
+        // boars all but yaw): skip the software sin/cos there. `+0.0` only,
+        // where sin and cos return exactly 0 and 1 (pinned by a test), so
+        // the matrix is bit-identical.
+        let sin_cos = |a: f32| {
+            if a.to_bits() == 0 {
+                (0.0, 1.0)
+            } else {
+                (sin(a), cos(a))
+            }
+        };
+        let (sx, cx) = sin_cos(rot.x);
+        let (sy, cy) = sin_cos(rot.y);
+        let (sz, cz) = sin_cos(rot.z);
         // R = Rz * Ry * Rx, then columns scaled.
         let r = [
             [cz * cy, cz * sy * sx - sz * cx, cz * sy * cx + sz * sx],
@@ -331,6 +342,34 @@ impl Mat34 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zero_angle_fast_path_matches_sin_cos() {
+        // from_rotation_scale_translation skips sin/cos for +0.0 angles;
+        // that is only output-identical while these hold bit for bit.
+        assert_eq!(sin(0.0).to_bits(), 0.0f32.to_bits());
+        assert_eq!(cos(0.0).to_bits(), 1.0f32.to_bits());
+        let full = |r: Vec3, s: Vec3, p: Vec3| {
+            let (sx, cx) = (sin(r.x), cos(r.x));
+            let (sy, cy) = (sin(r.y), cos(r.y));
+            let (sz, cz) = (sin(r.z), cos(r.z));
+            [
+                cz * cy * s.x,
+                (cz * sy * sx - sz * cx) * s.y,
+                cy * cx * s.z,
+                p.x,
+            ]
+        };
+        let (r, sc, p) = (
+            Vec3::new(0.0, 0.7, 0.0),
+            Vec3::new(2.0, 1.0, 3.0),
+            Vec3::ONE,
+        );
+        let m = Mat34::from_rotation_scale_translation(r, sc, p);
+        let want = full(r, sc, p);
+        let got = [m.m[0][0], m.m[0][1], m.m[2][2], m.m[0][3]];
+        assert_eq!(got.map(f32::to_bits), want.map(f32::to_bits));
+    }
 
     #[test]
     fn sin_cos_are_close_to_std() {

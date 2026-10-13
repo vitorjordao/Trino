@@ -38,6 +38,8 @@ mod input;
 #[cfg(target_os = "none")]
 mod renderer;
 #[cfg(target_os = "none")]
+mod rsp;
+#[cfg(target_os = "none")]
 pub mod runtime;
 #[cfg(target_os = "none")]
 mod system;

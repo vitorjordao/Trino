@@ -35,23 +35,27 @@ pub struct CostModel {
     pub us_per_emitted: f32,
 }
 
-/// The N64 (emulated time under ares), recalibrated 2026-10-13 after back
-/// faces started being rejected before clipping/splitting, from the
-/// castle64 `TRINO_PERF_MODEL` / `TRINO_PERF_SCENE` lines (default white
-/// light, no fog): least squares over 44 per-model measurements (mean error
-/// 5%), four of the five scene totals within ±2% (sky-tower +11%); sort +
-/// submit come to 29–31 µs per emitted triangle in every scene. Vertices
-/// and triangles are strongly correlated in real meshes (~2 vertices per
-/// triangle), so trust the sum, not the split between the two terms. Code layout alone moves real
-/// frames by ~5–10%, so read results as estimates. Recalibrate when the
-/// T&L or the backends change (the n64-performance skill says how);
-/// `cargo xtask test n64` prints estimate vs measurement for every scene.
+/// The N64 (emulated time under ares), recalibrated 2026-10-13 after the
+/// throughput plan's Phases 1–3c (`docs/plans/n64-throughput.md`: per-frame
+/// T&L constants, backend-owned scratch, meshes parsed once, chunked vertex
+/// fetch, split T&L code, opaque draws unsplit, one reciprocal per vertex,
+/// model-space lighting), from the castle64 `TRINO_PERF_MODEL` /
+/// `TRINO_PERF_SCENE` lines (default white light, no fog). castle64 no
+/// longer splits, so the split term keeps its Phase 1 value, and vertices
+/// and triangles are too correlated in real meshes (~2:1) for a free fit:
+/// the per-vertex term is the micro scenes' measured 7.1 µs and the rest is
+/// least squares over 39 per-model points (mean error 11%, scene totals
+/// -4…+9%). Sort + submit come to 34–40 µs per emitted triangle. Code layout
+/// alone moves real frames by ~5–10%, so read results as estimates.
+/// Recalibrate when the T&L or the backends change (the n64-performance
+/// skill says how); `cargo xtask test n64` prints estimate vs measurement
+/// for every scene.
 pub const N64_COST: CostModel = CostModel {
-    us_per_vert: 16.6,
-    us_per_tri: 26.1,
-    us_per_draw: 278.0,
-    us_per_split: 22.3,
-    us_per_emitted: 30.0,
+    us_per_vert: 7.1,
+    us_per_tri: 17.3,
+    us_per_draw: 183.8,
+    us_per_split: 25.5,
+    us_per_emitted: 37.0,
 };
 
 impl CostModel {
@@ -232,7 +236,7 @@ impl RenderProfile {
             out,
             "TRINO_PERF_SCENE:{scene} frames={} update={} render={} begin={} tnl={} sort={} \
              submit={} sprites={} end={} game={} vblanks={} verts={} tris_in={} clipped={} \
-             splits={} backfaced={} emitted={} culled={} draws={}",
+             splits={} backfaced={} emitted={} culled={} draws={} rsp_draws={} rsp_tris={}",
             self.frames,
             times.update / n,
             times.render / n,
@@ -252,6 +256,8 @@ impl RenderProfile {
             t.emitted / n,
             t.culled / n,
             self.draws() / n,
+            t.rsp_draws / n,
+            t.rsp_tris / n,
         )?;
         let sorted = self.models_by_cost();
         let other = [self.other];
@@ -294,11 +300,10 @@ mod tests {
     fn n64_cost_model_reproduces_its_calibration() {
         // (verts, tris_in, draws, splits, measured T&L us) from castle64.
         let points = [
-            (159, 75, 1, 0, 5_159),       // castle doorway
-            (140, 70, 1, 0, 4_567),       // boar
-            (24, 12, 1, 191, 5_011),      // lava sea block (depth splits)
-            (1397, 661, 34, 199, 55_014), // the whole hub scene
-            (24, 12, 1, 0, 1_025),        // shadow
+            (159, 75, 1, 0, 2_845),     // castle doorway
+            (140, 70, 1, 0, 2_483),     // boar
+            (1229, 605, 26, 0, 24_908), // the whole hub scene
+            (450, 220, 12, 0, 9_592),   // the whole throne scene
         ];
         for (verts, tris_in, draws, splits, us) in points {
             let t = TnlStats {
@@ -309,8 +314,10 @@ mod tests {
             };
             let est = N64_COST.tnl_us(&t, draws) as f32;
             let err = (est - us as f32).abs() / us as f32;
+            // Mean error 11%; small meshes drawn many times sit furthest
+            // off (their per-draw cost moves with code layout).
             assert!(
-                err < 0.1,
+                err < 0.15,
                 "{verts}v {tris_in}t: est {est} vs {us} ({err:.2})"
             );
         }
@@ -370,7 +377,10 @@ mod tests {
         // game = render - renderer stages = (6000 - 4400) / 4.
         assert!(scene.contains(" game=400 "), "{scene}");
         assert!(scene.contains(" verts=100 "), "{scene}");
-        assert!(scene.ends_with(" draws=0"), "{scene}");
+        assert!(
+            scene.ends_with(" draws=0 rsp_draws=0 rsp_tris=0"),
+            "{scene}"
+        );
         let model = lines.next().unwrap();
         assert_eq!(
             model,

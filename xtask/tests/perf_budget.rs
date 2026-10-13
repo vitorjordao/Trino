@@ -18,14 +18,17 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
-use trino_core::render3d::{Camera3, DEFAULT_LIGHT, Light, Mesh, TnlStats, tessellate};
+use trino_core::render3d::{
+    Camera3, DEFAULT_LIGHT, Light, Mesh, TnlContext, TnlStats, rsp_eligible, rsp_mesh_supported,
+    tessellate,
+};
 use trino_core::*;
 
 const BASELINE: &str = "tests/perf/castle64_work.toml";
 /// The N64 screen: projection and culling depend on it, and the N64 is
 /// the target the baseline is cross-checked on.
 const SCREEN: Vec2 = Vec2::new(320.0, 240.0);
-const FIELDS: [&str; 7] = [
+const FIELDS: [&str; 9] = [
     "verts",
     "tris_in",
     "clipped",
@@ -33,6 +36,8 @@ const FIELDS: [&str; 7] = [
     "backfaced",
     "emitted",
     "culled",
+    "rsp_draws",
+    "rsp_tris",
 ];
 
 struct NullAudio;
@@ -73,7 +78,19 @@ impl Renderer for Counting {
             return;
         };
         let mesh = Mesh::from_tmdl(bytes).unwrap();
-        let s = tessellate(&mesh, x, &self.camera, &self.light, p, SCREEN, &mut |_| {});
+        // The N64 sends eligible draws to its RSP overlay (same rules,
+        // trino_core::render3d::rsp_eligible): count those as RSP work, as
+        // the ROM does.
+        let ctx = TnlContext::new(&self.camera, &self.light, SCREEN);
+        let s = if rsp_mesh_supported(&mesh) && rsp_eligible(&ctx, &mesh, x, p).is_some() {
+            TnlStats {
+                rsp_draws: 1,
+                rsp_tris: (mesh.index_count / 3) as u32,
+                ..TnlStats::default()
+            }
+        } else {
+            tessellate(&mesh, x, &self.camera, &self.light, p, SCREEN, &mut |_| {})
+        };
         self.total.add(&s);
         let e = self.per_model.entry(m.0).or_default();
         e.0 += 1;
@@ -91,6 +108,8 @@ fn field(t: &TnlStats, name: &str) -> u32 {
         "backfaced" => t.backfaced,
         "emitted" => t.emitted,
         "culled" => t.culled,
+        "rsp_draws" => t.rsp_draws,
+        "rsp_tris" => t.rsp_tris,
         _ => unreachable!(),
     }
 }
@@ -106,6 +125,8 @@ fn per_frame(t: &TnlStats, n: u32) -> TnlStats {
         splits: t.splits / n,
         backfaced: t.backfaced / n,
         emitted: t.emitted / n,
+        rsp_draws: t.rsp_draws / n,
+        rsp_tris: t.rsp_tris / n,
     }
 }
 

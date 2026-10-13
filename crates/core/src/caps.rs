@@ -17,8 +17,17 @@ pub struct Caps {
     pub max_texture_dim: u16,
     /// Soft budget used by strict mode to flag overdraw-heavy scenes.
     pub max_sprites_per_frame: u32,
-    /// Soft budget for Fase 7 (3D).
+    /// Rasterizer-side triangle cap (RDP / GPU), checked by strict mode. It
+    /// is **not** the CPU T&L budget: on the N64 the time budget below binds
+    /// far earlier.
     pub max_tris_per_frame: u32,
+    /// Hard ceiling, in console microseconds, for one frame's 3D (T&L, sort
+    /// and submit) as the calibrated cost model estimates it
+    /// ([`crate::perf::N64_COST`]); strict mode panics above it. The N64's is
+    /// 50 ms (20 fps). Tools warn earlier, at a 30 fps frame
+    /// ([`crate::perf::FRAME_30FPS_US`]). `u32::MAX` = no time model for the
+    /// target.
+    pub max_3d_us_per_frame: u32,
     /// Output color depth in bits.
     pub color_depth_bits: u8,
     /// Save-data budget in bytes (`Platform::save_capacity`). The N64 value
@@ -48,6 +57,7 @@ impl Caps {
         max_texture_dim: 256,
         max_sprites_per_frame: 512,
         max_tris_per_frame: 4000,
+        max_3d_us_per_frame: 50_000,
         color_depth_bits: 16,
         save_bytes: 2048,
     };
@@ -60,6 +70,7 @@ impl Caps {
         max_texture_dim: 1024,
         max_sprites_per_frame: 4096,
         max_tris_per_frame: 60_000,
+        max_3d_us_per_frame: u32::MAX,
         color_depth_bits: 24,
         save_bytes: 64 * 1024,
     };
@@ -73,6 +84,7 @@ impl Caps {
         max_texture_dim: 4096,
         max_sprites_per_frame: u32::MAX,
         max_tris_per_frame: u32::MAX,
+        max_3d_us_per_frame: u32::MAX,
         color_depth_bits: 32,
         save_bytes: 1024 * 1024,
     };

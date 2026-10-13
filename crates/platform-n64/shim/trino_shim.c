@@ -25,15 +25,31 @@
 
 static void trino_check_trifmt(void);
 
+// Trino's RSP overlay (rsp_trino.S): vertex T&L for static meshes.
+DEFINE_RSP_UCODE(rsp_trino);
+static uint32_t trino_rsp_id;
+
 // VI interrupt counter: an independent clock for perf reports (60 per
 // emulated second on NTSC), to cross-check the count-register timings.
 static volatile uint32_t trino_vblanks = 0;
 static void trino_on_vi(void) { trino_vblanks++; }
 
+// RSP T&L bookkeeping. RSP draws need the 3D shade + z mode current when
+// the overlay runs (they don't go through trino_3d_begin's batch flush), and
+// rdpq's CPU-side autosync never sees the triangles the overlay emits, so
+// the next mode change must be preceded by an explicit SYNC_PIPE.
+static int trino_mode_3d = 0;
+static int trino_rsp_pending = 0;
+
 // Standard render mode + magic-square RGB dither into the 16-bit
 // framebuffer (libdragon's standard mode disables dithering).
 static void trino_mode_standard(void)
 {
+    if (trino_rsp_pending) {
+        rdpq_sync_pipe();
+        trino_rsp_pending = 0;
+    }
+    trino_mode_3d = 0;
     rdpq_set_mode_standard();
     rdpq_mode_dithering(DITHER_SQUARE_NONE);
 }
@@ -56,6 +72,7 @@ void trino_init(void)
     audio_init(44100, 4);
     mixer_init(16);
     trino_check_trifmt();
+    trino_rsp_id = rspq_overlay_register(&rsp_trino);
     register_VI_handler(trino_on_vi);
 }
 
@@ -105,6 +122,7 @@ void trino_frame_begin(uint32_t rgba8888)
         trino_zbuf = surface_alloc(FMT_RGBA16, display_get_width(), display_get_height());
         trino_zbuf_ready = 1;
     }
+    trino_mode_3d = 0;
     rdpq_attach(fb, &trino_zbuf);
     rdpq_clear(RGBA32((rgba8888 >> 24) & 0xFF, (rgba8888 >> 16) & 0xFF,
                       (rgba8888 >> 8) & 0xFF, 255));
@@ -113,7 +131,21 @@ void trino_frame_begin(uint32_t rgba8888)
 
 void trino_frame_end(void)
 {
+    if (trino_rsp_pending) {
+        rdpq_sync_pipe();
+        trino_rsp_pending = 0;
+    }
+    trino_mode_3d = 0;
     rdpq_detach_show();
+}
+
+// Profiling: wait until the RSP and the RDP have finished everything queued,
+// so a measured frame includes the work it handed them (with RSP T&L that
+// work no longer shows up as CPU time).
+void trino_drain(void)
+{
+    rdpq_fence();
+    rspq_wait();
 }
 
 // ---------------------------------------------------------------------------
@@ -175,6 +207,32 @@ void trino_3d_begin(void)
     trino_mode_standard();
     rdpq_mode_combiner(RDPQ_COMBINER_SHADE);
     rdpq_mode_zbuf(true, true);
+    trino_mode_3d = 1;
+}
+
+// RSP T&L: one static mesh draw (rsp_trino.S TrinoCmd_Draw). `w` holds the
+// overlay's DRAW layout, 27 words; word 0's low 24 bits are the flags.
+#define TRINO_RSP_DRAW_WORDS 27
+void trino_rsp_draw(const uint32_t* w)
+{
+    if (!trino_mode_3d) trino_3d_begin();
+    rspq_write_t c = rspq_write_begin(trino_rsp_id, 0x1, TRINO_RSP_DRAW_WORDS);
+    rspq_write_arg(&c, w[0] & 0xFFFFFF);
+    for (int i = 1; i < TRINO_RSP_DRAW_WORDS; i++) rspq_write_arg(&c, w[i]);
+    rspq_write_end(&c);
+    trino_rsp_pending = 1;
+}
+
+// Uncached RDRAM for data the RSP reads by DMA (no cache writeback needed),
+// 16-byte aligned; and its physical address for the overlay.
+void* trino_alloc_uncached(uint32_t size)
+{
+    return malloc_uncached(size);
+}
+
+uint32_t trino_phys_addr(const void* p)
+{
+    return PhysicalAddr(p);
 }
 
 // pts: 6 floats (x0,y0,x1,y1,x2,y2) in screen pixels;
@@ -196,6 +254,13 @@ void trino_tri(const float* pts, const uint8_t* colors, const float* zs)
         v[i][TRIFMT_ZBUF_SHADE.shade_offset + 3] = colors[i * 4 + 3] / 255.0f;
     }
     rdpq_triangle(&TRIFMT_ZBUF_SHADE, v[0], v[1], v[2]);
+}
+
+// RSP overlay milestone 1: one fixed triangle assembled by the overlay
+// (shade + z), drawn in the current 3D mode (call trino_3d_begin first).
+void trino_rsp_test_tri(void)
+{
+    rspq_write(trino_rsp_id, 0x0, 0xCD00);
 }
 
 // Startup self-check of the vertex layouts the trino_tri* buffers assume.

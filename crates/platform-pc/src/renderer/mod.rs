@@ -12,7 +12,9 @@ mod batch;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use trino_core::render3d::{Camera3, DEFAULT_LIGHT, Light, Mesh, ScreenTri};
+use trino_core::render3d::{
+    Camera3, DEFAULT_LIGHT, Light, Mesh, MeshLayout, ScreenTri, TnlContext, TnlScratch,
+};
 use trino_core::{
     Caps, Color, FontId, FrameStats, Mat34, Material, ModelId, ModelParams, Renderer, SpriteId,
     SpriteParams, TextParams, Transform3, Vec2,
@@ -87,7 +89,8 @@ pub struct PcRenderer {
     clamp_sampler: wgpu::Sampler,
     /// 1x1 white: what untextured triangles "sample" (×1 = unchanged).
     white_bg: wgpu::BindGroup,
-    meshes: HashMap<u32, Vec<u8>>,
+    /// TMDL blobs with their validated layout (parsed once, at register).
+    meshes: HashMap<u32, (Vec<u8>, MeshLayout)>,
     /// Glyph tables (`TFNT`) by font handle; the atlas is the sprite with
     /// the same handle. `Arc` so `draw_text` can lay out while drawing.
     fonts: HashMap<u32, Arc<[u8]>>,
@@ -105,6 +108,11 @@ pub struct PcRenderer {
     pending_tex: Vec<Option<TexKey>>,
     camera: Camera3,
     light: Light,
+    /// T&L constants of `camera` + `light` at the current internal size
+    /// (rebuilt when any of them changes).
+    tnl_ctx: Option<TnlContext>,
+    /// The T&L's working memory, reused by every draw (boxed: ~9 KB).
+    tnl_scratch: Box<TnlScratch>,
     clear: Color,
     caps: Caps,
     profile: SimProfile,
@@ -727,6 +735,8 @@ impl PcRenderer {
             pending_tex: Vec::new(),
             camera: Camera3::default(),
             light: DEFAULT_LIGHT,
+            tnl_ctx: None,
+            tnl_scratch: Box::new(TnlScratch::new()),
             clear: Color::BLACK,
             caps,
             profile,
@@ -742,10 +752,11 @@ impl PcRenderer {
     /// Register a baked TMDL mesh under a stable handle. Re-uploading the
     /// same id replaces the content (live reload).
     pub fn upload_mesh(&mut self, id: ModelId, tmdl: Vec<u8>) {
-        if let Err(e) = Mesh::from_tmdl(&tmdl) {
-            panic!("mesh {id:?}: invalid TMDL blob: {e:?}");
-        }
-        self.meshes.insert(id.0, tmdl);
+        let layout = match Mesh::from_tmdl(&tmdl) {
+            Ok(m) => m.layout(&tmdl),
+            Err(e) => panic!("mesh {id:?}: invalid TMDL blob: {e:?}"),
+        };
+        self.meshes.insert(id.0, (tmdl, layout));
     }
 
     /// Register a baked font's glyph table (`TFNT`) under its handle; the
@@ -1088,6 +1099,24 @@ impl PcRenderer {
                     self.profile, self.caps.max_tris_per_frame
                 );
             }
+            if self.caps.max_3d_us_per_frame != u32::MAX {
+                let us = trino_core::perf::N64_COST
+                    .estimate_us(&self.frame_stats.tnl, self.frame_stats.models);
+                if us > self.caps.max_3d_us_per_frame {
+                    panic!(
+                        "strict mode: this frame's 3D is ~{:.1} ms on the {:?} profile \
+                         (trino_core::perf::N64_COST, from {} draws, {} vertices, {} \
+                         triangles) — over its {:.0} ms ceiling. Fewer draws, fewer \
+                         visible triangles, or a `lod` level (n64-performance skill).",
+                        us as f32 / 1000.0,
+                        self.profile,
+                        self.frame_stats.models,
+                        self.frame_stats.tnl.verts,
+                        self.frame_stats.tnl.tris_in,
+                        self.caps.max_3d_us_per_frame as f32 / 1000.0
+                    );
+                }
+            }
         }
         let (instances, segments) = build_segments(&self.commands);
         self.commands.clear();
@@ -1349,6 +1378,20 @@ fn texture_budget(r: TextureBudget<'_>, t: SpriteId, tiled: bool) {
     }
 }
 
+/// The T&L constants for `camera`, `light` and `screen`, cached in `slot`
+/// (rebuilt only when one of them changed).
+fn tnl_context(
+    slot: &mut Option<TnlContext>,
+    camera: &Camera3,
+    light: &Light,
+    screen: Vec2,
+) -> TnlContext {
+    match *slot {
+        Some(c) if c.matches(camera, light, screen) => c,
+        _ => *slot.insert(TnlContext::new(camera, light, screen)),
+    }
+}
+
 impl Renderer for PcRenderer {
     fn caps(&self) -> &Caps {
         &self.caps
@@ -1436,10 +1479,10 @@ impl Renderer for PcRenderer {
         _material: Material,
         params: &ModelParams,
     ) {
-        let Some(tmdl) = self.meshes.get(&model.0) else {
+        let Some((tmdl, layout)) = self.meshes.get(&model.0) else {
             return; // unknown handle: skip, like sprites
         };
-        let mesh = Mesh::from_tmdl(tmdl).expect("validated on upload");
+        let mesh = Mesh::from_layout(tmdl, layout);
         self.frame_stats.models += 1;
         let texture = mesh
             .texture_for(params)
@@ -1459,14 +1502,14 @@ impl Renderer for PcRenderer {
         }
         let screen = Vec2::new(self.internal_size.0 as f32, self.internal_size.1 as f32);
         let before = self.pending_tris.len();
+        let ctx = tnl_context(&mut self.tnl_ctx, &self.camera, &self.light, screen);
         let pending = &mut self.pending_tris;
-        let tnl = trino_core::render3d::tessellate(
+        let tnl = trino_core::render3d::tessellate_with(
+            &ctx,
+            &mut self.tnl_scratch,
             &mesh,
             matrix,
-            &self.camera,
-            &self.light,
             params,
-            screen,
             &mut |tri| pending.push(tri),
         );
         self.frame_stats.tnl.add(&tnl);
@@ -1504,9 +1547,8 @@ impl Renderer for PcRenderer {
             false,
         );
         let screen = Vec2::new(self.internal_size.0 as f32, self.internal_size.1 as f32);
-        let Some(tris) =
-            trino_core::render3d::billboard(&self.camera, &self.light, screen, pos, params, uv)
-        else {
+        let ctx = tnl_context(&mut self.tnl_ctx, &self.camera, &self.light, screen);
+        let Some(tris) = trino_core::render3d::billboard_with(&ctx, pos, params, uv) else {
             return;
         };
         self.frame_stats.sprites += 1;

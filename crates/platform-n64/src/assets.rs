@@ -68,7 +68,7 @@ impl N64Assets {
                 }
                 "model" => {
                     if let Some(bytes) = read_bytes(&path) {
-                        renderer.register_mesh(id, bytes);
+                        let _ = renderer.register_mesh(id, bytes);
                     }
                 }
                 "font" => {

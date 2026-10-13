@@ -41,6 +41,17 @@ unsafe extern "C" {
     /// Set the RDP shade combiner + z-test; call once before a `trino_tri`
     /// batch.
     pub fn trino_3d_begin();
+    /// RSP overlay check: one fixed triangle drawn by `rsp_trino.S`.
+    pub fn trino_rsp_test_tri();
+    /// RSP T&L of one static mesh draw: 27 words in the overlay's DRAW
+    /// layout (`rsp_trino.S`).
+    pub fn trino_rsp_draw(words: *const u32);
+    /// Uncached, 16-byte aligned RDRAM (the RSP reads it by DMA).
+    pub fn trino_alloc_uncached(size: u32) -> *mut c_void;
+    /// Physical address of a pointer (what the RSP's DMA takes).
+    pub fn trino_phys_addr(p: *const c_void) -> u32;
+    /// Profiling: wait for the RSP and RDP to finish everything queued.
+    pub fn trino_drain();
     /// pts: 6 floats (x/y per vertex); colors: 12 bytes (rgba per vertex);
     /// zs: 3 floats (normalized depth 0..1, 0 = near) for the RDP z-buffer.
     pub fn trino_tri(pts: *const f32, colors: *const u8, zs: *const f32);

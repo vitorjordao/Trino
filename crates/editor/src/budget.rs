@@ -56,7 +56,9 @@ pub fn rows(stats: &FrameStats, caps: &Caps) -> Vec<Row> {
             limit: lim(caps.max_tris_per_frame),
             unit: "",
             level: level(stats.tris as u64, lim(caps.max_tris_per_frame)),
-            hint: "3D triangles after culling/clipping/subdivision (Caps::max_tris_per_frame)",
+            hint: "3D triangles after culling/clipping/subdivision, against the rasterizer's \
+                   cap (Caps::max_tris_per_frame). On the N64 the CPU time binds far earlier: \
+                   see N64 3D time",
         },
         Row {
             label: "Sprites",
@@ -124,9 +126,9 @@ mod tests {
         };
         let r = rows(&stats, &Caps::N64);
         let time = r.iter().find(|r| r.label == "N64 3D time").unwrap();
-        // KayKit's original 1068-tri door alone: far over a 30 fps frame.
+        // KayKit's original 1068-tri door alone: about two 30 fps frames.
         assert_eq!(time.level, Level::Over);
-        assert!(time.used > 70_000, "{}", time.used);
+        assert!(time.used > 50_000, "{}", time.used);
         assert!(
             rows(&stats, &Caps::PC)
                 .iter()

@@ -402,3 +402,51 @@ fn strict_mode_rejects_texture_over_budget() {
         "panic message must be actionable, got: {msg}"
     );
 }
+
+#[test]
+fn strict_mode_rejects_3d_over_the_n64_time_ceiling() {
+    let Some(mut renderer) = headless_renderer(SimProfile::N64) else {
+        return;
+    };
+    renderer.set_strict(true);
+    let glb = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/shared/models/cube.glb");
+    let tmdl = trino_asset_pipeline::bake_model_tmdl(&glb).expect("cube.glb bakes");
+    let cube = trino_core::ModelId(1);
+    renderer.upload_mesh(cube, tmdl);
+    use trino_core::render3d::Camera3;
+    use trino_core::{Renderer as _, Transform3, Vec3};
+    let frame = |renderer: &mut PcRenderer, draws: usize| {
+        renderer.begin_frame(Color::BLACK);
+        renderer.set_camera(&Camera3::default());
+        for k in 0..draws {
+            renderer.draw_model(
+                cube,
+                &Transform3 {
+                    position: Vec3::new(
+                        (k % 10) as f32 * 0.3 - 1.4,
+                        (k / 10) as f32 * 0.3 - 1.0,
+                        0.0,
+                    ),
+                    rotation: Vec3::new(0.5, 0.8, 0.0),
+                    scale: Vec3::new(0.2, 0.2, 0.2),
+                },
+                trino_core::Material::VertexLit,
+                &trino_core::ModelParams::default(),
+            );
+        }
+        renderer.end_frame();
+    };
+    // ~0.8 ms of N64 time per cube draw (N64_COST): 10 fit easily.
+    frame(&mut renderer, 10);
+    let result =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| frame(&mut renderer, 80)));
+    let err = result.expect_err("80 cube draws must bust the N64's 50 ms 3D ceiling");
+    let msg = err
+        .downcast_ref::<String>()
+        .cloned()
+        .unwrap_or_else(|| "non-string panic".into());
+    assert!(
+        msg.contains("strict mode") && msg.contains("N64_COST") && msg.contains("ceiling"),
+        "panic message must be actionable, got: {msg}"
+    );
+}

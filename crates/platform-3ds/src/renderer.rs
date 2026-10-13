@@ -1,13 +1,15 @@
 //! citro2d sprite renderer (top screen, 400x240) via the shim, plus gouraud
 //! triangles for the engine's software-T&L 3D (`trino_core::render3d`).
 
+use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::rc::Rc;
 use alloc::vec::Vec;
 use core::ffi::c_void;
 
 use trino_core::render3d::{
-    Camera3, DEFAULT_LIGHT, Light, Mesh, ScreenTri, painter_index, painter_key,
+    Camera3, DEFAULT_LIGHT, Light, Mesh, MeshLayout, ScreenTri, TnlContext, TnlScratch,
+    painter_index, painter_key,
 };
 use trino_core::text::BitmapFont;
 use trino_core::{
@@ -34,7 +36,8 @@ const TRI_DEPTH_RANGE: f32 = 0.35;
 
 pub struct N3dsRenderer {
     sprites: BTreeMap<u32, SpriteEntry>,
-    meshes: BTreeMap<u32, Vec<u8>>,
+    /// TMDL blobs with their validated layout (parsed once, at register).
+    meshes: BTreeMap<u32, (Vec<u8>, MeshLayout)>,
     /// Glyph tables by font handle (atlas = sprite with the same handle).
     fonts: BTreeMap<u32, Rc<[u8]>>,
     frame_stats: FrameStats,
@@ -54,6 +57,10 @@ pub struct N3dsRenderer {
     sprite_depth: f32,
     camera: Camera3,
     light: Light,
+    /// T&L constants of `camera` + `light`, rebuilt when either changes.
+    tnl_ctx: TnlContext,
+    /// The T&L's working memory, reused by every draw (boxed: ~9 KB).
+    tnl_scratch: Box<TnlScratch>,
     caps: Caps,
 }
 
@@ -71,6 +78,8 @@ impl N3dsRenderer {
             verts: Vec::new(),
             sprite_depth: SPRITE_DEPTH_BG,
             camera: Camera3::default(),
+            tnl_ctx: TnlContext::new(&Camera3::default(), &DEFAULT_LIGHT, SCREEN),
+            tnl_scratch: Box::new(TnlScratch::new()),
             light: DEFAULT_LIGHT,
             caps: Caps::N3DS,
         }
@@ -161,8 +170,8 @@ impl N3dsRenderer {
 
     /// Register a TMDL mesh blob under a stable handle.
     pub(crate) fn register_mesh(&mut self, id: u32, tmdl: Vec<u8>) {
-        if Mesh::from_tmdl(&tmdl).is_ok() {
-            self.meshes.insert(id, tmdl);
+        if let Ok(layout) = Mesh::from_tmdl(&tmdl).map(|m| m.layout(&tmdl)) {
+            self.meshes.insert(id, (tmdl, layout));
         }
     }
 
@@ -262,12 +271,14 @@ impl Renderer for N3dsRenderer {
     fn set_camera(&mut self, camera: &Camera3) {
         self.flush_model_batch();
         self.camera = *camera;
+        self.tnl_ctx = TnlContext::new(&self.camera, &self.light, SCREEN);
     }
 
     fn set_light(&mut self, light: &Light) {
         // Lighting is resolved into vertex colors at tessellation time, so
         // a change needs no batch flush.
         self.light = *light;
+        self.tnl_ctx = TnlContext::new(&self.camera, &self.light, SCREEN);
     }
 
     fn draw_model(
@@ -287,23 +298,22 @@ impl Renderer for N3dsRenderer {
         _material: Material,
         params: &ModelParams,
     ) {
-        let Some(tmdl) = self.meshes.get(&model.0) else {
+        let Some((tmdl, layout)) = self.meshes.get(&model.0) else {
             return;
         };
-        let mesh = Mesh::from_tmdl(tmdl).expect("validated on register");
+        let mesh = Mesh::from_layout(tmdl, layout);
         self.frame_stats.models += 1;
         let texture = mesh
             .texture_for(params)
             .filter(|t| self.sprites.contains_key(&t.0));
         let before = self.pending_tris.len();
         let pending = &mut self.pending_tris;
-        let tnl = trino_core::render3d::tessellate(
+        let tnl = trino_core::render3d::tessellate_with(
+            &self.tnl_ctx,
+            &mut self.tnl_scratch,
             &mesh,
             matrix,
-            &self.camera,
-            &self.light,
             params,
-            SCREEN,
             &mut |tri| pending.push(tri),
         );
         self.frame_stats.tnl.add(&tnl);
@@ -318,8 +328,7 @@ impl Renderer for N3dsRenderer {
         let size = unsafe { ffi::trino_sprite_size(entry.ptr) };
         let (w, h) = ((size >> 16) as f32, (size & 0xFFFF) as f32);
         let uv = trino_core::render3d::region_uv(params.region, w, h);
-        let Some(tris) =
-            trino_core::render3d::billboard(&self.camera, &self.light, SCREEN, pos, params, uv)
+        let Some(tris) = trino_core::render3d::billboard_with(&self.tnl_ctx, pos, params, uv)
         else {
             return;
         };

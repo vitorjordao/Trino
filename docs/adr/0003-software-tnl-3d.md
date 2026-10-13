@@ -1,6 +1,8 @@
 # ADR 0003 — 3D via software T&L in core; backends only rasterize triangles
 
-Status: accepted (Fase 7, 2026-07)
+Status: accepted (Fase 7, 2026-07). On the N64, eligible static draws now run the
+same T&L contract on the RSP instead (ADR 0007, 2026-10-13); this CPU path stays the
+reference and the fallback.
 
 ## Context
 

@@ -39,8 +39,10 @@
 //!
 //! - Edges spanning more than [`DEPTH_SPLIT`] units of view depth are
 //!   recursively bisected (per-edge rule — neighbors split shared edges at
-//!   identical points, no T-junction cracks), which keeps the 3DS's
-//!   per-triangle depth honest and the N64's 16-bit z precise.
+//!   identical points, no T-junction cracks) in fogged, textured and
+//!   translucent draws ([`split_policy`]). Opaque draws don't need it: the
+//!   per-vertex depth is affine in screen space, so the z-buffer gets the
+//!   same depth from an unsplit triangle.
 //! - Backends still batch consecutive `draw_model` calls and sort the batch
 //!   far-to-near by [`ScreenTri::depth`] (farthest vertex) — the tie-break
 //!   for equal depths and the correct blending order.
@@ -87,18 +89,29 @@ const CLIP_HEADER: usize = 16;
 /// A parsed (borrowed) mesh — zero-copy over the baked blob.
 #[derive(Clone, Copy, Debug)]
 pub struct Mesh<'a> {
-    positions: &'a [u8],
-    normals: &'a [u8],
-    colors: &'a [u8],
-    indices: &'a [u8],
+    // Per-vertex records as fixed-size arrays: a fetch is one bounds check
+    // plus constant-index byte loads, not one check per byte (the hot T&L
+    // loop reads three of them per vertex).
+    positions: &'a [[u8; 12]],
+    normals: &'a [[u8; 12]],
+    colors: &'a [[u8; 4]],
+    indices: &'a [[u8; 2]],
     pub vertex_count: usize,
     pub index_count: usize,
     bounds: Option<(Vec3, f32)>,
     skeleton: Option<Skeleton<'a>>,
-    uvs: Option<&'a [u8]>,
+    uvs: Option<&'a [[u8; 8]]>,
     texture: Option<SpriteId>,
     /// `SKW2`: (joint2, weight2) per vertex.
     blend: Option<&'a [u8]>,
+    /// Every vertex color has alpha 255 (checked once, at parse).
+    opaque: bool,
+    /// Every normal has unit length (checked once, at parse): the
+    /// model-space lighting path relies on it.
+    unit_normals: bool,
+    /// Every normal lies on a coordinate axis (boxes): model-space lighting
+    /// then holds under non-uniform scale too.
+    axis_normals: bool,
 }
 
 /// Rigid skeleton + clips (borrowed from the blob).
@@ -109,6 +122,61 @@ struct Skeleton<'a> {
     joint_count: usize,
     clips: &'a [u8],
     clip_count: usize,
+}
+
+/// Where each part of a validated TMDL blob lives (byte spans), so a
+/// backend can rebuild its [`Mesh`] on every draw without parsing or
+/// validating again ([`Mesh::layout`] at register, [`Mesh::from_layout`] per
+/// draw). Only valid for the blob it was taken from.
+#[derive(Clone, Copy, Debug)]
+pub struct MeshLayout {
+    positions: Span,
+    normals: Span,
+    colors: Span,
+    indices: Span,
+    vertex_count: usize,
+    index_count: usize,
+    bounds: Option<(Vec3, f32)>,
+    skeleton: Option<SkeletonLayout>,
+    uvs: Option<Span>,
+    texture: Option<SpriteId>,
+    blend: Option<Span>,
+    opaque: bool,
+    unit_normals: bool,
+    axis_normals: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct SkeletonLayout {
+    joint_of_vertex: Span,
+    joints: Span,
+    joint_count: usize,
+    clips: Span,
+    clip_count: usize,
+}
+
+/// A byte range of the blob.
+#[derive(Clone, Copy, Debug)]
+struct Span {
+    at: usize,
+    len: usize,
+}
+
+impl Span {
+    /// `part` must be a sub-slice of `blob` (or empty).
+    fn of(blob: &[u8], part: &[u8]) -> Span {
+        if part.is_empty() {
+            return Span { at: 0, len: 0 };
+        }
+        Span {
+            at: part.as_ptr() as usize - blob.as_ptr() as usize,
+            len: part.len(),
+        }
+    }
+
+    fn get(self, blob: &[u8]) -> &[u8] {
+        &blob[self.at..self.at + self.len]
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -134,6 +202,21 @@ fn rd_f32(d: &[u8], at: usize) -> f32 {
 #[inline]
 fn rd_vec3(d: &[u8], at: usize) -> Vec3 {
     Vec3::new(rd_f32(d, at), rd_f32(d, at + 4), rd_f32(d, at + 8))
+}
+
+#[inline(always)]
+fn le_f32(b: [u8; 4]) -> f32 {
+    f32::from_bits(u32::from_le_bytes(b))
+}
+
+/// A little-endian `f32 * 3` record (constant indices: no bounds checks).
+#[inline(always)]
+fn vec3_of(c: &[u8; 12]) -> Vec3 {
+    Vec3::new(
+        le_f32([c[0], c[1], c[2], c[3]]),
+        le_f32([c[4], c[5], c[6], c[7]]),
+        le_f32([c[8], c[9], c[10], c[11]]),
+    )
 }
 
 #[inline]
@@ -212,10 +295,10 @@ impl<'a> Mesh<'a> {
         let col_at = nrm_at + nrm_len;
         let idx_at = col_at + col_len;
         let mut mesh = Mesh {
-            positions: &bytes[pos_at..pos_at + pos_len],
-            normals: &bytes[nrm_at..nrm_at + nrm_len],
-            colors: &bytes[col_at..col_at + col_len],
-            indices: &bytes[idx_at..idx_at + idx_len],
+            positions: bytes[pos_at..pos_at + pos_len].as_chunks().0,
+            normals: bytes[nrm_at..nrm_at + nrm_len].as_chunks().0,
+            colors: bytes[col_at..col_at + col_len].as_chunks().0,
+            indices: bytes[idx_at..idx_at + idx_len].as_chunks().0,
             vertex_count: v,
             index_count: i,
             bounds: None,
@@ -223,7 +306,20 @@ impl<'a> Mesh<'a> {
             uvs: None,
             texture: None,
             blend: None,
+            opaque: true,
+            unit_normals: true,
+            axis_normals: true,
         };
+        mesh.opaque = mesh.colors.iter().all(|c| c[3] == 255);
+        mesh.unit_normals = mesh.normals.iter().all(|n| {
+            let n = vec3_of(n);
+            (n.dot(n) - 1.0).abs() < 2e-3
+        });
+        mesh.axis_normals = mesh.normals.iter().all(|n| {
+            let n = vec3_of(n);
+            let zeros = [n.x, n.y, n.z].iter().filter(|c| c.abs() < 1e-6).count();
+            zeros == 2
+        });
 
         // Optional sections.
         let mut at = end;
@@ -269,7 +365,7 @@ impl<'a> Mesh<'a> {
                     if len < v * 8 {
                         return Err(MeshError::BadSection);
                     }
-                    mesh.uvs = Some(&body[..v * 8]);
+                    mesh.uvs = Some(body[..v * 8].as_chunks().0);
                 }
                 b"TXID" if len >= 4 => mesh.texture = Some(SpriteId(rd_u32(body, 0))),
                 b"SKW2" => {
@@ -292,6 +388,62 @@ impl<'a> Mesh<'a> {
             at = body_at + len;
         }
         Ok(mesh)
+    }
+
+    /// This mesh's layout inside `blob`, the bytes it was parsed from.
+    pub fn layout(&self, blob: &[u8]) -> MeshLayout {
+        let span = |part: &[u8]| Span::of(blob, part);
+        MeshLayout {
+            positions: span(self.positions.as_flattened()),
+            normals: span(self.normals.as_flattened()),
+            colors: span(self.colors.as_flattened()),
+            indices: span(self.indices.as_flattened()),
+            vertex_count: self.vertex_count,
+            index_count: self.index_count,
+            bounds: self.bounds,
+            skeleton: self.skeleton.map(|k| SkeletonLayout {
+                joint_of_vertex: span(k.joint_of_vertex),
+                joints: span(k.joints),
+                joint_count: k.joint_count,
+                clips: span(k.clips),
+                clip_count: k.clip_count,
+            }),
+            uvs: self.uvs.map(|u| span(u.as_flattened())),
+            texture: self.texture,
+            blend: self.blend.map(span),
+            opaque: self.opaque,
+            unit_normals: self.unit_normals,
+            axis_normals: self.axis_normals,
+        }
+    }
+
+    /// The mesh [`Mesh::from_tmdl`] parsed from `blob`, rebuilt from its
+    /// [`MeshLayout`] without validating again: a draw's mesh for the cost
+    /// of a few slice bounds checks. `blob` must be the bytes the layout was
+    /// taken from (a shorter blob panics, a different one draws garbage).
+    pub fn from_layout(blob: &'a [u8], l: &MeshLayout) -> Mesh<'a> {
+        Mesh {
+            positions: l.positions.get(blob).as_chunks().0,
+            normals: l.normals.get(blob).as_chunks().0,
+            colors: l.colors.get(blob).as_chunks().0,
+            indices: l.indices.get(blob).as_chunks().0,
+            vertex_count: l.vertex_count,
+            index_count: l.index_count,
+            bounds: l.bounds,
+            skeleton: l.skeleton.map(|k| Skeleton {
+                joint_of_vertex: k.joint_of_vertex.get(blob),
+                joints: k.joints.get(blob),
+                joint_count: k.joint_count,
+                clips: k.clips.get(blob),
+                clip_count: k.clip_count,
+            }),
+            uvs: l.uvs.map(|u| u.get(blob).as_chunks().0),
+            texture: l.texture,
+            blend: l.blend.map(|b| b.get(blob)),
+            opaque: l.opaque,
+            unit_normals: l.unit_normals,
+            axis_normals: l.axis_normals,
+        }
     }
 
     fn parse_skeleton(body: &'a [u8], v: usize) -> Result<Skeleton<'a>, MeshError> {
@@ -324,14 +476,20 @@ impl<'a> Mesh<'a> {
 
     #[inline]
     pub fn position(&self, i: usize) -> Vec3 {
-        rd_vec3(self.positions, i * 12)
+        vec3_of(&self.positions[i])
     }
 
     /// Texture coordinate of vertex `i` (zero when the mesh has no UVs).
     #[inline]
     pub fn uv(&self, i: usize) -> Vec2 {
         match self.uvs {
-            Some(uv) => Vec2::new(rd_f32(uv, i * 8), rd_f32(uv, i * 8 + 4)),
+            Some(uv) => {
+                let c = &uv[i];
+                Vec2::new(
+                    le_f32([c[0], c[1], c[2], c[3]]),
+                    le_f32([c[4], c[5], c[6], c[7]]),
+                )
+            }
             None => Vec2::ZERO,
         }
     }
@@ -354,23 +512,18 @@ impl<'a> Mesh<'a> {
 
     #[inline]
     pub fn normal(&self, i: usize) -> Vec3 {
-        rd_vec3(self.normals, i * 12)
+        vec3_of(&self.normals[i])
     }
 
     #[inline]
     pub fn color(&self, i: usize) -> Color {
-        let at = i * 4;
-        Color::rgba(
-            self.colors[at],
-            self.colors[at + 1],
-            self.colors[at + 2],
-            self.colors[at + 3],
-        )
+        let [r, g, b, a] = self.colors[i];
+        Color::rgba(r, g, b, a)
     }
 
     #[inline]
     pub fn index(&self, i: usize) -> u16 {
-        u16::from_le_bytes([self.indices[i * 2], self.indices[i * 2 + 1]])
+        u16::from_le_bytes(self.indices[i])
     }
 
     /// Model-space bounding sphere `(center, radius)`, when baked.
@@ -680,16 +833,230 @@ pub fn painter_index(key: u64) -> usize {
 }
 
 const NEAR: f32 = 0.05;
+/// The near plane's view depth (hardware T&L paths project like [`tessellate`]).
+pub const NEAR_PLANE: f32 = NEAR;
 /// Guard band: side planes sit at 1.5x the screen so clipped coordinates stay
 /// bounded (RDP fixed-point safety) without visible clipping at the borders.
 const GUARD: f32 = 1.5;
 /// A triangle clipped by up to 5 planes gains at most one vertex per plane.
 const MAX_POLY: usize = 8;
 /// Edges spanning more than this much view depth are bisected before
-/// projection: painter sorting is only as good as how depth-uniform each
-/// triangle is. The rule looks at one edge at a time, so neighbors split
+/// projection, for the draws [`split_policy`] picks: painter sorting (the
+/// blending order) is only as good as how depth-uniform each triangle is,
+/// and per-vertex fog and perspective-free texture paths need the extra
+/// vertices. The rule looks at one edge at a time, so neighbors split
 /// shared edges identically (no cracks).
 pub const DEPTH_SPLIT: f32 = 3.0;
+
+/// The light direction in model space, for a draw whose world normals are
+/// a rotation of its unit model normals. With orthogonal columns,
+/// `M = R·S` (rotation, per-axis scale `S`, no shear), and `normalize(M·n)`
+/// is `R·n` when the scale is uniform, or when every normal lies on an axis
+/// (castle64's stretched blocks): then `(R·n)·l = n·(Rᵀ·l)`, and `Rᵀ·l` is
+/// each column's unit vector dotted with `l`. One transform per draw instead
+/// of a normal transform, a square root and a division per vertex. `None`
+/// for shear, for non-uniform scale with free normals, or when the normals
+/// aren't unit length.
+fn model_space_light(mesh: &Mesh, model: &Mat34, ldir: Vec3) -> Option<Vec3> {
+    if !mesh.unit_normals {
+        return None;
+    }
+    let m = &model.m;
+    let col = |c: usize| Vec3::new(m[0][c], m[1][c], m[2][c]);
+    let (a, b, c) = (col(0), col(1), col(2));
+    let (la, lb, lc) = (a.dot(a), b.dot(b), c.dot(c));
+    let big = la.max(lb).max(lc);
+    // The core's sin/cos are approximations (~1e-4), so its rotation
+    // matrices are orthonormal only to ~1e-4; 3e-3 still keeps the lighting
+    // error under a quarter of a color step.
+    let tol = big * 3e-3;
+    let near = |x: f32, y: f32| (x - y).abs() <= tol;
+    let orthogonal = la.min(lb).min(lc) > 0.0
+        && a.dot(b).abs() <= tol
+        && a.dot(c).abs() <= tol
+        && b.dot(c).abs() <= tol;
+    let uniform = near(la, lb) && near(la, lc);
+    if !orthogonal || !(uniform || mesh.axis_normals) {
+        return None;
+    }
+    let unit = |v: Vec3, len2: f32| v.dot(ldir) / crate::math3d::sqrt(len2);
+    Some(Vec3::new(unit(a, la), unit(b, lb), unit(c, lc)))
+}
+
+/// Vertices per RSP mesh segment: the N64 overlay transforms a segment into
+/// DMEM, then draws its triangles (local u8 indices).
+pub const RSP_SEG_VERTS: usize = 32;
+/// Triangles per RSP mesh segment (the overlay's index space).
+pub const RSP_SEG_TRIS: usize = 64;
+/// Segments per RSP mesh (the overlay's segment table).
+pub const RSP_MAX_SEGS: usize = 16;
+/// Farthest view depth (including the bounding radius) an RSP draw may
+/// reach: the overlay's s15.16 clip coordinates go to ~1.5x the depth.
+pub const RSP_MAX_DEPTH: f32 = 16_000.0;
+/// Largest model axis scale an RSP draw may use (its matrix entries are
+/// s15.16 too).
+pub const RSP_MAX_SCALE: f32 = 4_000.0;
+
+/// What [`rsp_split`] hands each segment to: its vertices (global indices,
+/// local order) and triangles (local indices).
+pub type RspSegmentFn<'a> = dyn FnMut(&[u16], &[[u8; 3]]) + 'a;
+
+/// Split a mesh's triangles, in source order, into the N64 overlay's
+/// segments: at most [`RSP_SEG_VERTS`] distinct vertices and
+/// [`RSP_SEG_TRIS`] triangles each. `emit` gets each segment's vertices
+/// (global indices, in local order) and its triangles (local indices).
+/// Returns the segment count. No allocation: the PC (work baseline) and the
+/// N64 (the RSP copy) run the same split.
+pub fn rsp_split(mesh: &Mesh, emit: &mut RspSegmentFn) -> usize {
+    let mut verts = [0u16; RSP_SEG_VERTS];
+    let mut tris = [[0u8; 3]; RSP_SEG_TRIS];
+    let (mut nv, mut nt, mut segs) = (0usize, 0usize, 0usize);
+    for t in mesh.indices.as_flattened().as_chunks::<6>().0 {
+        let idx = [
+            u16::from_le_bytes([t[0], t[1]]),
+            u16::from_le_bytes([t[2], t[3]]),
+            u16::from_le_bytes([t[4], t[5]]),
+        ];
+        let new = (0..3)
+            .filter(|&k| !verts[..nv].contains(&idx[k]) && !idx[..k].contains(&idx[k]))
+            .count();
+        if nv + new > RSP_SEG_VERTS || nt == RSP_SEG_TRIS {
+            emit(&verts[..nv], &tris[..nt]);
+            segs += 1;
+            (nv, nt) = (0, 0);
+        }
+        for k in 0..3 {
+            let l = match verts[..nv].iter().position(|&v| v == idx[k]) {
+                Some(l) => l,
+                None => {
+                    verts[nv] = idx[k];
+                    nv += 1;
+                    nv - 1
+                }
+            };
+            tris[nt][k] = l as u8;
+        }
+        nt += 1;
+    }
+    if nt > 0 {
+        emit(&verts[..nv], &tris[..nt]);
+        segs += 1;
+    }
+    segs
+}
+
+/// Can the N64's RSP T&L path hold this mesh at all? Static (no skeleton,
+/// no smooth skinning), untextured, opaque vertex colors, unit normals,
+/// coordinates inside the overlay's s15.16 range, and at most
+/// [`RSP_MAX_SEGS`] segments ([`rsp_split`]). Walks the mesh: call it once;
+/// the N64 renderer bakes an RSP copy only for these.
+pub fn rsp_mesh_supported(mesh: &Mesh) -> bool {
+    mesh.joint_count() == 0
+        && !mesh.has_uvs()
+        && !mesh.has_blend()
+        && mesh.opaque
+        && mesh.unit_normals
+        && mesh.vertex_count > 0
+        && mesh.positions.iter().all(|p| {
+            let p = vec3_of(p);
+            p.x.abs() < 16_384.0 && p.y.abs() < 16_384.0 && p.z.abs() < 16_384.0
+        })
+        && (1..=RSP_MAX_SEGS).contains(&rsp_split(mesh, &mut |_, _| {}))
+}
+
+/// What the N64's RSP T&L path needs for one draw ([`rsp_eligible`]).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct RspDraw {
+    /// Unit vector toward the light in model space (zero for `Unlit`).
+    pub light: Vec3,
+    /// Ambient term (1.0 for `Unlit`).
+    pub ambient: f32,
+    /// Back-face culling (always on: double-sided draws stay on the CPU).
+    pub cull_back: bool,
+}
+
+/// Whether the N64 backend may send this draw to its RSP overlay
+/// (`crates/platform-n64/shim/rsp_trino.S`) instead of [`tessellate`]: the
+/// overlay has no clipping, splitting, fog, colored light, emissive, flat
+/// shading or textures, so the draw must need none of them. Its whole
+/// bounding sphere must be inside the guard-band frustum and past the near
+/// plane, so no triangle could have been clipped. Only for meshes
+/// [`rsp_mesh_supported`] accepted (checked once; this runs per draw). It
+/// lives in the core so host tests can predict the console's work split
+/// exactly (`perf_budget`).
+pub fn rsp_eligible(
+    ctx: &TnlContext,
+    mesh: &Mesh,
+    model: &Mat34,
+    params: &ModelParams,
+) -> Option<RspDraw> {
+    if !ctx.white
+        || ctx.fog_on
+        || params.tint.a < 255
+        || params.emissive.r | params.emissive.g | params.emissive.b != 0
+        || params.texture.is_some()
+        // Back faces through the overlay were never verified: CPU path.
+        || params.double_sided
+    {
+        return None;
+    }
+    let (c, r) = mesh.bounds()?;
+    let c = ctx.view.mul(model).transform_point(c);
+    let s = model.axis_scales_sq();
+    let r2 = r * r * s.x.max(s.y).max(s.z);
+    let inside = |d: f32, k: f32| d > 0.0 && d * d > r2 * k;
+    let (lx, ly) = (ctx.lim_x, ctx.lim_y);
+    let abs = |v: f32| if v < 0.0 { -v } else { v };
+    if !(inside(c.z - NEAR, 1.0)
+        && inside(lx * c.z - abs(c.x), lx * lx + 1.0)
+        && inside(ly * c.z - abs(c.y), ly * ly + 1.0))
+    {
+        return None;
+    }
+    // The overlay's clip coordinates are s15.16 (|v| < 32768): x reaches
+    // ~1.5x the view depth inside the guard band. Keep the whole sphere
+    // under RSP_MAX_DEPTH, and the matrix entries (axis scale) in range.
+    if !inside(RSP_MAX_DEPTH - c.z, 1.0) || s.x.max(s.y).max(s.z) >= RSP_MAX_SCALE * RSP_MAX_SCALE {
+        return None;
+    }
+    let cull_back = true;
+    match params.shading {
+        Shading::Unlit => Some(RspDraw {
+            light: Vec3::ZERO,
+            ambient: 1.0,
+            cull_back,
+        }),
+        Shading::Gouraud => Some(RspDraw {
+            light: model_space_light(mesh, model, ctx.ldir)? * -1.0,
+            ambient: ctx.light.ambient,
+            cull_back,
+        }),
+        Shading::Flat => None,
+    }
+}
+
+impl TnlContext {
+    /// View matrix, focal length (pixels) and screen size: what a hardware
+    /// T&L path needs to build its own projection.
+    pub fn projection(&self) -> (Mat34, f32, Vec2) {
+        (self.view, self.focal, self.screen)
+    }
+}
+
+/// Whether a draw gets [`DEPTH_SPLIT`] bisection. Every target z-buffers
+/// with per-vertex depth `1 - NEAR/z`, which is affine in screen space, so
+/// an unsplit opaque triangle gets the same per-pixel depth: splitting it
+/// buys nothing but triangles (castle64's lava sea: 12 → 198). Splits stay
+/// where the vertices carry something that is not affine on screen or
+/// where draw order matters:
+/// - fog (per-vertex, by view depth);
+/// - textured draws (conservative: their alpha may blend);
+/// - translucent draws (tint or vertex alpha < 255: PC blends, and the
+///   painter order is the blending order).
+#[inline]
+pub fn split_policy(ctx: &TnlContext, mesh: &Mesh, params: &ModelParams) -> bool {
+    ctx.fog_on || mesh.has_uvs() || params.tint.a < 255 || !mesh.opaque
+}
 /// Subdivision work stack; overflow emits the triangle unsplit (graceful).
 const SPLIT_STACK: usize = 48;
 
@@ -716,6 +1083,12 @@ pub struct TnlStats {
     pub backfaced: u32,
     /// Screen triangles handed to the backend.
     pub emitted: u32,
+    /// Draws a backend sent whole to a hardware T&L path instead (the N64's
+    /// RSP overlay, see [`rsp_eligible`]); their work is not in the fields
+    /// above.
+    pub rsp_draws: u32,
+    /// Source triangles of those draws.
+    pub rsp_tris: u32,
 }
 
 impl TnlStats {
@@ -728,6 +1101,8 @@ impl TnlStats {
         self.splits += o.splits;
         self.backfaced += o.backfaced;
         self.emitted += o.emitted;
+        self.rsp_draws += o.rsp_draws;
+        self.rsp_tris += o.rsp_tris;
     }
 }
 
@@ -775,6 +1150,95 @@ fn clip_plane(
     n_out
 }
 
+/// Everything [`tessellate`] derives from the camera, the light and the
+/// screen, computed once instead of per draw: the view matrix (two
+/// normalizations), the focal length (the core's software `sin`/`cos`), the
+/// guard-band extents, the normalized light direction and the light color
+/// factors. Backends keep one and rebuild it on `set_camera` / `set_light`
+/// (and on a screen-size change); [`tessellate_with`] takes it by reference.
+/// The values are the same expressions [`tessellate`] used to evaluate per
+/// draw, so the output is bit-identical.
+#[derive(Clone, Copy, Debug)]
+pub struct TnlContext {
+    camera: Camera3,
+    light: Light,
+    screen: Vec2,
+    view: Mat34,
+    focal: f32,
+    center: Vec2,
+    lim_x: f32,
+    lim_y: f32,
+    ldir: Vec3,
+    /// Light / ambient colors as 0..1 factors. White yields exactly 1.0,
+    /// keeping the default path bit-identical to the single-intensity model.
+    lc: [f32; 3],
+    ac: [f32; 3],
+    /// Both light colors white: the single-intensity fast path applies.
+    white: bool,
+    fog_on: bool,
+}
+
+impl TnlContext {
+    pub fn new(camera: &Camera3, light: &Light, screen: Vec2) -> TnlContext {
+        // fov -> focal length in pixels (vertical).
+        let half_fov = camera.fov_y * 0.5;
+        let focal = crate::math3d::cos(half_fov) / crate::math3d::sin(half_fov) * screen.y * 0.5;
+        let center = screen * 0.5;
+        TnlContext {
+            camera: *camera,
+            light: *light,
+            screen,
+            view: camera.view(),
+            focal,
+            center,
+            // Guard-band frustum half-extents per unit of view depth.
+            lim_x: center.x * GUARD / focal,
+            lim_y: center.y * GUARD / focal,
+            ldir: light.dir.normalized(),
+            lc: [
+                light.color.r as f32 / 255.0,
+                light.color.g as f32 / 255.0,
+                light.color.b as f32 / 255.0,
+            ],
+            ac: [
+                light.ambient_color.r as f32 / 255.0,
+                light.ambient_color.g as f32 / 255.0,
+                light.ambient_color.b as f32 / 255.0,
+            ],
+            white: light.color == Color::WHITE && light.ambient_color == Color::WHITE,
+            fog_on: light.fog.enabled(),
+        }
+    }
+
+    /// Still valid for this camera, light and screen? Backends that can't
+    /// hook every change (a resize) check this before reusing a context.
+    pub fn matches(&self, camera: &Camera3, light: &Light, screen: Vec2) -> bool {
+        self.camera == *camera && self.light == *light && self.screen == screen
+    }
+}
+
+/// Clip the triangle in `poly_a` against the near plane and the 4
+/// guard-band side planes; the result is back in `poly_a` (`poly_b` is
+/// scratch). Returns the vertex count. Out of line and cold: a few percent
+/// of triangles need it, and inlined five times it was most of the T&L's
+/// code size.
+#[cold]
+#[inline(never)]
+fn clip_frustum(
+    poly_a: &mut [ClipVert; MAX_POLY],
+    poly_b: &mut [ClipVert; MAX_POLY],
+    lim_x: f32,
+    lim_y: f32,
+) -> usize {
+    let mut n = clip_plane(poly_a, 3, poly_b, |v| v.z - NEAR);
+    n = clip_plane(poly_b, n, poly_a, |v| lim_x * v.z - v.x);
+    n = clip_plane(poly_a, n, poly_b, |v| lim_x * v.z + v.x);
+    n = clip_plane(poly_b, n, poly_a, |v| lim_y * v.z - v.y);
+    n = clip_plane(poly_a, n, poly_b, |v| lim_y * v.z + v.y);
+    *poly_a = *poly_b;
+    n
+}
+
 /// Transform, light, clip, depth-subdivide, project and cull `mesh`,
 /// handing each visible triangle to `emit`. Triangles are **not** sorted
 /// here: backends batch the triangles of consecutive `draw_model` calls and
@@ -786,6 +1250,8 @@ fn clip_plane(
 /// double-sided and the animation pose for skinned meshes.
 ///
 /// Returns what the draw cost in [`TnlStats`] (callers may ignore it).
+/// Builds a [`TnlContext`] per call; backends drawing many meshes per frame
+/// keep one and call [`tessellate_with`].
 pub fn tessellate(
     mesh: &Mesh,
     model: &Mat34,
@@ -795,15 +1261,73 @@ pub fn tessellate(
     screen: Vec2,
     emit: &mut dyn FnMut(ScreenTri),
 ) -> TnlStats {
-    let view = camera.view();
+    let ctx = TnlContext::new(camera, light, screen);
+    let mut scratch = TnlScratch::new();
+    tessellate_with(&ctx, &mut scratch, mesh, model, params, emit)
+}
+
+/// Working memory of one [`tessellate_with`] call — the vertex cache, the
+/// clipping polygons, the depth-split stack and the skinned path's joint
+/// matrices, ~9 KB — owned by the caller and reused across draws without
+/// being cleared. Initializing it on every draw was most of a visible
+/// draw's fixed cost on the N64: thousands of stores through an 8 KB
+/// direct-mapped data cache before the first vertex. Every slot is written
+/// before it is read (only the vertex-cache tags are reset per draw), so
+/// reuse changes no output. Backends keep one (boxed: the N64 main stack is
+/// 64 KB).
+pub struct TnlScratch {
+    tri: TriScratch,
+    skin: [Mat34; MAX_JOINTS],
+    world: [Mat34; MAX_JOINTS],
+    viewm: [Mat34; MAX_JOINTS],
+}
+
+impl TnlScratch {
+    pub const fn new() -> TnlScratch {
+        TnlScratch {
+            tri: TriScratch {
+                cache_pos: [Vec3::ZERO; VCACHE],
+                cache_col: [Color::WHITE; VCACHE],
+                poly_a: [NO_VERT; MAX_POLY],
+                poly_b: [NO_VERT; MAX_POLY],
+                stack: [[NO_VERT; 3]; SPLIT_STACK],
+            },
+            skin: [Mat34::IDENTITY; MAX_JOINTS],
+            world: [Mat34::IDENTITY; MAX_JOINTS],
+            viewm: [Mat34::IDENTITY; MAX_JOINTS],
+        }
+    }
+}
+
+/// The per-triangle half of [`TnlScratch`] (vertex cache payload, clip
+/// polygons, split stack).
+struct TriScratch {
+    cache_pos: [Vec3; VCACHE],
+    cache_col: [Color; VCACHE],
+    poly_a: [ClipVert; MAX_POLY],
+    poly_b: [ClipVert; MAX_POLY],
+    stack: [[ClipVert; 3]; SPLIT_STACK],
+}
+
+impl Default for TnlScratch {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// [`tessellate`] with the per-frame constants precomputed and the
+/// caller's scratch memory.
+pub fn tessellate_with(
+    ctx: &TnlContext,
+    scratch: &mut TnlScratch,
+    mesh: &Mesh,
+    model: &Mat34,
+    params: &ModelParams,
+    emit: &mut dyn FnMut(ScreenTri),
+) -> TnlStats {
+    let view = ctx.view;
     let mv = view.mul(model);
-    // fov -> focal length in pixels (vertical).
-    let half_fov = camera.fov_y * 0.5;
-    let focal = crate::math3d::cos(half_fov) / crate::math3d::sin(half_fov) * screen.y * 0.5;
-    let center = screen * 0.5;
-    // Guard-band frustum half-extents per unit of view depth.
-    let lim_x = center.x * GUARD / focal;
-    let lim_y = center.y * GUARD / focal;
+    let (lim_x, lim_y) = (ctx.lim_x, ctx.lim_y);
 
     // Whole-mesh frustum cull from the baked bounding sphere: a mesh that
     // cannot produce a single visible triangle costs one transform instead
@@ -833,46 +1357,50 @@ pub fn tessellate(
     }
 
     let setup = Setup {
-        focal,
-        center,
+        focal: ctx.focal,
+        center: ctx.center,
         lim_x,
         lim_y,
-        ldir: light.dir.normalized(),
-        light,
+        ldir: ctx.ldir,
+        light: &ctx.light,
         params,
-        lc: [
-            light.color.r as f32 / 255.0,
-            light.color.g as f32 / 255.0,
-            light.color.b as f32 / 255.0,
-        ],
-        ac: [
-            light.ambient_color.r as f32 / 255.0,
-            light.ambient_color.g as f32 / 255.0,
-            light.ambient_color.b as f32 / 255.0,
-        ],
-        white: light.color == Color::WHITE && light.ambient_color == Color::WHITE,
+        lc: ctx.lc,
+        ac: ctx.ac,
+        white: ctx.white,
         has_emissive: params.emissive.r | params.emissive.g | params.emissive.b != 0,
-        fog_on: light.fog.enabled(),
+        fog_on: ctx.fog_on,
+        tint_k: [
+            params.tint.r as f32 / 255.0,
+            params.tint.g as f32 / 255.0,
+            params.tint.b as f32 / 255.0,
+            params.tint.a as f32 / 255.0,
+        ],
+        split: split_policy(ctx, mesh, params),
+        local_ldir: if mesh.joint_count() == 0 && params.shading == Shading::Gouraud {
+            model_space_light(mesh, model, ctx.ldir)
+        } else {
+            None
+        },
     };
 
     if mesh.joint_count() == 0 {
         // Static mesh: one "joint" (the model matrix) and no joint arrays —
         // the common case stays as cheap as before skeletons existed.
-        tessellate_joints::<false, false>(mesh, &[*model], &[mv], &setup, emit)
+        tessellate_joints::<false, false>(mesh, &[*model], &[mv], &setup, &mut scratch.tri, emit)
     } else {
-        let mut skin = [Mat34::IDENTITY; MAX_JOINTS];
-        let joints = mesh.pose(params.anim, &mut skin);
-        let mut world = [Mat34::IDENTITY; MAX_JOINTS];
-        let mut viewm = [Mat34::IDENTITY; MAX_JOINTS];
+        // Only the first `joints` matrices are written (pose included) and
+        // read.
+        let joints = mesh.pose(params.anim, &mut scratch.skin);
         for j in 0..joints {
-            world[j] = model.mul(&skin[j]);
-            viewm[j] = view.mul(&world[j]);
+            scratch.world[j] = model.mul(&scratch.skin[j]);
+            scratch.viewm[j] = view.mul(&scratch.world[j]);
         }
-        let (world, viewm) = (&world[..joints], &viewm[..joints]);
+        let (world, viewm) = (&scratch.world[..joints], &scratch.viewm[..joints]);
+        let tri = &mut scratch.tri;
         if mesh.has_blend() {
-            tessellate_joints::<true, true>(mesh, world, viewm, &setup, emit)
+            tessellate_joints::<true, true>(mesh, world, viewm, &setup, tri, emit)
         } else {
-            tessellate_joints::<true, false>(mesh, world, viewm, &setup, emit)
+            tessellate_joints::<true, false>(mesh, world, viewm, &setup, tri, emit)
         }
     }
 }
@@ -894,24 +1422,39 @@ struct Setup<'a> {
     white: bool,
     has_emissive: bool,
     fog_on: bool,
+    /// `params.tint` as 0..1 factors: the same quotients `finish` took per
+    /// vertex (4 divisions), once per draw.
+    tint_k: [f32; 4],
+    /// Apply the [`DEPTH_SPLIT`] rule (see [`split_policy`]).
+    split: bool,
+    /// The light direction in model space, when the static path may light
+    /// model-space normals directly ([`model_space_light`]).
+    local_ldir: Option<Vec3>,
 }
 
 impl Setup<'_> {
     /// Final vertex color from a world-space normal and the view depth.
     #[inline(always)]
     fn shade(&self, c: Color, n: Vec3, z: f32) -> Color {
+        self.shade_with(c, || -n.dot(self.ldir), z)
+    }
+
+    /// [`Setup::shade`] with the raw diffuse term (`-n · l`) supplied by
+    /// the caller (the model-space lighting path), evaluated only when the
+    /// shading mode is lit.
+    #[inline(always)]
+    fn shade_with(&self, c: Color, diffuse: impl FnOnce() -> f32, z: f32) -> Color {
         let light = self.light;
-        let tint = self.params.tint;
         let k = match self.params.shading {
             Shading::Unlit => [1.0, 1.0, 1.0],
             Shading::Gouraud | Shading::Flat => {
-                let diffuse = -n.dot(self.ldir);
+                let diffuse = diffuse();
                 let diffuse = if diffuse > 0.0 { diffuse } else { 0.0 };
                 let d = (1.0 - light.ambient) * diffuse;
                 if self.white {
                     // White light: one intensity (identical result, less work).
                     let i = light.ambient + d;
-                    return self.finish(c, tint, [i, i, i], z);
+                    return self.finish(c, [i, i, i], z);
                 }
                 [
                     light.ambient * self.ac[0] + d * self.lc[0],
@@ -920,19 +1463,22 @@ impl Setup<'_> {
                 ]
             }
         };
-        self.finish(c, tint, k, z)
+        self.finish(c, k, z)
     }
 
     /// Tint × light, then emissive and fog.
     #[inline(always)]
-    fn finish(&self, c: Color, tint: Color, k: [f32; 3], z: f32) -> Color {
+    fn finish(&self, c: Color, k: [f32; 3], z: f32) -> Color {
         let light = self.light;
-        let mul = |v: u8, t: u8, k: f32| (v as f32 * (t as f32 / 255.0) * k) as u8;
+        let t = self.tint_k;
+        // v * (tint / 255) * k, with the quotient from `Setup`: the same
+        // operations in the same order as dividing here, so bit-identical.
+        let mul = |v: u8, t: f32, k: f32| (v as f32 * t * k) as u8;
         let mut out = Color::rgba(
-            mul(c.r, tint.r, k[0]),
-            mul(c.g, tint.g, k[1]),
-            mul(c.b, tint.b, k[2]),
-            (c.a as f32 * (tint.a as f32 / 255.0)) as u8,
+            mul(c.r, t[0], k[0]),
+            mul(c.g, t[1], k[1]),
+            mul(c.b, t[2], k[2]),
+            (c.a as f32 * t[3]) as u8,
         );
         let e = self.params.emissive;
         if self.has_emissive {
@@ -957,37 +1503,41 @@ impl Setup<'_> {
 /// recomputing (same inputs, same operations).
 const VCACHE: usize = 32;
 
-struct VertexCache {
-    tag: [u32; VCACHE],
-    pos: [Vec3; VCACHE],
-    col: [Color; VCACHE],
-}
-
 /// `SKINNED` / `SMOOTH` are const parameters so the static and rigid paths
-/// compile without any per-vertex joint or blend lookup.
+/// compile without any per-vertex joint or blend lookup. Out of line: each
+/// path is its own function, so the static one (most draws) stays compact
+/// in the N64's 16 KB instruction cache instead of being one 60 KB body
+/// with the skinned paths.
+#[inline(never)]
 fn tessellate_joints<const SKINNED: bool, const SMOOTH: bool>(
     mesh: &Mesh,
     world: &[Mat34],
     viewm: &[Mat34],
     s: &Setup,
+    scratch: &mut TriScratch,
     emit: &mut dyn FnMut(ScreenTri),
 ) -> TnlStats {
+    let TriScratch {
+        cache_pos,
+        cache_col,
+        poly_a,
+        poly_b,
+        stack,
+    } = scratch;
     let mut stats = TnlStats::default();
     let mut verts = 0u32;
     let joint = |i: usize| if SKINNED { mesh.joint_of(i) } else { 0 };
     let flat = s.params.shading == Shading::Flat;
     let (lim_x, lim_y, focal, center) = (s.lim_x, s.lim_y, s.focal, s.center);
-    let mut cache = VertexCache {
-        tag: [u32::MAX; VCACHE],
-        pos: [Vec3::ZERO; VCACHE],
-        col: [Color::WHITE; VCACHE],
-    };
+    // Only the tags start empty: the payload (`cache_pos` / `cache_col`,
+    // in the caller's scratch) is written on every miss.
+    let mut tag = [u32::MAX; VCACHE];
     let textured = mesh.has_uvs();
     // (view-space position, shaded color — unused when flat).
     let mut vertex = |i: usize| -> (Vec3, Color) {
         let slot = i % VCACHE;
-        if cache.tag[slot] == i as u32 {
-            return (cache.pos[slot], cache.col[slot]);
+        if tag[slot] == i as u32 {
+            return (cache_pos[slot], cache_col[slot]);
         }
         verts += 1;
         let j = joint(i);
@@ -1001,6 +1551,13 @@ fn tessellate_joints<const SKINNED: bool, const SMOOTH: bool>(
         let col = match s.params.shading {
             Shading::Flat => Color::WHITE,
             Shading::Unlit => s.shade(mesh.color(i), Vec3::ZERO, p.z),
+            Shading::Gouraud if !SKINNED && s.local_ldir.is_some() => {
+                // Rotation + uniform scale: light the model-space normal
+                // with the light turned into model space (Setup).
+                let ll = s.local_ldir.unwrap_or(Vec3::ZERO);
+                let nl = mesh.normal(i);
+                s.shade_with(mesh.color(i), || -nl.dot(ll), p.z)
+            }
             Shading::Gouraud => {
                 let nl = mesh.normal(i);
                 let mut n = world[j].transform_dir(nl);
@@ -1010,26 +1567,26 @@ fn tessellate_joints<const SKINNED: bool, const SMOOTH: bool>(
                 s.shade(mesh.color(i), n.normalized(), p.z)
             }
         };
-        cache.tag[slot] = i as u32;
-        cache.pos[slot] = p;
-        cache.col[slot] = col;
+        tag[slot] = i as u32;
+        cache_pos[slot] = p;
+        cache_col[slot] = col;
         (p, col)
     };
 
-    // Scratch buffers live across the whole draw: initializing them per
-    // triangle (3.8 KB of stores, most of the VR4300's 8 KB data cache)
-    // was the N64's single largest T&L cost. Every slot is written before
-    // it is read, so reuse changes no output.
-    let mut poly_a = [NO_VERT; MAX_POLY];
-    let mut poly_b = [NO_VERT; MAX_POLY];
-    let mut stack = [[NO_VERT; 3]; SPLIT_STACK];
-    let tri_count = mesh.index_count / 3;
-    stats.tris_in = tri_count as u32;
-    for t in 0..tri_count {
+    // `poly_a` / `poly_b` / `stack` come from the caller's scratch and are
+    // never cleared: initializing them per triangle (3.8 KB of stores, most
+    // of the VR4300's 8 KB data cache) was once the N64's single largest
+    // T&L cost, and per draw still most of a draw's fixed cost. Every slot
+    // is written before it is read, so reuse changes no output.
+    // Whole triangles of the index buffer: iterating them needs no bounds
+    // checks at all.
+    let tris = mesh.indices.as_flattened().as_chunks::<6>().0;
+    stats.tris_in = tris.len() as u32;
+    for t in tris {
         let idx = [
-            mesh.index(t * 3) as usize,
-            mesh.index(t * 3 + 1) as usize,
-            mesh.index(t * 3 + 2) as usize,
+            u16::from_le_bytes([t[0], t[1]]) as usize,
+            u16::from_le_bytes([t[2], t[3]]) as usize,
+            u16::from_le_bytes([t[4], t[5]]) as usize,
         ];
         let v = [vertex(idx[0]), vertex(idx[1]), vertex(idx[2])];
         let vs = [v[0].0, v[1].0, v[2].0];
@@ -1088,22 +1645,19 @@ fn tessellate_joints<const SKINNED: bool, const SMOOTH: bool>(
         let mut n_poly = 3;
         if !(inside(vs[0]) && inside(vs[1]) && inside(vs[2])) {
             stats.clipped += 1;
-            // Clip against near plane + the 4 guard-band side planes.
-            n_poly = clip_plane(&poly_a, n_poly, &mut poly_b, |v| v.z - NEAR);
-            n_poly = clip_plane(&poly_b, n_poly, &mut poly_a, |v| lim_x * v.z - v.x);
-            n_poly = clip_plane(&poly_a, n_poly, &mut poly_b, |v| lim_x * v.z + v.x);
-            n_poly = clip_plane(&poly_b, n_poly, &mut poly_a, |v| lim_y * v.z - v.y);
-            n_poly = clip_plane(&poly_a, n_poly, &mut poly_b, |v| lim_y * v.z + v.y);
-            poly_a = poly_b;
+            n_poly = clip_frustum(poly_a, poly_b, lim_x, lim_y);
             if n_poly < 3 {
                 continue;
             }
         }
 
-        let project = |v: Vec3| {
+        // One division per vertex: `inv` = 1 / view depth serves the
+        // projection and the z-buffer depth (`1 - NEAR / z`).
+        let project = |v: Vec3, inv: f32| {
+            let k = focal * inv;
             Vec2::new(
-                center.x + v.x * focal / v.z,
-                center.y - v.y * focal / v.z, // world Y-up -> screen Y-down
+                center.x + v.x * k,
+                center.y - v.y * k, // world Y-up -> screen Y-down
             )
         };
         // Fan-triangulate the clipped polygon, then depth-subdivide each
@@ -1121,13 +1675,17 @@ fn tessellate_joints<const SKINNED: bool, const SMOOTH: bool>(
                     let d = tri[a].0.z - tri[b].0.z;
                     if d < 0.0 { -d } else { d }
                 };
-                let (s01, s12, s20) = (span(0, 1), span(1, 2), span(2, 0));
-                let worst = if s01 >= s12 && s01 >= s20 {
-                    (s01, 0)
-                } else if s12 >= s20 {
-                    (s12, 1)
+                let worst = if !s.split {
+                    (0.0, 0)
                 } else {
-                    (s20, 2)
+                    let (s01, s12, s20) = (span(0, 1), span(1, 2), span(2, 0));
+                    if s01 >= s12 && s01 >= s20 {
+                        (s01, 0)
+                    } else if s12 >= s20 {
+                        (s12, 1)
+                    } else {
+                        (s20, 2)
+                    }
                 };
                 if worst.0 > DEPTH_SPLIT && top + 2 <= SPLIT_STACK {
                     // Rotate so the split edge is (a, b); bisect keeping the
@@ -1153,7 +1711,12 @@ fn tessellate_joints<const SKINNED: bool, const SMOOTH: bool>(
                     (mut v1, mut c1, mut u1),
                     (v2, c2, u2),
                 ] = tri;
-                let mut pts = [project(v0), project(v1), project(v2)];
+                let mut inv = [1.0 / v0.z, 1.0 / v1.z, 1.0 / v2.z];
+                let mut pts = [
+                    project(v0, inv[0]),
+                    project(v1, inv[1]),
+                    project(v2, inv[2]),
+                ];
                 // Backface cull: front faces are CCW in world space, which
                 // lands as positive signed area in Y-down screen space.
                 let area = (pts[1].x - pts[0].x) * (pts[2].y - pts[0].y)
@@ -1168,15 +1731,16 @@ fn tessellate_joints<const SKINNED: bool, const SMOOTH: bool>(
                     core::mem::swap(&mut c0, &mut c1);
                     core::mem::swap(&mut u0, &mut u1);
                     pts.swap(0, 1);
+                    inv.swap(0, 1);
                 }
                 let depth = v0.z.max(v1.z).max(v2.z);
-                let zn = |v: Vec3| 1.0 - NEAR / v.z;
+                let zn = |inv: f32| 1.0 - NEAR * inv;
                 stats.emitted += 1;
                 emit(ScreenTri {
                     pts,
                     colors: [c0, c1, c2],
                     depth,
-                    z: [zn(v0), zn(v1), zn(v2)],
+                    z: [zn(inv[0]), zn(inv[1]), zn(inv[2])],
                     uv: [u0, u1, u2],
                     w: [v0.z, v1.z, v2.z],
                 });
@@ -1216,18 +1780,33 @@ pub fn billboard(
     params: &crate::render::BillboardParams,
     uv: [f32; 4],
 ) -> Option<[ScreenTri; 2]> {
+    billboard_with(&TnlContext::new(camera, light, screen), pos, params, uv)
+}
+
+/// [`billboard`] with the per-frame constants precomputed (the view matrix
+/// and focal length cost two normalizations and a software sin/cos per
+/// call otherwise). Same expressions, so the same triangles.
+pub fn billboard_with(
+    ctx: &TnlContext,
+    pos: Vec3,
+    params: &crate::render::BillboardParams,
+    uv: [f32; 4],
+) -> Option<[ScreenTri; 2]> {
     let (size, rotation, tint) = (params.size, params.rotation, params.tint);
-    let view = camera.view();
-    let c = view.transform_point(pos);
+    let (light, screen) = (&ctx.light, ctx.screen);
+    let c = ctx.view.transform_point(pos);
     // Keep the whole quad comfortably in front of the near plane: its
     // corners share the center's depth (screen-aligned), so no clipping.
     if c.z <= NEAR * 2.0 {
         return None;
     }
-    let half_fov = camera.fov_y * 0.5;
-    let focal = crate::math3d::cos(half_fov) / crate::math3d::sin(half_fov) * screen.y * 0.5;
-    let center = screen * 0.5;
-    let (sn, cs) = (crate::math3d::sin(rotation), crate::math3d::cos(rotation));
+    let (focal, center) = (ctx.focal, ctx.center);
+    let (sn, cs) = if rotation.to_bits() == 0 {
+        // sin/cos of +0.0 are exactly 0 and 1 (see math3d's tests).
+        (0.0, 1.0)
+    } else {
+        (crate::math3d::sin(rotation), crate::math3d::cos(rotation))
+    };
     let (hw, hh) = (size.x * 0.5, size.y * 0.5);
     // Corners in view space (x right, y up): TL, TR, BR, BL.
     let corner = |x: f32, y: f32| {
@@ -1403,6 +1982,171 @@ mod tests {
         assert_eq!(mesh.index_count, 36);
         assert_eq!(mesh.color(0), Color::rgba(230, 80, 80, 255));
         assert!((mesh.normal(4).z - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn split_policy_splits_only_fogged_textured_or_translucent_draws() {
+        let (cube, tex) = (cube_tmdl(), textured_cube());
+        let (cube, tex) = (
+            Mesh::from_tmdl(&cube).unwrap(),
+            Mesh::from_tmdl(&tex).unwrap(),
+        );
+        let screen = Vec2::new(320.0, 240.0);
+        let plain = TnlContext::new(&Camera3::default(), &DEFAULT_LIGHT, screen);
+        let fogged = TnlContext::new(
+            &Camera3::default(),
+            &Light {
+                fog: Fog {
+                    color: Color::BLACK,
+                    near: 1.0,
+                    far: 9.0,
+                },
+                ..DEFAULT_LIGHT
+            },
+            screen,
+        );
+        let opaque = ModelParams::DEFAULT;
+        let glass = ModelParams::tinted(Color::rgba(255, 255, 255, 100));
+        assert!(!split_policy(&plain, &cube, &opaque));
+        assert!(split_policy(&fogged, &cube, &opaque));
+        assert!(split_policy(&plain, &cube, &glass));
+        assert!(split_policy(&plain, &tex, &opaque));
+        // Vertex alpha counts too.
+        let mut blob = cube_tmdl();
+        let colors_at = 12 + 24 * 12 * 2;
+        blob[colors_at + 3] = 10;
+        assert!(split_policy(
+            &plain,
+            &Mesh::from_tmdl(&blob).unwrap(),
+            &opaque
+        ));
+    }
+
+    #[test]
+    fn model_space_light_matches_world_space_lighting() {
+        let blob = cube_tmdl();
+        let mesh = Mesh::from_tmdl(&blob).unwrap();
+        let rot = Vec3::new(0.3, 0.9, -0.2);
+        let at = Vec3::new(0.2, -0.1, 3.0);
+        let uniform = Mat34::from_rotation_scale_translation(rot, Vec3::new(1.5, 1.5, 1.5), at);
+        let l = DEFAULT_LIGHT.dir.normalized();
+        assert!(model_space_light(&mesh, &uniform, l).is_some());
+        // Non-uniform scale: fine for a box (axis-aligned normals, like
+        // castle64's blocks), not for free normals (the world path then).
+        let stretched = Mat34::from_rotation_scale_translation(rot, Vec3::new(1.5, 1.5, 1.6), at);
+        assert!(model_space_light(&mesh, &stretched, l).is_some());
+        let free = Mesh {
+            axis_normals: false,
+            ..mesh
+        };
+        assert!(model_space_light(&free, &stretched, l).is_none());
+        // The same cube with normals 1% long is lit in world space (they
+        // are renormalized there): the colors must agree within rounding.
+        let mut long = blob.clone();
+        let normals_at = 12 + 24 * 12;
+        for k in 0..24 * 3 {
+            let at = normals_at + k * 4;
+            let v = f32::from_le_bytes(long[at..at + 4].try_into().unwrap()) * 1.01;
+            long[at..at + 4].copy_from_slice(&v.to_le_bytes());
+        }
+        let world = Mesh::from_tmdl(&long).unwrap();
+        assert!(model_space_light(&world, &uniform, l).is_none());
+        for model in [uniform, stretched] {
+            let a = collect(&mesh, &model, &Camera3::default(), Color::WHITE);
+            let b = collect(&world, &model, &Camera3::default(), Color::WHITE);
+            assert_eq!(a.len(), b.len());
+            for (x, y) in a.iter().zip(&b) {
+                for (p, q) in x.colors.iter().zip(&y.colors) {
+                    for (u, v) in [(p.r, q.r), (p.g, q.g), (p.b, q.b)] {
+                        assert!(u.abs_diff(v) <= 1, "{p:?} vs {q:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn rsp_eligibility_follows_what_the_overlay_can_draw() {
+        let mut blob = cube_tmdl();
+        let mut b = std::vec::Vec::new();
+        f32s(&mut b, &[0.0, 0.0, 0.0, 0.87]);
+        section(&mut blob, b"BNDS", &b);
+        let cube = Mesh::from_tmdl(&blob).unwrap();
+        let screen = Vec2::new(320.0, 240.0);
+        let ctx = TnlContext::new(&Camera3::default(), &DEFAULT_LIGHT, screen);
+        let at = |z: f32| {
+            Mat34::from_rotation_scale_translation(
+                Vec3::ZERO,
+                Vec3::new(1.0, 1.0, 1.0),
+                Vec3::new(0.0, 0.0, z),
+            )
+        };
+        let plain = ModelParams::DEFAULT;
+        // In front of the camera (eye at z = -5), whole sphere inside.
+        let d = rsp_eligible(&ctx, &cube, &at(0.0), &plain).expect("eligible");
+        assert!(d.cull_back && d.ambient == DEFAULT_LIGHT.ambient);
+        // Crossing the near plane (clipping needed): CPU path.
+        assert!(rsp_eligible(&ctx, &cube, &at(-4.6), &plain).is_none());
+        // What the overlay lacks: CPU path.
+        for p in [
+            ModelParams {
+                shading: Shading::Flat,
+                ..plain
+            },
+            ModelParams::tinted(Color::rgba(255, 255, 255, 200)),
+            ModelParams {
+                emissive: Color::rgb(20, 0, 0),
+                ..plain
+            },
+        ] {
+            assert!(rsp_eligible(&ctx, &cube, &at(0.0), &p).is_none(), "{p:?}");
+        }
+        let fog = Light {
+            fog: Fog {
+                color: Color::BLACK,
+                near: 1.0,
+                far: 9.0,
+            },
+            ..DEFAULT_LIGHT
+        };
+        let fogged = TnlContext::new(&Camera3::default(), &fog, screen);
+        assert!(rsp_eligible(&fogged, &cube, &at(0.0), &plain).is_none());
+        // Fixed-point range: too far, or a huge scale, stays on the CPU.
+        assert!(rsp_eligible(&ctx, &cube, &at(20_000.0), &plain).is_none());
+        let huge = Mat34::from_rotation_scale_translation(
+            Vec3::ZERO,
+            Vec3::new(5_000.0, 5_000.0, 5_000.0),
+            Vec3::new(0.0, 0.0, 30_000.0),
+        );
+        assert!(rsp_eligible(&ctx, &cube, &huge, &plain).is_none());
+        // Back faces through the overlay are unverified: CPU path.
+        let both = ModelParams {
+            double_sided: true,
+            ..plain
+        };
+        assert!(rsp_eligible(&ctx, &cube, &at(0.0), &both).is_none());
+        // Unlit: no light, full ambient.
+        let u = ModelParams {
+            shading: Shading::Unlit,
+            ..plain
+        };
+        assert_eq!(
+            rsp_eligible(&ctx, &cube, &at(0.0), &u).unwrap().ambient,
+            1.0
+        );
+        // A textured mesh never has an RSP copy.
+        assert!(!rsp_mesh_supported(
+            &Mesh::from_tmdl(&textured_cube()).unwrap()
+        ));
+    }
+
+    #[test]
+    fn layout_rebuilds_the_same_mesh() {
+        for blob in [cube_tmdl(), skinned_cube(), textured_cube()] {
+            let parsed = Mesh::from_tmdl(&blob).unwrap();
+            let rebuilt = Mesh::from_layout(&blob, &parsed.layout(&blob));
+            assert_eq!(format!("{parsed:?}"), format!("{rebuilt:?}"));
+        }
     }
 
     #[test]
@@ -1616,11 +2360,16 @@ mod tests {
             target: Vec3::ZERO,
             ..Default::default()
         };
-        let out = collect(&mesh, &model, &camera, Color::WHITE);
+        // Translucent, so the split policy applies.
+        let out = collect(&mesh, &model, &camera, Color::rgba(255, 255, 255, 128));
         assert!(!out.is_empty(), "near-crossing ground vanished");
         // Depth subdivision: the receding floor must arrive as depth-thin
         // strips, not one giant triangle pair.
         assert!(out.len() > 6, "floor not subdivided: {} tris", out.len());
+        // Opaque, the same floor is clipped but not subdivided: the
+        // z-buffer gets the same depth from the whole triangle.
+        let opaque = collect(&mesh, &model, &camera, Color::WHITE);
+        assert!(!opaque.is_empty() && opaque.len() < out.len());
         // Guard band keeps every projected coordinate bounded (the N64 RDP
         // works in fixed point; huge offscreen coordinates overflow it).
         for tri in &out {
@@ -1826,12 +2575,13 @@ mod tests {
         }
         .matrix();
         let mut tris = std::vec::Vec::new();
+        // Translucent: split_policy keeps the depth splits on.
         let stats = tessellate(
             &mesh,
             &slab,
             &Camera3::default(),
             &DEFAULT_LIGHT,
-            &ModelParams::DEFAULT,
+            &ModelParams::tinted(Color::rgba(255, 255, 255, 200)),
             Vec2::new(320.0, 240.0),
             &mut |t| tris.push(t),
         );

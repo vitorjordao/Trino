@@ -212,7 +212,7 @@ pub fn run(r: &mut N64Renderer, frames: u32) {
             measure(r, name, suffix, set, frames);
         }
     }
-    r.set_rsp(false);
+    r.set_rsp(true);
 }
 
 /// Camera + light every micro frame uses.
@@ -230,6 +230,16 @@ fn setup(r: &mut N64Renderer) {
 fn rsp_checks(r: &mut N64Renderer) {
     setup(r);
     let grid = translation(Vec3::new(0.0, 0.0, 4.0));
+    let turned = Transform3 {
+        position: Vec3::new(0.2, -0.1, 4.0),
+        rotation: Vec3::new(0.3, 0.7, -0.2),
+        scale: Vec3::new(0.8, 0.8, 0.8),
+    }
+    .matrix();
+    match r.rsp_oracle(GRID, &turned, &ModelParams::DEFAULT) {
+        Ok(m) => runtime::log(&alloc::format!("TRINO_RSP:oracle rotated: {m}\n")),
+        Err(m) => runtime::log(&alloc::format!("TRINO_TEST_FAIL:rsp oracle rotated: {m}\n")),
+    }
     for (what, params) in [
         ("gouraud", ModelParams::DEFAULT),
         (
@@ -262,7 +272,6 @@ fn rsp_checks(r: &mut N64Renderer) {
     };
     let cpu = sample(r, false);
     let rsp = sample(r, true);
-    r.set_rsp(false);
     let (mut sum, mut far) = (0u32, 0u32);
     for (a, b) in cpu.iter().zip(&rsp) {
         let d = a.r.abs_diff(b.r) as u32 + a.g.abs_diff(b.g) as u32 + a.b.abs_diff(b.b) as u32;

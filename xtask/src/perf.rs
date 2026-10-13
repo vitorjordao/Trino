@@ -159,8 +159,13 @@ pub fn check(work: &str, n64: Option<&str>, scenes: &[SceneLine]) -> Result<Stri
             rsp_draws: s.get("rsp_draws") as u32,
             rsp_tris: s.get("rsp_tris") as u32,
         };
-        let est = trino_core::perf::N64_COST.tnl_us(&work_now, s.get("draws") as u32) as u64;
-        if s.get("draws") > 0 && t[1].1 > 0 {
+        // N64_COST models the CPU path: RSP draws are not in its terms.
+        let cpu_draws = s.get("draws").saturating_sub(s.get("rsp_draws")) as u32;
+        let est = trino_core::perf::N64_COST.tnl_us(&work_now, cpu_draws) as u64;
+        // N64_COST is fitted on CPU-path draws; with the RSP taking most
+        // draws, the ones left (clipped by the near plane, fogged...) are not
+        // a sample it describes.
+        if s.get("draws") > 0 && t[1].1 > 0 && s.get("rsp_draws") == 0 {
             let off = est as f64 / t[1].1 as f64 - 1.0;
             if off.abs() > 0.25 {
                 let _ = writeln!(
@@ -236,10 +241,43 @@ pub fn gate(root: &Path, scenes: &[SceneLine], bless: bool) -> Result<String, St
     check(&work, n64.as_deref(), scenes)
 }
 
-/// Micro scenes (`apps/n64/src/n64/micro.rs`): synthetic draw sets that
-/// measure the T&L's fixed costs. Reported, never gated or blessed.
+/// Scenes that are reported, never gated or blessed: the micro scenes
+/// (`apps/n64/src/n64/micro.rs`, synthetic draw sets measuring the T&L's
+/// fixed costs) and `cpu-*`, the castle64 scenes again with the RSP T&L
+/// path off (a same-ROM A/B).
 pub fn is_micro(name: &str) -> bool {
-    name.starts_with("micro-")
+    name.starts_with("micro-") || name.starts_with("cpu-")
+}
+
+/// The castle64 scenes with the RSP T&L path (gated lines) against the same
+/// scenes on the CPU path (`cpu-<scene>`, same ROM). Empty if the ROM did
+/// not print the CPU side.
+pub fn rsp_ab_report(gated: &[SceneLine], ungated: &[SceneLine]) -> String {
+    let mut out = String::new();
+    for c in ungated.iter().filter(|s| s.name.starts_with("cpu-")) {
+        let name = &c.name["cpu-".len()..];
+        let Some(r) = gated.iter().find(|s| s.name == name) else {
+            continue;
+        };
+        if out.is_empty() {
+            out.push_str(
+                "scene         frame cpu   frame rsp         tnl cpu  tnl rsp  submit cpu  \
+                 submit rsp  rsp draws\n",
+            );
+        }
+        let (fc, fr) = (c.timings()[0].1, r.timings()[0].1);
+        let _ = writeln!(
+            out,
+            "{name:<13} {fc:>9} {fr:>11} ({:+4.0}%) {:>8} {:>8} {:>11} {:>11} {:>10}",
+            (fr as f64 / fc.max(1) as f64 - 1.0) * 100.0,
+            c.get("tnl"),
+            r.get("tnl"),
+            c.get("submit"),
+            r.get("submit"),
+            r.get("rsp_draws"),
+        );
+    }
+    out
 }
 
 /// VR4300 clock: cycles per emulated microsecond.

@@ -136,6 +136,65 @@ mod n64 {
         }
     }
 
+    /// The hub perf scene's first frame, dumped for the second golden.
+    #[inline(never)]
+    fn castle64_golden(renderer: &mut N64Renderer, audio: &mut N64Audio) {
+        // The RSP T&L path against the CPU path on a real frame: the hub
+        // drawn both ways, 40x30 samples. Different cells mean the two
+        // paths disagree (depth ties, lighting, a dropped mesh).
+        let mut maps = alloc::vec![[[0u8; 40]; 30]; 2];
+        for (k, rsp) in [false, true].into_iter().enumerate() {
+            renderer.set_rsp(rsp);
+            let mut g = alloc::boxed::Box::new(castle64::perf::scene_game(
+                &castle64::perf::SCENES[0],
+                Vec2::new(320.0, 240.0),
+                audio,
+            ));
+            g.render(renderer);
+            for y in 0..30u32 {
+                for x in 0..40u32 {
+                    let c = trino_core::Renderer::read_pixel(renderer, x * 8 + 4, y * 8 + 4)
+                        .unwrap_or(trino_core::Color::BLACK);
+                    maps[k][y as usize][x as usize] =
+                        ((c.r as u32 + c.g as u32 * 3 + c.b as u32) / 5) as u8;
+                }
+            }
+        }
+        let mut differ = 0;
+        for y in 0..30 {
+            for x in 0..40 {
+                differ += (maps[0][y][x].abs_diff(maps[1][y][x]) > 20) as u32;
+            }
+        }
+        runtime::log(&format!(
+            "TRINO_RSP:hub frame, RSP vs CPU T&L: {differ} of 1200 samples differ\n"
+        ));
+        if differ > 24 {
+            for y in 0..30 {
+                let line: alloc::string::String = (0..40)
+                    .map(|x| {
+                        if maps[0][y][x].abs_diff(maps[1][y][x]) > 20 {
+                            '#'
+                        } else {
+                            '.'
+                        }
+                    })
+                    .collect();
+                runtime::log(&format!("TRINO_RSP:diff {y:02} {line}\n"));
+            }
+            runtime::log("TRINO_TEST_FAIL:rsp: the hub frame differs from the CPU path\n");
+        }
+        renderer.set_rsp(true);
+        runtime::log("TRINO_STEP:castle64 golden frame\n");
+        let mut g = alloc::boxed::Box::new(castle64::perf::scene_game(
+            &castle64::perf::SCENES[0],
+            Vec2::new(320.0, 240.0),
+            audio,
+        ));
+        g.render(renderer);
+        renderer.dump_framebuffer();
+    }
+
     /// Libdragon's main stack is 64 KB and nothing stops an overflow: it
     /// silently corrupts memory (interrupts push onto it too). Report the
     /// high-water mark and fail the self-test well before the limit.
@@ -297,39 +356,50 @@ mod n64 {
                     // (`castle64::perf`), per stage and per model. xtask
                     // compares the lines with tests/perf/n64.toml.
                     force_render.set(true);
-                    for scene in castle64::perf::SCENES {
-                        let mut g = alloc::boxed::Box::new(castle64::perf::scene_game(
-                            scene,
-                            Vec2::new(320.0, 240.0),
-                            audio,
-                        ));
-                        let mut times = trino_core::perf::FrameTimes::default();
-                        let v0 = runtime::vblanks();
-                        renderer.start_profile();
-                        for _ in 0..castle64::perf::MEASURE_FRAMES {
-                            frame(&mut *g, renderer, audio, &idle);
-                            times.update += last_update_us.get();
-                            times.render += last_render_us.get();
-                        }
-                        times.vblanks = runtime::vblanks().wrapping_sub(v0);
-                        if let Some(p) = renderer.take_profile() {
-                            let mut report = alloc::string::String::new();
-                            let _ = p.write_report(scene.name, &times, &mut report);
-                            runtime::log(&report);
-                        }
-                        if scene.name == "hub" {
-                            let n = castle64::perf::MEASURE_FRAMES;
-                            runtime::log(&format!(
-                                "TRINO_PERF:castle64 hub frame update={}us render={}us \
+                    // RSP T&L on (the default, gated), then the same scenes
+                    // on the CPU path as `cpu-<scene>` (same ROM, ungated):
+                    // the A/B without code-layout noise.
+                    for (prefix, rsp) in [("", true), ("cpu-", false)] {
+                        renderer.set_rsp(rsp);
+                        for scene in castle64::perf::SCENES {
+                            let mut g = alloc::boxed::Box::new(castle64::perf::scene_game(
+                                scene,
+                                Vec2::new(320.0, 240.0),
+                                audio,
+                            ));
+                            let mut times = trino_core::perf::FrameTimes::default();
+                            let v0 = runtime::vblanks();
+                            renderer.start_profile();
+                            for _ in 0..castle64::perf::MEASURE_FRAMES {
+                                frame(&mut *g, renderer, audio, &idle);
+                                times.update += last_update_us.get();
+                                times.render += last_render_us.get();
+                            }
+                            times.vblanks = runtime::vblanks().wrapping_sub(v0);
+                            if let Some(p) = renderer.take_profile() {
+                                let mut report = alloc::string::String::new();
+                                let name = format!("{prefix}{}", scene.name);
+                                let _ = p.write_report(&name, &times, &mut report);
+                                runtime::log(&report);
+                            }
+                            if scene.name == "hub" {
+                                let n = castle64::perf::MEASURE_FRAMES;
+                                runtime::log(&format!(
+                                    "TRINO_PERF:castle64 hub frame update={}us render={}us \
                                  total={}us (emulated N64 time; 60 fps = 16667us, \
                                  30 fps = 33333us)\n",
-                                times.update / n,
-                                times.render / n,
-                                (times.update + times.render) / n
-                            ));
+                                    times.update / n,
+                                    times.render / n,
+                                    (times.update + times.render) / n
+                                ));
+                            }
                         }
                     }
+                    renderer.set_rsp(true);
                     force_render.set(false);
+                    // A second emulator golden: castle64's hub through the
+                    // RSP T&L path (`tests/golden/n64/castle64_hub.png`).
+                    castle64_golden(renderer, audio);
                     // 6) Fixed costs of the T&L (synthetic draw sets,
                     // ungated): after the castle64 scenes, so their camera
                     // and light cannot leak into those.

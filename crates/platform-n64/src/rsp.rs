@@ -1,6 +1,6 @@
 //! RSP T&L (`shim/rsp_trino.S`): the CPU side. A mesh the overlay can draw
 //! ([`trino_core::render3d::rsp_mesh_supported`]) gets an RSP copy at
-//! register — segments of at most [`RSP_SEG_VERTS`] vertices in uncached
+//! register — segments of at most `RSP_SEG_VERTS` vertices in uncached
 //! RDRAM — and an eligible draw ([`trino_core::render3d::rsp_eligible`])
 //! becomes one rspq command carrying its clip-space matrix, light and tint.
 //! The layouts here mirror the overlay's; keep them in pairs.
@@ -8,17 +8,13 @@
 use alloc::vec::Vec;
 use core::ffi::c_void;
 
-use trino_core::render3d::{Mesh, NEAR_PLANE, RSP_SEG_VERTS, RspDraw, TnlContext};
+use trino_core::render3d::{Mesh, NEAR_PLANE, RSP_MAX_SEGS, RspDraw, TnlContext, rsp_split};
 use trino_core::{Color, Mat34, Vec3};
 
 use crate::ffi;
 
 /// Bytes per vertex in an RSP segment (overlay `VTX_IN_SIZE`).
 const VTX_IN: usize = 32;
-/// Triangles per segment (the overlay's index space after the vertices).
-const SEG_TRIS: usize = 64;
-/// Segments per mesh (overlay `MAX_SEGS`).
-const MAX_SEGS: usize = 16;
 /// Words of the draw command (overlay `DRAW_CMD_SIZE` / 4).
 pub const DRAW_WORDS: usize = 27;
 
@@ -47,57 +43,22 @@ struct Segment {
     tris: Vec<[u8; 3]>,
 }
 
-/// Greedy split of the index list into segments of at most RSP_SEG_VERTS
-/// vertices and SEG_TRIS triangles, in source order.
+/// The core's split ([`rsp_split`]), collected.
 fn segments(mesh: &Mesh) -> Vec<Segment> {
-    let mut out: Vec<Segment> = Vec::new();
-    let mut cur = Segment {
-        verts: Vec::new(),
-        tris: Vec::new(),
-    };
-    for t in 0..mesh.index_count / 3 {
-        let idx = [
-            mesh.index(t * 3),
-            mesh.index(t * 3 + 1),
-            mesh.index(t * 3 + 2),
-        ];
-        let new = idx
-            .iter()
-            .enumerate()
-            .filter(|&(k, i)| !cur.verts.contains(i) && !idx[..k].contains(i))
-            .count();
-        if cur.verts.len() + new > RSP_SEG_VERTS || cur.tris.len() == SEG_TRIS {
-            out.push(core::mem::replace(
-                &mut cur,
-                Segment {
-                    verts: Vec::new(),
-                    tris: Vec::new(),
-                },
-            ));
-        }
-        let mut local = [0u8; 3];
-        for (k, i) in idx.iter().enumerate() {
-            let l = match cur.verts.iter().position(|v| v == i) {
-                Some(l) => l,
-                None => {
-                    cur.verts.push(*i);
-                    cur.verts.len() - 1
-                }
-            };
-            local[k] = l as u8;
-        }
-        cur.tris.push(local);
-    }
-    if !cur.tris.is_empty() {
-        out.push(cur);
-    }
+    let mut out = Vec::new();
+    rsp_split(mesh, &mut |verts, tris| {
+        out.push(Segment {
+            verts: verts.to_vec(),
+            tris: tris.to_vec(),
+        })
+    });
     out
 }
 
 /// Bake a mesh's RSP copy (`None` if it has too many segments).
 pub fn build(mesh: &Mesh) -> Option<RspMesh> {
     let segs = segments(mesh);
-    if segs.is_empty() || segs.len() > MAX_SEGS {
+    if segs.is_empty() || segs.len() > RSP_MAX_SEGS {
         return None;
     }
     let seg_bytes = |s: &Segment| (s.verts.len() * VTX_IN + s.tris.len() * 3).div_ceil(8) * 8;

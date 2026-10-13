@@ -886,10 +886,63 @@ fn model_space_light(mesh: &Mesh, model: &Mat34, ldir: Vec3) -> Option<Vec3> {
 /// Vertices per RSP mesh segment: the N64 overlay transforms a segment into
 /// DMEM, then draws its triangles (local u8 indices).
 pub const RSP_SEG_VERTS: usize = 32;
+/// Triangles per RSP mesh segment (the overlay's index space).
+pub const RSP_SEG_TRIS: usize = 64;
+/// Segments per RSP mesh (the overlay's segment table).
+pub const RSP_MAX_SEGS: usize = 16;
+
+/// What [`rsp_split`] hands each segment to: its vertices (global indices,
+/// local order) and triangles (local indices).
+pub type RspSegmentFn<'a> = dyn FnMut(&[u16], &[[u8; 3]]) + 'a;
+
+/// Split a mesh's triangles, in source order, into the N64 overlay's
+/// segments: at most [`RSP_SEG_VERTS`] distinct vertices and
+/// [`RSP_SEG_TRIS`] triangles each. `emit` gets each segment's vertices
+/// (global indices, in local order) and its triangles (local indices).
+/// Returns the segment count. No allocation: the PC (work baseline) and the
+/// N64 (the RSP copy) run the same split.
+pub fn rsp_split(mesh: &Mesh, emit: &mut RspSegmentFn) -> usize {
+    let mut verts = [0u16; RSP_SEG_VERTS];
+    let mut tris = [[0u8; 3]; RSP_SEG_TRIS];
+    let (mut nv, mut nt, mut segs) = (0usize, 0usize, 0usize);
+    for t in mesh.indices.as_flattened().as_chunks::<6>().0 {
+        let idx = [
+            u16::from_le_bytes([t[0], t[1]]),
+            u16::from_le_bytes([t[2], t[3]]),
+            u16::from_le_bytes([t[4], t[5]]),
+        ];
+        let new = (0..3)
+            .filter(|&k| !verts[..nv].contains(&idx[k]) && !idx[..k].contains(&idx[k]))
+            .count();
+        if nv + new > RSP_SEG_VERTS || nt == RSP_SEG_TRIS {
+            emit(&verts[..nv], &tris[..nt]);
+            segs += 1;
+            (nv, nt) = (0, 0);
+        }
+        for k in 0..3 {
+            let l = match verts[..nv].iter().position(|&v| v == idx[k]) {
+                Some(l) => l,
+                None => {
+                    verts[nv] = idx[k];
+                    nv += 1;
+                    nv - 1
+                }
+            };
+            tris[nt][k] = l as u8;
+        }
+        nt += 1;
+    }
+    if nt > 0 {
+        emit(&verts[..nv], &tris[..nt]);
+        segs += 1;
+    }
+    segs
+}
 
 /// Can the N64's RSP T&L path hold this mesh at all? Static (no skeleton,
-/// no smooth skinning), untextured, opaque vertex colors, unit normals, and
-/// coordinates inside the overlay's s15.16 range. Checked once per mesh;
+/// no smooth skinning), untextured, opaque vertex colors, unit normals,
+/// coordinates inside the overlay's s15.16 range, and at most
+/// [`RSP_MAX_SEGS`] segments ([`rsp_split`]). Walks the mesh: call it once;
 /// the N64 renderer bakes an RSP copy only for these.
 pub fn rsp_mesh_supported(mesh: &Mesh) -> bool {
     mesh.joint_count() == 0
@@ -902,6 +955,7 @@ pub fn rsp_mesh_supported(mesh: &Mesh) -> bool {
             let p = vec3_of(p);
             p.x.abs() < 16_384.0 && p.y.abs() < 16_384.0 && p.z.abs() < 16_384.0
         })
+        && (1..=RSP_MAX_SEGS).contains(&rsp_split(mesh, &mut |_, _| {}))
 }
 
 /// What the N64's RSP T&L path needs for one draw ([`rsp_eligible`]).
@@ -920,16 +974,17 @@ pub struct RspDraw {
 /// overlay has no clipping, splitting, fog, colored light, emissive, flat
 /// shading or textures, so the draw must need none of them. Its whole
 /// bounding sphere must be inside the guard-band frustum and past the near
-/// plane, so no triangle could have been clipped. It lives in the core so
-/// host tests can predict the console's work split exactly (`perf_budget`).
+/// plane, so no triangle could have been clipped. Only for meshes
+/// [`rsp_mesh_supported`] accepted (checked once; this runs per draw). It
+/// lives in the core so host tests can predict the console's work split
+/// exactly (`perf_budget`).
 pub fn rsp_eligible(
     ctx: &TnlContext,
     mesh: &Mesh,
     model: &Mat34,
     params: &ModelParams,
 ) -> Option<RspDraw> {
-    if !rsp_mesh_supported(mesh)
-        || !ctx.white
+    if !ctx.white
         || ctx.fog_on
         || params.tint.a < 255
         || params.emissive.r | params.emissive.g | params.emissive.b != 0

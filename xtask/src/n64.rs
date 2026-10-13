@@ -647,6 +647,7 @@ pub fn test(bless: bool) -> ExitCode {
 
     let deadline = Instant::now() + Duration::from_secs(timeout);
     let mut fb = crate::fbgolden::FbCapture::default();
+    let mut frames: Vec<crate::fbgolden::FbCapture> = Vec::new();
     let mut perf_scenes = Vec::new();
     let mut micro_scenes = Vec::new();
     let verdict = loop {
@@ -656,8 +657,12 @@ pub fn test(bless: bool) -> ExitCode {
         }
         match rx.recv_timeout(left.min(Duration::from_millis(500))) {
             Ok(line) => {
-                // Framebuffer dump rows are collected, not echoed.
+                // Framebuffer dump rows are collected, not echoed; each
+                // TRINO_FB_END closes one image (they arrive in order).
                 if fb.feed(&line) {
+                    if fb.done() {
+                        frames.push(std::mem::take(&mut fb));
+                    }
                     continue;
                 }
                 println!("[ares] {line}");
@@ -692,11 +697,18 @@ pub fn test(bless: bool) -> ExitCode {
             .status();
     }
 
-    // Emulator golden image (the showcase's first frame).
+    // Emulator golden images, in dump order: the showcase's first frame
+    // (fogged: the CPU T&L path) and castle64's hub (the RSP T&L path).
     let verdict = verdict.and_then(|()| {
-        let img = fb.image().map_err(|e| format!("golden frame: {e}"))?;
-        let msg = crate::fbgolden::check(&root, "n64", "showcase", img, bless)?;
-        println!("[n64] golden frame: {msg}");
+        for (n, name) in ["showcase", "castle64_hub"].iter().enumerate() {
+            let img = frames
+                .get(n)
+                .ok_or_else(|| format!("golden frame {name}: not dumped"))?
+                .image()
+                .map_err(|e| format!("golden frame {name}: {e}"))?;
+            let msg = crate::fbgolden::check(&root, "n64", name, img, bless)?;
+            println!("[n64] golden frame: {msg}");
+        }
         Ok(())
     });
     // Performance gates: same T&L work as the PC baseline, frame costs
@@ -708,6 +720,10 @@ pub fn test(bless: bool) -> ExitCode {
         Ok(())
     });
     let verdict = verdict.and_then(|()| {
+        let ab = crate::perf::rsp_ab_report(&perf_scenes, &micro_scenes);
+        if !ab.is_empty() {
+            println!("[n64] castle64, RSP T&L vs CPU T&L (same ROM, emulated us per frame):\n{ab}");
+        }
         let table = crate::perf::micro_report(&micro_scenes)
             .map_err(|e| format!("micro perf scenes:\n{e}"))?;
         println!("[n64] T&L fixed costs (micro scenes, ungated):\n{table}");

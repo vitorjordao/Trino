@@ -46,10 +46,15 @@ BANNER: .ascii "Trino RSP T&L   "
     RSPQ_EmptySavedState
 
     # Viewport: clip space x/y in [-w, w] -> s13.2 screen coordinates of a
-    # 320x240 frame (160*4, 120*4); z/w in [0, 1) -> 0..0x7FFF.
+    # 320x240 frame (160*4, 120*4). Lane 2 of VIEW_SCALE and lane 3 of
+    # VIEW_OFFSET give the z-buffer value 0x7FFF * (1 - NEAR / depth)
+    # (NEAR = 0.05, NEAR * 0x7FFF = 1638) straight from 1 / depth, as
+    # 0x7FFE - floor(1638 / depth): the CPU path truncates
+    # 0x7FFF - 1638.35 / depth, and 0x7FFF here sat one unit farther, which
+    # flipped the depth test where RSP and CPU geometry touch.
     .align 4
-VIEW_SCALE:     .half 160*4, 120*4, 0x7FFF, 0, 0, 0, 0, 0
-VIEW_OFFSET:    .half 160*4, 120*4, 0, 0, 0, 0, 0, 0
+VIEW_SCALE:     .half 160*4, 120*4, 0x7FFE, 0, 0, 0, 0, 0
+VIEW_OFFSET:    .half 160*4, 120*4, 0, 1638, 0, 0, 0, 0
 
     # Milestone 1 check: three screen-space vertices in rsp_rdpq_tri.inc's
     # default layout.
@@ -232,6 +237,14 @@ transform_vertex:
     vmudn vs_f, vs_f, vvs
     vmadh vs_i, vs_i, vvs
     vadd vs_i, vs_i, vvo
+    # Z = 0x7FFF - NEAR * 0x7FFF / depth: z / w through the 32-bit product
+    # above loses ~9 bits on rotated meshes (measured, 58/32767), enough to
+    # flip the depth test where objects touch; 1 / depth alone keeps it
+    # within a unit.
+    vmudn vtmp, vinv_f, vvo.e3
+    vmadh vtmp, vinv_i, vvo.e3
+    vsub vtmp, vvs, vtmp.e3
+    vmov vs_i.e2, vtmp.e2
     sdv vs_i.e0, 0, dst             # X, Y, Z (+ W in the flag bytes)
     li t0, 0x003F                   # no clip flags, inside every plane
     sh t0, 6(dst)

@@ -18,7 +18,10 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
-use trino_core::render3d::{Camera3, DEFAULT_LIGHT, Light, Mesh, TnlStats, tessellate};
+use trino_core::render3d::{
+    Camera3, DEFAULT_LIGHT, Light, Mesh, TnlContext, TnlStats, rsp_eligible, rsp_mesh_supported,
+    tessellate,
+};
 use trino_core::*;
 
 const BASELINE: &str = "tests/perf/castle64_work.toml";
@@ -75,7 +78,19 @@ impl Renderer for Counting {
             return;
         };
         let mesh = Mesh::from_tmdl(bytes).unwrap();
-        let s = tessellate(&mesh, x, &self.camera, &self.light, p, SCREEN, &mut |_| {});
+        // The N64 sends eligible draws to its RSP overlay (same rules,
+        // trino_core::render3d::rsp_eligible): count those as RSP work, as
+        // the ROM does.
+        let ctx = TnlContext::new(&self.camera, &self.light, SCREEN);
+        let s = if rsp_mesh_supported(&mesh) && rsp_eligible(&ctx, &mesh, x, p).is_some() {
+            TnlStats {
+                rsp_draws: 1,
+                rsp_tris: (mesh.index_count / 3) as u32,
+                ..TnlStats::default()
+            }
+        } else {
+            tessellate(&mesh, x, &self.camera, &self.light, p, SCREEN, &mut |_| {})
+        };
         self.total.add(&s);
         let e = self.per_model.entry(m.0).or_default();
         e.0 += 1;

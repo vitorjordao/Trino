@@ -57,8 +57,12 @@ pub struct N64Renderer {
     profile: Option<RenderProfile>,
     /// RSP copies of the meshes the overlay can draw (`rsp.rs`).
     rsp_meshes: BTreeMap<u32, RspMesh>,
-    /// Send eligible draws to the RSP overlay (`set_rsp`).
+    /// Send eligible draws to the RSP overlay (`set_rsp`; on by default).
     rsp_on: bool,
+    /// RSP draw commands of the pending batch: submitted right after the
+    /// batch's CPU triangles, so on equal depth they win like the last
+    /// drawn surfaces of a painter-sorted batch do (a door on a wall).
+    pending_rsp: Vec<[u32; rsp::DRAW_WORDS]>,
     /// The overlay's cull mode for back faces: `RDPQ_Triangle_Send_Async`'s
     /// v0, where 0 culls Trino's back faces (its "front" is the opposite
     /// winding; 1 culled every front face, measured) and 2 culls nothing.
@@ -112,7 +116,8 @@ impl N64Renderer {
             caps: Caps::N64,
             profile: None,
             rsp_meshes: BTreeMap::new(),
-            rsp_on: false,
+            rsp_on: true,
+            pending_rsp: Vec::new(),
             rsp_cull: 0,
         }
     }
@@ -122,6 +127,19 @@ impl N64Renderer {
     /// grouped by texture (stable: depth order within a texture) so TMEM is
     /// loaded once per texture per batch.
     fn flush_model_batch(&mut self) {
+        self.flush_cpu_batch();
+        if !self.pending_rsp.is_empty() {
+            let t0 = self.tick();
+            for w in &self.pending_rsp {
+                unsafe { ffi::trino_rsp_draw(w.as_ptr()) };
+            }
+            self.pending_rsp.clear();
+            self.charge(t0, |s| &mut s.submit);
+        }
+    }
+
+    /// The CPU-tessellated part of the batch: sort + submit.
+    fn flush_cpu_batch(&mut self) {
         if self.pending_tris.is_empty() {
             return;
         }
@@ -318,7 +336,7 @@ impl N64Renderer {
             }
         }
         let msg = alloc::format!("{n} vertices: xy {dxy}/4 px, z {dz}/32767, color {dc}/255");
-        if dxy > 2 || dz > 16 || dc > 3 {
+        if dxy > 2 || dz > 64 || dc > 3 {
             Err(msg)
         } else {
             Ok(msg)
@@ -443,12 +461,11 @@ impl Renderer for N64Renderer {
             && let Some(d) = rsp_eligible(&self.tnl_ctx, &mesh, matrix, params)
         {
             // The overlay transforms, lights and rasterizes the whole draw;
-            // its triangles reach the RDP now, ahead of the CPU batch (fine
-            // for these opaque, z-buffered draws).
+            // the command goes out with the batch (flush_model_batch).
             let t0 = self.tick();
             let cull = if d.cull_back { self.rsp_cull } else { 2 };
             let words = rsp::draw_words(&self.tnl_ctx, matrix, &d, params.tint, rm, cull, 0);
-            unsafe { ffi::trino_rsp_draw(words.as_ptr()) };
+            self.pending_rsp.push(words);
             let tnl = TnlStats {
                 rsp_draws: 1,
                 rsp_tris: (mesh.index_count / 3) as u32,

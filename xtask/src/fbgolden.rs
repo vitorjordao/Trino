@@ -52,6 +52,11 @@ impl FbCapture {
 
     /// The RGBA8 image (5-bit channels expanded like the console's
     /// `trino_debug_pixel`), verified against the printed hash.
+    /// The dump's end line arrived (the next rows start a new image).
+    pub fn done(&self) -> bool {
+        self.end.is_some()
+    }
+
     pub fn image(&self) -> Result<(u32, u32, Vec<u8>), String> {
         let (w, h, hash) = self.end.ok_or("no TRINO_FB_END line")?;
         let mut px = vec![0u16; (w * h) as usize];

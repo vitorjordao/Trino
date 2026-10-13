@@ -1,8 +1,8 @@
 [workspace]
 resolver = "2"
 members = ["crates/*", "apps/*", "examples/*", "xtask"]
-# The scaffold template carries a Cargo.toml with placeholders — never build it.
-exclude = ["templates/new-game"]
+# Scaffold templates keep their manifests as `Cargo.toml.tmpl` (rendered by
+# `cargo xtask new`), so cargo never sees them as packages.
 
 [workspace.package]
 version = "0.1.0"
@@ -19,6 +19,7 @@ trino-platform-n64 = { path = "crates/platform-n64" }
 trino-platform-3ds = { path = "crates/platform-3ds" }
 trino-asset-pipeline = { path = "crates/asset-pipeline" }
 trino-scene = { path = "crates/scene" }
+trino-runner-pc = { path = "crates/runner-pc" }
 hello-sprite = { path = "examples/hello-sprite" }
 platformer = { path = "examples/platformer" }
 castle64 = { path = "examples/castle64" }

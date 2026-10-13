@@ -1,0 +1,20 @@
+[package]
+name = "{{name}}-pc"
+description = "Desktop host for {{name}}."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "{{name}}"
+path = "src/main.rs"
+
+[features]
+default = ["watch"]
+# Rebake + re-upload assets live when a master changes.
+watch = ["trino-runner-pc/watch"]
+
+[dependencies]
+{{name}} = { workspace = true }
+trino-runner-pc = { workspace = true }

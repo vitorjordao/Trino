@@ -92,61 +92,15 @@ struct App {
     smoke_frames: Option<u64>,
 }
 
-/// Upload (or re-upload) baked assets by handle. Sounds are resampled to the
-/// device rate at load time.
+/// Upload (or re-upload) baked assets by handle (shared with standalone
+/// projects through `trino-runner-pc`).
 fn upload_assets(
     renderer: &mut PcRenderer,
     audio: &mut PcAudio,
     platform: &mut PcPlatform,
     only: Option<&[u32]>,
 ) -> Result<(), String> {
-    let assets = trino_asset_pipeline::load_dir(&baked_dir(), only)?;
-    for sprite in assets.sprites {
-        renderer.upload_sprite(
-            trino_core::SpriteId(sprite.id),
-            sprite.width,
-            sprite.height,
-            &sprite.rgba,
-        );
-    }
-    for sound in assets.sounds {
-        let samples = resample(&sound.samples, sound.sample_rate, audio.sample_rate());
-        audio.upload_sound(trino_core::SoundId(sound.id), samples);
-    }
-    for track in assets.music {
-        let samples = resample(&track.samples, track.sample_rate, audio.sample_rate());
-        audio.upload_music(trino_core::MusicId(track.id), samples);
-    }
-    for model in assets.models {
-        renderer.upload_mesh(trino_core::ModelId(model.id), model.tmdl);
-    }
-    for font in assets.fonts {
-        renderer.upload_font(trino_core::FontId(font.id), font.table);
-    }
-    for blob in assets.blobs {
-        platform.insert_blob(trino_core::BlobId(blob.id), blob.bytes);
-    }
-    Ok(())
-}
-
-/// Linear-interpolation resampler — fine for short SFX in dev; the pipeline
-/// gains proper resampling when music lands (Fase 6).
-fn resample(samples: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
-    if from_rate == to_rate || samples.is_empty() {
-        return samples.to_vec();
-    }
-    let ratio = from_rate as f64 / to_rate as f64;
-    let out_len = (samples.len() as f64 / ratio) as usize;
-    (0..out_len)
-        .map(|i| {
-            let src = i as f64 * ratio;
-            let idx = src as usize;
-            let frac = (src - idx as f64) as f32;
-            let a = samples[idx.min(samples.len() - 1)];
-            let b = samples[(idx + 1).min(samples.len() - 1)];
-            a + (b - a) * frac
-        })
-        .collect()
+    trino_runner_pc::upload_assets(&baked_dir(), renderer, audio, platform, only)
 }
 
 impl App {
@@ -331,10 +285,7 @@ fn main() {
     let smoke_frames = std::env::var("TRINO_SMOKE_FRAMES")
         .ok()
         .and_then(|v| v.parse().ok());
-    let profile = std::env::var("TRINO_SIM")
-        .ok()
-        .and_then(|v| SimProfile::parse(&v))
-        .unwrap_or(SimProfile::N64);
+    let profile = trino_runner_pc::profile_from_env();
 
     let event_loop = EventLoop::new().expect("failed to create event loop");
     let mut app = App {

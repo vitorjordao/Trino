@@ -1,0 +1,20 @@
+[package]
+name = "trino-runner-pc"
+description = "Ready-made PC host for a Trino game: window, wgpu, audio, input, asset bake."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[features]
+default = []
+# Rebake + re-upload assets live when a master changes.
+watch = ["trino-asset-pipeline/watch"]
+
+[dependencies]
+trino-core = { workspace = true }
+trino-platform-pc = { workspace = true }
+trino-asset-pipeline = { workspace = true }
+winit = { workspace = true }
+pollster = { workspace = true }

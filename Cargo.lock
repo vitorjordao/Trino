@@ -3236,6 +3236,7 @@ dependencies = [
  "trino-core",
  "trino-game-api",
  "trino-platform-pc",
+ "trino-runner-pc",
  "trino-scene",
  "winit",
 ]
@@ -3314,6 +3315,17 @@ dependencies = [
  "trino-asset-pipeline",
  "trino-core",
  "wgpu",
+ "winit",
+]
+
+[[package]]
+name = "trino-runner-pc"
+version = "0.1.0"
+dependencies = [
+ "pollster",
+ "trino-asset-pipeline",
+ "trino-core",
+ "trino-platform-pc",
  "winit",
 ]
 

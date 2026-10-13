@@ -1,0 +1,13 @@
+# Asset manifest: logical path -> master file under `assets/shared/`
+# (per-platform overrides go in `assets/n64/`, `assets/3ds/`). The game
+# refers to assets by logical path: `SpriteId::from_path("sprites/hero")`.
+# N64 sprites must declare their texture format (TMEM is 4 KB).
+
+version = 1
+
+[sprites.hero]
+file = "sprites/hero.png"
+formats = { n64 = "CI4" }
+
+[sounds.beep]
+file = "sounds/beep.wav"

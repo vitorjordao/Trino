@@ -963,6 +963,28 @@ impl TnlContext {
     }
 }
 
+/// Clip the triangle in `poly_a` against the near plane and the 4
+/// guard-band side planes; the result is back in `poly_a` (`poly_b` is
+/// scratch). Returns the vertex count. Out of line and cold: a few percent
+/// of triangles need it, and inlined five times it was most of the T&L's
+/// code size.
+#[cold]
+#[inline(never)]
+fn clip_frustum(
+    poly_a: &mut [ClipVert; MAX_POLY],
+    poly_b: &mut [ClipVert; MAX_POLY],
+    lim_x: f32,
+    lim_y: f32,
+) -> usize {
+    let mut n = clip_plane(poly_a, 3, poly_b, |v| v.z - NEAR);
+    n = clip_plane(poly_b, n, poly_a, |v| lim_x * v.z - v.x);
+    n = clip_plane(poly_a, n, poly_b, |v| lim_x * v.z + v.x);
+    n = clip_plane(poly_b, n, poly_a, |v| lim_y * v.z - v.y);
+    n = clip_plane(poly_a, n, poly_b, |v| lim_y * v.z + v.y);
+    *poly_a = *poly_b;
+    n
+}
+
 /// Transform, light, clip, depth-subdivide, project and cull `mesh`,
 /// handing each visible triangle to `emit`. Triangles are **not** sorted
 /// here: backends batch the triangles of consecutive `draw_model` calls and
@@ -1209,7 +1231,11 @@ impl Setup<'_> {
 const VCACHE: usize = 32;
 
 /// `SKINNED` / `SMOOTH` are const parameters so the static and rigid paths
-/// compile without any per-vertex joint or blend lookup.
+/// compile without any per-vertex joint or blend lookup. Out of line: each
+/// path is its own function, so the static one (most draws) stays compact
+/// in the N64's 16 KB instruction cache instead of being one 60 KB body
+/// with the skinned paths.
+#[inline(never)]
 fn tessellate_joints<const SKINNED: bool, const SMOOTH: bool>(
     mesh: &Mesh,
     world: &[Mat34],
@@ -1339,13 +1365,7 @@ fn tessellate_joints<const SKINNED: bool, const SMOOTH: bool>(
         let mut n_poly = 3;
         if !(inside(vs[0]) && inside(vs[1]) && inside(vs[2])) {
             stats.clipped += 1;
-            // Clip against near plane + the 4 guard-band side planes.
-            n_poly = clip_plane(poly_a, n_poly, poly_b, |v| v.z - NEAR);
-            n_poly = clip_plane(poly_b, n_poly, poly_a, |v| lim_x * v.z - v.x);
-            n_poly = clip_plane(poly_a, n_poly, poly_b, |v| lim_x * v.z + v.x);
-            n_poly = clip_plane(poly_b, n_poly, poly_a, |v| lim_y * v.z - v.y);
-            n_poly = clip_plane(poly_a, n_poly, poly_b, |v| lim_y * v.z + v.y);
-            *poly_a = *poly_b;
+            n_poly = clip_frustum(poly_a, poly_b, lim_x, lim_y);
             if n_poly < 3 {
                 continue;
             }

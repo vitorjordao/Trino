@@ -382,6 +382,10 @@ Edit this file as you go.
   Decide after Phase 1.
   - Decision (Phase 1 exit): deferred to just before the Phase 4 spike. 2a and 3a are
     large enough to read through the ±5% frame noise.
+  - [x] 1i, done after 2a instead: `nm` showed `tessellate_with` at 60 KB (every path and
+    five clip planes inlined). Each `tessellate_joints` instance out of line plus a
+    `#[cold]` `clip_frustum`: static path 13.9 KB, frame −4.5…−7.9% in all five scenes,
+    goldens identical. The link-order idea stays deferred.
 - Phase 2:
   - [x] 2a coins — kept: coin T&L gone (1.6–3.4 ms per scene); frame throne −8.9%,
     green-hills/lava-land −4.9%, hub/sky-tower ±1% on an unlucky layout (micro scenes,

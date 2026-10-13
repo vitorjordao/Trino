@@ -181,6 +181,7 @@ frames. Trust the cost model.
 | Per-vertex cached projection + no-copy fast path in `tessellate` | neutral (±2%) — reverted |
 | Hot loop compacted (`#[inline(never)]` vertex/flat/general paths) | +3…+17% worse — reverted |
 | `opt-level = "s"` for the ROM | worse everywhere — not adopted |
+| **1i** T&L code size: each `tessellate_joints` instance `#[inline(never)]` and the 5-plane clip in one `#[cold]` `clip_frustum` | `tessellate_with` was **60 KB** (static + two skinned paths + five inlined clip planes, ~4× the 16 KB I-cache); now 1.9 KB + 13.9 KB static path + 6 KB cold clip. Frame −4.5…−7.9%, T&L −8…−12% in every scene. Goldens identical. (Not the reverted 2026-10-13 attempt, which split the hot loop itself) |
 | **2a** castle64 coins as billboards (`draw_billboard` of the HUD's `S_COIN`, width `0.8·max(|cos spin|, 0.15)`); `billboard_with` reuses the `TnlContext` | coins' T&L gone (hub 3.4 ms, stages 1.6–3.4 ms), sort/submit/`game` +0.3–0.4 ms each (textured batch). Frame: throne −8.9%, green-hills and lava-land −4.9%, hub +0.3%, sky-tower +0.9%. That build was an unlucky layout: the micro scenes, identical code with no billboards, got T&L +17…+34%. Output-moving: 3DS golden (round sprite coins), work baseline −coin counters |
 | **1h** `Mat34::from_rotation_scale_translation` skips the software sin/cos for `+0.0` angles (`sin(0) = 0`, `cos(0) = 1` bit-exactly, pinned by a test) | `game` −15…−18% in every scene; `Transform3::matrix` 26 → 7 µs per draw with zero rotation, 26 → 12 µs with a yaw. T&L +4% in two scenes (layout). Frame −1.4…+1.6%. Kept on the `game` stage win |
 | 1f One `trino_tris(ptr, n)` FFI call per batch (packed 48-byte triangles) and a 256-entry `c / 255.0f` table instead of 12 `div.s` per triangle in the shim | submit **+3…+6%** in every scene, frame −1.5…+4.6%: reverted. The submit is store-bound, not compute-bound: `rdpq_triangle_rsp` writes 26 words per triangle into the rspq buffer, which is `malloc_uncached`, and the divisions ran while the write buffer drained (likely; consistent with the skip-`rdpq_triangle` experiment above) |
@@ -198,6 +199,10 @@ Before guessing where CPU time goes, look at what the compiler emitted:
 docker run --rm -v "$PWD/target/n64":/w -w /w trino-n64:latest \
   sh -c 'mips64-elf-objdump -d --no-show-raw-insn trino.elf' > /tmp/rom.S
 ```
+
+Check code size first: `mips64-elf-nm -S --size-sort -C trino.elf | tail -30` in the
+same image. A hot function near or above 16 KB (the I-cache) is a lever on its own:
+`tessellate_with` was 60 KB until 1i. Code layout then moves less between builds too.
 
 Then find the function (`grep` its mangled name, e.g. `tessellate_joints`) and count
 `div.s` (~29 cycles each), `cvt`/`trunc`, `jal` targets (non-inlined helpers,

@@ -64,6 +64,7 @@ tests follow the same pattern: add a step to `castle64::selftest` so the PC suit
     `tests/golden/n64/actual/`. Review the diff before re-blessing.
   - **`TRINO_PERF`:** castle64 hub frame cost in **emulated N64 time** (ares emulates
     the count register). Quote it for T&L changes; `bench_tnl` is host CPU only.
+    Workflow and baseline: the `n64-performance` skill.
 - **3DS channel: `svcOutputDebugString`.** Azahar logs it to `azahar_log.txt`: under
   `%APPDATA%/Azahar` on Windows, `~/.local/share/azahar-emu` on Linux.
   - The harness seeds a fresh `qt-config.ini`, or patches an existing one, with
@@ -85,7 +86,7 @@ tests follow the same pattern: add a step to `castle64::selftest` so the PC suit
   mark (64 KB available).
 - **No in-place hot reload on consoles:** `watch` kills and relaunches, watching
   `examples/`, `assets/` and the console's own crates.
-- **CI:**
+- **CI** (details, local replicas and red-run debugging: the `ci` skill):
   - the `n64` job boots the test ROM in the cached `trino-ares` image;
   - `n3ds` builds `--selftest` and uploads it;
   - `n3ds-emulator` (ubuntu-24.04) boots it, because the devkitARM image's glibc is

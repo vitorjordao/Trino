@@ -32,6 +32,15 @@ What to build next (ranked): `docs/BACKLOG.md`.
 | `build-3ds` | .3dsx build via devkitPro, 3DS pipeline troubleshooting |
 | `run-emulator` | ares / Azahar runs, emulator test harness, watch loops |
 | `test-all` | the CI gates + guard tests, console type-checks, T&L benchmark |
+| `engine-feature` | adding/changing an engine service or format end to end: all backends, self-test step, docs, the closing knowledge loop |
+| `n64-performance` | `TRINO_PERF` (emulated N64 frame cost), before/after workflow, perf levers |
+| `ci` | the GitHub Actions jobs, why they're shaped that way, replicating a job locally, debugging red runs |
+| `new-project` | `cargo xtask new` (in-repo or `--standalone`), maintaining the templates and `trino-runner-pc` |
+
+**Knowledge loop:** before reporting a task done, write what it taught you into the
+skill that owns that kind of work. A trap also gets a line under Pitfalls below. Create a
+new skill when none fits. Then run `cargo xtask agents sync`. The steps are in
+`engine-feature` › Closing. A skill that turns out wrong gets fixed in the same session.
 
 ## Current state
 

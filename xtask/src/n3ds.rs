@@ -407,13 +407,19 @@ pub fn build(test_mode: bool) -> ExitCode {
     }
 }
 
-/// Azahar executable: $TRINO_AZAHAR, the default install location, or PATH.
+/// Azahar executable: $TRINO_AZAHAR, `target/emulators/azahar` (from
+/// `cargo xtask emulators setup azahar`), the default install location, or
+/// PATH.
 fn azahar_exe() -> Option<PathBuf> {
     if let Ok(env) = std::env::var("TRINO_AZAHAR") {
         let p = PathBuf::from(env);
         if p.exists() {
             return Some(p);
         }
+    }
+    // `cargo xtask emulators setup azahar`.
+    if let Some(p) = crate::emulators::local_azahar(&repo_root()) {
+        return Some(p);
     }
     if let Ok(local) = std::env::var("LOCALAPPDATA") {
         let p = PathBuf::from(local)
@@ -470,6 +476,24 @@ fn azahar_paths() -> Option<(PathBuf, PathBuf)> {
         .or(first)
 }
 
+/// Minimal qt-config.ini for an Azahar that never ran: Debug-level
+/// emulated output reaches the log and is flushed per line, no update
+/// check or close prompt.
+const AZAHAR_SEED_CONFIG: &str = "[Debugging]
+instant_debug_log=true
+instant_debug_log\\default=false
+
+[Miscellaneous]
+check_for_update_on_start=false
+check_for_update_on_start\\default=false
+log_filter=*:Info Debug.Emulated:Trace
+log_filter\\default=false
+
+[UI]
+confirmClose=false
+confirmClose\\default=false
+";
+
 fn azahar_log() -> Option<PathBuf> {
     azahar_paths().map(|(log, _)| log)
 }
@@ -482,34 +506,55 @@ fn ensure_azahar_log_filter() -> Result<(), String> {
         return Ok(()); // no HOME/APPDATA: nothing to patch
     };
     let Ok(content) = std::fs::read_to_string(&ini) else {
-        // No config yet (Azahar never ran): the default filter hides the
-        // magic strings, so tell the user instead of guessing the format.
-        return Err(format!(
-            "Azahar config not found at {} — run Azahar once, then re-run the test",
-            ini.display()
-        ));
+        // No config yet (fresh machine / CI): seed the keys the harness
+        // needs; Azahar fills in every other default on first start.
+        println!("[3ds] seeding {} for the test harness", ini.display());
+        if let Some(dir) = ini.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        }
+        return std::fs::write(&ini, AZAHAR_SEED_CONFIG).map_err(|e| e.to_string());
     };
-    if content.contains("Debug.Emulated") {
+    let mut patched = content.clone();
+    if !patched.contains("Debug.Emulated") {
+        patched = patched
+            .replace(
+                "log_filter\\default=true\r\n",
+                "log_filter\\default=false\r\n",
+            )
+            .replace("log_filter\\default=true\n", "log_filter\\default=false\n")
+            .replace(
+                "log_filter=*:Info",
+                "log_filter=*:Info Debug.Emulated:Trace",
+            );
+        if !patched.contains("Debug.Emulated") {
+            return Err(format!(
+                "could not widen Azahar's log_filter in {} — add `Debug.Emulated:Trace` \
+                 to it manually (Emulation > Configure > Debug)",
+                ini.display()
+            ));
+        }
+    }
+    // The file log only flushes on Error-level entries; without this the
+    // magic strings can sit in the write buffer until Azahar exits.
+    patched = patched
+        .replace("instant_debug_log=false", "instant_debug_log=true")
+        .replace(
+            "instant_debug_log\\default=true",
+            "instant_debug_log\\default=false",
+        );
+    if !patched.contains("instant_debug_log=true") {
+        patched = patched.replacen(
+            "[Debugging]\n",
+            "[Debugging]\ninstant_debug_log=true\ninstant_debug_log\\default=false\n",
+            1,
+        );
+    }
+    if patched == content {
         return Ok(());
     }
-    let patched = content
-        .replace(
-            "log_filter\\default=true\r\n",
-            "log_filter\\default=false\r\n",
-        )
-        .replace("log_filter\\default=true\n", "log_filter\\default=false\n")
-        .replace(
-            "log_filter=*:Info",
-            "log_filter=*:Info Debug.Emulated:Trace",
-        );
-    if patched == content {
-        return Err(format!(
-            "could not widen Azahar's log_filter in {} — add `Debug.Emulated:Trace` \
-             to it manually (Emulation > Configure > Debug)",
-            ini.display()
-        ));
-    }
-    println!("[3ds] widening Azahar log filter (Debug.Emulated:Trace) for the test harness");
+    println!(
+        "[3ds] configuring Azahar logging (Debug.Emulated:Trace, instant flush) for the test harness"
+    );
     std::fs::write(&ini, patched).map_err(|e| e.to_string())
 }
 
@@ -539,12 +584,21 @@ pub fn run() -> ExitCode {
 /// Boot the test app in Azahar and tail its log file for the magic strings
 /// (the GUI build has no console stdout on Windows). Kills the emulator on
 /// verdict or timeout.
-pub fn test() -> ExitCode {
-    let code = build(true);
-    if code != ExitCode::SUCCESS {
-        return code;
+/// `build`: false boots an existing self-test app (`cargo xtask build 3ds
+/// --selftest`, e.g. a CI artifact) — Azahar's AppImage needs a newer glibc
+/// than the devkitARM image has, so CI builds and boots in separate jobs.
+pub fn test(build_first: bool) -> ExitCode {
+    if build_first {
+        let code = build(true);
+        if code != ExitCode::SUCCESS {
+            return code;
+        }
     }
     let root = repo_root();
+    if !root.join("target/3ds/trino.3dsx").exists() {
+        eprintln!("[3ds] target/3ds/trino.3dsx missing (cargo xtask build 3ds --selftest)");
+        return ExitCode::FAILURE;
+    }
     let Some(azahar) = azahar_exe() else {
         eprintln!("[3ds] Azahar not found (set TRINO_AZAHAR to the executable)");
         return ExitCode::FAILURE;

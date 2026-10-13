@@ -7,6 +7,7 @@
 mod agents;
 mod blender;
 mod castle64_assets;
+mod emulators;
 mod fbgolden;
 mod font_assets;
 mod model;
@@ -25,9 +26,10 @@ const HELP: &str = "\
 cargo xtask <command> [platform] [-- extra args]
 
 commands:
-  build <pc|n64|3ds>   compile the app for a platform
+  build <pc|n64|3ds>   compile the app for a platform (3ds --selftest: the
+                       self-test app `test 3ds --no-build` boots)
   run   <pc|n64|3ds>   build and launch (emulator for consoles)
-  test  [pc|n64|3ds] [--bless]
+  test  [pc|n64|3ds] [--bless] [--no-build]
                        run the test suite (default: everything testable);
                        --bless regenerates golden images
   assets <pc|n64|3ds>  bake assets into target/assets/<platform>
@@ -35,6 +37,9 @@ commands:
                        ROM + relaunch ares). pc: --game <crate> picks the
                        game dylib to rebuild (default: castle64)
   editor               launch the Trino editor
+  emulators setup ares|azahar
+                       provision the self-test emulators (ares Docker image
+                       / pinned Azahar AppImage into target/emulators)
   new <name>           scaffold a new game crate under examples/
   new <name> --standalone <dir> [--git <url> [--rev <r>|--branch <b>]]
                        a game project outside this repo (own workspace,
@@ -58,6 +63,12 @@ fn main() -> ExitCode {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let bless = args.iter().any(|a| a == "--bless");
     args.retain(|a| a != "--bless");
+    // Console CI split: build the self-test app in the toolchain container,
+    // boot it elsewhere (`test 3ds --no-build`).
+    let selftest = args.iter().any(|a| a == "--selftest");
+    args.retain(|a| a != "--selftest");
+    let no_build = args.iter().any(|a| a == "--no-build");
+    args.retain(|a| a != "--no-build");
     // `watch pc --game <crate>`: which game crate feeds the hot-reload dylib.
     let game = match args.iter().position(|a| a == "--game") {
         Some(i) => {
@@ -113,6 +124,10 @@ fn main() -> ExitCode {
         (Some("editor"), _) => cargo(&["run", "-p", "trino-editor"], &[]),
         (Some("gen-assets"), _) => gen_assets(),
         (Some("agents"), sub) => agents::run(&repo_root(), sub),
+        (Some("emulators"), _) => {
+            let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
+            emulators::run(&repo_root(), &rest)
+        }
         (Some("blender"), _) => {
             let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
             blender::run(&repo_root(), &rest)
@@ -131,9 +146,9 @@ fn main() -> ExitCode {
         (Some("test"), Some("n64")) => n64::test(bless),
         (Some("watch"), Some("n64")) => n64::watch(),
 
-        (Some("build"), Some("3ds")) => n3ds::build(false),
+        (Some("build"), Some("3ds")) => n3ds::build(selftest),
         (Some("run"), Some("3ds")) => n3ds::run(),
-        (Some("test"), Some("3ds")) => n3ds::test(),
+        (Some("test"), Some("3ds")) => n3ds::test(!no_build),
         (Some("watch"), Some("3ds")) => n3ds::watch(),
         (Some("new"), Some(name)) => {
             let rest: Vec<&str> = args.iter().skip(2).map(String::as_str).collect();

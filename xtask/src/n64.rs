@@ -372,9 +372,44 @@ pub fn build(test_mode: bool) -> ExitCode {
     }
 }
 
+/// ares executable: `$TRINO_ARES` (a path, or `docker` for the
+/// `trino-ares` image — see `cargo xtask emulators setup ares`), else
+/// `ares-v148/` at the repo root.
 fn ares_exe(root: &Path) -> Option<PathBuf> {
+    if let Ok(env) = std::env::var("TRINO_ARES") {
+        let p = PathBuf::from(env);
+        return (p.as_os_str() == "docker" || p.exists()).then_some(p);
+    }
     let candidates = [root.join("ares-v148/ares.exe"), root.join("ares-v148/ares")];
     candidates.into_iter().find(|p| p.exists())
+}
+
+/// Command that boots `rom` in ares with `args` (native or in Docker).
+/// Returns the command and, for Docker, the container name to remove.
+fn ares_command(ares: &Path, rom: &Path, args: &[&str]) -> (Command, Option<String>) {
+    if ares.as_os_str() != "docker" {
+        let mut cmd = Command::new(ares);
+        cmd.args(args).arg(rom);
+        return (cmd, None);
+    }
+    let name = format!("trino-ares-{}", std::process::id());
+    let dir = rom.parent().expect("rom in a directory");
+    let file = rom.file_name().expect("rom file name").to_string_lossy();
+    let mut cmd = Command::new("docker");
+    cmd.args(["run", "--rm", "--init", "--name", &name, "-v"])
+        .arg(format!("{}:/rom:ro", dir.display()))
+        .arg(crate::emulators::ARES_IMAGE)
+        .args(args)
+        // Saves (EEPROM) go to a scratch dir inside the container: a
+        // read-only save path pops a modal dialog that blocks the boot.
+        .args([
+            "--setting",
+            "Audio/Driver=None",
+            "--setting",
+            "Paths/Saves=/tmp/",
+        ])
+        .arg(format!("/rom/{file}"));
+    (cmd, Some(name))
 }
 
 pub fn run() -> ExitCode {
@@ -497,19 +532,13 @@ pub fn test(bless: bool) -> ExitCode {
     };
 
     println!("[n64] booting test ROM in ares (300s timeout)...");
-    let mut cmd = Command::new(&ares);
-    // Native-resolution RDP (the golden frame is compared pixel-exactly);
-    // headless runs (CI containers) also mute audio.
-    cmd.args(["--no-file-prompt", "--setting", "Video/Quality=SD"]);
-    if std::env::var_os("TRINO_HEADLESS").is_some() {
-        cmd.args(["--setting", "Audio/Driver=None"]);
-    }
-    let mut child = match cmd
-        .arg(root.join("target/n64/trino.z64"))
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-    {
+    // Native-resolution RDP: the golden frame is compared pixel-exactly.
+    let (mut cmd, container) = ares_command(
+        &ares,
+        &root.join("target/n64/trino.z64"),
+        &["--no-file-prompt", "--setting", "Video/Quality=SD"],
+    );
+    let mut child = match cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() {
         Ok(c) => c,
         Err(e) => {
             eprintln!("[n64] failed to launch ares: {e}");
@@ -567,6 +596,13 @@ pub fn test(bless: bool) -> ExitCode {
         }
     };
     let _ = child.kill();
+    if let Some(name) = container {
+        let _ = Command::new("docker")
+            .args(["rm", "-f", &name])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
 
     // Emulator golden image (the showcase's first frame).
     let verdict = verdict.and_then(|()| {

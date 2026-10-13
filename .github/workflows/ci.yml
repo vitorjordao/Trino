@@ -72,6 +72,9 @@ jobs:
       - name: Editor smoke (Linux, headless)
         if: runner.os == 'Linux'
         run: TRINO_EDITOR_SMOKE_FRAMES=30 xvfb-run -a cargo run -p trino-editor
+      - name: Editor Play-here smoke (Linux, headless)
+        if: runner.os == 'Linux'
+        run: TRINO_EDITOR_PLAY=here TRINO_EDITOR_SMOKE_FRAMES=60 xvfb-run -a cargo run -p trino-editor
       # `cargo xtask new --standalone` into a temp dir, built and run there.
       - name: Standalone project smoke (Linux, headless)
         if: runner.os == 'Linux'
@@ -122,9 +125,36 @@ jobs:
         run: docker save trino-n64 -o ~/trino-n64.tar
       - name: ROM produced
         run: ls -l target/n64/trino.z64
-      # Emulator tests (`cargo xtask test n64`) run locally with ares for now:
-      # ares ships no Linux release binary. Candidate follow-up: build ares
-      # once in a cached step (or use a libretro core) and run under xvfb.
+      # Emulator self-test: ares (built from source into a Docker image —
+      # it ships no Linux binary) boots the test ROM under Xvfb; the
+      # harness asserts TRINO_TEST_PASS and the golden frame
+      # (tests/golden/n64/showcase.png) pixel for pixel.
+      - name: Cache ares image
+        id: ares-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/trino-ares.tar
+          key: trino-ares-image-${{ hashFiles('docker/ares/Dockerfile') }}
+      - name: Load cached ares image
+        if: steps.ares-cache.outputs.cache-hit == 'true'
+        run: docker load -i ~/trino-ares.tar
+      - name: Build ares image
+        if: steps.ares-cache.outputs.cache-hit != 'true'
+        run: cargo xtask emulators setup ares
+      - name: Save ares image
+        if: steps.ares-cache.outputs.cache-hit != 'true'
+        run: docker save trino-ares -o ~/trino-ares.tar
+      - name: Emulator self-test (ares)
+        run: cargo xtask test n64
+        env:
+          TRINO_ARES: docker
+      - name: Upload golden mismatch
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: n64-golden-actual
+          path: tests/golden/n64/actual/
+          if-no-files-found: ignore
 
   n3ds:
     name: 3DS app (devkitARM container)
@@ -145,5 +175,41 @@ jobs:
         run: cargo xtask build 3ds
       - name: App produced
         run: ls -l target/3ds/trino.3dsx
-      # Emulator tests (`cargo xtask test 3ds`) run locally with Azahar for
-      # now (GUI app; the harness tails its log for the magic strings).
+      # The self-test app is booted by the next job: Azahar's AppImage needs
+      # a newer glibc than this (Debian) toolchain image ships.
+      - name: Build self-test app
+        run: cargo xtask build 3ds --selftest
+      - uses: actions/upload-artifact@v4
+        with:
+          name: trino-3ds-selftest
+          path: target/3ds/trino.3dsx
+
+  n3ds-emulator:
+    name: 3DS self-test (Azahar)
+    needs: n3ds
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/download-artifact@v4
+        with:
+          name: trino-3ds-selftest
+          path: target/3ds
+      # The pinned Azahar AppImage (SHA-256 checked, extracted) boots the
+      # test app under Xvfb with Mesa's software OpenGL; the harness seeds
+      # Azahar's config (Debug.Emulated log level, per-line flush) and tails
+      # its log for the TRINO_TEST_* magic strings.
+      - name: Install emulator runtime deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends libasound2-dev xvfb xauth \
+            libopengl0 libegl1 libgl1 libgl1-mesa-dri libfontconfig1 \
+            libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+            libxcb-randr0 libxcb-render-util0 libxcb-xinerama0 libxcb-xkb1 \
+            libxcb-shape0 libxcb-cursor0 libdbus-1-3 libglib2.0-0 libxi6 libsm6 libice6 \
+            libharfbuzz0b libfribidi0
+      - name: Set up Azahar
+        run: cargo xtask emulators setup azahar
+      - name: Emulator self-test (Azahar)
+        run: xvfb-run -a -s "-screen 0 1280x720x24" cargo xtask test 3ds --no-build

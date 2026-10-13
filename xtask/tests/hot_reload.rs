@@ -13,7 +13,15 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use trino_core::{Audio, Button, InputState, MusicId, SoundId, Vec2};
+use trino_core::{Audio, Button, InputState, MusicId, Platform, SoundId, Vec2};
+
+struct NullPlatform;
+impl Platform for NullPlatform {
+    fn now_micros(&self) -> u64 {
+        0
+    }
+    fn log(&self, _: &str) {}
+}
 
 struct NullAudio;
 impl Audio for NullAudio {
@@ -24,7 +32,9 @@ impl Audio for NullAudio {
 }
 
 type VersionFn = fn() -> u32;
-type UpdateFn = fn(&mut hello_sprite::HelloGame, &InputState, &mut dyn Audio, f32);
+/// Must match `trino_game_api::export_game!` exactly (GAME_API_VERSION 2).
+type UpdateFn =
+    fn(&mut hello_sprite::HelloGame, &mut dyn Platform, &InputState, &mut dyn Audio, f32);
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..")
@@ -106,6 +116,7 @@ fn state_survives_dylib_swap_and_behavior_changes() {
     let v2_path = build_v2(temp.path());
 
     let mut audio = NullAudio;
+    let mut platform = NullPlatform;
     let mut input = InputState::default();
     input.set(Button::DpadRight, true);
 
@@ -122,7 +133,7 @@ fn state_survives_dylib_swap_and_behavior_changes() {
         let update: libloading::Symbol<UpdateFn> =
             v1.get(b"trino_game_update").expect("update symbol");
         // dt = 0.1 keeps the sprite far from the screen-edge clamp.
-        update(&mut game, &input, &mut audio, 0.1);
+        update(&mut game, &mut platform, &input, &mut audio, 0.1);
     }
     let x1 = game.pos.x;
     assert_eq!(x1 - x0, 12.0, "v1 moves at SPEED=120");
@@ -136,7 +147,7 @@ fn state_survives_dylib_swap_and_behavior_changes() {
         let update: libloading::Symbol<UpdateFn> =
             v2.get(b"trino_game_update").expect("update symbol");
         // SAME state object, new code.
-        update(&mut game, &input, &mut audio, 0.1);
+        update(&mut game, &mut platform, &input, &mut audio, 0.1);
     }
     let x2 = game.pos.x;
     assert_eq!(

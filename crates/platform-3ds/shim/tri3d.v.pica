@@ -1,0 +1,39 @@
+; Trino 3DS textured-triangle vertex shader (picasso syntax).
+;
+; The engine's software T&L (trino_core::render3d) already projected every
+; vertex to screen pixels; this shader only maps pixels to the top screen's
+; rotated clip space (the same Mtx_OrthoTilt citro2d uses, so depth bands
+; layer exactly like citro2d's own triangles) and scales the clip position
+; by the vertex's view depth w: the divide cancels it, but the PICA200 then
+; interpolates texcoords perspective-correctly.
+;
+; Inputs (immediate mode, see trino_shim_3ds.c):
+;   v0 = (x, y, depth, w)   v1 = (u, v, -, -)   v2 = (r, g, b, a) in 0..1
+
+.fvec projection[4]
+
+.constf ones(1.0, 1.0, 1.0, 1.0)
+
+.out outpos position
+.out outtc0 texcoord0
+.out outclr color
+
+.alias inpos v0
+.alias intc v1
+.alias inclr v2
+
+.proc main
+    ; r0 = (x, y, depth, 1)
+    mov r0.xyz, inpos.xyz
+    mov r0.w, ones.w
+
+    dp4 r1.x, projection[0], r0
+    dp4 r1.y, projection[1], r0
+    dp4 r1.z, projection[2], r0
+    dp4 r1.w, projection[3], r0
+
+    mul outpos, inpos.wwww, r1
+    mov outtc0, intc
+    mov outclr, inclr
+    end
+.end

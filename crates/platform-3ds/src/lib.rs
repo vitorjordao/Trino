@@ -38,6 +38,8 @@ mod input;
 mod renderer;
 #[cfg(target_os = "horizon")]
 pub mod runtime;
+#[cfg(target_os = "horizon")]
+mod system;
 
 #[cfg(target_os = "horizon")]
 pub use assets::N3dsAssets;
@@ -47,3 +49,5 @@ pub use audio::N3dsAudio;
 pub use input::N3dsInput;
 #[cfg(target_os = "horizon")]
 pub use renderer::N3dsRenderer;
+#[cfg(target_os = "horizon")]
+pub use system::N3dsPlatform;

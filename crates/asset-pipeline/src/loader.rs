@@ -41,12 +41,29 @@ pub struct LoadedModel {
     pub tmdl: Vec<u8>,
 }
 
+/// A font's glyph table (`TFNT`); its atlas arrives as a sprite with the
+/// same id.
+pub struct LoadedFont {
+    pub logical: String,
+    pub id: u32,
+    pub table: Vec<u8>,
+}
+
+/// Raw bytes of a `[blobs.*]` entry (or a baked scene).
+pub struct LoadedBlob {
+    pub logical: String,
+    pub id: u32,
+    pub bytes: Vec<u8>,
+}
+
 #[derive(Default)]
 pub struct LoadedAssets {
     pub sprites: Vec<LoadedSprite>,
     pub sounds: Vec<LoadedSound>,
     pub music: Vec<LoadedSound>,
     pub models: Vec<LoadedModel>,
+    pub fonts: Vec<LoadedFont>,
+    pub blobs: Vec<LoadedBlob>,
 }
 
 /// Load every baked asset from `out_dir`. `only` filters by handle (used by
@@ -102,8 +119,10 @@ pub fn load_dir(out_dir: &Path, only: Option<&[u32]>) -> Result<LoadedAssets, St
                     return Err(format!("{}: truncated sound data", path.display()));
                 }
                 let samples = data
-                    .chunks_exact(4)
-                    .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|&c| f32::from_le_bytes(c))
                     .collect();
                 let loaded = LoadedSound {
                     logical: entry.logical,
@@ -127,6 +146,21 @@ pub fn load_dir(out_dir: &Path, only: Option<&[u32]>) -> Result<LoadedAssets, St
                     tmdl: bytes,
                 });
             }
+            "font" => {
+                if let Err(e) = trino_core::text::BitmapFont::parse(&bytes) {
+                    return Err(format!("{}: bad font table: {e:?}", path.display()));
+                }
+                out.fonts.push(LoadedFont {
+                    logical: entry.logical,
+                    id: entry.id,
+                    table: bytes,
+                });
+            }
+            "blob" => out.blobs.push(LoadedBlob {
+                logical: entry.logical,
+                id: entry.id,
+                bytes,
+            }),
             other => return Err(format!("unknown asset kind `{other}`")),
         }
     }

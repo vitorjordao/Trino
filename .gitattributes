@@ -9,9 +9,11 @@
 *.json text eol=lf
 *.yml text eol=lf
 *.md text eol=lf
+*.py text eol=lf
 
 # Binary assets.
 *.png binary
 *.gif binary
 *.wav binary
 *.glb binary
+*.ttf binary

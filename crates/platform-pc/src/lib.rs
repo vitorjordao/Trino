@@ -1,7 +1,8 @@
 //! # trino-platform-pc
 //!
 //! The PC backend: implements `trino_core`'s `Renderer` (wgpu), `Audio`
-//! (cpal) and `Input` (keyboard via winit keycodes).
+//! (cpal), `Input` (keyboard via winit keycodes) and `Platform` (clock,
+//! blobs, save file).
 //!
 //! Rendering always goes through an internal offscreen framebuffer at the
 //! resolution of the active [`SimProfile`] (320x240 for N64, 400x240 for
@@ -13,8 +14,10 @@ pub mod audio;
 pub mod input;
 pub mod renderer;
 pub mod sim;
+pub mod system;
 
 pub use audio::PcAudio;
 pub use input::PcInput;
 pub use renderer::{PcRenderer, RendererError};
 pub use sim::SimProfile;
+pub use system::PcPlatform;

@@ -37,7 +37,7 @@ impl std::error::Error for BakeError {}
 pub struct BakedEntry {
     pub logical: String,
     pub id: u32,
-    pub kind: &'static str, // "sprite" | "sound" | "music"
+    pub kind: &'static str, // "sprite" | "sound" | "music" | "model" | "font" | "blob"
     pub file: String,       // output file name
     pub format: String,
     /// True if this bake changed the output bytes on disk.
@@ -158,6 +158,9 @@ pub fn bake_all(
         }
     }
 
+    // Model bounds for baked scenes' `Auto` colliders, collected as models
+    // bake (no second bake per scene).
+    let mut model_bounds = BTreeMap::new();
     for (name, decl) in &manifest.models {
         let logical = format!("models/{name}");
         let id = asset_id(&logical);
@@ -167,7 +170,10 @@ pub fn bake_all(
         }
         let result = (|| -> Result<BakedEntry, String> {
             let source = resolve_source(assets_root, platform, &decl.file)?;
-            let blob = crate::model::bake_model_tmdl(&source)?;
+            let blob = crate::model::bake_model(&source, &decl.options())?;
+            if let Some(b) = crate::model::tmdl_bounds(&blob) {
+                model_bounds.insert(logical.clone(), b);
+            }
             let file = format!("{id:08x}.model");
             let changed = write_if_changed(&out_dir.join(&file), &blob)?;
             Ok(BakedEntry {
@@ -176,6 +182,112 @@ pub fn bake_all(
                 kind: "model",
                 file,
                 format: "TMDL".into(),
+                changed,
+            })
+        })();
+        match result {
+            Ok(entry) => report.entries.push(entry),
+            Err(e) => errors.push(e),
+        }
+    }
+
+    for (name, decl) in &manifest.fonts {
+        let logical = format!("fonts/{name}");
+        let id = asset_id(&logical);
+        if let Some(other) = by_id.insert(id, logical.clone()) {
+            errors.push(format!("hash collision between `{other}` and `{logical}`"));
+            continue;
+        }
+        let result = (|| -> Result<Vec<BakedEntry>, String> {
+            let format = decl.format_for(&logical, platform)?;
+            let source = resolve_source(assets_root, platform, &decl.file)?;
+            let font = crate::font::bake_font(&source, decl)
+                .map_err(|e| format!("font `{logical}`: {e}"))?;
+            let mut atlas = Vec::with_capacity(12 + font.rgba.len());
+            atlas.extend_from_slice(b"TSPR");
+            atlas.extend_from_slice(&font.width.to_le_bytes());
+            atlas.extend_from_slice(&font.height.to_le_bytes());
+            atlas.extend_from_slice(&font.rgba);
+            // The atlas is a sprite under the font's own handle
+            // (`text::atlas_of`); the table is the `font` entry.
+            let sprite_file = format!("{id:08x}.sprite");
+            let table_file = format!("{id:08x}.font");
+            let sprite_changed = write_if_changed(&out_dir.join(&sprite_file), &atlas)?;
+            let table_changed = write_if_changed(&out_dir.join(&table_file), &font.table)?;
+            Ok(vec![
+                BakedEntry {
+                    logical: logical.clone(),
+                    id,
+                    kind: "sprite",
+                    file: sprite_file,
+                    format,
+                    changed: sprite_changed,
+                },
+                BakedEntry {
+                    logical: logical.clone(),
+                    id,
+                    kind: "font",
+                    file: table_file,
+                    format: "TFNT".into(),
+                    changed: table_changed,
+                },
+            ])
+        })();
+        match result {
+            Ok(entries) => report.entries.extend(entries),
+            Err(e) => errors.push(e),
+        }
+    }
+
+    for (name, decl) in &manifest.blobs {
+        let logical = format!("blobs/{name}");
+        let id = asset_id(&logical);
+        if let Some(other) = by_id.insert(id, logical.clone()) {
+            errors.push(format!("hash collision between `{other}` and `{logical}`"));
+            continue;
+        }
+        let result = (|| -> Result<BakedEntry, String> {
+            let source = resolve_source(assets_root, platform, &decl.file)?;
+            let bytes = std::fs::read(&source).map_err(|e| format!("{}: {e}", source.display()))?;
+            let file = format!("{id:08x}.blob");
+            let changed = write_if_changed(&out_dir.join(&file), &bytes)?;
+            Ok(BakedEntry {
+                logical: logical.clone(),
+                id,
+                kind: "blob",
+                file,
+                format: "RAW".into(),
+                changed,
+            })
+        })();
+        match result {
+            Ok(entry) => report.entries.push(entry),
+            Err(e) => errors.push(e),
+        }
+    }
+
+    for (name, decl) in &manifest.scenes {
+        let logical = format!("scenes/{name}");
+        let id = asset_id(&logical);
+        if let Some(other) = by_id.insert(id, logical.clone()) {
+            errors.push(format!("hash collision between `{other}` and `{logical}`"));
+            continue;
+        }
+        let result = (|| -> Result<BakedEntry, String> {
+            let blob = crate::model::bake_scene_with_bounds(
+                assets_root,
+                &decl.file,
+                model_bounds.clone(),
+            )?;
+            let file = format!("{id:08x}.blob");
+            let changed = write_if_changed(&out_dir.join(&file), &blob)?;
+            // A baked scene is a blob to every loader (`Platform::blob`).
+            Ok(BakedEntry {
+                logical: logical.clone(),
+                id,
+                kind: "blob",
+                file,
+                format: "TSCN".into(),
                 changed,
             })
         })();
@@ -203,7 +315,7 @@ pub fn bake_all(
     Ok(report)
 }
 
-fn decode_png(path: &Path) -> Result<(u32, u32, Vec<u8>), String> {
+pub(crate) fn decode_png(path: &Path) -> Result<(u32, u32, Vec<u8>), String> {
     let file = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let decoder = png::Decoder::new(std::io::BufReader::new(file));
     let mut reader = decoder
@@ -220,8 +332,10 @@ fn decode_png(path: &Path) -> Result<(u32, u32, Vec<u8>), String> {
     let rgba = match info.color_type {
         png::ColorType::Rgba => buf,
         png::ColorType::Rgb => buf
-            .chunks_exact(3)
-            .flat_map(|px| [px[0], px[1], px[2], 255])
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .flat_map(|&[r, g, b]| [r, g, b, 255])
             .collect(),
         other => {
             return Err(format!(
@@ -241,8 +355,10 @@ fn decode_wav(path: &Path) -> Result<(u32, Vec<f32>), String> {
     let to_mono = |samples: Vec<f32>| -> Vec<f32> {
         if spec.channels == 2 {
             samples
-                .chunks_exact(2)
-                .map(|c| (c[0] + c[1]) * 0.5)
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|&[l, r]| (l + r) * 0.5)
                 .collect()
         } else {
             samples

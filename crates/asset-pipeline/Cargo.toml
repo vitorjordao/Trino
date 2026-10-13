@@ -13,11 +13,15 @@ watch = ["dep:notify", "dep:notify-debouncer-full"]
 
 [dependencies]
 trino-core = { workspace = true }
+# Baked scenes ([scenes.*] -> TSCN) resolve scenes/prefabs/materials.
+trino-scene = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }
 png = { workspace = true }
 hound = { workspace = true }
 gltf = { workspace = true }
+ron = { workspace = true }
+ab_glyph = { workspace = true }
 notify = { workspace = true, optional = true }
 notify-debouncer-full = { workspace = true, optional = true }
 

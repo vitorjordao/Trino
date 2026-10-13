@@ -174,9 +174,16 @@ pub fn bake_assets(root: &Path, test_mode: bool) -> Result<(), String> {
         let logical = format!("sounds/{name}");
         let id = trino_core::asset_id(&logical);
         let source = resolve_source(&root.join("assets"), Platform::N64, &decl.file)?;
-        std::fs::copy(&source, stage.join(format!("{id:08x}.wav"))).map_err(|e| e.to_string())?;
+        let staged = stage.join(format!("{id:08x}.wav"));
+        stage_wav(&source, &staged, decl.sound_loops())?;
+        // Looping voices (ambient sources) need the loop in the wav64.
+        let looping = if decl.sound_loops() {
+            "--wav-loop true "
+        } else {
+            ""
+        };
         script.push_str(&format!(
-            "audioconv64 -o target/n64/filesystem target/n64/stage/{id:08x}.wav\n"
+            "audioconv64 {looping}-o target/n64/filesystem target/n64/stage/{id:08x}.wav\n"
         ));
         index.push_str(&format!("{id:08x}\tsound\t{id:08x}.wav64\n"));
     }
@@ -184,11 +191,17 @@ pub fn bake_assets(root: &Path, test_mode: bool) -> Result<(), String> {
         let logical = format!("music/{name}");
         let id = trino_core::asset_id(&logical);
         let source = resolve_source(&root.join("assets"), Platform::N64, &decl.file)?;
-        std::fs::copy(&source, stage.join(format!("{id:08x}.wav"))).map_err(|e| e.to_string())?;
+        stage_wav(
+            &source,
+            &stage.join(format!("{id:08x}.wav")),
+            decl.music_loops(),
+        )?;
         // Loop metadata is baked into the wav64 on the N64; the runtime's
-        // `looped` flag is a no-op there (see the shim).
+        // `looped` flag is a no-op there (see the shim). Stingers declare
+        // `loop = false`.
+        let looping = if decl.music_loops() { "true" } else { "false" };
         script.push_str(&format!(
-            "audioconv64 --wav-loop true -o target/n64/filesystem target/n64/stage/{id:08x}.wav\n"
+            "audioconv64 --wav-loop {looping} -o target/n64/filesystem target/n64/stage/{id:08x}.wav\n"
         ));
         index.push_str(&format!("{id:08x}\tmusic\t{id:08x}.wav64\n"));
     }
@@ -197,9 +210,47 @@ pub fn bake_assets(root: &Path, test_mode: bool) -> Result<(), String> {
         let id = trino_core::asset_id(&logical);
         let source = resolve_source(&root.join("assets"), Platform::N64, &decl.file)?;
         // TMDL is portable: same blob on every platform, no container tool.
-        let blob = trino_asset_pipeline::bake_model_tmdl(&source)?;
+        let blob = trino_asset_pipeline::bake_model(&source, &decl.options())?;
         std::fs::write(fsdir.join(format!("{id:08x}.tmdl")), blob).map_err(|e| e.to_string())?;
         index.push_str(&format!("{id:08x}\tmodel\t{id:08x}.tmdl\n"));
+    }
+
+    for (name, decl) in &manifest.fonts {
+        let logical = format!("fonts/{name}");
+        let id = trino_core::asset_id(&logical);
+        let format = decl.format_for(&logical, Platform::N64)?;
+        let mksprite_format = match format.as_str() {
+            "RGBA5551" => "RGBA16",
+            other => other,
+        };
+        let source = resolve_source(&root.join("assets"), Platform::N64, &decl.file)?;
+        let font = trino_asset_pipeline::bake_font(&source, decl)
+            .map_err(|e| format!("font `{logical}`: {e}"))?;
+        // Atlas -> sprite (mksprite, same handle); table -> verbatim TFNT.
+        let png = trino_asset_pipeline::font::encode_png(font.width, font.height, &font.rgba)?;
+        std::fs::write(stage.join(format!("{id:08x}.png")), png).map_err(|e| e.to_string())?;
+        script.push_str(&format!(
+            "mksprite --format {mksprite_format} -o target/n64/filesystem target/n64/stage/{id:08x}.png\n"
+        ));
+        std::fs::write(fsdir.join(format!("{id:08x}.font")), &font.table)
+            .map_err(|e| e.to_string())?;
+        index.push_str(&format!("{id:08x}\tsprite\t{id:08x}.sprite\n"));
+        index.push_str(&format!("{id:08x}\tfont\t{id:08x}.font\n"));
+    }
+    for (name, decl) in &manifest.blobs {
+        let logical = format!("blobs/{name}");
+        let id = trino_core::asset_id(&logical);
+        let source = resolve_source(&root.join("assets"), Platform::N64, &decl.file)?;
+        std::fs::copy(&source, fsdir.join(format!("{id:08x}.blob"))).map_err(|e| e.to_string())?;
+        index.push_str(&format!("{id:08x}\tblob\t{id:08x}.blob\n"));
+    }
+    for (name, decl) in &manifest.scenes {
+        let logical = format!("scenes/{name}");
+        let id = trino_core::asset_id(&logical);
+        // TSCN is portable: the same blob on every platform.
+        let blob = trino_asset_pipeline::bake_scene(&root.join("assets"), &decl.file)?;
+        std::fs::write(fsdir.join(format!("{id:08x}.blob")), blob).map_err(|e| e.to_string())?;
+        index.push_str(&format!("{id:08x}\tblob\t{id:08x}.blob\n"));
     }
 
     std::fs::write(fsdir.join("index.tsv"), index).map_err(|e| e.to_string())?;
@@ -213,6 +264,35 @@ pub fn bake_assets(root: &Path, test_mode: bool) -> Result<(), String> {
         return Err("asset baking failed".into());
     }
     Ok(())
+}
+
+/// Stage a wav for audioconv64: copied as-is, or — when it loops — with
+/// its frame count trimmed to a multiple of 16 (libdragon asserts the wav64
+/// loop length is; the few dropped samples are inaudible).
+fn stage_wav(source: &Path, out: &Path, looped: bool) -> Result<(), String> {
+    if !looped {
+        return std::fs::copy(source, out)
+            .map(|_| ())
+            .map_err(|e| format!("{}: {e}", source.display()));
+    }
+    let mut reader =
+        hound::WavReader::open(source).map_err(|e| format!("{}: {e}", source.display()))?;
+    let spec = reader.spec();
+    let samples: Vec<i32> = reader
+        .samples::<i32>()
+        .collect::<Result<_, _>>()
+        .map_err(|e| format!("{}: {e}", source.display()))?;
+    let ch = spec.channels as usize;
+    let frames = samples.len() / ch;
+    let keep = frames / 16 * 16;
+    if keep == 0 {
+        return Err(format!("{}: too short to loop", source.display()));
+    }
+    let mut w = hound::WavWriter::create(out, spec).map_err(|e| e.to_string())?;
+    for s in &samples[..keep * ch] {
+        w.write_sample(*s).map_err(|e| e.to_string())?;
+    }
+    w.finalize().map_err(|e| e.to_string())
 }
 
 fn cargo_build(root: &Path) -> Result<(), String> {
@@ -244,12 +324,22 @@ fn cargo_build(root: &Path) -> Result<(), String> {
 /// --no-warn-mismatch for the o32 staticlib + o64 libdragon mix), then
 /// n64sym + strip + n64elfcompress + mkdfs + n64tool, mirroring the %.z64
 /// recipe.
+///
+/// `-u mem* -Wl,-lc` ahead of the staticlib (`-Wl,`: the gcc driver drops
+/// a repeated plain `-lc`): Rust's `compiler_builtins` defines
+/// `memcpy`/`memset`/`memmove`/`memcmp` as *weak* generic loops, and once
+/// its object is linked the linker never pulls newlib's strong, hand-tuned
+/// MIPS versions — every struct copy in the ROM (libdragon's included) then
+/// ran ~5x slower. Undefining them first makes the first `-lc` scan supply
+/// newlib's; [`check_mem_symbols`] fails the build if the map says
+/// otherwise.
 fn pack_rom(root: &Path) -> Result<(), String> {
     println!("[n64] linking + packing ROM...");
     let script = format!(
         "set -e\n\
-         mips64-elf-g++ -o target/n64/trino.elf target/n64/shim.o {STATICLIB} \
-         -lc -mabi=o64 -Wl,-g -Wl,-L$N64_INST/mips64-elf/lib \
+         mips64-elf-g++ -o target/n64/trino.elf target/n64/shim.o \
+         -Wl,-u,memcpy -Wl,-u,memset -Wl,-u,memmove -Wl,-u,memcmp -Wl,-lc \
+         {STATICLIB} -lc -mabi=o64 -Wl,-g -Wl,-L$N64_INST/mips64-elf/lib \
          -Wl,-ldragon -Wl,-lm -Wl,-ldragonsys -Wl,-Tn64.ld \
          -Wl,--gc-sections -Wl,--no-warn-mismatch \
          -Wl,--wrap -Wl,__do_global_ctors \
@@ -262,13 +352,51 @@ fn pack_rom(root: &Path) -> Result<(), String> {
          n64elfcompress -o . -c 1 trino.elf.stripped\n\
          mkdfs trino.dfs filesystem >/dev/null\n\
          n64tool --title Trino --toc --output trino.z64 --align 256 trino.elf.stripped \
-         --align 8 trino.elf.sym --align 16 trino.dfs\n"
+         --align 8 trino.elf.sym --align 16 trino.dfs\n\
+         ed64romconfig --savetype eeprom16k trino.z64\n"
     );
     let status = docker_sh(root, &script).map_err(|e| format!("docker: {e}"))?;
     if !status.success() {
         return Err("ROM packing failed".into());
     }
+    let map = std::fs::read_to_string(root.join("target/n64/trino.map"))
+        .map_err(|e| format!("trino.map: {e}"))?;
+    check_mem_symbols(&map)?;
     println!("[n64] ROM: target/n64/trino.z64");
+    Ok(())
+}
+
+/// The linker map must place `memcpy`/`memset`/`memmove`/`memcmp` from
+/// newlib (`libc.a`), never from Rust's `compiler_builtins` (see
+/// [`pack_rom`]).
+fn check_mem_symbols(map: &str) -> Result<(), String> {
+    // Only the memory map counts ("Discarded input sections" lists the
+    // losing weak copies too).
+    let map = map
+        .split_once("Linker script and memory map")
+        .map_or(map, |(_, m)| m);
+    for sym in ["memcpy", "memset", "memmove", "memcmp"] {
+        let section = format!(".text.{sym}");
+        let mut lines = map.lines();
+        while let Some(line) = lines.next() {
+            let t = line.trim_start();
+            if !(t == section || t.starts_with(&format!("{section} "))) {
+                continue;
+            }
+            // The input file is on this line or wraps to the next one.
+            let file = if t.contains("0x") {
+                line.to_string()
+            } else {
+                lines.next().unwrap_or_default().to_string()
+            };
+            if file.contains("compiler_builtins") {
+                return Err(format!(
+                    "{sym} links from Rust's compiler_builtins (slow generic loop), \
+                     not newlib — keep `-u {sym} -Wl,-lc` ahead of the staticlib"
+                ));
+            }
+        }
+    }
     Ok(())
 }
 
@@ -291,9 +419,44 @@ pub fn build(test_mode: bool) -> ExitCode {
     }
 }
 
+/// ares executable: `$TRINO_ARES` (a path, or `docker` for the
+/// `trino-ares` image — see `cargo xtask emulators setup ares`), else
+/// `ares-v148/` at the repo root.
 fn ares_exe(root: &Path) -> Option<PathBuf> {
+    if let Ok(env) = std::env::var("TRINO_ARES") {
+        let p = PathBuf::from(env);
+        return (p.as_os_str() == "docker" || p.exists()).then_some(p);
+    }
     let candidates = [root.join("ares-v148/ares.exe"), root.join("ares-v148/ares")];
     candidates.into_iter().find(|p| p.exists())
+}
+
+/// Command that boots `rom` in ares with `args` (native or in Docker).
+/// Returns the command and, for Docker, the container name to remove.
+fn ares_command(ares: &Path, rom: &Path, args: &[&str]) -> (Command, Option<String>) {
+    if ares.as_os_str() != "docker" {
+        let mut cmd = Command::new(ares);
+        cmd.args(args).arg(rom);
+        return (cmd, None);
+    }
+    let name = format!("trino-ares-{}", std::process::id());
+    let dir = rom.parent().expect("rom in a directory");
+    let file = rom.file_name().expect("rom file name").to_string_lossy();
+    let mut cmd = Command::new("docker");
+    cmd.args(["run", "--rm", "--init", "--name", &name, "-v"])
+        .arg(format!("{}:/rom:ro", dir.display()))
+        .arg(crate::emulators::ARES_IMAGE)
+        .args(args)
+        // Saves (EEPROM) go to a scratch dir inside the container: a
+        // read-only save path pops a modal dialog that blocks the boot.
+        .args([
+            "--setting",
+            "Audio/Driver=None",
+            "--setting",
+            "Paths/Saves=/tmp/",
+        ])
+        .arg(format!("/rom/{file}"));
+    (cmd, Some(name))
 }
 
 pub fn run() -> ExitCode {
@@ -357,7 +520,7 @@ pub fn watch() -> ExitCode {
         None,
         move |result: DebounceEventResult| {
             if let Ok(events) = result
-                && !events.is_empty()
+                && crate::real_change(&events)
             {
                 let _ = tx.send(());
             }
@@ -404,7 +567,7 @@ pub fn watch() -> ExitCode {
 
 /// Boot the test ROM in ares and watch stdout for the ISViewer magic
 /// strings. Kills the emulator on verdict or timeout.
-pub fn test() -> ExitCode {
+pub fn test(bless: bool) -> ExitCode {
     let code = build(true);
     if code != ExitCode::SUCCESS {
         return code;
@@ -415,13 +578,15 @@ pub fn test() -> ExitCode {
         return ExitCode::FAILURE;
     };
 
-    println!("[n64] booting test ROM in ares (120s timeout)...");
-    let mut child = match Command::new(&ares)
-        .arg(root.join("target/n64/trino.z64"))
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-    {
+    let timeout = crate::emulators::timeout_secs();
+    println!("[n64] booting test ROM in ares ({timeout}s timeout)...");
+    // Native-resolution RDP: the golden frame is compared pixel-exactly.
+    let (mut cmd, container) = ares_command(
+        &ares,
+        &root.join("target/n64/trino.z64"),
+        &["--no-file-prompt", "--setting", "Video/Quality=SD"],
+    );
+    let mut child = match cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() {
         Ok(c) => c,
         Err(e) => {
             eprintln!("[n64] failed to launch ares: {e}");
@@ -451,15 +616,24 @@ pub fn test() -> ExitCode {
         }
     });
 
-    let deadline = Instant::now() + Duration::from_secs(120);
+    let deadline = Instant::now() + Duration::from_secs(timeout);
+    let mut fb = crate::fbgolden::FbCapture::default();
+    let mut perf_scenes = Vec::new();
     let verdict = loop {
         let left = deadline.saturating_duration_since(Instant::now());
         if left.is_zero() {
-            break Err("timeout: no TRINO_TEST_* output within 120s".to_string());
+            break Err(format!("timeout: no TRINO_TEST_* output within {timeout}s"));
         }
         match rx.recv_timeout(left.min(Duration::from_millis(500))) {
             Ok(line) => {
+                // Framebuffer dump rows are collected, not echoed.
+                if fb.feed(&line) {
+                    continue;
+                }
                 println!("[ares] {line}");
+                if let Some(scene) = crate::perf::SceneLine::parse(&line) {
+                    perf_scenes.push(scene);
+                }
                 if line.contains("TRINO_TEST_PASS") {
                     break Ok(());
                 }
@@ -474,6 +648,29 @@ pub fn test() -> ExitCode {
         }
     };
     let _ = child.kill();
+    if let Some(name) = container {
+        let _ = Command::new("docker")
+            .args(["rm", "-f", &name])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+
+    // Emulator golden image (the showcase's first frame).
+    let verdict = verdict.and_then(|()| {
+        let img = fb.image().map_err(|e| format!("golden frame: {e}"))?;
+        let msg = crate::fbgolden::check(&root, "n64", "showcase", img, bless)?;
+        println!("[n64] golden frame: {msg}");
+        Ok(())
+    });
+    // Performance gates: same T&L work as the PC baseline, frame costs
+    // under the committed ceilings.
+    let verdict = verdict.and_then(|()| {
+        let table = crate::perf::gate(&root, &perf_scenes, bless)
+            .map_err(|e| format!("perf gate:\n{e}"))?;
+        println!("[n64] perf (emulated us per frame):\n{table}");
+        Ok(())
+    });
 
     match verdict {
         Ok(()) => {
@@ -484,5 +681,26 @@ pub fn test() -> ExitCode {
             eprintln!("[n64] TEST FAIL: {e}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mem_symbols_must_come_from_newlib() {
+        let good = "Discarded input sections\n \
+                    .text.memcpy   0x00000000       0x1c libtrino.a(compiler_builtins-x.o)\n\
+                    Linker script and memory map\n \
+                    .text          0x800014a0       0x60 libc.a(libc_a-memcpy.o)\n";
+        assert!(check_mem_symbols(good).is_ok());
+        let bad = "Linker script and memory map\n \
+                   .text.memcpy   0x800230b8       0x1c libtrino.a(compiler_builtins-4d4.o)\n";
+        assert!(check_mem_symbols(bad).unwrap_err().contains("memcpy"));
+        // Long section names wrap the input file to the next line.
+        let wrapped = "Linker script and memory map\n .text.memmove\n                \
+                       0x80023000       0x40 libtrino.a(compiler_builtins-9.o)\n";
+        assert!(check_mem_symbols(wrapped).unwrap_err().contains("memmove"));
     }
 }

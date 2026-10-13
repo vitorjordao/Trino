@@ -1,13 +1,13 @@
 (
-    version: 1,
+    version: 2,
     name: "main",
     entities: [
         (
             name: "player",
             transform: (
-                pos: (144.0, 104.0),
-                scale: (1.0, 1.0),
-                rotation: 0.0,
+                pos: (144.0, 104.0, 0.0),
+                rot: (0.0, 0.0, 0.0),
+                scale: (1.0, 1.0, 1.0),
             ),
             sprite: Some((
                 path: "sprites/player",

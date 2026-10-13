@@ -1,0 +1,8 @@
+// Trino placeholder model ("fake object"). Edit and save: it hot-reloads.
+// Replace with real art by pointing the manifest `file` at a .glb —
+// the logical path (and every reference to it) stays the same.
+(
+    shape: Torus(radius: 0.35, tube: 0.09),
+    color: (255, 206, 64, 255),
+    segments: 16,
+)

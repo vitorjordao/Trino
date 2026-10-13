@@ -217,6 +217,55 @@ fn n64_look_scene_matches_golden() {
     check_golden(&renderer, "n64_look_scene", MAX_CHANNEL_DIFF_5551);
 }
 
+/// The VI dedither filter: a smooth gradient rendered through the 16-bit
+/// dither comes out with a smaller pixel-to-pixel error than without it,
+/// and flat colors stay exactly flat (only differing neighbours move a
+/// pixel).
+#[test]
+fn vi_dedither_smooths_the_dither_and_keeps_flat_areas() {
+    let Some(mut renderer) = headless_renderer(SimProfile::N64) else {
+        return;
+    };
+    renderer.set_n64_look(true);
+    // 64 px horizontal ramp of a dark blue, one value per column: the
+    // dither alternates between neighbouring 5-bit levels.
+    let ramp: Vec<u8> = (0..64u32)
+        .flat_map(|x| [10, 20, 40 + (x * 24 / 64) as u8, 255])
+        .collect();
+    let ramp = (0..16).flat_map(|_| ramp.clone()).collect::<Vec<u8>>();
+    renderer.upload_sprite(SpriteId(7), 64, 16, &ramp);
+    let frame = |r: &mut PcRenderer| {
+        r.begin_frame(Color::rgb(120, 60, 200));
+        r.draw_sprite(SpriteId(7), Vec2::new(0.0, 0.0), &SpriteParams::default());
+        r.end_frame();
+        r.read_offscreen()
+    };
+    let (w, _) = renderer.internal_size();
+    // Mean |pixel - true value| of the blue channel over the ramp interior.
+    let error = |px: &[u8]| {
+        let mut sum = 0.0;
+        let mut n = 0.0;
+        for y in 2..14u32 {
+            for x in 2..62u32 {
+                let truth = (40 + x * 24 / 64) as f32;
+                sum += (px[((y * w + x) * 4 + 2) as usize] as f32 - truth).abs();
+                n += 1.0;
+            }
+        }
+        sum / n
+    };
+    renderer.set_vi_dedither(false);
+    let dithered = frame(&mut renderer);
+    renderer.set_vi_dedither(true);
+    let restored = frame(&mut renderer);
+    let (e0, e1) = (error(&dithered), error(&restored));
+    eprintln!("vi dedither: mean error {e0:.2} -> {e1:.2}");
+    assert!(e1 < e0 * 0.8, "dedither error {e1:.2} vs dithered {e0:.2}");
+    // Far from the ramp the clear color is flat: untouched by the filter.
+    let at = ((100 * w + 200) * 4) as usize;
+    assert_eq!(dithered[at..at + 4], restored[at..at + 4]);
+}
+
 #[test]
 fn n3ds_scene_matches_golden() {
     // 400x240 + bilinear sprite sampling (the 3DS GPU default).
@@ -328,8 +377,20 @@ fn strict_mode_rejects_texture_over_budget() {
     };
     renderer.set_strict(true);
     // 64x64 @ RGBA5551 (2 bytes/pixel on N64) = 8192 bytes > 4096 TMEM.
+    // The check runs per draw, on what that draw loads: a 32x32 region of
+    // the same sprite (2 KB) fits; the whole sprite does not.
+    renderer.upload_sprite(SpriteId(3), 64, 64, &vec![255u8; 64 * 64 * 4]);
+    renderer.begin_frame(Color::BLACK);
+    renderer.draw_sprite(
+        SpriteId(3),
+        Vec2::ZERO,
+        &SpriteParams {
+            region: Some(trino_core::Rect::new(0.0, 0.0, 32.0, 32.0)),
+            ..SpriteParams::DEFAULT
+        },
+    );
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        renderer.upload_sprite(SpriteId(3), 64, 64, &vec![255u8; 64 * 64 * 4]);
+        renderer.draw_sprite(SpriteId(3), Vec2::ZERO, &SpriteParams::DEFAULT);
     }));
     let err = result.expect_err("strict mode must reject a 64x64 sprite on N64");
     let msg = err

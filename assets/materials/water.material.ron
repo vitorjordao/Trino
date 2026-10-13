@@ -1,0 +1,6 @@
+(
+    version: 1,
+    tint: (200, 230, 255, 255),
+    shading: Unlit,
+    double_sided: true,
+)

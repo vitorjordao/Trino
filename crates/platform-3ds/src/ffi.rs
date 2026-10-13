@@ -17,6 +17,11 @@ pub struct TrinoBlit {
     pub tint: u32,
     /// citro2d z (larger = nearer): layers sprites above/below the 3D band.
     pub depth: f32,
+    /// Source sub-rect in sprite pixels; `src_w == 0` = whole sprite.
+    pub src_x: i32,
+    pub src_y: i32,
+    pub src_w: i32,
+    pub src_h: i32,
 }
 
 unsafe extern "C" {
@@ -35,11 +40,13 @@ unsafe extern "C" {
     pub fn trino_sprite_size(sheet: *mut c_void) -> u32;
     pub fn trino_sprite_blit(sheet: *mut c_void, params: *const TrinoBlit);
 
-    /// No-op on 3DS (shim-API symmetry with the N64).
-    pub fn trino_3d_begin();
-    /// pts: 6 floats (x/y per vertex); colors: 12 bytes (rgba per vertex);
-    /// depth: citro2d z for the whole triangle (larger = nearer).
-    pub fn trino_tri(pts: *const f32, colors: *const u8, depth: f32);
+    /// Draw `count` vertices (`count / 3` triangles) through citro3d with
+    /// per-vertex depth. 10 floats per vertex: x, y (screen px), depth
+    /// (citro2d z, larger = nearer), w (view depth for perspective-correct
+    /// UVs, 1 = screen-linear), u, v (0..1 in the image), r, g, b, a (0..1).
+    /// `sheet`: texture (image 0; `clamp` != 0 = billboard addressing with
+    /// a half-alpha cutout), null = vertex colors only.
+    pub fn trino_3d_draw(verts: *const f32, count: u32, sheet: *mut c_void, clamp: u32);
 
     pub fn trino_joypad_buttons() -> u32;
     /// (x as i16 as u16) << 16 | (y as i16 as u16).
@@ -49,11 +56,28 @@ unsafe extern "C" {
     pub fn trino_wav_play(wav: *mut c_void, channel: u32, looped: u32);
     pub fn trino_channel_stop(channel: u32);
     pub fn trino_audio_poll();
+    /// Per-channel left/right volume, fixed point (65536 = 1.0): scalar
+    /// floats after an int are unsafe across the N64's o32/o64 boundary.
+    pub fn trino_ch_volume(channel: u32, lvol_q16: u32, rvol_q16: u32);
+    pub fn trino_ch_playing(channel: u32) -> i32;
+    pub fn trino_mixer_set_vol(vol_q16: u32);
 
     /// Path is romfs-relative, e.g. `/index.tsv` (no `romfs:/`).
     pub fn trino_file_exists(romfs_relative_path: *const c_char) -> i32;
     pub fn trino_asset_load(romfs_path: *const c_char, size_out: *mut u32) -> *mut c_void;
     pub fn trino_free(ptr: *mut c_void);
+
+    /// Test hook: RGBA8888 of the top screen at (x, y); 0 = unavailable.
+    pub fn trino_debug_pixel(x: u32, y: u32) -> u32;
+    /// Test hook: print the top screen as `TRINO_FBR:` rows (RGBA5551) and
+    /// a `TRINO_FB_END:` hash line — the N64 dump format.
+    pub fn trino_debug_fb_dump();
+
+    /// Save file on the SD card: returns its size (0 = none, -1 = error),
+    /// copying up to `cap` bytes into `dest`.
+    pub fn trino_save_load(dest: *mut u8, cap: u32) -> i32;
+    /// Atomically replace the save file; 0 = ok, -1 = error.
+    pub fn trino_save_store(src: *const u8, len: u32) -> i32;
 
     // newlib, for the global allocator.
     pub fn memalign(align: usize, size: usize) -> *mut c_void;

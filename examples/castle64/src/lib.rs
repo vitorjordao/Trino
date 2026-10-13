@@ -1,9 +1,10 @@
 //! castle64 — um "Mario 64 de bolso" para estressar o pipeline 3D do Trino.
 //!
 //! Hub (pátio do castelo) + 3 fases de plataforma + sala do trono, tudo em
-//! geometria de cubos vertex-lit (`draw_model`), com física 3D própria
-//! (`physics.rs`), câmera orbital, moedas, estrelas, inimigos com stomp,
-//! lava, plataformas móveis e HUD de sprites — zero alocação, `no_std`,
+//! geometria de cubos vertex-lit (`draw_model`), com a física AABB do
+//! engine (`trino_core::physics`), câmera orbital, moedas, estrelas,
+//! inimigos com stomp, lava, plataformas móveis e HUD com texto bitmap —
+//! zero alocação, `no_std`,
 //! determinístico nas três plataformas.
 //!
 //! Controles (PC entre parênteses): stick/d-pad move relativo à câmera,
@@ -14,14 +15,17 @@
 
 pub mod bot;
 mod levels;
-mod physics;
+pub mod perf;
+pub mod selftest;
 
+use core::fmt::Write as _;
 use levels::{BlockKind, DoorColor, LEVELS, Level, TOTAL_STARS};
-use physics::{Aabb, move_aabb};
 use trino_core::math3d::{atan2, cos, sin};
+use trino_core::physics::{self, Aabb, move_aabb};
 use trino_core::{
-    Audio, Button, Camera3, Color, Game, InputState, Material, ModelId, ModelParams, MusicId,
-    Renderer, SoundId, SpriteId, SpriteParams, Transform3, Vec2, Vec3,
+    Audio, Button, Camera3, Color, DEFAULT_LIGHT, FontId, Game, InputState, Material, ModelId,
+    ModelParams, MusicId, Renderer, SoundId, SpriteId, SpriteParams, TextAlign, TextBuf,
+    TextParams, Transform3, Vec2, Vec3,
 };
 
 // ------------------------------------------------------------ handles ----
@@ -41,24 +45,14 @@ const M_BOAR: ModelId = ModelId::from_path("models/c64_boar");
 const M_SHADOW: ModelId = ModelId::from_path("models/c64_shadow");
 /// Porta neutra gerada, tingida por destino (verde/vermelha/azul/cinza).
 const M_DOOR_FRAME: ModelId = ModelId::from_path("models/c64_door_frame");
-/// Entrada do castelo: doorway low-poly real (KayKit Dungeon Remastered,
-/// CC0) — textura de paleta amostrada para vertex colors no bake.
-const M_DOOR_KAYKIT: ModelId = ModelId::from_path("models/c64_door");
+/// Entrada do castelo: a doorway do KayKit Dungeon Remastered (CC0) refeita
+/// no Blender em 75 tris (`tools/blender/castle64_models.py`), mesmas medidas.
+const M_DOOR_CASTLE: ModelId = ModelId::from_path("models/c64_door");
 
 const S_COIN: SpriteId = SpriteId::from_path("sprites/coin");
 const S_STAR: SpriteId = SpriteId::from_path("sprites/c64_star");
-const S_DIGITS: [SpriteId; 10] = [
-    SpriteId::from_path("sprites/c64_digit0"),
-    SpriteId::from_path("sprites/c64_digit1"),
-    SpriteId::from_path("sprites/c64_digit2"),
-    SpriteId::from_path("sprites/c64_digit3"),
-    SpriteId::from_path("sprites/c64_digit4"),
-    SpriteId::from_path("sprites/c64_digit5"),
-    SpriteId::from_path("sprites/c64_digit6"),
-    SpriteId::from_path("sprites/c64_digit7"),
-    SpriteId::from_path("sprites/c64_digit8"),
-    SpriteId::from_path("sprites/c64_digit9"),
-];
+/// HUD text: the engine's default pixel font (atlas + glyph table).
+const F_HUD: FontId = selftest::FONT;
 
 const SND_JUMP: SoundId = SoundId::from_path("sounds/jump");
 const SND_COIN: SoundId = SoundId::from_path("sounds/coin");
@@ -531,7 +525,7 @@ impl Game for Castle64Game {
         );
         let want = trino_core::math3d::sqrt(back.dot(back));
         let dir = back * (1.0 / want);
-        let hit = physics::raycast_aabbs(target, dir, want, &boxes[..n_solids]);
+        let hit = physics::raycast_distance(target, dir, want, &boxes[..n_solids]);
         let cam_dist = (hit - 0.4).clamp(CAM_MIN_DIST, want);
         let camera = Camera3 {
             eye: target + dir * cam_dist,
@@ -539,6 +533,10 @@ impl Game for Castle64Game {
             ..Camera3::default()
         };
         renderer.set_camera(&camera);
+        // Light is renderer state and outlives a frame: declare it every
+        // frame, or the game inherits whatever drew before (on consoles the
+        // self-test's showcase leaves its colored, fogged light behind).
+        renderer.set_light(&DEFAULT_LIGHT);
         let eye = camera.eye;
         // A engine ordena os triângulos do batch entre meshes; aqui só
         // cortamos o que está longe demais.
@@ -565,9 +563,7 @@ impl Game for Castle64Game {
             // Lava pulsa via tint por draw (ModelParams).
             let params = if b.kind == BlockKind::Lava {
                 let glow = 190 + (65.0 * tri_wave(self.level_time * 0.6)) as u8;
-                ModelParams {
-                    tint: Color::rgb(255, glow, glow),
-                }
+                ModelParams::tinted(Color::rgb(255, glow, glow))
             } else {
                 plain
             };
@@ -599,8 +595,8 @@ impl Game for Castle64Game {
             }
         }
 
-        // Portas: a dourada do castelo é a doorway REAL (KayKit, CC0, baked
-        // de glTF texturizado); as de fase são a porta neutra tingida.
+        // Portas: a dourada do castelo é a doorway (KayKit, CC0, refeita no
+        // Blender); as de fase são a porta neutra tingida.
         for p in l.portals {
             if !visible(p.pos) {
                 continue;
@@ -611,18 +607,16 @@ impl Game for Castle64Game {
                 DoorColor::Red => (M_DOOR_FRAME, Vec3::ONE, Color::rgb(230, 95, 80)),
                 DoorColor::Blue => (M_DOOR_FRAME, Vec3::ONE, Color::rgb(95, 130, 235)),
                 DoorColor::Gold => (
-                    M_DOOR_KAYKIT,
+                    M_DOOR_CASTLE,
                     // Doorway de 4x4 do pack escalada para a fachada.
                     Vec3::new(0.62, 0.62, 0.62),
                     Color::rgb(255, 225, 140),
                 ),
             };
             let params = if locked {
-                ModelParams {
-                    tint: Color::rgb(115, 115, 120),
-                }
+                ModelParams::tinted(Color::rgb(115, 115, 120))
             } else {
-                ModelParams { tint: open_tint }
+                ModelParams::tinted(open_tint)
             };
             renderer.draw_model(
                 model,
@@ -681,9 +675,7 @@ impl Game for Castle64Game {
                     scale: Vec3::new(4.0, 4.0, 4.0),
                 },
                 Material::VertexLit,
-                &ModelParams {
-                    tint: Color::rgb(255, 255, warm),
-                },
+                &ModelParams::tinted(Color::rgb(255, 255, warm)),
             );
         }
 
@@ -785,28 +777,33 @@ impl Game for Castle64Game {
         }
 
         // ---- HUD (sprites por cima do 3D) ----
-        let digits = |renderer: &mut dyn Renderer, value: u32, x: f32, y: f32| {
-            let v = value.min(99);
-            let scale = SpriteParams {
-                scale: Vec2::new(2.0, 2.0),
-                ..Default::default()
-            };
-            renderer.draw_sprite(S_DIGITS[(v / 10) as usize], Vec2::new(x, y), &scale);
-            renderer.draw_sprite(S_DIGITS[(v % 10) as usize], Vec2::new(x + 18.0, y), &scale);
+        // Counters as bitmap text (no allocator: fixed TextBuf + write!).
+        let hud = TextParams {
+            scale: 2.0,
+            ..TextParams::DEFAULT
         };
+        let mut buf = TextBuf::<8>::new();
+        let _ = write!(buf, "x{:02}", self.total_coins().min(99));
         renderer.draw_sprite(S_COIN, Vec2::new(6.0, 6.0), &SpriteParams::default());
-        digits(renderer, self.total_coins(), 26.0, 6.0);
+        renderer.draw_text(F_HUD, Vec2::new(26.0, 6.0), buf.as_str(), &hud);
         renderer.draw_sprite(
             S_STAR,
-            Vec2::new(self.screen.x - 60.0, 6.0),
+            Vec2::new(self.screen.x - 70.0, 6.0),
             &SpriteParams {
                 scale: Vec2::new(2.0, 2.0),
                 ..Default::default()
             },
         );
-        digits(renderer, self.star_count(), self.screen.x - 40.0, 6.0);
+        buf.clear();
+        let _ = write!(buf, "x{:02}", self.star_count().min(99));
+        renderer.draw_text(
+            F_HUD,
+            Vec2::new(self.screen.x - 50.0, 6.0),
+            buf.as_str(),
+            &hud,
+        );
 
-        // Star get: estrela grande no centro da tela.
+        // Star get: estrela grande no centro da tela + legenda.
         if matches!(self.state, State::StarGet(_)) {
             renderer.draw_sprite(
                 S_STAR,
@@ -814,6 +811,16 @@ impl Game for Castle64Game {
                 &SpriteParams {
                     scale: Vec2::new(8.0, 8.0),
                     ..Default::default()
+                },
+            );
+            renderer.draw_text(
+                F_HUD,
+                Vec2::new(self.screen.x * 0.5, self.screen.y * 0.5 + 24.0),
+                "STAR GET!",
+                &TextParams {
+                    scale: 2.0,
+                    tint: Color::rgb(255, 230, 90),
+                    align: TextAlign::Center,
                 },
             );
         }
@@ -1157,7 +1164,7 @@ mod tests {
                     m if m == M_ARM || m == M_LEG => 24,
                     m if m == M_BOAR => 120,
                     m if m == M_DOOR_FRAME => 60,
-                    m if m == M_DOOR_KAYKIT => 1068,
+                    m if m == M_DOOR_CASTLE => 1068,
                     _ => 12,
                 };
             }

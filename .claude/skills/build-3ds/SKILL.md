@@ -6,7 +6,8 @@ description: Build the Nintendo 3DS app (target/3ds/trino.3dsx) with the local d
 # build-3ds
 
 ```
-cargo xtask build 3ds      # shim + assets + Rust + .3dsx (all local, no Docker)
+cargo xtask build 3ds              # shim + assets + Rust + .3dsx (all local, no Docker)
+cargo xtask build 3ds --selftest   # the self-test app `test 3ds --no-build` boots (CI artifact)
 ```
 
 Produces `target/3ds/trino.3dsx`. Everything runs on the local devkitPro
@@ -26,13 +27,33 @@ install (auto-detected at `$DEVKITPRO`, `C:\devkitPro` or `/opt/devkitpro`).
    the rest.
 4. `pack_3dsx` — `smdhtool` (metadata) + `3dsxtool --romfs` → `.3dsx`.
 
+**All 3D goes through one citro3d path** (`trino_3d_draw`): `tri3d.v.pica` is
+assembled by `picasso` into `target/3ds/tri3d_shbin.h`, which the shim includes. The
+renderer sorts the batch into texture runs and hands each run over in one call (10
+floats per vertex: x, y, depth, w, u, v, r, g, b, a); the shim copies it into a
+per-frame vertex buffer in linear memory (16 384 triangles; `TRINO_WARN:` once when
+full — `C3D_FRAME_SYNCDRAW` makes restarting it each frame safe), flushes the data
+cache and issues `C3D_DrawArrays`. Then `C2D_Prepare()` hands the GPU back to
+citro2d for sprites. `apps/3ds/build.rs` relinks when only the shim object changes
+(`TRINO_3DS_SHIM`), and the app's stack is 256 KB (`__stacksize__`).
+
+- **Never draw 3D with `C2D_DrawTriangle`.** It takes one depth for the whole
+  triangle: big floor triangles then win the depth test over whatever stands on
+  them (castle64's player and boars sank into the ground — the `occlusion`
+  self-test step reproduces it). Depth must be per vertex (`band_depth(tri.z[i])`).
+- Untextured triangles pass **w = 1** (screen-linear colors, like the PC and N64
+  rasterizers); textured ones pass the view depth (perspective-correct UVs).
+- Immediate mode (`C3D_ImmSendAttrib`) was the old textured path: ~144 bytes of
+  command buffer per triangle, so a full scene could overflow the 256 KB buffer.
+
 ## The shim rule
 
 Unlike the N64 there is no ABI hazard (both sides are ARM EABI-hf), but the
 shim (`trino_shim_3ds.c` + `crates/platform-3ds/src/ffi.rs`, matching pairs)
 is still the only FFI surface: citro2d is mostly static-inline C that Rust
 cannot call, and the discipline (≤4 scalar/pointer args, no by-value
-structs, no variadics) keeps the console backends symmetrical. Never call
+structs, no variadics, **no scalar float after an int** — volumes/pans cross as
+16.16 fixed point, like on the N64) keeps the console backends symmetrical. Never call
 libctru/citro2d directly from Rust.
 
 ## Troubleshooting

@@ -4,9 +4,19 @@
 //! target. Wraps cargo, the asset pipeline, Docker (N64) and emulators so
 //! contributors and CI never memorize per-platform incantations.
 
+mod agents;
+mod blender;
 mod castle64_assets;
+mod emulators;
+mod fbgolden;
+mod font_assets;
+mod model;
 mod n3ds;
 mod n64;
+mod perf;
+mod scene;
+mod showcase_assets;
+mod standalone;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -17,9 +27,10 @@ const HELP: &str = "\
 cargo xtask <command> [platform] [-- extra args]
 
 commands:
-  build <pc|n64|3ds>   compile the app for a platform
+  build <pc|n64|3ds>   compile the app for a platform (3ds --selftest: the
+                       self-test app `test 3ds --no-build` boots)
   run   <pc|n64|3ds>   build and launch (emulator for consoles)
-  test  [pc|n64|3ds] [--bless]
+  test  [pc|n64|3ds] [--bless] [--no-build]
                        run the test suite (default: everything testable);
                        --bless regenerates golden images
   assets <pc|n64|3ds>  bake assets into target/assets/<platform>
@@ -27,14 +38,41 @@ commands:
                        ROM + relaunch ares). pc: --game <crate> picks the
                        game dylib to rebuild (default: castle64)
   editor               launch the Trino editor
+  emulators setup ares|azahar
+                       provision the self-test emulators (ares Docker image
+                       / pinned Azahar AppImage into target/emulators)
   new <name>           scaffold a new game crate under examples/
+  new <name> --standalone <dir> [--git <url> [--rev <r>|--branch <b>]]
+                       a game project outside this repo (own workspace,
+                       PC host, assets); engine via path (default) or git
   gen-assets           regenerate the sample master assets (dev utility)
+  scene check [file..] validate scenes/prefabs/materials (text-first loop)
+  scene export <scene.ron> <out.rs>
+                       bake a scene into no_std Rust data for games
+  model inspect <file> [--fps N] [--once a,b] [--json]
+                       bake a .glb/.gltf/.prim.ron like the engine and report
+                       tris, joints, clips, bounds, N64 budget (art gate)
+  blender smoke [--no-render]
+                       run the Blender toolkit end to end (prop + rigid
+                       character -> export -> model inspect gates); skips
+                       when Blender is not installed
+  blender castle64 [--only a,b] [--no-render]
+                       rebuild castle64's Blender-authored models (doors,
+                       player parts, boar) with their triangle gates
+  agents <sync|check>  mirror .agents/skills/ into tool-specific folders
+                       (.claude/skills/) / verify the mirrors are in sync
 ";
 
 fn main() -> ExitCode {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let bless = args.iter().any(|a| a == "--bless");
     args.retain(|a| a != "--bless");
+    // Console CI split: build the self-test app in the toolchain container,
+    // boot it elsewhere (`test 3ds --no-build`).
+    let selftest = args.iter().any(|a| a == "--selftest");
+    args.retain(|a| a != "--selftest");
+    let no_build = args.iter().any(|a| a == "--no-build");
+    args.retain(|a| a != "--no-build");
     // `watch pc --game <crate>`: which game crate feeds the hot-reload dylib.
     let game = match args.iter().position(|a| a == "--game") {
         Some(i) => {
@@ -89,19 +127,42 @@ fn main() -> ExitCode {
         (Some("watch"), Some("pc")) => watch_pc(&game),
         (Some("editor"), _) => cargo(&["run", "-p", "trino-editor"], &[]),
         (Some("gen-assets"), _) => gen_assets(),
+        (Some("agents"), sub) => agents::run(&repo_root(), sub),
+        (Some("emulators"), _) => {
+            let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
+            emulators::run(&repo_root(), &rest)
+        }
+        (Some("blender"), _) => {
+            let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
+            blender::run(&repo_root(), &rest)
+        }
+        (Some("model"), _) => {
+            let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
+            model::run(&repo_root(), &rest)
+        }
+        (Some("scene"), _) => {
+            let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
+            scene::run(&repo_root(), &rest)
+        }
 
         (Some("build"), Some("n64")) => n64::build(false),
         (Some("run"), Some("n64")) => n64::run(),
-        (Some("test"), Some("n64")) => n64::test(),
+        (Some("test"), Some("n64")) => n64::test(bless),
         (Some("watch"), Some("n64")) => n64::watch(),
 
-        (Some("build"), Some("3ds")) => n3ds::build(false),
+        (Some("build"), Some("3ds")) => n3ds::build(selftest),
         (Some("run"), Some("3ds")) => n3ds::run(),
-        (Some("test"), Some("3ds")) => n3ds::test(),
+        (Some("test"), Some("3ds")) => n3ds::test(!no_build, bless),
         (Some("watch"), Some("3ds")) => n3ds::watch(),
-        (Some("new"), Some(name)) => new_game(name),
+        (Some("new"), Some(name)) => {
+            let rest: Vec<&str> = args.iter().skip(2).map(String::as_str).collect();
+            new_game(name, &rest)
+        }
         (Some("new"), None) => {
-            eprintln!("xtask: usage: cargo xtask new <kebab-case-name>");
+            eprintln!(
+                "xtask: usage: cargo xtask new <kebab-case-name> \
+                 [--standalone <dir> [--git <url> [--rev <r> | --branch <b>]]]"
+            );
             ExitCode::FAILURE
         }
 
@@ -117,6 +178,18 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// True when a debounced batch holds a real filesystem change. Reading a
+/// file emits inotify *access* events; reacting to those turns every build
+/// (which reads the sources) into the trigger for the next one.
+pub fn real_change(events: &[notify_debouncer_full::DebouncedEvent]) -> bool {
+    events.iter().any(|e| {
+        !matches!(
+            e.event.kind,
+            notify_debouncer_full::notify::EventKind::Access(_)
+        )
+    })
 }
 
 fn repo_root() -> PathBuf {
@@ -180,7 +253,7 @@ fn watch_pc(game: &str) -> ExitCode {
         None,
         move |result: DebounceEventResult| {
             if let Ok(events) = result
-                && !events.is_empty()
+                && crate::real_change(&events)
             {
                 let _ = tx.send(());
             }
@@ -281,6 +354,7 @@ fn gen_assets() -> ExitCode {
         0.2,
     );
     gen_theme(&music.join("theme.wav"));
+    gen_water_loop(&sounds.join("water.wav"));
 
     let models = root.join("assets/shared/models");
     std::fs::create_dir_all(&models).unwrap();
@@ -288,9 +362,34 @@ fn gen_assets() -> ExitCode {
 
     // castle64 (the 3D showcase): blocks, articulated player, boar, doors.
     castle64_assets::gen_all(&root, &|path, w, h, rgba| write_png(path, w, h, rgba));
+    showcase_assets::gen_all(&root, &|path, w, h, rgba| write_png(path, w, h, rgba));
+    // trino5x7: the default pixel font (bitmap text on every target).
+    font_assets::gen_all(&root, &|path, w, h, rgba| write_png(path, w, h, rgba));
 
     println!("sample assets regenerated under assets/shared/");
     ExitCode::SUCCESS
+}
+
+/// glTF `COLOR_0` is linear: display (sRGB) color bytes -> little-endian
+/// linear `f32`s (accessor `componentType` 5126). The bake converts back
+/// to the exact same bytes (`asset-pipeline` `color0_to_display`).
+pub(crate) fn color0_linear(display: &[u8]) -> Vec<u8> {
+    let lin = |b: u8| {
+        let c = b as f64 / 255.0;
+        if c <= 0.040_45 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let mut out = Vec::with_capacity(display.len() * 4);
+    for px in display.chunks(4) {
+        for (k, &b) in px.iter().enumerate() {
+            let v = if k == 3 { b as f64 / 255.0 } else { lin(b) };
+            out.extend_from_slice(&(v as f32).to_le_bytes());
+        }
+    }
+    out
 }
 
 /// cube.glb: a unit cube with per-face normals and colors — the 3D pipeline
@@ -332,6 +431,7 @@ fn gen_cube_glb(path: &Path) {
     for v in positions.iter().chain(normals.iter()) {
         bin.extend_from_slice(&v.to_le_bytes());
     }
+    let colors = color0_linear(&colors);
     let colors_offset = bin.len();
     bin.extend_from_slice(&colors);
     let indices_offset = bin.len();
@@ -345,7 +445,7 @@ fn gen_cube_glb(path: &Path) {
     let vcount = positions.len() / 3;
     let normals_offset = positions.len() * 4;
     let json = format!(
-        r#"{{"asset":{{"version":"2.0","generator":"trino gen-assets"}},"scene":0,"scenes":[{{"nodes":[0]}}],"nodes":[{{"mesh":0,"name":"cube"}}],"meshes":[{{"primitives":[{{"attributes":{{"POSITION":0,"NORMAL":1,"COLOR_0":2}},"indices":3}}]}}],"buffers":[{{"byteLength":{}}}],"bufferViews":[{{"buffer":0,"byteOffset":0,"byteLength":{}}},{{"buffer":0,"byteOffset":{normals_offset},"byteLength":{}}},{{"buffer":0,"byteOffset":{colors_offset},"byteLength":{}}},{{"buffer":0,"byteOffset":{indices_offset},"byteLength":{}}}],"accessors":[{{"bufferView":0,"componentType":5126,"count":{vcount},"type":"VEC3","min":[-0.5,-0.5,-0.5],"max":[0.5,0.5,0.5]}},{{"bufferView":1,"componentType":5126,"count":{vcount},"type":"VEC3"}},{{"bufferView":2,"componentType":5121,"normalized":true,"count":{vcount},"type":"VEC4"}},{{"bufferView":3,"componentType":5123,"count":{},"type":"SCALAR"}}]}}"#,
+        r#"{{"asset":{{"version":"2.0","generator":"trino gen-assets"}},"scene":0,"scenes":[{{"nodes":[0]}}],"nodes":[{{"mesh":0,"name":"cube"}}],"meshes":[{{"primitives":[{{"attributes":{{"POSITION":0,"NORMAL":1,"COLOR_0":2}},"indices":3}}]}}],"buffers":[{{"byteLength":{}}}],"bufferViews":[{{"buffer":0,"byteOffset":0,"byteLength":{}}},{{"buffer":0,"byteOffset":{normals_offset},"byteLength":{}}},{{"buffer":0,"byteOffset":{colors_offset},"byteLength":{}}},{{"buffer":0,"byteOffset":{indices_offset},"byteLength":{}}}],"accessors":[{{"bufferView":0,"componentType":5126,"count":{vcount},"type":"VEC3","min":[-0.5,-0.5,-0.5],"max":[0.5,0.5,0.5]}},{{"bufferView":1,"componentType":5126,"count":{vcount},"type":"VEC3"}},{{"bufferView":2,"componentType":5126,"count":{vcount},"type":"VEC4"}},{{"bufferView":3,"componentType":5123,"count":{},"type":"SCALAR"}}]}}"#,
         bin.len(),
         positions.len() * 4,
         normals.len() * 4,
@@ -556,6 +656,66 @@ fn gen_wav(path: &Path, notes: &[(f32, f32, Wave)], volume: f32) {
     writer.finalize().unwrap();
 }
 
+/// water.wav: a 2 s seamless water/stream loop for positional ambience —
+/// lowpassed noise with slow swells and soft "bubble" chirps; the last
+/// 0.25 s is crossfaded into the start so the loop point is inaudible.
+fn gen_water_loop(path: &Path) {
+    let rate = 22_050u32;
+    let n = rate as usize * 2;
+    let fade = rate as usize / 4;
+    let mut seed = 0x1234_5678u32;
+    let mut noise = || {
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        (seed as f32 / u32::MAX as f32) * 2.0 - 1.0
+    };
+    let total = n + fade;
+    let mut raw = Vec::with_capacity(total);
+    let (mut lp1, mut lp2) = (0.0f32, 0.0f32);
+    for i in 0..total {
+        let t = i as f32 / rate as f32;
+        lp1 += (noise() - lp1) * 0.08;
+        lp2 += (lp1 - lp2) * 0.15;
+        let swell = 0.7 + 0.3 * (t * std::f32::consts::TAU * 0.5).sin();
+        // Bubbles: short damped sine chirps at fixed times.
+        let mut bubble = 0.0;
+        for &(at, f) in &[
+            (0.31f32, 900.0f32),
+            (0.87, 1300.0),
+            (1.42, 1050.0),
+            (1.77, 760.0),
+        ] {
+            let dt = t - at;
+            if (0.0..0.06).contains(&dt) {
+                bubble += (dt * f * (1.0 + dt * 8.0) * std::f32::consts::TAU).sin()
+                    * (1.0 - dt / 0.06)
+                    * 0.25;
+            }
+        }
+        raw.push(lp2 * 2.2 * swell + bubble);
+    }
+    // Crossfade the tail over the head: sample i (< fade) mixes in i + n.
+    let mut out = raw[..n].to_vec();
+    for i in 0..fade {
+        let k = i as f32 / fade as f32;
+        out[i] = out[i] * k + raw[n + i] * (1.0 - k);
+    }
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: rate,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut writer = hound::WavWriter::create(path, spec).unwrap();
+    for s in out {
+        writer
+            .write_sample((s.clamp(-1.0, 1.0) * 0.6 * i16::MAX as f32) as i16)
+            .unwrap();
+    }
+    writer.finalize().unwrap();
+}
+
 /// theme.wav: a 3.2 s seamless-ish chiptune loop (square lead + pulse bass).
 fn gen_theme(path: &Path) {
     let rate = 44_100u32;
@@ -639,8 +799,34 @@ fn cargo(args: &[&str], envs: &[(&str, &str)]) -> ExitCode {
 /// Scaffold a new game crate from `templates/new-game/` into `examples/`.
 /// The workspace member glob picks it up automatically; every generated
 /// project ships its own AGENTS.md (AI-friendly by construction).
-fn new_game(name: &str) -> ExitCode {
-    match scaffold_game(&repo_root(), name) {
+fn new_game(name: &str, rest: &[&str]) -> ExitCode {
+    let root = repo_root();
+    match standalone::parse_args(rest, &root) {
+        Ok(Some((dir, source))) => {
+            let made = Names::new(name)
+                .and_then(|names| standalone::scaffold(&root, &dir, &names, &source));
+            return match made {
+                Ok(()) => {
+                    println!("created standalone project {}", dir.display());
+                    println!("\nnext steps:");
+                    println!("  cd {}", dir.display());
+                    println!("  cargo run -p {name}-pc   # play (TRINO_SIM=3ds for the 3DS look)");
+                    println!("  cargo test               # the game's unit tests");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("xtask: {e}");
+                    ExitCode::FAILURE
+                }
+            };
+        }
+        Ok(None) => {}
+        Err(e) => {
+            eprintln!("xtask: {e}");
+            return ExitCode::FAILURE;
+        }
+    }
+    match scaffold_game(&root, name) {
         Ok(dir) => {
             println!("created {}", dir.display());
             println!("\nnext steps:");
@@ -657,42 +843,76 @@ fn new_game(name: &str) -> ExitCode {
     }
 }
 
+/// A game name in the forms templates need.
+pub struct Names {
+    pub kebab: String,
+    pub snake: String,
+    pub camel: String,
+}
+
+impl Names {
+    pub fn new(name: &str) -> Result<Names, String> {
+        let valid = !name.is_empty()
+            && name
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+            && name.chars().next().is_some_and(|c| c.is_ascii_lowercase());
+        if !valid {
+            return Err(format!(
+                "`{name}` is not a valid crate name — use kebab-case (e.g. my-game)"
+            ));
+        }
+        let camel = name
+            .split('-')
+            .map(|w| {
+                let mut c = w.chars();
+                match c.next() {
+                    Some(f) => f.to_ascii_uppercase().to_string() + c.as_str(),
+                    None => String::new(),
+                }
+            })
+            .collect();
+        Ok(Names {
+            kebab: name.to_string(),
+            snake: name.replace('-', "_"),
+            camel,
+        })
+    }
+
+    /// Fill `{{name}}`, `{{name_snake}}` and `{{name_camel}}`.
+    pub fn render(&self, text: &str) -> String {
+        text.replace("{{name}}", &self.kebab)
+            .replace("{{name_snake}}", &self.snake)
+            .replace("{{name_camel}}", &self.camel)
+    }
+}
+
 /// Testable core of `new_game`: render the template into `<root>/examples/<name>`.
 fn scaffold_game(root: &Path, name: &str) -> Result<PathBuf, String> {
-    let valid = !name.is_empty()
-        && name
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-        && name.chars().next().is_some_and(|c| c.is_ascii_lowercase());
-    if !valid {
-        return Err(format!(
-            "`{name}` is not a valid crate name — use kebab-case (e.g. my-game)"
-        ));
-    }
+    let names = Names::new(name)?;
     let dest = root.join("examples").join(name);
     if dest.exists() {
         return Err(format!("{} already exists", dest.display()));
     }
-    let snake = name.replace('-', "_");
-    let camel: String = name
-        .split('-')
-        .map(|w| {
-            let mut c = w.chars();
-            match c.next() {
-                Some(f) => f.to_ascii_uppercase().to_string() + c.as_str(),
-                None => String::new(),
-            }
-        })
-        .collect();
-
     copy_template(
         &root.join("templates/new-game"),
         &dest,
-        name,
-        &snake,
-        &camel,
+        &names.kebab,
+        &names.snake,
+        &names.camel,
     )?;
     Ok(dest)
+}
+
+/// Template files that would confuse tools in place (a placeholder-laden
+/// `Cargo.toml` breaks cargo's git-source scan of this repo) carry a
+/// `.tmpl` suffix, dropped when rendered.
+fn template_target_name(name: &std::ffi::OsStr) -> std::ffi::OsString {
+    let s = name.to_string_lossy();
+    match s.strip_suffix(".tmpl") {
+        Some(base) => base.into(),
+        None => name.to_owned(),
+    }
 }
 
 fn copy_template(
@@ -706,7 +926,7 @@ fn copy_template(
     for entry in std::fs::read_dir(from).map_err(|e| format!("{}: {e}", from.display()))? {
         let entry = entry.map_err(|e| e.to_string())?;
         let src = entry.path();
-        let dst = to.join(entry.file_name());
+        let dst = to.join(template_target_name(&entry.file_name()));
         if src.is_dir() {
             copy_template(&src, &dst, name, snake, camel)?;
         } else {

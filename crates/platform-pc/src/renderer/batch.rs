@@ -34,13 +34,27 @@ pub struct Instance {
 
 pub const INSTANCE_STRIDE: u64 = core::mem::size_of::<Instance>() as u64;
 
+/// Texture of a triangle run: a sprite handle and its addressing — tiled
+/// (models: UVs repeat) or clamped (billboards: a sprite region).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TexKey {
+    pub id: u32,
+    pub clamp: bool,
+}
+
 /// One recorded draw call: a sprite quad or a run of 3D triangle vertices
 /// (already transformed/lit by `trino_core::render3d`; the vertices live in
 /// the renderer's triangle vertex list).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Cmd {
     Sprite(DrawCommand),
-    Tris { first: u32, count: u32 },
+    /// `texture`: sprite handle sampled by these triangles (None = vertex
+    /// colors only).
+    Tris {
+        first: u32,
+        count: u32,
+        texture: Option<TexKey>,
+    },
 }
 
 /// GPU triangle vertex. Must match `shaders.wgsl` (`TriIn`).
@@ -52,7 +66,10 @@ pub struct TriVertex {
     /// Normalized depth (0 = near) written to the depth buffer — real
     /// per-pixel occlusion; the painter batch sort is only a tie-break.
     pub depth: f32,
-    pub _pad: f32,
+    /// Clip-space w: the view depth for textured triangles (perspective-
+    /// correct UVs), 1.0 for vertex-color-only ones (affine, as always).
+    pub w: f32,
+    pub uv: [f32; 2],
 }
 
 pub const TRI_VERTEX_STRIDE: u64 = core::mem::size_of::<TriVertex>() as u64;
@@ -62,8 +79,12 @@ pub const TRI_VERTEX_STRIDE: u64 = core::mem::size_of::<TriVertex>() as u64;
 pub enum Segment {
     /// Sprite instances sharing one texture (one instanced draw call).
     Sprites { sprite: u32, instances: Range<u32> },
-    /// Vertex range into the triangle vertex buffer.
-    Tris { first: u32, count: u32 },
+    /// Vertex range into the triangle vertex buffer, one texture.
+    Tris {
+        first: u32,
+        count: u32,
+        texture: Option<TexKey>,
+    },
 }
 
 /// Resolve a `draw_sprite` call into a command: apply scale to the sprite's
@@ -74,12 +95,21 @@ pub fn make_command(
     sprite_size: (u32, u32),
     params: &SpriteParams,
 ) -> DrawCommand {
-    let size = Vec2::new(
-        sprite_size.0 as f32 * params.scale.x,
-        sprite_size.1 as f32 * params.scale.y,
-    );
-    let (mut u0, mut u1) = (0.0, 1.0);
-    let (mut v0, mut v1) = (0.0, 1.0);
+    let (tw, th) = (sprite_size.0 as f32, sprite_size.1 as f32);
+    // Region in sprite pixels (clamped to the texture), else the whole sprite.
+    let (rx, ry, rw, rh) = match params.region {
+        Some(r) => {
+            let x0 = r.pos.x.clamp(0.0, tw);
+            let y0 = r.pos.y.clamp(0.0, th);
+            let x1 = (r.pos.x + r.size.x).clamp(x0, tw);
+            let y1 = (r.pos.y + r.size.y).clamp(y0, th);
+            (x0, y0, x1 - x0, y1 - y0)
+        }
+        None => (0.0, 0.0, tw, th),
+    };
+    let size = Vec2::new(rw * params.scale.x, rh * params.scale.y);
+    let (mut u0, mut u1) = (rx / tw.max(1.0), (rx + rw) / tw.max(1.0));
+    let (mut v0, mut v1) = (ry / th.max(1.0), (ry + rh) / th.max(1.0));
     if params.flip_x {
         core::mem::swap(&mut u0, &mut u1);
     }
@@ -132,16 +162,22 @@ pub fn build_segments(commands: &[Cmd]) -> (Vec<Instance>, Vec<Segment>) {
                     }),
                 }
             }
-            Cmd::Tris { first, count } => match segments.last_mut() {
+            Cmd::Tris {
+                first,
+                count,
+                texture,
+            } => match segments.last_mut() {
                 Some(Segment::Tris {
                     first: seg_first,
                     count: seg_count,
-                }) if *seg_first + *seg_count == *first => {
+                    texture: seg_tex,
+                }) if *seg_first + *seg_count == *first && seg_tex == texture => {
                     *seg_count += count;
                 }
                 _ => segments.push(Segment::Tris {
                     first: *first,
                     count: *count,
+                    texture: *texture,
                 }),
             },
         }
@@ -188,12 +224,26 @@ mod tests {
 
     #[test]
     fn tris_interleave_and_merge_with_order_preserved() {
+        let tris = |first, count| Cmd::Tris {
+            first,
+            count,
+            texture: None,
+        };
         let (instances, segments) = build_segments(&[
             cmd(1),
-            Cmd::Tris { first: 0, count: 3 },
-            Cmd::Tris { first: 3, count: 6 },
+            tris(0, 3),
+            tris(3, 6),
             cmd(1),
-            Cmd::Tris { first: 9, count: 3 },
+            tris(9, 3),
+            // Same vertex run continues but with a texture: new segment.
+            Cmd::Tris {
+                first: 12,
+                count: 3,
+                texture: Some(TexKey {
+                    id: 5,
+                    clamp: false,
+                }),
+            },
         ]);
         assert_eq!(instances.len(), 2);
         assert_eq!(
@@ -203,12 +253,28 @@ mod tests {
                     sprite: 1,
                     instances: 0..1
                 },
-                Segment::Tris { first: 0, count: 9 },
+                Segment::Tris {
+                    first: 0,
+                    count: 9,
+                    texture: None
+                },
                 Segment::Sprites {
                     sprite: 1,
                     instances: 1..2
                 },
-                Segment::Tris { first: 9, count: 3 },
+                Segment::Tris {
+                    first: 9,
+                    count: 3,
+                    texture: None
+                },
+                Segment::Tris {
+                    first: 12,
+                    count: 3,
+                    texture: Some(TexKey {
+                        id: 5,
+                        clamp: false
+                    })
+                },
             ]
         );
     }
@@ -221,6 +287,27 @@ mod tests {
         };
         let c = make_command(1, Vec2::ZERO, (16, 32), &params);
         assert_eq!(c.size, Vec2::new(32.0, 16.0));
+    }
+
+    #[test]
+    fn region_selects_uvs_and_size() {
+        let params = SpriteParams {
+            region: Some(trino_core::Rect::new(8.0, 4.0, 8.0, 12.0)),
+            scale: Vec2::new(2.0, 1.0),
+            ..Default::default()
+        };
+        let c = make_command(1, Vec2::ZERO, (32, 16), &params);
+        assert_eq!(c.size, Vec2::new(16.0, 12.0));
+        assert_eq!(c.uv0, [0.25, 0.25]);
+        assert_eq!(c.uv1, [0.5, 1.0]);
+        // Regions past the texture edge clamp instead of sampling garbage.
+        let params = SpriteParams {
+            region: Some(trino_core::Rect::new(24.0, 0.0, 16.0, 16.0)),
+            ..Default::default()
+        };
+        let c = make_command(1, Vec2::ZERO, (32, 16), &params);
+        assert_eq!(c.size, Vec2::new(8.0, 16.0));
+        assert_eq!(c.uv1, [1.0, 1.0]);
     }
 
     #[test]

@@ -191,6 +191,143 @@ impl Mat34 {
     }
 }
 
+/// Unit quaternion (x, y, z, w) — the rotation format of baked animation
+/// clips (glTF native). Only what rigid-joint animation needs: normalized
+/// lerp and conversion to a matrix.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Quat {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    pub w: f32,
+}
+
+impl Quat {
+    pub const IDENTITY: Quat = Quat {
+        x: 0.0,
+        y: 0.0,
+        z: 0.0,
+        w: 1.0,
+    };
+
+    pub const fn new(x: f32, y: f32, z: f32, w: f32) -> Self {
+        Quat { x, y, z, w }
+    }
+
+    pub fn dot(self, o: Quat) -> f32 {
+        self.x * o.x + self.y * o.y + self.z * o.z + self.w * o.w
+    }
+
+    pub fn normalized(self) -> Quat {
+        let len = sqrt(self.dot(self));
+        if len > 1e-12 {
+            let inv = 1.0 / len;
+            Quat::new(self.x * inv, self.y * inv, self.z * inv, self.w * inv)
+        } else {
+            Quat::IDENTITY
+        }
+    }
+
+    /// Normalized lerp along the shortest arc. For the small per-sample
+    /// steps of a baked clip it is indistinguishable from slerp, and needs no
+    /// trigonometry (deterministic and cheap on every target).
+    pub fn nlerp(self, o: Quat, t: f32) -> Quat {
+        let o = if self.dot(o) < 0.0 {
+            Quat::new(-o.x, -o.y, -o.z, -o.w)
+        } else {
+            o
+        };
+        Quat::new(
+            self.x + (o.x - self.x) * t,
+            self.y + (o.y - self.y) * t,
+            self.z + (o.z - self.z) * t,
+            self.w + (o.w - self.w) * t,
+        )
+        .normalized()
+    }
+}
+
+impl Mat34 {
+    /// Matrix from translation, rotation quaternion and scale (applied
+    /// scale → rotate → translate, the glTF node convention).
+    pub fn from_trs(t: Vec3, q: Quat, s: Vec3) -> Mat34 {
+        let Quat { x, y, z, w } = q;
+        let (xx, yy, zz) = (x * x, y * y, z * z);
+        let (xy, xz, yz) = (x * y, x * z, y * z);
+        let (wx, wy, wz) = (w * x, w * y, w * z);
+        Mat34 {
+            m: [
+                [
+                    (1.0 - 2.0 * (yy + zz)) * s.x,
+                    2.0 * (xy - wz) * s.y,
+                    2.0 * (xz + wy) * s.z,
+                    t.x,
+                ],
+                [
+                    2.0 * (xy + wz) * s.x,
+                    (1.0 - 2.0 * (xx + zz)) * s.y,
+                    2.0 * (yz - wx) * s.z,
+                    t.y,
+                ],
+                [
+                    2.0 * (xz - wy) * s.x,
+                    2.0 * (yz + wx) * s.y,
+                    (1.0 - 2.0 * (xx + yy)) * s.z,
+                    t.z,
+                ],
+            ],
+        }
+    }
+
+    /// Length of each basis column (the per-axis scale).
+    pub fn axis_scales(&self) -> Vec3 {
+        let col = |c: usize| {
+            sqrt(
+                self.m[0][c] * self.m[0][c]
+                    + self.m[1][c] * self.m[1][c]
+                    + self.m[2][c] * self.m[2][c],
+            )
+        };
+        Vec3::new(col(0), col(1), col(2))
+    }
+
+    /// Squared length of each basis column (no sqrt).
+    pub fn axis_scales_sq(&self) -> Vec3 {
+        let col = |c: usize| {
+            self.m[0][c] * self.m[0][c] + self.m[1][c] * self.m[1][c] + self.m[2][c] * self.m[2][c]
+        };
+        Vec3::new(col(0), col(1), col(2))
+    }
+
+    /// Largest axis scale — what a bounding sphere radius multiplies by.
+    pub fn max_scale(&self) -> f32 {
+        let s = self.axis_scales();
+        s.x.max(s.y).max(s.z)
+    }
+
+    /// Split into (Euler XYZ radians, scale, translation) — the inverse of
+    /// [`Mat34::from_rotation_scale_translation`]. Exact for rotation +
+    /// per-axis scale; a sheared matrix (non-uniform parent scale with a
+    /// rotated child) has no such decomposition and comes back approximated.
+    pub fn decompose(&self) -> (Vec3, Vec3, Vec3) {
+        let s = self.axis_scales();
+        let inv = |v: f32| if v > 1e-12 { 1.0 / v } else { 0.0 };
+        let (ix, iy, iz) = (inv(s.x), inv(s.y), inv(s.z));
+        let r00 = self.m[0][0] * ix;
+        let r10 = self.m[1][0] * ix;
+        let r20 = self.m[2][0] * ix;
+        let r21 = self.m[2][1] * iy;
+        let r22 = self.m[2][2] * iz;
+        let rot = Vec3::new(
+            atan2(r21, r22),
+            atan2(-r20, sqrt(r00 * r00 + r10 * r10)),
+            atan2(r10, r00),
+        );
+        let pos = Vec3::new(self.m[0][3], self.m[1][3], self.m[2][3]);
+        (rot, s, pos)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -285,5 +422,55 @@ mod tests {
         );
         let p = m.transform_point(Vec3::new(1.0, 1.0, 1.0));
         assert_eq!(p, Vec3::new(12.0, 2.0, 2.0));
+    }
+
+    #[test]
+    fn quat_identity_matrix_is_identity() {
+        let m = Mat34::from_trs(Vec3::ZERO, Quat::IDENTITY, Vec3::ONE);
+        assert_eq!(m, Mat34::IDENTITY);
+    }
+
+    #[test]
+    fn quat_matches_euler_for_a_single_axis() {
+        // 90 degrees around Y.
+        let h = core::f32::consts::FRAC_PI_4;
+        let q = Quat::new(0.0, h.sin(), 0.0, h.cos());
+        let a = Mat34::from_trs(Vec3::ZERO, q, Vec3::ONE);
+        let b = Mat34::from_rotation_scale_translation(
+            Vec3::new(0.0, core::f32::consts::FRAC_PI_2, 0.0),
+            Vec3::ONE,
+            Vec3::ZERO,
+        );
+        for r in 0..3 {
+            for c in 0..4 {
+                assert!((a.m[r][c] - b.m[r][c]).abs() < 3e-3, "{a:?} vs {b:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn nlerp_takes_the_short_way_and_stays_unit() {
+        let a = Quat::IDENTITY;
+        let b = Quat::new(0.0, 0.0, 0.0, -1.0); // same rotation, other sign
+        let m = a.nlerp(b, 0.5);
+        assert!((m.dot(m) - 1.0).abs() < 1e-3);
+        assert!(m.w.abs() > 0.99);
+    }
+
+    #[test]
+    fn decompose_round_trips_euler_scale_translation() {
+        let rot = Vec3::new(0.3, -0.7, 1.2);
+        let scale = Vec3::new(2.0, 0.5, 1.5);
+        let pos = Vec3::new(1.0, -2.0, 3.0);
+        let m = Mat34::from_rotation_scale_translation(rot, scale, pos);
+        let (r, s, p) = m.decompose();
+        let back = Mat34::from_rotation_scale_translation(r, s, p);
+        for i in 0..3 {
+            for j in 0..4 {
+                assert!((m.m[i][j] - back.m[i][j]).abs() < 1e-2, "{m:?} vs {back:?}");
+            }
+        }
+        assert!((s.x - 2.0).abs() < 1e-2 && (s.y - 0.5).abs() < 1e-2);
+        assert_eq!(p, pos);
     }
 }

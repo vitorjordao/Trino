@@ -25,30 +25,48 @@ on 3DS and a native window on PC.*
 - 🕹️ **Write once, run on real retro hardware.** Your game code depends on one small,
   `no_std` crate — the engine maps it to libdragon (N64), libctru/citro2d (3DS) and
   wgpu (PC).
-- 🖥️ **A real editor.** Unity-style viewport, scene hierarchy, inspector, asset
-  browser and a tilemap **Level painter**, built with egui. Press play, edit assets,
-  watch them hot-reload.
-- 🔀 **Two-way file sync.** Levels are plain ASCII and scenes are RON: paint in the
-  editor and the file saves instantly; let an AI agent (or any tool) edit the file and
-  the editor updates live. The file is always the source of truth.
-- 📺 **Console simulation on PC.** Preview with N64 3-point filtering, RGBA5551 dither
-  and 320×240 output — or strict mode, which *fails the frame* when content busts the
-  N64's 4 KB TMEM or triangle budgets.
+- 🖥️ **A real editor.** Scene view with gizmos and the real renderer, a Game view that
+  simulates N64/3DS output, hierarchy, inspector, asset browser with rendered
+  thumbnails, prefabs, materials, undo/redo, and a tilemap **Level painter**. Press play,
+  edit anything, watch it hot-reload.
+- 🧱 **Prefabs, materials and fake objects.** Blender-style linked prefabs with
+  per-instance overrides; materials as data (flat/smooth/unlit, emissive, fog) that work
+  identically on every console; parametric placeholder models you can level-design with
+  today and swap for real art later without touching a single reference.
+- 🔀 **Two-way file sync.** Scenes, prefabs, materials and fake objects are RON, levels
+  are ASCII: edit in the editor and the file saves; let an AI agent (or any tool) edit
+  the file and the editor — and a running game — update live.
+- 📺 **Console simulation on PC.** The N64 preview has 3-point filtering, the RDP's
+  exact 16-bit dither rule and the Video Interface's dedither pass at 320×240,
+  measured against frames from a real ROM in ares. Strict mode *fails the frame*
+  when content busts the N64's 4 KB TMEM or triangle budgets.
 - 🔁 **Live reload everywhere.** Game code reloads as a dylib on PC; ROMs rebuild and
   relaunch in the emulator on file save (`cargo xtask watch n64|3ds`).
-- 🧪 **Emulator-tested.** `cargo xtask test n64|3ds` boots your game in ares/Azahar and
-  asserts on the debug channel; golden-image tests cover the renderer.
-- 🎲 **Vertex-lit 3D** on all three targets from one deterministic software T&L
-  pipeline (glTF masters → portable TMDL meshes).
-- 🤖 **AI-friendly by default.** The repo — and every game scaffolded by
-  `cargo xtask new` — ships `AGENTS.md` and Claude Code skills, so AI agents are
-  productive from clone.
+- 🧪 **Emulator-tested, in CI.** `cargo xtask test n64|3ds` boots the game in
+  ares/Azahar, runs every engine service's self-test and has a bot play a stage.
+  The N64 frame is checked pixel for pixel against a golden image. CI does the same
+  headless: ares in Docker, a pinned Azahar under Xvfb.
+- 🎲 **Textured, vertex-lit, animated 3D** on all three targets from one deterministic
+  software T&L pipeline (glTF masters → portable TMDL meshes):
+  - rigid or opt-in smooth skinning, with clip crossfades;
+  - billboards and particles;
+  - distance LOD and portal/cell visibility for interiors.
+- 🧰 **The services a game needs, on every target**:
+  - bitmap text;
+  - save data (EEPROM on N64, SD on 3DS);
+  - collision and runtime entities straight from editor scenes;
+  - levels loaded as data (`TSCN`);
+  - positional audio with music stingers.
+- 🤖 **AI-friendly by default, any AI.** A vendor-neutral `AGENTS.md`, open-format skills
+  in `.agents/skills/` (mirrored for Claude Code), text-first content with validation
+  commands (`scene check`, `model inspect`) and editor hooks that let an agent screenshot
+  what a human sees — plus a Blender skill for building assets within the N64's limits.
 
 ## Status
 
 **All 9 roadmap phases implemented** — a complete 2D platformer plus **castle64**, a
 SM64-style 3D showcase (hub + 3 stages, articulated character with inertial movement,
-z-buffered software T&L, a CC0 KayKit prop baked from textured glTF), run identically
+z-buffered software T&L, a CC0 KayKit doorway rebuilt in Blender to fit the N64 budget), run identically
 on all three targets; real ROMs boot in ares and Azahar with automated in-emulator
 test harnesses — including a bot that *plays* a full castle64 stage inside the
 emulators; `cargo xtask new` scaffolds AI-friendly game crates; releases are
@@ -65,6 +83,11 @@ automated. The roadmap with per-phase acceptance criteria lives in
 | Emulator test harness | — | ✅ ISViewer magic strings | ✅ svcOutputDebugString |
 | Visual editor + Level painter (two-way file sync) | ✅ | — | — |
 | 3D (vertex-lit `draw_model`) | ✅ | ✅ | ✅ |
+| Materials, fog, rigid animation | ✅ | ✅ | ✅ |
+| Editor scenes in games (codegen or baked `TSCN` blob) | ✅ | ✅ | ✅ |
+| Textured 3D, billboards/particles, LOD, portals | ✅ | ✅ | ✅ |
+| Text, save data, collision + entities, positional audio | ✅ | ✅ EEPROM | ✅ SD card |
+| Emulator self-tests in CI | — | ✅ ares (Docker) + pixel-exact golden | ✅ Azahar (pinned) |
 
 ### In pictures
 
@@ -75,7 +98,7 @@ automated. The roadmap with per-phase acceptance criteria lives in
 
 | castle64 — the 3D showcase | |
 |---|---|
-| <img src="docs/media/castle64.png" width="320" alt="castle64: the SM64-style 3D showcase — articulated character mid-jump over the castle courtyard, blob shadow on the grass" /> | Hub + 3 platforming stages on all three consoles: z-buffered occlusion, per-draw tint, an articulated character, and a real CC0 KayKit doorway baked from textured glTF into vertex colors. A deterministic bot plays it end-to-end in the test suite (`docs/media/castle64.gif`). |
+| <img src="docs/media/castle64.png" width="320" alt="castle64: the SM64-style 3D showcase — articulated character mid-jump over the castle courtyard, blob shadow on the grass" /> | Hub + 3 platforming stages on all three consoles: z-buffered occlusion, per-draw tint, an articulated character, and a CC0 KayKit doorway rebuilt in Blender at 75 triangles (from 1068) for the N64's CPU T&L. A deterministic bot plays it end-to-end in the test suite (`docs/media/castle64.gif`). |
 
 ## Quickstart
 
@@ -93,6 +116,9 @@ That's it for PC. For the consoles:
   in the repo root.
 - **3DS** — a local [devkitPro](https://devkitpro.org) install (`3ds-dev`
   packages) + the [Azahar](https://azahar-emu.org/) emulator.
+- No emulators installed? `cargo xtask emulators setup ares` builds a headless ares
+  image (Docker; then `TRINO_ARES=docker`), and `cargo xtask emulators setup azahar`
+  fetches the pinned Azahar AppImage (Linux).
 
 ```sh
 cargo xtask run n64    # build target/n64/trino.z64 + open it in ares
@@ -105,6 +131,17 @@ cargo xtask watch n64  # rebuild + relaunch on every save (3ds too)
 See [CONTRIBUTING.md](CONTRIBUTING.md) for setup details.
 
 ## The editor — built for humans *and* AI agents
+
+<img src="docs/media/editor.png" width="820" alt="The Trino editor: Scene view of the showcase scene with fog, trees from a prefab, an animated robot selected with the move gizmo, hierarchy, inspector and the asset browser with rendered thumbnails" />
+
+The showcase scene (`scenes/showcase.scene.ron`) is built entirely from **fake objects**,
+two **prefabs** (tree, lamp), **materials** and two **animated** models — open it with
+`cargo xtask editor`, play it with the Play button (or
+`TRINO_SCENE=scenes/showcase.scene.ron cargo run -p trino-app-pc`), and run the same
+scene **exported as `no_std` game code** with `TRINO_GAME=showcase cargo run -p trino-app-pc`
+(`examples/showcase` — type-checked for N64 and 3DS, and verified pixel-identical to the
+editor's version by a test). Every panel writes text files, so
+anything you click an AI agent can also do by editing RON (then `cargo xtask scene check`).
 
 <img src="docs/media/editor-level.png" width="720" alt="The Trino editor with the Level tab open: tile palette, the level grid, hierarchy, inspector, assets and console panels" />
 
@@ -149,14 +186,26 @@ cargo test -p my-game      # its tests join the workspace suite immediately
 ```
 
 Game crates depend only on `trino-core` — the dependency-direction test enforces it —
-so anything you build runs on all three targets by construction. Standalone project
-scaffolding (outside this repo) lands once the engine crates are published.
+so anything you build runs on all three targets by construction.
+
+Or start a project **outside** this repo:
+
+```sh
+cargo xtask new space-cat --standalone ~/games/space-cat   # engine via path deps
+#   … or --git https://github.com/vitorjordao/Trino --rev <commit>
+cd ~/games/space-cat && cargo run -p space-cat-pc          # play; TRINO_SIM=3ds for the 3DS look
+```
+
+You get the portable game crate, a desktop host (`trino-runner-pc`, live asset
+reload), starter assets and an `AGENTS.md`. Console packaging of standalone games
+still happens inside this repo (see the backlog).
 
 ## Working on Trino (humans & AIs)
 
 Start with [AGENTS.md](AGENTS.md) — repository map, architecture rules, commands and
-pitfalls. Using Claude Code? It picks the guide up automatically, and the
-`.claude/skills/` folder teaches it the project's workflows.
+pitfalls — for any agent (Claude Code, Codex, Gemini CLI, Cursor, Copilot…). Workflows
+live as open-format skills in `.agents/skills/` (`cargo xtask agents sync` mirrors them
+into `.claude/skills/`). Next steps for a real 3D project: [docs/BACKLOG.md](docs/BACKLOG.md).
 
 ## Contributing
 

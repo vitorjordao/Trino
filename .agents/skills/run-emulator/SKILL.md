@@ -1,0 +1,130 @@
+---
+name: run-emulator
+description: Run or test Trino builds in emulators — ares (N64) and Azahar (3DS) — launch the game, run the automated test harness (self-tests, the emulator golden frames, the N64 perf gates), provision headless emulators, or iterate with the watch loop. Use for "run on N64/3DS / test in the emulator / emulator loop / emulator CI" requests.
+---
+
+# run-emulator
+
+```
+cargo xtask run n64            # build + open the game in ares
+cargo xtask test n64           # build test ROM, self-test + golden frame + perf gates (300s timeout)
+cargo xtask test n64 --bless   # same, rewriting tests/golden/n64/showcase.png + tests/perf/castle64_n64.toml
+cargo xtask watch n64          # rebuild ROM + relaunch ares on every save
+
+cargo xtask run 3ds            # build + open the game in Azahar
+cargo xtask test 3ds           # build test app + assert TRINO_TEST_PASS + golden frame (300s timeout)
+cargo xtask test 3ds --bless   # same, rewriting tests/golden/3ds/castle64_hub.png
+cargo xtask build 3ds --selftest && cargo xtask test 3ds --no-build   # build, boot later
+cargo xtask watch 3ds          # rebuild .3dsx + relaunch Azahar on every save
+```
+
+## Emulator locations
+
+- **ares**, in order of preference:
+  - `$TRINO_ARES`: a path to the binary, or `docker` for the headless image;
+  - else `ares-v148/` in the repo root (gitignored).
+- `cargo xtask emulators setup ares` builds the `trino-ares` image from
+  `docker/ares/Dockerfile` (ares v148 n64 core, Xvfb, Mesa lavapipe). Then:
+  ```
+  TRINO_ARES=docker cargo xtask test n64
+  ```
+  This is what CI runs. The golden frame matches on lavapipe too, because
+  parallel-RDP is bit-exact.
+- **Azahar**, in order of preference:
+  - `$TRINO_AZAHAR`;
+  - `target/emulators/azahar/` (from `cargo xtask emulators setup azahar`, Linux
+    x86_64: the pinned 2126.2 AppImage, SHA-256 checked and extracted);
+  - the default install dir;
+  - PATH.
+- Headless Azahar: run the test under
+  `xvfb-run -a -s "-screen 0 1280x720x24"`. Its runtime libraries are listed in
+  `.github/workflows/ci.yml` (job `n3ds-emulator`).
+
+## Test protocol (same on both consoles)
+
+`test <console>` bakes a `test_mode` marker into the filesystem (DFS/RomFS). The app
+detects it and runs `run_self_test` (`apps/<console>/src/…`):
+
+1. `castle64::selftest::engine_checks`, one `TRINO_STEP:<name>` per engine service:
+   text, blob, save, textured_3d, billboards, **occlusion**, smooth skin, portals.
+   `occlusion` (boxes standing on a big floor, pixels read back) is the check that
+   caught the 3DS drawing floors over characters — it fails on any backend that
+   resolves depth per triangle instead of per pixel.
+2. Audio checks.
+3. The showcase demo and the baked scene.
+4. On N64, the golden frame (showcase).
+5. castle64 physics and a bot that plays a full stage.
+6. N64: the perf scenes (`TRINO_PERF_SCENE:` / `TRINO_PERF_MODEL:` lines, gated —
+   the `n64-performance` skill). 3DS: the golden frame (castle64 hub perf scene).
+
+It prints `TRINO_TEST_PASS` or `TRINO_TEST_FAIL:<reason>` on the debug channel. The
+harness matches the strings, kills the emulator and sets the exit code. New console
+tests follow the same pattern: add a step to `castle64::selftest` so the PC suite
+(`xtask/tests/engine_checks.rs`) runs it too.
+
+- **N64 channel: ISViewer.** ares echoes it to stdout and the harness reads the pipes.
+  - **Golden frame:** the ROM renders the showcase's first frame and dumps the
+    framebuffer as `TRINO_FBR:` hex rows plus `TRINO_FB_END:<w>x<h>:<fnv>`. xtask
+    rebuilds the PNG and compares it pixel-exactly with
+    `tests/golden/n64/showcase.png`. A mismatch is written to
+    `tests/golden/n64/actual/`. Review the diff before re-blessing.
+  - **Perf gates:** per-scene, per-stage, per-model cost in **emulated N64 time**
+    (ares emulates the count register). The harness requires the T&L work
+    counters to equal the PC baseline (`tests/perf/castle64_work.toml`) and the
+    times to stay under `tests/perf/castle64_n64.toml`, then prints a table with
+    the cost-model estimate. Workflow, layout caveats, history: the
+    `n64-performance` skill. `bench_tnl` is host CPU only.
+- **3DS channel: `svcOutputDebugString`.** Azahar logs it to `azahar_log.txt`: under
+  `%APPDATA%/Azahar` on Windows, `~/.local/share/azahar-emu` on Linux.
+  - The harness seeds a fresh `qt-config.ini`, or patches an existing one, with
+    `log_filter=*:Info Debug.Emulated:Trace` and `instant_debug_log=true`.
+  - Without the second setting, the file log only flushes on Error entries, and
+    the magic strings can sit in the buffer.
+  - The harness re-reads the log every 500 ms and only consumes **whole lines**
+    (Azahar may be mid-write).
+  - **Golden frame:** the app renders the castle64 hub perf scene (fresh game) and
+    `N3dsRenderer::dump_framebuffer` prints the top screen in the N64's
+    `TRINO_FBR` format (RGBA5551, so `fbgolden::FbCapture` rebuilds it). Compared
+    with `tests/golden/3ds/castle64_hub.png` **within a tolerance**
+    (`fbgolden::check_close`: mean ≤ 3, ≤ 2% far pixels) because Azahar's GPU output
+    depends on the host OpenGL (desktop GPU vs CI's llvmpipe — unverified in CI so
+    far). Locally it reproduces exactly (mean 0.00). `xtask/tests/n3ds_parity.rs`
+    holds the PC's N3ds look to the same image (mean 0.60, 1.0% far when written).
+  - Visual debugging without a window: `renderer.read_pixel` in a TEMP step and
+    `runtime::log` the values (that is how the light leak below was found).
+
+## Notes
+
+- **Timeout length:** 300 s by default; `TRINO_EMU_TIMEOUT=<secs>` overrides it (CI uses
+  900). On 4 CPUs, ares/lavapipe takes ~95 s and Azahar ~15 s.
+- **A timeout** usually means one of these:
+  - the app crashed before the test: look for `TRINO_PANIC:` in the harness output;
+  - a modal dialog blocked the emulator. A read-only ares save path pops one; the
+    Docker mode passes `Paths/Saves=/tmp/`.
+  - In a container, screenshot the Xvfb display with ImageMagick's
+    `import -window root`.
+- **Renderer state carries over between games in one boot.** The self-test runs
+  the showcase before castle64 on the same renderer; castle64 never set a light and
+  rendered with the showcase's colored, fogged one (found by the 3DS parity test:
+  24.5 mean diff → 0.6 after castle64 declared `set_light` every frame). A game
+  must set camera and light itself.
+- **N64 stack (64 KB, libdragon's main stack, nothing stops an overflow):**
+  `TRINO_STACK:<bytes>` lines report the high-water mark (a painted pattern,
+  `trino_stack_used`), and `check_stack` in `apps/n64` **fails the self-test above
+  60 KB**. Until 2026-10-13 the baked-scene step overflowed it (main +
+  `run_self_test` + `check_baked` + `ShowcaseGame::from_baked`, ~22 KB values built
+  by value) and the ROM hung at random points, timing-dependent because
+  interrupts push onto the same stack. Fixed by running each showcase step in its own
+  `#[inline(never)]` function (peak 47.6 KB). **`Box::new(big())` does not help**:
+  LLVM still builds the temporary in the caller's frame. Find big frames with
+  `mips64-elf-objdump -d -C target/n64/trino.elf` and grep `addiu sp,sp,-<N>`
+  (`run_self_test` was 21 KB, `tessellate` is 10 KB).
+- **The ares output is buffered:** after a hang, the last line printed is not where
+  the ROM stopped. Bracket with `TRINO_STACK`/`TRINO_STEP` lines and compare runs.
+- **No in-place hot reload on consoles:** `watch` kills and relaunches, watching
+  `examples/`, `assets/` and the console's own crates.
+- **CI** (details, local replicas and red-run debugging: the `ci` skill):
+  - the `n64` job boots the test ROM in the cached `trino-ares` image;
+  - `n3ds` builds `--selftest` and uploads it;
+  - `n3ds-emulator` (ubuntu-24.04) boots it, because the devkitARM image's glibc is
+    too old for the AppImage.

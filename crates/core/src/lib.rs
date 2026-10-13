@@ -22,27 +22,47 @@ pub mod asset;
 pub mod audio;
 pub mod caps;
 pub mod collide;
+pub mod entity;
 pub mod game;
 pub mod input;
 pub mod math;
 pub mod math3d;
+pub mod particles;
+pub mod perf;
+pub mod physics;
 pub mod platform;
 pub mod render;
 pub mod render3d;
+pub mod save;
+pub mod scene;
+pub mod text;
 pub mod tilemap;
+pub mod vis;
 
 pub use asset::asset_id;
 
-pub use audio::{Audio, MusicId, SoundId};
+pub use audio::{
+    Ambience, Audio, Listener, MusicId, SoundId, SoundParams, SoundSource, VoiceId, spatialize,
+};
 pub use caps::{Caps, CapsError};
 pub use collide::{MoveResult, move_and_collide};
+pub use entity::{Entity, EntityId, EntityStore};
 pub use game::Game;
 pub use input::{Button, Input, InputState};
 pub use math::{Color, Rect, Vec2, Vec3};
-pub use math3d::Mat34;
-pub use platform::Platform;
+pub use math3d::{Mat34, Quat};
+pub use particles::{Emitter, ParticleSystem};
+pub use physics::{Aabb, Collider, Shape};
+pub use platform::{BlobId, Platform, SaveError};
 pub use render::{
-    Material, MaterialId, ModelId, ModelParams, Renderer, SpriteId, SpriteParams, Transform3,
+    AnimBlend, AnimRef, BillboardParams, ClipId, FontId, FrameStats, Material, MaterialId, ModelId,
+    ModelParams, Renderer, Shading, SpriteId, SpriteParams, TextAlign, TextParams, Transform3,
 };
-pub use render3d::{Camera3, DEFAULT_LIGHT, Light, Mesh, MeshError, ScreenTri, tessellate};
+pub use render3d::{
+    Camera3, ClipInfo, DEFAULT_LIGHT, Fog, Light, MAX_JOINTS, Mesh, MeshError, ScreenTri, TnlStats,
+    tessellate,
+};
+pub use scene::{BakedScene, LodLevel, Lods, SceneNode, Tags};
+pub use text::{BitmapFont, TextBuf};
 pub use tilemap::{TILE_SIZE, Tilemap, TilemapError};
+pub use vis::{Cells, MAX_CELLS, NO_CELL, Portal, VisVolume};

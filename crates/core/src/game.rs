@@ -3,6 +3,7 @@
 
 use crate::audio::Audio;
 use crate::input::InputState;
+use crate::platform::Platform;
 use crate::render::Renderer;
 
 pub trait Game {
@@ -11,6 +12,21 @@ pub trait Game {
     /// (verified by tests from Fase 6 on). Audio calls are fire-and-forget
     /// and do not affect determinism.
     fn update(&mut self, input: &InputState, audio: &mut dyn Audio, dt: f32);
+
+    /// What the apps actually call each frame: [`update`](Self::update)
+    /// plus the platform services (data blobs, save data, clock, log).
+    /// Override this instead when the game needs them; the default ignores
+    /// the platform. Same determinism rules as `update`.
+    fn update_with(
+        &mut self,
+        platform: &mut dyn Platform,
+        input: &InputState,
+        audio: &mut dyn Audio,
+        dt: f32,
+    ) {
+        let _ = platform;
+        self.update(input, audio, dt);
+    }
 
     /// Issue draw calls, bracketed by `begin_frame`/`end_frame`.
     /// Must not mutate gameplay state.

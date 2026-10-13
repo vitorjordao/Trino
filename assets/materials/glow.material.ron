@@ -1,0 +1,6 @@
+(
+    version: 1,
+    tint: (255, 255, 255, 255),
+    shading: Unlit,
+    emissive: (40, 30, 0),
+)

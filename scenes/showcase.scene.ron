@@ -1,0 +1,365 @@
+(
+    version: 2,
+    name: "showcase",
+    environment: (
+        clear: (132, 178, 226),
+        camera: (
+            eye: (9.0, 7.0, -13.0),
+            target: (0.0, 1.0, 0.0),
+            fov: 55.0,
+        ),
+        light: (
+            dir: (0.45, -0.75, 0.48),
+            color: (255, 244, 225),
+            ambient: 0.42,
+            ambient_color: (190, 210, 255),
+        ),
+        fog: Some((
+            color: (132, 178, 226),
+            near: 16.0,
+            far: 42.0,
+        )),
+    ),
+    entities: [
+(
+    name: "ground",
+    transform: (
+        pos: (0.0, 0.0, 0.0),
+        rot: (0.0, 0.0, 0.0),
+        scale: (1.0, 1.0, 1.0),
+    ),
+    model: Some((path: "models/ground", material: Some("materials/grass"))),
+    collider: Some((shape: Box(size: (40.0, 1.0, 40.0)), offset: (0.0, -0.5, 0.0))),
+),
+(
+    name: "pond",
+    transform: (
+        pos: (6.0, 0.1, -5.0),
+        rot: (0.0, 0.0, 0.0),
+        scale: (1.0, 1.0, 1.0),
+    ),
+    model: Some((path: "models/water", material: Some("materials/water"))),
+    sound: Some((path: "sounds/water", radius: 9.0, volume: 0.8)),
+),
+(
+    name: "tree-1",
+    transform: (
+        pos: (-6.0, 0.0, 4.0),
+        rot: (0.0, 0.0, 0.0),
+        scale: (1.0, 1.0, 1.0),
+    ),
+    tags: ["foliage"],
+    prefab: Some((path: "prefabs/tree")),
+),
+(
+    name: "tree-2",
+    transform: (
+        pos: (-8.0, 0.0, 1.0),
+        rot: (0.0, 30.0, 0.0),
+        scale: (1.3, 1.3, 1.3),
+    ),
+    tags: ["foliage"],
+    prefab: Some((path: "prefabs/tree")),
+),
+(
+    name: "tree-3",
+    transform: (
+        pos: (-5.0, 0.0, -3.0),
+        rot: (0.0, 60.0, 0.0),
+        scale: (0.9, 0.9, 0.9),
+    ),
+    tags: ["foliage"],
+    prefab: Some((path: "prefabs/tree")),
+),
+(
+    name: "tree-4",
+    transform: (
+        pos: (8.0, 0.0, 5.0),
+        rot: (0.0, 10.0, 0.0),
+        scale: (1.2, 1.2, 1.2),
+    ),
+    tags: ["foliage"],
+    prefab: Some((path: "prefabs/tree", overrides: [(target: "leaves", material: Some("materials/autumn"))])),
+),
+(
+    name: "tree-5",
+    transform: (
+        pos: (10.0, 0.0, -1.0),
+        rot: (0.0, 45.0, 0.0),
+        scale: (1.0, 1.0, 1.0),
+    ),
+    tags: ["foliage"],
+    prefab: Some((path: "prefabs/tree")),
+),
+(
+    name: "crates",
+    transform: (
+        pos: (-3.0, 0.0, 2.0),
+        rot: (0.0, 0.0, 0.0),
+        scale: (1.0, 1.0, 1.0),
+    ),
+    children: [
+(
+    name: "crate-a",
+    transform: (
+        pos: (0.0, 0.0, 0.0),
+        rot: (0.0, 0.0, 0.0),
+        scale: (1.0, 1.0, 1.0),
+    ),
+    model: Some((path: "models/crate", material: Some("materials/wood"))),
+    collider: Some(()),
+),
+(
+    name: "crate-b",
+    transform: (
+        pos: (1.05, 0.0, 0.1),
+        rot: (0.0, 12.0, 0.0),
+        scale: (1.0, 1.0, 1.0),
+    ),
+    model: Some((path: "models/crate", material: Some("materials/wood"))),
+    collider: Some(()),
+),
+(
+    name: "crate-c",
+    transform: (
+        pos: (0.5, 1.0, 0.05),
+        rot: (0.0, -20.0, 0.0),
+        scale: (1.0, 1.0, 1.0),
+    ),
+    model: Some((path: "models/crate", material: Some("materials/wood"), tint: Some((255, 220, 200, 255)))),
+    collider: Some(()),
+)
+    ],
+),
+(
+    name: "pillar-1",
+    transform: (
+        pos: (-2.0, 0.0, 7.0),
+        rot: (0.0, 0.0, 0.0),
+        scale: (1.0, 1.0, 1.0),
+    ),
+    model: Some((path: "models/pillar", material: Some("materials/stone"))),
+    collider: Some(()),
+),
+(
+    name: "pillar-2",
+    transform: (
+        pos: (0.0, 0.0, 7.0),
+        rot: (0.0, 0.0, 0.0),
+        scale: (1.0, 1.0, 1.0),
+    ),
+    model: Some((path: "models/pillar", material: Some("materials/stone"))),
+    collider: Some(()),
+),
+(
+    name: "pillar-3",
+    transform: (
+        pos: (2.0, 0.0, 7.0),
+        rot: (0.0, 0.0, 0.0),
+        scale: (1.0, 1.0, 1.0),
+    ),
+    model: Some((path: "models/pillar", material: Some("materials/stone"))),
+    collider: Some(()),
+),
+(
+    name: "pillar-4",
+    transform: (
+        pos: (4.0, 0.0, 7.0),
+        rot: (0.0, 0.0, 0.0),
+        scale: (1.0, 1.0, 1.0),
+    ),
+    model: Some((path: "models/pillar", material: Some("materials/stone"))),
+    collider: Some(()),
+),
+(
+    name: "ramp",
+    transform: (
+        pos: (3.0, 0.0, 1.5),
+        rot: (0.0, 180.0, 0.0),
+        scale: (1.0, 1.0, 1.0),
+    ),
+    model: Some((path: "models/ramp", material: Some("materials/stone"))),
+),
+(
+    name: "rock-1",
+    transform: (
+        pos: (5.0, 0.3, 8.0),
+        rot: (0.0, 0.0, 0.0),
+        scale: (1.2, 0.7, 1.0),
+    ),
+    model: Some((path: "models/rock", material: Some("materials/stone"))),
+    collider: Some(()),
+),
+(
+    name: "rock-2",
+    transform: (
+        pos: (-9.0, 0.25, -4.0),
+        rot: (0.0, 0.0, 0.0),
+        scale: (1.0, 0.6, 1.4),
+    ),
+    model: Some((path: "models/rock", material: Some("materials/stone"))),
+    collider: Some(()),
+),
+(
+    name: "rock-3",
+    transform: (
+        pos: (1.0, 0.2, -7.0),
+        rot: (0.0, 0.0, 0.0),
+        scale: (0.8, 0.5, 0.8),
+    ),
+    model: Some((path: "models/rock", material: Some("materials/stone"))),
+    collider: Some(()),
+),
+(
+    name: "lamp-1",
+    transform: (
+        pos: (-1.5, 0.0, -2.0),
+        rot: (0.0, 0.0, 0.0),
+        scale: (1.0, 1.0, 1.0),
+    ),
+    prefab: Some((path: "prefabs/lamp")),
+),
+(
+    name: "lamp-2",
+    transform: (
+        pos: (2.5, 0.0, -2.0),
+        rot: (0.0, 0.0, 0.0),
+        scale: (1.0, 1.0, 1.0),
+    ),
+    prefab: Some((path: "prefabs/lamp")),
+),
+(
+    name: "robot-walker",
+    transform: (
+        pos: (0.5, 0.0, -0.5),
+        rot: (0.0, 200.0, 0.0),
+        scale: (1.0, 1.0, 1.0),
+    ),
+    tags: ["npc"],
+    model: Some((path: "models/robot", material: Some("materials/metal"), anim: Some((clip: "walk", speed: 1.0)))),
+),
+(
+    name: "robot-greeter",
+    transform: (
+        pos: (-2.0, 0.0, -4.5),
+        rot: (0.0, 160.0, 0.0),
+        scale: (1.0, 1.0, 1.0),
+    ),
+    tags: ["npc"],
+    model: Some((path: "models/robot", material: Some("materials/metal"), tint: Some((255, 200, 200, 255)), anim: Some((clip: "wave", speed: 1.0)))),
+),
+(
+    name: "windmill",
+    transform: (
+        pos: (-7.0, 0.0, -8.0),
+        rot: (0.0, 200.0, 0.0),
+        scale: (1.0, 1.0, 1.0),
+    ),
+    model: Some((path: "models/windmill", material: Some("materials/wood"), anim: Some((clip: "spin", speed: 1.0)))),
+),
+(
+    name: "castle-door",
+    transform: (
+        pos: (-3.0, 0.0, 11.0),
+        rot: (0.0, 180.0, 0.0),
+        scale: (1.0, 1.0, 1.0),
+    ),
+    model: Some((path: "models/c64_door")),
+    collider: Some(()),
+),
+(
+    name: "coin-1",
+    transform: (
+        pos: (-1.0, 0.8, 3.5),
+        rot: (90.0, 0.0, 0.0),
+        scale: (1.0, 1.0, 1.0),
+    ),
+    tags: ["coin"],
+    model: Some((path: "models/coin-ring", material: Some("materials/glow"))),
+    collider: Some((shape: Sphere(radius: 0.5), trigger: true)),
+),
+(
+    name: "coin-2",
+    transform: (
+        pos: (-0.09999999999999998, 0.8, 3.5),
+        rot: (90.0, 0.0, 18.0),
+        scale: (1.0, 1.0, 1.0),
+    ),
+    tags: ["coin"],
+    model: Some((path: "models/coin-ring", material: Some("materials/glow"))),
+    collider: Some((shape: Sphere(radius: 0.5), trigger: true)),
+),
+(
+    name: "coin-3",
+    transform: (
+        pos: (0.8, 0.8, 3.5),
+        rot: (90.0, 0.0, 36.0),
+        scale: (1.0, 1.0, 1.0),
+    ),
+    tags: ["coin"],
+    model: Some((path: "models/coin-ring", material: Some("materials/glow"))),
+    collider: Some((shape: Sphere(radius: 0.5), trigger: true)),
+),
+(
+    name: "coin-4",
+    transform: (
+        pos: (1.7000000000000002, 0.8, 3.5),
+        rot: (90.0, 0.0, 54.0),
+        scale: (1.0, 1.0, 1.0),
+    ),
+    tags: ["coin"],
+    model: Some((path: "models/coin-ring", material: Some("materials/glow"))),
+    collider: Some((shape: Sphere(radius: 0.5), trigger: true)),
+),
+(
+    name: "coin-5",
+    transform: (
+        pos: (2.6, 0.8, 3.5),
+        rot: (90.0, 0.0, 72.0),
+        scale: (1.0, 1.0, 1.0),
+    ),
+    tags: ["coin"],
+    model: Some((path: "models/coin-ring", material: Some("materials/glow"))),
+    collider: Some((shape: Sphere(radius: 0.5), trigger: true)),
+),
+(
+    name: "gameplay",
+    transform: (
+        pos: (0.0, 0.0, 0.0),
+        rot: (0.0, 0.0, 0.0),
+        scale: (1.0, 1.0, 1.0),
+    ),
+    children: [
+(
+    name: "spawn",
+    transform: (
+        pos: (0.0, 0.0, -6.0),
+        rot: (0.0, 0.0, 0.0),
+        scale: (1.0, 1.0, 1.0),
+    ),
+    tags: ["spawn"],
+),
+(
+    name: "hero",
+    transform: (
+        pos: (0.0, 0.0, -6.0),
+        rot: (0.0, 0.0, 0.0),
+        scale: (1.0, 1.0, 1.0),
+    ),
+    tags: ["player"],
+    model: Some((path: "models/hero-capsule", material: Some("materials/metal"))),
+),
+(
+    name: "goal",
+    transform: (
+        pos: (6.0, 0.0, 9.0),
+        rot: (0.0, 0.0, 0.0),
+        scale: (1.0, 1.0, 1.0),
+    ),
+    tags: ["goal"],
+    collider: Some((shape: Box(size: (2.0, 2.0, 2.0)), offset: (0.0, 1.0, 0.0), trigger: true)),
+)
+    ],
+)
+    ],
+)

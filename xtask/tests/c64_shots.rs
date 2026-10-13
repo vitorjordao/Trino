@@ -74,6 +74,9 @@ fn castle64_level_shots() {
     for model in assets.models {
         renderer.upload_mesh(trino_core::ModelId(model.id), model.tmdl);
     }
+    for font in assets.fonts {
+        renderer.upload_font(trino_core::FontId(font.id), font.table);
+    }
     let out_dir = root.join("target/c64_shots");
     std::fs::create_dir_all(&out_dir).unwrap();
     let mut audio = NullAudio;

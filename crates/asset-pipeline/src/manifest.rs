@@ -69,13 +69,64 @@ pub struct Manifest {
     /// Logical paths are `models/<name>`.
     #[serde(default)]
     pub models: BTreeMap<String, ModelDecl>,
+    /// Bitmap fonts (PNG glyph grid or TTF) → atlas sprite + glyph table.
+    /// Logical paths are `fonts/<name>`.
+    #[serde(default)]
+    pub fonts: BTreeMap<String, crate::font::FontDecl>,
+    /// Raw data delivered byte-for-byte on every target
+    /// (`Platform::blob`). Logical paths are `blobs/<name>`.
+    #[serde(default)]
+    pub blobs: BTreeMap<String, BlobDecl>,
+    /// Editor scenes baked to `TSCN` blobs for runtime loading
+    /// (`trino_core::scene::BakedScene`). Logical paths are `scenes/<name>`;
+    /// `file` is relative to the **project root** (`scenes/x.scene.ron`).
+    #[serde(default)]
+    pub scenes: BTreeMap<String, BlobDecl>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BlobDecl {
+    /// Source file: relative to `assets/shared/` (or a platform override)
+    /// for `[blobs.*]`, to the project root for `[scenes.*]`.
+    pub file: String,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModelDecl {
-    /// Source `.gltf`/`.glb`, relative to `assets/shared/` (or an override).
+    /// Source `.gltf`/`.glb` (or a `.prim.ron` placeholder), relative to
+    /// `assets/shared/` (or an override).
     pub file: String,
+    /// Animation clip sampling rate (frames per second). Default 15.
+    #[serde(default)]
+    pub anim_fps: Option<f32>,
+    /// Clip names that play once and hold the last frame (default: loop).
+    #[serde(default)]
+    pub once: Vec<String>,
+    /// Textured model: a sprite logical path (`sprites/brick`) baked as the
+    /// default texture; UVs are kept (glTF `TEXCOORD_0`, generated for fake
+    /// objects). Without it textures are sampled into vertex colors.
+    #[serde(default)]
+    pub texture: Option<String>,
+    /// `"rigid"` (default: each vertex follows its heaviest joint — the
+    /// N64-era look, cheapest) or `"smooth"` (two-joint blend per vertex;
+    /// costs a second transform per skinned vertex).
+    #[serde(default)]
+    pub skinning: Option<String>,
+}
+
+impl ModelDecl {
+    pub fn options(&self) -> crate::model::ModelOptions {
+        let mut opts = crate::model::ModelOptions::default();
+        if let Some(fps) = self.anim_fps {
+            opts.anim_fps = fps;
+        }
+        opts.once = self.once.clone();
+        opts.texture = self.texture.clone();
+        opts.smooth = self.skinning.as_deref() == Some("smooth");
+        opts
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -92,6 +143,24 @@ pub struct SpriteDecl {
 #[serde(deny_unknown_fields)]
 pub struct SoundDecl {
     pub file: String,
+    /// Bake loop metadata — needed on the N64, where the loop lives in the
+    /// wav64. Sounds default to `false` (set it for looping voices: ambient
+    /// sources, engines); music defaults to `true` (set `false` for
+    /// stingers, which play once).
+    #[serde(default, rename = "loop")]
+    pub looped: Option<bool>,
+}
+
+impl SoundDecl {
+    /// Loop flag of a `[sounds.*]` entry.
+    pub fn sound_loops(&self) -> bool {
+        self.looped.unwrap_or(false)
+    }
+
+    /// Loop flag of a `[music.*]` entry.
+    pub fn music_loops(&self) -> bool {
+        self.looped.unwrap_or(true)
+    }
 }
 
 impl Manifest {
@@ -140,6 +209,113 @@ impl SpriteDecl {
                         platform.key()
                     )
                 }),
+        }
+    }
+}
+
+/// Text-level manifest edits that keep the file's comments and layout —
+/// what the editor (and scripts) use to add or retarget models.
+pub mod edit {
+    /// Append `[models.<name>]` with `file`. Errors if the name exists.
+    pub fn add_model(text: &str, name: &str, file: &str) -> Result<String, String> {
+        if has_table(text, "models", name) {
+            return Err(format!("model `{name}` already exists in the manifest"));
+        }
+        let mut out = text.trim_end().to_string();
+        out.push_str(&format!("\n\n[models.{name}]\nfile = \"{file}\"\n"));
+        Ok(out)
+    }
+
+    /// Append `[sprites.<name>]` with `file` and an explicit N64 format
+    /// (the N64 has no safe default). Errors if the name exists.
+    pub fn add_sprite(text: &str, name: &str, file: &str, n64: &str) -> Result<String, String> {
+        if has_table(text, "sprites", name) {
+            return Err(format!("sprite `{name}` already exists in the manifest"));
+        }
+        let mut out = text.trim_end().to_string();
+        out.push_str(&format!(
+            "\n\n[sprites.{name}]\nfile = \"{file}\"\nformats = {{ n64 = \"{n64}\" }}\n"
+        ));
+        Ok(out)
+    }
+
+    /// A valid logical name from a file stem (`My Rock 2` -> `my-rock-2`).
+    pub fn name_from_stem(stem: &str) -> String {
+        let mut out = String::new();
+        for c in stem.chars() {
+            if c.is_ascii_alphanumeric() {
+                out.push(c.to_ascii_lowercase());
+            } else if !out.ends_with('-') && !out.is_empty() {
+                out.push('-');
+            }
+        }
+        out.trim_end_matches('-').to_string()
+    }
+
+    /// Point `[models.<name>]` at a new `file` (placeholder → real art).
+    pub fn set_model_file(text: &str, name: &str, file: &str) -> Result<String, String> {
+        let header = format!("[models.{name}]");
+        let mut lines: Vec<String> = text.lines().map(String::from).collect();
+        let start = lines
+            .iter()
+            .position(|l| l.trim() == header)
+            .ok_or_else(|| format!("model `{name}` not found in the manifest"))?;
+        for line in lines.iter_mut().skip(start + 1) {
+            let t = line.trim_start();
+            if t.starts_with('[') {
+                break;
+            }
+            if t.starts_with("file") && t[4..].trim_start().starts_with('=') {
+                *line = format!("file = \"{file}\"");
+                let mut out = lines.join("\n");
+                out.push('\n');
+                return Ok(out);
+            }
+        }
+        Err(format!("model `{name}` has no `file` line"))
+    }
+
+    pub fn has_table(text: &str, kind: &str, name: &str) -> bool {
+        let header = format!("[{kind}.{name}]");
+        text.lines().any(|l| l.trim() == header)
+    }
+
+    /// Valid logical name: lowercase ASCII letters, digits, `_` and `-`.
+    pub fn valid_name(name: &str) -> bool {
+        !name.is_empty()
+            && name
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn add_and_retarget_keep_comments() {
+            let text =
+                "# header comment\nversion = 1\n\n[models.cube]\nfile = \"models/cube.glb\"\n";
+            let added = add_model(text, "crate", "models/proxies/crate.prim.ron").unwrap();
+            assert!(added.starts_with("# header comment"));
+            assert!(has_table(&added, "models", "crate"));
+            assert!(add_model(&added, "crate", "x").is_err());
+            let moved = set_model_file(&added, "crate", "models/crate.glb").unwrap();
+            assert!(moved.contains("[models.crate]\nfile = \"models/crate.glb\""));
+            assert!(
+                moved.contains("file = \"models/cube.glb\""),
+                "other tables untouched"
+            );
+            let parsed: super::super::Manifest = toml::from_str(&moved).unwrap();
+            assert_eq!(parsed.models["crate"].file, "models/crate.glb");
+            assert!(valid_name("rock-02") && !valid_name("Rock") && !valid_name(""));
+            let with_sprite =
+                add_sprite(&moved, "bark", "sprites/imported/bark.png", "CI8").unwrap();
+            let parsed: super::super::Manifest = toml::from_str(&with_sprite).unwrap();
+            assert_eq!(parsed.sprites["bark"].formats["n64"], "CI8");
+            assert!(add_sprite(&with_sprite, "bark", "x", "CI4").is_err());
+            assert_eq!(name_from_stem("My Rock (2)"), "my-rock-2");
+            assert!(valid_name(&name_from_stem("KayKit_Door v1")));
         }
     }
 }

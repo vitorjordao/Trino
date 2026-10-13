@@ -20,15 +20,24 @@
 //! by snapshot tests).
 
 pub mod bake;
+pub mod font;
 pub mod loader;
 pub mod manifest;
 pub mod model;
+pub mod primitive;
 pub mod resolve;
 #[cfg(feature = "watch")]
 pub mod watch;
 
 pub use bake::{BakeError, BakeReport, bake_all};
-pub use loader::{LoadedAssets, LoadedModel, LoadedSound, LoadedSprite, load_dir};
+pub use font::{BakedFont, FontDecl, bake_font};
+pub use loader::{
+    LoadedAssets, LoadedBlob, LoadedFont, LoadedModel, LoadedSound, LoadedSprite, load_dir,
+};
 pub use manifest::{Manifest, Platform};
-pub use model::bake_model_tmdl;
+pub use model::{
+    MeshData, ModelOptions, bake_model, bake_model_tmdl, bake_scene, clip_names,
+    manifest_model_bounds,
+};
+pub use primitive::{Pivot, Primitive, Shape};
 pub use resolve::resolve_source;

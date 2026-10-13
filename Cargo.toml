@@ -1,8 +1,8 @@
 [workspace]
 resolver = "2"
 members = ["crates/*", "apps/*", "examples/*", "xtask"]
-# The scaffold template carries a Cargo.toml with placeholders — never build it.
-exclude = ["templates/new-game"]
+# Scaffold templates keep their manifests as `Cargo.toml.tmpl` (rendered by
+# `cargo xtask new`), so cargo never sees them as packages.
 
 [workspace.package]
 version = "0.1.0"
@@ -19,9 +19,11 @@ trino-platform-n64 = { path = "crates/platform-n64" }
 trino-platform-3ds = { path = "crates/platform-3ds" }
 trino-asset-pipeline = { path = "crates/asset-pipeline" }
 trino-scene = { path = "crates/scene" }
+trino-runner-pc = { path = "crates/runner-pc" }
 hello-sprite = { path = "examples/hello-sprite" }
 platformer = { path = "examples/platformer" }
 castle64 = { path = "examples/castle64" }
+showcase = { path = "examples/showcase" }
 winit = "0.30"
 # wgpu 29 = what egui-wgpu 0.35 (the editor UI, Fase 3) resolves to. Keep in
 # lockstep with the egui upgrade cadence, never bump one without the other.
@@ -36,6 +38,8 @@ toml = "1"
 hound = "3"
 # glTF 2.0 import for the 3D model pipeline (Fase 7).
 gltf = "1"
+# TTF/OTF font masters -> bitmap atlases (the version egui already pulls).
+ab_glyph = "0.2"
 # README gameplay recording (dev utility in xtask).
 gif = "0.13"
 notify = "8"
@@ -52,6 +56,11 @@ eframe = { version = "0.35", default-features = false, features = [
     "wayland",
 ] }
 egui_dock = "0.20"
+# Headless editor UI tests; same lockstep as eframe/egui.
+egui_kittest = { version = "0.35", features = ["eframe", "wgpu"] }
+# Icon font for the editor. 0.13 is the line built on egui 0.35 — bump in
+# lockstep with eframe/egui (0.14 already requires egui 0.36).
+egui-phosphor = "0.13"
 
 [profile.dev]
 opt-level = 1

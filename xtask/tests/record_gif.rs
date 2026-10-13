@@ -71,6 +71,9 @@ fn record_readme_gameplay_gif() {
     for model in assets.models {
         renderer.upload_mesh(trino_core::ModelId(model.id), model.tmdl);
     }
+    for font in assets.fonts {
+        renderer.upload_font(trino_core::FontId(font.id), font.table);
+    }
 
     let map = Tilemap::parse(platformer::LEVEL).unwrap();
     let mut game = platformer::PlatformerGame::new(Vec2::new(320.0, 240.0));

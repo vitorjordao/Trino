@@ -1,6 +1,6 @@
 ---
 name: add-asset
-description: Add an asset to a Trino game — sprite, sound, music, 3D model (glTF or a fake-object placeholder) or material — master placement, manifest declaration, per-platform formats, baking, validation and live reload.
+description: Add an asset to a Trino game — sprite, sound, music, 3D model (glTF or a fake-object placeholder, textured or not), material, bitmap font, data blob or baked scene — master placement, manifest declaration, per-platform formats, baking, validation and live reload.
 ---
 
 # add-asset
@@ -18,10 +18,18 @@ formats = { n64 = "CI4" }       # REQUIRED for n64: CI4, CI8 or RGBA5551 (TMEM i
 
 [sounds.jump]
 file = "sounds/jump.wav"        # PCM 16-bit or float, mono/stereo
+# loop = true                   # looping SFX (scene `sound` sources / voices); default false
 
 [music.theme]
 file = "music/theme.wav"        # loops on the music channel (wav64 --wav-loop on N64)
+
+[music.fanfare]
+file = "sounds/win.wav"
+loop = false                    # a stinger: Audio::play_stinger, music ducks under it
 ```
+
+On the N64, looped wavs are trimmed to a multiple of 16 frames (wav64 requires it),
+and a sound plays on one channel at a time: re-triggering restarts it.
 
 ```rust
 pub const ENEMY: SpriteId = SpriteId::from_path("sprites/enemy");
@@ -38,9 +46,17 @@ anim_fps = 20               # optional: clip sampling rate (default 15)
 once = ["wave"]             # optional: clips that play once (default: loop)
 ```
 
-- Vertex colors only (COLOR_0 → base-color texture sampled at vertex UV → base-color
-  factor). Animated files bake a rigid skeleton (≤ 32 joints, heaviest weight wins).
-  Full rules and the Blender workflow: the `blender-asset` skill.
+- **Colors**: by default the color is baked into the vertices, from COLOR_0, else the
+  base-color texture sampled at the vertex UV, else the base-color factor.
+- **Textures**: add `texture = "sprites/<tex>"` and the mesh keeps its UVs and draws
+  with that sprite (TMDL `TXUV`/`TXID`). One texture per draw, power-of-two, and it
+  must fit TMEM on the N64 (`formats = { n64 = "CI8" }` for 32×32 or 64×32 tiles).
+  Fake objects get planar UVs (one repeat per meter). A material's `texture` overrides
+  it per draw.
+- **Skeletons**: animated files bake a rigid skeleton (≤ 32 joints, heaviest weight
+  wins). `skinning = "smooth"` keeps a second joint per vertex (TMDL `SKW2`) for meshes
+  that crack. That costs ~3% CPU per draw; check with `model inspect --smooth`.
+- Full rules and the Blender workflow: the `blender-asset` skill.
 - **Gate:** `cargo xtask model inspect assets/shared/models/robot.glb [--json]` — bakes
   like the engine and reports tris, joints, clips, size, N64 budget.
 - Code: `ModelId::from_path("models/robot")`; animate with
@@ -71,6 +87,29 @@ the handle — and every scene entity, material and code reference — stays the
 editor does both (*Create › Fake object*, Shift+A; model Inspector › *Replace with real
 art*) and writes these same files.
 
+## Fonts, blobs, baked scenes
+
+```toml
+[fonts.hud]
+file = "fonts/hud.png"        # PNG glyph grid in codepoint order…
+cell = [6, 10]                # …of these cells, from `first` (default 32 = space)
+# proportional = true         # trim glyphs to their opaque columns (+ `spacing`)
+# or: file = "fonts/x.ttf" + size = 12 (+ chars, antialias) — rasterized at bake time
+
+[blobs.dialogue]
+file = "data/dialogue.txt"    # any bytes: Platform::blob(BlobId::from_path("blobs/dialogue"))
+
+[scenes.level1]
+file = "scenes/level1.scene.ron"   # path from the PROJECT ROOT; bakes to a TSCN blob
+```
+
+- **Fonts**: code uses `renderer.draw_text(FontId::from_path("fonts/hud"), pos, "TEXT",
+  &TextParams::DEFAULT)` and formats numbers with `TextBuf<N>` (no alloc). The atlas
+  is a sprite (CI4 on N64). Missing characters draw as `?`.
+- **Blobs**: they are `'static`, read once at load.
+- **Baked scenes**: load with `BakedScene::parse(platform.blob(BlobId::from_path("scenes/level1"))?)`
+  (see `scene-authoring`).
+
 ## Materials
 
 `assets/materials/<name>.material.ron` (logical `materials/<name>`), no manifest entry:
@@ -82,6 +121,7 @@ art*) and writes these same files.
     shading: Flat,                // Gouraud | Flat | Unlit
     emissive: (0, 0, 0),          // added after lighting
     double_sided: false,
+    texture: Some("sprites/brick"),  // optional: per-draw texture for meshes with UVs
 )
 ```
 

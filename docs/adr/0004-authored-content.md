@@ -54,3 +54,12 @@ agents, hot-reloaded, and shippable on N64/3DS — without breaking the two rule
 - Codegen means a rebuild to change a console scene. The next step (docs/BACKLOG.md) is
   a baked binary scene asset (`TSCN`) loaded through a generic blob API on every
   backend, keeping codegen for compile-time-checked content.
+
+## Update (October 2026)
+
+- The baked `TSCN` scene asset and the `Platform::blob` API shipped as planned.
+- Scenes v2 gained the optional `collider`, `model.lod`, `sound` and `vis` (cell/portal)
+  components without a version bump.
+- Opt-in smooth skinning (`SKW2`) exists for meshes that need it.
+
+Formats and rules are in ADR 0005.

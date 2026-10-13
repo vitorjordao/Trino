@@ -95,3 +95,20 @@ Transform & lighting is **engine code, not backend code**
   hardware stacks (tiny3d/citro3d) can be introduced per-backend behind the
   same `draw_model` contract — this ADR does not preclude them; it defers
   them until the engine actually needs that throughput.
+
+## Update (October 2026)
+
+Textured 3D landed **within this contract**. The core T&L still produces screen-space
+triangles, and they now carry `uv` + `w`. Each backend rasterizes them with one texture
+per draw:
+- PC: the w trick in the triangle shader;
+- N64: rdpq TEX_SHADE;
+- 3DS: a small citro3d path.
+
+The "vertex colors only" limit is retired. Opt-in smooth skinning (`SKW2`) added
+about 3% host CPU per draw in the worst case (`bench_tnl`).
+
+Measured on the console clock: a full castle64 hub frame spends about **670 ms** of
+emulated N64 time in render (CPU T&L + submit), against a 33 ms budget at 30 fps
+(`TRINO_PERF` in `cargo xtask test n64`). CPU T&L throughput is now the top N64
+risk. See `docs/BACKLOG.md` and ADR 0005.

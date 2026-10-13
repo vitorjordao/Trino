@@ -81,20 +81,30 @@ What to build next (ranked): `docs/BACKLOG.md`.
   toolchain image + C shim + Rust staticlib — ABI story in
   `docs/adr/0002-n64-abi-o32-staticlib.md`); `run n64` opens it in ares
   (expected at `ares-v148/` in the repo root, gitignored); `test n64` boots a
-  test ROM and asserts on ISViewer magic strings (`TRINO_TEST_PASS/FAIL`);
+  test ROM and asserts on ISViewer magic strings (`TRINO_TEST_PASS/FAIL`), on
+  a pixel-exact **emulator golden** (`tests/golden/n64/showcase.png`, from a
+  framebuffer dump; `--bless` rewrites it) and prints `TRINO_PERF` (frame cost
+  in emulated N64 time). `TRINO_ARES=docker` runs ares from the
+  `docker/ares` image (`cargo xtask emulators setup ares`) — what CI does.
   `watch n64` rebuilds + relaunches on save. Skills: `build-n64`, `run-emulator`.
 - **N64 look on PC**: the `SimProfile::N64` renderer emulates the console
   output — 3-point filtering + RGBA5551 quantization with the RDP magic-square
   dither (`TRINO_LOOK=off|n64` overrides). Strict mode (`TRINO_STRICT=1` or
   `PcRenderer::set_strict`) panics with an actionable message when content
-  busts the profile's `Caps`. Deferred: mupen64plus golden screenshots (ares
-  is the reference emulator for now) and the VI post stage (dedither/divot).
+  busts the profile's `Caps`. The 16-bit write follows the RDP's own rule
+  (angrylion `dither.c`), and a **VI dedither pass** runs at `end_frame`
+  (`set_vi_dedither`). The N64 shim enables the same dither and VI filter, so
+  PC and console match: `xtask/tests/n64_parity.rs` compares the PC frame
+  with the ares golden (mean diff about 2.5/255).
 - **3DS**: `cargo xtask build 3ds` produces `target/3ds/trino.3dsx` — all
   local (devkitPro install auto-detected; built-in `armv6k-nintendo-3ds`
   Tier 3 target, C shim over libctru + citro2d in
   `crates/platform-3ds/shim/`); `run 3ds` opens it in Azahar (auto-detected
-  or `$TRINO_AZAHAR`); `test 3ds` asserts the TRINO_TEST_* magic strings by
-  tailing Azahar's log (`svcOutputDebugString` channel); `watch 3ds`
+  or `$TRINO_AZAHAR`, or the pinned AppImage from `cargo xtask emulators
+  setup azahar`); `test 3ds` asserts the TRINO_TEST_* magic strings by
+  tailing Azahar's log (`svcOutputDebugString` channel; the harness seeds or
+  patches Azahar's config). `build 3ds --selftest` + `test 3ds --no-build`
+  split build and boot, as CI does. `watch 3ds`
   rebuilds + relaunches on save. The `SimProfile::N3ds` PC renderer samples
   sprites bilinearly (the 3DS GPU default). Skills: `build-3ds`,
   `run-emulator`.
@@ -148,11 +158,18 @@ What to build next (ranked): `docs/BACKLOG.md`.
   citro2d per-draw depth on 3DS) — interpenetrating geometry resolves per
   pixel. Consecutive `draw_model` calls still form a depth-sorted batch
   (tie-break + blending order; flushed on sprite draws, camera changes and
-  `end_frame`). v1 limit (in the ADR): vertex colors only (no textured 3D).
+  `end_frame`). **Textured 3D**: one texture per draw (TMDL `TXUV`/`TXID`,
+  `ModelParams.texture`, material `texture`), on all three targets.
 
 - **Scaffolding + release**: `cargo xtask new <name>` renders
   `templates/new-game/` into `examples/<name>` (game crate + its own
-  AGENTS.md; the workspace glob picks it up). `release.yml` tags new
+  AGENTS.md; the workspace glob picks it up). `cargo xtask new <name>
+  --standalone <dir> [--git <url> --rev <r>]` creates a project **outside**
+  this repo: its own workspace, `game/` plus a `pc/` host on
+  `trino-runner-pc`, starter assets and an AGENTS.md. The engine comes in as
+  path or git deps (`templates/standalone/`; manifests are `*.tmpl` so
+  cargo's git scan ignores them). Console packaging of standalone games is
+  still done in this repo (BACKLOG P1). `release.yml` tags new
   workspace versions on main and publishes editor binaries + demo
   `.z64`/`.3dsx` + SHA256SUMS.
 - **Editor two-way file sync** (`crates/editor/src/level_editor.rs` + the
@@ -165,9 +182,44 @@ What to build next (ranked): `docs/BACKLOG.md`.
   logged, not force-loaded, until saved. Dev hook: `TRINO_EDITOR_TAB=level`
   opens with the Level tab focused (used for screenshots).
 
-Deferred backlog: ranked in `docs/BACKLOG.md` (scene loading on consoles without
-codegen, textured 3D, collision from scenes, mupen64plus goldens + VI stage, emulators
-in CI, standalone game scaffolding, …).
+- **Engine services** (October 2026 pass, formats in
+  `docs/adr/0005-backlog-pass-formats-and-services.md`):
+  - **Bitmap text**: `[fonts.*]`, TFNT, `Renderer::draw_text`, `TextBuf`.
+  - **Platform blobs** (`[blobs.*]`, `Platform::blob`).
+  - **Save data** (`save_read/write`): framed, EEPROM on N64, SD on 3DS.
+  - **Baked scenes** (`[scenes.*]` → `TSCN`, `BakedScene`): levels as data on every
+    target.
+  - **Collision**: `collider` component, `core::physics`.
+  - **Runtime entities**: `EntityStore<N>`.
+  - **Clip crossfade**: `AnimRef::blend_to`.
+  - **Opt-in smooth skinning**: `skinning = "smooth"`, TMDL `SKW2`.
+  - **Billboards and particles**: `draw_billboard`, `ParticleSystem`.
+  - **Distance LOD**: `model.lod`.
+  - **Positional audio**: `play_sound_with`, voices, stingers,
+    `Listener`/`spatialize`, the `sound` component plus `Ambience`.
+  - **Portal/cell visibility**: `core::vis`, `vis` component,
+    `draw_nodes_in`/`draw_in`.
+
+  Each one has a step in `castle64::selftest`, run on PC, in ares and in Azahar.
+- **Editor additions**:
+  - **Budget HUD** in the Game view.
+  - **Play here**: the scene runs inside the Game view (Ctrl+Shift+P, Esc).
+  - **Selection and arrangement**: multi-select and box select, the Arrange menu
+    (align, distribute, array, drop to surface).
+  - **Command palette** (Ctrl+K).
+  - **Drop-to-import** of `.glb`/`.gltf`/`.png`.
+  - **Scene tabs**; apply-overrides-to-prefab; in-place prefab part editing.
+  - **Inspector components**: LOD, sound, cell/portal; cell and portal wireframes.
+  - **Headless UI tests** with egui_kittest (`crates/editor/src/ui_tests.rs`).
+- **Emulators in CI**:
+  - The `n64` job boots the test ROM in the `trino-ares` image. Its golden frame
+    matches on Mesa lavapipe too.
+  - The `n3ds-emulator` job boots the CI-built self-test `.3dsx` in the pinned Azahar
+    under Xvfb.
+  - Both jobs were verified in local containers replicating each job.
+
+Ranked next steps: `docs/BACKLOG.md`. The top one is N64 render throughput: castle64's
+hub costs ~670 ms of emulated N64 time per frame (`TRINO_PERF`).
 
 PC keyboard mapping: A/B = Z/X, X/Y = C/V, L/R = Q/E, Start = Enter,
 Select = Right Shift, D-pad = arrows, stick = WASD (see `crates/platform-pc/src/input.rs`).
@@ -181,6 +233,7 @@ Select = Right Shift, D-pad = arrows, stick = WASD (see `crates/platform-pc/src/
 | `crates/platform-*` | One backend per target: wgpu (pc), libdragon FFI (n64), ctru/citro FFI (3ds) |
 | `crates/editor` | egui editor (see the `editor` skill for its file map) |
 | `crates/scene` | Scenes, prefabs, materials (RON), resolve → draw list, codegen |
+| `crates/runner-pc` | Ready-made PC host (window, renderer, audio, asset bake) for standalone projects |
 | `crates/asset-pipeline` | Asset baking (sprites, audio, glTF → TMDL + skeleton, fake objects) + watching |
 | `apps/{pc,n64,3ds}` | Thin glue binaries; `apps/pc` also plays editor scenes (`TRINO_SCENE`) |
 | `examples/` | Games: `castle64` (3D, default), `platformer`, `showcase` (editor scene via codegen), `hello-sprite` |
@@ -189,7 +242,9 @@ Select = Right Shift, D-pad = arrows, stick = WASD (see `crates/platform-pc/src/
 | `tools/blender/` | Blender Python helpers for the `blender-asset` skill |
 | `.agents/skills/` | Canonical AI skills (mirrored to `.claude/skills/` by `cargo xtask agents sync`) |
 | `xtask/` | Build orchestrator — the only entry point you need |
-| `templates/new-game/` | Scaffold for `cargo xtask new` |
+| `templates/new-game/`, `templates/standalone/` | Scaffolds for `cargo xtask new` (in-repo crate / standalone project) |
+| `docker/` | Toolchain/emulator images: `n64/` (libdragon), `ares/` (headless ares for tests) |
+| `tests/golden/` | Golden images: `pc/` (renderer), `n64/` (ares framebuffer) |
 | `docs/adr/` | Architecture decisions; `docs/BACKLOG.md` ranked next steps |
 | `.github/workflows/` | `ci.yml`, `release.yml` |
 
@@ -245,6 +300,11 @@ cargo xtask scene check   # validate scenes/prefabs/materials (text-first loop)
 cargo xtask scene export <scene.ron> <out.rs>   # scene -> no_std Rust data for games
 cargo xtask model inspect <file> [--json]       # bake a model like the engine; art gate
 cargo xtask agents sync   # mirror .agents/skills/ into .claude/skills/ (check: agents check)
+cargo xtask new <name> --standalone <dir> [--git <url> --rev <r>]   # project outside this repo
+cargo xtask emulators setup ares|azahar          # headless ares image / pinned Azahar AppImage
+cargo xtask test n64 --bless                     # rewrite the ares golden frame (review the PNG!)
+cargo xtask build 3ds --selftest && cargo xtask test 3ds --no-build   # CI's build/boot split
+cargo xtask blender smoke                        # Blender toolkit end to end (needs Blender)
 ```
 
 Run modes: `TRINO_SCENE=scenes/x.scene.ron cargo run -p trino-app-pc` plays a scene
@@ -274,8 +334,16 @@ cargo test --workspace
 - Console tests report through debug channels — ISViewer magic strings on
   N64 (`apps/n64/src/lib.rs::run_self_test`), `svcOutputDebugString` on 3DS
   (`apps/3ds/src/main.rs::run_self_test`, read from Azahar's log file).
-  Emulator tests run locally via `cargo xtask test n64|3ds`; CI builds the
-  ROM/.3dsx but does not boot emulators yet.
+  `cargo xtask test n64|3ds` runs them locally; CI boots both (the ares Docker
+  image, and the pinned Azahar under Xvfb).
+- Every engine service has a step in `castle64::selftest`, the same code on
+  PC (`xtask/tests/engine_checks.rs`), in ares and in Azahar. A new
+  console-visible feature adds a step there.
+- Emulator golden: `tests/golden/n64/showcase.png` is compared pixel-exactly
+  by `test n64`. A renderer change on the N64 path re-blesses it
+  (`--bless`), and the PNG diff gets reviewed like any golden.
+- Console performance: quote `TRINO_PERF` (emulated N64 time) for T&L
+  changes. `bench_tnl` measures host CPU only.
 
 ## Toolchain notes
 
@@ -293,6 +361,17 @@ cargo test --workspace
   beyond Rust.
 
 ## Pitfalls
+
+- **N64 FFI: no scalar float after an integer argument.** Rust is o32 and libdragon
+  is o64, so the float arrives as garbage. Pass 16.16 fixed point (`u32`) or a
+  pointer (ADR 0005 §6).
+- **N64 z precision is 16-bit.** Coplanar surfaces need centimetres of separation at
+  gameplay distances, or they z-fight on the console but not on PC (Depth32Float).
+  The ares golden catches it.
+- **Azahar's file log flushes only on errors.** The harness turns on
+  `instant_debug_log`, so don't remove it.
+- **Template manifests are `Cargo.toml.tmpl`.** A placeholder `Cargo.toml` anywhere in
+  the repo breaks every git-dependency user, because cargo scans the whole repository.
 
 - Do not add dependencies to `trino-core` — the dep-graph test will fail, and the crate
   must compile for MIPS bare metal.

@@ -29,8 +29,21 @@ Produces `target/n64/trino.z64`. Everything native runs inside the pinned
 libdragon is `-mabi=o64`; LLVM has no o64, so Rust codegens **o32** and GNU ld
 links the mix. That is only safe because every C<->Rust call goes through the
 shim, which is restricted to **≤4 scalar/pointer args, no by-value structs, no
-variadics**. When adding FFI: extend `trino_shim.c` + `crates/platform-n64/src/ffi.rs`
+variadics, and no scalar `float` after an integer argument** (the float lands in
+the wrong register between o32 and o64; pass 16.16 fixed point as `u32` or a
+pointer to floats). When adding FFI: extend `trino_shim.c` + `crates/platform-n64/src/ffi.rs`
 in matching pairs and keep the restriction. Never call libdragon directly from Rust.
+
+## Console output conventions (keep PC in sync)
+
+- **16-bit output**: `trino_mode_standard()` sets magic-square RGB dither, and the VI
+  runs with `FILTERS_RESAMPLE_ANTIALIAS_DEDITHER`. The PC N64 look emulates exactly
+  this, so a change here needs the matching change in
+  `crates/platform-pc/src/renderer/shaders.wgsl`, and then
+  `cargo xtask test n64 --bless` plus the `n64_parity` test.
+- **Saves**: EEPROM 16 Kbit (`ed64romconfig --savetype eeprom16k`), framed by
+  `trino_core::save`.
+- **Test hooks**: `trino_debug_pixel` and `trino_debug_fb_dump` (the golden frame).
 
 ## Troubleshooting
 

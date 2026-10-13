@@ -27,6 +27,30 @@ the canonical reference; this file covers what is specific to game code.
 - Hot-reload boundary: no statics (they reset on reload), no `TypeId`
   across the boundary, and state layout must not change between reloads.
 
+## Engine services (all `no_std`, identical on PC / N64 / 3DS)
+
+- **Platform services** through `Game::update_with(platform, …)`:
+  - `platform.blob(id)` returns `'static` bytes from `[blobs.*]` / `[scenes.*]`;
+  - `save_read` / `save_write` store a framed save (EEPROM on N64, SD on 3DS).
+- **Text**: `renderer.draw_text(FontId::from_path("fonts/…"), pos, s, &TextParams::DEFAULT)`
+  with `TextBuf<N>` for numbers.
+- **Levels**:
+  - from code: `scene export`;
+  - from data: `BakedScene::parse(blob)`;
+  - live objects: `EntityStore<N>` (spawn, query by tag, `draw`).
+- **Collision**: `trino_core::physics` (`move_aabb`, `raycast`, triggers), using the
+  colliders authored in the editor.
+- **Rendering**:
+  - animation crossfade: `AnimRef::new(clip, t).blend_to(other, t2, w)`;
+  - billboards and particles: `draw_billboard`, `ParticleSystem`;
+  - distance LOD comes from the scene and is applied by `draw_nodes(.., eye)`;
+  - interior culling: `Cells::from_nodes` + `visible` + `draw_nodes_in`.
+- **Audio**: `play_sound_with(id, &params)`, voices, `play_stinger`,
+  `Listener` + `spatialize`, and `Ambience` for scene `sound` sources.
+
+Every one of these is exercised on the consoles by `castle64::selftest`. Read it for
+working examples.
+
 ## Skills
 
 Workflows (adding assets, Blender models, scenes, editor, console builds,

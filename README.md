@@ -36,15 +36,27 @@ on 3DS and a native window on PC.*
 - 🔀 **Two-way file sync.** Scenes, prefabs, materials and fake objects are RON, levels
   are ASCII: edit in the editor and the file saves; let an AI agent (or any tool) edit
   the file and the editor — and a running game — update live.
-- 📺 **Console simulation on PC.** Preview with N64 3-point filtering, RGBA5551 dither
-  and 320×240 output — or strict mode, which *fails the frame* when content busts the
-  N64's 4 KB TMEM or triangle budgets.
+- 📺 **Console simulation on PC.** The N64 preview has 3-point filtering, the RDP's
+  exact 16-bit dither rule and the Video Interface's dedither pass at 320×240,
+  measured against frames from a real ROM in ares. Strict mode *fails the frame*
+  when content busts the N64's 4 KB TMEM or triangle budgets.
 - 🔁 **Live reload everywhere.** Game code reloads as a dylib on PC; ROMs rebuild and
   relaunch in the emulator on file save (`cargo xtask watch n64|3ds`).
-- 🧪 **Emulator-tested.** `cargo xtask test n64|3ds` boots your game in ares/Azahar and
-  asserts on the debug channel; golden-image tests cover the renderer.
-- 🎲 **Vertex-lit, animated 3D** on all three targets from one deterministic software T&L
-  pipeline (glTF masters → portable TMDL meshes with rigid skeletons and clips).
+- 🧪 **Emulator-tested, in CI.** `cargo xtask test n64|3ds` boots the game in
+  ares/Azahar, runs every engine service's self-test and has a bot play a stage.
+  The N64 frame is checked pixel for pixel against a golden image. CI does the same
+  headless: ares in Docker, a pinned Azahar under Xvfb.
+- 🎲 **Textured, vertex-lit, animated 3D** on all three targets from one deterministic
+  software T&L pipeline (glTF masters → portable TMDL meshes):
+  - rigid or opt-in smooth skinning, with clip crossfades;
+  - billboards and particles;
+  - distance LOD and portal/cell visibility for interiors.
+- 🧰 **The services a game needs, on every target**:
+  - bitmap text;
+  - save data (EEPROM on N64, SD on 3DS);
+  - collision and runtime entities straight from editor scenes;
+  - levels loaded as data (`TSCN`);
+  - positional audio with music stingers.
 - 🤖 **AI-friendly by default, any AI.** A vendor-neutral `AGENTS.md`, open-format skills
   in `.agents/skills/` (mirrored for Claude Code), text-first content with validation
   commands (`scene check`, `model inspect`) and editor hooks that let an agent screenshot
@@ -72,7 +84,10 @@ automated. The roadmap with per-phase acceptance criteria lives in
 | Visual editor + Level painter (two-way file sync) | ✅ | — | — |
 | 3D (vertex-lit `draw_model`) | ✅ | ✅ | ✅ |
 | Materials, fog, rigid animation | ✅ | ✅ | ✅ |
-| Editor scenes in games (`scene export` → `SceneNode`) | ✅ | ✅ | ✅ |
+| Editor scenes in games (codegen or baked `TSCN` blob) | ✅ | ✅ | ✅ |
+| Textured 3D, billboards/particles, LOD, portals | ✅ | ✅ | ✅ |
+| Text, save data, collision + entities, positional audio | ✅ | ✅ EEPROM | ✅ SD card |
+| Emulator self-tests in CI | — | ✅ ares (Docker) + pixel-exact golden | ✅ Azahar (pinned) |
 
 ### In pictures
 
@@ -101,6 +116,9 @@ That's it for PC. For the consoles:
   in the repo root.
 - **3DS** — a local [devkitPro](https://devkitpro.org) install (`3ds-dev`
   packages) + the [Azahar](https://azahar-emu.org/) emulator.
+- No emulators installed? `cargo xtask emulators setup ares` builds a headless ares
+  image (Docker; then `TRINO_ARES=docker`), and `cargo xtask emulators setup azahar`
+  fetches the pinned Azahar AppImage (Linux).
 
 ```sh
 cargo xtask run n64    # build target/n64/trino.z64 + open it in ares
@@ -168,8 +186,19 @@ cargo test -p my-game      # its tests join the workspace suite immediately
 ```
 
 Game crates depend only on `trino-core` — the dependency-direction test enforces it —
-so anything you build runs on all three targets by construction. Standalone project
-scaffolding (outside this repo) lands once the engine crates are published.
+so anything you build runs on all three targets by construction.
+
+Or start a project **outside** this repo:
+
+```sh
+cargo xtask new space-cat --standalone ~/games/space-cat   # engine via path deps
+#   … or --git https://github.com/vitorjordao/Trino --rev <commit>
+cd ~/games/space-cat && cargo run -p space-cat-pc          # play; TRINO_SIM=3ds for the 3DS look
+```
+
+You get the portable game crate, a desktop host (`trino-runner-pc`, live asset
+reload), starter assets and an `AGENTS.md`. Console packaging of standalone games
+still happens inside this repo (see the backlog).
 
 ## Working on Trino (humans & AIs)
 

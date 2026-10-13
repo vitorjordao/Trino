@@ -22,6 +22,10 @@ cargo test --workspace
 | `xtask/tests/scene_codegen.rs` | `examples/showcase/src/showcase_gen.rs` is stale vs. its scene | `cargo xtask scene export scenes/showcase.scene.ron examples/showcase/src/showcase_gen.rs` |
 | `xtask/tests/showcase_render.rs` | runtime-resolved scene and exported code render differently | a codegen/resolve mismatch — fix the code, not the scene |
 | `crates/platform-pc/tests/golden.rs` | renderer output changed | intended? `cargo xtask test --bless` and review the PNG diff; a pure refactor/perf change must NOT change goldens |
+| `xtask/tests/engine_checks.rs` | a `castle64::selftest` step fails on the PC backend (the same steps run in ares/Azahar) | fix the service; never special-case PC |
+| `xtask/tests/n64_parity.rs` | the PC N64 look drifted from the ares golden frame (mean diff / % within two 5-bit steps) | a quantizer/VI/T&L change; compare with `TRINO_PARITY_DUMP=1` (writes `tests/golden/n64/actual/pc_look.png`) |
+| `xtask/tests/standalone.rs` | `cargo xtask new --standalone` output no longer builds/tests (windowed smoke with GPU + display) | fix `templates/standalone/` or `trino-runner-pc` |
+| `crates/editor/src/ui_tests.rs` | an editor panel flow broke (select → palette → duplicate → undo) | fix the UI; hand-painted widgets need `widget_info` |
 
 GPU-dependent tests skip without an adapter unless `TRINO_REQUIRE_GPU=1`.
 
@@ -38,5 +42,8 @@ GPU-dependent tests skip without an adapter unless `TRINO_REQUIRE_GPU=1`.
 - T&L cost (what the consoles' CPUs pay): `cargo test --release -p xtask --test bench_tnl -- --ignored --nocapture`.
   Compare against the base commit in a `git worktree` (never `git stash` a dirty tree for this).
 - Full console suites: `cargo xtask test n64|3ds` (emulators required; see `run-emulator`).
+  They also check the N64 golden frame (`tests/golden/n64/`) and print `TRINO_PERF`.
+- Blender toolkit, on machines with Blender: `cargo xtask blender smoke`.
+- Skinning cost: `bench_tnl` includes `skinning_rigid_vs_smooth`.
 
 On Linux the PC crates need `pkg-config` and ALSA headers (`apt install pkg-config libasound2-dev`).

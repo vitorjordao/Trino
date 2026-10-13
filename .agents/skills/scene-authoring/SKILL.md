@@ -56,6 +56,44 @@ editor (and a running `TRINO_SCENE` player) reloads them live. Formats are docum
 - Entities with no model/sprite/prefab are **markers** (spawn points, triggers, waypoints):
   game code finds them by name or tag.
 
+## Gameplay components (all optional)
+
+```ron
+(
+    name: "crate-a",
+    model: Some((
+        path: "models/crate",
+        // Distance LOD: swap to a cheaper model (often a fake object), or
+        // cull with `path: None`, beyond each distance (world units).
+        lod: [(distance: 14.0, path: Some("models/crate-far")), (distance: 40.0, path: None)],
+    )),
+    // Collision for trino_core::physics. `Some(())` = Auto: the model's box.
+    // Shapes: Box(size: (x, y, z)) (FULL size), Sphere(radius), Capsule(radius, height).
+    collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), offset: (0.0, 0.5, 0.0))),
+),
+(name: "coin", collider: Some((shape: Sphere(radius: 0.5), trigger: true)), tags: ["coin"]),
+// Positional looping sound (Ambience plays the nearest sources). On N64 the
+// sound needs `loop = true` in the manifest.
+(name: "waterfall", sound: Some((path: "sounds/water", radius: 9.0, volume: 0.8))),
+// Interior visibility (trino_core::vis): a room is a Cell; everything under
+// it belongs to it. A Portal joins two cells by name and should cover the
+// doorway opening. Sizes are FULL box sizes around the entity origin.
+(name: "kitchen", transform: (pos: (4.0, 2.0, 4.0), rot: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0)),
+ vis: Some(Cell(size: (8.0, 4.0, 8.0))), children: [ /* the room's content */ ]),
+(name: "door", transform: (pos: (8.0, 1.5, 4.0), rot: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0)),
+ vis: Some(Portal(size: (0.4, 3.0, 2.0), a: "kitchen", b: "hall"))),
+```
+
+Each component ends up in `SceneNode` / `Entity`, and in TSCN and codegen. Keep these
+rules in mind:
+- **Coplanar surfaces z-fight on the N64.** Keep decals and water several cm above the
+  ground (16-bit z); the showcase pond sits at 10 cm.
+- **Portal visibility:** a camera outside every cell sees everything. Nodes outside
+  all cells (`NO_CELL`: walls, sky, exterior) always draw.
+- **Up to 64 cells** per scene.
+
+See `scenes/interior.scene.ron` for a working portal example.
+
 ## Prefab
 
 ```ron
@@ -85,10 +123,25 @@ children by `/`-joined names below the root (`"trunk/leaves"`) and may set `mate
 3. Look at it: open the editor (`cargo xtask editor`, `TRINO_EDITOR_SCENE=scenes/x.scene.ron`)
    or play it (`TRINO_SCENE=scenes/x.scene.ron cargo run -p trino-app-pc`). Screenshots for
    agents: the `editor` skill.
-4. Console/game code: `cargo xtask scene export scenes/x.scene.ron examples/<game>/src/x_gen.rs`
-   and `include!` it (see `examples/showcase/src/lib.rs`): `scene::draw_nodes`,
-   `scene::find(NODES, "spawn")`, `scene::with_tag(NODES, "coin")`, `CAMERA`, `LIGHT`, `CLEAR`.
-   Add a drift test like `xtask/tests/scene_codegen.rs` for every exported scene.
+4. Console/game code, two ways (both checked to agree byte for byte):
+   - **Code**: export the scene, then `include!` the output (see
+     `examples/showcase/src/lib.rs`):
+     ```
+     cargo xtask scene export scenes/x.scene.ron examples/<game>/src/x_gen.rs
+     ```
+     The output gives you `NODES`, `CAMERA`, `LIGHT` and `CLEAR`. Add a drift test
+     like `xtask/tests/scene_codegen.rs` for every exported scene.
+   - **Data**: declare `[scenes.x] file = "scenes/x.scene.ron"` in the manifest. It
+     bakes to a `TSCN` blob, which you load with
+     `BakedScene::parse(platform.blob(BlobId::from_path("scenes/x"))?)`. Changing the
+     level then needs no rebuild of game code.
+
+   Then, from either source:
+   - spawn live entities with `EntityStore::spawn_nodes` / `spawn_iter`;
+   - draw with `scene::draw_nodes(r, nodes, &root, t, eye)`, where `eye` drives LOD;
+   - cull interiors with `Cells::from_nodes(..)`, `cells.visible(&camera, screen)`
+     and `draw_nodes_in` / `EntityStore::draw_in`;
+   - query with `scene::find(NODES, "spawn")` and `scene::with_tag(NODES, "coin")`.
 
 ## Pitfalls
 

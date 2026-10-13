@@ -17,8 +17,10 @@ the current-state section of [AGENTS.md](AGENTS.md) tell you exactly what exists
 - Docker reachable from the shell (on Windows, WSL2 with dockerd is enough — no
   Docker Desktop required). `cargo xtask build n64` builds the pinned libdragon
   toolchain image and the ROM for you — no manual toolchain setup.
-- Testing: [ares](https://ares-emu.net) at `ares-v148/` in the repo root;
-  `cargo xtask test n64` drives it automatically.
+- Testing: [ares](https://ares-emu.net) at `ares-v148/` in the repo root (or
+  `cargo xtask emulators setup ares` + `TRINO_ARES=docker` for the headless
+  image CI uses); `cargo xtask test n64` drives it automatically, including the
+  pixel-exact golden frame (`--bless` to update `tests/golden/n64/`).
 - Real hardware (optional): a flashcart (SummerCart64 / EverDrive) + UNFLoader.
 
 ### 3DS
@@ -26,7 +28,8 @@ the current-state section of [AGENTS.md](AGENTS.md) tell you exactly what exists
 - [devkitPro](https://devkitpro.org/wiki/Getting_Started) with the `3ds-dev` group
   (Windows has a graphical installer). No cargo-3ds needed — xtask drives the
   built-in `armv6k-nintendo-3ds` target directly.
-- Testing: [Azahar](https://azahar-emu.org) (auto-detected, or set `TRINO_AZAHAR`);
+- Testing: [Azahar](https://azahar-emu.org) (auto-detected, set `TRINO_AZAHAR`,
+  or `cargo xtask emulators setup azahar` for the pinned Linux AppImage);
   `cargo xtask test 3ds` drives it automatically.
 
 ## Workflow

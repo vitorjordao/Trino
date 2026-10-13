@@ -6,7 +6,8 @@ description: Build the Nintendo 3DS app (target/3ds/trino.3dsx) with the local d
 # build-3ds
 
 ```
-cargo xtask build 3ds      # shim + assets + Rust + .3dsx (all local, no Docker)
+cargo xtask build 3ds              # shim + assets + Rust + .3dsx (all local, no Docker)
+cargo xtask build 3ds --selftest   # the self-test app `test 3ds --no-build` boots (CI artifact)
 ```
 
 Produces `target/3ds/trino.3dsx`. Everything runs on the local devkitPro
@@ -26,13 +27,19 @@ install (auto-detected at `$DEVKITPRO`, `C:\devkitPro` or `/opt/devkitpro`).
    the rest.
 4. `pack_3dsx` — `smdhtool` (metadata) + `3dsxtool --romfs` → `.3dsx`.
 
+Textured 3D uses a small citro3d path: `tri3d.v.pica` is assembled by `picasso` into
+`target/3ds/tri3d_shbin.h`, which the shim includes. `apps/3ds/build.rs` relinks when
+only the shim object changes (`TRINO_3DS_SHIM`), and the app's stack is 256 KB
+(`__stacksize__`).
+
 ## The shim rule
 
 Unlike the N64 there is no ABI hazard (both sides are ARM EABI-hf), but the
 shim (`trino_shim_3ds.c` + `crates/platform-3ds/src/ffi.rs`, matching pairs)
 is still the only FFI surface: citro2d is mostly static-inline C that Rust
 cannot call, and the discipline (≤4 scalar/pointer args, no by-value
-structs, no variadics) keeps the console backends symmetrical. Never call
+structs, no variadics, **no scalar float after an int** — volumes/pans cross as
+16.16 fixed point, like on the N64) keeps the console backends symmetrical. Never call
 libctru/citro2d directly from Rust.
 
 ## Troubleshooting

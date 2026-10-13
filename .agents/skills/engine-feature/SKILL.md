@@ -25,6 +25,11 @@ A feature is done only when **PC, N64 and 3DS** all run it and an emulator has s
   - Game API: a new `Platform`/`Game` method that changes the dylib ABI bumps
     `GAME_API_VERSION`.
 - `ModelParams` and similar structs grow. Use `..ModelParams::DEFAULT` everywhere.
+- **A new surface or light feature must reach the N64's RSP path too.** Most N64 draws
+  skip `tessellate` and run on `rsp_trino.S` (ADR 0007), which ignores whatever it
+  doesn't implement. Either exclude the feature in
+  `trino_core::render3d::rsp_eligible`, which is the safe default, or implement it in
+  the overlay behind the oracle and parity checks (`n64-performance` › RSP T&L).
 
 ## 2. Backends, in matched pairs
 

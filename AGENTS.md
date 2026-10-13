@@ -274,10 +274,19 @@ new skill when none fits. Then run `cargo xtask agents sync`. The steps are in
     in strict mode; `model inspect` and the editor report N64 time;
     `N64_COST` recalibrated.
 
-Ranked next steps: `docs/BACKLOG.md`. The top one is still N64 render throughput, now
-for the hub alone: ~39 ms of emulated N64 time per frame, 24.7 ms of it CPU T&L and
-8 ms submit (26 uncached rspq words per triangle). RSP T&L is the lever, proposed in
-`docs/adr/0007-n64-rsp-tnl.md` (a custom overlay on the current libdragon pin).
+- **N64 RSP T&L** (ADR 0007, `crates/platform-n64/shim/rsp_trino.S`).
+  - Most N64 draws run on Trino's own rspq overlay instead of `tessellate`: static,
+    opaque, untextured, unclipped Gouraud/Unlit draws (`trino_core::render3d::
+    rsp_eligible`).
+  - Fixed-point transform, model-space light, libdragon's RSP triangle setup.
+  - Same ROM: hub 38.0 → 13.1 ms, every stage 7–8 ms (vsync caps at 60 fps).
+  - Gated by an oracle, CPU-vs-RSP pixel checks, the work split (`rsp_draws`) and
+    the `castle64_hub` N64 golden.
+
+Ranked next steps: `docs/BACKLOG.md`. N64 throughput is no longer the top risk for
+castle64. Next for the RSP path: clipping on the RSP, more surface features, an RSP
+term in the cost model, and a measurement on real hardware (ares doesn't time the
+RDP).
 
 PC keyboard mapping: A/B = Z/X, X/Y = C/V, L/R = Q/E, Start = Enter,
 Select = Right Shift, D-pad = arrows, stick = WASD (see `crates/platform-pc/src/input.rs`).
@@ -451,6 +460,15 @@ cargo test --workspace
   `rdpq_triangle` writes 26 words per triangle into it. Shaving the conversion math
   before it doesn't help (it overlaps the drain); only fewer triangles or fewer words
   do.
+- **A new surface or light feature must reach the RSP path.** Most N64 draws run on
+  `rsp_trino.S`, which silently ignores what it doesn't implement. Exclude the feature
+  in `rsp_eligible`, or implement it in the overlay behind the oracle and parity
+  checks (`engine-feature` › 1).
+- **RSP fixed point:**
+  - the overlay's `vrcph/vrcpl` of an s15.16 w is 1/(2w);
+  - z must come from 1/depth with the CPU path's rounding, or touching surfaces flip
+    between RSP and CPU draws;
+  - reuse a single triangle staging buffer.
 - **Translucency turns depth splits on.** `split_policy` bisects only fogged,
   textured or translucent draws (tint or vertex alpha < 255). A tint with alpha < 255
   on a big mesh brings back DEPTH_SPLIT's extra triangles on the N64.

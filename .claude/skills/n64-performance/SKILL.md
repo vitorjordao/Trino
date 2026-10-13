@@ -42,6 +42,52 @@ TRINO_PERF_MODEL:hub model=e2dd959e calls=3 us=8659 verts=264 tris_in=132 emitte
 - Code: `trino_core::perf` (`RenderProfile`, `CostModel`), the N64 renderer's
   `start_profile`/`take_profile`, `castle64::perf`, `apps/n64/src/lib.rs` step 5.
 
+## RSP T&L (`rsp_trino.S`, ADR 0007)
+
+Most castle64 draws never run `tessellate` on the N64. They go to Trino's rspq
+overlay:
+
+- **Which draws.** `trino_core::render3d::rsp_eligible` (per draw) on meshes that
+  `rsp_mesh_supported` accepted (once, at register):
+  - static, untextured, opaque, unit normals, ≤ 16 segments (`rsp_split`);
+  - Gouraud (model-space light, 3c) or Unlit; white light, no fog, no emissive;
+  - the whole bounding sphere inside the guard band and past NEAR, so the CPU path
+    would have clipped nothing.
+
+  Everything else stays on the CPU path, which is still the reference.
+- **How.** At register, the N64 renderer bakes an RSP copy in uncached RDRAM:
+  segments of ≤ 32 vertices (s15.16 positions, s0.15 normals, colors) plus u8 local
+  indices. A draw becomes one 27-word command: the clip-space matrix, the light, the
+  tint and the segment table. The overlay DMAs each segment, transforms and lights it
+  into DMEM, then calls `RDPQ_Triangle_Send_Async` per triangle. Commands are queued
+  with the batch and submitted right after its CPU triangles.
+- **Gates.**
+  - `rsp_draws`/`rsp_tris` in the work counters: `perf_budget` applies the same rules
+    on the PC, and the ROM must match exactly.
+  - The oracle: screen vertices DMA'd back and compared with the CPU projection.
+    Tolerances xy ≤ 2/4 px, z ≤ 64/32767, color ≤ 3; measured 1/4, 1, 1, rotated too.
+  - The micro grid drawn both ways must match pixel for pixel.
+  - The hub drawn both ways: 1200 samples, 0 may differ beyond 24.
+  - `tests/golden/n64/castle64_hub.png`.
+- **A/B without layout noise.** The micro scenes run twice (`micro-*-rsp`), and the
+  castle64 scenes run again as `cpu-<scene>` with `set_rsp(false)`, in the same ROM.
+  xtask prints both tables. Measured frames drain the queue (`trino_drain`: rdpq
+  fence + rspq wait, charged to `end`), so RSP and RDP work counts in the frame.
+  Cross-check with `vblanks`.
+- **Traps, all measured:**
+  - `vrcph/vrcpl` of an s15.16 w gives 1/(2w), so the matrix halves its w row;
+  - z through z/w lost ~9 bits on rotated meshes, so the overlay derives z from
+    1/depth as `0x7FFE − floor(1638/depth)`. With 0x7FFF it sat one unit behind the
+    CPU path's truncation, and the doorway vanished into the wall;
+  - one staging buffer: alternating two dropped every other pair of triangles;
+  - v0 = 0 culls Trino's back faces (v0 = 1 culled every front face);
+  - the shim keeps the 3D mode current for RSP draws and issues a SYNC_PIPE before
+    the next mode change (rdpq's autosync never sees them).
+- **Limits.**
+  - ares does not model RDP fill time, so on hardware the RDP may bind first.
+  - `N64_COST` describes CPU-path draws only, and the editor HUD and strict mode
+    still assume CPU T&L for everything.
+
 ## The gates (keep the data honest over time)
 
 | Gate | Where | Checks |
@@ -155,25 +201,32 @@ inspect` and the editor warn against a 30 fps frame. The
 original KayKit door (1068 tris) read "27% of budget" and cost ~64 ms, two whole
 frames. Trust the cost model.
 
-## Where the time goes (2026-10-13, after Phases 1–3c)
+## Where the time goes (2026-10-13, RSP T&L on (ADR 0007))
 
 | Scene | Frame (ms) | ≈ fps | T&L (ms) | sort + submit (ms) | game (ms) | Draws |
 |---|---|---|---|---|---|---|
-| hub | 39.6 | 25 | 24.9 | 10.4 | 3.3 | 26 |
-| green-hills | 19.9 | **50** | 11.7 | 5.0 | 2.3 | 16 |
-| lava-land | 21.8 | **46** | 13.0 | 5.6 | 2.2 | 16 |
-| sky-tower | 19.0 | **53** | 11.3 | 4.5 | 2.3 | 19 |
-| throne | 16.1 | **62** | 9.6 | 3.6 | 2.0 | 12 |
+| hub | 13.1 | **76** | 4.6 | 1.7 | 3.2 | 26 |
+| green-hills | 7.3 | **137** | 2.1 | 1.0 | 2.2 | 16 |
+| lava-land | 7.3 | **136** | 1.8 | 1.0 | 2.3 | 16 |
+| sky-tower | 7.2 | **139** | 2.2 | 0.8 | 2.3 | 19 |
+| throne | 8.4 | **119** | 3.6 | 1.6 | 2.0 | 12 |
+| cpu-hub | 38.0 | 26 | 23.1 | 10.7 | 3.1 | 26 |
+| cpu-green-hills | 19.4 | **52** | 11.0 | 5.2 | 2.1 | 16 |
+| cpu-lava-land | 21.1 | **47** | 12.0 | 5.8 | 2.1 | 16 |
+| cpu-sky-tower | 18.5 | **54** | 10.4 | 4.8 | 2.1 | 19 |
+| cpu-throne | 15.4 | **65** | 8.8 | 3.7 | 1.8 | 12 |
 
 - Hub T&L by model (ms, calls):
-  door_frame ×3: 5.0; block_brick ×7: 4.6; door ×1: 2.8; boar ×1: 2.5; player_leg ×2: 1.8; player_arm ×2: 1.7; player_torso ×1: 1.6; block_castle ×3: 1.5; block_roof ×3: 1.5; block_grass ×1: 0.9; star ×1: 0.6; shadow ×1: 0.5.
-- A visible draw costs ~50 µs before its first vertex (280 µs at Phase 0) plus
-  ~13–29 µs outside the T&L timer. A Gouraud vertex in model-space lighting is the
-  transform plus the light (~5 µs on the micro grid), a front-facing emitted triangle
-  ~30 µs, submit ~22 µs per emitted triangle (26 uncached rspq words).
-- No castle64 draw splits any more (3a). The hub's remaining cost is spread over the
-  doors, the bricks, the boar and the 5-part player.
-- **The enemy is not the problem.** A boar costs ~2.5 ms, and all game logic ~0.3 ms.
+  block_brick ×7: 2.0; block_grass ×1: 0.8; block_roof ×3: 0.6; block_castle ×3: 0.6; door_frame ×3: 0.2; player_arm ×2: 0.1; player_leg ×2: 0.1; star ×1: 0.1; boar ×1: 0.1; player_torso ×1: 0.1; shadow ×1: 0.1; door ×1: 0.1.
+- 21 of the hub's 26 draws (545 of 605 source triangles) run on the RSP overlay
+  (`rsp_trino.S`). The CPU keeps the draws that need clipping (the grass floor and
+  walls crossing the near plane or the guard band), the billboards and the fogged or
+  textured ones.
+- The CPU T&L left (4.6 ms in the hub) is those few clipped draws; `game` (castle64's
+  own render code, ~3 ms) is now a third of the frame.
+- Same ROM, CPU T&L instead (`cpu-hub`): 38.0 ms. ares does not model RDP fill time,
+  so real hardware may be RDP-bound before it is CPU-bound.
+- **The enemy is not the problem.** A boar is one RSP draw now.
 
 ## What worked, what didn't (keep this list honest)
 
@@ -189,6 +242,7 @@ frames. Trust the cost model.
 | Per-vertex cached projection + no-copy fast path in `tessellate` | neutral (±2%) — reverted |
 | Hot loop compacted (`#[inline(never)]` vertex/flat/general paths) | +3…+17% worse — reverted |
 | `opt-level = "s"` for the ROM | worse everywhere — not adopted |
+| **RSP T&L** (ADR 0007): `rsp_trino.S`, an rspq overlay that transforms, lights and projects static Gouraud/Unlit meshes in fixed point and calls libdragon's `RDPQ_Triangle_Send_Async`; `rsp_eligible` picks the draws (no clipping needed, white light, no fog, opaque, untextured) | same ROM, CPU → RSP: **hub 38.0 → 13.1 ms (−65%)**, stages −45…−65% (7.2–8.4 ms). Hub vblanks 11 → 4 per 4 frames. Output: a new N64 golden (`castle64_hub.png`, mean 0.05/255 from the CPU path), every other golden identical |
 | Phase 4 spike (desk): the pin has rspq overlays and `rsp_rdpq_tri.inc`; preview (for tiny3d) is 4 609 ahead / 272 behind the pin | ADR 0007 proposed: a custom overlay on the pin. No microcode yet |
 | **3d** `Caps::max_3d_us_per_frame` (N64 50 ms): PC strict mode panics when a frame's `N64_COST` estimate exceeds it; `model inspect`, the HUD and the model inspector show time against a 30 fps frame instead of a share of 4000 triangles. `N64_COST` refit after 3c (7.1 / 17.3 / 184 / 25.5 / 37) | tools only; the ROM's frame moved −0.3…−1.1% (layout). Goldens and counters identical |
 | **3c** Model-space lighting on the static Gouraud path: for orthogonal model matrices with uniform scale, or any per-axis scale when every normal lies on an axis (boxes, and castle64's boar), light `n_local · (Rᵀ·l)` and skip the per-vertex normal transform, sqrt and division. The mesh's `unit_normals`/`axis_normals` are checked once at parse; the tolerance is 3e-3 because the core's sin/cos make rotations orthonormal only to ~1e-4 | T&L −11…−14% in four scenes, throne −2.8%; frame −4…−7%, throne +1.1% (`game`, unchanged code, +17…21%: layout). Boar −29%, doors −17…−27%, player −9…−18% per model. Expected to move output, but every golden and the work baseline stayed byte-identical |
@@ -229,17 +283,20 @@ They are in `docs/plans/n64-throughput.md`.
 
 ## Remaining levers (BACKLOG P0)
 
-The throughput plan (`docs/plans/n64-throughput.md`) is done through Phase 3. The four
-stages run at 46–62 fps; only the hub (~39 ms) misses 30 fps.
+The throughput plan (`docs/plans/n64-throughput.md`) is done, including Phase 4: RSP
+T&L. Every castle64 scene costs 7–13 ms of emulated time (vsync caps it at 60 fps).
 
-- **RSP T&L**, proposed in `docs/adr/0007-n64-rsp-tnl.md`: a custom overlay on the
-  current pin (`rspq_overlay_register`, `rsp_rdpq_tri.inc` with a custom vertex
-  layout), with a CPU fallback per draw. The hub's T&L (24.7 ms) plus submit (8 ms)
-  is the whole gap. Next step: one static mesh on the RSP, timed against
-  `micro-gouraud`.
-- **Hub blocks merged per chunk** (2b): priced at ~1–2 ms, deferred.
-- Done: coins as billboards (2a), depth splits only where they matter (3a), the
-  `Caps` cost budget (3d). Skipped: the player as one draw (2c, ~0.35 ms).
+- **Grow the overlay's coverage**, one feature at a time, each behind the same
+  oracle + parity gates:
+  - near/guard-band clipping, so big floors and walls leave the CPU (the hub's
+    remaining 4.6 ms of CPU T&L);
+  - Flat, fog, colored light, emissive;
+  - textured draws, rigid skeletons.
+- **Teach the cost model the RSP**, so the editor HUD, strict mode and `model
+  inspect` stop overestimating eligible draws.
+- **Real hardware**: ares doesn't model RDP fill time. Measure there before chasing
+  CPU time further.
+- Deferred: hub blocks merged per chunk (2b, ~1–2 ms on the CPU path).
 
 ## Workflow for a perf change
 

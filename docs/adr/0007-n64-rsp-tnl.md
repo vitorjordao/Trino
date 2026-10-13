@@ -1,9 +1,8 @@
-# ADR 0007 — N64: vertex T&L on the RSP (proposed)
+# ADR 0007 — N64: vertex T&L on the RSP
 
-- Status: **proposed**. This records the Phase 4 spike of `docs/plans/n64-throughput.md`.
-  The spike was a desk study of the pinned toolchain plus measurements of the current
-  CPU path. No microcode was written yet, so the hub frame with RSP T&L is an estimate,
-  not a measurement.
+- Status: **accepted**, and implemented (§7, results). §1–§6 were written as a
+  proposal after the Phase 4 desk spike of `docs/plans/n64-throughput.md`; §7 records
+  what was built and measured, and where it departed from the proposal.
 - Date: 2026-10-13
 - Context: Phases 1–3 of the throughput plan took castle64 from hub 76.1 / green-hills
   37.3 / lava-land 49.1 / sky-tower 31.2 / throne 43.4 ms to 39.4 / 19.8 / 21.7 / 18.9 /
@@ -112,3 +111,45 @@ frame gets faster.
   built in a struct passed by pointer), an RSP self-test step in `castle64::selftest`.
 - The N64 renderer keeps `trino_core::tessellate` for every draw the overlay
   declines, so features never regress; coverage grows draw type by draw type.
+
+## 7. As built (2026-10-13, branch `n64-rsp-tnl`)
+
+- **Overlay** `crates/platform-n64/shim/rsp_trino.S`, built by xtask like `n64.mk`
+  builds ucode. It takes 2.4 KB of IMEM and 3.4 KB of DMEM with the rspq kernel.
+  - `TrinoCmd_Draw` takes a 27-word command (§3.2).
+  - Segments of ≤ 32 vertices: s15.16 positions with a 32×32 multiply, s0.15 normals,
+    u8 indices. A position format with a per-mesh shift was dropped because it
+    overflowed for distant objects.
+  - Lighting is the model-space white light of throughput item 3c; Unlit is ambient 1.
+  - Triangles go through `RDPQ_Triangle_Send_Async`.
+- **Eligibility**: `trino_core::render3d::{rsp_mesh_supported, rsp_eligible,
+  rsp_split}`, in the core so the PC predicts the console's split. A draw qualifies
+  when it needs nothing the overlay lacks, and its bounding sphere is inside the guard
+  band and past NEAR. So instead of a per-triangle CPU fallback (§3.4), whole draws
+  that could clip stay on the CPU.
+- **Gates (§4, as decided)**:
+  - work counters gain `rsp_draws`/`rsp_tris`, and ROM = PC stays exact;
+  - the showcase golden is unchanged (fogged, so it takes the CPU path);
+  - a second N64 golden, `castle64_hub.png`, covers the RSP path;
+  - an oracle, a pixel-parity check and a hub CPU-vs-RSP check run in the self-test;
+  - measured frames drain the queue, so RSP time is counted.
+- **Measured traps** (the `n64-performance` skill has them): the reciprocal's 1/2w,
+  z from 1/depth with CPU-matching rounding, a single staging buffer, the cull mode,
+  submitting RSP draws after the batch's CPU triangles, and SYNC_PIPE before mode
+  changes.
+- **Results**, same ROM, emulated time, frames drained:
+
+  | Scene | CPU T&L (ms) | RSP T&L (ms) |
+  |---|---|---|
+  | hub | 38.0 | **13.1** |
+  | green-hills | 19.4 | **7.3** |
+  | lava-land | 21.1 | **7.3** |
+  | sky-tower | 18.5 | **7.2** |
+  | throne | 15.4 | **8.4** |
+
+  Hub vblanks: 11 → 4 over the 4 measured frames, i.e. vsync-bound at 60 fps.
+- **Not modeled**: ares doesn't time the RDP's fill, so hardware may be RDP-bound.
+  `N64_COST`, the HUD and strict mode still describe CPU T&L only.
+- **Determinism (§4)**: as decided. The PC is still bit-exact against itself. The N64
+  RSP path is reproducible in ares and within 1/4 px, 1/32767 z and 1/255 color of the
+  CPU path. Gameplay never reads T&L output.

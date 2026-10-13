@@ -13,36 +13,28 @@ shipping a 3D game first**, then by cost:
 
 ### P0 — blocks a real N64 release
 
-1. **N64 render throughput** (L). The four stages now reach 30 fps; the hub is the gap.
-   - castle64 frame, emulated N64 ms (update + render − begin), after the throughput
-     plan (`docs/plans/n64-throughput.md`, Phases 0–3):
+1. **N64 render throughput: grow the RSP path** (M). castle64 is CPU-light now.
+   - castle64 frame, emulated N64 ms (update + render − begin, queue drained):
 
-     | Scene | Before (ms) | Now (ms) | ≈ fps now |
+     | Scene | Before the plan | CPU T&L (Phase 3) | **RSP T&L (ADR 0007)** |
      |---|---|---|---|
-     | hub | 76.1 | 39.4 | 25 |
-     | green-hills | 37.3 | 19.8 | **50** |
-     | lava-land | 49.1 | 21.7 | **46** |
-     | sky-tower | 31.2 | 18.9 | **53** |
-     | throne | 43.4 | 16.0 | **62** |
+     | hub | 76.1 | 38.0 | **13.1** |
+     | green-hills | 37.3 | 19.4 | **7.3** |
+     | lava-land | 49.1 | 21.1 | **7.3** |
+     | sky-tower | 31.2 | 18.5 | **7.2** |
+     | throne | 43.4 | 15.4 | **8.4** |
 
-   - Calibrated cost: T&L ≈ 7.1 µs/vertex + 17.3 µs/triangle + 0.18 ms/draw +
-     25.5 µs/split, plus ~37 µs per emitted triangle (`trino_core::perf::N64_COST`).
-     A 30 fps frame affords roughly 550–650 triangles of CPU T&L.
-   - What is left, best first:
-     - **(a)** RSP T&L, proposed in **ADR 0007**. It would take a custom overlay on
-       the current libdragon pin, built on `rsp_rdpq_tri.inc`, with a CPU fallback
-       per draw. The hub's T&L (24.7 ms) plus submit (8.0 ms) is the whole gap. Next
-       step: one static mesh on the RSP, measured in the micro scenes.
-     - **(b)** Merge the hub's static blocks (2b, priced at ~1–2 ms; the stages
-       don't need it).
-     - **(c)** The plan's hot-code link-order idea, deferred: 1i already shrank the
-       T&L code that made layout swing.
-     - **(e)** Cache transformed static geometry while the camera is still.
-   - Done, see the record below: billboard coins, depth splits only where they
-     matter, the `Caps` cost budget (`max_3d_us_per_frame`).
-   - Judge every change on the `test n64` scene table, on identical code apart from
-     the change: code layout alone moves a stage ~10–20%. The micro scenes
-     (`micro-*`) show it when identical code moves. Bless the baselines afterward.
+     The CPU T&L column comes from the same ROM as the RSP column (`cpu-*` scenes).
+   - Next, best first:
+     - **(a)** Measure on real hardware. ares doesn't model RDP fill time, so the RDP
+       may now bind first.
+     - **(b)** Near/guard-band clipping on the RSP. The draws that still clip (big
+       floors and walls) are the hub's remaining 4.6 ms of CPU T&L.
+     - **(c)** Overlay coverage: Flat, fog, colored light, emissive, textures, rigid
+       skeletons. Each lands behind the oracle and parity checks.
+     - **(d)** An RSP term in `N64_COST`. The HUD, strict mode and `model inspect`
+       still assume CPU T&L for every draw.
+     - **(e)** Merge the hub's static blocks (2b), deferred.
 2. **Freeze `TSCN` v1 at the first release** (S). Until then the layout may still grow.
    Afterwards, every change bumps the version and adds a migration (ADR 0005 §3).
 
@@ -104,6 +96,14 @@ shipping a 3D game first**, then by cost:
   time) and bless `tests/perf/` on purpose. Host benches stay as regression guards only.
 
 ---
+
+## Done — N64 RSP T&L (2026-10-13, branch `n64-rsp-tnl`, ADR 0007)
+
+| Item | Evidence |
+|---|---|
+| Milestone 1: an rspq overlay built by xtask (n64.mk's RSP recipe), drawing a triangle through `RDPQ_Triangle_Send_Async` | the self-test reads the triangle back |
+| Milestone 2: `TrinoCmd_Draw` (fixed-point transform, light, projection), `rsp_eligible`/`rsp_mesh_supported`, an oracle, and the micro scenes twice in one ROM | oracle xy 0/4 px, z 2, color 1; pixels identical; micro-gouraud 23.7 → 2.7 ms |
+| Milestone 3: on by default; z from 1/depth with CPU rounding; RSP draws after the batch's CPU triangles; `rsp_split` in the core; a work split in the gates; the `castle64_hub` N64 golden; hub CPU-vs-RSP parity | hub 38.0 → 13.1 ms in the same ROM; 0 of 1200 samples differ; golden 0.05/255 from the CPU path; Docker ares identical |
 
 ## Done — N64 throughput plan (2026-10-13, branch `plan/n64-throughput`)
 

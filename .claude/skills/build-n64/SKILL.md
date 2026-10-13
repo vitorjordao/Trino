@@ -16,7 +16,12 @@ Produces `target/n64/trino.z64`. Everything native runs inside the pinned
 
 1. `ensure_image` — builds the `trino-n64` image if missing (libdragon pinned by commit).
 2. `compile_shim` — compiles `crates/platform-n64/shim/trino_shim.c` with
-   `mips64-elf-gcc -mabi=o64` in-container (mtime-cached to `target/n64/shim.o`).
+   `mips64-elf-gcc -mabi=o64` in-container (mtime-cached to `target/n64/shim.o`),
+   and the RSP overlay `shim/rsp_trino.S` the way `n64.mk` builds RSP ucode:
+   `-march=mips1 -mabi=32 -Wl,-Trsp.ld`, then `.text`/`.data` cut to binaries and
+   wrapped as `rsp_trino_{text,data}_{start,end}` for `DEFINE_RSP_UCODE`
+   (`target/n64/rsp_trino.o`; `mips64-elf-size -G` prints its IMEM/DMEM use, which
+   must stay under 4 KB each with the rspq kernel).
 3. `bake_assets` — mksprite/audioconv64 into `target/n64/filesystem/` + `index.tsv`.
 4. `cargo +nightly build` — Rust as a **staticlib** for the custom target
    `platforms/n64/mips-nintendo64-none.json` (o32, `+noabicalls`, build-std).

@@ -365,7 +365,7 @@ Edit this file as you go.
     words, so the optional step is dropped too. Fewer words per triangle means a custom
     RSP command or RSP T&L with shared vertices (Phase 4).
   - [x] 1g sort — skipped: sort ≤ 4 ms per scene, 2.4 µs per emitted triangle (Phase 0)
-  - [ ] 1h transform fast path
+  - [x] 1h transform fast path — kept: `game` −15…−18% in all five scenes, frame neutral
 - [ ] N64_COST recalibrated, skill tables updated
 - [ ] Candidate after Phase 1: group the T&L hot code in the link (a `.text` section
   ahead of the rest via a wrapped `n64.ld`). The hot set (`tessellate_with` with the

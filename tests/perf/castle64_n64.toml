@@ -8,30 +8,30 @@
 
 [hub]
 frame_us = 68700
-tnl_us = 49900
-sort_us = 5800
+tnl_us = 50700
+sort_us = 5700
 submit_us = 16900
 
 [green-hills]
-frame_us = 31100
-tnl_us = 23300
+frame_us = 31600
+tnl_us = 24300
 sort_us = 2000
 submit_us = 6300
 
 [lava-land]
-frame_us = 45900
-tnl_us = 32000
-sort_us = 3900
+frame_us = 45500
+tnl_us = 31900
+sort_us = 4000
 submit_us = 12400
 
 [sky-tower]
-frame_us = 26500
-tnl_us = 19600
-sort_us = 1800
+frame_us = 26800
+tnl_us = 20500
+sort_us = 1700
 submit_us = 5100
 
 [throne]
-frame_us = 41700
-tnl_us = 28400
-sort_us = 3500
+frame_us = 41200
+tnl_us = 28100
+sort_us = 3700
 submit_us = 11800

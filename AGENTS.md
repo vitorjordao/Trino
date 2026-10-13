@@ -261,7 +261,7 @@ new skill when none fits. Then run `cargo xtask agents sync`. The steps are in
 Ranked next steps: `docs/BACKLOG.md`. The top one is N64 render throughput. castle64's
 hub costs ~76 ms of emulated N64 time per frame. 55 ms of that is CPU T&L, spread over
 34 draws (0.28 ms each before any vertex). The stages run at 20–32 fps. RSP T&L and fewer
-draws are the levers.
+draws are the levers. The ordered execution plan is `docs/plans/n64-throughput.md`.
 
 PC keyboard mapping: A/B = Z/X, X/Y = C/V, L/R = Q/E, Start = Enter,
 Select = Right Shift, D-pad = arrows, stick = WASD (see `crates/platform-pc/src/input.rs`).
@@ -287,7 +287,7 @@ Select = Right Shift, D-pad = arrows, stick = WASD (see `crates/platform-pc/src/
 | `templates/new-game/`, `templates/standalone/` | Scaffolds for `cargo xtask new` (in-repo crate / standalone project) |
 | `docker/` | Toolchain/emulator images: `n64/` (libdragon), `ares/` (headless ares for tests) |
 | `tests/golden/` | Golden images: `pc/` (renderer), `n64/` (ares framebuffer) |
-| `docs/adr/` | Architecture decisions; `docs/BACKLOG.md` ranked next steps |
+| `docs/adr/`, `docs/plans/` | Architecture decisions; execution plans for big items; `docs/BACKLOG.md` ranked next steps |
 | `.github/workflows/` | `ci.yml`, `release.yml` |
 
 ## The one inviolable rule: dependency direction

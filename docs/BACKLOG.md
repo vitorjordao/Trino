@@ -30,6 +30,9 @@ shipping a 3D game first**, then by cost:
    - Calibrated cost: T&L ≈ 16.6 µs/vertex + 26.1 µs/triangle + 0.28 ms/draw +
      22.3 µs/split, plus ~30 µs per emitted triangle (`trino_core::perf::N64_COST`).
      A 30 fps frame affords roughly 300–400 triangles of CPU T&L.
+   - **Execution plan: `docs/plans/n64-throughput.md`.** It orders the work: measure
+     fixed costs, output-identical CPU wins, fewer draws, golden-moving changes, then an
+     RSP spike. It also records the disassembly evidence. Start there.
    - Options, best first:
      - **(a)** Move vertex transform and lighting to the RSP. A small ucode, or
        tiny3d's, behind the same `draw_model` contract (ADR 0003 allows it). Of the
@@ -40,7 +43,7 @@ shipping a 3D game first**, then by cost:
        - draw coins as billboards;
        - make the player one rigid-skeleton model (today it is 5 draws).
      - **(c)** DEPTH_SPLIT policy (S–M): every target z-buffers now (the 3DS too, since
-       this pass), so splits mostly buy painter-order quality. They cost 14.7 µs each
+       this pass), so splits mostly buy painter-order quality. They cost ~22 µs each
        and inflate emitted triangles (hub grass 12 → 198, throne castle 60 → 273).
        Relaxing them moves goldens: a deliberate renderer change.
      - **(d)** Replace `Caps::N64.max_tris_per_frame = 4000` (an RDP-era number) with

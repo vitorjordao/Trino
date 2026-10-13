@@ -20,8 +20,9 @@ TRINO_PERF_MODEL:hub model=e2dd959e calls=3 us=8659 verts=264 tris_in=132 emitte
 
 - **Times** (µs, emulated N64 clock: ares emulates the count register; the shim
   converts exactly with `TIMER_MICROS_LL`): `tnl` = `tessellate` for all models,
-  `sort` = batch depth sort, `submit` = handing triangles to the RDP (`rdpq_triangle`
-  is CPU-side C), `begin` = framebuffer acquire, **mostly waiting** (vsync/RDP — it
+  `sort` = batch depth sort, `submit` = handing triangles to the RDP (the CPU side of
+  `rdpq_triangle`: at the pinned libdragon it is `rdpq_triangle_rsp`, so the CPU only
+  converts floats and writes the rspq command, and the RSP does edge setup), `begin` = framebuffer acquire, **mostly waiting** (vsync/RDP — it
   swings 0.1–9 ms between runs, never judge on it), `game` = castle64's own render
   code, `vblanks` = VI interrupts during the frames (independent clock check).
 - **Work** (deterministic, identical on every target): `verts` = vertex
@@ -126,7 +127,28 @@ frames. Trust the cost model.
 | Hot loop compacted (`#[inline(never)]` vertex/flat/general paths) | +3…+17% worse — reverted |
 | `opt-level = "s"` for the ROM | worse everywhere — not adopted |
 
+## Reading the ROM's machine code
+
+Before guessing where CPU time goes, look at what the compiler emitted:
+
+```sh
+docker run --rm -v "$PWD/target/n64":/w -w /w trino-n64:latest \
+  sh -c 'mips64-elf-objdump -d --no-show-raw-insn trino.elf' > /tmp/rom.S
+```
+
+Then find the function (`grep` its mangled name, e.g. `tessellate_joints`) and count
+`div.s` (~29 cycles each), `cvt`/`trunc`, `jal` targets (non-inlined helpers,
+`panic_bounds_check`) and `__*sf*` libcalls. Findings on 2026-10-13:
+- no soft-float;
+- `rd_vec3` not inlined, with 12 bounds checks per call;
+- 15 `div.s` in the static vertex closure;
+- the shim's `trino_tri` divides 12 color bytes by 255 for every triangle.
+
+They are in `docs/plans/n64-throughput.md`.
+
 ## Remaining levers (BACKLOG P0)
+
+The ordered plan is `docs/plans/n64-throughput.md`.
 
 - **RSP T&L**: a small ucode, or tiny3d's, behind the same `draw_model` contract
   (ADR 0003). It is still the lever for the hub (~2.3× short of 30 fps).

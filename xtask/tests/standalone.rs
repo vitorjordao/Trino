@@ -1,8 +1,9 @@
 //! `cargo xtask new <name> --standalone <dir>` end to end: scaffold a
 //! project outside the repository, then build and test it with plain
 //! `cargo` from inside it — what a user does. With `TRINO_REQUIRE_GPU=1`
-//! (a GPU and display are present) the PC host also runs a 30-frame smoke
-//! and must print `TRINO_RUN_OK`.
+//! and a display (`DISPLAY` / `WAYLAND_DISPLAY`; CI runs this test under
+//! `xvfb-run`) the PC host also runs a 30-frame smoke and must print
+//! `TRINO_RUN_OK`.
 //!
 //! Builds share this workspace's `target/` (same `Cargo.lock`, same
 //! profiles), so only the generated crates compile.
@@ -49,7 +50,10 @@ fn standalone_project_builds_tests_and_runs() {
     let tests = run(&["test", "--offline"], &[]);
     assert!(tests.contains("moves_with_dpad ... ok"), "{tests}");
 
-    if std::env::var("TRINO_REQUIRE_GPU").as_deref() == Ok("1") {
+    let display = ["DISPLAY", "WAYLAND_DISPLAY"]
+        .iter()
+        .any(|v| std::env::var_os(v).is_some_and(|s| !s.is_empty()));
+    if std::env::var("TRINO_REQUIRE_GPU").as_deref() == Ok("1") && display {
         let smoke = run(
             &["run", "--offline", "-p", "orbit-cat-pc"],
             &[("TRINO_SMOKE_FRAMES", "30")],

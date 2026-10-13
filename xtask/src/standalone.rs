@@ -88,13 +88,27 @@ pub fn parse_args(
     let source = match git {
         Some(url) => EngineSource::Git { url, pin },
         None if pin.is_some() => return Err("--rev/--branch need --git <url>".into()),
-        None => EngineSource::Path(
-            engine_root
-                .canonicalize()
-                .map_err(|e| format!("{}: {e}", engine_root.display()))?,
-        ),
+        None => EngineSource::Path(absolute(engine_root)?),
     };
     Ok(Some((dir, source)))
+}
+
+/// Absolute, `..`-free path without `canonicalize` (which yields `\\?\`
+/// verbatim paths on Windows that cargo cannot use as path dependencies).
+pub fn absolute(path: &Path) -> Result<PathBuf, String> {
+    use std::path::Component;
+    let abs = std::path::absolute(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut out = PathBuf::new();
+    for c in abs.components() {
+        match c {
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::CurDir => {}
+            other => out.push(other),
+        }
+    }
+    Ok(out)
 }
 
 /// Render the standalone project into `dest` (must not exist or be empty).
@@ -197,6 +211,9 @@ mod tests {
         assert!(parse_args(&["--git", "u"], &root).is_err());
         assert!(parse_args(&["--standalone", "g", "--rev", "r"], &root).is_err());
         assert!(parse_args(&["--bogus"], &root).is_err());
+        let abs = absolute(Path::new("a/b/../c")).unwrap();
+        assert!(abs.is_absolute() && abs.ends_with("a/c"), "{abs:?}");
+        assert!(!abs.to_string_lossy().contains(".."));
     }
 
     #[test]
@@ -205,7 +222,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let dest = tmp.path().join("my-game");
         let names = crate::Names::new("my-game").unwrap();
-        let src = EngineSource::Path(root.canonicalize().unwrap());
+        let src = EngineSource::Path(absolute(&root).unwrap());
         scaffold(&root, &dest, &names, &src).unwrap();
         for f in [
             "Cargo.toml",

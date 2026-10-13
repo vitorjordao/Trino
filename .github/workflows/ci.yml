@@ -72,6 +72,12 @@ jobs:
       - name: Editor smoke (Linux, headless)
         if: runner.os == 'Linux'
         run: TRINO_EDITOR_SMOKE_FRAMES=30 xvfb-run -a cargo run -p trino-editor
+      # `cargo xtask new --standalone` into a temp dir, built and run there.
+      - name: Standalone project smoke (Linux, headless)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a cargo test -p xtask --test standalone
+        env:
+          TRINO_REQUIRE_GPU: "1"
 
   hot-reload:
     name: Hot reload E2E

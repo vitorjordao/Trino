@@ -57,6 +57,20 @@ impl ScreenRect {
         let max = Vec2::new(self.max.x.min(o.max.x), self.max.y.min(o.max.y));
         (min.x < max.x && min.y < max.y).then_some(ScreenRect { min, max })
     }
+
+    fn union(&self, o: &ScreenRect) -> ScreenRect {
+        ScreenRect {
+            min: Vec2::new(self.min.x.min(o.min.x), self.min.y.min(o.min.y)),
+            max: Vec2::new(self.max.x.max(o.max.x), self.max.y.max(o.max.y)),
+        }
+    }
+
+    fn contains(&self, o: &ScreenRect) -> bool {
+        self.min.x <= o.min.x
+            && self.min.y <= o.min.y
+            && self.max.x >= o.max.x
+            && self.max.y >= o.max.y
+    }
 }
 
 /// The cells and portals of a level.
@@ -170,14 +184,24 @@ impl<const P: usize> Cells<P> {
             max: screen,
         };
         let mut mask: u64 = 1u64 << start;
-        // Depth-first over (cell, clip rect); a fixed stack bounds the work.
+        // The screen area each reached cell has been explored through. A
+        // cell reached again through a view that is not inside it (a
+        // second, wider doorway) is explored again with the union, so
+        // rooms seen only through that doorway are not lost.
+        let mut seen = [full; MAX_CELLS];
+        // Depth-first over (cell, clip rect); fixed stack and step budget.
+        // Running out of either returns everything visible (conservative).
         const STACK: usize = 32;
+        const STEPS: usize = 256;
         let mut stack = [(0u8, full); STACK];
         stack[0] = (start, full);
         let mut top = 1;
         let mut steps = 0;
-        while top > 0 && steps < 256 {
+        while top > 0 {
             steps += 1;
+            if steps > STEPS {
+                return u64::MAX;
+            }
             top -= 1;
             let (cell, clip) = stack[top];
             for p in &self.portals[..self.portal_count] {
@@ -197,14 +221,22 @@ impl<const P: usize> Cells<P> {
                 let Some(narrow) = rect.intersect(&clip) else {
                     continue; // off screen through this chain
                 };
-                if mask & (1u64 << next) != 0 {
-                    continue; // already reached (first chain wins: fine for culling)
+                let bit = 1u64 << next;
+                let explore = if mask & bit == 0 {
+                    mask |= bit;
+                    seen[next as usize] = narrow;
+                    narrow
+                } else if seen[next as usize].contains(&narrow) {
+                    continue; // nothing new through this chain
+                } else {
+                    seen[next as usize] = seen[next as usize].union(&narrow);
+                    seen[next as usize]
+                };
+                if top == STACK {
+                    return u64::MAX;
                 }
-                mask |= 1u64 << next;
-                if top < STACK {
-                    stack[top] = (next, narrow);
-                    top += 1;
-                }
+                stack[top] = (next, explore);
+                top += 1;
             }
         }
         mask
@@ -345,6 +377,34 @@ mod tests {
             SCREEN,
         );
         assert_eq!(m & 0b111, 0b110, "{m:b}");
+    }
+
+    #[test]
+    fn a_second_wider_doorway_is_explored_too() {
+        // A and B share two doorways: a slit at z 0.1..0.2 (listed first,
+        // so B is reached through it first) and a wide door at z 1..3.
+        // C lies behind B, seen from A only through the wide door.
+        let mut c: Cells<8> = Cells::new();
+        for i in 0..3 {
+            let x = i as f32 * 4.0;
+            c.add_cell(Aabb::new(
+                Vec3::new(x, 0.0, 0.0),
+                Vec3::new(x + 4.0, 3.0, 4.0),
+            ));
+        }
+        let door = |x: f32, z0: f32, z1: f32, a, b| Portal {
+            bounds: Aabb::new(Vec3::new(x - 0.1, 0.0, z0), Vec3::new(x + 0.1, 2.0, z1)),
+            a,
+            b,
+        };
+        c.add_portal(door(4.0, 0.1, 0.2, 0, 1));
+        c.add_portal(door(4.0, 1.0, 3.0, 0, 1));
+        c.add_portal(door(8.0, 1.5, 2.5, 1, 2));
+        let m = c.visible(
+            &cam(Vec3::new(1.0, 1.0, 2.0), Vec3::new(12.0, 1.0, 2.0)),
+            SCREEN,
+        );
+        assert_eq!(m & 0b111, 0b111, "{m:b}");
     }
 
     #[test]

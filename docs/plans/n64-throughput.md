@@ -391,8 +391,18 @@ Edit this file as you go.
     green-hills/lava-land −4.9%, hub/sky-tower ±1% on an unlucky layout (micro scenes,
     identical code: T&L +17…+34%). 3DS golden re-blessed (round coins); the N64 hub
     was checked by eye in a one-off framebuffer dump.
-  - [ ] 2b chunks
-  - [ ] 2c player (decide)
+  - [x] 2b chunks — deferred, priced first. A draw's fixed cost is now ~87 µs (setup 51,
+    outside the timer ~29, matrix ~7). Static non-lava blocks per level: hub 14 (17
+    touching face pairs), green-hills 7, lava-land 5, sky-tower 9, throne 5 (4 pairs); the
+    stages have no buried faces. Merging saves ~0.1–0.5 ms per stage and ~1–2 ms in the
+    hub. No stage crosses 30 fps with it.
+  - [x] 2c player — skipped: 5 → 1 draws saves ~0.35 ms. The player's ~6 ms is
+    per-vertex and per-triangle work, and the merge needs an engine API change on three
+    backends.
+  - Phase 2 exit (after 2a and 1i): green-hills 23.3, sky-tower 20.3, throne 29.4 ms are
+    under 33.3. lava-land is 34.0 ms because of its lava block: 191 depth splits
+    (≈ 5 ms of T&L) and ~190 extra emitted triangles (≈ 5.6 ms of sort + submit). That
+    is 3a.
 - [ ] 3a split policy · [ ] 3b reciprocals · [ ] 3c model-space light · [ ] 3d Caps cost budget
 - [ ] Phase 4 spike result + ADR (or a written "not needed")
 - [ ] BACKLOG P0 #1 table, ADR 0006, AGENTS.md "Current state", README, `agents sync`

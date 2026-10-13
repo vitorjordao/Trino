@@ -78,6 +78,56 @@ The model is used by:
 - the `test n64` table: the `model est` column, plus a `note:` line when off by more
   than 25%.
 
+### Measured fixed costs (micro scenes)
+
+The fit can't separate per-draw from per-vertex cost. The **micro scenes** measure
+them directly (`apps/n64/src/n64/micro.rs`, run by `test n64` after the castle64
+scenes). They are synthetic draw sets built in code: 64 one-triangle draws on screen,
+the same 64 culled behind the camera, the same 64 through `draw_model` (zero rotation
+/ yaw), and one 16×16-vertex grid (256 vertices, 450 triangles, facing the camera, no
+clipping or splits) in Gouraud, Unlit and Flat, plus the grid with every triangle
+listed twice (900 triangles, same vertices).
+
+- `xtask/src/perf.rs` (`is_micro`, `micro_report`) keeps `micro-*` lines out of the
+  gates and the bless.
+- It **fails** if a micro scene's work counters are off: a number from the wrong T&L
+  path (clipping, splits, back faces, a rejected blob) is worse than none.
+- It prints the derived table after the castle64 table. The per-draw, per-vertex and
+  per-triangle terms come from three equations:
+  `A/64 = d + 3v + t`, `G = d + 256v + 450t`, `T = d + 256v + 900t`.
+  Sort and submit per emitted triangle are read from the 64- and 900-triangle
+  batches.
+- `outside tnl` is the scene's `game` field per draw: `Mesh::from_tmdl`, the mesh map
+  lookup and `Transform3::matrix`, which the `tnl` timer doesn't cover.
+
+2026-10-13, on the Phase 0 ROM (emulated µs; cycles at 93.75 MHz):
+
+| Cost | µs | cycles |
+|---|---|---|
+| culled draw (bounding-sphere reject), T&L | 32.8 | 3 070 |
+| visible draw **setup** before any vertex (fit `d`) | **280** | 26 300 |
+| draw call outside the T&L timer (parse, lookup) | 35–51 | 3 300–4 800 |
+| `Transform3::matrix` (zero rotation or yaw; same cost) | 12.5 | 1 180 |
+| per vertex, Gouraud | 28.1 | 2 630 |
+| per vertex, Unlit | 33.3 | 3 120 |
+| per front-facing, emitted source triangle (includes the 88-byte push) | 28.8 | 2 700 |
+| per triangle all-in, Flat (its 256 position-only vertices included) | 67.3 | 6 300 |
+| sort per emitted triangle | 2.4 | 220–230 |
+| submit per emitted triangle | 22–24 | 2 100–2 300 |
+
+How to read them:
+- The visible-draw setup (280 µs) dwarfs the culled floor (33 µs). What lies between
+  the cull and the first vertex is the `Setup`, `light.dir.normalized()` and the
+  initialization of ~4.5 KB of scratch (vertex cache, `poly_a/poly_b`, split stack)
+  in an 8 KB direct-mapped D-cache.
+- Per vertex and per triangle are higher here than the scene fit's split suggests,
+  because every grid triangle is front-facing and emitted. Real meshes reject about
+  half as back faces. Use the fit for scene totals and these numbers for "what does
+  one more draw / vertex cost".
+- Sort is cheap. Submit costs 10× the sort per triangle.
+- Unlit costs *more* per vertex than Gouraud on this build. That points at
+  `Setup::finish` (4 `/ 255.0` divisions per vertex) and code layout, not lighting.
+
 Recalibrate after any T&L or backend change. The `note:` line tells you when.
 1. Collect the `TRINO_PERF_MODEL` lines of a run.
 2. Least-squares `us ≈ a·verts + b·tris_in + c·calls + d·splits` over every line with

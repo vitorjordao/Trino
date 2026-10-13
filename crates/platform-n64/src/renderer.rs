@@ -197,11 +197,15 @@ impl N64Renderer {
         }
     }
 
-    /// Register a TMDL mesh blob under a stable handle.
-    pub(crate) fn register_mesh(&mut self, id: u32, tmdl: Vec<u8>) {
-        if Mesh::from_tmdl(&tmdl).is_ok() {
+    /// Register a TMDL mesh blob under a stable handle (the asset loader,
+    /// or a test building meshes in code). `false` = invalid blob, not
+    /// registered.
+    pub fn register_mesh(&mut self, id: u32, tmdl: Vec<u8>) -> bool {
+        let ok = Mesh::from_tmdl(&tmdl).is_ok();
+        if ok {
             self.meshes.insert(id, tmdl);
         }
+        ok
     }
 
     /// Register a font's glyph table (its atlas is the sprite `id`).

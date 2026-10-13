@@ -231,6 +231,128 @@ pub fn gate(root: &Path, scenes: &[SceneLine], bless: bool) -> Result<String, St
     check(&work, n64.as_deref(), scenes)
 }
 
+/// Micro scenes (`apps/n64/src/n64/micro.rs`): synthetic draw sets that
+/// measure the T&L's fixed costs. Reported, never gated or blessed.
+pub fn is_micro(name: &str) -> bool {
+    name.starts_with("micro-")
+}
+
+/// VR4300 clock: cycles per emulated microsecond.
+const MHZ: f64 = 93.75;
+
+/// Work every micro scene must show per frame — otherwise its time comes
+/// from another T&L path (clipping, splits, back faces, a missing mesh).
+/// `(name, verts, tris_in, emitted, culled, draws)`; clipped, splits and
+/// backfaced must be 0.
+const MICRO_WORK: [(&str, u64, u64, u64, u64, u64); 8] = [
+    ("micro-draws", 192, 64, 64, 0, 64),
+    ("micro-culled", 0, 0, 0, 64, 64),
+    ("micro-trs", 192, 64, 64, 0, 64),
+    ("micro-yaw", 192, 64, 64, 0, 64),
+    ("micro-gouraud", 256, 450, 450, 0, 1),
+    ("micro-unlit", 256, 450, 450, 0, 1),
+    ("micro-flat", 256, 450, 450, 0, 1),
+    ("micro-tris", 256, 900, 900, 0, 1),
+];
+
+/// Check the micro scenes' work and derive the fixed costs (µs and VR4300
+/// cycles): per draw (culled floor, visible, `draw_model` matrix), per
+/// vertex by shading mode, per source triangle, sort and submit per
+/// emitted triangle. `tnl` covers `tessellate` only; "outside" is the
+/// rest of the draw call (render minus the timed stages: mesh lookup and
+/// parse, `Transform3::matrix`, the loop).
+pub fn micro_report(scenes: &[SceneLine]) -> Result<String, String> {
+    let mut errors = String::new();
+    let mut by_name = BTreeMap::new();
+    for (name, verts, tris_in, emitted, culled, draws) in MICRO_WORK {
+        let Some(s) = scenes.iter().find(|s| s.name == name) else {
+            let _ = writeln!(errors, "  {name}: missing from the ROM's output");
+            continue;
+        };
+        let want = [
+            ("verts", verts),
+            ("tris_in", tris_in),
+            ("emitted", emitted),
+            ("culled", culled),
+            ("draws", draws),
+            ("clipped", 0),
+            ("splits", 0),
+            ("backfaced", 0),
+        ];
+        for (k, v) in want {
+            if s.get(k) != v {
+                let _ = writeln!(errors, "  {name}.{k}: {} (expected {v})", s.get(k));
+            }
+        }
+        by_name.insert(name, s);
+    }
+    if !errors.is_empty() {
+        return Err(errors);
+    }
+    let f = |name: &str, k: &str| by_name[name].get(k) as f64;
+    let outside = |name: &str| f(name, "game");
+    let (a, b) = (
+        f("micro-draws", "tnl") / 64.0,
+        f("micro-culled", "tnl") / 64.0,
+    );
+    let (g, u, fl, t2) = (
+        f("micro-gouraud", "tnl"),
+        f("micro-unlit", "tnl"),
+        f("micro-flat", "tnl"),
+        f("micro-tris", "tnl"),
+    );
+    // Per draw d, per vertex v, per triangle t (Gouraud, front-facing,
+    // unclipped): A = d + 3v + t, G = d + 256v + 450t, T = d + 256v + 900t.
+    let t = (t2 - g) / 450.0;
+    let v = (g - a - 449.0 * t) / 253.0;
+    let d = a - 3.0 * v - t;
+    let vu = (u - d - 450.0 * t) / 256.0;
+    let flat_tri = (fl - d) / 450.0;
+    let mut out = String::new();
+    let mut row = |what: &str, us: f64| {
+        let _ = writeln!(out, "  {what:<44} {us:>8.1} us {:>7.0} cycles", us * MHZ);
+    };
+    row("culled draw, tnl (B/64)", b);
+    row("culled draw, outside tnl", outside("micro-culled") / 64.0);
+    row("visible 1-tri draw, tnl (A/64)", a);
+    row(
+        "visible 1-tri draw, outside tnl",
+        outside("micro-draws") / 64.0,
+    );
+    row("visible draw setup, tnl (fit d)", d);
+    row(
+        "draw_model zero rotation vs matrix (+)",
+        (outside("micro-trs") - outside("micro-draws")) / 64.0,
+    );
+    row(
+        "draw_model yaw vs matrix (+)",
+        (outside("micro-yaw") - outside("micro-draws")) / 64.0,
+    );
+    row("per vertex, Gouraud (fit v)", v);
+    row("per vertex, Unlit", vu);
+    row("per source triangle, front, unclipped (fit t)", t);
+    row("per triangle all-in, Flat (256 v, 450 t)", flat_tri);
+    for (name, n) in [("micro-draws", 64.0), ("micro-tris", 900.0)] {
+        row(
+            &format!("sort per emitted, batch of {n}"),
+            f(name, "sort") / n,
+        );
+        row(
+            &format!("submit per emitted, batch of {n}"),
+            f(name, "submit") / n,
+        );
+    }
+    let _ = writeln!(
+        out,
+        "  raw tnl us: draws {} culled {} trs {} yaw {} gouraud {g} unlit {u} flat {fl} tris {t2}",
+        f("micro-draws", "tnl"),
+        f("micro-culled", "tnl"),
+        f("micro-trs", "tnl"),
+        f("micro-yaw", "tnl"),
+    );
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -273,6 +395,34 @@ mod tests {
             err.contains("hub.emitted: ROM 1075, PC baseline 1074"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn micro_scenes_are_split_out_and_checked() {
+        assert!(is_micro("micro-draws"));
+        assert!(!is_micro("hub"));
+        let line = |name: &str, extra: &str| {
+            SceneLine::parse(&format!(
+                "TRINO_PERF_SCENE:{name} frames=4 tnl=6400 {extra}"
+            ))
+            .unwrap()
+        };
+        let mut lines: Vec<SceneLine> = MICRO_WORK
+            .iter()
+            .map(|&(n, v, t, e, c, d)| {
+                line(
+                    n,
+                    &format!("verts={v} tris_in={t} emitted={e} culled={c} draws={d}"),
+                )
+            })
+            .collect();
+        let table = micro_report(&lines).unwrap();
+        assert!(table.contains("culled draw, tnl (B/64)"), "{table}");
+        // A micro scene on the wrong T&L path is an error, not a number.
+        lines[0].fields.insert("splits".into(), 3);
+        let err = micro_report(&lines).unwrap_err();
+        assert!(err.contains("micro-draws.splits: 3"), "{err}");
+        assert!(micro_report(&lines[1..]).is_err());
     }
 
     #[test]

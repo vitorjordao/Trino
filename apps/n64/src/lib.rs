@@ -17,6 +17,8 @@
 mod n64 {
     extern crate alloc;
 
+    mod micro;
+
     use alloc::format;
     use trino_core::{Button, Game, Input, InputState, Vec2};
     use trino_platform_n64::{N64Assets, N64Audio, N64Input, N64Platform, N64Renderer, runtime};
@@ -328,6 +330,10 @@ mod n64 {
                         }
                     }
                     force_render.set(false);
+                    // 6) Fixed costs of the T&L (synthetic draw sets,
+                    // ungated): after the castle64 scenes, so their camera
+                    // and light cannot leak into those.
+                    micro::run(renderer, castle64::perf::MEASURE_FRAMES);
                     // High-water mark of the whole run (bot, perf scenes).
                     if check_stack("the bot and the perf scenes") {
                         runtime::log("TRINO_TEST_PASS\n");

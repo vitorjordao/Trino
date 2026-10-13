@@ -337,7 +337,19 @@ Only the hub should still need this after Phases 1–3. Re-measure before starti
 
 Edit this file as you go.
 
-- [ ] Phase 0 micro scenes, numbers in the skill, decision written here
+- [x] Phase 0 micro scenes, numbers in the skill, decision written here
+  - Visible-draw setup (fit `d`) = **280 µs**; culled floor = 33 µs; outside the T&L
+    timer 35–51 µs per draw. The setup is ≥ 150 µs, so **1a–1c pay first** (the
+    decision used `d`, not B/64: B returns before `Setup` and the scratch init).
+  - Per vertex 28 µs Gouraud / 33 µs Unlit (2 600–3 100 cycles): far above 1000
+    cycles, so 1d–1e are worth doing before Phase 4.
+  - Sort 2.4 µs and submit 22–24 µs per emitted triangle: 1f matters, 1g doesn't
+    (sort is ≤ 4 ms in every scene).
+  - `Transform3::matrix` 12.5 µs per draw, zero rotation or yaw: 1h is worth at
+    most ~0.4 ms per scene.
+  - New baseline (Phase 0 ROM, blessed): hub 79.6, green-hills 39.1, lava-land 51.4,
+    sky-tower 32.8, throne 44.5 ms. That is +2…+5% from layout alone: the micro code
+    adds ROM, and the castle64 code is unchanged.
 - [ ] 1a per-frame setup · [ ] 1b scratch · [ ] 1c parse once · [ ] 1d fetch · [ ] 1e divisions · [ ] 1f submit · [ ] 1g sort · [ ] 1h transform fast path
 - [ ] N64_COST recalibrated, skill tables updated
 - [ ] 2a coins · [ ] 2b chunks · [ ] 2c player (decide)

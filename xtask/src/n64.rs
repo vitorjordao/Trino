@@ -619,6 +619,7 @@ pub fn test(bless: bool) -> ExitCode {
     let deadline = Instant::now() + Duration::from_secs(timeout);
     let mut fb = crate::fbgolden::FbCapture::default();
     let mut perf_scenes = Vec::new();
+    let mut micro_scenes = Vec::new();
     let verdict = loop {
         let left = deadline.saturating_duration_since(Instant::now());
         if left.is_zero() {
@@ -632,7 +633,13 @@ pub fn test(bless: bool) -> ExitCode {
                 }
                 println!("[ares] {line}");
                 if let Some(scene) = crate::perf::SceneLine::parse(&line) {
-                    perf_scenes.push(scene);
+                    // Micro scenes measure fixed costs: reported, never
+                    // gated or blessed.
+                    if crate::perf::is_micro(&scene.name) {
+                        micro_scenes.push(scene);
+                    } else {
+                        perf_scenes.push(scene);
+                    }
                 }
                 if line.contains("TRINO_TEST_PASS") {
                     break Ok(());
@@ -669,6 +676,12 @@ pub fn test(bless: bool) -> ExitCode {
         let table = crate::perf::gate(&root, &perf_scenes, bless)
             .map_err(|e| format!("perf gate:\n{e}"))?;
         println!("[n64] perf (emulated us per frame):\n{table}");
+        Ok(())
+    });
+    let verdict = verdict.and_then(|()| {
+        let table = crate::perf::micro_report(&micro_scenes)
+            .map_err(|e| format!("micro perf scenes:\n{e}"))?;
+        println!("[n64] T&L fixed costs (micro scenes, ungated):\n{table}");
         Ok(())
     });
 

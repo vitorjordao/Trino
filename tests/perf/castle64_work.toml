@@ -13,6 +13,8 @@ splits = 0
 backfaced = 298
 emitted = 310
 culled = 0
+rsp_draws = 0
+rsp_tris = 0
 
 [green-hills]
 verts = 608
@@ -22,6 +24,8 @@ splits = 0
 backfaced = 174
 emitted = 130
 culled = 2
+rsp_draws = 0
+rsp_tris = 0
 
 [lava-land]
 verts = 662
@@ -31,6 +35,8 @@ splits = 0
 backfaced = 180
 emitted = 149
 culled = 0
+rsp_draws = 0
+rsp_tris = 0
 
 [sky-tower]
 verts = 560
@@ -40,6 +46,8 @@ splits = 0
 backfaced = 152
 emitted = 128
 culled = 7
+rsp_draws = 0
+rsp_tris = 0
 
 [throne]
 verts = 450
@@ -49,3 +57,5 @@ splits = 0
 backfaced = 133
 emitted = 89
 culled = 0
+rsp_draws = 0
+rsp_tris = 0

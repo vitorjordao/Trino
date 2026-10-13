@@ -833,6 +833,8 @@ pub fn painter_index(key: u64) -> usize {
 }
 
 const NEAR: f32 = 0.05;
+/// The near plane's view depth (hardware T&L paths project like [`tessellate`]).
+pub const NEAR_PLANE: f32 = NEAR;
 /// Guard band: side planes sit at 1.5x the screen so clipped coordinates stay
 /// bounded (RDP fixed-point safety) without visible clipping at the borders.
 const GUARD: f32 = 1.5;
@@ -881,6 +883,97 @@ fn model_space_light(mesh: &Mesh, model: &Mat34, ldir: Vec3) -> Option<Vec3> {
     Some(Vec3::new(unit(a, la), unit(b, lb), unit(c, lc)))
 }
 
+/// Vertices per RSP mesh segment: the N64 overlay transforms a segment into
+/// DMEM, then draws its triangles (local u8 indices).
+pub const RSP_SEG_VERTS: usize = 32;
+
+/// Can the N64's RSP T&L path hold this mesh at all? Static (no skeleton,
+/// no smooth skinning), untextured, opaque vertex colors, unit normals, and
+/// coordinates inside the overlay's s15.16 range. Checked once per mesh;
+/// the N64 renderer bakes an RSP copy only for these.
+pub fn rsp_mesh_supported(mesh: &Mesh) -> bool {
+    mesh.joint_count() == 0
+        && !mesh.has_uvs()
+        && !mesh.has_blend()
+        && mesh.opaque
+        && mesh.unit_normals
+        && mesh.vertex_count > 0
+        && mesh.positions.iter().all(|p| {
+            let p = vec3_of(p);
+            p.x.abs() < 16_384.0 && p.y.abs() < 16_384.0 && p.z.abs() < 16_384.0
+        })
+}
+
+/// What the N64's RSP T&L path needs for one draw ([`rsp_eligible`]).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct RspDraw {
+    /// Unit vector toward the light in model space (zero for `Unlit`).
+    pub light: Vec3,
+    /// Ambient term (1.0 for `Unlit`).
+    pub ambient: f32,
+    /// Back-face culling (false for double-sided draws).
+    pub cull_back: bool,
+}
+
+/// Whether the N64 backend may send this draw to its RSP overlay
+/// (`crates/platform-n64/shim/rsp_trino.S`) instead of [`tessellate`]: the
+/// overlay has no clipping, splitting, fog, colored light, emissive, flat
+/// shading or textures, so the draw must need none of them. Its whole
+/// bounding sphere must be inside the guard-band frustum and past the near
+/// plane, so no triangle could have been clipped. It lives in the core so
+/// host tests can predict the console's work split exactly (`perf_budget`).
+pub fn rsp_eligible(
+    ctx: &TnlContext,
+    mesh: &Mesh,
+    model: &Mat34,
+    params: &ModelParams,
+) -> Option<RspDraw> {
+    if !rsp_mesh_supported(mesh)
+        || !ctx.white
+        || ctx.fog_on
+        || params.tint.a < 255
+        || params.emissive.r | params.emissive.g | params.emissive.b != 0
+        || params.texture.is_some()
+    {
+        return None;
+    }
+    let (c, r) = mesh.bounds()?;
+    let c = ctx.view.mul(model).transform_point(c);
+    let s = model.axis_scales_sq();
+    let r2 = r * r * s.x.max(s.y).max(s.z);
+    let inside = |d: f32, k: f32| d > 0.0 && d * d > r2 * k;
+    let (lx, ly) = (ctx.lim_x, ctx.lim_y);
+    let abs = |v: f32| if v < 0.0 { -v } else { v };
+    if !(inside(c.z - NEAR, 1.0)
+        && inside(lx * c.z - abs(c.x), lx * lx + 1.0)
+        && inside(ly * c.z - abs(c.y), ly * ly + 1.0))
+    {
+        return None;
+    }
+    let cull_back = !params.double_sided;
+    match params.shading {
+        Shading::Unlit => Some(RspDraw {
+            light: Vec3::ZERO,
+            ambient: 1.0,
+            cull_back,
+        }),
+        Shading::Gouraud => Some(RspDraw {
+            light: model_space_light(mesh, model, ctx.ldir)? * -1.0,
+            ambient: ctx.light.ambient,
+            cull_back,
+        }),
+        Shading::Flat => None,
+    }
+}
+
+impl TnlContext {
+    /// View matrix, focal length (pixels) and screen size: what a hardware
+    /// T&L path needs to build its own projection.
+    pub fn projection(&self) -> (Mat34, f32, Vec2) {
+        (self.view, self.focal, self.screen)
+    }
+}
+
 /// Whether a draw gets [`DEPTH_SPLIT`] bisection. Every target z-buffers
 /// with per-vertex depth `1 - NEAR/z`, which is affine in screen space, so
 /// an unsplit opaque triangle gets the same per-pixel depth: splitting it
@@ -921,6 +1014,12 @@ pub struct TnlStats {
     pub backfaced: u32,
     /// Screen triangles handed to the backend.
     pub emitted: u32,
+    /// Draws a backend sent whole to a hardware T&L path instead (the N64's
+    /// RSP overlay, see [`rsp_eligible`]); their work is not in the fields
+    /// above.
+    pub rsp_draws: u32,
+    /// Source triangles of those draws.
+    pub rsp_tris: u32,
 }
 
 impl TnlStats {
@@ -933,6 +1032,8 @@ impl TnlStats {
         self.splits += o.splits;
         self.backfaced += o.backfaced;
         self.emitted += o.emitted;
+        self.rsp_draws += o.rsp_draws;
+        self.rsp_tris += o.rsp_tris;
     }
 }
 
@@ -1893,6 +1994,67 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn rsp_eligibility_follows_what_the_overlay_can_draw() {
+        let mut blob = cube_tmdl();
+        let mut b = std::vec::Vec::new();
+        f32s(&mut b, &[0.0, 0.0, 0.0, 0.87]);
+        section(&mut blob, b"BNDS", &b);
+        let cube = Mesh::from_tmdl(&blob).unwrap();
+        let screen = Vec2::new(320.0, 240.0);
+        let ctx = TnlContext::new(&Camera3::default(), &DEFAULT_LIGHT, screen);
+        let at = |z: f32| {
+            Mat34::from_rotation_scale_translation(
+                Vec3::ZERO,
+                Vec3::new(1.0, 1.0, 1.0),
+                Vec3::new(0.0, 0.0, z),
+            )
+        };
+        let plain = ModelParams::DEFAULT;
+        // In front of the camera (eye at z = -5), whole sphere inside.
+        let d = rsp_eligible(&ctx, &cube, &at(0.0), &plain).expect("eligible");
+        assert!(d.cull_back && d.ambient == DEFAULT_LIGHT.ambient);
+        // Crossing the near plane (clipping needed): CPU path.
+        assert!(rsp_eligible(&ctx, &cube, &at(-4.6), &plain).is_none());
+        // What the overlay lacks: CPU path.
+        for p in [
+            ModelParams {
+                shading: Shading::Flat,
+                ..plain
+            },
+            ModelParams::tinted(Color::rgba(255, 255, 255, 200)),
+            ModelParams {
+                emissive: Color::rgb(20, 0, 0),
+                ..plain
+            },
+        ] {
+            assert!(rsp_eligible(&ctx, &cube, &at(0.0), &p).is_none(), "{p:?}");
+        }
+        let fog = Light {
+            fog: Fog {
+                color: Color::BLACK,
+                near: 1.0,
+                far: 9.0,
+            },
+            ..DEFAULT_LIGHT
+        };
+        let fogged = TnlContext::new(&Camera3::default(), &fog, screen);
+        assert!(rsp_eligible(&fogged, &cube, &at(0.0), &plain).is_none());
+        // Unlit: no light, full ambient.
+        let u = ModelParams {
+            shading: Shading::Unlit,
+            ..plain
+        };
+        assert_eq!(
+            rsp_eligible(&ctx, &cube, &at(0.0), &u).unwrap().ambient,
+            1.0
+        );
+        // A textured mesh never has an RSP copy.
+        assert!(!rsp_mesh_supported(
+            &Mesh::from_tmdl(&textured_cube()).unwrap()
+        ));
     }
 
     #[test]

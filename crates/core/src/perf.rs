@@ -236,7 +236,7 @@ impl RenderProfile {
             out,
             "TRINO_PERF_SCENE:{scene} frames={} update={} render={} begin={} tnl={} sort={} \
              submit={} sprites={} end={} game={} vblanks={} verts={} tris_in={} clipped={} \
-             splits={} backfaced={} emitted={} culled={} draws={}",
+             splits={} backfaced={} emitted={} culled={} draws={} rsp_draws={} rsp_tris={}",
             self.frames,
             times.update / n,
             times.render / n,
@@ -256,6 +256,8 @@ impl RenderProfile {
             t.emitted / n,
             t.culled / n,
             self.draws() / n,
+            t.rsp_draws / n,
+            t.rsp_tris / n,
         )?;
         let sorted = self.models_by_cost();
         let other = [self.other];
@@ -375,7 +377,10 @@ mod tests {
         // game = render - renderer stages = (6000 - 4400) / 4.
         assert!(scene.contains(" game=400 "), "{scene}");
         assert!(scene.contains(" verts=100 "), "{scene}");
-        assert!(scene.ends_with(" draws=0"), "{scene}");
+        assert!(
+            scene.ends_with(" draws=0 rsp_draws=0 rsp_tris=0"),
+            "{scene}"
+        );
         let model = lines.next().unwrap();
         assert_eq!(
             model,

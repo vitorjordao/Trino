@@ -26,7 +26,7 @@ pub const WORK_FILE: &str = "tests/perf/castle64_work.toml";
 pub const N64_FILE: &str = "tests/perf/castle64_n64.toml";
 
 /// T&L counters compared with the PC baseline.
-const WORK_FIELDS: [&str; 7] = [
+const WORK_FIELDS: [&str; 9] = [
     "verts",
     "tris_in",
     "clipped",
@@ -34,6 +34,8 @@ const WORK_FIELDS: [&str; 7] = [
     "backfaced",
     "emitted",
     "culled",
+    "rsp_draws",
+    "rsp_tris",
 ];
 
 /// Ceiling = measured × (1 + headroom) + [`SLACK_US`]: the frame total
@@ -129,7 +131,8 @@ pub fn check(work: &str, n64: Option<&str>, scenes: &[SceneLine]) -> Result<Stri
             }
             Some(want) => {
                 for f in WORK_FIELDS {
-                    let expected = want.get(f).and_then(|v| v.as_integer()).unwrap_or(-1);
+                    // A counter missing from the file is 0 (files predating it).
+                    let expected = want.get(f).and_then(|v| v.as_integer()).unwrap_or(0);
                     let got = s.get(f) as i64;
                     if expected != got {
                         let _ = writeln!(
@@ -153,6 +156,8 @@ pub fn check(work: &str, n64: Option<&str>, scenes: &[SceneLine]) -> Result<Stri
             splits: s.get("splits") as u32,
             backfaced: s.get("backfaced") as u32,
             emitted: s.get("emitted") as u32,
+            rsp_draws: s.get("rsp_draws") as u32,
+            rsp_tris: s.get("rsp_tris") as u32,
         };
         let est = trino_core::perf::N64_COST.tnl_us(&work_now, s.get("draws") as u32) as u64;
         if s.get("draws") > 0 && t[1].1 > 0 {
@@ -341,6 +346,29 @@ pub fn micro_report(scenes: &[SceneLine]) -> Result<String, String> {
             &format!("submit per emitted, batch of {n}"),
             f(name, "submit") / n,
         );
+    }
+    // The same micro scenes through the N64's RSP T&L overlay (same ROM,
+    // `-rsp` suffix): frame = update + render - begin, where the measured
+    // frames drain the RSP/RDP queue, so the overlay's time counts.
+    let rsp: Vec<&SceneLine> = scenes.iter().filter(|s| s.name.ends_with("-rsp")).collect();
+    if !rsp.is_empty() {
+        let _ = writeln!(
+            out,
+            "  CPU vs RSP T&L (same ROM)        frame cpu   frame rsp   tnl cpu   tnl rsp"
+        );
+        for r in rsp {
+            let base = r.name.trim_end_matches("-rsp");
+            if let Some(c) = scenes.iter().find(|s| s.name == base) {
+                let (fc, fr) = (c.timings()[0].1, r.timings()[0].1);
+                let _ = writeln!(
+                    out,
+                    "  {base:<30} {fc:>10} {fr:>11} {:>9} {:>9}  ({:+.0}%)",
+                    c.get("tnl"),
+                    r.get("tnl"),
+                    (fr as f64 / fc.max(1) as f64 - 1.0) * 100.0
+                );
+            }
+        }
     }
     let _ = writeln!(
         out,

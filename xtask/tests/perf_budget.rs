@@ -25,7 +25,7 @@ const BASELINE: &str = "tests/perf/castle64_work.toml";
 /// The N64 screen: projection and culling depend on it, and the N64 is
 /// the target the baseline is cross-checked on.
 const SCREEN: Vec2 = Vec2::new(320.0, 240.0);
-const FIELDS: [&str; 7] = [
+const FIELDS: [&str; 9] = [
     "verts",
     "tris_in",
     "clipped",
@@ -33,6 +33,8 @@ const FIELDS: [&str; 7] = [
     "backfaced",
     "emitted",
     "culled",
+    "rsp_draws",
+    "rsp_tris",
 ];
 
 struct NullAudio;
@@ -91,6 +93,8 @@ fn field(t: &TnlStats, name: &str) -> u32 {
         "backfaced" => t.backfaced,
         "emitted" => t.emitted,
         "culled" => t.culled,
+        "rsp_draws" => t.rsp_draws,
+        "rsp_tris" => t.rsp_tris,
         _ => unreachable!(),
     }
 }
@@ -106,6 +110,8 @@ fn per_frame(t: &TnlStats, n: u32) -> TnlStats {
         splits: t.splits / n,
         backfaced: t.backfaced / n,
         emitted: t.emitted / n,
+        rsp_draws: t.rsp_draws / n,
+        rsp_tris: t.rsp_tris / n,
     }
 }
 

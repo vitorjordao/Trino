@@ -155,12 +155,7 @@ fn translation(p: Vec3) -> Mat34 {
 
 fn render(r: &mut N64Renderer, set: Set) {
     r.begin_frame(Color::BLACK);
-    r.set_camera(&Camera3 {
-        eye: Vec3::ZERO,
-        target: Vec3::new(0.0, 0.0, 1.0),
-        ..Camera3::default()
-    });
-    r.set_light(&DEFAULT_LIGHT);
+    setup(r);
     let params = ModelParams::DEFAULT;
     match set {
         Set::Draws | Set::Culled => {
@@ -197,11 +192,108 @@ fn render(r: &mut N64Renderer, set: Set) {
 /// gone before the caller's next step (64 KB stack).
 #[inline(never)]
 pub fn run(r: &mut N64Renderer, frames: u32) {
+    match r.rsp_selftest() {
+        Some(c) if c.r > 100 && c.a > 0 => {
+            runtime::log(&alloc::format!("TRINO_RSP:test triangle ok {c:?}\n"))
+        }
+        c => runtime::log(&alloc::format!(
+            "TRINO_TEST_FAIL:rsp: the overlay's test triangle did not render ({c:?})\n"
+        )),
+    }
     if !register_meshes(r) {
         runtime::log("TRINO_PERF_MICRO: mesh blobs rejected\n");
         return;
     }
-    for &(name, set) in SCENES {
+    rsp_checks(r);
+    // Same ROM, both paths: the RSP numbers are free of code-layout noise.
+    for (suffix, rsp) in [("", false), ("-rsp", true)] {
+        r.set_rsp(rsp);
+        for &(name, set) in SCENES {
+            measure(r, name, suffix, set, frames);
+        }
+    }
+    r.set_rsp(false);
+}
+
+/// Camera + light every micro frame uses.
+fn setup(r: &mut N64Renderer) {
+    r.set_camera(&Camera3 {
+        eye: Vec3::ZERO,
+        target: Vec3::new(0.0, 0.0, 1.0),
+        ..Camera3::default()
+    });
+    r.set_light(&DEFAULT_LIGHT);
+}
+
+/// The RSP overlay against the CPU path: screen vertices (oracle), then the
+/// pixels of the same frame drawn both ways.
+fn rsp_checks(r: &mut N64Renderer) {
+    setup(r);
+    let grid = translation(Vec3::new(0.0, 0.0, 4.0));
+    for (what, params) in [
+        ("gouraud", ModelParams::DEFAULT),
+        (
+            "unlit tinted",
+            ModelParams {
+                shading: Shading::Unlit,
+                tint: Color::rgb(200, 120, 255),
+                ..ModelParams::DEFAULT
+            },
+        ),
+    ] {
+        match r.rsp_oracle(GRID, &grid, &params) {
+            Ok(m) => runtime::log(&alloc::format!("TRINO_RSP:oracle {what}: {m}\n")),
+            Err(m) => runtime::log(&alloc::format!("TRINO_TEST_FAIL:rsp oracle {what}: {m}\n")),
+        }
+    }
+    let sample = |r: &mut N64Renderer, rsp: bool| {
+        r.set_rsp(rsp);
+        render(r, Set::Grid(GRID, Shading::Gouraud));
+        let mut px = Vec::new();
+        for y in 0..12 {
+            for x in 0..12 {
+                px.push(
+                    r.read_pixel(118 + x * 7, 78 + y * 7)
+                        .unwrap_or(Color::BLACK),
+                );
+            }
+        }
+        px
+    };
+    let cpu = sample(r, false);
+    let rsp = sample(r, true);
+    r.set_rsp(false);
+    let (mut sum, mut far) = (0u32, 0u32);
+    for (a, b) in cpu.iter().zip(&rsp) {
+        let d = a.r.abs_diff(b.r) as u32 + a.g.abs_diff(b.g) as u32 + a.b.abs_diff(b.b) as u32;
+        sum += d;
+        far += (d > 24) as u32;
+    }
+    let mut map = String::new();
+    for (i, (a, b)) in cpu.iter().zip(&rsp).enumerate() {
+        let d = a.r.abs_diff(b.r) as u32 + a.g.abs_diff(b.g) as u32 + a.b.abs_diff(b.b) as u32;
+        map.push(if d > 24 { '#' } else { '.' });
+        if i % 12 == 11 {
+            map.push('|');
+        }
+    }
+    let msg = alloc::format!(
+        "{} pixels, mean diff {:.2}/255, {far} far (cpu {:?} rsp {:?})",
+        cpu.len(),
+        sum as f32 / (cpu.len() * 3) as f32,
+        cpu[66],
+        rsp[66]
+    );
+    if far > cpu.len() as u32 / 10 {
+        runtime::log(&alloc::format!("TRINO_RSP:pixel map {map}\n"));
+        runtime::log(&alloc::format!("TRINO_TEST_FAIL:rsp pixels: {msg}\n"));
+    } else {
+        runtime::log(&alloc::format!("TRINO_RSP:pixels {msg}\n"));
+    }
+}
+
+fn measure(r: &mut N64Renderer, name: &str, suffix: &str, set: Set, frames: u32) {
+    {
         let mut times = trino_core::perf::FrameTimes::default();
         let v0 = runtime::vblanks();
         r.start_profile();
@@ -213,7 +305,7 @@ pub fn run(r: &mut N64Renderer, frames: u32) {
         times.vblanks = runtime::vblanks().wrapping_sub(v0);
         if let Some(p) = r.take_profile() {
             let mut report = String::new();
-            let _ = p.write_report(name, &times, &mut report);
+            let _ = p.write_report(&alloc::format!("{name}{suffix}"), &times, &mut report);
             runtime::log(&report);
         }
     }

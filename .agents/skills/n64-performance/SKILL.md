@@ -83,6 +83,10 @@ overlay:
   - v0 = 0 culls Trino's back faces (v0 = 1 culled every front face);
   - the shim keeps the 3D mode current for RSP draws and issues a SYNC_PIPE before
     the next mode change (rdpq's autosync never sees them).
+- **Cost of the check itself.** A draw that falls back to the CPU still pays
+  `rsp_eligible` (a `view·model` product and the sphere tests) outside the T&L timer,
+  in `game`. `micro-culled`, 64 draws that never qualify, went 2.3 → 3.5 ms: about
+  19 µs per fallback draw. That is ~0.1 ms for the hub's 5.
 - **Limits.**
   - ares does not model RDP fill time, so on hardware the RDP may bind first.
   - `N64_COST` describes CPU-path draws only, and the editor HUD and strict mode

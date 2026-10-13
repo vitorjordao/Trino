@@ -8,12 +8,12 @@
 
 [hub]
 frame_us = 16300
-tnl_us = 6800
+tnl_us = 6900
 sort_us = 900
-submit_us = 2600
+submit_us = 2500
 
 [green-hills]
-frame_us = 9300
+frame_us = 9400
 tnl_us = 3400
 sort_us = 600
 submit_us = 1800
@@ -25,13 +25,13 @@ sort_us = 600
 submit_us = 1800
 
 [sky-tower]
-frame_us = 9200
-tnl_us = 3500
+frame_us = 9300
+tnl_us = 3400
 sort_us = 600
 submit_us = 1600
 
 [throne]
 frame_us = 10600
 tnl_us = 5400
-sort_us = 900
-submit_us = 2400
+sort_us = 800
+submit_us = 2300

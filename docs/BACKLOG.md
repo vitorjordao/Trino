@@ -16,7 +16,7 @@ shipping a 3D game first**, then by cost:
 1. **N64 render throughput: grow the RSP path** (M). castle64 is CPU-light now.
    - castle64 frame, emulated N64 ms (update + render − begin, queue drained):
 
-     | Scene | Before the plan | CPU T&L (Phase 3) | **RSP T&L (ADR 0007)** |
+     | Scene | Before the plan | CPU T&L, same ROM | **RSP T&L (ADR 0007)** |
      |---|---|---|---|
      | hub | 76.1 | 38.0 | **13.1** |
      | green-hills | 37.3 | 19.4 | **7.3** |
@@ -24,7 +24,10 @@ shipping a 3D game first**, then by cost:
      | sky-tower | 31.2 | 18.5 | **7.2** |
      | throne | 43.4 | 15.4 | **8.4** |
 
-     The CPU T&L column comes from the same ROM as the RSP column (`cpu-*` scenes).
+     The CPU T&L column comes from the same ROM as the RSP column (`cpu-*` scenes,
+     with RSP draws switched off). Both are measured with the queue drained at the end
+     of each frame. "Before" predates the drain, which only adds time, so the
+     76.1 → 13.1 comparison is conservative.
    - Next, best first:
      - **(a)** Measure on real hardware. ares doesn't model RDP fill time, so the RDP
        may now bind first.

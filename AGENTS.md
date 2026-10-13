@@ -152,7 +152,8 @@ new skill when none fits. Then run `cargo xtask agents sync`. The steps are in
   (`xtask/src/castle64_assets.rs`); screenshots/GIF via
   `cargo test -p xtask --test c64_shots|c64_gif -- --ignored`.
 - **3D (`draw_model`)**: engine-side software T&L (`trino_core::render3d` —
-  see `docs/adr/0003-software-tnl-3d.md`): glTF masters bake to the portable
+  see `docs/adr/0003-software-tnl-3d.md`; on the N64 most draws run it on the RSP
+  instead, ADR 0007, and this CPU path stays the reference everywhere): glTF masters bake to the portable
   TMDL format (`[models.*]` in the manifest); the core transforms, lights
   (gouraud, directional + ambient), culls and depth-sorts on the CPU with
   deterministic f32 (own no_std sin/cos/sqrt); backends only rasterize

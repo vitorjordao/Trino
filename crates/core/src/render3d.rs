@@ -890,6 +890,12 @@ pub const RSP_SEG_VERTS: usize = 32;
 pub const RSP_SEG_TRIS: usize = 64;
 /// Segments per RSP mesh (the overlay's segment table).
 pub const RSP_MAX_SEGS: usize = 16;
+/// Farthest view depth (including the bounding radius) an RSP draw may
+/// reach: the overlay's s15.16 clip coordinates go to ~1.5x the depth.
+pub const RSP_MAX_DEPTH: f32 = 16_000.0;
+/// Largest model axis scale an RSP draw may use (its matrix entries are
+/// s15.16 too).
+pub const RSP_MAX_SCALE: f32 = 4_000.0;
 
 /// What [`rsp_split`] hands each segment to: its vertices (global indices,
 /// local order) and triangles (local indices).
@@ -965,7 +971,7 @@ pub struct RspDraw {
     pub light: Vec3,
     /// Ambient term (1.0 for `Unlit`).
     pub ambient: f32,
-    /// Back-face culling (false for double-sided draws).
+    /// Back-face culling (always on: double-sided draws stay on the CPU).
     pub cull_back: bool,
 }
 
@@ -989,6 +995,8 @@ pub fn rsp_eligible(
         || params.tint.a < 255
         || params.emissive.r | params.emissive.g | params.emissive.b != 0
         || params.texture.is_some()
+        // Back faces through the overlay were never verified: CPU path.
+        || params.double_sided
     {
         return None;
     }
@@ -1005,7 +1013,13 @@ pub fn rsp_eligible(
     {
         return None;
     }
-    let cull_back = !params.double_sided;
+    // The overlay's clip coordinates are s15.16 (|v| < 32768): x reaches
+    // ~1.5x the view depth inside the guard band. Keep the whole sphere
+    // under RSP_MAX_DEPTH, and the matrix entries (axis scale) in range.
+    if !inside(RSP_MAX_DEPTH - c.z, 1.0) || s.x.max(s.y).max(s.z) >= RSP_MAX_SCALE * RSP_MAX_SCALE {
+        return None;
+    }
+    let cull_back = true;
     match params.shading {
         Shading::Unlit => Some(RspDraw {
             light: Vec3::ZERO,
@@ -2097,6 +2111,20 @@ mod tests {
         };
         let fogged = TnlContext::new(&Camera3::default(), &fog, screen);
         assert!(rsp_eligible(&fogged, &cube, &at(0.0), &plain).is_none());
+        // Fixed-point range: too far, or a huge scale, stays on the CPU.
+        assert!(rsp_eligible(&ctx, &cube, &at(20_000.0), &plain).is_none());
+        let huge = Mat34::from_rotation_scale_translation(
+            Vec3::ZERO,
+            Vec3::new(5_000.0, 5_000.0, 5_000.0),
+            Vec3::new(0.0, 0.0, 30_000.0),
+        );
+        assert!(rsp_eligible(&ctx, &cube, &huge, &plain).is_none());
+        // Back faces through the overlay are unverified: CPU path.
+        let both = ModelParams {
+            double_sided: true,
+            ..plain
+        };
+        assert!(rsp_eligible(&ctx, &cube, &at(0.0), &both).is_none());
         // Unlit: no light, full ambient.
         let u = ModelParams {
             shading: Shading::Unlit,

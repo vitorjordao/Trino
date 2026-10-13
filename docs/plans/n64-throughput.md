@@ -410,7 +410,9 @@ Edit this file as you go.
     `N64_COST` estimates stay within ±6%, so no refit.
   - [x] 3b reciprocals — kept: frame −2.5…−3.5% in all five scenes; every golden stayed
     byte-identical (the normalize and fog divisions are left alone)
-  - [ ] 3c model-space light
+  - [x] 3c model-space light — kept: T&L −11…−14% in four scenes (throne −2.8%), frame
+    −4…−7% (throne +1.1%, layout). Boxes take it under non-uniform scale too (all
+    their normals lie on an axis). Every golden stayed byte-identical
   - [ ] 3d Caps cost budget
 - [ ] Phase 4 spike result + ADR (or a written "not needed")
 - [ ] BACKLOG P0 #1 table, ADR 0006, AGENTS.md "Current state", README, `agents sync`

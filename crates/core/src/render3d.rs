@@ -106,6 +106,12 @@ pub struct Mesh<'a> {
     blend: Option<&'a [u8]>,
     /// Every vertex color has alpha 255 (checked once, at parse).
     opaque: bool,
+    /// Every normal has unit length (checked once, at parse): the
+    /// model-space lighting path relies on it.
+    unit_normals: bool,
+    /// Every normal lies on a coordinate axis (boxes): model-space lighting
+    /// then holds under non-uniform scale too.
+    axis_normals: bool,
 }
 
 /// Rigid skeleton + clips (borrowed from the blob).
@@ -136,6 +142,8 @@ pub struct MeshLayout {
     texture: Option<SpriteId>,
     blend: Option<Span>,
     opaque: bool,
+    unit_normals: bool,
+    axis_normals: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -299,8 +307,19 @@ impl<'a> Mesh<'a> {
             texture: None,
             blend: None,
             opaque: true,
+            unit_normals: true,
+            axis_normals: true,
         };
         mesh.opaque = mesh.colors.iter().all(|c| c[3] == 255);
+        mesh.unit_normals = mesh.normals.iter().all(|n| {
+            let n = vec3_of(n);
+            (n.dot(n) - 1.0).abs() < 2e-3
+        });
+        mesh.axis_normals = mesh.normals.iter().all(|n| {
+            let n = vec3_of(n);
+            let zeros = [n.x, n.y, n.z].iter().filter(|c| c.abs() < 1e-6).count();
+            zeros == 2
+        });
 
         // Optional sections.
         let mut at = end;
@@ -393,6 +412,8 @@ impl<'a> Mesh<'a> {
             texture: self.texture,
             blend: self.blend.map(span),
             opaque: self.opaque,
+            unit_normals: self.unit_normals,
+            axis_normals: self.axis_normals,
         }
     }
 
@@ -420,6 +441,8 @@ impl<'a> Mesh<'a> {
             texture: l.texture,
             blend: l.blend.map(|b| b.get(blob)),
             opaque: l.opaque,
+            unit_normals: l.unit_normals,
+            axis_normals: l.axis_normals,
         }
     }
 
@@ -823,6 +846,41 @@ const MAX_POLY: usize = 8;
 /// shared edges identically (no cracks).
 pub const DEPTH_SPLIT: f32 = 3.0;
 
+/// The light direction in model space, for a draw whose world normals are
+/// a rotation of its unit model normals. With orthogonal columns,
+/// `M = R·S` (rotation, per-axis scale `S`, no shear), and `normalize(M·n)`
+/// is `R·n` when the scale is uniform, or when every normal lies on an axis
+/// (castle64's stretched blocks): then `(R·n)·l = n·(Rᵀ·l)`, and `Rᵀ·l` is
+/// each column's unit vector dotted with `l`. One transform per draw instead
+/// of a normal transform, a square root and a division per vertex. `None`
+/// for shear, for non-uniform scale with free normals, or when the normals
+/// aren't unit length.
+fn model_space_light(mesh: &Mesh, model: &Mat34, ldir: Vec3) -> Option<Vec3> {
+    if !mesh.unit_normals {
+        return None;
+    }
+    let m = &model.m;
+    let col = |c: usize| Vec3::new(m[0][c], m[1][c], m[2][c]);
+    let (a, b, c) = (col(0), col(1), col(2));
+    let (la, lb, lc) = (a.dot(a), b.dot(b), c.dot(c));
+    let big = la.max(lb).max(lc);
+    // The core's sin/cos are approximations (~1e-4), so its rotation
+    // matrices are orthonormal only to ~1e-4; 3e-3 still keeps the lighting
+    // error under a quarter of a color step.
+    let tol = big * 3e-3;
+    let near = |x: f32, y: f32| (x - y).abs() <= tol;
+    let orthogonal = la.min(lb).min(lc) > 0.0
+        && a.dot(b).abs() <= tol
+        && a.dot(c).abs() <= tol
+        && b.dot(c).abs() <= tol;
+    let uniform = near(la, lb) && near(la, lc);
+    if !orthogonal || !(uniform || mesh.axis_normals) {
+        return None;
+    }
+    let unit = |v: Vec3, len2: f32| v.dot(ldir) / crate::math3d::sqrt(len2);
+    Some(Vec3::new(unit(a, la), unit(b, lb), unit(c, lc)))
+}
+
 /// Whether a draw gets [`DEPTH_SPLIT`] bisection. Every target z-buffers
 /// with per-vertex depth `1 - NEAR/z`, which is affine in screen space, so
 /// an unsplit opaque triangle gets the same per-pixel depth: splitting it
@@ -1148,6 +1206,11 @@ pub fn tessellate_with(
             params.tint.a as f32 / 255.0,
         ],
         split: split_policy(ctx, mesh, params),
+        local_ldir: if mesh.joint_count() == 0 && params.shading == Shading::Gouraud {
+            model_space_light(mesh, model, ctx.ldir)
+        } else {
+            None
+        },
     };
 
     if mesh.joint_count() == 0 {
@@ -1194,17 +1257,28 @@ struct Setup<'a> {
     tint_k: [f32; 4],
     /// Apply the [`DEPTH_SPLIT`] rule (see [`split_policy`]).
     split: bool,
+    /// The light direction in model space, when the static path may light
+    /// model-space normals directly ([`model_space_light`]).
+    local_ldir: Option<Vec3>,
 }
 
 impl Setup<'_> {
     /// Final vertex color from a world-space normal and the view depth.
     #[inline(always)]
     fn shade(&self, c: Color, n: Vec3, z: f32) -> Color {
+        self.shade_with(c, || -n.dot(self.ldir), z)
+    }
+
+    /// [`Setup::shade`] with the raw diffuse term (`-n · l`) supplied by
+    /// the caller (the model-space lighting path), evaluated only when the
+    /// shading mode is lit.
+    #[inline(always)]
+    fn shade_with(&self, c: Color, diffuse: impl FnOnce() -> f32, z: f32) -> Color {
         let light = self.light;
         let k = match self.params.shading {
             Shading::Unlit => [1.0, 1.0, 1.0],
             Shading::Gouraud | Shading::Flat => {
-                let diffuse = -n.dot(self.ldir);
+                let diffuse = diffuse();
                 let diffuse = if diffuse > 0.0 { diffuse } else { 0.0 };
                 let d = (1.0 - light.ambient) * diffuse;
                 if self.white {
@@ -1307,6 +1381,13 @@ fn tessellate_joints<const SKINNED: bool, const SMOOTH: bool>(
         let col = match s.params.shading {
             Shading::Flat => Color::WHITE,
             Shading::Unlit => s.shade(mesh.color(i), Vec3::ZERO, p.z),
+            Shading::Gouraud if !SKINNED && s.local_ldir.is_some() => {
+                // Rotation + uniform scale: light the model-space normal
+                // with the light turned into model space (Setup).
+                let ll = s.local_ldir.unwrap_or(Vec3::ZERO);
+                let nl = mesh.normal(i);
+                s.shade_with(mesh.color(i), || -nl.dot(ll), p.z)
+            }
             Shading::Gouraud => {
                 let nl = mesh.normal(i);
                 let mut n = world[j].transform_dir(nl);
@@ -1769,6 +1850,49 @@ mod tests {
             &Mesh::from_tmdl(&blob).unwrap(),
             &opaque
         ));
+    }
+
+    #[test]
+    fn model_space_light_matches_world_space_lighting() {
+        let blob = cube_tmdl();
+        let mesh = Mesh::from_tmdl(&blob).unwrap();
+        let rot = Vec3::new(0.3, 0.9, -0.2);
+        let at = Vec3::new(0.2, -0.1, 3.0);
+        let uniform = Mat34::from_rotation_scale_translation(rot, Vec3::new(1.5, 1.5, 1.5), at);
+        let l = DEFAULT_LIGHT.dir.normalized();
+        assert!(model_space_light(&mesh, &uniform, l).is_some());
+        // Non-uniform scale: fine for a box (axis-aligned normals, like
+        // castle64's blocks), not for free normals (the world path then).
+        let stretched = Mat34::from_rotation_scale_translation(rot, Vec3::new(1.5, 1.5, 1.6), at);
+        assert!(model_space_light(&mesh, &stretched, l).is_some());
+        let free = Mesh {
+            axis_normals: false,
+            ..mesh
+        };
+        assert!(model_space_light(&free, &stretched, l).is_none());
+        // The same cube with normals 1% long is lit in world space (they
+        // are renormalized there): the colors must agree within rounding.
+        let mut long = blob.clone();
+        let normals_at = 12 + 24 * 12;
+        for k in 0..24 * 3 {
+            let at = normals_at + k * 4;
+            let v = f32::from_le_bytes(long[at..at + 4].try_into().unwrap()) * 1.01;
+            long[at..at + 4].copy_from_slice(&v.to_le_bytes());
+        }
+        let world = Mesh::from_tmdl(&long).unwrap();
+        assert!(model_space_light(&world, &uniform, l).is_none());
+        for model in [uniform, stretched] {
+            let a = collect(&mesh, &model, &Camera3::default(), Color::WHITE);
+            let b = collect(&world, &model, &Camera3::default(), Color::WHITE);
+            assert_eq!(a.len(), b.len());
+            for (x, y) in a.iter().zip(&b) {
+                for (p, q) in x.colors.iter().zip(&y.colors) {
+                    for (u, v) in [(p.r, q.r), (p.g, q.g), (p.b, q.b)] {
+                        assert!(u.abs_diff(v) <= 1, "{p:?} vs {q:?}");
+                    }
+                }
+            }
+        }
     }
 
     #[test]

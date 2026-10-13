@@ -149,24 +149,25 @@ fewer with many draws. The
 original KayKit door (1068 tris) read "27% of budget" and cost ~64 ms, two whole
 frames. Trust the cost model.
 
-## Where the time goes (2026-10-13, after Phases 1–3a)
+## Where the time goes (2026-10-13, after Phases 1–3c)
 
 | Scene | Frame (ms) | ≈ fps | T&L (ms) | sort + submit (ms) | game (ms) | Draws |
 |---|---|---|---|---|---|---|
-| hub | 44.0 | 23 | 30.0 | 10.4 | 2.7 | 26 |
-| green-hills | 21.6 | **46** | 14.2 | 4.6 | 1.9 | 16 |
-| lava-land | 23.7 | **42** | 15.7 | 5.2 | 1.9 | 16 |
-| sky-tower | 20.4 | **49** | 13.3 | 4.2 | 1.9 | 19 |
-| throne | 16.3 | **61** | 10.3 | 3.5 | 1.7 | 12 |
+| hub | 39.6 | 25 | 24.9 | 10.4 | 3.3 | 26 |
+| green-hills | 19.9 | **50** | 11.7 | 5.0 | 2.3 | 16 |
+| lava-land | 21.8 | **46** | 13.0 | 5.6 | 2.2 | 16 |
+| sky-tower | 19.0 | **53** | 11.3 | 4.5 | 2.3 | 19 |
+| throne | 16.1 | **62** | 9.6 | 3.6 | 2.0 | 12 |
 
 - Hub T&L by model (ms, calls):
-  door_frame ×3: 6.3; block_brick ×7: 4.4; door ×1: 4.1; boar ×1: 3.7; player_leg ×2: 2.3; player_arm ×2: 2.0; player_torso ×1: 1.9; block_roof ×3: 1.7; block_castle ×3: 1.5; block_grass ×1: 0.8; star ×1: 0.6; shadow ×1: 0.6.
+  door_frame ×3: 5.0; block_brick ×7: 4.6; door ×1: 2.8; boar ×1: 2.5; player_leg ×2: 1.8; player_arm ×2: 1.7; player_torso ×1: 1.6; block_castle ×3: 1.5; block_roof ×3: 1.5; block_grass ×1: 0.9; star ×1: 0.6; shadow ×1: 0.5.
 - A visible draw costs ~50 µs before its first vertex (280 µs at Phase 0) plus
-  ~13–29 µs outside the T&L timer. A Gouraud vertex ~10 µs, a front-facing emitted
-  triangle ~30 µs, submit ~22 µs per emitted triangle (26 uncached rspq words).
-- No castle64 draw splits any more (3a). The remaining hub cost is the doors, the
-  bricks, the boar and the 5-part player: per-vertex and per-triangle work.
-- **The enemy is not the problem.** A boar costs ~3.5 ms, and all game logic ~0.3 ms.
+  ~13–29 µs outside the T&L timer. A Gouraud vertex in model-space lighting is the
+  transform plus the light (~5 µs on the micro grid), a front-facing emitted triangle
+  ~30 µs, submit ~22 µs per emitted triangle (26 uncached rspq words).
+- No castle64 draw splits any more (3a). The hub's remaining cost is spread over the
+  doors, the bricks, the boar and the 5-part player.
+- **The enemy is not the problem.** A boar costs ~2.5 ms, and all game logic ~0.3 ms.
 
 ## What worked, what didn't (keep this list honest)
 
@@ -182,6 +183,7 @@ frames. Trust the cost model.
 | Per-vertex cached projection + no-copy fast path in `tessellate` | neutral (±2%) — reverted |
 | Hot loop compacted (`#[inline(never)]` vertex/flat/general paths) | +3…+17% worse — reverted |
 | `opt-level = "s"` for the ROM | worse everywhere — not adopted |
+| **3c** Model-space lighting on the static Gouraud path: for orthogonal model matrices with uniform scale, or any per-axis scale when every normal lies on an axis (boxes, and castle64's boar), light `n_local · (Rᵀ·l)` and skip the per-vertex normal transform, sqrt and division. The mesh's `unit_normals`/`axis_normals` are checked once at parse; the tolerance is 3e-3 because the core's sin/cos make rotations orthonormal only to ~1e-4 | T&L −11…−14% in four scenes, throne −2.8%; frame −4…−7%, throne +1.1% (`game`, unchanged code, +17…21%: layout). Boar −29%, doors −17…−27%, player −9…−18% per model. Expected to move output, but every golden and the work baseline stayed byte-identical |
 | **3b** One `1 / z` per projected vertex shared by the projection (`x · focal · inv`) and the z-buffer depth (`1 − NEAR · inv`), instead of three divisions | frame −2.5…−3.5%, T&L −4…−5% in every scene. Expected to move output, but every golden (PC, N64 pixel-exact, 3DS) stayed byte-identical and the work counters equal |
 | **3a** `split_policy`: DEPTH_SPLIT only for fogged, textured or translucent draws (tint or vertex alpha < 255); opaque draws go unsplit, since per-vertex z `1 − NEAR/z` is affine on screen | frame hub −17%, lava-land −30%, throne −45%, green-hills −7%, sky-tower +0.5%; castle64 splits 199/30/211/4/252 → 0, emitted hub 509 → 310, throne 341 → 89. Output-moving: work baseline, 3DS golden (mean 0.006/255, a few pixels); N64 showcase golden identical (fogged scene keeps its splits); N64 hub/lava/throne checked by eye in one-off dumps, no z-fighting |
 | **1i** T&L code size: each `tessellate_joints` instance `#[inline(never)]` and the 5-plane clip in one `#[cold]` `clip_frustum` | `tessellate_with` was **60 KB** (static + two skinned paths + five inlined clip planes, ~4× the 16 KB I-cache); now 1.9 KB + 13.9 KB static path + 6 KB cold clip. Frame −4.5…−7.9%, T&L −8…−12% in every scene. Goldens identical. (Not the reverted 2026-10-13 attempt, which split the hot loop itself) |

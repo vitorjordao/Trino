@@ -1467,18 +1467,33 @@ pub fn billboard(
     params: &crate::render::BillboardParams,
     uv: [f32; 4],
 ) -> Option<[ScreenTri; 2]> {
+    billboard_with(&TnlContext::new(camera, light, screen), pos, params, uv)
+}
+
+/// [`billboard`] with the per-frame constants precomputed (the view matrix
+/// and focal length cost two normalizations and a software sin/cos per
+/// call otherwise). Same expressions, so the same triangles.
+pub fn billboard_with(
+    ctx: &TnlContext,
+    pos: Vec3,
+    params: &crate::render::BillboardParams,
+    uv: [f32; 4],
+) -> Option<[ScreenTri; 2]> {
     let (size, rotation, tint) = (params.size, params.rotation, params.tint);
-    let view = camera.view();
-    let c = view.transform_point(pos);
+    let (light, screen) = (&ctx.light, ctx.screen);
+    let c = ctx.view.transform_point(pos);
     // Keep the whole quad comfortably in front of the near plane: its
     // corners share the center's depth (screen-aligned), so no clipping.
     if c.z <= NEAR * 2.0 {
         return None;
     }
-    let half_fov = camera.fov_y * 0.5;
-    let focal = crate::math3d::cos(half_fov) / crate::math3d::sin(half_fov) * screen.y * 0.5;
-    let center = screen * 0.5;
-    let (sn, cs) = (crate::math3d::sin(rotation), crate::math3d::cos(rotation));
+    let (focal, center) = (ctx.focal, ctx.center);
+    let (sn, cs) = if rotation.to_bits() == 0 {
+        // sin/cos of +0.0 are exactly 0 and 1 (see math3d's tests).
+        (0.0, 1.0)
+    } else {
+        (crate::math3d::sin(rotation), crate::math3d::cos(rotation))
+    };
     let (hw, hh) = (size.x * 0.5, size.y * 0.5);
     // Corners in view space (x right, y up): TL, TR, BR, BL.
     let corner = |x: f32, y: f32| {

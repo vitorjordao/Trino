@@ -23,9 +23,9 @@ use levels::{BlockKind, DoorColor, LEVELS, Level, TOTAL_STARS};
 use trino_core::math3d::{atan2, cos, sin};
 use trino_core::physics::{self, Aabb, move_aabb};
 use trino_core::{
-    Audio, Button, Camera3, Color, DEFAULT_LIGHT, FontId, Game, InputState, Material, ModelId,
-    ModelParams, MusicId, Renderer, SoundId, SpriteId, SpriteParams, TextAlign, TextBuf,
-    TextParams, Transform3, Vec2, Vec3,
+    Audio, BillboardParams, Button, Camera3, Color, DEFAULT_LIGHT, FontId, Game, InputState,
+    Material, ModelId, ModelParams, MusicId, Renderer, SoundId, SpriteId, SpriteParams, TextAlign,
+    TextBuf, TextParams, Transform3, Vec2, Vec3,
 };
 
 // ------------------------------------------------------------ handles ----
@@ -36,7 +36,6 @@ const M_BRICK: ModelId = ModelId::from_path("models/c64_block_brick");
 const M_CASTLE: ModelId = ModelId::from_path("models/c64_block_castle");
 const M_ROOF: ModelId = ModelId::from_path("models/c64_block_roof");
 const M_LAVA: ModelId = ModelId::from_path("models/c64_block_lava");
-const M_COIN: ModelId = ModelId::from_path("models/c64_coin");
 const M_STAR: ModelId = ModelId::from_path("models/c64_star");
 const M_TORSO: ModelId = ModelId::from_path("models/c64_player_torso");
 const M_ARM: ModelId = ModelId::from_path("models/c64_player_arm");
@@ -50,6 +49,8 @@ const M_DOOR_FRAME: ModelId = ModelId::from_path("models/c64_door_frame");
 const M_DOOR_CASTLE: ModelId = ModelId::from_path("models/c64_door");
 
 const S_COIN: SpriteId = SpriteId::from_path("sprites/coin");
+/// World size of a coin billboard (the old 3D coin was 0.7 × 0.9).
+const COIN_SIZE: f32 = 0.8;
 const S_STAR: SpriteId = SpriteId::from_path("sprites/c64_star");
 /// HUD text: the engine's default pixel font (atlas + glyph table).
 const F_HUD: FontId = selftest::FONT;
@@ -630,20 +631,19 @@ impl Game for Castle64Game {
             );
         }
 
-        // Moedas girando + bob.
-        let spin = self.level_time * 3.0;
+        // Moedas: billboards do sprite do HUD — sem T&L (no N64 cada moeda
+        // 3D custava ~0.4 ms). O giro é a largura |cos|, com um mínimo para
+        // o quad nunca degenerar de perfil.
+        let turn = cos(self.level_time * 3.0);
+        let width = if turn < 0.0 { -turn } else { turn }.max(0.15);
+        let coin = BillboardParams {
+            size: Vec2::new(COIN_SIZE * width, COIN_SIZE),
+            ..BillboardParams::DEFAULT
+        };
         for (i, c) in l.coins.iter().enumerate() {
             if self.coins_taken[self.level] & (1 << i) == 0 && visible(*c) {
-                renderer.draw_model(
-                    M_COIN,
-                    &Transform3 {
-                        position: *c + Vec3::new(0.0, tri_wave(self.level_time * 0.5) * 0.2, 0.0),
-                        rotation: Vec3::new(0.0, spin, 0.0),
-                        scale: Vec3::ONE,
-                    },
-                    Material::VertexLit,
-                    &plain,
-                );
+                let bob = Vec3::new(0.0, tri_wave(self.level_time * 0.5) * 0.2, 0.0);
+                renderer.draw_billboard(S_COIN, *c + bob, &coin);
             }
         }
 
@@ -1158,7 +1158,6 @@ mod tests {
             fn draw_model(&mut self, model: ModelId, _: &Transform3, _: Material, _: &ModelParams) {
                 // Contagem por modelo (worst case: tudo visível).
                 self.tris += match model {
-                    m if m == M_COIN => 8,
                     m if m == M_STAR => 10,
                     m if m == M_TORSO => 60,
                     m if m == M_ARM || m == M_LEG => 24,

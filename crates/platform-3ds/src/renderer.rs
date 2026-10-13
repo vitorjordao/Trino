@@ -328,8 +328,7 @@ impl Renderer for N3dsRenderer {
         let size = unsafe { ffi::trino_sprite_size(entry.ptr) };
         let (w, h) = ((size >> 16) as f32, (size & 0xFFFF) as f32);
         let uv = trino_core::render3d::region_uv(params.region, w, h);
-        let Some(tris) =
-            trino_core::render3d::billboard(&self.camera, &self.light, SCREEN, pos, params, uv)
+        let Some(tris) = trino_core::render3d::billboard_with(&self.tnl_ctx, pos, params, uv)
         else {
             return;
         };

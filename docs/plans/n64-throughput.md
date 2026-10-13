@@ -382,7 +382,13 @@ Edit this file as you go.
   Decide after Phase 1.
   - Decision (Phase 1 exit): deferred to just before the Phase 4 spike. 2a and 3a are
     large enough to read through the ±5% frame noise.
-- [ ] 2a coins · [ ] 2b chunks · [ ] 2c player (decide)
+- Phase 2:
+  - [x] 2a coins — kept: coin T&L gone (1.6–3.4 ms per scene); frame throne −8.9%,
+    green-hills/lava-land −4.9%, hub/sky-tower ±1% on an unlucky layout (micro scenes,
+    identical code: T&L +17…+34%). 3DS golden re-blessed (round coins); the N64 hub
+    was checked by eye in a one-off framebuffer dump.
+  - [ ] 2b chunks
+  - [ ] 2c player (decide)
 - [ ] 3a split policy · [ ] 3b reciprocals · [ ] 3c model-space light · [ ] 3d Caps cost budget
 - [ ] Phase 4 spike result + ADR (or a written "not needed")
 - [ ] BACKLOG P0 #1 table, ADR 0006, AGENTS.md "Current state", README, `agents sync`

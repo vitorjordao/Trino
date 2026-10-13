@@ -1360,6 +1360,20 @@ fn texture_budget(r: TextureBudget<'_>, t: SpriteId, tiled: bool) {
     }
 }
 
+/// The T&L constants for `camera`, `light` and `screen`, cached in `slot`
+/// (rebuilt only when one of them changed).
+fn tnl_context(
+    slot: &mut Option<TnlContext>,
+    camera: &Camera3,
+    light: &Light,
+    screen: Vec2,
+) -> TnlContext {
+    match *slot {
+        Some(c) if c.matches(camera, light, screen) => c,
+        _ => *slot.insert(TnlContext::new(camera, light, screen)),
+    }
+}
+
 impl Renderer for PcRenderer {
     fn caps(&self) -> &Caps {
         &self.caps
@@ -1470,12 +1484,7 @@ impl Renderer for PcRenderer {
         }
         let screen = Vec2::new(self.internal_size.0 as f32, self.internal_size.1 as f32);
         let before = self.pending_tris.len();
-        let ctx = match self.tnl_ctx {
-            Some(c) if c.matches(&self.camera, &self.light, screen) => c,
-            _ => *self
-                .tnl_ctx
-                .insert(TnlContext::new(&self.camera, &self.light, screen)),
-        };
+        let ctx = tnl_context(&mut self.tnl_ctx, &self.camera, &self.light, screen);
         let pending = &mut self.pending_tris;
         let tnl = trino_core::render3d::tessellate_with(
             &ctx,
@@ -1520,9 +1529,8 @@ impl Renderer for PcRenderer {
             false,
         );
         let screen = Vec2::new(self.internal_size.0 as f32, self.internal_size.1 as f32);
-        let Some(tris) =
-            trino_core::render3d::billboard(&self.camera, &self.light, screen, pos, params, uv)
-        else {
+        let ctx = tnl_context(&mut self.tnl_ctx, &self.camera, &self.light, screen);
+        let Some(tris) = trino_core::render3d::billboard_with(&ctx, pos, params, uv) else {
             return;
         };
         self.frame_stats.sprites += 1;

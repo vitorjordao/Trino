@@ -211,6 +211,12 @@ formats = { n64 = "CI4" }
 file = "sprites/selftest_quadrants.png"
 formats = { n64 = "CI4" }
 
+# Two-joint strip with one 50/50 vertex: smooth skinning (SKW2) on every
+# target (selftest::smooth_skin).
+[models.selftest_strip]
+file = "models/proxies/selftest-strip.gltf"
+skinning = "smooth"
+
 # Textured fake object: UVs kept, default texture baked in.
 [models.selftest_card]
 file = "models/proxies/selftest-card.prim.ron"

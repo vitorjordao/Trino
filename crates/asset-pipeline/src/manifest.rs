@@ -109,6 +109,11 @@ pub struct ModelDecl {
     /// objects). Without it textures are sampled into vertex colors.
     #[serde(default)]
     pub texture: Option<String>,
+    /// `"rigid"` (default: each vertex follows its heaviest joint — the
+    /// N64-era look, cheapest) or `"smooth"` (two-joint blend per vertex;
+    /// costs a second transform per skinned vertex).
+    #[serde(default)]
+    pub skinning: Option<String>,
 }
 
 impl ModelDecl {
@@ -119,6 +124,7 @@ impl ModelDecl {
         }
         opts.once = self.once.clone();
         opts.texture = self.texture.clone();
+        opts.smooth = self.skinning.as_deref() == Some("smooth");
         opts
     }
 }

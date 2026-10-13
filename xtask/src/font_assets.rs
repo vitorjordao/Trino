@@ -138,7 +138,103 @@ pub fn atlas() -> (u32, u32, Vec<u8>) {
     (w, h, rgba)
 }
 
+// Self-test skinned strip (smooth skinning on consoles): the same fixture
+// as crates/asset-pipeline/tests/animated_model.rs.
+fn b64(bytes: &[u8]) -> String {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    for chunk in bytes.chunks(3) {
+        let n = chunk.len();
+        let v = (chunk[0] as u32) << 16
+            | (*chunk.get(1).unwrap_or(&0) as u32) << 8
+            | *chunk.get(2).unwrap_or(&0) as u32;
+        for i in 0..4 {
+            if i <= n {
+                out.push(T[(v >> (18 - 6 * i) & 63) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
+/// A skinned strip: two joints (root at y=0, tip at y=1), three vertices
+/// weighted 100% root, 50/50 and 100% tip.
+pub fn write_skinned_gltf(path: &std::path::Path) {
+    let mut buf: Vec<u8> = Vec::new();
+    let f = |buf: &mut Vec<u8>, vals: &[f32]| {
+        for v in vals {
+            buf.extend_from_slice(&v.to_le_bytes());
+        }
+    };
+    f(&mut buf, &[0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.2, 0.5, 0.0]); // 0..36 positions
+    f(&mut buf, &[0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0]); // 36..72 normals
+    for i in [0u16, 2, 1, 0] {
+        buf.extend_from_slice(&i.to_le_bytes()); // 72..80 indices (+pad)
+    }
+    // 80..104 JOINTS_0 (u16 x4 per vertex): v0 [0,1], v1 [1,0], v2 [0,1]
+    for j in [[0u16, 1, 0, 0], [1, 0, 0, 0], [0, 1, 0, 0]] {
+        for x in j {
+            buf.extend_from_slice(&x.to_le_bytes());
+        }
+    }
+    // 104..152 WEIGHTS_0: v0 root only, v1 tip only, v2 half/half
+    f(
+        &mut buf,
+        &[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.5, 0.5, 0.0, 0.0],
+    );
+    // 152..280 inverse bind matrices (column-major): root identity, tip -1 y.
+    f(
+        &mut buf,
+        &[
+            1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+        ],
+    );
+    f(
+        &mut buf,
+        &[
+            1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, -1.0, 0.0, 1.0,
+        ],
+    );
+    let json = format!(
+        r#"{{
+  "asset": {{"version": "2.0"}},
+  "scene": 0,
+  "scenes": [{{"nodes": [0, 2]}}],
+  "nodes": [
+    {{"name": "root", "children": [1]}},
+    {{"name": "tip", "translation": [0.0, 1.0, 0.0]}},
+    {{"name": "strip", "mesh": 0, "skin": 0}}
+  ],
+  "skins": [{{"joints": [0, 1], "inverseBindMatrices": 5}}],
+  "meshes": [{{"primitives": [{{"attributes": {{"POSITION": 0, "NORMAL": 1, "JOINTS_0": 3, "WEIGHTS_0": 4}}, "indices": 2}}]}}],
+  "buffers": [{{"byteLength": {len}, "uri": "data:application/octet-stream;base64,{data}"}}],
+  "bufferViews": [
+    {{"buffer": 0, "byteOffset": 0, "byteLength": 36}},
+    {{"buffer": 0, "byteOffset": 36, "byteLength": 36}},
+    {{"buffer": 0, "byteOffset": 72, "byteLength": 6}},
+    {{"buffer": 0, "byteOffset": 80, "byteLength": 24}},
+    {{"buffer": 0, "byteOffset": 104, "byteLength": 48}},
+    {{"buffer": 0, "byteOffset": 152, "byteLength": 128}}
+  ],
+  "accessors": [
+    {{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "min": [0,0,0], "max": [0.2,1,0]}},
+    {{"bufferView": 1, "componentType": 5126, "count": 3, "type": "VEC3"}},
+    {{"bufferView": 2, "componentType": 5123, "count": 3, "type": "SCALAR"}},
+    {{"bufferView": 3, "componentType": 5123, "count": 3, "type": "VEC4"}},
+    {{"bufferView": 4, "componentType": 5126, "count": 3, "type": "VEC4"}},
+    {{"bufferView": 5, "componentType": 5126, "count": 2, "type": "MAT4"}}
+  ]
+}}"#,
+        len = buf.len(),
+        data = b64(&buf)
+    );
+    std::fs::write(path, json).unwrap();
+}
+
 pub fn gen_all(repo_root: &Path, write_png: crate::castle64_assets::PngWriter) {
+    write_skinned_gltf(&repo_root.join("assets/shared/models/proxies/selftest-strip.gltf"));
     let (w, h, rgba) = atlas();
     let path = repo_root.join("assets/shared/fonts/trino5x7.png");
     std::fs::create_dir_all(path.parent().unwrap()).expect("create fonts dir");

@@ -285,6 +285,9 @@ pub struct MeshData {
     pub uvs: Vec<[f32; 2]>,
     /// Default texture (sprite handle) -> `TXID`; UVs are kept iff set.
     pub texture: Option<u32>,
+    /// Smooth skinning: (second joint, weight 0..255) per vertex -> `SKW2`
+    /// (written only when some vertex actually blends).
+    pub blend: Vec<[u8; 2]>,
 }
 
 fn section(blob: &mut Vec<u8>, tag: &[u8; 4], body: &[u8]) {
@@ -353,6 +356,13 @@ impl MeshData {
                 put_trs(&mut body, &j.rest);
             }
             section(&mut blob, b"SKEL", &body);
+            if self.blend.iter().any(|b| b[1] != 0) {
+                if self.blend.len() != self.positions.len() {
+                    return Err("smooth skin: one blend pair per vertex expected".into());
+                }
+                let body: Vec<u8> = self.blend.iter().flatten().copied().collect();
+                section(&mut blob, b"SKW2", &body);
+            }
             if !skel.clips.is_empty() {
                 let mut body = Vec::new();
                 body.extend_from_slice(&(skel.clips.len() as u32).to_le_bytes());
@@ -406,17 +416,25 @@ impl MeshData {
                 let joints = mesh.pose(*pose, &mut skin);
                 for (i, p) in self.positions.iter().enumerate() {
                     let v = Vec3::new(p[0], p[1], p[2]);
-                    let v = if joints > 0 {
+                    let mut candidates = [v; 2];
+                    if joints > 0 {
                         let j = self.skeleton.as_ref().unwrap().joint_of_vertex[i] as usize;
-                        skin[j].transform_point(v)
-                    } else {
-                        v
-                    };
-                    for (k, c) in [v.x, v.y, v.z].into_iter().enumerate() {
-                        lo[k] = lo[k].min(c);
-                        hi[k] = hi[k].max(c);
+                        candidates = [skin[j].transform_point(v); 2];
+                        // A blended vertex lies between its two joints'
+                        // positions: covering both covers it.
+                        if let Some(&[j2, w]) = self.blend.get(i)
+                            && w != 0
+                        {
+                            candidates[1] = skin[j2 as usize].transform_point(v);
+                        }
                     }
-                    posed.push(v);
+                    for v in candidates {
+                        for (k, c) in [v.x, v.y, v.z].into_iter().enumerate() {
+                            lo[k] = lo[k].min(c);
+                            hi[k] = hi[k].max(c);
+                        }
+                        posed.push(v);
+                    }
                 }
             }
             let c = Vec3::new(
@@ -451,6 +469,9 @@ pub struct ModelOptions {
     /// default texture. `None` = vertex colors only (textures are sampled
     /// into vertex colors at bake time).
     pub texture: Option<String>,
+    /// Smooth skinning: keep the two strongest joint weights per vertex
+    /// (`SKW2`) instead of snapping to the heaviest (rigid, the default).
+    pub smooth: bool,
 }
 
 impl Default for ModelOptions {
@@ -459,6 +480,7 @@ impl Default for ModelOptions {
             anim_fps: 15.0,
             once: Vec::new(),
             texture: None,
+            smooth: false,
         }
     }
 }
@@ -631,6 +653,8 @@ fn load_gltf(path: &Path, opts: &ModelOptions) -> Result<MeshData, String> {
 
     let mut data = MeshData::default();
     let mut joint_of_vertex: Vec<u8> = Vec::new();
+    // (second joint, weight) per vertex — only kept with `opts.smooth`.
+    let mut blend_of_vertex: Vec<[u8; 2]> = Vec::new();
     // A static joint for unskinned meshes outside the rig (skinned files).
     let mut needs_static_joint = false;
     let static_joint = joint_nodes.len();
@@ -743,13 +767,27 @@ fn load_gltf(path: &Path, opts: &ModelOptions) -> Result<MeshData, String> {
                         .collect();
                     for (j4, w4) in js.iter().zip(ws.iter()) {
                         // Rigid binding: the heaviest influence wins.
-                        let k = (0..4)
-                            .max_by(|&a, &b| w4[a].partial_cmp(&w4[b]).unwrap())
-                            .unwrap();
+                        let mut order = [0usize, 1, 2, 3];
+                        order.sort_by(|&a, &b| w4[b].total_cmp(&w4[a]));
+                        let k = order[0];
                         let node = skin_nodes
                             .get(j4[k] as usize)
                             .ok_or_else(|| err(&"JOINTS_0 index out of range"))?;
                         joint_of_vertex.push(joint_of_node[node] as u8);
+                        // Smooth skinning (opt-in): keep the runner-up too,
+                        // renormalized over the two.
+                        let k2 = order[1];
+                        let (w1, w2) = (w4[k], w4[k2]);
+                        let blend = if opts.smooth && w2 > 0.0 && w1 + w2 > 0.0 {
+                            let node2 = skin_nodes
+                                .get(j4[k2] as usize)
+                                .ok_or_else(|| err(&"JOINTS_0 index out of range"))?;
+                            let w = (w2 / (w1 + w2) * 255.0).round() as u8;
+                            [joint_of_node[node2] as u8, w]
+                        } else {
+                            [0, 0]
+                        };
+                        blend_of_vertex.push(blend);
                     }
                 } else {
                     let j = match owner {
@@ -760,6 +798,7 @@ fn load_gltf(path: &Path, opts: &ModelOptions) -> Result<MeshData, String> {
                         }
                     };
                     joint_of_vertex.extend(std::iter::repeat_n(j as u8, prim_pos.len()));
+                    blend_of_vertex.extend(std::iter::repeat_n([0u8, 0], prim_pos.len()));
                 }
             }
 
@@ -921,6 +960,13 @@ fn load_gltf(path: &Path, opts: &ModelOptions) -> Result<MeshData, String> {
         });
     }
 
+    if opts.smooth {
+        if needs_static_joint {
+            // Unskinned meshes in a skinned file: no blend for those.
+            blend_of_vertex.resize(joint_of_vertex.len(), [0, 0]);
+        }
+        data.blend = blend_of_vertex;
+    }
     data.skeleton = Some(SkeletonData {
         joint_of_vertex,
         joints,

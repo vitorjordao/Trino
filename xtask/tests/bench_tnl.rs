@@ -117,3 +117,91 @@ fn castle64_tnl_cost_per_frame() {
         r.emitted as f64 / FRAMES as f64
     );
 }
+
+/// Rigid vs smooth skinning on the same 2-joint mesh (a 24-segment capsule
+/// bent at its middle): the extra transform per blended vertex is the whole
+/// cost difference. Host CPU numbers; the ratio is what carries to consoles.
+#[test]
+#[ignore = "benchmark: run with --release --ignored --nocapture"]
+fn skinning_rigid_vs_smooth() {
+    use trino_asset_pipeline::model::{JointData, SkeletonData, Trs};
+    use trino_asset_pipeline::{Primitive, Shape};
+    let mut data = Primitive {
+        shape: Shape::Capsule {
+            radius: 0.4,
+            height: 2.0,
+        },
+        segments: 24,
+        ..Primitive::default()
+    }
+    .build();
+    // Upper half follows joint 1; worst case: every vertex blends 50/50
+    // with the other joint (real rigs blend only around the joints).
+    let joint_of_vertex: Vec<u8> = data.positions.iter().map(|p| (p[1] > 0.0) as u8).collect();
+    let blend: Vec<[u8; 2]> = data
+        .positions
+        .iter()
+        .map(|p| [(p[1] <= 0.0) as u8, 128])
+        .collect();
+    let rest = Trs {
+        t: [0.0; 3],
+        r: [0.0, 0.0, 0.0, 1.0],
+        s: [1.0; 3],
+    };
+    let ident = [
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+    ];
+    data.skeleton = Some(SkeletonData {
+        joint_of_vertex,
+        joints: vec![
+            JointData {
+                parent: -1,
+                inverse_bind: ident,
+                rest,
+            },
+            JointData {
+                parent: 0,
+                inverse_bind: ident,
+                rest,
+            },
+        ],
+        clips: Vec::new(),
+    });
+    let rigid = data.encode().unwrap();
+    data.blend = blend;
+    let smooth = data.encode().unwrap();
+    let camera = Camera3::default();
+    let time = |blob: &[u8]| {
+        let mesh = Mesh::from_tmdl(blob).unwrap();
+        let mut tris = Vec::new();
+        const DRAWS: u32 = 4000;
+        let t = Instant::now();
+        for _ in 0..DRAWS {
+            tris.clear();
+            trino_core::render3d::tessellate(
+                &mesh,
+                &Mat34::IDENTITY,
+                &camera,
+                &DEFAULT_LIGHT,
+                &ModelParams::DEFAULT,
+                Vec2::new(320.0, 240.0),
+                &mut |tri| tris.push(tri),
+            );
+        }
+        (
+            t.elapsed().as_secs_f64() * 1e6 / DRAWS as f64,
+            mesh.vertex_count,
+            tris.len(),
+        )
+    };
+    let (r_us, verts, tris) = time(&rigid);
+    let (s_us, _, _) = time(&smooth);
+    println!(
+        "skinning ({verts} verts, {tris} tris): rigid {r_us:.2} us/draw, smooth {s_us:.2} us/draw \
+         ({:+.0}%)",
+        (s_us / r_us - 1.0) * 100.0
+    );
+    assert!(Mesh::from_tmdl(&smooth).unwrap().has_blend());
+}

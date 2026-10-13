@@ -178,3 +178,104 @@ fn static_gltf_stays_skeleton_free() {
         .fold(f32::MIN, f32::max);
     assert!((max_x - 3.0).abs() < 1e-5);
 }
+
+/// A skinned strip: two joints (root at y=0, tip at y=1), three vertices
+/// weighted 100% root, 50/50 and 100% tip.
+fn write_skinned_gltf(path: &std::path::Path) {
+    let mut buf: Vec<u8> = Vec::new();
+    let f = |buf: &mut Vec<u8>, vals: &[f32]| {
+        for v in vals {
+            buf.extend_from_slice(&v.to_le_bytes());
+        }
+    };
+    f(&mut buf, &[0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.2, 0.5, 0.0]); // 0..36 positions
+    f(&mut buf, &[0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0]); // 36..72 normals
+    for i in [0u16, 2, 1, 0] {
+        buf.extend_from_slice(&i.to_le_bytes()); // 72..80 indices (+pad)
+    }
+    // 80..104 JOINTS_0 (u16 x4 per vertex): v0 [0,1], v1 [1,0], v2 [0,1]
+    for j in [[0u16, 1, 0, 0], [1, 0, 0, 0], [0, 1, 0, 0]] {
+        for x in j {
+            buf.extend_from_slice(&x.to_le_bytes());
+        }
+    }
+    // 104..152 WEIGHTS_0: v0 root only, v1 tip only, v2 half/half
+    f(
+        &mut buf,
+        &[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.5, 0.5, 0.0, 0.0],
+    );
+    // 152..280 inverse bind matrices (column-major): root identity, tip -1 y.
+    f(
+        &mut buf,
+        &[
+            1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+        ],
+    );
+    f(
+        &mut buf,
+        &[
+            1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, -1.0, 0.0, 1.0,
+        ],
+    );
+    let json = format!(
+        r#"{{
+  "asset": {{"version": "2.0"}},
+  "scene": 0,
+  "scenes": [{{"nodes": [0, 2]}}],
+  "nodes": [
+    {{"name": "root", "children": [1]}},
+    {{"name": "tip", "translation": [0.0, 1.0, 0.0]}},
+    {{"name": "strip", "mesh": 0, "skin": 0}}
+  ],
+  "skins": [{{"joints": [0, 1], "inverseBindMatrices": 5}}],
+  "meshes": [{{"primitives": [{{"attributes": {{"POSITION": 0, "NORMAL": 1, "JOINTS_0": 3, "WEIGHTS_0": 4}}, "indices": 2}}]}}],
+  "buffers": [{{"byteLength": {len}, "uri": "data:application/octet-stream;base64,{data}"}}],
+  "bufferViews": [
+    {{"buffer": 0, "byteOffset": 0, "byteLength": 36}},
+    {{"buffer": 0, "byteOffset": 36, "byteLength": 36}},
+    {{"buffer": 0, "byteOffset": 72, "byteLength": 6}},
+    {{"buffer": 0, "byteOffset": 80, "byteLength": 24}},
+    {{"buffer": 0, "byteOffset": 104, "byteLength": 48}},
+    {{"buffer": 0, "byteOffset": 152, "byteLength": 128}}
+  ],
+  "accessors": [
+    {{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "min": [0,0,0], "max": [0.2,1,0]}},
+    {{"bufferView": 1, "componentType": 5126, "count": 3, "type": "VEC3"}},
+    {{"bufferView": 2, "componentType": 5123, "count": 3, "type": "SCALAR"}},
+    {{"bufferView": 3, "componentType": 5123, "count": 3, "type": "VEC4"}},
+    {{"bufferView": 4, "componentType": 5126, "count": 3, "type": "VEC4"}},
+    {{"bufferView": 5, "componentType": 5126, "count": 2, "type": "MAT4"}}
+  ]
+}}"#,
+        len = buf.len(),
+        data = b64(&buf)
+    );
+    std::fs::write(path, json).unwrap();
+}
+
+#[test]
+fn smooth_skinning_keeps_two_weights_only_when_asked() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("strip.gltf");
+    write_skinned_gltf(&path);
+    let rigid = bake_model(&path, &ModelOptions::default()).unwrap();
+    let rigid = Mesh::from_tmdl(&rigid).unwrap();
+    assert_eq!(rigid.joint_count(), 2);
+    assert!(!rigid.has_blend(), "rigid by default");
+    let smooth_blob = bake_model(
+        &path,
+        &ModelOptions {
+            smooth: true,
+            ..ModelOptions::default()
+        },
+    )
+    .unwrap();
+    let smooth = Mesh::from_tmdl(&smooth_blob).unwrap();
+    assert!(smooth.has_blend());
+    // Exactly one vertex blends, half toward the other joint.
+    let blended: Vec<(usize, f32)> = (0..smooth.vertex_count)
+        .filter_map(|i| smooth.blend_of(i))
+        .collect();
+    assert_eq!(blended.len(), 1, "{blended:?}");
+    assert!((blended[0].1 - 0.5).abs() < 0.01);
+}

@@ -69,6 +69,10 @@ use crate::render::{AnimRef, ClipId, ModelParams, Shading, SpriteId};
 /// - `TXUV`: texture coordinates, `f32 u, f32 v` per vertex (0..1 spans the
 ///   texture once; values outside repeat).
 /// - `TXID`: `u32` sprite handle of the default texture.
+/// - `SKW2` (after `SKEL`, opt-in smooth skinning): per vertex `u8 joint2,
+///   u8 weight2` — the vertex blends from its `SKEL` joint toward `joint2`
+///   by `weight2 / 255` (two-bone linear blend). Meshes without it stay
+///   rigid (the N64-era look, and cheaper).
 pub const TMDL_MAGIC: &[u8; 4] = b"TMDL";
 
 /// Most joints a skeleton may have. Joint matrices live on the stack during
@@ -93,6 +97,8 @@ pub struct Mesh<'a> {
     skeleton: Option<Skeleton<'a>>,
     uvs: Option<&'a [u8]>,
     texture: Option<SpriteId>,
+    /// `SKW2`: (joint2, weight2) per vertex.
+    blend: Option<&'a [u8]>,
 }
 
 /// Rigid skeleton + clips (borrowed from the blob).
@@ -216,6 +222,7 @@ impl<'a> Mesh<'a> {
             skeleton: None,
             uvs: None,
             texture: None,
+            blend: None,
         };
 
         // Optional sections.
@@ -265,6 +272,21 @@ impl<'a> Mesh<'a> {
                     mesh.uvs = Some(&body[..v * 8]);
                 }
                 b"TXID" if len >= 4 => mesh.texture = Some(SpriteId(rd_u32(body, 0))),
+                b"SKW2" => {
+                    let Some(skel) = mesh.skeleton else {
+                        return Err(MeshError::BadSection);
+                    };
+                    if len < v * 2
+                        || body[..v * 2]
+                            .as_chunks::<2>()
+                            .0
+                            .iter()
+                            .any(|&[j, _]| j as usize >= skel.joint_count)
+                    {
+                        return Err(MeshError::BadSection);
+                    }
+                    mesh.blend = Some(&body[..v * 2]);
+                }
                 _ => {} // unknown section: skip
             }
             at = body_at + len;
@@ -516,10 +538,28 @@ impl<'a> Mesh<'a> {
         lerp_trs(a, b, s.k)
     }
 
+    /// Smooth skinning data present (`SKW2`)?
+    pub fn has_blend(&self) -> bool {
+        self.blend.is_some()
+    }
+
+    /// Second joint and its weight (0..1) for vertex `i`, if blended.
+    #[inline]
+    pub fn blend_of(&self, i: usize) -> Option<(usize, f32)> {
+        let b = self.blend?;
+        let w = b[i * 2 + 1];
+        (w != 0).then(|| (b[i * 2] as usize, w as f32 * (1.0 / 255.0)))
+    }
+
     /// Joint driving vertex `i` (0 for static meshes).
     #[inline]
     fn joint_of(&self, i: usize) -> usize {
         self.skeleton.map_or(0, |s| s.joint_of_vertex[i] as usize)
+    }
+
+    #[cfg(test)]
+    fn joint_of_first(&self, j: usize) -> Option<usize> {
+        (0..self.vertex_count).find(|&i| self.joint_of(i) == j)
     }
 }
 
@@ -755,7 +795,7 @@ pub fn tessellate(
     if mesh.joint_count() == 0 {
         // Static mesh: one "joint" (the model matrix) and no joint arrays —
         // the common case stays as cheap as before skeletons existed.
-        tessellate_joints::<false>(mesh, &[*model], &[mv], &setup, emit);
+        tessellate_joints::<false, false>(mesh, &[*model], &[mv], &setup, emit);
     } else {
         let mut skin = [Mat34::IDENTITY; MAX_JOINTS];
         let joints = mesh.pose(params.anim, &mut skin);
@@ -765,7 +805,12 @@ pub fn tessellate(
             world[j] = model.mul(&skin[j]);
             viewm[j] = view.mul(&world[j]);
         }
-        tessellate_joints::<true>(mesh, &world[..joints], &viewm[..joints], &setup, emit);
+        let (world, viewm) = (&world[..joints], &viewm[..joints]);
+        if mesh.has_blend() {
+            tessellate_joints::<true, true>(mesh, world, viewm, &setup, emit);
+        } else {
+            tessellate_joints::<true, false>(mesh, world, viewm, &setup, emit);
+        }
     }
 }
 
@@ -855,9 +900,9 @@ struct VertexCache {
     col: [Color; VCACHE],
 }
 
-/// `SKINNED` is a const parameter so the static path compiles without any
-/// per-vertex joint lookup.
-fn tessellate_joints<const SKINNED: bool>(
+/// `SKINNED` / `SMOOTH` are const parameters so the static and rigid paths
+/// compile without any per-vertex joint or blend lookup.
+fn tessellate_joints<const SKINNED: bool, const SMOOTH: bool>(
     mesh: &Mesh,
     world: &[Mat34],
     viewm: &[Mat34],
@@ -880,13 +925,23 @@ fn tessellate_joints<const SKINNED: bool>(
             return (cache.pos[slot], cache.col[slot]);
         }
         let j = joint(i);
-        let p = viewm[j].transform_point(mesh.position(i));
+        let local = mesh.position(i);
+        let mut p = viewm[j].transform_point(local);
+        let blend = if SMOOTH { mesh.blend_of(i) } else { None };
+        if let Some((j2, w)) = blend {
+            let p2 = viewm[j2].transform_point(local);
+            p = p + (p2 - p) * w;
+        }
         let col = match s.params.shading {
             Shading::Flat => Color::WHITE,
             Shading::Unlit => s.shade(mesh.color(i), Vec3::ZERO, p.z),
             Shading::Gouraud => {
-                let n = world[j].transform_dir(mesh.normal(i)).normalized();
-                s.shade(mesh.color(i), n, p.z)
+                let nl = mesh.normal(i);
+                let mut n = world[j].transform_dir(nl);
+                if let Some((j2, w)) = blend {
+                    n = n + (world[j2].transform_dir(nl) - n) * w;
+                }
+                s.shade(mesh.color(i), n.normalized(), p.z)
             }
         };
         cache.tag[slot] = i as u32;
@@ -911,7 +966,13 @@ fn tessellate_joints<const SKINNED: bool>(
         let colors = if flat {
             // One light value per triangle, from the world-space face normal.
             let p: [Vec3; 3] = core::array::from_fn(|k| {
-                world[joint(idx[k])].transform_point(mesh.position(idx[k]))
+                let i = idx[k];
+                let local = mesh.position(i);
+                let a = world[joint(i)].transform_point(local);
+                match if SMOOTH { mesh.blend_of(i) } else { None } {
+                    Some((j2, w)) => a + (world[j2].transform_point(local) - a) * w,
+                    None => a,
+                }
             });
             let n = (p[1] - p[0]).cross(p[2] - p[0]).normalized();
             [
@@ -1686,6 +1747,62 @@ mod tests {
         assert_eq!(clip.frame_count, 3);
         assert!((clip.duration() - 1.0).abs() < 1e-6);
         assert!(mesh.find_clip(ClipId::from_name("nope")).is_none());
+    }
+
+    #[test]
+    fn smooth_skinning_blends_two_joints() {
+        // The skinned cube with every top vertex (joint 1) blended 50%
+        // back toward joint 0: lifting joint 1 by 1 moves them by 0.5.
+        let rigid_blob = skinned_cube();
+        let mut smooth_blob = skinned_cube();
+        let mesh = Mesh::from_tmdl(&rigid_blob).unwrap();
+        let mut skw2 = std::vec::Vec::new();
+        for i in 0..mesh.vertex_count {
+            if mesh.joint_of(i) == 1 {
+                skw2.extend_from_slice(&[0, 128]);
+            } else {
+                skw2.extend_from_slice(&[0, 0]);
+            }
+        }
+        section(&mut smooth_blob, b"SKW2", &skw2);
+        let smooth = Mesh::from_tmdl(&smooth_blob).unwrap();
+        assert!(smooth.has_blend() && !mesh.has_blend());
+        let top = mesh.joint_of_first(1).unwrap();
+        let (j2, w) = smooth.blend_of(top).unwrap();
+        assert_eq!(j2, 0);
+        assert!((w - 128.0 / 255.0).abs() < 1e-6);
+        // Same pose (lift 1 unit), drawn rigid vs smooth: the top edge of
+        // the smooth one sits lower on screen (larger y).
+        let params = ModelParams {
+            anim: Some(AnimRef::new(ClipId::from_name("lift"), 0.5)),
+            ..ModelParams::DEFAULT
+        };
+        let top_y = |m: &Mesh| {
+            let mut tris = std::vec::Vec::new();
+            tessellate(
+                m,
+                &Mat34::IDENTITY,
+                &Camera3::default(),
+                &DEFAULT_LIGHT,
+                &params,
+                Vec2::new(320.0, 240.0),
+                &mut |t| tris.push(t),
+            );
+            tris.iter()
+                .flat_map(|t| t.pts)
+                .map(|p| p.y)
+                .fold(f32::MAX, f32::min)
+        };
+        let (r, sm) = (top_y(&mesh), top_y(&smooth));
+        assert!(sm > r + 1.0, "smooth top {sm} vs rigid {r}");
+        // A blend toward a joint that does not exist is rejected.
+        let mut bad = skinned_cube();
+        let mut b = std::vec::Vec::new();
+        for _ in 0..mesh.vertex_count {
+            b.extend_from_slice(&[9, 255]);
+        }
+        section(&mut bad, b"SKW2", &b);
+        assert_eq!(Mesh::from_tmdl(&bad).unwrap_err(), MeshError::BadSection);
     }
 
     #[test]

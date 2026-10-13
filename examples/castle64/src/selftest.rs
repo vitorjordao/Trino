@@ -43,6 +43,8 @@ pub fn engine_checks(
     if billboards(renderer)? {
         platform.log("TRINO_STEP:billboards probed\n");
     }
+    platform.log("TRINO_STEP:smooth skin\n");
+    smooth_skin(renderer)?;
     platform.log("TRINO_STEP:engine ok\n");
     Ok(())
 }
@@ -247,5 +249,31 @@ pub fn audio_checks(audio: &mut dyn trino_core::Audio) -> Result<(), &'static st
             pan: 0.5,
         },
     );
+    Ok(())
+}
+
+/// A smooth-skinned strip (`[models.selftest_strip]`, `skinning = "smooth"`)
+/// draws through the two-joint path: its triangle reaches the rasterizer.
+pub fn smooth_skin(renderer: &mut dyn Renderer) -> Result<(), &'static str> {
+    const STRIP: ModelId = ModelId::from_path("models/selftest_strip");
+    renderer.begin_frame(Color::BLACK);
+    renderer.set_camera(&Camera3 {
+        eye: Vec3::new(0.1, 0.5, -2.0),
+        target: Vec3::new(0.1, 0.5, 0.0),
+        fov_y: 1.0,
+    });
+    renderer.draw_model(
+        STRIP,
+        &Transform3::default(),
+        Material::VertexLit,
+        &ModelParams {
+            double_sided: true,
+            ..ModelParams::DEFAULT
+        },
+    );
+    renderer.end_frame();
+    if renderer.stats().tris == 0 {
+        return Err("smooth-skinned model drew nothing (SKW2 path)");
+    }
     Ok(())
 }

@@ -1,4 +1,4 @@
-//! `cargo xtask model inspect <file> [--fps N] [--once a,b] [--json]` —
+//! `cargo xtask model inspect <file> [--fps N] [--once a,b] [--smooth] [--json]` —
 //! bake a model master exactly like the asset pipeline does and report what
 //! the engine will see: triangles, vertices, joints, clips, bounds and the
 //! N64 budget. The deterministic acceptance gate for art coming out of
@@ -13,7 +13,7 @@ use trino_core::{Caps, Mesh};
 pub fn run(root: &Path, args: &[&str]) -> ExitCode {
     let ["inspect", file, rest @ ..] = args else {
         eprintln!(
-            "xtask: usage: cargo xtask model inspect <file.glb|.gltf|.prim.ron> [--fps N] [--once clip,clip] [--json]"
+            "xtask: usage: cargo xtask model inspect <file.glb|.gltf|.prim.ron> [--fps N] [--once clip,clip] [--smooth] [--json]"
         );
         return ExitCode::FAILURE;
     };
@@ -23,6 +23,7 @@ pub fn run(root: &Path, args: &[&str]) -> ExitCode {
     while let Some(a) = it.next() {
         match *a {
             "--json" => json = true,
+            "--smooth" => opts.smooth = true,
             "--fps" => match it.next().and_then(|v| v.parse().ok()) {
                 Some(v) => opts.anim_fps = v,
                 None => {
@@ -79,6 +80,8 @@ pub struct Report {
     pub verts: usize,
     pub tris: usize,
     pub joints: usize,
+    /// Vertices blending two joints (smooth skinning, `--smooth`).
+    pub blended: usize,
     pub clips: Vec<(String, f32, usize, bool)>,
     pub size: [f32; 3],
     pub min: [f32; 3],
@@ -110,13 +113,14 @@ impl Report {
             .collect();
         let list = |v: &[String]| v.iter().map(|s| quote(s)).collect::<Vec<_>>().join(",");
         format!(
-            "{{\"ok\":{},\"file\":{},\"bytes\":{},\"vertices\":{},\"triangles\":{},\"joints\":{},\"clips\":[{}],\"size\":[{},{},{}],\"min\":[{},{},{}],\"radius\":{},\"n64_tri_budget\":{},\"warnings\":[{}],\"errors\":[{}]}}",
+            "{{\"ok\":{},\"file\":{},\"bytes\":{},\"vertices\":{},\"triangles\":{},\"joints\":{},\"blended_vertices\":{},\"clips\":[{}],\"size\":[{},{},{}],\"min\":[{},{},{}],\"radius\":{},\"n64_tri_budget\":{},\"warnings\":[{}],\"errors\":[{}]}}",
             self.errors.is_empty(),
             quote(&self.file),
             self.bytes,
             self.verts,
             self.tris,
             self.joints,
+            self.blended,
             clips.join(","),
             self.size[0],
             self.size[1],
@@ -149,7 +153,12 @@ impl Report {
             self.tris as f32 / budget * 100.0,
             budget
         );
-        if self.joints > 0 {
+        if self.joints > 0 && self.blended > 0 {
+            s += &format!(
+                "  smooth skeleton: {} joint(s), {} vertices blend two joints\n",
+                self.joints, self.blended
+            );
+        } else if self.joints > 0 {
             s += &format!("  rigid skeleton: {} joint(s)\n", self.joints);
         }
         for (n, d, f, l) in &self.clips {
@@ -223,6 +232,9 @@ pub fn inspect(path: &Path, opts: &ModelOptions) -> Result<Report, String> {
         verts: mesh.vertex_count,
         tris,
         joints: mesh.joint_count(),
+        blended: (0..mesh.vertex_count)
+            .filter(|&i| mesh.blend_of(i).is_some())
+            .count(),
         clips,
         size: [max[0] - min[0], max[1] - min[1], max[2] - min[2]],
         min,

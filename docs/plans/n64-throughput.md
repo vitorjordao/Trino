@@ -28,10 +28,12 @@ Fill in the empty cells from your own Phase 0 baseline run; they are in
 
 ## Start here
 
-1. **Branch.**
-   - If PR #1 (`backlog/full-pass` → `main`) is merged, branch from `main`.
-   - Otherwise branch from `backlog/full-pass`.
-   - Use one branch for the plan, with one commit per item.
+1. **Branch.** This plan exists only on `plan/n64-throughput` until its PR merges.
+   - Work on `plan/n64-throughput`. Run `git fetch` first.
+   - If PR #1 (`backlog/full-pass` → `main`) has been merged, run `git merge origin/main`
+     into it first.
+   - Make one commit per item.
+   - Don't push or merge without asking the user.
 2. **Environment.** These shells don't inherit rustup, and `/usr/bin/cargo` shadows it:
    ```sh
    source ~/.cargo/env
@@ -128,8 +130,8 @@ docker run --rm -v "$PWD/target/n64":/w -w /w trino-n64:latest \
   - the shim divides **12 color bytes by 255.0f** (12 `div.s`, ~350 cycles);
   - libdragon's `rdpq_triangle` then multiplies each one back by `255.0`, in double.
   - At the pinned commit `rdpq_triangle` is `rdpq_triangle_rsp`: edge setup runs on the
-    RSP, and the CPU only converts and does 4 `rspq_write`s. The skill's line "rdpq_triangle
-    is CPU-side C" is wrong; fix it.
+    RSP, and the CPU only converts and does 4 `rspq_write`s. This is already corrected in
+    the skill.
   - `RDPQ_OVL_ID` and `RDPQ_CMD_TRIANGLE_DATA` are public in `rdpq.h`.
   - `__rdpq_autosync_use` is internal; don't depend on it.
 - **libdragon pin.** `docker/n64/Dockerfile` pins `2c3d5db` on **trunk** (2026-06-26).
@@ -159,7 +161,11 @@ real per-draw and per-triangle numbers.
      - D per triangle is the sort and submit cost.
 2. **Write the numbers into the skill's cost-model section** as measured fixed costs.
    Keep the fit for scene totals.
-3. **Decide.**
+3. **Lock a new baseline.** The micro scenes add ROM code, and code layout moves every
+   scene. Once Phase 0 lands:
+   - run `cargo xtask test n64 --bless` (time ceilings);
+   - use that commit as the A/B base for Phase 1.
+4. **Decide.**
    - If the per-draw floor is ≥ 150 µs, Phase 1a–1c pays first.
    - If per-vertex is ≥ 1000 cycles after 1d–1e, keep going on the CPU before Phase 4.
    - Record the decision in the plan's checklist (bottom).
@@ -221,8 +227,9 @@ computing the same f32 expressions in the same order, only fewer times.
     A radix sort on the 32-bit depth plus a stable index is an option if Phase 0 shows
     sort ≥ 3 ms.
 - **1h. Game-side draw overhead.**
-  - `Transform3::matrix` runs software `sin`/`cos` for three axes every draw. Blocks have
-    zero rotation, and coins and boars only yaw.
+  - `Transform3::matrix` (`Mat34::from_rotation_scale_translation`) runs software
+    `sin`/`cos` for all three axes every draw. Blocks have zero rotation, and coins and
+    boars only yaw.
   - A fast path for zero angles (`sin(0) = 0`, `cos(0) = 1` exactly) is identical; check
     that `math3d::sin(0.0) == 0.0` and `cos(0.0) == 1.0` bit-exactly first.
   - castle64's per-frame `visible` closure and shadow search are small. Look at the

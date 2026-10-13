@@ -137,6 +137,24 @@ pub struct SpriteDecl {
 #[serde(deny_unknown_fields)]
 pub struct SoundDecl {
     pub file: String,
+    /// Bake loop metadata — needed on the N64, where the loop lives in the
+    /// wav64. Sounds default to `false` (set it for looping voices: ambient
+    /// sources, engines); music defaults to `true` (set `false` for
+    /// stingers, which play once).
+    #[serde(default, rename = "loop")]
+    pub looped: Option<bool>,
+}
+
+impl SoundDecl {
+    /// Loop flag of a `[sounds.*]` entry.
+    pub fn sound_loops(&self) -> bool {
+        self.looped.unwrap_or(false)
+    }
+
+    /// Loop flag of a `[music.*]` entry.
+    pub fn music_loops(&self) -> bool {
+        self.looped.unwrap_or(true)
+    }
 }
 
 impl Manifest {

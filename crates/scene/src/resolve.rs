@@ -29,6 +29,8 @@ pub struct DrawItem {
     pub collider: Option<Collider>,
     /// LOD levels sorted by distance: (distance, model or culled).
     pub lod: Vec<(f32, Option<(ModelId, String)>)>,
+    /// Positional looping sound.
+    pub sound: Option<trino_core::SoundSource>,
     /// True for parts that come from a prefab (not editable in place).
     pub from_prefab: bool,
 }
@@ -202,6 +204,11 @@ fn visit(
         sprite,
         collider,
         lod,
+        sound: e.sound.as_ref().map(|s| trino_core::SoundSource {
+            sound: trino_core::SoundId::from_path(&s.path),
+            radius: s.radius,
+            volume: s.volume,
+        }),
         from_prefab,
     });
 

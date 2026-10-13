@@ -46,6 +46,17 @@ file = "sounds/win.wav"
 [music.theme]
 file = "music/theme.wav"
 
+# Positional ambience (scene `sound` components): loops, so on the N64 the
+# loop is baked into the wav64.
+[sounds.water]
+file = "sounds/water.wav"
+loop = true
+
+# A stinger: plays once over the music (Audio::play_stinger) — no loop.
+[music.fanfare]
+file = "sounds/win.wav"
+loop = false
+
 [models.cube]
 file = "models/cube.glb"
 

@@ -81,6 +81,15 @@ mod n3ds {
             }
             return;
         }
+        runtime::log("TRINO_STEP:audio\n");
+        if let Err(e) = castle64::selftest::audio_checks(audio) {
+            runtime::log(&format!("TRINO_TEST_FAIL:audio: {e}\n"));
+            while runtime::running() {
+                trino_core::Renderer::begin_frame(renderer, trino_core::Color::BLACK);
+                trino_core::Renderer::end_frame(renderer);
+            }
+            return;
+        }
         runtime::log("TRINO_STEP:showcase demo\n");
         // 0b) Collision from scenes + runtime entities: the showcase demo
         // (editor scene exported to code) plays through every coin to the goal.

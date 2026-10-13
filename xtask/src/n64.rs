@@ -174,9 +174,16 @@ pub fn bake_assets(root: &Path, test_mode: bool) -> Result<(), String> {
         let logical = format!("sounds/{name}");
         let id = trino_core::asset_id(&logical);
         let source = resolve_source(&root.join("assets"), Platform::N64, &decl.file)?;
-        std::fs::copy(&source, stage.join(format!("{id:08x}.wav"))).map_err(|e| e.to_string())?;
+        let staged = stage.join(format!("{id:08x}.wav"));
+        stage_wav(&source, &staged, decl.sound_loops())?;
+        // Looping voices (ambient sources) need the loop in the wav64.
+        let looping = if decl.sound_loops() {
+            "--wav-loop true "
+        } else {
+            ""
+        };
         script.push_str(&format!(
-            "audioconv64 -o target/n64/filesystem target/n64/stage/{id:08x}.wav\n"
+            "audioconv64 {looping}-o target/n64/filesystem target/n64/stage/{id:08x}.wav\n"
         ));
         index.push_str(&format!("{id:08x}\tsound\t{id:08x}.wav64\n"));
     }
@@ -184,11 +191,17 @@ pub fn bake_assets(root: &Path, test_mode: bool) -> Result<(), String> {
         let logical = format!("music/{name}");
         let id = trino_core::asset_id(&logical);
         let source = resolve_source(&root.join("assets"), Platform::N64, &decl.file)?;
-        std::fs::copy(&source, stage.join(format!("{id:08x}.wav"))).map_err(|e| e.to_string())?;
+        stage_wav(
+            &source,
+            &stage.join(format!("{id:08x}.wav")),
+            decl.music_loops(),
+        )?;
         // Loop metadata is baked into the wav64 on the N64; the runtime's
-        // `looped` flag is a no-op there (see the shim).
+        // `looped` flag is a no-op there (see the shim). Stingers declare
+        // `loop = false`.
+        let looping = if decl.music_loops() { "true" } else { "false" };
         script.push_str(&format!(
-            "audioconv64 --wav-loop true -o target/n64/filesystem target/n64/stage/{id:08x}.wav\n"
+            "audioconv64 --wav-loop {looping} -o target/n64/filesystem target/n64/stage/{id:08x}.wav\n"
         ));
         index.push_str(&format!("{id:08x}\tmusic\t{id:08x}.wav64\n"));
     }
@@ -251,6 +264,35 @@ pub fn bake_assets(root: &Path, test_mode: bool) -> Result<(), String> {
         return Err("asset baking failed".into());
     }
     Ok(())
+}
+
+/// Stage a wav for audioconv64: copied as-is, or — when it loops — with
+/// its frame count trimmed to a multiple of 16 (libdragon asserts the wav64
+/// loop length is; the few dropped samples are inaudible).
+fn stage_wav(source: &Path, out: &Path, looped: bool) -> Result<(), String> {
+    if !looped {
+        return std::fs::copy(source, out)
+            .map(|_| ())
+            .map_err(|e| format!("{}: {e}", source.display()));
+    }
+    let mut reader =
+        hound::WavReader::open(source).map_err(|e| format!("{}: {e}", source.display()))?;
+    let spec = reader.spec();
+    let samples: Vec<i32> = reader
+        .samples::<i32>()
+        .collect::<Result<_, _>>()
+        .map_err(|e| format!("{}: {e}", source.display()))?;
+    let ch = spec.channels as usize;
+    let frames = samples.len() / ch;
+    let keep = frames / 16 * 16;
+    if keep == 0 {
+        return Err(format!("{}: too short to loop", source.display()));
+    }
+    let mut w = hound::WavWriter::create(out, spec).map_err(|e| e.to_string())?;
+    for s in &samples[..keep * ch] {
+        w.write_sample(*s).map_err(|e| e.to_string())?;
+    }
+    w.finalize().map_err(|e| e.to_string())
 }
 
 fn cargo_build(root: &Path) -> Result<(), String> {

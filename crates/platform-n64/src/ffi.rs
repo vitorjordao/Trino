@@ -61,6 +61,11 @@ unsafe extern "C" {
     pub fn trino_wav_play(wav: *mut c_void, channel: u32, looped: u32);
     pub fn trino_channel_stop(channel: u32);
     pub fn trino_audio_poll();
+    /// Per-channel left/right volume, fixed point (65536 = 1.0): scalar
+    /// floats after an int are unsafe across the N64's o32/o64 boundary.
+    pub fn trino_ch_volume(channel: u32, lvol_q16: u32, rvol_q16: u32);
+    pub fn trino_ch_playing(channel: u32) -> i32;
+    pub fn trino_mixer_set_vol(vol_q16: u32);
 
     /// Path is DFS-relative, e.g. `/index.tsv` (no `rom:/`).
     pub fn trino_file_exists(dfs_relative_path: *const c_char) -> i32;

@@ -16,6 +16,7 @@
 //! let spawn = trino_core::scene::find(level::NODES, "spawn").unwrap().position();
 //! ```
 
+use crate::audio::{SoundId, SoundSource};
 use crate::math::{Color, Vec3};
 use crate::math3d::Mat34;
 use crate::physics::{Aabb, Collider, Shape};
@@ -138,6 +139,8 @@ pub struct SceneNode {
     pub collider: Option<Collider>,
     /// Distance levels replacing `model` far from the camera.
     pub lod: Lods,
+    /// Positional looping sound (see [`crate::audio::Ambience`]).
+    pub sound: Option<SoundSource>,
 }
 
 impl SceneNode {
@@ -191,7 +194,8 @@ impl SceneNode {
 ///   collider a f32 b f32 c f32 (box half xyz / sphere r / capsule r,h)
 ///   collider offset f32*3, texture u32 (sprite handle),
 ///   LOD levels (u32 offset, u32 count) into the data table — 8-byte
-///   records `f32 distance, u32 model` (0 = none), sorted by distance
+///   records `f32 distance, u32 model` (0 = none), sorted by distance,
+///   sound source: u32 sound (flag bit4), f32 radius, f32 volume
 /// data table: UTF-8 strings and LOD records, to the end of the blob: UTF-8 bytes to the end of the blob
 /// ```
 ///
@@ -201,7 +205,7 @@ pub const TSCN_MAGIC: &[u8; 4] = b"TSCN";
 pub const TSCN_VERSION: u16 = 1;
 pub const TSCN_HEADER: usize = 12;
 pub const TSCN_ENV_BYTES: usize = 68;
-pub const TSCN_NODE_BYTES: usize = 16 + 48 + 4 + 4 + 4 + 4 + 4 + 4 + 12 + 12 + 4 + 8;
+pub const TSCN_NODE_BYTES: usize = 16 + 48 + 4 + 4 + 4 + 4 + 4 + 4 + 12 + 12 + 4 + 8 + 12;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SceneError {
@@ -377,10 +381,16 @@ impl BakedScene {
         let lod = self
             .data(rd_u32(d, lod_at), rd_u32(d, lod_at + 4) * 8)
             .expect("validated in parse");
+        let sound = (flags & 16 != 0).then(|| SoundSource {
+            sound: SoundId(rd_u32(d, b + 60)),
+            radius: rd_f32(d, b + 64),
+            volume: rd_f32(d, b + 68),
+        });
         SceneNode {
             name,
             tags: Tags::Packed(tags),
             lod: Lods::Packed(lod),
+            sound,
             matrix,
             model: (flags & 1 != 0).then(|| ModelId(rd_u32(d, b + 4))),
             params,
@@ -473,6 +483,7 @@ mod tests {
             anim: None,
             collider: None,
             lod: Lods::NONE,
+            sound: None,
         },
         SceneNode {
             name: "spawn",
@@ -489,6 +500,7 @@ mod tests {
             anim: None,
             collider: None,
             lod: Lods::NONE,
+            sound: None,
         },
     ];
 
@@ -566,6 +578,7 @@ mod tests {
         b.extend_from_slice(&0u32.to_le_bytes()); // texture (flag off)
         b.extend_from_slice(&12u32.to_le_bytes()); // LOD records at 12
         b.extend_from_slice(&1u32.to_le_bytes()); // one level
+        b.extend_from_slice(&[0; 12]); // sound (flag off)
         b.extend_from_slice(b"a/doordoor\nx");
         f(&mut b, &[30.0]);
         b.extend_from_slice(&0u32.to_le_bytes()); // culled beyond 30

@@ -39,6 +39,7 @@
         scale: (1.0, 1.0, 1.0),
     ),
     model: Some((path: "models/water", material: Some("materials/water"))),
+    sound: Some((path: "sounds/water", radius: 9.0, volume: 0.8)),
 ),
 (
     name: "tree-1",

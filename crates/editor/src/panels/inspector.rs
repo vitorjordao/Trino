@@ -48,6 +48,7 @@ fn entity(app: &mut App, ui: &mut egui::Ui, path: &[usize]) {
         .map(|m| (m.logical.clone(), m.is_proxy()))
         .collect();
     let sprite_names: Vec<String> = app.project.sprites.keys().cloned().collect();
+    let sound_names: Vec<String> = app.project.sounds.clone();
     let material_names: Vec<String> = app.lib.materials.keys().cloned().collect();
     let prefab_names: Vec<String> = app.lib.prefabs.keys().cloned().collect();
     let is_prefab_doc = app.doc.is_prefab();
@@ -628,6 +629,59 @@ fn entity(app: &mut App, ui: &mut egui::Ui, path: &[usize]) {
         e.collider = None;
     }
 
+    // Sound source.
+    let mut remove_sound = false;
+    if let Some(snd) = &mut e.sound {
+        theme::component(
+            ui,
+            "c-sound",
+            icon::SPEAKER_HIGH,
+            c::SPRITE,
+            "Sound source (positional loop)",
+            |ui| {
+                theme::prop(ui, "Sound", |ui| {
+                    egui::ComboBox::from_id_salt("sound-path")
+                        .selected_text(&snd.path)
+                        .show_ui(ui, |ui| {
+                            for name in &sound_names {
+                                if ui.selectable_label(snd.path == *name, name).clicked() {
+                                    snd.path = name.clone();
+                                }
+                            }
+                        });
+                });
+                theme::prop(ui, "Radius", |ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut snd.radius)
+                            .speed(0.1)
+                            .range(0.1..=500.0)
+                            .suffix(" m"),
+                    );
+                });
+                theme::prop(ui, "Volume", |ui| {
+                    ui.add(egui::Slider::new(&mut snd.volume, 0.0..=1.0));
+                });
+                ui.label(
+                    RichText::new(
+                        "Loops near the listener, panned by side (Ambience). On N64 the sound \
+                         needs `loop = true` in the manifest.",
+                    )
+                    .size(11.5)
+                    .color(c::TEXT_FAINT),
+                );
+                if ui
+                    .small_button(RichText::new(format!("{} Remove", icon::TRASH)).color(c::ERROR))
+                    .clicked()
+                {
+                    remove_sound = true;
+                }
+            },
+        );
+    }
+    if remove_sound {
+        e.sound = None;
+    }
+
     // Add component.
     ui.add_space(4.0);
     ui.vertical_centered(|ui| {
@@ -662,6 +716,17 @@ fn entity(app: &mut App, ui: &mut egui::Ui, path: &[usize]) {
                         .clicked()
                 {
                     e.collider = Some(trino_scene::ColliderComponent::default());
+                }
+                if e.sound.is_none()
+                    && ui
+                        .button(format!("{}  Sound source", icon::SPEAKER_HIGH))
+                        .clicked()
+                {
+                    let first = sound_names
+                        .first()
+                        .cloned()
+                        .unwrap_or_else(|| "sounds/beep".into());
+                    e.sound = Some(trino_scene::SoundComponent::new(first));
                 }
             },
         );

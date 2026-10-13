@@ -211,3 +211,41 @@ pub fn billboards(renderer: &mut dyn Renderer) -> Result<bool, &'static str> {
     }
     Ok(probed)
 }
+
+/// The looping water ambience (`[sounds.water]`, `loop = true`).
+pub const WATER: trino_core::SoundId = trino_core::SoundId::from_path("sounds/water");
+/// A stinger track (`[music.fanfare]`).
+pub const FANFARE: trino_core::MusicId = trino_core::MusicId::from_path("music/fanfare");
+
+/// Audio v2 through the real backend: a steerable looping voice (start,
+/// steer, stop) and a stinger over the music.
+pub fn audio_checks(audio: &mut dyn trino_core::Audio) -> Result<(), &'static str> {
+    use trino_core::SoundParams;
+    let left = SoundParams {
+        volume: 0.5,
+        pan: -1.0,
+    };
+    let voice = audio
+        .play_voice(WATER, &left, true)
+        .ok_or("no voice for a looping sound")?;
+    if !audio.voice_playing(voice) {
+        return Err("voice not playing after play_voice");
+    }
+    audio.set_voice(voice, &SoundParams::DEFAULT);
+    audio.stop_voice(voice);
+    if audio.voice_playing(voice) {
+        return Err("voice still playing after stop_voice");
+    }
+    audio.play_stinger(FANFARE);
+    if !audio.stinger_playing() {
+        return Err("stinger not playing");
+    }
+    audio.play_sound_with(
+        WATER,
+        &SoundParams {
+            volume: 0.2,
+            pan: 0.5,
+        },
+    );
+    Ok(())
+}

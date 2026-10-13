@@ -34,9 +34,9 @@ use trino_core::math3d::{atan2, cos, sin, sqrt};
 use trino_core::physics::{Aabb, move_aabb};
 use trino_core::scene::{BakedScene, SceneNode};
 use trino_core::{
-    Audio, BlobId, Button, Camera3, Color, Emitter, EntityId, EntityStore, FontId, Game,
-    InputState, Light, Mat34, Material, ParticleSystem, Platform, Renderer, SpriteId, TextAlign,
-    TextBuf, TextParams, Vec2, Vec3,
+    Ambience, Audio, BlobId, Button, Camera3, Color, Emitter, EntityId, EntityStore, FontId, Game,
+    InputState, Light, Listener, Mat34, Material, MusicId, ParticleSystem, Platform, Renderer,
+    SoundId, SpriteId, TextAlign, TextBuf, TextParams, Vec2, Vec3, spatialize,
 };
 
 #[allow(clippy::all)]
@@ -61,6 +61,10 @@ const HERO_HALF: Vec3 = Vec3::new(0.35, 0.6, 0.35);
 const GRAVITY: f32 = 22.0;
 const JUMP: f32 = 8.0;
 const SPEED: f32 = 4.5;
+const COIN_SOUND: SoundId = SoundId::from_path("sounds/coin");
+/// All coins collected: a fanfare over the music (stinger).
+const FANFARE: MusicId = MusicId::from_path("music/fanfare");
+
 /// Coin pickup sparkles: a short, bright burst that rises and fades.
 const SPARKS: Emitter = Emitter {
     sprite: SpriteId::from_path("sprites/fx_spark"),
@@ -102,6 +106,10 @@ pub struct ShowcaseGame {
     clear: Color,
     /// Coin pickup particles (billboards).
     sparks: ParticleSystem<32>,
+    /// Scene sound sources (the pond) playing near the camera.
+    ambience: Ambience<4>,
+    /// Coins collected this frame: count and where (positional sounds).
+    picked: (u32, Vec3),
 }
 
 impl ShowcaseGame {
@@ -166,6 +174,8 @@ impl ShowcaseGame {
             light,
             clear,
             sparks: ParticleSystem::new(SPARKS, 0x5EED),
+            ambience: Ambience::new(),
+            picked: (0, Vec3::ZERO),
         };
         game.world.spawn_iter(nodes);
         game.hero = game.world.with_tag("player").next();
@@ -231,6 +241,7 @@ impl ShowcaseGame {
                 continue;
             };
             if e.has_tag("coin") {
+                self.picked = (self.picked.0 + 1, e.position());
                 self.sparks.origin = e.position();
                 self.sparks.burst(12);
                 self.world.despawn(id);
@@ -249,7 +260,7 @@ impl Default for ShowcaseGame {
 }
 
 impl Game for ShowcaseGame {
-    fn update(&mut self, input: &InputState, _audio: &mut dyn Audio, dt: f32) {
+    fn update(&mut self, input: &InputState, audio: &mut dyn Audio, dt: f32) {
         self.time += dt;
         let mut dx = input.stick.x;
         let mut dy = input.stick.y;
@@ -284,8 +295,26 @@ impl Game for ShowcaseGame {
         self.prev = *input;
         if !self.reached_goal {
             self.physics(wish, jump, dt);
+            let before = self.coins;
             self.pickups();
+            // Positional audio: the pickup is heard from where it happened,
+            // the last coin plays the fanfare over the music.
+            let (n, at) = core::mem::replace(&mut self.picked, (0, Vec3::ZERO));
+            if n > 0 {
+                let listener = Listener::from_camera(&self.camera());
+                let params = spatialize(&listener, at, 25.0, 1.0);
+                for _ in 0..n {
+                    audio.play_sound_with(COIN_SOUND, &params);
+                }
+                if before < self.total_coins && self.coins == self.total_coins {
+                    audio.play_stinger(FANFARE);
+                }
+            }
         }
+        // Scene sound sources (looping voices steered by distance and side).
+        let listener = Listener::from_camera(&self.camera());
+        self.ambience
+            .update(audio, &listener, self.world.sound_sources());
         if let Some(hero) = self.hero.and_then(|h| self.world.get_mut(h)) {
             let feet = self.pos - Vec3::new(0.0, HERO_HALF.y, 0.0);
             // Face the walk direction.
@@ -502,6 +531,60 @@ mod tests {
         assert!(find(NODES, "coin-1").unwrap().collider.unwrap().trigger);
         assert!(!find(NODES, "crate-a").unwrap().collider.unwrap().trigger);
         assert!(g.world.len() == NODES.len(), "every node is a live entity");
+        assert_eq!(g.world.sound_sources().count(), 1, "the pond");
+    }
+
+    /// Records what the game asks of the audio backend.
+    #[derive(Default)]
+    struct AudioLog {
+        coin_sounds: u32,
+        stingers: u32,
+        voices_started: u32,
+        loudest_voice: f32,
+        next: u32,
+    }
+
+    impl Audio for AudioLog {
+        fn play_sound(&mut self, _: trino_core::SoundId) {}
+        fn play_music(&mut self, _: trino_core::MusicId, _: bool) {}
+        fn stop_music(&mut self) {}
+        fn set_master_volume(&mut self, _: f32) {}
+        fn play_sound_with(&mut self, s: trino_core::SoundId, p: &trino_core::SoundParams) {
+            if s == COIN_SOUND {
+                assert!(p.volume > 0.0, "pickups happen next to the camera");
+                self.coin_sounds += 1;
+            }
+        }
+        fn play_voice(
+            &mut self,
+            _: trino_core::SoundId,
+            p: &trino_core::SoundParams,
+            looped: bool,
+        ) -> Option<trino_core::VoiceId> {
+            assert!(looped, "ambience loops");
+            self.voices_started += 1;
+            self.loudest_voice = self.loudest_voice.max(p.volume);
+            self.next += 1;
+            Some(trino_core::VoiceId(self.next))
+        }
+        fn set_voice(&mut self, _: trino_core::VoiceId, p: &trino_core::SoundParams) {
+            self.loudest_voice = self.loudest_voice.max(p.volume);
+        }
+        fn play_stinger(&mut self, m: trino_core::MusicId) {
+            assert_eq!(m, FANFARE);
+            self.stingers += 1;
+        }
+    }
+
+    #[test]
+    fn audio_is_positional_and_the_last_coin_plays_the_fanfare() {
+        let mut g = ShowcaseGame::new();
+        let mut log = AudioLog::default();
+        run_demo(&mut g, |g, input| g.update(input, &mut log, 1.0 / 60.0)).unwrap();
+        assert_eq!(log.coin_sounds, 5);
+        assert_eq!(log.stingers, 1, "fanfare once, on the last coin");
+        assert!(log.voices_started >= 1, "the pond's water loop started");
+        assert!(log.loudest_voice > 0.0);
     }
 
     #[test]

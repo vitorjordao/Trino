@@ -44,6 +44,8 @@ pub struct Entity {
     pub collider: Option<Collider>,
     /// Distance levels (see [`crate::scene::LodLevel`]).
     pub lod: Lods,
+    /// Positional looping sound (see [`crate::audio::Ambience`]).
+    pub sound: Option<crate::audio::SoundSource>,
     pub visible: bool,
     /// Game-defined payload.
     pub user: u32,
@@ -59,6 +61,7 @@ impl Entity {
         anim: None,
         collider: None,
         lod: Lods::NONE,
+        sound: None,
         visible: true,
         user: 0,
     };
@@ -74,6 +77,7 @@ impl Entity {
             anim: node.anim,
             collider: node.collider,
             lod: node.lod,
+            sound: node.sound,
             visible: true,
             user: 0,
         }
@@ -303,6 +307,17 @@ impl<const N: usize> EntityStore<N> {
         n
     }
 
+    /// Sound sources of visible entities, for [`crate::audio::Ambience::update`]
+    /// (keyed by slot index — stable while the entity lives).
+    pub fn sound_sources(
+        &self,
+    ) -> impl Iterator<Item = (u32, Vec3, crate::audio::SoundSource)> + '_ {
+        self.iter().filter_map(|(id, e)| {
+            let s = e.sound.filter(|_| e.visible)?;
+            Some((id.index as u32, e.position(), s))
+        })
+    }
+
     /// Visible **trigger** entities whose collider overlaps `query`.
     pub fn triggers_overlapping<'a>(
         &'a self,
@@ -351,6 +366,7 @@ mod tests {
             anim: None,
             collider: None,
             lod: Lods::NONE,
+            sound: None,
         }
     }
 

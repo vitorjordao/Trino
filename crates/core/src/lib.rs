@@ -39,7 +39,9 @@ pub mod tilemap;
 
 pub use asset::asset_id;
 
-pub use audio::{Audio, MusicId, SoundId};
+pub use audio::{
+    Ambience, Audio, Listener, MusicId, SoundId, SoundParams, SoundSource, VoiceId, spatialize,
+};
 pub use caps::{Caps, CapsError};
 pub use collide::{MoveResult, move_and_collide};
 pub use entity::{Entity, EntityId, EntityStore};

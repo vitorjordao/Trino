@@ -39,7 +39,7 @@ pub fn to_rust(scene: &Scene, lib: &Library) -> (String, Vec<String>) {
     );
     let _ = writeln!(
         out,
-        "#[allow(unused_imports)]\nuse trino_core::{{\n    Camera3, ClipId, Collider, Color, Fog, Light, LodLevel, Lods, Mat34, ModelId, ModelParams,\n    SceneNode, Shading, Shape, SpriteId, Tags, Vec3,\n}};\n"
+        "#[allow(unused_imports)]\nuse trino_core::{{\n    Camera3, ClipId, Collider, Color, Fog, Light, LodLevel, Lods, Mat34, ModelId, ModelParams,\n    SceneNode, Shading, Shape, SoundId, SoundSource, SpriteId, Tags, Vec3,\n}};\n"
     );
     let env = &scene.environment;
     let cam = env.core_camera();
@@ -153,7 +153,7 @@ pub fn to_rust(scene: &Scene, lib: &Library) -> (String, Vec<String>) {
             .collect();
         let _ = writeln!(
             out,
-            "    SceneNode {{\n        name: \"{}\",\n        tags: Tags::List(&[{}]),\n        matrix: Mat34 {{\n            m: [{}],\n        }},\n        model: {},\n        params: ModelParams {{\n            tint: {},\n            emissive: {},\n            shading: Shading::{},\n            double_sided: {},\n            anim: None,\n            texture: {},\n        }},\n        anim: {},\n        collider: {},\n        lod: {},\n    }},",
+            "    SceneNode {{\n        name: \"{}\",\n        tags: Tags::List(&[{}]),\n        matrix: Mat34 {{\n            m: [{}],\n        }},\n        model: {},\n        params: ModelParams {{\n            tint: {},\n            emissive: {},\n            shading: Shading::{},\n            double_sided: {},\n            anim: None,\n            texture: {},\n        }},\n        anim: {},\n        collider: {},\n        lod: {},\n        sound: {},\n    }},",
             esc(&item.name),
             tags.join(", "),
             rows.join(", "),
@@ -168,7 +168,16 @@ pub fn to_rust(scene: &Scene, lib: &Library) -> (String, Vec<String>) {
             },
             anim,
             collider,
-            lod
+            lod,
+            match item.sound {
+                Some(snd) => format!(
+                    "Some(SoundSource {{ sound: SoundId({:#010x}), radius: {}, volume: {} }})",
+                    snd.sound.0,
+                    f(snd.radius),
+                    f(snd.volume)
+                ),
+                None => "None".into(),
+            }
         );
     }
     let _ = writeln!(out, "];");

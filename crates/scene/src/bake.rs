@@ -96,6 +96,9 @@ pub fn to_tscn(scene: &Scene, lib: &Library) -> (Vec<u8>, Vec<String>) {
         if p.texture.is_some() {
             flags |= 8;
         }
+        if item.sound.is_some() {
+            flags |= 16;
+        }
         flags |= match p.shading {
             Shading::Gouraud => 0,
             Shading::Flat => 1,
@@ -130,6 +133,12 @@ pub fn to_tscn(scene: &Scene, lib: &Library) -> (Vec<u8>, Vec<String>) {
         }
         out.extend_from_slice(&lod_at.to_le_bytes());
         out.extend_from_slice(&(item.lod.len() as u32).to_le_bytes());
+        let snd = item.sound;
+        out.extend_from_slice(&snd.map_or(0, |s| s.sound.0).to_le_bytes());
+        f32s(
+            &mut out,
+            &[snd.map_or(0.0, |s| s.radius), snd.map_or(0.0, |s| s.volume)],
+        );
         debug_assert_eq!(out.len() - start, TSCN_NODE_BYTES);
     }
     out.extend_from_slice(&strings);
@@ -189,6 +198,11 @@ mod tests {
                 ..ModelComponent::new("models/robot")
             });
         robot.tags = vec!["npc".into(), "friendly".into()];
+        robot.sound = Some(crate::SoundComponent {
+            path: "sounds/hum".into(),
+            radius: 6.0,
+            volume: 0.5,
+        });
         robot.collider = Some(ColliderComponent {
             shape: ShapeDef::Capsule {
                 radius: 0.4,
@@ -225,7 +239,11 @@ mod tests {
             }
         );
         assert!(r.lod.is_empty());
+        let snd = r.sound.unwrap();
+        assert_eq!(snd.sound, trino_core::SoundId::from_path("sounds/hum"));
+        assert_eq!((snd.radius, snd.volume), (6.0, 0.5));
         let m = baked.find("group/marker").unwrap();
+        assert!(m.sound.is_none());
         assert!(m.model.is_none() && m.tags.is_empty());
         assert_eq!(m.position().y, 5.0);
     }

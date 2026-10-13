@@ -75,3 +75,27 @@ fn baked_showcase_matches_code_and_plays() {
     })
     .unwrap();
 }
+
+/// Audio v2 on the PC backend (silent without a device, same voice
+/// bookkeeping) — the console self-tests run the same check.
+#[test]
+fn audio_checks_pass_on_pc() {
+    use trino_platform_pc::PcAudio;
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+    let baked = tempfile::tempdir().unwrap();
+    trino_asset_pipeline::bake_all(
+        &root.join("assets"),
+        trino_asset_pipeline::Platform::Pc,
+        baked.path(),
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let assets = trino_asset_pipeline::load_dir(baked.path(), None).unwrap();
+    let mut audio = PcAudio::new();
+    for s in assets.sounds {
+        audio.upload_sound(trino_core::SoundId(s.id), s.samples);
+    }
+    for m in assets.music {
+        audio.upload_music(trino_core::MusicId(m.id), m.samples);
+    }
+    castle64::selftest::audio_checks(&mut audio).unwrap();
+}

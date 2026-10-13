@@ -305,11 +305,24 @@ void trino_channel_stop(uint32_t channel)
     mixer_ch_stop((int)channel);
 }
 
-void trino_mixer_set_vol(float vol)
+void trino_mixer_set_vol(uint32_t vol_q16)
 {
-    // Master volume: apply per-channel on play instead; global gain not
-    // exposed uniformly. v1: no-op placeholder kept for ABI stability.
-    (void)vol;
+    mixer_set_vol(vol_q16 / 65536.0f);
+}
+
+// Per-channel left/right volume (pan + attenuation, music ducking).
+// Volumes are 16.16-free fixed point (65536 = 1.0) on purpose: with an
+// integer first argument, o32 (Rust) passes following floats in integer
+// registers while o64 (libdragon) uses FP registers — scalar floats after
+// an int would arrive as garbage. Integers and pointers are always safe.
+void trino_ch_volume(uint32_t channel, uint32_t lvol_q16, uint32_t rvol_q16)
+{
+    mixer_ch_set_vol((int)channel, lvol_q16 / 65536.0f, rvol_q16 / 65536.0f);
+}
+
+int32_t trino_ch_playing(uint32_t channel)
+{
+    return mixer_ch_playing((int)channel) ? 1 : 0;
 }
 
 void trino_audio_poll(void)

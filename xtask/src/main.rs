@@ -324,6 +324,7 @@ fn gen_assets() -> ExitCode {
         0.2,
     );
     gen_theme(&music.join("theme.wav"));
+    gen_water_loop(&sounds.join("water.wav"));
 
     let models = root.join("assets/shared/models");
     std::fs::create_dir_all(&models).unwrap();
@@ -598,6 +599,66 @@ fn gen_wav(path: &Path, notes: &[(f32, f32, Wave)], volume: f32) {
                 .write_sample((s * volume * fade * i16::MAX as f32) as i16)
                 .unwrap();
         }
+    }
+    writer.finalize().unwrap();
+}
+
+/// water.wav: a 2 s seamless water/stream loop for positional ambience —
+/// lowpassed noise with slow swells and soft "bubble" chirps; the last
+/// 0.25 s is crossfaded into the start so the loop point is inaudible.
+fn gen_water_loop(path: &Path) {
+    let rate = 22_050u32;
+    let n = rate as usize * 2;
+    let fade = rate as usize / 4;
+    let mut seed = 0x1234_5678u32;
+    let mut noise = || {
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        (seed as f32 / u32::MAX as f32) * 2.0 - 1.0
+    };
+    let total = n + fade;
+    let mut raw = Vec::with_capacity(total);
+    let (mut lp1, mut lp2) = (0.0f32, 0.0f32);
+    for i in 0..total {
+        let t = i as f32 / rate as f32;
+        lp1 += (noise() - lp1) * 0.08;
+        lp2 += (lp1 - lp2) * 0.15;
+        let swell = 0.7 + 0.3 * (t * std::f32::consts::TAU * 0.5).sin();
+        // Bubbles: short damped sine chirps at fixed times.
+        let mut bubble = 0.0;
+        for &(at, f) in &[
+            (0.31f32, 900.0f32),
+            (0.87, 1300.0),
+            (1.42, 1050.0),
+            (1.77, 760.0),
+        ] {
+            let dt = t - at;
+            if (0.0..0.06).contains(&dt) {
+                bubble += (dt * f * (1.0 + dt * 8.0) * std::f32::consts::TAU).sin()
+                    * (1.0 - dt / 0.06)
+                    * 0.25;
+            }
+        }
+        raw.push(lp2 * 2.2 * swell + bubble);
+    }
+    // Crossfade the tail over the head: sample i (< fade) mixes in i + n.
+    let mut out = raw[..n].to_vec();
+    for i in 0..fade {
+        let k = i as f32 / fade as f32;
+        out[i] = out[i] * k + raw[n + i] * (1.0 - k);
+    }
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: rate,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut writer = hound::WavWriter::create(path, spec).unwrap();
+    for s in out {
+        writer
+            .write_sample((s.clamp(-1.0, 1.0) * 0.6 * i16::MAX as f32) as i16)
+            .unwrap();
     }
     writer.finalize().unwrap();
 }

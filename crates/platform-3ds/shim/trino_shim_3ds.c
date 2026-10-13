@@ -431,6 +431,34 @@ void trino_channel_stop(uint32_t channel)
 {
     if (channel >= TRINO_NDSP_CHANNELS) return;
     ndspChnWaveBufClear(channel);
+    s_wavebufs[channel].status = NDSP_WBUF_DONE;
+}
+
+// Per-channel left/right volume (pan + attenuation, music ducking): the
+// front-left / front-right entries of the ndsp mix.
+// Fixed-point volumes (65536 = 1.0): same signature as the N64 shim, where
+// scalar floats after an int are unsafe across the o32/o64 boundary.
+void trino_ch_volume(uint32_t channel, uint32_t lvol_q16, uint32_t rvol_q16)
+{
+    if (channel >= TRINO_NDSP_CHANNELS) return;
+    float mix[12] = {0};
+    mix[0] = lvol_q16 / 65536.0f;
+    mix[1] = rvol_q16 / 65536.0f;
+    ndspChnSetMix(channel, mix);
+}
+
+// Playing = the DSP is on it, or our buffer is still queued (right after a
+// play the DSP has not picked it up yet: ndspChnIsPlaying lags a frame).
+int32_t trino_ch_playing(uint32_t channel)
+{
+    if (channel >= TRINO_NDSP_CHANNELS) return 0;
+    u8 st = s_wavebufs[channel].status;
+    return (ndspChnIsPlaying(channel) || st == NDSP_WBUF_QUEUED || st == NDSP_WBUF_PLAYING) ? 1 : 0;
+}
+
+void trino_mixer_set_vol(uint32_t vol_q16)
+{
+    ndspSetMasterVol(vol_q16 / 65536.0f);
 }
 
 // ndsp is callback-driven; nothing to pump. Kept so the platform crates and

@@ -189,6 +189,10 @@ pub struct Entity {
     /// `SceneNode::collider` for `trino_core::physics`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub collider: Option<ColliderComponent>,
+    /// Positional looping sound (waterfalls, machines, torches) — played by
+    /// `trino_core::audio::Ambience` near the listener.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sound: Option<SoundComponent>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<Entity>,
 }
@@ -212,6 +216,7 @@ impl Entity {
             model: None,
             prefab: None,
             collider: None,
+            sound: None,
             children: Vec::new(),
         }
     }
@@ -371,6 +376,33 @@ fn is_zero3(v: &[f32; 3]) -> bool {
 
 fn is_false(b: &bool) -> bool {
     !*b
+}
+
+/// A positional sound source (a looping sound effect; on the N64 declare
+/// it with `loop = true` in the manifest).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct SoundComponent {
+    /// Logical path, e.g. `"sounds/water"`.
+    pub path: String,
+    /// Heard within this distance (world units), fading to silence.
+    #[serde(default = "default_sound_radius")]
+    pub radius: f32,
+    #[serde(default = "one")]
+    pub volume: f32,
+}
+
+fn default_sound_radius() -> f32 {
+    10.0
+}
+
+impl SoundComponent {
+    pub fn new(path: impl Into<String>) -> Self {
+        SoundComponent {
+            path: path.into(),
+            radius: default_sound_radius(),
+            volume: 1.0,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default)]

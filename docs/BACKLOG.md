@@ -13,46 +13,36 @@ shipping a 3D game first**, then by cost:
 
 ### P0 — blocks a real N64 release
 
-1. **N64 render throughput** (L). Measured per stage and per model since the
-   2026-10-13 pass (`n64-performance` skill):
-   - castle64 frame, emulated N64 ms (update + render − begin):
+1. **N64 render throughput** (L). The four stages now reach 30 fps; the hub is the gap.
+   - castle64 frame, emulated N64 ms (update + render − begin), after the throughput
+     plan (`docs/plans/n64-throughput.md`, Phases 0–3):
 
-     | Scene | Frame (ms) | ≈ fps |
-     |---|---|---|
-     | hub | 76.2 | 13 |
-     | green-hills | 37.3 | 27 |
-     | lava-land | 49.1 | 20 |
-     | sky-tower | 31.2 | 32 |
-     | throne | 43.4 | 23 |
+     | Scene | Before (ms) | Now (ms) | ≈ fps now |
+     |---|---|---|---|
+     | hub | 76.1 | 39.4 | 25 |
+     | green-hills | 37.3 | 19.8 | **50** |
+     | lava-land | 49.1 | 21.7 | **46** |
+     | sky-tower | 31.2 | 18.9 | **53** |
+     | throne | 43.4 | 16.0 | **62** |
 
-     The hub was 640 ms of render before these passes, and it is still ~2.3× from
-     30 fps.
-   - Calibrated cost: T&L ≈ 16.6 µs/vertex + 26.1 µs/triangle + 0.28 ms/draw +
-     22.3 µs/split, plus ~30 µs per emitted triangle (`trino_core::perf::N64_COST`).
-     A 30 fps frame affords roughly 300–400 triangles of CPU T&L.
-   - **Execution plan: `docs/plans/n64-throughput.md`.** It orders the work: measure
-     fixed costs, output-identical CPU wins, fewer draws, golden-moving changes, then an
-     RSP spike. It also records the disassembly evidence. Start there.
-   - Options, best first:
-     - **(a)** Move vertex transform and lighting to the RSP. A small ucode, or
-       tiny3d's, behind the same `draw_model` contract (ADR 0003 allows it). Of the
-       levers below, only this one is the size of the gap.
-     - **(b)** Fewer draws (S–M). Each costs 0.28 ms before any vertex, and the hub
-       makes 34:
-       - merge each level's static blocks into one baked mesh;
-       - draw coins as billboards;
-       - make the player one rigid-skeleton model (today it is 5 draws).
-     - **(c)** DEPTH_SPLIT policy (S–M): every target z-buffers now (the 3DS too, since
-       this pass), so splits mostly buy painter-order quality. They cost ~22 µs each
-       and inflate emitted triangles (hub grass 12 → 198, throne castle 60 → 273).
-       Relaxing them moves goldens: a deliberate renderer change.
-     - **(d)** Replace `Caps::N64.max_tris_per_frame = 4000` (an RDP-era number) with
-       a cost budget from `N64_COST`. Strict mode and `model inspect` then warn
-       honestly.
+   - Calibrated cost: T&L ≈ 7.1 µs/vertex + 17.3 µs/triangle + 0.18 ms/draw +
+     25.5 µs/split, plus ~37 µs per emitted triangle (`trino_core::perf::N64_COST`).
+     A 30 fps frame affords roughly 550–650 triangles of CPU T&L.
+   - What is left, best first:
+     - **(a)** RSP T&L, proposed in **ADR 0007**. It would take a custom overlay on
+       the current libdragon pin, built on `rsp_rdpq_tri.inc`, with a CPU fallback
+       per draw. The hub's T&L (24.7 ms) plus submit (8.0 ms) is the whole gap. Next
+       step: one static mesh on the RSP, measured in the micro scenes.
+     - **(b)** Merge the hub's static blocks (2b, priced at ~1–2 ms; the stages
+       don't need it).
+     - **(c)** The plan's hot-code link-order idea, deferred: 1i already shrank the
+       T&L code that made layout swing.
      - **(e)** Cache transformed static geometry while the camera is still.
-     - **(f)** Fixed-point T&L paths for the VR4300.
+   - Done, see the record below: billboard coins, depth splits only where they
+     matter, the `Caps` cost budget (`max_3d_us_per_frame`).
    - Judge every change on the `test n64` scene table, on identical code apart from
-     the change: code layout alone moves a stage ~20%. Bless the baselines afterward.
+     the change: code layout alone moves a stage ~10–20%. The micro scenes
+     (`micro-*`) show it when identical code moves. Bless the baselines afterward.
 2. **Freeze `TSCN` v1 at the first release** (S). Until then the layout may still grow.
    Afterwards, every change bumps the version and adds a migration (ADR 0005 §3).
 
@@ -114,6 +104,38 @@ shipping a 3D game first**, then by cost:
   time) and bless `tests/perf/` on purpose. Host benches stay as regression guards only.
 
 ---
+
+## Done — N64 throughput plan (2026-10-13, branch `plan/n64-throughput`)
+
+Plan: `docs/plans/n64-throughput.md` (its checklist has each item's numbers). One
+commit per item, each A/B'd on the `test n64` scene table against its parent.
+Emulated N64 frame, ms, before → after: hub 76.1 → 39.4, green-hills 37.3 → 19.8,
+lava-land 49.1 → 21.7, sky-tower 31.2 → 18.9, throne 43.4 → 16.0 (−39…−63%).
+
+| Item | Evidence (frame, A/B on the parent commit) |
+|---|---|
+| Phase 0: `micro-*` perf scenes measure fixed costs (ungated; their work counters checked) | visible-draw setup 280 µs vs a 33 µs culled draw: per-draw cost first |
+| 1a `TnlContext`: camera/light constants once per `set_camera`/`set_light` | culled draw 33 → 16 µs; frame neutral (layout) |
+| 1b `TnlScratch`: T&L scratch owned by the backend, not cleared per draw | **−12…−15%** in every scene |
+| 1c `MeshLayout`: meshes parsed once at register | `game` −13…−20%; frame neutral |
+| 1d vertex fetch through `as_chunks` records (one bounds check per attribute) | **−5…−14%** |
+| 1e tint quotients per draw, not per vertex (15 → 3 `div.s` per vertex) | **−8…−14%** |
+| 1f batched submit + `/255` table | +3…+6% submit: **reverted**. Submit is 26 uncached rspq words per triangle |
+| 1h no sin/cos for zero angles in `Transform3::matrix` | `game` −15…−18% |
+| `N64_COST` recalibrated (twice) | scene totals within −4…+9% |
+| 2a coins as billboards (output-moving: 3DS golden, work baseline) | coin T&L gone; throne −8.9%, two stages −4.9% |
+| 1i `tessellate_with` was 60 KB: per-path functions + a `#[cold]` clip | **−4.5…−7.9%** |
+| 2b block merge priced and deferred, 2c player merge skipped | ~0.1–0.5 ms per stage |
+| 3a `split_policy`: depth splits only for fog, textures, translucency (output-moving) | **hub −17%, lava-land −30%, throne −45%** |
+| 3b one reciprocal per projected vertex | −2.5…−3.5%; goldens byte-identical |
+| 3c model-space lighting for rotation + scale draws (boxes under any per-axis scale) | T&L −11…−14% in four scenes; goldens byte-identical |
+| 3d `Caps::max_3d_us_per_frame` (N64 50 ms) in strict mode; time instead of a triangle share in `model inspect` and the editor | tools; golden test for the strict panic |
+| Phase 4 spike (desk): pin capabilities, preview divergence, ADR 0007 proposed | no microcode yet |
+
+Every output-identical item kept the PC, N64 (pixel-exact) and 3DS goldens
+byte-identical, with work counters equal. The two output-moving items (2a, 3a)
+re-blessed the work baseline and the 3DS castle64 golden. Both were reviewed, and the
+N64 hub, lava-land and throne frames were checked in one-off framebuffer dumps.
 
 ## Done — performance & stability pass (2026-10-13, branch `backlog/full-pass`)
 

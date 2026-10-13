@@ -417,5 +417,14 @@ Edit this file as you go.
     panics above it on the `N64_COST` estimate. `model inspect`, the editor HUD and the
     model inspector show time against a 30 fps frame, not a percentage of 4000
     triangles. `N64_COST` refit after 3c: 7.1 / 17.3 / 184 / 25.5 / 37
-- [ ] Phase 4 spike result + ADR (or a written "not needed")
-- [ ] BACKLOG P0 #1 table, ADR 0006, AGENTS.md "Current state", README, `agents sync`
+- [~] Phase 4 spike result + ADR (or a written "not needed") — desk spike done, ADR 0007
+  **proposed**: a custom RSP overlay on the current pin (`rspq_overlay_register`,
+  `rsp_rdpq_tri.inc` with a custom vertex layout and clip flags), CPU fallback per
+  draw. preview + tiny3d is rejected for now: the branch is 4 609 commits ahead of the
+  pin and 272 behind. No microcode yet, so the hub-on-RSP frame is an estimate. The
+  next session's acceptance: one static mesh on the RSP, timed in the micro scenes.
+- [x] BACKLOG P0 #1 table, ADR 0006, AGENTS.md "Current state", README, `agents sync`
+  — README has no N64 performance claims, so it is unchanged.
+- Result: frame ms before → after, hub 76.1 → 39.4, green-hills 37.3 → 19.8,
+  lava-land 49.1 → 21.7, sky-tower 31.2 → 18.9, throne 43.4 → 16.0. The goal (all four
+  stages ≥ 30 fps) is met; the hub's path is ADR 0007.

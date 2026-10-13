@@ -167,8 +167,10 @@ new skill when none fits. Then run `cargo xtask agents sync`. The steps are in
   tracked by `xtask/tests/bench_tnl.rs`). Strict mode enforces
   `max_tris_per_frame`. The platformer shows a spinning cube.
   Triangles are clipped against the near plane + a 1.5x guard-band frustum
-  (bounded coordinates — RDP fixed-point safe); edges spanning > 3 units of
-  view depth are bisected; `math3d` ships deterministic `sin/cos/sqrt/atan2`.
+  (bounded coordinates — RDP fixed-point safe); in fogged, textured or translucent
+  draws, edges spanning > 3 units of view depth are bisected (`split_policy`: opaque
+  draws don't need it, the per-vertex z is affine on screen); `math3d` ships
+  deterministic `sin/cos/sqrt/atan2`.
   Occlusion is **z-buffered** on every target (per-vertex normalized depth
   in `ScreenTri::z`: wgpu depth buffer on PC, RDP hardware z-buffer on N64,
   per-vertex depth through citro3d on 3DS) — interpenetrating geometry
@@ -258,10 +260,24 @@ new skill when none fits. Then run `cargo xtask agents sync`. The steps are in
   - **Stability**: the N64 self-test stack overflow is fixed, and a guard
     (`check_stack`) catches the next one.
 
-Ranked next steps: `docs/BACKLOG.md`. The top one is N64 render throughput. castle64's
-hub costs ~76 ms of emulated N64 time per frame. 55 ms of that is CPU T&L, spread over
-34 draws (0.28 ms each before any vertex). The stages run at 20–32 fps. RSP T&L and fewer
-draws are the levers. The ordered execution plan is `docs/plans/n64-throughput.md`.
+- **N64 throughput plan** (2026-10-13, `docs/plans/n64-throughput.md`, BACKLOG ›
+  Done): castle64 frame, emulated N64 ms, hub 76.1 → 39.4, green-hills 37.3 → 19.8,
+  lava-land 49.1 → 21.7, sky-tower 31.2 → 18.9, throne 43.4 → 16.0. The four stages
+  now run at 46–62 fps.
+  - **T&L constant factors**: `TnlContext` per camera/light, backend-owned
+    `TnlScratch`, meshes parsed once (`MeshLayout`), vertex fetch via `as_chunks`,
+    tint quotients per draw, per-path T&L functions with a `#[cold]` clip,
+    reciprocals, model-space lighting. All golden-identical.
+  - **Content/renderer**: castle64 coins are billboards; depth splits only where
+    they matter (`split_policy`).
+  - **Tools**: `micro-*` perf scenes for fixed costs; `Caps::max_3d_us_per_frame`
+    in strict mode; `model inspect` and the editor report N64 time;
+    `N64_COST` recalibrated.
+
+Ranked next steps: `docs/BACKLOG.md`. The top one is still N64 render throughput, now
+for the hub alone: ~39 ms of emulated N64 time per frame, 24.7 ms of it CPU T&L and
+8 ms submit (26 uncached rspq words per triangle). RSP T&L is the lever, proposed in
+`docs/adr/0007-n64-rsp-tnl.md` (a custom overlay on the current libdragon pin).
 
 PC keyboard mapping: A/B = Z/X, X/Y = C/V, L/R = Q/E, Start = Enter,
 Select = Right Shift, D-pad = arrows, stick = WASD (see `crates/platform-pc/src/input.rs`).
@@ -287,7 +303,7 @@ Select = Right Shift, D-pad = arrows, stick = WASD (see `crates/platform-pc/src/
 | `templates/new-game/`, `templates/standalone/` | Scaffolds for `cargo xtask new` (in-repo crate / standalone project) |
 | `docker/` | Toolchain/emulator images: `n64/` (libdragon), `ares/` (headless ares for tests) |
 | `tests/golden/` | Golden images: `pc/` (renderer), `n64/` (ares framebuffer) |
-| `docs/adr/`, `docs/plans/` | Architecture decisions; execution plans for big items; `docs/BACKLOG.md` ranked next steps |
+| `docs/adr/`, `docs/plans/` | Architecture decisions (0007: RSP T&L, proposed); execution plans for big items; `docs/BACKLOG.md` ranked next steps |
 | `.github/workflows/` | `ci.yml`, `release.yml` |
 
 ## The one inviolable rule: dependency direction
@@ -427,7 +443,17 @@ cargo test --workspace
   memory section, not "Discarded input sections". `check_mem_symbols` guards it.
 - **Code layout moves N64 timings ~20% per stage** (ares is reproducible per ROM,
   but I-cache conflicts are not). Never claim a small win from one build: A/B on
-  identical code and judge on the scene table, not on a synthetic bench.
+  identical code and judge on the scene table, not on a synthetic bench. When the
+  `micro-*` scenes (unchanged code) move too, it is layout. Check hot function sizes
+  with `mips64-elf-nm -S --size-sort`: `tessellate_with` was a 60 KB inlined body
+  against a 16 KB I-cache until it was split.
+- **N64 submit is store-bound.** libdragon's rspq buffer is `malloc_uncached`, and
+  `rdpq_triangle` writes 26 words per triangle into it. Shaving the conversion math
+  before it doesn't help (it overlaps the drain); only fewer triangles or fewer words
+  do.
+- **Translucency turns depth splits on.** `split_policy` bisects only fogged,
+  textured or translucent draws (tint or vertex alpha < 255). A tint with alpha < 255
+  on a big mesh brings back DEPTH_SPLIT's extra triangles on the N64.
 - **3DS: never draw 3D with `C2D_DrawTriangle`.** It takes one depth per triangle,
   so big floors cover what stands on them. Everything goes through
   `trino_3d_draw` (per-vertex depth).

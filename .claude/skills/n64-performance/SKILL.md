@@ -189,6 +189,7 @@ frames. Trust the cost model.
 | Per-vertex cached projection + no-copy fast path in `tessellate` | neutral (±2%) — reverted |
 | Hot loop compacted (`#[inline(never)]` vertex/flat/general paths) | +3…+17% worse — reverted |
 | `opt-level = "s"` for the ROM | worse everywhere — not adopted |
+| Phase 4 spike (desk): the pin has rspq overlays and `rsp_rdpq_tri.inc`; preview (for tiny3d) is 4 609 ahead / 272 behind the pin | ADR 0007 proposed: a custom overlay on the pin. No microcode yet |
 | **3d** `Caps::max_3d_us_per_frame` (N64 50 ms): PC strict mode panics when a frame's `N64_COST` estimate exceeds it; `model inspect`, the HUD and the model inspector show time against a 30 fps frame instead of a share of 4000 triangles. `N64_COST` refit after 3c (7.1 / 17.3 / 184 / 25.5 / 37) | tools only; the ROM's frame moved −0.3…−1.1% (layout). Goldens and counters identical |
 | **3c** Model-space lighting on the static Gouraud path: for orthogonal model matrices with uniform scale, or any per-axis scale when every normal lies on an axis (boxes, and castle64's boar), light `n_local · (Rᵀ·l)` and skip the per-vertex normal transform, sqrt and division. The mesh's `unit_normals`/`axis_normals` are checked once at parse; the tolerance is 3e-3 because the core's sin/cos make rotations orthonormal only to ~1e-4 | T&L −11…−14% in four scenes, throne −2.8%; frame −4…−7%, throne +1.1% (`game`, unchanged code, +17…21%: layout). Boar −29%, doors −17…−27%, player −9…−18% per model. Expected to move output, but every golden and the work baseline stayed byte-identical |
 | **3b** One `1 / z` per projected vertex shared by the projection (`x · focal · inv`) and the z-buffer depth (`1 − NEAR · inv`), instead of three divisions | frame −2.5…−3.5%, T&L −4…−5% in every scene. Expected to move output, but every golden (PC, N64 pixel-exact, 3DS) stayed byte-identical and the work counters equal |
@@ -228,19 +229,17 @@ They are in `docs/plans/n64-throughput.md`.
 
 ## Remaining levers (BACKLOG P0)
 
-The ordered plan is `docs/plans/n64-throughput.md`.
+The throughput plan (`docs/plans/n64-throughput.md`) is done through Phase 3. The four
+stages run at 46–62 fps; only the hub (~39 ms) misses 30 fps.
 
-- **RSP T&L**: a small ucode, or tiny3d's, behind the same `draw_model` contract
-  (ADR 0003). It is still the lever for the hub (~2.3× short of 30 fps).
-- **Fewer draws.** Each one costs 0.28 ms before any vertex:
-  - merge each level's static blocks into one baked mesh (also drops buried faces
-    between blocks);
-  - draw coins as billboards (`draw_billboard`, no T&L);
-  - make the player one rigid-skeleton model instead of 5 draws.
-- **DEPTH_SPLIT policy**: every target z-buffers. The remaining splits are on front
-  faces of big blocks (hub grass 12 → 198 tris). Relaxing them moves goldens, so it is
-  a deliberate renderer change.
-- **Caps recalibration** to a cost budget.
+- **RSP T&L**, proposed in `docs/adr/0007-n64-rsp-tnl.md`: a custom overlay on the
+  current pin (`rspq_overlay_register`, `rsp_rdpq_tri.inc` with a custom vertex
+  layout), with a CPU fallback per draw. The hub's T&L (24.7 ms) plus submit (8 ms)
+  is the whole gap. Next step: one static mesh on the RSP, timed against
+  `micro-gouraud`.
+- **Hub blocks merged per chunk** (2b): priced at ~1–2 ms, deferred.
+- Done: coins as billboards (2a), depth splits only where they matter (3a), the
+  `Caps` cost budget (3d). Skipped: the player as one draw (2c, ~0.35 ms).
 
 ## Workflow for a perf change
 

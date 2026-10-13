@@ -43,6 +43,10 @@ pub fn engine_checks(
     if billboards(renderer)? {
         platform.log("TRINO_STEP:billboards probed\n");
     }
+    platform.log("TRINO_STEP:occlusion\n");
+    if occlusion(renderer)? {
+        platform.log("TRINO_STEP:occlusion probed\n");
+    }
     platform.log("TRINO_STEP:smooth skin\n");
     smooth_skin(renderer)?;
     platform.log("TRINO_STEP:portals\n");
@@ -97,6 +101,101 @@ pub fn textured_3d(renderer: &mut dyn Renderer) -> Result<bool, &'static str> {
         let close = |a: u8, b: u8| (a as i32 - b as i32).abs() <= 48;
         if !(close(got.r, want[0]) && close(got.g, want[1]) && close(got.b, want[2])) {
             return Err("textured 3D: wrong color in a texture quadrant");
+        }
+    }
+    Ok(true)
+}
+
+/// Unit block (1x1x1, centered) used by [`occlusion`].
+const BLOCK: ModelId = ModelId::from_path("models/c64_block_stone");
+
+/// Depth occlusion: boxes standing on a large floor, seen from a
+/// third-person camera — castle64's player and boars on the ground. Probes
+/// each box's front face just above the floor: it must show the box, never
+/// the floor. A backend that resolves depth per triangle instead of per
+/// pixel paints big floor triangles over whatever stands on them (the
+/// original 3DS path: citro2d's one averaged depth per triangle). The PC
+/// and N64 z-buffers pass trivially; the check exists so no backend can
+/// regress to per-triangle depth. `Ok(false)` where `read_pixel` is
+/// unsupported.
+pub fn occlusion(renderer: &mut dyn Renderer) -> Result<bool, &'static str> {
+    let caps = *renderer.caps();
+    let screen = Vec2::new(caps.screen_width as f32, caps.screen_height as f32);
+    let camera = Camera3 {
+        eye: Vec3::new(0.0, 2.6, -6.0),
+        target: Vec3::new(0.0, 0.4, 0.0),
+        ..Camera3::default()
+    };
+    // Flat colors whatever the block's vertex colors: tint black for the
+    // floor; the boxes' tint zeroes green and the emissive saturates red
+    // and blue — pure magenta.
+    let floor = ModelParams {
+        shading: Shading::Unlit,
+        tint: Color::rgba(0, 0, 0, 255),
+        ..ModelParams::DEFAULT
+    };
+    let boxes = ModelParams {
+        shading: Shading::Unlit,
+        tint: Color::rgba(255, 0, 255, 255),
+        emissive: Color::rgba(255, 0, 255, 255),
+        ..ModelParams::DEFAULT
+    };
+    let spots = [
+        Vec3::new(-2.2, 0.5, -1.0),
+        Vec3::new(0.0, 0.5, 0.0),
+        Vec3::new(2.0, 0.5, 2.5),
+        Vec3::new(-1.0, 0.5, 5.0),
+    ];
+    // Several identical frames: the 3DS LCD is double-buffered.
+    for _ in 0..3 {
+        renderer.begin_frame(Color::rgba(40, 60, 200, 255));
+        renderer.set_camera(&camera);
+        renderer.set_light(&DEFAULT_LIGHT);
+        renderer.draw_model(
+            BLOCK,
+            &Transform3 {
+                position: Vec3::new(0.0, -0.5, 4.0),
+                rotation: Vec3::ZERO,
+                scale: Vec3::new(30.0, 1.0, 30.0),
+            },
+            Material::VertexLit,
+            &floor,
+        );
+        for at in spots {
+            let t = Transform3 {
+                position: at,
+                ..Transform3::default()
+            };
+            renderer.draw_model(BLOCK, &t, Material::VertexLit, &boxes);
+        }
+        renderer.end_frame();
+    }
+    let view = camera.view();
+    let half = camera.fov_y * 0.5;
+    let focal = cos(half) / sin(half) * screen.y * 0.5;
+    let pixel = |renderer: &mut dyn Renderer, world: Vec3| {
+        let v = view.transform_point(world);
+        let x = screen.x * 0.5 + v.x * focal / v.z;
+        let y = screen.y * 0.5 - v.y * focal / v.z;
+        renderer.read_pixel(x as u32, y as u32)
+    };
+    // The floor itself rendered (in front of the first box).
+    let Some(f) = pixel(renderer, Vec3::new(0.0, 0.0, -2.0)) else {
+        return Ok(false); // backend cannot read back
+    };
+    if f.r > 60 || f.g > 60 || f.b > 60 {
+        return Err("occlusion: the floor did not render");
+    }
+    for at in spots {
+        // Front face (z - 0.5), low: 0.08 and 0.25 above the floor.
+        for (dx, h) in [(0.0, 0.08), (-0.25, 0.25), (0.25, 0.25)] {
+            let p = Vec3::new(at.x + dx, h, at.z - 0.5);
+            let Some(c) = pixel(renderer, p) else {
+                return Ok(false);
+            };
+            if !(c.r > 150 && c.g < 100 && c.b > 150) {
+                return Err("occlusion: the floor painted over a box standing on it");
+            }
         }
     }
     Ok(true)

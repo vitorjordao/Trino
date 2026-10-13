@@ -223,3 +223,12 @@ jobs:
         run: xvfb-run -a -s "-screen 0 1280x720x24" cargo xtask test 3ds --no-build
         env:
           TRINO_EMU_TIMEOUT: "900"
+      # The golden frame is compared within a tolerance (Azahar's output
+      # depends on the host OpenGL); on a mismatch the frame lands here.
+      - name: Upload golden mismatch
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: n3ds-golden-actual
+          path: tests/golden/3ds/actual/
+          if-no-files-found: ignore

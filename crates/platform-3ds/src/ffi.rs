@@ -40,11 +40,13 @@ unsafe extern "C" {
     pub fn trino_sprite_size(sheet: *mut c_void) -> u32;
     pub fn trino_sprite_blit(sheet: *mut c_void, params: *const TrinoBlit);
 
-    /// No-op on 3DS (shim-API symmetry with the N64).
-    pub fn trino_3d_begin();
-    /// pts: 6 floats (x/y per vertex); colors: 12 bytes (rgba per vertex);
-    /// depth: citro2d z for the whole triangle (larger = nearer).
-    pub fn trino_tri(pts: *const f32, colors: *const u8, depth: f32);
+    /// Draw `count` vertices (`count / 3` triangles) through citro3d with
+    /// per-vertex depth. 10 floats per vertex: x, y (screen px), depth
+    /// (citro2d z, larger = nearer), w (view depth for perspective-correct
+    /// UVs, 1 = screen-linear), u, v (0..1 in the image), r, g, b, a (0..1).
+    /// `sheet`: texture (image 0; `clamp` != 0 = billboard addressing with
+    /// a half-alpha cutout), null = vertex colors only.
+    pub fn trino_3d_draw(verts: *const f32, count: u32, sheet: *mut c_void, clamp: u32);
 
     pub fn trino_joypad_buttons() -> u32;
     /// (x as i16 as u16) << 16 | (y as i16 as u16).
@@ -65,15 +67,11 @@ unsafe extern "C" {
     pub fn trino_asset_load(romfs_path: *const c_char, size_out: *mut u32) -> *mut c_void;
     pub fn trino_free(ptr: *mut c_void);
 
-    /// Textured 3D batch (citro3d): bind the sheet's image as a wrapping
-    /// texture, then `trino_tri_tex` per triangle, then `trino_3d_tex_end`.
-    /// `clamp` != 0: billboard mode (clamped, half-alpha cutout).
-    pub fn trino_3d_tex_begin(sheet: *mut c_void, clamp: u32);
-    /// 30 floats: per vertex x, y, depth (citro2d z), u, v, w, r, g, b, a.
-    pub fn trino_tri_tex(verts: *const f32);
-    pub fn trino_3d_tex_end();
     /// Test hook: RGBA8888 of the top screen at (x, y); 0 = unavailable.
     pub fn trino_debug_pixel(x: u32, y: u32) -> u32;
+    /// Test hook: print the top screen as `TRINO_FBR:` rows (RGBA5551) and
+    /// a `TRINO_FB_END:` hash line — the N64 dump format.
+    pub fn trino_debug_fb_dump();
 
     /// Save file on the SD card: returns its size (0 = none, -1 = error),
     /// copying up to `cap` bytes into `dest`.

@@ -29,17 +29,27 @@
 #include "tri3d_shbin.h"
 
 // ---------------------------------------------------------------------------
-// Textured 3D (citro3d): citro2d draws untextured triangles fine but cannot
-// map UVs, so textured triangles take a tiny citro3d path of their own:
-// our shader (tri3d.v.pica), immediate-mode vertices, one texture per batch,
-// TEXTURE0 * vertex color. C2D_Flush before, C2D_Prepare after (citro2d's
-// documented way to share the GPU).
-
+// 3D triangles (citro3d): the engine's software T&L projects and lights
+// every vertex; the GPU only rasterizes. All 3D goes through one citro3d
+// path — our shader (tri3d.v.pica), a per-frame vertex buffer in linear
+// memory, one draw per texture run — with a depth value PER VERTEX, so the
+// depth test resolves overlap per pixel like the PC/N64 z-buffers.
+// (citro2d's C2D_DrawTriangle takes one depth for the whole triangle; big
+// floor triangles then painted over whatever stood on them — the
+// castle64 bug the `occlusion` self-test step reproduces.)
 static DVLB_s* s_tri3d_dvlb = NULL;
 static shaderProgram_s s_tri3d;
 static int s_tri3d_proj = -1;
 static C3D_Mtx s_proj_top;
-static float s_uv_l, s_uv_t, s_uv_r, s_uv_b;
+
+// Per-frame vertex buffer: x, y, depth, w | u, v | r, g, b, a (10 floats).
+// C3D_FRAME_SYNCDRAW in trino_frame_begin waits for the previous frame's
+// GPU work, so the buffer restarts at 0 every frame.
+#define TRI3D_FLOATS 10
+#define TRI3D_MAX_VERTS (3 * 16384)
+static float* s_vbuf = NULL;
+static uint32_t s_vused = 0;
+static int s_vfull_warned = 0;
 
 static void trino_tex3d_init(void)
 {
@@ -49,6 +59,7 @@ static void trino_tex3d_init(void)
     s_tri3d_proj = shaderInstanceGetUniformLocation(s_tri3d.vertexShader, "projection");
     // Same projection citro2d builds for the top screen.
     Mtx_OrthoTilt(&s_proj_top, 0.0f, 400.0f, 240.0f, 0.0f, 1.0f, -1.0f, true);
+    s_vbuf = (float*)linearAlloc(TRI3D_MAX_VERTS * TRI3D_FLOATS * sizeof(float));
 }
 
 // ---------------------------------------------------------------------------
@@ -116,6 +127,7 @@ void trino_frame_begin(uint32_t rgba8888)
     C2D_TargetClear(s_top, C2D_Color32((rgba8888 >> 24) & 0xFF, (rgba8888 >> 16) & 0xFF,
                                        (rgba8888 >> 8) & 0xFF, 0xFF));
     C2D_SceneBegin(s_top);
+    s_vused = 0;
 }
 
 void trino_frame_end(void)
@@ -201,19 +213,89 @@ void trino_sprite_blit(void* sheet, const trino_blit_t* p)
 // 3D triangles: the engine transforms and lights on the CPU
 // (trino_core::render3d); citro2d only rasterizes gouraud-shaded tris.
 
-// Symmetry with the N64 shim (no mode switch needed on citro2d).
-void trino_3d_begin(void)
+// Draw `count` vertices (count / 3 triangles), TRI3D_FLOATS each, in
+// order: x, y (screen px), depth (citro2d z, larger = nearer), w (view
+// depth: perspective-correct UVs; 1 = screen-linear), u, v (0..1 in the
+// image), r, g, b, a (0..1). `sheet` = texture (image 0, tiled; clamp != 0:
+// billboard addressing + half-alpha cutout), NULL = vertex colors only.
+void trino_3d_draw(const float* v, uint32_t count, void* sheet, uint32_t clamp)
 {
-}
+    if (!s_vbuf) return;
+    if (s_vused + count > TRI3D_MAX_VERTS) {
+        if (!s_vfull_warned) {
+            s_vfull_warned = 1;
+            trino_log("TRINO_WARN: 3D vertex buffer full, triangles dropped\n");
+        }
+        count = (TRI3D_MAX_VERTS - s_vused) / 3 * 3;
+    }
+    if (count == 0) return;
 
-// pts: 6 floats (x0,y0,x1,y1,x2,y2) in screen pixels;
-// colors: 12 bytes (r,g,b,a per vertex);
-// depth: citro2d z coordinate (larger = nearer; depth-tested by citro3d).
-void trino_tri(const float* pts, const uint8_t* c, float depth)
-{
-    C2D_DrawTriangle(pts[0], pts[1], C2D_Color32(c[0], c[1], c[2], c[3]),
-                     pts[2], pts[3], C2D_Color32(c[4], c[5], c[6], c[7]),
-                     pts[4], pts[5], C2D_Color32(c[8], c[9], c[10], c[11]), depth);
+    float uv_l = 0.0f, uv_t = 0.0f, uv_r = 1.0f, uv_b = 1.0f;
+    C2D_Image img = {0};
+    if (sheet) {
+        img = C2D_SpriteSheetGetImage((C2D_SpriteSheet)sheet, 0);
+        // UVs map through the image's sub-texture (tex3ds stores rows
+        // flipped and pads to power-of-two).
+        uv_l = img.subtex->left;
+        uv_t = img.subtex->top;
+        uv_r = img.subtex->right;
+        uv_b = img.subtex->bottom;
+    }
+    float* dst = s_vbuf + s_vused * TRI3D_FLOATS;
+    for (uint32_t i = 0; i < count; i++) {
+        const float* sv = v + i * TRI3D_FLOATS;
+        float* dv = dst + i * TRI3D_FLOATS;
+        dv[0] = sv[0];
+        dv[1] = sv[1];
+        dv[2] = sv[2];
+        dv[3] = sv[3];
+        dv[4] = uv_l + sv[4] * (uv_r - uv_l);
+        dv[5] = uv_t + sv[5] * (uv_b - uv_t);
+        dv[6] = sv[6];
+        dv[7] = sv[7];
+        dv[8] = sv[8];
+        dv[9] = sv[9];
+    }
+    GSPGPU_FlushDataCache(dst, count * TRI3D_FLOATS * sizeof(float));
+
+    C2D_Flush();
+    C3D_BindProgram(&s_tri3d);
+    C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, s_tri3d_proj, &s_proj_top);
+    C3D_AttrInfo* attr = C3D_GetAttrInfo();
+    AttrInfo_Init(attr);
+    AttrInfo_AddLoader(attr, 0, GPU_FLOAT, 4); // x, y, depth, w
+    AttrInfo_AddLoader(attr, 1, GPU_FLOAT, 2); // u, v
+    AttrInfo_AddLoader(attr, 2, GPU_FLOAT, 4); // r, g, b, a
+    C3D_BufInfo* buf = C3D_GetBufInfo();
+    BufInfo_Init(buf);
+    BufInfo_Add(buf, s_vbuf, TRI3D_FLOATS * sizeof(float), 3, 0x210);
+    C3D_CullFace(GPU_CULL_NONE); // the engine already culled
+    C3D_TexEnv* env = C3D_GetTexEnv(0);
+    C3D_TexEnvInit(env);
+    if (sheet) {
+        C3D_TexSetFilter(img.tex, GPU_LINEAR, GPU_LINEAR);
+        if (clamp) {
+            C3D_TexSetWrap(img.tex, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
+            C3D_AlphaTest(true, GPU_GREATER, 127);
+        } else {
+            C3D_TexSetWrap(img.tex, GPU_REPEAT, GPU_REPEAT);
+            C3D_AlphaTest(true, GPU_GREATER, 0);
+        }
+        C3D_TexBind(0, img.tex);
+        C3D_TexEnvSrc(env, C3D_Both, GPU_TEXTURE0, GPU_PRIMARY_COLOR, 0);
+        C3D_TexEnvFunc(env, C3D_Both, GPU_MODULATE);
+    } else {
+        C3D_AlphaTest(false, GPU_ALWAYS, 0);
+        C3D_TexEnvSrc(env, C3D_Both, GPU_PRIMARY_COLOR, 0, 0);
+        C3D_TexEnvFunc(env, C3D_Both, GPU_REPLACE);
+    }
+    for (int i = 1; i < 6; i++) {
+        C3D_TexEnvInit(C3D_GetTexEnv(i));
+    }
+    C3D_DrawArrays(GPU_TRIANGLES, s_vused, count);
+    s_vused += count;
+    // Hand the GPU back to citro2d (program, attributes, buffers, texenv).
+    C2D_Prepare();
 }
 
 // ---------------------------------------------------------------------------
@@ -253,64 +335,6 @@ int32_t trino_save_store(const uint8_t* src, uint32_t len)
     return rename(TRINO_SAVE_TMP, TRINO_SAVE_PATH) == 0 ? 0 : -1;
 }
 
-// Start a textured batch: bind `sheet`'s image as a texture — tiled, or
-// clamped with a half-alpha cutout (clamp != 0: billboards).
-void trino_3d_tex_begin(void* sheet, uint32_t clamp)
-{
-    C2D_Flush();
-    C3D_BindProgram(&s_tri3d);
-    C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, s_tri3d_proj, &s_proj_top);
-    C3D_AttrInfo* attr = C3D_GetAttrInfo();
-    AttrInfo_Init(attr);
-    AttrInfo_AddLoader(attr, 0, GPU_FLOAT, 4); // x, y, depth, w
-    AttrInfo_AddLoader(attr, 1, GPU_FLOAT, 2); // u, v
-    AttrInfo_AddLoader(attr, 2, GPU_FLOAT, 4); // r, g, b, a
-    C3D_CullFace(GPU_CULL_NONE); // the engine already culled
-    C2D_Image img = C2D_SpriteSheetGetImage((C2D_SpriteSheet)sheet, 0);
-    C3D_TexSetFilter(img.tex, GPU_LINEAR, GPU_LINEAR);
-    if (clamp) {
-        C3D_TexSetWrap(img.tex, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
-        C3D_AlphaTest(true, GPU_GREATER, 127);
-    } else {
-        C3D_TexSetWrap(img.tex, GPU_REPEAT, GPU_REPEAT);
-        C3D_AlphaTest(true, GPU_GREATER, 0);
-    }
-    C3D_TexBind(0, img.tex);
-    // UVs map through the image's sub-texture (tex3ds stores rows flipped
-    // and pads to power-of-two; POT images span the whole texture).
-    s_uv_l = img.subtex->left;
-    s_uv_t = img.subtex->top;
-    s_uv_r = img.subtex->right;
-    s_uv_b = img.subtex->bottom;
-    C3D_TexEnv* env = C3D_GetTexEnv(0);
-    C3D_TexEnvInit(env);
-    C3D_TexEnvSrc(env, C3D_Both, GPU_TEXTURE0, GPU_PRIMARY_COLOR, 0);
-    C3D_TexEnvFunc(env, C3D_Both, GPU_MODULATE);
-    for (int i = 1; i < 6; i++) {
-        C3D_TexEnvInit(C3D_GetTexEnv(i));
-    }
-    C3D_ImmDrawBegin(GPU_TRIANGLES);
-}
-
-// 30 floats: per vertex x, y, depth (citro2d z), u, v, w, r, g, b, a.
-void trino_tri_tex(const float* v)
-{
-    for (int i = 0; i < 3; i++) {
-        const float* s = v + i * 10;
-        C3D_ImmSendAttrib(s[0], s[1], s[2], s[5]);
-        C3D_ImmSendAttrib(s_uv_l + s[3] * (s_uv_r - s_uv_l),
-                          s_uv_t + s[4] * (s_uv_b - s_uv_t), 0.0f, 0.0f);
-        C3D_ImmSendAttrib(s[6], s[7], s[8], s[9]);
-    }
-}
-
-// End the textured batch and hand the GPU back to citro2d.
-void trino_3d_tex_end(void)
-{
-    C3D_ImmDrawEnd();
-    C2D_Prepare();
-}
-
 // Test hook: RGBA8888 of the top screen at (x, y) (landscape, y down) from
 // the LCD back buffer; 0 if unavailable. Waits two vblanks so the frame's
 // display transfer has landed; callers draw the probed frame several times
@@ -334,6 +358,50 @@ uint32_t trino_debug_pixel(uint32_t x, uint32_t y)
         r = p[2]; g = p[1]; b = p[0];
     }
     return (r << 24) | (g << 16) | (b << 8) | 0xFF;
+}
+
+// Test hook: print the top screen as "TRINO_FBR:<y>:<x0>:<hex>" rows of 64
+// RGBA5551 pixels, then "TRINO_FB_END:400x240:<fnv1a32 of the pixels>" —
+// the N64 dump format, so `cargo xtask test 3ds` rebuilds the image with the
+// same code (5-bit channels: enough for a tolerance check). Same buffer
+// rules as trino_debug_pixel.
+void trino_debug_fb_dump(void)
+{
+    gspWaitForVBlank();
+    gspWaitForVBlank();
+    u16 w = 0, h = 0;
+    const u8* fb = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, &w, &h);
+    if (!fb || w != 240) return;
+    GSPGPU_FramebufferFormat fmt = gfxGetScreenFormat(GFX_TOP);
+    u32 bpp = fmt == GSP_RGBA8_OES ? 4 : (fmt == GSP_BGR8_OES ? 3 : 0);
+    if (!bpp) return;
+    static const char hex[] = "0123456789abcdef";
+    static char line[96 + 64 * 4];
+    uint32_t hash = 2166136261u;
+    for (uint32_t y = 0; y < 240; y++) {
+        for (uint32_t x0 = 0; x0 < 400; x0 += 64) {
+            uint32_t n = (400 - x0 < 64) ? (400 - x0) : 64;
+            int at = snprintf(line, 96, "TRINO_FBR:%lu:%lu:", (unsigned long)y,
+                              (unsigned long)x0);
+            for (uint32_t i = 0; i < n; i++) {
+                const u8* p = fb + ((x0 + i) * 240 + (239 - y)) * bpp;
+                u32 r, g, b;
+                if (bpp == 4) { r = p[3]; g = p[2]; b = p[1]; }
+                else          { r = p[2]; g = p[1]; b = p[0]; }
+                uint16_t px = (uint16_t)(((r >> 3) << 11) | ((g >> 3) << 6) | ((b >> 3) << 1) | 1);
+                hash = (hash ^ (px >> 8)) * 16777619u;
+                hash = (hash ^ (px & 0xFF)) * 16777619u;
+                line[at++] = hex[(px >> 12) & 15];
+                line[at++] = hex[(px >> 8) & 15];
+                line[at++] = hex[(px >> 4) & 15];
+                line[at++] = hex[px & 15];
+            }
+            line[at++] = '\n';
+            svcOutputDebugString(line, at);
+        }
+    }
+    int at = snprintf(line, 96, "TRINO_FB_END:400x240:%08lx\n", (unsigned long)hash);
+    svcOutputDebugString(line, at);
 }
 
 // ---------------------------------------------------------------------------

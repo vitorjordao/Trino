@@ -221,6 +221,22 @@ mod n3ds {
                         game.level
                     ));
                 } else if bot_ok {
+                    // 5) Emulator frame of a fixed castle64 state (the hub
+                    // perf scene, fresh game): `cargo xtask test 3ds`
+                    // compares it with tests/golden/3ds/castle64_hub.png
+                    // within a tolerance, and xtask/tests/n3ds_parity.rs
+                    // holds the PC's N3ds look to the same image.
+                    runtime::log("TRINO_STEP:golden frame\n");
+                    let hub = &castle64::perf::SCENES[0];
+                    let mut g = alloc::boxed::Box::new(castle64::perf::scene_game(
+                        hub,
+                        Vec2::new(400.0, 240.0),
+                        audio,
+                    ));
+                    for _ in 0..3 {
+                        g.render(renderer);
+                    }
+                    renderer.dump_framebuffer();
                     runtime::log("TRINO_TEST_PASS\n");
                 }
             }

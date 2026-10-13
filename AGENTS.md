@@ -210,7 +210,8 @@ What to build next (ranked): `docs/BACKLOG.md`.
   - **Drop-to-import** of `.glb`/`.gltf`/`.png`.
   - **Scene tabs**; apply-overrides-to-prefab; in-place prefab part editing.
   - **Inspector components**: LOD, sound, cell/portal; cell and portal wireframes.
-  - **Headless UI tests** with egui_kittest (`crates/editor/src/ui_tests.rs`).
+  - **Headless UI tests** with egui_kittest (`crates/editor/src/ui_tests.rs`). They
+    are ignored by default; run them alone with `--ignored --test-threads=1`.
 - **Emulators in CI**:
   - The `n64` job boots the test ROM in the `trino-ares` image. Its golden frame
     matches on Mesa lavapipe too.

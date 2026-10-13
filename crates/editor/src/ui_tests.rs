@@ -2,9 +2,17 @@
 //! state included) driven through its UI by accessibility labels and
 //! keyboard shortcuts — what a user clicks, checked against the document.
 //!
-//! GPU-gated like the renderer goldens (skips without an adapter unless
-//! `TRINO_REQUIRE_GPU=1`). The editor opens a temp copy of the showcase
-//! scene, so nothing in the repo is written.
+//! The editor resolves everything relative to the working directory and
+//! reads its hooks from the environment, so this test changes both. It
+//! is `#[ignore]` and runs on its own, single-threaded:
+//!
+//! ```text
+//! cargo test -p trino-editor ui_tests -- --ignored --test-threads=1
+//! ```
+//!
+//! (CI does, under xvfb with `TRINO_REQUIRE_GPU=1`.) GPU-gated like the
+//! renderer goldens. The editor opens a temp copy of the showcase scene,
+//! so nothing in the repo is written.
 
 use eframe::egui;
 use egui_kittest::Harness;
@@ -12,18 +20,17 @@ use egui_kittest::kittest::Queryable;
 
 use crate::app::App;
 
-/// The editor resolves assets relative to the working directory: run from
-/// the repo root. One test owns the process cwd and env, so it is the only
-/// one in this module.
+/// Runs from the repo root (the editor's asset root is the cwd).
 #[test]
+#[ignore = "changes cwd/env: run alone with --ignored --test-threads=1"]
 fn hierarchy_select_palette_duplicate_and_undo() {
     let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let tmp = tempfile::tempdir().unwrap();
     let scene = tmp.path().join("flow.scene.ron");
     std::fs::copy(repo.join("scenes/showcase.scene.ron"), &scene).unwrap();
     std::env::set_current_dir(&repo).unwrap();
-    // SAFETY: single test in this binary touching the environment, before
-    // any editor thread starts.
+    // SAFETY: this test only runs with --ignored --test-threads=1 (see the
+    // module docs), so no other thread reads or writes the environment.
     unsafe { std::env::set_var("TRINO_EDITOR_SCENE", &scene) };
 
     let built = std::panic::catch_unwind(|| {

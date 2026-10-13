@@ -73,6 +73,8 @@ tests follow the same pattern: add a step to `castle64::selftest` so the PC suit
 
 ## Notes
 
+- **Timeout length:** 300 s by default; `TRINO_EMU_TIMEOUT=<secs>` overrides it (CI uses
+  900). On 4 CPUs, ares/lavapipe takes ~95 s and Azahar ~15 s.
 - **A timeout** usually means one of these:
   - the app crashed before the test: look for `TRINO_PANIC:` in the harness output;
   - a modal dialog blocked the emulator. A read-only ares save path pops one; the

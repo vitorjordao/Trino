@@ -72,6 +72,12 @@ jobs:
       - name: Editor smoke (Linux, headless)
         if: runner.os == 'Linux'
         run: TRINO_EDITOR_SMOKE_FRAMES=30 xvfb-run -a cargo run -p trino-editor
+      # Headless editor flows (egui_kittest): own process state, so alone.
+      - name: Editor UI tests (Linux, headless)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a cargo test -p trino-editor ui_tests -- --ignored --test-threads=1
+        env:
+          TRINO_REQUIRE_GPU: "1"
       - name: Editor Play-here smoke (Linux, headless)
         if: runner.os == 'Linux'
         run: TRINO_EDITOR_PLAY=here TRINO_EDITOR_SMOKE_FRAMES=60 xvfb-run -a cargo run -p trino-editor
@@ -148,6 +154,8 @@ jobs:
         run: cargo xtask test n64
         env:
           TRINO_ARES: docker
+          # lavapipe on a 4-core runner; the harness default is 300 s.
+          TRINO_EMU_TIMEOUT: "900"
       - name: Upload golden mismatch
         if: failure()
         uses: actions/upload-artifact@v4
@@ -213,3 +221,5 @@ jobs:
         run: cargo xtask emulators setup azahar
       - name: Emulator self-test (Azahar)
         run: xvfb-run -a -s "-screen 0 1280x720x24" cargo xtask test 3ds --no-build
+        env:
+          TRINO_EMU_TIMEOUT: "900"

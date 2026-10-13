@@ -531,7 +531,8 @@ pub fn test(bless: bool) -> ExitCode {
         return ExitCode::FAILURE;
     };
 
-    println!("[n64] booting test ROM in ares (300s timeout)...");
+    let timeout = crate::emulators::timeout_secs();
+    println!("[n64] booting test ROM in ares ({timeout}s timeout)...");
     // Native-resolution RDP: the golden frame is compared pixel-exactly.
     let (mut cmd, container) = ares_command(
         &ares,
@@ -568,12 +569,12 @@ pub fn test(bless: bool) -> ExitCode {
         }
     });
 
-    let deadline = Instant::now() + Duration::from_secs(300);
+    let deadline = Instant::now() + Duration::from_secs(timeout);
     let mut fb = crate::fbgolden::FbCapture::default();
     let verdict = loop {
         let left = deadline.saturating_duration_since(Instant::now());
         if left.is_zero() {
-            break Err("timeout: no TRINO_TEST_* output within 300s".to_string());
+            break Err(format!("timeout: no TRINO_TEST_* output within {timeout}s"));
         }
         match rx.recv_timeout(left.min(Duration::from_millis(500))) {
             Ok(line) => {

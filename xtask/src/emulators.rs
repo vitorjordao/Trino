@@ -20,6 +20,15 @@ const AZAHAR_SHA256: &str = "af037f8b775198f636b14bcfe63fb401b02246ebfefe1025bb9
 /// Docker image tag `TRINO_ARES=docker` runs.
 pub const ARES_IMAGE: &str = "trino-ares";
 
+/// Emulator self-test timeout: `$TRINO_EMU_TIMEOUT` seconds, default 300.
+/// CI raises it — software GPU emulation on 4-core runners is slower.
+pub fn timeout_secs() -> u64 {
+    std::env::var("TRINO_EMU_TIMEOUT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(300)
+}
+
 /// Where `setup azahar` extracts the emulator.
 pub fn azahar_dir(root: &Path) -> PathBuf {
     root.join("target/emulators/azahar")

@@ -75,7 +75,9 @@ Live-edit check: start the editor with `TRINO_EDITOR_ECHO_LOG=1` in the backgrou
   animated (toasts, flashes, camera easing).
 - Hand-painted widgets must expose `widget_info` (accessibility), otherwise screen
   readers and the kittest flows cannot find them (see the Hierarchy rows).
-- Extend `ui_tests.rs` for new panel flows. It opens a temp copy of a scene, so it
-  never writes repository files.
+- Extend `ui_tests.rs` for new panel flows (run them with `cargo test -p trino-editor
+  ui_tests -- --ignored --test-threads=1`: they set the cwd and env). They open a temp
+  copy of a scene, so they
+  never write repository files.
 - After UI changes, take a screenshot with the hooks above and look at it before claiming
   it looks right.

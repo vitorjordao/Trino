@@ -615,7 +615,8 @@ pub fn test(build_first: bool) -> ExitCode {
     // match output from a previous run.
     let _ = std::fs::remove_file(&log);
 
-    println!("[3ds] booting test app in Azahar (300s timeout)...");
+    let timeout = crate::emulators::timeout_secs();
+    println!("[3ds] booting test app in Azahar ({timeout}s timeout)...");
     let mut child = match Command::new(&azahar)
         .arg(root.join("target/3ds/trino.3dsx"))
         .spawn()
@@ -627,11 +628,11 @@ pub fn test(build_first: bool) -> ExitCode {
         }
     };
 
-    let deadline = Instant::now() + Duration::from_secs(300);
+    let deadline = Instant::now() + Duration::from_secs(timeout);
     let mut seen = 0usize;
     let verdict = loop {
         if Instant::now() >= deadline {
-            break Err("timeout: no TRINO_TEST_* output within 300s".to_string());
+            break Err(format!("timeout: no TRINO_TEST_* output within {timeout}s"));
         }
         if let Ok(Some(status)) = child.try_wait() {
             break Err(format!(

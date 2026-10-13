@@ -403,6 +403,13 @@ Edit this file as you go.
     under 33.3. lava-land is 34.0 ms because of its lava block: 191 depth splits
     (≈ 5 ms of T&L) and ~190 extra emitted triangles (≈ 5.6 ms of sort + submit). That
     is 3a.
-- [ ] 3a split policy · [ ] 3b reciprocals · [ ] 3c model-space light · [ ] 3d Caps cost budget
+- Phase 3:
+  - [x] 3a split policy — kept: splits only for fogged, textured or translucent draws.
+    Frame hub 53.0 → 44.0, lava-land 34.0 → 23.7, throne 29.4 → 16.3 ms. 3DS golden
+    re-blessed (a few pixels); the N64 showcase golden is identical (fogged).
+    `N64_COST` estimates stay within ±6%, so no refit.
+  - [ ] 3b reciprocals
+  - [ ] 3c model-space light
+  - [ ] 3d Caps cost budget
 - [ ] Phase 4 spike result + ADR (or a written "not needed")
 - [ ] BACKLOG P0 #1 table, ADR 0006, AGENTS.md "Current state", README, `agents sync`

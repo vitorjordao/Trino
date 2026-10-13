@@ -39,8 +39,10 @@
 //!
 //! - Edges spanning more than [`DEPTH_SPLIT`] units of view depth are
 //!   recursively bisected (per-edge rule — neighbors split shared edges at
-//!   identical points, no T-junction cracks), which keeps the 3DS's
-//!   per-triangle depth honest and the N64's 16-bit z precise.
+//!   identical points, no T-junction cracks) in fogged, textured and
+//!   translucent draws ([`split_policy`]). Opaque draws don't need it: the
+//!   per-vertex depth is affine in screen space, so the z-buffer gets the
+//!   same depth from an unsplit triangle.
 //! - Backends still batch consecutive `draw_model` calls and sort the batch
 //!   far-to-near by [`ScreenTri::depth`] (farthest vertex) — the tie-break
 //!   for equal depths and the correct blending order.
@@ -102,6 +104,8 @@ pub struct Mesh<'a> {
     texture: Option<SpriteId>,
     /// `SKW2`: (joint2, weight2) per vertex.
     blend: Option<&'a [u8]>,
+    /// Every vertex color has alpha 255 (checked once, at parse).
+    opaque: bool,
 }
 
 /// Rigid skeleton + clips (borrowed from the blob).
@@ -131,6 +135,7 @@ pub struct MeshLayout {
     uvs: Option<Span>,
     texture: Option<SpriteId>,
     blend: Option<Span>,
+    opaque: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -293,7 +298,9 @@ impl<'a> Mesh<'a> {
             uvs: None,
             texture: None,
             blend: None,
+            opaque: true,
         };
+        mesh.opaque = mesh.colors.iter().all(|c| c[3] == 255);
 
         // Optional sections.
         let mut at = end;
@@ -385,6 +392,7 @@ impl<'a> Mesh<'a> {
             uvs: self.uvs.map(|u| span(u.as_flattened())),
             texture: self.texture,
             blend: self.blend.map(span),
+            opaque: self.opaque,
         }
     }
 
@@ -411,6 +419,7 @@ impl<'a> Mesh<'a> {
             uvs: l.uvs.map(|u| u.get(blob).as_chunks().0),
             texture: l.texture,
             blend: l.blend.map(|b| b.get(blob)),
+            opaque: l.opaque,
         }
     }
 
@@ -807,10 +816,27 @@ const GUARD: f32 = 1.5;
 /// A triangle clipped by up to 5 planes gains at most one vertex per plane.
 const MAX_POLY: usize = 8;
 /// Edges spanning more than this much view depth are bisected before
-/// projection: painter sorting is only as good as how depth-uniform each
-/// triangle is. The rule looks at one edge at a time, so neighbors split
+/// projection, for the draws [`split_policy`] picks: painter sorting (the
+/// blending order) is only as good as how depth-uniform each triangle is,
+/// and per-vertex fog and perspective-free texture paths need the extra
+/// vertices. The rule looks at one edge at a time, so neighbors split
 /// shared edges identically (no cracks).
 pub const DEPTH_SPLIT: f32 = 3.0;
+
+/// Whether a draw gets [`DEPTH_SPLIT`] bisection. Every target z-buffers
+/// with per-vertex depth `1 - NEAR/z`, which is affine in screen space, so
+/// an unsplit opaque triangle gets the same per-pixel depth: splitting it
+/// buys nothing but triangles (castle64's lava sea: 12 → 198). Splits stay
+/// where the vertices carry something that is not affine on screen or
+/// where draw order matters:
+/// - fog (per-vertex, by view depth);
+/// - textured draws (conservative: their alpha may blend);
+/// - translucent draws (tint or vertex alpha < 255: PC blends, and the
+///   painter order is the blending order).
+#[inline]
+pub fn split_policy(ctx: &TnlContext, mesh: &Mesh, params: &ModelParams) -> bool {
+    ctx.fog_on || mesh.has_uvs() || params.tint.a < 255 || !mesh.opaque
+}
 /// Subdivision work stack; overflow emits the triangle unsplit (graceful).
 const SPLIT_STACK: usize = 48;
 
@@ -1121,6 +1147,7 @@ pub fn tessellate_with(
             params.tint.b as f32 / 255.0,
             params.tint.a as f32 / 255.0,
         ],
+        split: split_policy(ctx, mesh, params),
     };
 
     if mesh.joint_count() == 0 {
@@ -1165,6 +1192,8 @@ struct Setup<'a> {
     /// `params.tint` as 0..1 factors: the same quotients `finish` took per
     /// vertex (4 divisions), once per draw.
     tint_k: [f32; 4],
+    /// Apply the [`DEPTH_SPLIT`] rule (see [`split_policy`]).
+    split: bool,
 }
 
 impl Setup<'_> {
@@ -1392,13 +1421,17 @@ fn tessellate_joints<const SKINNED: bool, const SMOOTH: bool>(
                     let d = tri[a].0.z - tri[b].0.z;
                     if d < 0.0 { -d } else { d }
                 };
-                let (s01, s12, s20) = (span(0, 1), span(1, 2), span(2, 0));
-                let worst = if s01 >= s12 && s01 >= s20 {
-                    (s01, 0)
-                } else if s12 >= s20 {
-                    (s12, 1)
+                let worst = if !s.split {
+                    (0.0, 0)
                 } else {
-                    (s20, 2)
+                    let (s01, s12, s20) = (span(0, 1), span(1, 2), span(2, 0));
+                    if s01 >= s12 && s01 >= s20 {
+                        (s01, 0)
+                    } else if s12 >= s20 {
+                        (s12, 1)
+                    } else {
+                        (s20, 2)
+                    }
                 };
                 if worst.0 > DEPTH_SPLIT && top + 2 <= SPLIT_STACK {
                     // Rotate so the split edge is (a, b); bisect keeping the
@@ -1692,6 +1725,44 @@ mod tests {
     }
 
     #[test]
+    fn split_policy_splits_only_fogged_textured_or_translucent_draws() {
+        let (cube, tex) = (cube_tmdl(), textured_cube());
+        let (cube, tex) = (
+            Mesh::from_tmdl(&cube).unwrap(),
+            Mesh::from_tmdl(&tex).unwrap(),
+        );
+        let screen = Vec2::new(320.0, 240.0);
+        let plain = TnlContext::new(&Camera3::default(), &DEFAULT_LIGHT, screen);
+        let fogged = TnlContext::new(
+            &Camera3::default(),
+            &Light {
+                fog: Fog {
+                    color: Color::BLACK,
+                    near: 1.0,
+                    far: 9.0,
+                },
+                ..DEFAULT_LIGHT
+            },
+            screen,
+        );
+        let opaque = ModelParams::DEFAULT;
+        let glass = ModelParams::tinted(Color::rgba(255, 255, 255, 100));
+        assert!(!split_policy(&plain, &cube, &opaque));
+        assert!(split_policy(&fogged, &cube, &opaque));
+        assert!(split_policy(&plain, &cube, &glass));
+        assert!(split_policy(&plain, &tex, &opaque));
+        // Vertex alpha counts too.
+        let mut blob = cube_tmdl();
+        let colors_at = 12 + 24 * 12 * 2;
+        blob[colors_at + 3] = 10;
+        assert!(split_policy(
+            &plain,
+            &Mesh::from_tmdl(&blob).unwrap(),
+            &opaque
+        ));
+    }
+
+    #[test]
     fn layout_rebuilds_the_same_mesh() {
         for blob in [cube_tmdl(), skinned_cube(), textured_cube()] {
             let parsed = Mesh::from_tmdl(&blob).unwrap();
@@ -1911,11 +1982,16 @@ mod tests {
             target: Vec3::ZERO,
             ..Default::default()
         };
-        let out = collect(&mesh, &model, &camera, Color::WHITE);
+        // Translucent, so the split policy applies.
+        let out = collect(&mesh, &model, &camera, Color::rgba(255, 255, 255, 128));
         assert!(!out.is_empty(), "near-crossing ground vanished");
         // Depth subdivision: the receding floor must arrive as depth-thin
         // strips, not one giant triangle pair.
         assert!(out.len() > 6, "floor not subdivided: {} tris", out.len());
+        // Opaque, the same floor is clipped but not subdivided: the
+        // z-buffer gets the same depth from the whole triangle.
+        let opaque = collect(&mesh, &model, &camera, Color::WHITE);
+        assert!(!opaque.is_empty() && opaque.len() < out.len());
         // Guard band keeps every projected coordinate bounded (the N64 RDP
         // works in fixed point; huge offscreen coordinates overflow it).
         for tri in &out {
@@ -2121,12 +2197,13 @@ mod tests {
         }
         .matrix();
         let mut tris = std::vec::Vec::new();
+        // Translucent: split_policy keeps the depth splits on.
         let stats = tessellate(
             &mesh,
             &slab,
             &Camera3::default(),
             &DEFAULT_LIGHT,
-            &ModelParams::DEFAULT,
+            &ModelParams::tinted(Color::rgba(255, 255, 255, 200)),
             Vec2::new(320.0, 240.0),
             &mut |t| tris.push(t),
         );

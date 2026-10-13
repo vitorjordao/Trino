@@ -149,22 +149,23 @@ fewer with many draws. The
 original KayKit door (1068 tris) read "27% of budget" and cost ~64 ms, two whole
 frames. Trust the cost model.
 
-## Where the time goes (2026-10-13, Phase 1 after 1a–1h)
+## Where the time goes (2026-10-13, after Phases 1–3a)
 
 | Scene | Frame (ms) | ≈ fps | T&L (ms) | sort + submit (ms) | game (ms) | Draws |
 |---|---|---|---|---|---|---|
-| hub | 56.8 | 18 | 37.2 | 15.9 | 2.7 | 34 |
-| green-hills | 25.8 | **39** | 17.6 | 5.3 | 1.9 | 23 |
-| lava-land | 37.5 | 27 | 23.2 | 11.3 | 2.0 | 22 |
-| sky-tower | 21.8 | **46** | 14.8 | 4.2 | 1.9 | 26 |
-| throne | 33.8 | 30 | 20.4 | 10.7 | 1.8 | 19 |
+| hub | 44.0 | 23 | 30.0 | 10.4 | 2.7 | 26 |
+| green-hills | 21.6 | **46** | 14.2 | 4.6 | 1.9 | 16 |
+| lava-land | 23.7 | **42** | 15.7 | 5.2 | 1.9 | 16 |
+| sky-tower | 20.4 | **49** | 13.3 | 4.2 | 1.9 | 19 |
+| throne | 16.3 | **61** | 10.3 | 3.5 | 1.7 | 12 |
 
 - Hub T&L by model (ms, calls):
-  door_frame ×3: 6.1; block_grass ×1: 5.3; block_brick ×7: 4.4; door ×1: 3.7; coin ×8: 3.4; boar ×1: 3.4; player_leg ×2: 2.2; player_arm ×2: 2.0; player_torso ×1: 2.0; block_roof ×3: 1.9; block_castle ×3: 1.7; star ×1: 0.6; shadow ×1: 0.5.
-- A visible draw costs ~45 µs before its first vertex (280 µs at Phase 0) plus
-  ~13–29 µs outside the T&L timer. A Gouraud vertex ~10 µs (~900 cycles), a
-  front-facing emitted triangle ~35 µs. Submit, ~22 µs per emitted triangle, is store
-  bound (26 uncached rspq words each): about a fifth of the hub frame.
+  door_frame ×3: 6.3; block_brick ×7: 4.4; door ×1: 4.1; boar ×1: 3.7; player_leg ×2: 2.3; player_arm ×2: 2.0; player_torso ×1: 1.9; block_roof ×3: 1.7; block_castle ×3: 1.5; block_grass ×1: 0.8; star ×1: 0.6; shadow ×1: 0.6.
+- A visible draw costs ~50 µs before its first vertex (280 µs at Phase 0) plus
+  ~13–29 µs outside the T&L timer. A Gouraud vertex ~10 µs, a front-facing emitted
+  triangle ~30 µs, submit ~22 µs per emitted triangle (26 uncached rspq words).
+- No castle64 draw splits any more (3a). The remaining hub cost is the doors, the
+  bricks, the boar and the 5-part player: per-vertex and per-triangle work.
 - **The enemy is not the problem.** A boar costs ~3.5 ms, and all game logic ~0.3 ms.
 
 ## What worked, what didn't (keep this list honest)
@@ -181,6 +182,7 @@ frames. Trust the cost model.
 | Per-vertex cached projection + no-copy fast path in `tessellate` | neutral (±2%) — reverted |
 | Hot loop compacted (`#[inline(never)]` vertex/flat/general paths) | +3…+17% worse — reverted |
 | `opt-level = "s"` for the ROM | worse everywhere — not adopted |
+| **3a** `split_policy`: DEPTH_SPLIT only for fogged, textured or translucent draws (tint or vertex alpha < 255); opaque draws go unsplit, since per-vertex z `1 − NEAR/z` is affine on screen | frame hub −17%, lava-land −30%, throne −45%, green-hills −7%, sky-tower +0.5%; castle64 splits 199/30/211/4/252 → 0, emitted hub 509 → 310, throne 341 → 89. Output-moving: work baseline, 3DS golden (mean 0.006/255, a few pixels); N64 showcase golden identical (fogged scene keeps its splits); N64 hub/lava/throne checked by eye in one-off dumps, no z-fighting |
 | **1i** T&L code size: each `tessellate_joints` instance `#[inline(never)]` and the 5-plane clip in one `#[cold]` `clip_frustum` | `tessellate_with` was **60 KB** (static + two skinned paths + five inlined clip planes, ~4× the 16 KB I-cache); now 1.9 KB + 13.9 KB static path + 6 KB cold clip. Frame −4.5…−7.9%, T&L −8…−12% in every scene. Goldens identical. (Not the reverted 2026-10-13 attempt, which split the hot loop itself) |
 | **2a** castle64 coins as billboards (`draw_billboard` of the HUD's `S_COIN`, width `0.8·max(|cos spin|, 0.15)`); `billboard_with` reuses the `TnlContext` | coins' T&L gone (hub 3.4 ms, stages 1.6–3.4 ms), sort/submit/`game` +0.3–0.4 ms each (textured batch). Frame: throne −8.9%, green-hills and lava-land −4.9%, hub +0.3%, sky-tower +0.9%. That build was an unlucky layout: the micro scenes, identical code with no billboards, got T&L +17…+34%. Output-moving: 3DS golden (round sprite coins), work baseline −coin counters |
 | **1h** `Mat34::from_rotation_scale_translation` skips the software sin/cos for `+0.0` angles (`sin(0) = 0`, `cos(0) = 1` bit-exactly, pinned by a test) | `game` −15…−18% in every scene; `Transform3::matrix` 26 → 7 µs per draw with zero rotation, 26 → 12 µs with a yaw. T&L +4% in two scenes (layout). Frame −1.4…+1.6%. Kept on the `game` stage win |

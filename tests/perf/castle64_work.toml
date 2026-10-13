@@ -9,43 +9,43 @@
 verts = 1229
 tris_in = 605
 clipped = 16
-splits = 199
+splits = 0
 backfaced = 298
-emitted = 509
+emitted = 310
 culled = 0
 
 [green-hills]
 verts = 608
 tris_in = 304
 clipped = 6
-splits = 30
+splits = 0
 backfaced = 174
-emitted = 160
+emitted = 130
 culled = 2
 
 [lava-land]
 verts = 662
 tris_in = 326
 clipped = 4
-splits = 211
+splits = 0
 backfaced = 180
-emitted = 360
+emitted = 149
 culled = 0
 
 [sky-tower]
 verts = 560
 tris_in = 280
 clipped = 6
-splits = 4
+splits = 0
 backfaced = 152
-emitted = 132
+emitted = 128
 culled = 7
 
 [throne]
 verts = 450
 tris_in = 220
 clipped = 12
-splits = 252
+splits = 0
 backfaced = 133
-emitted = 341
+emitted = 89
 culled = 0

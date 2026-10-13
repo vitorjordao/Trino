@@ -357,7 +357,8 @@ Edit this file as you go.
     (unchanged code), frame neutral
   - [x] 1d fetch — kept: frame −5…−14%, T&L −10…−20%; Gouraud vertex 21.7 → 15.8 µs.
     No byte swap at register: the byte assembly is ~100 of ~1 500 cycles per vertex
-  - [ ] 1e divisions
+  - [x] 1e divisions — kept: frame −8…−14%, T&L −12…−20%; `div.s` in the vertex closure
+    15 → 3
   - [ ] 1f submit
   - [x] 1g sort — skipped: sort ≤ 4 ms per scene, 2.4 µs per emitted triangle (Phase 0)
   - [ ] 1h transform fast path

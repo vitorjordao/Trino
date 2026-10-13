@@ -140,22 +140,23 @@ cost, a 30 fps frame affords roughly 300–400 triangles, fewer with many draws.
 original KayKit door (1068 tris) read "27% of budget" and cost ~64 ms, two whole
 frames. Trust the cost model.
 
-## Where the time goes (2026-10-13, Phase 1 after 1a–1d)
+## Where the time goes (2026-10-13, Phase 1 after 1a–1e)
 
 | Scene | Frame (ms) | ≈ fps | T&L (ms) | sort + submit (ms) | game (ms) | Draws |
 |---|---|---|---|---|---|---|
-| hub | 64.9 | 15 | 44.7 | 15.8 | 3.4 | 34 |
-| green-hills | 29.5 | **34** | 20.8 | 5.3 | 2.4 | 23 |
-| lava-land | 42.4 | 24 | 27.7 | 11.3 | 2.4 | 22 |
-| sky-tower | 25.2 | **40** | 17.7 | 4.1 | 2.4 | 26 |
-| throne | 37.4 | 27 | 23.4 | 10.8 | 2.2 | 19 |
+| hub | 56.8 | 18 | 36.6 | 15.9 | 3.3 | 34 |
+| green-hills | 25.4 | **39** | 16.9 | 5.3 | 2.3 | 23 |
+| lava-land | 37.8 | 26 | 23.3 | 11.3 | 2.3 | 22 |
+| sky-tower | 21.6 | **46** | 14.1 | 4.2 | 2.3 | 26 |
+| throne | 34.3 | 29 | 20.6 | 10.6 | 2.1 | 19 |
 
 - Hub T&L by model (ms, calls):
-  door_frame ×3: 7.5; block_grass ×1: 6.3; block_brick ×7: 5.4; door ×1: 4.6; coin ×8: 4.1; boar ×1: 4.1; player_leg ×2: 2.7; player_arm ×2: 2.4; player_torso ×1: 2.3; block_roof ×3: 2.2; block_castle ×3: 2.0; star ×1: 0.7; shadow ×1: 0.6.
+  block_grass ×1: 6.2; door_frame ×3: 5.8; block_brick ×7: 4.2; door ×1: 3.6; boar ×1: 3.3; coin ×8: 3.2; player_leg ×2: 2.1; player_arm ×2: 1.9; player_torso ×1: 1.9; block_roof ×3: 1.8; block_castle ×3: 1.6; star ×1: 0.5; shadow ×1: 0.5.
 - A visible draw costs ~45 µs before its first vertex (280 µs at Phase 0) plus
-  ~16–32 µs outside the T&L timer. A Gouraud vertex ~16 µs (~1 500 cycles), a
-  front-facing emitted triangle ~33 µs, submit ~22 µs per emitted triangle.
-- **The enemy is not the problem.** A boar costs ~4 ms, and all game logic ~0.3 ms.
+  ~16–32 µs outside the T&L timer. A Gouraud vertex ~10 µs (~900 cycles), a
+  front-facing emitted triangle ~35 µs, submit ~22 µs per emitted triangle: submit is
+  now ~20% of the hub frame.
+- **The enemy is not the problem.** A boar costs ~3.5 ms, and all game logic ~0.3 ms.
 
 ## What worked, what didn't (keep this list honest)
 
@@ -171,6 +172,7 @@ frames. Trust the cost model.
 | Per-vertex cached projection + no-copy fast path in `tessellate` | neutral (±2%) — reverted |
 | Hot loop compacted (`#[inline(never)]` vertex/flat/general paths) | +3…+17% worse — reverted |
 | `opt-level = "s"` for the ROM | worse everywhere — not adopted |
+| **1e** Tint quotients `tint / 255.0` hoisted from `Setup::finish` (per vertex) into `Setup` (per draw); same operations, same order | frame −8…−14%, T&L −12…−20% in every scene (hub 64.9 → 56.8 ms, sky-tower 25.2 → 21.6). `div.s` in the static vertex closure 15 → 3 (the normalize and fog remain). Goldens identical |
 | **1d** Vertex fetch through fixed-size records (`as_chunks`: `&[[u8; 12]]` positions/normals, `[[u8; 4]]` colors, whole-triangle index records): one bounds check per attribute instead of one per byte, none per triangle | frame −5…−14% (green-hills 34.4 → 29.5 ms, sky-tower 28.8 → 25.2); T&L −10…−20%; Gouraud per vertex 21.7 → 15.8 µs. Goldens identical. The floats are still assembled from bytes (24 `lbu` + shifts per vertex, ~100 cycles of ~1 500); byte-swapping at register was not worth its RAM |
 | **1c** `MeshLayout`: each TMDL validated once at register, the draw's `Mesh` rebuilt from byte spans (`Mesh::from_layout`) instead of `Mesh::from_tmdl` per draw (all three backends) | `game` −13…−20% in every scene; culled draw outside the T&L 25 → 16 µs. T&L +8…+12% with unchanged `tessellate` code and submit −17%: layout. Frame −0.1…+3.8% (green-hills). Kept on the `game` stage win |
 | **1b** `TnlScratch`: vertex-cache payload, clip polygons, split stack and the skinned joint matrices (~9 KB) owned by the backend and never cleared; only the 32 cache tags reset per draw | **frame −12…−15% in every scene** (hub 80.0 → 70.2 ms, green-hills 38.8 → 33.2); T&L −19…−22%; visible-draw setup 248 → 58 µs. `submit` +20% from layout. Goldens identical |

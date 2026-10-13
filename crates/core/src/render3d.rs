@@ -1093,6 +1093,12 @@ pub fn tessellate_with(
         white: ctx.white,
         has_emissive: params.emissive.r | params.emissive.g | params.emissive.b != 0,
         fog_on: ctx.fog_on,
+        tint_k: [
+            params.tint.r as f32 / 255.0,
+            params.tint.g as f32 / 255.0,
+            params.tint.b as f32 / 255.0,
+            params.tint.a as f32 / 255.0,
+        ],
     };
 
     if mesh.joint_count() == 0 {
@@ -1134,6 +1140,9 @@ struct Setup<'a> {
     white: bool,
     has_emissive: bool,
     fog_on: bool,
+    /// `params.tint` as 0..1 factors: the same quotients `finish` took per
+    /// vertex (4 divisions), once per draw.
+    tint_k: [f32; 4],
 }
 
 impl Setup<'_> {
@@ -1141,7 +1150,6 @@ impl Setup<'_> {
     #[inline(always)]
     fn shade(&self, c: Color, n: Vec3, z: f32) -> Color {
         let light = self.light;
-        let tint = self.params.tint;
         let k = match self.params.shading {
             Shading::Unlit => [1.0, 1.0, 1.0],
             Shading::Gouraud | Shading::Flat => {
@@ -1151,7 +1159,7 @@ impl Setup<'_> {
                 if self.white {
                     // White light: one intensity (identical result, less work).
                     let i = light.ambient + d;
-                    return self.finish(c, tint, [i, i, i], z);
+                    return self.finish(c, [i, i, i], z);
                 }
                 [
                     light.ambient * self.ac[0] + d * self.lc[0],
@@ -1160,19 +1168,22 @@ impl Setup<'_> {
                 ]
             }
         };
-        self.finish(c, tint, k, z)
+        self.finish(c, k, z)
     }
 
     /// Tint × light, then emissive and fog.
     #[inline(always)]
-    fn finish(&self, c: Color, tint: Color, k: [f32; 3], z: f32) -> Color {
+    fn finish(&self, c: Color, k: [f32; 3], z: f32) -> Color {
         let light = self.light;
-        let mul = |v: u8, t: u8, k: f32| (v as f32 * (t as f32 / 255.0) * k) as u8;
+        let t = self.tint_k;
+        // v * (tint / 255) * k, with the quotient from `Setup`: the same
+        // operations in the same order as dividing here, so bit-identical.
+        let mul = |v: u8, t: f32, k: f32| (v as f32 * t * k) as u8;
         let mut out = Color::rgba(
-            mul(c.r, tint.r, k[0]),
-            mul(c.g, tint.g, k[1]),
-            mul(c.b, tint.b, k[2]),
-            (c.a as f32 * (tint.a as f32 / 255.0)) as u8,
+            mul(c.r, t[0], k[0]),
+            mul(c.g, t[1], k[1]),
+            mul(c.b, t[2], k[2]),
+            (c.a as f32 * t[3]) as u8,
         );
         let e = self.params.emissive;
         if self.has_emissive {

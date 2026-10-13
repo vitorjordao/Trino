@@ -366,7 +366,13 @@ Edit this file as you go.
     RSP command or RSP T&L with shared vertices (Phase 4).
   - [x] 1g sort — skipped: sort ≤ 4 ms per scene, 2.4 µs per emitted triangle (Phase 0)
   - [x] 1h transform fast path — kept: `game` −15…−18% in all five scenes, frame neutral
-- [ ] N64_COST recalibrated, skill tables updated
+- [x] N64_COST recalibrated, skill tables updated — 8.1 µs/vertex, 27.5/triangle,
+  67.7/draw, 25.5/split, 29.5/emitted (was 16.6 / 26.1 / 278 / 22.3 / 30); mean error 6%.
+  Phase 1 exit vs the Phase 0 base, frame ms: hub 79.6 → 56.8, green-hills 39.1 → 25.8,
+  lava-land 51.4 → 37.5, sky-tower 32.8 → 21.8, throne 44.5 → 33.8 (−24…−34%, every
+  golden identical). Micro re-check: visible-draw setup 280 → 51 µs, Gouraud vertex
+  28 → 9 µs, front emitted triangle 29 µs (unchanged: now the largest T&L term), submit
+  22 µs per triangle (store-bound, 1f).
 - [ ] Candidate after Phase 1: group the T&L hot code in the link (a `.text` section
   ahead of the rest via a wrapped `n64.ld`). The hot set (`tessellate_with` with the
   static path inlined, the vertex closure, the emit closure, `Vec::push`, `memcpy`)

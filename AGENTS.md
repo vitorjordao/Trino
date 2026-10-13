@@ -440,7 +440,8 @@ cargo test --workspace
   calls `set_light` inherits the last one. On consoles the self-test's showcase
   fog leaked into castle64. Set both every frame.
 - **`Caps::N64.max_tris_per_frame` is not the CPU T&L budget.** A 30 fps frame
-  affords roughly 300–400 triangles today. Use `model inspect`'s N64 cost estimate.
+  affords roughly 450–550 source triangles today, fewer with many draws. Use
+  `model inspect`'s N64 cost estimate.
 - **glTF COLOR_0 is linear.** The bake converts it to display sRGB, so write linear
   values (the generators use `color0_linear`). Before 2026-10-13, Blender-painted
   colors baked much darker.

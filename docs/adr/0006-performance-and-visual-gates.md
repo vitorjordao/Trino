@@ -59,13 +59,19 @@
   totals within ±2%. Vertices and triangles are correlated (~2:1), so the sum is
   reliable and the split between the two terms is not. The first fit was 9.0 / 44.2 /
   419 / 14.7 µs.
+- Recalibrated again after Phase 1 of `docs/plans/n64-throughput.md` (constant
+  factors, output-identical): 8.1 µs per vertex, 27.5 per source triangle, 67.7 per
+  draw, 25.5 per split, 29.5 per emitted triangle; mean error 6%, scene totals
+  −1…+4%. The micro perf scenes (`micro-*`, ungated) now measure the per-draw,
+  per-vertex and per-triangle costs directly; the fit stays for scene totals.
 - Tools that only see deterministic counters use it:
   - `model inspect` prints the per-draw estimate and warns above 25% of a 30 fps
     frame;
   - the editor budget HUD shows an "N64 3D time" row;
   - `test n64` prints the estimate and notes any drift above 25%.
 - `Caps::N64.max_tris_per_frame` (4000) stays for the RDP and strict mode. It is
-  not the CPU-T&L budget, which is roughly 300–400 triangles per 30 fps frame today.
+  not the CPU-T&L budget, which is roughly 450–550 source triangles per 30 fps frame
+  after the throughput plan's Phase 1 (300–400 before it).
   Replacing it with a cost budget is BACKLOG P0 #1 (d).
 
 ## 4. 3DS: all 3D through citro3d with per-vertex depth

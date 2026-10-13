@@ -66,14 +66,14 @@ up is a cost the N64 pays.
 
 ## The cost model (`trino_core::perf::N64_COST`)
 
-T&L ≈ **16.6 µs/vertex + 26.1 µs/source triangle + 278 µs/draw + 22.3 µs/split**, plus
-**~30 µs per emitted triangle** for sort + submit. It was recalibrated on 2026-10-13
-after back faces moved ahead of clipping: 44 per-model points, mean error 5%, scene
-totals ±2% (sky-tower +11%).
+T&L ≈ **8.1 µs/vertex + 27.5 µs/source triangle + 67.7 µs/draw + 25.5 µs/split**, plus
+**~29.5 µs per emitted triangle** for sort + submit. It was recalibrated on 2026-10-13
+after the throughput plan's Phase 1: 44 per-model points, mean error 6%, scene totals
+−1…+4%. Before Phase 1 it was 16.6 / 26.1 / 278 / 22.3 / 30.
 
 Real meshes carry ~2 vertices per triangle, so the vertex and triangle terms trade off
-in the fit. Trust their sum, ~60 µs per closed-mesh triangle, not the split between
-them.
+in the fit. Trust their sum, ~44 µs of T&L per closed-mesh triangle (~59 µs with its
+share of sort + submit), not the split between them.
 
 The model is used by:
 - `cargo xtask model inspect`: "N64 cost estimate", with a warning above 25% of a
@@ -140,7 +140,8 @@ Recalibrate after any T&L or backend change. The `note:` line tells you when.
 4. Update `N64_COST` and its calibration test in `crates/core/src/perf.rs`.
 
 **`Caps::N64.max_tris_per_frame = 4000` is not a CPU-T&L budget.** At the measured
-cost, a 30 fps frame affords roughly 300–400 triangles, fewer with many draws. The
+cost, a 30 fps frame affords roughly 450–550 source triangles (300–400 before Phase 1),
+fewer with many draws. The
 original KayKit door (1068 tris) read "27% of budget" and cost ~64 ms, two whole
 frames. Trust the cost model.
 

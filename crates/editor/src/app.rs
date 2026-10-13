@@ -1503,10 +1503,12 @@ impl App {
                     RichText::new(format!("{} {}", icon::TRIANGLE, self.scene_view.stats.tris))
                         .color(c::TEXT_FAINT),
                 )
-                .on_hover_text(format!(
-                    "Triangles in the scene view (N64 budget: {}/frame, enforced in strict mode)",
-                    trino_core::Caps::N64.max_tris_per_frame
-                ));
+                .on_hover_text(
+                    "Triangles in the scene view. The N64 budget is CPU time, not a \
+                     triangle count: the Game view's budget HUD shows the N64 3D time \
+                     (trino_core::perf::N64_COST); strict mode stops above \
+                     Caps::max_3d_us_per_frame.",
+                );
                 let mut n = 0;
                 self.doc.scene.walk(|_, _| n += 1);
                 ui.label(

@@ -48,8 +48,9 @@ GPU-dependent tests skip without an adapter unless `TRINO_REQUIRE_GPU=1`.
   times ≤ `tests/perf/castle64_n64.toml`; `n64-performance` skill). 3DS: the
   castle64 hub golden frame within a tolerance (`tests/golden/3ds/`).
 - `cargo xtask model inspect <glb>` prints an **N64 cost estimate** per draw
-  (`trino_core::perf::N64_COST`) — the triangle-budget percentage beside it badly
-  understates the CPU T&L cost.
+  (`trino_core::perf::N64_COST`) and its share of a 30 fps frame. PC strict mode
+  panics when a frame's estimated N64 3D time passes `Caps::max_3d_us_per_frame`
+  (50 ms); `strict_mode_rejects_3d_over_the_n64_time_ceiling` covers it.
 - Blender toolkit, on machines with Blender: `cargo xtask blender smoke`.
 - Skinning cost: `bench_tnl` includes `skinning_rigid_vs_smooth`.
 

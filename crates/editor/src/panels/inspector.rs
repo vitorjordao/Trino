@@ -1167,11 +1167,13 @@ fn model_asset(app: &mut App, ui: &mut egui::Ui, logical: &str) {
                 }
             });
         ui.add_space(4.0);
+        // What one draw costs the N64's CPU T&L (calibrated), against a
+        // 30 fps frame.
         budget_bar(
             ui,
-            "N64 tris",
-            tris as f32,
-            Caps::N64.max_tris_per_frame as f32,
+            "N64 µs/draw",
+            trino_core::perf::N64_COST.mesh_draw_us(verts as u32, tris as u32) as f32,
+            trino_core::perf::FRAME_30FPS_US as f32,
         );
     });
     ui.add_space(8.0);

@@ -70,14 +70,18 @@ up is a cost the N64 pays.
 
 ## The cost model (`trino_core::perf::N64_COST`)
 
-T&L ≈ **8.1 µs/vertex + 27.5 µs/source triangle + 67.7 µs/draw + 25.5 µs/split**, plus
-**~29.5 µs per emitted triangle** for sort + submit. It was recalibrated on 2026-10-13
-after the throughput plan's Phase 1: 44 per-model points, mean error 6%, scene totals
-−1…+4%. Before Phase 1 it was 16.6 / 26.1 / 278 / 22.3 / 30.
+T&L ≈ **7.1 µs/vertex + 17.3 µs/source triangle + 184 µs/draw + 25.5 µs/split**, plus
+**~37 µs per emitted triangle** for sort + submit. Recalibrated on 2026-10-13 after the
+throughput plan's Phases 1–3c. castle64 no longer splits, so the split term keeps its
+Phase 1 value. A free fit came out degenerate (negative triangle term: vertices and
+triangles run ~2:1 in real meshes), so the per-vertex term is the micro scenes'
+measured 7.1 µs and the rest is least squares: 39 per-model points, mean error 11%,
+scene totals −4…+9%. History: 16.6 / 26.1 / 278 / 22.3 / 30 before Phase 1, and
+8.1 / 27.5 / 67.7 / 25.5 / 29.5 after it.
 
-Real meshes carry ~2 vertices per triangle, so the vertex and triangle terms trade off
-in the fit. Trust their sum, ~44 µs of T&L per closed-mesh triangle (~59 µs with its
-share of sort + submit), not the split between them.
+Trust the sum, ~31 µs of T&L per closed-mesh triangle (~50 µs with its share of sort
++ submit), not the split between the terms. The per-draw term also soaks up how code
+layout treats small meshes drawn many times (castle64's blocks).
 
 The model is used by:
 - `cargo xtask model inspect`: "N64 cost estimate", with a warning above 25% of a
@@ -144,8 +148,10 @@ Recalibrate after any T&L or backend change. The `note:` line tells you when.
 4. Update `N64_COST` and its calibration test in `crates/core/src/perf.rs`.
 
 **`Caps::N64.max_tris_per_frame = 4000` is not a CPU-T&L budget.** At the measured
-cost, a 30 fps frame affords roughly 450–550 source triangles (300–400 before Phase 1),
-fewer with many draws. The
+cost, a 30 fps frame affords roughly 550–650 source triangles (300–400 before the
+throughput plan), fewer with many draws. Strict mode stops at
+`Caps::max_3d_us_per_frame` (N64: 50 ms of estimated 3D, i.e. 20 fps); `model
+inspect` and the editor warn against a 30 fps frame. The
 original KayKit door (1068 tris) read "27% of budget" and cost ~64 ms, two whole
 frames. Trust the cost model.
 
@@ -183,6 +189,7 @@ frames. Trust the cost model.
 | Per-vertex cached projection + no-copy fast path in `tessellate` | neutral (±2%) — reverted |
 | Hot loop compacted (`#[inline(never)]` vertex/flat/general paths) | +3…+17% worse — reverted |
 | `opt-level = "s"` for the ROM | worse everywhere — not adopted |
+| **3d** `Caps::max_3d_us_per_frame` (N64 50 ms): PC strict mode panics when a frame's `N64_COST` estimate exceeds it; `model inspect`, the HUD and the model inspector show time against a 30 fps frame instead of a share of 4000 triangles. `N64_COST` refit after 3c (7.1 / 17.3 / 184 / 25.5 / 37) | tools only; the ROM's frame moved −0.3…−1.1% (layout). Goldens and counters identical |
 | **3c** Model-space lighting on the static Gouraud path: for orthogonal model matrices with uniform scale, or any per-axis scale when every normal lies on an axis (boxes, and castle64's boar), light `n_local · (Rᵀ·l)` and skip the per-vertex normal transform, sqrt and division. The mesh's `unit_normals`/`axis_normals` are checked once at parse; the tolerance is 3e-3 because the core's sin/cos make rotations orthonormal only to ~1e-4 | T&L −11…−14% in four scenes, throne −2.8%; frame −4…−7%, throne +1.1% (`game`, unchanged code, +17…21%: layout). Boar −29%, doors −17…−27%, player −9…−18% per model. Expected to move output, but every golden and the work baseline stayed byte-identical |
 | **3b** One `1 / z` per projected vertex shared by the projection (`x · focal · inv`) and the z-buffer depth (`1 − NEAR · inv`), instead of three divisions | frame −2.5…−3.5%, T&L −4…−5% in every scene. Expected to move output, but every golden (PC, N64 pixel-exact, 3DS) stayed byte-identical and the work counters equal |
 | **3a** `split_policy`: DEPTH_SPLIT only for fogged, textured or translucent draws (tint or vertex alpha < 255); opaque draws go unsplit, since per-vertex z `1 − NEAR/z` is affine on screen | frame hub −17%, lava-land −30%, throne −45%, green-hills −7%, sky-tower +0.5%; castle64 splits 199/30/211/4/252 → 0, emitted hub 509 → 310, throne 341 → 89. Output-moving: work baseline, 3DS golden (mean 0.006/255, a few pixels); N64 showcase golden identical (fogged scene keeps its splits); N64 hub/lava/throne checked by eye in one-off dumps, no z-fighting |

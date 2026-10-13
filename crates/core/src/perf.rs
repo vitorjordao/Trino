@@ -36,25 +36,26 @@ pub struct CostModel {
 }
 
 /// The N64 (emulated time under ares), recalibrated 2026-10-13 after the
-/// Phase 1 constant-factor pass of `docs/plans/n64-throughput.md` (per-frame
+/// throughput plan's Phases 1–3c (`docs/plans/n64-throughput.md`: per-frame
 /// T&L constants, backend-owned scratch, meshes parsed once, chunked vertex
-/// fetch, tint quotients per draw), from the castle64 `TRINO_PERF_MODEL` /
-/// `TRINO_PERF_SCENE` lines (default white light, no fog): least squares over
-/// 44 per-model measurements (mean error 6%), the five scene totals within
-/// -1…+4%; sort + submit come to 29–30 µs per emitted triangle in every
-/// scene. Vertices and triangles are strongly correlated in real meshes
-/// (~2 vertices per triangle), so trust the sum, not the split between the
-/// two terms; the micro scenes (n64-performance skill) measure the fixed
-/// costs directly. Code layout alone moves real frames by ~5–10%, so read
-/// results as estimates. Recalibrate when the T&L or the backends change (the
-/// n64-performance skill says how); `cargo xtask test n64` prints estimate vs
-/// measurement for every scene.
+/// fetch, split T&L code, opaque draws unsplit, one reciprocal per vertex,
+/// model-space lighting), from the castle64 `TRINO_PERF_MODEL` /
+/// `TRINO_PERF_SCENE` lines (default white light, no fog). castle64 no
+/// longer splits, so the split term keeps its Phase 1 value, and vertices
+/// and triangles are too correlated in real meshes (~2:1) for a free fit:
+/// the per-vertex term is the micro scenes' measured 7.1 µs and the rest is
+/// least squares over 39 per-model points (mean error 11%, scene totals
+/// -4…+9%). Sort + submit come to 34–40 µs per emitted triangle. Code layout
+/// alone moves real frames by ~5–10%, so read results as estimates.
+/// Recalibrate when the T&L or the backends change (the n64-performance
+/// skill says how); `cargo xtask test n64` prints estimate vs measurement
+/// for every scene.
 pub const N64_COST: CostModel = CostModel {
-    us_per_vert: 8.1,
-    us_per_tri: 27.5,
-    us_per_draw: 67.7,
+    us_per_vert: 7.1,
+    us_per_tri: 17.3,
+    us_per_draw: 183.8,
     us_per_split: 25.5,
-    us_per_emitted: 29.5,
+    us_per_emitted: 37.0,
 };
 
 impl CostModel {
@@ -297,11 +298,10 @@ mod tests {
     fn n64_cost_model_reproduces_its_calibration() {
         // (verts, tris_in, draws, splits, measured T&L us) from castle64.
         let points = [
-            (159, 75, 1, 0, 3_720),       // castle doorway
-            (140, 70, 1, 0, 3_375),       // boar
-            (24, 12, 1, 191, 5_357),      // lava sea block (depth splits)
-            (1397, 661, 34, 199, 37_176), // the whole hub scene
-            (24, 12, 1, 0, 528),          // shadow
+            (159, 75, 1, 0, 2_845),     // castle doorway
+            (140, 70, 1, 0, 2_483),     // boar
+            (1229, 605, 26, 0, 24_908), // the whole hub scene
+            (450, 220, 12, 0, 9_592),   // the whole throne scene
         ];
         for (verts, tris_in, draws, splits, us) in points {
             let t = TnlStats {
@@ -312,8 +312,8 @@ mod tests {
             };
             let est = N64_COST.tnl_us(&t, draws) as f32;
             let err = (est - us as f32).abs() / us as f32;
-            // Mean error 6%; the smallest meshes sit furthest off (shadow
-            // +12%).
+            // Mean error 11%; small meshes drawn many times sit furthest
+            // off (their per-draw cost moves with code layout).
             assert!(
                 err < 0.15,
                 "{verts}v {tris_in}t: est {est} vs {us} ({err:.2})"

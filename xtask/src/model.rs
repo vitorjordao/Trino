@@ -8,8 +8,8 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use trino_asset_pipeline::{ModelOptions, bake_model, clip_names};
+use trino_core::Mesh;
 use trino_core::perf::FRAME_30FPS_US;
-use trino_core::{Caps, Mesh};
 
 pub fn run(root: &Path, args: &[&str]) -> ExitCode {
     let ["inspect", file, rest @ ..] = args else {
@@ -119,7 +119,7 @@ impl Report {
             .collect();
         let list = |v: &[String]| v.iter().map(|s| quote(s)).collect::<Vec<_>>().join(",");
         format!(
-            "{{\"ok\":{},\"file\":{},\"bytes\":{},\"vertices\":{},\"triangles\":{},\"joints\":{},\"blended_vertices\":{},\"clips\":[{}],\"size\":[{},{},{}],\"min\":[{},{},{}],\"radius\":{},\"n64_tri_budget\":{},\"n64_draw_us\":{},\"warnings\":[{}],\"errors\":[{}]}}",
+            "{{\"ok\":{},\"file\":{},\"bytes\":{},\"vertices\":{},\"triangles\":{},\"joints\":{},\"blended_vertices\":{},\"clips\":[{}],\"size\":[{},{},{}],\"min\":[{},{},{}],\"radius\":{},\"n64_draw_us\":{},\"n64_frame_percent\":{:.1},\"warnings\":[{}],\"errors\":[{}]}}",
             self.errors.is_empty(),
             quote(&self.file),
             self.bytes,
@@ -135,8 +135,8 @@ impl Report {
             self.min[1],
             self.min[2],
             self.radius,
-            Caps::N64.max_tris_per_frame,
             n64_draw_us(self.verts, self.tris),
+            n64_draw_us(self.verts, self.tris) as f32 / FRAME_30FPS_US as f32 * 100.0,
             list(&self.warnings),
             list(&self.errors),
         )
@@ -153,12 +153,6 @@ impl Report {
         s += &format!(
             "  size {:.3} × {:.3} × {:.3} m (min y {:.3}), bounding radius {:.3}\n",
             self.size[0], self.size[1], self.size[2], self.min[1], self.radius
-        );
-        let budget = Caps::N64.max_tris_per_frame as f32;
-        s += &format!(
-            "  N64 frame budget: {:.0}% of {} tris\n",
-            self.tris as f32 / budget * 100.0,
-            budget
         );
         let us = n64_draw_us(self.verts, self.tris);
         s += &format!(
@@ -220,14 +214,9 @@ pub fn inspect(path: &Path, opts: &ModelOptions) -> Result<Report, String> {
     let tris = mesh.index_count / 3;
     let mut warnings = Vec::new();
     let errors = Vec::new();
-    let budget = Caps::N64.max_tris_per_frame as usize;
-    if tris > budget / 2 {
-        warnings.push(format!(
-            "{tris} triangles is over half of the N64 per-frame budget ({budget}) — fine as a hero asset, too heavy to repeat"
-        ));
-    }
-    // The triangle cap above is an RDP-era number; what the CPU T&L
-    // really costs per draw comes from the calibrated model.
+    // The N64 budget is CPU time, not a triangle count: the calibrated
+    // cost model says what one draw costs (Caps::max_tris_per_frame is the
+    // rasterizer's cap, which the T&L never gets near).
     let us = n64_draw_us(mesh.vertex_count, tris);
     if us > FRAME_30FPS_US / 4 {
         warnings.push(format!(

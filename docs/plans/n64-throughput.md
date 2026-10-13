@@ -413,6 +413,9 @@ Edit this file as you go.
   - [x] 3c model-space light — kept: T&L −11…−14% in four scenes (throne −2.8%), frame
     −4…−7% (throne +1.1%, layout). Boxes take it under non-uniform scale too (all
     their normals lie on an axis). Every golden stayed byte-identical
-  - [ ] 3d Caps cost budget
+  - [x] 3d Caps cost budget — `Caps::max_3d_us_per_frame` (N64 50 ms): PC strict mode
+    panics above it on the `N64_COST` estimate. `model inspect`, the editor HUD and the
+    model inspector show time against a 30 fps frame, not a percentage of 4000
+    triangles. `N64_COST` refit after 3c: 7.1 / 17.3 / 184 / 25.5 / 37
 - [ ] Phase 4 spike result + ADR (or a written "not needed")
 - [ ] BACKLOG P0 #1 table, ADR 0006, AGENTS.md "Current state", README, `agents sync`

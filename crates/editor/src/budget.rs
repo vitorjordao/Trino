@@ -56,7 +56,9 @@ pub fn rows(stats: &FrameStats, caps: &Caps) -> Vec<Row> {
             limit: lim(caps.max_tris_per_frame),
             unit: "",
             level: level(stats.tris as u64, lim(caps.max_tris_per_frame)),
-            hint: "3D triangles after culling/clipping/subdivision (Caps::max_tris_per_frame)",
+            hint: "3D triangles after culling/clipping/subdivision, against the rasterizer's \
+                   cap (Caps::max_tris_per_frame). On the N64 the CPU time binds far earlier: \
+                   see N64 3D time",
         },
         Row {
             label: "Sprites",

@@ -1099,6 +1099,24 @@ impl PcRenderer {
                     self.profile, self.caps.max_tris_per_frame
                 );
             }
+            if self.caps.max_3d_us_per_frame != u32::MAX {
+                let us = trino_core::perf::N64_COST
+                    .estimate_us(&self.frame_stats.tnl, self.frame_stats.models);
+                if us > self.caps.max_3d_us_per_frame {
+                    panic!(
+                        "strict mode: this frame's 3D is ~{:.1} ms on the {:?} profile \
+                         (trino_core::perf::N64_COST, from {} draws, {} vertices, {} \
+                         triangles) — over its {:.0} ms ceiling. Fewer draws, fewer \
+                         visible triangles, or a `lod` level (n64-performance skill).",
+                        us as f32 / 1000.0,
+                        self.profile,
+                        self.frame_stats.models,
+                        self.frame_stats.tnl.verts,
+                        self.frame_stats.tnl.tris_in,
+                        self.caps.max_3d_us_per_frame as f32 / 1000.0
+                    );
+                }
+            }
         }
         let (instances, segments) = build_segments(&self.commands);
         self.commands.clear();

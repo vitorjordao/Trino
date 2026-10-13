@@ -446,9 +446,7 @@ cargo test --workspace
   colors baked much darker.
 - **Hidden faces still cost N64 CPU.** A face buried inside another part, or a back
   face, pays its transform. Build models from visible faces only (`blender-asset`).
-  Don't union parts with a boolean: it cuts holes and adds triangles. Blender's
-  flat-shaded export uses 3 vertices per triangle, so mark faces smooth when each
-  polygon owns its vertices.
+  Don't union parts with a boolean: it cuts holes and adds triangles.
 - **Template manifests are `Cargo.toml.tmpl`.** A placeholder `Cargo.toml` anywhere in
   the repo breaks every git-dependency user, because cargo scans the whole repository.
 

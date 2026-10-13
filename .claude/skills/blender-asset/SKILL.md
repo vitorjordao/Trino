@@ -140,10 +140,11 @@ Traps, measured:
 - **Blender's n-gon fill can mangle a concave outline.** A wall face with an arch
   notch came out with back-facing triangles across the opening. Build concave faces
   from convex pieces (fans from a corner), and check `orient_mode` from the front.
-- **Flat-shaded faces export 3 vertices per triangle**: the glTF exporter shares no
-  vertex even inside a quad (boar: 70 triangles → 210 vertices). Give every polygon
-  its own vertices and mark the faces **smooth**. The normals are then exactly the
-  face normal, and a quad exports 4 vertices.
+- **Count vertices in the GLB (`model inspect`), not the transforms.** The glTF exporter
+  shares a flat quad's 4 vertices fine (boar: 140 vertices for 70 triangles).
+  `perf_budget`'s `verts` counts vertex-cache misses. Those were 210 (3 per triangle)
+  until the bake started reordering for the cache, and the same file then dropped
+  to 140.
 
 ## Stage 2 — Color
 

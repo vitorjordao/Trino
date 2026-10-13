@@ -135,12 +135,8 @@ class Model:
                 loop[col] = lin
             kept += 1
         bmesh.ops.triangulate(bm, faces=bm.faces[:], quad_method="BEAUTY", ngon_method="BEAUTY")
-        # Every polygon owns its vertices, so "smooth" normals ARE the face
-        # normal — and the exporter then shares a polygon's vertices between
-        # its triangles. Flat-shaded faces export 3 vertices per triangle
-        # (measured: boar 70 tris -> 210 verts), at ~17 us each on the N64.
         for f in bm.faces:
-            f.smooth = True
+            f.smooth = False
         bm.to_mesh(me)
         bm.free()
         me.color_attributes.active_color = me.color_attributes["Col"]

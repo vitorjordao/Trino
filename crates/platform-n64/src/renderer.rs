@@ -6,7 +6,10 @@ use alloc::rc::Rc;
 use alloc::vec::Vec;
 use core::ffi::c_void;
 
-use trino_core::render3d::{Camera3, DEFAULT_LIGHT, Light, Mesh, ScreenTri};
+use trino_core::perf::RenderProfile;
+use trino_core::render3d::{
+    Camera3, DEFAULT_LIGHT, Light, Mesh, ScreenTri, painter_index, painter_key,
+};
 use trino_core::text::BitmapFont;
 use trino_core::{
     BillboardParams, Caps, Color, FontId, FrameStats, Mat34, Material, ModelId, ModelParams,
@@ -14,6 +17,7 @@ use trino_core::{
 };
 
 use crate::ffi;
+use crate::runtime::now_us;
 
 /// Internal resolution the T&L projects to.
 const SCREEN: Vec2 = Vec2::new(320.0, 240.0);
@@ -36,12 +40,38 @@ pub struct N64Renderer {
     /// joins the batch).
     /// (sprite handle, clamp) — clamp = billboard addressing.
     pending_tex: Vec<Option<(u32, bool)>>,
+    /// Draw order of the pending batch: (texture group, painter key).
+    order: Vec<(u64, u64)>,
     camera: Camera3,
     light: Light,
     caps: Caps,
+    /// Stage/model timing on the console clock while profiling is on.
+    profile: Option<RenderProfile>,
 }
 
 impl N64Renderer {
+    /// Start timing every stage and model (see `trino_core::perf`).
+    pub fn start_profile(&mut self) {
+        self.profile = Some(RenderProfile::default());
+    }
+
+    /// Stop profiling and hand back what was measured.
+    pub fn take_profile(&mut self) -> Option<RenderProfile> {
+        self.profile.take()
+    }
+
+    /// Timestamp when profiling (no timer reads otherwise).
+    fn tick(&self) -> u32 {
+        if self.profile.is_some() { now_us() } else { 0 }
+    }
+
+    /// Add the microseconds since `t0` to one stage.
+    fn charge(&mut self, t0: u32, stage: impl Fn(&mut trino_core::perf::StageTimes) -> &mut u32) {
+        if let Some(p) = &mut self.profile {
+            *stage(&mut p.stages) += now_us().wrapping_sub(t0);
+        }
+    }
+
     /// Test hook: print the last presented framebuffer over ISViewer as
     /// `TRINO_FBR:` hex rows — `cargo xtask test n64` turns them into the
     /// emulator golden image (`tests/golden/n64/`).
@@ -58,9 +88,11 @@ impl N64Renderer {
             last_stats: FrameStats::default(),
             pending_tris: Vec::new(),
             pending_tex: Vec::new(),
+            order: Vec::new(),
             camera: Camera3::default(),
             light: DEFAULT_LIGHT,
             caps: Caps::N64,
+            profile: None,
         }
     }
 
@@ -74,51 +106,81 @@ impl N64Renderer {
         }
         self.frame_stats.tris += self.pending_tris.len() as u32;
         let textured = self.pending_tex.iter().any(Option::is_some);
+        let t0 = self.tick();
+        // Painter order as 8-byte keys (texture group, depth, submission
+        // index) — never move the 88-byte triangles themselves.
+        self.order.clear();
+        for (i, tri) in self.pending_tris.iter().enumerate() {
+            let group = match self.pending_tex.get(i).copied().flatten() {
+                Some((id, clamp)) => (((id as u64) << 1) | clamp as u64) + 1,
+                None => 0,
+            };
+            self.order.push((group, painter_key(tri.depth, i)));
+        }
+        self.order.sort_unstable();
+        self.charge(t0, |s| &mut s.sort);
+        let t1 = self.tick();
         if !textured {
-            self.pending_tris.sort_unstable_by(|a, b| {
-                b.depth
-                    .partial_cmp(&a.depth)
-                    .unwrap_or(core::cmp::Ordering::Equal)
-            });
             unsafe { ffi::trino_3d_begin() }
-            for tri in &self.pending_tris {
-                emit_tri(tri);
+            for &(_, key) in &self.order {
+                emit_tri(&self.pending_tris[painter_index(key)]);
             }
         } else {
-            let mut order: Vec<(Option<(u32, bool)>, ScreenTri)> = self
-                .pending_tex
-                .iter()
-                .copied()
-                .zip(self.pending_tris.iter().copied())
-                .collect();
-            order.sort_by(|a, b| {
-                b.1.depth
-                    .partial_cmp(&a.1.depth)
-                    .unwrap_or(core::cmp::Ordering::Equal)
-            });
-            order.sort_by_key(|(t, _)| {
-                t.map_or(0u64, |(id, clamp)| ((id as u64) << 1 | clamp as u64) + 1)
-            });
             let mut bound: Option<Option<(u32, bool)>> = None;
-            for (tex, tri) in &order {
-                if bound != Some(*tex) {
+            for &(_, key) in &self.order {
+                let i = painter_index(key);
+                let tex = self.pending_tex.get(i).copied().flatten();
+                if bound != Some(tex) {
                     match tex.and_then(|(t, clamp)| self.sprites.get(&t).map(|e| (e, clamp))) {
                         Some((entry, clamp)) => unsafe {
                             ffi::trino_3d_texture(entry.ptr, clamp as u32)
                         },
                         None => unsafe { ffi::trino_3d_begin() },
                     }
-                    bound = Some(*tex);
+                    bound = Some(tex);
                 }
                 if tex.is_some_and(|(t, _)| self.sprites.contains_key(&t)) {
-                    emit_tri_tex(tri);
+                    emit_tri_tex(&self.pending_tris[i]);
                 } else {
-                    emit_tri(tri);
+                    emit_tri(&self.pending_tris[i]);
                 }
             }
         }
+        self.charge(t1, |s| &mut s.submit);
         self.pending_tris.clear();
         self.pending_tex.clear();
+    }
+
+    /// One RDP sprite blit (no batch flush).
+    fn blit(&mut self, sprite: SpriteId, pos: Vec2, params: &SpriteParams) {
+        let Some(entry) = self.sprites.get(&sprite.0) else {
+            return;
+        };
+        self.frame_stats.sprites += 1;
+        let (src_x, src_y, src_w, src_h) = match params.region {
+            Some(r) => (
+                r.pos.x as i32,
+                r.pos.y as i32,
+                (r.size.x as i32).max(1),
+                (r.size.y as i32).max(1),
+            ),
+            None => (0, 0, 0, 0),
+        };
+        let blit = ffi::TrinoBlit {
+            x: pos.x,
+            y: pos.y,
+            scale_x: params.scale.x,
+            scale_y: params.scale.y,
+            theta: params.rotation,
+            flip_x: params.flip_x as u32,
+            flip_y: params.flip_y as u32,
+            tint: pack_color(params.tint),
+            src_x,
+            src_y,
+            src_w,
+            src_h,
+        };
+        unsafe { ffi::trino_sprite_blit(entry.ptr, &blit) }
     }
 
     /// Register a `sprite_t` loaded from the DFS under a stable handle.
@@ -205,39 +267,19 @@ impl Renderer for N64Renderer {
 
     fn begin_frame(&mut self, clear: Color) {
         self.frame_stats = FrameStats::default();
+        let t0 = self.tick();
         unsafe { ffi::trino_frame_begin(pack_color(clear)) }
+        self.charge(t0, |s| &mut s.begin);
+        if let Some(p) = &mut self.profile {
+            p.frames += 1;
+        }
     }
 
     fn draw_sprite(&mut self, sprite: SpriteId, pos: Vec2, params: &SpriteParams) {
         self.flush_model_batch();
-        let Some(entry) = self.sprites.get(&sprite.0) else {
-            return;
-        };
-        self.frame_stats.sprites += 1;
-        let (src_x, src_y, src_w, src_h) = match params.region {
-            Some(r) => (
-                r.pos.x as i32,
-                r.pos.y as i32,
-                (r.size.x as i32).max(1),
-                (r.size.y as i32).max(1),
-            ),
-            None => (0, 0, 0, 0),
-        };
-        let blit = ffi::TrinoBlit {
-            x: pos.x,
-            y: pos.y,
-            scale_x: params.scale.x,
-            scale_y: params.scale.y,
-            theta: params.rotation,
-            flip_x: params.flip_x as u32,
-            flip_y: params.flip_y as u32,
-            tint: pack_color(params.tint),
-            src_x,
-            src_y,
-            src_w,
-            src_h,
-        };
-        unsafe { ffi::trino_sprite_blit(entry.ptr, &blit) }
+        let t0 = self.tick();
+        self.blit(sprite, pos, params);
+        self.charge(t0, |s| &mut s.sprites);
     }
 
     fn set_camera(&mut self, camera: &Camera3) {
@@ -277,8 +319,9 @@ impl Renderer for N64Renderer {
             .texture_for(params)
             .filter(|t| self.sprites.contains_key(&t.0));
         let before = self.pending_tris.len();
+        let t0 = self.tick();
         let pending = &mut self.pending_tris;
-        trino_core::render3d::tessellate(
+        let tnl = trino_core::render3d::tessellate(
             &mesh,
             matrix,
             &self.camera,
@@ -287,6 +330,10 @@ impl Renderer for N64Renderer {
             SCREEN,
             &mut |tri| pending.push(tri),
         );
+        self.frame_stats.tnl.add(&tnl);
+        if let Some(p) = &mut self.profile {
+            p.record_model(model, now_us().wrapping_sub(t0), &tnl);
+        }
         let added = self.pending_tris.len() - before;
         self.tag_pending(before, added, texture.map(|t| (t.0, false)));
     }
@@ -312,7 +359,9 @@ impl Renderer for N64Renderer {
     fn end_frame(&mut self) {
         self.flush_model_batch();
         self.last_stats = self.frame_stats;
+        let t0 = self.tick();
         unsafe { ffi::trino_frame_end() }
+        self.charge(t0, |s| &mut s.end);
     }
 
     fn draw_text(&mut self, font: FontId, pos: Vec2, text: &str, params: &TextParams) {

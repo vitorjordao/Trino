@@ -13,6 +13,7 @@ mod font_assets;
 mod model;
 mod n3ds;
 mod n64;
+mod perf;
 mod scene;
 mod showcase_assets;
 mod standalone;
@@ -148,7 +149,7 @@ fn main() -> ExitCode {
 
         (Some("build"), Some("3ds")) => n3ds::build(selftest),
         (Some("run"), Some("3ds")) => n3ds::run(),
-        (Some("test"), Some("3ds")) => n3ds::test(!no_build),
+        (Some("test"), Some("3ds")) => n3ds::test(!no_build, bless),
         (Some("watch"), Some("3ds")) => n3ds::watch(),
         (Some("new"), Some(name)) => {
             let rest: Vec<&str> = args.iter().skip(2).map(String::as_str).collect();

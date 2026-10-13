@@ -28,6 +28,12 @@ pub fn now_us() -> u32 {
     unsafe { ffi::trino_ticks_us() }
 }
 
+/// Vertical blanks since boot (60 Hz NTSC): an independent clock for
+/// perf reports.
+pub fn vblanks() -> u32 {
+    unsafe { ffi::trino_vblank_count() }
+}
+
 struct LibdragonAlloc;
 
 unsafe impl GlobalAlloc for LibdragonAlloc {

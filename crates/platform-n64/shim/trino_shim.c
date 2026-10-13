@@ -25,6 +25,11 @@
 
 static void trino_check_trifmt(void);
 
+// VI interrupt counter: an independent clock for perf reports (60 per
+// emulated second on NTSC), to cross-check the count-register timings.
+static volatile uint32_t trino_vblanks = 0;
+static void trino_on_vi(void) { trino_vblanks++; }
+
 // Standard render mode + magic-square RGB dither into the 16-bit
 // framebuffer (libdragon's standard mode disables dithering).
 static void trino_mode_standard(void)
@@ -51,6 +56,7 @@ void trino_init(void)
     audio_init(44100, 4);
     mixer_init(16);
     trino_check_trifmt();
+    register_VI_handler(trino_on_vi);
 }
 
 void trino_log(const char* msg)
@@ -71,7 +77,14 @@ void trino_panic(const char* msg)
 
 uint32_t trino_ticks_us(void)
 {
-    return (uint32_t)(timer_ticks() / (TICKS_PER_SECOND / 1000000));
+    // Exact conversion: TICKS_PER_SECOND / 1000000 is 46.875, and the
+    // integer quotient (46) made every timing read 1.9% high.
+    return (uint32_t)TIMER_MICROS_LL(timer_ticks());
+}
+
+uint32_t trino_vblank_count(void)
+{
+    return trino_vblanks;
 }
 
 // ---------------------------------------------------------------------------

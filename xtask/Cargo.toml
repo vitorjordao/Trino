@@ -17,6 +17,8 @@ png = { workspace = true }
 hound = { workspace = true }
 # `blender smoke` parses the toolkit's JSON report.
 serde_json = { workspace = true }
+# perf baselines (tests/perf/*.toml).
+toml = { workspace = true }
 
 [dev-dependencies]
 libloading = { workspace = true }

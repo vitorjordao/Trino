@@ -27,6 +27,8 @@ unsafe extern "C" {
     pub fn trino_log(msg: *const c_char);
     pub fn trino_panic(msg: *const c_char) -> !;
     pub fn trino_ticks_us() -> u32;
+    /// Vertical blanks since boot (VI interrupt counter; clock cross-check).
+    pub fn trino_vblank_count() -> u32;
 
     pub fn trino_frame_begin(rgba8888: u32);
     pub fn trino_frame_end();

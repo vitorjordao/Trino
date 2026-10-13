@@ -324,12 +324,22 @@ fn cargo_build(root: &Path) -> Result<(), String> {
 /// --no-warn-mismatch for the o32 staticlib + o64 libdragon mix), then
 /// n64sym + strip + n64elfcompress + mkdfs + n64tool, mirroring the %.z64
 /// recipe.
+///
+/// `-u mem* -Wl,-lc` ahead of the staticlib (`-Wl,`: the gcc driver drops
+/// a repeated plain `-lc`): Rust's `compiler_builtins` defines
+/// `memcpy`/`memset`/`memmove`/`memcmp` as *weak* generic loops, and once
+/// its object is linked the linker never pulls newlib's strong, hand-tuned
+/// MIPS versions — every struct copy in the ROM (libdragon's included) then
+/// ran ~5x slower. Undefining them first makes the first `-lc` scan supply
+/// newlib's; [`check_mem_symbols`] fails the build if the map says
+/// otherwise.
 fn pack_rom(root: &Path) -> Result<(), String> {
     println!("[n64] linking + packing ROM...");
     let script = format!(
         "set -e\n\
-         mips64-elf-g++ -o target/n64/trino.elf target/n64/shim.o {STATICLIB} \
-         -lc -mabi=o64 -Wl,-g -Wl,-L$N64_INST/mips64-elf/lib \
+         mips64-elf-g++ -o target/n64/trino.elf target/n64/shim.o \
+         -Wl,-u,memcpy -Wl,-u,memset -Wl,-u,memmove -Wl,-u,memcmp -Wl,-lc \
+         {STATICLIB} -lc -mabi=o64 -Wl,-g -Wl,-L$N64_INST/mips64-elf/lib \
          -Wl,-ldragon -Wl,-lm -Wl,-ldragonsys -Wl,-Tn64.ld \
          -Wl,--gc-sections -Wl,--no-warn-mismatch \
          -Wl,--wrap -Wl,__do_global_ctors \
@@ -349,7 +359,44 @@ fn pack_rom(root: &Path) -> Result<(), String> {
     if !status.success() {
         return Err("ROM packing failed".into());
     }
+    let map = std::fs::read_to_string(root.join("target/n64/trino.map"))
+        .map_err(|e| format!("trino.map: {e}"))?;
+    check_mem_symbols(&map)?;
     println!("[n64] ROM: target/n64/trino.z64");
+    Ok(())
+}
+
+/// The linker map must place `memcpy`/`memset`/`memmove`/`memcmp` from
+/// newlib (`libc.a`), never from Rust's `compiler_builtins` (see
+/// [`pack_rom`]).
+fn check_mem_symbols(map: &str) -> Result<(), String> {
+    // Only the memory map counts ("Discarded input sections" lists the
+    // losing weak copies too).
+    let map = map
+        .split_once("Linker script and memory map")
+        .map_or(map, |(_, m)| m);
+    for sym in ["memcpy", "memset", "memmove", "memcmp"] {
+        let section = format!(".text.{sym}");
+        let mut lines = map.lines();
+        while let Some(line) = lines.next() {
+            let t = line.trim_start();
+            if !(t == section || t.starts_with(&format!("{section} "))) {
+                continue;
+            }
+            // The input file is on this line or wraps to the next one.
+            let file = if t.contains("0x") {
+                line.to_string()
+            } else {
+                lines.next().unwrap_or_default().to_string()
+            };
+            if file.contains("compiler_builtins") {
+                return Err(format!(
+                    "{sym} links from Rust's compiler_builtins (slow generic loop), \
+                     not newlib — keep `-u {sym} -Wl,-lc` ahead of the staticlib"
+                ));
+            }
+        }
+    }
     Ok(())
 }
 
@@ -571,6 +618,7 @@ pub fn test(bless: bool) -> ExitCode {
 
     let deadline = Instant::now() + Duration::from_secs(timeout);
     let mut fb = crate::fbgolden::FbCapture::default();
+    let mut perf_scenes = Vec::new();
     let verdict = loop {
         let left = deadline.saturating_duration_since(Instant::now());
         if left.is_zero() {
@@ -583,6 +631,9 @@ pub fn test(bless: bool) -> ExitCode {
                     continue;
                 }
                 println!("[ares] {line}");
+                if let Some(scene) = crate::perf::SceneLine::parse(&line) {
+                    perf_scenes.push(scene);
+                }
                 if line.contains("TRINO_TEST_PASS") {
                     break Ok(());
                 }
@@ -612,6 +663,14 @@ pub fn test(bless: bool) -> ExitCode {
         println!("[n64] golden frame: {msg}");
         Ok(())
     });
+    // Performance gates: same T&L work as the PC baseline, frame costs
+    // under the committed ceilings.
+    let verdict = verdict.and_then(|()| {
+        let table = crate::perf::gate(&root, &perf_scenes, bless)
+            .map_err(|e| format!("perf gate:\n{e}"))?;
+        println!("[n64] perf (emulated us per frame):\n{table}");
+        Ok(())
+    });
 
     match verdict {
         Ok(()) => {
@@ -622,5 +681,26 @@ pub fn test(bless: bool) -> ExitCode {
             eprintln!("[n64] TEST FAIL: {e}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mem_symbols_must_come_from_newlib() {
+        let good = "Discarded input sections\n \
+                    .text.memcpy   0x00000000       0x1c libtrino.a(compiler_builtins-x.o)\n\
+                    Linker script and memory map\n \
+                    .text          0x800014a0       0x60 libc.a(libc_a-memcpy.o)\n";
+        assert!(check_mem_symbols(good).is_ok());
+        let bad = "Linker script and memory map\n \
+                   .text.memcpy   0x800230b8       0x1c libtrino.a(compiler_builtins-4d4.o)\n";
+        assert!(check_mem_symbols(bad).unwrap_err().contains("memcpy"));
+        // Long section names wrap the input file to the next line.
+        let wrapped = "Linker script and memory map\n .text.memmove\n                \
+                       0x80023000       0x40 libtrino.a(compiler_builtins-9.o)\n";
+        assert!(check_mem_symbols(wrapped).unwrap_err().contains("memmove"));
     }
 }

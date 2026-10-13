@@ -116,6 +116,70 @@ fn read_png(path: &Path) -> Result<(u32, u32, Vec<u8>), String> {
     Ok((info.width, info.height, buf))
 }
 
+/// How far two frames are apart: mean of the per-pixel largest channel
+/// difference, and the fraction of pixels differing by more than
+/// [`FAR`] (a different color, not a rounding or edge-coverage step).
+pub fn distance(a: &[u8], b: &[u8]) -> (f32, f32) {
+    let diffs: Vec<u8> = a
+        .chunks(4)
+        .zip(b.chunks(4))
+        .map(|(a, b)| (0..3).map(|i| a[i].abs_diff(b[i])).max().unwrap())
+        .collect();
+    let n = diffs.len().max(1) as f32;
+    let mean = diffs.iter().map(|&d| d as f32).sum::<f32>() / n;
+    let far = diffs.iter().filter(|&&d| d > FAR).count() as f32 / n;
+    (mean, far)
+}
+
+/// A channel difference above this is a different color.
+pub const FAR: u8 = 32;
+
+/// Like [`check`], within a tolerance: for emulators whose GPU output
+/// depends on the host renderer (Azahar's OpenGL backend differs between a
+/// desktop GPU and CI's software rasterizer at triangle edges). Fails above
+/// `max_mean` mean difference or `max_far` fraction of far pixels.
+pub fn check_close(
+    root: &Path,
+    target: &str,
+    name: &str,
+    img: (u32, u32, Vec<u8>),
+    bless: bool,
+    max_mean: f32,
+    max_far: f32,
+) -> Result<String, String> {
+    let dir = root.join("tests/golden").join(target);
+    let path = dir.join(format!("{name}.png"));
+    let (w, h, rgba) = img;
+    if bless {
+        write_png(&path, w, h, &rgba)?;
+        return Ok(format!("blessed {}", path.display()));
+    }
+    if !path.exists() {
+        return Err(format!(
+            "{} missing — run with --bless once and commit it",
+            path.display()
+        ));
+    }
+    let (gw, gh, golden) = read_png(&path)?;
+    let actual = dir.join("actual").join(format!("{name}.png"));
+    if (gw, gh) != (w, h) {
+        write_png(&actual, w, h, &rgba)?;
+        return Err(format!("{} differs in size", path.display()));
+    }
+    let (mean, far) = distance(&rgba, &golden);
+    let msg = format!(
+        "{}: mean diff {mean:.2}, {:.2}% far pixels (limits {max_mean}, {:.1}%)",
+        path.display(),
+        far * 100.0,
+        max_far * 100.0
+    );
+    if mean <= max_mean && far <= max_far {
+        return Ok(msg);
+    }
+    write_png(&actual, w, h, &rgba)?;
+    Err(format!("{msg}; actual written to {}", actual.display()))
+}
+
 /// Compare (or with `bless`, write) `tests/golden/<target>/<name>.png`.
 /// On mismatch the actual image goes to `.../actual/<name>.png`.
 pub fn check(

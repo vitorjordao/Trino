@@ -15,6 +15,7 @@
 
 pub mod bot;
 mod levels;
+pub mod perf;
 pub mod selftest;
 
 use core::fmt::Write as _;
@@ -22,9 +23,9 @@ use levels::{BlockKind, DoorColor, LEVELS, Level, TOTAL_STARS};
 use trino_core::math3d::{atan2, cos, sin};
 use trino_core::physics::{self, Aabb, move_aabb};
 use trino_core::{
-    Audio, Button, Camera3, Color, FontId, Game, InputState, Material, ModelId, ModelParams,
-    MusicId, Renderer, SoundId, SpriteId, SpriteParams, TextAlign, TextBuf, TextParams, Transform3,
-    Vec2, Vec3,
+    Audio, Button, Camera3, Color, DEFAULT_LIGHT, FontId, Game, InputState, Material, ModelId,
+    ModelParams, MusicId, Renderer, SoundId, SpriteId, SpriteParams, TextAlign, TextBuf,
+    TextParams, Transform3, Vec2, Vec3,
 };
 
 // ------------------------------------------------------------ handles ----
@@ -532,6 +533,10 @@ impl Game for Castle64Game {
             ..Camera3::default()
         };
         renderer.set_camera(&camera);
+        // Light is renderer state and outlives a frame: declare it every
+        // frame, or the game inherits whatever drew before (on consoles the
+        // self-test's showcase leaves its colored, fogged light behind).
+        renderer.set_light(&DEFAULT_LIGHT);
         let eye = camera.eye;
         // A engine ordena os triângulos do batch entre meshes; aqui só
         // cortamos o que está longe demais.

@@ -1,0 +1,51 @@
+# castle64 T&L work per frame (castle64::perf::SCENES) — deterministic,
+# identical on every target. Checked for equality by
+# xtask/tests/perf_budget.rs (PC) and by `cargo xtask test n64` (the
+# ROM's TRINO_PERF_SCENE counters). Generated: rewrite with
+# `TRINO_BLESS=1 cargo test -p xtask --test perf_budget` and review —
+# a number going up is a cost the N64 pays.
+
+[hub]
+verts = 3260
+tris_in = 1770
+clipped = 40
+splits = 504
+backfaced = 1204
+emitted = 1074
+culled = 1
+
+[green-hills]
+verts = 888
+tris_in = 420
+clipped = 19
+splits = 118
+backfaced = 328
+emitted = 212
+culled = 3
+
+[lava-land]
+verts = 942
+tris_in = 442
+clipped = 10
+splits = 515
+backfaced = 551
+emitted = 414
+culled = 0
+
+[sky-tower]
+verts = 768
+tris_in = 372
+clipped = 11
+splits = 20
+backfaced = 218
+emitted = 173
+culled = 11
+
+[throne]
+verts = 654
+tris_in = 294
+clipped = 40
+splits = 688
+backfaced = 602
+emitted = 377
+culled = 0

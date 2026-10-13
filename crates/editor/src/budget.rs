@@ -2,6 +2,7 @@
 //! the selected profile's `Caps` (N64 / 3DS / PC). Pure data here; the
 //! viewport draws it as an overlay (green < 75%, amber < 100%, red over).
 
+use trino_core::perf::{FRAME_30FPS_US, N64_COST};
 use trino_core::{Caps, FrameStats};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -86,6 +87,22 @@ pub fn rows(stats: &FrameStats, caps: &Caps) -> Vec<Row> {
         level: Level::Ok,
         hint: "draw_model calls that reached the T&L (each costs CPU on consoles)",
     });
+    if *caps == Caps::N64 {
+        // The triangle cap says little about the N64's CPU T&L; the
+        // calibrated cost model turns this frame's deterministic T&L work
+        // into emulated N64 time (3D only: T&L + sort + submit).
+        let us = N64_COST.estimate_us(&stats.tnl, stats.models) as u64;
+        let limit = FRAME_30FPS_US as u64;
+        out.push(Row {
+            label: "N64 3D time",
+            used: us,
+            limit,
+            unit: "us",
+            level: level(us, limit),
+            hint: "estimated N64 time of this frame's 3D (T&L + sort + submit) vs one \
+                   30 fps frame — trino_core::perf::N64_COST, calibrated on ares",
+        });
+    }
     out
 }
 
@@ -94,12 +111,37 @@ mod tests {
     use super::*;
 
     #[test]
+    fn n64_profile_estimates_3d_time() {
+        let stats = FrameStats {
+            models: 1,
+            tnl: trino_core::TnlStats {
+                verts: 1790,
+                tris_in: 1068,
+                emitted: 552,
+                ..Default::default()
+            },
+            ..FrameStats::default()
+        };
+        let r = rows(&stats, &Caps::N64);
+        let time = r.iter().find(|r| r.label == "N64 3D time").unwrap();
+        // The KayKit door alone: far over a 30 fps frame.
+        assert_eq!(time.level, Level::Over);
+        assert!(time.used > 70_000, "{}", time.used);
+        assert!(
+            rows(&stats, &Caps::PC)
+                .iter()
+                .all(|r| r.label != "N64 3D time")
+        );
+    }
+
+    #[test]
     fn levels_follow_the_n64_caps() {
         let stats = FrameStats {
             tris: 3500,
             sprites: 10,
             models: 40,
             max_texture_bytes: 8192,
+            ..FrameStats::default()
         };
         let r = rows(&stats, &Caps::N64);
         assert_eq!(r[0].level, Level::Near, "3500 / 4000 tris");
@@ -115,6 +157,7 @@ mod tests {
             sprites: 100_000,
             models: 1,
             max_texture_bytes: 1 << 30,
+            ..FrameStats::default()
         };
         assert!(rows(&stats, &Caps::PC).iter().all(|r| r.level == Level::Ok));
     }

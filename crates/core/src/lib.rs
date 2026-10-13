@@ -28,6 +28,7 @@ pub mod input;
 pub mod math;
 pub mod math3d;
 pub mod particles;
+pub mod perf;
 pub mod physics;
 pub mod platform;
 pub mod render;
@@ -58,7 +59,7 @@ pub use render::{
     ModelParams, Renderer, Shading, SpriteId, SpriteParams, TextAlign, TextParams, Transform3,
 };
 pub use render3d::{
-    Camera3, ClipInfo, DEFAULT_LIGHT, Fog, Light, MAX_JOINTS, Mesh, MeshError, ScreenTri,
+    Camera3, ClipInfo, DEFAULT_LIGHT, Fog, Light, MAX_JOINTS, Mesh, MeshError, ScreenTri, TnlStats,
     tessellate,
 };
 pub use scene::{BakedScene, LodLevel, Lods, SceneNode, Tags};

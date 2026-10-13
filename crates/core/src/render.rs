@@ -189,6 +189,9 @@ pub struct FrameStats {
     /// Largest single texture (bytes, at the target's texel size) bound
     /// this frame — the TMEM pressure on N64.
     pub max_texture_bytes: u32,
+    /// Software T&L work behind `tris` (vertex transforms, clipping,
+    /// depth splits, culls) — deterministic, so tests pin it per scene.
+    pub tnl: crate::render3d::TnlStats,
 }
 
 /// How a 3D surface reacts to light. Evaluated per vertex by the engine's

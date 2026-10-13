@@ -978,30 +978,31 @@ impl PcRenderer {
         if self.pending_tris.is_empty() {
             return;
         }
-        let textured = self.pending_tex.iter().any(Option::is_some);
-        let order: Vec<(Option<TexKey>, ScreenTri)> = if !textured {
-            // Untextured fast path: exactly the historical sort (goldens).
-            self.pending_tris.sort_unstable_by(|a, b| {
-                b.depth
-                    .partial_cmp(&a.depth)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-            self.pending_tris.iter().map(|t| (None, *t)).collect()
-        } else {
-            let mut v: Vec<(Option<TexKey>, ScreenTri)> = self
-                .pending_tex
-                .iter()
-                .copied()
-                .zip(self.pending_tris.iter().copied())
-                .collect();
-            v.sort_by(|a, b| {
-                b.1.depth
-                    .partial_cmp(&a.1.depth)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-            v.sort_by_key(|(t, _)| t.map_or(0u64, |t| ((t.id as u64) << 1 | t.clamp as u64) + 1));
-            v
-        };
+        // Painter order as keys (texture group, depth, submission index) —
+        // the same order the console backends draw in.
+        let mut keys: Vec<(u64, u64)> = self
+            .pending_tris
+            .iter()
+            .enumerate()
+            .map(|(i, tri)| {
+                let group = match self.pending_tex.get(i).copied().flatten() {
+                    Some(t) => (((t.id as u64) << 1) | t.clamp as u64) + 1,
+                    None => 0,
+                };
+                (group, trino_core::render3d::painter_key(tri.depth, i))
+            })
+            .collect();
+        keys.sort_unstable();
+        let order: Vec<(Option<TexKey>, ScreenTri)> = keys
+            .iter()
+            .map(|&(_, key)| {
+                let i = trino_core::render3d::painter_index(key);
+                (
+                    self.pending_tex.get(i).copied().flatten(),
+                    self.pending_tris[i],
+                )
+            })
+            .collect();
         let mut run_start = self.tri_verts.len() as u32;
         let mut run_tex = order.first().and_then(|(t, _)| *t);
         for (tex, tri) in &order {
@@ -1459,7 +1460,7 @@ impl Renderer for PcRenderer {
         let screen = Vec2::new(self.internal_size.0 as f32, self.internal_size.1 as f32);
         let before = self.pending_tris.len();
         let pending = &mut self.pending_tris;
-        trino_core::render3d::tessellate(
+        let tnl = trino_core::render3d::tessellate(
             &mesh,
             matrix,
             &self.camera,
@@ -1468,6 +1469,7 @@ impl Renderer for PcRenderer {
             screen,
             &mut |tri| pending.push(tri),
         );
+        self.frame_stats.tnl.add(&tnl);
         let added = self.pending_tris.len() - before;
         self.tag_pending(
             before,

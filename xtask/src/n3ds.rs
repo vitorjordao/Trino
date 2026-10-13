@@ -587,7 +587,7 @@ pub fn run() -> ExitCode {
 /// `build`: false boots an existing self-test app (`cargo xtask build 3ds
 /// --selftest`, e.g. a CI artifact) — Azahar's AppImage needs a newer glibc
 /// than the devkitARM image has, so CI builds and boots in separate jobs.
-pub fn test(build_first: bool) -> ExitCode {
+pub fn test(build_first: bool, bless: bool) -> ExitCode {
     if build_first {
         let code = build(true);
         if code != ExitCode::SUCCESS {
@@ -630,6 +630,7 @@ pub fn test(build_first: bool) -> ExitCode {
 
     let deadline = Instant::now() + Duration::from_secs(timeout);
     let mut seen = 0usize;
+    let mut fb = crate::fbgolden::FbCapture::default();
     let verdict = loop {
         if Instant::now() >= deadline {
             break Err(format!("timeout: no TRINO_TEST_* output within {timeout}s"));
@@ -643,8 +644,14 @@ pub fn test(build_first: bool) -> ExitCode {
         let Ok(content) = std::fs::read_to_string(&log) else {
             continue;
         };
-        let fresh = &content[seen.min(content.len())..];
+        // Only whole lines: the emulator may be mid-write.
+        let end = content.rfind('\n').map_or(0, |i| i + 1);
+        let fresh = &content[seen.min(end)..end];
         for line in fresh.lines() {
+            // Framebuffer dump rows are collected, not echoed.
+            if fb.feed(line) {
+                continue;
+            }
             if line.contains("TRINO_") {
                 println!("[azahar] {line}");
             }
@@ -656,9 +663,19 @@ pub fn test(build_first: bool) -> ExitCode {
             let tail: String = fresh[idx..].lines().next().unwrap_or("").to_string();
             break Err(tail);
         }
-        seen = content.len();
+        seen = end;
     };
     let _ = child.kill();
+
+    // Emulator frame of the castle64 hub, within a tolerance: Azahar's GPU
+    // output depends on the host's OpenGL (desktop GPU vs CI's llvmpipe).
+    let verdict = verdict.and_then(|()| {
+        let img = fb.image().map_err(|e| format!("golden frame: {e}"))?;
+        let msg =
+            crate::fbgolden::check_close(&root, "3ds", "castle64_hub", img, bless, 3.0, 0.02)?;
+        println!("[3ds] golden frame: {msg}");
+        Ok(())
+    });
 
     match verdict {
         Ok(()) => {

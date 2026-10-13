@@ -8,6 +8,7 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use trino_asset_pipeline::{ModelOptions, bake_model, clip_names};
+use trino_core::perf::FRAME_30FPS_US;
 use trino_core::{Caps, Mesh};
 
 pub fn run(root: &Path, args: &[&str]) -> ExitCode {
@@ -99,6 +100,11 @@ fn quote(s: &str) -> String {
     )
 }
 
+/// Estimated emulated-N64 microseconds of one draw (T&L + sort + submit).
+fn n64_draw_us(vertices: usize, triangles: usize) -> u32 {
+    trino_core::perf::N64_COST.mesh_draw_us(vertices as u32, triangles as u32)
+}
+
 impl Report {
     pub fn json(&self) -> String {
         let clips: Vec<String> = self
@@ -113,7 +119,7 @@ impl Report {
             .collect();
         let list = |v: &[String]| v.iter().map(|s| quote(s)).collect::<Vec<_>>().join(",");
         format!(
-            "{{\"ok\":{},\"file\":{},\"bytes\":{},\"vertices\":{},\"triangles\":{},\"joints\":{},\"blended_vertices\":{},\"clips\":[{}],\"size\":[{},{},{}],\"min\":[{},{},{}],\"radius\":{},\"n64_tri_budget\":{},\"warnings\":[{}],\"errors\":[{}]}}",
+            "{{\"ok\":{},\"file\":{},\"bytes\":{},\"vertices\":{},\"triangles\":{},\"joints\":{},\"blended_vertices\":{},\"clips\":[{}],\"size\":[{},{},{}],\"min\":[{},{},{}],\"radius\":{},\"n64_tri_budget\":{},\"n64_draw_us\":{},\"warnings\":[{}],\"errors\":[{}]}}",
             self.errors.is_empty(),
             quote(&self.file),
             self.bytes,
@@ -130,6 +136,7 @@ impl Report {
             self.min[2],
             self.radius,
             Caps::N64.max_tris_per_frame,
+            n64_draw_us(self.verts, self.tris),
             list(&self.warnings),
             list(&self.errors),
         )
@@ -152,6 +159,13 @@ impl Report {
             "  N64 frame budget: {:.0}% of {} tris\n",
             self.tris as f32 / budget * 100.0,
             budget
+        );
+        let us = n64_draw_us(self.verts, self.tris);
+        s += &format!(
+            "  N64 cost estimate: ~{:.1} ms per draw ({:.0}% of a 30 fps frame; \
+             trino_core::perf::N64_COST)\n",
+            us as f32 / 1000.0,
+            us as f32 / FRAME_30FPS_US as f32 * 100.0
         );
         if self.joints > 0 && self.blended > 0 {
             s += &format!(
@@ -210,6 +224,17 @@ pub fn inspect(path: &Path, opts: &ModelOptions) -> Result<Report, String> {
     if tris > budget / 2 {
         warnings.push(format!(
             "{tris} triangles is over half of the N64 per-frame budget ({budget}) — fine as a hero asset, too heavy to repeat"
+        ));
+    }
+    // The triangle cap above is an RDP-era number; what the CPU T&L
+    // really costs per draw comes from the calibrated model.
+    let us = n64_draw_us(mesh.vertex_count, tris);
+    if us > FRAME_30FPS_US / 4 {
+        warnings.push(format!(
+            "one draw costs ~{:.1} ms on the N64 ({:.0}% of a 30 fps frame, calibrated \
+             estimate) — decimate it, or add a low-poly `lod` level for distance",
+            us as f32 / 1000.0,
+            us as f32 / FRAME_30FPS_US as f32 * 100.0
         ));
     }
     if min[1] < -0.01 && max[1] > 0.01 && min[1].abs() > 0.25 * (max[1] - min[1]) {

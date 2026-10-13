@@ -659,6 +659,26 @@ pub struct ScreenTri {
     pub w: [f32; 3],
 }
 
+/// Sort key of a batch triangle in painter order: farthest first
+/// ([`ScreenTri::depth`] descending), ties in submission order (`index`).
+/// Backends sort these 8-byte keys (plus a texture group in the high word
+/// of a pair) instead of the 88-byte triangles: on the N64 moving the
+/// triangles themselves cost more than the whole rest of the sort, and the
+/// explicit tie-break makes the order identical on every target, whatever
+/// the sort algorithm.
+#[inline]
+pub fn painter_key(depth: f32, index: usize) -> u64 {
+    // View depths are > NEAR > 0, where IEEE-754 bit patterns order like
+    // the values; inverting them makes "farther" sort first.
+    (((!depth.to_bits()) as u64) << 32) | index as u64
+}
+
+/// Index back out of a [`painter_key`].
+#[inline]
+pub fn painter_index(key: u64) -> usize {
+    (key & 0xFFFF_FFFF) as usize
+}
+
 const NEAR: f32 = 0.05;
 /// Guard band: side planes sit at 1.5x the screen so clipped coordinates stay
 /// bounded (RDP fixed-point safety) without visible clipping at the borders.
@@ -672,6 +692,42 @@ const MAX_POLY: usize = 8;
 pub const DEPTH_SPLIT: f32 = 3.0;
 /// Subdivision work stack; overflow emits the triangle unsplit (graceful).
 const SPLIT_STACK: usize = 48;
+
+/// Deterministic work counters of [`tessellate`] — what the T&L actually did
+/// for one draw (or, summed, for a frame). Identical on every target (same
+/// code, same f32), so a host test can pin a scene's console workload
+/// without an emulator: the profiling side of the "N64 is the ceiling"
+/// rule. Backends sum them into [`crate::FrameStats`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct TnlStats {
+    /// Draws rejected whole by the bounding-sphere frustum test.
+    pub culled: u32,
+    /// Vertex transforms (+ lighting) computed — vertex-cache misses.
+    pub verts: u32,
+    /// Source triangles considered.
+    pub tris_in: u32,
+    /// Source triangles that needed near/guard-band clipping.
+    pub clipped: u32,
+    /// Bisections made by the depth-span rule ([`DEPTH_SPLIT`]).
+    pub splits: u32,
+    /// Triangles dropped as back faces (or degenerate).
+    pub backfaced: u32,
+    /// Screen triangles handed to the backend.
+    pub emitted: u32,
+}
+
+impl TnlStats {
+    /// Field-wise sum (per-frame totals).
+    pub fn add(&mut self, o: &TnlStats) {
+        self.culled += o.culled;
+        self.verts += o.verts;
+        self.tris_in += o.tris_in;
+        self.clipped += o.clipped;
+        self.splits += o.splits;
+        self.backfaced += o.backfaced;
+        self.emitted += o.emitted;
+    }
+}
 
 /// Linear blend of two already-lit vertex colors (gouraud interpolation for
 /// clip-generated vertices).
@@ -726,6 +782,8 @@ fn clip_plane(
 ///
 /// `params` is the surface material: tint, emissive, [`Shading`],
 /// double-sided and the animation pose for skinned meshes.
+///
+/// Returns what the draw cost in [`TnlStats`] (callers may ignore it).
 pub fn tessellate(
     mesh: &Mesh,
     model: &Mat34,
@@ -734,7 +792,7 @@ pub fn tessellate(
     params: &ModelParams,
     screen: Vec2,
     emit: &mut dyn FnMut(ScreenTri),
-) {
+) -> TnlStats {
     let view = camera.view();
     let mv = view.mul(model);
     // fov -> focal length in pixels (vertical).
@@ -765,7 +823,10 @@ pub fn tessellate(
             || outside(lim_y * c.z - c.y, lim_y)
             || outside(lim_y * c.z + c.y, lim_y)
         {
-            return;
+            return TnlStats {
+                culled: 1,
+                ..TnlStats::default()
+            };
         }
     }
 
@@ -795,7 +856,7 @@ pub fn tessellate(
     if mesh.joint_count() == 0 {
         // Static mesh: one "joint" (the model matrix) and no joint arrays —
         // the common case stays as cheap as before skeletons existed.
-        tessellate_joints::<false, false>(mesh, &[*model], &[mv], &setup, emit);
+        tessellate_joints::<false, false>(mesh, &[*model], &[mv], &setup, emit)
     } else {
         let mut skin = [Mat34::IDENTITY; MAX_JOINTS];
         let joints = mesh.pose(params.anim, &mut skin);
@@ -807,9 +868,9 @@ pub fn tessellate(
         }
         let (world, viewm) = (&world[..joints], &viewm[..joints]);
         if mesh.has_blend() {
-            tessellate_joints::<true, true>(mesh, world, viewm, &setup, emit);
+            tessellate_joints::<true, true>(mesh, world, viewm, &setup, emit)
         } else {
-            tessellate_joints::<true, false>(mesh, world, viewm, &setup, emit);
+            tessellate_joints::<true, false>(mesh, world, viewm, &setup, emit)
         }
     }
 }
@@ -908,7 +969,9 @@ fn tessellate_joints<const SKINNED: bool, const SMOOTH: bool>(
     viewm: &[Mat34],
     s: &Setup,
     emit: &mut dyn FnMut(ScreenTri),
-) {
+) -> TnlStats {
+    let mut stats = TnlStats::default();
+    let mut verts = 0u32;
     let joint = |i: usize| if SKINNED { mesh.joint_of(i) } else { 0 };
     let flat = s.params.shading == Shading::Flat;
     let (lim_x, lim_y, focal, center) = (s.lim_x, s.lim_y, s.focal, s.center);
@@ -924,6 +987,7 @@ fn tessellate_joints<const SKINNED: bool, const SMOOTH: bool>(
         if cache.tag[slot] == i as u32 {
             return (cache.pos[slot], cache.col[slot]);
         }
+        verts += 1;
         let j = joint(i);
         let local = mesh.position(i);
         let mut p = viewm[j].transform_point(local);
@@ -950,7 +1014,15 @@ fn tessellate_joints<const SKINNED: bool, const SMOOTH: bool>(
         (p, col)
     };
 
+    // Scratch buffers live across the whole draw: initializing them per
+    // triangle (3.8 KB of stores, most of the VR4300's 8 KB data cache)
+    // was the N64's single largest T&L cost. Every slot is written before
+    // it is read, so reuse changes no output.
+    let mut poly_a = [NO_VERT; MAX_POLY];
+    let mut poly_b = [NO_VERT; MAX_POLY];
+    let mut stack = [[NO_VERT; 3]; SPLIT_STACK];
     let tri_count = mesh.index_count / 3;
+    stats.tris_in = tri_count as u32;
     for t in 0..tri_count {
         let idx = [
             mesh.index(t * 3) as usize,
@@ -991,8 +1063,6 @@ fn tessellate_joints<const SKINNED: bool, const SMOOTH: bool>(
                 && v.y >= -lim_y * v.z
                 && v.y <= lim_y * v.z
         };
-        let mut poly_a = [NO_VERT; MAX_POLY];
-        let mut poly_b = [NO_VERT; MAX_POLY];
         for k in 0..3 {
             let uv = if textured {
                 mesh.uv(idx[k])
@@ -1003,6 +1073,7 @@ fn tessellate_joints<const SKINNED: bool, const SMOOTH: bool>(
         }
         let mut n_poly = 3;
         if !(inside(vs[0]) && inside(vs[1]) && inside(vs[2])) {
+            stats.clipped += 1;
             // Clip against near plane + the 4 guard-band side planes.
             n_poly = clip_plane(&poly_a, n_poly, &mut poly_b, |v| v.z - NEAR);
             n_poly = clip_plane(&poly_b, n_poly, &mut poly_a, |v| lim_x * v.z - v.x);
@@ -1026,7 +1097,6 @@ fn tessellate_joints<const SKINNED: bool, const SMOOTH: bool>(
         // than DEPTH_SPLIT of view depth is bisected, recursively, so every
         // emitted triangle is depth-uniform enough for painter sorting.
         for k in 1..n_poly - 1 {
-            let mut stack = [[NO_VERT; 3]; SPLIT_STACK];
             stack[0] = [poly_a[0], poly_a[k], poly_a[k + 1]];
             let mut top = 1usize;
             while top > 0 {
@@ -1061,6 +1131,7 @@ fn tessellate_joints<const SKINNED: bool, const SMOOTH: bool>(
                     stack[top] = [a, mid, c];
                     stack[top + 1] = [mid, b, c];
                     top += 2;
+                    stats.splits += 1;
                     continue;
                 }
                 let [
@@ -1075,6 +1146,7 @@ fn tessellate_joints<const SKINNED: bool, const SMOOTH: bool>(
                     - (pts[2].x - pts[0].x) * (pts[1].y - pts[0].y);
                 if area <= 0.0 {
                     if !s.params.double_sided || area == 0.0 {
+                        stats.backfaced += 1;
                         continue;
                     }
                     // Double-sided: emit the back face with flipped winding.
@@ -1085,6 +1157,7 @@ fn tessellate_joints<const SKINNED: bool, const SMOOTH: bool>(
                 }
                 let depth = v0.z.max(v1.z).max(v2.z);
                 let zn = |v: Vec3| 1.0 - NEAR / v.z;
+                stats.emitted += 1;
                 emit(ScreenTri {
                     pts,
                     colors: [c0, c1, c2],
@@ -1096,6 +1169,8 @@ fn tessellate_joints<const SKINNED: bool, const SMOOTH: bool>(
             }
         }
     }
+    stats.verts = verts;
+    stats
 }
 
 /// Normalized `[u0, v0, u1, v1]` of a sprite region (pixels) inside a
@@ -1196,6 +1271,20 @@ pub fn billboard(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn painter_keys_sort_far_first_then_by_submission() {
+        let depths = [2.0f32, 9.5, 0.06, 9.5, 300.0];
+        let mut keys: std::vec::Vec<u64> = depths
+            .iter()
+            .enumerate()
+            .map(|(i, d)| painter_key(*d, i))
+            .collect();
+        keys.sort_unstable();
+        let order: std::vec::Vec<usize> = keys.into_iter().map(painter_index).collect();
+        // 300 first; the two 9.5s keep submission order; nearest last.
+        assert_eq!(order, [4, 1, 3, 0, 2]);
+    }
 
     #[test]
     fn billboards_face_the_camera_and_cull() {

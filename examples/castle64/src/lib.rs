@@ -45,9 +45,9 @@ const M_BOAR: ModelId = ModelId::from_path("models/c64_boar");
 const M_SHADOW: ModelId = ModelId::from_path("models/c64_shadow");
 /// Porta neutra gerada, tingida por destino (verde/vermelha/azul/cinza).
 const M_DOOR_FRAME: ModelId = ModelId::from_path("models/c64_door_frame");
-/// Entrada do castelo: doorway low-poly real (KayKit Dungeon Remastered,
-/// CC0) — textura de paleta amostrada para vertex colors no bake.
-const M_DOOR_KAYKIT: ModelId = ModelId::from_path("models/c64_door");
+/// Entrada do castelo: a doorway do KayKit Dungeon Remastered (CC0) refeita
+/// no Blender em 75 tris (`tools/blender/castle64_models.py`), mesmas medidas.
+const M_DOOR_CASTLE: ModelId = ModelId::from_path("models/c64_door");
 
 const S_COIN: SpriteId = SpriteId::from_path("sprites/coin");
 const S_STAR: SpriteId = SpriteId::from_path("sprites/c64_star");
@@ -595,8 +595,8 @@ impl Game for Castle64Game {
             }
         }
 
-        // Portas: a dourada do castelo é a doorway REAL (KayKit, CC0, baked
-        // de glTF texturizado); as de fase são a porta neutra tingida.
+        // Portas: a dourada do castelo é a doorway (KayKit, CC0, refeita no
+        // Blender); as de fase são a porta neutra tingida.
         for p in l.portals {
             if !visible(p.pos) {
                 continue;
@@ -607,7 +607,7 @@ impl Game for Castle64Game {
                 DoorColor::Red => (M_DOOR_FRAME, Vec3::ONE, Color::rgb(230, 95, 80)),
                 DoorColor::Blue => (M_DOOR_FRAME, Vec3::ONE, Color::rgb(95, 130, 235)),
                 DoorColor::Gold => (
-                    M_DOOR_KAYKIT,
+                    M_DOOR_CASTLE,
                     // Doorway de 4x4 do pack escalada para a fachada.
                     Vec3::new(0.62, 0.62, 0.62),
                     Color::rgb(255, 225, 140),
@@ -1164,7 +1164,7 @@ mod tests {
                     m if m == M_ARM || m == M_LEG => 24,
                     m if m == M_BOAR => 120,
                     m if m == M_DOOR_FRAME => 60,
-                    m if m == M_DOOR_KAYKIT => 1068,
+                    m if m == M_DOOR_CASTLE => 1068,
                     _ => 12,
                 };
             }

@@ -124,7 +124,7 @@ mod tests {
         };
         let r = rows(&stats, &Caps::N64);
         let time = r.iter().find(|r| r.label == "N64 3D time").unwrap();
-        // The KayKit door alone: far over a 30 fps frame.
+        // KayKit's original 1068-tri door alone: far over a 30 fps frame.
         assert_eq!(time.level, Level::Over);
         assert!(time.used > 70_000, "{}", time.used);
         assert!(

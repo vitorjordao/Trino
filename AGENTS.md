@@ -141,9 +141,11 @@ new skill when none fits. Then run `cargo xtask agents sync`. The steps are in
   player (torso/arms/legs pivoted at shoulders/hips, real walk cycle),
   patrol boars with stomp kills, lava, moving platforms that carry the
   player, an orbit camera clamped by raycast, tinted doors and a HUD with
-  generated digit sprites. The castle entrance is a REAL low-poly doorway
-  from KayKit's Dungeon Remastered pack (CC0, vendored with its license) —
-  it exercises the glTF bake on a textured multi-primitive model. A
+  generated digit sprites. The characters and doors are built in Blender by
+  `tools/blender/castle64_models.py` (`cargo xtask blender castle64`), with
+  only the faces a camera can see. The castle entrance is KayKit's Dungeon
+  Remastered doorway (CC0) rebuilt at 75 triangles. The original 1068-triangle
+  file stays as the asset pipeline's textured multi-primitive fixture. A
   deterministic waypoint bot (`castle64::bot`) plays the entire game in the
   PC test suite and a full stage inside the ares/Azahar self-tests.
   Generated masters regenerate via `cargo xtask gen-assets`

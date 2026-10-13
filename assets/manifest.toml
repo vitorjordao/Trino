@@ -108,10 +108,12 @@ file = "models/castle64/shadow.glb"
 [models.c64_door_frame]
 file = "models/castle64/door_frame.glb"
 
-# Porta real low-poly: KayKit Dungeon Remastered (CC0, Kay Lousberg) —
-# textura de paleta amostrada para vertex colors no bake; tint por destino.
+# Entrada do castelo: a doorway do KayKit Dungeon Remastered (CC0, Kay
+# Lousberg) refeita no Blender com 75 tris (a original, 1068 tris, custava
+# ~64 ms por frame no N64). tools/blender/castle64_models.py a gera; a
+# original fica em door_kaykit.glb como fixture do bake texturizado.
 [models.c64_door]
-file = "models/castle64/door_kaykit.glb"
+file = "models/castle64/door_castle.glb"
 
 # ---- editor showcase (scenes/showcase.scene.ron) ----
 # Fake objects: parametric placeholders (.prim.ron). Swap `file` for a

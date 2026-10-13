@@ -56,6 +56,9 @@ commands:
                        run the Blender toolkit end to end (prop + rigid
                        character -> export -> model inspect gates); skips
                        when Blender is not installed
+  blender castle64 [--only a,b] [--no-render]
+                       rebuild castle64's Blender-authored models (doors,
+                       player parts, boar) with their triangle gates
   agents <sync|check>  mirror .agents/skills/ into tool-specific folders
                        (.claude/skills/) / verify the mirrors are in sync
 ";
@@ -367,6 +370,28 @@ fn gen_assets() -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// glTF `COLOR_0` is linear: display (sRGB) color bytes -> little-endian
+/// linear `f32`s (accessor `componentType` 5126). The bake converts back
+/// to the exact same bytes (`asset-pipeline` `color0_to_display`).
+pub(crate) fn color0_linear(display: &[u8]) -> Vec<u8> {
+    let lin = |b: u8| {
+        let c = b as f64 / 255.0;
+        if c <= 0.040_45 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let mut out = Vec::with_capacity(display.len() * 4);
+    for px in display.chunks(4) {
+        for (k, &b) in px.iter().enumerate() {
+            let v = if k == 3 { b as f64 / 255.0 } else { lin(b) };
+            out.extend_from_slice(&(v as f32).to_le_bytes());
+        }
+    }
+    out
+}
+
 /// cube.glb: a unit cube with per-face normals and colors — the 3D pipeline
 /// master. Hand-assembled GLB (JSON + BIN chunks) so the sample stays
 /// reproducible from code.
@@ -406,6 +431,7 @@ fn gen_cube_glb(path: &Path) {
     for v in positions.iter().chain(normals.iter()) {
         bin.extend_from_slice(&v.to_le_bytes());
     }
+    let colors = color0_linear(&colors);
     let colors_offset = bin.len();
     bin.extend_from_slice(&colors);
     let indices_offset = bin.len();
@@ -419,7 +445,7 @@ fn gen_cube_glb(path: &Path) {
     let vcount = positions.len() / 3;
     let normals_offset = positions.len() * 4;
     let json = format!(
-        r#"{{"asset":{{"version":"2.0","generator":"trino gen-assets"}},"scene":0,"scenes":[{{"nodes":[0]}}],"nodes":[{{"mesh":0,"name":"cube"}}],"meshes":[{{"primitives":[{{"attributes":{{"POSITION":0,"NORMAL":1,"COLOR_0":2}},"indices":3}}]}}],"buffers":[{{"byteLength":{}}}],"bufferViews":[{{"buffer":0,"byteOffset":0,"byteLength":{}}},{{"buffer":0,"byteOffset":{normals_offset},"byteLength":{}}},{{"buffer":0,"byteOffset":{colors_offset},"byteLength":{}}},{{"buffer":0,"byteOffset":{indices_offset},"byteLength":{}}}],"accessors":[{{"bufferView":0,"componentType":5126,"count":{vcount},"type":"VEC3","min":[-0.5,-0.5,-0.5],"max":[0.5,0.5,0.5]}},{{"bufferView":1,"componentType":5126,"count":{vcount},"type":"VEC3"}},{{"bufferView":2,"componentType":5121,"normalized":true,"count":{vcount},"type":"VEC4"}},{{"bufferView":3,"componentType":5123,"count":{},"type":"SCALAR"}}]}}"#,
+        r#"{{"asset":{{"version":"2.0","generator":"trino gen-assets"}},"scene":0,"scenes":[{{"nodes":[0]}}],"nodes":[{{"mesh":0,"name":"cube"}}],"meshes":[{{"primitives":[{{"attributes":{{"POSITION":0,"NORMAL":1,"COLOR_0":2}},"indices":3}}]}}],"buffers":[{{"byteLength":{}}}],"bufferViews":[{{"buffer":0,"byteOffset":0,"byteLength":{}}},{{"buffer":0,"byteOffset":{normals_offset},"byteLength":{}}},{{"buffer":0,"byteOffset":{colors_offset},"byteLength":{}}},{{"buffer":0,"byteOffset":{indices_offset},"byteLength":{}}}],"accessors":[{{"bufferView":0,"componentType":5126,"count":{vcount},"type":"VEC3","min":[-0.5,-0.5,-0.5],"max":[0.5,0.5,0.5]}},{{"bufferView":1,"componentType":5126,"count":{vcount},"type":"VEC3"}},{{"bufferView":2,"componentType":5126,"count":{vcount},"type":"VEC4"}},{{"bufferView":3,"componentType":5123,"count":{},"type":"SCALAR"}}]}}"#,
         bin.len(),
         positions.len() * 4,
         normals.len() * 4,

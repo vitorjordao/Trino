@@ -170,7 +170,7 @@ fn write_glb(path: &Path, nodes: &[Node], roots: &[usize], clips: &[Clip]) {
             }
             let pv = push_view(&mut bin, &f32s(&p.positions));
             let nv = push_view(&mut bin, &f32s(&p.normals));
-            let cv = push_view(&mut bin, &p.colors);
+            let cv = push_view(&mut bin, &crate::color0_linear(&p.colors));
             let iv = push_view(
                 &mut bin,
                 &p.indices
@@ -187,7 +187,7 @@ fn write_glb(path: &Path, nodes: &[Node], roots: &[usize], clips: &[Clip]) {
                 r#"{{"bufferView":{nv},"componentType":5126,"count":{vcount},"type":"VEC3"}}"#
             ));
             accessors.push(format!(
-                r#"{{"bufferView":{cv},"componentType":5121,"normalized":true,"count":{vcount},"type":"VEC4"}}"#
+                r#"{{"bufferView":{cv},"componentType":5126,"count":{vcount},"type":"VEC4"}}"#
             ));
             accessors.push(format!(
                 r#"{{"bufferView":{iv},"componentType":5123,"count":{},"type":"SCALAR"}}"#,

@@ -19,7 +19,7 @@
 #
 # Exporter option names changed across Blender versions; `_supported` drops keys the
 # running exporter does not know and returns them so you can see what was skipped.
-# STATUS: validated on Blender 4.5 LTS by `cargo xtask blender smoke` — `inspect`
+# STATUS: validated on Blender 4.5 LTS and 5.2 LTS by `cargo xtask blender smoke` — `inspect`
 # is still the gate that matters.
 import bpy, json, os, subprocess
 

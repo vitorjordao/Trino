@@ -23,6 +23,12 @@ If you learn something new, update this skill and `tools/blender/` in the same s
 | Clip timing | Each clip starts at its **first keyframe** (Blender exports from frame 1 = 1/24 s; the bake removes the offset) | Key from frame 1 (or 0); close loops by repeating the first key `length` frames later. |
 | Clips | Sampled at manifest `anim_fps` (default 15); loop unless listed in `once` | Close loops (last key = first). Name actions/NLA tracks exactly like the clips the game uses. |
 
+castle64's characters and doors are built by a Blender script,
+`tools/blender/castle64_models.py` (`cargo xtask blender castle64`), with only the faces
+a camera can see. It is the reference for **budgeted static props and rigid parts**:
+- the hand-rebuilt KayKit doorway: 1068 → 75 triangles;
+- the boar, the stage doors and the player parts.
+
 Reference models built exactly this way (generated in `xtask/src/showcase_assets.rs`):
 `assets/shared/models/showcase/robot.glb` (body → head/arms/legs, clips `idle`, `walk`,
 `wave`) and `windmill.glb` (tower + rotor, clip `spin`). Inspect them first:
@@ -49,7 +55,7 @@ result = {"ok": True}   # some Blender MCP servers require `result` to be a dict
 | `rig_tools.py` | `part_report` (joints vs 32), `set_pivot`, `key_rot`, `key_loc`, `make_clip`, `rigid_check`, `snap_rigid`, `bake_to_deform` |
 | `trino_export.py` | `stash_clips` (one NLA track per clip), `export_glb` (version-tolerant options), `inspect` (runs the engine's bake) |
 
-> **Status:** validated end to end on **Blender 4.5.14 LTS** (headless) by
+> **Status:** validated end to end on **Blender 4.5.14 LTS and 5.2.2 LTS** (headless) by
 > `cargo xtask blender smoke` (`tools/blender/smoke_test.py`): a static prop and a
 > rigid-part character built from scratch with these tools, exported, and gated by the
 > engine's bake (triangles, size, joints, clips, loop flags, facing), plus QA renders
@@ -92,6 +98,51 @@ Python console or `blender --background file.blend --python script.py`.
 - Scale: real meters (`proxies/hero-capsule` is 1.7 m). Root origin at the base (y = 0).
 - Budget gate: `report` triangles; keep repeated props small.
 
+### Pay only for faces a camera can see (N64)
+
+The CPU T&L transforms and tests every triangle you ship, including:
+- back faces, which are culled only after the transform;
+- faces buried inside another part, which only the z-buffer hides.
+
+Each one costs ~9 µs per vertex plus ~44 µs per triangle.
+
+What worked on castle64 (`tools/blender/castle64_models.py`):
+- **Drop buried faces:** a box face lying entirely inside another box goes. Parts may
+  still interpenetrate, because every target z-buffers.
+- **Drop faces no camera reaches:**
+  - soles and bases on the ground;
+  - the back of a prop set against a wall;
+  - a creature's underside when the camera always looks down on it.
+
+  Check with `orient_mode`. Red is fine only where no camera goes.
+- **Rebuild heavy kit pieces by hand** at the same extents, origin and palette. The
+  KayKit doorway (`door_kaykit.glb`) was 1068 triangles and cost ~64 ms per frame for
+  ~20 px of screen. `door_castle.glb` is 75 triangles and looks the same in game (0.16%
+  of pixels changed across nine views).
+- **Results:**
+
+  | Model | Before (tris) | After (tris) |
+  |---|---|---|
+  | boar | 120 | 70 |
+  | stage door | 60 | 44 |
+  | torso | 60 | 50 |
+  | arm | 24 | 22 |
+  | leg | 24 | 22 |
+
+  The old boar's mane box was buried inside its body: 12 triangles nobody ever saw.
+
+Traps, measured:
+- **A boolean union of the parts makes it worse.** It cuts every face another part
+  passes through, and the triangulation pays for the holes: the boar went 120 → 184
+  triangles.
+- **Blender's n-gon fill can mangle a concave outline.** A wall face with an arch
+  notch came out with back-facing triangles across the opening. Build concave faces
+  from convex pieces (fans from a corner), and check `orient_mode` from the front.
+- **Flat-shaded faces export 3 vertices per triangle**: the glTF exporter shares no
+  vertex even inside a quad (boar: 70 triangles → 210 vertices). Give every polygon
+  its own vertices and mark the faces **smooth**. The normals are then exactly the
+  face normal, and a quad exports 4 vertices.
+
 ## Stage 2 — Color
 
 - Paint by **3D rules** with `Painter` (position, angle around the body axis, height
@@ -101,6 +152,16 @@ Python console or `blender --background file.blend --python script.py`.
   colors into the color attribute; or keep a palette texture and rely on the vertex-UV
   sampling rule (each face's UVs inside one flat cell).
 - Gate: `vertex_color_mode(True)` + `turntable` — this is what Trino shows before lighting.
+- **COLOR_0 is linear** (glTF spec). Blender exports the color attribute linear.
+  Since 2026-10-13 the bake converts it back to display sRGB bytes
+  (`color0_to_display`; Trino vertex colors are display bytes, like texels). Before
+  that, every Blender-painted model came out much darker in game: (200, 120, 80) →
+  (147, 48, 20). `Painter` already stores linear values, and Trino's own generators
+  now write linear `f32` colors too.
+- Don't export materials over vertex colors. The bake multiplies COLOR_0 by the
+  material's base-color factor, so the color would apply twice. After
+  `palette_from_materials`, clear the material slots, or write the colors directly as
+  `castle64_models.py` does.
 
 ## Stage 3 — Rig (animated only)
 
@@ -134,6 +195,11 @@ Python console or `blender --background file.blend --python script.py`.
 ns["export_glb"](["Robot"], "assets/shared/models/robot.glb")
 ns["inspect"]("assets/shared/models/robot.glb", fps=20, once=["wave"])
 ```
+
+The bake reorders triangles and vertices for the engine's 32-slot vertex cache
+(`MeshData::optimize_vertex_order`), so exporter order doesn't matter. Before that,
+Blender's order missed the cache on every reference: 210 transforms for 140 vertices.
+`model inspect` reports vertices; `perf_budget` reports the transforms (`verts`).
 
 Gate (all must hold, from the `inspect` JSON): `ok: true`; triangle count as planned;
 `joints` = expected parts; every planned clip present with the right duration and loop

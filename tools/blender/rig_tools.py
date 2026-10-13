@@ -26,7 +26,7 @@
 #   ns["rigid_check"]("Body")                   # vertices whose top weight < 0.99 (will crack)
 #   ns["snap_rigid"]("Body")                    # set every vertex to its heaviest group = Trino's result
 #
-# STATUS: validated on Blender 4.5 LTS by `cargo xtask blender smoke` (written for
+# STATUS: validated on Blender 4.5 LTS and 5.2 LTS by `cargo xtask blender smoke` (written for
 # 4.2+/5.x, actions with slots handled). Verify with `cargo xtask model inspect`.
 import bpy, math
 from mathutils import Matrix, Vector

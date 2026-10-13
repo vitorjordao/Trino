@@ -27,7 +27,7 @@ pub struct PerfScene {
     pub settle: u32,
 }
 
-/// Every castle64 level at its spawn: the hub (KayKit doorway, a boar,
+/// Every castle64 level at its spawn: the hub (castle doorway, a boar,
 /// many blocks), the three stages (boars, movers, lava) and the throne.
 pub const SCENES: &[PerfScene] = &[
     PerfScene {

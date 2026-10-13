@@ -1,3 +1,9 @@
+//! `cargo xtask blender castle64 [--only a,b] [--no-render]` — build
+//! castle64's Blender-authored models (`tools/blender/castle64_models.py`):
+//! writes the `.glb`s under `assets/shared/models/castle64/`, gates each with
+//! the engine's bake against its triangle budget, QA renders in
+//! `target/blender_castle64/`. Fails when Blender is absent.
+//!
 //! `cargo xtask blender smoke [--no-render]` — run `tools/blender/smoke_test.py`
 //! headless: builds a static prop and a rigid-part character with the
 //! toolkit, exports them and gates them with the engine's own bake (see the
@@ -54,8 +60,11 @@ fn find_blender() -> Option<PathBuf> {
 pub fn run(root: &Path, args: &[&str]) -> ExitCode {
     match args {
         ["smoke", rest @ ..] => smoke(root, rest),
+        ["castle64", rest @ ..] => castle64(root, rest),
         _ => {
-            eprintln!("xtask: usage: cargo xtask blender smoke [--no-render]");
+            eprintln!(
+                "xtask: usage: cargo xtask blender smoke [--no-render] | castle64 [--only a,b] [--no-render]"
+            );
             ExitCode::FAILURE
         }
     }
@@ -126,6 +135,73 @@ fn smoke(root: &Path, rest: &[&str]) -> ExitCode {
         if let Some(e) = report["error"].as_str() {
             eprintln!("{e}");
         }
+        ExitCode::FAILURE
+    }
+}
+
+fn castle64(root: &Path, rest: &[&str]) -> ExitCode {
+    let Some(blender) = find_blender() else {
+        eprintln!("[blender] Blender not found ($TRINO_BLENDER, PATH, ~/.local/opt/blender*)");
+        return ExitCode::FAILURE;
+    };
+    println!("[blender] {} building castle64 models", blender.display());
+    let output = Command::new(&blender)
+        .args(["--background", "--factory-startup", "--python"])
+        .arg(root.join("tools/blender/castle64_models.py"))
+        .arg("--")
+        .args(rest)
+        .current_dir(root)
+        .output();
+    let output = match output {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("[blender] failed to run {}: {e}", blender.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let Some(line) = stdout
+        .lines()
+        .find_map(|l| l.strip_prefix("TRINO_BLENDER_MODELS "))
+    else {
+        eprintln!(
+            "[blender] no report — Blender output:\n{}\n{}",
+            stdout,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return ExitCode::FAILURE;
+    };
+    let report: serde_json::Value = match serde_json::from_str(line) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("[blender] bad report ({e}): {line}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if let Some(models) = report["models"].as_object() {
+        for (name, m) in models {
+            let mark = if m["ok"].as_bool() == Some(true) {
+                "ok  "
+            } else {
+                "FAIL"
+            };
+            match m["error"].as_str() {
+                Some(e) => println!("[blender] {mark} {name}: {e}"),
+                None => println!(
+                    "[blender] {mark} {name}: {} tris (budget {})",
+                    m["triangles"], m["budget"]
+                ),
+            }
+        }
+    }
+    if report["ok"].as_bool() == Some(true) {
+        println!(
+            "[blender] castle64 models written (Blender {}); QA renders in {}",
+            report["blender"].as_str().unwrap_or("?"),
+            root.join("target/blender_castle64").display()
+        );
+        ExitCode::SUCCESS
+    } else {
         ExitCode::FAILURE
     }
 }

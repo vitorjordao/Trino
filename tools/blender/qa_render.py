@@ -16,7 +16,7 @@
 #                                           red = back faces) in EEVEE
 #   vertex_color_mode(True/False)        -> Workbench showing the vertex colors Trino will use
 #
-# STATUS: validated on Blender 4.5 LTS (headless, EEVEE/Workbench) by
+# STATUS: validated on Blender 4.5 LTS and 5.2 LTS (headless, EEVEE/Workbench) by
 # `cargo xtask blender smoke`. If Blender's API moves, fix this file and note it
 # in .agents/skills/blender-asset/SKILL.md.
 #

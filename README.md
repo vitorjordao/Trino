@@ -66,7 +66,7 @@ on 3DS and a native window on PC.*
 
 **All 9 roadmap phases implemented** — a complete 2D platformer plus **castle64**, a
 SM64-style 3D showcase (hub + 3 stages, articulated character with inertial movement,
-z-buffered software T&L, a CC0 KayKit prop baked from textured glTF), run identically
+z-buffered software T&L, a CC0 KayKit doorway rebuilt in Blender to fit the N64 budget), run identically
 on all three targets; real ROMs boot in ares and Azahar with automated in-emulator
 test harnesses — including a bot that *plays* a full castle64 stage inside the
 emulators; `cargo xtask new` scaffolds AI-friendly game crates; releases are
@@ -98,7 +98,7 @@ automated. The roadmap with per-phase acceptance criteria lives in
 
 | castle64 — the 3D showcase | |
 |---|---|
-| <img src="docs/media/castle64.png" width="320" alt="castle64: the SM64-style 3D showcase — articulated character mid-jump over the castle courtyard, blob shadow on the grass" /> | Hub + 3 platforming stages on all three consoles: z-buffered occlusion, per-draw tint, an articulated character, and a real CC0 KayKit doorway baked from textured glTF into vertex colors. A deterministic bot plays it end-to-end in the test suite (`docs/media/castle64.gif`). |
+| <img src="docs/media/castle64.png" width="320" alt="castle64: the SM64-style 3D showcase — articulated character mid-jump over the castle courtyard, blob shadow on the grass" /> | Hub + 3 platforming stages on all three consoles: z-buffered occlusion, per-draw tint, an articulated character, and a CC0 KayKit doorway rebuilt in Blender at 75 triangles (from 1068) for the N64's CPU T&L. A deterministic bot plays it end-to-end in the test suite (`docs/media/castle64.gif`). |
 
 ## Quickstart
 

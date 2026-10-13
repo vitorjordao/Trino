@@ -27,12 +27,20 @@ this file covers what is specific to this crate.
 - Keep `update` deterministic: same inputs + same state = same result.
   Audio calls are fire-and-forget and excluded from determinism.
 - Assets are declared in the repo's `assets/manifest.toml` under `c64_*`
-  logical names. Generated masters (blocks, player parts, boar, doors,
-  HUD star) regenerate via `cargo xtask gen-assets`
-  (`xtask/src/castle64_assets.rs`). The castle entrance
-  (`door_kaykit.glb`) is a REAL low-poly asset — KayKit Dungeon Remastered,
-  CC0, license vendored next to the file — baked from textured glTF by the
-  asset pipeline (texture sampled into vertex colors).
+  logical names.
+  - **Generated masters** (blocks, coin, star, shadow, HUD star) regenerate via
+    `cargo xtask gen-assets` (`xtask/src/castle64_assets.rs`).
+  - **Characters and doors** (`player_*`, `boar`, `door_frame`, `door_castle`)
+    are built in Blender by `tools/blender/castle64_models.py`
+    (`cargo xtask blender castle64`). It keeps only the faces a camera can see and
+    gates each model on a triangle budget.
+  - **The castle entrance** (`door_castle.glb`) is KayKit Dungeon Remastered's
+    doorway (CC0) rebuilt at 75 triangles. The original (`door_kaykit.glb`, 1068
+    triangles, ~64 ms per frame on the N64, license vendored next to it) is no
+    longer drawn.
+- Every triangle costs CPU on the N64 (`n64-performance` skill). Check a new or
+  changed model with `cargo xtask model inspect` (N64 cost estimate), and bless
+  `tests/perf/castle64_work.toml`.
 - N64 budget: the tri-budget unit test + PC strict mode keep every scene
   under `Caps::N64.max_tris_per_frame`; mind it when adding geometry.
 - Hot-reload boundary: no statics (they reset on reload), no `TypeId`

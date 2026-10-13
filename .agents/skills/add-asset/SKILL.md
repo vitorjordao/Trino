@@ -61,7 +61,9 @@ once = ["wave"]             # optional: clips that play once (default: loop)
   like the engine and reports tris, joints, clips, size, N64 budget and an **N64 cost
   estimate per draw** (calibrated `trino_core::perf::N64_COST`; warns above 25% of a
   30 fps frame). Trust the estimate over the triangle percentage: the 1068-tri KayKit
-  door reads "27% of budget" and costs ~64 ms (two frames) on the N64's CPU T&L.
+  door read "27% of budget" and cost ~64 ms (two frames) on the N64's CPU T&L. It was
+  rebuilt in Blender at 75 tris (`blender-asset` › "Pay only for faces a camera can
+  see").
   Adding a model to castle64 changes `tests/perf/castle64_work.toml` (bless it,
   `n64-performance`).
 - Code: `ModelId::from_path("models/robot")`; animate with

@@ -1,13 +1,17 @@
 //! Master-asset generator for the castle64 example (the 3D showcase game):
-//! vertex-colored GLB models (blocks, articulated player parts, boar, coin,
-//! star, doors, shadow) and the HUD star icon. Called from
-//! `cargo xtask gen-assets` so every generated master stays reproducible
-//! from code, like the platformer's assets.
+//! vertex-colored GLB models (blocks, coin, star, shadow) and the HUD star
+//! icon. Called from `cargo xtask gen-assets` so every generated master stays
+//! reproducible from code, like the platformer's assets.
 //!
-//! The one asset NOT generated here is `door_kaykit.glb` — a real low-poly
-//! doorway from KayKit's Dungeon Remastered pack (CC0, see the LICENSE file
-//! next to it), used as the castle entrance to exercise the glTF bake on a
-//! textured, multi-primitive, real-world model.
+//! NOT generated here:
+//! - the characters and doors (`player_torso/arm/leg`, `boar`,
+//!   `door_frame`, `door_castle`): built in Blender by
+//!   `tools/blender/castle64_models.py` (`cargo xtask blender castle64`), with
+//!   only the faces a camera can see — the N64's CPU T&L pays for every
+//!   buried or back-facing triangle;
+//! - `door_kaykit.glb`, KayKit's original 1068-triangle doorway (CC0, see the
+//!   LICENSE file next to it): no longer drawn, kept as the asset-pipeline's
+//!   fixture for a textured, multi-primitive, real-world glTF.
 
 use std::path::Path;
 
@@ -126,8 +130,9 @@ impl MeshBuf {
         for v in self.positions.iter().chain(self.normals.iter()) {
             bin.extend_from_slice(&v.to_le_bytes());
         }
+        let colors = crate::color0_linear(&self.colors);
         let colors_offset = bin.len();
-        bin.extend_from_slice(&self.colors);
+        bin.extend_from_slice(&colors);
         let indices_offset = bin.len();
         for i in &self.indices {
             bin.extend_from_slice(&i.to_le_bytes());
@@ -146,11 +151,11 @@ impl MeshBuf {
             }
         }
         let json = format!(
-            r#"{{"asset":{{"version":"2.0","generator":"trino gen-assets"}},"scene":0,"scenes":[{{"nodes":[0]}}],"nodes":[{{"mesh":0,"name":"m"}}],"meshes":[{{"primitives":[{{"attributes":{{"POSITION":0,"NORMAL":1,"COLOR_0":2}},"indices":3}}]}}],"buffers":[{{"byteLength":{}}}],"bufferViews":[{{"buffer":0,"byteOffset":0,"byteLength":{}}},{{"buffer":0,"byteOffset":{normals_offset},"byteLength":{}}},{{"buffer":0,"byteOffset":{colors_offset},"byteLength":{}}},{{"buffer":0,"byteOffset":{indices_offset},"byteLength":{}}}],"accessors":[{{"bufferView":0,"componentType":5126,"count":{vcount},"type":"VEC3","min":[{},{},{}],"max":[{},{},{}]}},{{"bufferView":1,"componentType":5126,"count":{vcount},"type":"VEC3"}},{{"bufferView":2,"componentType":5121,"normalized":true,"count":{vcount},"type":"VEC4"}},{{"bufferView":3,"componentType":5123,"count":{},"type":"SCALAR"}}]}}"#,
+            r#"{{"asset":{{"version":"2.0","generator":"trino gen-assets"}},"scene":0,"scenes":[{{"nodes":[0]}}],"nodes":[{{"mesh":0,"name":"m"}}],"meshes":[{{"primitives":[{{"attributes":{{"POSITION":0,"NORMAL":1,"COLOR_0":2}},"indices":3}}]}}],"buffers":[{{"byteLength":{}}}],"bufferViews":[{{"buffer":0,"byteOffset":0,"byteLength":{}}},{{"buffer":0,"byteOffset":{normals_offset},"byteLength":{}}},{{"buffer":0,"byteOffset":{colors_offset},"byteLength":{}}},{{"buffer":0,"byteOffset":{indices_offset},"byteLength":{}}}],"accessors":[{{"bufferView":0,"componentType":5126,"count":{vcount},"type":"VEC3","min":[{},{},{}],"max":[{},{},{}]}},{{"bufferView":1,"componentType":5126,"count":{vcount},"type":"VEC3"}},{{"bufferView":2,"componentType":5126,"count":{vcount},"type":"VEC4"}},{{"bufferView":3,"componentType":5123,"count":{},"type":"SCALAR"}}]}}"#,
             bin.len(),
             self.positions.len() * 4,
             self.normals.len() * 4,
-            self.colors.len(),
+            colors.len(),
             self.indices.len() * 2,
             min[0],
             min[1],
@@ -188,74 +193,6 @@ fn block(dir: &Path, name: &str, top: Rgba, side: Rgba, bottom: Rgba) {
     let mut m = MeshBuf::default();
     m.boxx(Vec3::ZERO, Vec3::ONE, [side, side, side, side, bottom, top]);
     m.write_glb(&dir.join(format!("{name}.glb")));
-}
-
-/// Neutral door (frame + pale slab) — the game tints it per destination.
-fn door_frame(dir: &Path) {
-    let frame: Rgba = [225, 220, 210, 255];
-    let slab: Rgba = [245, 242, 235, 255];
-    let mut m = MeshBuf::default();
-    m.boxc(v3(0.0, 0.9, 0.0), v3(1.1, 1.8, 0.12), slab);
-    m.boxc(v3(-0.62, 1.0, 0.0), v3(0.15, 2.0, 0.2), frame);
-    m.boxc(v3(0.62, 1.0, 0.0), v3(0.15, 2.0, 0.2), frame);
-    m.boxc(v3(0.0, 2.05, 0.0), v3(1.4, 0.15, 0.2), frame);
-    m.boxc(v3(0.35, 0.95, 0.08), v3(0.1, 0.1, 0.06), [90, 90, 95, 255]);
-    m.write_glb(&dir.join("door_frame.glb"));
-}
-
-/// Articulated purple player: torso+head in one mesh; arm and leg meshes
-/// have their ORIGIN AT THE PIVOT (shoulder/hip) so rotation.x swings them.
-fn player_parts(dir: &Path) {
-    let purple: Rgba = [140, 70, 195, 255];
-    let sleeve: Rgba = [170, 110, 225, 255];
-    let pants: Rgba = [80, 50, 125, 255];
-    let skin: Rgba = [245, 200, 160, 255];
-    let hair: Rgba = [55, 40, 70, 255];
-
-    let mut torso = MeshBuf::default();
-    torso.boxc(v3(0.0, 0.52, 0.0), v3(0.50, 0.36, 0.34), purple);
-    torso.boxc(v3(0.0, 0.82, 0.0), v3(0.38, 0.28, 0.34), skin);
-    torso.boxc(
-        v3(0.0, 0.80, 0.21),
-        v3(0.10, 0.08, 0.08),
-        [230, 180, 140, 255],
-    );
-    torso.boxc(v3(0.0, 0.99, 0.0), v3(0.40, 0.10, 0.36), hair);
-    torso.boxc(v3(0.0, 0.90, -0.19), v3(0.40, 0.20, 0.06), hair);
-    torso.write_glb(&dir.join("player_torso.glb"));
-
-    let mut arm = MeshBuf::default();
-    arm.boxc(v3(0.0, -0.16, 0.0), v3(0.13, 0.32, 0.13), sleeve);
-    arm.boxc(v3(0.0, -0.36, 0.0), v3(0.11, 0.10, 0.11), skin);
-    arm.write_glb(&dir.join("player_arm.glb"));
-
-    let mut leg = MeshBuf::default();
-    leg.boxc(v3(0.0, -0.17, 0.0), v3(0.16, 0.34, 0.20), pants);
-    leg.boxc(
-        v3(0.0, -0.36, 0.03),
-        v3(0.17, 0.08, 0.26),
-        [45, 35, 55, 255],
-    );
-    leg.write_glb(&dir.join("player_leg.glb"));
-}
-
-/// Patrol boar: low body, snout, tusks, four stub legs.
-fn boar(dir: &Path) {
-    let hide: Rgba = [105, 75, 55, 255];
-    let dark: Rgba = [70, 50, 38, 255];
-    let tusk: Rgba = [235, 230, 215, 255];
-    let mut m = MeshBuf::default();
-    m.boxc(v3(0.0, 0.34, -0.05), v3(0.55, 0.34, 0.62), hide);
-    m.boxc(v3(0.0, 0.42, -0.05), v3(0.30, 0.10, 0.55), dark);
-    m.boxc(v3(0.0, 0.30, 0.34), v3(0.34, 0.26, 0.22), hide);
-    m.boxc(v3(0.0, 0.24, 0.48), v3(0.16, 0.12, 0.10), dark);
-    m.boxc(v3(-0.11, 0.20, 0.44), v3(0.04, 0.10, 0.04), tusk);
-    m.boxc(v3(0.11, 0.20, 0.44), v3(0.04, 0.10, 0.04), tusk);
-    m.boxc(v3(-0.17, 0.09, 0.22), v3(0.10, 0.18, 0.10), dark);
-    m.boxc(v3(0.17, 0.09, 0.22), v3(0.10, 0.18, 0.10), dark);
-    m.boxc(v3(-0.17, 0.09, -0.30), v3(0.10, 0.18, 0.10), dark);
-    m.boxc(v3(0.17, 0.09, -0.30), v3(0.10, 0.18, 0.10), dark);
-    m.write_glb(&dir.join("boar.glb"));
 }
 
 /// The HUD star icon (counters are bitmap text: `fonts/trino5x7`).
@@ -349,10 +286,6 @@ pub fn gen_all(repo_root: &Path, write_png: PngWriter) {
         [255, 190, 40, 255],
     );
     star.write_glb(&models.join("star.glb"));
-
-    player_parts(&models);
-    boar(&models);
-    door_frame(&models);
 
     let mut shadow = MeshBuf::default();
     shadow.boxc(Vec3::ZERO, v3(1.0, 0.02, 1.0), [35, 35, 40, 255]);

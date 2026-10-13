@@ -34,7 +34,7 @@
 # - Small detail that does not fit as color needs geometry (an extra edge loop), not a
 #   texture. Budget: keep props tens to a few hundred triangles; see `cargo xtask model inspect`.
 #
-# STATUS: validated on Blender 4.5 LTS by `cargo xtask blender smoke`.
+# STATUS: validated on Blender 4.5 LTS and 5.2 LTS by `cargo xtask blender smoke`.
 import bpy, math
 import numpy as np
 
@@ -120,7 +120,9 @@ class _V:
 def palette_from_materials(obj_name, name="Col"):
     """Bake each face's material base color into the color attribute — turns a
     multi-material low-poly model (Kenney/Quaternius style) into one mesh with
-    vertex colors, no textures needed."""
+    vertex colors, no textures needed. Then clear the material slots
+    (`obj.data.materials.clear()`) before export: the bake multiplies COLOR_0
+    by the material's base-color factor, which would apply the color twice."""
     obj = bpy.data.objects[obj_name]
     me = obj.data
 

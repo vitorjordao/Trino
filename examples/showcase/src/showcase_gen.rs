@@ -1093,7 +1093,7 @@ pub static NODES: &[SceneNode] = &[
         },
         anim: None,
         collider: Some(Collider {
-            shape: Shape::Box { half: Vec3::new(2.0, 2.0, 0.49999997) },
+            shape: Shape::Box { half: Vec3::new(2.0, 2.0, 0.5) },
             offset: Vec3::new(0.0, 2.0, 0.0),
             trigger: false,
         }),

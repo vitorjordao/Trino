@@ -64,6 +64,27 @@ fn mat_dir(m: &[[f32; 4]; 4], d: [f32; 3]) -> [f32; 3] {
     out
 }
 
+/// glTF `COLOR_0` is **linear** (the spec; Blender exports it so), while
+/// the engine's vertex colors are display (sRGB) bytes like texture texels:
+/// convert, rounding to the nearest byte (alpha is linear, no curve).
+fn color0_to_display(c: [f32; 4]) -> [u8; 4] {
+    let srgb = |l: f32| {
+        let l = l.clamp(0.0, 1.0);
+        if l <= 0.003_130_8 {
+            l * 12.92
+        } else {
+            1.055 * l.powf(1.0 / 2.4) - 0.055
+        }
+    };
+    let byte = |v: f32| (v * 255.0).round().clamp(0.0, 255.0) as u8;
+    [
+        byte(srgb(c[0])),
+        byte(srgb(c[1])),
+        byte(srgb(c[2])),
+        byte(c[3]),
+    ]
+}
+
 /// Nearest-neighbor sample of a glTF image at (u, v), repeat wrapping.
 fn sample_image(img: &gltf::image::Data, u: f32, v: f32) -> Option<[u8; 4]> {
     let wrap = |t: f32| {
@@ -309,6 +330,50 @@ fn put_trs(out: &mut Vec<u8>, trs: &Trs) {
 }
 
 impl MeshData {
+    /// Reorder for the engine's per-draw vertex cache (`trino_core::
+    /// render3d`, 32 direct-mapped slots keyed by `index % 32`): triangles
+    /// sorted (stably) by their lowest vertex, then vertices renumbered in
+    /// first-use order, so a vertex's reuses come while it is still cached.
+    /// Exporters do not order for this — Blender's glTF output missed on
+    /// every reference (boar: 210 transforms for 140 vertices), and on the
+    /// N64 each transform costs ~9 us. Pixels are unchanged (same triangles,
+    /// same winding); already-local meshes (quads written as 4 consecutive
+    /// vertices) come out identical.
+    pub fn optimize_vertex_order(&mut self) {
+        let n = self.positions.len();
+        let mut tris: Vec<[u32; 3]> = self.indices.as_chunks::<3>().0.to_vec();
+        tris.sort_by_key(|t| t[0].min(t[1]).min(t[2]));
+        let mut remap = vec![u32::MAX; n];
+        let mut order = Vec::with_capacity(n);
+        for i in tris.iter().flatten() {
+            if remap[*i as usize] == u32::MAX {
+                remap[*i as usize] = order.len() as u32;
+                order.push(*i as usize);
+            }
+        }
+        // Unreferenced vertices keep their relative order at the end.
+        for (i, r) in remap.iter_mut().enumerate() {
+            if *r == u32::MAX {
+                *r = order.len() as u32;
+                order.push(i);
+            }
+        }
+        self.indices = tris.iter().flatten().map(|i| remap[*i as usize]).collect();
+        fn permute<T: Copy>(v: &mut Vec<T>, order: &[usize]) {
+            if v.len() == order.len() {
+                *v = order.iter().map(|&i| v[i]).collect();
+            }
+        }
+        permute(&mut self.positions, &order);
+        permute(&mut self.normals, &order);
+        permute(&mut self.colors, &order);
+        permute(&mut self.uvs, &order);
+        permute(&mut self.blend, &order);
+        if let Some(skel) = &mut self.skeleton {
+            permute(&mut skel.joint_of_vertex, &order);
+        }
+    }
+
     /// Serialize to TMDL (base arrays + `SKEL`/`ANIM` + `BNDS`).
     pub fn encode(&self) -> Result<Vec<u8>, String> {
         if self.positions.is_empty() {
@@ -501,7 +566,9 @@ pub fn bake_model(path: &Path, opts: &ModelOptions) -> Result<Vec<u8>, String> {
     let mut data = if name.ends_with(".prim.ron") {
         crate::primitive::Primitive::load(path)?.build()
     } else {
-        load_gltf(path, opts)?
+        let mut data = load_gltf(path, opts)?;
+        data.optimize_vertex_order();
+        data
     };
     data.texture = opts.texture.as_deref().map(trino_core::asset_id);
     if data.texture.is_none() {
@@ -724,7 +791,7 @@ fn load_gltf(path: &Path, opts: &ModelOptions) -> Result<MeshData, String> {
                 .map(|t| t.into_f32().collect())
                 .unwrap_or_default();
             let prim_col: Vec<[u8; 4]> = if let Some(c) = reader.read_colors(0) {
-                c.into_rgba_u8().collect()
+                c.into_rgba_f32().map(color0_to_display).collect()
             } else if textured {
                 vec![fmul([255, 255, 255, 255]); prim_pos.len()]
             } else {
@@ -1037,6 +1104,63 @@ pub fn manifest_model_bounds(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vertex_order_follows_first_use() {
+        // Two quads whose triangles were exported interleaved (q0a, q1a,
+        // q0b, q1b) with scattered vertex numbers.
+        let mut m = MeshData {
+            positions: (0..8).map(|i| [i as f32, 0.0, 0.0]).collect(),
+            normals: vec![[0.0, 1.0, 0.0]; 8],
+            colors: (0..8).map(|i| [i as u8, 0, 0, 255]).collect(),
+            indices: vec![0, 4, 2, 1, 5, 3, 0, 2, 6, 1, 3, 7],
+            ..MeshData::default()
+        };
+        let before: Vec<[f32; 3]> = m.indices.iter().map(|&i| m.positions[i as usize]).collect();
+        m.optimize_vertex_order();
+        // Each quad's triangles are now adjacent, numbered in first-use order.
+        assert_eq!(m.indices, vec![0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7]);
+        // Same triangles (and windings), same per-vertex data.
+        let after: Vec<[f32; 3]> = m.indices.iter().map(|&i| m.positions[i as usize]).collect();
+        let mut tb: Vec<_> = before.chunks(3).map(|t| format!("{t:?}")).collect();
+        let mut ta: Vec<_> = after.chunks(3).map(|t| format!("{t:?}")).collect();
+        tb.sort();
+        ta.sort();
+        assert_eq!(ta, tb);
+        for (p, c) in m.positions.iter().zip(&m.colors) {
+            assert_eq!(p[0] as u8, c[0]);
+        }
+        // An already-local mesh is left exactly as it was.
+        let local = m.clone();
+        m.optimize_vertex_order();
+        assert_eq!(m.indices, local.indices);
+        assert_eq!(m.positions, local.positions);
+    }
+
+    #[test]
+    fn color0_is_linear_and_round_trips_every_byte() {
+        // What Blender writes for a color painted as sRGB (200, 120, 80):
+        // linear values, quantized to 16-bit normalized.
+        let blender = [
+            37_852.0 / 65535.0,
+            12_309.0 / 65535.0,
+            5_257.0 / 65535.0,
+            1.0,
+        ];
+        assert_eq!(color0_to_display(blender), [200, 120, 80, 255]);
+        // Every display byte survives sRGB -> linear f32 -> display (what
+        // the generators in xtask write and the bake reads).
+        for b in 0..=255u8 {
+            let c = b as f64 / 255.0;
+            let l = if c <= 0.040_45 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            } as f32;
+            let a = b as f32 / 255.0;
+            assert_eq!(color0_to_display([l, l, l, a]), [b, b, b, b], "byte {b}");
+        }
+    }
 
     #[test]
     fn textured_gltf_keeps_texcoords() {

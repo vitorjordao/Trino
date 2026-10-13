@@ -359,7 +359,11 @@ Edit this file as you go.
     No byte swap at register: the byte assembly is ~100 of ~1 500 cycles per vertex
   - [x] 1e divisions — kept: frame −8…−14%, T&L −12…−20%; `div.s` in the vertex closure
     15 → 3
-  - [ ] 1f submit
+  - [x] 1f submit — reverted: one FFI call per batch plus the `/255` table made submit
+    +3…+6%. Submit is bound by the 26 uncached rspq words per triangle, not by the
+    conversion math. Packing `RDPQ_CMD_TRIANGLE_DATA` ourselves would write the same
+    words, so the optional step is dropped too. Fewer words per triangle means a custom
+    RSP command or RSP T&L with shared vertices (Phase 4).
   - [x] 1g sort — skipped: sort ≤ 4 ms per scene, 2.4 µs per emitted triangle (Phase 0)
   - [ ] 1h transform fast path
 - [ ] N64_COST recalibrated, skill tables updated

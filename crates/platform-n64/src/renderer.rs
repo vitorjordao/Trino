@@ -8,7 +8,7 @@ use core::ffi::c_void;
 
 use trino_core::perf::RenderProfile;
 use trino_core::render3d::{
-    Camera3, DEFAULT_LIGHT, Light, Mesh, ScreenTri, painter_index, painter_key,
+    Camera3, DEFAULT_LIGHT, Light, Mesh, ScreenTri, TnlContext, painter_index, painter_key,
 };
 use trino_core::text::BitmapFont;
 use trino_core::{
@@ -44,6 +44,8 @@ pub struct N64Renderer {
     order: Vec<(u64, u64)>,
     camera: Camera3,
     light: Light,
+    /// T&L constants of `camera` + `light`, rebuilt when either changes.
+    tnl_ctx: TnlContext,
     caps: Caps,
     /// Stage/model timing on the console clock while profiling is on.
     profile: Option<RenderProfile>,
@@ -90,6 +92,7 @@ impl N64Renderer {
             pending_tex: Vec::new(),
             order: Vec::new(),
             camera: Camera3::default(),
+            tnl_ctx: TnlContext::new(&Camera3::default(), &DEFAULT_LIGHT, SCREEN),
             light: DEFAULT_LIGHT,
             caps: Caps::N64,
             profile: None,
@@ -289,12 +292,14 @@ impl Renderer for N64Renderer {
     fn set_camera(&mut self, camera: &Camera3) {
         self.flush_model_batch();
         self.camera = *camera;
+        self.tnl_ctx = TnlContext::new(&self.camera, &self.light, SCREEN);
     }
 
     fn set_light(&mut self, light: &Light) {
         // Lighting is resolved into vertex colors at tessellation time, so
         // a change needs no batch flush.
         self.light = *light;
+        self.tnl_ctx = TnlContext::new(&self.camera, &self.light, SCREEN);
     }
 
     fn draw_model(
@@ -325,13 +330,11 @@ impl Renderer for N64Renderer {
         let before = self.pending_tris.len();
         let t0 = self.tick();
         let pending = &mut self.pending_tris;
-        let tnl = trino_core::render3d::tessellate(
+        let tnl = trino_core::render3d::tessellate_with(
+            &self.tnl_ctx,
             &mesh,
             matrix,
-            &self.camera,
-            &self.light,
             params,
-            SCREEN,
             &mut |tri| pending.push(tri),
         );
         self.frame_stats.tnl.add(&tnl);

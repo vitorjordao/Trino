@@ -775,6 +775,73 @@ fn clip_plane(
     n_out
 }
 
+/// Everything [`tessellate`] derives from the camera, the light and the
+/// screen, computed once instead of per draw: the view matrix (two
+/// normalizations), the focal length (the core's software `sin`/`cos`), the
+/// guard-band extents, the normalized light direction and the light color
+/// factors. Backends keep one and rebuild it on `set_camera` / `set_light`
+/// (and on a screen-size change); [`tessellate_with`] takes it by reference.
+/// The values are the same expressions [`tessellate`] used to evaluate per
+/// draw, so the output is bit-identical.
+#[derive(Clone, Copy, Debug)]
+pub struct TnlContext {
+    camera: Camera3,
+    light: Light,
+    screen: Vec2,
+    view: Mat34,
+    focal: f32,
+    center: Vec2,
+    lim_x: f32,
+    lim_y: f32,
+    ldir: Vec3,
+    /// Light / ambient colors as 0..1 factors. White yields exactly 1.0,
+    /// keeping the default path bit-identical to the single-intensity model.
+    lc: [f32; 3],
+    ac: [f32; 3],
+    /// Both light colors white: the single-intensity fast path applies.
+    white: bool,
+    fog_on: bool,
+}
+
+impl TnlContext {
+    pub fn new(camera: &Camera3, light: &Light, screen: Vec2) -> TnlContext {
+        // fov -> focal length in pixels (vertical).
+        let half_fov = camera.fov_y * 0.5;
+        let focal = crate::math3d::cos(half_fov) / crate::math3d::sin(half_fov) * screen.y * 0.5;
+        let center = screen * 0.5;
+        TnlContext {
+            camera: *camera,
+            light: *light,
+            screen,
+            view: camera.view(),
+            focal,
+            center,
+            // Guard-band frustum half-extents per unit of view depth.
+            lim_x: center.x * GUARD / focal,
+            lim_y: center.y * GUARD / focal,
+            ldir: light.dir.normalized(),
+            lc: [
+                light.color.r as f32 / 255.0,
+                light.color.g as f32 / 255.0,
+                light.color.b as f32 / 255.0,
+            ],
+            ac: [
+                light.ambient_color.r as f32 / 255.0,
+                light.ambient_color.g as f32 / 255.0,
+                light.ambient_color.b as f32 / 255.0,
+            ],
+            white: light.color == Color::WHITE && light.ambient_color == Color::WHITE,
+            fog_on: light.fog.enabled(),
+        }
+    }
+
+    /// Still valid for this camera, light and screen? Backends that can't
+    /// hook every change (a resize) check this before reusing a context.
+    pub fn matches(&self, camera: &Camera3, light: &Light, screen: Vec2) -> bool {
+        self.camera == *camera && self.light == *light && self.screen == screen
+    }
+}
+
 /// Transform, light, clip, depth-subdivide, project and cull `mesh`,
 /// handing each visible triangle to `emit`. Triangles are **not** sorted
 /// here: backends batch the triangles of consecutive `draw_model` calls and
@@ -786,6 +853,8 @@ fn clip_plane(
 /// double-sided and the animation pose for skinned meshes.
 ///
 /// Returns what the draw cost in [`TnlStats`] (callers may ignore it).
+/// Builds a [`TnlContext`] per call; backends drawing many meshes per frame
+/// keep one and call [`tessellate_with`].
 pub fn tessellate(
     mesh: &Mesh,
     model: &Mat34,
@@ -795,15 +864,21 @@ pub fn tessellate(
     screen: Vec2,
     emit: &mut dyn FnMut(ScreenTri),
 ) -> TnlStats {
-    let view = camera.view();
+    let ctx = TnlContext::new(camera, light, screen);
+    tessellate_with(&ctx, mesh, model, params, emit)
+}
+
+/// [`tessellate`] with the per-frame constants precomputed.
+pub fn tessellate_with(
+    ctx: &TnlContext,
+    mesh: &Mesh,
+    model: &Mat34,
+    params: &ModelParams,
+    emit: &mut dyn FnMut(ScreenTri),
+) -> TnlStats {
+    let view = ctx.view;
     let mv = view.mul(model);
-    // fov -> focal length in pixels (vertical).
-    let half_fov = camera.fov_y * 0.5;
-    let focal = crate::math3d::cos(half_fov) / crate::math3d::sin(half_fov) * screen.y * 0.5;
-    let center = screen * 0.5;
-    // Guard-band frustum half-extents per unit of view depth.
-    let lim_x = center.x * GUARD / focal;
-    let lim_y = center.y * GUARD / focal;
+    let (lim_x, lim_y) = (ctx.lim_x, ctx.lim_y);
 
     // Whole-mesh frustum cull from the baked bounding sphere: a mesh that
     // cannot produce a single visible triangle costs one transform instead
@@ -833,26 +908,18 @@ pub fn tessellate(
     }
 
     let setup = Setup {
-        focal,
-        center,
+        focal: ctx.focal,
+        center: ctx.center,
         lim_x,
         lim_y,
-        ldir: light.dir.normalized(),
-        light,
+        ldir: ctx.ldir,
+        light: &ctx.light,
         params,
-        lc: [
-            light.color.r as f32 / 255.0,
-            light.color.g as f32 / 255.0,
-            light.color.b as f32 / 255.0,
-        ],
-        ac: [
-            light.ambient_color.r as f32 / 255.0,
-            light.ambient_color.g as f32 / 255.0,
-            light.ambient_color.b as f32 / 255.0,
-        ],
-        white: light.color == Color::WHITE && light.ambient_color == Color::WHITE,
+        lc: ctx.lc,
+        ac: ctx.ac,
+        white: ctx.white,
         has_emissive: params.emissive.r | params.emissive.g | params.emissive.b != 0,
-        fog_on: light.fog.enabled(),
+        fog_on: ctx.fog_on,
     };
 
     if mesh.joint_count() == 0 {

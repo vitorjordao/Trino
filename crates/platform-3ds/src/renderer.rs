@@ -7,7 +7,7 @@ use alloc::vec::Vec;
 use core::ffi::c_void;
 
 use trino_core::render3d::{
-    Camera3, DEFAULT_LIGHT, Light, Mesh, ScreenTri, painter_index, painter_key,
+    Camera3, DEFAULT_LIGHT, Light, Mesh, ScreenTri, TnlContext, painter_index, painter_key,
 };
 use trino_core::text::BitmapFont;
 use trino_core::{
@@ -54,6 +54,8 @@ pub struct N3dsRenderer {
     sprite_depth: f32,
     camera: Camera3,
     light: Light,
+    /// T&L constants of `camera` + `light`, rebuilt when either changes.
+    tnl_ctx: TnlContext,
     caps: Caps,
 }
 
@@ -71,6 +73,7 @@ impl N3dsRenderer {
             verts: Vec::new(),
             sprite_depth: SPRITE_DEPTH_BG,
             camera: Camera3::default(),
+            tnl_ctx: TnlContext::new(&Camera3::default(), &DEFAULT_LIGHT, SCREEN),
             light: DEFAULT_LIGHT,
             caps: Caps::N3DS,
         }
@@ -262,12 +265,14 @@ impl Renderer for N3dsRenderer {
     fn set_camera(&mut self, camera: &Camera3) {
         self.flush_model_batch();
         self.camera = *camera;
+        self.tnl_ctx = TnlContext::new(&self.camera, &self.light, SCREEN);
     }
 
     fn set_light(&mut self, light: &Light) {
         // Lighting is resolved into vertex colors at tessellation time, so
         // a change needs no batch flush.
         self.light = *light;
+        self.tnl_ctx = TnlContext::new(&self.camera, &self.light, SCREEN);
     }
 
     fn draw_model(
@@ -297,13 +302,11 @@ impl Renderer for N3dsRenderer {
             .filter(|t| self.sprites.contains_key(&t.0));
         let before = self.pending_tris.len();
         let pending = &mut self.pending_tris;
-        let tnl = trino_core::render3d::tessellate(
+        let tnl = trino_core::render3d::tessellate_with(
+            &self.tnl_ctx,
             &mesh,
             matrix,
-            &self.camera,
-            &self.light,
             params,
-            SCREEN,
             &mut |tri| pending.push(tri),
         );
         self.frame_stats.tnl.add(&tnl);

@@ -350,7 +350,15 @@ Edit this file as you go.
   - New baseline (Phase 0 ROM, blessed): hub 79.6, green-hills 39.1, lava-land 51.4,
     sky-tower 32.8, throne 44.5 ms. That is +2…+5% from layout alone: the micro code
     adds ROM, and the castle64 code is unchanged.
-- [ ] 1a per-frame setup · [ ] 1b scratch · [ ] 1c parse once · [ ] 1d fetch · [ ] 1e divisions · [ ] 1f submit · [ ] 1g sort · [ ] 1h transform fast path
+- Phase 1:
+  - [x] 1a per-frame setup — kept: culled draw 33 → 16 µs, frame neutral (±2%, layout)
+  - [ ] 1b scratch
+  - [ ] 1c parse once
+  - [ ] 1d fetch
+  - [ ] 1e divisions
+  - [ ] 1f submit
+  - [ ] 1g sort
+  - [ ] 1h transform fast path
 - [ ] N64_COST recalibrated, skill tables updated
 - [ ] 2a coins · [ ] 2b chunks · [ ] 2c player (decide)
 - [ ] 3a split policy · [ ] 3b reciprocals · [ ] 3c model-space light · [ ] 3d Caps cost budget

@@ -59,8 +59,8 @@ pub use render::{
     ModelParams, Renderer, Shading, SpriteId, SpriteParams, TextAlign, TextParams, Transform3,
 };
 pub use render3d::{
-    Camera3, ClipInfo, DEFAULT_LIGHT, Fog, Light, MAX_JOINTS, Mesh, MeshError, ScreenTri, TnlStats,
-    tessellate,
+    Camera3, ClipInfo, DEFAULT_LIGHT, Fog, Light, MAX_JOINTS, Mesh, MeshError, ScreenTri,
+    TnlContext, TnlStats, tessellate, tessellate_with,
 };
 pub use scene::{BakedScene, LodLevel, Lods, SceneNode, Tags};
 pub use text::{BitmapFont, TextBuf};

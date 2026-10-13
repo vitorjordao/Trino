@@ -176,6 +176,7 @@ frames. Trust the cost model.
 | Per-vertex cached projection + no-copy fast path in `tessellate` | neutral (±2%) — reverted |
 | Hot loop compacted (`#[inline(never)]` vertex/flat/general paths) | +3…+17% worse — reverted |
 | `opt-level = "s"` for the ROM | worse everywhere — not adopted |
+| **1a** `TnlContext`: view, focal (software sin/cos), guard band, `ldir`, light factors once per `set_camera`/`set_light` instead of per draw (all three backends; `tessellate_with`) | culled draw T&L 33 → 16 µs, visible setup 280 → 248 µs; scene T&L −0.5…−2.6% (throne +1%), but `game` +15…+22% from layout: `Transform3::matrix`, which didn't change, went 12.5 → 36 µs per draw (micro-trs). Frame −1.2…+1.9%: neutral, kept because the work it removes is measured |
 
 ## Reading the ROM's machine code
 

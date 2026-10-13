@@ -12,7 +12,7 @@ mod batch;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use trino_core::render3d::{Camera3, DEFAULT_LIGHT, Light, Mesh, ScreenTri};
+use trino_core::render3d::{Camera3, DEFAULT_LIGHT, Light, Mesh, ScreenTri, TnlContext};
 use trino_core::{
     Caps, Color, FontId, FrameStats, Mat34, Material, ModelId, ModelParams, Renderer, SpriteId,
     SpriteParams, TextParams, Transform3, Vec2,
@@ -105,6 +105,9 @@ pub struct PcRenderer {
     pending_tex: Vec<Option<TexKey>>,
     camera: Camera3,
     light: Light,
+    /// T&L constants of `camera` + `light` at the current internal size
+    /// (rebuilt when any of them changes).
+    tnl_ctx: Option<TnlContext>,
     clear: Color,
     caps: Caps,
     profile: SimProfile,
@@ -727,6 +730,7 @@ impl PcRenderer {
             pending_tex: Vec::new(),
             camera: Camera3::default(),
             light: DEFAULT_LIGHT,
+            tnl_ctx: None,
             clear: Color::BLACK,
             caps,
             profile,
@@ -1459,16 +1463,16 @@ impl Renderer for PcRenderer {
         }
         let screen = Vec2::new(self.internal_size.0 as f32, self.internal_size.1 as f32);
         let before = self.pending_tris.len();
+        let ctx = match self.tnl_ctx {
+            Some(c) if c.matches(&self.camera, &self.light, screen) => c,
+            _ => *self
+                .tnl_ctx
+                .insert(TnlContext::new(&self.camera, &self.light, screen)),
+        };
         let pending = &mut self.pending_tris;
-        let tnl = trino_core::render3d::tessellate(
-            &mesh,
-            matrix,
-            &self.camera,
-            &self.light,
-            params,
-            screen,
-            &mut |tri| pending.push(tri),
-        );
+        let tnl = trino_core::render3d::tessellate_with(&ctx, &mesh, matrix, params, &mut |tri| {
+            pending.push(tri)
+        });
         self.frame_stats.tnl.add(&tnl);
         let added = self.pending_tris.len() - before;
         self.tag_pending(

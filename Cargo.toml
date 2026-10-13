@@ -56,6 +56,8 @@ eframe = { version = "0.35", default-features = false, features = [
     "wayland",
 ] }
 egui_dock = "0.20"
+# Headless editor UI tests; same lockstep as eframe/egui.
+egui_kittest = { version = "0.35", features = ["eframe", "wgpu"] }
 # Icon font for the editor. 0.13 is the line built on egui 0.35 — bump in
 # lockstep with eframe/egui (0.14 already requires egui 0.36).
 egui-phosphor = "0.13"

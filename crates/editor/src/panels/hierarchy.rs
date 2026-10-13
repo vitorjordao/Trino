@@ -163,6 +163,11 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
         );
         let is_sel =
             !row.ghost && (selected.as_ref() == Some(&row.path) || extra.contains(&row.path));
+        // Painted by hand below: tell accessibility (screen readers, the
+        // kittest UI tests) what the row is.
+        resp.widget_info(|| {
+            egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, is_sel, &row.name)
+        });
         let id = ui.id().with(("row", &row.path, row.ghost, &row.name));
         let t_sel = ui
             .ctx()

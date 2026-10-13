@@ -28,6 +28,8 @@ mod panels;
 mod play;
 mod project;
 mod theme;
+#[cfg(test)]
+mod ui_tests;
 mod viewport;
 
 use eframe::egui;

@@ -146,11 +146,21 @@ mod n64 {
         // T&L em software da cena completa a cada frame estourava o timeout
         // do harness no emulador.
         let mut frame_no = 0u32;
+        // Timing of the last frame (emulated clock) and a switch that
+        // renders every frame while measuring (step 5).
+        let force_render = core::cell::Cell::new(false);
+        let last_update_us = core::cell::Cell::new(0u32);
+        let last_render_us = core::cell::Cell::new(0u32);
         let mut frame = |game: &mut castle64::Castle64Game, input: &InputState| {
+            let t0 = runtime::now_us();
             game.update(input, audio, DT);
-            if frame_no % 4 == 0 {
+            let t1 = runtime::now_us();
+            if force_render.get() || frame_no % 4 == 0 {
                 game.render(renderer);
             }
+            let t2 = runtime::now_us();
+            last_update_us.set(t1.wrapping_sub(t0));
+            last_render_us.set(t2.wrapping_sub(t1));
             frame_no += 1;
             audio.poll();
         };
@@ -224,6 +234,26 @@ mod n64 {
                         game.level
                     ));
                 } else if bot_ok {
+                    // 5) Frame cost on the console's own clock (ares
+                    // emulates the CPU count register, so this is emulated
+                    // N64 time, not host time): 8 full castle64 frames in
+                    // the hub — update, and render (CPU T&L + RDP submit).
+                    const N: u32 = 8;
+                    let (mut upd, mut ren) = (0u32, 0u32);
+                    force_render.set(true);
+                    for _ in 0..N {
+                        frame(game, &idle);
+                        upd += last_update_us.get();
+                        ren += last_render_us.get();
+                    }
+                    force_render.set(false);
+                    runtime::log(&format!(
+                        "TRINO_PERF:castle64 hub frame update={}us render={}us total={}us \
+                         (emulated N64 time; 60 fps = 16667us, 30 fps = 33333us)\n",
+                        upd / N,
+                        ren / N,
+                        (upd + ren) / N
+                    ));
                     runtime::log("TRINO_TEST_PASS\n");
                 }
             }

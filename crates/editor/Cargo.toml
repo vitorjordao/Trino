@@ -27,3 +27,5 @@ png = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+# Headless panel-flow tests (the egui 0.35 line).
+egui_kittest = { workspace = true }

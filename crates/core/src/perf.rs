@@ -35,19 +35,22 @@ pub struct CostModel {
     pub us_per_emitted: f32,
 }
 
-/// The N64 (emulated time under ares), calibrated 2026-10-13 from the
+/// The N64 (emulated time under ares), recalibrated 2026-10-13 after back
+/// faces started being rejected before clipping/splitting, from the
 /// castle64 `TRINO_PERF_MODEL` / `TRINO_PERF_SCENE` lines (default white
-/// light, no fog): the T&L terms fit 13 per-model measurements within ±11%
-/// and four of the five scene totals within ±2%; sort + submit come to
-/// 29–31 µs per emitted triangle in every scene. Code layout alone moves real
+/// light, no fog): least squares over 44 per-model measurements (mean error
+/// 5%), four of the five scene totals within ±2% (sky-tower +11%); sort +
+/// submit come to 29–31 µs per emitted triangle in every scene. Vertices
+/// and triangles are strongly correlated in real meshes (~2 vertices per
+/// triangle), so trust the sum, not the split between the two terms. Code layout alone moves real
 /// frames by ~5–10%, so read results as estimates. Recalibrate when the
 /// T&L or the backends change (the n64-performance skill says how);
 /// `cargo xtask test n64` prints estimate vs measurement for every scene.
 pub const N64_COST: CostModel = CostModel {
-    us_per_vert: 9.0,
-    us_per_tri: 44.2,
-    us_per_draw: 419.0,
-    us_per_split: 14.7,
+    us_per_vert: 16.6,
+    us_per_tri: 26.1,
+    us_per_draw: 278.0,
+    us_per_split: 22.3,
     us_per_emitted: 30.0,
 };
 
@@ -291,11 +294,11 @@ mod tests {
     fn n64_cost_model_reproduces_its_calibration() {
         // (verts, tris_in, draws, splits, measured T&L us) from castle64.
         let points = [
-            (1790, 1068, 1, 0, 63_603),     // KayKit door
-            (240, 120, 1, 0, 8_220),        // boar
-            (24, 12, 1, 464, 7_996),        // huge grass block (depth splits)
-            (3260, 1770, 34, 504, 129_774), // the whole hub scene
-            (24, 12, 1, 0, 1_169),          // shadow
+            (159, 75, 1, 0, 5_159),       // castle doorway
+            (140, 70, 1, 0, 4_567),       // boar
+            (24, 12, 1, 191, 5_011),      // lava sea block (depth splits)
+            (1397, 661, 34, 199, 55_014), // the whole hub scene
+            (24, 12, 1, 0, 1_025),        // shadow
         ];
         for (verts, tris_in, draws, splits, us) in points {
             let t = TnlStats {

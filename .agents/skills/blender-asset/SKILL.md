@@ -17,7 +17,7 @@ If you learn something new, update this skill and `tools/blender/` in the same s
 | Lighting | Engine-side, per vertex: `Gouraud`, `Flat` or `Unlit` materials (`assets/materials/*.material.ron`) | Model for the faceted look; the material (not Blender) decides shading. |
 | Animation | **Rigid skeleton**: each vertex follows exactly one joint. Skins: heaviest weight wins. No skin + animations: **every scene node is a joint** | Rigid parts (one object per moving part) or an armature with weight 1.0 per vertex. Blended weights crack at joints — or opt into `skinning = "smooth"` in the manifest (two joints per vertex, ~3% more CPU per draw; `model inspect --smooth` reports blended vertices) for meshes that must bend (tails, cloth strips). |
 | Limits | ≤ **32 joints**, **one skin**, ≤ **65 535 vertices**, triangles only, no morph targets, CUBICSPLINE tangents dropped | Merge static parts into their parent; LINEAR keys. |
-| Budget | The **N64 cost estimate** `model inspect` prints (CPU T&L ≈ 9 µs/vertex + 44 µs/triangle + 0.4 ms/draw, + ~30 µs per visible triangle) — not the `Caps` triangle percentage, which understates it ~10× | A 30 fps frame affords ~200–300 triangles of CPU T&L today: props tens of tris, characters ~100–150 (castle64's boar: 120 tris ≈ 9.7 ms). Heavier art needs a `lod` level, or waits for RSP T&L (BACKLOG). |
+| Budget | The **N64 cost estimate** `model inspect` prints (CPU T&L ≈ 17 µs/vertex + 26 µs/triangle + 0.28 ms/draw, + ~30 µs per visible triangle) — not the `Caps` triangle percentage, which understates it ~10× | A 30 fps frame affords roughly 300–400 triangles of CPU T&L today, fewer with many draws: props tens of tris, characters well under 100 (castle64's boar: 70 tris ≈ 4.6 ms; the player is 5 draws, 160 tris ≈ 12 ms). Heavier art needs a `lod` level, or waits for RSP T&L (BACKLOG). |
 | Format | glTF 2.0 (`.glb`), Y-up, meters | Export with the exporter's Y-up option; 1 Blender unit = 1 m. |
 | Facing | **Blender −Y = Trino +Z** (verified by `cargo xtask blender smoke`) | Model the front looking at Blender's −Y (Front view, numpad 1, looks at it). |
 | Clip timing | Each clip starts at its **first keyframe** (Blender exports from frame 1 = 1/24 s; the bake removes the offset) | Key from frame 1 (or 0); close loops by repeating the first key `length` frames later. |
@@ -104,7 +104,9 @@ The CPU T&L transforms and tests every triangle you ship, including:
 - back faces, which are culled only after the transform;
 - faces buried inside another part, which only the z-buffer hides.
 
-Each one costs ~9 µs per vertex plus ~44 µs per triangle.
+Each one costs ~17 µs per vertex plus ~26 µs per triangle. Back faces have been
+rejected before clipping since 2026-10-13, but they still pay for their vertices and
+the test.
 
 What worked on castle64 (`tools/blender/castle64_models.py`):
 - **Drop buried faces:** a box face lying entirely inside another box goes. Parts may

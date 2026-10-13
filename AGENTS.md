@@ -244,6 +244,14 @@ new skill when none fits. Then run `cargo xtask agents sync`. The steps are in
   - **Cost model**: calibrated `N64_COST` in `model inspect` and the editor HUD.
   - **N64 fixes**: hub render 640 → 175 ms. T&L scratch per draw, sort keys, newlib
     `mem*`.
+  - **Content + T&L follow-up**:
+    - castle64's characters and doors rebuilt in Blender with only their visible
+      faces (`cargo xtask blender castle64`);
+    - bake: COLOR_0 is linear, vertex-cache order;
+    - back faces are rejected before clipping and splitting.
+
+    Hub frame 174 → 76 ms; sky-tower 31 ms (≈ 32 fps). Every golden is identical
+    under the T&L change.
   - **3DS fixes**: per-vertex depth (floors no longer cover characters).
   - **castle64 fix**: the game declares its own light.
   - **Visual checks**: a 3DS golden frame and `n3ds_parity`.
@@ -251,8 +259,9 @@ new skill when none fits. Then run `cargo xtask agents sync`. The steps are in
     (`check_stack`) catches the next one.
 
 Ranked next steps: `docs/BACKLOG.md`. The top one is N64 render throughput. castle64's
-hub costs ~175 ms of emulated N64 time per frame; 130 ms of that is CPU T&L, half of it
-one 1068-tri door. RSP T&L is the lever of the needed size.
+hub costs ~76 ms of emulated N64 time per frame. 55 ms of that is CPU T&L, spread over
+34 draws (0.28 ms each before any vertex). The stages run at 20–32 fps. RSP T&L and fewer
+draws are the levers.
 
 PC keyboard mapping: A/B = Z/X, X/Y = C/V, L/R = Q/E, Start = Enter,
 Select = Right Shift, D-pad = arrows, stick = WASD (see `crates/platform-pc/src/input.rs`).
@@ -431,7 +440,15 @@ cargo test --workspace
   calls `set_light` inherits the last one. On consoles the self-test's showcase
   fog leaked into castle64. Set both every frame.
 - **`Caps::N64.max_tris_per_frame` is not the CPU T&L budget.** A 30 fps frame
-  affords ~200–300 triangles today. Use `model inspect`'s N64 cost estimate.
+  affords roughly 300–400 triangles today. Use `model inspect`'s N64 cost estimate.
+- **glTF COLOR_0 is linear.** The bake converts it to display sRGB, so write linear
+  values (the generators use `color0_linear`). Before 2026-10-13, Blender-painted
+  colors baked much darker.
+- **Hidden faces still cost N64 CPU.** A face buried inside another part, or a back
+  face, pays its transform. Build models from visible faces only (`blender-asset`).
+  Don't union parts with a boolean: it cuts holes and adds triangles. Blender's
+  flat-shaded export uses 3 vertices per triangle, so mark faces smooth when each
+  polygon owns its vertices.
 - **Template manifests are `Cargo.toml.tmpl`.** A placeholder `Cargo.toml` anywhere in
   the repo breaks every git-dependency user, because cargo scans the whole repository.
 

@@ -7,31 +7,31 @@
 # 30 fps = 33333.
 
 [hub]
-frame_us = 106700
-tnl_us = 91300
-sort_us = 5600
+frame_us = 91900
+tnl_us = 74800
+sort_us = 5700
 submit_us = 17000
 
 [green-hills]
-frame_us = 52800
-tnl_us = 46700
-sort_us = 2000
-submit_us = 6300
+frame_us = 45300
+tnl_us = 38400
+sort_us = 2100
+submit_us = 6400
 
 [lava-land]
-frame_us = 69900
-tnl_us = 57200
-sort_us = 4800
+frame_us = 59500
+tnl_us = 46100
+sort_us = 4500
 submit_us = 12400
 
 [sky-tower]
-frame_us = 43400
-tnl_us = 37800
+frame_us = 37900
+tnl_us = 31900
 sort_us = 1600
-submit_us = 5200
+submit_us = 5100
 
 [throne]
-frame_us = 63100
-tnl_us = 51000
-sort_us = 4400
+frame_us = 52700
+tnl_us = 39300
+sort_us = 4500
 submit_us = 11900

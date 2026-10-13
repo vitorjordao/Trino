@@ -12,10 +12,10 @@ lava-land, sky-tower, throne — each a **fresh** game at its spawn after 60 idl
 updates, then 4 measured update+render frames) and prints, per frame:
 
 ```
-TRINO_PERF_SCENE:hub frames=4 update=279 render=174865 begin=6892 tnl=129774 sort=9202
-  submit=24122 sprites=688 end=30 game=4155 vblanks=44 verts=3260 tris_in=1770 clipped=40
-  splits=504 backfaced=1204 emitted=1074 culled=1 draws=34
-TRINO_PERF_MODEL:hub model=e2d8d1f0 calls=1 us=63603 verts=1790 tris_in=1068 emitted=552 splits=0
+TRINO_PERF_SCENE:hub frames=4 update=272 render=78556 begin=2676 tnl=55014 sort=3808
+  submit=12191 sprites=695 end=21 game=4148 vblanks=19 verts=1397 tris_in=661 clipped=20
+  splits=199 backfaced=326 emitted=533 culled=1 draws=34
+TRINO_PERF_MODEL:hub model=e2dd959e calls=3 us=8659 verts=264 tris_in=132 emitted=72 splits=0
 ```
 
 - **Times** (µs, emulated N64 clock: ares emulates the count register; the shim
@@ -61,27 +61,55 @@ up is a cost the N64 pays.
 
 ## The cost model (`trino_core::perf::N64_COST`)
 
-T&L ≈ **9.0 µs/vertex + 44.2 µs/source triangle + 419 µs/draw + 14.7 µs/split**, plus
-**~30 µs per emitted triangle** for sort + submit (calibrated 2026-10-13, ±11%).
-Used by `cargo xtask model inspect` ("N64 cost estimate", warning above 25% of a
-30 fps frame), the editor Game view's budget HUD ("N64 3D time" row, N64 profile)
-and the `test n64` table (`model est` column; a `note:` line when off by >25%).
+T&L ≈ **16.6 µs/vertex + 26.1 µs/source triangle + 278 µs/draw + 22.3 µs/split**, plus
+**~30 µs per emitted triangle** for sort + submit. It was recalibrated on 2026-10-13
+after back faces moved ahead of clipping: 44 per-model points, mean error 5%, scene
+totals ±2% (sky-tower +11%).
 
-Recalibrate after any T&L/backend change: collect the `TRINO_PERF_MODEL` lines of a
-run, least-squares `us ≈ a·verts + b·tris_in + c·calls + d·splits` (13+ points;
-numpy isn't installed — normal equations in plain Python are enough), check the
-scene totals, update `N64_COST` and its calibration test in `crates/core/src/perf.rs`.
+Real meshes carry ~2 vertices per triangle, so the vertex and triangle terms trade off
+in the fit. Trust their sum, ~60 µs per closed-mesh triangle, not the split between
+them.
 
-**`Caps::N64.max_tris_per_frame = 4000` is not a CPU-T&L budget**: at the measured
-cost a 30 fps frame affords ~200–300 triangles. The KayKit door (1068 tris) reads
-"27% of budget" but costs ~64 ms ≈ two whole frames. Trust the cost model.
+The model is used by:
+- `cargo xtask model inspect`: "N64 cost estimate", with a warning above 25% of a
+  30 fps frame;
+- the editor Game view's budget HUD: the "N64 3D time" row, N64 profile;
+- the `test n64` table: the `model est` column, plus a `note:` line when off by more
+  than 25%.
 
-## Where the hub's time goes (2026-10-13, render 175 ms, update 0.3 ms)
+Recalibrate after any T&L or backend change. The `note:` line tells you when.
+1. Collect the `TRINO_PERF_MODEL` lines of a run.
+2. Least-squares `us ≈ a·verts + b·tris_in + c·calls + d·splits` over every line with
+   `verts > 0`. numpy isn't installed; normal equations in plain Python are enough.
+3. Check the scene totals.
+4. Update `N64_COST` and its calibration test in `crates/core/src/perf.rs`.
 
-T&L 130 ms (door 64 = half of it; door frames 13; one boar 8; the big grass block 8
-from 464 depth splits), submit 24, sort 9, begin ~1–9 (waiting), game 4. **The enemy
-is not the problem** (a boar ≈ 8 ms, all game logic ≈ 0.3 ms); the door asset and the
-CPU T&L's per-vertex/per-triangle cost are.
+**`Caps::N64.max_tris_per_frame = 4000` is not a CPU-T&L budget.** At the measured
+cost, a 30 fps frame affords roughly 300–400 triangles, fewer with many draws. The
+original KayKit door (1068 tris) read "27% of budget" and cost ~64 ms, two whole
+frames. Trust the cost model.
+
+## Where the time goes (2026-10-13, after the content + back-face pass)
+
+| Scene | Frame (ms) | ≈ fps | T&L (ms) | Draws |
+|---|---|---|---|---|
+| hub | 76.2 | 13 | 55.0 | 34 |
+| green-hills | 37.3 | 27 | 28.1 | 23 |
+| lava-land | 49.1 | 20 | 33.7 | 22 |
+| sky-tower | 31.2 | **32** | 23.2 | 26 |
+| throne | 43.4 | 23 | 28.7 | 19 |
+
+- **The hub has no single culprit any more:**
+  - door frames ×3: 8.7 ms;
+  - brick blocks ×7: 7.8 ms;
+  - coins ×8: 6.3 ms;
+  - doorway: 5.2 ms;
+  - grass (193 splits): 5.0 ms;
+  - boar: 4.6 ms;
+  - player, 5 draws: 9.3 ms.
+- About 9.5 ms is per-draw overhead (34 × 0.28 ms).
+- Sort + submit: 16 ms.
+- **The enemy is not the problem.** A boar costs ~4.6 ms, and all game logic ~0.3 ms.
 
 ## What worked, what didn't (keep this list honest)
 
@@ -91,18 +119,25 @@ CPU T&L's per-vertex/per-triangle cost are.
 | Sort 8-byte keys `(group, painter_key)` instead of moving 88-byte `ScreenTri`s; explicit tie-break | 259 → 190 ms; same order on every backend |
 | Link newlib's `memcpy/memset/memmove/memcmp` (Rust's weak generic ones won) | update −10%, T&L −0.4…−1.6% (kept; `check_mem_symbols` guards it) |
 | Light declared by castle64 every frame (it inherited the showcase's fogged light) | hub 190 → 175 ms (fog/colored-light path off) — a correctness fix that also measured right |
+| **Content rebuilt in Blender** (`tools/blender/castle64_models.py`): KayKit doorway 1068 → 75 tris, boar 120 → 70, stage door 60 → 44, player parts −10…20%, only faces a camera can see | frame: hub 174 → 88.5 ms, the stages −3…−14% (same ROM code: a clean A/B) |
+| Bake reorders triangles/vertices for the 32-slot vertex cache (`MeshData::optimize_vertex_order`) | Blender exports: transforms 3/tri → 2/tri (boar 210 → 140) |
+| **Back faces rejected before clipping/splitting** (view-space triple product, `tessellate`) | frame −8…−17% more (hub 88.5 → 76.2, throne 52.2 → 43.4); splits −60…−80%; `emitted` and every golden (PC, N64, 3DS) identical |
 | Per-vertex cached projection + no-copy fast path in `tessellate` | neutral (±2%) — reverted |
 | Hot loop compacted (`#[inline(never)]` vertex/flat/general paths) | +3…+17% worse — reverted |
 | `opt-level = "s"` for the ROM | worse everywhere — not adopted |
 
 ## Remaining levers (BACKLOG P0)
 
-- **RSP T&L** (a small ucode, or tiny3d's, behind the same `draw_model` contract,
-  ADR 0003): the only lever of the needed size (~5×).
-- **Content**: decimate or LOD (`model.lod`) the KayKit door — half the hub's T&L.
-- **DEPTH_SPLIT policy**: every target z-buffers now, so splits mostly pay for
-  painter-order quality (14.7 µs each, and they inflate emitted tris: grass 12 → 198,
-  throne castle 60 → 273). Changing it moves goldens — a deliberate renderer change.
+- **RSP T&L**: a small ucode, or tiny3d's, behind the same `draw_model` contract
+  (ADR 0003). It is still the lever for the hub (~2.3× short of 30 fps).
+- **Fewer draws.** Each one costs 0.28 ms before any vertex:
+  - merge each level's static blocks into one baked mesh (also drops buried faces
+    between blocks);
+  - draw coins as billboards (`draw_billboard`, no T&L);
+  - make the player one rigid-skeleton model instead of 5 draws.
+- **DEPTH_SPLIT policy**: every target z-buffers. The remaining splits are on front
+  faces of big blocks (hub grass 12 → 198 tris). Relaxing them moves goldens, so it is
+  a deliberate renderer change.
 - **Caps recalibration** to a cost budget.
 
 ## Workflow for a perf change

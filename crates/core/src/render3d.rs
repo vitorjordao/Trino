@@ -710,7 +710,9 @@ pub struct TnlStats {
     pub clipped: u32,
     /// Bisections made by the depth-span rule ([`DEPTH_SPLIT`]).
     pub splits: u32,
-    /// Triangles dropped as back faces (or degenerate).
+    /// Triangles dropped as back faces (or degenerate): source triangles
+    /// tested before any clipping/splitting, plus the rare split piece that
+    /// rounds to zero area.
     pub backfaced: u32,
     /// Screen triangles handed to the backend.
     pub emitted: u32,
@@ -1033,6 +1035,18 @@ fn tessellate_joints<const SKINNED: bool, const SMOOTH: bool>(
         let vs = [v[0].0, v[1].0, v[2].0];
         // Entirely behind the near plane: gone.
         if vs[0].z <= NEAR && vs[1].z <= NEAR && vs[2].z <= NEAR {
+            continue;
+        }
+        // Back faces go before any clipping, depth splitting or flat
+        // lighting. With the eye at the view-space origin, the projected
+        // (Y-down) area of a triangle is -f² · p0·((p1-p0)×(p2-p0)) / (z0 z1
+        // z2), and every clipped or split piece lies in the same plane, so
+        // this sign is the one the per-piece screen test below finds — it
+        // just used to find it after clipping and bisecting pieces that were
+        // all thrown away (castle64's throne: 592 culled pieces from 276
+        // source triangles).
+        if !s.params.double_sided && (vs[1] - vs[0]).cross(vs[2] - vs[0]).dot(vs[0]) >= 0.0 {
+            stats.backfaced += 1;
             continue;
         }
         let colors = if flat {
@@ -1794,6 +1808,42 @@ mod tests {
                 assert_eq!((c.r, c.g, c.b), (255, 0, 255));
                 assert_eq!(c.a, 255, "fog keeps alpha");
             }
+        }
+    }
+
+    #[test]
+    fn back_faces_are_dropped_before_clipping_and_splitting() {
+        // A long floor slab seen from above: its top and near side face the
+        // camera, the bottom, far side and both ends do not (8 triangles).
+        // The bottom spans the same depth as the top, so splitting it first
+        // would cull a pile of pieces; it must cost one test per triangle.
+        let blob = cube_tmdl();
+        let mesh = Mesh::from_tmdl(&blob).unwrap();
+        let slab = crate::Transform3 {
+            position: Vec3::new(0.0, -1.5, 6.0),
+            rotation: Vec3::ZERO,
+            scale: Vec3::new(12.0, 1.0, 16.0),
+        }
+        .matrix();
+        let mut tris = std::vec::Vec::new();
+        let stats = tessellate(
+            &mesh,
+            &slab,
+            &Camera3::default(),
+            &DEFAULT_LIGHT,
+            &ModelParams::DEFAULT,
+            Vec2::new(320.0, 240.0),
+            &mut |t| tris.push(t),
+        );
+        assert_eq!(stats.tris_in, 12);
+        assert_eq!(stats.backfaced, 8, "{stats:?}");
+        assert!(stats.splits > 0, "the top still splits: {stats:?}");
+        assert_eq!(stats.emitted as usize, tris.len());
+        for t in &tris {
+            let p = t.pts;
+            let area =
+                (p[1].x - p[0].x) * (p[2].y - p[0].y) - (p[2].x - p[0].x) * (p[1].y - p[0].y);
+            assert!(area > 0.0, "only front faces reach the backend");
         }
     }
 

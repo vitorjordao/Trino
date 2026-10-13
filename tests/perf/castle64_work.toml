@@ -8,44 +8,44 @@
 [hub]
 verts = 1397
 tris_in = 661
-clipped = 40
-splits = 504
-backfaced = 636
+clipped = 20
+splits = 199
+backfaced = 326
 emitted = 533
 culled = 1
 
 [green-hills]
 verts = 752
 tris_in = 352
-clipped = 19
-splits = 118
-backfaced = 288
+clipped = 6
+splits = 30
+backfaced = 198
 emitted = 184
 culled = 3
 
 [lava-land]
 verts = 806
 tris_in = 374
-clipped = 10
-splits = 515
-backfaced = 513
+clipped = 4
+splits = 211
+backfaced = 204
 emitted = 384
 culled = 0
 
 [sky-tower]
 verts = 632
 tris_in = 304
-clipped = 11
-splits = 20
-backfaced = 180
+clipped = 6
+splits = 4
+backfaced = 164
 emitted = 143
 culled = 11
 
 [throne]
 verts = 618
 tris_in = 276
-clipped = 40
-splits = 688
-backfaced = 592
+clipped = 12
+splits = 252
+backfaced = 161
 emitted = 369
 culled = 0

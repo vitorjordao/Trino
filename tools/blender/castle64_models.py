@@ -9,7 +9,7 @@
 # into target/blender_castle64/. Prints one `TRINO_BLENDER_MODELS {...}` JSON line.
 #
 # Why these exist (docs/adr/0006, n64-performance skill): on the N64 the CPU T&L
-# pays ~9 us per vertex and ~44 us per source triangle EVEN WHEN THE TRIANGLE IS
+# pays ~17 us per vertex and ~26 us per source triangle EVEN WHEN THE TRIANGLE IS
 # HIDDEN, because hiding happens later (back faces after the transform, buried
 # faces only in the z-buffer). The old generated models were overlapping boxes,
 # and every buried face still paid. The castle entrance was KayKit's
@@ -138,7 +138,7 @@ class Model:
         # Every polygon owns its vertices, so "smooth" normals ARE the face
         # normal — and the exporter then shares a polygon's vertices between
         # its triangles. Flat-shaded faces export 3 vertices per triangle
-        # (measured: boar 70 tris -> 210 verts), at ~9 us each on the N64.
+        # (measured: boar 70 tris -> 210 verts), at ~17 us each on the N64.
         for f in bm.faces:
             f.smooth = True
         bm.to_mesh(me)

@@ -49,21 +49,23 @@
 ## 3. A calibrated cost model instead of a triangle count
 
 - `trino_core::perf::N64_COST` (`CostModel`) is a linear fit of measured emulated
-  time:
-  - 9.0 µs per vertex;
-  - 44.2 µs per source triangle;
-  - 419 µs per draw;
-  - 14.7 µs per split;
+  time. It was recalibrated after §10 made back faces cheap:
+  - 16.6 µs per vertex;
+  - 26.1 µs per source triangle;
+  - 278 µs per draw;
+  - 22.3 µs per split;
   - plus 30 µs per emitted triangle for sort and submit.
-- It fits 13 per-model points within ±11% and four of the five scene totals within
-  ±2%.
+- It fits 44 per-model points with a mean error of 5%, and four of the five scene
+  totals within ±2%. Vertices and triangles are correlated (~2:1), so the sum is
+  reliable and the split between the two terms is not. The first fit was 9.0 / 44.2 /
+  419 / 14.7 µs.
 - Tools that only see deterministic counters use it:
   - `model inspect` prints the per-draw estimate and warns above 25% of a 30 fps
     frame;
   - the editor budget HUD shows an "N64 3D time" row;
   - `test n64` prints the estimate and notes any drift above 25%.
 - `Caps::N64.max_tris_per_frame` (4000) stays for the RDP and strict mode. It is
-  not the CPU-T&L budget, which is ~200–300 triangles per 30 fps frame today.
+  not the CPU-T&L budget, which is roughly 300–400 triangles per 30 fps frame today.
   Replacing it with a cost budget is BACKLOG P0 #1 (d).
 
 ## 4. 3DS: all 3D through citro3d with per-vertex depth
@@ -129,3 +131,56 @@
 - `check_mem_symbols` fails the build if the map's memory section shows the Rust
   copies.
 - Effect, A/B on identical code: game update −10%, T&L −0.4…−1.6%.
+
+## 9. Content is built to the CPU T&L's budget
+
+- On the CPU T&L, every shipped triangle costs time:
+  - back faces pay their vertices and a test;
+  - faces buried inside another part pay everything, since only the z-buffer hides
+    them.
+- The castle entrance was KayKit's 1068-triangle doorway: ~64 ms per frame for ~20 px
+  of screen.
+- castle64's characters and doors are now built in Blender by a committed script,
+  `tools/blender/castle64_models.py` (`cargo xtask blender castle64`). The
+  `blender-asset` skill describes the technique:
+  - keep only the faces a camera can see (buried box faces, soles, the doorway's back);
+  - gate each model on a triangle budget through the engine's own bake.
+- Results:
+
+  | Model | Before (tris) | After (tris) |
+  |---|---|---|
+  | doorway | 1068 | 75 |
+  | boar | 120 | 70 |
+  | stage door | 60 | 44 |
+  | player parts | — | −10…20% |
+
+- The original KayKit file stays as the asset pipeline's textured glTF fixture.
+- On the same ROM code, the hub frame went 174 → 88.5 ms; the stages dropped 3–14%.
+- Two bake fixes came with it:
+  - **COLOR_0 is linear** (glTF spec; Blender exports it so). The bake now converts it
+    to display sRGB bytes, and the in-house generators write linear `f32`. Every
+    previously baked asset is byte-identical. Before the fix, Blender-painted colors
+    came out much darker.
+  - **Vertex-cache order.** `MeshData::optimize_vertex_order` sorts triangles by their
+    lowest vertex and renumbers vertices by first use. Blender's export order missed
+    the 32-slot direct-mapped cache on every reference (3 transforms per triangle
+    instead of 2). It is the identity for meshes that were already local.
+
+## 10. Back faces are rejected before clipping and splitting
+
+- `tessellate` used to cull back faces per screen piece: after near and guard-band
+  clipping, depth bisection and flat lighting. The throne room culled 592 pieces from
+  276 source triangles.
+- Now the test runs once per source triangle, in view space: back-facing when
+  p0 · ((p1 − p0) × (p2 − p0)) ≥ 0. With the eye at the origin, this is the sign of
+  the projected area for z > 0. Every clipped or split piece lies in the same plane, so
+  the answer is the same.
+- Double-sided draws skip it. The per-piece test stays for degenerate pieces.
+- Evidence:
+  - `emitted` is unchanged in every scene;
+  - the PC goldens and the N64 golden are byte-identical;
+  - the 3DS golden has mean diff 0.00;
+  - splits fell 60–80%;
+  - frames fell another 8–17% (hub 88.5 → 76.2 ms, throne 52.2 → 43.4 ms);
+  - a unit test (`back_faces_are_dropped_before_clipping_and_splitting`) fails on the
+    old order with 362 splits and 259 culled pieces for 12 triangles.

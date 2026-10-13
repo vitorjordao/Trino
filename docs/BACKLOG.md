@@ -15,17 +15,30 @@ shipping a 3D game first**, then by cost:
 
 1. **N64 render throughput** (L). Measured per stage and per model since the
    2026-10-13 pass (`n64-performance` skill):
-   - castle64 hub: render **175 ms** of emulated N64 time per frame (640 ms before the
-     pass), update 0.3 ms. T&L 130 ms, RDP submit 24, sort 9. Still ~5× from 30 fps.
-   - Calibrated cost: T&L ≈ 9.0 µs/vertex + 44.2 µs/triangle + 0.42 ms/draw +
-     14.7 µs/split, plus ~30 µs per emitted triangle (`trino_core::perf::N64_COST`).
-     A 30 fps frame affords ~200–300 triangles of CPU T&L.
+   - castle64 frame, emulated N64 ms (update + render − begin):
+
+     | Scene | Frame (ms) | ≈ fps |
+     |---|---|---|
+     | hub | 76.2 | 13 |
+     | green-hills | 37.3 | 27 |
+     | lava-land | 49.1 | 20 |
+     | sky-tower | 31.2 | 32 |
+     | throne | 43.4 | 23 |
+
+     The hub was 640 ms of render before these passes, and it is still ~2.3× from
+     30 fps.
+   - Calibrated cost: T&L ≈ 16.6 µs/vertex + 26.1 µs/triangle + 0.28 ms/draw +
+     22.3 µs/split, plus ~30 µs per emitted triangle (`trino_core::perf::N64_COST`).
+     A 30 fps frame affords roughly 300–400 triangles of CPU T&L.
    - Options, best first:
      - **(a)** Move vertex transform and lighting to the RSP. A small ucode, or
        tiny3d's, behind the same `draw_model` contract (ADR 0003 allows it). Of the
        levers below, only this one is the size of the gap.
-     - **(b)** castle64 content (S): the KayKit door is ~64 ms (half the hub's T&L,
-       1068 tris). Decimate it to ~200 tris or give it a `lod` level.
+     - **(b)** Fewer draws (S–M). Each costs 0.28 ms before any vertex, and the hub
+       makes 34:
+       - merge each level's static blocks into one baked mesh;
+       - draw coins as billboards;
+       - make the player one rigid-skeleton model (today it is 5 draws).
      - **(c)** DEPTH_SPLIT policy (S–M): every target z-buffers now (the 3DS too, since
        this pass), so splits mostly buy painter-order quality. They cost 14.7 µs each
        and inflate emitted triangles (hub grass 12 → 198, throne castle 60 → 273).
@@ -116,6 +129,8 @@ models' vertices overlap the floor".
 | Time gate: `tests/perf/castle64_n64.toml` ceilings (+20% frame, +35% stages — code layout moves a stage ~20%) | passes un-blessed |
 | Calibrated `N64_COST` in `model inspect`, the editor budget HUD and the `test n64` table | ±11% per model, ±2% on 4 of 5 scenes |
 | 3DS golden frame (castle64 hub, tolerance) + `n3ds_parity` (PC N3ds look vs Azahar) | local + CI replica (llvmpipe): mean diff 0.00 |
+| castle64 characters and doors rebuilt in Blender (`tools/blender/castle64_models.py`, only visible faces; KayKit doorway 1068 → 75 tris) + bake fixes (COLOR_0 linear, vertex-cache order) | hub frame 174 → 88.5 ms, stages −3…−14% (same ROM code); goldens re-blessed and reviewed |
+| Back faces rejected before clipping/splitting in `tessellate` | frames another −8…−17% (hub 76.2 ms, sky-tower 31.2 ms ≈ 32 fps); `emitted` and every golden identical |
 | **N64 stack overflow** (present since the baked-scene step): the self-test stacked two ~22 KB `ShowcaseGame` frames past libdragon's 64 KB stack and hung at random. Each showcase step now runs out of line; `check_stack` fails the self-test above 60 KB | peak >64 KB → 47.6 KB; same ROM passed 4/4 runs (it had hung 4 times in a row before) |
 
 Tried and reverted, because it was neutral or worse on the scenes: a per-vertex

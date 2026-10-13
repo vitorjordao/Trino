@@ -336,7 +336,7 @@ impl MeshData {
     /// first-use order, so a vertex's reuses come while it is still cached.
     /// Exporters do not order for this — Blender's glTF output missed on
     /// every reference (boar: 210 transforms for 140 vertices), and on the
-    /// N64 each transform costs ~9 us. Pixels are unchanged (same triangles,
+    /// N64 each transform costs ~17 us. Pixels are unchanged (same triangles,
     /// same winding); already-local meshes (quads written as 4 consecutive
     /// vertices) come out identical.
     pub fn optimize_vertex_order(&mut self) {

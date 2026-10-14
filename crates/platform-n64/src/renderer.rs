@@ -67,6 +67,12 @@ pub struct N64Renderer {
     /// v0, where 0 culls Trino's back faces (its "front" is the opposite
     /// winding; 1 culled every front face, measured) and 2 culls nothing.
     rsp_cull: u32,
+    /// Stream RSP draws to the overlay as they come (when no CPU triangle
+    /// is pending in the batch) instead of at the batch flush: the RSP then
+    /// rasterizes while the CPU is still issuing draws. Off by default:
+    /// at equal depth an RSP draw no longer wins over a CPU triangle that
+    /// comes later in the same batch (castle64's door-on-wall).
+    rsp_stream: bool,
 }
 
 impl N64Renderer {
@@ -119,6 +125,7 @@ impl N64Renderer {
             rsp_on: true,
             pending_rsp: Vec::new(),
             rsp_cull: 0,
+            rsp_stream: false,
         }
     }
 
@@ -265,6 +272,19 @@ impl N64Renderer {
         true
     }
 
+    /// See [`N64Renderer::set_rsp_stream`].
+    pub fn rsp_stream(&self) -> bool {
+        self.rsp_stream
+    }
+
+    /// Stream RSP draws as they are issued (when the batch holds no CPU
+    /// triangles yet) so the RSP overlaps the CPU's remaining draw calls.
+    /// For scenes whose draws are (nearly) all RSP-eligible and that don't
+    /// rely on RSP-after-CPU ordering at equal depth.
+    pub fn set_rsp_stream(&mut self, on: bool) {
+        self.rsp_stream = on;
+    }
+
     /// Send eligible static draws to the RSP T&L overlay (`rsp_trino.S`)
     /// instead of the CPU's `tessellate`.
     pub fn set_rsp(&mut self, on: bool) {
@@ -395,6 +415,9 @@ fn emit_tri_tex(tri: &ScreenTri) {
     unsafe { ffi::trino_tri_tex(v.as_ptr()) }
 }
 
+/// Draws per streamed RSP chunk ([`N64Renderer::set_rsp_stream`]).
+const RSP_STREAM_CHUNK: usize = 8;
+
 fn pack_color(c: Color) -> u32 {
     ((c.r as u32) << 24) | ((c.g as u32) << 16) | ((c.b as u32) << 8) | c.a as u32
 }
@@ -466,6 +489,20 @@ impl Renderer for N64Renderer {
             let cull = if d.cull_back { self.rsp_cull } else { 2 };
             let words = rsp::draw_words(&self.tnl_ctx, matrix, &d, params.tint, rm, cull, 0);
             self.pending_rsp.push(words);
+            // Streaming: hand the overlay a chunk as soon as it is full (and
+            // the batch holds no CPU triangles), so the RSP starts while the
+            // CPU is still issuing draws. Single-draw streaming hung the RDP
+            // in ares under heavy 2D traffic (see the n64-performance skill);
+            // chunks keep the proven burst pattern.
+            if self.rsp_stream
+                && self.pending_tris.is_empty()
+                && self.pending_rsp.len() >= RSP_STREAM_CHUNK
+            {
+                for w in &self.pending_rsp {
+                    unsafe { ffi::trino_rsp_draw(w.as_ptr()) };
+                }
+                self.pending_rsp.clear();
+            }
             let tnl = TnlStats {
                 rsp_draws: 1,
                 rsp_tris: (mesh.index_count / 3) as u32,
@@ -529,20 +566,59 @@ impl Renderer for N64Renderer {
         self.charge(t0, |s| &mut s.end);
     }
 
+    fn fill_rect(&mut self, rect: trino_core::Rect, color: Color) {
+        self.flush_model_batch();
+        let t0 = self.tick();
+        let pack = |a: f32, b: f32| {
+            (((a + 0.5) as i32 as u32 & 0xFFFF) << 16) | ((b + 0.5) as i32 as u32 & 0xFFFF)
+        };
+        let (x, y) = (rect.pos.x, rect.pos.y);
+        // Round the edges (not the size): adjacent rectangles stay seamless.
+        let (x1, y1) = (
+            (x + rect.size.x + 0.5) as i32,
+            (y + rect.size.y + 0.5) as i32,
+        );
+        let (x0, y0) = ((x + 0.5) as i32, (y + 0.5) as i32);
+        let wh = pack((x1 - x0) as f32, (y1 - y0) as f32);
+        unsafe { ffi::trino_fill_rect(pack(x0 as f32, y0 as f32), wh, pack_color(color)) };
+        self.frame_stats.sprites += 1;
+        self.charge(t0, |s| &mut s.sprites);
+    }
+
     fn draw_text(&mut self, font: FontId, pos: Vec2, text: &str, params: &TextParams) {
         let Some(table) = self.fonts.get(&font.0).cloned() else {
             return;
         };
-        if let Ok(parsed) = BitmapFont::parse(&table) {
-            trino_core::text::draw(
-                self,
-                trino_core::text::atlas_of(font),
-                &parsed,
-                pos,
-                text,
-                params,
-            );
+        let Ok(parsed) = BitmapFont::parse(&table) else {
+            return;
+        };
+        let atlas = trino_core::text::atlas_of(font);
+        // Fast path: integer scale and an atlas that fits TMEM whole — one
+        // upload, then a texture rectangle per glyph.
+        let k = params.scale as u32;
+        if k >= 1
+            && params.scale == k as f32
+            && let Some(entry) = self.sprites.get(&atlas.0)
+        {
+            let ptr = entry.ptr;
+            self.flush_model_batch();
+            let t0 = self.tick();
+            if unsafe { ffi::trino_text_begin(ptr, pack_color(params.tint)) } == 1 {
+                let mut glyphs = 0u32;
+                trino_core::text::layout(&parsed, pos, text, params, &mut |r, at| {
+                    let xy = ((at.x as i32 as u32 & 0xFFFF) << 16) | (at.y as i32 as u32 & 0xFFFF);
+                    let st = ((r.pos.x as u32) << 16) | r.pos.y as u32;
+                    let wh = ((r.size.x as u32) << 16) | r.size.y as u32;
+                    unsafe { ffi::trino_text_glyph(xy, st, wh, k) };
+                    glyphs += 1;
+                });
+                self.frame_stats.sprites += glyphs;
+                self.charge(t0, |s| &mut s.sprites);
+                return;
+            }
+            self.charge(t0, |s| &mut s.sprites);
         }
+        trino_core::text::draw(self, atlas, &parsed, pos, text, params);
     }
 
     fn measure_text(&self, font: FontId, text: &str, scale: f32) -> Vec2 {

@@ -209,6 +209,20 @@ void trino_sprite_blit(void* sheet, const trino_blit_t* p)
     }
 }
 
+// Solid rectangle (fill_rect): citro2d's own, no texture.
+typedef struct {
+    float x, y, w, h;
+    float depth;
+    uint32_t color; // RGBA8888
+} trino_fill_t;
+
+void trino_fill_rect(const trino_fill_t* f)
+{
+    uint32_t c = f->color;
+    C2D_DrawRectSolid(f->x, f->y, f->depth, f->w, f->h,
+                      C2D_Color32((c >> 24) & 0xFF, (c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF));
+}
+
 // ---------------------------------------------------------------------------
 // 3D triangles: the engine transforms and lights on the CPU
 // (trino_core::render3d); citro2d only rasterizes gouraud-shaded tris.
@@ -435,6 +449,17 @@ uint32_t trino_joypad_stick(void)
     uint16_t x = (uint16_t)pos.dx;
     uint16_t y = (uint16_t)pos.dy;
     return ((uint32_t)x << 16) | y;
+}
+
+// Touch screen (bottom, 320x240): bit 31 = touching, bits 16..24 = y,
+// bits 0..9 = x, in bottom-screen pixels. hidScanInput already ran in
+// trino_joypad_buttons this frame.
+uint32_t trino_touch(void)
+{
+    if (!(hidKeysHeld() & KEY_TOUCH)) return 0;
+    touchPosition t;
+    hidTouchRead(&t);
+    return (1u << 31) | ((uint32_t)(t.py & 0xff) << 16) | (uint32_t)(t.px & 0x3ff);
 }
 
 // ---------------------------------------------------------------------------

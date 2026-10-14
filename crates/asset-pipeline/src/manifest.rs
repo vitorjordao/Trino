@@ -35,8 +35,10 @@ impl Platform {
     pub fn supported_texture_formats(self) -> &'static [&'static str] {
         match self {
             Platform::Pc => &["RGBA8"],
-            // libdragon mksprite formats that fit typical TMEM budgets.
-            Platform::N64 => &["CI4", "CI8", "RGBA5551"],
+            // libdragon mksprite formats that fit typical TMEM budgets. I4/I8
+            // (intensity, alpha = intensity) suit white masks tinted at draw
+            // time — fonts, UI panels — and upload no palette per blit.
+            Platform::N64 => &["CI4", "CI8", "RGBA5551", "I4", "I8"],
             Platform::N3ds => &["RGBA8", "RGB565"],
         }
     }

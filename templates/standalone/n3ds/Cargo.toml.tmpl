@@ -1,0 +1,16 @@
+[package]
+name = "{{name}}-3ds"
+description = "Nintendo 3DS host for {{name}} (`cargo trino build 3ds`)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "{{name}}-3ds"
+path = "src/main.rs"
+
+[dependencies]
+{{name}} = { workspace = true }
+trino-core = { workspace = true }
+trino-platform-3ds = { workspace = true }

@@ -15,6 +15,13 @@ cpal = { workspace = true }
 winit = { workspace = true }
 bytemuck = { workspace = true }
 pollster = { workspace = true }
+# Gamepads (feature `gamepad`). On Linux gilrs links libudev: install
+# libudev-dev (Debian/Ubuntu) / systemd-devel (Fedora) to enable it.
+gilrs = { version = "0.11", optional = true }
+
+[features]
+default = []
+gamepad = ["dep:gilrs"]
 
 [dev-dependencies]
 png = { workspace = true }

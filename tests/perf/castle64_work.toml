@@ -6,26 +6,26 @@
 # a number going up is a cost the N64 pays.
 
 [hub]
-verts = 120
-tris_in = 60
-clipped = 16
+verts = 24
+tris_in = 12
+clipped = 4
 splits = 0
-backfaced = 38
-emitted = 25
+backfaced = 8
+emitted = 5
 culled = 0
-rsp_draws = 21
-rsp_tris = 545
+rsp_draws = 25
+rsp_tris = 593
 
 [green-hills]
-verts = 48
-tris_in = 24
-clipped = 6
+verts = 24
+tris_in = 12
+clipped = 2
 splits = 0
-backfaced = 16
-emitted = 8
+backfaced = 8
+emitted = 5
 culled = 2
-rsp_draws = 12
-rsp_tris = 280
+rsp_draws = 13
+rsp_tris = 292
 
 [lava-land]
 verts = 24
@@ -39,15 +39,15 @@ rsp_draws = 15
 rsp_tris = 314
 
 [sky-tower]
-verts = 48
-tris_in = 24
-clipped = 6
+verts = 0
+tris_in = 0
+clipped = 0
 splits = 0
-backfaced = 14
-emitted = 10
+backfaced = 0
+emitted = 0
 culled = 7
-rsp_draws = 10
-rsp_tris = 256
+rsp_draws = 12
+rsp_tris = 280
 
 [throne]
 verts = 120

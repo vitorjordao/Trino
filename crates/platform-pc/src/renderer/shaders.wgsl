@@ -101,8 +101,21 @@ fn expand5(c5: vec3<f32>) -> vec3<f32> {
 fn fs_sprite(in: VsOut) -> @location(0) vec4<f32> {
     // Sampled unconditionally: textureSample requires uniform control flow.
     let plain = textureSample(t_sprite, s_sprite, in.uv) * in.tint;
+    var c = plain;
     if globals.look == 1u {
-        let c = sample_3point(in.uv) * in.tint;
+        c = sample_3point(in.uv) * in.tint;
+    }
+    // fill_rect (UVs at the -2 sentinel): a flat color blended with its own
+    // alpha — the RDP blends with the fragment's full-precision alpha; only
+    // the stored color is 5551.
+    if in.uv.x < -1.0 {
+        if globals.look == 1u {
+            let q = quantize_5551(in.tint, vec2<u32>(in.clip.xy));
+            return vec4<f32>(q.rgb, in.tint.a);
+        }
+        return in.tint;
+    }
+    if globals.look == 1u {
         return quantize_5551(c, vec2<u32>(in.clip.xy));
     }
     return plain;

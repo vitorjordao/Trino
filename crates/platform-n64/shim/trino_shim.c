@@ -40,6 +40,18 @@ static void trino_on_vi(void) { trino_vblanks++; }
 // the next mode change must be preceded by an explicit SYNC_PIPE.
 static int trino_mode_3d = 0;
 static int trino_rsp_pending = 0;
+// 2D state cache: standard mode + alpha compare already set for blits, and
+// the tint the combiner currently applies (0xFFFFFFFF = none). Consecutive
+// blits (every glyph of a string) then skip the mode setup — one SOM change
+// and its syncs per blit were most of a glyph's cost. Anything else that
+// touches the mode clears it (trino_mode_standard).
+static int trino_2d_ready = 0;
+static uint32_t trino_2d_tint = 0xFFFFFFFFu;
+static int trino_fill_ready;
+// The sprite whose texels TILE0/TMEM hold right now (text atlas), or NULL
+// once anything else may have loaded TMEM (a blit, a textured 3D draw, a
+// new frame): consecutive strings then skip the atlas upload.
+static void* trino_tmem_owner = NULL;
 
 // Standard render mode + magic-square RGB dither into the 16-bit
 // framebuffer (libdragon's standard mode disables dithering).
@@ -50,6 +62,8 @@ static void trino_mode_standard(void)
         trino_rsp_pending = 0;
     }
     trino_mode_3d = 0;
+    trino_2d_ready = 0;
+    trino_fill_ready = 0;
     rdpq_set_mode_standard();
     rdpq_mode_dithering(DITHER_SQUARE_NONE);
 }
@@ -123,6 +137,8 @@ void trino_frame_begin(uint32_t rgba8888)
         trino_zbuf_ready = 1;
     }
     trino_mode_3d = 0;
+    trino_2d_ready = 0;
+    trino_tmem_owner = NULL;
     rdpq_attach(fb, &trino_zbuf);
     rdpq_clear(RGBA32((rgba8888 >> 24) & 0xFF, (rgba8888 >> 16) & 0xFF,
                       (rgba8888 >> 8) & 0xFF, 255));
@@ -136,6 +152,7 @@ void trino_frame_end(void)
         trino_rsp_pending = 0;
     }
     trino_mode_3d = 0;
+    trino_2d_ready = 0;
     rdpq_detach_show();
 }
 
@@ -174,15 +191,33 @@ typedef struct {
     int32_t src_w, src_h; // 0 = whole sprite
 } trino_blit_t;
 
+// 2D mode for a blit or a text run, with the tint (0xFFFFFFFF = none).
+static void trino_2d_setup(uint32_t tint)
+{
+    if (!trino_2d_ready || trino_mode_3d || trino_rsp_pending) {
+        trino_mode_standard();
+        rdpq_mode_alphacompare(1);
+        trino_2d_ready = 1;
+        trino_2d_tint = 0xFFFFFFFFu; // standard mode's combiner: texture only
+    }
+    if (tint != trino_2d_tint) {
+        if (tint == 0xFFFFFFFFu) {
+            rdpq_mode_combiner(RDPQ_COMBINER_TEX);
+        } else {
+            rdpq_set_prim_color(RGBA32((tint >> 24) & 0xFF, (tint >> 16) & 0xFF,
+                                       (tint >> 8) & 0xFF, tint & 0xFF));
+            if (trino_2d_tint == 0xFFFFFFFFu) {
+                rdpq_mode_combiner(RDPQ_COMBINER1((TEX0, 0, PRIM, 0), (TEX0, 0, PRIM, 0)));
+            }
+        }
+        trino_2d_tint = tint;
+    }
+}
+
 void trino_sprite_blit(void* sprite, const trino_blit_t* p)
 {
-    trino_mode_standard();
-    rdpq_mode_alphacompare(1);
-    if (p->tint != 0xFFFFFFFFu) {
-        rdpq_set_prim_color(RGBA32((p->tint >> 24) & 0xFF, (p->tint >> 16) & 0xFF,
-                                   (p->tint >> 8) & 0xFF, p->tint & 0xFF));
-        rdpq_mode_combiner(RDPQ_COMBINER1((TEX0, 0, PRIM, 0), (TEX0, 0, PRIM, 0)));
-    }
+    trino_2d_setup(p->tint);
+    trino_tmem_owner = NULL;
     rdpq_blitparms_t parms = {
         .s0 = p->src_x,
         .t0 = p->src_y,
@@ -195,6 +230,77 @@ void trino_sprite_blit(void* sprite, const trino_blit_t* p)
         .flip_y = p->flip_y != 0,
     };
     rdpq_sprite_blit((sprite_t*)sprite, p->x, p->y, &parms);
+}
+
+// Solid rectangle (fill_rect): flat PRIM combiner, alpha-blended when
+// translucent, no texture. xy / wh = x << 16 | y (signed 16-bit, whole
+// pixels), color = RGBA8888. Consecutive fills of the same color reuse the
+// mode (the blit cache is invalidated: a blit after a fill re-sets its mode).
+static uint32_t trino_fill_color = 0;
+static int trino_fill_blend = 0;
+void trino_fill_rect(uint32_t xy, uint32_t wh, uint32_t color)
+{
+    if (!trino_fill_ready || trino_mode_3d || trino_rsp_pending) {
+        trino_mode_standard(); // no blending
+        rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
+        trino_fill_ready = 1;
+        trino_fill_blend = 0;
+        trino_fill_color = ~color; // force the color below
+    }
+    // A blit after this fill must set its own mode again.
+    trino_2d_ready = 0;
+    if (color != trino_fill_color) {
+        int a = color & 0xFF;
+        int blend = a < 255;
+        if (blend != trino_fill_blend) {
+            rdpq_mode_blender(blend ? RDPQ_BLENDER_MULTIPLY : 0);
+            trino_fill_blend = blend;
+        }
+        rdpq_set_prim_color(RGBA32((color >> 24) & 0xFF, (color >> 16) & 0xFF,
+                                   (color >> 8) & 0xFF, a));
+        trino_fill_color = color;
+    }
+    int32_t x = (int16_t)(xy >> 16), y = (int16_t)(xy & 0xFFFF);
+    int32_t w = (int16_t)(wh >> 16), h = (int16_t)(wh & 0xFFFF);
+    if (w > 0 && h > 0) {
+        rdpq_fill_rectangle(x, y, x + w, y + h);
+    }
+}
+
+// Text with the whole font atlas resident in TMEM: one upload per string,
+// then one texture rectangle per glyph (trino_text_glyph) — a per-glyph
+// rdpq_sprite_blit re-uploads texels (and a CI palette) every time, ~50 us
+// each. Returns 1 when the atlas fits (I4/I8/RGBA16: 4 KB; CI: 2 KB, the
+// palette takes the rest) and was uploaded, else 0 (blit per glyph).
+uint32_t trino_text_begin(void* sprite, uint32_t tint)
+{
+    sprite_t* sp = (sprite_t*)sprite;
+    tex_format_t fmt = sprite_get_format(sp);
+    int row = (TEX_FORMAT_PIX2BYTES(fmt, sp->width) + 7) & ~7;
+    int limit = (fmt == FMT_CI4 || fmt == FMT_CI8) ? 2048 : 4096;
+    if (row * sp->height > limit) {
+        return 0;
+    }
+    trino_2d_setup(tint);
+    if (trino_tmem_owner != sprite) {
+        rdpq_sprite_upload(TILE0, sp, NULL);
+        trino_tmem_owner = sprite;
+    }
+    return 1;
+}
+
+// One glyph of the resident atlas: xy = screen x << 16 | y (signed 16-bit
+// each, whole pixels), st = atlas s << 16 | t, wh = w << 16 | h, scale =
+// integer pixel scale. Integers only (the N64 ABI rule: no float after an
+// integer argument).
+void trino_text_glyph(uint32_t xy, uint32_t st, uint32_t wh, uint32_t scale)
+{
+    int32_t x = (int16_t)(xy >> 16), y = (int16_t)(xy & 0xFFFF);
+    int32_t s0 = (int32_t)(st >> 16), t0 = (int32_t)(st & 0xFFFF);
+    int32_t w = (int32_t)(wh >> 16), h = (int32_t)(wh & 0xFFFF);
+    int32_t k = (int32_t)scale;
+    __rdpq_texture_rectangle_scaled_fx(TILE0, x * 4, y * 4, (x + w * k) * 4, (y + h * k) * 4,
+                                       s0 * 32, t0 * 32, (s0 + w) * 32, (t0 + h) * 32);
 }
 
 // ---------------------------------------------------------------------------
@@ -286,6 +392,7 @@ static float trino_tex_w = 1.0f, trino_tex_h = 1.0f;
 // into its neighbours) and a half-alpha cutout for soft-edged sprites.
 void trino_3d_texture(void* sprite, uint32_t clamp)
 {
+    trino_tmem_owner = NULL;
     sprite_t* sp = (sprite_t*)sprite;
     trino_mode_standard();
     rdpq_mode_combiner(RDPQ_COMBINER_TEX_SHADE);

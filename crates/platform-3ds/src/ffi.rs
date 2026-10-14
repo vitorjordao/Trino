@@ -4,6 +4,17 @@
 
 use core::ffi::{c_char, c_void};
 
+/// Mirrors `trino_fill_t` in the shim (fill_rect).
+#[repr(C)]
+pub struct TrinoFill {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+    pub depth: f32,
+    pub color: u32,
+}
+
 /// Mirrors `trino_blit_t` in the shim.
 #[repr(C)]
 pub struct TrinoBlit {
@@ -36,6 +47,7 @@ unsafe extern "C" {
     pub fn trino_frame_end();
 
     pub fn trino_sprite_load(romfs_path: *const c_char) -> *mut c_void;
+    pub fn trino_fill_rect(fill: *const TrinoFill);
     /// Returns (width << 16) | height.
     pub fn trino_sprite_size(sheet: *mut c_void) -> u32;
     pub fn trino_sprite_blit(sheet: *mut c_void, params: *const TrinoBlit);
@@ -51,6 +63,8 @@ unsafe extern "C" {
     pub fn trino_joypad_buttons() -> u32;
     /// (x as i16 as u16) << 16 | (y as i16 as u16).
     pub fn trino_joypad_stick() -> u32;
+    /// Bit 31 = touching, bits 16..24 = y, bits 0..9 = x (bottom screen px).
+    pub fn trino_touch() -> u32;
 
     pub fn trino_wav_load(romfs_path: *const c_char) -> *mut c_void;
     pub fn trino_wav_play(wav: *mut c_void, channel: u32, looped: u32);

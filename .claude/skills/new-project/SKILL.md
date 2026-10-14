@@ -18,8 +18,36 @@ cargo xtask new space-cat --standalone <dir> --git https://github.com/vitorjorda
     `trino-runner-pc`, with live asset reload);
   - `assets/manifest.toml`, an AGENTS.md and a pinned `rust-toolchain.toml`;
   - run it with `cargo run -p <name>-pc`; `TRINO_SIM=3ds` gives the 3DS look.
-  - Console packaging of standalone games does **not** exist yet (BACKLOG P1 #3).
-    The `.z64`/`.3dsx` builds still link castle64 inside this repo.
+  - **Consoles:** the template also ships `n64/` (a staticlib using `n64_main!`),
+    `n3ds/` (a bin using `n3ds_main!`, with a `build.rs` that relinks when the shim
+    changes) and `trino.toml`.
+    - `cargo trino build|run|test|watch n64|3ds` is the engine's xtask, aliased in the
+      project's `.cargo/config.toml`. It finds `trino.toml` in the cwd; `--project <dir>`
+      and `$TRINO_PROJECT` also work.
+    - Outputs go to the project's `target/n64/<name>.z64` and `target/3ds/<name>.3dsx`.
+    - A local engine checkout is required (a path dep, or a submodule like Plan &
+      Party's `engine/`): the shims, target spec and Docker image live there.
+
+## Console projects (`trino.toml`, ADR 0008)
+
+| Key | Meaning |
+|---|---|
+| `[project]` | `name` (file stem); `title` (≤ 20 ASCII, the ROM header and 3DS menu); `description`, `author` |
+| `[n64]` | `package` (staticlib crate); `save` (`eeprom16k` = 2 KB: framing leaves 2040 B) |
+| `[3ds]` | `package`, `bin`, `icon` (a 48×48 PNG) |
+| `[test]` | `n64_goldens`/`n3ds_goldens` (frames the self-test dumps, in order); `n64_max_frame_us` (gate on `TRINO_FRAME` averages); `watch` dirs |
+
+- **The self-test** is the macro's second argument, `fn(&mut N64Host, &mut G) ->
+  Result<(), String>`. Drive frames with `host.step`, time them with `host.measure` +
+  `host.report_frames`, and dump goldens with `host.dump_framebuffer`. The N64 macro
+  fails the test above 60 KB of stack.
+- **`n64_main!(make, self_test, setup)`**: `setup(&mut N64Host)` runs after boot, for
+  renderer options such as `set_rsp_stream`.
+- **Pitfall:** the N64 crate must be `#![cfg_attr(target_os = "none", no_std)]`. A
+  plain `no_std` breaks the host `cargo check --workspace` (no panic handler).
+- **Gate:** `xtask/tests/standalone.rs` renders the template, and `project::tests`
+  parses `trino.toml`. The console path was verified end to end on a fresh scaffold:
+  it builds and passes in ares and in Azahar.
 
 ## Maintaining the templates
 

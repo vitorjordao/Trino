@@ -1,0 +1,4 @@
+# `cargo trino <command>`: the engine's xtask, run against this project
+# (it finds `trino.toml` in the current directory).
+[alias]
+trino = "run --quiet --manifest-path {{engine_manifest}} -p xtask --"

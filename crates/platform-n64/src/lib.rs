@@ -34,6 +34,8 @@ mod assets;
 #[cfg(target_os = "none")]
 mod audio;
 #[cfg(target_os = "none")]
+mod host;
+#[cfg(target_os = "none")]
 mod input;
 #[cfg(target_os = "none")]
 mod renderer;
@@ -49,8 +51,34 @@ pub use assets::N64Assets;
 #[cfg(target_os = "none")]
 pub use audio::N64Audio;
 #[cfg(target_os = "none")]
+pub use host::{FrameReport, N64Host};
+#[cfg(target_os = "none")]
 pub use input::N64Input;
 #[cfg(target_os = "none")]
 pub use renderer::N64Renderer;
 #[cfg(target_os = "none")]
 pub use system::N64Platform;
+
+/// Generate `trino_rust_main` (the symbol the C shim's `main` calls) for a
+/// game: `n64_main!(MyGame::new)` or `n64_main!(MyGame::new, self_test)`,
+/// where `MyGame::new: fn(Vec2) -> MyGame` and
+/// `self_test: fn(&mut N64Host, &mut MyGame) -> Result<(), String>`; an
+/// optional third `setup: fn(&mut N64Host)` runs after boot (renderer
+/// options such as `renderer.set_rsp_stream(true)`).
+/// Expands to nothing on other targets, so the crate builds everywhere.
+#[macro_export]
+macro_rules! n64_main {
+    ($make:expr) => {
+        $crate::n64_main!($make, |_: &mut $crate::N64Host, _: &mut _| Ok(()));
+    };
+    ($make:expr, $self_test:expr) => {
+        $crate::n64_main!($make, $self_test, |_: &mut $crate::N64Host| {});
+    };
+    ($make:expr, $self_test:expr, $setup:expr) => {
+        #[cfg(target_os = "none")]
+        #[unsafe(no_mangle)]
+        pub extern "C" fn trino_rust_main() {
+            $crate::N64Host::main($make, $self_test, $setup)
+        }
+    };
+}

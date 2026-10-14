@@ -235,6 +235,20 @@ impl Renderer for N3dsRenderer {
         unsafe { ffi::trino_frame_begin(pack_color(clear)) }
     }
 
+    fn fill_rect(&mut self, rect: trino_core::Rect, color: Color) {
+        self.flush_model_batch();
+        self.frame_stats.sprites += 1;
+        let f = ffi::TrinoFill {
+            x: rect.pos.x,
+            y: rect.pos.y,
+            w: rect.size.x,
+            h: rect.size.y,
+            depth: self.sprite_depth,
+            color: pack_color(color),
+        };
+        unsafe { ffi::trino_fill_rect(&f) }
+    }
+
     fn draw_sprite(&mut self, sprite: SpriteId, pos: Vec2, params: &SpriteParams) {
         self.flush_model_batch();
         let Some(entry) = self.sprites.get(&sprite.0) else {

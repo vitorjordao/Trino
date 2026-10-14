@@ -10,6 +10,8 @@ for AI agents and humans.
 |---|---|
 | `game/` | The game crate (`{{name_snake}}`). Portable: depends only on `trino-core` + `trino-game-api`. |
 | `pc/` | Desktop host (`trino-runner-pc`): window, renderer, audio, input, asset bake. |
+| `n64/`, `n3ds/` | Console hosts (`n64_main!` / `n3ds_main!`) and their emulator self-tests. |
+| `trino.toml` | Console packaging: ROM title, save type, 3DS icon, test gates. |
 | `assets/manifest.toml` | Every asset by logical path; masters in `assets/shared/`. |
 | `Cargo.toml` | Workspace; the engine dependencies (path or git) are declared once here. |
 
@@ -32,13 +34,22 @@ cargo test                              # the game's unit tests
 cargo clippy --all-targets -- -D warnings
 ```
 
-Console type-check of the game crate (needs nightly + `rust-src`):
+Consoles (`cargo trino` is the engine's xtask, aliased in `.cargo/config.toml`;
+it needs a local engine checkout, Docker for the N64 and devkitPro for the 3DS —
+see the engine's `build-n64` / `build-3ds` skills):
 
 ```
-cargo +nightly check -Zbuild-std=core,alloc --target armv6k-nintendo-3ds -p {{name}} --release
+cargo trino build n64      # target/n64/{{name}}.z64
+cargo trino run n64        # ... in ares
+cargo trino test n64       # boot the self-test in ares: TRINO_TEST_PASS + frame budget
+cargo trino build 3ds      # target/3ds/{{name}}.3dsx
+cargo trino run 3ds        # ... in Azahar
+cargo trino test 3ds       # boot the self-test in Azahar
+cargo trino watch n64      # rebuild + relaunch on save (also 3ds)
 ```
 
-Console **packaging** (`.z64` / `.3dsx`), the editor, scenes and the AI
-skills live in the engine repository: add the game there as
-`examples/{{name}}` (`cargo xtask new {{name}}` in the engine) or point its
-`apps/*` at this crate. See the engine's `AGENTS.md` and `.agents/skills/`.
+The self-tests live in `n64/src/lib.rs` and `n3ds/src/main.rs`: drive frames
+with `host.step`, time them with `host.measure` + `host.report_frames`
+(`trino.toml` › `n64_max_frame_us` gates the N64 average), dump golden frames
+with `host.dump_framebuffer` (`n64_goldens` / `n3ds_goldens`, blessed with
+`--bless`). See the engine's `AGENTS.md` and `.agents/skills/`.

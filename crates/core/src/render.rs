@@ -411,6 +411,14 @@ pub trait Renderer {
     /// flipbook frames of a small atlas. Unknown sprites draw nothing.
     fn draw_billboard(&mut self, _sprite: SpriteId, _pos: Vec3, _params: &BillboardParams) {}
 
+    /// Fill a rectangle (screen pixels, top-left origin) with a solid
+    /// color; alpha < 255 blends. A 2D draw like `draw_sprite` (it flushes
+    /// the model batch), but with no texture: interface panels, bars and
+    /// highlights without a texture upload per rectangle (on the N64 a
+    /// sprite blit loads TMEM every time). Every backend implements it; the
+    /// default draws nothing.
+    fn fill_rect(&mut self, _rect: Rect, _color: Color) {}
+
     /// Draw `text` with a baked bitmap font, its top-left corner at `pos`
     /// (alignment shifts each line around `pos.x`). `\n` starts a new line.
     /// Built on sprite regions, so it costs one sprite draw per glyph.

@@ -47,6 +47,10 @@ pub fn engine_checks(
     if occlusion(renderer)? {
         platform.log("TRINO_STEP:occlusion probed\n");
     }
+    platform.log("TRINO_STEP:fill rect\n");
+    if fill_rect(renderer)? {
+        platform.log("TRINO_STEP:fill rect probed\n");
+    }
     platform.log("TRINO_STEP:smooth skin\n");
     smooth_skin(renderer)?;
     platform.log("TRINO_STEP:portals\n");
@@ -101,6 +105,39 @@ pub fn textured_3d(renderer: &mut dyn Renderer) -> Result<bool, &'static str> {
         let close = |a: u8, b: u8| (a as i32 - b as i32).abs() <= 48;
         if !(close(got.r, want[0]) && close(got.g, want[1]) && close(got.b, want[2])) {
             return Err("textured 3D: wrong color in a texture quadrant");
+        }
+    }
+    Ok(true)
+}
+
+/// `Renderer::fill_rect`: an opaque red rectangle with a half-transparent
+/// white one over its left half, on black. Probes the opaque part (red),
+/// the blend (pink: red + white at 50%) and the outside (black). `Ok(false)`
+/// where `read_pixel` is unsupported.
+pub fn fill_rect(renderer: &mut dyn Renderer) -> Result<bool, &'static str> {
+    let caps = *renderer.caps();
+    let (w, h) = (caps.screen_width as f32, caps.screen_height as f32);
+    let r = trino_core::Rect::new(w * 0.25, h * 0.25, w * 0.5, h * 0.5);
+    let half = trino_core::Rect::new(w * 0.25, h * 0.25, w * 0.25, h * 0.5);
+    // Several identical frames: the 3DS LCD is double-buffered.
+    for _ in 0..3 {
+        renderer.begin_frame(Color::BLACK);
+        renderer.fill_rect(r, Color::rgb(255, 0, 0));
+        renderer.fill_rect(half, Color::rgba(255, 255, 255, 128));
+        renderer.end_frame();
+    }
+    let probes = [
+        ((w * 0.6) as u32, (h * 0.5) as u32, [255, 0, 0]),
+        ((w * 0.35) as u32, (h * 0.5) as u32, [255, 128, 128]),
+        ((w * 0.1) as u32, (h * 0.1) as u32, [0, 0, 0]),
+    ];
+    for (x, y, want) in probes {
+        let Some(got) = renderer.read_pixel(x, y) else {
+            return Ok(false);
+        };
+        let close = |a: u8, b: u8| (a as i32 - b as i32).abs() <= 40;
+        if !(close(got.r, want[0]) && close(got.g, want[1]) && close(got.b, want[2])) {
+            return Err("fill_rect: wrong color (opaque, blended or outside)");
         }
     }
     Ok(true)

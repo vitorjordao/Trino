@@ -4,9 +4,11 @@
 //! (CI4 on N64 by default — two colors fit a 4-bit palette), the table is
 //! copied verbatim.
 //!
-//! - **PNG grid**: glyphs in codepoint order from `first`, row-major cells
-//!   of `cell = [w, h]`. `proportional = true` trims each glyph to its
-//!   opaque columns (advance = width + `spacing`).
+//! - **PNG grid**: row-major cells of `cell = [w, h]`, in codepoint order
+//!   from `first` — or, with `chars = "..."`, cell *i* holds the *i*-th
+//!   character of `chars` (any codepoints: accented letters, `¿`, `€`).
+//!   `proportional = true` trims each glyph to its opaque columns
+//!   (advance = width + `spacing`).
 //! - **TTF/OTF**: rasterized at `size` pixels with `ab_glyph`; coverage is
 //!   thresholded to hard pixels unless `antialias = true` (the N64-era
 //!   look is crisp, and CI4 cannot hold coverage ramps).
@@ -31,7 +33,9 @@ pub struct FontDecl {
     /// TTF: pixel height (line height before rounding).
     #[serde(default)]
     pub size: Option<f32>,
-    /// TTF: characters to bake (default: printable ASCII).
+    /// TTF: characters to bake (default: printable ASCII). PNG grid: the
+    /// character of each cell, in cell order (default: consecutive
+    /// codepoints from `first`).
     #[serde(default)]
     pub chars: Option<String>,
     /// PNG grid: trim glyphs to their opaque columns (default true).
@@ -40,6 +44,11 @@ pub struct FontDecl {
     /// Extra advance after each proportional glyph, pixels (default 1).
     #[serde(default = "default_spacing")]
     pub spacing: u32,
+    /// PNG grid, monospaced (`proportional = false`): the advance per glyph
+    /// (default: the cell width). Lets the atlas store 5-wide cells for a
+    /// 6-pixel pitch — a smaller atlas that fits the N64's TMEM whole.
+    #[serde(default)]
+    pub advance: Option<u32>,
     /// TTF: keep coverage as alpha instead of thresholding.
     #[serde(default)]
     pub antialias: bool,
@@ -122,13 +131,28 @@ fn bake_grid(source: &Path, decl: &FontDecl) -> Result<BakedFont, String> {
     let cols = w / cw;
     let rows = h / ch;
     let alpha = |x: u32, y: u32| rgba[((y * w + x) * 4 + 3) as usize];
+    let listed: Option<Vec<char>> = decl.chars.as_ref().map(|c| c.chars().collect());
+    if let Some(list) = &listed
+        && list.len() as u32 > cols * rows
+    {
+        return Err(format!(
+            "{}: `chars` lists {} characters but the grid has {} cells",
+            source.display(),
+            list.len(),
+            cols * rows
+        ));
+    }
+    let cells = listed.as_ref().map_or(cols * rows, |l| l.len() as u32);
     let mut glyphs = Vec::new();
-    for i in 0..cols * rows {
+    for i in 0..cells {
         let (cx, cy) = ((i % cols) * cw, (i / cols) * ch);
         let opaque: Vec<u32> = (0..cw)
             .filter(|&x| (0..ch).any(|y| alpha(cx + x, cy + y) > 0))
             .collect();
-        let cp = decl.first + i;
+        let cp = match &listed {
+            Some(list) => list[i as usize] as u32,
+            None => decl.first + i,
+        };
         let glyph = if !decl.proportional {
             Glyph {
                 codepoint: cp,
@@ -137,7 +161,7 @@ fn bake_grid(source: &Path, decl: &FontDecl) -> Result<BakedFont, String> {
                 w: if opaque.is_empty() { 0 } else { cw as u8 },
                 h: ch as u8,
                 x_offset: 0,
-                advance: cw as u8,
+                advance: decl.advance.unwrap_or(cw).min(255) as u8,
             }
         } else if let (Some(&l), Some(&r)) = (opaque.first(), opaque.last()) {
             Glyph {
@@ -301,11 +325,17 @@ fn bake_ttf(source: &Path, decl: &FontDecl) -> Result<BakedFont, String> {
 }
 
 /// Make every pixel white, keeping alpha (tint colors text at draw time).
+/// White ink, coverage in alpha — and transparent texels **black**: the
+/// N64's intensity formats (I4/I8) derive alpha from RGB, so a white but
+/// transparent background would turn every glyph cell into a solid block.
 fn whiten(rgba: &[u8]) -> Vec<u8> {
     rgba.as_chunks::<4>()
         .0
         .iter()
-        .flat_map(|&[_, _, _, a]| [255, 255, 255, a])
+        .flat_map(|&[_, _, _, a]| {
+            let c = if a > 0 { 255 } else { 0 };
+            [c, c, c, a]
+        })
         .collect()
 }
 
@@ -391,6 +421,45 @@ mod tests {
     }
 
     #[test]
+    fn monospaced_grid_can_advance_past_its_cell() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = grid_png(dir.path());
+        let baked = bake_font(
+            &path,
+            &decl("file = \"x.png\"\ncell = [4, 2]\nproportional = false\nadvance = 6\n"),
+        )
+        .unwrap();
+        let font = BitmapFont::parse(&baked.table).unwrap();
+        let bang = font.glyph('!').unwrap();
+        assert_eq!((bang.w, bang.advance), (4, 6));
+    }
+
+    #[test]
+    fn grid_font_with_listed_chars_maps_any_codepoint() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = grid_png(dir.path());
+        let baked = bake_font(
+            &path,
+            &decl("file = \"x.png\"\ncell = [4, 2]\nchars = \" çÃ\"\n"),
+        )
+        .unwrap();
+        let font = BitmapFont::parse(&baked.table).unwrap();
+        assert_eq!(font.glyph('ç').unwrap().x, 5);
+        assert_eq!(font.glyph('Ã').unwrap().x, 9);
+        assert!(
+            font.glyph('!').is_none(),
+            "cells follow `chars`, not `first`"
+        );
+        // More characters than cells is an authoring error.
+        let err = bake_font(
+            &path,
+            &decl("file = \"x.png\"\ncell = [4, 2]\nchars = \"abcd\"\n"),
+        )
+        .unwrap_err();
+        assert!(err.contains("4 characters"), "{err}");
+    }
+
+    #[test]
     fn grid_font_trims_and_round_trips_through_core() {
         let dir = tempfile::tempdir().unwrap();
         let path = grid_png(dir.path());
@@ -403,9 +472,11 @@ mod tests {
         assert_eq!((bang.x, bang.w, bang.advance), (5, 1, 2));
         let quote = font.glyph('"').unwrap();
         assert_eq!((quote.x, quote.w, quote.advance), (9, 2, 3));
-        // Atlas is whitened, alpha kept.
+        // Atlas is whitened, alpha kept; transparent texels are black
+        // (intensity formats take alpha from RGB).
         let at = 5 * 4; // pixel (5, 0)
         assert_eq!(&baked.rgba[at..at + 4], &[255, 255, 255, 255]);
+        assert_eq!(&baked.rgba[0..4], &[0, 0, 0, 0]);
     }
 
     #[test]

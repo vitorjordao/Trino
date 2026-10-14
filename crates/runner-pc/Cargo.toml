@@ -11,6 +11,8 @@ rust-version.workspace = true
 default = []
 # Rebake + re-upload assets live when a master changes.
 watch = ["trino-asset-pipeline/watch"]
+# Gamepads through gilrs (Linux: needs libudev-dev at build time).
+gamepad = ["trino-platform-pc/gamepad"]
 
 [dependencies]
 trino-core = { workspace = true }

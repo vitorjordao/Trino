@@ -43,13 +43,8 @@ shipping a 3D game first**, then by cost:
 
 ### P1 — the next quality and reach jump
 
-3. **Console packaging for standalone projects** (M).
-   - `cargo xtask new --standalone` gives a PC host plus a portable game crate.
-   - `.z64` / `.3dsx` builds still live in the engine repo, because `apps/n64` and
-     `apps/3ds` link castle64.
-   - Make the console apps generic over a game crate (a `trino_game!` entry macro,
-     like `export_game!`), and let `xtask build n64|3ds --project <dir>` build an
-     external project.
+3. ~~**Console packaging for standalone projects**~~: **done** (2026-10-14, ADR 0008, the
+   "Done — external console projects" table below).
 4. **Publish the engine crates** (S–M). Publish `trino-core`, `trino-game-api` and
    `trino-runner-pc` to crates.io, with a semver policy tied to `GAME_API_VERSION`
    and the format versions. Standalone projects then default to registry deps; they
@@ -57,6 +52,9 @@ shipping a 3D game first**, then by cost:
 5. **N64 depth precision** (S–M).
    - The 16-bit z with `NEAR = 0.05` z-fights coplanar decals; the showcase pond
      needed 10 cm.
+   - Workaround that works today: draw the world at a smaller scale (Plan & Party
+     uses 1/128, about 1 cm per depth step at 40–60 m). A per-camera depth near would
+     make it unnecessary.
    - Either raise the near plane per scene, or add a material `decal` flag mapping to
      `Z_MODE_DECAL` on N64 (and a depth bias on PC/3DS).
 6. **RDP antialiasing + the VI AA/divot stage** (M).
@@ -79,6 +77,17 @@ shipping a 3D game first**, then by cost:
    independent check of the ares golden. Skipped in this pass: ares's parallel-RDP is
    bit-exact and already the reference.
 
+8. **RSP streaming: single-draw hang** (M). `set_rsp_stream` one draw at a time
+   hung the RDP in ares under Plan & Party's 2D traffic (`RSP CRASH … display_get`,
+   RDP queue misaligned), triggered by font texel data. Chunks of 8 are fine. Find
+   the race (overlay switch vs rdpq autosync?), then stream per draw.
+9. **3DS bottom screen** (M). Draw a second picture on the touch screen (menus, map),
+   with `pointer` in its own coordinates.
+10. **N64 Mouse** (S). Fill `InputState::pointer` from the N64 mouse peripheral
+    (libdragon's joypad styles).
+11. **Gamepads on Linux without libudev at build time** (S). An evdev backend, or a
+    dlopen'd udev, so `gamepad` can be on by default.
+
 ### P2 — when a game asks for it
 
 10. **Editor UI test coverage** (incremental). The kittest harness exists
@@ -99,6 +108,15 @@ shipping a 3D game first**, then by cost:
   time) and bless `tests/perf/` on purpose. Host benches stay as regression guards only.
 
 ---
+
+## Done — external console projects (2026-10-14, branch `engine/standalone-consoles`, ADR 0008)
+
+| Item | Evidence |
+|---|---|
+| `trino.toml` + `--project` for `build/run/test/watch n64|3ds`, `n64_main!`/`n3ds_main!`, `N64Host`/`N3dsHost`, project goldens + `n64_max_frame_us` | a fresh standalone scaffold passes in ares and Azahar; Plan & Party ships through it |
+| Pointer input (PC mouse + wheel, 3DS touch), PC gamepads (gilrs, feature `gamepad`) | `PcInput` tests, the window → game mapping test; gamepads type-checked for Windows/macOS |
+| `Renderer::fill_rect` (all backends), N64 resident text atlas, 2D blit cache, I4/I8 sprites, font `chars`/`advance`, black transparent texels | castle64 `fill rect` self-test step on PC, ares and Azahar; goldens unchanged |
+| `RSP_BAND` 4×; opt-in `set_rsp_stream` (chunks of 8); `FrameReport` with stages, top models, vblank fps | castle64 hub 13.4 → 10.6 ms; Plan & Party late-game event 107 → 24 ms emulated (30 fps locked) |
 
 ## Done — N64 RSP T&L (2026-10-13, branch `n64-rsp-tnl`, ADR 0007)
 

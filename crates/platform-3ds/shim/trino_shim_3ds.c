@@ -209,6 +209,20 @@ void trino_sprite_blit(void* sheet, const trino_blit_t* p)
     }
 }
 
+// Solid rectangle (fill_rect): citro2d's own, no texture.
+typedef struct {
+    float x, y, w, h;
+    float depth;
+    uint32_t color; // RGBA8888
+} trino_fill_t;
+
+void trino_fill_rect(const trino_fill_t* f)
+{
+    uint32_t c = f->color;
+    C2D_DrawRectSolid(f->x, f->y, f->depth, f->w, f->h,
+                      C2D_Color32((c >> 24) & 0xFF, (c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF));
+}
+
 // ---------------------------------------------------------------------------
 // 3D triangles: the engine transforms and lights on the CPU
 // (trino_core::render3d); citro2d only rasterizes gouraud-shaded tris.

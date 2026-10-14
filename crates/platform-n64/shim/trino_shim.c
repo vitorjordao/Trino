@@ -47,6 +47,11 @@ static int trino_rsp_pending = 0;
 // touches the mode clears it (trino_mode_standard).
 static int trino_2d_ready = 0;
 static uint32_t trino_2d_tint = 0xFFFFFFFFu;
+static int trino_fill_ready;
+// The sprite whose texels TILE0/TMEM hold right now (text atlas), or NULL
+// once anything else may have loaded TMEM (a blit, a textured 3D draw, a
+// new frame): consecutive strings then skip the atlas upload.
+static void* trino_tmem_owner = NULL;
 
 // Standard render mode + magic-square RGB dither into the 16-bit
 // framebuffer (libdragon's standard mode disables dithering).
@@ -58,6 +63,7 @@ static void trino_mode_standard(void)
     }
     trino_mode_3d = 0;
     trino_2d_ready = 0;
+    trino_fill_ready = 0;
     rdpq_set_mode_standard();
     rdpq_mode_dithering(DITHER_SQUARE_NONE);
 }
@@ -132,6 +138,7 @@ void trino_frame_begin(uint32_t rgba8888)
     }
     trino_mode_3d = 0;
     trino_2d_ready = 0;
+    trino_tmem_owner = NULL;
     rdpq_attach(fb, &trino_zbuf);
     rdpq_clear(RGBA32((rgba8888 >> 24) & 0xFF, (rgba8888 >> 16) & 0xFF,
                       (rgba8888 >> 8) & 0xFF, 255));
@@ -210,6 +217,7 @@ static void trino_2d_setup(uint32_t tint)
 void trino_sprite_blit(void* sprite, const trino_blit_t* p)
 {
     trino_2d_setup(p->tint);
+    trino_tmem_owner = NULL;
     rdpq_blitparms_t parms = {
         .s0 = p->src_x,
         .t0 = p->src_y,
@@ -222,6 +230,41 @@ void trino_sprite_blit(void* sprite, const trino_blit_t* p)
         .flip_y = p->flip_y != 0,
     };
     rdpq_sprite_blit((sprite_t*)sprite, p->x, p->y, &parms);
+}
+
+// Solid rectangle (fill_rect): flat PRIM combiner, alpha-blended when
+// translucent, no texture. xy / wh = x << 16 | y (signed 16-bit, whole
+// pixels), color = RGBA8888. Consecutive fills of the same color reuse the
+// mode (the blit cache is invalidated: a blit after a fill re-sets its mode).
+static uint32_t trino_fill_color = 0;
+static int trino_fill_blend = 0;
+void trino_fill_rect(uint32_t xy, uint32_t wh, uint32_t color)
+{
+    if (!trino_fill_ready || trino_mode_3d || trino_rsp_pending) {
+        trino_mode_standard(); // no blending
+        rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
+        trino_fill_ready = 1;
+        trino_fill_blend = 0;
+        trino_fill_color = ~color; // force the color below
+    }
+    // A blit after this fill must set its own mode again.
+    trino_2d_ready = 0;
+    if (color != trino_fill_color) {
+        int a = color & 0xFF;
+        int blend = a < 255;
+        if (blend != trino_fill_blend) {
+            rdpq_mode_blender(blend ? RDPQ_BLENDER_MULTIPLY : 0);
+            trino_fill_blend = blend;
+        }
+        rdpq_set_prim_color(RGBA32((color >> 24) & 0xFF, (color >> 16) & 0xFF,
+                                   (color >> 8) & 0xFF, a));
+        trino_fill_color = color;
+    }
+    int32_t x = (int16_t)(xy >> 16), y = (int16_t)(xy & 0xFFFF);
+    int32_t w = (int16_t)(wh >> 16), h = (int16_t)(wh & 0xFFFF);
+    if (w > 0 && h > 0) {
+        rdpq_fill_rectangle(x, y, x + w, y + h);
+    }
 }
 
 // Text with the whole font atlas resident in TMEM: one upload per string,
@@ -239,7 +282,10 @@ uint32_t trino_text_begin(void* sprite, uint32_t tint)
         return 0;
     }
     trino_2d_setup(tint);
-    rdpq_sprite_upload(TILE0, sp, NULL);
+    if (trino_tmem_owner != sprite) {
+        rdpq_sprite_upload(TILE0, sp, NULL);
+        trino_tmem_owner = sprite;
+    }
     return 1;
 }
 
@@ -346,6 +392,7 @@ static float trino_tex_w = 1.0f, trino_tex_h = 1.0f;
 // into its neighbours) and a half-alpha cutout for soft-edged sprites.
 void trino_3d_texture(void* sprite, uint32_t clamp)
 {
+    trino_tmem_owner = NULL;
     sprite_t* sp = (sprite_t*)sprite;
     trino_mode_standard();
     rdpq_mode_combiner(RDPQ_COMBINER_TEX_SHADE);

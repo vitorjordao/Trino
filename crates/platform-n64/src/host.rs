@@ -50,6 +50,10 @@ pub struct FrameReport {
     pub rsp_draws: u32,
     pub draws: u32,
     pub culled: u32,
+    /// Vertical blanks (60 Hz) the run took: the real frame rate, waits
+    /// for vsync, the RSP and the RDP included (`fps = frames × 60 /
+    /// vblanks`).
+    pub vblanks: u32,
     /// The costliest models over the run: (model handle, calls per frame, µs per
     /// frame of T&L, RSP draws per frame), most expensive first.
     pub top: [(u32, u32, u32, u32); 8],
@@ -107,6 +111,7 @@ impl N64Host {
         let mut total: u64 = 0;
         let mut max = 0u32;
         let mut sums = [0u64; 9];
+        let v0 = runtime::vblanks();
         let mut models: [ModelCost; 48] = [ModelCost::default(); 48];
         let mut n_models = 0usize;
         for i in 0..frames {
@@ -157,6 +162,7 @@ impl N64Host {
                 }
             }
         }
+        let vblanks = runtime::vblanks().wrapping_sub(v0);
         let n = (frames as u64).max(1);
         models[..n_models].sort_unstable_by(|a, b| b.us.cmp(&a.us));
         let mut top = [(0u32, 0, 0, 0); 8];
@@ -165,6 +171,7 @@ impl N64Host {
             *t = (m.model.0, m.calls / f, m.us / f, m.tnl.rsp_draws / f);
         }
         FrameReport {
+            vblanks,
             top,
             frames,
             avg_us: (total / n) as u32,
@@ -186,7 +193,7 @@ impl N64Host {
     pub fn report_frames(&self, scene: &str, r: &FrameReport) {
         runtime::log(&format!(
             "TRINO_FRAME:{scene} avg_us={} max_us={} frames={} update={} tnl={} sort={} \
-             submit={} sprites={} end={} draws={} rsp={} culled={}\n",
+             submit={} sprites={} end={} draws={} rsp={} culled={} vblanks={} fps={}\n",
             r.avg_us,
             r.max_us,
             r.frames,
@@ -198,7 +205,9 @@ impl N64Host {
             r.end_us,
             r.draws,
             r.rsp_draws,
-            r.culled
+            r.culled,
+            r.vblanks,
+            (r.frames * 60).checked_div(r.vblanks).unwrap_or(0)
         ));
         for (id, calls, us, rsp) in r.top.iter().filter(|t| t.1 > 0) {
             runtime::log(&format!(
@@ -235,8 +244,10 @@ impl N64Host {
     pub fn main<G: Game>(
         make: impl FnOnce(Vec2) -> G,
         self_test: impl FnOnce(&mut N64Host, &mut G) -> Result<(), String>,
+        setup: impl FnOnce(&mut N64Host),
     ) -> ! {
         let mut host = N64Host::boot();
+        setup(&mut host);
         let mut game = boxed(make);
         if Self::test_mode() {
             let verdict = self_test(&mut host, &mut game);

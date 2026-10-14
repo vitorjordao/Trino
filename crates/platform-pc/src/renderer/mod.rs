@@ -1458,6 +1458,25 @@ impl Renderer for PcRenderer {
         self.commands.push(Cmd::Sprite(cmd));
     }
 
+    fn fill_rect(&mut self, rect: trino_core::Rect, color: Color) {
+        // A built-in 1×1 white texel through the sprite path.
+        if !self.sprites.contains_key(&FILL_SPRITE.0) {
+            self.upload_sprite(FILL_SPRITE, 1, 1, &[255, 255, 255, 255]);
+        }
+        self.flush_model_batch();
+        let params = SpriteParams {
+            scale: Vec2::new(rect.size.x, rect.size.y),
+            tint: color,
+            ..SpriteParams::DEFAULT
+        };
+        let mut cmd = make_command(FILL_SPRITE.0, rect.pos, (1, 1), &params);
+        // The shader's flat-color sentinel (fs_sprite).
+        cmd.uv0 = [-2.0, -2.0];
+        cmd.uv1 = [-2.0, -2.0];
+        self.frame_stats.sprites += 1;
+        self.commands.push(Cmd::Sprite(cmd));
+    }
+
     fn set_camera(&mut self, camera: &Camera3) {
         self.flush_model_batch();
         self.camera = *camera;
@@ -1619,6 +1638,10 @@ impl Renderer for PcRenderer {
         ))
     }
 }
+
+/// The texel `fill_rect` stretches (a handle no asset path hashes to in
+/// practice: fnv1a of a reserved name).
+const FILL_SPRITE: SpriteId = SpriteId::from_path("\0trino/fill");
 
 /// Where the internal framebuffer lands in the window: nearest integer
 /// upscale, centered (fractional only when the window is smaller than the

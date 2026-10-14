@@ -67,6 +67,12 @@ pub struct N64Renderer {
     /// v0, where 0 culls Trino's back faces (its "front" is the opposite
     /// winding; 1 culled every front face, measured) and 2 culls nothing.
     rsp_cull: u32,
+    /// Stream RSP draws to the overlay as they come (when no CPU triangle
+    /// is pending in the batch) instead of at the batch flush: the RSP then
+    /// rasterizes while the CPU is still issuing draws. Off by default:
+    /// at equal depth an RSP draw no longer wins over a CPU triangle that
+    /// comes later in the same batch (castle64's door-on-wall).
+    rsp_stream: bool,
 }
 
 impl N64Renderer {
@@ -119,6 +125,7 @@ impl N64Renderer {
             rsp_on: true,
             pending_rsp: Vec::new(),
             rsp_cull: 0,
+            rsp_stream: false,
         }
     }
 
@@ -263,6 +270,19 @@ impl N64Renderer {
         }
         self.meshes.insert(id, (tmdl, layout));
         true
+    }
+
+    /// See [`N64Renderer::set_rsp_stream`].
+    pub fn rsp_stream(&self) -> bool {
+        self.rsp_stream
+    }
+
+    /// Stream RSP draws as they are issued (when the batch holds no CPU
+    /// triangles yet) so the RSP overlaps the CPU's remaining draw calls.
+    /// For scenes whose draws are (nearly) all RSP-eligible and that don't
+    /// rely on RSP-after-CPU ordering at equal depth.
+    pub fn set_rsp_stream(&mut self, on: bool) {
+        self.rsp_stream = on;
     }
 
     /// Send eligible static draws to the RSP T&L overlay (`rsp_trino.S`)
@@ -465,7 +485,11 @@ impl Renderer for N64Renderer {
             let t0 = self.tick();
             let cull = if d.cull_back { self.rsp_cull } else { 2 };
             let words = rsp::draw_words(&self.tnl_ctx, matrix, &d, params.tint, rm, cull, 0);
-            self.pending_rsp.push(words);
+            if self.rsp_stream && self.pending_tris.is_empty() && self.pending_rsp.is_empty() {
+                unsafe { ffi::trino_rsp_draw(words.as_ptr()) };
+            } else {
+                self.pending_rsp.push(words);
+            }
             let tnl = TnlStats {
                 rsp_draws: 1,
                 rsp_tris: (mesh.index_count / 3) as u32,
@@ -527,6 +551,25 @@ impl Renderer for N64Renderer {
             unsafe { ffi::trino_drain() }
         }
         self.charge(t0, |s| &mut s.end);
+    }
+
+    fn fill_rect(&mut self, rect: trino_core::Rect, color: Color) {
+        self.flush_model_batch();
+        let t0 = self.tick();
+        let pack = |a: f32, b: f32| {
+            (((a + 0.5) as i32 as u32 & 0xFFFF) << 16) | ((b + 0.5) as i32 as u32 & 0xFFFF)
+        };
+        let (x, y) = (rect.pos.x, rect.pos.y);
+        // Round the edges (not the size): adjacent rectangles stay seamless.
+        let (x1, y1) = (
+            (x + rect.size.x + 0.5) as i32,
+            (y + rect.size.y + 0.5) as i32,
+        );
+        let (x0, y0) = ((x + 0.5) as i32, (y + 0.5) as i32);
+        let wh = pack((x1 - x0) as f32, (y1 - y0) as f32);
+        unsafe { ffi::trino_fill_rect(pack(x0 as f32, y0 as f32), wh, pack_color(color)) };
+        self.frame_stats.sprites += 1;
+        self.charge(t0, |s| &mut s.sprites);
     }
 
     fn draw_text(&mut self, font: FontId, pos: Vec2, text: &str, params: &TextParams) {

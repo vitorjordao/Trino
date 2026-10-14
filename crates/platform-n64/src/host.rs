@@ -1,0 +1,176 @@
+//! A ready-made N64 host: what a game's console crate uses instead of
+//! writing its own `trino_rust_main` (castle64's `apps/n64` keeps its own,
+//! because its self-test also drives the engine's perf and RSP gates).
+//!
+//! ```ignore
+//! // n64/src/lib.rs of a project (staticlib crate, `cargo xtask build n64`)
+//! #![cfg_attr(target_os = "none", no_std)]
+//! trino_platform_n64::n64_main!(my_game::MyGame::new, my_game::selftest::run);
+//! ```
+//!
+//! The self-test (`cargo xtask test n64`) receives the [`N64Host`] and the
+//! game, drives frames with [`N64Host::step`], may report frame times with
+//! [`N64Host::report_frames`] (`TRINO_FRAME:` lines, gated by the project's
+//! `n64_max_frame_us`) and dump goldens with [`N64Host::dump_framebuffer`].
+//! Its `Ok` / `Err(reason)` becomes `TRINO_TEST_PASS` / `TRINO_TEST_FAIL`.
+
+use alloc::boxed::Box;
+use alloc::format;
+use alloc::string::String;
+use trino_core::{Game, Input, InputState, Vec2};
+
+use crate::{N64Assets, N64Audio, N64Input, N64Platform, N64Renderer, runtime};
+
+/// Everything a running N64 game talks to.
+pub struct N64Host {
+    pub renderer: N64Renderer,
+    pub audio: N64Audio,
+    pub input: N64Input,
+    pub platform: N64Platform,
+}
+
+/// Frame-time summary of [`N64Host::measure`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FrameReport {
+    pub frames: u32,
+    /// Mean of `update + render` minus `begin_frame`'s vsync/RDP wait, µs.
+    pub avg_us: u32,
+    pub max_us: u32,
+}
+
+impl N64Host {
+    /// The picture size games are created with.
+    pub const SCREEN: Vec2 = Vec2::new(320.0, 240.0);
+
+    /// Boot libdragon, print `TRINO_BOOT` and load every baked asset.
+    pub fn boot() -> Self {
+        runtime::init();
+        runtime::log("TRINO_BOOT\n");
+        let mut host = N64Host {
+            renderer: N64Renderer::new(),
+            audio: N64Audio::new(),
+            input: N64Input,
+            platform: N64Platform::new(),
+        };
+        N64Assets::load_all(&mut host.renderer, &mut host.audio, &mut host.platform);
+        host
+    }
+
+    /// `cargo xtask test n64` put a `test_mode` file in the DFS.
+    pub fn test_mode() -> bool {
+        N64Assets::exists("/test_mode")
+    }
+
+    pub fn log(&self, msg: &str) {
+        runtime::log(msg);
+    }
+
+    /// One frame with real controller input.
+    pub fn frame(&mut self, game: &mut dyn Game, dt: f32) {
+        let state = self.input.poll();
+        self.step(game, &state, dt);
+    }
+
+    /// One frame with scripted input (self-tests, bots).
+    pub fn step(&mut self, game: &mut dyn Game, input: &InputState, dt: f32) {
+        game.update_with(&mut self.platform, input, &mut self.audio, dt);
+        game.render(&mut self.renderer);
+        self.audio.poll();
+    }
+
+    /// Run `frames` scripted frames (`input(i)` per frame) and time them
+    /// in emulated N64 microseconds, excluding `begin_frame`'s vsync wait.
+    pub fn measure(
+        &mut self,
+        game: &mut dyn Game,
+        frames: u32,
+        dt: f32,
+        mut input: impl FnMut(u32) -> InputState,
+    ) -> FrameReport {
+        let mut total: u64 = 0;
+        let mut max = 0u32;
+        for i in 0..frames {
+            let state = input(i);
+            self.renderer.start_profile();
+            let t0 = runtime::now_us();
+            self.step(game, &state, dt);
+            let spent = runtime::now_us().wrapping_sub(t0);
+            let wait = self.renderer.take_profile().map_or(0, |p| p.stages.begin);
+            let us = spent.saturating_sub(wait);
+            total += us as u64;
+            max = max.max(us);
+        }
+        FrameReport {
+            frames,
+            avg_us: total.checked_div(frames as u64).unwrap_or(0) as u32,
+            max_us: max,
+        }
+    }
+
+    /// Print a [`FrameReport`] as `TRINO_FRAME:<scene> avg_us= max_us=
+    /// frames=` — `cargo xtask test n64` gates it on `n64_max_frame_us`.
+    pub fn report_frames(&self, scene: &str, r: &FrameReport) {
+        runtime::log(&format!(
+            "TRINO_FRAME:{scene} avg_us={} max_us={} frames={}\n",
+            r.avg_us, r.max_us, r.frames
+        ));
+    }
+
+    /// Print the last presented frame (`TRINO_FBR:` rows): the next entry
+    /// of the project's `n64_goldens`.
+    pub fn dump_framebuffer(&mut self) {
+        self.renderer.dump_framebuffer();
+    }
+
+    /// Deepest main-stack use since boot, bytes (the stack is 64 KB).
+    pub fn stack_used(&self) -> u32 {
+        runtime::stack_used()
+    }
+
+    /// The real-time loop. Never returns.
+    pub fn run(&mut self, game: &mut dyn Game) -> ! {
+        let mut last = runtime::now_us();
+        loop {
+            let now = runtime::now_us();
+            let dt = (now.wrapping_sub(last) as f32 / 1_000_000.0).min(0.1);
+            last = now;
+            self.frame(game, dt);
+        }
+    }
+
+    /// The entry the [`n64_main!`](crate::n64_main) macro expands to: boot,
+    /// build the game on the heap, run the self-test in test mode
+    /// (reporting its verdict, then idling on neutral input), else play.
+    pub fn main<G: Game>(
+        make: impl FnOnce(Vec2) -> G,
+        self_test: impl FnOnce(&mut N64Host, &mut G) -> Result<(), String>,
+    ) -> ! {
+        let mut host = N64Host::boot();
+        let mut game = boxed(make);
+        if Self::test_mode() {
+            let verdict = self_test(&mut host, &mut game);
+            // The stack guard of the engine's own self-test: an overflow
+            // corrupts memory silently (AGENTS.md › Pitfalls).
+            let stack = host.stack_used();
+            match verdict {
+                Ok(()) if stack > 60 * 1024 => runtime::log(&format!(
+                    "TRINO_TEST_FAIL:stack {stack} bytes of 64 KB used\n"
+                )),
+                Ok(()) => runtime::log(&format!("TRINO_STACK:{stack}\nTRINO_TEST_PASS\n")),
+                Err(e) => runtime::log(&format!("TRINO_TEST_FAIL:{e}\n")),
+            }
+            loop {
+                host.step(&mut *game, &InputState::default(), 1.0 / 60.0);
+            }
+        }
+        host.run(&mut *game)
+    }
+}
+
+/// Build the game straight into a box from a frame that is popped right
+/// after: `Box::new(big())` in the caller would keep the temporary in its
+/// frame for the whole run (the 64 KB stack pitfall).
+#[inline(never)]
+fn boxed<G>(make: impl FnOnce(Vec2) -> G) -> Box<G> {
+    Box::new(make(N64Host::SCREEN))
+}

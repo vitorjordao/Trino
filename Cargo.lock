@@ -4921,6 +4921,7 @@ dependencies = [
  "platformer",
  "png",
  "pollster",
+ "serde",
  "serde_json",
  "showcase",
  "tempfile",

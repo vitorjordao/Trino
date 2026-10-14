@@ -14,6 +14,7 @@ mod model;
 mod n3ds;
 mod n64;
 mod perf;
+mod project;
 mod scene;
 mod showcase_assets;
 mod standalone;
@@ -27,8 +28,11 @@ const HELP: &str = "\
 cargo xtask <command> [platform] [-- extra args]
 
 commands:
-  build <pc|n64|3ds>   compile the app for a platform (3ds --selftest: the
-                       self-test app `test 3ds --no-build` boots)
+  build <pc|n64|3ds>   compile the app for a platform (--selftest: the
+                       self-test build `test 3ds --no-build` boots)
+  [--project <dir>]    n64/3ds commands package an external project (its
+                       trino.toml; also $TRINO_PROJECT or a trino.toml in
+                       the current directory) instead of the engine's demo
   run   <pc|n64|3ds>   build and launch (emulator for consoles)
   test  [pc|n64|3ds] [--bless] [--no-build]
                        run the test suite (default: everything testable);
@@ -87,6 +91,15 @@ fn main() -> ExitCode {
         // Must match the game crate apps/pc links (the 3D showcase).
         None => "castle64".into(),
     };
+    // Console builds package the engine's demo or an external project
+    // (`--project <dir>`, $TRINO_PROJECT, or a trino.toml in the cwd).
+    let project = match project::Project::select(&mut args) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
     let mut it = args.iter().map(String::as_str);
 
     match (it.next(), it.next()) {
@@ -101,22 +114,20 @@ fn main() -> ExitCode {
             let envs: &[(&str, &str)] = if bless { &[("TRINO_BLESS", "1")] } else { &[] };
             cargo(&["test", "--workspace"], envs)
         }
-        (Some("assets"), Some("n64")) => match n64::bake_assets(&n64::repo_root(), false) {
+        (Some("assets"), Some("n64")) => match n64::bake_assets(&project, false) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("[n64] {e}");
                 ExitCode::FAILURE
             }
         },
-        (Some("assets"), Some("3ds" | "n3ds")) => {
-            match n3ds::bake_assets(&n3ds::repo_root(), false) {
-                Ok(()) => ExitCode::SUCCESS,
-                Err(e) => {
-                    eprintln!("[3ds] {e}");
-                    ExitCode::FAILURE
-                }
+        (Some("assets"), Some("3ds" | "n3ds")) => match n3ds::bake_assets(&project, false) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("[3ds] {e}");
+                ExitCode::FAILURE
             }
-        }
+        },
         (Some("assets"), Some(platform)) => match Platform::parse(platform) {
             Some(p) => assets(p),
             None => {
@@ -145,15 +156,15 @@ fn main() -> ExitCode {
             scene::run(&repo_root(), &rest)
         }
 
-        (Some("build"), Some("n64")) => n64::build(false),
-        (Some("run"), Some("n64")) => n64::run(),
-        (Some("test"), Some("n64")) => n64::test(bless),
-        (Some("watch"), Some("n64")) => n64::watch(),
+        (Some("build"), Some("n64")) => n64::build(&project, selftest),
+        (Some("run"), Some("n64")) => n64::run(&project),
+        (Some("test"), Some("n64")) => n64::test(&project, bless),
+        (Some("watch"), Some("n64")) => n64::watch(&project),
 
-        (Some("build"), Some("3ds")) => n3ds::build(selftest),
-        (Some("run"), Some("3ds")) => n3ds::run(),
-        (Some("test"), Some("3ds")) => n3ds::test(!no_build, bless),
-        (Some("watch"), Some("3ds")) => n3ds::watch(),
+        (Some("build"), Some("3ds")) => n3ds::build(&project, selftest),
+        (Some("run"), Some("3ds")) => n3ds::run(&project),
+        (Some("test"), Some("3ds")) => n3ds::test(&project, !no_build, bless),
+        (Some("watch"), Some("3ds")) => n3ds::watch(&project),
         (Some("new"), Some(name)) => {
             let rest: Vec<&str> = args.iter().skip(2).map(String::as_str).collect();
             new_game(name, &rest)

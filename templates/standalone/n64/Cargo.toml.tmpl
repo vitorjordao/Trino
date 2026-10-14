@@ -1,0 +1,17 @@
+[package]
+name = "{{name}}-n64"
+description = "Nintendo 64 host for {{name}} (staticlib; `cargo trino build n64`)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# The ROM's Rust half: linked with the engine's C shim and libdragon inside
+# the toolchain image. On the host it builds an empty lib.
+[lib]
+crate-type = ["staticlib"]
+
+[dependencies]
+{{name}} = { workspace = true }
+trino-core = { workspace = true }
+trino-platform-n64 = { workspace = true }

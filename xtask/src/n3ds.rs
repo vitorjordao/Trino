@@ -16,22 +16,9 @@ use std::time::{Duration, Instant};
 
 use trino_asset_pipeline::{Manifest, Platform, resolve_source};
 
-const TARGET: &str = "armv6k-nintendo-3ds";
-const ELF: &str = "target/armv6k-nintendo-3ds/release/trino-3ds.elf";
+use crate::project::Project;
 
-pub fn repo_root() -> PathBuf {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .canonicalize()
-        .expect("repo root");
-    // canonicalize() yields \\?\C:\... on Windows; mingw-built devkitPro
-    // tools reject the verbatim prefix, so strip it.
-    let s = root.to_string_lossy();
-    match s.strip_prefix(r"\\?\") {
-        Some(rest) => PathBuf::from(rest),
-        None => root,
-    }
-}
+const TARGET: &str = "armv6k-nintendo-3ds";
 
 fn exe(name: &str) -> String {
     if cfg!(windows) {
@@ -159,7 +146,8 @@ fn compile_shim(root: &Path, dkp: &Path) -> Result<(), String> {
 /// Bake 3DS assets into target/3ds/romfs: tex3ds for sprites, raw PCM16
 /// (12-byte header: rate, channels, frames) for sounds, plus the index.tsv
 /// the runtime reads at boot.
-pub fn bake_assets(root: &Path, test_mode: bool) -> Result<(), String> {
+pub fn bake_assets(p: &Project, test_mode: bool) -> Result<(), String> {
+    let root = &p.root;
     let dkp = devkitpro()?;
     let tex3ds = tool(&dkp, "tools/bin", "tex3ds")?;
     let manifest = Manifest::load(&root.join("assets/manifest.toml"))?;
@@ -313,7 +301,7 @@ fn bake_pcm16(wav: &Path, out: &Path) -> Result<(), String> {
     std::fs::write(out, bytes).map_err(|e| e.to_string())
 }
 
-fn cargo_build(root: &Path, dkp: &Path) -> Result<(), String> {
+fn cargo_build(p: &Project, dkp: &Path) -> Result<(), String> {
     println!("[3ds] building Rust (nightly, build-std)...");
     // The target's linker is arm-none-eabi-gcc (found via PATH) and its spec
     // already carries -specs=3dsx.specs; we only add the shim + libraries.
@@ -321,7 +309,7 @@ fn cargo_build(root: &Path, dkp: &Path) -> Result<(), String> {
     let sep = if cfg!(windows) { ';' } else { ':' };
     let path = format!("{}{sep}{path}", dkp.join("devkitARM/bin").display());
 
-    let shim = root.join("target/3ds/shim.o");
+    let shim = p.engine.join("target/3ds/shim.o");
     let rustflags = format!(
         "-Cpanic=abort -Clink-arg={shim} -Clink-arg=-L{libs} \
          -Clink-arg=-lcitro2d -Clink-arg=-lcitro3d -Clink-arg=-lctru -Clink-arg=-lm",
@@ -338,9 +326,9 @@ fn cargo_build(root: &Path, dkp: &Path) -> Result<(), String> {
             "--target",
             TARGET,
             "-p",
-            "trino-app-3ds",
+            &p.n3ds_package,
         ])
-        .current_dir(root)
+        .current_dir(&p.root)
         .env("PATH", path)
         .env("RUSTFLAGS", rustflags)
         // apps/3ds/build.rs watches it: a shim-only edit still relinks.
@@ -356,14 +344,17 @@ fn cargo_build(root: &Path, dkp: &Path) -> Result<(), String> {
 }
 
 /// smdh metadata + 3dsxtool (ELF + RomFS -> .3dsx).
-fn pack_3dsx(root: &Path, dkp: &Path) -> Result<(), String> {
+fn pack_3dsx(p: &Project, dkp: &Path) -> Result<(), String> {
     println!("[3ds] packing .3dsx...");
     let smdhtool = tool(dkp, "tools/bin", "smdhtool")?;
     let tool_3dsx = tool(dkp, "tools/bin", "3dsxtool")?;
-    let smdh = root.join("target/3ds/trino.smdh");
-    let icon = dkp.join("libctru/default_icon.png");
+    let smdh = p.root.join(format!("target/3ds/{}.smdh", p.name));
+    let icon = p
+        .n3ds_icon
+        .clone()
+        .unwrap_or_else(|| dkp.join("libctru/default_icon.png"));
     let status = Command::new(&smdhtool)
-        .args(["--create", "Trino", "Trino hello-sprite", "Trino"])
+        .args(["--create", &p.title, &p.description, &p.author])
         .arg(&icon)
         .arg(&smdh)
         .status()
@@ -372,30 +363,29 @@ fn pack_3dsx(root: &Path, dkp: &Path) -> Result<(), String> {
         return Err("smdhtool failed".into());
     }
     let status = Command::new(&tool_3dsx)
-        .arg(root.join(ELF))
-        .arg(root.join("target/3ds/trino.3dsx"))
+        .arg(p.n3ds_elf())
+        .arg(p.app_3dsx())
         .arg(format!("--smdh={}", smdh.display()))
         .arg(format!(
             "--romfs={}",
-            root.join("target/3ds/romfs").display()
+            p.root.join("target/3ds/romfs").display()
         ))
         .status()
         .map_err(|e| format!("3dsxtool: {e}"))?;
     if !status.success() {
         return Err("3dsxtool failed".into());
     }
-    println!("[3ds] app: target/3ds/trino.3dsx");
+    println!("[3ds] app: {}", p.app_3dsx().display());
     Ok(())
 }
 
-pub fn build(test_mode: bool) -> ExitCode {
-    let root = repo_root();
+pub fn build(p: &Project, test_mode: bool) -> ExitCode {
     let steps = || -> Result<(), String> {
         let dkp = devkitpro()?;
-        compile_shim(&root, &dkp)?;
-        bake_assets(&root, test_mode)?;
-        cargo_build(&root, &dkp)?;
-        pack_3dsx(&root, &dkp)?;
+        compile_shim(&p.engine, &dkp)?;
+        bake_assets(p, test_mode)?;
+        cargo_build(p, &dkp)?;
+        pack_3dsx(p, &dkp)?;
         Ok(())
     };
     match steps() {
@@ -418,7 +408,7 @@ fn azahar_exe() -> Option<PathBuf> {
         }
     }
     // `cargo xtask emulators setup azahar`.
-    if let Some(p) = crate::emulators::local_azahar(&repo_root()) {
+    if let Some(p) = crate::emulators::local_azahar(&crate::project::engine_root()) {
         return Some(p);
     }
     if let Ok(local) = std::env::var("LOCALAPPDATA") {
@@ -558,21 +548,17 @@ fn ensure_azahar_log_filter() -> Result<(), String> {
     std::fs::write(&ini, patched).map_err(|e| e.to_string())
 }
 
-pub fn run() -> ExitCode {
-    let code = build(false);
+pub fn run(p: &Project) -> ExitCode {
+    let code = build(p, false);
     if code != ExitCode::SUCCESS {
         return code;
     }
-    let root = repo_root();
     let Some(azahar) = azahar_exe() else {
         eprintln!("[3ds] Azahar not found (set TRINO_AZAHAR to the executable)");
         return ExitCode::FAILURE;
     };
     println!("[3ds] launching Azahar...");
-    match Command::new(&azahar)
-        .arg(root.join("target/3ds/trino.3dsx"))
-        .spawn()
-    {
+    match Command::new(&azahar).arg(p.app_3dsx()).spawn() {
         Ok(_) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("[3ds] failed to launch Azahar: {e}");
@@ -587,16 +573,19 @@ pub fn run() -> ExitCode {
 /// `build`: false boots an existing self-test app (`cargo xtask build 3ds
 /// --selftest`, e.g. a CI artifact) — Azahar's AppImage needs a newer glibc
 /// than the devkitARM image has, so CI builds and boots in separate jobs.
-pub fn test(build_first: bool, bless: bool) -> ExitCode {
+pub fn test(p: &Project, build_first: bool, bless: bool) -> ExitCode {
     if build_first {
-        let code = build(true);
+        let code = build(p, true);
         if code != ExitCode::SUCCESS {
             return code;
         }
     }
-    let root = repo_root();
-    if !root.join("target/3ds/trino.3dsx").exists() {
-        eprintln!("[3ds] target/3ds/trino.3dsx missing (cargo xtask build 3ds --selftest)");
+    let root = &p.root;
+    if !p.app_3dsx().exists() {
+        eprintln!(
+            "[3ds] {} missing (cargo xtask build 3ds --selftest)",
+            p.app_3dsx().display()
+        );
         return ExitCode::FAILURE;
     }
     let Some(azahar) = azahar_exe() else {
@@ -617,10 +606,7 @@ pub fn test(build_first: bool, bless: bool) -> ExitCode {
 
     let timeout = crate::emulators::timeout_secs();
     println!("[3ds] booting test app in Azahar ({timeout}s timeout)...");
-    let mut child = match Command::new(&azahar)
-        .arg(root.join("target/3ds/trino.3dsx"))
-        .spawn()
-    {
+    let mut child = match Command::new(&azahar).arg(p.app_3dsx()).spawn() {
         Ok(c) => c,
         Err(e) => {
             eprintln!("[3ds] failed to launch Azahar: {e}");
@@ -631,6 +617,7 @@ pub fn test(build_first: bool, bless: bool) -> ExitCode {
     let deadline = Instant::now() + Duration::from_secs(timeout);
     let mut seen = 0usize;
     let mut fb = crate::fbgolden::FbCapture::default();
+    let mut frames: Vec<crate::fbgolden::FbCapture> = Vec::new();
     let verdict = loop {
         if Instant::now() >= deadline {
             break Err(format!("timeout: no TRINO_TEST_* output within {timeout}s"));
@@ -648,8 +635,12 @@ pub fn test(build_first: bool, bless: bool) -> ExitCode {
         let end = content.rfind('\n').map_or(0, |i| i + 1);
         let fresh = &content[seen.min(end)..end];
         for line in fresh.lines() {
-            // Framebuffer dump rows are collected, not echoed.
+            // Framebuffer dump rows are collected, not echoed; each
+            // TRINO_FB_END closes one image (they arrive in order).
             if fb.feed(line) {
+                if fb.done() {
+                    frames.push(std::mem::take(&mut fb));
+                }
                 continue;
             }
             if line.contains("TRINO_") {
@@ -670,9 +661,23 @@ pub fn test(build_first: bool, bless: bool) -> ExitCode {
     // Emulator frame of the castle64 hub, within a tolerance: Azahar's GPU
     // output depends on the host's OpenGL (desktop GPU vs CI's llvmpipe).
     let verdict = verdict.and_then(|()| {
-        let img = fb.image().map_err(|e| format!("golden frame: {e}"))?;
-        let msg =
-            crate::fbgolden::check_close(&root, "3ds", "castle64_hub", img, bless, 3.0, 0.02)?;
+        if !p.is_engine {
+            let mean = p.test.n3ds_golden_mean.unwrap_or(3.0);
+            return crate::n64::project_gates(
+                p,
+                "3ds",
+                &p.test.n3ds_goldens,
+                &frames,
+                bless,
+                Some((mean, 0.02)),
+            );
+        }
+        let img = frames
+            .first()
+            .ok_or("golden frame: not dumped")?
+            .image()
+            .map_err(|e| format!("golden frame: {e}"))?;
+        let msg = crate::fbgolden::check_close(root, "3ds", "castle64_hub", img, bless, 3.0, 0.02)?;
         println!("[3ds] golden frame: {msg}");
         Ok(())
     });
@@ -691,27 +696,25 @@ pub fn test(build_first: bool, bless: bool) -> ExitCode {
 
 /// Console live-reload loop: watch game source + assets, rebuild the .3dsx
 /// on change and relaunch Azahar (kill + relaunch, like the N64 loop).
-pub fn watch() -> ExitCode {
+pub fn watch(p: &Project) -> ExitCode {
     use std::sync::mpsc;
 
     use notify_debouncer_full::notify::RecursiveMode;
     use notify_debouncer_full::{DebounceEventResult, new_debouncer};
 
-    let root = repo_root();
     let Some(azahar) = azahar_exe() else {
         eprintln!("[3ds] Azahar not found (set TRINO_AZAHAR to the executable)");
         return ExitCode::FAILURE;
     };
-    if build(false) != ExitCode::SUCCESS {
+    if build(p, false) != ExitCode::SUCCESS {
         return ExitCode::FAILURE;
     }
 
-    fn launch(azahar: &Path, root: &Path) -> std::io::Result<std::process::Child> {
-        Command::new(azahar)
-            .arg(root.join("target/3ds/trino.3dsx"))
-            .spawn()
+    fn launch(azahar: &Path, app: &Path) -> std::io::Result<std::process::Child> {
+        Command::new(azahar).arg(app).spawn()
     }
-    let mut child = match launch(&azahar, &root) {
+    let app = p.app_3dsx();
+    let mut child = match launch(&azahar, &app) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("[3ds] failed to launch Azahar: {e}");
@@ -738,15 +741,15 @@ pub fn watch() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    for dir in ["examples", "assets", "apps/3ds", "crates/platform-3ds"] {
-        if let Err(e) = debouncer.watch(root.join(dir), RecursiveMode::Recursive) {
+    for dir in &p.watch {
+        if let Err(e) = debouncer.watch(p.root.join(dir), RecursiveMode::Recursive) {
             eprintln!("[3ds] failed to watch {dir}/: {e}");
             let _ = child.kill();
             return ExitCode::FAILURE;
         }
     }
 
-    println!("[3ds] watching examples/, assets/, apps/3ds/, crates/platform-3ds/ — Ctrl+C to stop");
+    println!("[3ds] watching {} — Ctrl+C to stop", p.watch.join(", "));
     loop {
         if rx.recv().is_err() {
             let _ = child.kill();
@@ -754,10 +757,10 @@ pub fn watch() -> ExitCode {
         }
         while rx.try_recv().is_ok() {}
         println!("[3ds] change detected, rebuilding...");
-        if build(false) == ExitCode::SUCCESS {
+        if build(p, false) == ExitCode::SUCCESS {
             let _ = child.kill();
             let _ = child.wait();
-            match launch(&azahar, &root) {
+            match launch(&azahar, &app) {
                 Ok(c) => child = c,
                 Err(e) => {
                     eprintln!("[3ds] failed to relaunch Azahar: {e}");

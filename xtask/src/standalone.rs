@@ -27,6 +27,8 @@ const ENGINE_CRATES: &[(&str, &str)] = &[
     ("trino-core", "crates/core"),
     ("trino-game-api", "crates/game-api"),
     ("trino-runner-pc", "crates/runner-pc"),
+    ("trino-platform-n64", "crates/platform-n64"),
+    ("trino-platform-3ds", "crates/platform-3ds"),
 ];
 
 impl EngineSource {
@@ -127,7 +129,22 @@ pub fn scaffold(
         return Err(format!("{} exists and is not empty", dest.display()));
     }
     let deps = source.dependency_lines();
-    let render = |text: &str| names.render(text).replace("{{trino_deps}}", &deps);
+    // `cargo trino` runs the engine's xtask from a local checkout: this one
+    // for path sources; for git sources the user points it at their clone.
+    let engine_manifest = match source {
+        EngineSource::Path(root) => root
+            .join("Cargo.toml")
+            .display()
+            .to_string()
+            .replace('\\', "/"),
+        EngineSource::Git { .. } => "../Trino/Cargo.toml".to_string(),
+    };
+    let render = |text: &str| {
+        names
+            .render(text)
+            .replace("{{trino_deps}}", &deps)
+            .replace("{{engine_manifest}}", &engine_manifest)
+    };
     let templates = engine_root.join("templates");
     copy_rendered(&templates.join("standalone"), dest, &render)?;
     // The game crate is the same template `xtask new` uses in-repo.
@@ -139,6 +156,7 @@ pub fn scaffold(
     // Dotfiles are stored without the dot (they would apply to the engine
     // repo itself otherwise).
     std::fs::rename(dest.join("gitignore"), dest.join(".gitignore")).map_err(|e| e.to_string())?;
+    std::fs::rename(dest.join("cargo"), dest.join(".cargo")).map_err(|e| e.to_string())?;
     // Starter assets: the engine's own hero sprite and beep.
     for rel in ["sprites/hero.png", "sounds/beep.wav"] {
         let to = dest.join("assets/shared").join(rel);
@@ -232,6 +250,13 @@ mod tests {
             "game/Cargo.toml",
             "game/src/lib.rs",
             "pc/src/main.rs",
+            "n64/Cargo.toml",
+            "n64/src/lib.rs",
+            "n3ds/Cargo.toml",
+            "n3ds/src/main.rs",
+            "n3ds/build.rs",
+            "trino.toml",
+            ".cargo/config.toml",
             "assets/manifest.toml",
             "assets/shared/sprites/hero.png",
         ] {
@@ -242,9 +267,22 @@ mod tests {
         assert!(ws.contains("trino-runner-pc = { path = \""), "{ws}");
         let main = std::fs::read_to_string(dest.join("pc/src/main.rs")).unwrap();
         assert!(main.contains("my_game::MyGameGame::new"), "{main}");
+        let cfg = std::fs::read_to_string(dest.join(".cargo/config.toml")).unwrap();
+        assert!(
+            cfg.contains("--manifest-path /") || cfg.contains(":/"),
+            "{cfg}"
+        );
+        let n64 = std::fs::read_to_string(dest.join("n64/src/lib.rs")).unwrap();
+        assert!(n64.contains("my_game::MyGameGame::new"), "{n64}");
+        // trino.toml parses as a console project.
+        crate::project::Project::load(&dest).unwrap();
         for f in [
             "Cargo.toml",
             "pc/Cargo.toml",
+            "n64/Cargo.toml",
+            "n3ds/Cargo.toml",
+            "trino.toml",
+            ".cargo/config.toml",
             "game/src/lib.rs",
             "AGENTS.md",
         ] {

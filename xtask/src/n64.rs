@@ -14,16 +14,10 @@ use std::time::{Duration, Instant};
 
 use trino_asset_pipeline::{Manifest, Platform, resolve_source};
 
+use crate::project::Project;
+
 const IMAGE: &str = "trino-n64";
 const TARGET_JSON: &str = "platforms/n64/mips-nintendo64-none.json";
-const STATICLIB: &str = "target/mips-nintendo64-none/release/libtrino_app_n64.a";
-
-pub fn repo_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .canonicalize()
-        .expect("repo root")
-}
 
 /// Repo root as the docker host path (WSL mount path on Windows).
 fn docker_volume_path(root: &Path) -> String {
@@ -39,11 +33,20 @@ fn docker_volume_path(root: &Path) -> String {
     }
 }
 
-/// Run a shell script inside the toolchain image with the repo mounted at
-/// /workdir. The script goes through a file, never through the command
-/// line: on Windows, wsl.exe re-interprets arguments with its own shell,
-/// which would expand `$VARS` outside the container.
-fn docker_sh(root: &Path, script: &str) -> std::io::Result<std::process::ExitStatus> {
+/// Run a shell script inside the toolchain image. The engine is mounted at
+/// `/engine` and the project at `/project` (the same directory for the
+/// engine's own demo); the script runs in `/project` when `in_project`,
+/// else in `/engine` (the shim and RSP objects belong to the engine). The
+/// script goes through a file, never through the command line: on Windows,
+/// wsl.exe re-interprets arguments with its own shell, which would expand
+/// `$VARS` outside the container.
+fn docker_sh(
+    p: &Project,
+    in_project: bool,
+    script: &str,
+) -> std::io::Result<std::process::ExitStatus> {
+    let root = if in_project { &p.root } else { &p.engine };
+    let workdir = if in_project { "/project" } else { "/engine" };
     let script_dir = root.join("target/n64");
     std::fs::create_dir_all(&script_dir)?;
     // \n only: bash inside the container chokes on \r.
@@ -52,7 +55,9 @@ fn docker_sh(root: &Path, script: &str) -> std::io::Result<std::process::ExitSta
         script.replace("\r\n", "\n"),
     )?;
 
-    let vol = format!("{}:/workdir", docker_volume_path(root));
+    let engine_vol = format!("{}:/engine", docker_volume_path(&p.engine));
+    let project_vol = format!("{}:/project", docker_volume_path(&p.root));
+    let script_path = format!("{workdir}/target/n64/.docker-step.sh");
     let mut cmd = if cfg!(windows) {
         let mut c = Command::new("wsl");
         c.arg("docker");
@@ -64,12 +69,14 @@ fn docker_sh(root: &Path, script: &str) -> std::io::Result<std::process::ExitSta
         "run",
         "--rm",
         "-v",
-        &vol,
+        &engine_vol,
+        "-v",
+        &project_vol,
         "-w",
-        "/workdir",
+        workdir,
         IMAGE,
         "bash",
-        "/workdir/target/n64/.docker-step.sh",
+        &script_path,
     ])
     .status()
 }
@@ -129,7 +136,8 @@ fn up_to_date(obj: &Path, sources: &[std::path::PathBuf]) -> bool {
 /// RSP ucode: assemble against `rsp.ld`, cut `.text`/`.data` to binaries,
 /// wrap each in an object exposing `rsp_trino_{text,data}_{start,end}`
 /// (what `DEFINE_RSP_UCODE` expects).
-fn compile_shim(root: &Path) -> Result<(), String> {
+fn compile_shim(p: &Project) -> Result<(), String> {
+    let root = &p.engine;
     let shim_dir = root.join("crates/platform-n64/shim");
     let shim_src = shim_dir.join("trino_shim.c");
     let rsp_src = shim_dir.join("rsp_trino.S");
@@ -158,7 +166,7 @@ fn compile_shim(root: &Path) -> Result<(), String> {
               --set-section-alignment .data=8 --rename-section .text=.data \
               rsp_trino.${s}.bin rsp_trino.${s}.o; done\n\
             mips64-elf-ld -relocatable rsp_trino.text.o rsp_trino.data.o -o ../rsp_trino.o";
-        let status = docker_sh(root, script).map_err(|e| format!("docker: {e}"))?;
+        let status = docker_sh(p, false, script).map_err(|e| format!("docker: {e}"))?;
         if !status.success() {
             return Err("shim / RSP overlay compilation failed".into());
         }
@@ -168,8 +176,9 @@ fn compile_shim(root: &Path) -> Result<(), String> {
 
 /// Bake N64 assets with the image's mksprite/audioconv64 into
 /// target/n64/filesystem, plus the index.tsv the runtime reads at boot.
-pub fn bake_assets(root: &Path, test_mode: bool) -> Result<(), String> {
-    ensure_image(root)?;
+pub fn bake_assets(p: &Project, test_mode: bool) -> Result<(), String> {
+    ensure_image(&p.engine)?;
+    let root = &p.root;
     let manifest = Manifest::load(&root.join("assets/manifest.toml"))?;
 
     let stage = root.join("target/n64/stage");
@@ -288,7 +297,7 @@ pub fn bake_assets(root: &Path, test_mode: bool) -> Result<(), String> {
     }
 
     println!("[n64] baking assets in container...");
-    let status = docker_sh(root, &script).map_err(|e| format!("docker: {e}"))?;
+    let status = docker_sh(p, true, &script).map_err(|e| format!("docker: {e}"))?;
     if !status.success() {
         return Err("asset baking failed".into());
     }
@@ -324,8 +333,9 @@ fn stage_wav(source: &Path, out: &Path, looped: bool) -> Result<(), String> {
     w.finalize().map_err(|e| e.to_string())
 }
 
-fn cargo_build(root: &Path) -> Result<(), String> {
+fn cargo_build(p: &Project) -> Result<(), String> {
     println!("[n64] building Rust (nightly, build-std)...");
+    let target = p.engine.join(TARGET_JSON);
     let status = Command::new("cargo")
         .args([
             "+nightly",
@@ -334,11 +344,10 @@ fn cargo_build(root: &Path) -> Result<(), String> {
             "-Zbuild-std=core,alloc",
             "-Zjson-target-spec",
             "--target",
-            TARGET_JSON,
-            "-p",
-            "trino-app-n64",
         ])
-        .current_dir(root)
+        .arg(&target)
+        .args(["-p", &p.n64_package])
+        .current_dir(&p.root)
         .env_remove("CARGO")
         .env_remove("RUSTC")
         .status()
@@ -362,36 +371,39 @@ fn cargo_build(root: &Path) -> Result<(), String> {
 /// ran ~5x slower. Undefining them first makes the first `-lc` scan supply
 /// newlib's; [`check_mem_symbols`] fails the build if the map says
 /// otherwise.
-fn pack_rom(root: &Path) -> Result<(), String> {
+fn pack_rom(p: &Project) -> Result<(), String> {
     println!("[n64] linking + packing ROM...");
+    let (name, title, save) = (&p.name, &p.title, &p.n64_save);
+    let staticlib = p.n64_staticlib();
     let script = format!(
         "set -e\n\
-         mips64-elf-g++ -o target/n64/trino.elf target/n64/shim.o target/n64/rsp_trino.o \
+         mips64-elf-g++ -o target/n64/{name}.elf /engine/target/n64/shim.o /engine/target/n64/rsp_trino.o \
          -Wl,-u,memcpy -Wl,-u,memset -Wl,-u,memmove -Wl,-u,memcmp -Wl,-lc \
-         {STATICLIB} -lc -mabi=o64 -Wl,-g -Wl,-L$N64_INST/mips64-elf/lib \
+         {staticlib} -lc -mabi=o64 -Wl,-g -Wl,-L$N64_INST/mips64-elf/lib \
          -Wl,-ldragon -Wl,-lm -Wl,-ldragonsys -Wl,-Tn64.ld \
          -Wl,--gc-sections -Wl,--no-warn-mismatch \
          -Wl,--wrap -Wl,__do_global_ctors \
-         -Wl,-Map=target/n64/trino.map\n\
-         mips64-elf-size -G target/n64/trino.elf\n\
+         -Wl,-Map=target/n64/{name}.map\n\
+         mips64-elf-size -G target/n64/{name}.elf\n\
          cd target/n64\n\
-         n64sym trino.elf trino.elf.sym\n\
-         cp trino.elf trino.elf.stripped\n\
-         mips64-elf-strip -s trino.elf.stripped\n\
-         n64elfcompress -o . -c 1 trino.elf.stripped\n\
-         mkdfs trino.dfs filesystem >/dev/null\n\
-         n64tool --title Trino --toc --output trino.z64 --align 256 trino.elf.stripped \
-         --align 8 trino.elf.sym --align 16 trino.dfs\n\
-         ed64romconfig --savetype eeprom16k trino.z64\n"
+         n64sym {name}.elf {name}.elf.sym\n\
+         cp {name}.elf {name}.elf.stripped\n\
+         mips64-elf-strip -s {name}.elf.stripped\n\
+         n64elfcompress -o . -c 1 {name}.elf.stripped\n\
+         mkdfs {name}.dfs filesystem >/dev/null\n\
+         n64tool --title '{title}' --toc --output {name}.z64 --align 256 {name}.elf.stripped \
+         --align 8 {name}.elf.sym --align 16 {name}.dfs\n\
+         ed64romconfig --savetype {save} {name}.z64\n"
     );
-    let status = docker_sh(root, &script).map_err(|e| format!("docker: {e}"))?;
+    let status = docker_sh(p, true, &script).map_err(|e| format!("docker: {e}"))?;
     if !status.success() {
         return Err("ROM packing failed".into());
     }
-    let map = std::fs::read_to_string(root.join("target/n64/trino.map"))
-        .map_err(|e| format!("trino.map: {e}"))?;
+    let map_path = p.root.join(format!("target/n64/{name}.map"));
+    let map =
+        std::fs::read_to_string(&map_path).map_err(|e| format!("{}: {e}", map_path.display()))?;
     check_mem_symbols(&map)?;
-    println!("[n64] ROM: target/n64/trino.z64");
+    println!("[n64] ROM: {}", p.rom().display());
     Ok(())
 }
 
@@ -429,14 +441,13 @@ fn check_mem_symbols(map: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub fn build(test_mode: bool) -> ExitCode {
-    let root = repo_root();
+pub fn build(p: &Project, test_mode: bool) -> ExitCode {
     let steps = || -> Result<(), String> {
-        ensure_image(&root)?;
-        compile_shim(&root)?;
-        bake_assets(&root, test_mode)?;
-        cargo_build(&root)?;
-        pack_rom(&root)?;
+        ensure_image(&p.engine)?;
+        compile_shim(p)?;
+        bake_assets(p, test_mode)?;
+        cargo_build(p)?;
+        pack_rom(p)?;
         Ok(())
     };
     match steps() {
@@ -450,14 +461,16 @@ pub fn build(test_mode: bool) -> ExitCode {
 
 /// ares executable: `$TRINO_ARES` (a path, or `docker` for the
 /// `trino-ares` image — see `cargo xtask emulators setup ares`), else
-/// `ares-v148/` at the repo root.
-fn ares_exe(root: &Path) -> Option<PathBuf> {
+/// `ares-v148/` at the project or engine root.
+fn ares_exe(p: &Project) -> Option<PathBuf> {
     if let Ok(env) = std::env::var("TRINO_ARES") {
         let p = PathBuf::from(env);
         return (p.as_os_str() == "docker" || p.exists()).then_some(p);
     }
-    let candidates = [root.join("ares-v148/ares.exe"), root.join("ares-v148/ares")];
-    candidates.into_iter().find(|p| p.exists())
+    [&p.root, &p.engine]
+        .iter()
+        .flat_map(|r| [r.join("ares-v148/ares.exe"), r.join("ares-v148/ares")])
+        .find(|c| c.exists())
 }
 
 /// Command that boots `rom` in ares with `args` (native or in Docker).
@@ -488,21 +501,17 @@ fn ares_command(ares: &Path, rom: &Path, args: &[&str]) -> (Command, Option<Stri
     (cmd, Some(name))
 }
 
-pub fn run() -> ExitCode {
-    let code = build(false);
+pub fn run(p: &Project) -> ExitCode {
+    let code = build(p, false);
     if code != ExitCode::SUCCESS {
         return code;
     }
-    let root = repo_root();
-    let Some(ares) = ares_exe(&root) else {
+    let Some(ares) = ares_exe(p) else {
         eprintln!("[n64] ares not found (expected ares-v148/ares.exe at the repo root)");
         return ExitCode::FAILURE;
     };
     println!("[n64] launching ares...");
-    match Command::new(&ares)
-        .arg(root.join("target/n64/trino.z64"))
-        .spawn()
-    {
+    match Command::new(&ares).arg(p.rom()).spawn() {
         Ok(_) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("[n64] failed to launch ares: {e}");
@@ -514,28 +523,26 @@ pub fn run() -> ExitCode {
 /// Console live-reload loop: watch game source + assets, rebuild the ROM on
 /// change and relaunch ares. No in-place hot reload on the N64 — kill +
 /// relaunch IS the loop (n64.mk-style dev cycle).
-pub fn watch() -> ExitCode {
+pub fn watch(p: &Project) -> ExitCode {
     use std::sync::mpsc;
     use std::time::Duration;
 
     use notify_debouncer_full::notify::RecursiveMode;
     use notify_debouncer_full::{DebounceEventResult, new_debouncer};
 
-    let root = repo_root();
-    let Some(ares) = ares_exe(&root) else {
+    let Some(ares) = ares_exe(p) else {
         eprintln!("[n64] ares not found (expected ares-v148/ares.exe at the repo root)");
         return ExitCode::FAILURE;
     };
-    if build(false) != ExitCode::SUCCESS {
+    if build(p, false) != ExitCode::SUCCESS {
         return ExitCode::FAILURE;
     }
 
-    fn launch(ares: &Path, root: &Path) -> std::io::Result<std::process::Child> {
-        Command::new(ares)
-            .arg(root.join("target/n64/trino.z64"))
-            .spawn()
+    fn launch(ares: &Path, rom: &Path) -> std::io::Result<std::process::Child> {
+        Command::new(ares).arg(rom).spawn()
     }
-    let mut child = match launch(&ares, &root) {
+    let rom = p.rom();
+    let mut child = match launch(&ares, &rom) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("[n64] failed to launch ares: {e}");
@@ -562,15 +569,15 @@ pub fn watch() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    for dir in ["examples", "assets", "apps/n64", "crates/platform-n64"] {
-        if let Err(e) = debouncer.watch(root.join(dir), RecursiveMode::Recursive) {
+    for dir in &p.watch {
+        if let Err(e) = debouncer.watch(p.root.join(dir), RecursiveMode::Recursive) {
             eprintln!("[n64] failed to watch {dir}/: {e}");
             let _ = child.kill();
             return ExitCode::FAILURE;
         }
     }
 
-    println!("[n64] watching examples/, assets/, apps/n64/, crates/platform-n64/ — Ctrl+C to stop");
+    println!("[n64] watching {} — Ctrl+C to stop", p.watch.join(", "));
     loop {
         if rx.recv().is_err() {
             let _ = child.kill();
@@ -578,10 +585,10 @@ pub fn watch() -> ExitCode {
         }
         while rx.try_recv().is_ok() {}
         println!("[n64] change detected, rebuilding ROM...");
-        if build(false) == ExitCode::SUCCESS {
+        if build(p, false) == ExitCode::SUCCESS {
             let _ = child.kill();
             let _ = child.wait();
-            match launch(&ares, &root) {
+            match launch(&ares, &rom) {
                 Ok(c) => child = c,
                 Err(e) => {
                     eprintln!("[n64] failed to relaunch ares: {e}");
@@ -596,13 +603,13 @@ pub fn watch() -> ExitCode {
 
 /// Boot the test ROM in ares and watch stdout for the ISViewer magic
 /// strings. Kills the emulator on verdict or timeout.
-pub fn test(bless: bool) -> ExitCode {
-    let code = build(true);
+pub fn test(p: &Project, bless: bool) -> ExitCode {
+    let code = build(p, true);
     if code != ExitCode::SUCCESS {
         return code;
     }
-    let root = repo_root();
-    let Some(ares) = ares_exe(&root) else {
+    let root = &p.root;
+    let Some(ares) = ares_exe(p) else {
         eprintln!("[n64] ares not found (expected ares-v148/ares.exe at the repo root)");
         return ExitCode::FAILURE;
     };
@@ -612,7 +619,7 @@ pub fn test(bless: bool) -> ExitCode {
     // Native-resolution RDP: the golden frame is compared pixel-exactly.
     let (mut cmd, container) = ares_command(
         &ares,
-        &root.join("target/n64/trino.z64"),
+        &p.rom(),
         &["--no-file-prompt", "--setting", "Video/Quality=SD"],
     );
     let mut child = match cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() {
@@ -650,6 +657,7 @@ pub fn test(bless: bool) -> ExitCode {
     let mut frames: Vec<crate::fbgolden::FbCapture> = Vec::new();
     let mut perf_scenes = Vec::new();
     let mut micro_scenes = Vec::new();
+    let mut frame_lines = Vec::new();
     let verdict = loop {
         let left = deadline.saturating_duration_since(Instant::now());
         if left.is_zero() {
@@ -675,6 +683,9 @@ pub fn test(bless: bool) -> ExitCode {
                         perf_scenes.push(scene);
                     }
                 }
+                if let Some(f) = parse_frame_line(&line) {
+                    frame_lines.push(f);
+                }
                 if line.contains("TRINO_TEST_PASS") {
                     break Ok(());
                 }
@@ -697,38 +708,14 @@ pub fn test(bless: bool) -> ExitCode {
             .status();
     }
 
-    // Emulator golden images, in dump order: the showcase's first frame
-    // (fogged: the CPU T&L path) and castle64's hub (the RSP T&L path).
-    let verdict = verdict.and_then(|()| {
-        for (n, name) in ["showcase", "castle64_hub"].iter().enumerate() {
-            let img = frames
-                .get(n)
-                .ok_or_else(|| format!("golden frame {name}: not dumped"))?
-                .image()
-                .map_err(|e| format!("golden frame {name}: {e}"))?;
-            let msg = crate::fbgolden::check(&root, "n64", name, img, bless)?;
-            println!("[n64] golden frame: {msg}");
-        }
-        Ok(())
-    });
-    // Performance gates: same T&L work as the PC baseline, frame costs
-    // under the committed ceilings.
-    let verdict = verdict.and_then(|()| {
-        let table = crate::perf::gate(&root, &perf_scenes, bless)
-            .map_err(|e| format!("perf gate:\n{e}"))?;
-        println!("[n64] perf (emulated us per frame):\n{table}");
-        Ok(())
-    });
-    let verdict = verdict.and_then(|()| {
-        let ab = crate::perf::rsp_ab_report(&perf_scenes, &micro_scenes);
-        if !ab.is_empty() {
-            println!("[n64] castle64, RSP T&L vs CPU T&L (same ROM, emulated us per frame):\n{ab}");
-        }
-        let table = crate::perf::micro_report(&micro_scenes)
-            .map_err(|e| format!("micro perf scenes:\n{e}"))?;
-        println!("[n64] T&L fixed costs (micro scenes, ungated):\n{table}");
-        Ok(())
-    });
+    let verdict = if p.is_engine {
+        verdict.and_then(|()| engine_gates(root, &frames, &perf_scenes, &micro_scenes, bless))
+    } else {
+        verdict.and_then(|()| {
+            project_gates(p, "n64", &p.test.n64_goldens, &frames, bless, None)?;
+            frame_gate(&frame_lines, p.test.n64_max_frame_us)
+        })
+    };
 
     match verdict {
         Ok(()) => {
@@ -742,9 +729,136 @@ pub fn test(bless: bool) -> ExitCode {
     }
 }
 
+/// castle64's gates: the emulator goldens and the perf gates.
+fn engine_gates(
+    root: &Path,
+    frames: &[crate::fbgolden::FbCapture],
+    perf_scenes: &[crate::perf::SceneLine],
+    micro_scenes: &[crate::perf::SceneLine],
+    bless: bool,
+) -> Result<(), String> {
+    // Emulator golden images, in dump order: the showcase's first frame
+    // (fogged: the CPU T&L path) and castle64's hub (the RSP T&L path).
+    for (n, name) in ["showcase", "castle64_hub"].iter().enumerate() {
+        let img = frames
+            .get(n)
+            .ok_or_else(|| format!("golden frame {name}: not dumped"))?
+            .image()
+            .map_err(|e| format!("golden frame {name}: {e}"))?;
+        let msg = crate::fbgolden::check(root, "n64", name, img, bless)?;
+        println!("[n64] golden frame: {msg}");
+    }
+    // Performance gates: same T&L work as the PC baseline, frame costs
+    // under the committed ceilings.
+    let table =
+        crate::perf::gate(root, perf_scenes, bless).map_err(|e| format!("perf gate:\n{e}"))?;
+    println!("[n64] perf (emulated us per frame):\n{table}");
+    let ab = crate::perf::rsp_ab_report(perf_scenes, micro_scenes);
+    if !ab.is_empty() {
+        println!("[n64] castle64, RSP T&L vs CPU T&L (same ROM, emulated us per frame):\n{ab}");
+    }
+    let table =
+        crate::perf::micro_report(micro_scenes).map_err(|e| format!("micro perf scenes:\n{e}"))?;
+    println!("[n64] T&L fixed costs (micro scenes, ungated):\n{table}");
+    Ok(())
+}
+
+/// An external project's goldens: the `TRINO_FB` dumps, in order, against
+/// `<project>/tests/golden/<platform>/<name>.png` — exact on the N64
+/// (`tolerance: None`), within `(mean, outliers)` on the 3DS.
+pub fn project_gates(
+    p: &Project,
+    platform: &str,
+    names: &[String],
+    frames: &[crate::fbgolden::FbCapture],
+    bless: bool,
+    tolerance: Option<(f32, f32)>,
+) -> Result<(), String> {
+    for (n, name) in names.iter().enumerate() {
+        let img = frames
+            .get(n)
+            .ok_or_else(|| format!("golden frame {name}: not dumped"))?
+            .image()
+            .map_err(|e| format!("golden frame {name}: {e}"))?;
+        let msg = match tolerance {
+            None => crate::fbgolden::check(&p.root, platform, name, img, bless)?,
+            Some((mean, outliers)) => {
+                crate::fbgolden::check_close(&p.root, platform, name, img, bless, mean, outliers)?
+            }
+        };
+        println!("[{platform}] golden frame {name}: {msg}");
+    }
+    Ok(())
+}
+
+/// `TRINO_FRAME:<scene> avg_us=<n> max_us=<n> frames=<n>` — a project
+/// self-test's frame-time report (emulated console time). Returns
+/// `(scene, avg_us, max_us)`.
+pub fn parse_frame_line(line: &str) -> Option<(String, u32, u32)> {
+    let rest = &line[line.find("TRINO_FRAME:")? + "TRINO_FRAME:".len()..];
+    let mut parts = rest.split_whitespace();
+    let scene = parts.next()?.to_string();
+    let (mut avg, mut max) = (None, None);
+    for kv in parts {
+        match kv.split_once('=') {
+            Some(("avg_us", v)) => avg = v.parse().ok(),
+            Some(("max_us", v)) => max = v.parse().ok(),
+            _ => {}
+        }
+    }
+    Some((scene, avg?, max?))
+}
+
+/// Gate the project's frame-time lines on `max_frame_us` (the average per
+/// scene; the worst frame is reported, not gated: one-off loads spike).
+fn frame_gate(lines: &[(String, u32, u32)], max_frame_us: Option<u32>) -> Result<(), String> {
+    if lines.is_empty() {
+        return match max_frame_us {
+            Some(_) => {
+                Err("n64_max_frame_us is set but the ROM printed no TRINO_FRAME line".into())
+            }
+            None => Ok(()),
+        };
+    }
+    let mut table = String::from("scene                      avg ms   max ms    fps\n");
+    let mut over = Vec::new();
+    for (scene, avg, max) in lines {
+        table.push_str(&format!(
+            "{scene:<24} {:>8.2} {:>8.2} {:>6.1}\n",
+            *avg as f32 / 1000.0,
+            *max as f32 / 1000.0,
+            1_000_000.0 / (*avg).max(1) as f32
+        ));
+        if let Some(limit) = max_frame_us
+            && *avg > limit
+        {
+            over.push(format!("{scene}: {avg} us > {limit} us"));
+        }
+    }
+    println!("[n64] frame time (emulated):\n{table}");
+    if over.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("frame budget exceeded: {}", over.join("; ")))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn frame_lines_parse_and_gate() {
+        let l =
+            parse_frame_line("[ares] TRINO_FRAME:hall-busy avg_us=21000 max_us=30500 frames=120");
+        assert_eq!(l, Some(("hall-busy".into(), 21000, 30500)));
+        assert_eq!(parse_frame_line("TRINO_FRAME:x avg_us=1"), None);
+        let lines = vec![l.unwrap()];
+        assert!(frame_gate(&lines, Some(33333)).is_ok());
+        assert!(frame_gate(&lines, Some(20000)).is_err());
+        assert!(frame_gate(&[], Some(33333)).is_err());
+        assert!(frame_gate(&[], None).is_ok());
+    }
 
     #[test]
     fn mem_symbols_must_come_from_newlib() {

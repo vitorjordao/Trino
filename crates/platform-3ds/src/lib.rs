@@ -33,6 +33,8 @@ mod assets;
 #[cfg(target_os = "horizon")]
 mod audio;
 #[cfg(target_os = "horizon")]
+mod host;
+#[cfg(target_os = "horizon")]
 mod input;
 #[cfg(target_os = "horizon")]
 mod renderer;
@@ -46,8 +48,36 @@ pub use assets::N3dsAssets;
 #[cfg(target_os = "horizon")]
 pub use audio::N3dsAudio;
 #[cfg(target_os = "horizon")]
+pub use host::{FrameReport, N3dsHost};
+#[cfg(target_os = "horizon")]
 pub use input::N3dsInput;
 #[cfg(target_os = "horizon")]
 pub use renderer::N3dsRenderer;
 #[cfg(target_os = "horizon")]
 pub use system::N3dsPlatform;
+
+/// Generate `trino_rust_main` (the symbol the C shim's `main` calls) for a
+/// game: `n3ds_main!(MyGame::new)` or `n3ds_main!(MyGame::new, self_test)`,
+/// where `MyGame::new: fn(Vec2) -> MyGame` and
+/// `self_test: fn(&mut N3dsHost, &mut MyGame) -> Result<(), String>`.
+/// On other targets it expands to a `main` that explains how to build, so
+/// the bin crate builds everywhere.
+#[macro_export]
+macro_rules! n3ds_main {
+    ($make:expr) => {
+        $crate::n3ds_main!($make, |_: &mut $crate::N3dsHost, _: &mut _| Ok(()));
+    };
+    ($make:expr, $self_test:expr) => {
+        #[cfg(target_os = "horizon")]
+        #[unsafe(no_mangle)]
+        pub extern "C" fn trino_rust_main() {
+            $crate::N3dsHost::main($make, $self_test)
+        }
+
+        #[cfg(not(target_os = "horizon"))]
+        fn main() {
+            eprintln!("this crate targets the 3DS — build it with `cargo xtask build 3ds`");
+            std::process::exit(1);
+        }
+    };
+}

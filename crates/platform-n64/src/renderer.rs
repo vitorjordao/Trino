@@ -533,16 +533,36 @@ impl Renderer for N64Renderer {
         let Some(table) = self.fonts.get(&font.0).cloned() else {
             return;
         };
-        if let Ok(parsed) = BitmapFont::parse(&table) {
-            trino_core::text::draw(
-                self,
-                trino_core::text::atlas_of(font),
-                &parsed,
-                pos,
-                text,
-                params,
-            );
+        let Ok(parsed) = BitmapFont::parse(&table) else {
+            return;
+        };
+        let atlas = trino_core::text::atlas_of(font);
+        // Fast path: integer scale and an atlas that fits TMEM whole — one
+        // upload, then a texture rectangle per glyph.
+        let k = params.scale as u32;
+        if k >= 1
+            && params.scale == k as f32
+            && let Some(entry) = self.sprites.get(&atlas.0)
+        {
+            let ptr = entry.ptr;
+            self.flush_model_batch();
+            let t0 = self.tick();
+            if unsafe { ffi::trino_text_begin(ptr, pack_color(params.tint)) } == 1 {
+                let mut glyphs = 0u32;
+                trino_core::text::layout(&parsed, pos, text, params, &mut |r, at| {
+                    let xy = ((at.x as i32 as u32 & 0xFFFF) << 16) | (at.y as i32 as u32 & 0xFFFF);
+                    let st = ((r.pos.x as u32) << 16) | r.pos.y as u32;
+                    let wh = ((r.size.x as u32) << 16) | r.size.y as u32;
+                    unsafe { ffi::trino_text_glyph(xy, st, wh, k) };
+                    glyphs += 1;
+                });
+                self.frame_stats.sprites += glyphs;
+                self.charge(t0, |s| &mut s.sprites);
+                return;
+            }
+            self.charge(t0, |s| &mut s.sprites);
         }
+        trino_core::text::draw(self, atlas, &parsed, pos, text, params);
     }
 
     fn measure_text(&self, font: FontId, text: &str, scale: f32) -> Vec2 {

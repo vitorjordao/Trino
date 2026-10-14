@@ -44,6 +44,11 @@ pub struct FontDecl {
     /// Extra advance after each proportional glyph, pixels (default 1).
     #[serde(default = "default_spacing")]
     pub spacing: u32,
+    /// PNG grid, monospaced (`proportional = false`): the advance per glyph
+    /// (default: the cell width). Lets the atlas store 5-wide cells for a
+    /// 6-pixel pitch — a smaller atlas that fits the N64's TMEM whole.
+    #[serde(default)]
+    pub advance: Option<u32>,
     /// TTF: keep coverage as alpha instead of thresholding.
     #[serde(default)]
     pub antialias: bool,
@@ -156,7 +161,7 @@ fn bake_grid(source: &Path, decl: &FontDecl) -> Result<BakedFont, String> {
                 w: if opaque.is_empty() { 0 } else { cw as u8 },
                 h: ch as u8,
                 x_offset: 0,
-                advance: cw as u8,
+                advance: decl.advance.unwrap_or(cw).min(255) as u8,
             }
         } else if let (Some(&l), Some(&r)) = (opaque.first(), opaque.last()) {
             Glyph {
@@ -407,6 +412,20 @@ mod tests {
         let path = dir.join("grid.png");
         std::fs::write(&path, encode_png(w, h, &rgba).unwrap()).unwrap();
         path
+    }
+
+    #[test]
+    fn monospaced_grid_can_advance_past_its_cell() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = grid_png(dir.path());
+        let baked = bake_font(
+            &path,
+            &decl("file = \"x.png\"\ncell = [4, 2]\nproportional = false\nadvance = 6\n"),
+        )
+        .unwrap();
+        let font = BitmapFont::parse(&baked.table).unwrap();
+        let bang = font.glyph('!').unwrap();
+        assert_eq!((bang.w, bang.advance), (4, 6));
     }
 
     #[test]

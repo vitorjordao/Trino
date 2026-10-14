@@ -37,6 +37,10 @@ unsafe extern "C" {
     /// Returns (width << 16) | height.
     pub fn trino_sprite_size(sprite: *mut c_void) -> u32;
     pub fn trino_sprite_blit(sprite: *mut c_void, params: *const TrinoBlit);
+    /// Upload a whole font atlas to TMEM if it fits; 1 = resident.
+    pub fn trino_text_begin(sprite: *mut c_void, tint: u32) -> u32;
+    /// One glyph of the resident atlas (packed 16:16 pairs, integer scale).
+    pub fn trino_text_glyph(xy: u32, st: u32, wh: u32, scale: u32);
 
     /// Set the RDP shade combiner + z-test; call once before a `trino_tri`
     /// batch.

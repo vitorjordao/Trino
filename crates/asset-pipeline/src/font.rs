@@ -4,9 +4,11 @@
 //! (CI4 on N64 by default — two colors fit a 4-bit palette), the table is
 //! copied verbatim.
 //!
-//! - **PNG grid**: glyphs in codepoint order from `first`, row-major cells
-//!   of `cell = [w, h]`. `proportional = true` trims each glyph to its
-//!   opaque columns (advance = width + `spacing`).
+//! - **PNG grid**: row-major cells of `cell = [w, h]`, in codepoint order
+//!   from `first` — or, with `chars = "..."`, cell *i* holds the *i*-th
+//!   character of `chars` (any codepoints: accented letters, `¿`, `€`).
+//!   `proportional = true` trims each glyph to its opaque columns
+//!   (advance = width + `spacing`).
 //! - **TTF/OTF**: rasterized at `size` pixels with `ab_glyph`; coverage is
 //!   thresholded to hard pixels unless `antialias = true` (the N64-era
 //!   look is crisp, and CI4 cannot hold coverage ramps).
@@ -31,7 +33,9 @@ pub struct FontDecl {
     /// TTF: pixel height (line height before rounding).
     #[serde(default)]
     pub size: Option<f32>,
-    /// TTF: characters to bake (default: printable ASCII).
+    /// TTF: characters to bake (default: printable ASCII). PNG grid: the
+    /// character of each cell, in cell order (default: consecutive
+    /// codepoints from `first`).
     #[serde(default)]
     pub chars: Option<String>,
     /// PNG grid: trim glyphs to their opaque columns (default true).
@@ -122,13 +126,28 @@ fn bake_grid(source: &Path, decl: &FontDecl) -> Result<BakedFont, String> {
     let cols = w / cw;
     let rows = h / ch;
     let alpha = |x: u32, y: u32| rgba[((y * w + x) * 4 + 3) as usize];
+    let listed: Option<Vec<char>> = decl.chars.as_ref().map(|c| c.chars().collect());
+    if let Some(list) = &listed
+        && list.len() as u32 > cols * rows
+    {
+        return Err(format!(
+            "{}: `chars` lists {} characters but the grid has {} cells",
+            source.display(),
+            list.len(),
+            cols * rows
+        ));
+    }
+    let cells = listed.as_ref().map_or(cols * rows, |l| l.len() as u32);
     let mut glyphs = Vec::new();
-    for i in 0..cols * rows {
+    for i in 0..cells {
         let (cx, cy) = ((i % cols) * cw, (i / cols) * ch);
         let opaque: Vec<u32> = (0..cw)
             .filter(|&x| (0..ch).any(|y| alpha(cx + x, cy + y) > 0))
             .collect();
-        let cp = decl.first + i;
+        let cp = match &listed {
+            Some(list) => list[i as usize] as u32,
+            None => decl.first + i,
+        };
         let glyph = if !decl.proportional {
             Glyph {
                 codepoint: cp,
@@ -388,6 +407,31 @@ mod tests {
         let path = dir.join("grid.png");
         std::fs::write(&path, encode_png(w, h, &rgba).unwrap()).unwrap();
         path
+    }
+
+    #[test]
+    fn grid_font_with_listed_chars_maps_any_codepoint() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = grid_png(dir.path());
+        let baked = bake_font(
+            &path,
+            &decl("file = \"x.png\"\ncell = [4, 2]\nchars = \" çÃ\"\n"),
+        )
+        .unwrap();
+        let font = BitmapFont::parse(&baked.table).unwrap();
+        assert_eq!(font.glyph('ç').unwrap().x, 5);
+        assert_eq!(font.glyph('Ã').unwrap().x, 9);
+        assert!(
+            font.glyph('!').is_none(),
+            "cells follow `chars`, not `first`"
+        );
+        // More characters than cells is an authoring error.
+        let err = bake_font(
+            &path,
+            &decl("file = \"x.png\"\ncell = [4, 2]\nchars = \"abcd\"\n"),
+        )
+        .unwrap_err();
+        assert!(err.contains("4 characters"), "{err}");
     }
 
     #[test]

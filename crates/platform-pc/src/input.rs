@@ -1,5 +1,7 @@
-//! Keyboard + mouse input backend. Gamepad support (gilrs) is planned
-//! alongside the editor's input settings.
+//! Keyboard + mouse + gamepad input backend. Gamepads come through gilrs
+//! with the `gamepad` feature (Xbox-style layout: A/B/X/Y = South/East/
+//! West/North, L/R = bumpers or triggers, the left stick and the D-pad);
+//! every connected pad is merged with the keyboard.
 //!
 //! The mouse is the [`InputState::pointer`]: the host converts window
 //! pixels to game pixels ([`crate::PcRenderer::window_to_game`]) and feeds
@@ -28,10 +30,22 @@ pub struct PcInput {
     state: InputState,
     // W, A, S, D held state for the digital stick.
     wasd: [bool; 4],
+    #[cfg(feature = "gamepad")]
+    pads: Option<gilrs::Gilrs>,
 }
 
 impl PcInput {
     pub fn new() -> Self {
+        #[cfg(feature = "gamepad")]
+        {
+            // No pad subsystem (headless CI, missing permissions): keyboard
+            // and mouse still work.
+            Self {
+                pads: gilrs::Gilrs::new().ok(),
+                ..Self::default()
+            }
+        }
+        #[cfg(not(feature = "gamepad"))]
         Self::default()
     }
 
@@ -131,9 +145,54 @@ impl PcInput {
     }
 }
 
+#[cfg(feature = "gamepad")]
+impl PcInput {
+    /// Fold every connected gamepad into `state` (buttons OR'ed, the
+    /// strongest stick wins over the keyboard's digital stick).
+    fn merge_pads(&mut self, state: &mut InputState) {
+        let Some(g) = self.pads.as_mut() else { return };
+        while g.next_event().is_some() {}
+        use gilrs::{Axis, Button as B};
+        const MAP: [(B, Button); 16] = [
+            (B::South, Button::A),
+            (B::East, Button::B),
+            (B::West, Button::X),
+            (B::North, Button::Y),
+            (B::LeftTrigger, Button::L),
+            (B::LeftTrigger2, Button::L),
+            (B::RightTrigger, Button::R),
+            (B::RightTrigger2, Button::R),
+            (B::Start, Button::Start),
+            (B::Select, Button::Select),
+            (B::DPadUp, Button::DpadUp),
+            (B::DPadDown, Button::DpadDown),
+            (B::DPadLeft, Button::DpadLeft),
+            (B::DPadRight, Button::DpadRight),
+            (B::Mode, Button::Start),
+            (B::LeftThumb, Button::Select),
+        ];
+        for (_, pad) in g.gamepads() {
+            for (from, to) in MAP {
+                if pad.is_pressed(from) {
+                    state.set(to, true);
+                }
+            }
+            // gilrs sticks are Y-up, like InputState.
+            let s = Vec2::new(pad.value(Axis::LeftStickX), pad.value(Axis::LeftStickY));
+            if s.x * s.x + s.y * s.y > state.stick.x * state.stick.x + state.stick.y * state.stick.y
+            {
+                state.stick = s;
+            }
+        }
+    }
+}
+
 impl Input for PcInput {
     fn poll(&mut self) -> InputState {
-        let state = self.state;
+        #[allow(unused_mut)]
+        let mut state = self.state;
+        #[cfg(feature = "gamepad")]
+        self.merge_pads(&mut state);
         // The wheel is a per-frame delta; everything else is held state.
         self.state.wheel = 0.0;
         state

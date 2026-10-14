@@ -325,11 +325,17 @@ fn bake_ttf(source: &Path, decl: &FontDecl) -> Result<BakedFont, String> {
 }
 
 /// Make every pixel white, keeping alpha (tint colors text at draw time).
+/// White ink, coverage in alpha — and transparent texels **black**: the
+/// N64's intensity formats (I4/I8) derive alpha from RGB, so a white but
+/// transparent background would turn every glyph cell into a solid block.
 fn whiten(rgba: &[u8]) -> Vec<u8> {
     rgba.as_chunks::<4>()
         .0
         .iter()
-        .flat_map(|&[_, _, _, a]| [255, 255, 255, a])
+        .flat_map(|&[_, _, _, a]| {
+            let c = if a > 0 { 255 } else { 0 };
+            [c, c, c, a]
+        })
         .collect()
 }
 
@@ -466,9 +472,11 @@ mod tests {
         assert_eq!((bang.x, bang.w, bang.advance), (5, 1, 2));
         let quote = font.glyph('"').unwrap();
         assert_eq!((quote.x, quote.w, quote.advance), (9, 2, 3));
-        // Atlas is whitened, alpha kept.
+        // Atlas is whitened, alpha kept; transparent texels are black
+        // (intensity formats take alpha from RGB).
         let at = 5 * 4; // pixel (5, 0)
         assert_eq!(&baked.rgba[at..at + 4], &[255, 255, 255, 255]);
+        assert_eq!(&baked.rgba[0..4], &[0, 0, 0, 0]);
     }
 
     #[test]

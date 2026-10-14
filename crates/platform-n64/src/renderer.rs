@@ -415,6 +415,9 @@ fn emit_tri_tex(tri: &ScreenTri) {
     unsafe { ffi::trino_tri_tex(v.as_ptr()) }
 }
 
+/// Draws per streamed RSP chunk ([`N64Renderer::set_rsp_stream`]).
+const RSP_STREAM_CHUNK: usize = 8;
+
 fn pack_color(c: Color) -> u32 {
     ((c.r as u32) << 24) | ((c.g as u32) << 16) | ((c.b as u32) << 8) | c.a as u32
 }
@@ -485,10 +488,20 @@ impl Renderer for N64Renderer {
             let t0 = self.tick();
             let cull = if d.cull_back { self.rsp_cull } else { 2 };
             let words = rsp::draw_words(&self.tnl_ctx, matrix, &d, params.tint, rm, cull, 0);
-            if self.rsp_stream && self.pending_tris.is_empty() && self.pending_rsp.is_empty() {
-                unsafe { ffi::trino_rsp_draw(words.as_ptr()) };
-            } else {
-                self.pending_rsp.push(words);
+            self.pending_rsp.push(words);
+            // Streaming: hand the overlay a chunk as soon as it is full (and
+            // the batch holds no CPU triangles), so the RSP starts while the
+            // CPU is still issuing draws. Single-draw streaming hung the RDP
+            // in ares under heavy 2D traffic (see the n64-performance skill);
+            // chunks keep the proven burst pattern.
+            if self.rsp_stream
+                && self.pending_tris.is_empty()
+                && self.pending_rsp.len() >= RSP_STREAM_CHUNK
+            {
+                for w in &self.pending_rsp {
+                    unsafe { ffi::trino_rsp_draw(w.as_ptr()) };
+                }
+                self.pending_rsp.clear();
             }
             let tnl = TnlStats {
                 rsp_draws: 1,

@@ -17,6 +17,7 @@
 use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::String;
+use trino_core::perf::ModelCost;
 use trino_core::{Game, Input, InputState, Vec2};
 
 use crate::{N64Assets, N64Audio, N64Input, N64Platform, N64Renderer, runtime};
@@ -49,6 +50,9 @@ pub struct FrameReport {
     pub rsp_draws: u32,
     pub draws: u32,
     pub culled: u32,
+    /// The costliest models over the run: (model handle, calls per frame, µs per
+    /// frame of T&L, RSP draws per frame), most expensive first.
+    pub top: [(u32, u32, u32, u32); 8],
 }
 
 impl N64Host {
@@ -103,6 +107,8 @@ impl N64Host {
         let mut total: u64 = 0;
         let mut max = 0u32;
         let mut sums = [0u64; 9];
+        let mut models: [ModelCost; 48] = [ModelCost::default(); 48];
+        let mut n_models = 0usize;
         for i in 0..frames {
             let state = input(i);
             self.renderer.start_profile();
@@ -134,10 +140,32 @@ impl N64Host {
                     + p.other.calls;
                 sums[7] += draws as u64;
                 sums[8] += p.tnl.culled as u64;
+                for m in &p.models[..p.model_count] {
+                    match models[..n_models].iter().position(|x| x.model == m.model) {
+                        Some(i) => {
+                            let x = &mut models[i];
+                            x.calls += m.calls;
+                            x.us += m.us;
+                            x.tnl.rsp_draws += m.tnl.rsp_draws;
+                        }
+                        None if n_models < models.len() => {
+                            models[n_models] = *m;
+                            n_models += 1;
+                        }
+                        None => {}
+                    }
+                }
             }
         }
         let n = (frames as u64).max(1);
+        models[..n_models].sort_unstable_by(|a, b| b.us.cmp(&a.us));
+        let mut top = [(0u32, 0, 0, 0); 8];
+        for (t, m) in top.iter_mut().zip(models[..n_models].iter()) {
+            let f = frames.max(1);
+            *t = (m.model.0, m.calls / f, m.us / f, m.tnl.rsp_draws / f);
+        }
         FrameReport {
+            top,
             frames,
             avg_us: (total / n) as u32,
             max_us: max,
@@ -172,6 +200,11 @@ impl N64Host {
             r.rsp_draws,
             r.culled
         ));
+        for (id, calls, us, rsp) in r.top.iter().filter(|t| t.1 > 0) {
+            runtime::log(&format!(
+                "TRINO_FRAME_MODEL:{scene} {id:08x} calls={calls} tnl_us={us} rsp={rsp}\n"
+            ));
+        }
     }
 
     /// Print the last presented frame (`TRINO_FBR:` rows): the next entry

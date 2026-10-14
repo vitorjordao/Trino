@@ -245,3 +245,36 @@ about the origin.
 - Record what went wrong and how it was fixed in this skill (or in the game's AGENTS.md).
 - Report: what changed (mesh/colors/rig/clips), the `inspect` numbers, what is left, and how
   to see it (editor Scene view, `TRINO_SCENE=... cargo run -p trino-app-pc`).
+
+## Lessons from Plan & Party's asset set (2026-10-14, 64 models + 38 console variants)
+
+- **Export and inspect:**
+  - export with `export_materials='NONE'` (and `export_vertex_color='ACTIVE'`): Trino
+    multiplies COLOR_0 by the material base color, so PBR master materials come out
+    double-colored;
+  - `inspect` run from inside Blender finds the system cargo: put `~/.cargo/bin` first
+    on PATH.
+- **QA renders:** Workbench STUDIO light plus Blender 5's AgX view transform darken and
+  tint the colors (white cloth renders gray). Use the Standard view transform, FLAT
+  light, and a temporary color attribute that applies Trino's formula
+  `ambient + (1 − ambient)·max(0, n·l)`.
+- **Baked light** (pre-lit meshes drawn `Unlit`, e.g. a roof that is stretched
+  non-uniformly): multiply the light factor in display (sRGB) space, then convert to
+  linear for COLOR_0. Trino lights display bytes.
+- **Geometry:**
+  - the "buried face" culling in `castle64_models.py` deletes recessed geometry (a sink
+    basin, planter soil): give boxes an opt-out (`occlude=False`);
+  - cards and rotated slivers dip a few millimetres below y = 0: snap anything within
+    5 mm up to the floor;
+  - coplanar details (hair on a head, papers on a desk) z-fight on the N64: stand them
+    about 2 cm proud, or cut them into the face;
+  - an octagon wheel's lowest point is `r·cos(22.5°)` below its center;
+  - world positions are stale until `view_layer.update()`.
+- **Code and checks:**
+  - `castle64_models.py` runs `main()` on import, so it can't be used as a library;
+    copy its Model class;
+  - two coincident opposite faces read red in the orientation check: offset them 2 mm.
+- **Console variants:** the pipeline resolves `assets/<platform>/<same path>` over the
+  master, so low-poly N64/3DS versions need no game code. In Plan & Party's set they
+  cost 44% fewer triangles.
+

@@ -149,3 +149,18 @@ Scenes/prefabs reference materials by logical path; games use the equivalent
 - Renaming a logical path changes the handle — breaking for scenes/code. Renames are refactors.
 - With the editor open or `cargo xtask watch pc` running, saving a master rebakes and
   re-uploads it live under the same handle.
+
+## Formats and fonts added for external projects (2026-10-14)
+- **N64 sprite and font formats** include `I4` and `I8`: intensity, with alpha equal
+  to intensity. They suit white masks tinted at draw time (fonts, UI) and upload no
+  palette per blit. The font bake writes transparent texels **black** for this reason.
+- **PNG grid fonts:**
+  - `chars = "..."` lists each cell's character in order, so accents, `¿`, `€` and
+    friends work;
+  - with `proportional = false`, `advance = N` sets a pitch wider than the cell (for
+    example 5-wide cells at 6 px);
+  - a font atlas that fits TMEM (I4: ≤ 4096 bytes) takes the N64 resident text path,
+    which is several times faster per glyph.
+- **Per-platform model overrides** (`assets/n64/models/...`, `assets/3ds/models/...`)
+  are the way to ship console low-poly variants.
+

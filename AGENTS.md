@@ -284,6 +284,21 @@ new skill when none fits. Then run `cargo xtask agents sync`. The steps are in
   - Gated by an oracle, CPU-vs-RSP pixel checks, the work split (`rsp_draws`) and
     the `castle64_hub` N64 golden.
 
+- **External console projects** (2026-10-14, ADR 0008, first user: Plan & Party, a
+  separate repo with this engine as its `engine/` submodule).
+  - `trino.toml` and `cargo xtask build|run|test|watch n64|3ds --project <dir>` (or
+    `$TRINO_PROJECT`, or a `trino.toml` in the cwd). The standalone template gives
+    `cargo trino`.
+  - `n64_main!` / `n3ds_main!` with `N64Host` / `N3dsHost` (boot, step, measure, report
+    frames with the real fps, dump goldens). Project gates: `TRINO_TEST_PASS`, goldens,
+    `n64_max_frame_us`.
+  - **Input:** an optional `InputState::pointer` (PC mouse, 3DS touch mapped onto the
+    top screen) with the wheel; PC gamepads through gilrs (feature `gamepad`).
+  - **2D:** `Renderer::fill_rect`; the N64 resident text atlas, a 2D blit-mode cache and
+    I4/I8 sprites; PNG grid fonts with `chars` and `advance`.
+  - **RSP:** the RSP accepts draws up to 4× the screen (`RSP_BAND`); opt-in
+    `set_rsp_stream`.
+
 Ranked next steps: `docs/BACKLOG.md`. N64 throughput is no longer the top risk for
 castle64. Next for the RSP path: clipping on the RSP, more surface features, an RSP
 term in the cost model, and a measurement on real hardware (ares doesn't time the
@@ -369,6 +384,7 @@ cargo xtask scene export <scene.ron> <out.rs>   # scene -> no_std Rust data for 
 cargo xtask model inspect <file> [--json]       # bake a model like the engine; art gate
 cargo xtask agents sync   # mirror .agents/skills/ into .claude/skills/ (check: agents check)
 cargo xtask new <name> --standalone <dir> [--git <url> --rev <r>]   # project outside this repo
+cargo xtask build|run|test|watch n64|3ds --project <dir>          # package an external project (its trino.toml)
 cargo xtask emulators setup ares|azahar          # headless ares image / pinned Azahar AppImage
 cargo xtask test n64 --bless                     # rewrite the ares golden frame + N64 perf ceilings (review!)
 cargo xtask test 3ds --bless                     # rewrite the Azahar golden frame (review the PNG!)
@@ -496,6 +512,20 @@ cargo test --workspace
   Don't union parts with a boolean: it cuts holes and adds triangles.
 - **Template manifests are `Cargo.toml.tmpl`.** A placeholder `Cargo.toml` anywhere in
   the repo breaks every git-dependency user, because cargo scans the whole repository.
+
+- **I4/I8 textures take alpha from RGB.** A font atlas with white transparent
+  texels drew every glyph as a solid block on the N64 only. The bake now writes
+  transparent texels black. Any white-mask sprite in I4/I8 needs the same.
+- **Per-draw RSP streaming hung the RDP in ares** (`set_rsp_stream` with one draw at a
+  time, under heavy 2D traffic, data-dependently; "RDP command queue MISALIGNED").
+  Chunks of 8 never did. Root cause open (BACKLOG). Keep the chunking.
+- **Wide shots z-fight on the N64 at meter scale:** at 30–60 m, `1 − NEAR/z` resolves
+  about 1 m. Draw the world scaled (Plan & Party uses 1/128) so the near/far ratio
+  stays small.
+- **`n64_main!` crates are `#![cfg_attr(target_os = "none", no_std)]`.** A plain
+  `no_std` breaks the host `cargo check --workspace` (no panic handler).
+- **The PC `gamepad` feature links libudev on Linux** (`libudev-dev`). Keep it opt-in
+  for Linux builds.
 
 - Do not add dependencies to `trino-core` — the dep-graph test will fail, and the crate
   must compile for MIPS bare metal.

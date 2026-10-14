@@ -51,6 +51,8 @@ unsafe extern "C" {
     pub fn trino_joypad_buttons() -> u32;
     /// (x as i16 as u16) << 16 | (y as i16 as u16).
     pub fn trino_joypad_stick() -> u32;
+    /// Bit 31 = touching, bits 16..24 = y, bits 0..9 = x (bottom screen px).
+    pub fn trino_touch() -> u32;
 
     pub fn trino_wav_load(romfs_path: *const c_char) -> *mut c_void;
     pub fn trino_wav_play(wav: *mut c_void, channel: u32, looped: u32);

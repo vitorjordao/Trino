@@ -437,6 +437,17 @@ uint32_t trino_joypad_stick(void)
     return ((uint32_t)x << 16) | y;
 }
 
+// Touch screen (bottom, 320x240): bit 31 = touching, bits 16..24 = y,
+// bits 0..9 = x, in bottom-screen pixels. hidScanInput already ran in
+// trino_joypad_buttons this frame.
+uint32_t trino_touch(void)
+{
+    if (!(hidKeysHeld() & KEY_TOUCH)) return 0;
+    touchPosition t;
+    hidTouchRead(&t);
+    return (1u << 31) | ((uint32_t)(t.py & 0xff) << 16) | (uint32_t)(t.px & 0x3ff);
+}
+
 // ---------------------------------------------------------------------------
 // Audio — raw PCM16 through ndsp. Baked format (cargo xtask assets 3ds):
 // 12-byte header (u32 LE sample_rate, u32 LE channels, u32 LE frame count)

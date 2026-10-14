@@ -29,9 +29,8 @@ use trino_platform_pc::{PcAudio, PcInput, PcPlatform, PcRenderer, SimProfile};
 
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
-use winit::event::{ElementState, KeyEvent, WindowEvent};
+use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, EventLoop};
-use winit::keyboard::PhysicalKey;
 use winit::window::{Window, WindowId};
 
 /// Where the game lives and how its window looks.
@@ -254,16 +253,7 @@ impl ApplicationHandler for Host {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => ctx.renderer.resize(size.width, size.height),
-            WindowEvent::KeyboardInput {
-                event:
-                    KeyEvent {
-                        physical_key: PhysicalKey::Code(code),
-                        state,
-                        repeat: false,
-                        ..
-                    },
-                ..
-            } => ctx.input.handle_key(code, state == ElementState::Pressed),
+            ref e if ctx.input.handle_window_event(e, &ctx.renderer) => {}
             WindowEvent::RedrawRequested => {
                 #[cfg(feature = "watch")]
                 while let Ok(changed) = ctx.asset_events.try_recv() {

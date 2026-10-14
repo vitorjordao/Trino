@@ -980,6 +980,19 @@ impl PcRenderer {
         self.internal_size
     }
 
+    /// Window pixel (physical, as winit reports the cursor) → game pixel,
+    /// through the same letterboxed integer upscale the window shows.
+    /// `None` outside the picture or without a window surface.
+    pub fn window_to_game(&self, x: f64, y: f64) -> Option<trino_core::Vec2> {
+        let ss = self.surface.as_ref()?;
+        window_to_game(
+            self.internal_size,
+            (ss.config.width, ss.config.height),
+            x as f32,
+            y as f32,
+        )
+    }
+
     /// Depth-sort the pending model batch and enqueue it as triangle
     /// commands (painter's order across every mesh of the batch). Batches
     /// with textured draws are then grouped by texture (stable: depth order
@@ -1317,14 +1330,8 @@ impl PcRenderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            // Nearest integer upscale, centered. Fractional only when the
-            // window is smaller than the internal framebuffer.
-            let (iw, ih) = (self.internal_size.0 as f32, self.internal_size.1 as f32);
-            let (sw, sh) = (ss.config.width as f32, ss.config.height as f32);
-            let fit = (sw / iw).min(sh / ih);
-            let scale = if fit >= 1.0 { fit.floor() } else { fit };
-            let (vw, vh) = (iw * scale, ih * scale);
-            let (vx, vy) = ((sw - vw) * 0.5, (sh - vh) * 0.5);
+            let (vx, vy, vw, vh) =
+                present_rect(self.internal_size, (ss.config.width, ss.config.height));
             pass.set_viewport(vx, vy, vw, vh, 0.0, 1.0);
             pass.set_pipeline(&self.blit_pipeline);
             pass.set_bind_group(0, &self.blit_bind_group, &[]);
@@ -1610,5 +1617,57 @@ impl Renderer for PcRenderer {
             rgba[at + 2],
             rgba[at + 3],
         ))
+    }
+}
+
+/// Where the internal framebuffer lands in the window: nearest integer
+/// upscale, centered (fractional only when the window is smaller than the
+/// framebuffer). `(x, y, width, height)` in window pixels.
+fn present_rect(internal: (u32, u32), surface: (u32, u32)) -> (f32, f32, f32, f32) {
+    let (iw, ih) = (internal.0 as f32, internal.1 as f32);
+    let (sw, sh) = (surface.0 as f32, surface.1 as f32);
+    let fit = (sw / iw).min(sh / ih);
+    let scale = if fit >= 1.0 { fit.floor() } else { fit };
+    let (vw, vh) = (iw * scale, ih * scale);
+    ((sw - vw) * 0.5, (sh - vh) * 0.5, vw, vh)
+}
+
+/// Inverse of [`present_rect`] for one window pixel.
+fn window_to_game(
+    internal: (u32, u32),
+    surface: (u32, u32),
+    x: f32,
+    y: f32,
+) -> Option<trino_core::Vec2> {
+    let (vx, vy, vw, vh) = present_rect(internal, surface);
+    let (u, v) = ((x - vx) / vw, (y - vy) / vh);
+    if !(0.0..1.0).contains(&u) || !(0.0..1.0).contains(&v) {
+        return None;
+    }
+    Some(trino_core::Vec2::new(
+        u * internal.0 as f32,
+        v * internal.1 as f32,
+    ))
+}
+
+#[cfg(test)]
+mod present_tests {
+    use super::*;
+
+    #[test]
+    fn letterboxed_integer_upscale_maps_back() {
+        // 320x240 in a 1280x720 window: scale 3, 960x720 centered at x=160.
+        assert_eq!(
+            present_rect((320, 240), (1280, 720)),
+            (160.0, 0.0, 960.0, 720.0)
+        );
+        let p = window_to_game((320, 240), (1280, 720), 160.0 + 30.0, 9.0).unwrap();
+        assert_eq!((p.x, p.y), (10.0, 3.0));
+        // The black bars are outside the picture.
+        assert_eq!(window_to_game((320, 240), (1280, 720), 100.0, 10.0), None);
+        assert_eq!(window_to_game((320, 240), (1280, 720), 1125.0, 10.0), None);
+        // Smaller window: fractional downscale still maps corners.
+        let p = window_to_game((640, 480), (320, 240), 319.0, 239.0).unwrap();
+        assert!((p.x - 638.0).abs() < 0.01 && (p.y - 478.0).abs() < 0.01);
     }
 }

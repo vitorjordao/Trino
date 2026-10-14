@@ -23,7 +23,8 @@
 
 /// Version handshake between host and game dylib. Bump on ANY change to the
 /// exported function signatures or to types crossing the boundary.
-pub const GAME_API_VERSION: u32 = 2;
+/// 3: `InputState` gained the pointer (`pointer`, pointer buttons, `wheel`).
+pub const GAME_API_VERSION: u32 = 3;
 
 /// Generates the hot-reload exports for a game state type implementing
 /// `trino_core::Game`:

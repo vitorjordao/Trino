@@ -36,6 +36,19 @@ pub struct FrameReport {
     /// Mean of `update + render` minus `begin_frame`'s vsync/RDP wait, µs.
     pub avg_us: u32,
     pub max_us: u32,
+    /// Mean per stage, µs: `Game::update_with`, and the renderer's T&L,
+    /// sort, submit, sprites (2D + text) and `end_frame`.
+    pub update_us: u32,
+    pub tnl_us: u32,
+    pub sort_us: u32,
+    pub submit_us: u32,
+    pub sprites_us: u32,
+    pub end_us: u32,
+    /// Per frame: model draws sent to the RSP overlay vs all model draws
+    /// that reached the T&L (culled ones included).
+    pub rsp_draws: u32,
+    pub draws: u32,
+    pub culled: u32,
 }
 
 impl N64Host {
@@ -89,21 +102,54 @@ impl N64Host {
     ) -> FrameReport {
         let mut total: u64 = 0;
         let mut max = 0u32;
+        let mut sums = [0u64; 9];
         for i in 0..frames {
             let state = input(i);
             self.renderer.start_profile();
             let t0 = runtime::now_us();
-            self.step(game, &state, dt);
+            game.update_with(&mut self.platform, &state, &mut self.audio, dt);
+            let t1 = runtime::now_us();
+            game.render(&mut self.renderer);
+            self.audio.poll();
             let spent = runtime::now_us().wrapping_sub(t0);
-            let wait = self.renderer.take_profile().map_or(0, |p| p.stages.begin);
+            let p = self.renderer.take_profile();
+            let wait = p.as_ref().map_or(0, |p| p.stages.begin);
             let us = spent.saturating_sub(wait);
             total += us as u64;
             max = max.max(us);
+            sums[0] += t1.wrapping_sub(t0) as u64;
+            if let Some(p) = p {
+                let st = p.stages;
+                for (k, v) in [st.tnl, st.sort, st.submit, st.sprites, st.end]
+                    .iter()
+                    .enumerate()
+                {
+                    sums[1 + k] += *v as u64;
+                }
+                sums[6] += p.tnl.rsp_draws as u64;
+                let draws: u32 = p.models[..p.model_count]
+                    .iter()
+                    .map(|m| m.calls)
+                    .sum::<u32>()
+                    + p.other.calls;
+                sums[7] += draws as u64;
+                sums[8] += p.tnl.culled as u64;
+            }
         }
+        let n = (frames as u64).max(1);
         FrameReport {
             frames,
-            avg_us: total.checked_div(frames as u64).unwrap_or(0) as u32,
+            avg_us: (total / n) as u32,
             max_us: max,
+            update_us: (sums[0] / n) as u32,
+            tnl_us: (sums[1] / n) as u32,
+            sort_us: (sums[2] / n) as u32,
+            submit_us: (sums[3] / n) as u32,
+            sprites_us: (sums[4] / n) as u32,
+            end_us: (sums[5] / n) as u32,
+            rsp_draws: (sums[6] / n) as u32,
+            draws: (sums[7] / n) as u32,
+            culled: (sums[8] / n) as u32,
         }
     }
 
@@ -111,8 +157,20 @@ impl N64Host {
     /// frames=` — `cargo xtask test n64` gates it on `n64_max_frame_us`.
     pub fn report_frames(&self, scene: &str, r: &FrameReport) {
         runtime::log(&format!(
-            "TRINO_FRAME:{scene} avg_us={} max_us={} frames={}\n",
-            r.avg_us, r.max_us, r.frames
+            "TRINO_FRAME:{scene} avg_us={} max_us={} frames={} update={} tnl={} sort={} \
+             submit={} sprites={} end={} draws={} rsp={} culled={}\n",
+            r.avg_us,
+            r.max_us,
+            r.frames,
+            r.update_us,
+            r.tnl_us,
+            r.sort_us,
+            r.submit_us,
+            r.sprites_us,
+            r.end_us,
+            r.draws,
+            r.rsp_draws,
+            r.culled
         ));
     }
 

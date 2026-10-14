@@ -890,9 +890,18 @@ pub const RSP_SEG_VERTS: usize = 32;
 pub const RSP_SEG_TRIS: usize = 64;
 /// Segments per RSP mesh (the overlay's segment table).
 pub const RSP_MAX_SEGS: usize = 16;
+/// How far beyond the screen an RSP draw may reach, as a multiple of the
+/// half screen (the CPU path's guard band is 1.5). The overlay does not
+/// clip: it only needs every vertex past NEAR and inside its fixed-point
+/// ranges — screen coordinates are s13.2 (±8192 px: 4× a 320-wide screen
+/// is ±640) and the RDP scissors the rest. A wider band keeps props at the
+/// screen edges on the fast path instead of CPU-clipping them for pixels
+/// nobody sees (~3–4 ms per prop on the N64).
+pub const RSP_BAND: f32 = 4.0;
 /// Farthest view depth (including the bounding radius) an RSP draw may
-/// reach: the overlay's s15.16 clip coordinates go to ~1.5x the depth.
-pub const RSP_MAX_DEPTH: f32 = 16_000.0;
+/// reach: the overlay's s15.16 clip coordinates go to ~RSP_BAND × the
+/// depth (|x| < 32768).
+pub const RSP_MAX_DEPTH: f32 = 6_000.0;
 /// Largest model axis scale an RSP draw may use (its matrix entries are
 /// s15.16 too).
 pub const RSP_MAX_SCALE: f32 = 4_000.0;
@@ -1005,8 +1014,16 @@ pub fn rsp_eligible(
     let s = model.axis_scales_sq();
     let r2 = r * r * s.x.max(s.y).max(s.z);
     let inside = |d: f32, k: f32| d > 0.0 && d * d > r2 * k;
-    let (lx, ly) = (ctx.lim_x, ctx.lim_y);
     let abs = |v: f32| if v < 0.0 { -v } else { v };
+    // Wholly outside the guard band: the CPU path culls it for ~13 µs —
+    // never ship invisible work to the overlay.
+    let outside = |d: f32, k: f32| d < 0.0 && d * d > r2 * k;
+    let (gx, gy) = (ctx.lim_x, ctx.lim_y);
+    if outside(gx * c.z - abs(c.x), gx * gx + 1.0) || outside(gy * c.z - abs(c.y), gy * gy + 1.0) {
+        return None;
+    }
+    let band = RSP_BAND / GUARD;
+    let (lx, ly) = (ctx.lim_x * band, ctx.lim_y * band);
     if !(inside(c.z - NEAR, 1.0)
         && inside(lx * c.z - abs(c.x), lx * lx + 1.0)
         && inside(ly * c.z - abs(c.y), ly * ly + 1.0))
@@ -1014,7 +1031,7 @@ pub fn rsp_eligible(
         return None;
     }
     // The overlay's clip coordinates are s15.16 (|v| < 32768): x reaches
-    // ~1.5x the view depth inside the guard band. Keep the whole sphere
+    // ~RSP_BAND × the view depth inside the band. Keep the whole sphere
     // under RSP_MAX_DEPTH, and the matrix entries (axis scale) in range.
     if !inside(RSP_MAX_DEPTH - c.z, 1.0) || s.x.max(s.y).max(s.z) >= RSP_MAX_SCALE * RSP_MAX_SCALE {
         return None;

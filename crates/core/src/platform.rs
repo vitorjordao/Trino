@@ -80,6 +80,35 @@ pub struct DisplayInfo {
     pub pixel_scale: u8,
 }
 
+/// Which bindings a remapping screen edits: the keyboard's or the
+/// gamepads'.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum BindDevice {
+    Keyboard = 0,
+    Gamepad = 1,
+}
+
+/// The gamepads a PC host can see.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum GamepadStatus {
+    /// Built without gamepad support, or the system's pad layer would not
+    /// start (Linux without udev access, for one): keyboard and mouse only.
+    Unsupported,
+    /// Supported; none connected.
+    Disconnected,
+    /// At least one connected.
+    Connected,
+}
+
+/// Input as a PC host reports it ([`Platform::input_info`]; `None` on
+/// consoles, whose buttons are fixed).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct InputInfo {
+    pub gamepad: GamepadStatus,
+    /// A rebind waiting for its key or pad button ([`Platform::rebind`]).
+    pub capturing: Option<(crate::Button, BindDevice)>,
+}
+
 pub trait Platform {
     /// Monotonic time in microseconds since an arbitrary epoch.
     fn now_micros(&self) -> u64;
@@ -149,4 +178,33 @@ pub trait Platform {
     /// applies them after the frame and calls [`crate::Game::resize`] when
     /// the picture's size changes; it also persists them.
     fn set_display(&mut self, _settings: DisplaySettings) {}
+
+    /// The input bindings' state, on platforms where they can be remapped
+    /// (PC). `None` on consoles.
+    fn input_info(&self) -> Option<InputInfo> {
+        None
+    }
+
+    /// The first connected gamepad's name, as the system reports it.
+    fn gamepad_name(&self) -> Option<&str> {
+        None
+    }
+
+    /// What `button` is bound to on `device` ("Z", "Enter", "LB"…), for a
+    /// remapping screen. `None` when unbound or not remappable.
+    fn binding_label(&self, _button: crate::Button, _device: BindDevice) -> Option<&str> {
+        None
+    }
+
+    /// Bind `button` on `device` to the next key or pad button pressed (PC;
+    /// a no-op elsewhere). The host applies it after the frame, reports it
+    /// in [`input_info`](Self::input_info) while it waits, and persists the
+    /// bindings.
+    fn rebind(&mut self, _button: crate::Button, _device: BindDevice) {}
+
+    /// Drop a rebind still waiting for its press.
+    fn cancel_rebind(&mut self) {}
+
+    /// Back to the default bindings (persisted too).
+    fn reset_bindings(&mut self) {}
 }

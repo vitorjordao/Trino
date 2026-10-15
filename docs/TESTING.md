@@ -106,6 +106,12 @@ the wgpu backend and read pixels back.
 | `Platform::second_screen` | `crates/core/tests/platform_save.rs::platform_defaults_report_no_services`, `crates/platform-pc/tests/platform_services.rs::clock_log_second_screen_and_display_requests` |
 | `Platform::display` | `crates/core/tests/platform_save.rs::display_settings_default_is_auto_fullscreen`, `crates/platform-pc/tests/platform_services.rs::clock_log_second_screen_and_display_requests` |
 | `Platform::set_display` | `crates/core/tests/platform_save.rs::platform_defaults_report_no_services`, `crates/platform-pc/tests/platform_services.rs::clock_log_second_screen_and_display_requests`, `crates/platform-pc/tests/platform_services.rs::display_settings_text_round_trip_and_repair` |
+| `Platform::input_info` | `crates/core/tests/platform_save.rs::platform_defaults_report_no_services`, `crates/platform-pc/tests/platform_services.rs::rebinding_keys_through_the_platform` |
+| `Platform::gamepad_name` | `crates/core/tests/platform_save.rs::platform_defaults_report_no_services`, `crates/platform-pc/tests/platform_services.rs::rebinding_keys_through_the_platform` |
+| `Platform::binding_label` | `crates/core/tests/platform_save.rs::platform_defaults_report_no_services`, `crates/platform-pc/tests/platform_services.rs::rebinding_keys_through_the_platform`, `crates/platform-pc/tests/platform_services.rs::rebinding_a_pad_button` |
+| `Platform::rebind` | `crates/core/tests/platform_save.rs::platform_defaults_report_no_services`, `crates/platform-pc/tests/platform_services.rs::rebinding_keys_through_the_platform`, `crates/platform-pc/tests/platform_services.rs::rebinding_a_pad_button` |
+| `Platform::cancel_rebind` | `crates/core/tests/platform_save.rs::platform_defaults_report_no_services`, `crates/platform-pc/tests/platform_services.rs::rebinding_keys_through_the_platform` |
+| `Platform::reset_bindings` | `crates/core/tests/platform_save.rs::platform_defaults_report_no_services`, `crates/platform-pc/tests/platform_services.rs::rebinding_keys_through_the_platform` |
 
 ### Audio trait
 

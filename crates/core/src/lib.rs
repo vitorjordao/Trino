@@ -56,7 +56,9 @@ pub use math::{Color, Rect, Vec2, Vec3};
 pub use math3d::{Mat34, Quat};
 pub use particles::{Effect, Emitter, ParticleSystem};
 pub use physics::{Aabb, Collider, Shape};
-pub use platform::{BlobId, DisplayInfo, DisplaySettings, Platform, SaveError};
+pub use platform::{
+    BindDevice, BlobId, DisplayInfo, DisplaySettings, GamepadStatus, InputInfo, Platform, SaveError,
+};
 pub use render::{
     AnimBlend, AnimRef, BillboardParams, ClipId, FontId, FrameStats, Material, MaterialId, ModelId,
     ModelParams, Palette, Renderer, Shading, SpriteId, SpriteParams, TextAlign, TextParams,

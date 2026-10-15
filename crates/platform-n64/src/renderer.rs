@@ -57,6 +57,10 @@ pub struct N64Renderer {
     profile: Option<RenderProfile>,
     /// RSP copies of the meshes the overlay can draw (`rsp.rs`).
     rsp_meshes: BTreeMap<u32, RspMesh>,
+    /// RSP copies of replaced/dropped batches and the frame they left:
+    /// freed two frames later, once the RSP can no longer be reading them.
+    retired: Vec<(RspMesh, u32)>,
+    frame_no: u32,
     /// Send eligible draws to the RSP overlay (`set_rsp`; on by default).
     rsp_on: bool,
     /// RSP draw commands of the pending batch: submitted right after the
@@ -122,6 +126,8 @@ impl N64Renderer {
             caps: Caps::N64,
             profile: None,
             rsp_meshes: BTreeMap::new(),
+            retired: Vec::new(),
+            frame_no: 0,
             rsp_on: true,
             pending_rsp: Vec::new(),
             rsp_cull: 0,
@@ -270,6 +276,31 @@ impl N64Renderer {
         }
         self.meshes.insert(id, (tmdl, layout));
         true
+    }
+
+    /// Take `id` out of use: its CPU copy goes now (nothing keeps it), its
+    /// RSP copy is freed two frames later.
+    fn retire(&mut self, id: u32) {
+        self.meshes.remove(&id);
+        if let Some(rm) = self.rsp_meshes.remove(&id) {
+            self.retired.push((rm, self.frame_no));
+        }
+    }
+
+    /// The merged TMDL of `parts`, or `None` if a part is missing or not
+    /// batchable.
+    fn merge(&self, parts: &[trino_core::BatchPart]) -> Option<Vec<u8>> {
+        let ms: Vec<Mesh> = parts
+            .iter()
+            .map(|p| {
+                self.meshes
+                    .get(&p.model.0)
+                    .map(|(t, l)| Mesh::from_layout(t, l))
+            })
+            .collect::<Option<_>>()?;
+        let mut blob = alloc::vec![0u8; trino_core::batch::merged_size_of(&ms)?];
+        trino_core::batch::merge_parts(&ms, parts, &mut blob).ok()?;
+        Some(blob)
     }
 
     /// See [`N64Renderer::set_rsp_stream`].
@@ -427,6 +458,35 @@ impl Renderer for N64Renderer {
         &self.caps
     }
 
+    /// The longest prefix of `parts` that still makes **one RSP draw**
+    /// (≤ 16 segments of 32 vertices): a batch that fell to the CPU path
+    /// would cost ms, not save them.
+    fn build_batch(&mut self, id: ModelId, parts: &[trino_core::BatchPart]) -> usize {
+        let mut n = parts.len();
+        while n > 0 {
+            let Some(blob) = self.merge(&parts[..n]) else {
+                return 0;
+            };
+            let Ok(mesh) = Mesh::from_tmdl(&blob) else {
+                return 0;
+            };
+            let segs = trino_core::render3d::rsp_split(&mesh, &mut |_, _| {});
+            let fits = rsp_mesh_supported(&mesh);
+            if fits || n == 1 {
+                self.retire(id.0);
+                self.register_mesh(id.0, blob);
+                return n;
+            }
+            let shrink = n * trino_core::render3d::RSP_MAX_SEGS / segs.max(1);
+            n = shrink.clamp(1, n - 1);
+        }
+        0
+    }
+
+    fn drop_batch(&mut self, id: ModelId) {
+        self.retire(id.0);
+    }
+
     fn begin_frame(&mut self, clear: Color) {
         self.frame_stats = FrameStats::default();
         let t0 = self.tick();
@@ -556,6 +616,18 @@ impl Renderer for N64Renderer {
     fn end_frame(&mut self) {
         self.flush_model_batch();
         self.last_stats = self.frame_stats;
+        // Batches retired two frames ago: the RSP is past them.
+        self.frame_no = self.frame_no.wrapping_add(1);
+        let now = self.frame_no;
+        let mut k = 0;
+        while k < self.retired.len() {
+            if now.wrapping_sub(self.retired[k].1) >= 2 {
+                let (rm, _) = self.retired.swap_remove(k);
+                unsafe { rm.free() };
+            } else {
+                k += 1;
+            }
+        }
         let t0 = self.tick();
         unsafe { ffi::trino_frame_end() }
         // Profiling: charge the RSP/RDP work this frame queued to the frame

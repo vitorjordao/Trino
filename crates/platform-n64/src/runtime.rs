@@ -23,6 +23,11 @@ pub fn stack_used() -> u32 {
     unsafe { ffi::trino_stack_used() }
 }
 
+/// Heap bytes in use and in total (RDRAM left after code, data, stack).
+pub fn heap() -> (u32, u32) {
+    unsafe { (ffi::trino_heap_used(), ffi::trino_heap_total()) }
+}
+
 /// Monotonic microseconds (wraps every ~71 minutes; diff arithmetic only).
 pub fn now_us() -> u32 {
     unsafe { ffi::trino_ticks_us() }

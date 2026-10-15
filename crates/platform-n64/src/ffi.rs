@@ -56,6 +56,11 @@ unsafe extern "C" {
     pub fn trino_alloc_uncached(size: u32) -> *mut c_void;
     /// Physical address of a pointer (what the RSP's DMA takes).
     pub fn trino_phys_addr(p: *const c_void) -> u32;
+    /// Free a `trino_alloc_uncached` block.
+    pub fn trino_free_uncached(p: *mut c_void);
+    /// Heap bytes in use / in total (libdragon `sys_get_heap_stats`).
+    pub fn trino_heap_used() -> u32;
+    pub fn trino_heap_total() -> u32;
     /// Profiling: wait for the RSP and RDP to finish everything queued.
     pub fn trino_drain();
     /// pts: 6 floats (x/y per vertex); colors: 12 bytes (rgba per vertex);

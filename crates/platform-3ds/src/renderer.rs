@@ -237,6 +237,32 @@ impl Renderer for N3dsRenderer {
         &self.caps
     }
 
+    fn build_batch(&mut self, id: ModelId, parts: &[trino_core::BatchPart]) -> usize {
+        // CPU T&L, like the PC: no per-draw limit beyond u16 indices.
+        let blob = {
+            let meshes = &self.meshes;
+            let ms: Option<Vec<Mesh>> = parts
+                .iter()
+                .map(|p| meshes.get(&p.model.0).map(|(t, l)| Mesh::from_layout(t, l)))
+                .collect();
+            let Some(ms) = ms else { return 0 };
+            let Some(size) = trino_core::batch::merged_size_of(&ms) else {
+                return 0;
+            };
+            let mut blob = alloc::vec![0u8; size];
+            if parts.is_empty() || trino_core::batch::merge_parts(&ms, parts, &mut blob).is_err() {
+                return 0;
+            }
+            blob
+        };
+        self.register_mesh(id.0, blob);
+        parts.len()
+    }
+
+    fn drop_batch(&mut self, id: ModelId) {
+        self.meshes.remove(&id.0);
+    }
+
     fn begin_frame(&mut self, clear: Color) {
         self.sprite_depth = SPRITE_DEPTH_BG;
         self.frame_stats = FrameStats::default();

@@ -258,7 +258,12 @@ impl N64Host {
                 Ok(()) if stack > 60 * 1024 => runtime::log(&format!(
                     "TRINO_TEST_FAIL:stack {stack} bytes of 64 KB used\n"
                 )),
-                Ok(()) => runtime::log(&format!("TRINO_STACK:{stack}\nTRINO_TEST_PASS\n")),
+                Ok(()) => {
+                    let (used, total) = runtime::heap();
+                    runtime::log(&format!(
+                        "TRINO_STACK:{stack}\nTRINO_HEAP:{used}/{total}\nTRINO_TEST_PASS\n"
+                    ))
+                }
                 Err(e) => runtime::log(&format!("TRINO_TEST_FAIL:{e}\n")),
             }
             loop {

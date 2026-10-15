@@ -771,8 +771,8 @@ fn a_panned_draw_rebuilds_exactly_from_its_pan_parts() {
             let pan = render3d::RspPan::new(&view0, &view0.mul(&m), &mesh, &m).unwrap();
             let full = view.mul(&m);
             let mt = pan.translation(t);
-            for r in 0..3 {
-                assert_eq!(mt[r].to_bits(), full.m[r][3].to_bits());
+            for (r, v) in mt.iter().enumerate() {
+                assert_eq!(v.to_bits(), full.m[r][3].to_bits());
             }
             let (c, _) = mesh.bounds().unwrap();
             let fc = full.transform_point(c);

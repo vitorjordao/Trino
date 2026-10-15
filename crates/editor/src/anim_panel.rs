@@ -77,7 +77,40 @@ impl AnimPanel {
     /// Dev hook `TRINO_EDITOR_ANIM=<model>:<clip>@<time>` (screenshots,
     /// tests): previews that clip, paused at that time.
     pub fn from_env() -> Self {
-        Self::from_hook(std::env::var("TRINO_EDITOR_ANIM").ok().as_deref())
+        let mut p = Self::from_hook(std::env::var("TRINO_EDITOR_ANIM").ok().as_deref());
+        if let Ok(v) = std::env::var("TRINO_EDITOR_ANIM_VIEW") {
+            p.apply_view(&v);
+        }
+        p
+    }
+
+    /// Dev hook `TRINO_EDITOR_ANIM_VIEW=ghosts=3,blend=wave:0.5,look=n64,palette`.
+    pub fn apply_view(&mut self, spec: &str) {
+        for part in spec.split(',').map(str::trim) {
+            match part.split_once('=') {
+                Some(("ghosts", n)) => self.ghosts = n.parse().unwrap_or(0).min(6),
+                Some(("blend", b)) => {
+                    let (clip, w) = b.split_once(':').unwrap_or((b, "0.5"));
+                    self.blend = Some((clip.to_string(), w.parse().unwrap_or(0.5)));
+                }
+                Some(("look", l)) => {
+                    self.profile = match l {
+                        "n64" => SimProfile::N64,
+                        "3ds" => SimProfile::N3ds,
+                        _ => SimProfile::Native,
+                    }
+                }
+                _ if part == "palette" => {
+                    self.palette = Some([
+                        [230, 80, 80],
+                        [80, 200, 120],
+                        [80, 120, 230],
+                        [240, 200, 60],
+                    ])
+                }
+                _ => {}
+            }
+        }
     }
 
     /// `<model>:<clip>@<time>` (each part optional after the model).
@@ -800,6 +833,12 @@ mod tests {
         assert_eq!(p.clip.as_deref(), Some("walk"));
         assert_eq!(p.time, 0.4);
         assert!(!p.playing, "a given time pauses there");
+        let mut v = AnimPanel::default();
+        v.apply_view("ghosts=3, blend=wave:0.25, look=n64, palette, bogus");
+        assert_eq!(v.ghosts, 3);
+        assert_eq!(v.blend, Some(("wave".to_string(), 0.25)));
+        assert_eq!(v.profile, SimProfile::N64);
+        assert!(v.palette.is_some());
         let q = AnimPanel::from_hook(Some("models/robot"));
         assert!(q.clip.is_none() && q.playing);
         assert!(AnimPanel::from_hook(None).model.is_none());

@@ -321,7 +321,13 @@ impl App {
         let doc_selected = doc.selected.clone();
         let mut scene_view =
             Viewport::new(render_state.clone(), ViewKind::Scene, SimProfile::Native);
-        let game_view = Viewport::new(render_state.clone(), ViewKind::Game, SimProfile::N64);
+        // Dev hook: TRINO_EDITOR_GAME=pc|n64|3ds picks the Game view's profile.
+        let game_profile = match std::env::var("TRINO_EDITOR_GAME").as_deref() {
+            Ok("pc") => SimProfile::Native,
+            Ok("3ds") => SimProfile::N3ds,
+            _ => SimProfile::N64,
+        };
+        let game_view = Viewport::new(render_state.clone(), ViewKind::Game, game_profile);
         let cam = doc.scene.environment.core_camera();
         scene_view.cam.look_from(cam.eye, cam.target);
         let thumbs = Thumbnailer::new(

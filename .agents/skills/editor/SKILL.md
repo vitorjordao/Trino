@@ -20,10 +20,12 @@ Opens `scenes/showcase.scene.ron` (override: `TRINO_EDITOR_SCENE=scenes/x.scene.
 | `TRINO_EDITOR_SELECT=<name>[,<name>…]` | start with those entities selected (the first is active; gizmo + inspector visible) |
 | `TRINO_EDITOR_TAB=scene\|game\|level\|animation` | focused center tab |
 | `TRINO_EDITOR_ANIM=<model>:<clip>@<time>` | the Animation tab previews that clip, paused at that time |
+| `TRINO_EDITOR_ANIM_VIEW=ghosts=3,blend=wave:0.5,look=n64,palette` | its view options (onion skin, crossfade, look, palette) |
 | `TRINO_EDITOR_OPEN=fake-object` / `array` / `material:<logical>` / `model:<logical>` / `prefab:<logical>` | open the fake-object or array dialog, an asset inspector, or a prefab in edit mode |
 | `TRINO_EDITOR_PALETTE=<query>` | open the command palette (Ctrl+K) with that query |
 | `TRINO_EDITOR_PLAY=here` | start **Play here** on the first frame: the scene runs inside the Game view (CI smoke) |
 | `TRINO_EDITOR_ECHO_LOG=1` | mirror the Console to stderr (see reloads, errors, saves) |
+| `TRINO_EDITOR_GAME=pc\|n64\|3ds` | the Game view's profile (default n64) — screenshots of each platform's variant |
 | `TRINO_EDITOR_SIZE=960x600` | window size (default 1600x940; never below the 960x600 minimum) — screenshot small windows |
 | `TRINO_EDITOR_INSPECT=platforms\|lod\|impostor` | the Inspector opens that section and scrolls to it |
 | `TRINO_EDITOR_LOD_PREVIEW=<m>` | preview the selected entity's LOD at that distance (both views) |

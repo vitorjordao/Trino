@@ -8,9 +8,9 @@
 
 use trino_core::math3d::{cos, sin};
 use trino_core::{
-    BakedScene, BillboardParams, BlobId, Camera3, Cells, Color, DEFAULT_LIGHT, Emitter,
-    EntityStore, FontId, Material, ModelId, ModelParams, ParticleSystem, Platform, Rect, Renderer,
-    Shading, SpriteId, TextParams, Transform3, Vec2, Vec3,
+    BakedScene, BillboardParams, BlobId, Camera3, Cells, Color, DEFAULT_LIGHT, Effect, Emitter,
+    EntityStore, FontId, Impostor, Material, ModelId, ModelParams, ParticleSystem, Platform, Rect,
+    Renderer, Shading, SpriteId, TextBuf, TextParams, Transform3, Vec2, Vec3,
 };
 
 /// The HUD font (also what the checks measure).
@@ -57,6 +57,12 @@ pub fn engine_checks(
     if palette(renderer)? {
         platform.log("TRINO_STEP:palette probed 3 slots\n");
     }
+    platform.log("TRINO_STEP:impostor\n");
+    if impostor(renderer, platform)? {
+        platform.log("TRINO_STEP:impostor probed\n");
+    }
+    platform.log("TRINO_STEP:particles\n");
+    particles(renderer, platform)?;
     platform.log("TRINO_STEP:portals\n");
     portals(renderer, platform)?;
     platform.log("TRINO_STEP:engine ok\n");
@@ -487,6 +493,137 @@ pub fn palette(renderer: &mut dyn Renderer) -> Result<bool, &'static str> {
         }
     }
     Ok(true)
+}
+
+/// The boar pre-rendered from 8 yaws (`cargo xtask impostor bake
+/// selftest-boar`): its `TIMP` table; the atlas is
+/// `sprites/impostor-selftest-boar` (CI4 within TMEM on the N64).
+pub const BOAR_IMPOSTOR: BlobId = BlobId::from_path("blobs/impostor-selftest-boar");
+
+/// Impostors: the baked table parses on the target, the view seen from the
+/// side is the side view on every target (the core's deterministic yaw),
+/// the draw is one billboard of exactly 2 triangles, and the boar's body
+/// shows at its center. `Ok(false)` where `read_pixel` is unsupported.
+pub fn impostor(
+    renderer: &mut dyn Renderer,
+    platform: &mut dyn Platform,
+) -> Result<bool, &'static str> {
+    let bytes = platform
+        .blob(BOAR_IMPOSTOR)
+        .ok_or("impostor: table blob missing")?;
+    let imp = Impostor::parse(bytes).map_err(|_| "impostor: table does not parse")?;
+    if imp.views != 8 {
+        return Err("impostor: expected 8 views");
+    }
+    let caps = *renderer.caps();
+    let screen = Vec2::new(caps.screen_width as f32, caps.screen_height as f32);
+    // From the boar's right (+X), 6 m away, level with its center.
+    let center = imp.center;
+    let eye = Vec3::new(center.x + 6.0, center.y, center.z);
+    if imp.view_for(&trino_core::Mat34::IDENTITY, eye) != 2 {
+        return Err("impostor: the side camera picked the wrong view");
+    }
+    let camera = Camera3 {
+        eye,
+        target: center,
+        fov_y: 0.6,
+    };
+    for _ in 0..3 {
+        renderer.begin_frame(Color::BLACK);
+        renderer.set_camera(&camera);
+        renderer.set_light(&DEFAULT_LIGHT);
+        imp.draw(renderer, &trino_core::Mat34::IDENTITY, eye, Color::WHITE);
+        renderer.end_frame();
+    }
+    let stats = renderer.stats();
+    if stats.tris != 2 || stats.sprites != 1 {
+        return Err("impostor: not one billboard of 2 triangles");
+    }
+    let Some(got) = renderer.read_pixel(screen.x as u32 / 2, screen.y as u32 / 2) else {
+        return Ok(false);
+    };
+    // The boar is brown: lit, and redder than it is blue.
+    if (got.r as u32 + got.g as u32 + got.b as u32) < 60 || got.r <= got.b {
+        return Err("impostor: the center pixel is not the boar");
+    }
+    Ok(true)
+}
+
+/// Sparks baked per platform (`[particles.selftest-sparks]`): the cap is
+/// 24 on PC, 8 on the N64 and 16 on the 3DS.
+pub const SPARKS: BlobId = BlobId::from_path("particles/selftest-sparks");
+
+/// FNV-1a over the particles' exact positions.
+fn particle_hash<const N: usize>(s: &ParticleSystem<N>) -> u32 {
+    let mut h: u32 = 0x811c_9dc5;
+    for p in s.particles() {
+        for v in [p.pos.x, p.pos.y, p.pos.z] {
+            for b in v.to_bits().to_le_bytes() {
+                h ^= b as u32;
+                h = h.wrapping_mul(0x0100_0193);
+            }
+        }
+    }
+    h
+}
+
+/// Particle effects: the baked effect parses on the target with this
+/// platform's cap, a burst never passes it, the same seed gives the same
+/// particles (and another seed others), and drawing them is one billboard
+/// per particle. Logs the cap (`TRINO_STEP:particles cap N`).
+#[inline(never)]
+pub fn particles(
+    renderer: &mut dyn Renderer,
+    platform: &mut dyn Platform,
+) -> Result<(), &'static str> {
+    let bytes = platform
+        .blob(SPARKS)
+        .ok_or("particles: effect blob missing")?;
+    let fx = Effect::parse(bytes).map_err(|_| "particles: effect does not parse")?;
+    if fx.max == 0 || fx.max > 24 {
+        return Err("particles: the platform cap is not baked in");
+    }
+    let run = |seed: u32| {
+        let mut s: ParticleSystem<32> = ParticleSystem::from_effect(&fx, seed);
+        s.burst(100);
+        let first = s.len();
+        let mut most = first;
+        for _ in 0..45 {
+            s.update(1.0 / 30.0);
+            most = most.max(s.len());
+        }
+        (s, first, most)
+    };
+    let (a, first, most) = run(7);
+    let cap = fx.max as usize;
+    if first != cap || most > cap {
+        return Err("particles: the cap does not hold");
+    }
+    let (b, ..) = run(7);
+    let (c, ..) = run(8);
+    if particle_hash(&a) != particle_hash(&b) {
+        return Err("particles: the same seed gave different particles");
+    }
+    if particle_hash(&a) == particle_hash(&c) {
+        return Err("particles: another seed gave the same particles");
+    }
+    renderer.begin_frame(Color::BLACK);
+    renderer.set_camera(&Camera3 {
+        eye: Vec3::new(0.0, 1.0, -6.0),
+        target: Vec3::new(0.0, 1.0, 0.0),
+        fov_y: 1.0,
+    });
+    renderer.set_light(&DEFAULT_LIGHT);
+    a.draw(renderer);
+    renderer.end_frame();
+    if renderer.stats().sprites as usize != a.len() {
+        return Err("particles: not one billboard per particle");
+    }
+    let mut line: TextBuf<48> = TextBuf::new();
+    let _ =
+        core::fmt::Write::write_fmt(&mut line, format_args!("TRINO_STEP:particles cap {cap}\n"));
+    platform.log(line.as_str());
+    Ok(())
 }
 
 /// The baked portal/cell demo (`scenes/interior.scene.ron`).

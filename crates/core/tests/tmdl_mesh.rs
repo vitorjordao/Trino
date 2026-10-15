@@ -404,3 +404,40 @@ fn single_frame_clips_and_empty_meshes() {
     let again = Mesh::from_layout(&empty, &e.layout(&empty));
     assert_eq!((again.vertex_count, again.index_count), (0, 0));
 }
+
+/// `posed_position` / `posed_normal` give what the skinned T&L transforms:
+/// each vertex under its joint's skin matrix (the static mesh and the bind
+/// pose return the baked data).
+#[test]
+fn posed_vertices_follow_their_joint() {
+    let blob = rigged_cube();
+    let m = Mesh::from_tmdl(&blob).unwrap();
+    let mut out = [Mat34::IDENTITY; MAX_JOINTS];
+    let n = m.pose(Some(AnimRef::new(ClipId::from_name("lift"), 0.5)), &mut out);
+    for i in 0..m.vertex_count {
+        let j = m.joint_of_vertex(i);
+        assert!(j < n);
+        let want = out[j].transform_point(m.position(i));
+        assert_eq!(m.posed_position(i, &out, n), want, "vertex {i}");
+        assert_eq!(
+            m.posed_normal(i, &out, n),
+            out[j].transform_dir(m.normal(i))
+        );
+    }
+    // Joint 1's vertices are lifted by 1 at that time; joint 0's are not.
+    let lifted = (0..m.vertex_count)
+        .find(|&i| m.joint_of_vertex(i) == 1)
+        .unwrap();
+    assert!(near(
+        m.posed_position(lifted, &out, n) - m.position(lifted),
+        Vec3::new(0.0, 1.0, 0.0)
+    ));
+    // Bind pose and static meshes: the baked positions.
+    m.pose(None, &mut out);
+    assert_eq!(m.posed_position(lifted, &out, n), m.position(lifted));
+    let cube_blob = cube_tmdl();
+    let cube = Mesh::from_tmdl(&cube_blob).unwrap();
+    assert_eq!(cube.joint_of_vertex(0), 0);
+    assert_eq!(cube.posed_position(0, &out, 0), cube.position(0));
+    assert_eq!(cube.posed_normal(0, &out, 0), cube.normal(0));
+}

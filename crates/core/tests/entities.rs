@@ -39,10 +39,7 @@ const fn at(name: &'static str, tags: &'static [&'static str], x: f32) -> SceneN
     }
 }
 
-const LODS: &[LodLevel] = &[LodLevel {
-    distance: 20.0,
-    model: Some(FAR),
-}];
+const LODS: &[LodLevel] = &[LodLevel::model(20.0, Some(FAR))];
 
 const NODES: &[SceneNode] = &[
     SceneNode {

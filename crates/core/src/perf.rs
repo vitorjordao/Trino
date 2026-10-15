@@ -33,6 +33,13 @@ pub struct CostModel {
     pub us_per_split: f32,
     /// Depth sort + rasterizer submission per emitted triangle.
     pub us_per_emitted: f32,
+    /// One textured billboard (`draw_billboard`, an impostor, a particle):
+    /// two CPU-submitted textured triangles and a texture load.
+    pub us_per_billboard: f32,
+    /// One triangle (with its share of vertices) of a draw on the N64's RSP
+    /// path. The overlay runs in parallel with the CPU, so a frame costs the
+    /// slower of the two (`trino_scene::budget`).
+    pub us_per_rsp_tri: f32,
 }
 
 /// The N64 (emulated time under ares), recalibrated 2026-10-13 after the
@@ -56,6 +63,15 @@ pub const N64_COST: CostModel = CostModel {
     us_per_draw: 183.8,
     us_per_split: 25.5,
     us_per_emitted: 37.0,
+    // Two textured triangles at ~22 µs each, measured in ares on an
+    // external project's far view (impostors made the N64 slower: textured
+    // triangles are CPU-submitted, 52 rspq words each).
+    us_per_billboard: 44.0,
+    // ares, 2026-10-15: the RSP floor of an external project's heaviest view,
+    // 5 600 triangles in ~35 ms of RSP time with streaming off (n64-performance
+    // › Per-draw CPU cost and the RSP floor). The per-draw overhead is not
+    // separated; the estimate leaves it out.
+    us_per_rsp_tri: 6.0,
 };
 
 impl CostModel {
@@ -67,6 +83,16 @@ impl CostModel {
             + self.us_per_draw * draws as f32
             + self.us_per_split * tnl.splits as f32
             + self.us_per_emitted * tnl.emitted as f32) as u32
+    }
+
+    /// Estimated RSP microseconds of `tris` triangles on the RSP path.
+    pub fn rsp_us(&self, tris: u32) -> u32 {
+        (self.us_per_rsp_tri * tris as f32) as u32
+    }
+
+    /// Estimated microseconds of `n` billboards (impostors, particles).
+    pub fn billboards_us(&self, n: u32) -> u32 {
+        (self.us_per_billboard * n as f32) as u32
     }
 
     /// Estimated T&L-only microseconds (no sort/submit) — comparable with

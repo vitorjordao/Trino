@@ -118,6 +118,36 @@ shipping a 3D game first**, then by cost:
 
 ---
 
+## Done — each platform's frame budget in the editor and the CLI (2026-10-15, branch `editor/platform-budget`, ADR 0009 §5)
+
+| Item | Evidence |
+|---|---|
+| `rsp_check`/`RspReject` (the rule a draw fails; `rsp_eligible` defined by it); `trino_scene::budget` (per-platform draws, T&L work, N64 CPU vs RSP with `N64_COST.us_per_rsp_tri`, reasons, impostors, LOD, unseen draws); `cargo xtask scene budget`; editor Game-view HUD lines, "N64 3D time" with the RSP split, Inspector scene-settings section with every reason and clickable unseen draws | the estimate's T&L work equals `PcRenderer`'s N64-profile counters on the showcase and interior scenes; a mesh behind the camera is reported on every platform; each RSP rule (translucent, fog) and PC/3DS without an RSP; variants, LOD and impostors per platform; the CLI's JSON equals the library; `rsp_check` per rule; HUD lines and the N64 row; kittest: reasons, a new rock behind the camera, its line selects it, layout at 960x600 and 1600x1000 |
+
+## Done — particle effects as assets with caps per platform (2026-10-15, branch `editor/particles`, ADR 0009 §4)
+
+| Item | Evidence |
+|---|---|
+| `*.particles.ron` + `[particles.*]` → `TPFX` per platform (`trino_core::Effect`, `ParticleSystem::from_effect`, `limit`); bakes on PC, N64 and 3DS; `cargo xtask particles new/check/inspect`; editor Assets › Particles with an inspector (fields, caps per platform, cost, live preview with Burst on each platform's cap); castle64 `particles` self-test step | RON both ways and every validation error, caps per platform through the real bake and an override file, deterministic simulation (same seed same hash, another seed another, peaks at the cap), core cap/off/determinism tests, CLI tests, the editor widget and kittest flows (file both ways), the self-test on PC, ares and Azahar (`TRINO_STEP:particles cap 24/8/16`) |
+
+## Done — the Animation tab, clip measurements and console poses (2026-10-15, branch `editor/animation-panel`, ADR 0009 §3)
+
+| Item | Evidence |
+|---|---|
+| Editor Animation tab (own preview, clips, transport, speed, crossfade + weight, measurements with warnings, grid, onion skin, palette, PC/N64/3DS looks, Use on the entity, Console pose); `Mesh::posed_position/posed_normal/joint_of_vertex`; `trino_asset_pipeline::anim` (clip metrics, pose mesh, glTF writer, `export_pose`); `model inspect --anim`, `model pose` | clips built in the tests with known answers (`animation_metrics.rs`: stride 0.4 m/s and 0.4 m per cycle, a 10 cm skate, a 3 cm dip, crossfade at 0.5 = the mean pose, pose → glTF → static TMDL with the same triangles and colors), `posed_vertices_follow_their_joint`, panel unit tests, kittest `animation_tab_previews_measures_and_exports` (GUI pose == CLI pose byte for byte, clip written into the entity, layout at both sizes), xtask CLI tests. Found: the sample robot's walk skates 15 cm and dips 3.6 cm |
+
+## Done — LOD chains with impostors, baked by the engine (2026-10-15, branch `editor/lod-impostors`, ADR 0009 §2)
+
+| Item | Evidence |
+|---|---|
+| `trino_core::Impostor` (`TIMP` blob, `view_for` by yaw, `draw` = one billboard), `LodLevel::impostor`, `LodPick`, `SceneNode::lod_from`; `draw_nodes` and `EntityStore::draw_in` draw impostor levels; TSCN v2 (32-byte LOD records); scene `LodDef::impostor` + per-platform `LodAt`; `N64_COST.us_per_billboard` | `crates/core/tests/impostors.rs` (view per 45°, half-way switches, rotated objects; exactly 2 triangles; deterministic chain switches; packed records; TIMP round trip), `crates/scene/tests/lod_chain.rs`, castle64 `impostor` self-test step (table parses on the target, side view picked, 1 billboard of 2 triangles, pixel probe) |
+| Impostor bake in the engine (`asset-pipeline::impostor`: own T&L + CPU raster, 4x4 supersampling, clear margins, color bleed, CI4 median cut for the N64 within TMEM, manifest entries, model hash) behind `cargo xtask impostor new/bake/check/list` and the editor's Model › Impostor | `crates/asset-pipeline/tests/impostors.rs` (K frames, margins, light-side orientation, CI4 PNG, determinism, staleness), `xtask/tests/impostor_cli.rs`, kittest `impostors_bake_from_the_inspector_and_drive_a_lod_level` (editor bake == CLI bake byte for byte) |
+| Editor LOD panel (chain, per-platform starts, cost per level, preview slider), budget HUD LOD counts and impostor cost, N64 atlas in the N64 Game view | widget tests, the kittest flow, the layout audit at 960x600 and 1600x940 with both panels open |
+
+Deviation: the bake renders vertex colors only (textured models lose their texture in the
+atlas) and a model, not a prefab. Follow-ups: textured and prefab impostors; an N64
+impostor as an RDP rectangle with depth (cheaper than CPU-submitted triangles).
+
 ## Done — platform variants in scenes and a layout-safe editor (2026-10-15, branch `editor/platform-variants`, ADR 0009)
 
 | Item | Evidence |

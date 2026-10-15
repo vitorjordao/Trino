@@ -303,6 +303,14 @@ pub fn component_open<R>(
     out
 }
 
+/// [`icon_button`] whose accessible name is `name` (the tooltip too):
+/// screen readers and the UI tests find it by that, not by the glyph.
+pub fn named_icon_button(ui: &mut egui::Ui, glyph: &str, name: &str) -> egui::Response {
+    let r = icon_button(ui, glyph, name);
+    r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, name));
+    r
+}
+
 /// Frameless icon button with hover background and tooltip.
 pub fn icon_button(ui: &mut egui::Ui, glyph: &str, tooltip: &str) -> egui::Response {
     ui.add(
@@ -412,6 +420,23 @@ pub fn vec3_row(
         }
     });
     changed
+}
+
+/// Lay `add` out in a box exactly `width` wide (in a row). A truncating
+/// `ComboBox` sizes its text to the space *available*, not to its
+/// `.width()`, so a combo followed by a button needs this box to stop at
+/// its width.
+pub fn fixed_width<R>(ui: &mut egui::Ui, width: f32, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let width = width.max(1.0);
+    ui.allocate_ui_with_layout(
+        Vec2::new(width, ui.spacing().interact_size.y),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            ui.set_max_width(width);
+            add(ui)
+        },
+    )
+    .inner
 }
 
 /// Width of a property row's label: 64 px, less in a narrow panel.

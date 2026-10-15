@@ -54,7 +54,7 @@ fn tscn_blobs_carry_everything_resolve_computed() {
         let want: Vec<_> = item
             .lod
             .iter()
-            .map(|(d, m)| (*d, m.as_ref().map(|(id, _)| *id)))
+            .map(|l| (l.distance, l.draw.pick().model()))
             .collect();
         assert_eq!(lod, want, "{}", item.name);
         assert_eq!(node.sound, item.sound);
@@ -172,7 +172,7 @@ fn generated_code_lists_every_exported_node_and_component() {
         "trigger: true",
         "offset: Vec3::new(0.0, -0.5, 0.0)",
         "lod: Lods::List(&[LodLevel { distance: 10.0, model: Some(ModelId(",
-        "LodLevel { distance: 30.0, model: None }",
+        "LodLevel { distance: 30.0, model: None, impostor: None }",
         "/* models/hat-far */",
         "Some(SoundSource { sound: SoundId(",
         "radius: 4.0, volume: 0.8 })",

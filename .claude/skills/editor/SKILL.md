@@ -18,13 +18,17 @@ Opens `scenes/showcase.scene.ron` (override: `TRINO_EDITOR_SCENE=scenes/x.scene.
 | `TRINO_EDITOR_SCREENSHOT=out.png` | save a PNG of the whole window, then exit |
 | `TRINO_EDITOR_SCREENSHOT_FRAME=N` | …after N frames (default 30; use ~60 so thumbnails finish) |
 | `TRINO_EDITOR_SELECT=<name>[,<name>…]` | start with those entities selected (the first is active; gizmo + inspector visible) |
-| `TRINO_EDITOR_TAB=scene\|game\|level` | focused center tab |
-| `TRINO_EDITOR_OPEN=fake-object` / `array` / `material:<logical>` / `model:<logical>` / `prefab:<logical>` | open the fake-object or array dialog, an asset inspector, or a prefab in edit mode |
+| `TRINO_EDITOR_TAB=scene\|game\|level\|animation` | focused center tab |
+| `TRINO_EDITOR_ANIM=<model>:<clip>@<time>` | the Animation tab previews that clip, paused at that time |
+| `TRINO_EDITOR_ANIM_VIEW=ghosts=3,blend=wave:0.5,look=n64,palette` | its view options (onion skin, crossfade, look, palette) |
+| `TRINO_EDITOR_OPEN=fake-object` / `array` / `material:<logical>` / `model:<logical>` / `prefab:<logical>` / `particles:<name>[@pc\|n64\|3ds]` | open the fake-object or array dialog, an asset inspector, or a prefab in edit mode |
 | `TRINO_EDITOR_PALETTE=<query>` | open the command palette (Ctrl+K) with that query |
 | `TRINO_EDITOR_PLAY=here` | start **Play here** on the first frame: the scene runs inside the Game view (CI smoke) |
 | `TRINO_EDITOR_ECHO_LOG=1` | mirror the Console to stderr (see reloads, errors, saves) |
+| `TRINO_EDITOR_GAME=pc\|n64\|3ds` | the Game view's profile (default n64) — screenshots of each platform's variant |
 | `TRINO_EDITOR_SIZE=960x600` | window size (default 1600x940; never below the 960x600 minimum) — screenshot small windows |
-| `TRINO_EDITOR_INSPECT=platforms` | the Inspector opens that section and scrolls to it |
+| `TRINO_EDITOR_INSPECT=platforms\|lod\|impostor\|budget` | the Inspector opens that section and scrolls to it (`budget`: the scene settings' platform budget, with nothing selected) |
+| `TRINO_EDITOR_LOD_PREVIEW=<m>` | preview the selected entity's LOD at that distance (both views) |
 | `TRINO_EDITOR_SMOKE_FRAMES=N` | close after N frames (CI smoke test) |
 
 Example — look at an entity in the Game view, then read the PNG:
@@ -44,8 +48,19 @@ Keys worth knowing (F1 lists all):
 
 The Game view shows a **budget HUD** (tris, sprites, texture bytes vs the console's
 `Caps`; under the N64 profile also **N64 3D time** — this frame's T&L work through the
-calibrated cost model `trino_core::perf::N64_COST`, against one 30 fps frame) and culls interior cells like the game does. The Scene view draws collider,
-cell and portal wireframes.
+calibrated cost model `trino_core::perf::N64_COST`, against one 30 fps frame) and culls interior cells like the game does.
+Below it, the **platform budget** of the scene camera (`trino_scene::budget`, the same
+numbers as `cargo xtask scene budget`): the N64 frame as the slower of CPU and RSP, how
+many draws take the RSP and the most common reason the rest don't, the 3DS triangles,
+and draws sent but unseen. The "N64 3D time" row then uses that CPU/RSP split, so the
+HUD's two N64 figures agree. The Inspector's scene settings (nothing selected) list every
+reason (`off the RSP: n × reason`) and each unseen draw; clicking one selects it. The
+budgets are cached on the scene text, the library revision and the project generation
+(`App::budgets`), and hidden during Play here (the camera is the game's then). They use the
+PC bakes except where a console has its own source (`assets/n64/...`) or does not bake a
+model (`platforms = [..]`): `App::console_models` bakes those, as `scene budget` does.
+
+The Scene view draws collider, cell and portal wireframes.
 
 Live-edit check: start the editor with `TRINO_EDITOR_ECHO_LOG=1` in the background, edit a
 `.material.ron` / `.prefab.ron` / scene, and watch for `… updated` / `… reloaded` lines.
@@ -66,6 +81,11 @@ Live-edit check: start the editor with `TRINO_EDITOR_ECHO_LOG=1` in the backgrou
 | `ops.rs` | arrange operations (align, distribute, array, drop to surface, group delete) — pure, unit-tested |
 | `palette.rs` | command-palette matcher (the app builds the item list from its menus) |
 | `budget.rs` | Game-view budget HUD rows from `FrameStats` vs `Caps` |
+| `anim_panel.rs` | the Animation tab: its own preview renderer, clips, transport, crossfade, measurements (`trino_asset_pipeline::anim`), onion skin, palette, looks, console pose export |
+| `panels/particles.rs` | Assets › Particles inspector: fields, caps per platform, the live preview (`ParticlesView`) with Burst |
+| `preview.rs` | a small offscreen preview with its own `PcRenderer` (Animation tab, particle inspector) |
+| `panels/lod.rs` | Inspector › Model › LOD: the chain (mesh / impostor / cull), per-platform starts, cost per level, the preview slider |
+| `panels/impostor.rs` | Model asset › Impostor: settings, Bake (the same `impostor::bake` as the CLI), atlas preview, fresh/stale badge |
 | `panels/platforms.rs` | Inspector › Platforms: per-platform variants (grid of PC/N64/3DS columns, stacked when narrow) |
 | `layout_audit.rs` | test helper: no widget off the window, none overlapping (accesskit rects) |
 | `ui_tests.rs` | headless UI flows with egui_kittest (real `App` + wgpu): drive panels by accessibility label |
@@ -110,8 +130,29 @@ Live-edit check: start the editor with `TRINO_EDITOR_ECHO_LOG=1` in the backgrou
   - tab strips use `horizontal_wrapped`;
   - the dock gives the Hierarchy ≥ 200 px and the Inspector ≥ 300 px (`default_dock(width)`,
     built on the first frame).
+- **The layout audit judges overlaps on what shows.** Accessibility rects are unclipped,
+  so a scroll area's hidden rows "overlapped" the Assets panel under the Animation tab.
+  `layout_audit::widgets(h, Some(&h.ctx))` matches each node to egui's own widget rect and
+  uses its clipped `interact_rect` (sideways overflow still uses the full rect: text wider
+  than its panel is a bug even when clipped).
+- **Icon buttons need an accessible name** (`theme::named_icon_button`): a tooltip is not a
+  label, so kittest (and a screen reader) can't find "Pause" by its glyph.
 - **Kittest clicks need the widget on screen.** A panel's content below the fold has rects
-  past the window; `ui_tests::click` wheels the panel until the widget shows. Items of an
-  open combo list are clicked with `click_accesskit()` (the list scrolls on its own).
+  past the window or its scroll area; `ui_tests::click` first sends accesskit's
+  `ScrollIntoView` (`Node::scroll_to_me`), then wheels the panel (over a visible part of
+  it) until the widget fully shows. The wheel alone failed once a button sat above a
+  3D preview: the wheel landed on the preview, which zooms instead of scrolling, and the
+  click went nowhere (a rect above the window also counted as visible until the helper
+  clipped it to the screen). Items of an open combo list are clicked with
+  `click_accesskit()` (the list scrolls on its own), which leaves the list open: close it
+  on its combo before the next click.
+- **A truncating `ComboBox` sizes its text to the space *available*, not to its
+  `.width()`.** With a long selected name it grew to the panel's edge and pushed the
+  button after it out of the window (`layout_audit` caught it). Put such a combo in
+  `theme::fixed_width(ui, w, ..)`. Don't add `widget_info` to a `Slider`'s response: it is
+  the union of the track and its value box, so the audit sees them overlap.
+- Impostors in the views: `DrawItem::lod_from`/`lod_at` give a `LodPick`; an impostor
+  draws through `Impostor::draw` (a billboard). The N64 Game view uploads the N64 atlas
+  (`Project::upload_platform_sprites`) so its regions match the N64 table.
 - **The Game view resolves its own platform** (`App::resolved_game`, `viewport::target_of`):
   the Scene view, picking and the Inspector use the PC resolve.

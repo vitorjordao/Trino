@@ -4,7 +4,8 @@
 
 use trino_core::physics::{Collider, Shape};
 use trino_core::{
-    AnimRef, ClipId, MAX_CELLS, Mat34, ModelId, ModelParams, NO_CELL, SpriteId, Vec3, VisVolume,
+    AnimRef, ClipId, LodPick, MAX_CELLS, Mat34, ModelId, ModelParams, NO_CELL, SpriteId, Vec3,
+    VisVolume,
 };
 
 use crate::{Entity, Library, ModelComponent, Scene, Target, Variant};
@@ -29,8 +30,8 @@ pub struct DrawItem {
     pub sprite: Option<SpriteDraw>,
     /// Collision shape (local to `matrix`), `Auto` already resolved.
     pub collider: Option<Collider>,
-    /// LOD levels sorted by distance: (distance, model or culled).
-    pub lod: Vec<(f32, Option<(ModelId, String)>)>,
+    /// LOD levels for the resolved platform, sorted by distance.
+    pub lod: Vec<LodItem>,
     /// Positional looping sound.
     pub sound: Option<trino_core::SoundSource>,
     /// Interior cell index ([`trino_core::NO_CELL`] = outside every cell).
@@ -48,24 +49,76 @@ impl DrawItem {
         self.sprite.is_none() || self.model.is_some() || self.vis.is_some()
     }
 
-    /// Model to draw for a camera at `eye` (LOD applied).
+    /// Model to draw for a camera at `eye` (LOD applied; `None` for an
+    /// impostor level too — see [`lod_from`](Self::lod_from)).
     pub fn model_from(&self, eye: trino_core::Vec3) -> Option<ModelId> {
-        let base = self.model.as_ref().map(|(id, _)| *id);
-        if self.lod.is_empty() {
-            return base;
-        }
+        self.lod_from(eye).model()
+    }
+
+    /// What to draw for a camera at `eye`: what the game's
+    /// `SceneNode::lod_from` picks for the same node.
+    pub fn lod_from(&self, eye: trino_core::Vec3) -> LodPick {
         let p = self.matrix.transform_point(trino_core::Vec3::ZERO);
         let d = p - eye;
-        let dist_sq = d.dot(d);
-        let mut model = base;
-        for (distance, m) in &self.lod {
-            if dist_sq >= distance * distance {
-                model = m.as_ref().map(|(id, _)| *id);
+        self.pick_sq(d.dot(d))
+    }
+
+    /// What to draw at `distance` from the camera (the editor's LOD
+    /// preview slider).
+    pub fn lod_at(&self, distance: f32) -> LodPick {
+        self.pick_sq(distance * distance)
+    }
+
+    /// Index of the level drawn at `distance` (`None` = the base model).
+    pub fn level_at(&self, distance: f32) -> Option<usize> {
+        let d2 = distance * distance;
+        self.lod
+            .iter()
+            .take_while(|l| d2 >= l.distance * l.distance)
+            .count()
+            .checked_sub(1)
+    }
+
+    fn pick_sq(&self, dist_sq: f32) -> LodPick {
+        let mut pick = self
+            .model
+            .as_ref()
+            .map_or(LodPick::None, |(id, _)| LodPick::Model(*id));
+        for l in &self.lod {
+            if dist_sq >= l.distance * l.distance {
+                pick = l.draw.pick();
             } else {
                 break;
             }
         }
-        model
+        pick
+    }
+}
+
+/// One resolved LOD level.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LodItem {
+    /// Where it starts on the resolved platform.
+    pub distance: f32,
+    pub draw: LodDraw,
+}
+
+/// What a resolved LOD level draws.
+#[derive(Clone, Debug, PartialEq)]
+pub enum LodDraw {
+    Model(ModelId, String),
+    /// `impostors/<name>` and its baked descriptor for the platform.
+    Impostor(String, trino_core::Impostor),
+    Cull,
+}
+
+impl LodDraw {
+    pub fn pick(&self) -> LodPick {
+        match self {
+            LodDraw::Model(id, _) => LodPick::Model(*id),
+            LodDraw::Impostor(_, imp) => LodPick::Impostor(*imp),
+            LodDraw::Cull => LodPick::None,
+        }
     }
 }
 
@@ -286,22 +339,34 @@ fn visit(
         flip_x: s.flip_x,
         flip_y: s.flip_y,
     });
-    let mut lod: Vec<(f32, Option<(ModelId, String)>)> = model_c
-        .map(|m| {
-            m.lod
-                .iter()
-                .map(|l| {
-                    (
-                        l.distance,
-                        l.path
-                            .as_ref()
-                            .map(|p| (ModelId(trino_core::asset_id(p)), p.clone())),
-                    )
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    lod.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut lod: Vec<LodItem> = Vec::new();
+    for l in model_c.map(|m| m.lod.as_slice()).unwrap_or_default() {
+        let Some(distance) = l.distance_on(ctx.target) else {
+            continue;
+        };
+        let draw = match (&l.impostor, &l.path) {
+            (Some(imp), _) => match ctx
+                .lib
+                .impostors
+                .get(imp)
+                .and_then(|per| per[ctx.target.index()])
+            {
+                Some(baked) => LodDraw::Impostor(imp.clone(), baked),
+                None => {
+                    ctx.out.warnings.push(format!(
+                        "{name}: impostor `{imp}` is not baked for {} \
+                         (cargo xtask impostor bake) — that level draws nothing",
+                        ctx.target.label()
+                    ));
+                    LodDraw::Cull
+                }
+            },
+            (None, Some(p)) => LodDraw::Model(ModelId(trino_core::asset_id(p)), p.clone()),
+            (None, None) => LodDraw::Cull,
+        };
+        lod.push(LodItem { distance, draw });
+    }
+    lod.sort_by(|a, b| a.distance.total_cmp(&b.distance));
     // Variants are a look, not gameplay: the collider stays the PC one
     // (the base model's bounds, the base scale), so a game's simulation is
     // the same on every target. Only `disabled` removes it.

@@ -50,7 +50,7 @@ pub fn to_rust_for(scene: &Scene, lib: &Library, target: Target) -> (String, Vec
     );
     let _ = writeln!(
         out,
-        "#[allow(unused_imports)]\nuse trino_core::{{\n    Camera3, ClipId, Collider, Color, Fog, Light, LodLevel, Lods, Mat34, ModelId, ModelParams,\n    NO_CELL, SceneNode, Shading, Shape, SoundId, SoundSource, SpriteId, Tags, Vec3, VisVolume,\n}};\n"
+        "#[allow(unused_imports)]\nuse trino_core::{{\n    Camera3, ClipId, Collider, Color, Fog, Impostor, Light, LodLevel, Lods, Mat34, ModelId,\n    ModelParams, NO_CELL, SceneNode, Shading, Shape, SoundId, SoundSource, SpriteId, Tags, Vec3,\n    VisVolume,\n}};\n"
     );
     let env = &scene.environment;
     let cam = env.core_camera();
@@ -141,14 +141,32 @@ pub fn to_rust_for(scene: &Scene, lib: &Library, target: Target) -> (String, Vec
             let levels: Vec<String> = item
                 .lod
                 .iter()
-                .map(|(d, m)| {
-                    let model = match m {
-                        Some((id, path)) => {
-                            format!("Some(ModelId({:#010x})) /* {} */", id.0, esc(path))
-                        }
-                        None => "None".into(),
+                .map(|l| {
+                    let (model, impostor) = match &l.draw {
+                        crate::LodDraw::Model(id, path) => (
+                            format!("Some(ModelId({:#010x})) /* {} */", id.0, esc(path)),
+                            "None".to_string(),
+                        ),
+                        crate::LodDraw::Impostor(path, i) => (
+                            "None".to_string(),
+                            format!(
+                                "Some(Impostor {{ sprite: SpriteId({:#010x}), views: {}, cols: {}, \
+                                 tile: {}, size: {}, center: {} }}) /* {} */",
+                                i.sprite.0,
+                                i.views,
+                                i.cols,
+                                i.tile,
+                                f(i.size),
+                                v3(i.center),
+                                esc(path)
+                            ),
+                        ),
+                        crate::LodDraw::Cull => ("None".to_string(), "None".to_string()),
                     };
-                    format!("LodLevel {{ distance: {}, model: {model} }}", f(*d))
+                    format!(
+                        "LodLevel {{ distance: {}, model: {model}, impostor: {impostor} }}",
+                        f(l.distance)
+                    )
                 })
                 .collect();
             format!("Lods::List(&[{}])", levels.join(", "))

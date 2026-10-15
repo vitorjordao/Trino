@@ -29,6 +29,7 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
             AssetSel::Material(l) => material_asset(app, ui, &l),
             AssetSel::Prefab(l) => prefab_asset(app, ui, &l),
             AssetSel::Sprite(l) => sprite_asset(app, ui, &l),
+            AssetSel::Particles(n) => crate::panels::particles::asset(app, ui, &n),
         }
         return;
     }
@@ -70,12 +71,14 @@ fn entity(app: &mut App, ui: &mut egui::Ui, path: &[usize]) {
         }
     });
 
+    let impostor_names: Vec<String> = app.lib.impostors.keys().cloned().collect();
     let App {
         doc,
         project,
         lib,
         cmds,
         material_thumbs,
+        lod_preview,
         ..
     } = app;
     let Some(e) = doc.scene.get_mut(path) else {
@@ -181,22 +184,26 @@ fn entity(app: &mut App, ui: &mut egui::Ui, path: &[usize]) {
         let stats = asset.map(|a| (a.tris, a.joints, a.is_proxy()));
         theme::component(ui, "c-model", icon::CUBE, c::MODEL, "Model", |ui| {
             theme::prop(ui, "Mesh", |ui| {
-                egui::ComboBox::from_id_salt("model-path")
-                    .selected_text(&m.path)
-                    .width(ui.available_width() - 38.0)
-                    .height(320.0)
-                    .show_ui(ui, |ui| {
-                        for (name, proxy) in &model_names {
-                            let g = if *proxy { icon::GHOST } else { icon::CUBE };
-                            if ui
-                                .selectable_label(m.path == *name, format!("{g}  {name}"))
-                                .clicked()
-                            {
-                                m.path = name.clone();
-                                m.anim = None;
+                let w = ui.available_width() - 38.0;
+                theme::fixed_width(ui, w, |ui| {
+                    egui::ComboBox::from_id_salt("model-path")
+                        .selected_text(&m.path)
+                        .width(w)
+                        .truncate()
+                        .height(320.0)
+                        .show_ui(ui, |ui| {
+                            for (name, proxy) in &model_names {
+                                let g = if *proxy { icon::GHOST } else { icon::CUBE };
+                                if ui
+                                    .selectable_label(m.path == *name, format!("{g}  {name}"))
+                                    .clicked()
+                                {
+                                    m.path = name.clone();
+                                    m.anim = None;
+                                }
                             }
-                        }
-                    });
+                        });
+                });
                 if theme::icon_button(ui, icon::ARROW_SQUARE_OUT, "Show asset").clicked() {
                     cmds.push(Cmd::SelectAsset(AssetSel::Model(m.path.clone())));
                 }
@@ -233,28 +240,32 @@ fn entity(app: &mut App, ui: &mut egui::Ui, path: &[usize]) {
             // Material picker + inline editor.
             theme::prop(ui, "Material", |ui| {
                 let current = m.material.clone().unwrap_or_else(|| "Default".into());
-                egui::ComboBox::from_id_salt("material")
-                    .selected_text(current)
-                    .width(ui.available_width() - 38.0)
-                    .show_ui(ui, |ui| {
-                        if ui
-                            .selectable_label(m.material.is_none(), "Default")
-                            .clicked()
-                        {
-                            m.material = None;
-                        }
-                        for name in &material_names {
-                            let sel = m.material.as_deref() == Some(name.as_str());
-                            ui.horizontal(|ui| {
-                                if let Some((_, tex)) = material_thumbs.get(name) {
-                                    ui.add(egui::Image::new((tex.id(), Vec2::splat(18.0))));
-                                }
-                                if ui.selectable_label(sel, name).clicked() {
-                                    m.material = Some(name.clone());
-                                }
-                            });
-                        }
-                    });
+                let w = ui.available_width() - 38.0;
+                theme::fixed_width(ui, w, |ui| {
+                    egui::ComboBox::from_id_salt("material")
+                        .selected_text(current)
+                        .width(w)
+                        .truncate()
+                        .show_ui(ui, |ui| {
+                            if ui
+                                .selectable_label(m.material.is_none(), "Default")
+                                .clicked()
+                            {
+                                m.material = None;
+                            }
+                            for name in &material_names {
+                                let sel = m.material.as_deref() == Some(name.as_str());
+                                ui.horizontal(|ui| {
+                                    if let Some((_, tex)) = material_thumbs.get(name) {
+                                        ui.add(egui::Image::new((tex.id(), Vec2::splat(18.0))));
+                                    }
+                                    if ui.selectable_label(sel, name).clicked() {
+                                        m.material = Some(name.clone());
+                                    }
+                                });
+                            }
+                        });
+                });
                 if theme::icon_button(ui, icon::PLUS, "New material for this entity").clicked() {
                     cmds.push(Cmd::Open(Dialog::new_material()));
                 }
@@ -330,63 +341,39 @@ fn entity(app: &mut App, ui: &mut egui::Ui, path: &[usize]) {
                     });
                 }
             }
-            // Distance LOD: cheaper models (fake objects) or nothing, far away.
+            // Distance LOD: lighter meshes, an impostor, or nothing, far away.
+            let open = !m.lod.is_empty() || focus.as_deref() == Some("lod");
+            let lod_top = ui.cursor().min;
             egui::CollapsingHeader::new(
                 RichText::new(format!("{}  LOD ({})", icon::STACK, m.lod.len()))
                     .color(c::TEXT_WEAK),
             )
             .id_salt("model-lod")
-            .default_open(!m.lod.is_empty())
+            .default_open(open)
             .show(ui, |ui| {
-                let mut remove = None;
-                for (i, level) in m.lod.iter_mut().enumerate() {
-                    ui.horizontal(|ui| {
-                        ui.add(
-                            egui::DragValue::new(&mut level.distance)
-                                .speed(0.25)
-                                .range(0.0..=10_000.0)
-                                .suffix(" m"),
-                        )
-                        .on_hover_text("Camera distance where this level starts");
-                        let label = level.path.clone().unwrap_or_else(|| "None (cull)".into());
-                        egui::ComboBox::from_id_salt(("lod-path", i))
-                            .selected_text(label)
-                            .width(ui.available_width() - 38.0)
-                            .show_ui(ui, |ui| {
-                                if ui
-                                    .selectable_label(level.path.is_none(), "None (cull)")
-                                    .clicked()
-                                {
-                                    level.path = None;
-                                }
-                                for (name, proxy) in &model_names {
-                                    let g = if *proxy { icon::GHOST } else { icon::CUBE };
-                                    let sel = level.path.as_deref() == Some(name.as_str());
-                                    if ui.selectable_label(sel, format!("{g}  {name}")).clicked() {
-                                        level.path = Some(name.clone());
-                                    }
-                                }
-                            });
-                        if theme::icon_button(ui, icon::X, "Remove level").clicked() {
-                            remove = Some(i);
-                        }
-                    });
-                }
-                if let Some(i) = remove {
-                    m.lod.remove(i);
-                }
-                if ui
-                    .small_button(format!("{} Add level", icon::PLUS))
-                    .on_hover_text("Fake objects make good far levels (Create › Fake object)")
-                    .clicked()
-                {
-                    let next = m.lod.last().map_or(15.0, |l| l.distance + 15.0);
-                    m.lod.push(trino_scene::LodDef {
-                        distance: next,
-                        path: None,
-                    });
-                }
+                let base = model_infos.iter().find(|i| i.logical == m.path);
+                let mut preview = lod_preview
+                    .as_ref()
+                    .filter(|(p, _)| p.as_slice() == path)
+                    .map(|(_, d)| *d);
+                crate::panels::lod::ui(
+                    ui,
+                    &mut m.lod,
+                    &crate::panels::lod::Choices {
+                        models: &model_infos,
+                        impostors: &impostor_names,
+                        base,
+                    },
+                    &mut preview,
+                );
+                *lod_preview = preview.map(|d| (path.to_vec(), d));
             });
+            if focus.as_deref() == Some("lod") {
+                ui.scroll_to_rect(
+                    egui::Rect::from_min_size(lod_top, Vec2::new(1.0, 1.0)),
+                    Some(egui::Align::TOP),
+                );
+            }
             ui.horizontal(|ui| {
                 ui.add_space(64.0);
                 if ui
@@ -1134,7 +1121,7 @@ fn header(ui: &mut egui::Ui, glyph: &str, color: egui::Color32, title: &str, kin
     ui.add_space(6.0);
 }
 
-fn budget_bar(ui: &mut egui::Ui, label: &str, used: f32, budget: f32) {
+pub fn budget_bar(ui: &mut egui::Ui, label: &str, used: f32, budget: f32) {
     let frac = (used / budget).clamp(0.0, 1.0);
     let col = if frac > 0.9 {
         c::ERROR
@@ -1243,6 +1230,7 @@ fn model_asset(app: &mut App, ui: &mut egui::Ui, logical: &str) {
         }
     });
     ui.add_space(8.0);
+    crate::panels::impostor::section(app, ui, logical, tris, verts);
 
     if let Some(p) = &mut proxy {
         theme::component(
@@ -1605,6 +1593,35 @@ fn scene_settings(app: &mut App, ui: &mut egui::Ui) {
             }
         },
     );
+    if let Some((_, budgets)) = &app.budgets {
+        if app.inspect_focus.as_deref() == Some("budget") {
+            ui.scroll_to_rect(
+                egui::Rect::from_min_size(ui.cursor().min, Vec2::new(1.0, 1.0)),
+                Some(egui::Align::TOP),
+            );
+        }
+        let picked = theme::component(
+            ui,
+            "env-budget",
+            icon::GAUGE,
+            c::TEXT,
+            "Platform budget (scene camera)",
+            |ui| budget_section(ui, budgets),
+        )
+        .flatten();
+        // An unseen draw's line selects its entity.
+        if let Some(name) = picked {
+            let mut found = None;
+            app.doc.scene.walk(|p, e| {
+                if e.name == name && found.is_none() {
+                    found = Some(p.to_vec());
+                }
+            });
+            if let Some(path) = found {
+                app.cmds.push(Cmd::Select(Some(path)));
+            }
+        }
+    }
     if !app.resolved.warnings.is_empty() {
         theme::component(ui, "env-warn", icon::WARNING, c::WARN, "Issues", |ui| {
             for w in &app.resolved.warnings {
@@ -1612,4 +1629,97 @@ fn scene_settings(app: &mut App, ui: &mut egui::Ui) {
             }
         });
     }
+}
+
+/// The scene's frame per console: the N64's CPU and RSP time with every
+/// reason a draw misses the RSP, the 3DS's triangles, and each draw sent
+/// for nothing (`cargo xtask scene budget` prints the same). Returns the
+/// name of an unseen draw the user clicked.
+fn budget_section(
+    ui: &mut egui::Ui,
+    budgets: &[trino_scene::budget::FrameBudget; 2],
+) -> Option<String> {
+    let line = |ui: &mut egui::Ui, text: String, color: egui::Color32| {
+        ui.add(egui::Label::new(RichText::new(text).size(12.0).color(color)).truncate());
+    };
+    let [n64, n3ds] = budgets;
+    let mut picked = None;
+    let pct = n64.n64_frame_percent();
+    line(
+        ui,
+        format!(
+            "N64 ≈{:.1} ms ({pct:.0}% of 30 fps)",
+            n64.n64_frame_us() as f32 / 1000.0
+        ),
+        if pct > 100.0 {
+            c::ERROR
+        } else if pct > 75.0 {
+            c::WARN
+        } else {
+            c::OK
+        },
+    );
+    line(
+        ui,
+        format!(
+            "CPU {:.1} ms on {} draws · RSP {:.1} ms on {} draws",
+            n64.n64_cpu_us() as f32 / 1000.0,
+            n64.cpu_draws,
+            n64.n64_rsp_us() as f32 / 1000.0,
+            n64.rsp_draws
+        ),
+        c::TEXT_WEAK,
+    );
+    for (r, n) in &n64.off_rsp {
+        line(
+            ui,
+            format!("off the RSP: {n} × {}", r.label()),
+            c::TEXT_FAINT,
+        );
+    }
+    if n64.billboards > 0 {
+        line(
+            ui,
+            format!("{} impostor billboards", n64.billboards),
+            c::TEXT_FAINT,
+        );
+    }
+    line(
+        ui,
+        format!(
+            "3DS {} tris · {} draws · {} billboards",
+            n3ds.tris(),
+            n3ds.draws,
+            n3ds.billboards
+        ),
+        c::TEXT_WEAK,
+    );
+    let mut wasted: Vec<&String> = n64.wasted.iter().chain(&n3ds.wasted).collect();
+    wasted.sort();
+    wasted.dedup();
+    if !wasted.is_empty() {
+        line(
+            ui,
+            format!("{} draws sent but unseen (outside the view):", wasted.len()),
+            c::WARN,
+        );
+        for w in wasted {
+            let r = ui
+                .add(
+                    egui::Label::new(
+                        RichText::new(format!("unseen: {w}"))
+                            .size(12.0)
+                            .color(c::WARN),
+                    )
+                    .truncate()
+                    .sense(egui::Sense::click()),
+                )
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .on_hover_text("Select it");
+            if r.clicked() {
+                picked = Some(w.clone());
+            }
+        }
+    }
+    picked
 }

@@ -2,7 +2,7 @@
 //! menus / toolbar / status bar, file sync (hot reload of scenes, prefabs,
 //! materials and assets), shortcuts and undo.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::mpsc::Receiver;
@@ -33,6 +33,7 @@ pub enum Tab {
     Scene,
     Game,
     Level,
+    Animation,
     Hierarchy,
     Inspector,
     Assets,
@@ -45,6 +46,7 @@ impl Tab {
             Tab::Scene => (icon::CUBE_TRANSPARENT, "Scene"),
             Tab::Game => (icon::GAME_CONTROLLER, "Game"),
             Tab::Level => (icon::GRID_FOUR, "Level"),
+            Tab::Animation => (icon::PERSON_SIMPLE_WALK, "Animation"),
             Tab::Hierarchy => (icon::TREE_STRUCTURE, "Hierarchy"),
             Tab::Inspector => (icon::SLIDERS_HORIZONTAL, "Inspector"),
             Tab::Assets => (icon::FOLDER_OPEN, "Assets"),
@@ -61,6 +63,8 @@ pub enum AssetSel {
     Material(String),
     Prefab(String),
     Sprite(String),
+    /// A particle effect, by name (`particles/<name>`).
+    Particles(String),
 }
 
 /// Everything panels ask the app to do (applied after the UI pass).
@@ -129,6 +133,22 @@ pub enum Cmd {
     /// or close it.
     SwitchScene(usize),
     CloseScene(usize),
+    /// Write an impostor's settings (`assets/impostors/<name>.impostor.ron`).
+    SaveImpostor(String, pipeline::impostor::ImpostorDef),
+    /// Render it: atlases, tables and manifest entries (the same bake as
+    /// `cargo xtask impostor bake <name>`).
+    BakeImpostor(String),
+    /// Bake a clip's pose into a static model (Animation › Console pose;
+    /// the same as `cargo xtask model pose`).
+    /// A new particle effect (`assets/shared/particles/<name>.particles.ron`
+    /// + `[particles.<name>]`), like `cargo xtask particles new`.
+    NewParticles(String),
+    ExportPose {
+        model: String,
+        clip: Option<String>,
+        time: f32,
+        name: String,
+    },
 }
 
 pub struct App {
@@ -200,8 +220,34 @@ pub struct App {
     /// Dev hook `TRINO_EDITOR_PLAY=here`: start Play here on the first frame.
     play_here_on_start: bool,
     /// Dev hook `TRINO_EDITOR_INSPECT=<section>`: the Inspector opens that
-    /// section and scrolls to it (`platforms`).
+    /// section and scrolls to it (`platforms`, `lod`, `impostor`).
     pub inspect_focus: Option<String>,
+    /// Inspector › LOD › Preview: (entity, distance) both views draw that
+    /// entity's LOD at.
+    pub lod_preview: Option<(Vec<usize>, f32)>,
+    /// Impostor settings on disk, by name (`assets/impostors/`).
+    pub impostor_defs: std::collections::BTreeMap<String, pipeline::impostor::ImpostorDef>,
+    /// Atlas previews by impostor name, with the project generation they
+    /// were made at.
+    pub impostor_thumbs: std::collections::HashMap<String, (u64, egui::TextureHandle)>,
+    /// The Animation tab.
+    pub anim: crate::anim_panel::AnimPanel,
+    /// Particle effects by name (the manifest's `[particles.*]` files).
+    pub particles: std::collections::BTreeMap<String, pipeline::particles::ParticlesDef>,
+    /// Effects edited in the inspector, written once the user settles.
+    pub pending_particles: HashSet<String>,
+    /// The particle inspector's live preview.
+    pub particles_view: crate::panels::particles::ParticlesView,
+    /// The scene's frame from its camera on the N64 and the 3DS (variants,
+    /// LOD and impostors applied), with the content key it is for.
+    pub budgets: Option<(u64, [trino_scene::budget::FrameBudget; 2])>,
+    /// What a console draws that the PC bakes don't say, for the budgets:
+    /// the console bake of a model with its own source there (an
+    /// `assets/n64/...` override), or `None` for a model that platform does
+    /// not bake. With the project generation it was read at.
+    pub console_models: (u64, ConsoleModels),
+    /// eframe's wgpu device (panels with their own preview renderer).
+    pub render_state: eframe::egui_wgpu::RenderState,
 }
 
 impl App {
@@ -224,6 +270,7 @@ impl App {
         }
         let mut lib = Library::load(&root);
         lib.model_bounds = project.model_bounds();
+        lib.impostors = pipeline::impostor::baked(&project.assets_dir());
         for e in &lib.errors {
             log.error(e.clone());
         }
@@ -281,6 +328,11 @@ impl App {
                 cmds.push(Cmd::SelectAsset(AssetSel::Material(l.to_string())));
             }
             Some(("model", l)) => cmds.push(Cmd::SelectAsset(AssetSel::Model(l.to_string()))),
+            Some(("particles", n)) => {
+                assets_tab = crate::panels::assets::AssetTab::Particles;
+                let name = n.split_once('@').map_or(n, |(n, _)| n);
+                cmds.push(Cmd::SelectAsset(AssetSel::Particles(name.to_string())));
+            }
             Some(("prefab", l)) => {
                 assets_tab = crate::panels::assets::AssetTab::Prefabs;
                 cmds.push(Cmd::EditPrefab(l.to_string()));
@@ -290,9 +342,16 @@ impl App {
             _ => {}
         }
 
+        let doc_selected = doc.selected.clone();
         let mut scene_view =
             Viewport::new(render_state.clone(), ViewKind::Scene, SimProfile::Native);
-        let game_view = Viewport::new(render_state.clone(), ViewKind::Game, SimProfile::N64);
+        // Dev hook: TRINO_EDITOR_GAME=pc|n64|3ds picks the Game view's profile.
+        let game_profile = match std::env::var("TRINO_EDITOR_GAME").as_deref() {
+            Ok("pc") => SimProfile::Native,
+            Ok("3ds") => SimProfile::N3ds,
+            _ => SimProfile::N64,
+        };
+        let game_view = Viewport::new(render_state.clone(), ViewKind::Game, game_profile);
         let cam = doc.scene.environment.core_camera();
         scene_view.cam.look_from(cam.eye, cam.target);
         let thumbs = Thumbnailer::new(
@@ -339,6 +398,8 @@ impl App {
             "scenes",
             "prefabs",
             "assets/materials",
+            "assets/impostors",
+            "assets/shared/particles",
             "examples/platformer/src",
         ] {
             let _ = std::fs::create_dir_all(dir);
@@ -412,6 +473,30 @@ impl App {
             palette: std::env::var("TRINO_EDITOR_PALETTE").ok(),
             play_here_on_start: std::env::var("TRINO_EDITOR_PLAY").as_deref() == Ok("here"),
             inspect_focus: std::env::var("TRINO_EDITOR_INSPECT").ok(),
+            // Dev hook: TRINO_EDITOR_LOD_PREVIEW=<m> previews the selected
+            // entity's LOD at that distance.
+            lod_preview: std::env::var("TRINO_EDITOR_LOD_PREVIEW")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .zip(doc_selected)
+                .map(|(d, p)| (p, d)),
+            impostor_defs: load_impostor_defs(&root.join("assets")),
+            impostor_thumbs: Default::default(),
+            anim: crate::anim_panel::AnimPanel::from_env(),
+            budgets: None,
+            console_models: (u64::MAX, ConsoleModels::new()),
+            particles: load_particles(&root.join("assets")),
+            pending_particles: HashSet::new(),
+            // `TRINO_EDITOR_OPEN=particles:<name>@n64` previews that platform.
+            particles_view: crate::panels::particles::ParticlesView {
+                platform: match open.rsplit_once('@').map(|(_, p)| p) {
+                    Some("n64") => pipeline::Platform::N64,
+                    Some("3ds") => pipeline::Platform::N3ds,
+                    _ => pipeline::Platform::Pc,
+                },
+                ..Default::default()
+            },
+            render_state,
         }
     }
 
@@ -429,6 +514,8 @@ impl App {
             rev: self.rev,
             time: self.time(),
             animate: self.animate,
+            lod_preview: self.lod_preview.as_ref().map(|(p, d)| (p.as_slice(), *d)),
+            budgets: self.budgets.as_ref().map(|b| &b.1),
         }
     }
 
@@ -441,6 +528,40 @@ impl App {
             }
         });
         n
+    }
+
+    /// What the platform budgets depend on: the scene, the library and the
+    /// baked assets.
+    fn budget_key(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        self.doc.scene.to_ron().hash(&mut h);
+        self.lib_rev.hash(&mut h);
+        self.project.generation.hash(&mut h);
+        h.finish()
+    }
+
+    /// The scene's frame on the N64 and the 3DS from its camera
+    /// (`trino_scene::budget`, what `cargo xtask scene budget` prints): the
+    /// PC bakes of the models, except where a console has its own.
+    pub fn platform_budgets(&self) -> [trino_scene::budget::FrameBudget; 2] {
+        use trino_scene::{Target, budget};
+        let env = &self.doc.scene.environment;
+        let (camera, light) = (env.core_camera(), env.core_light());
+        [Target::N64, Target::N3ds].map(|t| {
+            let resolved = trino_scene::resolve_for(&self.doc.scene, &self.lib, 0.0, t);
+            budget::estimate(
+                &resolved,
+                &|id| match self.console_models.1.get(&(t, id.0)) {
+                    Some(own) => own.as_deref(),
+                    None => self.project.model_by_id(id).map(|m| m.tmdl.as_slice()),
+                },
+                &camera,
+                &light,
+                budget::screen_of(t, trino_core::Vec2::new(640.0, 480.0)),
+                t,
+            )
+        })
     }
 
     pub fn mark_lib_changed(&mut self) {
@@ -468,8 +589,14 @@ impl App {
         if !changed_ids.is_empty() {
             match self.project.reload(Some(&changed_ids)) {
                 Ok(n) => {
-                    // `Auto` colliders follow model edits.
+                    // `Auto` colliders follow model edits; impostor LOD
+                    // levels follow a fresh bake (its blobs changed).
                     self.lib.model_bounds = self.project.model_bounds();
+                    let impostors = pipeline::impostor::baked(&self.project.assets_dir());
+                    if impostors != self.lib.impostors {
+                        self.lib.impostors = impostors;
+                        self.mark_lib_changed();
+                    }
                     let logicals = self.project.logicals_for_ids(&changed_ids);
                     self.scene_view.upload(&self.project, &logicals);
                     self.game_view.upload(&self.project, &logicals);
@@ -545,6 +672,26 @@ impl App {
                 if p == self.doc.path || self.parked.as_ref().is_some_and(|d| d.path == p) {
                     self.external_doc_change(&p, text);
                 }
+            } else if s.ends_with(pipeline::particles::DEF_EXT) {
+                // An effect changed on disk (an agent, a text editor): the
+                // inspector and its preview follow.
+                self.particles = load_particles(&self.project.assets_dir());
+                self.log.toast(
+                    Level::Ok,
+                    format!("{} {} reloaded", icon::ARROWS_CLOCKWISE, p.display()),
+                );
+            } else if s.ends_with(pipeline::impostor::DEF_EXT) {
+                // An agent (or another tool) edited impostor settings: show
+                // them; the atlas changes when someone bakes.
+                self.impostor_defs = load_impostor_defs(&self.project.assets_dir());
+                self.log.toast(
+                    Level::Ok,
+                    format!(
+                        "{} {} changed — Bake impostor (or cargo xtask impostor bake) to update",
+                        icon::ARROWS_CLOCKWISE,
+                        p.display()
+                    ),
+                );
             } else if s.ends_with("level1.txt") && !level_checked {
                 level_checked = true;
                 if self.level.maybe_external_reload() {
@@ -1006,6 +1153,84 @@ impl App {
                 }
                 self.pending_proxies.insert(logical, prim);
             }
+            Cmd::SaveImpostor(name, def) => {
+                let path = pipeline::impostor::save_def(&self.project.assets_dir(), &name, &def)?;
+                self.written.insert(
+                    path.clone(),
+                    std::fs::read_to_string(&path).unwrap_or_default(),
+                );
+                self.impostor_defs.insert(name, def);
+            }
+            Cmd::BakeImpostor(name) => {
+                let r = pipeline::impostor::bake(&self.project.assets_dir(), &name)?;
+                self.log.toast(
+                    Level::Ok,
+                    format!(
+                        "{} impostor {name}: {} views, {}x{} atlas, N64 {}x{} CI4{}",
+                        icon::IMAGE_SQUARE,
+                        r.pc.impostor.views,
+                        r.pc.width,
+                        r.pc.height,
+                        r.n64.width,
+                        r.n64.height,
+                        if r.written.is_empty() {
+                            " (unchanged)"
+                        } else {
+                            ""
+                        }
+                    ),
+                );
+                for f in &r.written {
+                    self.log.info(format!("wrote assets/{f}"));
+                }
+                // The asset watcher rebakes the sprite and the blob; the
+                // library picks the tables up on that reload.
+            }
+            Cmd::NewParticles(name) => {
+                let sprite = self
+                    .project
+                    .sprites
+                    .keys()
+                    .next()
+                    .cloned()
+                    .unwrap_or_else(|| "sprites/particle".into());
+                let def = pipeline::particles::ParticlesDef::new(sprite);
+                let assets = self.project.assets_dir();
+                pipeline::particles::save(&assets, &name, &def)?;
+                let file = pipeline::particles::def_file(&assets, &name);
+                self.written.insert(file, def.to_ron());
+                self.particles.insert(name.clone(), def);
+                self.asset_sel = Some(AssetSel::Particles(name.clone()));
+                self.log.toast(
+                    Level::Ok,
+                    format!("{} particles/{name} created", icon::SPARKLE),
+                );
+            }
+            Cmd::ExportPose {
+                model,
+                clip,
+                time,
+                name,
+            } => {
+                let e = trino_asset_pipeline::anim::export_pose(
+                    &self.project.assets_dir(),
+                    &model,
+                    clip.as_deref(),
+                    time,
+                    &name,
+                )?;
+                self.log.toast(
+                    Level::Ok,
+                    format!(
+                        "{} {} exported: {} tris, N64 ≈{:.1} ms per draw",
+                        icon::CUBE,
+                        e.logical,
+                        e.tris,
+                        e.n64_us as f32 / 1000.0
+                    ),
+                );
+                self.log.info(format!("wrote assets/{}", e.file));
+            }
             Cmd::RetargetModel(name, file) => {
                 self.project.retarget_model(&name, &file)?;
                 self.log.toast(
@@ -1101,6 +1326,19 @@ impl App {
         }
         if !mats.is_empty() || !proxies.is_empty() {
             self.thumb_rev += 1;
+        }
+        let effects: Vec<String> = self.pending_particles.drain().collect();
+        for name in effects {
+            if let Some(def) = self.particles.get(&name).cloned() {
+                let assets = self.project.assets_dir();
+                let file = pipeline::particles::def_file(&assets, &name);
+                match pipeline::particles::save(&assets, &name, &def) {
+                    Ok(_) => {
+                        self.written.insert(file, def.to_ron());
+                    }
+                    Err(e) => self.log.toast(Level::Error, e),
+                }
+            }
         }
     }
 
@@ -2130,6 +2368,74 @@ impl App {
 /// canonicalized paths (`/private/var/...` on macOS, `\\?\C:\...` on
 /// Windows), so fall back to comparing canonical forms — for deleted files,
 /// canonicalize the parent and re-append the name.
+/// Every `[particles.*]` effect of the manifest that parses, by name.
+pub fn load_particles(
+    assets: &Path,
+) -> std::collections::BTreeMap<String, pipeline::particles::ParticlesDef> {
+    let Ok(manifest) = pipeline::Manifest::load(&assets.join("manifest.toml")) else {
+        return Default::default();
+    };
+    manifest
+        .particles
+        .iter()
+        .filter_map(|(name, decl)| {
+            let path = pipeline::resolve_source(assets, pipeline::Platform::Pc, &decl.file).ok()?;
+            let text = std::fs::read_to_string(path).ok()?;
+            pipeline::particles::ParticlesDef::from_ron(&text)
+                .ok()
+                .map(|d| (name.clone(), d))
+        })
+        .collect()
+}
+
+/// Console model bakes keyed by (platform, model id): `Some` for a model
+/// with its own source on that console, `None` for one it does not bake.
+pub type ConsoleModels = HashMap<(trino_scene::Target, u32), Option<Vec<u8>>>;
+
+/// The models whose console build differs from the PC's (see
+/// `App::console_models`); `cargo xtask scene budget` bakes each platform
+/// the same way.
+pub fn console_models(assets: &Path) -> ConsoleModels {
+    use trino_scene::Target;
+    let mut out = ConsoleModels::new();
+    let Ok(manifest) = pipeline::Manifest::load(&assets.join("manifest.toml")) else {
+        return out;
+    };
+    for (t, p) in [
+        (Target::N64, pipeline::Platform::N64),
+        (Target::N3ds, pipeline::Platform::N3ds),
+    ] {
+        for (name, d) in &manifest.models {
+            let id = trino_core::asset_id(&format!("models/{name}"));
+            if !d.bakes_for(p) {
+                out.insert((t, id), None);
+                continue;
+            }
+            let pc = pipeline::resolve_source(assets, pipeline::Platform::Pc, &d.file).ok();
+            let own = pipeline::resolve_source(assets, p, &d.file).ok();
+            if own.is_some() && own != pc {
+                let blob = own.and_then(|src| pipeline::bake_model(&src, &d.options()).ok());
+                out.insert((t, id), blob);
+            }
+        }
+    }
+    out
+}
+
+/// Every impostor settings file under `assets/impostors/`, by name.
+fn load_impostor_defs(
+    assets: &Path,
+) -> std::collections::BTreeMap<String, pipeline::impostor::ImpostorDef> {
+    pipeline::impostor::names(assets)
+        .into_iter()
+        .filter_map(|n| {
+            pipeline::impostor::load_def(assets, &n)
+                .ok()
+                .map(|d| (n, d))
+        })
+        .collect()
+}
+
 /// `text` cut to its last `max` characters, starting with "…" when cut
 /// (nothing when even "…" + a few characters wouldn't fit).
 fn elide_start(text: &str, max: usize) -> String {
@@ -2194,6 +2500,14 @@ impl eframe::App for App {
         }
         self.update_thumbnails(&ctx);
 
+        // A LOD preview belongs to the entity it was started on.
+        if self
+            .lod_preview
+            .as_ref()
+            .is_some_and(|(p, _)| self.doc.selected.as_ref() != Some(p))
+        {
+            self.lod_preview = None;
+        }
         // Resolve once per frame; bump the revision when content changed.
         let time = self.time();
         self.resolved = resolve(&self.doc.scene, &self.lib, time);
@@ -2206,7 +2520,22 @@ impl eframe::App for App {
             self.rev_scene = Some(self.doc.scene.clone());
             self.seen_lib_rev = self.lib_rev;
         }
+        // The consoles' frames, once per content change (not per animated
+        // frame: the estimate is from the scene camera at time 0).
+        let key = self.budget_key();
+        if self.console_models.0 != self.project.generation {
+            self.console_models = (
+                self.project.generation,
+                console_models(&self.project.assets_dir()),
+            );
+        }
+        if self.budgets.as_ref().map(|b| b.0) != Some(key) {
+            self.budgets = Some((key, self.platform_budgets()));
+        }
         let has_anim = self.resolved.items.iter().any(|i| i.params.anim.is_some());
+        if self.lod_preview.is_some() {
+            self.rev += 1; // the preview distance moves without a scene edit
+        }
         if self.animate && has_anim {
             self.rev += 1; // animated content re-renders every frame
             ctx.request_repaint();
@@ -2305,9 +2634,10 @@ fn default_dock(width: f32) -> egui_dock::DockState<Tab> {
     // Dev hook (screenshots): TRINO_EDITOR_TAB=scene|game|level picks the
     // focused center tab.
     let tabs = match std::env::var("TRINO_EDITOR_TAB").as_deref() {
-        Ok("level") => vec![Tab::Level, Tab::Scene, Tab::Game],
-        Ok("game") => vec![Tab::Game, Tab::Scene, Tab::Level],
-        _ => vec![Tab::Scene, Tab::Game, Tab::Level],
+        Ok("level") => vec![Tab::Level, Tab::Scene, Tab::Game, Tab::Animation],
+        Ok("game") => vec![Tab::Game, Tab::Scene, Tab::Level, Tab::Animation],
+        Ok("animation") => vec![Tab::Animation, Tab::Scene, Tab::Game, Tab::Level],
+        _ => vec![Tab::Scene, Tab::Game, Tab::Level, Tab::Animation],
     };
     let mut dock = egui_dock::DockState::new(tabs);
     let surface = dock.main_surface_mut();
@@ -2348,7 +2678,9 @@ impl egui_dock::TabViewer for TabView<'_> {
 
     fn scroll_bars(&self, tab: &Tab) -> [bool; 2] {
         match tab {
-            Tab::Scene | Tab::Game | Tab::Console | Tab::Assets | Tab::Level => [false, false],
+            Tab::Scene | Tab::Game | Tab::Console | Tab::Assets | Tab::Level | Tab::Animation => {
+                [false, false]
+            }
             _ => [false, true],
         }
     }
@@ -2375,6 +2707,8 @@ impl egui_dock::TabViewer for TabView<'_> {
                     rev: app.rev,
                     time: app.anim_start.elapsed().as_secs_f32(),
                     animate: app.animate,
+                    lod_preview: app.lod_preview.as_ref().map(|(p, d)| (p.as_slice(), *d)),
+                    budgets: app.budgets.as_ref().map(|b| &b.1),
                 };
                 let view = if kind == ViewKind::Scene {
                     &mut app.scene_view
@@ -2428,6 +2762,7 @@ impl egui_dock::TabViewer for TabView<'_> {
                     app.log.info(l);
                 }
             }
+            Tab::Animation => crate::anim_panel::ui(app, ui),
             Tab::Hierarchy => crate::panels::hierarchy::ui(app, ui),
             Tab::Inspector => crate::panels::inspector::ui(app, ui),
             Tab::Assets => crate::panels::assets::ui(app, ui),
@@ -2448,6 +2783,47 @@ pub fn card() -> egui::Frame {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The budgets see what each console bakes: its own source where it
+    /// has one, nothing where the model is not baked, the PC bake
+    /// otherwise.
+    #[test]
+    fn console_models_follow_overrides_and_platform_lists() {
+        use trino_scene::Target;
+        let dir = tempfile::tempdir().unwrap();
+        let assets = dir.path().join("assets");
+        let repo =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/shared/models/castle64");
+        for (sub, from) in [("shared", "coin.glb"), ("n64", "boar.glb")] {
+            let to = assets.join(sub).join("models");
+            std::fs::create_dir_all(&to).unwrap();
+            std::fs::copy(repo.join(from), to.join("coin.glb")).unwrap();
+        }
+        std::fs::write(
+            assets.join("manifest.toml"),
+            "version = 1\n\n[models.coin]\nfile = \"models/coin.glb\"\n\n\
+             [models.pc_only]\nfile = \"models/coin.glb\"\nplatforms = [\"pc\"]\n",
+        )
+        .unwrap();
+        let m = console_models(&assets);
+        let (coin, pc_only) = (
+            trino_core::asset_id("models/coin"),
+            trino_core::asset_id("models/pc_only"),
+        );
+        let tris = |b: &[u8]| trino_core::Mesh::from_tmdl(b).unwrap().index_count / 3;
+        let boar = pipeline::bake_model(&repo.join("boar.glb"), &Default::default()).unwrap();
+        let n64 = m[&(Target::N64, coin)]
+            .as_deref()
+            .expect("the N64 override");
+        assert_eq!(tris(n64), tris(&boar), "the N64 bakes the boar");
+        assert!(
+            !m.contains_key(&(Target::N3ds, coin)),
+            "no 3DS override: PC bake"
+        );
+        assert_eq!(m[&(Target::N64, pc_only)], None);
+        assert_eq!(m[&(Target::N3ds, pc_only)], None);
+        assert_eq!(m.len(), 3);
+    }
 
     #[test]
     fn long_paths_keep_their_end() {

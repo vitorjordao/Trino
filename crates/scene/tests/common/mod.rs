@@ -108,10 +108,12 @@ pub fn scene() -> Scene {
                     LodDef {
                         distance: 30.0,
                         path: None,
+                        ..Default::default()
                     },
                     LodDef {
                         distance: 10.0,
                         path: Some("models/hat-far".into()),
+                        ..Default::default()
                     },
                 ],
                 ..model("models/hat")

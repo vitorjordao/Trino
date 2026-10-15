@@ -484,31 +484,80 @@ fn leave_temp_project(repo: &std::path::Path) {
 /// Scroll the widget labeled `label` into view, then click it (panels
 /// scroll: a click on a clipped widget would land on whatever covers it).
 fn click(h: &mut Harness<'static, App>, label: &str) {
-    let screen = h.ctx.content_rect();
-    for _ in 0..40 {
-        let r = h.get_by_label(label).rect();
-        let dy = if r.bottom() > screen.bottom() - 4.0 {
-            -120.0
-        } else if r.top() < screen.top() + 60.0 {
-            120.0
-        } else {
-            break;
+    // An exact label, else the one widget whose label contains it (icon
+    // glyphs prefix most button and header texts).
+    let find = |h: &Harness<'static, App>| -> crate::layout_audit::Widget {
+        let all = crate::layout_audit::widgets(h, Some(&h.ctx));
+        let rect = match h.query_by_label(label) {
+            Some(n) => n.rect(),
+            None => h.get_by_label_contains(label).rect(),
         };
-        // Wheel over the widget's panel, inside the window.
-        let at = egui::pos2(
-            r.center().x,
-            r.center().y.clamp(80.0, screen.bottom() - 40.0),
-        );
+        all.into_iter()
+            .find(|w| (w.rect.min - rect.min).length() < 0.5)
+            .unwrap_or(crate::layout_audit::Widget {
+                role: eframe::egui::accesskit::Role::Unknown,
+                label: label.into(),
+                rect,
+                visible: eframe::egui::Rect::NOTHING,
+            })
+    };
+    let screen = h.ctx.content_rect();
+    let shown = |h: &Harness<'static, App>| {
+        let w = find(h);
+        // Whatever egui says, off the window is not shown.
+        let visible = w.visible.intersect(screen);
+        (
+            visible.is_positive() && visible.height() >= w.rect.height() - 1.0,
+            crate::layout_audit::Widget { visible, ..w },
+        )
+    };
+    // Ask egui to scroll it into view (the accessibility action) first: a
+    // wheel can land on a viewport that zooms instead of scrolling.
+    if !shown(h).0 {
+        match h.query_by_label(label) {
+            Some(n) => n.scroll_to_me(),
+            None => h.get_by_label_contains(label).scroll_to_me(),
+        }
+        h.run_steps(8);
+    }
+    for _ in 0..40 {
+        let (ok, w) = shown(h);
+        if ok {
+            break;
+        }
+        // Wheel over the part of its panel that shows: the widget's own
+        // visible part, else a visible widget in the same column.
+        let at = if w.visible.is_positive() {
+            w.visible.center()
+        } else {
+            crate::layout_audit::widgets(h, Some(&h.ctx))
+                .into_iter()
+                .filter(|o| o.visible.is_positive())
+                .filter(|o| (o.rect.center().x - w.rect.center().x).abs() < w.rect.width())
+                .min_by(|a, b| {
+                    let d = |o: &crate::layout_audit::Widget| {
+                        (o.rect.center().y - w.rect.center().y).abs()
+                    };
+                    d(a).total_cmp(&d(b))
+                })
+                .map_or(w.rect.center(), |o| o.visible.center())
+        };
+        let down = w.rect.center().y > at.y;
         h.hover_at(at);
         h.event(egui::Event::MouseWheel {
             unit: egui::MouseWheelUnit::Point,
-            delta: egui::vec2(0.0, dy),
+            delta: egui::vec2(0.0, if down { -120.0 } else { 120.0 }),
             phase: egui::TouchPhase::Move,
             modifiers: egui::Modifiers::NONE,
         });
-        h.run_steps(2);
+        // Wheel scrolling is animated: let it settle before measuring again.
+        h.run_steps(8);
     }
-    h.get_by_label(label).click();
+    h.run_steps(4);
+    match h.query_by_label(label) {
+        Some(n) => n.click(),
+        None => h.get_by_label_contains(label).click(),
+    }
     h.run_steps(3);
 }
 
@@ -555,6 +604,12 @@ fn platform_variants_reach_the_game_view_and_the_file() {
     // Popup items: through accessibility (the list scrolls on its own).
     h.get_by_label("models/crate").click_accesskit();
     h.run_steps(3);
+    // An item picked through accessibility leaves its list open: close it
+    // the way a user would, on its combo.
+    if h.query_by_label("models/crate").is_some() {
+        h.get_by_label("N64 model").click();
+        h.run_steps(3);
+    }
     let e = h.state().doc.scene.get(&rock).unwrap().clone();
     assert_eq!(
         e.platforms.n64.as_ref().unwrap().model.as_deref(),
@@ -651,6 +706,417 @@ fn editor_layout_is_clean_at_minimum_and_default_sizes() {
         h.state_mut().cmds.push(Cmd::FocusTab(Tab::Game));
         h.run_steps(3);
         crate::layout_audit::assert_clean(&h, size, true, &what("Game view"));
+        // A LOD chain with an impostor level, previewed.
+        let boar = trino_scene::Entity::new("boar").with_model(trino_scene::ModelComponent {
+            lod: vec![
+                trino_scene::LodDef {
+                    distance: 12.0,
+                    impostor: Some("impostors/selftest-boar".into()),
+                    platforms: trino_scene::LodPlatforms {
+                        n64: Some(trino_scene::LodAt::Never),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                trino_scene::LodDef {
+                    distance: 40.0,
+                    platforms: trino_scene::LodPlatforms {
+                        n64: Some(trino_scene::LodAt::At(25.0)),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            ],
+            ..trino_scene::ModelComponent::new("models/c64_boar")
+        });
+        h.state_mut().cmds.push(Cmd::Create {
+            parent: None,
+            entity: Box::new(boar),
+        });
+        h.run_steps(3);
+        let sel = h.state().doc.selected.clone().unwrap();
+        h.state_mut().lod_preview = Some((sel, 20.0));
+        h.state_mut().inspect_focus = Some("lod".into());
+        h.run_steps(4);
+        crate::layout_audit::assert_clean(&h, size, true, &what("LOD panel"));
+        // A model asset with its impostor section.
+        h.state_mut().inspect_focus = Some("impostor".into());
+        h.state_mut()
+            .cmds
+            .push(Cmd::SelectAsset(crate::app::AssetSel::Model(
+                "models/c64_boar".into(),
+            )));
+        h.run_steps(4);
+        crate::layout_audit::assert_clean(&h, size, true, &what("impostor section"));
+        leave_temp_project(&repo);
+    }
+}
+
+/// Impostors from the Inspector, both ways: "Create and bake" on a model
+/// writes the same files `cargo xtask impostor bake` does, the library
+/// picks the baked table up, an entity's LOD level draws it (the preview
+/// shows the switch in the view), and settings an agent writes appear.
+#[test]
+#[ignore = "changes cwd/env: run alone with --ignored --test-threads=1"]
+fn impostors_bake_from_the_inspector_and_drive_a_lod_level() {
+    use crate::app::{AssetSel, Cmd};
+    use trino_asset_pipeline::impostor;
+    let Some((mut h, _tmp, repo)) = temp_project_app(egui::vec2(1600.0, 1000.0)) else {
+        return;
+    };
+    let assets = std::path::PathBuf::from("assets");
+    h.state_mut()
+        .cmds
+        .push(Cmd::SelectAsset(AssetSel::Model("models/crate".into())));
+    h.run_steps(3);
+    click(&mut h, "  Impostor");
+    click(&mut h, "Create and bake");
+    h.run_steps(3);
+    for f in [
+        "impostors/crate.impostor.ron",
+        "shared/impostors/crate.png",
+        "shared/impostors/crate.timp",
+        "n64/impostors/crate.png",
+        "n64/impostors/crate.timp",
+    ] {
+        assert!(assets.join(f).exists(), "{f}");
+    }
+    let manifest = std::fs::read_to_string(assets.join("manifest.toml")).unwrap();
+    assert!(
+        manifest.contains("[sprites.impostor-crate]")
+            && manifest.contains("[blobs.impostor-crate]")
+    );
+    // GUI == CLI: the command-line bake finds nothing to change.
+    let again = impostor::bake(&assets, "crate").unwrap();
+    assert!(again.written.is_empty() && !again.manifest_changed);
+
+    // The asset watcher rebakes; the library gets the table.
+    let start = std::time::Instant::now();
+    while !h.state().lib.impostors.contains_key("impostors/crate") && start.elapsed().as_secs() < 15
+    {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(h.state().lib.impostors.contains_key("impostors/crate"));
+
+    // An entity's LOD level draws it.
+    let crate_a = find(&h.state().doc.scene, "crate-a");
+    h.state_mut().cmds.push(Cmd::Select(Some(crate_a.clone())));
+    h.state_mut().inspect_focus = Some("lod".into());
+    h.run_steps(3);
+    click(&mut h, "Add level");
+    click(&mut h, "LOD 1 draws");
+    h.get_by_label_contains(" impostors/crate")
+        .click_accesskit();
+    h.run_steps(3);
+    let e = h.state().doc.scene.get(&crate_a).unwrap().clone();
+    let lod = &e.model.as_ref().unwrap().lod;
+    assert_eq!(lod.len(), 1);
+    assert_eq!(lod[0].impostor.as_deref(), Some("impostors/crate"));
+    // The preview puts the camera past the level: the view draws it.
+    h.state_mut().lod_preview = Some((crate_a.clone(), lod[0].distance + 5.0));
+    h.run_steps(4);
+    assert_eq!(
+        h.state().scene_view.stats.lod.impostor,
+        1,
+        "one impostor drawn"
+    );
+    let full = h.state().scene_view.stats.lod.full;
+    h.state_mut().lod_preview = Some((crate_a.clone(), 0.0));
+    h.run_steps(4);
+    assert_eq!(h.state().scene_view.stats.lod.impostor, 0);
+    assert_eq!(
+        h.state().scene_view.stats.lod.full,
+        full + 1,
+        "back on its mesh"
+    );
+    // The N64 Game view resolves the N64 table (smaller tiles).
+    let n64 = h
+        .state()
+        .resolved_game
+        .items
+        .iter()
+        .find(|i| i.name == "crates/crate-a")
+        .map(|i| i.lod[0].draw.clone());
+    match n64 {
+        Some(trino_scene::LodDraw::Impostor(p, imp)) => {
+            assert_eq!(p, "impostors/crate");
+            assert_eq!(imp.tile, impostor::n64_tile(8, 64));
+        }
+        other => panic!("{other:?}"),
+    }
+
+    // An agent writes impostor settings for another model: they show up.
+    std::fs::write(
+        assets.join("impostors/rock.impostor.ron"),
+        r#"(version: 1, model: "models/rock", views: 4, tile: 32)"#,
+    )
+    .unwrap();
+    let start = std::time::Instant::now();
+    while !h.state().impostor_defs.contains_key("rock") && start.elapsed().as_secs() < 10 {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert_eq!(h.state().impostor_defs["rock"].views, 4);
+    h.state_mut()
+        .cmds
+        .push(Cmd::SelectAsset(AssetSel::Model("models/rock".into())));
+    h.run_steps(4);
+    assert!(h.query_by_label_contains("not baked yet").is_some());
+    leave_temp_project(&repo);
+}
+
+/// The Animation tab on the showcase robot: clips and their measurements,
+/// frame steps, a crossfade, the pose exported to the same file the CLI
+/// writes, and the clip written into the selected entity; then the layout
+/// audit at both window sizes.
+#[test]
+#[ignore = "changes cwd/env: run alone with --ignored --test-threads=1"]
+fn animation_tab_previews_measures_and_exports() {
+    use crate::app::{Cmd, Tab};
+    for size in [egui::vec2(1600.0, 1000.0), egui::vec2(960.0, 600.0)] {
+        let Some((mut h, _tmp, repo)) = temp_project_app(size) else {
+            return;
+        };
+        let walker = find(&h.state().doc.scene, "robot-walker");
+        h.state_mut().cmds.push(Cmd::Select(Some(walker.clone())));
+        h.state_mut().cmds.push(Cmd::FocusTab(Tab::Animation));
+        h.run_steps(4);
+        assert_eq!(
+            h.state().anim.model.as_deref(),
+            Some("models/robot"),
+            "follows the selected entity"
+        );
+        let names: Vec<String> = h
+            .state()
+            .anim
+            .metrics
+            .iter()
+            .map(|m| m.name.clone())
+            .collect();
+        assert_eq!(names, ["idle", "walk", "wave"]);
+        click(&mut h, " walk");
+        assert_eq!(h.state().anim.clip.as_deref(), Some("walk"));
+        // The showcase robot's walk skates and dips: the panel says so.
+        assert!(h.query_by_label_contains("slides").is_some());
+        assert!(h.query_by_label_contains("below the floor").is_some());
+        click(&mut h, "Pause");
+        h.state_mut().anim.time = 0.0;
+        click(&mut h, "Next frame");
+        let fps = {
+            let m = trino_core::Mesh::from_tmdl(&h.state().project.models["models/robot"].tmdl)
+                .unwrap();
+            m.find_clip(trino_core::ClipId::from_name("walk"))
+                .unwrap()
+                .fps
+        };
+        assert!(
+            (h.state().anim.time - 1.0 / fps).abs() < 1e-4,
+            "one frame: {} at {fps} fps",
+            h.state().anim.time
+        );
+        h.state_mut().anim.blend = Some(("wave".into(), 0.5));
+        h.run_steps(3);
+        assert!(h.state().anim.anim_ref().unwrap().blend.is_some());
+        crate::layout_audit::assert_clean(
+            &h,
+            size,
+            true,
+            &format!("Animation tab at {}x{}", size.x, size.y),
+        );
+        if size.x < 1000.0 {
+            leave_temp_project(&repo);
+            continue;
+        }
+        // Export the pose: the same file the CLI writes.
+        h.state_mut().anim.pose_name = "robot-pose".into();
+        click(&mut h, "Export pose");
+        h.run_steps(3);
+        let file = std::path::Path::new("assets/shared/models/poses/robot-pose.gltf");
+        let written = std::fs::read_to_string(file).unwrap_or_else(|e| {
+            panic!(
+                "pose not written ({e}); last log: {:?}",
+                h.state().log.last().map(|l| l.text.clone())
+            )
+        });
+        let (time, clip) = (h.state().anim.time, h.state().anim.clip.clone());
+        trino_asset_pipeline::anim::export_pose(
+            std::path::Path::new("assets"),
+            "models/robot",
+            clip.as_deref(),
+            time,
+            "robot-pose",
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(file).unwrap(),
+            written,
+            "GUI == CLI"
+        );
+        let manifest = std::fs::read_to_string("assets/manifest.toml").unwrap();
+        assert!(manifest.contains("[models.robot-pose]"));
+        // Write the clip into the entity: the scene gets it.
+        h.state_mut().anim.speed = 1.5;
+        click(&mut h, "Use on the selected entity");
+        let e = h.state().doc.scene.get(&walker).unwrap();
+        let a = e.model.as_ref().unwrap().anim.as_ref().unwrap();
+        assert_eq!((a.clip.as_str(), a.speed), ("walk", 1.5));
+        leave_temp_project(&repo);
+    }
+}
+
+/// Particle effects in the editor, both ways: "+" writes the same file and
+/// manifest entry `cargo xtask particles new` writes; the inspector's
+/// preview bursts up to the previewed platform's cap; an edit lands in the
+/// file once settled; an agent's edit to the file reloads in the inspector.
+#[test]
+#[ignore = "changes cwd/env: run alone with --ignored --test-threads=1"]
+fn particle_effects_preview_caps_and_files() {
+    use crate::app::{AssetSel, Cmd};
+    use trino_asset_pipeline::Platform;
+    use trino_asset_pipeline::particles::ParticlesDef;
+    let Some((mut h, _tmp, repo)) = temp_project_app(egui::vec2(1600.0, 1000.0)) else {
+        return;
+    };
+    let assets = std::path::PathBuf::from("assets");
+    h.state_mut().assets_tab = crate::panels::assets::AssetTab::Particles;
+    h.run_steps(3);
+    click(&mut h, "New particle effect");
+    h.run_steps(3);
+    let file = assets.join("shared/particles/effect-1.particles.ron");
+    let def = ParticlesDef::from_ron(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    assert!(
+        std::fs::read_to_string(assets.join("manifest.toml"))
+            .unwrap()
+            .contains("[particles.effect-1]")
+    );
+    assert_eq!(
+        h.state().asset_sel,
+        Some(AssetSel::Particles("effect-1".into()))
+    );
+    assert_eq!(def.max, 32);
+
+    // The self-test effect: bursts stop at each platform's cap.
+    h.state_mut()
+        .cmds
+        .push(Cmd::SelectAsset(AssetSel::Particles(
+            "selftest-sparks".into(),
+        )));
+    h.run_steps(3);
+    h.state_mut().particles_view.system.emitting = false;
+    for (label, cap) in [("N64 preview", 8), ("3DS preview", 16), ("PC preview", 24)] {
+        click(&mut h, label);
+        h.run_steps(2);
+        h.state_mut().particles_view.burst = 100;
+        click(&mut h, "Burst");
+        h.run_steps(2);
+        let v = &h.state().particles_view;
+        assert_eq!(v.system.limit, cap, "{label}");
+        assert_eq!(v.system.len(), cap, "{label}");
+    }
+    assert!(h.query_by_label_contains("24 / 24 live on PC").is_some());
+
+    // An inspector edit is written once the user settles.
+    h.state_mut()
+        .particles
+        .get_mut("selftest-sparks")
+        .unwrap()
+        .rate = 55.0;
+    h.state_mut()
+        .pending_particles
+        .insert("selftest-sparks".into());
+    h.run_steps(3);
+    let disk = ParticlesDef::from_ron(
+        &std::fs::read_to_string(assets.join("shared/particles/selftest-sparks.particles.ron"))
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(disk.rate, 55.0);
+
+    // An agent edits the file: the inspector follows.
+    let mut agent = disk.clone();
+    agent.max = 12;
+    std::fs::write(
+        assets.join("shared/particles/selftest-sparks.particles.ron"),
+        agent.to_ron(),
+    )
+    .unwrap();
+    let start = std::time::Instant::now();
+    while h.state().particles["selftest-sparks"].max != 12 && start.elapsed().as_secs() < 10 {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert_eq!(h.state().particles["selftest-sparks"].max, 12);
+    assert_eq!(h.state().particles["selftest-sparks"].cap(Platform::Pc), 12);
+    h.run_steps(3);
+    assert_eq!(
+        h.state().particles_view.system.limit,
+        12,
+        "the preview rebuilt"
+    );
+    crate::layout_audit::assert_clean(&h, egui::vec2(1600.0, 1000.0), true, "particle inspector");
+    leave_temp_project(&repo);
+}
+
+/// The scene's frame per console in the Inspector (scene settings): the N64
+/// time with its RSP/CPU split and the reasons, the 3DS triangles, and a
+/// mesh placed behind the camera listed as sent for nothing — the numbers
+/// `cargo xtask scene budget` prints.
+#[test]
+#[ignore = "changes cwd/env: run alone with --ignored --test-threads=1"]
+fn platform_budget_shows_rsp_reasons_and_unseen_draws() {
+    use crate::app::Cmd;
+    for size in [egui::vec2(1600.0, 1000.0), egui::vec2(960.0, 600.0)] {
+        let Some((mut h, _tmp, repo)) = temp_project_app(size) else {
+            return;
+        };
+        let b = h.state().budgets.clone().expect("budgets computed").1;
+        assert_eq!(b, h.state().platform_budgets(), "cached = fresh");
+        assert!(h.query_by_label_contains("N64 ≈").is_some());
+        assert!(
+            h.query_all_by_label_contains("off the RSP:")
+                .next()
+                .is_some()
+        );
+        assert!(h.query_by_label_contains("3DS ").is_some());
+        assert!(h.query_by_label_contains("unseen: lost-rock").is_none());
+        // A rock far behind the game camera.
+        let cam = h.state().doc.scene.environment.camera;
+        let back = [
+            cam.eye[0] * 2.0 - cam.target[0],
+            cam.eye[1],
+            cam.eye[2] * 2.0 - cam.target[2],
+        ];
+        let rock = trino_scene::Entity::new("lost-rock")
+            .at(back)
+            .with_model(trino_scene::ModelComponent::new("models/rock"));
+        h.state_mut().cmds.push(Cmd::Create {
+            parent: None,
+            entity: Box::new(rock),
+        });
+        h.run_steps(3);
+        h.state_mut().cmds.push(Cmd::Select(None));
+        h.run_steps(4);
+        let after = &h.state().budgets.as_ref().unwrap().1;
+        assert!(
+            after[0].wasted.contains(&"lost-rock".to_string()),
+            "{:?}",
+            after[0].wasted
+        );
+        assert_eq!(after[0].draws, b[0].draws + 1);
+        // Its line in the Inspector selects it.
+        click(&mut h, "unseen: lost-rock");
+        h.run_steps(2);
+        let lost = find(&h.state().doc.scene, "lost-rock");
+        assert_eq!(h.state().doc.selected, Some(lost));
+        h.state_mut().cmds.push(Cmd::Select(None));
+        h.run_steps(4);
+        crate::layout_audit::assert_clean(
+            &h,
+            size,
+            true,
+            &format!("platform budget at {}x{}", size.x, size.y),
+        );
         leave_temp_project(&repo);
     }
 }

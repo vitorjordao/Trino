@@ -17,6 +17,7 @@
 //! ```
 
 use crate::audio::{SoundId, SoundSource};
+use crate::impostor::Impostor;
 use crate::math::{Color, Vec3};
 use crate::math3d::Mat34;
 use crate::physics::{Aabb, Collider, Shape};
@@ -58,18 +59,82 @@ impl Tags {
 }
 
 /// One distance level of a model: from `distance` (world units from the
-/// camera eye) on, draw `model` instead — `None` draws nothing (culled).
+/// camera eye) on, draw `model` instead — `None` draws nothing (culled) —
+/// or, with `impostor`, a pre-rendered billboard of it (2 triangles).
 /// Fake objects make natural far levels: a 6-sided cone for a tree, a box
-/// for a house.
+/// for a house; an impostor is the farthest step before culling.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LodLevel {
     pub distance: f32,
     pub model: Option<ModelId>,
+    /// Draw this impostor instead of a mesh (wins over `model`).
+    pub impostor: Option<Impostor>,
 }
 
+impl LodLevel {
+    /// A mesh level (`None` = culled).
+    pub const fn model(distance: f32, model: Option<ModelId>) -> LodLevel {
+        LodLevel {
+            distance,
+            model,
+            impostor: None,
+        }
+    }
+
+    /// An impostor level.
+    pub const fn impostor(distance: f32, impostor: Impostor) -> LodLevel {
+        LodLevel {
+            distance,
+            model: None,
+            impostor: Some(impostor),
+        }
+    }
+}
+
+/// What a LOD chain picked for one distance.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum LodPick {
+    Model(ModelId),
+    Impostor(Impostor),
+    /// Nothing to draw.
+    None,
+}
+
+impl LodPick {
+    /// The mesh, when the pick is one.
+    pub fn model(self) -> Option<ModelId> {
+        match self {
+            LodPick::Model(m) => Some(m),
+            _ => None,
+        }
+    }
+
+    /// Draw the pick for an object placed by `matrix` (the impostor's view
+    /// comes from `eye`): a mesh with `params`, or a billboard tinted by
+    /// `params.tint`.
+    pub fn draw(
+        self,
+        renderer: &mut dyn Renderer,
+        matrix: &Mat34,
+        params: &ModelParams,
+        eye: Vec3,
+    ) {
+        match self {
+            LodPick::Model(m) => renderer.draw_model_matrix(m, matrix, Material::VertexLit, params),
+            LodPick::Impostor(imp) => imp.draw(renderer, matrix, eye, params.tint),
+            LodPick::None => {}
+        }
+    }
+}
+
+/// Bytes of one baked LOD record (TSCN v2): `f32 distance, u32 model`
+/// (0 = none), then the impostor — `u32 sprite` (0 = not an impostor),
+/// `u8 views, u8 cols, u16 tile, f32 size, f32*3 center`.
+pub const LOD_RECORD_BYTES: usize = 32;
+
 /// A node's LOD levels, sorted by distance: a static list (exported code)
-/// or 8-byte little-endian records (`f32 distance, u32 model`, 0 = none)
-/// borrowed from a baked scene blob.
+/// or [`LOD_RECORD_BYTES`]-byte little-endian records borrowed from a baked
+/// scene blob.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Lods {
     List(&'static [LodLevel]),
@@ -82,7 +147,7 @@ impl Lods {
     pub fn len(&self) -> usize {
         match self {
             Lods::List(l) => l.len(),
-            Lods::Packed(b) => b.len() / 8,
+            Lods::Packed(b) => b.len() / LOD_RECORD_BYTES,
         }
     }
 
@@ -94,11 +159,22 @@ impl Lods {
         match self {
             Lods::List(l) => l.get(i).copied(),
             Lods::Packed(b) => {
-                let r = b.get(i * 8..i * 8 + 8)?;
-                let id = u32::from_le_bytes([r[4], r[5], r[6], r[7]]);
+                let r = b.get(i * LOD_RECORD_BYTES..(i + 1) * LOD_RECORD_BYTES)?;
+                let u = |at: usize| u32::from_le_bytes([r[at], r[at + 1], r[at + 2], r[at + 3]]);
+                let f = |at: usize| f32::from_bits(u(at));
+                let id = u(4);
+                let sprite = u(8);
                 Some(LodLevel {
-                    distance: f32::from_le_bytes([r[0], r[1], r[2], r[3]]),
+                    distance: f(0),
                     model: (id != 0).then_some(ModelId(id)),
+                    impostor: (sprite != 0).then(|| Impostor {
+                        sprite: crate::render::SpriteId(sprite),
+                        views: r[12],
+                        cols: r[13],
+                        tile: u16::from_le_bytes([r[14], r[15]]),
+                        size: f(16),
+                        center: Vec3::new(f(20), f(24), f(28)),
+                    }),
                 })
             }
         }
@@ -108,19 +184,29 @@ impl Lods {
         (0..self.len()).filter_map(|i| self.get(i))
     }
 
-    /// Model to draw at squared distance `dist_sq` from the eye: the last
+    /// What to draw at squared distance `dist_sq` from the eye: the last
     /// level whose distance is reached, else `base`. Squared distances
     /// keep `sqrt` (software on consoles) out of the per-node cost.
-    pub fn select(&self, base: Option<ModelId>, dist_sq: f32) -> Option<ModelId> {
-        let mut model = base;
+    pub fn pick(&self, base: Option<ModelId>, dist_sq: f32) -> LodPick {
+        let mut pick = base.map_or(LodPick::None, LodPick::Model);
         for level in self.iter() {
             if dist_sq >= level.distance * level.distance {
-                model = level.model;
+                pick = match (level.impostor, level.model) {
+                    (Some(imp), _) => LodPick::Impostor(imp),
+                    (None, Some(m)) => LodPick::Model(m),
+                    (None, None) => LodPick::None,
+                };
             } else {
                 break;
             }
         }
-        model
+        pick
+    }
+
+    /// The mesh [`pick`](Self::pick) chose (`None` for an impostor or a
+    /// cull).
+    pub fn select(&self, base: Option<ModelId>, dist_sq: f32) -> Option<ModelId> {
+        self.pick(base, dist_sq).model()
     }
 }
 
@@ -168,13 +254,19 @@ impl SceneNode {
         self.collider.map(|c| c.world_aabb(&self.matrix))
     }
 
-    /// Model to draw seen from `eye` (LOD applied).
+    /// Model to draw seen from `eye` (LOD applied; `None` for an impostor
+    /// level too — see [`lod_from`](Self::lod_from)).
     pub fn model_from(&self, eye: Vec3) -> Option<ModelId> {
+        self.lod_from(eye).model()
+    }
+
+    /// What to draw seen from `eye`: the mesh, an impostor or nothing.
+    pub fn lod_from(&self, eye: Vec3) -> LodPick {
         if self.lod.is_empty() {
-            return self.model;
+            return self.model.map_or(LodPick::None, LodPick::Model);
         }
         let d = self.position() - eye;
-        self.lod.select(self.model, d.dot(d))
+        self.lod.pick(self.model, d.dot(d))
     }
 }
 
@@ -184,7 +276,7 @@ impl SceneNode {
 /// `trino_scene::bake::to_tscn`:
 ///
 /// ```text
-/// magic "TSCN"  u16 version (1)  u16 reserved  u32 node_count
+/// magic "TSCN"  u16 version (2)  u16 reserved  u32 node_count
 /// environment: clear rgb u8*3 + pad u8, camera eye f32*3 target f32*3
 ///   fov_y f32 (radians), light dir f32*3 ambient f32 color rgba
 ///   ambient_color rgba, fog color rgba near f32 far f32      (= 68 bytes)
@@ -199,8 +291,9 @@ impl SceneNode {
 ///   model u32, tint rgba, emissive rgba, clip u32, speed f32
 ///   collider a f32 b f32 c f32 (box half xyz / sphere r / capsule r,h)
 ///   collider offset f32*3, texture u32 (sprite handle),
-///   LOD levels (u32 offset, u32 count) into the data table — 8-byte
-///   records `f32 distance, u32 model` (0 = none), sorted by distance,
+///   LOD levels (u32 offset, u32 count) into the data table — 32-byte
+///   records (`LOD_RECORD_BYTES`: distance, model, impostor), sorted by
+///   distance,
 ///   sound source: u32 sound (flag bit4), f32 radius, f32 volume,
 ///   visibility: u8 cell (0xFF none), u8 volume kind (0 none, 1 cell,
 ///   2 portal), u8 portal a, u8 portal b, f32*3 world half extents
@@ -210,7 +303,9 @@ impl SceneNode {
 /// [`BakedScene::parse`] validates everything up front (bounds, UTF-8), so
 /// node access never fails afterwards.
 pub const TSCN_MAGIC: &[u8; 4] = b"TSCN";
-pub const TSCN_VERSION: u16 = 1;
+/// v2 (October 2026): LOD records grew from 8 to 32 bytes (impostor
+/// levels). A v1 blob is refused: rebake the scene.
+pub const TSCN_VERSION: u16 = 2;
 pub const TSCN_HEADER: usize = 12;
 pub const TSCN_ENV_BYTES: usize = 68;
 pub const TSCN_NODE_BYTES: usize = 16 + 48 + 4 + 4 + 4 + 4 + 4 + 4 + 12 + 12 + 4 + 8 + 12 + 16;
@@ -283,7 +378,10 @@ impl BakedScene {
                 scene.string(rd_u32(bytes, field), rd_u32(bytes, field + 4))?;
             }
             let lod = at + 64 + 52;
-            scene.data(rd_u32(bytes, lod), rd_u32(bytes, lod + 4).saturating_mul(8))?;
+            scene.data(
+                rd_u32(bytes, lod),
+                rd_u32(bytes, lod + 4).saturating_mul(LOD_RECORD_BYTES as u32),
+            )?;
         }
         Ok(scene)
     }
@@ -388,7 +486,10 @@ impl BakedScene {
         };
         let lod_at = b + 52;
         let lod = self
-            .data(rd_u32(d, lod_at), rd_u32(d, lod_at + 4) * 8)
+            .data(
+                rd_u32(d, lod_at),
+                rd_u32(d, lod_at + 4) * LOD_RECORD_BYTES as u32,
+            )
             .expect("validated in parse");
         let sound = (flags & 16 != 0).then(|| SoundSource {
             sound: SoundId(rd_u32(d, b + 60)),
@@ -486,14 +587,15 @@ pub fn draw_nodes_in(
         if !crate::vis::in_view(node.cell, visible) {
             continue;
         }
-        let Some(model) = node.model_from(eye) else {
+        let pick = node.lod_from(eye);
+        if pick == LodPick::None {
             continue;
-        };
+        }
         let mut params = node.params;
         if let Some((clip, speed)) = node.anim {
             params.anim = Some(AnimRef::new(clip, time * speed));
         }
-        renderer.draw_model_matrix(model, &root.mul(&node.matrix), Material::VertexLit, &params);
+        pick.draw(renderer, &root.mul(&node.matrix), &params, eye);
     }
 }
 
@@ -627,6 +729,7 @@ mod tests {
         b.extend_from_slice(b"a/doordoor\nx");
         f(&mut b, &[30.0]);
         b.extend_from_slice(&0u32.to_le_bytes()); // culled beyond 30
+        b.extend_from_slice(&[0; LOD_RECORD_BYTES - 8]); // not an impostor
         std::boxed::Box::leak(b.into_boxed_slice())
     }
 
@@ -669,29 +772,52 @@ mod tests {
 
     #[test]
     fn lod_selection() {
+        const IMP: Impostor = Impostor {
+            sprite: crate::render::SpriteId(5),
+            views: 8,
+            cols: 4,
+            tile: 16,
+            size: 3.0,
+            center: Vec3::new(0.0, 1.5, 0.0),
+        };
         const LEVELS: &[LodLevel] = &[
-            LodLevel {
-                distance: 10.0,
-                model: Some(ModelId(2)),
-            },
-            LodLevel {
-                distance: 20.0,
-                model: None,
-            },
+            LodLevel::model(10.0, Some(ModelId(2))),
+            LodLevel::impostor(20.0, IMP),
+            LodLevel::model(40.0, None),
         ];
         let lods = Lods::List(LEVELS);
         assert_eq!(lods.select(Some(ModelId(1)), 5.0 * 5.0), Some(ModelId(1)));
         assert_eq!(lods.select(Some(ModelId(1)), 10.0 * 10.0), Some(ModelId(2)));
+        assert_eq!(
+            lods.pick(Some(ModelId(1)), 25.0 * 25.0),
+            LodPick::Impostor(IMP)
+        );
         assert_eq!(lods.select(Some(ModelId(1)), 25.0 * 25.0), None);
+        assert_eq!(lods.pick(Some(ModelId(1)), 50.0 * 50.0), LodPick::None);
         assert_eq!(Lods::NONE.select(Some(ModelId(1)), 1e9), Some(ModelId(1)));
         let mut packed = std::vec::Vec::new();
         for l in LEVELS {
             packed.extend_from_slice(&l.distance.to_le_bytes());
             packed.extend_from_slice(&l.model.map_or(0, |m| m.0).to_le_bytes());
+            let i = l.impostor;
+            packed.extend_from_slice(&i.map_or(0, |i| i.sprite.0).to_le_bytes());
+            let i = i.unwrap_or(Impostor {
+                sprite: crate::render::SpriteId(0),
+                views: 0,
+                cols: 0,
+                tile: 0,
+                size: 0.0,
+                center: Vec3::ZERO,
+            });
+            packed.extend_from_slice(&[i.views, i.cols]);
+            packed.extend_from_slice(&i.tile.to_le_bytes());
+            for v in [i.size, i.center.x, i.center.y, i.center.z] {
+                packed.extend_from_slice(&v.to_le_bytes());
+            }
         }
         let packed: &'static [u8] = std::boxed::Box::leak(packed.into_boxed_slice());
         let p = Lods::Packed(packed);
-        assert_eq!(p.len(), 2);
+        assert_eq!(p.len(), 3);
         assert!(p.iter().eq(lods.iter()));
     }
 

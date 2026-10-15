@@ -6,7 +6,7 @@
 //! watchers pick the change up.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use eframe::egui;
 use trino_asset_pipeline as pipeline;
@@ -224,6 +224,24 @@ impl Project {
         }
         for (id, table) in self.fonts.values() {
             r.upload_font(trino_core::FontId(*id), table.clone());
+        }
+    }
+
+    /// Sprites a console bakes from its own override file — the impostor
+    /// atlases, whose N64 version has smaller tiles (and a palette) — so the
+    /// Game view's N64 profile samples what the console will. Every other
+    /// sprite keeps the PC pixels.
+    pub fn upload_platform_sprites(&self, r: &mut PcRenderer, target: trino_scene::Target) {
+        if target != trino_scene::Target::N64 {
+            return;
+        }
+        for name in pipeline::impostor::names(&self.assets_dir()) {
+            let file = self.assets_dir().join(format!("n64/impostors/{name}.png"));
+            if let Some((w, h, rgba)) = decode_png_rgba(&file) {
+                let id =
+                    trino_core::SpriteId::from_path(&pipeline::impostor::sprite_logical(&name));
+                r.upload_sprite(id, w, h, &rgba);
+            }
         }
     }
 
@@ -456,6 +474,36 @@ impl Thumbnailer {
     pub fn material(&mut self, params: &ModelParams) -> egui::ColorImage {
         self.render(self.sphere, Vec3::ZERO, 1.0, params)
     }
+}
+
+/// Any PNG (indexed, gray, RGB, RGBA) as RGBA8.
+pub fn decode_png_rgba(path: &Path) -> Option<(u32, u32, Vec<u8>)> {
+    let file = std::fs::File::open(path).ok()?;
+    let mut dec = png::Decoder::new(std::io::BufReader::new(file));
+    dec.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
+    let mut reader = dec.read_info().ok()?;
+    let mut buf = vec![0; reader.output_buffer_size()?];
+    let info = reader.next_frame(&mut buf).ok()?;
+    buf.truncate(info.buffer_size());
+    let (w, h) = (info.width, info.height);
+    let rgba = match info.color_type {
+        png::ColorType::Rgba => buf,
+        png::ColorType::Rgb => buf
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .flat_map(|p| [p[0], p[1], p[2], 255])
+            .collect(),
+        png::ColorType::GrayscaleAlpha => buf
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .flat_map(|p| [p[0], p[0], p[0], p[1]])
+            .collect(),
+        png::ColorType::Grayscale => buf.iter().flat_map(|&g| [g, g, g, 255]).collect(),
+        png::ColorType::Indexed => return None,
+    };
+    Some((w, h, rgba))
 }
 
 #[cfg(test)]

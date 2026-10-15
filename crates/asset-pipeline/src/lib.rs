@@ -19,11 +19,14 @@
 //! plus `index.toml` (the manifest of what was baked, used by loaders and
 //! by snapshot tests).
 
+pub mod anim;
 pub mod bake;
 pub mod font;
+pub mod impostor;
 pub mod loader;
 pub mod manifest;
 pub mod model;
+pub mod particles;
 pub mod primitive;
 pub mod resolve;
 #[cfg(feature = "watch")]

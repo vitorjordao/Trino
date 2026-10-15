@@ -87,6 +87,9 @@ pub struct ParticleSystem<const N: usize> {
     pub origin: Vec3,
     /// Continuous spawning on/off (bursts work either way).
     pub emitting: bool,
+    /// The most particles alive at once (≤ `N`): a platform's cap from a
+    /// baked [`Effect`]. 0 = this effect is off here.
+    pub limit: usize,
     particles: [Particle; N],
     count: usize,
     carry: f32,
@@ -100,11 +103,22 @@ impl<const N: usize> ParticleSystem<N> {
             emitter,
             origin: Vec3::ZERO,
             emitting: true,
+            limit: N,
             particles: [DEAD; N],
             count: 0,
             carry: 0.0,
             rng: if seed == 0 { 1 } else { seed },
         }
+    }
+
+    /// A system for a baked effect: its emitter, its cap on this platform
+    /// (`effect.max`, at most `N`), off when the platform has none.
+    pub const fn from_effect(effect: &Effect, seed: u32) -> Self {
+        let mut s = Self::new(effect.emitter, seed);
+        let max = effect.max as usize;
+        s.limit = if max < N { max } else { N };
+        s.emitting = max > 0;
+        s
     }
 
     pub fn len(&self) -> usize {
@@ -136,8 +150,9 @@ impl<const N: usize> ParticleSystem<N> {
     /// Spawn `n` particles now (explosions, impacts). Extra ones past the
     /// capacity are dropped.
     pub fn burst(&mut self, n: usize) {
+        let cap = if self.limit < N { self.limit } else { N };
         for _ in 0..n {
-            if self.count == N {
+            if self.count >= cap {
                 return;
             }
             let p = self.spawn();
@@ -232,6 +247,106 @@ impl<const N: usize> ParticleSystem<N> {
     }
 }
 
+/// A baked particle effect (`TPFX`, from an `assets/.../*.particles.ron`
+/// through the asset bake): the emitter and the most particles this
+/// platform keeps alive (0 = the effect is off on this platform).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Effect {
+    pub emitter: Emitter,
+    pub max: u16,
+}
+
+pub const TPFX_MAGIC: &[u8; 4] = b"TPFX";
+pub const TPFX_VERSION: u16 = 1;
+/// Size of a `TPFX` blob.
+pub const TPFX_BYTES: usize = 88;
+
+/// Why a `TPFX` blob was refused.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum EffectError {
+    BadMagic,
+    UnsupportedVersion(u16),
+    Truncated,
+}
+
+impl Effect {
+    /// Read a `TPFX` blob (little endian):
+    ///
+    /// ```text
+    /// magic "TPFX"  u16 version (1)  u16 max  u32 sprite
+    /// f32 rate, life.0, life.1, speed.0, speed.1, direction xyz,
+    ///   spread (radians), gravity xyz, size.0, size.1
+    /// color.0 rgba, color.1 rgba, u16 frames, u16 reserved, f32 frame w, h
+    /// ```
+    pub fn parse(b: &[u8]) -> Result<Effect, EffectError> {
+        if b.len() < TPFX_BYTES {
+            return Err(EffectError::Truncated);
+        }
+        if &b[0..4] != TPFX_MAGIC {
+            return Err(EffectError::BadMagic);
+        }
+        let u16_at = |at: usize| u16::from_le_bytes([b[at], b[at + 1]]);
+        let version = u16_at(4);
+        if version != TPFX_VERSION {
+            return Err(EffectError::UnsupportedVersion(version));
+        }
+        let u32_at = |at: usize| u32::from_le_bytes([b[at], b[at + 1], b[at + 2], b[at + 3]]);
+        let f = |k: usize| f32::from_bits(u32_at(12 + k * 4));
+        let rgba = |at: usize| Color::rgba(b[at], b[at + 1], b[at + 2], b[at + 3]);
+        Ok(Effect {
+            max: u16_at(6),
+            emitter: Emitter {
+                sprite: SpriteId(u32_at(8)),
+                rate: f(0),
+                life: (f(1), f(2)),
+                speed: (f(3), f(4)),
+                direction: Vec3::new(f(5), f(6), f(7)),
+                spread: f(8),
+                gravity: Vec3::new(f(9), f(10), f(11)),
+                size: (f(12), f(13)),
+                color: (rgba(68), rgba(72)),
+                frames: u16_at(76),
+                frame_size: Vec2::new(f32::from_bits(u32_at(80)), f32::from_bits(u32_at(84))),
+            },
+        })
+    }
+
+    /// Write `self` as a `TPFX` blob.
+    pub fn write(&self, out: &mut [u8; TPFX_BYTES]) {
+        let e = &self.emitter;
+        out[0..4].copy_from_slice(TPFX_MAGIC);
+        out[4..6].copy_from_slice(&TPFX_VERSION.to_le_bytes());
+        out[6..8].copy_from_slice(&self.max.to_le_bytes());
+        out[8..12].copy_from_slice(&e.sprite.0.to_le_bytes());
+        let fs = [
+            e.rate,
+            e.life.0,
+            e.life.1,
+            e.speed.0,
+            e.speed.1,
+            e.direction.x,
+            e.direction.y,
+            e.direction.z,
+            e.spread,
+            e.gravity.x,
+            e.gravity.y,
+            e.gravity.z,
+            e.size.0,
+            e.size.1,
+        ];
+        for (k, v) in fs.iter().enumerate() {
+            out[12 + k * 4..16 + k * 4].copy_from_slice(&v.to_le_bytes());
+        }
+        let (c0, c1) = e.color;
+        out[68..72].copy_from_slice(&[c0.r, c0.g, c0.b, c0.a]);
+        out[72..76].copy_from_slice(&[c1.r, c1.g, c1.b, c1.a]);
+        out[76..78].copy_from_slice(&e.frames.to_le_bytes());
+        out[78..80].copy_from_slice(&[0, 0]);
+        out[80..84].copy_from_slice(&e.frame_size.x.to_le_bytes());
+        out[84..88].copy_from_slice(&e.frame_size.y.to_le_bytes());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -290,5 +405,49 @@ mod tests {
             // Angle to +Y below the spread: cos(angle) = vel.y / |vel|.
             assert!(p.vel.y > cos(0.2) - 1e-3, "{:?}", p.vel);
         }
+    }
+}
+
+#[cfg(test)]
+mod effect_tests {
+    use super::*;
+
+    #[test]
+    fn tpfx_round_trips_and_caps_the_system() {
+        let fx = Effect {
+            emitter: Emitter {
+                sprite: SpriteId(9),
+                rate: 40.0,
+                color: (Color::rgba(1, 2, 3, 4), Color::rgba(5, 6, 7, 8)),
+                frames: 4,
+                frame_size: Vec2::new(8.0, 8.0),
+                ..Emitter::DEFAULT
+            },
+            max: 5,
+        };
+        let mut buf = [0u8; TPFX_BYTES];
+        fx.write(&mut buf);
+        assert_eq!(Effect::parse(&buf), Ok(fx));
+        assert_eq!(Effect::parse(&buf[..10]), Err(EffectError::Truncated));
+        let mut bad = buf;
+        bad[0] = b'X';
+        assert_eq!(Effect::parse(&bad), Err(EffectError::BadMagic));
+        bad = buf;
+        bad[4] = 2;
+        assert_eq!(Effect::parse(&bad), Err(EffectError::UnsupportedVersion(2)));
+        // The platform's cap holds whatever the capacity and the bursts.
+        let mut s: ParticleSystem<64> = ParticleSystem::from_effect(&fx, 3);
+        s.burst(50);
+        assert_eq!(s.len(), 5);
+        for _ in 0..30 {
+            s.update(0.05);
+            assert!(s.len() <= 5);
+        }
+        // A cap of 0 is "off here": nothing spawns.
+        let off: ParticleSystem<64> = ParticleSystem::from_effect(&Effect { max: 0, ..fx }, 3);
+        assert!(!off.emitting && off.limit == 0);
+        // A cap past the capacity stops at the capacity.
+        let big: ParticleSystem<4> = ParticleSystem::from_effect(&Effect { max: 99, ..fx }, 3);
+        assert_eq!(big.limit, 4);
     }
 }

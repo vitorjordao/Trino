@@ -52,6 +52,11 @@ impl Target {
         }
     }
 
+    /// 0, 1, 2 — for per-platform arrays.
+    pub fn index(self) -> usize {
+        self as usize
+    }
+
     /// Parses a manifest key (`n3ds` is accepted for `3ds`).
     pub fn parse(s: &str) -> Option<Target> {
         match s.to_ascii_lowercase().as_str() {

@@ -10,9 +10,11 @@ mod castle64_assets;
 mod emulators;
 mod fbgolden;
 mod font_assets;
+mod impostor;
 mod model;
 mod n3ds;
 mod n64;
+mod particles;
 mod perf;
 mod project;
 mod scene;
@@ -51,9 +53,19 @@ commands:
                        PC host, assets); engine via path (default) or git
   gen-assets           regenerate the sample master assets (dev utility)
   scene check [file..] validate scenes/prefabs/materials (text-first loop)
-  scene export <scene.ron> <out.rs>
+  scene export [--platform pc|n64|3ds] <scene.ron> <out.rs>
                        bake a scene into no_std Rust data for games
-  model inspect <file> [--fps N] [--once a,b] [--json]
+  impostor new <name> --model models/x [--views N] [--pitch DEG] [--tile PX]
+  impostor bake <name>.. | --all
+                       pre-render a model from N yaws into a billboard atlas
+                       (PC/3DS RGBA + N64 CI4 within TMEM) + its TIMP table
+  particles new <name> --sprite sprites/x | check
+  particles inspect <name> [--seconds S] [--seed N] [--json]
+                       particle effects as text: validate, and simulate each
+                       platform's cap (peak tris, N64 time, position hash)
+  impostor check [name..] | list [--json]
+                       spot missing or stale impostors (model changed)
+  model inspect <file> [--fps N] [--once a,b] [--anim] [--json]
                        bake a .glb/.gltf/.prim.ron like the engine and report
                        tris, joints, clips, bounds, N64 budget (art gate)
   blender smoke [--no-render]
@@ -149,11 +161,21 @@ fn main() -> ExitCode {
         }
         (Some("model"), _) => {
             let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
-            model::run(&repo_root(), &rest)
+            // `model pose` writes into the selected project's assets.
+            model::run(&project.root, &rest)
         }
         (Some("scene"), _) => {
             let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
             scene::run(&repo_root(), &rest)
+        }
+        (Some("particles"), _) => {
+            let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
+            particles::run(&project.root, &rest)
+        }
+        (Some("impostor"), _) => {
+            let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
+            // An external project's own assets when one is selected.
+            impostor::run(&project.root, &rest)
         }
 
         (Some("build"), Some("n64")) => n64::build(&project, selftest),

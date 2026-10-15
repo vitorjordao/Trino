@@ -201,7 +201,14 @@ fn assets_pc_bakes_the_repo_manifest() {
             .count()
     };
     let all = declared(&[
-        "sprites", "sounds", "music", "models", "fonts", "blobs", "scenes",
+        "sprites",
+        "sounds",
+        "music",
+        "models",
+        "fonts",
+        "blobs",
+        "scenes",
+        "particles",
     ]);
     // A font bakes twice under one handle: atlas sprite + glyph table.
     let fonts = declared(&["fonts"]);
@@ -215,8 +222,9 @@ fn assets_pc_bakes_the_repo_manifest() {
     assert_eq!(kind("music"), declared(&["music"]));
     assert_eq!(kind("font"), fonts);
     assert_eq!(kind("sprite"), declared(&["sprites"]) + fonts);
-    // Baked scenes are TSCN blobs, served like any other blob.
-    assert_eq!(kind("blob"), declared(&["blobs", "scenes"]));
+    // Baked scenes (TSCN) and particle effects (TPFX) are blobs, served
+    // like any other blob.
+    assert_eq!(kind("blob"), declared(&["blobs", "scenes", "particles"]));
 }
 
 #[test]

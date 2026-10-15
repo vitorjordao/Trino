@@ -45,9 +45,39 @@ fn level(used: u64, limit: u64) -> Level {
     }
 }
 
+/// What the Game view drew for entities with LOD levels this frame.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LodCounts {
+    /// Still on their full mesh (closer than the first level).
+    pub full: u32,
+    /// On a lighter mesh level.
+    pub light: u32,
+    /// Drawn as impostors (one billboard each).
+    pub impostor: u32,
+    /// Culled by a level with nothing to draw.
+    pub culled: u32,
+}
+
+impl LodCounts {
+    pub fn total(&self) -> u32 {
+        self.full + self.light + self.impostor + self.culled
+    }
+
+    /// `LOD 3 full · 5 light · 12 impostor · 2 culled` (None without LOD).
+    pub fn summary(&self) -> Option<String> {
+        (self.total() > 0).then(|| {
+            format!(
+                "LOD {} full · {} light · {} imp · {} cull",
+                self.full, self.light, self.impostor, self.culled
+            )
+        })
+    }
+}
+
 /// Budget rows for one frame. Unlimited caps (`u32::MAX`, the PC profile)
-/// never warn.
-pub fn rows(stats: &FrameStats, caps: &Caps) -> Vec<Row> {
+/// never warn. `lod` adds the impostors' cost (billboards are not T&L
+/// work) to the N64 time.
+pub fn rows(stats: &FrameStats, caps: &Caps, lod: &LodCounts) -> Vec<Row> {
     let lim = |v: u32| if v == u32::MAX { u64::MAX } else { v as u64 };
     let mut out = vec![
         Row {
@@ -93,7 +123,8 @@ pub fn rows(stats: &FrameStats, caps: &Caps) -> Vec<Row> {
         // The triangle cap says little about the N64's CPU T&L; the
         // calibrated cost model turns this frame's deterministic T&L work
         // into emulated N64 time (3D only: T&L + sort + submit).
-        let us = N64_COST.estimate_us(&stats.tnl, stats.models) as u64;
+        let us = (N64_COST.estimate_us(&stats.tnl, stats.models)
+            + N64_COST.billboards_us(lod.impostor)) as u64;
         let limit = FRAME_30FPS_US as u64;
         out.push(Row {
             label: "N64 3D time",
@@ -101,9 +132,74 @@ pub fn rows(stats: &FrameStats, caps: &Caps) -> Vec<Row> {
             limit,
             unit: "us",
             level: level(us, limit),
-            hint: "estimated N64 time of this frame's 3D (T&L + sort + submit) vs one \
-                   30 fps frame — trino_core::perf::N64_COST, calibrated on ares",
+            hint: "estimated N64 time of this frame's 3D (T&L + sort + submit, plus \
+                   ~44 µs per impostor billboard) vs one 30 fps frame — \
+                   trino_core::perf::N64_COST, calibrated on ares",
         });
+    }
+    if lod.impostor > 0 {
+        out.push(Row {
+            label: "Impostors",
+            used: lod.impostor as u64,
+            limit: u64::MAX,
+            unit: "",
+            level: Level::Ok,
+            hint: "LOD levels drawn as impostors: 2 textured triangles each (on the N64 \
+                   they are CPU-submitted — check the N64 3D time)",
+        });
+    }
+    out
+}
+
+/// Put the scene budget's N64 time (CPU vs RSP, `trino_scene::budget`) in
+/// the "N64 3D time" row, so the HUD's two N64 figures agree: the row from
+/// the drawn frame alone counts every draw as CPU work.
+pub fn use_rsp_split(rows: &mut [Row], n64: &trino_scene::budget::FrameBudget) {
+    if let Some(r) = rows.iter_mut().find(|r| r.label == "N64 3D time") {
+        r.used = n64.n64_frame_us() as u64;
+        r.level = level(r.used, r.limit);
+        r.hint = "estimated N64 time of the scene camera's frame: the slower of the CPU \
+                  (T&L + sort + submit of the draws off the RSP fast path, ~44 µs per \
+                  billboard) and the RSP (its draws' triangles) vs one 30 fps frame — \
+                  trino_scene::budget, calibrated on ares";
+    }
+}
+
+/// The Game view's per-console lines for the scene camera's frame: the
+/// N64 time (CPU vs RSP), how many draws take the RSP and the most common
+/// reason the rest don't, the 3DS triangles, and draws sent for nothing.
+/// Each with its level (the N64 time against a 30 fps frame).
+pub fn platform_lines(budgets: &[trino_scene::budget::FrameBudget; 2]) -> Vec<(String, Level)> {
+    let [n64, n3ds] = budgets;
+    let pct = n64.n64_frame_percent();
+    let level = if pct > 100.0 {
+        Level::Over
+    } else if pct > 75.0 {
+        Level::Near
+    } else {
+        Level::Ok
+    };
+    let mut out = vec![(
+        format!(
+            "N64 ≈{:.1} ms · CPU {:.1} · RSP {:.1}",
+            n64.n64_frame_us() as f32 / 1000.0,
+            n64.n64_cpu_us() as f32 / 1000.0,
+            n64.n64_rsp_us() as f32 / 1000.0
+        ),
+        level,
+    )];
+    let mut rsp = format!("RSP {}/{} draws", n64.rsp_draws, n64.draws);
+    if let Some((r, k)) = n64.off_rsp.first() {
+        rsp.push_str(&format!(" · {k} {}", r.label()));
+    }
+    out.push((rsp, Level::Ok));
+    out.push((
+        format!("3DS {} tris · {} draws", n3ds.tris(), n3ds.draws),
+        Level::Ok,
+    ));
+    let wasted = n64.wasted.len().max(n3ds.wasted.len());
+    if wasted > 0 {
+        out.push((format!("{wasted} draws sent but unseen"), Level::Near));
     }
     out
 }
@@ -111,6 +207,58 @@ pub fn rows(stats: &FrameStats, caps: &Caps) -> Vec<Row> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn platform_lines_name_the_rsp_reason_and_unseen_draws() {
+        use trino_core::RspReject;
+        use trino_scene::{Target, budget::FrameBudget};
+        let n64 = FrameBudget {
+            draws: 5,
+            rsp_draws: 2,
+            rsp_tris: 100,
+            cpu_draws: 3,
+            off_rsp: vec![(RspReject::Fog, 2), (RspReject::Skinned, 1)],
+            wasted: vec!["far".into()],
+            target: Target::N64,
+            ..Default::default()
+        };
+        let n3ds = FrameBudget {
+            draws: 5,
+            billboards: 1,
+            target: Target::N3ds,
+            ..Default::default()
+        };
+        let lines = platform_lines(&[n64.clone(), n3ds]);
+        let text: Vec<&str> = lines.iter().map(|(t, _)| t.as_str()).collect();
+        assert!(text[0].starts_with("N64 ≈"), "{text:?}");
+        assert_eq!(text[1], "RSP 2/5 draws · 2 fog");
+        assert_eq!(text[2], "3DS 2 tris · 5 draws");
+        assert_eq!(lines[3], ("1 draws sent but unseen".into(), Level::Near));
+        // A light frame is green; one past 33.3 ms is red.
+        assert_eq!(lines[0].1, Level::Ok);
+        let heavy = FrameBudget {
+            billboards: 1000,
+            ..n64.clone()
+        };
+        assert_eq!(platform_lines(&[heavy, n64.clone()])[0].1, Level::Over);
+        // The HUD's N64 time row takes the CPU/RSP split.
+        let mut r = rows(&FrameStats::default(), &Caps::N64, &LodCounts::default());
+        use_rsp_split(&mut r, &n64);
+        let time = r.iter().find(|r| r.label == "N64 3D time").unwrap();
+        assert_eq!(time.used, n64.n64_frame_us() as u64);
+        let mut pc = rows(&FrameStats::default(), &Caps::PC, &LodCounts::default());
+        use_rsp_split(&mut pc, &n64);
+        assert_eq!(
+            pc,
+            rows(&FrameStats::default(), &Caps::PC, &LodCounts::default())
+        );
+        // Nothing unseen: no warning line.
+        let clean = FrameBudget {
+            wasted: vec![],
+            ..n64.clone()
+        };
+        assert_eq!(platform_lines(&[clean.clone(), clean]).len(), 3);
+    }
 
     #[test]
     fn n64_profile_estimates_3d_time() {
@@ -124,13 +272,13 @@ mod tests {
             },
             ..FrameStats::default()
         };
-        let r = rows(&stats, &Caps::N64);
+        let r = rows(&stats, &Caps::N64, &LodCounts::default());
         let time = r.iter().find(|r| r.label == "N64 3D time").unwrap();
         // KayKit's original 1068-tri door alone: about two 30 fps frames.
         assert_eq!(time.level, Level::Over);
         assert!(time.used > 50_000, "{}", time.used);
         assert!(
-            rows(&stats, &Caps::PC)
+            rows(&stats, &Caps::PC, &LodCounts::default())
                 .iter()
                 .all(|r| r.label != "N64 3D time")
         );
@@ -145,11 +293,32 @@ mod tests {
             max_texture_bytes: 8192,
             ..FrameStats::default()
         };
-        let r = rows(&stats, &Caps::N64);
+        let r = rows(&stats, &Caps::N64, &LodCounts::default());
         assert_eq!(r[0].level, Level::Near, "3500 / 4000 tris");
         assert_eq!(r[1].level, Level::Ok);
         assert_eq!(r[2].level, Level::Over, "8 KB texture vs 4 KB TMEM");
         assert!((r[0].fraction() - 0.875).abs() < 1e-6);
+    }
+
+    #[test]
+    fn impostors_add_their_billboard_cost_to_the_n64_time() {
+        let stats = FrameStats::default();
+        let lod = LodCounts {
+            full: 1,
+            light: 2,
+            impostor: 10,
+            culled: 3,
+        };
+        let r = rows(&stats, &Caps::N64, &lod);
+        let time = r.iter().find(|r| r.label == "N64 3D time").unwrap();
+        assert_eq!(time.used, 440, "10 billboards at 44 µs");
+        assert_eq!(r.iter().find(|r| r.label == "Impostors").unwrap().used, 10);
+        assert_eq!(lod.total(), 16);
+        assert_eq!(
+            lod.summary().unwrap(),
+            "LOD 1 full · 2 light · 10 imp · 3 cull"
+        );
+        assert!(LodCounts::default().summary().is_none());
     }
 
     #[test]
@@ -161,6 +330,10 @@ mod tests {
             max_texture_bytes: 1 << 30,
             ..FrameStats::default()
         };
-        assert!(rows(&stats, &Caps::PC).iter().all(|r| r.level == Level::Ok));
+        assert!(
+            rows(&stats, &Caps::PC, &LodCounts::default())
+                .iter()
+                .all(|r| r.level == Level::Ok)
+        );
     }
 }

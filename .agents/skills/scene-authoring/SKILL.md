@@ -95,9 +95,14 @@ digit).
     name: "crate-a",
     model: Some((
         path: "models/crate",
-        // Distance LOD: swap to a cheaper model (often a fake object), or
-        // cull with `path: None`, beyond each distance (world units).
-        lod: [(distance: 14.0, path: Some("models/crate-far")), (distance: 40.0, path: None)],
+        // Distance LOD chain: a lighter model (often a fake object), an
+        // impostor (2 triangles, `cargo xtask impostor`), then nothing.
+        // Each level can start elsewhere per platform, or not be used there.
+        lod: [
+            (distance: 14.0, path: Some("models/crate-far")),
+            (distance: 30.0, impostor: Some("impostors/crate"), platforms: (n64: Some(Never))),
+            (distance: 40.0, path: None, platforms: (n64: Some(At(30.0)))),
+        ],
     )),
     // Collision for trino_core::physics. `Some(())` = Auto: the model's box.
     // Shapes: Box(size: (x, y, z)) (FULL size), Sphere(radius), Capsule(radius, height).
@@ -118,6 +123,11 @@ digit).
 
 Each component ends up in `SceneNode` / `Entity`, and in TSCN and codegen. Keep these
 rules in mind:
+- **LOD levels resolve per platform** (`LodDef::distance_on`): `At(d)` moves a level,
+  `Never` skips it (the previous level keeps drawing). An impostor level needs the
+  impostor baked; otherwise `scene check` warns and that level draws nothing. Games draw a
+  chain with `scene::draw_nodes` (or `SceneNode::lod_from(eye).draw(..)`), which handles
+  impostor levels. TSCN is v2 since impostor levels (32-byte LOD records): rebake.
 - **Coplanar surfaces z-fight on the N64.** Keep decals and water several cm above the
   ground (16-bit z); the showcase pond sits at 10 cm.
 - **Portal visibility:** a camera outside every cell sees everything. Nodes outside
@@ -152,10 +162,14 @@ children by `/`-joined names below the root (`"trunk/leaves"`) and may set `mate
 2. `cargo xtask scene check` (or `scene check scenes/x.scene.ron`) — parses everything,
    resolves prefabs/materials, prints missing references, prefab cycles, stale overrides.
    Exit code ≠ 0 on problems.
-3. Look at it: open the editor (`cargo xtask editor`, `TRINO_EDITOR_SCENE=scenes/x.scene.ron`)
+3. Price it per console: `cargo xtask scene budget scenes/x.scene.ron [--platform n64]
+   [--json]` — draws, triangles, the N64 frame (CPU vs RSP, with every reason a draw
+   stays off the RSP) and draws sent but outside the view, from the scene camera, with
+   each platform's variants, LOD levels and impostors.
+4. Look at it: open the editor (`cargo xtask editor`, `TRINO_EDITOR_SCENE=scenes/x.scene.ron`)
    or play it (`TRINO_SCENE=scenes/x.scene.ron cargo run -p trino-app-pc`). Screenshots for
    agents: the `editor` skill.
-4. Console/game code, two ways (both checked to agree byte for byte):
+5. Console/game code, two ways (both checked to agree byte for byte):
    - **Code**: export the scene, then `include!` the output (see
      `examples/showcase/src/lib.rs`):
      ```

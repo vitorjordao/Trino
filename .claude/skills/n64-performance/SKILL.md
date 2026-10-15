@@ -234,9 +234,14 @@ frames. Trust the cost model.
 
 ## What worked, what didn't (keep this list honest)
 
+`N64_COST.us_per_billboard` (44 µs: two CPU-submitted textured triangles) carries the
+impostor measurement below into the estimates: the editor's budget HUD adds it per impostor drawn, and
+the LOD panel and the impostor section print it next to the mesh's CPU-path cost.
+
 | Change | Result on the scenes |
 |---|---|
 | Impostors (props as textured billboards at a far zoom, an external project) | **worse on the N64**: far view 29.8 → 35 ms, the busiest scene 58 → 66 ms. Textured triangles are CPU-submitted (~22 µs each, 52 rspq words), costing more than the RSP time they save. On the 3DS the same impostors doubled the far view's rate (Azahar). An N64 impostor would need an RDP rectangle with depth |
+
 | **Draw memo** (`trino_core::memo`, N64 renderer): a draw repeated under the same camera and light reuses last frame's 27-word RSP command (key: model, matrix bits, tint, shading, generation) | an external project's 93-draw scene 25.9 → 23.5 ms. The CPU then issues draws faster than the RSP draws them: waits show up in `tnl` (streamed) |
 | **Pan patch** (`RspPan`, `rsp::patch_translation`): the memo survives a camera that only translates (pan, zoom along the view axis); a hit re-tests `rsp_band` and rewrites the command's translation column, bit-identical to a rebuild | panning over a 105-draw scene 36.4 → 28.3 ms. Needs the game's camera to keep the view rotation exact under a pan (eye − target exactly representable) |
 | `to_i32` instead of `as i32`; one `view·model` per draw (`rsp_eligible_mv`); tint quotients from a const table | a 207-draw scene 47.2 → 46.6 ms (layout noise). Measured hot: 16 saturating casts 22 µs, unchecked 6.5 µs |
@@ -339,6 +344,15 @@ They are in `docs/plans/n64-throughput.md`.
   - At 30 fps that means ~3,500–4,500 triangles in the heaviest view. Past that,
     cutting CPU time no longer moves the frame: cut triangles (lighter console
     variants), draws, or what is shown.
+- **Predicting it before the console:** `trino_core::render3d::rsp_check` names the
+  rule that keeps a draw off the RSP (`RspReject`: colored light, fog, translucent tint,
+  textured or skinned mesh, flat shading, emissive, double-sided, off screen, crossing
+  the near plane…); `rsp_eligible` is `rsp_check(..).is_ok()`. `trino_scene::budget`
+  turns a scene and camera into the N64 frame: CPU (`N64_COST` on the off-RSP draws'
+  T&L and the billboards) vs RSP (`us_per_rsp_tri` × its triangles), the slower one
+  wins. `cargo xtask scene budget <scene> [--platform] [--json]` prints it; the editor's
+  Game view and Inspector show it. Its T&L work equals the PC renderer's counters on the
+  N64 profile (`xtask/tests/scene_budget.rs`).
 - **Measuring:**
   - Profiled frames drain the RSP/RDP at `end_frame`, so they never overlap the next
     frame. Treat them as pessimistic.

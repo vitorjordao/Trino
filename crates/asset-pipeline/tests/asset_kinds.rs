@@ -736,3 +736,52 @@ fn manifest_edits_keep_comments_and_retarget_a_model_under_one_handle() {
             .contains("no `file` line")
     );
 }
+
+/// `platforms = [...]` on a model: baked (and loadable) only there, so a
+/// PC-only model never costs a console its RAM; an unknown platform name
+/// is a manifest error.
+#[test]
+fn a_model_bakes_only_for_the_platforms_it_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let assets = project(dir.path());
+    let text = std::fs::read_to_string(assets.join("manifest.toml")).unwrap();
+    std::fs::write(
+        assets.join("manifest.toml"),
+        format!(
+            "{text}\n[models.pc_only]\nfile = \"models/block.prim.ron\"\nplatforms = [\"pc\"]\n\
+             \n[models.consoles]\nfile = \"models/block.prim.ron\"\nplatforms = [\"n64\", \"3ds\"]\n"
+        ),
+    )
+    .unwrap();
+    let manifest = Manifest::load(&assets.join("manifest.toml")).unwrap();
+    assert!(manifest.models["pc_only"].bakes_for(Platform::Pc));
+    assert!(!manifest.models["pc_only"].bakes_for(Platform::N64));
+    assert!(manifest.models["consoles"].bakes_for(Platform::N3ds));
+    assert!(manifest.models["block"].bakes_for(Platform::N64), "default: everywhere");
+    let has = |platform: Platform, logical: &str| {
+        let out = dir.path().join(platform.key());
+        let report = bake_all(&assets, platform, &out).unwrap();
+        let listed = report.entries.iter().any(|e| e.logical == logical);
+        let loaded = load_dir(&out, None)
+            .unwrap()
+            .models
+            .iter()
+            .any(|m| m.id == asset_id(logical));
+        assert_eq!(listed, loaded, "{logical} on {platform:?}");
+        listed
+    };
+    assert!(has(Platform::Pc, "models/pc_only"));
+    assert!(!has(Platform::Pc, "models/consoles"));
+    assert!(!has(Platform::N64, "models/pc_only"));
+    assert!(has(Platform::N64, "models/consoles"));
+    assert!(has(Platform::N3ds, "models/consoles"));
+    assert!(has(Platform::N64, "models/block"));
+
+    std::fs::write(
+        assets.join("manifest.toml"),
+        format!("{text}\n[models.odd]\nfile = \"models/block.prim.ron\"\nplatforms = [\"gba\"]\n"),
+    )
+    .unwrap();
+    let err = Manifest::load(&assets.join("manifest.toml")).unwrap_err();
+    assert!(err.contains("unknown platform `gba`"), "{err}");
+}

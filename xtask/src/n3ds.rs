@@ -207,6 +207,9 @@ pub fn bake_assets(p: &Project, test_mode: bool) -> Result<(), String> {
         index.push_str(&format!("{id:08x}\tmusic\t{id:08x}.pcm16\n"));
     }
     for (name, decl) in &manifest.models {
+        if !decl.bakes_for(Platform::N3ds) {
+            continue;
+        }
         let logical = format!("models/{name}");
         let id = trino_core::asset_id(&logical);
         let source = resolve_source(&root.join("assets"), Platform::N3ds, &decl.file)?;

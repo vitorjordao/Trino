@@ -43,6 +43,7 @@ pub const THEME: MusicId = MusicId::from_path("music/theme");
 [models.robot]
 file = "models/robot.glb"   # glTF 2.0 (.glb/.gltf), Y-up, meters
 anim_fps = 20               # optional: clip sampling rate (default 15)
+platforms = ["pc"]          # optional: bake only for these (pc, n64, 3ds); default all
 once = ["wave"]             # optional: clips that play once (default: loop)
 ```
 

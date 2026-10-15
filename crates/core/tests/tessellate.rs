@@ -723,3 +723,73 @@ fn rsp_eligibility_with_a_given_view_model_product_matches() {
         "both answers covered: {checked:?}"
     );
 }
+
+/// A pan (eye and target moved by the same exactly representable step)
+/// keeps the view's rotation bit for bit, and `RspPan` rebuilds a draw's
+/// `view · model` translation, bound center and RSP decision exactly as a
+/// full recompute does: a backend may patch remembered draws while the
+/// camera pans.
+#[test]
+fn a_panned_draw_rebuilds_exactly_from_its_pan_parts() {
+    let cube = bounded_cube();
+    let mesh = Mesh::from_tmdl(&cube).unwrap();
+    let base = Camera3 {
+        eye: Vec3::new(0.25, 0.140625, 0.25),
+        target: Vec3::new(0.0, 0.0, 0.0),
+        fov_y: 0.6,
+    };
+    let ctx0 = TnlContext::new(&base, &DEFAULT_LIGHT, SCREEN);
+    let view0 = ctx0.projection().0;
+    let (mut same, mut flips) = (0, 0);
+    for step in 1..60 {
+        let d = Vec3::new(step as f32 / 512.0, 0.0, -(step as f32) / 1024.0);
+        let cam = Camera3 {
+            eye: base.eye + d,
+            target: base.target + d,
+            ..base
+        };
+        let ctx = TnlContext::new(&cam, &DEFAULT_LIGHT, SCREEN);
+        let view = ctx.projection().0;
+        for r in 0..3 {
+            for c in 0..3 {
+                assert_eq!(
+                    view.m[r][c].to_bits(),
+                    view0.m[r][c].to_bits(),
+                    "rotation moved"
+                );
+            }
+        }
+        let t = [view.m[0][3], view.m[1][3], view.m[2][3]];
+        for i in 0..40 {
+            let f = i as f32;
+            let k = 1.0 / 128.0;
+            let m = Mat34::from_rotation_scale_translation(
+                Vec3::new(0.0, (i % 4) as f32 * core::f32::consts::FRAC_PI_2, 0.0),
+                Vec3::new(k, k, k),
+                Vec3::new((f * 0.37).sin() * 0.12, 0.0, (f * 0.23).cos() * 0.12),
+            );
+            let pan = render3d::RspPan::new(&view0, &view0.mul(&m), &mesh, &m).unwrap();
+            let full = view.mul(&m);
+            let mt = pan.translation(t);
+            for r in 0..3 {
+                assert_eq!(mt[r].to_bits(), full.m[r][3].to_bits());
+            }
+            let (c, _) = mesh.bounds().unwrap();
+            let fc = full.transform_point(c);
+            let pc = pan.center(mt);
+            assert_eq!(
+                (pc.x.to_bits(), pc.y.to_bits(), pc.z.to_bits()),
+                (fc.x.to_bits(), fc.y.to_bits(), fc.z.to_bits())
+            );
+            let eligible =
+                render3d::rsp_eligible_mv(&ctx, &mesh, &m, &full, &ModelParams::DEFAULT).is_some();
+            assert_eq!(render3d::rsp_band(&ctx, pc, pan.r2), eligible);
+            if eligible {
+                same += 1;
+            } else {
+                flips += 1;
+            }
+        }
+    }
+    assert!(same > 100, "{same} eligible, {flips} not");
+}

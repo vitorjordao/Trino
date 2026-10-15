@@ -10,8 +10,9 @@ use core::ffi::c_void;
 use trino_core::memo::{self, MemoKey, MemoSlot};
 use trino_core::perf::RenderProfile;
 use trino_core::render3d::{
-    Camera3, DEFAULT_LIGHT, Light, Mesh, MeshLayout, NEAR_PLANE, ScreenTri, TnlContext, TnlScratch,
-    TnlStats, painter_index, painter_key, rsp_eligible_mv, rsp_mesh_supported,
+    Camera3, DEFAULT_LIGHT, Light, Mesh, MeshLayout, NEAR_PLANE, RspPan, ScreenTri, TnlContext,
+    TnlScratch, TnlStats, painter_index, painter_key, rsp_band, rsp_eligible_mv,
+    rsp_mesh_supported,
 };
 use trino_core::text::BitmapFont;
 use trino_core::{
@@ -77,14 +78,22 @@ pub struct N64Renderer {
     /// Last frames' RSP commands by draw (`trino_core::memo`): a draw that
     /// repeats under an unchanged camera and light skips the eligibility
     /// test and the command build (~100 µs each on the console).
-    memo: Vec<MemoSlot<{ rsp::DRAW_WORDS }>>,
-    /// Bumped whenever the camera, the light, the meshes or the cull mode
-    /// change: older memo entries then never match.
+    /// Each entry is the command plus its [`RspPan`] (`MEMO_WORDS`): a
+    /// camera that only moves (pan, zoom along the view axis) patches the
+    /// command's translation instead of rebuilding it.
+    memo: Vec<MemoSlot<MEMO_WORDS>>,
+    /// Bumped whenever the view's rotation or focal, the light, the meshes
+    /// or the cull mode change: older memo entries then never match.
     memo_gen: u32,
 }
 
-/// Memo slots (176 bytes each): a few hundred draws per frame rarely share one.
+/// Memo slots (204 bytes each): a few hundred draws per frame rarely share one.
 const MEMO_SLOTS: usize = 1024;
+/// A memo entry: the command, then `RspPan` (s, q, r2) and the view
+/// translation the command was made for, as float bits.
+const MEMO_WORDS: usize = rsp::DRAW_WORDS + 10;
+/// Where the view translation sits in a memo entry.
+const MEMO_T: usize = rsp::DRAW_WORDS + 7;
 
 impl N64Renderer {
     /// Start timing every stage and model (see `trino_core::perf`).
@@ -498,9 +507,17 @@ impl Renderer for N64Renderer {
         // The same camera every frame (most frames of most games) keeps
         // the T&L constants and the memo.
         if *camera != self.camera {
+            let before = self.tnl_ctx.projection();
             self.camera = *camera;
             self.tnl_ctx = TnlContext::new(&self.camera, &self.light, SCREEN);
-            self.memo_gen = self.memo_gen.wrapping_add(1);
+            // Only the view's translation moved (a pan): remembered
+            // commands are patched, not dropped.
+            let after = self.tnl_ctx.projection();
+            let turned = (0..3).any(|r| (0..3).any(|c| before.0.m[r][c] != after.0.m[r][c]))
+                || before.1 != after.1;
+            if turned {
+                self.memo_gen = self.memo_gen.wrapping_add(1);
+            }
         }
     }
 
@@ -539,14 +556,38 @@ impl Renderer for N64Renderer {
             None
         };
         if let Some(k) = &key
-            && let Some(hit) = memo::find(&self.memo, k)
+            && let Some(hit) = memo::find_mut(&mut self.memo, k)
         {
-            let t0 = self.tick();
-            let (words, tris) = (hit.words, hit.extra);
-            self.frame_stats.models += 1;
-            self.queue_rsp(words);
-            self.count_rsp(model, t0, tris);
-            return;
+            let v = &self.tnl_ctx.projection().0.m;
+            let t = [v[0][3].to_bits(), v[1][3].to_bits(), v[2][3].to_bits()];
+            let w = &mut hit.words;
+            let still = w[MEMO_T..MEMO_T + 3] == t;
+            let f = |w: &[u32; MEMO_WORDS], i: usize| f32::from_bits(w[rsp::DRAW_WORDS + i]);
+            let pan = RspPan {
+                s: [f(w, 0), f(w, 1), f(w, 2)],
+                q: [f(w, 3), f(w, 4), f(w, 5)],
+                r2: f(w, 6),
+            };
+            let mt = pan.translation([v[0][3], v[1][3], v[2][3]]);
+            // Moved: still inside the band where the camera is now? Else
+            // the draw takes the full path (maybe the CPU's).
+            if still || rsp_band(&self.tnl_ctx, pan.center(mt), pan.r2) {
+                let t0 = if self.profile.is_some() { now_us() } else { 0 };
+                if !still {
+                    let mut c = [0u32; rsp::DRAW_WORDS];
+                    c.copy_from_slice(&w[..rsp::DRAW_WORDS]);
+                    rsp::patch_translation(&self.tnl_ctx, &mut c, mt);
+                    w[..rsp::DRAW_WORDS].copy_from_slice(&c);
+                    w[MEMO_T..MEMO_T + 3].copy_from_slice(&t);
+                }
+                let mut words = [0u32; rsp::DRAW_WORDS];
+                words.copy_from_slice(&w[..rsp::DRAW_WORDS]);
+                let tris = hit.extra;
+                self.frame_stats.models += 1;
+                self.queue_rsp(words);
+                self.count_rsp(model, t0, tris);
+                return;
+            }
         }
         let Some((tmdl, layout)) = self.meshes.get(&model.0) else {
             return;
@@ -568,8 +609,20 @@ impl Renderer for N64Renderer {
             let cull = if d.cull_back { self.rsp_cull } else { 2 };
             let words = rsp::draw_words(&self.tnl_ctx, &mv, &d, params.tint, rm, cull, 0);
             let tris = (mesh.index_count / 3) as u32;
-            if let Some(k) = key {
-                memo::store(&mut self.memo, k, words, tris);
+            if let Some(k) = key
+                && let Some(pan) = RspPan::new(&self.tnl_ctx.projection().0, &mv, &mesh, matrix)
+            {
+                let mut entry = [0u32; MEMO_WORDS];
+                entry[..rsp::DRAW_WORDS].copy_from_slice(&words);
+                let v = &self.tnl_ctx.projection().0.m;
+                let aux = [
+                    pan.s[0], pan.s[1], pan.s[2], pan.q[0], pan.q[1], pan.q[2], pan.r2, v[0][3],
+                    v[1][3], v[2][3],
+                ];
+                for (i, a) in aux.iter().enumerate() {
+                    entry[rsp::DRAW_WORDS + i] = a.to_bits();
+                }
+                memo::store(&mut self.memo, k, entry, tris);
             }
             self.queue_rsp(words);
             self.count_rsp(model, t0, tris);

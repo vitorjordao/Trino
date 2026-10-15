@@ -1036,6 +1036,72 @@ pub fn rsp_eligible(
     rsp_eligible_mv(ctx, mesh, model, &ctx.view.mul(model), params)
 }
 
+/// The view-space sphere tests of [`rsp_eligible`]: center `c` (view
+/// space) and squared radius `r2` wholly inside the RSP band, past NEAR and
+/// under `RSP_MAX_DEPTH`, and not wholly outside the guard band.
+pub fn rsp_band(ctx: &TnlContext, c: Vec3, r2: f32) -> bool {
+    let inside = |d: f32, k: f32| d > 0.0 && d * d > r2 * k;
+    let abs = |v: f32| if v < 0.0 { -v } else { v };
+    // Wholly outside the guard band: the CPU path culls it for ~13 µs —
+    // never ship invisible work to the overlay.
+    let outside = |d: f32, k: f32| d < 0.0 && d * d > r2 * k;
+    let (gx, gy) = (ctx.lim_x, ctx.lim_y);
+    if outside(gx * c.z - abs(c.x), gx * gx + 1.0) || outside(gy * c.z - abs(c.y), gy * gy + 1.0) {
+        return false;
+    }
+    let band = RSP_BAND / GUARD;
+    let (lx, ly) = (ctx.lim_x * band, ctx.lim_y * band);
+    // The overlay's clip coordinates are s15.16 (|v| < 32768): x reaches
+    // ~RSP_BAND × the view depth inside the band. Keep the whole sphere
+    // under RSP_MAX_DEPTH.
+    inside(c.z - NEAR, 1.0)
+        && inside(lx * c.z - abs(c.x), lx * lx + 1.0)
+        && inside(ly * c.z - abs(c.y), ly * ly + 1.0)
+        && inside(RSP_MAX_DEPTH - c.z, 1.0)
+}
+
+/// What an RSP draw keeps when only the camera's **translation** changes
+/// (a pan or a zoom along the view axis: same view rotation and focal).
+/// With the view's new translation column `t`, the draw's `view · model`
+/// translation is `s[r] + t[r]` and its bound center `q[r] + (s[r] + t[r])`
+/// — the very operations, in the same order, as [`Mat34::mul`] and
+/// [`Mat34::transform_point`], so a backend that patches a remembered draw
+/// gets the bits a full recompute would ([`rsp_band`] then decides again).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct RspPan {
+    pub s: [f32; 3],
+    pub q: [f32; 3],
+    pub r2: f32,
+}
+
+impl RspPan {
+    /// The parts of drawing `mesh` with `model` under `view` (whose
+    /// `view.mul(model)` is `mv`).
+    pub fn new(view: &Mat34, mv: &Mat34, mesh: &Mesh, model: &Mat34) -> Option<RspPan> {
+        let (c, r) = mesh.bounds()?;
+        let (v, m, w) = (&view.m, &model.m, &mv.m);
+        let s = model.axis_scales_sq();
+        let r2 = r * r * s.x.max(s.y).max(s.z);
+        Some(RspPan {
+            s: core::array::from_fn(|i| v[i][0] * m[0][3] + v[i][1] * m[1][3] + v[i][2] * m[2][3]),
+            q: core::array::from_fn(|i| w[i][0] * c.x + w[i][1] * c.y + w[i][2] * c.z),
+            r2,
+        })
+    }
+
+    /// The draw's `view · model` translation column under a view whose
+    /// translation column is `t`.
+    pub fn translation(&self, t: [f32; 3]) -> [f32; 3] {
+        core::array::from_fn(|i| self.s[i] + t[i])
+    }
+
+    /// The draw's bound center (view space) for translation column `mt`
+    /// ([`RspPan::translation`]).
+    pub fn center(&self, mt: [f32; 3]) -> Vec3 {
+        Vec3::new(self.q[0] + mt[0], self.q[1] + mt[1], self.q[2] + mt[2])
+    }
+}
+
 /// [`rsp_eligible`] with the draw's `view · model` product already made
 /// (`mv`): a backend that needs it for the draw itself computes it once
 /// (on the N64 a 3×4 product is ~8 µs). Same arithmetic, same answers.
@@ -1061,28 +1127,10 @@ pub fn rsp_eligible_mv(
     let (c, r) = mesh.bounds()?;
     let c = mv.transform_point(c);
     let s = model.axis_scales_sq();
-    let r2 = r * r * s.x.max(s.y).max(s.z);
-    let inside = |d: f32, k: f32| d > 0.0 && d * d > r2 * k;
-    let abs = |v: f32| if v < 0.0 { -v } else { v };
-    // Wholly outside the guard band: the CPU path culls it for ~13 µs —
-    // never ship invisible work to the overlay.
-    let outside = |d: f32, k: f32| d < 0.0 && d * d > r2 * k;
-    let (gx, gy) = (ctx.lim_x, ctx.lim_y);
-    if outside(gx * c.z - abs(c.x), gx * gx + 1.0) || outside(gy * c.z - abs(c.y), gy * gy + 1.0) {
-        return None;
-    }
-    let band = RSP_BAND / GUARD;
-    let (lx, ly) = (ctx.lim_x * band, ctx.lim_y * band);
-    if !(inside(c.z - NEAR, 1.0)
-        && inside(lx * c.z - abs(c.x), lx * lx + 1.0)
-        && inside(ly * c.z - abs(c.y), ly * ly + 1.0))
-    {
-        return None;
-    }
-    // The overlay's clip coordinates are s15.16 (|v| < 32768): x reaches
-    // ~RSP_BAND × the view depth inside the band. Keep the whole sphere
-    // under RSP_MAX_DEPTH, and the matrix entries (axis scale) in range.
-    if !inside(RSP_MAX_DEPTH - c.z, 1.0) || s.x.max(s.y).max(s.z) >= RSP_MAX_SCALE * RSP_MAX_SCALE {
+    let smax = s.x.max(s.y).max(s.z);
+    let r2 = r * r * smax;
+    // The overlay's matrix entries (axis scale) must stay in range.
+    if !rsp_band(ctx, c, r2) || smax >= RSP_MAX_SCALE * RSP_MAX_SCALE {
         return None;
     }
     let cull_back = true;

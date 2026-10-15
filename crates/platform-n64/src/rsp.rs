@@ -161,6 +161,28 @@ pub fn clip_matrix_mv(ctx: &TnlContext, mv: &Mat34) -> [[f32; 4]; 4] {
     ]
 }
 
+/// Rewrite the translation column of a draw command made by
+/// [`draw_words`] for a `view · model` whose translation column is now
+/// `mt` (a camera pan: everything else in the command stays). The same
+/// operations as [`clip_matrix_mv`] and [`draw_words`] on that column, so
+/// the words equal a full rebuild.
+pub fn patch_translation(ctx: &TnlContext, w: &mut [u32; DRAW_WORDS], mt: [f32; 3]) {
+    let (_, focal, screen) = ctx.projection();
+    let (cx, cy) = (screen.x * 0.5, screen.y * 0.5);
+    let col = [
+        mt[0] * (focal / cx),
+        mt[1] * (-focal / cy),
+        mt[2] - NEAR_PLANE,
+        mt[2] * 0.5,
+    ];
+    let pair = |a: i16, b: i16| ((a as u16 as u32) << 16) | b as u16 as u32;
+    let f: [(i16, u16); 4] = core::array::from_fn(|row| fixed(col[row]));
+    w[10] = pair(f[0].0, f[1].0);
+    w[11] = pair(f[2].0, f[3].0);
+    w[18] = pair(f[0].1 as i16, f[1].1 as i16);
+    w[19] = pair(f[2].1 as i16, f[3].1 as i16);
+}
+
 /// The 27-word draw command (overlay `DRAW` layout); `mv` is the draw's
 /// `view · model` product.
 pub fn draw_words(

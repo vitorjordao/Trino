@@ -21,6 +21,9 @@ fn a_repeated_draw_hits_and_anything_it_depends_on_misses() {
     memo::store(&mut slots, k, [1, 2, 3, 4], 12);
     let hit = memo::find(&slots, &k).expect("same draw");
     assert_eq!((hit.words, hit.extra), ([1, 2, 3, 4], 12));
+    // Updated in place, it stays under its key.
+    memo::find_mut(&mut slots, &k).unwrap().words[3] = 9;
+    assert_eq!(memo::find(&slots, &k).unwrap().words, [1, 2, 3, 9]);
     // Every input of the key matters.
     let other = [
         MemoKey::new(8, 0, &at(1.0), &plain),

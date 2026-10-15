@@ -99,6 +99,20 @@ pub fn find<'a, const W: usize>(
     (s.key == *key).then_some(s)
 }
 
+/// [`find`], to update the command in place (a backend that patches a
+/// remembered command keeps the patched one).
+pub fn find_mut<'a, const W: usize>(
+    slots: &'a mut [MemoSlot<W>],
+    key: &MemoKey,
+) -> Option<&'a mut MemoSlot<W>> {
+    if slots.is_empty() {
+        return None;
+    }
+    let i = key.slot(slots.len());
+    let s = &mut slots[i];
+    (s.key == *key).then_some(s)
+}
+
 /// Remember `words` (and `extra`) for `key`, replacing whatever shared its
 /// slot.
 pub fn store<const W: usize>(slots: &mut [MemoSlot<W>], key: MemoKey, words: [u32; W], extra: u32) {

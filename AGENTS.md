@@ -284,8 +284,8 @@ new skill when none fits. Then run `cargo xtask agents sync`. The steps are in
   - Gated by an oracle, CPU-vs-RSP pixel checks, the work split (`rsp_draws`) and
     the `castle64_hub` N64 golden.
 
-- **External console projects** (2026-10-14, ADR 0008, first user: Plan & Party, a
-  separate repo with this engine as its `engine/` submodule).
+- **External console projects** (2026-10-14, ADR 0008: a project in a separate repo
+  with this engine as its `engine/` submodule).
   - `trino.toml` and `cargo xtask build|run|test|watch n64|3ds --project <dir>` (or
     `$TRINO_PROJECT`, or a `trino.toml` in the cwd). The standalone template gives
     `cargo trino`.
@@ -540,9 +540,9 @@ cargo test --workspace
   cover the RSP's `mfc0 … break` window, but ares runs the RSP in time slices and
   both writes can land inside it. Nothing wakes the RSP while the CPU waits
   (`display_get`). `docker/n64/rsp-lost-wakeup.patch` makes every `RSP_WAIT_LOOP`
-  re-wake such an RSP. It was the "streaming hang" (Plan & Party, 2026-10-14).
+  re-wake such an RSP. It was the "streaming hang" of an external project (2026-10-14).
 - **Wide shots z-fight on the N64 at meter scale:** at 30–60 m, `1 − NEAR/z` resolves
-  about 1 m. Draw the world scaled (Plan & Party uses 1/128) so the near/far ratio
+  about 1 m. Draw the world scaled (1/128 works) so the near/far ratio
   stays small.
 - **`n64_main!` crates are `#![cfg_attr(target_os = "none", no_std)]`.** A plain
   `no_std` breaks the host `cargo check --workspace` (no panic handler).

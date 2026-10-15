@@ -25,8 +25,8 @@ cargo xtask new space-cat --standalone <dir> --git https://github.com/vitorjorda
       project's `.cargo/config.toml`. It finds `trino.toml` in the cwd; `--project <dir>`
       and `$TRINO_PROJECT` also work.
     - Outputs go to the project's `target/n64/<name>.z64` and `target/3ds/<name>.3dsx`.
-    - A local engine checkout is required (a path dep, or a submodule like Plan &
-      Party's `engine/`): the shims, target spec and Docker image live there.
+    - A local engine checkout is required (a path dep, or an `engine/`
+      submodule): the shims, target spec and Docker image live there.
 
 ## Console projects (`trino.toml`, ADR 0008)
 

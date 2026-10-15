@@ -246,7 +246,7 @@ about the origin.
 - Report: what changed (mesh/colors/rig/clips), the `inspect` numbers, what is left, and how
   to see it (editor Scene view, `TRINO_SCENE=... cargo run -p trino-app-pc`).
 
-## Lessons from Plan & Party's asset set (2026-10-14, 64 models + 38 console variants)
+## Lessons from an external project's asset set (2026-10-14, 64 models + 38 console variants)
 
 - **Export and inspect:**
   - export with `export_materials='NONE'` (and `export_vertex_color='ACTIVE'`): Trino
@@ -275,6 +275,6 @@ about the origin.
     copy its Model class;
   - two coincident opposite faces read red in the orientation check: offset them 2 mm.
 - **Console variants:** the pipeline resolves `assets/<platform>/<same path>` over the
-  master, so low-poly N64/3DS versions need no game code. In Plan & Party's set they
+  master, so low-poly N64/3DS versions need no game code. In one 64-model set they
   cost 44% fewer triangles.
 

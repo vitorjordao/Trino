@@ -243,10 +243,10 @@ frames. Trust the cost model.
 | **Content rebuilt in Blender** (`tools/blender/castle64_models.py`): KayKit doorway 1068 → 75 tris, boar 120 → 70, stage door 60 → 44, player parts −10…20%, only faces a camera can see | frame: hub 174 → 88.5 ms, the stages −3…−14% (same ROM code: a clean A/B) |
 | Bake reorders triangles/vertices for the 32-slot vertex cache (`MeshData::optimize_vertex_order`) | Blender exports: transforms 3/tri → 2/tri (boar 210 → 140) |
 | **Back faces rejected before clipping/splitting** (view-space triple product, `tessellate`) | frame −8…−17% more (hub 88.5 → 76.2, throne 52.2 → 43.4); splits −60…−80%; `emitted` and every golden (PC, N64, 3DS) identical |
-| **RSP band 4× the screen** (`RSP_BAND`): the overlay never clips, so `rsp_eligible` accepts spheres up to 4× the half screen (the CPU guard band stays 1.5×); wholly outside 1.5× still takes the CPU cull. `RSP_MAX_DEPTH` 16000 → 6000 keeps s15.16 clip x in range | castle64 hub 13.4 → 10.6 ms, sky-tower 7.4 → 6.0; Plan & Party event 100 → 70 ms (props at the screen edge had been CPU-clipped, 3–4 ms each). castle64_hub golden: 10 px on two tower silhouettes |
-| **Resident text atlas** (`trino_text_begin/glyph`): a font atlas that fits TMEM (I4/I8 ≤ 4 KB, CI ≤ 2 KB) uploads once per string (and not at all while it stays resident), glyphs are texture rectangles; plus a 2D blit mode/tint cache in the shim | Plan & Party UI-only frame 31.6 → 13.5 ms → 11.1 (layered replay). castle64 (its 96×60 CI4 font does not fit) unchanged |
+| **RSP band 4× the screen** (`RSP_BAND`): the overlay never clips, so `rsp_eligible` accepts spheres up to 4× the half screen (the CPU guard band stays 1.5×); wholly outside 1.5× still takes the CPU cull. `RSP_MAX_DEPTH` 16000 → 6000 keeps s15.16 clip x in range | castle64 hub 13.4 → 10.6 ms, sky-tower 7.4 → 6.0; a large isometric scene 100 → 70 ms (props at the screen edge had been CPU-clipped, 3–4 ms each). castle64_hub golden: 10 px on two tower silhouettes |
+| **Resident text atlas** (`trino_text_begin/glyph`): a font atlas that fits TMEM (I4/I8 ≤ 4 KB, CI ≤ 2 KB) uploads once per string (and not at all while it stays resident), glyphs are texture rectangles; plus a 2D blit mode/tint cache in the shim | an external project's UI-only frame 31.6 → 13.5 ms → 11.1 (layered replay). castle64 (its 96×60 CI4 font does not fit) unchanged |
 | **`fill_rect`** (no texture) for UI rectangles | small (−1 ms) once text was resident: the per-blit cost was the TMEM upload, not the rectangle |
-| **`set_rsp_stream`** (opt-in): RSP draws go to the overlay in chunks of 8 as they are issued, so the RSP rasterizes while the CPU issues the rest | Plan & Party event 35 → 24 ms (submit 9 ms → 0: overlapped). The "hang" under heavy 2D traffic (`RSP CRASH … display_get`, `[halt broke … sig7]`) was a lost RSP wake-up, which chunks of 8 only made rarer; fixed by `docker/n64/rsp-lost-wakeup.patch` (AGENTS.md › Pitfalls) |
+| **`set_rsp_stream`** (opt-in): RSP draws go to the overlay in chunks of 8 as they are issued, so the RSP rasterizes while the CPU issues the rest | a large isometric scene 35 → 24 ms (submit 9 ms → 0: overlapped). The "hang" under heavy 2D traffic (`RSP CRASH … display_get`, `[halt broke … sig7]`) was a lost RSP wake-up, which chunks of 8 only made rarer; fixed by `docker/n64/rsp-lost-wakeup.patch` (AGENTS.md › Pitfalls) |
 | Per-vertex cached projection + no-copy fast path in `tessellate` | neutral (±2%) — reverted |
 | Hot loop compacted (`#[inline(never)]` vertex/flat/general paths) | +3…+17% worse — reverted |
 | `opt-level = "s"` for the ROM | worse everywhere — not adopted |
@@ -266,11 +266,10 @@ frames. Trust the cost model.
 | **1b** `TnlScratch`: vertex-cache payload, clip polygons, split stack and the skinned joint matrices (~9 KB) owned by the backend and never cleared; only the 32 cache tags reset per draw | **frame −12…−15% in every scene** (hub 80.0 → 70.2 ms, green-hills 38.8 → 33.2); T&L −19…−22%; visible-draw setup 248 → 58 µs. `submit` +20% from layout. Goldens identical |
 | **1a** `TnlContext`: view, focal (software sin/cos), guard band, `ldir`, light factors once per `set_camera`/`set_light` instead of per draw (all three backends; `tessellate_with`) | culled draw T&L 33 → 16 µs, visible setup 280 → 248 µs; scene T&L −0.5…−2.6% (throne +1%), but `game` +15…+22% from layout: `Transform3::matrix`, which didn't change, went 12.5 → 36 µs per draw (micro-trs). Frame −1.2…+1.9%: neutral, kept because the work it removes is measured |
 
-## Big isometric scenes (Plan & Party, 2026-10-14)
+## Big isometric scenes (an external project, 2026-10-14)
 
-A tycoon venue with ~100 draws and ~4,400 triangles per frame went from 107 to 24 ms of
-emulated N64 time. The game's `docs/PERFORMANCE.md` has the full table. The lessons
-that generalize:
+An isometric scene with ~100 draws and ~4,400 triangles per frame went from 107 to 24 ms
+of emulated N64 time. The lessons that generalize:
 
 - **Depth precision is the near/far ratio, not meters.** At 30–60 m from the camera,
   `1 − NEAR/z` with NEAR = 0.05 resolves about 1 m on the N64's 16-bit z. Drawing the
@@ -290,7 +289,7 @@ that generalize:
     work only shows up there);
   - a host-injected clock (`debug_clock`) times the game's own render code;
   - a no-GPU counting renderer that runs `rsp_eligible` gates the work split on the PC
-    (Plan & Party's `pc/tests/budget.rs`).
+    (a project-side test drawing every view).
 - **2D on the N64:** per-glyph blits re-upload TMEM, about 50 µs each. Keep the font
   atlas within TMEM in I4 (white ink, **black** transparent texels: I-formats take
   alpha from RGB) and group a layer's text.

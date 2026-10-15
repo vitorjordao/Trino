@@ -2,8 +2,8 @@
 
 - Status: accepted (2026-10-14)
 - Context: BACKLOG P1 #3. The `.z64`/`.3dsx` builds lived inside this repository
-  because `apps/n64` and `apps/3ds` link castle64. A commercial game, Plan & Party,
-  needed its own repository and still had to ship on every target.
+  because `apps/n64` and `apps/3ds` link castle64. A commercial game needed its own
+  repository and still had to ship on every target.
 
 ## Decision
 - A project is described by **`trino.toml`**: name, ROM title, save type, the 3DS
@@ -25,7 +25,7 @@
 ## Consequences
 - The standalone template ships `n64/`, `n3ds/`, `trino.toml` and a `cargo trino`
   alias, and a fresh scaffold builds and passes in ares and Azahar.
-- Engine improvements a project needs land here, like the ones Plan & Party drove:
+- Engine improvements a project needs land here, like the ones the first external project drove:
   pointer input, `fill_rect`, the resident text atlas, `RSP_BAND`, RSP streaming. The
   project bumps its submodule.
 - Not solved: publishing crates (P1 #4); building a project against git deps alone.

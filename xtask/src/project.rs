@@ -16,23 +16,23 @@
 //!
 //! ```toml
 //! [project]
-//! name = "plan-and-party"        # output file stem (.z64 / .3dsx)
-//! title = "Plan & Party"         # ROM header (≤ 20 ASCII chars) + 3DS menu
-//! description = "Party venue tycoon"
+//! name = "my-game"        # output file stem (.z64 / .3dsx)
+//! title = "My Game"         # ROM header (≤ 20 ASCII chars) + 3DS menu
+//! description = "A console game"
 //! author = "Studio"
 //!
 //! [n64]
-//! package = "plan-and-party-n64" # staticlib crate (cargo -p)
+//! package = "my-game-n64" # staticlib crate (cargo -p)
 //! save = "eeprom16k"             # ed64romconfig save type
 //!
 //! [3ds]
-//! package = "plan-and-party-3ds" # bin crate (cargo -p)
-//! bin = "plan-and-party-3ds"     # the ELF's name
+//! package = "my-game-3ds" # bin crate (cargo -p)
+//! bin = "my-game-3ds"     # the ELF's name
 //! icon = "assets/platform/3ds/icon.png"   # 48x48 PNG (optional)
 //!
 //! [test]
-//! n64_goldens = ["hall"]         # TRINO_FB dumps compared in order
-//! n3ds_goldens = ["hall"]        # (tests/golden/<n64|3ds>/<name>.png)
+//! n64_goldens = ["level"]         # TRINO_FB dumps compared in order
+//! n3ds_goldens = ["level"]        # (tests/golden/<n64|3ds>/<name>.png)
 //! n64_max_frame_us = 33333       # gate on TRINO_FRAME lines (30 fps)
 //! watch = ["game", "n64", "assets"]       # dirs `watch n64|3ds` follows
 //! ```
@@ -285,20 +285,20 @@ mod tests {
 
     const SAMPLE: &str = r#"
 [project]
-name = "plan-and-party"
-title = "Plan & Party"
+name = "my-game"
+title = "My Game"
 author = "Studio"
 
 [n64]
-package = "plan-and-party-n64"
+package = "my-game-n64"
 
 [3ds]
-package = "plan-and-party-3ds"
+package = "my-game-3ds"
 bin = "pnp-3ds"
 icon = "assets/icon.png"
 
 [test]
-n64_goldens = ["hall"]
+n64_goldens = ["level"]
 n64_max_frame_us = 33333
 watch = ["game"]
 "#;
@@ -310,26 +310,26 @@ watch = ["game"]
         assert_eq!(p.n64_save, "eeprom16k");
         assert_eq!(
             p.n64_staticlib(),
-            "target/mips-nintendo64-none/release/libplan_and_party_n64.a"
+            "target/mips-nintendo64-none/release/libmy_game_n64.a"
         );
-        assert_eq!(p.rom(), PathBuf::from("/g/target/n64/plan-and-party.z64"));
+        assert_eq!(p.rom(), PathBuf::from("/g/target/n64/my-game.z64"));
         assert_eq!(
             p.n3ds_elf(),
             PathBuf::from("/g/target/armv6k-nintendo-3ds/release/pnp-3ds.elf")
         );
         assert_eq!(p.n3ds_icon, Some(PathBuf::from("/g/assets/icon.png")));
-        assert_eq!(p.test.n64_goldens, ["hall"]);
+        assert_eq!(p.test.n64_goldens, ["level"]);
         assert_eq!(p.test.n64_max_frame_us, Some(33333));
         assert_eq!(p.watch, ["game"]);
     }
 
     #[test]
     fn rejects_bad_names_and_titles() {
-        let bad = SAMPLE.replace("plan-and-party\"\ntitle", "plan and party\"\ntitle");
+        let bad = SAMPLE.replace("my-game\"\ntitle", "my game\"\ntitle");
         assert!(Project::parse(&bad, "/g".into(), "/e".into()).is_err());
-        let long = SAMPLE.replace("Plan & Party", "A title far too long for the N64");
+        let long = SAMPLE.replace("My Game", "A title far too long for the N64");
         assert!(Project::parse(&long, "/g".into(), "/e".into()).is_err());
-        let accent = SAMPLE.replace("Plan & Party", "Plan & Festa ç");
+        let accent = SAMPLE.replace("My Game", "My Game ç");
         assert!(Project::parse(&accent, "/g".into(), "/e".into()).is_err());
     }
 

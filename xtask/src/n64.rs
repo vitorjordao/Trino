@@ -860,6 +860,84 @@ mod tests {
         assert!(frame_gate(&[], None).is_ok());
     }
 
+    fn write_wav(path: &Path, channels: u16, frames: usize) {
+        let spec = hound::WavSpec {
+            channels,
+            sample_rate: 22_050,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut w = hound::WavWriter::create(path, spec).unwrap();
+        for i in 0..frames * channels as usize {
+            w.write_sample(i as i16).unwrap();
+        }
+        w.finalize().unwrap();
+    }
+
+    #[test]
+    fn looped_wavs_are_trimmed_to_whole_16_frame_blocks() {
+        let dir = tempfile::tempdir().unwrap();
+        let (src, out) = (dir.path().join("in.wav"), dir.path().join("out.wav"));
+        write_wav(&src, 2, 37);
+        stage_wav(&src, &out, true).unwrap();
+        let mut r = hound::WavReader::open(&out).unwrap();
+        assert_eq!(r.spec().channels, 2);
+        let samples: Vec<i16> = r.samples::<i16>().map(Result::unwrap).collect();
+        assert_eq!(samples.len(), 32 * 2, "37 frames trim to 32");
+        assert_eq!(samples[..4], [0, 1, 2, 3], "the head is kept as is");
+        // One-shots are copied byte for byte.
+        stage_wav(&src, &out, false).unwrap();
+        assert_eq!(std::fs::read(&src).unwrap(), std::fs::read(&out).unwrap());
+        // Under 16 frames there is nothing to loop.
+        write_wav(&src, 1, 15);
+        assert!(
+            stage_wav(&src, &out, true)
+                .unwrap_err()
+                .contains("too short")
+        );
+        assert!(stage_wav(&dir.path().join("missing.wav"), &out, true).is_err());
+    }
+
+    #[test]
+    fn objects_are_up_to_date_only_when_newer_than_every_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let (src, obj) = (dir.path().join("a.c"), dir.path().join("a.o"));
+        std::fs::write(&src, "int x;").unwrap();
+        assert!(
+            !up_to_date(&obj, std::slice::from_ref(&src)),
+            "no object yet"
+        );
+        std::fs::write(&obj, "o").unwrap();
+        let old = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000);
+        std::fs::File::options()
+            .write(true)
+            .open(&src)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        assert!(up_to_date(&obj, std::slice::from_ref(&src)));
+        assert!(
+            !up_to_date(&obj, &[dir.path().join("gone.c")]),
+            "a missing source forces a rebuild"
+        );
+    }
+
+    #[test]
+    fn docker_paths_map_windows_drives_to_wsl_mounts() {
+        assert_eq!(
+            docker_volume_path(Path::new("/home/u/trino")),
+            "/home/u/trino"
+        );
+        assert_eq!(
+            docker_volume_path(Path::new(r"C:\src\trino")),
+            "/mnt/c/src/trino"
+        );
+        assert_eq!(
+            docker_volume_path(Path::new(r"\\?\D:\work\trino")),
+            "/mnt/d/work/trino"
+        );
+    }
+
     #[test]
     fn mem_symbols_must_come_from_newlib() {
         let good = "Discarded input sections\n \

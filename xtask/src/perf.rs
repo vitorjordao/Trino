@@ -498,4 +498,87 @@ mod tests {
         assert_eq!(ceiling("tnl_us", 10_000), 14_000);
         assert_eq!(ceiling("tnl_us", 146_356), 198_100);
     }
+
+    fn scene(name: &str, extra: &str) -> SceneLine {
+        SceneLine::parse(&format!(
+            "[emu] TRINO_PERF_SCENE:{name} frames=4 update=300 render=12000 begin=1000 \
+             tnl=6000 sort=500 submit=2500 draws=10 verts=900 tris_in=400 emitted=380 {extra}"
+        ))
+        .unwrap()
+    }
+
+    fn write(root: &std::path::Path, rel: &str, text: &str) {
+        let p = root.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, text).unwrap();
+    }
+
+    const STAGE_WORK: &str = "[stage]\nverts = 900\ntris_in = 400\nemitted = 380\n";
+
+    #[test]
+    fn perf_gate_blesses_ceilings_then_holds_them() {
+        let root = tempfile::tempdir().unwrap();
+        let scenes = [scene("stage", "")];
+
+        let err = gate(root.path(), &scenes, false).unwrap_err();
+        assert!(err.contains(WORK_FILE), "no work baseline: {err}");
+
+        write(root.path(), WORK_FILE, STAGE_WORK);
+        let err = gate(root.path(), &scenes, false).unwrap_err();
+        assert!(err.contains("missing — create it with --bless"), "{err}");
+
+        let blessed = gate(root.path(), &scenes, true).unwrap();
+        assert!(
+            blessed.starts_with(&format!("blessed {}", N64_FILE)),
+            "{blessed}"
+        );
+        let ceilings = std::fs::read_to_string(root.path().join(N64_FILE)).unwrap();
+        assert_eq!(ceilings, render_ceilings(&scenes));
+        assert!(ceilings.contains("[stage]\nframe_us = "), "{ceilings}");
+
+        let table = gate(root.path(), &scenes, false).unwrap();
+        assert!(table.starts_with("scene "), "{table}");
+        assert!(table.contains("stage"), "{table}");
+
+        // Twice the frame time busts the ceiling; a scene unknown to the
+        // baselines fails both files.
+        let slow = scene("stage", "render=24000");
+        let err = gate(root.path(), &[slow], false).unwrap_err();
+        assert!(err.contains("stage.frame_us"), "{err}");
+        let err = gate(root.path(), &[scene("new-level", "")], false).unwrap_err();
+        assert!(err.contains("new-level: not in"), "{err}");
+        assert!(err.contains("new-level.frame_us: no ceiling"), "{err}");
+        let err = gate(root.path(), &[], false).unwrap_err();
+        assert!(err.contains("no TRINO_PERF_SCENE lines"), "{err}");
+
+        write(root.path(), N64_FILE, "not = [toml");
+        assert!(
+            gate(root.path(), &scenes, false).is_err(),
+            "broken ceilings file"
+        );
+    }
+
+    #[test]
+    fn perf_reports_compare_rsp_and_cpu_paths() {
+        let gated = [scene("hub", "tnl=3000 rsp_draws=8")];
+        let ungated = [scene("cpu-hub", "tnl=9000"), scene("cpu-gone", "")];
+        let report = rsp_ab_report(&gated, &ungated);
+        assert!(report.starts_with("scene "), "{report}");
+        let row = report.lines().find(|l| l.starts_with("hub")).unwrap();
+        assert!(row.contains("9000") && row.contains("3000"), "{row}");
+        assert!(!report.contains("gone"), "unmatched CPU scenes are skipped");
+        assert!(rsp_ab_report(&gated, &[]).is_empty());
+        assert!(is_micro("cpu-hub") && is_micro("micro-tris"));
+        assert!(!is_micro("hub"));
+
+        // The cost model's drift note: a CPU-path scene whose T&L time is far
+        // from the calibrated estimate says so (without failing).
+        let drift = check(
+            STAGE_WORK,
+            Some(&render_ceilings(&[scene("stage", "tnl=1")])),
+            &[scene("stage", "tnl=1")],
+        )
+        .unwrap();
+        assert!(drift.contains("recalibrate"), "{drift}");
+    }
 }

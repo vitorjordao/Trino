@@ -1,0 +1,374 @@
+//! `cargo xtask` end to end: the real binary, driven like a contributor or
+//! CI drives it — help, argument errors, project selection (`--project`,
+//! `$TRINO_PROJECT`, a `trino.toml` in the cwd), `agents check`,
+//! `assets pc` and the `new` scaffolder's standalone mode.
+//!
+//! Only commands that read the repository or write where they are told run
+//! here; console builds, emulators, Blender and the in-repo scaffolder are
+//! listed as untested in `docs/TESTING.md`.
+
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
+
+fn root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..")
+}
+
+/// Run xtask from the repo root, with no project selected from the
+/// environment.
+fn xtask_in(cwd: &Path, args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .args(args)
+        .current_dir(cwd)
+        .env_remove("TRINO_PROJECT")
+        .output()
+        .expect("spawn xtask")
+}
+
+fn xtask(args: &[&str]) -> Output {
+    xtask_in(&root(), args)
+}
+
+fn stdout(o: &Output) -> String {
+    String::from_utf8_lossy(&o.stdout).into_owned()
+}
+
+fn stderr(o: &Output) -> String {
+    String::from_utf8_lossy(&o.stderr).into_owned()
+}
+
+/// Fails with `needle` on stderr.
+fn assert_fails_with(o: &Output, needle: &str) {
+    assert!(
+        !o.status.success(),
+        "expected failure, got success: {}",
+        stdout(o)
+    );
+    assert!(
+        stderr(o).contains(needle),
+        "stderr lacks `{needle}`:\n{}",
+        stderr(o)
+    );
+}
+
+#[test]
+fn help_and_no_arguments_list_every_command() {
+    let help = xtask(&["help"]);
+    assert!(help.status.success());
+    let text = stdout(&help);
+    for cmd in [
+        "build <pc|n64|3ds>",
+        "run   <pc|n64|3ds>",
+        "test  [pc|n64|3ds]",
+        "assets <pc|n64|3ds>",
+        "watch <pc|n64>",
+        "editor",
+        "emulators setup ares|azahar",
+        "new <name>",
+        "gen-assets",
+        "scene check",
+        "scene export",
+        "model inspect",
+        "blender smoke",
+        "agents <sync|check>",
+        "--project <dir>",
+    ] {
+        assert!(text.contains(cmd), "help lacks `{cmd}`");
+    }
+    let bare = xtask(&[]);
+    assert!(bare.status.success());
+    assert_eq!(stdout(&bare), text, "no arguments prints the same help");
+}
+
+#[test]
+fn unknown_invocations_fail_with_the_usage() {
+    let o = xtask(&["frobnicate"]);
+    assert_fails_with(&o, "unknown invocation `frobnicate`");
+    assert!(stderr(&o).contains("commands:"), "usage follows the error");
+    assert_fails_with(
+        &xtask(&["build", "xbox"]),
+        "unknown invocation `build xbox`",
+    );
+    assert_fails_with(
+        &xtask(&["assets", "gamecube"]),
+        "unknown platform `gamecube`",
+    );
+    assert_fails_with(
+        &xtask(&["watch", "pc", "--game"]),
+        "--game needs a crate name",
+    );
+}
+
+/// Tool provisioning commands validate their arguments before touching
+/// Docker, the network or Blender.
+#[test]
+fn emulator_and_blender_commands_reject_unknown_subcommands() {
+    for args in [
+        &["emulators"][..],
+        &["emulators", "setup"],
+        &["emulators", "setup", "mame"],
+    ] {
+        assert_fails_with(
+            &xtask(args),
+            "usage: cargo xtask emulators setup ares|azahar",
+        );
+    }
+    for args in [&["blender"][..], &["blender", "render"]] {
+        assert_fails_with(&xtask(args), "usage: cargo xtask blender smoke");
+    }
+}
+
+/// A console command is never reached when the project cannot be selected:
+/// every failure below happens before any toolchain is touched (`help` is
+/// the command, so a passing selection only prints the usage).
+#[test]
+fn project_selection_fails_fast_on_bad_projects() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    let s = dir.to_str().unwrap();
+
+    assert_fails_with(
+        &xtask(&["help", "--project"]),
+        "--project needs a directory",
+    );
+    assert_fails_with(
+        &xtask(&["help", "--project", "/no/such/project"]),
+        "project /no/such/project",
+    );
+    assert_fails_with(&xtask(&["help", "--project", s]), "trino.toml");
+
+    let write = |text: &str| std::fs::write(dir.join("trino.toml"), text).unwrap();
+    let good = "[project]\nname = \"demo-game\"\ntitle = \"Demo\"\n\n\
+                [n64]\npackage = \"demo-n64\"\n\n[3ds]\npackage = \"demo-3ds\"\nbin = \"demo-3ds\"\n";
+    write(&good.replace("demo-game", "demo game"));
+    assert_fails_with(
+        &xtask(&["help", "--project", s]),
+        "project.name `demo game`",
+    );
+    write(&good.replace("\"Demo\"", "\"A title far too long for a ROM\""));
+    assert_fails_with(&xtask(&["help", "--project", s]), "≤ 20 ASCII characters");
+    write(&format!("{good}\n[test]\nunknown_gate = 1\n"));
+    assert_fails_with(&xtask(&["help", "--project", s]), "unknown_gate");
+
+    // The same broken file is found through $TRINO_PROJECT and through a
+    // trino.toml in the working directory.
+    let env = Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .arg("help")
+        .current_dir(root())
+        .env("TRINO_PROJECT", dir)
+        .output()
+        .unwrap();
+    assert_fails_with(&env, "unknown_gate");
+    assert_fails_with(&xtask_in(dir, &["help"]), "unknown_gate");
+
+    write(good);
+    let ok = xtask(&["help", "--project", s]);
+    assert!(ok.status.success(), "{}", stderr(&ok));
+    assert!(stdout(&ok).contains("commands:"));
+}
+
+#[test]
+fn agents_check_passes_on_the_clean_tree_and_rejects_unknown_subcommands() {
+    let o = xtask(&["agents", "check"]);
+    assert!(o.status.success(), "{}", stderr(&o));
+    assert!(stdout(&o).contains("mirrors are in sync"));
+    assert_fails_with(
+        &xtask(&["agents"]),
+        "usage: cargo xtask agents <sync|check>",
+    );
+    assert_fails_with(
+        &xtask(&["agents", "frob"]),
+        "usage: cargo xtask agents <sync|check>",
+    );
+}
+
+#[test]
+fn assets_pc_bakes_the_repo_manifest() {
+    let o = xtask(&["assets", "pc"]);
+    assert!(o.status.success(), "{}", stderr(&o));
+    let line = stdout(&o);
+    let count: usize = line
+        .strip_prefix("baked ")
+        .and_then(|r| r.split_whitespace().next())
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| panic!("unexpected output: {line}"));
+    assert!(line.contains("for pc into"), "{line}");
+    let manifest = std::fs::read_to_string(root().join("assets/manifest.toml")).unwrap();
+    let declared = |kinds: &[&str]| {
+        manifest
+            .lines()
+            .filter(|l| kinds.iter().any(|k| l.starts_with(&format!("[{k}."))))
+            .count()
+    };
+    let all = declared(&[
+        "sprites", "sounds", "music", "models", "fonts", "blobs", "scenes",
+    ]);
+    // A font bakes twice under one handle: atlas sprite + glyph table.
+    let fonts = declared(&["fonts"]);
+    assert!(fonts > 0);
+    assert_eq!(count, all + fonts, "every manifest entry is baked");
+    let index = std::fs::read_to_string(root().join("target/assets/pc/index.toml")).unwrap();
+    assert_eq!(index.matches("[[asset]]").count(), count);
+    let kind = |k: &str| index.matches(&format!("kind = \"{k}\"")).count();
+    assert_eq!(kind("model"), declared(&["models"]));
+    assert_eq!(kind("sound"), declared(&["sounds"]));
+    assert_eq!(kind("music"), declared(&["music"]));
+    assert_eq!(kind("font"), fonts);
+    assert_eq!(kind("sprite"), declared(&["sprites"]) + fonts);
+    // Baked scenes are TSCN blobs, served like any other blob.
+    assert_eq!(kind("blob"), declared(&["blobs", "scenes"]));
+}
+
+#[test]
+fn new_rejects_bad_names_and_bad_options() {
+    assert_fails_with(&xtask(&["new"]), "usage: cargo xtask new <kebab-case-name>");
+    assert_fails_with(&xtask(&["new", "Bad_Name"]), "not a valid crate name");
+    assert!(!root().join("examples/Bad_Name").exists());
+    assert_fails_with(
+        &xtask(&["new", "demo", "--git", "https://example.invalid/t.git"]),
+        "need --standalone",
+    );
+    assert_fails_with(
+        &xtask(&["new", "demo", "--standalone"]),
+        "--standalone needs a value",
+    );
+    assert_fails_with(
+        &xtask(&["new", "demo", "--frob"]),
+        "unknown option `--frob`",
+    );
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("p");
+    let d = dir.to_str().unwrap();
+    assert_fails_with(
+        &xtask(&["new", "demo", "--standalone", d, "--rev", "abc"]),
+        "--rev/--branch need --git",
+    );
+    assert_fails_with(
+        &xtask(&["new", "Bad", "--standalone", d]),
+        "not a valid crate name",
+    );
+    assert!(!dir.exists(), "nothing is written on a bad name");
+}
+
+/// Every file under `dir`, recursively.
+fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+    for e in std::fs::read_dir(dir).unwrap() {
+        let p = e.unwrap().path();
+        if p.is_dir() {
+            walk(&p, out);
+        } else {
+            out.push(p);
+        }
+    }
+}
+
+/// The scaffold only (the slow build-and-run is `standalone.rs`): a
+/// complete project with no template placeholders left, engine crates as
+/// path dependencies on this checkout or as pinned git dependencies.
+#[test]
+fn new_standalone_scaffolds_a_complete_project() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("moon-hop");
+    let d = dir.to_str().unwrap();
+    let o = xtask(&["new", "moon-hop", "--standalone", d]);
+    assert!(o.status.success(), "{}", stderr(&o));
+    assert!(stdout(&o).contains("created standalone project"));
+
+    for rel in [
+        "Cargo.toml",
+        "Cargo.lock",
+        "AGENTS.md",
+        "trino.toml",
+        "rust-toolchain.toml",
+        ".gitignore",
+        ".cargo/config.toml",
+        "assets/manifest.toml",
+        "assets/shared/sprites/hero.png",
+        "assets/shared/sounds/beep.wav",
+        "game/Cargo.toml",
+        "game/src/lib.rs",
+        "pc/Cargo.toml",
+        "pc/src/main.rs",
+        "n64/Cargo.toml",
+        "n3ds/Cargo.toml",
+    ] {
+        assert!(dir.join(rel).is_file(), "{rel} missing");
+    }
+    let mut files = Vec::new();
+    walk(&dir, &mut files);
+    for f in files.iter().filter(|f| {
+        !matches!(
+            f.extension().and_then(|e| e.to_str()),
+            Some("png" | "wav" | "lock")
+        )
+    }) {
+        let text = std::fs::read_to_string(f).unwrap();
+        assert!(!text.contains("{{"), "{} keeps a placeholder", f.display());
+        assert!(
+            !f.to_string_lossy().ends_with(".tmpl"),
+            "{} kept its .tmpl suffix",
+            f.display()
+        );
+    }
+    let game = std::fs::read_to_string(dir.join("game/Cargo.toml")).unwrap();
+    assert!(game.contains("name = \"moon-hop\""), "{game}");
+    let lib = std::fs::read_to_string(dir.join("game/src/lib.rs")).unwrap();
+    assert!(lib.contains("MoonHop"), "camel-case game type");
+    let ws = std::fs::read_to_string(dir.join("Cargo.toml")).unwrap();
+    let engine = std::path::absolute(root()).unwrap();
+    let core = trino_dep_path(&ws);
+    assert_eq!(
+        std::fs::canonicalize(core).unwrap(),
+        std::fs::canonicalize(engine.join("crates/core")).unwrap(),
+        "path dependency on this checkout"
+    );
+    assert_eq!(
+        std::fs::read(dir.join("Cargo.lock")).unwrap(),
+        std::fs::read(root().join("Cargo.lock")).unwrap(),
+        "the engine's lock file is copied"
+    );
+    // The scaffolded trino.toml is a valid project for the console commands.
+    let sel = xtask(&["help", "--project", d]);
+    assert!(sel.status.success(), "{}", stderr(&sel));
+
+    // A non-empty destination is refused.
+    assert_fails_with(
+        &xtask(&["new", "moon-hop", "--standalone", d]),
+        "exists and is not empty",
+    );
+
+    // Git sources pin a branch (or rev) on every engine crate.
+    let git_dir = tmp.path().join("git-hop");
+    let g = git_dir.to_str().unwrap();
+    let o = xtask(&[
+        "new",
+        "git-hop",
+        "--standalone",
+        g,
+        "--git",
+        "https://example.invalid/trino.git",
+        "--branch",
+        "main",
+    ]);
+    assert!(o.status.success(), "{}", stderr(&o));
+    let ws = std::fs::read_to_string(git_dir.join("Cargo.toml")).unwrap();
+    for krate in ["trino-core", "trino-game-api", "trino-runner-pc"] {
+        assert!(
+            ws.contains(&format!(
+                "{krate} = {{ git = \"https://example.invalid/trino.git\", branch = \"main\" }}"
+            )),
+            "{krate} git dependency:\n{ws}"
+        );
+    }
+}
+
+/// The `path = "..."` of `trino-core` in a workspace manifest.
+fn trino_dep_path(ws: &str) -> PathBuf {
+    let line = ws
+        .lines()
+        .find(|l| l.starts_with("trino-core = "))
+        .unwrap_or_else(|| panic!("no trino-core dependency:\n{ws}"));
+    let start = line.find("path = \"").expect("a path dependency") + 8;
+    let end = line[start..].find('"').unwrap() + start;
+    PathBuf::from(&line[start..end])
+}

@@ -230,6 +230,7 @@ pub fn write_skinned_gltf(path: &std::path::Path) {
         len = buf.len(),
         data = b64(&buf)
     );
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, json).unwrap();
 }
 

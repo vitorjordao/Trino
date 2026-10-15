@@ -118,7 +118,7 @@ shipping a 3D game first**, then by cost:
 
 ---
 
-## Done — a typed two-screen API, 3D on the 3DS bottom screen, touch routing (2026-10-15, branch `n3ds/screen-api`, GitHub #17)
+## Done — a typed two-screen API, 3D on the 3DS bottom screen, touch routing (2026-10-15, branch `n3ds/screen-api`, GitHub #17, ADR 0005 §6)
 
 | Item | Evidence |
 |---|---|

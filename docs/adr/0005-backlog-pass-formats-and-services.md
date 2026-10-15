@@ -144,6 +144,24 @@ Textures must be power-of-two and fit TMEM; strict mode enforces both.
 - **N64 z precision:** depth is `1 - NEAR/d` with `NEAR = 0.05` in a 16-bit z-buffer.
   Coplanar decals need several centimetres of separation at gameplay distances. The
   emulator golden caught the showcase pond z-fighting at 2 cm.
+- **Two screens (added 2026-10-15, GitHub #17):**
+  - `trino_core::Screen`: `Top` is the main screen on every target, `Bottom` the
+    3DS touch screen (simulated by the PC's 3DS profile).
+  - **Order contract:** a frame draws the top first, then the bottom, once. Every
+    backend refuses a switch back to the top, and `Renderer::on_screen` reports the
+    refusal as `false`. On a single-screen target `on_screen(Bottom)` is `false` and
+    the caller skips those draws. Backends don't discard them, so the N64 renderer
+    needs no screen code at all.
+  - **Per-screen projection:** a 3D draw projects to the current screen's size. The
+    T&L context is built from it, and the 3DS shim switches its citro3d matrix in
+    `trino_set_screen`. Each screen has its own render target and depth buffer, which
+    also clips its 2D.
+  - **Budgets are per frame:** both 3DS screens share one citro2d object pool
+    (`C2D_Init` once) and the shim's one per-frame vertex buffer. The PC's strict mode
+    and `FrameStats::tris` therefore count both screens together.
+  - **ABI:** `trino_debug_pixel(x, y, bottom)` (3 arguments) reads either LCD for
+    `Renderer::read_screen_pixel`. `GAME_API_VERSION` stays 3, because the host and
+    the game dylib build against the same `trino-core`.
 
 ## 7. Verification conventions
 

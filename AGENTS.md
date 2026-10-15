@@ -517,6 +517,10 @@ cargo test --workspace
 - **3DS: never draw 3D with `C2D_DrawTriangle`.** It takes one depth per triangle,
   so big floors cover what stands on them. Everything goes through
   `trino_3d_draw` (per-vertex depth).
+- **A big game struct used to be built on the N64 stack before boxing.** `boxed`
+  (host.rs) now writes it into `Box::new_uninit()`, which lets the compiler build it in
+  place. An external project's stack peak fell from 60.5 to 33.5 KB. Keep that pattern
+  for any large heap object.
 - **The N64 main stack is 64 KB and an overflow is silent** (memory corruption, random
   hangs; interrupts push onto it too). A ~22 KB struct built by value (`ShowcaseGame`)
   overflowed it in the self-test. `Box::new(big())` still builds the temporary in the

@@ -516,9 +516,13 @@ cargo test --workspace
 - **I4/I8 textures take alpha from RGB.** A font atlas with white transparent
   texels drew every glyph as a solid block on the N64 only. The bake now writes
   transparent texels black. Any white-mask sprite in I4/I8 needs the same.
-- **Per-draw RSP streaming hung the RDP in ares** (`set_rsp_stream` with one draw at a
-  time, under heavy 2D traffic, data-dependently; "RDP command queue MISALIGNED").
-  Chunks of 8 never did. Root cause open (BACKLOG). Keep the chunking.
+- **An RSP that halts with SIG_MORE (SIG7) set is a lost wake-up, not a crash.**
+  `RSP CRASH … wait loop timed out` with `STATUS … [halt broke … sig7]` in the dump:
+  libdragon's `rspq_flush` writes SIG_MORE + CLEAR_HALT twice, 10 cycles apart, to
+  cover the RSP's `mfc0 … break` window, but ares runs the RSP in time slices and
+  both writes can land inside it. Nothing wakes the RSP while the CPU waits
+  (`display_get`). `docker/n64/rsp-lost-wakeup.patch` makes every `RSP_WAIT_LOOP`
+  re-wake such an RSP. It was the "streaming hang" (Plan & Party, 2026-10-14).
 - **Wide shots z-fight on the N64 at meter scale:** at 30–60 m, `1 − NEAR/z` resolves
   about 1 m. Draw the world scaled (Plan & Party uses 1/128) so the near/far ratio
   stays small.

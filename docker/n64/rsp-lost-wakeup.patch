@@ -1,0 +1,35 @@
+diff --git a/include/rsp.h b/include/rsp.h
+index 407559c..5a4704c 100644
+--- a/include/rsp.h
++++ b/include/rsp.h
+@@ -540,7 +540,29 @@ void rsp_read_data(void* data, unsigned long size, unsigned int dmem_offset);
+ #define RSP_WAIT_LOOP(timeout_ms) \
+     for (uint32_t __t = TICKS_READ() + TICKS_FROM_MS(timeout_ms); \
+          TICKS_BEFORE(TICKS_READ(), __t) || (rsp_crashf("wait loop timed out (%d ms)", timeout_ms), false); \
+-         __rsp_check_assert(__FILE__, __LINE__, __func__))
++         __rsp_check_assert(__FILE__, __LINE__, __func__), __rsp_kick_lost_wakeup())
++
++/**
++ * @brief Trino patch: wake an RSP that went to sleep with SIG_MORE pending.
++ *
++ * rspq_flush sets SIG_MORE (SIG7) and clears HALT twice, 10 cycles apart,
++ * to cover the RSP's "mfc0 SP_STATUS ... break" window in
++ * RSPQCmd_WaitNewInput. Emulators that run the RSP in time slices (ares)
++ * can put both CPU writes inside that window: the RSP then halts with
++ * SIG_MORE set and nothing wakes it until the next flush. When the CPU is
++ * waiting (this loop), there is no next flush: a deadlock reported as
++ * "wait loop timed out". A halted RSP with SIG_MORE set is never a
++ * legitimate idle state (it clears SIG_MORE before re-fetching), so clear
++ * HALT again: it resumes at the wakeup label and fetches the new commands.
++ */
++static inline void __rsp_kick_lost_wakeup(void)
++{
++    uint32_t st = *SP_STATUS;
++    if ((st & (SP_STATUS_HALTED | SP_STATUS_BROKE | SP_STATUS_SIG7)) ==
++        (SP_STATUS_HALTED | SP_STATUS_BROKE | SP_STATUS_SIG7)) {
++        *SP_STATUS = SP_WSTATUS_CLEAR_HALT | SP_WSTATUS_CLEAR_BROKE;
++    }
++}
+ 
+ static inline __attribute__((deprecated("use rsp_load_code instead")))
+ void load_ucode(void * start, unsigned long size) {

@@ -32,6 +32,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm /tmp/toolchain.deb \
     && rm -rf /var/lib/apt/lists/*
 
+# Trino's patches on top of the pinned commit:
+# - rsp-lost-wakeup.patch: libdragon's RSP wait loops re-wake an RSP that
+#   halted with SIG_MORE pending (a race ares exposes; it deadlocked
+#   display_get under heavy streamed RSP + 2D traffic). See the patch text.
+COPY rsp-lost-wakeup.patch /tmp/rsp-lost-wakeup.patch
+
 # Shallow-fetch exactly the pinned commit (full clones of libdragon are
 # flaky over docker's network stack).
 RUN mkdir /libdragon && cd /libdragon \
@@ -39,6 +45,7 @@ RUN mkdir /libdragon && cd /libdragon \
     && git remote add origin https://github.com/DragonMinded/libdragon.git \
     && git fetch --depth 1 origin ${LIBDRAGON_COMMIT} \
     && git checkout -q FETCH_HEAD \
+    && git apply /tmp/rsp-lost-wakeup.patch \
     && make -j"$(nproc)" install \
     && make -j"$(nproc)" tools-install \
     && cd / && rm -rf /libdragon

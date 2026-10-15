@@ -77,10 +77,10 @@ shipping a 3D game first**, then by cost:
    independent check of the ares golden. Skipped in this pass: ares's parallel-RDP is
    bit-exact and already the reference.
 
-8. **RSP streaming: single-draw hang** (M). `set_rsp_stream` one draw at a time
-   hung the RDP in ares under Plan & Party's 2D traffic (`RSP CRASH … display_get`,
-   RDP queue misaligned), triggered by font texel data. Chunks of 8 are fine. Find
-   the race (overlay switch vs rdpq autosync?), then stream per draw.
+8. **RSP streaming per draw** (S). The "streaming hang" was a lost RSP wake-up
+   (the RSP halted with SIG_MORE set; see AGENTS.md › Pitfalls), fixed by
+   `docker/n64/rsp-lost-wakeup.patch`. Chunks of 8 stay until single-draw streaming
+   is re-measured with the patch.
 9. **3DS bottom screen** (M). Draw a second picture on the touch screen (menus, map),
    with `pointer` in its own coordinates.
 10. **N64 Mouse** (S). Fill `InputState::pointer` from the N64 mouse peripheral

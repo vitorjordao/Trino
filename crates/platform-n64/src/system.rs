@@ -1,12 +1,16 @@
 //! N64 platform services ([`trino_core::Platform`]): clock, ISViewer log,
-//! DFS blobs and cartridge-EEPROM saves (framed by `trino_core::save`).
+//! DFS blobs and cartridge-EEPROM saves (two slots, compressed, written
+//! body-first and header-last by `trino_core::save`, so a power cut keeps
+//! the previous save; `save_begin`/`save_step` spread the ~7.5 ms-per-block
+//! writes over frames instead of freezing).
 
 use alloc::collections::BTreeMap;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::cell::Cell;
 
-use trino_core::save::{self, HEADER};
+use alloc::boxed::Box;
+use trino_core::save::{self, Lz, Medium, SLOT_HEADER, WritePlan};
 use trino_core::{BlobId, Platform, SaveError};
 
 use crate::{ffi, runtime};
@@ -18,7 +22,36 @@ pub struct N64Platform {
     /// widen it to the trait's u64 by tracking wraps.
     last_us: Cell<u32>,
     high: Cell<u64>,
+    /// A save being written over frames (`save_begin`).
+    pending: Option<Box<Pending>>,
+    lz: Option<Box<Lz>>,
 }
+
+/// An unfinished save: the planned body, how much of it is on the EEPROM,
+/// and whether the header (written last) is.
+struct Pending {
+    plan: WritePlan,
+    body: Vec<u8>,
+    written: usize,
+}
+
+/// The cartridge EEPROM as a [`Medium`].
+struct Eeprom(usize);
+
+impl Medium for Eeprom {
+    fn size(&self) -> usize {
+        self.0
+    }
+    fn read(&mut self, at: usize, buf: &mut [u8]) {
+        unsafe { ffi::trino_save_read(buf.as_mut_ptr(), at as u32, buf.len() as u32) };
+    }
+    fn write(&mut self, at: usize, data: &[u8]) {
+        unsafe { ffi::trino_save_write(data.as_ptr(), at as u32, data.len() as u32) };
+    }
+}
+
+/// EEPROM block size: the unit `save_step` writes.
+const BLOCK: usize = 8;
 
 impl N64Platform {
     pub fn new() -> Self {
@@ -26,7 +59,45 @@ impl N64Platform {
             blobs: BTreeMap::new(),
             last_us: Cell::new(runtime::now_us()),
             high: Cell::new(0),
+            pending: None,
+            lz: None,
         }
+    }
+
+    fn plan(&mut self, data: &[u8]) -> Result<Box<Pending>, SaveError> {
+        let total = self.eeprom_bytes();
+        if total < 2 * SLOT_HEADER {
+            return Err(SaveError::Unsupported);
+        }
+        let lz = self.lz.get_or_insert_with(Box::default);
+        let mut body = vec![0u8; total];
+        let mut scratch = vec![0u8; total];
+        let plan = save::plan_write(&mut Eeprom(total), data, &mut body, &mut scratch, lz)?;
+        Ok(Box::new(Pending {
+            plan,
+            body,
+            written: 0,
+        }))
+    }
+
+    /// Write the next block of `p` (body blocks, then the header's two).
+    /// True when the header is on the EEPROM.
+    fn write_block(p: &mut Pending, total: usize) -> bool {
+        let mut e = Eeprom(total);
+        let body = p.plan.body_len;
+        if p.written < body {
+            let n = BLOCK.min(body - p.written);
+            let at = p.plan.offset + SLOT_HEADER + p.written;
+            e.write(at, &p.body[p.written..p.written + n]);
+            p.written += n;
+            return false;
+        }
+        let h = p.written - body;
+        if h < SLOT_HEADER {
+            e.write(p.plan.offset + h, &p.plan.header[h..h + BLOCK]);
+            p.written += BLOCK;
+        }
+        p.written >= body + SLOT_HEADER
     }
 
     pub(crate) fn insert_blob(&mut self, id: u32, bytes: Vec<u8>) {
@@ -64,47 +135,47 @@ impl Platform for N64Platform {
     }
 
     fn save_capacity(&self) -> usize {
-        self.eeprom_bytes().saturating_sub(HEADER)
+        save::capacity(self.eeprom_bytes())
     }
 
     fn save_read(&mut self, buf: &mut [u8]) -> Result<usize, SaveError> {
         let total = self.eeprom_bytes();
-        if total <= HEADER {
+        if total < 2 * SLOT_HEADER {
             return Err(SaveError::Unsupported);
         }
-        let mut header = [0u8; HEADER];
-        unsafe { ffi::trino_save_read(header.as_mut_ptr(), 0, HEADER as u32) };
-        let Some(len) = save::data_len(&header).filter(|&l| l <= total - HEADER) else {
-            return Ok(0); // blank or foreign EEPROM: no save yet
-        };
-        let mut data = vec![0u8; len];
-        unsafe { ffi::trino_save_read(data.as_mut_ptr(), HEADER as u32, len as u32) };
-        if !save::verify(&header, &data) {
-            return Ok(0); // torn write: treat as no save
-        }
-        let n = len.min(buf.len());
-        buf[..n].copy_from_slice(&data[..n]);
-        Ok(len)
+        let mut scratch = vec![0u8; total];
+        // Blank, foreign or torn both ways: 0 = no save yet.
+        Ok(save::read_newest(&mut Eeprom(total), buf, &mut scratch))
     }
 
     fn save_write(&mut self, data: &[u8]) -> Result<(), SaveError> {
-        let capacity = self.save_capacity();
-        if self.eeprom_bytes() <= HEADER {
-            return Err(SaveError::Unsupported);
-        }
-        if data.len() > capacity {
-            return Err(SaveError::TooLarge {
-                len: data.len(),
-                capacity,
-            });
-        }
-        // Data first, header last: a power cut mid-write leaves a header
-        // whose checksum no longer matches -> reads as "no save".
-        unsafe {
-            ffi::trino_save_write(data.as_ptr(), HEADER as u32, data.len() as u32);
-            let header = save::header(data);
-            ffi::trino_save_write(header.as_ptr(), 0, HEADER as u32);
-        }
+        self.pending = None;
+        let total = self.eeprom_bytes();
+        let mut p = self.plan(data)?;
+        while !Self::write_block(&mut p, total) {}
         Ok(())
+    }
+
+    fn save_begin(&mut self, data: &[u8]) -> Result<(), SaveError> {
+        // An unfinished save never got its header: dropping it is safe.
+        self.pending = Some(self.plan(data)?);
+        Ok(())
+    }
+
+    /// One EEPROM block per call, whatever the budget: libdragon's
+    /// `eeprom_write` returns at once and the *next* write waits out the
+    /// chip's write cycle (~7.5 ms in ares, up to 15 ms on hardware), so a
+    /// second block in the same frame costs that whole wait. A frame later
+    /// the cycle is over and a block costs one joybus transaction.
+    fn save_step(&mut self, _budget_us: u32) -> Result<bool, SaveError> {
+        let total = self.eeprom_bytes();
+        let Some(p) = self.pending.as_mut() else {
+            return Ok(true);
+        };
+        if Self::write_block(p, total) {
+            self.pending = None;
+            return Ok(true);
+        }
+        Ok(false)
     }
 }

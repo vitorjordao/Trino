@@ -114,6 +114,24 @@ pub trait Platform {
         Err(SaveError::Unsupported)
     }
 
+    /// Start replacing the save with `data` without stalling the frame:
+    /// then call [`save_step`](Self::save_step) once per frame until it
+    /// returns `Ok(true)`. Until then [`save_read`](Self::save_read) still
+    /// returns the previous save, and a power cut keeps it. A new
+    /// `save_begin` replaces an unfinished one. The default writes it all
+    /// now (files are fast); the N64 spreads its EEPROM blocks (~7.5 ms per
+    /// 8 bytes) over frames.
+    fn save_begin(&mut self, data: &[u8]) -> Result<(), SaveError> {
+        self.save_write(data)
+    }
+
+    /// Continue a [`save_begin`](Self::save_begin): spend about `budget_us`
+    /// (at least one unit of progress per call). `Ok(true)` once the save
+    /// is complete — and also when nothing is pending.
+    fn save_step(&mut self, _budget_us: u32) -> Result<bool, SaveError> {
+        Ok(true)
+    }
+
     /// The second screen's size (3DS touch screen, or the PC's 3DS profile),
     /// known at update time (the renderer's
     /// [`second_screen`](crate::Renderer::second_screen) is the same).

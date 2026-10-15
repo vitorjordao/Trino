@@ -98,7 +98,18 @@ impl Platform for PcPlatform {
                 buf[..n].copy_from_slice(&bytes[..n]);
                 Ok(bytes.len())
             }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(0),
+            // A crash between the temp file and the rename: the temp file
+            // is complete (it was flushed before the rename).
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                match std::fs::read(path.with_extension("tmp")) {
+                    Ok(bytes) => {
+                        let n = bytes.len().min(buf.len());
+                        buf[..n].copy_from_slice(&bytes[..n]);
+                        Ok(bytes.len())
+                    }
+                    Err(_) => Ok(0),
+                }
+            }
             Err(_) => Err(SaveError::Io),
         }
     }
@@ -114,8 +125,15 @@ impl Platform for PcPlatform {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|_| SaveError::Io)?;
         }
+        // Write + flush a temp file, then rename over the save: a crash
+        // leaves either the old file or the new one, never half of one.
         let tmp = path.with_extension("tmp");
-        std::fs::write(&tmp, data).map_err(|_| SaveError::Io)?;
+        {
+            use std::io::Write;
+            let mut f = std::fs::File::create(&tmp).map_err(|_| SaveError::Io)?;
+            f.write_all(data).map_err(|_| SaveError::Io)?;
+            f.sync_all().map_err(|_| SaveError::Io)?;
+        }
         std::fs::rename(&tmp, path).map_err(|_| SaveError::Io)
     }
 

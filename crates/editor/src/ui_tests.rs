@@ -156,8 +156,7 @@ fn commands_edit_save_and_export_in_a_temp_project() {
         h.run_steps(2);
     };
     h.run_steps(4);
-    let (warns_before, errors_before) = h.state().log.counts();
-    assert_eq!(errors_before, 0, "the project loads cleanly");
+    assert_eq!(h.state().log.counts().1, 0, "the project loads cleanly");
     assert!(h.state().project.models.contains_key("models/crate"));
     let roots = h.state().doc.scene.entities.len();
 
@@ -196,10 +195,41 @@ fn commands_edit_save_and_export_in_a_temp_project() {
             step: [2.0, 0.0, 0.0],
         },
     );
-    assert_eq!(h.state().doc.selection().len(), 4);
+    let sel = h.state().doc.selection();
+    assert_eq!(sel.len(), 4);
+    // Spread the copies out far from the level, in the air, at uneven spots.
+    for (i, (x, z)) in [(100.0, -3.0), (101.0, 5.0), (105.0, 1.0), (109.0, 2.0)]
+        .into_iter()
+        .enumerate()
+    {
+        let e = h.state_mut().doc.scene.get_mut(&sel[i]).unwrap();
+        e.transform.pos = [x, 10.0, z];
+    }
+    let pos = |h: &Harness<'_, App>| -> Vec<[f32; 3]> {
+        sel.iter()
+            .map(|p| h.state().doc.scene.get(p).unwrap().transform.pos)
+            .collect()
+    };
     cmd(&mut h, Cmd::Align(2, AlignTo::Max));
+    assert!(
+        pos(&h).iter().all(|p| p[2] == 5.0),
+        "aligned on max z: {:?}",
+        pos(&h)
+    );
     cmd(&mut h, Cmd::Distribute(0));
+    let mut xs: Vec<f32> = pos(&h).iter().map(|p| p[0]).collect();
+    xs.sort_by(f32::total_cmp);
+    assert_eq!(
+        xs,
+        vec![100.0, 103.0, 106.0, 109.0],
+        "even gaps between the ends"
+    );
     cmd(&mut h, Cmd::DropToSurface);
+    assert!(
+        pos(&h).iter().all(|p| p[1] == 0.0),
+        "nothing below: they land on the ground plane: {:?}",
+        pos(&h)
+    );
     cmd(&mut h, Cmd::DuplicateSelection);
     assert_eq!(h.state().doc.scene.entities.len(), roots + 8);
     cmd(&mut h, Cmd::DeleteSelection);
@@ -317,7 +347,27 @@ fn commands_edit_save_and_export_in_a_temp_project() {
         assert_eq!(h.state().asset_sel, Some(sel));
         assert_eq!(h.state().doc.selected, None);
     }
-    for tab in [Tab::Assets, Tab::Console, Tab::Level, Tab::Game, Tab::Scene] {
+    // Assets and Console share a dock node: focusing one hides the other.
+    let line = h
+        .state()
+        .log
+        .entries
+        .iter()
+        .find(|e| e.text.starts_with("library: "))
+        .unwrap()
+        .text
+        .clone();
+    cmd(&mut h, Cmd::FocusTab(Tab::Console));
+    assert!(
+        h.query_by_label(&line).is_some(),
+        "the Console shows `{line}`"
+    );
+    cmd(&mut h, Cmd::FocusTab(Tab::Assets));
+    assert!(
+        h.query_by_label(&line).is_none(),
+        "the Assets tab is in front"
+    );
+    for tab in [Tab::Level, Tab::Game, Tab::Scene] {
         cmd(&mut h, Cmd::FocusTab(tab));
     }
 
@@ -354,11 +404,26 @@ fn commands_edit_save_and_export_in_a_temp_project() {
     // Play here runs the scene inside the Game view, and stops.
     cmd(&mut h, Cmd::PlayHere);
     h.run_steps(6);
+    let frames = h
+        .state()
+        .game_view
+        .play
+        .as_ref()
+        .expect("a play session")
+        .frames;
+    assert!(frames > 0, "the session advanced");
     cmd(&mut h, Cmd::StopPlayHere);
+    assert!(h.state().game_view.play.is_none());
+    assert!(
+        h.state()
+            .log
+            .last()
+            .unwrap()
+            .text
+            .starts_with("play here stopped")
+    );
 
     // Nothing above leaked into the engine's own content.
-    let (warns_after, _) = h.state().log.counts();
-    assert!(warns_after >= warns_before);
     std::env::set_current_dir(&repo).unwrap();
     // SAFETY: as above.
     unsafe { std::env::remove_var("TRINO_EDITOR_SCENE") };

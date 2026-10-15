@@ -120,7 +120,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/trino-n64.tar
-          key: trino-n64-image-${{ hashFiles('docker/n64/Dockerfile') }}
+          key: trino-n64-image-${{ hashFiles('docker/n64/**') }}
       - name: Load cached toolchain image
         if: steps.image-cache.outputs.cache-hit == 'true'
         run: docker load -i ~/trino-n64.tar

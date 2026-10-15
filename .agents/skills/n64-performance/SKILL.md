@@ -236,6 +236,7 @@ frames. Trust the cost model.
 
 | Change | Result on the scenes |
 |---|---|
+| Impostors (props as textured billboards at a far zoom, an external project) | **worse on the N64**: far view 29.8 → 35 ms, the busiest scene 58 → 66 ms. Textured triangles are CPU-submitted (~22 µs each, 52 rspq words), costing more than the RSP time they save. On the 3DS the same impostors doubled the far view's rate (Azahar). An N64 impostor would need an RDP rectangle with depth |
 | **Draw memo** (`trino_core::memo`, N64 renderer): a draw repeated under the same camera and light reuses last frame's 27-word RSP command (key: model, matrix bits, tint, shading, generation) | an external project's 93-draw scene 25.9 → 23.5 ms. The CPU then issues draws faster than the RSP draws them: waits show up in `tnl` (streamed) |
 | **Pan patch** (`RspPan`, `rsp::patch_translation`): the memo survives a camera that only translates (pan, zoom along the view axis); a hit re-tests `rsp_band` and rewrites the command's translation column, bit-identical to a rebuild | panning over a 105-draw scene 36.4 → 28.3 ms. Needs the game's camera to keep the view rotation exact under a pan (eye − target exactly representable) |
 | `to_i32` instead of `as i32`; one `view·model` per draw (`rsp_eligible_mv`); tint quotients from a const table | a 207-draw scene 47.2 → 46.6 ms (layout noise). Measured hot: 16 saturating casts 22 µs, unchecked 6.5 µs |

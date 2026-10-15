@@ -793,3 +793,36 @@ fn a_panned_draw_rebuilds_exactly_from_its_pan_parts() {
     }
     assert!(same > 100, "{same} eligible, {flips} not");
 }
+
+/// A billboard just past the near plane is drawn (screen-aligned, its
+/// corners share its depth, so it needs no clipping); one behind it is not.
+#[test]
+fn billboards_draw_right_up_to_the_near_plane() {
+    let cam = Camera3 {
+        eye: Vec3::new(0.0, 0.0, 0.0),
+        target: Vec3::new(0.0, 0.0, 1.0),
+        fov_y: 0.8,
+    };
+    let p = BillboardParams {
+        size: Vec2::new(0.01, 0.01),
+        ..BillboardParams::DEFAULT
+    };
+    let uv = [0.0, 0.0, 1.0, 1.0];
+    let near = render3d::NEAR_PLANE;
+    for (z, drawn) in [
+        (near * 1.2, true),
+        (near * 1.9, true),
+        (near * 0.9, false),
+        (-1.0, false),
+    ] {
+        let q = render3d::billboard(&cam, &DEFAULT_LIGHT, SCREEN, Vec3::new(0.0, 0.0, z), &p, uv);
+        assert_eq!(q.is_some(), drawn, "depth {z}");
+        if let Some([a, _]) = q {
+            assert!(
+                a.z.iter().all(|d| *d > 0.0 && *d < 1.0),
+                "depth in range: {:?}",
+                a.z
+            );
+        }
+    }
+}

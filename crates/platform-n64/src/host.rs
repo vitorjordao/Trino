@@ -279,5 +279,11 @@ impl N64Host {
 /// frame for the whole run (the 64 KB stack pitfall).
 #[inline(never)]
 fn boxed<G>(make: impl FnOnce(Vec2) -> G) -> Box<G> {
-    Box::new(make(N64Host::SCREEN))
+    // Allocate first and write the game straight into the box: the
+    // compiler can then build it in place instead of on the stack and copy
+    // it over (a large game is tens of KB of a 64 KB stack).
+    let mut b = Box::<G>::new_uninit();
+    b.write(make(N64Host::SCREEN));
+    // SAFETY: just written.
+    unsafe { b.assume_init() }
 }

@@ -1938,9 +1938,11 @@ pub fn billboard_with(
     let (size, rotation, tint) = (params.size, params.rotation, params.tint);
     let (light, screen) = (&ctx.light, ctx.screen);
     let c = ctx.view.transform_point(pos);
-    // Keep the whole quad comfortably in front of the near plane: its
-    // corners share the center's depth (screen-aligned), so no clipping.
-    if c.z <= NEAR * 2.0 {
+    // The quad's corners share the center's depth (screen-aligned): in
+    // front of the near plane it needs no clipping. (It once required
+    // twice NEAR, which in a world drawn at 1/128 scale hid every
+    // billboard within 12.8 m of the camera.)
+    if c.z <= NEAR {
         return None;
     }
     let (focal, center) = (ctx.focal, ctx.center);

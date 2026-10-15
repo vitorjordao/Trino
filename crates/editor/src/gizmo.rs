@@ -704,7 +704,9 @@ fn point_in_quad(p: Pos2, q: &[Pos2]) -> bool {
             return false;
         }
     }
-    true
+    // A quad seen edge-on has no area: it must not swallow clicks on the
+    // line it collapses to (the axis handles lie on that line).
+    sign != 0.0
 }
 
 /// Small XYZ orientation widget (top-right of the scene view). Returns the
@@ -819,6 +821,341 @@ mod tests {
         let along = v.dot(d);
         let off = v - d * along;
         assert!(off.dot(off).sqrt() < 1e-2, "{off:?}");
+    }
+
+    /// A camera on -Z looking at the origin, rendered 1:1 into a 320x240 panel.
+    fn front_proj() -> Proj {
+        let cam = Camera3 {
+            eye: Vec3::new(0.0, 0.0, -10.0),
+            target: Vec3::ZERO,
+            fov_y: 1.0,
+        };
+        Proj::new(
+            &cam,
+            (320, 240),
+            Rect::from_min_size(Pos2::ZERO, Vec2::new(320.0, 240.0)),
+        )
+    }
+
+    fn close(a: Vec3, b: Vec3, eps: f32) -> bool {
+        let d = a - b;
+        d.dot(d).sqrt() < eps
+    }
+
+    #[test]
+    fn orbit_camera_moves_clamps_and_settles() {
+        let mut cam = OrbitCam::default();
+        let eye = cam.eye();
+        let d = eye - cam.target;
+        assert!(
+            (d.dot(d).sqrt() - cam.dist).abs() < 1e-3,
+            "eye at orbit distance"
+        );
+        assert_eq!(cam.camera().target, cam.target);
+
+        // Orbit is immediate, and pitch stops short of the poles.
+        cam.orbit(Vec2::new(0.0, 10_000.0));
+        assert_eq!(cam.pitch, 1.54);
+        cam.orbit(Vec2::new(0.0, -20_000.0));
+        assert_eq!(cam.pitch, -1.54);
+
+        // Zoom eases toward a clamped goal; step reports motion until it settles.
+        cam.zoom(-1.0e6);
+        let mut frames = 0;
+        while cam.step(1.0 / 60.0) {
+            frames += 1;
+            assert!(frames < 1000, "smoothing must converge");
+        }
+        assert!(frames > 0);
+        assert!(
+            (cam.dist - 600.0).abs() < 0.1,
+            "zoom-out clamps at 600: {}",
+            cam.dist
+        );
+        assert!(!cam.step(1.0 / 60.0), "a settled camera stays still");
+
+        // Focus frames a sphere: farther for a bigger one.
+        cam.focus(Vec3::new(1.0, 2.0, 3.0), 1.0);
+        while cam.step(0.1) {}
+        let small = cam.dist;
+        assert!(close(cam.target, Vec3::new(1.0, 2.0, 3.0), 1e-3));
+        cam.focus(Vec3::ZERO, 4.0);
+        while cam.step(0.1) {}
+        assert!(cam.dist > small * 3.0, "{} vs {small}", cam.dist);
+    }
+
+    #[test]
+    fn orbit_camera_views_take_the_short_way_and_match_a_game_camera() {
+        let mut cam = OrbitCam::default();
+        cam.orbit(Vec2::new((3.0 - cam.yaw) / 0.008, 0.0));
+        assert!((cam.yaw - 3.0).abs() < 1e-4);
+        // -3.0 rad is 0.28 rad away going forward through +π, not 6 rad back.
+        cam.view_from(-3.0, 0.2);
+        while cam.step(0.1) {}
+        assert!(
+            (cam.yaw - (-3.0 + std::f32::consts::TAU)).abs() < 1e-3,
+            "{}",
+            cam.yaw
+        );
+        assert!((cam.pitch - 0.2).abs() < 1e-3);
+
+        let (eye, target) = (Vec3::new(4.0, 3.0, -5.0), Vec3::new(0.0, 1.0, 0.0));
+        cam.look_from(eye, target);
+        while cam.step(0.1) {}
+        assert!(close(cam.eye(), eye, 1e-2), "{:?}", cam.eye());
+        assert!(close(cam.target, target, 1e-3));
+
+        // Pan shifts the target sideways in view space, immediately.
+        let before = cam.target;
+        cam.pan(Vec2::new(100.0, 0.0), 240.0);
+        let moved = cam.target - before;
+        assert!(moved.dot(moved) > 0.01);
+        let fwd = cam.target - cam.eye();
+        assert!(moved.dot(fwd).abs() < 1e-2, "pan stays in the view plane");
+    }
+
+    #[test]
+    fn projection_helpers_reject_points_behind_and_hit_the_ground() {
+        let proj = front_proj();
+        let c = proj.project(Vec3::ZERO).unwrap();
+        assert!((c.x - 160.0).abs() < 1e-3 && (c.y - 120.0).abs() < 1e-3);
+        assert!(proj.project(Vec3::new(0.0, 0.0, -20.0)).is_none(), "behind");
+        assert!((proj.depth(Vec3::ZERO) - 10.0).abs() < 1e-3);
+        assert!(close(proj.forward(), Vec3::new(0.0, 0.0, 1.0), 1e-4));
+        // Y is up in the world and down on screen.
+        assert!(proj.project(Vec3::new(0.0, 1.0, 0.0)).unwrap().y < c.y);
+        // World size of 100 px doubles at twice the depth.
+        let near = proj.world_per_px(Vec3::ZERO, 100.0);
+        let far = proj.world_per_px(Vec3::new(0.0, 0.0, 10.0), 100.0);
+        assert!((far / near - 2.0).abs() < 1e-3);
+        // A ray below the horizon meets y = -1 in front; the centre ray is parallel.
+        let g = proj.ground_point(Pos2::new(160.0, 200.0), -1.0).unwrap();
+        assert!((g.y + 1.0).abs() < 1e-4 && g.z > -10.0);
+        assert!(proj.ground_point(Pos2::new(160.0, 120.0), -1.0).is_none());
+        assert!(
+            proj.ground_point(Pos2::new(160.0, 20.0), -1.0).is_none(),
+            "behind"
+        );
+    }
+
+    #[test]
+    fn affine_inverse_and_box_wireframe() {
+        let m = Mat34::from_rotation_scale_translation(
+            Vec3::new(0.3, -0.7, 1.1),
+            Vec3::new(2.0, 0.5, 1.5),
+            Vec3::new(4.0, -2.0, 7.0),
+        );
+        let p = Vec3::new(0.25, -1.5, 3.0);
+        let back = inverse(&m).transform_point(m.transform_point(p));
+        assert!(close(back, p, 1e-4), "{back:?}");
+        assert!(close(translation(&m), Vec3::new(4.0, -2.0, 7.0), 1e-6));
+        // A singular matrix inverts to zero instead of NaN.
+        let z = inverse(&Mat34 { m: [[0.0; 4]; 3] });
+        assert!(z.m.iter().flatten().all(|v| v.is_finite()));
+
+        let proj = front_proj();
+        assert_eq!(
+            box_lines(&proj, &Mat34::IDENTITY, [-1.0; 3], [1.0; 3]).len(),
+            12
+        );
+        // A box straddling the eye loses the edges it cannot project.
+        let around_eye = Mat34::from_rotation_scale_translation(
+            Vec3::ZERO,
+            Vec3::ONE,
+            Vec3::new(0.0, 0.0, -10.0),
+        );
+        assert!(box_lines(&proj, &around_eye, [-1.0; 3], [1.0; 3]).len() < 12);
+        // A flat plane stays clickable (thickened).
+        let t = ray_obb(
+            Vec3::new(0.0, 5.0, 0.0),
+            Vec3::new(0.0, -1.0, 0.0),
+            &Mat34::IDENTITY,
+            [-1.0, 0.0, -1.0],
+            [1.0, 0.0, 1.0],
+        );
+        assert!((t.unwrap() - 4.99).abs() < 1e-3, "{t:?}");
+    }
+
+    #[test]
+    fn gizmo_handles_are_hit_where_they_are_drawn() {
+        let proj = front_proj();
+        let g = Gizmo::new(&proj, Vec3::ZERO);
+        let o = proj.project(g.origin).unwrap();
+        assert!((g.len - proj.world_per_px(Vec3::ZERO, GIZMO_PX)).abs() < 1e-6);
+        let x_tip = proj.project(Vec3::new(g.len, 0.0, 0.0)).unwrap();
+        let mid_x = o + (x_tip - o) * 0.6;
+        assert_eq!(
+            g.hit(&proj, GizmoMode::Translate, mid_x),
+            Some(Handle::Axis(0))
+        );
+        assert_eq!(g.hit(&proj, GizmoMode::Scale, mid_x), Some(Handle::Axis(0)));
+        let y_tip = proj.project(Vec3::new(0.0, g.len, 0.0)).unwrap();
+        assert_eq!(
+            g.hit(&proj, GizmoMode::Translate, o + (y_tip - o) * 0.6),
+            Some(Handle::Axis(1))
+        );
+        // The scale centre is the uniform handle; far away hits nothing.
+        assert_eq!(g.hit(&proj, GizmoMode::Scale, o), Some(Handle::Uniform));
+        assert_eq!(
+            g.hit(&proj, GizmoMode::Translate, o + Vec2::splat(150.0)),
+            None
+        );
+        // The Z ring (in the XY plane) faces this camera: a point on it hits.
+        // (On the diagonal: the X and Y rings are edge-on lines through the axes.)
+        let r = g.len * 0.85 * std::f32::consts::FRAC_1_SQRT_2;
+        let on_ring = proj.project(Vec3::new(r, r, 0.0)).unwrap();
+        assert_eq!(
+            g.hit(&proj, GizmoMode::Rotate, on_ring),
+            Some(Handle::Ring(2))
+        );
+        // Inside the rings, away from the edge-on ones (the axis lines), hits nothing.
+        assert_eq!(
+            g.hit(&proj, GizmoMode::Rotate, o + Vec2::new(20.0, -20.0)),
+            None
+        );
+        // A gizmo behind the camera has no handles.
+        let behind = Gizmo {
+            origin: Vec3::new(0.0, 0.0, -20.0),
+            len: 1.0,
+        };
+        assert_eq!(behind.hit(&proj, GizmoMode::Translate, o), None);
+    }
+
+    #[test]
+    fn drags_move_scale_and_rotate_the_local_transform() {
+        let proj = front_proj();
+        let g = Gizmo::new(&proj, Vec3::ZERO);
+        let o = proj.project(g.origin).unwrap();
+        let local = Transform::default();
+        let world = local.matrix();
+        let px_per_unit = (proj.project(Vec3::new(g.len, 0.0, 0.0)).unwrap() - o).length() / g.len;
+
+        // Move along X by 1.1 units: snapped to the 0.25 grid -> 1.0.
+        let drag = Drag::begin(
+            GizmoMode::Translate,
+            Handle::Axis(0),
+            &g,
+            &proj,
+            o,
+            &world,
+            local,
+        )
+        .unwrap();
+        let to = o + Vec2::new(px_per_unit * 1.1, 0.0);
+        let free = drag.update(&proj, to, false);
+        assert!((free.pos[0] - 1.1).abs() < 1e-3, "{:?}", free.pos);
+        assert_eq!(drag.update(&proj, to, true).pos, [1.0, 0.0, 0.0]);
+
+        // The same handle in scale mode scales X only.
+        let drag = Drag::begin(
+            GizmoMode::Scale,
+            Handle::Axis(0),
+            &g,
+            &proj,
+            o,
+            &world,
+            local,
+        )
+        .unwrap();
+        let t = drag.update(&proj, o + Vec2::new(px_per_unit * g.len, 0.0), true);
+        assert_eq!(t.scale, [2.0, 1.0, 1.0]);
+        assert_eq!(t.pos, local.pos);
+
+        // Uniform scale grows all three axes together.
+        let drag = Drag::begin(
+            GizmoMode::Scale,
+            Handle::Uniform,
+            &g,
+            &proj,
+            o,
+            &world,
+            local,
+        )
+        .unwrap();
+        let t = drag.update(&proj, o + Vec2::new(50.0, 0.0), false);
+        assert!(t.scale[0] > 1.2 && t.scale[0] == t.scale[1] && t.scale[1] == t.scale[2]);
+
+        // A quarter turn on the Z ring, snapped to 15 degree steps.
+        let start = o + Vec2::new(40.0, 0.0);
+        let drag = Drag::begin(
+            GizmoMode::Rotate,
+            Handle::Ring(2),
+            &g,
+            &proj,
+            start,
+            &world,
+            local,
+        )
+        .unwrap();
+        let t = drag.update(&proj, o + Vec2::new(0.0, 40.0), true);
+        assert_eq!(t.rot[0], 0.0);
+        assert_eq!(t.rot[1], 0.0);
+        assert_eq!(t.rot[2].abs(), 90.0, "{:?}", t.rot);
+
+        // Ground-plane move from a camera looking down.
+        let cam = Camera3 {
+            eye: Vec3::new(0.0, 10.0, -10.0),
+            target: Vec3::ZERO,
+            fov_y: 1.0,
+        };
+        let down = Proj::new(
+            &cam,
+            (320, 240),
+            Rect::from_min_size(Pos2::ZERO, Vec2::new(320.0, 240.0)),
+        );
+        let g = Gizmo::new(&down, Vec3::ZERO);
+        let o = down.project(Vec3::ZERO).unwrap();
+        let drag = Drag::begin(
+            GizmoMode::Translate,
+            Handle::Plane,
+            &g,
+            &down,
+            o,
+            &world,
+            local,
+        )
+        .unwrap();
+        let target = down.project(Vec3::new(2.0, 0.0, 1.0)).unwrap();
+        let t = drag.update(&down, target, true);
+        assert_eq!(t.pos, [2.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn rotation_under_a_rotated_parent_stays_in_world_axes() {
+        // Parent turned 90 degrees around Y: a world-Y spin is still a local Y spin.
+        let parent = Transform {
+            rot: [0.0, 90.0, 0.0],
+            ..Transform::default()
+        }
+        .matrix();
+        let r = rotate_euler([0.0, 0.0, 0.0], &parent, 1, 30.0);
+        assert!(
+            (r[1] - 30.0).abs() < 0.05 && r[0].abs() < 0.05 && r[2].abs() < 0.05,
+            "{r:?}"
+        );
+        // Helpers: segment distance and convex point-in-quad.
+        let seg = (Pos2::ZERO, Pos2::new(10.0, 0.0));
+        assert!((dist_to_segment(Pos2::new(5.0, 3.0), seg.0, seg.1) - 3.0).abs() < 1e-5);
+        assert!((dist_to_segment(Pos2::new(-4.0, 3.0), seg.0, seg.1) - 5.0).abs() < 1e-5);
+        let q = [
+            Pos2::new(0.0, 0.0),
+            Pos2::new(10.0, 0.0),
+            Pos2::new(10.0, 10.0),
+            Pos2::new(0.0, 10.0),
+        ];
+        assert!(point_in_quad(Pos2::new(5.0, 5.0), &q));
+        assert!(!point_in_quad(Pos2::new(15.0, 5.0), &q));
+        // Regression: an edge-on (zero-area) quad contains nothing. It used to
+        // contain every point on its line, so in a level side view the
+        // ground-plane handle stole clicks from the X axis.
+        let flat = [
+            Pos2::new(0.0, 5.0),
+            Pos2::new(4.0, 5.0),
+            Pos2::new(6.0, 5.0),
+            Pos2::new(2.0, 5.0),
+        ];
+        assert!(!point_in_quad(Pos2::new(20.0, 5.0), &flat));
+        assert!(!point_in_quad(Pos2::new(3.0, 5.0), &flat));
     }
 
     #[test]

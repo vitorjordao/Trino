@@ -89,10 +89,11 @@ pub fn load_dir(out_dir: &Path, only: Option<&[u32]>) -> Result<LoadedAssets, St
         let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
         match entry.kind.as_str() {
             "sprite" => {
-                let (magic, rest) = bytes.split_at(4);
-                if magic != b"TSPR" || rest.len() < 8 {
+                // A truncated file must be an error, not a `split_at` panic.
+                if bytes.len() < 12 || !bytes.starts_with(b"TSPR") {
                     return Err(format!("{}: bad sprite blob", path.display()));
                 }
+                let rest = &bytes[4..];
                 let width = u32::from_le_bytes(rest[0..4].try_into().unwrap());
                 let height = u32::from_le_bytes(rest[4..8].try_into().unwrap());
                 let rgba = rest[8..].to_vec();
@@ -108,10 +109,10 @@ pub fn load_dir(out_dir: &Path, only: Option<&[u32]>) -> Result<LoadedAssets, St
                 });
             }
             "sound" | "music" => {
-                let (magic, rest) = bytes.split_at(4);
-                if magic != b"TSND" || rest.len() < 8 {
+                if bytes.len() < 12 || !bytes.starts_with(b"TSND") {
                     return Err(format!("{}: bad sound blob", path.display()));
                 }
+                let rest = &bytes[4..];
                 let sample_rate = u32::from_le_bytes(rest[0..4].try_into().unwrap());
                 let count = u32::from_le_bytes(rest[4..8].try_into().unwrap()) as usize;
                 let data = &rest[8..];

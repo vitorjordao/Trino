@@ -65,6 +65,7 @@ Live-edit check: start the editor with `TRINO_EDITOR_ECHO_LOG=1` in the backgrou
 | `palette.rs` | command-palette matcher (the app builds the item list from its menus) |
 | `budget.rs` | Game-view budget HUD rows from `FrameStats` vs `Caps` |
 | `ui_tests.rs` | headless UI flows with egui_kittest (real `App` + wgpu): drive panels by accessibility label |
+| `widget_tests.rs` | widget tests with egui_kittest and no renderer (no GPU, not ignored): inspector editors, Console |
 
 ## Rules when changing the editor
 
@@ -79,6 +80,16 @@ Live-edit check: start the editor with `TRINO_EDITOR_ECHO_LOG=1` in the backgrou
 - Extend `ui_tests.rs` for new panel flows (run them with `cargo test -p trino-editor
   ui_tests -- --ignored --test-threads=1`: they set the cwd and env). They open a temp
   copy of a scene, so they
-  never write repository files.
+  never write repository files. A flow that runs file-writing `Cmd`s (save, prefabs,
+  materials, fake objects, new scene) copies `assets/`, `scenes/`, `prefabs/` and the
+  platformer level into a temp dir and runs the `App` there
+  (`commands_edit_save_and_export_in_a_temp_project`); push `Cmd`s into
+  `h.state_mut().cmds` and step two frames.
+- A widget that only needs `&mut egui::Ui` and data (no `App`) is tested without a GPU
+  in `widget_tests.rs` (`Harness::new_ui_state`). Install the theme on the first frame
+  (`theme::install`) before drawing anything that uses the bold font family, or epaint
+  panics.
+- Gizmo hit tests: `point_in_quad` treats an edge-on (zero-area) quad as empty. Before,
+  in a side view the ground-plane handle took clicks meant for the X axis.
 - After UI changes, take a screenshot with the hooks above and look at it before claiming
   it looks right.

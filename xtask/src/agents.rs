@@ -173,3 +173,90 @@ pub fn check(root: &Path) -> Result<(), String> {
         ))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn skill(root: &Path, name: &str, body: &str) {
+        let dir = root.join(CANONICAL).join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("SKILL.md"), body).unwrap();
+    }
+
+    fn good(name: &str) -> String {
+        format!("---\nname: {name}\ndescription: Does {name} things.\n---\n\n# {name}\n")
+    }
+
+    #[test]
+    fn sync_mirrors_the_canonical_tree_and_check_reports_drift() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        skill(root, "alpha", &good("alpha"));
+        skill(root, "beta", &good("beta"));
+        std::fs::create_dir_all(root.join(CANONICAL).join("beta/refs")).unwrap();
+        std::fs::write(root.join(CANONICAL).join("beta/refs/notes.md"), "n").unwrap();
+        // A stale mirror file from an earlier skill.
+        let mirror = root.join(MIRRORS[0]);
+        std::fs::create_dir_all(mirror.join("gone")).unwrap();
+        std::fs::write(mirror.join("gone/SKILL.md"), "old").unwrap();
+        let err = check(root).unwrap_err();
+        assert!(err.contains("alpha/SKILL.md is missing"), "{err}");
+        assert!(err.contains("gone/SKILL.md is stale"), "{err}");
+
+        assert_eq!(sync(root).unwrap(), 3 * MIRRORS.len());
+        check(root).unwrap();
+        assert!(!mirror.join("gone").exists(), "stale files are removed");
+        assert_eq!(
+            std::fs::read(mirror.join("beta/refs/notes.md")).unwrap(),
+            b"n",
+            "nested files are mirrored"
+        );
+
+        std::fs::write(mirror.join("alpha/SKILL.md"), "edited in the mirror").unwrap();
+        let err = check(root).unwrap_err();
+        assert!(err.contains("alpha/SKILL.md differs"), "{err}");
+        assert!(err.contains("agents sync"), "the fix is named: {err}");
+    }
+
+    #[test]
+    fn malformed_skills_are_rejected() {
+        let cases = [
+            (
+                "no-front",
+                "# no frontmatter\n",
+                "missing `---` frontmatter",
+            ),
+            (
+                "wrong-name",
+                "---\nname: other\ndescription: x\n---\n",
+                "must equal the folder name `wrong-name`",
+            ),
+            (
+                "no-desc",
+                "---\nname: no-desc\ndescription:\n---\n",
+                "needs a description",
+            ),
+        ];
+        for (name, body, msg) in cases {
+            let tmp = tempfile::tempdir().unwrap();
+            skill(tmp.path(), name, body);
+            let err = validate(tmp.path()).unwrap_err();
+            assert!(err.contains(msg), "{name}: {err}");
+            assert!(sync(tmp.path()).is_err(), "{name}: sync refuses");
+            assert!(check(tmp.path()).is_err(), "{name}: check refuses");
+        }
+        // A folder without SKILL.md.
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(CANONICAL).join("empty")).unwrap();
+        let err = validate(tmp.path()).unwrap_err();
+        assert!(err.contains("every skill needs a SKILL.md"), "{err}");
+        // CRLF checkouts are fine.
+        let tmp = tempfile::tempdir().unwrap();
+        skill(tmp.path(), "crlf", &good("crlf").replace('\n', "\r\n"));
+        validate(tmp.path()).unwrap();
+        // No canonical folder at all.
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(validate(tmp.path()).unwrap_err().contains("cannot read"));
+    }
+}

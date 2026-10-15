@@ -3908,6 +3908,7 @@ dependencies = [
  "platformer",
  "png",
  "pollster",
+ "tempfile",
  "trino-asset-pipeline",
  "trino-core",
  "wgpu",
@@ -3918,7 +3919,9 @@ dependencies = [
 name = "trino-runner-pc"
 version = "0.1.0"
 dependencies = [
+ "png",
  "pollster",
+ "tempfile",
  "trino-asset-pipeline",
  "trino-core",
  "trino-platform-pc",

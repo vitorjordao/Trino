@@ -20,8 +20,8 @@ use eframe::egui::{
 use eframe::egui_wgpu::RenderState;
 use trino_asset_pipeline::MeshData;
 use trino_core::{
-    Color, Fog, Light, Material, ModelId, ModelParams, Renderer, Shading, SpriteId, SpriteParams,
-    Vec2 as TVec2, Vec3,
+    Color, Fog, Light, LodPick, Material, ModelId, ModelParams, Renderer, Shading, SpriteId,
+    SpriteParams, Vec2 as TVec2, Vec3,
 };
 use trino_platform_pc::{PcRenderer, SimProfile};
 use trino_scene::{Resolved, Scene, Transform};
@@ -63,6 +63,9 @@ pub struct ViewInput<'a> {
     pub rev: u64,
     pub time: f32,
     pub animate: bool,
+    /// Inspector › LOD › Preview: draw this entity's LOD as if the camera
+    /// were this far away (both views), to see each switch live.
+    pub lod_preview: Option<(&'a [usize], f32)>,
 }
 
 pub enum ViewAction {
@@ -83,6 +86,8 @@ pub struct Stats {
     pub ms: f32,
     /// What the renderer counted for the last frame (budget overlay).
     pub frame: trino_core::FrameStats,
+    /// What entities with LOD levels drew (full / light / impostor / cull).
+    pub lod: crate::budget::LodCounts,
 }
 
 pub struct Viewport {
@@ -171,6 +176,7 @@ impl Viewport {
                 tris: 0,
                 ms: 0.0,
                 frame: trino_core::FrameStats::default(),
+                lod: crate::budget::LodCounts::default(),
             },
             hover: None,
             box_start: None,
@@ -197,6 +203,7 @@ impl Viewport {
         self.renderer = PcRenderer::with_device(device, queue, profile);
         self.renderer.upload_mesh(self.grid, grid_tmdl());
         project.upload_all(&mut self.renderer);
+        project.upload_platform_sprites(&mut self.renderer, target_of(profile));
         self.uploaded_gen = project.generation;
         self.profile = profile;
         self.rendered = None;
@@ -206,6 +213,7 @@ impl Viewport {
     /// Re-upload changed assets (live reload).
     pub fn upload(&mut self, project: &Project, changed: &[String]) {
         project.upload_some(&mut self.renderer, changed);
+        project.upload_platform_sprites(&mut self.renderer, target_of(self.profile));
         self.rendered = None;
     }
 
@@ -287,13 +295,35 @@ impl Viewport {
             ViewKind::Scene => u64::MAX,
         };
         let r = &mut self.renderer;
+        let mut lod = crate::budget::LodCounts::default();
         for item in &input.resolved.items {
             if !trino_core::vis::in_view(item.cell, visible) {
                 continue;
             }
-            // LOD as the game sees it, from this view's camera.
-            let Some(lod_id) = item.model_from(camera.eye) else {
-                continue;
+            // LOD as the game sees it, from this view's camera (or at the
+            // Inspector's preview distance for the entity being tuned).
+            let pick = match input.lod_preview {
+                Some((owner, d)) if item.owner == owner && !item.from_prefab => item.lod_at(d),
+                _ => item.lod_from(camera.eye),
+            };
+            if !item.lod.is_empty() {
+                match pick {
+                    LodPick::Model(id) if item.model.as_ref().map(|m| m.0) == Some(id) => {
+                        lod.full += 1
+                    }
+                    LodPick::Model(_) => lod.light += 1,
+                    LodPick::Impostor(_) => lod.impostor += 1,
+                    LodPick::None => lod.culled += 1,
+                }
+            }
+            let lod_id = match pick {
+                LodPick::Model(id) => id,
+                LodPick::Impostor(imp) => {
+                    imp.draw(r, &item.matrix, camera.eye, item.params.tint);
+                    tris += 2;
+                    continue;
+                }
+                LodPick::None => continue,
             };
             let id = &lod_id;
             let mut params = item.params;
@@ -343,6 +373,7 @@ impl Viewport {
             tris,
             ms: started.elapsed().as_secs_f32() * 1000.0,
             frame: r.stats(),
+            lod,
         };
     }
 
@@ -356,6 +387,9 @@ impl Viewport {
 
         if input.project.generation != self.uploaded_gen {
             input.project.upload_all(&mut self.renderer);
+            input
+                .project
+                .upload_platform_sprites(&mut self.renderer, target_of(self.profile));
             self.uploaded_gen = input.project.generation;
             self.rendered = None;
         }
@@ -430,6 +464,7 @@ impl Viewport {
                 tris: self.renderer.stats().tris as usize,
                 ms: dt * 1000.0,
                 frame: self.renderer.stats(),
+                lod: crate::budget::LodCounts::default(),
             };
             self.rendered = None;
             ui.ctx().request_repaint();
@@ -751,12 +786,14 @@ impl Viewport {
     /// Console budget panel (top right of the Game view).
     fn budget_overlay(&self, painter: &egui::Painter, avail: Rect) {
         let caps = *self.renderer.caps();
-        let rows = crate::budget::rows(&self.stats.frame, &caps);
+        let rows = crate::budget::rows(&self.stats.frame, &caps, &self.stats.lod);
+        let summary = self.stats.lod.summary();
         let w = 210.0;
         let row_h = 18.0;
+        let extra = if summary.is_some() { row_h } else { 0.0 };
         let rect = Rect::from_min_size(
             Pos2::new(avail.max.x - w - 10.0, avail.min.y + 50.0),
-            Vec2::new(w, 24.0 + rows.len() as f32 * row_h),
+            Vec2::new(w, 24.0 + rows.len() as f32 * row_h + extra),
         );
         painter.rect_filled(rect, CornerRadius::same(6), c::BG1.gamma_multiply(0.88));
         painter.text(
@@ -811,6 +848,15 @@ impl Viewport {
                 );
                 painter.rect_filled(filled, CornerRadius::ZERO, color);
             }
+        }
+        if let Some(text) = summary {
+            painter.text(
+                Pos2::new(rect.min.x + 8.0, rect.max.y - row_h + 2.0),
+                egui::Align2::LEFT_TOP,
+                text,
+                egui::FontId::proportional(10.5),
+                c::TEXT_WEAK,
+            );
         }
     }
 

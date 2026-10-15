@@ -414,6 +414,23 @@ pub fn vec3_row(
     changed
 }
 
+/// Lay `add` out in a box exactly `width` wide (in a row). A truncating
+/// `ComboBox` sizes its text to the space *available*, not to its
+/// `.width()`, so a combo followed by a button needs this box to stop at
+/// its width.
+pub fn fixed_width<R>(ui: &mut egui::Ui, width: f32, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let width = width.max(1.0);
+    ui.allocate_ui_with_layout(
+        Vec2::new(width, ui.spacing().interact_size.y),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            ui.set_max_width(width);
+            add(ui)
+        },
+    )
+    .inner
+}
+
 /// Width of a property row's label: 64 px, less in a narrow panel.
 pub fn label_width(ui: &egui::Ui) -> f32 {
     (ui.available_width() * 0.3).clamp(40.0, 64.0).floor()

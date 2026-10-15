@@ -485,8 +485,14 @@ fn leave_temp_project(repo: &std::path::Path) {
 /// scroll: a click on a clipped widget would land on whatever covers it).
 fn click(h: &mut Harness<'static, App>, label: &str) {
     let screen = h.ctx.content_rect();
+    // An exact label, else the one widget whose label contains it (icon
+    // glyphs prefix most button and header texts).
+    let rect = |h: &Harness<'static, App>| match h.query_by_label(label) {
+        Some(n) => n.rect(),
+        None => h.get_by_label_contains(label).rect(),
+    };
     for _ in 0..40 {
-        let r = h.get_by_label(label).rect();
+        let r = rect(h);
         let dy = if r.bottom() > screen.bottom() - 4.0 {
             -120.0
         } else if r.top() < screen.top() + 60.0 {
@@ -506,9 +512,14 @@ fn click(h: &mut Harness<'static, App>, label: &str) {
             phase: egui::TouchPhase::Move,
             modifiers: egui::Modifiers::NONE,
         });
-        h.run_steps(2);
+        // Wheel scrolling is animated: let it settle before measuring again.
+        h.run_steps(8);
     }
-    h.get_by_label(label).click();
+    h.run_steps(4);
+    match h.query_by_label(label) {
+        Some(n) => n.click(),
+        None => h.get_by_label_contains(label).click(),
+    }
     h.run_steps(3);
 }
 
@@ -651,6 +662,162 @@ fn editor_layout_is_clean_at_minimum_and_default_sizes() {
         h.state_mut().cmds.push(Cmd::FocusTab(Tab::Game));
         h.run_steps(3);
         crate::layout_audit::assert_clean(&h, size, true, &what("Game view"));
+        // A LOD chain with an impostor level, previewed.
+        let boar = trino_scene::Entity::new("boar").with_model(trino_scene::ModelComponent {
+            lod: vec![
+                trino_scene::LodDef {
+                    distance: 12.0,
+                    impostor: Some("impostors/selftest-boar".into()),
+                    platforms: trino_scene::LodPlatforms {
+                        n64: Some(trino_scene::LodAt::Never),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                trino_scene::LodDef {
+                    distance: 40.0,
+                    platforms: trino_scene::LodPlatforms {
+                        n64: Some(trino_scene::LodAt::At(25.0)),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            ],
+            ..trino_scene::ModelComponent::new("models/c64_boar")
+        });
+        h.state_mut().cmds.push(Cmd::Create {
+            parent: None,
+            entity: Box::new(boar),
+        });
+        h.run_steps(3);
+        let sel = h.state().doc.selected.clone().unwrap();
+        h.state_mut().lod_preview = Some((sel, 20.0));
+        h.state_mut().inspect_focus = Some("lod".into());
+        h.run_steps(4);
+        crate::layout_audit::assert_clean(&h, size, true, &what("LOD panel"));
+        // A model asset with its impostor section.
+        h.state_mut().inspect_focus = Some("impostor".into());
+        h.state_mut()
+            .cmds
+            .push(Cmd::SelectAsset(crate::app::AssetSel::Model(
+                "models/c64_boar".into(),
+            )));
+        h.run_steps(4);
+        crate::layout_audit::assert_clean(&h, size, true, &what("impostor section"));
         leave_temp_project(&repo);
     }
+}
+
+/// Impostors from the Inspector, both ways: "Create and bake" on a model
+/// writes the same files `cargo xtask impostor bake` does, the library
+/// picks the baked table up, an entity's LOD level draws it (the preview
+/// shows the switch in the view), and settings an agent writes appear.
+#[test]
+#[ignore = "changes cwd/env: run alone with --ignored --test-threads=1"]
+fn impostors_bake_from_the_inspector_and_drive_a_lod_level() {
+    use crate::app::{AssetSel, Cmd};
+    use trino_asset_pipeline::impostor;
+    let Some((mut h, _tmp, repo)) = temp_project_app(egui::vec2(1600.0, 1000.0)) else {
+        return;
+    };
+    let assets = std::path::PathBuf::from("assets");
+    h.state_mut()
+        .cmds
+        .push(Cmd::SelectAsset(AssetSel::Model("models/crate".into())));
+    h.run_steps(3);
+    click(&mut h, "  Impostor");
+    click(&mut h, "Create and bake");
+    h.run_steps(3);
+    for f in [
+        "impostors/crate.impostor.ron",
+        "shared/impostors/crate.png",
+        "shared/impostors/crate.timp",
+        "n64/impostors/crate.png",
+        "n64/impostors/crate.timp",
+    ] {
+        assert!(assets.join(f).exists(), "{f}");
+    }
+    let manifest = std::fs::read_to_string(assets.join("manifest.toml")).unwrap();
+    assert!(
+        manifest.contains("[sprites.impostor-crate]")
+            && manifest.contains("[blobs.impostor-crate]")
+    );
+    // GUI == CLI: the command-line bake finds nothing to change.
+    let again = impostor::bake(&assets, "crate").unwrap();
+    assert!(again.written.is_empty() && !again.manifest_changed);
+
+    // The asset watcher rebakes; the library gets the table.
+    let start = std::time::Instant::now();
+    while !h.state().lib.impostors.contains_key("impostors/crate") && start.elapsed().as_secs() < 15
+    {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(h.state().lib.impostors.contains_key("impostors/crate"));
+
+    // An entity's LOD level draws it.
+    let crate_a = find(&h.state().doc.scene, "crate-a");
+    h.state_mut().cmds.push(Cmd::Select(Some(crate_a.clone())));
+    h.state_mut().inspect_focus = Some("lod".into());
+    h.run_steps(3);
+    click(&mut h, "Add level");
+    click(&mut h, "LOD 1 draws");
+    h.get_by_label_contains(" impostors/crate")
+        .click_accesskit();
+    h.run_steps(3);
+    let e = h.state().doc.scene.get(&crate_a).unwrap().clone();
+    let lod = &e.model.as_ref().unwrap().lod;
+    assert_eq!(lod.len(), 1);
+    assert_eq!(lod[0].impostor.as_deref(), Some("impostors/crate"));
+    // The preview puts the camera past the level: the view draws it.
+    h.state_mut().lod_preview = Some((crate_a.clone(), lod[0].distance + 5.0));
+    h.run_steps(4);
+    assert_eq!(
+        h.state().scene_view.stats.lod.impostor,
+        1,
+        "one impostor drawn"
+    );
+    let full = h.state().scene_view.stats.lod.full;
+    h.state_mut().lod_preview = Some((crate_a.clone(), 0.0));
+    h.run_steps(4);
+    assert_eq!(h.state().scene_view.stats.lod.impostor, 0);
+    assert_eq!(
+        h.state().scene_view.stats.lod.full,
+        full + 1,
+        "back on its mesh"
+    );
+    // The N64 Game view resolves the N64 table (smaller tiles).
+    let n64 = h
+        .state()
+        .resolved_game
+        .items
+        .iter()
+        .find(|i| i.name == "crates/crate-a")
+        .map(|i| i.lod[0].draw.clone());
+    match n64 {
+        Some(trino_scene::LodDraw::Impostor(p, imp)) => {
+            assert_eq!(p, "impostors/crate");
+            assert_eq!(imp.tile, impostor::n64_tile(8, 64));
+        }
+        other => panic!("{other:?}"),
+    }
+
+    // An agent writes impostor settings for another model: they show up.
+    std::fs::write(
+        assets.join("impostors/rock.impostor.ron"),
+        r#"(version: 1, model: "models/rock", views: 4, tile: 32)"#,
+    )
+    .unwrap();
+    let start = std::time::Instant::now();
+    while !h.state().impostor_defs.contains_key("rock") && start.elapsed().as_secs() < 10 {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert_eq!(h.state().impostor_defs["rock"].views, 4);
+    h.state_mut()
+        .cmds
+        .push(Cmd::SelectAsset(AssetSel::Model("models/rock".into())));
+    h.run_steps(4);
+    assert!(h.query_by_label_contains("not baked yet").is_some());
+    leave_temp_project(&repo);
 }

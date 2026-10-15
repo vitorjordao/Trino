@@ -63,7 +63,7 @@ fn resolve_flattens_every_component() {
     assert_eq!(hat.owner, vec![1, 0]);
     let at = hat.matrix.transform_point(Vec3::ZERO);
     assert!(near(at, Vec3::new(1.0, 2.0, 2.0)), "{at:?}");
-    let distances: Vec<f32> = hat.lod.iter().map(|l| l.0).collect();
+    let distances: Vec<f32> = hat.lod.iter().map(|l| l.distance).collect();
     assert_eq!(distances, [10.0, 30.0]);
     let from = |z: f32| hat.model_from(at + Vec3::new(0.0, 0.0, z));
     assert_eq!(from(1.0), Some(ModelId::from_path("models/hat")));

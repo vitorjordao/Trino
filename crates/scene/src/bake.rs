@@ -129,9 +129,23 @@ pub fn to_tscn_for(scene: &Scene, lib: &Library, target: Target) -> (Vec<u8>, Ve
         // LOD records live in the data table (4-aligned offsets are not
         // required: readers decode bytes, never cast).
         let lod_at = strings.len() as u32;
-        for (d, m) in &item.lod {
-            strings.extend_from_slice(&d.to_le_bytes());
-            strings.extend_from_slice(&m.as_ref().map_or(0, |(id, _)| id.0).to_le_bytes());
+        for l in &item.lod {
+            strings.extend_from_slice(&l.distance.to_le_bytes());
+            let (model, imp) = match &l.draw {
+                crate::LodDraw::Model(id, _) => (id.0, None),
+                crate::LodDraw::Impostor(_, imp) => (0, Some(*imp)),
+                crate::LodDraw::Cull => (0, None),
+            };
+            strings.extend_from_slice(&model.to_le_bytes());
+            match imp {
+                Some(i) => {
+                    strings.extend_from_slice(&i.sprite.0.to_le_bytes());
+                    strings.extend_from_slice(&[i.views, i.cols]);
+                    strings.extend_from_slice(&i.tile.to_le_bytes());
+                    f32s(&mut strings, &[i.size, i.center.x, i.center.y, i.center.z]);
+                }
+                None => strings.extend_from_slice(&[0; trino_core::scene::LOD_RECORD_BYTES - 8]),
+            }
         }
         out.extend_from_slice(&lod_at.to_le_bytes());
         out.extend_from_slice(&(item.lod.len() as u32).to_le_bytes());
@@ -170,10 +184,12 @@ mod tests {
                     crate::LodDef {
                         distance: 40.0,
                         path: None,
+                        ..Default::default()
                     },
                     crate::LodDef {
                         distance: 15.0,
                         path: Some("models/tree-far".into()),
+                        ..Default::default()
                     },
                 ],
                 ..ModelComponent::new("models/tree")

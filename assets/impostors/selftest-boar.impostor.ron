@@ -1,0 +1,7 @@
+(
+    version: 1,
+    model: "models/c64_boar",
+    views: 8,
+    pitch: 25.0,
+    tile: 16,
+)

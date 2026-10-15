@@ -273,6 +273,16 @@ pub mod edit {
         Ok(out)
     }
 
+    /// Append `[blobs.<name>]` with `file`. Errors if the name exists.
+    pub fn add_blob(text: &str, name: &str, file: &str) -> Result<String, String> {
+        if has_table(text, "blobs", name) {
+            return Err(format!("blob `{name}` already exists in the manifest"));
+        }
+        let mut out = text.trim_end().to_string();
+        out.push_str(&format!("\n\n[blobs.{name}]\nfile = \"{file}\"\n"));
+        Ok(out)
+    }
+
     /// A valid logical name from a file stem (`My Rock 2` -> `my-rock-2`).
     pub fn name_from_stem(stem: &str) -> String {
         let mut out = String::new();

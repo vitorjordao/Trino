@@ -129,6 +129,11 @@ pub enum Cmd {
     /// or close it.
     SwitchScene(usize),
     CloseScene(usize),
+    /// Write an impostor's settings (`assets/impostors/<name>.impostor.ron`).
+    SaveImpostor(String, pipeline::impostor::ImpostorDef),
+    /// Render it: atlases, tables and manifest entries (the same bake as
+    /// `cargo xtask impostor bake <name>`).
+    BakeImpostor(String),
 }
 
 pub struct App {
@@ -200,8 +205,16 @@ pub struct App {
     /// Dev hook `TRINO_EDITOR_PLAY=here`: start Play here on the first frame.
     play_here_on_start: bool,
     /// Dev hook `TRINO_EDITOR_INSPECT=<section>`: the Inspector opens that
-    /// section and scrolls to it (`platforms`).
+    /// section and scrolls to it (`platforms`, `lod`, `impostor`).
     pub inspect_focus: Option<String>,
+    /// Inspector › LOD › Preview: (entity, distance) both views draw that
+    /// entity's LOD at.
+    pub lod_preview: Option<(Vec<usize>, f32)>,
+    /// Impostor settings on disk, by name (`assets/impostors/`).
+    pub impostor_defs: std::collections::BTreeMap<String, pipeline::impostor::ImpostorDef>,
+    /// Atlas previews by impostor name, with the project generation they
+    /// were made at.
+    pub impostor_thumbs: std::collections::HashMap<String, (u64, egui::TextureHandle)>,
 }
 
 impl App {
@@ -224,6 +237,7 @@ impl App {
         }
         let mut lib = Library::load(&root);
         lib.model_bounds = project.model_bounds();
+        lib.impostors = pipeline::impostor::baked(&project.assets_dir());
         for e in &lib.errors {
             log.error(e.clone());
         }
@@ -290,6 +304,7 @@ impl App {
             _ => {}
         }
 
+        let doc_selected = doc.selected.clone();
         let mut scene_view =
             Viewport::new(render_state.clone(), ViewKind::Scene, SimProfile::Native);
         let game_view = Viewport::new(render_state.clone(), ViewKind::Game, SimProfile::N64);
@@ -339,6 +354,7 @@ impl App {
             "scenes",
             "prefabs",
             "assets/materials",
+            "assets/impostors",
             "examples/platformer/src",
         ] {
             let _ = std::fs::create_dir_all(dir);
@@ -412,6 +428,15 @@ impl App {
             palette: std::env::var("TRINO_EDITOR_PALETTE").ok(),
             play_here_on_start: std::env::var("TRINO_EDITOR_PLAY").as_deref() == Ok("here"),
             inspect_focus: std::env::var("TRINO_EDITOR_INSPECT").ok(),
+            // Dev hook: TRINO_EDITOR_LOD_PREVIEW=<m> previews the selected
+            // entity's LOD at that distance.
+            lod_preview: std::env::var("TRINO_EDITOR_LOD_PREVIEW")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .zip(doc_selected)
+                .map(|(d, p)| (p, d)),
+            impostor_defs: load_impostor_defs(&root.join("assets")),
+            impostor_thumbs: Default::default(),
         }
     }
 
@@ -429,6 +454,7 @@ impl App {
             rev: self.rev,
             time: self.time(),
             animate: self.animate,
+            lod_preview: self.lod_preview.as_ref().map(|(p, d)| (p.as_slice(), *d)),
         }
     }
 
@@ -468,8 +494,14 @@ impl App {
         if !changed_ids.is_empty() {
             match self.project.reload(Some(&changed_ids)) {
                 Ok(n) => {
-                    // `Auto` colliders follow model edits.
+                    // `Auto` colliders follow model edits; impostor LOD
+                    // levels follow a fresh bake (its blobs changed).
                     self.lib.model_bounds = self.project.model_bounds();
+                    let impostors = pipeline::impostor::baked(&self.project.assets_dir());
+                    if impostors != self.lib.impostors {
+                        self.lib.impostors = impostors;
+                        self.mark_lib_changed();
+                    }
                     let logicals = self.project.logicals_for_ids(&changed_ids);
                     self.scene_view.upload(&self.project, &logicals);
                     self.game_view.upload(&self.project, &logicals);
@@ -545,6 +577,18 @@ impl App {
                 if p == self.doc.path || self.parked.as_ref().is_some_and(|d| d.path == p) {
                     self.external_doc_change(&p, text);
                 }
+            } else if s.ends_with(pipeline::impostor::DEF_EXT) {
+                // An agent (or another tool) edited impostor settings: show
+                // them; the atlas changes when someone bakes.
+                self.impostor_defs = load_impostor_defs(&self.project.assets_dir());
+                self.log.toast(
+                    Level::Ok,
+                    format!(
+                        "{} {} changed — Bake impostor (or cargo xtask impostor bake) to update",
+                        icon::ARROWS_CLOCKWISE,
+                        p.display()
+                    ),
+                );
             } else if s.ends_with("level1.txt") && !level_checked {
                 level_checked = true;
                 if self.level.maybe_external_reload() {
@@ -1005,6 +1049,39 @@ impl App {
                     m.proxy = Some(prim.clone());
                 }
                 self.pending_proxies.insert(logical, prim);
+            }
+            Cmd::SaveImpostor(name, def) => {
+                let path = pipeline::impostor::save_def(&self.project.assets_dir(), &name, &def)?;
+                self.written.insert(
+                    path.clone(),
+                    std::fs::read_to_string(&path).unwrap_or_default(),
+                );
+                self.impostor_defs.insert(name, def);
+            }
+            Cmd::BakeImpostor(name) => {
+                let r = pipeline::impostor::bake(&self.project.assets_dir(), &name)?;
+                self.log.toast(
+                    Level::Ok,
+                    format!(
+                        "{} impostor {name}: {} views, {}x{} atlas, N64 {}x{} CI4{}",
+                        icon::IMAGE_SQUARE,
+                        r.pc.impostor.views,
+                        r.pc.width,
+                        r.pc.height,
+                        r.n64.width,
+                        r.n64.height,
+                        if r.written.is_empty() {
+                            " (unchanged)"
+                        } else {
+                            ""
+                        }
+                    ),
+                );
+                for f in &r.written {
+                    self.log.info(format!("wrote assets/{f}"));
+                }
+                // The asset watcher rebakes the sprite and the blob; the
+                // library picks the tables up on that reload.
             }
             Cmd::RetargetModel(name, file) => {
                 self.project.retarget_model(&name, &file)?;
@@ -2130,6 +2207,20 @@ impl App {
 /// canonicalized paths (`/private/var/...` on macOS, `\\?\C:\...` on
 /// Windows), so fall back to comparing canonical forms — for deleted files,
 /// canonicalize the parent and re-append the name.
+/// Every impostor settings file under `assets/impostors/`, by name.
+fn load_impostor_defs(
+    assets: &Path,
+) -> std::collections::BTreeMap<String, pipeline::impostor::ImpostorDef> {
+    pipeline::impostor::names(assets)
+        .into_iter()
+        .filter_map(|n| {
+            pipeline::impostor::load_def(assets, &n)
+                .ok()
+                .map(|d| (n, d))
+        })
+        .collect()
+}
+
 /// `text` cut to its last `max` characters, starting with "…" when cut
 /// (nothing when even "…" + a few characters wouldn't fit).
 fn elide_start(text: &str, max: usize) -> String {
@@ -2194,6 +2285,14 @@ impl eframe::App for App {
         }
         self.update_thumbnails(&ctx);
 
+        // A LOD preview belongs to the entity it was started on.
+        if self
+            .lod_preview
+            .as_ref()
+            .is_some_and(|(p, _)| self.doc.selected.as_ref() != Some(p))
+        {
+            self.lod_preview = None;
+        }
         // Resolve once per frame; bump the revision when content changed.
         let time = self.time();
         self.resolved = resolve(&self.doc.scene, &self.lib, time);
@@ -2207,6 +2306,9 @@ impl eframe::App for App {
             self.seen_lib_rev = self.lib_rev;
         }
         let has_anim = self.resolved.items.iter().any(|i| i.params.anim.is_some());
+        if self.lod_preview.is_some() {
+            self.rev += 1; // the preview distance moves without a scene edit
+        }
         if self.animate && has_anim {
             self.rev += 1; // animated content re-renders every frame
             ctx.request_repaint();
@@ -2375,6 +2477,7 @@ impl egui_dock::TabViewer for TabView<'_> {
                     rev: app.rev,
                     time: app.anim_start.elapsed().as_secs_f32(),
                     animate: app.animate,
+                    lod_preview: app.lod_preview.as_ref().map(|(p, d)| (p.as_slice(), *d)),
                 };
                 let view = if kind == ViewKind::Scene {
                     &mut app.scene_view

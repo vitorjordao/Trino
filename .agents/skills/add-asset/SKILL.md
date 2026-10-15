@@ -127,6 +127,42 @@ file = "scenes/level1.scene.ron"   # path from the PROJECT ROOT; bakes to a TSCN
 - **Baked scenes**: load with `BakedScene::parse(platform.blob(BlobId::from_path("scenes/level1"))?)`
   (see `scene-authoring`).
 
+## Impostors (a model as a far-away billboard)
+
+A model pre-rendered from N yaws into one atlas, drawn as **one billboard, 2 triangles**
+(a LOD level). The engine renders it itself (its own T&L + a CPU rasterizer: no Blender,
+no GPU, deterministic bytes), and the editor and the CLI run the same bake:
+
+```
+cargo xtask impostor new tree --model models/tree --views 8 --pitch 20 --tile 64
+cargo xtask impostor bake tree | --all        # after editing the settings or the model
+cargo xtask impostor check                    # fails on a missing or stale impostor
+cargo xtask impostor list --json
+```
+
+Editor: Assets › the model › Inspector › **Impostor** (Create and bake; then tune views,
+pitch, tiles and Bake). Both write:
+
+| File | What |
+|---|---|
+| `assets/impostors/<name>.impostor.ron` | the settings (`ImpostorDef`): model, views, pitch, tile, n64_tile, light, clip/time |
+| `assets/shared/impostors/<name>.png` + `.timp` | PC/3DS atlas (RGBA) and its `TIMP` table |
+| `assets/n64/impostors/<name>.png` + `.timp` | N64 atlas: an **indexed CI4 PNG** (index 0 clear) whose tiles shrink to fit TMEM, and its table |
+| manifest `[sprites.impostor-<name>]` (`n64 = "CI4"`) + `[blobs.impostor-<name>]` | added once |
+
+- Use it from a scene LOD level: `(distance: 30.0, impostor: Some("impostors/<name>"))`
+  (`scene-authoring`), or in code: `Impostor::parse(platform.blob(BlobId::from_path(
+  "blobs/impostor-<name>"))?)?.draw(r, &matrix, eye, tint)`.
+- The view shown is the rendered yaw nearest to the camera's direction in model space
+  (`Impostor::view_for`, deterministic). The quad covers the bounding sphere; the light is
+  baked in (billboards are unlit) and turns with the object.
+- Each `.timp` records a hash of the model it came from: `impostor check` (and the
+  editor's "stale" badge) catch a model edit that wasn't re-baked.
+- Textured models render with their vertex colors only (the bake ignores textures).
+- **N64 cost:** textured triangles are CPU-submitted (~44 µs a billboard,
+  `N64_COST.us_per_billboard`). Most static meshes run on the RSP for less, so an impostor
+  can make the N64 *slower* — give the N64 its own distance or `Never` in the LOD level.
+
 ## Materials
 
 `assets/materials/<name>.material.ron` (logical `materials/<name>`), no manifest entry:

@@ -36,14 +36,8 @@ const fn node(name: &'static str, tags: &'static [&'static str], x: f32, z: f32)
 }
 
 const LEVELS: &[LodLevel] = &[
-    LodLevel {
-        distance: 10.0,
-        model: Some(CUBE_FAR),
-    },
-    LodLevel {
-        distance: 30.0,
-        model: None,
-    },
+    LodLevel::model(10.0, Some(CUBE_FAR)),
+    LodLevel::model(30.0, None),
 ];
 
 /// An exported level: a crate, a lamp with LOD, a spawn marker, a trigger.
@@ -390,12 +384,15 @@ fn baked_scene_rejects_bad_blobs() {
         BakedScene::parse(leak(magic)).unwrap_err(),
         SceneError::BadMagic
     );
-    let mut v2 = good.to_vec();
-    v2[4] = 2;
-    assert_eq!(
-        BakedScene::parse(leak(v2)).unwrap_err(),
-        SceneError::UnsupportedVersion(2)
-    );
+    // v1 (8-byte LOD records) and future versions need a rebake.
+    for v in [1u8, 3] {
+        let mut other = good.to_vec();
+        other[4] = v;
+        assert_eq!(
+            BakedScene::parse(leak(other)).unwrap_err(),
+            SceneError::UnsupportedVersion(v as u16)
+        );
+    }
     // More nodes announced than present, and an absurd count (overflow).
     let mut many = good.to_vec();
     many[8..12].copy_from_slice(&7u32.to_le_bytes());

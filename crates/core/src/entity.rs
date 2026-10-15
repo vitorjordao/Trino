@@ -24,8 +24,8 @@
 use crate::math::Vec3;
 use crate::math3d::Mat34;
 use crate::physics::{Aabb, Collider};
-use crate::render::{AnimRef, ClipId, Material, ModelId, ModelParams, Renderer};
-use crate::scene::{Lods, SceneNode, Tags};
+use crate::render::{AnimRef, ClipId, ModelId, ModelParams, Renderer};
+use crate::scene::{LodPick, Lods, SceneNode, Tags};
 
 /// One live entity. Plain data; game logic lives in the game, keyed by
 /// `user` (a kind or an index into game-side arrays) or by tags.
@@ -106,13 +106,19 @@ impl Entity {
         self.set_position(p + d);
     }
 
-    /// Model to draw seen from `eye` (LOD applied).
+    /// Model to draw seen from `eye` (LOD applied; `None` for an impostor
+    /// level too — see [`lod_from`](Self::lod_from)).
     pub fn model_from(&self, eye: Vec3) -> Option<ModelId> {
+        self.lod_from(eye).model()
+    }
+
+    /// What to draw seen from `eye`: the mesh, an impostor or nothing.
+    pub fn lod_from(&self, eye: Vec3) -> LodPick {
         if self.lod.is_empty() {
-            return self.model;
+            return self.model.map_or(LodPick::None, LodPick::Model);
         }
         let d = self.position() - eye;
-        self.lod.select(self.model, d.dot(d))
+        self.lod.pick(self.model, d.dot(d))
     }
 
     pub fn has_tag(&self, tag: &str) -> bool {
@@ -357,14 +363,15 @@ impl<const N: usize> EntityStore<N> {
             if !crate::vis::in_view(e.cell, visible) {
                 continue;
             }
-            let Some(model) = e.model_from(eye).filter(|_| e.visible) else {
+            let pick = e.lod_from(eye);
+            if !e.visible || pick == LodPick::None {
                 continue;
-            };
+            }
             let mut params = e.params;
             if let Some((clip, speed)) = e.anim {
                 params.anim = Some(AnimRef::new(clip, time * speed));
             }
-            renderer.draw_model_matrix(model, &root.mul(&e.matrix), Material::VertexLit, &params);
+            pick.draw(renderer, &root.mul(&e.matrix), &params, eye);
         }
     }
 }

@@ -299,3 +299,200 @@ fn platforms_tab_fits_wide_and_narrow_inspectors() {
         }
     }
 }
+
+struct LodState {
+    lod: Vec<trino_scene::LodDef>,
+    preview: Option<f32>,
+    changes: usize,
+    fonts: bool,
+}
+
+fn lod_harness(width: f32, lod: Vec<trino_scene::LodDef>) -> Harness<'static, LodState> {
+    use crate::panels::platforms::ModelInfo;
+    let models: &'static [ModelInfo] = Box::leak(Box::new([
+        ModelInfo {
+            logical: "models/tree".into(),
+            verts: 400,
+            tris: 600,
+        },
+        ModelInfo {
+            logical: "models/tree-light".into(),
+            verts: 60,
+            tris: 80,
+        },
+    ]));
+    let impostors: &'static [String] = Box::leak(Box::new(["impostors/tree".to_string()]));
+    let mut h = Harness::builder()
+        .with_size(eframe::egui::vec2(width, 700.0))
+        .build_ui_state(
+            move |ui, s: &mut LodState| {
+                if !s.fonts {
+                    crate::theme::install(ui.ctx());
+                    s.fonts = true;
+                    return;
+                }
+                let choices = crate::panels::lod::Choices {
+                    models,
+                    impostors,
+                    base: models.first(),
+                };
+                if crate::panels::lod::ui(ui, &mut s.lod, &choices, &mut s.preview) {
+                    s.changes += 1;
+                }
+            },
+            LodState {
+                lod,
+                preview: None,
+                changes: 0,
+                fonts: false,
+            },
+        );
+    h.run();
+    h
+}
+
+/// The LOD chain editor: add levels, make one an impostor, skip it on the
+/// N64, give the N64 its own cull distance, and preview a distance.
+#[test]
+fn lod_panel_builds_a_chain_with_per_platform_distances() {
+    let mut h = lod_harness(320.0, Vec::new());
+    h.get_by_label_contains("Add level").click();
+    h.run();
+    h.get_by_label_contains("Add level").click();
+    h.run();
+    assert_eq!(h.state().lod.len(), 2);
+    assert_eq!(
+        (h.state().lod[0].distance, h.state().lod[1].distance),
+        (15.0, 30.0)
+    );
+    // Level 1: the light mesh; level 2: the impostor.
+    h.get_by_label("LOD 1 draws").click();
+    h.run();
+    h.get_by_label_contains("models/tree-light").click();
+    h.run();
+    h.get_by_label("LOD 2 draws").click();
+    h.run();
+    h.get_by_label_contains(" impostors/tree").click();
+    h.run();
+    let s = h.state();
+    assert_eq!(s.lod[0].path.as_deref(), Some("models/tree-light"));
+    assert_eq!(s.lod[1].impostor.as_deref(), Some("impostors/tree"));
+    assert!(s.lod[1].path.is_none());
+    // The impostor never on the N64.
+    h.get_by_label("LOD 2 on N64").click();
+    h.run();
+    h.get_by_label("never").click();
+    h.run();
+    assert_eq!(
+        h.state().lod[1].platforms.n64,
+        Some(trino_scene::LodAt::Never)
+    );
+    assert_eq!(h.state().lod[1].distance_on(trino_scene::Target::N64), None);
+    assert_eq!(
+        h.state().lod[1].distance_on(trino_scene::Target::N3ds),
+        Some(30.0)
+    );
+    // Costs per level.
+    assert!(h.query_by_label_contains("80 tris").is_some());
+    assert!(h.query_by_label_contains("impostor · 2 tris").is_some());
+
+    // Preview: on, then the label says which level draws there.
+    h.get_by_label("Preview LOD").click();
+    h.run();
+    assert_eq!(h.state().preview, Some(0.0));
+    h.state_mut().preview = Some(31.0);
+    h.run();
+    assert!(
+        h.query_by_label_contains("at 31.0 m: LOD 2 — impostor")
+            .is_some(),
+        "the preview names the impostor level"
+    );
+    h.state_mut().preview = Some(20.0);
+    h.run();
+    assert!(h.query_by_label_contains("at 20.0 m: LOD 1").is_some());
+    h.state_mut().preview = Some(5.0);
+    h.run();
+    assert!(
+        h.query_by_label_contains("the full mesh (600 tris)")
+            .is_some()
+    );
+    // The edited chain is what the scene file stores.
+    let text = ron::to_string(&h.state().lod).unwrap();
+    let back: Vec<trino_scene::LodDef> = ron::from_str(&text).unwrap();
+    assert_eq!(back, h.state().lod);
+    assert!(h.state().changes >= 5);
+}
+
+#[test]
+fn lod_and_impostor_panels_fit_narrow_inspectors() {
+    let chain = vec![
+        trino_scene::LodDef {
+            distance: 12.0,
+            path: Some("models/tree-light".into()),
+            ..Default::default()
+        },
+        trino_scene::LodDef {
+            distance: 30.0,
+            impostor: Some("impostors/tree".into()),
+            platforms: trino_scene::LodPlatforms {
+                n64: Some(trino_scene::LodAt::At(45.0)),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    ];
+    for width in [260.0, 320.0, 480.0] {
+        let mut h = lod_harness(width, chain.clone());
+        h.state_mut().preview = Some(25.0);
+        h.run();
+        crate::layout_audit::assert_clean(
+            &h,
+            eframe::egui::vec2(width, 700.0),
+            false,
+            &format!("LOD panel at {width} px"),
+        );
+    }
+    struct ImpState {
+        def: trino_asset_pipeline::impostor::ImpostorDef,
+        fonts: bool,
+    }
+    for width in [260.0, 320.0] {
+        let mut h = Harness::builder()
+            .with_size(eframe::egui::vec2(width, 400.0))
+            .build_ui_state(
+                |ui, s: &mut ImpState| {
+                    if !s.fonts {
+                        crate::theme::install(ui.ctx());
+                        s.fonts = true;
+                        return;
+                    }
+                    crate::panels::impostor::settings_editor(ui, &mut s.def);
+                },
+                ImpState {
+                    def: trino_asset_pipeline::impostor::ImpostorDef::new("models/tree"),
+                    fonts: false,
+                },
+            );
+        h.run();
+        crate::layout_audit::assert_clean(
+            &h,
+            eframe::egui::vec2(width, 400.0),
+            false,
+            &format!("impostor settings at {width} px"),
+        );
+        // The N64 tile follows the PC tile until it is set.
+        assert!(
+            h.query_by_label_contains("N64 64x32 CI4 fits TMEM")
+                .is_some()
+        );
+        h.state_mut().def.views = 4;
+        h.run();
+        assert!(
+            h.query_by_label_contains("N64 64x64 CI4 fits TMEM")
+                .is_some()
+        );
+        h.state_mut().def.n64_tile = Some(64);
+        h.run();
+        assert!(h.query_by_label_contains("past TMEM!").is_some());
+    }
+}

@@ -856,6 +856,8 @@ pub fn tscn(env: &TscnEnv, nodes: &[TscnNode]) -> &'static [u8] {
         for (d, m) in &n.lods {
             lod.extend_from_slice(&d.to_le_bytes());
             lod.extend_from_slice(&m.to_le_bytes());
+            // Not an impostor: the rest of the 32-byte record is zero.
+            lod.extend_from_slice(&[0; trino_core::scene::LOD_RECORD_BYTES - 8]);
         }
         let (lo, _) = put(&lod);
         for v in [no, nl, to, tl] {

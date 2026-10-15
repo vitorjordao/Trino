@@ -118,6 +118,18 @@ shipping a 3D game first**, then by cost:
 
 ---
 
+## Done — LOD chains with impostors, baked by the engine (2026-10-15, branch `editor/lod-impostors`, ADR 0009 §2)
+
+| Item | Evidence |
+|---|---|
+| `trino_core::Impostor` (`TIMP` blob, `view_for` by yaw, `draw` = one billboard), `LodLevel::impostor`, `LodPick`, `SceneNode::lod_from`; `draw_nodes` and `EntityStore::draw_in` draw impostor levels; TSCN v2 (32-byte LOD records); scene `LodDef::impostor` + per-platform `LodAt`; `N64_COST.us_per_billboard` | `crates/core/tests/impostors.rs` (view per 45°, half-way switches, rotated objects; exactly 2 triangles; deterministic chain switches; packed records; TIMP round trip), `crates/scene/tests/lod_chain.rs`, castle64 `impostor` self-test step (table parses on the target, side view picked, 1 billboard of 2 triangles, pixel probe) |
+| Impostor bake in the engine (`asset-pipeline::impostor`: own T&L + CPU raster, 4x4 supersampling, clear margins, color bleed, CI4 median cut for the N64 within TMEM, manifest entries, model hash) behind `cargo xtask impostor new/bake/check/list` and the editor's Model › Impostor | `crates/asset-pipeline/tests/impostors.rs` (K frames, margins, light-side orientation, CI4 PNG, determinism, staleness), `xtask/tests/impostor_cli.rs`, kittest `impostors_bake_from_the_inspector_and_drive_a_lod_level` (editor bake == CLI bake byte for byte) |
+| Editor LOD panel (chain, per-platform starts, cost per level, preview slider), budget HUD LOD counts and impostor cost, N64 atlas in the N64 Game view | widget tests, the kittest flow, the layout audit at 960x600 and 1600x940 with both panels open |
+
+Deviation: the bake renders vertex colors only (textured models lose their texture in the
+atlas) and a model, not a prefab. Follow-ups: textured and prefab impostors; an N64
+impostor as an RDP rectangle with depth (cheaper than CPU-submitted triangles).
+
 ## Done — platform variants in scenes and a layout-safe editor (2026-10-15, branch `editor/platform-variants`, ADR 0009)
 
 | Item | Evidence |

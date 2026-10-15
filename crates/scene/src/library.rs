@@ -24,6 +24,11 @@ pub struct Library {
     pub prefabs: BTreeMap<String, Prefab>,
     /// `models/<name>` -> local AABB (see [`ModelBounds`]).
     pub model_bounds: BTreeMap<String, ModelBounds>,
+    /// `impostors/<name>` -> the baked impostor per platform
+    /// ([`crate::Target::index`]; the N64's atlas is smaller). Filled by
+    /// tools that read the baked `TIMP` blobs (xtask, the asset bake, the
+    /// editor); [`Library::load`] leaves it empty.
+    pub impostors: BTreeMap<String, [Option<trino_core::Impostor>; 3]>,
     /// Files that failed to parse (path: error) — shown, never fatal.
     pub errors: Vec<String>,
 }

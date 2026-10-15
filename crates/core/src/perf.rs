@@ -33,6 +33,9 @@ pub struct CostModel {
     pub us_per_split: f32,
     /// Depth sort + rasterizer submission per emitted triangle.
     pub us_per_emitted: f32,
+    /// One textured billboard (`draw_billboard`, an impostor, a particle):
+    /// two CPU-submitted textured triangles and a texture load.
+    pub us_per_billboard: f32,
 }
 
 /// The N64 (emulated time under ares), recalibrated 2026-10-13 after the
@@ -56,6 +59,10 @@ pub const N64_COST: CostModel = CostModel {
     us_per_draw: 183.8,
     us_per_split: 25.5,
     us_per_emitted: 37.0,
+    // Two textured triangles at ~22 µs each, measured in ares on an
+    // external project's far view (impostors made the N64 slower: textured
+    // triangles are CPU-submitted, 52 rspq words each).
+    us_per_billboard: 44.0,
 };
 
 impl CostModel {
@@ -67,6 +74,11 @@ impl CostModel {
             + self.us_per_draw * draws as f32
             + self.us_per_split * tnl.splits as f32
             + self.us_per_emitted * tnl.emitted as f32) as u32
+    }
+
+    /// Estimated microseconds of `n` billboards (impostors, particles).
+    pub fn billboards_us(&self, n: u32) -> u32 {
+        (self.us_per_billboard * n as f32) as u32
     }
 
     /// Estimated T&L-only microseconds (no sort/submit) — comparable with

@@ -42,7 +42,7 @@ pub use library::{Library, ModelBounds};
 pub use material::{MaterialDef, ShadingDef};
 pub use platform::{PlatformVariants, Target, Variant};
 pub use prefab::{Override, Prefab, PrefabInstance};
-pub use resolve::{DrawItem, Resolved, resolve, resolve_for};
+pub use resolve::{DrawItem, LodDraw, LodItem, Resolved, resolve, resolve_for};
 
 use serde::{Deserialize, Serialize};
 use trino_core::SpriteId;
@@ -331,20 +331,92 @@ pub struct ModelComponent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub anim: Option<AnimComponent>,
     /// Distance levels: from `distance` on, draw `path` (a cheaper model —
-    /// fake objects make good far levels) or nothing (`None`). Sorted by
-    /// distance on resolve.
+    /// fake objects make good far levels), an `impostor` (a pre-rendered
+    /// billboard, 2 triangles) or nothing. Sorted by distance on resolve;
+    /// each level can move or drop out per platform.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub lod: Vec<LodDef>,
 }
 
-/// One LOD level of a [`ModelComponent`].
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+/// One LOD level of a [`ModelComponent`]: a chain full mesh → light mesh →
+/// impostor → nothing, with distances per platform.
+///
+/// ```ron
+/// lod: [
+///     (distance: 12.0, path: Some("models/tree-light")),
+///     (distance: 30.0, impostor: Some("impostors/tree"), platforms: (n64: Some(Never))),
+///     (distance: 60.0, platforms: (n64: Some(At(35.0)))),
+/// ]
+/// ```
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 pub struct LodDef {
     /// Camera distance (world units) where this level starts.
     pub distance: f32,
-    /// Model logical path (`models/tree-far`); `None` = culled.
+    /// Model logical path (`models/tree-far`); `None` (and no impostor) =
+    /// culled.
     #[serde(default)]
     pub path: Option<String>,
+    /// An impostor (`impostors/<name>`, baked by `cargo xtask impostor
+    /// bake`) drawn instead of a mesh. Wins over `path`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub impostor: Option<String>,
+    /// Where this level starts on each platform, when not at `distance`
+    /// (`At(d)`), or that it is skipped there (`Never`).
+    #[serde(default, skip_serializing_if = "LodPlatforms::is_empty")]
+    pub platforms: LodPlatforms,
+}
+
+impl LodDef {
+    /// The level's start distance on `target` (`None` = not used there).
+    pub fn distance_on(&self, target: Target) -> Option<f32> {
+        match self.platforms.get(target) {
+            Some(LodAt::At(d)) => Some(*d),
+            Some(LodAt::Never) => None,
+            None => Some(self.distance),
+        }
+    }
+}
+
+/// A LOD level's distance on one platform.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+pub enum LodAt {
+    /// Starts at this distance there.
+    At(f32),
+    /// Not used there (the previous level keeps drawing).
+    Never,
+}
+
+/// Per-platform [`LodAt`]s of a level (`None` = the level's `distance`).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct LodPlatforms {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pc: Option<LodAt>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub n64: Option<LodAt>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub n3ds: Option<LodAt>,
+}
+
+impl LodPlatforms {
+    pub fn is_empty(&self) -> bool {
+        self.pc.is_none() && self.n64.is_none() && self.n3ds.is_none()
+    }
+
+    pub fn get(&self, target: Target) -> Option<&LodAt> {
+        match target {
+            Target::Pc => self.pc.as_ref(),
+            Target::N64 => self.n64.as_ref(),
+            Target::N3ds => self.n3ds.as_ref(),
+        }
+    }
+
+    pub fn get_mut(&mut self, target: Target) -> &mut Option<LodAt> {
+        match target {
+            Target::Pc => &mut self.pc,
+            Target::N64 => &mut self.n64,
+            Target::N3ds => &mut self.n3ds,
+        }
+    }
 }
 
 impl ModelComponent {

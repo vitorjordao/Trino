@@ -67,11 +67,14 @@ fn platform_problems(root: &Path, scene: &Scene, lib: &Library) -> Vec<String> {
         let platform = trino_asset_pipeline::Platform::parse(target.key()).unwrap();
         let r = resolve_for(scene, lib, 0.0, target);
         for item in &r.items {
-            let paths = item.model.iter().map(|(_, p)| p).chain(
-                item.lod
-                    .iter()
-                    .filter_map(|(_, m)| m.as_ref().map(|(_, p)| p)),
-            );
+            let paths = item
+                .model
+                .iter()
+                .map(|(_, p)| p)
+                .chain(item.lod.iter().filter_map(|l| match &l.draw {
+                    trino_scene::LodDraw::Model(_, p) => Some(p),
+                    _ => None,
+                }));
             for path in paths {
                 let name = path.strip_prefix("models/").unwrap_or(path);
                 if let Some(decl) = manifest.models.get(name)
@@ -100,6 +103,7 @@ fn platform_problems(root: &Path, scene: &Scene, lib: &Library) -> Vec<String> {
 pub fn load_library(root: &Path) -> Library {
     let mut lib = Library::load(root);
     lib.model_bounds = trino_asset_pipeline::manifest_model_bounds(&root.join("assets"));
+    lib.impostors = trino_asset_pipeline::impostor::baked(&root.join("assets"));
     lib
 }
 

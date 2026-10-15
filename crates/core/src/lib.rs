@@ -24,6 +24,7 @@ pub mod caps;
 pub mod collide;
 pub mod entity;
 pub mod game;
+pub mod impostor;
 pub mod input;
 pub mod math;
 pub mod math3d;
@@ -49,6 +50,7 @@ pub use caps::{Caps, CapsError};
 pub use collide::{MoveResult, move_and_collide};
 pub use entity::{Entity, EntityId, EntityStore};
 pub use game::Game;
+pub use impostor::Impostor;
 pub use input::{Button, Input, InputState, Key, PointerButton};
 pub use math::{Color, Rect, Vec2, Vec3};
 pub use math3d::{Mat34, Quat};
@@ -64,7 +66,7 @@ pub use render3d::{
     Camera3, ClipInfo, DEFAULT_LIGHT, Fog, Light, MAX_JOINTS, Mesh, MeshError, MeshLayout,
     ScreenTri, TnlContext, TnlScratch, TnlStats, tessellate, tessellate_with,
 };
-pub use scene::{BakedScene, LodLevel, Lods, SceneNode, Tags};
+pub use scene::{BakedScene, LodLevel, LodPick, Lods, SceneNode, Tags};
 pub use text::{BitmapFont, TextBuf};
 pub use tilemap::{TILE_SIZE, Tilemap, TilemapError};
 pub use vis::{Cells, MAX_CELLS, NO_CELL, Portal, VisVolume};

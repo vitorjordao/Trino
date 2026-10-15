@@ -21,6 +21,7 @@
 
 pub mod bake;
 pub mod font;
+pub mod impostor;
 pub mod loader;
 pub mod manifest;
 pub mod model;

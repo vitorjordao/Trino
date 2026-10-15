@@ -1148,6 +1148,7 @@ pub fn bake_scene_with_bounds(
         return Err(format!("scene `{file}`: library error: {e}"));
     }
     lib.model_bounds = bounds;
+    lib.impostors = crate::impostor::baked(assets_root);
     let (blob, warnings) = trino_scene::bake::to_tscn_for(&scene, &lib, platform.target());
     if let Some(w) = warnings.first() {
         return Err(format!("scene `{file}`: {w}"));

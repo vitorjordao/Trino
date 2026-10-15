@@ -216,7 +216,12 @@ new skill when none fits. Then run `cargo xtask agents sync`. The steps are in
   - **Clip crossfade**: `AnimRef::blend_to`.
   - **Opt-in smooth skinning**: `skinning = "smooth"`, TMDL `SKW2`.
   - **Billboards and particles**: `draw_billboard`, `ParticleSystem`.
-  - **Distance LOD**: `model.lod`.
+  - **Distance LOD**: `model.lod` — a chain of lighter meshes, an **impostor** and a cull,
+    each level with its own start per platform (`At(d)` / `Never`); TSCN v2.
+  - **Impostors** (2026-10-15, ADR 0009): `trino_core::Impostor` (a `TIMP` table + an atlas
+    sprite) draws a model as one billboard, the view chosen by the camera's yaw; baked by
+    the engine itself (`cargo xtask impostor`, the editor's model inspector — same files),
+    CI4 within TMEM on the N64; `impostor` self-test step on PC, ares and Azahar.
   - **Positional audio**: `play_sound_with`, voices, stingers,
     `Listener`/`spatialize`, the `sound` component plus `Ambience`.
   - **Portal/cell visibility**: `core::vis`, `vis` component,
@@ -240,6 +245,9 @@ new skill when none fits. Then run `cargo xtask agents sync`. The steps are in
     are ignored by default; run them alone with `--ignored --test-threads=1`.
   - **Inspector › Platforms**: PC / N64 / 3DS columns of variants with their N64 cost;
     the Game view draws the variant of the console it simulates.
+  - **LOD panel** (chain, per-platform starts, cost per level, a preview slider that shows
+    the switch live) and **Model › Impostor** (create, tune, bake, atlas preview, stale
+    badge); the budget HUD counts LOD picks and adds the impostors' N64 cost.
   - **Layout audit** (`layout_audit.rs`): no widget off the window or overlapping, over
     the whole editor at 960x600 and 1600x940.
 - **Emulators in CI**:
@@ -411,6 +419,8 @@ cargo xtask new <name>    # scaffold a game crate under examples/
 cargo xtask scene check   # validate scenes/prefabs/materials (text-first loop)
 cargo xtask scene export [--platform pc|n64|3ds] <scene.ron> <out.rs>   # scene -> no_std Rust data (that platform's variants)
 cargo xtask model inspect <file> [--json]       # bake a model like the engine; art gate
+cargo xtask impostor new <name> --model models/x [--views N --pitch DEG --tile PX]   # pre-render a billboard atlas
+cargo xtask impostor bake <name>|--all | check | list [--json]                     # re-render / stale check / list
 cargo xtask agents sync   # mirror .agents/skills/ into .claude/skills/ (check: agents check)
 cargo xtask new <name> --standalone <dir> [--git <url> --rev <r>]   # project outside this repo
 cargo xtask build|run|test|watch n64|3ds --project <dir>          # package an external project (its trino.toml)
@@ -576,6 +586,12 @@ cargo test --workspace
   failed).
 - **The PC `gamepad` feature links libudev on Linux** (`libudev-dev`). Keep it opt-in
   for Linux builds.
+
+- **egui: a truncating `ComboBox` sizes its text to the space available, not to its
+  `.width()`.** A long name pushed the button after it out of the Inspector. Wrap it in
+  `theme::fixed_width` (the layout audit catches the next one).
+- **`/tmp` may be a RAM disk (tmpfs).** A second `target/` there (a git worktree's build)
+  filled RAM and killed rustc. Put extra worktrees and their targets on a real disk.
 
 - **A module pulled into a test with `#[path = "../src/x.rs"]` doesn't count for
   coverage:** llvm-cov reports it under `tests/../src/x.rs`, which the default filter

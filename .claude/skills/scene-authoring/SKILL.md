@@ -95,9 +95,14 @@ digit).
     name: "crate-a",
     model: Some((
         path: "models/crate",
-        // Distance LOD: swap to a cheaper model (often a fake object), or
-        // cull with `path: None`, beyond each distance (world units).
-        lod: [(distance: 14.0, path: Some("models/crate-far")), (distance: 40.0, path: None)],
+        // Distance LOD chain: a lighter model (often a fake object), an
+        // impostor (2 triangles, `cargo xtask impostor`), then nothing.
+        // Each level can start elsewhere per platform, or not be used there.
+        lod: [
+            (distance: 14.0, path: Some("models/crate-far")),
+            (distance: 30.0, impostor: Some("impostors/crate"), platforms: (n64: Some(Never))),
+            (distance: 40.0, path: None, platforms: (n64: Some(At(30.0)))),
+        ],
     )),
     // Collision for trino_core::physics. `Some(())` = Auto: the model's box.
     // Shapes: Box(size: (x, y, z)) (FULL size), Sphere(radius), Capsule(radius, height).
@@ -118,6 +123,11 @@ digit).
 
 Each component ends up in `SceneNode` / `Entity`, and in TSCN and codegen. Keep these
 rules in mind:
+- **LOD levels resolve per platform** (`LodDef::distance_on`): `At(d)` moves a level,
+  `Never` skips it (the previous level keeps drawing). An impostor level needs the
+  impostor baked; otherwise `scene check` warns and that level draws nothing. Games draw a
+  chain with `scene::draw_nodes` (or `SceneNode::lod_from(eye).draw(..)`), which handles
+  impostor levels. TSCN is v2 since impostor levels (32-byte LOD records): rebake.
 - **Coplanar surfaces z-fight on the N64.** Keep decals and water several cm above the
   ground (16-bit z); the showcase pond sits at 10 cm.
 - **Portal visibility:** a camera outside every cell sees everything. Nodes outside

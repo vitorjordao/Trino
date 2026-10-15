@@ -2,7 +2,7 @@
 //! menus / toolbar / status bar, file sync (hot reload of scenes, prefabs,
 //! materials and assets), shortcuts and undo.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::mpsc::Receiver;
@@ -241,6 +241,11 @@ pub struct App {
     /// The scene's frame from its camera on the N64 and the 3DS (variants,
     /// LOD and impostors applied), with the content key it is for.
     pub budgets: Option<(u64, [trino_scene::budget::FrameBudget; 2])>,
+    /// What a console draws that the PC bakes don't say, for the budgets:
+    /// the console bake of a model with its own source there (an
+    /// `assets/n64/...` override), or `None` for a model that platform does
+    /// not bake. With the project generation it was read at.
+    pub console_models: (u64, ConsoleModels),
     /// eframe's wgpu device (panels with their own preview renderer).
     pub render_state: eframe::egui_wgpu::RenderState,
 }
@@ -479,6 +484,7 @@ impl App {
             impostor_thumbs: Default::default(),
             anim: crate::anim_panel::AnimPanel::from_env(),
             budgets: None,
+            console_models: (u64::MAX, ConsoleModels::new()),
             particles: load_particles(&root.join("assets")),
             pending_particles: HashSet::new(),
             // `TRINO_EDITOR_OPEN=particles:<name>@n64` previews that platform.
@@ -536,8 +542,8 @@ impl App {
     }
 
     /// The scene's frame on the N64 and the 3DS from its camera
-    /// (`trino_scene::budget`, what `cargo xtask scene budget` prints; the
-    /// editor has the PC bakes of the models).
+    /// (`trino_scene::budget`, what `cargo xtask scene budget` prints): the
+    /// PC bakes of the models, except where a console has its own.
     pub fn platform_budgets(&self) -> [trino_scene::budget::FrameBudget; 2] {
         use trino_scene::{Target, budget};
         let env = &self.doc.scene.environment;
@@ -546,7 +552,10 @@ impl App {
             let resolved = trino_scene::resolve_for(&self.doc.scene, &self.lib, 0.0, t);
             budget::estimate(
                 &resolved,
-                &|id| self.project.model_by_id(id).map(|m| m.tmdl.as_slice()),
+                &|id| match self.console_models.1.get(&(t, id.0)) {
+                    Some(own) => own.as_deref(),
+                    None => self.project.model_by_id(id).map(|m| m.tmdl.as_slice()),
+                },
                 &camera,
                 &light,
                 budget::screen_of(t, trino_core::Vec2::new(640.0, 480.0)),
@@ -2379,6 +2388,40 @@ pub fn load_particles(
         .collect()
 }
 
+/// Console model bakes keyed by (platform, model id): `Some` for a model
+/// with its own source on that console, `None` for one it does not bake.
+pub type ConsoleModels = HashMap<(trino_scene::Target, u32), Option<Vec<u8>>>;
+
+/// The models whose console build differs from the PC's (see
+/// `App::console_models`); `cargo xtask scene budget` bakes each platform
+/// the same way.
+pub fn console_models(assets: &Path) -> ConsoleModels {
+    use trino_scene::Target;
+    let mut out = ConsoleModels::new();
+    let Ok(manifest) = pipeline::Manifest::load(&assets.join("manifest.toml")) else {
+        return out;
+    };
+    for (t, p) in [
+        (Target::N64, pipeline::Platform::N64),
+        (Target::N3ds, pipeline::Platform::N3ds),
+    ] {
+        for (name, d) in &manifest.models {
+            let id = trino_core::asset_id(&format!("models/{name}"));
+            if !d.bakes_for(p) {
+                out.insert((t, id), None);
+                continue;
+            }
+            let pc = pipeline::resolve_source(assets, pipeline::Platform::Pc, &d.file).ok();
+            let own = pipeline::resolve_source(assets, p, &d.file).ok();
+            if own.is_some() && own != pc {
+                let blob = own.and_then(|src| pipeline::bake_model(&src, &d.options()).ok());
+                out.insert((t, id), blob);
+            }
+        }
+    }
+    out
+}
+
 /// Every impostor settings file under `assets/impostors/`, by name.
 fn load_impostor_defs(
     assets: &Path,
@@ -2480,6 +2523,12 @@ impl eframe::App for App {
         // The consoles' frames, once per content change (not per animated
         // frame: the estimate is from the scene camera at time 0).
         let key = self.budget_key();
+        if self.console_models.0 != self.project.generation {
+            self.console_models = (
+                self.project.generation,
+                console_models(&self.project.assets_dir()),
+            );
+        }
         if self.budgets.as_ref().map(|b| b.0) != Some(key) {
             self.budgets = Some((key, self.platform_budgets()));
         }
@@ -2734,6 +2783,47 @@ pub fn card() -> egui::Frame {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The budgets see what each console bakes: its own source where it
+    /// has one, nothing where the model is not baked, the PC bake
+    /// otherwise.
+    #[test]
+    fn console_models_follow_overrides_and_platform_lists() {
+        use trino_scene::Target;
+        let dir = tempfile::tempdir().unwrap();
+        let assets = dir.path().join("assets");
+        let repo =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/shared/models/castle64");
+        for (sub, from) in [("shared", "coin.glb"), ("n64", "boar.glb")] {
+            let to = assets.join(sub).join("models");
+            std::fs::create_dir_all(&to).unwrap();
+            std::fs::copy(repo.join(from), to.join("coin.glb")).unwrap();
+        }
+        std::fs::write(
+            assets.join("manifest.toml"),
+            "version = 1\n\n[models.coin]\nfile = \"models/coin.glb\"\n\n\
+             [models.pc_only]\nfile = \"models/coin.glb\"\nplatforms = [\"pc\"]\n",
+        )
+        .unwrap();
+        let m = console_models(&assets);
+        let (coin, pc_only) = (
+            trino_core::asset_id("models/coin"),
+            trino_core::asset_id("models/pc_only"),
+        );
+        let tris = |b: &[u8]| trino_core::Mesh::from_tmdl(b).unwrap().index_count / 3;
+        let boar = pipeline::bake_model(&repo.join("boar.glb"), &Default::default()).unwrap();
+        let n64 = m[&(Target::N64, coin)]
+            .as_deref()
+            .expect("the N64 override");
+        assert_eq!(tris(n64), tris(&boar), "the N64 bakes the boar");
+        assert!(
+            !m.contains_key(&(Target::N3ds, coin)),
+            "no 3DS override: PC bake"
+        );
+        assert_eq!(m[&(Target::N64, pc_only)], None);
+        assert_eq!(m[&(Target::N3ds, pc_only)], None);
+        assert_eq!(m.len(), 3);
+    }
 
     #[test]
     fn long_paths_keep_their_end() {

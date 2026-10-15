@@ -56,8 +56,11 @@ and draws sent but unseen. The "N64 3D time" row then uses that CPU/RSP split, s
 HUD's two N64 figures agree. The Inspector's scene settings (nothing selected) list every
 reason (`off the RSP: n × reason`) and each unseen draw; clicking one selects it. The
 budgets are cached on the scene text, the library revision and the project generation
-(`App::budgets`), and hidden during Play here (the camera is the game's then). The Scene view draws collider,
-cell and portal wireframes.
+(`App::budgets`), and hidden during Play here (the camera is the game's then). They use the
+PC bakes except where a console has its own source (`assets/n64/...`) or does not bake a
+model (`platforms = [..]`): `App::console_models` bakes those, as `scene budget` does.
+
+The Scene view draws collider, cell and portal wireframes.
 
 Live-edit check: start the editor with `TRINO_EDITOR_ECHO_LOG=1` in the background, edit a
 `.material.ron` / `.prefab.ron` / scene, and watch for `… updated` / `… reloaded` lines.

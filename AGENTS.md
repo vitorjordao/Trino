@@ -434,7 +434,10 @@ cargo test --workspace
   `cargo xtask test --bless` and review the diff in the PR. Performance work must leave
   goldens byte-identical.
 - Guard tests: `dep_graph`, `agents_sync` (skill mirrors), `scene_codegen` (exported
-  scene drift), `showcase_render` (runtime == codegen pixels). See the `test-all` skill.
+  scene drift), `showcase_render` (runtime == codegen pixels), `feature_matrix`
+  (`docs/TESTING.md`, the feature → test matrix). See the `test-all` skill.
+- Every feature has an integration test through the public API
+  (`crates/<crate>/tests/`, end to end) and a row in `docs/TESTING.md`.
 - Console tests report through debug channels — ISViewer magic strings on
   N64 (`apps/n64/src/lib.rs::run_self_test`), `svcOutputDebugString` on 3DS
   (`apps/3ds/src/main.rs::run_self_test`, read from Azahar's log file).
@@ -548,6 +551,10 @@ cargo test --workspace
   `no_std` breaks the host `cargo check --workspace` (no panic handler).
 - **The PC `gamepad` feature links libudev on Linux** (`libudev-dev`). Keep it opt-in
   for Linux builds.
+
+- **A module pulled into a test with `#[path = "../src/x.rs"]` doesn't count for
+  coverage:** llvm-cov reports it under `tests/../src/x.rs`, which the default filter
+  drops. Put such tests in the module itself.
 
 - Do not add dependencies to `trino-core` — the dep-graph test will fail, and the crate
   must compile for MIPS bare metal.

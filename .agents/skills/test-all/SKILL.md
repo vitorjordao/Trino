@@ -26,10 +26,20 @@ cargo test --workspace
 | `xtask/tests/n64_parity.rs` | the PC N64 look drifted from the ares golden frame (mean diff / % within two 5-bit steps) | a quantizer/VI/T&L change; compare with `TRINO_PARITY_DUMP=1` (writes `tests/golden/n64/actual/pc_look.png`) |
 | `xtask/tests/perf_budget.rs` | castle64's per-scene T&L work (verts, tris, splits, emitted, …) differs from `tests/perf/castle64_work.toml` — heavier content, a level drawing more, a culling or split regression | intended? `TRINO_BLESS=1 cargo test -p xtask --test perf_budget`, review the TOML diff (each number is N64 time), then `cargo xtask test n64 --bless`. The failure prints the hot models by name |
 | `xtask/tests/n3ds_parity.rs` | the PC N3ds look drifted from the Azahar golden frame (`tests/golden/3ds/castle64_hub.png`: mean diff < 2.5, < 2.5% far pixels) | a backend difference or **renderer state leaking** (it found castle64 inheriting a fogged light); `TRINO_PARITY_DUMP=1` writes `tests/golden/3ds/actual/pc_look.png` |
+| `xtask/tests/feature_matrix.rs` | a `docs/TESTING.md` test reference is stale, or a trait method / TMDL section / asset kind / xtask command has no row | add the row with its test (or `n/a: <reason>` when no host test can exist) |
 | `xtask/tests/standalone.rs` | `cargo xtask new --standalone` output no longer builds/tests (windowed smoke with GPU + display) | fix `templates/standalone/` or `trino-runner-pc` |
 | `crates/editor/src/ui_tests.rs` (`#[ignore]`: `cargo test -p trino-editor ui_tests -- --ignored --test-threads=1`, own CI step) | an editor panel flow broke (select → palette → duplicate → undo) | fix the UI; hand-painted widgets need `widget_info` |
 
 GPU-dependent tests skip without an adapter unless `TRINO_REQUIRE_GPU=1`.
+
+**Feature matrix and coverage.** `docs/TESTING.md` maps every engine feature to
+its tests; `xtask/tests/feature_matrix.rs` fails when a listed test no longer
+exists, or when a `Renderer`/`Platform`/`Audio` method, a TMDL section, a
+manifest asset kind or an xtask command has no row. A new feature adds an
+integration test (`crates/<crate>/tests/`, public API, end to end) and a row.
+Coverage: `TRINO_REQUIRE_GPU=1 cargo llvm-cov --workspace --summary-only
+--ignore-filename-regex '(crates/platform-(n64|3ds)|apps/(n64|3ds))/|crates/editor/src/main\.rs'`
+(details and the editor's ignored flows in `docs/TESTING.md`).
 
 ## Also worth running
 

@@ -418,6 +418,26 @@ fn controls(
     tris: usize,
     verts: usize,
 ) {
+    // Write the previewed clip into the selected entity (the scene file).
+    let a = &app.anim;
+    let target = app.doc.selected.clone().filter(|p| {
+        app.doc
+            .scene
+            .get(p)
+            .and_then(|e| e.model.as_ref())
+            .is_some_and(|m| m.path == model)
+    });
+    if let (Some(path), Some(clip)) = (target, a.clip.clone()) {
+        let speed = a.speed;
+        if ui
+            .button(format!("{}  Use on the selected entity", icon::CHECK))
+            .on_hover_text("Sets its clip and speed in the scene")
+            .clicked()
+            && let Some(m) = app.doc.scene.get_mut(&path).and_then(|e| e.model.as_mut())
+        {
+            m.anim = Some(trino_scene::AnimComponent { clip, speed });
+        }
+    }
     let a = &mut app.anim;
     theme::component(ui, "anim-play", icon::TIMER, c::TEXT, "Playback", |ui| {
         theme::prop(ui, "Speed", |ui| {
@@ -616,27 +636,6 @@ fn controls(
             }
         },
     );
-
-    // Write the previewed clip into the selected entity (the scene file).
-    let a = &app.anim;
-    let target = app.doc.selected.clone().filter(|p| {
-        app.doc
-            .scene
-            .get(p)
-            .and_then(|e| e.model.as_ref())
-            .is_some_and(|m| m.path == model)
-    });
-    if let (Some(path), Some(clip)) = (target, a.clip.clone()) {
-        let speed = a.speed;
-        if ui
-            .button(format!("{}  Use on the selected entity", icon::CHECK))
-            .on_hover_text("Sets its clip and speed in the scene")
-            .clicked()
-            && let Some(m) = app.doc.scene.get_mut(&path).and_then(|e| e.model.as_mut())
-        {
-            m.anim = Some(trino_scene::AnimComponent { clip, speed });
-        }
-    }
 }
 
 #[cfg(test)]

@@ -127,8 +127,12 @@ Live-edit check: start the editor with `TRINO_EDITOR_ECHO_LOG=1` in the backgrou
 - **Icon buttons need an accessible name** (`theme::named_icon_button`): a tooltip is not a
   label, so kittest (and a screen reader) can't find "Pause" by its glyph.
 - **Kittest clicks need the widget on screen.** A panel's content below the fold has rects
-  past the window or its scroll area; `ui_tests::click` wheels the panel (over a visible
-  part of it) until the widget fully shows. Items of an open combo list are clicked with
+  past the window or its scroll area; `ui_tests::click` first sends accesskit's
+  `ScrollIntoView` (`Node::scroll_to_me`), then wheels the panel (over a visible part of
+  it) until the widget fully shows. The wheel alone failed once a button sat above a
+  3D preview: the wheel landed on the preview, which zooms instead of scrolling, and the
+  click went nowhere (a rect above the window also counted as visible until the helper
+  clipped it to the screen). Items of an open combo list are clicked with
   `click_accesskit()` (the list scrolls on its own), which leaves the list open: close it
   on its combo before the next click.
 - **A truncating `ComboBox` sizes its text to the space *available*, not to its

@@ -501,10 +501,28 @@ fn click(h: &mut Harness<'static, App>, label: &str) {
                 visible: eframe::egui::Rect::NOTHING,
             })
     };
-    for _ in 0..40 {
+    let screen = h.ctx.content_rect();
+    let shown = |h: &Harness<'static, App>| {
         let w = find(h);
-        let shown = w.visible.is_positive() && w.visible.height() >= w.rect.height() - 1.0;
-        if shown {
+        // Whatever egui says, off the window is not shown.
+        let visible = w.visible.intersect(screen);
+        (
+            visible.is_positive() && visible.height() >= w.rect.height() - 1.0,
+            crate::layout_audit::Widget { visible, ..w },
+        )
+    };
+    // Ask egui to scroll it into view (the accessibility action) first: a
+    // wheel can land on a viewport that zooms instead of scrolling.
+    if !shown(h).0 {
+        match h.query_by_label(label) {
+            Some(n) => n.scroll_to_me(),
+            None => h.get_by_label_contains(label).scroll_to_me(),
+        }
+        h.run_steps(8);
+    }
+    for _ in 0..40 {
+        let (ok, w) = shown(h);
+        if ok {
             break;
         }
         // Wheel over the part of its panel that shows: the widget's own

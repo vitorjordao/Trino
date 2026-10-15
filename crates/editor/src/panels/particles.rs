@@ -72,6 +72,19 @@ fn profile_of(p: Platform) -> SimProfile {
     }
 }
 
+/// How far the effect's particles get from the emitter: the apex of a
+/// throw against gravity, else speed × life (the preview frames it).
+fn reach(def: &ParticlesDef) -> f32 {
+    let g = def.gravity.iter().map(|v| v * v).sum::<f32>().sqrt();
+    let flight = def.speed.1 * def.life.1;
+    let apex = if g > 0.0 {
+        def.speed.1 * def.speed.1 / (2.0 * g)
+    } else {
+        flight
+    };
+    apex.min(flight).max(0.5) + def.size.0.max(def.size.1)
+}
+
 /// Two drag values side by side for a (min, max) range.
 fn range(ui: &mut egui::Ui, label: &str, v: &mut (f32, f32), speed: f64, suffix: &str) -> bool {
     theme::prop(ui, label, |ui| {
@@ -276,10 +289,12 @@ pub fn asset(app: &mut App, ui: &mut egui::Ui, name: &str) {
     let sys = &v.system;
     let p = Preview::ensure(&mut v.preview, &rs, profile);
     let generation = app.project.generation;
-    if p.uploaded.as_ref() != Some(&("particles".to_string(), generation)) {
+    let key = (format!("particles:{name}"), generation);
+    if p.uploaded.as_ref() != Some(&key) {
         app.project.upload_all(&mut p.renderer);
-        p.cam.focus(Vec3::new(0.0, 1.0, 0.0), 0.9);
-        p.uploaded = Some(("particles".to_string(), generation));
+        let reach = reach(&def);
+        p.cam.focus(Vec3::new(0.0, reach * 0.4, 0.0), reach * 0.45);
+        p.uploaded = Some(key);
     }
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
     p.show(

@@ -21,7 +21,7 @@ Opens `scenes/showcase.scene.ron` (override: `TRINO_EDITOR_SCENE=scenes/x.scene.
 | `TRINO_EDITOR_TAB=scene\|game\|level\|animation` | focused center tab |
 | `TRINO_EDITOR_ANIM=<model>:<clip>@<time>` | the Animation tab previews that clip, paused at that time |
 | `TRINO_EDITOR_ANIM_VIEW=ghosts=3,blend=wave:0.5,look=n64,palette` | its view options (onion skin, crossfade, look, palette) |
-| `TRINO_EDITOR_OPEN=fake-object` / `array` / `material:<logical>` / `model:<logical>` / `prefab:<logical>` | open the fake-object or array dialog, an asset inspector, or a prefab in edit mode |
+| `TRINO_EDITOR_OPEN=fake-object` / `array` / `material:<logical>` / `model:<logical>` / `prefab:<logical>` / `particles:<name>[@pc\|n64\|3ds]` | open the fake-object or array dialog, an asset inspector, or a prefab in edit mode |
 | `TRINO_EDITOR_PALETTE=<query>` | open the command palette (Ctrl+K) with that query |
 | `TRINO_EDITOR_PLAY=here` | start **Play here** on the first frame: the scene runs inside the Game view (CI smoke) |
 | `TRINO_EDITOR_ECHO_LOG=1` | mirror the Console to stderr (see reloads, errors, saves) |
@@ -71,6 +71,8 @@ Live-edit check: start the editor with `TRINO_EDITOR_ECHO_LOG=1` in the backgrou
 | `palette.rs` | command-palette matcher (the app builds the item list from its menus) |
 | `budget.rs` | Game-view budget HUD rows from `FrameStats` vs `Caps` |
 | `anim_panel.rs` | the Animation tab: its own preview renderer, clips, transport, crossfade, measurements (`trino_asset_pipeline::anim`), onion skin, palette, looks, console pose export |
+| `panels/particles.rs` | Assets › Particles inspector: fields, caps per platform, the live preview (`ParticlesView`) with Burst |
+| `preview.rs` | a small offscreen preview with its own `PcRenderer` (Animation tab, particle inspector) |
 | `panels/lod.rs` | Inspector › Model › LOD: the chain (mesh / impostor / cull), per-platform starts, cost per level, the preview slider |
 | `panels/impostor.rs` | Model asset › Impostor: settings, Bake (the same `impostor::bake` as the CLI), atlas preview, fresh/stale badge |
 | `panels/platforms.rs` | Inspector › Platforms: per-platform variants (grid of PC/N64/3DS columns, stacked when narrow) |
@@ -122,7 +124,7 @@ Live-edit check: start the editor with `TRINO_EDITOR_ECHO_LOG=1` in the backgrou
   `layout_audit::widgets(h, Some(&h.ctx))` matches each node to egui's own widget rect and
   uses its clipped `interact_rect` (sideways overflow still uses the full rect: text wider
   than its panel is a bug even when clipped).
-- **Icon buttons need an accessible name** (`anim_panel::named_icon`): a tooltip is not a
+- **Icon buttons need an accessible name** (`theme::named_icon_button`): a tooltip is not a
   label, so kittest (and a screen reader) can't find "Pause" by its glyph.
 - **Kittest clicks need the widget on screen.** A panel's content below the fold has rects
   past the window or its scroll area; `ui_tests::click` wheels the panel (over a visible

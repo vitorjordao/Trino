@@ -496,3 +496,83 @@ fn lod_and_impostor_panels_fit_narrow_inspectors() {
         assert!(h.query_by_label_contains("past TMEM!").is_some());
     }
 }
+
+struct PfxState {
+    def: trino_asset_pipeline::particles::ParticlesDef,
+    changes: usize,
+    fonts: bool,
+}
+
+fn pfx_harness(width: f32) -> Harness<'static, PfxState> {
+    let sprites: &'static [String] = Box::leak(Box::new([
+        "sprites/spark".to_string(),
+        "sprites/smoke-puff-with-a-long-name".to_string(),
+    ]));
+    let mut h = Harness::builder()
+        .with_size(eframe::egui::vec2(width, 900.0))
+        .build_ui_state(
+            move |ui, s: &mut PfxState| {
+                if !s.fonts {
+                    crate::theme::install(ui.ctx());
+                    s.fonts = true;
+                    return;
+                }
+                if crate::panels::particles::editor(ui, &mut s.def, sprites) {
+                    s.changes += 1;
+                }
+            },
+            PfxState {
+                def: trino_asset_pipeline::particles::ParticlesDef::new("sprites/spark"),
+                changes: 0,
+                fonts: false,
+            },
+        );
+    h.run();
+    h
+}
+
+/// The particle editor: a sprite, the caps per platform (own cap, off), and
+/// what the file stores; it fits narrow inspectors.
+#[test]
+fn particle_editor_sets_fields_and_per_platform_caps() {
+    use trino_asset_pipeline::Platform;
+    let mut h = pfx_harness(340.0);
+    h.get_by_role(Role::ComboBox).click();
+    h.run();
+    h.get_by_label("sprites/smoke-puff-with-a-long-name")
+        .click();
+    h.run();
+    assert_eq!(h.state().def.sprite, "sprites/smoke-puff-with-a-long-name");
+    h.get_by_label("Own cap on N64").click();
+    h.run();
+    assert_eq!(h.state().def.cap(Platform::N64), 32, "starts at the max");
+    h.state_mut().def.platforms.n64.as_mut().unwrap().max = Some(6);
+    h.run();
+    assert!(
+        h.query_by_label_contains("N64: up to 6 · 12 tris")
+            .is_some()
+    );
+    h.get_by_label("Off on 3DS").click();
+    h.run();
+    assert_eq!(h.state().def.cap(Platform::N3ds), 0);
+    assert!(h.query_by_label_contains("3DS: off").is_some());
+    // Unticking leaves no platform block.
+    h.get_by_label("Off on 3DS").click();
+    h.run();
+    assert!(h.state().def.platforms.n3ds.is_none());
+    let text = h.state().def.to_ron();
+    assert_eq!(
+        trino_asset_pipeline::particles::ParticlesDef::from_ron(&text).unwrap(),
+        h.state().def
+    );
+    assert!(h.state().changes >= 3);
+    for width in [260.0, 340.0, 480.0] {
+        let h = pfx_harness(width);
+        crate::layout_audit::assert_clean(
+            &h,
+            eframe::egui::vec2(width, 900.0),
+            false,
+            &format!("particle editor at {width} px"),
+        );
+    }
+}

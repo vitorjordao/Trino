@@ -54,7 +54,7 @@ pub use impostor::Impostor;
 pub use input::{Button, Input, InputState, Key, PointerButton};
 pub use math::{Color, Rect, Vec2, Vec3};
 pub use math3d::{Mat34, Quat};
-pub use particles::{Emitter, ParticleSystem};
+pub use particles::{Effect, Emitter, ParticleSystem};
 pub use physics::{Aabb, Collider, Shape};
 pub use platform::{BlobId, DisplayInfo, DisplaySettings, Platform, SaveError};
 pub use render::{

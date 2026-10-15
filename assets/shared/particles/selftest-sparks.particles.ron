@@ -1,0 +1,21 @@
+// Sparks for castle64's self-test (selftest::particles): a burst capped
+// per platform — 24 on PC, 8 on the N64, 16 on the 3DS.
+(
+    version: 1,
+    sprite: "sprites/selftest_quadrants",
+    rate: 30.0,
+    life: (0.6, 1.2),
+    speed: (1.5, 3.0),
+    direction: (0.0, 1.0, 0.0),
+    spread: 35.0,
+    gravity: (0.0, -6.0, 0.0),
+    size: (0.3, 0.1),
+    color: ((255, 230, 120, 255), (255, 80, 20, 0)),
+    frames: 2,
+    frame_size: (8.0, 8.0),
+    max: 24,
+    platforms: (
+        n64: Some((max: Some(8))),
+        n3ds: Some((max: Some(16))),
+    ),
+)

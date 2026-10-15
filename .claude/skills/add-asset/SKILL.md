@@ -163,6 +163,39 @@ pitch, tiles and Bake). Both write:
   `N64_COST.us_per_billboard`). Most static meshes run on the RSP for less, so an impostor
   can make the N64 *slower* — give the N64 its own distance or `Never` in the LOD level.
 
+## Particle effects
+
+`assets/shared/particles/<name>.particles.ron` + `[particles.<name>] file =
+"particles/<name>.particles.ron"` (an override in `assets/n64/particles/` wins on the N64,
+like any master):
+
+```ron
+(
+    version: 1,
+    sprite: "sprites/spark",         // a flipbook left to right when `frames` > 0
+    rate: 30.0, life: (0.6, 1.2), speed: (1.5, 3.0),
+    direction: (0.0, 1.0, 0.0), spread: 35.0,   // cone half-angle, DEGREES
+    gravity: (0.0, -6.0, 0.0), size: (0.3, 0.1),
+    color: ((255, 230, 120, 255), (255, 80, 20, 0)),
+    frames: 2, frame_size: (8.0, 8.0),
+    max: 24,                                     // the most alive at once
+    platforms: (n64: Some((max: Some(8))), n3ds: Some((disabled: true))),
+)
+```
+
+- It bakes per platform to a `TPFX` blob with that platform's cap (0 = off there). Code:
+  `let fx = Effect::parse(platform.blob(BlobId::from_path("particles/<name>"))?)?;
+  let mut s: ParticleSystem<32> = ParticleSystem::from_effect(&fx, seed);` — the cap
+  holds against bursts and emission (`ParticleSystem::limit`).
+- Cost: 2 triangles per particle and ~44 µs each on the N64 (`N64_COST.us_per_billboard`):
+  cap the N64.
+- `cargo xtask particles new <name> --sprite sprites/x`, `particles check`,
+  `particles inspect <name> [--seconds S] [--seed N] [--json]` (live and peak particles,
+  peak tris, N64 time and a position hash per platform — the same seed, the same hash).
+- Editor: Assets › **Particles** (+ creates one) › Inspector: every field, the cap per
+  platform, a live preview with Burst on the PC/N64/3DS caps. Edits write the file once
+  the user settles; a file an agent writes reloads in the inspector.
+
 ## Materials
 
 `assets/materials/<name>.material.ron` (logical `materials/<name>`), no manifest entry:

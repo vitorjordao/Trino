@@ -13,16 +13,16 @@
 
 use std::time::Instant;
 
-use eframe::egui::{self, Color32, Pos2, Rect, RichText, Sense, Vec2};
+use eframe::egui::{self, Pos2, Rect, RichText, Sense, Vec2};
 use eframe::egui_wgpu::RenderState;
 use trino_asset_pipeline::anim::{self, ClipMetrics, Limits};
 use trino_core::{
-    AnimRef, ClipId, Color, Material, Mesh, ModelId, ModelParams, Renderer, Shading, Transform3,
+    AnimRef, ClipId, Color, Material, Mesh, ModelId, ModelParams, Renderer, Transform3,
 };
-use trino_platform_pc::{PcRenderer, SimProfile};
+use trino_platform_pc::SimProfile;
 
 use crate::app::{App, Cmd};
-use crate::gizmo::OrbitCam;
+use crate::preview::Preview;
 use crate::theme::{self, c, icon};
 
 /// The tab's state (what is previewed and how).
@@ -47,7 +47,7 @@ pub struct AnimPanel {
     /// Measurements of the model's clips (cached per model and bake).
     pub metrics: Vec<ClipMetrics>,
     metrics_key: Option<(String, u64)>,
-    preview: Option<Preview>,
+    preview: Option<crate::preview::Preview>,
     last: Instant,
 }
 
@@ -174,61 +174,6 @@ impl AnimPanel {
     }
 }
 
-/// The tab's own renderer: the model alone, orbited by mouse.
-struct Preview {
-    render_state: RenderState,
-    renderer: PcRenderer,
-    texture: egui::TextureId,
-    profile: SimProfile,
-    size: (u32, u32),
-    cam: OrbitCam,
-    /// (model, project generation) uploaded.
-    uploaded: Option<(String, u64)>,
-}
-
-const GRID: ModelId = ModelId(trino_core::asset_id("__editor/anim-grid"));
-
-impl Preview {
-    fn new(render_state: RenderState, profile: SimProfile) -> Self {
-        let device = wgpu::Device::clone(&render_state.device);
-        let queue = wgpu::Queue::clone(&render_state.queue);
-        let mut renderer = PcRenderer::with_device(device, queue, profile);
-        renderer.upload_mesh(GRID, crate::viewport::grid_tmdl());
-        let texture = render_state.renderer.write().register_native_texture(
-            &render_state.device,
-            renderer.offscreen_view(),
-            wgpu::FilterMode::Nearest,
-        );
-        Preview {
-            render_state,
-            renderer,
-            texture,
-            profile,
-            size: (0, 0),
-            cam: OrbitCam::default(),
-            uploaded: None,
-        }
-    }
-
-    fn reregister(&mut self) {
-        let mut r = self.render_state.renderer.write();
-        r.free_texture(&self.texture);
-        self.texture = r.register_native_texture(
-            &self.render_state.device,
-            self.renderer.offscreen_view(),
-            wgpu::FilterMode::Nearest,
-        );
-    }
-}
-
-/// An icon button whose accessible name is `name` (screen readers and the
-/// UI tests find it by that, not by the glyph).
-fn named_icon(ui: &mut egui::Ui, glyph: &str, name: &str) -> egui::Response {
-    let r = theme::icon_button(ui, glyph, name);
-    r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, name));
-    r
-}
-
 /// Models with a skeleton and clips, by logical path.
 fn animated(app: &App) -> Vec<String> {
     app.project
@@ -339,7 +284,7 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
     });
     let duration = a.current_metrics().map_or(0.0, |m| m.duration);
     ui.horizontal(|ui| {
-        if named_icon(ui, icon::SKIP_BACK, "Previous frame").clicked() {
+        if theme::named_icon_button(ui, icon::SKIP_BACK, "Previous frame").clicked() {
             a.step(-1.0, fps);
         }
         let (glyph, tip) = if a.playing {
@@ -347,10 +292,10 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
         } else {
             (icon::PLAY, "Play")
         };
-        if named_icon(ui, glyph, tip).clicked() {
+        if theme::named_icon_button(ui, glyph, tip).clicked() {
             a.playing = !a.playing;
         }
-        if named_icon(ui, icon::SKIP_FORWARD, "Next frame").clicked() {
+        if theme::named_icon_button(ui, icon::SKIP_FORWARD, "Next frame").clicked() {
             a.step(1.0, fps);
         }
         ui.spacing_mut().slider_width = (ui.available_width() - 160.0).clamp(40.0, 360.0);
@@ -419,12 +364,7 @@ fn preview(
         .map_or(0.1, |m| m.duration / m.frames.max(1) as f32);
     let (ghosts, grid, profile, time) = (a.ghosts, a.grid, a.profile, a.time);
     let palette = a.palette.map(|p| p.map(|c| Color::rgb(c[0], c[1], c[2])));
-    let p = a
-        .preview
-        .get_or_insert_with(|| Preview::new(render_state.clone(), profile));
-    if p.profile != profile {
-        *p = Preview::new(render_state, profile);
-    }
+    let p = Preview::ensure(&mut a.preview, &render_state, profile);
     let generation = app.project.generation;
     if p.uploaded.as_ref() != Some(&(model.to_string(), generation)) {
         app.project.upload_all(&mut p.renderer);
@@ -432,94 +372,39 @@ fn preview(
         p.cam.focus(c, radius.max(0.3));
         p.uploaded = Some((model.to_string(), generation));
     }
-    let ppp = ui.ctx().pixels_per_point();
-    let size = if profile == SimProfile::Native {
-        let s = (
-            ((rect.width() * ppp) as u32).max(16),
-            ((rect.height() * ppp) as u32).max(16),
-        );
-        p.renderer.set_internal_size(s.0, s.1);
-        s
-    } else {
-        p.renderer.internal_size()
-    };
-    let resp = ui.allocate_rect(rect, Sense::click_and_drag());
-    if resp.dragged() {
-        p.cam.orbit(resp.drag_delta());
-    }
-    if resp.hovered() {
-        let scroll = ui.input(|i| i.smooth_scroll_delta.y);
-        if scroll != 0.0 {
-            p.cam.zoom(scroll);
-        }
-    }
-    if p.cam.step(ui.input(|i| i.stable_dt).min(0.1)) {
-        ui.ctx().request_repaint();
-    }
     let id = ModelId(trino_core::asset_id(model));
-    let r = &mut p.renderer;
-    r.begin_frame(Color::rgb(20, 22, 30));
-    r.set_camera(&p.cam.camera());
-    r.set_light(&trino_core::DEFAULT_LIGHT);
-    if grid {
-        r.draw_model(
-            GRID,
-            &Transform3::default(),
-            Material::VertexLit,
-            &ModelParams {
-                shading: Shading::Unlit,
-                double_sided: true,
-                ..ModelParams::DEFAULT
-            },
-        );
-    }
-    // Onion skin: earlier frames, fainter the older.
-    for k in (1..=ghosts as i32).rev() {
-        let t = (time - k as f32 * step * 2.0).max(0.0);
-        let alpha = (110.0 * (1.0 - k as f32 / (ghosts as f32 + 1.0))) as u8;
-        r.draw_model(
-            id,
-            &Transform3::default(),
-            Material::VertexLit,
-            &ModelParams {
-                tint: Color::rgba(160, 190, 255, alpha.max(20)),
-                anim: anim.map(|x| AnimRef { time: t, ..x }),
-                palette,
-                ..ModelParams::DEFAULT
-            },
-        );
-    }
-    r.draw_model(
-        id,
-        &Transform3::default(),
-        Material::VertexLit,
-        &ModelParams {
-            anim,
-            palette,
-            ..ModelParams::DEFAULT
+    p.show(
+        ui,
+        rect,
+        grid,
+        |r: &mut trino_platform_pc::PcRenderer, _| {
+            // Onion skin: earlier frames, fainter the older.
+            for k in (1..=ghosts as i32).rev() {
+                let t = (time - k as f32 * step * 2.0).max(0.0);
+                let alpha = (110.0 * (1.0 - k as f32 / (ghosts as f32 + 1.0))) as u8;
+                r.draw_model(
+                    id,
+                    &Transform3::default(),
+                    Material::VertexLit,
+                    &ModelParams {
+                        tint: Color::rgba(160, 190, 255, alpha.max(20)),
+                        anim: anim.map(|x| AnimRef { time: t, ..x }),
+                        palette,
+                        ..ModelParams::DEFAULT
+                    },
+                );
+            }
+            r.draw_model(
+                id,
+                &Transform3::default(),
+                Material::VertexLit,
+                &ModelParams {
+                    anim,
+                    palette,
+                    ..ModelParams::DEFAULT
+                },
+            );
         },
-    );
-    r.end_frame();
-    if p.size != size {
-        p.reregister();
-        p.size = size;
-    }
-    // Letterbox console looks; fill the rect on PC.
-    let image = if profile == SimProfile::Native {
-        rect
-    } else {
-        let fit = (rect.width() / size.0 as f32).min(rect.height() / size.1 as f32);
-        Rect::from_center_size(
-            rect.center(),
-            Vec2::new(size.0 as f32 * fit, size.1 as f32 * fit),
-        )
-    };
-    ui.painter().rect_filled(rect, 6.0, c::BG0);
-    ui.painter().image(
-        p.texture,
-        image,
-        Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
-        Color32::WHITE,
     );
     ui.ctx()
         .request_repaint_after(std::time::Duration::from_millis(250));

@@ -16,6 +16,7 @@ pub enum AssetTab {
     Prefabs,
     Materials,
     Sprites,
+    Particles,
     Audio,
 }
 
@@ -61,6 +62,12 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
                 icon::IMAGE,
                 "Sprites",
                 app.project.sprites.len(),
+            ),
+            (
+                AssetTab::Particles,
+                icon::SPARKLE,
+                "Particles",
+                app.particles.len(),
             ),
             (
                 AssetTab::Audio,
@@ -110,6 +117,16 @@ fn search_row(app: &mut App, ui: &mut egui::Ui) {
                 Some(Dialog::fake_object(&app.project)),
             ),
             AssetTab::Materials => ("New material", Some(Dialog::new_material())),
+            AssetTab::Particles => {
+                if theme::named_icon_button(ui, icon::PLUS, "New particle effect").clicked() {
+                    let mut n = 1;
+                    while app.particles.contains_key(&format!("effect-{n}")) {
+                        n += 1;
+                    }
+                    app.cmds.push(Cmd::NewParticles(format!("effect-{n}")));
+                }
+                ("", None)
+            }
             _ => ("", None),
         };
         if let Some(d) = dialog
@@ -192,6 +209,20 @@ fn grid(app: &mut App, ui: &mut egui::Ui) {
                 });
             }
         }
+        AssetTab::Particles => {
+            for (name, d) in &app.particles {
+                tiles.push(Tile {
+                    sel: Some(AssetSel::Particles(name.clone())),
+                    payload: None,
+                    name: name.clone(),
+                    sub: format!("max {}", d.max),
+                    glyph: icon::SPARKLE,
+                    color: c::TRIGGER,
+                    thumb: None,
+                    badge: None,
+                });
+            }
+        }
         AssetTab::Audio => {
             for (l, music) in app
                 .project
@@ -230,6 +261,7 @@ fn grid(app: &mut App, ui: &mut egui::Ui) {
                 "Right-click an entity › Create prefab from this",
             ),
             AssetTab::Materials => ("No materials", "Press + to create one"),
+            AssetTab::Particles => ("No particle effects", "Press + to create one"),
             AssetTab::Models => (
                 "No models",
                 "Press + for a fake object, or add a .glb to the manifest",
@@ -410,6 +442,7 @@ fn tile(app: &mut App, ui: &mut egui::Ui, t: &Tile, size: Vec2) {
                 | AssetSel::Material(l)
                 | AssetSel::Prefab(l)
                 | AssetSel::Sprite(l) => l.clone(),
+                AssetSel::Particles(n) => format!("particles/{n}"),
             };
             if ui
                 .button(format!("{}  Copy logical path", icon::COPY))

@@ -77,7 +77,17 @@ same thing by writing text, and both see each other's changes.
   `model pose`, and the tab's "Console pose" writes the same glTF and manifest entry.
   A pose model has no skeleton: a console variant that skips skinning.
 
-### 4. The editor's layout is tested
+### 4. Particle effects as assets, capped per platform
+
+- An effect is text (`*.particles.ron`, a `ParticlesDef`) declared as `[particles.*]`, a
+  new manifest kind baked per platform to a fixed-size `TPFX` blob: the `Emitter` and the
+  cap of that platform (0 = off there). Systems stay fixed-capacity (`ParticleSystem<N>`,
+  no heap); `limit` applies the cap at runtime.
+- The editor previews an effect with the real renderer and a live system on each
+  platform's cap; `cargo xtask particles inspect` runs the same simulation (30 fps,
+  seeded) and prints a position hash, so determinism is checkable from text.
+
+### 5. The editor's layout is tested
 
 The Inspector, the Assets strip and the toolbar overflowed at the editor's minimum
 window (960x600) and with long paths. `layout_audit` walks the accessibility tree and

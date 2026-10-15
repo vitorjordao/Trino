@@ -29,6 +29,7 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
             AssetSel::Material(l) => material_asset(app, ui, &l),
             AssetSel::Prefab(l) => prefab_asset(app, ui, &l),
             AssetSel::Sprite(l) => sprite_asset(app, ui, &l),
+            AssetSel::Particles(n) => crate::panels::particles::asset(app, ui, &n),
         }
         return;
     }

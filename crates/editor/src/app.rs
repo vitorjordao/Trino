@@ -63,6 +63,8 @@ pub enum AssetSel {
     Material(String),
     Prefab(String),
     Sprite(String),
+    /// A particle effect, by name (`particles/<name>`).
+    Particles(String),
 }
 
 /// Everything panels ask the app to do (applied after the UI pass).
@@ -138,6 +140,9 @@ pub enum Cmd {
     BakeImpostor(String),
     /// Bake a clip's pose into a static model (Animation › Console pose;
     /// the same as `cargo xtask model pose`).
+    /// A new particle effect (`assets/shared/particles/<name>.particles.ron`
+    /// + `[particles.<name>]`), like `cargo xtask particles new`.
+    NewParticles(String),
     ExportPose {
         model: String,
         clip: Option<String>,
@@ -227,6 +232,12 @@ pub struct App {
     pub impostor_thumbs: std::collections::HashMap<String, (u64, egui::TextureHandle)>,
     /// The Animation tab.
     pub anim: crate::anim_panel::AnimPanel,
+    /// Particle effects by name (the manifest's `[particles.*]` files).
+    pub particles: std::collections::BTreeMap<String, pipeline::particles::ParticlesDef>,
+    /// Effects edited in the inspector, written once the user settles.
+    pub pending_particles: HashSet<String>,
+    /// The particle inspector's live preview.
+    pub particles_view: crate::panels::particles::ParticlesView,
     /// eframe's wgpu device (panels with their own preview renderer).
     pub render_state: eframe::egui_wgpu::RenderState,
 }
@@ -309,6 +320,11 @@ impl App {
                 cmds.push(Cmd::SelectAsset(AssetSel::Material(l.to_string())));
             }
             Some(("model", l)) => cmds.push(Cmd::SelectAsset(AssetSel::Model(l.to_string()))),
+            Some(("particles", n)) => {
+                assets_tab = crate::panels::assets::AssetTab::Particles;
+                let name = n.split_once('@').map_or(n, |(n, _)| n);
+                cmds.push(Cmd::SelectAsset(AssetSel::Particles(name.to_string())));
+            }
             Some(("prefab", l)) => {
                 assets_tab = crate::panels::assets::AssetTab::Prefabs;
                 cmds.push(Cmd::EditPrefab(l.to_string()));
@@ -375,6 +391,7 @@ impl App {
             "prefabs",
             "assets/materials",
             "assets/impostors",
+            "assets/shared/particles",
             "examples/platformer/src",
         ] {
             let _ = std::fs::create_dir_all(dir);
@@ -458,6 +475,17 @@ impl App {
             impostor_defs: load_impostor_defs(&root.join("assets")),
             impostor_thumbs: Default::default(),
             anim: crate::anim_panel::AnimPanel::from_env(),
+            particles: load_particles(&root.join("assets")),
+            pending_particles: HashSet::new(),
+            // `TRINO_EDITOR_OPEN=particles:<name>@n64` previews that platform.
+            particles_view: crate::panels::particles::ParticlesView {
+                platform: match open.rsplit_once('@').map(|(_, p)| p) {
+                    Some("n64") => pipeline::Platform::N64,
+                    Some("3ds") => pipeline::Platform::N3ds,
+                    _ => pipeline::Platform::Pc,
+                },
+                ..Default::default()
+            },
             render_state,
         }
     }
@@ -599,6 +627,14 @@ impl App {
                 if p == self.doc.path || self.parked.as_ref().is_some_and(|d| d.path == p) {
                     self.external_doc_change(&p, text);
                 }
+            } else if s.ends_with(pipeline::particles::DEF_EXT) {
+                // An effect changed on disk (an agent, a text editor): the
+                // inspector and its preview follow.
+                self.particles = load_particles(&self.project.assets_dir());
+                self.log.toast(
+                    Level::Ok,
+                    format!("{} {} reloaded", icon::ARROWS_CLOCKWISE, p.display()),
+                );
             } else if s.ends_with(pipeline::impostor::DEF_EXT) {
                 // An agent (or another tool) edited impostor settings: show
                 // them; the atlas changes when someone bakes.
@@ -1105,6 +1141,26 @@ impl App {
                 // The asset watcher rebakes the sprite and the blob; the
                 // library picks the tables up on that reload.
             }
+            Cmd::NewParticles(name) => {
+                let sprite = self
+                    .project
+                    .sprites
+                    .keys()
+                    .next()
+                    .cloned()
+                    .unwrap_or_else(|| "sprites/particle".into());
+                let def = pipeline::particles::ParticlesDef::new(sprite);
+                let assets = self.project.assets_dir();
+                pipeline::particles::save(&assets, &name, &def)?;
+                let file = pipeline::particles::def_file(&assets, &name);
+                self.written.insert(file, def.to_ron());
+                self.particles.insert(name.clone(), def);
+                self.asset_sel = Some(AssetSel::Particles(name.clone()));
+                self.log.toast(
+                    Level::Ok,
+                    format!("{} particles/{name} created", icon::SPARKLE),
+                );
+            }
             Cmd::ExportPose {
                 model,
                 clip,
@@ -1225,6 +1281,19 @@ impl App {
         }
         if !mats.is_empty() || !proxies.is_empty() {
             self.thumb_rev += 1;
+        }
+        let effects: Vec<String> = self.pending_particles.drain().collect();
+        for name in effects {
+            if let Some(def) = self.particles.get(&name).cloned() {
+                let assets = self.project.assets_dir();
+                let file = pipeline::particles::def_file(&assets, &name);
+                match pipeline::particles::save(&assets, &name, &def) {
+                    Ok(_) => {
+                        self.written.insert(file, def.to_ron());
+                    }
+                    Err(e) => self.log.toast(Level::Error, e),
+                }
+            }
         }
     }
 
@@ -2254,6 +2323,26 @@ impl App {
 /// canonicalized paths (`/private/var/...` on macOS, `\\?\C:\...` on
 /// Windows), so fall back to comparing canonical forms — for deleted files,
 /// canonicalize the parent and re-append the name.
+/// Every `[particles.*]` effect of the manifest that parses, by name.
+pub fn load_particles(
+    assets: &Path,
+) -> std::collections::BTreeMap<String, pipeline::particles::ParticlesDef> {
+    let Ok(manifest) = pipeline::Manifest::load(&assets.join("manifest.toml")) else {
+        return Default::default();
+    };
+    manifest
+        .particles
+        .iter()
+        .filter_map(|(name, decl)| {
+            let path = pipeline::resolve_source(assets, pipeline::Platform::Pc, &decl.file).ok()?;
+            let text = std::fs::read_to_string(path).ok()?;
+            pipeline::particles::ParticlesDef::from_ron(&text)
+                .ok()
+                .map(|d| (name.clone(), d))
+        })
+        .collect()
+}
+
 /// Every impostor settings file under `assets/impostors/`, by name.
 fn load_impostor_defs(
     assets: &Path,

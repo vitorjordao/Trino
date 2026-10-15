@@ -242,3 +242,6 @@ formats = { n64 = "CI4" }
 
 [blobs.impostor-selftest-boar]
 file = "impostors/selftest-boar.timp"
+
+[particles.selftest-sparks]
+file = "particles/selftest-sparks.particles.ron"

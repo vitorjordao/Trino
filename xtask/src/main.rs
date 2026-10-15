@@ -14,6 +14,7 @@ mod impostor;
 mod model;
 mod n3ds;
 mod n64;
+mod particles;
 mod perf;
 mod project;
 mod scene;
@@ -58,6 +59,10 @@ commands:
   impostor bake <name>.. | --all
                        pre-render a model from N yaws into a billboard atlas
                        (PC/3DS RGBA + N64 CI4 within TMEM) + its TIMP table
+  particles new <name> --sprite sprites/x | check
+  particles inspect <name> [--seconds S] [--seed N] [--json]
+                       particle effects as text: validate, and simulate each
+                       platform's cap (peak tris, N64 time, position hash)
   impostor check [name..] | list [--json]
                        spot missing or stale impostors (model changed)
   model inspect <file> [--fps N] [--once a,b] [--anim] [--json]
@@ -162,6 +167,10 @@ fn main() -> ExitCode {
         (Some("scene"), _) => {
             let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
             scene::run(&repo_root(), &rest)
+        }
+        (Some("particles"), _) => {
+            let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
+            particles::run(&project.root, &rest)
         }
         (Some("impostor"), _) => {
             let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();

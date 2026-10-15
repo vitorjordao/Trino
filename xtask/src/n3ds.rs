@@ -259,6 +259,20 @@ pub fn bake_assets(p: &Project, test_mode: bool) -> Result<(), String> {
         std::fs::copy(&source, romfs.join(format!("{id:08x}.blob"))).map_err(|e| e.to_string())?;
         index.push_str(&format!("{id:08x}\tblob\t{id:08x}.blob\n"));
     }
+    for (name, decl) in &manifest.particles {
+        let logical = format!("particles/{name}");
+        let id = trino_core::asset_id(&logical);
+        // This platform's cap (0 = the effect is off here).
+        let source = trino_asset_pipeline::resolve_source(
+            &root.join("assets"),
+            trino_asset_pipeline::Platform::N3ds,
+            &decl.file,
+        )?;
+        let blob =
+            trino_asset_pipeline::particles::bake(&source, trino_asset_pipeline::Platform::N3ds)?;
+        std::fs::write(romfs.join(format!("{id:08x}.blob")), blob).map_err(|e| e.to_string())?;
+        index.push_str(&format!("{id:08x}\tblob\t{id:08x}.blob\n"));
+    }
     for (name, decl) in &manifest.scenes {
         let logical = format!("scenes/{name}");
         let id = trino_core::asset_id(&logical);

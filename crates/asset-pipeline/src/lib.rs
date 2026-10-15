@@ -26,6 +26,7 @@ pub mod impostor;
 pub mod loader;
 pub mod manifest;
 pub mod model;
+pub mod particles;
 pub mod primitive;
 pub mod resolve;
 #[cfg(feature = "watch")]

@@ -946,3 +946,96 @@ fn animation_tab_previews_measures_and_exports() {
         leave_temp_project(&repo);
     }
 }
+
+/// Particle effects in the editor, both ways: "+" writes the same file and
+/// manifest entry `cargo xtask particles new` writes; the inspector's
+/// preview bursts up to the previewed platform's cap; an edit lands in the
+/// file once settled; an agent's edit to the file reloads in the inspector.
+#[test]
+#[ignore = "changes cwd/env: run alone with --ignored --test-threads=1"]
+fn particle_effects_preview_caps_and_files() {
+    use crate::app::{AssetSel, Cmd};
+    use trino_asset_pipeline::Platform;
+    use trino_asset_pipeline::particles::ParticlesDef;
+    let Some((mut h, _tmp, repo)) = temp_project_app(egui::vec2(1600.0, 1000.0)) else {
+        return;
+    };
+    let assets = std::path::PathBuf::from("assets");
+    h.state_mut().assets_tab = crate::panels::assets::AssetTab::Particles;
+    h.run_steps(3);
+    click(&mut h, "New particle effect");
+    h.run_steps(3);
+    let file = assets.join("shared/particles/effect-1.particles.ron");
+    let def = ParticlesDef::from_ron(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    assert!(
+        std::fs::read_to_string(assets.join("manifest.toml"))
+            .unwrap()
+            .contains("[particles.effect-1]")
+    );
+    assert_eq!(
+        h.state().asset_sel,
+        Some(AssetSel::Particles("effect-1".into()))
+    );
+    assert_eq!(def.max, 32);
+
+    // The self-test effect: bursts stop at each platform's cap.
+    h.state_mut()
+        .cmds
+        .push(Cmd::SelectAsset(AssetSel::Particles(
+            "selftest-sparks".into(),
+        )));
+    h.run_steps(3);
+    h.state_mut().particles_view.system.emitting = false;
+    for (label, cap) in [("N64 preview", 8), ("3DS preview", 16), ("PC preview", 24)] {
+        click(&mut h, label);
+        h.run_steps(2);
+        h.state_mut().particles_view.burst = 100;
+        click(&mut h, "Burst");
+        h.run_steps(2);
+        let v = &h.state().particles_view;
+        assert_eq!(v.system.limit, cap, "{label}");
+        assert_eq!(v.system.len(), cap, "{label}");
+    }
+    assert!(h.query_by_label_contains("24 / 24 live on PC").is_some());
+
+    // An inspector edit is written once the user settles.
+    h.state_mut()
+        .particles
+        .get_mut("selftest-sparks")
+        .unwrap()
+        .rate = 55.0;
+    h.state_mut()
+        .pending_particles
+        .insert("selftest-sparks".into());
+    h.run_steps(3);
+    let disk = ParticlesDef::from_ron(
+        &std::fs::read_to_string(assets.join("shared/particles/selftest-sparks.particles.ron"))
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(disk.rate, 55.0);
+
+    // An agent edits the file: the inspector follows.
+    let mut agent = disk.clone();
+    agent.max = 12;
+    std::fs::write(
+        assets.join("shared/particles/selftest-sparks.particles.ron"),
+        agent.to_ron(),
+    )
+    .unwrap();
+    let start = std::time::Instant::now();
+    while h.state().particles["selftest-sparks"].max != 12 && start.elapsed().as_secs() < 10 {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert_eq!(h.state().particles["selftest-sparks"].max, 12);
+    assert_eq!(h.state().particles["selftest-sparks"].cap(Platform::Pc), 12);
+    h.run_steps(3);
+    assert_eq!(
+        h.state().particles_view.system.limit,
+        12,
+        "the preview rebuilt"
+    );
+    crate::layout_audit::assert_clean(&h, egui::vec2(1600.0, 1000.0), true, "particle inspector");
+    leave_temp_project(&repo);
+}

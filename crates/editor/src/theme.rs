@@ -303,6 +303,14 @@ pub fn component_open<R>(
     out
 }
 
+/// [`icon_button`] whose accessible name is `name` (the tooltip too):
+/// screen readers and the UI tests find it by that, not by the glyph.
+pub fn named_icon_button(ui: &mut egui::Ui, glyph: &str, name: &str) -> egui::Response {
+    let r = icon_button(ui, glyph, name);
+    r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, name));
+    r
+}
+
 /// Frameless icon button with hover background and tooltip.
 pub fn icon_button(ui: &mut egui::Ui, glyph: &str, tooltip: &str) -> egui::Response {
     ui.add(

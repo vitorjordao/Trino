@@ -29,6 +29,7 @@ mod ops;
 mod palette;
 mod panels;
 mod play;
+mod preview;
 mod project;
 mod theme;
 #[cfg(test)]

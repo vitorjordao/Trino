@@ -118,6 +118,12 @@ shipping a 3D game first**, then by cost:
 
 ---
 
+## Done — particle effects as assets with caps per platform (2026-10-15, branch `editor/particles`, ADR 0009 §4)
+
+| Item | Evidence |
+|---|---|
+| `*.particles.ron` + `[particles.*]` → `TPFX` per platform (`trino_core::Effect`, `ParticleSystem::from_effect`, `limit`); bakes on PC, N64 and 3DS; `cargo xtask particles new/check/inspect`; editor Assets › Particles with an inspector (fields, caps per platform, cost, live preview with Burst on each platform's cap); castle64 `particles` self-test step | RON both ways and every validation error, caps per platform through the real bake and an override file, deterministic simulation (same seed same hash, another seed another, peaks at the cap), core cap/off/determinism tests, CLI tests, the editor widget and kittest flows (file both ways), the self-test on PC, ares and Azahar (`TRINO_STEP:particles cap 24/8/16`) |
+
 ## Done — the Animation tab, clip measurements and console poses (2026-10-15, branch `editor/animation-panel`, ADR 0009 §3)
 
 | Item | Evidence |

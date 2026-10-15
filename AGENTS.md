@@ -252,6 +252,10 @@ new skill when none fits. Then run `cargo xtask agents sync`. The steps are in
     speed, crossfade with its weight, measurements per clip with warnings (stride speed
     and distance per cycle, foot slide, foot under the floor, bounds), ground grid, onion
     skin, palette, PC/N64/3DS looks, and a console pose exported as a static model.
+  - **Particle inspector** (Assets › Particles): every `Emitter` field, a cap per platform
+    or off, cost in triangles and N64 time, a live preview with Burst on each platform's
+    cap; `*.particles.ron` + `[particles.*]` bake to `TPFX` per platform
+    (`Effect`, `ParticleSystem::from_effect`/`limit`); `particles` self-test step.
   - **Layout audit** (`layout_audit.rs`): no widget off the window or overlapping, over
     the whole editor at 960x600 and 1600x940.
 - **Emulators in CI**:
@@ -425,6 +429,7 @@ cargo xtask scene export [--platform pc|n64|3ds] <scene.ron> <out.rs>   # scene 
 cargo xtask model inspect <file> [--json]       # bake a model like the engine; art gate
 cargo xtask model inspect <file> --anim [--json]                                   # + per-clip stride, slide, floor, bounds
 cargo xtask model pose <models/x> [--clip C --time S] --name <new>                 # a pose as a static model (consoles)
+cargo xtask particles new <name> --sprite sprites/x | check | inspect <name> [--json]   # particle effects as text
 cargo xtask impostor new <name> --model models/x [--views N --pitch DEG --tile PX]   # pre-render a billboard atlas
 cargo xtask impostor bake <name>|--all | check | list [--json]                     # re-render / stale check / list
 cargo xtask agents sync   # mirror .agents/skills/ into .claude/skills/ (check: agents check)

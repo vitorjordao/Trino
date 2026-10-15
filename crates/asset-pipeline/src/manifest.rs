@@ -14,6 +14,8 @@ pub enum Platform {
 }
 
 impl Platform {
+    pub const ALL: [Platform; 3] = [Platform::Pc, Platform::N64, Platform::N3ds];
+
     /// The scene crate's name for this platform (variants resolve by it).
     pub fn target(self) -> trino_scene::Target {
         match self {
@@ -93,6 +95,12 @@ pub struct Manifest {
     /// `file` is relative to the **project root** (`scenes/x.scene.ron`).
     #[serde(default)]
     pub scenes: BTreeMap<String, BlobDecl>,
+    /// Particle effects (`*.particles.ron`, relative to `assets/shared/` or
+    /// an override) baked per platform to `TPFX` blobs with that platform's
+    /// particle cap (`trino_core::particles::Effect`). Logical paths are
+    /// `particles/<name>`.
+    #[serde(default)]
+    pub particles: BTreeMap<String, BlobDecl>,
 }
 
 #[derive(Debug, Deserialize)]

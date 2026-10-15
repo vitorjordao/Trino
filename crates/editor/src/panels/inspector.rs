@@ -1120,7 +1120,7 @@ fn header(ui: &mut egui::Ui, glyph: &str, color: egui::Color32, title: &str, kin
     ui.add_space(6.0);
 }
 
-fn budget_bar(ui: &mut egui::Ui, label: &str, used: f32, budget: f32) {
+pub fn budget_bar(ui: &mut egui::Ui, label: &str, used: f32, budget: f32) {
     let frac = (used / budget).clamp(0.0, 1.0);
     let col = if frac > 0.9 {
         c::ERROR

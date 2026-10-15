@@ -743,6 +743,44 @@ impl<'a> Mesh<'a> {
         self.skeleton.map_or(0, |s| s.joint_of_vertex[i] as usize)
     }
 
+    /// Joint driving vertex `i` (0 for static meshes) — the heaviest one
+    /// when the mesh blends two (`blend_of` gives the second).
+    pub fn joint_of_vertex(&self, i: usize) -> usize {
+        self.joint_of(i)
+    }
+
+    /// Vertex `i` in model space under the skinning matrices `joints`
+    /// (from [`pose`](Self::pose), `count` of them): what the T&L
+    /// transforms, for tools that measure a pose (foot contact, bounds,
+    /// a pose baked into a static mesh). Static meshes return the bind
+    /// position.
+    pub fn posed_position(&self, i: usize, joints: &[Mat34; MAX_JOINTS], count: usize) -> Vec3 {
+        let p = self.position(i);
+        if count == 0 || self.skeleton.is_none() {
+            return p;
+        }
+        let a = joints[self.joint_of(i).min(count - 1)].transform_point(p);
+        match self.blend_of(i) {
+            // The T&L's own expression, so tools measure what it draws.
+            Some((j, w)) if j < count => a + (joints[j].transform_point(p) - a) * w,
+            _ => a,
+        }
+    }
+
+    /// Normal `i` under `joints` (rotated like the T&L does; not
+    /// renormalized).
+    pub fn posed_normal(&self, i: usize, joints: &[Mat34; MAX_JOINTS], count: usize) -> Vec3 {
+        let n = self.normal(i);
+        if count == 0 || self.skeleton.is_none() {
+            return n;
+        }
+        let a = joints[self.joint_of(i).min(count - 1)].transform_dir(n);
+        match self.blend_of(i) {
+            Some((j, w)) if j < count => a + (joints[j].transform_dir(n) - a) * w,
+            _ => a,
+        }
+    }
+
     #[cfg(test)]
     fn joint_of_first(&self, j: usize) -> Option<usize> {
         (0..self.vertex_count).find(|&i| self.joint_of(i) == j)

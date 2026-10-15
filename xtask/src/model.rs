@@ -11,19 +11,26 @@ use trino_asset_pipeline::{ModelOptions, bake_model, clip_names};
 use trino_core::Mesh;
 use trino_core::perf::FRAME_30FPS_US;
 
+const USAGE: &str = "xtask: usage:
+  cargo xtask model inspect <file.glb|.gltf|.prim.ron> [--fps N] [--once clip,clip] [--smooth] [--anim] [--json]
+  cargo xtask model pose <models/name> [--clip C] [--time S] --name <new-model>";
+
 pub fn run(root: &Path, args: &[&str]) -> ExitCode {
+    if let ["pose", model, rest @ ..] = args {
+        return pose(root, model, rest);
+    }
     let ["inspect", file, rest @ ..] = args else {
-        eprintln!(
-            "xtask: usage: cargo xtask model inspect <file.glb|.gltf|.prim.ron> [--fps N] [--once clip,clip] [--smooth] [--json]"
-        );
+        eprintln!("{USAGE}");
         return ExitCode::FAILURE;
     };
     let mut opts = ModelOptions::default();
     let mut json = false;
+    let mut anim = false;
     let mut it = rest.iter();
     while let Some(a) = it.next() {
         match *a {
             "--json" => json = true,
+            "--anim" => anim = true,
             "--smooth" => opts.smooth = true,
             "--fps" => match it.next().and_then(|v| v.parse().ok()) {
                 Some(v) => opts.anim_fps = v,
@@ -51,7 +58,12 @@ pub fn run(root: &Path, args: &[&str]) -> ExitCode {
             .unwrap_or_else(|_| root.to_path_buf())
             .join(file)
     };
-    match inspect(&path, &opts) {
+    match inspect(&path, &opts).map(|mut r| {
+        if anim {
+            r.add_anim_metrics(&path, &opts);
+        }
+        r
+    }) {
         Ok(report) => {
             if json {
                 println!("{}", report.json());
@@ -92,6 +104,89 @@ pub struct Report {
     pub radius: f32,
     pub warnings: Vec<String>,
     pub errors: Vec<String>,
+    /// Per-clip measurements (`--anim`).
+    pub anim: Option<Vec<trino_asset_pipeline::anim::ClipMetrics>>,
+}
+
+/// `model pose <models/x> [--clip C] [--time S] --name <new>`: bake a pose
+/// into a static model (`trino_asset_pipeline::anim::export_pose`, the
+/// editor's Animation › Console pose).
+fn pose(root: &Path, model: &str, rest: &[&str]) -> ExitCode {
+    let (mut clip, mut time, mut name) = (None, 0.0f32, None);
+    let mut it = rest.iter();
+    while let Some(flag) = it.next() {
+        let Some(v) = it.next() else {
+            eprintln!("xtask: {flag} needs a value\n{USAGE}");
+            return ExitCode::FAILURE;
+        };
+        match *flag {
+            "--clip" => clip = Some(v.to_string()),
+            "--time" => match v.parse() {
+                Ok(t) => time = t,
+                Err(_) => {
+                    eprintln!("xtask: --time needs seconds");
+                    return ExitCode::FAILURE;
+                }
+            },
+            "--name" => name = Some(v.to_string()),
+            other => {
+                eprintln!("xtask: unknown flag `{other}`\n{USAGE}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+    let Some(name) = name else {
+        eprintln!("xtask: model pose needs --name <new-model>\n{USAGE}");
+        return ExitCode::FAILURE;
+    };
+    match trino_asset_pipeline::anim::export_pose(
+        &root.join("assets"),
+        model,
+        clip.as_deref(),
+        time,
+        &name,
+    ) {
+        Ok(e) => {
+            println!(
+                "wrote assets/{} ({} tris, {} vertices, N64 ~{:.1} ms per draw){}",
+                e.file,
+                e.tris,
+                e.verts,
+                e.n64_us as f32 / 1000.0,
+                if e.manifest_changed {
+                    format!(" — declared [models.{name}]")
+                } else {
+                    String::new()
+                }
+            );
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+impl Report {
+    /// Measure every clip (`--anim`): their warnings join the report's.
+    pub fn add_anim_metrics(&mut self, path: &Path, opts: &ModelOptions) {
+        let Ok(blob) = bake_model(path, opts) else {
+            return;
+        };
+        let names: Vec<String> = self.clips.iter().map(|c| c.0.clone()).collect();
+        let m = trino_asset_pipeline::anim::all_metrics(
+            &blob,
+            &names,
+            trino_asset_pipeline::anim::Limits::default(),
+        );
+        for c in &m {
+            for w in &c.warnings {
+                self.warnings.push(format!("clip `{}`: {w}", c.name));
+            }
+        }
+        self.anim = Some(m);
+    }
 }
 
 fn quote(s: &str) -> String {
@@ -121,8 +216,27 @@ impl Report {
             })
             .collect();
         let list = |v: &[String]| v.iter().map(|s| quote(s)).collect::<Vec<_>>().join(",");
+        let anim = match &self.anim {
+            None => "null".to_string(),
+            Some(m) => format!(
+                "[{}]",
+                m.iter()
+                    .map(|c| format!(
+                        "{{\"name\":{},\"speed\":{},\"distance_per_cycle\":{},\"foot_slide\":{},\"lowest\":{},\"feet\":{:?},\"warnings\":[{}]}}",
+                        quote(&c.name),
+                        c.speed,
+                        c.distance_per_cycle,
+                        c.foot_slide,
+                        c.lowest,
+                        c.feet,
+                        list(&c.warnings)
+                    ))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ),
+        };
         format!(
-            "{{\"ok\":{},\"file\":{},\"bytes\":{},\"vertices\":{},\"triangles\":{},\"joints\":{},\"blended_vertices\":{},\"slot_vertices\":{},\"clips\":[{}],\"size\":[{},{},{}],\"min\":[{},{},{}],\"radius\":{},\"n64_draw_us\":{},\"n64_frame_percent\":{:.1},\"warnings\":[{}],\"errors\":[{}]}}",
+            "{{\"ok\":{},\"file\":{},\"bytes\":{},\"vertices\":{},\"triangles\":{},\"joints\":{},\"blended_vertices\":{},\"slot_vertices\":{},\"clips\":[{}],\"size\":[{},{},{}],\"min\":[{},{},{}],\"radius\":{},\"n64_draw_us\":{},\"n64_frame_percent\":{:.1},\"anim\":{anim},\"warnings\":[{}],\"errors\":[{}]}}",
             self.errors.is_empty(),
             quote(&self.file),
             self.bytes,
@@ -184,6 +298,18 @@ impl Report {
             s += &format!(
                 "  clip `{n}`: {d:.2} s, {f} frames, {}\n",
                 if *l { "loops" } else { "plays once" }
+            );
+        }
+        for c in self.anim.iter().flatten() {
+            s += &format!(
+                "  clip `{}`: stride {:.2} m/s, {:.2} m per cycle, foot slide {:.1} cm, \
+                 lowest y {:.3}, feet {:?}\n",
+                c.name,
+                c.speed,
+                c.distance_per_cycle,
+                c.foot_slide * 100.0,
+                c.lowest,
+                c.feet
             );
         }
         for w in &self.warnings {
@@ -273,5 +399,6 @@ pub fn inspect(path: &Path, opts: &ModelOptions) -> Result<Report, String> {
         radius,
         warnings,
         errors,
+        anim: None,
     })
 }

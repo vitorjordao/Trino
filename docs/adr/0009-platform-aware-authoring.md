@@ -63,13 +63,28 @@ same thing by writing text, and both see each other's changes.
   the N64 most static meshes run on the RSP for less than a CPU-submitted billboard, so
   the tools say so and per-platform distances let the N64 skip impostors.
 
-### 3. The editor's layout is tested
+### 3. Animation checked in the editor, measured by the engine
+
+- The Animation tab previews any model with a skeleton in its own renderer (the same
+  `PcRenderer`, so the N64 and 3DS looks are real) and drives `AnimRef` directly: a time,
+  a speed, a crossfade with its weight.
+- **Measurements come from the T&L's own posed vertices** (`Mesh::posed_position`, the
+  T&L's expression, so tools and draws agree): a foot is planted when it is the lowest on
+  the floor in a frame; its contact vertex's move between frames gives the stride speed,
+  and the worst deviation from it is the foot slide. A looping clip's last frame is its
+  first again (time wraps at the duration), so only consecutive frames pair up.
+- The same `trino_asset_pipeline::anim` backs `cargo xtask model inspect --anim` and
+  `model pose`, and the tab's "Console pose" writes the same glTF and manifest entry.
+  A pose model has no skeleton: a console variant that skips skinning.
+
+### 4. The editor's layout is tested
 
 The Inspector, the Assets strip and the toolbar overflowed at the editor's minimum
 window (960x600) and with long paths. `layout_audit` walks the accessibility tree and
 fails a test when a widget runs off the window or overlaps another; it runs over the
 whole editor at 960x600 and 1600x940 and over each new panel at several widths. Every
-new surface gets a pass of it.
+new surface gets a pass of it. Overlaps are judged on the clipped rects egui keeps for
+each widget (hidden rows of a scroll area are not on screen).
 
 ## Consequences
 

@@ -15,6 +15,7 @@
 //! saves a screenshot of the whole window and exits; `TRINO_EDITOR_TAB=level`
 //! opens with the Level tab focused.
 
+mod anim_panel;
 mod app;
 mod budget;
 mod dialogs;

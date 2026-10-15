@@ -484,31 +484,51 @@ fn leave_temp_project(repo: &std::path::Path) {
 /// Scroll the widget labeled `label` into view, then click it (panels
 /// scroll: a click on a clipped widget would land on whatever covers it).
 fn click(h: &mut Harness<'static, App>, label: &str) {
-    let screen = h.ctx.content_rect();
     // An exact label, else the one widget whose label contains it (icon
     // glyphs prefix most button and header texts).
-    let rect = |h: &Harness<'static, App>| match h.query_by_label(label) {
-        Some(n) => n.rect(),
-        None => h.get_by_label_contains(label).rect(),
+    let find = |h: &Harness<'static, App>| -> crate::layout_audit::Widget {
+        let all = crate::layout_audit::widgets(h, Some(&h.ctx));
+        let rect = match h.query_by_label(label) {
+            Some(n) => n.rect(),
+            None => h.get_by_label_contains(label).rect(),
+        };
+        all.into_iter()
+            .find(|w| (w.rect.min - rect.min).length() < 0.5)
+            .unwrap_or(crate::layout_audit::Widget {
+                role: eframe::egui::accesskit::Role::Unknown,
+                label: label.into(),
+                rect,
+                visible: eframe::egui::Rect::NOTHING,
+            })
     };
     for _ in 0..40 {
-        let r = rect(h);
-        let dy = if r.bottom() > screen.bottom() - 4.0 {
-            -120.0
-        } else if r.top() < screen.top() + 60.0 {
-            120.0
-        } else {
+        let w = find(h);
+        let shown = w.visible.is_positive() && w.visible.height() >= w.rect.height() - 1.0;
+        if shown {
             break;
+        }
+        // Wheel over the part of its panel that shows: the widget's own
+        // visible part, else a visible widget in the same column.
+        let at = if w.visible.is_positive() {
+            w.visible.center()
+        } else {
+            crate::layout_audit::widgets(h, Some(&h.ctx))
+                .into_iter()
+                .filter(|o| o.visible.is_positive())
+                .filter(|o| (o.rect.center().x - w.rect.center().x).abs() < w.rect.width())
+                .min_by(|a, b| {
+                    let d = |o: &crate::layout_audit::Widget| {
+                        (o.rect.center().y - w.rect.center().y).abs()
+                    };
+                    d(a).total_cmp(&d(b))
+                })
+                .map_or(w.rect.center(), |o| o.visible.center())
         };
-        // Wheel over the widget's panel, inside the window.
-        let at = egui::pos2(
-            r.center().x,
-            r.center().y.clamp(80.0, screen.bottom() - 40.0),
-        );
+        let down = w.rect.center().y > at.y;
         h.hover_at(at);
         h.event(egui::Event::MouseWheel {
             unit: egui::MouseWheelUnit::Point,
-            delta: egui::vec2(0.0, dy),
+            delta: egui::vec2(0.0, if down { -120.0 } else { 120.0 }),
             phase: egui::TouchPhase::Move,
             modifiers: egui::Modifiers::NONE,
         });
@@ -566,6 +586,12 @@ fn platform_variants_reach_the_game_view_and_the_file() {
     // Popup items: through accessibility (the list scrolls on its own).
     h.get_by_label("models/crate").click_accesskit();
     h.run_steps(3);
+    // An item picked through accessibility leaves its list open: close it
+    // the way a user would, on its combo.
+    if h.query_by_label("models/crate").is_some() {
+        h.get_by_label("N64 model").click();
+        h.run_steps(3);
+    }
     let e = h.state().doc.scene.get(&rock).unwrap().clone();
     assert_eq!(
         e.platforms.n64.as_ref().unwrap().model.as_deref(),
@@ -820,4 +846,103 @@ fn impostors_bake_from_the_inspector_and_drive_a_lod_level() {
     h.run_steps(4);
     assert!(h.query_by_label_contains("not baked yet").is_some());
     leave_temp_project(&repo);
+}
+
+/// The Animation tab on the showcase robot: clips and their measurements,
+/// frame steps, a crossfade, the pose exported to the same file the CLI
+/// writes, and the clip written into the selected entity; then the layout
+/// audit at both window sizes.
+#[test]
+#[ignore = "changes cwd/env: run alone with --ignored --test-threads=1"]
+fn animation_tab_previews_measures_and_exports() {
+    use crate::app::{Cmd, Tab};
+    for size in [egui::vec2(1600.0, 1000.0), egui::vec2(960.0, 600.0)] {
+        let Some((mut h, _tmp, repo)) = temp_project_app(size) else {
+            return;
+        };
+        let walker = find(&h.state().doc.scene, "robot-walker");
+        h.state_mut().cmds.push(Cmd::Select(Some(walker.clone())));
+        h.state_mut().cmds.push(Cmd::FocusTab(Tab::Animation));
+        h.run_steps(4);
+        assert_eq!(
+            h.state().anim.model.as_deref(),
+            Some("models/robot"),
+            "follows the selected entity"
+        );
+        let names: Vec<String> = h
+            .state()
+            .anim
+            .metrics
+            .iter()
+            .map(|m| m.name.clone())
+            .collect();
+        assert_eq!(names, ["idle", "walk", "wave"]);
+        click(&mut h, " walk");
+        assert_eq!(h.state().anim.clip.as_deref(), Some("walk"));
+        // The showcase robot's walk skates and dips: the panel says so.
+        assert!(h.query_by_label_contains("slides").is_some());
+        assert!(h.query_by_label_contains("below the floor").is_some());
+        click(&mut h, "Pause");
+        h.state_mut().anim.time = 0.0;
+        click(&mut h, "Next frame");
+        let fps = {
+            let m = trino_core::Mesh::from_tmdl(&h.state().project.models["models/robot"].tmdl)
+                .unwrap();
+            m.find_clip(trino_core::ClipId::from_name("walk"))
+                .unwrap()
+                .fps
+        };
+        assert!(
+            (h.state().anim.time - 1.0 / fps).abs() < 1e-4,
+            "one frame: {} at {fps} fps",
+            h.state().anim.time
+        );
+        h.state_mut().anim.blend = Some(("wave".into(), 0.5));
+        h.run_steps(3);
+        assert!(h.state().anim.anim_ref().unwrap().blend.is_some());
+        crate::layout_audit::assert_clean(
+            &h,
+            size,
+            true,
+            &format!("Animation tab at {}x{}", size.x, size.y),
+        );
+        if size.x < 1000.0 {
+            leave_temp_project(&repo);
+            continue;
+        }
+        // Export the pose: the same file the CLI writes.
+        h.state_mut().anim.pose_name = "robot-pose".into();
+        click(&mut h, "Export pose");
+        h.run_steps(3);
+        let file = std::path::Path::new("assets/shared/models/poses/robot-pose.gltf");
+        let written = std::fs::read_to_string(file).unwrap_or_else(|e| {
+            panic!(
+                "pose not written ({e}); last log: {:?}",
+                h.state().log.last().map(|l| l.text.clone())
+            )
+        });
+        let (time, clip) = (h.state().anim.time, h.state().anim.clip.clone());
+        trino_asset_pipeline::anim::export_pose(
+            std::path::Path::new("assets"),
+            "models/robot",
+            clip.as_deref(),
+            time,
+            "robot-pose",
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(file).unwrap(),
+            written,
+            "GUI == CLI"
+        );
+        let manifest = std::fs::read_to_string("assets/manifest.toml").unwrap();
+        assert!(manifest.contains("[models.robot-pose]"));
+        // Write the clip into the entity: the scene gets it.
+        h.state_mut().anim.speed = 1.5;
+        click(&mut h, "Use on the selected entity");
+        let e = h.state().doc.scene.get(&walker).unwrap();
+        let a = e.model.as_ref().unwrap().anim.as_ref().unwrap();
+        assert_eq!((a.clip.as_str(), a.speed), ("walk", 1.5));
+        leave_temp_project(&repo);
+    }
 }

@@ -60,7 +60,7 @@ commands:
                        (PC/3DS RGBA + N64 CI4 within TMEM) + its TIMP table
   impostor check [name..] | list [--json]
                        spot missing or stale impostors (model changed)
-  model inspect <file> [--fps N] [--once a,b] [--json]
+  model inspect <file> [--fps N] [--once a,b] [--anim] [--json]
                        bake a .glb/.gltf/.prim.ron like the engine and report
                        tris, joints, clips, bounds, N64 budget (art gate)
   blender smoke [--no-render]
@@ -156,7 +156,8 @@ fn main() -> ExitCode {
         }
         (Some("model"), _) => {
             let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
-            model::run(&repo_root(), &rest)
+            // `model pose` writes into the selected project's assets.
+            model::run(&project.root, &rest)
         }
         (Some("scene"), _) => {
             let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();

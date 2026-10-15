@@ -242,7 +242,7 @@ fn fake_objects_bake_and_heavy_or_centered_ones_warn() {
 fn bad_invocations_and_files_fail() {
     let usage = inspect(&[]);
     assert!(!usage.status.success());
-    assert!(String::from_utf8_lossy(&usage.stderr).contains("usage: cargo xtask model inspect"));
+    assert!(String::from_utf8_lossy(&usage.stderr).contains("cargo xtask model inspect <file"));
 
     let cube = "assets/shared/models/cube.glb";
     for (args, msg) in [
@@ -294,4 +294,141 @@ fn color_slots_are_counted_per_slot() {
     // No `_SLOT`: no slot report.
     let (_, cube) = json(&["assets/shared/models/cube.glb"]);
     assert_eq!(cube["slot_vertices"], serde_json::Value::Null);
+}
+
+/// `--anim`: every clip's measurements, in text and JSON — the showcase
+/// robot's walk skates and dips under the floor, and the report says so.
+#[test]
+fn anim_flag_measures_every_clip() {
+    let (ok, v) = json(&["assets/shared/models/showcase/robot.glb", "--anim"]);
+    assert!(ok, "warnings don't fail the gate: {v}");
+    let anim = v["anim"].as_array().expect("anim measurements");
+    let walk = anim.iter().find(|c| c["name"] == "walk").unwrap();
+    assert!(walk["foot_slide"].as_f64().unwrap() > 0.05, "{walk}");
+    assert!(walk["lowest"].as_f64().unwrap() < -0.02, "{walk}");
+    assert_eq!(walk["feet"].as_array().unwrap().len(), 2);
+    let idle = anim.iter().find(|c| c["name"] == "idle").unwrap();
+    assert_eq!(idle["warnings"].as_array().unwrap().len(), 0, "{idle}");
+    let warnings = v["warnings"].to_string();
+    assert!(
+        warnings.contains("clip `walk`: a planted foot slides"),
+        "{warnings}"
+    );
+    // Without the flag nothing is measured.
+    let (_, plain) = json(&["assets/shared/models/showcase/robot.glb"]);
+    assert!(plain["anim"].is_null());
+    let o = inspect(&["assets/shared/models/showcase/robot.glb", "--anim"]);
+    let text = String::from_utf8_lossy(&o.stdout);
+    assert!(text.contains("clip `walk`: stride"), "{text}");
+}
+
+/// `model pose` writes a static model of a clip's pose into the project
+/// and declares it; bad invocations say why.
+#[test]
+fn model_pose_exports_a_static_model() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    std::fs::create_dir_all(dir.join("assets/shared/models/showcase")).unwrap();
+    std::fs::copy(
+        root().join("assets/shared/models/showcase/robot.glb"),
+        dir.join("assets/shared/models/showcase/robot.glb"),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("assets/manifest.toml"),
+        "version = 1\n\n[models.robot]\nfile = \"models/showcase/robot.glb\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("trino.toml"),
+        "[project]\nname = \"r\"\ntitle = \"R\"\n\n[n64]\npackage = \"r\"\n\n[3ds]\npackage = \"r\"\nbin = \"r\"\n",
+    )
+    .unwrap();
+    let p = dir.to_str().unwrap();
+    let run = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_xtask"))
+            .args(args)
+            .current_dir(root())
+            .env_remove("TRINO_PROJECT")
+            .output()
+            .unwrap()
+    };
+    let o = run(&[
+        "model",
+        "pose",
+        "models/robot",
+        "--clip",
+        "wave",
+        "--time",
+        "0.6",
+        "--name",
+        "robot-wave",
+        "--project",
+        p,
+    ]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let out = String::from_utf8_lossy(&o.stdout);
+    assert!(
+        out.contains("wrote assets/shared/models/poses/robot-wave.gltf"),
+        "{out}"
+    );
+    assert!(out.contains("declared [models.robot-wave]"), "{out}");
+    let file = dir.join("assets/shared/models/poses/robot-wave.gltf");
+    let (ok, v) = json(&[file.to_str().unwrap()]);
+    assert!(ok);
+    assert_eq!(v["joints"], 0, "static: no skeleton");
+    let robot = json(&["assets/shared/models/showcase/robot.glb"]).1;
+    assert_eq!(v["triangles"], robot["triangles"]);
+    for (args, needle) in [
+        (
+            &["model", "pose", "models/robot", "--project", p][..],
+            "needs --name",
+        ),
+        (
+            &[
+                "model",
+                "pose",
+                "models/robot",
+                "--clip",
+                "fly",
+                "--name",
+                "x",
+                "--project",
+                p,
+            ],
+            "clip `fly`",
+        ),
+        (
+            &[
+                "model",
+                "pose",
+                "models/robot",
+                "--time",
+                "soon",
+                "--name",
+                "x",
+                "--project",
+                p,
+            ],
+            "--time",
+        ),
+        (
+            &[
+                "model",
+                "pose",
+                "models/ghost",
+                "--name",
+                "x",
+                "--project",
+                p,
+            ],
+            "not in the manifest",
+        ),
+        (&["model"], "cargo xtask model pose"),
+    ] {
+        let o = run(args);
+        assert!(!o.status.success(), "{args:?}");
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert!(err.contains(needle), "{args:?}: {err}");
+    }
 }

@@ -35,15 +35,34 @@ fn audited(role: Role) -> bool {
 pub struct Widget {
     pub role: Role,
     pub label: String,
+    /// Where it is laid out (may run past its panel: that is a bug).
     pub rect: egui::Rect,
+    /// The part its clip region shows (overlaps are judged on this).
+    pub visible: egui::Rect,
 }
 
-/// Every audited widget on screen (with a non-empty rect).
-pub fn widgets<'t, Q, N>(q: &'t Q) -> Vec<Widget>
+/// Every audited widget on screen (with a non-empty rect). With `ctx`,
+/// widgets a scroll area or a panel clips away entirely are left out, and
+/// `visible` is the part that shows (accessibility rects are unclipped).
+pub fn widgets<'t, Q, N>(q: &'t Q, ctx: Option<&egui::Context>) -> Vec<Widget>
 where
     Q: Queryable<'t, 't, N>,
     N: NodeT<'t> + 't,
 {
+    // egui's own widget rects carry the clipped `interact_rect`; match them
+    // to accessibility nodes by their (unclipped) rect.
+    let mut clipped: Vec<(egui::Rect, egui::Rect)> = Vec::new();
+    if let Some(ctx) = ctx {
+        ctx.viewport(|v| {
+            for pass in [&v.prev_pass, &v.this_pass] {
+                for (_, rects) in pass.widgets.layers() {
+                    for w in rects {
+                        clipped.push((w.rect, w.interact_rect));
+                    }
+                }
+            }
+        });
+    }
     q.query_all_by(|n| audited(n.role()) && n.children().next().is_none())
         .filter_map(|n| {
             let ak = n.accesskit_node();
@@ -52,11 +71,23 @@ where
                 egui::pos2(b.x0 as f32, b.y0 as f32),
                 egui::pos2(b.x1 as f32, b.y1 as f32),
             );
-            (rect.width() > 0.5 && rect.height() > 0.5).then(|| Widget {
-                role: ak.role(),
-                label: ak.label().unwrap_or_default(),
-                rect,
-            })
+            let same = |a: egui::Rect| {
+                (a.min - rect.min).length() < 0.5 && (a.max - rect.max).length() < 0.5
+            };
+            let visible = clipped
+                .iter()
+                .find(|(r, _)| same(*r))
+                .map_or(rect, |(_, c)| rect.intersect(*c));
+            (rect.width() > 0.5
+                && rect.height() > 0.5
+                && visible.width() > 0.5
+                && visible.height() > 0.5)
+                .then(|| Widget {
+                    role: ak.role(),
+                    label: ak.label().unwrap_or_default(),
+                    rect,
+                    visible,
+                })
         })
         .collect()
 }
@@ -84,12 +115,12 @@ pub fn problems(widgets: &[Widget], size: egui::Vec2, scrolls: bool) -> Vec<Stri
     }
     for (i, a) in widgets.iter().enumerate() {
         for b in &widgets[i + 1..] {
-            let o = a.rect.intersect(b.rect);
+            let o = a.visible.intersect(b.visible);
             // Touching edges and 1-2 px antialias overlaps are fine.
             if o.width() > 2.0 && o.height() > 2.0 {
                 out.push(format!(
                     "{:?} `{}` {:?} overlaps {:?} `{}` {:?}",
-                    a.role, a.label, a.rect, b.role, b.label, b.rect
+                    a.role, a.label, a.visible, b.role, b.label, b.visible
                 ));
             }
         }
@@ -97,13 +128,14 @@ pub fn problems(widgets: &[Widget], size: egui::Vec2, scrolls: bool) -> Vec<Stri
     out
 }
 
-/// Asserts a clean layout, listing every problem.
-pub fn assert_clean<'t, Q, N>(q: &'t Q, size: egui::Vec2, scrolls: bool, what: &str)
-where
-    Q: Queryable<'t, 't, N>,
-    N: NodeT<'t> + 't,
-{
-    let w = widgets(q);
+/// Asserts a clean layout of a harness, listing every problem.
+pub fn assert_clean<S>(
+    h: &egui_kittest::Harness<'_, S>,
+    size: egui::Vec2,
+    scrolls: bool,
+    what: &str,
+) {
+    let w = widgets(h, Some(&h.ctx));
     assert!(!w.is_empty(), "{what}: no widgets found");
     let p = problems(&w, size, scrolls);
     if !p.is_empty() && std::env::var("TRINO_LAYOUT_DUMP").is_ok() {
@@ -119,10 +151,12 @@ mod tests {
     use super::*;
 
     fn w(label: &str, x0: f32, x1: f32) -> Widget {
+        let rect = egui::Rect::from_min_max(egui::pos2(x0, 0.0), egui::pos2(x1, 20.0));
         Widget {
             role: Role::Button,
             label: label.into(),
-            rect: egui::Rect::from_min_max(egui::pos2(x0, 0.0), egui::pos2(x1, 20.0)),
+            rect,
+            visible: rect,
         }
     }
 

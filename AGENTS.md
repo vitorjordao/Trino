@@ -248,6 +248,10 @@ new skill when none fits. Then run `cargo xtask agents sync`. The steps are in
   - **LOD panel** (chain, per-platform starts, cost per level, a preview slider that shows
     the switch live) and **Model › Impostor** (create, tune, bake, atlas preview, stale
     badge); the budget HUD counts LOD picks and adds the impostors' N64 cost.
+  - **Animation tab**: any model with a skeleton — clips, play/pause/frame steps, time,
+    speed, crossfade with its weight, measurements per clip with warnings (stride speed
+    and distance per cycle, foot slide, foot under the floor, bounds), ground grid, onion
+    skin, palette, PC/N64/3DS looks, and a console pose exported as a static model.
   - **Layout audit** (`layout_audit.rs`): no widget off the window or overlapping, over
     the whole editor at 960x600 and 1600x940.
 - **Emulators in CI**:
@@ -419,6 +423,8 @@ cargo xtask new <name>    # scaffold a game crate under examples/
 cargo xtask scene check   # validate scenes/prefabs/materials (text-first loop)
 cargo xtask scene export [--platform pc|n64|3ds] <scene.ron> <out.rs>   # scene -> no_std Rust data (that platform's variants)
 cargo xtask model inspect <file> [--json]       # bake a model like the engine; art gate
+cargo xtask model inspect <file> --anim [--json]                                   # + per-clip stride, slide, floor, bounds
+cargo xtask model pose <models/x> [--clip C --time S] --name <new>                 # a pose as a static model (consoles)
 cargo xtask impostor new <name> --model models/x [--views N --pitch DEG --tile PX]   # pre-render a billboard atlas
 cargo xtask impostor bake <name>|--all | check | list [--json]                     # re-render / stale check / list
 cargo xtask agents sync   # mirror .agents/skills/ into .claude/skills/ (check: agents check)

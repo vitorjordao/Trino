@@ -118,6 +118,12 @@ shipping a 3D game first**, then by cost:
 
 ---
 
+## Done — the Animation tab, clip measurements and console poses (2026-10-15, branch `editor/animation-panel`, ADR 0009 §3)
+
+| Item | Evidence |
+|---|---|
+| Editor Animation tab (own preview, clips, transport, speed, crossfade + weight, measurements with warnings, grid, onion skin, palette, PC/N64/3DS looks, Use on the entity, Console pose); `Mesh::posed_position/posed_normal/joint_of_vertex`; `trino_asset_pipeline::anim` (clip metrics, pose mesh, glTF writer, `export_pose`); `model inspect --anim`, `model pose` | clips built in the tests with known answers (`animation_metrics.rs`: stride 0.4 m/s and 0.4 m per cycle, a 10 cm skate, a 3 cm dip, crossfade at 0.5 = the mean pose, pose → glTF → static TMDL with the same triangles and colors), `posed_vertices_follow_their_joint`, panel unit tests, kittest `animation_tab_previews_measures_and_exports` (GUI pose == CLI pose byte for byte, clip written into the entity, layout at both sizes), xtask CLI tests. Found: the sample robot's walk skates 15 cm and dips 3.6 cm |
+
 ## Done — LOD chains with impostors, baked by the engine (2026-10-15, branch `editor/lod-impostors`, ADR 0009 §2)
 
 | Item | Evidence |

@@ -211,6 +211,19 @@ per draw (`ModelParams::palette`).
 - Keep timing readable at 15–20 fps sampling (`anim_fps` in the manifest).
 - Measure what must touch: lowest vertex ≈ 0 on support frames (no floating, no sinking).
 - Gate: `clip_sheet` for every clip (side + 3/4, evenly spaced frames).
+- Gate: `cargo xtask model inspect <file> --anim [--json]` measures every clip on the
+  engine's own posed vertices: **stride speed** and distance per cycle (move the
+  character at that speed so its planted feet stay put), **foot slide** (a planted foot
+  drifting against that speed in one frame; warns over 2 cm), **lowest point** (warns
+  under −0.5 cm) and the feet it found. The editor's **Animation** tab shows the same
+  numbers live, with onion skin and a crossfade. A planted foot is the lowest one on the
+  floor in a frame; a looping clip's last frame must repeat its first.
+- Seen on the engine's sample robot: its walk swings both legs like a pendulum, so the
+  "planted" foot travels back and then forward again on the floor (15 cm slide) and dips
+  3.6 cm under it — the measurement is right; the art needs a real stance phase.
+- A console that should skip the skeleton: `cargo xtask model pose models/x --clip walk
+  --time 0.3 --name x-pose` (or Animation › Console pose) bakes a static glTF of that
+  pose and declares it; point the entity's N64 variant at it (`platforms`).
 
 ## Stage 5 — QA gates (mandatory)
 

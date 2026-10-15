@@ -33,6 +33,7 @@ pub enum Tab {
     Scene,
     Game,
     Level,
+    Animation,
     Hierarchy,
     Inspector,
     Assets,
@@ -45,6 +46,7 @@ impl Tab {
             Tab::Scene => (icon::CUBE_TRANSPARENT, "Scene"),
             Tab::Game => (icon::GAME_CONTROLLER, "Game"),
             Tab::Level => (icon::GRID_FOUR, "Level"),
+            Tab::Animation => (icon::PERSON_SIMPLE_WALK, "Animation"),
             Tab::Hierarchy => (icon::TREE_STRUCTURE, "Hierarchy"),
             Tab::Inspector => (icon::SLIDERS_HORIZONTAL, "Inspector"),
             Tab::Assets => (icon::FOLDER_OPEN, "Assets"),
@@ -134,6 +136,14 @@ pub enum Cmd {
     /// Render it: atlases, tables and manifest entries (the same bake as
     /// `cargo xtask impostor bake <name>`).
     BakeImpostor(String),
+    /// Bake a clip's pose into a static model (Animation › Console pose;
+    /// the same as `cargo xtask model pose`).
+    ExportPose {
+        model: String,
+        clip: Option<String>,
+        time: f32,
+        name: String,
+    },
 }
 
 pub struct App {
@@ -215,6 +225,10 @@ pub struct App {
     /// Atlas previews by impostor name, with the project generation they
     /// were made at.
     pub impostor_thumbs: std::collections::HashMap<String, (u64, egui::TextureHandle)>,
+    /// The Animation tab.
+    pub anim: crate::anim_panel::AnimPanel,
+    /// eframe's wgpu device (panels with their own preview renderer).
+    pub render_state: eframe::egui_wgpu::RenderState,
 }
 
 impl App {
@@ -437,6 +451,8 @@ impl App {
                 .map(|(d, p)| (p, d)),
             impostor_defs: load_impostor_defs(&root.join("assets")),
             impostor_thumbs: Default::default(),
+            anim: crate::anim_panel::AnimPanel::from_env(),
+            render_state,
         }
     }
 
@@ -1082,6 +1098,31 @@ impl App {
                 }
                 // The asset watcher rebakes the sprite and the blob; the
                 // library picks the tables up on that reload.
+            }
+            Cmd::ExportPose {
+                model,
+                clip,
+                time,
+                name,
+            } => {
+                let e = trino_asset_pipeline::anim::export_pose(
+                    &self.project.assets_dir(),
+                    &model,
+                    clip.as_deref(),
+                    time,
+                    &name,
+                )?;
+                self.log.toast(
+                    Level::Ok,
+                    format!(
+                        "{} {} exported: {} tris, N64 ≈{:.1} ms per draw",
+                        icon::CUBE,
+                        e.logical,
+                        e.tris,
+                        e.n64_us as f32 / 1000.0
+                    ),
+                );
+                self.log.info(format!("wrote assets/{}", e.file));
             }
             Cmd::RetargetModel(name, file) => {
                 self.project.retarget_model(&name, &file)?;
@@ -2407,9 +2448,10 @@ fn default_dock(width: f32) -> egui_dock::DockState<Tab> {
     // Dev hook (screenshots): TRINO_EDITOR_TAB=scene|game|level picks the
     // focused center tab.
     let tabs = match std::env::var("TRINO_EDITOR_TAB").as_deref() {
-        Ok("level") => vec![Tab::Level, Tab::Scene, Tab::Game],
-        Ok("game") => vec![Tab::Game, Tab::Scene, Tab::Level],
-        _ => vec![Tab::Scene, Tab::Game, Tab::Level],
+        Ok("level") => vec![Tab::Level, Tab::Scene, Tab::Game, Tab::Animation],
+        Ok("game") => vec![Tab::Game, Tab::Scene, Tab::Level, Tab::Animation],
+        Ok("animation") => vec![Tab::Animation, Tab::Scene, Tab::Game, Tab::Level],
+        _ => vec![Tab::Scene, Tab::Game, Tab::Level, Tab::Animation],
     };
     let mut dock = egui_dock::DockState::new(tabs);
     let surface = dock.main_surface_mut();
@@ -2450,7 +2492,9 @@ impl egui_dock::TabViewer for TabView<'_> {
 
     fn scroll_bars(&self, tab: &Tab) -> [bool; 2] {
         match tab {
-            Tab::Scene | Tab::Game | Tab::Console | Tab::Assets | Tab::Level => [false, false],
+            Tab::Scene | Tab::Game | Tab::Console | Tab::Assets | Tab::Level | Tab::Animation => {
+                [false, false]
+            }
             _ => [false, true],
         }
     }
@@ -2531,6 +2575,7 @@ impl egui_dock::TabViewer for TabView<'_> {
                     app.log.info(l);
                 }
             }
+            Tab::Animation => crate::anim_panel::ui(app, ui),
             Tab::Hierarchy => crate::panels::hierarchy::ui(app, ui),
             Tab::Inspector => crate::panels::inspector::ui(app, ui),
             Tab::Assets => crate::panels::assets::ui(app, ui),

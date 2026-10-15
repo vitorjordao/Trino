@@ -1200,7 +1200,7 @@ pub fn selection_sphere(input: &ViewInput, path: &[usize]) -> Option<(Vec3, f32)
 
 /// Ground grid: 1 m lines, brighter every 5 m, colored X (red) / Z (blue)
 /// axes. Thin quads, so it is z-buffered against the scene like Unity's.
-fn grid_tmdl() -> Vec<u8> {
+pub(crate) fn grid_tmdl() -> Vec<u8> {
     let mut d = MeshData::default();
     let mut quad = |a: [f32; 3], b: [f32; 3], w: f32, col: [u8; 4], along_x: bool| {
         let base = d.positions.len() as u32;

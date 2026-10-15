@@ -360,7 +360,8 @@ Both the keys and the pad buttons can be **rebound** from the game: `Platform::i
 `rebind`, `cancel_rebind`, `reset_bindings` (PC only, `None`/no-ops on consoles).
 `trino-runner-pc` applies them after the frame and keeps them in `<save_name>.input`
 (text; `input::bindings_to_text`). The next bindable key or pad button pressed becomes
-the binding, Escape cancels. Without the `gamepad` feature (or a working pad layer)
+the binding, Escape cancels; keys with a fixed role (WASD, the `Key` bits but Enter and
+Shift) are not bindable, so one press never does two things. Without the `gamepad` feature (or a working pad layer)
 `GamepadStatus::Unsupported` and keyboard rebinding still works.
 
 ## Repository map

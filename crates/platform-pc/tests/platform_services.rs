@@ -336,6 +336,27 @@ fn rebinding_keys_through_the_platform() {
         Default::default()
     );
 
+    // A key with a fixed role (W moves the stick) is not taken: the
+    // rebind keeps waiting, and the next bindable key gets it.
+    input.apply(InputRequest::Rebind(Button::Y, BindDevice::Keyboard));
+    input.handle_key(KeyCode::KeyW, true);
+    input.handle_key(KeyCode::KeyW, false);
+    assert_eq!(
+        input.info().capturing,
+        Some((Button::Y, BindDevice::Keyboard))
+    );
+    input.handle_key(KeyCode::KeyK, true);
+    input.handle_key(KeyCode::KeyK, false);
+    assert_eq!(input.info().capturing, None);
+    assert_eq!(
+        input
+            .bindings()
+            .label(Button::Y, BindDevice::Keyboard)
+            .as_deref(),
+        Some("K")
+    );
+    assert!(input.take_changed());
+
     // Escape cancels a pending rebind.
     input.apply(InputRequest::Rebind(Button::Y, BindDevice::Keyboard));
     input.handle_key(KeyCode::Escape, true);

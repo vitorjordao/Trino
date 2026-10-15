@@ -312,15 +312,6 @@ impl Default for ModelParams {
     }
 }
 
-/// One static part of [`Renderer::build_batch`]: a model, its placement,
-/// its tint (multiplied into the vertex colors).
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub struct BatchPart {
-    pub model: ModelId,
-    pub matrix: crate::math3d::Mat34,
-    pub tint: Color,
-}
-
 /// 3D placement. Euler rotation in radians (XYZ order).
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Transform3 {
@@ -385,26 +376,6 @@ pub trait Renderer {
         material: Material,
         params: &ModelParams,
     );
-
-    /// Merge static models into the runtime model `id` ([`crate::batch`]):
-    /// afterwards one `draw_model*` of `id` draws them all, each where its
-    /// matrix put it (so draw `id` with the batch space's own matrix). For
-    /// props that never move: on the N64 every draw costs ~160 µs whatever
-    /// its size, so a field of props drawn one by one is CPU/RSP-bound.
-    ///
-    /// Returns how many **leading** parts went in: fewer than
-    /// `parts.len()` when the platform's limit stops it (the N64 keeps a
-    /// batch within one RSP draw: 16 segments of 32 vertices), so batch
-    /// the rest under another id; 0 when unsupported or a part is not
-    /// batchable (skinned, textured, unknown) — draw the parts yourself.
-    /// Rebuilding an existing `id` replaces it.
-    fn build_batch(&mut self, _id: ModelId, _parts: &[BatchPart]) -> usize {
-        0
-    }
-
-    /// Free a batch made by [`build_batch`](Self::build_batch) (safe while
-    /// a frame that drew it is still in flight).
-    fn drop_batch(&mut self, _id: ModelId) {}
 
     /// Draw a 3D model with an arbitrary model matrix — what hierarchies
     /// (prefab parts, attached props) need, since composed transforms are

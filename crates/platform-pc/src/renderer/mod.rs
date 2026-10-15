@@ -1672,33 +1672,6 @@ impl Renderer for PcRenderer {
         self.draw_model_matrix(model, &transform.matrix(), material, params);
     }
 
-    fn build_batch(&mut self, id: ModelId, parts: &[trino_core::BatchPart]) -> usize {
-        // No per-draw limit on the PC (its T&L is the CPU's): everything,
-        // up to what u16 indices address.
-        let blob = {
-            let meshes = &self.meshes;
-            let ms: Option<Vec<Mesh>> = parts
-                .iter()
-                .map(|p| meshes.get(&p.model.0).map(|(t, l)| Mesh::from_layout(t, l)))
-                .collect();
-            let Some(ms) = ms else { return 0 };
-            let Some(size) = trino_core::batch::merged_size_of(&ms) else {
-                return 0;
-            };
-            let mut blob = vec![0u8; size];
-            if parts.is_empty() || trino_core::batch::merge_parts(&ms, parts, &mut blob).is_err() {
-                return 0;
-            }
-            blob
-        };
-        self.upload_mesh(id, blob);
-        parts.len()
-    }
-
-    fn drop_batch(&mut self, id: ModelId) {
-        self.meshes.remove(&id.0);
-    }
-
     fn draw_model_matrix(
         &mut self,
         model: ModelId,

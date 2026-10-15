@@ -20,7 +20,6 @@
 
 pub mod asset;
 pub mod audio;
-pub mod batch;
 pub mod caps;
 pub mod collide;
 pub mod entity;
@@ -56,9 +55,8 @@ pub use particles::{Emitter, ParticleSystem};
 pub use physics::{Aabb, Collider, Shape};
 pub use platform::{BlobId, DisplayInfo, DisplaySettings, Platform, SaveError};
 pub use render::{
-    AnimBlend, AnimRef, BatchPart, BillboardParams, ClipId, FontId, FrameStats, Material,
-    MaterialId, ModelId, ModelParams, Renderer, Shading, SpriteId, SpriteParams, TextAlign,
-    TextParams, Transform3,
+    AnimBlend, AnimRef, BillboardParams, ClipId, FontId, FrameStats, Material, MaterialId, ModelId,
+    ModelParams, Renderer, Shading, SpriteId, SpriteParams, TextAlign, TextParams, Transform3,
 };
 pub use render3d::{
     Camera3, ClipInfo, DEFAULT_LIGHT, Fog, Light, MAX_JOINTS, Mesh, MeshError, MeshLayout,

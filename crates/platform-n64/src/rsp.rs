@@ -22,9 +22,6 @@ pub const DRAW_WORDS: usize = 27;
 pub struct RspMesh {
     table: u32,
     segs: u16,
-    /// The uncached block (freed only for runtime batches, never while the
-    /// RSP may still read it: see `N64Renderer::retire`).
-    base: *mut u8,
     /// Local vertex order of segment 0 (global indices), for the oracle.
     pub seg0: Vec<u16>,
 }
@@ -123,20 +120,8 @@ pub fn build(mesh: &Mesh) -> Option<RspMesh> {
     Some(RspMesh {
         table: phys,
         segs: segs.len() as u16,
-        base,
         seg0: segs[0].verts.clone(),
     })
-}
-
-impl RspMesh {
-    /// Free the uncached block.
-    ///
-    /// # Safety
-    /// Nothing the RSP still has queued may read it (retire it for two
-    /// frames first: `N64Renderer::retire`).
-    pub unsafe fn free(self) {
-        unsafe { ffi::trino_free_uncached(self.base as *mut c_void) };
-    }
 }
 
 /// The clip-space matrix the overlay applies: x and y normalized to the

@@ -341,11 +341,6 @@ uint32_t trino_phys_addr(const void* p)
     return PhysicalAddr(p);
 }
 
-void trino_free_uncached(void* p)
-{
-    free_uncached(p);
-}
-
 // Heap use (bytes): the self-test reports it next to the stack watermark.
 uint32_t trino_heap_used(void)
 {

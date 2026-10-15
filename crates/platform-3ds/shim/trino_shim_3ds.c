@@ -21,6 +21,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <malloc.h>
+#include <unistd.h>
+#include <arpa/inet.h>
 #include <3ds.h>
 #include <citro2d.h>
 
@@ -74,8 +77,60 @@ static C3D_RenderTarget* s_bottom = NULL;
 // code) and console self-tests run two games, so give Rust real headroom.
 u32 __stacksize__ = 256 * 1024;
 
+// 3dslink (real hardware, `cargo xtask run 3ds --device network`): libctru
+// sets __3dslink_host from the launch arguments 3dslink sends. Then stdout
+// and stderr go to the host's `3dslink -s` server, and trino_log writes
+// there as well. Emulators and normal launches leave it 0: nothing changes.
+#define TRINO_SOC_ALIGN 0x1000
+#define TRINO_SOC_SIZE 0x100000
+static u32* s_soc_buf = NULL;
+static int s_link_sock = -1;
+
+static void trino_debug_str(const char* msg)
+{
+    svcOutputDebugString(msg, strlen(msg));
+}
+
+static void trino_link_exit(void)
+{
+    if (s_link_sock >= 0) {
+        fflush(stdout);
+        fflush(stderr);
+        close(s_link_sock);
+        s_link_sock = -1;
+    }
+    socExit();
+}
+
+static void trino_link_init(void)
+{
+    if (__3dslink_host.s_addr == 0) {
+        return;
+    }
+    s_soc_buf = (u32*)memalign(TRINO_SOC_ALIGN, TRINO_SOC_SIZE);
+    if (s_soc_buf == NULL || R_FAILED(socInit(s_soc_buf, TRINO_SOC_SIZE))) {
+        trino_debug_str("TRINO_WARN: 3dslink: socInit failed\n");
+        return;
+    }
+    atexit(trino_link_exit);
+    s_link_sock = link3dsStdio();
+    if (s_link_sock < 0) {
+        trino_debug_str("TRINO_WARN: 3dslink: no host server\n");
+    }
+}
+
+// Also to the 3dslink host when connected.
+static void trino_link_write(const char* msg, size_t len)
+{
+    if (s_link_sock >= 0) {
+        fwrite(msg, 1, len, stdout);
+        fflush(stdout);
+    }
+}
+
 void trino_init(void)
 {
+    trino_link_init();
     gfxInitDefault();
     romfsInit();
     C3D_Init(C3D_DEFAULT_CMDBUF_SIZE);
@@ -90,10 +145,13 @@ void trino_init(void)
     trino_tex3d_init();
 }
 
-// svcOutputDebugString: shows up in Azahar/Citra logs and GDB.
+// svcOutputDebugString: shows up in Azahar/Citra logs and GDB; also on the
+// 3dslink host when the app was launched by it.
 void trino_log(const char* msg)
 {
-    svcOutputDebugString(msg, strlen(msg));
+    size_t len = strlen(msg);
+    svcOutputDebugString(msg, len);
+    trino_link_write(msg, len);
 }
 
 // Rust panic lands here: report and halt (responding to HOME so the
@@ -102,6 +160,9 @@ void trino_panic(const char* msg)
 {
     svcOutputDebugString("TRINO_PANIC: ", 13);
     svcOutputDebugString(msg, strlen(msg));
+    trino_link_write("TRINO_PANIC: ", 13);
+    trino_link_write(msg, strlen(msg));
+    trino_link_write("\n", 1);
     while (aptMainLoop()) {
         gspWaitForVBlank();
     }

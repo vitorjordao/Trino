@@ -29,3 +29,5 @@ png = { workspace = true }
 # dep-graph rule about platform crates concerns normal dependencies).
 platformer = { workspace = true }
 trino-asset-pipeline = { workspace = true }
+# Integration tests bake synthetic projects into temp dirs.
+tempfile = { workspace = true }

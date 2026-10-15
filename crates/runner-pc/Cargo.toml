@@ -20,3 +20,8 @@ trino-platform-pc = { workspace = true }
 trino-asset-pipeline = { workspace = true }
 winit = { workspace = true }
 pollster = { workspace = true }
+
+[dev-dependencies]
+# Integration tests bake a synthetic project (the PC backend's fixture).
+png = { workspace = true }
+tempfile = { workspace = true }

@@ -18,6 +18,12 @@ cargo xtask new space-cat --standalone <dir> --git https://github.com/vitorjorda
     `trino-runner-pc`, with live asset reload);
   - `assets/manifest.toml`, an AGENTS.md and a pinned `rust-toolchain.toml`;
   - run it with `cargo run -p <name>-pc`; `TRINO_SIM=3ds` gives the 3DS look.
+  - `trino-runner-pc` keeps two text files next to the save: `<save>.display` (window,
+    scales) and `<save>.input` (key and pad bindings the game rebinds through
+    `Platform::rebind`). Both are applied after the frame (the game asks, the host
+    applies and persists); a broken line falls back to the default. Linux builds have
+    no `gamepad` feature by default (it needs `libudev-dev`): the game then sees
+    `GamepadStatus::Unsupported` and can still rebind the keyboard.
   - **Consoles:** the template also ships `n64/` (a staticlib using `n64_main!`),
     `n3ds/` (a bin using `n3ds_main!`, with a `build.rs` that relinks when the shim
     changes) and `trino.toml`.

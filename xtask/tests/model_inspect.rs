@@ -274,3 +274,24 @@ fn bad_invocations_and_files_fail() {
     let (ok, v) = json(&[junk.to_str().unwrap()]);
     assert!(!ok && v["ok"] == false, "{v}");
 }
+
+#[test]
+fn color_slots_are_counted_per_slot() {
+    let file = "assets/shared/models/proxies/selftest-slots.gltf";
+    let (ok, v) = json(&[file]);
+    assert!(ok, "{v}");
+    // Three quads in slots 0, 1 and 4.
+    assert_eq!(
+        v["slot_vertices"],
+        serde_json::json!([4, 4, 0, 0, 4]),
+        "{v}"
+    );
+    let t = String::from_utf8_lossy(&inspect(&[file]).stdout).to_string();
+    assert!(
+        t.contains("color slots: 4 vertices keep their color; slots 1-4 have 4 / 0 / 0 / 4"),
+        "{t}"
+    );
+    // No `_SLOT`: no slot report.
+    let (_, cube) = json(&["assets/shared/models/cube.glb"]);
+    assert_eq!(cube["slot_vertices"], serde_json::Value::Null);
+}

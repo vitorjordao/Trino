@@ -29,8 +29,9 @@ pub struct MemoKey(pub [u32; KEY_WORDS]);
 impl MemoKey {
     /// The key of drawing `model` (a handle) with `matrix` and `params`
     /// under generation `generation`, or `None` when the draw is not a
-    /// plain one (emissive, double-sided, animated or textured draws are
-    /// never memoized: they are rare and their commands depend on more).
+    /// plain one (emissive, double-sided, animated, textured or palette
+    /// draws are never memoized: they are rare and their commands depend on
+    /// more; a palette alone is 4 words the key has no room for).
     /// A new [`ModelParams`] field must be added here or excluded.
     pub fn new(model: u32, generation: u32, matrix: &Mat34, params: &ModelParams) -> Option<Self> {
         let e = params.emissive;
@@ -38,6 +39,7 @@ impl MemoKey {
             || params.double_sided
             || params.anim.is_some()
             || params.texture.is_some()
+            || params.palette.is_some()
         {
             return None;
         }

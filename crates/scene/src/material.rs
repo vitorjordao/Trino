@@ -130,6 +130,7 @@ impl MaterialDef {
             double_sided: self.double_sided,
             anim: None,
             texture: self.texture.as_deref().map(trino_core::SpriteId::from_path),
+            ..ModelParams::DEFAULT
         }
     }
 }

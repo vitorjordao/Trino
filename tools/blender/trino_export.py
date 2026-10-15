@@ -131,6 +131,7 @@ def export_glb(roots, out_path, animations=True, nla=True):
         export_frame_step=1,
         export_skins=True,
         export_morph=False,
+        export_attributes=True,          # `_SLOT` color slots (custom `_` attributes)
         export_cameras=False,
         export_lights=False,
     )

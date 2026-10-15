@@ -179,6 +179,17 @@ impl Gltf {
         self.accessors.len() - 1
     }
 
+    /// Unsigned-byte accessor (e.g. an integer custom attribute).
+    pub fn u8s(&mut self, ty: &str, vals: &[u8]) -> usize {
+        let n = components(ty);
+        let view = self.view(vals);
+        self.accessors.push(format!(
+            "{{\"bufferView\": {view}, \"componentType\": 5121, \"count\": {}, \"type\": \"{ty}\"}}",
+            vals.len() / n
+        ));
+        self.accessors.len() - 1
+    }
+
     /// Complete document: `body` holds the remaining top-level members
     /// (no trailing comma), e.g. `"scene": 0, "scenes": [...], "nodes": [...]`.
     pub fn json(&self, body: &str) -> String {

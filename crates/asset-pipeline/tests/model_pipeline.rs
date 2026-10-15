@@ -752,12 +752,13 @@ fn rigged_triangle() -> MeshData {
         uvs: vec![[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]],
         texture: Some(trino_core::asset_id("sprites/skin")),
         blend: vec![[0, 0], [0, 0], [0, 128]],
+        slots: vec![0, 2, 4],
     }
 }
 
 #[test]
 fn mesh_data_encodes_every_tmdl_section_and_rejects_bad_layouts() {
-    // SKEL + ANIM + SKW2 + TXUV + TXID + BNDS, read back by the core.
+    // SKEL + ANIM + SKW2 + TXUV + TXID + SLOT + BNDS, read back by the core.
     let blob = rigged_triangle().encode().unwrap();
     let mesh = Mesh::from_tmdl(&blob).unwrap();
     assert_eq!(mesh.joint_count(), 2);
@@ -773,6 +774,8 @@ fn mesh_data_encodes_every_tmdl_section_and_rejects_bad_layouts() {
         mesh.default_texture(),
         Some(SpriteId::from_path("sprites/skin"))
     );
+    assert!(mesh.has_slots());
+    assert_eq!([mesh.slot(0), mesh.slot(1), mesh.slot(2)], [0, 2, 4]);
     let mut skin = [Mat34::IDENTITY; MAX_JOINTS];
     mesh.pose(Some(AnimRef::new(clip.id, 0.5)), &mut skin);
     assert!(near(
@@ -817,4 +820,22 @@ fn mesh_data_encodes_every_tmdl_section_and_rejects_bad_layouts() {
     let mut uvs = rigged_triangle();
     uvs.uvs.pop();
     fails(uvs, "textured model has 2 UVs for 3 vertices");
+    let mut slots = rigged_triangle();
+    slots.slots.pop();
+    fails(slots, "2 color slots for 3 vertices");
+    let mut slot5 = rigged_triangle();
+    slot5.slots[1] = 5;
+    fails(slot5, "color slot 5 is out of range 0..=4");
+    // All-zero slots write no SLOT section: the blob is byte-identical to
+    // one without slots.
+    let mut zeros = rigged_triangle();
+    zeros.slots = vec![0; 3];
+    let mut none = rigged_triangle();
+    none.slots.clear();
+    assert_eq!(zeros.encode().unwrap(), none.encode().unwrap());
+    assert!(
+        !Mesh::from_tmdl(&none.encode().unwrap())
+            .unwrap()
+            .has_slots()
+    );
 }

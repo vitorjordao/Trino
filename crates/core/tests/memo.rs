@@ -68,6 +68,10 @@ fn only_plain_draws_are_memoized() {
             texture: Some(SpriteId(3)),
             ..ModelParams::DEFAULT
         },
+        ModelParams {
+            palette: Some([Color::WHITE; 4]),
+            ..ModelParams::DEFAULT
+        },
     ] {
         assert!(MemoKey::new(1, 0, &m, &p).is_none(), "{p:?}");
     }

@@ -869,3 +869,75 @@ fn large_frames_grow_buffers_and_batches_mix_textures() {
         "override texture",
     );
 }
+
+/// Color slots and a per-draw palette (TMDL `SLOT`, `ModelParams::palette`):
+/// one white card baked with two slot regions, drawn with two different
+/// palettes and without one. The two halves take their palette entries;
+/// without a palette the card stays white.
+#[test]
+fn a_palette_recolors_slot_regions_per_draw() {
+    let Some(mut r) = headless(SimProfile::Native) else {
+        return;
+    };
+    // Two quads side by side (the seam has its own vertices, so the
+    // regions don't blend): left in slot 1, right in slot 2.
+    let mut card = trino_asset_pipeline::MeshData::default();
+    for (x0, slot) in [(-1.0f32, 1u8), (0.0, 2)] {
+        let base = card.positions.len() as u32;
+        for (x, y) in [(0.0, -1.0), (1.0, -1.0), (1.0, 1.0), (0.0, 1.0)] {
+            card.positions.push([x0 + x, y, 0.0]);
+            card.normals.push([0.0, 0.0, -1.0]);
+            card.colors.push([255; 4]);
+            card.slots.push(slot);
+        }
+        card.indices
+            .extend([base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+    let id = trino_core::ModelId::from_path("models/slotted_card");
+    r.upload_mesh(id, card.encode().unwrap());
+    let draw = |r: &mut PcRenderer, palette| {
+        r.begin_frame(CLEAR);
+        r.set_camera(&camera());
+        r.set_light(&light(Color::WHITE, Fog::NONE));
+        r.draw_model(
+            id,
+            &Transform3::default(),
+            Material::VertexLit,
+            &ModelParams {
+                shading: Shading::Unlit,
+                double_sided: true,
+                palette,
+                ..ModelParams::DEFAULT
+            },
+        );
+        r.end_frame();
+        let mut sides = [read(r, 280, 240), read(r, 360, 240)];
+        sides.sort();
+        sides
+    };
+    let (red, blue, green) = (
+        Color::rgb(220, 30, 30),
+        Color::rgb(30, 40, 210),
+        Color::rgb(20, 200, 60),
+    );
+    let sorted = |a: Color, b: Color| {
+        let mut s = [[a.r, a.g, a.b, 255], [b.r, b.g, b.b, 255]];
+        s.sort();
+        s
+    };
+    for (one, two) in [(red, blue), (green, red)] {
+        let got = draw(&mut r, Some([one, two, Color::WHITE, Color::WHITE]));
+        let want = sorted(one, two);
+        for k in 0..2 {
+            assert_near(
+                got[k],
+                [want[k][0], want[k][1], want[k][2]],
+                6,
+                "slot color",
+            );
+        }
+    }
+    for side in draw(&mut r, None) {
+        assert_near(side, [255, 255, 255], 6, "no palette: baked white");
+    }
+}

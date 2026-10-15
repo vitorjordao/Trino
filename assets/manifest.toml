@@ -230,3 +230,8 @@ skinning = "smooth"
 [models.selftest_card]
 file = "models/proxies/selftest-card.prim.ron"
 texture = "sprites/selftest_quadrants"
+
+# White card in color slots 0, 1 and 4 (glTF `_SLOT`): a per-draw palette
+# recolors it on every target (selftest::palette).
+[models.selftest_slots]
+file = "models/proxies/selftest-slots.gltf"

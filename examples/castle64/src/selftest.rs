@@ -53,6 +53,10 @@ pub fn engine_checks(
     }
     platform.log("TRINO_STEP:smooth skin\n");
     smooth_skin(renderer)?;
+    platform.log("TRINO_STEP:palette\n");
+    if palette(renderer)? {
+        platform.log("TRINO_STEP:palette probed 3 slots\n");
+    }
     platform.log("TRINO_STEP:portals\n");
     portals(renderer, platform)?;
     platform.log("TRINO_STEP:engine ok\n");
@@ -414,6 +418,75 @@ pub fn smooth_skin(renderer: &mut dyn Renderer) -> Result<(), &'static str> {
         return Err("smooth-skinned model drew nothing (SKW2 path)");
     }
     Ok(())
+}
+
+/// A white card in color slots 0, 1 and 4 (`[models.selftest_slots]`,
+/// glTF `_SLOT`).
+pub const SLOTS_CARD: ModelId = ModelId::from_path("models/selftest_slots");
+
+/// Color slots and a per-draw palette: the slotted card drawn face-on with
+/// a palette shows white (slot 0), the first entry (slot 1) and the fourth
+/// (slot 4); drawn again without one it is white everywhere. On the N64 the
+/// palette draw must stay off the RSP overlay (which draws baked colors),
+/// and the plain one may take it. `Ok(false)` where `read_pixel` is
+/// unsupported.
+pub fn palette(renderer: &mut dyn Renderer) -> Result<bool, &'static str> {
+    let caps = *renderer.caps();
+    let screen = Vec2::new(caps.screen_width as f32, caps.screen_height as f32);
+    let camera = Camera3 {
+        eye: Vec3::new(0.0, 0.0, -1.5),
+        target: Vec3::ZERO,
+        fov_y: 60.0 * core::f32::consts::PI / 180.0,
+    };
+    let (red, blue) = ([230, 40, 40], [40, 60, 230]);
+    let rgb = |c: [u8; 3]| Color::rgb(c[0], c[1], c[2]);
+    let view = camera.view();
+    let half = camera.fov_y * 0.5;
+    let focal = cos(half) / sin(half) * screen.y * 0.5;
+    for (palette, want) in [
+        (
+            Some([rgb(red), Color::WHITE, Color::WHITE, rgb(blue)]),
+            [[255, 255, 255], red, blue],
+        ),
+        (None, [[255, 255, 255]; 3]),
+    ] {
+        let params = ModelParams {
+            shading: Shading::Unlit,
+            palette,
+            ..ModelParams::DEFAULT
+        };
+        // Several identical frames: the 3DS LCD is double-buffered.
+        for _ in 0..3 {
+            renderer.begin_frame(Color::BLACK);
+            renderer.set_camera(&camera);
+            renderer.set_light(&DEFAULT_LIGHT);
+            renderer.draw_model(
+                SLOTS_CARD,
+                &Transform3::default(),
+                Material::VertexLit,
+                &params,
+            );
+            renderer.end_frame();
+        }
+        // Column centers: slot 0 at x = -0.4, slot 1 at 0, slot 4 at 0.4.
+        for (x, want) in [-0.4f32, 0.0, 0.4].into_iter().zip(want) {
+            let v = view.transform_point(Vec3::new(x, 0.0, 0.0));
+            let px = screen.x * 0.5 + v.x * focal / v.z;
+            let py = screen.y * 0.5 - v.y * focal / v.z;
+            let Some(got) = renderer.read_pixel(px as u32, py as u32) else {
+                return Ok(false);
+            };
+            let close = |a: u8, b: u8| (a as i32 - b as i32).abs() <= 48;
+            if !(close(got.r, want[0]) && close(got.g, want[1]) && close(got.b, want[2])) {
+                return Err(if palette.is_some() {
+                    "palette: a color slot shows the wrong color"
+                } else {
+                    "palette: without a palette the card is not its baked white"
+                });
+            }
+        }
+    }
+    Ok(true)
 }
 
 /// The baked portal/cell demo (`scenes/interior.scene.ron`).

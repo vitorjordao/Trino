@@ -285,7 +285,23 @@ pub struct ModelParams {
     /// fit TMEM (4 KB) and be power-of-two sized to tile. Ignored by meshes
     /// without UVs.
     pub texture: Option<SpriteId>,
+    /// Per-draw colors for the mesh's color slots (TMDL `SLOT`): a vertex
+    /// in slot `s` (1..=4) has its RGB multiplied by `palette[s - 1]`
+    /// before tint and lighting; slot 0 keeps its baked color. One model
+    /// drawn many times with different skin, hair or clothing colors.
+    /// `None`, or a mesh without slots, draws the baked colors. See
+    /// [`Palette`].
+    pub palette: Option<Palette>,
 }
+
+/// Four per-draw colors for the color slots 1..=4 of a mesh
+/// ([`ModelParams::palette`]). Each channel multiplies the vertex color as
+/// `(vertex * entry + 127) / 255` (white keeps the vertex color exactly,
+/// the same rounding as material tint stacking), so artists paint slot
+/// regions white with their shading and the palette color comes out
+/// shaded. The entries' alpha is ignored: vertex alpha stays as baked
+/// (translucency is the tint's job).
+pub type Palette = [Color; 4];
 
 impl ModelParams {
     pub const DEFAULT: ModelParams = ModelParams {
@@ -295,6 +311,7 @@ impl ModelParams {
         double_sided: false,
         anim: None,
         texture: None,
+        palette: None,
     };
 
     /// Default surface with a tint — the common case in game code.

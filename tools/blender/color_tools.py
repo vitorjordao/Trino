@@ -22,6 +22,7 @@
 #   P.ambient_occlusion_floor(0.25)        # darken near the ground plane (fake contact shadow)
 #   P.commit()                             # writes the "Col" corner attribute and makes it active
 #   ns["palette_from_materials"]("Prop")   # alternative: bake each material's base color into Col
+#   ns["paint_slots"]("Body", [(lambda c, n: c.z > 1.2, 1)])  # `_SLOT` per face: palette entry 0
 #
 # Rules that saved rework (inherited from a production character pipeline):
 # - Paint by **3D position** rules, never by UV: seams stop mattering.
@@ -115,6 +116,35 @@ class _V:
 
     def __init__(self, a):
         self.x, self.y, self.z = float(a[0]), float(a[1]), float(a[2])
+
+
+def paint_slots(obj_name, rules):
+    """Color slots for a per-draw palette (`ModelParams::palette`): writes the INT
+    FACE attribute `_SLOT` (0 = keep the vertex color, 1..4 = multiply it by palette
+    entry slot-1). `rules` is a list of `(rule(center, normal) -> bool, slot)`; later
+    rules win, unmatched faces stay 0. Paint those faces WHITE (with their shading /
+    AO) in COLOR_0 so the palette color comes out shaded. The FACE domain makes the
+    glTF exporter split vertices on slot borders, so Gouraud never blends two slots.
+    Export with `export_glb` (it sets `export_attributes`), then check
+    `slot_vertices` in `inspect`."""
+    obj = bpy.data.objects[obj_name]
+    me = obj.data
+    attr = me.attributes.get("_SLOT")
+    if attr is not None and (attr.domain != 'FACE' or attr.data_type != 'INT'):
+        me.attributes.remove(attr)
+        attr = None
+    if attr is None:
+        attr = me.attributes.new("_SLOT", 'INT', 'FACE')
+    slots = [0] * len(me.polygons)
+    for p in me.polygons:
+        for rule, slot in rules:
+            if rule(_V(p.center), _V(p.normal)):
+                slots[p.index] = int(slot)
+    if any(s < 0 or s > 4 for s in slots):
+        raise ValueError("color slots are 0..4")
+    attr.data.foreach_set("value", slots)
+    me.update()
+    return {"faces": len(slots), "per_slot": [slots.count(k) for k in range(5)]}
 
 
 def palette_from_materials(obj_name, name="Col"):

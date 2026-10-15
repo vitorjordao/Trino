@@ -31,6 +31,8 @@ mod theme;
 #[cfg(test)]
 mod ui_tests;
 mod viewport;
+#[cfg(test)]
+mod widget_tests;
 
 use eframe::egui;
 

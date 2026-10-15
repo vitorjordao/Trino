@@ -178,7 +178,7 @@ pub fn to_rust_for(scene: &Scene, lib: &Library, target: Target) -> (String, Vec
             .collect();
         let _ = writeln!(
             out,
-            "    SceneNode {{\n        name: \"{}\",\n        tags: Tags::List(&[{}]),\n        matrix: Mat34 {{\n            m: [{}],\n        }},\n        model: {},\n        params: ModelParams {{\n            tint: {},\n            emissive: {},\n            shading: Shading::{},\n            double_sided: {},\n            anim: None,\n            texture: {},\n            palette: None,\n        }},\n        anim: {},\n        collider: {},\n        lod: {},\n        sound: {},\n        cell: {},\n        vis: {},\n    }},",
+            "    SceneNode {{\n        name: \"{}\",\n        tags: Tags::List(&[{}]),\n        matrix: Mat34 {{\n            m: [{}],\n        }},\n        model: {},\n        params: ModelParams {{\n            tint: {},\n            emissive: {},\n            shading: Shading::{},\n            double_sided: {},\n            anim: None,\n            texture: {},\n            palette: None,\n            gloss: {},\n        }},\n        anim: {},\n        collider: {},\n        lod: {},\n        sound: {},\n        cell: {},\n        vis: {},\n    }},",
             esc(&item.name),
             tags.join(", "),
             rows.join(", "),
@@ -191,6 +191,7 @@ pub fn to_rust_for(scene: &Scene, lib: &Library, target: Target) -> (String, Vec
                 Some(t) => format!("Some(SpriteId({:#010x}))", t.0),
                 None => "None".into(),
             },
+            p.gloss,
             anim,
             collider,
             lod,

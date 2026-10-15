@@ -298,6 +298,10 @@ pub struct SpriteComponent {
     pub tint: [u8; 4],
 }
 
+pub(crate) fn is_zero_u8(v: &u8) -> bool {
+    *v == 0
+}
+
 pub(crate) fn white() -> [u8; 4] {
     [255, 255, 255, 255]
 }

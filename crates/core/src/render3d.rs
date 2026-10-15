@@ -47,9 +47,13 @@
 //!   far-to-near by [`ScreenTri::depth`] (farthest vertex) — the tie-break
 //!   for equal depths and the correct blending order.
 
+use crate::light::{LightKind, LocalLight, MAX_VERTEX_LIGHTS};
 use crate::math::{Color, Vec2, Vec3};
 use crate::math3d::{Mat34, Quat};
+
+mod lit;
 use crate::render::{AnimRef, ClipId, ModelParams, Shading, SpriteId};
+pub use lit::{SurfaceScratch, SurfaceVert, tessellate_surface};
 
 /// Mesh blob format ("TMDL", little-endian):
 /// `u32 vertex_count, u32 index_count`, then `positions f32*3*v`,
@@ -859,6 +863,28 @@ pub const DEFAULT_LIGHT: Light = Light {
     fog: Fog::NONE,
 };
 
+/// A [`LocalLight`] in view space with its per-frame constants (the
+/// per-vertex tier, [`TnlContext::with_local_lights`]).
+#[derive(Clone, Copy, PartialEq, Debug)]
+struct ViewLight {
+    pos: Vec3,
+    /// `color × intensity` as 0..1 factors.
+    color: [f32; 3],
+    radius: f32,
+    inv_r2: f32,
+    /// Spot: the axis (view space, unit), `cos` of the outer half-angle and
+    /// `1 / (cos inner - cos outer)`; `None` for a point light.
+    spot: Option<(Vec3, f32, f32)>,
+}
+
+const NO_LIGHT: ViewLight = ViewLight {
+    pos: Vec3::ZERO,
+    color: [0.0; 3],
+    radius: 0.0,
+    inv_r2: 0.0,
+    spot: None,
+};
+
 /// One screen-space triangle ready for a backend rasterizer.
 #[derive(Clone, Copy, Debug)]
 pub struct ScreenTri {
@@ -1083,6 +1109,9 @@ pub enum RspReject {
     /// Lit with a matrix that isn't rotation + uniform scale (a shear, or
     /// an uneven scale on a mesh with sloped normals).
     NonUniformScale,
+    /// A local light reaches it ([`crate::light`]): the overlay only knows
+    /// the global light.
+    LocalLight,
 }
 
 impl RspReject {
@@ -1112,6 +1141,7 @@ impl RspReject {
             RspReject::TooScaled => "scale too big",
             RspReject::Flat => "flat shading",
             RspReject::NonUniformScale => "sheared or uneven scale",
+            RspReject::LocalLight => "local light",
         }
     }
 }
@@ -1317,6 +1347,10 @@ pub fn rsp_check_mv(
     let r2 = r * r * smax;
     // The overlay's matrix entries (axis scale) must stay in range.
     rsp_band_check(ctx, c, r2)?;
+    // Lit by a local light: only the CPU T&L adds those.
+    if ctx.n_locals > 0 && params.shading != Shading::Unlit && ctx.lights_touch(c, r2) {
+        return Err(RspReject::LocalLight);
+    }
     if smax >= RSP_MAX_SCALE * RSP_MAX_SCALE {
         return Err(RspReject::TooScaled);
     }
@@ -1478,6 +1512,11 @@ pub struct TnlContext {
     /// Both light colors white: the single-intensity fast path applies.
     white: bool,
     fog_on: bool,
+    /// Local lights evaluated per vertex ([`TnlContext::with_local_lights`]),
+    /// in view space. Last and small: every N64 draw's RSP test reads this
+    /// context.
+    n_locals: u8,
+    view_locals: [ViewLight; MAX_VERTEX_LIGHTS],
 }
 
 impl TnlContext {
@@ -1509,7 +1548,66 @@ impl TnlContext {
             ],
             white: light.color == Color::WHITE && light.ambient_color == Color::WHITE,
             fog_on: light.fog.enabled(),
+            n_locals: 0,
+            view_locals: [NO_LIGHT; MAX_VERTEX_LIGHTS],
         }
+    }
+    /// This context with `lights` (the first [`MAX_VERTEX_LIGHTS`]) added to
+    /// the vertex colors of every lit draw they reach — the per-vertex
+    /// tier ([`crate::LightTier::PerVertex`]). Lights with no radius or no
+    /// color are dropped. With no lights the T&L is exactly what it was
+    /// without them.
+    pub fn with_local_lights(mut self, lights: &[LocalLight]) -> TnlContext {
+        let mut n = 0;
+        for l in lights.iter() {
+            if n == MAX_VERTEX_LIGHTS {
+                break;
+            }
+            let k = l.intensity / 255.0;
+            if l.radius <= 0.0 || k <= 0.0 || (l.color.r | l.color.g | l.color.b) == 0 {
+                continue;
+            }
+            let spot = match l.kind {
+                LightKind::Point => None,
+                LightKind::Spot { dir, inner, outer } => {
+                    let (co, inv) = crate::light::spot_cone(inner, outer);
+                    Some((
+                        self.view.transform_dir(dir.normalized()).normalized(),
+                        co,
+                        inv,
+                    ))
+                }
+            };
+            self.view_locals[n] = ViewLight {
+                pos: self.view.transform_point(l.pos),
+                color: [
+                    l.color.r as f32 * k,
+                    l.color.g as f32 * k,
+                    l.color.b as f32 * k,
+                ],
+                radius: l.radius,
+                inv_r2: 1.0 / (l.radius * l.radius),
+                spot,
+            };
+            n += 1;
+        }
+        self.n_locals = n as u8;
+        self
+    }
+
+    /// How many local lights this context evaluates per vertex (lights
+    /// with no radius or color are dropped).
+    pub fn local_light_count(&self) -> usize {
+        self.n_locals as usize
+    }
+
+    /// Does any per-vertex local light reach a bounding sphere (view-space
+    /// center `c`, squared radius `r2`)? Such a draw needs the CPU T&L on
+    /// the N64 ([`RspReject::LocalLight`]).
+    pub fn lights_touch(&self, c: Vec3, r2: f32) -> bool {
+        self.view_locals[..self.n_locals as usize]
+            .iter()
+            .any(|l| reaches(l, c, r2))
     }
 
     /// Still valid for this camera, light and screen? Backends that can't
@@ -1517,6 +1615,21 @@ impl TnlContext {
     pub fn matches(&self, camera: &Camera3, light: &Light, screen: Vec2) -> bool {
         self.camera == *camera && self.light == *light && self.screen == screen
     }
+}
+/// Does view-space light `l` reach the sphere (`c`, `r2`)? Sqrt-free:
+/// `|p - c| < radius + r` squared, with `r` bounded by `r2`.
+#[inline]
+fn reaches(l: &ViewLight, c: Vec3, r2: f32) -> bool {
+    let d = l.pos - c;
+    let d2 = d.dot(d);
+    let lr2 = l.radius * l.radius;
+    // (R + r)² = R² + r² + 2Rr ≤ R² + r² + (R² + r²) — exact enough as a
+    // conservative test, and exact for points (r = 0).
+    if d2 >= 2.0 * (lr2 + r2) {
+        return false;
+    }
+    let r = crate::math3d::sqrt(r2);
+    d2 < (l.radius + r) * (l.radius + r)
 }
 
 /// Clip the triangle in `poly_a` against the near plane and the 4
@@ -1627,6 +1740,14 @@ pub fn tessellate_with(
     params: &ModelParams,
     emit: &mut dyn FnMut(ScreenTri),
 ) -> TnlStats {
+    // A local light may reach it: the lit copy of the T&L (render3d/lit.rs),
+    // out of this path's way.
+    if ctx.n_locals > 0
+        && params.shading != Shading::Unlit
+        && let Some(stats) = lit::tessellate_lit(ctx, scratch, mesh, model, params, emit)
+    {
+        return stats;
+    }
     let view = ctx.view;
     let mv = view.mul(model);
     let (lim_x, lim_y) = (ctx.lim_x, ctx.lim_y);

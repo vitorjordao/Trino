@@ -81,6 +81,9 @@ pub struct Level {
     pub spawn_yaw: f32,
     pub kill_y: f32,
     pub sky: Color,
+    /// Torches (feet on the floor): each one a lamp post with a warm local
+    /// light at its top.
+    pub torches: &'static [Vec3],
 }
 
 const fn blk(x: f32, y: f32, z: f32, w: f32, h: f32, d: f32, kind: BlockKind) -> Block {
@@ -182,6 +185,7 @@ pub const HUB: Level = Level {
     spawn_yaw: PI,
     kill_y: -10.0,
     sky: Color::rgb(100, 160, 255),
+    torches: &[],
 };
 
 // ------------------------------------------------------- green hills ----
@@ -234,6 +238,7 @@ pub const GREEN: Level = Level {
     spawn_yaw: -PI * 0.5,
     kill_y: -8.0,
     sky: Color::rgb(120, 200, 255),
+    torches: &[],
 };
 
 // --------------------------------------------------------- lava land ----
@@ -297,6 +302,7 @@ pub const LAVA: Level = Level {
     spawn_yaw: PI,
     kill_y: -6.0,
     sky: Color::rgb(255, 120, 70),
+    torches: &[],
 };
 
 // --------------------------------------------------------- sky tower ----
@@ -357,6 +363,7 @@ pub const SKY: Level = Level {
     spawn_yaw: -PI * 0.5,
     kill_y: -6.0,
     sky: Color::rgb(150, 170, 230),
+    torches: &[],
 };
 
 // ------------------------------------------------------- throne room ----
@@ -380,6 +387,14 @@ const THRONE_COINS: &[Vec3] = &[
     v(2.1, 0.6, 2.1),
 ];
 
+/// Two pairs of torches along the way to the throne.
+const THRONE_TORCHES: &[Vec3] = &[
+    v(-4.0, 0.0, 1.5),
+    v(4.0, 0.0, 1.5),
+    v(-4.0, 0.0, 7.5),
+    v(4.0, 0.0, 7.5),
+];
+
 pub const THRONE: Level = Level {
     name: "throne",
     blocks: THRONE_BLOCKS,
@@ -393,6 +408,7 @@ pub const THRONE: Level = Level {
     spawn_yaw: PI,
     kill_y: -5.0,
     sky: Color::rgb(255, 215, 120),
+    torches: THRONE_TORCHES,
 };
 
 pub const LEVELS: [&Level; 5] = [&HUB, &GREEN, &LAVA, &SKY, &THRONE];

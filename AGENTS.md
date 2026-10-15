@@ -342,6 +342,17 @@ RDP).
   scale (`sim::native_internal`), its aspect within 4:3..21:9 (bars beyond).
   `PcRenderer::present_preview` composes what a window shows, for tests.
 
+- **Local lights (2026-10-15, ADR 0010):** `LocalLight` (point / spot, color, intensity,
+  radius with a `(1 - d²/r²)²` falloff), `Renderer::set_local_lights` and `set_wetness`
+  (both cleared at `begin_frame`), `ModelParams::gloss` (and `gloss` in material files).
+  Each platform evaluates them by its `Caps::light_tier` / `max_local_lights`: the PC
+  native profile per pixel (diffuse, Blinn-Phong highlights, wet floors; the lit
+  pipeline `fs_tri_lit`), the 3DS (4) and the N64 (2) per vertex in the core's T&L
+  (`render3d/lit.rs`, a separate copy of `tessellate_joints`). On the N64 a draw a light
+  reaches leaves the RSP (`RspReject::LocalLight`); `ground_pool` gives the floor decal
+  to draw instead. castle64's throne room has torches on every tier; `local lights`
+  self-test step on PC, ares and Azahar; goldens `tests/golden/pc/lights_*`.
+
 - **Two screens (2026-10-14):** `Renderer::second_screen`/`set_screen` (3DS touch
   screen, 2D only; main screen first, then the second, once per frame),
   `Platform::second_screen` (known at update time), `InputState::pointer_screen`
@@ -608,6 +619,14 @@ cargo test --workspace
 - **`platforms = [...]` keeps big PC-only models out of console RAM.** A console loads
   every model at boot: animated rigs once made the N64 fail `display_init` (allocation
   failed).
+- **Never fold a new per-vertex feature into `tessellate_joints`.** Even never-taken
+  branches and zero-sized generics grew its static body past the N64's 16 KB I-cache
+  (15.6 → 18.0 KB) and made unlit draws 10–35 % slower in ares (local lights, 2026-10-15).
+  Lit draws take `render3d/lit.rs`. Check `mips64-elf-nm -S` of
+  `tessellate_joints::<false, false>` (0x3d04) after any T&L change.
+- **A colored or dimmed global light sends every N64 draw to the CPU**
+  (`RspReject::ColoredLight`): a "dim room" must stay white (lower ambient, a grazing
+  direction) or be a tint.
 - **The PC `gamepad` feature links libudev on Linux** (`libudev-dev`). Keep it opt-in
   for Linux builds.
 

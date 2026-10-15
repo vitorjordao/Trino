@@ -292,6 +292,11 @@ pub struct ModelParams {
     /// `None`, or a mesh without slots, draws the baked colors. See
     /// [`Palette`].
     pub palette: Option<Palette>,
+    /// Shininess, 0 (matte) to 255 (mirror-like): the strength and
+    /// tightness of specular highlights from the global light and local
+    /// lights. Specular exists only on the per-pixel tier
+    /// ([`crate::LightTier::PerPixel`], PC); per-vertex targets ignore it.
+    pub gloss: u8,
 }
 
 /// Four per-draw colors for the color slots 1..=4 of a mesh
@@ -312,6 +317,7 @@ impl ModelParams {
         anim: None,
         texture: None,
         palette: None,
+        gloss: 0,
     };
 
     /// Default surface with a tint — the common case in game code.
@@ -380,6 +386,20 @@ pub trait Renderer {
     /// subsequent `draw_model` calls. Persists across frames until changed;
     /// starts as [`crate::render3d::DEFAULT_LIGHT`].
     fn set_light(&mut self, _light: &crate::render3d::Light) {}
+
+    /// Set the point and spot lights for the next 3D draws (see
+    /// [`crate::light`]): the first [`Caps::max_local_lights`] are used,
+    /// per pixel or per vertex as [`Caps::light_tier`] says. **Cleared at
+    /// `begin_frame`**: set them every frame (they usually move), before
+    /// the draws they light. Draws made before the call keep the lights
+    /// they had.
+    fn set_local_lights(&mut self, _lights: &[crate::light::LocalLight]) {}
+
+    /// How wet the world looks, 0 (dry) to 1 (soaked): on the per-pixel
+    /// tier (PC), surfaces facing up darken and turn glossy, mirroring the
+    /// lights in highlights. Per-vertex targets ignore it. Cleared at
+    /// `begin_frame`, like the local lights.
+    fn set_wetness(&mut self, _wetness: f32) {}
 
     /// Draw a 3D model (vertex-lit, engine-side T&L — see `render3d`).
     ///

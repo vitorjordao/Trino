@@ -50,6 +50,8 @@ fn provided_renderer_methods_are_harmless_defaults() {
         ambient: 1.0,
         ..DEFAULT_LIGHT
     });
+    dyn_r.set_local_lights(&[trino_core::LocalLight::point(Vec3::ZERO, Color::WHITE, 2.0)]);
+    dyn_r.set_wetness(0.5);
     dyn_r.draw_billboard(SpriteId(1), Vec3::ZERO, &BillboardParams::DEFAULT);
     dyn_r.fill_rect(Rect::new(0.0, 0.0, 10.0, 10.0), Color::WHITE);
     dyn_r.draw_text(FontId(3), Vec2::ZERO, "hello", &TextParams::DEFAULT);

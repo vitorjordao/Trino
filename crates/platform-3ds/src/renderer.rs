@@ -13,8 +13,8 @@ use trino_core::render3d::{
 };
 use trino_core::text::BitmapFont;
 use trino_core::{
-    BillboardParams, Caps, Color, FontId, FrameStats, Mat34, Material, ModelId, ModelParams,
-    Renderer, SpriteId, SpriteParams, TextParams, Transform3, Vec2, Vec3,
+    BillboardParams, Caps, Color, FontId, FrameStats, LightList, LocalLight, Mat34, Material,
+    ModelId, ModelParams, Renderer, SpriteId, SpriteParams, TextParams, Transform3, Vec2, Vec3,
 };
 
 use crate::ffi;
@@ -59,7 +59,10 @@ pub struct N3dsRenderer {
     screen: u8,
     camera: Camera3,
     light: Light,
-    /// T&L constants of `camera` + `light`, rebuilt when either changes.
+    /// Local lights of this frame (per vertex, `Caps::N3DS` cap).
+    locals: LightList,
+    /// T&L constants of `camera` + `light` + `locals`, rebuilt when one
+    /// changes.
     tnl_ctx: TnlContext,
     /// The T&L's working memory, reused by every draw (boxed: ~9 KB).
     tnl_scratch: Box<TnlScratch>,
@@ -84,8 +87,14 @@ impl N3dsRenderer {
             tnl_ctx: TnlContext::new(&Camera3::default(), &DEFAULT_LIGHT, SCREEN),
             tnl_scratch: Box::new(TnlScratch::new()),
             light: DEFAULT_LIGHT,
+            locals: LightList::EMPTY,
             caps: Caps::N3DS,
         }
+    }
+
+    fn rebuild_tnl(&mut self) {
+        self.tnl_ctx = TnlContext::new(&self.camera, &self.light, SCREEN)
+            .with_local_lights(self.locals.as_slice());
     }
 
     /// Depth-sort (painter tie-break) and rasterize the pending model batch.
@@ -241,6 +250,9 @@ impl Renderer for N3dsRenderer {
         self.sprite_depth = SPRITE_DEPTH_BG;
         self.frame_stats = FrameStats::default();
         self.screen = 0;
+        if self.locals.set(&[], 0) {
+            self.rebuild_tnl();
+        }
         unsafe { ffi::trino_frame_begin(pack_color(clear)) }
     }
 
@@ -308,14 +320,21 @@ impl Renderer for N3dsRenderer {
     fn set_camera(&mut self, camera: &Camera3) {
         self.flush_model_batch();
         self.camera = *camera;
-        self.tnl_ctx = TnlContext::new(&self.camera, &self.light, SCREEN);
+        self.rebuild_tnl();
     }
 
     fn set_light(&mut self, light: &Light) {
         // Lighting is resolved into vertex colors at tessellation time, so
         // a change needs no batch flush.
         self.light = *light;
-        self.tnl_ctx = TnlContext::new(&self.camera, &self.light, SCREEN);
+        self.rebuild_tnl();
+    }
+
+    fn set_local_lights(&mut self, lights: &[LocalLight]) {
+        // Per vertex, like the global light: no flush.
+        if self.locals.set(lights, self.caps.max_local_lights) {
+            self.rebuild_tnl();
+        }
     }
 
     fn draw_model(

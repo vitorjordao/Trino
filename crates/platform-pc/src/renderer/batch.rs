@@ -49,11 +49,13 @@ pub struct TexKey {
 pub enum Cmd {
     Sprite(DrawCommand),
     /// `texture`: sprite handle sampled by these triangles (None = vertex
-    /// colors only).
+    /// colors only). `lit`: shaded per pixel (local lights, specular,
+    /// wetness: the lit pipeline).
     Tris {
         first: u32,
         count: u32,
         texture: Option<TexKey>,
+        lit: bool,
     },
 }
 
@@ -70,6 +72,14 @@ pub struct TriVertex {
     /// correct UVs), 1.0 for vertex-color-only ones (affine, as always).
     pub w: f32,
     pub uv: [f32; 2],
+    /// Per-pixel lighting inputs (the lit pipeline only; zero elsewhere):
+    /// world position, world normal (zero = leave unlit), the unlit color
+    /// (`SurfaceVert::base`), gloss 0..1 and the light set index.
+    pub world: [f32; 3],
+    pub normal: [f32; 3],
+    pub base: [f32; 4],
+    pub gloss: f32,
+    pub set: f32,
 }
 
 pub const TRI_VERTEX_STRIDE: u64 = core::mem::size_of::<TriVertex>() as u64;
@@ -84,6 +94,7 @@ pub enum Segment {
         first: u32,
         count: u32,
         texture: Option<TexKey>,
+        lit: bool,
     },
 }
 
@@ -166,18 +177,21 @@ pub fn build_segments(commands: &[Cmd]) -> (Vec<Instance>, Vec<Segment>) {
                 first,
                 count,
                 texture,
+                lit,
             } => match segments.last_mut() {
                 Some(Segment::Tris {
                     first: seg_first,
                     count: seg_count,
                     texture: seg_tex,
-                }) if *seg_first + *seg_count == *first && seg_tex == texture => {
+                    lit: seg_lit,
+                }) if *seg_first + *seg_count == *first && seg_tex == texture && seg_lit == lit => {
                     *seg_count += count;
                 }
                 _ => segments.push(Segment::Tris {
                     first: *first,
                     count: *count,
                     texture: *texture,
+                    lit: *lit,
                 }),
             },
         }
@@ -228,6 +242,7 @@ mod tests {
             first,
             count,
             texture: None,
+            lit: false,
         };
         let (instances, segments) = build_segments(&[
             cmd(1),
@@ -243,6 +258,17 @@ mod tests {
                     id: 5,
                     clamp: false,
                 }),
+                lit: false,
+            },
+            // Per-pixel lit: another pipeline, another segment.
+            Cmd::Tris {
+                first: 15,
+                count: 3,
+                texture: Some(TexKey {
+                    id: 5,
+                    clamp: false,
+                }),
+                lit: true,
             },
         ]);
         assert_eq!(instances.len(), 2);
@@ -256,7 +282,8 @@ mod tests {
                 Segment::Tris {
                     first: 0,
                     count: 9,
-                    texture: None
+                    texture: None,
+                    lit: false
                 },
                 Segment::Sprites {
                     sprite: 1,
@@ -265,7 +292,8 @@ mod tests {
                 Segment::Tris {
                     first: 9,
                     count: 3,
-                    texture: None
+                    texture: None,
+                    lit: false
                 },
                 Segment::Tris {
                     first: 12,
@@ -273,7 +301,17 @@ mod tests {
                     texture: Some(TexKey {
                         id: 5,
                         clamp: false
-                    })
+                    }),
+                    lit: false
+                },
+                Segment::Tris {
+                    first: 15,
+                    count: 3,
+                    texture: Some(TexKey {
+                        id: 5,
+                        clamp: false
+                    }),
+                    lit: true
                 },
             ]
         );
@@ -333,6 +371,18 @@ mod tests {
         assert_eq!(c.tint[1], 0.0);
         assert!((c.tint[2] - 128.0 / 255.0).abs() < 1e-6);
         assert!((c.tint[3] - 0.2).abs() < 0.01);
+    }
+
+    #[test]
+    fn tri_vertex_layout_matches_the_pipelines() {
+        // shaders.wgsl TriIn/LitIn locations: pos@0, color@8, depth@24,
+        // w@28, uv@32, world@40, normal@52, base@64, gloss@80, set@84.
+        assert_eq!(TRI_VERTEX_STRIDE, 88);
+        assert_eq!(core::mem::offset_of!(TriVertex, world), 40);
+        assert_eq!(core::mem::offset_of!(TriVertex, normal), 52);
+        assert_eq!(core::mem::offset_of!(TriVertex, base), 64);
+        assert_eq!(core::mem::offset_of!(TriVertex, gloss), 80);
+        assert_eq!(core::mem::offset_of!(TriVertex, set), 84);
     }
 
     #[test]

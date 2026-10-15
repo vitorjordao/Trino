@@ -31,7 +31,7 @@ sort_us = 600
 submit_us = 1200
 
 [throne]
-frame_us = 11500
-tnl_us = 6300
-sort_us = 800
-submit_us = 2300
+frame_us = 19800
+tnl_us = 10000
+sort_us = 1000
+submit_us = 2900

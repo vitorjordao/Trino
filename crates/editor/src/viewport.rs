@@ -118,6 +118,15 @@ pub struct Viewport {
 
 const GRID_EXTENT: i32 = 40;
 
+/// The platform whose variants a console-simulation profile shows.
+pub fn target_of(profile: SimProfile) -> trino_scene::Target {
+    match profile {
+        SimProfile::Native => trino_scene::Target::Pc,
+        SimProfile::N64 => trino_scene::Target::N64,
+        SimProfile::N3ds => trino_scene::Target::N3ds,
+    }
+}
+
 /// What a rendered frame depended on: (content rev, size, asset generation,
 /// camera, animation time). Same key = skip the render.
 type RenderKey = (u64, (u32, u32), u64, [f32; 6], f32);

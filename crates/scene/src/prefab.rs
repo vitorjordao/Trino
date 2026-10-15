@@ -12,7 +12,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::Entity;
 
-pub const PREFAB_VERSION: u32 = 1;
+/// v2: entities may carry per-platform variants (`platforms`, see
+/// [`crate::platform`]); v1 files load unchanged and save as v2.
+pub const PREFAB_VERSION: u32 = 2;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Prefab {
@@ -31,7 +33,7 @@ impl Prefab {
     }
 
     pub fn from_ron(text: &str) -> Result<Prefab, String> {
-        let p: Prefab = ron::from_str(text).map_err(|e| format!("prefab parse error: {e}"))?;
+        let mut p: Prefab = ron::from_str(text).map_err(|e| format!("prefab parse error: {e}"))?;
         if p.version > PREFAB_VERSION {
             return Err(format!(
                 "prefab version {} is newer than this engine understands ({PREFAB_VERSION}) — \
@@ -39,6 +41,8 @@ impl Prefab {
                 p.version
             ));
         }
+        // v1 is v2 without variants.
+        p.version = PREFAB_VERSION;
         Ok(p)
     }
 

@@ -170,3 +170,132 @@ fn console_counts_filters_and_clears() {
     assert!(h.state().entries.is_empty());
     assert_eq!(h.state().counts(), (0, 0));
 }
+
+struct PlatState {
+    e: trino_scene::Entity,
+    changes: usize,
+    fonts: bool,
+}
+
+fn platforms_harness(width: f32) -> Harness<'static, PlatState> {
+    use crate::panels::platforms::{Choices, ModelInfo};
+    let models: &'static [ModelInfo] = Box::leak(Box::new([
+        ModelInfo {
+            logical: "models/tree".into(),
+            verts: 400,
+            tris: 600,
+        },
+        ModelInfo {
+            logical: "models/tree-low-poly-for-consoles".into(),
+            verts: 40,
+            tris: 48,
+        },
+    ]));
+    let materials: &'static [String] = Box::leak(Box::new(["materials/leaf-flat".to_string()]));
+    let mut e = trino_scene::Entity::new("tree");
+    e.model = Some(trino_scene::ModelComponent::new("models/tree"));
+    let mut h = Harness::builder()
+        .with_size(eframe::egui::vec2(width, 900.0))
+        .build_ui_state(
+            move |ui, s: &mut PlatState| {
+                if !s.fonts {
+                    crate::theme::install(ui.ctx());
+                    s.fonts = true;
+                    return;
+                }
+                let choices = Choices { models, materials };
+                if crate::panels::platforms::ui(ui, &mut s.e, &choices) {
+                    s.changes += 1;
+                }
+            },
+            PlatState {
+                e,
+                changes: 0,
+                fonts: false,
+            },
+        );
+    h.run();
+    h
+}
+
+#[test]
+fn platforms_tab_edits_variants_per_platform() {
+    let mut h = platforms_harness(520.0);
+    assert_eq!(h.state().changes, 0);
+    // The N64 column picks the low model; the 3DS stays "Same as PC".
+    h.get_by_label("N64 model").click();
+    h.run();
+    h.get_by_label("models/tree-low-poly-for-consoles").click();
+    h.run();
+    let v = h.state().e.platforms.n64.clone().expect("an N64 variant");
+    assert_eq!(
+        v.model.as_deref(),
+        Some("models/tree-low-poly-for-consoles")
+    );
+    assert!(h.state().e.platforms.n3ds.is_none());
+    // The cost line follows the variant's model (48 tris, not 600).
+    assert!(h.query_by_label_contains("48 tris").is_some());
+
+    // "Not on 3DS" drops it there; "Hidden on PC" hides it on PC.
+    h.get_by_label("Not on 3DS").click();
+    h.run();
+    assert!(h.state().e.platforms.n3ds.as_ref().unwrap().disabled);
+    h.get_by_label("Hidden on PC").click();
+    h.run();
+    assert_eq!(
+        h.state().e.platforms.pc.as_ref().unwrap().visible,
+        Some(false)
+    );
+    // A scale of its own, then back.
+    h.get_by_label("Scale on N64").click();
+    h.run();
+    assert_eq!(
+        h.state().e.platforms.n64.as_ref().unwrap().scale,
+        Some([1.0; 3])
+    );
+    h.get_by_label("Scale on N64").click();
+    h.run();
+    assert_eq!(h.state().e.platforms.n64.as_ref().unwrap().scale, None);
+
+    // Unticking "Hidden on PC" leaves a no-op variant, which is pruned.
+    h.get_by_label("Hidden on PC").click();
+    h.run();
+    assert!(
+        h.state().e.platforms.pc.is_none(),
+        "same as written: no block"
+    );
+    // What the inspector edited is what the file stores.
+    let text = ron::to_string(&h.state().e).unwrap();
+    let back: trino_scene::Entity = ron::from_str(&text).unwrap();
+    assert_eq!(back, h.state().e);
+    assert!(h.state().changes >= 6);
+}
+
+/// The three columns side by side in a wide inspector, stacked in a narrow
+/// one — and in both, nothing runs off the panel or overlaps.
+#[test]
+fn platforms_tab_fits_wide_and_narrow_inspectors() {
+    for width in [240.0, 300.0, 520.0, 900.0] {
+        let mut h = platforms_harness(width);
+        // Fill every column so the longest labels show.
+        h.get_by_label("N64 model").click();
+        h.run();
+        h.get_by_label("models/tree-low-poly-for-consoles").click();
+        h.run();
+        h.get_by_label("Scale on 3DS").click();
+        h.run();
+        crate::layout_audit::assert_clean(
+            &h,
+            eframe::egui::vec2(width, 900.0),
+            false,
+            &format!("Platforms tab at {width} px"),
+        );
+        let n64 = h.get_by_label("N64 model").rect();
+        let n3ds = h.get_by_label("3DS model").rect();
+        if width >= crate::panels::platforms::COLUMNS_MIN_WIDTH + 16.0 {
+            assert!((n64.top() - n3ds.top()).abs() < 1.0, "columns at {width}");
+        } else {
+            assert!(n3ds.top() > n64.bottom(), "stacked at {width}");
+        }
+    }
+}

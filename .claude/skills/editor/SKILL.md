@@ -23,6 +23,8 @@ Opens `scenes/showcase.scene.ron` (override: `TRINO_EDITOR_SCENE=scenes/x.scene.
 | `TRINO_EDITOR_PALETTE=<query>` | open the command palette (Ctrl+K) with that query |
 | `TRINO_EDITOR_PLAY=here` | start **Play here** on the first frame: the scene runs inside the Game view (CI smoke) |
 | `TRINO_EDITOR_ECHO_LOG=1` | mirror the Console to stderr (see reloads, errors, saves) |
+| `TRINO_EDITOR_SIZE=960x600` | window size (default 1600x940; never below the 960x600 minimum) — screenshot small windows |
+| `TRINO_EDITOR_INSPECT=platforms` | the Inspector opens that section and scrolls to it |
 | `TRINO_EDITOR_SMOKE_FRAMES=N` | close after N frames (CI smoke test) |
 
 Example — look at an entity in the Game view, then read the PNG:
@@ -64,6 +66,8 @@ Live-edit check: start the editor with `TRINO_EDITOR_ECHO_LOG=1` in the backgrou
 | `ops.rs` | arrange operations (align, distribute, array, drop to surface, group delete) — pure, unit-tested |
 | `palette.rs` | command-palette matcher (the app builds the item list from its menus) |
 | `budget.rs` | Game-view budget HUD rows from `FrameStats` vs `Caps` |
+| `panels/platforms.rs` | Inspector › Platforms: per-platform variants (grid of PC/N64/3DS columns, stacked when narrow) |
+| `layout_audit.rs` | test helper: no widget off the window, none overlapping (accesskit rects) |
 | `ui_tests.rs` | headless UI flows with egui_kittest (real `App` + wgpu): drive panels by accessibility label |
 | `widget_tests.rs` | widget tests with egui_kittest and no renderer (no GPU, not ignored): inspector editors, Console |
 
@@ -92,4 +96,22 @@ Live-edit check: start the editor with `TRINO_EDITOR_ECHO_LOG=1` in the backgrou
 - Gizmo hit tests: `point_in_quad` treats an edge-on (zero-area) quad as empty. Before,
   in a side view the ground-plane handle took clicks meant for the X axis.
 - After UI changes, take a screenshot with the hooks above and look at it before claiming
-  it looks right.
+  it looks right — at the minimum size too (`TRINO_EDITOR_SIZE=960x600`).
+- **Layout must hold at 960x600.** `ui_tests::editor_layout_is_clean_at_minimum_and_default_sizes`
+  runs `layout_audit` over the whole window; widget tests run it on a panel at several
+  widths. What broke before it existed: the Inspector's sliders and long check box
+  labels widened the panel past the window (one wide row widens every row after it in an
+  egui `Ui`), the Assets tabs ran under the Inspector, and a long scene path overlapped
+  the toolbar. The rules that fixed them:
+  - rows go through `theme::prop` (truncating text, slider width from the space left)
+    and `theme::vec3_row` (fewer decimals when narrow);
+  - a combo followed by an icon button is `available_width() - 38`;
+  - long free text in a row is `Label::truncate()` (or `elide_start` for paths);
+  - tab strips use `horizontal_wrapped`;
+  - the dock gives the Hierarchy ≥ 200 px and the Inspector ≥ 300 px (`default_dock(width)`,
+    built on the first frame).
+- **Kittest clicks need the widget on screen.** A panel's content below the fold has rects
+  past the window; `ui_tests::click` wheels the panel until the widget shows. Items of an
+  open combo list are clicked with `click_accesskit()` (the list scrolls on its own).
+- **The Game view resolves its own platform** (`App::resolved_game`, `viewport::target_of`):
+  the Scene view, picking and the Inspector use the PC resolve.

@@ -34,20 +34,27 @@ pub mod bake;
 pub mod codegen;
 pub mod library;
 pub mod material;
+pub mod platform;
 pub mod prefab;
 pub mod resolve;
 
 pub use library::{Library, ModelBounds};
 pub use material::{MaterialDef, ShadingDef};
+pub use platform::{PlatformVariants, Target, Variant};
 pub use prefab::{Override, Prefab, PrefabInstance};
-pub use resolve::{DrawItem, Resolved, resolve};
+pub use resolve::{DrawItem, Resolved, resolve, resolve_for};
 
 use serde::{Deserialize, Serialize};
 use trino_core::SpriteId;
 
-/// v2: 3D transforms (degrees), nested children, models, prefab instances,
-/// environment. v1 (2D-only, flat) is migrated on load.
-pub const SCENE_VERSION: u32 = 2;
+/// v3: per-platform variants (`platforms`, see [`platform`]). v2 added 3D
+/// transforms (degrees), nested children, models, prefab instances and the
+/// environment. v1 (2D-only, flat) and v2 are migrated on load.
+///
+/// v3 only adds a field, but it changes what a scene *means* per target:
+/// an engine that ignored `platforms` would ship the PC model to a console
+/// without a word. The bump makes such an engine refuse the file instead.
+pub const SCENE_VERSION: u32 = 3;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Scene {
@@ -198,6 +205,10 @@ pub struct Entity {
     /// cells) — see `trino_core::vis`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vis: Option<VisComponent>,
+    /// What changes on PC, N64 and 3DS (model, material, scale,
+    /// visibility, or not there at all) — see [`platform`].
+    #[serde(default, skip_serializing_if = "PlatformVariants::is_empty")]
+    pub platforms: PlatformVariants,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<Entity>,
 }
@@ -223,6 +234,7 @@ impl Entity {
             collider: None,
             sound: None,
             vis: None,
+            platforms: PlatformVariants::default(),
             children: Vec::new(),
         }
     }
@@ -476,6 +488,13 @@ impl Scene {
             ron::from_str(text).map_err(|e| format!("scene parse error: {e}"))?;
         match versioned.version {
             SCENE_VERSION => ron::from_str(text).map_err(|e| format!("scene parse error: {e}")),
+            // v2 is v3 without variants: same fields, defaults fill the rest.
+            2 => {
+                let mut scene: Scene =
+                    ron::from_str(text).map_err(|e| format!("scene parse error (v2 file): {e}"))?;
+                scene.version = SCENE_VERSION;
+                Ok(scene)
+            }
             1 => {
                 let v1: v1::Scene =
                     ron::from_str(text).map_err(|e| format!("scene (v1) parse error: {e}"))?;
@@ -718,7 +737,7 @@ mod tests {
 
     #[test]
     fn missing_optional_fields_get_defaults() {
-        let text = r#"(version: 2, name: "min", entities: [(name: "e")])"#;
+        let text = r#"(version: 3, name: "min", entities: [(name: "e")])"#;
         let scene = Scene::from_ron(text).unwrap();
         let e = &scene.entities[0];
         assert_eq!(e.transform, Transform::default());

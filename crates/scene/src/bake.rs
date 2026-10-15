@@ -6,7 +6,7 @@
 use trino_core::scene::{TSCN_ENV_BYTES, TSCN_HEADER, TSCN_MAGIC, TSCN_NODE_BYTES, TSCN_VERSION};
 use trino_core::{Color, Shading, Shape};
 
-use crate::{Library, Scene, resolve};
+use crate::{Library, Scene, Target, resolve_for};
 
 fn f32s(out: &mut Vec<u8>, v: &[f32]) {
     for x in v {
@@ -18,10 +18,16 @@ fn rgba(out: &mut Vec<u8>, c: Color) {
     out.extend_from_slice(&[c.r, c.g, c.b, c.a]);
 }
 
-/// Bake `scene` (resolved against `lib`) into a TSCN blob. Returns
-/// (blob, warnings).
+/// Bake `scene` (resolved against `lib`) into a TSCN blob for the PC.
+/// Returns (blob, warnings).
 pub fn to_tscn(scene: &Scene, lib: &Library) -> (Vec<u8>, Vec<String>) {
-    let resolved = resolve(scene, lib, 0.0);
+    to_tscn_for(scene, lib, Target::Pc)
+}
+
+/// [`to_tscn`] with `target`'s platform variants applied — what the asset
+/// bake of each platform writes.
+pub fn to_tscn_for(scene: &Scene, lib: &Library, target: Target) -> (Vec<u8>, Vec<String>) {
+    let resolved = resolve_for(scene, lib, 0.0, target);
     let items: Vec<_> = resolved.items.iter().filter(|i| i.exported()).collect();
 
     let mut out = Vec::new();

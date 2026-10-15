@@ -281,6 +281,7 @@ pub fn bake_all(
                 assets_root,
                 &decl.file,
                 model_bounds.clone(),
+                platform,
             )?;
             let file = format!("{id:08x}.blob");
             let changed = write_if_changed(&out_dir.join(&file), &blob)?;

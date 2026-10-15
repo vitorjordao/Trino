@@ -430,3 +430,227 @@ fn commands_edit_save_and_export_in_a_temp_project() {
     assert!(!repo.join("prefabs/probe-prefab.prefab.ron").exists());
     assert!(!repo.join("scenes/probe-level.scene.ron").exists());
 }
+
+/// A throwaway project (the engine's content copied into a temp dir, the
+/// cwd moved there) with the editor open on `scene` at `size`. `None` when
+/// there is no GPU adapter (and `TRINO_REQUIRE_GPU` is unset).
+fn temp_project_app(
+    size: egui::Vec2,
+) -> Option<(Harness<'static, App>, tempfile::TempDir, std::path::PathBuf)> {
+    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    for dir in ["assets", "scenes", "prefabs"] {
+        copy_tree(&repo.join(dir), &tmp.path().join(dir));
+    }
+    copy_tree(
+        &repo.join("examples/platformer/src"),
+        &tmp.path().join("examples/platformer/src"),
+    );
+    std::env::set_current_dir(tmp.path()).unwrap();
+    // SAFETY: --ignored --test-threads=1 only (module docs).
+    unsafe { std::env::set_var("TRINO_EDITOR_SCENE", "scenes/showcase.scene.ron") };
+    let built = std::panic::catch_unwind(|| {
+        Harness::builder()
+            .with_size(size)
+            .wgpu()
+            .build_eframe(|cc| App::new(cc))
+    });
+    match built {
+        Ok(mut h) => {
+            h.run_steps(4);
+            Some((h, tmp, repo))
+        }
+        Err(e) => {
+            std::env::set_current_dir(&repo).unwrap();
+            assert!(
+                std::env::var("TRINO_REQUIRE_GPU").is_err(),
+                "TRINO_REQUIRE_GPU set but the editor could not start"
+            );
+            eprintln!("skipping editor UI test (no GPU adapter): {e:?}");
+            None
+        }
+    }
+}
+
+fn leave_temp_project(repo: &std::path::Path) {
+    std::env::set_current_dir(repo).unwrap();
+    // SAFETY: as in `temp_project_app`.
+    unsafe { std::env::remove_var("TRINO_EDITOR_SCENE") };
+}
+
+/// Scroll the widget labeled `label` into view, then click it (panels
+/// scroll: a click on a clipped widget would land on whatever covers it).
+fn click(h: &mut Harness<'static, App>, label: &str) {
+    let screen = h.ctx.content_rect();
+    for _ in 0..40 {
+        let r = h.get_by_label(label).rect();
+        let dy = if r.bottom() > screen.bottom() - 4.0 {
+            -120.0
+        } else if r.top() < screen.top() + 60.0 {
+            120.0
+        } else {
+            break;
+        };
+        // Wheel over the widget's panel, inside the window.
+        let at = egui::pos2(
+            r.center().x,
+            r.center().y.clamp(80.0, screen.bottom() - 40.0),
+        );
+        h.hover_at(at);
+        h.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, dy),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.run_steps(2);
+    }
+    h.get_by_label(label).click();
+    h.run_steps(3);
+}
+
+/// The Game view's item for `name`, as its profile resolves it.
+fn game_model(app: &App, name: &str) -> Option<trino_core::ModelId> {
+    app.resolved_game
+        .items
+        .iter()
+        .find(|i| i.name == name)
+        .and_then(|i| i.model.as_ref().map(|(id, _)| *id))
+}
+
+/// Platforms tab ↔ Game view ↔ the scene file, both ways: a variant picked
+/// in the Inspector changes what the N64 Game view draws (not the Scene
+/// view), saving writes it as text, and a variant an agent writes into the
+/// file shows up in the editor.
+#[test]
+#[ignore = "changes cwd/env: run alone with --ignored --test-threads=1"]
+fn platform_variants_reach_the_game_view_and_the_file() {
+    use crate::app::{Cmd, Tab};
+    use trino_core::ModelId;
+    let Some((mut h, _tmp, repo)) = temp_project_app(egui::vec2(1600.0, 1000.0)) else {
+        return;
+    };
+    let rock = find(&h.state().doc.scene, "rock-1");
+    h.state_mut().cmds.push(Cmd::Select(Some(rock.clone())));
+    h.state_mut().cmds.push(Cmd::FocusTab(Tab::Game));
+    h.run_steps(3);
+    {
+        let app = h.state_mut();
+        app.game_view
+            .set_profile(trino_platform_pc::SimProfile::N64, &app.project);
+    }
+    h.run_steps(3);
+    let rock_id = ModelId(trino_core::asset_id("models/rock"));
+    let crate_id = ModelId(trino_core::asset_id("models/crate"));
+    assert_eq!(game_model(h.state(), "rock-1"), Some(rock_id));
+    let tris_before = h.state().game_view.stats.tris;
+
+    // Open the Platforms section and pick another model for the N64.
+    h.get_by_label_contains("Platforms").click();
+    h.run_steps(2);
+    click(&mut h, "N64 model");
+    // Popup items: through accessibility (the list scrolls on its own).
+    h.get_by_label("models/crate").click_accesskit();
+    h.run_steps(3);
+    let e = h.state().doc.scene.get(&rock).unwrap().clone();
+    assert_eq!(
+        e.platforms.n64.as_ref().unwrap().model.as_deref(),
+        Some("models/crate")
+    );
+    assert_eq!(game_model(h.state(), "rock-1"), Some(crate_id), "N64 view");
+    let pc = h.state().resolved.items.iter().find(|i| i.name == "rock-1");
+    assert_eq!(
+        pc.unwrap().model.as_ref().unwrap().0,
+        rock_id,
+        "PC unchanged"
+    );
+    let (rock_tris, crate_tris) = {
+        let m = &h.state().project.models;
+        (m["models/rock"].tris, m["models/crate"].tris)
+    };
+    assert_ne!(rock_tris, crate_tris);
+    assert_eq!(
+        h.state().game_view.stats.tris + rock_tris,
+        tris_before + crate_tris,
+        "the Game view drew the crate instead of the rock"
+    );
+
+    // "Not on N64": gone from the N64 view only.
+    click(&mut h, "Not on N64");
+    assert_eq!(game_model(h.state(), "rock-1"), None);
+    assert_eq!(h.state().game_view.stats.tris + rock_tris, tris_before);
+    assert!(h.state().resolved.items.iter().any(|i| i.name == "rock-1"));
+
+    // GUI → file: saving writes the variant as text an agent can read.
+    h.state_mut().cmds.push(Cmd::Save);
+    h.run_steps(3);
+    let disk = std::fs::read_to_string("scenes/showcase.scene.ron").unwrap();
+    let saved = trino_scene::Scene::from_ron(&disk).unwrap();
+    let r = saved.get(&rock).unwrap();
+    assert!(disk.contains("version: 3"));
+    assert!(r.platforms.n64.as_ref().unwrap().disabled);
+    assert_eq!(
+        r.platforms.n64.as_ref().unwrap().model.as_deref(),
+        Some("models/crate")
+    );
+
+    // File → GUI: an agent gives rock-2 a 3DS variant; the editor reloads.
+    let mut edited = saved.clone();
+    let rock2 = find(&edited, "rock-2");
+    edited.get_mut(&rock2).unwrap().platforms.n3ds = Some(trino_scene::Variant {
+        model: Some("models/pillar".into()),
+        ..Default::default()
+    });
+    std::fs::write("scenes/showcase.scene.ron", edited.to_ron()).unwrap();
+    let start = std::time::Instant::now();
+    while h.state().doc.scene != edited && start.elapsed().as_secs() < 10 {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert_eq!(h.state().doc.scene, edited, "the external edit reloaded");
+    {
+        let app = h.state_mut();
+        app.game_view
+            .set_profile(trino_platform_pc::SimProfile::N3ds, &app.project);
+    }
+    h.run_steps(3);
+    assert_eq!(
+        game_model(h.state(), "rock-2"),
+        Some(ModelId(trino_core::asset_id("models/pillar")))
+    );
+    assert_eq!(
+        game_model(h.state(), "rock-1"),
+        Some(rock_id),
+        "3DS: as on PC"
+    );
+    leave_temp_project(&repo);
+}
+
+/// The whole editor at its minimum window size and at the default one, with
+/// an entity's Inspector open (Platforms section included) and with the
+/// scene settings: no widget runs off the window or overlaps another.
+#[test]
+#[ignore = "changes cwd/env: run alone with --ignored --test-threads=1"]
+fn editor_layout_is_clean_at_minimum_and_default_sizes() {
+    use crate::app::{Cmd, Tab};
+    for size in [egui::vec2(960.0, 600.0), egui::vec2(1600.0, 940.0)] {
+        let Some((mut h, _tmp, repo)) = temp_project_app(size) else {
+            return;
+        };
+        let what = |s: &str| format!("{s} at {}x{}", size.x, size.y);
+        crate::layout_audit::assert_clean(&h, size, true, &what("scene settings"));
+        let rock = find(&h.state().doc.scene, "rock-1");
+        h.state_mut().cmds.push(Cmd::Select(Some(rock)));
+        h.run_steps(3);
+        h.get_by_label_contains("Platforms").click();
+        h.run_steps(3);
+        crate::layout_audit::assert_clean(&h, size, true, &what("entity inspector"));
+        h.state_mut().cmds.push(Cmd::FocusTab(Tab::Game));
+        h.run_steps(3);
+        crate::layout_audit::assert_clean(&h, size, true, &what("Game view"));
+        leave_temp_project(&repo);
+    }
+}

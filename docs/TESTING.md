@@ -232,6 +232,9 @@ the wgpu backend and read pixels back.
 | `Resolve: draw list with every component` | `crates/scene/tests/library_resolve.rs::resolve_flattens_every_component`, `crates/scene/tests/library_resolve.rs::sprites_accumulate_their_parents_2d_transform` |
 | `Scene codegen (no_std Rust)` | `crates/scene/tests/export.rs::generated_code_lists_every_exported_node_and_component`, `xtask/tests/scene_codegen.rs::showcase_codegen_matches_the_scene`, `xtask/tests/showcase_render.rs::runtime_scene_and_exported_code_render_identically` |
 | `TSCN bake ↔ BakedScene` | `crates/scene/tests/export.rs::tscn_blobs_carry_everything_resolve_computed`, `crates/scene/tests/export.rs::corrupt_tscn_blobs_are_rejected_up_front` |
+| `Platform variants: RON both ways, v2 → v3 scene and v1 → v2 prefab migration` | `crates/scene/tests/platform_variants.rs::variants_round_trip_through_ron_both_ways`, `crates/scene/tests/platform_variants.rs::v2_scenes_and_v1_prefabs_migrate` |
+| `Platform variants: resolve_for (model, material, scale, hidden, left out; colliders stay)` | `crates/scene/tests/platform_variants.rs::each_platform_resolves_its_own_variant`, `crates/scene/tests/platform_variants.rs::prefab_parts_and_instances_take_variants` |
+| `Platform variants: TSCN bake and codegen per platform` | `crates/scene/tests/platform_variants.rs::exports_pick_the_variant_of_their_platform`, `crates/asset-pipeline/tests/scene_runtime.rs::each_platform_bakes_its_own_scene_variant`, `xtask/tests/scene_cli.rs::scene_export_applies_the_platform_variants`, `xtask/src/scene.rs::check_flags_models_a_platform_does_not_bake` |
 
 ### PC backend and runner
 
@@ -250,7 +253,7 @@ the wgpu backend and read pixels back.
 
 ### Editor
 
-The editor is a binary, so these are unit tests. The two App-level flows are
+The editor is a binary, so these are unit tests. The App-level flows are
 `#[ignore]` (they change the working directory) and run in CI's editor step:
 `cargo test -p trino-editor ui_tests -- --ignored --test-threads=1`.
 
@@ -269,6 +272,9 @@ The editor is a binary, so these are unit tests. The two App-level flows are
 | `Editor: budget HUD` | `crates/editor/src/budget.rs::levels_follow_the_n64_caps`, `crates/editor/src/budget.rs::n64_profile_estimates_3d_time`, `crates/editor/src/budget.rs::pc_profile_never_warns` |
 | `Editor: command palette matching` | `crates/editor/src/palette.rs::subsequence_word_starts_win`, `crates/editor/src/palette.rs::order_matters_and_case_does_not` |
 | `Editor: play here` | `crates/editor/src/play.rs::plays_the_showcase_scene_in_memory`, `crates/editor/src/play.rs::keys_map_like_the_pc_app` |
+| `Editor: Platforms tab (variants per platform, cost, wide and narrow layouts)` | `crates/editor/src/widget_tests.rs::platforms_tab_edits_variants_per_platform`, `crates/editor/src/widget_tests.rs::platforms_tab_fits_wide_and_narrow_inspectors` |
+| `Editor: variants in the Game view, saved as text, external edits reload` | `crates/editor/src/ui_tests.rs::platform_variants_reach_the_game_view_and_the_file` |
+| `Editor: layout audit (nothing off the window or overlapping, 960x600 and 1600x940)` | `crates/editor/src/ui_tests.rs::editor_layout_is_clean_at_minimum_and_default_sizes`, `crates/editor/src/layout_audit.rs::flags_overflow_and_overlap_only`, `crates/editor/src/app.rs::long_paths_keep_their_end` |
 
 ## Tools: xtask
 
@@ -279,7 +285,7 @@ the host; CI's console jobs and smoke runs cover them.
 | Feature | Tests |
 |---|---|
 | `xtask help` | `xtask/tests/cli.rs::help_and_no_arguments_list_every_command`, `xtask/tests/cli.rs::unknown_invocations_fail_with_the_usage` |
-| `xtask scene` | `xtask/tests/scene_cli.rs::scene_check_accepts_every_repo_scene`, `xtask/tests/scene_cli.rs::scene_check_reports_dangling_references_and_parse_errors`, `xtask/tests/scene_cli.rs::scene_without_a_subcommand_prints_the_usage`, `xtask/tests/scene_cli.rs::scene_export_writes_the_committed_showcase_code`, `xtask/tests/scene_cli.rs::scene_export_warns_on_dangling_references_and_fails_on_io_errors`, `xtask/tests/scene_codegen.rs::showcase_codegen_matches_the_scene` |
+| `xtask scene` | `xtask/tests/scene_cli.rs::scene_check_accepts_every_repo_scene`, `xtask/tests/scene_cli.rs::scene_check_reports_dangling_references_and_parse_errors`, `xtask/tests/scene_cli.rs::scene_without_a_subcommand_prints_the_usage`, `xtask/tests/scene_cli.rs::scene_export_writes_the_committed_showcase_code`, `xtask/tests/scene_cli.rs::scene_export_warns_on_dangling_references_and_fails_on_io_errors`, `xtask/tests/scene_cli.rs::scene_export_applies_the_platform_variants`, `xtask/tests/scene_codegen.rs::showcase_codegen_matches_the_scene` |
 | `xtask model` | `xtask/tests/model_inspect.rs::static_glb_reports_its_mesh_and_n64_cost`, `xtask/tests/model_inspect.rs::animated_glb_reports_its_skeleton_and_clips`, `xtask/tests/model_inspect.rs::smooth_flag_keeps_two_joint_weights`, `xtask/tests/model_inspect.rs::fake_objects_bake_and_heavy_or_centered_ones_warn`, `xtask/tests/model_inspect.rs::bad_invocations_and_files_fail`, `xtask/tests/model_inspect.rs::color_slots_are_counted_per_slot` |
 | `xtask agents` | `xtask/tests/cli.rs::agents_check_passes_on_the_clean_tree_and_rejects_unknown_subcommands`, `xtask/tests/agents_sync.rs::skill_mirrors_match_canonical_tree`, `xtask/tests/agents_sync.rs::every_skill_is_listed_in_agents_md` |
 | `xtask assets` | `xtask/tests/cli.rs::assets_pc_bakes_the_repo_manifest` |

@@ -1,0 +1,286 @@
+//! Per-platform variants (`platforms` on an entity) end to end: the RON
+//! text both ways, the v2 → v3 scene and v1 → v2 prefab migrations, what
+//! `resolve_for` draws on each target, and the two exports (`TSCN` and
+//! codegen) choosing the right variant per platform.
+
+mod common;
+
+use trino_core::physics::Shape;
+use trino_core::{BakedScene, ModelId, Vec3};
+use trino_scene::prefab::PREFAB_VERSION;
+use trino_scene::{
+    ColliderComponent, Entity, Library, ModelComponent, PlatformVariants, Prefab, PrefabInstance,
+    SCENE_VERSION, Scene, ShapeDef, Target, Variant, bake, codegen, resolve, resolve_for,
+};
+
+fn leak(bytes: Vec<u8>) -> &'static [u8] {
+    Box::leak(bytes.into_boxed_slice())
+}
+
+fn id(path: &str) -> ModelId {
+    ModelId(trino_core::asset_id(path))
+}
+
+/// A tree with a cheaper N64 model and material, a 3DS scale, a crate
+/// that is not on the N64, and a decoration hidden on the 3DS.
+fn scene() -> Scene {
+    let mut s = Scene::new("variants");
+    let mut tree = Entity::new("tree").with_model(ModelComponent::new("models/tree"));
+    tree.collider = Some(ColliderComponent {
+        shape: ShapeDef::Box {
+            size: [1.0, 4.0, 1.0],
+        },
+        ..ColliderComponent::default()
+    });
+    tree.platforms = PlatformVariants {
+        n64: Some(Variant {
+            model: Some("models/tree-low".into()),
+            material: Some("materials/glow".into()),
+            ..Variant::default()
+        }),
+        n3ds: Some(Variant {
+            scale: Some([0.5, 0.5, 0.5]),
+            ..Variant::default()
+        }),
+        ..PlatformVariants::default()
+    };
+    tree.children.push(
+        Entity::new("bird")
+            .at([0.0, 4.0, 0.0])
+            .with_model(ModelComponent::new("models/bird")),
+    );
+    let mut crate_ = Entity::new("crate").with_model(ModelComponent::new("models/crate"));
+    crate_.collider = Some(ColliderComponent::default());
+    crate_.platforms.n64 = Some(Variant {
+        disabled: true,
+        ..Variant::default()
+    });
+    crate_
+        .children
+        .push(Entity::new("lid").with_model(ModelComponent::new("models/lid")));
+    let mut flag = Entity::new("flag").with_model(ModelComponent::new("models/flag"));
+    flag.platforms.n3ds = Some(Variant {
+        visible: Some(false),
+        ..Variant::default()
+    });
+    s.entities.extend([tree, crate_, flag]);
+    s
+}
+
+fn names(scene: &Scene, lib: &Library, t: Target) -> Vec<String> {
+    resolve_for(scene, lib, 0.0, t)
+        .items
+        .into_iter()
+        .map(|i| i.name)
+        .collect()
+}
+
+#[test]
+fn variants_round_trip_through_ron_both_ways() {
+    // Struct → text → struct, and the text is stable.
+    let s = scene();
+    let text = s.to_ron();
+    assert!(text.contains("version: 3"), "{text}");
+    assert!(text.contains("n64: Some(") && text.contains("n3ds: Some("));
+    assert!(text.contains("disabled: true"));
+    let back = Scene::from_ron(&text).unwrap();
+    assert_eq!(back, s);
+    assert_eq!(back.to_ron(), text);
+
+    // Hand-written text (what an agent writes) → struct → text → struct.
+    let hand = r#"(
+        version: 3,
+        name: "hand",
+        entities: [(
+            name: "rock",
+            model: Some((path: "models/rock")),
+            platforms: (
+                n64: Some((model: Some("models/rock-low"), scale: Some((2.0, 2.0, 2.0)))),
+                pc: Some((visible: Some(false))),
+            ),
+        )],
+    )"#;
+    let parsed = Scene::from_ron(hand).unwrap();
+    let rock = &parsed.entities[0];
+    let n64 = rock.platforms.get(Target::N64).unwrap();
+    assert_eq!(n64.model.as_deref(), Some("models/rock-low"));
+    assert_eq!(n64.scale, Some([2.0, 2.0, 2.0]));
+    assert_eq!(rock.platforms.pc.as_ref().unwrap().visible, Some(false));
+    assert!(rock.platforms.n3ds.is_none(), "3DS: same as PC");
+    let again = Scene::from_ron(&parsed.to_ron()).unwrap();
+    assert_eq!(again, parsed);
+
+    // An entity without variants writes no `platforms` block at all.
+    let plain = Scene::new("plain");
+    let mut plain = plain;
+    plain.entities.push(Entity::new("e"));
+    assert!(!plain.to_ron().contains("platforms"));
+}
+
+#[test]
+fn v2_scenes_and_v1_prefabs_migrate() {
+    let v2 = r#"(version: 2, name: "old", entities: [(
+        name: "house",
+        model: Some((path: "models/house")),
+        children: [(name: "door")],
+    )])"#;
+    let scene = Scene::from_ron(v2).unwrap();
+    assert_eq!(scene.version, SCENE_VERSION);
+    assert_eq!(scene.version, 3);
+    assert!(scene.entities[0].platforms.is_empty());
+    assert_eq!(scene.entities[0].children[0].name, "door");
+    // Saved, it is a v3 file that reads back identically.
+    let text = scene.to_ron();
+    assert!(text.contains("version: 3"));
+    assert_eq!(Scene::from_ron(&text).unwrap(), scene);
+
+    let v1 = r#"(version: 1, root: (name: "lamp", children: [(name: "bulb")]))"#;
+    let prefab = Prefab::from_ron(v1).unwrap();
+    assert_eq!(prefab.version, PREFAB_VERSION);
+    assert!(prefab.to_ron().contains("version: 2"));
+    let future = r#"(version: 9, root: (name: "x"))"#;
+    assert!(Prefab::from_ron(future).unwrap_err().contains("newer"));
+    // The v2 path still reports bad files as parse errors.
+    let bad = r#"(version: 2, name: "x", entities: 3)"#;
+    assert!(
+        Scene::from_ron(bad)
+            .unwrap_err()
+            .contains("scene parse error")
+    );
+}
+
+#[test]
+fn each_platform_resolves_its_own_variant() {
+    let (s, lib) = (scene(), common::library());
+
+    // `resolve` is the PC: every entity, base models.
+    let pc = resolve(&s, &lib, 0.0);
+    let model_of = |items: &[trino_scene::DrawItem], name: &str| {
+        items
+            .iter()
+            .find(|i| i.name == name)
+            .and_then(|i| i.model.as_ref().map(|(id, _)| *id))
+    };
+    assert_eq!(model_of(&pc.items, "tree"), Some(id("models/tree")));
+    assert_eq!(
+        names(&s, &lib, Target::Pc),
+        ["tree", "tree/bird", "crate", "crate/lid", "flag"]
+    );
+
+    // N64: the cheap tree with its material; the crate and its lid gone.
+    let n64 = resolve_for(&s, &lib, 0.0, Target::N64);
+    assert!(n64.warnings.is_empty(), "{:?}", n64.warnings);
+    let tree = n64.items.iter().find(|i| i.name == "tree").unwrap();
+    assert_eq!(tree.model.as_ref().unwrap().0, id("models/tree-low"));
+    assert_eq!(tree.material.as_deref(), Some("materials/glow"));
+    assert_eq!(tree.params.shading, trino_core::Shading::Unlit);
+    assert_eq!(names(&s, &lib, Target::N64), ["tree", "tree/bird", "flag"]);
+
+    // 3DS: the flag hidden, the tree drawn at half scale — but its child
+    // and its collider keep the PC transform (variants are a look).
+    let n3ds = resolve_for(&s, &lib, 0.0, Target::N3ds);
+    assert_eq!(
+        names(&s, &lib, Target::N3ds),
+        ["tree", "tree/bird", "crate", "crate/lid"]
+    );
+    let small = n3ds.items.iter().find(|i| i.name == "tree").unwrap();
+    let big = pc.items.iter().find(|i| i.name == "tree").unwrap();
+    assert!((small.matrix.m[1][1] - 0.5).abs() < 1e-6);
+    assert_eq!(
+        small.collider.unwrap().world_aabb(&small.matrix),
+        big.collider.unwrap().world_aabb(&big.matrix),
+        "same collision box on every platform"
+    );
+    let bird = |items: &[trino_scene::DrawItem]| {
+        items
+            .iter()
+            .find(|i| i.name == "tree/bird")
+            .unwrap()
+            .matrix
+            .transform_point(Vec3::ZERO)
+    };
+    assert_eq!(bird(&n3ds.items), bird(&pc.items));
+    assert_eq!(
+        small.collider.unwrap().shape,
+        Shape::Box {
+            half: Vec3::new(1.0, 4.0, 1.0)
+        },
+        "unscaled by the 0.5 variant"
+    );
+}
+
+#[test]
+fn prefab_parts_and_instances_take_variants() {
+    let mut lib = common::library();
+    // A prefab whose leaves are not on the N64.
+    let mut tree = Entity::new("tree");
+    let mut leaves = Entity::new("leaves").with_model(ModelComponent::new("models/leaves"));
+    leaves.platforms.n64 = Some(Variant {
+        disabled: true,
+        ..Variant::default()
+    });
+    tree.children.push(leaves);
+    tree.children
+        .push(Entity::new("trunk").with_model(ModelComponent::new("models/trunk")));
+    lib.prefabs
+        .insert("prefabs/vtree".into(), Prefab::new(tree));
+    let mut s = Scene::new("p");
+    let mut inst = Entity::new("t1");
+    inst.prefab = Some(PrefabInstance::new("prefabs/vtree"));
+    // The instance itself is twice as big on the 3DS.
+    inst.platforms.n3ds = Some(Variant {
+        scale: Some([2.0, 2.0, 2.0]),
+        ..Variant::default()
+    });
+    s.entities.push(inst);
+    assert_eq!(
+        names(&s, &lib, Target::N64),
+        ["t1", "t1/tree", "t1/tree/trunk"]
+    );
+    let n3ds = resolve_for(&s, &lib, 0.0, Target::N3ds);
+    let trunk = n3ds
+        .items
+        .iter()
+        .find(|i| i.name == "t1/tree/trunk")
+        .unwrap();
+    assert!(
+        (trunk.matrix.m[0][0] - 2.0).abs() < 1e-6,
+        "the instance's parts scale"
+    );
+}
+
+#[test]
+fn exports_pick_the_variant_of_their_platform() {
+    let (s, lib) = (scene(), common::library());
+    for target in Target::ALL {
+        let resolved = resolve_for(&s, &lib, 0.0, target);
+        let (blob, warnings) = bake::to_tscn_for(&s, &lib, target);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let baked = BakedScene::parse(leak(blob)).unwrap();
+        let items: Vec<_> = resolved.items.iter().filter(|i| i.exported()).collect();
+        assert_eq!(baked.node_count(), items.len(), "{target:?}");
+        for (item, node) in items.iter().zip(baked.nodes()) {
+            assert_eq!(node.name, item.name);
+            assert_eq!(node.model, item.model.as_ref().map(|(id, _)| *id));
+            assert_eq!(node.matrix, item.matrix);
+        }
+    }
+    let n64 = BakedScene::parse(leak(bake::to_tscn_for(&s, &lib, Target::N64).0)).unwrap();
+    assert_eq!(n64.find("tree").unwrap().model, Some(id("models/tree-low")));
+    assert!(n64.find("crate").is_none());
+    // The PC wrapper is the PC variant.
+    assert_eq!(
+        bake::to_tscn(&s, &lib).0,
+        bake::to_tscn_for(&s, &lib, Target::Pc).0
+    );
+
+    // Codegen: the N64 module names the low model and says how to redo it.
+    let (code, _) = codegen::to_rust_for(&s, &lib, Target::N64);
+    assert!(code.contains("scene export --platform n64"), "{code}");
+    let low = format!("ModelId(0x{:08x})", id("models/tree-low").0);
+    let full = format!("ModelId(0x{:08x})", id("models/tree").0);
+    assert!(code.contains(&low) && !code.contains(&full), "{code}");
+    assert!(!code.contains("\"crate\""));
+    let (pc_code, _) = codegen::to_rust(&s, &lib);
+    assert!(pc_code.contains(&full) && !pc_code.contains("--platform"));
+}

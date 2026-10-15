@@ -33,15 +33,17 @@ pub struct PlaySession {
 }
 
 impl PlaySession {
-    /// Bake `scene` against `lib` and start the scene runtime at the Game
-    /// view's internal resolution. The blob is leaked (a few KB per Play
+    /// Bake `scene` against `lib` for `target` (the Game view's platform:
+    /// its variants) and start the scene runtime at the Game view's
+    /// internal resolution. The blob is leaked (a few KB per Play
     /// press — the runtime keeps `'static` names and tags, like consoles).
     pub fn start(
         scene: &trino_scene::Scene,
         lib: &trino_scene::Library,
+        target: trino_scene::Target,
         screen: (u32, u32),
     ) -> Result<Self, String> {
-        let (blob, warnings) = trino_scene::bake::to_tscn(scene, lib);
+        let (blob, warnings) = trino_scene::bake::to_tscn_for(scene, lib, target);
         if let Some(w) = warnings.first() {
             return Err(format!("cannot play: {w}"));
         }
@@ -118,7 +120,7 @@ mod tests {
         let scene = trino_scene::Scene::load(&root.join("scenes/showcase.scene.ron")).unwrap();
         let mut lib = trino_scene::Library::load(&root);
         lib.model_bounds = trino_asset_pipeline::manifest_model_bounds(&root.join("assets"));
-        let mut s = PlaySession::start(&scene, &lib, (320, 240)).unwrap();
+        let mut s = PlaySession::start(&scene, &lib, trino_scene::Target::Pc, (320, 240)).unwrap();
         assert_eq!(s.game.total_coins, 5);
         let r = showcase::run_demo(&mut s.game, |g, input| {
             trino_core::Game::update(g, input, &mut NullAudio, 1.0 / 60.0)

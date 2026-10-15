@@ -13,12 +13,14 @@ use std::time::{Instant, SystemTime};
 use trino_core::{
     Button, Camera3, Color, InputState, Material, Renderer, SpriteId, SpriteParams, Vec2, Vec3,
 };
-use trino_scene::{Library, Scene, resolve};
+use trino_scene::{Library, Scene, Target, resolve_for};
 
 pub struct ScenePlayer {
     path: PathBuf,
     scene: Scene,
     lib: Library,
+    /// Whose platform variants to draw (the `TRINO_SIM` profile).
+    platform: Target,
     time: f32,
     yaw: f32,
     pitch: f32,
@@ -86,6 +88,12 @@ impl ScenePlayer {
             fov: c.fov.to_radians(),
             scene,
             lib,
+            // The simulated console's variants (`TRINO_SIM`).
+            platform: match trino_runner_pc::profile_from_env() {
+                trino_platform_pc::SimProfile::Native => Target::Pc,
+                trino_platform_pc::SimProfile::N64 => Target::N64,
+                trino_platform_pc::SimProfile::N3ds => Target::N3ds,
+            },
             time: 0.0,
             last_check: Instant::now(),
         };
@@ -98,7 +106,7 @@ impl ScenePlayer {
     }
 
     fn report(&self) {
-        for w in resolve(&self.scene, &self.lib, 0.0).warnings {
+        for w in resolve_for(&self.scene, &self.lib, 0.0, self.platform).warnings {
             eprintln!("scene: {w}");
         }
     }
@@ -162,7 +170,7 @@ impl ScenePlayer {
         };
         r.set_camera(&camera);
         r.set_light(&env.core_light());
-        let resolved = resolve(&self.scene, &self.lib, self.time);
+        let resolved = resolve_for(&self.scene, &self.lib, self.time, self.platform);
         let caps = r.caps();
         let screen = Vec2::new(caps.screen_width as f32, caps.screen_height as f32);
         let visible = resolved.visible_cells(&camera, screen);

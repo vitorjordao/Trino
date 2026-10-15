@@ -14,6 +14,15 @@ pub enum Platform {
 }
 
 impl Platform {
+    /// The scene crate's name for this platform (variants resolve by it).
+    pub fn target(self) -> trino_scene::Target {
+        match self {
+            Platform::Pc => trino_scene::Target::Pc,
+            Platform::N64 => trino_scene::Target::N64,
+            Platform::N3ds => trino_scene::Target::N3ds,
+        }
+    }
+
     pub fn key(self) -> &'static str {
         match self {
             Platform::Pc => "pc",

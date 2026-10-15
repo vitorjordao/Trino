@@ -3,7 +3,7 @@
 // rooms seen through the doorways are drawn. Baked as `[scenes.interior]`
 // for the console self-tests (`castle64::selftest::portals`).
 (
-    version: 2,
+    version: 3,
     name: "interior",
     environment: (
         clear: (24, 22, 30),

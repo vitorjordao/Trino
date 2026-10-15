@@ -263,7 +263,11 @@ pub fn bake_assets(p: &Project, test_mode: bool) -> Result<(), String> {
         let logical = format!("scenes/{name}");
         let id = trino_core::asset_id(&logical);
         // TSCN is portable: the same blob on every platform.
-        let blob = trino_asset_pipeline::bake_scene(&root.join("assets"), &decl.file)?;
+        let blob = trino_asset_pipeline::bake_scene_for(
+            &root.join("assets"),
+            &decl.file,
+            trino_asset_pipeline::Platform::N3ds,
+        )?;
         std::fs::write(romfs.join(format!("{id:08x}.blob")), blob).map_err(|e| e.to_string())?;
         index.push_str(&format!("{id:08x}\tblob\t{id:08x}.blob\n"));
     }

@@ -128,15 +128,54 @@ fn scene_without_a_subcommand_prints_the_usage() {
         &["scene"][..],
         &["scene", "frob"],
         &["scene", "export", "one-arg"],
+        &["scene", "export", "--platform", "wii", "a.ron", "b.rs"],
     ] {
         let o = xtask(args);
         assert!(!o.status.success(), "{args:?}");
         assert!(
-            text(&o.stderr).contains("cargo xtask scene export <scene.ron> <out.rs>"),
+            text(&o.stderr)
+                .contains("cargo xtask scene export [--platform pc|n64|3ds] <scene.ron> <out.rs>"),
             "{args:?}: {}",
             text(&o.stderr)
         );
     }
+}
+
+/// A scene with an N64 variant: `--platform n64` exports the console's
+/// model, the default (PC) the base one.
+#[test]
+fn scene_export_applies_the_platform_variants() {
+    let tmp = tempfile::tempdir().unwrap();
+    let scene = write(
+        tmp.path(),
+        "variants.scene.ron",
+        r#"(version: 3, name: "variants", entities: [(
+            name: "rock",
+            model: Some((path: "models/rock")),
+            platforms: (n64: Some((model: Some("models/crate"))), n3ds: Some((disabled: true))),
+        )])"#,
+    );
+    let hex = |p: &str| format!("ModelId({:#010x})", trino_core::asset_id(p));
+    let export = |platform: Option<&str>| {
+        let out = tmp
+            .path()
+            .join(format!("{}.rs", platform.unwrap_or("default")));
+        let mut args = vec!["scene", "export"];
+        if let Some(p) = platform {
+            args.extend(["--platform", p]);
+        }
+        args.extend([scene.as_str(), out.to_str().unwrap()]);
+        let o = xtask(&args);
+        assert!(o.status.success(), "{}", text(&o.stderr));
+        std::fs::read_to_string(&out).unwrap()
+    };
+    let pc = export(None);
+    assert!(pc.contains(&hex("models/rock")) && !pc.contains(&hex("models/crate")));
+    let n64 = export(Some("n64"));
+    assert!(n64.contains(&hex("models/crate")) && !n64.contains(&hex("models/rock")));
+    assert!(n64.contains("scene export --platform n64"));
+    let n3ds = export(Some("3ds"));
+    assert!(!n3ds.contains("\"rock\""), "disabled on the 3DS: {n3ds}");
 }
 
 /// The exported code is exactly what `examples/showcase` commits (the

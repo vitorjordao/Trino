@@ -16,11 +16,11 @@ editor (and a running `TRINO_SCENE` player) reloads them live. Formats are docum
 | `assets/materials/<name>.material.ron` | `materials/<name>` | surface (tint, shading, emissive, sides) |
 | `assets/shared/models/proxies/<name>.prim.ron` + manifest | `models/<name>` | fake object (see `add-asset`) |
 
-## Scene (v2)
+## Scene (v3)
 
 ```ron
 (
-    version: 2,
+    version: 3,
     name: "level-1",
     environment: (                        // optional, all fields defaulted
         clear: (132, 178, 226),
@@ -55,6 +55,38 @@ editor (and a running `TRINO_SCENE` player) reloads them live. Formats are docum
 - `visible: false` hides an entity and its children. Omitted fields take defaults.
 - Entities with no model/sprite/prefab are **markers** (spawn points, triggers, waypoints):
   game code finds them by name or tag.
+- v2 files load and save as v3 (v3 added `platforms`). Prefabs are v2 (v1 loads).
+
+## Per-platform variants (`platforms`)
+
+One scene, three looks — no `cfg` in game code. A platform without a variant draws the
+entity as written ("same as PC"). The 3DS field is `n3ds` (RON names can't start with a
+digit).
+
+```ron
+(
+    name: "tree",
+    model: Some((path: "models/tree", material: Some("materials/leaf"))),
+    platforms: (
+        n64: Some((model: Some("models/tree-low"), material: Some("materials/leaf-flat"), scale: Some((0.9, 0.9, 0.9)))),
+        n3ds: Some((visible: Some(false))),     // hidden there (subtree too)
+        // pc: Some((disabled: true)),          // not on PC at all: no draw, collider or node
+    ),
+),
+```
+
+- `model` / `material` replace the `model` component's; `scale` replaces the scale of this
+  entity's own model (or instanced prefab) — its children keep theirs.
+- **Variants are a look.** The collider keeps the PC model's bounds and scale (gameplay is
+  the same on every target); only `disabled` removes it.
+- Who resolves them: the editor's Game view (its N64/3DS/PC profile), Play here,
+  `TRINO_SIM=n64 TRINO_SCENE=…` on PC, `cargo xtask scene export --platform n64|3ds`, and
+  the `[scenes.*]` bake of each platform (`bake_scene_for`).
+- `cargo xtask scene check` resolves every scene for each platform and fails when a
+  platform draws a model the manifest doesn't bake for it (`platforms = ["pc"]`): give the
+  entity a variant for that console.
+- In the editor: Inspector › **Platforms** (PC / N64 / 3DS columns; "= PC" is "same as
+  PC"; the N64 column shows the variant's estimated N64 time per draw).
 
 ## Gameplay components (all optional)
 
@@ -98,7 +130,7 @@ See `scenes/interior.scene.ron` for a working portal example.
 
 ```ron
 (
-    version: 1,
+    version: 2,
     root: (
         name: "lamp",
         children: [
@@ -130,7 +162,9 @@ children by `/`-joined names below the root (`"trunk/leaves"`) and may set `mate
      cargo xtask scene export scenes/x.scene.ron examples/<game>/src/x_gen.rs
      ```
      The output gives you `NODES`, `CAMERA`, `LIGHT` and `CLEAR`. Add a drift test
-     like `xtask/tests/scene_codegen.rs` for every exported scene.
+     like `xtask/tests/scene_codegen.rs` for every exported scene. A scene with
+     variants is exported once per console (`--platform n64 …/x_n64_gen.rs`), each
+     behind its `cfg` in the game.
    - **Data**: declare `[scenes.x] file = "scenes/x.scene.ron"` in the manifest. It
      bakes to a `TSCN` blob, which you load with
      `BakedScene::parse(platform.blob(BlobId::from_path("scenes/x"))?)`. Changing the

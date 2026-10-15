@@ -20,6 +20,8 @@ mod budget;
 mod dialogs;
 mod doc;
 mod gizmo;
+#[cfg(test)]
+mod layout_audit;
 mod level_editor;
 mod log;
 mod ops;
@@ -36,13 +38,25 @@ mod widget_tests;
 
 use eframe::egui;
 
+/// Window size: `TRINO_EDITOR_SIZE=960x600` (screenshots of small
+/// windows), else 1600x940. Never below the 960x600 minimum.
+fn window_size() -> [f32; 2] {
+    std::env::var("TRINO_EDITOR_SIZE")
+        .ok()
+        .and_then(|v| {
+            let (w, h) = v.split_once('x')?;
+            Some([w.trim().parse::<f32>().ok()?, h.trim().parse::<f32>().ok()?])
+        })
+        .map_or([1600.0, 940.0], |[w, h]| [w.max(960.0), h.max(600.0)])
+}
+
 fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
         viewport: egui::ViewportBuilder::default()
             .with_title("Trino Editor")
             .with_app_id("trino-editor")
-            .with_inner_size([1600.0, 940.0])
+            .with_inner_size(window_size())
             .with_min_inner_size([960.0, 600.0]),
         ..Default::default()
     };

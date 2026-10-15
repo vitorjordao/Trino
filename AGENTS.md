@@ -612,8 +612,10 @@ cargo test --workspace
   log with unflushed `printf`/`fwrite`, so a pipe delivers it in 4 KB blocks, and
   `sc64deployer debug` stops at stdin EOF. `xtask/src/hardware.rs` runs them with the
   terminal inherited.
-- **A `|` inside a `docs/TESTING.md` key splits the table cell.** The row is then
-  read as a header and its test references are never checked. Write "n64 or 3ds".
+- **A `docs/TESTING.md` row is only checked when its whole first cell is one
+  backticked key.** Text outside the backticks, or a `|` inside them (which splits
+  the cell), makes the guard read the row as a header, and its test references are
+  never checked. Put any description inside the backticks and write "n64 or 3ds".
 - **`n64_main!` crates are `#![cfg_attr(target_os = "none", no_std)]`.** A plain
   `no_std` breaks the host `cargo check --workspace` (no panic handler).
 - **N64 per-draw CPU is float latency, not triangles:** a saturating `as i32` costs

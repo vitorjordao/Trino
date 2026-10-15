@@ -8,7 +8,7 @@ terminal:
 cargo xtask run n64 --device sc64                  # SummerCart64 over USB
 cargo xtask run n64 --device everdrive             # EverDrive 64 X7 / 3.0 over USB
 cargo xtask run 3ds --device network --ip <IP>     # a 3DS on the LAN, via 3dslink
-cargo xtask run 3ds --device network --ip <IP> --gdb [--gdb-port 4000]
+cargo xtask run 3ds --device network --ip <IP> --gdb [--gdb-port 4003]
                                                    # + a gdb script for Luma3DS
 ```
 
@@ -54,7 +54,7 @@ Every flag below comes from the tool's own documentation or source:
 | `--device` | Command lines | Notes |
 |---|---|---|
 | `sc64` | `sc64deployer upload <rom>`, then `sc64deployer debug` | `upload` writes the ROM and picks the save type from its header. It **does not boot the console**: power the N64 on, or press reset, once xtask says so. `--reboot` is left out because it needs support in the running game. `--isv` is left out because the ROM already logs over USB, and ISViewer would print every line twice. |
-| `everdrive` | `UNFLoader -b -f 3 -r <rom> -d` | `-b`: plain stdout, no ncurses UI. Without it the log stays inside UNFLoader's window. `-f 3`: the "EverDrive 3.0 or X7" cart type, so autodetection is skipped. `-r`: upload and boot. `-d`: debug mode. `-d` must stay last, because it takes an optional log-file name. |
+| `everdrive` | `UNFLoader -b -f 3 -r <rom> -d` | `-b`: plain stdout, no ncurses UI. Without it the log stays inside UNFLoader's window. `-f 3`: the "EverDrive 3.0 or X7" cart type, so autodetection is skipped. `-r`: upload, then boot (UNFLoader sends the cart's PIFboot command after the upload, `device_everdrive.cpp`). `-d`: debug mode. `-d` must stay last, because it takes an optional log-file name. |
 | `network` | `3dslink -a <ip> -s <app.3dsx>` | `-a`: the 3DS's address. Without `--ip`, 3dslink broadcasts to find the 3DS. `-s`: after the upload, serve on TCP 17491 and print the app's output until it exits. |
 
 ## Prerequisites
@@ -103,9 +103,9 @@ Luma3DS's Rosalina has a GDB stub. Its README gives the ports:
    $DEVKITPRO/devkitARM/bin/arm-none-eabi-gdb -x target/3ds/<name>.gdb
    ```
 3. Run that in a second terminal; the first one keeps printing the log.
-   - **Attach (recommended): `--gdb-port 4000`.** Once the app runs, gdb connects
-     in extended-remote mode. Then run `info os processes` and `attach <pid>`.
-   - **Break on start: the default, port 4003.** Pick Rosalina › Debugger options ›
+   - **Attach: the default, port 4000.** Once the app runs, gdb connects in
+     extended-remote mode. Then run `info os processes` and `attach <pid>`.
+   - **Break on start: `--gdb-port 4003`.** Pick Rosalina › Debugger options ›
      "Force-debug next application at launch" *before* the upload. The app stops
      before its first instruction, and `continue` runs it.
 
@@ -138,6 +138,12 @@ The release ELF has symbols (function names, backtraces) but no line tables.
     computer's firewall.
   - The app writes `TRINO_WARN: 3dslink: …` to `svcOutputDebugString`, which Luma
     shows in gdb, when it cannot open the socket.
+  - `TRINO_WARN: 3dslink: no host server` means the app connected before
+    `3dslink -s` was listening. The server only starts once the upload has
+    finished. Run the command again.
+- **`--selftest` on an N64 floods the terminal with hex.** The self-test dumps its
+  golden frames as `TRINO_FBR` rows. Over USB that is several thousand lines. The
+  goldens are only compared in emulators.
 - **3DS: the app runs out of memory.** Under 3dslink only, the socket service takes
   a 1 MiB buffer from the heap (the libctru 3dslink demo's size).
 - **Frame numbers differ from ares.** Expected. ares does not time the RDP, so

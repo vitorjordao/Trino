@@ -113,7 +113,15 @@ fn main() -> ExitCode {
     };
     // Console builds package the engine's demo or an external project
     // (`--project <dir>`, $TRINO_PROJECT, or a trino.toml in the cwd).
-    // Real hardware (`run n64 --device sc64`, `run --target n64 ...`).
+    let project = match project::Project::select(&mut args) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    // Real hardware (`run n64 --device sc64`, `run --target n64 ...`), parsed
+    // after `--project <dir>` is gone so it may come first.
     let device = match hardware::normalize_target(&mut args)
         .and_then(|()| hardware::take_device_args(&mut args))
     {
@@ -133,13 +141,6 @@ fn main() -> ExitCode {
         eprintln!("{e}");
         return ExitCode::FAILURE;
     }
-    let project = match project::Project::select(&mut args) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("{e}");
-            return ExitCode::FAILURE;
-        }
-    };
     let mut it = args.iter().map(String::as_str);
 
     match (it.next(), it.next()) {

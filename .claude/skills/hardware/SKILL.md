@@ -9,7 +9,7 @@ description: Run Trino games on real consoles — N64 through a SummerCart64 (sc
 cargo xtask run n64 --device sc64                  # sc64deployer upload <rom>; sc64deployer debug
 cargo xtask run n64 --device everdrive             # UNFLoader -b -f 3 -r <rom> -d
 cargo xtask run 3ds --device network --ip <IP>     # 3dslink -a <IP> -s <app.3dsx>
-cargo xtask run 3ds --device network --ip <IP> --gdb [--gdb-port 4000]   # + target/3ds/<name>.gdb
+cargo xtask run 3ds --device network --ip <IP> --gdb [--gdb-port 4003]   # + target/3ds/<name>.gdb (attach on 4000 by default)
 cargo xtask run --target n64 --device sc64         # the same; --target is moved to the positional slot
   ... --no-build                                   # deploy the ROM/.3dsx already in target/
   ... --selftest                                   # deploy the self-test build (TRINO_STEP/PERF/TEST lines)
@@ -30,6 +30,9 @@ gdb and troubleshooting, and links the upstream docs for every flag. Code:
   - `check_invocation` rejects them anywhere but `run n64` / `run 3ds`, and also
     rejects a device of the other console. Without it, `test n64 --device sc64`
     would silently boot ares.
+  - All of it runs **after** `Project::select`, so `--project <dir>` may come first
+    (`cargo trino --project X run --target n64 …`). Parsed before, `--target`'s
+    platform landed between `--project` and its directory.
 - **Tools** (`find_tool`):
   1. `$TRINO_SC64DEPLOYER` / `$TRINO_UNFLOADER` / `$TRINO_3DSLINK`. When set, the
      path must exist; there is no silent fallback.
@@ -78,6 +81,7 @@ fake `target/` files (`--no-build`). `#!/bin/sh` stub loaders record `$*` to
 
 Nothing here has run on a physical SummerCart64, EverDrive or 3DS (BACKLOG). Open
 questions for the first hardware session:
-- Does Luma's break-on-start (port 4003, "Force-debug next application at launch")
-  catch a `.3dsx` the Homebrew Launcher starts?
+- Does Luma's break-on-start (`--gdb-port 4003`, "Force-debug next application at
+  launch") catch a `.3dsx` the Homebrew Launcher starts? That is why `--gdb`
+  defaults to attach (4000).
 - Is the USB log slow enough to change the self-test's frame times?

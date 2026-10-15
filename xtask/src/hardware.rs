@@ -70,6 +70,8 @@ impl Device {
 
 /// Luma3DS's break-on-start port (`target remote`, no "extended-remote").
 pub const LUMA_BREAK_ON_START_PORT: u16 = 4003;
+/// Luma3DS's first normal port: extended-remote + `attach` (the default).
+pub const LUMA_ATTACH_PORT: u16 = 4000;
 
 /// The `--device` family of flags.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -153,7 +155,7 @@ pub fn take_device_args(args: &mut Vec<String>) -> Result<Option<DeviceArgs>, St
         Some(p) => p
             .parse::<u16>()
             .map_err(|_| format!("xtask: --gdb-port `{p}` is not a port number"))?,
-        None => LUMA_BREAK_ON_START_PORT,
+        None => LUMA_ATTACH_PORT,
     };
     if gdb && ip.is_none() {
         return Err("xtask: --gdb needs --ip (the address gdb connects to)".into());
@@ -290,8 +292,9 @@ fn step(args: &[&dyn AsRef<std::ffi::OsStr>], note: Option<&'static str>) -> Ste
 ///   already logs over USB, ISViewer would print every line twice.
 /// - EverDrive (`UNFLoader`, `UNFLoader/main.cpp` in buu342/N64-UNFLoader):
 ///   `-b` plain stdout instead of the ncurses UI, `-f 3` forces the
-///   "EverDrive 3.0 or X7" cart type, `-r <rom>` uploads and boots, `-d`
-///   stays in debug mode (last: it takes an optional log-file name).
+///   "EverDrive 3.0 or X7" cart type, `-r <rom>` uploads and boots (the
+///   PIFboot command after the upload, `device_everdrive.cpp`), `-d` stays in
+///   debug mode (last: it takes an optional log-file name).
 pub fn n64_steps(device: Device, rom: &Path) -> Vec<Step> {
     match device {
         Device::Sc64 => vec![
@@ -512,7 +515,7 @@ mod tests {
         let d = take_device_args(&mut a).unwrap().unwrap();
         assert_eq!((d.device, a), (Device::Sc64, args("run n64")));
 
-        let mut a = args("run 3ds --device network --ip 10.0.0.2 --gdb --gdb-port 4000");
+        let mut a = args("run 3ds --device network --ip 10.0.0.2 --gdb --gdb-port 4003");
         let d = take_device_args(&mut a).unwrap().unwrap();
         assert_eq!(a, args("run 3ds"));
         assert_eq!(
@@ -521,13 +524,13 @@ mod tests {
                 device: Device::Network,
                 ip: Some("10.0.0.2".into()),
                 gdb: true,
-                gdb_port: 4000,
+                gdb_port: 4003,
             }
         );
         let d = take_device_args(&mut args("run 3ds --device network --ip 1.2.3.4 --gdb"))
             .unwrap()
             .unwrap();
-        assert_eq!(d.gdb_port, LUMA_BREAK_ON_START_PORT);
+        assert_eq!(d.gdb_port, LUMA_ATTACH_PORT);
 
         assert_eq!(take_device_args(&mut args("run n64")).unwrap(), None);
         for bad in [
@@ -548,7 +551,7 @@ mod tests {
             device,
             ip: None,
             gdb: false,
-            gdb_port: LUMA_BREAK_ON_START_PORT,
+            gdb_port: LUMA_ATTACH_PORT,
         };
         assert!(check_invocation(Some("run"), Some("n64"), &d(Device::Sc64)).is_ok());
         assert!(check_invocation(Some("run"), Some("n64"), &d(Device::EverDrive)).is_ok());

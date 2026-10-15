@@ -105,13 +105,15 @@ impl Fixture {
             .collect()
     }
 
-    /// Run xtask with `--project`, no tool on PATH but `stub_dir` (if any),
+    /// Run xtask with `--project` (appended unless `args` has it), no tool on PATH but `stub_dir` (if any),
     /// none of the tool overrides but `envs`.
     fn xtask(&self, args: &[&str], envs: &[(&str, &Path)], path: Option<&Path>) -> Output {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_xtask"));
-        cmd.args(args)
-            .args(["--project", self.project.to_str().unwrap()])
-            .current_dir(&self.project)
+        cmd.args(args);
+        if !args.contains(&"--project") {
+            cmd.args(["--project", self.project.to_str().unwrap()]);
+        }
+        cmd.current_dir(&self.project)
             .env_remove("TRINO_PROJECT")
             .env_remove("TRINO_SC64DEPLOYER")
             .env_remove("TRINO_UNFLOADER")
@@ -147,7 +149,7 @@ fn stub(dir: &Path, name: &str, body: &str) -> PathBuf {
 
 /// SummerCart64: `upload <rom>`, then `debug`, whose output (the ROM's USB
 /// log) reaches the terminal. The tool is found on PATH; `--target n64` is
-/// the same command as the positional `run n64`.
+/// the same command as the positional `run n64`, with `--project` anywhere.
 #[cfg(unix)]
 #[test]
 fn sc64_uploads_the_rom_then_forwards_the_debug_log() {
@@ -160,9 +162,21 @@ fn sc64_uploads_the_rom_then_forwards_the_debug_log() {
          debug) echo 'TRINO_FRAME:hub avg_us=16000 max_us=21000 frames=60'; echo 'TRINO_TEST_PASS' ;;\n\
          esac",
     );
+    let dir = f.project.to_str().unwrap();
     for args in [
         &["run", "n64", "--device", "sc64", "--no-build"][..],
         &["run", "--target", "n64", "--device", "sc64", "--no-build"],
+        // `--project` first, as in `cargo trino --project <dir> run ...`.
+        &[
+            "--project",
+            dir,
+            "run",
+            "--target",
+            "n64",
+            "--device",
+            "sc64",
+            "--no-build",
+        ],
     ] {
         let _ = std::fs::remove_file(&f.log);
         let o = f.xtask(args, &[], Some(&f.stubs));
@@ -264,7 +278,7 @@ fn network_deploy_runs_3dslink_with_the_ip_and_writes_the_gdb_script() {
     assert!(o.status.success(), "{}", stderr(&o));
     assert_eq!(f.calls(), [format!("-s {}", f.app())]);
 
-    // --gdb: the script loads the ELF and targets the break-on-start port.
+    // --gdb: the script loads the ELF and attaches (extended-remote, 4000).
     let o = f.xtask(
         &[
             "run",
@@ -290,14 +304,17 @@ fn network_deploy_runs_3dslink_with_the_ip_and_writes_the_gdb_script() {
         text.contains(&format!("file {}\n", elf.display())),
         "{text}"
     );
-    assert!(text.contains("target remote 192.168.1.50:4003\n"), "{text}");
+    assert!(
+        text.contains("target extended-remote 192.168.1.50:4000\n"),
+        "{text}"
+    );
     assert!(
         stdout(&o).contains(&format!("-x {}", script.display())),
         "{}",
         stdout(&o)
     );
 
-    // --gdb-port 4000: attach in extended-remote mode.
+    // --gdb-port 4003: Luma's break-on-start port, plain `target remote`.
     let o = f.xtask(
         &[
             "run",
@@ -308,7 +325,7 @@ fn network_deploy_runs_3dslink_with_the_ip_and_writes_the_gdb_script() {
             "192.168.1.50",
             "--gdb",
             "--gdb-port",
-            "4000",
+            "4003",
             "--no-build",
         ],
         &[("TRINO_3DSLINK", &tool)],
@@ -316,7 +333,7 @@ fn network_deploy_runs_3dslink_with_the_ip_and_writes_the_gdb_script() {
     );
     assert!(o.status.success(), "{}", stderr(&o));
     let text = std::fs::read_to_string(&script).unwrap();
-    assert!(text.contains("target extended-remote 192.168.1.50:4000\n"));
+    assert!(text.contains("target remote 192.168.1.50:4003\n"), "{text}");
 }
 
 /// Device flags are checked before anything is built or launched, and a

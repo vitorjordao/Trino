@@ -221,7 +221,7 @@ new skill when none fits. Then run `cargo xtask agents sync`. The steps are in
   - **Color slots + per-draw palette** (2026-10-15): glTF `_SLOT` → TMDL `SLOT`,
     `ModelParams::palette` recolors slots 1..=4 of one model per draw (a crowd from
     one character). CPU T&L on every target; never on the N64 RSP. Its self-test
-    step has run on PC only; the ares and Azahar runs are still pending.
+    step passes on PC, in ares and in Azahar.
 
   Each one has a step in `castle64::selftest`, run on PC, in ares and in Azahar.
 - **Editor additions**:
@@ -553,6 +553,16 @@ cargo test --workspace
   stays small.
 - **`n64_main!` crates are `#![cfg_attr(target_os = "none", no_std)]`.** A plain
   `no_std` breaks the host `cargo check --workspace` (no panic handler).
+- **N64 per-draw CPU is float latency, not triangles:** a saturating `as i32` costs
+  ~70 cycles (FP compares and branches); use `math3d::to_i32`. Once draws are cheap the
+  RSP (~6 µs per triangle) is the bound, and batching made it worse (n64-performance).
+- **The N64 draw memo keys on the view's rotation.** A camera whose rotation jitters by
+  an ulp on every pan (eye = focus + offset in floats) rebuilds every draw. Keep
+  `target - eye` exactly representable (a power-of-two grid) and the memo patches only
+  the translation.
+- **`platforms = [...]` keeps big PC-only models out of console RAM.** A console loads
+  every model at boot: animated rigs once made the N64 fail `display_init` (allocation
+  failed).
 - **The PC `gamepad` feature links libudev on Linux** (`libudev-dev`). Keep it opt-in
   for Linux builds.
 

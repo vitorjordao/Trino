@@ -302,7 +302,7 @@ fn bake_pcm16(wav: &Path, out: &Path) -> Result<(), String> {
 }
 
 fn cargo_build(p: &Project, dkp: &Path) -> Result<(), String> {
-    println!("[3ds] building Rust (nightly, build-std)...");
+    println!("[3ds] building Rust ({}, build-std)...", p.nightly);
     // The target's linker is arm-none-eabi-gcc (found via PATH) and its spec
     // already carries -specs=3dsx.specs; we only add the shim + libraries.
     let path = std::env::var("PATH").unwrap_or_default();
@@ -319,7 +319,7 @@ fn cargo_build(p: &Project, dkp: &Path) -> Result<(), String> {
 
     let status = Command::new("cargo")
         .args([
-            "+nightly",
+            &format!("+{}", p.nightly),
             "build",
             "--release",
             "-Zbuild-std=core,alloc",

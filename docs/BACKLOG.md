@@ -52,8 +52,7 @@ shipping a 3D game first**, then by cost:
 5. **N64 depth precision** (S–M).
    - The 16-bit z with `NEAR = 0.05` z-fights coplanar decals; the showcase pond
      needed 10 cm.
-   - Workaround that works today: draw the world at a smaller scale (Plan & Party
-     uses 1/128, about 1 cm per depth step at 40–60 m). A per-camera depth near would
+   - Workaround that works today: draw the world at a smaller scale (1/128 gives about 1 cm per depth step at 40–60 m). A per-camera depth near would
      make it unnecessary.
    - Either raise the near plane per scene, or add a material `decal` flag mapping to
      `Z_MODE_DECAL` on N64 (and a depth bias on PC/3DS).
@@ -114,10 +113,10 @@ shipping a 3D game first**, then by cost:
 
 | Item | Evidence |
 |---|---|
-| `trino.toml` + `--project` for `build/run/test/watch n64|3ds`, `n64_main!`/`n3ds_main!`, `N64Host`/`N3dsHost`, project goldens + `n64_max_frame_us` | a fresh standalone scaffold passes in ares and Azahar; Plan & Party ships through it |
+| `trino.toml` + `--project` for `build/run/test/watch n64|3ds`, `n64_main!`/`n3ds_main!`, `N64Host`/`N3dsHost`, project goldens + `n64_max_frame_us` | a fresh standalone scaffold passes in ares and Azahar; an external project ships through it |
 | Pointer input (PC mouse + wheel, 3DS touch), PC gamepads (gilrs, feature `gamepad`) | `PcInput` tests, the window → game mapping test; gamepads type-checked for Windows/macOS |
 | `Renderer::fill_rect` (all backends), N64 resident text atlas, 2D blit cache, I4/I8 sprites, font `chars`/`advance`, black transparent texels | castle64 `fill rect` self-test step on PC, ares and Azahar; goldens unchanged |
-| `RSP_BAND` 4×; opt-in `set_rsp_stream` (chunks of 8); `FrameReport` with stages, top models, vblank fps | castle64 hub 13.4 → 10.6 ms; Plan & Party late-game event 107 → 24 ms emulated (30 fps locked) |
+| `RSP_BAND` 4×; opt-in `set_rsp_stream` (chunks of 8); `FrameReport` with stages, top models, vblank fps | castle64 hub 13.4 → 10.6 ms; a large isometric scene 107 → 24 ms emulated (30 fps locked) |
 
 ## Done — N64 RSP T&L (2026-10-13, branch `n64-rsp-tnl`, ADR 0007)
 

@@ -334,11 +334,11 @@ fn stage_wav(source: &Path, out: &Path, looped: bool) -> Result<(), String> {
 }
 
 fn cargo_build(p: &Project) -> Result<(), String> {
-    println!("[n64] building Rust (nightly, build-std)...");
+    println!("[n64] building Rust ({}, build-std)...", p.nightly);
     let target = p.engine.join(TARGET_JSON);
     let status = Command::new("cargo")
         .args([
-            "+nightly",
+            &format!("+{}", p.nightly),
             "build",
             "--release",
             "-Zbuild-std=core,alloc",

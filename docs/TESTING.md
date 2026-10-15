@@ -315,6 +315,7 @@ the host; CI's console jobs and smoke runs cover them.
 | `xtask assets` | `xtask/tests/cli.rs::assets_pc_bakes_the_repo_manifest` |
 | `xtask new` | `xtask/tests/cli.rs::new_rejects_bad_names_and_bad_options`, `xtask/tests/cli.rs::new_standalone_scaffolds_a_complete_project`, `xtask/tests/standalone.rs::standalone_project_builds_tests_and_runs` |
 | `xtask --project` (external projects) | `xtask/tests/cli.rs::project_selection_fails_fast_on_bad_projects` |
+| `xtask run n64 or 3ds --device (real hardware: SummerCart64, EverDrive, 3dslink, Luma3DS gdb script)` | `xtask/tests/hardware.rs::sc64_uploads_the_rom_then_forwards_the_debug_log`, `xtask/tests/hardware.rs::a_failed_upload_stops_the_deploy`, `xtask/tests/hardware.rs::everdrive_uploads_and_debugs_in_one_unfloader_call`, `xtask/tests/hardware.rs::network_deploy_runs_3dslink_with_the_ip_and_writes_the_gdb_script`, `xtask/tests/hardware.rs::device_flags_and_missing_tools_fail_with_a_reason`, `xtask/tests/hardware.rs::no_build_needs_an_existing_rom`, `xtask/src/hardware.rs::loader_command_lines`, `xtask/src/hardware.rs::device_flags_parse_and_reject_bad_combinations`, `xtask/src/hardware.rs::devices_only_run_on_their_own_console`, `xtask/src/hardware.rs::target_flag_becomes_the_positional_platform`, `xtask/src/hardware.rs::gdb_scripts_follow_lumas_ports` |
 | `xtask emulators` | n/a: needs Docker or the network; only its usage errors run on the host (`xtask/tests/cli.rs::emulator_and_blender_commands_reject_unknown_subcommands`) |
 | `xtask blender` | n/a: needs Blender; only its usage errors run on the host (`xtask/tests/cli.rs::emulator_and_blender_commands_reject_unknown_subcommands`) |
 | `xtask gen-assets` | n/a: rewrites the committed masters. Its generators are checked into a temp dir instead (`xtask/src/main.rs::gen_assets_reproduces_the_committed_masters`) |
@@ -325,11 +326,11 @@ the host; CI's console jobs and smoke runs cover them.
 | `xtask editor` | n/a: opens a window; the editor's own tests are listed below |
 | `xtask assets n64` | n/a: needs the libdragon Docker image |
 | `xtask build n64` | n/a: needs the libdragon Docker image (CI `n64` job) |
-| `xtask run n64` | n/a: needs ares |
+| `xtask run n64` | n/a: needs ares (`--device`: the real-hardware row above, with stub loaders) |
 | `xtask test n64` | n/a: needs Docker + ares (CI `n64` job); its pure gates are unit-tested in `xtask/src/perf.rs` and `xtask/src/fbgolden.rs` |
 | `xtask watch n64` | n/a: needs Docker + ares |
 | `xtask assets 3ds` | n/a: needs devkitPro (tex3ds) |
 | `xtask build 3ds` | n/a: needs devkitPro (CI `n3ds` job) |
-| `xtask run 3ds` | n/a: needs Azahar |
+| `xtask run 3ds` | n/a: needs Azahar (`--device network`: the real-hardware row above, with a stub 3dslink) |
 | `xtask test 3ds` | n/a: needs devkitPro + Azahar (CI `n3ds-emulator` job) |
 | `xtask watch 3ds` | n/a: needs devkitPro + Azahar |

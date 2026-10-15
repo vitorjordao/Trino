@@ -93,6 +93,14 @@ shipping a 3D game first**, then by cost:
     four entries with the draw command, keep the slot per vertex in the RSP mesh copy,
     and multiply in the overlay. Gate it with the oracle and a CPU-vs-RSP pixel check.
     Measure a crowd scene in ares before and after.
+13. **Hardware deploys, first run on real devices** (S). `run n64 --device sc64|everdrive`
+    and `run 3ds --device network` (`docs/HARDWARE.md`) are tested with stub loaders
+    only. Run each on a physical SummerCart64, EverDrive 64 X7 and 3DS. Confirm three
+    things: the USB/3dslink log reaches the terminal; Luma3DS break-on-start (port
+    4003) catches a Homebrew-Launcher `.3dsx`; the USB log doesn't skew the
+    self-test's frame times. Then take P0 1(a) (RDP time on real hardware) from those
+    runs. A gdb path for the N64 (UNFLoader `-g` with libdragon's GDB support) is not
+    wired yet.
 
 ### P2 — when a game asks for it
 

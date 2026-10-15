@@ -265,7 +265,13 @@ impl PcRenderer {
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("trino-pc"),
                 required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::downlevel_defaults(),
+                // Downlevel limits, but the adapter's real texture size:
+                // a 4K or ultrawide window (surface) and full-resolution
+                // pictures need more than downlevel's 2048.
+                required_limits: wgpu::Limits {
+                    max_texture_dimension_2d: adapter.limits().max_texture_dimension_2d.min(8192),
+                    ..wgpu::Limits::downlevel_defaults()
+                },
                 ..Default::default()
             })
             .await
@@ -315,7 +321,11 @@ impl PcRenderer {
         profile: SimProfile,
     ) -> Self {
         let internal_size = profile.internal_resolution();
-        let caps = profile.caps();
+        let mut caps = profile.caps();
+        // The picture size games see is the internal resolution (the
+        // native profile's table says 1080p, its picture starts at 640×480).
+        caps.screen_width = internal_size.0 as u16;
+        caps.screen_height = internal_size.1 as u16;
         // The N64 profile emulates the console's output (3-point filtering,
         // RGBA5551 + dither) by default; TRINO_LOOK=off|n64 overrides.
         let n64_look = match std::env::var("TRINO_LOOK").as_deref() {
@@ -799,7 +809,8 @@ impl PcRenderer {
     /// holding [`offscreen_view`](Self::offscreen_view) must re-fetch it.
     /// Budgets ([`Caps`]) still come from the profile.
     pub fn set_internal_size(&mut self, width: u32, height: u32) {
-        let size = (width.clamp(16, 4096), height.clamp(16, 4096));
+        let max = self.device.limits().max_texture_dimension_2d.min(8192);
+        let size = (width.clamp(16, max), height.clamp(16, max));
         if size == self.internal_size {
             return;
         }
@@ -811,6 +822,9 @@ impl PcRenderer {
         self.depth_view = depth;
         self.vi_tex = create_vi_target(&self.device, size);
         self.internal_size = size;
+        // Games read the picture size from the caps (culling, layout).
+        self.caps.screen_width = size.0 as u16;
+        self.caps.screen_height = size.1 as u16;
         self.queue.write_buffer(
             &self.globals_buf,
             0,
@@ -916,6 +930,31 @@ impl PcRenderer {
             ss.config.height = height;
             ss.surface.configure(&self.device, &ss.config);
         }
+    }
+
+    /// What a window of `output` physical pixels shows right now: the
+    /// internal frame upscaled and centered exactly like the present pass
+    /// (nearest, whole-number scale, black bars), composed on the CPU.
+    /// Test/tooling path (screenshots of fullscreen/ultrawide layouts).
+    pub fn present_preview(&self, output: (u32, u32)) -> Vec<u8> {
+        let (iw, ih) = self.internal_size;
+        let src = self.read_offscreen();
+        let (vx, vy, vw, vh) = present_rect((iw, ih), output);
+        let mut out = vec![0u8; (output.0 * output.1 * 4) as usize];
+        for oy in 0..output.1 {
+            for ox in 0..output.0 {
+                let (u, v) = ((ox as f32 + 0.5 - vx) / vw, (oy as f32 + 0.5 - vy) / vh);
+                let at = ((oy * output.0 + ox) * 4) as usize;
+                if (0.0..1.0).contains(&u) && (0.0..1.0).contains(&v) {
+                    let (sx, sy) = ((u * iw as f32) as u32, (v * ih as f32) as u32);
+                    let from = ((sy * iw + sx) * 4) as usize;
+                    out[at..at + 4].copy_from_slice(&src[from..from + 4]);
+                } else {
+                    out[at + 3] = 255;
+                }
+            }
+        }
+        out
     }
 
     /// Read the internal framebuffer back as tightly-packed RGBA8.
@@ -1676,6 +1715,54 @@ fn window_to_game(
 #[cfg(test)]
 mod present_tests {
     use super::*;
+
+    /// Native pictures on real monitors: a whole-number upscale, the same
+    /// in x and y (never stretched), bars only where the aspect is out of
+    /// 4:3..21:9, and the pointer mapping back to the picture's corners.
+    #[test]
+    fn native_pictures_are_never_stretched() {
+        for out in [
+            (1280, 720),
+            (1366, 768),
+            (1920, 1080),
+            (2560, 1080),
+            (3440, 1440),
+            (3840, 1080),
+            (5120, 1440),
+            (1280, 1024),
+            (3840, 2160),
+            (1080, 1920),
+        ] {
+            for scale in 0..=4 {
+                let (w, h, k) = crate::sim::native_internal(out, scale);
+                let (x, y, vw, vh) = present_rect((w, h), out);
+                assert_eq!(
+                    (vw, vh),
+                    ((w * k) as f32, (h * k) as f32),
+                    "{out:?} {scale}"
+                );
+                assert!(
+                    x >= 0.0 && y >= 0.0,
+                    "{out:?}: picture larger than the output"
+                );
+                let aspect = out.0 as f32 / out.1 as f32;
+                if (crate::sim::MIN_ASPECT..=crate::sim::MAX_ASPECT).contains(&aspect) {
+                    // In range: at most a few pixels of rounding per side.
+                    assert!(
+                        x <= k as f32 * 2.0 && y <= k as f32 * 2.0,
+                        "{out:?} {scale}: {x},{y}"
+                    );
+                }
+                let p = window_to_game((w, h), out, x + vw - 0.5, y + vh - 0.5).unwrap();
+                assert!(p.x < w as f32 && p.y < h as f32 && p.x > w as f32 - 1.0);
+                assert_eq!(window_to_game((w, h), out, x - 1.0, y), None);
+            }
+        }
+        // 32:9: a 21:9 picture with side bars.
+        let (w, h, k) = crate::sim::native_internal((3840, 1080), 0);
+        let (x, _, _, _) = present_rect((w, h), (3840, 1080));
+        assert!(x > 400.0, "side bars on 32:9 ({w}x{h} x{k}, bar {x})");
+    }
 
     #[test]
     fn letterboxed_integer_upscale_maps_back() {

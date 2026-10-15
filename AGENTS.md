@@ -304,6 +304,13 @@ castle64. Next for the RSP path: clipping on the RSP, more surface features, an 
 term in the cost model, and a measurement on real hardware (ares doesn't time the
 RDP).
 
+- **Display (PC, 2026-10-14):** `Platform::display`/`set_display` with
+  `DisplaySettings` (fullscreen or window, window size, pixel scale, interface scale),
+  `Game::resize`. `trino-runner-pc` applies and persists them
+  (`<save_name>.display`). The native profile's picture is the output ÷ the pixel
+  scale (`sim::native_internal`), its aspect within 4:3..21:9 (bars beyond).
+  `PcRenderer::present_preview` composes what a window shows, for tests.
+
 PC keyboard mapping: A/B = Z/X, X/Y = C/V, L/R = Q/E, Start = Enter,
 Select = Right Shift, D-pad = arrows, stick = WASD (see `crates/platform-pc/src/input.rs`).
 

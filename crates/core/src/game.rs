@@ -31,4 +31,11 @@ pub trait Game {
     /// Issue draw calls, bracketed by `begin_frame`/`end_frame`.
     /// Must not mutate gameplay state.
     fn render(&mut self, renderer: &mut dyn Renderer);
+
+    /// The picture changed size (PC: window resized, fullscreen toggled,
+    /// pixel scale changed). `screen` is the new internal resolution, the
+    /// same space as `InputState::pointer`. Consoles never call it.
+    fn resize(&mut self, screen: crate::Vec2) {
+        let _ = screen;
+    }
 }

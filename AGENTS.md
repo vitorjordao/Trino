@@ -256,6 +256,10 @@ new skill when none fits. Then run `cargo xtask agents sync`. The steps are in
     or off, cost in triangles and N64 time, a live preview with Burst on each platform's
     cap; `*.particles.ron` + `[particles.*]` bake to `TPFX` per platform
     (`Effect`, `ParticleSystem::from_effect`/`limit`); `particles` self-test step.
+  - **Platform budget** (Game view HUD + Inspector scene settings): the scene camera's
+    N64 frame as CPU vs RSP with each reason a draw misses the RSP (`rsp_check`,
+    `RspReject`), the 3DS triangles, and draws sent but unseen (click one to select it);
+    `trino_scene::budget`, also `cargo xtask scene budget`.
   - **Layout audit** (`layout_audit.rs`): no widget off the window or overlapping, over
     the whole editor at 960x600 and 1600x940.
 - **Emulators in CI**:
@@ -426,6 +430,7 @@ cargo xtask watch 3ds     # rebuild .3dsx + relaunch Azahar on save
 cargo xtask new <name>    # scaffold a game crate under examples/
 cargo xtask scene check   # validate scenes/prefabs/materials (text-first loop)
 cargo xtask scene export [--platform pc|n64|3ds] <scene.ron> <out.rs>   # scene -> no_std Rust data (that platform's variants)
+cargo xtask scene budget <scene.ron> [--platform pc|n64|3ds] [--json]   # per-console frame: draws, tris, N64 CPU/RSP, off-RSP reasons, unseen draws
 cargo xtask model inspect <file> [--json]       # bake a model like the engine; art gate
 cargo xtask model inspect <file> --anim [--json]                                   # + per-clip stride, slide, floor, bounds
 cargo xtask model pose <models/x> [--clip C --time S] --name <new>                 # a pose as a static model (consoles)

@@ -1593,6 +1593,35 @@ fn scene_settings(app: &mut App, ui: &mut egui::Ui) {
             }
         },
     );
+    if let Some((_, budgets)) = &app.budgets {
+        if app.inspect_focus.as_deref() == Some("budget") {
+            ui.scroll_to_rect(
+                egui::Rect::from_min_size(ui.cursor().min, Vec2::new(1.0, 1.0)),
+                Some(egui::Align::TOP),
+            );
+        }
+        let picked = theme::component(
+            ui,
+            "env-budget",
+            icon::GAUGE,
+            c::TEXT,
+            "Platform budget (scene camera)",
+            |ui| budget_section(ui, budgets),
+        )
+        .flatten();
+        // An unseen draw's line selects its entity.
+        if let Some(name) = picked {
+            let mut found = None;
+            app.doc.scene.walk(|p, e| {
+                if e.name == name && found.is_none() {
+                    found = Some(p.to_vec());
+                }
+            });
+            if let Some(path) = found {
+                app.cmds.push(Cmd::Select(Some(path)));
+            }
+        }
+    }
     if !app.resolved.warnings.is_empty() {
         theme::component(ui, "env-warn", icon::WARNING, c::WARN, "Issues", |ui| {
             for w in &app.resolved.warnings {
@@ -1600,4 +1629,97 @@ fn scene_settings(app: &mut App, ui: &mut egui::Ui) {
             }
         });
     }
+}
+
+/// The scene's frame per console: the N64's CPU and RSP time with every
+/// reason a draw misses the RSP, the 3DS's triangles, and each draw sent
+/// for nothing (`cargo xtask scene budget` prints the same). Returns the
+/// name of an unseen draw the user clicked.
+fn budget_section(
+    ui: &mut egui::Ui,
+    budgets: &[trino_scene::budget::FrameBudget; 2],
+) -> Option<String> {
+    let line = |ui: &mut egui::Ui, text: String, color: egui::Color32| {
+        ui.add(egui::Label::new(RichText::new(text).size(12.0).color(color)).truncate());
+    };
+    let [n64, n3ds] = budgets;
+    let mut picked = None;
+    let pct = n64.n64_frame_percent();
+    line(
+        ui,
+        format!(
+            "N64 ≈{:.1} ms ({pct:.0}% of 30 fps)",
+            n64.n64_frame_us() as f32 / 1000.0
+        ),
+        if pct > 100.0 {
+            c::ERROR
+        } else if pct > 75.0 {
+            c::WARN
+        } else {
+            c::OK
+        },
+    );
+    line(
+        ui,
+        format!(
+            "CPU {:.1} ms on {} draws · RSP {:.1} ms on {} draws",
+            n64.n64_cpu_us() as f32 / 1000.0,
+            n64.cpu_draws,
+            n64.n64_rsp_us() as f32 / 1000.0,
+            n64.rsp_draws
+        ),
+        c::TEXT_WEAK,
+    );
+    for (r, n) in &n64.off_rsp {
+        line(
+            ui,
+            format!("off the RSP: {n} × {}", r.label()),
+            c::TEXT_FAINT,
+        );
+    }
+    if n64.billboards > 0 {
+        line(
+            ui,
+            format!("{} impostor billboards", n64.billboards),
+            c::TEXT_FAINT,
+        );
+    }
+    line(
+        ui,
+        format!(
+            "3DS {} tris · {} draws · {} billboards",
+            n3ds.tris(),
+            n3ds.draws,
+            n3ds.billboards
+        ),
+        c::TEXT_WEAK,
+    );
+    let mut wasted: Vec<&String> = n64.wasted.iter().chain(&n3ds.wasted).collect();
+    wasted.sort();
+    wasted.dedup();
+    if !wasted.is_empty() {
+        line(
+            ui,
+            format!("{} draws sent but unseen (outside the view):", wasted.len()),
+            c::WARN,
+        );
+        for w in wasted {
+            let r = ui
+                .add(
+                    egui::Label::new(
+                        RichText::new(format!("unseen: {w}"))
+                            .size(12.0)
+                            .color(c::WARN),
+                    )
+                    .truncate()
+                    .sense(egui::Sense::click()),
+                )
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .on_hover_text("Select it");
+            if r.clicked() {
+                picked = Some(w.clone());
+            }
+        }
+    }
+    picked
 }

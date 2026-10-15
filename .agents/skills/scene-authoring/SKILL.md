@@ -162,10 +162,14 @@ children by `/`-joined names below the root (`"trunk/leaves"`) and may set `mate
 2. `cargo xtask scene check` (or `scene check scenes/x.scene.ron`) — parses everything,
    resolves prefabs/materials, prints missing references, prefab cycles, stale overrides.
    Exit code ≠ 0 on problems.
-3. Look at it: open the editor (`cargo xtask editor`, `TRINO_EDITOR_SCENE=scenes/x.scene.ron`)
+3. Price it per console: `cargo xtask scene budget scenes/x.scene.ron [--platform n64]
+   [--json]` — draws, triangles, the N64 frame (CPU vs RSP, with every reason a draw
+   stays off the RSP) and draws sent but outside the view, from the scene camera, with
+   each platform's variants, LOD levels and impostors.
+4. Look at it: open the editor (`cargo xtask editor`, `TRINO_EDITOR_SCENE=scenes/x.scene.ron`)
    or play it (`TRINO_SCENE=scenes/x.scene.ron cargo run -p trino-app-pc`). Screenshots for
    agents: the `editor` skill.
-4. Console/game code, two ways (both checked to agree byte for byte):
+5. Console/game code, two ways (both checked to agree byte for byte):
    - **Code**: export the scene, then `include!` the output (see
      `examples/showcase/src/lib.rs`):
      ```

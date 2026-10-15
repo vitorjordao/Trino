@@ -151,9 +151,114 @@ pub fn rows(stats: &FrameStats, caps: &Caps, lod: &LodCounts) -> Vec<Row> {
     out
 }
 
+/// Put the scene budget's N64 time (CPU vs RSP, `trino_scene::budget`) in
+/// the "N64 3D time" row, so the HUD's two N64 figures agree: the row from
+/// the drawn frame alone counts every draw as CPU work.
+pub fn use_rsp_split(rows: &mut [Row], n64: &trino_scene::budget::FrameBudget) {
+    if let Some(r) = rows.iter_mut().find(|r| r.label == "N64 3D time") {
+        r.used = n64.n64_frame_us() as u64;
+        r.level = level(r.used, r.limit);
+        r.hint = "estimated N64 time of the scene camera's frame: the slower of the CPU \
+                  (T&L + sort + submit of the draws off the RSP fast path, ~44 µs per \
+                  billboard) and the RSP (its draws' triangles) vs one 30 fps frame — \
+                  trino_scene::budget, calibrated on ares";
+    }
+}
+
+/// The Game view's per-console lines for the scene camera's frame: the
+/// N64 time (CPU vs RSP), how many draws take the RSP and the most common
+/// reason the rest don't, the 3DS triangles, and draws sent for nothing.
+/// Each with its level (the N64 time against a 30 fps frame).
+pub fn platform_lines(budgets: &[trino_scene::budget::FrameBudget; 2]) -> Vec<(String, Level)> {
+    let [n64, n3ds] = budgets;
+    let pct = n64.n64_frame_percent();
+    let level = if pct > 100.0 {
+        Level::Over
+    } else if pct > 75.0 {
+        Level::Near
+    } else {
+        Level::Ok
+    };
+    let mut out = vec![(
+        format!(
+            "N64 ≈{:.1} ms · CPU {:.1} · RSP {:.1}",
+            n64.n64_frame_us() as f32 / 1000.0,
+            n64.n64_cpu_us() as f32 / 1000.0,
+            n64.n64_rsp_us() as f32 / 1000.0
+        ),
+        level,
+    )];
+    let mut rsp = format!("RSP {}/{} draws", n64.rsp_draws, n64.draws);
+    if let Some((r, k)) = n64.off_rsp.first() {
+        rsp.push_str(&format!(" · {k} {}", r.label()));
+    }
+    out.push((rsp, Level::Ok));
+    out.push((
+        format!("3DS {} tris · {} draws", n3ds.tris(), n3ds.draws),
+        Level::Ok,
+    ));
+    let wasted = n64.wasted.len().max(n3ds.wasted.len());
+    if wasted > 0 {
+        out.push((format!("{wasted} draws sent but unseen"), Level::Near));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn platform_lines_name_the_rsp_reason_and_unseen_draws() {
+        use trino_core::RspReject;
+        use trino_scene::{Target, budget::FrameBudget};
+        let n64 = FrameBudget {
+            draws: 5,
+            rsp_draws: 2,
+            rsp_tris: 100,
+            cpu_draws: 3,
+            off_rsp: vec![(RspReject::Fog, 2), (RspReject::Skinned, 1)],
+            wasted: vec!["far".into()],
+            target: Target::N64,
+            ..Default::default()
+        };
+        let n3ds = FrameBudget {
+            draws: 5,
+            billboards: 1,
+            target: Target::N3ds,
+            ..Default::default()
+        };
+        let lines = platform_lines(&[n64.clone(), n3ds]);
+        let text: Vec<&str> = lines.iter().map(|(t, _)| t.as_str()).collect();
+        assert!(text[0].starts_with("N64 ≈"), "{text:?}");
+        assert_eq!(text[1], "RSP 2/5 draws · 2 fog");
+        assert_eq!(text[2], "3DS 2 tris · 5 draws");
+        assert_eq!(lines[3], ("1 draws sent but unseen".into(), Level::Near));
+        // A light frame is green; one past 33.3 ms is red.
+        assert_eq!(lines[0].1, Level::Ok);
+        let heavy = FrameBudget {
+            billboards: 1000,
+            ..n64.clone()
+        };
+        assert_eq!(platform_lines(&[heavy, n64.clone()])[0].1, Level::Over);
+        // The HUD's N64 time row takes the CPU/RSP split.
+        let mut r = rows(&FrameStats::default(), &Caps::N64, &LodCounts::default());
+        use_rsp_split(&mut r, &n64);
+        let time = r.iter().find(|r| r.label == "N64 3D time").unwrap();
+        assert_eq!(time.used, n64.n64_frame_us() as u64);
+        let mut pc = rows(&FrameStats::default(), &Caps::PC, &LodCounts::default());
+        use_rsp_split(&mut pc, &n64);
+        assert_eq!(
+            pc,
+            rows(&FrameStats::default(), &Caps::PC, &LodCounts::default())
+        );
+        // Nothing unseen: no warning line.
+        let clean = FrameBudget {
+            wasted: vec![],
+            ..n64.clone()
+        };
+        assert_eq!(platform_lines(&[clean.clone(), clean]).len(), 3);
+    }
 
     #[test]
     fn n64_profile_estimates_3d_time() {

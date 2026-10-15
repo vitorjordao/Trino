@@ -31,6 +31,7 @@
 //!   and adds a migration. Adding an optional field with a default does not.
 
 pub mod bake;
+pub mod budget;
 pub mod codegen;
 pub mod library;
 pub mod material;

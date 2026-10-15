@@ -118,6 +118,12 @@ shipping a 3D game first**, then by cost:
 
 ---
 
+## Done — each platform's frame budget in the editor and the CLI (2026-10-15, branch `editor/platform-budget`, ADR 0009 §5)
+
+| Item | Evidence |
+|---|---|
+| `rsp_check`/`RspReject` (the rule a draw fails; `rsp_eligible` defined by it); `trino_scene::budget` (per-platform draws, T&L work, N64 CPU vs RSP with `N64_COST.us_per_rsp_tri`, reasons, impostors, LOD, unseen draws); `cargo xtask scene budget`; editor Game-view HUD lines, "N64 3D time" with the RSP split, Inspector scene-settings section with every reason and clickable unseen draws | the estimate's T&L work equals `PcRenderer`'s N64-profile counters on the showcase and interior scenes; a mesh behind the camera is reported on every platform; each RSP rule (translucent, fog) and PC/3DS without an RSP; variants, LOD and impostors per platform; the CLI's JSON equals the library; `rsp_check` per rule; HUD lines and the N64 row; kittest: reasons, a new rock behind the camera, its line selects it, layout at 960x600 and 1600x1000 |
+
 ## Done — particle effects as assets with caps per platform (2026-10-15, branch `editor/particles`, ADR 0009 §4)
 
 | Item | Evidence |

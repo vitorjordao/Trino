@@ -1031,17 +1031,121 @@ pub fn rsp_split(mesh: &Mesh, emit: &mut RspSegmentFn) -> usize {
 /// [`RSP_MAX_SEGS`] segments ([`rsp_split`]). Walks the mesh: call it once;
 /// the N64 renderer bakes an RSP copy only for these.
 pub fn rsp_mesh_supported(mesh: &Mesh) -> bool {
-    mesh.joint_count() == 0
-        && !mesh.has_uvs()
-        && !mesh.has_blend()
-        && mesh.opaque
-        && mesh.unit_normals
-        && mesh.vertex_count > 0
-        && mesh.positions.iter().all(|p| {
-            let p = vec3_of(p);
-            p.x.abs() < 16_384.0 && p.y.abs() < 16_384.0 && p.z.abs() < 16_384.0
-        })
-        && (1..=RSP_MAX_SEGS).contains(&rsp_split(mesh, &mut |_, _| {}))
+    rsp_mesh_check(mesh).is_ok()
+}
+
+/// Why a draw stays off the N64's RSP path ([`rsp_check`]): the first rule
+/// of [`rsp_eligible`] it fails, in the order the rules are tested.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
+pub enum RspReject {
+    // The mesh (decided once per mesh).
+    /// A skeleton (skinned or rigid-animated) mesh.
+    Skinned,
+    /// UVs (a textured mesh).
+    TexturedMesh,
+    /// Smooth skinning weights.
+    Blended,
+    /// Vertex alpha below 255.
+    TranslucentMesh,
+    /// Normals that aren't unit length.
+    NormalsNotUnit,
+    /// No vertices.
+    Empty,
+    /// A position past ±16384 (the overlay's fixed point).
+    TooLarge,
+    /// More vertex segments than the overlay takes.
+    TooManySegments,
+    // The draw.
+    /// A colored (non-white) light.
+    ColoredLight,
+    Fog,
+    /// A tint with alpha below 255.
+    Translucent,
+    Emissive,
+    Textured,
+    DoubleSided,
+    /// A palette on a mesh with color slots.
+    Palette,
+    /// No bounding sphere.
+    NoBounds,
+    /// Wholly outside the guard band: culled (invisible work).
+    Offscreen,
+    /// The sphere reaches past the near plane (needs clipping).
+    NearPlane,
+    /// The sphere crosses the RSP band (needs guard-band clipping).
+    ClipBand,
+    /// Past `RSP_MAX_DEPTH`.
+    TooFar,
+    /// An axis scale past `RSP_MAX_SCALE`.
+    TooScaled,
+    /// `Shading::Flat`.
+    Flat,
+    /// Lit with a matrix that isn't rotation + uniform scale (a shear, or
+    /// an uneven scale on a mesh with sloped normals).
+    NonUniformScale,
+}
+
+impl RspReject {
+    /// A few words for tools (the editor's budget HUD).
+    pub const fn label(self) -> &'static str {
+        match self {
+            RspReject::Skinned => "skinned mesh",
+            RspReject::TexturedMesh => "textured mesh",
+            RspReject::Blended => "smooth skinning",
+            RspReject::TranslucentMesh => "translucent vertices",
+            RspReject::NormalsNotUnit => "normals not unit",
+            RspReject::Empty => "empty mesh",
+            RspReject::TooLarge => "mesh too large",
+            RspReject::TooManySegments => "too many segments",
+            RspReject::ColoredLight => "colored light",
+            RspReject::Fog => "fog",
+            RspReject::Translucent => "translucent tint",
+            RspReject::Emissive => "emissive",
+            RspReject::Textured => "texture",
+            RspReject::DoubleSided => "double-sided",
+            RspReject::Palette => "palette",
+            RspReject::NoBounds => "no bounds",
+            RspReject::Offscreen => "off screen",
+            RspReject::NearPlane => "crosses the near plane",
+            RspReject::ClipBand => "needs clipping",
+            RspReject::TooFar => "too far",
+            RspReject::TooScaled => "scale too big",
+            RspReject::Flat => "flat shading",
+            RspReject::NonUniformScale => "sheared or uneven scale",
+        }
+    }
+}
+
+/// [`rsp_mesh_supported`] with the reason a mesh can never use the RSP.
+pub fn rsp_mesh_check(mesh: &Mesh) -> Result<(), RspReject> {
+    if mesh.joint_count() != 0 {
+        return Err(RspReject::Skinned);
+    }
+    if mesh.has_uvs() {
+        return Err(RspReject::TexturedMesh);
+    }
+    if mesh.has_blend() {
+        return Err(RspReject::Blended);
+    }
+    if !mesh.opaque {
+        return Err(RspReject::TranslucentMesh);
+    }
+    if !mesh.unit_normals {
+        return Err(RspReject::NormalsNotUnit);
+    }
+    if mesh.vertex_count == 0 {
+        return Err(RspReject::Empty);
+    }
+    if !mesh.positions.iter().all(|p| {
+        let p = vec3_of(p);
+        p.x.abs() < 16_384.0 && p.y.abs() < 16_384.0 && p.z.abs() < 16_384.0
+    }) {
+        return Err(RspReject::TooLarge);
+    }
+    if !(1..=RSP_MAX_SEGS).contains(&rsp_split(mesh, &mut |_, _| {})) {
+        return Err(RspReject::TooManySegments);
+    }
+    Ok(())
 }
 
 /// What the N64's RSP T&L path needs for one draw ([`rsp_eligible`]).
@@ -1078,6 +1182,11 @@ pub fn rsp_eligible(
 /// space) and squared radius `r2` wholly inside the RSP band, past NEAR and
 /// under `RSP_MAX_DEPTH`, and not wholly outside the guard band.
 pub fn rsp_band(ctx: &TnlContext, c: Vec3, r2: f32) -> bool {
+    rsp_band_check(ctx, c, r2).is_ok()
+}
+
+/// [`rsp_band`] with the reason a sphere fails it.
+pub fn rsp_band_check(ctx: &TnlContext, c: Vec3, r2: f32) -> Result<(), RspReject> {
     let inside = |d: f32, k: f32| d > 0.0 && d * d > r2 * k;
     let abs = |v: f32| if v < 0.0 { -v } else { v };
     // Wholly outside the guard band: the CPU path culls it for ~13 µs —
@@ -1085,17 +1194,23 @@ pub fn rsp_band(ctx: &TnlContext, c: Vec3, r2: f32) -> bool {
     let outside = |d: f32, k: f32| d < 0.0 && d * d > r2 * k;
     let (gx, gy) = (ctx.lim_x, ctx.lim_y);
     if outside(gx * c.z - abs(c.x), gx * gx + 1.0) || outside(gy * c.z - abs(c.y), gy * gy + 1.0) {
-        return false;
+        return Err(RspReject::Offscreen);
     }
     let band = RSP_BAND / GUARD;
     let (lx, ly) = (ctx.lim_x * band, ctx.lim_y * band);
     // The overlay's clip coordinates are s15.16 (|v| < 32768): x reaches
     // ~RSP_BAND × the view depth inside the band. Keep the whole sphere
     // under RSP_MAX_DEPTH.
-    inside(c.z - NEAR, 1.0)
-        && inside(lx * c.z - abs(c.x), lx * lx + 1.0)
-        && inside(ly * c.z - abs(c.y), ly * ly + 1.0)
-        && inside(RSP_MAX_DEPTH - c.z, 1.0)
+    if !inside(c.z - NEAR, 1.0) {
+        return Err(RspReject::NearPlane);
+    }
+    if !(inside(lx * c.z - abs(c.x), lx * lx + 1.0) && inside(ly * c.z - abs(c.y), ly * ly + 1.0)) {
+        return Err(RspReject::ClipBand);
+    }
+    if !inside(RSP_MAX_DEPTH - c.z, 1.0) {
+        return Err(RspReject::TooFar);
+    }
+    Ok(())
 }
 
 /// What an RSP draw keeps when only the camera's **translation** changes
@@ -1150,40 +1265,75 @@ pub fn rsp_eligible_mv(
     mv: &Mat34,
     params: &ModelParams,
 ) -> Option<RspDraw> {
-    if !ctx.white
-        || ctx.fog_on
-        || params.tint.a < 255
-        || params.emissive.r | params.emissive.g | params.emissive.b != 0
-        || params.texture.is_some()
-        // Back faces through the overlay were never verified: CPU path.
-        || params.double_sided
-        // The overlay reads baked vertex colors only.
-        || (params.palette.is_some() && mesh.has_slots())
-    {
-        return None;
+    rsp_check_mv(ctx, mesh, model, mv, params).ok()
+}
+
+/// [`rsp_eligible`] with the reason a draw stays on the CPU (the draw's
+/// rules; the mesh's are [`rsp_mesh_check`]).
+pub fn rsp_check(
+    ctx: &TnlContext,
+    mesh: &Mesh,
+    model: &Mat34,
+    params: &ModelParams,
+) -> Result<RspDraw, RspReject> {
+    rsp_check_mv(ctx, mesh, model, &ctx.view.mul(model), params)
+}
+
+/// [`rsp_eligible_mv`] with the reason.
+pub fn rsp_check_mv(
+    ctx: &TnlContext,
+    mesh: &Mesh,
+    model: &Mat34,
+    mv: &Mat34,
+    params: &ModelParams,
+) -> Result<RspDraw, RspReject> {
+    if !ctx.white {
+        return Err(RspReject::ColoredLight);
     }
-    let (c, r) = mesh.bounds()?;
+    if ctx.fog_on {
+        return Err(RspReject::Fog);
+    }
+    if params.tint.a < 255 {
+        return Err(RspReject::Translucent);
+    }
+    if params.emissive.r | params.emissive.g | params.emissive.b != 0 {
+        return Err(RspReject::Emissive);
+    }
+    if params.texture.is_some() {
+        return Err(RspReject::Textured);
+    }
+    // Back faces through the overlay were never verified: CPU path.
+    if params.double_sided {
+        return Err(RspReject::DoubleSided);
+    }
+    // The overlay reads baked vertex colors only.
+    if params.palette.is_some() && mesh.has_slots() {
+        return Err(RspReject::Palette);
+    }
+    let (c, r) = mesh.bounds().ok_or(RspReject::NoBounds)?;
     let c = mv.transform_point(c);
     let s = model.axis_scales_sq();
     let smax = s.x.max(s.y).max(s.z);
     let r2 = r * r * smax;
     // The overlay's matrix entries (axis scale) must stay in range.
-    if !rsp_band(ctx, c, r2) || smax >= RSP_MAX_SCALE * RSP_MAX_SCALE {
-        return None;
+    rsp_band_check(ctx, c, r2)?;
+    if smax >= RSP_MAX_SCALE * RSP_MAX_SCALE {
+        return Err(RspReject::TooScaled);
     }
     let cull_back = true;
     match params.shading {
-        Shading::Unlit => Some(RspDraw {
+        Shading::Unlit => Ok(RspDraw {
             light: Vec3::ZERO,
             ambient: 1.0,
             cull_back,
         }),
-        Shading::Gouraud => Some(RspDraw {
-            light: model_space_light(mesh, model, ctx.ldir)? * -1.0,
+        Shading::Gouraud => Ok(RspDraw {
+            light: model_space_light(mesh, model, ctx.ldir).ok_or(RspReject::NonUniformScale)?
+                * -1.0,
             ambient: ctx.light.ambient,
             cull_back,
         }),
-        Shading::Flat => None,
+        Shading::Flat => Err(RspReject::Flat),
     }
 }
 

@@ -64,7 +64,7 @@ pub use render::{
 };
 pub use render3d::{
     Camera3, ClipInfo, DEFAULT_LIGHT, Fog, Light, MAX_JOINTS, Mesh, MeshError, MeshLayout,
-    ScreenTri, TnlContext, TnlScratch, TnlStats, tessellate, tessellate_with,
+    RspReject, ScreenTri, TnlContext, TnlScratch, TnlStats, tessellate, tessellate_with,
 };
 pub use scene::{BakedScene, LodLevel, LodPick, Lods, SceneNode, Tags};
 pub use text::{BitmapFont, TextBuf};

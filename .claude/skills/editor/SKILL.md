@@ -27,7 +27,7 @@ Opens `scenes/showcase.scene.ron` (override: `TRINO_EDITOR_SCENE=scenes/x.scene.
 | `TRINO_EDITOR_ECHO_LOG=1` | mirror the Console to stderr (see reloads, errors, saves) |
 | `TRINO_EDITOR_GAME=pc\|n64\|3ds` | the Game view's profile (default n64) — screenshots of each platform's variant |
 | `TRINO_EDITOR_SIZE=960x600` | window size (default 1600x940; never below the 960x600 minimum) — screenshot small windows |
-| `TRINO_EDITOR_INSPECT=platforms\|lod\|impostor` | the Inspector opens that section and scrolls to it |
+| `TRINO_EDITOR_INSPECT=platforms\|lod\|impostor\|budget` | the Inspector opens that section and scrolls to it (`budget`: the scene settings' platform budget, with nothing selected) |
 | `TRINO_EDITOR_LOD_PREVIEW=<m>` | preview the selected entity's LOD at that distance (both views) |
 | `TRINO_EDITOR_SMOKE_FRAMES=N` | close after N frames (CI smoke test) |
 
@@ -48,7 +48,15 @@ Keys worth knowing (F1 lists all):
 
 The Game view shows a **budget HUD** (tris, sprites, texture bytes vs the console's
 `Caps`; under the N64 profile also **N64 3D time** — this frame's T&L work through the
-calibrated cost model `trino_core::perf::N64_COST`, against one 30 fps frame) and culls interior cells like the game does. The Scene view draws collider,
+calibrated cost model `trino_core::perf::N64_COST`, against one 30 fps frame) and culls interior cells like the game does.
+Below it, the **platform budget** of the scene camera (`trino_scene::budget`, the same
+numbers as `cargo xtask scene budget`): the N64 frame as the slower of CPU and RSP, how
+many draws take the RSP and the most common reason the rest don't, the 3DS triangles,
+and draws sent but unseen. The "N64 3D time" row then uses that CPU/RSP split, so the
+HUD's two N64 figures agree. The Inspector's scene settings (nothing selected) list every
+reason (`off the RSP: n × reason`) and each unseen draw; clicking one selects it. The
+budgets are cached on the scene text, the library revision and the project generation
+(`App::budgets`), and hidden during Play here (the camera is the game's then). The Scene view draws collider,
 cell and portal wireframes.
 
 Live-edit check: start the editor with `TRINO_EDITOR_ECHO_LOG=1` in the background, edit a

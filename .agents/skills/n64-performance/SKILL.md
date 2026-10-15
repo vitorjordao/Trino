@@ -344,6 +344,15 @@ They are in `docs/plans/n64-throughput.md`.
   - At 30 fps that means ~3,500–4,500 triangles in the heaviest view. Past that,
     cutting CPU time no longer moves the frame: cut triangles (lighter console
     variants), draws, or what is shown.
+- **Predicting it before the console:** `trino_core::render3d::rsp_check` names the
+  rule that keeps a draw off the RSP (`RspReject`: colored light, fog, translucent tint,
+  textured or skinned mesh, flat shading, emissive, double-sided, off screen, crossing
+  the near plane…); `rsp_eligible` is `rsp_check(..).is_ok()`. `trino_scene::budget`
+  turns a scene and camera into the N64 frame: CPU (`N64_COST` on the off-RSP draws'
+  T&L and the billboards) vs RSP (`us_per_rsp_tri` × its triangles), the slower one
+  wins. `cargo xtask scene budget <scene> [--platform] [--json]` prints it; the editor's
+  Game view and Inspector show it. Its T&L work equals the PC renderer's counters on the
+  N64 profile (`xtask/tests/scene_budget.rs`).
 - **Measuring:**
   - Profiled frames drain the RSP/RDP at `end_frame`, so they never overlap the next
     frame. Treat them as pessimistic.

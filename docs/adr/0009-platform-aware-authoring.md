@@ -87,7 +87,21 @@ same thing by writing text, and both see each other's changes.
   platform's cap; `cargo xtask particles inspect` runs the same simulation (30 fps,
   seeded) and prints a position hash, so determinism is checkable from text.
 
-### 5. The editor's layout is tested
+### 5. A scene's cost per platform, before the console
+
+- `trino_core::render3d::rsp_check` returns the first rule a draw fails (`RspReject`);
+  `rsp_eligible` keeps its meaning and is defined by it, so the console and the
+  estimate cannot drift apart.
+- `trino_scene::budget::estimate` resolves the scene for a platform (variants, LOD,
+  impostors), runs the same `tessellate` work counters the PC renderer keeps, splits the
+  N64 draws into RSP and CPU, and prices them with `N64_COST` (the CPU side; plus
+  `us_per_rsp_tri` for the RSP side). The frame is the slower half. Draws whose whole
+  mesh is outside the view are named: they cost the CPU and show nothing.
+- The editor shows it in the Game view's HUD and the Inspector's scene settings;
+  `cargo xtask scene budget` prints the same numbers for an agent. The 3DS has no
+  calibrated time model yet: it gets triangles and draws.
+
+### 6. The editor's layout is tested
 
 The Inspector, the Assets strip and the toolbar overflowed at the editor's minimum
 window (960x600) and with long paths. `layout_audit` walks the accessibility tree and

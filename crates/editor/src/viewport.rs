@@ -66,6 +66,8 @@ pub struct ViewInput<'a> {
     /// Inspector › LOD › Preview: draw this entity's LOD as if the camera
     /// were this far away (both views), to see each switch live.
     pub lod_preview: Option<(&'a [usize], f32)>,
+    /// The scene's frame on the N64 and the 3DS (Game view HUD).
+    pub budgets: Option<&'a [trino_scene::budget::FrameBudget; 2]>,
 }
 
 pub enum ViewAction {
@@ -724,7 +726,7 @@ impl Viewport {
         if self.kind == ViewKind::Game && self.show_budget {
             // Panel-wide painter: the overlay sits over the letterbox area
             // when there is room, never clipped by the game image.
-            self.budget_overlay(&ui.painter_at(avail), avail);
+            self.budget_overlay(&ui.painter_at(avail), avail, input.budgets);
         }
 
         // ---- keyboard (when hovered) ------------------------------------------
@@ -784,13 +786,40 @@ impl Viewport {
     }
 
     /// Console budget panel (top right of the Game view).
-    fn budget_overlay(&self, painter: &egui::Painter, avail: Rect) {
+    fn budget_overlay(
+        &self,
+        painter: &egui::Painter,
+        avail: Rect,
+        budgets: Option<&[trino_scene::budget::FrameBudget; 2]>,
+    ) {
         let caps = *self.renderer.caps();
-        let rows = crate::budget::rows(&self.stats.frame, &caps, &self.stats.lod);
+        let mut rows = crate::budget::rows(&self.stats.frame, &caps, &self.stats.lod);
+        // The scene budget is the scene camera's: not while playing.
+        let budgets = budgets.filter(|_| self.play.is_none());
+        if let Some([n64, _]) = budgets {
+            crate::budget::use_rsp_split(&mut rows, n64);
+        }
         let summary = self.stats.lod.summary();
         let w = 210.0;
         let row_h = 18.0;
-        let extra = if summary.is_some() { row_h } else { 0.0 };
+        // Per platform: the N64 frame (CPU vs RSP, why draws miss the fast
+        // path), the 3DS triangles, and draws sent for nothing.
+        let platform_lines: Vec<(String, Color32)> = budgets
+            .map(crate::budget::platform_lines)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(t, l)| {
+                let color = match l {
+                    crate::budget::Level::Ok if t.starts_with("N64") => c::OK,
+                    crate::budget::Level::Ok => c::TEXT_WEAK,
+                    crate::budget::Level::Near => c::WARN,
+                    crate::budget::Level::Over => c::ERROR,
+                };
+                (t, color)
+            })
+            .collect();
+        let extra =
+            if summary.is_some() { row_h } else { 0.0 } + platform_lines.len() as f32 * row_h;
         let rect = Rect::from_min_size(
             Pos2::new(avail.max.x - w - 10.0, avail.min.y + 50.0),
             Vec2::new(w, 24.0 + rows.len() as f32 * row_h + extra),
@@ -849,9 +878,20 @@ impl Viewport {
                 painter.rect_filled(filled, CornerRadius::ZERO, color);
             }
         }
+        let mut y = rect.max.y - extra + 2.0;
+        for (text, color) in platform_lines {
+            painter.text(
+                Pos2::new(rect.min.x + 8.0, y),
+                egui::Align2::LEFT_TOP,
+                text,
+                egui::FontId::proportional(10.5),
+                color,
+            );
+            y += row_h;
+        }
         if let Some(text) = summary {
             painter.text(
-                Pos2::new(rect.min.x + 8.0, rect.max.y - row_h + 2.0),
+                Pos2::new(rect.min.x + 8.0, y),
                 egui::Align2::LEFT_TOP,
                 text,
                 egui::FontId::proportional(10.5),

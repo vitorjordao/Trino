@@ -1057,3 +1057,66 @@ fn particle_effects_preview_caps_and_files() {
     crate::layout_audit::assert_clean(&h, egui::vec2(1600.0, 1000.0), true, "particle inspector");
     leave_temp_project(&repo);
 }
+
+/// The scene's frame per console in the Inspector (scene settings): the N64
+/// time with its RSP/CPU split and the reasons, the 3DS triangles, and a
+/// mesh placed behind the camera listed as sent for nothing — the numbers
+/// `cargo xtask scene budget` prints.
+#[test]
+#[ignore = "changes cwd/env: run alone with --ignored --test-threads=1"]
+fn platform_budget_shows_rsp_reasons_and_unseen_draws() {
+    use crate::app::Cmd;
+    for size in [egui::vec2(1600.0, 1000.0), egui::vec2(960.0, 600.0)] {
+        let Some((mut h, _tmp, repo)) = temp_project_app(size) else {
+            return;
+        };
+        let b = h.state().budgets.clone().expect("budgets computed").1;
+        assert_eq!(b, h.state().platform_budgets(), "cached = fresh");
+        assert!(h.query_by_label_contains("N64 ≈").is_some());
+        assert!(
+            h.query_all_by_label_contains("off the RSP:")
+                .next()
+                .is_some()
+        );
+        assert!(h.query_by_label_contains("3DS ").is_some());
+        assert!(h.query_by_label_contains("unseen: lost-rock").is_none());
+        // A rock far behind the game camera.
+        let cam = h.state().doc.scene.environment.camera;
+        let back = [
+            cam.eye[0] * 2.0 - cam.target[0],
+            cam.eye[1],
+            cam.eye[2] * 2.0 - cam.target[2],
+        ];
+        let rock = trino_scene::Entity::new("lost-rock")
+            .at(back)
+            .with_model(trino_scene::ModelComponent::new("models/rock"));
+        h.state_mut().cmds.push(Cmd::Create {
+            parent: None,
+            entity: Box::new(rock),
+        });
+        h.run_steps(3);
+        h.state_mut().cmds.push(Cmd::Select(None));
+        h.run_steps(4);
+        let after = &h.state().budgets.as_ref().unwrap().1;
+        assert!(
+            after[0].wasted.contains(&"lost-rock".to_string()),
+            "{:?}",
+            after[0].wasted
+        );
+        assert_eq!(after[0].draws, b[0].draws + 1);
+        // Its line in the Inspector selects it.
+        click(&mut h, "unseen: lost-rock");
+        h.run_steps(2);
+        let lost = find(&h.state().doc.scene, "lost-rock");
+        assert_eq!(h.state().doc.selected, Some(lost));
+        h.state_mut().cmds.push(Cmd::Select(None));
+        h.run_steps(4);
+        crate::layout_audit::assert_clean(
+            &h,
+            size,
+            true,
+            &format!("platform budget at {}x{}", size.x, size.y),
+        );
+        leave_temp_project(&repo);
+    }
+}

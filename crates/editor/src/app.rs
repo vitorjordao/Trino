@@ -238,6 +238,9 @@ pub struct App {
     pub pending_particles: HashSet<String>,
     /// The particle inspector's live preview.
     pub particles_view: crate::panels::particles::ParticlesView,
+    /// The scene's frame from its camera on the N64 and the 3DS (variants,
+    /// LOD and impostors applied), with the content key it is for.
+    pub budgets: Option<(u64, [trino_scene::budget::FrameBudget; 2])>,
     /// eframe's wgpu device (panels with their own preview renderer).
     pub render_state: eframe::egui_wgpu::RenderState,
 }
@@ -475,6 +478,7 @@ impl App {
             impostor_defs: load_impostor_defs(&root.join("assets")),
             impostor_thumbs: Default::default(),
             anim: crate::anim_panel::AnimPanel::from_env(),
+            budgets: None,
             particles: load_particles(&root.join("assets")),
             pending_particles: HashSet::new(),
             // `TRINO_EDITOR_OPEN=particles:<name>@n64` previews that platform.
@@ -505,6 +509,7 @@ impl App {
             time: self.time(),
             animate: self.animate,
             lod_preview: self.lod_preview.as_ref().map(|(p, d)| (p.as_slice(), *d)),
+            budgets: self.budgets.as_ref().map(|b| &b.1),
         }
     }
 
@@ -517,6 +522,37 @@ impl App {
             }
         });
         n
+    }
+
+    /// What the platform budgets depend on: the scene, the library and the
+    /// baked assets.
+    fn budget_key(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        self.doc.scene.to_ron().hash(&mut h);
+        self.lib_rev.hash(&mut h);
+        self.project.generation.hash(&mut h);
+        h.finish()
+    }
+
+    /// The scene's frame on the N64 and the 3DS from its camera
+    /// (`trino_scene::budget`, what `cargo xtask scene budget` prints; the
+    /// editor has the PC bakes of the models).
+    pub fn platform_budgets(&self) -> [trino_scene::budget::FrameBudget; 2] {
+        use trino_scene::{Target, budget};
+        let env = &self.doc.scene.environment;
+        let (camera, light) = (env.core_camera(), env.core_light());
+        [Target::N64, Target::N3ds].map(|t| {
+            let resolved = trino_scene::resolve_for(&self.doc.scene, &self.lib, 0.0, t);
+            budget::estimate(
+                &resolved,
+                &|id| self.project.model_by_id(id).map(|m| m.tmdl.as_slice()),
+                &camera,
+                &light,
+                budget::screen_of(t, trino_core::Vec2::new(640.0, 480.0)),
+                t,
+            )
+        })
     }
 
     pub fn mark_lib_changed(&mut self) {
@@ -2441,6 +2477,12 @@ impl eframe::App for App {
             self.rev_scene = Some(self.doc.scene.clone());
             self.seen_lib_rev = self.lib_rev;
         }
+        // The consoles' frames, once per content change (not per animated
+        // frame: the estimate is from the scene camera at time 0).
+        let key = self.budget_key();
+        if self.budgets.as_ref().map(|b| b.0) != Some(key) {
+            self.budgets = Some((key, self.platform_budgets()));
+        }
         let has_anim = self.resolved.items.iter().any(|i| i.params.anim.is_some());
         if self.lod_preview.is_some() {
             self.rev += 1; // the preview distance moves without a scene edit
@@ -2617,6 +2659,7 @@ impl egui_dock::TabViewer for TabView<'_> {
                     time: app.anim_start.elapsed().as_secs_f32(),
                     animate: app.animate,
                     lod_preview: app.lod_preview.as_ref().map(|(p, d)| (p.as_slice(), *d)),
+                    budgets: app.budgets.as_ref().map(|b| &b.1),
                 };
                 let view = if kind == ViewKind::Scene {
                     &mut app.scene_view

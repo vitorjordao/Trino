@@ -826,3 +826,158 @@ fn billboards_draw_right_up_to_the_near_plane() {
         }
     }
 }
+
+/// `rsp_check` / `rsp_mesh_check` name the rule a draw fails — the first
+/// one, in `rsp_eligible`'s order — and agree with `rsp_eligible` on every
+/// draw (tools explain the console's work split without changing it).
+#[test]
+fn rsp_check_names_the_rule_each_draw_fails() {
+    use render3d::RspReject as R;
+    let cube = bounded_cube();
+    let cube_m = Mesh::from_tmdl(&cube).unwrap();
+    let tex = textured_cube(SpriteId(1));
+    let rig = rigged_cube();
+    assert_eq!(render3d::rsp_mesh_check(&cube_m), Ok(()));
+    assert_eq!(
+        render3d::rsp_mesh_check(&Mesh::from_tmdl(&tex).unwrap()),
+        Err(R::TexturedMesh)
+    );
+    assert_eq!(
+        render3d::rsp_mesh_check(&Mesh::from_tmdl(&rig).unwrap()),
+        Err(R::Skinned)
+    );
+    let plain = TnlContext::new(&Camera3::default(), &DEFAULT_LIGHT, SCREEN);
+    let fogged = TnlContext::new(
+        &Camera3::default(),
+        &Light {
+            fog: Fog {
+                color: Color::BLACK,
+                near: 1.0,
+                far: 9.0,
+            },
+            ..DEFAULT_LIGHT
+        },
+        SCREEN,
+    );
+    let colored = TnlContext::new(
+        &Camera3::default(),
+        &Light {
+            color: Color::rgb(255, 200, 200),
+            ..DEFAULT_LIGHT
+        },
+        SCREEN,
+    );
+    let o = ModelParams::DEFAULT;
+    let id = Mat34::IDENTITY;
+    // A sheared matrix: the overlay can't light it in model space.
+    let squash = Mat34 {
+        m: [
+            [1.0, 0.6, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+        ],
+    };
+    // A small mesh along +X goes from the fast path straight to culled: the
+    // RSP band is wider than the guard band.
+    let mut seen = Vec::new();
+    for k in 0..400 {
+        let m = at(Vec3::new(k as f32 * 0.25, 0.0, 0.0));
+        let r = render3d::rsp_check(&plain, &cube_m, &m, &o).map(|_| ());
+        if seen.last() != Some(&r) {
+            seen.push(r);
+        }
+    }
+    assert_eq!(seen, [Ok(()), Err(R::Offscreen)]);
+    // A big one partly in view reaches past the band: it needs clipping.
+    let big = Mat34::from_rotation_scale_translation(
+        Vec3::ZERO,
+        Vec3::new(70.0, 70.0, 70.0),
+        Vec3::new(150.0, 0.0, 95.0),
+    );
+    assert_eq!(
+        render3d::rsp_check(&plain, &cube_m, &big, &o).map(|_| ()),
+        Err(R::ClipBand)
+    );
+    let cases: [(&TnlContext, ModelParams, Mat34, Result<(), R>); 12] = [
+        (&plain, o, id, Ok(())),
+        (&colored, o, id, Err(R::ColoredLight)),
+        (&fogged, o, id, Err(R::Fog)),
+        (
+            &plain,
+            ModelParams::tinted(Color::rgba(255, 255, 255, 100)),
+            id,
+            Err(R::Translucent),
+        ),
+        (
+            &plain,
+            ModelParams {
+                emissive: Color::rgb(10, 0, 0),
+                ..o
+            },
+            id,
+            Err(R::Emissive),
+        ),
+        (
+            &plain,
+            ModelParams {
+                texture: Some(SpriteId(1)),
+                ..o
+            },
+            id,
+            Err(R::Textured),
+        ),
+        (
+            &plain,
+            ModelParams {
+                double_sided: true,
+                ..o
+            },
+            id,
+            Err(R::DoubleSided),
+        ),
+        (
+            &plain,
+            ModelParams {
+                shading: Shading::Flat,
+                ..o
+            },
+            id,
+            Err(R::Flat),
+        ),
+        (&plain, o, at(Vec3::new(0.0, 0.0, -4.7)), Err(R::NearPlane)),
+        (
+            &plain,
+            o,
+            at(Vec3::new(3000.0, 0.0, 0.0)),
+            Err(R::Offscreen),
+        ),
+        (&plain, o, at(Vec3::new(0.0, 0.0, 9000.0)), Err(R::TooFar)),
+        (&plain, o, squash, Err(R::NonUniformScale)),
+    ];
+    for (ctx, params, m, want) in cases {
+        let got = render3d::rsp_check(ctx, &cube_m, &m, &params).map(|_| ());
+        assert_eq!(got, want, "{params:?} at {m:?}");
+        assert_eq!(
+            render3d::rsp_check(ctx, &cube_m, &m, &params).ok(),
+            render3d::rsp_eligible(ctx, &cube_m, &m, &params),
+            "same answer as rsp_eligible"
+        );
+        // A first failing rule wins over later ones.
+        if want == Err(R::Fog) {
+            let both = ModelParams {
+                shading: Shading::Flat,
+                ..params
+            };
+            assert_eq!(
+                render3d::rsp_check(ctx, &cube_m, &m, &both).map(|_| ()),
+                Err(R::Fog)
+            );
+        }
+    }
+    // Labels for tools are short and distinct.
+    let labels = [R::Fog, R::Flat, R::Offscreen, R::NearPlane, R::Skinned].map(R::label);
+    let mut uniq = labels.to_vec();
+    uniq.sort();
+    uniq.dedup();
+    assert_eq!(uniq.len(), labels.len());
+}

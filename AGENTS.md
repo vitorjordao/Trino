@@ -64,13 +64,16 @@ new skill when none fits. Then run `cargo xtask agents sync`. The steps are in
   reload) or the game, in a separate process. Every UI action writes a text file.
   Agent hooks: the `editor` skill.
 - **Content formats** (`trino-scene` crate, versioned RON, hot-reloaded):
-  scenes v2 (`scenes/*.scene.ron`: nested entities, 3D transforms in degrees, models +
+  scenes v3 (`scenes/*.scene.ron`: nested entities, 3D transforms in degrees, models +
   materials + animation clip, sprites, tags, prefab instances, environment = camera,
   colored light, fog); **prefabs** (`prefabs/*.prefab.ron`: linked instances,
   per-instance overrides, unpack, nesting with cycle detection — Blender-style);
   **materials** (`assets/materials/*.material.ron`: tint, `Gouraud|Flat|Unlit`,
   emissive, double-sided — all evaluated by the software T&L, so identical on every
-  target). v1 scenes migrate on load. `cargo xtask scene check` validates;
+  target). v1/v2 scenes migrate on load. **Per-platform variants** (scene v3, ADR 0009):
+  an entity's `platforms` block swaps the model, material or scale, hides it or leaves it
+  out on `pc`, `n64` or `n3ds`; `resolve_for`, `scene export --platform`, each
+  platform's `[scenes.*]` bake and the editor's Game view apply them. `cargo xtask scene check` validates;
   `cargo xtask scene export` turns a scene into `no_std` Rust data
   (`trino_core::SceneNode`) for consoles — `examples/showcase` is the editor's demo
   scene that way (runs on PC with `TRINO_GAME=showcase`, type-checks for N64/3DS), and
@@ -235,6 +238,10 @@ new skill when none fits. Then run `cargo xtask agents sync`. The steps are in
   - **Inspector components**: LOD, sound, cell/portal; cell and portal wireframes.
   - **Headless UI tests** with egui_kittest (`crates/editor/src/ui_tests.rs`). They
     are ignored by default; run them alone with `--ignored --test-threads=1`.
+  - **Inspector › Platforms**: PC / N64 / 3DS columns of variants with their N64 cost;
+    the Game view draws the variant of the console it simulates.
+  - **Layout audit** (`layout_audit.rs`): no widget off the window or overlapping, over
+    the whole editor at 960x600 and 1600x940.
 - **Emulators in CI**:
   - The `n64` job boots the test ROM in the `trino-ares` image. Its golden frame
     matches on Mesa lavapipe too.
@@ -350,7 +357,7 @@ for PC shortcuts, and `InputState::pad` says a gamepad was used this frame.
 | `templates/new-game/`, `templates/standalone/` | Scaffolds for `cargo xtask new` (in-repo crate / standalone project) |
 | `docker/` | Toolchain/emulator images: `n64/` (libdragon), `ares/` (headless ares for tests) |
 | `tests/golden/` | Golden images: `pc/` (renderer), `n64/` (ares framebuffer) |
-| `docs/adr/`, `docs/plans/` | Architecture decisions (0007: RSP T&L, proposed); execution plans for big items; `docs/BACKLOG.md` ranked next steps |
+| `docs/adr/`, `docs/plans/` | Architecture decisions (0007: RSP T&L; 0009: platform-aware authoring); execution plans for big items; `docs/BACKLOG.md` ranked next steps |
 | `.github/workflows/` | `ci.yml`, `release.yml` |
 
 ## The one inviolable rule: dependency direction
@@ -402,7 +409,7 @@ cargo xtask test 3ds      # build test app + assert magic strings (Azahar log)
 cargo xtask watch 3ds     # rebuild .3dsx + relaunch Azahar on save
 cargo xtask new <name>    # scaffold a game crate under examples/
 cargo xtask scene check   # validate scenes/prefabs/materials (text-first loop)
-cargo xtask scene export <scene.ron> <out.rs>   # scene -> no_std Rust data for games
+cargo xtask scene export [--platform pc|n64|3ds] <scene.ron> <out.rs>   # scene -> no_std Rust data (that platform's variants)
 cargo xtask model inspect <file> [--json]       # bake a model like the engine; art gate
 cargo xtask agents sync   # mirror .agents/skills/ into .claude/skills/ (check: agents check)
 cargo xtask new <name> --standalone <dir> [--git <url> --rev <r>]   # project outside this repo

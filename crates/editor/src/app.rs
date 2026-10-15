@@ -143,7 +143,11 @@ pub struct App {
     pub palette: Option<String>,
     parked_cam: Option<crate::gizmo::OrbitCam>,
     pub asset_sel: Option<AssetSel>,
+    /// The scene as the PC sees it (Scene view, picking, inspector).
     pub resolved: Resolved,
+    /// The scene as the Game view's profile sees it: that platform's
+    /// variants applied (the PC one when it simulates the PC).
+    pub resolved_game: Resolved,
     pub scene_view: Viewport,
     pub game_view: Viewport,
     pub thumbs: Thumbnailer,
@@ -195,6 +199,9 @@ pub struct App {
     focus_tab: Option<Tab>,
     /// Dev hook `TRINO_EDITOR_PLAY=here`: start Play here on the first frame.
     play_here_on_start: bool,
+    /// Dev hook `TRINO_EDITOR_INSPECT=<section>`: the Inspector opens that
+    /// section and scrolls to it (`platforms`).
+    pub inspect_focus: Option<String>,
 }
 
 impl App {
@@ -356,6 +363,7 @@ impl App {
             parked_cam: None,
             asset_sel: None,
             resolved: Resolved::default(),
+            resolved_game: Resolved::default(),
             scene_view,
             game_view,
             thumbs,
@@ -396,12 +404,14 @@ impl App {
             last_frame: Instant::now(),
             fps: 0.0,
             show_shortcuts: false,
-            dock: Some(default_dock()),
+            // Built on the first frame, when the window size is known.
+            dock: None,
             focus_tab: None,
             open_docs: Vec::new(),
             // Dev hook: TRINO_EDITOR_PALETTE=<query> opens the palette.
             palette: std::env::var("TRINO_EDITOR_PALETTE").ok(),
             play_here_on_start: std::env::var("TRINO_EDITOR_PLAY").as_deref() == Ok("here"),
+            inspect_focus: std::env::var("TRINO_EDITOR_INSPECT").ok(),
         }
     }
 
@@ -1468,11 +1478,14 @@ impl App {
                 }
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(
-                    RichText::new(self.doc.path.display().to_string())
-                        .color(c::TEXT_FAINT)
-                        .size(12.0),
-                );
+                // The file name matters most: elide the path's start to fit.
+                let full = self.doc.path.display().to_string();
+                let fits = ((ui.available_width() - 8.0) / 6.6).max(0.0) as usize;
+                let shown = elide_start(&full, fits);
+                if !shown.is_empty() {
+                    ui.label(RichText::new(shown).color(c::TEXT_FAINT).size(12.0))
+                        .on_hover_text(full);
+                }
             });
         });
     }
@@ -1480,18 +1493,8 @@ impl App {
     fn status_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 14.0;
-            if let Some(last) = self.log.last() {
-                ui.label(RichText::new(last.level.glyph()).color(last.level.color()));
-                let text: String = last
-                    .text
-                    .lines()
-                    .next()
-                    .unwrap_or("")
-                    .chars()
-                    .take(120)
-                    .collect();
-                ui.label(RichText::new(text).color(c::TEXT_WEAK).size(12.0));
-            }
+            // Counters on the right first; the last log line takes what is
+            // left and truncates (a long path must not run under them).
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let (w, e) = self.log.counts();
                 ui.label(
@@ -1531,6 +1534,16 @@ impl App {
                     )
                     .on_hover_text(self.resolved.warnings.join("\n"));
                 }
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    if let Some(last) = self.log.last() {
+                        ui.label(RichText::new(last.level.glyph()).color(last.level.color()));
+                        let text = last.text.lines().next().unwrap_or("");
+                        ui.add(
+                            egui::Label::new(RichText::new(text).color(c::TEXT_WEAK).size(12.0))
+                                .truncate(),
+                        );
+                    }
+                });
             });
         });
     }
@@ -1822,7 +1835,8 @@ impl App {
     /// Play the open scene inside the Game view (same process).
     fn start_play_here(&mut self) {
         let screen = self.game_view.internal_size();
-        match crate::play::PlaySession::start(&self.doc.scene, &self.lib, screen) {
+        let target = crate::viewport::target_of(self.game_view.profile);
+        match crate::play::PlaySession::start(&self.doc.scene, &self.lib, target, screen) {
             Ok(session) => {
                 self.game_view.play = Some(session);
                 self.focus_tab = Some(Tab::Game);
@@ -2116,6 +2130,20 @@ impl App {
 /// canonicalized paths (`/private/var/...` on macOS, `\\?\C:\...` on
 /// Windows), so fall back to comparing canonical forms — for deleted files,
 /// canonicalize the parent and re-append the name.
+/// `text` cut to its last `max` characters, starting with "…" when cut
+/// (nothing when even "…" + a few characters wouldn't fit).
+fn elide_start(text: &str, max: usize) -> String {
+    let n = text.chars().count();
+    if n <= max {
+        text.to_string()
+    } else if max < 6 {
+        String::new()
+    } else {
+        let tail: String = text.chars().skip(n - (max - 1)).collect();
+        format!("…{tail}")
+    }
+}
+
 fn relative_to(abs: &Path, cwd: &Path, cwd_canon: &Path) -> PathBuf {
     if let Ok(r) = abs.strip_prefix(cwd) {
         return r.to_path_buf();
@@ -2167,7 +2195,12 @@ impl eframe::App for App {
         self.update_thumbnails(&ctx);
 
         // Resolve once per frame; bump the revision when content changed.
-        self.resolved = resolve(&self.doc.scene, &self.lib, self.time());
+        let time = self.time();
+        self.resolved = resolve(&self.doc.scene, &self.lib, time);
+        self.resolved_game = match crate::viewport::target_of(self.game_view.profile) {
+            trino_scene::Target::Pc => self.resolved.clone(),
+            t => trino_scene::resolve_for(&self.doc.scene, &self.lib, time, t),
+        };
         if self.rev_scene.as_ref() != Some(&self.doc.scene) || self.lib_rev != self.seen_lib_rev {
             self.rev += 1;
             self.rev_scene = Some(self.doc.scene.clone());
@@ -2202,7 +2235,8 @@ impl eframe::App for App {
             )
             .show(ui, |ui| self.status_bar(ui));
 
-        let mut dock = self.dock.take().unwrap_or_else(default_dock);
+        let width = ui.available_width();
+        let mut dock = self.dock.take().unwrap_or_else(|| default_dock(width));
         if let Some(tab) = self.focus_tab.take()
             && let Some(path) = dock.find_tab(&tab)
         {
@@ -2264,7 +2298,10 @@ impl eframe::App for App {
     }
 }
 
-fn default_dock() -> egui_dock::DockState<Tab> {
+/// The panel layout for a window `width` points wide: the Hierarchy and
+/// the Inspector keep a usable width (200 / 300 px) at the editor's
+/// minimum window size, and their usual share of a big one.
+fn default_dock(width: f32) -> egui_dock::DockState<Tab> {
     // Dev hook (screenshots): TRINO_EDITOR_TAB=scene|game|level picks the
     // focused center tab.
     let tabs = match std::env::var("TRINO_EDITOR_TAB").as_deref() {
@@ -2274,9 +2311,13 @@ fn default_dock() -> egui_dock::DockState<Tab> {
     };
     let mut dock = egui_dock::DockState::new(tabs);
     let surface = dock.main_surface_mut();
+    let width = width.max(1.0);
+    let left = (200.0 / width).clamp(0.17, 0.3);
+    let rest = width * (1.0 - left);
+    let right = (300.0 / rest).clamp(0.28, 0.45);
     let [center, _left] =
-        surface.split_left(egui_dock::NodeIndex::root(), 0.17, vec![Tab::Hierarchy]);
-    let [center, _right] = surface.split_right(center, 0.75, vec![Tab::Inspector]);
+        surface.split_left(egui_dock::NodeIndex::root(), left, vec![Tab::Hierarchy]);
+    let [center, _right] = surface.split_right(center, 1.0 - right, vec![Tab::Inspector]);
     let [_, _bottom] = surface.split_below(center, 0.70, vec![Tab::Assets, Tab::Console]);
     dock
 }
@@ -2323,7 +2364,11 @@ impl egui_dock::TabViewer for TabView<'_> {
                 };
                 let input = ViewInput {
                     scene: &app.doc.scene,
-                    resolved: &app.resolved,
+                    resolved: if kind == ViewKind::Game {
+                        &app.resolved_game
+                    } else {
+                        &app.resolved
+                    },
                     project: &app.project,
                     selected: app.doc.selected.as_deref(),
                     extra: &app.doc.extra,
@@ -2403,6 +2448,16 @@ pub fn card() -> egui::Frame {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn long_paths_keep_their_end() {
+        assert_eq!(elide_start("scenes/a.scene.ron", 40), "scenes/a.scene.ron");
+        assert_eq!(
+            elide_start("/very/long/dir/scenes/a.scene.ron", 12),
+            "…a.scene.ron"
+        );
+        assert_eq!(elide_start("/x/y/z.ron", 3), "");
+    }
 
     #[test]
     fn watcher_paths_resolve_relative_even_when_canonicalized() {

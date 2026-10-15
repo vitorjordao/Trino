@@ -7,7 +7,7 @@ use trino_core::{
     AnimRef, ClipId, MAX_CELLS, Mat34, ModelId, ModelParams, NO_CELL, SpriteId, Vec3, VisVolume,
 };
 
-use crate::{Entity, Library, Scene};
+use crate::{Entity, Library, ModelComponent, Scene, Target, Variant};
 
 /// Prefab nesting deeper than this is treated as a cycle.
 pub const MAX_PREFAB_DEPTH: usize = 16;
@@ -112,6 +112,7 @@ impl Resolved {
 
 struct Ctx<'a> {
     lib: &'a Library,
+    target: Target,
     time: f32,
     out: Resolved,
     stack: Vec<String>,
@@ -130,11 +131,19 @@ struct Parent2D {
     rot: f32,
 }
 
-/// Resolve `scene` at animation time `time` (seconds; clips play at
-/// `time * speed`).
+/// Resolve `scene` for the PC at animation time `time` (seconds; clips
+/// play at `time * speed`).
 pub fn resolve(scene: &Scene, lib: &Library, time: f32) -> Resolved {
+    resolve_for(scene, lib, time, Target::Pc)
+}
+
+/// [`resolve`] for one platform: every entity's variant for `target`
+/// (`platforms`) is applied — another model, material or scale, hidden, or
+/// dropped with its subtree.
+pub fn resolve_for(scene: &Scene, lib: &Library, time: f32, target: Target) -> Resolved {
     let mut ctx = Ctx {
         lib,
+        target,
         time,
         out: Resolved::default(),
         stack: Vec::new(),
@@ -199,17 +208,44 @@ fn visit(
     parent_name: &str,
     from_prefab: bool,
 ) {
-    if !e.visible {
+    let variant = e.platforms.get(ctx.target);
+    if !Variant::shows(variant, e.visible) {
         return;
     }
-    let matrix = parent.mul(&e.transform.matrix());
+    let mut transform = e.transform;
+    if let Some(scale) = variant.and_then(|v| v.scale) {
+        transform.scale = scale;
+    }
+    // The model as this platform sees it (borrowed when nothing changes).
+    let swapped;
+    let model_c: Option<&ModelComponent> = match (&e.model, variant) {
+        (Some(m), Some(v)) if v.model.is_some() || v.material.is_some() => {
+            let mut m = m.clone();
+            if let Some(path) = &v.model {
+                m.path = path.clone();
+            }
+            if let Some(mat) = &v.material {
+                m.material = Some(mat.clone());
+            }
+            swapped = m;
+            Some(&swapped)
+        }
+        (m, _) => m.as_ref(),
+    };
+    // A scale variant changes this entity's own model (or instanced
+    // prefab) only; its children and cells/portals keep the base transform.
+    let base_matrix = parent.mul(&e.transform.matrix());
+    let matrix = if transform == e.transform {
+        base_matrix
+    } else {
+        parent.mul(&transform.matrix())
+    };
     let name = if parent_name.is_empty() {
         e.name.clone()
     } else {
         format!("{parent_name}/{}", e.name)
     };
-    let t = &e.transform;
-    let here = Parent2D {
+    let place = |t: &crate::Transform| Parent2D {
         pos: [
             p2.pos[0] + t.pos[0] * p2.scale[0],
             p2.pos[1] + t.pos[1] * p2.scale[1],
@@ -217,10 +253,11 @@ fn visit(
         scale: [p2.scale[0] * t.scale[0], p2.scale[1] * t.scale[1]],
         rot: p2.rot + t.rot[2].to_radians(),
     };
+    let (here, own) = (place(&e.transform), place(&transform));
 
     let mut params = ModelParams::DEFAULT;
     let mut material = None;
-    let model = e.model.as_ref().map(|m| {
+    let model = model_c.map(|m| {
         params = match &m.material {
             Some(path) => match ctx.lib.materials.get(path) {
                 Some(def) => def.params(m.tint),
@@ -242,16 +279,14 @@ fn visit(
     let sprite = e.sprite.as_ref().map(|s| SpriteDraw {
         id: s.sprite_id(),
         path: s.path.clone(),
-        pos: here.pos,
-        scale: here.scale,
-        rotation: here.rot,
+        pos: own.pos,
+        scale: own.scale,
+        rotation: own.rot,
         tint: s.tint,
         flip_x: s.flip_x,
         flip_y: s.flip_y,
     });
-    let mut lod: Vec<(f32, Option<(ModelId, String)>)> = e
-        .model
-        .as_ref()
+    let mut lod: Vec<(f32, Option<(ModelId, String)>)> = model_c
         .map(|m| {
             m.lod
                 .iter()
@@ -267,10 +302,14 @@ fn visit(
         })
         .unwrap_or_default();
     lod.sort_by(|a, b| a.0.total_cmp(&b.0));
-    let collider = e
-        .collider
-        .as_ref()
-        .map(|c| resolve_collider(ctx, &name, e, c));
+    // Variants are a look, not gameplay: the collider stays the PC one
+    // (the base model's bounds, the base scale), so a game's simulation is
+    // the same on every target. Only `disabled` removes it.
+    let collider = e.collider.as_ref().map(|c| {
+        let c = resolve_collider(ctx, &name, e.model.as_ref(), c);
+        let s = |i: usize| e.transform.scale[i] / transform.scale[i];
+        unscale_collider(ctx, &name, c, Vec3::new(s(0), s(1), s(2)))
+    });
     let outer_cell = ctx.cell;
     let vis = match &e.vis {
         Some(crate::VisComponent::Cell { size }) => {
@@ -278,7 +317,7 @@ fn visit(
                 ctx.cell = ctx.cells.len() as u8;
                 ctx.cells.push(name.clone());
                 Some(VisVolume::Cell {
-                    half: world_half(&matrix, *size),
+                    half: world_half(&base_matrix, *size),
                 })
             } else {
                 ctx.out.warnings.push(format!(
@@ -291,7 +330,7 @@ fn visit(
             ctx.portals
                 .push((ctx.out.items.len(), a.clone(), b.clone()));
             Some(VisVolume::Portal {
-                half: world_half(&matrix, *size),
+                half: world_half(&base_matrix, *size),
                 a: 0,
                 b: 0,
             })
@@ -336,7 +375,9 @@ fn visit(
                         ));
                     }
                     ctx.stack.push(inst.path.clone());
-                    visit(ctx, &root, owner, &matrix, here, &name, true);
+                    // The instanced prefab is the object itself: it takes the
+                    // variant's scale like a model would.
+                    visit(ctx, &root, owner, &matrix, own, &name, true);
                     ctx.stack.pop();
                 }
                 Err(err) => ctx.out.warnings.push(format!("{name}: {err}")),
@@ -353,16 +394,58 @@ fn visit(
             p.push(i);
             p
         };
-        visit(ctx, child, &child_owner, &matrix, here, &name, from_prefab);
+        visit(
+            ctx,
+            child,
+            &child_owner,
+            &base_matrix,
+            here,
+            &name,
+            from_prefab,
+        );
     }
     ctx.cell = outer_cell;
+}
+
+/// Undo a variant's scale on a collider: `ratio` is base scale / variant
+/// scale per axis. Boxes are exact; a sphere or capsule needs a uniform
+/// ratio (else it keeps the variant's scale, with a warning).
+fn unscale_collider(ctx: &mut Ctx, name: &str, c: Collider, ratio: Vec3) -> Collider {
+    if ratio == Vec3::ONE || !(ratio.x.is_finite() && ratio.y.is_finite() && ratio.z.is_finite()) {
+        return c;
+    }
+    let mul = |a: Vec3| Vec3::new(a.x * ratio.x, a.y * ratio.y, a.z * ratio.z);
+    let uniform = ratio.x == ratio.y && ratio.y == ratio.z;
+    let shape = match c.shape {
+        Shape::Box { half } => Shape::Box { half: mul(half) },
+        Shape::Sphere { radius } if uniform => Shape::Sphere {
+            radius: radius * ratio.x,
+        },
+        Shape::Capsule { radius, height } if uniform => Shape::Capsule {
+            radius: radius * ratio.x,
+            height: height * ratio.x,
+        },
+        other => {
+            ctx.out.warnings.push(format!(
+                "{name}: the {} variant scales unevenly, so its round collider differs \
+                 from the PC one",
+                ctx.target.label()
+            ));
+            return Collider { shape: other, ..c };
+        }
+    };
+    Collider {
+        shape,
+        offset: mul(c.offset),
+        ..c
+    }
 }
 
 /// Authored collider -> engine collider (`Auto` = the model's box).
 fn resolve_collider(
     ctx: &mut Ctx,
     name: &str,
-    e: &Entity,
+    model: Option<&ModelComponent>,
     c: &crate::ColliderComponent,
 ) -> Collider {
     let offset = Vec3::new(c.offset[0], c.offset[1], c.offset[2]);
@@ -376,10 +459,7 @@ fn resolve_collider(
         crate::ShapeDef::Sphere { radius } => (Shape::Sphere { radius }, offset),
         crate::ShapeDef::Capsule { radius, height } => (Shape::Capsule { radius, height }, offset),
         crate::ShapeDef::Auto => {
-            let bounds = e
-                .model
-                .as_ref()
-                .and_then(|m| ctx.lib.model_bounds.get(&m.path));
+            let bounds = model.and_then(|m| ctx.lib.model_bounds.get(&m.path));
             match bounds {
                 Some((min, max)) => (
                     Shape::Box {

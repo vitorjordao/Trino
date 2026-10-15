@@ -36,7 +36,7 @@ pub use loader::{
 };
 pub use manifest::{Manifest, Platform};
 pub use model::{
-    MeshData, ModelOptions, bake_model, bake_model_tmdl, bake_scene, clip_names,
+    MeshData, ModelOptions, bake_model, bake_model_tmdl, bake_scene, bake_scene_for, clip_names,
     manifest_model_bounds,
 };
 pub use primitive::{Pivot, Primitive, Shape};

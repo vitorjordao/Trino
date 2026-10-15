@@ -12,7 +12,7 @@ use trino_asset_pipeline::{Pivot, Primitive, Shape};
 use trino_core::Caps;
 use trino_scene::{
     AnimComponent, Entity, MaterialDef, ModelComponent, Override, PrefabInstance, ShadingDef,
-    SpriteComponent, VisComponent,
+    SpriteComponent, Target, VisComponent,
 };
 
 use crate::app::{App, AssetSel, Cmd, card};
@@ -47,11 +47,22 @@ fn entity(app: &mut App, ui: &mut egui::Ui, path: &[usize]) {
         .values()
         .map(|m| (m.logical.clone(), m.is_proxy()))
         .collect();
+    let model_infos: Vec<crate::panels::platforms::ModelInfo> = app
+        .project
+        .models
+        .values()
+        .map(|m| crate::panels::platforms::ModelInfo {
+            logical: m.logical.clone(),
+            verts: m.verts,
+            tris: m.tris,
+        })
+        .collect();
     let sprite_names: Vec<String> = app.project.sprites.keys().cloned().collect();
     let sound_names: Vec<String> = app.project.sounds.clone();
     let material_names: Vec<String> = app.lib.materials.keys().cloned().collect();
     let prefab_names: Vec<String> = app.lib.prefabs.keys().cloned().collect();
     let is_prefab_doc = app.doc.is_prefab();
+    let focus = app.inspect_focus.clone();
     let mut cell_names: Vec<String> = Vec::new();
     app.doc.scene.walk(|_, e| {
         if matches!(e.vis, Some(VisComponent::Cell { .. })) {
@@ -172,7 +183,7 @@ fn entity(app: &mut App, ui: &mut egui::Ui, path: &[usize]) {
             theme::prop(ui, "Mesh", |ui| {
                 egui::ComboBox::from_id_salt("model-path")
                     .selected_text(&m.path)
-                    .width(ui.available_width() - 30.0)
+                    .width(ui.available_width() - 38.0)
                     .height(320.0)
                     .show_ui(ui, |ui| {
                         for (name, proxy) in &model_names {
@@ -224,7 +235,7 @@ fn entity(app: &mut App, ui: &mut egui::Ui, path: &[usize]) {
                 let current = m.material.clone().unwrap_or_else(|| "Default".into());
                 egui::ComboBox::from_id_salt("material")
                     .selected_text(current)
-                    .width(ui.available_width() - 30.0)
+                    .width(ui.available_width() - 38.0)
                     .show_ui(ui, |ui| {
                         if ui
                             .selectable_label(m.material.is_none(), "Default")
@@ -340,7 +351,7 @@ fn entity(app: &mut App, ui: &mut egui::Ui, path: &[usize]) {
                         let label = level.path.clone().unwrap_or_else(|| "None (cull)".into());
                         egui::ComboBox::from_id_salt(("lod-path", i))
                             .selected_text(label)
-                            .width(ui.available_width() - 30.0)
+                            .width(ui.available_width() - 38.0)
                             .show_ui(ui, |ui| {
                                 if ui
                                     .selectable_label(level.path.is_none(), "None (cull)")
@@ -620,7 +631,10 @@ fn entity(app: &mut App, ui: &mut egui::Ui, path: &[usize]) {
                 }
                 theme::vec3_row(ui, "Offset", &mut col.offset, 0.05, "");
                 theme::prop(ui, "Trigger", |ui| {
-                    ui.checkbox(&mut col.trigger, "overlap only (coins, doors, zones)");
+                    ui.checkbox(&mut col.trigger, "overlap only").on_hover_text(
+                        "A trigger: reports overlaps (coins, doors, zones) \
+                                        instead of blocking",
+                    );
                 });
                 if ui
                     .small_button(RichText::new(format!("{} Remove", icon::TRASH)).color(c::ERROR))
@@ -746,6 +760,46 @@ fn entity(app: &mut App, ui: &mut egui::Ui, path: &[usize]) {
     }
     if remove_vis {
         e.vis = None;
+    }
+
+    // Per-platform variants (PC / N64 / 3DS columns).
+    let variants = Target::ALL
+        .iter()
+        .filter(|t| e.platforms.get(**t).is_some())
+        .count();
+    let title = if variants == 0 {
+        "Platforms".to_string()
+    } else {
+        format!(
+            "Platforms ({variants} variant{})",
+            if variants == 1 { "" } else { "s" }
+        )
+    };
+    let focus_platforms = focus.as_deref() == Some("platforms");
+    let top = ui.cursor().min;
+    theme::component_open(
+        ui,
+        "c-platforms",
+        icon::DEVICES,
+        c::ACCENT_TEXT,
+        &title,
+        variants > 0 || focus_platforms,
+        |ui| {
+            crate::panels::platforms::ui(
+                ui,
+                e,
+                &crate::panels::platforms::Choices {
+                    models: &model_infos,
+                    materials: &material_names,
+                },
+            );
+        },
+    );
+    if focus_platforms {
+        ui.scroll_to_rect(
+            egui::Rect::from_min_size(top, Vec2::new(1.0, ui.clip_rect().height() - 8.0)),
+            Some(egui::Align::TOP),
+        );
     }
 
     // Add component.

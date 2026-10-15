@@ -30,8 +30,12 @@ struct Tile {
     badge: Option<&'static str>,
 }
 
+/// Below this width the tabs wrap and the search box gets its own row.
+const ONE_ROW_WIDTH: f32 = 640.0;
+
 pub fn ui(app: &mut App, ui: &mut egui::Ui) {
-    ui.horizontal(|ui| {
+    let one_row = ui.available_width() >= ONE_ROW_WIDTH;
+    ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         for (tab, glyph, name, n) in [
             (
@@ -81,7 +85,21 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
                 app.assets_tab = tab;
             }
         }
-        ui.add_space(8.0);
+        if one_row {
+            ui.add_space(8.0);
+            search_row(app, ui);
+        }
+    });
+    if !one_row {
+        ui.horizontal(|ui| search_row(app, ui));
+    }
+    ui.add_space(6.0);
+    grid(app, ui);
+}
+
+/// The search box and the tab's "new" button.
+fn search_row(app: &mut App, ui: &mut egui::Ui) {
+    {
         let w = (ui.available_width() - 40.0).max(100.0);
         ui.allocate_ui(Vec2::new(w, 26.0), |ui| {
             theme::search_box(ui, &mut app.assets_filter, "Search assets…");
@@ -99,9 +117,10 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
         {
             app.cmds.push(Cmd::Open(d));
         }
-    });
-    ui.add_space(6.0);
+    }
+}
 
+fn grid(app: &mut App, ui: &mut egui::Ui) {
     let needle = app.assets_filter.to_lowercase();
     let mut tiles: Vec<Tile> = Vec::new();
     match app.assets_tab {

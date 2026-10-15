@@ -266,6 +266,19 @@ pub fn component<R>(
     title: &str,
     add: impl FnOnce(&mut egui::Ui) -> R,
 ) -> Option<R> {
+    component_open(ui, id, glyph, tint, title, true, add)
+}
+
+/// [`component`] that starts collapsed unless `open`.
+pub fn component_open<R>(
+    ui: &mut egui::Ui,
+    id: &str,
+    glyph: &str,
+    tint: Color32,
+    title: &str,
+    open: bool,
+    add: impl FnOnce(&mut egui::Ui) -> R,
+) -> Option<R> {
     let mut out = None;
     egui::Frame::new()
         .fill(c::BG2.gamma_multiply(0.55))
@@ -280,7 +293,7 @@ pub fn component<R>(
                     .family(bold()),
             )
             .id_salt(id)
-            .default_open(true);
+            .default_open(open);
             header.show(ui, |ui| {
                 ui.add_space(4.0);
                 out = Some(add(ui));
@@ -351,13 +364,25 @@ pub fn vec3_row(
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 3.0;
         ui.add_sized(
-            [64.0, 22.0],
-            egui::Label::new(RichText::new(label).color(c::TEXT_WEAK)),
+            [label_width(ui), 22.0],
+            egui::Label::new(RichText::new(label).color(c::TEXT_WEAK)).truncate(),
         );
         // label + 3 × (tag + field), with 3 px gaps between all 7 items.
-        let w = ((ui.available_width() - 3.0 * 12.0 - 6.0 * 3.0) / 3.0)
+        let w = ((ui.available_width() - 3.0 * 12.0 - 6.0 * 3.0 - 2.0) / 3.0)
             .floor()
-            .max(30.0);
+            .max(26.0);
+        // A field grows past `w` to fit its text: in a narrow panel show
+        // fewer decimals and pad less (-10.5 must fit in ~45 px).
+        let decimals = if w < 52.0 {
+            1
+        } else if w < 64.0 {
+            2
+        } else {
+            3
+        };
+        if w < 64.0 {
+            ui.spacing_mut().button_padding.x = 2.0;
+        }
         for (i, (axis, col)) in [("X", c::AXIS_X), ("Y", c::AXIS_Y), ("Z", c::AXIS_Z)]
             .into_iter()
             .enumerate()
@@ -381,7 +406,7 @@ pub fn vec3_row(
                     egui::DragValue::new(&mut v[i])
                         .speed(speed)
                         .suffix(suffix)
-                        .max_decimals(3),
+                        .max_decimals(decimals),
                 )
                 .changed();
         }
@@ -389,13 +414,23 @@ pub fn vec3_row(
     changed
 }
 
-/// Labeled property row: fixed-width label + widget.
+/// Width of a property row's label: 64 px, less in a narrow panel.
+pub fn label_width(ui: &egui::Ui) -> f32 {
+    (ui.available_width() * 0.3).clamp(40.0, 64.0).floor()
+}
+
+/// Labeled property row: label + widget. The row never grows past the
+/// panel: long texts truncate (with "…") and sliders shrink to fit
+/// (`layout_audit` checks it at the editor's minimum window size).
 pub fn prop<R>(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     ui.horizontal(|ui| {
         ui.add_sized(
-            [64.0, 22.0],
-            egui::Label::new(RichText::new(label).color(c::TEXT_WEAK)),
+            [label_width(ui), 22.0],
+            egui::Label::new(RichText::new(label).color(c::TEXT_WEAK)).truncate(),
         );
+        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+        // A slider is its track plus a value box (~60 px with a suffix).
+        ui.spacing_mut().slider_width = (ui.available_width() - 72.0).clamp(30.0, 120.0);
         add(ui)
     })
     .inner

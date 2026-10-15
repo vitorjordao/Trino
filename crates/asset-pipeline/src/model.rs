@@ -1114,7 +1114,23 @@ fn load_gltf(path: &Path, opts: &ModelOptions) -> Result<MeshData, String> {
 /// `assets_root`) into a `TSCN` blob, resolving prefabs, materials and
 /// `Auto` colliders exactly like the editor and `scene export`.
 pub fn bake_scene(assets_root: &Path, file: &str) -> Result<Vec<u8>, String> {
-    bake_scene_with_bounds(assets_root, file, manifest_model_bounds(assets_root))
+    bake_scene_for(assets_root, file, crate::Platform::Pc)
+}
+
+/// [`bake_scene`] for one platform: each entity's variant for `platform`
+/// (`platforms` in the scene) is applied. Colliders always come from the
+/// PC models, so gameplay is the same on every target.
+pub fn bake_scene_for(
+    assets_root: &Path,
+    file: &str,
+    platform: crate::Platform,
+) -> Result<Vec<u8>, String> {
+    bake_scene_with_bounds(
+        assets_root,
+        file,
+        manifest_model_bounds(assets_root),
+        platform,
+    )
 }
 
 /// [`bake_scene`] with model bounds the caller already has (the bake loop
@@ -1123,6 +1139,7 @@ pub fn bake_scene_with_bounds(
     assets_root: &Path,
     file: &str,
     bounds: std::collections::BTreeMap<String, ([f32; 3], [f32; 3])>,
+    platform: crate::Platform,
 ) -> Result<Vec<u8>, String> {
     let project = assets_root.parent().unwrap_or(Path::new(""));
     let scene = trino_scene::Scene::load(&project.join(file))?;
@@ -1131,7 +1148,7 @@ pub fn bake_scene_with_bounds(
         return Err(format!("scene `{file}`: library error: {e}"));
     }
     lib.model_bounds = bounds;
-    let (blob, warnings) = trino_scene::bake::to_tscn(&scene, &lib);
+    let (blob, warnings) = trino_scene::bake::to_tscn_for(&scene, &lib, platform.target());
     if let Some(w) = warnings.first() {
         return Err(format!("scene `{file}`: {w}"));
     }

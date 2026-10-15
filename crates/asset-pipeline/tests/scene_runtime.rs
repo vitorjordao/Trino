@@ -192,3 +192,55 @@ fn the_interior_scene_culls_rooms_through_its_portals() {
         .collect();
     assert_eq!(drawn_cells.len(), in_room);
 }
+
+/// `[scenes.*]` bake per platform: a project whose scene gives one entity
+/// an N64 model and leaves another out of the 3DS — each platform's blob
+/// carries its own variant, the PC one the scene as written.
+#[test]
+fn each_platform_bakes_its_own_scene_variant() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    std::fs::create_dir_all(root.join("assets")).unwrap();
+    std::fs::create_dir_all(root.join("scenes")).unwrap();
+    std::fs::write(
+        root.join("assets/manifest.toml"),
+        "version = 1\n[scenes.level]\nfile = \"scenes/level.scene.ron\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("scenes/level.scene.ron"),
+        r#"(version: 3, name: "level", entities: [
+            (
+                name: "tree",
+                model: Some((path: "models/tree")),
+                platforms: (n64: Some((model: Some("models/tree-low")))),
+            ),
+            (
+                name: "statue",
+                model: Some((path: "models/statue")),
+                platforms: (n3ds: Some((disabled: true))),
+            ),
+        ])"#,
+    )
+    .unwrap();
+    let assets = root.join("assets");
+    let bake = |p: Platform| {
+        let blob = trino_asset_pipeline::bake_scene_for(&assets, "scenes/level.scene.ron", p);
+        BakedScene::parse(leak(blob.unwrap())).unwrap()
+    };
+    let id = |p: &str| Some(ModelId(trino_core::asset_id(p)));
+    let pc = bake(Platform::Pc);
+    assert_eq!(pc.find("tree").unwrap().model, id("models/tree"));
+    assert!(pc.find("statue").is_some());
+    let n64 = bake(Platform::N64);
+    assert_eq!(n64.find("tree").unwrap().model, id("models/tree-low"));
+    let n3ds = bake(Platform::N3ds);
+    assert!(n3ds.find("statue").is_none());
+    assert_eq!(n3ds.find("tree").unwrap().model, id("models/tree"));
+    // `bake_scene` is the PC bake.
+    let plain = bake_scene(&assets, "scenes/level.scene.ron").unwrap();
+    assert_eq!(
+        BakedScene::parse(leak(plain)).unwrap().node_count(),
+        pc.node_count()
+    );
+}

@@ -118,6 +118,13 @@ shipping a 3D game first**, then by cost:
 
 ---
 
+## Done — platform variants in scenes and a layout-safe editor (2026-10-15, branch `editor/platform-variants`, ADR 0009)
+
+| Item | Evidence |
+|---|---|
+| Scene v3 / prefab v2: `Entity::platforms` (`pc`, `n64`, `n3ds`: model, material, scale, visible, disabled); v2 scenes and v1 prefabs migrate; `resolve_for`; `bake_scene_for` per platform in the PC, N64 and 3DS bakes; `scene export --platform`; `scene check` flags models a platform does not bake; Inspector › Platforms (grid of three columns with the N64 cost per draw, stacked when narrow); the Game view, Play here and `TRINO_SIM` scene player show their platform's variant | `crates/scene/tests/platform_variants.rs` (RON both ways, migrations, resolve per platform, prefab parts, TSCN + codegen per platform), `asset-pipeline` per-platform scene bake, `scene_cli` export test, editor widget tests and the kittest flow `platform_variants_reach_the_game_view_and_the_file` (pick a variant in the Inspector → the N64 Game view draws the other model; save → the file has it; an external edit → the editor reloads it). Colliders stay the PC ones by design (deterministic games) |
+| Editor layout audit (`layout_audit.rs`) and the fixes it found at 960x600: Inspector rows truncate and size their sliders from the space left, the Assets tabs wrap, long scene paths elide at the start (toolbar) or truncate (status bar), the dock keeps the Hierarchy ≥ 200 px and the Inspector ≥ 300 px; hooks `TRINO_EDITOR_SIZE` and `TRINO_EDITOR_INSPECT` | `ui_tests::editor_layout_is_clean_at_minimum_and_default_sizes` (whole window, 960x600 and 1600x940, scene settings / entity / Game view), screenshots at both sizes |
+
 ## Done — color slots and a per-draw palette (2026-10-15, branch `vertex-color-slots`)
 
 | Item | Evidence |

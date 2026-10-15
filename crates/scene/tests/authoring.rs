@@ -1,4 +1,4 @@
-//! The authored text formats on disk — scenes (v2, v1 migration),
+//! The authored text formats on disk — scenes (v3, v2 and v1 migration),
 //! prefabs and materials — and the entity-tree edits the editor and agents
 //! make: what goes into a file is what comes back out, and every version
 //! or parse problem is a readable error.
@@ -19,7 +19,7 @@ fn scenes_round_trip_through_files_with_every_component() {
     let scene = common::scene();
     scene.save(&path).unwrap();
     let text = std::fs::read_to_string(&path).unwrap();
-    assert!(text.contains("version: 2"));
+    assert!(text.contains("version: 3"));
     let back = Scene::load(&path).unwrap();
     assert_eq!(back, scene);
     assert_eq!(back.to_ron(), text, "stable text: clean diffs");

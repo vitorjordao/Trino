@@ -126,6 +126,8 @@ pub struct PcRenderer {
     strict: bool,
     /// The 3DS profile's touch screen (320×240, 2D only).
     second: Option<SecondScreen>,
+    /// "name (backend)" of the GPU adapter.
+    adapter_name: String,
     /// Where draws go now (0 main, 1 second) and whether the main screen
     /// was already rendered this frame (`set_screen(1)` renders it).
     screen: u8,
@@ -261,7 +263,7 @@ impl PcRenderer {
     /// sharing eframe's device lets the offscreen texture be registered
     /// directly as an egui texture (render-to-texture, zero copies).
     pub fn with_device(device: wgpu::Device, queue: wgpu::Queue, profile: SimProfile) -> Self {
-        Self::build(device, queue, None, profile)
+        Self::build(device, queue, None, profile, "editor device".into())
     }
 
     async fn init(
@@ -327,7 +329,9 @@ impl PcRenderer {
             SurfaceState { surface, config }
         });
 
-        Ok(Self::build(device, queue, surface, profile))
+        let info = adapter.get_info();
+        let name = format!("{} ({:?})", info.name, info.backend);
+        Ok(Self::build(device, queue, surface, profile, name))
     }
 
     fn build(
@@ -335,6 +339,7 @@ impl PcRenderer {
         queue: wgpu::Queue,
         surface: Option<SurfaceState>,
         profile: SimProfile,
+        adapter_name: String,
     ) -> Self {
         let internal_size = profile.internal_resolution();
         let mut caps = profile.caps();
@@ -804,6 +809,7 @@ impl PcRenderer {
             second,
             screen: 0,
             main_done: false,
+            adapter_name,
         }
     }
 
@@ -1015,6 +1021,17 @@ impl PcRenderer {
             Some(sc) => self.read_texture(&sc.tex, sc.size),
             None => Vec::new(),
         }
+    }
+
+    /// Block until the GPU has finished everything submitted (frame-time
+    /// measurements include the GPU's work).
+    pub fn wait_gpu(&self) {
+        let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+    }
+
+    /// The adapter's name and backend (for performance reports).
+    pub fn adapter_info(&self) -> String {
+        self.adapter_name.clone()
     }
 
     /// Read the internal framebuffer back as tightly-packed RGBA8.

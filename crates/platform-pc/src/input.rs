@@ -408,6 +408,9 @@ pub struct PcInput {
     capture: Option<(Button, BindDevice)>,
     /// The bindings changed since [`PcInput::take_changed`] (persist them).
     changed: bool,
+    /// The pad button that just completed a rebind: it presses nothing
+    /// until released (else the game would see the press that bound it).
+    held_after_bind: Option<PadButton>,
     #[cfg(feature = "gamepad")]
     pads: Option<gilrs::Gilrs>,
 }
@@ -507,6 +510,7 @@ impl PcInput {
             self.bindings.bind_pad(button, pad);
             self.capture = None;
             self.changed = true;
+            self.held_after_bind = Some(pad);
             return true;
         }
         false
@@ -678,11 +682,19 @@ impl PcInput {
             self.pad_pressed(p);
         }
         let bindings = self.bindings;
+        let held = self.held_after_bind;
+        let Some(g) = self.pads.as_mut() else { return };
+        if let Some(h) = held
+            && !g.gamepads().any(|(_, p)| p.is_pressed(h.to_gilrs()))
+        {
+            self.held_after_bind = None;
+        }
+        let held = self.held_after_bind;
         let Some(g) = self.pads.as_mut() else { return };
         for (_, pad) in g.gamepads() {
             for (i, to) in BINDABLE.iter().enumerate() {
                 for from in bindings.pad[i].iter().flatten() {
-                    if pad.is_pressed(from.to_gilrs()) {
+                    if Some(*from) != held && pad.is_pressed(from.to_gilrs()) {
                         state.set(*to, true);
                         state.pad = true;
                     }

@@ -27,6 +27,7 @@ pub mod game;
 pub mod input;
 pub mod math;
 pub mod math3d;
+pub mod memo;
 pub mod particles;
 pub mod perf;
 pub mod physics;

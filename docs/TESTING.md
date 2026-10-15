@@ -152,6 +152,9 @@ the wgpu backend and read pixels back.
 | `Software T&L: near and guard-band clipping, depth splits` | `crates/core/tests/tessellate.rs::geometry_crossing_the_near_plane_is_clipped_into_the_guard_band` |
 | `Software T&L: textured draws` | `crates/core/tests/tessellate.rs::textured_draws_carry_uvs_and_view_depth`, `crates/platform-pc/tests/render_e2e.rs::baked_models_light_fog_depth_textures_and_billboards` |
 | `Software T&L: TnlContext and TnlScratch reuse` | `crates/core/tests/tessellate.rs::tessellate_with_reuses_context_and_scratch_bit_identically` |
+| `Draw command memo (trino_core::memo)` | `crates/core/tests/memo.rs::a_repeated_draw_hits_and_anything_it_depends_on_misses`, `crates/core/tests/memo.rs::only_plain_draws_are_memoized`, `crates/core/tests/memo.rs::a_full_memo_replaces_and_an_empty_one_never_hits` |
+| `RSP eligibility from a given view·model (rsp_eligible_mv)` | `crates/core/tests/tessellate.rs::rsp_eligibility_with_a_given_view_model_product_matches` |
+| `Saturating float→int (math3d::to_i32)` | `crates/core/tests/math.rs::to_i32_matches_the_saturating_cast_everywhere` |
 | `RSP eligibility and split policy` | `crates/core/tests/tessellate.rs::split_policy_and_rsp_eligibility_follow_the_draw`, `crates/core/tests/tessellate.rs::degenerate_flat_skinned_and_multi_segment_meshes` |
 | `Z-buffered occlusion` | `crates/platform-pc/tests/render_e2e.rs::baked_models_light_fog_depth_textures_and_billboards`, `xtask/tests/engine_checks.rs::engine_checks_pass_on_pc` |
 | `Caps and strict mode` | `crates/core/tests/perf_caps.rs::caps_validate_textures_per_console`, `crates/platform-pc/tests/render_e2e.rs::n64_look_and_strict_mode_budgets`, `crates/platform-pc/tests/golden.rs::strict_mode_rejects_texture_over_budget`, `crates/platform-pc/tests/golden.rs::strict_mode_rejects_3d_over_the_n64_time_ceiling` |

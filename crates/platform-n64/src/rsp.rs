@@ -143,12 +143,9 @@ pub fn build(mesh: &Mesh) -> Option<RspMesh> {
 /// so z / 2w = 1 - NEAR / depth like the CPU path's z-buffer value. The
 /// half on w: the RSP's 32-bit reciprocal (vrcph/vrcpl) of an s15.16 value
 /// comes out as 1 / 2w in s15.16 (measured by the oracle).
-pub fn clip_matrix(ctx: &TnlContext, model: &Mat34) -> [[f32; 4]; 4] {
-    clip_matrix_mv(ctx, &ctx.projection().0.mul(model))
-}
-
-/// [`clip_matrix`] from the draw's `view · model` product (`mv`), which
-/// the eligibility test already needed ([`trino_core::render3d::rsp_eligible_mv`]).
+///
+/// `mv` is the draw's `view · model` product, which the eligibility test
+/// already needed ([`trino_core::render3d::rsp_eligible_mv`]).
 pub fn clip_matrix_mv(ctx: &TnlContext, mv: &Mat34) -> [[f32; 4]; 4] {
     let (_, focal, screen) = ctx.projection();
     let mv = mv.m;

@@ -7,6 +7,7 @@ use alloc::rc::Rc;
 use alloc::vec::Vec;
 use core::ffi::c_void;
 
+use trino_core::memo::{self, MemoKey, MemoSlot};
 use trino_core::perf::RenderProfile;
 use trino_core::render3d::{
     Camera3, DEFAULT_LIGHT, Light, Mesh, MeshLayout, NEAR_PLANE, ScreenTri, TnlContext, TnlScratch,
@@ -73,7 +74,17 @@ pub struct N64Renderer {
     /// at equal depth an RSP draw no longer wins over a CPU triangle that
     /// comes later in the same batch (castle64's door-on-wall).
     rsp_stream: bool,
+    /// Last frames' RSP commands by draw (`trino_core::memo`): a draw that
+    /// repeats under an unchanged camera and light skips the eligibility
+    /// test and the command build (~100 µs each on the console).
+    memo: Vec<MemoSlot<{ rsp::DRAW_WORDS }>>,
+    /// Bumped whenever the camera, the light, the meshes or the cull mode
+    /// change: older memo entries then never match.
+    memo_gen: u32,
 }
+
+/// Memo slots (176 bytes each): a few hundred draws per frame rarely share one.
+const MEMO_SLOTS: usize = 1024;
 
 impl N64Renderer {
     /// Start timing every stage and model (see `trino_core::perf`).
@@ -126,6 +137,8 @@ impl N64Renderer {
             pending_rsp: Vec::new(),
             rsp_cull: 0,
             rsp_stream: false,
+            memo: alloc::vec![MemoSlot::EMPTY; MEMO_SLOTS],
+            memo_gen: 0,
         }
     }
 
@@ -269,6 +282,7 @@ impl N64Renderer {
             self.rsp_meshes.insert(id, rm);
         }
         self.meshes.insert(id, (tmdl, layout));
+        self.memo_gen = self.memo_gen.wrapping_add(1);
         true
     }
 
@@ -294,6 +308,7 @@ impl N64Renderer {
     /// Override the overlay's back-face cull mode (tests).
     pub fn set_rsp_cull(&mut self, cull: u32) {
         self.rsp_cull = cull;
+        self.memo_gen = self.memo_gen.wrapping_add(1);
     }
 
     /// RSP oracle: draw `model` through the overlay with its screen
@@ -416,6 +431,39 @@ fn emit_tri_tex(tri: &ScreenTri) {
     unsafe { ffi::trino_tri_tex(v.as_ptr()) }
 }
 
+impl N64Renderer {
+    /// Queue one RSP draw command. Streaming: hand the overlay a chunk as
+    /// soon as it is full (and the batch holds no CPU triangles), so the
+    /// RSP starts while the CPU is still issuing draws. Single-draw
+    /// streaming hung the RDP in ares under heavy 2D traffic (see the
+    /// n64-performance skill); chunks keep the proven burst pattern.
+    fn queue_rsp(&mut self, words: [u32; rsp::DRAW_WORDS]) {
+        self.pending_rsp.push(words);
+        if self.rsp_stream
+            && self.pending_tris.is_empty()
+            && self.pending_rsp.len() >= RSP_STREAM_CHUNK
+        {
+            for w in &self.pending_rsp {
+                unsafe { ffi::trino_rsp_draw(w.as_ptr()) };
+            }
+            self.pending_rsp.clear();
+        }
+    }
+
+    /// Statistics and profile of one RSP draw of `tris` triangles.
+    fn count_rsp(&mut self, model: ModelId, t0: u32, tris: u32) {
+        let tnl = TnlStats {
+            rsp_draws: 1,
+            rsp_tris: tris,
+            ..TnlStats::default()
+        };
+        self.frame_stats.tnl.add(&tnl);
+        if let Some(p) = &mut self.profile {
+            p.record_model(model, now_us().wrapping_sub(t0), &tnl);
+        }
+    }
+}
+
 /// Draws per streamed RSP chunk ([`N64Renderer::set_rsp_stream`]).
 const RSP_STREAM_CHUNK: usize = 8;
 
@@ -447,15 +495,23 @@ impl Renderer for N64Renderer {
 
     fn set_camera(&mut self, camera: &Camera3) {
         self.flush_model_batch();
-        self.camera = *camera;
-        self.tnl_ctx = TnlContext::new(&self.camera, &self.light, SCREEN);
+        // The same camera every frame (most frames of most games) keeps
+        // the T&L constants and the memo.
+        if *camera != self.camera {
+            self.camera = *camera;
+            self.tnl_ctx = TnlContext::new(&self.camera, &self.light, SCREEN);
+            self.memo_gen = self.memo_gen.wrapping_add(1);
+        }
     }
 
     fn set_light(&mut self, light: &Light) {
         // Lighting is resolved into vertex colors at tessellation time, so
         // a change needs no batch flush.
-        self.light = *light;
-        self.tnl_ctx = TnlContext::new(&self.camera, &self.light, SCREEN);
+        if *light != self.light {
+            self.light = *light;
+            self.tnl_ctx = TnlContext::new(&self.camera, &self.light, SCREEN);
+            self.memo_gen = self.memo_gen.wrapping_add(1);
+        }
     }
 
     fn draw_model(
@@ -475,6 +531,23 @@ impl Renderer for N64Renderer {
         _material: Material,
         params: &ModelParams,
     ) {
+        // A draw that repeats under the same camera and light: last
+        // frame's command.
+        let key = if self.rsp_on {
+            MemoKey::new(model.0, self.memo_gen, matrix, params)
+        } else {
+            None
+        };
+        if let Some(k) = &key
+            && let Some(hit) = memo::find(&self.memo, k)
+        {
+            let t0 = self.tick();
+            let (words, tris) = (hit.words, hit.extra);
+            self.frame_stats.models += 1;
+            self.queue_rsp(words);
+            self.count_rsp(model, t0, tris);
+            return;
+        }
         let Some((tmdl, layout)) = self.meshes.get(&model.0) else {
             return;
         };
@@ -494,30 +567,12 @@ impl Renderer for N64Renderer {
             let t0 = self.tick();
             let cull = if d.cull_back { self.rsp_cull } else { 2 };
             let words = rsp::draw_words(&self.tnl_ctx, &mv, &d, params.tint, rm, cull, 0);
-            self.pending_rsp.push(words);
-            // Streaming: hand the overlay a chunk as soon as it is full (and
-            // the batch holds no CPU triangles), so the RSP starts while the
-            // CPU is still issuing draws. Single-draw streaming hung the RDP
-            // in ares under heavy 2D traffic (see the n64-performance skill);
-            // chunks keep the proven burst pattern.
-            if self.rsp_stream
-                && self.pending_tris.is_empty()
-                && self.pending_rsp.len() >= RSP_STREAM_CHUNK
-            {
-                for w in &self.pending_rsp {
-                    unsafe { ffi::trino_rsp_draw(w.as_ptr()) };
-                }
-                self.pending_rsp.clear();
+            let tris = (mesh.index_count / 3) as u32;
+            if let Some(k) = key {
+                memo::store(&mut self.memo, k, words, tris);
             }
-            let tnl = TnlStats {
-                rsp_draws: 1,
-                rsp_tris: (mesh.index_count / 3) as u32,
-                ..TnlStats::default()
-            };
-            self.frame_stats.tnl.add(&tnl);
-            if let Some(p) = &mut self.profile {
-                p.record_model(model, now_us().wrapping_sub(t0), &tnl);
-            }
+            self.queue_rsp(words);
+            self.count_rsp(model, t0, tris);
             return;
         }
         let texture = mesh

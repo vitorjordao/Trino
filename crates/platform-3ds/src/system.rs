@@ -58,6 +58,10 @@ impl Platform for N3dsPlatform {
         self.blobs.get(&id.0).copied()
     }
 
+    fn second_screen(&self) -> Option<(u16, u16)> {
+        Some((320, 240))
+    }
+
     fn save_capacity(&self) -> usize {
         Caps::N3DS.save_bytes as usize - HEADER
     }

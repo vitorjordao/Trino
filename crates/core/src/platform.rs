@@ -114,6 +114,13 @@ pub trait Platform {
         Err(SaveError::Unsupported)
     }
 
+    /// The second screen's size (3DS touch screen, or the PC's 3DS profile),
+    /// known at update time (the renderer's
+    /// [`second_screen`](crate::Renderer::second_screen) is the same).
+    fn second_screen(&self) -> Option<(u16, u16)> {
+        None
+    }
+
     /// The window/monitor/picture sizes and display settings, on platforms
     /// where they can change (PC). `None` on consoles.
     fn display(&self) -> Option<DisplayInfo> {

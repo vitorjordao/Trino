@@ -146,7 +146,10 @@ impl PcInput {
                 ..
             } => self.handle_key(*code, *state == ElementState::Pressed),
             WindowEvent::CursorMoved { position, .. } => {
-                self.handle_pointer(renderer.window_to_game(position.x, position.y));
+                match renderer.window_to_pointer(position.x, position.y) {
+                    Some((p, screen)) => self.handle_pointer_on(Some(p), screen),
+                    None => self.handle_pointer(None),
+                }
             }
             WindowEvent::CursorLeft { .. } => self.handle_pointer(None),
             WindowEvent::MouseInput { state, button, .. } => {
@@ -164,7 +167,14 @@ impl PcInput {
 
     /// Mouse moved: `pos` in game pixels, `None` outside the picture.
     pub fn handle_pointer(&mut self, pos: Option<Vec2>) {
+        self.handle_pointer_on(pos, 0);
+    }
+
+    /// Mouse moved onto screen `screen` (1 = the simulated 3DS touch
+    /// screen), `pos` in that screen's pixels.
+    pub fn handle_pointer_on(&mut self, pos: Option<Vec2>, screen: u8) {
         self.state.pointer = pos;
+        self.state.pointer_screen = screen;
     }
 
     /// Feed a winit mouse button event.

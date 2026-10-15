@@ -311,6 +311,14 @@ RDP).
   scale (`sim::native_internal`), its aspect within 4:3..21:9 (bars beyond).
   `PcRenderer::present_preview` composes what a window shows, for tests.
 
+- **Two screens (2026-10-14):** `Renderer::second_screen`/`set_screen` (3DS touch
+  screen, 2D only; main screen first, then the second, once per frame),
+  `Platform::second_screen` (known at update time), `InputState::pointer_screen`
+  (3DS touches are bottom-screen pixels on screen 1). The PC's 3DS profile renders
+  and presents both screens stacked, maps the mouse to either, and
+  `present_preview`/`read_second_screen` capture them; the 3DS host dumps the touch
+  screen as the next golden (`dump_framebuffer_bottom`).
+
 PC keyboard mapping: A/B = Z/X, X/Y = C/V, L/R = Q/E, Start = Enter,
 Select = Right Shift, D-pad = arrows, stick = WASD (see `crates/platform-pc/src/input.rs`).
 On top of it, `InputState::keys` carries PC keys (`trino_core::Key`: Esc, Enter,

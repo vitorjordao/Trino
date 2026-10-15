@@ -23,6 +23,8 @@ pub struct PcPlatform {
     display: Option<DisplayInfo>,
     /// The game's last [`Platform::set_display`], for the host to apply.
     display_request: Option<DisplaySettings>,
+    /// The simulated second screen (3DS profile).
+    second_screen: Option<(u16, u16)>,
 }
 
 impl PcPlatform {
@@ -36,7 +38,13 @@ impl PcPlatform {
             save_capacity: caps.save_bytes as usize,
             display: None,
             display_request: None,
+            second_screen: None,
         }
+    }
+
+    /// The host says the renderer has a second screen (3DS profile).
+    pub fn set_second_screen(&mut self, size: Option<(u16, u16)>) {
+        self.second_screen = size;
     }
 
     /// The host publishes the display state (window, monitor, picture).
@@ -113,6 +121,10 @@ impl Platform for PcPlatform {
 
     fn display(&self) -> Option<DisplayInfo> {
         self.display
+    }
+
+    fn second_screen(&self) -> Option<(u16, u16)> {
+        self.second_screen
     }
 
     fn set_display(&mut self, settings: DisplaySettings) {

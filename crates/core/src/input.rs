@@ -104,6 +104,10 @@ pub struct InputState {
     pub wheel: f32,
     /// PC keyboard keys held ([`Key`] bits). 0 on consoles.
     pub keys: u32,
+    /// Which screen `pointer` is on: 0 = the main screen, 1 = the second
+    /// screen (3DS touch screen, `Renderer::second_screen`), in that
+    /// screen's own pixels.
+    pub pointer_screen: u8,
     /// A gamepad button or stick was active this frame (PC): games can show
     /// pad button names instead of keyboard keys.
     pub pad: bool,

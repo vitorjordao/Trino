@@ -34,7 +34,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
-use trino_core::{DisplayInfo, DisplaySettings, Game, Input, Vec2};
+use trino_core::{DisplayInfo, DisplaySettings, Game, Input, Renderer, Vec2};
 use trino_platform_pc::{PcAudio, PcInput, PcPlatform, PcRenderer, SimProfile};
 
 use winit::application::ApplicationHandler;
@@ -252,6 +252,7 @@ impl Host {
                 .expect("failed to initialize wgpu renderer");
         let mut audio = PcAudio::new();
         let mut platform = PcPlatform::new(&self.profile.caps()).with_save_file(cfg.save_file());
+        platform.set_second_screen(renderer.second_screen().map(|s| (s.x as u16, s.y as u16)));
         trino_asset_pipeline::bake_all(
             &cfg.assets_dir(),
             trino_asset_pipeline::Platform::Pc,

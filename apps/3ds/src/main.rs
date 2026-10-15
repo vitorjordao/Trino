@@ -225,7 +225,9 @@ mod n3ds {
                     // perf scene, fresh game): `cargo xtask test 3ds`
                     // compares it with tests/golden/3ds/castle64_hub.png
                     // within a tolerance, and xtask/tests/n3ds_parity.rs
-                    // holds the PC's N3ds look to the same image.
+                    // holds the PC's N3ds look to the same image. Then the
+                    // touch screen of the same frame (castle64's map panel:
+                    // 2D plus a 3D star), castle64_hub_bottom.png.
                     runtime::log("TRINO_STEP:golden frame\n");
                     let hub = &castle64::perf::SCENES[0];
                     let mut g = alloc::boxed::Box::new(castle64::perf::scene_game(
@@ -237,6 +239,7 @@ mod n3ds {
                         g.render(renderer);
                     }
                     renderer.dump_framebuffer();
+                    renderer.dump_framebuffer_bottom();
                     runtime::log("TRINO_TEST_PASS\n");
                 }
             }

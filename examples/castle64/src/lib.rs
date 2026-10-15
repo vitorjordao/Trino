@@ -10,6 +10,11 @@
 //! Controles (PC entre parênteses): stick/d-pad move relativo à câmera,
 //! A (Z) pula, L/R (Q/E) giram a câmera, B (X) volta ao hub, Start (Enter)
 //! reinicia a fase.
+//!
+//! Two screens (3DS, and the PC's 3DS profile): the bottom screen shows a
+//! map of the level, the counters around a spinning 3D star, and touch
+//! buttons (camera left/right, back to the hub). Single-screen targets skip
+//! it (`Renderer::on_screen` says no).
 
 #![cfg_attr(any(target_os = "none", target_os = "horizon"), no_std)]
 
@@ -24,8 +29,8 @@ use trino_core::math3d::{atan2, cos, sin};
 use trino_core::physics::{self, Aabb, move_aabb};
 use trino_core::{
     Audio, BillboardParams, Button, Camera3, Color, DEFAULT_LIGHT, FontId, Game, InputState,
-    Material, ModelId, ModelParams, MusicId, Renderer, SoundId, SpriteId, SpriteParams, TextAlign,
-    TextBuf, TextParams, Transform3, Vec2, Vec3,
+    Material, ModelId, ModelParams, MusicId, PointerButton, Rect, Renderer, Screen, SoundId,
+    SpriteId, SpriteParams, TextAlign, TextBuf, TextParams, Transform3, Vec2, Vec3,
 };
 
 // ------------------------------------------------------------ handles ----
@@ -89,6 +94,15 @@ const MAX_ENEMIES: usize = 4;
 const CULL_FAR: f32 = 60.0;
 
 const ENEMY_HALF: Vec3 = Vec3::new(0.3, 0.26, 0.34);
+
+// ------------------------------------------------------ bottom screen ----
+
+/// The level map on the bottom screen (320x240 pixels).
+const PANEL_MAP: Rect = Rect::new(6.0, 26.0, 204.0, 208.0);
+/// Touch buttons: held = the camera turns (like L/R); tapped = B.
+const BTN_CAM_L: Rect = Rect::new(218.0, 152.0, 45.0, 34.0);
+const BTN_CAM_R: Rect = Rect::new(269.0, 152.0, 45.0, 34.0);
+const BTN_HUB: Rect = Rect::new(218.0, 194.0, 96.0, 34.0);
 
 // ------------------------------------------------------------- state ----
 
@@ -299,11 +313,12 @@ impl Game for Castle64Game {
         self.level_time += dt;
         let l = self.cur();
 
-        // Câmera orbital: L/R giram em torno do player.
-        if input.is_down(Button::L) {
+        // Câmera orbital: L/R (ou os botões da tela de baixo) giram em
+        // torno do player.
+        if input.is_down(Button::L) || touching(input, BTN_CAM_L) {
             self.cam_yaw += CAM_SPEED * dt;
         }
-        if input.is_down(Button::R) {
+        if input.is_down(Button::R) || touching(input, BTN_CAM_R) {
             self.cam_yaw -= CAM_SPEED * dt;
         }
 
@@ -454,8 +469,11 @@ impl Game for Castle64Game {
             }
         }
 
-        // B volta ao hub; Start reinicia o nível.
-        if self.level != 0 && input.just_pressed(&self.prev, Button::B) {
+        // B (ou o botão HUB da tela de baixo) volta ao hub; Start
+        // reinicia o nível.
+        let hub_tap =
+            input.pointer_pressed(&self.prev, PointerButton::Primary) && touching(input, BTN_HUB);
+        if self.level != 0 && (input.just_pressed(&self.prev, Button::B) || hub_tap) {
             self.goto_level(0);
             self.prev = *input;
             return;
@@ -825,7 +843,172 @@ impl Game for Castle64Game {
             );
         }
 
+        // ---- Bottom screen (3DS touch screen / PC 3DS profile) ----
+        // Single-screen targets refuse it: no extra work there.
+        if renderer.on_screen(Screen::Bottom) {
+            self.render_bottom(renderer);
+        }
+
         renderer.end_frame();
+    }
+}
+
+/// The pointer holds `button` on the bottom screen (a touch, or the mouse
+/// on the PC's simulated touch screen). Top-screen clicks never count.
+fn touching(input: &InputState, button: Rect) -> bool {
+    input.pointer_down(PointerButton::Primary)
+        && input
+            .pointer_on(Screen::Bottom)
+            .is_some_and(|p| button.contains(p))
+}
+
+/// Map color of a block kind.
+fn map_color(kind: BlockKind) -> Color {
+    match kind {
+        BlockKind::Grass => Color::rgb(76, 150, 64),
+        BlockKind::Stone => Color::rgb(118, 118, 128),
+        BlockKind::Brick => Color::rgb(150, 82, 60),
+        BlockKind::Castle => Color::rgb(196, 186, 164),
+        BlockKind::Roof => Color::rgb(164, 52, 62),
+        BlockKind::Lava => Color::rgb(240, 104, 32),
+    }
+}
+
+impl Castle64Game {
+    /// The bottom screen: a top-down map of the level (2D rectangles), the
+    /// counters around a spinning 3D star (3D on the second screen, with
+    /// its own camera) and the touch buttons. Called after
+    /// `on_screen(Screen::Bottom)` succeeded.
+    fn render_bottom(&self, renderer: &mut dyn Renderer) {
+        let l = self.cur();
+        let label = TextParams {
+            scale: 2.0,
+            ..TextParams::DEFAULT
+        };
+        // Title bar: the level's name.
+        renderer.fill_rect(Rect::new(0.0, 0.0, 320.0, 20.0), Color::rgb(36, 44, 84));
+        renderer.draw_text(F_HUD, Vec2::new(6.0, 1.0), l.name, &label);
+
+        // Map: x to the right, +z (toward the castle at the spawn) up.
+        let (mut lo, mut hi) = (Vec2::new(f32::MAX, f32::MAX), Vec2::new(f32::MIN, f32::MIN));
+        for b in l.blocks {
+            lo = Vec2::new(lo.x.min(b.min.x), lo.y.min(b.min.z));
+            hi = Vec2::new(hi.x.max(b.min.x + b.size.x), hi.y.max(b.min.z + b.size.z));
+        }
+        let span = (hi.x - lo.x).max(hi.y - lo.y).max(1.0);
+        let k = PANEL_MAP.size.x.min(PANEL_MAP.size.y) / span;
+        let origin =
+            PANEL_MAP.pos + (PANEL_MAP.size - Vec2::new(hi.x - lo.x, hi.y - lo.y) * k) * 0.5;
+        let to_map =
+            |x: f32, z: f32| Vec2::new(origin.x + (x - lo.x) * k, origin.y + (hi.y - z) * k);
+        let area = |min: Vec3, size: Vec3| {
+            let p = to_map(min.x, min.z + size.z);
+            Rect {
+                pos: p,
+                size: Vec2::new((size.x * k).max(1.0), (size.z * k).max(1.0)),
+            }
+        };
+        let dot = |at: Vec3, r: f32| {
+            let p = to_map(at.x, at.z);
+            Rect::new(p.x - r, p.y - r, r * 2.0, r * 2.0)
+        };
+        renderer.fill_rect(PANEL_MAP, Color::rgb(10, 12, 22));
+        for b in l.blocks {
+            renderer.fill_rect(area(b.min, b.size), map_color(b.kind));
+        }
+        for m in l.movers {
+            let min = mover_min(m, self.level_time);
+            renderer.fill_rect(area(min, m.size), Color::rgb(170, 170, 190));
+        }
+        for p in l.portals {
+            let open = self.star_count() >= p.need as u32;
+            let c = if open {
+                Color::rgb(255, 225, 140)
+            } else {
+                Color::rgb(90, 90, 96)
+            };
+            renderer.fill_rect(dot(p.pos, 3.0), c);
+        }
+        for (i, c) in l.coins.iter().enumerate() {
+            if self.coins_taken[self.level] & (1 << i) == 0 {
+                renderer.fill_rect(dot(*c, 1.5), Color::rgb(255, 214, 40));
+            }
+        }
+        if let Some(star) = l.star
+            && self.stars & l.star_bit == 0
+        {
+            renderer.fill_rect(dot(star, 3.0), Color::rgb(255, 250, 170));
+        }
+        for i in 0..l.enemies.len().min(MAX_ENEMIES) {
+            if self.enemies[i].alive {
+                renderer.fill_rect(dot(self.enemies[i].pos, 2.5), Color::rgb(200, 40, 40));
+            }
+        }
+        // The player, and a tick where it faces.
+        renderer.fill_rect(dot(self.pos, 3.0), Color::WHITE);
+        let ahead = self.pos + Vec3::new(sin(self.yaw), 0.0, cos(self.yaw)) * (5.0 / k);
+        renderer.fill_rect(dot(ahead, 1.0), Color::WHITE);
+
+        // Counters: a spinning 3D star (its own camera: the bottom screen
+        // projects to 320x240) over the star count, then the coins.
+        renderer.set_camera(&Camera3 {
+            eye: Vec3::new(0.0, 0.0, -4.0),
+            target: Vec3::ZERO,
+            ..Camera3::default()
+        });
+        renderer.draw_model(
+            M_STAR,
+            &Transform3 {
+                // About (266, 54) on the bottom screen. The star is a flat
+                // bipyramid: pitched to face the camera, then spun about
+                // the view axis (Euler XYZ: the roll comes last).
+                position: Vec3::new(2.04, 1.27, 0.0),
+                rotation: Vec3::new(1.25, 0.0, self.level_time * 2.0),
+                scale: Vec3::new(1.1, 1.1, 1.1),
+            },
+            Material::VertexLit,
+            &ModelParams::default(),
+        );
+        let centered = TextParams {
+            align: TextAlign::Center,
+            ..label
+        };
+        let mut buf = TextBuf::<8>::new();
+        let _ = write!(buf, "x{:02}", self.star_count().min(99));
+        renderer.draw_text(F_HUD, Vec2::new(266.0, 88.0), buf.as_str(), &centered);
+        buf.clear();
+        let _ = write!(buf, "x{:02}", self.total_coins().min(99));
+        renderer.draw_sprite(S_COIN, Vec2::new(226.0, 118.0), &SpriteParams::default());
+        renderer.draw_text(F_HUD, Vec2::new(246.0, 118.0), buf.as_str(), &label);
+
+        // Touch buttons, lit while held.
+        let button = |renderer: &mut dyn Renderer, r: Rect, text: &str, on: bool| {
+            let bg = if !on {
+                Color::rgb(44, 48, 64)
+            } else if touching(&self.prev, r) {
+                Color::rgb(90, 130, 220)
+            } else {
+                Color::rgb(60, 80, 140)
+            };
+            let fg = if on {
+                Color::WHITE
+            } else {
+                Color::rgb(110, 110, 120)
+            };
+            renderer.fill_rect(r, bg);
+            renderer.draw_text(
+                F_HUD,
+                r.pos + Vec2::new(r.size.x * 0.5, r.size.y * 0.5 - 10.0),
+                text,
+                &TextParams {
+                    tint: fg,
+                    ..centered
+                },
+            );
+        };
+        button(renderer, BTN_CAM_L, "<", true);
+        button(renderer, BTN_CAM_R, ">", true);
+        button(renderer, BTN_HUB, "HUB", self.level != 0);
     }
 }
 
@@ -1184,6 +1367,98 @@ mod tests {
                 counter.tris
             );
         }
+    }
+
+    /// A touch on the bottom screen's buttons turns the camera (held) and
+    /// goes back to the hub (tapped); the same spot touched on the top
+    /// screen does nothing (touch routing: `InputState::pointer_on`).
+    #[test]
+    fn bottom_screen_buttons_turn_the_camera_and_go_to_the_hub() {
+        let mut a = audio();
+        let touch = |screen: Screen, at: Rect| {
+            let mut s = InputState::default();
+            s.pointer = Some(at.pos + at.size * 0.5);
+            s.pointer_screen = screen.index();
+            s.set_pointer_button(PointerButton::Primary, true);
+            s
+        };
+        let mut g = game();
+        g.goto_level(1);
+        settle(&mut g, &mut a);
+        let yaw = g.cam_yaw;
+        g.update(&touch(Screen::Top, BTN_CAM_L), &mut a, DT);
+        g.update(&touch(Screen::Top, BTN_HUB), &mut a, DT);
+        assert_eq!(g.cam_yaw, yaw, "top-screen clicks are not touch buttons");
+        assert_eq!(g.level, 1);
+        g.update(&InputState::default(), &mut a, DT);
+        g.update(&touch(Screen::Bottom, BTN_CAM_L), &mut a, DT);
+        assert!(g.cam_yaw > yaw, "held < turns like L");
+        let left = g.cam_yaw;
+        g.update(&touch(Screen::Bottom, BTN_CAM_R), &mut a, DT);
+        assert!(g.cam_yaw < left, "held > turns like R");
+        g.update(&InputState::default(), &mut a, DT);
+        g.update(&touch(Screen::Bottom, BTN_HUB), &mut a, DT);
+        assert_eq!(g.level, 0, "a HUB tap is B");
+    }
+
+    /// The bottom-screen panel draws only where `on_screen(Bottom)`
+    /// succeeds — with its 3D star and after the top's draws — and adds
+    /// nothing on a single screen.
+    #[test]
+    fn bottom_screen_panel_draws_only_with_a_second_screen() {
+        #[derive(Default)]
+        struct PerScreen {
+            two: bool,
+            screen: u8,
+            rects: [u32; 2],
+            models: [u32; 2],
+            texts: [u32; 2],
+        }
+        impl Renderer for PerScreen {
+            fn caps(&self) -> &trino_core::Caps {
+                &trino_core::Caps::N3DS
+            }
+            fn begin_frame(&mut self, _: Color) {
+                self.screen = 0;
+            }
+            fn draw_sprite(&mut self, _: SpriteId, _: Vec2, _: &SpriteParams) {}
+            fn fill_rect(&mut self, _: Rect, _: Color) {
+                self.rects[self.screen as usize] += 1;
+            }
+            fn draw_text(&mut self, _: FontId, _: Vec2, _: &str, _: &TextParams) {
+                self.texts[self.screen as usize] += 1;
+            }
+            fn draw_model(&mut self, _: ModelId, _: &Transform3, _: Material, _: &ModelParams) {
+                self.models[self.screen as usize] += 1;
+            }
+            fn end_frame(&mut self) {}
+            fn second_screen(&self) -> Option<Vec2> {
+                self.two.then_some(Vec2::new(320.0, 240.0))
+            }
+            fn set_screen(&mut self, screen: u8) {
+                if self.two && screen == 1 {
+                    self.screen = 1;
+                }
+            }
+            fn screen(&self) -> Screen {
+                Screen::from_index(self.screen).unwrap()
+            }
+        }
+        let mut one = PerScreen::default();
+        let mut two = PerScreen {
+            two: true,
+            ..PerScreen::default()
+        };
+        let mut g = game();
+        g.render(&mut one);
+        g.render(&mut two);
+        assert_eq!(one.rects[1] + one.models[1] + one.texts[1], 0);
+        assert_eq!(one.rects[0], 0, "no panel drawn over the top screen");
+        assert_eq!(two.models[0], one.models[0], "the top is the same");
+        assert_eq!(two.texts[0], one.texts[0]);
+        assert_eq!(two.models[1], 1, "the spinning 3D star");
+        assert!(two.rects[1] > 20, "map + buttons: {}", two.rects[1]);
+        assert!(two.texts[1] >= 5, "name, counters, button labels");
     }
 
     /// O bot JOGA o jogo inteiro com inputs reais: 4 estrelas navegando

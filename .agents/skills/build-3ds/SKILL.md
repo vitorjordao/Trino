@@ -46,6 +46,15 @@ citro2d for sprites. `apps/3ds/build.rs` relinks when only the shim object chang
 - Immediate mode (`C3D_ImmSendAttrib`) was the old textured path: ~144 bytes of
   command buffer per triangle, so a full scene could overflow the 256 KB buffer.
 
+**Two screens.** `s_top` (400×240) and `s_bottom` (320×240) are citro2d screen
+targets, and each has a 16-bit depth buffer. `trino_set_screen(1)` begins the
+bottom's scene and switches `s_proj` (the tri3d projection) to the bottom's
+`Mtx_OrthoTilt(0, 320, 240, 0)`. `trino_frame_begin` resets both to the top. On the
+Rust side, `N3dsRenderer::set_screen` only goes 0 → 1 (the PC's order) and rebuilds
+the T&L context at 320×240, and `begin_frame` goes back to 400×240. A 3D draw on the
+bottom with the top's projection lands about 40 px off. The `dual screen` self-test
+step probes for that.
+
 ## The shim rule
 
 Unlike the N64 there is no ABI hazard (both sides are ARM EABI-hf), but the

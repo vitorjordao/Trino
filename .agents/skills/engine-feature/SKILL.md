@@ -67,6 +67,8 @@ A feature is done only when **PC, N64 and 3DS** all run it and an emulator has s
 
 - A self-test step must **assert** what the feature does: probe pixels, read back
   bytes, compare counts. A step that only calls the API and prints proves nothing.
+  Then break the feature on purpose (one line in the PC backend) and make sure the
+  step fails. The first `dual screen` probes passed with a wrong projection.
 - Tests that change the cwd or the environment (`set_current_dir`, `set_var`) race
   with other tests in the same binary. Mark them `#[ignore]` and run them alone
   with `--test-threads=1`, as the editor UI tests do, or don't touch global state.

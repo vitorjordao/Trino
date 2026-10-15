@@ -1,5 +1,6 @@
-//! citro2d sprite renderer (top screen, 400x240) via the shim, plus gouraud
-//! triangles for the engine's software-T&L 3D (`trino_core::render3d`).
+//! citro2d sprite renderer (top screen 400x240, touch screen 320x240) via
+//! the shim, plus gouraud triangles for the engine's software-T&L 3D
+//! (`trino_core::render3d`), projected to whichever screen is current.
 
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
@@ -14,13 +15,15 @@ use trino_core::render3d::{
 use trino_core::text::BitmapFont;
 use trino_core::{
     BillboardParams, Caps, Color, FontId, FrameStats, Mat34, Material, ModelId, ModelParams,
-    Renderer, SpriteId, SpriteParams, TextParams, Transform3, Vec2, Vec3,
+    Renderer, Screen, SpriteId, SpriteParams, TextParams, Transform3, Vec2, Vec3,
 };
 
 use crate::ffi;
 
-/// Internal resolution the T&L projects to.
+/// The top screen: the game's picture (what the T&L projects to there).
 const SCREEN: Vec2 = Vec2::new(400.0, 240.0);
+/// The touch screen (`set_screen(1)`).
+const BOTTOM: Vec2 = Vec2::new(320.0, 240.0);
 
 struct SpriteEntry {
     ptr: *mut c_void,
@@ -55,7 +58,7 @@ pub struct N3dsRenderer {
     verts: Vec<f32>,
     /// Depth for the next sprite draw (background before 3D, HUD after).
     sprite_depth: f32,
-    /// 0 = top screen, 1 = touch screen (where 2D draws go now).
+    /// 0 = top screen, 1 = touch screen (where draws go now).
     screen: u8,
     camera: Camera3,
     light: Light,
@@ -86,6 +89,16 @@ impl N3dsRenderer {
             light: DEFAULT_LIGHT,
             caps: Caps::N3DS,
         }
+    }
+
+    /// The current screen's size: what the T&L projects to.
+    fn screen_px(&self) -> Vec2 {
+        if self.screen == 1 { BOTTOM } else { SCREEN }
+    }
+
+    /// Rebuild the T&L constants for the camera, light and current screen.
+    fn rebuild_tnl(&mut self) {
+        self.tnl_ctx = TnlContext::new(&self.camera, &self.light, self.screen_px());
     }
 
     /// Depth-sort (painter tie-break) and rasterize the pending model batch.
@@ -240,21 +253,37 @@ impl Renderer for N3dsRenderer {
     fn begin_frame(&mut self, clear: Color) {
         self.sprite_depth = SPRITE_DEPTH_BG;
         self.frame_stats = FrameStats::default();
-        self.screen = 0;
+        if self.screen != 0 {
+            // The last frame ended on the touch screen: project to the top.
+            self.screen = 0;
+            self.rebuild_tnl();
+        }
         unsafe { ffi::trino_frame_begin(pack_color(clear)) }
     }
 
     fn second_screen(&self) -> Option<Vec2> {
-        Some(Vec2::new(320.0, 240.0))
+        Some(BOTTOM)
     }
 
     fn set_screen(&mut self, screen: u8) {
-        if screen != self.screen {
+        // The top screen first, then the touch screen, once per frame
+        // (like the PC backend, which renders the top on the switch).
+        if screen == 1 && self.screen == 0 {
             self.flush_model_batch();
-            self.screen = screen;
-            // A fresh scene: 2D depth starts over on the other screen.
+            self.screen = 1;
+            // A fresh scene: 2D depth starts over on the other screen, and
+            // 3D projects to its size (the shim swaps the projection).
             self.sprite_depth = SPRITE_DEPTH_BG;
-            unsafe { ffi::trino_set_screen(screen as u32) }
+            self.rebuild_tnl();
+            unsafe { ffi::trino_set_screen(1) }
+        }
+    }
+
+    fn screen(&self) -> Screen {
+        if self.screen == 1 {
+            Screen::Bottom
+        } else {
+            Screen::Top
         }
     }
 
@@ -308,14 +337,14 @@ impl Renderer for N3dsRenderer {
     fn set_camera(&mut self, camera: &Camera3) {
         self.flush_model_batch();
         self.camera = *camera;
-        self.tnl_ctx = TnlContext::new(&self.camera, &self.light, SCREEN);
+        self.rebuild_tnl();
     }
 
     fn set_light(&mut self, light: &Light) {
         // Lighting is resolved into vertex colors at tessellation time, so
         // a change needs no batch flush.
         self.light = *light;
-        self.tnl_ctx = TnlContext::new(&self.camera, &self.light, SCREEN);
+        self.rebuild_tnl();
     }
 
     fn draw_model(
@@ -409,7 +438,11 @@ impl Renderer for N3dsRenderer {
     }
 
     fn read_pixel(&mut self, x: u32, y: u32) -> Option<Color> {
-        let c = unsafe { ffi::trino_debug_pixel(x, y) };
+        self.read_screen_pixel(Screen::Top, x, y)
+    }
+
+    fn read_screen_pixel(&mut self, screen: Screen, x: u32, y: u32) -> Option<Color> {
+        let c = unsafe { ffi::trino_debug_pixel(x, y, screen.index() as u32) };
         (c != 0).then(|| Color::rgba((c >> 24) as u8, (c >> 16) as u8, (c >> 8) as u8, c as u8))
     }
 }

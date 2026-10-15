@@ -61,7 +61,7 @@ pub use platform::{
 };
 pub use render::{
     AnimBlend, AnimRef, BillboardParams, ClipId, FontId, FrameStats, Material, MaterialId, ModelId,
-    ModelParams, Palette, Renderer, Shading, SpriteId, SpriteParams, TextAlign, TextParams,
+    ModelParams, Palette, Renderer, Screen, Shading, SpriteId, SpriteParams, TextAlign, TextParams,
     Transform3,
 };
 pub use render3d::{

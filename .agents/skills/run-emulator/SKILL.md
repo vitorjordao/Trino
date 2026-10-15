@@ -13,7 +13,7 @@ cargo xtask watch n64          # rebuild ROM + relaunch ares on every save
 
 cargo xtask run 3ds            # build + open the game in Azahar
 cargo xtask test 3ds           # build test app + assert TRINO_TEST_PASS + golden frame (300s timeout)
-cargo xtask test 3ds --bless   # same, rewriting tests/golden/3ds/castle64_hub.png
+cargo xtask test 3ds --bless   # same, rewriting tests/golden/3ds/castle64_hub.png + castle64_hub_bottom.png
 cargo xtask build 3ds --selftest && cargo xtask test 3ds --no-build   # build, boot later
 cargo xtask watch 3ds          # rebuild .3dsx + relaunch Azahar on every save
 ```
@@ -55,7 +55,13 @@ detects it and runs `run_self_test` (`apps/<console>/src/…`):
 4. On N64, the golden frame (showcase).
 5. castle64 physics and a bot that plays a full stage.
 6. N64: the perf scenes (`TRINO_PERF_SCENE:` / `TRINO_PERF_MODEL:` lines, gated —
-   the `n64-performance` skill). 3DS: the golden frame (castle64 hub perf scene).
+   the `n64-performance` skill). 3DS: the golden frames (castle64 hub perf scene:
+   the top screen, then the same frame's touch screen, `castle64_hub_bottom.png`).
+
+The `dual screen` step probes both 3DS screens through `read_screen_pixel(Screen, ..)`
+(`trino_debug_pixel(x, y, bottom)` in the shim), drawing the probed frame three
+times because both LCDs are double-buffered. ares logs `dual screen single screen
+(collapsed)`: `on_screen(Bottom)` must say no there.
 
 It prints `TRINO_TEST_PASS` or `TRINO_TEST_FAIL:<reason>` on the debug channel. The
 harness matches the strings, kills the emulator and sets the exit code. New console

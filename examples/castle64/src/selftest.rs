@@ -9,8 +9,9 @@
 use trino_core::math3d::{cos, sin};
 use trino_core::{
     BakedScene, BillboardParams, BlobId, Camera3, Cells, Color, DEFAULT_LIGHT, Effect, Emitter,
-    EntityStore, FontId, Impostor, Material, ModelId, ModelParams, ParticleSystem, Platform, Rect,
-    Renderer, Shading, SpriteId, TextBuf, TextParams, Transform3, Vec2, Vec3,
+    EntityStore, FontId, Impostor, InputState, Material, ModelId, ModelParams, ParticleSystem,
+    Platform, Rect, Renderer, Screen, Shading, SpriteId, TextBuf, TextParams, Transform3, Vec2,
+    Vec3,
 };
 
 /// The HUD font (also what the checks measure).
@@ -50,6 +51,12 @@ pub fn engine_checks(
     platform.log("TRINO_STEP:fill rect\n");
     if fill_rect(renderer)? {
         platform.log("TRINO_STEP:fill rect probed\n");
+    }
+    platform.log("TRINO_STEP:dual screen\n");
+    if dual_screen(renderer)? {
+        platform.log("TRINO_STEP:dual screen probed both screens\n");
+    } else if renderer.screen_size(Screen::Bottom).is_none() {
+        platform.log("TRINO_STEP:dual screen single screen (collapsed)\n");
     }
     platform.log("TRINO_STEP:smooth skin\n");
     smooth_skin(renderer)?;
@@ -148,6 +155,135 @@ pub fn fill_rect(renderer: &mut dyn Renderer) -> Result<bool, &'static str> {
         let close = |a: u8, b: u8| (a as i32 - b as i32).abs() <= 40;
         if !(close(got.r, want[0]) && close(got.g, want[1]) && close(got.b, want[2])) {
             return Err("fill_rect: wrong color (opaque, blended or outside)");
+        }
+    }
+    Ok(true)
+}
+
+/// Two screens: `Renderer::on_screen` / `screen_size` /
+/// `read_screen_pixel` and touch routing (`InputState::pointer_on`).
+///
+/// - A bottom-screen pointer is never reported to top-screen picking.
+/// - With a second screen (3DS, the PC's 3DS profile): a strip on each
+///   screen and the quadrant card in 3D on the bottom, then both screens
+///   read back. The card's quadrants are probed where the *bottom's*
+///   320x240 projection puts them (a top-screen projection leaking through
+///   misses them), the top keeps its clear color where the card would land
+///   there, and neither strip shows on the other screen (no missing or
+///   shared framebuffer). Going back to the top after the bottom must be
+///   refused.
+/// - With one screen (N64, PC native): `on_screen(Bottom)` says no and
+///   draws stay on the top: `Ok(false)`, also where read-back is missing.
+pub fn dual_screen(renderer: &mut dyn Renderer) -> Result<bool, &'static str> {
+    let mut touch = InputState::default();
+    touch.pointer = Some(Vec2::new(40.0, 30.0));
+    touch.pointer_screen = Screen::Bottom.index();
+    if touch.pointer_on(Screen::Top).is_some() {
+        return Err("dual screen: a bottom-screen touch reached top-screen picking");
+    }
+    if touch.pointer_on(Screen::Bottom) != Some(Vec2::new(40.0, 30.0)) {
+        return Err("dual screen: a bottom-screen touch is missing on the bottom");
+    }
+    let top = renderer
+        .screen_size(Screen::Top)
+        .ok_or("dual screen: no top screen")?;
+    let Some(bottom) = renderer.screen_size(Screen::Bottom) else {
+        renderer.begin_frame(Color::BLACK);
+        let refused = !renderer.on_screen(Screen::Bottom);
+        let stayed = renderer.screen() == Screen::Top && renderer.on_screen(Screen::Top);
+        renderer.end_frame();
+        if !(refused && stayed) {
+            return Err("dual screen: a single-screen target left the top screen");
+        }
+        return Ok(false);
+    };
+    let camera = Camera3 {
+        eye: Vec3::new(0.0, 0.0, -1.2),
+        target: Vec3::ZERO,
+        fov_y: 60.0 * core::f32::consts::PI / 180.0,
+    };
+    let unlit = ModelParams {
+        shading: Shading::Unlit,
+        ..ModelParams::DEFAULT
+    };
+    let clear = [0, 0, 120];
+    let (yellow, cyan) = (Color::rgb(255, 255, 0), Color::rgb(0, 255, 255));
+    // Several identical frames: the 3DS LCDs are double-buffered.
+    for _ in 0..3 {
+        renderer.begin_frame(Color::rgb(clear[0], clear[1], clear[2]));
+        if !renderer.on_screen(Screen::Top) {
+            return Err("dual screen: on_screen(Top) refused at the frame's start");
+        }
+        renderer.fill_rect(Rect::new(0.0, 0.0, top.x, 16.0), yellow);
+        if !renderer.on_screen(Screen::Bottom) {
+            return Err("dual screen: on_screen(Bottom) refused with a second screen");
+        }
+        renderer.set_camera(&camera);
+        renderer.set_light(&DEFAULT_LIGHT);
+        renderer.draw_model(CARD, &Transform3::default(), Material::VertexLit, &unlit);
+        renderer.fill_rect(Rect::new(0.0, bottom.y - 16.0, bottom.x, 16.0), cyan);
+        if renderer.on_screen(Screen::Top) || renderer.screen() != Screen::Bottom {
+            return Err("dual screen: went back to the top after the bottom");
+        }
+        renderer.end_frame();
+    }
+    let close = |c: Color, want: [u8; 3], tol: i32| {
+        (c.r as i32 - want[0] as i32).abs() <= tol
+            && (c.g as i32 - want[1] as i32).abs() <= tol
+            && (c.b as i32 - want[2] as i32).abs() <= tol
+    };
+    let Some(strip) = renderer.read_screen_pixel(Screen::Top, 8, 8) else {
+        return Ok(false); // backend cannot read back
+    };
+    if !close(strip, [255, 255, 0], 40) {
+        return Err("dual screen: the top strip is missing");
+    }
+    let mid = renderer.read_screen_pixel(Screen::Top, top.x as u32 / 2, top.y as u32 / 2);
+    if !mid.is_some_and(|c| close(c, clear, 40)) {
+        return Err("dual screen: bottom-screen 3D landed on the top screen");
+    }
+    let low = renderer.read_screen_pixel(Screen::Top, 8, top.y as u32 - 8);
+    if !low.is_some_and(|c| close(c, clear, 40)) {
+        return Err("dual screen: the bottom strip landed on the top screen");
+    }
+    let at = |r: &mut dyn Renderer, x: f32, y: f32| {
+        r.read_screen_pixel(Screen::Bottom, x as u32, y as u32)
+    };
+    if !at(renderer, 8.0, bottom.y - 8.0).is_some_and(|c| close(c, [0, 255, 255], 40)) {
+        return Err("dual screen: the bottom strip is missing (no bottom framebuffer?)");
+    }
+    if at(renderer, 8.0, 8.0).is_none_or(|c| close(c, [255, 255, 0], 80)) {
+        return Err("dual screen: the top strip landed on the bottom screen");
+    }
+    // The card through the bottom's projection: near its corners and just
+    // outside its left and right edges. A 400-wide projection shifts the
+    // card 40 px right, enough to move both kinds of probe.
+    let view = camera.view();
+    let half = camera.fov_y * 0.5;
+    let focal = cos(half) / sin(half) * bottom.y * 0.5;
+    let project = |world: Vec3| {
+        let v = view.transform_point(world);
+        (
+            bottom.x * 0.5 + v.x * focal / v.z,
+            bottom.y * 0.5 - v.y * focal / v.z,
+        )
+    };
+    let corners = [
+        (Vec3::new(-0.35, 0.35, -0.05), [255, 0, 0]),
+        (Vec3::new(0.35, 0.35, -0.05), [0, 255, 0]),
+        (Vec3::new(-0.35, -0.35, -0.05), [0, 0, 255]),
+        (Vec3::new(0.35, -0.35, -0.05), [255, 255, 255]),
+    ];
+    for (world, want) in corners {
+        let (x, y) = project(world);
+        if !at(renderer, x, y).is_some_and(|c| close(c, want, 48)) {
+            return Err("dual screen: wrong color in the bottom screen's 3D card");
+        }
+    }
+    for side in [-0.7, 0.7] {
+        let (x, y) = project(Vec3::new(side, 0.0, -0.05));
+        if !at(renderer, x, y).is_some_and(|c| c.r < 60 && c.g < 60 && c.b < 60) {
+            return Err("dual screen: the bottom screen's 3D card is off its projection");
         }
     }
     Ok(true)

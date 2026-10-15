@@ -999,6 +999,19 @@ pub fn rsp_eligible(
     model: &Mat34,
     params: &ModelParams,
 ) -> Option<RspDraw> {
+    rsp_eligible_mv(ctx, mesh, model, &ctx.view.mul(model), params)
+}
+
+/// [`rsp_eligible`] with the draw's `view · model` product already made
+/// (`mv`): a backend that needs it for the draw itself computes it once
+/// (on the N64 a 3×4 product is ~8 µs). Same arithmetic, same answers.
+pub fn rsp_eligible_mv(
+    ctx: &TnlContext,
+    mesh: &Mesh,
+    model: &Mat34,
+    mv: &Mat34,
+    params: &ModelParams,
+) -> Option<RspDraw> {
     if !ctx.white
         || ctx.fog_on
         || params.tint.a < 255
@@ -1010,7 +1023,7 @@ pub fn rsp_eligible(
         return None;
     }
     let (c, r) = mesh.bounds()?;
-    let c = ctx.view.mul(model).transform_point(c);
+    let c = mv.transform_point(c);
     let s = model.axis_scales_sq();
     let r2 = r * r * s.x.max(s.y).max(s.z);
     let inside = |d: f32, k: f32| d > 0.0 && d * d > r2 * k;

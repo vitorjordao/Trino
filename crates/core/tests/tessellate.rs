@@ -666,3 +666,60 @@ fn degenerate_flat_skinned_and_multi_segment_meshes() {
     assert!(segs >= 3, "{segs}");
     assert!(max_verts <= render3d::RSP_SEG_VERTS);
 }
+
+/// `rsp_eligible_mv` (the backend passes its `view · model` product) gives
+/// exactly `rsp_eligible`'s answers: the N64 split must stay the one the
+/// host tests predict.
+#[test]
+fn rsp_eligibility_with_a_given_view_model_product_matches() {
+    let cube = bounded_cube();
+    let mesh = Mesh::from_tmdl(&cube).unwrap();
+    let cams = [
+        Camera3::default(),
+        Camera3 {
+            eye: Vec3::new(6.0, 7.0, 9.0),
+            target: Vec3::new(0.0, 0.0, 0.0),
+            fov_y: 0.8,
+        },
+    ];
+    let mut checked = (0, 0);
+    for cam in &cams {
+        let ctx = TnlContext::new(cam, &DEFAULT_LIGHT, SCREEN);
+        let view = ctx.projection().0;
+        for i in 0..400 {
+            let f = i as f32;
+            let m = Mat34::from_rotation_scale_translation(
+                Vec3::new(0.0, (i % 4) as f32 * core::f32::consts::FRAC_PI_2, 0.0),
+                {
+                    let k = 0.2 + (i % 7) as f32 * 0.4;
+                    Vec3::new(k, k, k)
+                },
+                Vec3::new(
+                    (f * 0.37).sin() * 12.0,
+                    (f * 0.11).cos(),
+                    (f * 0.23).cos() * 12.0 - 4.0,
+                ),
+            );
+            for params in [
+                ModelParams::DEFAULT,
+                ModelParams {
+                    shading: Shading::Unlit,
+                    ..ModelParams::DEFAULT
+                },
+            ] {
+                let a = render3d::rsp_eligible(&ctx, &mesh, &m, &params);
+                let b = render3d::rsp_eligible_mv(&ctx, &mesh, &m, &view.mul(&m), &params);
+                assert_eq!(a, b, "draw {i}");
+                if a.is_some() {
+                    checked.0 += 1;
+                } else {
+                    checked.1 += 1;
+                }
+            }
+        }
+    }
+    assert!(
+        checked.0 > 100 && checked.1 > 100,
+        "both answers covered: {checked:?}"
+    );
+}

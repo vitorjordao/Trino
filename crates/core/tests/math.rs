@@ -173,3 +173,44 @@ fn quaternions_interpolate_and_build_trs_matrices() {
     assert!((n.w - 1.0).abs() < 1e-5);
     assert_eq!(Quat::new(0.0, 0.0, 0.0, 0.0).normalized(), Quat::IDENTITY);
 }
+
+/// `math3d::to_i32` is `as i32` (saturating, NaN → 0) for every float:
+/// the special values, the edges of the range, and a sweep through the
+/// bit patterns.
+#[test]
+fn to_i32_matches_the_saturating_cast_everywhere() {
+    let edge = 2_147_483_648.0f32;
+    for v in [
+        0.0f32,
+        -0.0,
+        0.4,
+        -0.6,
+        1.0,
+        -1.0,
+        65535.99,
+        -32768.5,
+        edge,
+        -edge,
+        edge - 128.0,
+        -edge + 128.0,
+        f32::MAX,
+        f32::MIN,
+        f32::MIN_POSITIVE,
+        1e-40,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        f32::NAN,
+        -f32::NAN,
+    ] {
+        assert_eq!(math3d::to_i32(v), v as i32, "{v:e}");
+    }
+    let mut bits = 0u32;
+    loop {
+        let v = f32::from_bits(bits);
+        assert_eq!(math3d::to_i32(v), v as i32, "bits {bits:#010x}");
+        match bits.checked_add(0x0000_3FFB) {
+            Some(b) => bits = b,
+            None => break,
+        }
+    }
+}

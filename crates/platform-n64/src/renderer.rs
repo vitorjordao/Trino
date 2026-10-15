@@ -10,7 +10,7 @@ use core::ffi::c_void;
 use trino_core::perf::RenderProfile;
 use trino_core::render3d::{
     Camera3, DEFAULT_LIGHT, Light, Mesh, MeshLayout, NEAR_PLANE, ScreenTri, TnlContext, TnlScratch,
-    TnlStats, painter_index, painter_key, rsp_eligible, rsp_mesh_supported,
+    TnlStats, painter_index, painter_key, rsp_eligible_mv, rsp_mesh_supported,
 };
 use trino_core::text::BitmapFont;
 use trino_core::{
@@ -313,7 +313,8 @@ impl N64Renderer {
         let Some(rm) = self.rsp_meshes.get(&model.0) else {
             return Err("mesh has no RSP copy".into());
         };
-        let Some(d) = rsp_eligible(&self.tnl_ctx, &mesh, matrix, params) else {
+        let mv = self.tnl_ctx.projection().0.mul(matrix);
+        let Some(d) = rsp_eligible_mv(&self.tnl_ctx, &mesh, matrix, &mv, params) else {
             return Err("draw not RSP-eligible".into());
         };
         let seg0 = rm.seg0.clone();
@@ -321,7 +322,7 @@ impl N64Renderer {
         let buf = unsafe { ffi::trino_alloc_uncached((n * 24) as u32) } as *mut u8;
         let phys = unsafe { ffi::trino_phys_addr(buf as *const c_void) };
         let cull = if d.cull_back { self.rsp_cull } else { 2 };
-        let words = rsp::draw_words(&self.tnl_ctx, matrix, &d, params.tint, rm, cull, phys);
+        let words = rsp::draw_words(&self.tnl_ctx, &mv, &d, params.tint, rm, cull, phys);
         self.begin_frame(Color::BLACK);
         unsafe { ffi::trino_rsp_draw(words.as_ptr()) };
         self.end_frame();
@@ -479,15 +480,20 @@ impl Renderer for N64Renderer {
         };
         let mesh = Mesh::from_layout(tmdl, layout);
         self.frame_stats.models += 1;
-        if self.rsp_on
-            && let Some(rm) = self.rsp_meshes.get(&model.0)
-            && let Some(d) = rsp_eligible(&self.tnl_ctx, &mesh, matrix, params)
-        {
+        // `view · model` once: the eligibility test and the command share it.
+        let rsp = match self.rsp_meshes.get(&model.0) {
+            Some(rm) if self.rsp_on => {
+                let mv = self.tnl_ctx.projection().0.mul(matrix);
+                rsp_eligible_mv(&self.tnl_ctx, &mesh, matrix, &mv, params).map(|d| (rm, d, mv))
+            }
+            _ => None,
+        };
+        if let Some((rm, d, mv)) = rsp {
             // The overlay transforms, lights and rasterizes the whole draw;
             // the command goes out with the batch (flush_model_batch).
             let t0 = self.tick();
             let cull = if d.cull_back { self.rsp_cull } else { 2 };
-            let words = rsp::draw_words(&self.tnl_ctx, matrix, &d, params.tint, rm, cull, 0);
+            let words = rsp::draw_words(&self.tnl_ctx, &mv, &d, params.tint, rm, cull, 0);
             self.pending_rsp.push(words);
             // Streaming: hand the overlay a chunk as soon as it is full (and
             // the batch holds no CPU triangles), so the RSP starts while the

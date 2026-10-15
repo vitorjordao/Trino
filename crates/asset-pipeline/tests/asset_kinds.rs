@@ -757,7 +757,10 @@ fn a_model_bakes_only_for_the_platforms_it_names() {
     assert!(manifest.models["pc_only"].bakes_for(Platform::Pc));
     assert!(!manifest.models["pc_only"].bakes_for(Platform::N64));
     assert!(manifest.models["consoles"].bakes_for(Platform::N3ds));
-    assert!(manifest.models["block"].bakes_for(Platform::N64), "default: everywhere");
+    assert!(
+        manifest.models["block"].bakes_for(Platform::N64),
+        "default: everywhere"
+    );
     let has = |platform: Platform, logical: &str| {
         let out = dir.path().join(platform.key());
         let report = bake_all(&assets, platform, &out).unwrap();

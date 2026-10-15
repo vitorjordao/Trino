@@ -435,6 +435,18 @@ pub trait Renderer {
         FrameStats::default()
     }
 
+    /// The second screen's size (3DS: the 320×240 touch screen; the PC's
+    /// 3DS profile simulates it), or `None` with one screen.
+    fn second_screen(&self) -> Option<Vec2> {
+        None
+    }
+
+    /// Where the next 2D draws go: `0` = the main screen (the 3D world's),
+    /// `1` = the [`second_screen`](Self::second_screen) (2D only:
+    /// `fill_rect`, sprites, text). Starts at `0` each frame. A no-op on
+    /// single-screen targets.
+    fn set_screen(&mut self, _screen: u8) {}
+
     /// **Test hook** (slow, never per frame): color of the last finished
     /// frame at internal pixel `(x, y)`, or `None` if this backend cannot
     /// read back. Lets self-tests check rendering on the real targets (PC

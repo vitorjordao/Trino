@@ -124,6 +124,24 @@ pub struct PcRenderer {
     vi_pipeline: wgpu::RenderPipeline,
     vi_tex: wgpu::Texture,
     strict: bool,
+    /// The 3DS profile's touch screen (320×240, 2D only).
+    second: Option<SecondScreen>,
+    /// "name (backend)" of the GPU adapter.
+    adapter_name: String,
+    /// Where draws go now (0 main, 1 second) and whether the main screen
+    /// was already rendered this frame (`set_screen(1)` renders it).
+    screen: u8,
+    main_done: bool,
+}
+
+/// The second screen's own target, globals and blit source.
+struct SecondScreen {
+    size: (u32, u32),
+    tex: wgpu::Texture,
+    view: wgpu::TextureView,
+    depth_view: wgpu::TextureView,
+    globals_bg: wgpu::BindGroup,
+    blit_bg: wgpu::BindGroup,
 }
 
 /// Offscreen color target + its view + the matching depth buffer.
@@ -245,7 +263,7 @@ impl PcRenderer {
     /// sharing eframe's device lets the offscreen texture be registered
     /// directly as an egui texture (render-to-texture, zero copies).
     pub fn with_device(device: wgpu::Device, queue: wgpu::Queue, profile: SimProfile) -> Self {
-        Self::build(device, queue, None, profile)
+        Self::build(device, queue, None, profile, "editor device".into())
     }
 
     async fn init(
@@ -265,7 +283,13 @@ impl PcRenderer {
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("trino-pc"),
                 required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::downlevel_defaults(),
+                // Downlevel limits, but the adapter's real texture size:
+                // a 4K or ultrawide window (surface) and full-resolution
+                // pictures need more than downlevel's 2048.
+                required_limits: wgpu::Limits {
+                    max_texture_dimension_2d: adapter.limits().max_texture_dimension_2d.min(8192),
+                    ..wgpu::Limits::downlevel_defaults()
+                },
                 ..Default::default()
             })
             .await
@@ -305,7 +329,9 @@ impl PcRenderer {
             SurfaceState { surface, config }
         });
 
-        Ok(Self::build(device, queue, surface, profile))
+        let info = adapter.get_info();
+        let name = format!("{} ({:?})", info.name, info.backend);
+        Ok(Self::build(device, queue, surface, profile, name))
     }
 
     fn build(
@@ -313,9 +339,14 @@ impl PcRenderer {
         queue: wgpu::Queue,
         surface: Option<SurfaceState>,
         profile: SimProfile,
+        adapter_name: String,
     ) -> Self {
         let internal_size = profile.internal_resolution();
-        let caps = profile.caps();
+        let mut caps = profile.caps();
+        // The picture size games see is the internal resolution (the
+        // native profile's table says 1080p, its picture starts at 640×480).
+        caps.screen_width = internal_size.0 as u16;
+        caps.screen_height = internal_size.1 as u16;
         // The N64 profile emulates the console's output (3-point filtering,
         // RGBA5551 + dither) by default; TRINO_LOOK=off|n64 overrides.
         let n64_look = match std::env::var("TRINO_LOOK").as_deref() {
@@ -619,6 +650,35 @@ impl PcRenderer {
 
         let blit_bind_group =
             create_blit_bind_group(&device, &texture_bgl, &offscreen_view, &blit_sampler);
+        // The 3DS profile simulates the touch screen too.
+        let second = (profile == SimProfile::N3ds).then(|| {
+            let size = (320, 240);
+            let (tex, view, depth_view) = create_targets(&device, size);
+            let buf = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("trino-globals-2"),
+                size: 16,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            queue.write_buffer(&buf, 0, &globals_bytes(size.0, size.1, false));
+            let globals_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("trino-globals-bg-2"),
+                layout: &globals_bgl,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buf.as_entire_binding(),
+                }],
+            });
+            let blit_bg = create_blit_bind_group(&device, &texture_bgl, &view, &blit_sampler);
+            SecondScreen {
+                size,
+                tex,
+                view,
+                depth_view,
+                globals_bg,
+                blit_bg,
+            }
+        });
         // VI pass: reads the offscreen target (through the blit bind group)
         // into a scratch texture of the same format.
         let vi_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -746,6 +806,10 @@ impl PcRenderer {
             vi_pipeline,
             vi_tex,
             strict,
+            second,
+            screen: 0,
+            main_done: false,
+            adapter_name,
         }
     }
 
@@ -799,7 +863,8 @@ impl PcRenderer {
     /// holding [`offscreen_view`](Self::offscreen_view) must re-fetch it.
     /// Budgets ([`Caps`]) still come from the profile.
     pub fn set_internal_size(&mut self, width: u32, height: u32) {
-        let size = (width.clamp(16, 4096), height.clamp(16, 4096));
+        let max = self.device.limits().max_texture_dimension_2d.min(8192);
+        let size = (width.clamp(16, max), height.clamp(16, max));
         if size == self.internal_size {
             return;
         }
@@ -811,6 +876,9 @@ impl PcRenderer {
         self.depth_view = depth;
         self.vi_tex = create_vi_target(&self.device, size);
         self.internal_size = size;
+        // Games read the picture size from the caps (culling, layout).
+        self.caps.screen_width = size.0 as u16;
+        self.caps.screen_height = size.1 as u16;
         self.queue.write_buffer(
             &self.globals_buf,
             0,
@@ -918,10 +986,62 @@ impl PcRenderer {
         }
     }
 
+    /// What a window of `output` physical pixels shows right now: the
+    /// internal frame upscaled and centered exactly like the present pass
+    /// (nearest, whole-number scale, black bars), composed on the CPU.
+    /// Test/tooling path (screenshots of fullscreen/ultrawide layouts).
+    pub fn present_preview(&self, output: (u32, u32)) -> Vec<u8> {
+        let main = self.internal_size;
+        let second = self.second.as_ref().map(|sc| sc.size);
+        let src = self.read_offscreen();
+        let src2 = second.map(|_| self.read_second_screen());
+        let mut out = vec![0u8; (output.0 * output.1 * 4) as usize];
+        for oy in 0..output.1 {
+            for ox in 0..output.0 {
+                let at = ((oy * output.0 + ox) * 4) as usize;
+                out[at + 3] = 255;
+                let hit = window_to_screen(main, second, output, ox as f32 + 0.5, oy as f32 + 0.5);
+                if let Some((p, screen)) = hit {
+                    let (w, buf) = match (screen, &src2, second) {
+                        (1, Some(b), Some(s)) => (s.0, b),
+                        _ => (main.0, &src),
+                    };
+                    let from = ((p.y as u32 * w + p.x as u32) * 4) as usize;
+                    out[at..at + 4].copy_from_slice(&buf[from..from + 4]);
+                }
+            }
+        }
+        out
+    }
+
+    /// Read the second screen back (RGBA8), like
+    /// [`read_offscreen`](Self::read_offscreen). Empty without one.
+    pub fn read_second_screen(&self) -> Vec<u8> {
+        match &self.second {
+            Some(sc) => self.read_texture(&sc.tex, sc.size),
+            None => Vec::new(),
+        }
+    }
+
+    /// Block until the GPU has finished everything submitted (frame-time
+    /// measurements include the GPU's work).
+    pub fn wait_gpu(&self) {
+        let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+    }
+
+    /// The adapter's name and backend (for performance reports).
+    pub fn adapter_info(&self) -> String {
+        self.adapter_name.clone()
+    }
+
     /// Read the internal framebuffer back as tightly-packed RGBA8.
     /// Test/tooling path — synchronous, not for per-frame use.
     pub fn read_offscreen(&self) -> Vec<u8> {
-        let (w, h) = self.internal_size;
+        self.read_texture(&self.offscreen_tex, self.internal_size)
+    }
+
+    fn read_texture(&self, tex: &wgpu::Texture, size: (u32, u32)) -> Vec<u8> {
+        let (w, h) = size;
         let unpadded = w * 4;
         let padded = unpadded.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
             * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
@@ -936,7 +1056,7 @@ impl PcRenderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
-                texture: &self.offscreen_tex,
+                texture: tex,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
@@ -984,9 +1104,17 @@ impl PcRenderer {
     /// through the same letterboxed integer upscale the window shows.
     /// `None` outside the picture or without a window surface.
     pub fn window_to_game(&self, x: f64, y: f64) -> Option<trino_core::Vec2> {
+        self.window_to_pointer(x, y)
+            .and_then(|(p, screen)| (screen == 0).then_some(p))
+    }
+
+    /// Window pixel → (position, screen): with the 3DS profile the window
+    /// shows both screens stacked, and the second screen is 1.
+    pub fn window_to_pointer(&self, x: f64, y: f64) -> Option<(trino_core::Vec2, u8)> {
         let ss = self.surface.as_ref()?;
-        window_to_game(
+        window_to_screen(
             self.internal_size,
+            self.second.as_ref().map(|sc| sc.size),
             (ss.config.width, ss.config.height),
             x as f32,
             y as f32,
@@ -1093,7 +1221,9 @@ impl PcRenderer {
         self.tex3d.get(&key)
     }
 
-    fn flush(&mut self) {
+    /// Render the recorded commands into the main target, or (`second`)
+    /// into the second screen's, and submit.
+    fn draw_commands(&mut self, second: bool) {
         if self.strict {
             if self.commands.len() as u32 > self.caps.max_sprites_per_frame {
                 panic!(
@@ -1183,11 +1313,25 @@ impl PcRenderer {
                 v as f64 / 255.0
             }
         };
-        let clear = wgpu::Color {
-            r: ch(self.clear.r),
-            g: ch(self.clear.g),
-            b: ch(self.clear.b),
-            a: self.clear.a as f64 / 255.0,
+        let clear = if second {
+            // The touch screen's own background.
+            wgpu::Color {
+                r: 16.0 / 255.0,
+                g: 18.0 / 255.0,
+                b: 28.0 / 255.0,
+                a: 1.0,
+            }
+        } else {
+            wgpu::Color {
+                r: ch(self.clear.r),
+                g: ch(self.clear.g),
+                b: ch(self.clear.b),
+                a: self.clear.a as f64 / 255.0,
+            }
+        };
+        let (color_view, depth_view, globals_bg) = match (&self.second, second) {
+            (Some(sc), true) => (&sc.view, &sc.depth_view, &sc.globals_bg),
+            _ => (&self.offscreen_view, &self.depth_view, &self.globals_bg),
         };
 
         let mut encoder = self
@@ -1197,7 +1341,7 @@ impl PcRenderer {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("trino-sprite-pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.offscreen_view,
+                    view: color_view,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(clear),
@@ -1206,7 +1350,7 @@ impl PcRenderer {
                     depth_slice: None,
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.depth_view,
+                    view: depth_view,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(1.0),
                         store: wgpu::StoreOp::Store,
@@ -1217,7 +1361,7 @@ impl PcRenderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_bind_group(0, &self.globals_bg, &[]);
+            pass.set_bind_group(0, globals_bg, &[]);
             for segment in &segments {
                 match segment {
                     Segment::Sprites { sprite, instances } => {
@@ -1253,7 +1397,7 @@ impl PcRenderer {
         // N64 Video Interface: dedither the finished 16-bit frame, then put
         // it back where every consumer (window blit, editor, readback)
         // reads it.
-        if self.n64_look && self.vi_dedither {
+        if self.n64_look && self.vi_dedither && !second {
             let vi_view = self
                 .vi_tex
                 .create_view(&wgpu::TextureViewDescriptor::default());
@@ -1288,7 +1432,28 @@ impl PcRenderer {
                 },
             );
         }
+        self.queue.submit([encoder.finish()]);
+    }
 
+    /// The end of a frame: render what is left (the second screen is
+    /// cleared even when nothing was drawn on it), then show it.
+    fn flush(&mut self) {
+        if self.screen == 1 {
+            self.draw_commands(true);
+        } else {
+            self.draw_commands(false);
+            if self.second.is_some() {
+                self.draw_commands(true);
+            }
+        }
+        self.present();
+    }
+
+    /// Blit the finished frame(s) to the window, if there is one.
+    fn present(&mut self) {
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
         fn acquire(frame: wgpu::CurrentSurfaceTexture) -> Result<wgpu::SurfaceTexture, bool> {
             use wgpu::CurrentSurfaceTexture as C;
             match frame {
@@ -1330,12 +1495,19 @@ impl PcRenderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            let (vx, vy, vw, vh) =
-                present_rect(self.internal_size, (ss.config.width, ss.config.height));
-            pass.set_viewport(vx, vy, vw, vh, 0.0, 1.0);
+            let surface = (ss.config.width, ss.config.height);
+            let second = self.second.as_ref().map(|sc| sc.size);
+            let (main, below) = present_layout(self.internal_size, second, surface);
             pass.set_pipeline(&self.blit_pipeline);
+            let (vx, vy, vw, vh) = main;
+            pass.set_viewport(vx, vy, vw, vh, 0.0, 1.0);
             pass.set_bind_group(0, &self.blit_bind_group, &[]);
             pass.draw(0..3, 0..1);
+            if let (Some(sc), Some((vx, vy, vw, vh))) = (&self.second, below) {
+                pass.set_viewport(vx, vy, vw, vh, 0.0, 1.0);
+                pass.set_bind_group(0, &sc.blit_bg, &[]);
+                pass.draw(0..3, 0..1);
+            }
         }
 
         self.queue.submit([encoder.finish()]);
@@ -1406,6 +1578,8 @@ impl Renderer for PcRenderer {
 
     fn begin_frame(&mut self, clear: Color) {
         self.clear = clear;
+        self.screen = 0;
+        self.main_done = false;
         self.commands.clear();
         self.tri_verts.clear();
         self.pending_tris.clear();
@@ -1590,9 +1764,28 @@ impl Renderer for PcRenderer {
         );
     }
 
+    fn second_screen(&self) -> Option<Vec2> {
+        self.second
+            .as_ref()
+            .map(|sc| Vec2::new(sc.size.0 as f32, sc.size.1 as f32))
+    }
+
+    fn set_screen(&mut self, screen: u8) {
+        // Main screen first, then the second (once per frame).
+        if screen == 1 && self.screen == 0 && self.second.is_some() {
+            self.flush_model_batch();
+            self.frame_stats.tris = (self.tri_verts.len() / 3) as u32;
+            self.draw_commands(false);
+            self.main_done = true;
+            self.screen = 1;
+        }
+    }
+
     fn end_frame(&mut self) {
         self.flush_model_batch();
-        self.frame_stats.tris = (self.tri_verts.len() / 3) as u32;
+        if self.screen == 0 {
+            self.frame_stats.tris = (self.tri_verts.len() / 3) as u32;
+        }
         self.last_stats = self.frame_stats;
         self.flush();
     }
@@ -1655,7 +1848,62 @@ fn present_rect(internal: (u32, u32), surface: (u32, u32)) -> (f32, f32, f32, f3
     ((sw - vw) * 0.5, (sh - vh) * 0.5, vw, vh)
 }
 
+/// A picture's place in the window: `(x, y, width, height)`, pixels.
+type Viewport = (f32, f32, f32, f32);
+
+/// Where the main picture and (with one) the second screen land in the
+/// window: one whole-number scale for both, the second screen centered
+/// under the main one (the 3DS's two screens), the pair centered.
+fn present_layout(
+    main: (u32, u32),
+    second: Option<(u32, u32)>,
+    surface: (u32, u32),
+) -> (Viewport, Option<Viewport>) {
+    let Some(sec) = second else {
+        return (present_rect(main, surface), None);
+    };
+    let (tw, th) = (main.0.max(sec.0), main.1 + sec.1);
+    let (x, y, w, _) = present_rect((tw, th), surface);
+    let k = w / tw as f32;
+    let top = (
+        x + (tw - main.0) as f32 * 0.5 * k,
+        y,
+        main.0 as f32 * k,
+        main.1 as f32 * k,
+    );
+    let below = (
+        x + (tw - sec.0) as f32 * 0.5 * k,
+        y + main.1 as f32 * k,
+        sec.0 as f32 * k,
+        sec.1 as f32 * k,
+    );
+    (top, Some(below))
+}
+
+/// A window pixel on the presented picture(s): the screen it falls on and
+/// the position in that screen's pixels.
+fn window_to_screen(
+    main: (u32, u32),
+    second: Option<(u32, u32)>,
+    surface: (u32, u32),
+    x: f32,
+    y: f32,
+) -> Option<(trino_core::Vec2, u8)> {
+    let (top, below) = present_layout(main, second, surface);
+    let hit = |r: (f32, f32, f32, f32), size: (u32, u32)| {
+        let (u, v) = ((x - r.0) / r.2, (y - r.1) / r.3);
+        ((0.0..1.0).contains(&u) && (0.0..1.0).contains(&v))
+            .then(|| trino_core::Vec2::new(u * size.0 as f32, v * size.1 as f32))
+    };
+    if let Some(p) = hit(top, main) {
+        return Some((p, 0));
+    }
+    let (b, s) = (below?, second?);
+    hit(b, s).map(|p| (p, 1))
+}
+
 /// Inverse of [`present_rect`] for one window pixel.
+#[cfg(test)]
 fn window_to_game(
     internal: (u32, u32),
     surface: (u32, u32),
@@ -1676,6 +1924,74 @@ fn window_to_game(
 #[cfg(test)]
 mod present_tests {
     use super::*;
+
+    /// Native pictures on real monitors: a whole-number upscale, the same
+    /// in x and y (never stretched), bars only where the aspect is out of
+    /// 4:3..21:9, and the pointer mapping back to the picture's corners.
+    #[test]
+    fn native_pictures_are_never_stretched() {
+        for out in [
+            (1280, 720),
+            (1366, 768),
+            (1920, 1080),
+            (2560, 1080),
+            (3440, 1440),
+            (3840, 1080),
+            (5120, 1440),
+            (1280, 1024),
+            (3840, 2160),
+            (1080, 1920),
+        ] {
+            for scale in 0..=4 {
+                let (w, h, k) = crate::sim::native_internal(out, scale);
+                let (x, y, vw, vh) = present_rect((w, h), out);
+                assert_eq!(
+                    (vw, vh),
+                    ((w * k) as f32, (h * k) as f32),
+                    "{out:?} {scale}"
+                );
+                assert!(
+                    x >= 0.0 && y >= 0.0,
+                    "{out:?}: picture larger than the output"
+                );
+                let aspect = out.0 as f32 / out.1 as f32;
+                if (crate::sim::MIN_ASPECT..=crate::sim::MAX_ASPECT).contains(&aspect) {
+                    // In range: at most a few pixels of rounding per side.
+                    assert!(
+                        x <= k as f32 * 2.0 && y <= k as f32 * 2.0,
+                        "{out:?} {scale}: {x},{y}"
+                    );
+                }
+                let p = window_to_game((w, h), out, x + vw - 0.5, y + vh - 0.5).unwrap();
+                assert!(p.x < w as f32 && p.y < h as f32 && p.x > w as f32 - 1.0);
+                assert_eq!(window_to_game((w, h), out, x - 1.0, y), None);
+            }
+        }
+        // 32:9: a 21:9 picture with side bars.
+        let (w, h, k) = crate::sim::native_internal((3840, 1080), 0);
+        let (x, _, _, _) = present_rect((w, h), (3840, 1080));
+        assert!(x > 400.0, "side bars on 32:9 ({w}x{h} x{k}, bar {x})");
+    }
+
+    /// The 3DS profile: top 400×240 over bottom 320×240, one scale, the
+    /// bottom centered; the pointer knows which screen it is on.
+    #[test]
+    fn two_screens_stack_and_map_the_pointer() {
+        let (top, below) = present_layout((400, 240), Some((320, 240)), (1280, 960));
+        // 400×480 into 1280×960: scale 2.
+        assert_eq!(top, (240.0, 0.0, 800.0, 480.0));
+        assert_eq!(below, Some((320.0, 480.0, 640.0, 480.0)));
+        let s = Some((320, 240));
+        let (p, screen) = window_to_screen((400, 240), s, (1280, 960), 250.0, 10.0).unwrap();
+        assert_eq!((p.x, p.y, screen), (5.0, 5.0, 0));
+        let (p, screen) = window_to_screen((400, 240), s, (1280, 960), 330.0, 500.0).unwrap();
+        assert_eq!((p.x, p.y, screen), (5.0, 10.0, 1));
+        // Beside the narrower bottom screen: nothing.
+        assert_eq!(
+            window_to_screen((400, 240), s, (1280, 960), 250.0, 600.0),
+            None
+        );
+    }
 
     #[test]
     fn letterboxed_integer_upscale_maps_back() {

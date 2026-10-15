@@ -66,6 +66,8 @@ static void trino_tex3d_init(void)
 // Boot + logging
 
 static C3D_RenderTarget* s_top = NULL;
+// The touch screen (320x240): 2D only (trino_set_screen).
+static C3D_RenderTarget* s_bottom = NULL;
 
 // Main-thread stack. libctru's weak default is 32 KB; game states live in
 // one struct (fixed-capacity stores like EntityStore, no allocator in game
@@ -83,6 +85,7 @@ void trino_init(void)
     // backends.
     C2D_SetTintMode(C2D_TintMult);
     s_top = C2D_CreateScreenTarget(GFX_TOP, GFX_LEFT);
+    s_bottom = C2D_CreateScreenTarget(GFX_BOTTOM, GFX_LEFT);
     ndspInit();
     trino_tex3d_init();
 }
@@ -126,8 +129,17 @@ void trino_frame_begin(uint32_t rgba8888)
     C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
     C2D_TargetClear(s_top, C2D_Color32((rgba8888 >> 24) & 0xFF, (rgba8888 >> 16) & 0xFF,
                                        (rgba8888 >> 8) & 0xFF, 0xFF));
+    // The touch screen's own background (games draw their UI on it).
+    C2D_TargetClear(s_bottom, C2D_Color32(16, 18, 28, 0xFF));
     C2D_SceneBegin(s_top);
     s_vused = 0;
+}
+
+// Later 2D draws go to the touch screen (1) or the top screen (0). 3D stays
+// on the top screen (tri3d's projection is the top's).
+void trino_set_screen(uint32_t bottom)
+{
+    C2D_SceneBegin(bottom ? s_bottom : s_top);
 }
 
 void trino_frame_end(void)
@@ -379,22 +391,24 @@ uint32_t trino_debug_pixel(uint32_t x, uint32_t y)
 // the N64 dump format, so `cargo xtask test 3ds` rebuilds the image with the
 // same code (5-bit channels: enough for a tolerance check). Same buffer
 // rules as trino_debug_pixel.
-void trino_debug_fb_dump(void)
+void trino_debug_fb_dump(uint32_t bottom)
 {
     gspWaitForVBlank();
     gspWaitForVBlank();
     u16 w = 0, h = 0;
-    const u8* fb = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, &w, &h);
+    gfxScreen_t scr = bottom ? GFX_BOTTOM : GFX_TOP;
+    const uint32_t width = bottom ? 320 : 400;
+    const u8* fb = gfxGetFramebuffer(scr, GFX_LEFT, &w, &h);
     if (!fb || w != 240) return;
-    GSPGPU_FramebufferFormat fmt = gfxGetScreenFormat(GFX_TOP);
+    GSPGPU_FramebufferFormat fmt = gfxGetScreenFormat(scr);
     u32 bpp = fmt == GSP_RGBA8_OES ? 4 : (fmt == GSP_BGR8_OES ? 3 : 0);
     if (!bpp) return;
     static const char hex[] = "0123456789abcdef";
     static char line[96 + 64 * 4];
     uint32_t hash = 2166136261u;
     for (uint32_t y = 0; y < 240; y++) {
-        for (uint32_t x0 = 0; x0 < 400; x0 += 64) {
-            uint32_t n = (400 - x0 < 64) ? (400 - x0) : 64;
+        for (uint32_t x0 = 0; x0 < width; x0 += 64) {
+            uint32_t n = (width - x0 < 64) ? (width - x0) : 64;
             int at = snprintf(line, 96, "TRINO_FBR:%lu:%lu:", (unsigned long)y,
                               (unsigned long)x0);
             for (uint32_t i = 0; i < n; i++) {
@@ -414,7 +428,8 @@ void trino_debug_fb_dump(void)
             svcOutputDebugString(line, at);
         }
     }
-    int at = snprintf(line, 96, "TRINO_FB_END:400x240:%08lx\n", (unsigned long)hash);
+    int at = snprintf(line, 96, "TRINO_FB_END:%lux240:%08lx\n", (unsigned long)width,
+                      (unsigned long)hash);
     svcOutputDebugString(line, at);
 }
 

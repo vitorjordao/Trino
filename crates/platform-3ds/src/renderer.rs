@@ -55,6 +55,8 @@ pub struct N3dsRenderer {
     verts: Vec<f32>,
     /// Depth for the next sprite draw (background before 3D, HUD after).
     sprite_depth: f32,
+    /// 0 = top screen, 1 = touch screen (where 2D draws go now).
+    screen: u8,
     camera: Camera3,
     light: Light,
     /// T&L constants of `camera` + `light`, rebuilt when either changes.
@@ -77,6 +79,7 @@ impl N3dsRenderer {
             order: Vec::new(),
             verts: Vec::new(),
             sprite_depth: SPRITE_DEPTH_BG,
+            screen: 0,
             camera: Camera3::default(),
             tnl_ctx: TnlContext::new(&Camera3::default(), &DEFAULT_LIGHT, SCREEN),
             tnl_scratch: Box::new(TnlScratch::new()),
@@ -150,7 +153,12 @@ impl N3dsRenderer {
     /// `target/3ds/castle64_hub.png` and checks it against the golden. Draw
     /// the frame a few times first (the LCD is double-buffered).
     pub fn dump_framebuffer(&mut self) {
-        unsafe { ffi::trino_debug_fb_dump() }
+        unsafe { ffi::trino_debug_fb_dump(0) }
+    }
+
+    /// The touch screen, the same way (the next golden after the top's).
+    pub fn dump_framebuffer_bottom(&mut self) {
+        unsafe { ffi::trino_debug_fb_dump(1) }
     }
 
     /// Register a `C2D_SpriteSheet` loaded from the RomFS under a stable
@@ -232,7 +240,22 @@ impl Renderer for N3dsRenderer {
     fn begin_frame(&mut self, clear: Color) {
         self.sprite_depth = SPRITE_DEPTH_BG;
         self.frame_stats = FrameStats::default();
+        self.screen = 0;
         unsafe { ffi::trino_frame_begin(pack_color(clear)) }
+    }
+
+    fn second_screen(&self) -> Option<Vec2> {
+        Some(Vec2::new(320.0, 240.0))
+    }
+
+    fn set_screen(&mut self, screen: u8) {
+        if screen != self.screen {
+            self.flush_model_batch();
+            self.screen = screen;
+            // A fresh scene: 2D depth starts over on the other screen.
+            self.sprite_depth = SPRITE_DEPTH_BG;
+            unsafe { ffi::trino_set_screen(screen as u32) }
+        }
     }
 
     fn fill_rect(&mut self, rect: trino_core::Rect, color: Color) {

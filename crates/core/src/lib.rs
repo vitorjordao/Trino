@@ -48,12 +48,12 @@ pub use caps::{Caps, CapsError};
 pub use collide::{MoveResult, move_and_collide};
 pub use entity::{Entity, EntityId, EntityStore};
 pub use game::Game;
-pub use input::{Button, Input, InputState, PointerButton};
+pub use input::{Button, Input, InputState, Key, PointerButton};
 pub use math::{Color, Rect, Vec2, Vec3};
 pub use math3d::{Mat34, Quat};
 pub use particles::{Emitter, ParticleSystem};
 pub use physics::{Aabb, Collider, Shape};
-pub use platform::{BlobId, Platform, SaveError};
+pub use platform::{BlobId, DisplayInfo, DisplaySettings, Platform, SaveError};
 pub use render::{
     AnimBlend, AnimRef, BillboardParams, ClipId, FontId, FrameStats, Material, MaterialId, ModelId,
     ModelParams, Renderer, Shading, SpriteId, SpriteParams, TextAlign, TextParams, Transform3,

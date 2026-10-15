@@ -123,6 +123,11 @@ impl N3dsHost {
         self.renderer.dump_framebuffer();
     }
 
+    /// Print the last presented touch screen (the next golden).
+    pub fn dump_framebuffer_bottom(&mut self) {
+        self.renderer.dump_framebuffer_bottom();
+    }
+
     /// The real-time loop, until the applet manager asks to quit.
     pub fn run(&mut self, game: &mut dyn Game) {
         let mut last = runtime::now_us();

@@ -304,8 +304,26 @@ castle64. Next for the RSP path: clipping on the RSP, more surface features, an 
 term in the cost model, and a measurement on real hardware (ares doesn't time the
 RDP).
 
+- **Display (PC, 2026-10-14):** `Platform::display`/`set_display` with
+  `DisplaySettings` (fullscreen or window, window size, pixel scale, interface scale),
+  `Game::resize`. `trino-runner-pc` applies and persists them
+  (`<save_name>.display`). The native profile's picture is the output ÷ the pixel
+  scale (`sim::native_internal`), its aspect within 4:3..21:9 (bars beyond).
+  `PcRenderer::present_preview` composes what a window shows, for tests.
+
+- **Two screens (2026-10-14):** `Renderer::second_screen`/`set_screen` (3DS touch
+  screen, 2D only; main screen first, then the second, once per frame),
+  `Platform::second_screen` (known at update time), `InputState::pointer_screen`
+  (3DS touches are bottom-screen pixels on screen 1). The PC's 3DS profile renders
+  and presents both screens stacked, maps the mouse to either, and
+  `present_preview`/`read_second_screen` capture them; the 3DS host dumps the touch
+  screen as the next golden (`dump_framebuffer_bottom`).
+
 PC keyboard mapping: A/B = Z/X, X/Y = C/V, L/R = Q/E, Start = Enter,
 Select = Right Shift, D-pad = arrows, stick = WASD (see `crates/platform-pc/src/input.rs`).
+On top of it, `InputState::keys` carries PC keys (`trino_core::Key`: Esc, Enter,
+Space, Tab, Delete, F1–F8, 1–3, Page Up/Down, Home, R, W/A/S/D, +/−, Shift, Ctrl)
+for PC shortcuts, and `InputState::pad` says a gamepad was used this frame.
 
 ## Repository map
 
@@ -516,9 +534,13 @@ cargo test --workspace
 - **I4/I8 textures take alpha from RGB.** A font atlas with white transparent
   texels drew every glyph as a solid block on the N64 only. The bake now writes
   transparent texels black. Any white-mask sprite in I4/I8 needs the same.
-- **Per-draw RSP streaming hung the RDP in ares** (`set_rsp_stream` with one draw at a
-  time, under heavy 2D traffic, data-dependently; "RDP command queue MISALIGNED").
-  Chunks of 8 never did. Root cause open (BACKLOG). Keep the chunking.
+- **An RSP that halts with SIG_MORE (SIG7) set is a lost wake-up, not a crash.**
+  `RSP CRASH … wait loop timed out` with `STATUS … [halt broke … sig7]` in the dump:
+  libdragon's `rspq_flush` writes SIG_MORE + CLEAR_HALT twice, 10 cycles apart, to
+  cover the RSP's `mfc0 … break` window, but ares runs the RSP in time slices and
+  both writes can land inside it. Nothing wakes the RSP while the CPU waits
+  (`display_get`). `docker/n64/rsp-lost-wakeup.patch` makes every `RSP_WAIT_LOOP`
+  re-wake such an RSP. It was the "streaming hang" (Plan & Party, 2026-10-14).
 - **Wide shots z-fight on the N64 at meter scale:** at 30–60 m, `1 − NEAR/z` resolves
   about 1 m. Draw the world scaled (Plan & Party uses 1/128) so the near/far ratio
   stays small.

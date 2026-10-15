@@ -29,6 +29,57 @@ pub enum SaveError {
     Io,
 }
 
+/// How a PC window shows the game. Consoles have one fixed screen and
+/// ignore it ([`Platform::display`] returns `None` there).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct DisplaySettings {
+    /// Borderless fullscreen on the current monitor (else a window).
+    pub fullscreen: bool,
+    /// Window client size in physical pixels (0 × 0 = fit the monitor).
+    pub window_w: u16,
+    pub window_h: u16,
+    /// Pixel scale: the game renders at the output size divided by this
+    /// (integer, so the upscale stays crisp). 0 = auto (about 300–600
+    /// lines, see the backend).
+    pub pixel_scale: u8,
+    /// Interface scale for the game to apply (0 = auto). The engine only
+    /// stores and persists it.
+    pub ui_scale: u8,
+}
+
+impl DisplaySettings {
+    /// The first-run default: fullscreen at the monitor's size, auto
+    /// scales.
+    pub const DEFAULT: DisplaySettings = DisplaySettings {
+        fullscreen: true,
+        window_w: 0,
+        window_h: 0,
+        pixel_scale: 0,
+        ui_scale: 0,
+    };
+}
+
+impl Default for DisplaySettings {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+/// The display as the platform reports it (PC only).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct DisplayInfo {
+    /// What is in effect (after the last [`Platform::set_display`]).
+    pub settings: DisplaySettings,
+    /// The window's client area (or the fullscreen output), physical px.
+    pub output: (u16, u16),
+    /// The monitor the window is on, physical px.
+    pub monitor: (u16, u16),
+    /// The game's picture: the internal resolution it renders at.
+    pub screen: (u16, u16),
+    /// The pixel scale in effect (the auto value resolved).
+    pub pixel_scale: u8,
+}
+
 pub trait Platform {
     /// Monotonic time in microseconds since an arbitrary epoch.
     fn now_micros(&self) -> u64;
@@ -62,4 +113,22 @@ pub trait Platform {
     fn save_write(&mut self, _data: &[u8]) -> Result<(), SaveError> {
         Err(SaveError::Unsupported)
     }
+
+    /// The second screen's size (3DS touch screen, or the PC's 3DS profile),
+    /// known at update time (the renderer's
+    /// [`second_screen`](crate::Renderer::second_screen) is the same).
+    fn second_screen(&self) -> Option<(u16, u16)> {
+        None
+    }
+
+    /// The window/monitor/picture sizes and display settings, on platforms
+    /// where they can change (PC). `None` on consoles.
+    fn display(&self) -> Option<DisplayInfo> {
+        None
+    }
+
+    /// Ask for new display settings (PC; a no-op elsewhere). The host
+    /// applies them after the frame and calls [`crate::Game::resize`] when
+    /// the picture's size changes; it also persists them.
+    fn set_display(&mut self, _settings: DisplaySettings) {}
 }

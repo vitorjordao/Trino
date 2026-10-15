@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;
 
-use trino_core::{BlobId, Caps, Platform, SaveError};
+use trino_core::{BlobId, Caps, DisplayInfo, DisplaySettings, Platform, SaveError};
 
 pub struct PcPlatform {
     start: Instant,
@@ -19,6 +19,12 @@ pub struct PcPlatform {
     blobs: HashMap<u32, &'static [u8]>,
     save_path: Option<PathBuf>,
     save_capacity: usize,
+    /// What the host reports ([`Platform::display`]); `None` = fixed screen.
+    display: Option<DisplayInfo>,
+    /// The game's last [`Platform::set_display`], for the host to apply.
+    display_request: Option<DisplaySettings>,
+    /// The simulated second screen (3DS profile).
+    second_screen: Option<(u16, u16)>,
 }
 
 impl PcPlatform {
@@ -30,7 +36,25 @@ impl PcPlatform {
             blobs: HashMap::new(),
             save_path: None,
             save_capacity: caps.save_bytes as usize,
+            display: None,
+            display_request: None,
+            second_screen: None,
         }
+    }
+
+    /// The host says the renderer has a second screen (3DS profile).
+    pub fn set_second_screen(&mut self, size: Option<(u16, u16)>) {
+        self.second_screen = size;
+    }
+
+    /// The host publishes the display state (window, monitor, picture).
+    pub fn set_display_info(&mut self, info: Option<DisplayInfo>) {
+        self.display = info;
+    }
+
+    /// The settings the game asked for since the last call, if any.
+    pub fn take_display_request(&mut self) -> Option<DisplaySettings> {
+        self.display_request.take()
     }
 
     /// Persist saves at `path` (created on first write).
@@ -94,6 +118,56 @@ impl Platform for PcPlatform {
         std::fs::write(&tmp, data).map_err(|_| SaveError::Io)?;
         std::fs::rename(&tmp, path).map_err(|_| SaveError::Io)
     }
+
+    fn display(&self) -> Option<DisplayInfo> {
+        self.display
+    }
+
+    fn second_screen(&self) -> Option<(u16, u16)> {
+        self.second_screen
+    }
+
+    fn set_display(&mut self, settings: DisplaySettings) {
+        if self.display.is_some() {
+            self.display_request = Some(settings);
+        }
+    }
+}
+
+/// Display settings as a small text file (`key=value` lines), so players
+/// can read and fix it by hand.
+pub fn display_settings_to_text(s: &DisplaySettings) -> String {
+    format!(
+        "fullscreen={}\nwindow={}x{}\npixel_scale={}\nui_scale={}\n",
+        s.fullscreen as u8, s.window_w, s.window_h, s.pixel_scale, s.ui_scale
+    )
+}
+
+/// Parse [`display_settings_to_text`]; unknown or broken lines keep the
+/// default.
+pub fn display_settings_from_text(text: &str) -> DisplaySettings {
+    let mut s = DisplaySettings::DEFAULT;
+    for line in text.lines() {
+        let Some((k, v)) = line.split_once('=') else {
+            continue;
+        };
+        let v = v.trim();
+        match k.trim() {
+            "fullscreen" => s.fullscreen = v == "1" || v == "true",
+            "window" => {
+                if let Some((w, h)) = v.split_once('x')
+                    && let (Ok(w), Ok(h)) = (w.parse(), h.parse())
+                {
+                    s.window_w = w;
+                    s.window_h = h;
+                }
+            }
+            "pixel_scale" => s.pixel_scale = v.parse().unwrap_or(0).min(16),
+            "ui_scale" => s.ui_scale = v.parse().unwrap_or(0).min(8),
+            _ => {}
+        }
+    }
+    s
 }
 
 #[cfg(test)]
@@ -107,6 +181,36 @@ mod tests {
         assert!(p.blob(id).is_none());
         p.insert_blob(id, b"abc".to_vec());
         assert_eq!(p.blob(id), Some(&b"abc"[..]));
+    }
+
+    #[test]
+    fn display_settings_round_trip_and_requests() {
+        let s = DisplaySettings {
+            fullscreen: false,
+            window_w: 1600,
+            window_h: 900,
+            pixel_scale: 2,
+            ui_scale: 3,
+        };
+        assert_eq!(display_settings_from_text(&display_settings_to_text(&s)), s);
+        assert_eq!(
+            display_settings_from_text("garbage\nwindow=axb\n"),
+            DisplaySettings::DEFAULT
+        );
+        // Requests only exist where the host reports a display.
+        let mut p = PcPlatform::new(&Caps::PC);
+        p.set_display(s);
+        assert_eq!(p.take_display_request(), None);
+        p.set_display_info(Some(DisplayInfo {
+            settings: DisplaySettings::DEFAULT,
+            output: (1920, 1080),
+            monitor: (1920, 1080),
+            screen: (640, 360),
+            pixel_scale: 3,
+        }));
+        p.set_display(s);
+        assert_eq!(p.take_display_request(), Some(s));
+        assert_eq!(p.take_display_request(), None);
     }
 
     #[test]

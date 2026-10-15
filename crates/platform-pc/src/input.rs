@@ -20,8 +20,13 @@
 //! | Select   | Right Shift |
 //! | D-pad    | Arrows      |
 //! | Stick    | WASD        |
+//!
+//! Every key with a [`Key`] also sets that bit in [`InputState::keys`]
+//! (Esc, Enter, Space, Tab, Delete, Backspace, F1–F8, 1–3, Page Up/Down,
+//! Home, R, W/A/S/D, +/−, Shift, Ctrl), so a game can offer PC shortcuts on
+//! top of the console mapping.
 
-use trino_core::{Button, Input, InputState, PointerButton, Vec2};
+use trino_core::{Button, Input, InputState, Key, PointerButton, Vec2};
 use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::keyboard::{KeyCode, PhysicalKey};
 
@@ -70,6 +75,41 @@ impl PcInput {
         if let Some(button) = button {
             self.state.set(button, down);
         }
+        let key = match code {
+            KeyCode::Escape => Some(Key::Escape),
+            KeyCode::Enter | KeyCode::NumpadEnter => Some(Key::Enter),
+            KeyCode::Space => Some(Key::Space),
+            KeyCode::Tab => Some(Key::Tab),
+            KeyCode::Delete => Some(Key::Delete),
+            KeyCode::Backspace => Some(Key::Backspace),
+            KeyCode::F1 => Some(Key::F1),
+            KeyCode::F2 => Some(Key::F2),
+            KeyCode::F3 => Some(Key::F3),
+            KeyCode::F4 => Some(Key::F4),
+            KeyCode::F5 => Some(Key::F5),
+            KeyCode::F6 => Some(Key::F6),
+            KeyCode::F7 => Some(Key::F7),
+            KeyCode::F8 => Some(Key::F8),
+            KeyCode::Digit1 | KeyCode::Numpad1 => Some(Key::Digit1),
+            KeyCode::Digit2 | KeyCode::Numpad2 => Some(Key::Digit2),
+            KeyCode::Digit3 | KeyCode::Numpad3 => Some(Key::Digit3),
+            KeyCode::PageUp => Some(Key::PageUp),
+            KeyCode::PageDown => Some(Key::PageDown),
+            KeyCode::Home => Some(Key::Home),
+            KeyCode::KeyR => Some(Key::R),
+            KeyCode::KeyW => Some(Key::W),
+            KeyCode::KeyA => Some(Key::A),
+            KeyCode::KeyS => Some(Key::S),
+            KeyCode::KeyD => Some(Key::D),
+            KeyCode::Equal | KeyCode::NumpadAdd => Some(Key::Plus),
+            KeyCode::Minus | KeyCode::NumpadSubtract => Some(Key::Minus),
+            KeyCode::ShiftLeft | KeyCode::ShiftRight => Some(Key::Shift),
+            KeyCode::ControlLeft | KeyCode::ControlRight => Some(Key::Ctrl),
+            _ => None,
+        };
+        if let Some(k) = key {
+            self.state.set_key(k, down);
+        }
         match code {
             KeyCode::KeyW => self.wasd[0] = down,
             KeyCode::KeyA => self.wasd[1] = down,
@@ -106,7 +146,10 @@ impl PcInput {
                 ..
             } => self.handle_key(*code, *state == ElementState::Pressed),
             WindowEvent::CursorMoved { position, .. } => {
-                self.handle_pointer(renderer.window_to_game(position.x, position.y));
+                match renderer.window_to_pointer(position.x, position.y) {
+                    Some((p, screen)) => self.handle_pointer_on(Some(p), screen),
+                    None => self.handle_pointer(None),
+                }
             }
             WindowEvent::CursorLeft { .. } => self.handle_pointer(None),
             WindowEvent::MouseInput { state, button, .. } => {
@@ -124,7 +167,14 @@ impl PcInput {
 
     /// Mouse moved: `pos` in game pixels, `None` outside the picture.
     pub fn handle_pointer(&mut self, pos: Option<Vec2>) {
+        self.handle_pointer_on(pos, 0);
+    }
+
+    /// Mouse moved onto screen `screen` (1 = the simulated 3DS touch
+    /// screen), `pos` in that screen's pixels.
+    pub fn handle_pointer_on(&mut self, pos: Option<Vec2>, screen: u8) {
         self.state.pointer = pos;
+        self.state.pointer_screen = screen;
     }
 
     /// Feed a winit mouse button event.
@@ -175,10 +225,14 @@ impl PcInput {
             for (from, to) in MAP {
                 if pad.is_pressed(from) {
                     state.set(to, true);
+                    state.pad = true;
                 }
             }
             // gilrs sticks are Y-up, like InputState.
             let s = Vec2::new(pad.value(Axis::LeftStickX), pad.value(Axis::LeftStickY));
+            if s.x * s.x + s.y * s.y > 0.25 * 0.25 {
+                state.pad = true;
+            }
             if s.x * s.x + s.y * s.y > state.stick.x * state.stick.x + state.stick.y * state.stick.y
             {
                 state.stick = s;
@@ -259,6 +313,25 @@ mod tests {
         let s = input.poll();
         assert!(!s.pointer_down(PointerButton::Primary));
         assert_eq!(s.pointer, None);
+    }
+
+    #[test]
+    fn pc_keys_set_their_bits_too() {
+        let mut input = PcInput::new();
+        input.handle_key(KeyCode::Escape, true);
+        input.handle_key(KeyCode::KeyW, true);
+        input.handle_key(KeyCode::F3, true);
+        input.handle_key(KeyCode::Numpad2, true);
+        input.handle_key(KeyCode::Enter, true);
+        let s = input.poll();
+        assert!(s.key(Key::Escape) && s.key(Key::W) && s.key(Key::F3) && s.key(Key::Digit2));
+        // Enter keeps its console button (Start) and gets its own bit.
+        assert!(s.key(Key::Enter) && s.is_down(Button::Start));
+        // W still drives the digital stick (console-style games).
+        assert_eq!(s.stick, Vec2::new(0.0, 1.0));
+        assert!(!s.pad);
+        input.handle_key(KeyCode::Escape, false);
+        assert!(!input.poll().key(Key::Escape));
     }
 
     #[test]

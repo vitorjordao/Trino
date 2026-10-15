@@ -45,6 +45,8 @@ unsafe extern "C" {
 
     pub fn trino_frame_begin(rgba8888: u32);
     pub fn trino_frame_end();
+    /// Later 2D draws on the touch screen (1) or the top screen (0).
+    pub fn trino_set_screen(bottom: u32);
 
     pub fn trino_sprite_load(romfs_path: *const c_char) -> *mut c_void;
     pub fn trino_fill_rect(fill: *const TrinoFill);
@@ -85,7 +87,7 @@ unsafe extern "C" {
     pub fn trino_debug_pixel(x: u32, y: u32) -> u32;
     /// Test hook: print the top screen as `TRINO_FBR:` rows (RGBA5551) and
     /// a `TRINO_FB_END:` hash line — the N64 dump format.
-    pub fn trino_debug_fb_dump();
+    pub fn trino_debug_fb_dump(bottom: u32);
 
     /// Save file on the SD card: returns its size (0 = none, -1 = error),
     /// copying up to `cap` bytes into `dest`.

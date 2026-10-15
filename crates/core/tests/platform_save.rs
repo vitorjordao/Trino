@@ -41,6 +41,17 @@ fn platform_defaults_report_no_services() {
         None,
         "set_display is a no-op without a display"
     );
+    // No remapping on a platform that does not offer it.
+    assert_eq!(p.input_info(), None);
+    assert_eq!(p.gamepad_name(), None);
+    p.rebind(trino_core::Button::A, trino_core::BindDevice::Keyboard);
+    p.cancel_rebind();
+    p.reset_bindings();
+    assert_eq!(
+        p.binding_label(trino_core::Button::A, trino_core::BindDevice::Keyboard),
+        None
+    );
+    assert_eq!(p.input_info(), None);
 }
 
 #[test]

@@ -10,7 +10,11 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;
 
-use trino_core::{BlobId, Caps, DisplayInfo, DisplaySettings, Platform, SaveError};
+use trino_core::{
+    BindDevice, BlobId, Button, Caps, DisplayInfo, DisplaySettings, InputInfo, Platform, SaveError,
+};
+
+use crate::input::{BINDABLE, InputRequest, PcInput};
 
 pub struct PcPlatform {
     start: Instant,
@@ -25,6 +29,14 @@ pub struct PcPlatform {
     display_request: Option<DisplaySettings>,
     /// The simulated second screen (3DS profile).
     second_screen: Option<(u16, u16)>,
+    /// What the host reports about input ([`Platform::input_info`]); `None`
+    /// until a host publishes it (no remapping then).
+    input: Option<InputInfo>,
+    pad_name: Option<String>,
+    /// Binding labels, [`BINDABLE`] order: keyboard, gamepad.
+    labels: [[Option<String>; 2]; 12],
+    /// The game's last rebind/cancel/reset, for the host to apply.
+    input_request: Option<InputRequest>,
 }
 
 impl PcPlatform {
@@ -39,7 +51,29 @@ impl PcPlatform {
             display: None,
             display_request: None,
             second_screen: None,
+            input: None,
+            pad_name: None,
+            labels: Default::default(),
+            input_request: None,
         }
+    }
+
+    /// The host publishes the input backend's state: support, a pending
+    /// rebind, the pad's name and every binding's label.
+    pub fn publish_input(&mut self, input: &PcInput) {
+        self.input = Some(input.info());
+        self.pad_name = input.gamepad_name();
+        for (i, b) in BINDABLE.iter().enumerate() {
+            self.labels[i] = [
+                input.bindings().label(*b, BindDevice::Keyboard),
+                input.bindings().label(*b, BindDevice::Gamepad),
+            ];
+        }
+    }
+
+    /// The rebind, cancel or reset the game asked for since the last call.
+    pub fn take_input_request(&mut self) -> Option<InputRequest> {
+        self.input_request.take()
     }
 
     /// The host says the renderer has a second screen (3DS profile).
@@ -148,6 +182,37 @@ impl Platform for PcPlatform {
     fn set_display(&mut self, settings: DisplaySettings) {
         if self.display.is_some() {
             self.display_request = Some(settings);
+        }
+    }
+
+    fn input_info(&self) -> Option<InputInfo> {
+        self.input
+    }
+
+    fn gamepad_name(&self) -> Option<&str> {
+        self.pad_name.as_deref()
+    }
+
+    fn binding_label(&self, button: Button, device: BindDevice) -> Option<&str> {
+        let i = BINDABLE.iter().position(|b| *b == button)?;
+        self.labels[i][device as usize].as_deref()
+    }
+
+    fn rebind(&mut self, button: Button, device: BindDevice) {
+        if self.input.is_some() {
+            self.input_request = Some(InputRequest::Rebind(button, device));
+        }
+    }
+
+    fn cancel_rebind(&mut self) {
+        if self.input.is_some() {
+            self.input_request = Some(InputRequest::Cancel);
+        }
+    }
+
+    fn reset_bindings(&mut self) {
+        if self.input.is_some() {
+            self.input_request = Some(InputRequest::Reset);
         }
     }
 }

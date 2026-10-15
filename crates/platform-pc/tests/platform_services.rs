@@ -267,3 +267,130 @@ fn renderer_errors_are_readable() {
         assert_eq!(boxed.to_string(), text);
     }
 }
+
+/// Rebinding through the platform, as a host drives it: the game asks
+/// (`Platform::rebind`), the host hands the request to the input backend,
+/// the next key pressed becomes the binding (and only that button keeps
+/// it), the labels follow, the bindings survive their text file, and a
+/// reset brings the defaults back. Without a published input state the
+/// requests are dropped (consoles, tests).
+#[test]
+fn rebinding_keys_through_the_platform() {
+    use trino_core::{BindDevice, Button, GamepadStatus, Input, Platform};
+    use trino_platform_pc::input::{InputRequest, bindings_from_text, bindings_to_text};
+    use winit::keyboard::KeyCode;
+
+    let mut p = PcPlatform::new(&Caps::PC);
+    let mut input = trino_platform_pc::PcInput::new();
+    p.rebind(Button::A, BindDevice::Keyboard);
+    assert_eq!(p.take_input_request(), None, "no input published yet");
+
+    p.publish_input(&input);
+    let info = p.input_info().expect("published");
+    assert_eq!(info.capturing, None);
+    assert_ne!(
+        info.gamepad,
+        GamepadStatus::Connected,
+        "no pad on a test runner"
+    );
+    assert_eq!(p.binding_label(Button::A, BindDevice::Keyboard), Some("Z"));
+    assert_eq!(
+        p.binding_label(Button::L, BindDevice::Gamepad),
+        Some("LB/LT")
+    );
+
+    p.rebind(Button::A, BindDevice::Keyboard);
+    let r = p.take_input_request().expect("a request");
+    assert_eq!(r, InputRequest::Rebind(Button::A, BindDevice::Keyboard));
+    input.apply(r);
+    p.publish_input(&input);
+    assert_eq!(
+        p.input_info().unwrap().capturing,
+        Some((Button::A, BindDevice::Keyboard))
+    );
+    // B's key: it moves to A, B is left without one.
+    input.handle_key(KeyCode::KeyX, true);
+    assert!(
+        !input.poll().is_down(Button::A),
+        "the capturing press does nothing"
+    );
+    input.handle_key(KeyCode::KeyX, false);
+    assert!(input.take_changed());
+    p.publish_input(&input);
+    assert_eq!(p.input_info().unwrap().capturing, None);
+    assert_eq!(p.binding_label(Button::A, BindDevice::Keyboard), Some("X"));
+    assert_eq!(p.binding_label(Button::B, BindDevice::Keyboard), None);
+    input.handle_key(KeyCode::KeyX, true);
+    let s = input.poll();
+    assert!(s.is_down(Button::A) && !s.is_down(Button::B));
+    input.handle_key(KeyCode::KeyX, false);
+    input.handle_key(KeyCode::KeyZ, true);
+    assert!(!input.poll().is_down(Button::A), "Z no longer presses A");
+    input.handle_key(KeyCode::KeyZ, false);
+
+    // The text file round-trips; a broken file keeps the defaults.
+    let text = bindings_to_text(input.bindings());
+    assert_eq!(&bindings_from_text(&text), input.bindings());
+    assert_eq!(
+        bindings_from_text("garbage\nA = ??? | Nothing\n"),
+        Default::default()
+    );
+
+    // A key with a fixed role (W moves the stick) is not taken: the
+    // rebind keeps waiting, and the next bindable key gets it.
+    input.apply(InputRequest::Rebind(Button::Y, BindDevice::Keyboard));
+    input.handle_key(KeyCode::KeyW, true);
+    input.handle_key(KeyCode::KeyW, false);
+    assert_eq!(
+        input.info().capturing,
+        Some((Button::Y, BindDevice::Keyboard))
+    );
+    input.handle_key(KeyCode::KeyK, true);
+    input.handle_key(KeyCode::KeyK, false);
+    assert_eq!(input.info().capturing, None);
+    assert_eq!(
+        input
+            .bindings()
+            .label(Button::Y, BindDevice::Keyboard)
+            .as_deref(),
+        Some("K")
+    );
+    assert!(input.take_changed());
+
+    // Escape cancels a pending rebind.
+    input.apply(InputRequest::Rebind(Button::Y, BindDevice::Keyboard));
+    input.handle_key(KeyCode::Escape, true);
+    assert_eq!(input.info().capturing, None);
+    assert!(!input.take_changed());
+
+    p.reset_bindings();
+    input.apply(p.take_input_request().unwrap());
+    assert!(input.take_changed());
+    p.publish_input(&input);
+    assert_eq!(p.binding_label(Button::A, BindDevice::Keyboard), Some("Z"));
+    assert_eq!(p.binding_label(Button::B, BindDevice::Keyboard), Some("X"));
+}
+
+/// A pad rebind takes the next pad button (here fed directly: no pad on a
+/// test runner); the pad button leaves the button that had it.
+#[test]
+fn rebinding_a_pad_button() {
+    use trino_core::{BindDevice, Button};
+    use trino_platform_pc::input::{Bindings, PadButton};
+
+    let mut b = Bindings::default();
+    b.bind_pad(Button::Y, PadButton::South);
+    assert_eq!(
+        b.label(Button::Y, BindDevice::Gamepad).as_deref(),
+        Some("A")
+    );
+    assert_eq!(b.label(Button::A, BindDevice::Gamepad), None);
+    b.bind_pad(Button::L, PadButton::RightThumb);
+    assert_eq!(
+        b.label(Button::L, BindDevice::Gamepad).as_deref(),
+        Some("RS")
+    );
+
+    let mut input = trino_platform_pc::PcInput::new();
+    assert!(!input.pad_pressed(PadButton::North), "nothing waits");
+}

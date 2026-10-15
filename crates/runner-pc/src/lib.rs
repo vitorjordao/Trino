@@ -80,6 +80,12 @@ impl RunConfig {
     pub fn display_file(&self) -> PathBuf {
         self.save_file().with_extension("display")
     }
+
+    /// The input bindings (`<save_name>.input`, plain text, one line per
+    /// console button).
+    pub fn input_file(&self) -> PathBuf {
+        self.save_file().with_extension("input")
+    }
 }
 
 /// The window size for `settings` on a `monitor`: the saved size if it
@@ -291,13 +297,18 @@ impl Host {
         let make = self.make.take().expect("game created once");
         let game = make(Vec2::new(w as f32, h as f32));
         window.request_redraw();
+        let mut input = PcInput::new();
+        if let Ok(t) = std::fs::read_to_string(cfg.input_file()) {
+            input.set_bindings(trino_platform_pc::input::bindings_from_text(&t));
+        }
+        platform.publish_input(&input);
         let mut ctx = Ctx {
             window,
             settings,
             monitor,
             renderer,
             audio,
-            input: PcInput::new(),
+            input,
             platform,
             game,
             last_frame: Instant::now(),
@@ -365,6 +376,24 @@ fn apply_display(ctx: &mut Ctx, profile: SimProfile, file: &Path, s: DisplaySett
     refit(ctx, profile);
 }
 
+/// Apply the game's rebind/cancel/reset, persist bindings that changed
+/// (a rebind completes on a later key or pad press), and tell the game.
+fn apply_input(ctx: &mut Ctx, file: &Path) {
+    if let Some(r) = ctx.platform.take_input_request() {
+        ctx.input.apply(r);
+    }
+    if ctx.input.take_changed() {
+        if let Some(dir) = file.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(
+            file,
+            trino_platform_pc::input::bindings_to_text(ctx.input.bindings()),
+        );
+    }
+    ctx.platform.publish_input(&ctx.input);
+}
+
 impl ApplicationHandler for Host {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.ctx.is_none() {
@@ -408,6 +437,7 @@ impl ApplicationHandler for Host {
                 if let Some(s) = ctx.platform.take_display_request() {
                     apply_display(ctx, self.profile, &self.config.display_file(), s);
                 }
+                apply_input(ctx, &self.config.input_file());
 
                 self.frames += 1;
                 if let Some(max) = self.smoke_frames
@@ -444,6 +474,7 @@ mod tests {
             c.display_file(),
             PathBuf::from("/p/target/save/game.display")
         );
+        assert_eq!(c.input_file(), PathBuf::from("/p/target/save/game.input"));
     }
 
     #[test]

@@ -61,6 +61,26 @@ pub struct Project {
     pub n3ds_icon: Option<PathBuf>,
     pub test: TestConfig,
     pub watch: Vec<String>,
+    /// Rust toolchain for the console builds (`cargo +<nightly>`):
+    /// `$TRINO_NIGHTLY`, else `[toolchain] nightly`, else `nightly`.
+    /// Pin it: N64 frame times move with code layout, so two nightlies
+    /// give two different emulated timings for the same source.
+    pub nightly: String,
+}
+
+/// `[toolchain]`: the nightly the console builds use.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ToolchainSection {
+    #[serde(default)]
+    pub nightly: Option<String>,
+}
+
+/// `$TRINO_NIGHTLY` over `pinned` over the floating `nightly`.
+fn nightly_from(env: Option<String>, pinned: Option<String>) -> String {
+    env.filter(|s| !s.is_empty())
+        .or(pinned)
+        .unwrap_or_else(|| "nightly".into())
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -89,6 +109,8 @@ struct File {
     n3ds: N3dsSection,
     #[serde(default)]
     test: TestConfig,
+    #[serde(default)]
+    toolchain: ToolchainSection,
 }
 
 #[derive(Deserialize)]
@@ -169,6 +191,7 @@ impl Project {
             ]
             .map(String::from)
             .to_vec(),
+            nightly: nightly_from(std::env::var("TRINO_NIGHTLY").ok(), None),
         }
     }
 
@@ -226,6 +249,7 @@ impl Project {
             test: f.test,
             watch,
             root,
+            nightly: nightly_from(std::env::var("TRINO_NIGHTLY").ok(), f.toolchain.nightly),
         })
     }
 
@@ -321,6 +345,26 @@ watch = ["game"]
         assert_eq!(p.test.n64_goldens, ["level"]);
         assert_eq!(p.test.n64_max_frame_us, Some(33333));
         assert_eq!(p.watch, ["game"]);
+    }
+
+    #[test]
+    fn nightly_pin_env_over_file_over_floating() {
+        let pinned = Some("nightly-2026-01-02".to_string());
+        assert_eq!(nightly_from(None, None), "nightly");
+        assert_eq!(nightly_from(None, pinned.clone()), "nightly-2026-01-02");
+        assert_eq!(
+            nightly_from(Some("nightly-2026-03-04".into()), pinned.clone()),
+            "nightly-2026-03-04"
+        );
+        assert_eq!(
+            nightly_from(Some(String::new()), pinned),
+            "nightly-2026-01-02"
+        );
+        let with = format!("{SAMPLE}\n[toolchain]\nnightly = \"nightly-2026-05-06\"\n");
+        let p = Project::parse(&with, "/g".into(), "/e".into()).unwrap();
+        if std::env::var("TRINO_NIGHTLY").is_err() {
+            assert_eq!(p.nightly, "nightly-2026-05-06");
+        }
     }
 
     #[test]

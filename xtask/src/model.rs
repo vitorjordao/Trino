@@ -83,6 +83,9 @@ pub struct Report {
     pub joints: usize,
     /// Vertices blending two joints (smooth skinning, `--smooth`).
     pub blended: usize,
+    /// Vertices per color slot 0..=4 (TMDL `SLOT`, glTF `_SLOT`); `None`
+    /// when the model has no slots.
+    pub slots: Option<[usize; 5]>,
     pub clips: Vec<(String, f32, usize, bool)>,
     pub size: [f32; 3],
     pub min: [f32; 3],
@@ -119,7 +122,7 @@ impl Report {
             .collect();
         let list = |v: &[String]| v.iter().map(|s| quote(s)).collect::<Vec<_>>().join(",");
         format!(
-            "{{\"ok\":{},\"file\":{},\"bytes\":{},\"vertices\":{},\"triangles\":{},\"joints\":{},\"blended_vertices\":{},\"clips\":[{}],\"size\":[{},{},{}],\"min\":[{},{},{}],\"radius\":{},\"n64_draw_us\":{},\"n64_frame_percent\":{:.1},\"warnings\":[{}],\"errors\":[{}]}}",
+            "{{\"ok\":{},\"file\":{},\"bytes\":{},\"vertices\":{},\"triangles\":{},\"joints\":{},\"blended_vertices\":{},\"slot_vertices\":{},\"clips\":[{}],\"size\":[{},{},{}],\"min\":[{},{},{}],\"radius\":{},\"n64_draw_us\":{},\"n64_frame_percent\":{:.1},\"warnings\":[{}],\"errors\":[{}]}}",
             self.errors.is_empty(),
             quote(&self.file),
             self.bytes,
@@ -127,6 +130,7 @@ impl Report {
             self.tris,
             self.joints,
             self.blended,
+            self.slots.map_or("null".into(), |c| format!("{c:?}")),
             clips.join(","),
             self.size[0],
             self.size[1],
@@ -168,6 +172,13 @@ impl Report {
             );
         } else if self.joints > 0 {
             s += &format!("  rigid skeleton: {} joint(s)\n", self.joints);
+        }
+        if let Some(c) = self.slots {
+            s += &format!(
+                "  color slots: {} vertices keep their color; slots 1-4 have {} / {} / {} / {} \
+                 (recolored per draw by ModelParams::palette)\n",
+                c[0], c[1], c[2], c[3], c[4]
+            );
         }
         for (n, d, f, l) in &self.clips {
             s += &format!(
@@ -249,6 +260,13 @@ pub fn inspect(path: &Path, opts: &ModelOptions) -> Result<Report, String> {
         blended: (0..mesh.vertex_count)
             .filter(|&i| mesh.blend_of(i).is_some())
             .count(),
+        slots: mesh.has_slots().then(|| {
+            let mut c = [0; 5];
+            for i in 0..mesh.vertex_count {
+                c[mesh.slot(i) as usize] += 1;
+            }
+            c
+        }),
         clips,
         size: [max[0] - min[0], max[1] - min[1], max[2] - min[2]],
         min,

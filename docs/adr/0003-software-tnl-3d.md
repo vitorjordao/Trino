@@ -110,6 +110,10 @@ per draw:
 The "vertex colors only" limit is retired. Opt-in smooth skinning (`SKW2`) added
 about 3% host CPU per draw in the worst case (`bench_tnl`).
 
+Color slots (TMDL `SLOT`) and a per-draw `ModelParams::palette` (2026-10-15, ADR 0005 §4)
+also stay within this contract. The T&L multiplies a slotted vertex color before tint
+and lighting, and the backends see ordinary colored triangles.
+
 Measured on the console clock: a full castle64 hub frame spends about **670 ms** of
 emulated N64 time in render (CPU T&L + submit), against a 33 ms budget at 30 fps
 (`TRINO_PERF` in `cargo xtask test n64`). CPU T&L throughput is now the top N64

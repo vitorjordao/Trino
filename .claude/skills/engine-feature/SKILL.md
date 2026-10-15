@@ -25,6 +25,18 @@ A feature is done only when **PC, N64 and 3DS** all run it and an emulator has s
   - Game API: a new `Platform`/`Game` method that changes the dylib ABI bumps
     `GAME_API_VERSION`.
 - `ModelParams` and similar structs grow. Use `..ModelParams::DEFAULT` everywhere.
+  A new `ModelParams` field also needs three more things:
+  - **Scene codegen:** `crates/scene/src/codegen.rs` writes every field, so add it to
+    the template, then regenerate `examples/showcase/src/showcase_gen.rs` with
+    `cargo xtask scene export` (the `scene_codegen` guard);
+  - **The draw memo:** decide it in `trino_core::memo::MemoKey::new`, which has all 16
+    key words in use, so a big field must be excluded;
+  - **The RSP:** decide it in `rsp_eligible_mv`. The palette (2026-10-15) did all three.
+- A per-vertex T&L input that is unused by most draws gets resolved once per draw into
+  `Setup`, and the vertex reads it through a predictable `Option` branch. Don't add a
+  const generic: it would double every `tessellate_joints` body on the N64's 16 KB
+  I-cache. Prove "unchanged when unused" with a bit-identical comparison test
+  (`crates/core/tests/color_slots.rs`).
 - **A new surface or light feature must reach the N64's RSP path too.** Most N64 draws
   skip `tessellate` and run on `rsp_trino.S` (ADR 0007), which ignores whatever it
   doesn't implement. Either exclude the feature in

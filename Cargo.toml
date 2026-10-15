@@ -37,7 +37,7 @@ serde = { version = "1", features = ["derive"] }
 toml = "1"
 hound = "3"
 # glTF 2.0 import for the 3D model pipeline (Fase 7).
-gltf = "1"
+gltf = { version = "1", features = ["extras"] }
 # TTF/OTF font masters -> bitmap atlases (the version egui already pulls).
 ab_glyph = "0.2"
 # README gameplay recording (dev utility in xtask).

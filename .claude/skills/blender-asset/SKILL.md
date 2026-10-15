@@ -51,7 +51,7 @@ result = {"ok": True}   # some Blender MCP servers require `result` to be a dict
 | Script | For |
 |---|---|
 | `qa_render.py` | `shot`, `sheet`, `turntable`, `clip_sheet`, `orient_mode` (renderable face orientation), `vertex_color_mode` |
-| `color_tools.py` | `Painter` (per-face colors by 3D rules: `fill`, `paint`, `gradient`, `noise`, `ambient_occlusion_floor`, `commit`), `palette_from_materials`, `report` |
+| `color_tools.py` | `Painter` (per-face colors by 3D rules: `fill`, `paint`, `gradient`, `noise`, `ambient_occlusion_floor`, `commit`), `paint_slots` (`_SLOT` color slots), `palette_from_materials`, `report` |
 | `rig_tools.py` | `part_report` (joints vs 32), `set_pivot`, `key_rot`, `key_loc`, `make_clip`, `rigid_check`, `snap_rigid`, `bake_to_deform` |
 | `trino_export.py` | `stash_clips` (one NLA track per clip), `export_glb` (version-tolerant options), `inspect` (runs the engine's bake) |
 
@@ -166,6 +166,34 @@ Traps, measured:
   `palette_from_materials`, clear the material slots, or write the colors directly as
   `castle64_models.py` does.
 
+### Color slots: one model, many color schemes
+
+A character drawn many times in different colors (skin, hair, top, bottom) is ONE
+model. Mark the recolorable regions with color slots, and the game passes the colors
+per draw (`ModelParams::palette`).
+- **Slots:** 0 keeps the baked color; 1..4 multiply it by palette entry slot-1, rounded
+  `(a·b + 127) / 255`, before tint and lighting. The palette's alpha is ignored.
+- **Paint slot regions white in COLOR_0**, with their AO or shading painted in. White
+  times the entry gives exactly the palette color, and darker paint gives it shaded.
+  Anything that must not change (eyes, shoes, a logo) stays in slot 0 with its real
+  color.
+- **Mark them** with `ns["paint_slots"](name, [(rule, slot), ...])`. It writes the INT
+  FACE attribute `_SLOT` by the same 3D rules as `Painter`, and later rules win.
+- **Keep the FACE domain.** The exporter then splits vertices on slot borders. A shared
+  POINT-domain vertex has one slot for all its faces, so Gouraud blends the palette
+  color into the neighbor region.
+- **Export** with `export_glb`, which sets `export_attributes=True`. Without that option
+  Blender drops every custom attribute.
+- **Verified on Blender 5.2.2** (`cargo xtask blender smoke`, gate `color_slots_export`):
+  INT, INT8 and FLOAT on POINT, INT on FACE and FLOAT on CORNER all exported as a
+  float SCALAR `_SLOT`. The bake rounds floats and rejects values outside 0..4 with
+  the file name.
+- **Gate:** `model inspect` prints `color slots: N vertices keep their color; slots 1-4
+  have a / b / c / d`. In the JSON it is `slot_vertices` (`null` without slots).
+- **Cost:** a palette draw always runs the CPU T&L on the N64, never the RSP. On a
+  crowd that is the bigger cost; the per-vertex multiply itself is small. Budget the
+  crowd with `model inspect`'s per-draw estimate.
+
 ## Stage 3 — Rig (animated only)
 
 - **Rigid parts:** hierarchy root → parts. `part_report` must say `ok` (≤ 32 nodes).
@@ -227,6 +255,7 @@ about the origin.
 4. Game code: `ModelId::from_path("models/robot")`, pose with
    `ModelParams { anim: Some(AnimRef::new(ClipId::from_name("walk"), time)), ..ModelParams::DEFAULT }`
    — crossfade idle→walk with `AnimRef::new(idle, t).blend_to(walk, t, weight)`.
+   Color slots: `ModelParams { palette: Some([skin, hair, top, bottom]), ..ModelParams::DEFAULT }`.
 5. Textured model: add `texture = "sprites/<tile>"` to its `[models.*]` entry (UVs from
    `TEXCOORD_0`), declare the sprite (`formats = { n64 = "CI4" }` or `CI8`), or set
    `texture` in a material to swap it per entity.

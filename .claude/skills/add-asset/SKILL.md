@@ -43,6 +43,7 @@ pub const THEME: MusicId = MusicId::from_path("music/theme");
 [models.robot]
 file = "models/robot.glb"   # glTF 2.0 (.glb/.gltf), Y-up, meters
 anim_fps = 20               # optional: clip sampling rate (default 15)
+platforms = ["pc"]          # optional: bake only for these (pc, n64, 3ds); default all
 once = ["wave"]             # optional: clips that play once (default: loop)
 ```
 
@@ -56,6 +57,14 @@ once = ["wave"]             # optional: clips that play once (default: loop)
 - **Skeletons**: animated files bake a rigid skeleton (≤ 32 joints, heaviest weight
   wins). `skinning = "smooth"` keeps a second joint per vertex (TMDL `SKW2`) for meshes
   that crack. That costs ~3% CPU per draw; check with `model inspect --smooth`.
+- **Color slots:** a glTF custom attribute `_SLOT` (one scalar per vertex, 0..4, float
+  or integer) bakes to TMDL `SLOT`. Draw with
+  `ModelParams { palette: Some([c1, c2, c3, c4]), .. }` and each slotted vertex's color
+  is multiplied by its entry, before tint and lighting. Slot 0 keeps its color. One
+  character model then gives a whole crowd. Paint slot regions white, and keep slot
+  borders on split vertices (Blender: `paint_slots`, FACE domain). Without `_SLOT`,
+  the bake output is byte-identical to before. `model inspect` reports the vertices
+  per slot. On the N64 a palette draw runs on the CPU T&L, not the RSP.
 - Full rules and the Blender workflow: the `blender-asset` skill.
 - **Gate:** `cargo xtask model inspect assets/shared/models/robot.glb [--json]` — bakes
   like the engine and reports tris, joints, clips, size and an **N64 cost estimate per

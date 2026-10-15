@@ -261,4 +261,159 @@ mod tests {
         bad.feed(&format!("TRINO_FB_END:3x1:{fnv:08x}"));
         assert!(bad.image().is_err(), "lost rows are detected");
     }
+
+    /// Console log lines for an RGBA5551 framebuffer, as the self-tests print
+    /// them (rows split in two chunks, like the ROM's line-length cap does).
+    fn dump(w: u32, h: u32, px: &[u16]) -> Vec<String> {
+        let mut lines = Vec::new();
+        let mut fnv: u32 = 2166136261;
+        for p in px {
+            for b in [(p >> 8) as u8, *p as u8] {
+                fnv = (fnv ^ b as u32).wrapping_mul(16777619);
+            }
+        }
+        for y in 0..h {
+            let row = &px[(y * w) as usize..((y + 1) * w) as usize];
+            let half = (w / 2) as usize;
+            for (x0, chunk) in [(0, &row[..half]), (half, &row[half..])] {
+                let hex: String = chunk.iter().map(|p| format!("{p:04x}")).collect();
+                lines.push(format!("[emu] TRINO_FBR:{y}:{x0}:{hex}"));
+            }
+        }
+        lines.push(format!("TRINO_FB_END:{w}x{h}:{fnv:08x}"));
+        lines
+    }
+
+    fn capture(lines: &[String]) -> FbCapture {
+        let mut c = FbCapture::default();
+        for l in lines {
+            assert!(c.feed(l), "{l}");
+        }
+        assert!(
+            !c.feed("TRINO_STEP:unrelated"),
+            "other lines are not the dump"
+        );
+        c
+    }
+
+    /// 4x2: red, green, blue, white / black, grey ramp (RGBA5551, alpha bit set).
+    const PX: [u16; 8] = [
+        0xf801, 0x07c1, 0x003f, 0xffff, 0x0001, 0x4211, 0x8421, 0xc631,
+    ];
+
+    #[test]
+    fn framebuffer_dumps_round_trip_through_bless_and_check() {
+        let root = tempfile::tempdir().unwrap();
+        let c = capture(&dump(4, 2, &PX));
+        assert!(c.done());
+        let img = c.image().unwrap();
+        assert_eq!((img.0, img.1), (4, 2));
+        assert_eq!(
+            &img.2[..16],
+            &[
+                255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255
+            ]
+        );
+
+        // No golden yet: a clear error, then --bless writes it.
+        let err = check(root.path(), "n64", "frame", img.clone(), false).unwrap_err();
+        assert!(err.contains("run with --bless"), "{err}");
+        let msg = check(root.path(), "n64", "frame", img.clone(), true).unwrap();
+        assert!(msg.starts_with("blessed"), "{msg}");
+        assert!(root.path().join("tests/golden/n64/frame.png").is_file());
+        let ok = check(root.path(), "n64", "frame", img.clone(), false).unwrap();
+        assert!(ok.ends_with("matches"), "{ok}");
+
+        // One pixel off: pixel-exact check fails and writes the actual image.
+        let mut px = PX;
+        px[5] ^= 0x0800;
+        let changed = capture(&dump(4, 2, &px)).image().unwrap();
+        let err = check(root.path(), "n64", "frame", changed, false).unwrap_err();
+        assert!(err.contains("differs (1 pixels)"), "{err}");
+        assert!(
+            root.path()
+                .join("tests/golden/n64/actual/frame.png")
+                .is_file()
+        );
+
+        // A different size is reported as such.
+        let small = capture(&dump(2, 1, &PX[..2])).image().unwrap();
+        let err = check(root.path(), "n64", "frame", small, false).unwrap_err();
+        assert!(err.contains("differs (size"), "{err}");
+    }
+
+    #[test]
+    fn lost_or_garbled_dump_lines_are_detected() {
+        let lines = dump(4, 2, &PX);
+        // A dropped row chunk: the hash no longer matches.
+        let partial: Vec<String> = lines.iter().skip(1).cloned().collect();
+        let err = capture(&partial).image().unwrap_err();
+        assert!(err.contains("hash mismatch"), "{err}");
+        // Malformed lines still belong to the dump but carry nothing.
+        let mut c = FbCapture::default();
+        assert!(c.feed("TRINO_FBR:x:0:ffff"));
+        assert!(c.feed("TRINO_FBR:0"));
+        assert!(c.feed("TRINO_FB_END:garbage"));
+        assert!(!c.done(), "an unparsable end line is no end");
+        assert!(c.image().unwrap_err().contains("no TRINO_FB_END"));
+    }
+
+    #[test]
+    fn tolerant_goldens_accept_small_drift_and_reject_far_pixels() {
+        let root = tempfile::tempdir().unwrap();
+        let (w, h) = (8u32, 8u32);
+        let base: Vec<u8> = (0..w * h)
+            .flat_map(|i| [i as u8 * 3, 100, 200, 255])
+            .collect();
+        let msg = check_close(
+            root.path(),
+            "3ds",
+            "hub",
+            (w, h, base.clone()),
+            true,
+            2.0,
+            0.02,
+        )
+        .unwrap();
+        assert!(msg.starts_with("blessed"));
+
+        // +2 on one channel everywhere: mean 2, no far pixels.
+        let near: Vec<u8> = base
+            .chunks(4)
+            .flat_map(|p| [p[0], p[1] + 2, p[2], p[3]])
+            .collect();
+        assert_eq!(distance(&near, &base), (2.0, 0.0));
+        let ok = check_close(root.path(), "3ds", "hub", (w, h, near), false, 2.0, 0.02).unwrap();
+        assert!(ok.contains("mean diff 2.00"), "{ok}");
+
+        // Two pixels of a different color: 2/64 > 2% far pixels.
+        let mut far = base.clone();
+        far[0] = far[0].wrapping_add(100);
+        far[4] = far[4].wrapping_add(100);
+        let (_, frac) = distance(&far, &base);
+        assert!((frac - 2.0 / 64.0).abs() < 1e-6);
+        let err =
+            check_close(root.path(), "3ds", "hub", (w, h, far), false, 2.0, 0.02).unwrap_err();
+        assert!(err.contains("actual written to"), "{err}");
+        assert!(
+            root.path()
+                .join("tests/golden/3ds/actual/hub.png")
+                .is_file()
+        );
+
+        let err = check_close(
+            root.path(),
+            "3ds",
+            "hub",
+            (4, 4, vec![0; 64]),
+            false,
+            2.0,
+            0.02,
+        )
+        .unwrap_err();
+        assert!(err.contains("differs in size"), "{err}");
+        let err =
+            check_close(root.path(), "3ds", "none", (w, h, base), false, 2.0, 0.02).unwrap_err();
+        assert!(err.contains("--bless"), "{err}");
+    }
 }

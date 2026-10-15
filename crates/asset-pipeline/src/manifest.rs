@@ -116,9 +116,22 @@ pub struct ModelDecl {
     /// costs a second transform per skinned vertex).
     #[serde(default)]
     pub skinning: Option<String>,
+    /// Bake only for these platforms (`["pc"]`: a model too big for a
+    /// console's RAM). Default: every platform. A game draws only what
+    /// the running platform has (`draw_model` of a missing model draws
+    /// nothing).
+    #[serde(default)]
+    pub platforms: Option<Vec<String>>,
 }
 
 impl ModelDecl {
+    /// Is this model baked for `platform`?
+    pub fn bakes_for(&self, platform: Platform) -> bool {
+        self.platforms
+            .as_ref()
+            .is_none_or(|ps| ps.iter().any(|p| Platform::parse(p) == Some(platform)))
+    }
+
     pub fn options(&self) -> crate::model::ModelOptions {
         let mut opts = crate::model::ModelOptions::default();
         if let Some(fps) = self.anim_fps {
@@ -177,6 +190,16 @@ impl Manifest {
                 path.display(),
                 manifest.version
             ));
+        }
+        for (name, m) in &manifest.models {
+            for p in m.platforms.iter().flatten() {
+                if Platform::parse(p).is_none() {
+                    return Err(format!(
+                        "{}: model `{name}`: unknown platform `{p}` (pc, n64, 3ds)",
+                        path.display()
+                    ));
+                }
+            }
         }
         Ok(manifest)
     }

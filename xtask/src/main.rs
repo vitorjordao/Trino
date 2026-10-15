@@ -315,7 +315,14 @@ fn watch_pc(game: &str) -> ExitCode {
 /// Regenerate the sample master assets (committed to the repo). Dev utility:
 /// keeps binary fixtures reproducible from code.
 fn gen_assets() -> ExitCode {
-    let root = repo_root();
+    gen_assets_into(&repo_root());
+    println!("sample assets regenerated under assets/shared/");
+    ExitCode::SUCCESS
+}
+
+/// Write every generated master under `root/assets/shared/` (the repo root
+/// for `gen-assets`; a temp dir in tests).
+fn gen_assets_into(root: &Path) {
     let sprites = root.join("assets/shared/sprites");
     let sounds = root.join("assets/shared/sounds");
     let music = root.join("assets/shared/music");
@@ -372,13 +379,10 @@ fn gen_assets() -> ExitCode {
     gen_cube_glb(&models.join("cube.glb"));
 
     // castle64 (the 3D showcase): blocks, articulated player, boar, doors.
-    castle64_assets::gen_all(&root, &|path, w, h, rgba| write_png(path, w, h, rgba));
-    showcase_assets::gen_all(&root, &|path, w, h, rgba| write_png(path, w, h, rgba));
+    castle64_assets::gen_all(root, &|path, w, h, rgba| write_png(path, w, h, rgba));
+    showcase_assets::gen_all(root, &|path, w, h, rgba| write_png(path, w, h, rgba));
     // trino5x7: the default pixel font (bitmap text on every target).
-    font_assets::gen_all(&root, &|path, w, h, rgba| write_png(path, w, h, rgba));
-
-    println!("sample assets regenerated under assets/shared/");
-    ExitCode::SUCCESS
+    font_assets::gen_all(root, &|path, w, h, rgba| write_png(path, w, h, rgba));
 }
 
 /// glTF `COLOR_0` is linear: display (sRGB) color bytes -> little-endian
@@ -955,7 +959,142 @@ fn copy_template(
 
 #[cfg(test)]
 mod tests {
-    use super::{copy_template, repo_root, scaffold_game};
+    use super::{copy_template, gen_assets_into, repo_root, scaffold_game};
+
+    /// Every file under `dir`, relative to it.
+    fn files(dir: &std::path::Path, base: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                files(&path, base, out);
+            } else {
+                out.push(path.strip_prefix(base).unwrap().to_path_buf());
+            }
+        }
+    }
+
+    fn png(path: &std::path::Path) -> (u32, u32, Vec<u8>) {
+        let mut dec =
+            png::Decoder::new(std::io::BufReader::new(std::fs::File::open(path).unwrap()));
+        dec.set_transformations(png::Transformations::EXPAND);
+        let mut reader = dec.read_info().unwrap();
+        let mut buf = vec![0; reader.output_buffer_size().unwrap()];
+        let info = reader.next_frame(&mut buf).unwrap();
+        buf.truncate(info.buffer_size());
+        (info.width, info.height, buf)
+    }
+
+    fn wav(path: &std::path::Path) -> (hound::WavSpec, Vec<i32>) {
+        let mut r = hound::WavReader::open(path).unwrap();
+        let spec = r.spec();
+        (spec, r.samples::<i32>().map(Result::unwrap).collect())
+    }
+
+    /// Generated and committed masters agree: PNG pixels and WAV samples
+    /// within one step, models bake to the same mesh (counts, indices,
+    /// positions within 1e-4, colors within one step). Tolerant on purpose:
+    /// `sin`/`powf` may round differently in another OS's libm.
+    fn same_master(
+        rel: &std::path::Path,
+        generated: &std::path::Path,
+        committed: &std::path::Path,
+    ) {
+        let ext = rel.extension().and_then(|e| e.to_str()).unwrap_or("");
+        let close = |a: &[u8], b: &[u8]| {
+            a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.abs_diff(*y) <= 1)
+        };
+        match ext {
+            "png" => {
+                let (a, b) = (png(generated), png(committed));
+                assert_eq!((a.0, a.1), (b.0, b.1), "{}: size", rel.display());
+                assert!(close(&a.2, &b.2), "{}: pixels differ", rel.display());
+            }
+            "wav" => {
+                let (a, b) = (wav(generated), wav(committed));
+                assert_eq!(a.0, b.0, "{}: wav spec", rel.display());
+                assert_eq!(a.1.len(), b.1.len(), "{}: sample count", rel.display());
+                assert!(
+                    a.1.iter().zip(&b.1).all(|(x, y)| (x - y).abs() <= 1),
+                    "{}: samples differ",
+                    rel.display()
+                );
+            }
+            "glb" | "gltf" => {
+                let opts = trino_asset_pipeline::ModelOptions::default();
+                let ta = trino_asset_pipeline::bake_model(generated, &opts).unwrap();
+                let tb = trino_asset_pipeline::bake_model(committed, &opts).unwrap();
+                let (a, b) = (
+                    trino_core::Mesh::from_tmdl(&ta).unwrap(),
+                    trino_core::Mesh::from_tmdl(&tb).unwrap(),
+                );
+                let what = rel.display();
+                assert_eq!(a.vertex_count, b.vertex_count, "{what}: vertices");
+                assert_eq!(a.index_count, b.index_count, "{what}: indices");
+                assert_eq!(a.joint_count(), b.joint_count(), "{what}: joints");
+                assert_eq!(a.clip_count(), b.clip_count(), "{what}: clips");
+                for i in 0..a.index_count {
+                    assert_eq!(a.index(i), b.index(i), "{what}: index {i}");
+                }
+                for i in 0..a.vertex_count {
+                    let (p, q) = (a.position(i), b.position(i));
+                    let d = (p.x - q.x)
+                        .abs()
+                        .max((p.y - q.y).abs())
+                        .max((p.z - q.z).abs());
+                    assert!(d < 1e-4, "{what}: vertex {i} moved {d}");
+                    let (c, k) = (a.color(i), b.color(i));
+                    assert!(
+                        close(&[c.r, c.g, c.b, c.a], &[k.r, k.g, k.b, k.a]),
+                        "{what}: vertex {i} color"
+                    );
+                }
+            }
+            other => panic!("{}: no comparison for `.{other}` masters", rel.display()),
+        }
+    }
+
+    /// `cargo xtask gen-assets` keeps the committed binary masters
+    /// reproducible from code: generating them into a temp dir gives the
+    /// same sprites, sounds, music, models and font the repo ships.
+    #[test]
+    fn gen_assets_reproduces_the_committed_masters() {
+        let tmp = tempfile::tempdir().unwrap();
+        gen_assets_into(tmp.path());
+        let mut out = Vec::new();
+        files(tmp.path(), tmp.path(), &mut out);
+        out.sort();
+        assert!(out.len() >= 30, "generated only {} files", out.len());
+        for kind in ["sprites", "sounds", "music", "models", "fonts"] {
+            assert!(
+                out.iter()
+                    .any(|r| r.starts_with(format!("assets/shared/{kind}"))),
+                "nothing generated under {kind}/"
+            );
+        }
+        for rel in &out {
+            let committed = repo_root().join(rel);
+            assert!(
+                committed.is_file(),
+                "{} is generated but not committed",
+                rel.display()
+            );
+            same_master(rel, &tmp.path().join(rel), &committed);
+        }
+    }
+
+    /// Watch loops rebuild on writes, creates and removes, never on the
+    /// access events that reading the sources emits.
+    #[test]
+    fn only_real_filesystem_changes_trigger_a_rebuild() {
+        use notify_debouncer_full::DebouncedEvent;
+        use notify_debouncer_full::notify::event::{AccessKind, CreateKind, Event, EventKind};
+        let ev = |kind| DebouncedEvent::new(Event::new(kind), std::time::Instant::now());
+        let read = ev(EventKind::Access(AccessKind::Any));
+        let made = ev(EventKind::Create(CreateKind::File));
+        assert!(!super::real_change(&[]));
+        assert!(!super::real_change(std::slice::from_ref(&read)));
+        assert!(super::real_change(&[read, made]));
+    }
 
     #[test]
     fn scaffold_renders_placeholders() {

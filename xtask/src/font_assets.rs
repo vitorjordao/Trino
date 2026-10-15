@@ -230,11 +230,76 @@ pub fn write_skinned_gltf(path: &std::path::Path) {
         len = buf.len(),
         data = b64(&buf)
     );
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, json).unwrap();
+}
+
+/// A white card of three 0.4 x 0.6 quads side by side (x from -0.6 to 0.6,
+/// facing -Z), in color slots 0, 1 and 4 (a float `_SLOT`, what Blender
+/// exports): `castle64::selftest::palette` probes each column. No COLOR_0
+/// and no material, so every vertex is white.
+pub fn write_slots_gltf(path: &std::path::Path) {
+    let (mut pos, mut slots, mut idx) = (Vec::new(), Vec::new(), Vec::new());
+    for (q, (x0, slot)) in [(-0.6f32, 0.0f32), (-0.2, 1.0), (0.2, 4.0)]
+        .into_iter()
+        .enumerate()
+    {
+        let x1 = x0 + 0.4;
+        // Front faces toward -Z: (+x,-y), (-x,-y), (-x,+y), (+x,+y).
+        for (x, y) in [(x1, -0.3f32), (x0, -0.3), (x0, 0.3), (x1, 0.3)] {
+            pos.extend_from_slice(&[x, y, 0.0]);
+            slots.push(slot);
+        }
+        let b = q as u16 * 4;
+        idx.extend_from_slice(&[b, b + 1, b + 2, b, b + 2, b + 3]);
+    }
+    let mut buf: Vec<u8> = Vec::new();
+    for v in &pos {
+        buf.extend_from_slice(&v.to_le_bytes()); // 0..144 positions
+    }
+    for _ in 0..12 {
+        for v in [0.0f32, 0.0, -1.0] {
+            buf.extend_from_slice(&v.to_le_bytes()); // 144..288 normals
+        }
+    }
+    for i in &idx {
+        buf.extend_from_slice(&i.to_le_bytes()); // 288..324 indices
+    }
+    for v in &slots {
+        buf.extend_from_slice(&v.to_le_bytes()); // 324..372 _SLOT
+    }
+    let json = format!(
+        r#"{{
+  "asset": {{"version": "2.0"}},
+  "scene": 0,
+  "scenes": [{{"nodes": [0]}}],
+  "nodes": [{{"name": "card", "mesh": 0}}],
+  "meshes": [{{"primitives": [{{"attributes": {{"POSITION": 0, "NORMAL": 1, "_SLOT": 3}}, "indices": 2}}]}}],
+  "buffers": [{{"byteLength": {len}, "uri": "data:application/octet-stream;base64,{data}"}}],
+  "bufferViews": [
+    {{"buffer": 0, "byteOffset": 0, "byteLength": 144}},
+    {{"buffer": 0, "byteOffset": 144, "byteLength": 144}},
+    {{"buffer": 0, "byteOffset": 288, "byteLength": 36}},
+    {{"buffer": 0, "byteOffset": 324, "byteLength": 48}}
+  ],
+  "accessors": [
+    {{"bufferView": 0, "componentType": 5126, "count": 12, "type": "VEC3", "min": [-0.6,-0.3,0], "max": [0.6,0.3,0]}},
+    {{"bufferView": 1, "componentType": 5126, "count": 12, "type": "VEC3"}},
+    {{"bufferView": 2, "componentType": 5123, "count": 18, "type": "SCALAR"}},
+    {{"bufferView": 3, "componentType": 5126, "count": 12, "type": "SCALAR"}}
+  ]
+}}
+"#,
+        len = buf.len(),
+        data = b64(&buf)
+    );
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, json).unwrap();
 }
 
 pub fn gen_all(repo_root: &Path, write_png: crate::castle64_assets::PngWriter) {
     write_skinned_gltf(&repo_root.join("assets/shared/models/proxies/selftest-strip.gltf"));
+    write_slots_gltf(&repo_root.join("assets/shared/models/proxies/selftest-slots.gltf"));
     let (w, h, rgba) = atlas();
     let path = repo_root.join("assets/shared/fonts/trino5x7.png");
     std::fs::create_dir_all(path.parent().unwrap()).expect("create fonts dir");

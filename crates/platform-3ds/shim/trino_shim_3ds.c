@@ -333,10 +333,12 @@ void trino_3d_draw(const float* v, uint32_t count, void* sheet, uint32_t clamp)
 #define TRINO_SAVE_TMP TRINO_SAVE_DIR "/save.tmp"
 
 // Reads up to `cap` bytes; returns the file size, 0 if there is no save,
-// -1 on error.
+// -1 on error. A power cut between store's remove() and rename() leaves
+// only the (complete) temp file: read that. The Rust side checks the frame.
 int32_t trino_save_load(uint8_t* dest, uint32_t cap)
 {
     FILE* f = fopen(TRINO_SAVE_PATH, "rb");
+    if (!f) f = fopen(TRINO_SAVE_TMP, "rb");
     if (!f) return 0;
     fseek(f, 0, SEEK_END);
     long size = ftell(f);

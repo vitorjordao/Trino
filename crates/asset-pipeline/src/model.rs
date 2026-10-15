@@ -28,7 +28,7 @@
 
 use std::path::Path;
 
-use trino_core::render3d::{MAX_JOINTS, TMDL_MAGIC};
+use trino_core::render3d::{MAX_JOINTS, MAX_SLOT, TMDL_MAGIC};
 use trino_core::{AnimRef, ClipId, Mat34, Mesh, Vec3};
 
 /// Column-major glTF node matrix helpers.
@@ -309,6 +309,9 @@ pub struct MeshData {
     /// Smooth skinning: (second joint, weight 0..255) per vertex -> `SKW2`
     /// (written only when some vertex actually blends).
     pub blend: Vec<[u8; 2]>,
+    /// Color slot per vertex (0..=4, glTF `_SLOT`) -> `SLOT` (written only
+    /// when some vertex has a non-zero slot). Empty = no slots.
+    pub slots: Vec<u8>,
 }
 
 fn section(blob: &mut Vec<u8>, tag: &[u8; 4], body: &[u8]) {
@@ -369,6 +372,7 @@ impl MeshData {
         permute(&mut self.colors, &order);
         permute(&mut self.uvs, &order);
         permute(&mut self.blend, &order);
+        permute(&mut self.slots, &order);
         if let Some(skel) = &mut self.skeleton {
             permute(&mut skel.joint_of_vertex, &order);
         }
@@ -460,6 +464,20 @@ impl MeshData {
             }
             section(&mut blob, b"TXUV", &body);
             section(&mut blob, b"TXID", &tex.to_le_bytes());
+        }
+
+        if self.slots.iter().any(|&s| s != 0) {
+            if self.slots.len() != self.positions.len() {
+                return Err(format!(
+                    "{} color slots for {} vertices (one `_SLOT` per vertex expected)",
+                    self.slots.len(),
+                    self.positions.len()
+                ));
+            }
+            if let Some(s) = self.slots.iter().find(|&&s| s > MAX_SLOT) {
+                return Err(format!("color slot {s} is out of range 0..={MAX_SLOT}"));
+            }
+            section(&mut blob, b"SLOT", &self.slots);
         }
 
         // Bounds over the bind pose and every sampled frame, evaluated by
@@ -627,6 +645,54 @@ fn sample_channel<const N: usize>(
             lerp(value(k), value(k + 1), f)
         }
     }
+}
+
+/// The primitive's color slots (custom attribute `_SLOT`, one scalar per
+/// vertex, float or integer, 0..=4): zeros when it has none. Floats round
+/// to the nearest slot (exporters write custom attributes as floats).
+fn read_slots<'s>(
+    primitive: &gltf::Primitive,
+    buf: impl Clone + Fn(gltf::Buffer) -> Option<&'s [u8]>,
+    count: usize,
+) -> Result<Vec<u8>, String> {
+    use gltf::accessor::{DataType, Dimensions, Iter};
+    let Some(acc) = primitive.get(&gltf::Semantic::Extras("SLOT".into())) else {
+        return Ok(vec![0; count]);
+    };
+    if acc.dimensions() != Dimensions::Scalar {
+        return Err("`_SLOT` must be a SCALAR attribute (one slot per vertex)".into());
+    }
+    if acc.count() != count {
+        return Err(format!(
+            "`_SLOT` has {} values for {count} vertices",
+            acc.count()
+        ));
+    }
+    fn ints<'s, T: gltf::accessor::Item + Copy + Into<f64>>(
+        acc: gltf::Accessor,
+        buf: impl Clone + Fn(gltf::Buffer) -> Option<&'s [u8]>,
+    ) -> Option<Vec<f64>> {
+        Some(Iter::<T>::new(acc, buf)?.map(Into::into).collect())
+    }
+    let vals = match acc.data_type() {
+        DataType::F32 => ints::<f32>(acc, buf),
+        DataType::U8 => ints::<u8>(acc, buf),
+        DataType::I8 => ints::<i8>(acc, buf),
+        DataType::U16 => ints::<u16>(acc, buf),
+        DataType::I16 => ints::<i16>(acc, buf),
+        DataType::U32 => ints::<u32>(acc, buf),
+    }
+    .ok_or("`_SLOT` accessor has no readable data")?;
+    vals.iter()
+        .map(|&v| {
+            let r = v.round();
+            if (0.0..=MAX_SLOT as f64).contains(&r) {
+                Ok(r as u8)
+            } else {
+                Err(format!("`_SLOT` value {v} is out of range 0..={MAX_SLOT}"))
+            }
+        })
+        .collect()
 }
 
 fn node_trs(node: &gltf::Node) -> Trs {
@@ -816,6 +882,7 @@ fn load_gltf(path: &Path, opts: &ModelOptions) -> Result<MeshData, String> {
             if prim_col.len() != prim_pos.len() {
                 return Err(err(&"attribute counts do not match POSITION count"));
             }
+            let prim_slots = read_slots(&primitive, buf, prim_pos.len()).map_err(|e| err(&e))?;
 
             // Joint per vertex.
             if rigged {
@@ -875,6 +942,7 @@ fn load_gltf(path: &Path, opts: &ModelOptions) -> Result<MeshData, String> {
             data.normals
                 .extend(prim_nrm.iter().map(|n| mat_dir(&xform, *n)));
             data.colors.extend(prim_col);
+            data.slots.extend(prim_slots);
             if prim_uv.len() == prim_pos.len() {
                 data.uvs.extend(prim_uv);
             } else {

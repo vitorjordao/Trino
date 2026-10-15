@@ -19,7 +19,7 @@
 //! (RDP with W on N64, clip-space w on PC/3DS).
 //!
 //! Surface materials ([`ModelParams`]: tint, emissive, flat/gouraud/unlit
-//! shading, double-sided), the light (colored directional + ambient) and
+//! shading, double-sided, a palette for the mesh's color slots), the light (colored directional + ambient) and
 //! distance fog are all evaluated here, per vertex — so every target gets
 //! them for free. Animated models carry a **rigid skeleton** in their TMDL
 //! blob (each vertex follows exactly one joint — the N64-era limb model):
@@ -75,7 +75,15 @@ use crate::render::{AnimRef, ClipId, ModelParams, Shading, SpriteId};
 ///   u8 weight2` — the vertex blends from its `SKEL` joint toward `joint2`
 ///   by `weight2 / 255` (two-bone linear blend). Meshes without it stay
 ///   rigid (the N64-era look, and cheaper).
+/// - `SLOT`: per vertex `u8` color slot, 0..=4. Slot 0 keeps the baked
+///   color; slot `s` multiplies the vertex RGB by entry `s - 1` of the
+///   draw's [`ModelParams::palette`] (before tint and lighting). Baked only
+///   when some vertex has a non-zero slot (glTF attribute `_SLOT`).
 pub const TMDL_MAGIC: &[u8; 4] = b"TMDL";
+
+/// Highest color slot a vertex may name (`SLOT`): the palette has
+/// [`MAX_SLOT`] entries ([`crate::Palette`]).
+pub const MAX_SLOT: u8 = 4;
 
 /// Most joints a skeleton may have. Joint matrices live on the stack during
 /// [`tessellate`] (no allocator on consoles); 32 rigid joints is above what
@@ -104,6 +112,8 @@ pub struct Mesh<'a> {
     texture: Option<SpriteId>,
     /// `SKW2`: (joint2, weight2) per vertex.
     blend: Option<&'a [u8]>,
+    /// `SLOT`: color slot (0..=[`MAX_SLOT`]) per vertex.
+    slots: Option<&'a [u8]>,
     /// Every vertex color has alpha 255 (checked once, at parse).
     opaque: bool,
     /// Every normal has unit length (checked once, at parse): the
@@ -141,6 +151,7 @@ pub struct MeshLayout {
     uvs: Option<Span>,
     texture: Option<SpriteId>,
     blend: Option<Span>,
+    slots: Option<Span>,
     opaque: bool,
     unit_normals: bool,
     axis_normals: bool,
@@ -306,6 +317,7 @@ impl<'a> Mesh<'a> {
             uvs: None,
             texture: None,
             blend: None,
+            slots: None,
             opaque: true,
             unit_normals: true,
             axis_normals: true,
@@ -383,6 +395,12 @@ impl<'a> Mesh<'a> {
                     }
                     mesh.blend = Some(&body[..v * 2]);
                 }
+                b"SLOT" => {
+                    if len < v || body[..v].iter().any(|&s| s > MAX_SLOT) {
+                        return Err(MeshError::BadSection);
+                    }
+                    mesh.slots = Some(&body[..v]);
+                }
                 _ => {} // unknown section: skip
             }
             at = body_at + len;
@@ -411,6 +429,7 @@ impl<'a> Mesh<'a> {
             uvs: self.uvs.map(|u| span(u.as_flattened())),
             texture: self.texture,
             blend: self.blend.map(span),
+            slots: self.slots.map(span),
             opaque: self.opaque,
             unit_normals: self.unit_normals,
             axis_normals: self.axis_normals,
@@ -440,6 +459,7 @@ impl<'a> Mesh<'a> {
             uvs: l.uvs.map(|u| u.get(blob).as_chunks().0),
             texture: l.texture,
             blend: l.blend.map(|b| b.get(blob)),
+            slots: l.slots.map(|s| s.get(blob)),
             opaque: l.opaque,
             unit_normals: l.unit_normals,
             axis_normals: l.axis_normals,
@@ -519,6 +539,19 @@ impl<'a> Mesh<'a> {
     pub fn color(&self, i: usize) -> Color {
         let [r, g, b, a] = self.colors[i];
         Color::rgba(r, g, b, a)
+    }
+
+    /// Color slot of vertex `i` (`SLOT`, 0..=[`MAX_SLOT`]); 0 when the mesh
+    /// has no slots.
+    #[inline]
+    pub fn slot(&self, i: usize) -> u8 {
+        self.slots.map_or(0, |s| s[i])
+    }
+
+    /// Color slots present (`SLOT`): [`ModelParams::palette`] recolors
+    /// this mesh.
+    pub fn has_slots(&self) -> bool {
+        self.slots.is_some()
     }
 
     #[inline]
@@ -989,7 +1022,8 @@ pub struct RspDraw {
 /// overlay has no clipping, splitting, fog, colored light, emissive, flat
 /// shading or textures, so the draw must need none of them. Its whole
 /// bounding sphere must be inside the guard-band frustum and past the near
-/// plane, so no triangle could have been clipped. Only for meshes
+/// plane, so no triangle could have been clipped. A palette on a mesh with
+/// color slots stays on the CPU too (the overlay draws baked colors). Only for meshes
 /// [`rsp_mesh_supported`] accepted (checked once; this runs per draw). It
 /// lives in the core so host tests can predict the console's work split
 /// exactly (`perf_budget`).
@@ -999,20 +1033,13 @@ pub fn rsp_eligible(
     model: &Mat34,
     params: &ModelParams,
 ) -> Option<RspDraw> {
-    if !ctx.white
-        || ctx.fog_on
-        || params.tint.a < 255
-        || params.emissive.r | params.emissive.g | params.emissive.b != 0
-        || params.texture.is_some()
-        // Back faces through the overlay were never verified: CPU path.
-        || params.double_sided
-    {
-        return None;
-    }
-    let (c, r) = mesh.bounds()?;
-    let c = ctx.view.mul(model).transform_point(c);
-    let s = model.axis_scales_sq();
-    let r2 = r * r * s.x.max(s.y).max(s.z);
+    rsp_eligible_mv(ctx, mesh, model, &ctx.view.mul(model), params)
+}
+
+/// The view-space sphere tests of [`rsp_eligible`]: center `c` (view
+/// space) and squared radius `r2` wholly inside the RSP band, past NEAR and
+/// under `RSP_MAX_DEPTH`, and not wholly outside the guard band.
+pub fn rsp_band(ctx: &TnlContext, c: Vec3, r2: f32) -> bool {
     let inside = |d: f32, k: f32| d > 0.0 && d * d > r2 * k;
     let abs = |v: f32| if v < 0.0 { -v } else { v };
     // Wholly outside the guard band: the CPU path culls it for ~13 µs —
@@ -1020,20 +1047,90 @@ pub fn rsp_eligible(
     let outside = |d: f32, k: f32| d < 0.0 && d * d > r2 * k;
     let (gx, gy) = (ctx.lim_x, ctx.lim_y);
     if outside(gx * c.z - abs(c.x), gx * gx + 1.0) || outside(gy * c.z - abs(c.y), gy * gy + 1.0) {
-        return None;
+        return false;
     }
     let band = RSP_BAND / GUARD;
     let (lx, ly) = (ctx.lim_x * band, ctx.lim_y * band);
-    if !(inside(c.z - NEAR, 1.0)
+    // The overlay's clip coordinates are s15.16 (|v| < 32768): x reaches
+    // ~RSP_BAND × the view depth inside the band. Keep the whole sphere
+    // under RSP_MAX_DEPTH.
+    inside(c.z - NEAR, 1.0)
         && inside(lx * c.z - abs(c.x), lx * lx + 1.0)
-        && inside(ly * c.z - abs(c.y), ly * ly + 1.0))
+        && inside(ly * c.z - abs(c.y), ly * ly + 1.0)
+        && inside(RSP_MAX_DEPTH - c.z, 1.0)
+}
+
+/// What an RSP draw keeps when only the camera's **translation** changes
+/// (a pan or a zoom along the view axis: same view rotation and focal).
+/// With the view's new translation column `t`, the draw's `view · model`
+/// translation is `s[r] + t[r]` and its bound center `q[r] + (s[r] + t[r])`
+/// — the very operations, in the same order, as [`Mat34::mul`] and
+/// [`Mat34::transform_point`], so a backend that patches a remembered draw
+/// gets the bits a full recompute would ([`rsp_band`] then decides again).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct RspPan {
+    pub s: [f32; 3],
+    pub q: [f32; 3],
+    pub r2: f32,
+}
+
+impl RspPan {
+    /// The parts of drawing `mesh` with `model` under `view` (whose
+    /// `view.mul(model)` is `mv`).
+    pub fn new(view: &Mat34, mv: &Mat34, mesh: &Mesh, model: &Mat34) -> Option<RspPan> {
+        let (c, r) = mesh.bounds()?;
+        let (v, m, w) = (&view.m, &model.m, &mv.m);
+        let s = model.axis_scales_sq();
+        let r2 = r * r * s.x.max(s.y).max(s.z);
+        Some(RspPan {
+            s: core::array::from_fn(|i| v[i][0] * m[0][3] + v[i][1] * m[1][3] + v[i][2] * m[2][3]),
+            q: core::array::from_fn(|i| w[i][0] * c.x + w[i][1] * c.y + w[i][2] * c.z),
+            r2,
+        })
+    }
+
+    /// The draw's `view · model` translation column under a view whose
+    /// translation column is `t`.
+    pub fn translation(&self, t: [f32; 3]) -> [f32; 3] {
+        core::array::from_fn(|i| self.s[i] + t[i])
+    }
+
+    /// The draw's bound center (view space) for translation column `mt`
+    /// ([`RspPan::translation`]).
+    pub fn center(&self, mt: [f32; 3]) -> Vec3 {
+        Vec3::new(self.q[0] + mt[0], self.q[1] + mt[1], self.q[2] + mt[2])
+    }
+}
+
+/// [`rsp_eligible`] with the draw's `view · model` product already made
+/// (`mv`): a backend that needs it for the draw itself computes it once
+/// (on the N64 a 3×4 product is ~8 µs). Same arithmetic, same answers.
+pub fn rsp_eligible_mv(
+    ctx: &TnlContext,
+    mesh: &Mesh,
+    model: &Mat34,
+    mv: &Mat34,
+    params: &ModelParams,
+) -> Option<RspDraw> {
+    if !ctx.white
+        || ctx.fog_on
+        || params.tint.a < 255
+        || params.emissive.r | params.emissive.g | params.emissive.b != 0
+        || params.texture.is_some()
+        // Back faces through the overlay were never verified: CPU path.
+        || params.double_sided
+        // The overlay reads baked vertex colors only.
+        || (params.palette.is_some() && mesh.has_slots())
     {
         return None;
     }
-    // The overlay's clip coordinates are s15.16 (|v| < 32768): x reaches
-    // ~RSP_BAND × the view depth inside the band. Keep the whole sphere
-    // under RSP_MAX_DEPTH, and the matrix entries (axis scale) in range.
-    if !inside(RSP_MAX_DEPTH - c.z, 1.0) || s.x.max(s.y).max(s.z) >= RSP_MAX_SCALE * RSP_MAX_SCALE {
+    let (c, r) = mesh.bounds()?;
+    let c = mv.transform_point(c);
+    let s = model.axis_scales_sq();
+    let smax = s.x.max(s.y).max(s.z);
+    let r2 = r * r * smax;
+    // The overlay's matrix entries (axis scale) must stay in range.
+    if !rsp_band(ctx, c, r2) || smax >= RSP_MAX_SCALE * RSP_MAX_SCALE {
         return None;
     }
     let cull_back = true;
@@ -1398,6 +1495,10 @@ pub fn tessellate_with(
         } else {
             None
         },
+        palette: match (params.palette, mesh.slots) {
+            (Some(p), Some(slots)) => Some((slots, [Color::WHITE, p[0], p[1], p[2], p[3]])),
+            _ => None,
+        },
     };
 
     if mesh.joint_count() == 0 {
@@ -1447,9 +1548,34 @@ struct Setup<'a> {
     /// The light direction in model space, when the static path may light
     /// model-space normals directly ([`model_space_light`]).
     local_ldir: Option<Vec3>,
+    /// The mesh's slots and the draw's palette, indexed by slot (entry 0
+    /// white: slot 0 multiplies by 255, which keeps the color exactly).
+    /// `None` unless the draw has a palette and the mesh has slots: the
+    /// default path reads `mesh.color` as before.
+    palette: Option<(&'a [u8], [Color; 5])>,
+}
+
+/// `a * b / 255` per RGB channel, rounded (`(a*b + 127) / 255`, exact for
+/// b = 255); alpha stays `c`'s. The palette multiply ([`crate::Palette`]).
+#[inline(always)]
+fn palette_mul(c: Color, p: Color) -> Color {
+    let mul = |a: u8, b: u8| ((a as u32 * b as u32 + 127) / 255) as u8;
+    Color::rgba(mul(c.r, p.r), mul(c.g, p.g), mul(c.b, p.b), c.a)
 }
 
 impl Setup<'_> {
+    /// Vertex `i`'s color before tint and lighting: the baked color, times
+    /// its palette entry when the draw recolors slots. One predictable
+    /// branch per vertex when unused.
+    #[inline(always)]
+    fn base_color(&self, mesh: &Mesh, i: usize) -> Color {
+        let c = mesh.color(i);
+        match &self.palette {
+            None => c,
+            Some((slots, pal)) => palette_mul(c, pal[(slots[i] as usize).min(MAX_SLOT as usize)]),
+        }
+    }
+
     /// Final vertex color from a world-space normal and the view depth.
     #[inline(always)]
     fn shade(&self, c: Color, n: Vec3, z: f32) -> Color {
@@ -1567,13 +1693,13 @@ fn tessellate_joints<const SKINNED: bool, const SMOOTH: bool>(
         }
         let col = match s.params.shading {
             Shading::Flat => Color::WHITE,
-            Shading::Unlit => s.shade(mesh.color(i), Vec3::ZERO, p.z),
+            Shading::Unlit => s.shade(s.base_color(mesh, i), Vec3::ZERO, p.z),
             Shading::Gouraud if !SKINNED && s.local_ldir.is_some() => {
                 // Rotation + uniform scale: light the model-space normal
                 // with the light turned into model space (Setup).
                 let ll = s.local_ldir.unwrap_or(Vec3::ZERO);
                 let nl = mesh.normal(i);
-                s.shade_with(mesh.color(i), || -nl.dot(ll), p.z)
+                s.shade_with(s.base_color(mesh, i), || -nl.dot(ll), p.z)
             }
             Shading::Gouraud => {
                 let nl = mesh.normal(i);
@@ -1581,7 +1707,7 @@ fn tessellate_joints<const SKINNED: bool, const SMOOTH: bool>(
                 if let Some((j2, w)) = blend {
                     n = n + (world[j2].transform_dir(nl) - n) * w;
                 }
-                s.shade(mesh.color(i), n.normalized(), p.z)
+                s.shade(s.base_color(mesh, i), n.normalized(), p.z)
             }
         };
         tag[slot] = i as u32;
@@ -1636,9 +1762,9 @@ fn tessellate_joints<const SKINNED: bool, const SMOOTH: bool>(
             });
             let n = (p[1] - p[0]).cross(p[2] - p[0]).normalized();
             [
-                s.shade(mesh.color(idx[0]), n, vs[0].z),
-                s.shade(mesh.color(idx[1]), n, vs[1].z),
-                s.shade(mesh.color(idx[2]), n, vs[2].z),
+                s.shade(s.base_color(mesh, idx[0]), n, vs[0].z),
+                s.shade(s.base_color(mesh, idx[1]), n, vs[1].z),
+                s.shade(s.base_color(mesh, idx[2]), n, vs[2].z),
             ]
         } else {
             [v[0].1, v[1].1, v[2].1]

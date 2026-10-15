@@ -218,6 +218,10 @@ new skill when none fits. Then run `cargo xtask agents sync`. The steps are in
     `Listener`/`spatialize`, the `sound` component plus `Ambience`.
   - **Portal/cell visibility**: `core::vis`, `vis` component,
     `draw_nodes_in`/`draw_in`.
+  - **Color slots + per-draw palette** (2026-10-15): glTF `_SLOT` → TMDL `SLOT`,
+    `ModelParams::palette` recolors slots 1..=4 of one model per draw (a crowd from
+    one character). CPU T&L on every target; never on the N64 RSP. Its self-test
+    step passes on PC, in ares and in Azahar.
 
   Each one has a step in `castle64::selftest`, run on PC, in ares and in Azahar.
 - **Editor additions**:
@@ -370,7 +374,7 @@ and fails CI. If you add a crate, that test decides what it may depend on by nam
 If a feature cannot work on the N64, the engine does not expose it. There are no free
 shaders: the pipeline is picked by `Material::{Sprite, VertexLit}` and a 3D surface is
 plain data (`ModelParams`: tint, emissive, `Shading::{Gouraud, Flat, Unlit}`,
-double-sided, animation pose) evaluated by the engine's own per-vertex T&L. `Caps` in
+double-sided, animation pose, a palette for color slots) evaluated by the engine's own per-vertex T&L. `Caps` in
 `crates/core/src/caps.rs` encodes per-console budgets (N64 TMEM = 4 KB); PC strict mode
 validates content against them at development time.
 
@@ -434,7 +438,10 @@ cargo test --workspace
   `cargo xtask test --bless` and review the diff in the PR. Performance work must leave
   goldens byte-identical.
 - Guard tests: `dep_graph`, `agents_sync` (skill mirrors), `scene_codegen` (exported
-  scene drift), `showcase_render` (runtime == codegen pixels). See the `test-all` skill.
+  scene drift), `showcase_render` (runtime == codegen pixels), `feature_matrix`
+  (`docs/TESTING.md`, the feature → test matrix). See the `test-all` skill.
+- Every feature has an integration test through the public API
+  (`crates/<crate>/tests/`, end to end) and a row in `docs/TESTING.md`.
 - Console tests report through debug channels — ISViewer magic strings on
   N64 (`apps/n64/src/lib.rs::run_self_test`), `svcOutputDebugString` on 3DS
   (`apps/3ds/src/main.rs::run_self_test`, read from Azahar's log file).
@@ -546,8 +553,22 @@ cargo test --workspace
   stays small.
 - **`n64_main!` crates are `#![cfg_attr(target_os = "none", no_std)]`.** A plain
   `no_std` breaks the host `cargo check --workspace` (no panic handler).
+- **N64 per-draw CPU is float latency, not triangles:** a saturating `as i32` costs
+  ~70 cycles (FP compares and branches); use `math3d::to_i32`. Once draws are cheap the
+  RSP (~6 µs per triangle) is the bound, and batching made it worse (n64-performance).
+- **The N64 draw memo keys on the view's rotation.** A camera whose rotation jitters by
+  an ulp on every pan (eye = focus + offset in floats) rebuilds every draw. Keep
+  `target - eye` exactly representable (a power-of-two grid) and the memo patches only
+  the translation.
+- **`platforms = [...]` keeps big PC-only models out of console RAM.** A console loads
+  every model at boot: animated rigs once made the N64 fail `display_init` (allocation
+  failed).
 - **The PC `gamepad` feature links libudev on Linux** (`libudev-dev`). Keep it opt-in
   for Linux builds.
+
+- **A module pulled into a test with `#[path = "../src/x.rs"]` doesn't count for
+  coverage:** llvm-cov reports it under `tests/../src/x.rs`, which the default filter
+  drops. Put such tests in the module itself.
 
 - Do not add dependencies to `trino-core` — the dep-graph test will fail, and the crate
   must compile for MIPS bare metal.
@@ -577,7 +598,15 @@ cargo test --workspace
   sin/cos/atan2 are fast approximations (deterministic across consoles); never
   round-trip authored values through them in tools (the gizmo uses std math).
 - `ModelParams` grows: construct it with `ModelParams::tinted(c)` or
-  `ModelParams { .., ..ModelParams::DEFAULT }`, never a bare struct literal.
+  `ModelParams { .., ..ModelParams::DEFAULT }`, never a bare struct literal. Scene
+  codegen (`crates/scene/src/codegen.rs`) still writes every field, so a new field goes
+  into its template and `examples/showcase/src/showcase_gen.rs` is regenerated with
+  `cargo xtask scene export scenes/showcase.scene.ron examples/showcase/src/showcase_gen.rs`
+  (`scene_codegen` fails otherwise). Then decide the field in `MemoKey::new` and
+  `rsp_eligible`.
+- **glTF custom attributes lose their underscore in the `gltf` crate:** `_SLOT` is
+  `Semantic::Extras("SLOT")`. Blender exports them only with `export_attributes=True`
+  (`export_glb` sets it), and always as float SCALAR, even from INT attributes.
 - TMDL is extensible by **sections** (`BNDS`, `SKEL`, `ANIM`; unknown tags are skipped):
   add data as a new section instead of changing the base layout.
 - Rigid skeletons: ≤ 32 joints (`MAX_JOINTS`, stack-allocated), parents before children,

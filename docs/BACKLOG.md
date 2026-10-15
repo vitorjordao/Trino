@@ -87,6 +87,12 @@ shipping a 3D game first**, then by cost:
     (libdragon's joypad styles).
 11. **Gamepads on Linux without libudev at build time** (S). An evdev backend, or a
     dlopen'd udev, so `gamepad` can be on by default.
+12. **Palette draws on the N64 RSP** (M). A palette draw on a slotted mesh runs the
+    CPU T&L (`rsp_eligible` refuses it), so a crowd of recolored characters costs
+    several times what the same draws cost on the overlay (ADR 0007). Upload the
+    four entries with the draw command, keep the slot per vertex in the RSP mesh copy,
+    and multiply in the overlay. Gate it with the oracle and a CPU-vs-RSP pixel check.
+    Measure a crowd scene in ares before and after.
 
 ### P2 — when a game asks for it
 
@@ -99,6 +105,9 @@ shipping a 3D game first**, then by cost:
 11. **Scene streaming** (M). Load and unload TSCN chunks by portal cell or distance, for
     levels larger than RDRAM.
 12. **Audio**: Doppler and occlusion through portals, only if a game needs them.
+13. **Palette in authored content** (S). `ModelParams::palette` is code-only today.
+    Expose it in materials (`*.material.ron`), scene entities, TSCN (version bump),
+    scene codegen and the editor inspector.
 
 ## Engineering hygiene (ongoing)
 
@@ -108,6 +117,12 @@ shipping a 3D game first**, then by cost:
   time) and bless `tests/perf/` on purpose. Host benches stay as regression guards only.
 
 ---
+
+## Done — color slots and a per-draw palette (2026-10-15, branch `vertex-color-slots`)
+
+| Item | Evidence |
+|---|---|
+| glTF `_SLOT` → TMDL `SLOT` (one `u8` per vertex, 0..=4, only when used); `Mesh::slot`/`has_slots`; `ModelParams::palette` (`Palette = [Color; 4]`) multiplies slotted vertex colors before tint and lighting on every T&L path; palette draws on slotted meshes stay off the N64 RSP and out of the draw memo; `model inspect` counts vertices per slot; Blender `paint_slots` + `export_attributes` | an oracle test (palette draw == the same mesh with pre-multiplied colors) under Gouraud, Unlit and Flat, static, rigid and smooth; no-palette draws bit-identical; every PC asset bakes byte-identical; castle64 `palette` self-test step probes three slots on PC (run in ares and Azahar on 2026-10-15: the step passes, both console goldens and the N64 perf ceilings hold); `cargo xtask blender smoke` exports `_SLOT` from Blender 5.2.2. Deviation: palette draws skip the N64 RSP (follow-up P1 #12); no material/scene support yet (P2 #13) |
 
 ## Done — external console projects (2026-10-14, branch `engine/standalone-consoles`, ADR 0008)
 

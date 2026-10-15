@@ -168,6 +168,9 @@ pub fn bake_all(
             errors.push(format!("hash collision between `{other}` and `{logical}`"));
             continue;
         }
+        if !decl.bakes_for(platform) {
+            continue;
+        }
         let result = (|| -> Result<BakedEntry, String> {
             let source = resolve_source(assets_root, platform, &decl.file)?;
             let blob = crate::model::bake_model(&source, &decl.options())?;

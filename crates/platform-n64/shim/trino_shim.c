@@ -341,6 +341,21 @@ uint32_t trino_phys_addr(const void* p)
     return PhysicalAddr(p);
 }
 
+// Heap use (bytes): the self-test reports it next to the stack watermark.
+uint32_t trino_heap_used(void)
+{
+    heap_stats_t s;
+    sys_get_heap_stats(&s);
+    return (uint32_t)s.used;
+}
+
+uint32_t trino_heap_total(void)
+{
+    heap_stats_t s;
+    sys_get_heap_stats(&s);
+    return (uint32_t)s.total;
+}
+
 // pts: 6 floats (x0,y0,x1,y1,x2,y2) in screen pixels;
 // colors: 12 bytes (r,g,b,a per vertex);
 // zs: 3 floats, normalized depth 0..1 (0 = near plane).

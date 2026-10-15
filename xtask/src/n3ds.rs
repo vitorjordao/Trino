@@ -207,6 +207,9 @@ pub fn bake_assets(p: &Project, test_mode: bool) -> Result<(), String> {
         index.push_str(&format!("{id:08x}\tmusic\t{id:08x}.pcm16\n"));
     }
     for (name, decl) in &manifest.models {
+        if !decl.bakes_for(Platform::N3ds) {
+            continue;
+        }
         let logical = format!("models/{name}");
         let id = trino_core::asset_id(&logical);
         let source = resolve_source(&root.join("assets"), Platform::N3ds, &decl.file)?;
@@ -770,5 +773,59 @@ pub fn watch(p: &Project) -> ExitCode {
         } else {
             eprintln!("[3ds] build failed — keeping the previous app running (fix and save again)");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wavs_bake_to_pcm16_with_a_rate_channels_frames_header() {
+        let dir = tempfile::tempdir().unwrap();
+        let (src, out) = (dir.path().join("in.wav"), dir.path().join("out.pcm"));
+        let spec = hound::WavSpec {
+            channels: 2,
+            sample_rate: 32_000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut w = hound::WavWriter::create(&src, spec).unwrap();
+        for s in [1i16, -2, 300, -400, i16::MAX, i16::MIN] {
+            w.write_sample(s).unwrap();
+        }
+        w.finalize().unwrap();
+        bake_pcm16(&src, &out).unwrap();
+        let b = std::fs::read(&out).unwrap();
+        let u32_at = |i: usize| u32::from_le_bytes(b[i..i + 4].try_into().unwrap());
+        assert_eq!((u32_at(0), u32_at(4), u32_at(8)), (32_000, 2, 3));
+        let samples: Vec<i16> = b[12..]
+            .chunks(2)
+            .map(|c| i16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        assert_eq!(samples, [1, -2, 300, -400, i16::MAX, i16::MIN]);
+
+        // Only 16-bit integer PCM is accepted.
+        let float = hound::WavSpec {
+            bits_per_sample: 32,
+            sample_format: hound::SampleFormat::Float,
+            ..spec
+        };
+        let mut w = hound::WavWriter::create(&src, float).unwrap();
+        w.write_sample(0.5f32).unwrap();
+        w.write_sample(0.5f32).unwrap();
+        w.finalize().unwrap();
+        assert!(
+            bake_pcm16(&src, &out)
+                .unwrap_err()
+                .contains("unsupported wav format")
+        );
+    }
+
+    #[test]
+    fn host_executables_get_the_platform_suffix() {
+        let name = exe("tex3ds");
+        assert_eq!(name.ends_with(".exe"), cfg!(windows));
+        assert!(name.starts_with("tex3ds"));
     }
 }

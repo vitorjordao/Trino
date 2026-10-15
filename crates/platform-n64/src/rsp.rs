@@ -8,6 +8,7 @@
 use alloc::vec::Vec;
 use core::ffi::c_void;
 
+use trino_core::math3d::to_i32;
 use trino_core::render3d::{Mesh, NEAR_PLANE, RSP_MAX_SEGS, RspDraw, TnlContext, rsp_split};
 use trino_core::{Color, Mat34, Vec3};
 
@@ -28,15 +29,28 @@ pub struct RspMesh {
 
 /// s15.16 of `v`, split into its integer and fractional halves.
 fn fixed(v: f32) -> (i16, u16) {
-    let x = (v * 65536.0) as i32;
+    let x = to_i32(v * 65536.0);
     ((x >> 16) as i16, (x & 0xFFFF) as u16)
 }
 
 /// s0.15 of `v` (-1..1).
 fn s015(v: f32) -> i16 {
-    let x = (v * 32767.0) as i32;
+    let x = to_i32(v * 32767.0);
     x.clamp(-32767, 32767) as i16
 }
+
+/// `s015(c / 255)` for every tint channel, made at compile time with the
+/// same float operations (a division per channel per draw otherwise).
+const TINT_S015: [i16; 256] = {
+    let mut t = [0i16; 256];
+    let mut c = 0;
+    while c < 256 {
+        let x = (c as f32 / 255.0 * 32767.0) as i32;
+        t[c] = if x > 32767 { 32767 } else { x as i16 };
+        c += 1;
+    }
+    t
+};
 
 struct Segment {
     verts: Vec<u16>,
@@ -129,9 +143,12 @@ pub fn build(mesh: &Mesh) -> Option<RspMesh> {
 /// so z / 2w = 1 - NEAR / depth like the CPU path's z-buffer value. The
 /// half on w: the RSP's 32-bit reciprocal (vrcph/vrcpl) of an s15.16 value
 /// comes out as 1 / 2w in s15.16 (measured by the oracle).
-pub fn clip_matrix(ctx: &TnlContext, model: &Mat34) -> [[f32; 4]; 4] {
-    let (view, focal, screen) = ctx.projection();
-    let mv = view.mul(model).m;
+///
+/// `mv` is the draw's `view · model` product, which the eligibility test
+/// already needed ([`trino_core::render3d::rsp_eligible_mv`]).
+pub fn clip_matrix_mv(ctx: &TnlContext, mv: &Mat34) -> [[f32; 4]; 4] {
+    let (_, focal, screen) = ctx.projection();
+    let mv = mv.m;
     let (cx, cy) = (screen.x * 0.5, screen.y * 0.5);
     let row = |r: [f32; 4], k: f32| [r[0] * k, r[1] * k, r[2] * k, r[3] * k];
     let mut z = mv[2];
@@ -144,17 +161,40 @@ pub fn clip_matrix(ctx: &TnlContext, model: &Mat34) -> [[f32; 4]; 4] {
     ]
 }
 
-/// The 27-word draw command (overlay `DRAW` layout).
+/// Rewrite the translation column of a draw command made by
+/// [`draw_words`] for a `view · model` whose translation column is now
+/// `mt` (a camera pan: everything else in the command stays). The same
+/// operations as [`clip_matrix_mv`] and [`draw_words`] on that column, so
+/// the words equal a full rebuild.
+pub fn patch_translation(ctx: &TnlContext, w: &mut [u32; DRAW_WORDS], mt: [f32; 3]) {
+    let (_, focal, screen) = ctx.projection();
+    let (cx, cy) = (screen.x * 0.5, screen.y * 0.5);
+    let col = [
+        mt[0] * (focal / cx),
+        mt[1] * (-focal / cy),
+        mt[2] - NEAR_PLANE,
+        mt[2] * 0.5,
+    ];
+    let pair = |a: i16, b: i16| ((a as u16 as u32) << 16) | b as u16 as u32;
+    let f: [(i16, u16); 4] = core::array::from_fn(|row| fixed(col[row]));
+    w[10] = pair(f[0].0, f[1].0);
+    w[11] = pair(f[2].0, f[3].0);
+    w[18] = pair(f[0].1 as i16, f[1].1 as i16);
+    w[19] = pair(f[2].1 as i16, f[3].1 as i16);
+}
+
+/// The 27-word draw command (overlay `DRAW` layout); `mv` is the draw's
+/// `view · model` product.
 pub fn draw_words(
     ctx: &TnlContext,
-    model: &Mat34,
+    mv: &Mat34,
     d: &RspDraw,
     tint: Color,
     mesh: &RspMesh,
     cull: u32,
     debug_phys: u32,
 ) -> [u32; DRAW_WORDS] {
-    let m = clip_matrix(ctx, model);
+    let m = clip_matrix_mv(ctx, mv);
     let mut w = [0u32; DRAW_WORDS];
     w[0] = cull;
     w[1] = mesh.table;
@@ -170,7 +210,7 @@ pub fn draw_words(
     let l: Vec3 = d.light;
     w[20] = pair(s015(l.x), s015(l.y));
     w[21] = pair(s015(l.z), 0);
-    let t = |c: u8| s015(c as f32 / 255.0);
+    let t = |c: u8| TINT_S015[c as usize];
     w[22] = pair(t(tint.r), t(tint.g));
     w[23] = pair(t(tint.b), 0);
     w[24] = pair(s015(d.ambient), s015(1.0 - d.ambient));

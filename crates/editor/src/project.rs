@@ -462,6 +462,141 @@ impl Thumbnailer {
 mod tests {
     use super::*;
 
+    /// A temp project with a sprite, a sound, a music track, a real model and
+    /// a fake object, all copied from the engine's sample masters.
+    fn sample_project() -> (tempfile::TempDir, Project) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let engine = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/shared");
+        let shared = root.join("assets/shared");
+        for (from, to) in [
+            ("sprites/brick.png", "sprites/brick.png"),
+            ("sounds/beep.wav", "sounds/beep.wav"),
+            ("sounds/win.wav", "music/win.wav"),
+            ("models/cube.glb", "models/cube.glb"),
+        ] {
+            std::fs::create_dir_all(shared.join(to).parent().unwrap()).unwrap();
+            std::fs::copy(engine.join(from), shared.join(to)).unwrap();
+        }
+        std::fs::write(
+            root.join("assets/manifest.toml"),
+            "version = 1\n\n[sprites.brick]\nfile = \"sprites/brick.png\"\n\n\
+             [sounds.beep]\nfile = \"sounds/beep.wav\"\n\n[music.win]\nfile = \"music/win.wav\"\n\n\
+             [models.cube]\nfile = \"models/cube.glb\"\n",
+        )
+        .unwrap();
+        let project = Project::new(root);
+        project
+            .create_proxy(
+                "block",
+                &Primitive {
+                    shape: trino_asset_pipeline::Shape::Box {
+                        size: [2.0, 1.0, 4.0],
+                    },
+                    ..Primitive::default()
+                },
+            )
+            .unwrap();
+        (dir, project)
+    }
+
+    #[test]
+    fn bake_and_load_reads_every_asset_with_its_stats() {
+        let (_dir, mut project) = sample_project();
+        let log = project.bake_and_load();
+        assert_eq!(
+            log,
+            vec![
+                Ok("baked 5 asset(s)".to_string()),
+                Ok("loaded 3 asset(s)".to_string())
+            ]
+        );
+        assert_eq!(project.generation, 1);
+        assert_eq!(project.sounds, vec!["sounds/beep".to_string()]);
+        assert_eq!(project.music, vec!["music/win".to_string()]);
+        let brick = &project.sprites["sprites/brick"];
+        assert_eq!(brick.rgba.len() as u32, brick.width * brick.height * 4);
+
+        // The fake object knows its parameters; its bounds match its size.
+        let block = &project.models["models/block"];
+        assert!(block.is_proxy());
+        assert_eq!(block.source, "models/proxies/block.prim.ron");
+        let size: Vec<f32> = (0..3).map(|k| block.max[k] - block.min[k]).collect();
+        assert!(
+            (size[0] - 2.0).abs() < 1e-4
+                && (size[1] - 1.0).abs() < 1e-4
+                && (size[2] - 4.0).abs() < 1e-4,
+            "{size:?}"
+        );
+        assert_eq!(block.tris, 12, "a box is 12 triangles");
+        let cube = &project.models["models/cube"];
+        assert!(!cube.is_proxy());
+        assert!(cube.verts > 0 && cube.tris > 0 && cube.radius > 0.0);
+        assert_eq!(
+            project.model_bounds()["models/block"],
+            (block.min, block.max)
+        );
+
+        // Lookups by handle.
+        assert_eq!(project.model_by_id(ModelId(cube.id)).unwrap().name, "cube");
+        assert!(project.model_by_id(ModelId(1)).is_none());
+        let mut found = project.logicals_for_ids(&[brick.id, block.id]);
+        found.sort();
+        assert_eq!(found, vec!["models/block", "sprites/brick"]);
+
+        // Free names.
+        assert_eq!(project.unique_model_name("tree"), "tree");
+        assert_eq!(project.unique_model_name("block"), "block-2");
+    }
+
+    #[test]
+    fn saving_a_fake_object_rebakes_it_in_place() {
+        let (_dir, mut project) = sample_project();
+        project.bake_and_load();
+        let id = project.models["models/block"].id;
+        let tall = Primitive {
+            shape: trino_asset_pipeline::Shape::Box {
+                size: [1.0, 6.0, 1.0],
+            },
+            ..Primitive::default()
+        };
+        let model = &project.models["models/block"];
+        project.save_proxy(model, &tall).unwrap();
+        let report = pipeline::bake_all(
+            &project.assets_dir(),
+            pipeline::Platform::Pc,
+            &project.baked_dir(),
+        )
+        .unwrap();
+        assert_eq!(
+            report.changed_ids(),
+            vec![id],
+            "only the edited model rebakes"
+        );
+        assert_eq!(project.reload(Some(&[id])).unwrap(), 1);
+        let block = &project.models["models/block"];
+        assert_eq!(block.id, id, "same handle after the edit");
+        assert!((block.max[1] - block.min[1] - 6.0).abs() < 1e-4);
+        assert_eq!(block.proxy.as_ref(), Some(&tall));
+        assert_eq!(
+            project.sounds.len(),
+            1,
+            "a partial reload keeps the sound list"
+        );
+
+        // A model whose source vanished cannot be saved.
+        let mut ghost = Project::new(project.root.clone());
+        ghost.reload(None).unwrap();
+        let mut m = ghost.models.remove("models/block").unwrap();
+        m.source = "models/proxies/gone.prim.ron".into();
+        assert!(ghost.save_proxy(&m, &tall).is_err());
+        // An empty project fails to load instead of panicking.
+        let empty = tempfile::tempdir().unwrap();
+        let mut none = Project::new(empty.path().to_path_buf());
+        let log = none.bake_and_load();
+        assert!(log.iter().all(Result::is_err), "{log:?}");
+    }
+
     #[test]
     fn create_proxy_writes_the_prim_and_the_manifest_entry_then_retargets() {
         let dir = tempfile::tempdir().unwrap();

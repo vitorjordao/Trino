@@ -291,6 +291,55 @@ mod tests {
     }
 
     #[test]
+    fn save_reload_and_history_bounds() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut d = doc();
+        d.path = dir.path().join("nested/x.scene.ron");
+        assert_eq!(d.title(), "t");
+        assert!(!d.can_undo() && !d.can_redo());
+        assert!(!d.undo() && !d.redo(), "nothing to undo or redo yet");
+
+        d.scene.entities[0].name = "renamed".into();
+        assert!(d.can_undo(), "an uncommitted edit is undoable");
+        d.commit(true);
+        assert!(d.dirty());
+        d.save().unwrap();
+        assert!(!d.dirty(), "saving makes the document clean");
+        let on_disk = std::fs::read_to_string(&d.path).unwrap();
+        assert_eq!(on_disk, d.disk_text);
+        assert_eq!(Scene::from_ron(&on_disk).unwrap(), d.scene);
+
+        // An external edit replaces the scene, prunes a stale selection and
+        // stays undoable.
+        d.select_many(vec![vec![0], vec![5]]);
+        let mut external = d.scene.clone();
+        external.entities.clear();
+        d.reload_from(external.clone(), external.to_ron());
+        assert_eq!(d.selected, None);
+        assert!(d.extra.is_empty());
+        assert!(!d.dirty(), "the reloaded text is the saved state");
+        assert!(d.undo());
+        assert_eq!(d.scene.entities[0].name, "renamed");
+
+        // The undo stack is capped.
+        for i in 0..(MAX_UNDO + 20) {
+            d.scene.entities[0].transform.pos[1] = i as f32 + 1.0;
+            d.commit(true);
+        }
+        let mut steps = 0;
+        while d.undo() {
+            steps += 1;
+        }
+        assert_eq!(steps, MAX_UNDO);
+
+        // Saving into a path that cannot be a directory fails cleanly.
+        let blocker = dir.path().join("file");
+        std::fs::write(&blocker, "x").unwrap();
+        d.path = blocker.join("x.scene.ron");
+        assert!(d.save().is_err());
+    }
+
+    #[test]
     fn prefab_docs_serialize_as_prefabs() {
         let p = Prefab::new(Entity::new("lamp"));
         let d = Doc::prefab(

@@ -153,6 +153,23 @@ def main():
     )
     bpy.data.objects.remove(arrow, do_unlink=True)
 
+    # ---- 4. color slots (`_SLOT`, recolored per draw by a palette) ------
+    tee = box("Tee", (0.6, 0.4, 0.6), (0, 0, 0.3))
+    P = ns["Painter"]("Tee")
+    P.fill((255, 255, 255))  # slot regions are painted white
+    P.paint(lambda c, n: n.z < -0.9, (60, 50, 90), "hem")
+    P.commit()
+    painted = ns["paint_slots"]("Tee", [(lambda c, n: n.z > 0.9, 1), (lambda c, n: abs(n.z) < 0.1, 2)])
+    exp = ns["export_glb"](["Tee"], os.path.join(out_dir, "tee.glb"), animations=False)
+    rep = ns["inspect"](exp["path"])
+    # One top face in slot 1, four sides in slot 2, the bottom keeps its color.
+    gate(
+        "color_slots_export",
+        rep.get("ok") and rep.get("slot_vertices") == [4, 4, 16, 0, 0],
+        {"painted": painted, "slot_vertices": rep.get("slot_vertices"), "error": rep.get("error")},
+    )
+    bpy.data.objects.remove(tee, do_unlink=True)
+
     report["ok"] = not failures
     report["failed"] = failures
     report["out_dir"] = out_dir

@@ -53,6 +53,27 @@ pub fn atan2(y: f32, x: f32) -> f32 {
     if y < 0.0 { -r } else { r }
 }
 
+/// `x as i32` (saturating; NaN → 0) decided on the float's bits: in range
+/// it is one plain truncation. Rust's `as` compiles to floating-point
+/// compares and branches around the truncation, which cost the N64 about
+/// 70 cycles per conversion (measured in ares); integer tests on the bits
+/// cost a few. Bit-identical to `as` for every input.
+#[inline]
+pub fn to_i32(x: f32) -> i32 {
+    let b = x.to_bits();
+    // |x| < 2^31: the exponent field is below 127 + 31.
+    if (b >> 23) & 0xFF < 127 + 31 {
+        // SAFETY: finite and |x| < 2^31, so the truncation fits an i32.
+        unsafe { x.to_int_unchecked::<i32>() }
+    } else if b & 0x7FFF_FFFF > 0x7F80_0000 {
+        0
+    } else if b >> 31 != 0 {
+        i32::MIN
+    } else {
+        i32::MAX
+    }
+}
+
 /// sqrt via one reciprocal-sqrt bit trick + two Newton iterations.
 pub fn sqrt(x: f32) -> f32 {
     if x <= 0.0 {

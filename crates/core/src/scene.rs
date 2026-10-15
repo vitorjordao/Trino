@@ -372,6 +372,7 @@ impl BakedScene {
             double_sided: flags & 4 != 0,
             anim: None,
             texture: (flags & 8 != 0).then(|| crate::render::SpriteId(rd_u32(d, b + 48))),
+            ..ModelParams::DEFAULT
         };
         let (x, y, z) = (rd_f32(d, b + 24), rd_f32(d, b + 28), rd_f32(d, b + 32));
         let shape = match (flags >> 12) & 7 {

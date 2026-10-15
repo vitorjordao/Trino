@@ -236,6 +236,11 @@ frames. Trust the cost model.
 
 | Change | Result on the scenes |
 |---|---|
+| **Draw memo** (`trino_core::memo`, N64 renderer): a draw repeated under the same camera and light reuses last frame's 27-word RSP command (key: model, matrix bits, tint, shading, generation) | an external project's 93-draw scene 25.9 → 23.5 ms. The CPU then issues draws faster than the RSP draws them: waits show up in `tnl` (streamed) |
+| **Pan patch** (`RspPan`, `rsp::patch_translation`): the memo survives a camera that only translates (pan, zoom along the view axis); a hit re-tests `rsp_band` and rewrites the command's translation column, bit-identical to a rebuild | panning over a 105-draw scene 36.4 → 28.3 ms. Needs the game's camera to keep the view rotation exact under a pan (eye − target exactly representable) |
+| `to_i32` instead of `as i32`; one `view·model` per draw (`rsp_eligible_mv`); tint quotients from a const table | a 207-draw scene 47.2 → 46.6 ms (layout noise). Measured hot: 16 saturating casts 22 µs, unchecked 6.5 µs |
+| Static batching (`build_batch`, props merged per area; **reverted**) | 207 → 96 draws but 47 → 53 ms: the batches carried their hidden and off-screen parts, and the RSP (already ~35 ms for that geometry) became the bound |
+| Unstreamed RSP draws (`set_rsp_stream(false)`) with the memo | **worse**: 23 → 35 ms. The flush at the first sprite blocks the CPU on a full rspq while the RSP sat idle during the world. An A/B that toggled streaming mid-run said the opposite: compare from boot |
 | T&L scratch (`poly_a/poly_b/stack`, 3.8 KB) initialized once per draw, not per triangle | hub render 640 → 259 ms, goldens identical |
 | Sort 8-byte keys `(group, painter_key)` instead of moving 88-byte `ScreenTri`s; explicit tie-break | 259 → 190 ms; same order on every backend |
 | Link newlib's `memcpy/memset/memmove/memcmp` (Rust's weak generic ones won) | update −10%, T&L −0.4…−1.6% (kept; `check_mem_symbols` guards it) |
@@ -316,6 +321,30 @@ Then find the function (`grep` its mangled name, e.g. `tessellate_joints`) and c
 - the shim's `trino_tri` divides 12 color bytes by 255 for every triangle.
 
 They are in `docs/plans/n64-throughput.md`.
+
+## Per-draw CPU cost and the RSP floor (2026-10-15, an external project)
+
+- **Per RSP draw, cold:** ~140 µs of CPU: the mesh lookups and `Mesh::from_layout`,
+  `rsp_eligible` and the command build. Even hot (the same draw twice), eligibility
+  costs ~24 µs and the command ~30 µs. On the VR4300 in ares, FP latency and FP
+  compare-and-branch dominate:
+  - a saturating `as i32` is ~70 cycles of compares around a 5-cycle truncation;
+  - a 3×4 matrix product is ~8 µs.
+
+  Use `math3d::to_i32`. Never compute `view·model` twice. Memoize what repeats.
+- **The RSP floor:** about 6 µs per source triangle, plus a per-draw overhead.
+  - A 5,600-triangle view needed ~35 ms of RSP time on its own (measured with
+    streaming off: everything submits at the end).
+  - At 30 fps that means ~3,500–4,500 triangles in the heaviest view. Past that,
+    cutting CPU time no longer moves the frame: cut triangles (lighter console
+    variants), draws, or what is shown.
+- **Measuring:**
+  - Profiled frames drain the RSP/RDP at `end_frame`, so they never overlap the next
+    frame. Treat them as pessimistic.
+  - Time the game's own render code with a same-ROM switch that skips the
+    submission. That split CPU 4.6 ms from engine 29 ms in one run.
+  - A `TRINO_FRAME` scene must not include a camera transition (an eased zoom):
+    with the memo, every frame of the transition is a rebuild.
 
 ## Remaining levers (BACKLOG P0)
 

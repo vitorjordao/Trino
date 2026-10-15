@@ -1,0 +1,20 @@
+{
+  "asset": {"version": "2.0"},
+  "scene": 0,
+  "scenes": [{"nodes": [0]}],
+  "nodes": [{"name": "card", "mesh": 0}],
+  "meshes": [{"primitives": [{"attributes": {"POSITION": 0, "NORMAL": 1, "_SLOT": 3}, "indices": 2}]}],
+  "buffers": [{"byteLength": 372, "uri": "data:application/octet-stream;base64,zsxMvpqZmb4AAAAAmpkZv5qZmb4AAAAAmpkZv5qZmT4AAAAAzsxMvpqZmT4AAAAAzcxMPpqZmb4AAAAAzcxMvpqZmb4AAAAAzcxMvpqZmT4AAAAAzcxMPpqZmT4AAAAAmpkZP5qZmb4AAAAAzcxMPpqZmb4AAAAAzcxMPpqZmT4AAAAAmpkZP5qZmT4AAAAAAAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAABAAIAAAACAAMABAAFAAYABAAGAAcACAAJAAoACAAKAAsAAAAAAAAAAAAAAAAAAAAAAAAAgD8AAIA/AACAPwAAgD8AAIBAAACAQAAAgEAAAIBA"}],
+  "bufferViews": [
+    {"buffer": 0, "byteOffset": 0, "byteLength": 144},
+    {"buffer": 0, "byteOffset": 144, "byteLength": 144},
+    {"buffer": 0, "byteOffset": 288, "byteLength": 36},
+    {"buffer": 0, "byteOffset": 324, "byteLength": 48}
+  ],
+  "accessors": [
+    {"bufferView": 0, "componentType": 5126, "count": 12, "type": "VEC3", "min": [-0.6,-0.3,0], "max": [0.6,0.3,0]},
+    {"bufferView": 1, "componentType": 5126, "count": 12, "type": "VEC3"},
+    {"bufferView": 2, "componentType": 5123, "count": 18, "type": "SCALAR"},
+    {"bufferView": 3, "componentType": 5126, "count": 12, "type": "SCALAR"}
+  ]
+}

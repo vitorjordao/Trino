@@ -75,6 +75,23 @@ TMDL stays extensible by section; unknown tags are skipped, so old readers keep 
 - `SKW2` (after `SKEL`, opt-in with `skinning = "smooth"`): `u8 joint2, u8 weight2` per
   vertex. The vertex blends from its SKEL joint toward `joint2` by `weight2 / 255`
   (a two-bone linear blend).
+- `SLOT` (color slots): `u8 slot` per vertex, 0..=4, any value above 4 is a
+  `BadSection`. Written only when some vertex has a non-zero slot, so models without
+  slots bake byte-identical to before. Source: the glTF custom attribute `_SLOT`
+  (SCALAR, float or integer; floats round to the nearest slot). The bake carries it
+  through the vertex-cache reorder like every per-vertex array.
+
+  A draw's `ModelParams::palette: Option<Palette>` (`Palette = [Color; 4]`) multiplies
+  the RGB of a vertex in slot `s ≥ 1` by `palette[s - 1]` with `(a·b + 127) / 255`
+  (the material tint-stacking rounding: white keeps the vertex color exactly), before
+  tint and lighting; slot 0 keeps the baked color, and the palette's alpha is
+  ignored. One mesh is drawn many times with different skin, hair or clothing colors.
+  The software T&L applies it on every path (static, flat, rigid, smooth), so all
+  three targets get it with no backend code. The palette is resolved once per draw,
+  and a draw without one reads `mesh.color` exactly as before, so goldens are
+  unchanged. The N64 RSP overlay draws baked colors, so `rsp_eligible` refuses a
+  palette on a slotted mesh (CPU path), and `MemoKey::new` refuses any palette (its
+  16 words are full).
 
 Textured 3D:
 - **PC**: perspective-correct, using the `w` trick in the triangle shader.

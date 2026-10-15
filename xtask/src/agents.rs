@@ -152,15 +152,15 @@ pub fn check(root: &Path) -> Result<(), String> {
         let copy = tree(&root.join(mirror))?;
         for (rel, bytes) in &canonical {
             match copy.get(rel) {
-                None => problems.push(format!("{mirror}/{} is missing", rel.display())),
+                None => problems.push(format!("{mirror}/{} is missing", slashed(rel))),
                 Some(b) if b != bytes => {
-                    problems.push(format!("{mirror}/{} differs", rel.display()))
+                    problems.push(format!("{mirror}/{} differs", slashed(rel)))
                 }
                 _ => {}
             }
         }
         for rel in copy.keys().filter(|r| !canonical.contains_key(*r)) {
-            problems.push(format!("{mirror}/{} is stale", rel.display()));
+            problems.push(format!("{mirror}/{} is stale", slashed(rel)));
         }
     }
     if problems.is_empty() {
@@ -172,6 +172,14 @@ pub fn check(root: &Path) -> Result<(), String> {
             problems.join("\n  ")
         ))
     }
+}
+
+/// A relative path with `/` on every OS (the messages name repo paths).
+fn slashed(rel: &Path) -> String {
+    rel.components()
+        .map(|c| c.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 #[cfg(test)]

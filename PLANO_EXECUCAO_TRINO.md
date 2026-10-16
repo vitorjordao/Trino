@@ -1,5 +1,11 @@
 # Trino — Plano de Execução Passo a Passo
 
+> **Historical document.** This is one of the original planning documents the engine
+> was first built from. It is kept for its rationale; it does not describe the current
+> engine. Trino is now a low-poly 3D engine with 2D drawn in the same pipeline, and the
+> 2D-first sequencing below is history. Current state: `AGENTS.md`; guides:
+> `docs/README.md`; what comes next: `docs/BACKLOG.md`.
+
 > Engine Rust multiplataforma: **Nintendo 64 / Nintendo 3DS / PC**, com editor visual,
 > simulação de consoles, live reload, testes em emuladores, CI/CD e repositório AI-friendly.
 >

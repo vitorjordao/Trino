@@ -1,5 +1,11 @@
 //! Minimal example game: a sprite that moves with stick/d-pad and beeps on A.
 //!
+//! **Legacy.** This crate is from the engine's first, 2D-only phase and is not
+//! the model for new games: start from `cargo xtask new` and see `castle64`. It
+//! stays because the hot-reload end-to-end test (`xtask/tests/hot_reload.rs`)
+//! builds it. A redesigned 2D sprite and tile system is planned for a future
+//! release (`docs/BACKLOG.md`).
+//!
 //! Dependency-free on purpose — this exact crate must compile for PC, N64
 //! and 3DS. `no_std` is enforced on console targets (N64 `target_os = "none"`,
 //! 3DS `target_os = "horizon"`); on PC the dylib build links std only for its

@@ -68,6 +68,6 @@ cargo xtask model inspect <glb> # check a model against the engine's limits
 ```
 
 To make this game the one the apps launch, point `apps/*` at
-`{{name_snake}}::{{name_camel}}Game` (see how `examples/platformer` is wired) —
+`{{name_snake}}::{{name_camel}}Game` (see how `examples/castle64` is wired) —
 including the `hot_module` dylib name in `apps/pc/src/main.rs`, which must be
 this crate's name for `watch pc --game {{name}}` to hot-swap it.

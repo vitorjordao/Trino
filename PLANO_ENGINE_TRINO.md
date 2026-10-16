@@ -1,5 +1,11 @@
 # Trino — Engine Rust multiplataforma (N64 / 3DS / PC)
 
+> **Historical document.** This is one of the original planning documents the engine
+> was first built from. It is kept for its rationale; it does not describe the current
+> engine. Trino is now a low-poly 3D engine with 2D drawn in the same pipeline, and the
+> 2D-first sequencing below is history. Current state: `AGENTS.md`; guides:
+> `docs/README.md`; what comes next: `docs/BACKLOG.md`.
+
 > Nome de trabalho: **trino** (três alvos). Renomeie à vontade — é só trocar
 > os nomes dos crates no `Cargo.toml`.
 

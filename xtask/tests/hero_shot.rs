@@ -1,5 +1,5 @@
-//! Regenerates the README hero screenshot: the real platformer, real baked
-//! assets, N64 look, 90 scripted frames. Dev utility (needs a GPU), so it
+//! Regenerates the platformer screenshot (the legacy 2D example): the real
+//! platformer, real baked assets, N64 look, 90 scripted frames. Dev utility (needs a GPU), so it
 //! is `#[ignore]`d — run explicitly with:
 //!
 //! ```sh

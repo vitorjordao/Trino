@@ -166,6 +166,7 @@ jobs:
       # against trino.toml's 33.3 ms budget, its sim hash and golden frame.
       - name: Football template self-test (ares)
         run: |
+          rm -rf target/test-projects/ci-football  # the cargo cache restores target/
           cargo xtask new ci-football --standalone target/test-projects/ci-football --template football
           cargo xtask test n64 --project target/test-projects/ci-football
         env:
@@ -211,6 +212,7 @@ jobs:
       # The football template's self-test app (booted by the next job).
       - name: Build the football template's self-test app
         run: |
+          rm -rf target/test-projects/ci-football  # the cargo cache restores target/
           cargo xtask new ci-football --standalone target/test-projects/ci-football --template football
           cargo xtask build 3ds --project target/test-projects/ci-football --selftest
       - uses: actions/upload-artifact@v4
@@ -252,7 +254,9 @@ jobs:
       # The football template: the same project scaffolded again (its
       # trino.toml and goldens), the app the previous job built.
       - name: Scaffold the football template
-        run: cargo xtask new ci-football --standalone target/test-projects/ci-football --template football
+        run: |
+          rm -rf target/test-projects/ci-football  # the cargo cache restores target/
+          cargo xtask new ci-football --standalone target/test-projects/ci-football --template football
       - uses: actions/download-artifact@v4
         with:
           name: football-3ds-selftest

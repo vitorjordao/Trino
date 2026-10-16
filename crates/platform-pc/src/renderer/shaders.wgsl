@@ -133,13 +133,22 @@ struct TriIn {
     @location(2) depth: f32,       // normalized (0 = near), z-buffer value
     @location(3) w: f32,           // view depth (textured) or 1.0
     @location(4) uv: vec2<f32>,
+    // x: 1 = point filter (else the N64 look's 3-point); y: the detail
+    // layer's UV scale (0 = none).
+    @location(10) tex: vec2<f32>,
 };
 
 struct TriOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) color: vec4<f32>,
     @location(1) uv: vec2<f32>,
+    @location(2) @interpolate(flat) tex: vec2<f32>,
 };
+
+// The detail layer of a 3D draw (group 1 with the texture; white when the
+// draw has none).
+@group(1) @binding(2) var t_detail: texture_2d<f32>;
+@group(1) @binding(3) var s_detail: sampler;
 
 @vertex
 fn vs_tri(in: TriIn) -> TriOut {
@@ -154,6 +163,7 @@ fn vs_tri(in: TriIn) -> TriOut {
     out.clip = vec4<f32>(ndc, in.depth, 1.0) * in.w;
     out.color = in.color;
     out.uv = in.uv;
+    out.tex = in.tex;
     return out;
 }
 
@@ -163,15 +173,42 @@ fn wrap_texel(p: vec2<i32>, dims: vec2<i32>) -> vec2<i32> {
 
 // 3-point sampling for wrapping (tiled) 3D textures.
 fn sample_3point_wrap(uv: vec2<f32>) -> vec4<f32> {
-    let dims = vec2<i32>(textureDimensions(t_sprite));
+    return sample_3point_wrap_in(t_sprite, uv);
+}
+
+// The RDP's point sampling of a wrapping texture (`FILTER_POINT`).
+fn sample_point_wrap(t: texture_2d<f32>, uv: vec2<f32>) -> vec4<f32> {
+    let dims = vec2<i32>(textureDimensions(t));
+    return textureLoad(t, wrap_texel(vec2<i32>(floor(uv * vec2<f32>(dims))), dims), 0);
+}
+
+// The N64 look's texel: point or 3-point, by the draw's filter.
+fn sample_n64(t: texture_2d<f32>, uv: vec2<f32>, point: bool) -> vec4<f32> {
+    if point {
+        return sample_point_wrap(t, uv);
+    }
+    return sample_3point_wrap_in(t, uv);
+}
+
+// The detail layer's factor (white without one).
+fn detail_texel(uv: vec2<f32>, tex: vec2<f32>) -> vec4<f32> {
+    let d = textureSample(t_detail, s_detail, uv * max(tex.y, 1.0));
+    if tex.y > 0.0 {
+        return vec4<f32>(d.rgb, 1.0);
+    }
+    return vec4<f32>(1.0);
+}
+
+fn sample_3point_wrap_in(t: texture_2d<f32>, uv: vec2<f32>) -> vec4<f32> {
+    let dims = vec2<i32>(textureDimensions(t));
     let st = uv * vec2<f32>(dims) - vec2<f32>(0.5, 0.5);
     let base = floor(st);
     let f = st - base;
     let b = vec2<i32>(base);
-    let t00 = textureLoad(t_sprite, wrap_texel(b, dims), 0);
-    let t10 = textureLoad(t_sprite, wrap_texel(b + vec2<i32>(1, 0), dims), 0);
-    let t01 = textureLoad(t_sprite, wrap_texel(b + vec2<i32>(0, 1), dims), 0);
-    let t11 = textureLoad(t_sprite, wrap_texel(b + vec2<i32>(1, 1), dims), 0);
+    let t00 = textureLoad(t, wrap_texel(b, dims), 0);
+    let t10 = textureLoad(t, wrap_texel(b + vec2<i32>(1, 0), dims), 0);
+    let t01 = textureLoad(t, wrap_texel(b + vec2<i32>(0, 1), dims), 0);
+    let t11 = textureLoad(t, wrap_texel(b + vec2<i32>(1, 1), dims), 0);
     if f.x + f.y < 1.0 {
         return t00 + f.x * (t10 - t00) + f.y * (t01 - t00);
     }
@@ -201,9 +238,16 @@ fn fs_tri_clamp(in: TriOut) -> @location(0) vec4<f32> {
 @fragment
 fn fs_tri(in: TriOut) -> @location(0) vec4<f32> {
     // Sampled unconditionally: textureSample requires uniform control flow.
-    let plain = textureSample(t_sprite, s_sprite, in.uv) * in.color;
+    let detail = detail_texel(in.uv, in.tex);
+    let plain = textureSample(t_sprite, s_sprite, in.uv) * in.color * detail;
     if globals.look == 1u {
-        return quantize_5551(sample_3point_wrap(in.uv) * in.color, vec2<u32>(in.clip.xy));
+        let point = in.tex.x > 0.5;
+        var d = vec4<f32>(1.0);
+        if in.tex.y > 0.0 {
+            d = vec4<f32>(sample_n64(t_detail, in.uv * in.tex.y, point).rgb, 1.0);
+        }
+        let c = sample_n64(t_sprite, in.uv, point) * in.color * d;
+        return quantize_5551(c, vec2<u32>(in.clip.xy));
     }
     return plain;
 }
@@ -246,6 +290,7 @@ struct LitIn {
     @location(7) base: vec4<f32>,
     @location(8) gloss: f32,
     @location(9) light_set: f32,
+    @location(10) tex: vec2<f32>,
 };
 
 struct LitOut {
@@ -256,6 +301,7 @@ struct LitOut {
     @location(3) normal: vec3<f32>,
     @location(4) base: vec4<f32>,
     @location(5) @interpolate(flat) params: vec2<f32>,
+    @location(6) @interpolate(flat) tex: vec2<f32>,
 };
 
 @vertex
@@ -274,6 +320,7 @@ fn vs_tri_lit(in: LitIn) -> LitOut {
     out.normal = in.normal;
     out.base = in.base;
     out.params = vec2<f32>(in.gloss, in.light_set);
+    out.tex = in.tex;
     return out;
 }
 
@@ -343,7 +390,7 @@ fn shade_lit(in: LitOut, texel: vec4<f32>) -> vec4<f32> {
 @fragment
 fn fs_tri_lit(in: LitOut) -> @location(0) vec4<f32> {
     // Sampled unconditionally: textureSample requires uniform control flow.
-    let texel = textureSample(t_sprite, s_sprite, in.uv);
+    let texel = textureSample(t_sprite, s_sprite, in.uv) * detail_texel(in.uv, in.tex);
     let c = shade_lit(in, texel);
     if globals.look == 1u {
         return quantize_5551(c, vec2<u32>(in.clip.xy));

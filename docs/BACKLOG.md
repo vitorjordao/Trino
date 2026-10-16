@@ -129,6 +129,20 @@ shipping a 3D game first**, then by cost:
 
 ---
 
+## Done — texture filtering per draw and a detail layer (2026-10-15, branch `textures/filter-detail`, ADR 0011)
+
+- `ModelParams::filter` + `set_texture_filter`, `ModelParams::detail` (`DetailTexture`),
+  materials, the editor's material inspector, TSCN v3 (the surface: gloss, filter,
+  detail).
+- N64: `trino_3d_texture_ex` (`FILTER_POINT`/`FILTER_BILINEAR`, `TILE1` detail with a
+  2-cycle combiner, dropped when the pair doesn't fit TMEM). 3DS: `C3D_TexSetFilter`,
+  texture unit 1 + TexEnv stage 1 (`texcoord1` from the vertex shader). PC: per-draw
+  samplers, a detail binding, the N64 look's point fetch.
+- Verified: `crates/platform-pc/tests/texture_filter.rs` (goldens per profile), the
+  `texture filter and detail` self-test step in ares and Azahar, the showcase's pillars.
+- Deviation: the PC native profile has no separate "high-resolution detail map pass"; it
+  uses the same multiply as the consoles, at its own resolution.
+
 ## Done — local lights with a quality tier per platform (2026-10-15, branch `lights/local-lights`, ADR 0010)
 
 - `LocalLight` (point, spot), `Renderer::set_local_lights` / `set_wetness`,

@@ -213,9 +213,16 @@ file = "scenes/interior.scene.ron"
 file = "sprites/textures/tex_planks.png"
 formats = { n64 = "CI8" }
 
+# 16-bit, not CI8: the pillars multiply a detail layer over the bricks, and
+# the two share TMEM, which a palette's upper half would take (2 KB + 128 B).
 [sprites.tex_bricks]
 file = "sprites/textures/tex_bricks.png"
-formats = { n64 = "CI8" }
+formats = { n64 = "RGBA5551" }
+
+# Stone grain, the pillars' detail layer (materials/stone-grain).
+[sprites.tex_grain]
+file = "sprites/textures/tex_grain.png"
+formats = { n64 = "I4" }
 
 # Particle sprite (billboards): white sparkle tinted by the emitter.
 [sprites.fx_spark]
@@ -227,6 +234,17 @@ formats = { n64 = "CI4" }
 [sprites.selftest_quadrants]
 file = "sprites/selftest_quadrants.png"
 formats = { n64 = "CI4" }
+
+# The same quadrants in 16-bit color, and a detail layer (I4) to multiply
+# over them: base + detail share the N64's TMEM, which a palette texture
+# can't (selftest::texture_detail).
+[sprites.selftest_quadrants16]
+file = "sprites/selftest_quadrants.png"
+formats = { n64 = "RGBA5551" }
+
+[sprites.selftest_detail]
+file = "sprites/selftest_detail.png"
+formats = { n64 = "I4" }
 
 # Two-joint strip with one 50/50 vertex: smooth skinning (SKW2) on every
 # target (selftest::smooth_skin).

@@ -77,6 +77,55 @@ pub struct MaterialDef {
     /// only; consoles ignore it).
     #[serde(default, skip_serializing_if = "crate::is_zero_u8")]
     pub gloss: u8,
+    /// Texture sampling (`Default` = the target's own).
+    #[serde(default, skip_serializing_if = "FilterDef::is_default")]
+    pub filter: FilterDef,
+    /// A detail texture multiplied over `texture` (see
+    /// `trino_core::DetailTexture` for the N64's TMEM budget).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<DetailDef>,
+}
+
+/// Mirror of `trino_core::TexFilter`.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum FilterDef {
+    #[default]
+    Default,
+    Point,
+    Bilinear,
+}
+
+impl FilterDef {
+    pub const ALL: [FilterDef; 3] = [FilterDef::Default, FilterDef::Point, FilterDef::Bilinear];
+
+    pub fn core(self) -> trino_core::TexFilter {
+        match self {
+            FilterDef::Default => trino_core::TexFilter::Default,
+            FilterDef::Point => trino_core::TexFilter::Point,
+            FilterDef::Bilinear => trino_core::TexFilter::Bilinear,
+        }
+    }
+
+    fn is_default(&self) -> bool {
+        *self == FilterDef::Default
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            FilterDef::Default => "Default",
+            FilterDef::Point => "Point",
+            FilterDef::Bilinear => "Bilinear",
+        }
+    }
+}
+
+/// A detail texture: a sprite (logical path) tiling `2^scale_log2` times
+/// per repeat of the base texture.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct DetailDef {
+    pub texture: String,
+    #[serde(default)]
+    pub scale_log2: u8,
 }
 
 impl Default for MaterialDef {
@@ -89,6 +138,8 @@ impl Default for MaterialDef {
             double_sided: false,
             texture: None,
             gloss: 0,
+            filter: FilterDef::Default,
+            detail: None,
         }
     }
 }
@@ -136,6 +187,13 @@ impl MaterialDef {
             anim: None,
             texture: self.texture.as_deref().map(trino_core::SpriteId::from_path),
             gloss: self.gloss,
+            filter: self.filter.core(),
+            detail: self.detail.as_ref().map(|d| {
+                trino_core::DetailTexture::new(
+                    trino_core::SpriteId::from_path(&d.texture),
+                    d.scale_log2,
+                )
+            }),
             ..ModelParams::DEFAULT
         }
     }
@@ -177,6 +235,34 @@ mod tests {
         // Matte materials don't write the field (files stay as they were).
         assert!(!MaterialDef::default().to_ron().contains("gloss"));
         assert_eq!(MaterialDef::default().params(None).gloss, 0);
+    }
+
+    #[test]
+    fn filter_and_detail_round_trip_and_map_onto_the_core() {
+        let m = MaterialDef {
+            texture: Some("sprites/bricks".into()),
+            filter: FilterDef::Point,
+            detail: Some(DetailDef {
+                texture: "sprites/grain".into(),
+                scale_log2: 9,
+            }),
+            ..MaterialDef::default()
+        };
+        assert_eq!(MaterialDef::from_ron(&m.to_ron()).unwrap(), m);
+        let p = m.params(None);
+        assert_eq!(p.filter, trino_core::TexFilter::Point);
+        let d = p.detail.unwrap();
+        assert_eq!(d.sprite, trino_core::SpriteId::from_path("sprites/grain"));
+        assert_eq!(
+            d.scale_log2,
+            trino_core::DetailTexture::MAX_SCALE_LOG2,
+            "clamped"
+        );
+        let plain = MaterialDef::default().to_ron();
+        assert!(
+            !plain.contains("filter") && !plain.contains("detail"),
+            "{plain}"
+        );
     }
 
     #[test]

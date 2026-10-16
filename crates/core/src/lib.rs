@@ -65,9 +65,9 @@ pub use platform::{
     BindDevice, BlobId, DisplayInfo, DisplaySettings, GamepadStatus, InputInfo, Platform, SaveError,
 };
 pub use render::{
-    AnimBlend, AnimRef, BillboardParams, ClipId, FontId, FrameStats, Material, MaterialId, ModelId,
-    ModelParams, Palette, Renderer, Shading, SpriteId, SpriteParams, TextAlign, TextParams,
-    Transform3,
+    AnimBlend, AnimRef, BillboardParams, ClipId, DetailTexture, FontId, FrameStats, Material,
+    MaterialId, ModelId, ModelParams, Palette, Renderer, Shading, SpriteId, SpriteParams,
+    TexFilter, TextAlign, TextParams, Transform3,
 };
 pub use render3d::{
     Camera3, ClipInfo, DEFAULT_LIGHT, Fog, Light, MAX_JOINTS, Mesh, MeshError, MeshLayout,

@@ -34,13 +34,10 @@ pub struct Instance {
 
 pub const INSTANCE_STRIDE: u64 = core::mem::size_of::<Instance>() as u64;
 
-/// Texture of a triangle run: a sprite handle and its addressing — tiled
-/// (models: UVs repeat) or clamped (billboards: a sprite region).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct TexKey {
-    pub id: u32,
-    pub clamp: bool,
-}
+/// Texture state of a triangle run: the sprite, tiled (models) or clamped
+/// (billboards), its filter and detail layer (`trino_core`'s backend
+/// helper).
+pub use trino_core::render3d::TexBind as TexKey;
 
 /// One recorded draw call: a sprite quad or a run of 3D triangle vertices
 /// (already transformed/lit by `trino_core::render3d`; the vertices live in
@@ -81,6 +78,9 @@ pub struct TriVertex {
     pub base: [f32; 4],
     pub gloss: f32,
     pub set: f32,
+    /// Texture sampling: 1 = point filter (the N64 look's 3-point
+    /// otherwise), and the detail layer's UV scale (0 = no detail).
+    pub tex: [f32; 2],
 }
 
 pub const TRI_VERTEX_STRIDE: u64 = core::mem::size_of::<TriVertex>() as u64;
@@ -237,6 +237,14 @@ mod tests {
         );
     }
 
+    fn tex5() -> TexKey {
+        TexKey::model(
+            5,
+            &trino_core::ModelParams::DEFAULT,
+            trino_core::TexFilter::Point,
+        )
+    }
+
     #[test]
     fn tris_interleave_and_merge_with_order_preserved() {
         let tris = |first, count| Cmd::Tris {
@@ -255,20 +263,14 @@ mod tests {
             Cmd::Tris {
                 first: 12,
                 count: 3,
-                texture: Some(TexKey {
-                    id: 5,
-                    clamp: false,
-                }),
+                texture: Some(tex5()),
                 lit: false,
             },
             // Per-pixel lit: another pipeline, another segment.
             Cmd::Tris {
                 first: 15,
                 count: 3,
-                texture: Some(TexKey {
-                    id: 5,
-                    clamp: false,
-                }),
+                texture: Some(tex5()),
                 lit: true,
             },
         ]);
@@ -299,19 +301,13 @@ mod tests {
                 Segment::Tris {
                     first: 12,
                     count: 3,
-                    texture: Some(TexKey {
-                        id: 5,
-                        clamp: false
-                    }),
+                    texture: Some(tex5()),
                     lit: false
                 },
                 Segment::Tris {
                     first: 15,
                     count: 3,
-                    texture: Some(TexKey {
-                        id: 5,
-                        clamp: false
-                    }),
+                    texture: Some(tex5()),
                     lit: true
                 },
             ]
@@ -377,8 +373,10 @@ mod tests {
     #[test]
     fn tri_vertex_layout_matches_the_pipelines() {
         // shaders.wgsl TriIn/LitIn locations: pos@0, color@8, depth@24,
-        // w@28, uv@32, world@40, normal@52, base@64, gloss@80, set@84.
-        assert_eq!(TRI_VERTEX_STRIDE, 88);
+        // w@28, uv@32, world@40, normal@52, base@64, gloss@80, set@84,
+        // tex@88.
+        assert_eq!(TRI_VERTEX_STRIDE, 96);
+        assert_eq!(core::mem::offset_of!(TriVertex, tex), 88);
         assert_eq!(core::mem::offset_of!(TriVertex, world), 40);
         assert_eq!(core::mem::offset_of!(TriVertex, normal), 52);
         assert_eq!(core::mem::offset_of!(TriVertex, base), 64);

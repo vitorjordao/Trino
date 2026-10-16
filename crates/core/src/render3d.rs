@@ -52,7 +52,7 @@ use crate::math::{Color, Vec2, Vec3};
 use crate::math3d::{Mat34, Quat};
 
 mod lit;
-use crate::render::{AnimRef, ClipId, ModelParams, Shading, SpriteId};
+use crate::render::{AnimRef, ClipId, DetailTexture, ModelParams, Shading, SpriteId, TexFilter};
 pub use lit::{SurfaceScratch, SurfaceVert, tessellate_surface};
 
 /// Mesh blob format ("TMDL", little-endian):
@@ -2201,6 +2201,52 @@ fn tessellate_joints<const SKINNED: bool, const SMOOTH: bool>(
     }
     stats.verts = verts;
     stats
+}
+
+/// What a backend's batch triangles sample (backend helper): the sprite,
+/// tiled (models) or clamped (billboards), its filter already resolved
+/// (never [`TexFilter::Default`]) and the detail layer of the draw.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct TexBind {
+    pub id: u32,
+    pub clamp: bool,
+    pub filter: TexFilter,
+    pub detail: Option<DetailTexture>,
+}
+
+impl TexBind {
+    /// A model draw's binding: `default` replaces [`TexFilter::Default`].
+    pub fn model(id: u32, params: &ModelParams, default: TexFilter) -> TexBind {
+        TexBind {
+            id,
+            clamp: false,
+            filter: match params.filter {
+                TexFilter::Default => default,
+                f => f,
+            },
+            detail: params.detail,
+        }
+    }
+
+    /// A billboard's binding (clamped, the target's filter, no detail).
+    pub fn billboard(id: u32, default: TexFilter) -> TexBind {
+        TexBind {
+            id,
+            clamp: true,
+            filter: default,
+            detail: None,
+        }
+    }
+
+    /// A non-zero sort key: equal bindings share it, so a batch sorted by
+    /// it binds each texture state once (unequal bindings may collide; the
+    /// backends compare bindings, not keys, before rebinding).
+    pub fn group(&self) -> u64 {
+        let d = self.detail.map_or(0, |d| {
+            (d.sprite.0 as u64 & 0x00FF_FFFF) << 4 | d.scale_log2 as u64
+        });
+        ((self.id as u64) << 32 | d << 3 | (self.filter as u64) << 1 | self.clamp as u64) + 1
+    }
 }
 
 /// Normalized `[u0, v0, u1, v1]` of a sprite region (pixels) inside a

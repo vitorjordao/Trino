@@ -19,7 +19,7 @@ use trino_core::render3d::{
 };
 use trino_core::{
     Caps, Color, FontId, FrameStats, LightList, LightTier, LocalLight, Mat34, Material, ModelId,
-    ModelParams, Renderer, SpriteId, SpriteParams, TextParams, Transform3, Vec2,
+    ModelParams, Renderer, SpriteId, SpriteParams, TexFilter, TextParams, Transform3, Vec2,
 };
 
 use crate::sim::SimProfile;
@@ -89,13 +89,23 @@ pub struct PcRenderer {
     tri_buf: wgpu::Buffer,
     tri_capacity: u64,
     sprites: HashMap<u32, SpriteEntry>,
-    /// Sprite textures as 3D textures (wrapping sampler), by handle.
+    /// Sprite textures as 3D textures (base + detail layer, their samplers),
+    /// by texture state.
     tex3d: HashMap<TexKey, wgpu::BindGroup>,
-    tex3d_sampler: wgpu::Sampler,
-    /// Clamp-to-edge twin for billboards (sprite regions must not bleed).
-    clamp_sampler: wgpu::Sampler,
-    /// 1x1 white: what untextured triangles "sample" (×1 = unchanged).
+    tex3d_bgl: wgpu::BindGroupLayout,
+    /// Wrapping (models) and clamp-to-edge (billboards: sprite regions must
+    /// not bleed) samplers, nearest and linear.
+    tex3d_nearest: wgpu::Sampler,
+    tex3d_linear: wgpu::Sampler,
+    clamp_nearest: wgpu::Sampler,
+    clamp_linear: wgpu::Sampler,
+    /// 1x1 white: what untextured triangles "sample" (×1 = unchanged), and
+    /// a draw without a detail layer.
+    white_view: wgpu::TextureView,
     white_bg: wgpu::BindGroup,
+    /// What `TexFilter::Default` means (`set_texture_filter`; the profile's
+    /// own: nearest native, the 3-point look on N64, bilinear on 3DS).
+    tex_filter: TexFilter,
     /// TMDL blobs with their validated layout (parsed once, at register).
     meshes: HashMap<u32, (Vec<u8>, MeshLayout)>,
     /// Glyph tables (`TFNT`) by font handle; the atlas is the sprite with
@@ -161,6 +171,48 @@ struct SurfTri {
     set: u32,
     /// The local lights that reach the draw (`lights::reach_mask`).
     mask: u32,
+}
+
+/// What `TexFilter::Default` means on a profile: nearest texels on the PC
+/// (pixel art stays crisp, as always), the RDP's 3-point bilinear in the
+/// N64 look, bilinear on the 3DS (its GPU default).
+fn default_filter(profile: SimProfile) -> TexFilter {
+    match profile {
+        SimProfile::Native => TexFilter::Point,
+        SimProfile::N64 | SimProfile::N3ds => TexFilter::Bilinear,
+    }
+}
+
+/// A 3D texture bind group: the base texture and the detail layer, each
+/// with its sampler.
+fn create_tex3d_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    base: (&wgpu::TextureView, &wgpu::Sampler),
+    detail: (&wgpu::TextureView, &wgpu::Sampler),
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("trino-tex3d-bg"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(base.0),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(base.1),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::TextureView(detail.0),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::Sampler(detail.1),
+            },
+        ],
+    })
 }
 
 /// The second screen's own target, globals and blit source.
@@ -402,20 +454,31 @@ impl PcRenderer {
             min_filter: sprite_filter,
             ..Default::default()
         });
-        // 3D textures tile (wrap); same filter policy as sprites (the N64
-        // 3-point filter is emulated in the shader).
-        let tex3d_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("trino-tex3d-sampler"),
+        // 3D draws choose per draw (`TexFilter`): nearest and linear, each
+        // wrapping and clamped (the N64 look filters in the shader, from
+        // nearest texels).
+        let tex3d_nearest = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("trino-tex3d-nearest"),
             address_mode_u: wgpu::AddressMode::Repeat,
             address_mode_v: wgpu::AddressMode::Repeat,
-            mag_filter: sprite_filter,
-            min_filter: sprite_filter,
             ..Default::default()
         });
-        let clamp_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("trino-clamp-sampler"),
-            mag_filter: sprite_filter,
-            min_filter: sprite_filter,
+        let clamp_nearest = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("trino-clamp-nearest"),
+            ..Default::default()
+        });
+        let tex3d_linear = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("trino-tex3d-linear"),
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let clamp_linear = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("trino-clamp-linear"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
         // The window blit stays nearest: consoles output at native
@@ -567,10 +630,36 @@ impl PcRenderer {
         });
 
         // 3D triangle pipeline: same offscreen target; vertex colors
-        // modulated by one texture per segment (white when untextured).
+        // modulated by one texture per segment (white when untextured) and
+        // its detail layer (white when none).
+        let tex_entry = |binding: u32| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        };
+        let sampler_entry = |binding: u32| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+            count: None,
+        };
+        let tex3d_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("trino-tex3d-bgl"),
+            entries: &[
+                tex_entry(0),
+                sampler_entry(1),
+                tex_entry(2),
+                sampler_entry(3),
+            ],
+        });
         let tri_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("trino-tri-layout"),
-            bind_group_layouts: &[Some(&globals_bgl), Some(&texture_bgl)],
+            bind_group_layouts: &[Some(&globals_bgl), Some(&tex3d_bgl)],
             immediate_size: 0,
         });
         let tri_attrs = [
@@ -598,6 +687,11 @@ impl PcRenderer {
                 format: wgpu::VertexFormat::Float32x2,
                 offset: 32,
                 shader_location: 4,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x2,
+                offset: 88,
+                shader_location: 10,
             },
         ];
         let make_tri_pipeline = |fragment: &str| {
@@ -673,7 +767,7 @@ impl PcRenderer {
         });
         let lit_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("trino-lit-layout"),
-            bind_group_layouts: &[Some(&globals_bgl), Some(&texture_bgl), Some(&lights_bgl)],
+            bind_group_layouts: &[Some(&globals_bgl), Some(&tex3d_bgl), Some(&lights_bgl)],
             immediate_size: 0,
         });
         let lit_attrs = {
@@ -859,7 +953,13 @@ impl PcRenderer {
             },
         );
         let white_view = white_tex.create_view(&wgpu::TextureViewDescriptor::default());
-        let white_bg = create_blit_bind_group(&device, &texture_bgl, &white_view, &tex3d_sampler);
+        let white_bg = create_tex3d_bind_group(
+            &device,
+            &tex3d_bgl,
+            (&white_view, &tex3d_nearest),
+            (&white_view, &tex3d_nearest),
+        );
+        let tex_filter = default_filter(profile);
 
         let instance_capacity = 1024 * INSTANCE_STRIDE;
         let instance_buf = device.create_buffer(&wgpu::BufferDescriptor {
@@ -902,9 +1002,14 @@ impl PcRenderer {
             tri_capacity,
             sprites: HashMap::new(),
             tex3d: HashMap::new(),
-            tex3d_sampler,
-            clamp_sampler,
+            tex3d_bgl,
+            tex3d_nearest,
+            tex3d_linear,
+            clamp_nearest,
+            clamp_linear,
+            white_view,
             white_bg,
+            tex_filter,
             meshes: HashMap::new(),
             fonts: HashMap::new(),
             commands: Vec::new(),
@@ -961,6 +1066,8 @@ impl PcRenderer {
     /// Toggle the N64 output emulation (3-point filtering, RGBA5551 +
     /// ordered dither). Defaults to on for [`SimProfile::N64`].
     pub fn set_n64_look(&mut self, on: bool) {
+        // 3D bind groups pick their sampler by the look.
+        self.tex3d.clear();
         if self.n64_look != on {
             self.n64_look = on;
             self.queue.write_buffer(
@@ -1088,7 +1195,8 @@ impl PcRenderer {
                 },
             ],
         });
-        self.tex3d.retain(|k, _| k.id != id.0);
+        self.tex3d
+            .retain(|k, _| k.id != id.0 && k.detail.is_none_or(|d| d.sprite != id));
         self.sprites.insert(
             id.0,
             SpriteEntry {
@@ -1328,6 +1436,15 @@ impl PcRenderer {
                     base: [0.0; 4],
                     gloss: 0.0,
                     set: 0.0,
+                    tex: match tex {
+                        Some(t) => [
+                            (t.filter == TexFilter::Point) as u32 as f32,
+                            t.detail
+                                .filter(|d| self.sprites.contains_key(&d.sprite.0))
+                                .map_or(0.0, |d| d.scale()),
+                        ],
+                        None => [0.0; 2],
+                    },
                 };
                 if let Some(s) = surf {
                     let sv = &s.v[i];
@@ -1370,12 +1487,30 @@ impl PcRenderer {
     fn tex3d_group(&mut self, key: TexKey) -> Option<&wgpu::BindGroup> {
         if !self.tex3d.contains_key(&key) {
             let entry = self.sprites.get(&key.id)?;
-            let sampler = if key.clamp {
-                &self.clamp_sampler
-            } else {
-                &self.tex3d_sampler
+            // The N64 look filters in the shader (3-point or point), from
+            // nearest texels; elsewhere the sampler does.
+            let linear = key.filter == TexFilter::Bilinear && !self.n64_look;
+            let sampler = match (key.clamp, linear) {
+                (true, false) => &self.clamp_nearest,
+                (true, true) => &self.clamp_linear,
+                (false, false) => &self.tex3d_nearest,
+                (false, true) => &self.tex3d_linear,
             };
-            let bg = create_blit_bind_group(&self.device, &self.sprite_bgl, &entry.view, sampler);
+            let detail = key
+                .detail
+                .and_then(|d| self.sprites.get(&d.sprite.0))
+                .map_or(&self.white_view, |e| &e.view);
+            let dsampler = if linear {
+                &self.tex3d_linear
+            } else {
+                &self.tex3d_nearest
+            };
+            let bg = create_tex3d_bind_group(
+                &self.device,
+                &self.tex3d_bgl,
+                (&entry.view, sampler),
+                (detail, dsampler),
+            );
             self.tex3d.insert(key, bg);
         }
         self.tex3d.get(&key)
@@ -1851,6 +1986,13 @@ impl Renderer for PcRenderer {
         self.locals.set(lights, self.caps.max_local_lights);
     }
 
+    fn set_texture_filter(&mut self, filter: TexFilter) {
+        self.tex_filter = match filter {
+            TexFilter::Default => default_filter(self.profile),
+            f => f,
+        };
+    }
+
     fn set_wetness(&mut self, wetness: f32) {
         self.wetness = wetness.clamp(0.0, 1.0);
     }
@@ -1892,6 +2034,27 @@ impl Renderer for PcRenderer {
                 t,
                 true,
             );
+        }
+        if let (Some(t), Some(d), true) = (texture, params.detail, self.strict) {
+            // Base and detail share texture memory (the N64's TMEM), at
+            // worst 16-bit texels; the console drops a detail that doesn't
+            // fit, strict mode says so.
+            let bytes = |id: SpriteId| self.sprites.get(&id.0).map_or(0, |e| e.size.0 * e.size.1);
+            let bpp = if self.caps.color_depth_bits <= 16 {
+                2
+            } else {
+                4
+            };
+            let total = (bytes(t) + bytes(d.sprite)) * bpp;
+            if total > self.caps.texture_memory_bytes {
+                panic!(
+                    "strict mode: texture {t:?} with detail {:?} needs {total} bytes of \
+                     texture memory together, over the {:?} profile's {} (N64 TMEM: \
+                     base + detail share 4 KB; use a small I4 detail and a non-palette \
+                     base).",
+                    d.sprite, self.profile, self.caps.texture_memory_bytes
+                );
+            }
         }
         let screen = Vec2::new(self.internal_size.0 as f32, self.internal_size.1 as f32);
         let before = self.pending_tris.len();
@@ -1959,10 +2122,7 @@ impl Renderer for PcRenderer {
         self.tag_pending(
             before,
             added,
-            texture.map(|t| TexKey {
-                id: t.0,
-                clamp: false,
-            }),
+            texture.map(|t| TexKey::model(t.0, params, self.tex_filter)),
         );
     }
 
@@ -2003,10 +2163,7 @@ impl Renderer for PcRenderer {
         self.tag_pending(
             before,
             2,
-            Some(TexKey {
-                id: sprite.0,
-                clamp: true,
-            }),
+            Some(TexKey::billboard(sprite.0, self.tex_filter)),
         );
     }
 

@@ -353,6 +353,15 @@ RDP).
   to draw instead. castle64's throne room has torches on every tier; `local lights`
   self-test step on PC, ares and Azahar; goldens `tests/golden/pc/lights_*`.
 
+- **Texture filter and detail layer (2026-10-15, ADR 0011):** `ModelParams::filter`
+  (`TexFilter::{Default, Point, Bilinear}`) and `Renderer::set_texture_filter`;
+  `ModelParams::detail` (`DetailTexture`: a second texture multiplied over the first,
+  tiling 2^n per base repeat) — the N64's `TILE1` + 2-cycle combiner (base and detail
+  share TMEM: no palettes, a small I4 detail), the 3DS's TexEnv stage 1, a second
+  binding on PC. In materials (`filter`, `detail`), the editor's material inspector and
+  baked scenes (TSCN v3). The showcase's pillars use it (`materials/stone-grain`);
+  `texture filter and detail` self-test step; goldens `tests/golden/pc/texture_filter_*`.
+
 - **Two screens (2026-10-14):** `Renderer::second_screen`/`set_screen` (3DS touch
   screen, 2D only; main screen first, then the second, once per frame),
   `Platform::second_screen` (known at update time), `InputState::pointer_screen`
@@ -632,6 +641,10 @@ cargo test --workspace
 - **A colored or dimmed global light sends every N64 draw to the CPU**
   (`RspReject::ColoredLight`): a "dim room" must stay white (lower ambient, a grazing
   direction) or be a tint.
+- **A detail layer and a palette texture can't share the N64's TMEM:** a CI4/CI8 base puts
+  its TLUT in TMEM's upper half. The shim then draws without the detail, silently on
+  the console. Give a detailed base a 16-bit or intensity format (the showcase's bricks
+  went from CI8 to RGBA5551).
 - **The PC `gamepad` feature links libudev on Linux** (`libudev-dev`). Keep it opt-in
   for Linux builds.
 

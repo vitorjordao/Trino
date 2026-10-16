@@ -47,18 +47,28 @@ fn material_editor_sets_shading_sides_and_texture() {
     assert!(h.state().def.double_sided);
 
     // Pick a texture from the combo box, then clear it again.
-    h.get_by_role(Role::ComboBox).click();
+    h.get_all_by_role(Role::ComboBox).next().unwrap().click();
     h.run();
     h.get_by_label("sprites/planks").click();
     h.run();
     assert_eq!(h.state().def.texture.as_deref(), Some("sprites/planks"));
-    h.get_by_role(Role::ComboBox).click();
+    h.get_all_by_role(Role::ComboBox).next().unwrap().click();
     h.run();
     h.get_by_label("None (model default / vertex colors)")
         .click();
     h.run();
     assert_eq!(h.state().def.texture, None);
-    assert!(h.state().changes >= 5, "every edit reports a change");
+    // Filter, and a detail layer from the second combo box.
+    h.get_by_label("Point").click();
+    h.run();
+    assert_eq!(h.state().def.filter, trino_scene::FilterDef::Point);
+    h.get_all_by_role(Role::ComboBox).nth(1).unwrap().click();
+    h.run();
+    h.get_by_label("sprites/brick").click();
+    h.run();
+    let d = h.state().def.detail.clone().expect("a detail layer");
+    assert_eq!((d.texture.as_str(), d.scale_log2), ("sprites/brick", 2));
+    assert!(h.state().changes >= 7, "every edit reports a change");
     // The edited definition still round-trips through its file format.
     let def = &h.state().def;
     assert_eq!(&MaterialDef::from_ron(&def.to_ron()).unwrap(), def);
@@ -537,7 +547,7 @@ fn pfx_harness(width: f32) -> Harness<'static, PfxState> {
 fn particle_editor_sets_fields_and_per_platform_caps() {
     use trino_asset_pipeline::Platform;
     let mut h = pfx_harness(340.0);
-    h.get_by_role(Role::ComboBox).click();
+    h.get_all_by_role(Role::ComboBox).next().unwrap().click();
     h.run();
     h.get_by_label("sprites/smoke-puff-with-a-long-name")
         .click();

@@ -10,7 +10,12 @@
 //! - State layout must not change between reloads — layout changes require
 //!   a restart. Bump [`GAME_API_VERSION`] on any signature change; the host
 //!   checks `trino_game_api_version()` after every reload and refuses
-//!   mismatches.
+//!   mismatches. A new trait method *with a default* (`Renderer`,
+//!   `Platform`) does not bump it: the host and the dylib always build
+//!   against the same `trino-core` (a core change needs a restart anyway,
+//!   `cargo xtask watch pc` only watches `examples/`), and no existing
+//!   export's signature changes. `second_screen`/`set_screen` and the typed
+//!   screen methods followed this rule.
 //! - No statics in the game dylib (they reset on reload) and no `TypeId`
 //!   across the boundary (it changes per compilation).
 //! - Exports take references only; nothing owned crosses the boundary.

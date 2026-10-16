@@ -700,6 +700,22 @@ pub fn test(p: &Project, build_first: bool, bless: bool) -> ExitCode {
             .map_err(|e| format!("golden frame: {e}"))?;
         let msg = crate::fbgolden::check_close(root, "3ds", "castle64_hub", img, bless, 3.0, 0.02)?;
         println!("[3ds] golden frame: {msg}");
+        // The same frame's touch screen (castle64's bottom-screen panel).
+        let img = frames
+            .get(1)
+            .ok_or("bottom golden frame: not dumped")?
+            .image()
+            .map_err(|e| format!("bottom golden frame: {e}"))?;
+        let msg = crate::fbgolden::check_close(
+            root,
+            "3ds",
+            "castle64_hub_bottom",
+            img,
+            bless,
+            3.0,
+            0.02,
+        )?;
+        println!("[3ds] golden frame (bottom): {msg}");
         Ok(())
     });
 

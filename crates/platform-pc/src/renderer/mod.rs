@@ -19,7 +19,7 @@ use trino_core::render3d::{
 };
 use trino_core::{
     Caps, Color, FontId, FrameStats, LightList, LightTier, LocalLight, Mat34, Material, ModelId,
-    ModelParams, Renderer, SpriteId, SpriteParams, TexFilter, TextParams, Transform3, Vec2,
+    ModelParams, Renderer, Screen, SpriteId, SpriteParams, TexFilter, TextParams, Transform3, Vec2,
 };
 
 use crate::sim::SimProfile;
@@ -152,14 +152,16 @@ pub struct PcRenderer {
     vi_pipeline: wgpu::RenderPipeline,
     vi_tex: wgpu::Texture,
     strict: bool,
-    /// The 3DS profile's touch screen (320×240, 2D only).
+    /// The 3DS profile's touch screen (320×240, 2D and 3D).
     second: Option<SecondScreen>,
     /// "name (backend)" of the GPU adapter.
     adapter_name: String,
-    /// Where draws go now (0 main, 1 second) and whether the main screen
-    /// was already rendered this frame (`set_screen(1)` renders it).
+    /// Where draws go now (0 main, 1 second). `set_screen(1)` renders the
+    /// main screen right away and keeps its counts (commands, triangles):
+    /// strict mode's budgets and the stats cover the whole frame.
     screen: u8,
-    main_done: bool,
+    main_cmds: u32,
+    main_tris: u32,
 }
 
 /// What a lit triangle adds to its vertices: the surface, the gloss and the
@@ -1038,7 +1040,8 @@ impl PcRenderer {
             strict,
             second,
             screen: 0,
-            main_done: false,
+            main_cmds: 0,
+            main_tris: 0,
             adapter_name,
         }
     }
@@ -1516,20 +1519,30 @@ impl PcRenderer {
         self.tex3d.get(&key)
     }
 
+    /// The size of the screen draws go to now: what the T&L projects to.
+    fn current_screen_size(&self) -> Vec2 {
+        let (w, h) = match (&self.second, self.screen) {
+            (Some(sc), 1) => sc.size,
+            _ => self.internal_size,
+        };
+        Vec2::new(w as f32, h as f32)
+    }
+
     /// Render the recorded commands into the main target, or (`second`)
     /// into the second screen's, and submit.
     fn draw_commands(&mut self, second: bool) {
         if self.strict {
-            if self.commands.len() as u32 > self.caps.max_sprites_per_frame {
+            // With two screens, the main screen's counts are in `main_*`:
+            // the budgets are per frame, both screens together.
+            let cmds = self.commands.len() as u32 + self.main_cmds;
+            if cmds > self.caps.max_sprites_per_frame {
                 panic!(
                     "strict mode: {} sprites this frame busts the {:?} profile budget \
                      of {} — reduce overdraw or batch static content.",
-                    self.commands.len(),
-                    self.profile,
-                    self.caps.max_sprites_per_frame
+                    cmds, self.profile, self.caps.max_sprites_per_frame
                 );
             }
-            let tris = (self.tri_verts.len() / 3) as u32;
+            let tris = (self.tri_verts.len() / 3) as u32 + self.main_tris;
             if tris > self.caps.max_tris_per_frame {
                 panic!(
                     "strict mode: {tris} 3D triangles this frame busts the {:?} \
@@ -1893,7 +1906,8 @@ impl Renderer for PcRenderer {
     fn begin_frame(&mut self, clear: Color) {
         self.clear = clear;
         self.screen = 0;
-        self.main_done = false;
+        self.main_cmds = 0;
+        self.main_tris = 0;
         self.commands.clear();
         self.tri_verts.clear();
         self.pending_tris.clear();
@@ -2056,7 +2070,7 @@ impl Renderer for PcRenderer {
                 );
             }
         }
-        let screen = Vec2::new(self.internal_size.0 as f32, self.internal_size.1 as f32);
+        let screen = self.current_screen_size();
         let before = self.pending_tris.len();
         let per_pixel = self.caps.light_tier == LightTier::PerPixel;
         let ctx = tnl_context(
@@ -2148,7 +2162,7 @@ impl Renderer for PcRenderer {
             sprite,
             false,
         );
-        let screen = Vec2::new(self.internal_size.0 as f32, self.internal_size.1 as f32);
+        let screen = self.current_screen_size();
         let locals = match self.caps.light_tier {
             LightTier::PerPixel => &[],
             LightTier::PerVertex => self.locals.as_slice(),
@@ -2177,18 +2191,37 @@ impl Renderer for PcRenderer {
         // Main screen first, then the second (once per frame).
         if screen == 1 && self.screen == 0 && self.second.is_some() {
             self.flush_model_batch();
-            self.frame_stats.tris = (self.tri_verts.len() / 3) as u32;
+            let (cmds, tris) = (
+                self.commands.len() as u32,
+                (self.tri_verts.len() / 3) as u32,
+            );
             self.draw_commands(false);
-            self.main_done = true;
+            (self.main_cmds, self.main_tris) = (cmds, tris);
             self.screen = 1;
+        }
+    }
+
+    fn screen(&self) -> Screen {
+        if self.screen == 1 {
+            Screen::Bottom
+        } else {
+            Screen::Top
+        }
+    }
+
+    fn screen_size(&self, screen: Screen) -> Option<Vec2> {
+        match screen {
+            Screen::Top => Some(Vec2::new(
+                self.internal_size.0 as f32,
+                self.internal_size.1 as f32,
+            )),
+            Screen::Bottom => self.second_screen(),
         }
     }
 
     fn end_frame(&mut self) {
         self.flush_model_batch();
-        if self.screen == 0 {
-            self.frame_stats.tris = (self.tri_verts.len() / 3) as u32;
-        }
+        self.frame_stats.tris = self.main_tris + (self.tri_verts.len() / 3) as u32;
         self.last_stats = self.frame_stats;
         self.flush();
     }
@@ -2225,6 +2258,24 @@ impl Renderer for PcRenderer {
             return None;
         }
         let rgba = self.read_offscreen();
+        let at = ((y * w + x) * 4) as usize;
+        Some(Color::rgba(
+            rgba[at],
+            rgba[at + 1],
+            rgba[at + 2],
+            rgba[at + 3],
+        ))
+    }
+
+    fn read_screen_pixel(&mut self, screen: Screen, x: u32, y: u32) -> Option<Color> {
+        let Screen::Bottom = screen else {
+            return self.read_pixel(x, y);
+        };
+        let (w, h) = self.second.as_ref()?.size;
+        if x >= w || y >= h {
+            return None;
+        }
+        let rgba = self.read_second_screen();
         let at = ((y * w + x) * 4) as usize;
         Some(Color::rgba(
             rgba[at],

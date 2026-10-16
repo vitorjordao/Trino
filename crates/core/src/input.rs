@@ -19,6 +19,7 @@
 //! with the stick and D-pad — a virtual cursor is the portable pattern.
 
 use crate::math::Vec2;
+use crate::render::Screen;
 
 /// A digital button. Discriminants are bit positions in [`InputState`].
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -108,7 +109,8 @@ pub struct InputState {
     pub keys: u32,
     /// Which screen `pointer` is on: 0 = the main screen, 1 = the second
     /// screen (3DS touch screen, `Renderer::second_screen`), in that
-    /// screen's own pixels.
+    /// screen's own pixels ([`Screen::index`]). Read it through
+    /// [`pointer_on`](Self::pointer_on).
     pub pointer_screen: u8,
     /// A gamepad button or stick was active this frame (PC): games can show
     /// pad button names instead of keyboard keys.
@@ -142,6 +144,18 @@ impl InputState {
         } else {
             self.buttons &= !bit;
         }
+    }
+
+    /// The pointer, only while it is on `screen` (in that screen's
+    /// pixels). World picking on the top screen asks for
+    /// `pointer_on(Screen::Top)`, so a touch on the 3DS bottom screen (or
+    /// the PC's simulated one) never picks the world; bottom-screen widgets
+    /// ask for `Screen::Bottom`, which is always `None` on single-screen
+    /// targets.
+    #[inline]
+    pub fn pointer_on(&self, screen: Screen) -> Option<Vec2> {
+        self.pointer
+            .filter(|_| self.pointer_screen == screen.index())
     }
 
     #[inline]
@@ -233,6 +247,30 @@ mod tests {
         assert!(!now.is_down(Button::A));
         let later = InputState::default();
         assert!(later.pointer_released(&now, PointerButton::Primary));
+    }
+
+    #[test]
+    fn pointer_on_reports_the_pointer_only_on_its_screen() {
+        let mut s = InputState::default();
+        assert_eq!(s.pointer_on(Screen::Top), None);
+        assert_eq!(s.pointer_on(Screen::Bottom), None);
+        // A mouse on the main picture.
+        s.pointer = Some(Vec2::new(10.0, 20.0));
+        assert_eq!(s.pointer_on(Screen::Top), Some(Vec2::new(10.0, 20.0)));
+        assert_eq!(s.pointer_on(Screen::Bottom), None);
+        // A 3DS touch (bottom screen): world picking never sees it.
+        s.pointer_screen = Screen::Bottom.index();
+        assert_eq!(s.pointer_on(Screen::Top), None);
+        assert_eq!(s.pointer_on(Screen::Bottom), Some(Vec2::new(10.0, 20.0)));
+        // An index no screen has reports nowhere.
+        s.pointer_screen = 7;
+        assert_eq!(s.pointer_on(Screen::Top), None);
+        assert_eq!(s.pointer_on(Screen::Bottom), None);
+        assert_eq!(Screen::from_index(7), None);
+        for screen in [Screen::Top, Screen::Bottom] {
+            assert_eq!(Screen::from_index(screen.index()), Some(screen));
+        }
+        assert_eq!(Screen::default(), Screen::Top);
     }
 
     #[test]

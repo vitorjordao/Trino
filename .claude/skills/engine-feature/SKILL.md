@@ -23,7 +23,10 @@ A feature is done only when **PC, N64 and 3DS** all run it and an emulator has s
   - TSCN: frozen at the first release (BACKLOG P0 #2). After that, every change
     bumps the version and adds a migration in `BakedScene::parse`.
   - Game API: a new `Platform`/`Game` method that changes the dylib ABI bumps
-    `GAME_API_VERSION`.
+    `GAME_API_VERSION`. A new `Renderer`/`Platform` method **with a default**
+    does not: the host and the dylib share `trino-core`, and a core change
+    already needs a restart (rule written in `crates/game-api/src/lib.rs`;
+    `second_screen` and the typed screen API followed it).
 - `ModelParams` and similar structs grow. Use `..ModelParams::DEFAULT` everywhere.
   A new `ModelParams` field also needs three more things:
   - **Scene codegen:** `crates/scene/src/codegen.rs` writes every field, so add it to
@@ -74,6 +77,8 @@ A feature is done only when **PC, N64 and 3DS** all run it and an emulator has s
 
 - A self-test step must **assert** what the feature does: probe pixels, read back
   bytes, compare counts. A step that only calls the API and prints proves nothing.
+  Then break the feature on purpose (one line in the PC backend) and make sure the
+  step fails. The first `dual screen` probes passed with a wrong projection.
 - Tests that change the cwd or the environment (`set_current_dir`, `set_var`) race
   with other tests in the same binary. Mark them `#[ignore]` and run them alone
   with `--test-threads=1`, as the editor UI tests do, or don't touch global state.

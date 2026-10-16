@@ -47,7 +47,11 @@ static int s_tri3d_detail = -1;
 static int s_point = 0;
 static C2D_SpriteSheet s_detail_sheet = NULL;
 static float s_detail_scale = 1.0f;
+// One projection per screen (citro2d's own for each): 3D drawn after
+// trino_set_screen(1) lands on the touch screen, projected to its 320x240.
 static C3D_Mtx s_proj_top;
+static C3D_Mtx s_proj_bottom;
+static const C3D_Mtx* s_proj = &s_proj_top;
 
 // Per-frame vertex buffer: x, y, depth, w | u, v | r, g, b, a (10 floats).
 // C3D_FRAME_SYNCDRAW in trino_frame_begin waits for the previous frame's
@@ -65,8 +69,9 @@ static void trino_tex3d_init(void)
     shaderProgramSetVsh(&s_tri3d, &s_tri3d_dvlb->DVLE[0]);
     s_tri3d_proj = shaderInstanceGetUniformLocation(s_tri3d.vertexShader, "projection");
     s_tri3d_detail = shaderInstanceGetUniformLocation(s_tri3d.vertexShader, "detail");
-    // Same projection citro2d builds for the top screen.
+    // The same projections citro2d builds for each screen.
     Mtx_OrthoTilt(&s_proj_top, 0.0f, 400.0f, 240.0f, 0.0f, 1.0f, -1.0f, true);
+    Mtx_OrthoTilt(&s_proj_bottom, 0.0f, 320.0f, 240.0f, 0.0f, 1.0f, -1.0f, true);
     s_vbuf = (float*)linearAlloc(TRI3D_MAX_VERTS * TRI3D_FLOATS * sizeof(float));
 }
 
@@ -74,7 +79,7 @@ static void trino_tex3d_init(void)
 // Boot + logging
 
 static C3D_RenderTarget* s_top = NULL;
-// The touch screen (320x240): 2D only (trino_set_screen).
+// The touch screen (320x240), 2D and 3D (trino_set_screen).
 static C3D_RenderTarget* s_bottom = NULL;
 
 // Main-thread stack. libctru's weak default is 32 KB; game states live in
@@ -140,14 +145,16 @@ void trino_frame_begin(uint32_t rgba8888)
     // The touch screen's own background (games draw their UI on it).
     C2D_TargetClear(s_bottom, C2D_Color32(16, 18, 28, 0xFF));
     C2D_SceneBegin(s_top);
+    s_proj = &s_proj_top;
     s_vused = 0;
 }
 
-// Later 2D draws go to the touch screen (1) or the top screen (0). 3D stays
-// on the top screen (tri3d's projection is the top's).
+// Later draws (2D and 3D) go to the touch screen (1) or the top screen (0),
+// each with its own projection. The Rust side only ever moves 0 -> 1.
 void trino_set_screen(uint32_t bottom)
 {
     C2D_SceneBegin(bottom ? s_bottom : s_top);
+    s_proj = bottom ? &s_proj_bottom : &s_proj_top;
 }
 
 void trino_frame_end(void)
@@ -304,7 +311,7 @@ void trino_3d_draw(const float* v, uint32_t count, void* sheet, uint32_t clamp)
 
     C2D_Flush();
     C3D_BindProgram(&s_tri3d);
-    C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, s_tri3d_proj, &s_proj_top);
+    C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, s_tri3d_proj, s_proj);
     int detail = sheet && s_detail_sheet;
     C3D_FVUnifSet(GPU_VERTEX_SHADER, s_tri3d_detail, s_detail_scale, s_detail_scale, 0.0f, 0.0f);
     C3D_AttrInfo* attr = C3D_GetAttrInfo();
@@ -397,19 +404,21 @@ int32_t trino_save_store(const uint8_t* src, uint32_t len)
     return rename(TRINO_SAVE_TMP, TRINO_SAVE_PATH) == 0 ? 0 : -1;
 }
 
-// Test hook: RGBA8888 of the top screen at (x, y) (landscape, y down) from
-// the LCD back buffer; 0 if unavailable. Waits two vblanks so the frame's
-// display transfer has landed; callers draw the probed frame several times
-// so both LCD buffers hold it. The LCD buffer is column-major, bottom-up.
-uint32_t trino_debug_pixel(uint32_t x, uint32_t y)
+// Test hook: RGBA8888 of the top screen (bottom = 0) or the touch screen
+// (bottom = 1) at (x, y) (landscape, y down) from the LCD back buffer; 0 if
+// unavailable. Waits two vblanks so the frame's display transfer has
+// landed; callers draw the probed frame several times so both LCD buffers
+// hold it. The LCD buffer is column-major, bottom-up.
+uint32_t trino_debug_pixel(uint32_t x, uint32_t y, uint32_t bottom)
 {
-    if (x >= 400 || y >= 240) return 0;
+    if (x >= (bottom ? 320u : 400u) || y >= 240) return 0;
     gspWaitForVBlank();
     gspWaitForVBlank();
     u16 w = 0, h = 0;
-    const u8* fb = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, &w, &h);
+    gfxScreen_t scr = bottom ? GFX_BOTTOM : GFX_TOP;
+    const u8* fb = gfxGetFramebuffer(scr, GFX_LEFT, &w, &h);
     if (!fb || w != 240) return 0;
-    GSPGPU_FramebufferFormat fmt = gfxGetScreenFormat(GFX_TOP);
+    GSPGPU_FramebufferFormat fmt = gfxGetScreenFormat(scr);
     u32 bpp = fmt == GSP_RGBA8_OES ? 4 : (fmt == GSP_BGR8_OES ? 3 : 0);
     if (!bpp) return 0;
     const u8* p = fb + (x * 240 + (239 - y)) * bpp;

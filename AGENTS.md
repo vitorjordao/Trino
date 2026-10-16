@@ -362,13 +362,28 @@ RDP).
   baked scenes (TSCN v3). The showcase's pillars use it (`materials/stone-grain`);
   `texture filter and detail` self-test step; goldens `tests/golden/pc/texture_filter_*`.
 
-- **Two screens (2026-10-14):** `Renderer::second_screen`/`set_screen` (3DS touch
-  screen, 2D only; main screen first, then the second, once per frame),
-  `Platform::second_screen` (known at update time), `InputState::pointer_screen`
-  (3DS touches are bottom-screen pixels on screen 1). The PC's 3DS profile renders
-  and presents both screens stacked, maps the mouse to either, and
-  `present_preview`/`read_second_screen` capture them; the 3DS host dumps the touch
-  screen as the next golden (`dump_framebuffer_bottom`).
+- **Two screens (2026-10-14, typed API 2026-10-15):** `trino_core::Screen`
+  (`Top` = the main screen everywhere, `Bottom` = the 3DS touch screen).
+  `Renderer::on_screen(Screen)` sends the next draws, **2D and 3D**, to a screen and
+  returns `false` when they don't go there: the screen is missing (PC native, N64:
+  skip the draws), or it is `Top` after the frame moved to the bottom. The order is
+  the top first, then the bottom, once per frame, on every backend. Each screen has
+  its own target, so draws are clipped to it, and its own projection: the T&L and the
+  3DS shim's citro3d matrix switch to 320×240, so set a camera for the bottom. The
+  camera is renderer state: a bottom-screen `set_camera` carries into the next
+  frame's top unless the game sets the top's camera again, so set it every frame on
+  each screen. A two-screen backend overrides `set_screen`, `screen()` and
+  `second_screen` together, because the provided `on_screen` reads `screen()`. Also
+  `screen()`, `screen_size(Screen)`, `read_screen_pixel(Screen, x, y)` (the
+  self-test read-back of either screen) and the low-level `second_screen`/`set_screen(u8)`.
+  `Platform::second_screen` is known at update time. Touch routing:
+  `InputState::pointer_on(Screen)` (a 3DS touch is on `Bottom`, in its own pixels),
+  so world picking asks for `Top` and never sees a touch. The PC's 3DS profile
+  renders and presents both screens stacked, maps the mouse to either, and
+  `present_preview`/`read_second_screen` capture them. The 3DS host dumps the touch
+  screen as the next golden (`dump_framebuffer_bottom`). castle64 shows it: a map,
+  counters with a 3D star, and touch buttons on the bottom screen (the
+  `dual screen` self-test step, `castle64_hub_bottom.png`).
 
 PC keyboard mapping: A/B = Z/X, X/Y = C/V, L/R = Q/E, Start = Enter,
 Select = Right Shift, D-pad = arrows, stick = WASD (see `crates/platform-pc/src/input.rs`).
@@ -514,7 +529,8 @@ cargo test --workspace
 - Emulator golden: `tests/golden/n64/showcase.png` is compared pixel-exactly
   by `test n64`. A renderer change on the N64 path re-blesses it
   (`--bless`), and the PNG diff gets reviewed like any golden.
-- 3DS golden: `tests/golden/3ds/castle64_hub.png`, compared within a
+- 3DS goldens: `tests/golden/3ds/castle64_hub.png` (top) and
+  `castle64_hub_bottom.png` (the same frame's touch screen), compared within a
   tolerance by `test 3ds` (Azahar's pixels depend on the host OpenGL);
   `n3ds_parity` holds the PC's N3ds look to it.
 - Performance is gated: `xtask/tests/perf_budget.rs` pins castle64's T&L
@@ -651,6 +667,14 @@ cargo test --workspace
 - **egui: a truncating `ComboBox` sizes its text to the space available, not to its
   `.width()`.** A long name pushed the button after it out of the Inspector. Wrap it in
   `theme::fixed_width` (the layout audit catches the next one).
+- **A probe at a quad's quadrant centers misses a shifted projection.** The first
+  `dual screen` probe used the `textured_3d` points, and a 400-wide projection on the
+  320-wide bottom screen (a 40 px shift) still landed every probe in the right
+  quadrant. Probe near the corners and just outside the edges, then check that a
+  deliberate mutation fails the step.
+- **Screen order is a contract, not a backend detail.** Before the typed API the
+  3DS let draws go back to the top after the bottom, while the PC sent them to the
+  bottom. Both now refuse the switch back, and `on_screen` reports it.
 - **`/tmp` may be a RAM disk (tmpfs).** A second `target/` there (a git worktree's build)
   filled RAM and killed rustc. Put extra worktrees and their targets on a real disk.
 

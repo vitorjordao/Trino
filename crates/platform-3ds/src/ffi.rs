@@ -45,7 +45,8 @@ unsafe extern "C" {
 
     pub fn trino_frame_begin(rgba8888: u32);
     pub fn trino_frame_end();
-    /// Later 2D draws on the touch screen (1) or the top screen (0).
+    /// Later draws (2D and 3D, each screen's projection) on the touch
+    /// screen (1) or the top screen (0).
     pub fn trino_set_screen(bottom: u32);
 
     pub fn trino_sprite_load(romfs_path: *const c_char) -> *mut c_void;
@@ -87,8 +88,9 @@ unsafe extern "C" {
     pub fn trino_asset_load(romfs_path: *const c_char, size_out: *mut u32) -> *mut c_void;
     pub fn trino_free(ptr: *mut c_void);
 
-    /// Test hook: RGBA8888 of the top screen at (x, y); 0 = unavailable.
-    pub fn trino_debug_pixel(x: u32, y: u32) -> u32;
+    /// Test hook: RGBA8888 of the top screen (`bottom` = 0) or the touch
+    /// screen (1) at (x, y); 0 = unavailable.
+    pub fn trino_debug_pixel(x: u32, y: u32, bottom: u32) -> u32;
     /// Test hook: print the top screen as `TRINO_FBR:` rows (RGBA5551) and
     /// a `TRINO_FB_END:` hash line — the N64 dump format.
     pub fn trino_debug_fb_dump(bottom: u32);

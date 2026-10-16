@@ -144,6 +144,34 @@ Textures must be power-of-two and fit TMEM; strict mode enforces both.
 - **N64 z precision:** depth is `1 - NEAR/d` with `NEAR = 0.05` in a 16-bit z-buffer.
   Coplanar decals need several centimetres of separation at gameplay distances. The
   emulator golden caught the showcase pond z-fighting at 2 cm.
+- **Two screens (added 2026-10-15, GitHub #17):**
+  - `trino_core::Screen`: `Top` is the main screen on every target, `Bottom` the
+    3DS touch screen (simulated by the PC's 3DS profile).
+  - **Order contract:** a frame draws the top first, then the bottom, once. Every
+    backend refuses a switch back to the top, and `Renderer::on_screen` reports the
+    refusal as `false`. On a single-screen target `on_screen(Bottom)` is `false` and
+    the caller skips those draws. Backends don't discard them, so the N64 renderer
+    needs no screen code at all.
+  - **Per-screen projection:** a 3D draw projects to the current screen's size. The
+    T&L context is built from it, and the 3DS shim switches its citro3d matrix in
+    `trino_set_screen`. Each screen has its own render target and depth buffer, which
+    also clips its 2D.
+  - **Budgets are per frame:** both 3DS screens share one citro2d object pool
+    (`C2D_Init` once) and the shim's one per-frame vertex buffer. The PC's strict mode
+    and `FrameStats::tris` therefore count both screens together.
+  - **ABI:** `trino_debug_pixel(x, y, bottom)` (3 arguments) reads either LCD for
+    `Renderer::read_screen_pixel`.
+  - **`GAME_API_VERSION` stays 3**, as it did for `second_screen`/`set_screen`. The
+    new methods all have defaults, and no exported function's signature changed.
+    Hot reload swaps only the game dylib, and the host and the dylib always build
+    against the same `trino-core`: a core change needs a restart, and
+    `cargo xtask watch pc` watches only `examples/`. Bumping would refuse nothing that
+    could actually be loaded. The rule is written in `crates/game-api/src/lib.rs`
+    and in the `engine-feature` skill: a trait method with a default doesn't bump; a
+    signature change does.
+  - **The camera is renderer state across screens and frames.** A `set_camera` for
+    the bottom carries into the next frame's top unless the game sets the camera
+    again, so set it every frame on each screen.
 
 ## 7. Verification conventions
 

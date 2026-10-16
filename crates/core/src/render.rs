@@ -425,9 +425,44 @@ impl Transform3 {
     }
 }
 
+/// One of a target's screens. [`Top`](Screen::Top) is the main screen on
+/// every target: the only one on PC native and the N64, the 3DS's top
+/// screen, and the picture games are created with. [`Bottom`](Screen::Bottom)
+/// is the second screen: the 3DS touch screen (320×240), simulated by the
+/// PC's 3DS profile, absent on single-screen targets
+/// ([`Renderer::screen_size`] is `None` there).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+#[repr(u8)]
+pub enum Screen {
+    #[default]
+    Top = 0,
+    Bottom = 1,
+}
+
+impl Screen {
+    /// The low-level index ([`Renderer::set_screen`],
+    /// [`InputState::pointer_screen`](crate::InputState::pointer_screen)).
+    #[inline]
+    pub const fn index(self) -> u8 {
+        self as u8
+    }
+
+    /// The screen with that index, if there is such a screen.
+    #[inline]
+    pub const fn from_index(index: u8) -> Option<Screen> {
+        match index {
+            0 => Some(Screen::Top),
+            1 => Some(Screen::Bottom),
+            _ => None,
+        }
+    }
+}
+
 /// What every platform backend implements.
 ///
 /// Call order per frame: `begin_frame` → any number of draws → `end_frame`.
+/// With two screens: the [`Top`](Screen::Top) screen's draws, then
+/// [`on_screen(Screen::Bottom)`](Renderer::on_screen) and the bottom's.
 pub trait Renderer {
     /// The hardware budget of this backend (or of the simulated console when
     /// the PC backend runs a console profile).
@@ -539,16 +574,61 @@ pub trait Renderer {
     }
 
     /// The second screen's size (3DS: the 320×240 touch screen; the PC's
-    /// 3DS profile simulates it), or `None` with one screen.
+    /// 3DS profile simulates it), or `None` with one screen. The same as
+    /// [`screen_size(Screen::Bottom)`](Self::screen_size).
     fn second_screen(&self) -> Option<Vec2> {
         None
     }
 
-    /// Where the next 2D draws go: `0` = the main screen (the 3D world's),
-    /// `1` = the [`second_screen`](Self::second_screen) (2D only:
-    /// `fill_rect`, sprites, text). Starts at `0` each frame. A no-op on
-    /// single-screen targets.
+    /// The low-level form of [`on_screen`](Self::on_screen): `0` = the
+    /// main screen, `1` = the [`second_screen`](Self::second_screen).
+    /// Every draw (2D and 3D) goes to the current screen, projected and
+    /// clipped to it. Starts at `0` each frame; the main screen comes
+    /// first, then the second, once per frame — switching back to `0`
+    /// after `1` is ignored on every backend. A no-op on single-screen
+    /// targets (draws stay on the main screen: check
+    /// [`on_screen`](Self::on_screen)'s result).
+    ///
+    /// A two-screen backend overrides `set_screen`, [`screen`](Self::screen)
+    /// and [`second_screen`](Self::second_screen) together: the provided
+    /// `on_screen` reads `screen()` to tell whether the switch happened.
     fn set_screen(&mut self, _screen: u8) {}
+
+    /// Where draws go now (see [`set_screen`](Self::set_screen)). The
+    /// default is [`Screen::Top`], right for single-screen targets only: a
+    /// backend that overrides `set_screen` must override this too, or
+    /// `on_screen(Screen::Bottom)` reports `false` while its draws go to the
+    /// bottom.
+    fn screen(&self) -> Screen {
+        Screen::Top
+    }
+
+    /// Send the next draws (2D and 3D) to `screen`; `true` when they now go
+    /// there. `false` means skip them: `screen` does not exist on this
+    /// target (single-screen targets collapse to the main screen), or it
+    /// is [`Screen::Top`] after the frame already moved to the bottom.
+    /// The camera persists across the switch; a 3D draw on the bottom
+    /// projects to the bottom's size, so set a camera meant for it.
+    fn on_screen(&mut self, screen: Screen) -> bool {
+        self.set_screen(screen.index());
+        self.screen() == screen
+    }
+
+    /// `screen`'s size in pixels, or `None` if this target lacks it. The
+    /// top is the picture the game renders at (the default reads it from
+    /// [`caps`](Self::caps); backends with a resizable picture override).
+    fn screen_size(&self, screen: Screen) -> Option<Vec2> {
+        match screen {
+            Screen::Top => {
+                let caps = self.caps();
+                Some(Vec2::new(
+                    caps.screen_width as f32,
+                    caps.screen_height as f32,
+                ))
+            }
+            Screen::Bottom => self.second_screen(),
+        }
+    }
 
     /// **Test hook** (slow, never per frame): color of the last finished
     /// frame at internal pixel `(x, y)`, or `None` if this backend cannot
@@ -557,5 +637,15 @@ pub trait Renderer {
     /// 3DS draw the probed frame a few times: the LCD is double-buffered).
     fn read_pixel(&mut self, _x: u32, _y: u32) -> Option<Color> {
         None
+    }
+
+    /// **Test hook**, like [`read_pixel`](Self::read_pixel) (which reads
+    /// the top screen) for either screen. `None` where the screen is
+    /// missing or cannot be read back.
+    fn read_screen_pixel(&mut self, screen: Screen, x: u32, y: u32) -> Option<Color> {
+        match screen {
+            Screen::Top => self.read_pixel(x, y),
+            Screen::Bottom => None,
+        }
     }
 }

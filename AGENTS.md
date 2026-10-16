@@ -57,14 +57,17 @@ new skill when none fits. Then run `cargo xtask agents sync`. The steps are in
   running state (`apps/pc` feature `reload`).
 - **Editor** (`cargo xtask editor`, `crates/editor`): dark themed dockable UI (Inter +
   Phosphor icons) — **Scene view** (real `PcRenderer` at panel resolution, orbit camera,
-  z-buffered grid, click picking, move/rotate/scale **gizmo** with snapping, axis widget,
-  drag-and-drop from Assets), **Game view** (scene camera at N64/3DS/PC resolution and
-  look), Hierarchy tree (parenting by drag, rename, visibility, prefab instances),
-  Inspector (components, inline material editing, prefab overrides, scene environment),
-  Assets browser (rendered thumbnails), Console, toasts, status bar. Snapshot
-  **undo/redo**, copy/paste entities **as RON** (Ctrl+C/V — round-trips through any AI
-  chat), keyboard shortcuts (F1). **Play** runs the open scene (`TRINO_SCENE`, live
-  reload) or the game, in a separate process. Every UI action writes a text file.
+  z-buffered grid, click picking, move/rotate/scale **gizmo** with snapping, planar
+  handles and a view ring, Unity-style navigation (MMB pan, Alt+RMB dolly, RMB-held
+  WASD/QE fly), a Blender-style axis widget (drag to orbit, click an axis twice to flip,
+  centre or `5` for a near-orthographic view), drag-and-drop from Assets), **Game view**
+  (scene camera at N64/3DS/PC resolution and look), Hierarchy tree (parenting by drag,
+  rename, visibility, prefab instances), Inspector (components, inline material editing,
+  prefab overrides, scene environment), Assets browser (rendered thumbnails), Console,
+  toasts, status bar. Snapshot **undo/redo**, copy/paste entities **as RON** (Ctrl+C/V —
+  round-trips through any AI chat), keyboard shortcuts (F1). **Play** runs the open
+  scene (`TRINO_SCENE`, live reload) or the game, in a separate process. Every UI action
+  writes a text file.
   Agent hooks: the `editor` skill.
 - **Content formats** (`trino-scene` crate, versioned RON, hot-reloaded):
   scenes v3 (`scenes/*.scene.ron`: nested entities, 3D transforms in degrees, models +
@@ -792,6 +795,11 @@ cargo test --workspace
   slower in wall time.
 - **`/tmp` may be a RAM disk (tmpfs).** A second `target/` there (a git worktree's build)
   filled RAM and killed rustc. Put extra worktrees and their targets on a real disk.
+
+- **The engine has no orthographic projection.** A camera backed far off with a
+  tiny field of view fakes one, but `1 - NEAR/z` depth then resolves metres. The
+  editor draws the world scaled around the target (`gizmo::RenderCam`). Any
+  far-eye trick needs the same scaling.
 
 - **A module pulled into a test with `#[path = "../src/x.rs"]` doesn't count for
   coverage:** llvm-cov reports it under `tests/../src/x.rs`, which the default filter

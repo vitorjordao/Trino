@@ -129,6 +129,8 @@ pub enum Cmd {
     /// Files dropped on the window: models / sprites to import.
     ImportFiles(Vec<PathBuf>),
     FocusTab(Tab),
+    /// Scene view: switch between perspective and (near-)orthographic.
+    ToggleOrtho,
     /// Scene tabs: bring open scene `n` (index into `open_docs`) to front,
     /// or close it.
     SwitchScene(usize),
@@ -913,6 +915,7 @@ impl App {
                 }
             }
             Cmd::FocusTab(tab) => self.focus_tab = Some(tab),
+            Cmd::ToggleOrtho => self.scene_view.cam.ortho = !self.scene_view.cam.ortho,
             Cmd::SwitchScene(i) => {
                 if i >= self.open_docs.len() {
                     return Ok(());
@@ -1542,6 +1545,7 @@ impl App {
                 ui.checkbox(&mut self.scene_view.show_grid, "Grid");
                 ui.checkbox(&mut self.animate, "Preview animations");
                 ui.checkbox(&mut self.scene_view.snap, "Snap");
+                ui.checkbox(&mut self.scene_view.cam.ortho, "Orthographic (5)");
                 ui.separator();
                 if ui
                     .button(format!("{}  Keyboard shortcuts", icon::INFO))
@@ -1949,6 +1953,14 @@ impl App {
         ] {
             add(format!("Go to {name} view"), "View", Cmd::FocusTab(tab));
         }
+        {
+            let name = if self.scene_view.cam.ortho {
+                "Perspective view"
+            } else {
+                "Orthographic view"
+            };
+            add(name.into(), "5", Cmd::ToggleOrtho);
+        }
         let mut scenes: Vec<PathBuf> = std::fs::read_dir("scenes")
             .map(|d| {
                 d.flatten()
@@ -2140,7 +2152,11 @@ impl App {
     }
 
     fn shortcuts(&mut self, ctx: &egui::Context) {
-        if ctx.egui_wants_keyboard_input() {
+        // Flying the Scene view (RMB held): Shift+A is boost + strafe there.
+        // (RMB is checked too: a flight the view didn't see end, because
+        // another tab took its place, must not mute the shortcuts.)
+        let flying = self.scene_view.flying() && ctx.input(|i| i.pointer.secondary_down());
+        if ctx.egui_wants_keyboard_input() || flying {
             return;
         }
         use egui::{Key, KeyboardShortcut, Modifiers};
@@ -2250,9 +2266,16 @@ impl App {
                             ("F", "Frame selection"),
                             ("G", "Toggle grid"),
                             ("1 / 3 / 7 (+Ctrl)", "Front / right / top view (opposite)"),
-                            ("MMB / RMB drag", "Orbit (Alt+LMB too)"),
-                            ("Shift + MMB/RMB drag", "Pan"),
+                            ("5", "Perspective / orthographic"),
+                            ("Alt+LMB drag", "Orbit (or drag the axis widget)"),
+                            ("MMB drag (+Ctrl/Shift)", "Pan (Shift+RMB too)"),
+                            ("Alt+RMB drag", "Dolly (up = in)"),
                             ("Wheel", "Zoom"),
+                            (
+                                "Hold RMB + WASD/QE",
+                                "Fly: look, move, down/up (Shift: faster, wheel: speed)",
+                            ),
+                            ("Axis widget", "Click: view from axis (again: opposite)"),
                             ("F1", "This window"),
                         ] {
                             ui.label(RichText::new(k).monospace().color(c::ACCENT_TEXT));

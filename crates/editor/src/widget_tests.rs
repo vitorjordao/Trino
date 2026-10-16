@@ -586,3 +586,106 @@ fn particle_editor_sets_fields_and_per_platform_caps() {
         );
     }
 }
+
+struct AxisState {
+    cam: crate::gizmo::OrbitCam,
+    events: Vec<crate::gizmo::AxisEvent>,
+    fonts: bool,
+}
+
+const AXIS_CENTER: eframe::egui::Pos2 = eframe::egui::pos2(120.0, 120.0);
+
+fn axis_proj(cam: &crate::gizmo::OrbitCam) -> crate::gizmo::Proj {
+    let rect = eframe::egui::Rect::from_min_size(
+        eframe::egui::Pos2::ZERO,
+        eframe::egui::vec2(240.0, 240.0),
+    );
+    crate::gizmo::Proj::new(&cam.camera(), (240, 240), rect)
+}
+
+/// The orientation widget, driven with the pointer: a tip click snaps (and
+/// the app's camera flips on a second one), a drag orbits, the centre and
+/// the label switch the projection.
+#[test]
+fn axis_widget_snaps_orbits_and_toggles_the_projection() {
+    use crate::gizmo::{AxisEvent, OrbitCam, axis_tips};
+    let mut h = Harness::builder()
+        .with_size(eframe::egui::vec2(240.0, 240.0))
+        .build_ui_state(
+            |ui, s: &mut AxisState| {
+                if !s.fonts {
+                    crate::theme::install(ui.ctx());
+                    s.fonts = true;
+                    return;
+                }
+                let proj = axis_proj(&s.cam);
+                if let Some(e) = crate::gizmo::axis_widget(ui, &proj, AXIS_CENTER, s.cam.ortho) {
+                    s.events.push(e);
+                }
+            },
+            AxisState {
+                cam: OrbitCam::default(),
+                events: Vec::new(),
+                fonts: false,
+            },
+        );
+    h.run();
+    assert!(h.query_by_label("View orientation").is_some());
+    let tip = |h: &Harness<'_, AxisState>, idx: usize| {
+        axis_tips(&axis_proj(&h.state().cam).view, AXIS_CENTER)
+            .into_iter()
+            .find(|t| t.0 == idx)
+            .unwrap()
+            .1
+    };
+    let click = |h: &mut Harness<'_, AxisState>, p: eframe::egui::Pos2| {
+        h.hover_at(p);
+        h.run();
+        h.drag_at(p);
+        h.run();
+        h.drop_at(p);
+        h.run();
+    };
+
+    // Click +X: snap to it.
+    let p = tip(&h, 0);
+    click(&mut h, p);
+    assert_eq!(h.state().events, vec![AxisEvent::Snap(0)]);
+
+    // Drag across the disc: orbit events adding up to the pointer's travel.
+    h.state_mut().events.clear();
+    let start = AXIS_CENTER + eframe::egui::vec2(-20.0, 22.0);
+    h.hover_at(start);
+    h.run();
+    h.drag_at(start);
+    h.run();
+    for k in 1..=6 {
+        h.hover_at(start + eframe::egui::vec2(5.0 * k as f32, 0.0));
+        h.run();
+    }
+    h.drop_at(start + eframe::egui::vec2(30.0, 0.0));
+    h.run();
+    let orbit: eframe::egui::Vec2 = h
+        .state()
+        .events
+        .iter()
+        .map(|e| match e {
+            AxisEvent::Orbit(d) => *d,
+            other => panic!("a drag only orbits: {other:?}"),
+        })
+        .fold(eframe::egui::Vec2::ZERO, |a, b| a + b);
+    assert!(orbit.x > 20.0 && orbit.y.abs() < 1e-3, "{orbit:?}");
+
+    // The centre and the label both switch the projection.
+    h.state_mut().events.clear();
+    click(&mut h, AXIS_CENTER);
+    assert_eq!(h.state().events, vec![AxisEvent::ToggleOrtho]);
+    h.state_mut().cam.ortho = true;
+    h.run();
+    h.get_by_label("Projection: Ortho (5)").click();
+    h.run();
+    assert_eq!(
+        h.state().events,
+        vec![AxisEvent::ToggleOrtho, AxisEvent::ToggleOrtho]
+    );
+}

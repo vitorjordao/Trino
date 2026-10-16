@@ -128,7 +128,9 @@ new skill when none fits. Then run `cargo xtask agents sync`. The steps are in
   `tests/golden/3ds/castle64_hub.png` within a tolerance. All 3D is drawn
   by citro3d with **per-vertex depth** (`trino_3d_draw`). `build 3ds --selftest` + `test 3ds --no-build`
   split build and boot, as CI does. `watch 3ds`
-  rebuilds + relaunches on save. The `SimProfile::N3ds` PC renderer samples
+  rebuilds + relaunches on save. `--accurate-timing` (or `TRINO_AZAHAR_GPU_TIMING=1`)
+  turns on Azahar's "Simulate 3DS GPU timings" for one session and restores the
+  user's setting afterwards (`docs/HARDWARE.md`). The `SimProfile::N3ds` PC renderer samples
   sprites bilinearly (the 3DS GPU default). Skills: `build-3ds`,
   `run-emulator`.
 
@@ -529,6 +531,7 @@ cargo xtask build 3ds     # .3dsx via local devkitPro -> target/3ds/trino.3dsx
 cargo xtask run 3ds       # build + open in Azahar (auto-detected)
 cargo xtask test 3ds      # build test app + assert magic strings (Azahar log)
 cargo xtask watch 3ds     # rebuild .3dsx + relaunch Azahar on save
+cargo xtask run|test|watch 3ds --accurate-timing  # Azahar "Simulate 3DS GPU timings" for one session (or TRINO_AZAHAR_GPU_TIMING=1)
 cargo xtask run n64 --device sc64|everdrive        # real N64 via flashcart USB; log in the terminal
 cargo xtask run 3ds --device network --ip <IP>     # real 3DS via 3dslink (--gdb: Luma3DS gdb script)
 cargo xtask new <name>    # scaffold a game crate under examples/
@@ -795,6 +798,12 @@ cargo test --workspace
   slower in wall time.
 - **`/tmp` may be a RAM disk (tmpfs).** A second `target/` there (a git worktree's build)
   filled RAM and killed rustc. Put extra worktrees and their targets on a real disk.
+
+- **Azahar's GPU timing key is `simulate_3ds_gpu_timings`** (2126.2), not issue #43's
+  `simulate_gpu_timing`, and it takes `\default=false` beside it or Azahar ignores the
+  value. Read an Azahar setting's name from the boot log's `Renderer_*:` lines.
+  Azahar rewrites qt-config.ini while it runs, so restore a setting after it exits,
+  and only that setting's lines (`n3ds::with_gpu_timing`).
 
 - **The engine has no orthographic projection.** A camera backed far off with a
   tiny field of view fakes one, but `1 - NEAR/z` depth then resolves metres. The

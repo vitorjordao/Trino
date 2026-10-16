@@ -33,7 +33,13 @@ start with `n/a:` and give the reason.
   assertions hold on a real GPU and on lavapipe. Window, emulator and
   slow tests are `#[ignore]` and run in their own CI jobs.
 - **Console self-test steps** (`castle64::selftest`) run the same checks on
-  PC (`xtask/tests/engine_checks.rs`), in ares and in Azahar.
+  PC (`xtask/tests/engine_checks.rs`), in ares and in Azahar. `test 3ds`
+  leaves Azahar's GPU timing as you set it. That is off by default, and it keeps
+  the run fast. The goldens hold either way: with
+  `--accurate-timing` (or `TRINO_AZAHAR_GPU_TIMING=1`) the self-test boots with
+  "Simulate 3DS GPU timings" on. Boot to `TRINO_TEST_PASS` took 7.7–8.2 s
+  either way over three runs: the self-test doesn't show the difference. Use it for frame pacing before real
+  hardware, not as a gate (`docs/HARDWARE.md` › Before the 3DS).
 
 Shared fixtures: `crates/core/tests/common/` (a recording renderer that runs
 the real T&L, a mock mixer, an EEPROM-like save medium, TMDL/TFNT/TSCN
@@ -368,4 +374,5 @@ the host; CI's console jobs and smoke runs cover them.
 | `xtask build 3ds` | n/a: needs devkitPro (CI `n3ds` job) |
 | `xtask run 3ds` | n/a: needs Azahar (`--device network`: the real-hardware row above, with a stub 3dslink) |
 | `xtask test 3ds` | n/a: needs devkitPro + Azahar (CI `n3ds-emulator` job) |
+| `xtask run, test or watch 3ds --accurate-timing (Azahar GPU timing for one session, TRINO_AZAHAR_GPU_TIMING)` | `xtask/src/n3ds.rs::gpu_timing_is_forced_with_both_lines_in_renderer_only`, `xtask/src/n3ds.rs::gpu_timing_already_on_is_left_as_is`, `xtask/src/n3ds.rs::gpu_timing_goes_into_a_seeded_or_missing_config`, `xtask/src/n3ds.rs::gpu_timing_keeps_windows_line_endings`, `xtask/src/n3ds.rs::gpu_timing_saved_copy_round_trips`, `xtask/src/n3ds.rs::a_session_restores_the_setting_and_recovers_an_interrupted_one`, `xtask/src/n3ds.rs::gpu_timing_is_read_back_from_azahar_boot_log`, `xtask/src/n3ds.rs::accurate_timing_comes_from_the_flag_or_the_environment` |
 | `xtask watch 3ds` | n/a: needs devkitPro + Azahar |

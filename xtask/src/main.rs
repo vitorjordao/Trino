@@ -49,6 +49,10 @@ commands:
                        debug log here; --no-build deploys target/'s file,
                        --selftest the self-test build; `run --target n64`
                        also works (docs/HARDWARE.md)
+  run|test|watch 3ds --accurate-timing
+                       Azahar with \"Simulate 3DS GPU timings\" on for this
+                       session (also TRINO_AZAHAR_GPU_TIMING=1); your own
+                       setting comes back when Azahar exits
   test  [pc|n64|3ds] [--bless] [--no-build]
                        run the test suite (default: the workspace's host
                        tests); --bless regenerates golden images
@@ -109,6 +113,11 @@ fn main() -> ExitCode {
     args.retain(|a| a != "--selftest");
     let no_build = args.iter().any(|a| a == "--no-build");
     args.retain(|a| a != "--no-build");
+    // Azahar's "Simulate 3DS GPU timings" for this session (or
+    // TRINO_AZAHAR_GPU_TIMING=1).
+    let accurate_flag = args.iter().any(|a| a == "--accurate-timing");
+    args.retain(|a| a != "--accurate-timing");
+    let accurate = n3ds::accurate_timing(accurate_flag);
     // `watch pc --game <crate>`: which game crate feeds the hot-reload dylib.
     let game = match args.iter().position(|a| a == "--game") {
         Some(i) => {
@@ -151,6 +160,16 @@ fn main() -> ExitCode {
         eprintln!("{e}");
         return ExitCode::FAILURE;
     }
+    if accurate_flag
+        && let Err(e) = n3ds::check_accurate_timing(
+            args.first().map(String::as_str),
+            args.get(1).map(String::as_str),
+            device.is_some(),
+        )
+    {
+        eprintln!("{e}");
+        return ExitCode::FAILURE;
+    }
     if device.is_some() && selftest && no_build {
         eprintln!(
             "xtask: --selftest builds the self-test app, --no-build sends what is in \
@@ -187,7 +206,7 @@ fn main() -> ExitCode {
         (Some("test"), Some("all")) => batch(&project, "test", |t| match t {
             Target::Pc => test_pc(&project, bless),
             Target::N64 => n64::test(&project, bless),
-            Target::N3ds => n3ds::test(&project, !no_build, bless),
+            Target::N3ds => n3ds::test(&project, !no_build, bless, accurate),
         }),
         (Some("assets"), Some("n64")) => assets_for(&project, Target::N64),
         (Some("assets"), Some("3ds" | "n3ds")) => assets_for(&project, Target::N3ds),
@@ -241,10 +260,10 @@ fn main() -> ExitCode {
         (Some("build"), Some("3ds")) => n3ds::build(&project, selftest),
         (Some("run"), Some("3ds")) => match &device {
             Some(d) => hardware::deploy_3ds(&project, d, !no_build, selftest),
-            None => n3ds::run(&project),
+            None => n3ds::run(&project, accurate),
         },
-        (Some("test"), Some("3ds")) => n3ds::test(&project, !no_build, bless),
-        (Some("watch"), Some("3ds")) => n3ds::watch(&project),
+        (Some("test"), Some("3ds")) => n3ds::test(&project, !no_build, bless, accurate),
+        (Some("watch"), Some("3ds")) => n3ds::watch(&project, accurate),
         (Some("new"), Some(name)) => {
             let rest: Vec<&str> = args.iter().skip(2).map(String::as_str).collect();
             new_game(name, &rest)

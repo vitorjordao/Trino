@@ -669,7 +669,8 @@ pub fn test(p: &Project, bless: bool) -> ExitCode {
     };
 
     let timeout = crate::emulators::timeout_secs();
-    println!("[n64] booting test ROM in ares ({timeout}s timeout)...");
+    let idle = crate::emulators::idle_secs();
+    println!("[n64] booting test ROM in ares ({timeout}s timeout, {idle}s idle limit)...");
     // Native-resolution RDP: the golden frame is compared pixel-exactly.
     let (mut cmd, container) = ares_command(
         &ares,
@@ -706,19 +707,20 @@ pub fn test(p: &Project, bless: bool) -> ExitCode {
         }
     });
 
-    let deadline = Instant::now() + Duration::from_secs(timeout);
+    let mut watchdog = crate::emulators::Watchdog::new();
     let mut fb = crate::fbgolden::FbCapture::default();
     let mut frames: Vec<crate::fbgolden::FbCapture> = Vec::new();
     let mut perf_scenes = Vec::new();
     let mut micro_scenes = Vec::new();
     let mut frame_lines = Vec::new();
     let verdict = loop {
-        let left = deadline.saturating_duration_since(Instant::now());
-        if left.is_zero() {
-            break Err(format!("timeout: no TRINO_TEST_* output within {timeout}s"));
+        if let Some(why) = watchdog.expired(Instant::now()) {
+            break Err(why);
         }
+        let left = watchdog.left(Instant::now());
         match rx.recv_timeout(left.min(Duration::from_millis(500))) {
             Ok(line) => {
+                watchdog.saw(&line, Instant::now());
                 // Framebuffer dump rows are collected, not echoed; each
                 // TRINO_FB_END closes one image (they arrive in order).
                 if fb.feed(&line) {

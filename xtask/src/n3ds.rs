@@ -626,7 +626,8 @@ pub fn test(p: &Project, build_first: bool, bless: bool) -> ExitCode {
     let _ = std::fs::remove_file(&log);
 
     let timeout = crate::emulators::timeout_secs();
-    println!("[3ds] booting test app in Azahar ({timeout}s timeout)...");
+    let idle = crate::emulators::idle_secs();
+    println!("[3ds] booting test app in Azahar ({timeout}s timeout, {idle}s idle limit)...");
     let mut child = match Command::new(&azahar).arg(p.app_3dsx()).spawn() {
         Ok(c) => c,
         Err(e) => {
@@ -635,13 +636,13 @@ pub fn test(p: &Project, build_first: bool, bless: bool) -> ExitCode {
         }
     };
 
-    let deadline = Instant::now() + Duration::from_secs(timeout);
+    let mut watchdog = crate::emulators::Watchdog::new();
     let mut seen = 0usize;
     let mut fb = crate::fbgolden::FbCapture::default();
     let mut frames: Vec<crate::fbgolden::FbCapture> = Vec::new();
     let verdict = loop {
-        if Instant::now() >= deadline {
-            break Err(format!("timeout: no TRINO_TEST_* output within {timeout}s"));
+        if let Some(why) = watchdog.expired(Instant::now()) {
+            break Err(why);
         }
         if let Ok(Some(status)) = child.try_wait() {
             break Err(format!(
@@ -656,6 +657,7 @@ pub fn test(p: &Project, build_first: bool, bless: bool) -> ExitCode {
         let end = content.rfind('\n').map_or(0, |i| i + 1);
         let fresh = &content[seen.min(end)..end];
         for line in fresh.lines() {
+            watchdog.saw(line, Instant::now());
             // Framebuffer dump rows are collected, not echoed; each
             // TRINO_FB_END closes one image (they arrive in order).
             if fb.feed(line) {

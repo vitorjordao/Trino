@@ -12,7 +12,7 @@ use trino_core::render3d::{
     Camera3, DEFAULT_LIGHT, Light, Mesh, MeshLayout, ScreenTri, TexBind, TnlContext, TnlScratch,
     painter_index, painter_key,
 };
-use trino_core::text::BitmapFont;
+use trino_core::text::{BitmapFont, GlyphIndex};
 use trino_core::{
     BillboardParams, Caps, Color, FontId, FrameStats, LightList, LocalLight, Mat34, Material,
     ModelId, ModelParams, Renderer, Screen, SpriteId, SpriteParams, TexFilter, TextParams,
@@ -38,12 +38,27 @@ const SPRITE_DEPTH_HUD: f32 = 0.9;
 const TRI_DEPTH_BASE: f32 = 0.1;
 const TRI_DEPTH_RANGE: f32 = 0.35;
 
+/// A registered font: its glyph table and the direct index of its
+/// codepoints below 256 (built once, at register).
+struct FontEntry {
+    table: Box<[u8]>,
+    index: GlyphIndex,
+}
+
+impl FontEntry {
+    fn font(&self) -> Option<BitmapFont<'_>> {
+        BitmapFont::parse(&self.table)
+            .ok()
+            .map(|f| f.with_index(&self.index))
+    }
+}
+
 pub struct N3dsRenderer {
     sprites: BTreeMap<u32, SpriteEntry>,
     /// TMDL blobs with their validated layout (parsed once, at register).
     meshes: BTreeMap<u32, (Vec<u8>, MeshLayout)>,
     /// Glyph tables by font handle (atlas = sprite with the same handle).
-    fonts: BTreeMap<u32, Rc<[u8]>>,
+    fonts: BTreeMap<u32, Rc<FontEntry>>,
     frame_stats: FrameStats,
     last_stats: FrameStats,
     /// Current model batch: consecutive `draw_model` calls depth-sort
@@ -217,8 +232,10 @@ impl N3dsRenderer {
 
     /// Register a font's glyph table (its atlas is the sprite `id`).
     pub(crate) fn register_font(&mut self, id: u32, table: Vec<u8>) {
-        if BitmapFont::parse(&table).is_ok() {
-            self.fonts.insert(id, table.into());
+        if let Ok(font) = BitmapFont::parse(&table) {
+            let index = GlyphIndex::build(&font);
+            let table = table.into_boxed_slice();
+            self.fonts.insert(id, Rc::new(FontEntry { table, index }));
         }
     }
 }
@@ -456,10 +473,10 @@ impl Renderer for N3dsRenderer {
     }
 
     fn draw_text(&mut self, font: FontId, pos: Vec2, text: &str, params: &TextParams) {
-        let Some(table) = self.fonts.get(&font.0).cloned() else {
+        let Some(entry) = self.fonts.get(&font.0).cloned() else {
             return;
         };
-        if let Ok(parsed) = BitmapFont::parse(&table) {
+        if let Some(parsed) = entry.font() {
             trino_core::text::draw(
                 self,
                 trino_core::text::atlas_of(font),
@@ -474,7 +491,7 @@ impl Renderer for N3dsRenderer {
     fn measure_text(&self, font: FontId, text: &str, scale: f32) -> Vec2 {
         self.fonts
             .get(&font.0)
-            .and_then(|t| BitmapFont::parse(t).ok())
+            .and_then(|e| e.font())
             .map_or(Vec2::ZERO, |f| f.measure(text, scale))
     }
 

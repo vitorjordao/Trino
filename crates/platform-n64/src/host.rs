@@ -50,6 +50,9 @@ pub struct FrameReport {
     pub rsp_draws: u32,
     pub draws: u32,
     pub culled: u32,
+    /// Per frame: 2D draws (sprite blits, rectangles and text glyphs), the
+    /// work behind `sprites_us`.
+    pub draws2d: u32,
     /// Vertical blanks (60 Hz) the run took: the real frame rate, waits
     /// for vsync, the RSP and the RDP included (`fps = frames × 60 /
     /// vblanks`).
@@ -110,7 +113,7 @@ impl N64Host {
     ) -> FrameReport {
         let mut total: u64 = 0;
         let mut max = 0u32;
-        let mut sums = [0u64; 9];
+        let mut sums = [0u64; 10];
         let v0 = runtime::vblanks();
         let mut models: [ModelCost; 48] = [ModelCost::default(); 48];
         let mut n_models = 0usize;
@@ -123,6 +126,7 @@ impl N64Host {
             game.render(&mut self.renderer);
             self.audio.poll();
             let spent = runtime::now_us().wrapping_sub(t0);
+            sums[9] += trino_core::Renderer::stats(&self.renderer).sprites as u64;
             let p = self.renderer.take_profile();
             let wait = p.as_ref().map_or(0, |p| p.stages.begin);
             let us = spent.saturating_sub(wait);
@@ -185,6 +189,7 @@ impl N64Host {
             rsp_draws: (sums[6] / n) as u32,
             draws: (sums[7] / n) as u32,
             culled: (sums[8] / n) as u32,
+            draws2d: (sums[9] / n) as u32,
         }
     }
 
@@ -193,7 +198,7 @@ impl N64Host {
     pub fn report_frames(&self, scene: &str, r: &FrameReport) {
         runtime::log(&format!(
             "TRINO_FRAME:{scene} avg_us={} max_us={} frames={} update={} tnl={} sort={} \
-             submit={} sprites={} end={} draws={} rsp={} culled={} vblanks={} fps={}\n",
+             submit={} sprites={} end={} draws={} rsp={} culled={} draws2d={} vblanks={} fps={}\n",
             r.avg_us,
             r.max_us,
             r.frames,
@@ -206,6 +211,7 @@ impl N64Host {
             r.draws,
             r.rsp_draws,
             r.culled,
+            r.draws2d,
             r.vblanks,
             (r.frames * 60).checked_div(r.vblanks).unwrap_or(0)
         ));

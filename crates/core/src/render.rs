@@ -292,6 +292,70 @@ pub struct ModelParams {
     /// `None`, or a mesh without slots, draws the baked colors. See
     /// [`Palette`].
     pub palette: Option<Palette>,
+    /// Shininess, 0 (matte) to 255 (mirror-like): the strength and
+    /// tightness of specular highlights from the global light and local
+    /// lights. Specular exists only on the per-pixel tier
+    /// ([`crate::LightTier::PerPixel`], PC); per-vertex targets ignore it.
+    pub gloss: u8,
+    /// How the texture is sampled (textured meshes only).
+    pub filter: TexFilter,
+    /// A detail texture multiplied over the texture (textured meshes only;
+    /// see [`DetailTexture`] for its N64 budget).
+    pub detail: Option<DetailTexture>,
+}
+
+/// How a 3D draw's texture is sampled ([`ModelParams::filter`]).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+pub enum TexFilter {
+    /// The target's default (see [`Renderer::set_texture_filter`]): the
+    /// RDP's 3-point bilinear on the N64, bilinear on the 3DS, nearest on
+    /// the PC's native profile.
+    #[default]
+    Default,
+    /// Nearest texel: crisp pixel art (RDP `FILTER_POINT`, `GPU_NEAREST`).
+    Point,
+    /// Smooth: the RDP's 3-point bilinear on the N64 (and its PC look),
+    /// bilinear elsewhere.
+    Bilinear,
+}
+
+/// A second texture multiplied over a draw's texture ([`ModelParams::
+/// detail`]): fine grain that hides the magnification of a small texture.
+/// It tiles `2^scale_log2` times per repeat of the base texture, over the
+/// same UVs (the N64's detail tile: `TILE1` shifted, 2-cycle combiner).
+///
+/// Budget on the N64: base and detail share TMEM's 4 KB, so the detail
+/// should be a small intensity texture (`I4`, e.g. 32×32 = 512 bytes) and
+/// the base a non-palette one (a `CI4`/`CI8` palette takes TMEM's upper
+/// half). A pair that doesn't fit draws without the detail there; the PC's
+/// strict mode panics on it.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct DetailTexture {
+    pub sprite: SpriteId,
+    /// Detail repeats per base repeat, as a power of two (0..=4).
+    pub scale_log2: u8,
+}
+
+impl DetailTexture {
+    /// Largest [`DetailTexture::scale_log2`] (the RDP tile shift).
+    pub const MAX_SCALE_LOG2: u8 = 4;
+
+    /// `sprite` repeating `2^scale_log2` times per base repeat (clamped).
+    pub const fn new(sprite: SpriteId, scale_log2: u8) -> Self {
+        DetailTexture {
+            sprite,
+            scale_log2: if scale_log2 > Self::MAX_SCALE_LOG2 {
+                Self::MAX_SCALE_LOG2
+            } else {
+                scale_log2
+            },
+        }
+    }
+
+    /// UV multiplier of the detail layer.
+    pub fn scale(&self) -> f32 {
+        (1u32 << self.scale_log2.min(Self::MAX_SCALE_LOG2)) as f32
+    }
 }
 
 /// Four per-draw colors for the color slots 1..=4 of a mesh
@@ -312,6 +376,9 @@ impl ModelParams {
         anim: None,
         texture: None,
         palette: None,
+        gloss: 0,
+        filter: TexFilter::Default,
+        detail: None,
     };
 
     /// Default surface with a tint — the common case in game code.
@@ -415,6 +482,25 @@ pub trait Renderer {
     /// subsequent `draw_model` calls. Persists across frames until changed;
     /// starts as [`crate::render3d::DEFAULT_LIGHT`].
     fn set_light(&mut self, _light: &crate::render3d::Light) {}
+
+    /// Set the point and spot lights for the next 3D draws (see
+    /// [`crate::light`]): the first [`Caps::max_local_lights`] are used,
+    /// per pixel or per vertex as [`Caps::light_tier`] says. **Cleared at
+    /// `begin_frame`**: set them every frame (they usually move), before
+    /// the draws they light. Draws made before the call keep the lights
+    /// they had.
+    fn set_local_lights(&mut self, _lights: &[crate::light::LocalLight]) {}
+
+    /// How wet the world looks, 0 (dry) to 1 (soaked): on the per-pixel
+    /// tier (PC), surfaces facing up darken and turn glossy, mirroring the
+    /// lights in highlights. Per-vertex targets ignore it. Cleared at
+    /// `begin_frame`, like the local lights.
+    fn set_wetness(&mut self, _wetness: f32) {}
+
+    /// What [`TexFilter::Default`] means for the next 3D draws (persists,
+    /// like `set_light`): toggle the whole game between crisp and smooth
+    /// textures. `TexFilter::Default` restores the target's own default.
+    fn set_texture_filter(&mut self, _filter: TexFilter) {}
 
     /// Draw a 3D model (vertex-lit, engine-side T&L — see `render3d`).
     ///

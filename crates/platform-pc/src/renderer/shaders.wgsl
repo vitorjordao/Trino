@@ -133,13 +133,22 @@ struct TriIn {
     @location(2) depth: f32,       // normalized (0 = near), z-buffer value
     @location(3) w: f32,           // view depth (textured) or 1.0
     @location(4) uv: vec2<f32>,
+    // x: 1 = point filter (else the N64 look's 3-point); y: the detail
+    // layer's UV scale (0 = none).
+    @location(10) tex: vec2<f32>,
 };
 
 struct TriOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) color: vec4<f32>,
     @location(1) uv: vec2<f32>,
+    @location(2) @interpolate(flat) tex: vec2<f32>,
 };
+
+// The detail layer of a 3D draw (group 1 with the texture; white when the
+// draw has none).
+@group(1) @binding(2) var t_detail: texture_2d<f32>;
+@group(1) @binding(3) var s_detail: sampler;
 
 @vertex
 fn vs_tri(in: TriIn) -> TriOut {
@@ -154,6 +163,7 @@ fn vs_tri(in: TriIn) -> TriOut {
     out.clip = vec4<f32>(ndc, in.depth, 1.0) * in.w;
     out.color = in.color;
     out.uv = in.uv;
+    out.tex = in.tex;
     return out;
 }
 
@@ -163,15 +173,42 @@ fn wrap_texel(p: vec2<i32>, dims: vec2<i32>) -> vec2<i32> {
 
 // 3-point sampling for wrapping (tiled) 3D textures.
 fn sample_3point_wrap(uv: vec2<f32>) -> vec4<f32> {
-    let dims = vec2<i32>(textureDimensions(t_sprite));
+    return sample_3point_wrap_in(t_sprite, uv);
+}
+
+// The RDP's point sampling of a wrapping texture (`FILTER_POINT`).
+fn sample_point_wrap(t: texture_2d<f32>, uv: vec2<f32>) -> vec4<f32> {
+    let dims = vec2<i32>(textureDimensions(t));
+    return textureLoad(t, wrap_texel(vec2<i32>(floor(uv * vec2<f32>(dims))), dims), 0);
+}
+
+// The N64 look's texel: point or 3-point, by the draw's filter.
+fn sample_n64(t: texture_2d<f32>, uv: vec2<f32>, point: bool) -> vec4<f32> {
+    if point {
+        return sample_point_wrap(t, uv);
+    }
+    return sample_3point_wrap_in(t, uv);
+}
+
+// The detail layer's factor (white without one).
+fn detail_texel(uv: vec2<f32>, tex: vec2<f32>) -> vec4<f32> {
+    let d = textureSample(t_detail, s_detail, uv * max(tex.y, 1.0));
+    if tex.y > 0.0 {
+        return vec4<f32>(d.rgb, 1.0);
+    }
+    return vec4<f32>(1.0);
+}
+
+fn sample_3point_wrap_in(t: texture_2d<f32>, uv: vec2<f32>) -> vec4<f32> {
+    let dims = vec2<i32>(textureDimensions(t));
     let st = uv * vec2<f32>(dims) - vec2<f32>(0.5, 0.5);
     let base = floor(st);
     let f = st - base;
     let b = vec2<i32>(base);
-    let t00 = textureLoad(t_sprite, wrap_texel(b, dims), 0);
-    let t10 = textureLoad(t_sprite, wrap_texel(b + vec2<i32>(1, 0), dims), 0);
-    let t01 = textureLoad(t_sprite, wrap_texel(b + vec2<i32>(0, 1), dims), 0);
-    let t11 = textureLoad(t_sprite, wrap_texel(b + vec2<i32>(1, 1), dims), 0);
+    let t00 = textureLoad(t, wrap_texel(b, dims), 0);
+    let t10 = textureLoad(t, wrap_texel(b + vec2<i32>(1, 0), dims), 0);
+    let t01 = textureLoad(t, wrap_texel(b + vec2<i32>(0, 1), dims), 0);
+    let t11 = textureLoad(t, wrap_texel(b + vec2<i32>(1, 1), dims), 0);
     if f.x + f.y < 1.0 {
         return t00 + f.x * (t10 - t00) + f.y * (t01 - t00);
     }
@@ -201,11 +238,164 @@ fn fs_tri_clamp(in: TriOut) -> @location(0) vec4<f32> {
 @fragment
 fn fs_tri(in: TriOut) -> @location(0) vec4<f32> {
     // Sampled unconditionally: textureSample requires uniform control flow.
-    let plain = textureSample(t_sprite, s_sprite, in.uv) * in.color;
+    let detail = detail_texel(in.uv, in.tex);
+    let plain = textureSample(t_sprite, s_sprite, in.uv) * in.color * detail;
     if globals.look == 1u {
-        return quantize_5551(sample_3point_wrap(in.uv) * in.color, vec2<u32>(in.clip.xy));
+        let point = in.tex.x > 0.5;
+        var d = vec4<f32>(1.0);
+        if in.tex.y > 0.0 {
+            d = vec4<f32>(sample_n64(t_detail, in.uv * in.tex.y, point).rgb, 1.0);
+        }
+        let c = sample_n64(t_sprite, in.uv, point) * in.color * d;
+        return quantize_5551(c, vec2<u32>(in.clip.xy));
     }
     return plain;
+}
+
+// ---------------------------------------------------------------------------
+// Lit triangle pass: the per-pixel lighting tier (native profile). The
+// vertex color already holds ambient + the global light's diffuse (per
+// vertex, like every target); this pass adds the local lights' diffuse,
+// specular highlights and wetness per pixel. Layout: batch.rs::TriVertex,
+// lights.rs::GpuSet.
+
+struct GpuLight {
+    pos_radius: vec4<f32>,
+    color_spot: vec4<f32>,
+    dir_cos: vec4<f32>,
+    cone: vec4<f32>,
+};
+
+struct LightSet {
+    sun_dir: vec4<f32>,    // xyz: direction the light travels; w: ambient
+    sun_color: vec4<f32>,  // rgb; w: wetness
+    eye: vec4<f32>,        // xyz: camera; w: local light count
+    lights: array<GpuLight, 8>,
+};
+
+struct LightSets {
+    sets: array<LightSet, 8>,
+};
+
+@group(2) @binding(0) var<uniform> light_sets: LightSets;
+
+struct LitIn {
+    @location(0) pos: vec2<f32>,
+    @location(1) color: vec4<f32>,
+    @location(2) depth: f32,
+    @location(3) w: f32,
+    @location(4) uv: vec2<f32>,
+    @location(5) world: vec3<f32>,
+    @location(6) normal: vec3<f32>,
+    @location(7) base: vec4<f32>,
+    @location(8) gloss: f32,
+    @location(9) light_set: f32,
+    @location(10) tex: vec2<f32>,
+};
+
+struct LitOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) color: vec4<f32>,
+    @location(1) uv: vec2<f32>,
+    @location(2) world: vec3<f32>,
+    @location(3) normal: vec3<f32>,
+    @location(4) base: vec4<f32>,
+    @location(5) @interpolate(flat) params: vec2<f32>,
+    @location(6) @interpolate(flat) tex: vec2<f32>,
+};
+
+@vertex
+fn vs_tri_lit(in: LitIn) -> LitOut {
+    let ndc = vec2<f32>(
+        in.pos.x / globals.screen.x * 2.0 - 1.0,
+        1.0 - in.pos.y / globals.screen.y * 2.0,
+    );
+    var out: LitOut;
+    // Always the true view depth: world positions and normals interpolate
+    // perspective-correctly (a light pool on a big floor stays round).
+    out.clip = vec4<f32>(ndc, in.depth, 1.0) * in.w;
+    out.color = in.color;
+    out.uv = in.uv;
+    out.world = in.world;
+    out.normal = in.normal;
+    out.base = in.base;
+    out.params = vec2<f32>(in.gloss, in.light_set);
+    out.tex = in.tex;
+    return out;
+}
+
+// Blinn-Phong lobe for gloss 0..1: tighter and stronger as it rises.
+fn specular(n: vec3<f32>, l: vec3<f32>, v: vec3<f32>, gloss: f32) -> f32 {
+    let h = normalize(l + v);
+    let e = mix(8.0, 256.0, gloss * gloss);
+    // Energy-ish normalization keeps tight lobes from vanishing.
+    return pow(max(dot(n, h), 0.0), e) * gloss * (e + 8.0) / 64.0;
+}
+
+fn shade_lit(in: LitOut, texel: vec4<f32>) -> vec4<f32> {
+    var c = in.color * texel;
+    if dot(in.normal, in.normal) < 1e-8 {
+        return c; // unlit draw
+    }
+    // The set index and the mask of the lights that reach this draw.
+    let packed = u32(in.params.y + 0.5);
+    // Pointers, never `let` copies: a copied set puts its lights in private
+    // memory, which a dynamic index then reads back from scratch per pixel.
+    let lset = &light_sets.sets[packed & 7u];
+    let mask = packed >> 3u;
+    let n = normalize(in.normal);
+    let albedo = in.base.rgb * texel.rgb;
+    let v = normalize((*lset).eye.xyz - in.world);
+    // Wet: surfaces facing up darken and turn glossy.
+    let wet = (*lset).sun_color.w * smoothstep(0.55, 0.9, n.y);
+    var gloss = max(in.params.x, wet * 0.9);
+    var rgb = c.rgb * (1.0 - 0.4 * wet);
+    let alb = albedo * (1.0 - 0.4 * wet);
+    // The global light's highlight (its diffuse is in the vertex color).
+    let ls = -normalize((*lset).sun_dir.xyz);
+    if gloss > 0.0 && dot(n, ls) > 0.0 {
+        rgb += (*lset).sun_color.rgb * specular(n, ls, v, gloss) * (1.0 - (*lset).sun_dir.w);
+    }
+    let count = u32((*lset).eye.w + 0.5);
+    for (var i = 0u; i < count; i++) {
+        if (mask & (1u << i)) == 0u {
+            continue;
+        }
+        let li = &(*lset).lights[i];
+        let pr = (*li).pos_radius;
+        let to = pr.xyz - in.world;
+        let d2 = dot(to, to);
+        let r2 = pr.w * pr.w;
+        if d2 >= r2 || d2 <= 0.0 {
+            continue;
+        }
+        let k = 1.0 - d2 / r2;
+        var att = k * k;
+        let l = to * inverseSqrt(d2);
+        let cs = (*li).color_spot;
+        if cs.w > 0.5 {
+            let dc = (*li).dir_cos;
+            let t = clamp((dot(-l, dc.xyz) - dc.w) * (*li).cone.x, 0.0, 1.0);
+            att *= t * t * (3.0 - 2.0 * t);
+        }
+        let ndl = max(dot(n, l), 0.0);
+        rgb += alb * cs.rgb * att * ndl;
+        if gloss > 0.0 && ndl > 0.0 {
+            rgb += cs.rgb * att * specular(n, l, v, gloss);
+        }
+    }
+    return vec4<f32>(rgb, c.a);
+}
+
+@fragment
+fn fs_tri_lit(in: LitOut) -> @location(0) vec4<f32> {
+    // Sampled unconditionally: textureSample requires uniform control flow.
+    let texel = textureSample(t_sprite, s_sprite, in.uv) * detail_texel(in.uv, in.tex);
+    let c = shade_lit(in, texel);
+    if globals.look == 1u {
+        return quantize_5551(c, vec2<u32>(in.clip.xy));
+    }
+    return c;
 }
 
 // ---------------------------------------------------------------------------

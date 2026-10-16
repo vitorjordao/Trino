@@ -33,6 +33,8 @@ impl MemoKey {
     /// draws are never memoized: they are rare and their commands depend on
     /// more; a palette alone is 4 words the key has no room for).
     /// A new [`ModelParams`] field must be added here or excluded.
+    /// `gloss` is excluded: only the per-pixel tier (PC) reads it, and the
+    /// memo serves the N64's RSP draws.
     pub fn new(model: u32, generation: u32, matrix: &Mat34, params: &ModelParams) -> Option<Self> {
         let e = params.emissive;
         if e.r | e.g | e.b != 0

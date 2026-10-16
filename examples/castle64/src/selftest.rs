@@ -8,10 +8,10 @@
 
 use trino_core::math3d::{cos, sin};
 use trino_core::{
-    BakedScene, BillboardParams, BlobId, Camera3, Cells, Color, DEFAULT_LIGHT, Effect, Emitter,
-    EntityStore, FontId, Impostor, InputState, Material, ModelId, ModelParams, ParticleSystem,
-    Platform, Rect, Renderer, Screen, Shading, SpriteId, TextBuf, TextParams, Transform3, Vec2,
-    Vec3,
+    BakedScene, BillboardParams, BlobId, Camera3, Cells, Color, DEFAULT_LIGHT, DetailTexture,
+    Effect, Emitter, EntityStore, FontId, Impostor, InputState, Light, LocalLight, Material,
+    ModelId, ModelParams, ParticleSystem, Platform, Rect, Renderer, Screen, Shading, SpriteId,
+    TexFilter, TextBuf, TextParams, Transform3, Vec2, Vec3,
 };
 
 /// The HUD font (also what the checks measure).
@@ -40,6 +40,10 @@ pub fn engine_checks(
     } else {
         platform.log("TRINO_STEP:textured_3d skipped (no read_pixel)\n");
     }
+    platform.log("TRINO_STEP:texture filter and detail\n");
+    if texture_detail(renderer)? {
+        platform.log("TRINO_STEP:texture filter and detail probed\n");
+    }
     platform.log("TRINO_STEP:billboards\n");
     if billboards(renderer)? {
         platform.log("TRINO_STEP:billboards probed\n");
@@ -64,6 +68,10 @@ pub fn engine_checks(
     if palette(renderer)? {
         platform.log("TRINO_STEP:palette probed 3 slots\n");
     }
+    platform.log("TRINO_STEP:local lights\n");
+    if local_lights(renderer)? {
+        platform.log("TRINO_STEP:local lights probed\n");
+    }
     platform.log("TRINO_STEP:impostor\n");
     if impostor(renderer, platform)? {
         platform.log("TRINO_STEP:impostor probed\n");
@@ -74,6 +82,91 @@ pub fn engine_checks(
     portals(renderer, platform)?;
     platform.log("TRINO_STEP:engine ok\n");
     Ok(())
+}
+
+/// The quadrants in 16-bit color (no palette: they share TMEM with a
+/// detail layer on the N64) and the detail layer, white left, gray right.
+pub const QUADRANTS16: SpriteId = SpriteId::from_path("sprites/selftest_quadrants16");
+pub const DETAIL: SpriteId = SpriteId::from_path("sprites/selftest_detail");
+
+/// Texture filtering and the detail layer: the quadrant card magnified
+/// (~11 px per texel), probed 2.6 px left of the red/green texel edge —
+/// pure red with `TexFilter::Point`, a red/green blend with `Bilinear` (the
+/// RDP's 3-point on the N64, whose texel centers sit half a texel off). Then the detail layer: the right half of the
+/// card (gray detail) at half the color, the left half (white) at full.
+/// `Ok(false)` where `read_pixel` is unsupported.
+pub fn texture_detail(renderer: &mut dyn Renderer) -> Result<bool, &'static str> {
+    let caps = *renderer.caps();
+    let screen = Vec2::new(caps.screen_width as f32, caps.screen_height as f32);
+    let camera = Camera3 {
+        eye: Vec3::new(0.0, 0.0, -1.2),
+        target: Vec3::ZERO,
+        fov_y: 60.0 * core::f32::consts::PI / 180.0,
+    };
+    let view = camera.view();
+    let half = camera.fov_y * 0.5;
+    let focal = cos(half) / sin(half) * screen.y * 0.5;
+    let draw = |r: &mut dyn Renderer, params: &ModelParams| {
+        // Several identical frames: the 3DS LCD is double-buffered.
+        for _ in 0..3 {
+            r.begin_frame(Color::BLACK);
+            r.set_camera(&camera);
+            r.set_light(&DEFAULT_LIGHT);
+            r.draw_model(CARD, &Transform3::default(), Material::VertexLit, params);
+            r.end_frame();
+        }
+    };
+    // Front face at z = -0.05; planar UVs u = x + 0.5, v = 0.5 - y.
+    let probe = |r: &mut dyn Renderer, u: f32, v: f32| {
+        let p = view.transform_point(Vec3::new(u - 0.5, 0.5 - v, -0.05));
+        let x = screen.x * 0.5 + p.x * focal / p.z;
+        let y = screen.y * 0.5 - p.y * focal / p.z;
+        r.read_pixel(x as u32, y as u32)
+    };
+    let base = ModelParams {
+        shading: Shading::Unlit,
+        texture: Some(QUADRANTS16),
+        ..ModelParams::DEFAULT
+    };
+    // Filter: 0.24 texel left of the edge between texels 7 (red) and 8.
+    for (filter, mixed) in [(TexFilter::Point, false), (TexFilter::Bilinear, true)] {
+        draw(renderer, &ModelParams { filter, ..base });
+        let Some(c) = probe(renderer, 0.485, 0.25) else {
+            return Ok(false);
+        };
+        // The RDP's bilinear centers its texels half a texel off the PC's
+        // (ares: 74, 189, 0 here, the PC: ~180, 70, 0): both blend.
+        if mixed && (c.r < 40 || c.g < 40) {
+            return Err("texture filter: Bilinear did not blend the texel edge");
+        }
+        if !mixed && (c.r < 150 || c.g > 30) {
+            return Err("texture filter: Point blended the texel edge");
+        }
+    }
+    // Detail: halves the right column, keeps the left.
+    draw(
+        renderer,
+        &ModelParams {
+            filter: TexFilter::Point,
+            detail: Some(DetailTexture::new(DETAIL, 0)),
+            ..base
+        },
+    );
+    let near = |a: u8, b: u8| (a as i32 - b as i32).abs() <= 40;
+    for (u, v, want) in [
+        (0.25, 0.25, [255, 0, 0]),
+        (0.75, 0.25, [0, 128, 0]),
+        (0.25, 0.75, [0, 0, 255]),
+        (0.75, 0.75, [128, 128, 128]),
+    ] {
+        let Some(c) = probe(renderer, u, v) else {
+            return Ok(false);
+        };
+        if !(near(c.r, want[0]) && near(c.g, want[1]) && near(c.b, want[2])) {
+            return Err("texture detail: the detail layer was not multiplied in");
+        }
+    }
+    Ok(true)
 }
 
 /// Textured 3D: draw the quadrant card face-on and read back one pixel per
@@ -627,6 +720,85 @@ pub fn palette(renderer: &mut dyn Renderer) -> Result<bool, &'static str> {
                 });
             }
         }
+    }
+    Ok(true)
+}
+
+/// Local lights ([`trino_core::light`]): the white slot card lit only by
+/// a dim ambient, then with a red point light in front of its left column.
+/// The left column turns red, the right one (out of reach) stays gray, on
+/// every tier (per pixel on PC, per vertex on the consoles); the lit frame
+/// draws nothing on the N64's RSP (`RspReject::LocalLight`), and the next
+/// frame without lights is the unlit one again (cleared at
+/// `begin_frame`). `Ok(false)` where `read_pixel` is unsupported.
+pub fn local_lights(renderer: &mut dyn Renderer) -> Result<bool, &'static str> {
+    let caps = *renderer.caps();
+    let screen = Vec2::new(caps.screen_width as f32, caps.screen_height as f32);
+    let camera = Camera3 {
+        eye: Vec3::new(0.0, 0.0, -1.5),
+        target: Vec3::ZERO,
+        fov_y: 60.0 * core::f32::consts::PI / 180.0,
+    };
+    // Ambient only: the global light travels away from the viewer.
+    let dim = Light {
+        dir: Vec3::new(0.0, 0.0, -1.0),
+        ambient: 0.35,
+        ..DEFAULT_LIGHT
+    };
+    let lamp = LocalLight::point(Vec3::new(-0.4, 0.0, -0.25), Color::rgb(255, 0, 0), 0.6)
+        .with_intensity(3.0);
+    let view = camera.view();
+    let half = camera.fov_y * 0.5;
+    let focal = cos(half) / sin(half) * screen.y * 0.5;
+    let probe = |r: &mut dyn Renderer, x: f32| {
+        let v = view.transform_point(Vec3::new(x, 0.0, 0.0));
+        let px = screen.x * 0.5 + v.x * focal / v.z;
+        let py = screen.y * 0.5 - v.y * focal / v.z;
+        r.read_pixel(px as u32, py as u32)
+    };
+    let mut rsp_lit = 0;
+    let mut seen = [[Color::BLACK; 2]; 3];
+    for (pass, lights) in [&[][..], &[lamp][..], &[][..]].into_iter().enumerate() {
+        // Several identical frames: the 3DS LCD is double-buffered.
+        for _ in 0..3 {
+            renderer.begin_frame(Color::BLACK);
+            renderer.set_camera(&camera);
+            renderer.set_light(&dim);
+            renderer.set_local_lights(lights);
+            renderer.draw_model(
+                SLOTS_CARD,
+                &Transform3::default(),
+                Material::VertexLit,
+                &ModelParams::DEFAULT,
+            );
+            renderer.end_frame();
+        }
+        if pass == 1 {
+            rsp_lit = renderer.stats().tnl.rsp_draws;
+        }
+        for (k, x) in [-0.4f32, 0.4].into_iter().enumerate() {
+            let Some(c) = probe(renderer, x) else {
+                return Ok(false);
+            };
+            seen[pass][k] = c;
+        }
+    }
+    let gray = |c: Color| c.r.abs_diff(c.g) <= 24 && c.g.abs_diff(c.b) <= 24 && c.g > 40;
+    let [off, on, after] = seen;
+    if !(gray(off[0]) && gray(off[1])) {
+        return Err("local lights: the unlit card is not gray");
+    }
+    if !(on[0].r as i32 >= on[0].g as i32 + 40 && on[0].r as i32 >= off[0].r as i32 + 30) {
+        return Err("local lights: the lit column did not turn red");
+    }
+    if !gray(on[1]) {
+        return Err("local lights: a light reached past its radius");
+    }
+    if rsp_lit != 0 {
+        return Err("local lights: a lit draw stayed on the N64 RSP");
+    }
+    if after != off {
+        return Err("local lights: lights survived begin_frame");
     }
     Ok(true)
 }

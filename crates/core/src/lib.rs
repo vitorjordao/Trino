@@ -26,6 +26,7 @@ pub mod entity;
 pub mod game;
 pub mod impostor;
 pub mod input;
+pub mod light;
 pub mod math;
 pub mod math3d;
 pub mod memo;
@@ -52,6 +53,10 @@ pub use entity::{Entity, EntityId, EntityStore};
 pub use game::Game;
 pub use impostor::Impostor;
 pub use input::{Button, Input, InputState, Key, PointerButton};
+pub use light::{
+    GroundPool, LightKind, LightList, LightTier, LocalLight, MAX_LOCAL_LIGHTS, MAX_VERTEX_LIGHTS,
+    ground_pool,
+};
 pub use math::{Color, Rect, Vec2, Vec3};
 pub use math3d::{Mat34, Quat};
 pub use particles::{Effect, Emitter, ParticleSystem};
@@ -60,13 +65,14 @@ pub use platform::{
     BindDevice, BlobId, DisplayInfo, DisplaySettings, GamepadStatus, InputInfo, Platform, SaveError,
 };
 pub use render::{
-    AnimBlend, AnimRef, BillboardParams, ClipId, FontId, FrameStats, Material, MaterialId, ModelId,
-    ModelParams, Palette, Renderer, Screen, Shading, SpriteId, SpriteParams, TextAlign, TextParams,
-    Transform3,
+    AnimBlend, AnimRef, BillboardParams, ClipId, DetailTexture, FontId, FrameStats, Material,
+    MaterialId, ModelId, ModelParams, Palette, Renderer, Screen, Shading, SpriteId, SpriteParams,
+    TexFilter, TextAlign, TextParams, Transform3,
 };
 pub use render3d::{
     Camera3, ClipInfo, DEFAULT_LIGHT, Fog, Light, MAX_JOINTS, Mesh, MeshError, MeshLayout,
-    RspReject, ScreenTri, TnlContext, TnlScratch, TnlStats, tessellate, tessellate_with,
+    RspReject, ScreenTri, SurfaceScratch, SurfaceVert, TnlContext, TnlScratch, TnlStats,
+    tessellate, tessellate_surface, tessellate_with,
 };
 pub use scene::{BakedScene, LodLevel, LodPick, Lods, SceneNode, Tags};
 pub use text::{BitmapFont, TextBuf};

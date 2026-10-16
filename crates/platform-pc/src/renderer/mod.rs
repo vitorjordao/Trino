@@ -8,16 +8,18 @@
 //!   viewport reuses in Fase 3 (render-to-texture).
 
 mod batch;
+mod lights;
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use trino_core::render3d::{
-    Camera3, DEFAULT_LIGHT, Light, Mesh, MeshLayout, ScreenTri, TnlContext, TnlScratch,
+    Camera3, DEFAULT_LIGHT, Light, Mesh, MeshLayout, ScreenTri, SurfaceScratch, SurfaceVert,
+    TnlContext, TnlScratch,
 };
 use trino_core::{
-    Caps, Color, FontId, FrameStats, Mat34, Material, ModelId, ModelParams, Renderer, Screen,
-    SpriteId, SpriteParams, TextParams, Transform3, Vec2,
+    Caps, Color, FontId, FrameStats, LightList, LightTier, LocalLight, Mat34, Material, ModelId,
+    ModelParams, Renderer, Screen, SpriteId, SpriteParams, TexFilter, TextParams, Transform3, Vec2,
 };
 
 use crate::sim::SimProfile;
@@ -70,6 +72,11 @@ pub struct PcRenderer {
     tri_pipeline: wgpu::RenderPipeline,
     /// Same as `tri_pipeline` with clamped 3-point sampling (billboards).
     tri_clamp_pipeline: wgpu::RenderPipeline,
+    /// Per-pixel lighting (`LightTier::PerPixel`): local lights, specular
+    /// and wetness on top of the vertex color.
+    lit_pipeline: wgpu::RenderPipeline,
+    lights_buf: wgpu::Buffer,
+    lights_bg: wgpu::BindGroup,
     blit_pipeline: wgpu::RenderPipeline,
     blit_bind_group: wgpu::BindGroup,
     blit_sampler: wgpu::Sampler,
@@ -82,13 +89,23 @@ pub struct PcRenderer {
     tri_buf: wgpu::Buffer,
     tri_capacity: u64,
     sprites: HashMap<u32, SpriteEntry>,
-    /// Sprite textures as 3D textures (wrapping sampler), by handle.
+    /// Sprite textures as 3D textures (base + detail layer, their samplers),
+    /// by texture state.
     tex3d: HashMap<TexKey, wgpu::BindGroup>,
-    tex3d_sampler: wgpu::Sampler,
-    /// Clamp-to-edge twin for billboards (sprite regions must not bleed).
-    clamp_sampler: wgpu::Sampler,
-    /// 1x1 white: what untextured triangles "sample" (×1 = unchanged).
+    tex3d_bgl: wgpu::BindGroupLayout,
+    /// Wrapping (models) and clamp-to-edge (billboards: sprite regions must
+    /// not bleed) samplers, nearest and linear.
+    tex3d_nearest: wgpu::Sampler,
+    tex3d_linear: wgpu::Sampler,
+    clamp_nearest: wgpu::Sampler,
+    clamp_linear: wgpu::Sampler,
+    /// 1x1 white: what untextured triangles "sample" (×1 = unchanged), and
+    /// a draw without a detail layer.
+    white_view: wgpu::TextureView,
     white_bg: wgpu::BindGroup,
+    /// What `TexFilter::Default` means (`set_texture_filter`; the profile's
+    /// own: nearest native, the 3-point look on N64, bilinear on 3DS).
+    tex_filter: TexFilter,
     /// TMDL blobs with their validated layout (parsed once, at register).
     meshes: HashMap<u32, (Vec<u8>, MeshLayout)>,
     /// Glyph tables (`TFNT`) by font handle; the atlas is the sprite with
@@ -106,11 +123,22 @@ pub struct PcRenderer {
     /// Texture of each pending triangle (parallel to `pending_tris`; only
     /// allocated into when the batch has textured draws).
     pending_tex: Vec<Option<TexKey>>,
+    /// Per-pixel lighting inputs of each pending triangle (parallel; only
+    /// allocated into once a lit draw joins the batch).
+    pending_surf: Vec<Option<SurfTri>>,
+    /// This frame's local lights and wetness (`set_local_lights`,
+    /// `set_wetness`; cleared at `begin_frame`), and the lighting states
+    /// lit draws used (the lit pipeline's uniform).
+    locals: LightList,
+    wetness: f32,
+    light_sets: lights::LightSets,
+    /// The T&L's working memory for per-pixel lit draws.
+    surf_scratch: Box<SurfaceScratch>,
     camera: Camera3,
     light: Light,
     /// T&L constants of `camera` + `light` at the current internal size
     /// (rebuilt when any of them changes).
-    tnl_ctx: Option<TnlContext>,
+    tnl_ctx: Option<(TnlContext, LightList)>,
     /// The T&L's working memory, reused by every draw (boxed: ~9 KB).
     tnl_scratch: Box<TnlScratch>,
     clear: Color,
@@ -134,6 +162,59 @@ pub struct PcRenderer {
     screen: u8,
     main_cmds: u32,
     main_tris: u32,
+}
+
+/// What a lit triangle adds to its vertices: the surface, the gloss and the
+/// light set.
+#[derive(Clone, Copy, Debug)]
+struct SurfTri {
+    v: [SurfaceVert; 3],
+    gloss: f32,
+    set: u32,
+    /// The local lights that reach the draw (`lights::reach_mask`).
+    mask: u32,
+}
+
+/// What `TexFilter::Default` means on a profile: nearest texels on the PC
+/// (pixel art stays crisp, as always), the RDP's 3-point bilinear in the
+/// N64 look, bilinear on the 3DS (its GPU default).
+fn default_filter(profile: SimProfile) -> TexFilter {
+    match profile {
+        SimProfile::Native => TexFilter::Point,
+        SimProfile::N64 | SimProfile::N3ds => TexFilter::Bilinear,
+    }
+}
+
+/// A 3D texture bind group: the base texture and the detail layer, each
+/// with its sampler.
+fn create_tex3d_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    base: (&wgpu::TextureView, &wgpu::Sampler),
+    detail: (&wgpu::TextureView, &wgpu::Sampler),
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("trino-tex3d-bg"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(base.0),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(base.1),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::TextureView(detail.0),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::Sampler(detail.1),
+            },
+        ],
+    })
 }
 
 /// The second screen's own target, globals and blit source.
@@ -375,20 +456,31 @@ impl PcRenderer {
             min_filter: sprite_filter,
             ..Default::default()
         });
-        // 3D textures tile (wrap); same filter policy as sprites (the N64
-        // 3-point filter is emulated in the shader).
-        let tex3d_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("trino-tex3d-sampler"),
+        // 3D draws choose per draw (`TexFilter`): nearest and linear, each
+        // wrapping and clamped (the N64 look filters in the shader, from
+        // nearest texels).
+        let tex3d_nearest = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("trino-tex3d-nearest"),
             address_mode_u: wgpu::AddressMode::Repeat,
             address_mode_v: wgpu::AddressMode::Repeat,
-            mag_filter: sprite_filter,
-            min_filter: sprite_filter,
             ..Default::default()
         });
-        let clamp_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("trino-clamp-sampler"),
-            mag_filter: sprite_filter,
-            min_filter: sprite_filter,
+        let clamp_nearest = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("trino-clamp-nearest"),
+            ..Default::default()
+        });
+        let tex3d_linear = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("trino-tex3d-linear"),
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let clamp_linear = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("trino-clamp-linear"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
         // The window blit stays nearest: consoles output at native
@@ -540,10 +632,36 @@ impl PcRenderer {
         });
 
         // 3D triangle pipeline: same offscreen target; vertex colors
-        // modulated by one texture per segment (white when untextured).
+        // modulated by one texture per segment (white when untextured) and
+        // its detail layer (white when none).
+        let tex_entry = |binding: u32| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        };
+        let sampler_entry = |binding: u32| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+            count: None,
+        };
+        let tex3d_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("trino-tex3d-bgl"),
+            entries: &[
+                tex_entry(0),
+                sampler_entry(1),
+                tex_entry(2),
+                sampler_entry(3),
+            ],
+        });
         let tri_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("trino-tri-layout"),
-            bind_group_layouts: &[Some(&globals_bgl), Some(&texture_bgl)],
+            bind_group_layouts: &[Some(&globals_bgl), Some(&tex3d_bgl)],
             immediate_size: 0,
         });
         let tri_attrs = [
@@ -571,6 +689,11 @@ impl PcRenderer {
                 format: wgpu::VertexFormat::Float32x2,
                 offset: 32,
                 shader_location: 4,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x2,
+                offset: 88,
+                shader_location: 10,
             },
         ];
         let make_tri_pipeline = |fragment: &str| {
@@ -614,6 +737,94 @@ impl PcRenderer {
         };
         let tri_pipeline = make_tri_pipeline("fs_tri");
         let tri_clamp_pipeline = make_tri_pipeline("fs_tri_clamp");
+
+        // Lit pipeline: the same vertices with the per-pixel inputs, and
+        // the frame's light sets in group 2.
+        let lights_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("trino-lights-bgl"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+        let lights_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("trino-light-sets"),
+            size: (lights::SET_BYTES * lights::MAX_SETS) as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let lights_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("trino-lights-bg"),
+            layout: &lights_bgl,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: lights_buf.as_entire_binding(),
+            }],
+        });
+        let lit_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("trino-lit-layout"),
+            bind_group_layouts: &[Some(&globals_bgl), Some(&tex3d_bgl), Some(&lights_bgl)],
+            immediate_size: 0,
+        });
+        let lit_attrs = {
+            let extra = [
+                (wgpu::VertexFormat::Float32x3, 40, 5),
+                (wgpu::VertexFormat::Float32x3, 52, 6),
+                (wgpu::VertexFormat::Float32x4, 64, 7),
+                (wgpu::VertexFormat::Float32, 80, 8),
+                (wgpu::VertexFormat::Float32, 84, 9),
+            ];
+            let mut a = tri_attrs.to_vec();
+            a.extend(extra.iter().map(|&(format, offset, shader_location)| {
+                wgpu::VertexAttribute {
+                    format,
+                    offset,
+                    shader_location,
+                }
+            }));
+            a
+        };
+        let lit_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("trino-lit-pipeline"),
+            layout: Some(&lit_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_tri_lit"),
+                compilation_options: Default::default(),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: TRI_VERTEX_STRIDE,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &lit_attrs,
+                }],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_tri_lit"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: OFFSCREEN_FORMAT,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
 
         let blit_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("trino-blit-layout"),
@@ -744,7 +955,13 @@ impl PcRenderer {
             },
         );
         let white_view = white_tex.create_view(&wgpu::TextureViewDescriptor::default());
-        let white_bg = create_blit_bind_group(&device, &texture_bgl, &white_view, &tex3d_sampler);
+        let white_bg = create_tex3d_bind_group(
+            &device,
+            &tex3d_bgl,
+            (&white_view, &tex3d_nearest),
+            (&white_view, &tex3d_nearest),
+        );
+        let tex_filter = default_filter(profile);
 
         let instance_capacity = 1024 * INSTANCE_STRIDE;
         let instance_buf = device.create_buffer(&wgpu::BufferDescriptor {
@@ -771,6 +988,9 @@ impl PcRenderer {
             sprite_pipeline,
             tri_pipeline,
             tri_clamp_pipeline,
+            lit_pipeline,
+            lights_buf,
+            lights_bg,
             blit_pipeline,
             blit_bind_group,
             blit_sampler,
@@ -784,9 +1004,14 @@ impl PcRenderer {
             tri_capacity,
             sprites: HashMap::new(),
             tex3d: HashMap::new(),
-            tex3d_sampler,
-            clamp_sampler,
+            tex3d_bgl,
+            tex3d_nearest,
+            tex3d_linear,
+            clamp_nearest,
+            clamp_linear,
+            white_view,
             white_bg,
+            tex_filter,
             meshes: HashMap::new(),
             fonts: HashMap::new(),
             commands: Vec::new(),
@@ -795,6 +1020,11 @@ impl PcRenderer {
             tri_verts: Vec::new(),
             pending_tris: Vec::new(),
             pending_tex: Vec::new(),
+            pending_surf: Vec::new(),
+            locals: LightList::EMPTY,
+            wetness: 0.0,
+            light_sets: lights::LightSets::default(),
+            surf_scratch: Box::new(SurfaceScratch::new()),
             camera: Camera3::default(),
             light: DEFAULT_LIGHT,
             tnl_ctx: None,
@@ -839,6 +1069,8 @@ impl PcRenderer {
     /// Toggle the N64 output emulation (3-point filtering, RGBA5551 +
     /// ordered dither). Defaults to on for [`SimProfile::N64`].
     pub fn set_n64_look(&mut self, on: bool) {
+        // 3D bind groups pick their sampler by the look.
+        self.tex3d.clear();
         if self.n64_look != on {
             self.n64_look = on;
             self.queue.write_buffer(
@@ -966,7 +1198,8 @@ impl PcRenderer {
                 },
             ],
         });
-        self.tex3d.retain(|k, _| k.id != id.0);
+        self.tex3d
+            .retain(|k, _| k.id != id.0 && k.detail.is_none_or(|d| d.sprite != id));
         self.sprites.insert(
             id.0,
             SpriteEntry {
@@ -1144,58 +1377,102 @@ impl PcRenderer {
                     Some(t) => (((t.id as u64) << 1) | t.clamp as u64) + 1,
                     None => 0,
                 };
-                (group, trino_core::render3d::painter_key(tri.depth, i))
+                // Per-pixel lit triangles group apart too (another pipeline):
+                // interleaved with plain ones in depth order they cut the
+                // batch into a draw call per switch. The z-buffer resolves
+                // the order between groups.
+                let lit = self.pending_surf.get(i).is_some_and(Option::is_some) as u64;
+                (
+                    (group << 1) | lit,
+                    trino_core::render3d::painter_key(tri.depth, i),
+                )
             })
             .collect();
         keys.sort_unstable();
-        let order: Vec<(Option<TexKey>, ScreenTri)> = keys
+        let order: Vec<(Option<TexKey>, ScreenTri, Option<SurfTri>)> = keys
             .iter()
             .map(|&(_, key)| {
                 let i = trino_core::render3d::painter_index(key);
                 (
                     self.pending_tex.get(i).copied().flatten(),
                     self.pending_tris[i],
+                    self.pending_surf.get(i).copied().flatten(),
                 )
             })
             .collect();
+        let rgba = |c: Color| {
+            [
+                c.r as f32 / 255.0,
+                c.g as f32 / 255.0,
+                c.b as f32 / 255.0,
+                c.a as f32 / 255.0,
+            ]
+        };
         let mut run_start = self.tri_verts.len() as u32;
-        let mut run_tex = order.first().and_then(|(t, _)| *t);
-        for (tex, tri) in &order {
-            if *tex != run_tex {
+        let mut run = order.first().map(|(t, _, s)| (*t, s.is_some()));
+        for (tex, tri, surf) in &order {
+            let lit = surf.is_some();
+            if Some((*tex, lit)) != run {
                 let first = run_start;
                 let count = self.tri_verts.len() as u32 - first;
-                self.commands.push(Cmd::Tris {
-                    first,
-                    count,
-                    texture: run_tex,
-                });
+                if let Some((texture, lit)) = run {
+                    self.commands.push(Cmd::Tris {
+                        first,
+                        count,
+                        texture,
+                        lit,
+                    });
+                }
                 run_start = self.tri_verts.len() as u32;
-                run_tex = *tex;
+                run = Some((*tex, lit));
             }
             for i in 0..3 {
-                let (p, c) = (tri.pts[i], tri.colors[i]);
-                self.tri_verts.push(TriVertex {
+                let p = tri.pts[i];
+                let mut v = TriVertex {
                     pos: [p.x, p.y],
-                    color: [
-                        c.r as f32 / 255.0,
-                        c.g as f32 / 255.0,
-                        c.b as f32 / 255.0,
-                        c.a as f32 / 255.0,
-                    ],
+                    color: rgba(tri.colors[i]),
                     depth: tri.z[i],
-                    w: if tex.is_some() { tri.w[i] } else { 1.0 },
+                    w: if tex.is_some() || lit { tri.w[i] } else { 1.0 },
                     uv: [tri.uv[i].x, tri.uv[i].y],
-                });
+                    world: [0.0; 3],
+                    normal: [0.0; 3],
+                    base: [0.0; 4],
+                    gloss: 0.0,
+                    set: 0.0,
+                    tex: match tex {
+                        Some(t) => [
+                            (t.filter == TexFilter::Point) as u32 as f32,
+                            t.detail
+                                .filter(|d| self.sprites.contains_key(&d.sprite.0))
+                                .map_or(0.0, |d| d.scale()),
+                        ],
+                        None => [0.0; 2],
+                    },
+                };
+                if let Some(s) = surf {
+                    let sv = &s.v[i];
+                    v.world = [sv.pos.x, sv.pos.y, sv.pos.z];
+                    v.normal = [sv.normal.x, sv.normal.y, sv.normal.z];
+                    v.base = rgba(sv.base);
+                    v.gloss = s.gloss;
+                    // The set (0..8) and the light mask, packed: exact in f32.
+                    v.set = (s.set + 8 * s.mask) as f32;
+                }
+                self.tri_verts.push(v);
             }
         }
-        let count = self.tri_verts.len() as u32 - run_start;
-        self.commands.push(Cmd::Tris {
-            first: run_start,
-            count,
-            texture: run_tex,
-        });
+        if let Some((texture, lit)) = run {
+            let count = self.tri_verts.len() as u32 - run_start;
+            self.commands.push(Cmd::Tris {
+                first: run_start,
+                count,
+                texture,
+                lit,
+            });
+        }
         self.pending_tris.clear();
         self.pending_tex.clear();
+        self.pending_surf.clear();
     }
 
     /// Record the texture of the `added` triangles appended at `before`
@@ -1213,12 +1490,30 @@ impl PcRenderer {
     fn tex3d_group(&mut self, key: TexKey) -> Option<&wgpu::BindGroup> {
         if !self.tex3d.contains_key(&key) {
             let entry = self.sprites.get(&key.id)?;
-            let sampler = if key.clamp {
-                &self.clamp_sampler
-            } else {
-                &self.tex3d_sampler
+            // The N64 look filters in the shader (3-point or point), from
+            // nearest texels; elsewhere the sampler does.
+            let linear = key.filter == TexFilter::Bilinear && !self.n64_look;
+            let sampler = match (key.clamp, linear) {
+                (true, false) => &self.clamp_nearest,
+                (true, true) => &self.clamp_linear,
+                (false, false) => &self.tex3d_nearest,
+                (false, true) => &self.tex3d_linear,
             };
-            let bg = create_blit_bind_group(&self.device, &self.sprite_bgl, &entry.view, sampler);
+            let detail = key
+                .detail
+                .and_then(|d| self.sprites.get(&d.sprite.0))
+                .map_or(&self.white_view, |e| &e.view);
+            let dsampler = if linear {
+                &self.tex3d_linear
+            } else {
+                &self.tex3d_nearest
+            };
+            let bg = create_tex3d_bind_group(
+                &self.device,
+                &self.tex3d_bgl,
+                (&entry.view, sampler),
+                (detail, dsampler),
+            );
             self.tex3d.insert(key, bg);
         }
         self.tex3d.get(&key)
@@ -1314,6 +1609,13 @@ impl PcRenderer {
             self.queue.write_buffer(&self.tri_buf, 0, tri_bytes);
         }
         self.tri_verts.clear();
+        if segments
+            .iter()
+            .any(|s| matches!(s, Segment::Tris { lit: true, .. }))
+        {
+            self.queue
+                .write_buffer(&self.lights_buf, 0, &self.light_sets.bytes());
+        }
 
         // In N64 look the framebuffer is 16-bit: the clear (an RDP fill, no
         // dither) keeps the top 5 bits, stored expanded like a 5551 readback
@@ -1389,8 +1691,12 @@ impl PcRenderer {
                         first,
                         count,
                         texture,
+                        lit,
                     } => {
-                        let pipeline = if texture.is_some_and(|t| t.clamp) {
+                        let pipeline = if *lit {
+                            pass.set_bind_group(2, &self.lights_bg, &[]);
+                            &self.lit_pipeline
+                        } else if texture.is_some_and(|t| t.clamp) {
                             &self.tri_clamp_pipeline
                         } else {
                             &self.tri_pipeline
@@ -1570,17 +1876,25 @@ fn texture_budget(r: TextureBudget<'_>, t: SpriteId, tiled: bool) {
     }
 }
 
-/// The T&L constants for `camera`, `light` and `screen`, cached in `slot`
-/// (rebuilt only when one of them changed).
+/// The T&L constants for `camera`, `light`, `screen` and the per-vertex
+/// local lights (empty on the per-pixel tier), cached in `slot` with the
+/// lights they were built for (rebuilt only when one of them changed).
 fn tnl_context(
-    slot: &mut Option<TnlContext>,
+    slot: &mut Option<(TnlContext, LightList)>,
     camera: &Camera3,
     light: &Light,
     screen: Vec2,
+    locals: &[LocalLight],
 ) -> TnlContext {
-    match *slot {
-        Some(c) if c.matches(camera, light, screen) => c,
-        _ => *slot.insert(TnlContext::new(camera, light, screen)),
+    match slot {
+        Some((c, l)) if c.matches(camera, light, screen) && l.as_slice() == locals => *c,
+        _ => {
+            let mut list = LightList::EMPTY;
+            list.set(locals, trino_core::MAX_LOCAL_LIGHTS as u8);
+            let c = TnlContext::new(camera, light, screen).with_local_lights(locals);
+            *slot = Some((c, list));
+            c
+        }
     }
 }
 
@@ -1598,6 +1912,10 @@ impl Renderer for PcRenderer {
         self.tri_verts.clear();
         self.pending_tris.clear();
         self.pending_tex.clear();
+        self.pending_surf.clear();
+        self.locals = LightList::EMPTY;
+        self.wetness = 0.0;
+        self.light_sets.clear();
         self.frame_stats = FrameStats::default();
     }
 
@@ -1676,6 +1994,23 @@ impl Renderer for PcRenderer {
         self.light = *light;
     }
 
+    fn set_local_lights(&mut self, lights: &[LocalLight]) {
+        // Per vertex they are resolved at tessellation; per pixel each lit
+        // vertex names its light set. No flush either way.
+        self.locals.set(lights, self.caps.max_local_lights);
+    }
+
+    fn set_texture_filter(&mut self, filter: TexFilter) {
+        self.tex_filter = match filter {
+            TexFilter::Default => default_filter(self.profile),
+            f => f,
+        };
+    }
+
+    fn set_wetness(&mut self, wetness: f32) {
+        self.wetness = wetness.clamp(0.0, 1.0);
+    }
+
     fn draw_model(
         &mut self,
         model: ModelId,
@@ -1714,27 +2049,94 @@ impl Renderer for PcRenderer {
                 true,
             );
         }
+        if let (Some(t), Some(d), true) = (texture, params.detail, self.strict) {
+            // Base and detail share texture memory (the N64's TMEM), at
+            // worst 16-bit texels; the console drops a detail that doesn't
+            // fit, strict mode says so.
+            let bytes = |id: SpriteId| self.sprites.get(&id.0).map_or(0, |e| e.size.0 * e.size.1);
+            let bpp = if self.caps.color_depth_bits <= 16 {
+                2
+            } else {
+                4
+            };
+            let total = (bytes(t) + bytes(d.sprite)) * bpp;
+            if total > self.caps.texture_memory_bytes {
+                panic!(
+                    "strict mode: texture {t:?} with detail {:?} needs {total} bytes of \
+                     texture memory together, over the {:?} profile's {} (N64 TMEM: \
+                     base + detail share 4 KB; use a small I4 detail and a non-palette \
+                     base).",
+                    d.sprite, self.profile, self.caps.texture_memory_bytes
+                );
+            }
+        }
         let screen = self.current_screen_size();
         let before = self.pending_tris.len();
-        let ctx = tnl_context(&mut self.tnl_ctx, &self.camera, &self.light, screen);
-        let pending = &mut self.pending_tris;
-        let tnl = trino_core::render3d::tessellate_with(
-            &ctx,
-            &mut self.tnl_scratch,
-            &mesh,
-            matrix,
-            params,
-            &mut |tri| pending.push(tri),
+        let per_pixel = self.caps.light_tier == LightTier::PerPixel;
+        let ctx = tnl_context(
+            &mut self.tnl_ctx,
+            &self.camera,
+            &self.light,
+            screen,
+            if per_pixel {
+                &[]
+            } else {
+                self.locals.as_slice()
+            },
         );
+        // Only the draws a local light reaches (or glossy or wet ones) go
+        // through the lit pipeline, and each names the lights that reach it:
+        // a frame with a few lamps shades a few draws per pixel, not all.
+        let unlit = params.shading == trino_core::Shading::Unlit;
+        let reach = if per_pixel && !unlit && !self.locals.is_empty() {
+            lights::reach_mask(&mesh, matrix, self.locals.as_slice())
+        } else {
+            0
+        };
+        let lit = per_pixel && !unlit && (reach != 0 || self.wetness > 0.0 || params.gloss > 0);
+        let tnl = if lit {
+            let set = self.light_sets.index(lights::SetKey::new(
+                &self.camera,
+                &self.light,
+                &self.locals,
+                self.wetness,
+            ));
+            let gloss = params.gloss as f32 / 255.0;
+            self.pending_surf.resize(before, None);
+            let (pending, surf) = (&mut self.pending_tris, &mut self.pending_surf);
+            trino_core::render3d::tessellate_surface(
+                &ctx,
+                &mut self.surf_scratch,
+                &mesh,
+                matrix,
+                params,
+                &mut |tri, v| {
+                    pending.push(tri);
+                    surf.push(Some(SurfTri {
+                        v: *v,
+                        gloss,
+                        set,
+                        mask: reach,
+                    }));
+                },
+            )
+        } else {
+            let pending = &mut self.pending_tris;
+            trino_core::render3d::tessellate_with(
+                &ctx,
+                &mut self.tnl_scratch,
+                &mesh,
+                matrix,
+                params,
+                &mut |tri| pending.push(tri),
+            )
+        };
         self.frame_stats.tnl.add(&tnl);
         let added = self.pending_tris.len() - before;
         self.tag_pending(
             before,
             added,
-            texture.map(|t| TexKey {
-                id: t.0,
-                clamp: false,
-            }),
+            texture.map(|t| TexKey::model(t.0, params, self.tex_filter)),
         );
     }
 
@@ -1761,7 +2163,11 @@ impl Renderer for PcRenderer {
             false,
         );
         let screen = self.current_screen_size();
-        let ctx = tnl_context(&mut self.tnl_ctx, &self.camera, &self.light, screen);
+        let locals = match self.caps.light_tier {
+            LightTier::PerPixel => &[],
+            LightTier::PerVertex => self.locals.as_slice(),
+        };
+        let ctx = tnl_context(&mut self.tnl_ctx, &self.camera, &self.light, screen, locals);
         let Some(tris) = trino_core::render3d::billboard_with(&ctx, pos, params, uv) else {
             return;
         };
@@ -1771,10 +2177,7 @@ impl Renderer for PcRenderer {
         self.tag_pending(
             before,
             2,
-            Some(TexKey {
-                id: sprite.0,
-                clamp: true,
-            }),
+            Some(TexKey::billboard(sprite.0, self.tex_filter)),
         );
     }
 

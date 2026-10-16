@@ -902,6 +902,8 @@ pub fn tscn(env: &TscnEnv, nodes: &[TscnNode]) -> &'static [u8] {
         let (kind, pa, pb, half) = n.vis.unwrap_or((0, 0, 0, [0.0; 3]));
         b.extend_from_slice(&[n.cell, kind, pa, pb]);
         f32s(&mut b, &half);
+        // Surface (v3): matte, the target's filter, no detail layer.
+        b.extend_from_slice(&[0; 8]);
         assert_eq!(b.len() - start, TSCN_NODE_BYTES);
     }
     b.extend_from_slice(&data);

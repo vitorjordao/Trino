@@ -9,13 +9,14 @@ use alloc::vec::Vec;
 use core::ffi::c_void;
 
 use trino_core::render3d::{
-    Camera3, DEFAULT_LIGHT, Light, Mesh, MeshLayout, ScreenTri, TnlContext, TnlScratch,
+    Camera3, DEFAULT_LIGHT, Light, Mesh, MeshLayout, ScreenTri, TexBind, TnlContext, TnlScratch,
     painter_index, painter_key,
 };
 use trino_core::text::BitmapFont;
 use trino_core::{
-    BillboardParams, Caps, Color, FontId, FrameStats, Mat34, Material, ModelId, ModelParams,
-    Renderer, Screen, SpriteId, SpriteParams, TextParams, Transform3, Vec2, Vec3,
+    BillboardParams, Caps, Color, FontId, FrameStats, LightList, LocalLight, Mat34, Material,
+    ModelId, ModelParams, Renderer, Screen, SpriteId, SpriteParams, TexFilter, TextParams,
+    Transform3, Vec2, Vec3,
 };
 
 use crate::ffi;
@@ -51,7 +52,9 @@ pub struct N3dsRenderer {
     /// Texture per pending triangle (parallel; filled once a textured draw
     /// joins the batch).
     /// (sprite handle, clamp) — clamp = billboard addressing.
-    pending_tex: Vec<Option<(u32, bool)>>,
+    pending_tex: Vec<Option<TexBind>>,
+    /// What `TexFilter::Default` means (`set_texture_filter`).
+    tex_filter: TexFilter,
     /// Draw order of the pending batch: (texture group, painter key).
     order: Vec<(u64, u64)>,
     /// Vertex staging for one texture run (`trino_3d_draw` layout).
@@ -62,7 +65,10 @@ pub struct N3dsRenderer {
     screen: u8,
     camera: Camera3,
     light: Light,
-    /// T&L constants of `camera` + `light`, rebuilt when either changes.
+    /// Local lights of this frame (per vertex, `Caps::N3DS` cap).
+    locals: LightList,
+    /// T&L constants of `camera` + `light` + `locals`, rebuilt when one
+    /// changes.
     tnl_ctx: TnlContext,
     /// The T&L's working memory, reused by every draw (boxed: ~9 KB).
     tnl_scratch: Box<TnlScratch>,
@@ -79,6 +85,7 @@ impl N3dsRenderer {
             last_stats: FrameStats::default(),
             pending_tris: Vec::new(),
             pending_tex: Vec::new(),
+            tex_filter: TexFilter::Bilinear,
             order: Vec::new(),
             verts: Vec::new(),
             sprite_depth: SPRITE_DEPTH_BG,
@@ -87,6 +94,7 @@ impl N3dsRenderer {
             tnl_ctx: TnlContext::new(&Camera3::default(), &DEFAULT_LIGHT, SCREEN),
             tnl_scratch: Box::new(TnlScratch::new()),
             light: DEFAULT_LIGHT,
+            locals: LightList::EMPTY,
             caps: Caps::N3DS,
         }
     }
@@ -96,9 +104,11 @@ impl N3dsRenderer {
         if self.screen == 1 { BOTTOM } else { SCREEN }
     }
 
-    /// Rebuild the T&L constants for the camera, light and current screen.
+    /// Rebuild the T&L constants for the camera, light, local lights and
+    /// current screen.
     fn rebuild_tnl(&mut self) {
-        self.tnl_ctx = TnlContext::new(&self.camera, &self.light, self.screen_px());
+        self.tnl_ctx = TnlContext::new(&self.camera, &self.light, self.screen_px())
+            .with_local_lights(self.locals.as_slice());
     }
 
     /// Depth-sort (painter tie-break) and rasterize the pending model batch.
@@ -117,13 +127,13 @@ impl N3dsRenderer {
         self.order.clear();
         for (i, tri) in self.pending_tris.iter().enumerate() {
             let group = match self.pending_tex.get(i).copied().flatten() {
-                Some((id, clamp)) => (((id as u64) << 1) | clamp as u64) + 1,
+                Some(t) => t.group(),
                 None => 0,
             };
             self.order.push((group, painter_key(tri.depth, i)));
         }
         self.order.sort_unstable();
-        let mut run: Option<(u32, bool)> = None;
+        let mut run: Option<TexBind> = None;
         self.verts.clear();
         for k in 0..self.order.len() {
             let i = painter_index(self.order[k].1);
@@ -133,7 +143,7 @@ impl N3dsRenderer {
                 .get(i)
                 .copied()
                 .flatten()
-                .filter(|(t, _)| self.sprites.contains_key(t));
+                .filter(|t| self.sprites.contains_key(&t.id));
             if tex != run {
                 self.draw_run(run);
                 run = tex;
@@ -148,12 +158,21 @@ impl N3dsRenderer {
     }
 
     /// Hand the staged vertices to the shim as one citro3d draw.
-    fn draw_run(&mut self, tex: Option<(u32, bool)>) {
+    fn draw_run(&mut self, tex: Option<TexBind>) {
         if self.verts.is_empty() {
             return;
         }
-        let (sheet, clamp) = match tex.and_then(|(t, c)| self.sprites.get(&t).map(|e| (e, c))) {
-            Some((entry, clamp)) => (entry.ptr, clamp as u32),
+        let (sheet, clamp) = match tex.and_then(|t| self.sprites.get(&t.id).map(|e| (e, t))) {
+            Some((entry, t)) => {
+                let detail = t
+                    .detail
+                    .and_then(|d| self.sprites.get(&d.sprite.0).map(|e| (e.ptr, d)));
+                let flags = ((t.filter == TexFilter::Point) as u32) << 1
+                    | detail.map_or(0, |(_, d)| (d.scale_log2 as u32) << 4);
+                let dptr = detail.map_or(core::ptr::null_mut(), |(p, _)| p);
+                unsafe { ffi::trino_3d_material(dptr, flags) };
+                (entry.ptr, t.clamp as u32)
+            }
             None => (core::ptr::null_mut(), 0),
         };
         let count = (self.verts.len() / VERT_FLOATS) as u32;
@@ -182,7 +201,7 @@ impl N3dsRenderer {
 
     /// Record the texture of the `added` triangles appended at `before`
     /// (the tag list is only materialized once a textured draw joins).
-    fn tag_pending(&mut self, before: usize, added: usize, key: Option<(u32, bool)>) {
+    fn tag_pending(&mut self, before: usize, added: usize, key: Option<TexBind>) {
         if key.is_some() || !self.pending_tex.is_empty() {
             self.pending_tex.resize(before, None);
             self.pending_tex.extend(core::iter::repeat_n(key, added));
@@ -253,9 +272,12 @@ impl Renderer for N3dsRenderer {
     fn begin_frame(&mut self, clear: Color) {
         self.sprite_depth = SPRITE_DEPTH_BG;
         self.frame_stats = FrameStats::default();
-        if self.screen != 0 {
-            // The last frame ended on the touch screen: project to the top.
-            self.screen = 0;
+        // The last frame may have ended on the touch screen (project to the
+        // top again) or with local lights (cleared every frame).
+        let was_bottom = self.screen != 0;
+        self.screen = 0;
+        let had_lights = self.locals.set(&[], 0);
+        if was_bottom || had_lights {
             self.rebuild_tnl();
         }
         unsafe { ffi::trino_frame_begin(pack_color(clear)) }
@@ -347,6 +369,20 @@ impl Renderer for N3dsRenderer {
         self.rebuild_tnl();
     }
 
+    fn set_texture_filter(&mut self, filter: TexFilter) {
+        self.tex_filter = match filter {
+            TexFilter::Default => TexFilter::Bilinear,
+            f => f,
+        };
+    }
+
+    fn set_local_lights(&mut self, lights: &[LocalLight]) {
+        // Per vertex, like the global light: no flush.
+        if self.locals.set(lights, self.caps.max_local_lights) {
+            self.rebuild_tnl();
+        }
+    }
+
     fn draw_model(
         &mut self,
         model: ModelId,
@@ -384,7 +420,12 @@ impl Renderer for N3dsRenderer {
         );
         self.frame_stats.tnl.add(&tnl);
         let added = self.pending_tris.len() - before;
-        self.tag_pending(before, added, texture.map(|t| (t.0, false)));
+        let filter = self.tex_filter;
+        self.tag_pending(
+            before,
+            added,
+            texture.map(|t| TexBind::model(t.0, params, filter)),
+        );
     }
 
     fn draw_billboard(&mut self, sprite: SpriteId, pos: Vec3, params: &BillboardParams) {
@@ -401,7 +442,11 @@ impl Renderer for N3dsRenderer {
         self.frame_stats.sprites += 1;
         let before = self.pending_tris.len();
         self.pending_tris.extend_from_slice(&tris);
-        self.tag_pending(before, 2, Some((sprite.0, true)));
+        self.tag_pending(
+            before,
+            2,
+            Some(TexBind::billboard(sprite.0, self.tex_filter)),
+        );
     }
 
     fn end_frame(&mut self) {

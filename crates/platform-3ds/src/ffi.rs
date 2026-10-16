@@ -62,6 +62,10 @@ unsafe extern "C" {
     /// `sheet`: texture (image 0; `clamp` != 0 = billboard addressing with
     /// a half-alpha cutout), null = vertex colors only.
     pub fn trino_3d_draw(verts: *const f32, count: u32, sheet: *mut c_void, clamp: u32);
+    /// Sampling of the next `trino_3d_draw` calls: `flags` bit 1 point
+    /// filter, bits 4..8 the detail layer's repeats per base repeat (log2);
+    /// `detail` (null = none) is multiplied over the texture.
+    pub fn trino_3d_material(detail: *mut c_void, flags: u32);
 
     pub fn trino_joypad_buttons() -> u32;
     /// (x as i16 as u16) << 16 | (y as i16 as u16).

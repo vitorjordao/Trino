@@ -9,13 +9,18 @@
 ;
 ; Inputs (immediate mode, see trino_shim_3ds.c):
 ;   v0 = (x, y, depth, w)   v1 = (u, v, -, -)   v2 = (r, g, b, a) in 0..1
+;
+; texcoord1 is texcoord0 scaled by `detail.xy`: the detail layer tiles
+; 2^n times per base repeat (ModelParams::detail, texture unit 1).
 
 .fvec projection[4]
+.fvec detail
 
 .constf ones(1.0, 1.0, 1.0, 1.0)
 
 .out outpos position
 .out outtc0 texcoord0
+.out outtc1 texcoord1
 .out outclr color
 
 .alias inpos v0
@@ -34,6 +39,7 @@
 
     mul outpos, inpos.wwww, r1
     mov outtc0, intc
+    mul outtc1, detail, intc
     mov outclr, inclr
     end
 .end

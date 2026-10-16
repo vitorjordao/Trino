@@ -68,6 +68,12 @@ unsafe extern "C" {
     /// TEX0 * SHADE, perspective). `clamp` != 0: billboard mode (no tiling,
     /// half-alpha cutout); 0: tiled.
     pub fn trino_3d_texture(sprite: *mut c_void, clamp: u32);
+    /// `trino_3d_texture` with options: `flags` bit 0 clamp, bit 1 point
+    /// filter, bits 4..8 the detail layer's scale (log2). `detail` (may be
+    /// null) is multiplied over the texture by the 2-cycle combiner from
+    /// TILE1; a pair that doesn't fit TMEM draws without it. Returns 1 when
+    /// the detail is on.
+    pub fn trino_3d_texture_ex(sprite: *mut c_void, detail: *mut c_void, flags: u32) -> u32;
     /// 30 floats: per vertex x, y, z, u, v, w, r, g, b, a (colors 0..1,
     /// u/v normalized, w = view depth).
     pub fn trino_tri_tex(verts: *const f32);

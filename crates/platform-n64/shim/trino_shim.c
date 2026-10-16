@@ -425,6 +425,73 @@ void trino_3d_texture(void* sprite, uint32_t clamp)
     trino_tex_h = (float)sp->height;
 }
 
+// TMEM bytes of a sprite's texels (rows padded to 8 bytes, as rdpq loads
+// them); -1 for palette formats, whose TLUT takes TMEM's upper half.
+static int trino_tmem_bytes(sprite_t* sp)
+{
+    tex_format_t f = sprite_get_format(sp);
+    if (f == FMT_CI4 || f == FMT_CI8) return -1;
+    return ((TEX_FORMAT_PIX2BYTES(f, sp->width) + 7) & ~7) * sp->height;
+}
+
+// log2 of a power of two (the tile sizes; 0 for anything else).
+static int trino_log2(uint32_t v)
+{
+    return v ? __builtin_ctz(v) : 0;
+}
+
+// Textured 3D with a filter and an optional detail layer (see ffi.rs):
+// flags bit 0 clamp, bit 1 point filter, bits 4..7 the detail's repeats
+// per base repeat (log2). The detail tile reads the same texture
+// coordinates as TILE0, shifted so it tiles 2^n times per base repeat
+// whatever the two sizes; the 2-cycle combiner multiplies it in:
+// (TEX0 * SHADE) then (COMBINED * TEX1).
+uint32_t trino_3d_texture_ex(void* sprite, void* detail, uint32_t flags)
+{
+    trino_tmem_owner = NULL;
+    sprite_t* sp = (sprite_t*)sprite;
+    sprite_t* dt = (sprite_t*)detail;
+    uint32_t clamp = flags & 1;
+    int shift = (flags >> 4) & 15;
+    if (dt) {
+        int a = trino_tmem_bytes(sp), b = trino_tmem_bytes(dt);
+        if (a < 0 || b < 0 || a + b > 4096) dt = NULL;
+    }
+    trino_mode_standard();
+    if (dt) {
+        rdpq_mode_combiner(RDPQ_COMBINER2((TEX0, 0, SHADE, 0), (TEX0, 0, SHADE, 0),
+                                          (COMBINED, 0, TEX1, 0), (0, 0, 0, COMBINED)));
+    } else {
+        rdpq_mode_combiner(RDPQ_COMBINER_TEX_SHADE);
+    }
+    rdpq_mode_zbuf(true, true);
+    rdpq_mode_persp(true);
+    rdpq_mode_filter((flags & 2) ? FILTER_POINT : FILTER_BILINEAR);
+    rdpq_mode_alphacompare(clamp ? 128 : 1);
+    float repeats = clamp ? 1.0f : REPEAT_INFINITE;
+    rdpq_texparms_t parms = {
+        .s.repeats = repeats,
+        .t.repeats = repeats,
+    };
+    if (dt) {
+        rdpq_texparms_t dparms = {
+            .s.repeats = REPEAT_INFINITE,
+            .t.repeats = REPEAT_INFINITE,
+            .s.scale_log = trino_log2(sp->width) - trino_log2(dt->width) - shift,
+            .t.scale_log = trino_log2(sp->height) - trino_log2(dt->height) - shift,
+        };
+        rdpq_tex_multi_begin();
+        rdpq_sprite_upload(TILE0, sp, &parms);
+        rdpq_sprite_upload(TILE1, dt, &dparms);
+        rdpq_tex_multi_end();
+    } else {
+        rdpq_sprite_upload(TILE0, sp, &parms);
+    }
+    trino_tex_w = (float)sp->width;
+    trino_tex_h = (float)sp->height;
+    return dt != NULL;
+}
+
 // v: 3 vertices x 10 floats (x, y, z, u, v, w, r, g, b, a), colors 0..1,
 // u/v normalized (scaled to texels here), w = view depth (> 0).
 void trino_tri_tex(const float* in)

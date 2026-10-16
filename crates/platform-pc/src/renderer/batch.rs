@@ -34,13 +34,10 @@ pub struct Instance {
 
 pub const INSTANCE_STRIDE: u64 = core::mem::size_of::<Instance>() as u64;
 
-/// Texture of a triangle run: a sprite handle and its addressing — tiled
-/// (models: UVs repeat) or clamped (billboards: a sprite region).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct TexKey {
-    pub id: u32,
-    pub clamp: bool,
-}
+/// Texture state of a triangle run: the sprite, tiled (models) or clamped
+/// (billboards), its filter and detail layer (`trino_core`'s backend
+/// helper).
+pub use trino_core::render3d::TexBind as TexKey;
 
 /// One recorded draw call: a sprite quad or a run of 3D triangle vertices
 /// (already transformed/lit by `trino_core::render3d`; the vertices live in
@@ -49,11 +46,13 @@ pub struct TexKey {
 pub enum Cmd {
     Sprite(DrawCommand),
     /// `texture`: sprite handle sampled by these triangles (None = vertex
-    /// colors only).
+    /// colors only). `lit`: shaded per pixel (local lights, specular,
+    /// wetness: the lit pipeline).
     Tris {
         first: u32,
         count: u32,
         texture: Option<TexKey>,
+        lit: bool,
     },
 }
 
@@ -70,6 +69,18 @@ pub struct TriVertex {
     /// correct UVs), 1.0 for vertex-color-only ones (affine, as always).
     pub w: f32,
     pub uv: [f32; 2],
+    /// Per-pixel lighting inputs (the lit pipeline only; zero elsewhere):
+    /// world position, world normal (zero = leave unlit), the unlit color
+    /// (`SurfaceVert::base`), gloss 0..1, and the light set index plus 8 ×
+    /// the mask of the local lights that reach the draw.
+    pub world: [f32; 3],
+    pub normal: [f32; 3],
+    pub base: [f32; 4],
+    pub gloss: f32,
+    pub set: f32,
+    /// Texture sampling: 1 = point filter (the N64 look's 3-point
+    /// otherwise), and the detail layer's UV scale (0 = no detail).
+    pub tex: [f32; 2],
 }
 
 pub const TRI_VERTEX_STRIDE: u64 = core::mem::size_of::<TriVertex>() as u64;
@@ -84,6 +95,7 @@ pub enum Segment {
         first: u32,
         count: u32,
         texture: Option<TexKey>,
+        lit: bool,
     },
 }
 
@@ -166,18 +178,21 @@ pub fn build_segments(commands: &[Cmd]) -> (Vec<Instance>, Vec<Segment>) {
                 first,
                 count,
                 texture,
+                lit,
             } => match segments.last_mut() {
                 Some(Segment::Tris {
                     first: seg_first,
                     count: seg_count,
                     texture: seg_tex,
-                }) if *seg_first + *seg_count == *first && seg_tex == texture => {
+                    lit: seg_lit,
+                }) if *seg_first + *seg_count == *first && seg_tex == texture && seg_lit == lit => {
                     *seg_count += count;
                 }
                 _ => segments.push(Segment::Tris {
                     first: *first,
                     count: *count,
                     texture: *texture,
+                    lit: *lit,
                 }),
             },
         }
@@ -222,12 +237,21 @@ mod tests {
         );
     }
 
+    fn tex5() -> TexKey {
+        TexKey::model(
+            5,
+            &trino_core::ModelParams::DEFAULT,
+            trino_core::TexFilter::Point,
+        )
+    }
+
     #[test]
     fn tris_interleave_and_merge_with_order_preserved() {
         let tris = |first, count| Cmd::Tris {
             first,
             count,
             texture: None,
+            lit: false,
         };
         let (instances, segments) = build_segments(&[
             cmd(1),
@@ -239,10 +263,15 @@ mod tests {
             Cmd::Tris {
                 first: 12,
                 count: 3,
-                texture: Some(TexKey {
-                    id: 5,
-                    clamp: false,
-                }),
+                texture: Some(tex5()),
+                lit: false,
+            },
+            // Per-pixel lit: another pipeline, another segment.
+            Cmd::Tris {
+                first: 15,
+                count: 3,
+                texture: Some(tex5()),
+                lit: true,
             },
         ]);
         assert_eq!(instances.len(), 2);
@@ -256,7 +285,8 @@ mod tests {
                 Segment::Tris {
                     first: 0,
                     count: 9,
-                    texture: None
+                    texture: None,
+                    lit: false
                 },
                 Segment::Sprites {
                     sprite: 1,
@@ -265,15 +295,20 @@ mod tests {
                 Segment::Tris {
                     first: 9,
                     count: 3,
-                    texture: None
+                    texture: None,
+                    lit: false
                 },
                 Segment::Tris {
                     first: 12,
                     count: 3,
-                    texture: Some(TexKey {
-                        id: 5,
-                        clamp: false
-                    })
+                    texture: Some(tex5()),
+                    lit: false
+                },
+                Segment::Tris {
+                    first: 15,
+                    count: 3,
+                    texture: Some(tex5()),
+                    lit: true
                 },
             ]
         );
@@ -333,6 +368,20 @@ mod tests {
         assert_eq!(c.tint[1], 0.0);
         assert!((c.tint[2] - 128.0 / 255.0).abs() < 1e-6);
         assert!((c.tint[3] - 0.2).abs() < 0.01);
+    }
+
+    #[test]
+    fn tri_vertex_layout_matches_the_pipelines() {
+        // shaders.wgsl TriIn/LitIn locations: pos@0, color@8, depth@24,
+        // w@28, uv@32, world@40, normal@52, base@64, gloss@80, set@84,
+        // tex@88.
+        assert_eq!(TRI_VERTEX_STRIDE, 96);
+        assert_eq!(core::mem::offset_of!(TriVertex, tex), 88);
+        assert_eq!(core::mem::offset_of!(TriVertex, world), 40);
+        assert_eq!(core::mem::offset_of!(TriVertex, normal), 52);
+        assert_eq!(core::mem::offset_of!(TriVertex, base), 64);
+        assert_eq!(core::mem::offset_of!(TriVertex, gloss), 80);
+        assert_eq!(core::mem::offset_of!(TriVertex, set), 84);
     }
 
     #[test]

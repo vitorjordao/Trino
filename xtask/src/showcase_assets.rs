@@ -484,6 +484,16 @@ fn textures(dir: &Path, write_png: crate::castle64_assets::PngWriter) {
     }
     write_png(&dir.join("tex_bricks.png"), 32, 32, &bricks);
 
+    // 16x16 stone grain: the detail layer the pillars multiply over their
+    // bricks (materials/stone-grain, `ModelParams::detail`), I4 on the N64.
+    let mut grain = Vec::with_capacity(16 * 16 * 4);
+    for y in 0..16u32 {
+        for x in 0..16u32 {
+            grain.extend_from_slice(&gray(0.72 + 0.28 * noise(x, y, 29)));
+        }
+    }
+    write_png(&dir.join("tex_grain.png"), 16, 16, &grain);
+
     // 16x16 four-point sparkle (particles: coin pickup). White with alpha:
     // the emitter's colors tint it.
     let mut spark = Vec::with_capacity(16 * 16 * 4);

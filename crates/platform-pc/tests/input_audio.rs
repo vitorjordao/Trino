@@ -95,6 +95,7 @@ fn every_pc_key_sets_its_bit() {
         (KeyCode::ShiftRight, Key::Shift),
         (KeyCode::ControlLeft, Key::Ctrl),
         (KeyCode::ControlRight, Key::Ctrl),
+        (KeyCode::KeyT, Key::T),
     ];
     for (code, key) in keys {
         let mut input = PcInput::new();

@@ -47,6 +47,11 @@ folder, which becomes the working directory.
   records the recent entry, then `App::open(ctx, render_state)` builds the editor.
   `App::new(cc)` is a thin wrapper over it, which the kittest flows use. The
   launcher runs the screenshot and smoke hooks itself (`app::screenshot_hook`).
+- **Glyphs:** the editor's fonts have no `→`. It drew a box in the launcher's first
+  screenshot, so write words or use a Phosphor icon.
+- **Screenshots after a change:** run `cargo build -p trino-editor` first.
+  `cargo test` and `clippy` leave the old `target/debug/trino-editor` in place, and
+  the hooks then capture the old UI.
 - **No stray folders:** the watcher no longer creates `examples/platformer/src` in a
   project that lacks it. The Level tab then shows its "file not found" note.
 

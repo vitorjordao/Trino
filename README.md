@@ -102,7 +102,7 @@ tables that strict mode and the tools check content against.
 git clone https://github.com/vitorjordao/Trino
 cd Trino
 cargo xtask run pc     # play castle64 (N64 look by default; TRINO_SIM=native|3ds)
-cargo xtask editor     # open the editor
+cargo xtask editor     # the editor's project launcher (`cargo xtask editor .`: the engine's scenes)
 cargo xtask test       # the workspace test suite, as CI runs it
 ```
 

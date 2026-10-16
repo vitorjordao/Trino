@@ -617,6 +617,18 @@ cargo test --workspace
 - **Keep gamepad logic out of the gilrs glue.** `PcInput::merge_pad` folds a
   device-free `PadReading`, so the mapping is tested without a pad or the feature;
   `read_gilrs` only copies values.
+- **A bare `cargo run -p trino-editor` shows the project launcher.** Scripts and CI
+  that want the editor pass a project (`-- .` for the engine's own content) or set a
+  scene hook (`TRINO_EDITOR_SCENE`, `_TAB`, `_SELECT`, ...).
+- **The editor's fonts have no `→` (or other arrow) glyph:** it draws as a box. Use
+  words or a Phosphor icon (`theme::icon`).
+- **`cargo test` / `cargo clippy` do not rebuild `target/debug/trino-editor`.** Before
+  a screenshot with the editor hooks, run `cargo build -p trino-editor`, or the
+  picture shows the old UI.
+- **Templates and scaffold tests write under `target/test-projects/`, never the
+  system temp dir** (a RAM disk on some machines). A scaffolded project's `cargo
+  check` shares the engine's `target/` (`CARGO_TARGET_DIR`).
+
 - **N64 FFI: no scalar float after an integer argument.** Rust is o32 and libdragon
   is o64, so the float arrives as garbage. Pass 16.16 fixed point (`u32`) or a
   pointer (ADR 0005 §6).

@@ -211,7 +211,14 @@ mod tests {
         // The press, then ~(1 - 0.34) / 0.085 ≈ 7 repeats.
         assert!((6..=10).contains(&fires), "{fires}");
         let mut sel = 0;
-        step(&mut sel, 3, &Nav { up: true, ..Nav::default() });
+        step(
+            &mut sel,
+            3,
+            &Nav {
+                up: true,
+                ..Nav::default()
+            },
+        );
         assert_eq!(sel, 2, "wraps");
     }
 

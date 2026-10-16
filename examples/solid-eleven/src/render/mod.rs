@@ -12,6 +12,7 @@
 //! N64's RSP, and fewer for distant players.
 
 pub mod anim;
+pub mod menu;
 #[rustfmt::skip]
 #[allow(clippy::all)]
 pub mod clips_gen;
@@ -306,7 +307,7 @@ pub struct Guides {
 
 /// Which parts a player gets.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Detail {
+pub(crate) enum Detail {
     /// PC native: 11 parts.
     Full,
     /// Consoles near the camera: 7 parts.
@@ -316,7 +317,7 @@ enum Detail {
 }
 
 impl Detail {
-    fn mask(self) -> u16 {
+    pub(crate) fn mask(self) -> u16 {
         match self {
             Detail::Full => mask::ALL,
             Detail::Near => mask::LIMBS,
@@ -327,7 +328,7 @@ impl Detail {
 
 /// A frame's view volume for game-side culling (cheaper than letting the
 /// engine cull: off-screen draws still cost T&L time on the N64).
-struct Frustum {
+pub(crate) struct Frustum {
     eye: Vec3,
     fwd: Vec3,
     right: Vec3,
@@ -337,7 +338,7 @@ struct Frustum {
 }
 
 impl Frustum {
-    fn new(cam: &CamState, aspect: f32) -> Frustum {
+    pub(crate) fn new(cam: &CamState, aspect: f32) -> Frustum {
         let eye = cam.eye();
         let fwd = (cam.focus - eye).normalized();
         let right = Vec3::new(0.0, 1.0, 0.0).cross(fwd).normalized();
@@ -395,11 +396,11 @@ impl Frustum {
     }
 }
 
-fn plain(tint: Color) -> ModelParams {
+pub(crate) fn plain(tint: Color) -> ModelParams {
     ModelParams::tinted(tint)
 }
 
-fn unlit(tint: Color) -> ModelParams {
+pub(crate) fn unlit(tint: Color) -> ModelParams {
     ModelParams {
         tint,
         shading: Shading::Unlit,
@@ -408,7 +409,7 @@ fn unlit(tint: Color) -> ModelParams {
 }
 
 /// A placement matrix: `pos` (m) and a ground facing (unit fx, fz).
-fn place(pos: Vec3, fx: f32, fz: f32, scale: f32) -> Mat34 {
+pub(crate) fn place(pos: Vec3, fx: f32, fz: f32, scale: f32) -> Mat34 {
     body_matrix(pos, fx, fz, scale * WORLD)
 }
 
@@ -435,7 +436,7 @@ pub fn draw_match(r: &mut dyn Renderer, m: &Match, v: &MatchView, aspect: f32) {
     draw_guides(r, m, v);
 }
 
-fn draw_stadium(r: &mut dyn Renderer, fr: &Frustum, hifi: bool) {
+pub(crate) fn draw_stadium(r: &mut dyn Renderer, fr: &Frustum, hifi: bool) {
     let grass = Color::WHITE;
     for ix in 0..6 {
         for iz in 0..4 {
@@ -645,7 +646,13 @@ fn draw_people(r: &mut dyn Renderer, m: &Match, v: &MatchView, fr: &Frustum, hif
     }
 }
 
-fn draw_body(r: &mut dyn Renderer, j: &[Mat34; JOINTS], look: &Look, detail: Detail, hifi: bool) {
+pub(crate) fn draw_body(
+    r: &mut dyn Renderer,
+    j: &[Mat34; JOINTS],
+    look: &Look,
+    detail: Detail,
+    hifi: bool,
+) {
     let skin = plain(look.skin);
     let (head, torso, shorts) = if hifi {
         (M_HEAD_HD, M_TORSO_HD, M_SHORTS_HD)

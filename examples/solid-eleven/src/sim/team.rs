@@ -80,7 +80,7 @@ impl Role {
         match self {
             Role::Gk => [1, 0, 0, 3, 2, 14],
             Role::Cb => [3, 1, 0, 3, 3, 10],
-            Role::Fb => [5, 2, 1, 4, 4, 4],
+            Role::Fb => [6, 2, 0, 4, 4, 4],
             Role::Dm => [2, 2, 1, 6, 4, 5],
             Role::Cm => [3, 4, 2, 7, 3, 1],
             Role::Am => [3, 6, 5, 5, 1, 0],
@@ -90,15 +90,20 @@ impl Role {
     }
 
     fn template(self) -> [u8; ATTRS] {
+        // Every role's template sums to about a regular's budget, so the
+        // balancing barely moves them and overall ratings line up across
+        // roles (regulars ~78-82, stars ~86, the bench ~74): a keeper's
+        // template once summed to 329, and the spare points lifted his
+        // rating to 91.
         match self {
-            Role::Gk => [48, 35, 34, 58, 62, 92],
-            Role::Cb => [62, 46, 40, 62, 72, 88],
-            Role::Fb => [80, 62, 46, 68, 82, 74],
-            Role::Dm => [64, 58, 52, 78, 84, 78],
-            Role::Cm => [68, 72, 62, 84, 80, 60],
-            Role::Am => [74, 86, 78, 82, 68, 44],
-            Role::W => [90, 84, 70, 72, 74, 40],
-            Role::St => [82, 76, 90, 64, 70, 36],
+            Role::Gk => [72, 60, 56, 72, 80, 80],
+            Role::Cb => [66, 56, 48, 66, 76, 86],
+            Role::Fb => [84, 66, 50, 72, 84, 76],
+            Role::Dm => [64, 58, 52, 84, 86, 84],
+            Role::Cm => [64, 80, 64, 90, 78, 48],
+            Role::Am => [74, 86, 78, 82, 66, 38],
+            Role::W => [88, 84, 70, 72, 74, 36],
+            Role::St => [80, 74, 88, 64, 72, 46],
         }
     }
 }
@@ -775,6 +780,39 @@ mod tests {
                     .max(CLUBS[b].away.shirt.dist2(h));
                 assert!(best > 30_000, "{} vs {}", CLUBS[a].name, CLUBS[b].name);
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod balance_report {
+    extern crate std;
+    use super::*;
+
+    #[test]
+    #[ignore = "tuning aid"]
+    fn ovr_by_role() {
+        let mut sums: std::collections::BTreeMap<std::string::String, (u32, u32, u8, u8)> =
+            Default::default();
+        for c in 0..TEAMS {
+            for s in 0..SQUAD {
+                let p = generate_player(c, s);
+                let role = if s < 11 {
+                    CLUBS[c].tactics.formation().role(s)
+                } else {
+                    pos_role(p.pos)
+                };
+                let key = std::format!("{role:?}{}", if s >= 11 { "-bench" } else { "" });
+                let e = sums.entry(key).or_insert((0, 0, 255, 0));
+                let o = ovr_for(&p.attrs, role);
+                e.0 += o as u32;
+                e.1 += 1;
+                e.2 = e.2.min(o);
+                e.3 = e.3.max(o);
+            }
+        }
+        for (k, (s, n, lo, hi)) in sums {
+            std::println!("{k:10} mean {:3} min {lo} max {hi} (n {n})", s / n);
         }
     }
 }

@@ -29,7 +29,7 @@ fn self_test(
     selftest::begin(game);
     let report = host.measure(game, selftest::FRAMES, selftest::DT, selftest::input);
     host.report_frames("match", &report);
-    host.log(&alloc::format!("TRINO_SE_HASH:{:08x}\n", game.session.m.hash()));
+    host.log(&alloc::format!("TRINO_SE_HASH:{:08x}\n", selftest::hash(game)));
     // The game's own render-side CPU (posing, culling, HUD layout): the
     // same frame drawn into a renderer that draws nothing.
     let mut null = selftest::NullRenderer {

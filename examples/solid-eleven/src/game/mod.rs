@@ -2,6 +2,8 @@
 //! career. Reads and drives [`crate::sim`]; draws through
 //! [`crate::render`] and [`crate::ui`].
 
+pub mod app;
 pub mod input;
+pub mod menu;
 pub mod session;
 pub mod sound;

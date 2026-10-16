@@ -80,7 +80,6 @@ pub struct Session {
     seen: u32,
     prev_officials: [(f32, f32); 3],
     prev_ball: Vec3,
-    music_on: bool,
 }
 
 impl Session {
@@ -120,7 +119,6 @@ impl Session {
             seen: 0,
             prev_officials: officials,
             prev_ball: Vec3::ZERO,
-            music_on: false,
         }
     }
 
@@ -139,21 +137,21 @@ impl Session {
         }
     }
 
-    /// One frame: `dt` seconds of play.
+    /// One frame: `dt` seconds of play. `touch` carries the 3DS's
+    /// bottom-screen taps (player pick, formation) into the pad.
     pub fn update(
         &mut self,
         input: &InputState,
         prev: &InputState,
         audio: &mut dyn Audio,
         dt: f32,
+        touch: (u8, u8),
     ) {
-        if !self.music_on {
-            self.music_on = true;
-            audio.play_music(sound::CROWD, true);
-        }
         let dt = dt.clamp(0.0, 0.1);
         let can_kick = self.human_can_kick();
-        let pad = self.controls.pad(input, prev, dt, can_kick);
+        let mut pad = self.controls.pad(input, prev, dt, can_kick);
+        pad.pick = touch.0;
+        pad.formation = touch.1;
         self.acc += dt;
         let mut ticks = 0;
         let mut first = true;

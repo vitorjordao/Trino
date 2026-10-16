@@ -127,6 +127,11 @@ pub struct Pad {
     pub tackle: bool,
     pub slide: bool,
     pub switch: bool,
+    /// Take control of the side's player in slot `pick - 1` (0 = none):
+    /// the 3DS's stamina tiles.
+    pub pick: u8,
+    /// Switch to formation `formation - 1` (0 = none).
+    pub formation: u8,
 }
 
 /// A side as the match sees it.
@@ -433,8 +438,9 @@ impl Match {
             receiver: None,
             restart_kick: None,
             first_kick: 0,
-            // A full match of sprinting would empty the tank 1.3 times.
-            drain: Fx(((Fx::ONE.0 as i64 * 13 / 10) / total as i64).max(1) as i32),
+            // A full match of sprinting would empty the tank 2.4 times
+            // (scaled by match length: a short match tires as much).
+            drain: Fx(((Fx::ONE.0 as i64 * 24 / 10) / total as i64).max(1) as i32),
             plan_tick: [0; N],
             traj: super::ai::Traj::default(),
             morale: [setup.sides[0].morale, setup.sides[1].morale],
@@ -767,9 +773,9 @@ impl Match {
         if sprint && speed_sq > jog_sq {
             p.stamina -= drain.mul(Fx::milli(1_500) - stam);
         } else if speed_sq > jog_sq / 4 {
-            p.stamina -= drain.mul(Fx::milli(250));
+            p.stamina -= drain.mul(Fx::milli(450));
         } else {
-            p.stamina += drain.mul(Fx::milli(600));
+            p.stamina += drain.mul(Fx::milli(400));
         }
         p.stamina = p.stamina.clamp(Fx::milli(150), Fx::ONE);
     }
@@ -1262,7 +1268,7 @@ impl Match {
         let victim = self.players[v];
         let challenge = Challenge {
             slide,
-            from_behind: me.face.dot(victim.face) > Fx::milli(600),
+            from_behind: me.face.dot(victim.face) > Fx::milli(780),
             speed: me.vel.len(),
             dogso: self.owner == Some(v as u8) && self.through_on_goal(v),
         };
@@ -1465,10 +1471,11 @@ impl Match {
         if keeper_hands {
             // Catch, or parry a hard shot.
             let skill = self.attr(i, team::DEFENSE);
+            // Hard shots are parried more often than held.
             let hold = Fx::milli(1_050)
-                - (speed - Fx::int(14))
+                - (speed - Fx::int(12))
                     .max(Fx::ZERO)
-                    .mul(Fx::milli(40))
+                    .mul(Fx::milli(55))
                     .mul(Fx::milli(1_300) - skill);
             if !self.touch(i) {
                 return;
@@ -1479,7 +1486,7 @@ impl Match {
                 self.players[i].vel = V2::ZERO;
             } else {
                 // Parried: out into play, or round the post for a corner.
-                let back = self.rng.chance(Fx::milli(400));
+                let back = self.rng.chance(Fx::milli(550));
                 let x = if back {
                     self.ends[s].sign()
                 } else {
@@ -1655,7 +1662,7 @@ impl Match {
         self.ends = [self.ends[0].other(), self.ends[1].other()];
         // Players recover a little at the break.
         for p in self.players.iter_mut() {
-            p.stamina = (p.stamina + Fx::milli(150)).min(Fx::ONE);
+            p.stamina = (p.stamina + Fx::milli(100)).min(Fx::ONE);
             p.act = Act::Free;
         }
         self.begin_restart(Restart {
@@ -1829,6 +1836,15 @@ impl Match {
     // ------------------------------------------------------------ humans
 
     fn human_tick(&mut self, s: usize, pad: &Pad, cmds: &mut [Option<Cmd>; N]) {
+        if pad.formation > 0 {
+            self.tactics[s].formation = (pad.formation - 1) % team::FORMATIONS.len() as u8;
+        }
+        if pad.pick > 0 {
+            let i = s * SIDE + (pad.pick as usize - 1).min(SIDE - 1);
+            if !self.players[i].off && self.players[i].role != Role::Gk {
+                self.active[s] = i as u8;
+            }
+        }
         // Keep control on someone able.
         let a = self.active[s] as usize;
         if side_of(a) != s || self.players[a].off || self.players[a].role == Role::Gk {

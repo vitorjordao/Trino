@@ -112,9 +112,13 @@ pub fn anchor(m: &Match, s: usize, k: usize, ball: V2, attacking: bool) -> V2 {
             }
         }
         Role::St | Role::W if attacking => {
-            // Stay onside until the pass.
+            // Play on the last defender's shoulder: drift around the line
+            // (2 m onside to 1 m off, a slow wave per player), the way
+            // forwards do — and why offsides happen.
             let off = offside_line(m, s);
-            x = x.min(off - Fx::milli(800)).max(b.x - Fx::int(15));
+            let phase = ((m.tick as i32 + k as i32 * 53) % 240 - 120).abs();
+            let drift = Fx::int(3).mul(Fx::ratio(phase, 120)) - Fx::int(2);
+            x = x.min(off + drift).max(b.x - Fx::int(15));
         }
         Role::St if !attacking => {
             // The front man stays up for the counter.
@@ -624,10 +628,23 @@ fn carrier(m: &mut Match, i: usize) -> Cmd {
             continue;
         }
         // Not to a man standing offside — the AI sees the line, but a
-        // poor passer sometimes misjudges it.
+        // poor passer sometimes misjudges it, and a tight call (within a
+        // meter and a half) fools anyone half the time.
         let rax = m.ax(s, r.pos);
-        if rules::offside_position(rax, ball_ax, line) && !m.rng.chance(misjudge) {
-            continue;
+        if rules::offside_position(rax, ball_ax, line) {
+            #[cfg(test)]
+            {
+                m.diag.chose[0] += 1;
+            }
+            let tight = rax - line.max(ball_ax) < Fx::milli(1_500);
+            let p = if tight {
+                misjudge + Fx::milli(450)
+            } else {
+                misjudge
+            };
+            if !m.rng.chance(p) {
+                continue;
+            }
         }
         // A through ball into the space behind the line: on when the
         // runner gets to the spot before any defender.

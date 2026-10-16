@@ -218,3 +218,155 @@ fn trace_match() {
         writeln!(f, "{line}").unwrap();
     }
 }
+
+/// The AI-vs-AI sample plays like football: every match ends, the score
+/// is the goals logged, every restart happens somewhere in the sample,
+/// players tire, and the numbers stay in football's range (per 6-minute
+/// match). A regression guard for the AI's tuning.
+#[test]
+fn ai_matches_play_like_football() {
+    let mut kinds = [0u32; 17];
+    let mut m_sum = Metrics::default();
+    for &(h, a, seed) in &SAMPLE {
+        let mut m = Match::new(&setup(h, a, seed, 60 * 60 * 3));
+        let ev = play(&mut m, 60 * 60 * 12);
+        assert!(m.finished(), "{h} v {a}: never finished");
+        // The score is the goals logged, by side.
+        for s in 0..2 {
+            let goals = ev
+                .iter()
+                .filter(|e| matches!(e.kind, EventKind::Goal { .. }) && e.side as usize == s)
+                .count();
+            assert_eq!(m.score[s] as usize, goals, "{h} v {a} side {s}");
+            assert!(
+                m.stats[s].on_target as usize >= goals.saturating_sub(1),
+                "{h} v {a}"
+            );
+        }
+        for e in &ev {
+            kinds[event_index(e.kind)] += 1;
+        }
+        // Everyone stayed in the stadium; outfield players tired.
+        let mut stamina = 0.0;
+        let mut n = 0.0;
+        for p in &m.players {
+            assert!(
+                p.pos.x.abs() < super::pitch::HALF_LEN + super::pitch::RUNOFF + super::fx::Fx::ONE
+            );
+            assert!(
+                p.pos.y.abs()
+                    < super::pitch::HALF_WID + super::pitch::RUNOFF + super::fx::Fx::int(7)
+            );
+            if p.role != super::team::Role::Gk && !p.off {
+                stamina += p.stamina.to_f32();
+                n += 1.0;
+            }
+        }
+        assert!(
+            stamina / n < 0.97,
+            "{h} v {a}: nobody tired ({})",
+            stamina / n
+        );
+        let mut one = Metrics::default();
+        for s in 0..2 {
+            one.passes += m.stats[s].passes as u32;
+            one.completed += m.stats[s].completed as u32;
+            one.owned += m.stats[s].possession;
+            one.shots += m.stats[s].shots as u32;
+        }
+        m_sum.passes += one.passes;
+        m_sum.completed += one.completed;
+        m_sum.owned += one.owned;
+        m_sum.shots += one.shots;
+        m_sum.goals += (m.score[0] + m.score[1]) as u32;
+        m_sum.play += 60 * 60 * 6;
+        m_sum.matches += 1;
+    }
+    for (k, name) in [
+        (EventKind::KickOff, "kick-off"),
+        (EventKind::Goal { own_goal: false }, "goal"),
+        (EventKind::Shot, "shot"),
+        (EventKind::Save, "save"),
+        (EventKind::Corner, "corner"),
+        (EventKind::ThrowIn, "throw-in"),
+        (EventKind::GoalKick, "goal kick"),
+        (EventKind::FreeKick, "free kick"),
+        (EventKind::Foul, "foul"),
+        (EventKind::Yellow, "yellow card"),
+        (EventKind::HalfTime, "half time"),
+        (EventKind::FullTime, "full time"),
+        (EventKind::Tackle, "tackle"),
+    ] {
+        assert!(
+            kinds[event_index(k)] > 0,
+            "no {name} in the sample: {kinds:?}"
+        );
+    }
+    let n = m_sum.matches as f32;
+    let goals = m_sum.goals as f32 / n;
+    let shots = m_sum.shots as f32 / n;
+    let completion = m_sum.completed as f32 / m_sum.passes as f32;
+    let owned = m_sum.owned as f32 / m_sum.play as f32;
+    assert!((0.8..4.5).contains(&goals), "goals per match {goals}");
+    assert!((4.0..16.0).contains(&shots), "shots per match {shots}");
+    assert!(
+        (0.55..0.88).contains(&completion),
+        "pass completion {completion}"
+    );
+    assert!((0.35..0.7).contains(&owned), "ball owned {owned}");
+}
+
+fn event_index(k: EventKind) -> usize {
+    match k {
+        EventKind::KickOff => 0,
+        EventKind::Goal { .. } => 1,
+        EventKind::Shot => 2,
+        EventKind::Save => 3,
+        EventKind::Post => 4,
+        EventKind::Offside => 5,
+        EventKind::Foul => 6,
+        EventKind::Yellow => 7,
+        EventKind::Red => 8,
+        EventKind::Corner => 9,
+        EventKind::ThrowIn => 10,
+        EventKind::GoalKick => 11,
+        EventKind::FreeKick => 12,
+        EventKind::Penalty => 13,
+        EventKind::HalfTime => 14,
+        EventKind::FullTime => 15,
+        EventKind::Tackle => 16,
+    }
+}
+
+/// The same pads give the same match: twice the same full match, bit for
+/// bit (the cross-target check rides on this and the self-test's hash).
+#[test]
+fn a_full_match_is_deterministic() {
+    let run = || {
+        let mut m = Match::new(&setup(3, 6, 99, 60 * 60));
+        let mut h = super::fx::Hasher::new();
+        let mut n = 0;
+        while !m.finished() && n < 60 * 60 * 5 {
+            let mut pads = [Pad::default(); 2];
+            // A human on side 0, pressing things on a schedule.
+            pads[0].mv = super::fx::V2::new(super::fx::Fx::ONE, super::fx::Fx::ZERO);
+            pads[0].sprint = n % 200 < 120;
+            if n % 97 == 0 {
+                pads[0].pass = Some(super::fx::Fx::HALF);
+            }
+            if n % 151 == 0 {
+                pads[0].shoot = Some(super::fx::Fx::milli(700));
+            }
+            if n % 61 == 0 {
+                pads[0].switch = true;
+            }
+            m.step(pads);
+            if n % 60 == 0 {
+                h.word(m.hash());
+            }
+            n += 1;
+        }
+        (h.0, m.score, m.tick)
+    };
+    assert_eq!(run(), run());
+}

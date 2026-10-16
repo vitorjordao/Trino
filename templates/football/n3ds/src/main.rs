@@ -20,7 +20,7 @@ fn self_test(
     selftest::begin(game);
     let report = host.measure(game, selftest::FRAMES, selftest::DT, selftest::input);
     host.report_frames("match", &report);
-    host.log(&alloc::format!("TRINO_SE_HASH:{:08x}\n", game.session.m.hash()));
+    host.log(&alloc::format!("TRINO_SE_HASH:{:08x}\n", selftest::hash(game)));
     selftest::check(game).map_err(alloc::string::String::from)?;
     // The LCDs are double-buffered: present the same frame a few times.
     for _ in 0..3 {

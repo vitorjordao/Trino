@@ -22,8 +22,12 @@ pub const SEED: u32 = 0x5E11_7E57;
 /// Put `game` in the scripted match: a human (the script) on side 0
 /// against the AI, from kick-off.
 pub fn begin(game: &mut SolidElevenGame) {
-    let screen = game.screen;
-    *game = SolidElevenGame::exhibition(screen, 0, 1, SEED, [true, false], Sky::Day);
+    game.start_exhibition(0, 1, SEED, [true, false], Sky::Day, 180);
+}
+
+/// The match's sim hash (printed as `TRINO_SE_HASH`).
+pub fn hash(game: &SolidElevenGame) -> u32 {
+    game.match_hash()
 }
 
 /// The script's input on `frame`: runs, sprints, passes and shots (a
@@ -61,7 +65,10 @@ pub const EXPECTED_HASH: u32 = 0;
 
 /// After the script: the sim hash matches the PC's, and the match is sane.
 pub fn check(game: &SolidElevenGame) -> Result<(), &'static str> {
-    let m = &game.session.m;
+    let Some(session) = &game.session else {
+        return Err("no match running");
+    };
+    let m = &session.m;
     if m.tick == 0 {
         return Err("the match never ran");
     }
@@ -105,13 +112,19 @@ mod tests {
     fn the_script_is_deterministic() {
         let a = run();
         let b = run();
-        assert_eq!(a.session.m.hash(), b.session.m.hash());
+        assert_eq!(
+            a.session.as_ref().unwrap().m.hash(),
+            b.session.as_ref().unwrap().m.hash()
+        );
         // 300 frames at 30 fps = 600 ticks.
-        assert_eq!(a.session.m.tick, 600);
-        std::println!("self-test hash: {:#010x}", a.session.m.hash());
+        assert_eq!(a.session.as_ref().unwrap().m.tick, 600);
+        std::println!(
+            "self-test hash: {:#010x}",
+            a.session.as_ref().unwrap().m.hash()
+        );
         if EXPECTED_HASH != 0 {
             assert_eq!(
-                a.session.m.hash(),
+                a.session.as_ref().unwrap().m.hash(),
                 EXPECTED_HASH,
                 "re-pin EXPECTED_HASH after a sim change"
             );
@@ -149,7 +162,7 @@ mod bench {
             g.update(&input(f), &mut Mute, DT);
         }
         let whole = t0.elapsed();
-        let mut m: Match = g.session.m.clone();
+        let mut m: Match = g.session.as_ref().unwrap().m.clone();
         let t1 = std::time::Instant::now();
         for _ in 0..FRAMES * 2 {
             m.step([Pad::default(); 2]);

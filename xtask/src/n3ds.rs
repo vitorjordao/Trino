@@ -576,7 +576,256 @@ fn ensure_azahar_log_filter() -> Result<(), String> {
     std::fs::write(&ini, patched).map_err(|e| e.to_string())
 }
 
-pub fn run(p: &Project) -> ExitCode {
+/// Azahar's "Simulate 3DS GPU timings" (Emulation > Configure > Graphics),
+/// under `[Renderer]` in qt-config.ini. Off by default since Azahar #2774:
+/// the emulated GPU then runs at host speed, so a GPU-bound frame can look
+/// cheap. (Issue #43 calls it `simulate_gpu_timing`; 2126.2 reads
+/// this name and ignores that one.)
+const GPU_TIMING_KEY: &str = "simulate_3ds_gpu_timings";
+/// The same setting in the configuration Azahar logs at boot.
+const GPU_TIMING_LOG: &str = "Renderer_Simulate3DSGPUTimings:";
+
+/// `--accurate-timing`, or `TRINO_AZAHAR_GPU_TIMING=1` (or true/on/yes).
+pub fn accurate_timing(flag: bool) -> bool {
+    flag || std::env::var("TRINO_AZAHAR_GPU_TIMING").is_ok_and(|v| env_on(&v))
+}
+
+fn env_on(v: &str) -> bool {
+    matches!(
+        v.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "on" | "yes"
+    )
+}
+
+/// `--accurate-timing` only means something where Azahar runs.
+pub fn check_accurate_timing(
+    cmd: Option<&str>,
+    platform: Option<&str>,
+    real_hardware: bool,
+) -> Result<(), String> {
+    if real_hardware {
+        return Err(
+            "xtask: --accurate-timing configures Azahar; a real 3DS already has real GPU timing"
+                .into(),
+        );
+    }
+    match (cmd, platform) {
+        (Some("run" | "test" | "watch"), Some("3ds" | "n3ds")) | (Some("test"), Some("all")) => {
+            Ok(())
+        }
+        _ => Err(
+            "xtask: --accurate-timing goes with `run|test|watch 3ds` (Azahar's \
+                  \"Simulate 3DS GPU timings\")"
+                .into(),
+        ),
+    }
+}
+
+/// The two `[Renderer]` lines of the GPU timing setting, verbatim without
+/// their line ending (None: absent). Qt writes `key\default=true` when the
+/// value is the default, and Azahar then ignores the value, so forcing the
+/// setting takes both lines.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct GpuTimingLines {
+    value: Option<String>,
+    default: Option<String>,
+}
+
+impl GpuTimingLines {
+    fn forced(on: bool) -> Self {
+        Self {
+            value: Some(format!("{GPU_TIMING_KEY}={on}")),
+            default: Some(format!("{GPU_TIMING_KEY}\\default=false")),
+        }
+    }
+
+    /// What Azahar runs with (its default is off).
+    fn enabled(&self) -> bool {
+        self.default.as_deref() != Some(&format!("{GPU_TIMING_KEY}\\default=true"))
+            && self.value.as_deref() == Some(&format!("{GPU_TIMING_KEY}=true"))
+    }
+
+    /// Saved copy: one line each, empty for an absent line.
+    fn to_text(&self) -> String {
+        format!(
+            "{}\n{}\n",
+            self.value.as_deref().unwrap_or(""),
+            self.default.as_deref().unwrap_or("")
+        )
+    }
+
+    fn from_text(text: &str) -> Self {
+        let mut it = text
+            .lines()
+            .map(|l| Some(l.to_string()).filter(|l| !l.is_empty()));
+        Self {
+            value: it.next().flatten(),
+            default: it.next().flatten(),
+        }
+    }
+}
+
+/// `[Renderer]` as a line range: the header's index and the end (exclusive).
+fn renderer_section(lines: &[String]) -> Option<(usize, usize)> {
+    let start = lines.iter().position(|l| l.trim() == "[Renderer]")?;
+    let end = lines[start + 1..]
+        .iter()
+        .position(|l| l.trim_start().starts_with('['))
+        .map_or(lines.len(), |i| start + 1 + i);
+    Some((start, end))
+}
+
+fn gpu_timing_lines(ini: &str) -> GpuTimingLines {
+    let lines: Vec<String> = ini.lines().map(str::to_string).collect();
+    let Some((start, end)) = renderer_section(&lines) else {
+        return GpuTimingLines::default();
+    };
+    let find = |prefix: &str| {
+        lines[start + 1..end]
+            .iter()
+            .find(|l| l.starts_with(prefix))
+            .cloned()
+    };
+    GpuTimingLines {
+        value: find(&format!("{GPU_TIMING_KEY}=")),
+        default: find(&format!("{GPU_TIMING_KEY}\\default=")),
+    }
+}
+
+/// `ini` with the GPU timing lines set to `want`, every other byte kept
+/// (line endings included). A missing `[Renderer]` is appended, and one
+/// left empty by removing the lines goes away again, so a set followed by
+/// a set to the old lines gives the original file back.
+fn with_gpu_timing(ini: &str, want: &GpuTimingLines) -> String {
+    let eol = if ini.contains("\r\n") { "\r\n" } else { "\n" };
+    let mut lines: Vec<String> = ini.lines().map(str::to_string).collect();
+    let trailing = ini.is_empty() || ini.ends_with('\n');
+    if renderer_section(&lines).is_none() {
+        if want.value.is_none() && want.default.is_none() {
+            return ini.to_string();
+        }
+        if lines.last().is_some_and(|l| !l.trim().is_empty()) {
+            lines.push(String::new());
+        }
+        lines.push("[Renderer]".into());
+    }
+    // The default line first: both insert under the header, value on top.
+    for (prefix, line) in [
+        (format!("{GPU_TIMING_KEY}\\default="), &want.default),
+        (format!("{GPU_TIMING_KEY}="), &want.value),
+    ] {
+        let (start, end) = renderer_section(&lines).expect("[Renderer] exists");
+        let at = (start + 1..end).find(|&i| lines[i].starts_with(&prefix));
+        match (at, line) {
+            (Some(i), Some(l)) => lines[i] = l.clone(),
+            (None, Some(l)) => lines.insert(start + 1, l.clone()),
+            (Some(i), None) => {
+                lines.remove(i);
+            }
+            (None, None) => {}
+        }
+    }
+    let (start, end) = renderer_section(&lines).expect("[Renderer] exists");
+    if lines[start + 1..end].iter().all(|l| l.trim().is_empty()) {
+        lines.drain(start..end);
+        if start == lines.len() && start > 0 && lines[start - 1].trim().is_empty() {
+            lines.pop();
+        }
+    }
+    let mut out = lines.join(eol);
+    if trailing && !out.is_empty() {
+        out.push_str(eol);
+    }
+    out
+}
+
+/// Where a session keeps the user's lines until it puts them back.
+fn gpu_timing_saved(ini: &Path) -> PathBuf {
+    let mut p = ini.as_os_str().to_owned();
+    p.push(".trino-gpu-timing");
+    PathBuf::from(p)
+}
+
+fn restore_gpu_timing(ini: &Path, saved: &GpuTimingLines) -> Result<(), String> {
+    let content = std::fs::read_to_string(ini).unwrap_or_default();
+    let restored = with_gpu_timing(&content, saved);
+    if restored != content {
+        std::fs::write(ini, restored).map_err(|e| format!("{}: {e}", ini.display()))?;
+    }
+    let _ = std::fs::remove_file(gpu_timing_saved(ini));
+    Ok(())
+}
+
+/// `--accurate-timing` for one Azahar session: qt-config.ini runs it with
+/// GPU timing on, and dropping this puts the user's own lines back. Azahar
+/// writes the file while it runs, so that happens after it exits.
+struct GpuTimingSession {
+    ini: PathBuf,
+    saved: GpuTimingLines,
+}
+
+impl Drop for GpuTimingSession {
+    fn drop(&mut self) {
+        match restore_gpu_timing(&self.ini, &self.saved) {
+            Ok(()) => println!("[3ds] restored your {GPU_TIMING_KEY} setting"),
+            Err(e) => eprintln!("[3ds] could not restore {GPU_TIMING_KEY}: {e}"),
+        }
+    }
+}
+
+/// Before every Azahar session: put back what an interrupted
+/// `--accurate-timing` session (Ctrl+C, a crash) left behind, then, when
+/// `accurate`, turn GPU timing on until the returned guard drops. Without
+/// `accurate` the user's setting stands, whatever it is.
+fn gpu_timing_session(accurate: bool) -> Result<Option<GpuTimingSession>, String> {
+    match azahar_paths() {
+        Some((_, ini)) => gpu_timing_session_at(ini, accurate),
+        None => Ok(None),
+    }
+}
+
+fn gpu_timing_session_at(ini: PathBuf, accurate: bool) -> Result<Option<GpuTimingSession>, String> {
+    let saved_path = gpu_timing_saved(&ini);
+    if let Ok(text) = std::fs::read_to_string(&saved_path) {
+        println!(
+            "[3ds] restoring {GPU_TIMING_KEY} left on by an interrupted --accurate-timing run"
+        );
+        restore_gpu_timing(&ini, &GpuTimingLines::from_text(&text))?;
+    }
+    if !accurate {
+        return Ok(None);
+    }
+    let content = std::fs::read_to_string(&ini).unwrap_or_default();
+    let saved = gpu_timing_lines(&content);
+    let forced = GpuTimingLines::forced(true);
+    if saved == forced {
+        println!("[3ds] {GPU_TIMING_KEY} is already on in {}", ini.display());
+        return Ok(None);
+    }
+    if let Some(dir) = ini.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    // The copy goes first: the ini is never changed without it.
+    std::fs::write(&saved_path, saved.to_text())
+        .map_err(|e| format!("{}: {e}", saved_path.display()))?;
+    std::fs::write(&ini, with_gpu_timing(&content, &forced))
+        .map_err(|e| format!("{}: {e}", ini.display()))?;
+    println!(
+        "[3ds] {GPU_TIMING_KEY}=true for this session (was {}): Azahar emulates the \
+         PICA200's timing",
+        if saved.enabled() { "on" } else { "off" }
+    );
+    Ok(Some(GpuTimingSession { ini, saved }))
+}
+
+/// GPU timing in the configuration Azahar logged at boot, if it has.
+fn gpu_timing_logged(log: &str) -> Option<bool> {
+    log.lines()
+        .find_map(|l| l.split_once(GPU_TIMING_LOG))
+        .map(|(_, v)| v.trim() == "true")
+}
+
+pub fn run(p: &Project, accurate: bool) -> ExitCode {
     let code = build(p, false);
     if code != ExitCode::SUCCESS {
         return code;
@@ -585,14 +834,35 @@ pub fn run(p: &Project) -> ExitCode {
         eprintln!("[3ds] Azahar not found (set TRINO_AZAHAR to the executable)");
         return ExitCode::FAILURE;
     };
+    let session = match gpu_timing_session(accurate) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("[3ds] {e}");
+            return ExitCode::FAILURE;
+        }
+    };
     println!("[3ds] launching Azahar...");
-    match Command::new(&azahar).arg(p.app_3dsx()).spawn() {
-        Ok(_) => ExitCode::SUCCESS,
+    let mut child = match Command::new(&azahar).arg(p.app_3dsx()).spawn() {
+        Ok(c) => c,
         Err(e) => {
             eprintln!("[3ds] failed to launch Azahar: {e}");
-            ExitCode::FAILURE
+            return ExitCode::FAILURE;
         }
+    };
+    if session.is_none() {
+        return ExitCode::SUCCESS;
     }
+    // The override lasts as long as the emulator: wait for it, then report
+    // what it booted with and put the user's setting back.
+    println!("[3ds] waiting for Azahar to close (then your setting comes back)");
+    let _ = child.wait();
+    if let Some(on) = azahar_log()
+        .and_then(|l| std::fs::read_to_string(l).ok())
+        .and_then(|l| gpu_timing_logged(&l))
+    {
+        println!("[3ds] Azahar booted with {GPU_TIMING_LOG} {on}");
+    }
+    ExitCode::SUCCESS
 }
 
 /// Boot the test app in Azahar and tail its log file for the magic strings
@@ -601,7 +871,7 @@ pub fn run(p: &Project) -> ExitCode {
 /// `build`: false boots an existing self-test app (`cargo xtask build 3ds
 /// --selftest`, e.g. a CI artifact) — Azahar's AppImage needs a newer glibc
 /// than the devkitARM image has, so CI builds and boots in separate jobs.
-pub fn test(p: &Project, build_first: bool, bless: bool) -> ExitCode {
+pub fn test(p: &Project, build_first: bool, bless: bool, accurate: bool) -> ExitCode {
     if build_first {
         let code = build(p, true);
         if code != ExitCode::SUCCESS {
@@ -628,6 +898,14 @@ pub fn test(p: &Project, build_first: bool, bless: bool) -> ExitCode {
         eprintln!("[3ds] {e}");
         return ExitCode::FAILURE;
     }
+    // After the seed above, so a fresh config gets both.
+    let session = match gpu_timing_session(accurate) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("[3ds] {e}");
+            return ExitCode::FAILURE;
+        }
+    };
     // Azahar truncates the log per session; remove any stale one so we never
     // match output from a previous run.
     let _ = std::fs::remove_file(&log);
@@ -647,6 +925,7 @@ pub fn test(p: &Project, build_first: bool, bless: bool) -> ExitCode {
     let mut seen = 0usize;
     let mut fb = crate::fbgolden::FbCapture::default();
     let mut frames: Vec<crate::fbgolden::FbCapture> = Vec::new();
+    let mut gpu_timing = None;
     let verdict = loop {
         if let Some(why) = watchdog.expired(Instant::now()) {
             break Err(why);
@@ -676,6 +955,10 @@ pub fn test(p: &Project, build_first: bool, bless: bool) -> ExitCode {
             if line.contains("TRINO_") {
                 println!("[azahar] {line}");
             }
+            if gpu_timing.is_none() && line.contains(GPU_TIMING_LOG) {
+                println!("[azahar] {}", line.trim());
+                gpu_timing = gpu_timing_logged(line);
+            }
         }
         if fresh.contains("TRINO_TEST_PASS") {
             break Ok(());
@@ -687,6 +970,19 @@ pub fn test(p: &Project, build_first: bool, bless: bool) -> ExitCode {
         seen = end;
     };
     let _ = child.kill();
+    let _ = child.wait();
+    drop(session);
+    // An Azahar that ignored the override would time the frames without it.
+    let verdict = verdict.and_then(|()| match gpu_timing {
+        Some(false) if accurate => Err(format!(
+            "--accurate-timing: Azahar booted with {GPU_TIMING_LOG} false"
+        )),
+        None if accurate => {
+            println!("[3ds] note: Azahar's log does not show {GPU_TIMING_LOG}");
+            Ok(())
+        }
+        _ => Ok(()),
+    });
 
     // Emulator frame of the castle64 hub, within a tolerance: Azahar's GPU
     // output depends on the host's OpenGL (desktop GPU vs CI's llvmpipe).
@@ -752,7 +1048,7 @@ pub fn test(p: &Project, build_first: bool, bless: bool) -> ExitCode {
 
 /// Console live-reload loop: watch game source + assets, rebuild the .3dsx
 /// on change and relaunch Azahar (kill + relaunch, like the N64 loop).
-pub fn watch(p: &Project) -> ExitCode {
+pub fn watch(p: &Project, accurate: bool) -> ExitCode {
     use std::sync::mpsc;
 
     use notify_debouncer_full::notify::RecursiveMode;
@@ -765,6 +1061,15 @@ pub fn watch(p: &Project) -> ExitCode {
     if build(p, false) != ExitCode::SUCCESS {
         return ExitCode::FAILURE;
     }
+    // Relaunches kill Azahar, which then saves nothing: the override holds
+    // for the whole loop (Ctrl+C leaves it to the next 3DS command to undo).
+    let _session = match gpu_timing_session(accurate) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("[3ds] {e}");
+            return ExitCode::FAILURE;
+        }
+    };
 
     fn launch(azahar: &Path, app: &Path) -> std::io::Result<std::process::Child> {
         Command::new(azahar).arg(app).spawn()
@@ -873,6 +1178,182 @@ mod tests {
                 .unwrap_err()
                 .contains("unsupported wav format")
         );
+    }
+
+    /// A slice of a real 2126.2 qt-config.ini, the setting at its default.
+    const INI: &str = "[Miscellaneous]\nlog_filter=*:Info\n\n[Renderer]\n\
+        shaders_accurate_mul=true\nshaders_accurate_mul\\default=true\n\
+        simulate_3ds_gpu_timings=false\nsimulate_3ds_gpu_timings\\default=true\n\
+        spirv_shader_gen=true\n\n[System]\nsimulate_3ds_gpu_timings=false\n";
+
+    #[test]
+    fn gpu_timing_is_forced_with_both_lines_in_renderer_only() {
+        let before = gpu_timing_lines(INI);
+        assert!(!before.enabled(), "\\default=true means the default (off)");
+        let on = with_gpu_timing(INI, &GpuTimingLines::forced(true));
+        assert_eq!(
+            on,
+            INI.replace(
+                "simulate_3ds_gpu_timings=false\nsimulate_3ds_gpu_timings\\default=true",
+                "simulate_3ds_gpu_timings=true\nsimulate_3ds_gpu_timings\\default=false"
+            ),
+            "the lines change in place, [System]'s same key and every other line stay"
+        );
+        assert!(gpu_timing_lines(&on).enabled());
+        // Idempotent, and the saved lines bring the file back byte for byte.
+        assert_eq!(with_gpu_timing(&on, &GpuTimingLines::forced(true)), on);
+        assert_eq!(with_gpu_timing(&on, &before), INI);
+        // Forced off is off whatever Azahar's default becomes.
+        let off = with_gpu_timing(&on, &GpuTimingLines::forced(false));
+        assert!(
+            off.contains("simulate_3ds_gpu_timings=false\nsimulate_3ds_gpu_timings\\default=false")
+        );
+        assert!(!gpu_timing_lines(&off).enabled());
+    }
+
+    #[test]
+    fn gpu_timing_already_on_is_left_as_is() {
+        let ini =
+            "[Renderer]\nsimulate_3ds_gpu_timings=true\nsimulate_3ds_gpu_timings\\default=false\n";
+        let lines = gpu_timing_lines(ini);
+        assert_eq!(lines, GpuTimingLines::forced(true));
+        assert!(lines.enabled());
+        assert_eq!(with_gpu_timing(ini, &lines), ini);
+        // `true` with `\default=true` still runs at the default.
+        let ignored = gpu_timing_lines(&ini.replace("default=false", "default=true"));
+        assert!(!ignored.enabled());
+    }
+
+    #[test]
+    fn gpu_timing_goes_into_a_seeded_or_missing_config() {
+        // The harness's seed has no [Renderer]: it is appended, then removed
+        // again with the lines.
+        let on = with_gpu_timing(AZAHAR_SEED_CONFIG, &GpuTimingLines::forced(true));
+        assert!(on.starts_with(AZAHAR_SEED_CONFIG));
+        assert!(on.ends_with(
+            "\n\n[Renderer]\nsimulate_3ds_gpu_timings=true\nsimulate_3ds_gpu_timings\\default=false\n"
+        ));
+        assert!(gpu_timing_lines(&on).enabled());
+        let back = with_gpu_timing(&on, &GpuTimingLines::default());
+        assert_eq!(back, AZAHAR_SEED_CONFIG);
+        // No file at all (`run` before Azahar ever started).
+        let fresh = with_gpu_timing("", &GpuTimingLines::forced(true));
+        assert_eq!(
+            fresh,
+            "[Renderer]\nsimulate_3ds_gpu_timings=true\nsimulate_3ds_gpu_timings\\default=false\n"
+        );
+        assert_eq!(with_gpu_timing(&fresh, &GpuTimingLines::default()), "");
+        // Nothing to remove from a file without the section.
+        assert_eq!(
+            with_gpu_timing(AZAHAR_SEED_CONFIG, &GpuTimingLines::default()),
+            AZAHAR_SEED_CONFIG
+        );
+    }
+
+    #[test]
+    fn gpu_timing_keeps_windows_line_endings() {
+        let crlf = INI.replace('\n', "\r\n");
+        let on = with_gpu_timing(&crlf, &GpuTimingLines::forced(true));
+        assert!(on.contains(
+            "simulate_3ds_gpu_timings=true\r\nsimulate_3ds_gpu_timings\\default=false\r\n"
+        ));
+        assert!(!on.replace("\r\n", "").contains('\n'));
+        assert_eq!(with_gpu_timing(&on, &gpu_timing_lines(&crlf)), crlf);
+    }
+
+    #[test]
+    fn gpu_timing_saved_copy_round_trips() {
+        for lines in [
+            gpu_timing_lines(INI),
+            GpuTimingLines::forced(true),
+            GpuTimingLines::default(),
+            GpuTimingLines {
+                value: Some("simulate_3ds_gpu_timings=true".into()),
+                default: None,
+            },
+        ] {
+            assert_eq!(GpuTimingLines::from_text(&lines.to_text()), lines);
+        }
+        let saved = gpu_timing_saved(Path::new("/x/azahar-emu/qt-config.ini"));
+        assert_eq!(
+            saved,
+            Path::new("/x/azahar-emu/qt-config.ini.trino-gpu-timing")
+        );
+    }
+
+    #[test]
+    fn gpu_timing_is_read_back_from_azahar_boot_log() {
+        let log = "[   1.47] Config <Info> common/settings.cpp:operator():85: Renderer_FrameLimit: 100\n\
+                   [   1.48] Config <Info> common/settings.cpp:operator():85: Renderer_Simulate3DSGPUTimings: true\n";
+        assert_eq!(gpu_timing_logged(log), Some(true));
+        assert_eq!(
+            gpu_timing_logged(&log.replace(": true", ": false")),
+            Some(false)
+        );
+        assert_eq!(gpu_timing_logged("no settings yet"), None);
+    }
+
+    #[test]
+    fn accurate_timing_comes_from_the_flag_or_the_environment() {
+        for v in ["1", "true", "ON", " yes "] {
+            assert!(env_on(v), "{v}");
+        }
+        for v in ["", "0", "false", "off", "2"] {
+            assert!(!env_on(v), "{v}");
+        }
+        assert!(accurate_timing(true));
+        for (cmd, platform) in [
+            ("run", "3ds"),
+            ("test", "3ds"),
+            ("watch", "n3ds"),
+            ("test", "all"),
+        ] {
+            check_accurate_timing(Some(cmd), Some(platform), false)
+                .unwrap_or_else(|e| panic!("{cmd} {platform}: {e}"));
+        }
+        for (cmd, platform) in [("run", "n64"), ("build", "3ds"), ("test", "pc")] {
+            let e = check_accurate_timing(Some(cmd), Some(platform), false).unwrap_err();
+            assert!(e.contains("run|test|watch 3ds"), "{cmd} {platform}: {e}");
+        }
+        let e = check_accurate_timing(Some("run"), Some("3ds"), true).unwrap_err();
+        assert!(e.contains("real 3DS"), "{e}");
+    }
+
+    #[test]
+    fn a_session_restores_the_setting_and_recovers_an_interrupted_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let ini = dir.path().join("azahar-emu/qt-config.ini");
+        let saved = gpu_timing_saved(&ini);
+        std::fs::create_dir_all(ini.parent().unwrap()).unwrap();
+        std::fs::write(&ini, INI).unwrap();
+
+        // No flag: the user's setting is not touched.
+        assert!(gpu_timing_session_at(ini.clone(), false).unwrap().is_none());
+        assert_eq!(std::fs::read_to_string(&ini).unwrap(), INI);
+
+        // The flag: on for the session, the user's lines back after it.
+        let session = gpu_timing_session_at(ini.clone(), true).unwrap().unwrap();
+        let during = std::fs::read_to_string(&ini).unwrap();
+        assert!(gpu_timing_lines(&during).enabled());
+        assert!(saved.exists());
+        drop(session);
+        assert_eq!(std::fs::read_to_string(&ini).unwrap(), INI);
+        assert!(!saved.exists());
+
+        // Interrupted (Ctrl+C: no drop): the next session undoes it first,
+        // with or without the flag.
+        std::mem::forget(gpu_timing_session_at(ini.clone(), true).unwrap());
+        assert!(gpu_timing_lines(&std::fs::read_to_string(&ini).unwrap()).enabled());
+        assert!(gpu_timing_session_at(ini.clone(), false).unwrap().is_none());
+        assert_eq!(std::fs::read_to_string(&ini).unwrap(), INI);
+        assert!(!saved.exists());
+
+        // A config with no file yet gets the section, and loses it after.
+        std::fs::remove_file(&ini).unwrap();
+        let session = gpu_timing_session_at(ini.clone(), true).unwrap().unwrap();
+        assert!(gpu_timing_lines(&std::fs::read_to_string(&ini).unwrap()).enabled());
+        drop(session);
+        assert_eq!(std::fs::read_to_string(&ini).unwrap(), "");
     }
 
     #[test]

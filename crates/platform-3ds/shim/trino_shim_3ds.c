@@ -30,6 +30,13 @@
 // tri3d.v.pica compiled by picasso and embedded as a C array by
 // `cargo xtask build 3ds` (target/3ds/tri3d_shbin.h).
 #include "tri3d_shbin.h"
+// tnl3d.v.pica: vertex T&L on the GPU for static meshes (trino_gpu_draw).
+#include "tnl3d_shbin.h"
+// Which winding the GPU T&L path culls as back faces (checked by the
+// `gpu tnl` self-test step against the CPU path).
+#ifndef TRINO_TNL_CULL
+#define TRINO_TNL_CULL GPU_CULL_BACK_CCW
+#endif
 
 // ---------------------------------------------------------------------------
 // 3D triangles (citro3d): the engine's software T&L projects and lights
@@ -65,6 +72,13 @@ static float* s_vbuf = NULL;
 static uint32_t s_vused = 0;
 static int s_vfull_warned = 0;
 
+// GPU T&L (tnl3d.v.pica): static meshes uploaded once to linear memory,
+// drawn with per-draw uniforms (trino_gpu_mesh / trino_gpu_draw).
+static DVLB_s* s_tnl3d_dvlb = NULL;
+static shaderProgram_s s_tnl3d;
+#define TNL_UNIFORMS 6
+static int s_tnl3d_unif[TNL_UNIFORMS];
+
 static void trino_tex3d_init(void)
 {
     s_tri3d_dvlb = DVLB_ParseFile((u32*)tri3d_shbin, tri3d_shbin_size);
@@ -76,6 +90,14 @@ static void trino_tex3d_init(void)
     Mtx_OrthoTilt(&s_proj_top, 0.0f, 400.0f, 240.0f, 0.0f, 1.0f, -1.0f, true);
     Mtx_OrthoTilt(&s_proj_bottom, 0.0f, 320.0f, 240.0f, 0.0f, 1.0f, -1.0f, true);
     s_vbuf = (float*)linearAlloc(TRI3D_MAX_VERTS * TRI3D_FLOATS * sizeof(float));
+
+    s_tnl3d_dvlb = DVLB_ParseFile((u32*)tnl3d_shbin, tnl3d_shbin_size);
+    shaderProgramInit(&s_tnl3d);
+    shaderProgramSetVsh(&s_tnl3d, &s_tnl3d_dvlb->DVLE[0]);
+    const char* names[TNL_UNIFORMS] = {"mvp", "lightdir", "ambient", "diffuse", "tint", "emissive"};
+    for (int i = 0; i < TNL_UNIFORMS; i++) {
+        s_tnl3d_unif[i] = shaderInstanceGetUniformLocation(s_tnl3d.vertexShader, names[i]);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -435,6 +457,92 @@ void trino_3d_draw(const float* v, uint32_t count, void* sheet, uint32_t clamp)
     }
     C3D_DrawArrays(GPU_TRIANGLES, s_vused, count);
     s_vused += count;
+    // Hand the GPU back to citro2d (program, attributes, buffers, texenv).
+    C2D_Prepare();
+}
+
+// ---------------------------------------------------------------------------
+// GPU T&L for static meshes (the draws trino_core::render3d::gpu_check
+// accepts): the PICA200's vertex units transform, light and project; the
+// CPU only writes 36 floats of uniforms per draw.
+
+#define TNL_VERTEX_BYTES 28 // x, y, z, nx, ny, nz (floats), r, g, b, a (bytes)
+
+typedef struct {
+    void* verts;     // linear memory, TNL_VERTEX_BYTES each
+    u16* indices;    // linear memory
+    uint32_t count;  // indices
+} trino_gpu_mesh_t;
+
+// Copy a mesh to linear memory for the GPU T&L path: `nverts` vertices of
+// TNL_VERTEX_BYTES and `nidx` u16 indices (triangles). NULL when linear
+// memory is short (the renderer keeps the CPU path for that mesh).
+void* trino_gpu_mesh(const void* verts, uint32_t nverts, const uint16_t* idx, uint32_t nidx)
+{
+    trino_gpu_mesh_t* m = (trino_gpu_mesh_t*)malloc(sizeof(trino_gpu_mesh_t));
+    if (!m) return NULL;
+    m->verts = linearAlloc(nverts * TNL_VERTEX_BYTES);
+    m->indices = (u16*)linearAlloc(nidx * sizeof(u16));
+    if (!m->verts || !m->indices) {
+        if (m->verts) linearFree(m->verts);
+        if (m->indices) linearFree(m->indices);
+        free(m);
+        return NULL;
+    }
+    memcpy(m->verts, verts, nverts * TNL_VERTEX_BYTES);
+    memcpy(m->indices, idx, nidx * sizeof(u16));
+    GSPGPU_FlushDataCache(m->verts, nverts * TNL_VERTEX_BYTES);
+    GSPGPU_FlushDataCache(m->indices, nidx * sizeof(u16));
+    m->count = nidx;
+    return m;
+}
+
+// Draw a trino_gpu_mesh. `u`: the 4x4 matrix to the screen's pixels and
+// per-vertex depth band, times the view depth (16 floats, rows), then
+// light direction, ambient, diffuse, tint and emissive (4 floats each).
+// The shim puts the current screen's tilt projection in front of the
+// matrix. flags bit 0: cull back faces.
+void trino_gpu_draw(void* mesh, const float* u, uint32_t flags)
+{
+    trino_gpu_mesh_t* m = (trino_gpu_mesh_t*)mesh;
+    if (!m) return;
+    C3D_Mtx screen, mvp;
+    for (int r = 0; r < 4; r++) {
+        screen.r[r].x = u[r * 4 + 0];
+        screen.r[r].y = u[r * 4 + 1];
+        screen.r[r].z = u[r * 4 + 2];
+        screen.r[r].w = u[r * 4 + 3];
+    }
+    Mtx_Multiply(&mvp, s_proj, &screen);
+
+    C2D_Flush();
+    C3D_BindProgram(&s_tnl3d);
+    C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, s_tnl3d_unif[0], &mvp);
+    for (int i = 1; i < TNL_UNIFORMS; i++) {
+        const float* v = u + 16 + (i - 1) * 4;
+        C3D_FVUnifSet(GPU_VERTEX_SHADER, s_tnl3d_unif[i], v[0], v[1], v[2], v[3]);
+    }
+    C3D_AttrInfo* attr = C3D_GetAttrInfo();
+    AttrInfo_Init(attr);
+    AttrInfo_AddLoader(attr, 0, GPU_FLOAT, 3);         // position
+    AttrInfo_AddLoader(attr, 1, GPU_FLOAT, 3);         // normal
+    AttrInfo_AddLoader(attr, 2, GPU_UNSIGNED_BYTE, 4); // color
+    C3D_BufInfo* buf = C3D_GetBufInfo();
+    BufInfo_Init(buf);
+    BufInfo_Add(buf, m->verts, TNL_VERTEX_BYTES, 3, 0x210);
+    // The tilt projection mirrors the screen: the engine's front faces
+    // arrive clockwise.
+    C3D_CullFace((flags & 1) ? TRINO_TNL_CULL : GPU_CULL_NONE);
+    C3D_AlphaTest(false, GPU_ALWAYS, 0);
+    C3D_TexEnv* env = C3D_GetTexEnv(0);
+    C3D_TexEnvInit(env);
+    C3D_TexEnvSrc(env, C3D_Both, GPU_PRIMARY_COLOR, 0, 0);
+    C3D_TexEnvFunc(env, C3D_Both, GPU_REPLACE);
+    for (int i = 1; i < 6; i++) {
+        C3D_TexEnvInit(C3D_GetTexEnv(i));
+    }
+    C3D_DrawElements(GPU_TRIANGLES, m->count, C3D_UNSIGNED_SHORT, m->indices);
+    C3D_CullFace(GPU_CULL_NONE);
     // Hand the GPU back to citro2d (program, attributes, buffers, texenv).
     C2D_Prepare();
 }

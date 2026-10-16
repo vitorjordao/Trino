@@ -1,0 +1,57 @@
+; Trino 3DS vertex T&L (picasso syntax): the GPU transforms, lights and
+; projects a static mesh (the draws trino_core::render3d::gpu_check accepts),
+; instead of the CPU's software T&L (tri3d.v.pica only maps CPU-projected
+; pixels). The same formula as the CPU path, in floats:
+;   position = mvp * p
+;   color    = min(1, color / 255 * tint * (ambient + diffuse * max(0, n . l))
+;                     + emissive)
+; `mvp` (built by the N3DS renderer and the shim) takes a model-space point
+; to the screen's clip space, already multiplied by the view depth: the
+; divide gives the CPU path's pixel and per-vertex depth band back, and the
+; PICA200 clips and interpolates perspective-correctly.
+;
+; Inputs (a static vertex buffer, see trino_gpu_mesh):
+;   v0 = (x, y, z) floats   v1 = (nx, ny, nz) floats   v2 = (r, g, b, a) bytes
+; PICA rule: a uniform can only be the first source of an instruction.
+
+.fvec mvp[4]
+.fvec lightdir
+.fvec ambient
+.fvec diffuse
+.fvec tint
+.fvec emissive
+
+.constf consts(0.0, 1.0, 0.00392156862745098, 0.0)
+
+.out outpos position
+.out outclr color
+
+.alias inpos v0
+.alias innrm v1
+.alias inclr v2
+
+.proc main
+    mov r0.xyz, inpos.xyz
+    mov r0.w, consts.y
+
+    dp4 outpos.x, mvp[0], r0
+    dp4 outpos.y, mvp[1], r0
+    dp4 outpos.z, mvp[2], r0
+    dp4 outpos.w, mvp[3], r0
+
+    ; k = ambient + diffuse * max(0, n . l)
+    dp3 r1.x, lightdir, innrm
+    max r1.x, consts.x, r1.x
+    mul r2.xyz, diffuse.xyz, r1.xxx
+    add r2.xyz, ambient.xyz, r2.xyz
+    mov r2.w, consts.y
+
+    ; color = min(1, color / 255 * tint * k + emissive)
+    mul r3, consts.zzzz, inclr
+    mul r3, tint, r3
+    mul r3, r2, r3
+    add r3.xyz, emissive.xyz, r3.xyz
+    min r3, consts.yyyy, r3
+    mov outclr, r3
+    end
+.end

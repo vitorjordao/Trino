@@ -329,6 +329,9 @@ new skill when none fits. Then run `cargo xtask agents sync`. The steps are in
   - `trino.toml` and `cargo xtask build|run|test|watch n64|3ds --project <dir>` (or
     `$TRINO_PROJECT`, or a `trino.toml` in the cwd). The standalone template gives
     `cargo trino`.
+  - `[project] platforms = ["pc", "n64", "3ds"]` (missing = all): naming a left-out
+    platform fails with the field in the message; `build all`, `assets all` and
+    `test all` skip it. The PC commands use the project's `[pc] package` and `assets/`.
   - `n64_main!` / `n3ds_main!` with `N64Host` / `N3dsHost` (boot, step, measure, report
     frames with the real fps, dump goldens). Project gates: `TRINO_TEST_PASS`, goldens,
     `n64_max_frame_us`.

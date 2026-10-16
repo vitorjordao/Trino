@@ -5,6 +5,15 @@ name = "{{name}}"
 title = "{{name}}"
 description = "A Trino game"
 author = ""
+# The platforms this project ships on (default: all three). Batch commands
+# (`cargo trino build all`, `assets all`, `test all`) skip the others, and
+# naming one (`cargo trino build n64`) fails. Remove a console here and its
+# section below may go too.
+# platforms = ["pc", "n64", "3ds"]
+
+# The desktop host crate (`cargo trino build|run pc`); default "<name>-pc".
+# [pc]
+# package = "{{name}}-pc"
 
 [n64]
 package = "{{name}}-n64"

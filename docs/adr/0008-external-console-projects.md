@@ -22,6 +22,15 @@
   pinned to a commit), not only git dependencies: the native toolchain inputs are
   files in the engine.
 
+- **Target platforms (2026-10-16).** `[project] platforms = ["pc", "n64", "3ds"]`
+  says which platforms a project ships on; missing means all three, so older files
+  behave as before. Every platform command checks it: naming a left-out platform
+  (`build n64`) fails with the field and the file in the message, and the batch
+  commands (`build all`, `assets all`, `test all`) skip it with a line saying so.
+  `[n64]` and `[3ds]` are required only for listed consoles. The PC commands run on
+  the project too: `build|run pc` use its desktop host (`[pc] package`, default
+  `<name>-pc`), `assets pc` bakes its `assets/`, `test pc` runs its workspace.
+
 ## Consequences
 - The standalone template ships `n64/`, `n3ds/`, `trino.toml` and a `cargo trino`
   alias, and a fresh scaffold builds and passes in ares and Azahar.

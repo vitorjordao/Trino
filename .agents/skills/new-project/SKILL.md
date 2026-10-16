@@ -38,11 +38,24 @@ cargo xtask new space-cat --standalone <dir> --git https://github.com/vitorjorda
 
 | Key | Meaning |
 |---|---|
-| `[project]` | `name` (file stem); `title` (≤ 20 ASCII, the ROM header and 3DS menu); `description`, `author` |
-| `[n64]` | `package` (staticlib crate); `save` (`eeprom16k` = 2 KB: framing leaves 2040 B) |
-| `[3ds]` | `package`, `bin`, `icon` (a 48×48 PNG) |
+| `[project]` | `name` (file stem); `title` (≤ 20 ASCII, the ROM header and 3DS menu); `description`, `author`; `platforms` (below) |
+| `[pc]` | `package` (desktop host crate; optional, default `<name>-pc`) |
+| `[n64]` | `package` (staticlib crate); `save` (`eeprom16k` = 2 KB: framing leaves 2040 B). Needed only when n64 is targeted |
+| `[3ds]` | `package`, `bin`, `icon` (a 48×48 PNG). Needed only when 3ds is targeted |
 | `[test]` | `n64_goldens`/`n3ds_goldens` (frames the self-test dumps, in order); `n64_max_frame_us` (gate on `TRINO_FRAME` averages); `watch` dirs |
 
+- **Target platforms:** `platforms = ["pc", "n64", "3ds"]` under `[project]`
+  (missing = all three, the old behavior).
+  - Each platform command checks it: `cargo trino build n64` on a project without
+    `"n64"` fails, and the message names the field and the file.
+  - `build all`, `assets all` and `test all` skip the left-out platforms and print
+    a line for each. Bare `build` and `assets` mean `all`; bare `test` is still
+    the host suite only.
+  - The gate is `Project::require`, called from `gate` in `xtask/src/main.rs`
+    after `hardware::parse`, so `run --target n64` is gated too. The batch plan is
+    `Project::batch`.
+  - PC commands follow the selected project: `build|run pc` build its `[pc]`
+    package, `assets pc` bakes its `assets/`, and `test pc` runs its workspace.
 - **The self-test** is the macro's second argument, `fn(&mut N64Host, &mut G) ->
   Result<(), String>`. Drive frames with `host.step`, time them with `host.measure` +
   `host.report_frames`, and dump goldens with `host.dump_framebuffer`. The N64 macro

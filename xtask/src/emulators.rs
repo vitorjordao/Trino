@@ -237,11 +237,11 @@ mod tests {
     fn a_silent_emulator_is_reported_as_a_hang() {
         let t0 = Instant::now();
         let mut w = Watchdog::with_limits(300, 120, t0);
-        w.saw("TRINO_STEP:event", t0 + Duration::from_secs(10));
+        w.saw("TRINO_STEP:scene-a", t0 + Duration::from_secs(10));
         assert_eq!(w.expired(t0 + Duration::from_secs(129)), None);
         let why = w.expired(t0 + Duration::from_secs(130)).unwrap();
         assert!(why.starts_with("stalled"), "{why}");
-        assert!(why.contains("after step `event`"), "{why}");
+        assert!(why.contains("after step `scene-a`"), "{why}");
     }
 
     #[test]

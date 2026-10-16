@@ -59,14 +59,14 @@ PC's GPU vertex path is not in this round.
 
   | Scene | GPU path off | on |
   |---|---|---|
-  | busy event | 19.6 ms CPU, 30 fps | 5.3 ms, 60 fps |
-  | event with a panel | 20.0 ms, 30 fps | 5.3 ms, 60 fps |
+  | busy scene | 19.6 ms CPU, 30 fps | 5.3 ms, 60 fps |
+  | the same with a UI panel open | 20.0 ms, 30 fps | 5.3 ms, 60 fps |
   | panning | 17.3 ms, 30 fps | 4.5 ms, 60 fps |
-  | the largest venue | 50.2 ms frame (20 fps) | 16.7 ms (60 fps) |
+  | its largest scene | 50.2 ms frame (20 fps) | 16.7 ms (60 fps) |
 
   Every 3D draw there took the GPU path (no CPU T&L triangles left); its 3DS goldens
   moved by mean 0.5–0.95/255.
-- The first version stalled the largest venue: every GPU draw re-emitted the program,
+- The first version stalled that largest scene: every GPU draw re-emitted the program,
   attributes, texenv and citro2d's state (`C2D_Prepare`), and a few hundred draws
   overran citro3d's command buffer. The shim now enters the T&L state once per run of
   GPU draws (`trino_tnl_leave` before any other draw) and allocates 4× the default
@@ -108,9 +108,13 @@ PC's GPU vertex path is not in this round.
   `rdpq_detach_show`) and the RSP/RDP status registers.
   - A console-side hang now names itself.
   - A stall with no `TRINO_STALL` line is the emulator.
-- The external project's "hang" reproduced only on a machine under heavy memory
-  pressure (load 35, 7 GB of swap). There the run was still printing, at a third of its
-  usual speed: the fixed 300 s total timeout ran out.
+- What this round saw:
+  - One 300 s timeout in the external project's N64 runs. It came while the machine was
+    under heavy memory pressure (load 35, 7 GB of swap).
+  - A rerun of the same ROM under that load was caught still printing, about three times
+    slower than usual.
+  - With the idle limit in place, a real stall did show up on the 3DS (§1's command
+    buffer). It was reported as `stalled: … after step X` within two minutes.
 
 ## Consequences
 

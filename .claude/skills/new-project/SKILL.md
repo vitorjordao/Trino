@@ -9,6 +9,9 @@ description: Scaffold a Trino game — an in-repo example crate (cargo xtask new
 cargo xtask new my-game                                     # examples/my-game, in the workspace
 cargo xtask new space-cat --standalone ~/games/space-cat     # engine via path deps
 cargo xtask new space-cat --standalone <dir> --git https://github.com/vitorjordao/Trino --rev <commit>
+cargo xtask new space-cat --standalone <dir> --template castle64   # start from a demo (blank|castle64|showcase)
+cargo xtask new                                              # asks for name, folder, template on stdin
+cargo xtask editor                                           # the editor's launcher can create one too
 ```
 
 - **In repo** (`templates/new-game/`): a game crate plus its own AGENTS.md. The
@@ -33,6 +36,44 @@ cargo xtask new space-cat --standalone <dir> --git https://github.com/vitorjorda
     - Outputs go to the project's `target/n64/<name>.z64` and `target/3ds/<name>.3dsx`.
     - A local engine checkout is required (a path dep, or an `engine/`
       submodule): the shims, target spec and Docker image live there.
+
+## Templates and the shared scaffolder (`crates/scaffold`)
+
+- **`trino-scaffold`** renders standalone projects. `cargo xtask new --standalone`
+  (`xtask/src/standalone.rs` only parses the arguments and runs the prompts) and the
+  editor's project launcher both call `trino_scaffold::scaffold`, so they write the
+  same files. The in-repo `new <name>` (`examples/<name>`) stays in xtask.
+- **`--template`** (needs `--standalone`):
+  - `blank`, the default, uses `templates/new-game/`.
+  - `castle64` and `showcase` copy `examples/<demo>/` as the game crate. The demo's
+    game type (`Castle64Game`, `ShowcaseGame`) becomes `<Camel>Game` and its crate
+    path becomes `<snake>::`. The package is renamed in the demo's own `Cargo.toml`,
+    which keeps features such as showcase's `hot-reload`.
+  - Nothing else is renamed. `include!("showcase_gen.rs")` and
+    `BlobId::from_path("scenes/showcase")` name files and manifest keys, not the
+    crate.
+  - A demo also brings the engine's whole `assets/` (the manifest replaces the
+    template's), `scenes/` and `prefabs/` (`[scenes.*]` paths are relative to the
+    project root).
+- **Hosts call `{{game_new}}`.** It is the constructor expression: `x::XGame::new`,
+  or `|_| x::XGame::new()` for showcase, whose `new` takes no screen. Templates under
+  `templates/standalone/` must use it, never a hardcoded `::new`.
+- **Interactive `new`** (no name): `standalone::prompt` reads name, folder and
+  template from any `BufRead`.
+  - It asks again after a wrong answer.
+  - The folder defaults to the engine checkout's parent directory.
+  - When stdin ends early (a closed or null stdin, as under `Command::output()`), it
+    prints the old usage error. Scripts see the same failure as before the prompts
+    existed.
+- **Gates:**
+  - `crates/scaffold` unit tests render each template and assert the renames and the
+    host text. The console hosts are cfg'd to their targets, so a host
+    `cargo check` never sees their bodies.
+  - `xtask/tests/standalone.rs::every_template_compiles_out_of_the_box` (ignored)
+    runs `cargo check --all-targets` on the game crate and PC host of each template.
+  - All of them scaffold under `target/test-projects/`, never the system temp dir.
+- **Demo-based projects run as they are.** A castle64 copy and a showcase copy each
+  ran the 30-frame PC smoke (`TRINO_RUN_OK`).
 
 ## Console projects (`trino.toml`, ADR 0008)
 

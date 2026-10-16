@@ -469,6 +469,65 @@ fn new_standalone_scaffolds_a_complete_project() {
     }
 }
 
+/// `--template` copies a demo; `new` with no name asks on stdin (name,
+/// folder, template) and builds the same project.
+#[test]
+fn new_from_a_demo_template_and_from_the_prompts() {
+    let base = root().join("target/test-projects");
+    std::fs::create_dir_all(&base).unwrap();
+    let tmp = tempfile::tempdir_in(&base).unwrap();
+    let dir = tmp.path().join("castle-copy");
+    let d = dir.to_str().unwrap();
+    let o = xtask(&[
+        "new",
+        "castle-copy",
+        "--standalone",
+        d,
+        "--template",
+        "castle64",
+    ]);
+    assert!(o.status.success(), "{}", stderr(&o));
+    assert!(stdout(&o).contains("(castle64 template)"), "{}", stdout(&o));
+    let lib = std::fs::read_to_string(dir.join("game/src/lib.rs")).unwrap();
+    assert!(
+        lib.contains("pub struct CastleCopyGame"),
+        "renamed game type"
+    );
+    assert!(dir.join("game/src/bot.rs").is_file());
+    assert_fails_with(
+        &xtask(&["new", "x", "--standalone", d, "--template", "doom"]),
+        "unknown template `doom`",
+    );
+    assert_fails_with(
+        &xtask(&["new", "x", "--template", "showcase"]),
+        "--template needs --standalone",
+    );
+
+    let asked = tmp.path().join("asked");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .arg("new")
+        .current_dir(root())
+        .env_remove("TRINO_PROJECT")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    {
+        use std::io::Write;
+        let mut stdin = child.stdin.take().unwrap();
+        writeln!(stdin, "Not Valid\nmy-game\n{}\nshowcase", asked.display()).unwrap();
+    }
+    let o = child.wait_with_output().unwrap();
+    assert!(o.status.success(), "{}{}", stdout(&o), stderr(&o));
+    let out = stdout(&o);
+    assert!(out.contains("not a valid crate name"), "{out}");
+    assert!(out.contains("(showcase template)"), "{out}");
+    assert!(asked.join("game/src/showcase_gen.rs").is_file());
+    let pc = std::fs::read_to_string(asked.join("pc/src/main.rs")).unwrap();
+    assert!(pc.contains("|_| my_game::MyGameGame::new()"), "{pc}");
+}
+
 /// The `path = "..."` of `trino-core` in a workspace manifest.
 fn trino_dep_path(ws: &str) -> PathBuf {
     let line = ws

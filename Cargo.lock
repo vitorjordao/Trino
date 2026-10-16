@@ -3929,6 +3929,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "trino-scaffold"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
+]
+
+[[package]]
 name = "trino-scene"
 version = "0.1.0"
 dependencies = [
@@ -5013,6 +5020,7 @@ dependencies = [
  "trino-core",
  "trino-game-api",
  "trino-platform-pc",
+ "trino-scaffold",
  "trino-scene",
 ]
 

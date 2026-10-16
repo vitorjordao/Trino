@@ -66,8 +66,11 @@ commands:
                        / pinned Azahar AppImage into target/emulators)
   new <name>           scaffold a new game crate under examples/
   new <name> --standalone <dir> [--git <url> [--rev <r>|--branch <b>]]
+      [--template blank|castle64|showcase]
                        a game project outside this repo (own workspace,
-                       PC host, assets); engine via path (default) or git
+                       PC host, assets); engine via path (default) or git;
+                       the game starts blank or as a copy of a demo
+  new                  the same, asking for name, folder and template
   gen-assets           regenerate the sample master assets (dev utility)
   scene check [file..] validate scenes/prefabs/materials (text-first loop)
   scene export [--platform pc|n64|3ds] <scene.ron> <out.rs>
@@ -246,12 +249,18 @@ fn main() -> ExitCode {
             let rest: Vec<&str> = args.iter().skip(2).map(String::as_str).collect();
             new_game(name, &rest)
         }
+        // No name: ask on stdin (name, folder, template). A closed or empty
+        // stdin prints the usage, as before the prompts existed.
         (Some("new"), None) => {
-            eprintln!(
-                "xtask: usage: cargo xtask new <kebab-case-name> \
-                 [--standalone <dir> [--git <url> [--rev <r> | --branch <b>]]]"
-            );
-            ExitCode::FAILURE
+            let root = repo_root();
+            let stdin = std::io::stdin();
+            match standalone::prompt(&mut stdin.lock(), &mut std::io::stdout(), &root) {
+                Some((names, s)) => make_standalone(&root, &names, &s),
+                None => {
+                    eprintln!("\n{NEW_USAGE}");
+                    ExitCode::FAILURE
+                }
+            }
         }
 
         (Some("help") | None, _) => {
@@ -999,18 +1008,9 @@ fn cargo(args: &[&str], envs: &[(&str, &str)]) -> ExitCode {
 fn new_game(name: &str, rest: &[&str]) -> ExitCode {
     let root = repo_root();
     match standalone::parse_args(rest, &root) {
-        Ok(Some((dir, source))) => {
-            let made = Names::new(name)
-                .and_then(|names| standalone::scaffold(&root, &dir, &names, &source));
-            return match made {
-                Ok(()) => {
-                    println!("created standalone project {}", dir.display());
-                    println!("\nnext steps:");
-                    println!("  cd {}", dir.display());
-                    println!("  cargo run -p {name}-pc   # play (TRINO_SIM=3ds for the 3DS look)");
-                    println!("  cargo test               # the game's unit tests");
-                    ExitCode::SUCCESS
-                }
+        Ok(Some(s)) => {
+            return match Names::new(name) {
+                Ok(names) => make_standalone(&root, &names, &s),
                 Err(e) => {
                     eprintln!("xtask: {e}");
                     ExitCode::FAILURE
@@ -1040,49 +1040,37 @@ fn new_game(name: &str, rest: &[&str]) -> ExitCode {
     }
 }
 
-/// A game name in the forms templates need.
-pub struct Names {
-    pub kebab: String,
-    pub snake: String,
-    pub camel: String,
-}
+const NEW_USAGE: &str = "xtask: usage: cargo xtask new <kebab-case-name> \
+     [--standalone <dir> [--git <url> [--rev <r> | --branch <b>]] \
+     [--template blank|castle64|showcase]]";
 
-impl Names {
-    pub fn new(name: &str) -> Result<Names, String> {
-        let valid = !name.is_empty()
-            && name
-                .chars()
-                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-            && name.chars().next().is_some_and(|c| c.is_ascii_lowercase());
-        if !valid {
-            return Err(format!(
-                "`{name}` is not a valid crate name — use kebab-case (e.g. my-game)"
-            ));
+/// Render a standalone project and print what to do next.
+fn make_standalone(root: &Path, names: &Names, s: &standalone::Standalone) -> ExitCode {
+    match standalone::scaffold(root, &s.dir, names, &s.source, s.template) {
+        Ok(()) => {
+            let dir = s.dir.display();
+            println!(
+                "created standalone project {dir} ({} template)",
+                s.template.key()
+            );
+            println!("\nnext steps:");
+            println!("  cd {dir}");
+            println!(
+                "  cargo run -p {}-pc   # play (TRINO_SIM=3ds for the 3DS look)",
+                names.kebab
+            );
+            println!("  cargo test               # the game's unit tests");
+            println!("  cargo trino editor       # open it in the editor");
+            ExitCode::SUCCESS
         }
-        let camel = name
-            .split('-')
-            .map(|w| {
-                let mut c = w.chars();
-                match c.next() {
-                    Some(f) => f.to_ascii_uppercase().to_string() + c.as_str(),
-                    None => String::new(),
-                }
-            })
-            .collect();
-        Ok(Names {
-            kebab: name.to_string(),
-            snake: name.replace('-', "_"),
-            camel,
-        })
-    }
-
-    /// Fill `{{name}}`, `{{name_snake}}` and `{{name_camel}}`.
-    pub fn render(&self, text: &str) -> String {
-        text.replace("{{name}}", &self.kebab)
-            .replace("{{name_snake}}", &self.snake)
-            .replace("{{name_camel}}", &self.camel)
+        Err(e) => {
+            eprintln!("xtask: {e}");
+            ExitCode::FAILURE
+        }
     }
 }
+
+pub use trino_scaffold::Names;
 
 /// Testable core of `new_game`: render the template into `<root>/examples/<name>`.
 fn scaffold_game(root: &Path, name: &str) -> Result<PathBuf, String> {
@@ -1101,16 +1089,7 @@ fn scaffold_game(root: &Path, name: &str) -> Result<PathBuf, String> {
     Ok(dest)
 }
 
-/// Template files that would confuse tools in place (a placeholder-laden
-/// `Cargo.toml` breaks cargo's git-source scan of this repo) carry a
-/// `.tmpl` suffix, dropped when rendered.
-fn template_target_name(name: &std::ffi::OsStr) -> std::ffi::OsString {
-    let s = name.to_string_lossy();
-    match s.strip_suffix(".tmpl") {
-        Some(base) => base.into(),
-        None => name.to_owned(),
-    }
-}
+use trino_scaffold::template_target_name;
 
 fn copy_template(
     from: &Path,

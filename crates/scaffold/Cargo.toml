@@ -1,0 +1,14 @@
+[package]
+name = "trino-scaffold"
+description = "Project scaffolding shared by `cargo xtask new` and the editor's project launcher: standalone projects from a blank template or an engine demo."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+# std only: the xtask and the editor both link it.
+[dependencies]
+
+[dev-dependencies]
+tempfile = { workspace = true }

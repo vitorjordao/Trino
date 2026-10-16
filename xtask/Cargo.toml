@@ -11,6 +11,8 @@ publish = false
 trino-core = { workspace = true }
 trino-asset-pipeline = { workspace = true, features = ["watch"] }
 trino-scene = { workspace = true }
+# `new --standalone` (shared with the editor's project launcher).
+trino-scaffold = { workspace = true }
 notify = { workspace = true }
 notify-debouncer-full = { workspace = true }
 png = { workspace = true }

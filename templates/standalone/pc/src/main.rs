@@ -5,5 +5,5 @@ fn main() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
     let mut config = trino_runner_pc::RunConfig::new("{{name}}", root);
     config.save_name = "{{name}}".into();
-    trino_runner_pc::run(config, {{name_snake}}::{{name_camel}}Game::new);
+    trino_runner_pc::run(config, {{game_new}});
 }

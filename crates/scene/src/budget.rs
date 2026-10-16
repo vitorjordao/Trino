@@ -1,7 +1,8 @@
 //! What a scene costs each platform from a camera: the draws, the software
 //! T&L work behind them (what the PC renderer counts), on the N64 the split
-//! between the RSP fast path and the CPU — with the rule each CPU draw
-//! failed — the impostors' billboards, the LOD picks, and the draws sent
+//! between the RSP fast path and the CPU, on the 3DS between the PICA200's
+//! vertex T&L and the CPU — with the rule each CPU draw failed — the
+//! impostors' billboards, the LOD picks, and the draws sent
 //! for nothing (a whole mesh outside the view, still paid for).
 //!
 //! The editor's Game view HUD and `cargo xtask scene budget` call
@@ -10,8 +11,8 @@
 
 use trino_core::perf::{FRAME_30FPS_US, N64_COST};
 use trino_core::render3d::{
-    Camera3, Light, Mesh, RspReject, TnlContext, TnlScratch, TnlStats, rsp_check, rsp_mesh_check,
-    tessellate_with,
+    Camera3, GpuReject, Light, Mesh, RspReject, TnlContext, TnlScratch, TnlStats, gpu_check,
+    gpu_mesh_check, rsp_check, rsp_mesh_check, tessellate_with,
 };
 use trino_core::{LodPick, ModelId, Vec2};
 
@@ -25,7 +26,8 @@ pub struct FrameBudget {
     pub draws: u32,
     /// The software T&L work of every mesh draw (the PC renderer's counters).
     pub tnl: TnlStats,
-    /// N64: the draws (and their work) left on the CPU path.
+    /// N64 and 3DS: the draws (and their work) left on the CPU path (PC:
+    /// every draw).
     pub cpu_draws: u32,
     pub cpu_tnl: TnlStats,
     /// N64: draws on the RSP fast path and their source triangles.
@@ -33,6 +35,12 @@ pub struct FrameBudget {
     pub rsp_tris: u32,
     /// N64: why the other draws stay on the CPU, most common first.
     pub off_rsp: Vec<(RspReject, u32)>,
+    /// 3DS: draws on the GPU T&L path and their source triangles.
+    pub gpu_draws: u32,
+    pub gpu_tris: u32,
+    /// 3DS: why the other draws stay on the CPU, most common first
+    /// (`Offscreen` draws are culled there, not drawn).
+    pub off_gpu: Vec<(GpuReject, u32)>,
     /// Impostor billboards.
     pub billboards: u32,
     /// What entities with LOD levels drew: full, light, impostor, culled.
@@ -99,6 +107,7 @@ pub fn estimate<'m>(
     };
     let visible = resolved.visible_cells(camera, screen);
     let mut reasons: Vec<(RspReject, u32)> = Vec::new();
+    let mut gpu_reasons: Vec<(GpuReject, u32)> = Vec::new();
     for item in &resolved.items {
         if !trino_core::vis::in_view(item.cell, visible) {
             continue;
@@ -138,6 +147,22 @@ pub fn estimate<'m>(
         if stats.culled > 0 {
             b.wasted.push(item.name.clone());
         }
+        if target == Target::N3ds {
+            match gpu_mesh_check(&mesh)
+                .and_then(|_| gpu_check(&ctx, &mesh, &item.matrix, &item.params))
+            {
+                Ok(_) => {
+                    b.gpu_draws += 1;
+                    b.gpu_tris += (mesh.index_count / 3) as u32;
+                }
+                Err(r) => {
+                    b.cpu_draws += 1;
+                    b.cpu_tnl.add(&stats);
+                    count(&mut gpu_reasons, r);
+                }
+            }
+            continue;
+        }
         if target != Target::N64 {
             continue;
         }
@@ -150,18 +175,25 @@ pub fn estimate<'m>(
             Err(r) => {
                 b.cpu_draws += 1;
                 b.cpu_tnl.add(&stats);
-                match reasons.iter_mut().find(|(k, _)| *k == r) {
-                    Some((_, n)) => *n += 1,
-                    None => reasons.push((r, 1)),
-                }
+                count(&mut reasons, r);
             }
         }
     }
-    if target != Target::N64 {
+    if target == Target::Pc {
         b.cpu_draws = b.draws;
         b.cpu_tnl = b.tnl;
     }
     reasons.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    gpu_reasons.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
     b.off_rsp = reasons;
+    b.off_gpu = gpu_reasons;
     b
+}
+
+/// One more draw for `reason`.
+fn count<R: PartialEq>(reasons: &mut Vec<(R, u32)>, reason: R) {
+    match reasons.iter_mut().find(|(k, _)| *k == reason) {
+        Some((_, n)) => *n += 1,
+        None => reasons.push((reason, 1)),
+    }
 }

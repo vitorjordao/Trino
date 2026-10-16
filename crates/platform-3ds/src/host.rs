@@ -17,6 +17,7 @@
 use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::String;
+use trino_core::render3d::GpuReject;
 use trino_core::{Game, Input, InputState, Vec2};
 
 use crate::{N3dsAssets, N3dsAudio, N3dsInput, N3dsPlatform, N3dsRenderer, runtime};
@@ -40,10 +41,16 @@ pub struct FrameReport {
     /// Per frame: the ARM11's own time (frame time minus `begin_frame`'s
     /// wait for the previous frame's GPU work and vsync).
     pub cpu_us: u32,
-    /// Per frame: model draws the GPU transformed and lit (ADR 0012), and
+    /// Per frame: model draws the GPU transformed and lit (ADR 0012) and
+    /// their source triangles, the model draws left on the CPU T&L, and
     /// the triangles the CPU T&L handed over.
     pub gpu_draws: u32,
+    pub gpu_tris: u32,
+    pub cpu_draws: u32,
     pub cpu_tris: u32,
+    /// Per frame: why the CPU draws stayed off the GPU
+    /// ([`GpuReject::index`]; `Offscreen` ones are culled, not drawn).
+    pub off_gpu: [u32; GpuReject::COUNT],
 }
 
 impl N3dsHost {
@@ -102,7 +109,8 @@ impl N3dsHost {
     ) -> FrameReport {
         let mut total: u64 = 0;
         let mut cpu: u64 = 0;
-        let (mut gpu_draws, mut cpu_tris) = (0u64, 0u64);
+        let (mut gpu_draws, mut gpu_tris, mut cpu_draws, mut cpu_tris) = (0u64, 0u64, 0u64, 0u64);
+        let mut off = [0u64; GpuReject::COUNT];
         let mut max = 0u32;
         let _ = self.renderer.take_wait_us();
         for i in 0..frames {
@@ -112,9 +120,15 @@ impl N3dsHost {
             let us = runtime::now_us().wrapping_sub(t0);
             total += us as u64;
             cpu += us.saturating_sub(self.renderer.take_wait_us()) as u64;
-            let tnl = trino_core::Renderer::stats(&self.renderer).tnl;
+            let stats = trino_core::Renderer::stats(&self.renderer);
+            let tnl = stats.tnl;
             gpu_draws += tnl.gpu_draws as u64;
+            gpu_tris += tnl.gpu_tris as u64;
+            cpu_draws += stats.models.saturating_sub(tnl.gpu_draws) as u64;
             cpu_tris += tnl.emitted as u64;
+            for (o, n) in off.iter_mut().zip(self.renderer.gpu_rejects()) {
+                *o += n as u64;
+            }
             max = max.max(us);
         }
         let per = |v: u64| v.checked_div(frames as u64).unwrap_or(0) as u32;
@@ -124,15 +138,30 @@ impl N3dsHost {
             max_us: max,
             cpu_us: per(cpu),
             gpu_draws: per(gpu_draws),
+            gpu_tris: per(gpu_tris),
+            cpu_draws: per(cpu_draws),
             cpu_tris: per(cpu_tris),
+            // Rounded up: a reason seen at all shows.
+            off_gpu: off.map(|n| n.div_ceil(frames.max(1) as u64) as u32),
         }
     }
 
-    /// Print a [`FrameReport`] as a `TRINO_FRAME:` line (reported only).
+    /// Print a [`FrameReport`] as a `TRINO_FRAME:` line (reported only),
+    /// with `off_gpu=` listing why the CPU draws stayed off the GPU, most
+    /// common first.
     pub fn report_frames(&self, scene: &str, r: &FrameReport) {
         runtime::log(&format!(
-            "TRINO_FRAME:{scene} avg_us={} max_us={} frames={} cpu_us={} gpu_draws={} cpu_tris={}\n",
-            r.avg_us, r.max_us, r.frames, r.cpu_us, r.gpu_draws, r.cpu_tris
+            "TRINO_FRAME:{scene} avg_us={} max_us={} frames={} cpu_us={} gpu_draws={} gpu_tris={} \
+             cpu_draws={} cpu_tris={} off_gpu={}\n",
+            r.avg_us,
+            r.max_us,
+            r.frames,
+            r.cpu_us,
+            r.gpu_draws,
+            r.gpu_tris,
+            r.cpu_draws,
+            r.cpu_tris,
+            off_gpu_list(&r.off_gpu)
         ));
     }
 
@@ -177,6 +206,27 @@ impl N3dsHost {
         }
         host.run(&mut *game);
     }
+}
+
+/// `Reason:n,…` by count (most first), `-` when nothing stayed off.
+pub fn off_gpu_list(off: &[u32; GpuReject::COUNT]) -> String {
+    let mut by: alloc::vec::Vec<(u32, GpuReject)> = GpuReject::ALL
+        .iter()
+        .map(|&r| (off[r.index()], r))
+        .filter(|&(n, _)| n > 0)
+        .collect();
+    by.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+    if by.is_empty() {
+        return String::from("-");
+    }
+    let mut s = String::new();
+    for (i, (n, r)) in by.iter().enumerate() {
+        if i > 0 {
+            s.push(',');
+        }
+        s.push_str(&format!("{r:?}:{n}"));
+    }
+    s
 }
 
 /// Build the game straight into a box from a frame popped right after.

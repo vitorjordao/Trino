@@ -278,9 +278,14 @@ fn budget(root: &Path, args: &[&str]) -> ExitCode {
                     .iter()
                     .map(|(r, n)| format!("{{\"reason\":{},\"draws\":{n}}}", q(r.label())))
                     .collect();
+                let gpu_reasons: Vec<String> = b
+                    .off_gpu
+                    .iter()
+                    .map(|(r, n)| format!("{{\"reason\":{},\"draws\":{n}}}", q(r.label())))
+                    .collect();
                 let wasted: Vec<String> = b.wasted.iter().map(|w| q(w)).collect();
                 format!(
-                    "{{\"platform\":\"{}\",\"draws\":{},\"tris\":{},\"verts\":{},\"culled\":{},\"billboards\":{},\"lod\":{:?},\"rsp_draws\":{},\"rsp_tris\":{},\"cpu_draws\":{},\"off_rsp\":[{}],\"wasted\":[{}],\"n64_cpu_us\":{},\"n64_rsp_us\":{},\"n64_frame_us\":{}}}",
+                    "{{\"platform\":\"{}\",\"draws\":{},\"tris\":{},\"verts\":{},\"culled\":{},\"billboards\":{},\"lod\":{:?},\"rsp_draws\":{},\"rsp_tris\":{},\"cpu_draws\":{},\"off_rsp\":[{}],\"gpu_draws\":{},\"gpu_tris\":{},\"off_gpu\":[{}],\"wasted\":[{}],\"n64_cpu_us\":{},\"n64_rsp_us\":{},\"n64_frame_us\":{}}}",
                     b.target.key(),
                     b.draws,
                     b.tris(),
@@ -292,6 +297,9 @@ fn budget(root: &Path, args: &[&str]) -> ExitCode {
                     b.rsp_tris,
                     b.cpu_draws,
                     reasons.join(","),
+                    b.gpu_draws,
+                    b.gpu_tris,
+                    gpu_reasons.join(","),
                     wasted.join(","),
                     b.n64_cpu_us(),
                     b.n64_rsp_us(),
@@ -329,6 +337,20 @@ fn budget(root: &Path, args: &[&str]) -> ExitCode {
                     .map(|(r, n)| format!("{n} {}", r.label()))
                     .collect();
                 println!("       off the RSP fast path: {}", r.join(", "));
+            }
+        }
+        if b.target == Target::N3ds {
+            println!(
+                "       3DS: GPU T&L on {} draws ({} tris), CPU on {} draws",
+                b.gpu_draws, b.gpu_tris, b.cpu_draws
+            );
+            if !b.off_gpu.is_empty() {
+                let r: Vec<String> = b
+                    .off_gpu
+                    .iter()
+                    .map(|(r, n)| format!("{n} {}", r.label()))
+                    .collect();
+                println!("       off the GPU path: {}", r.join(", "));
             }
         }
         if !b.wasted.is_empty() {

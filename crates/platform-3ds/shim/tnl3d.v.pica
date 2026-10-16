@@ -5,6 +5,8 @@
 ;   position = mvp * p
 ;   color    = min(1, color / 255 * tint * (ambient + diffuse * max(0, n . l))
 ;                     + emissive)
+;   f        = clamp(fogrow . p, 0, 1)          (distance fog by view depth)
+;   color    = color + (fogcolor - color) * f   (alpha kept)
 ; `mvp` (built by the N3DS renderer and the shim) takes a model-space point
 ; to the screen's clip space, already multiplied by the view depth: the
 ; divide gives the CPU path's pixel and per-vertex depth band back, and the
@@ -20,6 +22,8 @@
 .fvec diffuse
 .fvec tint
 .fvec emissive
+.fvec fogrow
+.fvec fogcolor
 
 .constf consts(0.0, 1.0, 0.00392156862745098, 0.0)
 
@@ -52,6 +56,15 @@
     mul r3, r2, r3
     add r3.xyz, emissive.xyz, r3.xyz
     min r3, consts.yyyy, r3
+
+    ; fog: f = clamp(fogrow . p, 0, 1); color += (fogcolor - color) * f.
+    ; Without fog the row is zero, so f = 0.
+    dp4 r4.x, fogrow, r0
+    max r4.x, consts.x, r4.x
+    min r4.x, consts.y, r4.x
+    add r5.xyz, fogcolor.xyz, -r3.xyz
+    mul r5.xyz, r4.xxx, r5.xyz
+    add r3.xyz, r3.xyz, r5.xyz
     mov outclr, r3
     end
 .end

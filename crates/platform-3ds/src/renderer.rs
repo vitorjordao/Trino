@@ -9,8 +9,9 @@ use alloc::vec::Vec;
 use core::ffi::c_void;
 
 use trino_core::render3d::{
-    Camera3, DEFAULT_LIGHT, Light, Mesh, MeshLayout, ScreenTri, TexBind, TnlContext, TnlScratch,
-    TnlStats, gpu_check_mv, gpu_mesh_check, gpu_screen_matrix, painter_index, painter_key,
+    Camera3, DEFAULT_LIGHT, GpuReject, Light, Mesh, MeshLayout, ScreenTri, TexBind, TnlContext,
+    TnlScratch, TnlStats, gpu_check_mv, gpu_mesh_check, gpu_screen_matrix, painter_index,
+    painter_key,
 };
 use trino_core::text::{BitmapFont, GlyphIndex};
 use trino_core::{
@@ -27,6 +28,10 @@ const SCREEN: Vec2 = Vec2::new(400.0, 240.0);
 const BOTTOM: Vec2 = Vec2::new(320.0, 240.0);
 /// Bytes per vertex of a GPU T&L mesh (the shim's `TNL_VERTEX_BYTES`).
 const GPU_VERTEX_BYTES: usize = 28;
+/// Floats of uniforms per GPU T&L draw (`trino_gpu_draw`): the screen
+/// matrix, then light, ambient, diffuse, tint, emissive, fog row and fog
+/// color.
+const GPU_UNIFORM_FLOATS: usize = 44;
 
 struct SpriteEntry {
     ptr: *mut c_void,
@@ -62,6 +67,12 @@ pub struct N3dsRenderer {
     /// The GPU T&L copies of the meshes that can take that path
     /// ([`gpu_mesh_check`]): shim handle and triangle count.
     gpu_meshes: BTreeMap<u32, (*mut c_void, u32)>,
+    /// Why each other mesh can never take it.
+    gpu_mesh_rejects: BTreeMap<u32, GpuReject>,
+    /// This frame's and the last frame's model draws left on the CPU, by
+    /// reason ([`GpuReject::index`]).
+    gpu_rejects: [u16; GpuReject::COUNT],
+    last_gpu_rejects: [u16; GpuReject::COUNT],
     /// GPU T&L on (the default); off draws everything through the CPU's
     /// software T&L (`set_gpu_tnl`, the self-test's reference).
     gpu_on: bool,
@@ -107,6 +118,9 @@ impl N3dsRenderer {
             sprites: BTreeMap::new(),
             meshes: BTreeMap::new(),
             gpu_meshes: BTreeMap::new(),
+            gpu_mesh_rejects: BTreeMap::new(),
+            gpu_rejects: [0; GpuReject::COUNT],
+            last_gpu_rejects: [0; GpuReject::COUNT],
             gpu_on: true,
             wait_us: 0,
             fonts: BTreeMap::new(),
@@ -242,7 +256,8 @@ impl N3dsRenderer {
         let Ok(mesh) = Mesh::from_tmdl(&tmdl) else {
             return;
         };
-        if gpu_mesh_check(&mesh).is_ok() {
+        let check = gpu_mesh_check(&mesh);
+        if check.is_ok() {
             let mut verts = Vec::with_capacity(mesh.vertex_count * GPU_VERTEX_BYTES);
             for i in 0..mesh.vertex_count {
                 let (p, n, c) = (mesh.position(i), mesh.normal(i), mesh.color(i));
@@ -260,10 +275,20 @@ impl N3dsRenderer {
                     idx.len() as u32,
                 )
             };
-            if !ptr.is_null() {
+            if ptr.is_null() {
+                // Linear memory is short: this mesh keeps the CPU path.
+                crate::runtime::log(&alloc::format!(
+                    "TRINO_WARN: no linear memory for the GPU copy of model {id:08x} \
+                     ({} vertices): CPU T&L\n",
+                    mesh.vertex_count
+                ));
+                self.gpu_mesh_rejects.insert(id, GpuReject::NoGpuMemory);
+            } else {
                 self.gpu_meshes
                     .insert(id, (ptr, (mesh.index_count / 3) as u32));
             }
+        } else if let Err(r) = check {
+            self.gpu_mesh_rejects.insert(id, r);
         }
         let layout = mesh.layout(&tmdl);
         self.meshes.insert(id, (tmdl, layout));
@@ -283,24 +308,37 @@ impl N3dsRenderer {
         self.gpu_on = on;
     }
 
+    /// The last frame's model draws left on the CPU T&L path, by reason
+    /// ([`GpuReject::index`]; all zero with the GPU path off).
+    pub fn gpu_rejects(&self) -> [u16; GpuReject::COUNT] {
+        self.last_gpu_rejects
+    }
+
     /// The GPU T&L draw of `model` if this draw may take that path: the
-    /// shim's mesh, its triangles, the uniforms and the cull flag.
+    /// shim's mesh, its triangles, the uniforms and the cull flag; else why
+    /// not.
     fn gpu_plan(
         &self,
         model: ModelId,
         mesh: &Mesh,
         matrix: &Mat34,
         params: &ModelParams,
-    ) -> Option<(*mut c_void, u32, [f32; 36], u32)> {
-        let &(ptr, tris) = self.gpu_meshes.get(&model.0)?;
+    ) -> Result<(*mut c_void, u32, [f32; GPU_UNIFORM_FLOATS], u32), GpuReject> {
+        let Some(&(ptr, tris)) = self.gpu_meshes.get(&model.0) else {
+            return Err(self
+                .gpu_mesh_rejects
+                .get(&model.0)
+                .copied()
+                .unwrap_or(GpuReject::Empty));
+        };
         let mv = self.tnl_ctx.projection().0.mul(matrix);
-        let d = gpu_check_mv(&self.tnl_ctx, mesh, matrix, &mv, params).ok()?;
+        let d = gpu_check_mv(&self.tnl_ctx, mesh, matrix, &mv, params)?;
         let s = gpu_screen_matrix(&self.tnl_ctx, &mv);
         // The CPU path's depth band (`band_depth`) of the z-buffer depth
         // row, times the view depth like the rest.
         let (b, k) = (TRI_DEPTH_BASE + TRI_DEPTH_RANGE, TRI_DEPTH_RANGE);
         let band: [f32; 4] = core::array::from_fn(|j| b * s[3][j] - k * s[2][j]);
-        let mut u = [0.0f32; 36];
+        let mut u = [0.0f32; GPU_UNIFORM_FLOATS];
         for (r, row) in [s[0], s[1], band, s[3]].iter().enumerate() {
             u[r * 4..r * 4 + 4].copy_from_slice(row);
         }
@@ -309,7 +347,9 @@ impl N3dsRenderer {
         u[24..27].copy_from_slice(&d.diffuse);
         u[28..32].copy_from_slice(&d.tint);
         u[32..35].copy_from_slice(&d.emissive);
-        Some((ptr, tris, u, d.cull_back as u32))
+        u[36..40].copy_from_slice(&d.fog);
+        u[40..43].copy_from_slice(&d.fog_color);
+        Ok((ptr, tris, u, d.cull_back as u32))
     }
 
     /// Register a font's glyph table (its atlas is the sprite `id`).
@@ -508,9 +548,18 @@ impl Renderer for N3dsRenderer {
         };
         let mesh = Mesh::from_layout(tmdl, layout);
         self.frame_stats.models += 1;
-        if self.gpu_on
-            && let Some((ptr, tris, u, cull)) = self.gpu_plan(model, &mesh, matrix, params)
-        {
+        let plan = match self.gpu_on {
+            true => match self.gpu_plan(model, &mesh, matrix, params) {
+                Ok(plan) => Some(plan),
+                Err(r) => {
+                    let n = &mut self.gpu_rejects[r.index()];
+                    *n = n.saturating_add(1);
+                    None
+                }
+            },
+            false => None,
+        };
+        if let Some((ptr, tris, u, cull)) = plan {
             unsafe { ffi::trino_gpu_draw(ptr, u.as_ptr(), cull) };
             self.frame_stats.tris += tris;
             self.frame_stats.tnl.add(&TnlStats {
@@ -569,6 +618,7 @@ impl Renderer for N3dsRenderer {
     fn end_frame(&mut self) {
         self.flush_model_batch();
         self.last_stats = self.frame_stats;
+        self.last_gpu_rejects = core::mem::take(&mut self.gpu_rejects);
         unsafe { ffi::trino_frame_end() }
     }
 

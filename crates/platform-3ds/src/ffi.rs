@@ -72,7 +72,8 @@ unsafe extern "C" {
     pub fn trino_gpu_mesh(verts: *const u8, nverts: u32, idx: *const u16, nidx: u32)
     -> *mut c_void;
     /// Draw a `trino_gpu_mesh`: `u` = the 4x4 screen matrix (16 floats, rows)
-    /// then light, ambient, diffuse, tint, emissive (4 floats each); flags
+    /// then light, ambient, diffuse, tint, emissive, fog row, fog color (4
+    /// floats each, 44 in all); flags
     /// bit 0 = cull back faces.
     pub fn trino_gpu_draw(mesh: *mut c_void, u: *const f32, flags: u32);
 

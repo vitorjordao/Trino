@@ -76,7 +76,7 @@ static int s_vfull_warned = 0;
 // drawn with per-draw uniforms (trino_gpu_mesh / trino_gpu_draw).
 static DVLB_s* s_tnl3d_dvlb = NULL;
 static shaderProgram_s s_tnl3d;
-#define TNL_UNIFORMS 6
+#define TNL_UNIFORMS 8
 static int s_tnl3d_unif[TNL_UNIFORMS];
 // The GPU holds the T&L program's state (program, attributes, texenv):
 // consecutive trino_gpu_draw calls only change uniforms and the vertex
@@ -108,7 +108,8 @@ static void trino_tex3d_init(void)
     s_tnl3d_dvlb = DVLB_ParseFile((u32*)tnl3d_shbin, tnl3d_shbin_size);
     shaderProgramInit(&s_tnl3d);
     shaderProgramSetVsh(&s_tnl3d, &s_tnl3d_dvlb->DVLE[0]);
-    const char* names[TNL_UNIFORMS] = {"mvp", "lightdir", "ambient", "diffuse", "tint", "emissive"};
+    const char* names[TNL_UNIFORMS] = {
+        "mvp", "lightdir", "ambient", "diffuse", "tint", "emissive", "fogrow", "fogcolor"};
     for (int i = 0; i < TNL_UNIFORMS; i++) {
         s_tnl3d_unif[i] = shaderInstanceGetUniformLocation(s_tnl3d.vertexShader, names[i]);
     }
@@ -485,7 +486,7 @@ void trino_3d_draw(const float* v, uint32_t count, void* sheet, uint32_t clamp)
 // ---------------------------------------------------------------------------
 // GPU T&L for static meshes (the draws trino_core::render3d::gpu_check
 // accepts): the PICA200's vertex units transform, light and project; the
-// CPU only writes 36 floats of uniforms per draw.
+// CPU only writes 44 floats of uniforms per draw.
 
 #define TNL_VERTEX_BYTES 28 // x, y, z, nx, ny, nz (floats), r, g, b, a (bytes)
 
@@ -520,7 +521,8 @@ void* trino_gpu_mesh(const void* verts, uint32_t nverts, const uint16_t* idx, ui
 
 // Draw a trino_gpu_mesh. `u`: the 4x4 matrix to the screen's pixels and
 // per-vertex depth band, times the view depth (16 floats, rows), then
-// light direction, ambient, diffuse, tint and emissive (4 floats each).
+// light direction, ambient, diffuse, tint, emissive, the fog row and the
+// fog color (4 floats each).
 // The shim puts the current screen's tilt projection in front of the
 // matrix. flags bit 0: cull back faces.
 void trino_gpu_draw(void* mesh, const float* u, uint32_t flags)

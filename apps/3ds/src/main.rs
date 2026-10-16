@@ -62,28 +62,24 @@ mod n3ds {
         }
     }
 
-    /// The GPU T&L path against the CPU's software T&L on the castle64 hub
-    /// (fresh game, fixed camera): the same frame drawn both ways must
-    /// match within the GPU's float rounding, and the GPU must have drawn
-    /// most of it. A wrong cull winding or projection shows here as whole
-    /// faces of the wrong color.
-    fn gpu_tnl_check(
+    /// The GPU T&L path against the CPU's software T&L on one frame (fixed
+    /// state, drawn by `draw`): the same frame drawn both ways must match
+    /// within the GPU's float rounding, and the GPU must have drawn some of
+    /// it. A wrong cull winding, projection or fog shows here as whole faces
+    /// of the wrong color.
+    fn gpu_tnl_frame(
         renderer: &mut N3dsRenderer,
-        audio: &mut N3dsAudio,
+        scene: &str,
+        draw: &mut dyn FnMut(&mut N3dsRenderer),
     ) -> Result<(), alloc::string::String> {
-        let hub = &castle64::perf::SCENES[0];
-        let mut g = alloc::boxed::Box::new(castle64::perf::scene_game(
-            hub,
-            Vec2::new(400.0, 240.0),
-            audio,
-        ));
         let mut grab = |renderer: &mut N3dsRenderer, gpu: bool| {
             renderer.set_gpu_tnl(gpu);
             // The LCD is double-buffered: draw the probed frame a few times.
             for _ in 0..3 {
-                g.render(renderer);
+                draw(renderer);
             }
-            let stats = trino_core::Renderer::stats(renderer).tnl;
+            let stats = trino_core::Renderer::stats(renderer);
+            let off = renderer.gpu_rejects().map(u32::from);
             let mut px = alloc::vec::Vec::with_capacity(40 * 24);
             for y in 0..24 {
                 for x in 0..40 {
@@ -92,10 +88,11 @@ mod n3ds {
                     px.push(c);
                 }
             }
-            (stats, px)
+            (stats, off, px)
         };
-        let (cpu_stats, cpu) = grab(renderer, false);
-        let (gpu_stats, gpu) = grab(renderer, true);
+        let (cpu_stats, _, cpu) = grab(renderer, false);
+        let (gpu_stats, off_gpu, gpu) = grab(renderer, true);
+        renderer.set_gpu_tnl(true);
         let diff = |a: trino_core::Color, b: trino_core::Color| {
             let d = |x: u8, y: u8| (x as i32 - y as i32).unsigned_abs();
             d(a.r, b.r).max(d(a.g, b.g)).max(d(a.b, b.b))
@@ -107,31 +104,53 @@ mod n3ds {
             .count();
         let total: u32 = cpu.iter().zip(&gpu).map(|(a, b)| diff(*a, *b)).sum();
         runtime::log(&format!(
-            "TRINO_STEP:gpu tnl draws={} of {} gpu_tris={} cpu_draws_reference={} differ={off}/{} mean={:.2}\n",
-            gpu_stats.gpu_draws,
-            gpu_stats.gpu_draws + gpu_stats.rsp_draws + (cpu_stats.gpu_draws),
-            gpu_stats.gpu_tris,
-            cpu_stats.gpu_draws,
+            "TRINO_STEP:gpu tnl {scene} draws={} of {} gpu_tris={} off_gpu={} cpu_draws_reference={} differ={off}/{} mean={:.2}\n",
+            gpu_stats.tnl.gpu_draws,
+            gpu_stats.models,
+            gpu_stats.tnl.gpu_tris,
+            trino_platform_3ds::off_gpu_list(&off_gpu),
+            cpu_stats.tnl.gpu_draws,
             cpu.len(),
             total as f32 / cpu.len() as f32,
         ));
-        if cpu_stats.gpu_draws != 0 {
+        if cpu_stats.tnl.gpu_draws != 0 {
             return Err(format!(
-                "{} GPU draws with the GPU path off",
-                cpu_stats.gpu_draws
+                "{scene}: {} GPU draws with the GPU path off",
+                cpu_stats.tnl.gpu_draws
             ));
         }
-        if gpu_stats.gpu_draws == 0 {
-            return Err("no draw took the GPU path".into());
+        if gpu_stats.tnl.gpu_draws == 0 {
+            return Err(format!("{scene}: no draw took the GPU path"));
         }
         // A few samples on silhouettes may flip (float24 vs f32 edges).
         if off * 50 > cpu.len() {
             return Err(format!(
-                "{off} of {} samples differ by more than 24",
+                "{scene}: {off} of {} samples differ by more than 24",
                 cpu.len()
             ));
         }
         Ok(())
+    }
+
+    /// [`gpu_tnl_frame`] on the castle64 hub (fresh game, fixed camera:
+    /// white light, no fog) and on the showcase's first frame (its
+    /// authored look: colored light and distance fog, which the vertex
+    /// shader applies per vertex).
+    fn gpu_tnl_check(
+        renderer: &mut N3dsRenderer,
+        audio: &mut N3dsAudio,
+    ) -> Result<(), alloc::string::String> {
+        let hub = &castle64::perf::SCENES[0];
+        let mut g = alloc::boxed::Box::new(castle64::perf::scene_game(
+            hub,
+            Vec2::new(400.0, 240.0),
+            audio,
+        ));
+        gpu_tnl_frame(renderer, "hub", &mut |r| g.render(r))?;
+        drop(g);
+        let mut demo =
+            alloc::boxed::Box::new(showcase::ShowcaseGame::with_screen(Vec2::new(400.0, 240.0)));
+        gpu_tnl_frame(renderer, "showcase-fog", &mut |r| demo.render(r))
     }
 
     /// Deterministic self-check exercising 3D physics + render + assets,

@@ -44,6 +44,7 @@ fn shader_vertex(
     let lit = (n.x * d.light.x + n.y * d.light.y + n.z * d.light.z).max(0.0);
     let c = mesh.color(i);
     let base = [c.r, c.g, c.b, c.a];
+    let f = (d.fog[0] * p.x + d.fog[1] * p.y + d.fog[2] * p.z + d.fog[3]).clamp(0.0, 1.0);
     let color = core::array::from_fn(|k| {
         let v = base[k] as f32 / 255.0 * d.tint[k];
         let v = if k < 3 {
@@ -51,7 +52,13 @@ fn shader_vertex(
         } else {
             v
         };
-        v.min(1.0) * 255.0
+        let v = v.min(1.0);
+        let v = if k < 3 {
+            v + (d.fog_color[k] - v) * f
+        } else {
+            v
+        };
+        v * 255.0
     });
     (screen, depth, color)
 }
@@ -64,6 +71,10 @@ fn cpu_tris(ctx: &TnlContext, mesh: &Mesh, model: &Mat34, params: &ModelParams) 
 }
 
 /// Every CPU vertex has a shader vertex at the same pixel, depth and color.
+/// Fogged draws split their triangles by depth on the CPU: the new
+/// vertices lie inside the mesh's triangles, where the GPU interpolates
+/// instead, so only the mesh's own vertices are compared (and every one
+/// the CPU kept must be found).
 fn assert_same(light: &Light, model: Mat34, params: ModelParams) {
     let blob = bounded_cube();
     let mesh = Mesh::from_tmdl(&blob).unwrap();
@@ -71,9 +82,12 @@ fn assert_same(light: &Light, model: Mat34, params: ModelParams) {
     let ctx = TnlContext::new(&camera(), light, SCREEN);
     let tris = cpu_tris(&ctx, &mesh, &model, &params);
     assert!(!tris.is_empty());
+    // The CPU truncates to a byte after lighting and again after the fog.
+    let tol = if light.fog.enabled() { 2.0 } else { 1.0 };
     let gpu: Vec<_> = (0..mesh.vertex_count)
         .map(|i| shader_vertex(&ctx, &mesh, &model, &params, i))
         .collect();
+    let mut matched = 0;
     for t in &tris {
         for k in 0..3 {
             let (pt, z, c) = (t.pts[k], t.z[k], t.colors[k]);
@@ -81,17 +95,23 @@ fn assert_same(light: &Light, model: Mat34, params: ModelParams) {
                 .iter()
                 .filter(|(p, ..)| (p.x - pt.x).abs() < 1e-2 && (p.y - pt.y).abs() < 1e-2)
                 .collect();
+            if near.is_empty() && light.fog.enabled() {
+                continue;
+            }
             assert!(!near.is_empty(), "no shader vertex at {pt:?}");
             let ok = near.iter().any(|(_, gz, gc)| {
                 (gz - z).abs() < 1e-5
                     && [c.r, c.g, c.b, c.a]
                         .iter()
                         .zip(gc)
-                        .all(|(&cpu, &g)| (cpu as f32 - g).abs() <= 1.0)
+                        .all(|(&cpu, &g)| (cpu as f32 - g).abs() <= tol)
             });
             assert!(ok, "vertex at {pt:?}: cpu z {z} {c:?}, shader {near:?}");
+            matched += 1;
         }
     }
+    // A front-facing cube corner joins 3 faces of 2 triangles each.
+    assert!(matched >= 12, "only {matched} vertices compared");
 }
 
 #[test]
@@ -115,12 +135,24 @@ fn the_shader_constants_reproduce_the_cpu_path() {
         tint: Color::rgb(255, 128, 64),
         ..ModelParams::DEFAULT
     };
+    // The cube spans view depths ~5.5-8: fog from 5 to 9 reaches every
+    // strength but full, and from 2 to 6 it saturates the far half (the
+    // clamp).
+    let fogged = |near: f32, far: f32, base: &Light| Light {
+        fog: render3d::Fog {
+            color: Color::rgb(132, 178, 226),
+            near,
+            far,
+        },
+        ..*base
+    };
+    let (fog_mid, fog_full) = (fogged(5.0, 9.0, &DEFAULT_LIGHT), fogged(2.0, 6.0, &colored));
     for (rot, s, at) in [
         (Vec3::ZERO, 1.0, Vec3::ZERO),
         (Vec3::new(0.3, 0.9, -0.2), 1.5, Vec3::new(0.4, -0.2, 1.0)),
         (Vec3::new(0.0, 2.1, 0.0), 0.5, Vec3::new(-1.0, 0.5, -2.0)),
     ] {
-        for light in [&DEFAULT_LIGHT, &colored] {
+        for light in [&DEFAULT_LIGHT, &colored, &fog_mid, &fog_full] {
             for params in [ModelParams::DEFAULT, tinted, unlit] {
                 assert_same(light, model(rot, s, at), params);
             }
@@ -180,11 +212,21 @@ fn the_gpu_path_refuses_what_needs_the_cpu() {
         },
         ..DEFAULT_LIGHT
     };
+    // Fog is the shader's (by view depth, per vertex).
     let fogged = TnlContext::new(&camera(), &fog, SCREEN);
+    let f = gpu_check(&fogged, &mesh, &at(Vec3::ZERO), &d).unwrap();
+    assert!(f.fog != [0.0; 4] && f.fog_color == [0.0; 3]);
     assert_eq!(
-        gpu_check(&fogged, &mesh, &at(Vec3::ZERO), &d).err(),
-        Some(GpuReject::Fog)
+        gpu_check(&ctx, &mesh, &at(Vec3::ZERO), &d).unwrap().fog,
+        [0.0; 4]
     );
+    // A texture on a mesh without UVs draws untextured on the CPU path
+    // too (`Mesh::texture_for`): the GPU takes it.
+    let tex_param = ModelParams {
+        texture: Some(trino_core::SpriteId(7)),
+        ..d
+    };
+    assert_eq!(check(at(Vec3::ZERO), tex_param), None);
     // Meshes: textured and skinned ones stay on the CPU.
     let tex = textured_cube(trino_core::SpriteId(7));
     let tex = Mesh::from_tmdl(&tex).unwrap();

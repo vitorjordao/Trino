@@ -10,10 +10,10 @@
 //!
 //! The CPU path stays the reference: the GPU path draws what
 //! `tessellate` would (same transform, the same lighting formula in
-//! floats instead of bytes, the same per-vertex depth `1 - NEAR / z`),
-//! and draws it refuses keep the CPU path (fog, flat shading, translucency,
-//! textures, skeletons, palettes, local lights and anything crossing the
-//! near plane).
+//! floats instead of bytes, the same per-vertex depth `1 - NEAR / z`, the
+//! same distance fog by view depth), and draws it refuses keep the CPU path
+//! (flat shading, translucency, textured meshes, skeletons, palettes, local
+//! lights and anything crossing the near plane).
 
 use super::{Mesh, NEAR, TnlContext, model_space_light};
 use crate::math::Vec3;
@@ -36,10 +36,8 @@ pub enum GpuReject {
     /// More vertices than 16-bit indices address.
     TooManyVertices,
     // The draw.
-    Fog,
     /// A tint with alpha below 255.
     Translucent,
-    Textured,
     /// A palette on a mesh with color slots.
     Palette,
     /// `Shading::Flat`.
@@ -55,9 +53,41 @@ pub enum GpuReject {
     NonUniformScale,
     /// A local light reaches it: the per-vertex lights are the CPU's.
     LocalLight,
+    /// The backend found no memory for the GPU copy of the mesh (the 3DS's
+    /// linear heap): reported by the renderer, never by [`gpu_check`].
+    NoGpuMemory,
 }
 
+// `ALL` ends with the last variant: a new reason must join it.
+const _: () = assert!(GpuReject::NoGpuMemory as usize + 1 == GpuReject::COUNT);
+
 impl GpuReject {
+    /// Every reason, in [`GpuReject::index`] order.
+    pub const ALL: [GpuReject; GpuReject::COUNT] = [
+        GpuReject::Skinned,
+        GpuReject::TexturedMesh,
+        GpuReject::TranslucentMesh,
+        GpuReject::Empty,
+        GpuReject::TooManyVertices,
+        GpuReject::Translucent,
+        GpuReject::Palette,
+        GpuReject::Flat,
+        GpuReject::NoBounds,
+        GpuReject::Offscreen,
+        GpuReject::NearPlane,
+        GpuReject::NonUniformScale,
+        GpuReject::LocalLight,
+        GpuReject::NoGpuMemory,
+    ];
+
+    /// Reasons in all ([`GpuReject::ALL`]'s length).
+    pub const COUNT: usize = 14;
+
+    /// The reason's slot in a per-reason histogram (`[u32; COUNT]`).
+    pub const fn index(self) -> usize {
+        self as usize
+    }
+
     /// A few words for tools (budget reports).
     pub const fn label(self) -> &'static str {
         match self {
@@ -66,9 +96,7 @@ impl GpuReject {
             GpuReject::TranslucentMesh => "translucent vertices",
             GpuReject::Empty => "empty mesh",
             GpuReject::TooManyVertices => "too many vertices",
-            GpuReject::Fog => "fog",
             GpuReject::Translucent => "translucent tint",
-            GpuReject::Textured => "texture",
             GpuReject::Palette => "palette",
             GpuReject::Flat => "flat shading",
             GpuReject::NoBounds => "no bounds",
@@ -76,14 +104,15 @@ impl GpuReject {
             GpuReject::NearPlane => "crosses the near plane",
             GpuReject::NonUniformScale => "sheared or uneven scale",
             GpuReject::LocalLight => "local light",
+            GpuReject::NoGpuMemory => "no GPU memory",
         }
     }
 }
 
 /// The constants of one GPU T&L draw ([`gpu_check`]). A vertex's color is
-/// `color / 255 · tint · (ambient + diffuse · max(0, n · light)) +
-/// emissive`, clamped to 1: [`tessellate`](super::tessellate)'s formula in
-/// floats.
+/// `c = min(1, color / 255 · tint · (ambient + diffuse · max(0, n · light))
+/// + emissive)`, then `c + (fog_color - c) · clamp(fog · p, 0, 1)` (alpha
+/// kept): [`tessellate`](super::tessellate)'s formula in floats.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct GpuDraw {
     /// Unit vector toward the light in model space (zero for `Unlit`).
@@ -96,6 +125,12 @@ pub struct GpuDraw {
     pub tint: [f32; 4],
     /// The emissive color, 0..1.
     pub emissive: [f32; 3],
+    /// The fog factor as a row on the model-space point `(x, y, z, 1)`:
+    /// `(depth - near) / (far - near)` with `depth` the view depth, before
+    /// the clamp to 0..1. All zero without fog.
+    pub fog: [f32; 4],
+    /// The fog color, 0..1.
+    pub fog_color: [f32; 3],
     /// Cull back faces (`false` for double-sided draws).
     pub cull_back: bool,
 }
@@ -142,14 +177,10 @@ pub fn gpu_check_mv(
     mv: &Mat34,
     params: &ModelParams,
 ) -> Result<GpuDraw, GpuReject> {
-    if ctx.fog_on {
-        return Err(GpuReject::Fog);
-    }
+    // No rule for `params.texture`: the mesh has no UVs (`gpu_mesh_check`),
+    // so the CPU path draws it untextured too (`Mesh::texture_for`).
     if params.tint.a < 255 {
         return Err(GpuReject::Translucent);
-    }
-    if params.texture.is_some() {
-        return Err(GpuReject::Textured);
     }
     if params.palette.is_some() && mesh.has_slots() {
         return Err(GpuReject::Palette);
@@ -197,12 +228,24 @@ pub fn gpu_check_mv(
             }
         }
     };
+    let (fog, fog_color) = match ctx.fog_on {
+        true => {
+            let f = ctx.light.fog;
+            let s = 1.0 / (f.far - f.near);
+            let mut row: [f32; 4] = core::array::from_fn(|j| mv.m[2][j] * s);
+            row[3] -= f.near * s;
+            (row, [k(f.color.r), k(f.color.g), k(f.color.b)])
+        }
+        false => ([0.0; 4], [0.0; 3]),
+    };
     Ok(GpuDraw {
         light,
         ambient,
         diffuse,
         tint: [k(t.r), k(t.g), k(t.b), k(t.a)],
         emissive: [k(e.r), k(e.g), k(e.b)],
+        fog,
+        fog_color,
         cull_back: !params.double_sided,
     })
 }
@@ -224,4 +267,16 @@ pub fn gpu_screen_matrix(ctx: &TnlContext, mv: &Mat34) -> [[f32; 4]; 4] {
     let mut depth = rz;
     depth[3] -= NEAR;
     [comb(f, rx, c.x, rz), comb(-f, ry, c.y, rz), depth, rz]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GpuReject;
+
+    #[test]
+    fn every_reason_has_its_own_histogram_slot() {
+        for (i, r) in GpuReject::ALL.iter().enumerate() {
+            assert_eq!(r.index(), i, "{r:?}");
+        }
+    }
 }

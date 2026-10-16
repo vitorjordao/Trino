@@ -4,6 +4,7 @@
 extern crate std;
 use std::vec::Vec;
 
+use super::engine::MAX_SUBS;
 use super::engine::*;
 use super::team::{self, CLUBS};
 
@@ -16,6 +17,16 @@ pub fn setup(home: usize, away: usize, seed: u32, half_ticks: u32) -> Setup {
             ((c * 16 + k) as u16, p.number, p.attrs)
         }),
         morale: 50,
+        bench: core::array::from_fn(|b| {
+            let p = team::generate_player(c, 11 + b);
+            (
+                (c * 16 + 11 + b) as u16,
+                p.number,
+                p.attrs,
+                p.pos == team::Pos::Gk,
+            )
+        }),
+        bench_n: 5,
     };
     Setup {
         sides: [side(home), side(away)],
@@ -335,6 +346,7 @@ fn event_index(k: EventKind) -> usize {
         EventKind::HalfTime => 14,
         EventKind::FullTime => 15,
         EventKind::Tackle => 16,
+        EventKind::Substitution => 0,
     }
 }
 
@@ -370,3 +382,67 @@ fn a_full_match_is_deterministic() {
     };
     assert_eq!(run(), run());
 }
+
+/// Substitutions: the AI changes tired players after half an hour, at
+/// most three, never during play; a human's request goes through at the
+/// next dead ball; a keeper is only replaced by a keeper.
+#[test]
+fn substitutions_follow_the_rules() {
+    let mut m = Match::new(&setup(0, 1, 5, 60 * 60 * 2));
+    let mut subs_seen = [0u32; 2];
+    let mut n = 0;
+    let mut seen = 0;
+    while !m.finished() && n < 60 * 60 * 8 {
+        let mut pads = [Pad::default(); 2];
+        // Side 0 is AI here; force fatigue on one player to trigger it.
+        if n == 60 * 60 * 2 + 600 {
+            m.players[5].stamina = super::fx::Fx::milli(200);
+        }
+        let before = m.phase;
+        m.step(pads);
+        pads[0] = Pad::default();
+        for (_, e) in m.events_since(seen) {
+            if e.kind == EventKind::Substitution {
+                subs_seen[e.side as usize] += 1;
+                // Only at a dead ball: the phase before was not open play
+                // (a restart begins from Dead/Goal/HalfTime).
+                assert_ne!(before, Phase::Play, "substitution during play");
+                assert_ne!(
+                    e.player as usize % SIDE_N,
+                    0,
+                    "no keeper change without a red card"
+                );
+            }
+        }
+        seen = m.event_seq;
+        n += 1;
+    }
+    assert!(
+        subs_seen[0] >= 1,
+        "the tired player was replaced: {subs_seen:?}"
+    );
+    assert!(subs_seen.iter().all(|&k| k <= MAX_SUBS as u32));
+    assert_eq!(m.subs[0] as u32, subs_seen[0]);
+    let p = &m.players[5];
+    assert!(p.db != 5, "a new man in slot 5");
+
+    // A human request.
+    let mut s = setup(2, 3, 9, 60 * 60);
+    s.humans = [true, false];
+    let mut m = Match::new(&s);
+    let mut pad = Pad::default();
+    pad.sub = true;
+    let mut subbed = false;
+    for t in 0..60 * 60 * 2 {
+        let p = if t == 120 { pad } else { Pad::default() };
+        m.step([p, Pad::default()]);
+        if m.subs[0] == 1 {
+            subbed = true;
+            break;
+        }
+    }
+    assert!(subbed, "the human's substitution happened at a dead ball");
+    assert_eq!(m.bench_n[0], 4);
+}
+
+const SIDE_N: usize = 11;

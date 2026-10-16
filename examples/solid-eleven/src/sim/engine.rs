@@ -111,6 +111,8 @@ pub struct Player {
     pub target: V2,
     /// Sprinting this tick.
     pub sprint: bool,
+    /// The tick of his last header (0 = none): the animation's cue.
+    pub headed: u32,
 }
 
 /// One tick's input for a human side, already in pitch directions.
@@ -132,6 +134,9 @@ pub struct Pad {
     pub pick: u8,
     /// Switch to formation `formation - 1` (0 = none).
     pub formation: u8,
+    /// Ask for a substitution: the most tired outfield player goes off at
+    /// the next dead ball.
+    pub sub: bool,
 }
 
 /// A side as the match sees it.
@@ -144,7 +149,15 @@ pub struct SideSetup {
     pub players: [(u16, u8, [u8; ATTRS]); SIDE],
     /// 0..100; 50 = neutral.
     pub morale: u8,
+    /// The substitutes (`bench_n` of them): database index, number,
+    /// attributes, and whether he is a keeper.
+    pub bench: [(u16, u8, [u8; ATTRS], bool); BENCH],
+    pub bench_n: u8,
 }
+
+/// Substitutes on a bench, and substitutions allowed per side.
+pub const BENCH: usize = 5;
+pub const MAX_SUBS: u8 = 3;
 
 /// Everything a match starts from.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -207,7 +220,9 @@ pub struct Stats {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum EventKind {
     KickOff,
-    Goal { own_goal: bool },
+    Goal {
+        own_goal: bool,
+    },
     Shot,
     Save,
     Post,
@@ -223,6 +238,8 @@ pub enum EventKind {
     HalfTime,
     FullTime,
     Tackle,
+    /// `player` (the slot) was replaced.
+    Substitution,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -333,6 +350,12 @@ pub struct Match {
     pub(super) traj: super::ai::Traj,
     /// Morale (0..100) per side, as set up.
     pub morale: [u8; 2],
+    /// Each side's substitutes left on the bench, and changes made.
+    pub bench: [[(u16, u8, [u8; ATTRS], bool); BENCH]; 2],
+    pub bench_n: [u8; 2],
+    pub subs: [u8; 2],
+    /// A human asked for a substitution (made at the next dead ball).
+    pub sub_wanted: [bool; 2],
     /// Tuning counters (tests only).
     #[cfg(test)]
     pub diag: Diag,
@@ -373,6 +396,7 @@ impl Match {
             goals: 0,
             target: V2::ZERO,
             sprint: false,
+            headed: 0,
         };
         let mut players = [blank; N];
         for s in 0..2 {
@@ -444,6 +468,13 @@ impl Match {
             plan_tick: [0; N],
             traj: super::ai::Traj::default(),
             morale: [setup.sides[0].morale, setup.sides[1].morale],
+            bench: [setup.sides[0].bench, setup.sides[1].bench],
+            bench_n: [
+                setup.sides[0].bench_n.min(BENCH as u8),
+                setup.sides[1].bench_n.min(BENCH as u8),
+            ],
+            subs: [0; 2],
+            sub_wanted: [false; 2],
             #[cfg(test)]
             diag: Diag::default(),
         };
@@ -560,6 +591,11 @@ impl Match {
     /// human plays it.
     pub fn step(&mut self, pads: [Pad; 2]) {
         self.tick += 1;
+        for s in 0..2 {
+            if self.humans[s] {
+                self.human_orders(s, &pads[s]);
+            }
+        }
         match self.phase {
             Phase::FullTime => {
                 self.idle_players();
@@ -1510,6 +1546,7 @@ impl Match {
             if !self.touch(i) {
                 return;
             }
+            self.players[i].headed = self.tick;
             let attack = self.attacks(s);
             let p = self.players[i].pos;
             let own_half = self.ax(s, p) < Fx::ZERO;
@@ -1712,6 +1749,10 @@ impl Match {
 
     /// Start walking everyone into place for `r`.
     pub(super) fn begin_restart(&mut self, r: Restart) {
+        // Substitutions happen while the ball is dead.
+        for side in 0..2 {
+            self.consider_sub(side);
+        }
         self.restart = r;
         self.phase = Phase::Setup { t: 0 };
         self.owner = None;
@@ -1744,6 +1785,73 @@ impl Match {
         if r.kind == RestartKind::KickOff {
             self.log(EventKind::KickOff, r.team as usize, self.taker);
         }
+    }
+
+    /// The side's substitution, if one is due: a human asked for one, or
+    /// (the AI) after half an hour a player is spent. The most tired
+    /// outfield player goes off for the bench player best suited to his
+    /// role; a keeper is only ever replaced by a keeper.
+    fn consider_sub(&mut self, s: usize) {
+        if self.subs[s] >= MAX_SUBS || self.bench_n[s] == 0 {
+            self.sub_wanted[s] = false;
+            return;
+        }
+        let late = self.half == 2 || self.clock * 3 > self.half_ticks * 2;
+        let ai_wants = !self.humans[s] && late;
+        if !(self.sub_wanted[s] || ai_wants) {
+            return;
+        }
+        let mut tired: Option<(usize, Fx)> = None;
+        for i in s * SIDE + 1..s * SIDE + SIDE {
+            let p = &self.players[i];
+            if p.off || i == self.owner.map_or(N, |o| o as usize) {
+                continue;
+            }
+            if tired.is_none_or(|(_, st)| p.stamina < st) {
+                tired = Some((i, p.stamina));
+            }
+        }
+        let Some((i, stamina)) = tired else {
+            return;
+        };
+        if !self.sub_wanted[s] && stamina > Fx::milli(450) {
+            return;
+        }
+        self.sub_wanted[s] = false;
+        // The best outfield bench player for the role.
+        let role = self.players[i].role;
+        let want = |a: &[u8; ATTRS]| -> u32 {
+            let w = match role {
+                Role::Cb | Role::Fb => [2, 0, 0, 1, 1, 4],
+                Role::Dm | Role::Cm | Role::Am => [1, 2, 1, 3, 2, 1],
+                _ => [3, 2, 4, 1, 1, 0],
+            };
+            (0..ATTRS).map(|k| a[k] as u32 * w[k]).sum()
+        };
+        let n = self.bench_n[s] as usize;
+        let Some(b) = (0..n)
+            .filter(|&b| !self.bench[s][b].3)
+            .max_by_key(|&b| (want(&self.bench[s][b].2), BENCH - b))
+        else {
+            return;
+        };
+        let (db, number, attrs, _) = self.bench[s][b];
+        // Off the bench for good (no return in football).
+        self.bench[s][b] = self.bench[s][n - 1];
+        self.bench_n[s] -= 1;
+        self.subs[s] += 1;
+        let p = &mut self.players[i];
+        p.db = db;
+        p.number = number;
+        let morale = (self.morale[s] as i32 - 50) / 10;
+        for k in 0..ATTRS {
+            p.attrs[k] = (attrs[k] as i32 + morale).clamp(1, 99) as u8;
+        }
+        p.stamina = Fx::ONE;
+        p.yellow = 0;
+        p.goals = 0;
+        p.act = Act::Free;
+        self.log(EventKind::Substitution, s, i as u8);
     }
 
     fn setup_players(&mut self) {
@@ -1835,7 +1943,13 @@ impl Match {
 
     // ------------------------------------------------------------ humans
 
-    fn human_tick(&mut self, s: usize, pad: &Pad, cmds: &mut [Option<Cmd>; N]) {
+    /// The bench-and-touch-screen part of a human's pad (any phase): a
+    /// substitution request, a formation change, picking the controlled
+    /// player.
+    fn human_orders(&mut self, s: usize, pad: &Pad) {
+        if pad.sub {
+            self.sub_wanted[s] = true;
+        }
         if pad.formation > 0 {
             self.tactics[s].formation = (pad.formation - 1) % team::FORMATIONS.len() as u8;
         }
@@ -1845,6 +1959,9 @@ impl Match {
                 self.active[s] = i as u8;
             }
         }
+    }
+
+    fn human_tick(&mut self, s: usize, pad: &Pad, cmds: &mut [Option<Cmd>; N]) {
         // Keep control on someone able.
         let a = self.active[s] as usize;
         if side_of(a) != s || self.players[a].off || self.players[a].role == Role::Gk {

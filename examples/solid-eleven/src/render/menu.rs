@@ -23,7 +23,7 @@ pub fn title(r: &mut dyn Renderer, looks: &[Look; 5], anims: &[AnimState], aspec
     r.set_camera(&cam.camera());
     r.set_light(&Sky::Night.light());
     let fr = Frustum::new(&cam, aspect);
-    draw_stadium(r, &fr, hifi);
+    draw_stadium(r, &fr, hifi, Sky::Night.tint());
     // The huddle, facing the camera and each other.
     let spots = [
         (8.6, 8.5, 0.2, 1.0),
@@ -39,7 +39,7 @@ pub fn title(r: &mut dyn Renderer, looks: &[Look; 5], anims: &[AnimState], aspec
         let detail = if hifi { Detail::Full } else { Detail::Near };
         let pose = anims[k].pose_masked(detail.mask());
         joint_matrices(&body, &pose, &mut j, detail.mask());
-        draw_body(r, &j, &looks[k], detail, hifi);
+        draw_body(r, &j, &looks[k], detail, hifi, Sky::Dusk.tint());
     }
 }
 
@@ -67,7 +67,7 @@ pub fn pedestal(
     r.set_camera(&cam.camera());
     r.set_light(&Sky::Dusk.light());
     let fr = Frustum::new(&cam, aspect);
-    draw_stadium(r, &fr, hifi);
+    draw_stadium(r, &fr, hifi, Sky::Night.tint());
     let (s, c) = (trino_core::math3d::sin(yaw), trino_core::math3d::cos(yaw));
     let base = Vec3::new(0.0, 0.0, 0.0);
     r.draw_model_matrix(
@@ -81,6 +81,6 @@ pub fn pedestal(
     let detail = if hifi { Detail::Full } else { Detail::Near };
     let pose = anim.pose_masked(detail.mask());
     joint_matrices(&body, &pose, &mut j, detail.mask());
-    draw_body(r, &j, look, detail, hifi);
+    draw_body(r, &j, look, detail, hifi, Color::WHITE);
     let _ = M_PEDESTAL;
 }

@@ -145,13 +145,14 @@ impl Session {
         prev: &InputState,
         audio: &mut dyn Audio,
         dt: f32,
-        touch: (u8, u8),
+        touch: (u8, u8, bool),
     ) {
         let dt = dt.clamp(0.0, 0.1);
         let can_kick = self.human_can_kick();
         let mut pad = self.controls.pad(input, prev, dt, can_kick);
         pad.pick = touch.0;
         pad.formation = touch.1;
+        pad.sub = touch.2;
         self.acc += dt;
         let mut ticks = 0;
         let mut first = true;
@@ -234,6 +235,7 @@ impl Session {
                     sound::play(audio, Sfx::Tap);
                     None
                 }
+                EventKind::Substitution => Some((S::Substitution, Some(e.side))),
             };
             // A card outranks the foul's restart banner.
             if let Some(b) = banner {

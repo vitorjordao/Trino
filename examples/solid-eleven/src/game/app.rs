@@ -165,6 +165,8 @@ pub struct SolidElevenGame {
     music: Option<bool>,
     /// Seconds since full time (the report follows).
     after_full_time: f32,
+    /// A substitution asked for from the pause menu.
+    sub_asked: bool,
 }
 
 impl SolidElevenGame {
@@ -205,6 +207,7 @@ impl SolidElevenGame {
             loaded: false,
             music: None,
             after_full_time: 0.0,
+            sub_asked: false,
         }
     }
 
@@ -351,9 +354,11 @@ impl SolidElevenGame {
         }
         // Bottom-screen taps: a stamina tile picks the player, the
         // formation box cycles the formation.
-        let mut touch = (0u8, 0u8);
+        let mut touch = (0u8, 0u8, core::mem::take(&mut self.sub_asked));
         if let Some(id) = self.hits.tapped(input, prev) {
-            if id == 100 {
+            if id == 101 {
+                touch.2 = true;
+            } else if id == 100 {
                 let side = s.human.unwrap_or(0);
                 touch.1 = (s.m.tactics[side].formation + 1) % FORMATIONS.len() as u8 + 1;
             } else if (id as usize) < SIDE {
@@ -370,7 +375,7 @@ impl SolidElevenGame {
     }
 
     fn pause_frame(&mut self, nav: &Nav, tap: Option<u8>, audio: &mut dyn Audio) {
-        menu::step(&mut self.cur.pause, 2, nav);
+        menu::step(&mut self.cur.pause, 3, nav);
         if let Some(id) = tap {
             self.cur.pause = id as usize;
         }
@@ -381,6 +386,10 @@ impl SolidElevenGame {
         if nav.confirm || tap.is_some() {
             sound::play(audio, Sfx::Click);
             if self.cur.pause == 0 {
+                self.scene = Scene::Match;
+            } else if self.cur.pause == 1 {
+                // The most tired player goes off at the next dead ball.
+                self.sub_asked = true;
                 self.scene = Scene::Match;
             } else {
                 // Quit: a career match counts as a 3-0 defeat.

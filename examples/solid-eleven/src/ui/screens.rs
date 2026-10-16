@@ -2020,7 +2020,7 @@ fn pause(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
         TextAlign::Center,
     );
     for (k, s) in [S::Resume, S::Quit].iter().enumerate() {
-        let rr = Rect::new(100.0, 94.0 + k as f32 * 26.0, 120.0, 20.0);
+        let rr = Rect::new(100.0, 86.0 + k as f32 * 26.0, 120.0, 20.0);
         let sel = g.cur.pause == k;
         ui.fill(
             rr,

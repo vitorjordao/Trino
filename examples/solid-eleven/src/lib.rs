@@ -53,6 +53,16 @@ pub fn quick_setup(
             ((c * team::SQUAD + k) as u16, p.number, p.attrs)
         }),
         morale: 50,
+        bench: core::array::from_fn(|b| {
+            let p = team::generate_player(c, SIDE + b);
+            (
+                (c * team::SQUAD + SIDE + b) as u16,
+                p.number,
+                p.attrs,
+                p.pos == team::Pos::Gk,
+            )
+        }),
+        bench_n: 5,
     };
     let a = side(home, &mut names, &mut skins, 0);
     let b = side(away, &mut names, &mut skins, 1);

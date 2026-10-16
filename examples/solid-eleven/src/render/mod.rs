@@ -18,15 +18,15 @@ pub mod menu;
 pub mod clips_gen;
 pub mod hud;
 
-use crate::sim::engine::{Act, Match, N, Phase, SIDE, side_of};
+use crate::sim::engine::{Act, EventKind, Match, N, Phase, SIDE, side_of};
 use crate::sim::fx::Fx;
 use crate::sim::pitch::{HALF_LEN, HALF_WID};
 use crate::sim::team::{CLUBS, Rgb, Role};
 use anim::{AnimState, Pose, body_matrix, joint, joint_matrices, mask};
 use clips_gen::{ClipName, JOINTS};
 use trino_core::{
-    Camera3, Color, DEFAULT_LIGHT, Light, LightTier, Mat34, Material, ModelId, ModelParams,
-    Renderer, Shading, Vec3,
+    BillboardParams, Camera3, Color, DEFAULT_LIGHT, Light, LightTier, Mat34, Material, ModelId,
+    ModelParams, Renderer, Shading, SpriteId, Vec2, Vec3,
 };
 
 /// World units per meter when drawn.
@@ -77,6 +77,7 @@ pub const M_ARROW: ModelId = model("models/se_arrow");
 pub const M_DASH: ModelId = model("models/se_dash");
 pub const M_DOT: ModelId = model("models/se_dot");
 pub const M_PEDESTAL: ModelId = model("models/se_pedestal");
+pub const M_BLOB: ModelId = model("models/se_blob");
 
 /// The 6 x 4 pitch tiles, row-major by x then z.
 pub const M_PITCH: [ModelId; 24] = [
@@ -181,6 +182,17 @@ impl Sky {
             Sky::Day => Color::rgb(126, 178, 232),
             Sky::Dusk => Color::rgb(232, 150, 110),
             Sky::Night => Color::rgb(16, 22, 48),
+        }
+    }
+
+    /// Multiplied into every draw's tint: dusk warms the scene, night
+    /// darkens and cools it. (A tint stays on the N64's RSP; a dimmed or
+    /// colored global light would not.)
+    pub fn tint(self) -> Color {
+        match self {
+            Sky::Day => Color::WHITE,
+            Sky::Dusk => Color::rgb(250, 214, 186),
+            Sky::Night => Color::rgb(150, 162, 205),
         }
     }
 
@@ -396,6 +408,12 @@ impl Frustum {
     }
 }
 
+/// `a × b` per channel (tints stacking, the engine's rounding).
+pub fn mul(a: Color, b: Color) -> Color {
+    let m = |x: u8, y: u8| ((x as u32 * y as u32 + 127) / 255) as u8;
+    Color::rgba(m(a.r, b.r), m(a.g, b.g), m(a.b, b.b), a.a)
+}
+
 pub(crate) fn plain(tint: Color) -> ModelParams {
     ModelParams::tinted(tint)
 }
@@ -430,14 +448,66 @@ pub fn draw_match(r: &mut dyn Renderer, m: &Match, v: &MatchView, aspect: f32) {
         r.set_wetness(0.55);
     }
     let fr = Frustum::new(&v.cam, aspect);
-    draw_stadium(r, &fr, hifi);
+    let env = v.sky.tint();
+    draw_stadium(r, &fr, hifi, env);
     draw_people(r, m, v, &fr, hifi);
     draw_ball(r, m, v, &fr, hifi);
     draw_guides(r, m, v);
+    if hifi {
+        draw_effects(r, v);
+    }
 }
 
-pub(crate) fn draw_stadium(r: &mut dyn Renderer, fr: &Frustum, hifi: bool) {
-    let grass = Color::WHITE;
+pub const S_RAIN: SpriteId = SpriteId::from_path("sprites/se_rain");
+pub const S_GLOW: SpriteId = SpriteId::from_path("sprites/se_glow");
+
+/// The PC tier's extras: rain falling around the camera's focus, and the
+/// floodlights' glow at night (billboards: z-tested, batched with the 3D).
+fn draw_effects(r: &mut dyn Renderer, v: &MatchView) {
+    if v.rain {
+        let f = v.cam.focus;
+        for i in 0..220u32 {
+            // A fixed scatter per drop (no RNG: visual only), each falling
+            // at 15 m/s through a 14 m column.
+            let hx = (i.wrapping_mul(2_654_435_761) >> 8) as f32 / 16_777_216.0;
+            let hz = (i.wrapping_mul(2_246_822_519) >> 8) as f32 / 16_777_216.0;
+            let ph = (i.wrapping_mul(3_266_489_917) >> 8) as f32 / 16_777_216.0;
+            let fall = v.time * 15.0 + ph * 14.0;
+            let y = 14.0 - (fall - (fall / 14.0) as i32 as f32 * 14.0);
+            let p = Vec3::new(f.x + (hx - 0.5) * 60.0, y, f.z + (hz - 0.5) * 44.0);
+            r.draw_billboard(
+                S_RAIN,
+                p * WORLD,
+                &BillboardParams {
+                    size: Vec2::new(0.025 * WORLD, 0.55 * WORLD),
+                    tint: Color::rgba(200, 215, 235, 150),
+                    ..BillboardParams::DEFAULT
+                },
+            );
+        }
+    }
+    if v.sky == Sky::Night {
+        for (x, z) in [
+            (-61.0f32, -44.0f32),
+            (61.0, -44.0),
+            (-61.0, 44.0),
+            (61.0, 44.0),
+        ] {
+            r.draw_billboard(
+                S_GLOW,
+                Vec3::new(x - x.signum() * 0.2, 29.0, z - z.signum() * 0.4) * WORLD,
+                &BillboardParams {
+                    size: Vec2::new(14.0 * WORLD, 14.0 * WORLD),
+                    tint: Color::rgba(255, 245, 210, 210),
+                    ..BillboardParams::DEFAULT
+                },
+            );
+        }
+    }
+}
+
+pub(crate) fn draw_stadium(r: &mut dyn Renderer, fr: &Frustum, hifi: bool, env: Color) {
+    let grass = env;
     for ix in 0..6 {
         for iz in 0..4 {
             let c = Vec3::new(
@@ -491,7 +561,7 @@ pub(crate) fn draw_stadium(r: &mut dyn Renderer, fr: &Frustum, hifi: bool) {
                     mdl,
                     &place(p, fx, fz, 1.0),
                     Material::VertexLit,
-                    &plain(Color::WHITE),
+                    &plain(env),
                 );
             }
         }
@@ -510,7 +580,7 @@ pub(crate) fn draw_stadium(r: &mut dyn Renderer, fr: &Frustum, hifi: bool) {
                     mdl,
                     &place(p, fx, fz, 1.0),
                     Material::VertexLit,
-                    &plain(Color::WHITE),
+                    &plain(env),
                 );
             }
         }
@@ -528,7 +598,7 @@ pub(crate) fn draw_stadium(r: &mut dyn Renderer, fr: &Frustum, hifi: bool) {
                 M_FLOOD,
                 &place(p, f.0, f.1, 1.0),
                 Material::VertexLit,
-                &plain(Color::WHITE),
+                &plain(env),
             );
         }
     }
@@ -541,7 +611,7 @@ pub(crate) fn draw_stadium(r: &mut dyn Renderer, fr: &Frustum, hifi: bool) {
                 mdl,
                 &place(p, fx, fz, 1.0),
                 Material::VertexLit,
-                &plain(Color::WHITE),
+                &plain(env),
             );
         }
         for z in [-HALF_WID.to_f32(), HALF_WID.to_f32()] {
@@ -551,7 +621,7 @@ pub(crate) fn draw_stadium(r: &mut dyn Renderer, fr: &Frustum, hifi: bool) {
                     M_FLAG,
                     &place(q, 0.0, 1.0, 1.0),
                     Material::VertexLit,
-                    &plain(Color::WHITE),
+                    &plain(env),
                 );
             }
         }
@@ -582,7 +652,7 @@ fn draw_people(r: &mut dyn Renderer, m: &Match, v: &MatchView, fr: &Frustum, hif
         let m = detail.mask();
         let pose = v.anims[i].pose_masked(m);
         joint_matrices(&body, &pose, &mut joints, m);
-        draw_body(r, &joints, &v.looks[i], detail, hifi);
+        draw_body(r, &joints, &v.looks[i], detail, hifi, v.sky.tint());
     }
     // Officials: the referee in black, linesmen in yellow with flags.
     let ref_look = Look {
@@ -621,6 +691,7 @@ fn draw_people(r: &mut dyn Renderer, m: &Match, v: &MatchView, fr: &Frustum, hif
             if k == 0 { &ref_look } else { &lm_look },
             detail,
             hifi,
+            v.sky.tint(),
         );
         if k > 0 {
             let hand = if hifi {
@@ -652,8 +723,9 @@ pub(crate) fn draw_body(
     look: &Look,
     detail: Detail,
     hifi: bool,
+    env: Color,
 ) {
-    let skin = plain(look.skin);
+    let skin = plain(mul(look.skin, env));
     let (head, torso, shorts) = if hifi {
         (M_HEAD_HD, M_TORSO_HD, M_SHORTS_HD)
     } else {
@@ -664,13 +736,13 @@ pub(crate) fn draw_body(
         torso,
         &j[joint::TORSO],
         Material::VertexLit,
-        &plain(look.shirt),
+        &plain(mul(look.shirt, env)),
     );
     r.draw_model_matrix(
         shorts,
         &j[joint::PELVIS],
         Material::VertexLit,
-        &plain(look.shorts),
+        &plain(mul(look.shorts, env)),
     );
     match detail {
         Detail::Full => {
@@ -686,7 +758,12 @@ pub(crate) fn draw_body(
                 (joint::THIGH_R, joint::SHIN_R),
             ] {
                 r.draw_model_matrix(M_THIGH, &j[t], Material::VertexLit, &skin);
-                r.draw_model_matrix(M_SHIN, &j[s], Material::VertexLit, &plain(look.socks));
+                r.draw_model_matrix(
+                    M_SHIN,
+                    &j[s],
+                    Material::VertexLit,
+                    &plain(mul(look.socks, env)),
+                );
             }
         }
         Detail::Near | Detail::Far => {
@@ -694,7 +771,7 @@ pub(crate) fn draw_body(
                 r.draw_model_matrix(M_ARM, &j[joint::ARM_L], Material::VertexLit, &skin);
                 r.draw_model_matrix(M_ARM, &j[joint::ARM_R], Material::VertexLit, &skin);
             }
-            let socks = plain(look.socks);
+            let socks = plain(mul(look.socks, env));
             r.draw_model_matrix(M_LEG, &j[joint::THIGH_L], Material::VertexLit, &socks);
             r.draw_model_matrix(M_LEG, &j[joint::THIGH_R], Material::VertexLit, &socks);
         }
@@ -709,7 +786,7 @@ fn draw_ball(r: &mut dyn Renderer, m: &Match, v: &MatchView, fr: &Frustum, hifi:
     }
     let rot = Mat34::from_trs(p * WORLD, v.ball_rot, Vec3::new(WORLD, WORLD, WORLD));
     let mdl = if hifi { M_BALL_HD } else { M_BALL };
-    r.draw_model_matrix(mdl, &rot, Material::VertexLit, &ModelParams::DEFAULT);
+    r.draw_model_matrix(mdl, &rot, Material::VertexLit, &plain(v.sky.tint()));
     // Its shadow: a flattened dark bead on the turf.
     let shadow = Mat34 {
         m: [
@@ -803,6 +880,24 @@ pub fn pick_clip(m: &Match, i: usize, dt: f32, st: &mut AnimState) {
     let speed = p.vel.len().to_f32();
     let owner = m.owner == Some(i as u8);
     let keeper = p.role == Role::Gk;
+    // Cues the sim's state alone doesn't hold: a header just made, a
+    // throw-in waiting to be taken.
+    let headed = p.headed != 0 && m.tick.saturating_sub(p.headed) < 26;
+    if headed {
+        st.play(ClipName::Header, false, false);
+        st.advance(dt, 1.0);
+        return;
+    }
+    let throwing = matches!(m.phase, Phase::Ready { .. } | Phase::Setup { .. })
+        && m.taker as usize == i
+        && m.restart.kind == crate::sim::rules::RestartKind::ThrowIn;
+    if throwing {
+        // The wind-up, held until the throw.
+        st.play(ClipName::Throw, false, false);
+        st.time = 0.0;
+        st.advance(dt, 0.0);
+        return;
+    }
     let (clip, mirror, rate, restart) = match p.act {
         Act::Kick { plan, t } => {
             let c = match plan.kind {
@@ -878,8 +973,24 @@ pub fn pick_official_clip(m: &Match, k: usize, prev: (f32, f32), dt: f32, st: &m
         let dz = o.y.to_f32() - prev.1;
         trino_core::math3d::sqrt(dx * dx + dz * dz) / dt.max(1e-3)
     };
+    // The referee shows a card for two seconds after one, and points the
+    // restart after a foul while the ball is dead.
+    let recent = |kinds: &[EventKind], within: u32| {
+        m.events_since(m.event_seq.saturating_sub(4))
+            .any(|(_, e)| kinds.contains(&e.kind) && m.tick.saturating_sub(e.tick) < within)
+    };
     let clip = if k > 0 && m.flag.0 as usize == k && m.flag.1 > 0 {
         ClipName::FlagUp
+    } else if k == 0 && recent(&[EventKind::Yellow, EventKind::Red], 120) {
+        ClipName::RefCard
+    } else if k == 0
+        && matches!(m.phase, Phase::Dead { .. } | Phase::Setup { .. })
+        && recent(
+            &[EventKind::Foul, EventKind::FreeKick, EventKind::Penalty],
+            150,
+        )
+    {
+        ClipName::RefPoint
     } else if speed > 3.0 {
         ClipName::Jog
     } else if speed > 0.5 {

@@ -374,12 +374,6 @@ file = "models/pitch_f_11_7.glb"
 
 # ---- stadium ----
 
-[models.se_boards_0]
-file = "models/boards_0.glb"
-
-[models.se_boards_1]
-file = "models/boards_1.glb"
-
 [models.se_stand_long_a]
 file = "models/stand_long_a.glb"
 
@@ -507,6 +501,9 @@ file = "models/dot.glb"
 [models.se_pedestal]
 file = "models/pedestal.glb"
 
+[models.se_blob]
+file = "models/blob.glb"
+
 # ---- fonts (Roboto Condensed Bold, Apache-2.0: fonts/LICENSE-Roboto.txt) ----
 # The UI font is caps, digits, punctuation and Portuguese accents: 11 px, an
 # I4 atlas that fits the N64's TMEM (the resident text path).
@@ -555,3 +552,13 @@ file = "music/se_crowd.wav"
 
 [music.se_theme]
 file = "music/se_theme.wav"
+
+# ---- effect sprites (tools/solid_eleven/make_sprites.py): white masks the
+# PC's native profile draws as billboards (rain, floodlight glows) ----
+[sprites.se_rain]
+file = "sprites/se_rain.png"
+formats = { n64 = "I4" }
+
+[sprites.se_glow]
+file = "sprites/se_glow.png"
+formats = { n64 = "I4" }

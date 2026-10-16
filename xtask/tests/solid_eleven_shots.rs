@@ -177,10 +177,11 @@ fn solid_eleven_shots() {
             r.set_n64_look(true);
         }
         let (w, h) = r.internal_size();
-        for (scene, ticks, sky) in [
-            ("kickoff", 0u32, Sky::Day),
-            ("play", 60 * 40, Sky::Day),
-            ("night", 60 * 70, Sky::Night),
+        for (scene, ticks, sky, rain) in [
+            ("kickoff", 0u32, Sky::Day, false),
+            ("play", 60 * 40, Sky::Day, false),
+            ("night", 60 * 70, Sky::Night, false),
+            ("rain", 60 * 25, Sky::Dusk, true),
         ] {
             let mut g = SolidElevenGame::exhibition(
                 Vec2::new(w as f32, h as f32),
@@ -190,6 +191,9 @@ fn solid_eleven_shots() {
                 [false, false],
                 sky,
             );
+            if let Some(s) = &mut g.session {
+                s.view.rain = rain;
+            }
             let mut a = NullAudio;
             for _ in 0..ticks.max(1) {
                 g.update(&InputState::default(), &mut a, 1.0 / 60.0);

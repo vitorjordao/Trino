@@ -142,6 +142,8 @@ pub enum S {
     Saved,
     Swap,
     Market,
+    Substitution,
+    Substitute,
 }
 
 /// The text of `s` in `lang`.
@@ -273,6 +275,8 @@ pub fn tr(lang: Lang, s: S) -> &'static str {
         S::Saved => ("SAVED", "SALVO"),
         S::Swap => ("SWAP", "TROCAR"),
         S::Market => ("MARKET", "MERCADO"),
+        S::Substitution => ("SUBSTITUTION", "SUBSTITUIÇÃO"),
+        S::Substitute => ("SUBSTITUTE", "SUBSTITUIR"),
     };
     match lang {
         Lang::En => en,
@@ -307,7 +311,7 @@ mod tests {
         let mut n = 0;
         for i in 0..200u8 {
             // Walk the enum through its discriminants.
-            if i as usize > S::Market as usize {
+            if i as usize > S::Substitute as usize {
                 break;
             }
             let s: S = unsafe { core::mem::transmute(i) };

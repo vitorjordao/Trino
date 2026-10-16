@@ -318,6 +318,19 @@ def stand_section(name, width, rows, rng_seed, home, dense):
     concrete, step_col = (150, 152, 160), (110, 112, 122)
     rise, tread = 0.5, 0.85
     w2 = width / 2
+    # Advertising boards at the pitch's edge, 2 m in front of the stand
+    # (part of the section: no extra draw), 0.9 m high, in 5 m panels.
+    schemes = [(200, 30, 40), (240, 240, 240), (30, 70, 190), (250, 200, 40), (40, 160, 90)]
+    panels = int(round(width / 5.0))
+    for k in range(panels):
+        x0 = -w2 + k * width / panels
+        x1 = x0 + width / panels
+        c = schemes[(rng_seed + k) % len(schemes)]
+        m.poly([(x0, 0, 2.0), (x1, 0, 2.0), (x1, 0.9, 2.0), (x0, 0.9, 2.0)], c, out=(0, 0, 1))
+        stripe = shade(c, 1.6) if sum(c) < 500 else shade(c, 0.55)
+        m.poly([(x0 + 0.6, 0.35, 2.01), (x1 - 0.6, 0.35, 2.01), (x1 - 0.6, 0.55, 2.01), (x0 + 0.6, 0.55, 2.01)],
+               stripe, out=(0, 0, 1))
+    m.poly([(-w2, 0.9, 2.0), (w2, 0.9, 2.0), (w2, 0.9, 1.85), (-w2, 0.9, 1.85)], (40, 40, 48), out=(0, 1, 0))
     # Front wall (behind the boards' moat).
     m.poly([(-w2, 0, 0), (w2, 0, 0), (w2, 1.6, 0), (-w2, 1.6, 0)], (60, 64, 76), out=(0, 0, 1))
     y, z = 1.6, 0.0
@@ -615,6 +628,13 @@ def dot():
     return m
 
 
+def blob():
+    """The ball's shadow: a small dark disc (drawn 3.5 cm over the turf)."""
+    m = Model("blob")
+    m.disc((0, 0, 0), 0.16, 0.16, (34, 66, 28), n=8, y=0.0)
+    return m
+
+
 def pedestal():
     """The menus' glowing turntable (reference art): a dark disc with a
     bright rim ring; the game tints the ring."""
@@ -717,12 +737,10 @@ for ix in range(TILES_X * 2):
     for iz in range(TILES_Z * 2):
         reg(f"pitch_f_{ix}_{iz}", (lambda ix=ix, iz=iz: pitch_tile(ix, iz, True)), SHARED, 80,
             ((-SURROUND_X + (ix + 0.5) * SURROUND_X / TILES_X, (SURROUND_Z - (iz + 0.5) * SURROUND_Z / TILES_Z), 0), 11))
-reg("boards_0", lambda: ad_boards(0), SHARED, 24, ((0, 0, 0.5), 11))
-reg("boards_1", lambda: ad_boards(1), SHARED, 24, ((0, 0, 0.5), 11))
-reg("stand_long_a", lambda: stand_section("stand_long_a", 19.5, 7, 1, (206, 32, 41), False), SHARED, 80, ((0, 2, 4), 22))
-reg("stand_long_b", lambda: stand_section("stand_long_b", 19.5, 7, 2, (28, 90, 200), False), SHARED, 80, ((0, 2, 4), 22))
-reg("stand_end_a", lambda: stand_section("stand_end_a", 20.0, 6, 3, (206, 32, 41), False), SHARED, 70, ((0, 2, 4), 22))
-reg("stand_end_b", lambda: stand_section("stand_end_b", 20.0, 6, 4, (28, 90, 200), False), SHARED, 70, ((0, 2, 4), 22))
+reg("stand_long_a", lambda: stand_section("stand_long_a", 19.5, 7, 1, (206, 32, 41), False), SHARED, 100, ((0, 2, 4), 22))
+reg("stand_long_b", lambda: stand_section("stand_long_b", 19.5, 7, 2, (28, 90, 200), False), SHARED, 100, ((0, 2, 4), 22))
+reg("stand_end_a", lambda: stand_section("stand_end_a", 20.0, 6, 3, (206, 32, 41), False), SHARED, 90, ((0, 2, 4), 22))
+reg("stand_end_b", lambda: stand_section("stand_end_b", 20.0, 6, 4, (28, 90, 200), False), SHARED, 90, ((0, 2, 4), 22))
 reg("stand_long_a@pc", lambda: stand_section("stand_long_a", 19.5, 12, 1, (206, 32, 41), True), PC, 12000, ((0, 2, 4), 22))
 reg("stand_long_b@pc", lambda: stand_section("stand_long_b", 19.5, 12, 2, (28, 90, 200), True), PC, 12000, ((0, 2, 4), 22))
 reg("stand_end_a@pc", lambda: stand_section("stand_end_a", 20.0, 10, 3, (206, 32, 41), True), PC, 12000, ((0, 2, 4), 22))
@@ -752,6 +770,7 @@ reg("arrow", arrow, SHARED, 8, ((0, 0, 0.1), 0.6))
 reg("dash", dash, SHARED, 2, ((0, 0, 0), 1.2))
 reg("dot", dot, SHARED, 8, ((0, 0, 0), 0.4))
 reg("pedestal", pedestal, SHARED, 60, ((0, 0, 0), 2.2))
+reg("blob", lambda: blob(), SHARED, 8, ((0, 0, 0), 0.5))
 reg("player_rig", player_rig, PC, 400, ((0, 0, 0.9), 2.4))
 
 

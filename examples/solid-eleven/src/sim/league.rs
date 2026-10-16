@@ -3,7 +3,7 @@
 //! transfer market. Pure and deterministic like the match; the save is a
 //! compact byte layout that fits the N64 cartridge's 2 KB EEPROM.
 
-use super::engine::{Setup, SideSetup};
+use super::engine::{BENCH, Setup, SideSetup};
 use super::fx::Rng;
 use super::team::{
     self, ATTRS, CLUBS, FORMATIONS, MAX_SQUAD, MIN_SQUAD, PLAYERS, PlayerRec, Pos, Role, SQUAD,
@@ -215,6 +215,12 @@ impl Career {
                     (i as u16, self.players[i].number, self.match_attrs(i))
                 }),
                 morale: self.clubs[c as usize].morale,
+                bench: self.bench(c, &xi),
+                bench_n: self
+                    .squad(c)
+                    .filter(|i| !xi.contains(&(*i as u16)))
+                    .count()
+                    .min(BENCH) as u8,
             }
         };
         Setup {
@@ -225,6 +231,28 @@ impl Career {
             humans,
             difficulty,
         }
+    }
+
+    /// The best five not in the eleven (fresher players first).
+    pub fn bench(&self, c: u8, xi: &[u16; 11]) -> [(u16, u8, [u8; ATTRS], bool); BENCH] {
+        let mut out = [(0u16, 0u8, [0u8; ATTRS], false); BENCH];
+        let mut rest = [0u16; MAX_SQUAD];
+        let mut n = 0;
+        for i in self.squad(c) {
+            if !xi.contains(&(i as u16)) && n < rest.len() {
+                rest[n] = i as u16;
+                n += 1;
+            }
+        }
+        rest[..n].sort_unstable_by_key(|&i| {
+            let p = &self.players[i as usize];
+            (core::cmp::Reverse(p.ovr() as u32 + p.energy as u32 / 4), i)
+        });
+        for (k, &i) in rest[..n.min(BENCH)].iter().enumerate() {
+            let p = &self.players[i as usize];
+            out[k] = (i, p.number, self.match_attrs(i as usize), p.pos == Pos::Gk);
+        }
+        out
     }
 
     /// A club's strength for the quick sim: the lineup's mean overall,

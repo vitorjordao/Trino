@@ -300,7 +300,8 @@ fn quitting_a_career_match_counts_as_a_defeat() {
     d.idle(30);
     d.press(Button::Start);
     assert_eq!(d.g.scene, Scene::Pause);
-    d.press(Button::DpadDown);
+    // Resume, Substitute, Quit.
+    d.presses(Button::DpadDown, 2);
     d.press(Button::A);
     assert_eq!(d.g.scene, Scene::Club);
     assert_eq!(d.g.world.round, 1);

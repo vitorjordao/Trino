@@ -6,6 +6,7 @@ pub mod ai;
 pub mod ball;
 pub mod engine;
 pub mod fx;
+pub mod league;
 pub mod pitch;
 pub mod rules;
 pub mod team;

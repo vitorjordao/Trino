@@ -33,6 +33,7 @@ hello-sprite = { workspace = true }
 platformer = { workspace = true }
 castle64 = { workspace = true }
 showcase = { workspace = true }
+solid-eleven = { workspace = true }
 trino-platform-pc = { workspace = true }
 pollster = { workspace = true }
 gif = { workspace = true }

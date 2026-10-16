@@ -294,7 +294,9 @@ fn bake_ttf(source: &Path, decl: &FontDecl) -> Result<BakedFont, String> {
             for xx in 0..cell.w {
                 let a = cell.pixels[(yy * cell.w + xx) as usize];
                 let at = (((py + yy) * width + px + xx) * 4) as usize;
-                rgba[at..at + 4].copy_from_slice(&[255, 255, 255, a]);
+                // White ink, transparent texels black (see `whiten`).
+                let c = if a > 0 { 255 } else { 0 };
+                rgba[at..at + 4].copy_from_slice(&[c, c, c, a]);
             }
         }
         if cell.x_offset.unsigned_abs() > 127 || cell.advance > 255 {
@@ -525,6 +527,23 @@ mod tests {
                 .iter()
                 .all(|p| p[3] == 0 || p[3] == 255)
         );
+        // Transparent texels are black, as in PNG fonts: the N64's I4/I8
+        // take alpha from intensity (a white background drew solid blocks).
+        for aa in [false, true] {
+            let d = if aa {
+                "file = \"x.ttf\"\nsize = 12\nantialias = true\n"
+            } else {
+                "file = \"x.ttf\"\nsize = 12\n"
+            };
+            let baked = bake_font(&ttf, &decl(d)).unwrap();
+            for p in baked.rgba.as_chunks::<4>().0 {
+                if p[3] == 0 {
+                    assert_eq!(p, &[0, 0, 0, 0], "antialias {aa}");
+                } else {
+                    assert_eq!(&p[..3], &[255, 255, 255], "antialias {aa}");
+                }
+            }
+        }
     }
 
     #[test]

@@ -90,17 +90,35 @@ pub enum Demo {
     /// `examples/showcase`: the editor's demo scene exported to code, with
     /// the tag-driven scene runtime (player, coins, goal).
     Showcase,
+    /// `examples/solid-eleven`: Solid Eleven, the low-poly football game
+    /// (match sim, tactical AI, clubs, career, menus) with its own assets
+    /// and console hosts whose self-test plays a scripted match.
+    Football,
 }
 
 impl Demo {
-    pub const ALL: [Demo; 2] = [Demo::Castle64, Demo::Showcase];
+    pub const ALL: [Demo; 3] = [Demo::Castle64, Demo::Showcase, Demo::Football];
 
-    /// The crate name (and `--template` value).
+    /// The `--template` value.
     pub fn key(self) -> &'static str {
         match self {
             Demo::Castle64 => "castle64",
             Demo::Showcase => "showcase",
+            Demo::Football => "football",
         }
+    }
+
+    /// The demo's crate name (`examples/<crate>` in the engine).
+    pub fn crate_name(self) -> &'static str {
+        match self {
+            Demo::Football => "solid-eleven",
+            other => other.key(),
+        }
+    }
+
+    /// The crate's path in Rust (`solid_eleven`).
+    fn crate_snake(self) -> String {
+        self.crate_name().replace('-', "_")
     }
 
     /// One line for pickers.
@@ -108,6 +126,9 @@ impl Demo {
         match self {
             Demo::Castle64 => "3D platformer: a castle hub, three stages, enemies, a HUD",
             Demo::Showcase => "an editor scene as code: a walking player, coins, a goal",
+            Demo::Football => {
+                "Solid Eleven: 3D football with full rules, tactical AI, clubs and a career"
+            }
         }
     }
 
@@ -116,28 +137,35 @@ impl Demo {
         match self {
             Demo::Castle64 => "Castle64Game",
             Demo::Showcase => "ShowcaseGame",
+            Demo::Football => "SolidElevenGame",
         }
     }
 
     /// How the hosts build the game (`FnOnce(Vec2) -> G`), after renaming.
     fn constructor(self, names: &Names) -> String {
         match self {
-            Demo::Castle64 => format!("{}::{}Game::new", names.snake, names.camel),
+            Demo::Castle64 | Demo::Football => format!("{}::{}Game::new", names.snake, names.camel),
             // `ShowcaseGame::new()` frames the screen itself.
             Demo::Showcase => format!("|_| {}::{}Game::new()", names.snake, names.camel),
         }
+    }
+
+    /// The demo ships its own `assets/` (instead of the engine's).
+    fn own_assets(self) -> bool {
+        self == Demo::Football
     }
 }
 
 impl Template {
     /// Every template, blank first.
-    pub const ALL: [Template; 3] = [
+    pub const ALL: [Template; 4] = [
         Template::Blank,
         Template::Demo(Demo::Castle64),
         Template::Demo(Demo::Showcase),
+        Template::Demo(Demo::Football),
     ];
 
-    /// `blank`, `castle64`, `showcase` (the `--template` values).
+    /// `blank`, `castle64`, `showcase`, `football` (the `--template` values).
     pub fn key(self) -> &'static str {
         match self {
             Template::Blank => "blank",
@@ -302,6 +330,12 @@ pub fn scaffold(
         }
         Template::Demo(demo) => copy_demo(engine_root, dest, demo, names)?,
     }
+    // A template's own files over the standalone base (the football
+    // template's hosts, test gates and guide).
+    let overlay = templates.join(template.key());
+    if overlay.is_dir() {
+        copy_overlay(&overlay, dest, &render)?;
+    }
     // Same dependency versions the engine is tested with.
     let lock = engine_root.join("Cargo.lock");
     if lock.exists() {
@@ -316,13 +350,16 @@ pub fn scaffold(
 /// (they name files and manifest keys, not the crate).
 pub fn rename_demo_source(text: &str, demo: Demo, names: &Names) -> String {
     text.replace(demo.game_type(), &format!("{}Game", names.camel))
-        .replace(&format!("{}::", demo.key()), &format!("{}::", names.snake))
+        .replace(
+            &format!("{}::", demo.crate_snake()),
+            &format!("{}::", names.snake),
+        )
 }
 
 /// The demo's `Cargo.toml` as the new game crate's: the package renamed,
 /// everything else (features, crate types) kept.
 pub fn rename_demo_manifest(text: &str, demo: Demo, names: &Names) -> String {
-    let from = format!("name = \"{}\"", demo.key());
+    let from = format!("name = \"{}\"", demo.crate_name());
     let to = format!("name = \"{}\"", names.kebab);
     text.lines()
         .map(|l| if l.trim() == from { to.as_str() } else { l })
@@ -331,10 +368,11 @@ pub fn rename_demo_manifest(text: &str, demo: Demo, names: &Names) -> String {
         + "\n"
 }
 
-/// The demo's game crate (renamed) plus the engine content it draws from:
-/// all of `assets/` (manifest included), `scenes/` and `prefabs/`.
+/// The demo's game crate (renamed) plus the content it draws from: its own
+/// `assets/` when it has them (the football template), else all of the
+/// engine's `assets/` (manifest included), `scenes/` and `prefabs/`.
 fn copy_demo(engine: &Path, dest: &Path, demo: Demo, names: &Names) -> Result<(), String> {
-    let src = engine.join("examples").join(demo.key());
+    let src = engine.join("examples").join(demo.crate_name());
     let game = dest.join("game");
     let manifest = read(&src.join("Cargo.toml"))?;
     write(
@@ -345,7 +383,7 @@ fn copy_demo(engine: &Path, dest: &Path, demo: Demo, names: &Names) -> Result<()
         "//! {} — started from Trino's `{}` demo (`examples/{}` in the engine).\n//!\n",
         names.kebab,
         demo.key(),
-        demo.key()
+        demo.crate_name()
     );
     copy_tree(&src.join("src"), &game.join("src"), &mut |rel, bytes| {
         if rel.extension() != Some(OsStr::new("rs")) {
@@ -358,6 +396,12 @@ fn copy_demo(engine: &Path, dest: &Path, demo: Demo, names: &Names) -> Result<()
         }
         out.into_bytes()
     })?;
+    if demo.own_assets() {
+        // Replace the starter manifest with the demo's, keep the starter
+        // masters next to its own.
+        copy_tree(&src.join("assets"), &dest.join("assets"), &mut |_, b| b)?;
+        return Ok(());
+    }
     for dir in ["assets", "scenes", "prefabs"] {
         let from = engine.join(dir);
         if from.is_dir() {
@@ -365,6 +409,33 @@ fn copy_demo(engine: &Path, dest: &Path, demo: Demo, names: &Names) -> Result<()
         }
     }
     Ok(())
+}
+
+/// Copy a template overlay over the project: text files rendered like the
+/// standalone base (`*.tmpl` suffix dropped), others byte for byte.
+fn copy_overlay(from: &Path, to: &Path, render: &dyn Fn(&str) -> String) -> Result<(), String> {
+    copy_tree(
+        from,
+        to,
+        &mut |rel, bytes| match std::str::from_utf8(&bytes) {
+            Ok(text) if rel.extension() != Some(OsStr::new("png")) => render(text).into_bytes(),
+            _ => bytes,
+        },
+    )?;
+    // `copy_tree` keeps names: drop `.tmpl` suffixes after the fact.
+    fn untmpl(dir: &Path) -> Result<(), String> {
+        for e in std::fs::read_dir(dir).map_err(|e| e.to_string())? {
+            let p = e.map_err(|e| e.to_string())?.path();
+            if p.is_dir() {
+                untmpl(&p)?;
+            } else if p.extension() == Some(OsStr::new("tmpl")) {
+                let target = p.with_file_name(template_target_name(p.file_name().unwrap()));
+                std::fs::rename(&p, &target).map_err(|e| e.to_string())?;
+            }
+        }
+        Ok(())
+    }
+    untmpl(to)
 }
 
 /// Template files that would confuse tools in place (a placeholder-laden
@@ -571,7 +642,11 @@ mod tests {
                     && f.starts_with("game")
                 {
                     assert!(!text.contains(d.game_type()), "{}", f.display());
-                    assert!(!text.contains(&format!("{}::", d.key())), "{}", f.display());
+                    assert!(
+                        !text.contains(&format!("{}::", d.crate_snake())),
+                        "{}",
+                        f.display()
+                    );
                 }
             }
             let game = std::fs::read_to_string(dest.join("game/Cargo.toml")).unwrap();
@@ -610,6 +685,37 @@ mod tests {
         assert!(show.join("game/src/showcase_gen.rs").is_file());
         let game = std::fs::read_to_string(show.join("game/Cargo.toml")).unwrap();
         assert!(game.contains("hot-reload = []"), "{game}");
+        // Football: its own assets (not the engine's), its console hosts
+        // with the scripted-match self-test, its gates.
+        let fb = tmp.path().join("football");
+        for f in [
+            "game/src/sim/engine.rs",
+            "game/src/selftest.rs",
+            "assets/shared/models/pitch_0_0.glb",
+            "assets/shared/fonts/RobotoCondensed-Bold.ttf",
+        ] {
+            assert!(fb.join(f).is_file(), "football: {f}");
+        }
+        let manifest = std::fs::read_to_string(fb.join("assets/manifest.toml")).unwrap();
+        assert!(
+            manifest.contains("[models.se_pitch_0_0]"),
+            "its own manifest"
+        );
+        assert!(
+            !manifest.contains("c64_"),
+            "no castle64 assets in a football project"
+        );
+        assert!(!fb.join("assets/shared/models/castle64").exists());
+        let n64 = std::fs::read_to_string(fb.join("n64/src/lib.rs")).unwrap();
+        assert!(
+            n64.contains("my_game::selftest") || n64.contains("use my_game::selftest"),
+            "{n64}"
+        );
+        let n3ds = std::fs::read_to_string(fb.join("n3ds/src/main.rs")).unwrap();
+        assert!(n3ds.contains("dump_framebuffer_bottom"), "{n3ds}");
+        let toml = std::fs::read_to_string(fb.join("trino.toml")).unwrap();
+        assert!(toml.contains("n64_goldens = [\"match\"]"), "{toml}");
+        assert!(toml.contains("name = \"my-game\""), "{toml}");
         let blank = tmp.path().join("blank");
         assert!(
             !blank.join("scenes").exists(),

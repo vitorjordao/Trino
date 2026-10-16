@@ -132,25 +132,98 @@ fn time_to(m: &Match, i: usize, p: V2) -> Fx {
     (p - m.players[i].pos).len().div(m.top_speed(i, true))
 }
 
-/// Where a moving ball will be when player `i` can get there (a few
-/// prediction steps).
-pub fn intercept_point(m: &Match, i: usize) -> V2 {
-    let mut b = m.ball;
-    let mut t = 0u32;
-    let speed = m.top_speed(i, true);
-    for _ in 0..12 {
-        let d = (b.pos.ground() - m.players[i].pos).len();
-        let need = (d.div(speed).mul(Fx::int(60))).round_int().max(0) as u32;
-        if need <= t || b.vel.ground().shorter_than(Fx::milli(500)) {
-            break;
+/// Ticks between trajectory samples, and how many.
+pub const TRAJ_STEP: u32 = 3;
+pub const TRAJ_LEN: usize = 24;
+
+/// The free ball's path for the next 72 ticks, sampled every
+/// [`TRAJ_STEP`]: computed once per tick and shared by every chaser and
+/// both keepers (each used to predict on its own: ~740 ball steps a tick
+/// on the N64, now 72).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct Traj {
+    pub at: [V3; TRAJ_LEN],
+    /// Samples before the ball stops (or all of them).
+    pub len: u8,
+}
+
+impl Default for Traj {
+    fn default() -> Traj {
+        Traj {
+            at: [V3::ZERO; TRAJ_LEN],
+            len: 0,
         }
-        let step = (need - t).min(10);
-        for _ in 0..step {
-            b.step(m.wet);
-        }
-        t += step;
     }
-    pitch::clamp_to_surround(b.pos.ground())
+}
+
+impl Traj {
+    pub fn of(ball: &Ball, wet: bool) -> Traj {
+        let mut t = Traj::default();
+        let mut b = *ball;
+        for k in 0..TRAJ_LEN {
+            for _ in 0..TRAJ_STEP {
+                b.step(wet);
+            }
+            t.at[k] = b.pos;
+            t.len = k as u8 + 1;
+            if b.vel.ground().shorter_than(Fx::milli(300))
+                && b.pos.y <= pitch::BALL_R + Fx::milli(5)
+            {
+                break;
+            }
+        }
+        t
+    }
+
+    /// When (ticks), where (y) and how high the ball crosses the plane of
+    /// the goal line at `end`, if it does within the horizon.
+    pub fn crossing(&self, from: V3, end: End) -> Option<(u32, Fx, Fx)> {
+        let gx = end.goal_x();
+        let s = end.sign();
+        let mut prev = from;
+        for k in 0..self.len as usize {
+            let p = self.at[k];
+            if (p.x - gx).mul(s) >= Fx::ZERO {
+                // Interpolate between the samples around the plane.
+                let a = (gx - prev.x).mul(s);
+                let span = (p.x - prev.x).mul(s);
+                let f = if span > Fx::ZERO {
+                    a.div(span).clamp(Fx::ZERO, Fx::ONE)
+                } else {
+                    Fx::ONE
+                };
+                let y = prev.z + (p.z - prev.z).mul(f);
+                let h = prev.y + (p.y - prev.y).mul(f);
+                let t = (k as u32) * TRAJ_STEP
+                    + (f.mul(Fx::int(TRAJ_STEP as i32))).round_int().max(1) as u32;
+                return Some((t, y, h));
+            }
+            prev = p;
+        }
+        None
+    }
+}
+
+/// Where the moving ball will be when player `i` can get there (from the
+/// shared trajectory).
+pub fn intercept_point(m: &Match, i: usize) -> V2 {
+    let me = m.players[i].pos;
+    let speed = m.top_speed(i, true);
+    let t = &m.traj;
+    for k in 0..t.len as usize {
+        let p = t.at[k].ground();
+        let ticks = Fx::int(((k as u32 + 1) * TRAJ_STEP) as i32);
+        let reach = speed.mul(ticks).div(Fx::int(60));
+        if (p - me).shorter_than(reach + Fx::milli(400)) {
+            return pitch::clamp_to_surround(p);
+        }
+    }
+    let last = if t.len > 0 {
+        t.at[t.len as usize - 1].ground()
+    } else {
+        m.ball.pos.ground()
+    };
+    pitch::clamp_to_surround(last)
 }
 
 /// The side's player nearest the ball (by time), skipping `except`.
@@ -185,6 +258,11 @@ fn chasers(m: &Match, s: usize) -> (Option<u8>, Option<u8>) {
 
 /// Every player's command this tick (the engine overrides the humans').
 pub fn think(m: &mut Match, cmds: &mut [Option<Cmd>; N]) {
+    m.traj = if m.owner.is_none() {
+        Traj::of(&m.ball, m.wet)
+    } else {
+        Traj::default()
+    };
     let poss = m.possession();
     let ball = m.ball.pos.ground();
     for s in 0..2 {
@@ -883,7 +961,7 @@ fn keeper(m: &mut Match, i: usize, _home: V2) -> Cmd {
     let goal = end.goal_center();
     // A shot (or any ball) heading in: dive if it can't be walked to.
     if m.owner.is_none()
-        && let Some((t, y, h)) = ball::crossing(&m.ball, end, 70, m.wet)
+        && let Some((t, y, h)) = m.traj.crossing(m.ball.pos, end)
         && y.abs() < GOAL_HALF_W + Fx::milli(600)
         && h < pitch::GOAL_H + Fx::milli(300)
     {

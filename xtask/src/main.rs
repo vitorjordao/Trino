@@ -92,9 +92,10 @@ commands:
                        run the Blender toolkit end to end (prop + rigid
                        character -> export -> model inspect gates); skips
                        when Blender is not installed
-  blender castle64 [--only a,b] [--no-render]
-                       rebuild castle64's Blender-authored models (doors,
-                       player parts, boar) with their triangle gates
+  blender castle64 | solid-eleven [--only a,b] [--no-render]
+                       rebuild a demo's Blender-authored models with their
+                       triangle gates (castle64: doors, player parts, boar;
+                       solid-eleven: pitch, stadium, players, rig + clips)
   agents <sync|check>  mirror .agents/skills/ into tool-specific folders
                        (.claude/skills/) / verify the mirrors are in sync
 ";

@@ -324,6 +324,8 @@ pub struct Match {
     drain: Fx,
     /// The AI's memory: when each player last re-planned.
     pub(super) plan_tick: [u8; N],
+    /// The free ball's predicted path this tick (shared by the AI).
+    pub(super) traj: super::ai::Traj,
     /// Morale (0..100) per side, as set up.
     pub morale: [u8; 2],
     /// Tuning counters (tests only).
@@ -434,6 +436,7 @@ impl Match {
             // A full match of sprinting would empty the tank 1.3 times.
             drain: Fx(((Fx::ONE.0 as i64 * 13 / 10) / total as i64).max(1) as i32),
             plan_tick: [0; N],
+            traj: super::ai::Traj::default(),
             morale: [setup.sides[0].morale, setup.sides[1].morale],
             #[cfg(test)]
             diag: Diag::default(),

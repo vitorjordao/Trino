@@ -14,6 +14,9 @@
 //! - `TRINO_GAME=showcase` — run `examples/showcase` (the editor's demo
 //!   scene exported to `no_std` code — the exact path console builds take)
 //!   instead of castle64.
+//! - `TRINO_GAME=solid-eleven` — run `examples/solid-eleven` (the football
+//!   demo) with its own assets (`examples/solid-eleven/assets`, baked to
+//!   `target/assets/solid-eleven/pc`).
 
 mod scene_player;
 
@@ -58,12 +61,25 @@ mod hot_game {
     }
 }
 
+/// `TRINO_GAME=solid-eleven`: the football demo, with its own asset set.
+fn solid_eleven() -> bool {
+    std::env::var("TRINO_GAME").as_deref() == Ok("solid-eleven")
+}
+
 fn assets_root() -> PathBuf {
-    PathBuf::from("assets")
+    if solid_eleven() {
+        PathBuf::from("examples/solid-eleven/assets")
+    } else {
+        PathBuf::from("assets")
+    }
 }
 
 fn baked_dir() -> PathBuf {
-    PathBuf::from("target/assets/pc")
+    if solid_eleven() {
+        PathBuf::from("target/assets/solid-eleven/pc")
+    } else {
+        PathBuf::from("target/assets/pc")
+    }
 }
 
 struct Ctx {
@@ -77,6 +93,8 @@ struct Ctx {
     player: Option<scene_player::ScenePlayer>,
     /// `TRINO_GAME=showcase`: the codegen showcase instead of castle64.
     showcase: Option<showcase::ShowcaseGame>,
+    /// `TRINO_GAME=solid-eleven`: the football demo.
+    solid: Option<solid_eleven::SolidElevenGame>,
     last_frame: Instant,
     #[cfg(feature = "reload")]
     asset_events: std::sync::mpsc::Receiver<Vec<u32>>,
@@ -114,6 +132,7 @@ impl App {
         let title = match (&player, &showcase) {
             (Some(p), _) => p.title(),
             (None, Some(_)) => "Trino — showcase (exported scene)".to_string(),
+            _ if solid_eleven() => "Solid Eleven".to_string(),
             _ => "Trino — castle64".to_string(),
         };
         let attrs = Window::default_attributes()
@@ -161,6 +180,8 @@ impl App {
 
         let (iw, ih) = renderer.internal_size();
         let game = castle64::Castle64Game::new(Vec2::new(iw as f32, ih as f32));
+        let solid = solid_eleven()
+            .then(|| solid_eleven::SolidElevenGame::new(Vec2::new(iw as f32, ih as f32)));
 
         window.request_redraw();
         Ctx {
@@ -172,6 +193,7 @@ impl App {
             game,
             player,
             showcase,
+            solid,
             last_frame: Instant::now(),
             #[cfg(feature = "reload")]
             asset_events,
@@ -228,6 +250,10 @@ impl ApplicationHandler for App {
                     player.update(&input, dt);
                     player.render(&mut ctx.renderer);
                 } else if let Some(game) = &mut ctx.showcase {
+                    use trino_core::Game as _;
+                    game.update_with(&mut ctx.platform, &input, &mut ctx.audio, dt);
+                    game.render(&mut ctx.renderer);
+                } else if let Some(game) = &mut ctx.solid {
                     use trino_core::Game as _;
                     game.update_with(&mut ctx.platform, &input, &mut ctx.audio, dt);
                     game.render(&mut ctx.renderer);

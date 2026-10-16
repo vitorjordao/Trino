@@ -1,0 +1,267 @@
+# Solid Eleven's assets (logical paths → masters under shared/, PC-only
+# parts and overrides under pc/). Models are built by
+# `cargo xtask blender solid-eleven` (tools/blender/solid_eleven_models.py);
+# sprites, sounds and fonts by `cargo xtask gen-assets`... see AGENTS.md.
+#
+# Every console-visible model stays on the N64's RSP: opaque vertex colors,
+# no palette, single-sided faces. Kits are tints at draw time.
+
+version = 1
+
+# ---- pitch (6 x 4 tiles with the lines in) ----
+
+[models.se_pitch_0_0]
+file = "models/pitch_0_0.glb"
+
+[models.se_pitch_0_1]
+file = "models/pitch_0_1.glb"
+
+[models.se_pitch_0_2]
+file = "models/pitch_0_2.glb"
+
+[models.se_pitch_0_3]
+file = "models/pitch_0_3.glb"
+
+[models.se_pitch_1_0]
+file = "models/pitch_1_0.glb"
+
+[models.se_pitch_1_1]
+file = "models/pitch_1_1.glb"
+
+[models.se_pitch_1_2]
+file = "models/pitch_1_2.glb"
+
+[models.se_pitch_1_3]
+file = "models/pitch_1_3.glb"
+
+[models.se_pitch_2_0]
+file = "models/pitch_2_0.glb"
+
+[models.se_pitch_2_1]
+file = "models/pitch_2_1.glb"
+
+[models.se_pitch_2_2]
+file = "models/pitch_2_2.glb"
+
+[models.se_pitch_2_3]
+file = "models/pitch_2_3.glb"
+
+[models.se_pitch_3_0]
+file = "models/pitch_3_0.glb"
+
+[models.se_pitch_3_1]
+file = "models/pitch_3_1.glb"
+
+[models.se_pitch_3_2]
+file = "models/pitch_3_2.glb"
+
+[models.se_pitch_3_3]
+file = "models/pitch_3_3.glb"
+
+[models.se_pitch_4_0]
+file = "models/pitch_4_0.glb"
+
+[models.se_pitch_4_1]
+file = "models/pitch_4_1.glb"
+
+[models.se_pitch_4_2]
+file = "models/pitch_4_2.glb"
+
+[models.se_pitch_4_3]
+file = "models/pitch_4_3.glb"
+
+[models.se_pitch_5_0]
+file = "models/pitch_5_0.glb"
+
+[models.se_pitch_5_1]
+file = "models/pitch_5_1.glb"
+
+[models.se_pitch_5_2]
+file = "models/pitch_5_2.glb"
+
+[models.se_pitch_5_3]
+file = "models/pitch_5_3.glb"
+
+# ---- stadium ----
+
+[models.se_boards_0]
+file = "models/boards_0.glb"
+
+[models.se_boards_1]
+file = "models/boards_1.glb"
+
+[models.se_stand_long_a]
+file = "models/stand_long_a.glb"
+
+[models.se_stand_long_b]
+file = "models/stand_long_b.glb"
+
+[models.se_stand_end_a]
+file = "models/stand_end_a.glb"
+
+[models.se_stand_end_b]
+file = "models/stand_end_b.glb"
+
+[models.se_flood_tower]
+file = "models/flood_tower.glb"
+
+[models.se_goal]
+file = "models/goal.glb"
+
+[models.se_corner_flag]
+file = "models/corner_flag.glb"
+
+[models.se_ball]
+file = "models/ball.glb"
+
+# ---- players: consoles draw 7 parts, the PC 11 (pc-only parts below) ----
+
+[models.se_head]
+file = "models/head.glb"
+
+[models.se_torso]
+file = "models/torso.glb"
+
+[models.se_shorts]
+file = "models/shorts.glb"
+
+[models.se_arm]
+file = "models/arm.glb"
+
+[models.se_leg]
+file = "models/leg.glb"
+
+[models.se_flag_hand]
+file = "models/flag_hand.glb"
+
+[models.se_upper_arm]
+file = "models/upper_arm.glb"
+platforms = ["pc"]
+
+[models.se_forearm]
+file = "models/forearm.glb"
+platforms = ["pc"]
+
+[models.se_thigh]
+file = "models/thigh.glb"
+platforms = ["pc"]
+
+[models.se_shin]
+file = "models/shin.glb"
+platforms = ["pc"]
+
+# The animation QA rig (every clip; model inspect --anim, the editor).
+
+[models.se_player_rig]
+file = "models/player_rig.glb"
+platforms = ["pc"]
+anim_fps = 15
+once = ["pass", "lob", "shot", "tackle", "slide", "down", "header", "throw", "gk_dive", "ref_point", "ref_card", "flag_up"]
+
+# ---- PC high detail: dense crowd, netted goal, rounder ball, detailed
+# players (the PC's native profile draws these; its N64/3DS profiles draw
+# the console models above, like the consoles) ----
+[models.se_stand_long_a_hd]
+file = "models/stand_long_a_hd.glb"
+platforms = ["pc"]
+
+[models.se_stand_long_b_hd]
+file = "models/stand_long_b_hd.glb"
+platforms = ["pc"]
+
+[models.se_stand_end_a_hd]
+file = "models/stand_end_a_hd.glb"
+platforms = ["pc"]
+
+[models.se_stand_end_b_hd]
+file = "models/stand_end_b_hd.glb"
+platforms = ["pc"]
+
+[models.se_goal_hd]
+file = "models/goal_hd.glb"
+platforms = ["pc"]
+
+[models.se_ball_hd]
+file = "models/ball_hd.glb"
+platforms = ["pc"]
+
+[models.se_head_hd]
+file = "models/head_hd.glb"
+platforms = ["pc"]
+
+[models.se_torso_hd]
+file = "models/torso_hd.glb"
+platforms = ["pc"]
+
+[models.se_shorts_hd]
+file = "models/shorts_hd.glb"
+platforms = ["pc"]
+
+# ---- HUD markers and menus ----
+
+[models.se_ring]
+file = "models/ring.glb"
+
+[models.se_ring_small]
+file = "models/ring_small.glb"
+
+[models.se_arrow]
+file = "models/arrow.glb"
+
+[models.se_dash]
+file = "models/dash.glb"
+
+[models.se_dot]
+file = "models/dot.glb"
+
+[models.se_pedestal]
+file = "models/pedestal.glb"
+
+# ---- fonts (Roboto Condensed Bold, Apache-2.0: fonts/LICENSE-Roboto.txt) ----
+# The UI font is caps, digits, punctuation and Portuguese accents: 11 px, an
+# I4 atlas that fits the N64's TMEM (the resident text path).
+[fonts.se_ui]
+file = "fonts/RobotoCondensed-Bold.ttf"
+size = 11
+antialias = true
+chars = " ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,:;-+/%!?()'&#<>*=_ÁÂÃÀÇÉÊÍÓÔÕÚÜ"
+formats = { n64 = "I4" }
+
+# Titles (and the PC's 2x interface).
+[fonts.se_big]
+file = "fonts/RobotoCondensed-Bold.ttf"
+size = 22
+antialias = true
+chars = " ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,:;-+/%!?()'&#<>*=_ÁÂÃÀÇÉÊÍÓÔÕÚÜ"
+formats = { n64 = "I4" }
+
+# ---- sounds (tools/solid_eleven/make_sounds.py) ----
+[sounds.se_whistle]
+file = "sounds/se_whistle.wav"
+
+[sounds.se_kick]
+file = "sounds/se_kick.wav"
+
+[sounds.se_tap]
+file = "sounds/se_tap.wav"
+
+[sounds.se_post]
+file = "sounds/se_post.wav"
+
+[sounds.se_cheer]
+file = "sounds/se_cheer.wav"
+
+[sounds.se_ooh]
+file = "sounds/se_ooh.wav"
+
+[sounds.se_click]
+file = "sounds/se_click.wav"
+
+[sounds.se_back]
+file = "sounds/se_back.wav"
+
+[music.se_crowd]
+file = "music/se_crowd.wav"
+
+[music.se_theme]
+file = "music/se_theme.wav"

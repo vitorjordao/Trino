@@ -78,6 +78,20 @@ static DVLB_s* s_tnl3d_dvlb = NULL;
 static shaderProgram_s s_tnl3d;
 #define TNL_UNIFORMS 6
 static int s_tnl3d_unif[TNL_UNIFORMS];
+// The GPU holds the T&L program's state (program, attributes, texenv):
+// consecutive trino_gpu_draw calls only change uniforms and the vertex
+// buffer. Any other draw (citro2d, trino_3d_draw) or frame step leaves it
+// first (trino_tnl_leave), which hands the GPU back to citro2d.
+static int s_tnl_on = 0;
+
+static void trino_tnl_leave(void)
+{
+    if (s_tnl_on) {
+        s_tnl_on = 0;
+        C3D_CullFace(GPU_CULL_NONE);
+        C2D_Prepare();
+    }
+}
 
 static void trino_tex3d_init(void)
 {
@@ -181,7 +195,9 @@ void trino_init(void)
     trino_link_init();
     gfxInitDefault();
     romfsInit();
-    C3D_Init(C3D_DEFAULT_CMDBUF_SIZE);
+    // 4x the default command buffer: every GPU T&L draw adds its uniforms
+    // and a draw command (a busy scene has hundreds).
+    C3D_Init(C3D_DEFAULT_CMDBUF_SIZE * 4);
     C2D_Init(C2D_DEFAULT_MAX_OBJECTS);
     C2D_Prepare();
     // Trino tints are multiplicative (texel * tint), like the PC and N64
@@ -249,12 +265,14 @@ void trino_frame_begin(uint32_t rgba8888)
 // each with its own projection. The Rust side only ever moves 0 -> 1.
 void trino_set_screen(uint32_t bottom)
 {
+    trino_tnl_leave();
     C2D_SceneBegin(bottom ? s_bottom : s_top);
     s_proj = bottom ? &s_proj_bottom : &s_proj_top;
 }
 
 void trino_frame_end(void)
 {
+    trino_tnl_leave();
     C3D_FrameEnd(0);
 }
 
@@ -287,6 +305,7 @@ typedef struct {
 
 void trino_sprite_blit(void* sheet, const trino_blit_t* p)
 {
+    trino_tnl_leave();
     C2D_Image img = C2D_SpriteSheetGetImage((C2D_SpriteSheet)sheet, 0);
     // Sub-rect (atlases, glyphs): a sub-texture whose UVs are interpolated
     // inside the image's own (works whatever way tex3ds oriented them).
@@ -341,6 +360,7 @@ typedef struct {
 
 void trino_fill_rect(const trino_fill_t* f)
 {
+    trino_tnl_leave();
     uint32_t c = f->color;
     C2D_DrawRectSolid(f->x, f->y, f->depth, f->w, f->h,
                       C2D_Color32((c >> 24) & 0xFF, (c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF));
@@ -376,6 +396,7 @@ void trino_3d_draw(const float* v, uint32_t count, void* sheet, uint32_t clamp)
         count = (TRI3D_MAX_VERTS - s_vused) / 3 * 3;
     }
     if (count == 0) return;
+    trino_tnl_leave();
 
     float uv_l = 0.0f, uv_t = 0.0f, uv_r = 1.0f, uv_b = 1.0f;
     C2D_Image img = {0};
@@ -515,36 +536,37 @@ void trino_gpu_draw(void* mesh, const float* u, uint32_t flags)
     }
     Mtx_Multiply(&mvp, s_proj, &screen);
 
-    C2D_Flush();
-    C3D_BindProgram(&s_tnl3d);
+    if (!s_tnl_on) {
+        // Enter the T&L state once per run of GPU draws.
+        C2D_Flush();
+        C3D_BindProgram(&s_tnl3d);
+        C3D_AttrInfo* attr = C3D_GetAttrInfo();
+        AttrInfo_Init(attr);
+        AttrInfo_AddLoader(attr, 0, GPU_FLOAT, 3);         // position
+        AttrInfo_AddLoader(attr, 1, GPU_FLOAT, 3);         // normal
+        AttrInfo_AddLoader(attr, 2, GPU_UNSIGNED_BYTE, 4); // color
+        C3D_AlphaTest(false, GPU_ALWAYS, 0);
+        C3D_TexEnv* env = C3D_GetTexEnv(0);
+        C3D_TexEnvInit(env);
+        C3D_TexEnvSrc(env, C3D_Both, GPU_PRIMARY_COLOR, 0, 0);
+        C3D_TexEnvFunc(env, C3D_Both, GPU_REPLACE);
+        for (int i = 1; i < 6; i++) {
+            C3D_TexEnvInit(C3D_GetTexEnv(i));
+        }
+        s_tnl_on = 1;
+    }
     C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, s_tnl3d_unif[0], &mvp);
     for (int i = 1; i < TNL_UNIFORMS; i++) {
         const float* v = u + 16 + (i - 1) * 4;
         C3D_FVUnifSet(GPU_VERTEX_SHADER, s_tnl3d_unif[i], v[0], v[1], v[2], v[3]);
     }
-    C3D_AttrInfo* attr = C3D_GetAttrInfo();
-    AttrInfo_Init(attr);
-    AttrInfo_AddLoader(attr, 0, GPU_FLOAT, 3);         // position
-    AttrInfo_AddLoader(attr, 1, GPU_FLOAT, 3);         // normal
-    AttrInfo_AddLoader(attr, 2, GPU_UNSIGNED_BYTE, 4); // color
     C3D_BufInfo* buf = C3D_GetBufInfo();
     BufInfo_Init(buf);
     BufInfo_Add(buf, m->verts, TNL_VERTEX_BYTES, 3, 0x210);
     // The tilt projection mirrors the screen: the engine's front faces
     // arrive clockwise.
     C3D_CullFace((flags & 1) ? TRINO_TNL_CULL : GPU_CULL_NONE);
-    C3D_AlphaTest(false, GPU_ALWAYS, 0);
-    C3D_TexEnv* env = C3D_GetTexEnv(0);
-    C3D_TexEnvInit(env);
-    C3D_TexEnvSrc(env, C3D_Both, GPU_PRIMARY_COLOR, 0, 0);
-    C3D_TexEnvFunc(env, C3D_Both, GPU_REPLACE);
-    for (int i = 1; i < 6; i++) {
-        C3D_TexEnvInit(C3D_GetTexEnv(i));
-    }
     C3D_DrawElements(GPU_TRIANGLES, m->count, C3D_UNSIGNED_SHORT, m->indices);
-    C3D_CullFace(GPU_CULL_NONE);
-    // Hand the GPU back to citro2d (program, attributes, buffers, texenv).
-    C2D_Prepare();
 }
 
 // ---------------------------------------------------------------------------
@@ -593,6 +615,7 @@ int32_t trino_save_store(const uint8_t* src, uint32_t len)
 // hold it. The LCD buffer is column-major, bottom-up.
 uint32_t trino_debug_pixel(uint32_t x, uint32_t y, uint32_t bottom)
 {
+    trino_tnl_leave();
     if (x >= (bottom ? 320u : 400u) || y >= 240) return 0;
     gspWaitForVBlank();
     gspWaitForVBlank();
@@ -620,6 +643,7 @@ uint32_t trino_debug_pixel(uint32_t x, uint32_t y, uint32_t bottom)
 // rules as trino_debug_pixel.
 void trino_debug_fb_dump(uint32_t bottom)
 {
+    trino_tnl_leave();
     gspWaitForVBlank();
     gspWaitForVBlank();
     u16 w = 0, h = 0;

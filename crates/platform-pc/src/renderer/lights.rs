@@ -126,10 +126,14 @@ impl LightSets {
         self.keys.clear();
     }
 
-    /// The set index for `key`: the last set when it is the same, a new
-    /// one otherwise (the last one once [`MAX_SETS`] are in use).
+    /// The set index for `key`: the set it already has (a game that
+    /// switches between two lighting states shares two sets), a new one
+    /// otherwise (the last one once [`MAX_SETS`] are in use).
     pub fn index(&mut self, key: SetKey) -> u32 {
-        if self.keys.last() != Some(&key) && self.keys.len() < MAX_SETS {
+        if let Some(i) = self.keys.iter().position(|k| *k == key) {
+            return i as u32;
+        }
+        if self.keys.len() < MAX_SETS {
             self.keys.push(key);
         }
         self.keys.len() as u32 - 1
@@ -172,6 +176,9 @@ mod tests {
         );
         let k1 = SetKey::new(&cam, &DEFAULT_LIGHT, &locals, 0.5);
         assert_eq!(sets.index(k1), 1);
+        // Back and forth between two states: still two sets.
+        assert_eq!(sets.index(k0), 0);
+        assert_eq!(sets.index(k1), 1);
         let g = k1.gpu();
         assert_eq!(g.eye[3], 1.0);
         assert_eq!(g.sun_color[3], 0.5);
@@ -180,7 +187,10 @@ mod tests {
         for i in 0..20 {
             sets.index(SetKey::new(&cam, &DEFAULT_LIGHT, &locals, i as f32 / 20.0));
         }
-        assert_eq!(sets.index(k0), MAX_SETS as u32 - 1);
+        // Full: a new state gets the last set, a known one keeps its own.
+        let new = SetKey::new(&cam, &DEFAULT_LIGHT, &locals, 0.99);
+        assert_eq!(sets.index(new), MAX_SETS as u32 - 1);
+        assert_eq!(sets.index(k0), 0);
         assert_eq!(sets.bytes().len(), SET_BYTES * MAX_SETS);
     }
 }

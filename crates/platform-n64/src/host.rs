@@ -256,6 +256,7 @@ impl N64Host {
         setup(&mut host);
         let mut game = boxed(make);
         if Self::test_mode() {
+            runtime::watchdog_start();
             let verdict = self_test(&mut host, &mut game);
             // The stack guard of the engine's own self-test: an overflow
             // corrupts memory silently (AGENTS.md › Pitfalls).

@@ -90,8 +90,50 @@ void trino_init(void)
     register_VI_handler(trino_on_vi);
 }
 
+// Self-test stall watchdog (trino_watchdog_start). A self-test that stops
+// printing is either stuck on the console (a CPU waiting on the RSP or the
+// RDP) or a frozen emulator. While a test runs, a timer interrupt checks
+// every 4 s of emulated time that a frame began or a line was logged since
+// the last check; if not, it prints TRINO_STALL with where the CPU waits
+// (trino_phase) and the RSP/RDP status registers. A stall that prints
+// nothing at all is the emulator.
+static volatile uint32_t trino_progress = 0;
+static volatile const char* trino_phase = "boot";
+static uint32_t trino_watch_seen = 0xFFFFFFFFu;
+static int trino_watch_reports = 0;
+
+#define TRINO_DP_REG(n) (*(volatile uint32_t*)(0xA4100000u + (n)))
+
+static void trino_watch_tick(int ovfl)
+{
+    (void)ovfl;
+    uint32_t p = trino_progress;
+    if (p != trino_watch_seen) {
+        trino_watch_seen = p;
+        trino_watch_reports = 0;
+        return;
+    }
+    if (trino_watch_reports >= 3) return;
+    trino_watch_reports++;
+    debugf("TRINO_STALL: no frame or log for %d s, waiting in %s; SP_STATUS=%08lx "
+           "DP_START=%08lx DP_END=%08lx DP_CURRENT=%08lx DP_STATUS=%08lx\n",
+           4 * trino_watch_reports, (const char*)trino_phase,
+           (unsigned long)*SP_STATUS, (unsigned long)TRINO_DP_REG(0x0),
+           (unsigned long)TRINO_DP_REG(0x4), (unsigned long)TRINO_DP_REG(0x8),
+           (unsigned long)TRINO_DP_REG(0xC));
+}
+
+void trino_watchdog_start(void)
+{
+    static int started = 0;
+    if (started) return;
+    started = 1;
+    new_timer(TIMER_TICKS(4000000), TF_CONTINUOUS, trino_watch_tick);
+}
+
 void trino_log(const char* msg)
 {
+    trino_progress++;
     debugf("%s", msg);
 }
 
@@ -130,7 +172,10 @@ static surface_t* trino_last_fb = NULL;
 
 void trino_frame_begin(uint32_t rgba8888)
 {
+    trino_progress++;
+    trino_phase = "display_get";
     surface_t* fb = display_get();
+    trino_phase = "frame";
     trino_last_fb = fb;
     if (!trino_zbuf_ready) {
         trino_zbuf = surface_alloc(FMT_RGBA16, display_get_width(), display_get_height());
@@ -153,7 +198,9 @@ void trino_frame_end(void)
     }
     trino_mode_3d = 0;
     trino_2d_ready = 0;
+    trino_phase = "frame_end (rdpq_detach_show)";
     rdpq_detach_show();
+    trino_phase = "between frames";
 }
 
 // Profiling: wait until the RSP and the RDP have finished everything queued,
@@ -161,8 +208,10 @@ void trino_frame_end(void)
 // work no longer shows up as CPU time).
 void trino_drain(void)
 {
+    trino_phase = "drain (rspq_wait)";
     rdpq_fence();
     rspq_wait();
+    trino_phase = "frame";
 }
 
 // ---------------------------------------------------------------------------
@@ -759,6 +808,7 @@ void trino_debug_fb_dump(void)
                 line[i * 4 + 3] = hex[px & 15];
             }
             line[n * 4] = 0;
+            trino_progress++;
             debugf("TRINO_FBR:%lu:%lu:%s\n", (unsigned long)y, (unsigned long)x0, line);
         }
     }

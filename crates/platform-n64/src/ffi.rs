@@ -25,6 +25,9 @@ pub struct TrinoBlit {
 unsafe extern "C" {
     pub fn trino_init();
     pub fn trino_log(msg: *const c_char);
+    /// Self-test only: print `TRINO_STALL` (where the CPU waits, RSP/RDP
+    /// status) when no frame begins and nothing is logged for 4 s.
+    pub fn trino_watchdog_start();
     pub fn trino_panic(msg: *const c_char) -> !;
     pub fn trino_ticks_us() -> u32;
     /// Vertical blanks since boot (VI interrupt counter; clock cross-check).

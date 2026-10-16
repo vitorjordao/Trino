@@ -53,7 +53,7 @@ impl Fixture {
             project.join("target/n64"),
             project.join("target/3ds"),
             project.join("target/armv6k-nintendo-3ds/release"),
-            stubs.clone(),
+            stubs.join("devkitpro/libctru"),
         ] {
             std::fs::create_dir_all(dir).unwrap();
         }
@@ -118,8 +118,9 @@ impl Fixture {
             .env_remove("TRINO_SC64DEPLOYER")
             .env_remove("TRINO_UNFLOADER")
             .env_remove("TRINO_3DSLINK")
-            // No devkitPro fallback for 3dslink.
-            .env("DEVKITPRO", self.stubs.join("no-devkitpro"))
+            // A devkitPro install (it has libctru/) without tools: no
+            // fallback 3dslink, and no real one from the default places.
+            .env("DEVKITPRO", self.stubs.join("devkitpro"))
             .env("STUB_LOG", &self.log);
         // An empty PATH: only the stubs (if given) can be found.
         cmd.env("PATH", path.unwrap_or(Path::new("")));
@@ -371,6 +372,23 @@ fn device_flags_and_missing_tools_fail_with_a_reason() {
         &run(&["run", "3ds", "--device", "network", "--gdb"]),
         "--gdb needs --ip",
     );
+    assert_fails_with(
+        &run(&[
+            "run",
+            "3ds",
+            "--device",
+            "network",
+            "--ip",
+            "10.0.0.2",
+            "--gdb-port",
+            "4003",
+        ]),
+        "--gdb-port needs --gdb",
+    );
+    assert_fails_with(
+        &run(&["run", "n64", "--device", "sc64", "--selftest", "--no-build"]),
+        "use one",
+    );
 
     // Missing loaders: install hints.
     assert_fails_with(
@@ -394,6 +412,30 @@ fn device_flags_and_missing_tools_fail_with_a_reason() {
         ),
         "TRINO_3DSLINK=",
     );
+}
+
+/// The `n3ds` alias works in both spellings and deploys like `3ds`.
+#[cfg(unix)]
+#[test]
+fn the_n3ds_alias_deploys_like_3ds() {
+    let f = Fixture::new();
+    let tool = stub(&f.stubs, "3dslink", "echo 'server active ...'");
+    for args in [
+        &["run", "n3ds", "--device", "network", "--no-build"][..],
+        &[
+            "run",
+            "--target",
+            "n3ds",
+            "--device",
+            "network",
+            "--no-build",
+        ],
+    ] {
+        let _ = std::fs::remove_file(&f.log);
+        let o = f.xtask(args, &[("TRINO_3DSLINK", &tool)], None);
+        assert!(o.status.success(), "{args:?}: {}", stderr(&o));
+        assert_eq!(f.calls(), [format!("-s {}", f.app())]);
+    }
 }
 
 /// `--no-build` without a ROM points at the build command.

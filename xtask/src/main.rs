@@ -122,9 +122,7 @@ fn main() -> ExitCode {
     };
     // Real hardware (`run n64 --device sc64`, `run --target n64 ...`), parsed
     // after `--project <dir>` is gone so it may come first.
-    let device = match hardware::normalize_target(&mut args)
-        .and_then(|()| hardware::take_device_args(&mut args))
-    {
+    let device = match hardware::parse(&mut args) {
         Ok(d) => d,
         Err(e) => {
             eprintln!("{e}");
@@ -139,6 +137,13 @@ fn main() -> ExitCode {
         )
     {
         eprintln!("{e}");
+        return ExitCode::FAILURE;
+    }
+    if device.is_some() && selftest && no_build {
+        eprintln!(
+            "xtask: --selftest builds the self-test app, --no-build sends what is in \
+             target/ — use one (`build n64|3ds --selftest` first, then --no-build)"
+        );
         return ExitCode::FAILURE;
     }
     let mut it = args.iter().map(String::as_str);

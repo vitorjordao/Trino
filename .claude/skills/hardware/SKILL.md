@@ -12,7 +12,7 @@ cargo xtask run 3ds --device network --ip <IP>     # 3dslink -a <IP> -s <app.3ds
 cargo xtask run 3ds --device network --ip <IP> --gdb [--gdb-port 4003]   # + target/3ds/<name>.gdb (attach on 4000 by default)
 cargo xtask run --target n64 --device sc64         # the same; --target is moved to the positional slot
   ... --no-build                                   # deploy the ROM/.3dsx already in target/
-  ... --selftest                                   # deploy the self-test build (TRINO_STEP/PERF/TEST lines)
+  ... --selftest                                   # build + deploy the self-test build (not with --no-build)
   ... --project <dir>                              # an external project's ROM/app (ADR 0008)
 ```
 
@@ -24,9 +24,16 @@ gdb and troubleshooting, and links the upstream docs for every flag. Code:
 ## How it works
 
 - **Parsing** (`main.rs`, before project selection):
-  - `normalize_target` turns `--target n64|3ds|pc` back into the positional
-    platform. A cargo triple after `run pc` passes through.
-  - `take_device_args` removes `--device/--ip/--gdb/--gdb-port`.
+  - `hardware::parse` only looks at the arguments **before `--`**. Everything after
+    `--` goes to the launched program (`run pc -- --gdb`).
+  - `normalize_target` turns `--target n64|3ds|n3ds|pc` back into the positional
+    platform and refuses a platform given twice. A cargo triple passes through.
+  - `take_device_args` removes `--device/--ip/--gdb/--gdb-port`. `--gdb-port`
+    needs `--gdb`.
+  - With a device, `n3ds` becomes `3ds`. `main.rs` only dispatches `run 3ds`, so the
+    alias used to end in "unknown invocation".
+  - `main.rs` refuses `--selftest --no-build` with a device: nothing would be
+    built.
   - `check_invocation` rejects them anywhere but `run n64` / `run 3ds`, and also
     rejects a device of the other console. Without it, `test n64 --device sc64`
     would silently boot ares.
@@ -37,8 +44,10 @@ gdb and troubleshooting, and links the upstream docs for every flag. Code:
   1. `$TRINO_SC64DEPLOYER` / `$TRINO_UNFLOADER` / `$TRINO_3DSLINK`. When set, the
      path must exist; there is no silent fallback.
   2. Else PATH.
-  3. Else, for 3dslink, `$DEVKITPRO/tools/bin`, or the default devkitPro dirs when
-     `DEVKITPRO` is unset.
+  3. Else, for 3dslink (and `arm-none-eabi-gdb`), the install `n3ds::devkitpro()`
+     picks: the first of `$DEVKITPRO`, `C:\devkitPro`, `/opt/devkitpro` holding
+     `libctru`. Never trust `$DEVKITPRO` blindly: Windows installers set it to
+     the msys path `/opt/devkitpro`.
 
   Missing tools fail with install links. The tool is looked up **before** the
   build, so nothing is built for a loader that isn't there.
@@ -73,8 +82,9 @@ fake `target/` files (`--no-build`). `#!/bin/sh` stub loaders record `$*` to
 `$STUB_LOG` and echo `TRINO_FRAME` lines.
 - The deploy tests are `#[cfg(unix)]`. Flag errors and missing tools are tested
   everywhere.
-- The test empties `PATH` and points `DEVKITPRO` at a missing dir, so a real
-  3dslink on the machine is never run by accident.
+- The test empties `PATH` and points `DEVKITPRO` at a fake install that has
+  `libctru/` but no tools. That way a real 3dslink on the machine is never run by
+  accident; a *missing* `DEVKITPRO` dir would fall back to `/opt/devkitpro`.
 - Unit tests in `hardware.rs` pin each command line and the gdb scripts.
 
 ## Not verified

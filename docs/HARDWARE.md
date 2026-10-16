@@ -14,11 +14,17 @@ cargo xtask run 3ds --device network --ip <IP> --gdb [--gdb-port 4003]
 
 - **Same build as the emulator.** xtask builds the ROM or `.3dsx` first, as `run` always
   does. Flags that change this:
-  - `--no-build` sends the file already in `target/`;
-  - `--selftest` sends the self-test build, whose `TRINO_STEP`/`TRINO_PERF_*`/
-    `TRINO_TEST_*` lines then print on the terminal.
+  - `--no-build` sends the file already in `target/`, whichever build that is;
+  - `--selftest` builds and sends the self-test build, whose `TRINO_STEP`/
+    `TRINO_PERF_*`/`TRINO_TEST_*` lines then print on the terminal.
+
+  The two don't combine: xtask refuses `--selftest --no-build`, because nothing would
+  be built. To send a self-test build later, run `cargo xtask build n64|3ds --selftest`
+  first, then `run … --no-build`.
+- **Flags after `--`** are not xtask's. `run pc -- --gdb` passes `--gdb` to the PC
+  app.
 - **Other spellings and projects.** `run --target n64 --device sc64` is the same
-  command. `--project <dir>` (or `$TRINO_PROJECT`, or a `trino.toml` in the current
+  command, and `n3ds` works wherever `3ds` does. `--project <dir>` (or `$TRINO_PROJECT`, or a `trino.toml` in the current
   directory) deploys an external project's ROM or app (ADR 0008), so from such a
   project `cargo trino run n64 --device sc64` works.
 - **What you see.** Every line the game logs reaches the terminal unchanged:
@@ -64,8 +70,10 @@ Every flag below comes from the tool's own documentation or source:
 xtask looks for each tool in this order:
 1. the environment variable;
 2. `PATH`;
-3. for 3dslink only, `$DEVKITPRO/tools/bin`, or `/opt/devkitpro` and `C:\devkitPro`
-   when `DEVKITPRO` is unset.
+3. for 3dslink only, `tools/bin` of the devkitPro install that `build 3ds` uses. That
+   is the first of `$DEVKITPRO`, `C:\devkitPro` and `/opt/devkitpro` that holds
+   `libctru`. A Windows installer's msys-style `DEVKITPRO=/opt/devkitpro` is
+   skipped when that path doesn't exist.
 
 | Tool | Override | Get it |
 |---|---|---|

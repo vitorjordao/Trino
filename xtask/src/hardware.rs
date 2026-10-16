@@ -85,24 +85,52 @@ pub struct DeviceArgs {
     pub gdb_port: u16,
 }
 
+/// Parse the hardware flags from `args`: `--target` (see
+/// [`normalize_target`]) and the `--device` family ([`take_device_args`]).
+/// Only the arguments before a `--` are xtask's: everything after it passes
+/// through untouched (`run pc -- --gdb` reaches the PC app). With a device,
+/// the `n3ds` alias becomes `3ds`, the platform `run` dispatches on.
+pub fn parse(args: &mut Vec<String>) -> Result<Option<DeviceArgs>, String> {
+    let tail = match args.iter().position(|a| a == "--") {
+        Some(i) => args.split_off(i),
+        None => Vec::new(),
+    };
+    let parsed = normalize_target(args).and_then(|()| take_device_args(args));
+    if let Ok(Some(_)) = parsed
+        && let Some(p) = args.get_mut(1)
+        && p == "n3ds"
+    {
+        *p = "3ds".into();
+    }
+    args.extend(tail);
+    parsed
+}
+
 /// The issue's `run --target n64` spelling: remove `--target <platform>` and
-/// put the platform back where the positional form has it (`run n64`).
-/// Only console/PC platform names are taken, so cargo's own `--target
-/// <triple>` after `run pc` still passes through.
-pub fn normalize_target(args: &mut Vec<String>) -> Result<(), String> {
+/// put the platform back where the positional form has it (`run n64`;
+/// `n3ds` becomes `3ds`). Only console/PC platform names are taken, so a
+/// cargo `--target <triple>` passes through.
+fn normalize_target(args: &mut Vec<String>) -> Result<(), String> {
     let Some(i) = args.iter().position(|a| a == "--target") else {
         return Ok(());
     };
     let Some(value) = args.get(i + 1) else {
         return Err("xtask: --target needs a platform (pc, n64 or 3ds)".into());
     };
-    if !matches!(value.as_str(), "pc" | "n64" | "3ds" | "n3ds") {
-        return Ok(()); // not ours (e.g. `run pc -- --target <triple>`)
-    }
-    let platform = args.remove(i + 1);
-    args.remove(i);
+    let platform = match value.as_str() {
+        "pc" | "n64" | "3ds" => value.clone(),
+        "n3ds" => "3ds".to_string(),
+        _ => return Ok(()), // not ours (a cargo target triple)
+    };
+    args.drain(i..i + 2);
     if args.is_empty() {
         return Err("xtask: --target needs a command (e.g. run --target n64)".into());
+    }
+    if args.get(1).is_some_and(|a| !a.starts_with("--")) {
+        return Err(format!(
+            "xtask: give the platform once: `{} {}` or `{} --target {platform}`",
+            args[0], args[1], args[0]
+        ));
     }
     args.insert(1, platform);
     Ok(())
@@ -123,7 +151,7 @@ fn take_value(args: &mut Vec<String>, flag: &str) -> Result<Option<String>, Stri
 
 /// Remove `--device`, `--ip`, `--gdb` and `--gdb-port` from `args`.
 /// `Ok(None)`: no device flag at all (the emulator path).
-pub fn take_device_args(args: &mut Vec<String>) -> Result<Option<DeviceArgs>, String> {
+fn take_device_args(args: &mut Vec<String>) -> Result<Option<DeviceArgs>, String> {
     let device = take_value(args, "--device")?;
     let ip = take_value(args, "--ip")?;
     let gdb_port = take_value(args, "--gdb-port")?;
@@ -151,6 +179,9 @@ pub fn take_device_args(args: &mut Vec<String>) -> Result<Option<DeviceArgs>, St
             device.name()
         ));
     }
+    if gdb_port.is_some() && !gdb {
+        return Err("xtask: --gdb-port needs --gdb".into());
+    }
     let gdb_port = match gdb_port {
         Some(p) => p
             .parse::<u16>()
@@ -175,7 +206,6 @@ pub fn check_invocation(
     platform: Option<&str>,
     d: &DeviceArgs,
 ) -> Result<(), String> {
-    let platform = platform.map(|p| if p == "n3ds" { "3ds" } else { p });
     match (cmd, platform) {
         (Some("run"), Some(p @ ("n64" | "3ds"))) if p == d.device.platform() => Ok(()),
         (Some("run"), Some(p @ ("n64" | "3ds"))) => Err(format!(
@@ -244,20 +274,13 @@ fn find_tool(tool: &Tool) -> Result<PathBuf, String> {
     if let Some(p) = which(&exe(tool.name)) {
         return Ok(p);
     }
-    if tool.name == LINK3DS.name {
-        // $DEVKITPRO when set (its install wins), else the default places.
-        let roots: Vec<PathBuf> = match std::env::var_os("DEVKITPRO").filter(|v| !v.is_empty()) {
-            Some(d) => vec![PathBuf::from(d)],
-            None => vec![
-                PathBuf::from(r"C:\devkitPro"),
-                PathBuf::from("/opt/devkitpro"),
-            ],
-        };
-        if let Some(p) = roots
-            .iter()
-            .map(|r| r.join("tools/bin").join(exe(tool.name)))
-            .find(|p| p.is_file())
-        {
+    // devkitPro's own tools: the same install `build 3ds` uses
+    // ($DEVKITPRO when it is a real install, else the default places).
+    if tool.name == LINK3DS.name
+        && let Ok(dkp) = crate::n3ds::devkitpro()
+    {
+        let p = dkp.join("tools/bin").join(exe(tool.name));
+        if p.is_file() {
             return Ok(p);
         }
     }
@@ -350,8 +373,9 @@ pub fn gdb_script(elf: &Path, ip: &str, port: u16) -> String {
 /// devkitARM's gdb when devkitPro is installed, else the one on PATH.
 fn arm_gdb() -> PathBuf {
     let name = exe("arm-none-eabi-gdb");
-    std::env::var_os("DEVKITPRO")
-        .map(|d| PathBuf::from(d).join("devkitARM/bin").join(&name))
+    crate::n3ds::devkitpro()
+        .ok()
+        .map(|d| d.join("devkitARM/bin").join(&name))
         .filter(|p| p.is_file())
         .or_else(|| which(&name))
         .unwrap_or_else(|| PathBuf::from(name))
@@ -496,27 +520,64 @@ mod tests {
 
     #[test]
     fn target_flag_becomes_the_positional_platform() {
-        let mut a = args("run --target n64 --device sc64");
-        normalize_target(&mut a).unwrap();
-        assert_eq!(a, args("run n64 --device sc64"));
-        let mut a = args("run --device network --target 3ds");
-        normalize_target(&mut a).unwrap();
-        assert_eq!(a, args("run 3ds --device network"));
-        // cargo's own --target after `run pc` is left alone.
-        let mut a = args("run pc --target x86_64-unknown-linux-gnu");
-        normalize_target(&mut a).unwrap();
-        assert_eq!(a, args("run pc --target x86_64-unknown-linux-gnu"));
-        assert!(normalize_target(&mut args("run --target")).is_err());
+        let parsed = |s: &str| {
+            let mut a = args(s);
+            parse(&mut a).map(|_| a)
+        };
+        assert_eq!(
+            parsed("run --target n64 --device sc64").unwrap(),
+            args("run n64")
+        );
+        assert_eq!(
+            parsed("run --device network --target 3ds").unwrap(),
+            args("run 3ds")
+        );
+        // The n3ds alias, both spellings, becomes the 3ds `run` dispatches on.
+        assert_eq!(
+            parsed("run --target n3ds --device network").unwrap(),
+            args("run 3ds")
+        );
+        assert_eq!(
+            parsed("run n3ds --device network").unwrap(),
+            args("run 3ds")
+        );
+        // A cargo target triple is not ours.
+        assert_eq!(
+            parsed("run pc --target x86_64-unknown-linux-gnu").unwrap(),
+            args("run pc --target x86_64-unknown-linux-gnu")
+        );
+        assert!(parsed("run --target").is_err());
+        assert!(
+            parsed("run pc --target n64").is_err(),
+            "platform given twice"
+        );
+    }
+
+    /// Everything after `--` belongs to the program `run` launches.
+    #[test]
+    fn arguments_after_a_double_dash_are_left_alone() {
+        for s in [
+            "run pc -- --gdb",
+            "run pc -- --target n64",
+            "run pc -- --device sc64 --ip 1.2.3.4 --gdb-port 9",
+        ] {
+            let mut a = args(s);
+            assert_eq!(parse(&mut a).unwrap(), None, "{s}");
+            assert_eq!(a, args(s), "{s}");
+        }
+        let mut a = args("run n64 --device sc64 -- --gdb");
+        let d = parse(&mut a).unwrap().unwrap();
+        assert_eq!((d.device, a), (Device::Sc64, args("run n64 -- --gdb")));
     }
 
     #[test]
     fn device_flags_parse_and_reject_bad_combinations() {
         let mut a = args("run n64 --device sc64");
-        let d = take_device_args(&mut a).unwrap().unwrap();
+        let d = parse(&mut a).unwrap().unwrap();
         assert_eq!((d.device, a), (Device::Sc64, args("run n64")));
 
         let mut a = args("run 3ds --device network --ip 10.0.0.2 --gdb --gdb-port 4003");
-        let d = take_device_args(&mut a).unwrap().unwrap();
+        let d = parse(&mut a).unwrap().unwrap();
         assert_eq!(a, args("run 3ds"));
         assert_eq!(
             d,
@@ -527,21 +588,22 @@ mod tests {
                 gdb_port: 4003,
             }
         );
-        let d = take_device_args(&mut args("run 3ds --device network --ip 1.2.3.4 --gdb"))
+        let d = parse(&mut args("run 3ds --device network --ip 1.2.3.4 --gdb"))
             .unwrap()
             .unwrap();
         assert_eq!(d.gdb_port, LUMA_ATTACH_PORT);
 
-        assert_eq!(take_device_args(&mut args("run n64")).unwrap(), None);
+        assert_eq!(parse(&mut args("run n64")).unwrap(), None);
         for bad in [
             "run n64 --device",
             "run n64 --device cartridge",
             "run n64 --device sc64 --ip 1.2.3.4",
             "run 3ds --ip 1.2.3.4",
             "run 3ds --device network --gdb",
-            "run 3ds --device network --ip 1.2.3.4 --gdb-port x",
+            "run 3ds --device network --ip 1.2.3.4 --gdb --gdb-port x",
+            "run 3ds --device network --ip 1.2.3.4 --gdb-port 4003",
         ] {
-            assert!(take_device_args(&mut args(bad)).is_err(), "{bad}");
+            assert!(parse(&mut args(bad)).is_err(), "{bad}");
         }
     }
 
@@ -556,7 +618,6 @@ mod tests {
         assert!(check_invocation(Some("run"), Some("n64"), &d(Device::Sc64)).is_ok());
         assert!(check_invocation(Some("run"), Some("n64"), &d(Device::EverDrive)).is_ok());
         assert!(check_invocation(Some("run"), Some("3ds"), &d(Device::Network)).is_ok());
-        assert!(check_invocation(Some("run"), Some("n3ds"), &d(Device::Network)).is_ok());
         assert!(check_invocation(Some("run"), Some("3ds"), &d(Device::Sc64)).is_err());
         assert!(check_invocation(Some("run"), Some("n64"), &d(Device::Network)).is_err());
         assert!(check_invocation(Some("test"), Some("n64"), &d(Device::Sc64)).is_err());

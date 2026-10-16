@@ -100,6 +100,8 @@ static void trino_link_exit(void)
         s_link_sock = -1;
     }
     socExit();
+    free(s_soc_buf);
+    s_soc_buf = NULL;
 }
 
 static void trino_link_init(void)
@@ -108,15 +110,26 @@ static void trino_link_init(void)
         return;
     }
     s_soc_buf = (u32*)memalign(TRINO_SOC_ALIGN, TRINO_SOC_SIZE);
-    if (s_soc_buf == NULL || R_FAILED(socInit(s_soc_buf, TRINO_SOC_SIZE))) {
+    if (s_soc_buf == NULL) {
+        trino_debug_str("TRINO_WARN: 3dslink: no memory for the socket buffer\n");
+        return;
+    }
+    if (R_FAILED(socInit(s_soc_buf, TRINO_SOC_SIZE))) {
         trino_debug_str("TRINO_WARN: 3dslink: socInit failed\n");
+        free(s_soc_buf);
+        s_soc_buf = NULL;
+        return;
+    }
+    s_link_sock = link3dsStdio();
+    if (s_link_sock < 0) {
+        // No server listening: give the service and its 1 MiB back.
+        trino_debug_str("TRINO_WARN: 3dslink: no host server\n");
+        socExit();
+        free(s_soc_buf);
+        s_soc_buf = NULL;
         return;
     }
     atexit(trino_link_exit);
-    s_link_sock = link3dsStdio();
-    if (s_link_sock < 0) {
-        trino_debug_str("TRINO_WARN: 3dslink: no host server\n");
-    }
 }
 
 // Also to the 3dslink host when connected.

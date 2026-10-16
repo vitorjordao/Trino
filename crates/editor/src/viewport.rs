@@ -533,16 +533,20 @@ impl Viewport {
             _ => None,
         };
 
-        // Drag start / update / end.
+        // Drag start / update / end. A drag starts once the pointer has
+        // moved past egui's threshold: the handle (and the drag's start) is
+        // the one under where the button went down, not where the pointer is
+        // by then (a quick drag off a thin handle grabbed its neighbour).
+        let press = ui.input(|i| i.pointer.press_origin());
+        let press_handle = match (&gizmo, press) {
+            (Some(g), Some(p)) if self.kind == ViewKind::Scene => g.hit(&proj, self.gizmo, p),
+            _ => None,
+        };
         if self.kind == ViewKind::Scene {
             if response.drag_started_by(egui::PointerButton::Primary)
                 && !ui.input(|i| i.modifiers.alt)
-                && let (Some(h), Some(g), Some(item), Some(m)) = (
-                    hot_handle,
-                    &gizmo,
-                    sel_item,
-                    response.interact_pointer_pos(),
-                )
+                && let (Some(h), Some(g), Some(item), Some(m)) =
+                    (press_handle, &gizmo, sel_item, press)
                 && let Some(local) = input.scene.get(&item.owner).map(|e| e.transform)
                 && let Some(d) = Drag::begin(self.gizmo, h, g, &proj, m, &item.matrix, local)
             {
@@ -620,9 +624,9 @@ impl Viewport {
             // Shift + left drag on empty space: box select.
             if response.drag_started_by(egui::PointerButton::Primary)
                 && shift
-                && hot_handle.is_none()
+                && press_handle.is_none()
             {
-                self.box_start = response.interact_pointer_pos();
+                self.box_start = press.or(response.interact_pointer_pos());
             }
             if let Some(start) = self.box_start {
                 let now = ui.input(|i| i.pointer.interact_pos()).unwrap_or(start);

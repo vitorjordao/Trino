@@ -1412,3 +1412,59 @@ fn scene_view_pans_flies_dollies_and_flips_axes() {
     assert!(h.state().doc.selected.is_none(), "widget clicks don't pick");
     leave_temp_project(&repo);
 }
+
+/// A gizmo drag takes the handle under where the button went down: a quick
+/// drag off the thin ground-plane square (the pointer already far from it
+/// when egui decides it is a drag) still moves on the ground plane.
+#[test]
+#[ignore = "changes cwd/env: run alone with --ignored --test-threads=1"]
+fn gizmo_drags_grab_the_handle_under_the_press() {
+    use trino_core::Vec3;
+    let Some((mut h, _tmp, repo)) = temp_project_app(egui::vec2(1600.0, 940.0)) else {
+        return;
+    };
+    let rock = find(&h.state().doc.scene, "rock-1");
+    h.state_mut()
+        .cmds
+        .push(crate::app::Cmd::Select(Some(rock.clone())));
+    h.state_mut().scene_view.cam = crate::gizmo::OrbitCam::default();
+    h.run_steps(10);
+    // The view's image: its top-right corner anchors the axis widget.
+    let widget = h.get_by_label("View orientation").rect().center();
+    let (iw, ih) = h.state().scene_view.internal_size();
+    let rect = egui::Rect::from_min_size(
+        egui::pos2(widget.x + 48.0 - iw as f32, widget.y - 52.0),
+        egui::vec2(iw as f32, ih as f32),
+    );
+    let cam = h.state().scene_view.cam.camera();
+    let proj = crate::gizmo::Proj::new(&cam, (iw, ih), rect);
+    let start = h.state().doc.scene.get(&rock).unwrap().transform.pos;
+    let origin = Vec3::new(start[0], start[1], start[2]);
+    let g = crate::gizmo::Gizmo::new(&proj, origin);
+    let square = proj
+        .project(origin + Vec3::new(g.len * 0.32, 0.0, g.len * 0.32))
+        .unwrap();
+    assert_eq!(
+        g.hit(&proj, crate::gizmo::GizmoMode::Translate, square),
+        Some(crate::gizmo::Handle::Plane(1))
+    );
+    h.hover_at(square);
+    h.run_steps(2);
+    h.drag_at(square);
+    h.run_steps(1);
+    // One jump, well off every handle.
+    h.hover_at(square + egui::vec2(-80.0, 50.0));
+    h.run_steps(2);
+    h.drop_at(square + egui::vec2(-80.0, 50.0));
+    h.run_steps(3);
+    let now = h.state().doc.scene.get(&rock).unwrap().transform.pos;
+    assert!(
+        (now[1] - start[1]).abs() < 1e-4,
+        "stays on the ground plane"
+    );
+    assert!(
+        (now[0] - start[0]).abs() > 0.1 && (now[2] - start[2]).abs() > 0.1,
+        "moved in X and Z: {start:?} -> {now:?}"
+    );
+    leave_temp_project(&repo);
+}

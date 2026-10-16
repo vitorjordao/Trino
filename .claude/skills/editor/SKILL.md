@@ -213,11 +213,20 @@ Live-edit check: start the editor with `TRINO_EDITOR_ECHO_LOG=1` in the backgrou
   new single-key or Shift shortcut the same way. `App::shortcuts` also requires RMB
   to be down. If another tab hides the Scene view mid-flight, the view never sees
   the release, and its flag would mute Ctrl+S and undo.
+- **A gizmo drag takes the handle under `pointer.press_origin()`.** egui reports
+  `drag_started` only after the pointer passes its threshold. Hit-testing where
+  the pointer is by then grabbed a neighbouring handle on a quick drag (the thin
+  ground square became the X axis), and it lost the first pixels of motion.
+  `ui_tests::gizmo_drags_grab_the_handle_under_the_press` guards it.
 - **Kittest pointer details:**
   - `drag_at`/`drop_at` are Primary only. For MMB/RMB, send
     `Event::PointerButton` yourself.
   - Set held modifiers with `h.input_mut().modifiers`: they persist across
     steps, and each queued event is its own step.
+  - Screen positions of world points: the Scene view's image has its top-right
+    corner at the axis widget's centre plus (48, -52), and its size is
+    `scene_view.internal_size()`. Build a `gizmo::Proj` from that, not from a
+    guessed panel rect.
   - The env hooks can't hold a drag or switch the projection. To look at those,
     render mid-flow with `h.render()` from a scratch `#[ignore]` test (saving the
     PNG to the scratchpad), then delete the test.

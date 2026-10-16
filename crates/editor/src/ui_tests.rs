@@ -1265,3 +1265,127 @@ fn launcher_mut<'a>(
         crate::Screen::Editor(_) => panic!("the editor opened"),
     }
 }
+
+/// Scene view navigation in the real editor, with pointer and keys: MMB
+/// pans, RMB held flies (WASD/QE, the app's own shortcuts stand down), Alt +
+/// RMB dollies, 5 switches the projection, and the axis widget looks from an
+/// axis, then from the opposite one.
+#[test]
+#[ignore = "changes cwd/env: run alone with --ignored --test-threads=1"]
+fn scene_view_pans_flies_dollies_and_flips_axes() {
+    use egui::{Event, Key, Modifiers, PointerButton};
+    let Some((mut h, _tmp, repo)) = temp_project_app(egui::vec2(1600.0, 940.0)) else {
+        return;
+    };
+    let widget = h.get_by_label("View orientation").rect().center();
+    let p = widget + egui::vec2(-300.0, 260.0);
+    let button = |h: &Harness<'static, App>, button, pos, pressed| {
+        h.event(Event::PointerButton {
+            pos,
+            button,
+            pressed,
+            modifiers: h.input().modifiers,
+        })
+    };
+    let drag = |h: &mut Harness<'static, App>, b: PointerButton, by: egui::Vec2| {
+        h.hover_at(p);
+        button(h, b, p, true);
+        for k in 1..=8 {
+            h.hover_at(p + by * (k as f32 / 8.0));
+        }
+        button(h, b, p + by, false);
+        h.run_steps(2);
+    };
+    h.hover_at(p);
+    h.run_steps(2);
+
+    // Plain MMB drag: pan (the target moves, the view doesn't turn).
+    let cam = h.state().scene_view.cam;
+    drag(&mut h, PointerButton::Middle, egui::vec2(60.0, 0.0));
+    let now = h.state().scene_view.cam;
+    let moved = now.target - cam.target;
+    assert!(moved.dot(moved) > 1e-4, "MMB pans");
+    assert!(
+        (now.yaw - cam.yaw).abs() < 1e-6,
+        "MMB doesn't orbit any more"
+    );
+    // Ctrl + MMB pans too.
+    h.input_mut().modifiers = Modifiers::COMMAND;
+    drag(&mut h, PointerButton::Middle, egui::vec2(0.0, 40.0));
+    h.input_mut().modifiers = Modifiers::NONE;
+    let moved = h.state().scene_view.cam.target - now.target;
+    assert!(moved.dot(moved) > 1e-4, "Ctrl+MMB pans");
+
+    // Hold RMB: fly. E rises (and doesn't switch the gizmo to rotate),
+    // W moves forward, and Shift+A doesn't open the fake-object dialog.
+    let cam = h.state().scene_view.cam;
+    h.hover_at(p);
+    button(&h, PointerButton::Secondary, p, true);
+    h.run_steps(2);
+    assert!(h.state().scene_view.flying(), "RMB held flies");
+    for key in [Key::E, Key::W] {
+        h.key_down(key);
+        h.run_steps(6);
+        h.key_up(key);
+        h.run_steps(1);
+    }
+    h.key_press_modifiers(Modifiers::SHIFT, Key::A);
+    h.run_steps(2);
+    button(&h, PointerButton::Secondary, p, false);
+    h.run_steps(2);
+    let now = h.state().scene_view.cam;
+    assert!(!h.state().scene_view.flying(), "released");
+    assert!(h.state().dialog.is_none(), "no shortcut fired while flying");
+    assert_eq!(
+        h.state().scene_view.gizmo,
+        crate::gizmo::GizmoMode::Translate
+    );
+    assert!(now.eye().y > cam.eye().y, "E rises");
+    let fwd = cam.target - cam.eye();
+    assert!((now.eye() - cam.eye()).dot(fwd) > 0.0, "W moves forward");
+    assert!(
+        (now.dist - cam.dist).abs() < 1e-4,
+        "flying keeps the orbit distance"
+    );
+
+    // Alt + RMB drag up: dolly in.
+    h.input_mut().modifiers = Modifiers::ALT;
+    drag(&mut h, PointerButton::Secondary, egui::vec2(0.0, -60.0));
+    h.input_mut().modifiers = Modifiers::NONE;
+    assert!(!h.state().scene_view.flying(), "Alt+RMB doesn't fly");
+    assert!(h.state().scene_view.cam.dist < now.dist * 0.9, "dollied in");
+
+    // 5 (with the view hovered): orthographic, and back.
+    h.hover_at(p);
+    h.key_press(Key::Num5);
+    h.run_steps(2);
+    assert!(h.state().scene_view.cam.ortho);
+    h.key_press(Key::Num5);
+    h.run_steps(2);
+    assert!(!h.state().scene_view.cam.ortho);
+
+    // The axis widget: +X looks from +X; clicking it again looks from -X.
+    let tip = |h: &Harness<'static, App>, idx: usize| {
+        crate::gizmo::axis_tips(&h.state().scene_view.cam.camera().view(), widget)
+            .into_iter()
+            .find(|t| t.0 == idx)
+            .unwrap()
+            .1
+    };
+    let click_at = |h: &mut Harness<'static, App>, at: egui::Pos2| {
+        h.hover_at(at);
+        h.drag_at(at);
+        h.drop_at(at);
+        h.run_steps(40);
+    };
+    let at = tip(&h, 0);
+    click_at(&mut h, at);
+    let cam = h.state().scene_view.cam;
+    assert_eq!(crate::gizmo::aligned_axis(cam.yaw, cam.pitch), Some(0));
+    let at = tip(&h, 0);
+    click_at(&mut h, at);
+    let cam = h.state().scene_view.cam;
+    assert_eq!(crate::gizmo::aligned_axis(cam.yaw, cam.pitch), Some(3));
+    assert!(h.state().doc.selected.is_none(), "widget clicks don't pick");
+    leave_temp_project(&repo);
+}

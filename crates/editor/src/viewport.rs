@@ -26,7 +26,7 @@ use trino_core::{
 use trino_platform_pc::{PcRenderer, SimProfile};
 use trino_scene::{Resolved, Scene, Transform};
 
-use crate::gizmo::{self, Drag, Gizmo, GizmoMode, OrbitCam, Proj};
+use crate::gizmo::{self, AxisEvent, Drag, Gizmo, GizmoMode, OrbitCam, Proj, RenderCam};
 use crate::project::Project;
 use crate::theme::{self, c, icon};
 
@@ -121,6 +121,8 @@ pub struct Viewport {
     hover: Option<Vec<usize>>,
     /// Box select in progress (Shift+drag on the Scene view): start point.
     box_start: Option<Pos2>,
+    /// Fly mode: RMB held on the Scene view (mouselook + WASD/QE).
+    fly: bool,
 }
 
 const GRID_EXTENT: i32 = 40;
@@ -136,7 +138,7 @@ pub fn target_of(profile: SimProfile) -> trino_scene::Target {
 
 /// What a rendered frame depended on: (content rev, size, asset generation,
 /// camera, animation time). Same key = skip the render.
-type RenderKey = (u64, (u32, u32), u64, [f32; 6], f32);
+type RenderKey = (u64, (u32, u32), u64, [f32; 7], f32);
 
 impl Viewport {
     pub fn new(render_state: RenderState, kind: ViewKind, profile: SimProfile) -> Self {
@@ -182,6 +184,7 @@ impl Viewport {
             },
             hover: None,
             box_start: None,
+            fly: false,
         }
     }
 
@@ -232,6 +235,12 @@ impl Viewport {
         }
     }
 
+    /// Fly mode is on (RMB held on the Scene view): WASD/QE/Shift move the
+    /// camera, so the app's own key shortcuts stand down.
+    pub fn flying(&self) -> bool {
+        self.fly
+    }
+
     pub fn focus_on(&mut self, input: &ViewInput, path: &[usize]) {
         if let Some((c, r)) = selection_sphere(input, path) {
             self.cam.focus(c, r);
@@ -249,27 +258,40 @@ impl Viewport {
         let clear = env.clear;
         let r = &mut self.renderer;
         r.begin_frame(Color::rgb(clear[0], clear[1], clear[2]));
-        let camera = match self.kind {
-            ViewKind::Scene => self.cam.camera(),
-            ViewKind::Game => env.core_camera(),
+        // The Scene view may draw near-orthographic: a far camera over a
+        // scaled-down world (`RenderCam`); LOD still measures from the
+        // orbit eye.
+        let (rc, lod_eye) = match self.kind {
+            ViewKind::Scene => (self.cam.render_cam(), self.cam.eye()),
+            ViewKind::Game => {
+                let camera = env.core_camera();
+                (RenderCam::plain(camera), camera.eye)
+            }
         };
+        let camera = rc.camera;
+        let ortho = rc.scale != 1.0;
+        let place = |m: &trino_core::Mat34| if ortho { rc.world.mul(m) } else { *m };
         r.set_camera(&camera);
         let light = env.core_light();
+        let light = Light {
+            fog: rc.fog(light.fog),
+            ..light
+        };
 
         if self.kind == ViewKind::Scene && self.show_grid {
             // The grid fades into the background with distance.
             let d = self.cam.dist;
             r.set_light(&Light {
-                fog: Fog {
+                fog: rc.fog(Fog {
                     color: Color::rgb(clear[0], clear[1], clear[2]),
                     near: d * 0.6,
                     far: d * 2.4 + 12.0,
-                },
+                }),
                 ..light
             });
             r.draw_model_matrix(
                 self.grid,
-                &trino_core::Mat34::IDENTITY,
+                &place(&trino_core::Mat34::IDENTITY),
                 Material::VertexLit,
                 &ModelParams {
                     shading: Shading::Unlit,
@@ -306,7 +328,7 @@ impl Viewport {
             // Inspector's preview distance for the entity being tuned).
             let pick = match input.lod_preview {
                 Some((owner, d)) if item.owner == owner && !item.from_prefab => item.lod_at(d),
-                _ => item.lod_from(camera.eye),
+                _ => item.lod_from(lod_eye),
             };
             if !item.lod.is_empty() {
                 match pick {
@@ -321,7 +343,7 @@ impl Viewport {
             let lod_id = match pick {
                 LodPick::Model(id) => id,
                 LodPick::Impostor(imp) => {
-                    imp.draw(r, &item.matrix, camera.eye, item.params.tint);
+                    imp.draw(r, &place(&item.matrix), camera.eye, item.params.tint);
                     tris += 2;
                     continue;
                 }
@@ -348,7 +370,7 @@ impl Viewport {
             if let Some(m) = input.project.model_by_id(*id) {
                 tris += m.tris;
             }
-            r.draw_model_matrix(*id, &item.matrix, Material::VertexLit, &params);
+            r.draw_model_matrix(*id, &place(&item.matrix), Material::VertexLit, &params);
         }
         if self.kind == ViewKind::Game {
             for item in &input.resolved.items {
@@ -430,15 +452,11 @@ impl Viewport {
 
         // Re-render only on change.
         let cam_key = {
-            let e = self.cam.eye();
-            [
-                e.x,
-                e.y,
-                e.z,
-                self.cam.target.x,
-                self.cam.target.y,
-                self.cam.target.z,
-            ]
+            // The overlay camera: its eye and field of view also change
+            // with the projection (and with zoom when orthographic).
+            let cam = self.cam.camera();
+            let (e, t) = (cam.eye, cam.target);
+            [e.x, e.y, e.z, t.x, t.y, t.z, cam.fov_y]
         };
         let anim_time = if input.animate { input.time } else { 0.0 };
         let key = (
@@ -544,11 +562,58 @@ impl Viewport {
 
         // ---- camera controls --------------------------------------------
         if self.kind == ViewKind::Scene && self.drag.is_none() {
-            let shift = ui.input(|i| i.modifiers.shift);
-            let alt = ui.input(|i| i.modifiers.alt);
+            let (shift, alt) = ui.input(|i| (i.modifiers.shift, i.modifiers.alt));
+            // Hold RMB on the view to fly: mouselook, WASD along the view,
+            // Q/E down/up, Shift boosts, the wheel sets the speed. (Shift+RMB
+            // still pans and Alt+RMB dollies.)
+            if !self.fly
+                && response.hovered()
+                && !shift
+                && !alt
+                && ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Secondary))
+            {
+                self.fly = true;
+                ui.memory_mut(|m| m.stop_text_input());
+            }
+            if self.fly && !ui.input(|i| i.pointer.button_down(egui::PointerButton::Secondary)) {
+                self.fly = false;
+            }
+            if self.fly {
+                use egui::Key;
+                let (look, dir, boost, scroll) = ui.input(|i| {
+                    let k = |key: Key| if i.key_down(key) { 1.0 } else { 0.0 };
+                    (
+                        i.pointer.delta(),
+                        Vec3::new(
+                            k(Key::D) - k(Key::A),
+                            k(Key::E) - k(Key::Q),
+                            k(Key::W) - k(Key::S),
+                        ),
+                        i.modifiers.shift,
+                        i.smooth_scroll_delta.y,
+                    )
+                });
+                if look != Vec2::ZERO {
+                    self.cam.look(look);
+                }
+                if dir.dot(dir) > 0.0 {
+                    self.cam.fly(dir, dt, boost);
+                }
+                if scroll != 0.0 {
+                    self.cam.fly_speed_scroll(scroll);
+                }
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+                ui.ctx().request_repaint();
+            }
             let delta = response.drag_delta();
-            let pan = (response.dragged_by(egui::PointerButton::Middle) && shift)
-                || (response.dragged_by(egui::PointerButton::Secondary) && shift);
+            let (lmb, mmb, rmb) = (
+                response.dragged_by(egui::PointerButton::Primary),
+                response.dragged_by(egui::PointerButton::Middle),
+                response.dragged_by(egui::PointerButton::Secondary) && !self.fly,
+            );
+            // MMB pans, with or without Ctrl/Cmd or Shift; Shift+RMB too.
+            let pan = mmb || (rmb && shift && !alt);
+            let dolly = rmb && alt;
             // Shift + left drag on empty space: box select.
             if response.drag_started_by(egui::PointerButton::Primary)
                 && shift
@@ -582,22 +647,22 @@ impl Viewport {
                 }
                 ui.ctx().request_repaint();
             }
-            let orbit = (response.dragged_by(egui::PointerButton::Middle) && !shift)
-                || (response.dragged_by(egui::PointerButton::Secondary) && !shift)
-                || (response.dragged_by(egui::PointerButton::Primary) && alt);
+            let orbit = lmb && alt;
             if pan {
                 self.cam.pan(delta, image_rect.height());
+            } else if dolly {
+                self.cam.dolly(delta.y);
             } else if orbit {
                 self.cam.orbit(delta);
             }
-            if response.hovered() {
+            if response.hovered() && !self.fly {
                 let scroll = ui.input(|i| i.smooth_scroll_delta.y);
                 if scroll != 0.0 {
                     self.cam.zoom(scroll);
                     ui.ctx().request_repaint();
                 }
             }
-            if pan || orbit {
+            if pan || dolly || orbit {
                 ui.ctx().request_repaint();
             }
         }
@@ -692,18 +757,16 @@ impl Viewport {
         self.toolbar(ui, avail, input, &mut actions);
         if self.kind == ViewKind::Scene {
             let center = Pos2::new(avail.max.x - 48.0, avail.min.y + 52.0);
-            if let Some(axis) = gizmo::axis_widget(ui, &proj, center) {
-                use std::f32::consts::{FRAC_PI_2, PI};
-                // Click an axis to look down it (Blender-style).
-                let (yaw, pitch) = match axis {
-                    0 => (FRAC_PI_2, 0.0),
-                    3 => (-FRAC_PI_2, 0.0),
-                    1 => (self.cam.yaw, 1.54),
-                    4 => (self.cam.yaw, -1.54),
-                    2 => (PI, 0.0),
-                    _ => (0.0, 0.0),
-                };
-                self.cam.view_from(yaw, pitch);
+            if let Some(event) = gizmo::axis_widget(ui, &proj, center, self.cam.ortho) {
+                match event {
+                    // Click an axis to look from it, again for the other side.
+                    AxisEvent::Snap(axis) => {
+                        self.cam.snap_to_axis(axis);
+                    }
+                    AxisEvent::Orbit(delta) => self.cam.orbit(delta),
+                    AxisEvent::ToggleOrtho => self.cam.ortho = !self.cam.ortho,
+                }
+                ui.ctx().request_repaint();
             }
         }
         let stats = format!(
@@ -730,12 +793,14 @@ impl Viewport {
         }
 
         // ---- keyboard (when hovered) ------------------------------------------
+        // (Not while flying: WASD/QE steer the camera then.)
         if response.hovered()
             && self.kind == ViewKind::Scene
+            && !self.fly
             && !ui.ctx().egui_wants_keyboard_input()
         {
             use egui::Key;
-            let (w, e, r, f, g, n1, n3, n7, ctrl) = ui.input(|i| {
+            let (w, e, r, f, g, n1, n3, n5, n7, ctrl) = ui.input(|i| {
                 (
                     i.key_pressed(Key::W),
                     i.key_pressed(Key::E),
@@ -744,6 +809,7 @@ impl Viewport {
                     i.key_pressed(Key::G),
                     i.key_pressed(Key::Num1),
                     i.key_pressed(Key::Num3),
+                    i.key_pressed(Key::Num5),
                     i.key_pressed(Key::Num7),
                     i.modifiers.command,
                 )
@@ -769,17 +835,17 @@ impl Viewport {
                     None => self.cam.focus(Vec3::new(0.0, 0.5, 0.0), 6.0),
                 }
             }
-            use std::f32::consts::{FRAC_PI_2, PI};
-            if n1 {
-                self.cam.view_from(if ctrl { 0.0 } else { PI }, 0.0);
+            // Numpad-style views (Ctrl: the opposite side); 5 switches the
+            // projection. egui reads the numpad digits as the top-row ones.
+            for (pressed, front, back) in [(n1, 2, 5), (n3, 0, 3), (n7, 1, 4)] {
+                if pressed {
+                    let (yaw, pitch) =
+                        gizmo::axis_view(if ctrl { back } else { front }, self.cam.yaw);
+                    self.cam.view_from(yaw, pitch);
+                }
             }
-            if n3 {
-                self.cam
-                    .view_from(if ctrl { -FRAC_PI_2 } else { FRAC_PI_2 }, 0.0);
-            }
-            if n7 {
-                self.cam
-                    .view_from(self.cam.yaw, if ctrl { -1.54 } else { 1.54 });
+            if n5 {
+                self.cam.ortho = !self.cam.ortho;
             }
         }
         actions

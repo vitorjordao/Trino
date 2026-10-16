@@ -18,10 +18,72 @@ pub struct OrbitCam {
     pub pitch: f32,
     pub dist: f32,
     pub fov: f32,
+    /// Near-orthographic projection (Numpad 5 / the axis widget's centre):
+    /// see [`OrbitCam::camera`].
+    pub ortho: bool,
+    /// Fly mode (RMB + WASD/QE) speed, world units per second.
+    pub fly_speed: f32,
     goal_target: Vec3,
     goal_yaw: f32,
     goal_pitch: f32,
     goal_dist: f32,
+}
+
+/// Pitch limit: just short of the poles, where `look_at` has no up.
+pub const MAX_PITCH: f32 = 1.54;
+/// Radians of orbit per pixel dragged (the view and the axis widget alike).
+const ORBIT_PER_PX: f32 = 0.008;
+/// Fly mode: Shift multiplies the speed by this.
+pub const FLY_BOOST: f32 = 2.5;
+/// Near-orthographic mode: the eye backs off to at least this far (world
+/// units), and at least `ORTHO_FACTOR` times the orbit distance.
+const ORTHO_MIN_PULL: f32 = 2000.0;
+const ORTHO_FACTOR: f32 = 100.0;
+
+/// What the renderer draws the Scene view with. In perspective, the camera
+/// itself. The engine has no orthographic projection (the consoles don't
+/// need one), so the near-orthographic mode puts the eye very far back with
+/// a field of view so narrow that the view at the target keeps its size.
+/// At that distance a 32-bit depth buffer of `1 - NEAR/z` would resolve
+/// only metres, so the world is drawn scaled down around the target
+/// (`world`, applied to every model matrix): the eye is 1 unit away and
+/// depth keeps millimetres. The picture is the same (a perspective is
+/// scale-invariant); [`OrbitCam::camera`] is the unscaled equivalent the
+/// overlays and picking use.
+#[derive(Clone, Copy, Debug)]
+pub struct RenderCam {
+    pub camera: Camera3,
+    /// World to render space (identity in perspective).
+    pub world: Mat34,
+    /// Render units per world unit (1 in perspective).
+    pub scale: f32,
+    /// How much farther the eye is than the orbit distance (0 in
+    /// perspective): distance-based effects (fog) shift by it.
+    pub pull: f32,
+}
+
+impl RenderCam {
+    /// A camera drawn as is (perspective, unscaled world).
+    pub fn plain(camera: Camera3) -> Self {
+        RenderCam {
+            camera,
+            world: Mat34::IDENTITY,
+            scale: 1.0,
+            pull: 0.0,
+        }
+    }
+
+    /// A fog range (world units from the orbit eye) in render space.
+    pub fn fog(&self, fog: trino_core::Fog) -> trino_core::Fog {
+        if fog.far <= fog.near {
+            return fog;
+        }
+        trino_core::Fog {
+            near: (fog.near + self.pull) * self.scale,
+            far: (fog.far + self.pull) * self.scale,
+            ..fog
+        }
+    }
 }
 
 impl Default for OrbitCam {
@@ -32,6 +94,8 @@ impl Default for OrbitCam {
             pitch: 0.45,
             dist: 12.0,
             fov: 55f32.to_radians(),
+            ortho: false,
+            fly_speed: 6.0,
             goal_target: Vec3::ZERO,
             goal_yaw: 0.0,
             goal_pitch: 0.0,
@@ -40,6 +104,42 @@ impl Default for OrbitCam {
         cam.snap_goals();
         cam
     }
+}
+
+/// The six views of the axis widget: `k < 3` looks from the +k side
+/// (X right, Y top, Z back), `k + 3` from the -k side. Yaw and pitch of the
+/// orbit eye; the top and bottom views keep the current yaw.
+pub fn axis_view(idx: usize, yaw: f32) -> (f32, f32) {
+    use std::f32::consts::{FRAC_PI_2, PI};
+    match idx {
+        0 => (FRAC_PI_2, 0.0),
+        3 => (-FRAC_PI_2, 0.0),
+        1 => (yaw, MAX_PITCH),
+        4 => (yaw, -MAX_PITCH),
+        2 => (PI, 0.0),
+        _ => (0.0, 0.0),
+    }
+}
+
+/// Which of the six [`axis_view`]s a yaw/pitch looks from, if any.
+pub fn aligned_axis(yaw: f32, pitch: f32) -> Option<usize> {
+    use std::f32::consts::{FRAC_PI_2, PI, TAU};
+    const EPS: f32 = 0.01;
+    if pitch >= MAX_PITCH - EPS {
+        return Some(1);
+    }
+    if pitch <= -MAX_PITCH + EPS {
+        return Some(4);
+    }
+    if pitch.abs() > EPS {
+        return None;
+    }
+    let y = yaw.rem_euclid(TAU);
+    let near = |a: f32| (y - a).abs() < EPS || (y - a - TAU).abs() < EPS;
+    [(0, FRAC_PI_2), (3, 3.0 * FRAC_PI_2), (2, PI), (5, 0.0)]
+        .into_iter()
+        .find(|&(_, a)| near(a))
+        .map(|(k, _)| k)
 }
 
 impl OrbitCam {
@@ -58,16 +158,65 @@ impl OrbitCam {
         )
     }
 
+    /// The orbit eye: where a perspective view looks from (and what LOD
+    /// distances are measured from, in either projection).
     pub fn eye(&self) -> Vec3 {
         self.target + Self::offset(self.yaw, self.pitch) * self.dist
     }
 
+    /// The camera the overlays project with. In the near-orthographic mode
+    /// its eye is [`RenderCam::pull`] farther back with a narrow field of
+    /// view, so the target's plane keeps its size on screen.
     pub fn camera(&self) -> Camera3 {
+        let (dist, fov) = self.projection();
         Camera3 {
-            eye: self.eye(),
+            eye: self.target + Self::offset(self.yaw, self.pitch) * dist,
             target: self.target,
-            fov_y: self.fov,
+            fov_y: fov,
         }
+    }
+
+    /// The camera and world transform the renderer draws with.
+    pub fn render_cam(&self) -> RenderCam {
+        let camera = self.camera();
+        if !self.ortho {
+            return RenderCam::plain(camera);
+        }
+        let d = camera.eye - camera.target;
+        let len = d.dot(d).sqrt();
+        let s = 1.0 / len;
+        RenderCam {
+            camera: Camera3 {
+                eye: d * s,
+                target: Vec3::ZERO,
+                fov_y: camera.fov_y,
+            },
+            world: Mat34::from_rotation_scale_translation(
+                Vec3::ZERO,
+                Vec3::new(s, s, s),
+                -self.target * s,
+            ),
+            scale: s,
+            pull: len - self.dist,
+        }
+    }
+
+    /// Eye distance and vertical field of view of [`camera`](Self::camera).
+    fn projection(&self) -> (f32, f32) {
+        if !self.ortho {
+            return (self.dist, self.fov);
+        }
+        let pull = (self.dist * ORTHO_FACTOR).max(ORTHO_MIN_PULL);
+        // The renderer's focal is the core's cot(fov/2) (an approximation:
+        // ~1% off near zero), so solve for the angle whose core cotangent
+        // keeps the target plane exactly as big as in perspective.
+        let cot = |h: f32| trino_core::math3d::cos(h) / trino_core::math3d::sin(h);
+        let want = cot(self.fov * 0.5) * pull / self.dist;
+        let mut h = (1.0 / want).atan();
+        for _ in 0..3 {
+            h *= cot(h) / want;
+        }
+        (pull, h * 2.0)
     }
 
     /// Advance smoothing; true while still moving.
@@ -90,8 +239,8 @@ impl OrbitCam {
     }
 
     pub fn orbit(&mut self, delta: Vec2) {
-        self.goal_yaw += delta.x * 0.008;
-        self.goal_pitch = (self.goal_pitch + delta.y * 0.008).clamp(-1.54, 1.54);
+        self.goal_yaw += delta.x * ORBIT_PER_PX;
+        self.goal_pitch = (self.goal_pitch + delta.y * ORBIT_PER_PX).clamp(-MAX_PITCH, MAX_PITCH);
         // Orbit responds immediately (smoothing only on discrete moves).
         self.yaw = self.goal_yaw;
         self.pitch = self.goal_pitch;
@@ -111,7 +260,50 @@ impl OrbitCam {
         self.goal_dist = (self.goal_dist * (-scroll * 0.0015).exp()).clamp(0.3, 600.0);
     }
 
-    /// Ease to frame a sphere.
+    /// Alt + RMB drag: dolly by a vertical drag (up = in), immediately.
+    pub fn dolly(&mut self, dy: f32) {
+        self.goal_dist = (self.goal_dist * (dy * 0.01).exp()).clamp(0.3, 600.0);
+        self.dist = self.goal_dist;
+    }
+
+    /// Fly mode mouselook: turn the view around the eye (mouse right turns
+    /// right, mouse up looks up); the orbit target moves, the eye stays.
+    pub fn look(&mut self, delta: Vec2) {
+        self.settle();
+        let eye = self.eye();
+        self.yaw -= delta.x * ORBIT_PER_PX * 0.5;
+        self.pitch = (self.pitch + delta.y * ORBIT_PER_PX * 0.5).clamp(-MAX_PITCH, MAX_PITCH);
+        self.target = eye - Self::offset(self.yaw, self.pitch) * self.dist;
+        self.snap_goals();
+    }
+
+    /// Fly mode movement: `dir` is (right, world up, forward) in -1..=1,
+    /// forward along the view vector. Moves eye and target together.
+    pub fn fly(&mut self, dir: Vec3, dt: f32, boost: bool) {
+        self.settle();
+        let forward = -Self::offset(self.yaw, self.pitch);
+        let right = Vec3::new(self.yaw.cos(), 0.0, self.yaw.sin());
+        let speed = self.fly_speed * if boost { FLY_BOOST } else { 1.0 };
+        let step = (right * dir.x + Vec3::new(0.0, dir.y, 0.0) + forward * dir.z) * (speed * dt);
+        self.target += step;
+        self.snap_goals();
+    }
+
+    /// Scroll while flying: change the fly speed (scroll up = faster).
+    pub fn fly_speed_scroll(&mut self, scroll: f32) {
+        self.fly_speed = (self.fly_speed * (scroll * 0.003).exp()).clamp(0.25, 200.0);
+    }
+
+    /// Finish any easing at once (fly mode takes over from the goals).
+    fn settle(&mut self) {
+        self.target = self.goal_target;
+        self.yaw = self.goal_yaw;
+        self.pitch = self.goal_pitch;
+        self.dist = self.goal_dist;
+    }
+
+    /// Ease to frame a sphere. The sphere's centre becomes the orbit centre,
+    /// so the next orbit turns around the framed object.
     pub fn focus(&mut self, center: Vec3, radius: f32) {
         self.goal_target = center;
         self.goal_dist = (radius.max(0.25) / (self.fov * 0.5).sin() * 1.3).clamp(0.6, 400.0);
@@ -129,6 +321,21 @@ impl OrbitCam {
         }
         self.goal_yaw = y;
         self.goal_pitch = pitch;
+    }
+
+    /// The axis widget's click: look from that axis (an [`axis_view`]
+    /// index), or from the opposite side when the view already looks from
+    /// it (Blender's flip). Judged on where the camera is heading, so a
+    /// second click during the ease flips too. Returns the view chosen.
+    pub fn snap_to_axis(&mut self, idx: usize) -> usize {
+        let idx = if aligned_axis(self.goal_yaw, self.goal_pitch) == Some(idx) {
+            (idx + 3) % 6
+        } else {
+            idx
+        };
+        let (yaw, pitch) = axis_view(idx, self.goal_yaw);
+        self.view_from(yaw, pitch);
+        idx
     }
 
     /// Match a game camera (eye/target).
@@ -709,33 +916,162 @@ fn point_in_quad(p: Pos2, q: &[Pos2]) -> bool {
     sign != 0.0
 }
 
-/// Small XYZ orientation widget (top-right of the scene view). Returns the
-/// axis clicked (positive = 0..3, negative = 3..6) to snap the view.
-pub fn axis_widget(ui: &egui::Ui, proj: &Proj, center: Pos2) -> Option<usize> {
-    let painter = ui.painter();
-    painter.circle_filled(center, 34.0, c::BG0.gamma_multiply(0.55));
-    let view = &proj.view.m;
-    let mut items: Vec<(f32, usize, Vec2)> = Vec::new();
+// ------------------------------------------------------- axis widget --
+
+/// What the orientation widget asks of the camera.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum AxisEvent {
+    /// An axis tip was clicked: look from it ([`OrbitCam::snap_to_axis`],
+    /// which flips to the other side when the view already looks from it).
+    Snap(usize),
+    /// The widget is being dragged: orbit like a drag on the view.
+    Orbit(Vec2),
+    /// The centre (or the projection label) was clicked.
+    ToggleOrtho,
+}
+
+/// What a point on the widget lands on.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum AxisHit {
+    Tip(usize),
+    Center,
+    /// The disc around them (dragging there orbits).
+    Disc,
+}
+
+pub const AXIS_WIDGET_RADIUS: f32 = 34.0;
+const AXIS_TIP_LEN: f32 = 24.0;
+const AXIS_TIP_R: f32 = 7.0;
+const AXIS_CENTER_R: f32 = 5.0;
+
+/// The six tips (an [`axis_view`] index each) for a view matrix, back to
+/// front, with their depth (> 0: pointing away from the viewer).
+pub fn axis_tips(view: &Mat34, center: Pos2) -> Vec<(usize, Pos2, f32)> {
+    let (rx, ry, rz) = (view.m[0], view.m[1], view.m[2]);
+    let mut items = Vec::with_capacity(6);
     for k in 0..3usize {
-        let (rx, ry, rz) = (view[0], view[1], view[2]);
-        let v = Vec2::new(rx[k], -ry[k]); // screen-space axis
-        let depth = rz[k];
-        items.push((depth, k, v));
-        items.push((-depth, k + 3, -v));
+        let v = Vec2::new(rx[k], -ry[k]) * AXIS_TIP_LEN; // screen-space axis
+        items.push((k, center + v, rz[k]));
+        items.push((k + 3, center - v, -rz[k]));
     }
-    items.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
-    let mut clicked = None;
-    let pointer = ui.input(|i| i.pointer.hover_pos());
-    let pressed = ui.input(|i| i.pointer.primary_clicked());
-    for (_, idx, v) in items {
+    items.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap());
+    items
+}
+
+/// Hit test: the front-most tip under `pos` wins, then the centre, then
+/// the disc. Looking down an axis puts both of its tips on the centre, so
+/// there a click flips the view; elsewhere it toggles the projection.
+pub fn axis_hit(tips: &[(usize, Pos2, f32)], center: Pos2, pos: Pos2) -> Option<AxisHit> {
+    if let Some(&(idx, _, _)) = tips
+        .iter()
+        .rev()
+        .find(|(_, tip, _)| (pos - *tip).length() <= AXIS_TIP_R + 1.0)
+    {
+        return Some(AxisHit::Tip(idx));
+    }
+    let d = (pos - center).length();
+    if d <= AXIS_CENTER_R + 2.0 {
+        Some(AxisHit::Center)
+    } else if d <= AXIS_WIDGET_RADIUS {
+        Some(AxisHit::Disc)
+    } else {
+        None
+    }
+}
+
+/// The XYZ orientation widget (top-right of the scene view), Blender-style:
+/// click a tip to look from that axis (again to look from the other side),
+/// drag anywhere on it to orbit, click the centre (or the label below) to
+/// switch between perspective and orthographic.
+pub fn axis_widget(ui: &egui::Ui, proj: &Proj, center: Pos2, ortho: bool) -> Option<AxisEvent> {
+    let disc = Rect::from_center_size(center, Vec2::splat(AXIS_WIDGET_RADIUS * 2.0));
+    let resp = ui.interact(
+        disc,
+        ui.id().with("axis-widget"),
+        egui::Sense::click_and_drag(),
+    );
+    resp.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "View orientation")
+    });
+    let label_rect = Rect::from_center_size(
+        center + Vec2::new(0.0, AXIS_WIDGET_RADIUS + 12.0),
+        Vec2::new(46.0, 16.0),
+    );
+    let name = if ortho { "Ortho" } else { "Persp" };
+    let label = ui.interact(
+        label_rect,
+        ui.id().with("axis-widget-projection"),
+        egui::Sense::click(),
+    );
+    label.widget_info(|| {
+        egui::WidgetInfo::labeled(
+            egui::WidgetType::Button,
+            true,
+            format!("Projection: {name} (5)"),
+        )
+    });
+    let label = label.on_hover_text("Perspective / orthographic (5)");
+
+    let tips = axis_tips(&proj.view, center);
+    let dragging = resp.dragged_by(egui::PointerButton::Primary);
+    let hover = if dragging {
+        None
+    } else {
+        resp.hover_pos().and_then(|p| axis_hit(&tips, center, p))
+    };
+    if dragging {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+    } else if matches!(hover, Some(AxisHit::Tip(_) | AxisHit::Center)) || label.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+
+    let painter = ui.painter();
+    let disc_fill = if dragging || hover.is_some() {
+        c::BG3.gamma_multiply(0.7)
+    } else {
+        c::BG0.gamma_multiply(0.55)
+    };
+    painter.circle_filled(center, AXIS_WIDGET_RADIUS, disc_fill);
+    let center_hot = hover == Some(AxisHit::Center) || label.hovered();
+    let draw_center = || {
+        let (fill, stroke) = if dragging {
+            (c::ACCENT, c::ACCENT_TEXT)
+        } else if center_hot {
+            (c::TEXT, Color32::WHITE)
+        } else {
+            (c::TEXT_WEAK.gamma_multiply(0.8), c::TEXT_WEAK)
+        };
+        let r = if center_hot || dragging {
+            AXIS_CENTER_R + 1.0
+        } else {
+            AXIS_CENTER_R
+        };
+        if ortho {
+            // A square centre: the parallel projection.
+            painter.rect(
+                Rect::from_center_size(center, Vec2::splat(r * 1.8)),
+                1.5,
+                fill,
+                Stroke::new(1.0, stroke),
+                egui::StrokeKind::Middle,
+            );
+        } else {
+            painter.circle(center, r, fill, Stroke::new(1.0, stroke));
+        }
+    };
+    let mut center_drawn = false;
+    for &(idx, tip, depth) in &tips {
+        if depth < 0.0 && !center_drawn {
+            draw_center();
+            center_drawn = true;
+        }
         let k = idx % 3;
-        let tip = center + v * 24.0;
         let positive = idx < 3;
         let col = AXIS_COLORS[k];
         if positive {
             painter.line_segment([center, tip], Stroke::new(2.0, col));
         }
-        let hovered = pointer.is_some_and(|p| (p - tip).length() < 8.0);
+        let hovered = hover == Some(AxisHit::Tip(idx));
         let fill = if positive {
             col
         } else {
@@ -743,24 +1079,70 @@ pub fn axis_widget(ui: &egui::Ui, proj: &Proj, center: Pos2) -> Option<usize> {
         };
         painter.circle(
             tip,
-            if hovered { 8.0 } else { 7.0 },
+            if hovered {
+                AXIS_TIP_R + 1.0
+            } else {
+                AXIS_TIP_R
+            },
             fill,
             Stroke::new(1.0, if hovered { Color32::WHITE } else { col }),
         );
-        if positive {
+        if positive || hovered {
             painter.text(
                 tip,
                 egui::Align2::CENTER_CENTER,
-                ["X", "Y", "Z"][k],
-                egui::FontId::new(10.0, crate::theme::bold()),
-                c::BG0,
+                if positive {
+                    ["X", "Y", "Z"][k]
+                } else {
+                    ["-X", "-Y", "-Z"][k]
+                },
+                egui::FontId::new(if positive { 10.0 } else { 8.5 }, crate::theme::bold()),
+                if positive { c::BG0 } else { Color32::WHITE },
             );
         }
-        if hovered && pressed {
-            clicked = Some(idx);
-        }
     }
-    clicked
+    if !center_drawn {
+        draw_center();
+    }
+    painter.rect_filled(
+        label_rect,
+        4.0,
+        if label.hovered() {
+            c::BG3.gamma_multiply(0.9)
+        } else {
+            c::BG0.gamma_multiply(0.55)
+        },
+    );
+    painter.text(
+        label_rect.center(),
+        egui::Align2::CENTER_CENTER,
+        name,
+        egui::FontId::proportional(10.5),
+        if label.hovered() {
+            c::TEXT
+        } else {
+            c::TEXT_WEAK
+        },
+    );
+
+    if label.clicked() {
+        return Some(AxisEvent::ToggleOrtho);
+    }
+    if dragging {
+        let delta = resp.drag_delta();
+        return (delta != Vec2::ZERO).then_some(AxisEvent::Orbit(delta));
+    }
+    if resp.clicked() {
+        return match resp
+            .interact_pointer_pos()
+            .and_then(|p| axis_hit(&tips, center, p))
+        {
+            Some(AxisHit::Tip(idx)) => Some(AxisEvent::Snap(idx)),
+            Some(AxisHit::Center) => Some(AxisEvent::ToggleOrtho),
+            _ => None,
+        };
+    }
+    None
 }
 
 #[cfg(test)]
@@ -912,6 +1294,252 @@ mod tests {
         assert!(moved.dot(moved) > 0.01);
         let fwd = cam.target - cam.eye();
         assert!(moved.dot(fwd).abs() < 1e-2, "pan stays in the view plane");
+    }
+
+    /// Eye direction (unit, from the target) of a settled camera.
+    fn eye_dir(cam: &OrbitCam) -> Vec3 {
+        (cam.eye() - cam.target) * (1.0 / cam.dist)
+    }
+
+    #[test]
+    fn axis_widget_clicks_look_from_an_axis_then_flip_to_the_other_side() {
+        let expect = [
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(-1.0, 0.0, 0.0),
+            Vec3::new(0.0, -1.0, 0.0),
+            Vec3::new(0.0, 0.0, -1.0),
+        ];
+        for idx in 0..6 {
+            let mut cam = OrbitCam::default();
+            // First click: look from that axis.
+            assert_eq!(cam.snap_to_axis(idx), idx);
+            while cam.step(0.1) {}
+            assert!(
+                close(eye_dir(&cam), expect[idx], 0.05),
+                "{idx}: {:?}",
+                eye_dir(&cam)
+            );
+            assert_eq!(aligned_axis(cam.yaw, cam.pitch), Some(idx));
+            // Clicking the active axis flips to the opposite one (+X <-> -X).
+            let flipped = (idx + 3) % 6;
+            assert_eq!(cam.snap_to_axis(idx), flipped);
+            while cam.step(0.1) {}
+            assert!(close(eye_dir(&cam), expect[flipped], 0.05), "{idx} flipped");
+            // And back again.
+            assert_eq!(cam.snap_to_axis(flipped), idx);
+        }
+        // The flip reads where the camera is heading: a double click flips
+        // even before the first ease has finished.
+        let mut cam = OrbitCam::default();
+        cam.snap_to_axis(0);
+        cam.step(1.0 / 60.0);
+        assert_eq!(cam.snap_to_axis(0), 3);
+        // A view off every axis is not aligned; clicking an axis there
+        // never flips.
+        assert_eq!(aligned_axis(0.6, 0.45), None);
+        assert_eq!(aligned_axis(std::f32::consts::FRAC_PI_2, 0.2), None);
+        let mut cam = OrbitCam::default();
+        assert_eq!(cam.snap_to_axis(2), 2);
+        // Yaw is compared modulo a full turn.
+        assert_eq!(
+            aligned_axis(std::f32::consts::FRAC_PI_2 + std::f32::consts::TAU, 0.0),
+            Some(0)
+        );
+        assert_eq!(aligned_axis(-std::f32::consts::TAU, 0.0), Some(5));
+    }
+
+    #[test]
+    fn dragging_the_axis_widget_orbits_like_dragging_the_view() {
+        let mut cam = OrbitCam::default();
+        let (yaw, pitch, target, dist) = (cam.yaw, cam.pitch, cam.target, cam.dist);
+        cam.orbit(Vec2::new(50.0, -25.0));
+        assert!((cam.yaw - (yaw + 50.0 * ORBIT_PER_PX)).abs() < 1e-6);
+        assert!((cam.pitch - (pitch - 25.0 * ORBIT_PER_PX)).abs() < 1e-6);
+        // Immediate, around the same target, at the same distance.
+        assert!(!cam.step(1.0 / 60.0), "an orbit doesn't ease");
+        assert_eq!(cam.target, target);
+        assert_eq!(cam.dist, dist);
+        // The widget's tips follow the view: after a quarter turn from the
+        // front, +X points at the viewer (centre) and +Z to the side.
+        let mut cam = OrbitCam::default();
+        cam.snap_to_axis(5);
+        while cam.step(0.1) {}
+        let c = Pos2::new(100.0, 100.0);
+        let tip = |cam: &OrbitCam, idx: usize| {
+            axis_tips(&cam.camera().view(), c)
+                .into_iter()
+                .find(|t| t.0 == idx)
+                .unwrap()
+                .1
+        };
+        assert!((tip(&cam, 0) - c).x > 20.0, "front view: +X to the right");
+        cam.orbit(Vec2::new(std::f32::consts::FRAC_PI_2 / ORBIT_PER_PX, 0.0));
+        assert!((tip(&cam, 0) - c).length() < 1.0, "{:?}", tip(&cam, 0));
+        assert!((tip(&cam, 2) - c).x.abs() > 20.0);
+    }
+
+    #[test]
+    fn axis_widget_hit_test_prefers_the_front_tip_then_the_centre() {
+        let c = Pos2::new(100.0, 100.0);
+        // Off-axis: the centre is free and toggles the projection.
+        let cam = OrbitCam::default();
+        let tips = axis_tips(&cam.camera().view(), c);
+        assert_eq!(axis_hit(&tips, c, c), Some(AxisHit::Center));
+        for &(idx, p, _) in &tips {
+            assert_eq!(axis_hit(&tips, c, p), Some(AxisHit::Tip(idx)));
+        }
+        assert_eq!(
+            axis_hit(&tips, c, c + Vec2::new(0.0, 31.0)),
+            Some(AxisHit::Disc)
+        );
+        assert_eq!(axis_hit(&tips, c, c + Vec2::new(0.0, 40.0)), None);
+        // Looking from +Z: both Z tips sit on the centre and the front one
+        // (+Z, toward the viewer) takes the click, so clicking it flips.
+        let mut cam = OrbitCam::default();
+        cam.snap_to_axis(2);
+        while cam.step(0.1) {}
+        let tips = axis_tips(&cam.camera().view(), c);
+        assert_eq!(axis_hit(&tips, c, c), Some(AxisHit::Tip(2)));
+        assert_eq!(cam.snap_to_axis(2), 5);
+    }
+
+    #[test]
+    fn orthographic_keeps_the_target_plane_and_renders_what_it_projects() {
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(640.0, 360.0));
+        let mut cam = OrbitCam::default();
+        let persp = Proj::new(&cam.camera(), (640, 360), rect);
+        cam.ortho = true;
+        let ortho_cam = cam.camera();
+        let ortho = Proj::new(&ortho_cam, (640, 360), rect);
+        let d = ortho_cam.eye - ortho_cam.target;
+        assert!(d.dot(d).sqrt() >= ORTHO_MIN_PULL - 1.0, "the eye backs off");
+        // The plane through the target keeps its size on screen.
+        let view = cam.camera().view();
+        let right = Vec3::new(view.m[0][0], view.m[0][1], view.m[0][2]);
+        let up = Vec3::new(view.m[1][0], view.m[1][1], view.m[1][2]);
+        for p in [cam.target, cam.target + right * 3.0, cam.target + up * -2.0] {
+            let (a, b) = (persp.project(p).unwrap(), ortho.project(p).unwrap());
+            assert!((a - b).length() < 0.5, "{a:?} vs {b:?}");
+        }
+        // Parallel: a point 5 m behind the target lands (almost) where its
+        // front counterpart does; in perspective it moves toward the centre.
+        let fwd = ortho.forward();
+        let (front, back) = (
+            cam.target + right * 3.0,
+            cam.target + right * 3.0 + fwd * 5.0,
+        );
+        let shift = |p: &Proj| (p.project(front).unwrap() - p.project(back).unwrap()).length();
+        assert!(shift(&ortho) < 1.0, "{}", shift(&ortho));
+        assert!(shift(&persp) > 20.0, "{}", shift(&persp));
+
+        // The renderer's camera over the scaled world projects the same
+        // pixels as the overlay camera does over the real one.
+        let rc = cam.render_cam();
+        let drawn = Proj::new(&rc.camera, (640, 360), rect);
+        for p in [cam.target, back, Vec3::new(3.0, -1.0, 7.0)] {
+            let (a, b) = (
+                ortho.project(p).unwrap(),
+                drawn.project(rc.world.transform_point(p)).unwrap(),
+            );
+            assert!((a - b).length() < 0.5, "{p:?}: {a:?} vs {b:?}");
+        }
+        // Depth stays well resolved: the target is one render unit away.
+        assert!((drawn.depth(rc.world.transform_point(cam.target)) - 1.0).abs() < 1e-3);
+        // Fog ranges shift by the pull-back and scale with the world.
+        let fog = rc.fog(trino_core::Fog {
+            color: trino_core::Color::rgb(0, 0, 0),
+            near: 10.0,
+            far: 20.0,
+        });
+        let at = |w: f32| (w + rc.pull) * rc.scale;
+        assert!((fog.near - at(10.0)).abs() < 1e-6 && (fog.far - at(20.0)).abs() < 1e-6);
+        // Perspective draws as is.
+        cam.ortho = false;
+        let rc = cam.render_cam();
+        assert_eq!(rc.scale, 1.0);
+        assert_eq!(rc.camera.eye, cam.eye());
+        // Zooming an orthographic view changes what the overlay camera
+        // shows (the view's cache key reads it).
+        cam.ortho = true;
+        let before = cam.camera();
+        cam.zoom(500.0);
+        while cam.step(0.1) {}
+        assert!(cam.camera().fov_y < before.fov_y);
+    }
+
+    #[test]
+    fn fly_mode_looks_around_the_eye_and_moves_along_the_view() {
+        let mut cam = OrbitCam::default();
+        let eye = cam.eye();
+        let view = cam.camera().view();
+        let right = Vec3::new(view.m[0][0], view.m[0][1], view.m[0][2]);
+        let fwd = Vec3::new(view.m[2][0], view.m[2][1], view.m[2][2]);
+        // Mouselook: the eye stays, mouse right turns right, mouse up looks up.
+        cam.look(Vec2::new(40.0, 0.0));
+        assert!(close(cam.eye(), eye, 1e-3));
+        let new_fwd = (cam.target - cam.eye()) * (1.0 / cam.dist);
+        assert!(new_fwd.dot(right) > 0.05, "{new_fwd:?}");
+        let before = (cam.target - cam.eye()).y;
+        cam.look(Vec2::new(0.0, -40.0));
+        assert!((cam.target - cam.eye()).y > before, "looks up");
+        assert!(!cam.step(1.0 / 60.0), "fly mode doesn't ease");
+
+        // W: forward along the view vector at fly speed; D: right; E: up.
+        let mut cam = OrbitCam::default();
+        let (eye, target) = (cam.eye(), cam.target);
+        cam.fly(Vec3::new(0.0, 0.0, 1.0), 0.5, false);
+        let moved = cam.eye() - eye;
+        assert!(close(moved, fwd * (cam.fly_speed * 0.5), 1e-3), "{moved:?}");
+        assert!(
+            close(cam.target - target, moved, 1e-4),
+            "target travels along"
+        );
+        let eye = cam.eye();
+        cam.fly(Vec3::new(1.0, 0.0, 0.0), 1.0, false);
+        assert!(close(cam.eye() - eye, right * cam.fly_speed, 1e-3));
+        let eye = cam.eye();
+        cam.fly(Vec3::new(0.0, -1.0, 0.0), 1.0, true);
+        assert!(close(
+            cam.eye() - eye,
+            Vec3::new(0.0, -cam.fly_speed * FLY_BOOST, 0.0),
+            1e-3
+        ));
+        // The wheel sets the speed, within limits.
+        let speed = cam.fly_speed;
+        cam.fly_speed_scroll(100.0);
+        assert!(cam.fly_speed > speed);
+        cam.fly_speed_scroll(-1.0e6);
+        assert_eq!(cam.fly_speed, 0.25);
+
+        // Flying takes over from an ease in progress instead of fighting it.
+        let mut cam = OrbitCam::default();
+        cam.focus(Vec3::new(5.0, 0.0, 5.0), 1.0);
+        cam.fly(Vec3::new(0.0, 0.0, 1.0), 0.1, false);
+        let (eye, target) = (cam.eye(), cam.target);
+        while cam.step(0.1) {}
+        assert!(close(cam.eye(), eye, 1e-4) && close(cam.target, target, 1e-4));
+    }
+
+    #[test]
+    fn dolly_and_focus_pivot() {
+        let mut cam = OrbitCam::default();
+        let dist = cam.dist;
+        cam.dolly(-50.0);
+        assert!(cam.dist < dist, "drag up dollies in");
+        assert!(!cam.step(1.0 / 60.0), "immediately");
+        cam.dolly(1.0e5);
+        assert_eq!(cam.dist, 600.0);
+        // Framing an object makes it the orbit centre: orbiting afterwards
+        // turns around it, at the same distance.
+        let center = Vec3::new(4.0, 1.0, -3.0);
+        cam.focus(center, 1.0);
+        while cam.step(0.1) {}
+        cam.orbit(Vec2::new(120.0, 30.0));
+        assert!(close(cam.target, center, 1e-3));
+        let d = cam.eye() - center;
+        assert!((d.dot(d).sqrt() - cam.dist).abs() < 1e-3);
     }
 
     #[test]

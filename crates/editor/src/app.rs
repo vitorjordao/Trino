@@ -2140,7 +2140,8 @@ impl App {
     }
 
     fn shortcuts(&mut self, ctx: &egui::Context) {
-        if ctx.egui_wants_keyboard_input() {
+        // Flying the Scene view (RMB held): Shift+A is boost + strafe there.
+        if ctx.egui_wants_keyboard_input() || self.scene_view.flying() {
             return;
         }
         use egui::{Key, KeyboardShortcut, Modifiers};
@@ -2250,9 +2251,16 @@ impl App {
                             ("F", "Frame selection"),
                             ("G", "Toggle grid"),
                             ("1 / 3 / 7 (+Ctrl)", "Front / right / top view (opposite)"),
-                            ("MMB / RMB drag", "Orbit (Alt+LMB too)"),
-                            ("Shift + MMB/RMB drag", "Pan"),
+                            ("5", "Perspective / orthographic"),
+                            ("Alt+LMB drag", "Orbit (or drag the axis widget)"),
+                            ("MMB drag (+Ctrl/Shift)", "Pan (Shift+RMB too)"),
+                            ("Alt+RMB drag", "Dolly (up = in)"),
                             ("Wheel", "Zoom"),
+                            (
+                                "Hold RMB + WASD/QE",
+                                "Fly: look, move, down/up (Shift: faster, wheel: speed)",
+                            ),
+                            ("Axis widget", "Click: view from axis (again: opposite)"),
                             ("F1", "This window"),
                         ] {
                             ui.label(RichText::new(k).monospace().color(c::ACCENT_TEXT));

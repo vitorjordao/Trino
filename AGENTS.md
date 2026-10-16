@@ -744,6 +744,11 @@ cargo test --workspace
   (15.6 → 18.0 KB) and made unlit draws 10–35 % slower in ares (local lights, 2026-10-15).
   Lit draws take `render3d/lit.rs`. Check `mips64-elf-nm -S` of
   `tessellate_joints::<false, false>` (0x3d04) after any T&L change.
+- **N64 timings move with the code layout inside the Rust code**, which
+  `TRINO_N64_TEXT_PAD` does not sample: a 4-byte field in a hot struct moved a scene
+  +0.38 ms, and a feature with an unchanged hot path moved an external project +1.0 ms
+  on average over 8 paddings (ADR 0013 §4). Measure over 8 paddings against the
+  baseline's 8; keep new code out of line and new state out of hot structs.
 - **A colored or dimmed global light sends every N64 draw to the CPU**
   (`RspReject::ColoredLight`): a "dim room" must stay white (lower ambient, a grazing
   direction) or be a tint.

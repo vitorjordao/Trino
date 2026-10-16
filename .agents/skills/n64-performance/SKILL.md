@@ -118,6 +118,22 @@ knob moves everything after the shim together (one axis of the layout space), so
 samples layouts rather than explores them.
 
 
+- **The padding does not sample the layout inside the Rust code** (2026-10-16,
+  ADR 0013 §4). It moves all Rust code as one block. A change that adds functions,
+  or grows a hot struct (a 4-byte field in `StageTimes`, a `Vec` in the renderer),
+  reshuffles code and data *within* that block. An external project's busiest scene
+  moved +1.0 ms on average over 8 paddings (0/352/1024/2048/3072/4096/6144/8192) from
+  a change whose white-light hot path was unchanged and whose RSP overlay was byte
+  for byte the old one. So:
+  - judge an N64 change over 8 paddings, against the baseline's 8;
+  - keep new code out of line and new state out of hot structs (a `static`, a
+    carrier entry in an existing queue);
+  - when a feature changes nothing a scene draws yet shows a shift, measure a
+    control first: an inert, linked function of the same size on the baseline.
+- **rspq reloads an overlay's code on every switch to it.** A bigger overlay costs
+  every frame that interleaves it with rdpq (2D, CPU triangles), even when the new
+  code never runs. Put a rarely used path in its own overlay (same source with a
+  `-D`, see the held-back `perf/n64-rsp-colored`).
 - ares is **bit-reproducible** for the same ROM (two runs → identical µs).
 - But layout is not neutral: adding an unrelated 1 KB function moved hub `tnl`
   −10% and `submit` +20% (16 KB direct-mapped I-cache, 8 KB D-cache), while the

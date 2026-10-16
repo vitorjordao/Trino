@@ -193,10 +193,16 @@ pub fn platform_lines(budgets: &[trino_scene::budget::FrameBudget; 2]) -> Vec<(S
         rsp.push_str(&format!(" · {k} {}", r.label()));
     }
     out.push((rsp, Level::Ok));
-    out.push((
-        format!("3DS {} tris · {} draws", n3ds.tris(), n3ds.draws),
-        Level::Ok,
-    ));
+    let mut gpu = format!(
+        "3DS {} tris · GPU {}/{} draws",
+        n3ds.tris(),
+        n3ds.gpu_draws,
+        n3ds.draws
+    );
+    if let Some((r, k)) = n3ds.off_gpu.first() {
+        gpu.push_str(&format!(" · {k} {}", r.label()));
+    }
+    out.push((gpu, Level::Ok));
     let wasted = n64.wasted.len().max(n3ds.wasted.len());
     if wasted > 0 {
         out.push((format!("{wasted} draws sent but unseen"), Level::Near));
@@ -225,6 +231,8 @@ mod tests {
         let n3ds = FrameBudget {
             draws: 5,
             billboards: 1,
+            gpu_draws: 4,
+            off_gpu: vec![(trino_core::render3d::GpuReject::Flat, 1)],
             target: Target::N3ds,
             ..Default::default()
         };
@@ -232,7 +240,7 @@ mod tests {
         let text: Vec<&str> = lines.iter().map(|(t, _)| t.as_str()).collect();
         assert!(text[0].starts_with("N64 ≈"), "{text:?}");
         assert_eq!(text[1], "RSP 2/5 draws · 2 fog");
-        assert_eq!(text[2], "3DS 2 tris · 5 draws");
+        assert_eq!(text[2], "3DS 2 tris · GPU 4/5 draws · 1 flat shading");
         assert_eq!(lines[3], ("1 draws sent but unseen".into(), Level::Near));
         // A light frame is green; one past 33.3 ms is red.
         assert_eq!(lines[0].1, Level::Ok);

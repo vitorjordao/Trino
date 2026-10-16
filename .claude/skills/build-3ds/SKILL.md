@@ -39,7 +39,9 @@ citro2d for sprites. `apps/3ds/build.rs` relinks when only the shim object chang
 
 **Static meshes skip the CPU T&L (ADR 0012 §1).** Meshes `render3d::gpu_mesh_check`
 accepts are copied to linear memory at register (`trino_gpu_mesh`, 28-byte vertices +
-u16 indices); a draw `gpu_check` accepts is 36 floats of uniforms and one
+u16 indices); a draw `gpu_check` accepts is 44 floats of uniforms (matrix, light,
+ambient, diffuse, tint, emissive, then the fog row and fog color: the shader fogs per
+vertex from the view depth, a zero row = no fog) and one
 `C3D_DrawElements` through `tnl3d.v.pica` (`trino_gpu_draw`), which transforms, lights
 and projects on the PICA200. Both shaders are assembled by `compile_shader` (`SHADERS`
 in `xtask/src/n3ds.rs`). Traps:
@@ -52,6 +54,22 @@ in `xtask/src/n3ds.rs`). Traps:
 - `N3dsRenderer::set_gpu_tnl(false)` = everything on the CPU (the `gpu tnl` self-test
   step's reference; A/B measurements). The host gate of the split is
   `tests/perf/castle64_work_3ds.toml` (`perf_budget`).
+- **Why a draw stayed on the CPU:** `TRINO_FRAME` prints `off_gpu=<GpuReject>:<n>,…`
+  per frame (`N3dsRenderer::gpu_rejects`; `Offscreen` ones are culled, not drawn), and
+  `cargo xtask scene budget --platform 3ds` predicts the split from the host. A mesh
+  whose linear-memory copy failed logs `TRINO_WARN` and counts as `NoGpuMemory`.
+- **A "frozen" top screen in a self-test is usually the test, not the renderer.**
+  Azahar's status bar shows `Speed` (emulation vs real time) and `App: N FPS` (frames
+  the app presented). The self-test draws castle64 1 of 4 updates and the showcase 1 of
+  32, and pixel probes used to wait two vblanks per pixel (`trino_debug_pixel`: 64 s of
+  `App: 0 FPS` for one 960-sample check; now once per presented frame). `fps=` in
+  `TRINO_FRAME` and the showcase panel count drawn frames. To check what a person sees,
+  record Azahar's window (Wayland: `QT_QPA_PLATFORM=xcb`, GStreamer `ximagesrc xid=…`).
+- **Fog is the shader's, not the PICA fog LUT:** the LUT is indexed by the depth band,
+  where a 16–42 m fog spans ~0.0007 of the range. The shader interpolates the fog
+  perspective-correctly, so a fogged GPU frame is slightly closer to the true value
+  than the CPU path's depth splits (the `gpu tnl showcase-fog` step: 2/960 samples
+  differ by more than 24).
 
 - **Never draw 3D with `C2D_DrawTriangle`.** It takes one depth for the whole
   triangle: big floor triangles then win the depth test over whatever stands on

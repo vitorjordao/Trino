@@ -178,10 +178,27 @@ fn the_rsp_split_names_each_rule_and_follows_the_scene() {
     assert_eq!(fog.rsp_draws, 0);
     assert_eq!(fog.off_rsp, vec![(trino_core::RspReject::Fog, 3)]);
     assert!(fog.n64_cpu_us() > b.n64_cpu_us());
-    // Other platforms have no RSP: every draw is CPU work.
+    // The PC has no RSP: every draw is CPU work.
     let pc = estimate(&scene, &lib, &meshes, Target::Pc);
     assert_eq!((pc.rsp_draws, pc.cpu_draws), (0, 3));
     assert!(pc.off_rsp.is_empty());
+    // The 3DS splits by its own rules (`gpu_check`): fog is the vertex
+    // shader's, the flat and the translucent rock stay on the CPU.
+    let n3ds = estimate(&scene, &lib, &meshes, Target::N3ds);
+    assert_eq!((n3ds.rsp_draws, n3ds.draws), (0, 3));
+    assert_eq!(n3ds.gpu_draws + n3ds.cpu_draws, n3ds.draws, "{n3ds:?}");
+    assert!(
+        n3ds.gpu_draws >= 1,
+        "the plain rock takes the GPU: {n3ds:?}"
+    );
+    let off: u32 = n3ds.off_gpu.iter().map(|(_, n)| n).sum();
+    assert_eq!(off, n3ds.cpu_draws, "every CPU draw has its reason");
+    assert!(
+        n3ds.off_gpu
+            .iter()
+            .any(|(r, _)| *r == trino_core::render3d::GpuReject::Translucent),
+        "{n3ds:?}"
+    );
 }
 
 #[test]

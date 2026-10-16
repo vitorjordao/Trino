@@ -50,7 +50,7 @@ pub use assets::N3dsAssets;
 #[cfg(target_os = "horizon")]
 pub use audio::N3dsAudio;
 #[cfg(target_os = "horizon")]
-pub use host::{FrameReport, N3dsHost};
+pub use host::{FrameReport, N3dsHost, off_gpu_list};
 #[cfg(target_os = "horizon")]
 pub use input::N3dsInput;
 #[cfg(target_os = "horizon")]

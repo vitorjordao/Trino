@@ -320,7 +320,7 @@ pub fn draw(game: &ShowcaseGame, r: &mut dyn Renderer) {
 }
 
 /// The metric lines: frame time (from the frame's `dt`), then the
-/// renderer's counters. Numbers are zero-padded to a fixed width.
+/// renderer's counters, the last one the hardware T&L split. Numbers are zero-padded to a fixed width.
 pub fn metric_lines(dt: f32, s: &FrameStats) -> [TextBuf<28>; 5] {
     let mut lines = [TextBuf::<28>::new(); 5];
     let tenths = ((dt * 10_000.0 + 0.5) as u32).min(999);
@@ -354,11 +354,13 @@ pub fn metric_lines(dt: f32, s: &FrameStats) -> [TextBuf<28>; 5] {
         s.tnl.verts.min(99_999),
         s.tnl.clipped.min(9_999)
     );
+    // Draws the console's coprocessor transformed and lit (the N64's
+    // RSP, the 3DS's PICA200) and their source triangles.
     let _ = write!(
         lines[4],
-        "RSP DRAWS {:03} TRIS {:05}",
-        s.tnl.rsp_draws.min(999),
-        s.tnl.rsp_tris.min(99_999)
+        "HW DRAWS {:03} TRIS {:05}",
+        (s.tnl.rsp_draws + s.tnl.gpu_draws).min(999),
+        (s.tnl.rsp_tris + s.tnl.gpu_tris).min(99_999)
     );
     lines
 }

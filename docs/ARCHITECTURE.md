@@ -99,10 +99,12 @@ On the 3DS, static untextured meshes skip the CPU T&L too: the PICA200's vertex 
 (`crates/platform-3ds/shim/tnl3d.v.pica`) transforms, lights and projects them from a
 copy in linear memory ([ADR 0012](adr/0012-console-hardware-paths-and-honest-n64-timing.md)).
 `trino_core::render3d::gpu_check` decides per draw, with its own rules: the PICA clips in
-hardware and lights in floats, so it takes colored lights, emissive and double-sided
-draws. It returns a `GpuReject` reason for the draws that keep the CPU path (fog,
-translucency, textures, skeletons, local lights, anything crossing the near plane). The
-`gpu tnl` self-test step compares the frame with the CPU path's, and
+hardware and lights in floats, so it takes colored lights, emissive, double-sided and
+fogged draws (the shader fogs per vertex from the view depth). It returns a `GpuReject`
+reason for the draws that keep the CPU path (translucency, textured meshes, skeletons,
+palettes, flat shading, local lights, anything crossing the near plane); the 3DS
+`TRINO_FRAME` lists them as `off_gpu=`. The `gpu tnl` self-test step compares two frames
+(castle64's hub, the showcase's fogged first frame) with the CPU path's, and
 `tests/perf/castle64_work_3ds.toml` pins the split per scene.
 
 ### 2D in the same pipeline

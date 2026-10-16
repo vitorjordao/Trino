@@ -1296,6 +1296,9 @@ fn scene_view_pans_flies_dollies_and_flips_axes() {
         button(h, b, p + by, false);
         h.run_steps(2);
     };
+    // Start settled: the editor eases to the scene's game camera on open,
+    // and that ease would read as an orbit below.
+    h.state_mut().scene_view.cam = crate::gizmo::OrbitCam::default();
     h.hover_at(p);
     h.run_steps(2);
 

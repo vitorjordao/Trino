@@ -422,11 +422,18 @@ impl Proj {
 
     /// Ray ∩ horizontal plane y = h (None when parallel / behind).
     pub fn ground_point(&self, pos: Pos2, h: f32) -> Option<Vec3> {
+        self.plane_point(pos, Vec3::new(0.0, h, 0.0), Vec3::new(0.0, 1.0, 0.0))
+    }
+
+    /// Ray ∩ the plane through `at` with normal `n` (None when parallel /
+    /// behind).
+    pub fn plane_point(&self, pos: Pos2, at: Vec3, n: Vec3) -> Option<Vec3> {
         let (o, d) = self.ray(pos);
-        if d.y.abs() < 1e-5 {
+        let den = d.dot(n);
+        if den.abs() < 1e-5 {
             return None;
         }
-        let t = (h - o.y) / d.y;
+        let t = (at - o).dot(n) / den;
         (t > 0.0).then(|| o + d * t)
     }
 }
@@ -536,9 +543,11 @@ pub enum GizmoMode {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Handle {
     Axis(usize),
-    /// Move on the ground plane (XZ).
-    Plane,
+    /// Move on the plane normal to this axis (1 = the ground, XZ).
+    Plane(usize),
     Ring(usize),
+    /// The outer ring: rotate around the view axis.
+    ViewRing,
     Uniform,
 }
 
@@ -549,6 +558,21 @@ const AXES: [Vec3; 3] = [
 ];
 const AXIS_COLORS: [Color32; 3] = [c::AXIS_X, c::AXIS_Y, c::AXIS_Z];
 const GIZMO_PX: f32 = 90.0;
+/// Screen radius of the view ring, past the axis rings (0.85 × the axis).
+const VIEW_RING_PX: f32 = GIZMO_PX * 1.05;
+/// Snap steps: move (world units), rotate (degrees), scale.
+pub const SNAP_MOVE: f32 = 0.25;
+pub const SNAP_DEG: f32 = 15.0;
+pub const SNAP_SCALE: f32 = 0.05;
+
+/// The two axes spanning the plane normal to `axis` (also the ring's plane).
+fn plane_axes(axis: usize) -> (Vec3, Vec3) {
+    match axis {
+        0 => (AXES[1], AXES[2]),
+        1 => (AXES[2], AXES[0]),
+        _ => (AXES[0], AXES[1]),
+    }
+}
 
 pub struct Gizmo {
     pub origin: Vec3,
@@ -565,11 +589,7 @@ impl Gizmo {
     }
 
     fn ring(&self, proj: &Proj, axis: usize) -> Vec<Pos2> {
-        let (u, v) = match axis {
-            0 => (AXES[1], AXES[2]),
-            1 => (AXES[2], AXES[0]),
-            _ => (AXES[0], AXES[1]),
-        };
+        let (u, v) = plane_axes(axis);
         let r = self.len * 0.85;
         (0..=64)
             .filter_map(|i| {
@@ -585,9 +605,21 @@ impl Gizmo {
         match mode {
             GizmoMode::Translate | GizmoMode::Scale => {
                 if mode == GizmoMode::Translate {
-                    let q = self.plane_quad(proj);
-                    if q.len() == 4 && point_in_quad(mouse, &q) {
-                        return Some(Handle::Plane);
+                    // The plane that faces the camera most wins an overlap.
+                    let fwd = proj.forward();
+                    let mut planes: Vec<usize> = (0..3).collect();
+                    planes.sort_by(|&a, &b| {
+                        AXES[b]
+                            .dot(fwd)
+                            .abs()
+                            .partial_cmp(&AXES[a].dot(fwd).abs())
+                            .unwrap()
+                    });
+                    if let Some(k) = planes.into_iter().find(|&k| {
+                        let q = self.plane_quad(proj, k);
+                        q.len() == 4 && point_in_quad(mouse, &q)
+                    }) {
+                        return Some(Handle::Plane(k));
                     }
                 } else if (mouse - o).length() < 9.0 {
                     return Some(Handle::Uniform);
@@ -601,15 +633,24 @@ impl Gizmo {
             }
             GizmoMode::Rotate => (0..3)
                 .find(|&k| self.ring(proj, k).windows(2).any(|w| near_seg(w[0], w[1])))
-                .map(Handle::Ring),
+                .map(Handle::Ring)
+                .or_else(|| {
+                    ((mouse - o).length() - VIEW_RING_PX)
+                        .abs()
+                        .lt(&6.0)
+                        .then_some(Handle::ViewRing)
+                }),
         }
     }
 
-    fn plane_quad(&self, proj: &Proj) -> Vec<Pos2> {
+    /// The small square of a planar move handle, between the two axes
+    /// spanning the plane normal to `axis`.
+    fn plane_quad(&self, proj: &Proj, axis: usize) -> Vec<Pos2> {
+        let (u, v) = plane_axes(axis);
         let (a, b) = (self.len * 0.22, self.len * 0.42);
         [(a, a), (b, a), (b, b), (a, b)]
             .iter()
-            .filter_map(|&(x, z)| proj.project(self.origin + Vec3::new(x, 0.0, z)))
+            .filter_map(|&(x, y)| proj.project(self.origin + u * x + v * y))
             .collect()
     }
 
@@ -627,14 +668,18 @@ impl Gizmo {
         match mode {
             GizmoMode::Translate | GizmoMode::Scale => {
                 if mode == GizmoMode::Translate {
-                    let q = self.plane_quad(proj);
-                    if q.len() == 4 {
-                        let col = lit(Handle::Plane, c::AXIS_Y);
-                        painter.add(egui::Shape::convex_polygon(
-                            q.clone(),
-                            col.gamma_multiply(0.25),
-                            Stroke::new(1.0, col),
-                        ));
+                    // Planar handles, tinted like their normal (Unity's
+                    // convention: the XZ square is green).
+                    for (k, axis_color) in AXIS_COLORS.iter().enumerate() {
+                        let q = self.plane_quad(proj, k);
+                        if q.len() == 4 {
+                            let col = lit(Handle::Plane(k), *axis_color);
+                            painter.add(egui::Shape::convex_polygon(
+                                q,
+                                col.gamma_multiply(0.25),
+                                Stroke::new(1.0, col),
+                            ));
+                        }
                     }
                 } else {
                     let col = lit(Handle::Uniform, Color32::WHITE);
@@ -672,6 +717,13 @@ impl Gizmo {
             }
             GizmoMode::Rotate => {
                 painter.circle_stroke(o, 3.0, Stroke::new(1.0, Color32::WHITE));
+                let col = lit(Handle::ViewRing, Color32::from_white_alpha(170));
+                let w = if hot == Some(Handle::ViewRing) {
+                    2.5
+                } else {
+                    1.5
+                };
+                painter.circle_stroke(o, VIEW_RING_PX, Stroke::new(w, col));
                 for (k, axis_color) in AXIS_COLORS.iter().enumerate() {
                     let pts = self.ring(proj, k);
                     let col = lit(Handle::Ring(k), *axis_color);
@@ -694,11 +746,13 @@ pub struct Drag {
     start: Transform,
     /// Parent world matrix (entity world = parent * local).
     parent: Mat34,
-    world: Mat34,
+    origin: Vec3,
     origin_px: Pos2,
     axis_px: Vec2,
     px_per_unit: f32,
     plane_start: Option<Vec3>,
+    /// The view axis when the drag began (the view ring's axis).
+    view_axis: Vec3,
     /// Axis handles are shared by move and scale: which one this drag is.
     translate: bool,
     len: f32,
@@ -724,19 +778,85 @@ impl Drag {
             }
             _ => (Vec2::ZERO, 1.0),
         };
+        let plane_start = match handle {
+            Handle::Plane(k) => proj.plane_point(mouse, gizmo.origin, AXES[k]),
+            _ => None,
+        };
         Some(Drag {
             handle,
             start_mouse: mouse,
             start: local,
             parent,
-            world: *world,
+            origin: gizmo.origin,
             origin_px,
             axis_px,
             px_per_unit: px_per_unit.max(1e-6),
-            plane_start: proj.ground_point(mouse, gizmo.origin.y),
+            plane_start,
+            view_axis: proj.forward(),
             translate: mode == GizmoMode::Translate,
             len: gizmo.len,
         })
+    }
+
+    /// Distance moved along the dragged axis (world units, snapped).
+    fn axis_amount(&self, mouse: Pos2, snap: bool) -> f32 {
+        let s = (mouse - self.start_mouse).dot(self.axis_px) / self.px_per_unit;
+        if snap {
+            (s / SNAP_MOVE).round() * SNAP_MOVE
+        } else {
+            s
+        }
+    }
+
+    /// World offset on the dragged plane (snapped per world axis).
+    fn plane_amount(&self, proj: &Proj, mouse: Pos2, snap: bool) -> Option<Vec3> {
+        let Handle::Plane(k) = self.handle else {
+            return None;
+        };
+        let (a, b) = (
+            self.plane_start?,
+            proj.plane_point(mouse, self.origin, AXES[k])?,
+        );
+        let snapf = |v: f32| {
+            if snap {
+                (v / SNAP_MOVE).round() * SNAP_MOVE
+            } else {
+                v
+            }
+        };
+        let d = b - a;
+        let mut d = [snapf(d.x), snapf(d.y), snapf(d.z)];
+        d[k] = 0.0;
+        Some(Vec3::new(d[0], d[1], d[2]))
+    }
+
+    /// Ring drags: (screen angle swept, rotation in degrees), both snapped.
+    fn ring_amount(&self, proj: &Proj, mouse: Pos2, snap: bool) -> (f32, f32) {
+        let a0 = (self.start_mouse - self.origin_px).angle();
+        let a1 = (mouse - self.origin_px).angle();
+        let mut screen = a1 - a0;
+        // Keep the sweep within ±180° so the readout doesn't jump.
+        if screen > std::f32::consts::PI {
+            screen -= std::f32::consts::TAU;
+        } else if screen < -std::f32::consts::PI {
+            screen += std::f32::consts::TAU;
+        }
+        // Toward-viewer axes rotate CCW on screen for positive angles.
+        let axis = match self.handle {
+            Handle::Ring(k) => AXES[k],
+            _ => self.view_axis,
+        };
+        let sign = if axis.dot(proj.forward()) < 0.0 {
+            -1.0
+        } else {
+            1.0
+        };
+        let mut deg = (screen * sign).to_degrees();
+        if snap {
+            deg = (deg / SNAP_DEG).round() * SNAP_DEG;
+            screen = deg.to_radians() * sign;
+        }
+        (screen, deg)
     }
 
     /// New local transform for the current mouse position.
@@ -744,57 +864,139 @@ impl Drag {
         let mut t = self.start;
         let parent_inv = inverse(&self.parent);
         let snapf = |v: f32, step: f32| if snap { (v / step).round() * step } else { v };
+        let moved = |t: &mut Transform, d: Vec3| {
+            let local = parent_inv.transform_dir(d);
+            t.pos = [
+                self.start.pos[0] + local.x,
+                self.start.pos[1] + local.y,
+                self.start.pos[2] + local.z,
+            ];
+        };
         match self.handle {
             Handle::Axis(k) if self.translate => {
-                let s = (mouse - self.start_mouse).dot(self.axis_px) / self.px_per_unit;
-                let s = snapf(s, 0.25);
-                let local = parent_inv.transform_dir(AXES[k] * s);
-                t.pos = [
-                    self.start.pos[0] + local.x,
-                    self.start.pos[1] + local.y,
-                    self.start.pos[2] + local.z,
-                ];
+                moved(&mut t, AXES[k] * self.axis_amount(mouse, snap));
             }
-            Handle::Plane => {
-                if let (Some(a), Some(b)) = (
-                    self.plane_start,
-                    proj.ground_point(mouse, translation(&self.world).y),
-                ) {
-                    let d = b - a;
-                    let d = Vec3::new(snapf(d.x, 0.25), 0.0, snapf(d.z, 0.25));
-                    let local = parent_inv.transform_dir(d);
-                    t.pos = [
-                        self.start.pos[0] + local.x,
-                        self.start.pos[1] + local.y,
-                        self.start.pos[2] + local.z,
-                    ];
+            Handle::Plane(_) => {
+                if let Some(d) = self.plane_amount(proj, mouse, snap) {
+                    moved(&mut t, d);
                 }
             }
             Handle::Axis(k) => {
                 // Scale along the local axis k.
                 let s = (mouse - self.start_mouse).dot(self.axis_px) / self.px_per_unit;
                 let f = (1.0 + s / self.len).max(0.01);
-                t.scale[k] = snapf(self.start.scale[k] * f, 0.05).max(0.001);
+                t.scale[k] = snapf(self.start.scale[k] * f, SNAP_SCALE).max(0.001);
             }
             Handle::Uniform => {
                 let d = mouse - self.start_mouse;
                 let f = (1.0 + (d.x - d.y) * 0.006).max(0.01);
                 for k in 0..3 {
-                    t.scale[k] = snapf(self.start.scale[k] * f, 0.05).max(0.001);
+                    t.scale[k] = snapf(self.start.scale[k] * f, SNAP_SCALE).max(0.001);
                 }
             }
             Handle::Ring(k) => {
-                let a0 = (self.start_mouse - self.origin_px).angle();
-                let a1 = (mouse - self.origin_px).angle();
-                let mut delta = a1 - a0;
-                // Toward-viewer axes rotate CCW on screen for positive angles.
-                let toward = AXES[k].dot(proj.forward()) < 0.0;
-                delta = if toward { -delta } else { delta };
-                let deg = snapf(delta.to_degrees(), 15.0);
+                let (_, deg) = self.ring_amount(proj, mouse, snap);
                 t.rot = rotate_euler(self.start.rot, &self.parent, k, deg);
+            }
+            Handle::ViewRing => {
+                let (_, deg) = self.ring_amount(proj, mouse, snap);
+                t.rot = rotate_euler_axis(self.start.rot, &self.parent, self.view_axis, deg);
             }
         }
         t
+    }
+
+    /// What the drag does, drawn over the gizmo: the angle swept (an arc
+    /// with its degrees), the distance or the scale factor, and with
+    /// snapping on the notches it snaps to.
+    pub fn feedback(&self, painter: &egui::Painter, proj: &Proj, mouse: Pos2, snap: bool) {
+        let font = egui::FontId::monospace(11.0);
+        let label = |at: Pos2, text: String| {
+            let galley = painter.layout_no_wrap(text, font.clone(), Color32::WHITE);
+            let rect = Rect::from_min_size(at, galley.size()).expand(3.0);
+            painter.rect_filled(rect, 3.0, c::BG0.gamma_multiply(0.85));
+            painter.galley(at, galley, Color32::WHITE);
+        };
+        let tick = Color32::from_white_alpha(150);
+        match self.handle {
+            Handle::Ring(_) | Handle::ViewRing => {
+                let (screen, deg) = self.ring_amount(proj, mouse, snap);
+                let r = (self.start_mouse - self.origin_px).length().max(12.0);
+                let a0 = (self.start_mouse - self.origin_px).angle();
+                let at = |a: f32, r: f32| self.origin_px + Vec2::angled(a) * r;
+                if snap {
+                    // A notch every snap step around the circle.
+                    let n = (360.0 / SNAP_DEG) as usize;
+                    for i in 0..n {
+                        let a = a0 + (i as f32 * SNAP_DEG).to_radians();
+                        painter
+                            .line_segment([at(a, r - 4.0), at(a, r + 4.0)], Stroke::new(1.0, tick));
+                    }
+                }
+                let steps = ((screen.abs().to_degrees() / 4.0).ceil() as usize).max(1);
+                let mut pie = vec![self.origin_px];
+                pie.extend((0..=steps).map(|i| at(a0 + screen * i as f32 / steps as f32, r)));
+                // A fan from the centre (convex up to half a turn).
+                for w in pie[1..].windows(2) {
+                    painter.add(egui::Shape::convex_polygon(
+                        vec![self.origin_px, w[0], w[1]],
+                        c::ACCENT.gamma_multiply(0.22),
+                        Stroke::NONE,
+                    ));
+                }
+                painter.add(egui::Shape::line(pie, Stroke::new(1.5, c::ACCENT_TEXT)));
+                label(at(a0 + screen, r + 22.0), format!("{deg:+.1}°"));
+            }
+            Handle::Axis(k) if self.translate => {
+                let amount = self.axis_amount(mouse, snap);
+                if snap {
+                    let step_px = SNAP_MOVE * self.px_per_unit;
+                    let n = Vec2::new(-self.axis_px.y, self.axis_px.x);
+                    let reach = 400.0 / step_px.max(1.0);
+                    let count = reach.min(80.0) as i32;
+                    for i in -count..=count {
+                        let p = self.origin_px + self.axis_px * (i as f32 * step_px);
+                        let w = if i % 4 == 0 { 5.0 } else { 3.0 };
+                        painter.line_segment(
+                            [p - n * w, p + n * w],
+                            Stroke::new(1.0, AXIS_COLORS[k].gamma_multiply(0.8)),
+                        );
+                    }
+                }
+                let at = self.origin_px + self.axis_px * (amount * self.px_per_unit);
+                label(
+                    at + Vec2::new(10.0, 8.0),
+                    format!("{}{amount:+.2}", ["X", "Y", "Z"][k]),
+                );
+            }
+            Handle::Plane(k) => {
+                if let Some(d) = self.plane_amount(proj, mouse, snap) {
+                    let (u, v) = plane_axes(k);
+                    let names = |a: Vec3| {
+                        if a.x > 0.0 {
+                            "X"
+                        } else if a.y > 0.0 {
+                            "Y"
+                        } else {
+                            "Z"
+                        }
+                    };
+                    label(
+                        mouse + Vec2::new(14.0, 10.0),
+                        format!("{}{:+.2} {}{:+.2}", names(u), d.dot(u), names(v), d.dot(v)),
+                    );
+                }
+            }
+            Handle::Axis(_) | Handle::Uniform => {
+                let t = self.update(proj, mouse, snap);
+                let k = match self.handle {
+                    Handle::Axis(k) => k,
+                    _ => 0,
+                };
+                let f = t.scale[k] / self.start.scale[k].max(1e-6);
+                label(mouse + Vec2::new(14.0, 10.0), format!("×{f:.2}"));
+            }
+        }
     }
 }
 
@@ -869,6 +1071,39 @@ fn m3_euler(r: &M3, reference: [f32; 3]) -> [f32; 3] {
 /// Rotate an entity's local Euler rotation by `delta_deg` around world axis
 /// `axis`, given its parent's world matrix.
 pub fn rotate_euler(start: [f32; 3], parent: &Mat34, axis: usize, delta_deg: f32) -> [f32; 3] {
+    let mut e = [0.0f32; 3];
+    e[axis] = delta_deg;
+    rotate_by(start, parent, &euler_m3(e))
+}
+
+/// [`rotate_euler`] around any world axis (the view ring's): Rodrigues'
+/// rotation of `delta_deg` around the unit vector `axis`.
+pub fn rotate_euler_axis(start: [f32; 3], parent: &Mat34, axis: Vec3, delta_deg: f32) -> [f32; 3] {
+    let k = axis.normalized();
+    let (s, c) = delta_deg.to_radians().sin_cos();
+    let t = 1.0 - c;
+    let world_delta = [
+        [
+            c + k.x * k.x * t,
+            k.x * k.y * t - k.z * s,
+            k.x * k.z * t + k.y * s,
+        ],
+        [
+            k.y * k.x * t + k.z * s,
+            c + k.y * k.y * t,
+            k.y * k.z * t - k.x * s,
+        ],
+        [
+            k.z * k.x * t - k.y * s,
+            k.z * k.y * t + k.x * s,
+            c + k.z * k.z * t,
+        ],
+    ];
+    rotate_by(start, parent, &world_delta)
+}
+
+/// `start` (local Euler degrees) turned by the world rotation `world_delta`.
+fn rotate_by(start: [f32; 3], parent: &Mat34, world_delta: &M3) -> [f32; 3] {
     // Parent rotation (scale stripped).
     let mut p: M3 = std::array::from_fn(|i| std::array::from_fn(|j| parent.m[i][j]));
     for j in 0..3 {
@@ -879,13 +1114,10 @@ pub fn rotate_euler(start: [f32; 3], parent: &Mat34, axis: usize, delta_deg: f32
             }
         }
     }
-    let mut e = [0.0f32; 3];
-    e[axis] = delta_deg;
-    let world_delta = euler_m3(e);
     // local' = P^T · Δ · P · local
     let local = m3_mul(
         &m3_t(&p),
-        &m3_mul(&world_delta, &m3_mul(&p, &euler_m3(start))),
+        &m3_mul(world_delta, &m3_mul(&p, &euler_m3(start))),
     );
     m3_euler(&local, start)
 }
@@ -1735,7 +1967,7 @@ mod tests {
         let o = down.project(Vec3::ZERO).unwrap();
         let drag = Drag::begin(
             GizmoMode::Translate,
-            Handle::Plane,
+            Handle::Plane(1),
             &g,
             &down,
             o,
@@ -1746,6 +1978,101 @@ mod tests {
         let target = down.project(Vec3::new(2.0, 0.0, 1.0)).unwrap();
         let t = drag.update(&down, target, true);
         assert_eq!(t.pos, [2.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn planar_handles_move_on_their_plane_and_the_view_ring_turns_the_view_axis() {
+        // Looking from (+X, +Y, -Z): all three planar squares are visible.
+        let cam = Camera3 {
+            eye: Vec3::new(6.0, 7.0, -8.0),
+            target: Vec3::ZERO,
+            fov_y: 1.0,
+        };
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(640.0, 480.0));
+        let proj = Proj::new(&cam, (640, 480), rect);
+        let g = Gizmo::new(&proj, Vec3::ZERO);
+        let local = Transform::default();
+        let world = local.matrix();
+        for (k, normal) in AXES.iter().enumerate() {
+            let (u, v) = plane_axes(k);
+            let mid = u * (g.len * 0.32) + v * (g.len * 0.32);
+            let at = proj.project(mid).unwrap();
+            assert_eq!(
+                g.hit(&proj, GizmoMode::Translate, at),
+                Some(Handle::Plane(k)),
+                "plane {k}"
+            );
+            // Drag it to a point on its plane: the move lands there, the
+            // normal component stays 0, and snapping rounds to the grid.
+            let drag = Drag::begin(
+                GizmoMode::Translate,
+                Handle::Plane(k),
+                &g,
+                &proj,
+                at,
+                &world,
+                local,
+            )
+            .unwrap();
+            let goal = mid + u * 1.1 + v * 0.6;
+            let to = proj.project(goal).unwrap();
+            let free = drag.update(&proj, to, false);
+            let p = Vec3::new(free.pos[0], free.pos[1], free.pos[2]);
+            assert!(close(p, u * 1.1 + v * 0.6, 0.02), "{k}: {p:?}");
+            assert!(p.dot(*normal).abs() < 1e-6, "stays on the plane");
+            let snapped = drag.update(&proj, to, true);
+            let p = Vec3::new(snapped.pos[0], snapped.pos[1], snapped.pos[2]);
+            assert!(close(p, u * 1.0 + v * 0.5, 1e-4), "{k} snapped: {p:?}");
+        }
+        // Seen edge-on (the front view), the XZ and YZ squares take no
+        // clicks: the X axis keeps its handle.
+        let front = front_proj();
+        let g = Gizmo::new(&front, Vec3::ZERO);
+        let o = front.project(Vec3::ZERO).unwrap();
+        let x_tip = front.project(Vec3::new(g.len, 0.0, 0.0)).unwrap();
+        assert_eq!(
+            g.hit(&front, GizmoMode::Translate, o + (x_tip - o) * 0.3),
+            Some(Handle::Axis(0))
+        );
+        // The XY square faces this camera.
+        let xy = front
+            .project(Vec3::new(g.len * 0.32, g.len * 0.32, 0.0))
+            .unwrap();
+        assert_eq!(
+            g.hit(&front, GizmoMode::Translate, xy),
+            Some(Handle::Plane(2))
+        );
+
+        // The view ring: outside the axis rings, a screen-space circle.
+        let ring_at = o + Vec2::new(0.0, -VIEW_RING_PX);
+        assert_eq!(
+            g.hit(&front, GizmoMode::Rotate, ring_at),
+            Some(Handle::ViewRing)
+        );
+        // Looking down +Z it turns like the Z ring.
+        let start = o + Vec2::new(VIEW_RING_PX, 0.0);
+        let to = o + Vec2::new(0.0, VIEW_RING_PX);
+        let turn = |h: Handle| {
+            Drag::begin(GizmoMode::Rotate, h, &g, &front, start, &world, local)
+                .unwrap()
+                .update(&front, to, true)
+                .rot
+        };
+        assert_eq!(turn(Handle::ViewRing), turn(Handle::Ring(2)));
+        assert_eq!(turn(Handle::ViewRing)[2].abs(), 90.0);
+        // Around any axis, the rotation is the matrix it says it is.
+        let axis = Vec3::new(1.0, 2.0, -0.5).normalized();
+        let r = rotate_euler_axis([0.0; 3], &Mat34::IDENTITY, axis, 40.0);
+        let m = euler_m3(r);
+        let a = [axis.x, axis.y, axis.z];
+        let on_axis: Vec<f32> = (0..3)
+            .map(|i| (0..3).map(|j| m[i][j] * a[j]).sum())
+            .collect();
+        for i in 0..3 {
+            assert!((on_axis[i] - a[i]).abs() < 1e-3, "the axis is fixed");
+        }
+        let trace = m[0][0] + m[1][1] + m[2][2];
+        assert!((((trace - 1.0) * 0.5).acos().to_degrees() - 40.0).abs() < 0.05);
     }
 
     #[test]

@@ -93,6 +93,23 @@ TRINO_EDITOR_SCREENSHOT=/tmp/shot.png TRINO_EDITOR_SCREENSHOT_FRAME=60 cargo run
 ```
 
 Keys worth knowing (F1 lists all):
+- Scene view navigation (Unity-style, `viewport.rs` › camera controls):
+  - MMB drag pans, with or without Ctrl/Cmd or Shift; Shift+RMB pans too.
+  - Alt+LMB orbits. Alt+RMB dollies (drag up = in). The wheel zooms.
+  - Hold RMB to fly: mouselook, WASD along the view, Q/E down/up, Shift ×2.5,
+    the wheel sets the speed.
+  - 1/3/7 (+Ctrl) give the axis views; 5 toggles orthographic.
+- The **axis widget** (top right) is Blender-style:
+  - Click a tip to look from that axis; click it again for the opposite side
+    (`OrbitCam::snap_to_axis`, judged on the goal yaw/pitch).
+  - Drag anywhere on it to orbit.
+  - Click its centre or the Persp/Ortho label below it to switch projection.
+    Looking down an axis, that axis's tips cover the centre and win the click.
+- Gizmo:
+  - Translate has three planar squares (`Handle::Plane(normal axis)`).
+  - Rotate has an outer view ring (`Handle::ViewRing`, around the view axis).
+  - While dragging, the gizmo shows the angle, the distance or the factor. With
+    snapping on (the magnet, or Ctrl), it also shows the notches it snaps to.
 - Ctrl+K: the command palette, with every menu action searchable.
 - Ctrl+Shift+P / Esc: start / stop Play here.
 - Ctrl/Shift+click and Shift+drag: multi-select and box select.
@@ -129,7 +146,7 @@ Live-edit check: start the editor with `TRINO_EDITOR_ECHO_LOG=1` in the backgrou
 | `app.rs` | state, `Cmd` queue (panels never mutate structure directly), menus, toolbar, status bar, file sync, shortcuts, undo commit |
 | `doc.rs` | the document (scene or prefab being edited) + snapshot undo/redo (auto-coalescing) |
 | `viewport.rs` | Scene/Game views through the real `PcRenderer`, overlays, picking, drag-and-drop |
-| `gizmo.rs` | orbit camera, projection (same math as `tessellate`), move/rotate/scale gizmo |
+| `gizmo.rs` | orbit camera (fly, dolly, axis snaps, near-orthographic `RenderCam`), projection (same math as `tessellate`), move/rotate/scale gizmo with planar handles, view ring and drag feedback, the axis widget |
 | `panels/{hierarchy,inspector,assets}.rs` | the panels |
 | `dialogs.rs` | fake object (live preview), new material/scene, make prefab, export |
 | `project.rs` | asset catalog, thumbnails, fake-object/manifest file operations |
@@ -174,6 +191,30 @@ Live-edit check: start the editor with `TRINO_EDITOR_ECHO_LOG=1` in the backgrou
   in a side view the ground-plane handle took clicks meant for the X axis.
 - After UI changes, take a screenshot with the hooks above and look at it before claiming
   it looks right — at the minimum size too (`TRINO_EDITOR_SIZE=960x600`).
+- **The orthographic view is a near-orthographic stand-in.** The engine has no
+  orthographic projection, so `OrbitCam::camera` backs the eye off (≥ 2 km) with
+  a field of view that keeps the target plane's size. The core's sin/cos are ~1%
+  off near 0, so the angle is solved with the core's own cotangent. At that
+  distance, depth `1 - NEAR/z` in Depth32Float would resolve only metres, so
+  `Viewport::render` draws the world scaled around the target
+  (`RenderCam::world`, 1 unit from the eye).
+  - A new draw in `render` goes through its `place()`. Fog goes through
+    `RenderCam::fog`, LOD is measured from `cam.eye()` (the orbit eye), and the
+    render key includes the field of view (ortho zoom changes only that).
+  - Overlays, picking and the gizmo use the unscaled `camera()`; a unit test
+    holds the two to the same pixels.
+- **Fly mode owns the keyboard.** While RMB is held on the Scene view,
+  `Viewport::flying()` is true. `App::shortcuts` and the view's own key block
+  then stand down (Shift+A would open the fake-object dialog mid-strafe). Gate any
+  new single-key or Shift shortcut the same way.
+- **Kittest pointer details:**
+  - `drag_at`/`drop_at` are Primary only. For MMB/RMB, send
+    `Event::PointerButton` yourself.
+  - Set held modifiers with `h.input_mut().modifiers`: they persist across
+    steps, and each queued event is its own step.
+  - The env hooks can't hold a drag or switch the projection. To look at those,
+    render mid-flow with `h.render()` from a scratch `#[ignore]` test (saving the
+    PNG to the scratchpad), then delete the test.
 - **Layout must hold at 960x600.** `ui_tests::editor_layout_is_clean_at_minimum_and_default_sizes`
   runs `layout_audit` over the whole window; widget tests run it on a panel at several
   widths. What broke before it existed: the Inspector's sliders and long check box

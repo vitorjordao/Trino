@@ -723,6 +723,13 @@ impl Viewport {
             && let Some(g) = &gizmo
         {
             g.draw(&painter, &proj, self.gizmo, hot_handle);
+            // The drag's angle / distance / factor, and the snap notches.
+            if let Some((_, d)) = &self.drag
+                && let Some(m) = ui.input(|i| i.pointer.interact_pos())
+            {
+                let snap = self.snap ^ ui.input(|i| i.modifiers.command);
+                d.feedback(&painter, &proj, m, snap);
+            }
         }
 
         // ---- drag & drop from the Assets panel ------------------------------

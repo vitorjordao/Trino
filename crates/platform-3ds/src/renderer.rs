@@ -65,6 +65,9 @@ pub struct N3dsRenderer {
     /// GPU T&L on (the default); off draws everything through the CPU's
     /// software T&L (`set_gpu_tnl`, the self-test's reference).
     gpu_on: bool,
+    /// Microseconds spent waiting in `begin_frame` (the previous frame's
+    /// GPU work and vsync) since the last [`take_wait_us`](Self::take_wait_us).
+    wait_us: u32,
     /// Glyph tables by font handle (atlas = sprite with the same handle).
     fonts: BTreeMap<u32, Rc<FontEntry>>,
     frame_stats: FrameStats,
@@ -105,6 +108,7 @@ impl N3dsRenderer {
             meshes: BTreeMap::new(),
             gpu_meshes: BTreeMap::new(),
             gpu_on: true,
+            wait_us: 0,
             fonts: BTreeMap::new(),
             frame_stats: FrameStats::default(),
             last_stats: FrameStats::default(),
@@ -265,6 +269,12 @@ impl N3dsRenderer {
         self.meshes.insert(id, (tmdl, layout));
     }
 
+    /// The time `begin_frame` waited (GPU and vsync) since the last call:
+    /// frame time minus it is the ARM11's own work.
+    pub fn take_wait_us(&mut self) -> u32 {
+        core::mem::take(&mut self.wait_us)
+    }
+
     /// GPU T&L for the draws that can take it (on by default). Off, every
     /// draw runs the CPU's software T&L: the reference the self-test
     /// compares the GPU path with.
@@ -369,7 +379,11 @@ impl Renderer for N3dsRenderer {
         if was_bottom || had_lights {
             self.rebuild_tnl();
         }
+        let t0 = crate::runtime::now_us();
         unsafe { ffi::trino_frame_begin(pack_color(clear)) }
+        self.wait_us = self
+            .wait_us
+            .wrapping_add(crate::runtime::now_us().wrapping_sub(t0));
     }
 
     fn second_screen(&self) -> Option<Vec2> {

@@ -31,6 +31,7 @@ What to build next (ranked): `docs/BACKLOG.md`.
 | `build-n64` | ROM build via Docker, N64 pipeline troubleshooting |
 | `build-3ds` | .3dsx build via devkitPro, 3DS pipeline troubleshooting |
 | `run-emulator` | ares / Azahar runs, emulator test harness, watch loops |
+| `hardware` | real consoles: SummerCart64 / EverDrive 64 (USB) and 3DS (3dslink) deploys with the debug log in the terminal, Luma3DS gdb |
 | `test-all` | the CI gates + guard tests, console type-checks, T&L benchmark |
 | `engine-feature` | adding/changing an engine service or format end to end: all backends, self-test step, docs, the closing knowledge loop |
 | `n64-performance` | per-stage/per-model N64 frame cost (emulated, ares), perf gates, the calibrated cost model, before/after workflow, what worked |
@@ -335,6 +336,15 @@ castle64. Next for the RSP path: clipping on the RSP, more surface features, an 
 term in the cost model, and a measurement on real hardware (ares doesn't time the
 RDP).
 
+- **Real hardware (2026-10-15, `docs/HARDWARE.md`):** `run n64 --device sc64|everdrive`
+  (sc64deployer / UNFLoader over USB) and `run 3ds --device network [--ip <IP>]`
+  (3dslink), also as `run --target n64 …`, for the engine or a `--project`. The
+  game's debug log (`TRINO_FRAME`, `TRINO_TEST_*`, panics) prints on the terminal:
+  the N64 ROM logs over USB as well as ISViewer, and the 3DS app connects
+  stdout to the 3dslink host when launched by it. `--gdb` writes a Luma3DS gdb
+  script. Tested with stub loaders; not yet run on a physical cart or 3DS. Skill:
+  `hardware`.
+
 - **Display (PC, 2026-10-14):** `Platform::display`/`set_display` with
   `DisplaySettings` (fullscreen or window, window size, pixel scale, interface scale),
   `Game::resize`. `trino-runner-pc` applies and persists them
@@ -470,6 +480,8 @@ cargo xtask build 3ds     # .3dsx via local devkitPro -> target/3ds/trino.3dsx
 cargo xtask run 3ds       # build + open in Azahar (auto-detected)
 cargo xtask test 3ds      # build test app + assert magic strings (Azahar log)
 cargo xtask watch 3ds     # rebuild .3dsx + relaunch Azahar on save
+cargo xtask run n64 --device sc64|everdrive        # real N64 via flashcart USB; log in the terminal
+cargo xtask run 3ds --device network --ip <IP>     # real 3DS via 3dslink (--gdb: Luma3DS gdb script)
 cargo xtask new <name>    # scaffold a game crate under examples/
 cargo xtask scene check   # validate scenes/prefabs/materials (text-first loop)
 cargo xtask scene export [--platform pc|n64|3ds] <scene.ron> <out.rs>   # scene -> no_std Rust data (that platform's variants)
@@ -637,6 +649,14 @@ cargo test --workspace
 - **Wide shots z-fight on the N64 at meter scale:** at 30–60 m, `1 − NEAR/z` resolves
   about 1 m. Draw the world scaled (1/128 works) so the near/far ratio
   stays small.
+- **Don't pipe a hardware loader's output.** UNFLoader and 3dslink write the console's
+  log with unflushed `printf`/`fwrite`, so a pipe delivers it in 4 KB blocks, and
+  `sc64deployer debug` stops at stdin EOF. `xtask/src/hardware.rs` runs them with the
+  terminal inherited.
+- **A `docs/TESTING.md` row is only checked when its whole first cell is one
+  backticked key.** Text outside the backticks, or a `|` inside them (which splits
+  the cell), makes the guard read the row as a header, and its test references are
+  never checked. Put any description inside the backticks and write "n64 or 3ds".
 - **`n64_main!` crates are `#![cfg_attr(target_os = "none", no_std)]`.** A plain
   `no_std` breaks the host `cargo check --workspace` (no panic handler).
 - **N64 per-draw CPU is float latency, not triangles:** a saturating `as i32` costs

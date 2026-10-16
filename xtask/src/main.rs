@@ -10,6 +10,7 @@ mod castle64_assets;
 mod emulators;
 mod fbgolden;
 mod font_assets;
+mod hardware;
 mod impostor;
 mod model;
 mod n3ds;
@@ -36,6 +37,13 @@ commands:
                        trino.toml; also $TRINO_PROJECT or a trino.toml in
                        the current directory) instead of the engine's demo
   run   <pc|n64|3ds>   build and launch (emulator for consoles)
+  run n64 --device sc64|everdrive
+  run 3ds --device network [--ip <IP>] [--gdb [--gdb-port N]]
+                       real hardware instead of the emulator (flashcart
+                       over USB / 3dslink): deploy, then print the game's
+                       debug log here; --no-build deploys target/'s file,
+                       --selftest the self-test build; `run --target n64`
+                       also works (docs/HARDWARE.md)
   test  [pc|n64|3ds] [--bless] [--no-build]
                        run the test suite (default: everything testable);
                        --bless regenerates golden images
@@ -112,6 +120,32 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    // Real hardware (`run n64 --device sc64`, `run --target n64 ...`), parsed
+    // after `--project <dir>` is gone so it may come first.
+    let device = match hardware::parse(&mut args) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if let Some(d) = &device
+        && let Err(e) = hardware::check_invocation(
+            args.first().map(String::as_str),
+            args.get(1).map(String::as_str),
+            d,
+        )
+    {
+        eprintln!("{e}");
+        return ExitCode::FAILURE;
+    }
+    if device.is_some() && selftest && no_build {
+        eprintln!(
+            "xtask: --selftest builds the self-test app, --no-build sends what is in \
+             target/ — use one (`build n64|3ds --selftest` first, then --no-build)"
+        );
+        return ExitCode::FAILURE;
+    }
     let mut it = args.iter().map(String::as_str);
 
     match (it.next(), it.next()) {
@@ -179,12 +213,18 @@ fn main() -> ExitCode {
         }
 
         (Some("build"), Some("n64")) => n64::build(&project, selftest),
-        (Some("run"), Some("n64")) => n64::run(&project),
+        (Some("run"), Some("n64")) => match &device {
+            Some(d) => hardware::deploy_n64(&project, d, !no_build, selftest),
+            None => n64::run(&project),
+        },
         (Some("test"), Some("n64")) => n64::test(&project, bless),
         (Some("watch"), Some("n64")) => n64::watch(&project),
 
         (Some("build"), Some("3ds")) => n3ds::build(&project, selftest),
-        (Some("run"), Some("3ds")) => n3ds::run(&project),
+        (Some("run"), Some("3ds")) => match &device {
+            Some(d) => hardware::deploy_3ds(&project, d, !no_build, selftest),
+            None => n3ds::run(&project),
+        },
         (Some("test"), Some("3ds")) => n3ds::test(&project, !no_build, bless),
         (Some("watch"), Some("3ds")) => n3ds::watch(&project),
         (Some("new"), Some(name)) => {

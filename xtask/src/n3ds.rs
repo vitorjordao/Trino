@@ -20,7 +20,7 @@ use crate::project::Project;
 
 const TARGET: &str = "armv6k-nintendo-3ds";
 
-fn exe(name: &str) -> String {
+pub(crate) fn exe(name: &str) -> String {
     if cfg!(windows) {
         format!("{name}.exe")
     } else {
@@ -31,7 +31,7 @@ fn exe(name: &str) -> String {
 /// devkitPro root: $DEVKITPRO when it is a real directory (on Windows the
 /// installer registers the msys2-style `/opt/devkitpro`, useless outside
 /// msys2), else the platform default install location.
-fn devkitpro() -> Result<PathBuf, String> {
+pub(crate) fn devkitpro() -> Result<PathBuf, String> {
     let mut candidates: Vec<PathBuf> = Vec::new();
     if let Ok(env) = std::env::var("DEVKITPRO") {
         candidates.push(PathBuf::from(env));
@@ -443,7 +443,7 @@ fn azahar_exe() -> Option<PathBuf> {
     which(&exe("azahar"))
 }
 
-fn which(name: &str) -> Option<PathBuf> {
+pub(crate) fn which(name: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     std::env::split_paths(&path)
         .map(|d| d.join(name))

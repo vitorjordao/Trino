@@ -1,0 +1,97 @@
+---
+name: hardware
+description: Run Trino games on real consoles — N64 through a SummerCart64 (sc64deployer) or EverDrive 64 (UNFLoader), 3DS over the network (3dslink) — with the game's debug log forwarded to the terminal, and debug a 3DS app with gdb through Luma3DS's GDB stub. Use for "run on real hardware / flashcart / SC64 / EverDrive / 3dslink / deploy to the console / Luma gdb" requests, or when touching xtask/src/hardware.rs or the shims' log channels.
+---
+
+# hardware
+
+```
+cargo xtask run n64 --device sc64                  # sc64deployer upload <rom>; sc64deployer debug
+cargo xtask run n64 --device everdrive             # UNFLoader -b -f 3 -r <rom> -d
+cargo xtask run 3ds --device network --ip <IP>     # 3dslink -a <IP> -s <app.3dsx>
+cargo xtask run 3ds --device network --ip <IP> --gdb [--gdb-port 4003]   # + target/3ds/<name>.gdb (attach on 4000 by default)
+cargo xtask run --target n64 --device sc64         # the same; --target is moved to the positional slot
+  ... --no-build                                   # deploy the ROM/.3dsx already in target/
+  ... --selftest                                   # build + deploy the self-test build (not with --no-build)
+  ... --project <dir>                              # an external project's ROM/app (ADR 0008)
+```
+
+The user guide is `docs/HARDWARE.md`. It covers prerequisites, device detection,
+gdb and troubleshooting, and links the upstream docs for every flag. Code:
+`xtask/src/hardware.rs`, wired into `main.rs`'s `run n64` / `run 3ds` arms. Without
+`--device`, `n64::run` / `n3ds::run` run unchanged.
+
+## How it works
+
+- **Parsing** (`main.rs`, before project selection):
+  - `hardware::parse` only looks at the arguments **before `--`**. Everything after
+    `--` goes to the launched program (`run pc -- --gdb`).
+  - `normalize_target` turns `--target n64|3ds|n3ds|pc` back into the positional
+    platform and refuses a platform given twice. A cargo triple passes through.
+  - `take_device_args` removes `--device/--ip/--gdb/--gdb-port`. `--gdb-port`
+    needs `--gdb`.
+  - With a device, `n3ds` becomes `3ds`. `main.rs` only dispatches `run 3ds`, so the
+    alias used to end in "unknown invocation".
+  - `main.rs` refuses `--selftest --no-build` with a device: nothing would be
+    built.
+  - `check_invocation` rejects them anywhere but `run n64` / `run 3ds`, and also
+    rejects a device of the other console. Without it, `test n64 --device sc64`
+    would silently boot ares.
+  - All of it runs **after** `Project::select`, so `--project <dir>` may come first
+    (`cargo trino --project X run --target n64 …`). Parsed before, `--target`'s
+    platform landed between `--project` and its directory.
+- **Tools** (`find_tool`):
+  1. `$TRINO_SC64DEPLOYER` / `$TRINO_UNFLOADER` / `$TRINO_3DSLINK`. When set, the
+     path must exist; there is no silent fallback.
+  2. Else PATH.
+  3. Else, for 3dslink (and `arm-none-eabi-gdb`), the install `n3ds::devkitpro()`
+     picks: the first of `$DEVKITPRO`, `C:\devkitPro`, `/opt/devkitpro` holding
+     `libctru`. Never trust `$DEVKITPRO` blindly: Windows installers set it to
+     the msys path `/opt/devkitpro`.
+
+  Missing tools fail with install links. The tool is looked up **before** the
+  build, so nothing is built for a loader that isn't there.
+- **Forwarding:** the loader inherits stdin/stdout/stderr. **Never pipe it:**
+  - UNFLoader `vprintf`s and 3dslink `fwrite`s without flushing, so piped output
+    arrives in 4 KB blocks;
+  - `sc64deployer debug` reads stdin until EOF.
+- **N64 log channel:** the shim's `trino_init` calls `debug_init_isviewer()` and
+  `debug_init_usblog()`.
+  - `debugf` is `fprintf(stderr)` to every channel. It is compiled out by `NDEBUG`,
+    which xtask never defines.
+  - libdragon's `debug.h` (in the `trino-n64` image, `/opt/libdragon/mips64-elf/include`)
+    lists 64drive/EverDrive64/SC64 for USB.
+  - So no ROM change was needed. Don't add `--isv` to sc64deployer: lines would
+    print twice.
+- **3DS log channel:**
+  - libctru's `__system_initArgv` sets `__3dslink_host` when the last argument is
+    3dslink's `XXXXXXXX_3DSLINK_` marker.
+  - The shim's `trino_link_init` (first thing in `trino_init`) then runs
+    `memalign(0x1000, 0x100000)` + `socInit` + `link3dsStdio()`, and registers
+    `close` + `socExit` with `atexit`.
+  - `trino_log` and `trino_panic` then also `fwrite` + `fflush` stdout.
+  - Framebuffer dumps (`TRINO_FBR`) stay on `svcOutputDebugString` only.
+  - Under Azahar `__3dslink_host` is 0. The Azahar golden stayed at mean 0.00.
+- **SC64 order:** `upload` never boots the console (`--reboot` needs game support),
+  so xtask prints "power on (or reset) the N64 now" before `debug`.
+
+## Tests
+
+`xtask/tests/hardware.rs` runs the real binary against a temp external project with
+fake `target/` files (`--no-build`). `#!/bin/sh` stub loaders record `$*` to
+`$STUB_LOG` and echo `TRINO_FRAME` lines.
+- The deploy tests are `#[cfg(unix)]`. Flag errors and missing tools are tested
+  everywhere.
+- The test empties `PATH` and points `DEVKITPRO` at a fake install that has
+  `libctru/` but no tools. That way a real 3dslink on the machine is never run by
+  accident; a *missing* `DEVKITPRO` dir would fall back to `/opt/devkitpro`.
+- Unit tests in `hardware.rs` pin each command line and the gdb scripts.
+
+## Not verified
+
+Nothing here has run on a physical SummerCart64, EverDrive or 3DS (BACKLOG). Open
+questions for the first hardware session:
+- Does Luma's break-on-start (`--gdb-port 4003`, "Force-debug next application at
+  launch") catch a `.3dsx` the Homebrew Launcher starts? That is why `--gdb`
+  defaults to attach (4000).
+- Is the USB log slow enough to change the self-test's frame times?

@@ -72,6 +72,8 @@ fn help_and_no_arguments_list_every_command() {
         "blender smoke",
         "agents <sync|check>",
         "--project <dir>",
+        "run n64 --device sc64|everdrive",
+        "run 3ds --device network",
     ] {
         assert!(text.contains(cmd), "help lacks `{cmd}`");
     }

@@ -18,6 +18,9 @@ cargo xtask build 3ds --selftest && cargo xtask test 3ds --no-build   # build, b
 cargo xtask watch 3ds          # rebuild .3dsx + relaunch Azahar on every save
 ```
 
+Real consoles instead of emulators (`run n64 --device sc64|everdrive`,
+`run 3ds --device network --ip <IP>`): the `hardware` skill and `docs/HARDWARE.md`.
+
 ## Emulator locations
 
 - **ares**, in order of preference:

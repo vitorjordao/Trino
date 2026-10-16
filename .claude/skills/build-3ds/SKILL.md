@@ -46,6 +46,13 @@ citro2d for sprites. `apps/3ds/build.rs` relinks when only the shim object chang
 - Immediate mode (`C3D_ImmSendAttrib`) was the old textured path: ~144 bytes of
   command buffer per triangle, so a full scene could overflow the 256 KB buffer.
 
+- **Logging:** `trino_log` goes to `svcOutputDebugString` (Azahar's log, the
+  test harness). When the app was launched by 3dslink, `__3dslink_host` is set and
+  `trino_link_init` also connects stdout to the host, so the log goes there too. This
+  is for real hardware (`run 3ds --device network`, the `hardware` skill). The 3dslink
+  header only forward-declares `struct in_addr`: reading `.s_addr` needs
+  `<arpa/inet.h>`.
+
 **Two screens.** `s_top` (400×240) and `s_bottom` (320×240) are citro2d screen
 targets, and each has a 16-bit depth buffer. `trino_set_screen(1)` begins the
 bottom's scene and switches `s_proj` (the tri3d projection) to the bottom's

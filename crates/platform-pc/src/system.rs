@@ -14,7 +14,7 @@ use trino_core::{
     BindDevice, BlobId, Button, Caps, DisplayInfo, DisplaySettings, InputInfo, Platform, SaveError,
 };
 
-use crate::input::{BINDABLE, InputRequest, PcInput};
+use crate::input::{BINDABLE, BINDINGS, InputRequest, PcInput};
 
 pub struct PcPlatform {
     start: Instant,
@@ -34,7 +34,7 @@ pub struct PcPlatform {
     input: Option<InputInfo>,
     pad_name: Option<String>,
     /// Binding labels, [`BINDABLE`] order: keyboard, gamepad.
-    labels: [[Option<String>; 2]; 12],
+    labels: [[Option<String>; 2]; BINDINGS],
     /// The game's last rebind/cancel/reset, for the host to apply.
     input_request: Option<InputRequest>,
 }

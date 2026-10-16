@@ -244,6 +244,14 @@ mod n64 {
                 trino_core::Renderer::end_frame(renderer);
             }
         }
+        runtime::log("TRINO_STEP:input\n");
+        if let Err(e) = castle64::selftest::idle_input_checks(&mut N64Input) {
+            runtime::log(&format!("TRINO_TEST_FAIL:{e}\n"));
+            loop {
+                trino_core::Renderer::begin_frame(renderer, trino_core::Color::BLACK);
+                trino_core::Renderer::end_frame(renderer);
+            }
+        }
         // Its own frame: the showcase games (~22 KB each) must be gone from
         // the stack before castle64 renders on top of this function.
         showcase_demo(renderer, audio, platform);

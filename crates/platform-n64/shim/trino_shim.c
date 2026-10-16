@@ -532,7 +532,9 @@ uint32_t trino_debug_pixel(uint32_t x, uint32_t y)
 }
 
 // ---------------------------------------------------------------------------
-// Input — bit positions match trino_core::input::Button discriminants.
+// Input — bits 0..11 match trino_core::input::Button discriminants;
+// bits 16..19 are the raw C buttons (up, down, left, right), which Rust
+// turns into `InputState::right_stick` (C-left/C-down also stay X/Y).
 
 uint32_t trino_joypad_buttons(void)
 {
@@ -551,6 +553,10 @@ uint32_t trino_joypad_buttons(void)
     if (b.d_down) out |= 1u << 9;
     if (b.d_left) out |= 1u << 10;
     if (b.d_right) out |= 1u << 11;
+    if (b.c_up) out |= 1u << 16;
+    if (b.c_down) out |= 1u << 17;
+    if (b.c_left) out |= 1u << 18;
+    if (b.c_right) out |= 1u << 19;
     return out;
 }
 

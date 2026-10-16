@@ -52,7 +52,7 @@ pub use collide::{MoveResult, move_and_collide};
 pub use entity::{Entity, EntityId, EntityStore};
 pub use game::Game;
 pub use impostor::Impostor;
-pub use input::{Button, Input, InputState, Key, PointerButton};
+pub use input::{Button, Input, InputState, Key, KeySet, PointerButton};
 pub use light::{
     GroundPool, LightKind, LightList, LightTier, LocalLight, MAX_LOCAL_LIGHTS, MAX_VERTEX_LIGHTS,
     ground_pool,

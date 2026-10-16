@@ -137,6 +137,17 @@ shipping a 3D game first**, then by cost:
 
 ---
 
+## Done — comprehensive input mapping (2026-10-16, branch `input/full-coverage`, GitHub #32, ADR 0005 §8)
+
+| Item | Evidence |
+|---|---|
+| `InputState::keys` is a 128-bit `KeySet` and `Key` covers the whole keyboard (79 keys; the first 30 keep their bits); `Button::L2/R2/L3/R3`; `InputState::right_stick` and `triggers`; PC: every winit key, gilrs right stick, analog triggers, LT/RT → L2/R2, stick clicks → L3/R3; N64: the C buttons also drive `right_stick` (X/Y and Z unchanged); New 3DS: ZL/ZR → L2/R2, C-stick → `right_stick`; `.input` files gain four lines and old ones still parse; `GAME_API_VERSION` 4 | core tests (every key its own bit, the old bit positions, `u32`-era expressions, new buttons); PC tests (every key code, a device-free `PadReading` through the default bindings, trigger values, keys bound to L2/R2, old 12-line `.input` files); host tests of the N64 and 3DS shim decoders; the `input` self-test step (idle shims) on PC and in Azahar (ares pending, for coordination: the N64 shim was only syntax-checked); `--features gamepad` clippy + tests with a scratch `libudev.pc` |
+
+Deviations: L, R and Select keep their trigger and stick-click pad bindings, so by
+default LT presses L and L2. Keys bound to L2/R2 read as fully pulled triggers.
+Numpad 0 and 4–9 do not alias the digits, because they are bindable. Only 1–3 alias
+them, as before. Super cannot be bound, because the OS takes it.
+
 ## Done — a typed two-screen API, 3D on the 3DS bottom screen, touch routing (2026-10-15, branch `n3ds/screen-api`, GitHub #17, ADR 0005 §6)
 
 | Item | Evidence |

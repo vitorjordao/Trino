@@ -325,7 +325,10 @@ new skill when none fits. Then run `cargo xtask agents sync`. The steps are in
     frames with the real fps, dump goldens). Project gates: `TRINO_TEST_PASS`, goldens,
     `n64_max_frame_us`.
   - **Input:** an optional `InputState::pointer` (PC mouse, 3DS touch mapped onto the
-    top screen) with the wheel; PC gamepads through gilrs (feature `gamepad`).
+    top screen) with the wheel; PC gamepads through gilrs (feature `gamepad`). Full
+    coverage (engine issue #32): the whole PC keyboard in a 128-bit `KeySet`, buttons
+    L2/R2/L3/R3, `right_stick` and `triggers` on every backend that has them
+    (`GAME_API_VERSION` 4).
   - **2D:** `Renderer::fill_rect`; the N64 resident text atlas, a 2D blit-mode cache and
     I4/I8 sprites; PNG grid fonts with `chars` and `advance`.
   - **RSP:** the RSP accepts draws up to 4× the screen (`RSP_BAND`); opt-in
@@ -396,17 +399,29 @@ RDP).
   `dual screen` self-test step, `castle64_hub_bottom.png`).
 
 PC keyboard mapping: A/B = Z/X, X/Y = C/V, L/R = Q/E, Start = Enter,
-Select = Right Shift, D-pad = arrows, stick = WASD (see `crates/platform-pc/src/input.rs`).
-On top of it, `InputState::keys` carries PC keys (`trino_core::Key`: Esc, Enter,
-Space, Tab, Delete, F1–F8, 1–3, Page Up/Down, Home, R, T, W/A/S/D, +/−, Shift, Ctrl)
-for PC shortcuts, and `InputState::pad` says a gamepad was used this frame.
+Select = Right Shift, D-pad = arrows, stick = WASD; L2/R2/L3/R3 have no default key
+(see `crates/platform-pc/src/input.rs`). Gamepads (gilrs): A/B/X/Y, L = LB+LT, R = RB+RT,
+L2/R2 = LT/RT, L3/R3 = stick clicks, Start = Start+Guide, Select = Back+LS, both sticks
+(`stick`, `right_stick`) and the analog triggers (`triggers`, 0..=1).
+On top of it, `InputState::keys` (a 128-bit `trino_core::KeySet`) carries the whole PC
+keyboard (`trino_core::Key`: letters, digits, F1–F12, arrows, Home/End/PgUp/PgDn/
+Insert/Delete/Backspace, Shift/Ctrl/Alt/Super, Space/Enter/Escape/Tab and punctuation;
+`=` also sets `Plus`, numpad 1–3/Enter/+/− alias the main row). Every key sets its bit,
+bound keys too (Z sets `Key::Z` and presses A). The first 30 `Key`s keep their old
+bit positions and `KeySet` has `&`/`|`/`!` and `== u32`, so code written for the old
+`u32` (`now.keys & !prev.keys != 0`) still compiles. `InputState::pad` says a gamepad
+was used this frame. Consoles: N64 C-left/C-down stay X/Y and the four C buttons are
+also `right_stick`, Z is Select; New 3DS ZL/ZR = L2/R2 (`triggers` 0 or 1), C-stick =
+`right_stick`.
 Both the keys and the pad buttons can be **rebound** from the game: `Platform::input_info`
 (gamepad support/connection, a pending rebind), `gamepad_name`, `binding_label`,
 `rebind`, `cancel_rebind`, `reset_bindings` (PC only, `None`/no-ops on consoles).
 `trino-runner-pc` applies them after the frame and keeps them in `<save_name>.input`
-(text; `input::bindings_to_text`). The next bindable key or pad button pressed becomes
-the binding, Escape cancels; keys with a fixed role (WASD, the `Key` bits but Enter and
-Shift) are not bindable, so one press never does two things. Without the `gamepad` feature (or a working pad layer)
+(text; `input::bindings_to_text`, one line per `BINDABLE` button; files from before
+L2–R3 have 12 lines and still parse). The next bindable key or pad button pressed becomes
+the binding, Escape cancels; keys with a fixed role (WASD and the shortcut keys: Esc,
+Space, Tab, Delete, Backspace, F1–F8, 1–3, Page Up/Down, Home, R, T, =, −, Ctrl; and
+Super, which the OS takes) are not bindable, so one press never does two things. Without the `gamepad` feature (or a working pad layer)
 `GamepadStatus::Unsupported` and keyboard rebinding still works.
 
 ## Repository map
@@ -568,6 +583,16 @@ cargo test --workspace
 
 ## Pitfalls
 
+- **The PC `gamepad` feature is compiled by no default gate.** fmt, clippy and
+  `cargo test --workspace` build without it, so gilrs code can rot unseen. Check it with
+  `cargo clippy -p trino-platform-pc --features gamepad --all-targets -- -D warnings`.
+  Without `libudev-dev`, point `PKG_CONFIG_PATH` at a scratch `libudev.pc`
+  (`Libs: -L<dir> -ludev`, with `<dir>/libudev.so` → the system's `libudev.so.1`).
+  With a pad plugged in, `rebinding_keys_through_the_platform` fails there (it asserts
+  that no pad is connected); unplug it or skip that test.
+- **Keep gamepad logic out of the gilrs glue.** `PcInput::merge_pad` folds a
+  device-free `PadReading`, so the mapping is tested without a pad or the feature;
+  `read_gilrs` only copies values.
 - **N64 FFI: no scalar float after an integer argument.** Rust is o32 and libdragon
   is o64, so the float arrives as garbage. Pass 16.16 fixed point (`u32`) or a
   pointer (ADR 0005 §6).

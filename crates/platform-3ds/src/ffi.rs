@@ -67,9 +67,12 @@ unsafe extern "C" {
     /// `detail` (null = none) is multiplied over the texture.
     pub fn trino_3d_material(detail: *mut c_void, flags: u32);
 
+    /// Bits 0..13 = `Button` discriminants (12/13 = ZL/ZR, New 3DS).
     pub fn trino_joypad_buttons() -> u32;
     /// (x as i16 as u16) << 16 | (y as i16 as u16).
     pub fn trino_joypad_stick() -> u32;
+    /// The C-stick (New 3DS; 0 elsewhere), packed like `trino_joypad_stick`.
+    pub fn trino_cstick() -> u32;
     /// Bit 31 = touching, bits 16..24 = y, bits 0..9 = x (bottom screen px).
     pub fn trino_touch() -> u32;
 

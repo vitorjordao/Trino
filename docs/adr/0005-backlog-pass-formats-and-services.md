@@ -188,3 +188,31 @@ Textures must be power-of-two and fit TMEM; strict mode enforces both.
   - against codegen (`check_baked`);
   - against the editor's resolve (`showcase_render`);
   - with hand-built blobs in core tests.
+
+## 8. Input coverage (game API v4, engine issue #32)
+
+- **`InputState::keys` is a `KeySet`** (128 bits, `[u64; 2]`), not a `u32`. `Key` grew
+  to the whole keyboard (79 keys); the first 30 keep their bit positions and new keys
+  are appended, never inserted. `KeySet` has `&`, `|`, `^`, `!` and `PartialEq<u32>`
+  (the first 32 bits), so `now.keys & !prev.keys != 0` and `keys == 0` keep compiling
+  with the same meaning. `key`, `key_pressed`, `set_key` are unchanged.
+- **Buttons are a `u32` mask** with `L2`, `R2`, `L3`, `R3` at bits 12..15.
+  `InputState` gained `right_stick` (Y-up, like `stick`) and `triggers` (`x` = left,
+  `y` = right, 0..=1). A digital source reads 0 or 1: the New 3DS's ZL/ZR, and keys
+  bound to L2/R2 on PC. The N64 has no triggers.
+- **Console mappings only grow.** N64 C-left/C-down stay X/Y and Z stays Select. The
+  four C buttons are *also* `right_stick`, packed at bits 16..19 of the existing
+  `trino_joypad_buttons` word (no new FFI). The 3DS packs ZL/ZR at bits 12/13 and adds
+  `trino_cstick()`. `irrstCstickRead` copies a static, so it reads 0 on an Old 3DS.
+- **The `.input` format stays line-per-button.** Four lines were added (`L2`, `R2`,
+  `L3`, `R3`). A file without them keeps those buttons' defaults, minus any key or pad
+  button the file gave another button that didn't have it by default. The default pad
+  keeps L = LB+LT, R = RB+RT and Select = Back+LS, so a trigger presses both L and L2.
+- **Bindable keys are an explicit list** (`KEYS` in `crates/platform-pc/src/input.rs`).
+  "Has a `Key` bit" no longer means "fixed role", because now every key has one. The
+  fixed-role keys are the ones that were fixed before: WASD and the shortcut keys Esc,
+  Space, Tab, Delete, Backspace, F1–F8, 1–3, PgUp/PgDn, Home, R, T, =, − and Ctrl.
+  Super is excluded too, because the OS takes it. Every new key is bindable, F9–F12
+  included.
+- `GAME_API_VERSION` 3 → 4: the layout of `InputState` changed, and `InputState` crosses
+  the dylib boundary.

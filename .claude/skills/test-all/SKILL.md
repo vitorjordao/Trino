@@ -51,6 +51,13 @@ Coverage: `TRINO_REQUIRE_GPU=1 cargo llvm-cov --workspace --summary-only
   cargo +nightly check -Zbuild-std=core,alloc -Zjson-target-spec --target platforms/n64/mips-nintendo64-none.json -p trino-app-n64 --release
   cargo +nightly check -Zbuild-std=core,alloc --target armv6k-nintendo-3ds -p trino-platform-3ds -p castle64 -p showcase --release
   ```
+- The PC `gamepad` feature (no default gate compiles it):
+  `cargo clippy -p trino-platform-pc --features gamepad --all-targets -- -D warnings`
+  and `cargo test -p trino-platform-pc --features gamepad --lib --test input_audio`.
+  Without `libudev-dev`: write a scratch `libudev.pc` (`Libs: -L<dir> -ludev`), symlink
+  `<dir>/libudev.so` to `/usr/lib/x86_64-linux-gnu/libudev.so.1`, set `PKG_CONFIG_PATH=<dir>`
+  (verified 2026-10-16). With a pad connected, `platform_services::rebinding_keys_through_the_platform`
+  fails (it asserts no pad).
 - T&L cost (what the consoles' CPUs pay): `cargo test --release -p xtask --test bench_tnl -- --ignored --nocapture`.
   Compare against the base commit in a `git worktree` (never `git stash` a dirty tree for this).
 - Full console suites: `cargo xtask test n64|3ds` (emulators required; see `run-emulator`).

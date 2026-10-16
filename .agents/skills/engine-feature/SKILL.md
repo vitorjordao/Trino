@@ -62,6 +62,12 @@ A feature is done only when **PC, N64 and 3DS** all run it and an emulator has s
     or a pointer to floats. On the N64 a float in that position arrives as garbage,
     with no error from the compiler or the linker. The 3DS follows the same rule so
     the backends stay symmetrical.
+- Decode what a shim returns (packed bits, fixed point) in a pure module gated
+  `#[cfg(any(target_os = "none", test))]` (N64) or `"horizon"` (3DS), so host
+  `cargo test` covers the mapping: `crates/platform-n64/src/pad.rs` and
+  `crates/platform-3ds/src/pad.rs` do it for the joypads. New data in an existing
+  return value goes in unused bits (the N64's C buttons sit at bits 16..19, clear
+  of the `Button` discriminants), which needs no new FFI function.
 - The PC backend (`crates/platform-pc`) is the reference. Anything visual must match
   the N64 look (`build-n64` › Console output conventions).
 

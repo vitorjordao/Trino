@@ -37,6 +37,8 @@ mod audio;
 mod host;
 #[cfg(target_os = "none")]
 mod input;
+#[cfg(any(target_os = "none", test))]
+mod pad;
 #[cfg(target_os = "none")]
 mod renderer;
 #[cfg(target_os = "none")]

@@ -32,7 +32,7 @@ impl Audio for NullAudio {
 }
 
 type VersionFn = fn() -> u32;
-/// Must match `trino_game_api::export_game!` exactly (GAME_API_VERSION 3).
+/// Must match `trino_game_api::export_game!` exactly (GAME_API_VERSION 4).
 type UpdateFn =
     fn(&mut hello_sprite::HelloGame, &mut dyn Platform, &InputState, &mut dyn Audio, f32);
 

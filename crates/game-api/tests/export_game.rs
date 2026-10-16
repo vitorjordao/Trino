@@ -102,7 +102,7 @@ impl Renderer for Host {
 #[test]
 fn exports_handshake_and_forward_to_the_game() {
     assert_eq!(trino_game_api_version(), GAME_API_VERSION);
-    assert_eq!(GAME_API_VERSION, 3, "bump on purpose, with the host");
+    assert_eq!(GAME_API_VERSION, 4, "bump on purpose, with the host");
 
     let mut game = Probe::default();
     let mut host = Host {

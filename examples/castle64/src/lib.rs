@@ -1387,9 +1387,11 @@ mod tests {
         settle(&mut g, &mut a);
         let yaw = g.cam_yaw;
         g.update(&touch(Screen::Top, BTN_CAM_L), &mut a, DT);
+        // Released first, so the HUB click below is a fresh press.
+        g.update(&InputState::default(), &mut a, DT);
         g.update(&touch(Screen::Top, BTN_HUB), &mut a, DT);
+        assert_eq!(g.level, 1, "a top-screen click on HUB is not a tap");
         assert_eq!(g.cam_yaw, yaw, "top-screen clicks are not touch buttons");
-        assert_eq!(g.level, 1);
         g.update(&InputState::default(), &mut a, DT);
         g.update(&touch(Screen::Bottom, BTN_CAM_L), &mut a, DT);
         assert!(g.cam_yaw > yaw, "held < turns like L");
@@ -1452,7 +1454,8 @@ mod tests {
         let mut g = game();
         g.render(&mut one);
         g.render(&mut two);
-        assert_eq!(one.rects[1] + one.models[1] + one.texts[1], 0);
+        // castle64's top screen has no rectangles: any here would be the
+        // panel landing on the only screen.
         assert_eq!(one.rects[0], 0, "no panel drawn over the top screen");
         assert_eq!(two.models[0], one.models[0], "the top is the same");
         assert_eq!(two.texts[0], one.texts[0]);

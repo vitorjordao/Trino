@@ -160,8 +160,18 @@ Textures must be power-of-two and fit TMEM; strict mode enforces both.
     (`C2D_Init` once) and the shim's one per-frame vertex buffer. The PC's strict mode
     and `FrameStats::tris` therefore count both screens together.
   - **ABI:** `trino_debug_pixel(x, y, bottom)` (3 arguments) reads either LCD for
-    `Renderer::read_screen_pixel`. `GAME_API_VERSION` stays 3, because the host and
-    the game dylib build against the same `trino-core`.
+    `Renderer::read_screen_pixel`.
+  - **`GAME_API_VERSION` stays 3**, as it did for `second_screen`/`set_screen`. The
+    new methods all have defaults, and no exported function's signature changed.
+    Hot reload swaps only the game dylib, and the host and the dylib always build
+    against the same `trino-core`: a core change needs a restart, and
+    `cargo xtask watch pc` watches only `examples/`. Bumping would refuse nothing that
+    could actually be loaded. The rule is written in `crates/game-api/src/lib.rs`
+    and in the `engine-feature` skill: a trait method with a default doesn't bump; a
+    signature change does.
+  - **The camera is renderer state across screens and frames.** A `set_camera` for
+    the bottom carries into the next frame's top unless the game sets the camera
+    again, so set it every frame on each screen.
 
 ## 7. Verification conventions
 

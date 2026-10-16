@@ -502,10 +502,17 @@ pub trait Renderer {
     /// after `1` is ignored on every backend. A no-op on single-screen
     /// targets (draws stay on the main screen: check
     /// [`on_screen`](Self::on_screen)'s result).
+    ///
+    /// A two-screen backend overrides `set_screen`, [`screen`](Self::screen)
+    /// and [`second_screen`](Self::second_screen) together: the provided
+    /// `on_screen` reads `screen()` to tell whether the switch happened.
     fn set_screen(&mut self, _screen: u8) {}
 
-    /// Where draws go now (see [`set_screen`](Self::set_screen)). Always
-    /// [`Screen::Top`] on single-screen targets.
+    /// Where draws go now (see [`set_screen`](Self::set_screen)). The
+    /// default is [`Screen::Top`], right for single-screen targets only: a
+    /// backend that overrides `set_screen` must override this too, or
+    /// `on_screen(Screen::Bottom)` reports `false` while its draws go to the
+    /// bottom.
     fn screen(&self) -> Screen {
         Screen::Top
     }

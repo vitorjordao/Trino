@@ -349,7 +349,11 @@ RDP).
   skip the draws), or it is `Top` after the frame moved to the bottom. The order is
   the top first, then the bottom, once per frame, on every backend. Each screen has
   its own target, so draws are clipped to it, and its own projection: the T&L and the
-  3DS shim's citro3d matrix switch to 320×240, so set a camera for the bottom. Also
+  3DS shim's citro3d matrix switch to 320×240, so set a camera for the bottom. The
+  camera is renderer state: a bottom-screen `set_camera` carries into the next
+  frame's top unless the game sets the top's camera again, so set it every frame on
+  each screen. A two-screen backend overrides `set_screen`, `screen()` and
+  `second_screen` together, because the provided `on_screen` reads `screen()`. Also
   `screen()`, `screen_size(Screen)`, `read_screen_pixel(Screen, x, y)` (the
   self-test read-back of either screen) and the low-level `second_screen`/`set_screen(u8)`.
   `Platform::second_screen` is known at update time. Touch routing:

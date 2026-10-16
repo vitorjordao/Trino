@@ -109,7 +109,11 @@ shipping a 3D game first**, then by cost:
 14. **Lights in scenes and the editor** (S–M). A `light` component (point/spot, color,
     radius) in scene files, codegen and TSCN, gizmos and a preview in the Scene view
     (the showcase's lamp posts would light up).
-15. **PICA200 fragment lighting on the 3DS** (M). The 3DS evaluates local lights per
+15. **Grow the 3DS GPU path** (M, ADR 0012). Textured meshes (alpha-tested first, then
+    the blended ones in painter order), fog in `tnl3d.v.pica`, rigid skeletons (joint
+    matrices as uniforms), local lights per vertex in the shader. Then measure on a
+    real 3DS: Azahar doesn't time the GPU.
+16. **PICA200 fragment lighting on the 3DS** (M). The 3DS evaluates local lights per
     vertex today; its GPU could do it per fragment with normals passed through the
     citro3d shim (the PC's lit pipeline needs the same data).
 
@@ -136,6 +140,19 @@ shipping a 3D game first**, then by cost:
   time) and bless `tests/perf/` on purpose. Host benches stay as regression guards only.
 
 ---
+
+## Done — 3DS GPU vertex T&L, N64 text in runs, layout-robust N64 timing, hang diagnostics (2026-10-16, branch `perf/hardware-tnl`, part of GitHub #31, ADR 0012)
+
+| Item | Evidence |
+|---|---|
+| `render3d::gpu_check`/`gpu_mesh_check`/`gpu_screen_matrix`/`GpuReject`, `TnlStats::gpu_draws/gpu_tris`; 3DS static meshes in linear memory and `tnl3d.v.pica` (`trino_gpu_mesh`/`trino_gpu_draw`), `N3dsRenderer::set_gpu_tnl` | `crates/core/tests/gpu_tnl.rs` (shader arithmetic = `tessellate` per vertex; refusals); `gpu tnl` self-test step in Azahar (castle64 hub: 26/26 draws, 603 triangles on the GPU, 6/960 samples differ, mean 0.56); `occlusion` step; `perf_budget::castle64_3ds_gpu_split_matches_the_baseline` (`tests/perf/castle64_work_3ds.toml`); 3DS golden within tolerance (mean 0.58) |
+| `text::GlyphIndex` (O(1) lookup below 256, all backends), no line measuring for left-aligned text; N64 `trino_text_run` (32 glyphs per call, raw rectangles at integer scales) | `text::tests::the_index_finds_the_same_glyphs_as_the_search`; N64 goldens identical; an external project over 4 paddings: UI scenes −1.7 ms, its 30 fps scenes −0.6…−1.7 ms, spread 2.6 → 0.5 ms |
+| `TRINO_N64_TEXT_PAD` (layout sweep), `draws2d=` in `TRINO_FRAME` | `n64::tests::the_text_pad_is_whole_instructions_before_the_rust_code`; the sweep in ADR 0012 §3 |
+| Emulator idle limit (`TRINO_EMU_IDLE`, `emulators::Watchdog`) and the N64 stall watchdog (`TRINO_STALL`) | `emulators::tests::*` (hang vs slow run vs idle off) |
+
+Deviations from #31: the PC native profile keeps CPU T&L this round (no `draw_mesh` /
+instancing API yet), and the 3DS GPU path covers static untextured meshes only
+(textures, fog, rigid skeletons and local lights stay on the CPU; ADR 0012 Consequences).
 
 ## Done — comprehensive input mapping (2026-10-16, branch `input/full-coverage`, GitHub #32, ADR 0005 §8)
 

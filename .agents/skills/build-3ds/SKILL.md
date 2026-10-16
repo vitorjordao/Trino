@@ -37,6 +37,22 @@ cache and issues `C3D_DrawArrays`. Then `C2D_Prepare()` hands the GPU back to
 citro2d for sprites. `apps/3ds/build.rs` relinks when only the shim object changes
 (`TRINO_3DS_SHIM`), and the app's stack is 256 KB (`__stacksize__`).
 
+**Static meshes skip the CPU T&L (ADR 0012 §1).** Meshes `render3d::gpu_mesh_check`
+accepts are copied to linear memory at register (`trino_gpu_mesh`, 28-byte vertices +
+u16 indices); a draw `gpu_check` accepts is 36 floats of uniforms and one
+`C3D_DrawElements` through `tnl3d.v.pica` (`trino_gpu_draw`), which transforms, lights
+and projects on the PICA200. Both shaders are assembled by `compile_shader` (`SHADERS`
+in `xtask/src/n3ds.rs`). Traps:
+- **The tilt projection mirrors the winding:** the GPU path culls `GPU_CULL_FRONT_CCW`
+  (`TRINO_TNL_CULL`). With the other winding only the boxes' inner faces drew and the
+  `occlusion` step failed (their bottoms are coplanar with the floor).
+- **A PICA uniform may only be an instruction's first source** (picasso).
+- **GPU draws happen at call time,** not at the batch flush: they move the 2D depth to the
+  HUD band themselves (`sprite_depth`).
+- `N3dsRenderer::set_gpu_tnl(false)` = everything on the CPU (the `gpu tnl` self-test
+  step's reference; A/B measurements). The host gate of the split is
+  `tests/perf/castle64_work_3ds.toml` (`perf_budget`).
+
 - **Never draw 3D with `C2D_DrawTriangle`.** It takes one depth for the whole
   triangle: big floor triangles then win the depth test over whatever stands on
   them (castle64's player and boars sank into the ground — the `occlusion`

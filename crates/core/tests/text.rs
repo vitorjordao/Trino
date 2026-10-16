@@ -8,7 +8,7 @@ mod common;
 use std::fmt::Write as _;
 
 use common::{Recorder, glyph, sample_font, tfnt};
-use trino_core::text::{self, BitmapFont, FontError};
+use trino_core::text::{self, BitmapFont, FontError, GlyphIndex};
 use trino_core::{Color, FontId, Rect, Renderer, SpriteId, TextAlign, TextBuf, TextParams, Vec2};
 
 const UI: FontId = FontId(0x0F0F);
@@ -37,6 +37,36 @@ fn tfnt_parses_and_looks_up_glyphs() {
     assert_eq!(f.line_width("a~"), 12, "unknown chars measure as `?`");
     assert_eq!(f.measure("ab\nb a", 1.0), Vec2::new(16.0, 18.0));
     assert_eq!(f.measure("", 3.0), Vec2::new(0.0, 27.0));
+}
+
+#[test]
+fn the_glyph_index_lays_out_exactly_like_the_table_search() {
+    let bytes = sample_font();
+    let plain = BitmapFont::parse(&bytes).unwrap();
+    let index = GlyphIndex::build(&plain);
+    let fast = plain.with_index(&index);
+    for cp in (0..0x300).filter_map(char::from_u32) {
+        assert_eq!(
+            fast.glyph_or_fallback(cp),
+            plain.glyph_or_fallback(cp),
+            "{cp:?}"
+        );
+    }
+    for align in [TextAlign::Left, TextAlign::Center, TextAlign::Right] {
+        let params = TextParams {
+            align,
+            scale: 2.0,
+            ..TextParams::DEFAULT
+        };
+        let run = |f: &BitmapFont| {
+            let mut out = Vec::new();
+            text::layout(f, Vec2::new(7.0, 3.0), "ab~\nj ba", &params, &mut |r, p| {
+                out.push((r, p))
+            });
+            out
+        };
+        assert_eq!(run(&fast), run(&plain));
+    }
 }
 
 #[test]

@@ -3873,6 +3873,7 @@ dependencies = [
  "trino-asset-pipeline",
  "trino-core",
  "trino-platform-pc",
+ "trino-scaffold",
  "trino-scene",
  "wgpu",
 ]

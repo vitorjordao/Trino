@@ -6,10 +6,56 @@ description: Run, drive and observe the Trino editor (Scene/Game views, hierarch
 # editor
 
 ```
-cargo xtask editor                    # = cargo run -p trino-editor
+cargo xtask editor                    # the project launcher (= cargo run -p trino-editor)
+cargo xtask editor <dir>              # straight into the project at <dir>
+cargo xtask editor .                  # the engine's own content, as before the launcher
+cargo trino editor                    # inside a standalone project: that project
 ```
 
-Opens `scenes/showcase.scene.ron` (override: `TRINO_EDITOR_SCENE=scenes/x.scene.ron`).
+A project opens on `scenes/showcase.scene.ron` (override:
+`TRINO_EDITOR_SCENE=scenes/x.scene.ron`); the editor works relative to the project
+folder, which becomes the working directory.
+
+## Project launcher (`launcher.rs`, `recent.rs`)
+
+- **When it shows:** with no project argument. A hook that acts on an open scene
+  skips it and opens the working directory as before. The hooks are
+  `TRINO_EDITOR_SCENE`, `SELECT`, `TAB`, `OPEN`, `PLAY`, `INSPECT`, `ANIM`,
+  `ANIM_VIEW`, `PALETTE`, `GAME` and `LOD_PREVIEW` (`main.rs::EDITOR_HOOKS`).
+  `--launcher` or `TRINO_EDITOR_LAUNCHER=1` always show it. The rule is
+  `main.rs::start`, unit-tested.
+- **Recent projects:** each row shows the name, the path (elided at the start), the
+  time since it was last opened, **Open**, and **Forget** (×).
+  - They are kept in `recent-projects.txt`, one `<unix secs>\t<path>` per line,
+    newest first, 12 at most. Lines that don't parse are dropped.
+  - The file lives in `$XDG_CONFIG_HOME/trino` or `~/.config/trino` (Linux),
+    `~/Library/Application Support/trino` (macOS) or `%APPDATA%\trino` (Windows).
+    It never lives in a repository.
+  - `TRINO_EDITOR_RECENT=<file>` moves it. Tests and screenshots must set it, so
+    they never touch the real one.
+- **Open existing:** a path field, checked by `launcher::check_project`.
+  - It needs a folder with a `trino.toml`, or an `assets/manifest.toml` (the
+    engine).
+  - **Engine demo scenes** opens the engine checkout.
+- **Create new project:** name, folder and template (Blank, or based on the castle64
+  or showcase demo).
+  - It calls `trino_scaffold::scaffold`, the same code as
+    `cargo xtask new --standalone --template`, then opens the result.
+  - Templates come from `$TRINO_ENGINE` or the checkout the editor was built in.
+    Without one the Create button is disabled and a warning says why.
+- **Opening is in-process:** `enter_project` changes the working directory and
+  records the recent entry, then `App::open(ctx, render_state)` builds the editor.
+  `App::new(cc)` is a thin wrapper over it, which the kittest flows use. The
+  launcher runs the screenshot and smoke hooks itself (`app::screenshot_hook`).
+- **No stray folders:** the watcher no longer creates `examples/platformer/src` in a
+  project that lacks it. The Level tab then shows its "file not found" note.
+
+Screenshot of the launcher:
+
+```
+TRINO_EDITOR_LAUNCHER=1 TRINO_EDITOR_RECENT=target/recent-demo.txt \
+TRINO_EDITOR_SCREENSHOT=target/launcher.png TRINO_EDITOR_SCREENSHOT_FRAME=10 cargo run -p trino-editor
+```
 
 ## Hooks for agents and tests
 
@@ -29,7 +75,10 @@ Opens `scenes/showcase.scene.ron` (override: `TRINO_EDITOR_SCENE=scenes/x.scene.
 | `TRINO_EDITOR_SIZE=960x600` | window size (default 1600x940; never below the 960x600 minimum) — screenshot small windows |
 | `TRINO_EDITOR_INSPECT=platforms\|lod\|impostor\|budget` | the Inspector opens that section and scrolls to it (`budget`: the scene settings' platform budget, with nothing selected) |
 | `TRINO_EDITOR_LOD_PREVIEW=<m>` | preview the selected entity's LOD at that distance (both views) |
-| `TRINO_EDITOR_SMOKE_FRAMES=N` | close after N frames (CI smoke test) |
+| `TRINO_EDITOR_SMOKE_FRAMES=N` | close after N frames (CI smoke test; the launcher too) |
+| `TRINO_EDITOR_LAUNCHER=1` | show the project launcher even when a scene hook is set (screenshots) |
+| `TRINO_EDITOR_RECENT=<file>` | the launcher's recent-projects file (tests: never the user's own) |
+| `TRINO_ENGINE=<checkout>` | the engine checkout the launcher creates projects from |
 
 Example — look at an entity in the Game view, then read the PNG:
 
@@ -69,6 +118,9 @@ Live-edit check: start the editor with `TRINO_EDITOR_ECHO_LOG=1` in the backgrou
 
 | File | Role |
 |---|---|
+| `main.rs` | start rule (`start`: launcher, project argument or the old hooks), `Shell` (launcher, then editor) |
+| `launcher.rs` | the project launcher: recent projects, open existing (validated), create from a template |
+| `recent.rs` | the recent-projects file (location, parse, save, ages) |
 | `app.rs` | state, `Cmd` queue (panels never mutate structure directly), menus, toolbar, status bar, file sync, shortcuts, undo commit |
 | `doc.rs` | the document (scene or prefab being edited) + snapshot undo/redo (auto-coalescing) |
 | `viewport.rs` | Scene/Game views through the real `PcRenderer`, overlays, picking, drag-and-drop |

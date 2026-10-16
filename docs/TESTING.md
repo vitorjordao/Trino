@@ -319,6 +319,8 @@ The editor is a binary, so these are unit tests. The App-level flows are
 | `Editor: budget HUD with impostors` | `crates/editor/src/budget.rs::impostors_add_their_billboard_cost_to_the_n64_time` |
 | `Editor: platform budget (each console's own model bakes, HUD lines and N64 time with the RSP split, Inspector section with every reason, unseen draws select their entity, cache, layout)` | `crates/editor/src/budget.rs::platform_lines_name_the_rsp_reason_and_unseen_draws`, `crates/editor/src/app.rs::console_models_follow_overrides_and_platform_lists`, `crates/editor/src/ui_tests.rs::platform_budget_shows_rsp_reasons_and_unseen_draws` |
 | `Editor: variants in the Game view, saved as text, external edits reload` | `crates/editor/src/ui_tests.rs::platform_variants_reach_the_game_view_and_the_file` |
+| `Editor: project launcher (recent projects, forget, open with validation, create from a template into the editor, layout at 960x600 and 1600x940)` | `crates/editor/src/ui_tests.rs::launcher_lists_recent_projects_opens_and_creates`, `crates/editor/src/launcher.rs::projects_need_a_trino_toml_or_an_asset_manifest`, `crates/editor/src/launcher.rs::create_validates_then_scaffolds_into_folder_slash_name`, `crates/editor/src/main.rs::start_picks_the_launcher_unless_a_project_or_a_scene_hook_says_otherwise` |
+| `Editor: recent-projects file (parse, newest first, cap, round trip, ages)` | `crates/editor/src/recent.rs::parse_keeps_good_lines_newest_first_once`, `crates/editor/src/recent.rs::touch_moves_to_the_top_and_caps_the_list`, `crates/editor/src/recent.rs::load_and_save_round_trip_through_the_file`, `crates/editor/src/recent.rs::ages_read_like_a_person_says_them` |
 | `Editor: layout audit (nothing off the window or overlapping, 960x600 and 1600x940)` | `crates/editor/src/ui_tests.rs::editor_layout_is_clean_at_minimum_and_default_sizes`, `crates/editor/src/layout_audit.rs::flags_overflow_and_overlap_only`, `crates/editor/src/app.rs::long_paths_keep_their_end` |
 
 ## Tools: xtask
@@ -351,7 +353,7 @@ the host; CI's console jobs and smoke runs cover them.
 | `xtask run pc` | n/a: opens a window; CI's smoke runs cover it |
 | `xtask test pc` | n/a: runs this whole suite |
 | `xtask watch pc` | n/a: a live-reload session; the reload path is `xtask/tests/hot_reload.rs::state_survives_dylib_swap_and_behavior_changes` (ignored, CI job) |
-| `xtask editor` | n/a: opens a window; the editor's own tests are listed below |
+| `xtask editor` | n/a: opens a window (the launcher, or `<dir>` / the selected project); the editor's own tests are listed below, the start rule is `crates/editor/src/main.rs::start_picks_the_launcher_unless_a_project_or_a_scene_hook_says_otherwise` |
 | `xtask assets n64` | n/a: needs the libdragon Docker image |
 | `xtask build n64` | n/a: needs the libdragon Docker image (CI `n64` job) |
 | `xtask run n64` | n/a: needs ares (`--device`: the real-hardware row above, with stub loaders) |

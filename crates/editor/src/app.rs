@@ -251,12 +251,20 @@ pub struct App {
 }
 
 impl App {
+    /// [`App::open`] from eframe's creation context (the UI tests).
+    #[cfg(test)]
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        theme::install(&cc.egui_ctx);
         let render_state = cc
             .wgpu_render_state
             .clone()
             .expect("editor requires the wgpu backend");
+        Self::open(&cc.egui_ctx, render_state)
+    }
+
+    /// The editor on the project in the working directory (the launcher
+    /// changes into a project, then opens it here).
+    pub fn open(ctx: &egui::Context, render_state: eframe::egui_wgpu::RenderState) -> Self {
+        theme::install(ctx);
         // Relative to the working directory, *without* a `./` prefix: watcher
         // paths are compared component-wise against these.
         let root = PathBuf::new();
@@ -402,19 +410,19 @@ impl App {
             "assets/shared/particles",
             "examples/platformer/src",
         ] {
+            // The editor's own content folders are created on first use;
+            // the platformer level is the engine's, watched only where it
+            // exists (a game project has none, and gets no stray folder).
+            if dir.starts_with("examples/") && !Path::new(dir).is_dir() {
+                continue;
+            }
             let _ = std::fs::create_dir_all(dir);
             if let Err(e) = file_watcher.watch(Path::new(dir), RecursiveMode::Recursive) {
                 log.warn(format!("cannot watch {dir}: {e}"));
             }
         }
 
-        let screenshot = std::env::var("TRINO_EDITOR_SCREENSHOT").ok().map(|p| {
-            let frames = std::env::var("TRINO_EDITOR_SCREENSHOT_FRAME")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(30);
-            (frames, PathBuf::from(p))
-        });
+        let screenshot = screenshot_from_env();
 
         App {
             project,
@@ -2333,35 +2341,65 @@ impl App {
     }
 
     fn handle_screenshot(&mut self, ctx: &egui::Context) {
-        let Some((frame, path)) = self.screenshot.clone() else {
-            return;
-        };
-        if self.frames >= frame && !self.screenshot_requested {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
-            self.screenshot_requested = true;
-        }
-        let shot = ctx.input(|i| {
-            i.events.iter().find_map(|e| match e {
-                egui::Event::Screenshot { image, .. } => Some(image.clone()),
-                _ => None,
-            })
-        });
-        if let Some(image) = shot {
-            let [w, h] = image.size;
-            let file = std::fs::File::create(&path).expect("screenshot file");
-            let mut enc = png::Encoder::new(std::io::BufWriter::new(file), w as u32, h as u32);
-            enc.set_color(png::ColorType::Rgba);
-            enc.set_depth(png::BitDepth::Eight);
-            let mut writer = enc.write_header().expect("png header");
-            writer.write_image_data(image.as_raw()).expect("png data");
-            eprintln!("screenshot saved to {}", path.display());
-            self.screenshot = None;
-            if self.smoke_frames.is_none() {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-            }
-        }
-        ctx.request_repaint();
+        screenshot_hook(
+            ctx,
+            self.frames,
+            &mut self.screenshot,
+            &mut self.screenshot_requested,
+            self.smoke_frames.is_none(),
+        );
     }
+}
+
+/// `TRINO_EDITOR_SCREENSHOT`: once `frames` reaches the shot's frame, ask
+/// for a screenshot, save it as a PNG when it arrives, and close the
+/// window if `close`. Shared by the editor and the project launcher.
+pub fn screenshot_hook(
+    ctx: &egui::Context,
+    frames: u64,
+    screenshot: &mut Option<(u64, PathBuf)>,
+    requested: &mut bool,
+    close: bool,
+) {
+    let Some((frame, path)) = screenshot.clone() else {
+        return;
+    };
+    if frames >= frame && !*requested {
+        ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+        *requested = true;
+    }
+    let shot = ctx.input(|i| {
+        i.events.iter().find_map(|e| match e {
+            egui::Event::Screenshot { image, .. } => Some(image.clone()),
+            _ => None,
+        })
+    });
+    if let Some(image) = shot {
+        let [w, h] = image.size;
+        let file = std::fs::File::create(&path).expect("screenshot file");
+        let mut enc = png::Encoder::new(std::io::BufWriter::new(file), w as u32, h as u32);
+        enc.set_color(png::ColorType::Rgba);
+        enc.set_depth(png::BitDepth::Eight);
+        let mut writer = enc.write_header().expect("png header");
+        writer.write_image_data(image.as_raw()).expect("png data");
+        eprintln!("screenshot saved to {}", path.display());
+        *screenshot = None;
+        if close {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+    }
+    ctx.request_repaint();
+}
+
+/// The `TRINO_EDITOR_SCREENSHOT` hook: `(frame, path)`.
+pub fn screenshot_from_env() -> Option<(u64, PathBuf)> {
+    std::env::var("TRINO_EDITOR_SCREENSHOT").ok().map(|p| {
+        let frames = std::env::var("TRINO_EDITOR_SCREENSHOT_FRAME")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(30);
+        (frames, PathBuf::from(p))
+    })
 }
 
 /// `abs` relative to the working directory. Watchers may report
@@ -2438,7 +2476,7 @@ fn load_impostor_defs(
 
 /// `text` cut to its last `max` characters, starting with "…" when cut
 /// (nothing when even "…" + a few characters wouldn't fit).
-fn elide_start(text: &str, max: usize) -> String {
+pub fn elide_start(text: &str, max: usize) -> String {
     let n = text.chars().count();
     if n <= max {
         text.to_string()

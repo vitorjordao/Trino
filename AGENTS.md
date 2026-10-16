@@ -269,6 +269,11 @@ new skill when none fits. Then run `cargo xtask agents sync`. The steps are in
     N64 frame as CPU vs RSP with each reason a draw misses the RSP (`rsp_check`,
     `RspReject`), the 3DS triangles, and draws sent but unseen (click one to select it);
     `trino_scene::budget`, also `cargo xtask scene budget`.
+  - **Project launcher** (no project argument): recent projects (a text file in the
+    user's config dir, `TRINO_EDITOR_RECENT`), open an existing folder, create one
+    from a template (blank, castle64 or showcase) through `trino-scaffold`, the same
+    code as `cargo xtask new --standalone --template`. `cargo xtask editor <dir>`
+    opens a project directly; the scene hooks still open the working directory.
   - **Layout audit** (`layout_audit.rs`): no widget off the window or overlapping, over
     the whole editor at 960x600 and 1600x940.
 - **Emulators in CI**:

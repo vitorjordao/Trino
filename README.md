@@ -33,7 +33,7 @@ impostors) is part of the same pipeline, drawn by the same renderer in the same 
 
 | Runtime | PC | Nintendo 64 | Nintendo 3DS |
 |---|---|---|---|
-| 3D models (`draw_model`), z-buffered | engine T&L, wgpu raster | engine T&L; most static draws run on Trino's RSP overlay | engine T&L, citro3d raster with per-vertex depth |
+| 3D models (`draw_model`), z-buffered | engine T&L, wgpu raster | engine T&L; most static draws run on Trino's RSP overlay | static meshes transformed and lit by the PICA200's vertex shader; the rest engine T&L, citro3d raster with per-vertex depth |
 | Surfaces: Gouraud / Flat / Unlit shading, tint, emissive, distance fog, textures, per-draw filter, detail layer | yes | yes | yes |
 | Rigid and opt-in smooth skinning, clip crossfade | yes | yes | yes |
 | Local point and spot lights | per pixel, up to 8 | per vertex, up to 2 | per vertex, up to 4 |

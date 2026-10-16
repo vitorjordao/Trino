@@ -50,6 +50,7 @@ they read just as well for people. Each one is the most detailed source for its 
 | [0009](adr/0009-platform-aware-authoring.md) | Platform-aware authoring in the editor |
 | [0010](adr/0010-local-lights-per-tier.md) | Local lights, one API with a quality tier per platform |
 | [0011](adr/0011-texture-filter-and-detail.md) | Texture filtering per draw and a detail layer |
+| [0012](adr/0012-console-hardware-paths-and-honest-n64-timing.md) | GPU vertex T&L on the 3DS, N64 text in runs, N64 timings over code layouts, hang diagnostics |
 
 ## Plans and history
 

@@ -150,7 +150,14 @@ pub struct Challenge {
 /// force or DOGSO: red). A penalty-area DOGSO with a genuine attempt at the
 /// ball is cautioned only (the "triple punishment" rule).
 pub fn sanction(c: Challenge, in_own_box: bool) -> Card {
-    let reckless = c.from_behind || (c.slide && c.speed > Fx::milli(7_200));
+    // Reckless: a slide from behind or at speed, or a standing challenge
+    // that charges into the man's back. A standing tackle that just
+    // clips him is careless.
+    let reckless = if c.slide {
+        c.from_behind || c.speed > Fx::milli(7_200)
+    } else {
+        c.from_behind && c.speed > Fx::int(5)
+    };
     let excessive = c.slide && c.from_behind && c.speed > Fx::milli(7_600);
     if excessive {
         return Card::Red;
@@ -302,8 +309,33 @@ mod tests {
                 },
                 false
             ),
+            Card::None,
+            "a standing tackle from behind at a walk: careless"
+        );
+        assert_eq!(
+            sanction(
+                Challenge {
+                    from_behind: true,
+                    speed: Fx::int(6),
+                    ..base
+                },
+                false
+            ),
             Card::Yellow,
-            "reckless: from behind"
+            "reckless: charging into his back"
+        );
+        assert_eq!(
+            sanction(
+                Challenge {
+                    slide: true,
+                    from_behind: true,
+                    speed: Fx::int(3),
+                    ..base
+                },
+                false
+            ),
+            Card::Yellow,
+            "reckless: a slide from behind"
         );
         assert_eq!(
             sanction(

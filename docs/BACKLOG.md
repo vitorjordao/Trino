@@ -148,6 +148,14 @@ shipping a 3D game first**, then by cost:
 
 ---
 
+## Done — the showcase uses both 3DS screens (2026-10-16, branch `examples/showcase-two-screens`, GitHub #20)
+
+| Item | Evidence |
+|---|---|
+| `examples/showcase` keeps the scene on the top screen and draws a touch panel on the bottom (`showcase::panel`): live metrics (frame time from `dt`, `Renderer::stats`: triangles, models, sprites, the `tnl` culled/verts/clipped and `rsp_draws`/`rsp_tris` counters, zero-padded so the panel's own glyph count is stable) and five look toggles that exist in the engine (camera preset follow/high/scene, scene vs dusk light, fog on/off, `set_texture_filter` default/point/bilinear, the animation clock). Every toggle is also on a pad button (X, Y, B, Select, Start), so it works on PC native and the N64, where the panel is skipped (`on_screen(Screen::Bottom)` says no) and the top draws the same calls as before | showcase unit tests (hit-testing inside and just outside every button, toggles cycling, taps on press only, top-screen clicks ignored, pad buttons, the panel only with a second screen and the same top draws, the default look = the scene's light and the target's filter); `xtask/tests/showcase_panel.rs` on the PC's 3DS profile (`check_panel`: button fills 2 px inside every corner, the background 2 px outside every edge, no panel on the top, a FOG tap through `update`), with three mutations that must fail (a stale panel, a layout shifted by 3 px each way, the panel drawn without `on_screen`), and the N64 profile collapsing; the `showcase panel` step and the golden `showcase_bottom.png` in Azahar (written by `--bless`, viewed before commit; mean 0.00 on the next run, castle64's two goldens byte-identical); the N64 golden `showcase.png` pixel-identical; the N64 stack watermark after the showcase steps 57 224 → 58 040 bytes (gate 61 440; the showcase frames grew ≤ 90 bytes, `panel::draw` is out of line and never runs there) |
+
+Not done: an `n3ds_parity` check for this panel. The PC's 3DS profile draws scale-2 text bilinear-filtered and dimmer than Azahar's crisp glyphs (mean max-channel diff 13.9, 11.8% far pixels on this text-heavy panel, against 2.5 / 2.5% allowed); castle64's bottom screen passes only because it has little text. Fixing the PC text sampling is a backend change with its own goldens.
+
 ## Done — 3DS GPU vertex T&L, N64 text in runs, layout-robust N64 timing, hang diagnostics (2026-10-16, branch `perf/hardware-tnl`, part of GitHub #31, ADR 0012)
 
 | Item | Evidence |

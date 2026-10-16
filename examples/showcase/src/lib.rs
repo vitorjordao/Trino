@@ -25,7 +25,15 @@
 //! `xtask/tests/scene_codegen.rs` fails CI when the generated file drifts
 //! from the scene.
 //!
-//! Controls: stick/d-pad walk (camera-relative), A jump, L/R orbit.
+//! Controls: stick/d-pad walk (camera-relative), A jump, L/R orbit; the
+//! look toggles: X camera, Y light, B fog, Select texture filter, Start
+//! animation (PC: C, V, X, Right Shift, Enter).
+//!
+//! Two screens (3DS, and the PC's 3DS profile, `TRINO_SIM=3ds`): the top
+//! shows the scene, the bottom a touch panel ([`panel`]) with live
+//! renderer metrics (frame time, `Renderer::stats`) and buttons for the
+//! same toggles. Single-screen targets skip it (`Renderer::on_screen`
+//! says no) and draw exactly what they drew before.
 
 #![cfg_attr(any(target_os = "none", target_os = "horizon"), no_std)]
 
@@ -36,8 +44,10 @@ use trino_core::scene::{BakedScene, SceneNode};
 use trino_core::{
     Ambience, Audio, BlobId, Button, Camera3, Color, Emitter, EntityId, EntityStore, FontId, Game,
     InputState, Light, Listener, Mat34, Material, MusicId, ParticleSystem, Platform, Renderer,
-    SoundId, SpriteId, TextAlign, TextBuf, TextParams, Vec2, Vec3, spatialize,
+    Screen, SoundId, SpriteId, TextAlign, TextBuf, TextParams, Vec2, Vec3, spatialize,
 };
+
+pub mod panel;
 
 #[allow(clippy::all)]
 #[rustfmt::skip]
@@ -110,6 +120,14 @@ pub struct ShowcaseGame {
     ambience: Ambience<4>,
     /// Coins collected this frame: count and where (positional sounds).
     picked: (u32, Vec3),
+    /// The look the panel (or the pad) switched: camera, light, fog,
+    /// texture filter, animation clock.
+    pub look: panel::Look,
+    /// Smoothed frame time (seconds, from `update`'s `dt`).
+    frame_dt: f32,
+    /// The scene's own camera (the `SCENE` camera preset) and its yaw.
+    scene_camera: Camera3,
+    scene_yaw: f32,
 }
 
 impl ShowcaseGame {
@@ -176,6 +194,10 @@ impl ShowcaseGame {
             sparks: ParticleSystem::new(SPARKS, 0x5EED),
             ambience: Ambience::new(),
             picked: (0, Vec3::ZERO),
+            look: panel::Look::DEFAULT,
+            frame_dt: 1.0 / 60.0,
+            scene_camera: camera,
+            scene_yaw: atan2(d.x, -d.z),
         };
         game.world.spawn_iter(nodes);
         game.hero = game.world.with_tag("player").next();
@@ -189,15 +211,40 @@ impl ShowcaseGame {
         game
     }
 
+    /// The camera of the current preset ([`panel::Look::camera`]): the
+    /// orbit behind the hero, a steep one, or the scene's own camera.
     pub fn camera(&self) -> Camera3 {
-        let cp = cos(self.pitch);
+        let (pitch, dist) = match self.look.camera {
+            panel::CAMERA_SCENE => return self.scene_camera,
+            panel::CAMERA_HIGH => (1.1, self.dist * 1.5),
+            _ => (self.pitch, self.dist),
+        };
+        let cp = cos(pitch);
         let target = self.pos + Vec3::new(0.0, 0.6, 0.0);
         Camera3 {
-            eye: target
-                + Vec3::new(cp * sin(self.yaw), sin(self.pitch), -cp * cos(self.yaw)) * self.dist,
+            eye: target + Vec3::new(cp * sin(self.yaw), sin(pitch), -cp * cos(self.yaw)) * dist,
             target,
             fov_y: self.camera_fov,
         }
+    }
+
+    /// The yaw walking is relative to: the orbit's, or the scene camera's.
+    fn walk_yaw(&self) -> f32 {
+        if self.look.camera == panel::CAMERA_SCENE {
+            self.scene_yaw
+        } else {
+            self.yaw
+        }
+    }
+
+    /// Smoothed frame time in seconds (the panel's readout).
+    pub fn frame_dt(&self) -> f32 {
+        self.frame_dt
+    }
+
+    /// Last frame's input (the panel lights a held button).
+    pub fn prev_input(&self) -> &InputState {
+        &self.prev
     }
 
     /// Coins still in the world (tag `coin`).
@@ -261,7 +308,18 @@ impl Default for ShowcaseGame {
 
 impl Game for ShowcaseGame {
     fn update(&mut self, input: &InputState, audio: &mut dyn Audio, dt: f32) {
-        self.time += dt;
+        // Look toggles: a pad button, or a tap on the bottom-screen panel
+        // (fresh presses only: held does not repeat).
+        let tap = panel::tapped(input, &self.prev);
+        for t in panel::TOGGLES {
+            if input.just_pressed(&self.prev, t.button()) || tap == Some(t) {
+                self.look.apply(t);
+            }
+        }
+        self.frame_dt += (dt - self.frame_dt) * 0.125;
+        if !self.look.paused {
+            self.time += dt;
+        }
         let mut dx = input.stick.x;
         let mut dy = input.stick.y;
         if input.is_down(Button::DpadLeft) {
@@ -283,14 +341,17 @@ impl Game for ShowcaseGame {
             self.yaw += 1.8 * dt;
         }
         // Camera-relative walk: "up" moves away from the camera.
-        let fwd = Vec3::new(-sin(self.yaw), 0.0, cos(self.yaw));
-        let right = Vec3::new(cos(self.yaw), 0.0, sin(self.yaw));
+        let yaw = self.walk_yaw();
+        let fwd = Vec3::new(-sin(yaw), 0.0, cos(yaw));
+        let right = Vec3::new(cos(yaw), 0.0, sin(yaw));
         let mut wish = fwd * dy + right * dx;
         let len2 = wish.dot(wish);
         if len2 > 1.0 {
             wish = wish * (1.0 / sqrt(len2));
         }
-        self.sparks.update(dt);
+        if !self.look.paused {
+            self.sparks.update(dt);
+        }
         let jump = input.just_pressed(&self.prev, Button::A);
         self.prev = *input;
         if !self.reached_goal {
@@ -333,7 +394,11 @@ impl Game for ShowcaseGame {
         let camera = self.camera();
         r.begin_frame(self.clear);
         r.set_camera(&camera);
-        r.set_light(&self.light);
+        // The scene's light as authored unless the panel switched it; the
+        // filter every frame (it persists in the renderer: `Default` hands
+        // the next game the target's own default).
+        r.set_light(&self.look.light(&self.light));
+        r.set_texture_filter(self.look.filter);
         // Everything the editor placed (animated clips included), coins
         // spinning and bobbing on top — game logic driven by tags.
         for (_, e) in self.world.iter() {
@@ -389,6 +454,11 @@ impl Game for ShowcaseGame {
                     ..TextParams::DEFAULT
                 },
             );
+        }
+        // ---- Bottom screen (3DS touch screen / PC 3DS profile) ----
+        // Single-screen targets refuse it: nothing more is drawn there.
+        if r.on_screen(Screen::Bottom) {
+            panel::draw(self, r);
         }
         r.end_frame();
     }
@@ -627,6 +697,279 @@ mod tests {
             g.pos.x,
             wall.min.x
         );
+    }
+
+    /// A pointer pressed at `at` on `screen`.
+    fn touch(screen: Screen, at: Vec2) -> InputState {
+        let mut s = InputState::default();
+        s.pointer = Some(at);
+        s.pointer_screen = screen.index();
+        s.set_pointer_button(trino_core::PointerButton::Primary, true);
+        s
+    }
+
+    /// Hit-testing: each button's corners are inside it, a pixel past
+    /// each edge is not (`Rect::contains` is half-open), and no two
+    /// buttons overlap.
+    #[test]
+    fn panel_buttons_hit_inside_and_miss_just_outside() {
+        for t in panel::TOGGLES {
+            let b = t.rect();
+            let (x0, y0) = (b.pos.x, b.pos.y);
+            let (x1, y1) = (x0 + b.size.x, y0 + b.size.y);
+            for p in [
+                Vec2::new(x0, y0),
+                Vec2::new(x1 - 0.5, y0),
+                Vec2::new(x0, y1 - 0.5),
+                Vec2::new(x1 - 0.5, y1 - 0.5),
+            ] {
+                assert_eq!(panel::hit(p), Some(t), "{t:?} at {p:?}");
+            }
+            for p in [
+                Vec2::new(x0 - 1.0, y0 + 5.0),
+                Vec2::new(x1, y0 + 5.0),
+                Vec2::new(x0 + 5.0, y0 - 1.0),
+                Vec2::new(x0 + 5.0, y1),
+            ] {
+                assert_eq!(panel::hit(p), None, "{t:?} edge at {p:?}");
+            }
+            assert!(x0 >= 0.0 && y0 >= 0.0 && x1 <= 320.0 && y1 <= 240.0);
+            for u in panel::TOGGLES.into_iter().filter(|&u| u != t) {
+                assert!(!b.intersects(&u.rect()), "{t:?} overlaps {u:?}");
+            }
+        }
+        assert_eq!(panel::hit(Vec2::new(160.0, 60.0)), None, "the metrics");
+    }
+
+    /// The probed fills are told apart by read-back (tolerance 24 per
+    /// channel, RGB565 on the 3DS), from each other and from the 3DS
+    /// shim's bottom-screen clear (an undrawn panel).
+    #[test]
+    fn panel_colors_are_far_apart_for_the_probes() {
+        let colors = [
+            panel::BG,
+            panel::BTN_DEFAULT,
+            panel::BTN_CHANGED,
+            panel::BTN_HELD,
+            Color::rgb(16, 18, 28),
+        ];
+        for (i, a) in colors.iter().enumerate() {
+            for b in &colors[i + 1..] {
+                let d = |x: u8, y: u8| x.abs_diff(y);
+                let far = d(a.r, b.r).max(d(a.g, b.g)).max(d(a.b, b.b));
+                assert!(far > 24 + 8, "{a:?} vs {b:?}: {far}");
+            }
+        }
+    }
+
+    /// Each toggle cycles through its values and back to the default.
+    #[test]
+    fn panel_toggles_cycle_back_to_the_default() {
+        for (t, steps) in [
+            (panel::Toggle::Camera, 3),
+            (panel::Toggle::Light, 2),
+            (panel::Toggle::Fog, 2),
+            (panel::Toggle::Filter, 3),
+            (panel::Toggle::Anim, 2),
+        ] {
+            let mut look = panel::Look::DEFAULT;
+            for i in 1..=steps {
+                look.apply(t);
+                assert_eq!(look.changed(t), i < steps, "{t:?} after {i}");
+                for u in panel::TOGGLES.into_iter().filter(|&u| u != t) {
+                    assert!(!look.changed(u), "{t:?} changed {u:?}");
+                }
+            }
+            assert_eq!(look, panel::Look::DEFAULT);
+        }
+    }
+
+    /// Bottom-screen taps toggle on the press only (held does not
+    /// repeat); the same spot clicked on the top screen does nothing; the
+    /// pad buttons toggle the same options.
+    #[test]
+    fn panel_taps_and_pad_buttons_toggle_the_look() {
+        let mut g = ShowcaseGame::new();
+        let idle = InputState::default();
+        let fog = panel::Toggle::Fog.rect();
+        let at = fog.pos + fog.size * 0.5;
+        g.update(&touch(Screen::Top, at), &mut NullAudio, 1.0 / 60.0);
+        g.update(&idle, &mut NullAudio, 1.0 / 60.0);
+        assert_eq!(g.look, panel::Look::DEFAULT, "top-screen clicks");
+        g.update(&touch(Screen::Bottom, at), &mut NullAudio, 1.0 / 60.0);
+        assert!(!g.look.fog, "a FOG tap");
+        for _ in 0..5 {
+            g.update(&touch(Screen::Bottom, at), &mut NullAudio, 1.0 / 60.0);
+        }
+        assert!(!g.look.fog, "held does not toggle again");
+        g.update(&idle, &mut NullAudio, 1.0 / 60.0);
+        g.update(&touch(Screen::Bottom, at), &mut NullAudio, 1.0 / 60.0);
+        assert!(g.look.fog, "a second tap");
+        g.update(&idle, &mut NullAudio, 1.0 / 60.0);
+        // A tap between buttons does nothing.
+        g.update(
+            &touch(Screen::Bottom, Vec2::new(107.0, 130.0)),
+            &mut NullAudio,
+            1.0 / 60.0,
+        );
+        g.update(&idle, &mut NullAudio, 1.0 / 60.0);
+        assert_eq!(g.look, panel::Look::DEFAULT, "the gap");
+        for t in panel::TOGGLES {
+            let mut press = InputState::default();
+            press.set(t.button(), true);
+            g.update(&press, &mut NullAudio, 1.0 / 60.0);
+            assert!(g.look.changed(t), "{t:?} by {:?}", t.button());
+            g.update(&idle, &mut NullAudio, 1.0 / 60.0);
+        }
+    }
+
+    /// Pause freezes the animation clock; the SCENE preset is the scene's
+    /// own camera; HIGH looks down more steeply than FOLLOW.
+    #[test]
+    fn panel_options_change_the_clock_and_the_camera() {
+        let mut g = ShowcaseGame::new();
+        let dt = 1.0 / 60.0;
+        g.update(&InputState::default(), &mut NullAudio, dt);
+        let t0 = g.time;
+        g.look.paused = true;
+        g.update(&InputState::default(), &mut NullAudio, dt);
+        assert_eq!(g.time, t0, "paused");
+        let follow = g.camera();
+        g.look.camera = panel::CAMERA_HIGH;
+        let high = g.camera();
+        let rise =
+            |c: Camera3| (c.eye.y - c.target.y) / sqrt((c.eye - c.target).dot(c.eye - c.target));
+        assert!(rise(high) > rise(follow) + 0.1, "steeper");
+        assert_eq!(high.target, follow.target, "still on the hero");
+        g.look.camera = panel::CAMERA_SCENE;
+        assert_eq!(g.camera(), scene::CAMERA);
+    }
+
+    /// Records what `render` asks of a renderer, per screen.
+    #[derive(Default)]
+    struct PerScreen {
+        two: bool,
+        screen: u8,
+        rects: [u32; 2],
+        models: [u32; 2],
+        texts: [u32; 2],
+        lights: Vec<Light>,
+        filters: Vec<trino_core::TexFilter>,
+    }
+
+    impl Renderer for PerScreen {
+        fn caps(&self) -> &trino_core::Caps {
+            &trino_core::Caps::N3DS
+        }
+        fn begin_frame(&mut self, _: Color) {
+            self.screen = 0;
+        }
+        fn draw_sprite(&mut self, _: SpriteId, _: Vec2, _: &trino_core::SpriteParams) {}
+        fn fill_rect(&mut self, _: trino_core::Rect, _: Color) {
+            self.rects[self.screen as usize] += 1;
+        }
+        fn draw_text(&mut self, _: FontId, _: Vec2, _: &str, _: &TextParams) {
+            self.texts[self.screen as usize] += 1;
+        }
+        fn draw_model(
+            &mut self,
+            _: trino_core::ModelId,
+            _: &trino_core::Transform3,
+            _: Material,
+            _: &trino_core::ModelParams,
+        ) {
+            self.models[self.screen as usize] += 1;
+        }
+        fn set_light(&mut self, light: &Light) {
+            self.lights.push(*light);
+        }
+        fn set_texture_filter(&mut self, filter: trino_core::TexFilter) {
+            self.filters.push(filter);
+        }
+        fn end_frame(&mut self) {}
+        fn second_screen(&self) -> Option<Vec2> {
+            self.two.then_some(Vec2::new(320.0, 240.0))
+        }
+        fn set_screen(&mut self, screen: u8) {
+            if self.two && screen == 1 {
+                self.screen = 1;
+            }
+        }
+        fn screen(&self) -> Screen {
+            Screen::from_index(self.screen).unwrap()
+        }
+    }
+
+    /// The panel draws only where `on_screen(Bottom)` succeeds, after the
+    /// top's draws: a single screen gets the same top and nothing else.
+    #[test]
+    fn panel_draws_only_with_a_second_screen() {
+        let mut one = PerScreen::default();
+        let mut two = PerScreen {
+            two: true,
+            ..PerScreen::default()
+        };
+        let mut g = ShowcaseGame::new();
+        g.render(&mut one);
+        g.render(&mut two);
+        // The showcase's top screen has no rectangles: any here would be
+        // the panel landing on the only screen.
+        assert_eq!(one.rects, [0, 0], "no panel on a single screen");
+        assert_eq!(one.texts[1] + one.models[1], 0);
+        assert_eq!(two.models[0], one.models[0], "the same top");
+        assert_eq!(two.texts[0], one.texts[0]);
+        assert!(two.models[0] > 20, "the scene: {}", two.models[0]);
+        assert_eq!(two.models[1], 0, "the panel is 2D");
+        assert_eq!(two.rects[1], 2 + panel::TOGGLES.len() as u32);
+        // Title, coins, five metric lines, three labels per button.
+        assert_eq!(two.texts[1], 2 + 5 + 3 * panel::TOGGLES.len() as u32);
+    }
+
+    /// The default look renders the scene as authored (its light, the
+    /// target's default filter); the toggles reach the renderer.
+    #[test]
+    fn panel_options_reach_the_renderer() {
+        let mut r = PerScreen::default();
+        let mut g = ShowcaseGame::new();
+        g.render(&mut r);
+        assert_eq!(r.lights, [scene::LIGHT], "the scene's light, exactly");
+        assert_eq!(r.filters, [trino_core::TexFilter::Default]);
+        g.look.apply(panel::Toggle::Fog);
+        g.look.apply(panel::Toggle::Filter);
+        g.render(&mut r);
+        assert!(!r.lights[1].fog.enabled(), "fog off");
+        assert_eq!(r.lights[1].color, scene::LIGHT.color, "same light");
+        assert_eq!(r.filters[1], trino_core::TexFilter::Point);
+        g.look.apply(panel::Toggle::Light);
+        g.render(&mut r);
+        assert_ne!(r.lights[2].color, scene::LIGHT.color, "dusk");
+        assert!(r.lights[2].ambient < scene::LIGHT.ambient);
+    }
+
+    /// The readout keeps a fixed width whatever the numbers (the panel's
+    /// own glyph count, which `stats` reports next frame, must not move).
+    #[test]
+    fn metric_lines_have_a_fixed_width() {
+        let lens = |dt: f32, s: &trino_core::FrameStats| {
+            panel::metric_lines(dt, s).map(|l| l.as_str().len())
+        };
+        let mut big = trino_core::FrameStats {
+            tris: 1_000_000,
+            sprites: 123_456,
+            models: 5_000,
+            ..Default::default()
+        };
+        big.tnl.verts = 1_000_000;
+        big.tnl.rsp_draws = 4_000;
+        let base = lens(1.0 / 60.0, &trino_core::FrameStats::default());
+        assert_eq!(lens(1.0 / 60.0, &big), base);
+        assert_eq!(lens(0.5, &big), base);
+        assert_eq!(lens(0.0, &big), base);
+        let lines = panel::metric_lines(1.0 / 60.0, &trino_core::FrameStats::default());
+        assert_eq!(lines[0].as_str(), "FRAME 16.7 MS 060 FPS");
+        for l in &lines {
+            assert!(l.as_str().len() * 12 <= 308, "{} fits", l.as_str());
+        }
     }
 
     #[test]

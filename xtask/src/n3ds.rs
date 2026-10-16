@@ -725,6 +725,16 @@ pub fn test(p: &Project, build_first: bool, bless: bool) -> ExitCode {
             0.02,
         )?;
         println!("[3ds] golden frame (bottom): {msg}");
+        // The showcase's touch panel (metrics + look toggles), after its
+        // `showcase panel` probes.
+        let img = frames
+            .get(2)
+            .ok_or("showcase bottom golden frame: not dumped")?
+            .image()
+            .map_err(|e| format!("showcase bottom golden frame: {e}"))?;
+        let msg =
+            crate::fbgolden::check_close(root, "3ds", "showcase_bottom", img, bless, 3.0, 0.02)?;
+        println!("[3ds] golden frame (showcase bottom): {msg}");
         Ok(())
     });
 

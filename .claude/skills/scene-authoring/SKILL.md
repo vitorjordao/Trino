@@ -178,7 +178,10 @@ children by `/`-joined names below the root (`"trunk/leaves"`) and may set `mate
      The output gives you `NODES`, `CAMERA`, `LIGHT` and `CLEAR`. Add a drift test
      like `xtask/tests/scene_codegen.rs` for every exported scene. A scene with
      variants is exported once per console (`--platform n64 …/x_n64_gen.rs`), each
-     behind its `cfg` in the game.
+     behind its `cfg` in the game. Game code (UI, a second screen) goes in its own
+     modules next to the generated file, never in it: the showcase's 3DS touch panel
+     is `examples/showcase/src/panel.rs`, and it switches the exported `LIGHT`'s fog
+     or the camera at draw time instead of editing the data.
    - **Data**: declare `[scenes.x] file = "scenes/x.scene.ron"` in the manifest. It
      bakes to a `TSCN` blob, which you load with
      `BakedScene::parse(platform.blob(BlobId::from_path("scenes/x"))?)`. Changing the

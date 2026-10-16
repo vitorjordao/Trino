@@ -419,7 +419,14 @@ RDP).
   `present_preview`/`read_second_screen` capture them. The 3DS host dumps the touch
   screen as the next golden (`dump_framebuffer_bottom`). castle64 shows it: a map,
   counters with a 3D star, and touch buttons on the bottom screen (the
-  `dual screen` self-test step, `castle64_hub_bottom.png`).
+  `dual screen` self-test step, `castle64_hub_bottom.png`). The showcase's bottom
+  screen (`examples/showcase/src/panel.rs`, GitHub #20) is a touch panel: live
+  metrics (frame time from `dt`, `Renderer::stats` with the `tnl` counters) and
+  buttons for the look (camera preset, scene/dusk light, fog, `set_texture_filter`,
+  the animation clock), each also on a pad button (X, Y, B, Select, Start), so they
+  work on one screen too. `showcase::panel::check_panel` reads it back on the PC's 3DS
+  profile (`xtask/tests/showcase_panel.rs`, with mutations that must fail) and in
+  Azahar (the `showcase panel` step, golden `showcase_bottom.png`).
 
 PC keyboard mapping: A/B = Z/X, X/Y = C/V, L/R = Q/E, Start = Enter,
 Select = Right Shift, D-pad = arrows, stick = WASD; L2/R2/L3/R3 have no default key
@@ -580,10 +587,12 @@ cargo test --workspace
 - Emulator golden: `tests/golden/n64/showcase.png` is compared pixel-exactly
   by `test n64`. A renderer change on the N64 path re-blesses it
   (`--bless`), and the PNG diff gets reviewed like any golden.
-- 3DS goldens: `tests/golden/3ds/castle64_hub.png` (top) and
-  `castle64_hub_bottom.png` (the same frame's touch screen), compared within a
+- 3DS goldens: `tests/golden/3ds/castle64_hub.png` (top),
+  `castle64_hub_bottom.png` (the same frame's touch screen) and
+  `showcase_bottom.png` (the showcase's touch panel), compared within a
   tolerance by `test 3ds` (Azahar's pixels depend on the host OpenGL);
-  `n3ds_parity` holds the PC's N3ds look to it.
+  `n3ds_parity` holds the PC's N3ds look to castle64's two (not to the
+  text-heavy showcase panel: see the pitfall on PC 3DS text).
 - Performance is gated: `xtask/tests/perf_budget.rs` pins castle64's T&L
   work per scene (`tests/perf/castle64_work.toml`), and `test n64` pins
   the emulated frame cost (`tests/perf/castle64_n64.toml`). Quote the
@@ -752,7 +761,17 @@ cargo test --workspace
   `dual screen` probe used the `textured_3d` points, and a 400-wide projection on the
   320-wide bottom screen (a 40 px shift) still landed every probe in the right
   quadrant. Probe near the corners and just outside the edges, then check that a
-  deliberate mutation fails the step.
+  deliberate mutation fails the step. Keep the "can this backend read back?"
+  guard out of the mutated path: the showcase panel's shifted probe first read an
+  off-screen pixel, got `None`, returned `Ok(false)` ("no read-back") and hid the
+  mutation. Assert `is_err()` on a mutation, never `!= Ok(true)`.
+- **The PC's 3DS profile draws text softer than Azahar.** Its sprite sampler is
+  bilinear (`sprite_filter` for `SimProfile::N3ds`), so scale-2 glyphs come out
+  blurred and dimmer, while Azahar shows them crisp. castle64's bottom screen has
+  little text and stays within `n3ds_parity`'s limits; the showcase's text-heavy
+  panel was 13.9 mean / 11.8% far pixels against 2.5 / 2.5%, so it has an Azahar
+  golden but no parity check. Probe fills and layout on text-heavy screens, not
+  glyphs.
 - **Screen order is a contract, not a backend detail.** Before the typed API the
   3DS let draws go back to the top after the bottom, while the PC sent them to the
   bottom. Both now refuse the switch back, and `on_screen` reports it.

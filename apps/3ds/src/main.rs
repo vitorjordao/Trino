@@ -328,7 +328,23 @@ mod n3ds {
                     }
                     renderer.dump_framebuffer();
                     renderer.dump_framebuffer_bottom();
-                    runtime::log("TRINO_TEST_PASS\n");
+                    drop(g);
+                    // 6) The showcase's touch panel (metrics + look
+                    // toggles) read back: button fills by state and edges,
+                    // a top-screen click ignored, two FOG taps through
+                    // `update`. Last, so the toggles leak into nothing;
+                    // its final frame (the default panel) is the third
+                    // golden, showcase_bottom.png.
+                    runtime::log("TRINO_STEP:showcase panel\n");
+                    match showcase::panel::check_panel(renderer, audio) {
+                        Ok(true) => {
+                            runtime::log("TRINO_STEP:showcase panel probed\n");
+                            renderer.dump_framebuffer_bottom();
+                            runtime::log("TRINO_TEST_PASS\n");
+                        }
+                        Ok(false) => fail("showcase panel: no second screen to probe".into()),
+                        Err(e) => fail(format!("{e}")),
+                    }
                 }
             }
         }

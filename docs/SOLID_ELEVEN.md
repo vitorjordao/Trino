@@ -22,6 +22,8 @@ cd ../my-football && cargo run -p my-football-pc
 | <img src="media/solid-eleven/title_pc.png" width="300" alt="The title screen: the logo, the menu column, the club card, a huddle of celebrating players in the stadium at night"/> | <img src="media/solid-eleven/teams_pc.png" width="300" alt="Team selection: the squad list, the player on a glowing pedestal, his stats, the formation board"/> | <img src="media/solid-eleven/edit_pc.png" width="300" alt="The player editor: attributes within a point budget, skin tone, the overall rating and the radar"/> |
 | **Transfer market** | **Club management** | **Rain at dusk (PC tier)** |
 | <img src="media/solid-eleven/market_pc.png" width="300" alt="The transfer market: sort keys, players with price and club, the selected player's card and the buy button"/> | <img src="media/solid-eleven/club_pc.png" width="300" alt="Club management: finances, players with energy, the next match, the last results, the actions"/> | <img src="media/solid-eleven/rain_pc.png" width="300" alt="A wet match at dusk: rain billboards and the per-pixel wet look"/> |
+| **Close-up (PC models)** | **Night** | |
+| <img src="media/solid-eleven/closeup_pc.png" width="300" alt="A close-up of a red player dribbling past a blue one: the PC tier's 11-part players and the crowd"/> | <img src="media/solid-eleven/night_pc.png" width="300" alt="A night match: the sky's night tint on every draw (a tint keeps the N64 light white)"/> | |
 
 The UI follows the concept art the issue came with (dark navy panels with neon rims,
 slanted headers, stat bars and a radar pentagon, a footer of button hints). Every
@@ -193,9 +195,12 @@ stadium instead of rebuilding it.
 
 | Target | The self-test's scripted match (300 frames) |
 |---|---|
-| N64 (ares) | **PERF_N64** |
-| 3DS (Azahar) | **PERF_3DS** |
-| PC | **PERF_PC** |
+| N64 (ares) | avg **26.6 ms**, max 39.8 ms (frames paced at 31 fps by vblanks), against the template's 33.3 ms gate. The sim update takes 6.7 ms, the 3D 5.6 ms, the 2D overlay 1.4 ms. 76 of 77 draws ran on the RSP; one fine ground tile fell back to the CPU at the clip band. Stack 28 KB, heap 1.2 of 7.4 MB. Sim hash `208486c3`. |
+| 3DS (Azahar) | avg **16.8 ms** (59 fps), with every one of 87 draws (1640 triangles) on the PICA200 and none on the CPU. CPU 5.4 ms. Sim hash `208486c3`. Azahar doesn't time the console exactly. |
+| PC (1920x1080, native, AMD Renoir iGPU) | Clear day: avg **3.6 ms**, p99 6.0 ms. Dusk with rain, the wet look and glows: avg **6.4 ms**, p99 9.9 ms, max 12.1 ms. Each frame includes the update, the render and the GPU's work, measured by `solid_eleven_shots::pc_frame_time`. |
+
+The sim hash is the same on the PC, in ares and in Azahar, and each console's
+`check()` enforces it.
 
 What the PC's native profile adds: higher-detail players, crowd, goal and ball, rain
 billboards and the per-pixel wet look, floodlight glows. The 3DS adds its touch screen.

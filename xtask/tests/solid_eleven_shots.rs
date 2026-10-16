@@ -220,3 +220,46 @@ fn solid_eleven_shots() {
         }
     }
 }
+
+/// The PC's frame time on this machine: an AI match at 1920x1080 on the
+/// native profile, each frame's update, render and GPU work (`wait_gpu`).
+/// The clear day and the heaviest PC tier (dusk, rain, wet look, glows).
+/// A measurement for `docs/SOLID_ELEVEN.md`, not a gate:
+///
+/// ```sh
+/// cargo test --release -p xtask --test solid_eleven_shots pc_frame_time -- --ignored --nocapture
+/// ```
+#[test]
+#[ignore]
+fn pc_frame_time() {
+    let mut r = renderer(SimProfile::Native, Some((1920, 1080)));
+    println!("adapter: {}", r.adapter_info());
+    for (name, sky, rain) in [("day", Sky::Day, false), ("dusk+rain", Sky::Dusk, true)] {
+        let mut g =
+            SolidElevenGame::exhibition(Vec2::new(1920.0, 1080.0), 0, 1, 7, [false, false], sky);
+        if let Some(s) = &mut g.session {
+            s.view.rain = rain;
+        }
+        let mut a = NullAudio;
+        let mut times = Vec::new();
+        for f in 0..1200 {
+            let t = std::time::Instant::now();
+            g.update(&InputState::default(), &mut a, 1.0 / 60.0);
+            g.render(&mut r);
+            r.wait_gpu();
+            if f >= 60 {
+                times.push(t.elapsed().as_secs_f64() * 1000.0);
+            }
+        }
+        times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let avg = times.iter().sum::<f64>() / times.len() as f64;
+        let p99 = times[times.len() * 99 / 100];
+        let max = times[times.len() - 1];
+        println!(
+            "{name:10} 1920x1080: avg {avg:.2} ms, p99 {p99:.2} ms, max {max:.2} ms ({:.0} fps avg) over {} frames",
+            1000.0 / avg,
+            times.len()
+        );
+        assert!(avg < 1000.0 / 60.0, "{name}: {avg:.2} ms is under 60 fps");
+    }
+}

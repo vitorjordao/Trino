@@ -9,7 +9,7 @@ description: Scaffold a Trino game — an in-repo example crate (cargo xtask new
 cargo xtask new my-game                                     # examples/my-game, in the workspace
 cargo xtask new space-cat --standalone ~/games/space-cat     # engine via path deps
 cargo xtask new space-cat --standalone <dir> --git https://github.com/vitorjordao/Trino --rev <commit>
-cargo xtask new space-cat --standalone <dir> --template castle64   # start from a demo (blank|castle64|showcase)
+cargo xtask new space-cat --standalone <dir> --template castle64   # start from a demo (blank|castle64|showcase|football)
 cargo xtask new                                              # asks for name, folder, template on stdin
 cargo xtask editor                                           # the editor's launcher can create one too
 ```
@@ -72,6 +72,23 @@ cargo xtask editor                                           # the editor's laun
   - `xtask/tests/standalone.rs::every_template_compiles_out_of_the_box` (ignored)
     runs `cargo check --all-targets` on the game crate and PC host of each template.
   - All of them scaffold under `target/test-projects/`, never the system temp dir.
+  - `football` copies `examples/solid-eleven` (crate `solid-eleven`, type
+    `SolidElevenGame`; `Demo::crate_name` differs from the key). It brings **its own
+    `assets/`** (`Demo::own_assets`) instead of the engine's, so a project doesn't carry
+    castle64's art.
+- **Overlays:** `templates/<key>/` (when it exists) is copied over the standalone base
+  after rendering. Text files go through the same placeholders, `*.tmpl` drops its
+  suffix, and PNGs are copied byte for byte. The football overlay brings console hosts
+  whose self-test plays a scripted match and checks the sim hash, plus a `trino.toml`
+  with `n64_max_frame_us` and golden lists, the goldens under `tests/golden/`, and the
+  project's AGENTS.md.
+  - **After changing how the match plays or looks:** re-pin
+    `solid_eleven::selftest::EXPECTED_HASH`, then re-bless the goldens.
+  - **To re-bless:** scaffold a project, run `cargo xtask test n64|3ds --project
+    <dir> --bless`, view the PNGs, and copy them back into
+    `templates/football/tests/golden/`.
+  - **Then confirm:** a fresh scaffold must pass without `--bless`; CI does exactly
+    that.
 - **Demo-based projects run as they are.** A castle64 copy and a showcase copy each
   ran the 30-frame PC smoke (`TRINO_RUN_OK`).
 

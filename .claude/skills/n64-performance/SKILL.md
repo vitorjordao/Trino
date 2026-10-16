@@ -419,6 +419,23 @@ T&L. Every castle64 scene costs 7–13 ms of emulated time (vsync caps it at 60 
   `drain (rspq_wait)`, `frame_end (rdpq_detach_show)`, `frame`, `between frames`. A stall
   with no `TRINO_STALL` line is the emulator itself.
 
+## A football match at 30 fps (Solid Eleven, 2026-10-16)
+
+22 players, a referee, a stadium and a HUD: 26.6 ms avg in ares, 76 of 77 draws on the
+RSP. What got it from 48.7 ms there:
+
+- **The sim was the cost, not the draws.** Chasers and keepers each predicted the ball
+  on their own: about 740 ball steps a tick. One shared trajectory per tick (`ai::Traj`)
+  needs 72. Measure `update=` in `TRINO_FRAME` before touching the renderer.
+- **Ground:** coarse tiles far, fine tiles near, each culled by its exact rectangle.
+  A sphere-culled big quad under the camera leaves the RSP (`ClipBand`).
+- **Draw memo:** snap the camera's focus to 1/4096. Then `target - eye` stays bit-exact
+  while the camera pans, and the stadium's draws only patch their translation.
+- **Far LOD per part:** past a depth of 30, players drop their arms.
+- **Strict mode is not the gate for RSP content.** Its estimate prices every draw as
+  CPU T&L (about 100 draws trip its 50 ms). Gate with `rsp_check` per draw on the host
+  (`solid_eleven_budget.rs`) and with `n64_max_frame_us` on the ares run.
+
 ## Workflow for a perf change
 
 1. Baseline on the base commit in a `git worktree` (never `git stash`), over a few

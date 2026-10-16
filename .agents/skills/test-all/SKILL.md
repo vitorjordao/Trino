@@ -73,6 +73,19 @@ Coverage: `TRINO_REQUIRE_GPU=1 cargo llvm-cov --workspace --summary-only
 
 On Linux the PC crates need `pkg-config` and ALSA headers (`apt install pkg-config libasound2-dev`).
 
+## Solid Eleven
+
+```sh
+cargo test -p solid-eleven --release                       # rules, ball, league, e2e (67 tests)
+cargo test -p xtask --test solid_eleven_budget --test solid_eleven_layers --test solid_eleven_render
+TRINO_BLESS=1 cargo test -p xtask --test solid_eleven_budget   # re-pin the frame cost (review the TOML)
+TRINO_BLESS=1 cargo test -p xtask --test solid_eleven_render   # re-bless the PC goldens (view the PNGs)
+cargo test --release -p xtask --test solid_eleven_shots -- --ignored --nocapture   # screenshots + pc_frame_time
+```
+
+The console half is the football template's self-test (`new-project` › Overlays).
+The sim hash must match the PC's (`selftest::EXPECTED_HASH`).
+
 ## GPU tests crash now and then on RADV
 
 On AMD's RADV (this repo's dev machine, 2026-10-15) a test binary that creates and drops

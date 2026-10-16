@@ -234,7 +234,7 @@ impl Career {
     }
 
     /// The best five not in the eleven (fresher players first).
-    pub fn bench(&self, c: u8, xi: &[u16; 11]) -> [(u16, u8, [u8; ATTRS], bool); BENCH] {
+    pub fn bench(&self, c: u8, xi: &[u16; 11]) -> [super::engine::BenchSlot; BENCH] {
         let mut out = [(0u16, 0u8, [0u8; ATTRS], false); BENCH];
         let mut rest = [0u16; MAX_SQUAD];
         let mut n = 0;

@@ -428,8 +428,10 @@ fn substitutions_follow_the_rules() {
     let mut s = setup(2, 3, 9, 60 * 60);
     s.humans = [true, false];
     let mut m = Match::new(&s);
-    let mut pad = Pad::default();
-    pad.sub = true;
+    let pad = Pad {
+        sub: true,
+        ..Pad::default()
+    };
     let mut subbed = false;
     for t in 0..60 * 60 * 2 {
         let p = if t == 120 { pad } else { Pad::default() };

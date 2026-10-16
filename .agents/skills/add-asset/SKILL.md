@@ -228,6 +228,19 @@ Scenes/prefabs reference materials by logical path; games use the equivalent
 - With the editor open or `cargo xtask watch pc` running, saving a master rebakes and
   re-uploads it live under the same handle.
 
+## A game with its own asset set (Solid Eleven, 2026-10-16)
+
+- **Its own `assets/`:** `examples/solid-eleven/assets/` has its own `manifest.toml`.
+  `TRINO_GAME=solid-eleven` bakes it to `target/assets/solid-eleven/pc`, and the
+  football template copies it instead of the engine's. Sounds and sprites are generated
+  by `tools/solid_eleven/make_{sounds,sprites}.py`.
+- **TTF fonts on the N64:** the bake writes transparent texels black and the N64 stages
+  I4/I8 atlases with intensity = coverage. Before that, a TTF atlas drew solid blocks
+  on the console only.
+- **Keep strings to what the font bakes:** list the characters the code writes in the
+  font's `chars` (accents included) and test it, as `ui::FONT_CHARS` and
+  `solid_eleven_layers::the_fonts_bake_the_characters_the_code_writes` do.
+
 ## Formats and fonts added for external projects (2026-10-14)
 - **N64 sprite and font formats** include `I4` and `I8`: intensity, with alpha equal
   to intensity. They suit white masks tinted at draw time (fonts, UI) and upload no

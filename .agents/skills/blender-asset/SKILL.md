@@ -320,3 +320,21 @@ about the origin.
   master, so low-poly N64/3DS versions need no game code. In one 64-model set they
   cost 44% fewer triangles.
 
+
+## Lessons from Solid Eleven (2026-10-16, issue #39)
+
+- **One generator, two tiers:** `tools/blender/solid_eleven_models.py`
+  (`cargo xtask blender solid-eleven [--only a,b]`) builds console and PC models from
+  one table. Keys tagged `@pc` are written as `<name>_hd` and listed with
+  `platforms = ["pc"]` in the manifest, so the consoles never load them. `--only`
+  takes those `_hd` names.
+- **Rigid parts posed from a clip table instead of a skinned rig:** the players are 7
+  parts on the consoles (11 on PC), each drawn with a matrix the game computes from
+  `render/clips_gen.rs`. `tools/blender/solid_eleven_anim.py` holds the clip table, which
+  rigs the Blender preview and writes the Rust table (`--rust`, and `--check` in
+  `solid_eleven_layers`). One source keeps the art and the game in step, and a part
+  costs one draw with no skinning.
+- **Big flat ground under a low camera:** split it into coarse far tiles and fine
+  near tiles. One 20 m quad under the camera leaves the N64's RSP (clip band).
+- **Merge what's always together:** the advertising boards became part of the stands
+  (fewer draws; on the N64, draw count costs more than triangles).

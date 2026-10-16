@@ -15,6 +15,7 @@ explain the engine by topic and link the detailed material instead of repeating 
 | [HARDWARE.md](HARDWARE.md) | Deploying to a real N64 (SummerCart64, EverDrive 64) or 3DS (3dslink), the debug log in the terminal, Luma3DS gdb |
 | [TESTING.md](TESTING.md) | The kinds of tests, coverage, and the feature-to-test matrix that a guard test keeps current |
 | [BACKLOG.md](BACKLOG.md) | The ranked roadmap and the record of what each pass delivered |
+| [SOLID_ELEVEN.md](SOLID_ELEVEN.md) | Solid Eleven, the football demo and `football` project template: playing it, its rules, AI and career, its art pipeline, performance on each console, tests, and customizing it |
 
 ## Skills (step-by-step workflows)
 

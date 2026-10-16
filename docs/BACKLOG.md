@@ -144,6 +144,15 @@ shipping a 3D game first**, then by cost:
     until it replaces them: the hot-reload test builds `hello-sprite`, and a PC golden
     and the editor's Level tab use `platformer`.
 
+15. **Solid Eleven follow-ups** (S–M each, from issue #39).
+    - Local two-player matches: the sim takes two pads already (`human: [bool; 2]`), but
+      no menu offers it.
+    - The human can't take control of the keeper.
+    - An RSP-aware strict-mode estimate: PC strict mode prices every draw as CPU T&L,
+      so a scene that ares runs at 26 ms trips its 50 ms ceiling (see Pitfalls).
+    - Up to two fine ground tiles under the camera can still leave the RSP for the
+      clip band in a frame. Clipping on the RSP (P0 #1) removes it.
+
 ## Engineering hygiene (ongoing)
 
 - Keep `docs/adr/` current: every format change gets a version bump, a migration and
@@ -152,6 +161,17 @@ shipping a 3D game first**, then by cost:
   time) and bless `tests/perf/` on purpose. Host benches stay as regression guards only.
 
 ---
+
+## Done — Solid Eleven, a football demo and the `football` template (2026-10-16, branch `feat/solid-eleven`, GitHub #39)
+
+| Item | Evidence |
+|---|---|
+| `examples/solid-eleven`: a fixed-point (Q16.16, 60 Hz) match sim with the referee (restarts by last touch, offside, fouls, cards, penalties, substitutions), ball physics with curl, posts and net, a tactical AI, ten clubs balanced by point budgets, a career with transfers and a 1.8 KB save; menus after the issue's concept art in EN/PT-BR; HUD with the active player, the switch target and pass lanes; a 3DS touch screen (radar, formation, substitution and stamina tiles); PC-only detail (11-part players, rain, wet look, glows) | 67 crate tests (rules matrix, ball, league, e2e through the buttons with a bot, a career that survives the save on a 2 KB cart); `xtask/tests/solid_eleven_{budget,layers,render}.rs` (every draw on the RSP, pinned frame cost, layer rules, PC goldens); `docs/TESTING.md` › Solid Eleven |
+| Models and clips from `tools/blender/solid_eleven_{models,anim}.py` (`cargo xtask blender solid-eleven`); its own `assets/` | `solid_eleven_layers::the_pose_tables_match_the_clip_source` |
+| The `football` template (`--template football`, the editor's launcher): the game, its assets and an overlay with console hosts that self-test a scripted match | ares: 26.6 ms avg (gate 33.3 ms), 76/77 draws on the RSP, hash `208486c3` = PC; Azahar: 16.8 ms, every draw on the PICA200, same hash; goldens in `templates/football/tests/golden/`; CI `n64` and `n3ds-emulator` jobs run it |
+| Engine: TTF atlases with black transparent texels, N64 I4/I8 font atlases with intensity = coverage | `font.rs::ttf_font_bakes_ascii`, `n64.rs::intensity_atlases_carry_coverage_in_their_gray_level` |
+
+Not done: the items under P2 #15.
 
 ## Done — the showcase uses both 3DS screens (2026-10-16, branch `examples/showcase-two-screens`, GitHub #20)
 

@@ -139,6 +139,10 @@ pub struct Pad {
     pub sub: bool,
 }
 
+/// A substitute: database index, shirt number, attributes, and whether
+/// they are a keeper.
+pub type BenchSlot = (u16, u8, [u8; ATTRS], bool);
+
 /// A side as the match sees it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct SideSetup {
@@ -149,9 +153,8 @@ pub struct SideSetup {
     pub players: [(u16, u8, [u8; ATTRS]); SIDE],
     /// 0..100; 50 = neutral.
     pub morale: u8,
-    /// The substitutes (`bench_n` of them): database index, number,
-    /// attributes, and whether he is a keeper.
-    pub bench: [(u16, u8, [u8; ATTRS], bool); BENCH],
+    /// The substitutes (`bench_n` of them).
+    pub bench: [BenchSlot; BENCH],
     pub bench_n: u8,
 }
 
@@ -351,7 +354,7 @@ pub struct Match {
     /// Morale (0..100) per side, as set up.
     pub morale: [u8; 2],
     /// Each side's substitutes left on the bench, and changes made.
-    pub bench: [[(u16, u8, [u8; ATTRS], bool); BENCH]; 2],
+    pub bench: [[BenchSlot; BENCH]; 2],
     pub bench_n: [u8; 2],
     pub subs: [u8; 2],
     /// A human asked for a substitution (made at the next dead ball).

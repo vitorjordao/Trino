@@ -66,7 +66,7 @@ commands:
                        / pinned Azahar AppImage into target/emulators)
   new <name>           scaffold a new game crate under examples/
   new <name> --standalone <dir> [--git <url> [--rev <r>|--branch <b>]]
-      [--template blank|castle64|showcase]
+      [--template blank|castle64|showcase|football]
                        a game project outside this repo (own workspace,
                        PC host, assets); engine via path (default) or git;
                        the game starts blank or as a copy of a demo
@@ -1043,7 +1043,7 @@ fn new_game(name: &str, rest: &[&str]) -> ExitCode {
 
 const NEW_USAGE: &str = "xtask: usage: cargo xtask new <kebab-case-name> \
      [--standalone <dir> [--git <url> [--rev <r> | --branch <b>]] \
-     [--template blank|castle64|showcase]]";
+     [--template blank|castle64|showcase|football]]";
 
 /// Render a standalone project and print what to do next.
 fn make_standalone(root: &Path, names: &Names, s: &standalone::Standalone) -> ExitCode {

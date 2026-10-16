@@ -17,7 +17,10 @@ description: Understand, change, debug or locally replicate Trino's GitHub Actio
 | `n3ds-emulator` | ubuntu-24.04 | downloads that artifact, runs `emulators setup azahar`, then `xvfb-run … test 3ds --no-build` (self-test + the castle64 hub golden within a tolerance; on failure uploads `tests/golden/3ds/actual/` as `n3ds-golden-actual`) |
 
 `release.yml` tags new workspace versions on main and publishes editor binaries, demo
-ROMs and SHA256SUMS.
+ROMs and SHA256SUMS. A version with a pre-release part (`0.2.0-dev.1`) publishes a GitHub
+pre-release; `docs/releases/v<version>.md`, when present, is the release body (GitHub's
+generated changelog is appended). Merging a version bump into main *is* the release:
+write the notes file in the same PR.
 
 ## Why it is shaped like this
 

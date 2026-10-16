@@ -137,6 +137,7 @@ pub fn draw(g: &mut SolidElevenGame, r: &mut dyn Renderer) {
             title_backdrop(g, r, aspect);
             title(g, r, screen);
         }
+        Scene::Trophy => trophy(g, r, screen, aspect),
         Scene::Quick => {
             title_backdrop(g, r, aspect);
             quick(g, r, screen);
@@ -211,16 +212,86 @@ fn idle_anim(t: f32) -> AnimState {
     a
 }
 
+/// Skin tones of the ceremony's players.
+const CEREMONY_SKINS: [u8; 22] = [
+    1, 3, 2, 5, 0, 6, 4, 7, 2, 1, 3, 2, 5, 0, 6, 4, 7, 2, 1, 3, 2, 5,
+];
+
+/// Five players of `club` in its home kit: the captain first.
+fn ceremony_looks(club: u8) -> [Look; 5] {
+    let other = if club == 0 { 1 } else { 0 };
+    let d = dress([club, other], &CEREMONY_SKINS);
+    [d.looks[9], d.looks[7], d.looks[10], d.looks[4], d.looks[2]]
+}
+
 fn title_backdrop(g: &SolidElevenGame, r: &mut dyn Renderer, aspect: f32) {
-    // Two kits celebrating, like the reference's title.
-    let d = dress(
-        [0, 1],
-        &[
-            1, 3, 2, 5, 0, 6, 4, 7, 2, 1, 3, 2, 5, 0, 6, 4, 7, 2, 1, 3, 2, 5,
-        ],
+    // The club the menus are about lifts the trophy.
+    let club = if g.career_on {
+        g.world.user
+    } else {
+        g.quick.home
+    };
+    render::menu::title(r, &ceremony_looks(club), &g.menu_anims, aspect, g.time);
+}
+
+// ----------------------------------------------------------------- trophy
+
+/// The season's end: the champion's captain lifts the trophy; the banner
+/// names the champion and how the user's club finished.
+fn trophy(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2, aspect: f32) {
+    let lang = g.settings.lang;
+    let order = g.world.standings();
+    let champ = order[0];
+    let cam = render::CamState {
+        focus: trino_core::Vec3::new(0.0, 1.3, 1.0),
+        height: 0.6,
+        back: 7.5,
+        fov: 0.72,
+    };
+    render::menu::ceremony(
+        r,
+        &ceremony_looks(champ),
+        &g.menu_anims,
+        aspect,
+        &cam,
+        trino_core::Vec3::ZERO,
+        g.time,
     );
-    let looks: [Look; 5] = [d.looks[9], d.looks[13], d.looks[7], d.looks[15], d.looks[4]];
-    render::menu::title(r, &looks, &g.menu_anims, aspect);
+    let mut ui = Ui::new(r, screen);
+    let club = &CLUBS[champ as usize];
+    ui.slant(Rect::new(40.0, 10.0, 240.0, 46.0), pal::NAVY, 6.0);
+    ui.slant_border(Rect::new(40.0, 10.0, 240.0, 46.0), pal::YELLOW, 6.0, 1.0);
+    crest_of(&mut ui, 50.0, 15.0, 28.0, champ, false);
+    ui.text_shadow(
+        176.0,
+        14.0,
+        tr(lang, S::Champion),
+        pal::YELLOW,
+        Size::Big,
+        TextAlign::Center,
+    );
+    let name: TextBuf<20> = upper(club.name);
+    let mut b = buf();
+    let _ = write!(b, "{}  {} {}", name.as_str(), tr(lang, S::Season), g.world.year);
+    ui.text(176.0, 40.0, b.as_str(), pal::INK, Size::Small, TextAlign::Center);
+    let user = g.world.user;
+    let place = order.iter().position(|&c| c == user).unwrap_or(0) + 1;
+    b.clear();
+    if place == 1 {
+        let _ = write!(b, "{}", tr(lang, S::LeagueWon));
+    } else {
+        let _ = write!(b, "{} {}/{}", tr(lang, S::FinishedAt), place, order.len());
+    }
+    let w = ui.measure(b.as_str(), Size::Small) + 24.0;
+    ui.slant(
+        Rect::new(160.0 - w * 0.5, 176.0, w, 16.0),
+        Color::rgba(10, 12, 30, 235),
+        4.0,
+    );
+    let c = if place == 1 { pal::LIME } else { pal::CYAN };
+    ui.slant_border(Rect::new(160.0 - w * 0.5, 176.0, w, 16.0), c, 4.0, 1.0);
+    ui.text(160.0, 178.0, b.as_str(), c, Size::Small, TextAlign::Center);
+    footer(&mut ui, &[(A.0, A.1, S::Continue)], lang);
 }
 
 // ------------------------------------------------------------------ title

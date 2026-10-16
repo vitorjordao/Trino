@@ -40,6 +40,8 @@ pub enum Scene {
     Match,
     Pause,
     Results,
+    /// The season's end: the champion lifts the trophy.
+    Trophy,
 }
 
 /// Where a club pick leads.
@@ -194,8 +196,14 @@ impl SolidElevenGame {
             edit: None,
             in_career_match: false,
             time: 0.0,
+            // The captain lifts the trophy, four teammates celebrate.
             menu_anims: core::array::from_fn(|i| {
-                let mut a = AnimState::new(ClipName::Celebrate);
+                let clip = if i == 0 {
+                    ClipName::TrophyLift
+                } else {
+                    ClipName::Celebrate
+                };
+                let mut a = AnimState::new(clip);
                 a.time = i as f32 * 0.21;
                 a
             }),
@@ -487,7 +495,20 @@ impl SolidElevenGame {
             Scene::Results => {
                 if nav.confirm || nav.back || tap.is_some() {
                     let career = self.report.is_some_and(|r| r.career);
-                    self.scene = if career { Scene::Club } else { Scene::Title };
+                    // The last round: the champion's ceremony first.
+                    let over = self.world.round as usize >= ROUNDS;
+                    self.scene = if career && over {
+                        Scene::Trophy
+                    } else if career {
+                        Scene::Club
+                    } else {
+                        Scene::Title
+                    };
+                }
+            }
+            Scene::Trophy => {
+                if nav.confirm || nav.back || tap.is_some() {
+                    self.scene = Scene::Club;
                 }
             }
             Scene::Match | Scene::Pause => {}

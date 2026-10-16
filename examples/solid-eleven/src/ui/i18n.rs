@@ -144,6 +144,9 @@ pub enum S {
     Market,
     Substitution,
     Substitute,
+    LeagueWon,
+    FinishedAt,
+    Season,
 }
 
 /// The text of `s` in `lang`.
@@ -277,6 +280,9 @@ pub fn tr(lang: Lang, s: S) -> &'static str {
         S::Market => ("MARKET", "MERCADO"),
         S::Substitution => ("SUBSTITUTION", "SUBSTITUIÇÃO"),
         S::Substitute => ("SUBSTITUTE", "SUBSTITUIR"),
+        S::LeagueWon => ("YOU WON THE LEAGUE!", "VOCÊ GANHOU A LIGA!"),
+        S::FinishedAt => ("YOUR CLUB FINISHED", "SEU CLUBE TERMINOU EM"),
+        S::Season => ("SEASON", "TEMPORADA"),
     };
     match lang {
         Lang::En => en,

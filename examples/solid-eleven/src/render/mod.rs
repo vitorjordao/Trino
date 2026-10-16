@@ -82,6 +82,7 @@ pub const M_DOT: ModelId = model("models/se_dot");
 pub const M_PEDESTAL: ModelId = model("models/se_pedestal");
 pub const M_BLOB: ModelId = model("models/se_blob");
 pub const M_PLAYER_SHADOW: ModelId = model("models/se_player_shadow");
+pub const M_TROPHY: ModelId = model("models/se_trophy");
 
 /// The 6 x 4 pitch tiles, row-major by x then z.
 pub const M_PITCH: [ModelId; 24] = [
@@ -493,6 +494,7 @@ pub fn draw_match(r: &mut dyn Renderer, m: &Match, v: &MatchView, aspect: f32) {
 
 pub const S_RAIN: SpriteId = SpriteId::from_path("sprites/se_rain");
 pub const S_GLOW: SpriteId = SpriteId::from_path("sprites/se_glow");
+pub const S_CONFETTI: SpriteId = SpriteId::from_path("sprites/se_confetti");
 
 /// The PC tier's extras: rain falling around the camera's focus, and the
 /// floodlights' glow at night (billboards: z-tested, batched with the 3D).

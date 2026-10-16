@@ -74,7 +74,7 @@ fn solid_eleven_menu_shots() {
             .min_by_key(|&i| g.world.buy_price(i))
             .unwrap();
         g.world.buy(cheap).unwrap();
-        let scenes: [(&str, Scene); 11] = [
+        let scenes: [(&str, Scene); 12] = [
             ("title", Scene::Title),
             ("quick", Scene::Quick),
             ("pick", Scene::PickClub { then: After::Club }),
@@ -86,6 +86,7 @@ fn solid_eleven_menu_shots() {
             ("settings", Scene::Settings),
             ("results", Scene::Results),
             ("confirm", Scene::Confirm),
+            ("trophy", Scene::Trophy),
         ];
         for (name, scene) in scenes {
             g.scene = scene;
@@ -103,6 +104,12 @@ fn solid_eleven_menu_shots() {
                     }
                 }
                 g.scene = Scene::Results;
+            }
+            if scene == Scene::Trophy {
+                // The season played out: the champion's ceremony.
+                while (g.world.round as usize) < solid_eleven::sim::league::ROUNDS {
+                    g.world.finish_round(None);
+                }
             }
             g.render(&mut r);
             save(&r, &dir, &format!("menu_{name}_{tag}"));

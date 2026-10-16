@@ -675,3 +675,8 @@ formats = { n64 = "I4" }
 [sprites.se_glow]
 file = "sprites/se_glow.png"
 formats = { n64 = "I4" }
+
+# A confetti flake (white, tinted per flake): the trophy ceremony.
+[sprites.se_confetti]
+file = "sprites/se_confetti.png"
+formats = { n64 = "I4" }

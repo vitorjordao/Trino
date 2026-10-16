@@ -741,6 +741,27 @@ mod tests {
         assert_eq!(panel::hit(Vec2::new(160.0, 60.0)), None, "the metrics");
     }
 
+    /// The probed fills are told apart by read-back (tolerance 24 per
+    /// channel, RGB565 on the 3DS), from each other and from the 3DS
+    /// shim's bottom-screen clear (an undrawn panel).
+    #[test]
+    fn panel_colors_are_far_apart_for_the_probes() {
+        let colors = [
+            panel::BG,
+            panel::BTN_DEFAULT,
+            panel::BTN_CHANGED,
+            panel::BTN_HELD,
+            Color::rgb(16, 18, 28),
+        ];
+        for (i, a) in colors.iter().enumerate() {
+            for b in &colors[i + 1..] {
+                let d = |x: u8, y: u8| x.abs_diff(y);
+                let far = d(a.r, b.r).max(d(a.g, b.g)).max(d(a.b, b.b));
+                assert!(far > 24 + 8, "{a:?} vs {b:?}: {far}");
+            }
+        }
+    }
+
     /// Each toggle cycles through its values and back to the default.
     #[test]
     fn panel_toggles_cycle_back_to_the_default() {

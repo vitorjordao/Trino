@@ -591,7 +591,8 @@ cargo test --workspace
   `castle64_hub_bottom.png` (the same frame's touch screen) and
   `showcase_bottom.png` (the showcase's touch panel), compared within a
   tolerance by `test 3ds` (Azahar's pixels depend on the host OpenGL);
-  `n3ds_parity` holds the PC's N3ds look to it.
+  `n3ds_parity` holds the PC's N3ds look to castle64's two (not to the
+  text-heavy showcase panel: see the pitfall on PC 3DS text).
 - Performance is gated: `xtask/tests/perf_budget.rs` pins castle64's T&L
   work per scene (`tests/perf/castle64_work.toml`), and `test n64` pins
   the emulated frame cost (`tests/perf/castle64_n64.toml`). Quote the
@@ -760,7 +761,17 @@ cargo test --workspace
   `dual screen` probe used the `textured_3d` points, and a 400-wide projection on the
   320-wide bottom screen (a 40 px shift) still landed every probe in the right
   quadrant. Probe near the corners and just outside the edges, then check that a
-  deliberate mutation fails the step.
+  deliberate mutation fails the step. Keep the "can this backend read back?"
+  guard out of the mutated path: the showcase panel's shifted probe first read an
+  off-screen pixel, got `None`, returned `Ok(false)` ("no read-back") and hid the
+  mutation. Assert `is_err()` on a mutation, never `!= Ok(true)`.
+- **The PC's 3DS profile draws text softer than Azahar.** Its sprite sampler is
+  bilinear (`sprite_filter` for `SimProfile::N3ds`), so scale-2 glyphs come out
+  blurred and dimmer, while Azahar shows them crisp. castle64's bottom screen has
+  little text and stays within `n3ds_parity`'s limits; the showcase's text-heavy
+  panel was 13.9 mean / 11.8% far pixels against 2.5 / 2.5%, so it has an Azahar
+  golden but no parity check. Probe fills and layout on text-heavy screens, not
+  glyphs.
 - **Screen order is a contract, not a backend detail.** Before the typed API the
   3DS let draws go back to the top after the bottom, while the PC sent them to the
   bottom. Both now refuse the switch back, and `on_screen` reports it.

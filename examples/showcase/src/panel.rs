@@ -25,9 +25,10 @@ const METRICS_AT: Vec2 = Vec2::new(6.0, 23.0);
 const LINE: f32 = 15.0;
 
 /// Panel background, and the buttons' fills: at their default value, at
-/// another value, and held. Far apart in every channel the 3DS LCD keeps
-/// (RGB565), so read-back probes can tell them apart.
-pub const BG: Color = Color::rgb(12, 14, 24);
+/// another value, and held. More than the probes' tolerance (24) apart in
+/// some channel from each other and from the 3DS shim's bottom-screen
+/// clear (16, 18, 28), so a probe can tell a drawn background from no draw.
+pub const BG: Color = Color::rgb(30, 36, 64);
 pub const BTN_DEFAULT: Color = Color::rgb(70, 74, 96);
 pub const BTN_CHANGED: Color = Color::rgb(40, 110, 200);
 pub const BTN_HELD: Color = Color::rgb(120, 170, 255);

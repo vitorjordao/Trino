@@ -131,7 +131,8 @@ tests follow the same pattern: add a step to `castle64::selftest` so the PC suit
   `run_self_test` + `check_baked` + `ShowcaseGame::from_baked`, ~22 KB values built
   by value) and the ROM hung at random points, timing-dependent because
   interrupts push onto the same stack. Fixed by running each showcase step in its own
-  `#[inline(never)]` function (peak 47.6 KB). **`Box::new(big())` does not help**:
+  `#[inline(never)]` function (peak 47.6 KB then; 57 224 bytes on 2026-10-16 main and
+  58 040 with the showcase's touch panel, against the 61 440 gate: ~3.4 KB left). **`Box::new(big())` does not help**:
   LLVM still builds the temporary in the caller's frame. Find big frames with
   `mips64-elf-objdump -d -C target/n64/trino.elf` and grep `addiu sp,sp,-<N>`
   (`run_self_test` was 21 KB, `tessellate` is 10 KB).

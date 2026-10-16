@@ -146,16 +146,17 @@ impl N3dsHost {
         }
     }
 
-    /// Print a [`FrameReport`] as a `TRINO_FRAME:` line (reported only),
-    /// with `off_gpu=` listing why the CPU draws stayed off the GPU, most
-    /// common first.
+    /// Print a [`FrameReport`] as a `TRINO_FRAME:` line (reported only):
+    /// `fps=` from the average frame, and `off_gpu=` listing why the CPU
+    /// draws stayed off the GPU, most common first.
     pub fn report_frames(&self, scene: &str, r: &FrameReport) {
         runtime::log(&format!(
-            "TRINO_FRAME:{scene} avg_us={} max_us={} frames={} cpu_us={} gpu_draws={} gpu_tris={} \
-             cpu_draws={} cpu_tris={} off_gpu={}\n",
+            "TRINO_FRAME:{scene} avg_us={} max_us={} frames={} fps={} cpu_us={} gpu_draws={} \
+             gpu_tris={} cpu_draws={} cpu_tris={} off_gpu={}\n",
             r.avg_us,
             r.max_us,
             r.frames,
+            fps(r.avg_us),
             r.cpu_us,
             r.gpu_draws,
             r.gpu_tris,
@@ -206,6 +207,12 @@ impl N3dsHost {
         }
         host.run(&mut *game);
     }
+}
+
+/// Frames per second from the average wall-clock frame (vsync included):
+/// what the screen showed, 60 at most.
+fn fps(avg_us: u32) -> u32 {
+    (1_000_000 + avg_us / 2).checked_div(avg_us).unwrap_or(0)
 }
 
 /// `Reason:n,…` by count (most first), `-` when nothing stayed off.

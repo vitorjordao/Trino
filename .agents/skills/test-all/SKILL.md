@@ -65,3 +65,12 @@ Coverage: `TRINO_REQUIRE_GPU=1 cargo llvm-cov --workspace --summary-only
 - Skinning cost: `bench_tnl` includes `skinning_rigid_vs_smooth`.
 
 On Linux the PC crates need `pkg-config` and ALSA headers (`apt install pkg-config libasound2-dev`).
+
+## GPU tests crash now and then on RADV
+
+On AMD's RADV (this repo's dev machine, 2026-10-15) a test binary that creates and drops
+several `PcRenderer`s from parallel test threads segfaults about once in 10–40 runs
+(`render_e2e` on main: 1/40; a five-test binary: 3/30). Serial runs never crash. The
+newer GPU test files hold a binary-wide mutex (`gpu()` in
+`crates/platform-pc/tests/local_lights.rs`); a SIGSEGV in another GPU binary is this
+flake, so rerun it before suspecting the code.

@@ -23,6 +23,15 @@ fn golden_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/golden/pc")
 }
 
+/// One GPU test at a time in this binary: RADV crashed (SIGSEGV, ~1 run in
+/// 10–40) creating and dropping several devices from parallel test threads
+/// — `render_e2e` too, before these tests existed.
+static GPU: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn gpu() -> std::sync::MutexGuard<'static, ()> {
+    GPU.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 fn headless(profile: SimProfile) -> Option<PcRenderer> {
     match pollster::block_on(PcRenderer::new_headless(profile)) {
         Ok(r) => Some(r),
@@ -246,6 +255,7 @@ fn shots(r: &PcRenderer, name: &str, img: &[u8]) {
 
 #[test]
 fn each_tier_matches_its_golden() {
+    let _gpu = gpu();
     for (profile, name, tol) in [
         (SimProfile::Native, "lights_native", 3),
         (SimProfile::N3ds, "lights_n3ds", 3),
@@ -270,6 +280,7 @@ fn each_tier_matches_its_golden() {
 
 #[test]
 fn no_lights_draw_exactly_what_the_renderer_drew_before() {
+    let _gpu = gpu();
     let Some(mut r) = headless(SimProfile::Native) else {
         return;
     };
@@ -288,6 +299,7 @@ fn no_lights_draw_exactly_what_the_renderer_drew_before() {
 
 #[test]
 fn lights_add_their_color_where_they_reach_on_every_tier() {
+    let _gpu = gpu();
     for profile in [SimProfile::Native, SimProfile::N3ds, SimProfile::N64] {
         let Some(mut r) = headless(profile) else {
             return;
@@ -317,6 +329,7 @@ fn lights_add_their_color_where_they_reach_on_every_tier() {
 
 #[test]
 fn per_pixel_lights_are_round_on_a_coarse_mesh() {
+    let _gpu = gpu();
     // One big quad: per vertex a light in its middle can't show (no vertex
     // near it), per pixel it makes a pool.
     let Some(mut r) = headless(SimProfile::Native) else {
@@ -356,6 +369,7 @@ fn per_pixel_lights_are_round_on_a_coarse_mesh() {
 
 #[test]
 fn gloss_and_wetness_add_highlights_per_pixel_only() {
+    let _gpu = gpu();
     let count_bright = |img: &[u8]| {
         img.chunks(4)
             .filter(|p| p[0].max(p[1]).max(p[2]) > 220)
@@ -383,6 +397,7 @@ fn gloss_and_wetness_add_highlights_per_pixel_only() {
 
 #[test]
 fn per_vertex_tiers_use_at_most_their_cap() {
+    let _gpu = gpu();
     // The N64 profile evaluates 2 lights: a third changes nothing.
     let Some(mut r) = headless(SimProfile::N64) else {
         return;

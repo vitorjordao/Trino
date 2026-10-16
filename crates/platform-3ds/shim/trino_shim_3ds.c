@@ -271,10 +271,15 @@ void trino_set_screen(uint32_t bottom)
     s_proj = bottom ? &s_proj_bottom : &s_proj_top;
 }
 
+// A frame ended since the debug readback last waited for the display
+// (trino_debug_landed).
+static int s_frame_unseen = 1;
+
 void trino_frame_end(void)
 {
     trino_tnl_leave();
     C3D_FrameEnd(0);
+    s_frame_unseen = 1;
 }
 
 // ---------------------------------------------------------------------------
@@ -610,17 +615,30 @@ int32_t trino_save_store(const uint8_t* src, uint32_t len)
     return rename(TRINO_SAVE_TMP, TRINO_SAVE_PATH) == 0 ? 0 : -1;
 }
 
+// Wait two vblanks for the last presented frame's display transfer to land,
+// once per frame: a probe reading 960 pixels used to wait 33 ms for each
+// one (64 s with the screen frozen, measured in Azahar).
+static void trino_debug_landed(void)
+{
+    if (s_frame_unseen) {
+        gspWaitForVBlank();
+        gspWaitForVBlank();
+        s_frame_unseen = 0;
+    }
+}
+
 // Test hook: RGBA8888 of the top screen (bottom = 0) or the touch screen
 // (bottom = 1) at (x, y) (landscape, y down) from the LCD back buffer; 0 if
 // unavailable. Waits two vblanks so the frame's display transfer has
-// landed; callers draw the probed frame several times so both LCD buffers
-// hold it. The LCD buffer is column-major, bottom-up.
+// landed (once per presented frame: further reads of the same frame skip
+// the wait, see trino_debug_landed); callers draw the probed frame several
+// times so both LCD buffers hold it. The LCD buffer is column-major,
+// bottom-up.
 uint32_t trino_debug_pixel(uint32_t x, uint32_t y, uint32_t bottom)
 {
     trino_tnl_leave();
     if (x >= (bottom ? 320u : 400u) || y >= 240) return 0;
-    gspWaitForVBlank();
-    gspWaitForVBlank();
+    trino_debug_landed();
     u16 w = 0, h = 0;
     gfxScreen_t scr = bottom ? GFX_BOTTOM : GFX_TOP;
     const u8* fb = gfxGetFramebuffer(scr, GFX_LEFT, &w, &h);
@@ -646,8 +664,7 @@ uint32_t trino_debug_pixel(uint32_t x, uint32_t y, uint32_t bottom)
 void trino_debug_fb_dump(uint32_t bottom)
 {
     trino_tnl_leave();
-    gspWaitForVBlank();
-    gspWaitForVBlank();
+    trino_debug_landed();
     u16 w = 0, h = 0;
     gfxScreen_t scr = bottom ? GFX_BOTTOM : GFX_TOP;
     const uint32_t width = bottom ? 320 : 400;

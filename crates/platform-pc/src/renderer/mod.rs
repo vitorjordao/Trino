@@ -12,6 +12,7 @@ mod lights;
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Instant;
 
 use trino_core::render3d::{
     Camera3, DEFAULT_LIGHT, Light, Mesh, MeshLayout, ScreenTri, SurfaceScratch, SurfaceVert,
@@ -76,6 +77,34 @@ impl FontEntry {
     }
 }
 
+/// Where a PC frame's rendering time goes on the CPU (wall clock, µs), and
+/// what it hands the GPU: [`PcRenderer::frame_times`] of the last frame.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PcFrameTimes {
+    /// The software T&L of every model draw (`tessellate_with` /
+    /// `tessellate_surface`).
+    pub tnl_us: u32,
+    /// Model batches: the painter sort and the expansion into GPU
+    /// vertices.
+    pub batch_us: u32,
+    /// `end_frame`'s uploads, command encoding, submits and present.
+    pub submit_us: u32,
+    /// GPU draw calls (instanced sprite runs and triangle runs, both
+    /// screens).
+    pub draw_calls: u32,
+    /// Model draws shaded per pixel (`tessellate_surface`: a local light,
+    /// gloss or wetness reaches them); the rest take `tessellate_with`.
+    pub lit_draws: u32,
+    /// Bytes written to GPU buffers (sprite instances, triangle vertices,
+    /// light sets).
+    pub upload_bytes: u32,
+}
+
+/// Microseconds since `t0`.
+fn micros(t0: Instant) -> u32 {
+    t0.elapsed().as_micros().min(u32::MAX as u128) as u32
+}
+
 pub struct PcRenderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -130,6 +159,10 @@ pub struct PcRenderer {
     /// Counters of the frame being recorded / the last finished frame.
     frame_stats: FrameStats,
     last_stats: FrameStats,
+    /// CPU time per rendering stage and the GPU work handed over, of the
+    /// frame being recorded / the last finished frame ([`PcFrameTimes`]).
+    times: PcFrameTimes,
+    last_times: PcFrameTimes,
     tri_verts: Vec<TriVertex>,
     /// Triangles of the current model batch: consecutive `draw_model` calls
     /// accumulate here and depth-sort together (painter across meshes) when
@@ -1031,6 +1064,8 @@ impl PcRenderer {
             fonts: HashMap::new(),
             commands: Vec::new(),
             frame_stats: FrameStats::default(),
+            times: PcFrameTimes::default(),
+            last_times: PcFrameTimes::default(),
             last_stats: FrameStats::default(),
             tri_verts: Vec::new(),
             pending_tris: Vec::new(),
@@ -1288,6 +1323,12 @@ impl PcRenderer {
         self.adapter_name.clone()
     }
 
+    /// The last finished frame's CPU time per rendering stage and the GPU
+    /// work it handed over ([`PcFrameTimes`]).
+    pub fn frame_times(&self) -> PcFrameTimes {
+        self.last_times
+    }
+
     /// Read the internal framebuffer back as tightly-packed RGBA8.
     /// Test/tooling path — synchronous, not for per-frame use.
     pub fn read_offscreen(&self) -> Vec<u8> {
@@ -1384,6 +1425,14 @@ impl PcRenderer {
         if self.pending_tris.is_empty() {
             return;
         }
+        let t0 = Instant::now();
+        self.flush_model_batch_now();
+        self.times.batch_us += micros(t0);
+    }
+
+    /// [`Self::flush_model_batch`]'s work: sort the pending triangles and
+    /// expand them into GPU vertices.
+    fn flush_model_batch_now(&mut self) {
         // Painter order as keys (texture group, depth, submission index) —
         // the same order the console backends draw in.
         let mut keys: Vec<(u64, u64)> = self
@@ -1612,6 +1661,7 @@ impl PcRenderer {
         if !bytes.is_empty() {
             self.queue.write_buffer(&self.instance_buf, 0, bytes);
         }
+        self.times.upload_bytes += bytes.len() as u32;
 
         let tri_bytes: &[u8] = bytemuck::cast_slice(&self.tri_verts);
         if tri_bytes.len() as u64 > self.tri_capacity {
@@ -1626,13 +1676,15 @@ impl PcRenderer {
         if !tri_bytes.is_empty() {
             self.queue.write_buffer(&self.tri_buf, 0, tri_bytes);
         }
+        self.times.upload_bytes += tri_bytes.len() as u32;
         self.tri_verts.clear();
         if segments
             .iter()
             .any(|s| matches!(s, Segment::Tris { lit: true, .. }))
         {
-            self.queue
-                .write_buffer(&self.lights_buf, 0, &self.light_sets.bytes());
+            let lights = self.light_sets.bytes();
+            self.queue.write_buffer(&self.lights_buf, 0, &lights);
+            self.times.upload_bytes += lights.len() as u32;
         }
 
         // In N64 look the framebuffer is 16-bit: the clear (an RDP fill, no
@@ -1703,6 +1755,7 @@ impl PcRenderer {
                             pass.set_vertex_buffer(0, self.instance_buf.slice(..));
                             pass.set_bind_group(1, &entry.bind_group, &[]);
                             pass.draw(0..4, instances.clone());
+                            self.times.draw_calls += 1;
                         }
                     }
                     Segment::Tris {
@@ -1726,6 +1779,7 @@ impl PcRenderer {
                             .unwrap_or(&self.white_bg);
                         pass.set_bind_group(1, bg, &[]);
                         pass.draw(*first..*first + *count, 0..1);
+                        self.times.draw_calls += 1;
                     }
                 }
             }
@@ -1935,6 +1989,7 @@ impl Renderer for PcRenderer {
         self.wetness = 0.0;
         self.light_sets.clear();
         self.frame_stats = FrameStats::default();
+        self.times = PcFrameTimes::default();
     }
 
     fn draw_sprite(&mut self, sprite: SpriteId, pos: Vec2, params: &SpriteParams) {
@@ -2112,6 +2167,8 @@ impl Renderer for PcRenderer {
             0
         };
         let lit = per_pixel && !unlit && (reach != 0 || self.wetness > 0.0 || params.gloss > 0);
+        let t0 = Instant::now();
+        self.times.lit_draws += lit as u32;
         let tnl = if lit {
             let set = self.light_sets.index(lights::SetKey::new(
                 &self.camera,
@@ -2149,6 +2206,7 @@ impl Renderer for PcRenderer {
                 &mut |tri| pending.push(tri),
             )
         };
+        self.times.tnl_us += micros(t0);
         self.frame_stats.tnl.add(&tnl);
         let added = self.pending_tris.len() - before;
         self.tag_pending(
@@ -2241,7 +2299,10 @@ impl Renderer for PcRenderer {
         self.flush_model_batch();
         self.frame_stats.tris = self.main_tris + (self.tri_verts.len() / 3) as u32;
         self.last_stats = self.frame_stats;
+        let t0 = Instant::now();
         self.flush();
+        self.times.submit_us += micros(t0);
+        self.last_times = self.times;
     }
 
     fn draw_text(&mut self, font: FontId, pos: Vec2, text: &str, params: &TextParams) {

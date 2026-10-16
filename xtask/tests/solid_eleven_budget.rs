@@ -110,6 +110,7 @@ fn every_match_draw_stays_on_the_rsp() {
         frames += 1;
         let light = r.light.unwrap_or(DEFAULT_LIGHT);
         let mut tris = 0u32;
+        let mut cpu_tiles = 0;
         for (id, mat, params, cam) in &r.draws {
             let bytes = meshes
                 .get(&id.0)
@@ -135,8 +136,17 @@ fn every_match_draw_stays_on_the_rsp() {
                 continue;
             }
             if let Err(e) = rsp_check(&ctx, &mesh, mat, params) {
-                // Off screen is fine (the engine culls it for ~16 µs); the
-                // game culls most of those itself.
+                // Off screen is fine (the engine culls it for ~16 µs; the
+                // game culls most of those itself). A fine ground tile
+                // that only grazes the bottom of the frame may not fit the
+                // clip band: the CPU draws it (~0.5 ms), at most two.
+                let tile = names
+                    .get(&id.0)
+                    .is_some_and(|n| n.starts_with("se_pitch_f_"));
+                if tile && e == trino_core::RspReject::ClipBand {
+                    cpu_tiles += 1;
+                    continue;
+                }
                 assert_eq!(
                     e,
                     trino_core::RspReject::Offscreen,
@@ -145,23 +155,10 @@ fn every_match_draw_stays_on_the_rsp() {
                 );
             }
         }
-        if std::env::var("SE_DIAG").is_ok() && r.draws.len() > 95 {
-            let mut cats: std::collections::BTreeMap<&str, u32> = Default::default();
-            for (id, ..) in &r.draws {
-                let name = names.get(&id.0).map(String::as_str).unwrap_or("?");
-                let cat = if name.starts_with("se_pitch_f") {
-                    "pitch fine"
-                } else if name.starts_with("se_pitch") {
-                    "pitch coarse"
-                } else if name.starts_with("se_stand") || name.starts_with("se_flood") {
-                    "stadium"
-                } else {
-                    name
-                };
-                *cats.entry(cat).or_default() += 1;
-            }
-            eprintln!("frame {f}: {} draws {cats:?}", r.draws.len());
-        }
+        assert!(
+            cpu_tiles <= 2,
+            "frame {f}: {cpu_tiles} ground tiles off the RSP"
+        );
         if r.draws.len() > worst.0 {
             worst = (r.draws.len(), tris);
         }
@@ -178,4 +175,79 @@ fn every_match_draw_stays_on_the_rsp() {
     }
     assert!(frames >= 30);
     println!("worst frame: {} draws, {} triangles", worst.0, worst.1);
+}
+
+const BASELINE: &str = "tests/perf/solid_eleven_work.toml";
+
+/// The scripted match's cost, pinned: every 30th frame's 3D draws, source
+/// triangles, the 3DS GPU's share (`gpu_check` on the 400-wide top
+/// screen) and the 2D overlay's rectangles and glyphs. Deterministic (the
+/// sim is fixed point, the camera and culling are the game's), so a number
+/// that moves is a content or engine change: rewrite with
+/// `TRINO_BLESS=1 cargo test -p xtask --test solid_eleven_budget` and
+/// review — a number going up is a cost the N64 pays.
+#[test]
+fn the_match_frame_cost_is_pinned() {
+    use std::fmt::Write as _;
+    let meshes = meshes();
+    let mut g = SolidElevenGame::new(Vec2::new(320.0, 240.0));
+    selftest::begin(&mut g);
+    let mut r = Rec::default();
+    let mut out = String::from(
+        "# Solid Eleven's self-test match, frame by frame (every 30th of\n\
+         # solid_eleven::selftest's script, N64 profile): 3D draws, source\n\
+         # triangles, the 3DS GPU's share of them, 2D rectangles + glyphs.\n\
+         # Checked for equality by xtask/tests/solid_eleven_budget.rs;\n\
+         # rewrite with `TRINO_BLESS=1 cargo test -p xtask --test\n\
+         # solid_eleven_budget` and review: a number going up is a cost the\n\
+         # N64 pays.\n",
+    );
+    for f in 0..selftest::FRAMES {
+        g.update(&selftest::input(f), &mut Mute, selftest::DT);
+        if f % 30 != 29 {
+            continue;
+        }
+        g.render(&mut r);
+        let light = r.light.unwrap_or(DEFAULT_LIGHT);
+        let (mut tris, mut gpu_draws) = (0u32, 0u32);
+        for (id, mat, params, cam) in &r.draws {
+            let mesh = Mesh::from_tmdl(&meshes[&id.0]).unwrap();
+            tris += (mesh.index_count / 3) as u32;
+            let ctx = TnlContext::new(cam, &light, Vec2::new(400.0, 240.0));
+            if trino_core::render3d::gpu_mesh_check(&mesh).is_ok()
+                && trino_core::render3d::gpu_check(&ctx, &mesh, mat, params).is_ok()
+            {
+                gpu_draws += 1;
+            }
+        }
+        let _ = writeln!(
+            out,
+            "\n[frame-{f}]\ndraws = {}\ntris = {tris}\ngpu_draws_3ds = {gpu_draws}\nrects = {}\nglyphs = {}",
+            r.draws.len(),
+            r.rects,
+            r.glyphs
+        );
+    }
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join(BASELINE);
+    if std::env::var("TRINO_BLESS").is_ok() {
+        std::fs::write(&path, &out).unwrap();
+        eprintln!("blessed {}", path.display());
+        return;
+    }
+    let want = std::fs::read_to_string(&path)
+        .unwrap_or_else(|_| panic!("{BASELINE} missing: run with TRINO_BLESS=1 and commit it"));
+    if want != out {
+        let diff: Vec<String> = want
+            .lines()
+            .zip(out.lines())
+            .filter(|(a, b)| a != b)
+            .map(|(a, b)| format!("  {a}  ->  {b}"))
+            .collect();
+        panic!(
+            "Solid Eleven's frame cost changed ({BASELINE}); if intended, re-bless:\n{}",
+            diff.join("\n")
+        );
+    }
 }

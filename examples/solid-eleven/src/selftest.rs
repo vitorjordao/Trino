@@ -45,8 +45,9 @@ pub fn input(frame: u32) -> InputState {
     if t > 60 {
         s.set(Button::R, true);
     }
-    // A pass released at frame 95, a held shot released at 140.
-    if (85..95).contains(&t) {
+    // Kick off at once (a short pass released on frame 20, once the players are set), then a pass
+    // released at 95 and a held shot released at 140 in every cycle.
+    if (14..20).contains(&frame) || (85..95).contains(&t) {
         s.set(Button::A, true);
     }
     if (115..140).contains(&t) {

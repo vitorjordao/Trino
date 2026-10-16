@@ -243,7 +243,10 @@ pub fn button_color(look: &Look, prev: &InputState, t: Toggle) -> Color {
 }
 
 /// Draw the panel. Called after `on_screen(Screen::Bottom)` succeeded:
-/// 2D only, so no bottom-screen camera is needed.
+/// 2D only, so no bottom-screen camera is needed. Out of line: its text
+/// buffers stay off the frame of `render`, which single-screen targets
+/// (the N64's 64 KB stack) run without ever calling it.
+#[inline(never)]
 pub fn draw(game: &ShowcaseGame, r: &mut dyn Renderer) {
     // Counters of the last finished frame (this panel's glyphs included):
     // every number has a fixed width, so the panel's own sprite count is

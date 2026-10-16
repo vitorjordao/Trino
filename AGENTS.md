@@ -5,9 +5,10 @@ codebase, with a visual editor, console-simulation modes, live reload and emulat
 testing. This file is the canonical entry point for **any** AI agent (Claude Code, Codex,
 Gemini CLI, Cursor, Copilot, …) and a good one for humans.
 
-Roadmap and per-phase acceptance criteria: `PLANO_EXECUCAO_TRINO.md` (Portuguese).
-Original architecture rationale: `PLANO_ENGINE_TRINO.md` (Portuguese).
-What to build next (ranked): `docs/BACKLOG.md`.
+What to build next (ranked): `docs/BACKLOG.md`. Guides by topic (architecture, assets,
+platforms, hardware): `docs/README.md`. Historical plans the engine was first built from,
+2D-first and since outgrown: `PLANO_EXECUCAO_TRINO.md` (phases and acceptance criteria) and
+`PLANO_ENGINE_TRINO.md` (original rationale), both in Portuguese.
 
 ## Working with AI agents (vendor-neutral)
 
@@ -47,7 +48,8 @@ new skill when none fits. Then run `cargo xtask agents sync`. The steps are in
 
 **All 9 roadmap phases (0–8) implemented.** Working today:
 
-- PC 2D rendering (wgpu, console-sim resolutions, golden tests), audio, input.
+- PC rendering (wgpu, console-sim resolutions, golden tests): low-poly 3D with 2D
+  (sprites, text, rectangles, billboards) in the same renderer and frame; audio, input.
 - Asset pipeline: `assets/manifest.toml` + shared masters + per-platform overrides →
   `cargo xtask assets pc`. Handles = fnv1a(logical path), stable across reloads.
 - Live reload: `cargo xtask watch pc` — saving a master rebakes + re-uploads it live;
@@ -127,17 +129,23 @@ new skill when none fits. Then run `cargo xtask agents sync`. The steps are in
   sprites bilinearly (the 3DS GPU default). Skills: `build-3ds`,
   `run-emulator`.
 
-- **Showcase platformer** (`examples/platformer`, the 2D showcase):
+- **Legacy 2D examples** (`examples/platformer`, `examples/hello-sprite`): from
+  the engine's first, 2D-only phases. Not the model for new games (that is
+  castle64 and `cargo xtask new`); a redesigned 2D sprite/tile system is a
+  future release (BACKLOG P2 #14). Don't delete or rename them: the hot-reload
+  E2E builds hello-sprite, and the `platformer_scene` PC golden, the
+  `hero_shot`/`record_gif` media tools and the editor's Level tab use the
+  platformer. The platformer:
   tilemap + AABB physics from `trino_core::{tilemap,collide}`
   (ASCII levels, zero-alloc parse, substepped collision — deterministic
   across targets, verified by unit tests and the console self-tests), coins,
   goal, camera with bounds, chiptune music loop + SFX. Music flows through
   the whole pipeline (`[music.*]` in the manifest → TSND on PC, wav64
-  `--wav-loop` on N64, looped ndsp wavebuf on 3DS). `hello-sprite` stays as
-  the minimal example (the hot-reload E2E builds it standalone).
-  README media: hero shot via `cargo test -p xtask --test hero_shot --
-  --ignored`; gameplay GIF (a bot plays the level on the real renderer) via
-  `cargo test -p xtask --test record_gif -- --ignored`.
+  `--wav-loop` on N64, looped ndsp wavebuf on 3DS). `hello-sprite` is
+  the minimal sprite example (the hot-reload E2E builds it standalone).
+  Platformer media (`docs/media/platformer.*`): `cargo test -p xtask --test
+  hero_shot|record_gif -- --ignored`. The README's hero GIF is castle64's
+  (`docs/media/castle64.gif`).
 - **castle64** (`examples/castle64`, the 3D showcase and the default game in
   all three `apps/*`): SM64-style hub + 3 platforming stages + throne room.
   Own 3D AABB physics (axis-resolved with a contact skin — `physics.rs`),
@@ -170,7 +178,7 @@ new skill when none fits. Then run `cargo xtask agents sync`. The steps are in
   Meshes outside the frustum are culled whole from a baked bounding sphere; a
   per-draw vertex cache transforms/lights shared vertices once (CPU cost is
   tracked by `xtask/tests/bench_tnl.rs`). Strict mode enforces
-  `max_tris_per_frame`. The platformer shows a spinning cube.
+  `max_tris_per_frame`. The (legacy) platformer shows a spinning cube.
   Triangles are clipped against the near plane + a 1.5x guard-band frustum
   (bounded coordinates — RDP fixed-point safe); in fogged, textured or translucent
   draws, edges spanning > 3 units of view depth are bisected (`split_policy`: opaque
@@ -191,13 +199,13 @@ new skill when none fits. Then run `cargo xtask agents sync`. The steps are in
   this repo: its own workspace, `game/` plus a `pc/` host on
   `trino-runner-pc`, starter assets and an AGENTS.md. The engine comes in as
   path or git deps (`templates/standalone/`; manifests are `*.tmpl` so
-  cargo's git scan ignores them). Console packaging of standalone games is
-  still done in this repo (BACKLOG P1). `release.yml` tags new
+  cargo's git scan ignores them). Its console builds use `trino.toml` and
+  need a local engine checkout (ADR 0008, below). `release.yml` tags new
   workspace versions on main and publishes editor binaries + demo
   `.z64`/`.3dsx` + SHA256SUMS.
 - **Editor two-way file sync** (`crates/editor/src/level_editor.rs` + the
-  file watcher in `main.rs`): the **Level** tab paints the platformer's
-  ASCII tilemap; every stroke saves immediately to
+  file watcher in `main.rs`): the **Level** tab (legacy, tied to the 2D
+  platformer) paints the platformer's ASCII tilemap; every stroke saves immediately to
   `examples/platformer/src/level1.txt`, and external writes to that file or
   to `scenes/*.scene.ron` (AI agents, other tools) reload live in the UI —
   the file is the source of truth, with an echo guard so the editor's own
@@ -443,7 +451,7 @@ Super, which the OS takes) are not bindable, so one press never does two things.
 | `crates/runner-pc` | Ready-made PC host (window, renderer, audio, asset bake) for standalone projects |
 | `crates/asset-pipeline` | Asset baking (sprites, audio, glTF → TMDL + skeleton, fake objects) + watching |
 | `apps/{pc,n64,3ds}` | Thin glue binaries; `apps/pc` also plays editor scenes (`TRINO_SCENE`) |
-| `examples/` | Games: `castle64` (3D, default), `platformer`, `showcase` (editor scene via codegen), `hello-sprite` |
+| `examples/` | Games: `castle64` (3D, default), `showcase` (editor scene via codegen); legacy 2D-only: `platformer`, `hello-sprite` |
 | `assets/` | Masters (`shared/`), per-platform overrides, `manifest.toml`, `materials/` |
 | `scenes/`, `prefabs/` | Authored content (text, hot-reloaded) |
 | `tools/blender/` | Blender Python helpers for the `blender-asset` skill |
@@ -452,6 +460,7 @@ Super, which the OS takes) are not bindable, so one press never does two things.
 | `templates/new-game/`, `templates/standalone/` | Scaffolds for `cargo xtask new` (in-repo crate / standalone project) |
 | `docker/` | Toolchain/emulator images: `n64/` (libdragon), `ares/` (headless ares for tests) |
 | `tests/golden/` | Golden images: `pc/` (renderer), `n64/` (ares framebuffer) |
+| `docs/` | `README.md` (index), guides `ARCHITECTURE.md`, `ASSETS.md`, `PLATFORMS.md`, `HARDWARE.md`; `TESTING.md` (feature → test matrix) |
 | `docs/adr/`, `docs/plans/` | Architecture decisions (0007: RSP T&L; 0009: platform-aware authoring); execution plans for big items; `docs/BACKLOG.md` ranked next steps |
 | `.github/workflows/` | `ci.yml`, `release.yml` |
 

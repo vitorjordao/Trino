@@ -131,6 +131,13 @@ shipping a 3D game first**, then by cost:
 13. **Palette in authored content** (S). `ModelParams::palette` is code-only today.
     Expose it in materials (`*.material.ron`), scene entities, TSCN (version bump),
     scene codegen and the editor inspector.
+14. **A redesigned 2D sprite and tile system** (L), for a future release. The 2D-only
+    examples from the first phases (`examples/hello-sprite`, `examples/platformer`)
+    are legacy: the engine's model is low-poly 3D with 2D drawn in the same pipeline
+    (sprites, text, `fill_rect`, billboards, impostors). The new system is designed on
+    top of that pipeline, under the same per-platform budgets. The legacy examples stay
+    until it replaces them: the hot-reload test builds `hello-sprite`, and a PC golden
+    and the editor's Level tab use `platformer`.
 
 ## Engineering hygiene (ongoing)
 

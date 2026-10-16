@@ -98,5 +98,5 @@ libctru/citro2d directly from Rust.
   in `cargo_build` (citro2d → citro3d → ctru → m).
 - Game code gating: consoles are `no_std` — the 3DS is
   `target_os = "horizon"`, the N64 is `target_os = "none"`; game crates gate
-  with `any(...)` (see `examples/hello-sprite/src/lib.rs`).
+  with `any(...)` (see `examples/castle64/src/lib.rs`).
 - Nightly missing: `rustup toolchain install nightly --component rust-src`.

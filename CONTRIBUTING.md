@@ -1,7 +1,9 @@
 # Contributing to Trino
 
-Thanks for your interest! The roadmap in `PLANO_EXECUCAO_TRINO.md` (Portuguese) and
-the current-state section of [AGENTS.md](AGENTS.md) tell you exactly what exists.
+Thanks for your interest! The current-state section of [AGENTS.md](AGENTS.md) tells you
+exactly what exists, [docs/BACKLOG.md](docs/BACKLOG.md) what comes next, and
+[docs/README.md](docs/README.md) indexes the guides. The `PLANO_*.md` files (Portuguese)
+are the historical plans the engine was first built from.
 
 ## Getting set up
 
@@ -21,7 +23,8 @@ the current-state section of [AGENTS.md](AGENTS.md) tell you exactly what exists
   `cargo xtask emulators setup ares` + `TRINO_ARES=docker` for the headless
   image CI uses); `cargo xtask test n64` drives it automatically, including the
   pixel-exact golden frame (`--bless` to update `tests/golden/n64/`).
-- Real hardware (optional): a flashcart (SummerCart64 / EverDrive) + UNFLoader.
+- Real hardware (optional): a SummerCart64 (sc64deployer) or an EverDrive 64
+  (UNFLoader); see [docs/HARDWARE.md](docs/HARDWARE.md).
 
 ### 3DS
 

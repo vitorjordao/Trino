@@ -1,6 +1,7 @@
-//! Records the README gameplay GIF: the real platformer with real baked
-//! assets, N64 look, played by a tiny scripted bot (runs right, jumps over
-//! pits and walls, collects coins). Dev utility (needs a GPU), `#[ignore]`d:
+//! Records the platformer gameplay GIF (the legacy 2D example): the real
+//! platformer with real baked assets, N64 look, played by a tiny scripted
+//! bot (runs right, jumps over pits and walls, collects coins). Dev
+//! utility (needs a GPU), `#[ignore]`d:
 //!
 //! ```sh
 //! cargo test -p xtask --test record_gif -- --ignored

@@ -1,6 +1,13 @@
-//! Trino's showcase platformer: run, jump, collect the coins, reach the
-//! flag. One codebase, three consoles — this crate is the Fase 6 proof that
-//! the engine's contracts carry a real game.
+//! A 2D tilemap platformer: run, jump, collect the coins, reach the flag.
+//! One codebase, three consoles — this crate was the Fase 6 proof that the
+//! engine's contracts carry a real game.
+//!
+//! **Legacy.** It comes from the engine's first, 2D-only phase and is not the
+//! model for new games: the engine is a low-poly 3D pipeline with 2D drawn
+//! inside it (see `castle64`, and `cargo xtask new` for a new game). It stays
+//! because a PC golden test (`platformer_scene_matches_golden`), the
+//! `hero_shot`/`record_gif` media tools and the editor's Level tab use it. A redesigned 2D sprite and
+//! tile system is planned for a future release (`docs/BACKLOG.md`).
 //!
 //! Everything platform-specific is behind `trino_core` traits; the level is
 //! plain ASCII (`level1.txt`) parsed by `trino_core::tilemap` with zero

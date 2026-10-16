@@ -136,11 +136,11 @@ fn bot(g: &SolidElevenGame, s: usize, frame: u32) -> InputState {
                 input.set(Button::R, true);
                 if m.owner.is_some_and(|o| (o as usize) / SIDE != s)
                     && (ball - me).len().to_f32() < 1.6
-                    && frame % 12 == 0
+                    && frame.is_multiple_of(12)
                 {
                     input.set(Button::A, true);
                 }
-                if (ball - me).len().to_f32() > 18.0 && frame % 40 == 0 {
+                if (ball - me).len().to_f32() > 18.0 && frame.is_multiple_of(40) {
                     input.set(Button::L, true);
                 }
             }

@@ -1084,14 +1084,10 @@ pub enum RspReject {
     /// More vertex segments than the overlay takes.
     TooManySegments,
     // The draw.
-    /// A colored (non-white) light.
-    ColoredLight,
     Fog,
     /// A tint with alpha below 255.
     Translucent,
-    Emissive,
     Textured,
-    DoubleSided,
     /// A palette on a mesh with color slots.
     Palette,
     /// No bounding sphere.
@@ -1128,12 +1124,9 @@ impl RspReject {
             RspReject::Empty => "empty mesh",
             RspReject::TooLarge => "mesh too large",
             RspReject::TooManySegments => "too many segments",
-            RspReject::ColoredLight => "colored light",
             RspReject::Fog => "fog",
             RspReject::Translucent => "translucent tint",
-            RspReject::Emissive => "emissive",
             RspReject::Textured => "texture",
-            RspReject::DoubleSided => "double-sided",
             RspReject::Palette => "palette",
             RspReject::NoBounds => "no bounds",
             RspReject::Offscreen => "off screen",
@@ -1187,14 +1180,26 @@ pub struct RspDraw {
     pub light: Vec3,
     /// Ambient term (1.0 for `Unlit`).
     pub ambient: f32,
-    /// Back-face culling (always on: double-sided draws stay on the CPU).
+    /// Back-face culling (off for double-sided draws: the overlay then
+    /// draws back faces with the front faces' lighting, like the CPU path).
     pub cull_back: bool,
+}
+
+/// The per-channel lighting of an RSP draw ([`rsp_color`]): a vertex's
+/// color is `color · tint · (ambient + diffuse · max(0, n · l))`, then
+/// `+ emissive`, saturating — [`tessellate`]'s formula.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct RspColor {
+    pub ambient: [f32; 3],
+    pub diffuse: [f32; 3],
+    pub emissive: [u8; 3],
 }
 
 /// Whether the N64 backend may send this draw to its RSP overlay
 /// (`crates/platform-n64/shim/rsp_trino.S`) instead of [`tessellate`]: the
-/// overlay has no clipping, splitting, fog, colored light, emissive, flat
-/// shading or textures, so the draw must need none of them. Its whole
+/// overlay has no clipping, splitting, fog, flat shading or textures, so the
+/// draw must need none of them (colored lights, emissive and double-sided
+/// draws it does). Its whole
 /// bounding sphere must be inside the guard-band frustum and past the near
 /// plane, so no triangle could have been clipped. A palette on a mesh with
 /// color slots stays on the CPU too (the overlay draws baked colors). Only for meshes
@@ -1319,24 +1324,14 @@ pub fn rsp_check_mv(
     mv: &Mat34,
     params: &ModelParams,
 ) -> Result<RspDraw, RspReject> {
-    if !ctx.white {
-        return Err(RspReject::ColoredLight);
-    }
     if ctx.fog_on {
         return Err(RspReject::Fog);
     }
     if params.tint.a < 255 {
         return Err(RspReject::Translucent);
     }
-    if params.emissive.r | params.emissive.g | params.emissive.b != 0 {
-        return Err(RspReject::Emissive);
-    }
     if params.texture.is_some() {
         return Err(RspReject::Textured);
-    }
-    // Back faces through the overlay were never verified: CPU path.
-    if params.double_sided {
-        return Err(RspReject::DoubleSided);
     }
     // The overlay reads baked vertex colors only.
     if params.palette.is_some() && mesh.has_slots() {
@@ -1356,7 +1351,7 @@ pub fn rsp_check_mv(
     if smax >= RSP_MAX_SCALE * RSP_MAX_SCALE {
         return Err(RspReject::TooScaled);
     }
-    let cull_back = true;
+    let cull_back = !params.double_sided;
     match params.shading {
         Shading::Unlit => Ok(RspDraw {
             light: Vec3::ZERO,
@@ -1371,6 +1366,40 @@ pub fn rsp_check_mv(
         }),
         Shading::Flat => Err(RspReject::Flat),
     }
+}
+
+/// The per-channel terms an RSP draw ([`rsp_check`] accepted it) needs
+/// under a colored or dimmed light or with an emissive color; `None` for
+/// the common white, non-emissive draw, which one light intensity
+/// (`RspDraw::ambient`) describes. Apart from `rsp_check` on purpose: the
+/// N64's hot path and its `RspDraw` stay exactly what they were (their
+/// size and code layout move whole scenes, measured).
+#[inline]
+pub fn rsp_color(ctx: &TnlContext, params: &ModelParams) -> Option<RspColor> {
+    let e = params.emissive;
+    if e.r | e.g | e.b == 0 && (ctx.white || params.shading == Shading::Unlit) {
+        return None;
+    }
+    rsp_color_terms(ctx, params)
+}
+
+#[cold]
+#[inline(never)]
+fn rsp_color_terms(ctx: &TnlContext, params: &ModelParams) -> Option<RspColor> {
+    let e = params.emissive;
+    let a = ctx.light.ambient;
+    Some(match params.shading {
+        Shading::Unlit => RspColor {
+            ambient: [1.0; 3],
+            diffuse: [0.0; 3],
+            emissive: [e.r, e.g, e.b],
+        },
+        _ => RspColor {
+            ambient: core::array::from_fn(|i| a * ctx.ac[i]),
+            diffuse: core::array::from_fn(|i| (1.0 - a) * ctx.lc[i]),
+            emissive: [e.r, e.g, e.b],
+        },
+    })
 }
 
 impl TnlContext {
@@ -2604,13 +2633,42 @@ mod tests {
                 ..plain
             },
             ModelParams::tinted(Color::rgba(255, 255, 255, 200)),
-            ModelParams {
-                emissive: Color::rgb(20, 0, 0),
-                ..plain
-            },
         ] {
             assert!(rsp_eligible(&ctx, &cube, &at(0.0), &p).is_none(), "{p:?}");
         }
+        // Emissive and colored light: per-channel terms, white light without
+        // emissive: none (the overlay's single-intensity command).
+        assert!(rsp_eligible(&ctx, &cube, &at(0.0), &plain).is_some());
+        assert_eq!(rsp_color(&ctx, &plain), None);
+        let glow = ModelParams {
+            emissive: Color::rgb(20, 0, 0),
+            ..plain
+        };
+        assert!(rsp_eligible(&ctx, &cube, &at(0.0), &glow).is_some());
+        let c = rsp_color(&ctx, &glow).unwrap();
+        assert_eq!(c.emissive, [20, 0, 0]);
+        assert_eq!(c.ambient, [DEFAULT_LIGHT.ambient; 3]);
+        let warm = Light {
+            color: Color::rgb(255, 150, 70),
+            ..DEFAULT_LIGHT
+        };
+        let warm_ctx = TnlContext::new(&Camera3::default(), &warm, screen);
+        assert!(rsp_eligible(&warm_ctx, &cube, &at(0.0), &plain).is_some());
+        let c = rsp_color(&warm_ctx, &plain).unwrap();
+        assert!(
+            c.diffuse[0] > c.diffuse[1] && c.diffuse[1] > c.diffuse[2],
+            "{c:?}"
+        );
+        let unlit_warm = ModelParams {
+            shading: Shading::Unlit,
+            ..plain
+        };
+        assert!(rsp_eligible(&warm_ctx, &cube, &at(0.0), &unlit_warm).is_some());
+        assert_eq!(
+            rsp_color(&warm_ctx, &unlit_warm),
+            None,
+            "unlit draws ignore the light's color"
+        );
         let fog = Light {
             fog: Fog {
                 color: Color::BLACK,
@@ -2629,12 +2687,16 @@ mod tests {
             Vec3::new(0.0, 0.0, 30_000.0),
         );
         assert!(rsp_eligible(&ctx, &cube, &huge, &plain).is_none());
-        // Back faces through the overlay are unverified: CPU path.
+        // Double-sided: the overlay draws back faces (no cull).
         let both = ModelParams {
             double_sided: true,
             ..plain
         };
-        assert!(rsp_eligible(&ctx, &cube, &at(0.0), &both).is_none());
+        assert!(
+            !rsp_eligible(&ctx, &cube, &at(0.0), &both)
+                .unwrap()
+                .cull_back
+        );
         // Unlit: no light, full ambient.
         let u = ModelParams {
             shading: Shading::Unlit,

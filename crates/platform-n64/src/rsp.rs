@@ -9,7 +9,9 @@ use alloc::vec::Vec;
 use core::ffi::c_void;
 
 use trino_core::math3d::to_i32;
-use trino_core::render3d::{Mesh, NEAR_PLANE, RSP_MAX_SEGS, RspDraw, TnlContext, rsp_split};
+use trino_core::render3d::{
+    Mesh, NEAR_PLANE, RSP_MAX_SEGS, RspColor, RspDraw, TnlContext, rsp_split,
+};
 use trino_core::{Color, Mat34, Vec3};
 
 use crate::ffi;
@@ -18,6 +20,13 @@ use crate::ffi;
 const VTX_IN: usize = 32;
 /// Words of the draw command (overlay `DRAW_CMD_SIZE` / 4).
 pub const DRAW_WORDS: usize = 27;
+/// Words the colored overlay's draw command adds (its `DRAW_CMD_SIZE` / 4 -
+/// `DRAW_WORDS`): a pad, then the ambient, diffuse and emissive vectors.
+pub const COLOR_WORDS: usize = 7;
+/// Bit in a queued draw command's word 0 (above the overlay's cull byte):
+/// the draw goes out through the colored overlay, with its
+/// [`color_words`] in the next queue entry. The shim drops it.
+pub const COLORED: u32 = 0x100;
 
 /// A mesh's RSP copy: its segment table in uncached RDRAM.
 pub struct RspMesh {
@@ -217,4 +226,33 @@ pub fn draw_words(
     w[25] = pair(t(tint.a), 0);
     w[26] = debug_phys;
     w
+}
+
+/// [`color_words`] in a queue entry (the renderer queues it right after
+/// the command).
+#[cold]
+#[inline(never)]
+pub fn color_entry(c: &RspColor) -> [u32; DRAW_WORDS] {
+    let mut e = [0u32; DRAW_WORDS];
+    e[..COLOR_WORDS].copy_from_slice(&color_words(c));
+    e
+}
+
+/// The colored overlay's extra words (its `DRAW` +0x6C..0x88): the
+/// per-channel ambient and diffuse terms (s0.15) and the emissive color
+/// in the overlay's `luv` layout (a byte << 7), each `r, g, b, 0`.
+#[cold]
+#[inline(never)]
+pub fn color_words(c: &RspColor) -> [u32; COLOR_WORDS] {
+    let pair = |a: i16, b: i16| ((a as u16 as u32) << 16) | b as u16 as u32;
+    let e = |i: usize| ((c.emissive[i] as u16) << 7) as i16;
+    [
+        0,
+        pair(s015(c.ambient[0]), s015(c.ambient[1])),
+        pair(s015(c.ambient[2]), 0),
+        pair(s015(c.diffuse[0]), s015(c.diffuse[1])),
+        pair(s015(c.diffuse[2]), 0),
+        pair(e(0), e(1)),
+        pair(e(2), 0),
+    ]
 }

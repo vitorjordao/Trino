@@ -45,6 +45,9 @@ pub struct FrameReport {
     pub submit_us: u32,
     pub sprites_us: u32,
     pub end_us: u32,
+    /// Per frame: the part of `end_us` the CPU waited for the RSP and RDP
+    /// to finish the frame (high: the frame is bound by them).
+    pub drain_us: u32,
     /// Per frame: model draws sent to the RSP overlay vs all model draws
     /// that reached the T&L (culled ones included).
     pub rsp_draws: u32,
@@ -113,7 +116,7 @@ impl N64Host {
     ) -> FrameReport {
         let mut total: u64 = 0;
         let mut max = 0u32;
-        let mut sums = [0u64; 10];
+        let mut sums = [0u64; 11];
         let v0 = runtime::vblanks();
         let mut models: [ModelCost; 48] = [ModelCost::default(); 48];
         let mut n_models = 0usize;
@@ -126,6 +129,7 @@ impl N64Host {
             game.render(&mut self.renderer);
             self.audio.poll();
             let spent = runtime::now_us().wrapping_sub(t0);
+            sums[10] += crate::renderer::take_drain_us() as u64;
             sums[9] += trino_core::Renderer::stats(&self.renderer).sprites as u64;
             let p = self.renderer.take_profile();
             let wait = p.as_ref().map_or(0, |p| p.stages.begin);
@@ -149,6 +153,7 @@ impl N64Host {
                     + p.other.calls;
                 sums[7] += draws as u64;
                 sums[8] += p.tnl.culled as u64;
+
                 for m in &p.models[..p.model_count] {
                     match models[..n_models].iter().position(|x| x.model == m.model) {
                         Some(i) => {
@@ -186,6 +191,7 @@ impl N64Host {
             submit_us: (sums[3] / n) as u32,
             sprites_us: (sums[4] / n) as u32,
             end_us: (sums[5] / n) as u32,
+            drain_us: (sums[10] / n) as u32,
             rsp_draws: (sums[6] / n) as u32,
             draws: (sums[7] / n) as u32,
             culled: (sums[8] / n) as u32,
@@ -198,7 +204,8 @@ impl N64Host {
     pub fn report_frames(&self, scene: &str, r: &FrameReport) {
         runtime::log(&format!(
             "TRINO_FRAME:{scene} avg_us={} max_us={} frames={} update={} tnl={} sort={} \
-             submit={} sprites={} end={} draws={} rsp={} culled={} draws2d={} vblanks={} fps={}\n",
+             submit={} sprites={} end={} drain={} draws={} rsp={} culled={} draws2d={} vblanks={} \
+             fps={}\n",
             r.avg_us,
             r.max_us,
             r.frames,
@@ -208,6 +215,7 @@ impl N64Host {
             r.submit_us,
             r.sprites_us,
             r.end_us,
+            r.drain_us,
             r.draws,
             r.rsp_draws,
             r.culled,

@@ -10,6 +10,14 @@
 # RDPQ_Triangle_Send_Async (rsp_rdpq_tri.inc), the same RDP triangle setup
 # the CPU path's rdpq_triangle runs.
 #
+# Assembled twice (xtask `compile_shim`): as is, rsp_trino, with one light
+# intensity (ambient + (1 - ambient) * n.l); with TRINO_COLORED defined,
+# rsp_trino_color, for a colored or dimmed light or an emissive draw:
+# per-channel ambient and diffuse terms and an emissive add. A second
+# overlay, not a second command: rspq reloads an overlay's code on every
+# switch to it, and the colored loop in the same overlay made every
+# white-light frame pay for the bigger code (measured in ares, 2026-10-16).
+#
 # Mesh data (built once by the CPU at register, see the N64 renderer) is a
 # table of segments of at most SEG_VERTS vertices; each segment is one
 # DMA: its 32-byte vertices, then 3 local u8 indices per triangle.
@@ -30,7 +38,11 @@
 #define VTX_IN_SIZE     32
 #define VTX_OUT_SIZE    24
 #define MAX_SEGS        16
+#ifdef TRINO_COLORED
+#define DRAW_CMD_SIZE   0x88    // + the per-channel terms, see DRAW
+#else
 #define DRAW_CMD_SIZE   0x6C
+#endif
 #define TRI_SLOT        0xB0    // RDPQ_CMD_STAGING's size: the routine writes up to it
 
     .data
@@ -41,7 +53,11 @@
     RSPQ_EndOverlayHeader
 
     .align 4
+#ifdef TRINO_COLORED
+BANNER: .ascii "Trino RSP T&L c "
+#else
 BANNER: .ascii "Trino RSP T&L   "
+#endif
 
     RSPQ_EmptySavedState
 
@@ -81,8 +97,16 @@ TEST_VTX:
     #   +0x50 light (s0.15, model space, toward the light) x, y, z, 0
     #   +0x58 tint r, g, b, 0 (s0.15)  +0x60 ambient, 1 - ambient, tint a, 0
     #   +0x68 debug: RDRAM address for segment 0's screen vertices (0 = off)
+#ifdef TRINO_COLORED
+    #   +0x6C unused
+    #   +0x70 ambient r, g, b, 0   +0x78 diffuse r, g, b, 0 (s0.15)
+    #   +0x80 emissive r, g, b, 0 (u8 << 7, the luv layout)
+    .align 4
+DRAW:           .ds.b 0x90
+#else
     .align 4
 DRAW:           .ds.b 0x70
+#endif
     .align 4
 SEG_TABLE:      .ds.b MAX_SEGS * 16
     .align 4
@@ -180,6 +204,14 @@ draw_segment:
     #define vcol  $v13
     #define vtmp  $v14
     #define vta   $v15
+#ifdef TRINO_COLORED
+    // The per-channel light terms, reloaded per vertex from DRAW into
+    // registers the screen math is done with.
+    #define vdiff $v02
+    #define vambc $v03
+    #define vemis $v04
+    #define dptr  t5
+#endif
 
     li t0, %lo(DRAW)
     ldv vm0i.e0, 0x10, t0
@@ -203,6 +235,9 @@ draw_segment:
     lhu count, 6(seg_ptr)
     li src, %lo(VTX_IN)
     li dst, %lo(VTX_OUT)
+#ifdef TRINO_COLORED
+    li dptr, %lo(DRAW)
+#endif
 
 transform_vertex:
     ldv vpos.e0, 0, src
@@ -246,6 +281,31 @@ transform_vertex:
     vsub vtmp, vvs, vtmp.e3
     vmov vs_i.e2, vtmp.e2
     sdv vs_i.e0, 0, dst             # X, Y, Z (+ W in the flag bytes)
+#ifdef TRINO_COLORED
+    # The screen math is done: its registers take the per-channel terms.
+    ldv vdiff.e0, 0x78, dptr
+    li t0, 0x003F                   # no clip flags, inside every plane
+    sh t0, 6(dst)
+    ldv vambc.e0, 0x70, dptr
+    sw zero, 16(dst)                # W, 1/W unused (untextured)
+    sw zero, 20(dst)
+    ldv vemis.e0, 0x80, dptr
+
+    # Light, per channel: k = ambient + diffuse * max(0, n . l).
+    ldv vn.e0, 16, src
+    vmulf vp, vn, vlight
+    vadd vd, vp, vp.e1
+    vadd vd, vd, vp.e2
+    vge vd, vd, vzero
+    vmulf vk, vdiff, vd.e0
+    vadd vk, vk, vambc
+    vmulf vkt, vtint, vk
+    vadd vkt, vkt, vta
+    luv vcol.e0, 24, src
+    vmulf vcol, vcol, vkt
+    vadd vcol, vcol, vemis          # emissive, saturating
+    suv vcol.e0, 8, dst             # RGBA (+ 4 junk bytes over S/T)
+#else
     li t0, 0x003F                   # no clip flags, inside every plane
     sh t0, 6(dst)
     sw zero, 16(dst)                # W, 1/W unused (untextured)
@@ -264,6 +324,7 @@ transform_vertex:
     luv vcol.e0, 24, src
     vmulf vcol, vcol, vkt
     suv vcol.e0, 8, dst             # RGBA (+ 4 junk bytes over S/T)
+#endif
 
     addiu count, -1
     addiu src, VTX_IN_SIZE

@@ -24,7 +24,7 @@ extern crate alloc;
 
 use alloc::string::String;
 use alloc::vec::Vec;
-use trino_core::render3d::{Camera3, DEFAULT_LIGHT, TMDL_MAGIC};
+use trino_core::render3d::{Camera3, DEFAULT_LIGHT, Light, TMDL_MAGIC};
 use trino_core::{
     Color, Mat34, Material, ModelId, ModelParams, Renderer, Shading, Transform3, Vec3,
 };
@@ -225,6 +225,36 @@ fn setup(r: &mut N64Renderer) {
     r.set_light(&DEFAULT_LIGHT);
 }
 
+/// A warm key light over a blue ambient: the colored command's case.
+const WARM: Light = Light {
+    color: Color::rgb(255, 150, 70),
+    ambient_color: Color::rgb(90, 110, 200),
+    ..DEFAULT_LIGHT
+};
+
+/// A glowing tint under [`WARM`].
+const GLOW: ModelParams = ModelParams {
+    emissive: Color::rgb(40, 0, 90),
+    tint: Color::rgb(230, 255, 200),
+    ..ModelParams::DEFAULT
+};
+
+/// The grid turned to show its back (half a turn about Y), drawn
+/// double-sided.
+fn back_of_grid() -> (Mat34, ModelParams) {
+    let m = Transform3 {
+        position: Vec3::new(0.0, 0.0, 4.0),
+        rotation: Vec3::new(0.0, core::f32::consts::PI, 0.0),
+        ..Transform3::default()
+    }
+    .matrix();
+    let p = ModelParams {
+        double_sided: true,
+        ..ModelParams::DEFAULT
+    };
+    (m, p)
+}
+
 /// The RSP overlay against the CPU path: screen vertices (oracle), then the
 /// pixels of the same frame drawn both ways.
 fn rsp_checks(r: &mut N64Renderer) {
@@ -256,9 +286,47 @@ fn rsp_checks(r: &mut N64Renderer) {
             Err(m) => runtime::log(&alloc::format!("TRINO_TEST_FAIL:rsp oracle {what}: {m}\n")),
         }
     }
+    // The colored command (warm light, emissive), and a back face.
+    r.set_light(&WARM);
+    let colored = r.rsp_oracle(GRID, &grid, &GLOW);
+    setup(r);
+    let (back, both) = back_of_grid();
+    let flipped = r.rsp_oracle(GRID, &back, &both);
+    for (what, res) in [
+        ("colored emissive", colored),
+        ("double-sided back", flipped),
+    ] {
+        match res {
+            Ok(m) => runtime::log(&alloc::format!("TRINO_RSP:oracle {what}: {m}\n")),
+            Err(m) => runtime::log(&alloc::format!("TRINO_TEST_FAIL:rsp oracle {what}: {m}\n")),
+        }
+    }
+    pixel_check(r, "gouraud", &|r| {
+        render(r, Set::Grid(GRID, Shading::Gouraud))
+    });
+    pixel_check(r, "colored emissive", &|r| {
+        r.begin_frame(Color::BLACK);
+        setup(r);
+        r.set_light(&WARM);
+        r.draw_model_matrix(GRID, &grid, Material::VertexLit, &GLOW);
+        r.end_frame();
+    });
+    pixel_check(r, "double-sided back", &|r| {
+        r.begin_frame(Color::BLACK);
+        setup(r);
+        r.draw_model_matrix(GRID, &back, Material::VertexLit, &both);
+        r.end_frame();
+    });
+    setup(r);
+}
+
+/// The frame `draw` makes, through the CPU path and through the RSP: a
+/// 12×12 sample of the grid's pixels must agree (a tenth may differ by more
+/// than 24 on edges), and the RSP frame must not be empty.
+fn pixel_check(r: &mut N64Renderer, what: &str, draw: &dyn Fn(&mut N64Renderer)) {
     let sample = |r: &mut N64Renderer, rsp: bool| {
         r.set_rsp(rsp);
-        render(r, Set::Grid(GRID, Shading::Gouraud));
+        draw(r);
         let mut px = Vec::new();
         for y in 0..12 {
             for x in 0..12 {
@@ -286,6 +354,7 @@ fn rsp_checks(r: &mut N64Renderer) {
             map.push('|');
         }
     }
+    r.set_rsp(true);
     let msg = alloc::format!(
         "{} pixels, mean diff {:.2}/255, {far} far (cpu {:?} rsp {:?})",
         cpu.len(),
@@ -293,11 +362,14 @@ fn rsp_checks(r: &mut N64Renderer) {
         cpu[66],
         rsp[66]
     );
-    if far > cpu.len() as u32 / 10 {
-        runtime::log(&alloc::format!("TRINO_RSP:pixel map {map}\n"));
-        runtime::log(&alloc::format!("TRINO_TEST_FAIL:rsp pixels: {msg}\n"));
+    let blank = rsp.iter().all(|c| c.r | c.g | c.b == 0);
+    if far > cpu.len() as u32 / 10 || blank {
+        runtime::log(&alloc::format!("TRINO_RSP:pixel map {what} {map}\n"));
+        runtime::log(&alloc::format!(
+            "TRINO_TEST_FAIL:rsp pixels {what}: {msg}\n"
+        ));
     } else {
-        runtime::log(&alloc::format!("TRINO_RSP:pixels {msg}\n"));
+        runtime::log(&alloc::format!("TRINO_RSP:pixels {what}: {msg}\n"));
     }
 }
 

@@ -36,6 +36,8 @@ mod audio;
 mod host;
 #[cfg(target_os = "horizon")]
 mod input;
+#[cfg(any(target_os = "horizon", test))]
+mod pad;
 #[cfg(target_os = "horizon")]
 mod renderer;
 #[cfg(target_os = "horizon")]

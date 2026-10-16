@@ -371,6 +371,103 @@ fn rebinding_keys_through_the_platform() {
     assert_eq!(p.binding_label(Button::B, BindDevice::Keyboard), Some("X"));
 }
 
+/// `.input` files written before L2/R2/L3/R3 existed (twelve lines) still
+/// parse to the same twelve bindings; the four new buttons get their
+/// defaults, minus any key or pad button the file moved to another button.
+/// New files carry sixteen lines and round-trip.
+#[test]
+fn old_bindings_files_still_parse() {
+    use trino_core::{BindDevice, Button};
+    use trino_platform_pc::input::{
+        BINDABLE, Bindings, PadButton as P, bindings_from_text, bindings_to_text,
+    };
+    use winit::keyboard::KeyCode;
+
+    // Exactly what the twelve-button engine wrote for the defaults.
+    const OLD_DEFAULT: &str = "A = Z | South
+B = X | East
+X = C | West
+Y = V | North
+L = Q | LeftTrigger LeftTrigger2
+R = E | RightTrigger RightTrigger2
+Start = ENTER | Start Mode
+Select = RSHIFT | Select LeftThumb
+DpadUp = UP | DPadUp
+DpadDown = DOWN | DPadDown
+DpadLeft = LEFT | DPadLeft
+DpadRight = RIGHT | DPadRight
+";
+    let d = Bindings::default();
+    assert_eq!(bindings_from_text(OLD_DEFAULT), d);
+    // The defaults' first twelve lines are still the old text, byte for byte.
+    let new_text = bindings_to_text(&d);
+    assert!(new_text.starts_with(OLD_DEFAULT), "{new_text}");
+    assert_eq!(new_text.lines().count(), BINDABLE.len());
+    assert!(new_text.ends_with(
+        "L2 = - | LeftTrigger2\nR2 = - | RightTrigger2\nL3 = - | LeftThumb\nR3 = - | RightThumb\n"
+    ));
+
+    // A rebound old file: A on K and on LT, Y unbound, Select on the right
+    // stick click.
+    const OLD_REBOUND: &str = "A = K | LeftTrigger2
+B = X | East
+X = C | West
+Y = - | -
+L = Q | LeftTrigger
+R = E | RightTrigger RightTrigger2
+Start = ENTER | Start Mode
+Select = RSHIFT | RightThumb
+DpadUp = UP | DPadUp
+DpadDown = DOWN | DPadDown
+DpadLeft = LEFT | DPadLeft
+DpadRight = RIGHT | DPadRight
+";
+    let b = bindings_from_text(OLD_REBOUND);
+    let slot = |button: Button| BINDABLE.iter().position(|x| *x == button).unwrap();
+    assert_eq!(b.keys[slot(Button::A)], Some(KeyCode::KeyK));
+    assert_eq!(b.pad[slot(Button::A)], [Some(P::LeftTrigger2), None]);
+    assert_eq!(b.keys[slot(Button::Y)], None);
+    assert_eq!(b.pad[slot(Button::Y)], [None, None]);
+    assert_eq!(b.pad[slot(Button::L)], [Some(P::LeftTrigger), None]);
+    assert_eq!(b.pad[slot(Button::Select)], [Some(P::RightThumb), None]);
+    let changed = [Button::A, Button::Y, Button::L, Button::Select];
+    for (i, button) in BINDABLE[..12].iter().enumerate() {
+        if !changed.contains(button) {
+            assert_eq!((b.keys[i], b.pad[i]), (d.keys[i], d.pad[i]), "{button:?}");
+        }
+    }
+    // LT went to A and RS to Select: L2 and R3 don't get them back. R2
+    // keeps RT (R still shares it, as by default); L3 keeps LS (Select
+    // gave it up, nobody took it).
+    assert_eq!(b.pad[slot(Button::L2)], [None, None]);
+    assert_eq!(b.pad[slot(Button::R2)], [Some(P::RightTrigger2), None]);
+    assert_eq!(b.pad[slot(Button::L3)], [Some(P::LeftThumb), None]);
+    assert_eq!(b.pad[slot(Button::R3)], [None, None]);
+    assert_eq!(b.label(Button::L2, BindDevice::Keyboard), None);
+
+    // New buttons and new keys bind and persist.
+    let mut b = d;
+    b.bind_key(Button::L2, KeyCode::Backquote);
+    b.bind_key(Button::R3, KeyCode::KeyF);
+    b.bind_key(Button::Start, KeyCode::F12);
+    b.bind_pad(Button::L3, P::North);
+    let text = bindings_to_text(&b);
+    assert!(text.contains("L2 = ` | LeftTrigger2\n"), "{text}");
+    assert!(text.contains("R3 = F | RightThumb\n"), "{text}");
+    assert!(text.contains("Start = F12 | Start Mode\n"), "{text}");
+    assert!(text.contains("L3 = - | North\n"), "{text}");
+    assert!(text.contains("Y = V | -\n"), "North left Y: {text}");
+    assert_eq!(bindings_from_text(&text), b);
+    assert_eq!(
+        b.label(Button::L2, BindDevice::Keyboard).as_deref(),
+        Some("`")
+    );
+    assert_eq!(
+        b.label(Button::L3, BindDevice::Gamepad).as_deref(),
+        Some("Y")
+    );
+}
+
 /// A pad rebind takes the next pad button (here fed directly: no pad on a
 /// test runner); the pad button leaves the button that had it.
 #[test]

@@ -29,7 +29,9 @@
 /// Version handshake between host and game dylib. Bump on ANY change to the
 /// exported function signatures or to types crossing the boundary.
 /// 3: `InputState` gained the pointer (`pointer`, pointer buttons, `wheel`).
-pub const GAME_API_VERSION: u32 = 3;
+/// 4: `InputState` gained the full keyboard (`keys` is a 128-bit `KeySet`),
+/// `right_stick`, `triggers` and the L2/R2/L3/R3 buttons (a `u32` mask).
+pub const GAME_API_VERSION: u32 = 4;
 
 /// Generates the hot-reload exports for a game state type implementing
 /// `trino_core::Game`:

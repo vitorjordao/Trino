@@ -596,6 +596,29 @@ pub const WATER: trino_core::SoundId = trino_core::SoundId::from_path("sounds/wa
 /// A stinger track (`[music.fanfare]`).
 pub const FANFARE: trino_core::MusicId = trino_core::MusicId::from_path("music/fanfare");
 
+/// The backend's input with nothing pressed (the emulator harnesses press
+/// nothing): no button, key, right stick or trigger. On consoles this runs
+/// the shims' reads (the N64's C-button bits, the 3DS's ZL/ZR and C-stick),
+/// so a bit packed into the wrong place fails here.
+pub fn idle_input_checks(input: &mut dyn trino_core::Input) -> Result<(), &'static str> {
+    for _ in 0..3 {
+        let s = input.poll();
+        if s.any_button() {
+            return Err("input: a button reads held with nothing pressed");
+        }
+        if !s.keys.is_empty() {
+            return Err("input: a key reads held with nothing pressed");
+        }
+        if s.right_stick != Vec2::ZERO {
+            return Err("input: the right stick is off center with nothing pressed");
+        }
+        if s.triggers != Vec2::ZERO {
+            return Err("input: a trigger reads pulled with nothing pressed");
+        }
+    }
+    Ok(())
+}
+
 /// Audio v2 through the real backend: a steerable looping voice (start,
 /// steer, stop) and a stinger over the music.
 pub fn audio_checks(audio: &mut dyn trino_core::Audio) -> Result<(), &'static str> {

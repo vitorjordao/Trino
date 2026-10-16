@@ -82,6 +82,7 @@ unsafe extern "C" {
     /// Test hook: print the last framebuffer over ISViewer (golden images).
     pub fn trino_debug_fb_dump();
 
+    /// Bits 0..11 = `Button` discriminants; 16..19 = C-up, C-down, C-left, C-right.
     pub fn trino_joypad_buttons() -> u32;
     /// (x as i16 as u16) << 16 | (y as i16 as u16).
     pub fn trino_joypad_stick() -> u32;

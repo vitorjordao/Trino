@@ -1,7 +1,8 @@
 //! Keyboard + mouse + gamepad input backend. Gamepads come through gilrs
 //! with the `gamepad` feature (Xbox-style layout: A/B/X/Y = South/East/
-//! West/North, L/R = bumpers or triggers, the left stick and the D-pad);
-//! every connected pad is merged with the keyboard.
+//! West/North, L/R = bumpers or triggers, L2/R2 = triggers, L3/R3 = stick
+//! clicks, both sticks, the analog triggers and the D-pad); every connected
+//! pad is merged with the keyboard ([`PcInput::merge_pad`]).
 //!
 //! The mouse is the [`InputState::pointer`]: the host converts window
 //! pixels to game pixels ([`crate::PcRenderer::window_to_game`]) and feeds
@@ -11,27 +12,32 @@
 //!
 //! Default mapping (chosen to avoid key overlaps):
 //!
-//! | Trino    | Key         |
-//! |----------|-------------|
-//! | A / B    | Z / X       |
-//! | X / Y    | C / V       |
-//! | L / R    | Q / E       |
-//! | Start    | Enter       |
-//! | Select   | Right Shift |
-//! | D-pad    | Arrows      |
-//! | Stick    | WASD        |
+//! | Trino     | Key         | Gamepad         |
+//! |-----------|-------------|-----------------|
+//! | A / B     | Z / X       | A / B           |
+//! | X / Y     | C / V       | X / Y           |
+//! | L / R     | Q / E       | LB, LT / RB, RT |
+//! | L2 / R2   | (none)      | LT / RT         |
+//! | L3 / R3   | (none)      | LS / RS         |
+//! | Start     | Enter       | START, GUIDE    |
+//! | Select    | Right Shift | BACK, LS        |
+//! | D-pad     | Arrows      | D-pad           |
+//! | Stick     | WASD        | Left stick      |
+//!
+//! `right_stick` is the pad's right stick; `triggers` the pad's analog
+//! triggers, or 1.0 while a key bound to L2/R2 is held.
 //!
 //! The console buttons can be **rebound** (keyboard and gamepad separately):
 //! [`Bindings`] holds the table, [`PcInput::apply`] starts a capture (the
 //! next key or pad button pressed becomes the button's binding), and
 //! [`bindings_to_text`] / [`bindings_from_text`] persist it (the runner
-//! keeps `<save_name>.input`). The stick's WASD and the [`Key`] bits stay
-//! fixed.
+//! keeps `<save_name>.input`). The stick's WASD and the shortcut keys stay
+//! fixed (see [`key_label`]).
 //!
-//! Every key with a [`Key`] also sets that bit in [`InputState::keys`]
-//! (Esc, Enter, Space, Tab, Delete, Backspace, F1–F8, 1–3, Page Up/Down,
-//! Home, R, T, W/A/S/D, +/−, Shift, Ctrl), so a game can offer PC shortcuts on
-//! top of the console mapping.
+//! Every key also sets its [`Key`] bit in [`InputState::keys`]
+//! ([`keys_for`]: letters, digits, F1–F12, arrows, navigation, modifiers,
+//! punctuation), so a game can offer PC shortcuts on top of the console
+//! mapping. Bound keys set theirs too (Z sets `Key::Z` and presses A).
 
 use trino_core::{
     BindDevice, Button, GamepadStatus, Input, InputInfo, InputState, Key, PointerButton, Vec2,
@@ -39,24 +45,17 @@ use trino_core::{
 use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::keyboard::{KeyCode, PhysicalKey};
 
-/// The console buttons that can be rebound, in [`Bindings`] order.
-pub const BINDABLE: [Button; 12] = [
-    Button::A,
-    Button::B,
-    Button::X,
-    Button::Y,
-    Button::L,
-    Button::R,
-    Button::Start,
-    Button::Select,
-    Button::DpadUp,
-    Button::DpadDown,
-    Button::DpadLeft,
-    Button::DpadRight,
-];
+/// The console buttons that can be rebound, in [`Bindings`] order (and the
+/// order of a bindings file's lines).
+pub const BINDABLE: [Button; 16] = Button::ALL;
+
+/// How many buttons [`Bindings`] holds.
+pub const BINDINGS: usize = BINDABLE.len();
 
 /// A gamepad button (the standard Xbox-style layout gilrs reports).
+/// Discriminants follow [`PadButton::ALL`] (bits of [`PadReading::held`]).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(u8)]
 pub enum PadButton {
     South,
     East,
@@ -158,8 +157,11 @@ impl PadButton {
 
 /// The keys a binding may use, with their names (file and screen). Keys
 /// with a fixed role are left out, so a rebind never makes one press do two
-/// things: W/A/S/D (the stick) and every key with a [`Key`] bit except
-/// Enter and Shift (the defaults' Start and Select).
+/// things: W/A/S/D (the stick) and the shortcut keys that had a [`Key`]
+/// bit before the full keyboard (Esc, Space, Tab, Delete, Backspace, F1–F8,
+/// 1–3, Page Up/Down, Home, R, T, =/+, −, Ctrl, numpad 1–3/+/−), plus Super
+/// (the OS takes it). Every other key is bindable, though it also sets its
+/// own [`Key`] bit ([`keys_for`]).
 const KEYS: &[(KeyCode, &str)] = &[
     (KeyCode::KeyB, "B"),
     (KeyCode::KeyC, "C"),
@@ -207,6 +209,11 @@ const KEYS: &[(KeyCode, &str)] = &[
     (KeyCode::BracketLeft, "["),
     (KeyCode::BracketRight, "]"),
     (KeyCode::Backslash, "\\"),
+    (KeyCode::Backquote, "`"),
+    (KeyCode::F9, "F9"),
+    (KeyCode::F10, "F10"),
+    (KeyCode::F11, "F11"),
+    (KeyCode::F12, "F12"),
     (KeyCode::Numpad0, "NUM0"),
     (KeyCode::Numpad4, "NUM4"),
     (KeyCode::Numpad5, "NUM5"),
@@ -216,6 +223,95 @@ const KEYS: &[(KeyCode, &str)] = &[
     (KeyCode::Numpad9, "NUM9"),
     (KeyCode::NumpadEnter, "NUMENTER"),
 ];
+
+/// The [`Key`] bits a key sets (empty for keys without one). The numpad's
+/// 1–3, Enter, + and − alias their main-row keys; the main row's `=` sets
+/// both [`Key::Equal`] and [`Key::Plus`].
+pub fn keys_for(code: KeyCode) -> &'static [Key] {
+    use KeyCode as C;
+    match code {
+        C::Escape => &[Key::Escape],
+        C::Enter | C::NumpadEnter => &[Key::Enter],
+        C::Space => &[Key::Space],
+        C::Tab => &[Key::Tab],
+        C::Delete => &[Key::Delete],
+        C::Backspace => &[Key::Backspace],
+        C::Insert => &[Key::Insert],
+        C::Home => &[Key::Home],
+        C::End => &[Key::End],
+        C::PageUp => &[Key::PageUp],
+        C::PageDown => &[Key::PageDown],
+        C::ArrowUp => &[Key::ArrowUp],
+        C::ArrowDown => &[Key::ArrowDown],
+        C::ArrowLeft => &[Key::ArrowLeft],
+        C::ArrowRight => &[Key::ArrowRight],
+        C::F1 => &[Key::F1],
+        C::F2 => &[Key::F2],
+        C::F3 => &[Key::F3],
+        C::F4 => &[Key::F4],
+        C::F5 => &[Key::F5],
+        C::F6 => &[Key::F6],
+        C::F7 => &[Key::F7],
+        C::F8 => &[Key::F8],
+        C::F9 => &[Key::F9],
+        C::F10 => &[Key::F10],
+        C::F11 => &[Key::F11],
+        C::F12 => &[Key::F12],
+        C::Digit0 => &[Key::Digit0],
+        C::Digit1 | C::Numpad1 => &[Key::Digit1],
+        C::Digit2 | C::Numpad2 => &[Key::Digit2],
+        C::Digit3 | C::Numpad3 => &[Key::Digit3],
+        C::Digit4 => &[Key::Digit4],
+        C::Digit5 => &[Key::Digit5],
+        C::Digit6 => &[Key::Digit6],
+        C::Digit7 => &[Key::Digit7],
+        C::Digit8 => &[Key::Digit8],
+        C::Digit9 => &[Key::Digit9],
+        C::KeyA => &[Key::A],
+        C::KeyB => &[Key::B],
+        C::KeyC => &[Key::C],
+        C::KeyD => &[Key::D],
+        C::KeyE => &[Key::E],
+        C::KeyF => &[Key::F],
+        C::KeyG => &[Key::G],
+        C::KeyH => &[Key::H],
+        C::KeyI => &[Key::I],
+        C::KeyJ => &[Key::J],
+        C::KeyK => &[Key::K],
+        C::KeyL => &[Key::L],
+        C::KeyM => &[Key::M],
+        C::KeyN => &[Key::N],
+        C::KeyO => &[Key::O],
+        C::KeyP => &[Key::P],
+        C::KeyQ => &[Key::Q],
+        C::KeyR => &[Key::R],
+        C::KeyS => &[Key::S],
+        C::KeyT => &[Key::T],
+        C::KeyU => &[Key::U],
+        C::KeyV => &[Key::V],
+        C::KeyW => &[Key::W],
+        C::KeyX => &[Key::X],
+        C::KeyY => &[Key::Y],
+        C::KeyZ => &[Key::Z],
+        C::Equal => &[Key::Equal, Key::Plus],
+        C::NumpadAdd => &[Key::Plus],
+        C::Minus | C::NumpadSubtract => &[Key::Minus],
+        C::ShiftLeft | C::ShiftRight => &[Key::Shift],
+        C::ControlLeft | C::ControlRight => &[Key::Ctrl],
+        C::AltLeft | C::AltRight => &[Key::Alt],
+        C::SuperLeft | C::SuperRight => &[Key::Super],
+        C::BracketLeft => &[Key::BracketLeft],
+        C::BracketRight => &[Key::BracketRight],
+        C::Semicolon => &[Key::Semicolon],
+        C::Quote => &[Key::Quote],
+        C::Comma => &[Key::Comma],
+        C::Period => &[Key::Period],
+        C::Slash => &[Key::Slash],
+        C::Backslash => &[Key::Backslash],
+        C::Backquote => &[Key::Backquote],
+        _ => &[],
+    }
+}
 
 /// A key's name, if a binding may use it.
 pub fn key_label(code: KeyCode) -> Option<&'static str> {
@@ -231,8 +327,8 @@ fn key_from_label(name: &str) -> Option<KeyCode> {
 /// defaults put L and R on both the bumpers and the triggers).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Bindings {
-    pub keys: [Option<KeyCode>; 12],
-    pub pad: [[Option<PadButton>; 2]; 12],
+    pub keys: [Option<KeyCode>; BINDINGS],
+    pub pad: [[Option<PadButton>; 2]; BINDINGS],
 }
 
 impl Default for Bindings {
@@ -252,6 +348,12 @@ impl Default for Bindings {
                 Some(KeyCode::ArrowDown),
                 Some(KeyCode::ArrowLeft),
                 Some(KeyCode::ArrowRight),
+                // L2, R2, L3, R3: no key (every free key is someone's
+                // shortcut); a player can bind them.
+                None,
+                None,
+                None,
+                None,
             ],
             pad: [
                 [Some(P::South), None],
@@ -266,6 +368,12 @@ impl Default for Bindings {
                 [Some(P::DPadDown), None],
                 [Some(P::DPadLeft), None],
                 [Some(P::DPadRight), None],
+                // The triggers and stick clicks also keep pressing L, R and
+                // Select, as they did before L2–R3 existed.
+                [Some(P::LeftTrigger2), None],
+                [Some(P::RightTrigger2), None],
+                [Some(P::LeftThumb), None],
+                [Some(P::RightThumb), None],
             ],
         }
     }
@@ -313,8 +421,9 @@ impl Bindings {
     }
 }
 
-/// The bindings as text, one line per button: `a = Z | South LeftTrigger2`
-/// (`-` for none).
+/// The bindings as text, one line per button: `A = Z | South LeftTrigger2`
+/// (`-` for none). Files written before L2–R3 existed have only the first
+/// twelve lines; [`bindings_from_text`] reads them unchanged.
 pub fn bindings_to_text(b: &Bindings) -> String {
     let mut out = String::new();
     for (i, button) in BINDABLE.iter().enumerate() {
@@ -331,8 +440,13 @@ pub fn bindings_to_text(b: &Bindings) -> String {
 }
 
 /// Parse [`bindings_to_text`]; unknown or broken lines keep the default.
+///
+/// A button without a line (an older file) keeps its defaults, except a
+/// key or pad button the file gives to another button that didn't have it
+/// by default: a binding the player moved is not handed back.
 pub fn bindings_from_text(text: &str) -> Bindings {
     let mut b = Bindings::default();
+    let mut seen = [false; BINDINGS];
     for line in text.lines() {
         let Some((name, rest)) = line.split_once('=') else {
             continue;
@@ -346,6 +460,7 @@ pub fn bindings_from_text(text: &str) -> Bindings {
         let Some((key, pads)) = rest.split_once('|') else {
             continue;
         };
+        seen[i] = true;
         let key = key.trim();
         b.keys[i] = if key == "-" {
             None
@@ -361,6 +476,20 @@ pub fn bindings_from_text(text: &str) -> Bindings {
         } else if !pads.is_empty() {
             b.pad[i] = [pads.first().copied(), pads.get(1).copied()];
         }
+    }
+    // A default the file moved elsewhere stays with the button it went to.
+    let (def, parsed) = (Bindings::default(), b);
+    let moved_key = |k: KeyCode| {
+        (0..BINDINGS).any(|j| seen[j] && parsed.keys[j] == Some(k) && def.keys[j] != Some(k))
+    };
+    let moved_pad = |p: PadButton| {
+        (0..BINDINGS)
+            .any(|j| seen[j] && parsed.pad[j].contains(&Some(p)) && !def.pad[j].contains(&Some(p)))
+    };
+    for i in (0..BINDINGS).filter(|i| !seen[*i]) {
+        b.keys[i] = b.keys[i].filter(|k| !moved_key(*k));
+        let mut kept = b.pad[i].into_iter().flatten().filter(|p| !moved_pad(*p));
+        b.pad[i] = [kept.next(), kept.next()];
     }
     b
 }
@@ -521,41 +650,8 @@ impl PcInput {
                 self.state.set(*button, down);
             }
         }
-        let key = match code {
-            KeyCode::Escape => Some(Key::Escape),
-            KeyCode::Enter | KeyCode::NumpadEnter => Some(Key::Enter),
-            KeyCode::Space => Some(Key::Space),
-            KeyCode::Tab => Some(Key::Tab),
-            KeyCode::Delete => Some(Key::Delete),
-            KeyCode::Backspace => Some(Key::Backspace),
-            KeyCode::F1 => Some(Key::F1),
-            KeyCode::F2 => Some(Key::F2),
-            KeyCode::F3 => Some(Key::F3),
-            KeyCode::F4 => Some(Key::F4),
-            KeyCode::F5 => Some(Key::F5),
-            KeyCode::F6 => Some(Key::F6),
-            KeyCode::F7 => Some(Key::F7),
-            KeyCode::F8 => Some(Key::F8),
-            KeyCode::Digit1 | KeyCode::Numpad1 => Some(Key::Digit1),
-            KeyCode::Digit2 | KeyCode::Numpad2 => Some(Key::Digit2),
-            KeyCode::Digit3 | KeyCode::Numpad3 => Some(Key::Digit3),
-            KeyCode::PageUp => Some(Key::PageUp),
-            KeyCode::PageDown => Some(Key::PageDown),
-            KeyCode::Home => Some(Key::Home),
-            KeyCode::KeyR => Some(Key::R),
-            KeyCode::KeyW => Some(Key::W),
-            KeyCode::KeyA => Some(Key::A),
-            KeyCode::KeyS => Some(Key::S),
-            KeyCode::KeyD => Some(Key::D),
-            KeyCode::Equal | KeyCode::NumpadAdd => Some(Key::Plus),
-            KeyCode::Minus | KeyCode::NumpadSubtract => Some(Key::Minus),
-            KeyCode::ShiftLeft | KeyCode::ShiftRight => Some(Key::Shift),
-            KeyCode::ControlLeft | KeyCode::ControlRight => Some(Key::Ctrl),
-            KeyCode::KeyT => Some(Key::T),
-            _ => None,
-        };
-        if let Some(k) = key {
-            self.state.set_key(k, down);
+        for k in keys_for(code) {
+            self.state.set_key(*k, down);
         }
         match code {
             KeyCode::KeyW => self.wasd[0] = down,
@@ -642,12 +738,118 @@ impl PcInput {
     }
 }
 
+/// One gamepad's state for a frame, independent of gilrs: what
+/// [`PcInput::merge_pad`] folds into [`InputState`] (and what tests build
+/// without a device).
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
+pub struct PadReading {
+    /// Held buttons: bit `p as u32` for each [`PadButton`] `p`.
+    pub held: u32,
+    /// Left stick, -1..=1 per axis, Y-up.
+    pub left_stick: Vec2,
+    /// Right stick, -1..=1 per axis, Y-up.
+    pub right_stick: Vec2,
+    /// Analog triggers, 0..=1: `x` = left (LT), `y` = right (RT).
+    pub triggers: Vec2,
+}
+
+impl PadReading {
+    pub fn is_held(&self, p: PadButton) -> bool {
+        self.held & (1 << p as u32) != 0
+    }
+
+    pub fn press(&mut self, p: PadButton) {
+        self.held |= 1 << p as u32;
+    }
+}
+
+/// A trigger's travel, 0..=1, from what gilrs reports: the trigger button's
+/// analog value (SDL-mapped pads), its Z axis (raw pads, negative at rest
+/// on some), whichever is larger. A trigger reported pressed with no
+/// analog value (a digital trigger) reads 1.
+pub fn trigger_value(pressed: bool, button_value: f32, z_axis: f32) -> f32 {
+    let v = button_value.max(z_axis).clamp(0.0, 1.0);
+    if pressed && v <= 0.0 { 1.0 } else { v }
+}
+
+/// A stick counts as "the pad was used" past this radius.
+const PAD_DEADZONE: f32 = 0.25;
+
+/// The stronger of two stick vectors (the keyboard's and a pad's, or two
+/// pads'). Returns whether `pad` is past the deadzone.
+fn fold_stick(into: &mut Vec2, pad: Vec2) -> bool {
+    let len2 = |v: Vec2| v.x * v.x + v.y * v.y;
+    if len2(pad) > len2(*into) {
+        *into = pad;
+    }
+    len2(pad) > PAD_DEADZONE * PAD_DEADZONE
+}
+
+impl PcInput {
+    /// Fold one gamepad into `state`, as [`Input::poll`] does for every
+    /// connected pad: bound buttons are OR'ed in, the stronger stick wins
+    /// (each of the two), triggers take the larger value. Sets
+    /// [`InputState::pad`] when a button, a stick past the deadzone or a
+    /// trigger past a quarter is used.
+    pub fn merge_pad(&self, state: &mut InputState, pad: &PadReading) {
+        for (i, to) in BINDABLE.iter().enumerate() {
+            for from in self.bindings.pad[i].iter().flatten() {
+                if Some(*from) != self.held_after_bind && pad.is_held(*from) {
+                    state.set(*to, true);
+                    state.pad = true;
+                }
+            }
+        }
+        if fold_stick(&mut state.stick, pad.left_stick) {
+            state.pad = true;
+        }
+        if fold_stick(&mut state.right_stick, pad.right_stick) {
+            state.pad = true;
+        }
+        let t = Vec2::new(
+            pad.triggers.x.clamp(0.0, 1.0),
+            pad.triggers.y.clamp(0.0, 1.0),
+        );
+        if t.x > PAD_DEADZONE || t.y > PAD_DEADZONE {
+            state.pad = true;
+        }
+        state.triggers = Vec2::new(state.triggers.x.max(t.x), state.triggers.y.max(t.y));
+    }
+}
+
 #[cfg(feature = "gamepad")]
 impl PcInput {
-    /// Fold every connected gamepad into `state` (buttons OR'ed, the
-    /// strongest stick wins over the keyboard's digital stick).
+    /// One gilrs pad as a [`PadReading`].
+    fn read_gilrs(pad: &gilrs::Gamepad<'_>) -> PadReading {
+        use gilrs::{Axis, Button as B};
+        let mut r = PadReading::default();
+        for p in PadButton::ALL {
+            if pad.is_pressed(p.to_gilrs()) {
+                r.press(p);
+            }
+        }
+        let value = |b: B| pad.button_data(b).map_or(0.0, |d| d.value());
+        // gilrs sticks are Y-up, like InputState.
+        r.left_stick = Vec2::new(pad.value(Axis::LeftStickX), pad.value(Axis::LeftStickY));
+        r.right_stick = Vec2::new(pad.value(Axis::RightStickX), pad.value(Axis::RightStickY));
+        r.triggers = Vec2::new(
+            trigger_value(
+                r.is_held(PadButton::LeftTrigger2),
+                value(B::LeftTrigger2),
+                pad.value(Axis::LeftZ),
+            ),
+            trigger_value(
+                r.is_held(PadButton::RightTrigger2),
+                value(B::RightTrigger2),
+                pad.value(Axis::RightZ),
+            ),
+        );
+        r
+    }
+
+    /// Fold every connected gamepad into `state` ([`PcInput::merge_pad`]).
     fn merge_pads(&mut self, state: &mut InputState) {
-        use gilrs::{Axis, EventType};
+        use gilrs::EventType;
         let mut pressed = Vec::new();
         {
             let Some(g) = self.pads.as_mut() else { return };
@@ -662,34 +864,15 @@ impl PcInput {
         for p in pressed {
             self.pad_pressed(p);
         }
-        let bindings = self.bindings;
-        let held = self.held_after_bind;
-        let Some(g) = self.pads.as_mut() else { return };
-        if let Some(h) = held
-            && !g.gamepads().any(|(_, p)| p.is_pressed(h.to_gilrs()))
+        let Some(g) = self.pads.as_ref() else { return };
+        let readings: Vec<PadReading> = g.gamepads().map(|(_, p)| Self::read_gilrs(&p)).collect();
+        if let Some(h) = self.held_after_bind
+            && !readings.iter().any(|r| r.is_held(h))
         {
             self.held_after_bind = None;
         }
-        let held = self.held_after_bind;
-        let Some(g) = self.pads.as_mut() else { return };
-        for (_, pad) in g.gamepads() {
-            for (i, to) in BINDABLE.iter().enumerate() {
-                for from in bindings.pad[i].iter().flatten() {
-                    if Some(*from) != held && pad.is_pressed(from.to_gilrs()) {
-                        state.set(*to, true);
-                        state.pad = true;
-                    }
-                }
-            }
-            // gilrs sticks are Y-up, like InputState.
-            let s = Vec2::new(pad.value(Axis::LeftStickX), pad.value(Axis::LeftStickY));
-            if s.x * s.x + s.y * s.y > 0.25 * 0.25 {
-                state.pad = true;
-            }
-            if s.x * s.x + s.y * s.y > state.stick.x * state.stick.x + state.stick.y * state.stick.y
-            {
-                state.stick = s;
-            }
+        for r in &readings {
+            self.merge_pad(state, r);
         }
     }
 }
@@ -698,6 +881,11 @@ impl Input for PcInput {
     fn poll(&mut self) -> InputState {
         #[allow(unused_mut)]
         let mut state = self.state;
+        // Keys bound to L2/R2 are fully pulled triggers.
+        state.triggers = Vec2::new(
+            state.is_down(Button::L2) as u8 as f32,
+            state.is_down(Button::R2) as u8 as f32,
+        );
         #[cfg(feature = "gamepad")]
         self.merge_pads(&mut state);
         // The wheel is a per-frame delta; everything else is held state.
@@ -785,6 +973,38 @@ mod tests {
         assert!(!s.pad);
         input.handle_key(KeyCode::Escape, false);
         assert!(!input.poll().key(Key::Escape));
+    }
+
+    #[cfg(feature = "gamepad")]
+    #[test]
+    fn gilrs_buttons_map_one_to_one() {
+        for (i, p) in PadButton::ALL.iter().enumerate() {
+            assert_eq!(*p as usize, i, "PadButton::ALL is in discriminant order");
+            assert_eq!(PadButton::from_gilrs(p.to_gilrs()), Some(*p));
+        }
+        assert_eq!(PadButton::from_gilrs(gilrs::Button::Unknown), None);
+        // The issue's mapping: LT2/RT2 → L2/R2, thumbs → L3/R3.
+        let b = Bindings::default();
+        for (button, pad) in [
+            (Button::L2, gilrs::Button::LeftTrigger2),
+            (Button::R2, gilrs::Button::RightTrigger2),
+            (Button::L3, gilrs::Button::LeftThumb),
+            (Button::R3, gilrs::Button::RightThumb),
+        ] {
+            let p = PadButton::from_gilrs(pad).unwrap();
+            assert_eq!(b.pad[Bindings::slot(button)], [Some(p), None]);
+        }
+    }
+
+    #[test]
+    fn pad_buttons_are_distinct_bits() {
+        for (i, p) in PadButton::ALL.iter().enumerate() {
+            assert_eq!(*p as usize, i);
+            let mut r = PadReading::default();
+            r.press(*p);
+            assert_eq!(r.held, 1 << i);
+            assert!(PadButton::ALL.iter().all(|o| r.is_held(*o) == (o == p)));
+        }
     }
 
     #[test]

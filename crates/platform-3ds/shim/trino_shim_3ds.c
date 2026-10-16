@@ -572,6 +572,10 @@ uint32_t trino_joypad_buttons(void)
     if (k & KEY_DDOWN) out |= 1u << 9;
     if (k & KEY_DLEFT) out |= 1u << 10;
     if (k & KEY_DRIGHT) out |= 1u << 11;
+    // New 3DS only (hidInit starts ir:rst there and hidScanInput merges
+    // its keys); always 0 on an Old 3DS.
+    if (k & KEY_ZL) out |= 1u << 12;   // L2
+    if (k & KEY_ZR) out |= 1u << 13;   // R2
     return out;
 }
 
@@ -580,6 +584,17 @@ uint32_t trino_joypad_stick(void)
 {
     circlePosition pos;
     hidCircleRead(&pos);
+    uint16_t x = (uint16_t)pos.dx;
+    uint16_t y = (uint16_t)pos.dy;
+    return ((uint32_t)x << 16) | y;
+}
+
+// Packed C-stick (New 3DS), like trino_joypad_stick. irrstCstickRead copies
+// what hidScanInput read, so it is 0 on an Old 3DS (no ir:rst).
+uint32_t trino_cstick(void)
+{
+    circlePosition pos;
+    hidCstickRead(&pos);
     uint16_t x = (uint16_t)pos.dx;
     uint16_t y = (uint16_t)pos.dy;
     return ((uint32_t)x << 16) | y;

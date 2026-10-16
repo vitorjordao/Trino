@@ -107,6 +107,14 @@ fn baked_showcase_matches_code_and_plays() {
     .unwrap();
 }
 
+/// The PC input backend with nothing pressed — the console self-tests run
+/// the same check against their shims.
+#[test]
+fn idle_input_checks_pass_on_pc() {
+    let mut input = trino_platform_pc::PcInput::new();
+    castle64::selftest::idle_input_checks(&mut input).unwrap();
+}
+
 /// Audio v2 on the PC backend (silent without a device, same voice
 /// bookkeeping) — the console self-tests run the same check.
 #[test]

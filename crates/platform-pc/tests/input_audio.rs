@@ -8,6 +8,7 @@ use trino_core::{
     Audio, Button, Input, InputState, Key, MusicId, PointerButton, SoundId, SoundParams, Vec2,
 };
 use trino_platform_pc::audio::mixer::{DUCK, Kind, Voice, mix_into};
+use trino_platform_pc::input::{BINDABLE, Bindings, keys_for};
 use trino_platform_pc::{PcAudio, PcInput};
 use winit::event::MouseButton;
 use winit::keyboard::KeyCode;
@@ -47,85 +48,246 @@ fn every_console_button_maps_from_its_key_with_edges() {
         assert!(up.just_released(&held, button));
         prev = up;
     }
-    // Keys outside the mapping change nothing.
+    // Keys outside the mapping press no button: P only sets its key bit,
+    // a key without a `Key` (F13) changes nothing.
     input.handle_key(KeyCode::KeyP, true);
+    let p = input.poll();
+    assert!(!p.any_button() && p.key(Key::P) && p.keys.len() == 1);
+    input.handle_key(KeyCode::KeyP, false);
+    input.handle_key(KeyCode::F13, true);
     assert_eq!(input.poll(), InputState::default());
 }
 
-/// Every PC key sets its own `Key` bit (numpad aliases included), without
-/// pressing console buttons except where documented (Enter = Start,
-/// right Shift = Select).
+/// Every PC key sets its own `Key` bit (numpad aliases included, `=` also
+/// sets `Plus`), without pressing console buttons except the ones its
+/// default binding gives it (Z = A, Enter = Start, arrows = D-pad…).
 #[test]
 fn every_pc_key_sets_its_bit() {
-    let keys = [
-        (KeyCode::Escape, Key::Escape),
-        (KeyCode::Enter, Key::Enter),
-        (KeyCode::NumpadEnter, Key::Enter),
-        (KeyCode::Space, Key::Space),
-        (KeyCode::Tab, Key::Tab),
-        (KeyCode::Delete, Key::Delete),
-        (KeyCode::Backspace, Key::Backspace),
-        (KeyCode::F1, Key::F1),
-        (KeyCode::F2, Key::F2),
-        (KeyCode::F3, Key::F3),
-        (KeyCode::F4, Key::F4),
-        (KeyCode::F5, Key::F5),
-        (KeyCode::F6, Key::F6),
-        (KeyCode::F7, Key::F7),
-        (KeyCode::F8, Key::F8),
-        (KeyCode::Digit1, Key::Digit1),
-        (KeyCode::Numpad1, Key::Digit1),
-        (KeyCode::Digit2, Key::Digit2),
-        (KeyCode::Numpad2, Key::Digit2),
-        (KeyCode::Digit3, Key::Digit3),
-        (KeyCode::Numpad3, Key::Digit3),
-        (KeyCode::PageUp, Key::PageUp),
-        (KeyCode::PageDown, Key::PageDown),
-        (KeyCode::Home, Key::Home),
-        (KeyCode::KeyR, Key::R),
-        (KeyCode::KeyW, Key::W),
-        (KeyCode::KeyA, Key::A),
-        (KeyCode::KeyS, Key::S),
-        (KeyCode::KeyD, Key::D),
-        (KeyCode::Equal, Key::Plus),
-        (KeyCode::NumpadAdd, Key::Plus),
-        (KeyCode::Minus, Key::Minus),
-        (KeyCode::NumpadSubtract, Key::Minus),
-        (KeyCode::ShiftLeft, Key::Shift),
-        (KeyCode::ShiftRight, Key::Shift),
-        (KeyCode::ControlLeft, Key::Ctrl),
-        (KeyCode::ControlRight, Key::Ctrl),
-        (KeyCode::KeyT, Key::T),
+    use KeyCode as C;
+    let keys: &[(KeyCode, &[Key])] = &[
+        (C::Escape, &[Key::Escape]),
+        (C::Enter, &[Key::Enter]),
+        (C::NumpadEnter, &[Key::Enter]),
+        (C::Space, &[Key::Space]),
+        (C::Tab, &[Key::Tab]),
+        (C::Delete, &[Key::Delete]),
+        (C::Backspace, &[Key::Backspace]),
+        (C::Insert, &[Key::Insert]),
+        (C::Home, &[Key::Home]),
+        (C::End, &[Key::End]),
+        (C::PageUp, &[Key::PageUp]),
+        (C::PageDown, &[Key::PageDown]),
+        (C::ArrowUp, &[Key::ArrowUp]),
+        (C::ArrowDown, &[Key::ArrowDown]),
+        (C::ArrowLeft, &[Key::ArrowLeft]),
+        (C::ArrowRight, &[Key::ArrowRight]),
+        (C::F1, &[Key::F1]),
+        (C::F2, &[Key::F2]),
+        (C::F3, &[Key::F3]),
+        (C::F4, &[Key::F4]),
+        (C::F5, &[Key::F5]),
+        (C::F6, &[Key::F6]),
+        (C::F7, &[Key::F7]),
+        (C::F8, &[Key::F8]),
+        (C::F9, &[Key::F9]),
+        (C::F10, &[Key::F10]),
+        (C::F11, &[Key::F11]),
+        (C::F12, &[Key::F12]),
+        (C::Digit0, &[Key::Digit0]),
+        (C::Digit1, &[Key::Digit1]),
+        (C::Numpad1, &[Key::Digit1]),
+        (C::Digit2, &[Key::Digit2]),
+        (C::Numpad2, &[Key::Digit2]),
+        (C::Digit3, &[Key::Digit3]),
+        (C::Numpad3, &[Key::Digit3]),
+        (C::Digit4, &[Key::Digit4]),
+        (C::Digit5, &[Key::Digit5]),
+        (C::Digit6, &[Key::Digit6]),
+        (C::Digit7, &[Key::Digit7]),
+        (C::Digit8, &[Key::Digit8]),
+        (C::Digit9, &[Key::Digit9]),
+        (C::KeyA, &[Key::A]),
+        (C::KeyB, &[Key::B]),
+        (C::KeyC, &[Key::C]),
+        (C::KeyD, &[Key::D]),
+        (C::KeyE, &[Key::E]),
+        (C::KeyF, &[Key::F]),
+        (C::KeyG, &[Key::G]),
+        (C::KeyH, &[Key::H]),
+        (C::KeyI, &[Key::I]),
+        (C::KeyJ, &[Key::J]),
+        (C::KeyK, &[Key::K]),
+        (C::KeyL, &[Key::L]),
+        (C::KeyM, &[Key::M]),
+        (C::KeyN, &[Key::N]),
+        (C::KeyO, &[Key::O]),
+        (C::KeyP, &[Key::P]),
+        (C::KeyQ, &[Key::Q]),
+        (C::KeyR, &[Key::R]),
+        (C::KeyS, &[Key::S]),
+        (C::KeyT, &[Key::T]),
+        (C::KeyU, &[Key::U]),
+        (C::KeyV, &[Key::V]),
+        (C::KeyW, &[Key::W]),
+        (C::KeyX, &[Key::X]),
+        (C::KeyY, &[Key::Y]),
+        (C::KeyZ, &[Key::Z]),
+        (C::Equal, &[Key::Equal, Key::Plus]),
+        (C::NumpadAdd, &[Key::Plus]),
+        (C::Minus, &[Key::Minus]),
+        (C::NumpadSubtract, &[Key::Minus]),
+        (C::ShiftLeft, &[Key::Shift]),
+        (C::ShiftRight, &[Key::Shift]),
+        (C::ControlLeft, &[Key::Ctrl]),
+        (C::ControlRight, &[Key::Ctrl]),
+        (C::AltLeft, &[Key::Alt]),
+        (C::AltRight, &[Key::Alt]),
+        (C::SuperLeft, &[Key::Super]),
+        (C::SuperRight, &[Key::Super]),
+        (C::BracketLeft, &[Key::BracketLeft]),
+        (C::BracketRight, &[Key::BracketRight]),
+        (C::Semicolon, &[Key::Semicolon]),
+        (C::Quote, &[Key::Quote]),
+        (C::Comma, &[Key::Comma]),
+        (C::Period, &[Key::Period]),
+        (C::Slash, &[Key::Slash]),
+        (C::Backslash, &[Key::Backslash]),
+        (C::Backquote, &[Key::Backquote]),
     ];
-    for (code, key) in keys {
+    // Every Key is reachable from some key.
+    for k in Key::ALL {
+        assert!(
+            keys.iter().any(|(_, ks)| ks.contains(&k)),
+            "{k:?} has no key"
+        );
+    }
+    let defaults = Bindings::default();
+    for (code, expect) in keys {
+        assert_eq!(keys_for(*code), *expect, "{code:?}");
         let mut input = PcInput::new();
         let prev = input.poll();
-        input.handle_key(code, true);
+        input.handle_key(*code, true);
         let s = input.poll();
-        assert!(
-            s.key(key) && s.key_pressed(&prev, key),
-            "{code:?} → {key:?}"
-        );
-        assert_eq!(s.keys.count_ones(), 1, "{code:?} sets one key bit");
-        let buttons = [
-            Button::A,
-            Button::B,
-            Button::X,
-            Button::Y,
-            Button::L,
-            Button::R,
-            Button::Start,
-            Button::Select,
-        ];
-        let pressed: Vec<_> = buttons.iter().filter(|b| s.is_down(**b)).collect();
-        match code {
-            KeyCode::Enter => assert_eq!(pressed, [&Button::Start]),
-            KeyCode::ShiftRight => assert_eq!(pressed, [&Button::Select]),
-            _ => assert!(pressed.is_empty(), "{code:?} pressed {pressed:?}"),
+        for key in *expect {
+            assert!(
+                s.key(*key) && s.key_pressed(&prev, *key),
+                "{code:?} → {key:?}"
+            );
         }
-        input.handle_key(code, false);
-        assert_eq!(input.poll().keys, 0);
+        assert_eq!(s.keys.len(), expect.len(), "{code:?} sets only its bits");
+        let bound: Vec<Button> = BINDABLE
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| defaults.keys[*i] == Some(*code))
+            .map(|(_, b)| *b)
+            .collect();
+        let pressed: Vec<Button> = Button::ALL.into_iter().filter(|b| s.is_down(*b)).collect();
+        assert_eq!(pressed, bound, "{code:?} presses only its default button");
+        input.handle_key(*code, false);
+        assert!(input.poll().keys.is_empty());
+        assert_eq!(input.poll().keys, 0, "u32-era comparison still works");
     }
+}
+
+/// Gamepads without a device: a `PadReading` folds into the state through
+/// the default bindings (L2/R2 = triggers, L3/R3 = stick clicks, both
+/// sticks, analog triggers), and gilrs' trigger values become 0..=1.
+#[test]
+fn gamepad_readings_map_to_buttons_sticks_and_triggers() {
+    use trino_platform_pc::input::{PadButton as P, PadReading, trigger_value};
+    let input = PcInput::new();
+    let fold = |r: PadReading| {
+        let mut s = InputState::default();
+        input.merge_pad(&mut s, &r);
+        s
+    };
+    assert_eq!(fold(PadReading::default()), InputState::default());
+    for (pad, buttons) in [
+        (P::South, &[Button::A][..]),
+        (P::East, &[Button::B]),
+        (P::West, &[Button::X]),
+        (P::North, &[Button::Y]),
+        (P::LeftTrigger, &[Button::L]),
+        (P::RightTrigger, &[Button::R]),
+        (P::LeftTrigger2, &[Button::L, Button::L2]),
+        (P::RightTrigger2, &[Button::R, Button::R2]),
+        (P::LeftThumb, &[Button::Select, Button::L3]),
+        (P::RightThumb, &[Button::R3]),
+        (P::Start, &[Button::Start]),
+        (P::Mode, &[Button::Start]),
+        (P::Select, &[Button::Select]),
+        (P::DPadUp, &[Button::DpadUp]),
+        (P::DPadDown, &[Button::DpadDown]),
+        (P::DPadLeft, &[Button::DpadLeft]),
+        (P::DPadRight, &[Button::DpadRight]),
+    ] {
+        let mut r = PadReading::default();
+        r.press(pad);
+        let s = fold(r);
+        let pressed: Vec<Button> = Button::ALL.into_iter().filter(|b| s.is_down(*b)).collect();
+        let mut want = buttons.to_vec();
+        want.sort_by_key(|b| *b as u16);
+        assert_eq!(pressed, want, "{pad:?}");
+        assert!(s.pad, "{pad:?} marks the pad as used");
+    }
+    // Sticks: Y-up, the stronger one wins; small motion is not "pad used".
+    let s = fold(PadReading {
+        left_stick: Vec2::new(0.5, -1.0),
+        right_stick: Vec2::new(-1.0, 0.25),
+        triggers: Vec2::new(0.75, 1.5),
+        ..Default::default()
+    });
+    assert_eq!(s.stick, Vec2::new(0.5, -1.0));
+    assert_eq!(s.right_stick, Vec2::new(-1.0, 0.25));
+    assert_eq!(s.triggers, Vec2::new(0.75, 1.0), "clamped to 0..=1");
+    assert!(s.pad);
+    let drift = fold(PadReading {
+        right_stick: Vec2::new(0.1, 0.1),
+        triggers: Vec2::new(0.1, 0.0),
+        ..Default::default()
+    });
+    assert!(!drift.pad, "drift under the deadzone");
+    assert_eq!(drift.right_stick, Vec2::new(0.1, 0.1));
+    // Two pads: the stronger right stick and the larger trigger win.
+    let mut two = drift;
+    input.merge_pad(
+        &mut two,
+        &PadReading {
+            right_stick: Vec2::new(0.0, -0.9),
+            triggers: Vec2::new(0.05, 0.6),
+            ..Default::default()
+        },
+    );
+    assert_eq!(two.right_stick, Vec2::new(0.0, -0.9));
+    assert_eq!(two.triggers, Vec2::new(0.1, 0.6));
+    // gilrs trigger values: button value, Z axis (negative at rest on some
+    // pads), digital triggers.
+    assert_eq!(trigger_value(false, 0.0, 0.0), 0.0);
+    assert_eq!(trigger_value(true, 0.4, 0.0), 0.4);
+    assert_eq!(trigger_value(false, 0.0, 0.7), 0.7);
+    assert_eq!(trigger_value(false, 0.0, -1.0), 0.0);
+    assert_eq!(trigger_value(true, 0.0, -1.0), 1.0, "digital trigger");
+    assert_eq!(trigger_value(false, 2.0, 0.0), 1.0);
+}
+
+/// Keys bound to L2/R2 pull the triggers fully; the default keyboard has
+/// none, so a fresh keyboard never reports triggers.
+#[test]
+fn keys_bound_to_l2_r2_are_full_triggers() {
+    let mut input = PcInput::new();
+    let mut b = Bindings::default();
+    b.bind_key(Button::L2, KeyCode::KeyF);
+    b.bind_key(Button::R3, KeyCode::KeyG);
+    input.set_bindings(b);
+    assert_eq!(input.poll().triggers, Vec2::ZERO);
+    input.handle_key(KeyCode::KeyF, true);
+    input.handle_key(KeyCode::KeyG, true);
+    let s = input.poll();
+    assert!(s.is_down(Button::L2) && s.is_down(Button::R3) && !s.is_down(Button::R2));
+    assert_eq!(s.triggers, Vec2::new(1.0, 0.0));
+    assert!(s.key(Key::F), "a bound key still sets its key bit");
+    input.handle_key(KeyCode::KeyF, false);
+    assert_eq!(input.poll().triggers, Vec2::ZERO);
 }
 
 /// WASD is the digital stick (Y-up), mixing with the arrows' D-pad.

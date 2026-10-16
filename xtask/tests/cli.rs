@@ -72,6 +72,11 @@ fn help_and_no_arguments_list_every_command() {
         "blender smoke",
         "agents <sync|check>",
         "--project <dir>",
+        "build [all]",
+        "assets [all]",
+        "test all",
+        "[project] platforms",
+        "editor [<dir>]",
         "run n64 --device sc64|everdrive",
         "run 3ds --device network",
     ] {
@@ -167,6 +172,98 @@ fn project_selection_fails_fast_on_bad_projects() {
     let ok = xtask(&["help", "--project", s]);
     assert!(ok.status.success(), "{}", stderr(&ok));
     assert!(stdout(&ok).contains("commands:"));
+}
+
+/// A throwaway project under this repo's `target/` (never `/tmp`, a RAM
+/// disk on some machines) with `platforms` set and one sound to bake.
+fn platforms_project(platforms: &str) -> tempfile::TempDir {
+    let base = root().join("target/test-projects");
+    std::fs::create_dir_all(&base).unwrap();
+    let tmp = tempfile::tempdir_in(&base).unwrap();
+    std::fs::write(
+        tmp.path().join("trino.toml"),
+        format!("[project]\nname = \"my-game\"\ntitle = \"My Game\"\nplatforms = {platforms}\n"),
+    )
+    .unwrap();
+    let sounds = tmp.path().join("assets/shared/sounds");
+    std::fs::create_dir_all(&sounds).unwrap();
+    std::fs::copy(
+        root().join("assets/shared/sounds/beep.wav"),
+        sounds.join("beep.wav"),
+    )
+    .unwrap();
+    std::fs::write(
+        tmp.path().join("assets/manifest.toml"),
+        "version = 1\n\n[sounds.beep]\nfile = \"sounds/beep.wav\"\n",
+    )
+    .unwrap();
+    tmp
+}
+
+/// `[project] platforms`: naming a platform the project leaves out fails
+/// before any toolchain runs, and the message names the field and the
+/// file; a manifest without the field still accepts every platform.
+#[test]
+fn platform_commands_follow_the_project_platforms() {
+    let tmp = platforms_project(r#"["pc"]"#);
+    let s = tmp.path().to_str().unwrap();
+    for args in [
+        &["build", "n64"][..],
+        &["run", "n64"],
+        &["test", "n64"],
+        &["watch", "n64"],
+        &["assets", "n64"],
+        &["build", "3ds"],
+        &["test", "n3ds"],
+        &["assets", "3ds"],
+    ] {
+        let mut a = args.to_vec();
+        a.extend(["--project", s]);
+        let o = xtask(&a);
+        let platform = if args[1] == "n64" { "n64" } else { "3ds" };
+        assert_fails_with(&o, &format!("does not target {platform}"));
+        assert_fails_with(&o, "[project] platforms = [\"pc\"]");
+        assert_fails_with(&o, "trino.toml");
+    }
+    // Through the cwd's trino.toml too (what `cargo trino` does).
+    assert_fails_with(
+        &xtask_in(tmp.path(), &["build", "n64"]),
+        "does not target n64",
+    );
+
+    // The batch bake does the PC and says what it skipped.
+    let o = xtask(&["assets", "all", "--project", s]);
+    assert!(o.status.success(), "{}", stderr(&o));
+    let out = stdout(&o);
+    assert!(out.contains("baked 1 asset(s) for pc"), "{out}");
+    assert!(
+        out.contains("skipping n64 (not in [project] platforms)"),
+        "{out}"
+    );
+    assert!(
+        out.contains("skipping 3ds (not in [project] platforms)"),
+        "{out}"
+    );
+    assert!(tmp.path().join("target/assets/pc/index.toml").is_file());
+    assert!(!tmp.path().join("target/assets/n64").exists());
+
+    // A console-only project refuses the PC commands the same way.
+    let consoles = platforms_project(r#"["pc"]"#); // trino.toml rewritten:
+    std::fs::write(
+        consoles.path().join("trino.toml"),
+        "[project]\nname = \"my-game\"\ntitle = \"My Game\"\nplatforms = [\"n64\"]\n\n\
+         [n64]\npackage = \"my-game-n64\"\n",
+    )
+    .unwrap();
+    let c = consoles.path().to_str().unwrap();
+    assert_fails_with(
+        &xtask(&["assets", "pc", "--project", c]),
+        "does not target pc",
+    );
+    assert_fails_with(
+        &xtask(&["build", "pc", "--project", c]),
+        "does not target pc",
+    );
 }
 
 #[test]
@@ -370,6 +467,65 @@ fn new_standalone_scaffolds_a_complete_project() {
             "{krate} git dependency:\n{ws}"
         );
     }
+}
+
+/// `--template` copies a demo; `new` with no name asks on stdin (name,
+/// folder, template) and builds the same project.
+#[test]
+fn new_from_a_demo_template_and_from_the_prompts() {
+    let base = root().join("target/test-projects");
+    std::fs::create_dir_all(&base).unwrap();
+    let tmp = tempfile::tempdir_in(&base).unwrap();
+    let dir = tmp.path().join("castle-copy");
+    let d = dir.to_str().unwrap();
+    let o = xtask(&[
+        "new",
+        "castle-copy",
+        "--standalone",
+        d,
+        "--template",
+        "castle64",
+    ]);
+    assert!(o.status.success(), "{}", stderr(&o));
+    assert!(stdout(&o).contains("(castle64 template)"), "{}", stdout(&o));
+    let lib = std::fs::read_to_string(dir.join("game/src/lib.rs")).unwrap();
+    assert!(
+        lib.contains("pub struct CastleCopyGame"),
+        "renamed game type"
+    );
+    assert!(dir.join("game/src/bot.rs").is_file());
+    assert_fails_with(
+        &xtask(&["new", "x", "--standalone", d, "--template", "doom"]),
+        "unknown template `doom`",
+    );
+    assert_fails_with(
+        &xtask(&["new", "x", "--template", "showcase"]),
+        "--template needs --standalone",
+    );
+
+    let asked = tmp.path().join("asked");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .arg("new")
+        .current_dir(root())
+        .env_remove("TRINO_PROJECT")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    {
+        use std::io::Write;
+        let mut stdin = child.stdin.take().unwrap();
+        writeln!(stdin, "Not Valid\nmy-game\n{}\nshowcase", asked.display()).unwrap();
+    }
+    let o = child.wait_with_output().unwrap();
+    assert!(o.status.success(), "{}{}", stdout(&o), stderr(&o));
+    let out = stdout(&o);
+    assert!(out.contains("not a valid crate name"), "{out}");
+    assert!(out.contains("(showcase template)"), "{out}");
+    assert!(asked.join("game/src/showcase_gen.rs").is_file());
+    let pc = std::fs::read_to_string(asked.join("pc/src/main.rs")).unwrap();
+    assert!(pc.contains("|_| my_game::MyGameGame::new()"), "{pc}");
 }
 
 /// The `path = "..."` of `trino-core` in a workspace manifest.

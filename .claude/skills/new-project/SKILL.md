@@ -9,6 +9,9 @@ description: Scaffold a Trino game — an in-repo example crate (cargo xtask new
 cargo xtask new my-game                                     # examples/my-game, in the workspace
 cargo xtask new space-cat --standalone ~/games/space-cat     # engine via path deps
 cargo xtask new space-cat --standalone <dir> --git https://github.com/vitorjordao/Trino --rev <commit>
+cargo xtask new space-cat --standalone <dir> --template castle64   # start from a demo (blank|castle64|showcase)
+cargo xtask new                                              # asks for name, folder, template on stdin
+cargo xtask editor                                           # the editor's launcher can create one too
 ```
 
 - **In repo** (`templates/new-game/`): a game crate plus its own AGENTS.md. The
@@ -34,15 +37,66 @@ cargo xtask new space-cat --standalone <dir> --git https://github.com/vitorjorda
     - A local engine checkout is required (a path dep, or an `engine/`
       submodule): the shims, target spec and Docker image live there.
 
+## Templates and the shared scaffolder (`crates/scaffold`)
+
+- **`trino-scaffold`** renders standalone projects. `cargo xtask new --standalone`
+  (`xtask/src/standalone.rs` only parses the arguments and runs the prompts) and the
+  editor's project launcher both call `trino_scaffold::scaffold`, so they write the
+  same files. The in-repo `new <name>` (`examples/<name>`) stays in xtask.
+- **`--template`** (needs `--standalone`):
+  - `blank`, the default, uses `templates/new-game/`.
+  - `castle64` and `showcase` copy `examples/<demo>/` as the game crate. The demo's
+    game type (`Castle64Game`, `ShowcaseGame`) becomes `<Camel>Game` and its crate
+    path becomes `<snake>::`. The package is renamed in the demo's own `Cargo.toml`,
+    which keeps features such as showcase's `hot-reload`.
+  - Nothing else is renamed. `include!("showcase_gen.rs")` and
+    `BlobId::from_path("scenes/showcase")` name files and manifest keys, not the
+    crate.
+  - A demo also brings the engine's whole `assets/` (the manifest replaces the
+    template's), `scenes/` and `prefabs/` (`[scenes.*]` paths are relative to the
+    project root).
+- **Hosts call `{{game_new}}`.** It is the constructor expression: `x::XGame::new`,
+  or `|_| x::XGame::new()` for showcase, whose `new` takes no screen. Templates under
+  `templates/standalone/` must use it, never a hardcoded `::new`.
+- **Interactive `new`** (no name): `standalone::prompt` reads name, folder and
+  template from any `BufRead`.
+  - It asks again after a wrong answer.
+  - The folder defaults to the engine checkout's parent directory.
+  - When stdin ends early (a closed or null stdin, as under `Command::output()`), it
+    prints the old usage error. Scripts see the same failure as before the prompts
+    existed.
+- **Gates:**
+  - `crates/scaffold` unit tests render each template and assert the renames and the
+    host text. The console hosts are cfg'd to their targets, so a host
+    `cargo check` never sees their bodies.
+  - `xtask/tests/standalone.rs::every_template_compiles_out_of_the_box` (ignored)
+    runs `cargo check --all-targets` on the game crate and PC host of each template.
+  - All of them scaffold under `target/test-projects/`, never the system temp dir.
+- **Demo-based projects run as they are.** A castle64 copy and a showcase copy each
+  ran the 30-frame PC smoke (`TRINO_RUN_OK`).
+
 ## Console projects (`trino.toml`, ADR 0008)
 
 | Key | Meaning |
 |---|---|
-| `[project]` | `name` (file stem); `title` (≤ 20 ASCII, the ROM header and 3DS menu); `description`, `author` |
-| `[n64]` | `package` (staticlib crate); `save` (`eeprom16k` = 2 KB: framing leaves 2040 B) |
-| `[3ds]` | `package`, `bin`, `icon` (a 48×48 PNG) |
+| `[project]` | `name` (file stem); `title` (≤ 20 ASCII, the ROM header and 3DS menu); `description`, `author`; `platforms` (below) |
+| `[pc]` | `package` (desktop host crate; optional, default `<name>-pc`) |
+| `[n64]` | `package` (staticlib crate); `save` (`eeprom16k` = 2 KB: framing leaves 2040 B). Needed only when n64 is targeted |
+| `[3ds]` | `package`, `bin`, `icon` (a 48×48 PNG). Needed only when 3ds is targeted |
 | `[test]` | `n64_goldens`/`n3ds_goldens` (frames the self-test dumps, in order); `n64_max_frame_us` (gate on `TRINO_FRAME` averages); `watch` dirs |
 
+- **Target platforms:** `platforms = ["pc", "n64", "3ds"]` under `[project]`
+  (missing = all three, the old behavior).
+  - Each platform command checks it: `cargo trino build n64` on a project without
+    `"n64"` fails, and the message names the field and the file.
+  - `build all`, `assets all` and `test all` skip the left-out platforms and print
+    a line for each. Bare `build` and `assets` mean `all`; bare `test` is still
+    the host suite only.
+  - The gate is `Project::require`, called from `gate` in `xtask/src/main.rs`
+    after `hardware::parse`, so `run --target n64` is gated too. The batch plan is
+    `Project::batch`.
+  - PC commands follow the selected project: `build|run pc` build its `[pc]`
+    package, `assets pc` bakes its `assets/`, and `test pc` runs its workspace.
 - **The self-test** is the macro's second argument, `fn(&mut N64Host, &mut G) ->
   Result<(), String>`. Drive frames with `host.step`, time them with `host.measure` +
   `host.report_frames`, and dump goldens with `host.dump_framebuffer`. The N64 macro

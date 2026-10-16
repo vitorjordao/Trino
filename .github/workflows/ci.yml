@@ -69,9 +69,13 @@ jobs:
       - name: Exported-scene game smoke (Linux, headless)
         if: runner.os == 'Linux'
         run: TRINO_GAME=showcase TRINO_SMOKE_FRAMES=60 xvfb-run -a cargo run -p trino-app-pc
+      # A project argument opens the editor (no argument: the launcher).
       - name: Editor smoke (Linux, headless)
         if: runner.os == 'Linux'
-        run: TRINO_EDITOR_SMOKE_FRAMES=30 xvfb-run -a cargo run -p trino-editor
+        run: TRINO_EDITOR_SMOKE_FRAMES=30 xvfb-run -a cargo run -p trino-editor -- .
+      - name: Editor project launcher smoke (Linux, headless)
+        if: runner.os == 'Linux'
+        run: TRINO_EDITOR_RECENT=target/recent-projects.txt TRINO_EDITOR_SMOKE_FRAMES=30 xvfb-run -a cargo run -p trino-editor
       # Headless editor flows (egui_kittest): own process state, so alone.
       - name: Editor UI tests (Linux, headless)
         if: runner.os == 'Linux'
@@ -81,10 +85,11 @@ jobs:
       - name: Editor Play-here smoke (Linux, headless)
         if: runner.os == 'Linux'
         run: TRINO_EDITOR_PLAY=here TRINO_EDITOR_SMOKE_FRAMES=60 xvfb-run -a cargo run -p trino-editor
-      # `cargo xtask new --standalone` into a temp dir, built and run there.
+      # `cargo xtask new --standalone` into a temp dir, built and run there;
+      # every --template (blank, castle64, showcase) must `cargo check`.
       - name: Standalone project smoke (Linux, headless)
         if: runner.os == 'Linux'
-        run: xvfb-run -a cargo test -p xtask --test standalone
+        run: xvfb-run -a cargo test -p xtask --test standalone -- --include-ignored
         env:
           TRINO_REQUIRE_GPU: "1"
 

@@ -269,6 +269,11 @@ new skill when none fits. Then run `cargo xtask agents sync`. The steps are in
     N64 frame as CPU vs RSP with each reason a draw misses the RSP (`rsp_check`,
     `RspReject`), the 3DS triangles, and draws sent but unseen (click one to select it);
     `trino_scene::budget`, also `cargo xtask scene budget`.
+  - **Project launcher** (no project argument): recent projects (a text file in the
+    user's config dir, `TRINO_EDITOR_RECENT`), open an existing folder, create one
+    from a template (blank, castle64 or showcase) through `trino-scaffold`, the same
+    code as `cargo xtask new --standalone --template`. `cargo xtask editor <dir>`
+    opens a project directly; the scene hooks still open the working directory.
   - **Layout audit** (`layout_audit.rs`): no widget off the window or overlapping, over
     the whole editor at 960x600 and 1600x940.
 - **Emulators in CI**:
@@ -329,6 +334,9 @@ new skill when none fits. Then run `cargo xtask agents sync`. The steps are in
   - `trino.toml` and `cargo xtask build|run|test|watch n64|3ds --project <dir>` (or
     `$TRINO_PROJECT`, or a `trino.toml` in the cwd). The standalone template gives
     `cargo trino`.
+  - `[project] platforms = ["pc", "n64", "3ds"]` (missing = all): naming a left-out
+    platform fails with the field in the message; `build all`, `assets all` and
+    `test all` skip it. The PC commands use the project's `[pc] package` and `assets/`.
   - `n64_main!` / `n3ds_main!` with `N64Host` / `N3dsHost` (boot, step, measure, report
     frames with the real fps, dump goldens). Project gates: `TRINO_TEST_PASS`, goldens,
     `n64_max_frame_us`.
@@ -609,6 +617,18 @@ cargo test --workspace
 - **Keep gamepad logic out of the gilrs glue.** `PcInput::merge_pad` folds a
   device-free `PadReading`, so the mapping is tested without a pad or the feature;
   `read_gilrs` only copies values.
+- **A bare `cargo run -p trino-editor` shows the project launcher.** Scripts and CI
+  that want the editor pass a project (`-- .` for the engine's own content) or set a
+  scene hook (`TRINO_EDITOR_SCENE`, `_TAB`, `_SELECT`, ...).
+- **The editor's fonts have no `→` (or other arrow) glyph:** it draws as a box. Use
+  words or a Phosphor icon (`theme::icon`).
+- **`cargo test` / `cargo clippy` do not rebuild `target/debug/trino-editor`.** Before
+  a screenshot with the editor hooks, run `cargo build -p trino-editor`, or the
+  picture shows the old UI.
+- **Templates and scaffold tests write under `target/test-projects/`, never the
+  system temp dir** (a RAM disk on some machines). A scaffolded project's `cargo
+  check` shares the engine's `target/` (`CARGO_TARGET_DIR`).
+
 - **N64 FFI: no scalar float after an integer argument.** Rust is o32 and libdragon
   is o64, so the float arrives as garbage. Pass 16.16 fixed point (`u32`) or a
   pointer (ADR 0005 §6).

@@ -25,6 +25,7 @@ mod standalone;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
+use project::Target;
 use trino_asset_pipeline::{Platform, bake_all};
 
 const HELP: &str = "\
@@ -33,9 +34,13 @@ cargo xtask <command> [platform] [-- extra args]
 commands:
   build <pc|n64|3ds>   compile the app for a platform (--selftest: the
                        self-test build `test 3ds --no-build` boots)
-  [--project <dir>]    n64/3ds commands package an external project (its
-                       trino.toml; also $TRINO_PROJECT or a trino.toml in
-                       the current directory) instead of the engine's demo
+  build [all]          every platform the project targets, in turn
+  [--project <dir>]    package an external project (its trino.toml; also
+                       $TRINO_PROJECT or a trino.toml in the current
+                       directory) instead of the engine's demo. Its
+                       [project] platforms = [\"pc\", \"n64\", \"3ds\"] (default:
+                       all) gates every platform command: batch commands
+                       skip the others, naming one fails
   run   <pc|n64|3ds>   build and launch (emulator for consoles)
   run n64 --device sc64|everdrive
   run 3ds --device network [--ip <IP>] [--gdb [--gdb-port N]]
@@ -45,20 +50,27 @@ commands:
                        --selftest the self-test build; `run --target n64`
                        also works (docs/HARDWARE.md)
   test  [pc|n64|3ds] [--bless] [--no-build]
-                       run the test suite (default: everything testable);
-                       --bless regenerates golden images
+                       run the test suite (default: the workspace's host
+                       tests); --bless regenerates golden images
+  test all             the host suite, then each targeted console's
   assets <pc|n64|3ds>  bake assets into target/assets/<platform>
+  assets [all]         bake for every platform the project targets
   watch <pc|n64>       live-reload session (pc: dylib hot swap; n64: rebuild
                        ROM + relaunch ares). pc: --game <crate> picks the
                        game dylib to rebuild (default: castle64)
-  editor               launch the Trino editor
+  editor [<dir>]       launch the Trino editor: the project launcher
+                       (recent projects, open, create from a template), or
+                       straight into the project at <dir> / --project
   emulators setup ares|azahar
                        provision the self-test emulators (ares Docker image
                        / pinned Azahar AppImage into target/emulators)
   new <name>           scaffold a new game crate under examples/
   new <name> --standalone <dir> [--git <url> [--rev <r>|--branch <b>]]
+      [--template blank|castle64|showcase]
                        a game project outside this repo (own workspace,
-                       PC host, assets); engine via path (default) or git
+                       PC host, assets); engine via path (default) or git;
+                       the game starts blank or as a copy of a demo
+  new                  the same, asking for name, folder and template
   gen-assets           regenerate the sample master assets (dev utility)
   scene check [file..] validate scenes/prefabs/materials (text-first loop)
   scene export [--platform pc|n64|3ds] <scene.ron> <out.rs>
@@ -146,43 +158,49 @@ fn main() -> ExitCode {
         );
         return ExitCode::FAILURE;
     }
+    // `[project] platforms` in trino.toml: a platform command on a platform
+    // the project leaves out fails here, before any toolchain runs (after
+    // `hardware::parse`, so `run --target n64` is gated too).
+    if let Err(e) = gate(&project, &args) {
+        eprintln!("xtask: {e}");
+        return ExitCode::FAILURE;
+    }
     let mut it = args.iter().map(String::as_str);
 
     match (it.next(), it.next()) {
-        (Some("build"), Some("pc")) => cargo(&["build", "-p", "trino-app-pc"], &[]),
+        (Some("build"), Some("pc")) => build_pc(&project, "build", &[]),
         (Some("run"), Some("pc")) => {
             let extra: Vec<&str> = it.collect();
-            let mut cmd = vec!["run", "-p", "trino-app-pc"];
-            cmd.extend(extra);
-            cargo(&cmd, &[])
+            build_pc(&project, "run", &extra)
         }
-        (Some("test"), None | Some("pc")) => {
-            let envs: &[(&str, &str)] = if bless { &[("TRINO_BLESS", "1")] } else { &[] };
-            cargo(&["test", "--workspace"], envs)
+        (Some("test"), None | Some("pc")) => test_pc(&project, bless),
+        // Batch commands: every platform `[project] platforms` lists, in
+        // order pc, n64, 3ds; the others are skipped with a line saying so.
+        (Some("build"), None | Some("all")) => batch(&project, "build", |t| match t {
+            Target::Pc => build_pc(&project, "build", &[]),
+            Target::N64 => n64::build(&project, selftest),
+            Target::N3ds => n3ds::build(&project, selftest),
+        }),
+        (Some("assets"), None | Some("all")) => {
+            batch(&project, "assets", |t| assets_for(&project, t))
         }
-        (Some("assets"), Some("n64")) => match n64::bake_assets(&project, false) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(e) => {
-                eprintln!("[n64] {e}");
-                ExitCode::FAILURE
-            }
-        },
-        (Some("assets"), Some("3ds" | "n3ds")) => match n3ds::bake_assets(&project, false) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(e) => {
-                eprintln!("[3ds] {e}");
-                ExitCode::FAILURE
-            }
-        },
+        (Some("test"), Some("all")) => batch(&project, "test", |t| match t {
+            Target::Pc => test_pc(&project, bless),
+            Target::N64 => n64::test(&project, bless),
+            Target::N3ds => n3ds::test(&project, !no_build, bless),
+        }),
+        (Some("assets"), Some("n64")) => assets_for(&project, Target::N64),
+        (Some("assets"), Some("3ds" | "n3ds")) => assets_for(&project, Target::N3ds),
         (Some("assets"), Some(platform)) => match Platform::parse(platform) {
-            Some(p) => assets(p),
+            Some(Platform::Pc) => assets_for(&project, Target::Pc),
+            Some(p) => assets(&project.root, p),
             None => {
                 eprintln!("xtask: unknown platform `{platform}`");
                 ExitCode::FAILURE
             }
         },
         (Some("watch"), Some("pc")) => watch_pc(&game),
-        (Some("editor"), _) => cargo(&["run", "-p", "trino-editor"], &[]),
+        (Some("editor"), _) => editor(&project, args.get(1).map(String::as_str)),
         (Some("gen-assets"), _) => gen_assets(),
         (Some("agents"), sub) => agents::run(&repo_root(), sub),
         (Some("emulators"), _) => {
@@ -231,12 +249,18 @@ fn main() -> ExitCode {
             let rest: Vec<&str> = args.iter().skip(2).map(String::as_str).collect();
             new_game(name, &rest)
         }
+        // No name: ask on stdin (name, folder, template). A closed or empty
+        // stdin prints the usage, as before the prompts existed.
         (Some("new"), None) => {
-            eprintln!(
-                "xtask: usage: cargo xtask new <kebab-case-name> \
-                 [--standalone <dir> [--git <url> [--rev <r> | --branch <b>]]]"
-            );
-            ExitCode::FAILURE
+            let root = repo_root();
+            let stdin = std::io::stdin();
+            match standalone::prompt(&mut stdin.lock(), &mut std::io::stdout(), &root) {
+                Some((names, s)) => make_standalone(&root, &names, &s),
+                None => {
+                    eprintln!("\n{NEW_USAGE}");
+                    ExitCode::FAILURE
+                }
+            }
         }
 
         (Some("help") | None, _) => {
@@ -270,8 +294,113 @@ fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..")
 }
 
-fn assets(platform: Platform) -> ExitCode {
-    let root = repo_root();
+/// Fails when `args` (`<command> <platform> ...`) runs a platform command
+/// on a platform the project's `[project] platforms` leaves out.
+fn gate(project: &project::Project, args: &[String]) -> Result<(), String> {
+    let (Some(cmd), Some(platform)) = (args.first(), args.get(1)) else {
+        return Ok(());
+    };
+    if !matches!(cmd.as_str(), "build" | "run" | "test" | "watch" | "assets") {
+        return Ok(());
+    }
+    match Target::parse(platform) {
+        Some(t) => project.require(t),
+        None => Ok(()),
+    }
+}
+
+/// Run `one` on each platform of the project, skipping the platforms it
+/// does not target; stops at the first failure.
+fn batch(
+    project: &project::Project,
+    what: &str,
+    mut one: impl FnMut(Target) -> ExitCode,
+) -> ExitCode {
+    for (t, runs) in project.batch() {
+        if !runs {
+            println!(
+                "xtask {what}: skipping {} (not in [project] platforms)",
+                t.key()
+            );
+            continue;
+        }
+        println!("xtask {what}: {}", t.key());
+        let code = one(t);
+        if code != ExitCode::SUCCESS {
+            eprintln!("xtask {what}: {} failed", t.key());
+            return code;
+        }
+    }
+    ExitCode::SUCCESS
+}
+
+/// `assets <platform>` for the selected project (the engine's own
+/// `assets/` when none is).
+fn assets_for(project: &project::Project, t: Target) -> ExitCode {
+    let (tag, made) = match t {
+        Target::Pc => return assets(&project.root, Platform::Pc),
+        Target::N64 => ("n64", n64::bake_assets(project, false)),
+        Target::N3ds => ("3ds", n3ds::bake_assets(project, false)),
+    };
+    match made {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("[{tag}] {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// `build pc` / `run pc`: the engine's `trino-app-pc`, or an external
+/// project's desktop host (`[pc] package`, default `<name>-pc`).
+fn build_pc(project: &project::Project, verb: &str, extra: &[&str]) -> ExitCode {
+    let manifest = project.root.join("Cargo.toml");
+    let manifest = manifest.to_string_lossy();
+    let mut cmd = vec![verb];
+    if !project.is_engine {
+        cmd.extend(["--manifest-path", manifest.as_ref()]);
+    }
+    cmd.extend(["-p", project.pc_package.as_str()]);
+    cmd.extend(extra);
+    cargo(&cmd, &[])
+}
+
+/// `test` / `test pc`: the workspace suite (the project's own workspace
+/// when one is selected).
+fn test_pc(project: &project::Project, bless: bool) -> ExitCode {
+    let envs: &[(&str, &str)] = if bless { &[("TRINO_BLESS", "1")] } else { &[] };
+    let manifest = project.root.join("Cargo.toml");
+    let manifest = manifest.to_string_lossy();
+    let mut cmd = vec!["test", "--workspace"];
+    if !project.is_engine {
+        cmd.extend(["--manifest-path", manifest.as_ref()]);
+    }
+    cargo(&cmd, envs)
+}
+
+/// `editor [<dir>]`: the editor's project launcher, or the project at
+/// `<dir>` (else the selected external project). Runs from the engine's
+/// manifest so `cargo trino editor` works inside a project too.
+fn editor(project: &project::Project, dir: Option<&str>) -> ExitCode {
+    let manifest = project.engine.join("Cargo.toml");
+    let manifest = manifest.to_string_lossy();
+    let mut cmd = vec![
+        "run",
+        "--manifest-path",
+        manifest.as_ref(),
+        "-p",
+        "trino-editor",
+    ];
+    let root = project.root.to_string_lossy();
+    match dir {
+        Some(d) => cmd.extend(["--", d]),
+        None if !project.is_engine => cmd.extend(["--", root.as_ref()]),
+        None => {}
+    }
+    cargo(&cmd, &[])
+}
+
+fn assets(root: &Path, platform: Platform) -> ExitCode {
     let out = root.join("target/assets").join(platform.key());
     match bake_all(&root.join("assets"), platform, &out) {
         Ok(report) => {
@@ -879,18 +1008,9 @@ fn cargo(args: &[&str], envs: &[(&str, &str)]) -> ExitCode {
 fn new_game(name: &str, rest: &[&str]) -> ExitCode {
     let root = repo_root();
     match standalone::parse_args(rest, &root) {
-        Ok(Some((dir, source))) => {
-            let made = Names::new(name)
-                .and_then(|names| standalone::scaffold(&root, &dir, &names, &source));
-            return match made {
-                Ok(()) => {
-                    println!("created standalone project {}", dir.display());
-                    println!("\nnext steps:");
-                    println!("  cd {}", dir.display());
-                    println!("  cargo run -p {name}-pc   # play (TRINO_SIM=3ds for the 3DS look)");
-                    println!("  cargo test               # the game's unit tests");
-                    ExitCode::SUCCESS
-                }
+        Ok(Some(s)) => {
+            return match Names::new(name) {
+                Ok(names) => make_standalone(&root, &names, &s),
                 Err(e) => {
                     eprintln!("xtask: {e}");
                     ExitCode::FAILURE
@@ -920,49 +1040,37 @@ fn new_game(name: &str, rest: &[&str]) -> ExitCode {
     }
 }
 
-/// A game name in the forms templates need.
-pub struct Names {
-    pub kebab: String,
-    pub snake: String,
-    pub camel: String,
-}
+const NEW_USAGE: &str = "xtask: usage: cargo xtask new <kebab-case-name> \
+     [--standalone <dir> [--git <url> [--rev <r> | --branch <b>]] \
+     [--template blank|castle64|showcase]]";
 
-impl Names {
-    pub fn new(name: &str) -> Result<Names, String> {
-        let valid = !name.is_empty()
-            && name
-                .chars()
-                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-            && name.chars().next().is_some_and(|c| c.is_ascii_lowercase());
-        if !valid {
-            return Err(format!(
-                "`{name}` is not a valid crate name — use kebab-case (e.g. my-game)"
-            ));
+/// Render a standalone project and print what to do next.
+fn make_standalone(root: &Path, names: &Names, s: &standalone::Standalone) -> ExitCode {
+    match standalone::scaffold(root, &s.dir, names, &s.source, s.template) {
+        Ok(()) => {
+            let dir = s.dir.display();
+            println!(
+                "created standalone project {dir} ({} template)",
+                s.template.key()
+            );
+            println!("\nnext steps:");
+            println!("  cd {dir}");
+            println!(
+                "  cargo run -p {}-pc   # play (TRINO_SIM=3ds for the 3DS look)",
+                names.kebab
+            );
+            println!("  cargo test               # the game's unit tests");
+            println!("  cargo trino editor       # open it in the editor");
+            ExitCode::SUCCESS
         }
-        let camel = name
-            .split('-')
-            .map(|w| {
-                let mut c = w.chars();
-                match c.next() {
-                    Some(f) => f.to_ascii_uppercase().to_string() + c.as_str(),
-                    None => String::new(),
-                }
-            })
-            .collect();
-        Ok(Names {
-            kebab: name.to_string(),
-            snake: name.replace('-', "_"),
-            camel,
-        })
-    }
-
-    /// Fill `{{name}}`, `{{name_snake}}` and `{{name_camel}}`.
-    pub fn render(&self, text: &str) -> String {
-        text.replace("{{name}}", &self.kebab)
-            .replace("{{name_snake}}", &self.snake)
-            .replace("{{name_camel}}", &self.camel)
+        Err(e) => {
+            eprintln!("xtask: {e}");
+            ExitCode::FAILURE
+        }
     }
 }
+
+pub use trino_scaffold::Names;
 
 /// Testable core of `new_game`: render the template into `<root>/examples/<name>`.
 fn scaffold_game(root: &Path, name: &str) -> Result<PathBuf, String> {
@@ -981,16 +1089,7 @@ fn scaffold_game(root: &Path, name: &str) -> Result<PathBuf, String> {
     Ok(dest)
 }
 
-/// Template files that would confuse tools in place (a placeholder-laden
-/// `Cargo.toml` breaks cargo's git-source scan of this repo) carry a
-/// `.tmpl` suffix, dropped when rendered.
-fn template_target_name(name: &std::ffi::OsStr) -> std::ffi::OsString {
-    let s = name.to_string_lossy();
-    match s.strip_suffix(".tmpl") {
-        Some(base) => base.into(),
-        None => name.to_owned(),
-    }
-}
+use trino_scaffold::template_target_name;
 
 fn copy_template(
     from: &Path,
@@ -1156,6 +1255,32 @@ mod tests {
         assert!(!super::real_change(&[]));
         assert!(!super::real_change(std::slice::from_ref(&read)));
         assert!(super::real_change(&[read, made]));
+    }
+
+    /// The platform gate stops platform commands on a platform the
+    /// project leaves out, and nothing else.
+    #[test]
+    fn the_platform_gate_only_stops_left_out_platforms() {
+        let mut p = crate::project::Project::engine();
+        p.platforms = vec![crate::project::Target::Pc, crate::project::Target::N3ds];
+        let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        for ok in [
+            &["build", "pc"][..],
+            &["run", "3ds"],
+            &["test", "n3ds"],
+            &["assets", "all"],
+            &["build"],
+            &["test"],
+            &["scene", "check"],
+            &["model", "inspect", "n64"],
+            &["new", "n64"],
+        ] {
+            super::gate(&p, &args(ok)).unwrap_or_else(|e| panic!("{ok:?}: {e}"));
+        }
+        for cmd in ["build", "run", "test", "watch", "assets"] {
+            let e = super::gate(&p, &args(&[cmd, "n64"])).unwrap_err();
+            assert!(e.contains("does not target n64"), "{cmd}: {e}");
+        }
     }
 
     #[test]

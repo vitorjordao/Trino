@@ -62,3 +62,46 @@ fn standalone_project_builds_tests_and_runs() {
         assert!(dir.join("target/assets/pc/index.toml").exists());
     }
 }
+
+/// Every `--template` scaffolds a project whose game crate and PC host
+/// compile out of the box (`cargo check`, sharing this workspace's
+/// `target/`). The project lives under `target/` too, never in the system
+/// temp dir. Slow: `cargo test -p xtask --test standalone -- --ignored`.
+#[test]
+#[ignore = "runs cargo check on three scaffolded projects"]
+fn every_template_compiles_out_of_the_box() {
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let base = repo.join("target/test-projects");
+    std::fs::create_dir_all(&base).unwrap();
+    let tmp = tempfile::tempdir_in(&base).unwrap();
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+    for template in ["blank", "castle64", "showcase"] {
+        let name = format!("my-{template}");
+        let dir = tmp.path().join(&name);
+        let out = Command::new(env!("CARGO_BIN_EXE_xtask"))
+            .args(["new", &name, "--standalone"])
+            .arg(&dir)
+            .args(["--template", template])
+            .current_dir(&repo)
+            .env_remove("TRINO_PROJECT")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{template}: scaffold failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let check = Command::new(&cargo)
+            .args(["check", "--offline", "--all-targets", "-p", &name, "-p"])
+            .arg(format!("{name}-pc"))
+            .env("CARGO_TARGET_DIR", repo.join("target"))
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        assert!(
+            check.status.success(),
+            "{template}: cargo check failed:\n{}",
+            String::from_utf8_lossy(&check.stderr)
+        );
+    }
+}

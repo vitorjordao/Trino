@@ -20,6 +20,7 @@ trino-platform-3ds = { path = "crates/platform-3ds" }
 trino-asset-pipeline = { path = "crates/asset-pipeline" }
 trino-scene = { path = "crates/scene" }
 trino-runner-pc = { path = "crates/runner-pc" }
+trino-scaffold = { path = "crates/scaffold" }
 hello-sprite = { path = "examples/hello-sprite" }
 platformer = { path = "examples/platformer" }
 castle64 = { path = "examples/castle64" }

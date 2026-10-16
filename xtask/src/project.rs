@@ -20,6 +20,10 @@
 //! title = "My Game"         # ROM header (≤ 20 ASCII chars) + 3DS menu
 //! description = "A console game"
 //! author = "Studio"
+//! platforms = ["pc", "n64", "3ds"]   # optional; missing = all three
+//!
+//! [pc]
+//! package = "my-game-pc"  # desktop host crate (optional; default <name>-pc)
 //!
 //! [n64]
 //! package = "my-game-n64" # staticlib crate (cargo -p)
@@ -36,10 +40,47 @@
 //! n64_max_frame_us = 33333       # gate on TRINO_FRAME lines (30 fps)
 //! watch = ["game", "n64", "assets"]       # dirs `watch n64|3ds` follows
 //! ```
+//!
+//! `platforms` gates every platform command: an explicit `build n64` on a
+//! project without `"n64"` fails naming the field, and the batch commands
+//! (`build all`, `assets all`, `test all`) skip it. The `[n64]` / `[3ds]`
+//! sections are only required for the platforms the project lists.
 
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
+
+/// A platform a project can target (`[project] platforms`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Target {
+    Pc,
+    N64,
+    N3ds,
+}
+
+impl Target {
+    /// Every platform, in the order batch commands visit them.
+    pub const ALL: [Target; 3] = [Target::Pc, Target::N64, Target::N3ds];
+
+    /// The spelling `trino.toml` and the command line use.
+    pub fn key(self) -> &'static str {
+        match self {
+            Target::Pc => "pc",
+            Target::N64 => "n64",
+            Target::N3ds => "3ds",
+        }
+    }
+
+    /// `pc`, `n64`, `3ds` (and the command line's `n3ds` alias).
+    pub fn parse(s: &str) -> Option<Target> {
+        match s {
+            "pc" => Some(Target::Pc),
+            "n64" => Some(Target::N64),
+            "3ds" | "n3ds" => Some(Target::N3ds),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct Project {
@@ -54,6 +95,13 @@ pub struct Project {
     pub title: String,
     pub description: String,
     pub author: String,
+    /// `[project] platforms`, deduplicated in [`Target::ALL`] order; every
+    /// platform when the field is missing (and for the engine itself).
+    pub platforms: Vec<Target>,
+    /// `trino.toml` (None for the engine's own demo): named by the errors.
+    pub manifest: Option<PathBuf>,
+    /// Desktop host crate (`[pc] package`, default `<name>-pc`).
+    pub pc_package: String,
     pub n64_package: String,
     pub n64_save: String,
     pub n3ds_package: String,
@@ -104,9 +152,12 @@ pub struct TestConfig {
 #[serde(deny_unknown_fields)]
 struct File {
     project: ProjectSection,
-    n64: N64Section,
-    #[serde(rename = "3ds")]
-    n3ds: N3dsSection,
+    #[serde(default)]
+    pc: Option<PcSection>,
+    #[serde(default)]
+    n64: Option<N64Section>,
+    #[serde(default, rename = "3ds")]
+    n3ds: Option<N3dsSection>,
     #[serde(default)]
     test: TestConfig,
     #[serde(default)]
@@ -122,6 +173,15 @@ struct ProjectSection {
     description: String,
     #[serde(default)]
     author: String,
+    /// Missing = every platform (the behavior before the field existed).
+    #[serde(default)]
+    platforms: Option<Vec<String>>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PcSection {
+    package: String,
 }
 
 #[derive(Deserialize)]
@@ -143,6 +203,37 @@ struct N3dsSection {
 
 fn default_save() -> String {
     "eeprom16k".into()
+}
+
+/// `[project] platforms`: missing = all; otherwise known names, at least
+/// one, returned deduplicated in [`Target::ALL`] order.
+fn parse_platforms(list: Option<&[String]>) -> Result<Vec<Target>, String> {
+    let Some(list) = list else {
+        return Ok(Target::ALL.to_vec());
+    };
+    let mut out = Vec::new();
+    for name in list {
+        // `n3ds` is a command-line alias, not a manifest spelling.
+        let t = Target::parse(name)
+            .filter(|_| name != "n3ds")
+            .ok_or_else(|| {
+                format!(
+                    "[project] platforms: unknown platform `{name}` (use \"pc\", \"n64\", \"3ds\")"
+                )
+            })?;
+        if !out.contains(&t) {
+            out.push(t);
+        }
+    }
+    if out.is_empty() {
+        return Err(
+            "[project] platforms is empty: list at least one of \"pc\", \"n64\", \"3ds\" \
+             (or remove the field to target all three)"
+                .into(),
+        );
+    }
+    out.sort();
+    Ok(out)
 }
 
 /// The engine checkout xtask was built from.
@@ -176,6 +267,9 @@ impl Project {
             title: "Trino".into(),
             description: "Trino castle64".into(),
             author: "Trino".into(),
+            platforms: Target::ALL.to_vec(),
+            manifest: None,
+            pc_package: "trino-app-pc".into(),
             n64_package: "trino-app-n64".into(),
             n64_save: default_save(),
             n3ds_package: "trino-app-3ds".into(),
@@ -204,7 +298,10 @@ impl Project {
         let path = root.join("trino.toml");
         let text =
             std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-        Self::parse(&text, root, engine_root()).map_err(|e| format!("{}: {e}", path.display()))
+        let mut p = Self::parse(&text, root, engine_root())
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        p.manifest = Some(path);
+        Ok(p)
     }
 
     fn parse(text: &str, root: PathBuf, engine: PathBuf) -> Result<Self, String> {
@@ -227,6 +324,31 @@ impl Project {
                 f.project.title
             ));
         }
+        let platforms = parse_platforms(f.project.platforms.as_deref())?;
+        let wants = |t: Target| platforms.contains(&t);
+        if wants(Target::N64) && f.n64.is_none() {
+            return Err(
+                "[n64] is missing: add it (package = \"<crate>\"), or leave \"n64\" out of \
+                 [project] platforms"
+                    .into(),
+            );
+        }
+        if wants(Target::N3ds) && f.n3ds.is_none() {
+            return Err(
+                "[3ds] is missing: add it (package, bin), or leave \"3ds\" out of \
+                 [project] platforms"
+                    .into(),
+            );
+        }
+        let n64 = f.n64.unwrap_or(N64Section {
+            package: String::new(),
+            save: default_save(),
+        });
+        let n3ds = f.n3ds.unwrap_or(N3dsSection {
+            package: String::new(),
+            bin: String::new(),
+            icon: None,
+        });
         let watch = f.test.watch.clone().unwrap_or_else(|| {
             ["game", "n64", "n3ds", "3ds", "assets"]
                 .iter()
@@ -235,17 +357,23 @@ impl Project {
                 .collect()
         });
         Ok(Project {
-            n3ds_icon: f.n3ds.icon.map(|i| root.join(i)),
+            n3ds_icon: n3ds.icon.map(|i| root.join(i)),
             is_engine: root == engine,
             engine,
+            pc_package: f
+                .pc
+                .map(|pc| pc.package)
+                .unwrap_or_else(|| format!("{}-pc", f.project.name)),
             name: f.project.name,
             title: f.project.title,
             description: f.project.description,
             author: f.project.author,
-            n64_package: f.n64.package,
-            n64_save: f.n64.save,
-            n3ds_package: f.n3ds.package,
-            n3ds_bin: f.n3ds.bin,
+            platforms,
+            manifest: None,
+            n64_package: n64.package,
+            n64_save: n64.save,
+            n3ds_package: n3ds.package,
+            n3ds_bin: n3ds.bin,
             test: f.test,
             watch,
             root,
@@ -275,6 +403,41 @@ impl Project {
             return Self::load(&cwd);
         }
         Ok(Self::engine())
+    }
+
+    /// `Ok` when the project targets `t`; otherwise an error that names
+    /// the `trino.toml` field to change.
+    pub fn require(&self, t: Target) -> Result<(), String> {
+        if self.platforms.contains(&t) {
+            return Ok(());
+        }
+        let file = self
+            .manifest
+            .as_ref()
+            .map_or_else(|| "trino.toml".to_string(), |m| m.display().to_string());
+        let listed = self
+            .platforms
+            .iter()
+            .map(|p| format!("\"{}\"", p.key()))
+            .collect::<Vec<_>>()
+            .join(", ");
+        Err(format!(
+            "project `{}` does not target {}: {file} has [project] platforms = [{listed}] \
+             (add \"{}\" there to build it)",
+            self.name,
+            t.key(),
+            t.key()
+        ))
+    }
+
+    /// What a batch command (`build all`, `assets all`, `test all`) does on
+    /// each platform: `(platform, runs)`, in [`Target::ALL`] order — the
+    /// platforms the project leaves out are skipped.
+    pub fn batch(&self) -> Vec<(Target, bool)> {
+        Target::ALL
+            .iter()
+            .map(|t| (*t, self.platforms.contains(t)))
+            .collect()
     }
 
     /// Output ROM / app: `target/n64/<name>.z64`, `target/3ds/<name>.3dsx`.
@@ -318,7 +481,7 @@ package = "my-game-n64"
 
 [3ds]
 package = "my-game-3ds"
-bin = "pnp-3ds"
+bin = "my-game-3ds"
 icon = "assets/icon.png"
 
 [test]
@@ -339,7 +502,7 @@ watch = ["game"]
         assert_eq!(p.rom(), PathBuf::from("/g/target/n64/my-game.z64"));
         assert_eq!(
             p.n3ds_elf(),
-            PathBuf::from("/g/target/armv6k-nintendo-3ds/release/pnp-3ds.elf")
+            PathBuf::from("/g/target/armv6k-nintendo-3ds/release/my-game-3ds.elf")
         );
         assert_eq!(p.n3ds_icon, Some(PathBuf::from("/g/assets/icon.png")));
         assert_eq!(p.test.n64_goldens, ["level"]);
@@ -377,10 +540,126 @@ watch = ["game"]
         assert!(Project::parse(&accent, "/g".into(), "/e".into()).is_err());
     }
 
+    /// A manifest written before `platforms` existed parses as it always
+    /// did and targets every platform.
+    #[test]
+    fn a_manifest_without_platforms_targets_everything() {
+        let p = Project::parse(SAMPLE, "/g".into(), "/e".into()).unwrap();
+        assert_eq!(p.platforms, Target::ALL);
+        assert_eq!(p.pc_package, "my-game-pc");
+        assert_eq!(p.n64_package, "my-game-n64");
+        assert_eq!(p.n3ds_bin, "my-game-3ds");
+        assert!(p.batch().iter().all(|(_, runs)| *runs));
+        for t in Target::ALL {
+            p.require(t).unwrap();
+        }
+    }
+
+    fn with_platforms(list: &str) -> String {
+        SAMPLE.replace(
+            "author = \"Studio\"\n",
+            &format!("author = \"Studio\"\nplatforms = {list}\n"),
+        )
+    }
+
+    #[test]
+    fn platforms_parse_dedupe_and_sort() {
+        let p = Project::parse(
+            &with_platforms(r#"["3ds", "pc", "3ds"]"#),
+            "/g".into(),
+            "/e".into(),
+        )
+        .unwrap();
+        assert_eq!(p.platforms, [Target::Pc, Target::N3ds]);
+        assert_eq!(
+            p.batch(),
+            [
+                (Target::Pc, true),
+                (Target::N64, false),
+                (Target::N3ds, true)
+            ]
+        );
+        let pc = format!(
+            "{}\n[pc]\npackage = \"desk\"\n",
+            with_platforms(r#"["pc"]"#)
+        );
+        let p = Project::parse(&pc, "/g".into(), "/e".into()).unwrap();
+        assert_eq!(p.pc_package, "desk");
+    }
+
+    #[test]
+    fn console_sections_are_only_required_for_listed_platforms() {
+        // PC only: no [n64] and no [3ds] at all.
+        let pc_only = "[project]\nname = \"my-game\"\ntitle = \"My Game\"\nplatforms = [\"pc\"]\n";
+        let p = Project::parse(pc_only, "/g".into(), "/e".into()).unwrap();
+        assert_eq!(p.platforms, [Target::Pc]);
+        assert!(p.n64_package.is_empty() && p.n3ds_package.is_empty());
+        // Listed but missing: the error says which section and the way out.
+        let n64 = pc_only.replace(r#"["pc"]"#, r#"["pc", "n64"]"#);
+        let e = Project::parse(&n64, "/g".into(), "/e".into()).unwrap_err();
+        assert!(e.contains("[n64] is missing"), "{e}");
+        assert!(e.contains("[project] platforms"), "{e}");
+        let n3ds = pc_only.replace(r#"["pc"]"#, r#"["3ds"]"#);
+        let e = Project::parse(&n3ds, "/g".into(), "/e".into()).unwrap_err();
+        assert!(e.contains("[3ds] is missing"), "{e}");
+        // Without the field every section is needed, as before.
+        let e = Project::parse(
+            &pc_only.replace("platforms = [\"pc\"]\n", ""),
+            "/g".into(),
+            "/e".into(),
+        )
+        .unwrap_err();
+        assert!(e.contains("[n64] is missing"), "{e}");
+    }
+
+    #[test]
+    fn bad_platform_lists_are_rejected() {
+        for (list, needle) in [
+            (r#"["pc", "wii"]"#, "unknown platform `wii`"),
+            (r#"["n3ds"]"#, "unknown platform `n3ds`"),
+            ("[]", "platforms is empty"),
+        ] {
+            let e = Project::parse(&with_platforms(list), "/g".into(), "/e".into()).unwrap_err();
+            assert!(e.contains(needle), "{list}: {e}");
+        }
+        let e = Project::parse(&with_platforms("\"pc\""), "/g".into(), "/e".into()).unwrap_err();
+        assert!(e.contains("platforms"), "{e}");
+    }
+
+    #[test]
+    fn requiring_a_missing_platform_names_the_field_and_the_file() {
+        let mut p = Project::parse(
+            &with_platforms(r#"["pc", "3ds"]"#),
+            "/g".into(),
+            "/e".into(),
+        )
+        .unwrap();
+        p.manifest = Some("/g/trino.toml".into());
+        p.require(Target::Pc).unwrap();
+        p.require(Target::N3ds).unwrap();
+        let e = p.require(Target::N64).unwrap_err();
+        assert!(e.contains("does not target n64"), "{e}");
+        assert!(
+            e.contains(r#"/g/trino.toml has [project] platforms = ["pc", "3ds"]"#),
+            "{e}"
+        );
+        assert!(e.contains(r#"add "n64""#), "{e}");
+    }
+
+    #[test]
+    fn targets_parse_their_command_line_spellings() {
+        for t in Target::ALL {
+            assert_eq!(Target::parse(t.key()), Some(t));
+        }
+        assert_eq!(Target::parse("n3ds"), Some(Target::N3ds));
+        assert_eq!(Target::parse("xbox"), None);
+    }
+
     #[test]
     fn engine_default_matches_the_in_repo_apps() {
         let p = Project::engine();
         assert!(p.is_engine);
+        assert_eq!(p.platforms, Target::ALL);
         assert_eq!(
             p.n64_staticlib(),
             "target/mips-nintendo64-none/release/libtrino_app_n64.a"

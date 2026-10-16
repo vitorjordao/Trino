@@ -1120,3 +1120,148 @@ fn platform_budget_shows_rsp_reasons_and_unseen_draws() {
         leave_temp_project(&repo);
     }
 }
+
+/// The project launcher (no project argument): recent projects from the
+/// file (`TRINO_EDITOR_RECENT`), a long missing path that must not break
+/// the layout, Forget, Open with a bad folder, and Create from the
+/// showcase demo, which opens the new project in the editor (its scene,
+/// its assets) and puts it first in the recent file. Everything is written
+/// under `target/test-projects/`.
+#[test]
+#[ignore = "changes cwd/env: run alone with --ignored --test-threads=1"]
+fn launcher_lists_recent_projects_opens_and_creates() {
+    use crate::{Screen, Shell, Start};
+    use trino_scaffold::{EngineSource, Names, Template};
+
+    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .unwrap();
+    let base = repo.join("target/test-projects");
+    std::fs::create_dir_all(&base).unwrap();
+    let tmp = tempfile::tempdir_in(&base).unwrap();
+    let engine = crate::launcher::engine_checkout().expect("built in a checkout");
+    let old = tmp.path().join("old-game");
+    trino_scaffold::scaffold(
+        &engine,
+        &old,
+        &Names::new("old-game").unwrap(),
+        &EngineSource::Path(engine.clone()),
+        Template::Blank,
+    )
+    .unwrap();
+    let gone = tmp.path().join(
+        "a-folder-with-a-really-long-name-that-keeps-going/and-going/through-many/levels/of-nesting/gone-game",
+    );
+    let recent = tmp.path().join("recent-projects.txt");
+    let now = crate::recent::now();
+    std::fs::write(
+        &recent,
+        format!(
+            "{}\t{}\n{}\t{}\n",
+            now - 3600,
+            old.display(),
+            now - 3 * 86_400,
+            gone.display()
+        ),
+    )
+    .unwrap();
+    std::env::set_current_dir(&repo).unwrap();
+    // SAFETY: --ignored --test-threads=1 only (module docs).
+    unsafe {
+        std::env::set_var("TRINO_EDITOR_RECENT", &recent);
+        std::env::remove_var("TRINO_EDITOR_SCENE");
+    }
+    let build = |size: egui::Vec2| {
+        std::panic::catch_unwind(|| {
+            Harness::builder()
+                .with_size(size)
+                .wgpu()
+                .build_eframe(|cc| Shell::new(cc, &Start::Launcher))
+        })
+    };
+    let mut last = None;
+    for size in [egui::vec2(960.0, 600.0), egui::vec2(1600.0, 940.0)] {
+        let mut h = match build(size) {
+            Ok(h) => h,
+            Err(e) => {
+                assert!(
+                    std::env::var("TRINO_REQUIRE_GPU").is_err(),
+                    "TRINO_REQUIRE_GPU set but the editor could not start"
+                );
+                eprintln!("skipping launcher UI test (no GPU adapter): {e:?}");
+                unsafe { std::env::remove_var("TRINO_EDITOR_RECENT") };
+                return;
+            }
+        };
+        h.run_steps(3);
+        h.get_by_label("old-game");
+        h.get_by_label("Open old-game");
+        h.get_by_label_contains("folder not found");
+        h.get_by_label_contains("opened 1 h ago");
+        crate::layout_audit::assert_clean(
+            &h,
+            size,
+            true,
+            &format!("launcher at {}x{}", size.x, size.y),
+        );
+        last = Some(h);
+    }
+    let mut h = last.unwrap();
+
+    // Forget the missing project: gone from the list and the file.
+    h.get_by_label("Forget gone-game").click();
+    h.run_steps(2);
+    assert!(h.query_by_label("Forget gone-game").is_none());
+    let file = std::fs::read_to_string(&recent).unwrap();
+    assert!(
+        !file.contains("gone-game") && file.contains("old-game"),
+        "{file}"
+    );
+
+    // Open a folder that is not a project: the reason shows, nothing opens.
+    launcher_mut(&mut h).open_path = tmp.path().display().to_string();
+    h.get_by_label("Open").click();
+    h.run_steps(2);
+    h.get_by_label_contains("is not a Trino project");
+
+    // Create from the showcase demo: the editor opens on it.
+    let l = launcher_mut(&mut h);
+    l.name = "new-game".into();
+    l.folder = tmp.path().display().to_string();
+    h.get_by_label("Based on the showcase demo").click();
+    h.run_steps(1);
+    h.get_by_label("Create project").click();
+    h.run_steps(4);
+    let made = tmp.path().join("new-game");
+    match &h.state().screen {
+        Screen::Editor(app) => {
+            assert!(
+                app.project.models.contains_key("models/robot"),
+                "the demo's assets baked"
+            );
+            assert!(!app.doc.scene.entities.is_empty(), "the demo scene opened");
+        }
+        Screen::Launcher(l) => panic!("still on the launcher: {:?}", l.create_error),
+    }
+    assert_eq!(std::env::current_dir().unwrap(), made);
+    assert!(made.join("game/src/showcase_gen.rs").is_file());
+    let file = std::fs::read_to_string(&recent).unwrap();
+    assert!(
+        file.lines().next().unwrap().ends_with("/new-game"),
+        "newest first:\n{file}"
+    );
+    drop(h);
+    std::env::set_current_dir(&repo).unwrap();
+    // SAFETY: as above.
+    unsafe { std::env::remove_var("TRINO_EDITOR_RECENT") };
+}
+
+fn launcher_mut<'a>(
+    h: &'a mut Harness<'static, crate::Shell>,
+) -> &'a mut crate::launcher::Launcher {
+    match &mut h.state_mut().screen {
+        crate::Screen::Launcher(l) => l,
+        crate::Screen::Editor(_) => panic!("the editor opened"),
+    }
+}

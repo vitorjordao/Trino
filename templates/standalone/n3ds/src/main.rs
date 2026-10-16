@@ -7,7 +7,7 @@
 #[cfg(target_os = "horizon")]
 extern crate alloc;
 
-trino_platform_3ds::n3ds_main!({{name_snake}}::{{name_camel}}Game::new, self_test);
+trino_platform_3ds::n3ds_main!({{game_new}}, self_test);
 
 /// Runs in Azahar under `cargo trino test 3ds`. `Err` fails the test.
 #[cfg(target_os = "horizon")]

@@ -6,7 +6,7 @@
 #[cfg(target_os = "none")]
 extern crate alloc;
 
-trino_platform_n64::n64_main!({{name_snake}}::{{name_camel}}Game::new, self_test);
+trino_platform_n64::n64_main!({{game_new}}, self_test);
 
 /// Runs in ares under `cargo trino test n64`. `Err` fails the test.
 #[cfg(target_os = "none")]

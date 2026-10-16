@@ -3873,6 +3873,7 @@ dependencies = [
  "trino-asset-pipeline",
  "trino-core",
  "trino-platform-pc",
+ "trino-scaffold",
  "trino-scene",
  "wgpu",
 ]
@@ -3926,6 +3927,13 @@ dependencies = [
  "trino-core",
  "trino-platform-pc",
  "winit",
+]
+
+[[package]]
+name = "trino-scaffold"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
 ]
 
 [[package]]
@@ -5013,6 +5021,7 @@ dependencies = [
  "trino-core",
  "trino-game-api",
  "trino-platform-pc",
+ "trino-scaffold",
  "trino-scene",
 ]
 

@@ -11,7 +11,7 @@ for AI agents and humans.
 | `game/` | The game crate (`{{name_snake}}`). Portable: depends only on `trino-core` + `trino-game-api`. |
 | `pc/` | Desktop host (`trino-runner-pc`): window, renderer, audio, input, asset bake. |
 | `n64/`, `n3ds/` | Console hosts (`n64_main!` / `n3ds_main!`) and their emulator self-tests. |
-| `trino.toml` | Console packaging: ROM title, save type, 3DS icon, test gates. |
+| `trino.toml` | Target platforms (`[project] platforms`), console packaging (ROM title, save type, 3DS icon), test gates. |
 | `assets/manifest.toml` | Every asset by logical path; masters in `assets/shared/`. |
 | `Cargo.toml` | Workspace; the engine dependencies (path or git) are declared once here. |
 
@@ -46,7 +46,13 @@ cargo trino build 3ds      # target/3ds/{{name}}.3dsx
 cargo trino run 3ds        # ... in Azahar
 cargo trino test 3ds       # boot the self-test in Azahar
 cargo trino watch n64      # rebuild + relaunch on save (also 3ds)
+cargo trino build all      # every platform in trino.toml's [project] platforms
+cargo trino editor         # the Trino editor on this project
 ```
+
+`[project] platforms` in `trino.toml` lists the platforms this game ships on
+(missing = all three). Commands for a platform not listed fail and name the
+field; `build all`, `assets all` and `test all` skip it.
 
 The self-tests live in `n64/src/lib.rs` and `n3ds/src/main.rs`: drive frames
 with `host.step`, time them with `host.measure` + `host.report_frames`

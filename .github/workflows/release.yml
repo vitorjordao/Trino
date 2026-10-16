@@ -2,8 +2,11 @@
 # and publish a GitHub release with the editor binaries (3 OSes), the demo
 # ROM (.z64), the demo 3DS app (.3dsx) and SHA256SUMS.
 #
-# NOTE: this workflow has not run yet (the repo has no GitHub remote so far);
-# expect a shakedown on the first release. Upgrade path documented in
+# A version with a pre-release part (`0.2.0-dev.1`) publishes a GitHub
+# pre-release; `docs/releases/v<version>.md`, when present, is its notes
+# (GitHub's generated changelog is appended).
+#
+# NOTE: expect a shakedown on the first run of this workflow. Upgrade path documented in
 # PLANO_EXECUCAO_TRINO.md: release-plz (crates.io) and cargo-dist
 # (installers) once the project publishes crates.
 
@@ -138,8 +141,20 @@ jobs:
           merge-multiple: true
       - name: Checksums
         run: cd dist && sha256sum * > SHA256SUMS
+      - uses: actions/checkout@v4
+        with:
+          path: src
+          sparse-checkout: docs/releases
+      - name: Release notes
+        id: notes
+        run: |
+          NOTES="src/docs/releases/v${{ needs.tag.outputs.version }}.md"
+          if [ -f "$NOTES" ]; then echo "path=$NOTES" >> "$GITHUB_OUTPUT"; fi
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ needs.tag.outputs.version }}
+          name: Trino ${{ needs.tag.outputs.version }}
+          prerelease: ${{ contains(needs.tag.outputs.version, '-') }}
+          body_path: ${{ steps.notes.outputs.path }}
           generate_release_notes: true
           files: dist/*

@@ -5,7 +5,7 @@ members = ["crates/*", "apps/*", "examples/*", "xtask"]
 # `cargo xtask new`), so cargo never sees them as packages.
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0-dev.1"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/vitorjordao/Trino"

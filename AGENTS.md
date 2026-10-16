@@ -373,7 +373,7 @@ RDP).
 PC keyboard mapping: A/B = Z/X, X/Y = C/V, L/R = Q/E, Start = Enter,
 Select = Right Shift, D-pad = arrows, stick = WASD (see `crates/platform-pc/src/input.rs`).
 On top of it, `InputState::keys` carries PC keys (`trino_core::Key`: Esc, Enter,
-Space, Tab, Delete, F1–F8, 1–3, Page Up/Down, Home, R, W/A/S/D, +/−, Shift, Ctrl)
+Space, Tab, Delete, F1–F8, 1–3, Page Up/Down, Home, R, T, W/A/S/D, +/−, Shift, Ctrl)
 for PC shortcuts, and `InputState::pad` says a gamepad was used this frame.
 Both the keys and the pad buttons can be **rebound** from the game: `Platform::input_info`
 (gamepad support/connection, a pending rebind), `gamepad_name`, `binding_label`,

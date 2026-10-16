@@ -30,7 +30,7 @@
 //!
 //! Every key with a [`Key`] also sets that bit in [`InputState::keys`]
 //! (Esc, Enter, Space, Tab, Delete, Backspace, F1–F8, 1–3, Page Up/Down,
-//! Home, R, W/A/S/D, +/−, Shift, Ctrl), so a game can offer PC shortcuts on
+//! Home, R, T, W/A/S/D, +/−, Shift, Ctrl), so a game can offer PC shortcuts on
 //! top of the console mapping.
 
 use trino_core::{
@@ -176,7 +176,6 @@ const KEYS: &[(KeyCode, &str)] = &[
     (KeyCode::KeyO, "O"),
     (KeyCode::KeyP, "P"),
     (KeyCode::KeyQ, "Q"),
-    (KeyCode::KeyT, "T"),
     (KeyCode::KeyU, "U"),
     (KeyCode::KeyV, "V"),
     (KeyCode::KeyX, "X"),
@@ -552,6 +551,7 @@ impl PcInput {
             KeyCode::Minus | KeyCode::NumpadSubtract => Some(Key::Minus),
             KeyCode::ShiftLeft | KeyCode::ShiftRight => Some(Key::Shift),
             KeyCode::ControlLeft | KeyCode::ControlRight => Some(Key::Ctrl),
+            KeyCode::KeyT => Some(Key::T),
             _ => None,
         };
         if let Some(k) = key {

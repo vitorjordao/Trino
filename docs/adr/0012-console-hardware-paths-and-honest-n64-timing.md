@@ -53,6 +53,24 @@ PC's GPU vertex path is not in this round.
   tolerance (mean 0.58).
 - `N3dsRenderer::set_gpu_tnl(false)` puts every draw back on the CPU: the reference, and
   a switch for A/B measurements.
+- An external project's isometric scenes (~110–130 draws), the same build with the path
+  off and on (Azahar, `cpu_us` = the ARM11's own time per frame, now in the 3DS
+  `TRINO_FRAME` line):
+
+  | Scene | GPU path off | on |
+  |---|---|---|
+  | busy event | 19.6 ms CPU, 30 fps | 5.3 ms, 60 fps |
+  | event with a panel | 20.0 ms, 30 fps | 5.3 ms, 60 fps |
+  | panning | 17.3 ms, 30 fps | 4.5 ms, 60 fps |
+  | the largest venue | 50.2 ms frame (20 fps) | 16.7 ms (60 fps) |
+
+  Every 3D draw there took the GPU path (no CPU T&L triangles left); its 3DS goldens
+  moved by mean 0.5–0.95/255.
+- The first version stalled the largest venue: every GPU draw re-emitted the program,
+  attributes, texenv and citro2d's state (`C2D_Prepare`), and a few hundred draws
+  overran citro3d's command buffer. The shim now enters the T&L state once per run of
+  GPU draws (`trino_tnl_leave` before any other draw) and allocates 4× the default
+  command buffer.
 
 ### 2. Text on the N64: one call per run of glyphs, and O(1) glyph lookup everywhere
 

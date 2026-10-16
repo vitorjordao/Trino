@@ -15,7 +15,7 @@ cd ../my-football && cargo run -p my-football-pc
 
 | PC (native) | Nintendo 64 (ares) | Nintendo 3DS (Azahar, both screens) |
 |---|---|---|
-| <img src="media/solid-eleven/match_pc.png" width="320" alt="A match on the PC: the broadcast camera, the scoreboard, the minimap, the controlled player's ring and arrow, the pass lane"/> | <img src="media/solid-eleven/match_n64.png" width="240" alt="The same match in ares: 320x240, RGBA5551 dither, every draw on the RSP"/> | <img src="media/solid-eleven/match_3ds.png" width="250" alt="The 3DS top screen in Azahar"/><br><img src="media/solid-eleven/match_3ds_bottom.png" width="200" alt="The 3DS touch screen: radar, formation, substitution, stamina tiles"/> |
+| <img src="media/solid-eleven/match_pc.png" width="320" alt="A match on the PC: the broadcast camera, the scoreboard, the minimap, the controlled player's ring and arrow, the pass lane"/> | <img src="media/solid-eleven/match_n64.png" width="240" alt="The same match in ares: 320x240, RGBA5551 dither, 76 of 77 draws on the RSP"/> | <img src="media/solid-eleven/match_3ds.png" width="250" alt="The 3DS top screen in Azahar"/><br><img src="media/solid-eleven/match_3ds_bottom.png" width="200" alt="The 3DS touch screen: radar, formation, substitution, stamina tiles"/> |
 
 | Title | Team selection | Player editor |
 |---|---|---|
@@ -187,7 +187,9 @@ Sounds (whistle, kicks, crowd, cheers, the menu theme) are synthesized by
 ## Platforms and performance
 
 The N64 is the ceiling. Every console draw is opaque, untextured and single-sided, uses
-vertex colors and a white light, and stays on the RSP. Dusk and night are a tint on
+vertex colors and a white light, so it qualifies for the RSP. The one exception is a
+fine ground tile under the camera, which can fall back to the CPU at the clip band
+(one draw in the scripted match). Dusk and night are a tint on
 every draw, not a dimmed light, which would send every draw to the CPU. The world is
 drawn at 1/64 scale so the 16-bit depth buffer resolves the 2 cm line strips. The
 camera's eye-target offset stays bit-exact while it pans, so the draw memo patches the

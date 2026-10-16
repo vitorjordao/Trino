@@ -651,8 +651,12 @@ mod tests {
             }
             let game = std::fs::read_to_string(dest.join("game/Cargo.toml")).unwrap();
             assert!(game.contains("name = \"my-game\""), "{game}");
-            let lib = std::fs::read_to_string(dest.join("game/src/lib.rs")).unwrap();
-            assert!(lib.contains("pub struct MyGameGame"), "{}", template.key());
+            // The renamed game type, wherever the crate defines it.
+            let defined = files(&dest.join("game/src")).iter().any(|f| {
+                std::fs::read_to_string(dest.join("game/src").join(f))
+                    .is_ok_and(|t| t.contains("pub struct MyGameGame"))
+            });
+            assert!(defined, "{}", template.key());
             // The hosts are cfg'd to their console, so a host `cargo check`
             // never sees their bodies: check the text instead.
             let ctor = match template {

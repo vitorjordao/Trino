@@ -76,6 +76,8 @@ fn solid_eleven_menu_shots() {
         (SimProfile::N64, "n64", None),
         (SimProfile::N3ds, "3ds", None),
         (SimProfile::Native, "pc", Some((960u32, 540u32))),
+        (SimProfile::Native, "pc360", Some((640u32, 360u32))),
+        (SimProfile::Native, "pc720", Some((1280u32, 720u32))),
     ] {
         let mut r = renderer(profile, size);
         if profile == SimProfile::N64 {

@@ -65,9 +65,14 @@ pub struct Ui<'a> {
 }
 
 impl<'a> Ui<'a> {
-    /// Fit the design canvas into `screen` at an integer scale.
+    /// Fit the design canvas into `screen`: exactly 1:1 on the consoles'
+    /// screens (320×240, 400×240), scaled to fit a larger picture (the PC),
+    /// in whole pixels per unit when that fills it within 15%, else a
+    /// continuous scale.
     pub fn new(r: &'a mut dyn Renderer, screen: Vec2) -> Ui<'a> {
-        let s = ((screen.x / DESIGN_W).min(screen.y / DESIGN_H) as i32).max(1) as f32;
+        let fit = (screen.x / DESIGN_W).min(screen.y / DESIGN_H).max(1.0);
+        let whole = (fit as i32).max(1) as f32;
+        let s = if fit - whole < fit * 0.15 { whole } else { fit };
         let origin = Vec2::new(
             ((screen.x - DESIGN_W * s) * 0.5).max(0.0) as i32 as f32,
             ((screen.y - DESIGN_H * s) * 0.5).max(0.0) as i32 as f32,
@@ -171,7 +176,7 @@ impl<'a> Ui<'a> {
 
     fn font_for(&self, size: Size) -> (FontId, f32) {
         match size {
-            Size::Small if self.scale >= 2.0 => (F_BIG, self.scale * 0.5),
+            Size::Small if self.scale >= 1.5 => (F_BIG, self.scale * 0.5),
             Size::Small => (F_UI, self.scale),
             Size::Big => (F_BIG, self.scale),
         }
@@ -458,6 +463,10 @@ mod tests {
         let ui = Ui::new(&mut r, Vec2::new(1280.0, 720.0));
         assert_eq!(ui.scale, 3.0);
         assert_eq!(ui.px(0.0, 0.0), Vec2::new(160.0, 0.0));
+        // A 640x360 PC picture: 1.5x, not a 1x island in the middle.
+        let mut r = Rec::default();
+        let ui = Ui::new(&mut r, Vec2::new(640.0, 360.0));
+        assert_eq!(ui.scale, 1.5);
     }
 
     #[test]

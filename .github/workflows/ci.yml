@@ -161,12 +161,24 @@ jobs:
           TRINO_ARES: docker
           # lavapipe on a 4-core runner; the harness default is 300 s.
           TRINO_EMU_TIMEOUT: "900"
+      # The football template (Solid Eleven) as a user gets it: scaffolded
+      # into its own project, built, its scripted match timed in ares
+      # against trino.toml's 33.3 ms budget, its sim hash and golden frame.
+      - name: Football template self-test (ares)
+        run: |
+          cargo xtask new ci-football --standalone target/test-projects/ci-football --template football
+          cargo xtask test n64 --project target/test-projects/ci-football
+        env:
+          TRINO_ARES: docker
+          TRINO_EMU_TIMEOUT: "900"
       - name: Upload golden mismatch
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: n64-golden-actual
-          path: tests/golden/n64/actual/
+          path: |
+            tests/golden/n64/actual/
+            target/test-projects/ci-football/tests/golden/n64/actual/
           if-no-files-found: ignore
 
   n3ds:
@@ -196,6 +208,15 @@ jobs:
         with:
           name: trino-3ds-selftest
           path: target/3ds/trino.3dsx
+      # The football template's self-test app (booted by the next job).
+      - name: Build the football template's self-test app
+        run: |
+          cargo xtask new ci-football --standalone target/test-projects/ci-football --template football
+          cargo xtask build 3ds --project target/test-projects/ci-football --selftest
+      - uses: actions/upload-artifact@v4
+        with:
+          name: football-3ds-selftest
+          path: target/test-projects/ci-football/target/3ds/ci-football.3dsx
 
   n3ds-emulator:
     name: 3DS self-test (Azahar)
@@ -228,6 +249,18 @@ jobs:
         run: xvfb-run -a -s "-screen 0 1280x720x24" cargo xtask test 3ds --no-build
         env:
           TRINO_EMU_TIMEOUT: "900"
+      # The football template: the same project scaffolded again (its
+      # trino.toml and goldens), the app the previous job built.
+      - name: Scaffold the football template
+        run: cargo xtask new ci-football --standalone target/test-projects/ci-football --template football
+      - uses: actions/download-artifact@v4
+        with:
+          name: football-3ds-selftest
+          path: target/test-projects/ci-football/target/3ds
+      - name: Football template self-test (Azahar)
+        run: xvfb-run -a -s "-screen 0 1280x720x24" cargo xtask test 3ds --project target/test-projects/ci-football --no-build
+        env:
+          TRINO_EMU_TIMEOUT: "900"
       # The golden frame is compared within a tolerance (Azahar's output
       # depends on the host OpenGL); on a mismatch the frame lands here.
       - name: Upload golden mismatch
@@ -235,5 +268,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: n3ds-golden-actual
-          path: tests/golden/3ds/actual/
+          path: |
+            tests/golden/3ds/actual/
+            target/test-projects/ci-football/tests/golden/3ds/actual/
           if-no-files-found: ignore

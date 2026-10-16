@@ -393,14 +393,12 @@ fn substitutions_follow_the_rules() {
     let mut n = 0;
     let mut seen = 0;
     while !m.finished() && n < 60 * 60 * 8 {
-        let mut pads = [Pad::default(); 2];
         // Side 0 is AI here; force fatigue on one player to trigger it.
         if n == 60 * 60 * 2 + 600 {
             m.players[5].stamina = super::fx::Fx::milli(200);
         }
         let before = m.phase;
-        m.step(pads);
-        pads[0] = Pad::default();
+        m.step([Pad::default(); 2]);
         for (_, e) in m.events_since(seen) {
             if e.kind == EventKind::Substitution {
                 subs_seen[e.side as usize] += 1;

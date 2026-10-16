@@ -97,7 +97,11 @@ Keys worth knowing (F1 lists all):
   - MMB drag pans, with or without Ctrl/Cmd or Shift; Shift+RMB pans too.
   - Alt+LMB orbits. Alt+RMB dollies (drag up = in). The wheel zooms.
   - Hold RMB to fly: mouselook, WASD along the view, Q/E down/up, Shift ×2.5,
-    the wheel sets the speed.
+    the wheel sets the speed. Flying switches an orthographic view back to
+    perspective.
+  - Dropping an asset in an orthographic view: the ground hit is used only near
+    the target, else the plane through the target facing the camera
+    (`gizmo::drop_point`). A ray times a constant would land kilometres back.
   - 1/3/7 (+Ctrl) give the axis views; 5 toggles orthographic.
 - The **axis widget** (top right) is Blender-style:
   - Click a tip to look from that axis; click it again for the opposite side
@@ -206,7 +210,9 @@ Live-edit check: start the editor with `TRINO_EDITOR_ECHO_LOG=1` in the backgrou
 - **Fly mode owns the keyboard.** While RMB is held on the Scene view,
   `Viewport::flying()` is true. `App::shortcuts` and the view's own key block
   then stand down (Shift+A would open the fake-object dialog mid-strafe). Gate any
-  new single-key or Shift shortcut the same way.
+  new single-key or Shift shortcut the same way. `App::shortcuts` also requires RMB
+  to be down. If another tab hides the Scene view mid-flight, the view never sees
+  the release, and its flag would mute Ctrl+S and undo.
 - **Kittest pointer details:**
   - `drag_at`/`drop_at` are Primary only. For MMB/RMB, send
     `Event::PointerButton` yourself.

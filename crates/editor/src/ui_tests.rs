@@ -1358,7 +1358,8 @@ fn scene_view_pans_flies_dollies_and_flips_axes() {
     assert!(!h.state().scene_view.flying(), "Alt+RMB doesn't fly");
     assert!(h.state().scene_view.cam.dist < now.dist * 0.9, "dollied in");
 
-    // 5 (with the view hovered): orthographic, and back.
+    // 5 (with the view hovered): orthographic, and back; flying from an
+    // orthographic view goes perspective.
     h.hover_at(p);
     h.key_press(Key::Num5);
     h.run_steps(2);
@@ -1366,6 +1367,13 @@ fn scene_view_pans_flies_dollies_and_flips_axes() {
     h.key_press(Key::Num5);
     h.run_steps(2);
     assert!(!h.state().scene_view.cam.ortho);
+    h.key_press(Key::Num5);
+    h.run_steps(2);
+    button(&h, PointerButton::Secondary, p, true);
+    h.run_steps(2);
+    assert!(!h.state().scene_view.cam.ortho, "flying is perspective");
+    button(&h, PointerButton::Secondary, p, false);
+    h.run_steps(2);
 
     // The axis widget: +X looks from +X; clicking it again looks from -X.
     let tip = |h: &Harness<'static, App>, idx: usize| {
@@ -1375,20 +1383,32 @@ fn scene_view_pans_flies_dollies_and_flips_axes() {
             .unwrap()
             .1
     };
-    let click_at = |h: &mut Harness<'static, App>, at: egui::Pos2| {
+    // The ease runs on wall-clock time: step until it arrives (bounded).
+    let click_and_settle = |h: &mut Harness<'static, App>, at: egui::Pos2, want: usize| {
         h.hover_at(at);
         h.drag_at(at);
         h.drop_at(at);
-        h.run_steps(40);
+        let start = std::time::Instant::now();
+        loop {
+            h.run_steps(1);
+            let cam = h.state().scene_view.cam;
+            if crate::gizmo::aligned_axis(cam.yaw, cam.pitch) == Some(want) {
+                break;
+            }
+            assert!(
+                start.elapsed().as_secs_f32() < 5.0,
+                "never looked from axis {want}: yaw {} pitch {}",
+                cam.yaw,
+                cam.pitch
+            );
+        }
+        // Let the last of the ease settle before reading the tips again.
+        h.run_steps(20);
     };
     let at = tip(&h, 0);
-    click_at(&mut h, at);
-    let cam = h.state().scene_view.cam;
-    assert_eq!(crate::gizmo::aligned_axis(cam.yaw, cam.pitch), Some(0));
+    click_and_settle(&mut h, at, 0);
     let at = tip(&h, 0);
-    click_at(&mut h, at);
-    let cam = h.state().scene_view.cam;
-    assert_eq!(crate::gizmo::aligned_axis(cam.yaw, cam.pitch), Some(3));
+    click_and_settle(&mut h, at, 3);
     assert!(h.state().doc.selected.is_none(), "widget clicks don't pick");
     leave_temp_project(&repo);
 }

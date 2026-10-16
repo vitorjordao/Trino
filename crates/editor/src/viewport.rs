@@ -573,6 +573,9 @@ impl Viewport {
                 && ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Secondary))
             {
                 self.fly = true;
+                // Moving along the view shows nothing in a parallel
+                // projection: flying is perspective (as Blender's walk is).
+                self.cam.ortho = false;
                 ui.memory_mut(|m| m.stop_text_input());
             }
             if self.fly && !ui.input(|i| i.pointer.button_down(egui::PointerButton::Secondary)) {
@@ -736,10 +739,7 @@ impl Viewport {
         if let Some(payload) = response.dnd_hover_payload::<AssetPayload>()
             && let Some(m) = mouse
         {
-            let at = proj.ground_point(m, 0.0).unwrap_or_else(|| {
-                let (o, d) = proj.ray(m);
-                o + d * 6.0
-            });
+            let at = gizmo::drop_point(&proj, m, &self.cam);
             if let Some(p) = proj.project(at) {
                 painter.circle(
                     p,

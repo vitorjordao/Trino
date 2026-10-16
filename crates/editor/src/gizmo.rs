@@ -438,6 +438,29 @@ impl Proj {
     }
 }
 
+/// Where an asset dropped at `pos` lands: on the ground (y = 0) under the
+/// cursor, else a little ahead of the eye. In the near-orthographic view the
+/// eye is kilometres back and its rays run almost parallel, so a ground hit
+/// far from what the view looks at (or none) falls back to the plane through
+/// the orbit target that faces the camera.
+pub fn drop_point(proj: &Proj, pos: Pos2, cam: &OrbitCam) -> Vec3 {
+    let ground = proj.ground_point(pos, 0.0);
+    if !cam.ortho {
+        return ground.unwrap_or_else(|| {
+            let (o, d) = proj.ray(pos);
+            o + d * 6.0
+        });
+    }
+    let near_target = |p: &Vec3| {
+        let d = *p - cam.target;
+        d.dot(d).sqrt() <= cam.dist * 4.0
+    };
+    ground
+        .filter(near_target)
+        .or_else(|| proj.plane_point(pos, cam.target, proj.forward()))
+        .unwrap_or(cam.target)
+}
+
 // ----------------------------------------------------------- matrices --
 
 pub fn translation(m: &Mat34) -> Vec3 {
@@ -1699,6 +1722,40 @@ mod tests {
         cam.zoom(500.0);
         while cam.step(0.1) {}
         assert!(cam.camera().fov_y < before.fov_y);
+    }
+
+    #[test]
+    fn drops_land_near_what_an_orthographic_view_looks_at() {
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(640.0, 360.0));
+        let mut cam = OrbitCam::default();
+        cam.focus(Vec3::new(2.0, 1.0, 3.0), 1.0);
+        cam.snap_to_axis(5);
+        while cam.step(0.1) {}
+        assert!(close(cam.target, Vec3::new(2.0, 1.0, 3.0), 1e-3));
+        cam.ortho = true;
+        let proj = Proj::new(&cam.camera(), (640, 360), rect);
+        // Above and below the horizon of a front view: both land on the
+        // plane through the target, under the cursor.
+        for y in [100.0, 260.0] {
+            let at = Pos2::new(400.0, y);
+            let p = drop_point(&proj, at, &cam);
+            let d = p - cam.target;
+            assert!(d.dot(d).sqrt() < cam.dist * 2.0, "{y}: {p:?}");
+            assert!((proj.project(p).unwrap() - at).length() < 0.5);
+        }
+        // Looking down, the ground under the cursor wins.
+        cam.snap_to_axis(1);
+        while cam.step(0.1) {}
+        let proj = Proj::new(&cam.camera(), (640, 360), rect);
+        let p = drop_point(&proj, Pos2::new(300.0, 200.0), &cam);
+        assert!(p.y.abs() < 1e-3, "{p:?}");
+        // Perspective keeps the ground hit wherever it is.
+        cam.ortho = false;
+        cam.snap_to_axis(5);
+        while cam.step(0.1) {}
+        let proj = Proj::new(&cam.camera(), (640, 360), rect);
+        let p = drop_point(&proj, Pos2::new(320.0, 190.0), &cam);
+        assert!(p.y.abs() < 1e-3, "{p:?}");
     }
 
     #[test]

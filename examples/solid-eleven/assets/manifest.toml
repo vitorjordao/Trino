@@ -82,6 +82,296 @@ file = "models/pitch_5_2.glb"
 [models.se_pitch_5_3]
 file = "models/pitch_5_3.glb"
 
+# The same ground in 12 x 8 fine tiles: drawn instead of a coarse tile near
+# the camera (a coarse tile there doesn't fit the N64 RSP's clip band).
+[models.se_pitch_f_0_0]
+file = "models/pitch_f_0_0.glb"
+
+[models.se_pitch_f_0_1]
+file = "models/pitch_f_0_1.glb"
+
+[models.se_pitch_f_0_2]
+file = "models/pitch_f_0_2.glb"
+
+[models.se_pitch_f_0_3]
+file = "models/pitch_f_0_3.glb"
+
+[models.se_pitch_f_0_4]
+file = "models/pitch_f_0_4.glb"
+
+[models.se_pitch_f_0_5]
+file = "models/pitch_f_0_5.glb"
+
+[models.se_pitch_f_0_6]
+file = "models/pitch_f_0_6.glb"
+
+[models.se_pitch_f_0_7]
+file = "models/pitch_f_0_7.glb"
+
+[models.se_pitch_f_1_0]
+file = "models/pitch_f_1_0.glb"
+
+[models.se_pitch_f_1_1]
+file = "models/pitch_f_1_1.glb"
+
+[models.se_pitch_f_1_2]
+file = "models/pitch_f_1_2.glb"
+
+[models.se_pitch_f_1_3]
+file = "models/pitch_f_1_3.glb"
+
+[models.se_pitch_f_1_4]
+file = "models/pitch_f_1_4.glb"
+
+[models.se_pitch_f_1_5]
+file = "models/pitch_f_1_5.glb"
+
+[models.se_pitch_f_1_6]
+file = "models/pitch_f_1_6.glb"
+
+[models.se_pitch_f_1_7]
+file = "models/pitch_f_1_7.glb"
+
+[models.se_pitch_f_2_0]
+file = "models/pitch_f_2_0.glb"
+
+[models.se_pitch_f_2_1]
+file = "models/pitch_f_2_1.glb"
+
+[models.se_pitch_f_2_2]
+file = "models/pitch_f_2_2.glb"
+
+[models.se_pitch_f_2_3]
+file = "models/pitch_f_2_3.glb"
+
+[models.se_pitch_f_2_4]
+file = "models/pitch_f_2_4.glb"
+
+[models.se_pitch_f_2_5]
+file = "models/pitch_f_2_5.glb"
+
+[models.se_pitch_f_2_6]
+file = "models/pitch_f_2_6.glb"
+
+[models.se_pitch_f_2_7]
+file = "models/pitch_f_2_7.glb"
+
+[models.se_pitch_f_3_0]
+file = "models/pitch_f_3_0.glb"
+
+[models.se_pitch_f_3_1]
+file = "models/pitch_f_3_1.glb"
+
+[models.se_pitch_f_3_2]
+file = "models/pitch_f_3_2.glb"
+
+[models.se_pitch_f_3_3]
+file = "models/pitch_f_3_3.glb"
+
+[models.se_pitch_f_3_4]
+file = "models/pitch_f_3_4.glb"
+
+[models.se_pitch_f_3_5]
+file = "models/pitch_f_3_5.glb"
+
+[models.se_pitch_f_3_6]
+file = "models/pitch_f_3_6.glb"
+
+[models.se_pitch_f_3_7]
+file = "models/pitch_f_3_7.glb"
+
+[models.se_pitch_f_4_0]
+file = "models/pitch_f_4_0.glb"
+
+[models.se_pitch_f_4_1]
+file = "models/pitch_f_4_1.glb"
+
+[models.se_pitch_f_4_2]
+file = "models/pitch_f_4_2.glb"
+
+[models.se_pitch_f_4_3]
+file = "models/pitch_f_4_3.glb"
+
+[models.se_pitch_f_4_4]
+file = "models/pitch_f_4_4.glb"
+
+[models.se_pitch_f_4_5]
+file = "models/pitch_f_4_5.glb"
+
+[models.se_pitch_f_4_6]
+file = "models/pitch_f_4_6.glb"
+
+[models.se_pitch_f_4_7]
+file = "models/pitch_f_4_7.glb"
+
+[models.se_pitch_f_5_0]
+file = "models/pitch_f_5_0.glb"
+
+[models.se_pitch_f_5_1]
+file = "models/pitch_f_5_1.glb"
+
+[models.se_pitch_f_5_2]
+file = "models/pitch_f_5_2.glb"
+
+[models.se_pitch_f_5_3]
+file = "models/pitch_f_5_3.glb"
+
+[models.se_pitch_f_5_4]
+file = "models/pitch_f_5_4.glb"
+
+[models.se_pitch_f_5_5]
+file = "models/pitch_f_5_5.glb"
+
+[models.se_pitch_f_5_6]
+file = "models/pitch_f_5_6.glb"
+
+[models.se_pitch_f_5_7]
+file = "models/pitch_f_5_7.glb"
+
+[models.se_pitch_f_6_0]
+file = "models/pitch_f_6_0.glb"
+
+[models.se_pitch_f_6_1]
+file = "models/pitch_f_6_1.glb"
+
+[models.se_pitch_f_6_2]
+file = "models/pitch_f_6_2.glb"
+
+[models.se_pitch_f_6_3]
+file = "models/pitch_f_6_3.glb"
+
+[models.se_pitch_f_6_4]
+file = "models/pitch_f_6_4.glb"
+
+[models.se_pitch_f_6_5]
+file = "models/pitch_f_6_5.glb"
+
+[models.se_pitch_f_6_6]
+file = "models/pitch_f_6_6.glb"
+
+[models.se_pitch_f_6_7]
+file = "models/pitch_f_6_7.glb"
+
+[models.se_pitch_f_7_0]
+file = "models/pitch_f_7_0.glb"
+
+[models.se_pitch_f_7_1]
+file = "models/pitch_f_7_1.glb"
+
+[models.se_pitch_f_7_2]
+file = "models/pitch_f_7_2.glb"
+
+[models.se_pitch_f_7_3]
+file = "models/pitch_f_7_3.glb"
+
+[models.se_pitch_f_7_4]
+file = "models/pitch_f_7_4.glb"
+
+[models.se_pitch_f_7_5]
+file = "models/pitch_f_7_5.glb"
+
+[models.se_pitch_f_7_6]
+file = "models/pitch_f_7_6.glb"
+
+[models.se_pitch_f_7_7]
+file = "models/pitch_f_7_7.glb"
+
+[models.se_pitch_f_8_0]
+file = "models/pitch_f_8_0.glb"
+
+[models.se_pitch_f_8_1]
+file = "models/pitch_f_8_1.glb"
+
+[models.se_pitch_f_8_2]
+file = "models/pitch_f_8_2.glb"
+
+[models.se_pitch_f_8_3]
+file = "models/pitch_f_8_3.glb"
+
+[models.se_pitch_f_8_4]
+file = "models/pitch_f_8_4.glb"
+
+[models.se_pitch_f_8_5]
+file = "models/pitch_f_8_5.glb"
+
+[models.se_pitch_f_8_6]
+file = "models/pitch_f_8_6.glb"
+
+[models.se_pitch_f_8_7]
+file = "models/pitch_f_8_7.glb"
+
+[models.se_pitch_f_9_0]
+file = "models/pitch_f_9_0.glb"
+
+[models.se_pitch_f_9_1]
+file = "models/pitch_f_9_1.glb"
+
+[models.se_pitch_f_9_2]
+file = "models/pitch_f_9_2.glb"
+
+[models.se_pitch_f_9_3]
+file = "models/pitch_f_9_3.glb"
+
+[models.se_pitch_f_9_4]
+file = "models/pitch_f_9_4.glb"
+
+[models.se_pitch_f_9_5]
+file = "models/pitch_f_9_5.glb"
+
+[models.se_pitch_f_9_6]
+file = "models/pitch_f_9_6.glb"
+
+[models.se_pitch_f_9_7]
+file = "models/pitch_f_9_7.glb"
+
+[models.se_pitch_f_10_0]
+file = "models/pitch_f_10_0.glb"
+
+[models.se_pitch_f_10_1]
+file = "models/pitch_f_10_1.glb"
+
+[models.se_pitch_f_10_2]
+file = "models/pitch_f_10_2.glb"
+
+[models.se_pitch_f_10_3]
+file = "models/pitch_f_10_3.glb"
+
+[models.se_pitch_f_10_4]
+file = "models/pitch_f_10_4.glb"
+
+[models.se_pitch_f_10_5]
+file = "models/pitch_f_10_5.glb"
+
+[models.se_pitch_f_10_6]
+file = "models/pitch_f_10_6.glb"
+
+[models.se_pitch_f_10_7]
+file = "models/pitch_f_10_7.glb"
+
+[models.se_pitch_f_11_0]
+file = "models/pitch_f_11_0.glb"
+
+[models.se_pitch_f_11_1]
+file = "models/pitch_f_11_1.glb"
+
+[models.se_pitch_f_11_2]
+file = "models/pitch_f_11_2.glb"
+
+[models.se_pitch_f_11_3]
+file = "models/pitch_f_11_3.glb"
+
+[models.se_pitch_f_11_4]
+file = "models/pitch_f_11_4.glb"
+
+[models.se_pitch_f_11_5]
+file = "models/pitch_f_11_5.glb"
+
+[models.se_pitch_f_11_6]
+file = "models/pitch_f_11_6.glb"
+
+[models.se_pitch_f_11_7]
+file = "models/pitch_f_11_7.glb"
+
 # ---- stadium ----
 
 [models.se_boards_0]

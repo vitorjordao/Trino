@@ -162,3 +162,30 @@ mod bench {
         );
     }
 }
+
+/// A renderer that draws nothing: the hosts time [`crate::SolidElevenGame`]'s
+/// render code against it to split the game's own CPU work (posing,
+/// culling, the HUD's layout) from the backend's.
+pub struct NullRenderer {
+    pub caps: trino_core::Caps,
+}
+
+impl trino_core::Renderer for NullRenderer {
+    fn caps(&self) -> &trino_core::Caps {
+        &self.caps
+    }
+    fn begin_frame(&mut self, _: trino_core::Color) {}
+    fn draw_sprite(&mut self, _: trino_core::SpriteId, _: Vec2, _: &trino_core::SpriteParams) {}
+    fn draw_model(
+        &mut self,
+        _: trino_core::ModelId,
+        _: &trino_core::Transform3,
+        _: trino_core::Material,
+        _: &trino_core::ModelParams,
+    ) {
+    }
+    fn end_frame(&mut self) {}
+    fn measure_text(&self, _: trino_core::FontId, t: &str, scale: f32) -> Vec2 {
+        Vec2::new(t.len() as f32 * 6.0 * scale, 11.0 * scale)
+    }
+}

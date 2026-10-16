@@ -370,7 +370,7 @@ impl Career {
     /// Clubs by points, goal difference, goals for (then index).
     pub fn standings(&self) -> [u8; TEAMS] {
         let mut order: [u8; TEAMS] = core::array::from_fn(|i| i as u8);
-        order.sort_by(|&a, &b| {
+        order.sort_unstable_by(|&a, &b| {
             let (ra, rb) = (&self.table[a as usize], &self.table[b as usize]);
             rb.points()
                 .cmp(&ra.points())

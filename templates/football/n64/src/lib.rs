@@ -30,6 +30,17 @@ fn self_test(
     let report = host.measure(game, selftest::FRAMES, selftest::DT, selftest::input);
     host.report_frames("match", &report);
     host.log(&alloc::format!("TRINO_SE_HASH:{:08x}\n", game.session.m.hash()));
+    // The game's own render-side CPU (posing, culling, HUD layout): the
+    // same frame drawn into a renderer that draws nothing.
+    let mut null = selftest::NullRenderer {
+        caps: trino_core::Caps::N64,
+    };
+    let t0 = trino_platform_n64::runtime::now_us();
+    for _ in 0..10 {
+        trino_core::Game::render(game, &mut null);
+    }
+    let us = trino_platform_n64::runtime::now_us().wrapping_sub(t0) / 10;
+    host.log(&alloc::format!("TRINO_SE_RENDER_CPU:{us}\n"));
     selftest::check(game).map_err(alloc::string::String::from)?;
     // The golden frame: the match as the script left it.
     host.step(game, &trino_core::InputState::default(), 0.0);

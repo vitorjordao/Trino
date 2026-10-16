@@ -41,6 +41,23 @@ pub mod joint {
     pub const SHIN_R: usize = 10;
 }
 
+/// Which joints a detail level poses (bit `j` = joint `j`): all of them
+/// on the PC; consoles draw whole limbs (no forearms or shins) and far
+/// players without arms. Posing only these saves ~40% of the per-player
+/// CPU on the N64.
+pub mod mask {
+    use super::joint::*;
+    pub const ALL: u16 = (1 << super::JOINTS) - 1;
+    pub const LIMBS: u16 = 1 << PELVIS
+        | 1 << TORSO
+        | 1 << HEAD
+        | 1 << ARM_L
+        | 1 << ARM_R
+        | 1 << THIGH_L
+        | 1 << THIGH_R;
+    pub const NO_ARMS: u16 = 1 << PELVIS | 1 << TORSO | 1 << HEAD | 1 << THIGH_L | 1 << THIGH_R;
+}
+
 /// The left-right partner of each joint.
 const MIRROR: [usize; JOINTS] = [0, 1, 2, 4, 3, 6, 5, 8, 7, 10, 9];
 
@@ -69,6 +86,12 @@ fn quat(a: [f32; 4]) -> Quat {
 /// `name` at `time` seconds (looped clips wrap, others hold their last
 /// key); `mirror` swaps left and right.
 pub fn sample(name: ClipName, time: f32, mirror: bool) -> Pose {
+    sample_masked(name, time, mirror, mask::ALL)
+}
+
+/// [`sample`] for the joints in `mask` only (the rest stay at rest).
+/// Masks are left-right symmetric, so mirroring needs nothing extra.
+pub fn sample_masked(name: ClipName, time: f32, mirror: bool, mask: u16) -> Pose {
     let c = clip(name);
     let mut u = if c.seconds > 0.0 {
         time / c.seconds
@@ -108,7 +131,9 @@ pub fn sample(name: ClipName, time: f32, mirror: bool) -> Pose {
     f = f * f * (3.0 - 2.0 * f);
     let mut pose = Pose::REST;
     for j in 0..JOINTS {
-        pose.q[j] = quat(a.q[j]).nlerp(quat(b.q[j]), f);
+        if mask & (1 << j) != 0 {
+            pose.q[j] = quat(a.q[j]).nlerp(quat(b.q[j]), f);
+        }
     }
     pose.root = Vec3::new(
         a.root[0] + (b.root[0] - a.root[0]) * f,
@@ -132,8 +157,8 @@ pub fn mirrored(p: &Pose) -> Pose {
     out
 }
 
-/// Crossfade: `w` = 0 gives `a`, 1 gives `b`.
-pub fn blend(a: &Pose, b: &Pose, w: f32) -> Pose {
+/// Crossfade: `w` = 0 gives `a`, 1 gives `b` (joints in `mask`).
+pub fn blend(a: &Pose, b: &Pose, w: f32, mask: u16) -> Pose {
     if w <= 0.0 {
         return *a;
     }
@@ -142,7 +167,9 @@ pub fn blend(a: &Pose, b: &Pose, w: f32) -> Pose {
     }
     let mut out = Pose::REST;
     for j in 0..JOINTS {
-        out.q[j] = a.q[j].nlerp(b.q[j], w);
+        if mask & (1 << j) != 0 {
+            out.q[j] = a.q[j].nlerp(b.q[j], w);
+        }
     }
     out.root = a.root + (b.root - a.root) * w;
     out
@@ -162,9 +189,14 @@ pub fn body_matrix(feet: Vec3, fx: f32, fz: f32, scale: f32) -> Mat34 {
     }
 }
 
-/// Every joint's world matrix for `pose` on a body placed by `body`.
-pub fn joint_matrices(body: &Mat34, pose: &Pose, out: &mut [Mat34; JOINTS]) {
+/// The world matrix of each joint in `mask` for `pose` on a body placed
+/// by `body` (a joint's parents must be in the mask: they are, for the
+/// [`mask`] sets).
+pub fn joint_matrices(body: &Mat34, pose: &Pose, out: &mut [Mat34; JOINTS], mask: u16) {
     for j in 0..JOINTS {
+        if mask & (1 << j) == 0 {
+            continue;
+        }
         let (parent, pivot) = SKELETON[j];
         let mut t = Vec3::new(pivot[0], pivot[1], pivot[2]);
         if j == joint::PELVIS {
@@ -250,12 +282,17 @@ impl AnimState {
     }
 
     pub fn pose(&self) -> Pose {
-        let cur = sample(self.clip, self.time, self.mirror);
+        self.pose_masked(mask::ALL)
+    }
+
+    /// The pose of the joints in `mask` (see [`mask`]).
+    pub fn pose_masked(&self, mask: u16) -> Pose {
+        let cur = sample_masked(self.clip, self.time, self.mirror, mask);
         if self.fade <= 0.0 {
             return cur;
         }
-        let old = sample(self.prev, self.prev_time, self.prev_mirror);
-        blend(&cur, &old, self.fade / FADE)
+        let old = sample_masked(self.prev, self.prev_time, self.prev_mirror, mask);
+        blend(&cur, &old, self.fade / FADE, mask)
     }
 }
 
@@ -340,7 +377,7 @@ mod tests {
     fn the_rest_pose_puts_the_feet_on_the_ground() {
         let body = body_matrix(Vec3::ZERO, 0.0, 1.0, 1.0);
         let mut m = [Mat34::IDENTITY; JOINTS];
-        joint_matrices(&body, &Pose::REST, &mut m);
+        joint_matrices(&body, &Pose::REST, &mut m, mask::ALL);
         // Shin pivot (knee) height + the shin and boot (~0.47 m): the knee
         // sits about half a meter up.
         let knee = m[joint::SHIN_L].transform_point(Vec3::ZERO);

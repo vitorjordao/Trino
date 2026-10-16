@@ -250,13 +250,17 @@ def line_quads():
     return q
 
 
-def pitch_tile(ix, iz):
-    """Tile (ix, iz) of the 6 x 4 grid over the pitch and its run-off."""
-    tw = 2 * SURROUND_X / TILES_X
-    td = 2 * SURROUND_Z / TILES_Z
+def pitch_tile(ix, iz, fine=False):
+    """Tile (ix, iz) of the 6 x 4 grid over the pitch and its run-off, or
+    (`fine`) of the 12 x 8 grid: the game draws a coarse tile far from the
+    camera and its four fine ones near it (a 20 m tile under the camera
+    doesn't fit the N64 RSP's clip band and falls back to the CPU)."""
+    nx, nz = (TILES_X * 2, TILES_Z * 2) if fine else (TILES_X, TILES_Z)
+    tw = 2 * SURROUND_X / nx
+    td = 2 * SURROUND_Z / nz
     x0, z0 = -SURROUND_X + ix * tw, -SURROUND_Z + iz * td
     x1, z1 = x0 + tw, z0 + td
-    m = Model(f"pitch_{ix}_{iz}")
+    m = Model(f"pitch_{'f_' if fine else ''}{ix}_{iz}")
     # Turf: mowing stripes across the length inside the lines, darker grass
     # beyond them.
     sw = 2 * HALF_LEN / STRIPES
@@ -709,6 +713,10 @@ for ix in range(TILES_X):
     for iz in range(TILES_Z):
         reg(f"pitch_{ix}_{iz}", (lambda ix=ix, iz=iz: pitch_tile(ix, iz)), SHARED, 140,
             ((-SURROUND_X + (ix + 0.5) * 2 * SURROUND_X / TILES_X, (SURROUND_Z - (iz + 0.5) * 2 * SURROUND_Z / TILES_Z), 0), 22))
+for ix in range(TILES_X * 2):
+    for iz in range(TILES_Z * 2):
+        reg(f"pitch_f_{ix}_{iz}", (lambda ix=ix, iz=iz: pitch_tile(ix, iz, True)), SHARED, 80,
+            ((-SURROUND_X + (ix + 0.5) * SURROUND_X / TILES_X, (SURROUND_Z - (iz + 0.5) * SURROUND_Z / TILES_Z), 0), 11))
 reg("boards_0", lambda: ad_boards(0), SHARED, 24, ((0, 0, 0.5), 11))
 reg("boards_1", lambda: ad_boards(1), SHARED, 24, ((0, 0, 0.5), 11))
 reg("stand_long_a", lambda: stand_section("stand_long_a", 19.5, 7, 1, (206, 32, 41), False), SHARED, 80, ((0, 2, 4), 22))
@@ -787,7 +795,7 @@ def main():
             report["models"][key] = {"ok": good, "triangles": tris, "budget": budget,
                                      "size": ins.get("size"), "warnings": ins.get("warnings")}
             ok &= good
-            if render and not name.startswith("pitch_") or (render and name == "pitch_2_1"):
+            if render and not name.startswith("pitch_") or (render and name in ("pitch_2_1", "pitch_f_5_3")):
                 ns["vertex_color_mode"](True)
                 tiles = [ns["shot"](os.path.join(qa, f"{key}_{az}_{el}.png"), az, el, target, ortho, res=240)
                          for az, el in ((0, 10), (45, 25), (90, 10), (180, 25), (0, 80), (30, -40))]

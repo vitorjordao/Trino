@@ -21,7 +21,7 @@ use crate::sim::engine::{Act, Match, N, Phase, SIDE, side_of};
 use crate::sim::fx::Fx;
 use crate::sim::pitch::{HALF_LEN, HALF_WID};
 use crate::sim::team::{CLUBS, Rgb, Role};
-use anim::{AnimState, Pose, body_matrix, joint, joint_matrices};
+use anim::{AnimState, Pose, body_matrix, joint, joint_matrices, mask};
 use clips_gen::{ClipName, JOINTS};
 use trino_core::{
     Camera3, Color, DEFAULT_LIGHT, Light, LightTier, Mat34, Material, ModelId, ModelParams,
@@ -106,6 +106,48 @@ pub const M_PITCH: [ModelId; 24] = [
 ];
 const TILE_W: f32 = 117.0 / 6.0;
 const TILE_D: f32 = 80.0 / 4.0;
+
+/// The 12 x 8 fine tiles (`models/se_pitch_f_<ix>_<iz>`), by `ix * 8 + iz`.
+pub const M_PITCH_FINE: [ModelId; 96] = {
+    let mut out = [ModelId(0); 96];
+    let mut i = 0;
+    while i < 96 {
+        let (ix, iz) = (i / 8, i % 8);
+        let mut path = [0u8; 24];
+        let head = b"models/se_pitch_f_";
+        let mut len = 0;
+        while len < head.len() {
+            path[len] = head[len];
+            len += 1;
+        }
+        if ix >= 10 {
+            path[len] = b'0' + (ix / 10) as u8;
+            len += 1;
+        }
+        path[len] = b'0' + (ix % 10) as u8;
+        path[len + 1] = b'_';
+        path[len + 2] = b'0' + iz as u8;
+        out[i] = ModelId(fnv1a(&path, len + 3));
+        i += 1;
+    }
+    out
+};
+
+/// `trino_core::asset_id` over the first `len` bytes (a const path built
+/// from numbers).
+const fn fnv1a(bytes: &[u8], len: usize) -> u32 {
+    let mut h: u32 = 0x811c_9dc5;
+    let mut i = 0;
+    while i < len {
+        h ^= bytes[i] as u32;
+        h = h.wrapping_mul(0x0100_0193);
+        i += 1;
+    }
+    h
+}
+
+/// Beyond this view depth a coarse tile is drawn whole.
+const FINE_DEPTH: f32 = 30.0;
 
 /// Skin tones a player's `skin` index picks.
 pub const SKIN_TONES: [Color; 8] = [
@@ -204,9 +246,9 @@ pub struct CamState {
 impl CamState {
     pub const BROADCAST: CamState = CamState {
         focus: Vec3::ZERO,
-        height: 15.0,
-        back: 22.0,
-        fov: 0.62,
+        height: 18.0,
+        back: 17.0,
+        fov: 0.66,
     };
 
     pub fn eye(&self) -> Vec3 {
@@ -217,11 +259,19 @@ impl CamState {
         )
     }
 
-    /// The camera as the renderer takes it (scaled world).
+    /// The camera as the renderer takes it (scaled world). The focus is
+    /// snapped to 1/4096 of a world unit and the eye sits at an exactly
+    /// representable offset from it, so `target - eye` — the view's
+    /// rotation — is bit-identical from frame to frame while the camera
+    /// pans: the N64's draw memo then patches the stadium's draws instead
+    /// of rebuilding them (n64-performance skill).
     pub fn camera(&self) -> Camera3 {
+        let q = |v: f32| trino_core::math3d::to_i32(v * WORLD * 4096.0) as f32 * (1.0 / 4096.0);
+        let target = Vec3::new(q(self.focus.x), q(self.focus.y), q(self.focus.z));
+        let offset = Vec3::new(0.0, q(self.height), q(self.back));
         Camera3 {
-            eye: self.eye() * WORLD,
-            target: self.focus * WORLD,
+            eye: target + offset,
+            target,
             fov_y: self.fov,
         }
     }
@@ -265,6 +315,16 @@ enum Detail {
     Far,
 }
 
+impl Detail {
+    fn mask(self) -> u16 {
+        match self {
+            Detail::Full => mask::ALL,
+            Detail::Near => mask::LIMBS,
+            Detail::Far => mask::NO_ARMS,
+        }
+    }
+}
+
 /// A frame's view volume for game-side culling (cheaper than letting the
 /// engine cull: off-screen draws still cost T&L time on the N64).
 struct Frustum {
@@ -305,6 +365,29 @@ impl Frustum {
         // Distance past each side plane, conservatively (no normalization:
         // the planes' normals have length sqrt(1 + tan²) > 1).
         x - z * self.tan_x < r * (1.0 + self.tan_x) && y - z * self.tan_y < r * (1.0 + self.tan_y)
+    }
+
+    /// A ground rectangle (y = 0) may be on screen: exact for a flat tile,
+    /// where a bounding sphere keeps tiles that only graze the frame's edge
+    /// (and those, mostly off screen, don't fit the N64 RSP's clip band).
+    fn sees_ground(&self, x0: f32, z0: f32, x1: f32, z1: f32) -> bool {
+        let corners = [
+            Vec3::new(x0, 0.0, z0),
+            Vec3::new(x1, 0.0, z0),
+            Vec3::new(x0, 0.0, z1),
+            Vec3::new(x1, 0.0, z1),
+        ];
+        let rel: [(f32, f32, f32); 4] = core::array::from_fn(|k| {
+            let d = corners[k] - self.eye;
+            (d.dot(self.right), d.dot(self.up), d.dot(self.fwd))
+        });
+        // Outside one plane with all four corners: culled.
+        let all = |f: &dyn Fn(&(f32, f32, f32)) -> bool| rel.iter().all(f);
+        !(all(&|v| v.2 < 0.0)
+            || all(&|v| v.0 > v.2 * self.tan_x)
+            || all(&|v| -v.0 > v.2 * self.tan_x)
+            || all(&|v| v.1 > v.2 * self.tan_y)
+            || all(&|v| -v.1 > v.2 * self.tan_y))
     }
 
     fn depth(&self, p: Vec3) -> f32 {
@@ -361,13 +444,33 @@ fn draw_stadium(r: &mut dyn Renderer, fr: &Frustum, hifi: bool) {
                 0.0,
                 -40.0 + (iz as f32 + 0.5) * TILE_D,
             );
-            if fr.sees(c, 14.0) {
+            let (x0, z0) = (-58.5 + ix as f32 * TILE_W, -40.0 + iz as f32 * TILE_D);
+            if !fr.sees_ground(x0, z0, x0 + TILE_W, z0 + TILE_D) {
+                continue;
+            }
+            if fr.depth(c) > FINE_DEPTH {
                 r.draw_model_matrix(
                     M_PITCH[ix * 4 + iz],
                     &place(Vec3::ZERO, 0.0, 1.0, 1.0),
                     Material::VertexLit,
                     &plain(grass),
                 );
+                continue;
+            }
+            for (fx, fz) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                let (gx, gz) = (ix * 2 + fx, iz * 2 + fz);
+                let (fx0, fz0) = (
+                    -58.5 + gx as f32 * TILE_W * 0.5,
+                    -40.0 + gz as f32 * TILE_D * 0.5,
+                );
+                if fr.sees_ground(fx0, fz0, fx0 + TILE_W * 0.5, fz0 + TILE_D * 0.5) {
+                    r.draw_model_matrix(
+                        M_PITCH_FINE[gx * 8 + gz],
+                        &place(Vec3::ZERO, 0.0, 1.0, 1.0),
+                        Material::VertexLit,
+                        &plain(grass),
+                    );
+                }
             }
         }
     }
@@ -468,15 +571,16 @@ fn draw_people(r: &mut dyn Renderer, m: &Match, v: &MatchView, fr: &Frustum, hif
         }
         let detail = if hifi {
             Detail::Full
-        } else if fr.depth(pos) > 34.0 {
+        } else if fr.depth(pos) > 30.0 {
             Detail::Far
         } else {
             Detail::Near
         };
         let (fx, fz) = (p.face.x.to_f32(), p.face.y.to_f32());
         let body = body_matrix(pos, fx, fz, WORLD);
-        let pose = v.anims[i].pose();
-        joint_matrices(&body, &pose, &mut joints);
+        let m = detail.mask();
+        let pose = v.anims[i].pose_masked(m);
+        joint_matrices(&body, &pose, &mut joints, m);
         draw_body(r, &joints, &v.looks[i], detail, hifi);
     }
     // Officials: the referee in black, linesmen in yellow with flags.
@@ -507,9 +611,9 @@ fn draw_people(r: &mut dyn Renderer, m: &Match, v: &MatchView, fr: &Frustum, hif
             (d.x.to_f32(), d.y.to_f32())
         };
         let body = body_matrix(pos, fx, fz, WORLD);
-        let pose = v.anims[N + k].pose();
-        joint_matrices(&body, &pose, &mut joints);
         let detail = if hifi { Detail::Full } else { Detail::Near };
+        let pose = v.anims[N + k].pose_masked(detail.mask());
+        joint_matrices(&body, &pose, &mut joints, detail.mask());
         draw_body(
             r,
             &joints,
@@ -782,3 +886,39 @@ pub fn pick_official_clip(m: &Match, k: usize, prev: (f32, f32), dt: f32, st: &m
 
 /// Keep the unused-import list honest for the pose type.
 pub type PoseOf = Pose;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fine_tile_handles_match_their_paths() {
+        assert_eq!(M_PITCH_FINE[0], ModelId::from_path("models/se_pitch_f_0_0"));
+        assert_eq!(
+            M_PITCH_FINE[5 * 8 + 3],
+            ModelId::from_path("models/se_pitch_f_5_3")
+        );
+        assert_eq!(
+            M_PITCH_FINE[11 * 8 + 7],
+            ModelId::from_path("models/se_pitch_f_11_7")
+        );
+    }
+
+    /// The camera's `target - eye` doesn't move by a bit while it pans (the
+    /// N64 draw memo's key).
+    #[test]
+    fn a_panning_camera_keeps_its_rotation_bit_exact() {
+        let mut c = CamState::BROADCAST;
+        let base = c.camera();
+        let d0 = base.target - base.eye;
+        for k in 0..200 {
+            c.focus = Vec3::new(k as f32 * 0.173 - 17.0, 0.0, (k as f32 * 0.071).min(9.0));
+            let cam = c.camera();
+            let d = cam.target - cam.eye;
+            assert_eq!(
+                (d.x.to_bits(), d.y.to_bits(), d.z.to_bits()),
+                (d0.x.to_bits(), d0.y.to_bits(), d0.z.to_bits())
+            );
+        }
+    }
+}

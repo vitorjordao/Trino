@@ -58,6 +58,13 @@ in `xtask/src/n3ds.rs`). Traps:
   per frame (`N3dsRenderer::gpu_rejects`; `Offscreen` ones are culled, not drawn), and
   `cargo xtask scene budget --platform 3ds` predicts the split from the host. A mesh
   whose linear-memory copy failed logs `TRINO_WARN` and counts as `NoGpuMemory`.
+- **A "frozen" top screen in a self-test is usually the test, not the renderer.**
+  Azahar's status bar shows `Speed` (emulation vs real time) and `App: N FPS` (frames
+  the app presented). The self-test draws castle64 1 of 4 updates and the showcase 1 of
+  32, and pixel probes used to wait two vblanks per pixel (`trino_debug_pixel`: 64 s of
+  `App: 0 FPS` for one 960-sample check; now once per presented frame). `fps=` in
+  `TRINO_FRAME` and the showcase panel count drawn frames. To check what a person sees,
+  record Azahar's window (Wayland: `QT_QPA_PLATFORM=xcb`, GStreamer `ximagesrc xid=…`).
 - **Fog is the shader's, not the PICA fog LUT:** the LUT is indexed by the depth band,
   where a 16–42 m fog spans ~0.0007 of the range. The shader interpolates the fog
   perspective-correctly, so a fogged GPU frame is slightly closer to the true value

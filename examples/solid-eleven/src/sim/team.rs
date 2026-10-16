@@ -299,6 +299,11 @@ const fn kit(shirt: Rgb, trim: Rgb, shorts: Rgb, socks: Rgb) -> Kit {
     }
 }
 
+/// Keepers' shorts, whatever the club.
+pub const GK_SHORTS: Rgb = Rgb(40, 40, 44);
+/// The officials' black (shirt, shorts, socks).
+pub const OFFICIAL_BLACK: Rgb = Rgb(30, 30, 34);
+
 const WHITE: Rgb = Rgb(240, 240, 240);
 const NAVY: Rgb = Rgb(28, 36, 72);
 const BLACK: Rgb = Rgb(30, 30, 34);
@@ -321,6 +326,62 @@ const fn tac(
         direct,
         aggression,
     }
+}
+
+/// Every (shorts, socks) pair a body can wear — each club's two kits, its
+/// keeper, the officials — in a fixed order. The consoles draw a leg as
+/// one mesh with both colors baked in (`models/se_leg_k<NN>`, built by
+/// `tools/blender/solid_eleven_models.py` from `assets/leg_kits.txt`,
+/// which a test keeps equal to this list): one draw where a tinted shorts
+/// leg and a tinted sock would be two.
+pub const LEG_KITS: ([(Rgb, Rgb); 64], usize) = leg_kits();
+
+const fn same(a: Rgb, b: Rgb) -> bool {
+    a.0 == b.0 && a.1 == b.1 && a.2 == b.2
+}
+
+const fn leg_kits() -> ([(Rgb, Rgb); 64], usize) {
+    let mut out = [(Rgb(0, 0, 0), Rgb(0, 0, 0)); 64];
+    let mut n = 0;
+    let mut c = 0;
+    while c <= TEAMS {
+        let pairs = if c == TEAMS {
+            [(OFFICIAL_BLACK, OFFICIAL_BLACK); 3]
+        } else {
+            let k = &CLUBS[c];
+            [
+                (k.home.shorts, k.home.socks),
+                (k.away.shorts, k.away.socks),
+                (GK_SHORTS, k.gk),
+            ]
+        };
+        let mut i = 0;
+        while i < 3 {
+            let (a, b) = pairs[i];
+            let mut j = 0;
+            let mut found = false;
+            while j < n {
+                if same(out[j].0, a) && same(out[j].1, b) {
+                    found = true;
+                }
+                j += 1;
+            }
+            if !found {
+                out[n] = (a, b);
+                n += 1;
+            }
+            i += 1;
+        }
+        c += 1;
+    }
+    (out, n)
+}
+
+/// The [`LEG_KITS`] index of a (shorts, socks) pair.
+pub fn leg_kit(shorts: Rgb, socks: Rgb) -> Option<u8> {
+    (0..LEG_KITS.1)
+        .find(|&i| same(LEG_KITS.0[i].0, shorts) && same(LEG_KITS.0[i].1, socks))
+        .map(|i| i as u8)
 }
 
 /// The ten clubs. Formation indices refer to [`FORMATIONS`].
@@ -680,6 +741,55 @@ pub fn generate_player(c: usize, s: usize) -> PlayerRec {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `assets/leg_kits.txt` (read by the Blender script that bakes the
+    /// consoles' kit legs) lists [`LEG_KITS`]; rewrite it with
+    /// `TRINO_BLESS=1 cargo test -p solid-eleven leg_kit` and rebuild the
+    /// legs (`cargo xtask blender solid-eleven --only legs`).
+    #[test]
+    fn the_leg_kit_list_is_baked() {
+        let mut text = String::from(
+            "# Generated from sim::team::LEG_KITS (the_leg_kit_list_is_baked):\n\
+             # index, shorts r g b, socks r g b. One console leg mesh each.\n",
+        );
+        for i in 0..LEG_KITS.1 {
+            let (a, b) = LEG_KITS.0[i];
+            text += &format!("{i:02} {} {} {} {} {} {}\n", a.0, a.1, a.2, b.0, b.1, b.2);
+        }
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/leg_kits.txt");
+        if std::env::var("TRINO_BLESS").is_ok() {
+            std::fs::write(&path, &text).unwrap();
+            return;
+        }
+        let have = std::fs::read_to_string(&path).unwrap_or_default();
+        assert_eq!(
+            have, text,
+            "assets/leg_kits.txt is stale: re-bless it and rebuild the legs"
+        );
+        // Every leg model is in the manifest.
+        let manifest = std::fs::read_to_string(path.with_file_name("manifest.toml")).unwrap();
+        for i in 0..LEG_KITS.1 {
+            assert!(
+                manifest.contains(&format!("[models.se_leg_k{i:02}]")),
+                "manifest lacks models.se_leg_k{i:02}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_kit_a_match_can_dress_has_a_baked_leg() {
+        for c in &CLUBS {
+            for (sh, so) in [
+                (c.home.shorts, c.home.socks),
+                (c.away.shorts, c.away.socks),
+                (GK_SHORTS, c.gk),
+            ] {
+                assert!(leg_kit(sh, so).is_some(), "{}: {sh:?} {so:?}", c.name);
+            }
+        }
+        assert!(leg_kit(OFFICIAL_BLACK, OFFICIAL_BLACK).is_some());
+        assert!(LEG_KITS.1 <= 64);
+    }
 
     #[test]
     fn clubs_are_balanced_by_points() {

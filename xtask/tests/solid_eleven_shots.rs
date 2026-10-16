@@ -8,7 +8,7 @@
 //! Writes `target/solid_eleven_shots/<scene>_<profile>.png`: the N64 look,
 //! the 3DS profile and the PC's native profile at 960x540.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use solid_eleven::SolidElevenGame;
 use solid_eleven::game::app::{After, Scene};
@@ -24,35 +24,10 @@ impl trino_core::Audio for NullAudio {
     fn set_master_volume(&mut self, _: f32) {}
 }
 
-fn root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..")
-}
-
-pub fn renderer(profile: SimProfile, size: Option<(u32, u32)>) -> PcRenderer {
-    let root = root();
-    let baked = root.join("target/assets/solid-eleven/pc");
-    trino_asset_pipeline::bake_all(
-        &root.join("examples/solid-eleven/assets"),
-        trino_asset_pipeline::Platform::Pc,
-        &baked,
-    )
-    .unwrap_or_else(|e| panic!("{e}"));
-    let assets = trino_asset_pipeline::load_dir(&baked, None).unwrap();
-    let mut r = pollster::block_on(PcRenderer::new_headless(profile)).expect("a GPU adapter");
-    if let Some((w, h)) = size {
-        r.set_internal_size(w, h);
-    }
-    for s in assets.sprites {
-        r.upload_sprite(trino_core::SpriteId(s.id), s.width, s.height, &s.rgba);
-    }
-    for m in assets.models {
-        r.upload_mesh(trino_core::ModelId(m.id), m.tmdl);
-    }
-    for f in assets.fonts {
-        r.upload_font(trino_core::FontId(f.id), f.table);
-    }
-    r
-}
+#[path = "support/solid_eleven.rs"]
+#[allow(dead_code)]
+mod support;
+use support::{renderer, root};
 
 fn save(r: &PcRenderer, dir: &Path, name: &str) {
     let (w, h) = r.internal_size();

@@ -2,7 +2,7 @@
 //! with a huddle of celebrating players behind the title, and a player on
 //! a glowing pedestal for the squad, editor and market screens.
 
-use super::anim::{AnimState, body_matrix, joint_matrices};
+use super::anim::{AnimState, body_matrix, joint_matrices, plant};
 use super::clips_gen::JOINTS;
 use super::{
     CamState, Detail, Frustum, Look, M_PEDESTAL, Sky, WORLD, draw_body, draw_stadium, unlit,
@@ -39,7 +39,8 @@ pub fn title(r: &mut dyn Renderer, looks: &[Look; 5], anims: &[AnimState], aspec
         let detail = if hifi { Detail::Full } else { Detail::Near };
         let pose = anims[k].pose_masked(detail.mask());
         joint_matrices(&body, &pose, &mut j, detail.mask());
-        draw_body(r, &j, &looks[k], detail, hifi, Sky::Dusk.tint());
+        plant(&mut j, detail.mask(), anims[k].grounded(), body.m[1][3]);
+        draw_body(r, &body, &j, &looks[k], detail, Sky::Dusk.tint());
     }
 }
 
@@ -81,6 +82,7 @@ pub fn pedestal(
     let detail = if hifi { Detail::Full } else { Detail::Near };
     let pose = anim.pose_masked(detail.mask());
     joint_matrices(&body, &pose, &mut j, detail.mask());
-    draw_body(r, &j, look, detail, hifi, Color::WHITE);
+    plant(&mut j, detail.mask(), anim.grounded(), body.m[1][3]);
+    draw_body(r, &body, &j, look, detail, Color::WHITE);
     let _ = M_PEDESTAL;
 }

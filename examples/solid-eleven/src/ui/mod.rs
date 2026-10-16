@@ -151,6 +151,37 @@ impl<'a> Ui<'a> {
         }
     }
 
+    /// The outline of [`slant`](Self::slant), `t` design units thick: its
+    /// sides lean with the shape, its top and bottom follow the first and
+    /// last rows (a square border overshoots the slanted corners).
+    pub fn slant_border(&mut self, r: Rect, c: Color, lean: f32, t: f32) {
+        let rows = (r.size.y * self.scale) as i32;
+        if rows <= 0 {
+            return;
+        }
+        let p = self.px(r.pos.x, r.pos.y);
+        let w = r.size.x * self.scale;
+        let th = (t * self.scale).max(1.0);
+        let step = 2;
+        let off = |y: i32, h: f32| lean * (1.0 - (y as f32 + h * 0.5) / rows as f32) * self.scale;
+        let mut y = 0;
+        while y < rows {
+            let h = step.min(rows - y) as f32;
+            let o = off(y, h);
+            self.r
+                .fill_rect(Rect::new(p.x + o, p.y + y as f32, th, h), c);
+            self.r
+                .fill_rect(Rect::new(p.x + o + w - th, p.y + y as f32, th, h), c);
+            y += step;
+        }
+        let top = off(0, step.min(rows) as f32);
+        let last = (rows - 1) / step * step;
+        let bottom = off(last, (rows - last) as f32);
+        self.r.fill_rect(Rect::new(p.x + top, p.y, w, th), c);
+        self.r
+            .fill_rect(Rect::new(p.x + bottom, p.y + rows as f32 - th, w, th), c);
+    }
+
     /// Text in design units. Small text at 2x scale uses the big font, so
     /// the PC's interface stays crisp.
     pub fn text(&mut self, x: f32, y: f32, s: &str, c: Color, size: Size, align: TextAlign) {
@@ -396,7 +427,7 @@ impl<'a> Ui<'a> {
             Color::rgba(c.r / 3, c.g / 3, c.b / 3, 230),
             3.0,
         );
-        self.border(Rect::new(x + 1.0, y, w - 2.0, 13.0), c, 1.0);
+        self.slant_border(Rect::new(x, y, w, 13.0), c, 3.0, 1.0);
         self.fill(Rect::new(x + 3.0, y + 2.0, 10.0, 9.0), c);
         self.text(
             x + 8.0,

@@ -12,7 +12,10 @@
 //! N64's RSP, and fewer for distant players.
 
 pub mod anim;
+#[cfg(test)]
+mod fit;
 pub mod menu;
+pub mod studio;
 #[rustfmt::skip]
 #[allow(clippy::all)]
 pub mod clips_gen;
@@ -78,6 +81,7 @@ pub const M_DASH: ModelId = model("models/se_dash");
 pub const M_DOT: ModelId = model("models/se_dot");
 pub const M_PEDESTAL: ModelId = model("models/se_pedestal");
 pub const M_BLOB: ModelId = model("models/se_blob");
+pub const M_PLAYER_SHADOW: ModelId = model("models/se_player_shadow");
 
 /// The 6 x 4 pitch tiles, row-major by x then z.
 pub const M_PITCH: [ModelId; 24] = [
@@ -227,6 +231,26 @@ pub struct Look {
     pub shorts: Color,
     pub socks: Color,
     pub skin: Color,
+    /// The consoles' baked leg for this shorts and socks pair
+    /// ([`crate::sim::team::LEG_KITS`]), or [`NO_KIT_LEGS`]: then the legs
+    /// are tinted parts.
+    pub legs: u8,
+}
+
+/// [`Look::legs`] with no baked leg.
+pub const NO_KIT_LEGS: u8 = u8::MAX;
+
+impl Look {
+    /// A look from kit colors: the baked console legs when the pair has one.
+    pub fn of(shirt: Rgb, shorts: Rgb, socks: Rgb, skin: Color) -> Look {
+        Look {
+            shirt: rgb(shirt),
+            shorts: rgb(shorts),
+            socks: rgb(socks),
+            skin,
+            legs: crate::sim::team::leg_kit(shorts, socks).unwrap_or(NO_KIT_LEGS),
+        }
+    }
 }
 
 /// Visual state the game keeps for the match (never read by the sim).
@@ -319,7 +343,7 @@ pub struct Guides {
 
 /// Which parts a player gets.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum Detail {
+pub enum Detail {
     /// PC native: 11 parts.
     Full,
     /// Consoles near the camera: 7 parts.
@@ -329,7 +353,16 @@ pub(crate) enum Detail {
 }
 
 impl Detail {
-    pub(crate) fn mask(self) -> u16 {
+    /// Its bit in [`anim::Part::tiers`].
+    pub fn tier(self) -> u8 {
+        match self {
+            Detail::Full => anim::tier::FULL,
+            Detail::Near => anim::tier::NEAR,
+            Detail::Far => anim::tier::FAR,
+        }
+    }
+
+    pub fn mask(self) -> u16 {
         match self {
             Detail::Full => mask::ALL,
             Detail::Near => mask::LIMBS,
@@ -652,21 +685,13 @@ fn draw_people(r: &mut dyn Renderer, m: &Match, v: &MatchView, fr: &Frustum, hif
         let m = detail.mask();
         let pose = v.anims[i].pose_masked(m);
         joint_matrices(&body, &pose, &mut joints, m);
-        draw_body(r, &joints, &v.looks[i], detail, hifi, v.sky.tint());
+        anim::plant(&mut joints, m, v.anims[i].grounded(), body.m[1][3]);
+        draw_body(r, &body, &joints, &v.looks[i], detail, v.sky.tint());
     }
     // Officials: the referee in black, linesmen in yellow with flags.
-    let ref_look = Look {
-        shirt: Color::rgb(30, 30, 34),
-        shorts: Color::rgb(30, 30, 34),
-        socks: Color::rgb(30, 30, 34),
-        skin: SKIN_TONES[2],
-    };
-    let lm_look = Look {
-        shirt: Color::rgb(250, 220, 40),
-        shorts: Color::rgb(30, 30, 34),
-        socks: Color::rgb(30, 30, 34),
-        skin: SKIN_TONES[4],
-    };
+    use crate::sim::team::OFFICIAL_BLACK as BLACK;
+    let ref_look = Look::of(BLACK, BLACK, BLACK, SKIN_TONES[2]);
+    let lm_look = Look::of(Rgb(250, 220, 40), BLACK, BLACK, SKIN_TONES[4]);
     for k in 0..3 {
         let o = m.officials[k];
         let pos = Vec3::new(o.x.to_f32(), 0.0, o.y.to_f32());
@@ -685,12 +710,18 @@ fn draw_people(r: &mut dyn Renderer, m: &Match, v: &MatchView, fr: &Frustum, hif
         let detail = if hifi { Detail::Full } else { Detail::Near };
         let pose = v.anims[N + k].pose_masked(detail.mask());
         joint_matrices(&body, &pose, &mut joints, detail.mask());
+        anim::plant(
+            &mut joints,
+            detail.mask(),
+            v.anims[N + k].grounded(),
+            body.m[1][3],
+        );
         draw_body(
             r,
+            &body,
             &joints,
             if k == 0 { &ref_look } else { &lm_look },
             detail,
-            hifi,
             v.sky.tint(),
         );
         if k > 0 {
@@ -717,66 +748,78 @@ fn draw_people(r: &mut dyn Renderer, m: &Match, v: &MatchView, fr: &Frustum, hif
     }
 }
 
+/// Draw a posed body: its blob shadow on the turf under the pelvis (the
+/// turf is `body`'s height), then the parts of `detail`'s tier.
 pub(crate) fn draw_body(
     r: &mut dyn Renderer,
+    body: &Mat34,
     j: &[Mat34; JOINTS],
     look: &Look,
     detail: Detail,
-    hifi: bool,
     env: Color,
 ) {
-    let skin = plain(mul(look.skin, env));
-    let (head, torso, shorts) = if hifi {
-        (M_HEAD_HD, M_TORSO_HD, M_SHORTS_HD)
-    } else {
-        (M_HEAD, M_TORSO, M_SHORTS)
-    };
-    r.draw_model_matrix(head, &j[joint::HEAD], Material::VertexLit, &skin);
-    r.draw_model_matrix(
-        torso,
-        &j[joint::TORSO],
-        Material::VertexLit,
-        &plain(mul(look.shirt, env)),
-    );
-    r.draw_model_matrix(
-        shorts,
-        &j[joint::PELVIS],
-        Material::VertexLit,
-        &plain(mul(look.shorts, env)),
-    );
-    match detail {
-        Detail::Full => {
-            for (a, f) in [
-                (joint::ARM_L, joint::FOREARM_L),
-                (joint::ARM_R, joint::FOREARM_R),
-            ] {
-                r.draw_model_matrix(M_UPPER_ARM, &j[a], Material::VertexLit, &skin);
-                r.draw_model_matrix(M_FOREARM, &j[f], Material::VertexLit, &skin);
-            }
-            for (t, s) in [
-                (joint::THIGH_L, joint::SHIN_L),
-                (joint::THIGH_R, joint::SHIN_R),
-            ] {
-                r.draw_model_matrix(M_THIGH, &j[t], Material::VertexLit, &skin);
-                r.draw_model_matrix(
-                    M_SHIN,
-                    &j[s],
-                    Material::VertexLit,
-                    &plain(mul(look.socks, env)),
-                );
-            }
+    let pelvis = &j[joint::PELVIS];
+    let mut shadow = *body;
+    shadow.m[0][3] = pelvis.m[0][3];
+    shadow.m[2][3] = pelvis.m[2][3];
+    shadow.m[1][3] = body.m[1][3] + SHADOW_LIFT * body.m[1][1];
+    r.draw_model_matrix(M_PLAYER_SHADOW, &shadow, Material::VertexLit, &plain(env));
+    let colors = [
+        plain(mul(look.skin, env)),
+        plain(mul(look.shirt, env)),
+        plain(mul(look.shorts, env)),
+        plain(mul(look.socks, env)),
+    ];
+    let bit = detail.tier();
+    // Consoles draw a leg as one mesh with the kit's colors baked in.
+    let kit_legs = detail != Detail::Full && (look.legs as usize) < M_LEG_KIT.len();
+    for p in clips_gen::PARTS.iter() {
+        if p.tiers & bit == 0 {
+            continue;
         }
-        Detail::Near | Detail::Far => {
-            if detail == Detail::Near {
-                r.draw_model_matrix(M_ARM, &j[joint::ARM_L], Material::VertexLit, &skin);
-                r.draw_model_matrix(M_ARM, &j[joint::ARM_R], Material::VertexLit, &skin);
-            }
-            let socks = plain(mul(look.socks, env));
-            r.draw_model_matrix(M_LEG, &j[joint::THIGH_L], Material::VertexLit, &socks);
-            r.draw_model_matrix(M_LEG, &j[joint::THIGH_R], Material::VertexLit, &socks);
+        let leg = p.joint == joint::THIGH_L || p.joint == joint::THIGH_R;
+        if kit_legs && leg {
+            continue;
+        }
+        r.draw_model_matrix(
+            p.model,
+            &j[p.joint],
+            Material::VertexLit,
+            &colors[p.tint as usize],
+        );
+    }
+    if kit_legs {
+        let m = M_LEG_KIT[look.legs as usize];
+        for t in [joint::THIGH_L, joint::THIGH_R] {
+            r.draw_model_matrix(m, &j[t], Material::VertexLit, &plain(env));
         }
     }
 }
+
+/// The consoles' kit legs (`models/se_leg_k<NN>`, by
+/// [`crate::sim::team::LEG_KITS`] index).
+pub const M_LEG_KIT: [ModelId; crate::sim::team::LEG_KITS.1] = {
+    let mut out = [ModelId(0); crate::sim::team::LEG_KITS.1];
+    let mut i = 0;
+    while i < out.len() {
+        let mut path = [0u8; 24];
+        let head = b"models/se_leg_k";
+        let mut len = 0;
+        while len < head.len() {
+            path[len] = head[len];
+            len += 1;
+        }
+        path[len] = b'0' + (i / 10) as u8;
+        path[len + 1] = b'0' + (i % 10) as u8;
+        out[i] = ModelId(fnv1a(&path, len + 2));
+        i += 1;
+    }
+    out
+};
+
+/// How high the shadow floats over the turf (m): the N64's 16-bit depth
+/// resolves 4 cm at the drawing scale.
+const SHADOW_LIFT: f32 = 0.04;
 
 fn draw_ball(r: &mut dyn Renderer, m: &Match, v: &MatchView, fr: &Frustum, hifi: bool) {
     let b = m.ball.pos;
@@ -884,8 +927,7 @@ pub fn pick_clip(m: &Match, i: usize, dt: f32, st: &mut AnimState) {
     // throw-in waiting to be taken.
     let headed = p.headed != 0 && m.tick.saturating_sub(p.headed) < 26;
     if headed {
-        st.play(ClipName::Header, false, false);
-        st.advance(dt, 1.0);
+        show(st, ClipName::Header, false, false, 1.0, dt);
         return;
     }
     let throwing = matches!(m.phase, Phase::Ready { .. } | Phase::Setup { .. })
@@ -893,9 +935,10 @@ pub fn pick_clip(m: &Match, i: usize, dt: f32, st: &mut AnimState) {
         && m.restart.kind == crate::sim::rules::RestartKind::ThrowIn;
     if throwing {
         // The wind-up, held until the throw.
-        st.play(ClipName::Throw, false, false);
-        st.time = 0.0;
-        st.advance(dt, 0.0);
+        show(st, ClipName::Throw, false, false, 0.0, dt);
+        if st.clip == ClipName::Throw {
+            st.time = 0.0;
+        }
         return;
     }
     let (clip, mirror, rate, restart) = match p.act {
@@ -960,8 +1003,19 @@ pub fn pick_clip(m: &Match, i: usize, dt: f32, st: &mut AnimState) {
             }
         }
     };
-    st.play(clip, mirror, restart);
-    st.advance(dt, rate);
+    show(st, clip, mirror, restart, rate, dt);
+}
+
+/// Play `clip` unless the body must get up first ([`anim::route`]).
+fn show(st: &mut AnimState, clip: ClipName, mirror: bool, restart: bool, rate: f32, dt: f32) {
+    let shown = anim::route(st, clip);
+    if shown == clip {
+        anim::switch(st, clip, mirror, restart);
+        st.advance(dt, rate);
+    } else {
+        anim::switch(st, shown, st.mirror, false);
+        st.advance(dt, 1.0);
+    }
 }
 
 /// The officials' clips: the referee walks or jogs with the play; a

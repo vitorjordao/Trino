@@ -15,9 +15,9 @@
 #   Kits are a per-draw tint, so recolorable regions are painted light grey
 #   with their shading in; fixed details (boots, hair, eyes) keep dark colors.
 # - Players are rigid parts posed by the game (one code path on every target,
-#   tools/blender/solid_eleven_anim.py): consoles draw 7 parts (head, torso,
-#   shorts with the blob shadow, two arms, two legs), the PC 11 (elbows and
-#   knees) with higher-detail overrides.
+#   tools/blender/solid_eleven_anim.py BODY): consoles draw 9 near the camera
+#   (head, torso, shorts, arms, shorts legs, legs), the PC 15 (elbows,
+#   knees, sleeves); the blob shadow is a draw of its own on the turf.
 # - The pitch is 24 tiles so off-screen ground culls and on-screen ground fits
 #   the RSP's clip band; lines are separate strips 2 cm over the turf (the game
 #   draws the world at 1/64 scale, so the N64's 16-bit z resolves them).
@@ -464,117 +464,115 @@ HAIR = (70, 56, 46)
 EYE = (30, 26, 26)
 
 
-def part_head(detail):
-    """Head on the neck pivot (0, 0, 0): neck, head, hair cap, eyes, nose."""
-    m = Model("head")
-    m.box((0, 0.05, 0), (0.11, 0.1, 0.11), SKIN, skip=("-y", "+y"))
-    if detail:
-        m.taper(0.08, 0.20, 0.2, 0.22, 0.22, 0.24, SKIN, skip=("-y", "+y"))
-        m.taper(0.20, 0.31, 0.22, 0.24, 0.18, 0.21, SKIN, skip=("-y",))
-        m.taper(0.24, 0.335, 0.235, 0.255, 0.19, 0.2, HAIR, cz=-0.01, skip=("-y", "+z"))
-        m.box((0, 0.19, -0.115), (0.22, 0.18, 0.04), HAIR, skip=("+z",))
+def body_part(name, base=None, boot=BOOT):
+    """A body part from the shared spec (`solid_eleven_anim.BODY`): its
+    solids, then flat details. Kit and skin regions are light grey for the
+    per-draw tint (or `base`, baked); boots and hair keep their own
+    colors."""
+    joint, tint, tiers, budget, solids = anim.BODY[name]
+    if base is None:
+        base = SKIN if tint == "skin" else KIT
+    colors = {"base": base, "hair": HAIR, "boot": boot}
+    m = Model(name[:-2] if name.endswith("_x") else name)
+    for so in solids:
+        rgb = colors[so["color"]]
+        skip = tuple(so["skip"])
+        sides = None
+        top = None
+        if name == "head":
+            # The console head is one wedge: hair on top and at the back.
+            top = shade(HAIR, 1.1)
+            m.taper(so["y0"], so["y1"], so["w0"], so["d0"], so["w1"], so["d1"], rgb, so["cx"], so["cz"],
+                    skip=skip + ("+y",), sides={"-z": HAIR})
+        elif name == "torso" and so is solids[-1]:
+            # The console shirt's top is its darker collar.
+            top = shade(KIT, 0.62)
+            m.taper(so["y0"], so["y1"], so["w0"], so["d0"], so["w1"], so["d1"], rgb, so["cx"], so["cz"],
+                    skip=skip + ("+y",))
+        if top is not None:
+            x0, x1, z0, z1 = so["cx"] - so["w1"] / 2, so["cx"] + so["w1"] / 2, so["cz"] - so["d1"] / 2, so["cz"] + so["d1"] / 2
+            m.poly([(x0, so["y1"], z1), (x1, so["y1"], z1), (x1, so["y1"], z0), (x0, so["y1"], z0)], top, out=(0, 1, 0))
+            continue
+        m.taper(so["y0"], so["y1"], so["w0"], so["d0"], so["w1"], so["d1"], rgb, so["cx"], so["cz"], skip=skip)
+    face_z = lambda so, y: so["cz"] + (so["d0"] + (so["d1"] - so["d0"]) * (y - so["y0"]) / (so["y1"] - so["y0"])) / 2
+    if name in ("head", "head_hd"):
+        face = solids[0] if name == "head" else solids[2]
+        ey = 0.25 if name == "head" else 0.245
+        z = face_z(face, ey) + 0.002
         for x in (-0.055, 0.055):
-            m.poly([(x - 0.025, 0.205, 0.122), (x + 0.025, 0.205, 0.122), (x + 0.025, 0.225, 0.122),
-                    (x - 0.025, 0.225, 0.122)], EYE, out=(0, 0, 1))
-        m.taper(0.15, 0.2, 0.04, 0.05, 0.03, 0.01, shade(SKIN, 0.92), cz=0.13, skip=("-z",))
-    else:
-        # One box: skin front and sides, hair on top and at the back, two
-        # eye quads. The collar hides the neck.
-        x0, x1, y0, y1, z0, z1 = -0.11, 0.11, 0.06, 0.33, -0.12, 0.12
-        m.poly([(x0, y0, z1), (x1, y0, z1), (x1, y1, z1), (x0, y1, z1)], SKIN, out=(0, 0, 1))
-        m.poly([(x0, y0, z0), (x0, y0, z1), (x0, y1, z1), (x0, y1, z0)], shade(SKIN, 0.86), out=(-1, 0, 0))
-        m.poly([(x1, y0, z1), (x1, y0, z0), (x1, y1, z0), (x1, y1, z1)], shade(SKIN, 0.86), out=(1, 0, 0))
-        m.poly([(x1, y0, z0), (x0, y0, z0), (x0, y1, z0), (x1, y1, z0)], HAIR, out=(0, 0, -1))
-        m.poly([(x0, y1, z1), (x1, y1, z1), (x1, y1, z0), (x0, y1, z0)], shade(HAIR, 1.1), out=(0, 1, 0))
-        for x in (-0.055, 0.055):
-            m.poly([(x - 0.025, 0.2, 0.121), (x + 0.025, 0.2, 0.121), (x + 0.025, 0.225, 0.121),
-                    (x - 0.025, 0.225, 0.121)], EYE, out=(0, 0, 1))
+            m.poly([(x - 0.025, ey - 0.013, z), (x + 0.025, ey - 0.013, z), (x + 0.025, ey + 0.012, z),
+                    (x - 0.025, ey + 0.012, z)], EYE, out=(0, 0, 1))
+        if name == "head_hd":
+            m.taper(0.17, 0.22, 0.04, 0.05, 0.03, 0.01, shade(SKIN, 0.92), cz=0.13, skip=("-z",))
+    elif name == "torso_hd":
+        top = solids[2]
+        m.box((0, top["y1"] + 0.006, 0.0), (0.16, 0.012, 0.12), shade(KIT, 0.62), skip=("-y",))
+        zb = -face_z(solids[1], 0.25) - 0.002
+        m.poly([(-0.08, 0.17, zb), (0.08, 0.17, zb), (0.08, 0.29, zb), (-0.08, 0.29, zb)],
+               shade(KIT, 0.7), out=(0, 0, -1))
+        zf = face_z(solids[1], 0.25) + 0.002
+        m.poly([(0.06, 0.22, zf), (0.11, 0.22, zf), (0.11, 0.27, zf), (0.06, 0.27, zf)],
+               shade(KIT, 0.7), out=(0, 0, 1))
+    elif name == "shin_x":
+        so = solids[1]
+        m.box((0, so["y1"] - 0.015, 0), (so["w1"] + 0.006, 0.03, so["d1"] + 0.006), shade(KIT, 0.72),
+              skip=("+y", "-y"))
     return m
 
 
-def part_torso(detail):
-    """Shirt on the waist pivot: tapered chest, short sleeves at the
-    shoulders, a darker collar."""
-    m = Model("torso")
-    if not detail:
-        # Consoles: one tapered block (shoulders wide enough to read as
-        # sleeves) and a darker collar on top.
-        m.taper(0.0, 0.46, 0.31, 0.2, 0.5, 0.24, KIT, skip=("-y", "+y"))
-        m.poly([(-0.25, 0.46, 0.12), (0.25, 0.46, 0.12), (0.25, 0.46, -0.12), (-0.25, 0.46, -0.12)],
-               shade(KIT, 0.62), out=(0, 1, 0))
-        return m
-    m.taper(0.0, 0.3, 0.31, 0.2, 0.43, 0.25, KIT, skip=("-y", "+y"))
-    m.taper(0.3, 0.46, 0.43, 0.25, 0.4, 0.22, KIT, skip=("-y",))
-    for s in (-1, 1):
-        m.box((s * 0.25, 0.38, 0), (0.11, 0.14, 0.15), shade(KIT, 0.96), skip=("-x" if s > 0 else "+x",))
-    m.box((0, 0.465, 0.0), (0.16, 0.02, 0.12), shade(KIT, 0.62), skip=("-y",))
-    # Number panel on the back and a chest badge area, a touch darker.
-    m.poly([(-0.08, 0.17, -0.126), (0.08, 0.17, -0.126), (0.08, 0.33, -0.126), (-0.08, 0.33, -0.126)],
-           shade(KIT, 0.7), out=(0, 0, -1))
-    m.poly([(0.06, 0.32, 0.132), (0.11, 0.32, 0.132), (0.11, 0.37, 0.132), (0.06, 0.37, 0.132)],
-           shade(KIT, 0.7), out=(0, 0, 1))
+def leg_kits():
+    """(index, shorts, socks) of examples/solid-eleven/assets/leg_kits.txt."""
+    out = []
+    with open(os.path.join(GAME, "assets", "leg_kits.txt"), encoding="utf-8") as f:
+        for line in f:
+            if line.startswith("#") or not line.strip():
+                continue
+            v = [int(x) for x in line.split()]
+            out.append((v[0], tuple(v[1:4]), tuple(v[4:7])))
+    return out
+
+
+def leg_kit(shorts, socks):
+    """A console leg in one mesh: the shorts leg and the sock with its
+    boot, colors baked (no per-draw tint: one draw instead of two)."""
+    m = Model("leg_kit")
+    m.faces += body_part("shorts_leg_x", base=shorts).faces
+    boot = tuple(int(round(b * s / 255)) for b, s in zip(BOOT, socks))
+    m.faces += body_part("leg_x", base=socks, boot=boot).faces
     return m
 
 
-def part_shorts(detail):
-    """Shorts on the hip pivot, with the blob shadow on the ground (the
-    pelvis never rolls, so it stays flat; drawn 4 cm over the turf)."""
-    m = Model("shorts")
-    shadow = (36, 70, 30)
-    if not detail:
-        m.taper(-0.3, 0.04, 0.36, 0.22, 0.31, 0.2, KIT, skip=("+y", "-y"))
-        m.disc((0, 0, 0.02), 0.42, 0.32, shadow, n=8, y=-0.95 + 0.04)
-        return m
-    m.taper(-0.18, 0.04, 0.33, 0.21, 0.31, 0.2, KIT, skip=("+y",))
-    for s in (-1, 1):
-        m.taper(-0.34, -0.18, 0.15, 0.17, 0.165, 0.2, shade(KIT, 0.95), cx=s * 0.09, skip=("+y",))
-    m.disc((0, 0, 0.02), 0.42, 0.32, shadow, n=10, y=-0.95 + 0.04)
+GOLD = (236, 190, 64)
+
+
+def trophy():
+    """The league trophy: a gold cup with two handles on a dark plinth,
+    0.5 m tall, its foot at the origin (the captain's hands hold it
+    there). Fixed colors (never tinted)."""
+    m = Model("trophy")
+    wood = (70, 44, 30)
+    m.taper(-0.08, 0.0, 0.17, 0.17, 0.15, 0.15, wood)
+    m.taper(0.0, 0.05, 0.12, 0.12, 0.06, 0.06, GOLD, skip=("-y",))
+    m.taper(0.05, 0.16, 0.04, 0.04, 0.04, 0.04, shade(GOLD, 0.9), skip=("-y", "+y"))
+    m.taper(0.16, 0.2, 0.04, 0.04, 0.09, 0.09, GOLD, skip=("-y",))
+    m.taper(0.2, 0.42, 0.09, 0.09, 0.22, 0.22, GOLD, skip=("-y", "+y"))
+    # The bowl's mouth: a darker inside.
+    m.poly([(-0.11, 0.42, 0.11), (0.11, 0.42, 0.11), (0.11, 0.42, -0.11), (-0.11, 0.42, -0.11)],
+           shade(GOLD, 0.55), out=(0, 1, 0))
+    # The handles: a bar each side, joined to the bowl at both ends.
+    for sx in (-1, 1):
+        inner = "-x" if sx > 0 else "+x"
+        m.box((sx * 0.15, 0.33, 0), (0.03, 0.15, 0.03), shade(GOLD, 1.05))
+        m.box((sx * 0.125, 0.395, 0), (0.05, 0.02, 0.025), GOLD, skip=(inner,))
+        m.box((sx * 0.112, 0.265, 0), (0.075, 0.02, 0.025), GOLD, skip=(inner,))
     return m
 
 
-def part_arm(whole):
-    """Arm on the shoulder pivot: the whole arm (consoles: one tapered tube
-    with the hand as its cap) or the upper arm (PC, with a separate
-    forearm)."""
-    m = Model("arm" if whole else "upper_arm")
-    if whole:
-        m.taper(-0.62, 0.0, 0.07, 0.08, 0.1, 0.1, SKIN, skip=("+y",))
-        return m
-    m.taper(-0.3, 0.0, 0.085, 0.085, 0.1, 0.1, SKIN)
-    return m
-
-
-def part_forearm():
-    m = Model("forearm")
-    m.taper(-0.27, 0.0, 0.072, 0.072, 0.085, 0.085, SKIN, skip=("+y",))
-    m.box((0, -0.31, 0.0), (0.085, 0.08, 0.095), SKIN, skip=("+y",))
-    return m
-
-
-def part_leg(whole):
-    """Leg on the hip pivot. Consoles: one tapered piece tinted with the
-    sock color, and the boot. PC: the thigh alone (skin), the shin separate."""
-    m = Model("leg" if whole else "thigh")
-    if whole:
-        m.taper(-0.82, 0.0, 0.1, 0.11, 0.15, 0.16, KIT, skip=("+y", "-y"))
-        m.box((0, -0.865, 0.04), (0.11, 0.09, 0.26), BOOT, skip=("-y", "+y", "-z"))
-        m.poly([(-0.055, -0.82, -0.09), (0.055, -0.82, -0.09), (0.055, -0.82, 0.17), (-0.055, -0.82, 0.17)],
-               shade(BOOT, 1.1), out=(0, 1, 0))
-        return m
-    m.taper(-0.43, 0.0, 0.12, 0.13, 0.15, 0.16, SKIN)
-    return m
-
-
-def _shin(m, y0):
-    m.taper(y0 - 0.38, y0, 0.1, 0.11, 0.12, 0.13, KIT, skip=("+y",))
-    m.box((0, y0 + 0.02, 0), (0.125, 0.04, 0.135), shade(KIT, 0.72), skip=("+y", "-y"))
-    by = y0 - 0.38 - 0.05
-    m.box((0, by, 0.04), (0.11, 0.09, 0.26), BOOT, skip=("-y",))
-
-
-def part_shin():
-    m = Model("shin")
-    _shin(m, 0.0)
+def player_shadow():
+    """A player's blob shadow, drawn on the turf under the pelvis (a part
+    of its own: the pelvis rises and falls with the stride)."""
+    m = Model("player_shadow")
+    m.disc((0, 0, 0.02), 0.4, 0.3, (36, 70, 30), n=6, y=0.0)
     return m
 
 
@@ -656,16 +654,24 @@ def player_rig():
     """The PC parts posed by the skeleton of solid_eleven_anim.py, one object
     per joint (rigid parts), every clip as an NLA track: the animation QA
     model (`model inspect --anim`, the editor's Animation tab)."""
-    builders = {
-        "pelvis": lambda: part_shorts(True), "torso": lambda: part_torso(True),
-        "head": lambda: part_head(True), "arm_l": lambda: part_arm(False), "arm_r": lambda: part_arm(False),
-        "forearm_l": part_forearm, "forearm_r": part_forearm, "thigh_l": lambda: part_leg(False),
-        "thigh_r": lambda: part_leg(False), "shin_l": part_shin, "shin_r": part_shin,
-    }
+    # Every PC part on a joint, one mesh per joint.
+    builders = {}
+    for name, (joint, tint, tiers, budget, solids) in anim.BODY.items():
+        if "pc" not in tiers.split():
+            continue
+        sides = [joint] + ([joint[:-2] + "_r"] if name.endswith("_x") else [])
+        for j in sides:
+            builders.setdefault(j, []).append(name)
+
+    def build_joint(j):
+        m = Model("rig_" + j)
+        for n in builders[j]:
+            m.faces += body_part(n).faces
+        return m
+
     objs = {}
     for name, parent, piv in anim.JOINTS:
-        mdl = builders[name]()
-        mdl.name = "rig_" + name
+        mdl = build_joint(name)
         ob = mdl.build()
         ob.location = T(piv)
         if parent is not None:
@@ -703,7 +709,8 @@ def player_rig():
                 o.keyframe_insert("rotation_quaternion", frame=f)
                 if n == "pelvis":
                     piv = anim.JOINTS[0][2]
-                    o.location = Vector(T((piv[0] + root[0], piv[1] + root[1], piv[2] + root[2])))
+                    g = anim.grounded_root(pose, root, "pc")
+                    o.location = Vector(T((piv[0] + g[0], piv[1] + g[1], piv[2] + g[2])))
                     o.keyframe_insert("location", frame=f)
         for n in names:
             o = objs[n]
@@ -751,18 +758,17 @@ reg("goal@pc", lambda: goal(True), PC, 160, ((0, -1, 1.2), 9))
 reg("corner_flag", corner_flag, SHARED, 16, ((0, 0, 0.8), 2))
 reg("ball", lambda: ball(False), SHARED, 20, ((0, 0, 0), 0.3))
 reg("ball@pc", lambda: ball(True), PC, 80, ((0, 0, 0), 0.3))
-reg("head", lambda: part_head(False), SHARED, 24, ((0, 0, 0.18), 0.5))
-reg("head@pc", lambda: part_head(True), PC, 70, ((0, 0, 0.18), 0.5))
-reg("torso", lambda: part_torso(False), SHARED, 12, ((0, 0, 0.25), 0.7))
-reg("torso@pc", lambda: part_torso(True), PC, 60, ((0, 0, 0.25), 0.7))
-reg("shorts", lambda: part_shorts(False), SHARED, 16, ((0, 0, -0.4), 1.1))
-reg("shorts@pc", lambda: part_shorts(True), PC, 50, ((0, 0, -0.4), 1.1))
-reg("arm", lambda: part_arm(True), SHARED, 10, ((0, 0, -0.3), 0.8))
-reg("leg", lambda: part_leg(True), SHARED, 18, ((0, 0, -0.45), 1.1))
-reg("upper_arm", lambda: part_arm(False), PC, 14, ((0, 0, -0.15), 0.5))
-reg("forearm", part_forearm, PC, 20, ((0, 0, -0.15), 0.5))
-reg("thigh", lambda: part_leg(False), PC, 14, ((0, 0, -0.2), 0.6))
-reg("shin", part_shin, PC, 30, ((0, 0, -0.25), 0.7))
+for _name, (_joint, _tint, _tiers, _budget, _solids) in anim.BODY.items():
+    _file = _name[:-2] if _name.endswith("_x") else _name
+    _where = PC if _tiers.split() == ["pc"] else SHARED
+    _y = (_solids[0]["y0"] + _solids[0]["y1"]) / 2
+    reg(_file, (lambda n=_name: body_part(n)), _where, _budget, ((0, 0, _y), 0.8))
+reg("player_shadow", player_shadow, SHARED, 4, ((0, 0, 0), 1.0))
+reg("trophy", trophy, SHARED, 120, ((0, 0, 0.2), 0.7))
+for _i, _shorts, _socks in leg_kits():
+    reg(f"leg_k{_i:02}", (lambda a=_shorts, b=_socks: leg_kit(a, b)), SHARED,
+        anim.BODY["shorts_leg_x"][3] + anim.BODY["leg_x"][3], ((0, 0, -0.45), 1.1))
+
 reg("flag_hand", flag_hand, SHARED, 18, ((0, 0, 0.25), 0.8))
 reg("ring", lambda: ring("ring", 0.55, 0.68, 16, (255, 255, 255)), SHARED, 32, ((0, 0, 0), 1.6))
 reg("ring_small", lambda: ring("ring_small", 0.4, 0.48, 10, (255, 255, 255)), SHARED, 20, ((0, 0, 0), 1.2))
@@ -794,7 +800,8 @@ def main():
         # (`x_hd`), so the PC's N64 and 3DS profiles still draw the console
         # model.
         name = key.split("@")[0] + ("_hd" if key.endswith("@pc") else "")
-        if only and name not in only and key not in only:
+        # `--only legs`: every kit leg.
+        if only and name not in only and key not in only and not ("legs" in only and name.startswith("leg_k")):
             continue
         for o in list(bpy.data.objects):
             bpy.data.objects.remove(o, do_unlink=True)

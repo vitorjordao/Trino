@@ -46,16 +46,16 @@ pub fn dress(clubs: [u8; 2], skins: &[u8; N]) -> Dress {
         let k = &kits[s];
         let keeper = i % 11 == 0;
         let shirt: Rgb = if keeper { gks[s] } else { k.shirt };
-        Look {
-            shirt: rgb(shirt),
-            shorts: if keeper {
-                rgb(Rgb(40, 40, 44))
+        Look::of(
+            shirt,
+            if keeper {
+                crate::sim::team::GK_SHORTS
             } else {
-                rgb(k.shorts)
+                k.shorts
             },
-            socks: if keeper { rgb(gks[s]) } else { rgb(k.socks) },
-            skin: SKIN_TONES[skins[i] as usize % SKIN_TONES.len()],
-        }
+            if keeper { gks[s] } else { k.socks },
+            SKIN_TONES[skins[i] as usize % SKIN_TONES.len()],
+        )
     });
     Dress {
         looks,

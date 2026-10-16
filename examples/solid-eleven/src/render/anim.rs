@@ -6,15 +6,17 @@
 //! `nlerp`, and the body's yaw comes straight from the sim's facing vector.
 //! The same code poses players on PC, N64 and 3DS.
 
-use super::clips_gen::{CLIPS, ClipName, JOINTS, SKELETON};
+use super::clips_gen::{CLIPS, CONTACTS_FULL, CONTACTS_LO, ClipName, JOINTS, SKELETON};
 use trino_core::{Mat34, Quat, Vec3};
 
 /// One keyframe: the time (0..1 of the clip), the pelvis offset and a
-/// rotation per joint.
+/// rotation per joint. The generator grounds each key: `root[1]` puts the
+/// PC's body (bent knees) on the turf, `lo` the consoles' (straight legs).
 #[derive(Clone, Copy, Debug)]
 pub struct Key {
     pub t: f32,
     pub root: [f32; 3],
+    pub lo: f32,
     pub q: [[f32; 4]; JOINTS],
 }
 
@@ -23,7 +25,57 @@ pub struct Clip {
     pub name: &'static str,
     pub seconds: f32,
     pub looped: bool,
+    /// The body stays on the turf every frame ([`plant`] snaps it down);
+    /// otherwise it only stops at the turf.
+    pub grounded: bool,
     pub keys: &'static [Key],
+}
+
+/// One convex piece of a body part, in its joint's frame: a frustum from a
+/// `w0` x `d0` rectangle at `y0` to a `w1` x `d1` one at `y1`, centered on
+/// (`cx`, `cz`). `skip` has a bit per face never built (-x, +x, -y, +y,
+/// -z, +z = 1, 2, 4, 8, 16, 32): another part covers it in every pose.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Solid {
+    pub y0: f32,
+    pub y1: f32,
+    pub w0: f32,
+    pub d0: f32,
+    pub w1: f32,
+    pub d1: f32,
+    pub cx: f32,
+    pub cz: f32,
+    pub skip: u8,
+}
+
+/// Which of a player's colors a part is tinted with.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Tint {
+    Skin,
+    Shirt,
+    Shorts,
+    Socks,
+}
+
+/// A rigid body part: a mesh drawn with one joint's matrix.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Part {
+    pub model: trino_core::ModelId,
+    pub joint: usize,
+    pub tint: Tint,
+    /// The [`tier`]s that draw it.
+    pub tiers: u8,
+    pub solids: &'static [Solid],
+}
+
+/// Body detail tiers (bits of [`Part::tiers`]).
+pub mod tier {
+    /// The PC's native profile: elbows, knees, sleeves.
+    pub const FULL: u8 = 1;
+    /// Consoles near the camera.
+    pub const NEAR: u8 = 2;
+    /// Consoles far away: no arms, no shorts legs.
+    pub const FAR: u8 = 4;
 }
 
 /// Joint indices (the order of `solid_eleven_anim.JOINTS`).
@@ -135,9 +187,15 @@ pub fn sample_masked(name: ClipName, time: f32, mirror: bool, mask: u16) -> Pose
             pose.q[j] = quat(a.q[j]).nlerp(quat(b.q[j]), f);
         }
     }
+    // Bodies without shins (consoles) stand on straight legs.
+    let (ya, yb) = if mask & (1 << joint::SHIN_L) != 0 {
+        (a.root[1], b.root[1])
+    } else {
+        (a.lo, b.lo)
+    };
     pose.root = Vec3::new(
         a.root[0] + (b.root[0] - a.root[0]) * f,
-        a.root[1] + (b.root[1] - a.root[1]) * f,
+        ya + (yb - ya) * f,
         a.root[2] + (b.root[2] - a.root[2]) * f,
     );
     if mirror {
@@ -211,6 +269,35 @@ pub fn joint_matrices(body: &Mat34, pose: &Pose, out: &mut [Mat34; JOINTS], mask
     }
 }
 
+/// Rest posed joints on the turf at height `ground` (world units): the
+/// lowest contact point (the generator's list for this body, those of
+/// posed joints) goes to the turf when `snap`, or up to it when it sank.
+/// The keys are grounded already; this keeps the frames between them from
+/// sinking a foot or floating. ~20 dot products per player.
+pub fn plant(m: &mut [Mat34; JOINTS], mask: u16, snap: bool, ground: f32) {
+    let full = mask & (1 << joint::SHIN_L) != 0;
+    let pts: &[(usize, [f32; 3])] = if full { &CONTACTS_FULL } else { &CONTACTS_LO };
+    let mut low = f32::MAX;
+    for &(j, p) in pts {
+        if mask & (1 << j) == 0 {
+            continue;
+        }
+        let r = &m[j].m[1];
+        low = low.min(r[0] * p[0] + r[1] * p[1] + r[2] * p[2] + r[3]);
+    }
+    if low == f32::MAX {
+        return;
+    }
+    let lift = ground - low;
+    if lift > 0.0 || snap {
+        for (j, mj) in m.iter_mut().enumerate() {
+            if mask & (1 << j) != 0 {
+                mj.m[1][3] += lift;
+            }
+        }
+    }
+}
+
 /// `floor` without std (the clip clock is never huge).
 fn floor(x: f32) -> f32 {
     let i = x as i32 as f32;
@@ -224,15 +311,20 @@ pub struct AnimState {
     pub clip: ClipName,
     pub time: f32,
     pub mirror: bool,
-    /// The clip being faded out, its time, and the fade left (seconds).
+    /// The clip being faded out, its time, and the fade left (seconds)
+    /// of `fade_len`.
     pub prev: ClipName,
     pub prev_time: f32,
     pub prev_mirror: bool,
     pub fade: f32,
+    pub fade_len: f32,
 }
 
 /// Crossfade length.
 pub const FADE: f32 = 0.16;
+/// Into a dive, or from one into another fall: it starts at once (a slow
+/// fade from a sprint swings the arms through the chest on the way).
+pub const FADE_FAST: f32 = 0.05;
 
 impl AnimState {
     pub const fn new(clip: ClipName) -> AnimState {
@@ -244,6 +336,7 @@ impl AnimState {
             prev_time: 0.0,
             prev_mirror: false,
             fade: 0.0,
+            fade_len: FADE,
         }
     }
 
@@ -256,7 +349,10 @@ impl AnimState {
         self.prev = self.clip;
         self.prev_time = self.time;
         self.prev_mirror = self.mirror;
-        self.fade = FADE;
+        let dive = clip == ClipName::GkDive
+            || (self.clip == ClipName::GkDive && matches!(clip, ClipName::Down | ClipName::Slide));
+        self.fade_len = if dive { FADE_FAST } else { FADE };
+        self.fade = self.fade_len;
         // Cycles of the same family keep their phase (jog → sprint).
         let keep = is_cycle(clip) && is_cycle(self.clip);
         if keep {
@@ -285,6 +381,11 @@ impl AnimState {
         self.pose_masked(mask::ALL)
     }
 
+    /// The current clip keeps the body on the turf ([`plant`]).
+    pub fn grounded(&self) -> bool {
+        clip(self.clip).grounded
+    }
+
     /// The pose of the joints in `mask` (see [`mask`]).
     pub fn pose_masked(&self, mask: u16) -> Pose {
         let cur = sample_masked(self.clip, self.time, self.mirror, mask);
@@ -292,9 +393,46 @@ impl AnimState {
             return cur;
         }
         let old = sample_masked(self.prev, self.prev_time, self.prev_mirror, mask);
-        blend(&cur, &old, self.fade / FADE, mask)
+        blend(&cur, &old, self.fade / self.fade_len, mask)
     }
 }
+
+/// Ends lying on the turf.
+pub fn lying(c: ClipName) -> bool {
+    matches!(c, ClipName::GkDive | ClipName::Slide)
+}
+
+/// What to show when the sim asks for `want` while `st` plays. A fall
+/// plays out (a keeper who catches the ball mid-dive still lands), then
+/// the player gets up before anything else — the sim's short `Down` after
+/// a dive included — and the get-up plays out unless he falls again. A
+/// crossfade from lying to running would swing the arms through the body.
+pub fn route(st: &AnimState, want: ClipName) -> ClipName {
+    if lying(st.clip) {
+        if want == st.clip || st.time < clip(st.clip).seconds {
+            return st.clip;
+        }
+        return ClipName::GetUp;
+    }
+    let falls = matches!(want, ClipName::GkDive | ClipName::Slide | ClipName::Down);
+    if st.clip == ClipName::GetUp && st.time < clip(ClipName::GetUp).seconds && !falls {
+        return ClipName::GetUp;
+    }
+    want
+}
+
+/// Switch to `clip` the way the game does: a get-up after a slide starts
+/// at the kneel (the clip opens with rolling off a dive's side).
+pub fn switch(st: &mut AnimState, clip_name: ClipName, mirror: bool, restart: bool) {
+    let from = st.clip;
+    st.play(clip_name, mirror, restart);
+    if clip_name == ClipName::GetUp && from == ClipName::Slide && st.time == 0.0 {
+        st.time = clip(ClipName::GetUp).seconds * GET_UP_KNEEL;
+    }
+}
+
+/// Where the get-up clip kneels (its second key).
+pub const GET_UP_KNEEL: f32 = 0.35;
 
 fn is_cycle(c: ClipName) -> bool {
     matches!(
@@ -384,7 +522,7 @@ mod tests {
         assert!(close(knee.y, 0.95 - 0.03 - 0.43), "{}", knee.y);
         assert!(knee.x > 0.0, "the left knee is on +x");
         let head = m[joint::HEAD].transform_point(Vec3::ZERO);
-        assert!(close(head.y, 0.95 + 0.02 + 0.5));
+        assert!(close(head.y, 0.95 + 0.02 + 0.44));
     }
 
     #[test]

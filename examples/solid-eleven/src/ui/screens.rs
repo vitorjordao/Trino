@@ -59,12 +59,16 @@ fn look_of(g: &SolidElevenGame, i: usize) -> Look {
     let p = &g.world.players[i];
     let c = &CLUBS[g.world.club_of[i] as usize % TEAMS];
     let keeper = p.pos == team::Pos::Gk;
-    Look {
-        shirt: rgb(if keeper { c.gk } else { c.home.shirt }),
-        shorts: rgb(c.home.shorts),
-        socks: rgb(if keeper { c.gk } else { c.home.socks }),
-        skin: SKIN_TONES[p.skin as usize % 8],
-    }
+    Look::of(
+        if keeper { c.gk } else { c.home.shirt },
+        if keeper {
+            team::GK_SHORTS
+        } else {
+            c.home.shorts
+        },
+        if keeper { c.gk } else { c.home.socks },
+        SKIN_TONES[p.skin as usize % 8],
+    )
 }
 
 /// A tiny portrait: skin, hair, shirt (list rows).
@@ -193,7 +197,7 @@ pub fn draw(g: &mut SolidElevenGame, r: &mut dyn Renderer) {
             Color::rgba(10, 12, 30, 235),
             4.0,
         );
-        ui.border(Rect::new(160.0 - w * 0.5, 196.0, w, 16.0), c, 1.0);
+        ui.slant_border(Rect::new(160.0 - w * 0.5, 196.0, w, 16.0), c, 4.0, 1.0);
         ui.text(160.0, 198.0, s, c, Size::Small, TextAlign::Center);
     }
     if r.on_screen(Screen::Bottom) {
@@ -311,7 +315,7 @@ fn title(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
         );
         ui.slant(Rect::new(10.0, y, 3.0, 22.0), *c, 5.0);
         if sel {
-            ui.border(Rect::new(12.0, y, w - 2.0, 22.0), *c, 1.0);
+            ui.slant_border(r, *c, 5.0, 1.0);
         }
         ui.text(
             18.0,

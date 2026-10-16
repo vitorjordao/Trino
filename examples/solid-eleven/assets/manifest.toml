@@ -398,7 +398,9 @@ file = "models/corner_flag.glb"
 [models.se_ball]
 file = "models/ball.glb"
 
-# ---- players: consoles draw 7 parts, the PC 11 (pc-only parts below) ----
+# ---- players: rigid parts from tools/blender/solid_eleven_anim.py BODY.
+# Consoles draw 9 near the camera (5 far), the PC 15 (pc-only parts below),
+# and a blob shadow on the turf under each player.
 
 [models.se_head]
 file = "models/head.glb"
@@ -409,14 +411,121 @@ file = "models/torso.glb"
 [models.se_shorts]
 file = "models/shorts.glb"
 
+[models.se_player_shadow]
+file = "models/player_shadow.glb"
+
+# The league trophy (the title screen and the season's ceremony).
+[models.se_trophy]
+file = "models/trophy.glb"
+
 [models.se_arm]
 file = "models/arm.glb"
+
+[models.se_shorts_leg]
+file = "models/shorts_leg.glb"
 
 [models.se_leg]
 file = "models/leg.glb"
 
+# The consoles' kit legs: a shorts leg and a sock (with the boot) in one
+# mesh per (shorts, socks) pair of assets/leg_kits.txt, colors baked in.
+
+[models.se_leg_k00]
+file = "models/leg_k00.glb"
+
+[models.se_leg_k01]
+file = "models/leg_k01.glb"
+
+[models.se_leg_k02]
+file = "models/leg_k02.glb"
+
+[models.se_leg_k03]
+file = "models/leg_k03.glb"
+
+[models.se_leg_k04]
+file = "models/leg_k04.glb"
+
+[models.se_leg_k05]
+file = "models/leg_k05.glb"
+
+[models.se_leg_k06]
+file = "models/leg_k06.glb"
+
+[models.se_leg_k07]
+file = "models/leg_k07.glb"
+
+[models.se_leg_k08]
+file = "models/leg_k08.glb"
+
+[models.se_leg_k09]
+file = "models/leg_k09.glb"
+
+[models.se_leg_k10]
+file = "models/leg_k10.glb"
+
+[models.se_leg_k11]
+file = "models/leg_k11.glb"
+
+[models.se_leg_k12]
+file = "models/leg_k12.glb"
+
+[models.se_leg_k13]
+file = "models/leg_k13.glb"
+
+[models.se_leg_k14]
+file = "models/leg_k14.glb"
+
+[models.se_leg_k15]
+file = "models/leg_k15.glb"
+
+[models.se_leg_k16]
+file = "models/leg_k16.glb"
+
+[models.se_leg_k17]
+file = "models/leg_k17.glb"
+
+[models.se_leg_k18]
+file = "models/leg_k18.glb"
+
+[models.se_leg_k19]
+file = "models/leg_k19.glb"
+
+[models.se_leg_k20]
+file = "models/leg_k20.glb"
+
+[models.se_leg_k21]
+file = "models/leg_k21.glb"
+
+[models.se_leg_k22]
+file = "models/leg_k22.glb"
+
+[models.se_leg_k23]
+file = "models/leg_k23.glb"
+
+[models.se_leg_k24]
+file = "models/leg_k24.glb"
+
+[models.se_leg_k25]
+file = "models/leg_k25.glb"
+
+[models.se_leg_k26]
+file = "models/leg_k26.glb"
+
+[models.se_leg_k27]
+file = "models/leg_k27.glb"
+
+[models.se_leg_k28]
+file = "models/leg_k28.glb"
+
+[models.se_leg_k29]
+file = "models/leg_k29.glb"
+
 [models.se_flag_hand]
 file = "models/flag_hand.glb"
+
+[models.se_sleeve]
+file = "models/sleeve.glb"
+platforms = ["pc"]
 
 [models.se_upper_arm]
 file = "models/upper_arm.glb"
@@ -424,6 +533,10 @@ platforms = ["pc"]
 
 [models.se_forearm]
 file = "models/forearm.glb"
+platforms = ["pc"]
+
+[models.se_shorts_leg_hd]
+file = "models/shorts_leg_hd.glb"
 platforms = ["pc"]
 
 [models.se_thigh]
@@ -440,7 +553,7 @@ platforms = ["pc"]
 file = "models/player_rig.glb"
 platforms = ["pc"]
 anim_fps = 15
-once = ["pass", "lob", "shot", "tackle", "slide", "down", "header", "throw", "gk_dive", "ref_point", "ref_card", "flag_up"]
+once = ["pass", "lob", "shot", "tackle", "slide", "down", "get_up", "header", "throw", "gk_dive", "ref_point", "ref_card", "flag_up"]
 
 # ---- PC high detail: dense crowd, netted goal, rounder ball, detailed
 # players (the PC's native profile draws these; its N64/3DS profiles draw

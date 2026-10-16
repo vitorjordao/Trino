@@ -8,10 +8,10 @@
 
 use trino_core::math3d::{cos, sin};
 use trino_core::{
-    BakedScene, BillboardParams, BlobId, Camera3, Cells, Color, DEFAULT_LIGHT, Effect, Emitter,
-    EntityStore, FontId, Impostor, Light, LocalLight, Material, ModelId, ModelParams,
-    ParticleSystem, Platform, Rect, Renderer, Shading, SpriteId, TextBuf, TextParams, Transform3,
-    Vec2, Vec3,
+    BakedScene, BillboardParams, BlobId, Camera3, Cells, Color, DEFAULT_LIGHT, DetailTexture,
+    Effect, Emitter, EntityStore, FontId, Impostor, Light, LocalLight, Material, ModelId,
+    ModelParams, ParticleSystem, Platform, Rect, Renderer, Shading, SpriteId, TexFilter, TextBuf,
+    TextParams, Transform3, Vec2, Vec3,
 };
 
 /// The HUD font (also what the checks measure).
@@ -39,6 +39,10 @@ pub fn engine_checks(
         platform.log("TRINO_STEP:textured_3d probed 4 quadrants\n");
     } else {
         platform.log("TRINO_STEP:textured_3d skipped (no read_pixel)\n");
+    }
+    platform.log("TRINO_STEP:texture filter and detail\n");
+    if texture_detail(renderer)? {
+        platform.log("TRINO_STEP:texture filter and detail probed\n");
     }
     platform.log("TRINO_STEP:billboards\n");
     if billboards(renderer)? {
@@ -72,6 +76,91 @@ pub fn engine_checks(
     portals(renderer, platform)?;
     platform.log("TRINO_STEP:engine ok\n");
     Ok(())
+}
+
+/// The quadrants in 16-bit color (no palette: they share TMEM with a
+/// detail layer on the N64) and the detail layer, white left, gray right.
+pub const QUADRANTS16: SpriteId = SpriteId::from_path("sprites/selftest_quadrants16");
+pub const DETAIL: SpriteId = SpriteId::from_path("sprites/selftest_detail");
+
+/// Texture filtering and the detail layer: the quadrant card magnified
+/// (~11 px per texel), probed 2.6 px left of the red/green texel edge —
+/// pure red with `TexFilter::Point`, a red/green blend with `Bilinear` (the
+/// RDP's 3-point on the N64, whose texel centers sit half a texel off). Then the detail layer: the right half of the
+/// card (gray detail) at half the color, the left half (white) at full.
+/// `Ok(false)` where `read_pixel` is unsupported.
+pub fn texture_detail(renderer: &mut dyn Renderer) -> Result<bool, &'static str> {
+    let caps = *renderer.caps();
+    let screen = Vec2::new(caps.screen_width as f32, caps.screen_height as f32);
+    let camera = Camera3 {
+        eye: Vec3::new(0.0, 0.0, -1.2),
+        target: Vec3::ZERO,
+        fov_y: 60.0 * core::f32::consts::PI / 180.0,
+    };
+    let view = camera.view();
+    let half = camera.fov_y * 0.5;
+    let focal = cos(half) / sin(half) * screen.y * 0.5;
+    let draw = |r: &mut dyn Renderer, params: &ModelParams| {
+        // Several identical frames: the 3DS LCD is double-buffered.
+        for _ in 0..3 {
+            r.begin_frame(Color::BLACK);
+            r.set_camera(&camera);
+            r.set_light(&DEFAULT_LIGHT);
+            r.draw_model(CARD, &Transform3::default(), Material::VertexLit, params);
+            r.end_frame();
+        }
+    };
+    // Front face at z = -0.05; planar UVs u = x + 0.5, v = 0.5 - y.
+    let probe = |r: &mut dyn Renderer, u: f32, v: f32| {
+        let p = view.transform_point(Vec3::new(u - 0.5, 0.5 - v, -0.05));
+        let x = screen.x * 0.5 + p.x * focal / p.z;
+        let y = screen.y * 0.5 - p.y * focal / p.z;
+        r.read_pixel(x as u32, y as u32)
+    };
+    let base = ModelParams {
+        shading: Shading::Unlit,
+        texture: Some(QUADRANTS16),
+        ..ModelParams::DEFAULT
+    };
+    // Filter: 0.24 texel left of the edge between texels 7 (red) and 8.
+    for (filter, mixed) in [(TexFilter::Point, false), (TexFilter::Bilinear, true)] {
+        draw(renderer, &ModelParams { filter, ..base });
+        let Some(c) = probe(renderer, 0.485, 0.25) else {
+            return Ok(false);
+        };
+        // The RDP's bilinear centers its texels half a texel off the PC's
+        // (ares: 74, 189, 0 here, the PC: ~180, 70, 0): both blend.
+        if mixed && (c.r < 40 || c.g < 40) {
+            return Err("texture filter: Bilinear did not blend the texel edge");
+        }
+        if !mixed && (c.r < 150 || c.g > 30) {
+            return Err("texture filter: Point blended the texel edge");
+        }
+    }
+    // Detail: halves the right column, keeps the left.
+    draw(
+        renderer,
+        &ModelParams {
+            filter: TexFilter::Point,
+            detail: Some(DetailTexture::new(DETAIL, 0)),
+            ..base
+        },
+    );
+    let near = |a: u8, b: u8| (a as i32 - b as i32).abs() <= 40;
+    for (u, v, want) in [
+        (0.25, 0.25, [255, 0, 0]),
+        (0.75, 0.25, [0, 128, 0]),
+        (0.25, 0.75, [0, 0, 255]),
+        (0.75, 0.75, [128, 128, 128]),
+    ] {
+        let Some(c) = probe(renderer, u, v) else {
+            return Ok(false);
+        };
+        if !(near(c.r, want[0]) && near(c.g, want[1]) && near(c.b, want[2])) {
+            return Err("texture detail: the detail layer was not multiplied in");
+        }
+    }
+    Ok(true)
 }
 
 /// Textured 3D: draw the quadrant card face-on and read back one pixel per

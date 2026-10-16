@@ -285,6 +285,7 @@ impl SceneNode {
 ///   string table — tags are `\n`-separated
 ///   matrix f32*12 (row-major 3x4)
 ///   flags u32: bit0 model, bit1 anim, bit2 double_sided, bit3 texture,
+///     bit4 sound, bit5 detail layer,
 ///     bits 8..10 shading
 ///     (0 gouraud, 1 flat, 2 unlit), bits 12..14 collider shape (0 none,
 ///     1 box, 2 sphere, 3 capsule), bit15 collider trigger
@@ -296,7 +297,9 @@ impl SceneNode {
 ///   distance,
 ///   sound source: u32 sound (flag bit4), f32 radius, f32 volume,
 ///   visibility: u8 cell (0xFF none), u8 volume kind (0 none, 1 cell,
-///   2 portal), u8 portal a, u8 portal b, f32*3 world half extents
+///   2 portal), u8 portal a, u8 portal b, f32*3 world half extents,
+///   surface (v3): u8 gloss, u8 filter (0 default, 1 point, 2 bilinear),
+///   u8 detail scale_log2, u8 reserved, u32 detail sprite (flag bit5)
 /// data table: UTF-8 strings and LOD records, to the end of the blob: UTF-8 bytes to the end of the blob
 /// ```
 ///
@@ -304,11 +307,12 @@ impl SceneNode {
 /// node access never fails afterwards.
 pub const TSCN_MAGIC: &[u8; 4] = b"TSCN";
 /// v2 (October 2026): LOD records grew from 8 to 32 bytes (impostor
-/// levels). A v1 blob is refused: rebake the scene.
-pub const TSCN_VERSION: u16 = 2;
+/// levels). v3: nodes end with the surface's gloss, texture filter and
+/// detail layer (8 bytes). Older blobs are refused: rebake the scene.
+pub const TSCN_VERSION: u16 = 3;
 pub const TSCN_HEADER: usize = 12;
 pub const TSCN_ENV_BYTES: usize = 68;
-pub const TSCN_NODE_BYTES: usize = 16 + 48 + 4 + 4 + 4 + 4 + 4 + 4 + 12 + 12 + 4 + 8 + 12 + 16;
+pub const TSCN_NODE_BYTES: usize = 16 + 48 + 4 + 4 + 4 + 4 + 4 + 4 + 12 + 12 + 4 + 8 + 12 + 16 + 8;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SceneError {
@@ -463,6 +467,7 @@ impl BakedScene {
             2 => Shading::Unlit,
             _ => Shading::Gouraud,
         };
+        let surf = b + 88;
         let params = ModelParams {
             tint: rd_rgba(d, b + 8),
             emissive: rd_rgba(d, b + 12),
@@ -470,6 +475,18 @@ impl BakedScene {
             double_sided: flags & 4 != 0,
             anim: None,
             texture: (flags & 8 != 0).then(|| crate::render::SpriteId(rd_u32(d, b + 48))),
+            gloss: d[surf],
+            filter: match d[surf + 1] {
+                1 => crate::render::TexFilter::Point,
+                2 => crate::render::TexFilter::Bilinear,
+                _ => crate::render::TexFilter::Default,
+            },
+            detail: (flags & 32 != 0).then(|| {
+                crate::render::DetailTexture::new(
+                    crate::render::SpriteId(rd_u32(d, surf + 4)),
+                    d[surf + 2],
+                )
+            }),
             ..ModelParams::DEFAULT
         };
         let (x, y, z) = (rd_f32(d, b + 24), rd_f32(d, b + 28), rd_f32(d, b + 32));
@@ -726,6 +743,7 @@ mod tests {
         b.extend_from_slice(&[0; 12]); // sound (flag off)
         b.extend_from_slice(&[3, 2, 1, 4]); // cell 3, portal 1 <-> 4
         f(&mut b, &[0.5, 1.0, 0.25]);
+        b.extend_from_slice(&[40, 1, 0, 0, 0, 0, 0, 0]); // gloss 40, point, no detail
         b.extend_from_slice(b"a/doordoor\nx");
         f(&mut b, &[30.0]);
         b.extend_from_slice(&0u32.to_le_bytes()); // culled beyond 30
@@ -746,6 +764,9 @@ mod tests {
         assert_eq!(n.position(), Vec3::new(3.0, 0.0, -2.0));
         assert_eq!(n.model, Some(ModelId(7)));
         assert_eq!(n.params.shading, Shading::Unlit);
+        assert_eq!(n.params.gloss, 40);
+        assert_eq!(n.params.filter, crate::render::TexFilter::Point);
+        assert_eq!(n.params.detail, None);
         assert_eq!(n.anim, Some((ClipId(9), 2.0)));
         let c = n.collider.unwrap();
         assert!(c.trigger);

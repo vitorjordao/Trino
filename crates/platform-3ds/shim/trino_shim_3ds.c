@@ -40,6 +40,13 @@
 static DVLB_s* s_tri3d_dvlb = NULL;
 static shaderProgram_s s_tri3d;
 static int s_tri3d_proj = -1;
+static int s_tri3d_detail = -1;
+// The next 3D draws' sampling (trino_3d_material): point filter, and a
+// detail sheet multiplied over the texture (texture unit 1) tiling
+// s_detail_scale times per base repeat.
+static int s_point = 0;
+static C2D_SpriteSheet s_detail_sheet = NULL;
+static float s_detail_scale = 1.0f;
 static C3D_Mtx s_proj_top;
 
 // Per-frame vertex buffer: x, y, depth, w | u, v | r, g, b, a (10 floats).
@@ -57,6 +64,7 @@ static void trino_tex3d_init(void)
     shaderProgramInit(&s_tri3d);
     shaderProgramSetVsh(&s_tri3d, &s_tri3d_dvlb->DVLE[0]);
     s_tri3d_proj = shaderInstanceGetUniformLocation(s_tri3d.vertexShader, "projection");
+    s_tri3d_detail = shaderInstanceGetUniformLocation(s_tri3d.vertexShader, "detail");
     // Same projection citro2d builds for the top screen.
     Mtx_OrthoTilt(&s_proj_top, 0.0f, 400.0f, 240.0f, 0.0f, 1.0f, -1.0f, true);
     s_vbuf = (float*)linearAlloc(TRI3D_MAX_VERTS * TRI3D_FLOATS * sizeof(float));
@@ -239,6 +247,16 @@ void trino_fill_rect(const trino_fill_t* f)
 // 3D triangles: the engine transforms and lights on the CPU
 // (trino_core::render3d); citro2d only rasterizes gouraud-shaded tris.
 
+// Sampling of the next trino_3d_draw calls: `flags` bit 1 point filter,
+// bits 4..7 the detail layer's repeats per base repeat (log2); `detail`
+// (NULL = none) is a sprite sheet multiplied over the texture.
+void trino_3d_material(void* detail, uint32_t flags)
+{
+    s_point = (flags >> 1) & 1;
+    s_detail_sheet = (C2D_SpriteSheet)detail;
+    s_detail_scale = (float)(1u << ((flags >> 4) & 15));
+}
+
 // Draw `count` vertices (count / 3 triangles), TRI3D_FLOATS each, in
 // order: x, y (screen px), depth (citro2d z, larger = nearer), w (view
 // depth: perspective-correct UVs; 1 = screen-linear), u, v (0..1 in the
@@ -287,6 +305,8 @@ void trino_3d_draw(const float* v, uint32_t count, void* sheet, uint32_t clamp)
     C2D_Flush();
     C3D_BindProgram(&s_tri3d);
     C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, s_tri3d_proj, &s_proj_top);
+    int detail = sheet && s_detail_sheet;
+    C3D_FVUnifSet(GPU_VERTEX_SHADER, s_tri3d_detail, s_detail_scale, s_detail_scale, 0.0f, 0.0f);
     C3D_AttrInfo* attr = C3D_GetAttrInfo();
     AttrInfo_Init(attr);
     AttrInfo_AddLoader(attr, 0, GPU_FLOAT, 4); // x, y, depth, w
@@ -299,7 +319,8 @@ void trino_3d_draw(const float* v, uint32_t count, void* sheet, uint32_t clamp)
     C3D_TexEnv* env = C3D_GetTexEnv(0);
     C3D_TexEnvInit(env);
     if (sheet) {
-        C3D_TexSetFilter(img.tex, GPU_LINEAR, GPU_LINEAR);
+        GPU_TEXTURE_FILTER_PARAM filter = s_point ? GPU_NEAREST : GPU_LINEAR;
+        C3D_TexSetFilter(img.tex, filter, filter);
         if (clamp) {
             C3D_TexSetWrap(img.tex, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
             C3D_AlphaTest(true, GPU_GREATER, 127);
@@ -317,6 +338,19 @@ void trino_3d_draw(const float* v, uint32_t count, void* sheet, uint32_t clamp)
     }
     for (int i = 1; i < 6; i++) {
         C3D_TexEnvInit(C3D_GetTexEnv(i));
+    }
+    if (detail) {
+        // Stage 1: the lit texel times the detail texel (alpha stays).
+        C2D_Image dimg = C2D_SpriteSheetGetImage(s_detail_sheet, 0);
+        GPU_TEXTURE_FILTER_PARAM filter = s_point ? GPU_NEAREST : GPU_LINEAR;
+        C3D_TexSetFilter(dimg.tex, filter, filter);
+        C3D_TexSetWrap(dimg.tex, GPU_REPEAT, GPU_REPEAT);
+        C3D_TexBind(1, dimg.tex);
+        C3D_TexEnv* env1 = C3D_GetTexEnv(1);
+        C3D_TexEnvSrc(env1, C3D_RGB, GPU_PREVIOUS, GPU_TEXTURE1, 0);
+        C3D_TexEnvFunc(env1, C3D_RGB, GPU_MODULATE);
+        C3D_TexEnvSrc(env1, C3D_Alpha, GPU_PREVIOUS, 0, 0);
+        C3D_TexEnvFunc(env1, C3D_Alpha, GPU_REPLACE);
     }
     C3D_DrawArrays(GPU_TRIANGLES, s_vused, count);
     s_vused += count;

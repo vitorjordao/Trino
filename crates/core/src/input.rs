@@ -74,6 +74,8 @@ pub enum Key {
     Minus,
     Shift,
     Ctrl,
+    /// A letter for a game's view toggle (e.g. roofs on and off).
+    T,
 }
 
 /// A pointer button. Discriminants are bit positions in [`InputState`].

@@ -10,9 +10,9 @@ use core::ffi::c_void;
 
 use trino_core::render3d::{
     Camera3, DEFAULT_LIGHT, Light, Mesh, MeshLayout, ScreenTri, TexBind, TnlContext, TnlScratch,
-    painter_index, painter_key,
+    TnlStats, gpu_check_mv, gpu_mesh_check, gpu_screen_matrix, painter_index, painter_key,
 };
-use trino_core::text::BitmapFont;
+use trino_core::text::{BitmapFont, GlyphIndex};
 use trino_core::{
     BillboardParams, Caps, Color, FontId, FrameStats, LightList, LocalLight, Mat34, Material,
     ModelId, ModelParams, Renderer, Screen, SpriteId, SpriteParams, TexFilter, TextParams,
@@ -25,6 +25,8 @@ use crate::ffi;
 const SCREEN: Vec2 = Vec2::new(400.0, 240.0);
 /// The touch screen (`set_screen(1)`).
 const BOTTOM: Vec2 = Vec2::new(320.0, 240.0);
+/// Bytes per vertex of a GPU T&L mesh (the shim's `TNL_VERTEX_BYTES`).
+const GPU_VERTEX_BYTES: usize = 28;
 
 struct SpriteEntry {
     ptr: *mut c_void,
@@ -38,12 +40,36 @@ const SPRITE_DEPTH_HUD: f32 = 0.9;
 const TRI_DEPTH_BASE: f32 = 0.1;
 const TRI_DEPTH_RANGE: f32 = 0.35;
 
+/// A registered font: its glyph table and the direct index of its
+/// codepoints below 256 (built once, at register).
+struct FontEntry {
+    table: Box<[u8]>,
+    index: GlyphIndex,
+}
+
+impl FontEntry {
+    fn font(&self) -> Option<BitmapFont<'_>> {
+        BitmapFont::parse(&self.table)
+            .ok()
+            .map(|f| f.with_index(&self.index))
+    }
+}
+
 pub struct N3dsRenderer {
     sprites: BTreeMap<u32, SpriteEntry>,
     /// TMDL blobs with their validated layout (parsed once, at register).
     meshes: BTreeMap<u32, (Vec<u8>, MeshLayout)>,
+    /// The GPU T&L copies of the meshes that can take that path
+    /// ([`gpu_mesh_check`]): shim handle and triangle count.
+    gpu_meshes: BTreeMap<u32, (*mut c_void, u32)>,
+    /// GPU T&L on (the default); off draws everything through the CPU's
+    /// software T&L (`set_gpu_tnl`, the self-test's reference).
+    gpu_on: bool,
+    /// Microseconds spent waiting in `begin_frame` (the previous frame's
+    /// GPU work and vsync) since the last [`take_wait_us`](Self::take_wait_us).
+    wait_us: u32,
     /// Glyph tables by font handle (atlas = sprite with the same handle).
-    fonts: BTreeMap<u32, Rc<[u8]>>,
+    fonts: BTreeMap<u32, Rc<FontEntry>>,
     frame_stats: FrameStats,
     last_stats: FrameStats,
     /// Current model batch: consecutive `draw_model` calls depth-sort
@@ -80,6 +106,9 @@ impl N3dsRenderer {
         N3dsRenderer {
             sprites: BTreeMap::new(),
             meshes: BTreeMap::new(),
+            gpu_meshes: BTreeMap::new(),
+            gpu_on: true,
+            wait_us: 0,
             fonts: BTreeMap::new(),
             frame_stats: FrameStats::default(),
             last_stats: FrameStats::default(),
@@ -210,15 +239,85 @@ impl N3dsRenderer {
 
     /// Register a TMDL mesh blob under a stable handle.
     pub(crate) fn register_mesh(&mut self, id: u32, tmdl: Vec<u8>) {
-        if let Ok(layout) = Mesh::from_tmdl(&tmdl).map(|m| m.layout(&tmdl)) {
-            self.meshes.insert(id, (tmdl, layout));
+        let Ok(mesh) = Mesh::from_tmdl(&tmdl) else {
+            return;
+        };
+        if gpu_mesh_check(&mesh).is_ok() {
+            let mut verts = Vec::with_capacity(mesh.vertex_count * GPU_VERTEX_BYTES);
+            for i in 0..mesh.vertex_count {
+                let (p, n, c) = (mesh.position(i), mesh.normal(i), mesh.color(i));
+                for f in [p.x, p.y, p.z, n.x, n.y, n.z] {
+                    verts.extend_from_slice(&f.to_ne_bytes());
+                }
+                verts.extend_from_slice(&[c.r, c.g, c.b, c.a]);
+            }
+            let idx: Vec<u16> = (0..mesh.index_count).map(|i| mesh.index(i)).collect();
+            let ptr = unsafe {
+                ffi::trino_gpu_mesh(
+                    verts.as_ptr(),
+                    mesh.vertex_count as u32,
+                    idx.as_ptr(),
+                    idx.len() as u32,
+                )
+            };
+            if !ptr.is_null() {
+                self.gpu_meshes
+                    .insert(id, (ptr, (mesh.index_count / 3) as u32));
+            }
         }
+        let layout = mesh.layout(&tmdl);
+        self.meshes.insert(id, (tmdl, layout));
+    }
+
+    /// The time `begin_frame` waited (GPU and vsync) since the last call:
+    /// frame time minus it is the ARM11's own work.
+    pub fn take_wait_us(&mut self) -> u32 {
+        core::mem::take(&mut self.wait_us)
+    }
+
+    /// GPU T&L for the draws that can take it (on by default). Off, every
+    /// draw runs the CPU's software T&L: the reference the self-test
+    /// compares the GPU path with.
+    pub fn set_gpu_tnl(&mut self, on: bool) {
+        self.flush_model_batch();
+        self.gpu_on = on;
+    }
+
+    /// The GPU T&L draw of `model` if this draw may take that path: the
+    /// shim's mesh, its triangles, the uniforms and the cull flag.
+    fn gpu_plan(
+        &self,
+        model: ModelId,
+        mesh: &Mesh,
+        matrix: &Mat34,
+        params: &ModelParams,
+    ) -> Option<(*mut c_void, u32, [f32; 36], u32)> {
+        let &(ptr, tris) = self.gpu_meshes.get(&model.0)?;
+        let mv = self.tnl_ctx.projection().0.mul(matrix);
+        let d = gpu_check_mv(&self.tnl_ctx, mesh, matrix, &mv, params).ok()?;
+        let s = gpu_screen_matrix(&self.tnl_ctx, &mv);
+        // The CPU path's depth band (`band_depth`) of the z-buffer depth
+        // row, times the view depth like the rest.
+        let (b, k) = (TRI_DEPTH_BASE + TRI_DEPTH_RANGE, TRI_DEPTH_RANGE);
+        let band: [f32; 4] = core::array::from_fn(|j| b * s[3][j] - k * s[2][j]);
+        let mut u = [0.0f32; 36];
+        for (r, row) in [s[0], s[1], band, s[3]].iter().enumerate() {
+            u[r * 4..r * 4 + 4].copy_from_slice(row);
+        }
+        u[16..19].copy_from_slice(&[d.light.x, d.light.y, d.light.z]);
+        u[20..23].copy_from_slice(&d.ambient);
+        u[24..27].copy_from_slice(&d.diffuse);
+        u[28..32].copy_from_slice(&d.tint);
+        u[32..35].copy_from_slice(&d.emissive);
+        Some((ptr, tris, u, d.cull_back as u32))
     }
 
     /// Register a font's glyph table (its atlas is the sprite `id`).
     pub(crate) fn register_font(&mut self, id: u32, table: Vec<u8>) {
-        if BitmapFont::parse(&table).is_ok() {
-            self.fonts.insert(id, table.into());
+        if let Ok(font) = BitmapFont::parse(&table) {
+            let index = GlyphIndex::build(&font);
+            let table = table.into_boxed_slice();
+            self.fonts.insert(id, Rc::new(FontEntry { table, index }));
         }
     }
 }
@@ -280,7 +379,11 @@ impl Renderer for N3dsRenderer {
         if was_bottom || had_lights {
             self.rebuild_tnl();
         }
+        let t0 = crate::runtime::now_us();
         unsafe { ffi::trino_frame_begin(pack_color(clear)) }
+        self.wait_us = self
+            .wait_us
+            .wrapping_add(crate::runtime::now_us().wrapping_sub(t0));
     }
 
     fn second_screen(&self) -> Option<Vec2> {
@@ -405,6 +508,20 @@ impl Renderer for N3dsRenderer {
         };
         let mesh = Mesh::from_layout(tmdl, layout);
         self.frame_stats.models += 1;
+        if self.gpu_on
+            && let Some((ptr, tris, u, cull)) = self.gpu_plan(model, &mesh, matrix, params)
+        {
+            unsafe { ffi::trino_gpu_draw(ptr, u.as_ptr(), cull) };
+            self.frame_stats.tris += tris;
+            self.frame_stats.tnl.add(&TnlStats {
+                gpu_draws: 1,
+                gpu_tris: tris,
+                ..TnlStats::default()
+            });
+            // Sprites after 3D (the HUD) sit above the 3D band.
+            self.sprite_depth = SPRITE_DEPTH_HUD;
+            return;
+        }
         let texture = mesh
             .texture_for(params)
             .filter(|t| self.sprites.contains_key(&t.0));
@@ -456,10 +573,10 @@ impl Renderer for N3dsRenderer {
     }
 
     fn draw_text(&mut self, font: FontId, pos: Vec2, text: &str, params: &TextParams) {
-        let Some(table) = self.fonts.get(&font.0).cloned() else {
+        let Some(entry) = self.fonts.get(&font.0).cloned() else {
             return;
         };
-        if let Ok(parsed) = BitmapFont::parse(&table) {
+        if let Some(parsed) = entry.font() {
             trino_core::text::draw(
                 self,
                 trino_core::text::atlas_of(font),
@@ -474,7 +591,7 @@ impl Renderer for N3dsRenderer {
     fn measure_text(&self, font: FontId, text: &str, scale: f32) -> Vec2 {
         self.fonts
             .get(&font.0)
-            .and_then(|t| BitmapFont::parse(t).ok())
+            .and_then(|e| e.font())
             .map_or(Vec2::ZERO, |f| f.measure(text, scale))
     }
 

@@ -375,6 +375,13 @@ RDP).
   baked scenes (TSCN v3). The showcase's pillars use it (`materials/stone-grain`);
   `texture filter and detail` self-test step; goldens `tests/golden/pc/texture_filter_*`.
 
+- **Console hardware paths and N64 timing (2026-10-16, ADR 0012, part of #31):**
+  the 3DS transforms and lights static meshes on the PICA200 (`render3d::gpu_check`,
+  `tnl3d.v.pica`, `gpu tnl` self-test step, `castle64_work_3ds.toml`); text goes to the
+  N64 shim in runs of glyphs (`trino_text_run`) with O(1) glyph lookup on every target
+  (`text::GlyphIndex`); `TRINO_N64_TEXT_PAD` measures over code layouts; the emulator
+  harness has an idle limit and the N64 self-test a stall watchdog (`TRINO_STALL`);
+  `TRINO_FRAME` reports `draws2d=`.
 - **Two screens (2026-10-14, typed API 2026-10-15):** `trino_core::Screen`
   (`Top` = the main screen everywhere, `Bottom` = the 3DS touch screen).
   `Renderer::on_screen(Screen)` sends the next draws, **2D and 3D**, to a screen and
@@ -720,6 +727,16 @@ cargo test --workspace
 - **Screen order is a contract, not a backend detail.** Before the typed API the
   3DS let draws go back to the top after the bottom, while the PC sent them to the
   bottom. Both now refuse the switch back, and `on_screen` reports it.
+- **One N64 build is one code layout.** 344 bytes of unused methods moved a scene
+  25.8 → 27.7 ms; seven paddings of the same code (`TRINO_N64_TEXT_PAD`) spanned
+  25.1–28.1. Compare perf changes as mean (min–max) over a few paddings (ADR 0012 §3).
+- **The 3DS's GPU T&L culls `GPU_CULL_FRONT_CCW`:** the tilt projection mirrors the
+  engine's winding. A wrong winding leaves only inner faces, which the `occlusion` step
+  catches.
+- **A fixed emulator timeout can't tell a hang from a slow host.** Read `stalled:` (no
+  output for `TRINO_EMU_IDLE` s) vs `timeout: … still printing`, and the ROM's
+  `TRINO_STALL` lines (where the CPU waits). Parallel builds that swap make ares ~3×
+  slower in wall time.
 - **`/tmp` may be a RAM disk (tmpfs).** A second `target/` there (a git worktree's build)
   filled RAM and killed rustc. Put extra worktrees and their targets on a real disk.
 

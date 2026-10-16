@@ -25,6 +25,9 @@ pub struct TrinoBlit {
 unsafe extern "C" {
     pub fn trino_init();
     pub fn trino_log(msg: *const c_char);
+    /// Self-test only: print `TRINO_STALL` (where the CPU waits, RSP/RDP
+    /// status) when no frame begins and nothing is logged for 4 s.
+    pub fn trino_watchdog_start();
     pub fn trino_panic(msg: *const c_char) -> !;
     pub fn trino_ticks_us() -> u32;
     /// Vertical blanks since boot (VI interrupt counter; clock cross-check).
@@ -41,8 +44,9 @@ unsafe extern "C" {
     pub fn trino_fill_rect(xy: u32, wh: u32, color: u32);
     /// Upload a whole font atlas to TMEM if it fits; 1 = resident.
     pub fn trino_text_begin(sprite: *mut c_void, tint: u32) -> u32;
-    /// One glyph of the resident atlas (packed 16:16 pairs, integer scale).
-    pub fn trino_text_glyph(xy: u32, st: u32, wh: u32, scale: u32);
+    /// `n` glyphs of the resident atlas as (xy, st, wh) triples (screen
+    /// x << 16 | y, atlas s << 16 | t, w << 16 | h), one call per run.
+    pub fn trino_text_run(glyphs: *const u32, n: u32, scale: u32);
 
     /// Set the RDP shade combiner + z-test; call once before a `trino_tri`
     /// batch.

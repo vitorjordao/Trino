@@ -75,6 +75,6 @@ pub use render3d::{
     tessellate, tessellate_surface, tessellate_with,
 };
 pub use scene::{BakedScene, LodLevel, LodPick, Lods, SceneNode, Tags};
-pub use text::{BitmapFont, TextBuf};
+pub use text::{BitmapFont, GlyphIndex, TextBuf};
 pub use tilemap::{TILE_SIZE, Tilemap, TilemapError};
 pub use vis::{Cells, MAX_CELLS, NO_CELL, Portal, VisVolume};

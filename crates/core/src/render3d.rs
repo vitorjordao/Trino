@@ -51,8 +51,10 @@ use crate::light::{LightKind, LocalLight, MAX_VERTEX_LIGHTS};
 use crate::math::{Color, Vec2, Vec3};
 use crate::math3d::{Mat34, Quat};
 
+mod hw;
 mod lit;
 use crate::render::{AnimRef, ClipId, DetailTexture, ModelParams, Shading, SpriteId, TexFilter};
+pub use hw::{GpuDraw, GpuReject, gpu_check, gpu_check_mv, gpu_mesh_check, gpu_screen_matrix};
 pub use lit::{SurfaceScratch, SurfaceVert, tessellate_surface};
 
 /// Mesh blob format ("TMDL", little-endian):
@@ -1425,6 +1427,12 @@ pub struct TnlStats {
     pub rsp_draws: u32,
     /// Source triangles of those draws.
     pub rsp_tris: u32,
+    /// Draws a backend's GPU transformed, lit and clipped itself (the 3DS's
+    /// PICA200, see [`gpu_check`]); like `rsp_draws`, not in the fields
+    /// above.
+    pub gpu_draws: u32,
+    /// Source triangles of those draws.
+    pub gpu_tris: u32,
 }
 
 impl TnlStats {
@@ -1439,6 +1447,8 @@ impl TnlStats {
         self.emitted += o.emitted;
         self.rsp_draws += o.rsp_draws;
         self.rsp_tris += o.rsp_tris;
+        self.gpu_draws += o.gpu_draws;
+        self.gpu_tris += o.gpu_tris;
     }
 }
 

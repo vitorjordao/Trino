@@ -107,6 +107,17 @@ up is a cost the N64 pays.
 
 ## Code layout moves the numbers — read them like this
 
+**Measure over layouts (2026-10-16, ADR 0012 §3).** `TRINO_N64_TEXT_PAD=<bytes>` links
+that much padding into `.text` ahead of the Rust code: the same code, every function
+moved. An external project's busiest 30 fps scene at one engine commit measured **25.1–28.1 ms
+over seven paddings**. The two engine commits it had compared (25.8 vs 27.7 ms, "a
+regression" from 344 bytes of unused methods) both sit inside that spread. Quote a perf
+change as mean (min–max) over the same paddings before and after, e.g.
+`for p in 0 352 2048 6144; do TRINO_N64_TEXT_PAD=$p cargo xtask test n64 …; done`. The
+knob moves everything after the shim together (one axis of the layout space), so it
+samples layouts rather than explores them.
+
+
 - ares is **bit-reproducible** for the same ROM (two runs → identical µs).
 - But layout is not neutral: adding an unrelated 1 KB function moved hub `tnl`
   −10% and `submit` +20% (16 KB direct-mapped I-cache, 8 KB D-cache), while the
@@ -240,6 +251,7 @@ the LOD panel and the impostor section print it next to the mesh's CPU-path cost
 
 | Change | Result on the scenes |
 |---|---|
+| **Text in runs** (`trino_text_run`: up to 32 glyphs per FFI call, on-screen glyphs straight to `__rdpq_texture_rectangle` with the constant steps `1024 / scale`) + **`GlyphIndex`** (O(1) lookup below codepoint 256; left-aligned text no longer measures its lines), 2026-10-16 | an external project, mean (min–max) over 4 paddings: busiest scene 26.3 (25.1–27.7) → 25.1 (24.8–25.3) ms, two UI-heavy scenes 28.0 → 26.3 and 28.5 → 26.8, UI-only 11.3 → 9.6, its densest far view 56.7 → 54.2; the `sprites` stage −1.0…−1.8 ms (~210–310 2D draws a frame, `draws2d=` in `TRINO_FRAME`). The spread shrank from ~2.6 to ~0.5 ms: fewer, tighter hot functions are less layout-sensitive. Goldens identical |
 | Local lights folded into `tessellate_joints` (never-taken branches, zero-sized generics, 2026-10-15) | **worse with no light set**: the static body 15.6 → 18.0 KB (past the 16 KB I-cache); `micro-tris` T&L 21.5 → 29.0 ms, `micro-gouraud` 12.0 → 17.5 ms. Moved to `render3d/lit.rs` (a copy, dispatched only for lit draws): back to 21.9 / 11.9 ms, body 0x3d04 again |
 | Local lights in castle64's throne room (4 torches, cap 2 per vertex, `ground_pool` decals) | throne 9.3 → 16.0 ms: the star lit on the CPU (0.14 → 1.3 ms), the castle blocks' lit vertices (+0.6 ms), pools/posts/flames on the RSP (~1.2 ms) and the RSP drain. Torch posts lit by their own light cost ~1.7 ms each on the CPU: drawn Unlit on per-vertex tiers |
 | Impostors (props as textured billboards at a far zoom, an external project) | **worse on the N64**: far view 29.8 → 35 ms, the busiest scene 58 → 66 ms. Textured triangles are CPU-submitted (~22 µs each, 52 rspq words), costing more than the RSP time they save. On the 3DS the same impostors doubled the far view's rate (Azahar). An N64 impostor would need an RDP rectangle with depth |
@@ -380,9 +392,21 @@ T&L. Every castle64 scene costs 7–13 ms of emulated time (vsync caps it at 60 
   CPU time further.
 - Deferred: hub blocks merged per chunk (2b, ~1–2 ms on the CPU path).
 
+## Hang or slow run? (2026-10-16)
+
+- The harness has a total timeout (`TRINO_EMU_TIMEOUT`, 300 s) and an idle limit
+  (`TRINO_EMU_IDLE`, 120 s without an output line). `stalled: … after step X` is a hang;
+  `timeout: … still printing` is a slow host (a full self-test is ~2 min on an idle
+  machine and ran 3× slower under memory pressure from parallel builds).
+- In test mode the ROM arms a stall watchdog: `TRINO_STALL: … waiting in <phase>; SP_STATUS
+  DP_*` after 4 s of emulated time with no frame and no log. Phases: `display_get`,
+  `drain (rspq_wait)`, `frame_end (rdpq_detach_show)`, `frame`, `between frames`. A stall
+  with no `TRINO_STALL` line is the emulator itself.
+
 ## Workflow for a perf change
 
-1. Baseline on the base commit in a `git worktree` (never `git stash`).
+1. Baseline on the base commit in a `git worktree` (never `git stash`), over a few
+   `TRINO_N64_TEXT_PAD` paddings (see "Code layout" above).
 2. Fast loop first: the PC work counters (`perf_budget`, seconds) tell you whether
    the change removes work; `TRINO_PERF_MODEL` says where the time is.
 3. Hold the pixels: PC goldens and `tests/golden/n64/showcase.png` byte-identical,

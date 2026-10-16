@@ -392,13 +392,46 @@ fn cargo_build(p: &Project) -> Result<(), String> {
 /// ran ~5x slower. Undefining them first makes the first `-lc` scan supply
 /// newlib's; [`check_mem_symbols`] fails the build if the map says
 /// otherwise.
+/// `TRINO_N64_TEXT_PAD=<bytes>`: a layout experiment. Puts that many bytes
+/// of padding in `.text` ahead of all Rust code, so every function moves
+/// while the code stays the same. The N64's 16 KB direct-mapped I-cache
+/// makes frame times depend on where hot functions land (the
+/// `n64-performance` skill), and a few padded builds tell a real change from
+/// a lucky or unlucky layout. Returns the link argument and the build step
+/// (both empty when unset or 0).
+fn text_pad_step() -> (String, String) {
+    let pad = std::env::var("TRINO_N64_TEXT_PAD")
+        .ok()
+        .and_then(|v| v.trim().parse::<u32>().ok())
+        .unwrap_or(0);
+    text_pad_for(pad)
+}
+
+fn text_pad_for(pad: u32) -> (String, String) {
+    if pad == 0 {
+        return (String::new(), String::new());
+    }
+    // Whole instructions, so what follows keeps its alignment class.
+    let pad = pad.div_ceil(8) * 8;
+    println!("[n64] layout experiment: {pad} bytes of .text padding before the Rust code");
+    (
+        "target/n64/text_pad.o -Wl,-u,trino_text_pad".into(),
+        format!(
+            "printf '.section .text.trino_text_pad,\"ax\",@progbits\\n.globl trino_text_pad\\ntrino_text_pad:\\n.space {pad}\\n' > target/n64/text_pad.S\n\
+             mips64-elf-gcc -c -march=vr4300 -mabi=o64 target/n64/text_pad.S -o target/n64/text_pad.o\n"
+        ),
+    )
+}
+
 fn pack_rom(p: &Project) -> Result<(), String> {
     println!("[n64] linking + packing ROM...");
     let (name, title, save) = (&p.name, &p.title, &p.n64_save);
     let staticlib = p.n64_staticlib();
+    let (pad_obj, pad_step) = text_pad_step();
     let script = format!(
         "set -e\n\
-         mips64-elf-g++ -o target/n64/{name}.elf /engine/target/n64/shim.o /engine/target/n64/rsp_trino.o \
+         {pad_step}\
+         mips64-elf-g++ -o target/n64/{name}.elf /engine/target/n64/shim.o /engine/target/n64/rsp_trino.o {pad_obj} \
          -Wl,-u,memcpy -Wl,-u,memset -Wl,-u,memmove -Wl,-u,memcmp -Wl,-lc \
          {staticlib} -lc -mabi=o64 -Wl,-g -Wl,-L$N64_INST/mips64-elf/lib \
          -Wl,-ldragon -Wl,-lm -Wl,-ldragonsys -Wl,-Tn64.ld \
@@ -636,7 +669,8 @@ pub fn test(p: &Project, bless: bool) -> ExitCode {
     };
 
     let timeout = crate::emulators::timeout_secs();
-    println!("[n64] booting test ROM in ares ({timeout}s timeout)...");
+    let idle = crate::emulators::idle_secs();
+    println!("[n64] booting test ROM in ares ({timeout}s timeout, {idle}s idle limit)...");
     // Native-resolution RDP: the golden frame is compared pixel-exactly.
     let (mut cmd, container) = ares_command(
         &ares,
@@ -673,19 +707,20 @@ pub fn test(p: &Project, bless: bool) -> ExitCode {
         }
     });
 
-    let deadline = Instant::now() + Duration::from_secs(timeout);
+    let mut watchdog = crate::emulators::Watchdog::new();
     let mut fb = crate::fbgolden::FbCapture::default();
     let mut frames: Vec<crate::fbgolden::FbCapture> = Vec::new();
     let mut perf_scenes = Vec::new();
     let mut micro_scenes = Vec::new();
     let mut frame_lines = Vec::new();
     let verdict = loop {
-        let left = deadline.saturating_duration_since(Instant::now());
-        if left.is_zero() {
-            break Err(format!("timeout: no TRINO_TEST_* output within {timeout}s"));
+        if let Some(why) = watchdog.expired(Instant::now()) {
+            break Err(why);
         }
+        let left = watchdog.left(Instant::now());
         match rx.recv_timeout(left.min(Duration::from_millis(500))) {
             Ok(line) => {
+                watchdog.saw(&line, Instant::now());
                 // Framebuffer dump rows are collected, not echoed; each
                 // TRINO_FB_END closes one image (they arrive in order).
                 if fb.feed(&line) {
@@ -867,6 +902,18 @@ fn frame_gate(lines: &[(String, u32, u32)], max_frame_us: Option<u32>) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_text_pad_is_whole_instructions_before_the_rust_code() {
+        assert_eq!(text_pad_for(0), (String::new(), String::new()));
+        let (obj, step) = text_pad_for(1000);
+        assert_eq!(obj, "target/n64/text_pad.o -Wl,-u,trino_text_pad");
+        assert!(step.contains(".space 1000\\n"), "{step}");
+        // Rounded up to 8 bytes: what follows keeps its alignment class.
+        let (_, step) = text_pad_for(13);
+        assert!(step.contains(".space 16\\n"), "{step}");
+        assert!(step.contains("mips64-elf-gcc -c"), "{step}");
+    }
 
     #[test]
     fn frame_lines_parse_and_gate() {

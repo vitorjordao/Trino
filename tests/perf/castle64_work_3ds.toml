@@ -1,0 +1,60 @@
+# castle64 work per frame on the 3DS (castle64::perf::SCENES, 400x240):
+# the draws its GPU transforms and lights (render3d::gpu_check) and the
+# CPU T&L left. Deterministic; checked by xtask/tests/perf_budget.rs.
+# Generated: rewrite with `TRINO_BLESS=1 cargo test -p xtask --test
+# perf_budget` and review — CPU work going up is a cost the 3DS pays.
+
+[hub]
+verts = 24
+tris_in = 12
+clipped = 4
+splits = 0
+backfaced = 8
+emitted = 5
+culled = 0
+gpu_draws = 25
+gpu_tris = 593
+
+[green-hills]
+verts = 0
+tris_in = 0
+clipped = 0
+splits = 0
+backfaced = 0
+emitted = 0
+culled = 0
+gpu_draws = 16
+gpu_tris = 384
+
+[lava-land]
+verts = 24
+tris_in = 12
+clipped = 4
+splits = 0
+backfaced = 8
+emitted = 7
+culled = 0
+gpu_draws = 15
+gpu_tris = 314
+
+[sky-tower]
+verts = 0
+tris_in = 0
+clipped = 0
+splits = 0
+backfaced = 0
+emitted = 0
+culled = 6
+gpu_draws = 13
+gpu_tris = 292
+
+[throne]
+verts = 150
+tris_in = 70
+clipped = 12
+splits = 0
+backfaced = 47
+emitted = 25
+culled = 0
+gpu_draws = 22
+gpu_tris = 446

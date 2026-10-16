@@ -61,6 +61,21 @@ struct SurfaceState {
     config: wgpu::SurfaceConfiguration,
 }
 
+/// A registered font: its glyph table (validated at upload) and the direct
+/// index of its codepoints below 256.
+struct FontEntry {
+    table: Box<[u8]>,
+    index: trino_core::text::GlyphIndex,
+}
+
+impl FontEntry {
+    fn font(&self) -> trino_core::text::BitmapFont<'_> {
+        trino_core::text::BitmapFont::parse(&self.table)
+            .expect("validated on upload")
+            .with_index(&self.index)
+    }
+}
+
 pub struct PcRenderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -110,7 +125,7 @@ pub struct PcRenderer {
     meshes: HashMap<u32, (Vec<u8>, MeshLayout)>,
     /// Glyph tables (`TFNT`) by font handle; the atlas is the sprite with
     /// the same handle. `Arc` so `draw_text` can lay out while drawing.
-    fonts: HashMap<u32, Arc<[u8]>>,
+    fonts: HashMap<u32, Arc<FontEntry>>,
     commands: Vec<Cmd>,
     /// Counters of the frame being recorded / the last finished frame.
     frame_stats: FrameStats,
@@ -1060,10 +1075,13 @@ impl PcRenderer {
     /// atlas must be uploaded as the sprite with the same handle.
     /// Re-uploading replaces it (live reload).
     pub fn upload_font(&mut self, id: FontId, table: Vec<u8>) {
-        if let Err(e) = trino_core::text::BitmapFont::parse(&table) {
-            panic!("font {id:?}: invalid TFNT table: {e:?}");
-        }
-        self.fonts.insert(id.0, table.into());
+        let index = match trino_core::text::BitmapFont::parse(&table) {
+            Ok(font) => trino_core::text::GlyphIndex::build(&font),
+            Err(e) => panic!("font {id:?}: invalid TFNT table: {e:?}"),
+        };
+        let table = table.into_boxed_slice();
+        self.fonts
+            .insert(id.0, Arc::new(FontEntry { table, index }));
     }
 
     /// Toggle the N64 output emulation (3-point filtering, RGBA5551 +
@@ -2227,10 +2245,10 @@ impl Renderer for PcRenderer {
     }
 
     fn draw_text(&mut self, font: FontId, pos: Vec2, text: &str, params: &TextParams) {
-        let Some(table) = self.fonts.get(&font.0).cloned() else {
+        let Some(entry) = self.fonts.get(&font.0).cloned() else {
             return;
         };
-        let parsed = trino_core::text::BitmapFont::parse(&table).expect("validated on upload");
+        let parsed = entry.font();
         trino_core::text::draw(
             self,
             trino_core::text::atlas_of(font),
@@ -2244,8 +2262,7 @@ impl Renderer for PcRenderer {
     fn measure_text(&self, font: FontId, text: &str, scale: f32) -> Vec2 {
         self.fonts
             .get(&font.0)
-            .and_then(|t| trino_core::text::BitmapFont::parse(t).ok())
-            .map_or(Vec2::ZERO, |f| f.measure(text, scale))
+            .map_or(Vec2::ZERO, |e| e.font().measure(text, scale))
     }
 
     fn stats(&self) -> FrameStats {

@@ -34,8 +34,16 @@ pub struct N3dsHost {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct FrameReport {
     pub frames: u32,
+    /// Wall clock per frame, vsync and the wait for the GPU included.
     pub avg_us: u32,
     pub max_us: u32,
+    /// Per frame: the ARM11's own time (frame time minus `begin_frame`'s
+    /// wait for the previous frame's GPU work and vsync).
+    pub cpu_us: u32,
+    /// Per frame: model draws the GPU transformed and lit (ADR 0012), and
+    /// the triangles the CPU T&L handed over.
+    pub gpu_draws: u32,
+    pub cpu_tris: u32,
 }
 
 impl N3dsHost {
@@ -93,27 +101,38 @@ impl N3dsHost {
         mut input: impl FnMut(u32) -> InputState,
     ) -> FrameReport {
         let mut total: u64 = 0;
+        let mut cpu: u64 = 0;
+        let (mut gpu_draws, mut cpu_tris) = (0u64, 0u64);
         let mut max = 0u32;
+        let _ = self.renderer.take_wait_us();
         for i in 0..frames {
             let state = input(i);
             let t0 = runtime::now_us();
             self.step(game, &state, dt);
             let us = runtime::now_us().wrapping_sub(t0);
             total += us as u64;
+            cpu += us.saturating_sub(self.renderer.take_wait_us()) as u64;
+            let tnl = trino_core::Renderer::stats(&self.renderer).tnl;
+            gpu_draws += tnl.gpu_draws as u64;
+            cpu_tris += tnl.emitted as u64;
             max = max.max(us);
         }
+        let per = |v: u64| v.checked_div(frames as u64).unwrap_or(0) as u32;
         FrameReport {
             frames,
-            avg_us: total.checked_div(frames as u64).unwrap_or(0) as u32,
+            avg_us: per(total),
             max_us: max,
+            cpu_us: per(cpu),
+            gpu_draws: per(gpu_draws),
+            cpu_tris: per(cpu_tris),
         }
     }
 
     /// Print a [`FrameReport`] as a `TRINO_FRAME:` line (reported only).
     pub fn report_frames(&self, scene: &str, r: &FrameReport) {
         runtime::log(&format!(
-            "TRINO_FRAME:{scene} avg_us={} max_us={} frames={}\n",
-            r.avg_us, r.max_us, r.frames
+            "TRINO_FRAME:{scene} avg_us={} max_us={} frames={} cpu_us={} gpu_draws={} cpu_tris={}\n",
+            r.avg_us, r.max_us, r.frames, r.cpu_us, r.gpu_draws, r.cpu_tris
         ));
     }
 

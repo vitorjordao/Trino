@@ -66,6 +66,15 @@ unsafe extern "C" {
     /// filter, bits 4..8 the detail layer's repeats per base repeat (log2);
     /// `detail` (null = none) is multiplied over the texture.
     pub fn trino_3d_material(detail: *mut c_void, flags: u32);
+    /// Copy a mesh to linear memory for the GPU T&L path: `nverts`
+    /// vertices of 28 bytes (x, y, z, nx, ny, nz as f32, then r, g, b, a)
+    /// and `nidx` u16 indices. Null when linear memory is short.
+    pub fn trino_gpu_mesh(verts: *const u8, nverts: u32, idx: *const u16, nidx: u32)
+    -> *mut c_void;
+    /// Draw a `trino_gpu_mesh`: `u` = the 4x4 screen matrix (16 floats, rows)
+    /// then light, ambient, diffuse, tint, emissive (4 floats each); flags
+    /// bit 0 = cull back faces.
+    pub fn trino_gpu_draw(mesh: *mut c_void, u: *const f32, flags: u32);
 
     /// Bits 0..13 = `Button` discriminants (12/13 = ZL/ZR, New 3DS).
     pub fn trino_joypad_buttons() -> u32;

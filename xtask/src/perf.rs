@@ -158,6 +158,7 @@ pub fn check(work: &str, n64: Option<&str>, scenes: &[SceneLine]) -> Result<Stri
             emitted: s.get("emitted") as u32,
             rsp_draws: s.get("rsp_draws") as u32,
             rsp_tris: s.get("rsp_tris") as u32,
+            ..trino_core::TnlStats::default()
         };
         // N64_COST models the CPU path: RSP draws are not in its terms.
         let cpu_draws = s.get("draws").saturating_sub(s.get("rsp_draws")) as u32;

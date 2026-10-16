@@ -14,7 +14,7 @@ use trino_core::render3d::{
     TnlContext, TnlScratch, TnlStats, painter_index, painter_key, rsp_band, rsp_eligible_mv,
     rsp_mesh_supported,
 };
-use trino_core::text::BitmapFont;
+use trino_core::text::{BitmapFont, GlyphIndex};
 use trino_core::{
     BillboardParams, Caps, Color, FontId, FrameStats, LightList, LocalLight, Mat34, Material,
     ModelId, ModelParams, Renderer, Shading, SpriteId, SpriteParams, TexFilter, TextParams,
@@ -37,7 +37,7 @@ pub struct N64Renderer {
     /// TMDL blobs with their validated layout (parsed once, at register).
     meshes: BTreeMap<u32, (Vec<u8>, MeshLayout)>,
     /// Glyph tables by font handle (atlas = sprite with the same handle).
-    fonts: BTreeMap<u32, Rc<[u8]>>,
+    fonts: BTreeMap<u32, Rc<FontEntry>>,
     frame_stats: FrameStats,
     last_stats: FrameStats,
     /// Current model batch: consecutive `draw_model` calls depth-sort
@@ -413,8 +413,10 @@ impl N64Renderer {
 
     /// Register a font's glyph table (its atlas is the sprite `id`).
     pub(crate) fn register_font(&mut self, id: u32, table: Vec<u8>) {
-        if BitmapFont::parse(&table).is_ok() {
-            self.fonts.insert(id, table.into());
+        if let Ok(font) = BitmapFont::parse(&table) {
+            let index = GlyphIndex::build(&font);
+            let table = table.into_boxed_slice();
+            self.fonts.insert(id, Rc::new(FontEntry { table, index }));
         }
     }
 }
@@ -493,6 +495,24 @@ impl N64Renderer {
         if let Some(p) = &mut self.profile {
             p.record_model(model, now_us().wrapping_sub(t0), &tnl);
         }
+    }
+}
+
+/// Glyphs per `trino_text_run` call (a stack buffer of 3 words each).
+const TEXT_RUN: usize = 32;
+
+/// A registered font: its glyph table and the direct index of its
+/// codepoints below 256 (built once, at register).
+struct FontEntry {
+    table: alloc::boxed::Box<[u8]>,
+    index: GlyphIndex,
+}
+
+impl FontEntry {
+    fn font(&self) -> Option<BitmapFont<'_>> {
+        BitmapFont::parse(&self.table)
+            .ok()
+            .map(|f| f.with_index(&self.index))
     }
 }
 
@@ -755,10 +775,10 @@ impl Renderer for N64Renderer {
     }
 
     fn draw_text(&mut self, font: FontId, pos: Vec2, text: &str, params: &TextParams) {
-        let Some(table) = self.fonts.get(&font.0).cloned() else {
+        let Some(entry) = self.fonts.get(&font.0).cloned() else {
             return;
         };
-        let Ok(parsed) = BitmapFont::parse(&table) else {
+        let Some(parsed) = entry.font() else {
             return;
         };
         let atlas = trino_core::text::atlas_of(font);
@@ -773,14 +793,26 @@ impl Renderer for N64Renderer {
             self.flush_model_batch();
             let t0 = self.tick();
             if unsafe { ffi::trino_text_begin(ptr, pack_color(params.tint)) } == 1 {
+                // Glyphs go to the shim in runs (one call per run, not per
+                // glyph).
+                let mut run = [0u32; 3 * TEXT_RUN];
+                let mut n = 0usize;
                 let mut glyphs = 0u32;
                 trino_core::text::layout(&parsed, pos, text, params, &mut |r, at| {
                     let xy = ((at.x as i32 as u32 & 0xFFFF) << 16) | (at.y as i32 as u32 & 0xFFFF);
                     let st = ((r.pos.x as u32) << 16) | r.pos.y as u32;
                     let wh = ((r.size.x as u32) << 16) | r.size.y as u32;
-                    unsafe { ffi::trino_text_glyph(xy, st, wh, k) };
+                    run[3 * n..3 * n + 3].copy_from_slice(&[xy, st, wh]);
+                    n += 1;
+                    if n == TEXT_RUN {
+                        unsafe { ffi::trino_text_run(run.as_ptr(), n as u32, k) };
+                        n = 0;
+                    }
                     glyphs += 1;
                 });
+                if n > 0 {
+                    unsafe { ffi::trino_text_run(run.as_ptr(), n as u32, k) };
+                }
                 self.frame_stats.sprites += glyphs;
                 self.charge(t0, |s| &mut s.sprites);
                 return;
@@ -793,7 +825,7 @@ impl Renderer for N64Renderer {
     fn measure_text(&self, font: FontId, text: &str, scale: f32) -> Vec2 {
         self.fonts
             .get(&font.0)
-            .and_then(|t| BitmapFont::parse(t).ok())
+            .and_then(|e| e.font())
             .map_or(Vec2::ZERO, |f| f.measure(text, scale))
     }
 

@@ -62,6 +62,78 @@ mod n3ds {
         }
     }
 
+    /// The GPU T&L path against the CPU's software T&L on the castle64 hub
+    /// (fresh game, fixed camera): the same frame drawn both ways must
+    /// match within the GPU's float rounding, and the GPU must have drawn
+    /// most of it. A wrong cull winding or projection shows here as whole
+    /// faces of the wrong color.
+    fn gpu_tnl_check(
+        renderer: &mut N3dsRenderer,
+        audio: &mut N3dsAudio,
+    ) -> Result<(), alloc::string::String> {
+        let hub = &castle64::perf::SCENES[0];
+        let mut g = alloc::boxed::Box::new(castle64::perf::scene_game(
+            hub,
+            Vec2::new(400.0, 240.0),
+            audio,
+        ));
+        let mut grab = |renderer: &mut N3dsRenderer, gpu: bool| {
+            renderer.set_gpu_tnl(gpu);
+            // The LCD is double-buffered: draw the probed frame a few times.
+            for _ in 0..3 {
+                g.render(renderer);
+            }
+            let stats = trino_core::Renderer::stats(renderer).tnl;
+            let mut px = alloc::vec::Vec::with_capacity(40 * 24);
+            for y in 0..24 {
+                for x in 0..40 {
+                    let c = trino_core::Renderer::read_pixel(renderer, x * 10 + 5, y * 10 + 5)
+                        .unwrap_or(trino_core::Color::BLACK);
+                    px.push(c);
+                }
+            }
+            (stats, px)
+        };
+        let (cpu_stats, cpu) = grab(renderer, false);
+        let (gpu_stats, gpu) = grab(renderer, true);
+        let diff = |a: trino_core::Color, b: trino_core::Color| {
+            let d = |x: u8, y: u8| (x as i32 - y as i32).unsigned_abs();
+            d(a.r, b.r).max(d(a.g, b.g)).max(d(a.b, b.b))
+        };
+        let off = cpu
+            .iter()
+            .zip(&gpu)
+            .filter(|(a, b)| diff(**a, **b) > 24)
+            .count();
+        let total: u32 = cpu.iter().zip(&gpu).map(|(a, b)| diff(*a, *b)).sum();
+        runtime::log(&format!(
+            "TRINO_STEP:gpu tnl draws={} of {} gpu_tris={} cpu_draws_reference={} differ={off}/{} mean={:.2}\n",
+            gpu_stats.gpu_draws,
+            gpu_stats.gpu_draws + gpu_stats.rsp_draws + (cpu_stats.gpu_draws),
+            gpu_stats.gpu_tris,
+            cpu_stats.gpu_draws,
+            cpu.len(),
+            total as f32 / cpu.len() as f32,
+        ));
+        if cpu_stats.gpu_draws != 0 {
+            return Err(format!(
+                "{} GPU draws with the GPU path off",
+                cpu_stats.gpu_draws
+            ));
+        }
+        if gpu_stats.gpu_draws == 0 {
+            return Err("no draw took the GPU path".into());
+        }
+        // A few samples on silhouettes may flip (float24 vs f32 edges).
+        if off * 50 > cpu.len() {
+            return Err(format!(
+                "{off} of {} samples differ by more than 24",
+                cpu.len()
+            ));
+        }
+        Ok(())
+    }
+
     /// Deterministic self-check exercising 3D physics + render + assets,
     /// reporting through the debug channel: settle on the ground, walk
     /// toward the castle (+Z), then jump and land back.
@@ -237,6 +309,13 @@ mod n3ds {
                     // holds the PC's N3ds look to the same image. Then the
                     // touch screen of the same frame (castle64's map panel:
                     // 2D plus a 3D star), castle64_hub_bottom.png.
+                    if let Err(e) = gpu_tnl_check(renderer, audio) {
+                        fail(format!("gpu tnl: {e}"));
+                        while runtime::running() {
+                            frame(game, renderer, audio, &idle);
+                        }
+                        return;
+                    }
                     runtime::log("TRINO_STEP:golden frame\n");
                     let hub = &castle64::perf::SCENES[0];
                     let mut g = alloc::boxed::Box::new(castle64::perf::scene_game(

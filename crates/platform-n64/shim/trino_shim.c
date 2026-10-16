@@ -90,8 +90,50 @@ void trino_init(void)
     register_VI_handler(trino_on_vi);
 }
 
+// Self-test stall watchdog (trino_watchdog_start). A self-test that stops
+// printing is either stuck on the console (a CPU waiting on the RSP or the
+// RDP) or a frozen emulator. While a test runs, a timer interrupt checks
+// every 4 s of emulated time that a frame began or a line was logged since
+// the last check; if not, it prints TRINO_STALL with where the CPU waits
+// (trino_phase) and the RSP/RDP status registers. A stall that prints
+// nothing at all is the emulator.
+static volatile uint32_t trino_progress = 0;
+static volatile const char* trino_phase = "boot";
+static uint32_t trino_watch_seen = 0xFFFFFFFFu;
+static int trino_watch_reports = 0;
+
+#define TRINO_DP_REG(n) (*(volatile uint32_t*)(0xA4100000u + (n)))
+
+static void trino_watch_tick(int ovfl)
+{
+    (void)ovfl;
+    uint32_t p = trino_progress;
+    if (p != trino_watch_seen) {
+        trino_watch_seen = p;
+        trino_watch_reports = 0;
+        return;
+    }
+    if (trino_watch_reports >= 3) return;
+    trino_watch_reports++;
+    debugf("TRINO_STALL: no frame or log for %d s, waiting in %s; SP_STATUS=%08lx "
+           "DP_START=%08lx DP_END=%08lx DP_CURRENT=%08lx DP_STATUS=%08lx\n",
+           4 * trino_watch_reports, (const char*)trino_phase,
+           (unsigned long)*SP_STATUS, (unsigned long)TRINO_DP_REG(0x0),
+           (unsigned long)TRINO_DP_REG(0x4), (unsigned long)TRINO_DP_REG(0x8),
+           (unsigned long)TRINO_DP_REG(0xC));
+}
+
+void trino_watchdog_start(void)
+{
+    static int started = 0;
+    if (started) return;
+    started = 1;
+    new_timer(TIMER_TICKS(4000000), TF_CONTINUOUS, trino_watch_tick);
+}
+
 void trino_log(const char* msg)
 {
+    trino_progress++;
     debugf("%s", msg);
 }
 
@@ -130,7 +172,10 @@ static surface_t* trino_last_fb = NULL;
 
 void trino_frame_begin(uint32_t rgba8888)
 {
+    trino_progress++;
+    trino_phase = "display_get";
     surface_t* fb = display_get();
+    trino_phase = "frame";
     trino_last_fb = fb;
     if (!trino_zbuf_ready) {
         trino_zbuf = surface_alloc(FMT_RGBA16, display_get_width(), display_get_height());
@@ -153,7 +198,9 @@ void trino_frame_end(void)
     }
     trino_mode_3d = 0;
     trino_2d_ready = 0;
+    trino_phase = "frame_end (rdpq_detach_show)";
     rdpq_detach_show();
+    trino_phase = "between frames";
 }
 
 // Profiling: wait until the RSP and the RDP have finished everything queued,
@@ -161,8 +208,10 @@ void trino_frame_end(void)
 // work no longer shows up as CPU time).
 void trino_drain(void)
 {
+    trino_phase = "drain (rspq_wait)";
     rdpq_fence();
     rspq_wait();
+    trino_phase = "frame";
 }
 
 // ---------------------------------------------------------------------------
@@ -289,18 +338,38 @@ uint32_t trino_text_begin(void* sprite, uint32_t tint)
     return 1;
 }
 
-// One glyph of the resident atlas: xy = screen x << 16 | y (signed 16-bit
-// each, whole pixels), st = atlas s << 16 | t, wh = w << 16 | h, scale =
-// integer pixel scale. Integers only (the N64 ABI rule: no float after an
-// integer argument).
-void trino_text_glyph(uint32_t xy, uint32_t st, uint32_t wh, uint32_t scale)
+// A run of glyphs of the resident atlas (after trino_text_begin): `n`
+// records of 3 words each, (xy = screen x << 16 | y, signed 16-bit whole
+// pixels; st = atlas s << 16 | t; wh = w << 16 | h), at
+// integer scale `scale`. One call per string instead of one per glyph, and
+// on-screen glyphs skip libdragon's general rectangle path (two divisions
+// and four clip tests per glyph): at an integer scale the texture steps are
+// the constants 1024 / scale, which is what that path computes for every
+// glyph, so the RDP gets the same words. Glyphs that cross the screen's
+// top or left edge take the general path.
+void trino_text_run(const uint32_t* g, uint32_t n, uint32_t scale)
 {
-    int32_t x = (int16_t)(xy >> 16), y = (int16_t)(xy & 0xFFFF);
-    int32_t s0 = (int32_t)(st >> 16), t0 = (int32_t)(st & 0xFFFF);
-    int32_t w = (int32_t)(wh >> 16), h = (int32_t)(wh & 0xFFFF);
     int32_t k = (int32_t)scale;
-    __rdpq_texture_rectangle_scaled_fx(TILE0, x * 4, y * 4, (x + w * k) * 4, (y + h * k) * 4,
-                                       s0 * 32, t0 * 32, (s0 + w) * 32, (t0 + h) * 32);
+    int32_t step = (32 << 7) / (4 * k);
+    uint32_t steps = ((uint32_t)step << 16) | ((uint32_t)step & 0xFFFF);
+    extern void __rdpq_texture_rectangle(uint32_t w0, uint32_t w1, uint32_t w2, uint32_t w3);
+    for (uint32_t i = 0; i < n; i++, g += 3) {
+        int32_t x = (int16_t)(g[0] >> 16), y = (int16_t)(g[0] & 0xFFFF);
+        int32_t s0 = (int32_t)(g[1] >> 16), t0 = (int32_t)(g[1] & 0xFFFF);
+        int32_t w = (int32_t)(g[2] >> 16), h = (int32_t)(g[2] & 0xFFFF);
+        int32_t x0 = x * 4, y0 = y * 4, x1 = (x + w * k) * 4, y1 = (y + h * k) * 4;
+        if (__builtin_expect(x0 >= 0 && y0 >= 0 && x1 <= 1024 * 4 - 1 && y1 <= 1024 * 4 - 1
+                             && w > 0 && h > 0, 1)) {
+            __rdpq_texture_rectangle(
+                ((uint32_t)x1 << 12) | (uint32_t)y1,
+                ((uint32_t)TILE0 << 24) | ((uint32_t)x0 << 12) | (uint32_t)y0,
+                ((uint32_t)(s0 * 32) << 16) | ((uint32_t)(t0 * 32) & 0xFFFF),
+                steps);
+        } else {
+            __rdpq_texture_rectangle_scaled_fx(TILE0, x0, y0, x1, y1,
+                                               s0 * 32, t0 * 32, (s0 + w) * 32, (t0 + h) * 32);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -739,6 +808,7 @@ void trino_debug_fb_dump(void)
                 line[i * 4 + 3] = hex[px & 15];
             }
             line[n * 4] = 0;
+            trino_progress++;
             debugf("TRINO_FBR:%lu:%lu:%s\n", (unsigned long)y, (unsigned long)x0, line);
         }
     }

@@ -19,11 +19,36 @@ use std::fmt::Write as _;
 use std::path::PathBuf;
 
 use trino_core::render3d::{
-    Camera3, DEFAULT_LIGHT, Light, Mesh, TnlContext, TnlStats, rsp_eligible, rsp_mesh_supported,
+    Camera3, DEFAULT_LIGHT, Light, Mesh, TnlContext, TnlStats, gpu_check, gpu_mesh_check,
+    rsp_eligible, rsp_mesh_supported,
 };
 use trino_core::*;
 
 const BASELINE: &str = "tests/perf/castle64_work.toml";
+/// The 3DS's split: the draws its GPU transforms (`gpu_check`) and the CPU
+/// T&L left, on its 400-wide top screen.
+const BASELINE_3DS: &str = "tests/perf/castle64_work_3ds.toml";
+const SCREEN_3DS: Vec2 = Vec2::new(400.0, 240.0);
+const FIELDS_3DS: [&str; 9] = [
+    "verts",
+    "tris_in",
+    "clipped",
+    "splits",
+    "backfaced",
+    "emitted",
+    "culled",
+    "gpu_draws",
+    "gpu_tris",
+];
+
+/// Which hardware T&L path the counted target has.
+#[derive(Clone, Copy, PartialEq)]
+enum Target {
+    /// The N64: eligible draws go to the RSP overlay.
+    N64,
+    /// The 3DS: eligible draws go to the PICA200's vertex shader.
+    N3ds,
+}
 /// The N64 screen: projection and culling depend on it, and the N64 is
 /// the target the baseline is cross-checked on.
 const SCREEN: Vec2 = Vec2::new(320.0, 240.0);
@@ -57,6 +82,7 @@ struct Counting {
     caps: Caps,
     total: TnlStats,
     per_model: BTreeMap<u32, (u32, TnlStats)>,
+    target: Target,
 }
 
 impl Renderer for Counting {
@@ -87,12 +113,29 @@ impl Renderer for Counting {
         // The N64 sends eligible draws to its RSP overlay (same rules,
         // trino_core::render3d::rsp_eligible): count those as RSP work, as
         // the ROM does.
-        let ctx = TnlContext::new(&self.camera, &self.light, SCREEN)
+        let screen = match self.target {
+            Target::N64 => SCREEN,
+            Target::N3ds => SCREEN_3DS,
+        };
+        let ctx = TnlContext::new(&self.camera, &self.light, screen)
             .with_local_lights(self.locals.as_slice());
-        let s = if rsp_mesh_supported(&mesh) && rsp_eligible(&ctx, &mesh, x, p).is_some() {
+        let tris = (mesh.index_count / 3) as u32;
+        let s = if self.target == Target::N64
+            && rsp_mesh_supported(&mesh)
+            && rsp_eligible(&ctx, &mesh, x, p).is_some()
+        {
             TnlStats {
                 rsp_draws: 1,
-                rsp_tris: (mesh.index_count / 3) as u32,
+                rsp_tris: tris,
+                ..TnlStats::default()
+            }
+        } else if self.target == Target::N3ds
+            && gpu_mesh_check(&mesh).is_ok()
+            && gpu_check(&ctx, &mesh, x, p).is_ok()
+        {
+            TnlStats {
+                gpu_draws: 1,
+                gpu_tris: tris,
                 ..TnlStats::default()
             }
         } else {
@@ -118,6 +161,8 @@ fn field(t: &TnlStats, name: &str) -> u32 {
         "culled" => t.culled,
         "rsp_draws" => t.rsp_draws,
         "rsp_tris" => t.rsp_tris,
+        "gpu_draws" => t.gpu_draws,
+        "gpu_tris" => t.gpu_tris,
         _ => unreachable!(),
     }
 }
@@ -135,6 +180,8 @@ fn per_frame(t: &TnlStats, n: u32) -> TnlStats {
         emitted: t.emitted / n,
         rsp_draws: t.rsp_draws / n,
         rsp_tris: t.rsp_tris / n,
+        gpu_draws: t.gpu_draws / n,
+        gpu_tris: t.gpu_tris / n,
     }
 }
 
@@ -154,18 +201,31 @@ fn model_names(root: &std::path::Path) -> HashMap<u32, String> {
     out
 }
 
-fn render_baseline(scenes: &[(&str, TnlStats)]) -> String {
-    let mut out = String::from(
-        "# castle64 T&L work per frame (castle64::perf::SCENES) — deterministic,\n\
-         # identical on every target. Checked for equality by\n\
-         # xtask/tests/perf_budget.rs (PC) and by `cargo xtask test n64` (the\n\
-         # ROM's TRINO_PERF_SCENE counters). Generated: rewrite with\n\
-         # `TRINO_BLESS=1 cargo test -p xtask --test perf_budget` and review —\n\
-         # a number going up is a cost the N64 pays.\n",
-    );
+fn render_baseline(scenes: &[(&str, TnlStats)], target: Target) -> String {
+    let mut out = match target {
+        Target::N64 => String::from(
+            "# castle64 T&L work per frame (castle64::perf::SCENES) — deterministic,\n\
+             # identical on every target. Checked for equality by\n\
+             # xtask/tests/perf_budget.rs (PC) and by `cargo xtask test n64` (the\n\
+             # ROM's TRINO_PERF_SCENE counters). Generated: rewrite with\n\
+             # `TRINO_BLESS=1 cargo test -p xtask --test perf_budget` and review —\n\
+             # a number going up is a cost the N64 pays.\n",
+        ),
+        Target::N3ds => String::from(
+            "# castle64 work per frame on the 3DS (castle64::perf::SCENES, 400x240):\n\
+             # the draws its GPU transforms and lights (render3d::gpu_check) and the\n\
+             # CPU T&L left. Deterministic; checked by xtask/tests/perf_budget.rs.\n\
+             # Generated: rewrite with `TRINO_BLESS=1 cargo test -p xtask --test\n\
+             # perf_budget` and review — CPU work going up is a cost the 3DS pays.\n",
+        ),
+    };
+    let fields = match target {
+        Target::N64 => FIELDS,
+        Target::N3ds => FIELDS_3DS,
+    };
     for (name, t) in scenes {
         let _ = writeln!(out, "\n[{name}]");
-        for f in FIELDS {
+        for f in fields {
             let _ = writeln!(out, "{f} = {}", field(t, f));
         }
     }
@@ -174,6 +234,19 @@ fn render_baseline(scenes: &[(&str, TnlStats)]) -> String {
 
 #[test]
 fn castle64_tnl_work_matches_the_baseline() {
+    check_work(Target::N64, BASELINE);
+}
+
+#[test]
+fn castle64_3ds_gpu_split_matches_the_baseline() {
+    check_work(Target::N3ds, BASELINE_3DS);
+}
+
+fn check_work(target: Target, baseline_path: &str) {
+    let (screen, caps, fields) = match target {
+        Target::N64 => (SCREEN, Caps::N64, FIELDS),
+        Target::N3ds => (SCREEN_3DS, Caps::N3DS, FIELDS_3DS),
+    };
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
     let baked = tempfile::tempdir().unwrap();
     trino_asset_pipeline::bake_all(
@@ -195,12 +268,13 @@ fn castle64_tnl_work_matches_the_baseline() {
             camera: Camera3::default(),
             light: DEFAULT_LIGHT,
             locals: trino_core::LightList::EMPTY,
-            caps: Caps::N64,
+            caps,
             total: TnlStats::default(),
             per_model: BTreeMap::new(),
+            target,
         };
         let mut audio = NullAudio;
-        let mut game = castle64::perf::scene_game(scene, SCREEN, &mut audio);
+        let mut game = castle64::perf::scene_game(scene, screen, &mut audio);
         let idle = InputState::default();
         for _ in 0..n {
             game.update(&idle, &mut audio, castle64::perf::DT);
@@ -227,17 +301,17 @@ fn castle64_tnl_work_matches_the_baseline() {
         measured.push((scene.name, t));
     }
 
-    let path = root.join(BASELINE);
-    let fresh = render_baseline(&measured);
+    let path = root.join(baseline_path);
+    let fresh = render_baseline(&measured, target);
     if std::env::var_os("TRINO_BLESS").is_some() {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, &fresh).unwrap();
-        eprintln!("blessed {BASELINE}:\n{reports}");
+        eprintln!("blessed {baseline_path}:\n{reports}");
         return;
     }
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
         panic!(
-            "{BASELINE}: {e} — create it with TRINO_BLESS=1 cargo test -p xtask --test perf_budget"
+            "{baseline_path}: {e} — create it with TRINO_BLESS=1 cargo test -p xtask --test perf_budget"
         )
     });
     let baseline: toml::Table = toml::from_str(&text).unwrap();
@@ -247,7 +321,7 @@ fn castle64_tnl_work_matches_the_baseline() {
             let _ = writeln!(diffs, "  {name}: missing from the baseline");
             continue;
         };
-        for f in FIELDS {
+        for f in fields {
             let expected = want.get(f).and_then(|v| v.as_integer()).unwrap_or(-1);
             let got = field(t, f) as i64;
             if expected != got {
@@ -264,10 +338,10 @@ fn castle64_tnl_work_matches_the_baseline() {
     }
     assert!(
         diffs.is_empty(),
-        "castle64's T&L work changed (per frame, N64 screen):\n{diffs}\n\
+        "castle64's T&L work changed (per frame, {screen:?} screen):\n{diffs}\n\
          measured now:\n{reports}\n\
          If intentional, bless with `TRINO_BLESS=1 cargo test -p xtask --test perf_budget` \
-         and review {BASELINE}; then refresh the N64 ceilings with \
+         and review {baseline_path}; then refresh the N64 ceilings with \
          `cargo xtask test n64 --bless`."
     );
 }

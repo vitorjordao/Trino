@@ -222,6 +222,7 @@ mod n64 {
         platform: &mut N64Platform,
     ) -> ! {
         const DT: f32 = 1.0 / 60.0;
+        runtime::watchdog_start();
         // 0) Engine services through the portable traits (text, blobs, save).
         if let Err(e) = castle64::selftest::engine_checks(renderer, platform) {
             runtime::log(&format!("TRINO_TEST_FAIL:engine: {e}\n"));

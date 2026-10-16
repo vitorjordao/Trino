@@ -12,6 +12,12 @@ pub fn init() {
     unsafe { ffi::trino_init() }
 }
 
+/// Self-test only: report a stall (`TRINO_STALL`) if no frame begins and
+/// nothing is logged for 4 s of emulated time (see the shim).
+pub fn watchdog_start() {
+    unsafe { ffi::trino_watchdog_start() }
+}
+
 pub fn log(msg: &str) {
     if let Ok(c) = CString::new(msg) {
         unsafe { ffi::trino_log(c.as_ptr()) }

@@ -51,6 +51,33 @@ pub struct BitmapFont<'a> {
     pub line_height: u16,
     pub ascent: u16,
     pub glyph_count: usize,
+    /// Direct lookup for codepoints below 256 ([`with_index`](Self::with_index)).
+    index: Option<&'a GlyphIndex>,
+}
+
+/// The record of every codepoint below 256 (ASCII and Latin-1, what most
+/// interface text is made of), so a lookup is one load instead of a binary
+/// search per character. Built once per font when a backend registers it
+/// ([`GlyphIndex::build`]) and lent to [`BitmapFont::with_index`]; the
+/// glyphs found are the same either way. 512 bytes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GlyphIndex {
+    slot: [u16; 256],
+}
+
+impl GlyphIndex {
+    const NONE: u16 = u16::MAX;
+
+    pub fn build(font: &BitmapFont<'_>) -> Self {
+        let mut slot = [Self::NONE; 256];
+        for i in 0..font.glyph_count.min(Self::NONE as usize) {
+            let cp = font.codepoint_at(i);
+            if cp < 256 && slot[cp as usize] == Self::NONE {
+                slot[cp as usize] = i as u16;
+            }
+        }
+        GlyphIndex { slot }
+    }
 }
 
 impl<'a> BitmapFont<'a> {
@@ -76,7 +103,22 @@ impl<'a> BitmapFont<'a> {
             line_height: u16_at(6),
             ascent: u16_at(8),
             glyph_count,
+            index: None,
         })
+    }
+
+    /// The same font, looking codepoints below 256 up in `index` (built
+    /// from this table by [`GlyphIndex::build`]).
+    pub fn with_index(self, index: &'a GlyphIndex) -> Self {
+        BitmapFont {
+            index: Some(index),
+            ..self
+        }
+    }
+
+    fn codepoint_at(&self, i: usize) -> u32 {
+        let r = &self.records[i * RECORD..i * RECORD + 4];
+        u32::from_le_bytes([r[0], r[1], r[2], r[3]])
     }
 
     fn record(&self, i: usize) -> Glyph {
@@ -95,6 +137,13 @@ impl<'a> BitmapFont<'a> {
     /// Exact glyph lookup (binary search over the sorted table).
     pub fn glyph(&self, ch: char) -> Option<Glyph> {
         let cp = ch as u32;
+        if cp < 256
+            && let Some(index) = self.index
+        {
+            let i = index.slot[cp as usize];
+            return (i != GlyphIndex::NONE && (i as usize) < self.glyph_count)
+                .then(|| self.record(i as usize));
+        }
         let (mut lo, mut hi) = (0usize, self.glyph_count);
         while lo < hi {
             let mid = (lo + hi) / 2;
@@ -152,11 +201,12 @@ pub fn layout(
     let scale = params.scale;
     let mut y = pos.y;
     for line in text.split('\n') {
-        let width = font.line_width(line) as f32 * scale;
+        // Left-aligned text (most of it) needs no width.
+        let width = || font.line_width(line) as f32 * scale;
         let mut x = match params.align {
             TextAlign::Left => pos.x,
-            TextAlign::Center => pos.x - width * 0.5,
-            TextAlign::Right => pos.x - width,
+            TextAlign::Center => pos.x - width() * 0.5,
+            TextAlign::Right => pos.x - width(),
         };
         // Integer pen positions: glyphs land on whole pixels at integer
         // scales, so filtering backends (3DS bilinear) stay crisp.
@@ -317,6 +367,41 @@ mod tests {
                 g(' ', 0, 0, 4),
             ],
         )
+    }
+
+    #[test]
+    fn the_index_finds_the_same_glyphs_as_the_search() {
+        let bytes = font_bytes();
+        let plain = BitmapFont::parse(&bytes).unwrap();
+        let index = GlyphIndex::build(&plain);
+        let fast = plain.with_index(&index);
+        for cp in 0..300u32 {
+            let ch = char::from_u32(cp).unwrap();
+            assert_eq!(fast.glyph(ch), plain.glyph(ch), "{cp}");
+            assert_eq!(
+                fast.glyph_or_fallback(ch),
+                plain.glyph_or_fallback(ch),
+                "{cp}"
+            );
+        }
+        for text in ["ab?", "a\nbb", "zz b", ""] {
+            assert_eq!(fast.measure(text, 2.0), plain.measure(text, 2.0));
+            for align in [TextAlign::Left, TextAlign::Center, TextAlign::Right] {
+                let params = TextParams {
+                    align,
+                    ..TextParams::DEFAULT
+                };
+                let mut a = std::vec::Vec::new();
+                let mut b = std::vec::Vec::new();
+                layout(&plain, Vec2::new(3.0, 4.0), text, &params, &mut |r, p| {
+                    a.push((r, p))
+                });
+                layout(&fast, Vec2::new(3.0, 4.0), text, &params, &mut |r, p| {
+                    b.push((r, p))
+                });
+                assert_eq!(a, b);
+            }
+        }
     }
 
     #[test]

@@ -187,6 +187,11 @@ Live-edit check: start the editor with `TRINO_EDITOR_ECHO_LOG=1` in the backgrou
   platformer level into a temp dir and runs the `App` there
   (`commands_edit_save_and_export_in_a_temp_project`); push `Cmd`s into
   `h.state_mut().cmds` and step two frames.
+- **Never assert on `log.last()` after a command.** The watchers (asset rebakes, text
+  files) log on their own schedule, and on CI's slower lavapipe runner a late
+  "reloaded …" landed after `NewScene("Bad Name")`'s error, failing the flow on main
+  and on PR #44. The flow's `cmd` returns the lines logged while it ran; look for the
+  message among them (`said`).
 - A widget that only needs `&mut egui::Ui` and data (no `App`) is tested without a GPU
   in `widget_tests.rs` (`Harness::new_ui_state`). Install the theme on the first frame
   (`theme::install`) before drawing anything that uses the bold font family, or epaint

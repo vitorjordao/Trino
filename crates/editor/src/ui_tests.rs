@@ -151,9 +151,27 @@ fn commands_edit_save_and_export_in_a_temp_project() {
             return;
         }
     };
-    let cmd = |h: &mut Harness<'_, App>, c: Cmd| {
+    // Runs a command and returns what the Console got meanwhile. The asset
+    // watcher rebakes earlier steps' files on its own schedule and can log
+    // in the same frames (slower on CI), so a test looks for its line among
+    // these, never at `log.last()` alone.
+    let cmd = |h: &mut Harness<'_, App>, c: Cmd| -> Vec<String> {
+        let from = h.state().log.entries.len();
         h.state_mut().cmds.push(c);
         h.run_steps(2);
+        h.state()
+            .log
+            .entries
+            .iter()
+            .skip(from)
+            .map(|e| e.text.clone())
+            .collect()
+    };
+    let said = |lines: &[String], needle: &str| {
+        assert!(
+            lines.iter().any(|l| l.contains(needle)),
+            "expected a line with `{needle}`, the Console got {lines:?}"
+        );
     };
     h.run_steps(4);
     assert_eq!(h.state().log.counts().1, 0, "the project loads cleanly");
@@ -254,8 +272,8 @@ fn commands_edit_save_and_export_in_a_temp_project() {
     );
     let nested = find(&h.state().doc.scene, "probe");
     assert_eq!(nested.len(), 2, "now a child: {nested:?}");
-    cmd(&mut h, Cmd::Copy(nested.clone()));
-    assert!(h.state().log.last().unwrap().text.contains("copied probe"));
+    let lines = cmd(&mut h, Cmd::Copy(nested.clone()));
+    said(&lines, "copied probe");
 
     // Prefabs: make one from the probe, unpack it, edit a library prefab.
     cmd(
@@ -266,32 +284,16 @@ fn commands_edit_save_and_export_in_a_temp_project() {
     assert!(h.state().lib.prefabs.contains_key("prefabs/probe-prefab"));
     let inst = find(&h.state().doc.scene, "probe");
     assert!(h.state().doc.scene.get(&inst).unwrap().prefab.is_some());
-    cmd(&mut h, Cmd::MakePrefab(inst.clone(), "probe-prefab".into()));
-    assert!(
-        h.state()
-            .log
-            .last()
-            .unwrap()
-            .text
-            .contains("already exists"),
-        "{}",
-        h.state().log.last().unwrap().text
-    );
+    let lines = cmd(&mut h, Cmd::MakePrefab(inst.clone(), "probe-prefab".into()));
+    said(&lines, "already exists");
     cmd(&mut h, Cmd::Unpack(inst.clone()));
     assert!(h.state().doc.scene.get(&inst).unwrap().prefab.is_none());
     cmd(&mut h, Cmd::EditPrefab("prefabs/tree".into()));
     assert!(h.state().doc.is_prefab());
     assert_eq!(h.state().doc.title(), "prefabs/tree");
-    cmd(&mut h, Cmd::Delete(vec![0]));
-    assert!(
-        h.state()
-            .log
-            .last()
-            .unwrap()
-            .text
-            .contains("root cannot be deleted"),
-        "the prefab root is protected"
-    );
+    // The prefab root is protected.
+    let lines = cmd(&mut h, Cmd::Delete(vec![0]));
+    said(&lines, "root cannot be deleted");
     cmd(&mut h, Cmd::ExitPrefab);
     assert!(!h.state().doc.is_prefab());
 
@@ -391,15 +393,8 @@ fn commands_edit_save_and_export_in_a_temp_project() {
     assert_eq!(h.state().doc.scene.name, "probe-level");
     cmd(&mut h, Cmd::CloseScene(0));
     assert!(h.state().open_docs.is_empty());
-    cmd(&mut h, Cmd::NewScene("Bad Name".into()));
-    assert!(
-        h.state()
-            .log
-            .last()
-            .unwrap()
-            .text
-            .contains("not a valid scene name")
-    );
+    let lines = cmd(&mut h, Cmd::NewScene("Bad Name".into()));
+    said(&lines, "not a valid scene name");
 
     // Play here runs the scene inside the Game view, and stops.
     cmd(&mut h, Cmd::PlayHere);
@@ -412,16 +407,9 @@ fn commands_edit_save_and_export_in_a_temp_project() {
         .expect("a play session")
         .frames;
     assert!(frames > 0, "the session advanced");
-    cmd(&mut h, Cmd::StopPlayHere);
+    let lines = cmd(&mut h, Cmd::StopPlayHere);
     assert!(h.state().game_view.play.is_none());
-    assert!(
-        h.state()
-            .log
-            .last()
-            .unwrap()
-            .text
-            .starts_with("play here stopped")
-    );
+    said(&lines, "play here stopped");
 
     // Nothing above leaked into the engine's own content.
     std::env::set_current_dir(&repo).unwrap();

@@ -115,6 +115,14 @@ file = "models/castle64/door_frame.glb"
 [models.c64_door]
 file = "models/castle64/door_castle.glb"
 
+# Pool of light under a torch (throne room), drawn where lights are per
+# vertex: a floor that big has no vertex near the torch to light.
+[models.c64_light_pool]
+file = "models/proxies/light-pool.prim.ron"
+
+[models.c64_torch_flame]
+file = "models/proxies/torch-flame.prim.ron"
+
 # ---- editor showcase (scenes/showcase.scene.ron) ----
 # Fake objects: parametric placeholders (.prim.ron). Swap `file` for a
 # real .glb later — the handle and every reference stay the same.

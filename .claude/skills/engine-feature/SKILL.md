@@ -37,6 +37,13 @@ A feature is done only when **PC, N64 and 3DS** all run it and an emulator has s
   const generic: it would double every `tessellate_joints` body on the N64's 16 KB
   I-cache. Prove "unchanged when unused" with a bit-identical comparison test
   (`crates/core/tests/color_slots.rs`).
+- **A per-vertex feature with real code (lights, varyings) goes in `render3d/lit.rs`,
+  not in `tessellate_joints`.** Local lights first lived there behind never-taken
+  branches: the static body grew 15.6 → 18.0 KB, past the I-cache, and every unlit draw
+  got 10–35 % slower in ares. `tessellate_with` dispatches a draw to the lit copy only
+  when the feature applies. After a T&L change, compare `mips64-elf-nm -S` of
+  `tessellate_joints::<false, false>` (0x3d04 today) and the `micro-*` scenes with the
+  main branch's ROM.
 - **A new surface or light feature must reach the N64's RSP path too.** Most N64 draws
   skip `tessellate` and run on `rsp_trino.S` (ADR 0007), which ignores whatever it
   doesn't implement. Either exclude the feature in

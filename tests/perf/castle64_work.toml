@@ -50,12 +50,12 @@ rsp_draws = 12
 rsp_tris = 280
 
 [throne]
-verts = 120
-tris_in = 60
+verts = 150
+tris_in = 70
 clipped = 12
 splits = 0
-backfaced = 42
-emitted = 21
+backfaced = 47
+emitted = 25
 culled = 0
-rsp_draws = 7
-rsp_tris = 160
+rsp_draws = 22
+rsp_tris = 446

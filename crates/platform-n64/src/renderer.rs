@@ -16,8 +16,9 @@ use trino_core::render3d::{
 };
 use trino_core::text::BitmapFont;
 use trino_core::{
-    BillboardParams, Caps, Color, FontId, FrameStats, Mat34, Material, ModelId, ModelParams,
-    Renderer, SpriteId, SpriteParams, TextParams, Transform3, Vec2, Vec3,
+    BillboardParams, Caps, Color, FontId, FrameStats, LightList, LocalLight, Mat34, Material,
+    ModelId, ModelParams, Renderer, Shading, SpriteId, SpriteParams, TextParams, Transform3, Vec2,
+    Vec3,
 };
 
 use crate::ffi;
@@ -50,7 +51,11 @@ pub struct N64Renderer {
     order: Vec<(u64, u64)>,
     camera: Camera3,
     light: Light,
-    /// T&L constants of `camera` + `light`, rebuilt when either changes.
+    /// Local lights of this frame (per vertex, `Caps::N64` cap). A draw
+    /// one reaches runs the CPU T&L (`RspReject::LocalLight`).
+    locals: LightList,
+    /// T&L constants of `camera` + `light` + `locals`, rebuilt when one
+    /// changes.
     tnl_ctx: TnlContext,
     /// The T&L's working memory, reused by every draw (boxed: ~9 KB).
     tnl_scratch: Box<TnlScratch>,
@@ -106,6 +111,11 @@ impl N64Renderer {
         self.profile.take()
     }
 
+    fn rebuild_tnl(&mut self) {
+        self.tnl_ctx = TnlContext::new(&self.camera, &self.light, SCREEN)
+            .with_local_lights(self.locals.as_slice());
+    }
+
     /// Timestamp when profiling (no timer reads otherwise).
     fn tick(&self) -> u32 {
         if self.profile.is_some() { now_us() } else { 0 }
@@ -139,6 +149,7 @@ impl N64Renderer {
             tnl_ctx: TnlContext::new(&Camera3::default(), &DEFAULT_LIGHT, SCREEN),
             tnl_scratch: Box::new(TnlScratch::new()),
             light: DEFAULT_LIGHT,
+            locals: LightList::EMPTY,
             caps: Caps::N64,
             profile: None,
             rsp_meshes: BTreeMap::new(),
@@ -487,6 +498,9 @@ impl Renderer for N64Renderer {
 
     fn begin_frame(&mut self, clear: Color) {
         self.frame_stats = FrameStats::default();
+        if self.locals.set(&[], 0) {
+            self.rebuild_tnl();
+        }
         let t0 = self.tick();
         unsafe { ffi::trino_frame_begin(pack_color(clear)) }
         self.charge(t0, |s| &mut s.begin);
@@ -509,7 +523,7 @@ impl Renderer for N64Renderer {
         if *camera != self.camera {
             let before = self.tnl_ctx.projection();
             self.camera = *camera;
-            self.tnl_ctx = TnlContext::new(&self.camera, &self.light, SCREEN);
+            self.rebuild_tnl();
             // Only the view's translation moved (a pan): remembered
             // commands are patched, not dropped.
             let after = self.tnl_ctx.projection();
@@ -526,8 +540,17 @@ impl Renderer for N64Renderer {
         // a change needs no batch flush.
         if *light != self.light {
             self.light = *light;
-            self.tnl_ctx = TnlContext::new(&self.camera, &self.light, SCREEN);
+            self.rebuild_tnl();
             self.memo_gen = self.memo_gen.wrapping_add(1);
+        }
+    }
+
+    fn set_local_lights(&mut self, lights: &[LocalLight]) {
+        // Per vertex, no flush. The memo needs no new generation: a
+        // remembered command is an RSP draw no light reached, and a hit
+        // tests the lights again (`draw_model_matrix`).
+        if self.locals.set(lights, self.caps.max_local_lights) {
+            self.rebuild_tnl();
         }
     }
 
@@ -569,9 +592,13 @@ impl Renderer for N64Renderer {
                 r2: f(w, 6),
             };
             let mt = pan.translation([v[0][3], v[1][3], v[2][3]]);
+            // A local light reaching it now: the CPU T&L lights it.
+            let lit = !self.locals.is_empty()
+                && params.shading != Shading::Unlit
+                && self.tnl_ctx.lights_touch(pan.center(mt), pan.r2);
             // Moved: still inside the band where the camera is now? Else
             // the draw takes the full path (maybe the CPU's).
-            if still || rsp_band(&self.tnl_ctx, pan.center(mt), pan.r2) {
+            if !lit && (still || rsp_band(&self.tnl_ctx, pan.center(mt), pan.r2)) {
                 let t0 = if self.profile.is_some() { now_us() } else { 0 };
                 if !still {
                     let mut c = [0u32; rsp::DRAW_WORDS];

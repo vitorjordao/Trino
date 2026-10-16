@@ -1054,6 +1054,15 @@ pub fn material_editor(ui: &mut egui::Ui, def: &mut MaterialDef, textures: &[Str
     theme::prop(ui, "Sides", |ui| {
         changed |= ui.checkbox(&mut def.double_sided, "Double-sided").changed();
     });
+    theme::prop(ui, "Gloss", |ui| {
+        changed |= ui
+            .add(egui::Slider::new(&mut def.gloss, 0..=255))
+            .on_hover_text(
+                "Specular highlights (0 = matte). PC per-pixel lighting only; \
+                 consoles ignore it.",
+            )
+            .changed();
+    });
     theme::prop(ui, "Texture", |ui| {
         let current = def.texture.clone().unwrap_or_else(|| "None".into());
         egui::ComboBox::from_id_salt("mat-texture")

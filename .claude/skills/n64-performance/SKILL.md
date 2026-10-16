@@ -240,6 +240,8 @@ the LOD panel and the impostor section print it next to the mesh's CPU-path cost
 
 | Change | Result on the scenes |
 |---|---|
+| Local lights folded into `tessellate_joints` (never-taken branches, zero-sized generics, 2026-10-15) | **worse with no light set**: the static body 15.6 → 18.0 KB (past the 16 KB I-cache); `micro-tris` T&L 21.5 → 29.0 ms, `micro-gouraud` 12.0 → 17.5 ms. Moved to `render3d/lit.rs` (a copy, dispatched only for lit draws): back to 21.9 / 11.9 ms, body 0x3d04 again |
+| Local lights in castle64's throne room (4 torches, cap 2 per vertex, `ground_pool` decals) | throne 9.3 → 16.0 ms: the star lit on the CPU (0.14 → 1.3 ms), the castle blocks' lit vertices (+0.6 ms), pools/posts/flames on the RSP (~1.2 ms) and the RSP drain. Torch posts lit by their own light cost ~1.7 ms each on the CPU: drawn Unlit on per-vertex tiers |
 | Impostors (props as textured billboards at a far zoom, an external project) | **worse on the N64**: far view 29.8 → 35 ms, the busiest scene 58 → 66 ms. Textured triangles are CPU-submitted (~22 µs each, 52 rspq words), costing more than the RSP time they save. On the 3DS the same impostors doubled the far view's rate (Azahar). An N64 impostor would need an RDP rectangle with depth |
 
 | **Draw memo** (`trino_core::memo`, N64 renderer): a draw repeated under the same camera and light reuses last frame's 27-word RSP command (key: model, matrix bits, tint, shading, generation) | an external project's 93-draw scene 25.9 → 23.5 ms. The CPU then issues draws faster than the RSP draws them: waits show up in `tnl` (streamed) |

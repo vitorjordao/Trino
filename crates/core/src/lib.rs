@@ -26,6 +26,7 @@ pub mod entity;
 pub mod game;
 pub mod impostor;
 pub mod input;
+pub mod light;
 pub mod math;
 pub mod math3d;
 pub mod memo;
@@ -52,6 +53,10 @@ pub use entity::{Entity, EntityId, EntityStore};
 pub use game::Game;
 pub use impostor::Impostor;
 pub use input::{Button, Input, InputState, Key, PointerButton};
+pub use light::{
+    GroundPool, LightKind, LightList, LightTier, LocalLight, MAX_LOCAL_LIGHTS, MAX_VERTEX_LIGHTS,
+    ground_pool,
+};
 pub use math::{Color, Rect, Vec2, Vec3};
 pub use math3d::{Mat34, Quat};
 pub use particles::{Effect, Emitter, ParticleSystem};
@@ -66,7 +71,8 @@ pub use render::{
 };
 pub use render3d::{
     Camera3, ClipInfo, DEFAULT_LIGHT, Fog, Light, MAX_JOINTS, Mesh, MeshError, MeshLayout,
-    RspReject, ScreenTri, TnlContext, TnlScratch, TnlStats, tessellate, tessellate_with,
+    RspReject, ScreenTri, SurfaceScratch, SurfaceVert, TnlContext, TnlScratch, TnlStats,
+    tessellate, tessellate_surface, tessellate_with,
 };
 pub use scene::{BakedScene, LodLevel, LodPick, Lods, SceneNode, Tags};
 pub use text::{BitmapFont, TextBuf};

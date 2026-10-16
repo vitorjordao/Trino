@@ -23,9 +23,9 @@ use levels::{BlockKind, DoorColor, LEVELS, Level, TOTAL_STARS};
 use trino_core::math3d::{atan2, cos, sin};
 use trino_core::physics::{self, Aabb, move_aabb};
 use trino_core::{
-    Audio, BillboardParams, Button, Camera3, Color, DEFAULT_LIGHT, FontId, Game, InputState,
-    Material, ModelId, ModelParams, MusicId, Renderer, SoundId, SpriteId, SpriteParams, TextAlign,
-    TextBuf, TextParams, Transform3, Vec2, Vec3,
+    Audio, BillboardParams, Button, Camera3, Color, DEFAULT_LIGHT, FontId, Game, InputState, Light,
+    LightTier, LocalLight, Material, ModelId, ModelParams, MusicId, Renderer, Shading, SoundId,
+    SpriteId, SpriteParams, TextAlign, TextBuf, TextParams, Transform3, Vec2, Vec3, ground_pool,
 };
 
 // ------------------------------------------------------------ handles ----
@@ -47,6 +47,25 @@ const M_DOOR_FRAME: ModelId = ModelId::from_path("models/c64_door_frame");
 /// Entrada do castelo: a doorway do KayKit Dungeon Remastered (CC0) refeita
 /// no Blender em 75 tris (`tools/blender/castle64_models.py`), mesmas medidas.
 const M_DOOR_CASTLE: ModelId = ModelId::from_path("models/c64_door");
+/// Torches: the showcase's lamp post, a flame, and the pool of light the
+/// consoles draw under them (`ground_pool`).
+const M_TORCH_POST: ModelId = ModelId::from_path("models/lamp-post");
+const M_TORCH_FLAME: ModelId = ModelId::from_path("models/c64_torch_flame");
+const M_LIGHT_POOL: ModelId = ModelId::from_path("models/c64_light_pool");
+/// A torch's light: warm, at the bulb, reaching 5.5 m.
+const TORCH_COLOR: Color = Color::rgb(255, 150, 70);
+const TORCH_HEIGHT: f32 = 2.45;
+/// Where torches burn the room is dim: they light it. White (a colored
+/// light sends every N64 draw to the CPU, `RspReject::ColoredLight`), low
+/// and grazing, so the floor gets little of it.
+const TORCH_ROOM_LIGHT: Light = Light {
+    dir: Vec3::new(0.5, -0.3, 0.8),
+    ambient: 0.3,
+    ..DEFAULT_LIGHT
+};
+/// The castle floor's stone (`c64_block_castle`'s top), for the pools.
+const FLOOR_STONE: Color = Color::rgb(240, 232, 210);
+const TORCH_REACH: f32 = 5.5;
 
 const S_COIN: SpriteId = SpriteId::from_path("sprites/coin");
 /// World size of a coin billboard (the old 3D coin was 0.7 × 0.9).
@@ -537,7 +556,33 @@ impl Game for Castle64Game {
         // Light is renderer state and outlives a frame: declare it every
         // frame, or the game inherits whatever drew before (on consoles the
         // self-test's showcase leaves its colored, fogged light behind).
-        renderer.set_light(&DEFAULT_LIGHT);
+        let light = if l.torches.is_empty() {
+            DEFAULT_LIGHT
+        } else {
+            TORCH_ROOM_LIGHT
+        };
+        renderer.set_light(&light);
+        // Torches: one flickering local light each, declared before the
+        // draws they light (cleared by begin_frame). The PC shades them per
+        // pixel; the consoles per vertex (the first `max_local_lights`),
+        // which can't light a 24 m floor with vertices only at its corners,
+        // so they also draw the pool each light throws on the floor.
+        let mut torches = [LocalLight::point(Vec3::ZERO, TORCH_COLOR, TORCH_REACH); 4];
+        let n_torches = l.torches.len().min(torches.len());
+        for (i, t) in l.torches.iter().take(n_torches).enumerate() {
+            let k = i as f32 * 1.7;
+            let flicker = 1.0
+                + 0.12 * sin(self.level_time * 9.0 + k)
+                + 0.06 * sin(self.level_time * 23.0 + k * 2.3);
+            torches[i] = LocalLight::point(
+                *t + Vec3::new(0.0, TORCH_HEIGHT, 0.0),
+                TORCH_COLOR,
+                TORCH_REACH,
+            )
+            .with_intensity(1.3 * flicker);
+        }
+        let torches = &torches[..n_torches];
+        renderer.set_local_lights(torches);
         let eye = camera.eye;
         // A engine ordena os triângulos do batch entre meshes; aqui só
         // cortamos o que está longe demais.
@@ -565,6 +610,10 @@ impl Game for Castle64Game {
             let params = if b.kind == BlockKind::Lava {
                 let glow = 190 + (65.0 * tri_wave(self.level_time * 0.6)) as u8;
                 ModelParams::tinted(Color::rgb(255, glow, glow))
+            } else if !torches.is_empty() {
+                // Polished stone where torches burn: their highlights on
+                // the PC (per-vertex targets ignore gloss).
+                ModelParams { gloss: 70, ..plain }
             } else {
                 plain
             };
@@ -578,6 +627,83 @@ impl Game for Castle64Game {
                 Material::VertexLit,
                 &params,
             );
+        }
+        // Per vertex, a post its own torch lights would run the N64's CPU
+        // T&L (~1.7 ms each, measured in ares): there the posts are a flat
+        // dark iron instead.
+        let per_vertex = renderer.caps().light_tier == LightTier::PerVertex;
+        let post = if per_vertex {
+            ModelParams {
+                tint: Color::rgb(70, 66, 74),
+                shading: Shading::Unlit,
+                ..plain
+            }
+        } else {
+            plain
+        };
+        for t in l.torches.iter().take(n_torches) {
+            renderer.draw_model(
+                M_TORCH_POST,
+                &Transform3 {
+                    position: *t,
+                    ..Transform3::default()
+                },
+                Material::VertexLit,
+                &post,
+            );
+            renderer.draw_model(
+                M_TORCH_FLAME,
+                &Transform3 {
+                    position: *t + Vec3::new(0.0, TORCH_HEIGHT - 0.12, 0.0),
+                    ..Transform3::default()
+                },
+                Material::VertexLit,
+                &ModelParams {
+                    shading: Shading::Unlit,
+                    ..plain
+                },
+            );
+        }
+        if per_vertex {
+            // Opaque discs (they stay on the N64's RSP), wide and dim to
+            // small and bright: the floor as the room's light shows it
+            // (the T&L's own sum), plus the torch's light on the stone.
+            let d = light.dir.normalized();
+            let up = if d.y < 0.0 { -d.y } else { 0.0 };
+            let room = |ambient: u8, direct: u8| {
+                (light.ambient * ambient as f32 + (1.0 - light.ambient) * up * direct as f32)
+                    / 255.0
+            };
+            for torch in torches {
+                let Some(pool) = ground_pool(torch, 0.0) else {
+                    continue;
+                };
+                for (i, (r, k)) in [(1.0f32, 0.18f32), (0.55, 0.5)].into_iter().enumerate() {
+                    let ch = |stone: u8, ambient: u8, direct: u8, pool: u8| {
+                        let s = stone as f32;
+                        (s * room(ambient, direct) + s * pool as f32 * k / 255.0).min(255.0) as u8
+                    };
+                    let (st, a, c, p) = (FLOOR_STONE, light.ambient_color, light.color, pool.color);
+                    renderer.draw_model(
+                        M_LIGHT_POOL,
+                        &Transform3 {
+                            position: pool.center + Vec3::new(0.0, 0.01 + 0.01 * i as f32, 0.0),
+                            rotation: Vec3::ZERO,
+                            scale: Vec3::new(pool.radius * r, 1.0, pool.radius * r),
+                        },
+                        Material::VertexLit,
+                        &ModelParams {
+                            tint: Color::rgb(
+                                ch(st.r, a.r, c.r, p.r),
+                                ch(st.g, a.g, c.g, p.g),
+                                ch(st.b, a.b, c.b, p.b),
+                            ),
+                            shading: Shading::Unlit,
+                            ..plain
+                        },
+                    );
+                }
+            }
         }
         for m in l.movers {
             let min = mover_min(m, self.level_time);

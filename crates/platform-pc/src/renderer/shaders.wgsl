@@ -209,6 +209,149 @@ fn fs_tri(in: TriOut) -> @location(0) vec4<f32> {
 }
 
 // ---------------------------------------------------------------------------
+// Lit triangle pass: the per-pixel lighting tier (native profile). The
+// vertex color already holds ambient + the global light's diffuse (per
+// vertex, like every target); this pass adds the local lights' diffuse,
+// specular highlights and wetness per pixel. Layout: batch.rs::TriVertex,
+// lights.rs::GpuSet.
+
+struct GpuLight {
+    pos_radius: vec4<f32>,
+    color_spot: vec4<f32>,
+    dir_cos: vec4<f32>,
+    cone: vec4<f32>,
+};
+
+struct LightSet {
+    sun_dir: vec4<f32>,    // xyz: direction the light travels; w: ambient
+    sun_color: vec4<f32>,  // rgb; w: wetness
+    eye: vec4<f32>,        // xyz: camera; w: local light count
+    lights: array<GpuLight, 8>,
+};
+
+struct LightSets {
+    sets: array<LightSet, 8>,
+};
+
+@group(2) @binding(0) var<uniform> light_sets: LightSets;
+
+struct LitIn {
+    @location(0) pos: vec2<f32>,
+    @location(1) color: vec4<f32>,
+    @location(2) depth: f32,
+    @location(3) w: f32,
+    @location(4) uv: vec2<f32>,
+    @location(5) world: vec3<f32>,
+    @location(6) normal: vec3<f32>,
+    @location(7) base: vec4<f32>,
+    @location(8) gloss: f32,
+    @location(9) light_set: f32,
+};
+
+struct LitOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) color: vec4<f32>,
+    @location(1) uv: vec2<f32>,
+    @location(2) world: vec3<f32>,
+    @location(3) normal: vec3<f32>,
+    @location(4) base: vec4<f32>,
+    @location(5) @interpolate(flat) params: vec2<f32>,
+};
+
+@vertex
+fn vs_tri_lit(in: LitIn) -> LitOut {
+    let ndc = vec2<f32>(
+        in.pos.x / globals.screen.x * 2.0 - 1.0,
+        1.0 - in.pos.y / globals.screen.y * 2.0,
+    );
+    var out: LitOut;
+    // Always the true view depth: world positions and normals interpolate
+    // perspective-correctly (a light pool on a big floor stays round).
+    out.clip = vec4<f32>(ndc, in.depth, 1.0) * in.w;
+    out.color = in.color;
+    out.uv = in.uv;
+    out.world = in.world;
+    out.normal = in.normal;
+    out.base = in.base;
+    out.params = vec2<f32>(in.gloss, in.light_set);
+    return out;
+}
+
+// Blinn-Phong lobe for gloss 0..1: tighter and stronger as it rises.
+fn specular(n: vec3<f32>, l: vec3<f32>, v: vec3<f32>, gloss: f32) -> f32 {
+    let h = normalize(l + v);
+    let e = mix(8.0, 256.0, gloss * gloss);
+    // Energy-ish normalization keeps tight lobes from vanishing.
+    return pow(max(dot(n, h), 0.0), e) * gloss * (e + 8.0) / 64.0;
+}
+
+fn shade_lit(in: LitOut, texel: vec4<f32>) -> vec4<f32> {
+    var c = in.color * texel;
+    if dot(in.normal, in.normal) < 1e-8 {
+        return c; // unlit draw
+    }
+    // The set index and the mask of the lights that reach this draw.
+    let packed = u32(in.params.y + 0.5);
+    // Pointers, never `let` copies: a copied set puts its lights in private
+    // memory, which a dynamic index then reads back from scratch per pixel.
+    let lset = &light_sets.sets[packed & 7u];
+    let mask = packed >> 3u;
+    let n = normalize(in.normal);
+    let albedo = in.base.rgb * texel.rgb;
+    let v = normalize((*lset).eye.xyz - in.world);
+    // Wet: surfaces facing up darken and turn glossy.
+    let wet = (*lset).sun_color.w * smoothstep(0.55, 0.9, n.y);
+    var gloss = max(in.params.x, wet * 0.9);
+    var rgb = c.rgb * (1.0 - 0.4 * wet);
+    let alb = albedo * (1.0 - 0.4 * wet);
+    // The global light's highlight (its diffuse is in the vertex color).
+    let ls = -normalize((*lset).sun_dir.xyz);
+    if gloss > 0.0 && dot(n, ls) > 0.0 {
+        rgb += (*lset).sun_color.rgb * specular(n, ls, v, gloss) * (1.0 - (*lset).sun_dir.w);
+    }
+    let count = u32((*lset).eye.w + 0.5);
+    for (var i = 0u; i < count; i++) {
+        if (mask & (1u << i)) == 0u {
+            continue;
+        }
+        let li = &(*lset).lights[i];
+        let pr = (*li).pos_radius;
+        let to = pr.xyz - in.world;
+        let d2 = dot(to, to);
+        let r2 = pr.w * pr.w;
+        if d2 >= r2 || d2 <= 0.0 {
+            continue;
+        }
+        let k = 1.0 - d2 / r2;
+        var att = k * k;
+        let l = to * inverseSqrt(d2);
+        let cs = (*li).color_spot;
+        if cs.w > 0.5 {
+            let dc = (*li).dir_cos;
+            let t = clamp((dot(-l, dc.xyz) - dc.w) * (*li).cone.x, 0.0, 1.0);
+            att *= t * t * (3.0 - 2.0 * t);
+        }
+        let ndl = max(dot(n, l), 0.0);
+        rgb += alb * cs.rgb * att * ndl;
+        if gloss > 0.0 && ndl > 0.0 {
+            rgb += cs.rgb * att * specular(n, l, v, gloss);
+        }
+    }
+    return vec4<f32>(rgb, c.a);
+}
+
+@fragment
+fn fs_tri_lit(in: LitOut) -> @location(0) vec4<f32> {
+    // Sampled unconditionally: textureSample requires uniform control flow.
+    let texel = textureSample(t_sprite, s_sprite, in.uv);
+    let c = shade_lit(in, texel);
+    if globals.look == 1u {
+        return quantize_5551(c, vec2<u32>(in.clip.xy));
+    }
+    return c;
+}
+
+// ---------------------------------------------------------------------------
 // Blit pass: offscreen framebuffer -> window surface, nearest-neighbor.
 // Integer scaling and letterboxing are done with the render-pass viewport.
 

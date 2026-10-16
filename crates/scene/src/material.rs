@@ -73,6 +73,10 @@ pub struct MaterialDef {
     /// model's baked default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub texture: Option<String>,
+    /// Shininess 0..=255 for specular highlights (PC's per-pixel lighting
+    /// only; consoles ignore it).
+    #[serde(default, skip_serializing_if = "crate::is_zero_u8")]
+    pub gloss: u8,
 }
 
 impl Default for MaterialDef {
@@ -84,6 +88,7 @@ impl Default for MaterialDef {
             emissive: [0; 3],
             double_sided: false,
             texture: None,
+            gloss: 0,
         }
     }
 }
@@ -130,6 +135,7 @@ impl MaterialDef {
             double_sided: self.double_sided,
             anim: None,
             texture: self.texture.as_deref().map(trino_core::SpriteId::from_path),
+            gloss: self.gloss,
             ..ModelParams::DEFAULT
         }
     }
@@ -156,6 +162,21 @@ mod tests {
                 .unwrap_err()
                 .contains("update")
         );
+    }
+
+    #[test]
+    fn gloss_round_trips_and_defaults_to_matte() {
+        let m = MaterialDef {
+            gloss: 120,
+            ..MaterialDef::default()
+        };
+        let text = m.to_ron();
+        assert!(text.contains("gloss: 120"), "{text}");
+        assert_eq!(MaterialDef::from_ron(&text).unwrap(), m);
+        assert_eq!(m.params(None).gloss, 120);
+        // Matte materials don't write the field (files stay as they were).
+        assert!(!MaterialDef::default().to_ron().contains("gloss"));
+        assert_eq!(MaterialDef::default().params(None).gloss, 0);
     }
 
     #[test]

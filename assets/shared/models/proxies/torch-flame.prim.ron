@@ -1,0 +1,10 @@
+// Trino placeholder model ("fake object"). Edit and save: it hot-reloads.
+// A torch's flame (castle64's throne room), drawn unlit: a small cone.
+(
+    shape: Cone(radius: 0.13, height: 0.34),
+    color: (255, 150, 50, 255),
+    top_color: Some((255, 230, 120, 255)),
+    pivot: Bottom,
+    segments: 5,
+    smooth: false,
+)

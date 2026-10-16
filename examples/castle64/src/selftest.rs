@@ -9,8 +9,9 @@
 use trino_core::math3d::{cos, sin};
 use trino_core::{
     BakedScene, BillboardParams, BlobId, Camera3, Cells, Color, DEFAULT_LIGHT, Effect, Emitter,
-    EntityStore, FontId, Impostor, Material, ModelId, ModelParams, ParticleSystem, Platform, Rect,
-    Renderer, Shading, SpriteId, TextBuf, TextParams, Transform3, Vec2, Vec3,
+    EntityStore, FontId, Impostor, Light, LocalLight, Material, ModelId, ModelParams,
+    ParticleSystem, Platform, Rect, Renderer, Shading, SpriteId, TextBuf, TextParams, Transform3,
+    Vec2, Vec3,
 };
 
 /// The HUD font (also what the checks measure).
@@ -56,6 +57,10 @@ pub fn engine_checks(
     platform.log("TRINO_STEP:palette\n");
     if palette(renderer)? {
         platform.log("TRINO_STEP:palette probed 3 slots\n");
+    }
+    platform.log("TRINO_STEP:local lights\n");
+    if local_lights(renderer)? {
+        platform.log("TRINO_STEP:local lights probed\n");
     }
     platform.log("TRINO_STEP:impostor\n");
     if impostor(renderer, platform)? {
@@ -491,6 +496,85 @@ pub fn palette(renderer: &mut dyn Renderer) -> Result<bool, &'static str> {
                 });
             }
         }
+    }
+    Ok(true)
+}
+
+/// Local lights ([`trino_core::light`]): the white slot card lit only by
+/// a dim ambient, then with a red point light in front of its left column.
+/// The left column turns red, the right one (out of reach) stays gray, on
+/// every tier (per pixel on PC, per vertex on the consoles); the lit frame
+/// draws nothing on the N64's RSP (`RspReject::LocalLight`), and the next
+/// frame without lights is the unlit one again (cleared at
+/// `begin_frame`). `Ok(false)` where `read_pixel` is unsupported.
+pub fn local_lights(renderer: &mut dyn Renderer) -> Result<bool, &'static str> {
+    let caps = *renderer.caps();
+    let screen = Vec2::new(caps.screen_width as f32, caps.screen_height as f32);
+    let camera = Camera3 {
+        eye: Vec3::new(0.0, 0.0, -1.5),
+        target: Vec3::ZERO,
+        fov_y: 60.0 * core::f32::consts::PI / 180.0,
+    };
+    // Ambient only: the global light travels away from the viewer.
+    let dim = Light {
+        dir: Vec3::new(0.0, 0.0, -1.0),
+        ambient: 0.35,
+        ..DEFAULT_LIGHT
+    };
+    let lamp = LocalLight::point(Vec3::new(-0.4, 0.0, -0.25), Color::rgb(255, 0, 0), 0.6)
+        .with_intensity(3.0);
+    let view = camera.view();
+    let half = camera.fov_y * 0.5;
+    let focal = cos(half) / sin(half) * screen.y * 0.5;
+    let probe = |r: &mut dyn Renderer, x: f32| {
+        let v = view.transform_point(Vec3::new(x, 0.0, 0.0));
+        let px = screen.x * 0.5 + v.x * focal / v.z;
+        let py = screen.y * 0.5 - v.y * focal / v.z;
+        r.read_pixel(px as u32, py as u32)
+    };
+    let mut rsp_lit = 0;
+    let mut seen = [[Color::BLACK; 2]; 3];
+    for (pass, lights) in [&[][..], &[lamp][..], &[][..]].into_iter().enumerate() {
+        // Several identical frames: the 3DS LCD is double-buffered.
+        for _ in 0..3 {
+            renderer.begin_frame(Color::BLACK);
+            renderer.set_camera(&camera);
+            renderer.set_light(&dim);
+            renderer.set_local_lights(lights);
+            renderer.draw_model(
+                SLOTS_CARD,
+                &Transform3::default(),
+                Material::VertexLit,
+                &ModelParams::DEFAULT,
+            );
+            renderer.end_frame();
+        }
+        if pass == 1 {
+            rsp_lit = renderer.stats().tnl.rsp_draws;
+        }
+        for (k, x) in [-0.4f32, 0.4].into_iter().enumerate() {
+            let Some(c) = probe(renderer, x) else {
+                return Ok(false);
+            };
+            seen[pass][k] = c;
+        }
+    }
+    let gray = |c: Color| c.r.abs_diff(c.g) <= 24 && c.g.abs_diff(c.b) <= 24 && c.g > 40;
+    let [off, on, after] = seen;
+    if !(gray(off[0]) && gray(off[1])) {
+        return Err("local lights: the unlit card is not gray");
+    }
+    if !(on[0].r as i32 >= on[0].g as i32 + 40 && on[0].r as i32 >= off[0].r as i32 + 30) {
+        return Err("local lights: the lit column did not turn red");
+    }
+    if !gray(on[1]) {
+        return Err("local lights: a light reached past its radius");
+    }
+    if rsp_lit != 0 {
+        return Err("local lights: a lit draw stayed on the N64 RSP");
+    }
+    if after != off {
+        return Err("local lights: lights survived begin_frame");
     }
     Ok(true)
 }

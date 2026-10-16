@@ -13,7 +13,7 @@ cargo xtask watch n64          # rebuild ROM + relaunch ares on every save
 
 cargo xtask run 3ds            # build + open the game in Azahar
 cargo xtask test 3ds           # build test app + assert TRINO_TEST_PASS + golden frame (300s timeout)
-cargo xtask test 3ds --bless   # same, rewriting tests/golden/3ds/castle64_hub.png + castle64_hub_bottom.png
+cargo xtask test 3ds --bless   # same, rewriting tests/golden/3ds/castle64_hub.png + castle64_hub_bottom.png + showcase_bottom.png
 cargo xtask build 3ds --selftest && cargo xtask test 3ds --no-build   # build, boot later
 cargo xtask watch 3ds          # rebuild .3dsx + relaunch Azahar on every save
 ```
@@ -60,6 +60,13 @@ detects it and runs `run_self_test` (`apps/<console>/src/…`):
 6. N64: the perf scenes (`TRINO_PERF_SCENE:` / `TRINO_PERF_MODEL:` lines, gated —
    the `n64-performance` skill). 3DS: the golden frames (castle64 hub perf scene:
    the top screen, then the same frame's touch screen, `castle64_hub_bottom.png`).
+7. 3DS: the `showcase panel` step (`showcase::panel::check_panel`, the same code
+   `xtask/tests/showcase_panel.rs` runs on the PC's 3DS profile): the showcase's touch
+   panel read back (button fills by state 2 px inside every corner, background 2 px
+   outside every edge, no panel on the top screen), a top-screen click ignored, two
+   FOG taps through `update`. Its last frame is the third golden,
+   `showcase_bottom.png`. It runs last so its toggles cannot leak renderer state
+   (the texture filter persists) into castle64's goldens.
 
 The `dual screen` step probes both 3DS screens through `read_screen_pixel(Screen, ..)`
 (`trino_debug_pixel(x, y, bottom)` in the shim), drawing the probed frame three

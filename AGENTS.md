@@ -419,7 +419,14 @@ RDP).
   `present_preview`/`read_second_screen` capture them. The 3DS host dumps the touch
   screen as the next golden (`dump_framebuffer_bottom`). castle64 shows it: a map,
   counters with a 3D star, and touch buttons on the bottom screen (the
-  `dual screen` self-test step, `castle64_hub_bottom.png`).
+  `dual screen` self-test step, `castle64_hub_bottom.png`). The showcase's bottom
+  screen (`examples/showcase/src/panel.rs`, GitHub #20) is a touch panel: live
+  metrics (frame time from `dt`, `Renderer::stats` with the `tnl` counters) and
+  buttons for the look (camera preset, scene/dusk light, fog, `set_texture_filter`,
+  the animation clock), each also on a pad button (X, Y, B, Select, Start), so they
+  work on one screen too. `showcase::panel::check_panel` reads it back on the PC's 3DS
+  profile (`xtask/tests/showcase_panel.rs`, with mutations that must fail) and in
+  Azahar (the `showcase panel` step, golden `showcase_bottom.png`).
 
 PC keyboard mapping: A/B = Z/X, X/Y = C/V, L/R = Q/E, Start = Enter,
 Select = Right Shift, D-pad = arrows, stick = WASD; L2/R2/L3/R3 have no default key
@@ -580,8 +587,9 @@ cargo test --workspace
 - Emulator golden: `tests/golden/n64/showcase.png` is compared pixel-exactly
   by `test n64`. A renderer change on the N64 path re-blesses it
   (`--bless`), and the PNG diff gets reviewed like any golden.
-- 3DS goldens: `tests/golden/3ds/castle64_hub.png` (top) and
-  `castle64_hub_bottom.png` (the same frame's touch screen), compared within a
+- 3DS goldens: `tests/golden/3ds/castle64_hub.png` (top),
+  `castle64_hub_bottom.png` (the same frame's touch screen) and
+  `showcase_bottom.png` (the showcase's touch panel), compared within a
   tolerance by `test 3ds` (Azahar's pixels depend on the host OpenGL);
   `n3ds_parity` holds the PC's N3ds look to it.
 - Performance is gated: `xtask/tests/perf_budget.rs` pins castle64's T&L

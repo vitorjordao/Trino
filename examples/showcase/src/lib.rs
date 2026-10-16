@@ -123,8 +123,12 @@ pub struct ShowcaseGame {
     /// The look the panel (or the pad) switched: camera, light, fog,
     /// texture filter, animation clock.
     pub look: panel::Look,
-    /// Smoothed frame time (seconds, from `update`'s `dt`).
+    /// Smoothed frame time: the game time (`update`'s `dt`) between two
+    /// `render`s, so a host that updates several times per drawn frame (a
+    /// self-test drawing 1 of 32) reads as the frames it really shows.
     frame_dt: f32,
+    /// Game time since the last `render`.
+    dt_since_render: f32,
     /// The scene's own camera (the `SCENE` camera preset) and its yaw.
     scene_camera: Camera3,
     scene_yaw: f32,
@@ -196,6 +200,7 @@ impl ShowcaseGame {
             picked: (0, Vec3::ZERO),
             look: panel::Look::DEFAULT,
             frame_dt: 1.0 / 60.0,
+            dt_since_render: 0.0,
             scene_camera: camera,
             scene_yaw: atan2(d.x, -d.z),
         };
@@ -237,7 +242,7 @@ impl ShowcaseGame {
         }
     }
 
-    /// Smoothed frame time in seconds (the panel's readout).
+    /// Smoothed time between drawn frames in seconds (the panel's readout).
     pub fn frame_dt(&self) -> f32 {
         self.frame_dt
     }
@@ -316,7 +321,7 @@ impl Game for ShowcaseGame {
                 self.look.apply(t);
             }
         }
-        self.frame_dt += (dt - self.frame_dt) * 0.125;
+        self.dt_since_render += dt;
         if !self.look.paused {
             self.time += dt;
         }
@@ -391,6 +396,10 @@ impl Game for ShowcaseGame {
     }
 
     fn render(&mut self, r: &mut dyn Renderer) {
+        if self.dt_since_render > 0.0 {
+            self.frame_dt += (self.dt_since_render - self.frame_dt) * 0.125;
+            self.dt_since_render = 0.0;
+        }
         let camera = self.camera();
         r.begin_frame(self.clear);
         r.set_camera(&camera);
@@ -944,6 +953,29 @@ mod tests {
         g.render(&mut r);
         assert_ne!(r.lights[2].color, scene::LIGHT.color, "dusk");
         assert!(r.lights[2].ambient < scene::LIGHT.ambient);
+    }
+
+    /// The panel's frame rate counts drawn frames: a host that updates 32
+    /// times per `render` (a self-test) reads ~2 fps, not the 60 of `dt`;
+    /// one update per render reads 60.
+    #[test]
+    fn the_frame_rate_counts_drawn_frames() {
+        let mut r = PerScreen::default();
+        let idle = InputState::default();
+        let mut g = ShowcaseGame::new();
+        for _ in 0..40 {
+            g.update(&idle, &mut NullAudio, 1.0 / 60.0);
+            g.render(&mut r);
+        }
+        assert!((g.frame_dt() - 1.0 / 60.0).abs() < 1e-4, "{}", g.frame_dt());
+        for _ in 0..60 {
+            for _ in 0..32 {
+                g.update(&idle, &mut NullAudio, 1.0 / 60.0);
+            }
+            g.render(&mut r);
+        }
+        let fps = 1.0 / g.frame_dt();
+        assert!((1.8..2.0).contains(&fps), "{fps} fps");
     }
 
     /// The readout keeps a fixed width whatever the numbers (the panel's

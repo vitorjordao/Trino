@@ -80,5 +80,7 @@ pub fn quick_setup(
     )
 }
 
-// Hot-reload exports (trino_game_update / trino_game_render / version).
+// Hot-reload exports (trino_game_update / trino_game_render / version),
+// behind the `hot-reload` feature (see Cargo.toml).
+#[cfg(feature = "hot-reload")]
 trino_game_api::export_game!(SolidElevenGame);

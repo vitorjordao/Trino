@@ -10,6 +10,15 @@ repository.workspace = true
 [lib]
 crate-type = ["rlib", "dylib"]
 
+[features]
+default = []
+# Hot-reload exports (`trino_game_api::export_game!`). Off by default: apps/pc
+# links castle64, showcase *and* this crate statically, and two games
+# exporting the same `#[no_mangle]` symbols cannot share one binary. Enable it
+# when this crate is the one `cargo xtask watch pc --game solid-eleven`
+# hot-swaps.
+hot-reload = []
+
 # Game crates may depend only on trino-core / trino-game-api
 # (enforced by xtask/tests/dep_graph.rs).
 [dependencies]

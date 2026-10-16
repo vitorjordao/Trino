@@ -35,7 +35,7 @@
 // Which winding the GPU T&L path culls as back faces (checked by the
 // `gpu tnl` self-test step against the CPU path).
 #ifndef TRINO_TNL_CULL
-#define TRINO_TNL_CULL GPU_CULL_BACK_CCW
+#define TRINO_TNL_CULL GPU_CULL_FRONT_CCW
 #endif
 
 // ---------------------------------------------------------------------------

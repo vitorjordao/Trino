@@ -321,6 +321,22 @@ pub fn gen_all(repo_root: &Path, write_png: crate::castle64_assets::PngWriter) {
     }
     let path = repo_root.join("assets/shared/sprites/selftest_quadrants.png");
     write_png(&path, 16, 16, &tex);
+
+    // Detail layer (selftest::texture_detail): white left half, gray right
+    // half — multiplied over the quadrants it halves the right column.
+    let mut detail = Vec::with_capacity(8 * 8 * 4);
+    for _y in 0..8 {
+        for x in 0..8 {
+            let v = if x < 4 { 255 } else { 128 };
+            detail.extend_from_slice(&[v, v, v, 255]);
+        }
+    }
+    write_png(
+        &repo_root.join("assets/shared/sprites/selftest_detail.png"),
+        8,
+        8,
+        &detail,
+    );
 }
 
 #[cfg(test)]

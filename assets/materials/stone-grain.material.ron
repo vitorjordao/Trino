@@ -1,0 +1,10 @@
+(
+    version: 1,
+    tint: (235, 235, 245, 255),
+    shading: Flat,
+    filter: Bilinear,
+    detail: Some((
+        texture: "sprites/tex_grain",
+        scale_log2: 2,
+    )),
+)

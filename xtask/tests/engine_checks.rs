@@ -6,8 +6,9 @@ use std::path::PathBuf;
 
 use trino_platform_pc::{PcPlatform, PcRenderer, SimProfile};
 
-#[test]
-fn engine_checks_pass_on_pc() {
+/// A strict PC renderer with every baked asset, and a platform serving the
+/// blobs and a save file. `None` (skip) without a GPU.
+fn pc_target(profile: SimProfile, save_dir: &std::path::Path) -> Option<(PcRenderer, PcPlatform)> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
     let baked = tempfile::tempdir().unwrap();
     trino_asset_pipeline::bake_all(
@@ -17,18 +18,17 @@ fn engine_checks_pass_on_pc() {
     )
     .unwrap_or_else(|e| panic!("{e}"));
     let assets = trino_asset_pipeline::load_dir(baked.path(), None).unwrap();
-    let mut renderer = match pollster::block_on(PcRenderer::new_headless(SimProfile::N64)) {
+    let mut renderer = match pollster::block_on(PcRenderer::new_headless(profile)) {
         Ok(r) => r,
         Err(e) => {
             assert!(std::env::var("TRINO_REQUIRE_GPU").is_err(), "{e}");
             eprintln!("skipping: {e}");
-            return;
+            return None;
         }
     };
     renderer.set_strict(true);
-    let save_dir = tempfile::tempdir().unwrap();
-    let mut platform = PcPlatform::new(&SimProfile::N64.caps())
-        .with_save_file(save_dir.path().join("selftest.sav"));
+    let mut platform =
+        PcPlatform::new(&profile.caps()).with_save_file(save_dir.join("selftest.sav"));
     for s in assets.sprites {
         renderer.upload_sprite(trino_core::SpriteId(s.id), s.width, s.height, &s.rgba);
     }
@@ -41,7 +41,38 @@ fn engine_checks_pass_on_pc() {
     for b in assets.blobs {
         platform.insert_blob(trino_core::BlobId(b.id), b.bytes);
     }
+    Some((renderer, platform))
+}
+
+/// Every check on the N64 profile (one screen: `dual_screen` collapses).
+#[test]
+fn engine_checks_pass_on_pc() {
+    let save_dir = tempfile::tempdir().unwrap();
+    let Some((mut renderer, mut platform)) = pc_target(SimProfile::N64, save_dir.path()) else {
+        return;
+    };
     castle64::selftest::engine_checks(&mut renderer, &mut platform).unwrap();
+    assert_eq!(
+        castle64::selftest::dual_screen(&mut renderer),
+        Ok(false),
+        "single screen"
+    );
+}
+
+/// Every check on the 3DS profile, whose simulated second screen the
+/// `dual_screen` step probes (3D and 2D on both screens, read back).
+#[test]
+fn engine_checks_pass_on_the_pc_3ds_profile() {
+    let save_dir = tempfile::tempdir().unwrap();
+    let Some((mut renderer, mut platform)) = pc_target(SimProfile::N3ds, save_dir.path()) else {
+        return;
+    };
+    castle64::selftest::engine_checks(&mut renderer, &mut platform).unwrap();
+    assert_eq!(
+        castle64::selftest::dual_screen(&mut renderer),
+        Ok(true),
+        "both screens probed"
+    );
 }
 
 /// `[scenes.showcase]` baked by the PC pipeline, served by `PcPlatform`,

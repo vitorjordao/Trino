@@ -292,6 +292,70 @@ pub struct ModelParams {
     /// `None`, or a mesh without slots, draws the baked colors. See
     /// [`Palette`].
     pub palette: Option<Palette>,
+    /// Shininess, 0 (matte) to 255 (mirror-like): the strength and
+    /// tightness of specular highlights from the global light and local
+    /// lights. Specular exists only on the per-pixel tier
+    /// ([`crate::LightTier::PerPixel`], PC); per-vertex targets ignore it.
+    pub gloss: u8,
+    /// How the texture is sampled (textured meshes only).
+    pub filter: TexFilter,
+    /// A detail texture multiplied over the texture (textured meshes only;
+    /// see [`DetailTexture`] for its N64 budget).
+    pub detail: Option<DetailTexture>,
+}
+
+/// How a 3D draw's texture is sampled ([`ModelParams::filter`]).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+pub enum TexFilter {
+    /// The target's default (see [`Renderer::set_texture_filter`]): the
+    /// RDP's 3-point bilinear on the N64, bilinear on the 3DS, nearest on
+    /// the PC's native profile.
+    #[default]
+    Default,
+    /// Nearest texel: crisp pixel art (RDP `FILTER_POINT`, `GPU_NEAREST`).
+    Point,
+    /// Smooth: the RDP's 3-point bilinear on the N64 (and its PC look),
+    /// bilinear elsewhere.
+    Bilinear,
+}
+
+/// A second texture multiplied over a draw's texture ([`ModelParams::
+/// detail`]): fine grain that hides the magnification of a small texture.
+/// It tiles `2^scale_log2` times per repeat of the base texture, over the
+/// same UVs (the N64's detail tile: `TILE1` shifted, 2-cycle combiner).
+///
+/// Budget on the N64: base and detail share TMEM's 4 KB, so the detail
+/// should be a small intensity texture (`I4`, e.g. 32×32 = 512 bytes) and
+/// the base a non-palette one (a `CI4`/`CI8` palette takes TMEM's upper
+/// half). A pair that doesn't fit draws without the detail there; the PC's
+/// strict mode panics on it.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct DetailTexture {
+    pub sprite: SpriteId,
+    /// Detail repeats per base repeat, as a power of two (0..=4).
+    pub scale_log2: u8,
+}
+
+impl DetailTexture {
+    /// Largest [`DetailTexture::scale_log2`] (the RDP tile shift).
+    pub const MAX_SCALE_LOG2: u8 = 4;
+
+    /// `sprite` repeating `2^scale_log2` times per base repeat (clamped).
+    pub const fn new(sprite: SpriteId, scale_log2: u8) -> Self {
+        DetailTexture {
+            sprite,
+            scale_log2: if scale_log2 > Self::MAX_SCALE_LOG2 {
+                Self::MAX_SCALE_LOG2
+            } else {
+                scale_log2
+            },
+        }
+    }
+
+    /// UV multiplier of the detail layer.
+    pub fn scale(&self) -> f32 {
+        (1u32 << self.scale_log2.min(Self::MAX_SCALE_LOG2)) as f32
+    }
 }
 
 /// Four per-draw colors for the color slots 1..=4 of a mesh
@@ -312,6 +376,9 @@ impl ModelParams {
         anim: None,
         texture: None,
         palette: None,
+        gloss: 0,
+        filter: TexFilter::Default,
+        detail: None,
     };
 
     /// Default surface with a tint — the common case in game code.
@@ -358,9 +425,44 @@ impl Transform3 {
     }
 }
 
+/// One of a target's screens. [`Top`](Screen::Top) is the main screen on
+/// every target: the only one on PC native and the N64, the 3DS's top
+/// screen, and the picture games are created with. [`Bottom`](Screen::Bottom)
+/// is the second screen: the 3DS touch screen (320×240), simulated by the
+/// PC's 3DS profile, absent on single-screen targets
+/// ([`Renderer::screen_size`] is `None` there).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+#[repr(u8)]
+pub enum Screen {
+    #[default]
+    Top = 0,
+    Bottom = 1,
+}
+
+impl Screen {
+    /// The low-level index ([`Renderer::set_screen`],
+    /// [`InputState::pointer_screen`](crate::InputState::pointer_screen)).
+    #[inline]
+    pub const fn index(self) -> u8 {
+        self as u8
+    }
+
+    /// The screen with that index, if there is such a screen.
+    #[inline]
+    pub const fn from_index(index: u8) -> Option<Screen> {
+        match index {
+            0 => Some(Screen::Top),
+            1 => Some(Screen::Bottom),
+            _ => None,
+        }
+    }
+}
+
 /// What every platform backend implements.
 ///
 /// Call order per frame: `begin_frame` → any number of draws → `end_frame`.
+/// With two screens: the [`Top`](Screen::Top) screen's draws, then
+/// [`on_screen(Screen::Bottom)`](Renderer::on_screen) and the bottom's.
 pub trait Renderer {
     /// The hardware budget of this backend (or of the simulated console when
     /// the PC backend runs a console profile).
@@ -380,6 +482,25 @@ pub trait Renderer {
     /// subsequent `draw_model` calls. Persists across frames until changed;
     /// starts as [`crate::render3d::DEFAULT_LIGHT`].
     fn set_light(&mut self, _light: &crate::render3d::Light) {}
+
+    /// Set the point and spot lights for the next 3D draws (see
+    /// [`crate::light`]): the first [`Caps::max_local_lights`] are used,
+    /// per pixel or per vertex as [`Caps::light_tier`] says. **Cleared at
+    /// `begin_frame`**: set them every frame (they usually move), before
+    /// the draws they light. Draws made before the call keep the lights
+    /// they had.
+    fn set_local_lights(&mut self, _lights: &[crate::light::LocalLight]) {}
+
+    /// How wet the world looks, 0 (dry) to 1 (soaked): on the per-pixel
+    /// tier (PC), surfaces facing up darken and turn glossy, mirroring the
+    /// lights in highlights. Per-vertex targets ignore it. Cleared at
+    /// `begin_frame`, like the local lights.
+    fn set_wetness(&mut self, _wetness: f32) {}
+
+    /// What [`TexFilter::Default`] means for the next 3D draws (persists,
+    /// like `set_light`): toggle the whole game between crisp and smooth
+    /// textures. `TexFilter::Default` restores the target's own default.
+    fn set_texture_filter(&mut self, _filter: TexFilter) {}
 
     /// Draw a 3D model (vertex-lit, engine-side T&L — see `render3d`).
     ///
@@ -453,16 +574,61 @@ pub trait Renderer {
     }
 
     /// The second screen's size (3DS: the 320×240 touch screen; the PC's
-    /// 3DS profile simulates it), or `None` with one screen.
+    /// 3DS profile simulates it), or `None` with one screen. The same as
+    /// [`screen_size(Screen::Bottom)`](Self::screen_size).
     fn second_screen(&self) -> Option<Vec2> {
         None
     }
 
-    /// Where the next 2D draws go: `0` = the main screen (the 3D world's),
-    /// `1` = the [`second_screen`](Self::second_screen) (2D only:
-    /// `fill_rect`, sprites, text). Starts at `0` each frame. A no-op on
-    /// single-screen targets.
+    /// The low-level form of [`on_screen`](Self::on_screen): `0` = the
+    /// main screen, `1` = the [`second_screen`](Self::second_screen).
+    /// Every draw (2D and 3D) goes to the current screen, projected and
+    /// clipped to it. Starts at `0` each frame; the main screen comes
+    /// first, then the second, once per frame — switching back to `0`
+    /// after `1` is ignored on every backend. A no-op on single-screen
+    /// targets (draws stay on the main screen: check
+    /// [`on_screen`](Self::on_screen)'s result).
+    ///
+    /// A two-screen backend overrides `set_screen`, [`screen`](Self::screen)
+    /// and [`second_screen`](Self::second_screen) together: the provided
+    /// `on_screen` reads `screen()` to tell whether the switch happened.
     fn set_screen(&mut self, _screen: u8) {}
+
+    /// Where draws go now (see [`set_screen`](Self::set_screen)). The
+    /// default is [`Screen::Top`], right for single-screen targets only: a
+    /// backend that overrides `set_screen` must override this too, or
+    /// `on_screen(Screen::Bottom)` reports `false` while its draws go to the
+    /// bottom.
+    fn screen(&self) -> Screen {
+        Screen::Top
+    }
+
+    /// Send the next draws (2D and 3D) to `screen`; `true` when they now go
+    /// there. `false` means skip them: `screen` does not exist on this
+    /// target (single-screen targets collapse to the main screen), or it
+    /// is [`Screen::Top`] after the frame already moved to the bottom.
+    /// The camera persists across the switch; a 3D draw on the bottom
+    /// projects to the bottom's size, so set a camera meant for it.
+    fn on_screen(&mut self, screen: Screen) -> bool {
+        self.set_screen(screen.index());
+        self.screen() == screen
+    }
+
+    /// `screen`'s size in pixels, or `None` if this target lacks it. The
+    /// top is the picture the game renders at (the default reads it from
+    /// [`caps`](Self::caps); backends with a resizable picture override).
+    fn screen_size(&self, screen: Screen) -> Option<Vec2> {
+        match screen {
+            Screen::Top => {
+                let caps = self.caps();
+                Some(Vec2::new(
+                    caps.screen_width as f32,
+                    caps.screen_height as f32,
+                ))
+            }
+            Screen::Bottom => self.second_screen(),
+        }
+    }
 
     /// **Test hook** (slow, never per frame): color of the last finished
     /// frame at internal pixel `(x, y)`, or `None` if this backend cannot
@@ -471,5 +637,15 @@ pub trait Renderer {
     /// 3DS draw the probed frame a few times: the LCD is double-buffered).
     fn read_pixel(&mut self, _x: u32, _y: u32) -> Option<Color> {
         None
+    }
+
+    /// **Test hook**, like [`read_pixel`](Self::read_pixel) (which reads
+    /// the top screen) for either screen. `None` where the screen is
+    /// missing or cannot be read back.
+    fn read_screen_pixel(&mut self, screen: Screen, x: u32, y: u32) -> Option<Color> {
+        match screen {
+            Screen::Top => self.read_pixel(x, y),
+            Screen::Bottom => None,
+        }
     }
 }

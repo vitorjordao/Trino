@@ -11,8 +11,8 @@ use trino_core::save::{self, HEADER};
 use trino_core::text::{self, BitmapFont, Glyph};
 use trino_core::{
     Audio, BillboardParams, BlobId, Caps, Color, FontId, FrameStats, Mat34, Material, ModelId,
-    ModelParams, MusicId, Platform, Rect, Renderer, SaveError, SoundId, SoundParams, SpriteId,
-    SpriteParams, TextParams, Transform3, Vec2, Vec3, VoiceId,
+    ModelParams, MusicId, Platform, Rect, Renderer, SaveError, Screen, SoundId, SoundParams,
+    SpriteId, SpriteParams, TextParams, Transform3, Vec2, Vec3, VoiceId,
 };
 
 pub const SCREEN: Vec2 = Vec2::new(320.0, 240.0);
@@ -263,8 +263,15 @@ impl Renderer for Recorder {
     }
 
     fn set_screen(&mut self, screen: u8) {
-        self.screen_index = screen;
+        // The backends' order rule: the top screen, then the bottom.
+        if screen == 1 && self.screen_index == 0 {
+            self.screen_index = screen;
+        }
         self.calls.push(Call::Screen(screen));
+    }
+
+    fn screen(&self) -> Screen {
+        Screen::from_index(self.screen_index).unwrap_or_default()
     }
 }
 
@@ -895,6 +902,8 @@ pub fn tscn(env: &TscnEnv, nodes: &[TscnNode]) -> &'static [u8] {
         let (kind, pa, pb, half) = n.vis.unwrap_or((0, 0, 0, [0.0; 3]));
         b.extend_from_slice(&[n.cell, kind, pa, pb]);
         f32s(&mut b, &half);
+        // Surface (v3): matte, the target's filter, no detail layer.
+        b.extend_from_slice(&[0; 8]);
         assert_eq!(b.len() - start, TSCN_NODE_BYTES);
     }
     b.extend_from_slice(&data);

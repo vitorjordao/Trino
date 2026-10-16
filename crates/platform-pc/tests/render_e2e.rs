@@ -11,8 +11,8 @@ mod common;
 use common::*;
 use trino_core::render3d::{Camera3, Fog, Light};
 use trino_core::{
-    BillboardParams, Color, Mat34, Material, ModelParams, Rect, Renderer, Shading, SpriteParams,
-    TextAlign, TextParams, Transform3, Vec2, Vec3,
+    BillboardParams, Color, Mat34, Material, ModelParams, Rect, Renderer, Screen, Shading,
+    SpriteParams, TextAlign, TextParams, Transform3, Vec2, Vec3,
 };
 use trino_platform_pc::{PcPlatform, PcRenderer, SimProfile};
 
@@ -627,10 +627,51 @@ fn n3ds_second_screen_renders_reads_back_and_presents_stacked() {
         "cleared second screen",
     );
 
+    // The typed API: top first, then the bottom, no way back; the
+    // read-back hook reads either screen.
+    r.begin_frame(Color::rgb(0, 0, 90));
+    assert_eq!(r.screen(), Screen::Top);
+    assert_eq!(r.screen_size(Screen::Top), Some(Vec2::new(400.0, 240.0)));
+    assert_eq!(r.screen_size(Screen::Bottom), Some(Vec2::new(320.0, 240.0)));
+    assert!(r.on_screen(Screen::Top));
+    r.fill_rect(Rect::new(0.0, 0.0, 400.0, 20.0), Color::rgb(250, 250, 0));
+    assert!(r.on_screen(Screen::Bottom));
+    r.fill_rect(Rect::new(0.0, 0.0, 320.0, 20.0), Color::rgb(0, 250, 250));
+    assert!(!r.on_screen(Screen::Top), "the frame already left the top");
+    assert_eq!(r.screen(), Screen::Bottom);
+    r.fill_rect(Rect::new(0.0, 220.0, 320.0, 20.0), Color::rgb(0, 250, 250));
+    r.end_frame();
+    let at = |r: &mut PcRenderer, s: Screen, x: u32, y: u32| {
+        let c = r.read_screen_pixel(s, x, y).unwrap();
+        [c.r, c.g, c.b, c.a]
+    };
+    assert_near(at(&mut r, Screen::Top, 5, 5), [250, 250, 0], 8, "top strip");
+    assert_near(
+        at(&mut r, Screen::Top, 5, 230),
+        [0, 0, 90],
+        4,
+        "refused switch",
+    );
+    assert_near(at(&mut r, Screen::Bottom, 5, 5), [0, 250, 250], 8, "bottom");
+    assert_near(
+        at(&mut r, Screen::Bottom, 5, 230),
+        [0, 250, 250],
+        8,
+        "stays",
+    );
+    assert_eq!(r.read_screen_pixel(Screen::Bottom, 320, 0), None);
+    assert_eq!(r.stats().sprites, 3, "both screens counted");
+
     // Single-screen profiles have none.
-    if let Some(n64) = headless(SimProfile::N64) {
+    if let Some(mut n64) = headless(SimProfile::N64) {
         assert_eq!(n64.second_screen(), None);
         assert!(n64.read_second_screen().is_empty());
+        assert_eq!(n64.screen_size(Screen::Bottom), None);
+        n64.begin_frame(Color::BLACK);
+        assert!(!n64.on_screen(Screen::Bottom));
+        assert_eq!(n64.screen(), Screen::Top);
+        n64.end_frame();
+        assert_eq!(n64.read_screen_pixel(Screen::Bottom, 0, 0), None);
     }
 }
 

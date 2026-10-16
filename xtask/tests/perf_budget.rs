@@ -20,7 +20,6 @@ use std::path::PathBuf;
 
 use trino_core::render3d::{
     Camera3, DEFAULT_LIGHT, Light, Mesh, TnlContext, TnlStats, rsp_eligible, rsp_mesh_supported,
-    tessellate,
 };
 use trino_core::*;
 
@@ -53,6 +52,8 @@ struct Counting {
     meshes: HashMap<u32, Vec<u8>>,
     camera: Camera3,
     light: Light,
+    /// Local lights, per vertex like the N64 (its cap).
+    locals: trino_core::LightList,
     caps: Caps,
     total: TnlStats,
     per_model: BTreeMap<u32, (u32, TnlStats)>,
@@ -62,7 +63,12 @@ impl Renderer for Counting {
     fn caps(&self) -> &Caps {
         &self.caps
     }
-    fn begin_frame(&mut self, _: Color) {}
+    fn begin_frame(&mut self, _: Color) {
+        self.locals = trino_core::LightList::EMPTY;
+    }
+    fn set_local_lights(&mut self, lights: &[trino_core::LocalLight]) {
+        self.locals.set(lights, self.caps.max_local_lights);
+    }
     fn draw_sprite(&mut self, _: SpriteId, _: Vec2, _: &SpriteParams) {}
     fn set_camera(&mut self, c: &Camera3) {
         self.camera = *c;
@@ -81,7 +87,8 @@ impl Renderer for Counting {
         // The N64 sends eligible draws to its RSP overlay (same rules,
         // trino_core::render3d::rsp_eligible): count those as RSP work, as
         // the ROM does.
-        let ctx = TnlContext::new(&self.camera, &self.light, SCREEN);
+        let ctx = TnlContext::new(&self.camera, &self.light, SCREEN)
+            .with_local_lights(self.locals.as_slice());
         let s = if rsp_mesh_supported(&mesh) && rsp_eligible(&ctx, &mesh, x, p).is_some() {
             TnlStats {
                 rsp_draws: 1,
@@ -89,7 +96,8 @@ impl Renderer for Counting {
                 ..TnlStats::default()
             }
         } else {
-            tessellate(&mesh, x, &self.camera, &self.light, p, SCREEN, &mut |_| {})
+            let mut scratch = trino_core::TnlScratch::new();
+            trino_core::tessellate_with(&ctx, &mut scratch, &mesh, x, p, &mut |_| {})
         };
         self.total.add(&s);
         let e = self.per_model.entry(m.0).or_default();
@@ -186,6 +194,7 @@ fn castle64_tnl_work_matches_the_baseline() {
             meshes: meshes.clone(),
             camera: Camera3::default(),
             light: DEFAULT_LIGHT,
+            locals: trino_core::LightList::EMPTY,
             caps: Caps::N64,
             total: TnlStats::default(),
             per_model: BTreeMap::new(),

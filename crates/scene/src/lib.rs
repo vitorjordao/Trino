@@ -40,7 +40,7 @@ pub mod prefab;
 pub mod resolve;
 
 pub use library::{Library, ModelBounds};
-pub use material::{MaterialDef, ShadingDef};
+pub use material::{DetailDef, FilterDef, MaterialDef, ShadingDef};
 pub use platform::{PlatformVariants, Target, Variant};
 pub use prefab::{Override, Prefab, PrefabInstance};
 pub use resolve::{DrawItem, LodDraw, LodItem, Resolved, resolve, resolve_for};
@@ -296,6 +296,10 @@ pub struct SpriteComponent {
     pub flip_y: bool,
     #[serde(default = "white")]
     pub tint: [u8; 4],
+}
+
+pub(crate) fn is_zero_u8(v: &u8) -> bool {
+    *v == 0
 }
 
 pub(crate) fn white() -> [u8; 4] {

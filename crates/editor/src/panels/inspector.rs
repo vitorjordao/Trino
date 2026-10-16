@@ -1054,6 +1054,15 @@ pub fn material_editor(ui: &mut egui::Ui, def: &mut MaterialDef, textures: &[Str
     theme::prop(ui, "Sides", |ui| {
         changed |= ui.checkbox(&mut def.double_sided, "Double-sided").changed();
     });
+    theme::prop(ui, "Gloss", |ui| {
+        changed |= ui
+            .add(egui::Slider::new(&mut def.gloss, 0..=255))
+            .on_hover_text(
+                "Specular highlights (0 = matte). PC per-pixel lighting only; \
+                 consoles ignore it.",
+            )
+            .changed();
+    });
     theme::prop(ui, "Texture", |ui| {
         let current = def.texture.clone().unwrap_or_else(|| "None".into());
         egui::ComboBox::from_id_salt("mat-texture")
@@ -1084,6 +1093,69 @@ pub fn material_editor(ui: &mut egui::Ui, def: &mut MaterialDef, textures: &[Str
                  sizes; on N64 one texture must fit 4 KB TMEM (32x32 RGBA16, 64x64 CI4).",
             );
     });
+    theme::prop(ui, "Filter", |ui| {
+        for f in trino_scene::FilterDef::ALL {
+            if ui
+                .selectable_label(def.filter == f, f.label())
+                .on_hover_text(match f {
+                    trino_scene::FilterDef::Default => {
+                        "The target's own: 3-point on N64, bilinear on 3DS, nearest on PC"
+                    }
+                    trino_scene::FilterDef::Point => "Nearest texel: crisp pixels",
+                    trino_scene::FilterDef::Bilinear => "Smooth (the RDP's 3-point on N64)",
+                })
+                .clicked()
+            {
+                def.filter = f;
+                changed = true;
+            }
+        }
+    });
+    theme::prop(ui, "Detail", |ui| {
+        let current = def
+            .detail
+            .as_ref()
+            .map(|d| d.texture.clone())
+            .unwrap_or_else(|| "None".into());
+        egui::ComboBox::from_id_salt("mat-detail")
+            .selected_text(current)
+            .width(ui.available_width() - 8.0)
+            .show_ui(ui, |ui| {
+                if ui.selectable_label(def.detail.is_none(), "None").clicked() {
+                    def.detail = None;
+                    changed = true;
+                }
+                for t in textures {
+                    let sel = def.detail.as_ref().is_some_and(|d| d.texture == *t);
+                    if ui.selectable_label(sel, t).clicked() && !sel {
+                        let scale_log2 = def.detail.as_ref().map_or(2, |d| d.scale_log2);
+                        def.detail = Some(trino_scene::DetailDef {
+                            texture: t.clone(),
+                            scale_log2,
+                        });
+                        changed = true;
+                    }
+                }
+            })
+            .response
+            .on_hover_text(
+                "A texture multiplied over the base one, tiling 2^scale times per base \
+                 repeat. N64: both share 4 KB of TMEM (a small I4 detail).",
+            );
+    });
+    if let Some(d) = &mut def.detail {
+        theme::prop(ui, "Detail scale", |ui| {
+            changed |= ui
+                .add(
+                    egui::Slider::new(
+                        &mut d.scale_log2,
+                        0..=trino_core::DetailTexture::MAX_SCALE_LOG2,
+                    )
+                    .custom_formatter(|v, _| format!("×{}", 1u32 << v as u32)),
+                )
+                .changed();
+        });
+    }
     changed
 }
 

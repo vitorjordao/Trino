@@ -352,18 +352,53 @@ RDP).
   scale (`sim::native_internal`), its aspect within 4:3..21:9 (bars beyond).
   `PcRenderer::present_preview` composes what a window shows, for tests.
 
-- **Two screens (2026-10-14):** `Renderer::second_screen`/`set_screen` (3DS touch
-  screen, 2D only; main screen first, then the second, once per frame),
-  `Platform::second_screen` (known at update time), `InputState::pointer_screen`
-  (3DS touches are bottom-screen pixels on screen 1). The PC's 3DS profile renders
-  and presents both screens stacked, maps the mouse to either, and
-  `present_preview`/`read_second_screen` capture them; the 3DS host dumps the touch
-  screen as the next golden (`dump_framebuffer_bottom`).
+- **Local lights (2026-10-15, ADR 0010):** `LocalLight` (point / spot, color, intensity,
+  radius with a `(1 - d²/r²)²` falloff), `Renderer::set_local_lights` and `set_wetness`
+  (both cleared at `begin_frame`), `ModelParams::gloss` (and `gloss` in material files).
+  Each platform evaluates them by its `Caps::light_tier` / `max_local_lights`: the PC
+  native profile per pixel (diffuse, Blinn-Phong highlights, wet floors; the lit
+  pipeline `fs_tri_lit`), the 3DS (4) and the N64 (2) per vertex in the core's T&L
+  (`render3d/lit.rs`, a separate copy of `tessellate_joints`). On the N64 a draw a light
+  reaches leaves the RSP (`RspReject::LocalLight`); `ground_pool` gives the floor decal
+  to draw instead. castle64's throne room has torches on every tier; `local lights`
+  self-test step on PC, ares and Azahar; goldens `tests/golden/pc/lights_*`.
+
+- **Texture filter and detail layer (2026-10-15, ADR 0011):** `ModelParams::filter`
+  (`TexFilter::{Default, Point, Bilinear}`) and `Renderer::set_texture_filter`;
+  `ModelParams::detail` (`DetailTexture`: a second texture multiplied over the first,
+  tiling 2^n per base repeat) — the N64's `TILE1` + 2-cycle combiner (base and detail
+  share TMEM: no palettes, a small I4 detail), the 3DS's TexEnv stage 1, a second
+  binding on PC. In materials (`filter`, `detail`), the editor's material inspector and
+  baked scenes (TSCN v3). The showcase's pillars use it (`materials/stone-grain`);
+  `texture filter and detail` self-test step; goldens `tests/golden/pc/texture_filter_*`.
+
+- **Two screens (2026-10-14, typed API 2026-10-15):** `trino_core::Screen`
+  (`Top` = the main screen everywhere, `Bottom` = the 3DS touch screen).
+  `Renderer::on_screen(Screen)` sends the next draws, **2D and 3D**, to a screen and
+  returns `false` when they don't go there: the screen is missing (PC native, N64:
+  skip the draws), or it is `Top` after the frame moved to the bottom. The order is
+  the top first, then the bottom, once per frame, on every backend. Each screen has
+  its own target, so draws are clipped to it, and its own projection: the T&L and the
+  3DS shim's citro3d matrix switch to 320×240, so set a camera for the bottom. The
+  camera is renderer state: a bottom-screen `set_camera` carries into the next
+  frame's top unless the game sets the top's camera again, so set it every frame on
+  each screen. A two-screen backend overrides `set_screen`, `screen()` and
+  `second_screen` together, because the provided `on_screen` reads `screen()`. Also
+  `screen()`, `screen_size(Screen)`, `read_screen_pixel(Screen, x, y)` (the
+  self-test read-back of either screen) and the low-level `second_screen`/`set_screen(u8)`.
+  `Platform::second_screen` is known at update time. Touch routing:
+  `InputState::pointer_on(Screen)` (a 3DS touch is on `Bottom`, in its own pixels),
+  so world picking asks for `Top` and never sees a touch. The PC's 3DS profile
+  renders and presents both screens stacked, maps the mouse to either, and
+  `present_preview`/`read_second_screen` capture them. The 3DS host dumps the touch
+  screen as the next golden (`dump_framebuffer_bottom`). castle64 shows it: a map,
+  counters with a 3D star, and touch buttons on the bottom screen (the
+  `dual screen` self-test step, `castle64_hub_bottom.png`).
 
 PC keyboard mapping: A/B = Z/X, X/Y = C/V, L/R = Q/E, Start = Enter,
 Select = Right Shift, D-pad = arrows, stick = WASD (see `crates/platform-pc/src/input.rs`).
 On top of it, `InputState::keys` carries PC keys (`trino_core::Key`: Esc, Enter,
-Space, Tab, Delete, F1–F8, 1–3, Page Up/Down, Home, R, W/A/S/D, +/−, Shift, Ctrl)
+Space, Tab, Delete, F1–F8, 1–3, Page Up/Down, Home, R, T, W/A/S/D, +/−, Shift, Ctrl)
 for PC shortcuts, and `InputState::pad` says a gamepad was used this frame.
 Both the keys and the pad buttons can be **rebound** from the game: `Platform::input_info`
 (gamepad support/connection, a pending rebind), `gamepad_name`, `binding_label`,
@@ -506,7 +541,8 @@ cargo test --workspace
 - Emulator golden: `tests/golden/n64/showcase.png` is compared pixel-exactly
   by `test n64`. A renderer change on the N64 path re-blesses it
   (`--bless`), and the PNG diff gets reviewed like any golden.
-- 3DS golden: `tests/golden/3ds/castle64_hub.png`, compared within a
+- 3DS goldens: `tests/golden/3ds/castle64_hub.png` (top) and
+  `castle64_hub_bottom.png` (the same frame's touch screen), compared within a
   tolerance by `test 3ds` (Azahar's pixels depend on the host OpenGL);
   `n3ds_parity` holds the PC's N3ds look to it.
 - Performance is gated: `xtask/tests/perf_budget.rs` pins castle64's T&L
@@ -592,6 +628,11 @@ cargo test --workspace
 - **Hidden faces still cost N64 CPU.** A face buried inside another part, or a back
   face, pays its transform. Build models from visible faces only (`blender-asset`).
   Don't union parts with a boolean: it cuts holes and adds triangles.
+- **In WGSL, never `let`-copy a uniform struct that holds an array you index
+  dynamically.** `let set = sets.sets[i]` puts the whole struct in private memory and
+  every `set.lights[j]` reads it back from scratch, per pixel. The PC lit pipeline did
+  that: an external project's 4K frame took 19.1 ms instead of 8.6 ms on a Renoir iGPU.
+  Take a pointer (`let set = &sets.sets[i];`, then `(*set).lights[j]`).
 - **Template manifests are `Cargo.toml.tmpl`.** A placeholder `Cargo.toml` anywhere in
   the repo breaks every git-dependency user, because cargo scans the whole repository.
 
@@ -628,12 +669,32 @@ cargo test --workspace
 - **`platforms = [...]` keeps big PC-only models out of console RAM.** A console loads
   every model at boot: animated rigs once made the N64 fail `display_init` (allocation
   failed).
+- **Never fold a new per-vertex feature into `tessellate_joints`.** Even never-taken
+  branches and zero-sized generics grew its static body past the N64's 16 KB I-cache
+  (15.6 → 18.0 KB) and made unlit draws 10–35 % slower in ares (local lights, 2026-10-15).
+  Lit draws take `render3d/lit.rs`. Check `mips64-elf-nm -S` of
+  `tessellate_joints::<false, false>` (0x3d04) after any T&L change.
+- **A colored or dimmed global light sends every N64 draw to the CPU**
+  (`RspReject::ColoredLight`): a "dim room" must stay white (lower ambient, a grazing
+  direction) or be a tint.
+- **A detail layer and a palette texture can't share the N64's TMEM:** a CI4/CI8 base puts
+  its TLUT in TMEM's upper half. The shim then draws without the detail, silently on
+  the console. Give a detailed base a 16-bit or intensity format (the showcase's bricks
+  went from CI8 to RGBA5551).
 - **The PC `gamepad` feature links libudev on Linux** (`libudev-dev`). Keep it opt-in
   for Linux builds.
 
 - **egui: a truncating `ComboBox` sizes its text to the space available, not to its
   `.width()`.** A long name pushed the button after it out of the Inspector. Wrap it in
   `theme::fixed_width` (the layout audit catches the next one).
+- **A probe at a quad's quadrant centers misses a shifted projection.** The first
+  `dual screen` probe used the `textured_3d` points, and a 400-wide projection on the
+  320-wide bottom screen (a 40 px shift) still landed every probe in the right
+  quadrant. Probe near the corners and just outside the edges, then check that a
+  deliberate mutation fails the step.
+- **Screen order is a contract, not a backend detail.** Before the typed API the
+  3DS let draws go back to the top after the bottom, while the PC sent them to the
+  bottom. Both now refuse the switch back, and `on_screen` reports it.
 - **`/tmp` may be a RAM disk (tmpfs).** A second `target/` there (a git worktree's build)
   filled RAM and killed rustc. Put extra worktrees and their targets on a real disk.
 

@@ -8,7 +8,7 @@ mod common;
 use trino_core::render3d::{Camera3, DEFAULT_LIGHT, Light};
 use trino_core::{
     BillboardParams, Caps, Color, FontId, FrameStats, Mat34, Material, ModelId, ModelParams, Rect,
-    Renderer, SpriteId, SpriteParams, TextParams, Transform3, Vec2, Vec3,
+    Renderer, Screen, SpriteId, SpriteParams, TextParams, Transform3, Vec2, Vec3,
 };
 
 /// The smallest possible backend: records what reaches it.
@@ -50,6 +50,8 @@ fn provided_renderer_methods_are_harmless_defaults() {
         ambient: 1.0,
         ..DEFAULT_LIGHT
     });
+    dyn_r.set_local_lights(&[trino_core::LocalLight::point(Vec3::ZERO, Color::WHITE, 2.0)]);
+    dyn_r.set_wetness(0.5);
     dyn_r.draw_billboard(SpriteId(1), Vec3::ZERO, &BillboardParams::DEFAULT);
     dyn_r.fill_rect(Rect::new(0.0, 0.0, 10.0, 10.0), Color::WHITE);
     dyn_r.draw_text(FontId(3), Vec2::ZERO, "hello", &TextParams::DEFAULT);
@@ -62,6 +64,50 @@ fn provided_renderer_methods_are_harmless_defaults() {
     // None of the defaults draws through the required methods.
     assert!(r.sprites.is_empty() && r.models.is_empty());
     assert_eq!(r.frames, 1);
+}
+
+/// The typed screen API over a single-screen backend: everything
+/// collapses onto the top screen, and asking for the bottom says no.
+#[test]
+fn screen_api_collapses_on_a_single_screen() {
+    let mut r = Minimal::default();
+    let dyn_r: &mut dyn Renderer = &mut r;
+    dyn_r.begin_frame(Color::BLACK);
+    assert_eq!(dyn_r.screen(), Screen::Top);
+    assert_eq!(
+        dyn_r.screen_size(Screen::Top),
+        Some(Vec2::new(400.0, 240.0)),
+        "the top is the caps' picture"
+    );
+    assert_eq!(dyn_r.screen_size(Screen::Bottom), None);
+    assert!(!dyn_r.on_screen(Screen::Bottom), "no bottom screen here");
+    assert_eq!(dyn_r.screen(), Screen::Top, "draws stay on the top");
+    assert!(dyn_r.on_screen(Screen::Top));
+    assert_eq!(dyn_r.read_screen_pixel(Screen::Top, 0, 0), None);
+    assert_eq!(dyn_r.read_screen_pixel(Screen::Bottom, 0, 0), None);
+    dyn_r.end_frame();
+}
+
+/// The provided `on_screen` over a two-screen backend: top first, then
+/// the bottom; going back to the top is refused (and reported).
+#[test]
+fn screen_api_goes_top_then_bottom() {
+    let mut r = common::Recorder::default();
+    let dyn_r: &mut dyn Renderer = &mut r;
+    dyn_r.begin_frame(Color::BLACK);
+    assert_eq!(
+        dyn_r.screen_size(Screen::Bottom),
+        Some(Vec2::new(320.0, 240.0))
+    );
+    assert!(dyn_r.on_screen(Screen::Top));
+    assert!(dyn_r.on_screen(Screen::Bottom));
+    assert_eq!(dyn_r.screen(), Screen::Bottom);
+    assert!(!dyn_r.on_screen(Screen::Top), "no way back this frame");
+    assert_eq!(dyn_r.screen(), Screen::Bottom);
+    dyn_r.end_frame();
+    dyn_r.begin_frame(Color::BLACK);
+    assert_eq!(dyn_r.screen(), Screen::Top, "every frame starts on top");
+    dyn_r.end_frame();
 }
 
 #[test]

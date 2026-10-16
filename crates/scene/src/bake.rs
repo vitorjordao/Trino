@@ -101,6 +101,9 @@ pub fn to_tscn_for(scene: &Scene, lib: &Library, target: Target) -> (Vec<u8>, Ve
         if item.sound.is_some() {
             flags |= 16;
         }
+        if p.detail.is_some() {
+            flags |= 32;
+        }
         flags |= match p.shading {
             Shading::Gouraud => 0,
             Shading::Flat => 1,
@@ -162,6 +165,13 @@ pub fn to_tscn_for(scene: &Scene, lib: &Library, target: Target) -> (Vec<u8>, Ve
         };
         out.extend_from_slice(&[item.cell, kind, a, b]);
         f32s(&mut out, &[half.x, half.y, half.z]);
+        let filter = match p.filter {
+            trino_core::TexFilter::Default => 0u8,
+            trino_core::TexFilter::Point => 1,
+            trino_core::TexFilter::Bilinear => 2,
+        };
+        out.extend_from_slice(&[p.gloss, filter, p.detail.map_or(0, |d| d.scale_log2), 0]);
+        out.extend_from_slice(&p.detail.map_or(0, |d| d.sprite.0).to_le_bytes());
         debug_assert_eq!(out.len() - start, TSCN_NODE_BYTES);
     }
     out.extend_from_slice(&strings);

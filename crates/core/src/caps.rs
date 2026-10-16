@@ -33,6 +33,12 @@ pub struct Caps {
     /// Save-data budget in bytes (`Platform::save_capacity`). The N64 value
     /// is a 16 Kbit cartridge EEPROM; design saves to fit it.
     pub save_bytes: u32,
+    /// How local lights are evaluated ([`crate::light`], ADR 0010).
+    pub light_tier: crate::light::LightTier,
+    /// Most local lights a frame uses (the first ones given to
+    /// `set_local_lights`). On the N64 every draw a light reaches leaves
+    /// the RSP for the CPU T&L, so its cap is small.
+    pub max_local_lights: u8,
 }
 
 /// Why a piece of content does not fit in a target's [`Caps`].
@@ -60,6 +66,8 @@ impl Caps {
         max_3d_us_per_frame: 50_000,
         color_depth_bits: 16,
         save_bytes: 2048,
+        light_tier: crate::light::LightTier::PerVertex,
+        max_local_lights: 2,
     };
 
     /// Nintendo 3DS (top screen): 400x240, 24-bit.
@@ -73,6 +81,8 @@ impl Caps {
         max_3d_us_per_frame: u32::MAX,
         color_depth_bits: 24,
         save_bytes: 64 * 1024,
+        light_tier: crate::light::LightTier::PerVertex,
+        max_local_lights: 4,
     };
 
     /// PC: generous defaults; the internal resolution follows the active
@@ -87,6 +97,8 @@ impl Caps {
         max_3d_us_per_frame: u32::MAX,
         color_depth_bits: 32,
         save_bytes: 1024 * 1024,
+        light_tier: crate::light::LightTier::PerPixel,
+        max_local_lights: 8,
     };
 
     /// Validate a texture of `width`x`height` at `bytes_per_pixel` against

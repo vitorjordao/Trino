@@ -1,0 +1,12 @@
+// Trino placeholder model ("fake object"). Edit and save: it hot-reloads.
+// A flat white disc (1 m radius): castle64 draws the pool of light a torch
+// throws on the floor with it where lights are per vertex (consoles),
+// tinted by `trino_core::ground_pool`. A cone 2 cm tall: its side is the
+// disc (10 triangles a camera sees; the N64's RSP pays ~6 µs each).
+(
+    shape: Cone(radius: 1.0, height: 0.02),
+    color: (255, 255, 255, 255),
+    pivot: Bottom,
+    segments: 10,
+    smooth: false,
+)

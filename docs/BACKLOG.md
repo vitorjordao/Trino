@@ -81,8 +81,8 @@ shipping a 3D game first**, then by cost:
    `docker/n64/rsp-lost-wakeup.patch`. Chunks of 8 stay until single-draw streaming
    is re-measured with the patch.
 9. ~~**3DS bottom screen**~~ Done (2026-10-14): `Renderer::set_screen`, touch in the
-   bottom screen's own pixels (`pointer_screen`), simulated on PC. Next: 3D on the
-   bottom screen (a map), if a game asks.
+   bottom screen's own pixels (`pointer_screen`), simulated on PC. The typed API and
+   3D on the bottom screen followed (2026-10-15, see Done below).
 10. **N64 Mouse** (S). Fill `InputState::pointer` from the N64 mouse peripheral
     (libdragon's joypad styles).
 11. **Gamepads on Linux without libudev at build time** (S). An evdev backend, or a
@@ -101,6 +101,17 @@ shipping a 3D game first**, then by cost:
     self-test's frame times. Then take P0 1(a) (RDP time on real hardware) from those
     runs. A gdb path for the N64 (UNFLoader `-g` with libdragon's GDB support) is not
     wired yet.
+
+13. **Point lights on the N64 RSP** (M). A draw a local light reaches runs the CPU T&L
+    (ADR 0010 §4): the throne room's star went from 0.14 ms to 1.3 ms. Add one or two
+    point lights to `rsp_trino.S` (per-vertex distance, `vrsq`, falloff), behind the
+    oracle and a CPU-vs-RSP pixel check, then drop `RspReject::LocalLight` for them.
+14. **Lights in scenes and the editor** (S–M). A `light` component (point/spot, color,
+    radius) in scene files, codegen and TSCN, gizmos and a preview in the Scene view
+    (the showcase's lamp posts would light up).
+15. **PICA200 fragment lighting on the 3DS** (M). The 3DS evaluates local lights per
+    vertex today; its GPU could do it per fragment with normals passed through the
+    citro3d shim (the PC's lit pipeline needs the same data).
 
 ### P2 — when a game asks for it
 
@@ -125,6 +136,51 @@ shipping a 3D game first**, then by cost:
   time) and bless `tests/perf/` on purpose. Host benches stay as regression guards only.
 
 ---
+
+## Done — a typed two-screen API, 3D on the 3DS bottom screen, touch routing (2026-10-15, branch `n3ds/screen-api`, GitHub #17, ADR 0005 §6)
+
+| Item | Evidence |
+|---|---|
+| `trino_core::Screen` (`Top`/`Bottom`); `Renderer::on_screen` (bool: `false` = skip, on single-screen targets or back to the top after the bottom), `screen`, `screen_size`, `read_screen_pixel`; `InputState::pointer_on`; 3D on the bottom screen (per-screen T&L size on PC and 3DS, per-screen citro3d projection in the shim); the 3DS backend now refuses going back to the top like the PC; PC strict budgets and `FrameStats::tris` count both screens; castle64's bottom-screen panel (map, counters with a 3D star, touch buttons) | core tests (single-screen collapse, top-then-bottom order, `pointer_on`); the PC N3ds test (typed API, read-back of both screens, the N64 profile collapses); the `dual screen` self-test step on PC (N3ds and N64 profiles), in ares (collapses) and in Azahar (both screens probed, the bottom card through the 320×240 projection — a leaked 400-wide projection fails it, checked by mutation on PC); the new Azahar golden `castle64_hub_bottom.png` and `n3ds_parity` for the bottom screen; castle64 tests (touch buttons, top clicks ignored, the panel only with a second screen); the N64 golden pixel-identical |
+
+Deviations: `set_screen(u8)` stays as the low-level form (not deprecated: a
+deprecation would fail `-D warnings` builds of existing users). Draws after a refused
+`on_screen` are not discarded by the backends: they go to the current screen, and the
+result tells the caller to skip them. That keeps the N64 renderer untouched.
+`GAME_API_VERSION` is not bumped for the new `Renderer` methods, like the earlier
+trait additions: the host and the game dylib build against the same `trino-core`, and
+a core change already needs a restart.
+
+## Done — texture filtering per draw and a detail layer (2026-10-15, branch `textures/filter-detail`, ADR 0011)
+
+- `ModelParams::filter` + `set_texture_filter`, `ModelParams::detail` (`DetailTexture`),
+  materials, the editor's material inspector, TSCN v3 (the surface: gloss, filter,
+  detail).
+- N64: `trino_3d_texture_ex` (`FILTER_POINT`/`FILTER_BILINEAR`, `TILE1` detail with a
+  2-cycle combiner, dropped when the pair doesn't fit TMEM). 3DS: `C3D_TexSetFilter`,
+  texture unit 1 + TexEnv stage 1 (`texcoord1` from the vertex shader). PC: per-draw
+  samplers, a detail binding, the N64 look's point fetch.
+- Verified: `crates/platform-pc/tests/texture_filter.rs` (goldens per profile), the
+  `texture filter and detail` self-test step in ares and Azahar, the showcase's pillars.
+- Deviation: the PC native profile has no separate "high-resolution detail map pass"; it
+  uses the same multiply as the consoles, at its own resolution.
+
+## Done — local lights with a quality tier per platform (2026-10-15, branch `lights/local-lights`, ADR 0010)
+
+- `LocalLight` (point, spot), `Renderer::set_local_lights` / `set_wetness`,
+  `ModelParams::gloss` + material `gloss`, `Caps::light_tier` / `max_local_lights`,
+  `ground_pool`. PC native per pixel (specular, wetness), 3DS and N64 per vertex
+  (`render3d/lit.rs`), N64 lit draws off the RSP (`RspReject::LocalLight`).
+- Verified: `crates/core/tests/local_lights.rs`, `crates/platform-pc/tests/local_lights.rs`
+  (goldens per tier), the `local lights` self-test step in ares and Azahar, castle64's
+  throne torches (`xtask/tests/lights_shots.rs` evidence).
+- No lights: every golden and the T&L work counters are unchanged; the static T&L body
+  is the size it was (0x3d04) and the micro scenes match main.
+- Deviations from the issue: the N64 does not bake lights into vertex colors at stage
+  prep (a mesh copy per instance would not fit RAM); it lights per vertex on the CPU or
+  draws `ground_pool` decals. The 3DS uses the core's per-vertex lights, not PICA
+  fragment lighting (P1 #15). Wet surfaces are specular only (no reflections of the
+  scene).
 
 ## Done — each platform's frame budget in the editor and the CLI (2026-10-15, branch `editor/platform-budget`, ADR 0009 §5)
 

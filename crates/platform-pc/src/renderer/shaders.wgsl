@@ -290,7 +290,10 @@ fn shade_lit(in: LitOut, texel: vec4<f32>) -> vec4<f32> {
     if dot(in.normal, in.normal) < 1e-8 {
         return c; // unlit draw
     }
-    let lset = light_sets.sets[u32(in.params.y + 0.5)];
+    // The set index and the mask of the lights that reach this draw.
+    let packed = u32(in.params.y + 0.5);
+    let lset = light_sets.sets[packed & 7u];
+    let mask = packed >> 3u;
     let n = normalize(in.normal);
     let albedo = in.base.rgb * texel.rgb;
     let v = normalize(lset.eye.xyz - in.world);
@@ -306,6 +309,9 @@ fn shade_lit(in: LitOut, texel: vec4<f32>) -> vec4<f32> {
     }
     let count = u32(lset.eye.w + 0.5);
     for (var i = 0u; i < count; i++) {
+        if (mask & (1u << i)) == 0u {
+            continue;
+        }
         let li = lset.lights[i];
         let to = li.pos_radius.xyz - in.world;
         let d2 = dot(to, to);

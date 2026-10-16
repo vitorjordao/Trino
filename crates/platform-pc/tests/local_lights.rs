@@ -328,6 +328,24 @@ fn lights_add_their_color_where_they_reach_on_every_tier() {
 }
 
 #[test]
+fn a_light_that_reaches_no_draw_changes_no_pixel() {
+    // Per pixel only the draws a light reaches take the lit pipeline: one
+    // far from everything leaves the frame as it was (and costs nothing).
+    let _gpu = gpu();
+    let Some(mut r) = headless(SimProfile::Native) else {
+        return;
+    };
+    setup(&mut r);
+    let never = frame(&mut r, None, 0.0);
+    let far = [LocalLight::point(
+        Vec3::new(40.0, 1.0, 40.0),
+        Color::WHITE,
+        3.0,
+    )];
+    assert!(never == frame(&mut r, Some(&far), 0.0));
+}
+
+#[test]
 fn per_pixel_lights_are_round_on_a_coarse_mesh() {
     let _gpu = gpu();
     // One big quad: per vertex a light in its middle can't show (no vertex

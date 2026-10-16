@@ -115,6 +115,31 @@ fn gpu_light(l: &LocalLight) -> GpuLight {
     }
 }
 
+/// The local lights that reach a draw, one bit each: its bounding sphere
+/// (world space) within a light's radius. A mesh without bounds: all.
+/// Only these draws need the lit pipeline, and the shader skips the rest.
+pub fn reach_mask(
+    mesh: &trino_core::Mesh,
+    model: &trino_core::Mat34,
+    lights: &[LocalLight],
+) -> u32 {
+    let Some((c, r)) = mesh.bounds() else {
+        return (1u32 << lights.len()) - 1;
+    };
+    let wc = model.transform_point(c);
+    let s = model.axis_scales_sq();
+    let rs = r * s.x.max(s.y).max(s.z).sqrt();
+    lights.iter().enumerate().fold(0, |m, (i, l)| {
+        let d = l.pos - wc;
+        let reach = l.radius + rs;
+        if d.dot(d) < reach * reach {
+            m | 1 << i
+        } else {
+            m
+        }
+    })
+}
+
 /// A frame's light sets.
 #[derive(Default)]
 pub struct LightSets {

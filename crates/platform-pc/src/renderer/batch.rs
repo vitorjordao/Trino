@@ -74,7 +74,8 @@ pub struct TriVertex {
     pub uv: [f32; 2],
     /// Per-pixel lighting inputs (the lit pipeline only; zero elsewhere):
     /// world position, world normal (zero = leave unlit), the unlit color
-    /// (`SurfaceVert::base`), gloss 0..1 and the light set index.
+    /// (`SurfaceVert::base`), gloss 0..1, and the light set index plus 8 ×
+    /// the mask of the local lights that reach the draw.
     pub world: [f32; 3],
     pub normal: [f32; 3],
     pub base: [f32; 4],

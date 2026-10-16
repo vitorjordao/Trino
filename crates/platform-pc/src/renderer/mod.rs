@@ -159,6 +159,8 @@ struct SurfTri {
     v: [SurfaceVert; 3],
     gloss: f32,
     set: u32,
+    /// The local lights that reach the draw (`lights::reach_mask`).
+    mask: u32,
 }
 
 /// The second screen's own target, globals and blit source.
@@ -1325,7 +1327,8 @@ impl PcRenderer {
                     v.normal = [sv.normal.x, sv.normal.y, sv.normal.z];
                     v.base = rgba(sv.base);
                     v.gloss = s.gloss;
-                    v.set = s.set as f32;
+                    // The set (0..8) and the light mask, packed: exact in f32.
+                    v.set = (s.set + 8 * s.mask) as f32;
                 }
                 self.tri_verts.push(v);
             }
@@ -1896,9 +1899,16 @@ impl Renderer for PcRenderer {
                 self.locals.as_slice()
             },
         );
-        let lit = per_pixel
-            && params.shading != trino_core::Shading::Unlit
-            && (!self.locals.is_empty() || self.wetness > 0.0 || params.gloss > 0);
+        // Only the draws a local light reaches (or glossy or wet ones) go
+        // through the lit pipeline, and each names the lights that reach it:
+        // a frame with a few lamps shades a few draws per pixel, not all.
+        let unlit = params.shading == trino_core::Shading::Unlit;
+        let reach = if per_pixel && !unlit && !self.locals.is_empty() {
+            lights::reach_mask(&mesh, matrix, self.locals.as_slice())
+        } else {
+            0
+        };
+        let lit = per_pixel && !unlit && (reach != 0 || self.wetness > 0.0 || params.gloss > 0);
         let tnl = if lit {
             let set = self.light_sets.index(lights::SetKey::new(
                 &self.camera,
@@ -1917,7 +1927,12 @@ impl Renderer for PcRenderer {
                 params,
                 &mut |tri, v| {
                     pending.push(tri);
-                    surf.push(Some(SurfTri { v: *v, gloss, set }));
+                    surf.push(Some(SurfTri {
+                        v: *v,
+                        gloss,
+                        set,
+                        mask: reach,
+                    }));
                 },
             )
         } else {

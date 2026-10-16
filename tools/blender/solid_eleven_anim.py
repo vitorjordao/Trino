@@ -274,10 +274,15 @@ def main(argv):
     if len(argv) >= 2 and argv[0] in ("--rust", "--check"):
         text = rust_source()
         if argv[0] == "--rust":
-            open(argv[1], "w").write(text)
+            # UTF-8 and LF on every OS (Windows defaults to cp1252 and CRLF).
+            with open(argv[1], "w", encoding="utf-8", newline="\n") as f:
+                f.write(text)
             print(f"wrote {argv[1]}: {len(CLIPS)} clips, {len(NAMES)} joints")
             return 0
-        cur = open(argv[1]).read() if argv[1] != "-" else ""
+        cur = ""
+        if argv[1] != "-":
+            with open(argv[1], encoding="utf-8", newline="") as f:
+                cur = f.read()
         if cur != text:
             print(f"{argv[1]} is stale: run python3 tools/blender/solid_eleven_anim.py --rust {argv[1]}")
             return 1

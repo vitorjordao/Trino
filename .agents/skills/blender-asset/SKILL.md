@@ -336,5 +336,9 @@ about the origin.
   costs one draw with no skinning.
 - **Big flat ground under a low camera:** split it into coarse far tiles and fine
   near tiles. One 20 m quad under the camera leaves the N64's RSP (clip band).
+- **Generators that write Rust read and write with `encoding="utf-8", newline="\n"`.**
+  Windows Python defaults to cp1252. CI's Windows job runs the clip table's
+  `--check`, which then saw the em dash in the generated header as drift, on a file
+  identical on disk.
 - **Merge what's always together:** the advertising boards became part of the stands
   (fewer draws; on the N64, draw count costs more than triangles).

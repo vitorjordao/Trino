@@ -10,15 +10,15 @@ use core::ffi::c_void;
 use trino_core::memo::{self, MemoKey, MemoSlot};
 use trino_core::perf::RenderProfile;
 use trino_core::render3d::{
-    Camera3, DEFAULT_LIGHT, Light, Mesh, MeshLayout, NEAR_PLANE, RspPan, ScreenTri, TnlContext,
-    TnlScratch, TnlStats, painter_index, painter_key, rsp_band, rsp_eligible_mv,
+    Camera3, DEFAULT_LIGHT, Light, Mesh, MeshLayout, NEAR_PLANE, RspPan, ScreenTri, TexBind,
+    TnlContext, TnlScratch, TnlStats, painter_index, painter_key, rsp_band, rsp_eligible_mv,
     rsp_mesh_supported,
 };
 use trino_core::text::BitmapFont;
 use trino_core::{
     BillboardParams, Caps, Color, FontId, FrameStats, LightList, LocalLight, Mat34, Material,
-    ModelId, ModelParams, Renderer, Shading, SpriteId, SpriteParams, TextParams, Transform3, Vec2,
-    Vec3,
+    ModelId, ModelParams, Renderer, Shading, SpriteId, SpriteParams, TexFilter, TextParams,
+    Transform3, Vec2, Vec3,
 };
 
 use crate::ffi;
@@ -45,8 +45,12 @@ pub struct N64Renderer {
     pending_tris: Vec<ScreenTri>,
     /// Texture per pending triangle (parallel; filled once a textured draw
     /// joins the batch).
-    /// (sprite handle, clamp) — clamp = billboard addressing.
-    pending_tex: Vec<Option<(u32, bool)>>,
+    /// What each pending triangle samples (sprite, clamp = billboard
+    /// addressing, filter, detail layer).
+    pending_tex: Vec<Option<TexBind>>,
+    /// What `TexFilter::Default` means (`set_texture_filter`): the RDP's
+    /// 3-point bilinear unless the game says otherwise.
+    tex_filter: TexFilter,
     /// Draw order of the pending batch: (texture group, painter key).
     order: Vec<(u64, u64)>,
     camera: Camera3,
@@ -144,6 +148,7 @@ impl N64Renderer {
             last_stats: FrameStats::default(),
             pending_tris: Vec::new(),
             pending_tex: Vec::new(),
+            tex_filter: TexFilter::Bilinear,
             order: Vec::new(),
             camera: Camera3::default(),
             tnl_ctx: TnlContext::new(&Camera3::default(), &DEFAULT_LIGHT, SCREEN),
@@ -191,7 +196,7 @@ impl N64Renderer {
         self.order.clear();
         for (i, tri) in self.pending_tris.iter().enumerate() {
             let group = match self.pending_tex.get(i).copied().flatten() {
-                Some((id, clamp)) => (((id as u64) << 1) | clamp as u64) + 1,
+                Some(t) => t.group(),
                 None => 0,
             };
             self.order.push((group, painter_key(tri.depth, i)));
@@ -205,20 +210,27 @@ impl N64Renderer {
                 emit_tri(&self.pending_tris[painter_index(key)]);
             }
         } else {
-            let mut bound: Option<Option<(u32, bool)>> = None;
+            let mut bound: Option<Option<TexBind>> = None;
             for &(_, key) in &self.order {
                 let i = painter_index(key);
                 let tex = self.pending_tex.get(i).copied().flatten();
                 if bound != Some(tex) {
-                    match tex.and_then(|(t, clamp)| self.sprites.get(&t).map(|e| (e, clamp))) {
-                        Some((entry, clamp)) => unsafe {
-                            ffi::trino_3d_texture(entry.ptr, clamp as u32)
-                        },
+                    match tex.and_then(|t| self.sprites.get(&t.id).map(|e| (e, t))) {
+                        Some((entry, t)) => {
+                            let detail = t
+                                .detail
+                                .and_then(|d| self.sprites.get(&d.sprite.0).map(|e| (e.ptr, d)));
+                            let flags = t.clamp as u32
+                                | ((t.filter == TexFilter::Point) as u32) << 1
+                                | detail.map_or(0, |(_, d)| (d.scale_log2 as u32) << 4);
+                            let dptr = detail.map_or(core::ptr::null_mut(), |(p, _)| p);
+                            unsafe { ffi::trino_3d_texture_ex(entry.ptr, dptr, flags) };
+                        }
                         None => unsafe { ffi::trino_3d_begin() },
                     }
                     bound = Some(tex);
                 }
-                if tex.is_some_and(|(t, _)| self.sprites.contains_key(&t)) {
+                if tex.is_some_and(|t| self.sprites.contains_key(&t.id)) {
                     emit_tri_tex(&self.pending_tris[i]);
                 } else {
                     emit_tri(&self.pending_tris[i]);
@@ -269,7 +281,7 @@ impl N64Renderer {
 
     /// Record the texture of the `added` triangles appended at `before`
     /// (the tag list is only materialized once a textured draw joins).
-    fn tag_pending(&mut self, before: usize, added: usize, key: Option<(u32, bool)>) {
+    fn tag_pending(&mut self, before: usize, added: usize, key: Option<TexBind>) {
         if key.is_some() || !self.pending_tex.is_empty() {
             self.pending_tex.resize(before, None);
             self.pending_tex.extend(core::iter::repeat_n(key, added));
@@ -545,6 +557,13 @@ impl Renderer for N64Renderer {
         }
     }
 
+    fn set_texture_filter(&mut self, filter: TexFilter) {
+        self.tex_filter = match filter {
+            TexFilter::Default => TexFilter::Bilinear,
+            f => f,
+        };
+    }
+
     fn set_local_lights(&mut self, lights: &[LocalLight]) {
         // Per vertex, no flush. The memo needs no new generation: a
         // remembered command is an RSP draw no light reached, and a hit
@@ -674,7 +693,12 @@ impl Renderer for N64Renderer {
             p.record_model(model, now_us().wrapping_sub(t0), &tnl);
         }
         let added = self.pending_tris.len() - before;
-        self.tag_pending(before, added, texture.map(|t| (t.0, false)));
+        let filter = self.tex_filter;
+        self.tag_pending(
+            before,
+            added,
+            texture.map(|t| TexBind::model(t.0, params, filter)),
+        );
     }
 
     fn draw_billboard(&mut self, sprite: SpriteId, pos: Vec3, params: &BillboardParams) {
@@ -691,7 +715,11 @@ impl Renderer for N64Renderer {
         self.frame_stats.sprites += 1;
         let before = self.pending_tris.len();
         self.pending_tris.extend_from_slice(&tris);
-        self.tag_pending(before, 2, Some((sprite.0, true)));
+        self.tag_pending(
+            before,
+            2,
+            Some(TexBind::billboard(sprite.0, self.tex_filter)),
+        );
     }
 
     fn end_frame(&mut self) {

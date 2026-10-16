@@ -1266,7 +1266,15 @@ impl PcRenderer {
                     Some(t) => (((t.id as u64) << 1) | t.clamp as u64) + 1,
                     None => 0,
                 };
-                (group, trino_core::render3d::painter_key(tri.depth, i))
+                // Per-pixel lit triangles group apart too (another pipeline):
+                // interleaved with plain ones in depth order they cut the
+                // batch into a draw call per switch. The z-buffer resolves
+                // the order between groups.
+                let lit = self.pending_surf.get(i).is_some_and(Option::is_some) as u64;
+                (
+                    (group << 1) | lit,
+                    trino_core::render3d::painter_key(tri.depth, i),
+                )
             })
             .collect();
         keys.sort_unstable();

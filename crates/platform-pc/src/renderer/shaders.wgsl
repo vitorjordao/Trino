@@ -292,44 +292,49 @@ fn shade_lit(in: LitOut, texel: vec4<f32>) -> vec4<f32> {
     }
     // The set index and the mask of the lights that reach this draw.
     let packed = u32(in.params.y + 0.5);
-    let lset = light_sets.sets[packed & 7u];
+    // Pointers, never `let` copies: a copied set puts its lights in private
+    // memory, which a dynamic index then reads back from scratch per pixel.
+    let lset = &light_sets.sets[packed & 7u];
     let mask = packed >> 3u;
     let n = normalize(in.normal);
     let albedo = in.base.rgb * texel.rgb;
-    let v = normalize(lset.eye.xyz - in.world);
+    let v = normalize((*lset).eye.xyz - in.world);
     // Wet: surfaces facing up darken and turn glossy.
-    let wet = lset.sun_color.w * smoothstep(0.55, 0.9, n.y);
+    let wet = (*lset).sun_color.w * smoothstep(0.55, 0.9, n.y);
     var gloss = max(in.params.x, wet * 0.9);
     var rgb = c.rgb * (1.0 - 0.4 * wet);
     let alb = albedo * (1.0 - 0.4 * wet);
     // The global light's highlight (its diffuse is in the vertex color).
-    let ls = -normalize(lset.sun_dir.xyz);
+    let ls = -normalize((*lset).sun_dir.xyz);
     if gloss > 0.0 && dot(n, ls) > 0.0 {
-        rgb += lset.sun_color.rgb * specular(n, ls, v, gloss) * (1.0 - lset.sun_dir.w);
+        rgb += (*lset).sun_color.rgb * specular(n, ls, v, gloss) * (1.0 - (*lset).sun_dir.w);
     }
-    let count = u32(lset.eye.w + 0.5);
+    let count = u32((*lset).eye.w + 0.5);
     for (var i = 0u; i < count; i++) {
         if (mask & (1u << i)) == 0u {
             continue;
         }
-        let li = lset.lights[i];
-        let to = li.pos_radius.xyz - in.world;
+        let li = &(*lset).lights[i];
+        let pr = (*li).pos_radius;
+        let to = pr.xyz - in.world;
         let d2 = dot(to, to);
-        let r2 = li.pos_radius.w * li.pos_radius.w;
+        let r2 = pr.w * pr.w;
         if d2 >= r2 || d2 <= 0.0 {
             continue;
         }
         let k = 1.0 - d2 / r2;
         var att = k * k;
         let l = to * inverseSqrt(d2);
-        if li.color_spot.w > 0.5 {
-            let t = clamp((dot(-l, li.dir_cos.xyz) - li.dir_cos.w) * li.cone.x, 0.0, 1.0);
+        let cs = (*li).color_spot;
+        if cs.w > 0.5 {
+            let dc = (*li).dir_cos;
+            let t = clamp((dot(-l, dc.xyz) - dc.w) * (*li).cone.x, 0.0, 1.0);
             att *= t * t * (3.0 - 2.0 * t);
         }
         let ndl = max(dot(n, l), 0.0);
-        rgb += alb * li.color_spot.rgb * att * ndl;
+        rgb += alb * cs.rgb * att * ndl;
         if gloss > 0.0 && ndl > 0.0 {
-            rgb += li.color_spot.rgb * att * specular(n, l, v, gloss);
+            rgb += cs.rgb * att * specular(n, l, v, gloss);
         }
     }
     return vec4<f32>(rgb, c.a);

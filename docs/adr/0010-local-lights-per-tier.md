@@ -90,6 +90,11 @@ one *set* in a uniform buffer (8 per frame), and each lit vertex names its set. 
 uses the lit pipeline only when it has something to add: local lights, wetness or gloss.
 With none, the PC draws exactly what it drew before, which a test checks.
 
+The fragment shader reads its set through a pointer into the uniform buffer. A `let`
+copy of the set put its eight lights in private memory, read back from scratch for each
+light and pixel: a 4K frame of an external project went from 8.6 to 19.1 ms on a Renoir
+iGPU.
+
 ### 6. The 3DS
 
 The 3DS evaluates lights per vertex in the core's T&L, like the N64 but with a cap of 4.

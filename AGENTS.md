@@ -591,6 +591,11 @@ cargo test --workspace
 - **Hidden faces still cost N64 CPU.** A face buried inside another part, or a back
   face, pays its transform. Build models from visible faces only (`blender-asset`).
   Don't union parts with a boolean: it cuts holes and adds triangles.
+- **In WGSL, never `let`-copy a uniform struct that holds an array you index
+  dynamically.** `let set = sets.sets[i]` puts the whole struct in private memory and
+  every `set.lights[j]` reads it back from scratch, per pixel. The PC lit pipeline did
+  that: an external project's 4K frame took 19.1 ms instead of 8.6 ms on a Renoir iGPU.
+  Take a pointer (`let set = &sets.sets[i];`, then `(*set).lights[j]`).
 - **Template manifests are `Cargo.toml.tmpl`.** A placeholder `Cargo.toml` anywhere in
   the repo breaks every git-dependency user, because cargo scans the whole repository.
 

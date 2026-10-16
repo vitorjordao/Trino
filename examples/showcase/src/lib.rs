@@ -961,12 +961,19 @@ mod tests {
         };
         big.tnl.verts = 1_000_000;
         big.tnl.rsp_draws = 4_000;
+        big.tnl.gpu_draws = 4_000;
         let base = lens(1.0 / 60.0, &trino_core::FrameStats::default());
         assert_eq!(lens(1.0 / 60.0, &big), base);
         assert_eq!(lens(0.5, &big), base);
         assert_eq!(lens(0.0, &big), base);
         let lines = panel::metric_lines(1.0 / 60.0, &trino_core::FrameStats::default());
         assert_eq!(lines[0].as_str(), "FRAME 16.7 MS 060 FPS");
+        let mut hw = trino_core::FrameStats::default();
+        (hw.tnl.gpu_draws, hw.tnl.gpu_tris) = (12, 1733);
+        assert_eq!(
+            panel::metric_lines(1.0 / 60.0, &hw)[4].as_str(),
+            "HW DRAWS 012 TRIS 01733"
+        );
         for l in &lines {
             assert!(l.as_str().len() * 12 <= 308, "{} fits", l.as_str());
         }

@@ -2,9 +2,10 @@
 //! self-test's scripted match (the N64 profile's draw list), and check that
 //! each one stays on the N64's RSP (`trino_core::render3d::rsp_check`), and
 //! that the frame's draw and triangle counts stay in budget. A draw that
-//! falls back to the CPU costs ~1.5 ms of emulated time (two pitch tiles
-//! under the camera once did); this names the reason without a console
-//! build.
+//! falls back to the CPU costs ~1.5 ms of emulated time (a ground tile
+//! under the camera once did, until the engine checked a draw whose
+//! bounding sphere crosses the band vertex by vertex); this names the
+//! reason without a console build.
 
 use std::collections::HashMap;
 
@@ -110,7 +111,6 @@ fn every_match_draw_stays_on_the_rsp() {
         frames += 1;
         let light = r.light.unwrap_or(DEFAULT_LIGHT);
         let mut tris = 0u32;
-        let mut cpu_tiles = 0;
         for (id, mat, params, cam) in &r.draws {
             let bytes = meshes
                 .get(&id.0)
@@ -137,28 +137,17 @@ fn every_match_draw_stays_on_the_rsp() {
             }
             if let Err(e) = rsp_check(&ctx, &mesh, mat, params) {
                 // Off screen is fine (the engine culls it for ~16 µs; the
-                // game culls most of those itself). A fine ground tile
-                // that only grazes the bottom of the frame may not fit the
-                // clip band: the CPU draws it (~0.5 ms), at most two.
-                let tile = names
-                    .get(&id.0)
-                    .is_some_and(|n| n.starts_with("se_pitch_f_"));
-                if tile && e == trino_core::RspReject::ClipBand {
-                    cpu_tiles += 1;
-                    continue;
-                }
+                // game culls most of those itself). Anything else — the
+                // fine ground tile under the camera included, now checked
+                // vertex by vertex — must stay on the RSP.
                 assert_eq!(
                     e,
                     trino_core::RspReject::Offscreen,
-                    "frame {f}: model {:08x} leaves the RSP: {e:?} (matrix {mat:?})",
-                    id.0
+                    "frame {f}: {} leaves the RSP: {e:?} (matrix {mat:?})",
+                    names.get(&id.0).map_or("?", |n| n.as_str())
                 );
             }
         }
-        assert!(
-            cpu_tiles <= 2,
-            "frame {f}: {cpu_tiles} ground tiles off the RSP"
-        );
         if r.draws.len() > worst.0 {
             worst = (r.draws.len(), tris);
         }

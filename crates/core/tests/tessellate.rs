@@ -827,6 +827,61 @@ fn billboards_draw_right_up_to_the_near_plane() {
     }
 }
 
+/// A draw whose bounding sphere crosses the RSP band but whose vertices
+/// are all inside it stays on the RSP (the ground tile under the camera
+/// that used to fall back to the CPU); one with a vertex outside still
+/// needs clipping.
+#[test]
+fn a_draw_whose_sphere_crosses_the_band_but_whose_vertices_dont_stays_on_the_rsp() {
+    use render3d::RspReject as R;
+    let cube = bounded_cube();
+    let cube_m = Mesh::from_tmdl(&cube).unwrap();
+    let plain = TnlContext::new(&Camera3::default(), &DEFAULT_LIGHT, SCREEN);
+    let o = ModelParams::DEFAULT;
+    // A ground slab 40 m square, 3 m under the eye, from 2 m in front of
+    // it to 42 m: its sphere (radius ~35 m) reaches behind the camera, its
+    // corners are all in view of the band.
+    let slab = |z: f32| {
+        Mat34::from_rotation_scale_translation(
+            Vec3::ZERO,
+            Vec3::new(40.0, 0.2, 40.0),
+            Vec3::new(0.0, -3.0, z),
+        )
+    };
+    let m = slab(22.0);
+    let mv = plain.projection().0.mul(&m);
+    let (c, rad) = cube_m.bounds().unwrap();
+    let r2 = rad * rad * 40.0 * 40.0;
+    assert!(
+        !render3d::rsp_band(&plain, mv.transform_point(c), r2),
+        "the sphere fails"
+    );
+    assert!(
+        render3d::rsp_hull_inside(&plain, &cube_m, &mv),
+        "every corner is inside"
+    );
+    assert_eq!(
+        render3d::rsp_check(&plain, &cube_m, &m, &o).map(|_| ()),
+        Ok(())
+    );
+    // Slid toward the camera until corners are behind the near plane: it
+    // needs clipping again.
+    assert_eq!(
+        render3d::rsp_check(&plain, &cube_m, &slab(10.0), &o).map(|_| ()),
+        Err(R::NearPlane)
+    );
+    // And sliding sideways until a corner leaves the band.
+    let wide = Mat34::from_rotation_scale_translation(
+        Vec3::ZERO,
+        Vec3::new(40.0, 0.2, 40.0),
+        Vec3::new(14.0, -3.0, 22.0),
+    );
+    assert_eq!(
+        render3d::rsp_check(&plain, &cube_m, &wide, &o).map(|_| ()),
+        Err(R::ClipBand)
+    );
+}
+
 /// `rsp_check` / `rsp_mesh_check` name the rule a draw fails — the first
 /// one, in `rsp_eligible`'s order — and agree with `rsp_eligible` on every
 /// draw (tools explain the console's work split without changing it).
@@ -888,11 +943,12 @@ fn rsp_check_names_the_rule_each_draw_fails() {
         }
     }
     assert_eq!(seen, [Ok(()), Err(R::Offscreen)]);
-    // A big one partly in view reaches past the band: it needs clipping.
+    // A big one partly in view with corners past the band: it needs
+    // clipping.
     let big = Mat34::from_rotation_scale_translation(
         Vec3::ZERO,
         Vec3::new(70.0, 70.0, 70.0),
-        Vec3::new(150.0, 0.0, 95.0),
+        Vec3::new(60.0, 0.0, 60.0),
     );
     assert_eq!(
         render3d::rsp_check(&plain, &cube_m, &big, &o).map(|_| ()),

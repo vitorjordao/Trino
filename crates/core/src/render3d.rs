@@ -1098,9 +1098,10 @@ pub enum RspReject {
     NoBounds,
     /// Wholly outside the guard band: culled (invisible work).
     Offscreen,
-    /// The sphere reaches past the near plane (needs clipping).
+    /// A vertex is past the near plane (needs clipping).
     NearPlane,
-    /// The sphere crosses the RSP band (needs guard-band clipping).
+    /// A vertex is past the RSP band (needs guard-band clipping; the
+    /// bounding sphere crossing it is checked vertex by vertex first).
     ClipBand,
     /// Past `RSP_MAX_DEPTH`.
     TooFar,
@@ -1195,8 +1196,9 @@ pub struct RspDraw {
 /// (`crates/platform-n64/shim/rsp_trino.S`) instead of [`tessellate`]: the
 /// overlay has no clipping, splitting, fog, colored light, emissive, flat
 /// shading or textures, so the draw must need none of them. Its whole
-/// bounding sphere must be inside the guard-band frustum and past the near
-/// plane, so no triangle could have been clipped. A palette on a mesh with
+/// bounding sphere must be inside the RSP band and past the near plane, or
+/// failing that every one of its vertices ([`rsp_hull_check`]), so no
+/// triangle could have been clipped. A palette on a mesh with
 /// color slots stays on the CPU too (the overlay draws baked colors). Only for meshes
 /// [`rsp_mesh_supported`] accepted (checked once; this runs per draw). It
 /// lives in the core so host tests can predict the console's work split
@@ -1241,6 +1243,39 @@ pub fn rsp_band_check(ctx: &TnlContext, c: Vec3, r2: f32) -> Result<(), RspRejec
     }
     if !inside(RSP_MAX_DEPTH - c.z, 1.0) {
         return Err(RspReject::TooFar);
+    }
+    Ok(())
+}
+
+/// Every vertex of `mesh` through `mv` (view space) past NEAR, inside the
+/// RSP band and short of [`RSP_MAX_DEPTH`]: then no triangle can need
+/// clipping (a triangle is its vertices' hull, and each limit is a plane).
+/// [`rsp_check`] asks this only when the bounding sphere fails the band,
+/// so the per-vertex cost is paid by the few draws it rescues from the CPU.
+pub fn rsp_hull_inside(ctx: &TnlContext, mesh: &Mesh, mv: &Mat34) -> bool {
+    rsp_hull_check(ctx, mesh, mv).is_ok()
+}
+
+/// [`rsp_hull_inside`] with the first vertex's reason (near plane, band,
+/// depth).
+pub fn rsp_hull_check(ctx: &TnlContext, mesh: &Mesh, mv: &Mat34) -> Result<(), RspReject> {
+    let band = RSP_BAND / GUARD;
+    let (lx, ly) = (ctx.lim_x * band, ctx.lim_y * band);
+    for p in mesh.positions {
+        let v = mv.transform_point(vec3_of(p));
+        let (ax, ay) = (
+            if v.x < 0.0 { -v.x } else { v.x },
+            if v.y < 0.0 { -v.y } else { v.y },
+        );
+        if v.z <= NEAR {
+            return Err(RspReject::NearPlane);
+        }
+        if lx * v.z <= ax || ly * v.z <= ay {
+            return Err(RspReject::ClipBand);
+        }
+        if v.z >= RSP_MAX_DEPTH {
+            return Err(RspReject::TooFar);
+        }
     }
     Ok(())
 }
@@ -1348,7 +1383,14 @@ pub fn rsp_check_mv(
     let smax = s.x.max(s.y).max(s.z);
     let r2 = r * r * smax;
     // The overlay's matrix entries (axis scale) must stay in range.
-    rsp_band_check(ctx, c, r2)?;
+    match rsp_band_check(ctx, c, r2) {
+        Ok(()) => {}
+        // The sphere reaches past the near plane or the band, but the
+        // vertices themselves may all be inside: a big flat tile under the
+        // camera, whose sphere is far rounder than what's on screen.
+        Err(RspReject::ClipBand | RspReject::NearPlane) => rsp_hull_check(ctx, mesh, mv)?,
+        Err(e) => return Err(e),
+    }
     // Lit by a local light: only the CPU T&L adds those.
     if ctx.n_locals > 0 && params.shading != Shading::Unlit && ctx.lights_touch(c, r2) {
         return Err(RspReject::LocalLight);

@@ -98,7 +98,9 @@ fn confetti(r: &mut dyn Renderer, at: Vec3, time: f32, looks: &[Look; 5]) {
         let fall = time * 1.4 + ph * 6.0;
         let y = 6.0 - (fall - (fall / 6.0) as i32 as f32 * 6.0);
         let sway = trino_core::math3d::sin(time * 2.0 + ph * core::f32::consts::TAU) * 0.3;
-        let p = at + Vec3::new((hx - 0.5) * 5.0 + sway, y, (hz - 0.5) * 4.0);
+        // Behind the captain (the camera is on +z): a flake never crosses
+        // his face.
+        let p = at + Vec3::new((hx - 0.5) * 5.0 + sway, y, -0.4 - hz * 3.0);
         r.draw_billboard(
             S_CONFETTI,
             p * WORLD,
@@ -147,21 +149,24 @@ pub fn pedestal(
 ) {
     let hifi = super::hifi(r, retro);
     r.begin_frame(Sky::Night.clear());
-    // Looking up the pitch from the center spot: the far stand behind.
-    // Far enough back for the whole body between the header and the
-    // footer.
+    // Looking up the pitch from beside the center spot (on it, the halfway
+    // line ran up behind the player as if out of his shorts): the far
+    // stand behind. The body and the pedestal sit above the screens'
+    // stat panels; from 11 m back with a narrow lens, so the turf nearest
+    // the lens (4 m off) stays past the near plane (3.2 m at 1/64 scale).
+    let spot = Vec3::new(3.5, 0.0, 0.0);
     let cam = CamState {
-        focus: Vec3::new(shift, 0.98, 0.0),
-        height: 0.32,
-        back: 6.2,
-        fov: 0.62,
+        focus: spot + Vec3::new(shift, 0.46, 0.0),
+        height: 1.15,
+        back: 10.9,
+        fov: 0.5,
     };
     r.set_camera(&cam.camera());
     r.set_light(&Sky::Dusk.light());
     let fr = Frustum::new(&cam, aspect);
     draw_stadium(r, &fr, hifi, Sky::Night.tint());
     let (s, c) = (trino_core::math3d::sin(yaw), trino_core::math3d::cos(yaw));
-    let base = Vec3::new(0.0, 0.0, 0.0);
+    let base = spot;
     r.draw_model_matrix(
         super::M_PEDESTAL,
         &super::place(base - Vec3::new(0.0, 0.12, 0.0), 0.0, 1.0, 1.0),

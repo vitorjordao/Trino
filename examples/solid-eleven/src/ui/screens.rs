@@ -200,7 +200,8 @@ pub fn draw(g: &mut SolidElevenGame, r: &mut dyn Renderer) {
                     g.spin,
                     pal::LIME,
                     aspect,
-                    0.0,
+                    // In the gap between the list and the card.
+                    0.6,
                     g.settings.graphics == 1,
                 );
             }
@@ -288,8 +289,11 @@ fn trophy(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2, aspect: f
     let lang = g.settings.lang;
     let order = g.world.standings();
     let champ = order[0];
+    // Off the halfway line: seen along it, the line ran up behind the
+    // captain as if out of his shorts.
+    let at = trino_core::Vec3::new(5.0, 0.0, 0.0);
     let cam = render::CamState {
-        focus: trino_core::Vec3::new(0.0, 1.3, 1.0),
+        focus: at + trino_core::Vec3::new(0.0, 1.3, 1.0),
         height: 0.6,
         back: 7.5,
         fov: 0.72,
@@ -300,7 +304,7 @@ fn trophy(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2, aspect: f
         &g.menu_anims,
         aspect,
         &cam,
-        trino_core::Vec3::ZERO,
+        at,
         g.time,
         g.settings.graphics == 1,
     );

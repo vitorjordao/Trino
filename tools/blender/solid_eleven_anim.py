@@ -91,8 +91,11 @@ BODY = {
         # inside them).
         taper(0.30, 0.46, 0.35, 0.22, 0.54, 0.19, skip="-y"),
     ]),
+    # The hem low and wide enough that the shorts legs (on the thighs) stay
+    # inside its sides: only their bottoms show, and a raised thigh lifts its
+    # own, never a flap out to the side.
     "shorts_hd": ("pelvis", "shorts", "pc", 50, [
-        taper(-0.17, 0.07, 0.34, 0.22, 0.32, 0.21),
+        taper(-0.21, 0.07, 0.35, 0.22, 0.32, 0.21),
     ]),
     "sleeve_x": ("arm_l", "shirt", "pc", 24, [
         taper(-0.15, 0.04, 0.13, 0.13, 0.12, 0.12),
@@ -105,10 +108,10 @@ BODY = {
         box(-0.35, -0.27, 0.085, 0.095),
     ]),
     "shorts_leg_hd_x": ("thigh_l", "shorts", "pc", 24, [
-        taper(-0.22, 0.04, 0.175, 0.19, 0.15, 0.17),
+        taper(-0.24, 0.04, 0.145, 0.18, 0.145, 0.17),
     ]),
     "thigh_x": ("thigh_l", "skin", "pc", 26, [
-        taper(-0.40, -0.18, 0.115, 0.12, 0.145, 0.155, skip="+y"),
+        taper(-0.40, -0.18, 0.115, 0.12, 0.13, 0.14, skip="+y"),
         taper(-0.49, -0.40, 0.105, 0.11, 0.115, 0.12, skip="+y"),
     ]),
     "shin_x": ("shin_l", "socks", "pc", 40, [
@@ -127,13 +130,13 @@ BODY = {
         taper(0.30, 0.46, 0.34, 0.22, 0.56, 0.22, skip="-y"),
     ]),
     "shorts": ("pelvis", "shorts", "near far", 18, [
-        taper(-0.20, 0.07, 0.36, 0.22, 0.32, 0.21),
+        taper(-0.24, 0.07, 0.37, 0.22, 0.32, 0.21),
     ]),
     "arm_x": ("arm_l", "skin", "near", 12, [
         taper(-0.62, 0.0, 0.07, 0.075, 0.085, 0.085),
     ]),
     "shorts_leg_x": ("thigh_l", "shorts", "near far", 12, [
-        taper(-0.30, 0.02, 0.17, 0.18, 0.14, 0.15),
+        taper(-0.28, 0.02, 0.15, 0.17, 0.15, 0.16),
     ]),
     "leg_x": ("thigh_l", "socks", "near far", 20, [
         taper(-0.82, -0.05, 0.10, 0.11, 0.14, 0.15, skip="+y -y"),

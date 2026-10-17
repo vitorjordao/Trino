@@ -67,7 +67,7 @@ pub struct ViewInput<'a> {
     /// were this far away (both views), to see each switch live.
     pub lod_preview: Option<(&'a [usize], f32)>,
     /// The scene's frame on the N64 and the 3DS (Game view HUD).
-    pub budgets: Option<&'a [trino_scene::budget::FrameBudget; 2]>,
+    pub budgets: Option<&'a [trino_scene::budget::FrameBudget; 3]>,
     /// Each sprite's N64 TMEM bytes (the HUD's water lines).
     pub tmem: Option<&'a std::collections::BTreeMap<u32, Option<u32>>>,
     /// The water clock and ripples (`Renderer::set_water`).
@@ -903,18 +903,17 @@ impl Viewport {
         &self,
         painter: &egui::Painter,
         avail: Rect,
-        budgets: Option<&[trino_scene::budget::FrameBudget; 2]>,
+        budgets: Option<&[trino_scene::budget::FrameBudget; 3]>,
         tmem: Option<&std::collections::BTreeMap<u32, Option<u32>>>,
     ) {
         let caps = *self.renderer.caps();
         let mut rows = crate::budget::rows(&self.stats.frame, &caps, &self.stats.lod);
         // The scene budget is the scene camera's: not while playing.
         let budgets = budgets.filter(|_| self.play.is_none());
-        if let Some([n64, _]) = budgets {
+        if let Some([n64, ..]) = budgets {
             crate::budget::use_rsp_split(&mut rows, n64);
         }
         let summary = self.stats.lod.summary();
-        let w = 210.0;
         let row_h = 18.0;
         // Per platform: the N64 frame (CPU vs RSP, why draws miss the fast
         // path), the 3DS triangles, and draws sent for nothing.
@@ -933,6 +932,21 @@ impl Viewport {
                 (t, color)
             })
             .collect();
+        // As wide as the longest platform line (the PC GPU and 3DS lines
+        // name a reason), at least 210 px and never past the view.
+        let font = egui::FontId::proportional(10.5);
+        let widest = platform_lines
+            .iter()
+            .map(|(t, _)| t.as_str())
+            .chain(summary.as_deref())
+            .map(|t| {
+                painter
+                    .layout_no_wrap(t.to_string(), font.clone(), Color32::WHITE)
+                    .size()
+                    .x
+            })
+            .fold(0.0f32, f32::max);
+        let w = crate::budget::hud_width(widest, avail.width());
         let extra =
             if summary.is_some() { row_h } else { 0.0 } + platform_lines.len() as f32 * row_h;
         let rect = Rect::from_min_size(

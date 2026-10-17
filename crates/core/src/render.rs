@@ -401,6 +401,54 @@ impl Default for ModelParams {
     }
 }
 
+/// One copy of a mesh in [`Renderer::draw_model_instances`]: where it is,
+/// and what it changes in the call's [`ModelParams`].
+///
+/// - `tint` **multiplies** the call's tint per channel, alpha included, as
+///   `(a * b + 127) / 255` (white keeps it exactly, the rounding of material
+///   tint stacking): a crowd in one call, each copy its own shade.
+/// - `palette_index` 0 keeps the call's [`ModelParams::palette`]; `k` ≥ 1
+///   takes entry `k - 1` of the `palettes` given to
+///   [`Renderer::draw_model_instances_with`] (an index past them keeps the
+///   call's palette too). Per copy a byte, not 16: a GPU path uploads the
+///   palette table once per call.
+///
+/// What a copy draws is exactly a [`Renderer::draw_model_matrix`] with
+/// [`Instance::params`]: the default implementation is that loop.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Instance {
+    pub matrix: Mat34,
+    pub tint: Color,
+    pub palette_index: u8,
+}
+
+impl Instance {
+    /// A copy at `matrix` with the call's tint and palette.
+    pub const fn new(matrix: Mat34) -> Self {
+        Instance {
+            matrix,
+            tint: Color::WHITE,
+            palette_index: 0,
+        }
+    }
+
+    /// The copy's surface: `params` with this copy's tint and palette
+    /// ([`Instance`] has the rules).
+    pub fn params(&self, params: &ModelParams, palettes: &[Palette]) -> ModelParams {
+        let mul = |a: u8, b: u8| ((a as u16 * b as u16 + 127) / 255) as u8;
+        let (a, b) = (params.tint, self.tint);
+        let palette = match self.palette_index {
+            0 => params.palette,
+            k => palettes.get(k as usize - 1).copied().or(params.palette),
+        };
+        ModelParams {
+            tint: Color::rgba(mul(a.r, b.r), mul(a.g, b.g), mul(a.b, b.b), mul(a.a, b.a)),
+            palette,
+            ..*params
+        }
+    }
+}
+
 /// 3D placement. Euler rotation in radians (XYZ order).
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Transform3 {
@@ -560,6 +608,40 @@ pub trait Renderer {
             material,
             params,
         );
+    }
+
+    /// Draw many copies of one model in one call ([`Instance`]: a matrix,
+    /// a tint and a palette per copy), as [`Material::VertexLit`]. Same
+    /// pixels as one [`draw_model_matrix`](Self::draw_model_matrix) per
+    /// copy, in order, with [`Instance::params`] — which is the default
+    /// implementation, so every backend draws instances; a backend with
+    /// hardware instancing (the PC's GPU path, issue #51) changes the cost,
+    /// never the picture. The copies join the current model batch like
+    /// separate draws.
+    fn draw_model_instances(
+        &mut self,
+        model: ModelId,
+        instances: &[Instance],
+        params: &ModelParams,
+    ) {
+        self.draw_model_instances_with(model, instances, &[], params);
+    }
+
+    /// [`draw_model_instances`](Self::draw_model_instances) with a palette
+    /// table: a copy whose [`Instance::palette_index`] is `k` ≥ 1 draws
+    /// with `palettes[k - 1]` (one crowd, a few kits). Backends override
+    /// this one, not `draw_model_instances`.
+    fn draw_model_instances_with(
+        &mut self,
+        model: ModelId,
+        instances: &[Instance],
+        palettes: &[Palette],
+        params: &ModelParams,
+    ) {
+        for i in instances {
+            let p = i.params(params, palettes);
+            self.draw_model_matrix(model, &i.matrix, Material::VertexLit, &p);
+        }
     }
 
     fn end_frame(&mut self);

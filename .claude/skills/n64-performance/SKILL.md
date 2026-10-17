@@ -126,7 +126,8 @@ samples layouts rather than explores them.
   moved +1.0 ms on average over 8 paddings (0/352/1024/2048/3072/4096/6144/8192) from
   a change whose white-light hot path was unchanged and whose RSP overlay was byte
   for byte the old one. So:
-  - judge an N64 change over 8 paddings, against the baseline's 8;
+  - judge an N64 change over 8 paddings, against the baseline's 8 (the baseline in its
+    own `git worktree` with its **own** `target/`: a shared one mixes the two trees' crates);
   - keep new code out of line and new state out of hot structs (a `static`, a
     carrier entry in an existing queue);
   - when a feature changes nothing a scene draws yet shows a shift, measure a

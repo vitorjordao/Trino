@@ -107,6 +107,27 @@ palettes, flat shading, local lights, anything crossing the near plane); the 3DS
 (castle64's hub, the showcase's fogged first frame) with the CPU path's, and
 `tests/perf/castle64_work_3ds.toml` pins the split per scene.
 
+### The PC GPU path and instancing (issue #51)
+
+The PC native profile (and the Web target after it, #47) gets the same kind of per-draw
+decision: `trino_core::render3d::pc_gpu_check` (with `pc_gpu_mesh_check` once per mesh)
+names, as a `PcGpuReject`, what a WGSL vertex stage won't take: skeletons and smooth
+skinning (until Phase 3), water, translucency (its per-triangle painter order) and
+per-pixel lit surfaces; offscreen draws count as culled
+([ADR 0016](adr/0016-pc-hardware-tnl.md)). **Phase 1 only decides and reports**: every
+draw is still drawn by the CPU path, so the picture and the T&L work counters are
+unchanged, and `TnlStats::pc_gpu_draws`/`pc_gpu_tris` count the draws the GPU path would
+take. The split shows in the PC's `TRINO_FRAME` line (`pc_gpu_draws=`, `off_pc_gpu=`),
+the editor's budget (`PC GPU 42/46 draws · …`) and `cargo xtask scene budget --platform
+pc --json`. The console profiles never take it.
+
+`Renderer::draw_model_instances` (and `_with`, a palette table) draws many copies of one
+mesh in one call: a matrix, a tint multiplied over the call's and a palette index per
+`Instance`. The default implementation loops over `draw_model_matrix`, so the N64 and the
+3DS draw instances with no backend code; the PC counts the copies (`TnlStats::instanced`).
+The `instancing` self-test step holds one call to the separate draws' pixels and counters
+on PC, in ares and in Azahar.
+
 ### 2D in the same pipeline
 
 2D is not a separate engine path. The same `Renderer` draws it in the same frame as the

@@ -189,6 +189,9 @@ fn per_frame(t: &TnlStats, n: u32) -> TnlStats {
         rsp_tris: t.rsp_tris / n,
         gpu_draws: t.gpu_draws / n,
         gpu_tris: t.gpu_tris / n,
+        pc_gpu_draws: t.pc_gpu_draws / n,
+        pc_gpu_tris: t.pc_gpu_tris / n,
+        instanced: t.instanced / n,
     }
 }
 

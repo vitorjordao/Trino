@@ -17,13 +17,13 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use trino_core::render3d::{
-    Camera3, DEFAULT_LIGHT, Light, Mesh, MeshLayout, ScreenTri, SurfaceScratch, SurfaceVert,
-    TnlContext, TnlScratch,
+    Camera3, DEFAULT_LIGHT, Light, Mesh, MeshLayout, PcGpuReject, ScreenTri, SurfaceScratch,
+    SurfaceVert, TnlContext, TnlScratch,
 };
 use trino_core::{
-    AmbientOcclusion, AoTier, Caps, Color, FontId, FrameStats, LightList, LightTier, LocalLight,
-    Mat34, Material, ModelId, ModelParams, Renderer, Ripple, Screen, SpriteId, SpriteParams,
-    TexFilter, TextParams, Transform3, Vec2, WaterState, WaterTier,
+    AmbientOcclusion, AoTier, Caps, Color, FontId, FrameStats, Instance, LightList, LightTier,
+    LocalLight, Mat34, Material, ModelId, ModelParams, Palette, Renderer, Ripple, Screen, SpriteId,
+    SpriteParams, TexFilter, TextParams, Transform3, Vec2, WaterState, WaterTier,
 };
 
 use crate::sim::SimProfile;
@@ -180,6 +180,10 @@ pub struct PcRenderer {
     /// The N64 profile's frame as the console would split it (strict mode).
     n64: N64Split,
     last_stats: FrameStats,
+    /// The native profile's draws off the GPU T&L path, per
+    /// [`PcGpuReject`], of the frame being recorded / the last one.
+    pc_gpu_off: [u32; PcGpuReject::COUNT],
+    last_pc_gpu_off: [u32; PcGpuReject::COUNT],
     /// CPU time per rendering stage and the GPU work handed over, of the
     /// frame being recorded / the last finished frame ([`PcFrameTimes`]).
     times: PcFrameTimes,
@@ -1484,6 +1488,8 @@ impl PcRenderer {
             commands: Vec::new(),
             frame_stats: FrameStats::default(),
             n64: N64Split::default(),
+            pc_gpu_off: [0; PcGpuReject::COUNT],
+            last_pc_gpu_off: [0; PcGpuReject::COUNT],
             times: PcFrameTimes::default(),
             last_times: PcFrameTimes::default(),
             last_stats: FrameStats::default(),
@@ -1838,6 +1844,15 @@ impl PcRenderer {
     /// work it handed over ([`PcFrameTimes`]).
     pub fn frame_times(&self) -> PcFrameTimes {
         self.last_times
+    }
+
+    /// The last finished frame's model draws that stay off the native
+    /// profile's GPU T&L path, per reason ([`PcGpuReject::index`]); the
+    /// draws it takes are `stats().tnl.pc_gpu_draws`. All zero on the
+    /// console profiles, which never take it (issue #51; Phase 1 decides
+    /// and reports, the CPU path still draws).
+    pub fn pc_gpu_rejects(&self) -> [u32; PcGpuReject::COUNT] {
+        self.last_pc_gpu_off
     }
 
     /// Read the internal framebuffer back as tightly-packed RGBA8.
@@ -2655,6 +2670,33 @@ struct N64Split {
     rsp_tris: u32,
 }
 
+/// The native profile's GPU T&L decision for one draw (issue #51,
+/// [`trino_core::render3d::pc_gpu_check`]): counted in `stats`' `tnl`
+/// when taken, under its reason in `off` when not. `lit` = the draw is
+/// shaded per pixel (its surface varyings come from the CPU path).
+fn pc_gpu_split(
+    stats: &mut FrameStats,
+    off: &mut [u32; PcGpuReject::COUNT],
+    (ctx, mesh, matrix, params): (&TnlContext, &Mesh, &Mat34, &ModelParams),
+    lit: bool,
+) {
+    use trino_core::render3d::{pc_gpu_check, pc_gpu_mesh_check};
+    let decided = pc_gpu_mesh_check(mesh)
+        .and_then(|_| pc_gpu_check(ctx, mesh, matrix, params))
+        .and(if lit {
+            Err(PcGpuReject::PerPixelLit)
+        } else {
+            Ok(())
+        });
+    match decided {
+        Ok(()) => {
+            stats.tnl.pc_gpu_draws += 1;
+            stats.tnl.pc_gpu_tris += (mesh.index_count / 3) as u32;
+        }
+        Err(r) => off[r.index()] += 1,
+    }
+}
+
 /// [`PcRenderer::n64_estimate`]: the frame's 3D on the N64.
 #[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
 pub struct N64Estimate {
@@ -2742,6 +2784,7 @@ impl Renderer for PcRenderer {
         self.water_sets.clear();
         self.frame_stats = FrameStats::default();
         self.n64 = N64Split::default();
+        self.pc_gpu_off = [0; PcGpuReject::COUNT];
         self.times = PcFrameTimes::default();
     }
 
@@ -2979,6 +3022,14 @@ impl Renderer for PcRenderer {
             };
             self.times.tnl_us += micros(t0);
             self.frame_stats.tnl.add(&tnl);
+            if self.profile == SimProfile::Native {
+                pc_gpu_split(
+                    &mut self.frame_stats,
+                    &mut self.pc_gpu_off,
+                    (&ctx, &mesh, matrix, params),
+                    false,
+                );
+            }
             let added = self.pending_tris.len() - before;
             self.tag_pending(
                 before,
@@ -3052,6 +3103,14 @@ impl Renderer for PcRenderer {
         };
         self.times.tnl_us += micros(t0);
         self.frame_stats.tnl.add(&tnl);
+        if self.profile == SimProfile::Native {
+            pc_gpu_split(
+                &mut self.frame_stats,
+                &mut self.pc_gpu_off,
+                (&ctx, &mesh, matrix, params),
+                lit,
+            );
+        }
         if self.profile == SimProfile::N64 {
             // What the console does with it: its RSP overlay takes the draws
             // `rsp_eligible` accepts (the same rules, from the core); the CPU
@@ -3072,6 +3131,25 @@ impl Renderer for PcRenderer {
             added,
             texture.map(|t| TexKey::model(t.0, params, self.tex_filter)),
         );
+    }
+
+    fn draw_model_instances_with(
+        &mut self,
+        model: ModelId,
+        instances: &[Instance],
+        palettes: &[Palette],
+        params: &ModelParams,
+    ) {
+        // Phase 1 of issue #51: the trait's loop, counted. The GPU path
+        // (Phase 3) draws the copies in one instanced call instead.
+        if !self.meshes.contains_key(&model.0) {
+            return;
+        }
+        for i in instances {
+            let p = i.params(params, palettes);
+            self.draw_model_matrix(model, &i.matrix, Material::VertexLit, &p);
+            self.frame_stats.tnl.instanced += 1;
+        }
     }
 
     fn draw_billboard(
@@ -3157,6 +3235,7 @@ impl Renderer for PcRenderer {
         self.flush_model_batch();
         self.frame_stats.tris = self.main_tris + (self.tri_verts.len() / 3) as u32;
         self.last_stats = self.frame_stats;
+        self.last_pc_gpu_off = self.pc_gpu_off;
         let t0 = Instant::now();
         self.flush();
         self.times.submit_us += micros(t0);

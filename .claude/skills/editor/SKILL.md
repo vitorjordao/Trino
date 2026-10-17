@@ -312,3 +312,7 @@ Live-edit check: start the editor with `TRINO_EDITOR_ECHO_LOG=1` in the backgrou
   (`Project::upload_platform_sprites`) so its regions match the N64 table.
 - **The Game view resolves its own platform** (`App::resolved_game`, `viewport::target_of`):
   the Scene view, picking and the Inspector use the PC resolve.
+
+- **The Game view's budget panel sizes itself to its longest line** (`budget::hud_width`:
+  at least 210 px, never past the view; 2026-10-17). Platform lines that name a reason
+  (`3DS … · 22 flat shading`, `PC GPU … · 3 skinned mesh`) were cut at 210 px.

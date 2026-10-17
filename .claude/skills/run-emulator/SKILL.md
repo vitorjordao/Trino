@@ -44,6 +44,13 @@ Real consoles instead of emulators (`run n64 --device sc64|everdrive`,
 - Headless Azahar: run the test under
   `xvfb-run -a -s "-screen 0 1280x720x24"`. Its runtime libraries are listed in
   `.github/workflows/ci.yml` (job `n3ds-emulator`).
+- Azahar exiting **127** with `libOpenGL.so.0: cannot open shared object file` is a
+  missing `libopengl0` on the host. Without sudo: `apt-get download libopengl0`,
+  `dpkg-deb -x libopengl0_*.deb <dir>` and run the test with
+  `LD_LIBRARY_PATH=<dir>/usr/lib/x86_64-linux-gnu` (verified 2026-10-17, `test 3ds`
+  passed that way).
+- A `docker build` of `trino-ares` failing on `security.ubuntu.com:80 … Connection
+  refused` while the host reaches it is transient: rerun `emulators setup ares`.
 
 ## Test protocol (same on both consoles)
 

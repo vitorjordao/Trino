@@ -32,6 +32,21 @@ cargo test --workspace
 
 GPU-dependent tests skip without an adapter unless `TRINO_REQUIRE_GPU=1`.
 
+**No `libasound2-dev` on the host** (`alsa-sys` panics: "Package alsa was not found"):
+its bindings are bundled, so a scratch `alsa.pc` is enough. Write `Name: alsa`,
+`Version: 1.2.0`, `Libs: -L<dir> -lasound` into `<dir>/alsa.pc`, symlink
+`<dir>/libasound.so` to `/usr/lib/x86_64-linux-gnu/libasound.so.2`, and export
+`PKG_CONFIG_PATH=<dir>` (2026-10-17).
+
+**CI's clippy is the newest stable** (`dtolnay/rust-toolchain@stable`: 1.99.1 on
+2026-10-17), and a local stable a few releases behind disagrees both ways: 1.93 flagged
+`overly_complex_bool_expr` in Solid Eleven's AI (CI didn't; simplified anyway, same
+behaviour), and CI's 1.99 flagged a `manual_checked_div` 1.93 didn't. Read the version in
+the CI log (`Run dtolnay/rust-toolchain@stable` step), install it beside your stable
+(`rustup toolchain install 1.99.1 --profile minimal -c clippy,rustfmt`) and run
+`CARGO_TARGET_DIR=target/clippy-ci cargo +1.99.1 clippy --workspace --all-targets -- -D warnings`
+before pushing.
+
 **Feature matrix and coverage.** `docs/TESTING.md` maps every engine feature to
 its tests; `xtask/tests/feature_matrix.rs` fails when a listed test no longer
 exists, or when a `Renderer`/`Platform`/`Audio` method, a TMDL section, a

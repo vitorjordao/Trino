@@ -65,6 +65,18 @@ A feature is done only when **PC, N64 and 3DS** all run it and an emulator has s
   Sprites don't write depth, so a composite at `end_frame` would darken a HUD over
   geometry.
 
+- **A hardware T&L path gets a rule in the core, a reason enum and a histogram before
+  it gets a backend** (`rsp_check`/`RspReject`, `gpu_check`/`GpuReject`,
+  `pc_gpu_check`/`PcGpuReject`, ADR 0016). The enum has `ALL`, `COUNT` (a const assert
+  ties them), `index`, `label`; the renderer keeps a per-frame histogram;
+  `trino_scene::budget` predicts the same split and a test holds the two equal
+  (`xtask/tests/scene_budget.rs::pc_budget_reports_the_gpu_split`). Phase 1 of #51
+  shipped exactly that, with the CPU path still drawing.
+- **A new draw call with a default `Renderer` method needs no backend code** when it
+  is a loop over an existing one (`draw_model_instances` over `draw_model_matrix`).
+  Its self-test step compares one call with the separate draws (pixels on a probe
+  grid, `models`/`tris`/`tnl`), and the mutations to try are the ones an override
+  can get wrong: a copy dropped, a per-copy field ignored.
 - **A tiered surface (water, ADR 0015) keeps the geometry in the core** and lets each
   tier add what its hardware can: the PC per pixel, the 3DS a vertex program
   (`gpu_water` builds its uniforms and `crates/core/tests/gpu_water.rs` emulates the

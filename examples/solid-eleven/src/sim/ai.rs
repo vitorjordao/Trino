@@ -1169,12 +1169,11 @@ pub fn kickoff_spot(m: &Match, i: usize, kicking: bool) -> V2 {
         .min(-Fx::milli(1_500));
     let y = base.y.mul(HALF_WID).mul(Fx::milli(800));
     let mut p = V2::new(x, y);
-    if (!kicking
-        || !matches!(f.role(k), Role::St | Role::Am | Role::W)
-        || p.len() < pitch::CIRCLE_R + Fx::int(1))
-        && p.shorter_than(pitch::CIRCLE_R + Fx::int(1))
-        && !kicking
-    {
+    // The side not kicking off waits outside the center circle (the
+    // kicking side may stand in it). This was `(!kicking || ..) && inside &&
+    // !kicking`, whose middle terms could never change the result
+    // (clippy::overly_complex_bool_expr): the same test, written plainly.
+    if !kicking && p.shorter_than(pitch::CIRCLE_R + Fx::int(1)) {
         p = p.norm().scale(pitch::CIRCLE_R + Fx::int(1));
         if p == V2::ZERO {
             p = V2::new(-pitch::CIRCLE_R - Fx::int(1), Fx::ZERO);

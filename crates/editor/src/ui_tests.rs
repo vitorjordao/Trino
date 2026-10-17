@@ -1052,9 +1052,10 @@ fn particle_effects_preview_caps_and_files() {
 }
 
 /// The scene's frame per console in the Inspector (scene settings): the N64
-/// time with its RSP/CPU split and the reasons, the 3DS triangles, and a
-/// mesh placed behind the camera listed as sent for nothing — the numbers
-/// `cargo xtask scene budget` prints.
+/// time with its RSP/CPU split and the reasons, the 3DS triangles, the PC
+/// GPU T&L split with its reasons, and a mesh placed behind the camera
+/// listed as sent for nothing — the numbers `cargo xtask scene budget`
+/// prints.
 #[test]
 #[ignore = "changes cwd/env: run alone with --ignored --test-threads=1"]
 fn platform_budget_shows_rsp_reasons_and_unseen_draws() {
@@ -1072,6 +1073,20 @@ fn platform_budget_shows_rsp_reasons_and_unseen_draws() {
                 .is_some()
         );
         assert!(h.query_by_label_contains("3DS ").is_some());
+        // The PC native profile's GPU T&L split (issue #51), its reasons
+        // listed like the RSP's.
+        assert_eq!(b[2].target, trino_scene::Target::Pc);
+        assert!(b[2].pc_gpu_draws > 0, "{:?}", b[2]);
+        let pc_line = trino_scene::budget::pc_gpu_line(&b[2]);
+        assert!(pc_line.starts_with("PC GPU "), "{pc_line}");
+        assert!(h.query_by_label_contains(&pc_line).is_some(), "{pc_line}");
+        if !b[2].off_pc_gpu.is_empty() {
+            assert!(
+                h.query_all_by_label_contains("off the PC GPU:")
+                    .next()
+                    .is_some()
+            );
+        }
         assert!(h.query_by_label_contains("unseen: lost-rock").is_none());
         // A rock far behind the game camera.
         let cam = h.state().doc.scene.environment.camera;

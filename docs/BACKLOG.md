@@ -48,6 +48,13 @@ shipping a 3D game first**, then by cost:
 
 ### P1 — the next quality and reach jump
 
+- **PC hardware T&L, phases 2–6 (#51, ADR 0016)** (L). Phase 1 (the instancing API,
+  `pc_gpu_check` and the reporting) is done; the native profile still draws on the CPU.
+  Next: resident mesh buffers and the WGSL vertex stage for static draws behind the
+  CPU-path oracle (2), rigid/`SKW2` skeletons and the instance ring (3), the parallel
+  CPU fallback (4), `TRINO_PC_TNL` and the Inspector's render-path row (5), the
+  measurements (6). The Web target (#47) reuses it.
+
 3. ~~**Console packaging for standalone projects**~~: **done** (2026-10-14, ADR 0008, the
    "Done — external console projects" table below).
 4. **Publish the engine crates** (S–M). Publish `trino-core`, `trino-game-api` and
@@ -186,6 +193,28 @@ shipping a 3D game first**, then by cost:
   time) and bless `tests/perf/` on purpose. Host benches stay as regression guards only.
 
 ---
+
+## Done — PC hardware T&L, phase 1: instancing API, `pc_gpu_check` and reporting (2026-10-17, branch `feat/51-pc-gpu-tnl`, GitHub #51, ADR 0016 draft)
+
+| Item | Evidence |
+|---|---|
+| `Instance`, `Renderer::draw_model_instances` / `draw_model_instances_with` (default: a loop over `draw_model_matrix`; the PC counts `TnlStats::instanced`) | `crates/core/tests/instancing.rs` (the default loop = separate draws: screen triangles bit for bit, `FrameStats`; tint and palette rules); the `instancing` self-test step on PC (`engine_checks`, the N64, 3DS and native profiles), in Azahar (`instancing probed`, `TEST PASS`) and in ares (`instancing probed`, `TEST PASS`); three mutations of the PC override (a copy dropped, the tint ignored, the palette table ignored) each fail the step |
+| `render3d::pc_gpu_check` / `pc_gpu_mesh_check` / `PcGpuReject`, `TnlStats::pc_gpu_draws` / `pc_gpu_tris`, `PcRenderer::pc_gpu_rejects` (native profile only; the CPU path still draws) | `crates/core/tests/instancing.rs::pc_gpu_rules_reject_only_what_the_gpu_path_does_not_port` (`Offscreen` = the CPU path's cull); `xtask/tests/engine_checks.rs::instancing_matches_separate_draws_and_counts_the_pc_gpu_split`; every PC golden and `castle64_work*.toml` unchanged |
+| `TRINO_FRAME` on the PC (`FrameMeter`, `apps/pc`, `trino-runner-pc`): `pc_gpu_draws= pc_gpu_tris= instanced= off_pc_gpu=` | `frame_report::tests::the_line_averages_per_frame_and_sorts_the_reasons`; castle64 native 26/26 draws, showcase native 42/46 (`skinned:3,water:1`), the N64 profile zeros |
+| `scene budget` PC line and `--json` fields, the editor's Game-view HUD and Inspector `PC GPU` line | `xtask/tests/scene_budget.rs::pc_budget_reports_the_gpu_split` (estimate = the renderer's counters and reasons, CLI JSON); `budget::tests`; the editor kittest `platform_budget_shows_rsp_reasons_and_unseen_draws` with the layout audit at 960×600 and 1600×1000 |
+
+N64: the three ares goldens byte-identical and every ceiling unchanged (not re-blessed);
+`tessellate_joints` sizes identical to `main` and no `pc_gpu_*` symbol in the ROM. Frame,
+emulated ms, mean (min–max) over 8 `TRINO_N64_TEXT_PAD` layouts (0/352/1024/2048/3072/
+4096/6144/8192), `main` → this branch: hub 11.60 (11.26–12.01) → 11.51 (11.19–11.79),
+green-hills 6.73 → 6.80, lava-land 7.46 → 7.39, sky-tower 6.87 → 6.79, throne 17.22 →
+17.06, showcase-river 283.3 (275.5–293.1) → 274.1 (258.9–292.4): every change inside the
+layout spread.
+
+Deviations from the issue's Phase 1 wording: `palette_index` needed a table to index,
+so `draw_model_instances_with` takes `&[Palette]` (`draw_model_instances` passes none);
+an instance's tint multiplies the call's rather than replacing it. `PcGpuReject` also
+names `PerPixelLit` (reported by the renderer; the budget predicts it for glossy draws).
 
 ## Done — water surfaces per tier and the showcase river (2026-10-17, branch `feat/water-surfaces`, GitHub #49, ADR 0015)
 

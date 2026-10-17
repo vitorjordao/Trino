@@ -165,15 +165,16 @@ pub fn use_rsp_split(rows: &mut [Row], n64: &trino_scene::budget::FrameBudget) {
     }
 }
 
-/// The Game view's per-console lines for the scene camera's frame: the
+/// The Game view's per-platform lines for the scene camera's frame: the
 /// N64 time (CPU vs RSP), how many draws take the RSP and the most common
-/// reason the rest don't, the 3DS triangles, and draws sent for nothing.
-/// Each with its level (the N64 time against a 30 fps frame).
+/// reason the rest don't, the 3DS triangles and GPU split, the PC native
+/// profile's GPU T&L split (issue #51), and draws sent for nothing. Each
+/// with its level (the N64 time against a 30 fps frame).
 pub fn platform_lines(
-    budgets: &[trino_scene::budget::FrameBudget; 2],
+    budgets: &[trino_scene::budget::FrameBudget; 3],
     tmem: &dyn Fn(trino_core::SpriteId) -> Option<u32>,
 ) -> Vec<(String, Level)> {
-    let [n64, n3ds] = budgets;
+    let [n64, n3ds, pc] = budgets;
     let pct = n64.n64_frame_percent();
     let level = if pct > 100.0 {
         Level::Over
@@ -206,6 +207,7 @@ pub fn platform_lines(
         gpu.push_str(&format!(" · {k} {}", r.label()));
     }
     out.push((gpu, Level::Ok));
+    out.push((trino_scene::budget::pc_gpu_line(pc), Level::Ok));
     let wasted = n64.wasted.len().max(n3ds.wasted.len());
     if wasted > 0 {
         out.push((format!("{wasted} draws sent but unseen"), Level::Near));
@@ -222,8 +224,30 @@ pub fn platform_lines(
     out
 }
 
+/// The Game view budget panel's width for its widest text line (`widest`
+/// px) in a view `view` px wide: the text plus its margins, at least
+/// [`HUD_MIN_WIDTH`], and never past the view (10 px off each side) unless
+/// the view is narrower than the minimum.
+pub fn hud_width(widest: f32, view: f32) -> f32 {
+    (widest + 16.0)
+        .max(HUD_MIN_WIDTH)
+        .min((view - 20.0).max(HUD_MIN_WIDTH))
+}
+
+/// The budget panel's narrowest width (its rows' labels and values).
+pub const HUD_MIN_WIDTH: f32 = 210.0;
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_hud_grows_to_its_longest_line_within_the_view() {
+        use super::{HUD_MIN_WIDTH, hud_width};
+        assert_eq!(hud_width(100.0, 800.0), HUD_MIN_WIDTH, "short lines");
+        assert_eq!(hud_width(260.0, 800.0), 276.0, "a long reason fits");
+        assert_eq!(hud_width(600.0, 400.0), 380.0, "never past the view");
+        assert_eq!(hud_width(600.0, 150.0), HUD_MIN_WIDTH, "a tiny view");
+    }
+
     use super::*;
 
     #[test]
@@ -248,12 +272,24 @@ mod tests {
             target: Target::N3ds,
             ..Default::default()
         };
-        let lines = platform_lines(&[n64.clone(), n3ds], &|_| None);
+        let pc = FrameBudget {
+            draws: 5,
+            pc_gpu_draws: 3,
+            pc_gpu_tris: 240,
+            off_pc_gpu: vec![
+                (trino_core::PcGpuReject::Skinned, 1),
+                (trino_core::PcGpuReject::Water, 1),
+            ],
+            target: Target::Pc,
+            ..Default::default()
+        };
+        let lines = platform_lines(&[n64.clone(), n3ds, pc.clone()], &|_| None);
         let text: Vec<&str> = lines.iter().map(|(t, _)| t.as_str()).collect();
         assert!(text[0].starts_with("N64 ≈"), "{text:?}");
         assert_eq!(text[1], "RSP 2/5 draws · 2 fog");
         assert_eq!(text[2], "3DS 2 tris · GPU 4/5 draws · 1 flat shading");
-        assert_eq!(lines[3], ("1 draws sent but unseen".into(), Level::Near));
+        assert_eq!(text[3], "PC GPU 3/5 draws · 240 tris · 1 skinned mesh");
+        assert_eq!(lines[4], ("1 draws sent but unseen".into(), Level::Near));
         // A light frame is green; one past 33.3 ms is red.
         assert_eq!(lines[0].1, Level::Ok);
         let heavy = FrameBudget {
@@ -261,7 +297,7 @@ mod tests {
             ..n64.clone()
         };
         assert_eq!(
-            platform_lines(&[heavy, n64.clone()], &|_| None)[0].1,
+            platform_lines(&[heavy, n64.clone(), pc.clone()], &|_| None)[0].1,
             Level::Over
         );
         // The HUD's N64 time row takes the CPU/RSP split.
@@ -280,7 +316,10 @@ mod tests {
             wasted: vec![],
             ..n64.clone()
         };
-        assert_eq!(platform_lines(&[clean.clone(), clean], &|_| None).len(), 3);
+        assert_eq!(
+            platform_lines(&[clean.clone(), clean.clone(), clean], &|_| None).len(),
+            4
+        );
     }
 
     #[test]

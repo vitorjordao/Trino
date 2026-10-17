@@ -9,9 +9,9 @@
 use trino_core::math3d::{cos, sin};
 use trino_core::{
     BakedScene, BillboardParams, BlobId, Camera3, Cells, Color, DEFAULT_LIGHT, DetailTexture,
-    Effect, Emitter, EntityStore, FontId, Impostor, InputState, Light, LocalLight, Material,
-    ModelId, ModelParams, ParticleSystem, Platform, Rect, Renderer, Screen, Shading, SpriteId,
-    TexFilter, TextBuf, TextParams, Transform3, Vec2, Vec3,
+    Effect, Emitter, EntityStore, FontId, Impostor, InputState, Instance, Light, LocalLight,
+    Material, ModelId, ModelParams, Palette, ParticleSystem, Platform, Rect, Renderer, Screen,
+    Shading, SpriteId, TexFilter, TextBuf, TextParams, Transform3, Vec2, Vec3,
 };
 
 /// The HUD font (also what the checks measure).
@@ -67,6 +67,10 @@ pub fn engine_checks(
     platform.log("TRINO_STEP:palette\n");
     if palette(renderer)? {
         platform.log("TRINO_STEP:palette probed 3 slots\n");
+    }
+    platform.log("TRINO_STEP:instancing\n");
+    if instancing(renderer)? {
+        platform.log("TRINO_STEP:instancing probed\n");
     }
     platform.log("TRINO_STEP:local lights\n");
     if local_lights(renderer)? {
@@ -751,6 +755,162 @@ pub fn palette(renderer: &mut dyn Renderer) -> Result<bool, &'static str> {
                 });
             }
         }
+    }
+    Ok(true)
+}
+
+/// Copies the `instancing` step draws.
+pub const INSTANCES: usize = 6;
+
+/// The `instancing` step's scene: [`INSTANCES`] small slotted cards in a
+/// 3 × 2 grid, each its own tint, two with a palette from the table, and
+/// the call's own palette for the rest.
+pub fn instancing_scene() -> ([Instance; INSTANCES], [Palette; 2], ModelParams) {
+    let rgb = Color::rgb;
+    let tints = [
+        rgb(255, 80, 80),
+        rgb(80, 255, 80),
+        rgb(80, 80, 255),
+        Color::WHITE,
+        rgb(255, 255, 80),
+        rgb(80, 255, 255),
+    ];
+    let palette_index = [0, 1, 0, 2, 7, 1];
+    let instances = core::array::from_fn(|i| {
+        let (col, row) = ((i % 3) as f32, (i / 3) as f32);
+        Instance {
+            matrix: Transform3 {
+                position: Vec3::new(-0.6 + col * 0.6, 0.35 - row * 0.7, 0.0),
+                rotation: Vec3::ZERO,
+                scale: Vec3::new(0.45, 0.45, 0.45),
+            }
+            .matrix(),
+            tint: tints[i],
+            palette_index: palette_index[i],
+        }
+    });
+    let palettes = [
+        [
+            rgb(230, 40, 40),
+            Color::WHITE,
+            Color::WHITE,
+            rgb(40, 60, 230),
+        ],
+        [rgb(40, 200, 40); 4],
+    ];
+    let params = ModelParams {
+        shading: Shading::Unlit,
+        tint: rgb(255, 255, 200),
+        palette: Some([rgb(200, 120, 40); 4]),
+        ..ModelParams::DEFAULT
+    };
+    (instances, palettes, params)
+}
+
+/// Instancing ([`Renderer::draw_model_instances_with`], issue #51): the
+/// same copies drawn as separate `draw_model_matrix` calls (their tint and
+/// palette worked out here, by the rules [`Instance`] documents) and then
+/// in one call must give the same pixels — a grid of probes plus each
+/// card's center — and the same counters (the `instanced` count aside:
+/// zero for the trait's default loop, one per copy where a backend counts
+/// them). Then the first card must show its own tint. `Ok(false)` where
+/// `read_pixel` is unsupported (the counters are still compared).
+#[inline(never)]
+pub fn instancing(renderer: &mut dyn Renderer) -> Result<bool, &'static str> {
+    let caps = *renderer.caps();
+    let screen = Vec2::new(caps.screen_width as f32, caps.screen_height as f32);
+    let camera = Camera3 {
+        eye: Vec3::new(0.0, 0.0, -2.0),
+        target: Vec3::ZERO,
+        fov_y: 60.0 * core::f32::consts::PI / 180.0,
+    };
+    let (instances, palettes, params) = instancing_scene();
+    let view = camera.view();
+    let half = camera.fov_y * 0.5;
+    let focal = cos(half) / sin(half) * screen.y * 0.5;
+    let project = |p: Vec3| {
+        let v = view.transform_point(p);
+        (
+            (screen.x * 0.5 + v.x * focal / v.z) as u32,
+            (screen.y * 0.5 - v.y * focal / v.z) as u32,
+        )
+    };
+    // 8 × 6 probes over the screen, then each card's center.
+    let mut probes = [(0u32, 0u32); 48 + INSTANCES];
+    for (k, p) in probes.iter_mut().enumerate().take(48) {
+        let (gx, gy) = ((k % 8) as u32, (k / 8) as u32);
+        *p = (
+            (gx * 2 + 1) * screen.x as u32 / 16,
+            (gy * 2 + 1) * screen.y as u32 / 12,
+        );
+    }
+    for (p, i) in probes[48..].iter_mut().zip(&instances) {
+        *p = project(i.matrix.transform_point(Vec3::ZERO));
+    }
+    let mul = |a: u8, b: u8| ((a as u16 * b as u16 + 127) / 255) as u8;
+    let mut seen = [[Color::BLACK; 48 + INSTANCES]; 2];
+    let mut stats = [trino_core::FrameStats::default(); 2];
+    let mut read = true;
+    for (pass, (seen, stats)) in seen.iter_mut().zip(&mut stats).enumerate() {
+        // Several identical frames: the 3DS LCD is double-buffered.
+        for _ in 0..3 {
+            renderer.begin_frame(Color::BLACK);
+            renderer.set_camera(&camera);
+            renderer.set_light(&DEFAULT_LIGHT);
+            if pass == 0 {
+                for i in &instances {
+                    let (a, b) = (params.tint, i.tint);
+                    let palette = match i.palette_index {
+                        0 => params.palette,
+                        k => palettes.get(k as usize - 1).copied().or(params.palette),
+                    };
+                    let own = ModelParams {
+                        tint: Color::rgba(
+                            mul(a.r, b.r),
+                            mul(a.g, b.g),
+                            mul(a.b, b.b),
+                            mul(a.a, b.a),
+                        ),
+                        palette,
+                        ..params
+                    };
+                    renderer.draw_model_matrix(SLOTS_CARD, &i.matrix, Material::VertexLit, &own);
+                }
+            } else {
+                renderer.draw_model_instances_with(SLOTS_CARD, &instances, &palettes, &params);
+            }
+            renderer.end_frame();
+        }
+        *stats = renderer.stats();
+        for (c, &(x, y)) in seen.iter_mut().zip(&probes) {
+            match renderer.read_pixel(x, y) {
+                Some(got) => *c = got,
+                None => read = false,
+            }
+        }
+    }
+    let [separate, one_call] = stats;
+    if separate.models != INSTANCES as u32 || separate.tris == 0 {
+        return Err("instancing: the separate draws drew nothing");
+    }
+    let mut tnl = one_call.tnl;
+    if tnl.instanced != 0 && tnl.instanced != INSTANCES as u32 {
+        return Err("instancing: the instanced count is not one per copy");
+    }
+    tnl.instanced = separate.tnl.instanced;
+    if one_call.models != separate.models || one_call.tris != separate.tris || tnl != separate.tnl {
+        return Err("instancing: one call did different work than the separate draws");
+    }
+    if !read {
+        return Ok(false);
+    }
+    if seen[0] != seen[1] {
+        return Err("instancing: one call drew different pixels than the separate draws");
+    }
+    // The first card: its tint (red) over the call's, slot 0 of the card.
+    let c = seen[1][48];
+    if !(c.r > 150 && c.g < 120 && c.b < 120) {
+        return Err("instancing: the first copy does not show its own tint");
     }
     Ok(true)
 }

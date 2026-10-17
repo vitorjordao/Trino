@@ -250,7 +250,7 @@ pub struct App {
     pub particles_view: crate::panels::particles::ParticlesView,
     /// The scene's frame from its camera on the N64 and the 3DS (variants,
     /// LOD and impostors applied), with the content key it is for.
-    pub budgets: Option<(u64, [trino_scene::budget::FrameBudget; 2])>,
+    pub budgets: Option<(u64, [trino_scene::budget::FrameBudget; 3])>,
     /// Ripples dropped on water surfaces from the material inspector
     /// ("Drop a ripple"), aged by the real clock: the views ring them out.
     pub ripples: trino_core::RippleBuffer<{ trino_core::MAX_RIPPLES }>,
@@ -605,14 +605,15 @@ impl App {
         h.finish()
     }
 
-    /// The scene's frame on the N64 and the 3DS from its camera
-    /// (`trino_scene::budget`, what `cargo xtask scene budget` prints): the
-    /// PC bakes of the models, except where a console has its own.
-    pub fn platform_budgets(&self) -> [trino_scene::budget::FrameBudget; 2] {
+    /// The scene's frame on the N64, the 3DS and the PC native profile from
+    /// its camera (`trino_scene::budget`, what `cargo xtask scene budget`
+    /// prints), in that order: the PC bakes of the models, except where a
+    /// console has its own.
+    pub fn platform_budgets(&self) -> [trino_scene::budget::FrameBudget; 3] {
         use trino_scene::{Target, budget};
         let env = &self.doc.scene.environment;
         let (camera, light) = (env.core_camera(), env.core_light());
-        [Target::N64, Target::N3ds].map(|t| {
+        [Target::N64, Target::N3ds, Target::Pc].map(|t| {
             let resolved = trino_scene::resolve_for(&self.doc.scene, &self.lib, 0.0, t);
             budget::estimate(
                 &resolved,

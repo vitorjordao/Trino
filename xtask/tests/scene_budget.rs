@@ -254,6 +254,92 @@ fn variants_lod_and_impostors_change_each_platforms_frame() {
     let _ = Vec3::ZERO;
 }
 
+/// The PC native profile's GPU T&L split (issue #51, Phase 1: decided and
+/// reported): the estimate equals what the PC renderer counts drawing the
+/// same scene from the same camera, draws and reasons alike, and the CLI
+/// prints it.
+#[test]
+fn pc_budget_reports_the_gpu_split() {
+    let mut renderer = match pollster::block_on(PcRenderer::new_headless(SimProfile::Native)) {
+        Ok(r) => r,
+        Err(e) => {
+            assert!(std::env::var("TRINO_REQUIRE_GPU").is_err(), "{e}");
+            eprintln!("skipping: {e}");
+            return;
+        }
+    };
+    let (meshes, lib) = assets();
+    for (id, blob) in &meshes {
+        renderer.upload_mesh(trino_core::ModelId(*id), blob.clone());
+    }
+    for file in ["scenes/showcase.scene.ron", "scenes/interior.scene.ron"] {
+        let scene = Scene::load(&root().join(file)).unwrap();
+        let b = estimate(&scene, &lib, &meshes, Target::Pc);
+        let env = &scene.environment;
+        let (camera, light) = (env.core_camera(), env.core_light());
+        let resolved = resolve_for(&scene, &lib, 0.0, Target::Pc);
+        let visible = resolved.visible_cells(&camera, Vec2::new(640.0, 480.0));
+        renderer.begin_frame(trino_core::Color::BLACK);
+        renderer.set_camera(&camera);
+        renderer.set_light(&light);
+        for item in &resolved.items {
+            if !trino_core::vis::in_view(item.cell, visible) {
+                continue;
+            }
+            if let LodPick::Model(id) = item.lod_from(camera.eye) {
+                renderer.draw_model_matrix(id, &item.matrix, Material::VertexLit, &item.params)
+            }
+        }
+        renderer.end_frame();
+        let tnl = renderer.stats().tnl;
+        assert!(b.pc_gpu_draws > 0, "{file}: {b:?}");
+        assert_eq!(
+            (tnl.pc_gpu_draws, tnl.pc_gpu_tris),
+            (b.pc_gpu_draws, b.pc_gpu_tris),
+            "{file}"
+        );
+        let mut off: Vec<(trino_core::PcGpuReject, u32)> = trino_core::PcGpuReject::ALL
+            .iter()
+            .map(|r| (*r, renderer.pc_gpu_rejects()[r.index()]))
+            .filter(|(_, n)| *n > 0)
+            .collect();
+        off.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        assert_eq!(off, b.off_pc_gpu, "{file}: the same reasons");
+        let rest: u32 = b.off_pc_gpu.iter().map(|(_, n)| n).sum();
+        assert_eq!(b.pc_gpu_draws + rest, b.draws, "{file}");
+        // Phase 1: the CPU path still draws every PC draw.
+        assert_eq!(b.cpu_draws, b.draws);
+        assert!(
+            budget::pc_gpu_line(&b)
+                .starts_with(&format!("PC GPU {}/{} draws", b.pc_gpu_draws, b.draws))
+        );
+    }
+    let out = Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .args([
+            "scene",
+            "budget",
+            "scenes/showcase.scene.ron",
+            "--platform",
+            "pc",
+            "--json",
+        ])
+        .current_dir(root())
+        .env_remove("TRINO_PROJECT")
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let pc = &v.as_array().unwrap()[0];
+    let scene = Scene::load(&root().join("scenes/showcase.scene.ron")).unwrap();
+    let b = estimate(&scene, &lib, &meshes, Target::Pc);
+    assert_eq!(pc["platform"], "pc");
+    assert_eq!(pc["pc_gpu_draws"], b.pc_gpu_draws);
+    assert_eq!(pc["pc_gpu_tris"], b.pc_gpu_tris);
+    let reasons = pc["off_pc_gpu"].as_array().unwrap();
+    assert_eq!(reasons.len(), b.off_pc_gpu.len());
+    assert_eq!(reasons[0]["reason"], b.off_pc_gpu[0].0.label());
+}
+
 #[test]
 fn scene_budget_cli_prints_the_same_numbers() {
     let out = Command::new(env!("CARGO_BIN_EXE_xtask"))

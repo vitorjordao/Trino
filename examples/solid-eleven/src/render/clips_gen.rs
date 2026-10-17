@@ -239,7 +239,7 @@ pub const PARTS: [Part; 24] = [
         tint: Tint::Shorts,
         tiers: tier::FULL,
         solids: &[
-            Solid { y0: -0.2400, y1: 0.0400, w0: 0.1450, d0: 0.1800, w1: 0.1450, d1: 0.1700, cx: 0.0000, cz: 0.0000, skip: 0 },
+            Solid { y0: -0.2400, y1: 0.0400, w0: 0.1450, d0: 0.1800, w1: 0.1200, d1: 0.1700, cx: 0.0000, cz: 0.0000, skip: 0 },
         ],
     },
     Part {
@@ -248,7 +248,7 @@ pub const PARTS: [Part; 24] = [
         tint: Tint::Shorts,
         tiers: tier::FULL,
         solids: &[
-            Solid { y0: -0.2400, y1: 0.0400, w0: 0.1450, d0: 0.1800, w1: 0.1450, d1: 0.1700, cx: 0.0000, cz: 0.0000, skip: 0 },
+            Solid { y0: -0.2400, y1: 0.0400, w0: 0.1450, d0: 0.1800, w1: 0.1200, d1: 0.1700, cx: 0.0000, cz: 0.0000, skip: 0 },
         ],
     },
     Part {
@@ -345,7 +345,7 @@ pub const PARTS: [Part; 24] = [
         tint: Tint::Shorts,
         tiers: tier::NEAR | tier::FAR,
         solids: &[
-            Solid { y0: -0.2800, y1: 0.0200, w0: 0.1500, d0: 0.1700, w1: 0.1500, d1: 0.1600, cx: 0.0000, cz: 0.0000, skip: 0 },
+            Solid { y0: -0.2800, y1: 0.0200, w0: 0.1500, d0: 0.1700, w1: 0.1300, d1: 0.1600, cx: 0.0000, cz: 0.0000, skip: 0 },
         ],
     },
     Part {
@@ -354,7 +354,7 @@ pub const PARTS: [Part; 24] = [
         tint: Tint::Shorts,
         tiers: tier::NEAR | tier::FAR,
         solids: &[
-            Solid { y0: -0.2800, y1: 0.0200, w0: 0.1500, d0: 0.1700, w1: 0.1500, d1: 0.1600, cx: 0.0000, cz: 0.0000, skip: 0 },
+            Solid { y0: -0.2800, y1: 0.0200, w0: 0.1500, d0: 0.1700, w1: 0.1300, d1: 0.1600, cx: 0.0000, cz: 0.0000, skip: 0 },
         ],
     },
     Part {
@@ -363,7 +363,7 @@ pub const PARTS: [Part; 24] = [
         tint: Tint::Socks,
         tiers: tier::NEAR | tier::FAR,
         solids: &[
-            Solid { y0: -0.8200, y1: -0.0500, w0: 0.1000, d0: 0.1100, w1: 0.1400, d1: 0.1500, cx: 0.0000, cz: 0.0000, skip: 12 },
+            Solid { y0: -0.8200, y1: -0.0500, w0: 0.1000, d0: 0.1100, w1: 0.1200, d1: 0.1500, cx: 0.0000, cz: 0.0000, skip: 12 },
             Solid { y0: -0.9100, y1: -0.8200, w0: 0.1100, d0: 0.2600, w1: 0.1100, d1: 0.2600, cx: 0.0000, cz: 0.0400, skip: 0 },
         ],
     },
@@ -373,7 +373,7 @@ pub const PARTS: [Part; 24] = [
         tint: Tint::Socks,
         tiers: tier::NEAR | tier::FAR,
         solids: &[
-            Solid { y0: -0.8200, y1: -0.0500, w0: 0.1000, d0: 0.1100, w1: 0.1400, d1: 0.1500, cx: 0.0000, cz: 0.0000, skip: 12 },
+            Solid { y0: -0.8200, y1: -0.0500, w0: 0.1000, d0: 0.1100, w1: 0.1200, d1: 0.1500, cx: 0.0000, cz: 0.0000, skip: 12 },
             Solid { y0: -0.9100, y1: -0.8200, w0: 0.1100, d0: 0.2600, w1: 0.1100, d1: 0.2600, cx: 0.0000, cz: 0.0400, skip: 0 },
         ],
     },

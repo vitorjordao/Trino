@@ -109,7 +109,8 @@ BODY = {
         box(-0.35, -0.27, 0.085, 0.095),
     ]),
     "shorts_leg_hd_x": ("thigh_l", "shorts", "pc", 24, [
-        taper(-0.24, 0.04, 0.145, 0.18, 0.145, 0.17),
+        # Narrower at the top, where the shorts taper in to the waist.
+        taper(-0.24, 0.04, 0.145, 0.18, 0.12, 0.17),
     ]),
     "thigh_x": ("thigh_l", "skin", "pc", 26, [
         taper(-0.40, -0.18, 0.115, 0.12, 0.13, 0.14, skip="+y"),
@@ -137,10 +138,11 @@ BODY = {
         taper(-0.62, 0.0, 0.07, 0.075, 0.085, 0.085),
     ]),
     "shorts_leg_x": ("thigh_l", "shorts", "near far", 12, [
-        taper(-0.28, 0.02, 0.15, 0.17, 0.15, 0.16),
+        taper(-0.28, 0.02, 0.15, 0.17, 0.13, 0.16),
     ]),
     "leg_x": ("thigh_l", "socks", "near far", 20, [
-        taper(-0.82, -0.05, 0.10, 0.11, 0.14, 0.15, skip="+y -y"),
+        # Its top, under the shorts leg, narrower than the shorts leg there.
+        taper(-0.82, -0.05, 0.10, 0.11, 0.12, 0.15, skip="+y -y"),
         box(-0.91, -0.82, 0.11, 0.26, cz=0.04, color="boot"),
     ]),
 }

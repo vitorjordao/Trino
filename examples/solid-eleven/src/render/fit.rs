@@ -781,6 +781,65 @@ fn every_hair_style_stays_clear_of_the_skull() {
     assert!(hair_clearance(&cap, skull).0 < 0.0);
 }
 
+/// At rest (and through the run cycles' passing poses), a shorts leg
+/// stays within the shorts' sides: only its bottom shows, never a flap out
+/// to the side (iteration 2's shorts legs flared 1.5 cm past the hem).
+#[test]
+fn the_shorts_legs_stay_inside_the_shorts_sides() {
+    use super::anim::joint::{PELVIS, THIGH_L, THIGH_R};
+    for (tier_bit, name) in [(tier::FULL, "pc"), (tier::NEAR, "near"), (tier::FAR, "far")] {
+        let body = Body::new(tier_bit);
+        let shorts = body
+            .parts
+            .iter()
+            .position(|p| p.joint == PELVIS && p.tint == Tint::Shorts)
+            .unwrap();
+        for (label, clip, t) in [
+            ("rest", None, 0.0),
+            ("jog", Some(ClipName::Jog), 0.25),
+            ("sprint", Some(ClipName::Sprint), 0.25),
+        ] {
+            let pose = match clip {
+                None => Pose::REST,
+                Some(c) => sample_masked(c, clip_secs(c) * t, false, body.mask),
+            };
+            let m = body.matrices(&pose, true);
+            let half = |y: f32| {
+                // The shorts' half-width at world height y (its frame is
+                // the pelvis's, upright here).
+                let l = to_local(&m[PELVIS], Vec3::new(0.0, y, 0.0));
+                let s = &body.parts[shorts].solids[0];
+                let f = ((l.y - s.y0) / (s.y1 - s.y0)).clamp(0.0, 1.0);
+                (s.w0 + (s.w1 - s.w0) * f) * 0.5
+            };
+            for (pi, p) in body.parts.iter().enumerate() {
+                if !(p.tint == Tint::Shorts && (p.joint == THIGH_L || p.joint == THIGH_R)) {
+                    continue;
+                }
+                for (si, smp) in body.samples.iter().enumerate() {
+                    if smp.part != pi
+                        || body.depth(&m, shorts, m[p.joint].transform_point(smp.local)) < -0.03
+                    {
+                        continue;
+                    }
+                    let _ = si;
+                    let w = m[p.joint].transform_point(smp.local);
+                    let pelvis_x = m[PELVIS].m[0][3];
+                    let out = (w.x - pelvis_x).abs() - half(w.y);
+                    assert!(
+                        out <= 0.004,
+                        "{name} {label}: a shorts leg sticks {out:.3} m out past the shorts' side"
+                    );
+                }
+            }
+        }
+    }
+}
+
+fn clip_secs(c: ClipName) -> f32 {
+    clip(c).seconds
+}
+
 #[test]
 fn every_clip_and_the_body_are_covered() {
     assert_eq!(CLIPS.len(), ClipName::ALL.len());

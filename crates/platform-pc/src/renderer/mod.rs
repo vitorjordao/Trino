@@ -119,9 +119,12 @@ pub struct PcRenderer {
     /// Per-pixel lighting (`LightTier::PerPixel`): local lights, specular
     /// and wetness on top of the vertex color.
     lit_pipeline: wgpu::RenderPipeline,
-    /// The four scene pipelines again for a multisampled target
-    /// ([`PcRenderer::set_msaa`]): sprite, tri, tri clamp, lit.
-    ms_pipelines: [wgpu::RenderPipeline; 4],
+    /// What the scene pipelines are built from, and the four again for a
+    /// multisampled target, built by the first [`PcRenderer::set_msaa`]
+    /// that turns it on: sprite, tri, tri clamp, lit. (Building them for
+    /// every renderer made parallel headless tests crash RADV.)
+    sources: SceneSources,
+    ms_pipelines: Option<[wgpu::RenderPipeline; 4]>,
     /// Samples per pixel of the main screen's scene pass (1 = off), and
     /// its multisampled color and depth (resolved into the offscreen
     /// target at the end of the pass).
@@ -326,6 +329,246 @@ fn create_targets(
 
 /// Samples per pixel when multisampling is on.
 pub const MSAA_SAMPLES: u32 = 4;
+/// The shader and layouts the scene pipelines are built from, kept so the
+/// multisampled set ([`PcRenderer::set_msaa`]) is only built when asked for.
+struct SceneSources {
+    shader: wgpu::ShaderModule,
+    sprite_layout: wgpu::PipelineLayout,
+    tri_layout: wgpu::PipelineLayout,
+    lit_layout: wgpu::PipelineLayout,
+}
+
+/// The four scene pipelines for a target with `samples` samples per pixel:
+/// sprite, tri, tri clamp (billboards), lit.
+fn scene_pipelines(
+    device: &wgpu::Device,
+    src: &SceneSources,
+    samples: u32,
+) -> [wgpu::RenderPipeline; 4] {
+    let SceneSources {
+        shader,
+        sprite_layout,
+        tri_layout,
+        lit_layout,
+    } = src;
+    let instance_attrs = [
+        wgpu::VertexAttribute {
+            format: wgpu::VertexFormat::Float32x2,
+            offset: 0,
+            shader_location: 0,
+        },
+        wgpu::VertexAttribute {
+            format: wgpu::VertexFormat::Float32x2,
+            offset: 8,
+            shader_location: 1,
+        },
+        wgpu::VertexAttribute {
+            format: wgpu::VertexFormat::Float32,
+            offset: 16,
+            shader_location: 2,
+        },
+        wgpu::VertexAttribute {
+            format: wgpu::VertexFormat::Float32x2,
+            offset: 24,
+            shader_location: 3,
+        },
+        wgpu::VertexAttribute {
+            format: wgpu::VertexFormat::Float32x2,
+            offset: 32,
+            shader_location: 4,
+        },
+        wgpu::VertexAttribute {
+            format: wgpu::VertexFormat::Float32x4,
+            offset: 40,
+            shader_location: 5,
+        },
+    ];
+
+    let make_sprite_pipeline = |samples: u32| {
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("trino-sprite-pipeline"),
+            layout: Some(sprite_layout),
+            vertex: wgpu::VertexState {
+                module: shader,
+                entry_point: Some("vs_sprite"),
+                compilation_options: Default::default(),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: INSTANCE_STRIDE,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &instance_attrs,
+                }],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: shader,
+                entry_point: Some("fs_sprite"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: OFFSCREEN_FORMAT,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleStrip,
+                ..Default::default()
+            },
+            // Sprites are 2D overlay: draw in submission order, never test
+            // or write depth (matches the N64's rdpq sprite path).
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::Always),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState {
+                count: samples,
+                ..Default::default()
+            },
+            multiview_mask: None,
+            cache: None,
+        })
+    };
+    let tri_attrs = [
+        wgpu::VertexAttribute {
+            format: wgpu::VertexFormat::Float32x2,
+            offset: 0,
+            shader_location: 0,
+        },
+        wgpu::VertexAttribute {
+            format: wgpu::VertexFormat::Float32x4,
+            offset: 8,
+            shader_location: 1,
+        },
+        wgpu::VertexAttribute {
+            format: wgpu::VertexFormat::Float32,
+            offset: 24,
+            shader_location: 2,
+        },
+        wgpu::VertexAttribute {
+            format: wgpu::VertexFormat::Float32,
+            offset: 28,
+            shader_location: 3,
+        },
+        wgpu::VertexAttribute {
+            format: wgpu::VertexFormat::Float32x2,
+            offset: 32,
+            shader_location: 4,
+        },
+        wgpu::VertexAttribute {
+            format: wgpu::VertexFormat::Float32x2,
+            offset: 88,
+            shader_location: 10,
+        },
+    ];
+    let make_tri_pipeline = |fragment: &str, samples: u32| {
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("trino-tri-pipeline"),
+            layout: Some(tri_layout),
+            vertex: wgpu::VertexState {
+                module: shader,
+                entry_point: Some("vs_tri"),
+                compilation_options: Default::default(),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: TRI_VERTEX_STRIDE,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &tri_attrs,
+                }],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: shader,
+                entry_point: Some(fragment),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: OFFSCREEN_FORMAT,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            // Real per-pixel occlusion: interpenetrating meshes (a cap
+            // through a head) resolve correctly, which no painter sort can.
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState {
+                count: samples,
+                ..Default::default()
+            },
+            multiview_mask: None,
+            cache: None,
+        })
+    };
+    let lit_attrs =
+        {
+            let extra = [
+                (wgpu::VertexFormat::Float32x3, 40, 5),
+                (wgpu::VertexFormat::Float32x3, 52, 6),
+                (wgpu::VertexFormat::Float32x4, 64, 7),
+                (wgpu::VertexFormat::Float32, 80, 8),
+                (wgpu::VertexFormat::Float32, 84, 9),
+            ];
+            let mut a = tri_attrs.to_vec();
+            a.extend(extra.iter().map(|&(format, offset, shader_location)| {
+                wgpu::VertexAttribute {
+                    format,
+                    offset,
+                    shader_location,
+                }
+            }));
+            a
+        };
+    let make_lit_pipeline = |samples: u32| {
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("trino-lit-pipeline"),
+            layout: Some(lit_layout),
+            vertex: wgpu::VertexState {
+                module: shader,
+                entry_point: Some("vs_tri_lit"),
+                compilation_options: Default::default(),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: TRI_VERTEX_STRIDE,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &lit_attrs,
+                }],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: shader,
+                entry_point: Some("fs_tri_lit"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: OFFSCREEN_FORMAT,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState {
+                count: samples,
+                ..Default::default()
+            },
+            multiview_mask: None,
+            cache: None,
+        })
+    };
+    [
+        make_sprite_pipeline(samples),
+        make_tri_pipeline("fs_tri", samples),
+        make_tri_pipeline("fs_tri_clamp", samples),
+        make_lit_pipeline(samples),
+    ]
+}
 
 /// The multisampled color and depth of the scene pass (resolved into the
 /// offscreen target).
@@ -649,86 +892,6 @@ impl PcRenderer {
             immediate_size: 0,
         });
 
-        let instance_attrs = [
-            wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32x2,
-                offset: 0,
-                shader_location: 0,
-            },
-            wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32x2,
-                offset: 8,
-                shader_location: 1,
-            },
-            wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32,
-                offset: 16,
-                shader_location: 2,
-            },
-            wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32x2,
-                offset: 24,
-                shader_location: 3,
-            },
-            wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32x2,
-                offset: 32,
-                shader_location: 4,
-            },
-            wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32x4,
-                offset: 40,
-                shader_location: 5,
-            },
-        ];
-
-        let make_sprite_pipeline = |samples: u32| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("trino-sprite-pipeline"),
-                layout: Some(&sprite_layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some("vs_sprite"),
-                    compilation_options: Default::default(),
-                    buffers: &[wgpu::VertexBufferLayout {
-                        array_stride: INSTANCE_STRIDE,
-                        step_mode: wgpu::VertexStepMode::Instance,
-                        attributes: &instance_attrs,
-                    }],
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some("fs_sprite"),
-                    compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: OFFSCREEN_FORMAT,
-                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleStrip,
-                    ..Default::default()
-                },
-                // Sprites are 2D overlay: draw in submission order, never test
-                // or write depth (matches the N64's rdpq sprite path).
-                depth_stencil: Some(wgpu::DepthStencilState {
-                    format: wgpu::TextureFormat::Depth32Float,
-                    depth_write_enabled: Some(false),
-                    depth_compare: Some(wgpu::CompareFunction::Always),
-                    stencil: wgpu::StencilState::default(),
-                    bias: wgpu::DepthBiasState::default(),
-                }),
-                multisample: wgpu::MultisampleState {
-                    count: samples,
-                    ..Default::default()
-                },
-                multiview_mask: None,
-                cache: None,
-            })
-        };
-        let sprite_pipeline = make_sprite_pipeline(1);
-
         // 3D triangle pipeline: same offscreen target; vertex colors
         // modulated by one texture per segment (white when untextured) and
         // its detail layer (white when none).
@@ -762,82 +925,6 @@ impl PcRenderer {
             bind_group_layouts: &[Some(&globals_bgl), Some(&tex3d_bgl)],
             immediate_size: 0,
         });
-        let tri_attrs = [
-            wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32x2,
-                offset: 0,
-                shader_location: 0,
-            },
-            wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32x4,
-                offset: 8,
-                shader_location: 1,
-            },
-            wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32,
-                offset: 24,
-                shader_location: 2,
-            },
-            wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32,
-                offset: 28,
-                shader_location: 3,
-            },
-            wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32x2,
-                offset: 32,
-                shader_location: 4,
-            },
-            wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32x2,
-                offset: 88,
-                shader_location: 10,
-            },
-        ];
-        let make_tri_pipeline = |fragment: &str, samples: u32| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("trino-tri-pipeline"),
-                layout: Some(&tri_layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some("vs_tri"),
-                    compilation_options: Default::default(),
-                    buffers: &[wgpu::VertexBufferLayout {
-                        array_stride: TRI_VERTEX_STRIDE,
-                        step_mode: wgpu::VertexStepMode::Vertex,
-                        attributes: &tri_attrs,
-                    }],
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some(fragment),
-                    compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: OFFSCREEN_FORMAT,
-                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                }),
-                primitive: wgpu::PrimitiveState::default(),
-                // Real per-pixel occlusion: interpenetrating meshes (a cap
-                // through a head) resolve correctly, which no painter sort can.
-                depth_stencil: Some(wgpu::DepthStencilState {
-                    format: wgpu::TextureFormat::Depth32Float,
-                    depth_write_enabled: Some(true),
-                    depth_compare: Some(wgpu::CompareFunction::LessEqual),
-                    stencil: wgpu::StencilState::default(),
-                    bias: wgpu::DepthBiasState::default(),
-                }),
-                multisample: wgpu::MultisampleState {
-                    count: samples,
-                    ..Default::default()
-                },
-                multiview_mask: None,
-                cache: None,
-            })
-        };
-        let tri_pipeline = make_tri_pipeline("fs_tri", 1);
-        let tri_clamp_pipeline = make_tri_pipeline("fs_tri_clamp", 1);
 
         // Lit pipeline: the same vertices with the per-pixel inputs, and
         // the frame's light sets in group 2.
@@ -873,71 +960,18 @@ impl PcRenderer {
             bind_group_layouts: &[Some(&globals_bgl), Some(&tex3d_bgl), Some(&lights_bgl)],
             immediate_size: 0,
         });
-        let lit_attrs = {
-            let extra = [
-                (wgpu::VertexFormat::Float32x3, 40, 5),
-                (wgpu::VertexFormat::Float32x3, 52, 6),
-                (wgpu::VertexFormat::Float32x4, 64, 7),
-                (wgpu::VertexFormat::Float32, 80, 8),
-                (wgpu::VertexFormat::Float32, 84, 9),
-            ];
-            let mut a = tri_attrs.to_vec();
-            a.extend(extra.iter().map(|&(format, offset, shader_location)| {
-                wgpu::VertexAttribute {
-                    format,
-                    offset,
-                    shader_location,
-                }
-            }));
-            a
+        let sources = SceneSources {
+            shader,
+            sprite_layout,
+            tri_layout,
+            lit_layout,
         };
-        let make_lit_pipeline = |samples: u32| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("trino-lit-pipeline"),
-                layout: Some(&lit_layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some("vs_tri_lit"),
-                    compilation_options: Default::default(),
-                    buffers: &[wgpu::VertexBufferLayout {
-                        array_stride: TRI_VERTEX_STRIDE,
-                        step_mode: wgpu::VertexStepMode::Vertex,
-                        attributes: &lit_attrs,
-                    }],
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some("fs_tri_lit"),
-                    compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: OFFSCREEN_FORMAT,
-                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                }),
-                primitive: wgpu::PrimitiveState::default(),
-                depth_stencil: Some(wgpu::DepthStencilState {
-                    format: wgpu::TextureFormat::Depth32Float,
-                    depth_write_enabled: Some(true),
-                    depth_compare: Some(wgpu::CompareFunction::LessEqual),
-                    stencil: wgpu::StencilState::default(),
-                    bias: wgpu::DepthBiasState::default(),
-                }),
-                multisample: wgpu::MultisampleState {
-                    count: samples,
-                    ..Default::default()
-                },
-                multiview_mask: None,
-                cache: None,
-            })
-        };
-        let lit_pipeline = make_lit_pipeline(1);
-        let ms_pipelines = [
-            make_sprite_pipeline(MSAA_SAMPLES),
-            make_tri_pipeline("fs_tri", MSAA_SAMPLES),
-            make_tri_pipeline("fs_tri_clamp", MSAA_SAMPLES),
-            make_lit_pipeline(MSAA_SAMPLES),
-        ];
+        let [
+            sprite_pipeline,
+            tri_pipeline,
+            tri_clamp_pipeline,
+            lit_pipeline,
+        ] = scene_pipelines(&device, &sources, 1);
 
         let blit_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("trino-blit-layout"),
@@ -952,13 +986,13 @@ impl PcRenderer {
             label: Some("trino-blit-pipeline"),
             layout: Some(&blit_layout),
             vertex: wgpu::VertexState {
-                module: &shader,
+                module: &sources.shader,
                 entry_point: Some("vs_blit"),
                 compilation_options: Default::default(),
                 buffers: &[],
             },
             fragment: Some(wgpu::FragmentState {
-                module: &shader,
+                module: &sources.shader,
                 entry_point: Some("fs_blit"),
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
@@ -1011,13 +1045,13 @@ impl PcRenderer {
             label: Some("trino-vi-pipeline"),
             layout: Some(&blit_layout),
             vertex: wgpu::VertexState {
-                module: &shader,
+                module: &sources.shader,
                 entry_point: Some("vs_blit"),
                 compilation_options: Default::default(),
                 buffers: &[],
             },
             fragment: Some(wgpu::FragmentState {
-                module: &shader,
+                module: &sources.shader,
                 entry_point: Some("fs_vi_dedither"),
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
@@ -1102,7 +1136,8 @@ impl PcRenderer {
             tri_pipeline,
             tri_clamp_pipeline,
             lit_pipeline,
-            ms_pipelines,
+            sources,
+            ms_pipelines: None,
             msaa: 1,
             msaa_targets: None,
             lights_buf,
@@ -1280,6 +1315,9 @@ impl PcRenderer {
             return;
         }
         self.msaa = samples;
+        if samples > 1 && self.ms_pipelines.is_none() {
+            self.ms_pipelines = Some(scene_pipelines(&self.device, &self.sources, samples));
+        }
         self.msaa_targets =
             (samples > 1).then(|| create_msaa_targets(&self.device, self.internal_size));
     }
@@ -1847,13 +1885,8 @@ impl PcRenderer {
             Some((c, d)) => (c, Some(color_view), d),
             None => (color_view, None, depth_view),
         };
-        let pipes = if ms.is_some() {
-            [
-                &self.ms_pipelines[0],
-                &self.ms_pipelines[1],
-                &self.ms_pipelines[2],
-                &self.ms_pipelines[3],
-            ]
+        let pipes = if let (Some(_), Some(p)) = (ms, &self.ms_pipelines) {
+            [&p[0], &p[1], &p[2], &p[3]]
         } else {
             [
                 &self.sprite_pipeline,

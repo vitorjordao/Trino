@@ -446,6 +446,21 @@ hull check: 30.9 ms over four code layouts, all 83 draws on the RSP). What got i
   them, listed by `team::LEG_KITS` and checked by `the_leg_kit_list_is_baked`), so a
   console player is 7 draws. Draw count is what the N64 pays for.
 
+### Iteration 3 (2026-10-17): CI ran 3.6 ms slower, and where a body's time goes
+
+- The same commit measured 33.9 ms in CI and 30.3 ms locally (pad 0). CI builds with
+  the newest nightly and other paths, so its layout isn't any of the local paddings.
+  Keep ~3 ms of local headroom under a gate.
+- Bisect a frame by switching game code off in a scaffolded project and timing it in
+  ares (scaffold, `cargo xtask test n64 --project <dir>`, read `TRINO_FRAME`). In Solid
+  Eleven the HUD cost ~0; the players cost 15.5 ms. 3.4 ms of that was posing, and the
+  rest was draws.
+- An RSP draw that misses the memo spends ~110 µs *before* the `tnl` stage (key, mesh
+  lookups, `rsp_check_mv`, `view · model`). It showed up by charging that span to the
+  unused `sort` stage. So a moving body part costs ~0.2 ms of CPU.
+- What paid: far players (beyond 24 m) drop their arms and blob shadow (83 → 68 draws,
+  30.7 → 27.4 ms). Moving the threshold to 22 m gained nothing more.
+
 ## Workflow for a perf change
 
 1. Baseline on the base commit in a `git worktree` (never `git stash`), over a few

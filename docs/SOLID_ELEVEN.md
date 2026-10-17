@@ -207,7 +207,9 @@ own bake against a triangle budget:
   `tools/blender/solid_eleven_anim.py`: frustum solids per joint, a tint, the tiers
   that draw them). Consoles draw 7 per player: head, torso, shorts, two arms and two
   kit legs, each kit leg one mesh with the shorts leg and the sock in the kit's
-  colors (one of 30 baked pairs, `team::LEG_KITS`); far players drop the arms. The PC
+  colors (one of 30 baked pairs, `team::LEG_KITS`). Players beyond 24 m of view
+  depth (`FAR_DEPTH`; the referee too) drop their arms and their blob shadow: each N64
+  draw costs about 0.2 ms of CPU, and at 320x240 those are a pixel or two. The PC
   draws 15 parts, with sleeves, elbows and knees, plus the hair. A shadow is its own
   flat draw on the turf. Kits are a per-draw tint, so every part stays on the N64's
   RSP.
@@ -273,8 +275,8 @@ stadium instead of rebuilding it.
 
 | Target | The self-test's scripted match (300 frames) |
 |---|---|
-| N64 (ares) | avg **30.7 ms**: the mean over eight code layouts (`TRINO_N64_TEXT_PAD` 0 to 3584 by 512: 30.29, 30.72, 31.20, 30.99, 31.04, 30.53, 30.04, 30.91 ms), max 37.5–40.0 ms, against the template's 33.3 ms gate. The sim update takes 7.2 ms, the 3D 6.7 ms, the 2D overlay 1.6 ms. All 83 draws ran on the RSP. Stack 30 KB, heap 1.4 of 7.3 MB. Sim hash `d51e91bf`. |
-| 3DS (Azahar) | avg **16.8 ms** (59 fps), with every one of 99 draws (2035 triangles) on the PICA200 and none on the CPU. CPU 5.7 ms. Sim hash `d51e91bf`. Azahar doesn't time the console exactly. |
+| N64 (ares) | avg **27.4 ms**: the mean over eight code layouts (`TRINO_N64_TEXT_PAD` 0 to 3584 by 512: 27.40, 27.76, 27.31, 27.64, 27.47, 27.58, 27.01, 26.95 ms), max 34.2–36.2 ms, against the template's 33.3 ms gate. The sim update takes 7.2 ms, the 3D 5.4 ms, the 2D overlay 1.6 ms. All 68 draws ran on the RSP. Stack 30 KB, heap 1.4 of 7.3 MB. Sim hash `d51e91bf`. CI builds with the newest nightly and its own paths, a different code layout: the same code measured 33.9 ms there with 83 draws against 30.3 ms locally, so the frame keeps about 6 ms of local headroom. |
+| 3DS (Azahar) | avg **16.9 ms** (59 fps), with every one of 81 draws (1879 triangles) on the PICA200 and none on the CPU. CPU 5.4 ms. Sim hash `d51e91bf`. Azahar doesn't time the console exactly. |
 | PC (1920x1080, native, 4× MSAA and SSAO, AMD Renoir iGPU) | Clear day: avg **9.3 ms**, p99 12.0 ms. Dusk with rain, the wet look and glows: avg **11.2 ms**, p99 17.4 ms. Without the AO: 4.8 and 7.7 ms; without MSAA and AO: 2.7 and 5.0 ms. The AO costs 2.7 ms single-sampled and 4.5 ms over the multisampled depth (an AMD iGPU decompresses it to sample it). Each frame includes the update, the render and the GPU's work, measured by `solid_eleven_shots::pc_frame_time` (`TRINO_MSAA=0`, `TRINO_AO=0`). |
 
 The sim hash is the same on the PC, in ares and in Azahar, and each console's

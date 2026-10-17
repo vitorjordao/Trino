@@ -151,8 +151,12 @@ shipping a 3D game first**, then by cost:
 16. **Solid Eleven follow-ups** (S–M each, from issue #39).
     - Local two-player matches: the sim takes two pads already (`human: [bool; 2]`), but
       no menu offers it.
-    - The N64 frame has 2.6 ms of headroom under its 33.3 ms gate (30.7 ms over eight
-      code layouts): the sim update (7.2 ms) is the next thing to cut.
+    - The N64 frame is 27.4 ms locally (eight code layouts) against its 33.3 ms gate,
+      but CI's layout ran the same code ~3.6 ms slower: the sim update (7.2 ms) is the
+      next thing to cut.
+    - Engine: an RSP draw that misses the N64 memo spends ~110 µs before its T&L stage
+      (key, mesh lookups, `rsp_check_mv`). A cheaper miss path would help every game
+      with moving models.
     - The PC's SSAO over the multisampled depth costs 4.5 ms at 1080p on an AMD iGPU
       (2.7 ms single-sampled): a cheaper depth for the AO (a resolve in the scene pass)
       or a separate AO setting.

@@ -849,7 +849,7 @@ fn draw_people(r: &mut dyn Renderer, m: &Match, v: &MatchView, fr: &Frustum, hif
         }
         let detail = if hifi {
             Detail::Full
-        } else if fr.depth(pos) > 30.0 {
+        } else if fr.depth(pos) > FAR_DEPTH {
             Detail::Far
         } else {
             Detail::Near
@@ -881,7 +881,15 @@ fn draw_people(r: &mut dyn Renderer, m: &Match, v: &MatchView, fr: &Frustum, hif
             (d.x.to_f32(), d.y.to_f32())
         };
         let body = body_matrix(pos, fx, fz, WORLD);
-        let detail = if hifi { Detail::Full } else { Detail::Near };
+        // The referee goes far like a player; a linesman keeps his arms
+        // (his flag is in his hand).
+        let detail = if hifi {
+            Detail::Full
+        } else if k == 0 && fr.depth(pos) > FAR_DEPTH {
+            Detail::Far
+        } else {
+            Detail::Near
+        };
         let pose = v.anims[N + k].pose_masked(detail.mask());
         joint_matrices(&body, &pose, &mut joints, detail.mask());
         anim::plant(
@@ -932,12 +940,14 @@ pub(crate) fn draw_body(
     detail: Detail,
     env: Color,
 ) {
-    let pelvis = &j[joint::PELVIS];
-    let mut shadow = *body;
-    shadow.m[0][3] = pelvis.m[0][3];
-    shadow.m[2][3] = pelvis.m[2][3];
-    shadow.m[1][3] = body.m[1][3] + SHADOW_LIFT * body.m[1][1];
-    r.draw_model_matrix(M_PLAYER_SHADOW, &shadow, Material::VertexLit, &plain(env));
+    if detail != Detail::Far {
+        let pelvis = &j[joint::PELVIS];
+        let mut shadow = *body;
+        shadow.m[0][3] = pelvis.m[0][3];
+        shadow.m[2][3] = pelvis.m[2][3];
+        shadow.m[1][3] = body.m[1][3] + SHADOW_LIFT * body.m[1][1];
+        r.draw_model_matrix(M_PLAYER_SHADOW, &shadow, Material::VertexLit, &plain(env));
+    }
     let colors = [
         plain(mul(look.skin, env)),
         plain(mul(look.shirt, env)),
@@ -1011,6 +1021,11 @@ pub const M_LEG_KIT: [ModelId; crate::sim::team::LEG_KITS.1] = {
 /// The ball speed (m/s, along the turf) from which a shot plays the
 /// power clip: shots leave at 17..33 m/s.
 pub const POWER_SHOT: f32 = 30.0;
+
+/// Beyond this view depth (m) a console player is drawn far: no arms, no
+/// blob shadow (each RSP draw costs the N64 about 0.2 ms of CPU; at
+/// 320x240 a far player's arms and shadow are a pixel or two).
+pub const FAR_DEPTH: f32 = 24.0;
 
 /// How high the shadow floats over the turf (m): the N64's 16-bit depth
 /// resolves 4 cm at the drawing scale.

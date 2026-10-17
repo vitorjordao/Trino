@@ -368,6 +368,24 @@ pub fn hifi(r: &dyn Renderer, retro: bool) -> bool {
     !retro && r.caps().light_tier == LightTier::PerPixel
 }
 
+/// The PC tier's screen-space ambient occlusion (contact shadows under
+/// players, the goal's frame, the stands' rows), in meters scaled to the
+/// drawing scale. Consoles bake theirs into the stands' vertex colors.
+const AO: trino_core::AmbientOcclusion = trino_core::AmbientOcclusion {
+    radius: 0.55 * WORLD,
+    intensity: 1.0,
+    bias: 0.03 * WORLD,
+    quality: trino_core::AoQuality::Medium,
+};
+
+/// Declare the frame's ambient occlusion (cleared by `begin_frame`): on
+/// for the PC tier, a no-op where the renderer bakes it.
+pub fn set_ao(r: &mut dyn Renderer, hifi: bool) {
+    if hifi {
+        r.set_ambient_occlusion(Some(&AO));
+    }
+}
+
 /// The broadcast camera: a focus that trails the ball, an eye above the
 /// south touchline.
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -576,6 +594,7 @@ pub fn draw_match(r: &mut dyn Renderer, m: &Match, v: &MatchView, aspect: f32) {
     r.set_camera(&v.cam.camera());
     // Declared every frame: renderer state outlives frames (AGENTS.md).
     r.set_light(&v.sky.light());
+    set_ao(r, hifi);
     if hifi && v.rain {
         r.set_wetness(0.55);
     }

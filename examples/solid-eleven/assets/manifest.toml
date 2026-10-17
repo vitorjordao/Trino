@@ -374,23 +374,31 @@ file = "models/pitch_f_11_7.glb"
 
 # ---- stadium ----
 
+# Consoles: occlusion baked into the vertex colors (ADR 0014): the rows
+# under the roof and the back of the stand darken. The PC's own stands
+# get screen-space AO instead.
 [models.se_stand_long_a]
 file = "models/stand_long_a.glb"
+ao = { strength = 0.7, distance = 3.0 }
 
 [models.se_stand_long_b]
 file = "models/stand_long_b.glb"
+ao = { strength = 0.7, distance = 3.0 }
 
 [models.se_stand_end_a]
 file = "models/stand_end_a.glb"
+ao = { strength = 0.7, distance = 3.0 }
 
 [models.se_stand_end_b]
 file = "models/stand_end_b.glb"
+ao = { strength = 0.7, distance = 3.0 }
 
 [models.se_flood_tower]
 file = "models/flood_tower.glb"
 
 [models.se_goal]
 file = "models/goal.glb"
+ao = { strength = 0.6, distance = 0.8, ground = true }
 
 [models.se_corner_flag]
 file = "models/corner_flag.glb"

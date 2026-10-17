@@ -31,6 +31,7 @@ pub fn ceremony(
     // The floodlights: the players stand in daylight-white light in front
     // of the night stand.
     r.set_light(&Sky::Day.light());
+    super::set_ao(r, hifi);
     let fr = Frustum::new(cam, aspect);
     draw_stadium(r, &fr, hifi, Sky::Night.tint());
     // The captain in front, the others around him facing the camera.
@@ -163,6 +164,7 @@ pub fn pedestal(
     };
     r.set_camera(&cam.camera());
     r.set_light(&Sky::Dusk.light());
+    super::set_ao(r, hifi);
     let fr = Frustum::new(&cam, aspect);
     draw_stadium(r, &fr, hifi, Sky::Night.tint());
     let (s, c) = (trino_core::math3d::sin(yaw), trino_core::math3d::cos(yaw));

@@ -78,6 +78,16 @@ unsafe extern "C" {
     /// TILE1; a pair that doesn't fit TMEM draws without it. Returns 1 when
     /// the detail is on.
     pub fn trino_3d_texture_ex(sprite: *mut c_void, detail: *mut c_void, flags: u32) -> u32;
+    /// Water (ADR 0015): the next `trino_tri_tex` (or, with a null
+    /// `sprite`, `trino_tri`) calls blend over the frame, depth-tested but
+    /// not written. With a texture and a `detail` the 2-cycle combiner
+    /// blends the two half and half, then multiplies by the shade:
+    /// `((TEX1 - TEX0) * ENV_ALPHA + TEX0) * SHADE`, alpha from the shade.
+    /// `flags` as `trino_3d_texture_ex`'s; `scroll` = the detail tile's
+    /// offset, `u << 16 | v` in 1/65536 of its repeat. Returns 1 when the
+    /// detail is on (both fit TMEM and neither is a palette).
+    pub fn trino_3d_water(sprite: *mut c_void, detail: *mut c_void, flags: u32, scroll: u32)
+    -> u32;
     /// 30 floats: per vertex x, y, z, u, v, w, r, g, b, a (colors 0..1,
     /// u/v normalized, w = view depth).
     pub fn trino_tri_tex(verts: *const f32);

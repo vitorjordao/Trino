@@ -20,7 +20,15 @@
 //!   trigger colliders, despawned when touched; the hero is the entity
 //!   tagged `player`, moved every frame.
 //! - Game logic finds things by **name and tag** (`spawn`, `coin`,
-//!   `player`, `goal`), never by hardcoded positions.
+//!   `player`, `goal`, `water`, `patrol`, `pushable`), never by hardcoded
+//!   positions.
+//! - **The river** (issue #49, [`river`]): the hero and a patrolling robot
+//!   wade through it, the hero can shove the loose crate off the bank and
+//!   watch it float away. Whatever enters the water starts a ripple
+//!   (`trino_core::RippleBuffer`, handed to `Renderer::set_water`), a burst
+//!   of droplets and a positional splash; wading keeps rippling. The water
+//!   surface itself is a material (`materials/water`): swell, flow, Fresnel
+//!   and glint, drawn by each target's tier (ADR 0015).
 //!
 //! `xtask/tests/scene_codegen.rs` fails CI when the generated file drifts
 //! from the scene.
@@ -44,11 +52,12 @@ use trino_core::scene::{BakedScene, SceneNode};
 use trino_core::{
     Ambience, AmbientOcclusion, Audio, BlobId, Button, Camera3, Color, Emitter, EntityId,
     EntityStore, FontId, Game, InputState, Light, Listener, Mat34, Material, MusicId,
-    ParticleSystem, Platform, Renderer, Screen, SoundId, SpriteId, TextAlign, TextBuf, TextParams,
-    Vec2, Vec3, spatialize,
+    ParticleSystem, Platform, Renderer, RippleBuffer, Screen, SoundId, SpriteId, TextAlign,
+    TextBuf, TextParams, Vec2, Vec3, spatialize,
 };
 
 pub mod panel;
+pub mod river;
 
 #[allow(clippy::all)]
 #[rustfmt::skip]
@@ -90,8 +99,87 @@ const SPARKS: Emitter = Emitter {
     ..Emitter::DEFAULT
 };
 
+/// Splash droplets where something enters the river: a quick crown of
+/// drops that falls back.
+const SPLASH: Emitter = Emitter {
+    sprite: SpriteId::from_path("sprites/fx_drop"),
+    rate: 0.0,
+    life: (0.35, 0.7),
+    speed: (2.0, 3.6),
+    direction: Vec3::new(0.0, 1.0, 0.0),
+    spread: 0.85,
+    gravity: Vec3::new(0.0, -11.0, 0.0),
+    size: (0.18, 0.06),
+    color: (
+        Color::rgba(235, 248, 255, 235),
+        Color::rgba(170, 215, 255, 60),
+    ),
+    ..Emitter::DEFAULT
+};
+const SPLASH_SOUND: SoundId = SoundId::from_path("sounds/water_splash");
+/// Crest height of the ripple a body makes entering the water (scaled up
+/// by how fast it falls) and while it wades, every `WADE_EVERY` seconds.
+const RIPPLE_ENTER: f32 = 0.07;
+const RIPPLE_WADE: f32 = 0.03;
+const WADE_EVERY: f32 = 0.32;
+/// Wading slows a walker down.
+const WADE_SPEED: f32 = 0.6;
+/// The patrolling robot's pace and the loose crate's drift.
+const PATROL_SPEED: f32 = 1.1;
+const DRIFT_SPEED: f32 = 0.8;
+const CRATE_HALF: f32 = 0.5;
+
 /// Physics substep: small steps keep fast falls from tunneling.
 const STEP: f32 = 1.0 / 120.0;
+
+/// A body that can enter the water: wet last frame, time to its next
+/// wading ripple.
+#[derive(Clone, Copy, Default)]
+struct Wader {
+    wet: bool,
+    timer: f32,
+}
+
+/// What happened to a body and the water this frame.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Contact {
+    /// Entered the water at this point, this hard (0..1).
+    Splash(Vec3, f32),
+    /// Wading: a small ripple here.
+    Wade(Vec3),
+}
+
+impl Wader {
+    /// Track a body standing (or falling) at `feet`, moving horizontally
+    /// at `speed` with vertical velocity `vy`.
+    fn step(&mut self, feet: Vec3, speed: f32, vy: f32, dt: f32) -> Option<Contact> {
+        let wet = river::wading_depth(feet) > 0.02;
+        let was = core::mem::replace(&mut self.wet, wet);
+        if wet && !was {
+            self.timer = WADE_EVERY;
+            let hard = (0.4 + -vy * 0.12).clamp(0.4, 1.0);
+            let at = Vec3::new(feet.x, river::WATER_Y, feet.z);
+            return Some(Contact::Splash(at, hard));
+        }
+        if wet && speed > 0.3 {
+            self.timer -= dt;
+            if self.timer <= 0.0 {
+                self.timer += WADE_EVERY;
+                return Some(Contact::Wade(Vec3::new(feet.x, river::WATER_Y, feet.z)));
+            }
+        }
+        None
+    }
+}
+
+/// The loose crate's state (`pushable`): on the ground (pushed by the
+/// hero), falling, or floating downstream until it respawns.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum CrateState {
+    Resting,
+    Falling(f32),
+    Floating,
+}
 
 pub struct ShowcaseGame {
     pub world: EntityStore<CAPACITY>,
@@ -120,6 +208,25 @@ pub struct ShowcaseGame {
     pub ao: Option<AmbientOcclusion>,
     /// Coin pickup particles (billboards).
     sparks: ParticleSystem<32>,
+    /// Droplets where things enter the river.
+    splash: ParticleSystem<24>,
+    /// The river's ripples (`Renderer::set_water`), oldest first.
+    pub ripples: RippleBuffer<{ trino_core::MAX_RIPPLES }>,
+    /// Splashes so far (tests and self-tests read it).
+    pub splashes: u32,
+    hero_wade: Wader,
+    /// The patrolling robot (tag `patrol`), its two ends and its leg.
+    walker: Option<EntityId>,
+    patrol: (Vec3, Vec3),
+    patrol_t: f32,
+    walker_wade: Wader,
+    /// The loose crate (tag `pushable`), where it respawns, its state.
+    pushable: Option<EntityId>,
+    crate_home: Vec3,
+    pub crate_state: CrateState,
+    crate_wade: Wader,
+    /// Splashes this frame, for the sounds (`update` has the audio).
+    splash_sounds: (u32, Vec3),
     /// Scene sound sources (the pond) playing near the camera.
     ambience: Ambience<4>,
     /// Coins collected this frame: count and where (positional sounds).
@@ -175,13 +282,18 @@ impl ShowcaseGame {
         clear: Color,
         screen: Vec2,
     ) -> Self {
-        // Start from the scene's own camera, expressed as an orbit.
-        let d = camera.eye - camera.target;
-        let dist = sqrt(d.dot(d).max(1e-6));
-        // Build the store inside the game value (no temporary copy): the
-        // store is the bulk of the state, and console stacks are small (the
-        // N64 main stack is 64 KB).
-        let mut game = ShowcaseGame {
+        // Every field is set by `reset_from_scene`; the store is filled in
+        // place (no temporary copy of the bulk of the state).
+        let mut game = Self::blank();
+        game.reset_from_scene(nodes, camera, light, clear, screen);
+        game
+    }
+
+    /// An empty game (no scene): what [`Self::reset`] fills in. `const`, so
+    /// consoles copy it from a `static` straight into a box and reset it
+    /// there — the game (~25 KB) never sits on the N64's 64 KB stack.
+    pub const fn blank() -> Self {
+        ShowcaseGame {
             world: EntityStore::new(),
             hero: None,
             pos: Vec3::ZERO,
@@ -192,35 +304,181 @@ impl ShowcaseGame {
             reached_goal: false,
             facing: 0.0,
             time: 0.0,
-            yaw: atan2(d.x, -d.z),
-            pitch: (d.y / dist).clamp(0.15, 1.2),
-            dist: dist * 0.7,
-            prev: InputState::default(),
-            screen,
+            yaw: 0.0,
+            pitch: 0.0,
+            dist: 0.0,
+            prev: InputState::IDLE,
+            screen: Vec2::ZERO,
             spawn: Vec3::ZERO,
-            camera_fov: camera.fov_y,
-            light,
-            clear,
+            camera_fov: 1.0,
+            light: trino_core::DEFAULT_LIGHT,
+            clear: Color::BLACK,
             ao: None,
             sparks: ParticleSystem::new(SPARKS, 0x5EED),
+            splash: ParticleSystem::new(SPLASH, 0x5A1A),
+            ripples: RippleBuffer::new(),
+            splashes: 0,
+            hero_wade: Wader {
+                wet: false,
+                timer: 0.0,
+            },
+            walker: None,
+            patrol: (Vec3::ZERO, Vec3::ZERO),
+            patrol_t: 0.0,
+            walker_wade: Wader {
+                wet: false,
+                timer: 0.0,
+            },
+            pushable: None,
+            crate_home: Vec3::ZERO,
+            crate_state: CrateState::Resting,
+            crate_wade: Wader {
+                wet: false,
+                timer: 0.0,
+            },
+            splash_sounds: (0, Vec3::ZERO),
             ambience: Ambience::new(),
             picked: (0, Vec3::ZERO),
             look: panel::Look::DEFAULT,
-            frame_dt: 1.0 / 60.0,
+            frame_dt: 0.0,
             dt_since_render: 0.0,
-            scene_camera: camera,
-            scene_yaw: atan2(d.x, -d.z),
-        };
-        game.world.spawn_iter(nodes);
-        game.hero = game.world.with_tag("player").next();
-        game.spawn = game
-            .world
+            scene_camera: Camera3 {
+                eye: Vec3::ZERO,
+                target: Vec3::ZERO,
+                fov_y: 1.0,
+            },
+            scene_yaw: 0.0,
+        }
+    }
+
+    /// Start over in the exported scene, in place (consoles keep one game
+    /// in a box and reset it: a second ~25 KB value on the N64's 64 KB stack
+    /// overflowed it).
+    pub fn reset(&mut self, screen: Vec2) {
+        self.reset_from_scene(
+            NODES.iter().copied(),
+            scene::CAMERA,
+            scene::LIGHT,
+            scene::CLEAR,
+            screen,
+        );
+        self.ao = scene::AO;
+    }
+
+    /// [`Self::from_scene`] into this game, in place: every field is set
+    /// (the pattern below names them all), the entity store refilled.
+    pub fn reset_from_scene(
+        &mut self,
+        nodes: impl IntoIterator<Item = SceneNode>,
+        camera: Camera3,
+        light: Light,
+        clear: Color,
+        screen: Vec2,
+    ) {
+        // Start from the scene's own camera, expressed as an orbit.
+        let d = camera.eye - camera.target;
+        let dist = sqrt(d.dot(d).max(1e-6));
+        let ShowcaseGame {
+            world,
+            hero,
+            pos,
+            vel,
+            on_ground,
+            coins,
+            total_coins,
+            reached_goal,
+            facing,
+            time,
+            yaw,
+            pitch,
+            dist: orbit,
+            prev,
+            screen: scr,
+            spawn,
+            camera_fov,
+            light: lgt,
+            clear: clr,
+            ao,
+            sparks,
+            splash,
+            ripples,
+            splashes,
+            hero_wade,
+            walker,
+            patrol,
+            patrol_t,
+            walker_wade,
+            pushable,
+            crate_home,
+            crate_state,
+            crate_wade,
+            splash_sounds,
+            ambience,
+            picked,
+            look,
+            frame_dt,
+            dt_since_render,
+            scene_camera,
+            scene_yaw,
+        } = self;
+        world.clear();
+        world.spawn_iter(nodes);
+        *hero = world.with_tag("player").next();
+        *spawn = world
             .find("spawn")
-            .and_then(|id| game.world.get(id))
+            .and_then(|id| world.get(id))
             .map_or(Vec3::ZERO, |e| e.position());
-        game.pos = game.spawn + Vec3::new(0.0, HERO_HALF.y, 0.0);
-        game.total_coins = game.world.with_tag("coin").count() as u32;
-        game
+        *pos = *spawn + Vec3::new(0.0, HERO_HALF.y, 0.0);
+        *vel = Vec3::ZERO;
+        *on_ground = false;
+        *coins = 0;
+        *total_coins = world.with_tag("coin").count() as u32;
+        *reached_goal = false;
+        *facing = 0.0;
+        *time = 0.0;
+        *yaw = atan2(d.x, -d.z);
+        *pitch = (d.y / dist).clamp(0.15, 1.2);
+        *orbit = dist * 0.7;
+        *prev = InputState::default();
+        *scr = screen;
+        *camera_fov = camera.fov_y;
+        *lgt = light;
+        *clr = clear;
+        *ao = None;
+        *sparks = ParticleSystem::new(SPARKS, 0x5EED);
+        *splash = ParticleSystem::new(SPLASH, 0x5A1A);
+        ripples.clear();
+        *splashes = 0;
+        *hero_wade = Wader::default();
+        *walker = world.with_tag("patrol").next();
+        let end = world
+            .with_tag("patrol-end")
+            .next()
+            .and_then(|id| world.get(id))
+            .map(|e| e.position());
+        match (walker.and_then(|id| world.get(id)), end) {
+            (Some(w), Some(end)) => *patrol = (w.position(), end),
+            _ => {
+                *walker = None;
+                *patrol = (Vec3::ZERO, Vec3::ZERO);
+            }
+        }
+        *patrol_t = 0.0;
+        *walker_wade = Wader::default();
+        *pushable = world.with_tag("pushable").next();
+        *crate_home = pushable
+            .and_then(|id| world.get(id))
+            .map_or(Vec3::ZERO, |e| e.position());
+        *crate_state = CrateState::Resting;
+        *crate_wade = Wader::default();
+        *splash_sounds = (0, Vec3::ZERO);
+        *ambience = Ambience::new();
+        *picked = (0, Vec3::ZERO);
+        *look = panel::Look::DEFAULT;
+        *frame_dt = 1.0 / 60.0;
+        *dt_since_render = 0.0;
+        *scene_camera = camera;
+        *scene_yaw = atan2(d.x, -d.z);
     }
 
     /// The camera of the current preset ([`panel::Look::camera`]): the
@@ -238,6 +496,32 @@ impl ShowcaseGame {
             target,
             fov_y: self.camera_fov,
         }
+    }
+
+    /// Draw one entity seen from `eye` (its LOD, its clip at the game's
+    /// clock; coins spin and bob).
+    fn draw_entity(&self, r: &mut dyn Renderer, e: &trino_core::Entity, eye: Vec3) {
+        // LOD from the scene: far trees swap to cheaper fake objects.
+        let Some(model) = e.model_from(eye).filter(|_| e.visible) else {
+            return;
+        };
+        let mut params = e.params;
+        if let Some((clip, speed)) = e.anim {
+            params.anim = Some(trino_core::AnimRef::new(clip, self.time * speed));
+        }
+        let m = if e.has_tag("coin") {
+            let p = e.position();
+            let spin = Mat34::from_rotation_scale_translation(
+                Vec3::new(0.0, self.time * 2.0, 0.0),
+                Vec3::ONE,
+                p + Vec3::new(0.0, sin(self.time * 3.0 + p.x) * 0.12, 0.0),
+            );
+            let back = Mat34::from_rotation_scale_translation(Vec3::ZERO, Vec3::ONE, -p);
+            spin.mul(&back).mul(&e.matrix)
+        } else {
+            e.matrix
+        };
+        r.draw_model_matrix(model, &m, Material::VertexLit, &params);
     }
 
     /// The yaw walking is relative to: the orbit's, or the scene camera's.
@@ -266,9 +550,16 @@ impl ShowcaseGame {
 
     fn physics(&mut self, wish: Vec3, jump: bool, dt: f32) {
         let mut solids = [Aabb::EMPTY; CAPACITY];
-        let n = self.world.solids(&mut solids, None);
-        self.vel.x = wish.x * SPEED;
-        self.vel.z = wish.z * SPEED;
+        let mut ids = [EntityId::NONE; CAPACITY];
+        let n = self.world.solids(&mut solids, Some(&mut ids));
+        let feet = self.pos - Vec3::new(0.0, HERO_HALF.y, 0.0);
+        let speed = if river::wading_depth(feet) > 0.15 {
+            SPEED * WADE_SPEED
+        } else {
+            SPEED
+        };
+        self.vel.x = wish.x * speed;
+        self.vel.z = wish.z * speed;
         if jump && self.on_ground {
             self.vel.y = JUMP;
         }
@@ -277,15 +568,190 @@ impl ShowcaseGame {
             let h = left.min(STEP);
             left -= h;
             self.vel.y -= GRAVITY * h;
+            let want = self.vel;
             let out = move_aabb(self.pos, HERO_HALF, self.vel, h, &solids[..n]);
+            if out.hit_wall {
+                self.push_crate(&mut solids[..n], &ids[..n], want, h);
+            }
             self.pos = out.pos;
             self.vel = out.vel;
             self.on_ground = out.on_ground;
+            // The ground: the carved terrain, the stepping stones, the
+            // bridge (`river::floor_height`; no collider models it).
+            let floor = river::floor_height(self.pos.x, self.pos.z) + HERO_HALF.y;
+            if self.pos.y <= floor {
+                self.pos.y = floor;
+                if self.vel.y < 0.0 {
+                    self.vel.y = 0.0;
+                }
+                self.on_ground = true;
+            }
         }
         // Fell off the world: back to the spawn.
         if self.pos.y < -10.0 {
             self.pos = self.spawn + Vec3::new(0.0, HERO_HALF.y, 0.0);
             self.vel = Vec3::ZERO;
+        }
+    }
+
+    /// The hero walked into the loose crate: shove it along (it stops at
+    /// other solids), at the hero's pace.
+    fn push_crate(&mut self, solids: &mut [Aabb], ids: &[EntityId], vel: Vec3, h: f32) {
+        let Some(id) = self
+            .pushable
+            .filter(|_| self.crate_state == CrateState::Resting)
+        else {
+            return;
+        };
+        let Some(i) = ids.iter().position(|&x| x == id) else {
+            return;
+        };
+        // Touching it, in the direction of the push.
+        let reach = Aabb::from_center_half(
+            self.pos + Vec3::new(vel.x, 0.0, vel.z) * (h * 2.0),
+            HERO_HALF + Vec3::new(0.05, -0.05, 0.05),
+        );
+        if !reach.overlaps(&solids[i]) {
+            return;
+        }
+        let d = Vec3::new(vel.x, 0.0, vel.z) * h;
+        let moved = Aabb::new(solids[i].min + d, solids[i].max + d);
+        let blocked = solids
+            .iter()
+            .enumerate()
+            .any(|(j, s)| j != i && moved.overlaps(s));
+        if blocked {
+            return;
+        }
+        solids[i] = moved;
+        if let Some(e) = self.world.get_mut(id) {
+            e.translate(d);
+        }
+    }
+
+    /// Something entered the water or waded: a ripple, and for an entry
+    /// droplets and a splash sound.
+    fn contact(&mut self, c: Contact) {
+        match c {
+            Contact::Splash(at, hard) => {
+                self.ripples
+                    .spawn(Vec2::new(at.x, at.z), RIPPLE_ENTER * (0.6 + hard));
+                self.splash.origin = at;
+                self.splash.burst((6.0 + 10.0 * hard) as usize);
+                self.splashes += 1;
+                self.splash_sounds = (self.splash_sounds.0 + 1, at);
+            }
+            Contact::Wade(at) => self.ripples.spawn(Vec2::new(at.x, at.z), RIPPLE_WADE),
+        }
+    }
+
+    /// The patrolling robot walks to the far bank and back, through the
+    /// ford: it wades, and the river ripples around it.
+    fn patrol(&mut self, dt: f32) {
+        let Some(id) = self.walker else {
+            return;
+        };
+        let (a, b) = self.patrol;
+        let d = b - a;
+        let len = sqrt(d.x * d.x + d.z * d.z).max(1e-3);
+        // A ping-pong over 0..2 (out and back).
+        self.patrol_t = (self.patrol_t + dt * PATROL_SPEED / len) % 2.0;
+        let (k, dir) = if self.patrol_t < 1.0 {
+            (self.patrol_t, 1.0)
+        } else {
+            (2.0 - self.patrol_t, -1.0)
+        };
+        let x = a.x + d.x * k;
+        let z = a.z + d.z * k;
+        let feet = Vec3::new(x, river::terrain_height(x, z), z);
+        let yaw = atan2(d.x * dir, d.z * dir);
+        if let Some(e) = self.world.get_mut(id) {
+            e.matrix =
+                Mat34::from_rotation_scale_translation(Vec3::new(0.0, yaw, 0.0), Vec3::ONE, feet);
+        }
+        if let Some(c) = self.walker_wade.step(feet, PATROL_SPEED, 0.0, dt) {
+            self.contact(c);
+        }
+    }
+
+    /// The loose crate: falls when shoved off the bank, floats down the
+    /// river (no longer solid), and comes back home past the delta.
+    fn crate_physics(&mut self, dt: f32) {
+        let Some(id) = self.pushable else {
+            return;
+        };
+        let Some(p) = self.world.get(id).map(|e| e.position()) else {
+            return;
+        };
+        let floor = river::terrain_height(p.x, p.z);
+        let mut p = p;
+        // Deep enough under the surface to float off its bank.
+        let floats = |p: Vec3| river::over_water(p.x, p.z) && p.y < river::WATER_Y - 0.2;
+        match self.crate_state {
+            CrateState::Resting if floats(p) => {
+                self.crate_state = CrateState::Falling(0.0);
+            }
+            CrateState::Resting => {
+                if p.y > floor + 0.02 {
+                    self.crate_state = CrateState::Falling(0.0);
+                }
+            }
+            CrateState::Falling(vy) => {
+                let vy = vy - GRAVITY * dt;
+                p.y += vy * dt;
+                let float_at = river::WATER_Y - CRATE_HALF * 0.6;
+                if floats(p) || (river::over_water(p.x, p.z) && p.y <= float_at) {
+                    p.y = float_at;
+                    self.crate_state = CrateState::Floating;
+                    // No longer an obstacle: it drifts in the water.
+                    if let Some(e) = self.world.get_mut(id) {
+                        e.collider = None;
+                    }
+                } else if p.y <= floor {
+                    p.y = floor;
+                    self.crate_state = CrateState::Resting;
+                } else {
+                    self.crate_state = CrateState::Falling(vy);
+                }
+                let feet = Vec3::new(p.x, p.y, p.z);
+                if let Some(c) = self.crate_wade.step(feet, 0.0, vy, dt) {
+                    self.contact(c);
+                }
+            }
+            CrateState::Floating => match river::locate(p.x, p.z) {
+                Some(c) if p.x < 19.0 => {
+                    p.x += c.flow.0 * DRIFT_SPEED * dt;
+                    p.z += c.flow.1 * DRIFT_SPEED * dt;
+                    p.y = river::WATER_Y - CRATE_HALF * 0.6
+                        + 0.03 * trino_core::water::sin_turns(self.time * 0.6);
+                    if let Some(c) = self.crate_wade.step(p, DRIFT_SPEED, 0.0, dt) {
+                        self.contact(c);
+                    }
+                }
+                _ => {
+                    // Washed out of the world: back on the bank.
+                    p = self.crate_home;
+                    self.crate_state = CrateState::Resting;
+                    self.crate_wade = Wader::default();
+                    if let Some(node) = trino_core::scene::find(NODES, "loose-crate")
+                        && let Some(e) = self.world.get_mut(id)
+                    {
+                        e.collider = node.collider;
+                    }
+                }
+            },
+        }
+        if let Some(e) = self.world.get_mut(id) {
+            e.set_position(p);
+        }
+    }
+
+    /// Something in the river this frame: where the hero is.
+    fn hero_water(&mut self, dt: f32) {
+        let feet = self.pos - Vec3::new(0.0, HERO_HALF.y, 0.0);
+        let speed = sqrt(self.vel.x * self.vel.x + self.vel.z * self.vel.z);
+        if let Some(c) = self.hero_wade.step(feet, speed, self.vel.y, dt) {
+            self.contact(c);
         }
     }
 
@@ -363,11 +829,16 @@ impl Game for ShowcaseGame {
         }
         if !self.look.paused {
             self.sparks.update(dt);
+            self.splash.update(dt);
+            self.ripples.update(dt);
+            self.patrol(dt);
+            self.crate_physics(dt);
         }
         let jump = input.just_pressed(&self.prev, Button::A);
         self.prev = *input;
         if !self.reached_goal {
             self.physics(wish, jump, dt);
+            self.hero_water(dt);
             let before = self.coins;
             self.pickups();
             // Positional audio: the pickup is heard from where it happened,
@@ -383,6 +854,12 @@ impl Game for ShowcaseGame {
                     audio.play_stinger(FANFARE);
                 }
             }
+        }
+        // Splashes, heard from where they happened.
+        let (n, at) = core::mem::replace(&mut self.splash_sounds, (0, Vec3::ZERO));
+        if n > 0 {
+            let listener = Listener::from_camera(&self.camera());
+            audio.play_sound_with(SPLASH_SOUND, &spatialize(&listener, at, 22.0, 0.9));
         }
         // Scene sound sources (looping voices steered by distance and side).
         let listener = Listener::from_camera(&self.camera());
@@ -417,32 +894,20 @@ impl Game for ShowcaseGame {
         r.set_texture_filter(self.look.filter);
         // The scene's screen-space AO (PC native; cleared every frame).
         r.set_ambient_occlusion(self.ao.as_ref());
+        // The river's clock and ripples (cleared every frame, like AO).
+        r.set_water(self.time, self.ripples.as_slice());
         // Everything the editor placed (animated clips included), coins
-        // spinning and bobbing on top — game logic driven by tags.
-        for (_, e) in self.world.iter() {
-            // LOD from the scene: far trees swap to cheaper fake objects.
-            let Some(model) = e.model_from(camera.eye).filter(|_| e.visible) else {
-                continue;
-            };
-            let mut params = e.params;
-            if let Some((clip, speed)) = e.anim {
-                params.anim = Some(trino_core::AnimRef::new(clip, self.time * speed));
+        // spinning and bobbing on top — game logic driven by tags. Water
+        // last: it is translucent, so what lies under it must be drawn.
+        for water in [false, true] {
+            for (_, e) in self.world.iter() {
+                if e.has_tag("water") == water {
+                    self.draw_entity(r, e, camera.eye);
+                }
             }
-            let m = if e.has_tag("coin") {
-                let p = e.position();
-                let spin = Mat34::from_rotation_scale_translation(
-                    Vec3::new(0.0, self.time * 2.0, 0.0),
-                    Vec3::ONE,
-                    p + Vec3::new(0.0, sin(self.time * 3.0 + p.x) * 0.12, 0.0),
-                );
-                let back = Mat34::from_rotation_scale_translation(Vec3::ZERO, Vec3::ONE, -p);
-                spin.mul(&back).mul(&e.matrix)
-            } else {
-                e.matrix
-            };
-            r.draw_model_matrix(model, &m, Material::VertexLit, &params);
         }
         self.sparks.draw(r);
+        self.splash.draw(r);
         let mut hud = TextBuf::<24>::new();
         let _ = write!(hud, "COINS {}/{}", self.coins, self.total_coins);
         r.draw_text(
@@ -482,6 +947,36 @@ impl Game for ShowcaseGame {
     }
 }
 
+/// The river's performance scene (`showcase-river`): the same game state
+/// on every target, measured like castle64's scenes (`castle64::perf`) —
+/// its T&L work pinned on the PC (`xtask/tests/perf_budget.rs`), its time
+/// in ares (`cargo xtask test n64`).
+pub mod perf {
+    use super::{ShowcaseGame, river};
+    use trino_core::{Audio, Game, InputState, Vec2, Vec3};
+
+    pub const NAME: &str = "showcase-river";
+    /// Frames measured (each one idle update + render).
+    pub const MEASURE_FRAMES: u32 = 4;
+    pub const DT: f32 = 1.0 / 60.0;
+
+    /// Reset `game` into the scene: the scene's own camera, the hero walked
+    /// into the middle of the river (a splash, wading ripples), the robot
+    /// on its patrol. Callers then run `MEASURE_FRAMES` idle frames.
+    pub fn river_scene(game: &mut ShowcaseGame, screen: Vec2, audio: &mut dyn Audio) {
+        game.reset(screen);
+        game.look.camera = super::panel::CAMERA_SCENE;
+        let c = river::COURSE[8];
+        game.pos = Vec3::new(c.x, 0.6, c.z - 2.4);
+        let mut walk = InputState::default();
+        // Scene camera: "up" walks along its view, toward the river.
+        walk.stick = Vec2::new(0.0, 1.0);
+        for _ in 0..40 {
+            game.update(&walk, audio, DT);
+        }
+    }
+}
+
 /// A scripted playthrough for console self-tests and PC tests: walks the
 /// hero from the spawn through every coin to the goal, driving the real
 /// `update` with steering input. Returns the frames it took, or `Err`
@@ -517,6 +1012,8 @@ pub fn run_demo(
     for (i, target) in targets[..n].iter().enumerate() {
         let is_goal = i == n - 1;
         let mut steps = 0;
+        // Frames without progress: hop when stuck (crates, trees, a bank).
+        let mut stuck = 0;
         loop {
             let done = if is_goal {
                 game.reached_goal
@@ -544,11 +1041,19 @@ pub fn run_demo(
             let mut input = InputState::default();
             input.stick = Vec2::new(right / len, fwd / len);
             // Hop when stuck against something (crates, trees).
-            if steps % 90 == 45 {
+            if stuck >= 20 {
                 input.set(Button::A, true);
+                stuck = 0;
             }
+            let before = game.pos;
             frame(game, &input);
             frames += 1;
+            let (dx, dz) = (game.pos.x - before.x, game.pos.z - before.z);
+            if dx * dx + dz * dz < 0.02 * 0.02 {
+                stuck += 1;
+            } else {
+                stuck = 0;
+            }
         }
     }
     Ok(frames)
@@ -560,6 +1065,16 @@ pub fn run_demo(
 /// loading and `BakedScene` parsing on the real target.
 pub fn check_baked(
     platform: &dyn Platform,
+    frame: impl FnMut(&mut ShowcaseGame, &InputState),
+) -> Result<(), &'static str> {
+    check_baked_in(platform, &mut ShowcaseGame::new(), frame)
+}
+
+/// [`check_baked`] in `game`, which it resets from the blob in place (no
+/// second game on the stack: consoles pass the one they keep boxed).
+pub fn check_baked_in(
+    platform: &dyn Platform,
+    game: &mut ShowcaseGame,
     mut frame: impl FnMut(&mut ShowcaseGame, &InputState),
 ) -> Result<(), &'static str> {
     let bytes = platform.blob(BAKED).ok_or("baked scene blob missing")?;
@@ -583,8 +1098,14 @@ pub fn check_baked(
             return Err("baked node differs from the exported code");
         }
     }
-    let mut game = ShowcaseGame::from_baked(&baked, Vec2::new(320.0, 240.0));
-    run_demo(&mut game, &mut frame).map(|_| ())
+    game.reset_from_scene(
+        baked.nodes(),
+        baked.camera(),
+        baked.light(),
+        baked.clear(),
+        Vec2::new(320.0, 240.0),
+    );
+    run_demo(game, &mut frame).map(|_| ())
 }
 
 #[cfg(feature = "hot-reload")]
@@ -622,12 +1143,22 @@ mod tests {
         assert!(find(NODES, "coin-1").unwrap().collider.unwrap().trigger);
         assert!(!find(NODES, "crate-a").unwrap().collider.unwrap().trigger);
         assert!(g.world.len() == NODES.len(), "every node is a live entity");
-        assert_eq!(g.world.sound_sources().count(), 1, "the pond");
+        assert_eq!(g.world.sound_sources().count(), 2, "the river's murmurs");
+        assert!(g.walker.is_some(), "a robot patrols the ford");
+        assert!(g.pushable.is_some(), "a crate can be shoved in");
+        assert!(
+            g.world
+                .with_tag("water")
+                .filter_map(|id| g.world.get(id))
+                .all(|e| e.params.water.is_some()),
+            "the river is a water surface"
+        );
     }
 
     /// Records what the game asks of the audio backend.
     #[derive(Default)]
     struct AudioLog {
+        splash_sounds: u32,
         coin_sounds: u32,
         stingers: u32,
         voices_started: u32,
@@ -644,6 +1175,9 @@ mod tests {
             if s == COIN_SOUND {
                 assert!(p.volume > 0.0, "pickups happen next to the camera");
                 self.coin_sounds += 1;
+            }
+            if s == SPLASH_SOUND {
+                self.splash_sounds += 1;
             }
         }
         fn play_voice(
@@ -1021,6 +1555,97 @@ mod tests {
     }
 
     #[test]
+    fn wading_into_the_river_splashes_and_ripples() {
+        let mut g = ShowcaseGame::new();
+        // Stand on the south bank, facing the river (+Z), then walk in.
+        let c = river::COURSE[6];
+        g.pos = Vec3::new(c.x, HERO_HALF.y, c.z - 3.0);
+        g.yaw = 0.0;
+        let mut audio = AudioLog::default();
+        for _ in 0..10 {
+            g.update(&InputState::default(), &mut audio, 1.0 / 60.0);
+        }
+        assert_eq!(g.splashes, 0, "dry on the bank");
+        let mut input = InputState::default();
+        input.stick = Vec2::new(0.0, 1.0);
+        let mut deepest = f32::MAX;
+        let mut most = 0;
+        for _ in 0..90 {
+            g.update(&input, &mut audio, 1.0 / 60.0);
+            deepest = deepest.min(g.pos.y - HERO_HALF.y);
+            most = most.max(g.ripples.len());
+        }
+        assert!(
+            deepest < river::WATER_Y - 0.2,
+            "walked down into the bed: {deepest}"
+        );
+        assert!(g.splashes >= 1, "entering the water splashes");
+        assert!(most >= 2, "wading keeps rippling ({most})");
+        assert!(audio.splash_sounds >= 1, "and is heard");
+        // Out on the far bank: the ripples fade.
+        for _ in 0..240 {
+            g.update(&input, &mut audio, 1.0 / 60.0);
+        }
+        assert!(
+            g.pos.y - HERO_HALF.y > -0.01,
+            "climbed the far bank: {}",
+            g.pos.y
+        );
+        assert!(!g.hero_wade.wet, "dry again");
+    }
+
+    #[test]
+    fn the_robot_patrols_through_the_ford() {
+        let mut g = ShowcaseGame::new();
+        let id = g.walker.unwrap();
+        let start = g.world.get(id).unwrap().position();
+        let mut lowest = 0.0f32;
+        for _ in 0..60 * 8 {
+            g.update(&InputState::default(), &mut NullAudio, 1.0 / 60.0);
+            lowest = lowest.min(g.world.get(id).unwrap().position().y);
+        }
+        assert!(lowest <= river::BED_Y + 1e-3, "it waded through: {lowest}");
+        assert!(g.splashes >= 1, "and splashed");
+        assert_ne!(g.world.get(id).unwrap().position(), start);
+    }
+
+    #[test]
+    fn a_shoved_crate_falls_in_and_floats_away() {
+        let mut g = ShowcaseGame::new();
+        let id = g.pushable.unwrap();
+        let home = g.world.get(id).unwrap().position();
+        // Behind the crate (south), pushing north toward the river.
+        g.pos = Vec3::new(home.x, HERO_HALF.y, home.z - 1.2);
+        g.yaw = 0.0;
+        let mut input = InputState::default();
+        input.stick = Vec2::new(0.0, 1.0);
+        let mut floated = false;
+        for _ in 0..240 {
+            g.update(&input, &mut NullAudio, 1.0 / 60.0);
+            floated |= g.crate_state == CrateState::Floating;
+        }
+        assert!(floated, "shoved off the bank: {:?}", g.crate_state);
+        assert!(g.splashes >= 1);
+        assert!(
+            g.world.get(id).unwrap().collider.is_none(),
+            "a floating crate is no obstacle"
+        );
+        // It drifts downstream (east) and comes home.
+        let x0 = g.world.get(id).unwrap().position().x;
+        let idle = InputState::default();
+        for _ in 0..60 {
+            g.update(&idle, &mut NullAudio, 1.0 / 60.0);
+        }
+        assert!(g.world.get(id).unwrap().position().x > x0 + 0.5);
+        for _ in 0..60 * 60 {
+            g.update(&idle, &mut NullAudio, 1.0 / 60.0);
+        }
+        assert_eq!(g.crate_state, CrateState::Resting, "back home");
+        assert_eq!(g.world.get(id).unwrap().position(), home);
+        assert!(g.world.get(id).unwrap().collider.is_some());
+    }
+
+    #[test]
     fn scripted_run_collects_every_coin_and_wins() {
         let mut g = ShowcaseGame::new();
         let frames = run_demo(&mut g, |g: &mut ShowcaseGame, input: &InputState| {
@@ -1030,6 +1655,9 @@ mod tests {
         assert_eq!(g.coins, 5);
         assert_eq!(g.coins_left(), 0, "collected coins are despawned");
         assert!(g.reached_goal);
+        // The route wades across the river and shoves the loose crate in.
+        assert!(g.splashes >= 2, "{} splashes", g.splashes);
+        assert_ne!(g.crate_state, CrateState::Resting);
         assert!(frames < 60 * 90, "took {frames} frames");
     }
 }

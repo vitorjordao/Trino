@@ -54,6 +54,14 @@ fn provided_renderer_methods_are_harmless_defaults() {
     dyn_r.set_wetness(0.5);
     dyn_r.set_ambient_occlusion(Some(&trino_core::AmbientOcclusion::DEFAULT));
     dyn_r.set_ambient_occlusion(None);
+    dyn_r.set_water(
+        1.5,
+        &[trino_core::Ripple {
+            pos: trino_core::Vec2::new(0.0, 0.0),
+            age: 0.1,
+            strength: 0.1,
+        }],
+    );
     dyn_r.draw_billboard(SpriteId(1), Vec3::ZERO, &BillboardParams::DEFAULT);
     dyn_r.fill_rect(Rect::new(0.0, 0.0, 10.0, 10.0), Color::WHITE);
     dyn_r.draw_text(FontId(3), Vec2::ZERO, "hello", &TextParams::DEFAULT);

@@ -76,6 +76,10 @@ pub fn engine_checks(
     if ambient_occlusion(renderer)? {
         platform.log("TRINO_STEP:ambient occlusion probed\n");
     }
+    platform.log("TRINO_STEP:water\n");
+    if water(renderer)? {
+        platform.log("TRINO_STEP:water probed\n");
+    }
     platform.log("TRINO_STEP:impostor\n");
     if impostor(renderer, platform)? {
         platform.log("TRINO_STEP:impostor probed\n");
@@ -812,6 +816,231 @@ pub fn ambient_occlusion(renderer: &mut dyn Renderer) -> Result<bool, &'static s
     }
     if (ao_edge.r as i32 - ao_edge.b as i32).abs() > 24 {
         return Err("ambient occlusion: the occlusion tinted the panel");
+    }
+    Ok(true)
+}
+
+/// One frame of the water test scene: the sheet (`params`) over a red
+/// floor from `camera`, at `time` with `ripples` (the `water` step, and the
+/// 3DS's GPU-vs-CPU water frame).
+pub fn water_scene(
+    r: &mut dyn Renderer,
+    camera: &Camera3,
+    params: &ModelParams,
+    time: f32,
+    ripples: &[trino_core::Ripple],
+) {
+    let floor = ModelParams {
+        shading: Shading::Unlit,
+        tint: Color::rgba(255, 0, 0, 255),
+        emissive: Color::rgba(255, 0, 0, 255),
+        ..ModelParams::DEFAULT
+    };
+    r.begin_frame(Color::BLACK);
+    r.set_camera(camera);
+    r.set_light(&DEFAULT_LIGHT);
+    r.set_water(time, ripples);
+    r.draw_model(
+        BLOCK,
+        &Transform3 {
+            position: Vec3::new(0.0, -1.0, 0.0),
+            rotation: Vec3::ZERO,
+            scale: Vec3::new(6.0, 1.0, 6.0),
+        },
+        Material::VertexLit,
+        &floor,
+    );
+    r.draw_model(
+        WATER_SHEET,
+        &Transform3::default(),
+        Material::VertexLit,
+        params,
+    );
+    r.end_frame();
+}
+
+/// The water scene as the 3DS's GPU water path takes it (the whole sheet
+/// past the near plane): a swell, a ripple, the two layers flowing, a
+/// glint. `(camera, params, time, ripples)`.
+pub fn gpu_water_scene() -> (Camera3, ModelParams, f32, [trino_core::Ripple; 1]) {
+    let camera = Camera3 {
+        eye: Vec3::new(0.0, 5.0, -5.5),
+        target: Vec3::new(0.0, 0.0, 0.3),
+        fov_y: 60.0 * core::f32::consts::PI / 180.0,
+    };
+    let params = ModelParams {
+        texture: Some(WATER_TEX),
+        detail: Some(DetailTexture::new(WATER_DETAIL, 1)),
+        gloss: 200,
+        water: Some(trino_core::Water {
+            flow_speed: Vec2::new(0.2, 0.7),
+            detail_flow: Vec2::new(0.5, -0.6),
+            wave_amplitude: 0.15,
+            wave_frequency: 0.7,
+            ripple_responsiveness: 1.0,
+        }),
+        ..ModelParams::DEFAULT
+    };
+    let ripple = trino_core::Ripple {
+        pos: Vec2::new(0.4, -0.3),
+        age: 0.5,
+        strength: 0.12,
+    };
+    (camera, params, 1.3, [ripple])
+}
+
+/// The water self-test's sheet: 4 × 4 m, 8 × 8 quads at y 0, translucent
+/// blue (`[models.selftest_water]`).
+pub const WATER_SHEET: ModelId = ModelId::from_path("models/selftest_water");
+pub const WATER_TEX: SpriteId = SpriteId::from_path("sprites/tex_water");
+pub const WATER_DETAIL: SpriteId = SpriteId::from_path("sprites/tex_ripples");
+
+/// Water surfaces ([`trino_core::water`], ADR 0015): the sheet over a red
+/// floor, seen from above at an angle, on every tier.
+/// - **Translucent**: the floor shows through (red and blue both).
+/// - **Swell**: a tall swell moves the surface (and its light).
+/// - **Ripples**: a ripple's ring shows around its center (the consoles
+///   draw it as a ring on the surface, the PC per pixel).
+/// - **Flow**: later in time the layers have moved.
+///
+/// Each is two frames that must differ at probes over the sheet (or, for
+/// the blend, one in between the two colors). `Ok(false)` where
+/// `read_pixel` is unsupported.
+pub fn water(renderer: &mut dyn Renderer) -> Result<bool, &'static str> {
+    use trino_core::{Ripple, Water};
+    let caps = *renderer.caps();
+    let screen = Vec2::new(caps.screen_width as f32, caps.screen_height as f32);
+    let camera = Camera3 {
+        eye: Vec3::new(0.0, 3.0, -2.2),
+        target: Vec3::new(0.0, 0.0, 0.2),
+        fov_y: 60.0 * core::f32::consts::PI / 180.0,
+    };
+    let calm = Water {
+        flow_speed: Vec2::new(0.2, 0.7),
+        detail_flow: Vec2::new(0.5, -0.6),
+        wave_amplitude: 0.0,
+        wave_frequency: 0.5,
+        ripple_responsiveness: 1.0,
+    };
+    let base = ModelParams {
+        shading: Shading::Unlit,
+        texture: Some(WATER_TEX),
+        detail: Some(DetailTexture::new(WATER_DETAIL, 1)),
+        water: Some(calm),
+        ..ModelParams::DEFAULT
+    };
+    let view = camera.view();
+    let half = camera.fov_y * 0.5;
+    let focal = cos(half) / sin(half) * screen.y * 0.5;
+    let pixel = |world: Vec3| {
+        let v = view.transform_point(world);
+        (
+            (screen.x * 0.5 + v.x * focal / v.z) as u32,
+            (screen.y * 0.5 - v.y * focal / v.z) as u32,
+        )
+    };
+    // Probes: a ring of 8 at 0.64 m around the middle (where the ripple
+    // below spreads to), and its center.
+    let mut probes = [(0u32, 0u32); 9];
+    for (k, p) in probes.iter_mut().enumerate().take(8) {
+        let a = k as f32 * core::f32::consts::PI / 4.0;
+        *p = pixel(Vec3::new(0.64 * cos(a), 0.0, 0.64 * sin(a)));
+    }
+    probes[8] = pixel(Vec3::ZERO);
+    let ripple = Ripple {
+        pos: Vec2::new(0.0, 0.0),
+        age: 0.4,
+        strength: 0.12,
+    };
+    // One frame of the sheet over the floor; the probes' colors.
+    let frame = |r: &mut dyn Renderer,
+                 params: &ModelParams,
+                 time: f32,
+                 ripples: &[Ripple]|
+     -> Option<[Color; 9]> {
+        // Several identical frames: the 3DS LCD is double-buffered.
+        for _ in 0..3 {
+            water_scene(r, &camera, params, time, ripples);
+        }
+        let mut out = [Color::BLACK; 9];
+        for (o, &(x, y)) in out.iter_mut().zip(&probes) {
+            *o = r.read_pixel(x, y)?;
+        }
+        Some(out)
+    };
+    let Some(still) = frame(renderer, &base, 0.0, &[]) else {
+        return Ok(false);
+    };
+    // Translucent: the red floor through the blue water, in the middle.
+    let c = still[8];
+    if !(c.r > 40 && c.r < 230 && c.b > 50) {
+        return Err("water: the floor does not show through the water");
+    }
+    let differ = |a: &[Color; 9], b: &[Color; 9]| {
+        a.iter()
+            .zip(b)
+            .filter(|(x, y)| {
+                let d = |p: u8, q: u8| (p as i32 - q as i32).abs();
+                d(x.r, y.r) + d(x.g, y.g) + d(x.b, y.b) > 24
+            })
+            .count()
+    };
+    let lit = ModelParams {
+        shading: Shading::Gouraud,
+        ..base
+    };
+    let flat_lit = frame(renderer, &lit, 0.0, &[]).ok_or("water: read-back failed")?;
+    let swell = Water {
+        wave_amplitude: 0.4,
+        wave_frequency: 0.7,
+        ..calm
+    };
+    let swelling = frame(
+        renderer,
+        &ModelParams {
+            water: Some(swell),
+            ..lit
+        },
+        0.0,
+        &[],
+    )
+    .ok_or("water: read-back failed")?;
+    if differ(&flat_lit, &swelling) < 3 {
+        return Err("water: the swell did not move the surface");
+    }
+    let rippled = frame(renderer, &base, 0.0, &[ripple]).ok_or("water: read-back failed")?;
+    if differ(&still, &rippled) < 3 {
+        return Err("water: a ripple left no ring");
+    }
+    // The flow on high-contrast layers (the quadrants and the white/gray
+    // detail): the texture half a repeat on, then the detail layer alone.
+    let quads = ModelParams {
+        texture: Some(QUADRANTS16),
+        detail: Some(DetailTexture::new(DETAIL, 0)),
+        water: Some(Water {
+            flow_speed: Vec2::new(0.0, 0.5),
+            detail_flow: Vec2::new(0.0, 0.0),
+            ..calm
+        }),
+        ..base
+    };
+    let start = frame(renderer, &quads, 0.0, &[]).ok_or("water: read-back failed")?;
+    let later = frame(renderer, &quads, 1.0, &[]).ok_or("water: read-back failed")?;
+    if differ(&start, &later) < 3 {
+        return Err("water: the texture did not flow");
+    }
+    let detail_flows = ModelParams {
+        water: Some(Water {
+            flow_speed: Vec2::new(0.0, 0.0),
+            detail_flow: Vec2::new(0.5, 0.0),
+            ..calm
+        }),
+        ..quads
+    };
+    let start = frame(renderer, &detail_flows, 0.0, &[]).ok_or("water: read-back failed")?;
+    let later = frame(renderer, &detail_flows, 1.0, &[]).ok_or("water: read-back failed")?;
+    if differ(&start, &later) < 3 {
+        return Err("water: the detail layer did not flow");
     }
     Ok(true)
 }

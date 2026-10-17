@@ -485,6 +485,20 @@ pub struct InputState {
 }
 
 impl InputState {
+    /// Nothing pressed, no pointer (`Default`, in const contexts).
+    pub const IDLE: InputState = InputState {
+        buttons: 0,
+        pointer_buttons: 0,
+        stick: Vec2::ZERO,
+        right_stick: Vec2::ZERO,
+        triggers: Vec2::ZERO,
+        pointer: None,
+        wheel: 0.0,
+        keys: KeySet::EMPTY,
+        pointer_screen: 0,
+        pad: false,
+    };
+
     #[inline]
     pub fn is_down(&self, button: Button) -> bool {
         self.buttons & (1 << button as u32) != 0

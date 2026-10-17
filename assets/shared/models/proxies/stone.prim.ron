@@ -1,0 +1,12 @@
+// Trino placeholder model ("fake object"). Edit and save: it hot-reloads.
+// A flat river stone (the showcase's stepping stones and spring): a
+// six-sided slab, ~24 triangles instead of the rock's 70 — every one is
+// CPU T&L on the N64.
+(
+    shape: Cylinder(radius: 0.6, height: 0.6),
+    color: (112, 114, 122, 255),
+    top_color: Some((150, 152, 160, 255)),
+    pivot: Center,
+    segments: 6,
+    smooth: false,
+)

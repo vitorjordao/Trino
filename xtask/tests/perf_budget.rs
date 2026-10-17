@@ -83,6 +83,8 @@ struct Counting {
     total: TnlStats,
     per_model: BTreeMap<u32, (u32, TnlStats)>,
     target: Target,
+    /// The frame's water clock and ripples (`set_water`).
+    water: WaterState,
 }
 
 impl Renderer for Counting {
@@ -91,6 +93,10 @@ impl Renderer for Counting {
     }
     fn begin_frame(&mut self, _: Color) {
         self.locals = trino_core::LightList::EMPTY;
+        self.water = WaterState::NONE;
+    }
+    fn set_water(&mut self, time: f32, ripples: &[Ripple]) {
+        self.water = WaterState::new(time, ripples, self.caps.max_ripples);
     }
     fn set_local_lights(&mut self, lights: &[trino_core::LocalLight]) {
         self.locals.set(lights, self.caps.max_local_lights);
@@ -118,7 +124,8 @@ impl Renderer for Counting {
             Target::N3ds => SCREEN_3DS,
         };
         let ctx = TnlContext::new(&self.camera, &self.light, screen)
-            .with_local_lights(self.locals.as_slice());
+            .with_local_lights(self.locals.as_slice())
+            .with_water(&self.water);
         let tris = (mesh.index_count / 3) as u32;
         let s = if self.target == Target::N64
             && rsp_mesh_supported(&mesh)
@@ -262,29 +269,46 @@ fn check_work(target: Target, baseline_path: &str) {
     let n = castle64::perf::MEASURE_FRAMES;
     let mut measured = Vec::new();
     let mut reports = String::new();
-    for scene in castle64::perf::SCENES {
-        let mut r = Counting {
-            meshes: meshes.clone(),
-            camera: Camera3::default(),
-            light: DEFAULT_LIGHT,
-            locals: trino_core::LightList::EMPTY,
-            caps,
-            total: TnlStats::default(),
-            per_model: BTreeMap::new(),
-            target,
-        };
+    let counting = || Counting {
+        meshes: meshes.clone(),
+        camera: Camera3::default(),
+        light: DEFAULT_LIGHT,
+        locals: trino_core::LightList::EMPTY,
+        caps,
+        total: TnlStats::default(),
+        per_model: BTreeMap::new(),
+        target,
+        water: WaterState::NONE,
+    };
+    // castle64's scenes, then the showcase's river (water, ripples).
+    let scenes = castle64::perf::SCENES
+        .iter()
+        .map(|s| s.name)
+        .chain([showcase::perf::NAME]);
+    for name in scenes {
+        let mut r = counting();
         let mut audio = NullAudio;
-        let mut game = castle64::perf::scene_game(scene, screen, &mut audio);
         let idle = InputState::default();
-        for _ in 0..n {
-            game.update(&idle, &mut audio, castle64::perf::DT);
-            game.render(&mut r);
+        if let Some(scene) = castle64::perf::SCENES.iter().find(|s| s.name == name) {
+            let mut game = castle64::perf::scene_game(scene, screen, &mut audio);
+            for _ in 0..n {
+                game.update(&idle, &mut audio, castle64::perf::DT);
+                game.render(&mut r);
+            }
+        } else {
+            assert_eq!(showcase::perf::MEASURE_FRAMES, n);
+            let mut game = showcase::ShowcaseGame::new();
+            showcase::perf::river_scene(&mut game, screen, &mut audio);
+            for _ in 0..n {
+                game.update(&idle, &mut audio, showcase::perf::DT);
+                game.render(&mut r);
+            }
         }
         let t = per_frame(&r.total, n);
         // Most expensive models first (by vertex work), for the report.
         let mut models: Vec<_> = r.per_model.iter().collect();
         models.sort_by_key(|(_, (_, s))| std::cmp::Reverse(s.verts));
-        let _ = writeln!(reports, "  {}: {t:?}", scene.name);
+        let _ = writeln!(reports, "  {name}: {t:?}");
         for (id, (calls, s)) in models.iter().take(4) {
             let s = per_frame(s, n);
             let _ = writeln!(
@@ -298,7 +322,7 @@ fn check_work(target: Target, baseline_path: &str) {
                 s.splits,
             );
         }
-        measured.push((scene.name, t));
+        measured.push((name, t));
     }
 
     let path = root.join(baseline_path);

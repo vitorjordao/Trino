@@ -80,6 +80,7 @@ TRINO_EDITOR_SCREENSHOT=target/launcher.png TRINO_EDITOR_SCREENSHOT_FRAME=10 car
 | `TRINO_EDITOR_SIZE=960x600` | window size (default 1600x940; never below the 960x600 minimum) — screenshot small windows |
 | `TRINO_EDITOR_INSPECT=platforms\|lod\|impostor\|budget\|ao` | the Inspector opens that section and scrolls to it (`budget`: the scene settings' platform budget, with nothing selected; `ao`: the scene's Ambient Occlusion, or a model's baked AO with `TRINO_EDITOR_OPEN=model:<logical>`) |
 | `TRINO_EDITOR_AO=game\|on\|off\|mask` | the Scene view's ambient occlusion mode (as the scene sets it, forced on, off, the occlusion alone) |
+| `TRINO_EDITOR_RIPPLE=1` | keep a ripple ringing on the selected entity's water surface: one drops once the scene resolved, and another whenever it has faded (the inspector's "Drop a ripple"; screenshots of ripple rings) |
 | `TRINO_EDITOR_LOD_PREVIEW=<m>` | preview the selected entity's LOD at that distance (both views) |
 | `TRINO_EDITOR_SMOKE_FRAMES=N` | close after N frames (CI smoke test; the launcher too) |
 | `TRINO_EDITOR_LAUNCHER=1` | show the project launcher even when a scene hook is set (screenshots) |
@@ -169,6 +170,26 @@ Live-edit check: start the editor with `TRINO_EDITOR_ECHO_LOG=1` in the backgrou
 | `layout_audit.rs` | test helper: no widget off the window, none overlapping (accesskit rects) |
 | `ui_tests.rs` | headless UI flows with egui_kittest (real `App` + wgpu): drive panels by accessibility label |
 | `widget_tests.rs` | widget tests with egui_kittest and no renderer (no GPU, not ignored): inspector editors, Console |
+
+## Water (ADR 0015)
+
+- The material inspector's **Water surface** section (`inspector::water_editor`): a
+  checkbox, then flow, detail flow, swell height and frequency, ripple response.
+  **Drop a ripple** (`Cmd::DropRipple`) starts one on the selected surface. The Scene
+  and Game views run `set_water` with the editor's clock and ripples
+  (`App::water_time`, `ripples`), on every profile.
+- The budget's water lines (`trino_scene::budget::water_lines`): per surface,
+  triangles, combiner cycles, and the N64 TMEM of its layers (`Project::tmem`).
+- **Drop a ripple** lands on the surface's triangle nearest the scene camera's target
+  (`app::ripple_point`). The middle of a curved river's bounds is on the bank, where
+  the ring never showed.
+- **The Scene view measures fog as if the orbit eye were at most `DEFAULT_DIST` away**
+  (`viewport::scene_view_fog`): framing the 30 m river put the eye 45 m back, past
+  the showcase's fog end, and the whole view turned the fog's color. The Game view
+  keeps the real fog.
+- Hook: `TRINO_EDITOR_RIPPLE=1` keeps a ripple ringing on the selection, for
+  screenshots. A ripple lives 2.2 s and the editor's first frames are slow: take the
+  shot at `TRINO_EDITOR_SCREENSHOT_FRAME=40`, not 90, or the ring has faded.
 
 ## Rules when changing the editor
 

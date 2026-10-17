@@ -68,6 +68,10 @@ pub struct ViewInput<'a> {
     pub lod_preview: Option<(&'a [usize], f32)>,
     /// The scene's frame on the N64 and the 3DS (Game view HUD).
     pub budgets: Option<&'a [trino_scene::budget::FrameBudget; 2]>,
+    /// Each sprite's N64 TMEM bytes (the HUD's water lines).
+    pub tmem: Option<&'a std::collections::BTreeMap<u32, Option<u32>>>,
+    /// The water clock and ripples (`Renderer::set_water`).
+    pub water: (f32, &'a [trino_core::Ripple]),
 }
 
 pub enum ViewAction {
@@ -284,8 +288,12 @@ impl Viewport {
         let place = |m: &trino_core::Mat34| if ortho { rc.world.mul(m) } else { *m };
         r.set_camera(&camera);
         let light = env.core_light();
+        let fog = match self.kind {
+            ViewKind::Scene => scene_view_fog(light.fog, self.cam.dist),
+            ViewKind::Game => light.fog,
+        };
         let light = Light {
-            fog: rc.fog(light.fog),
+            fog: rc.fog(fog),
             ..light
         };
 
@@ -319,6 +327,9 @@ impl Viewport {
             ViewKind::Game => AoView::Game,
         });
         r.set_ambient_occlusion(env.core_ao().map(|a| rc.ao(a)).as_ref());
+        // Water surfaces flow with the preview clock; ripples dropped from
+        // the material inspector ring out.
+        r.set_water(input.water.0, input.water.1);
 
         let flash = self
             .flash
@@ -825,7 +836,7 @@ impl Viewport {
         if self.kind == ViewKind::Game && self.show_budget {
             // Panel-wide painter: the overlay sits over the letterbox area
             // when there is room, never clipped by the game image.
-            self.budget_overlay(&ui.painter_at(avail), avail, input.budgets);
+            self.budget_overlay(&ui.painter_at(avail), avail, input.budgets, input.tmem);
         }
 
         // ---- keyboard (when hovered) ------------------------------------------
@@ -893,6 +904,7 @@ impl Viewport {
         painter: &egui::Painter,
         avail: Rect,
         budgets: Option<&[trino_scene::budget::FrameBudget; 2]>,
+        tmem: Option<&std::collections::BTreeMap<u32, Option<u32>>>,
     ) {
         let caps = *self.renderer.caps();
         let mut rows = crate::budget::rows(&self.stats.frame, &caps, &self.stats.lod);
@@ -906,8 +918,9 @@ impl Viewport {
         let row_h = 18.0;
         // Per platform: the N64 frame (CPU vs RSP, why draws miss the fast
         // path), the 3DS triangles, and draws sent for nothing.
+        let tmem = |id: trino_core::SpriteId| tmem.and_then(|t| t.get(&id.0).copied().flatten());
         let platform_lines: Vec<(String, Color32)> = budgets
-            .map(crate::budget::platform_lines)
+            .map(|b| crate::budget::platform_lines(b, &tmem))
             .unwrap_or_default()
             .into_iter()
             .map(|(t, l)| {
@@ -1210,6 +1223,22 @@ pub fn ao_view_label(view: AoView) -> &'static str {
 }
 
 /// Nearest entity under `pos`: model boxes (ray vs OBB) and marker dots.
+/// The Scene view's fog: as if the orbit eye were never farther than the
+/// default orbit distance from its target, so framing a big object (a 30 m
+/// river) doesn't back the eye into the fog and paint the view the fog's
+/// color. The Game view keeps the scene's fog as is.
+pub(crate) fn scene_view_fog(fog: Fog, dist: f32) -> Fog {
+    if fog.far <= fog.near {
+        return fog;
+    }
+    let extra = (dist - gizmo::DEFAULT_DIST).max(0.0);
+    Fog {
+        near: fog.near + extra,
+        far: fog.far + extra,
+        ..fog
+    }
+}
+
 fn pick(proj: &Proj, input: &ViewInput, pos: Pos2) -> Option<Vec<usize>> {
     if !proj.rect.contains(pos) {
         return None;

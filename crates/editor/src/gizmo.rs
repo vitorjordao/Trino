@@ -39,6 +39,8 @@ pub const FLY_BOOST: f32 = 2.5;
 /// units), and at least `ORTHO_FACTOR` times the orbit distance.
 const ORTHO_MIN_PULL: f32 = 2000.0;
 const ORTHO_FACTOR: f32 = 100.0;
+/// The orbit distance a Scene view opens at.
+pub const DEFAULT_DIST: f32 = 12.0;
 
 /// What the renderer draws the Scene view with. In perspective, the camera
 /// itself. The engine has no orthographic projection (the consoles don't
@@ -101,7 +103,7 @@ impl Default for OrbitCam {
             target: Vec3::new(0.0, 0.5, 0.0),
             yaw: 0.6,
             pitch: 0.45,
-            dist: 12.0,
+            dist: DEFAULT_DIST,
             fov: 55f32.to_radians(),
             ortho: false,
             fly_speed: 6.0,

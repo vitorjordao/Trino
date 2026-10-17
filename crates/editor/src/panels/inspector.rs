@@ -288,6 +288,17 @@ fn entity(app: &mut App, ui: &mut egui::Ui, path: &[usize]) {
                         if material_editor(ui, def, &sprite_names) {
                             cmds.push(Cmd::SaveMaterial(name.clone()));
                         }
+                        if def.water.is_some()
+                            && ui
+                                .button(format!("{}  Drop a ripple", icon::DROP))
+                                .on_hover_text(
+                                    "Start a ripple in the middle of this surface: the \
+                                     views ring it out like a game's splash would.",
+                                )
+                                .clicked()
+                        {
+                            cmds.push(Cmd::DropRipple(path.to_vec()));
+                        }
                     });
                 });
             }
@@ -1156,6 +1167,85 @@ pub fn material_editor(ui: &mut egui::Ui, def: &mut MaterialDef, textures: &[Str
                 .changed();
         });
     }
+    changed |= water_editor(ui, &mut def.water);
+    changed
+}
+
+/// The material's water surface (ADR 0015): on or off, and its flow, swell
+/// and ripple response. Every change hot-reloads the views.
+pub fn water_editor(ui: &mut egui::Ui, water: &mut Option<trino_scene::WaterDef>) -> bool {
+    use trino_scene::WaterDef;
+    let mut changed = false;
+    theme::prop(ui, "Water", |ui| {
+        let mut on = water.is_some();
+        if ui
+            .checkbox(&mut on, "Water surface")
+            .on_hover_text(
+                "Swell, ripples, the two layers flowing, Fresnel. PC: per pixel with \
+                 glint and shore foam; N64 and 3DS: per vertex, the layers blended by \
+                 the combiner.",
+            )
+            .changed()
+        {
+            *water = on.then(WaterDef::default);
+            changed = true;
+        }
+    });
+    let Some(w) = water else {
+        return changed;
+    };
+    let rows: [(&str, &mut f32, (f32, f32), &str); 7] = [
+        (
+            "Flow u",
+            &mut w.flow_speed.0,
+            WaterDef::FLOW_RANGE,
+            "Texture repeats per second across",
+        ),
+        (
+            "Flow v",
+            &mut w.flow_speed.1,
+            WaterDef::FLOW_RANGE,
+            "Texture repeats per second along",
+        ),
+        (
+            "Detail flow u",
+            &mut w.detail_flow.0,
+            WaterDef::FLOW_RANGE,
+            "The detail layer's own flow",
+        ),
+        (
+            "Detail flow v",
+            &mut w.detail_flow.1,
+            WaterDef::FLOW_RANGE,
+            "The detail layer's own flow",
+        ),
+        (
+            "Wave height",
+            &mut w.wave_amplitude,
+            WaterDef::AMPLITUDE_RANGE,
+            "Swell height, meters",
+        ),
+        (
+            "Wave frequency",
+            &mut w.wave_frequency,
+            WaterDef::FREQUENCY_RANGE,
+            "Swell crests per meter",
+        ),
+        (
+            "Ripples",
+            &mut w.ripple_responsiveness,
+            WaterDef::RESPONSE_RANGE,
+            "How far ripples push the surface (0 = ignore them)",
+        ),
+    ];
+    for (label, v, (lo, hi), tip) in rows {
+        theme::prop(ui, label, |ui| {
+            changed |= ui
+                .add(egui::Slider::new(v, lo..=hi).max_decimals(2))
+                .on_hover_text(tip)
+                .changed();
+        });
+    }
     changed
 }
 
@@ -1779,7 +1869,7 @@ fn scene_settings(app: &mut App, ui: &mut egui::Ui) {
             icon::GAUGE,
             c::TEXT,
             "Platform budget (scene camera)",
-            |ui| budget_section(ui, budgets),
+            |ui| budget_section(ui, budgets, &app.project.tmem),
         )
         .flatten();
         // An unseen draw's line selects its entity.
@@ -1873,6 +1963,7 @@ fn ambient_occlusion(ui: &mut egui::Ui, ao: &mut Option<trino_scene::AmbientOccl
 fn budget_section(
     ui: &mut egui::Ui,
     budgets: &[trino_scene::budget::FrameBudget; 2],
+    tmem: &std::collections::BTreeMap<u32, Option<u32>>,
 ) -> Option<String> {
     let line = |ui: &mut egui::Ui, text: String, color: egui::Color32| {
         ui.add(egui::Label::new(RichText::new(text).size(12.0).color(color)).truncate());
@@ -1929,6 +2020,12 @@ fn budget_section(
         ),
         c::TEXT_WEAK,
     );
+    // Water (ADR 0015): what the N64 tier spends on each surface.
+    let tmem = |id: trino_core::SpriteId| tmem.get(&id.0).copied().flatten();
+    for text in trino_scene::budget::water_lines(n64, &tmem) {
+        let bad = text.contains("over TMEM") || text.contains("palette layer");
+        line(ui, text, if bad { c::ERROR } else { c::TEXT_WEAK });
+    }
     let mut wasted: Vec<&String> = n64.wasted.iter().chain(&n3ds.wasted).collect();
     wasted.sort();
     wasted.dedup();

@@ -27,6 +27,19 @@ pub fn library() -> Library {
         },
     );
     lib.materials.insert(
+        "materials/water".into(),
+        MaterialDef {
+            tint: [255, 255, 255, 200],
+            texture: Some("sprites/water".into()),
+            water: Some(trino_scene::WaterDef {
+                flow_speed: (0.0, -0.3),
+                wave_amplitude: 0.05,
+                ..trino_scene::WaterDef::default()
+            }),
+            ..MaterialDef::default()
+        },
+    );
+    lib.materials.insert(
         "materials/glow".into(),
         MaterialDef {
             shading: ShadingDef::Unlit,
@@ -120,6 +133,15 @@ pub fn scene() -> Scene {
             }),
     );
     s.entities.push(hero);
+
+    s.entities.push(
+        Entity::new("pond")
+            .at([0.0, -0.2, 4.0])
+            .with_model(ModelComponent {
+                material: Some("materials/water".into()),
+                ..model("models/pond")
+            }),
+    );
 
     let mut coin = Entity::new("coin")
         .at([3.0, 0.0, 0.0])

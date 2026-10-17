@@ -169,7 +169,10 @@ pub fn use_rsp_split(rows: &mut [Row], n64: &trino_scene::budget::FrameBudget) {
 /// N64 time (CPU vs RSP), how many draws take the RSP and the most common
 /// reason the rest don't, the 3DS triangles, and draws sent for nothing.
 /// Each with its level (the N64 time against a 30 fps frame).
-pub fn platform_lines(budgets: &[trino_scene::budget::FrameBudget; 2]) -> Vec<(String, Level)> {
+pub fn platform_lines(
+    budgets: &[trino_scene::budget::FrameBudget; 2],
+    tmem: &dyn Fn(trino_core::SpriteId) -> Option<u32>,
+) -> Vec<(String, Level)> {
     let [n64, n3ds] = budgets;
     let pct = n64.n64_frame_percent();
     let level = if pct > 100.0 {
@@ -207,6 +210,15 @@ pub fn platform_lines(budgets: &[trino_scene::budget::FrameBudget; 2]) -> Vec<(S
     if wasted > 0 {
         out.push((format!("{wasted} draws sent but unseen"), Level::Near));
     }
+    // Water (ADR 0015): the N64 tier's triangles, combiner cycles, TMEM.
+    for line in trino_scene::budget::water_lines(n64, tmem) {
+        let level = if line.contains("over TMEM") || line.contains("palette layer") {
+            Level::Over
+        } else {
+            Level::Ok
+        };
+        out.push((line, level));
+    }
     out
 }
 
@@ -236,7 +248,7 @@ mod tests {
             target: Target::N3ds,
             ..Default::default()
         };
-        let lines = platform_lines(&[n64.clone(), n3ds]);
+        let lines = platform_lines(&[n64.clone(), n3ds], &|_| None);
         let text: Vec<&str> = lines.iter().map(|(t, _)| t.as_str()).collect();
         assert!(text[0].starts_with("N64 ≈"), "{text:?}");
         assert_eq!(text[1], "RSP 2/5 draws · 2 fog");
@@ -248,7 +260,10 @@ mod tests {
             billboards: 1000,
             ..n64.clone()
         };
-        assert_eq!(platform_lines(&[heavy, n64.clone()])[0].1, Level::Over);
+        assert_eq!(
+            platform_lines(&[heavy, n64.clone()], &|_| None)[0].1,
+            Level::Over
+        );
         // The HUD's N64 time row takes the CPU/RSP split.
         let mut r = rows(&FrameStats::default(), &Caps::N64, &LodCounts::default());
         use_rsp_split(&mut r, &n64);
@@ -265,7 +280,7 @@ mod tests {
             wasted: vec![],
             ..n64.clone()
         };
-        assert_eq!(platform_lines(&[clean.clone(), clean]).len(), 3);
+        assert_eq!(platform_lines(&[clean.clone(), clean], &|_| None).len(), 3);
     }
 
     #[test]

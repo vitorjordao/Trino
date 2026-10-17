@@ -54,10 +54,15 @@ fn hierarchy_select_palette_duplicate_and_undo() {
     let roots = h.state().doc.scene.entities.len();
 
     // Click an entity in the Hierarchy: it becomes the selection.
-    h.get_by_label("pond").click();
+    h.get_by_label("loose-crate").click();
     h.run_steps(2);
-    let sel = h.state().doc.selected.clone().expect("pond selected");
-    assert_eq!(h.state().doc.scene.get(&sel).unwrap().name, "pond");
+    let sel = h
+        .state()
+        .doc
+        .selected
+        .clone()
+        .expect("loose-crate selected");
+    assert_eq!(h.state().doc.scene.get(&sel).unwrap().name, "loose-crate");
 
     // Ctrl+K, type, Enter: the palette runs Duplicate on the selection.
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::K);
@@ -260,14 +265,14 @@ fn commands_edit_save_and_export_in_a_temp_project() {
     cmd(&mut h, Cmd::Align(0, AlignTo::Min));
     assert_eq!(h.state().log.counts().1, errors + 1);
 
-    // Reparent under the pond, then copy as RON.
+    // Reparent under the river, then copy as RON.
     let probe = find(&h.state().doc.scene, "probe");
-    let pond = find(&h.state().doc.scene, "pond");
+    let river = find(&h.state().doc.scene, "river");
     cmd(
         &mut h,
         Cmd::Reparent {
             from: probe,
-            to: Some(pond.clone()),
+            to: Some(river.clone()),
         },
     );
     let nested = find(&h.state().doc.scene, "probe");
@@ -1107,6 +1112,64 @@ fn platform_budget_shows_rsp_reasons_and_unseen_draws() {
         );
         leave_temp_project(&repo);
     }
+}
+
+/// Water (ADR 0015) in the editor: the showcase river's line in the
+/// platform budget (triangles, 2-cycle combiner, TMEM), "Drop a ripple" on
+/// the selected river, and a water material edited and saved as text.
+#[test]
+#[ignore = "changes cwd/env: run alone with --ignored --test-threads=1"]
+fn water_budget_ripples_and_material_edits() {
+    use crate::app::Cmd;
+    let Some((mut h, tmp, repo)) = temp_project_app(egui::vec2(1600.0, 1000.0)) else {
+        return;
+    };
+    let root = tmp.path().to_path_buf();
+    let b = h.state().budgets.clone().expect("budgets computed").1;
+    let river = &b[0].water;
+    assert_eq!(river.len(), 1, "{river:?}");
+    assert_eq!(river[0].cycles, 2, "both layers: the 2-cycle combiner");
+    assert!(river[0].tris > 0);
+    assert!(h.query_by_label_contains("Water river").is_some());
+    assert!(h.query_by_label_contains("TMEM 1536/4096 B").is_some());
+    // Select the river: the inline material editor offers a ripple.
+    let path = find(&h.state().doc.scene, "river");
+    h.state_mut().cmds.push(Cmd::Select(Some(path.clone())));
+    h.run_steps(3);
+    assert!(h.state().ripples.is_empty());
+    h.state_mut().cmds.push(Cmd::DropRipple(path));
+    h.run_steps(2);
+    assert_eq!(h.state().ripples.len(), 1, "a ripple rings out");
+    // On the water itself, where the scene camera looks: inside one of the
+    // river's triangles (the middle of its bounds is on the bank, the
+    // course bends).
+    let at = h.state().ripples.as_slice()[0].pos;
+    let river = h.state().project.models["models/river"].tmdl.clone();
+    let mesh = trino_core::render3d::Mesh::from_tmdl(&river).unwrap();
+    let inside = (0..mesh.index_count / 3).any(|t| {
+        let p = [0, 1, 2].map(|k| mesh.position(mesh.index(t * 3 + k) as usize));
+        let side = |a: trino_core::Vec3, b: trino_core::Vec3| {
+            (b.x - a.x) * (at.y - a.z) - (b.z - a.z) * (at.x - a.x)
+        };
+        let s = [side(p[0], p[1]), side(p[1], p[2]), side(p[2], p[0])];
+        s.iter().all(|v| *v >= 0.0) || s.iter().all(|v| *v <= 0.0)
+    });
+    assert!(inside, "ripple at {at:?} is off the river");
+    // Edit the water material as the inspector does, and save it.
+    let def = h
+        .state_mut()
+        .lib
+        .materials
+        .get_mut("materials/water")
+        .expect("the showcase's water material");
+    def.water.as_mut().expect("a water surface").wave_amplitude = 0.2;
+    h.state_mut()
+        .cmds
+        .push(Cmd::SaveMaterial("materials/water".into()));
+    h.run_steps(6);
+    let text = std::fs::read_to_string(root.join("assets/materials/water.material.ron")).unwrap();
+    assert!(text.contains("wave_amplitude: 0.2"), "{text}");
+    leave_temp_project(&repo);
 }
 
 /// The project launcher (no project argument): recent projects from the

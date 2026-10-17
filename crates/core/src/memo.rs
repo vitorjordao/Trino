@@ -31,7 +31,8 @@ impl MemoKey {
     /// under generation `generation`, or `None` when the draw is not a
     /// plain one (emissive, double-sided, animated, textured or palette
     /// draws are never memoized: they are rare and their commands depend on
-    /// more; a palette alone is 4 words the key has no room for).
+    /// more; a palette alone is 4 words the key has no room for; water
+    /// moves every frame).
     /// A new [`ModelParams`] field must be added here or excluded.
     /// `gloss` is excluded: only the per-pixel tier (PC) reads it, and the
     /// memo serves the N64's RSP draws.
@@ -42,6 +43,7 @@ impl MemoKey {
             || params.anim.is_some()
             || params.texture.is_some()
             || params.palette.is_some()
+            || params.water.is_some()
         {
             return None;
         }

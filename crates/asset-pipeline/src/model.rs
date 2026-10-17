@@ -555,6 +555,8 @@ pub struct ModelOptions {
     /// Smooth skinning: keep the two strongest joint weights per vertex
     /// (`SKW2`) instead of snapping to the heaviest (rigid, the default).
     pub smooth: bool,
+    /// Bake ambient occlusion into the vertex colors ([`crate::ao`]).
+    pub ao: Option<crate::ao::AoBake>,
 }
 
 impl Default for ModelOptions {
@@ -564,6 +566,7 @@ impl Default for ModelOptions {
             once: Vec::new(),
             texture: None,
             smooth: false,
+            ao: None,
         }
     }
 }
@@ -588,6 +591,9 @@ pub fn bake_model(path: &Path, opts: &ModelOptions) -> Result<Vec<u8>, String> {
         data.optimize_vertex_order();
         data
     };
+    if let Some(ao) = &opts.ao {
+        crate::ao::bake_vertex_ao(&mut data, ao);
+    }
     data.texture = opts.texture.as_deref().map(trino_core::asset_id);
     if data.texture.is_none() {
         data.uvs.clear();

@@ -50,7 +50,7 @@ pub fn to_rust_for(scene: &Scene, lib: &Library, target: Target) -> (String, Vec
     );
     let _ = writeln!(
         out,
-        "#[allow(unused_imports)]\nuse trino_core::{{\n    Camera3, ClipId, Collider, Color, DetailTexture, Fog, Impostor, Light, LodLevel, Lods, Mat34,\n    ModelId, ModelParams, NO_CELL, SceneNode, Shading, Shape, SoundId, SoundSource, SpriteId, Tags,\n    TexFilter, Vec3, VisVolume,\n}};\n"
+        "#[allow(unused_imports)]\nuse trino_core::{{\n    AmbientOcclusion, AoQuality, Camera3, ClipId, Collider, Color, DetailTexture, Fog, Impostor,\n    Light, LodLevel, Lods, Mat34, ModelId, ModelParams, NO_CELL, SceneNode, Shading, Shape,\n    SoundId, SoundSource, SpriteId, Tags, TexFilter, Vec3, VisVolume,\n}};\n"
     );
     let env = &scene.environment;
     let cam = env.core_camera();
@@ -84,6 +84,19 @@ pub fn to_rust_for(scene: &Scene, lib: &Library, target: Target) -> (String, Vec
         f(light.fog.near),
         f(light.fog.far)
     );
+    // Screen-space AO (PC native; consoles ignore it — their AO is baked
+    // into the models).
+    let ao = match env.core_ao() {
+        Some(a) => format!(
+            "Some(AmbientOcclusion {{\n    radius: {},\n    intensity: {},\n    bias: {},\n    quality: AoQuality::{:?},\n}})",
+            f(a.radius),
+            f(a.intensity),
+            f(a.bias),
+            a.quality
+        ),
+        None => "None".into(),
+    };
+    let _ = writeln!(out, "pub const AO: Option<AmbientOcclusion> = {ao};\n");
 
     let _ = writeln!(out, "pub static NODES: &[SceneNode] = &[");
     for item in resolved.items.iter().filter(|i| i.exported()) {

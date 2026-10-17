@@ -18,6 +18,8 @@ pub mod system;
 
 pub use audio::PcAudio;
 pub use input::PcInput;
-pub use renderer::{MSAA_SAMPLES, N64Estimate, PcFrameTimes, PcRenderer, RendererError};
+pub use renderer::{
+    AoView, MSAA_SAMPLES, N64Estimate, PcFrameTimes, PcRenderer, RendererError,
+};
 pub use sim::SimProfile;
 pub use system::PcPlatform;

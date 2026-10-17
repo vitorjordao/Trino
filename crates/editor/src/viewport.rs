@@ -23,7 +23,7 @@ use trino_core::{
     Color, Fog, Light, LodPick, Material, ModelId, ModelParams, Renderer, Shading, SpriteId,
     SpriteParams, Vec2 as TVec2, Vec3,
 };
-use trino_platform_pc::{PcRenderer, SimProfile};
+use trino_platform_pc::{AoView, PcRenderer, SimProfile};
 use trino_scene::{Resolved, Scene, Transform};
 
 use crate::gizmo::{self, AxisEvent, Drag, Gizmo, GizmoMode, OrbitCam, Proj, RenderCam};
@@ -90,6 +90,8 @@ pub struct Stats {
     pub frame: trino_core::FrameStats,
     /// What entities with LOD levels drew (full / light / impostor / cull).
     pub lod: crate::budget::LodCounts,
+    /// The screen-space AO ran on the last frame.
+    pub ao: bool,
 }
 
 pub struct Viewport {
@@ -103,6 +105,12 @@ pub struct Viewport {
     /// Draw collider wireframes (world boxes — exactly what the physics
     /// uses): green = solid, yellow = trigger.
     pub show_colliders: bool,
+    /// Scene view: the screen-space AO as the scene sets it, forced on
+    /// (defaults when the scene has none), off, or the occlusion alone.
+    pub ao_view: AoView,
+    /// The mode the last render used (a change from the View menu
+    /// re-renders).
+    ao_rendered: AoView,
     /// Game view: the console budget overlay (tris / sprites / texture vs
     /// the selected profile's Caps).
     pub show_budget: bool,
@@ -164,6 +172,8 @@ impl Viewport {
             cam: OrbitCam::default(),
             show_grid: true,
             show_colliders: true,
+            ao_view: AoView::Game,
+            ao_rendered: AoView::Game,
             show_budget: true,
             play: None,
             gizmo: GizmoMode::Translate,
@@ -181,6 +191,7 @@ impl Viewport {
                 ms: 0.0,
                 frame: trino_core::FrameStats::default(),
                 lod: crate::budget::LodCounts::default(),
+                ao: false,
             },
             hover: None,
             box_start: None,
@@ -301,6 +312,13 @@ impl Viewport {
             );
         }
         r.set_light(&light);
+        // The scene's screen-space AO (the native profile runs it; the
+        // console profiles show the AO baked into the models).
+        r.set_ao_view(match self.kind {
+            ViewKind::Scene => self.ao_view,
+            ViewKind::Game => AoView::Game,
+        });
+        r.set_ambient_occlusion(env.core_ao().map(|a| rc.ao(a)).as_ref());
 
         let flash = self
             .flash
@@ -398,6 +416,7 @@ impl Viewport {
             ms: started.elapsed().as_secs_f32() * 1000.0,
             frame: r.stats(),
             lod,
+            ao: r.frame_times().ao_passes > 0,
         };
     }
 
@@ -485,10 +504,16 @@ impl Viewport {
                 ms: dt * 1000.0,
                 frame: self.renderer.stats(),
                 lod: crate::budget::LodCounts::default(),
+                ao: self.renderer.frame_times().ao_passes > 0,
             };
             self.rendered = None;
             ui.ctx().request_repaint();
-        } else if self.rendered.as_ref() != Some(&key) || flashing || cam_moving {
+        } else if self.rendered.as_ref() != Some(&key)
+            || flashing
+            || cam_moving
+            || self.ao_rendered != self.ao_view
+        {
+            self.ao_rendered = self.ao_view;
             self.render(input, internal);
             if size_changed {
                 self.reregister();
@@ -1046,6 +1071,38 @@ impl Viewport {
                             {
                                 actions.push(ViewAction::ToggleAnimate);
                             }
+                            // The AO menu, when the toolbar has room for it and
+                            // the two buttons after it (narrow windows: View ›
+                            // Ambient occlusion).
+                            let room = ui.available_width() >= 3.0 * 33.0 + 12.0;
+                            let color = if self.ao_view == AoView::Off {
+                                c::TEXT_WEAK
+                            } else {
+                                c::ACCENT_TEXT
+                            };
+                            let menu = room.then(|| {
+                                ui.menu_button(
+                                    RichText::new(icon::CIRCLE_HALF_TILT)
+                                        .size(15.0)
+                                        .color(color),
+                                    |ui| {
+                                        if ao_menu(ui, &mut self.ao_view) {
+                                            self.rendered = None;
+                                        }
+                                    },
+                                )
+                            });
+                            if let Some(menu) = menu {
+                                menu.response.on_hover_text(format!(
+                                    "Ambient occlusion: {} ({})",
+                                    ao_view_label(self.ao_view),
+                                    if self.stats.ao {
+                                        "drawn in this view"
+                                    } else {
+                                        "not drawn: the scene has none, or it is off"
+                                    }
+                                ));
+                            }
                             ui.separator();
                             if theme::icon_button(ui, icon::CROSSHAIR, "Frame selection (F)")
                                 .clicked()
@@ -1128,6 +1185,27 @@ impl Viewport {
                     }
                 });
             });
+    }
+}
+
+/// The Scene view's ambient occlusion modes, as radio buttons (toolbar and
+/// View menu). Returns true when the mode changed.
+pub fn ao_menu(ui: &mut egui::Ui, view: &mut AoView) -> bool {
+    let before = *view;
+    for v in [AoView::Game, AoView::On, AoView::Off, AoView::Mask] {
+        if ui.radio_value(view, v, ao_view_label(v)).clicked() {
+            ui.close();
+        }
+    }
+    *view != before
+}
+
+pub fn ao_view_label(view: AoView) -> &'static str {
+    match view {
+        AoView::Game => "As the scene sets it",
+        AoView::On => "Always on (preview)",
+        AoView::Off => "Off",
+        AoView::Mask => "AO only (mask)",
     }
 }
 

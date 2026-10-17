@@ -67,8 +67,8 @@ pub struct Scene {
     pub entities: Vec<Entity>,
 }
 
-/// Camera, light and fog of a scene — maps 1:1 onto
-/// `trino_core::{Camera3, Light, Fog}`.
+/// Camera, light, fog and ambient occlusion of a scene — maps 1:1 onto
+/// `trino_core::{Camera3, Light, Fog, AmbientOcclusion}`.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Environment {
     #[serde(default = "default_clear")]
@@ -79,6 +79,10 @@ pub struct Environment {
     pub light: LightDef,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fog: Option<FogDef>,
+    /// Screen-space ambient occlusion (PC native; consoles use the AO
+    /// baked into model vertex colors — `trino_core::ao`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ao: Option<AmbientOcclusionDef>,
 }
 
 fn default_clear() -> [u8; 3] {
@@ -92,6 +96,7 @@ impl Default for Environment {
             camera: CameraDef::default(),
             light: LightDef::default(),
             fog: None,
+            ao: None,
         }
     }
 }
@@ -143,7 +148,81 @@ pub struct FogDef {
     pub far: f32,
 }
 
+/// Ambient occlusion settings of a scene ([`trino_core::AmbientOcclusion`]).
+/// Every field has a default, so `ao: ()` is a valid start; `enabled:
+/// false` keeps the tuning while turning the pass off.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+pub struct AmbientOcclusionDef {
+    #[serde(default = "yes")]
+    pub enabled: bool,
+    /// How far around a point occluders count, meters.
+    #[serde(default = "default_ao_radius")]
+    pub radius: f32,
+    /// Occlusion strength, 0.0 to 2.0.
+    #[serde(default = "default_ao_intensity")]
+    pub intensity: f32,
+    /// Depth bias, meters: keeps surfaces from shadowing themselves.
+    #[serde(default = "default_ao_bias")]
+    pub bias: f32,
+    /// Samples per pixel: `Low` (8), `Medium` (16), `High` (32).
+    #[serde(default)]
+    pub quality: AoQualityDef,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum AoQualityDef {
+    Low,
+    #[default]
+    Medium,
+    High,
+}
+
+fn default_ao_radius() -> f32 {
+    trino_core::AmbientOcclusion::DEFAULT.radius
+}
+fn default_ao_intensity() -> f32 {
+    trino_core::AmbientOcclusion::DEFAULT.intensity
+}
+fn default_ao_bias() -> f32 {
+    trino_core::AmbientOcclusion::DEFAULT.bias
+}
+
+impl Default for AmbientOcclusionDef {
+    fn default() -> Self {
+        AmbientOcclusionDef {
+            enabled: true,
+            radius: default_ao_radius(),
+            intensity: default_ao_intensity(),
+            bias: default_ao_bias(),
+            quality: AoQualityDef::Medium,
+        }
+    }
+}
+
+impl AmbientOcclusionDef {
+    /// The engine settings, enabled or not.
+    pub fn core(&self) -> trino_core::AmbientOcclusion {
+        trino_core::AmbientOcclusion {
+            radius: self.radius,
+            intensity: self.intensity,
+            bias: self.bias,
+            quality: match self.quality {
+                AoQualityDef::Low => trino_core::AoQuality::Low,
+                AoQualityDef::Medium => trino_core::AoQuality::Medium,
+                AoQualityDef::High => trino_core::AoQuality::High,
+            },
+        }
+        .clamped()
+    }
+}
+
 impl Environment {
+    /// What `Renderer::set_ambient_occlusion` takes: `None` without an
+    /// `ao` block or with `enabled: false`.
+    pub fn core_ao(&self) -> Option<trino_core::AmbientOcclusion> {
+        self.ao.filter(|a| a.enabled).map(|a| a.core())
+    }
+
     pub fn core_camera(&self) -> trino_core::Camera3 {
         let c = &self.camera;
         trino_core::Camera3 {
@@ -785,6 +864,51 @@ mod v1 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ambient_occlusion_is_optional_defaulted_and_round_trips() {
+        // Absent: the field is not written, and nothing changes.
+        let plain = Scene::new("plain");
+        assert!(!plain.to_ron().contains("ao:"));
+        assert_eq!(plain.environment.core_ao(), None);
+        // `Some(())`: every field takes its default.
+        let text = "(version: 3, name: \"a\", environment: (ao: Some(())))";
+        let scene = Scene::from_ron(text).unwrap();
+        assert_eq!(scene.environment.ao, Some(AmbientOcclusionDef::default()));
+        assert_eq!(
+            scene.environment.core_ao(),
+            Some(trino_core::AmbientOcclusion::DEFAULT)
+        );
+        // Tuned, then disabled: the tuning stays in the file, the pass goes.
+        let mut tuned = Scene::new("tuned");
+        tuned.environment.ao = Some(AmbientOcclusionDef {
+            enabled: false,
+            radius: 1.25,
+            intensity: 1.5,
+            bias: 0.05,
+            quality: AoQualityDef::High,
+        });
+        let back = Scene::from_ron(&tuned.to_ron()).unwrap();
+        assert_eq!(back, tuned);
+        assert_eq!(back.environment.core_ao(), None);
+        tuned.environment.ao.as_mut().unwrap().enabled = true;
+        let ao = tuned.environment.core_ao().unwrap();
+        assert_eq!(ao.radius, 1.25);
+        assert_eq!(ao.quality, trino_core::AoQuality::High);
+        assert_eq!(ao.quality.samples(), 32);
+    }
+
+    #[test]
+    fn ambient_occlusion_out_of_range_values_are_clamped() {
+        let def = AmbientOcclusionDef {
+            intensity: 7.0,
+            radius: 0.0,
+            ..AmbientOcclusionDef::default()
+        };
+        let ao = def.core();
+        assert_eq!(ao.intensity, 2.0);
+        assert!(ao.radius > 0.0);
+    }
 
     fn sample() -> Scene {
         let mut scene = Scene::new("level-1");

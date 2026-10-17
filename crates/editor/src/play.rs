@@ -49,10 +49,12 @@ impl PlaySession {
         }
         let blob: &'static [u8] = Box::leak(blob.into_boxed_slice());
         let baked = BakedScene::parse(blob).map_err(|e| format!("baked scene: {e:?}"))?;
-        let game = Box::new(showcase::ShowcaseGame::from_baked(
+        let mut game = Box::new(showcase::ShowcaseGame::from_baked(
             &baked,
             Vec2::new(screen.0 as f32, screen.1 as f32),
         ));
+        // TSCN carries no AO (consoles bake theirs): the scene's own.
+        game.ao = scene.environment.core_ao();
         Ok(PlaySession {
             game,
             last: Instant::now(),

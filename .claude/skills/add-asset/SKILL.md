@@ -45,6 +45,7 @@ file = "models/robot.glb"   # glTF 2.0 (.glb/.gltf), Y-up, meters
 anim_fps = 20               # optional: clip sampling rate (default 15)
 platforms = ["pc"]          # optional: bake only for these (pc, n64, 3ds); default all
 once = ["wave"]             # optional: clips that play once (default: loop)
+ao = { strength = 0.8, ground = true }   # optional: bake ambient occlusion (below)
 ```
 
 - **Colors**: by default the color is baked into the vertices, from COLOR_0, else the
@@ -65,6 +66,19 @@ once = ["wave"]             # optional: clips that play once (default: loop)
   borders on split vertices (Blender: `paint_slots`, FACE domain). Without `_SLOT`,
   the bake output is byte-identical to before. `model inspect` reports the vertices
   per slot. On the N64 a palette draw runs on the CPU T&L, not the RSP.
+- **Ambient occlusion (baked):** `ao = true` or `ao = { strength = 0.8, distance = 0.5,
+  rays = 64, ground = true }` darkens the vertex colors where the model hides the sky
+  from itself (ADR 0014). This is how the N64 and 3DS get AO: free at run time and the
+  same on every target.
+  - `distance` 0 (the default) = a fifth of the bounding-box diagonal.
+  - `ground = true` adds a floor at the model's lowest point, for contact shading
+    under props.
+  - A convex model without `ground` has nothing to occlude, so it bakes byte-identical.
+  - Occlusion comes from the model alone. A crate on a separate floor model needs
+    `ground`; contacts between models are the PC's SSAO (`scene-authoring`).
+  - Editor: Assets › model › Ambient occlusion (baked), which writes the same line.
+  - Check the result in `cargo test -p xtask --test ao_shots -- --ignored`
+    (`baked_*.png`), or draw the model unlit.
 - Full rules and the Blender workflow: the `blender-asset` skill.
 - **Gate:** `cargo xtask model inspect assets/shared/models/robot.glb [--json]` — bakes
   like the engine and reports tris, joints, clips, size and an **N64 cost estimate per

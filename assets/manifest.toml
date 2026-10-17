@@ -262,6 +262,16 @@ texture = "sprites/selftest_quadrants"
 [models.selftest_slots]
 file = "models/proxies/selftest-slots.gltf"
 
+# A white panel between two fins, with ambient occlusion baked into its
+# vertex colors and without: the consoles' AO, the same on every target
+# (selftest::ambient_occlusion).
+[models.selftest_ao]
+file = "models/proxies/selftest-ao.gltf"
+ao = { strength = 0.9, distance = 0.5 }
+
+[models.selftest_ao_raw]
+file = "models/proxies/selftest-ao.gltf"
+
 [sprites.impostor-selftest-boar]
 file = "impostors/selftest-boar.png"
 formats = { n64 = "CI4" }

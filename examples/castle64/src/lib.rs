@@ -60,6 +60,13 @@ const M_TORCH_FLAME: ModelId = ModelId::from_path("models/c64_torch_flame");
 const M_LIGHT_POOL: ModelId = ModelId::from_path("models/c64_light_pool");
 /// A torch's light: warm, at the bulb, reaching 5.5 m.
 const TORCH_COLOR: Color = Color::rgb(255, 150, 70);
+/// The PC's screen-space ambient occlusion (`trino_core::ao`).
+const AMBIENT_OCCLUSION: trino_core::AmbientOcclusion = trino_core::AmbientOcclusion {
+    radius: 0.6,
+    intensity: 1.0,
+    bias: 0.03,
+    quality: trino_core::AoQuality::Medium,
+};
 const TORCH_HEIGHT: f32 = 2.45;
 /// Where torches burn the room is dim: they light it. White (a colored
 /// light sends every N64 draw to the CPU, `RspReject::ColoredLight`), low
@@ -581,6 +588,10 @@ impl Game for Castle64Game {
             TORCH_ROOM_LIGHT
         };
         renderer.set_light(&light);
+        // Screen-space ambient occlusion: contact shadows where the
+        // characters, doors and platforms meet the floor. The PC runs it;
+        // the consoles ignore it (cleared by begin_frame, like the torches).
+        renderer.set_ambient_occlusion(Some(&AMBIENT_OCCLUSION));
         // Torches: one flickering local light each, declared before the
         // draws they light (cleared by begin_frame). The PC shades them per
         // pixel; the consoles per vertex (the first `max_local_lights`),

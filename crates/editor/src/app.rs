@@ -98,6 +98,9 @@ pub enum Cmd {
     CreateProxy(String, pipeline::Primitive, bool),
     SaveProxy(String, pipeline::Primitive),
     RetargetModel(String, String),
+    /// Bake (`Some`) or stop baking (`None`) ambient occlusion into a
+    /// model's vertex colors: the manifest's `ao` (the watcher rebakes).
+    SetModelAo(String, Option<pipeline::AoBake>),
     OpenScene(PathBuf),
     NewScene(String),
     Export(PathBuf),
@@ -362,6 +365,14 @@ impl App {
             _ => SimProfile::N64,
         };
         let game_view = Viewport::new(render_state.clone(), ViewKind::Game, game_profile);
+        // Dev hook: TRINO_EDITOR_AO=game|on|off|mask, the Scene view's
+        // ambient occlusion mode.
+        if let Some(view) = std::env::var("TRINO_EDITOR_AO")
+            .ok()
+            .and_then(|v| trino_platform_pc::AoView::parse(&v))
+        {
+            scene_view.ao_view = view;
+        }
         let cam = doc.scene.environment.core_camera();
         scene_view.cam.look_from(cam.eye, cam.target);
         let thumbs = Thumbnailer::new(
@@ -1249,6 +1260,23 @@ impl App {
                     format!("models/{name} now uses {file} — same handle, every reference kept"),
                 );
             }
+            Cmd::SetModelAo(name, ao) => {
+                self.project.set_model_ao(&name, ao.as_ref())?;
+                // The inspector shows the manifest at once: a convex model
+                // bakes to the same bytes, and the watcher reports nothing.
+                if let Some(m) = self.project.models.get_mut(&format!("models/{name}")) {
+                    m.ao = ao.clone();
+                }
+                self.log.toast(
+                    Level::Ok,
+                    match ao {
+                        Some(_) => format!(
+                            "models/{name}: baking ambient occlusion into its vertex colors"
+                        ),
+                        None => format!("models/{name}: baked ambient occlusion removed"),
+                    },
+                );
+            }
             Cmd::OpenScene(path) => {
                 if self.doc.is_prefab() {
                     self.run(Cmd::ExitPrefab, ctx)?;
@@ -1546,6 +1574,9 @@ impl App {
                 ui.checkbox(&mut self.animate, "Preview animations");
                 ui.checkbox(&mut self.scene_view.snap, "Snap");
                 ui.checkbox(&mut self.scene_view.cam.ortho, "Orthographic (5)");
+                ui.menu_button("Ambient occlusion", |ui| {
+                    crate::viewport::ao_menu(ui, &mut self.scene_view.ao_view);
+                });
                 ui.separator();
                 if ui
                     .button(format!("{}  Keyboard shortcuts", icon::INFO))

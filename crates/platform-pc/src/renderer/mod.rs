@@ -7,6 +7,7 @@
 //!   with [`PcRenderer::read_offscreen`]. This is also the path the editor
 //!   viewport reuses in Fase 3 (render-to-texture).
 
+mod ao;
 mod batch;
 mod lights;
 
@@ -19,11 +20,13 @@ use trino_core::render3d::{
     TnlContext, TnlScratch,
 };
 use trino_core::{
-    Caps, Color, FontId, FrameStats, LightList, LightTier, LocalLight, Mat34, Material, ModelId,
-    ModelParams, Renderer, Screen, SpriteId, SpriteParams, TexFilter, TextParams, Transform3, Vec2,
+    AmbientOcclusion, AoTier, Caps, Color, FontId, FrameStats, LightList, LightTier, LocalLight,
+    Mat34, Material, ModelId, ModelParams, Renderer, Screen, SpriteId, SpriteParams, TexFilter,
+    TextParams, Transform3, Vec2,
 };
 
 use crate::sim::SimProfile;
+pub use ao::AoView;
 use batch::{
     Cmd, INSTANCE_STRIDE, Segment, TRI_VERTEX_STRIDE, TexKey, TriVertex, build_segments,
     make_command,
@@ -96,8 +99,10 @@ pub struct PcFrameTimes {
     /// gloss or wetness reaches them); the rest take `tessellate_with`.
     pub lit_draws: u32,
     /// Bytes written to GPU buffers (sprite instances, triangle vertices,
-    /// light sets).
+    /// light sets, AO parameters).
     pub upload_bytes: u32,
+    /// Screen-space AO passes run (0 or 1: the frame's 3D, once).
+    pub ao_passes: u32,
 }
 
 /// Microseconds since `t0`.
@@ -192,6 +197,14 @@ pub struct PcRenderer {
     /// lit draws used (the lit pipeline's uniform).
     locals: LightList,
     wetness: f32,
+    /// This frame's screen-space AO (`set_ambient_occlusion`, cleared at
+    /// `begin_frame`), what shows of it (`set_ao_view`, `TRINO_AO`) and
+    /// its passes (built on first use).
+    ao: Option<AmbientOcclusion>,
+    ao_view: AoView,
+    ao_pass: Option<ao::AoPass>,
+    /// The same over the multisampled depth (MSAA on).
+    ao_pass_ms: Option<ao::AoPass>,
     light_sets: lights::LightSets,
     /// The T&L's working memory for per-pixel lit draws.
     surf_scratch: Box<SurfaceScratch>,
@@ -320,7 +333,8 @@ fn create_targets(
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: wgpu::TextureFormat::Depth32Float,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        // Read back by the screen-space AO passes.
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
         view_formats: &[],
     });
     let depth_view = depth_tex.create_view(&wgpu::TextureViewDescriptor::default());
@@ -581,7 +595,7 @@ fn create_msaa_targets(
         height: size.1,
         depth_or_array_layers: 1,
     };
-    let make = |label, format| {
+    let make = |label, format, usage| {
         device
             .create_texture(&wgpu::TextureDescriptor {
                 label: Some(label),
@@ -590,14 +604,20 @@ fn create_msaa_targets(
                 sample_count: MSAA_SAMPLES,
                 dimension: wgpu::TextureDimension::D2,
                 format,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                usage,
                 view_formats: &[],
             })
             .create_view(&wgpu::TextureViewDescriptor::default())
     };
+    let target = wgpu::TextureUsages::RENDER_ATTACHMENT;
     (
-        make("trino-msaa-color", OFFSCREEN_FORMAT),
-        make("trino-msaa-depth", wgpu::TextureFormat::Depth32Float),
+        make("trino-msaa-color", OFFSCREEN_FORMAT, target),
+        // The SSAO pass reads it.
+        make(
+            "trino-msaa-depth",
+            wgpu::TextureFormat::Depth32Float,
+            target | wgpu::TextureUsages::TEXTURE_BINDING,
+        ),
     )
 }
 
@@ -663,12 +683,21 @@ impl PcRenderer {
             .create_surface(window.clone())
             .map_err(|e| RendererError::Surface(e.to_string()))?;
         let size = window.inner_size();
-        Self::init(
+        let mut r = Self::init(
             instance,
             Some((surface, size.width.max(1), size.height.max(1))),
             profile,
         )
-        .await
+        .await?;
+        // A game window honors TRINO_AO=off|on|mask (headless renderers,
+        // the tests', never read it).
+        if let Some(view) = std::env::var("TRINO_AO")
+            .ok()
+            .and_then(|v| AoView::parse(&v))
+        {
+            r.set_ao_view(view);
+        }
+        Ok(r)
     }
 
     /// Offscreen-only renderer for tests and tooling.
@@ -1177,6 +1206,10 @@ impl PcRenderer {
             pending_surf: Vec::new(),
             locals: LightList::EMPTY,
             wetness: 0.0,
+            ao: None,
+            ao_view: AoView::Game,
+            ao_pass: None,
+            ao_pass_ms: None,
             light_sets: lights::LightSets::default(),
             surf_scratch: Box::new(SurfaceScratch::new()),
             camera: Camera3::default(),
@@ -1285,9 +1318,15 @@ impl PcRenderer {
         self.offscreen_tex = tex;
         self.offscreen_view = view;
         self.depth_view = depth;
+        if let Some(ao) = &mut self.ao_pass {
+            ao.invalidate();
+        }
         self.vi_tex = create_vi_target(&self.device, size);
         if self.msaa > 1 {
             self.msaa_targets = Some(create_msaa_targets(&self.device, size));
+        }
+        if let Some(ao) = &mut self.ao_pass_ms {
+            ao.invalidate();
         }
         self.internal_size = size;
         // Games read the picture size from the caps (culling, layout).
@@ -1320,6 +1359,9 @@ impl PcRenderer {
         }
         self.msaa_targets =
             (samples > 1).then(|| create_msaa_targets(&self.device, self.internal_size));
+        if let Some(ao) = &mut self.ao_pass_ms {
+            ao.invalidate();
+        }
     }
 
     /// Samples per pixel of the scene (1 = no multisampling).
@@ -1339,6 +1381,27 @@ impl PcRenderer {
 
     pub fn vi_dedither(&self) -> bool {
         self.vi_dedither
+    }
+
+    /// What the screen-space AO shows ([`AoView`]): as the game sets it
+    /// (the default), off, always on, or the occlusion alone. The editor's
+    /// Scene view toggle and `TRINO_AO=off|on|mask`. Only the native
+    /// profile runs the pass (`Caps::ao_tier`); the console profiles show
+    /// what the consoles do, the AO baked into the models.
+    pub fn set_ao_view(&mut self, view: AoView) {
+        self.ao_view = view;
+    }
+
+    pub fn ao_view(&self) -> AoView {
+        self.ao_view
+    }
+
+    /// The AO this frame runs with, and whether it shows as the mask.
+    fn frame_ao(&self) -> Option<(AmbientOcclusion, bool)> {
+        if self.caps.ao_tier != AoTier::ScreenSpace {
+            return None;
+        }
+        self.ao_view.resolve(self.ao)
     }
 
     /// View of the internal framebuffer — the editor registers this as an
@@ -1871,102 +1934,93 @@ impl PcRenderer {
                 a: self.clear.a as f64 / 255.0,
             }
         };
-        let (color_view, depth_view, globals_bg) = match (&self.second, second) {
-            (Some(sc), true) => (&sc.view, &sc.depth_view, &sc.globals_bg),
-            _ => (&self.offscreen_view, &self.depth_view, &self.globals_bg),
-        };
-        // Multisampled: draw into the MSAA target, resolve into the
-        // offscreen one at the end of the pass.
-        let ms = match (&self.msaa_targets, second) {
-            (Some((c, d)), false) => Some((c, d)),
-            _ => None,
-        };
-        let (pass_color, pass_resolve, pass_depth) = match ms {
-            Some((c, d)) => (c, Some(color_view), d),
-            None => (color_view, None, depth_view),
-        };
-        let pipes = if let (Some(_), Some(p)) = (ms, &self.ms_pipelines) {
-            [&p[0], &p[1], &p[2], &p[3]]
-        } else {
-            [
-                &self.sprite_pipeline,
-                &self.tri_pipeline,
-                &self.tri_clamp_pipeline,
-                &self.lit_pipeline,
-            ]
-        };
-
-        // The multisampled targets live for this one pass (it clears them
-        // and resolves the color): nothing to write back.
-        let store = if ms.is_some() {
-            wgpu::StoreOp::Discard
-        } else {
-            wgpu::StoreOp::Store
-        };
+        // Screen-space AO darkens the 3D, not the 2D drawn over it: the
+        // pass ends after the frame's last 3D draw, the AO passes run, and
+        // the rest (HUD, text) draws on top.
+        let ao = if second { None } else { self.frame_ao() };
+        let split = ao.and_then(|_| {
+            segments
+                .iter()
+                .rposition(|s| matches!(s, Segment::Tris { .. }))
+                .map(|i| i + 1)
+        });
+        let (first_part, rest) = segments.split_at(split.unwrap_or(segments.len()));
 
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("trino-sprite-pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: pass_color,
-                    resolve_target: pass_resolve,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(clear),
-                        store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: pass_depth,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store,
+        // Multisampled (the main screen only): the 3D draws into the MSAA
+        // targets and resolves into the offscreen one at the end of the pass.
+        let ms = !second && self.msaa_targets.is_some() && self.ms_pipelines.is_some();
+        let draws = self.record_segments(
+            &mut encoder,
+            second,
+            first_part,
+            (wgpu::LoadOp::Clear(clear), wgpu::LoadOp::Clear(1.0)),
+            ms,
+            ao.is_some() && split.is_some(),
+        );
+        self.times.draw_calls += draws;
+        if let (Some((settings, mask)), Some(_)) = (ao, split) {
+            let (w, h) = self.internal_size;
+            let half = self.camera.fov_y * 0.5;
+            let focal =
+                trino_core::math3d::cos(half) / trino_core::math3d::sin(half) * h as f32 * 0.5;
+            let fog = self.light.fog;
+            let params = ao::AoUniform {
+                size: (w, h),
+                focal,
+                near: trino_core::render3d::NEAR_PLANE,
+                ao: settings,
+                fog: if fog.enabled() {
+                    (fog.near, fog.far)
+                } else {
+                    (0.0, 0.0)
+                },
+                mask,
+            };
+            // With MSAA the occlusion reads the multisampled depth (its
+            // first sample); its own pass, as its bind groups hold the view.
+            let (pass, depth) = match (&self.msaa_targets, ms) {
+                (Some((_, depth)), true) => (
+                    self.ao_pass_ms.get_or_insert_with(|| {
+                        ao::AoPass::new(&self.device, OFFSCREEN_FORMAT, true)
                     }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_bind_group(0, globals_bg, &[]);
-            for segment in &segments {
-                match segment {
-                    Segment::Sprites { sprite, instances } => {
-                        if let Some(entry) = self.sprites.get(sprite) {
-                            pass.set_pipeline(pipes[0]);
-                            pass.set_vertex_buffer(0, self.instance_buf.slice(..));
-                            pass.set_bind_group(1, &entry.bind_group, &[]);
-                            pass.draw(0..4, instances.clone());
-                            self.times.draw_calls += 1;
-                        }
-                    }
-                    Segment::Tris {
-                        first,
-                        count,
-                        texture,
-                        lit,
-                    } => {
-                        let pipeline = if *lit {
-                            pass.set_bind_group(2, &self.lights_bg, &[]);
-                            pipes[3]
-                        } else if texture.is_some_and(|t| t.clamp) {
-                            pipes[2]
-                        } else {
-                            pipes[1]
-                        };
-                        pass.set_pipeline(pipeline);
-                        pass.set_vertex_buffer(0, self.tri_buf.slice(..));
-                        let bg = texture
-                            .and_then(|t| self.tex3d.get(&t))
-                            .unwrap_or(&self.white_bg);
-                        pass.set_bind_group(1, bg, &[]);
-                        pass.draw(*first..*first + *count, 0..1);
-                        self.times.draw_calls += 1;
-                    }
-                }
+                    depth,
+                ),
+                _ => (
+                    self.ao_pass.get_or_insert_with(|| {
+                        ao::AoPass::new(&self.device, OFFSCREEN_FORMAT, false)
+                    }),
+                    &self.depth_view,
+                ),
+            };
+            self.times.upload_bytes += pass.encode(
+                &self.device,
+                &self.queue,
+                &mut encoder,
+                depth,
+                &self.offscreen_view,
+                &params,
+            );
+            self.times.ao_passes += 1;
+            if !rest.is_empty() {
+                // The rest is 2D (no depth test): with MSAA it draws
+                // single-sampled over the resolved, occluded frame.
+                let depth_load = if ms {
+                    wgpu::LoadOp::Clear(1.0)
+                } else {
+                    wgpu::LoadOp::Load
+                };
+                let draws = self.record_segments(
+                    &mut encoder,
+                    second,
+                    rest,
+                    (wgpu::LoadOp::Load, depth_load),
+                    false,
+                    false,
+                );
+                self.times.draw_calls += draws;
             }
         }
 
@@ -2009,6 +2063,123 @@ impl PcRenderer {
             );
         }
         self.queue.submit([encoder.finish()]);
+    }
+
+    /// One render pass over `segments` into the main target (or the
+    /// second screen's), loading or clearing color and depth. Returns the
+    /// GPU draw calls.
+    fn record_segments(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        second: bool,
+        segments: &[Segment],
+        (color_load, depth_load): (wgpu::LoadOp<wgpu::Color>, wgpu::LoadOp<f32>),
+        ms: bool,
+        keep_ms_depth: bool,
+    ) -> u32 {
+        let (color_view, depth_view, globals_bg) = match (&self.second, second) {
+            (Some(sc), true) => (&sc.view, &sc.depth_view, &sc.globals_bg),
+            _ => (&self.offscreen_view, &self.depth_view, &self.globals_bg),
+        };
+        // Multisampled: draw into the MSAA targets, resolve the color into
+        // the offscreen one at the end of the pass. They live for this one
+        // pass (it clears them), so nothing is written back but the depth
+        // the AO pass reads.
+        let ms = match (&self.msaa_targets, &self.ms_pipelines, ms) {
+            (Some((c, d)), Some(p), true) => Some((c, d, p)),
+            _ => None,
+        };
+        let (pass_color, pass_resolve, pass_depth, color_store, depth_store) = match ms {
+            Some((c, d, _)) => (
+                c,
+                Some(color_view),
+                d,
+                wgpu::StoreOp::Discard,
+                if keep_ms_depth {
+                    wgpu::StoreOp::Store
+                } else {
+                    wgpu::StoreOp::Discard
+                },
+            ),
+            None => (
+                color_view,
+                None,
+                depth_view,
+                wgpu::StoreOp::Store,
+                wgpu::StoreOp::Store,
+            ),
+        };
+        let pipes = match ms {
+            Some((_, _, p)) => [&p[0], &p[1], &p[2], &p[3]],
+            None => [
+                &self.sprite_pipeline,
+                &self.tri_pipeline,
+                &self.tri_clamp_pipeline,
+                &self.lit_pipeline,
+            ],
+        };
+        let mut draws = 0;
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("trino-sprite-pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: pass_color,
+                resolve_target: pass_resolve,
+                ops: wgpu::Operations {
+                    load: color_load,
+                    store: color_store,
+                },
+                depth_slice: None,
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: pass_depth,
+                depth_ops: Some(wgpu::Operations {
+                    load: depth_load,
+                    store: depth_store,
+                }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_bind_group(0, globals_bg, &[]);
+        for segment in segments {
+            match segment {
+                Segment::Sprites { sprite, instances } => {
+                    if let Some(entry) = self.sprites.get(sprite) {
+                        pass.set_pipeline(pipes[0]);
+                        pass.set_vertex_buffer(0, self.instance_buf.slice(..));
+                        pass.set_bind_group(1, &entry.bind_group, &[]);
+                        pass.draw(0..4, instances.clone());
+                        draws += 1;
+                    }
+                }
+                Segment::Tris {
+                    first,
+                    count,
+                    texture,
+                    lit,
+                } => {
+                    let pipeline = if *lit {
+                        pass.set_bind_group(2, &self.lights_bg, &[]);
+                        pipes[3]
+                    } else if texture.is_some_and(|t| t.clamp) {
+                        pipes[2]
+                    } else {
+                        pipes[1]
+                    };
+                    pass.set_pipeline(pipeline);
+                    pass.set_vertex_buffer(0, self.tri_buf.slice(..));
+                    let bg = texture
+                        .and_then(|t| self.tex3d.get(&t))
+                        .unwrap_or(&self.white_bg);
+                    pass.set_bind_group(1, bg, &[]);
+                    pass.draw(*first..*first + *count, 0..1);
+                    draws += 1;
+                }
+            }
+        }
+        draws
     }
 
     /// The end of a frame: render what is left (the second screen is
@@ -2193,6 +2364,7 @@ impl Renderer for PcRenderer {
         self.pending_surf.clear();
         self.locals = LightList::EMPTY;
         self.wetness = 0.0;
+        self.ao = None;
         self.light_sets.clear();
         self.frame_stats = FrameStats::default();
         self.n64 = N64Split::default();
@@ -2285,6 +2457,10 @@ impl Renderer for PcRenderer {
             TexFilter::Default => default_filter(self.profile),
             f => f,
         };
+    }
+
+    fn set_ambient_occlusion(&mut self, ao: Option<&AmbientOcclusion>) {
+        self.ao = ao.copied();
     }
 
     fn set_wetness(&mut self, wetness: f32) {

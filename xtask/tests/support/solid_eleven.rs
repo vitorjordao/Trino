@@ -14,6 +14,10 @@ pub fn root() -> PathBuf {
 pub fn try_renderer(profile: SimProfile, size: Option<(u32, u32)>) -> Option<PcRenderer> {
     let root = root();
     let baked = root.join("target/assets/solid-eleven/pc");
+    // One bake at a time in this test binary (its tests run in
+    // parallel and share the directory).
+    static BAKE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _bake = BAKE.lock().unwrap_or_else(|e| e.into_inner());
     trino_asset_pipeline::bake_all(
         &root.join("examples/solid-eleven/assets"),
         trino_asset_pipeline::Platform::Pc,

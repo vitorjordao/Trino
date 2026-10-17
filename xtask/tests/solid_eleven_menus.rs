@@ -34,8 +34,15 @@ impl trino_core::Audio for Mute {
     fn set_master_volume(&mut self, _: f32) {}
 }
 
-/// The game's fonts, baked by the asset pipeline.
+/// The game's fonts, baked by the asset pipeline once per test binary:
+/// both tests baking into one directory at once let one read the index
+/// while the other rewrote it (a flaky failure on macOS CI).
 fn fonts() -> HashMap<u32, Vec<u8>> {
+    static FONTS: std::sync::OnceLock<HashMap<u32, Vec<u8>>> = std::sync::OnceLock::new();
+    FONTS.get_or_init(bake_fonts).clone()
+}
+
+fn bake_fonts() -> HashMap<u32, Vec<u8>> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
     let baked = root.join("target/assets/solid-eleven/menus");
     trino_asset_pipeline::bake_all(

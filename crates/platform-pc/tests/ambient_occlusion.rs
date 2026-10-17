@@ -307,6 +307,54 @@ fn the_2d_drawn_after_the_3d_is_not_darkened() {
     assert_eq!(px(&r, &on, CONTACT), [90, 200, 120]);
 }
 
+/// With MSAA on (the PC's best look, `trino-runner-pc`'s default) the
+/// occlusion reads the multisampled depth: the same contacts darken, open
+/// floor doesn't, and the 2D after the 3D keeps its exact color.
+#[test]
+fn msaa_frames_get_the_same_occlusion() {
+    let _gpu = gpu();
+    let Some(mut r) = headless(SimProfile::Native) else {
+        return;
+    };
+    setup(&mut r);
+    r.set_msaa(true);
+    assert!(r.msaa() > 1);
+    let off = frame(&mut r, None, true);
+    let on = frame(&mut r, Some(Some(AO)), true);
+    assert_eq!(r.frame_times().ao_passes, 1);
+    shots(&r, "ao_msaa_on", &on);
+    let (a, b) = (px(&r, &off, CREASE), px(&r, &on, CREASE));
+    assert!(
+        luma(a) - luma(b) >= 25,
+        "crease: {a:?} -> {b:?} (at least 25 darker expected)"
+    );
+    for (name, p) in [("open floor", OPEN), ("crate top", TOP)] {
+        let (a, b) = (px(&r, &off, p), px(&r, &on, p));
+        assert!(
+            luma(a) - luma(b) <= 3,
+            "{name} at {p:?}: {a:?} -> {b:?} (unoccluded: unchanged)"
+        );
+    }
+    assert_eq!(px(&r, &on, CONTACT), [90, 200, 120]);
+    // Against the single-sampled occlusion: the same picture but the
+    // triangles' edges.
+    r.set_msaa(false);
+    let single = frame(&mut r, Some(Some(AO)), true);
+    let (w, h) = r.internal_size();
+    let mut far = 0;
+    for y in 0..h {
+        for x in 0..w {
+            if (luma(at(&r, &on, x, y)) - luma(at(&r, &single, x, y))).abs() > 24 {
+                far += 1;
+            }
+        }
+    }
+    assert!(
+        far * 100 < (w * h) as usize,
+        "{far} pixels differ by more than 24 from the single-sampled AO frame"
+    );
+}
+
 #[test]
 fn views_force_it_on_or_show_the_mask() {
     let _gpu = gpu();

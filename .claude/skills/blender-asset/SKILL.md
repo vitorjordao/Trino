@@ -320,3 +320,59 @@ about the origin.
   master, so low-poly N64/3DS versions need no game code. In one 64-model set they
   cost 44% fewer triangles.
 
+
+## Lessons from Solid Eleven (2026-10-16, issue #39)
+
+- **One generator, two tiers:** `tools/blender/solid_eleven_models.py`
+  (`cargo xtask blender solid-eleven [--only a,b]`) builds console and PC models from
+  one table. Keys tagged `@pc` are written as `<name>_hd` and listed with
+  `platforms = ["pc"]` in the manifest, so the consoles never load them. `--only`
+  takes those `_hd` names.
+- **Rigid parts posed from a clip table instead of a skinned rig:** the players are 7
+  parts on the consoles (11 on PC), each drawn with a matrix the game computes from
+  `render/clips_gen.rs`. `tools/blender/solid_eleven_anim.py` holds the clip table, which
+  rigs the Blender preview and writes the Rust table (`--rust`, and `--check` in
+  `solid_eleven_layers`). One source keeps the art and the game in step, and a part
+  costs one draw with no skinning.
+- **Big flat ground under a low camera:** split it into coarse far tiles and fine
+  near tiles. One 20 m quad under the camera can leave the N64's RSP (clip band).
+- **Rigid parts need a fit test, not eyeballing** (iteration 2: legs out of the shorts,
+  arms out of the sleeves, a floating head, all worse in motion). The body is a table
+  (`BODY` in `solid_eleven_anim.py`: frustums with skipped faces, a tint, tiers), so
+  `render/fit.rs` can pose it through every clip and crossfade and check five rules:
+  each part stays attached, its plug (the end inside the parent) stays hidden, no
+  holes, nothing sinks into a neighbor of another tint, feet on the turf. Put a joint's
+  pivot at the center of the parent's opening (the head pivots at the neck top), make
+  the plug a frustum that reaches deeper than the parent's rim at the widest bend, and
+  close every face a camera can see in some pose (the boot's back, the hair).
+- **The fit test never judges two solids on one joint against each other,** so a part
+  that crosses another on its own joint passes unseen. Solid Eleven's hair cap and skull
+  were two solids of one head: the forehead and temples showed through the hair for two
+  iterations. Make anything that must cover another surface on the same bone (hair,
+  a cap, a collar) a part of its own, built **around** the surface: the surface's own
+  solids pushed out by a margin (a frustum's sides stay parallel, so the gap holds over
+  the top), plus locks that stand off its widest section. Then check it statically
+  (`fit.rs` rule 6: every outer face ≥ 2 mm off) and pose every variant through the
+  clips at once, with variants never judging each other (`Body::judges`). Look at
+  `heads_<tier>.png` / `hair_lineup_<tier>.png` from `solid_eleven_poses head_closeups`.
+- **A taper that narrows to a waist needs whatever rides inside it narrowed too:**
+  the shorts taper in at the top, and a straight shorts leg on the thigh poked 9 mm out
+  of them at the hip (`fit.rs::the_shorts_legs_stay_inside_the_shorts_sides`).
+- **Ground every key by forward kinematics, per tier:** the generator computes each
+  key's root height from the lowest point of the posed body, once with the PC body
+  (`root`) and once with the console body (`lo`); the game also plants the feet per
+  frame from generated contact points. Hand-written root heights floated or sank.
+- **Lying clips need a pelvis roll,** or the torso goes through the turf; give falls
+  and slides a get-up clip, and route a fall to it instead of crossfading to a run.
+- **A pose can pass every fit rule and still look wrong:** the slide's hips sat 0.45 m
+  up on a straight leg, a flying kick, with nothing poking through. Look at the pose
+  sheets (`cargo test --release -p xtask --test solid_eleven_poses -- --ignored`) of
+  both bodies: the consoles' legs have no knee, so a folded leg sticks up into the air
+  there. Search a pose with the generator's FK (`lowest`, `frames_of`) against what
+  should touch the turf, on both tiers, then fit-test it.
+- **Generators that write Rust read and write with `encoding="utf-8", newline="\n"`.**
+  Windows Python defaults to cp1252. CI's Windows job runs the clip table's
+  `--check`, which then saw the em dash in the generated header as drift, on a file
+  identical on disk.
+- **Merge what's always together:** the advertising boards became part of the stands
+  (fewer draws; on the N64, draw count costs more than triangles).

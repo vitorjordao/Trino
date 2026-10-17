@@ -1,0 +1,566 @@
+//! Rigid-part player animation: the clips authored in
+//! `tools/blender/solid_eleven_anim.py` (generated into `clips_gen.rs`),
+//! sampled, mirrored, crossfaded and turned into one matrix per joint.
+//!
+//! No trigonometry per frame: keys are quaternions, poses blend with
+//! `nlerp`, and the body's yaw comes straight from the sim's facing vector.
+//! The same code poses players on PC, N64 and 3DS.
+
+use super::clips_gen::{CLIPS, CONTACTS_FULL, CONTACTS_LO, ClipName, JOINTS, SKELETON};
+use trino_core::{Mat34, Quat, Vec3};
+
+/// One keyframe: the time (0..1 of the clip), the pelvis offset and a
+/// rotation per joint. The generator grounds each key: `root[1]` puts the
+/// PC's body (bent knees) on the turf, `lo` the consoles' (straight legs).
+#[derive(Clone, Copy, Debug)]
+pub struct Key {
+    pub t: f32,
+    pub root: [f32; 3],
+    pub lo: f32,
+    pub q: [[f32; 4]; JOINTS],
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Clip {
+    pub name: &'static str,
+    pub seconds: f32,
+    pub looped: bool,
+    /// The body stays on the turf every frame ([`plant`] snaps it down);
+    /// otherwise it only stops at the turf.
+    pub grounded: bool,
+    pub keys: &'static [Key],
+}
+
+/// One convex piece of a body part, in its joint's frame: a frustum from a
+/// `w0` x `d0` rectangle at `y0` to a `w1` x `d1` one at `y1`, centered on
+/// (`cx`, `cz`). `skip` has a bit per face never built (-x, +x, -y, +y,
+/// -z, +z = 1, 2, 4, 8, 16, 32): another part covers it in every pose.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Solid {
+    pub y0: f32,
+    pub y1: f32,
+    pub w0: f32,
+    pub d0: f32,
+    pub w1: f32,
+    pub d1: f32,
+    pub cx: f32,
+    pub cz: f32,
+    pub skip: u8,
+}
+
+/// Which of a player's colors a part is tinted with.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Tint {
+    Skin,
+    Shirt,
+    Shorts,
+    Socks,
+    Hair,
+}
+
+/// A rigid body part: a mesh drawn with one joint's matrix.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Part {
+    pub model: trino_core::ModelId,
+    pub joint: usize,
+    pub tint: Tint,
+    /// The [`tier`]s that draw it.
+    pub tiers: u8,
+    pub solids: &'static [Solid],
+}
+
+/// Body detail tiers (bits of [`Part::tiers`]).
+pub mod tier {
+    /// The PC's native profile: elbows, knees, sleeves.
+    pub const FULL: u8 = 1;
+    /// Consoles near the camera.
+    pub const NEAR: u8 = 2;
+    /// Consoles far away: no arms, no shorts legs.
+    pub const FAR: u8 = 4;
+}
+
+/// Joint indices (the order of `solid_eleven_anim.JOINTS`).
+pub mod joint {
+    pub const PELVIS: usize = 0;
+    pub const TORSO: usize = 1;
+    pub const HEAD: usize = 2;
+    pub const ARM_L: usize = 3;
+    pub const ARM_R: usize = 4;
+    pub const FOREARM_L: usize = 5;
+    pub const FOREARM_R: usize = 6;
+    pub const THIGH_L: usize = 7;
+    pub const THIGH_R: usize = 8;
+    pub const SHIN_L: usize = 9;
+    pub const SHIN_R: usize = 10;
+}
+
+/// Which joints a detail level poses (bit `j` = joint `j`): all of them
+/// on the PC; consoles draw whole limbs (no forearms or shins) and far
+/// players without arms. Posing only these saves ~40% of the per-player
+/// CPU on the N64.
+pub mod mask {
+    use super::joint::*;
+    pub const ALL: u16 = (1 << super::JOINTS) - 1;
+    pub const LIMBS: u16 = 1 << PELVIS
+        | 1 << TORSO
+        | 1 << HEAD
+        | 1 << ARM_L
+        | 1 << ARM_R
+        | 1 << THIGH_L
+        | 1 << THIGH_R;
+    pub const NO_ARMS: u16 = 1 << PELVIS | 1 << TORSO | 1 << HEAD | 1 << THIGH_L | 1 << THIGH_R;
+}
+
+/// The left-right partner of each joint.
+const MIRROR: [usize; JOINTS] = [0, 1, 2, 4, 3, 6, 5, 8, 7, 10, 9];
+
+/// A sampled pose.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Pose {
+    pub root: Vec3,
+    pub q: [Quat; JOINTS],
+}
+
+impl Pose {
+    pub const REST: Pose = Pose {
+        root: Vec3::ZERO,
+        q: [Quat::IDENTITY; JOINTS],
+    };
+}
+
+pub fn clip(name: ClipName) -> &'static Clip {
+    &CLIPS[name as usize]
+}
+
+fn quat(a: [f32; 4]) -> Quat {
+    Quat::new(a[0], a[1], a[2], a[3])
+}
+
+/// `name` at `time` seconds (looped clips wrap, others hold their last
+/// key); `mirror` swaps left and right.
+pub fn sample(name: ClipName, time: f32, mirror: bool) -> Pose {
+    sample_masked(name, time, mirror, mask::ALL)
+}
+
+/// [`sample`] for the joints in `mask` only (the rest stay at rest).
+/// Masks are left-right symmetric, so mirroring needs nothing extra.
+pub fn sample_masked(name: ClipName, time: f32, mirror: bool, mask: u16) -> Pose {
+    let c = clip(name);
+    let mut u = if c.seconds > 0.0 {
+        time / c.seconds
+    } else {
+        0.0
+    };
+    if c.looped {
+        u -= floor(u);
+    } else {
+        u = u.clamp(0.0, 1.0);
+    }
+    let keys = c.keys;
+    // The segment holding u (wrapping to the first key for loops).
+    let mut i = keys.len() - 1;
+    for (k, key) in keys.iter().enumerate() {
+        if key.t > u {
+            i = if k == 0 { keys.len() - 1 } else { k - 1 };
+            break;
+        }
+    }
+    let a = &keys[i];
+    let (b, span) = if i + 1 < keys.len() {
+        (&keys[i + 1], keys[i + 1].t - a.t)
+    } else if c.looped {
+        (&keys[0], 1.0 - a.t + keys[0].t)
+    } else {
+        (a, 1.0)
+    };
+    let mut f = if span > 0.0 {
+        let d = u - a.t;
+        let d = if d < 0.0 { d + 1.0 } else { d };
+        (d / span).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    // Ease in and out between keys (smoothstep): no linear "robot" joints.
+    f = f * f * (3.0 - 2.0 * f);
+    let mut pose = Pose::REST;
+    for j in 0..JOINTS {
+        if mask & (1 << j) != 0 {
+            pose.q[j] = quat(a.q[j]).nlerp(quat(b.q[j]), f);
+        }
+    }
+    // Bodies without shins (consoles) stand on straight legs.
+    let (ya, yb) = if mask & (1 << joint::SHIN_L) != 0 {
+        (a.root[1], b.root[1])
+    } else {
+        (a.lo, b.lo)
+    };
+    pose.root = Vec3::new(
+        a.root[0] + (b.root[0] - a.root[0]) * f,
+        ya + (yb - ya) * f,
+        a.root[2] + (b.root[2] - a.root[2]) * f,
+    );
+    if mirror {
+        pose = mirrored(&pose);
+    }
+    pose
+}
+
+/// Left-right mirror: swap sides, reflect each rotation across x.
+pub fn mirrored(p: &Pose) -> Pose {
+    let mut out = Pose::REST;
+    for j in 0..JOINTS {
+        let q = p.q[MIRROR[j]];
+        out.q[j] = Quat::new(q.x, -q.y, -q.z, q.w);
+    }
+    out.root = Vec3::new(-p.root.x, p.root.y, p.root.z);
+    out
+}
+
+/// Crossfade: `w` = 0 gives `a`, 1 gives `b` (joints in `mask`).
+pub fn blend(a: &Pose, b: &Pose, w: f32, mask: u16) -> Pose {
+    if w <= 0.0 {
+        return *a;
+    }
+    if w >= 1.0 {
+        return *b;
+    }
+    let mut out = Pose::REST;
+    for j in 0..JOINTS {
+        if mask & (1 << j) != 0 {
+            out.q[j] = a.q[j].nlerp(b.q[j], w);
+        }
+    }
+    out.root = a.root + (b.root - a.root) * w;
+    out
+}
+
+/// Pelvis placement for a body at `feet` (ground point, world) facing the
+/// unit ground direction (`fx`, `fz`) and drawn at `scale`: a yaw matrix
+/// built from the facing vector itself (no sin/cos).
+pub fn body_matrix(feet: Vec3, fx: f32, fz: f32, scale: f32) -> Mat34 {
+    // The model's +z goes to (fx, 0, fz); its +x to (fz, 0, -fx).
+    Mat34 {
+        m: [
+            [fz * scale, 0.0, fx * scale, feet.x * scale],
+            [0.0, scale, 0.0, feet.y * scale],
+            [-fx * scale, 0.0, fz * scale, feet.z * scale],
+        ],
+    }
+}
+
+/// The world matrix of each joint in `mask` for `pose` on a body placed
+/// by `body` (a joint's parents must be in the mask: they are, for the
+/// [`mask`] sets).
+pub fn joint_matrices(body: &Mat34, pose: &Pose, out: &mut [Mat34; JOINTS], mask: u16) {
+    for j in 0..JOINTS {
+        if mask & (1 << j) == 0 {
+            continue;
+        }
+        let (parent, pivot) = SKELETON[j];
+        let mut t = Vec3::new(pivot[0], pivot[1], pivot[2]);
+        if j == joint::PELVIS {
+            t += pose.root;
+        }
+        let local = Mat34::from_trs(t, pose.q[j], Vec3::ONE);
+        out[j] = if parent == usize::MAX {
+            body.mul(&local)
+        } else {
+            out[parent].mul(&local)
+        };
+    }
+}
+
+/// Rest posed joints on the turf at height `ground` (world units): the
+/// lowest contact point (the generator's list for this body, those of
+/// posed joints) goes to the turf when `snap`, or up to it when it sank.
+/// The keys are grounded already; this keeps the frames between them from
+/// sinking a foot or floating. ~20 dot products per player.
+pub fn plant(m: &mut [Mat34; JOINTS], mask: u16, snap: bool, ground: f32) {
+    let full = mask & (1 << joint::SHIN_L) != 0;
+    let pts: &[(usize, [f32; 3])] = if full { &CONTACTS_FULL } else { &CONTACTS_LO };
+    let mut low = f32::MAX;
+    for &(j, p) in pts {
+        if mask & (1 << j) == 0 {
+            continue;
+        }
+        let r = &m[j].m[1];
+        low = low.min(r[0] * p[0] + r[1] * p[1] + r[2] * p[2] + r[3]);
+    }
+    if low == f32::MAX {
+        return;
+    }
+    let lift = ground - low;
+    if lift > 0.0 || snap {
+        for (j, mj) in m.iter_mut().enumerate() {
+            if mask & (1 << j) != 0 {
+                mj.m[1][3] += lift;
+            }
+        }
+    }
+}
+
+/// `floor` without std (the clip clock is never huge).
+fn floor(x: f32) -> f32 {
+    let i = x as i32 as f32;
+    if i > x { i - 1.0 } else { i }
+}
+
+/// Per-player animation state, advanced by the game's update (visual
+/// only: the sim never reads it).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct AnimState {
+    pub clip: ClipName,
+    pub time: f32,
+    pub mirror: bool,
+    /// The clip being faded out, its time, and the fade left (seconds)
+    /// of `fade_len`.
+    pub prev: ClipName,
+    pub prev_time: f32,
+    pub prev_mirror: bool,
+    pub fade: f32,
+    pub fade_len: f32,
+    /// A smoothed speed (m/s), for bodies whose speed is measured from
+    /// their positions (the officials).
+    pub speed: f32,
+}
+
+/// Crossfade length.
+pub const FADE: f32 = 0.16;
+/// Into a dive, or from one into another fall: it starts at once (a slow
+/// fade from a sprint swings the arms through the chest on the way).
+pub const FADE_FAST: f32 = 0.05;
+
+impl AnimState {
+    pub const fn new(clip: ClipName) -> AnimState {
+        AnimState {
+            clip,
+            time: 0.0,
+            mirror: false,
+            prev: clip,
+            prev_time: 0.0,
+            prev_mirror: false,
+            fade: 0.0,
+            fade_len: FADE,
+            speed: 0.0,
+        }
+    }
+
+    /// Switch to `clip` (fading from the current one) unless already on it;
+    /// a one-shot `restart`s when asked.
+    pub fn play(&mut self, clip: ClipName, mirror: bool, restart: bool) {
+        if clip == self.clip && mirror == self.mirror && !restart {
+            return;
+        }
+        self.prev = self.clip;
+        self.prev_time = self.time;
+        self.prev_mirror = self.mirror;
+        let dive = clip == ClipName::GkDive
+            || (self.clip == ClipName::GkDive && matches!(clip, ClipName::Down | ClipName::Slide));
+        self.fade_len = if dive { FADE_FAST } else { FADE };
+        self.fade = self.fade_len;
+        // Cycles of the same family keep their phase (jog → sprint).
+        let keep = is_cycle(clip) && is_cycle(self.clip);
+        if keep {
+            let from = super::anim::clip(self.clip).seconds;
+            let to = super::anim::clip(clip).seconds;
+            self.time = if from > 0.0 {
+                self.time / from * to
+            } else {
+                0.0
+            };
+        } else {
+            self.time = 0.0;
+        }
+        self.clip = clip;
+        self.mirror = mirror;
+    }
+
+    /// Advance by `dt` seconds at `rate` × the clip's speed.
+    pub fn advance(&mut self, dt: f32, rate: f32) {
+        self.time += dt * rate;
+        self.prev_time += dt * rate;
+        self.fade = (self.fade - dt).max(0.0);
+    }
+
+    pub fn pose(&self) -> Pose {
+        self.pose_masked(mask::ALL)
+    }
+
+    /// The current clip keeps the body on the turf ([`plant`]).
+    pub fn grounded(&self) -> bool {
+        clip(self.clip).grounded
+    }
+
+    /// The pose of the joints in `mask` (see [`mask`]).
+    pub fn pose_masked(&self, mask: u16) -> Pose {
+        let cur = sample_masked(self.clip, self.time, self.mirror, mask);
+        if self.fade <= 0.0 {
+            return cur;
+        }
+        let old = sample_masked(self.prev, self.prev_time, self.prev_mirror, mask);
+        blend(&cur, &old, self.fade / self.fade_len, mask)
+    }
+}
+
+/// Ends lying on the turf.
+pub fn lying(c: ClipName) -> bool {
+    matches!(c, ClipName::GkDive | ClipName::Slide)
+}
+
+/// What to show when the sim asks for `want` while `st` plays. A fall
+/// plays out (a keeper who catches the ball mid-dive still lands), then
+/// the player gets up before anything else — the sim's short `Down` after
+/// a dive included — and the get-up plays out unless he falls again. A
+/// crossfade from lying to running would swing the arms through the body.
+pub fn route(st: &AnimState, want: ClipName) -> ClipName {
+    if lying(st.clip) {
+        if want == st.clip || st.time < clip(st.clip).seconds {
+            return st.clip;
+        }
+        return ClipName::GetUp;
+    }
+    // Only lying clips lead here, and the sim keeps a player `Down` for a
+    // while after one: that is the same fall, not a new one.
+    let falls = matches!(want, ClipName::GkDive | ClipName::Slide);
+    if st.clip == ClipName::GetUp && st.time < clip(ClipName::GetUp).seconds && !falls {
+        return ClipName::GetUp;
+    }
+    want
+}
+
+/// Switch to `clip` the way the game does: a get-up after a slide starts
+/// at the kneel (the clip opens with rolling off a dive's side).
+pub fn switch(st: &mut AnimState, clip_name: ClipName, mirror: bool, restart: bool) {
+    let from = st.clip;
+    st.play(clip_name, mirror, restart);
+    if clip_name == ClipName::GetUp && from == ClipName::Slide && st.time == 0.0 {
+        st.time = clip(ClipName::GetUp).seconds * GET_UP_KNEEL;
+    }
+}
+
+/// Where the get-up clip kneels (its second key).
+pub const GET_UP_KNEEL: f32 = 0.35;
+
+fn is_cycle(c: ClipName) -> bool {
+    matches!(
+        c,
+        ClipName::Walk | ClipName::Jog | ClipName::Sprint | ClipName::Dribble
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn close(a: f32, b: f32) -> bool {
+        (a - b).abs() < 1e-3
+    }
+
+    #[test]
+    fn every_clip_is_well_formed() {
+        for c in CLIPS.iter() {
+            assert!(c.seconds > 0.0, "{}", c.name);
+            assert!(!c.keys.is_empty(), "{}", c.name);
+            let mut last = -1.0;
+            for k in c.keys {
+                assert!(k.t > last && k.t <= 1.0, "{}: keys out of order", c.name);
+                last = k.t;
+                for q in k.q {
+                    let n = q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3];
+                    assert!(close(n, 1.0), "{}: not a unit quaternion", c.name);
+                }
+            }
+            if !c.looped {
+                assert_eq!(
+                    c.keys.last().unwrap().t,
+                    1.0,
+                    "{}: one-shots end at 1",
+                    c.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn loops_wrap_and_one_shots_hold() {
+        let a = sample(ClipName::Jog, 0.1, false);
+        let b = sample(
+            ClipName::Jog,
+            0.1 + clip(ClipName::Jog).seconds * 3.0,
+            false,
+        );
+        for j in 0..JOINTS {
+            assert!(close(a.q[j].x, b.q[j].x) && close(a.q[j].w, b.q[j].w));
+        }
+        let end = sample(ClipName::Shot, 10.0, false);
+        let last = clip(ClipName::Shot).keys.last().unwrap();
+        assert!(close(end.q[joint::THIGH_R].x, last.q[joint::THIGH_R][0]));
+    }
+
+    #[test]
+    fn a_run_cycle_swings_the_legs_in_opposition() {
+        // At contact the left thigh swings forward (rx < 0), the right back.
+        let p = sample(ClipName::Sprint, 0.0, false);
+        assert!(p.q[joint::THIGH_L].x < 0.0 && p.q[joint::THIGH_R].x > 0.0);
+        // Half a cycle later it is the other way round.
+        let half = clip(ClipName::Sprint).seconds * 0.5;
+        let p = sample(ClipName::Sprint, half, false);
+        assert!(p.q[joint::THIGH_L].x > 0.0 && p.q[joint::THIGH_R].x < 0.0);
+    }
+
+    #[test]
+    fn mirroring_swaps_sides() {
+        let p = sample(ClipName::Shot, 0.1, false);
+        let m = sample(ClipName::Shot, 0.1, true);
+        assert!(close(m.q[joint::THIGH_L].x, p.q[joint::THIGH_R].x));
+        assert!(close(m.q[joint::THIGH_L].y, -p.q[joint::THIGH_R].y));
+        let twice = mirrored(&m);
+        assert!(close(twice.q[joint::ARM_R].z, p.q[joint::ARM_R].z));
+    }
+
+    #[test]
+    fn the_rest_pose_puts_the_feet_on_the_ground() {
+        let body = body_matrix(Vec3::ZERO, 0.0, 1.0, 1.0);
+        let mut m = [Mat34::IDENTITY; JOINTS];
+        joint_matrices(&body, &Pose::REST, &mut m, mask::ALL);
+        // Shin pivot (knee) height + the shin and boot (~0.47 m): the knee
+        // sits about half a meter up.
+        let knee = m[joint::SHIN_L].transform_point(Vec3::ZERO);
+        assert!(close(knee.y, 0.95 - 0.03 - 0.43), "{}", knee.y);
+        assert!(knee.x > 0.0, "the left knee is on +x");
+        let head = m[joint::HEAD].transform_point(Vec3::ZERO);
+        assert!(close(head.y, 0.95 + 0.02 + 0.44));
+    }
+
+    #[test]
+    fn facing_turns_the_body_without_trig() {
+        // Facing +x: the model's front (+z) maps to +x, its left (+x) to -z.
+        let b = body_matrix(Vec3::ZERO, 1.0, 0.0, 1.0);
+        let front = b.transform_dir(Vec3::new(0.0, 0.0, 1.0));
+        assert!(close(front.x, 1.0) && close(front.z, 0.0));
+        let left = b.transform_dir(Vec3::new(1.0, 0.0, 0.0));
+        assert!(close(left.z, -1.0));
+        // Scaled worlds keep the scale uniform (the RSP lights it).
+        let s = body_matrix(Vec3::new(64.0, 0.0, 0.0), 0.6, 0.8, 1.0 / 64.0);
+        let sc = s.axis_scales();
+        assert!(close(sc.x, sc.y) && close(sc.y, sc.z));
+        assert!(close(s.m[0][3], 1.0));
+    }
+
+    #[test]
+    fn crossfades_reach_their_target() {
+        let mut a = AnimState::new(ClipName::Idle);
+        a.play(ClipName::Sprint, false, false);
+        assert!(a.fade > 0.0);
+        a.advance(FADE * 2.0, 1.0);
+        assert_eq!(a.fade, 0.0);
+        let p = a.pose();
+        let s = sample(ClipName::Sprint, a.time, false);
+        assert!(close(p.q[joint::THIGH_L].x, s.q[joint::THIGH_L].x));
+        // Jog → sprint keeps the cycle's phase.
+        let mut b = AnimState::new(ClipName::Jog);
+        b.time = clip(ClipName::Jog).seconds * 0.5;
+        b.play(ClipName::Sprint, false, false);
+        assert!(close(b.time, clip(ClipName::Sprint).seconds * 0.5));
+    }
+}

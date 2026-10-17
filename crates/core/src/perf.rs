@@ -40,6 +40,9 @@ pub struct CostModel {
     /// path. The overlay runs in parallel with the CPU, so a frame costs the
     /// slower of the two (`trino_scene::budget`).
     pub us_per_rsp_tri: f32,
+    /// The CPU side of one RSP draw: mesh lookup, eligibility, the view ·
+    /// model product and the command (it doesn't run the T&L).
+    pub us_per_rsp_draw: f32,
 }
 
 /// The N64 (emulated time under ares), recalibrated 2026-10-13 after the
@@ -72,6 +75,9 @@ pub const N64_COST: CostModel = CostModel {
     // › Per-draw CPU cost and the RSP floor). The per-draw overhead is not
     // separated; the estimate leaves it out.
     us_per_rsp_tri: 6.0,
+    // ares, 2026-10-16: Solid Eleven's player parts (TRINO_FRAME_MODEL), each
+    // an RSP draw redrawn every frame: 83–106 µs of `tnl` stage per call.
+    us_per_rsp_draw: 90.0,
 };
 
 impl CostModel {
@@ -83,6 +89,22 @@ impl CostModel {
             + self.us_per_draw * draws as f32
             + self.us_per_split * tnl.splits as f32
             + self.us_per_emitted * tnl.emitted as f32) as u32
+    }
+
+    /// The N64 frame's 3D, split as the console runs it: the CPU (draws it
+    /// transforms itself, plus the CPU side of each RSP draw) and the RSP
+    /// (its triangles), which run in parallel: the frame takes the larger.
+    pub fn split_us(
+        &self,
+        cpu: &TnlStats,
+        cpu_draws: u32,
+        rsp_draws: u32,
+        rsp_tris: u32,
+    ) -> (u32, u32) {
+        (
+            self.estimate_us(cpu, cpu_draws) + (self.us_per_rsp_draw * rsp_draws as f32) as u32,
+            self.rsp_us(rsp_tris),
+        )
     }
 
     /// Estimated RSP microseconds of `tris` triangles on the RSP path.

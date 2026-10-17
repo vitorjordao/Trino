@@ -25,6 +25,7 @@ trino-runner-pc = { workspace = true }
 castle64 = { workspace = true }
 trino-scene = { workspace = true }
 showcase = { workspace = true }
+solid-eleven = { workspace = true }
 winit = { workspace = true }
 pollster = { workspace = true }
 hot-lib-reloader = { workspace = true, optional = true }

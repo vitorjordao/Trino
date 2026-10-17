@@ -12,7 +12,7 @@ use trino_core::perf::RenderProfile;
 use trino_core::render3d::{
     Camera3, DEFAULT_LIGHT, Light, Mesh, MeshLayout, NEAR_PLANE, RspPan, ScreenTri, TexBind,
     TnlContext, TnlScratch, TnlStats, painter_index, painter_key, rsp_band, rsp_eligible_mv,
-    rsp_mesh_supported,
+    rsp_hull_inside, rsp_mesh_supported,
 };
 use trino_core::text::{BitmapFont, GlyphIndex};
 use trino_core::{
@@ -428,6 +428,21 @@ impl Default for N64Renderer {
 }
 
 /// Gouraud triangle (vertex colors only).
+/// A memoized draw whose sphere left the band: are its vertices still
+/// inside ([`rsp_hull_inside`])? Out of line: it's off the hot path.
+#[inline(never)]
+fn hull_inside(
+    ctx: &TnlContext,
+    meshes: &BTreeMap<u32, (Vec<u8>, MeshLayout)>,
+    model: ModelId,
+    matrix: &Mat34,
+) -> bool {
+    meshes.get(&model.0).is_some_and(|(tmdl, layout)| {
+        let mesh = Mesh::from_layout(tmdl, layout);
+        rsp_hull_inside(ctx, &mesh, &ctx.projection().0.mul(matrix))
+    })
+}
+
 fn emit_tri(tri: &ScreenTri) {
     let pts = [
         tri.pts[0].x,
@@ -635,9 +650,15 @@ impl Renderer for N64Renderer {
             let lit = !self.locals.is_empty()
                 && params.shading != Shading::Unlit
                 && self.tnl_ctx.lights_touch(pan.center(mt), pan.r2);
-            // Moved: still inside the band where the camera is now? Else
-            // the draw takes the full path (maybe the CPU's).
-            if !lit && (still || rsp_band(&self.tnl_ctx, pan.center(mt), pan.r2)) {
+            // Moved: still inside the band where the camera is now (its
+            // sphere, or else its vertices: a ground tile whose sphere
+            // crosses the band)? Else the draw takes the full path (maybe
+            // the CPU's).
+            if !lit
+                && (still
+                    || rsp_band(&self.tnl_ctx, pan.center(mt), pan.r2)
+                    || hull_inside(&self.tnl_ctx, &self.meshes, model, matrix))
+            {
                 let t0 = if self.profile.is_some() { now_us() } else { 0 };
                 if !still {
                     let mut c = [0u32; rsp::DRAW_WORDS];

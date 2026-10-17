@@ -140,8 +140,23 @@ pub(super) struct AoPass {
 }
 
 impl AoPass {
-    pub(super) fn new(device: &wgpu::Device, color_format: wgpu::TextureFormat) -> AoPass {
-        let shader = device.create_shader_module(wgpu::include_wgsl!("ao.wgsl"));
+    /// `multisampled`: the depth it reads is the MSAA depth target (each
+    /// pixel's first sample).
+    pub(super) fn new(
+        device: &wgpu::Device,
+        color_format: wgpu::TextureFormat,
+        multisampled: bool,
+    ) -> AoPass {
+        let source = include_str!("ao.wgsl");
+        let source = if multisampled {
+            source.replace("texture_depth_2d", "texture_depth_multisampled_2d")
+        } else {
+            source.to_string()
+        };
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("trino-ao"),
+            source: wgpu::ShaderSource::Wgsl(source.into()),
+        });
         let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("trino-ao-bgl"),
             entries: &[
@@ -161,7 +176,7 @@ impl AoPass {
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Depth,
                         view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
+                        multisampled,
                     },
                     count: None,
                 },

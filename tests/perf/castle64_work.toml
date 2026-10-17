@@ -17,26 +17,26 @@ rsp_draws = 25
 rsp_tris = 593
 
 [green-hills]
-verts = 24
-tris_in = 12
-clipped = 2
+verts = 0
+tris_in = 0
+clipped = 0
 splits = 0
-backfaced = 8
-emitted = 5
+backfaced = 0
+emitted = 0
 culled = 2
-rsp_draws = 13
-rsp_tris = 292
+rsp_draws = 14
+rsp_tris = 304
 
 [lava-land]
-verts = 24
-tris_in = 12
-clipped = 4
+verts = 0
+tris_in = 0
+clipped = 0
 splits = 0
-backfaced = 8
-emitted = 7
+backfaced = 0
+emitted = 0
 culled = 0
-rsp_draws = 15
-rsp_tris = 314
+rsp_draws = 16
+rsp_tris = 326
 
 [sky-tower]
 verts = 0

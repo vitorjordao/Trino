@@ -66,12 +66,42 @@ Coverage: `TRINO_REQUIRE_GPU=1 cargo llvm-cov --workspace --summary-only
   castle64 hub golden frame within a tolerance (`tests/golden/3ds/`).
 - `cargo xtask model inspect <glb>` prints an **N64 cost estimate** per draw
   (`trino_core::perf::N64_COST`) and its share of a 30 fps frame. PC strict mode
-  panics when a frame's estimated N64 3D time passes `Caps::max_3d_us_per_frame`
-  (50 ms); `strict_mode_rejects_3d_over_the_n64_time_ceiling` covers it.
+  splits a frame's estimated N64 3D time like the console (draws `rsp_check` accepts:
+  90 µs of CPU each plus their triangles on the RSP) and panics when the CPU or the RSP
+  side passes `Caps::max_3d_us_per_frame` (50 ms);
+  `strict_mode_rejects_3d_over_the_n64_time_ceiling` covers it.
 - Blender toolkit, on machines with Blender: `cargo xtask blender smoke`.
 - Skinning cost: `bench_tnl` includes `skinning_rigid_vs_smooth`.
 
 On Linux the PC crates need `pkg-config` and ALSA headers (`apt install pkg-config libasound2-dev`).
+
+## Solid Eleven
+
+```sh
+cargo test -p solid-eleven --release                       # rules, ball, league, e2e, body fit, balance, scenarios
+cargo test -p xtask --test solid_eleven_budget --test solid_eleven_layers --test solid_eleven_render
+TRINO_BLESS=1 cargo test -p xtask --test solid_eleven_budget   # re-pin the frame cost (review the TOML)
+TRINO_BLESS=1 cargo test -p xtask --test solid_eleven_render   # re-bless the PC goldens (view the PNGs)
+cargo test --release -p xtask --test solid_eleven_menus   # menu crawler (every state, EN/PT, 3 sizes) + random play
+cargo test --release -p xtask --test solid_eleven_shots -- --ignored --nocapture   # screenshots + pc_frame_time
+cargo test --release -p xtask --test solid_eleven_poses -- --ignored               # pose sheets, target/solid_eleven_poses
+cargo test -p solid-eleven --release tuning_table -- --ignored --nocapture        # the balance table, big sample
+```
+
+- **Body fit** (`render/fit.rs`): every clip at 49 samples, mirrored, and the game's
+  real crossfades, on the PC body and the console body, must keep parts attached, plugs
+  hidden, no holes, nothing in the turf. A failure names clip, time and part; look at the
+  pose sheet before changing a tolerance. Most failures were real (floating head, arms
+  out of sleeves, bodies through the turf in slides).
+- **Balance** (`sim/balance.rs`, parallel threads): round robins over four seeds. When
+  it fails, run `tuning_table` and `which_lever` before retuning; change one lever at a
+  time and rerun everything (the pass completion check caught forwards pushing up the
+  whole pitch).
+- **Scenarios** (`game/scenarios.rs`): one test per rule staged in a real match, plus
+  seven match styles with frames fit-checked and the gait flicker counted.
+
+The console half is the football template's self-test (`new-project` › Overlays).
+The sim hash must match the PC's (`selftest::EXPECTED_HASH`).
 
 ## GPU tests crash now and then on RADV
 
@@ -81,3 +111,8 @@ several `PcRenderer`s from parallel test threads segfaults about once in 10–40
 newer GPU test files hold a binary-wide mutex (`gpu()` in
 `crates/platform-pc/tests/local_lights.rs`); a SIGSEGV in another GPU binary is this
 flake, so rerun it before suspecting the code.
+
+More pipelines per renderer make it much worse: building the four 4× MSAA pipelines in
+every `PcRenderer::new` took `render_e2e` to 2 crashes in 3 runs (2026-10-16). A mutex
+around `new_headless` alone did not help; building them only on `set_msaa(true)` did
+(0 in 5 full `trino-platform-pc` runs). Keep optional GPU objects lazy.

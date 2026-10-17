@@ -174,3 +174,27 @@ tests follow the same pattern: add a step to `castle64::selftest` so the PC suit
   - `n3ds` builds `--selftest` and uploads it;
   - `n3ds-emulator` (ubuntu-24.04) boots it, because the devkitARM image's glibc is
     too old for the AppImage.
+
+## A project's self-test: the football template (2026-10-16)
+
+```sh
+cargo xtask new se-demo --standalone target/test-projects/se-demo --template football
+TRINO_ARES=docker cargo xtask test n64 --project target/test-projects/se-demo
+cargo xtask build 3ds --project target/test-projects/se-demo --selftest
+cargo xtask test 3ds --project target/test-projects/se-demo --no-build
+```
+
+- **Output:** the hosts print `TRINO_FRAME:match …`, `TRINO_SE_HASH:<hex>` (the
+  sim's state after the script, which `check()` holds to the PC's) and
+  `TRINO_SE_RENDER_CPU`, then dump the `match` golden (and `match_bottom` on the
+  3DS).
+- **Measured results:** ares 30.9 ms avg over four code layouts (first iteration:
+  26.6 ms, with lighter bodies) against a 33.3 ms gate; Azahar 16.8 ms.
+- **No local devkitPro?** Build the project's `.3dsx` in a devkitPro image with Rust
+  nightly (the `n3ds` CI job's container plus rustup), then boot it on the host with
+  `test 3ds --project … --no-build`.
+- **The script must press a kick at each kick-off.** A side the human controls waits
+  up to 8 s for one, and the first script idled three seconds of its 300 frames that
+  way.
+- **Keep the build cache between re-scaffolds:** move the project's `target/` aside,
+  scaffold again, and move it back. A cold N64 build of the project takes minutes.

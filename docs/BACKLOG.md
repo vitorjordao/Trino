@@ -148,6 +148,23 @@ shipping a 3D game first**, then by cost:
     contact shadows between models, bake per static instance: a vertex-color copy per
     instance, under a RAM budget. Also put the scene's `ao` block in TSCN (a version
     bump) for PC games that load levels as data. (ADR 0014, Consequences.)
+16. **Solid Eleven follow-ups** (S–M each, from issue #39).
+    - Local two-player matches: the sim takes two pads already (`human: [bool; 2]`), but
+      no menu offers it.
+    - The N64 frame is 27.4 ms locally (eight code layouts) against its 33.3 ms gate,
+      but CI's layout ran the same code ~3.6 ms slower: the sim update (7.2 ms) is the
+      next thing to cut.
+    - Engine: an RSP draw that misses the N64 memo spends ~110 µs before its T&L stage
+      (key, mesh lookups, `rsp_check_mv`). A cheaper miss path would help every game
+      with moving models.
+    - The PC's SSAO over the multisampled depth costs 4.5 ms at 1080p on an AMD iGPU
+      (2.7 ms single-sampled): a cheaper depth for the AO (a resolve in the scene pass)
+      or a separate AO setting.
+    - The console heads show the hair on the top and the back only (one 14-triangle
+      wedge); the PC's styles have no console counterpart beyond dark, light and shaved.
+    - A check that no pitch line runs through a player's screen box in the menus' 3D
+      backdrops (that artifact came back twice).
+    - Nothing has run on real hardware yet.
 
 ## Engineering hygiene (ongoing)
 
@@ -155,6 +172,19 @@ shipping a 3D game first**, then by cost:
   an ADR line.
 - Console performance changes cite the `cargo xtask test n64` scene table (emulated N64
   time) and bless `tests/perf/` on purpose. Host benches stay as regression guards only.
+
+---
+
+## Done — Solid Eleven, a football demo and the `football` template (2026-10-16, branch `feat/solid-eleven`, GitHub #39)
+
+| Item | Evidence |
+|---|---|
+| `examples/solid-eleven`: a fixed-point (Q16.16, 60 Hz) match sim with the referee (restarts by last touch, offside, fouls, cards, penalties, substitutions), ball physics with curl, posts and net, a tactical AI, ten clubs balanced by point budgets, a career with transfers and a 1.8 KB save; menus after the issue's concept art in EN/PT-BR; HUD with the active player, the switch target and pass lanes; a 3DS touch screen (radar, formation, substitution and stamina tiles); PC-only detail (11-part players, rain, wet look, glows) | 67 crate tests (rules matrix, ball, league, e2e through the buttons with a bot, a career that survives the save on a 2 KB cart); `xtask/tests/solid_eleven_{budget,layers,render}.rs` (every draw on the RSP, pinned frame cost, layer rules, PC goldens); `docs/TESTING.md` › Solid Eleven |
+| Models and clips from `tools/blender/solid_eleven_{models,anim}.py` (`cargo xtask blender solid-eleven`); its own `assets/` | `solid_eleven_layers::the_pose_tables_match_the_clip_source` |
+| The `football` template (`--template football`, the editor's launcher): the game, its assets and an overlay with console hosts that self-test a scripted match | ares: 30.9 ms avg over four code layouts (30.5–31.3, gate 33.3 ms), all 83 draws on the RSP, hash `d51e91bf` = PC; Azahar: 16.8 ms, all 99 draws on the PICA200, same hash; goldens in `templates/football/tests/golden/`; CI `n64` and `n3ds-emulator` jobs run it |
+| Engine: TTF atlases with black transparent texels, N64 I4/I8 font atlases with intensity = coverage | `font.rs::ttf_font_bakes_ascii`, `n64.rs::intensity_atlases_carry_coverage_in_their_gray_level` |
+
+Not done: the items under P2 #16.
 
 ---
 

@@ -3545,6 +3545,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "solid-eleven"
+version = "0.2.0-dev.1"
+dependencies = [
+ "trino-core",
+ "trino-game-api",
+]
+
+[[package]]
 name = "spirv"
 version = "0.4.0+sdk-1.4.341.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3826,6 +3834,7 @@ dependencies = [
  "hot-lib-reloader",
  "pollster",
  "showcase",
+ "solid-eleven",
  "trino-asset-pipeline",
  "trino-core",
  "trino-game-api",
@@ -5015,6 +5024,7 @@ dependencies = [
  "serde",
  "serde_json",
  "showcase",
+ "solid-eleven",
  "tempfile",
  "toml",
  "trino-asset-pipeline",

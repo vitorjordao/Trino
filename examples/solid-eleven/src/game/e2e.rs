@@ -176,8 +176,23 @@ fn a_quick_match_from_the_title_to_the_report_with_a_human_side() {
         d.press(Button::DpadRight);
     }
     assert_eq!((d.g.quick.home, d.g.quick.away), (3, 6));
-    d.press(Button::Start);
+    // The stadium (the third ground), the difficulty (hard), then the
+    // Kick off button.
+    d.presses(Button::DpadDown, 2);
+    d.presses(Button::DpadRight, 2);
+    assert_eq!(d.g.quick.stadium, 2);
+    d.presses(Button::DpadDown, 3);
+    let difficulty = d.g.settings.difficulty;
+    d.press(Button::DpadRight);
+    assert_eq!(d.g.settings.difficulty, (difficulty + 1) % 3);
+    d.press(Button::DpadDown);
+    assert_eq!(d.g.cur.quick, crate::game::app::QUICK_GO);
+    d.press(Button::A);
     assert_eq!(d.g.scene, Scene::Match);
+    assert_eq!(
+        d.g.session.as_ref().unwrap().view.stadium,
+        crate::render::Stadium::Park
+    );
     // The bot plays the home side to full time.
     let mut frame = 0;
     while d.g.scene == Scene::Match && frame < 30 * 60 * 6 {

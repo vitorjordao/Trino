@@ -192,11 +192,15 @@ pub enum S {
     HairLong,
     HairMohawk,
     HairBald,
+    KickoffTime,
+    StadiumArena,
+    StadiumHarbour,
+    StadiumPark,
 }
 
 impl S {
     /// The last string id (tests walk the enum up to it).
-    pub const LAST: S = S::HairBald;
+    pub const LAST: S = S::StadiumPark;
 
     /// A hair style's name, by [`crate::render::HairStyle`] index.
     pub fn hair_style(i: usize) -> S {
@@ -396,6 +400,10 @@ pub fn tr(lang: Lang, s: S) -> &'static str {
         S::HairLong => ("LONG", "LONGO"),
         S::HairMohawk => ("MOHAWK", "MOICANO"),
         S::HairBald => ("BALD", "CARECA"),
+        S::KickoffTime => ("TIME", "HORÁRIO"),
+        S::StadiumArena => ("CENTRAL ARENA", "ARENA CENTRAL"),
+        S::StadiumHarbour => ("HARBOUR GROUND", "ESTÁDIO DO PORTO"),
+        S::StadiumPark => ("NORTH PARK", "PARQUE NORTE"),
     };
     match lang {
         Lang::En => en,

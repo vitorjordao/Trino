@@ -104,6 +104,7 @@ impl Session {
                 ..CamState::BROADCAST
             },
             sky,
+            stadium: render::Stadium::Arena,
             rain: setup.wet,
             time: 0.0,
             guides: Guides::default(),

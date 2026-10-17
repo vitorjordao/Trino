@@ -33,7 +33,7 @@ pub fn ceremony(
     r.set_light(&Sky::Day.light());
     super::set_ao(r, hifi);
     let fr = Frustum::new(cam, aspect);
-    draw_stadium(r, &fr, hifi, Sky::Night.tint());
+    draw_stadium(r, &fr, hifi, Sky::Night.tint(), super::Stadium::Arena);
     // The captain in front, the others around him facing the camera.
     let spots = [
         (0.0, 0.0, 0.0, 1.0),
@@ -166,7 +166,7 @@ pub fn pedestal(
     r.set_light(&Sky::Dusk.light());
     super::set_ao(r, hifi);
     let fr = Frustum::new(&cam, aspect);
-    draw_stadium(r, &fr, hifi, Sky::Night.tint());
+    draw_stadium(r, &fr, hifi, Sky::Night.tint(), super::Stadium::Arena);
     let (s, c) = (trino_core::math3d::sin(yaw), trino_core::math3d::cos(yaw));
     let base = spot;
     r.draw_model_matrix(

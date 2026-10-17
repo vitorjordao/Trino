@@ -12,7 +12,7 @@ use std::path::Path;
 
 use solid_eleven::SolidElevenGame;
 use solid_eleven::game::app::{After, Scene};
-use solid_eleven::render::Sky;
+use solid_eleven::render::{Sky, Stadium};
 use trino_core::{Game, InputState, Vec2};
 use trino_platform_pc::{PcRenderer, SimProfile};
 
@@ -221,11 +221,13 @@ fn solid_eleven_shots() {
             r.set_n64_look(true);
         }
         let (w, h) = r.internal_size();
-        for (scene, ticks, sky, rain) in [
-            ("kickoff", 0u32, Sky::Day, false),
-            ("play", 60 * 40, Sky::Day, false),
-            ("night", 60 * 70, Sky::Night, false),
-            ("rain", 60 * 25, Sky::Dusk, true),
+        for (scene, ticks, sky, rain, stadium) in [
+            ("kickoff", 0u32, Sky::Day, false, Stadium::Arena),
+            ("play", 60 * 40, Sky::Day, false, Stadium::Arena),
+            ("night", 60 * 70, Sky::Night, false, Stadium::Arena),
+            ("rain", 60 * 25, Sky::Dusk, true, Stadium::Arena),
+            ("harbour", 60 * 55, Sky::Day, false, Stadium::Harbour),
+            ("park", 60 * 85, Sky::Dusk, false, Stadium::Park),
         ] {
             let mut g = SolidElevenGame::exhibition(
                 Vec2::new(w as f32, h as f32),
@@ -237,6 +239,7 @@ fn solid_eleven_shots() {
             );
             if let Some(s) = &mut g.session {
                 s.view.rain = rain;
+                s.view.stadium = stadium;
             }
             let mut a = NullAudio;
             for _ in 0..ticks.max(1) {
@@ -258,6 +261,16 @@ fn solid_eleven_shots() {
                 cam.back = 6.5;
                 g.render(&mut r);
                 save(&r, &dir, &format!("closeup_{tag}"));
+            }
+            if matches!(scene, "play" | "harbour" | "park") {
+                // The ground itself: low and wide across the pitch.
+                let cam = &mut g.session.as_mut().unwrap().view.cam;
+                cam.focus = trino_core::Vec3::new(-8.0, 4.0, 0.0);
+                cam.height = 6.0;
+                cam.back = 44.0;
+                cam.fov = 0.9;
+                g.render(&mut r);
+                save(&r, &dir, &format!("ground_{scene}_{tag}"));
             }
         }
     }

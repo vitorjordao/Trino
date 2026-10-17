@@ -118,6 +118,8 @@ pub struct QuickCfg {
     pub side: u8,
     pub sky: u8,
     pub rain: bool,
+    /// [`crate::render::Stadium`] index.
+    pub stadium: u8,
 }
 
 /// The last match's report.
@@ -222,6 +224,11 @@ pub struct Capture {
 /// How long the controls page waits for the new button.
 pub const CAPTURE_SECS: f32 = 5.0;
 
+/// The quick match screen's rows: the two clubs, the side, the stadium,
+/// the time of day, the weather, the difficulty, then Kick off.
+pub const QUICK_ROWS: usize = 8;
+pub const QUICK_GO: usize = QUICK_ROWS - 1;
+
 /// The player editor's rows: the attributes, the skin tone, the hair style
 /// and the hair color.
 pub const EDIT_ROWS: usize = ATTRS + 3;
@@ -288,6 +295,7 @@ impl SolidElevenGame {
                 side: 0,
                 sky: 0,
                 rain: false,
+                stadium: 0,
             },
             cur: Cursors {
                 team_club: 0,
@@ -402,6 +410,12 @@ impl SolidElevenGame {
         let mut session = Session::new(&setup, &d, names, sky);
         session.controls.bindings = self.settings.bindings;
         session.view.retro = self.settings.graphics == 1;
+        // A career match is at the home club's ground.
+        session.view.stadium = if career {
+            crate::render::Stadium::of_club(home)
+        } else {
+            crate::render::Stadium::from_index(self.quick.stadium)
+        };
         self.session = Some(session);
         self.scene = Scene::Match;
         self.in_career_match = career;
@@ -688,7 +702,7 @@ impl SolidElevenGame {
     }
 
     fn quick_setup(&mut self, nav: &Nav, tap: Option<u8>) {
-        menu::step(&mut self.cur.quick, 6, nav);
+        menu::step(&mut self.cur.quick, QUICK_ROWS, nav);
         if let Some(id) = tap {
             self.cur.quick = id as usize;
         }
@@ -699,9 +713,15 @@ impl SolidElevenGame {
             0 => q.home = wrap(q.home, TEAMS as u8, d),
             1 => q.away = wrap(q.away, TEAMS as u8, d),
             2 => q.side = wrap(q.side, 3, d),
-            3 => q.sky = wrap(q.sky, 3, d),
-            4 if d != 0 => {
+            3 => q.stadium = wrap(q.stadium, crate::render::Stadium::ALL.len() as u8, d),
+            4 => q.sky = wrap(q.sky, 3, d),
+            5 if d != 0 => {
                 q.rain = !q.rain;
+            }
+            6 if d != 0 => {
+                let st = &mut self.settings;
+                st.difficulty = wrap(st.difficulty, 3, d);
+                self.save_dirty = true;
             }
             _ => {}
         }
@@ -710,7 +730,7 @@ impl SolidElevenGame {
         }
         if nav.back {
             self.scene = Scene::Title;
-        } else if nav.confirm || nav.start || (tap.is_some() && self.cur.quick == 5) {
+        } else if nav.confirm || nav.start || (tap.is_some() && self.cur.quick == QUICK_GO) {
             let humans = match self.quick.side {
                 0 => [true, false],
                 1 => [false, true],

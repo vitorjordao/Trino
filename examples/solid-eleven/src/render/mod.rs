@@ -256,6 +256,52 @@ pub fn rgb(c: Rgb) -> Color {
     Color::rgb(c.0, c.1, c.2)
 }
 
+/// The grounds a match can be played in: the same stand models, tinted,
+/// and more or fewer of them (a tint keeps every draw on the N64's RSP; a
+/// smaller ground draws fewer).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Stadium {
+    /// Four full stands.
+    #[default]
+    Arena,
+    /// A small ground: sun-bleached stands along the middle of the sides,
+    /// open ends.
+    Harbour,
+    /// Cool painted stands all round, a lusher pitch.
+    Park,
+}
+
+impl Stadium {
+    pub const ALL: [Stadium; 3] = [Stadium::Arena, Stadium::Harbour, Stadium::Park];
+
+    pub fn from_index(i: u8) -> Stadium {
+        Stadium::ALL[i as usize % Stadium::ALL.len()]
+    }
+
+    /// Club `c`'s home ground (career matches).
+    pub fn of_club(c: u8) -> Stadium {
+        Stadium::from_index(c)
+    }
+
+    /// The stands' tint and the pitch's (times the sky's).
+    fn tints(self) -> (Color, Color) {
+        match self {
+            Stadium::Arena => (Color::WHITE, Color::WHITE),
+            Stadium::Harbour => (Color::rgb(255, 196, 140), Color::rgb(250, 244, 200)),
+            Stadium::Park => (Color::rgb(150, 186, 255), Color::rgb(214, 255, 214)),
+        }
+    }
+
+    fn end_stands(self) -> bool {
+        self != Stadium::Harbour
+    }
+
+    /// The side stands' sections (of six along each touchline).
+    fn side_sections(self) -> core::ops::Range<usize> {
+        if self == Stadium::Harbour { 1..5 } else { 0..6 }
+    }
+}
+
 /// Lighting and sky by time of day.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Sky {
@@ -353,6 +399,7 @@ pub struct MatchView {
     pub ball_rot: trino_core::Quat,
     pub cam: CamState,
     pub sky: Sky,
+    pub stadium: Stadium,
     pub rain: bool,
     /// Seconds since the match view began (marker pulses).
     pub time: f32,
@@ -600,7 +647,7 @@ pub fn draw_match(r: &mut dyn Renderer, m: &Match, v: &MatchView, aspect: f32) {
     }
     let fr = Frustum::new(&v.cam, aspect);
     let env = v.sky.tint();
-    draw_stadium(r, &fr, hifi, env);
+    draw_stadium(r, &fr, hifi, env, v.stadium);
     draw_people(r, m, v, &fr, hifi);
     draw_ball(r, m, v, &fr, hifi);
     draw_guides(r, m, v);
@@ -658,8 +705,16 @@ fn draw_effects(r: &mut dyn Renderer, v: &MatchView) {
     }
 }
 
-pub(crate) fn draw_stadium(r: &mut dyn Renderer, fr: &Frustum, hifi: bool, env: Color) {
-    let grass = env;
+pub(crate) fn draw_stadium(
+    r: &mut dyn Renderer,
+    fr: &Frustum,
+    hifi: bool,
+    env: Color,
+    stadium: Stadium,
+) {
+    let (stands, pitch) = stadium.tints();
+    let grass = mul(env, pitch);
+    let seats = mul(env, stands);
     for ix in 0..6 {
         for iz in 0..4 {
             let c = Vec3::new(
@@ -699,7 +754,7 @@ pub(crate) fn draw_stadium(r: &mut dyn Renderer, fr: &Frustum, hifi: bool, env: 
     }
     // Stands: six sections a side, four an end; two crowd variants
     // alternate.
-    for i in 0..6 {
+    for i in stadium.side_sections() {
         let x = -48.75 + 19.5 * i as f32;
         for (z, (fx, fz)) in [(-41.5f32, NORTH), (41.5, SOUTH)] {
             let p = Vec3::new(x, 0.0, z);
@@ -713,12 +768,12 @@ pub(crate) fn draw_stadium(r: &mut dyn Renderer, fr: &Frustum, hifi: bool, env: 
                     mdl,
                     &place(p, fx, fz, 1.0),
                     Material::VertexLit,
-                    &plain(env),
+                    &plain(seats),
                 );
             }
         }
     }
-    for i in 0..4 {
+    for i in 0..if stadium.end_stands() { 4 } else { 0 } {
         let z = -30.0 + 20.0 * i as f32;
         for (x, (fx, fz)) in [(-60.5f32, WEST), (60.5, EAST)] {
             let p = Vec3::new(x, 0.0, z);
@@ -732,7 +787,7 @@ pub(crate) fn draw_stadium(r: &mut dyn Renderer, fr: &Frustum, hifi: bool, env: 
                     mdl,
                     &place(p, fx, fz, 1.0),
                     Material::VertexLit,
-                    &plain(env),
+                    &plain(seats),
                 );
             }
         }

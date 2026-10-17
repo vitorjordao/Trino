@@ -6,7 +6,7 @@
 
 use core::fmt::Write as _;
 
-use crate::game::app::{Scene, SettingRow, SolidElevenGame};
+use crate::game::app::{QUICK_GO, Scene, SettingRow, SolidElevenGame};
 use crate::game::session::dress;
 use crate::render::anim::AnimState;
 use crate::render::clips_gen::ClipName;
@@ -668,9 +668,12 @@ fn quick(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
         (_, Lang::Pt) => "CPU X CPU",
     };
     let sky = [S::Day, S::Dusk, S::Night][g.quick.sky as usize % 3];
-    let rows: [(S, &str); 4] = [
+    let stadium =
+        [S::StadiumArena, S::StadiumHarbour, S::StadiumPark][g.quick.stadium as usize % 3];
+    let rows: [(S, &str); 5] = [
         (S::Team, side),
-        (S::Stadium, tr(lang, sky)),
+        (S::Stadium, tr(lang, stadium)),
+        (S::KickoffTime, tr(lang, sky)),
         (
             S::Weather,
             tr(lang, if g.quick.rain { S::Rain } else { S::Clear }),
@@ -685,9 +688,9 @@ fn quick(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
     ];
     for (k, (label, value)) in rows.iter().enumerate() {
         let id = k + 2;
-        let y = 116.0 + k as f32 * 18.0;
+        let y = 114.0 + k as f32 * 16.0;
         let sel = g.cur.quick == id;
-        let rr = Rect::new(54.0, y, 212.0, 15.0);
+        let rr = Rect::new(54.0, y, 212.0, 14.0);
         ui.fill(
             rr,
             if sel {
@@ -701,7 +704,7 @@ fn quick(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
         }
         ui.text(
             60.0,
-            y + 2.0,
+            y + 1.0,
             tr(lang, *label),
             pal::DIM,
             Size::Small,
@@ -711,7 +714,7 @@ fn quick(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
         let _ = write!(b, "<  {value}  >");
         ui.text(
             260.0,
-            y + 2.0,
+            y + 1.0,
             b.as_str(),
             pal::INK,
             Size::Small,
@@ -728,8 +731,8 @@ fn quick(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
         let hit = ui.rect(Rect::new(x, 34.0, 112.0, 74.0));
         g.hits.add(hit, Screen::Top, k as u8);
     }
-    let sel = g.cur.quick == 5;
-    let go = Rect::new(96.0, 190.0, 128.0, 20.0);
+    let sel = g.cur.quick == QUICK_GO;
+    let go = Rect::new(96.0, 198.0, 128.0, 18.0);
     ui.slant(
         go,
         if sel {
@@ -741,14 +744,14 @@ fn quick(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
     );
     ui.text(
         160.0,
-        194.0,
+        201.0,
         tr(lang, S::KickOff),
         pal::NAVY,
         Size::Small,
         TextAlign::Center,
     );
     let hit = ui.rect(go);
-    g.hits.add(hit, Screen::Top, 5);
+    g.hits.add(hit, Screen::Top, QUICK_GO as u8);
     footer(
         &mut ui,
         &[(A.0, A.1, S::Confirm), (B.0, B.1, S::Back)],

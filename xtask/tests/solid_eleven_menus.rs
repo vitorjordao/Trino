@@ -17,7 +17,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 
 use solid_eleven::SolidElevenGame;
-use solid_eleven::game::app::Scene;
+use solid_eleven::game::app::{QUICK_ROWS, Scene};
+use solid_eleven::sim::team::{ATTRS, Appearance};
 use solid_eleven::ui::i18n::Lang;
 use trino_core::text::BitmapFont;
 use trino_core::{
@@ -370,6 +371,51 @@ fn every_menu_state_draws_cleanly_in_every_language_and_size() {
     }
     c.scene = Scene::Trophy;
     walk(c, &fonts, 300, &mut report);
+    // Values the walk's key leaves out, each with its row selected: every
+    // hair style and color in the player editor, every quick match option.
+    let mut e = g.clone();
+    e.scene = Scene::Edit;
+    let i = 5;
+    e.edit = Some((i, e.world.players[i]));
+    for style in 0..Appearance::STYLES {
+        for hair in 0..Appearance::HAIRS {
+            for row in [ATTRS, ATTRS + 1, ATTRS + 2] {
+                e.world.players[i].set_appearance(Appearance {
+                    skin: style % Appearance::SKINS,
+                    hair,
+                    style,
+                });
+                e.cur.edit_attr = row;
+                report.states += 1;
+                check(
+                    &e,
+                    &fonts,
+                    &format!("edit: style {style}, hair {hair}, row {row}"),
+                    &mut report,
+                );
+            }
+        }
+    }
+    let mut q = g.clone();
+    q.scene = Scene::Quick;
+    for stadium in 0..3 {
+        for sky in 0..3 {
+            for row in 0..QUICK_ROWS {
+                q.quick.stadium = stadium;
+                q.quick.sky = sky;
+                q.quick.rain = row % 2 == 0;
+                q.settings.difficulty = (stadium + sky) % 3;
+                q.cur.quick = row;
+                report.states += 1;
+                check(
+                    &q,
+                    &fonts,
+                    &format!("quick: stadium {stadium}, sky {sky}, row {row}"),
+                    &mut report,
+                );
+            }
+        }
+    }
     println!(
         "{} menu states, {} pictures checked; screens reached: {:?}",
         report.states,

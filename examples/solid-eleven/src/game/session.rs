@@ -66,6 +66,7 @@ pub fn dress(clubs: [u8; 2], skins: &[u8; N]) -> Dress {
     }
 }
 
+#[derive(Clone)]
 pub struct Session {
     pub m: Match,
     pub view: MatchView,

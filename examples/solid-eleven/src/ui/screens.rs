@@ -406,13 +406,13 @@ fn title(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
     ui.text(18.0, 13.0, "SOLID", pal::INK, Size::Big, TextAlign::Left);
     ui.text(
         16.0 + 1.5,
-        34.0 + 1.5,
+        37.0 + 1.5,
         "ELEVEN",
         Color::rgb(90, 10, 30),
         Size::Big,
         TextAlign::Left,
     );
-    ui.text(16.0, 34.0, "ELEVEN", pal::INK, Size::Big, TextAlign::Left);
+    ui.text(16.0, 37.0, "ELEVEN", pal::INK, Size::Big, TextAlign::Left);
     ui.text_shadow(
         88.0,
         50.0,

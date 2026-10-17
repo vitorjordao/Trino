@@ -222,6 +222,7 @@ pub struct Capture {
 /// How long the controls page waits for the new button.
 pub const CAPTURE_SECS: f32 = 5.0;
 
+#[derive(Clone)]
 pub struct SolidElevenGame {
     pub screen: Vec2,
     pub scene: Scene,

@@ -128,6 +128,11 @@ impl Hits {
         self.n = 0;
     }
 
+    /// The boxes the last frame registered.
+    pub fn iter(&self) -> impl Iterator<Item = &Hit> {
+        self.boxes[..self.n].iter()
+    }
+
     pub fn add(&mut self, rect: Rect, screen: Screen, id: u8) {
         if self.n < self.boxes.len() {
             self.boxes[self.n] = Hit { rect, screen, id };

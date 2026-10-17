@@ -410,6 +410,13 @@ impl SolidElevenGame {
         let mut session = Session::new(&setup, &d, names, sky);
         session.controls.bindings = self.settings.bindings;
         session.view.retro = self.settings.graphics == 1;
+        // The career's own substitutes (edited looks).
+        for (k, b) in session.bench.iter_mut().enumerate() {
+            let db =
+                setup.sides[k / crate::sim::engine::BENCH].bench[k % crate::sim::engine::BENCH].0;
+            let p = &self.world.players[db as usize % self.world.players.len()];
+            *b = (db, p.surname, p.appearance());
+        }
         // A career match is at the home club's ground.
         session.view.stadium = if career {
             crate::render::Stadium::of_club(home)
@@ -890,11 +897,20 @@ impl SolidElevenGame {
         // Rows: six attributes, then the skin tone, the hair style and
         // the hair color.
         menu::step(&mut self.cur.edit_attr, EDIT_ROWS, nav);
+        let p = &mut self.world.players[i];
         if let Some(id) = tap {
-            self.cur.edit_attr = id as usize;
+            let id = id as usize;
+            if id >= EDIT_ROWS {
+                // A hair color swatch: that color.
+                let mut a = p.appearance();
+                a.hair = (id - EDIT_ROWS) as u8;
+                p.set_appearance(a);
+                self.cur.edit_attr = ATTRS + 2;
+            } else {
+                self.cur.edit_attr = id;
+            }
         }
         let d = menu::lr(nav);
-        let p = &mut self.world.players[i];
         if d != 0 {
             if self.cur.edit_attr < ATTRS {
                 if p.adjust(self.cur.edit_attr, d as i8).is_err() {

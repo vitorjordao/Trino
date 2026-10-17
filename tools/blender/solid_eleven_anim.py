@@ -344,8 +344,8 @@ CLIPS = {
         (1.0, IDLE, (0, 0, 0)),
     ]),
     # A full-power strike: a longer backswing, the body over the ball, the
-    # kicking leg through high and the standing foot off the turf at the
-    # end (a hop), the arms wide.
+    # kicking leg through high, the arms wide. (Grounded: the standing foot
+    # stays planted, so no hop.)
     "power_shot": (0.65, False, [
         (0.0, {"torso": (4, 6, 0), "thigh_r": (70, 0, 0), "shin_r": (110, 0, 0), "thigh_l": (-14, 0, 0),
                "shin_l": (14, 0, 0), "arm_l": (-45, 0, 55), "arm_r": (40, 0, -50), "forearm_l": (-30, 0, 0),
@@ -354,7 +354,7 @@ CLIPS = {
                "shin_l": (24, 0, 0), "arm_l": (-55, 0, 70), "arm_r": (50, 0, -65), "forearm_l": (-20, 0, 0)},
          (0, 0, 0.08)),
         (0.55, {"torso": (12, -4, 0), "thigh_r": (-70, 6, 0), "shin_r": (20, 0, 0), "thigh_l": (4, 0, 0),
-                "shin_l": (10, 0, 0), "arm_l": (-35, 0, 50), "arm_r": (30, 0, -45)}, (0, 0.06, 0.18)),
+                "shin_l": (10, 0, 0), "arm_l": (-35, 0, 50), "arm_r": (30, 0, -45)}, (0, 0, 0.18)),
         (1.0, IDLE, (0, 0, 0.1)),
     ]),
     "tackle": (0.4, False, [

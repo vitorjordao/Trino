@@ -199,7 +199,8 @@ pub enum S {
 }
 
 impl S {
-    /// The last string id (tests walk the enum up to it).
+    /// The last string id: tests walk the enum up to it, so a string added
+    /// after it must move it.
     pub const LAST: S = S::StadiumPark;
 
     /// A hair style's name, by [`crate::render::HairStyle`] index.

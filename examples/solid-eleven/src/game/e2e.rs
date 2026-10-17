@@ -684,3 +684,35 @@ fn the_controls_page_survives_the_host_losing_its_tabs() {
     assert_eq!(g.control_tabs(), 1);
     assert!(g.cur.ctl_row < g.control_rows());
 }
+
+/// A tap on a hair color swatch in the player editor picks that color
+/// (the swatches' boxes come before their row's, so the row doesn't take
+/// the tap).
+#[test]
+fn tapping_a_hair_swatch_picks_that_color() {
+    use crate::selftest::NullRenderer;
+    use trino_core::{Game, PointerButton};
+    let mut d = Driver::new(Cart::default());
+    d.idle(2);
+    // Title > Customize > the first player.
+    d.presses(Button::DpadDown, 2);
+    d.press(Button::A);
+    d.press(Button::A);
+    assert_eq!(d.g.scene, Scene::Edit);
+    let (i, _) = d.g.edit.unwrap();
+    let mut r = NullRenderer {
+        caps: trino_core::Caps::N3DS,
+    };
+    for k in [3u8, 0, 4] {
+        d.g.render(&mut r);
+        // The swatch's center on the 320x240 canvas (the screen here).
+        let at = Vec2::new(221.0 + k as f32 * 17.5 + 7.5, 194.0);
+        let mut down = InputState::default();
+        down.pointer = Some(at);
+        down.set_pointer_button(PointerButton::Primary, true);
+        d.frame(&down);
+        d.idle(1);
+        assert_eq!(d.g.world.players[i].hair, k, "tapped swatch {k}");
+        assert_eq!(d.g.cur.edit_attr, crate::sim::team::ATTRS + 2);
+    }
+}

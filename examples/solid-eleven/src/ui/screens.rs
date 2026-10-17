@@ -6,7 +6,7 @@
 
 use core::fmt::Write as _;
 
-use crate::game::app::{QUICK_GO, Scene, SettingRow, SolidElevenGame};
+use crate::game::app::{EDIT_ROWS as EDIT_ROW_COUNT, QUICK_GO, Scene, SettingRow, SolidElevenGame};
 use crate::game::session::dress;
 use crate::render::anim::AnimState;
 use crate::render::clips_gen::ClipName;
@@ -1645,6 +1645,14 @@ fn edit(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
                 Color::rgba(30, 90, 150, 230),
             );
         }
+        if row == ATTRS + 2 {
+            // A tap on a swatch picks that color (before the row's box:
+            // the first box hit wins).
+            for k in 0..render::HAIR_COLORS.len() {
+                let hit = ui.rect(swatch(k));
+                g.hits.add(hit, Screen::Top, (EDIT_ROW_COUNT + k) as u8);
+            }
+        }
         let hit = ui.rect(Rect::new(216.0, y - 1.0, 96.0, 24.0));
         g.hits.add(hit, Screen::Top, row as u8);
     }
@@ -1672,7 +1680,7 @@ fn edit(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
         TextAlign::Center,
     );
     for (k, &c) in render::HAIR_COLORS.iter().enumerate() {
-        let rr = Rect::new(221.0 + k as f32 * 17.5, 186.0, 15.0, 16.0);
+        let rr = swatch(k);
         ui.fill(rr, c);
         if look.hair as usize == k {
             ui.border(rr, pal::CYAN, 1.0);
@@ -1687,6 +1695,11 @@ fn edit(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
         ],
         lang,
     );
+}
+
+/// The player editor's hair color swatch `k`.
+fn swatch(k: usize) -> Rect {
+    Rect::new(221.0 + k as f32 * 17.5, 186.0, 15.0, 16.0)
 }
 
 // ------------------------------------------------------------------ market

@@ -10,9 +10,10 @@ use crate::render::hud::{BANNER_SECS, Banner, SideColors};
 use crate::render::{self, CamState, Guides, Hair, Look, MatchView, SKIN_TONES, Sky, WORLD, rgb};
 use crate::sim::ai;
 use crate::sim::ball::{self, DT};
+use crate::sim::engine::BENCH;
 use crate::sim::engine::{Act, EventKind, KickKind, Match, N, Pad, Phase, Setup, side_of};
 use crate::sim::fx::{Fx, V2};
-use crate::sim::team::Appearance;
+use crate::sim::team::{Appearance, SQUAD, generate_player};
 use crate::sim::team::{CLUBS, Rgb};
 use crate::ui::Ui;
 use crate::ui::i18n::{Lang, S};
@@ -87,10 +88,17 @@ pub struct Session {
     /// (visual only; the PC tier draws it).
     pub turf: ParticleSystem<TURF_MAX>,
     was_kicking: [bool; N],
+    /// Who can come off the bench: database index, surname, look (a
+    /// substitute takes his own name and look into the slot).
+    pub bench: [(u16, u8, Appearance); 2 * BENCH],
 }
 
+/// Consoles never draw the turf, so they keep no room for it (and spend no
+/// CPU on it): the session is built on the N64's 64 KB stack.
+const CONSOLE: bool = cfg!(any(target_os = "none", target_os = "horizon"));
+
 /// The most turf bits in the air at once.
-pub const TURF_MAX: usize = 64;
+pub const TURF_MAX: usize = if CONSOLE { 1 } else { 64 };
 
 /// Turf bits: green flecks thrown up and falling back (meters scaled to
 /// the drawing scale).
@@ -151,6 +159,12 @@ impl Session {
             prev_ball: Vec3::ZERO,
             turf: ParticleSystem::new(TURF, 0x7EAF),
             was_kicking: [false; N],
+            // The generated squads' (a career sets its own, `set_bench`).
+            bench: core::array::from_fn(|k| {
+                let (db, ..) = setup.sides[k / BENCH].bench[k % BENCH];
+                let p = generate_player(db as usize / SQUAD, db as usize % SQUAD);
+                (db, p.surname, p.appearance())
+            }),
         }
     }
 
@@ -267,7 +281,18 @@ impl Session {
                     sound::play(audio, Sfx::Tap);
                     None
                 }
-                EventKind::Substitution => Some((S::Substitution, Some(e.side))),
+                EventKind::Substitution => {
+                    // The substitute's own name and look.
+                    let i = e.player as usize;
+                    let db = self.m.players[i].db;
+                    if let Some(&(_, name, a)) = self.bench.iter().find(|b| b.0 == db) {
+                        self.names[i] = name;
+                        let l = &mut self.view.looks[i];
+                        l.skin = SKIN_TONES[a.skin as usize % SKIN_TONES.len()];
+                        l.hair = Hair::of(a.style, a.hair);
+                    }
+                    Some((S::Substitution, Some(e.side)))
+                }
             };
             // A card outranks the foul's restart banner.
             if let Some(b) = banner {
@@ -305,7 +330,7 @@ impl Session {
         }
         // Turf: a burst at the foot where a kick or a tackle starts, a
         // spray along a slide.
-        for i in 0..N {
+        for i in (0..N).filter(|_| !CONSOLE) {
             let p = &self.m.players[i];
             let kick = matches!(p.act, Act::Kick { .. } | Act::Tackle { .. });
             let slide = matches!(p.act, Act::Slide { .. });
@@ -317,7 +342,9 @@ impl Session {
             }
             self.was_kicking[i] = kick;
         }
-        self.turf.update(dt);
+        if !CONSOLE {
+            self.turf.update(dt);
+        }
         for k in 0..3 {
             render::pick_official_clip(&self.m, k, self.prev_officials[k], dt, &mut v.anims[N + k]);
             self.prev_officials[k] = (
@@ -473,6 +500,40 @@ mod tests {
         fn measure_text(&self, _: trino_core::FontId, t: &str, scale: f32) -> Vec2 {
             NullRenderer { caps: self.caps }.measure_text(trino_core::FontId(0), t, scale)
         }
+    }
+
+    /// A substitute comes on with his own name and look (skin, hair), not
+    /// the replaced player's.
+    #[test]
+    fn a_substitute_takes_his_own_name_and_look() {
+        let (setup, names, people) = crate::quick_setup(0, 1, 5, 300, [false, false]);
+        let d = dress([0, 1], &people);
+        let mut s = Session::new(&setup, &d, names, Sky::Day);
+        let mut audio = Mute;
+        let mut subs = 0;
+        while !s.m.finished() {
+            let before = s.m.event_seq;
+            s.update(
+                &InputState::default(),
+                &InputState::default(),
+                &mut audio,
+                1.0 / 30.0,
+                (0, 0, false),
+            );
+            for (_, e) in s.m.events_since(before) {
+                if e.kind != EventKind::Substitution {
+                    continue;
+                }
+                let i = e.player as usize;
+                let db = s.m.players[i].db as usize;
+                let p = generate_player(db / SQUAD, db % SQUAD);
+                assert_eq!(s.names[i], p.surname);
+                assert_eq!(s.view.looks[i].skin, SKIN_TONES[p.skin as usize]);
+                assert_eq!(s.view.looks[i].hair, Hair::of(p.style, p.hair));
+                subs += 1;
+            }
+        }
+        assert!(subs > 0, "the AI made no substitution");
     }
 
     /// Kicks and tackles throw up turf that falls back and dies; the PC

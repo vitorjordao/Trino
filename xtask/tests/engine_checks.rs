@@ -167,3 +167,70 @@ fn instancing_matches_separate_draws_and_counts_the_pc_gpu_split() {
         }
     }
 }
+
+/// Evidence for issue #51: the `instancing` step's frame on the native
+/// profile as separate draws, as one call, and their difference (black =
+/// identical), side by side in `target/evidence/instancing/instancing.png`.
+#[test]
+#[ignore = "writes evidence PNGs: run with --ignored"]
+fn instancing_evidence() {
+    use castle64::selftest::{SLOTS_CARD, instancing_scene};
+    use trino_core::{Camera3, Color, DEFAULT_LIGHT, Material, Renderer, Vec3};
+    let save_dir = tempfile::tempdir().unwrap();
+    let Some((mut r, _)) = pc_target(SimProfile::Native, save_dir.path()) else {
+        return;
+    };
+    let (instances, palettes, params) = instancing_scene();
+    let camera = Camera3 {
+        eye: Vec3::new(0.0, 0.0, -2.0),
+        target: Vec3::ZERO,
+        fov_y: 60.0 * std::f32::consts::PI / 180.0,
+    };
+    let mut frames = Vec::new();
+    for one_call in [false, true] {
+        r.begin_frame(Color::BLACK);
+        r.set_camera(&camera);
+        r.set_light(&DEFAULT_LIGHT);
+        if one_call {
+            r.draw_model_instances_with(SLOTS_CARD, &instances, &palettes, &params);
+        } else {
+            for i in &instances {
+                let p = i.params(&params, &palettes);
+                r.draw_model_matrix(SLOTS_CARD, &i.matrix, Material::VertexLit, &p);
+            }
+        }
+        r.end_frame();
+        frames.push(r.read_offscreen());
+    }
+    let (w, h) = r.internal_size();
+    let diff: Vec<u8> = frames[0]
+        .chunks(4)
+        .zip(frames[1].chunks(4))
+        .flat_map(|(a, b)| {
+            let d = |k: usize| (a[k] as i32 - b[k] as i32).unsigned_abs().min(255) as u8;
+            [d(0), d(1), d(2), 255]
+        })
+        .collect();
+    assert!(
+        diff.chunks(4).all(|p| p[..3] == [0, 0, 0]),
+        "one call = separate draws"
+    );
+    let gap = 8u32;
+    let total_w = w * 3 + gap * 2;
+    let mut out = vec![40u8; (total_w * h * 4) as usize];
+    for (k, img) in [&frames[0], &frames[1], &diff].into_iter().enumerate() {
+        let x0 = k as u32 * (w + gap);
+        for y in 0..h {
+            let src = &img[(y * w * 4) as usize..((y + 1) * w * 4) as usize];
+            let at = ((y * total_w + x0) * 4) as usize;
+            out[at..at + src.len()].copy_from_slice(src);
+        }
+    }
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../target/evidence/instancing");
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = std::fs::File::create(dir.join("instancing.png")).unwrap();
+    let mut enc = png::Encoder::new(std::io::BufWriter::new(file), total_w, h);
+    enc.set_color(png::ColorType::Rgba);
+    enc.set_depth(png::BitDepth::Eight);
+    enc.write_header().unwrap().write_image_data(&out).unwrap();
+}

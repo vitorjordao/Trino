@@ -84,7 +84,7 @@ impl FrameMeter {
         let n = self.frames.max(1);
         let per = |v: u64| v / n;
         let avg = self.total_us.checked_div(self.timed).unwrap_or(0);
-        let fps = if avg == 0 { 0 } else { 1_000_000 / avg };
+        let fps = 1_000_000u64.checked_div(avg).unwrap_or(0);
         let mut off: Vec<(PcGpuReject, u64)> = PcGpuReject::ALL
             .iter()
             .map(|r| (*r, self.off[r.index()].div_ceil(n)))

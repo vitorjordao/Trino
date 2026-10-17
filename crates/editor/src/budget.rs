@@ -224,8 +224,30 @@ pub fn platform_lines(
     out
 }
 
+/// The Game view budget panel's width for its widest text line (`widest`
+/// px) in a view `view` px wide: the text plus its margins, at least
+/// [`HUD_MIN_WIDTH`], and never past the view (10 px off each side) unless
+/// the view is narrower than the minimum.
+pub fn hud_width(widest: f32, view: f32) -> f32 {
+    (widest + 16.0)
+        .max(HUD_MIN_WIDTH)
+        .min((view - 20.0).max(HUD_MIN_WIDTH))
+}
+
+/// The budget panel's narrowest width (its rows' labels and values).
+pub const HUD_MIN_WIDTH: f32 = 210.0;
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_hud_grows_to_its_longest_line_within_the_view() {
+        use super::{HUD_MIN_WIDTH, hud_width};
+        assert_eq!(hud_width(100.0, 800.0), HUD_MIN_WIDTH, "short lines");
+        assert_eq!(hud_width(260.0, 800.0), 276.0, "a long reason fits");
+        assert_eq!(hud_width(600.0, 400.0), 380.0, "never past the view");
+        assert_eq!(hud_width(600.0, 150.0), HUD_MIN_WIDTH, "a tiny view");
+    }
+
     use super::*;
 
     #[test]

@@ -765,7 +765,7 @@ pub const INSTANCES: usize = 6;
 /// The `instancing` step's scene: [`INSTANCES`] small slotted cards in a
 /// 3 × 2 grid, each its own tint, two with a palette from the table, and
 /// the call's own palette for the rest.
-fn instancing_scene() -> ([Instance; INSTANCES], [Palette; 2], ModelParams) {
+pub fn instancing_scene() -> ([Instance; INSTANCES], [Palette; 2], ModelParams) {
     let rgb = Color::rgb;
     let tints = [
         rgb(255, 80, 80),

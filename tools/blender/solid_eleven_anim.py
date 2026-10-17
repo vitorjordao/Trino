@@ -341,6 +341,20 @@ CLIPS = {
                 "arm_r": (20, 0, -30)}, (0, 0, 0.1)),
         (1.0, IDLE, (0, 0, 0)),
     ]),
+    # A full-power strike: a longer backswing, the body over the ball, the
+    # kicking leg through high and the standing foot off the turf at the
+    # end (a hop), the arms wide.
+    "power_shot": (0.65, False, [
+        (0.0, {"torso": (4, 6, 0), "thigh_r": (70, 0, 0), "shin_r": (110, 0, 0), "thigh_l": (-14, 0, 0),
+               "shin_l": (14, 0, 0), "arm_l": (-45, 0, 55), "arm_r": (40, 0, -50), "forearm_l": (-30, 0, 0),
+               "forearm_r": (-20, 0, 0)}, (0, 0, 0)),
+        (0.3, {"torso": (14, -6, 0), "thigh_r": (-90, 12, 0), "shin_r": (6, 0, 0), "thigh_l": (10, 0, 0),
+               "shin_l": (24, 0, 0), "arm_l": (-55, 0, 70), "arm_r": (50, 0, -65), "forearm_l": (-20, 0, 0)},
+         (0, 0, 0.08)),
+        (0.55, {"torso": (12, -4, 0), "thigh_r": (-70, 6, 0), "shin_r": (20, 0, 0), "thigh_l": (4, 0, 0),
+                "shin_l": (10, 0, 0), "arm_l": (-35, 0, 50), "arm_r": (30, 0, -45)}, (0, 0.06, 0.18)),
+        (1.0, IDLE, (0, 0, 0.1)),
+    ]),
     "tackle": (0.4, False, [
         (0.0, {"torso": (15, 0, 0), "thigh_l": (-45, 0, 8), "shin_l": (15, 0, 0), "thigh_r": (25, 0, 0),
                "shin_r": (40, 0, 0), "arm_l": (-20, 0, 25), "arm_r": (25, 0, -30)}, (0, 0, 0)),
@@ -475,7 +489,7 @@ CLIPS = {
 # Clips that keep a foot (or a hip, a back) on the turf every frame: the
 # game snaps the body down onto it. The others only stop at the turf
 # (runs have a flight phase, hops and dives leave it).
-GROUNDED = {"idle", "walk", "pass", "lob", "shot", "tackle", "slide", "down", "get_up", "throw", "gk_ready",
+GROUNDED = {"idle", "walk", "pass", "lob", "shot", "power_shot", "tackle", "slide", "down", "get_up", "throw", "gk_ready",
             "gk_hold", "ref_point", "ref_card", "flag_up"}
 
 

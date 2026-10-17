@@ -406,10 +406,14 @@ fn a_foul_in_the_box_is_a_penalty_taken_from_the_spot() {
         }
     }
     // Taken (the kick winds up, then the ball leaves): a shot, maybe a
-    // goal; the taker plays the shot clip.
+    // goal; the taker plays a shot clip (placed or full power).
     assert!(s.until(60 * 12, |m| m.phase == Phase::Play));
     s.run(40);
-    assert!(s.showed(taker, ClipName::Shot), "{:?}", s.shown[taker]);
+    assert!(
+        s.showed(taker, ClipName::Shot) || s.showed(taker, ClipName::PowerShot),
+        "{:?}",
+        s.shown[taker]
+    );
     assert_eq!(s.events(EventKind::Shot).len(), 1, "{:?}", s.log);
     s.check_poses("penalty");
     assert!(s.breaches.is_empty(), "{:?}", s.breaches);
@@ -639,6 +643,8 @@ fn every_style_of_match_plays_out_and_every_frame_fits() {
         }),
     ];
     let mut report = Vec::new();
+    // Shots across every style: placed ones and full-power strikes.
+    let (mut placed, mut power) = (0, 0);
     for (name, tweak) in styles {
         let (mut st, _, _) = crate::quick_setup(2, 5, 41, 90, [false, false]);
         tweak(&mut st);
@@ -679,6 +685,10 @@ fn every_style_of_match_plays_out_and_every_frame_fits() {
             );
         }
         let clips: usize = s.shown.iter().map(|v| v.len()).sum();
+        for v in &s.shown {
+            placed += v.iter().filter(|&&c| c == ClipName::Shot).count();
+            power += v.iter().filter(|&&c| c == ClipName::PowerShot).count();
+        }
         // No clip flickers: a run cycle never flips to another and back
         // within an eighth of a second (actions — a shot, a tackle — may
         // follow each other fast), and under about one change a second on
@@ -736,5 +746,10 @@ fn every_style_of_match_plays_out_and_every_frame_fits() {
     for line in report {
         std::println!("{line}");
     }
+    std::println!("shots shown: {placed} placed, {power} full power");
+    assert!(
+        placed > 0 && power > 0,
+        "{placed} placed, {power} power shots"
+    );
     let _ = JOINTS;
 }

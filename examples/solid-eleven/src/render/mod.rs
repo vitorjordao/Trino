@@ -1008,6 +1008,10 @@ pub const M_LEG_KIT: [ModelId; crate::sim::team::LEG_KITS.1] = {
     out
 };
 
+/// The ball speed (m/s, along the turf) from which a shot plays the
+/// power clip: shots leave at 17..33 m/s.
+pub const POWER_SHOT: f32 = 30.0;
+
 /// How high the shadow floats over the turf (m): the N64's 16-bit depth
 /// resolves 4 cm at the drawing scale.
 const SHADOW_LIFT: f32 = 0.04;
@@ -1142,7 +1146,16 @@ pub fn pick_clip(m: &Match, i: usize, dt: f32, st: &mut AnimState) {
     let (clip, mirror, rate, restart) = match p.act {
         Act::Kick { plan, t } => {
             let c = match plan.kind {
-                crate::sim::engine::KickKind::Shot => ClipName::Shot,
+                // A full-power strike (the fastest fifth of shots) swings
+                // through harder than a placed one.
+                crate::sim::engine::KickKind::Shot => {
+                    let (vx, vz) = (plan.vel.x.to_f32(), plan.vel.z.to_f32());
+                    if vx * vx + vz * vz >= POWER_SHOT * POWER_SHOT {
+                        ClipName::PowerShot
+                    } else {
+                        ClipName::Shot
+                    }
+                }
                 crate::sim::engine::KickKind::Throw => ClipName::Throw,
                 crate::sim::engine::KickKind::Cross
                 | crate::sim::engine::KickKind::Through

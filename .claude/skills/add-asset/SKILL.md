@@ -231,8 +231,9 @@ Scenes/prefabs reference materials by logical path; games use the equivalent
 ## A game with its own asset set (Solid Eleven, 2026-10-16)
 
 - **Its own `assets/`:** `examples/solid-eleven/assets/` has its own `manifest.toml`.
-  `TRINO_GAME=solid-eleven` bakes it to `target/assets/solid-eleven/pc`, and the
-  football template copies it instead of the engine's. Sounds and sprites are generated
+  `TRINO_GAME=solid-eleven` runs it on `trino-runner-pc` and bakes it to
+  `target/solid-eleven/assets/pc` (`RunConfig::target`), and the football template
+  copies it instead of the engine's. Sounds and sprites are generated
   by `tools/solid_eleven/make_{sounds,sprites}.py`.
 - **TTF fonts on the N64:** the bake writes transparent texels black and the N64 stages
   I4/I8 atlases with intensity = coverage. Before that, a TTF atlas drew solid blocks

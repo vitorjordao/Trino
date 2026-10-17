@@ -338,7 +338,7 @@ pub const PARTS: [Part; 24] = [
         model: ModelId::from_path("models/se_shorts_leg"),
         joint: 7, // thigh_l
         tint: Tint::Shorts,
-        tiers: tier::NEAR,
+        tiers: tier::NEAR | tier::FAR,
         solids: &[
             Solid { y0: -0.3000, y1: 0.0200, w0: 0.1700, d0: 0.1800, w1: 0.1400, d1: 0.1500, cx: 0.0000, cz: 0.0000, skip: 0 },
         ],
@@ -347,7 +347,7 @@ pub const PARTS: [Part; 24] = [
         model: ModelId::from_path("models/se_shorts_leg"),
         joint: 8, // thigh_r
         tint: Tint::Shorts,
-        tiers: tier::NEAR,
+        tiers: tier::NEAR | tier::FAR,
         solids: &[
             Solid { y0: -0.3000, y1: 0.0200, w0: 0.1700, d0: 0.1800, w1: 0.1400, d1: 0.1500, cx: 0.0000, cz: 0.0000, skip: 0 },
         ],

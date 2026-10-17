@@ -693,6 +693,13 @@ fn the_console_body_fits_through_every_clip() {
     print_and_assert("consoles (near)", &check(tier::NEAR));
 }
 
+/// Far players: the near body without arms, kit legs and all; this tier's
+/// own table (no shorts legs) is what's drawn when a kit has no baked leg.
+#[test]
+fn the_far_console_body_fits_through_every_clip() {
+    print_and_assert("consoles (far)", &check(tier::FAR));
+}
+
 #[test]
 fn every_clip_and_the_body_are_covered() {
     assert_eq!(CLIPS.len(), ClipName::ALL.len());

@@ -62,8 +62,8 @@ MIRROR = {"arm_l": "arm_r", "arm_r": "arm_l", "forearm_l": "forearm_r", "forearm
 # frame: y0 (w0 x d0) to y1 (w1 x d1), centered at (cx, cz); `skip` lists
 # faces never built because another part always covers them (the fit test
 # checks that), `color` the base color class. Tiers: "pc" (11 joints, the
-# PC's native profile), "near" / "far" (consoles; far players drop arms and
-# shorts legs).
+# PC's native profile), "near" / "far" (consoles; far players drop their
+# arms; their legs are the kit legs, shorts leg and sock in one mesh).
 
 def taper(y0, y1, w0, d0, w1, d1, cx=0.0, cz=0.0, skip="", color="base"):
     return {"y0": y0, "y1": y1, "w0": w0, "d0": d0, "w1": w1, "d1": d1, "cx": cx, "cz": cz,
@@ -132,7 +132,7 @@ BODY = {
     "arm_x": ("arm_l", "skin", "near", 12, [
         taper(-0.62, 0.0, 0.07, 0.075, 0.085, 0.085),
     ]),
-    "shorts_leg_x": ("thigh_l", "shorts", "near", 12, [
+    "shorts_leg_x": ("thigh_l", "shorts", "near far", 12, [
         taper(-0.30, 0.02, 0.17, 0.18, 0.14, 0.15),
     ]),
     "leg_x": ("thigh_l", "socks", "near far", 20, [

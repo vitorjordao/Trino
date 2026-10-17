@@ -20,12 +20,40 @@ pub fn figure(
     cam: (f32, f32),
     snap: bool,
 ) {
+    let framing = Framing {
+        focus_y: 1.05,
+        fov: 0.32,
+    };
+    figure_framed(r, pose, look, face, detail, cam, snap, framing);
+}
+
+/// Where [`figure_framed`]'s camera looks: the focus height (m) and the
+/// field of view (radians).
+#[derive(Clone, Copy, Debug)]
+pub struct Framing {
+    pub focus_y: f32,
+    pub fov: f32,
+}
+
+/// [`figure`] with its own framing: a head close-up looks at 1.7 m with a
+/// narrow field of view from the same distance.
+#[allow(clippy::too_many_arguments)]
+pub fn figure_framed(
+    r: &mut dyn Renderer,
+    pose: &Pose,
+    look: &Look,
+    face: (f32, f32),
+    detail: Detail,
+    cam: (f32, f32),
+    snap: bool,
+    framing: Framing,
+) {
     r.begin_frame(Color::rgb(70, 78, 96));
     let cs = CamState {
-        focus: Vec3::new(0.0, 1.05, 0.0),
+        focus: Vec3::new(0.0, framing.focus_y, 0.0),
         height: cam.0,
         back: cam.1,
-        fov: 0.32,
+        fov: framing.fov,
     };
     r.set_camera(&cs.camera());
     r.set_light(&Sky::Day.light());

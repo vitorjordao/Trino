@@ -55,6 +55,7 @@ pub enum Tint {
     Shirt,
     Shorts,
     Socks,
+    Hair,
 }
 
 /// A rigid body part: a mesh drawn with one joint's matrix.

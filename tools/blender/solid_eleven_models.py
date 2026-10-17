@@ -461,10 +461,13 @@ SKIN = (236, 236, 236)    # tinted by skin tone
 KIT = (236, 236, 236)     # tinted by kit colors
 BOOT = (46, 46, 52)
 HAIR = (70, 56, 46)
+# The console heads' baked hair: dark, light (blond and red hair under the
+# skin tint), or none (shaved: the crown a shade of the skin).
+CONSOLE_HAIR = {"head": HAIR, "head_light": (214, 176, 112), "head_shaved": None}
 EYE = (30, 26, 26)
 
 
-def body_part(name, base=None, boot=BOOT):
+def body_part(name, base=None, boot=BOOT, hair=HAIR):
     """A body part from the shared spec (`solid_eleven_anim.BODY`): its
     solids, then flat details. Kit and skin regions are light grey for the
     per-draw tint (or `base`, baked); boots and hair keep their own
@@ -472,7 +475,7 @@ def body_part(name, base=None, boot=BOOT):
     joint, tint, tiers, budget, solids = anim.BODY[name]
     if base is None:
         base = SKIN if tint == "skin" else KIT
-    colors = {"base": base, "hair": HAIR, "boot": boot}
+    colors = {"base": base, "hair": hair, "boot": boot}
     m = Model(name[:-2] if name.endswith("_x") else name)
     for so in solids:
         rgb = colors[so["color"]]
@@ -480,10 +483,11 @@ def body_part(name, base=None, boot=BOOT):
         sides = None
         top = None
         if name == "head":
-            # The console head is one wedge: hair on top and at the back.
-            top = shade(HAIR, 1.1)
+            # The console head is one wedge: hair on top and at the back
+            # (or a shaved crown).
+            top = shade(hair, 1.1) if hair else shade(SKIN, 0.94)
             m.taper(so["y0"], so["y1"], so["w0"], so["d0"], so["w1"], so["d1"], rgb, so["cx"], so["cz"],
-                    skip=skip + ("+y",), sides={"-z": HAIR})
+                    skip=skip + ("+y",), sides={"-z": hair} if hair else None)
         elif name == "torso" and so is solids[-1]:
             # The console shirt's top is its darker collar.
             top = shade(KIT, 0.62)
@@ -497,13 +501,19 @@ def body_part(name, base=None, boot=BOOT):
     face_z = lambda so, y: so["cz"] + (so["d0"] + (so["d1"] - so["d0"]) * (y - so["y0"]) / (so["y1"] - so["y0"])) / 2
     if name in ("head", "head_hd"):
         face = solids[0] if name == "head" else solids[2]
-        ey = 0.25 if name == "head" else 0.245
+        ey = 0.25 if name == "head" else 0.265
         z = face_z(face, ey) + 0.002
         for x in (-0.055, 0.055):
             m.poly([(x - 0.025, ey - 0.013, z), (x + 0.025, ey - 0.013, z), (x + 0.025, ey + 0.012, z),
                     (x - 0.025, ey + 0.012, z)], EYE, out=(0, 0, 1))
         if name == "head_hd":
-            m.taper(0.17, 0.22, 0.04, 0.05, 0.03, 0.01, shade(SKIN, 0.92), cz=0.13, skip=("-z",))
+            # The nose, from the face (the jaw's front) out.
+            m.taper(0.19, 0.245, 0.04, 0.044, 0.03, 0.016, shade(SKIN, 0.92), cz=0.122, skip=("-z",))
+            # The brows, a little darker than the skin (any skin tone).
+            zb = face_z(face, 0.287) + 0.002
+            for x in (-0.055, 0.055):
+                m.poly([(x - 0.032, 0.283, zb), (x + 0.032, 0.283, zb), (x + 0.032, 0.291, zb),
+                        (x - 0.032, 0.291, zb)], shade(SKIN, 0.55), out=(0, 0, 1))
     elif name == "torso_hd":
         top = solids[2]
         m.box((0, top["y1"] + 0.006, 0.0), (0.16, 0.012, 0.12), shade(KIT, 0.62), skip=("-y",))
@@ -517,6 +527,24 @@ def body_part(name, base=None, boot=BOOT):
         so = solids[1]
         m.box((0, so["y1"] - 0.015, 0), (so["w1"] + 0.006, 0.03, so["d1"] + 0.006), shade(KIT, 0.72),
               skip=("+y", "-y"))
+    return m
+
+
+def console_head(name):
+    """A console head: the wedge with its hair baked (`CONSOLE_HAIR`)."""
+    m = body_part("head", hair=CONSOLE_HAIR[name])
+    m.name = name
+    return m
+
+
+def hair_part(style):
+    """A PC hair style (`solid_eleven_anim.HAIR`): light grey for the
+    per-draw hair color, the shell's sides a shade darker than its crown."""
+    budget, solids = anim.HAIR[style]
+    m = Model("hair_" + style)
+    for so in solids:
+        m.taper(so["y0"], so["y1"], so["w0"], so["d0"], so["w1"], so["d1"], KIT, so["cx"], so["cz"],
+                skip=tuple(so["skip"]))
     return m
 
 
@@ -667,6 +695,8 @@ def player_rig():
         m = Model("rig_" + j)
         for n in builders[j]:
             m.faces += body_part(n).faces
+        if j == "head":
+            m.faces += hair_part("crop").faces
         return m
 
     objs = {}
@@ -763,6 +793,10 @@ for _name, (_joint, _tint, _tiers, _budget, _solids) in anim.BODY.items():
     _where = PC if _tiers.split() == ["pc"] else SHARED
     _y = (_solids[0]["y0"] + _solids[0]["y1"]) / 2
     reg(_file, (lambda n=_name: body_part(n)), _where, _budget, ((0, 0, _y), 0.8))
+for _style, (_budget, _solids) in anim.HAIR.items():
+    reg(f"hair_{_style}", (lambda st=_style: hair_part(st)), PC, _budget, ((0, 0, 0.33), 0.6))
+for _name in ("head_light", "head_shaved"):
+    reg(_name, (lambda n=_name: console_head(n)), SHARED, anim.BODY["head"][3], ((0, 0, 0.17), 0.8))
 reg("player_shadow", player_shadow, SHARED, 4, ((0, 0, 0), 1.0))
 reg("trophy", trophy, SHARED, 120, ((0, 0, 0.2), 0.7))
 for _i, _shorts, _socks in leg_kits():

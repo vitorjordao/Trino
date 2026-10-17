@@ -7,11 +7,12 @@ use super::sound::{self, Sfx};
 use crate::render::anim::AnimState;
 use crate::render::clips_gen::ClipName;
 use crate::render::hud::{BANNER_SECS, Banner, SideColors};
-use crate::render::{self, CamState, Guides, Look, MatchView, SKIN_TONES, Sky, rgb};
+use crate::render::{self, CamState, Guides, Hair, Look, MatchView, SKIN_TONES, Sky, rgb};
 use crate::sim::ai;
 use crate::sim::ball::{self, DT};
 use crate::sim::engine::{EventKind, KickKind, Match, N, Pad, Phase, Setup, side_of};
 use crate::sim::fx::{Fx, V2};
+use crate::sim::team::Appearance;
 use crate::sim::team::{CLUBS, Rgb};
 use crate::ui::Ui;
 use crate::ui::i18n::{Lang, S};
@@ -30,8 +31,8 @@ pub struct Dress {
 }
 
 /// Pick kits (the away side changes when the shirts clash) and dress the
-/// players. `skins[i]` is player `i`'s skin tone index.
-pub fn dress(clubs: [u8; 2], skins: &[u8; N]) -> Dress {
+/// players. `people[i]` is how player `i` looks (skin and hair).
+pub fn dress(clubs: [u8; 2], people: &[Appearance; N]) -> Dress {
     let home = &CLUBS[clubs[0] as usize];
     let away = &CLUBS[clubs[1] as usize];
     let away_kit = if away.home.shirt.dist2(home.home.shirt) < 30_000 {
@@ -54,8 +55,9 @@ pub fn dress(clubs: [u8; 2], skins: &[u8; N]) -> Dress {
                 k.shorts
             },
             if keeper { gks[s] } else { k.socks },
-            SKIN_TONES[skins[i] as usize % SKIN_TONES.len()],
+            SKIN_TONES[people[i].skin as usize % SKIN_TONES.len()],
         )
+        .with_hair(Hair::of(people[i].style, people[i].hair))
     });
     Dress {
         looks,

@@ -22,6 +22,11 @@
 //!    shorts leg).
 //! 5. **Turf:** nothing goes under the ground, and in clips with a foot
 //!    down the lowest point stays within 10 cm of it.
+//! 6. **Hair over the skull:** every outer face of every PC hair style
+//!    stays 2 mm or more off the skull, so skin never shows through hair
+//!    (the old cap's front and sides crossed the forehead). The PC body
+//!    wears every style at once for rules 1–5 (styles never judge each
+//!    other, and a style never hides or covers the bald skull).
 //!
 //! `cargo test -p solid-eleven fit -- --nocapture` prints the closest call
 //! of each rule per clip.
@@ -30,7 +35,7 @@ use super::anim::{
     AnimState, Part, Pose, Solid, Tint, body_matrix, clip, joint_matrices, lying, mask, plant,
     route, sample_masked, switch, tier,
 };
-use super::clips_gen::{CLIPS, ClipName, JOINTS, PARTS, SKELETON};
+use super::clips_gen::{CLIPS, ClipName, HAIR, JOINTS, PARTS, SKELETON};
 use trino_core::{Mat34, Vec3};
 
 /// How far skin may show through cloth (m), and cloth through cloth.
@@ -161,6 +166,7 @@ impl Body {
     fn new(tier_bit: u8) -> Body {
         let parts: Vec<Part> = PARTS
             .iter()
+            .chain(HAIR.iter())
             .copied()
             .filter(|p| p.tiers & tier_bit != 0)
             .collect();
@@ -259,6 +265,14 @@ impl Body {
             .filter(|&q| self.parts[q].joint == j)
             .map(|q| self.depth(m, q, w))
             .fold(-1.0, f32::max)
+    }
+
+    /// Whether part `q` counts for a point of part `p`: a hair style
+    /// (one of several a player may wear) never covers, hides or judges
+    /// another part's point, and styles never judge each other; a style's
+    /// own point is judged against the body.
+    fn judges(&self, p: usize, q: usize) -> bool {
+        self.parts[q].tint != Tint::Hair || self.parts[p].tint == Tint::Hair && p == q
     }
 
     fn tint_of_joint(&self, j: usize) -> Option<Tint> {
@@ -447,7 +461,7 @@ impl Checker {
                 .fold(-1.0, f32::max);
             hidden[si] = own >= 0.003;
             for q in 0..n {
-                if q == s.part {
+                if q == s.part || !body.judges(s.part, q) {
                     continue;
                 }
                 let pq = &body.parts[q];
@@ -489,6 +503,9 @@ impl Checker {
             let w = rest[p.joint].transform_point(s.local);
             for q in 0..n {
                 let pq = &body.parts[q];
+                if !body.judges(s.part, q) {
+                    continue;
+                }
                 let d = body.depth(&rest, q, w);
                 if q != s.part && d > 0.005 && !(adjacent(p.joint, pq.joint) && pq.tint == p.tint) {
                     note(rep, 4, "rest", d - 0.005, || {
@@ -544,7 +561,7 @@ impl Checker {
                     .map(|(_, pl)| depth_in(pl, s.local))
                     .fold(-1.0, f32::max);
                 let cover = (0..n)
-                    .filter(|&q| q != s.part)
+                    .filter(|&q| q != s.part && body.judges(s.part, q))
                     .map(|q| body.depth(&m, q, w))
                     .fold(own, f32::max);
                 note(rep, 3, key, -cover - 0.005, || {
@@ -567,7 +584,7 @@ impl Checker {
             // 4. A visible surface never sinks into another part.
             for q in 0..n {
                 let pq = &body.parts[q];
-                if pq.joint == p.joint {
+                if pq.joint == p.joint || !body.judges(s.part, q) {
                     continue;
                 }
                 if adjacent(p.joint, pq.joint) {
@@ -586,7 +603,7 @@ impl Checker {
                 // shorts corner in a leg that its shorts leg covers.
                 if d > SINK
                     && (0..n)
-                        .filter(|&r| r != s.part && r != q)
+                        .filter(|&r| r != s.part && r != q && body.judges(s.part, r))
                         .any(|r| body.depth(&m, r, w) > BURIED)
                 {
                     continue;
@@ -698,6 +715,70 @@ fn the_console_body_fits_through_every_clip() {
 #[test]
 fn the_far_console_body_fits_through_every_clip() {
     print_and_assert("consoles (far)", &check(tier::FAR));
+}
+
+/// Rule 6: the closest any outer face (all but the underside, which meets
+/// the skull at the hairline) of `hair` comes to the skull `skull`, in m
+/// (> 0: clear of it), and where.
+fn hair_clearance(hair: &[Solid], skull: &[Solid]) -> (f32, Vec3) {
+    let skull: Vec<[Plane; 6]> = skull.iter().map(planes).collect();
+    let mut worst = (f32::MAX, Vec3::ZERO);
+    for s in hair {
+        for f in [0usize, 1, 3, 4, 5] {
+            if s.skip & (1 << f) != 0 {
+                continue;
+            }
+            let c = face(s, f);
+            for u in 0..=8 {
+                for v in 0..=8 {
+                    let (u, v) = (u as f32 / 8.0, v as f32 / 8.0);
+                    let a = c[0] + (c[1] - c[0]) * u;
+                    let b = c[3] + (c[2] - c[3]) * u;
+                    let p = a + (b - a) * v;
+                    let inside = skull
+                        .iter()
+                        .map(|pl| depth_in(pl, p))
+                        .fold(f32::MIN, f32::max);
+                    if -inside < worst.0 {
+                        worst = (-inside, p);
+                    }
+                }
+            }
+        }
+    }
+    worst
+}
+
+#[test]
+fn every_hair_style_stays_clear_of_the_skull() {
+    let skull = PARTS
+        .iter()
+        .find(|p| {
+            p.tint == Tint::Skin && p.joint == super::anim::joint::HEAD && p.tiers == tier::FULL
+        })
+        .unwrap()
+        .solids;
+    for h in HAIR.iter() {
+        let (gap, at) = hair_clearance(h.solids, skull);
+        println!(
+            "hair {:?}: {gap:.4} m off the skull (closest at {at:?})",
+            h.model
+        );
+        assert!(
+            gap >= 0.002,
+            "a hair style's outer face comes within {gap:.4} m of the skull at {at:?}"
+        );
+    }
+    // The mutation the rule exists for: a cap 1 cm smaller than the shell
+    // crosses the forehead.
+    let mut cap: Vec<Solid> = HAIR[0].solids.to_vec();
+    for s in cap.iter_mut() {
+        s.w0 -= 0.04;
+        s.d0 -= 0.04;
+        s.w1 -= 0.04;
+        s.d1 -= 0.04;
+    }
+    assert!(hair_clearance(&cap, skull).0 < 0.0);
 }
 
 #[test]

@@ -222,6 +222,10 @@ pub struct Capture {
 /// How long the controls page waits for the new button.
 pub const CAPTURE_SECS: f32 = 5.0;
 
+/// The player editor's rows: the attributes, the skin tone, the hair style
+/// and the hair color.
+pub const EDIT_ROWS: usize = ATTRS + 3;
+
 #[derive(Clone)]
 pub struct SolidElevenGame {
     pub screen: Vec2,
@@ -347,9 +351,9 @@ impl SolidElevenGame {
         sky: Sky,
         half_secs: u32,
     ) {
-        let (mut setup, names, skins) = crate::quick_setup(home, away, seed, half_secs, humans);
+        let (mut setup, names, people) = crate::quick_setup(home, away, seed, half_secs, humans);
         setup.keeper_ctl = [self.settings.keeper; 2];
-        let d = dress([setup.sides[0].club, setup.sides[1].club], &skins);
+        let d = dress([setup.sides[0].club, setup.sides[1].club], &people);
         let mut session = Session::new(&setup, &d, names, sky);
         session.controls.bindings = self.settings.bindings;
         session.view.retro = self.settings.graphics == 1;
@@ -386,15 +390,15 @@ impl SolidElevenGame {
         );
         setup.keeper_ctl = [self.settings.keeper; 2];
         let mut names = [0u8; N];
-        let mut skins = [0u8; N];
+        let mut people = [crate::sim::team::Appearance::default(); N];
         for s in 0..2 {
             for k in 0..SIDE {
                 let db = setup.sides[s].players[k].0 as usize;
                 names[s * SIDE + k] = self.world.players[db].surname;
-                skins[s * SIDE + k] = self.world.players[db].skin;
+                people[s * SIDE + k] = self.world.players[db].appearance();
             }
         }
-        let d = dress([home, away], &skins);
+        let d = dress([home, away], &people);
         let mut session = Session::new(&setup, &d, names, sky);
         session.controls.bindings = self.settings.bindings;
         session.view.retro = self.settings.graphics == 1;
@@ -863,8 +867,9 @@ impl SolidElevenGame {
             self.scene = Scene::Teams;
             return;
         };
-        // Rows: six attributes, then the skin tone.
-        menu::step(&mut self.cur.edit_attr, ATTRS + 1, nav);
+        // Rows: six attributes, then the skin tone, the hair style and
+        // the hair color.
+        menu::step(&mut self.cur.edit_attr, EDIT_ROWS, nav);
         if let Some(id) = tap {
             self.cur.edit_attr = id as usize;
         }
@@ -880,7 +885,14 @@ impl SolidElevenGame {
                     });
                 }
             } else {
-                p.skin = ((p.skin as i32 + d).rem_euclid(8)) as u8;
+                let mut a = p.appearance();
+                let turn = |v: u8, n: u8| (v as i32 + d).rem_euclid(n as i32) as u8;
+                match self.cur.edit_attr - ATTRS {
+                    0 => a.skin = turn(a.skin, team::Appearance::SKINS),
+                    1 => a.style = turn(a.style, team::Appearance::STYLES),
+                    _ => a.hair = turn(a.hair, team::Appearance::HAIRS),
+                }
+                p.set_appearance(a);
             }
         }
         if nav.x {

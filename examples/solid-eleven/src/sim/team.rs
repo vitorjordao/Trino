@@ -552,6 +552,36 @@ pub const SURNAMES: [&str; 96] = [
     "Teixeira", "Barros", "Cardoso", "Pinto", "Moura", "Duarte", "Vieira", "Campos", "Aguilar",
 ];
 
+/// How a player looks, as palette indices (the renderer's `SKIN_TONES`,
+/// `HAIR_COLORS` and `HairStyle`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct Appearance {
+    pub skin: u8,
+    pub hair: u8,
+    pub style: u8,
+}
+
+impl Appearance {
+    pub const SKINS: u8 = 8;
+    pub const HAIRS: u8 = 5;
+    pub const STYLES: u8 = 6;
+
+    /// One byte (the save): `skin + 8 × (hair + 5 × style)`, below 240.
+    pub const fn byte(self) -> u8 {
+        self.skin % Self::SKINS
+            + Self::SKINS * (self.hair % Self::HAIRS + Self::HAIRS * (self.style % Self::STYLES))
+    }
+
+    pub const fn from_byte(b: u8) -> Appearance {
+        let b = b % (Self::SKINS * Self::HAIRS * Self::STYLES);
+        Appearance {
+            skin: b % Self::SKINS,
+            hair: (b / Self::SKINS) % Self::HAIRS,
+            style: b / (Self::SKINS * Self::HAIRS),
+        }
+    }
+}
+
 /// One player in the database (mutable: editing, form, transfers).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct PlayerRec {
@@ -562,15 +592,31 @@ pub struct PlayerRec {
     /// The cap on the sum of `attrs`.
     pub budget: u16,
     pub age: u8,
-    /// Skin tone index (0..8) and hair color index (0..6).
+    /// Skin tone (0..8), hair color (0..5) and hair style (0..6) indices:
+    /// the renderer's palettes; the match never reads them.
     pub skin: u8,
     pub hair: u8,
+    pub style: u8,
     /// Between matches: energy 0..100 and form -5..5.
     pub energy: u8,
     pub form: i8,
 }
 
 impl PlayerRec {
+    pub fn appearance(&self) -> Appearance {
+        Appearance {
+            skin: self.skin,
+            hair: self.hair,
+            style: self.style,
+        }
+    }
+
+    pub fn set_appearance(&mut self, a: Appearance) {
+        self.skin = a.skin % Appearance::SKINS;
+        self.hair = a.hair % Appearance::HAIRS;
+        self.style = a.style % Appearance::STYLES;
+    }
+
     pub fn name(&self) -> &'static str {
         SURNAMES[self.surname as usize % SURNAMES.len()]
     }
@@ -732,7 +778,9 @@ pub fn generate_player(c: usize, s: usize) -> PlayerRec {
         budget,
         age: 18 + (mix(h, 99) % 17) as u8,
         skin: (mix(h, 7) % 8) as u8,
-        hair: (mix(h, 8) % 6) as u8,
+        hair: (mix(h, 8) % Appearance::HAIRS as u32) as u8,
+        // Short hair is the most common, a mohawk the rarest.
+        style: [0, 0, 0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 4, 5, 5][mix(h, 9) as usize % 16],
         energy: 100,
         form: 0,
     }

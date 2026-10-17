@@ -77,12 +77,13 @@ def box(y0, y1, w, d, cx=0.0, cz=0.0, skip="", color="base"):
 # part -> (joint (left side; "_x" parts are drawn on both sides), tint, tiers, triangle budget, solids)
 BODY = {
     # --- the PC's native profile
+    # The skull alone: the hair is a part of its own (`HAIR`), a shell
+    # around it, so skin never cuts through hair.
     "head_hd": ("head", "skin", "pc", 80, [
         box(-0.06, 0.15, 0.11, 0.11, skip="-y +y"),
-        taper(0.14, 0.26, 0.2, 0.22, 0.22, 0.24, skip="+y"),
-        taper(0.26, 0.37, 0.22, 0.24, 0.18, 0.21, skip="-y"),
-        taper(0.30, 0.395, 0.235, 0.255, 0.19, 0.2, cz=-0.01, color="hair"),
-        box(0.18, 0.34, 0.2, 0.04, cz=-0.115, skip="+z", color="hair"),
+        taper(0.13, 0.25, 0.17, 0.19, 0.21, 0.235, skip="+y"),
+        taper(0.25, 0.34, 0.21, 0.235, 0.215, 0.24, skip="-y +y"),
+        taper(0.34, 0.40, 0.215, 0.24, 0.15, 0.175, skip="-y"),
     ]),
     "torso_hd": ("torso", "shirt", "pc", 70, [
         taper(-0.06, 0.07, 0.27, 0.16, 0.30, 0.19, skip="-y +y"),
@@ -145,6 +146,105 @@ BODY = {
 }
 
 
+# ------------------------------------------------------------------ hair
+#
+# The PC's hair styles: parts on the head joint, tinted with the hair's
+# color, drawn over the skull above. Each is built around the skull, never
+# through it: a shell is the skull's own solids above a hairline, every
+# side pushed out by a margin (the sides are parallel, so the gap holds all
+# the way up and over the top); back and side locks stand off the skull's
+# widest section. The fit test (`render/fit.rs`) checks that no outer face
+# of a style comes within 2 mm of the skull, and poses every style through
+# every clip against the rest of the body (long hair against the collar).
+
+SKULL = BODY["head_hd"][4][1:]
+
+
+def _span(so, y):
+    """Width and depth of solid `so` at height y (linear, extrapolated)."""
+    f = (y - so["y0"]) / (so["y1"] - so["y0"])
+    return so["w0"] + (so["w1"] - so["w0"]) * f, so["d0"] + (so["d1"] - so["d0"]) * f
+
+
+def skull_extent(y0, y1):
+    """The skull's widest half-width and deepest half-depth over y0..y1."""
+    hw = hd = 0.0
+    for so in SKULL:
+        for y in (max(y0, so["y0"]), min(y1, so["y1"])):
+            if so["y0"] <= y <= so["y1"]:
+                w, d = _span(so, y)
+                hw, hd = max(hw, w / 2), max(hd, d / 2)
+    return hw, hd
+
+
+def shell(hairline, m):
+    """The skull's solids above `hairline`, each side `m` out, the top `m`
+    over the crown. Internal faces between the layers are left out."""
+    out = []
+    layers = [so for so in SKULL if so["y1"] > hairline]
+    for i, so in enumerate(layers):
+        y0 = max(so["y0"], hairline)
+        y1 = so["y1"] + (m if i == len(layers) - 1 else 0.0)
+        w0, d0 = _span(so, y0)
+        w1, d1 = _span(so, y1)
+        skip = ([] if i == 0 else ["-y"]) + ([] if i == len(layers) - 1 else ["+y"])
+        out.append(taper(y0, y1, w0 + 2 * m, d0 + 2 * m, w1 + 2 * m, d1 + 2 * m, skip=" ".join(skip)))
+    return out
+
+
+def back_lock(y0, y1, t, m=0.003, w=0.2):
+    """Hair down the back of the head, `t` thick, `m` off the skull (its
+    outer face about flush with the shell's back)."""
+    _, hd = skull_extent(y0, y1)
+    return box(y0, y1, w, t, cz=-(hd + m + t / 2))
+
+
+def side_locks(y0, y1, t, z0, z1, m=0.003):
+    """Hair down both sides of the head (the temples, where the ears would
+    be), `t` thick, `m` off the skull."""
+    hw, _ = skull_extent(y0, y1)
+    x = hw + m + t / 2
+    return [box(y0, y1, t, z1 - z0, cx=s * x, cz=(z0 + z1) / 2) for s in (-1, 1)]
+
+
+def _curly():
+    """A rounded mass, fuller at the back and the sides than over the
+    brow (no hat brim): a band out of the hairline, the crown, a narrower
+    top; a thick lock low at the back, fuller sides."""
+    hw, hd = skull_extent(0.30, 0.30)
+    back = -0.014  # the mass sits back on the head
+    band = taper(0.30, 0.35, 2 * hw + 0.03, 2 * hd + 0.03 - 2 * back,
+                 2 * hw + 0.07, 2 * hd + 0.05 - 2 * back, cz=back, skip="+y")
+    crown = taper(0.35, 0.44, band["w1"], band["d1"], band["w1"] - 0.02, band["d1"] - 0.02,
+                  cz=back, skip="-y +y")
+    top = taper(0.44, 0.475, crown["w1"], crown["d1"], crown["w1"] - 0.1, crown["d1"] - 0.1,
+                cz=back, skip="-y")
+    return [band, crown, top, back_lock(0.2, 0.32, 0.04, w=0.24)] + side_locks(0.22, 0.32, 0.012, -0.13, -0.01)
+
+
+def _mohawk():
+    """A stubble strip over the crown, the sides shaved, and a ridge on
+    top. The strip's sides lie inside the skull (left out)."""
+    strip = [dict(so) for so in shell(0.335, 0.004)]
+    for so in strip:
+        so["w0"] = so["w1"] = 0.07
+        so["skip"] = so["skip"] + ["-x", "+x"]
+    return strip + [taper(0.404, 0.47, 0.05, 0.17, 0.04, 0.22)]
+
+
+# style -> (triangle budget, solids); the order is the game's `HairStyle`
+# (after them, `Bald`: no hair part).
+HAIR = {
+    "crop": (60, shell(0.325, 0.01) + [back_lock(0.19, 0.33, 0.008)]
+             + side_locks(0.24, 0.33, 0.006, -0.12, -0.03)),
+    "buzz": (40, shell(0.335, 0.005) + [back_lock(0.21, 0.34, 0.004)]),
+    "curly": (80, _curly()),
+    "long": (70, shell(0.325, 0.012) + [back_lock(0.11, 0.33, 0.02)]
+             + side_locks(0.16, 0.33, 0.012, -0.12, 0.04)),
+    "mohawk": (40, _mohawk()),
+}
+
+
 def body_parts():
     """(model name, joint, tint, tiers, solids) per drawn part: a "_x" part
     once (one mesh, drawn on both sides, its joint named for the left)."""
@@ -152,6 +252,17 @@ def body_parts():
     for name, (joint, tint, tiers, budget, solids) in BODY.items():
         out.append((name[:-2] if name.endswith("_x") else name, joint, tint, tiers.split(), solids))
     return out
+
+
+def hair_parts():
+    """(model name, joint, tint, tiers, solids) per hair style (PC only)."""
+    return [("hair_" + name, "head", "hair", ["pc"], solids) for name, (budget, solids) in HAIR.items()]
+
+
+def solid_parts(tier):
+    """The body's parts on `tier` and, on the PC, every hair style: what
+    can touch the turf."""
+    return [p for p in body_parts() + hair_parts() if tier in p[3]]
 
 
 def mirror_pose(pose):
@@ -426,9 +537,7 @@ def lowest(pose, root, tier):
             o = _qrot(pq, t)
             frames[name] = (_qmul(pq, q), (pt[0] + o[0], pt[1] + o[1], pt[2] + o[2]))
     low = 1e9
-    for name, joint, tint, tiers, solids in body_parts():
-        if tier not in tiers:
-            continue
+    for name, joint, tint, tiers, solids in solid_parts(tier):
         sides = [joint] + ([joint[:-2] + "_r"] if joint.endswith("_l") else [])
         for j in sides:
             q, t = frames[j]
@@ -468,9 +577,7 @@ def frames_of(quats, root):
 def tier_points(tier):
     """(joint, corner) of every solid of `tier`'s parts, both sides."""
     pts = []
-    for name, joint, tint, tiers, solids in body_parts():
-        if tier not in tiers:
-            continue
+    for name, joint, tint, tiers, solids in solid_parts(tier):
         sides = [joint] + ([joint[:-2] + "_r"] if joint.endswith("_l") else [])
         for j in sides:
             for so in solids:
@@ -556,9 +663,7 @@ def rust_source():
             sides.append(joint[:-2] + "_r")
         for j in sides:
             parts.append((name, j, tint, tl, solids))
-    w("/// The body's parts (`BODY` in the clip source), both sides of each limb.")
-    w(f"pub const PARTS: [Part; {len(parts)}] = [")
-    for name, j, tint, tl, solids in parts:
+    def emit(name, j, tint, tl, solids):
         w("    Part {")
         w(f"        model: ModelId::from_path(\"models/se_{name}\"),")
         w(f"        joint: {NAMES.index(j)}, // {j}")
@@ -571,6 +676,19 @@ def rust_source():
                 so["y0"], so["y1"], so["w0"], so["d0"], so["w1"], so["d1"], so["cx"], so["cz"], sk))
         w("        ],")
         w("    },")
+
+    w("/// The body's parts (`BODY` in the clip source), both sides of each limb.")
+    w(f"pub const PARTS: [Part; {len(parts)}] = [")
+    for part in parts:
+        emit(*part)
+    w("];")
+    w("")
+    hair = hair_parts()
+    w("/// The PC's hair styles (`HAIR` in the clip source), in `HairStyle` order:")
+    w(f"/// {', '.join(n[5:] for n, *_ in hair)}.")
+    w(f"pub const HAIR: [Part; {len(hair)}] = [")
+    for name, joint, tint, tl, solids in hair:
+        emit(name, joint, tint, tl, solids)
     w("];")
     w("")
     for tier, const in (("pc", "CONTACTS_FULL"), ("near", "CONTACTS_LO")):

@@ -11,10 +11,12 @@ use crate::game::session::dress;
 use crate::render::anim::AnimState;
 use crate::render::clips_gen::ClipName;
 use crate::render::hud::upper;
-use crate::render::{self, Look, SKIN_TONES, rgb};
+use crate::render::{self, Hair, HairStyle, Look, SKIN_TONES, rgb};
 use crate::sim::engine::{N, SIDE, side_of};
 use crate::sim::league::ROUNDS;
-use crate::sim::team::{self, ATTRS, CLUBS, Crest, FORMATIONS, PlayerRec, SURNAMES, TEAMS};
+use crate::sim::team::{
+    self, ATTRS, Appearance, CLUBS, Crest, FORMATIONS, PlayerRec, SURNAMES, TEAMS,
+};
 use crate::ui::i18n::{Lang, S, pos_short, tr};
 use crate::ui::{Size, Ui, pal};
 use trino_core::{Color, Rect, Renderer, Screen, TextAlign, TextBuf, Vec2};
@@ -69,6 +71,7 @@ fn look_of(g: &SolidElevenGame, i: usize) -> Look {
         if keeper { c.gk } else { c.home.socks },
         SKIN_TONES[p.skin as usize % 8],
     )
+    .with_hair(Hair::of(p.style, p.hair))
 }
 
 /// A tiny portrait: skin, hair, shirt (list rows).
@@ -76,10 +79,9 @@ fn portrait(ui: &mut Ui, x: f32, y: f32, look: &Look) {
     ui.fill(Rect::new(x, y, 16.0, 16.0), Color::rgb(40, 52, 110));
     ui.fill(Rect::new(x + 2.0, y + 11.0, 12.0, 5.0), look.shirt);
     ui.fill(Rect::new(x + 5.0, y + 3.0, 6.0, 8.0), look.skin);
-    ui.fill(
-        Rect::new(x + 5.0, y + 2.0, 6.0, 2.0),
-        Color::rgb(50, 36, 28),
-    );
+    if look.hair.style != HairStyle::Bald {
+        ui.fill(Rect::new(x + 5.0, y + 2.0, 6.0, 2.0), look.hair.color);
+    }
 }
 
 fn crest_of(ui: &mut Ui, x: f32, y: f32, w: f32, c: u8, label: bool) {
@@ -252,15 +254,55 @@ fn idle_anim(t: f32) -> AnimState {
     a
 }
 
-/// Skin tones of the ceremony's players.
-const CEREMONY_SKINS: [u8; 22] = [
-    1, 3, 2, 5, 0, 6, 4, 7, 2, 1, 3, 2, 5, 0, 6, 4, 7, 2, 1, 3, 2, 5,
-];
+/// How the ceremony's players look: the five shown (9, 7, 10, 4, 2) each
+/// with a hair style of his own.
+const CEREMONY_PEOPLE: [Appearance; 22] = {
+    // (skin, hair color, style) per player.
+    const L: [(u8, u8, u8); 22] = [
+        (1, 0, 0),
+        (3, 1, 0),
+        (5, 0, 5),
+        (5, 0, 1),
+        (0, 4, 4),
+        (6, 0, 2),
+        (4, 1, 0),
+        (7, 0, 2),
+        (2, 2, 0),
+        (1, 1, 0),
+        (2, 3, 3),
+        (2, 0, 0),
+        (5, 0, 1),
+        (0, 3, 0),
+        (6, 0, 2),
+        (4, 1, 5),
+        (7, 0, 1),
+        (2, 2, 0),
+        (1, 3, 3),
+        (3, 1, 0),
+        (2, 0, 4),
+        (5, 0, 2),
+    ];
+    let mut out = [Appearance {
+        skin: 0,
+        hair: 0,
+        style: 0,
+    }; 22];
+    let mut i = 0;
+    while i < 22 {
+        out[i] = Appearance {
+            skin: L[i].0,
+            hair: L[i].1,
+            style: L[i].2,
+        };
+        i += 1;
+    }
+    out
+};
 
 /// Five players of `club` in its home kit: the captain first.
 fn ceremony_looks(club: u8) -> [Look; 5] {
     let other = if club == 0 { 1 } else { 0 };
-    let d = dress([club, other], &CEREMONY_SKINS);
+    let d = dress([club, other], &CEREMONY_PEOPLE);
     [d.looks[9], d.looks[7], d.looks[10], d.looks[4], d.looks[2]]
 }
 
@@ -1541,7 +1583,7 @@ fn edit(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
     }
     let hit = ui.rect(Rect::new(8.0, y - 1.0, 106.0, 26.0));
     g.hits.add(hit, Screen::Top, ATTRS as u8);
-    // Right: overall, radar, points left.
+    // Right: overall and points left, the radar, the hair.
     ui.panel(Rect::new(214.0, 34.0, 100.0, 176.0), pal::CYAN);
     ui.text(
         222.0,
@@ -1564,14 +1606,14 @@ fn edit(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
     radar_of(
         &mut ui,
         264.0,
-        116.0,
-        32.0,
+        96.0,
+        24.0,
         &p,
         Color::rgba(100, 220, 120, 210),
     );
     ui.text(
         264.0,
-        156.0,
+        124.0,
         tr(lang, S::PointsLeft),
         pal::DIM,
         Size::Small,
@@ -1581,7 +1623,7 @@ fn edit(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
     let _ = write!(b, "{}", p.available());
     ui.text(
         264.0,
-        168.0,
+        134.0,
         b.as_str(),
         if p.available() > 0 {
             pal::YELLOW
@@ -1591,6 +1633,48 @@ fn edit(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
         Size::Big,
         TextAlign::Center,
     );
+    // Hair: the style by name, then the colors.
+    let look = p.appearance();
+    for (row, y) in [(ATTRS + 1, 158.0f32), (ATTRS + 2, 182.0)] {
+        if g.cur.edit_attr == row {
+            ui.fill(
+                Rect::new(216.0, y - 1.0, 96.0, 24.0),
+                Color::rgba(30, 90, 150, 230),
+            );
+        }
+        let hit = ui.rect(Rect::new(216.0, y - 1.0, 96.0, 24.0));
+        g.hits.add(hit, Screen::Top, row as u8);
+    }
+    ui.text(
+        222.0,
+        158.0,
+        tr(lang, S::Hair),
+        pal::DIM,
+        Size::Small,
+        TextAlign::Left,
+    );
+    b.clear();
+    let style = tr(lang, S::hair_style(look.style as usize));
+    if g.cur.edit_attr == ATTRS + 1 {
+        let _ = write!(b, "< {style} >");
+    } else {
+        let _ = write!(b, "{style}");
+    }
+    ui.text(
+        264.0,
+        168.0,
+        b.as_str(),
+        pal::YELLOW,
+        Size::Small,
+        TextAlign::Center,
+    );
+    for (k, &c) in render::HAIR_COLORS.iter().enumerate() {
+        let rr = Rect::new(221.0 + k as f32 * 17.5, 186.0, 15.0, 16.0);
+        ui.fill(rr, c);
+        if look.hair as usize == k {
+            ui.border(rr, pal::CYAN, 1.0);
+        }
+    }
     footer(
         &mut ui,
         &[

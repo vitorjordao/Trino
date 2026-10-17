@@ -116,7 +116,7 @@ impl Career {
         });
         Career {
             user,
-            year: 2026,
+            year: FIRST_YEAR,
             round: 0,
             players,
             club_of,
@@ -419,6 +419,12 @@ impl Career {
         order
     }
 
+    /// A generated player's age in `year` (everyone ages a year a season,
+    /// up to 40).
+    pub fn age_in(generated: u8, year: u16) -> u8 {
+        (generated as u16 + year.saturating_sub(FIRST_YEAR)).min(40) as u8
+    }
+
     /// Start the next season: the table resets, money and squads carry on,
     /// everyone ages a year.
     pub fn new_season(&mut self) {
@@ -537,7 +543,9 @@ impl Career {
             w.u8(p.energy);
             w.u8(p.form as u8);
             w.u8(p.number);
-            w.u8(p.age);
+            // Version 3: the look in the byte that held the age (derived
+            // from the year: everyone ages together).
+            w.u8(p.appearance().byte());
         }
         w.bytes(&self.titles);
         let sum = checksum(&w.buf[..w.at]);
@@ -545,13 +553,14 @@ impl Career {
         w.at
     }
 
-    /// Restore a save (this version or version 1); also returns the
+    /// Restore a save (versions 1 to 3); also returns the
     /// settings bytes (a version 1 save's four, then zeros: the defaults).
     pub fn load(data: &[u8]) -> Option<(Career, [u8; SETTINGS_LEN])> {
         if data.len() < 6 || &data[..4] != b"SE11" || !(1..=SAVE_VERSION).contains(&data[4]) {
             return None;
         }
         let v1 = data[4] == 1;
+        let v3 = data[4] >= 3;
         let n = if v1 { SAVE_LEN_V1 } else { SAVE_LEN };
         if data.len() < n {
             return None;
@@ -604,7 +613,13 @@ impl Career {
             c.players[i].energy = r.u8().min(100);
             c.players[i].form = (r.u8() as i8).clamp(-5, 5);
             c.players[i].number = r.u8();
-            c.players[i].age = r.u8();
+            let b = r.u8();
+            if v3 {
+                c.players[i].set_appearance(team::Appearance::from_byte(b));
+                c.players[i].age = Career::age_in(c.players[i].age, year);
+            } else {
+                c.players[i].age = b;
+            }
         }
         if !v1 {
             for t in c.titles.iter_mut() {
@@ -615,12 +630,16 @@ impl Career {
     }
 }
 
+/// The first season's year.
+pub const FIRST_YEAR: u16 = 2026;
+
 /// The league winner's prize (coins).
 pub const CHAMPION_PRIZE: i32 = 6_000;
 
 /// Version 2 added the 16 settings bytes (controls, keeper, graphics) and
-/// the titles; version 1 saves still load.
-pub const SAVE_VERSION: u8 = 2;
+/// the titles; version 3 keeps each player's look (skin, hair) instead of
+/// his age, which follows from the year. Versions 1 and 2 still load.
+pub const SAVE_VERSION: u8 = 3;
 /// Settings bytes in a save (the game's `Settings::bytes`).
 pub const SETTINGS_LEN: usize = 16;
 /// Bytes a save uses (fixed layout).
@@ -897,7 +916,14 @@ mod tests {
             .unwrap();
         c.buy(i).unwrap();
         c.players[3].attrs[0] = 77;
+        c.players[7].set_appearance(team::Appearance {
+            skin: 7,
+            hair: 4,
+            style: 5,
+        });
         c.titles[4] = 2;
+        // A later season: the ages follow the year.
+        c.new_season();
         let mut buf = [0u8; SAVE_MAX];
         let st: [u8; SETTINGS_LEN] = core::array::from_fn(|k| k as u8 + 1);
         let n = c.save(st, &mut buf);
@@ -915,6 +941,32 @@ mod tests {
         assert!(Career::load(b"nope").is_none());
     }
 
+    /// Rewrite a version 3 image as version 1 or 2 did it: each player's
+    /// age where version 3 keeps his look.
+    fn with_ages(c: &Career, buf: &mut [u8; SAVE_MAX], n: usize, version: u8) {
+        let players = 4 + 1 + SETTINGS_LEN + 1 + 2 + 1 + 4 + TEAMS * 12 + 5 + 8;
+        for i in 0..PLAYERS {
+            buf[players + i * 11 + 10] = c.players[i].age;
+        }
+        buf[4] = version;
+        let sum = checksum(&buf[..n - 2]);
+        buf[n - 2..n].copy_from_slice(&sum.to_le_bytes());
+    }
+
+    /// A version 2 save (before the looks) loads with its ages and the
+    /// generated looks.
+    #[test]
+    fn a_version_2_save_still_loads() {
+        let mut c = Career::new(1, 7);
+        c.finish_round(None);
+        c.players[9].age = 33;
+        let mut buf = [0u8; SAVE_MAX];
+        let n = c.save([0; SETTINGS_LEN], &mut buf);
+        with_ages(&c, &mut buf, n, 2);
+        let (back, _) = Career::load(&buf[..n]).unwrap();
+        assert_eq!(back, c);
+    }
+
     /// A save from before the controls page (version 1: four settings
     /// bytes, no titles) loads, its settings padded with zeros (defaults).
     #[test]
@@ -923,6 +975,7 @@ mod tests {
         c.finish_round(Some((1, 1)));
         let mut buf = [0u8; SAVE_MAX];
         let n = c.save(core::array::from_fn(|k| k as u8 + 1), &mut buf);
+        with_ages(&c, &mut buf, n, 3);
         // Rewrite it as version 1.
         let mut v1 = Vec::new();
         v1.extend_from_slice(b"SE11");

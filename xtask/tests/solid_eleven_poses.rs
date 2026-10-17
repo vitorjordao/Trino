@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use solid_eleven::render::anim::AnimState;
 use solid_eleven::render::clips_gen::{CLIPS, ClipName};
 use solid_eleven::render::studio;
-use solid_eleven::render::{Detail, Look, SKIN_TONES};
+use solid_eleven::render::{Detail, HAIR_COLORS, Hair, HairStyle, Look, SKIN_TONES};
 use solid_eleven::sim::team::Rgb;
 use trino_platform_pc::SimProfile;
 
@@ -83,5 +83,99 @@ fn pose_sheets() {
             support::write_png(&path, w, h, &sheet);
             eprintln!("pose sheet: {}", path.display());
         }
+    }
+}
+
+/// Head close-ups for looking at the hair's fit: every style (rows) from
+/// the front, three-quarters, the side, the back and above, each with its
+/// own color and skin tone; then a lineup of every style in every color
+/// (three-quarters), on the PC body and the console heads.
+#[test]
+#[ignore = "writes PNGs for review; run with --ignored"]
+fn head_closeups() {
+    let out = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../target/solid_eleven_poses");
+    std::fs::create_dir_all(&out).unwrap();
+    let cell = (200u32, 200u32);
+    let views: [((f32, f32), (f32, f32)); 5] = [
+        ((0.0, 1.0), (0.0, 7.0)),
+        ((0.7, 0.714), (0.0, 7.0)),
+        ((1.0, 0.0), (0.0, 7.0)),
+        ((0.0, -1.0), (0.0, 7.0)),
+        ((0.0, 1.0), (5.0, 5.0)),
+    ];
+    let look = |skin: usize, style: usize, color: u8| {
+        Look::of(
+            Rgb(206, 32, 41),
+            Rgb(240, 240, 240),
+            Rgb(206, 32, 41),
+            SKIN_TONES[skin],
+        )
+        .with_hair(Hair::of(style as u8, color))
+    };
+    let shoot = |r: &mut trino_platform_pc::PcRenderer,
+                 detail: Detail,
+                 look: &Look,
+                 face: (f32, f32),
+                 cam: (f32, f32)| {
+        let a = AnimState::new(ClipName::Idle);
+        let pose = a.pose_masked(detail.mask());
+        studio::figure_framed(
+            r,
+            &pose,
+            look,
+            face,
+            detail,
+            cam,
+            true,
+            studio::Framing {
+                focus_y: 1.66,
+                fov: 0.085,
+            },
+        );
+        trino_core::Renderer::end_frame(r);
+        r.read_offscreen()
+    };
+    for (profile, tier, detail) in [
+        (SimProfile::Native, "pc", Detail::Full),
+        (SimProfile::N64, "n64", Detail::Near),
+    ] {
+        let mut r = support::renderer(profile, Some(cell));
+        // Every style from every side.
+        let styles = HairStyle::ALL.len();
+        let (w, h) = (cell.0 * views.len() as u32, cell.1 * styles as u32);
+        let mut sheet = vec![0u8; (w * h * 4) as usize];
+        for row in 0..styles {
+            let l = look([1, 6, 3, 2, 0, 5][row], row, [0, 0, 3, 1, 4, 0][row]);
+            for (col, (face, cam)) in views.iter().enumerate() {
+                let px = shoot(&mut r, detail, &l, *face, *cam);
+                blit(&mut sheet, w, cell, row, col, &px);
+            }
+        }
+        let path = out.join(format!("heads_{tier}.png"));
+        support::write_png(&path, w, h, &sheet);
+        eprintln!("head sheet: {}", path.display());
+        // Every style in every color.
+        let colors = HAIR_COLORS.len();
+        let (w, h) = (cell.0 * colors as u32, cell.1 * styles as u32);
+        let mut sheet = vec![0u8; (w * h * 4) as usize];
+        for row in 0..styles {
+            for col in 0..colors {
+                let l = look((row + col * 3) % 8, row, col as u8);
+                let px = shoot(&mut r, detail, &l, (0.7, 0.714), (0.6, 7.0));
+                blit(&mut sheet, w, cell, row, col, &px);
+            }
+        }
+        let path = out.join(format!("hair_lineup_{tier}.png"));
+        support::write_png(&path, w, h, &sheet);
+        eprintln!("hair lineup: {}", path.display());
+    }
+}
+
+fn blit(sheet: &mut [u8], w: u32, cell: (u32, u32), row: usize, col: usize, px: &[u8]) {
+    for y in 0..cell.1 {
+        let src = (y * cell.0 * 4) as usize;
+        let dst = (((row as u32 * cell.1 + y) * w + col as u32 * cell.0) * 4) as usize;
+        sheet[dst..dst + (cell.0 * 4) as usize]
+            .copy_from_slice(&px[src..src + (cell.0 * 4) as usize]);
     }
 }

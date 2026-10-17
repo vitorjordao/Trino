@@ -31,7 +31,7 @@ pub mod ui;
 
 pub use game::app::SolidElevenGame;
 use sim::engine::{N, SIDE, Setup, SideSetup};
-use sim::team::{self, CLUBS};
+use sim::team::{self, Appearance, CLUBS};
 
 /// A quick match between two clubs with their generated squads.
 pub fn quick_setup(
@@ -40,16 +40,16 @@ pub fn quick_setup(
     seed: u32,
     half_secs: u32,
     humans: [bool; 2],
-) -> (Setup, [u8; N], [u8; N]) {
+) -> (Setup, [u8; N], [Appearance; N]) {
     let mut names = [0u8; N];
-    let mut skins = [0u8; N];
-    let side = |c: usize, names: &mut [u8; N], skins: &mut [u8; N], s: usize| SideSetup {
+    let mut looks = [Appearance::default(); N];
+    let side = |c: usize, names: &mut [u8; N], looks: &mut [Appearance; N], s: usize| SideSetup {
         club: c as u8,
         tactics: CLUBS[c].tactics,
         players: core::array::from_fn(|k| {
             let p = team::generate_player(c, k);
             names[s * SIDE + k] = p.surname;
-            skins[s * SIDE + k] = p.skin;
+            looks[s * SIDE + k] = p.appearance();
             ((c * team::SQUAD + k) as u16, p.number, p.attrs)
         }),
         morale: 50,
@@ -64,8 +64,8 @@ pub fn quick_setup(
         }),
         bench_n: 5,
     };
-    let a = side(home, &mut names, &mut skins, 0);
-    let b = side(away, &mut names, &mut skins, 1);
+    let a = side(home, &mut names, &mut looks, 0);
+    let b = side(away, &mut names, &mut looks, 1);
     (
         Setup {
             sides: [a, b],
@@ -77,7 +77,7 @@ pub fn quick_setup(
             difficulty: 1,
         },
         names,
-        skins,
+        looks,
     )
 }
 

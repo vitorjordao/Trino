@@ -268,6 +268,18 @@ fn a_career_round_trip_survives_the_save() {
         "only the freed points"
     );
     assert!(d.g.world.players[i].total() <= d.g.world.players[i].budget);
+    // His look: the skin tone, the hair style and its color (rows 7-9).
+    let look = d.g.world.players[i].appearance();
+    d.presses(Button::DpadDown, 6);
+    d.presses(Button::DpadRight, 2);
+    d.press(Button::DpadDown);
+    d.presses(Button::DpadRight, 2);
+    d.press(Button::DpadDown);
+    d.press(Button::DpadLeft);
+    let edited = d.g.world.players[i].appearance();
+    assert_eq!(edited.skin, (look.skin + 2) % 8);
+    assert_eq!(edited.style, (look.style + 2) % 6);
+    assert_eq!(edited.hair, (look.hair + 4) % 5);
     d.press(Button::A);
     d.press(Button::B);
     d.press(Button::B);
@@ -279,6 +291,11 @@ fn a_career_round_trip_survives_the_save() {
     e.idle(1);
     assert!(e.g.career_on);
     assert_eq!(e.g.world, saved);
+    assert_eq!(
+        e.g.world.players[i].appearance(),
+        edited,
+        "the look is saved"
+    );
     assert_eq!(e.g.world, {
         let mut buf = [0u8; crate::sim::league::SAVE_MAX];
         let n = saved.save(e.g.settings.bytes(), &mut buf);

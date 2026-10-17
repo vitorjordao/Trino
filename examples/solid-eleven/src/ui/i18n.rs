@@ -185,6 +185,30 @@ pub enum S {
     OtherKeys,
     Action,
     Button,
+    Hair,
+    HairCrop,
+    HairBuzz,
+    HairCurly,
+    HairLong,
+    HairMohawk,
+    HairBald,
+}
+
+impl S {
+    /// The last string id (tests walk the enum up to it).
+    pub const LAST: S = S::HairBald;
+
+    /// A hair style's name, by [`crate::render::HairStyle`] index.
+    pub fn hair_style(i: usize) -> S {
+        [
+            S::HairCrop,
+            S::HairBuzz,
+            S::HairCurly,
+            S::HairLong,
+            S::HairMohawk,
+            S::HairBald,
+        ][i % 6]
+    }
 }
 
 /// The text of `s` in `lang`.
@@ -365,6 +389,13 @@ pub fn tr(lang: Lang, s: S) -> &'static str {
         S::OtherKeys => ("OTHER KEYS", "OUTRAS TECLAS"),
         S::Action => ("ACTION", "AÇÃO"),
         S::Button => ("BUTTON", "BOTÃO"),
+        S::Hair => ("HAIR", "CABELO"),
+        S::HairCrop => ("SHORT", "CURTO"),
+        S::HairBuzz => ("BUZZ CUT", "RASPADO"),
+        S::HairCurly => ("CURLY", "CACHEADO"),
+        S::HairLong => ("LONG", "LONGO"),
+        S::HairMohawk => ("MOHAWK", "MOICANO"),
+        S::HairBald => ("BALD", "CARECA"),
     };
     match lang {
         Lang::En => en,
@@ -399,7 +430,7 @@ mod tests {
         let mut n = 0;
         for i in 0..200u8 {
             // Walk the enum through its discriminants.
-            if i as usize > S::Substitute as usize {
+            if i as usize > S::LAST as usize {
                 break;
             }
             let s: S = unsafe { core::mem::transmute(i) };
@@ -415,6 +446,6 @@ mod tests {
             }
             n += 1;
         }
-        assert!(n > 100);
+        assert_eq!(n, S::LAST as usize + 1);
     }
 }

@@ -25,7 +25,7 @@ use crate::sim::engine::{Act, EventKind, Match, N, Phase, SIDE, side_of};
 use crate::sim::fx::Fx;
 use crate::sim::pitch::{HALF_LEN, HALF_WID};
 use crate::sim::team::{CLUBS, Rgb, Role};
-use anim::{AnimState, Pose, body_matrix, joint, joint_matrices, mask};
+use anim::{AnimState, Pose, Tint, body_matrix, joint, joint_matrices, mask};
 use clips_gen::{ClipName, JOINTS};
 use trino_core::{
     BillboardParams, Camera3, Color, DEFAULT_LIGHT, Light, LightTier, Mat34, Material, ModelId,
@@ -65,6 +65,14 @@ pub const M_STAND_END: [ModelId; 2] = [
     model("models/se_stand_end_b"),
 ];
 pub const M_HEAD: ModelId = model("models/se_head");
+/// The console heads by [`Hair::console_head`]: dark hair, light hair,
+/// shaved (the hair is baked into the one wedge, so the head stays one
+/// draw on the RSP).
+pub const M_CONSOLE_HEADS: [ModelId; 3] = [
+    M_HEAD,
+    model("models/se_head_light"),
+    model("models/se_head_shaved"),
+];
 pub const M_TORSO: ModelId = model("models/se_torso");
 pub const M_SHORTS: ModelId = model("models/se_shorts");
 pub const M_ARM: ModelId = model("models/se_arm");
@@ -168,6 +176,82 @@ pub const SKIN_TONES: [Color; 8] = [
     Color::rgb(78, 50, 34),
 ];
 
+/// Hair colors a player's `hair` index picks: black, dark brown, brown,
+/// blond, red.
+pub const HAIR_COLORS: [Color; 5] = [
+    Color::rgb(34, 28, 26),
+    Color::rgb(72, 48, 32),
+    Color::rgb(122, 84, 50),
+    Color::rgb(214, 178, 106),
+    Color::rgb(156, 70, 36),
+];
+
+/// Hair styles: the PC's [`clips_gen::HAIR`] parts in order, then bald.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum HairStyle {
+    Crop,
+    Buzz,
+    Curly,
+    Long,
+    Mohawk,
+    Bald,
+}
+
+impl HairStyle {
+    pub const ALL: [HairStyle; 6] = [
+        HairStyle::Crop,
+        HairStyle::Buzz,
+        HairStyle::Curly,
+        HairStyle::Long,
+        HairStyle::Mohawk,
+        HairStyle::Bald,
+    ];
+
+    pub fn from_index(i: u8) -> HairStyle {
+        HairStyle::ALL[i as usize % HairStyle::ALL.len()]
+    }
+
+    /// The PC's hair part (none for bald).
+    pub fn part(self) -> Option<&'static anim::Part> {
+        clips_gen::HAIR.get(self as usize)
+    }
+}
+
+/// A player's hair: a style and a color.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Hair {
+    pub style: HairStyle,
+    pub color: Color,
+}
+
+impl Hair {
+    /// Short dark hair (officials, and looks made without a player).
+    pub const DEFAULT: Hair = Hair {
+        style: HairStyle::Crop,
+        color: HAIR_COLORS[0],
+    };
+
+    /// A player's hair from the database's indices.
+    pub fn of(style: u8, color: u8) -> Hair {
+        Hair {
+            style: HairStyle::from_index(style),
+            color: HAIR_COLORS[color as usize % HAIR_COLORS.len()],
+        }
+    }
+
+    /// Which [`M_CONSOLE_HEADS`] head the consoles draw: shaved for the
+    /// bald, light for blond and red hair, dark otherwise.
+    pub fn console_head(self) -> usize {
+        if self.style == HairStyle::Bald {
+            2
+        } else if self.color == HAIR_COLORS[3] || self.color == HAIR_COLORS[4] {
+            1
+        } else {
+            0
+        }
+    }
+}
+
 pub fn rgb(c: Rgb) -> Color {
     Color::rgb(c.0, c.1, c.2)
 }
@@ -232,6 +316,7 @@ pub struct Look {
     pub shorts: Color,
     pub socks: Color,
     pub skin: Color,
+    pub hair: Hair,
     /// The consoles' baked leg for this shorts and socks pair
     /// ([`crate::sim::team::LEG_KITS`]), or [`NO_KIT_LEGS`]: then the legs
     /// are tinted parts.
@@ -249,8 +334,13 @@ impl Look {
             shorts: rgb(shorts),
             socks: rgb(socks),
             skin,
+            hair: Hair::DEFAULT,
             legs: crate::sim::team::leg_kit(shorts, socks).unwrap_or(NO_KIT_LEGS),
         }
+    }
+
+    pub fn with_hair(self, hair: Hair) -> Look {
+        Look { hair, ..self }
     }
 }
 
@@ -779,6 +869,7 @@ pub(crate) fn draw_body(
         plain(mul(look.shirt, env)),
         plain(mul(look.shorts, env)),
         plain(mul(look.socks, env)),
+        plain(mul(look.hair.color, env)),
     ];
     let bit = detail.tier();
     // Consoles draw a leg as one mesh with the kit's colors baked in.
@@ -791,11 +882,27 @@ pub(crate) fn draw_body(
         if kit_legs && leg {
             continue;
         }
+        // Consoles bake the hair into the head: one of three heads.
+        let model = if p.model == M_HEAD {
+            M_CONSOLE_HEADS[look.hair.console_head()]
+        } else {
+            p.model
+        };
         r.draw_model_matrix(
-            p.model,
+            model,
             &j[p.joint],
             Material::VertexLit,
             &colors[p.tint as usize],
+        );
+    }
+    if detail == Detail::Full
+        && let Some(h) = look.hair.style.part()
+    {
+        r.draw_model_matrix(
+            h.model,
+            &j[h.joint],
+            Material::VertexLit,
+            &colors[Tint::Hair as usize],
         );
     }
     if kit_legs {

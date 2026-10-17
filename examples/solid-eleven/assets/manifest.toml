@@ -405,6 +405,13 @@ file = "models/ball.glb"
 [models.se_head]
 file = "models/head.glb"
 
+# The console heads with light hair and a shaved crown (`render::Hair`).
+[models.se_head_light]
+file = "models/head_light.glb"
+
+[models.se_head_shaved]
+file = "models/head_shaved.glb"
+
 [models.se_torso]
 file = "models/torso.glb"
 
@@ -584,6 +591,27 @@ platforms = ["pc"]
 
 [models.se_head_hd]
 file = "models/head_hd.glb"
+platforms = ["pc"]
+
+# The PC's hair styles (`render::HairStyle`), tinted with the hair's color.
+[models.se_hair_crop]
+file = "models/hair_crop.glb"
+platforms = ["pc"]
+
+[models.se_hair_buzz]
+file = "models/hair_buzz.glb"
+platforms = ["pc"]
+
+[models.se_hair_curly]
+file = "models/hair_curly.glb"
+platforms = ["pc"]
+
+[models.se_hair_long]
+file = "models/hair_long.glb"
+platforms = ["pc"]
+
+[models.se_hair_mohawk]
+file = "models/hair_mohawk.glb"
 platforms = ["pc"]
 
 [models.se_torso_hd]

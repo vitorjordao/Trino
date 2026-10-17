@@ -422,7 +422,7 @@ const AO: trino_core::AmbientOcclusion = trino_core::AmbientOcclusion {
     radius: 0.55 * WORLD,
     intensity: 1.0,
     bias: 0.03 * WORLD,
-    quality: trino_core::AoQuality::Medium,
+    quality: trino_core::AoQuality::Low,
 };
 
 /// Declare the frame's ambient occlusion (cleared by `begin_frame`): on

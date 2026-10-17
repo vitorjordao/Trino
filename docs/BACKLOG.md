@@ -151,8 +151,16 @@ shipping a 3D game first**, then by cost:
 16. **Solid Eleven follow-ups** (S–M each, from issue #39).
     - Local two-player matches: the sim takes two pads already (`human: [bool; 2]`), but
       no menu offers it.
-    - The N64 frame has 2.4 ms of headroom under its 33.3 ms gate (30.9 ms): the sim
-      update (7.1 ms) is the next thing to cut.
+    - The N64 frame has 2.6 ms of headroom under its 33.3 ms gate (30.7 ms over eight
+      code layouts): the sim update (7.2 ms) is the next thing to cut.
+    - The PC's SSAO over the multisampled depth costs 4.5 ms at 1080p on an AMD iGPU
+      (2.7 ms single-sampled): a cheaper depth for the AO (a resolve in the scene pass)
+      or a separate AO setting.
+    - The console heads show the hair on the top and the back only (one 14-triangle
+      wedge); the PC's styles have no console counterpart beyond dark, light and shaved.
+    - A check that no pitch line runs through a player's screen box in the menus' 3D
+      backdrops (that artifact came back twice).
+    - Nothing has run on real hardware yet.
 
 ## Engineering hygiene (ongoing)
 

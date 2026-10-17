@@ -295,7 +295,7 @@ fn solid_eleven_shots() {
 }
 
 /// The PC's frame time on this machine: an AI match at 1920x1080 on the
-/// native profile, each frame's update, render and GPU work (`wait_gpu`).
+/// native profile (4x MSAA and SSAO; `TRINO_MSAA=0`, `TRINO_AO=0` drop them), each frame's update, render and GPU work (`wait_gpu`).
 /// The clear day and the heaviest PC tier (dusk, rain, wet look, glows).
 /// A measurement for `docs/SOLID_ELEVEN.md`, not a gate:
 ///
@@ -308,6 +308,10 @@ fn pc_frame_time() {
     let mut r = renderer(SimProfile::Native, Some((1920, 1080)));
     // The PC's best look: multisampled (TRINO_MSAA=0 measures without).
     r.set_msaa(std::env::var("TRINO_MSAA").as_deref() != Ok("0"));
+    // TRINO_AO=0 measures without the screen-space AO.
+    if std::env::var("TRINO_AO").as_deref() == Ok("0") {
+        r.set_ao_view(trino_platform_pc::AoView::Off);
+    }
     println!("adapter: {}, msaa {}x", r.adapter_info(), r.msaa());
     for (name, sky, rain) in [("day", Sky::Day, false), ("dusk+rain", Sky::Dusk, true)] {
         let mut g =

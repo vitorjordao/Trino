@@ -7,16 +7,16 @@ use super::sound::{self, Sfx};
 use crate::render::anim::AnimState;
 use crate::render::clips_gen::ClipName;
 use crate::render::hud::{BANNER_SECS, Banner, SideColors};
-use crate::render::{self, CamState, Guides, Hair, Look, MatchView, SKIN_TONES, Sky, rgb};
+use crate::render::{self, CamState, Guides, Hair, Look, MatchView, SKIN_TONES, Sky, WORLD, rgb};
 use crate::sim::ai;
 use crate::sim::ball::{self, DT};
-use crate::sim::engine::{EventKind, KickKind, Match, N, Pad, Phase, Setup, side_of};
+use crate::sim::engine::{Act, EventKind, KickKind, Match, N, Pad, Phase, Setup, side_of};
 use crate::sim::fx::{Fx, V2};
 use crate::sim::team::Appearance;
 use crate::sim::team::{CLUBS, Rgb};
 use crate::ui::Ui;
 use crate::ui::i18n::{Lang, S};
-use trino_core::{Audio, InputState, Quat, Renderer, Vec2, Vec3};
+use trino_core::{Audio, Color, Emitter, InputState, ParticleSystem, Quat, Renderer, Vec2, Vec3};
 
 /// Seconds of sim per tick.
 const TICK: f32 = 1.0 / ball::HZ as f32;
@@ -83,7 +83,32 @@ pub struct Session {
     seen: u32,
     prev_officials: [(f32, f32); 3],
     prev_ball: Vec3,
+    /// Turf kicked up where a kick or a tackle starts and along a slide
+    /// (visual only; the PC tier draws it).
+    pub turf: ParticleSystem<TURF_MAX>,
+    was_kicking: [bool; N],
 }
+
+/// The most turf bits in the air at once.
+pub const TURF_MAX: usize = 64;
+
+/// Turf bits: green flecks thrown up and falling back (meters scaled to
+/// the drawing scale).
+const TURF: Emitter = Emitter {
+    sprite: render::S_CONFETTI,
+    rate: 0.0,
+    // Slowed by the air: every fleck lands as it dies (the slowest, most
+    // tilted one is up for 0.51 s).
+    life: (0.3, 0.5),
+    speed: (1.4 * WORLD, 2.6 * WORLD),
+    direction: Vec3::new(0.0, 1.0, 0.0),
+    spread: 0.6,
+    gravity: Vec3::new(0.0, -4.5 * WORLD, 0.0),
+    size: (0.14 * WORLD, 0.08 * WORLD),
+    color: (Color::rgba(84, 138, 46, 255), Color::rgba(70, 104, 38, 0)),
+    frames: 0,
+    frame_size: Vec2::ZERO,
+};
 
 impl Session {
     pub fn new(setup: &Setup, dress: &Dress, names: [u8; N], sky: Sky) -> Session {
@@ -124,6 +149,8 @@ impl Session {
             seen: 0,
             prev_officials: officials,
             prev_ball: Vec3::ZERO,
+            turf: ParticleSystem::new(TURF, 0x7EAF),
+            was_kicking: [false; N],
         }
     }
 
@@ -276,6 +303,21 @@ impl Session {
         for i in 0..N {
             render::pick_clip(&self.m, i, dt, &mut v.anims[i]);
         }
+        // Turf: a burst at the foot where a kick or a tackle starts, a
+        // spray along a slide.
+        for i in 0..N {
+            let p = &self.m.players[i];
+            let kick = matches!(p.act, Act::Kick { .. } | Act::Tackle { .. });
+            let slide = matches!(p.act, Act::Slide { .. });
+            if (kick && !self.was_kicking[i]) || slide {
+                let (fx, fz) = (p.face.x.to_f32(), p.face.y.to_f32());
+                let at = to3(p.pos) + Vec3::new(fx, 0.0, fz) * 0.35;
+                self.turf.origin = Vec3::new(at.x, 0.02, at.z) * WORLD;
+                self.turf.burst(if slide { 1 } else { 10 });
+            }
+            self.was_kicking[i] = kick;
+        }
+        self.turf.update(dt);
         for k in 0..3 {
             render::pick_official_clip(&self.m, k, self.prev_officials[k], dt, &mut v.anims[N + k]);
             self.prev_officials[k] = (
@@ -353,6 +395,9 @@ impl Session {
 
     pub fn render(&self, r: &mut dyn Renderer, screen: Vec2, lang: Lang) {
         render::draw_match(r, &self.m, &self.view, screen.x / screen.y.max(1.0));
+        if render::hifi(r, self.view.retro) {
+            self.turf.draw(r);
+        }
         let mut ui = Ui::new(r, screen);
         crate::render::hud::draw(
             &mut ui,
@@ -379,4 +424,109 @@ fn mul_q(a: Quat, b: Quat) -> Quat {
         a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
         a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::selftest::NullRenderer;
+
+    struct Mute;
+    impl Audio for Mute {
+        fn play_sound(&mut self, _: trino_core::SoundId) {}
+        fn play_music(&mut self, _: trino_core::MusicId, _: bool) {}
+        fn stop_music(&mut self) {}
+        fn set_master_volume(&mut self, _: f32) {}
+    }
+
+    /// Counts the turf's billboards (the confetti sprite).
+    struct Count {
+        caps: trino_core::Caps,
+        turf: usize,
+    }
+
+    impl Renderer for Count {
+        fn caps(&self) -> &trino_core::Caps {
+            &self.caps
+        }
+        fn begin_frame(&mut self, _: trino_core::Color) {}
+        fn draw_sprite(&mut self, _: trino_core::SpriteId, _: Vec2, _: &trino_core::SpriteParams) {}
+        fn draw_model(
+            &mut self,
+            _: trino_core::ModelId,
+            _: &trino_core::Transform3,
+            _: trino_core::Material,
+            _: &trino_core::ModelParams,
+        ) {
+        }
+        fn draw_billboard(
+            &mut self,
+            s: trino_core::SpriteId,
+            _: Vec3,
+            _: &trino_core::BillboardParams,
+        ) {
+            if s == render::S_CONFETTI {
+                self.turf += 1;
+            }
+        }
+        fn end_frame(&mut self) {}
+        fn measure_text(&self, _: trino_core::FontId, t: &str, scale: f32) -> Vec2 {
+            NullRenderer { caps: self.caps }.measure_text(trino_core::FontId(0), t, scale)
+        }
+    }
+
+    /// Kicks and tackles throw up turf that falls back and dies; the PC
+    /// tier draws it, the consoles (and the PC's retro look) never do.
+    #[test]
+    fn kicks_throw_up_turf_on_the_pc_tier_only() {
+        let (setup, names, people) = crate::quick_setup(0, 1, 3, 120, [false, false]);
+        let d = dress([0, 1], &people);
+        let mut s = Session::new(&setup, &d, names, Sky::Day);
+        let mut audio = Mute;
+        let (mut most, mut frames_with) = (0, 0);
+        for _ in 0..60 * 40 {
+            s.update(
+                &InputState::default(),
+                &InputState::default(),
+                &mut audio,
+                1.0 / 60.0,
+                (0, 0, false),
+            );
+            most = most.max(s.turf.len());
+            if !s.turf.is_empty() {
+                frames_with += 1;
+                for p in s.turf.particles() {
+                    assert!(p.pos.y > -0.05 * WORLD, "turf under the pitch");
+                }
+            }
+        }
+        assert!(most > 0 && most <= TURF_MAX);
+        assert!(frames_with > 60, "turf in only {frames_with} frames");
+        assert!(frames_with < 60 * 40, "turf never settles");
+        // Drawn on the PC tier only.
+        while s.turf.is_empty() {
+            s.update(
+                &InputState::default(),
+                &InputState::default(),
+                &mut audio,
+                1.0 / 60.0,
+                (0, 0, false),
+            );
+        }
+        let screen = Vec2::new(320.0, 240.0);
+        let mut pc = Count {
+            caps: trino_core::Caps::PC,
+            turf: 0,
+        };
+        s.render(&mut pc, screen, Lang::En);
+        assert_eq!(pc.turf, s.turf.len());
+        for caps in [trino_core::Caps::N64, trino_core::Caps::N3DS] {
+            let mut console = Count { caps, turf: 0 };
+            s.render(&mut console, screen, Lang::En);
+            assert_eq!(console.turf, 0);
+        }
+        s.view.retro = true;
+        s.render(&mut pc, screen, Lang::En);
+        assert_eq!(pc.turf, s.turf.len(), "the retro look draws none");
+    }
 }

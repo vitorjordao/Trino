@@ -261,6 +261,24 @@ fn solid_eleven_shots() {
                 cam.back = 6.5;
                 g.render(&mut r);
                 save(&r, &dir, &format!("closeup_{tag}"));
+                // Turf kicked up (the PC tier): play on to a kick, look
+                // at it from close.
+                let mut a = NullAudio;
+                for _ in 0..60 * 20 {
+                    g.update(&InputState::default(), &mut a, 1.0 / 60.0);
+                    if g.session.as_ref().unwrap().turf.len() >= 6 {
+                        break;
+                    }
+                }
+                let s = g.session.as_mut().unwrap();
+                if let Some(p) = s.turf.particles().first() {
+                    let at = p.pos * 64.0;
+                    s.view.cam.focus = trino_core::Vec3::new(at.x, 0.7, at.z);
+                    s.view.cam.height = 1.6;
+                    s.view.cam.back = 5.5;
+                    g.render(&mut r);
+                    save(&r, &dir, &format!("turf_{tag}"));
+                }
             }
             if matches!(scene, "play" | "harbour" | "park") {
                 // The ground itself: low and wide across the pitch.

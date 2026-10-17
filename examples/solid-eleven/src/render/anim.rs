@@ -318,6 +318,9 @@ pub struct AnimState {
     pub prev_mirror: bool,
     pub fade: f32,
     pub fade_len: f32,
+    /// A smoothed speed (m/s), for bodies whose speed is measured from
+    /// their positions (the officials).
+    pub speed: f32,
 }
 
 /// Crossfade length.
@@ -337,6 +340,7 @@ impl AnimState {
             prev_mirror: false,
             fade: 0.0,
             fade_len: FADE,
+            speed: 0.0,
         }
     }
 

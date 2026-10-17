@@ -398,110 +398,118 @@ fn name_of(p: &Part) -> String {
     format!("{:?}@{joint}", p.tint)
 }
 
-fn check(tier_bit: u8) -> Report {
-    let body = Body::new(tier_bit);
-    let mut rep = Report::new();
-    let rest = body.matrices(&Pose::REST, true);
-    let n = body.parts.len();
-    let adjacent = |a: usize, b: usize| parent(a) == b || parent(b) == a;
-    // The joint two adjacent joints share (the child's pivot).
-    let child = |a: usize, b: usize| if parent(a) == b { a } else { b };
+impl Checker {
+    /// The body of `tier_bit`, its static rules (1, and overlaps at rest)
+    /// noted in `rep`.
+    fn new(tier_bit: u8, rep: &mut Report) -> Checker {
+        let body = Body::new(tier_bit);
 
-    // 1. Attached: each joint's pivot inside its parent's parts and its own.
-    for j in 0..JOINTS {
-        if body.mask & (1 << j) == 0 || parent(j) == usize::MAX {
-            continue;
-        }
-        if body.tint_of_joint(j).is_none() {
-            continue;
-        }
-        let pivot = rest[j].transform_point(Vec3::ZERO);
-        // Inside the parent; on or inside the child (an arm may end at it).
-        let up = body.depth_joint(&rest, parent(j), pivot);
-        let own = body.depth_joint(&rest, j, pivot);
-        note(&mut rep, 1, "rest", (0.005 - up).max(-0.001 - own), || {
-            format!("joint {j} pivot depth {up:.3} in its parent, {own:.3} in its own parts")
-        });
-    }
+        let rest = body.matrices(&Pose::REST, true);
+        let n = body.parts.len();
+        let adjacent = |a: usize, b: usize| parent(a) == b || parent(b) == a;
+        // The joint two adjacent joints share (the child's pivot).
+        let child = |a: usize, b: usize| if parent(a) == b { a } else { b };
 
-    // Which samples are meant to be covered at rest: inside their own
-    // part's other solids, a part on the same joint, or the next joint's
-    // parts close to the bend. Anything else inside another part at rest
-    // is an overlap.
-    let mut hidden = vec![false; body.samples.len()];
-    for (si, s) in body.samples.iter().enumerate() {
-        let p = &body.parts[s.part];
-        let w = rest[p.joint].transform_point(s.local);
-        let own = body.planes[s.part]
-            .iter()
-            .enumerate()
-            .filter(|&(k, _)| k != s.solid)
-            .map(|(_, pl)| depth_in(pl, s.local))
-            .fold(-1.0, f32::max);
-        hidden[si] = own >= 0.003;
-        for q in 0..n {
-            if q == s.part {
+        // 1. Attached: each joint's pivot inside its parent's parts and its own.
+        for j in 0..JOINTS {
+            if body.mask & (1 << j) == 0 || parent(j) == usize::MAX {
                 continue;
             }
-            let pq = &body.parts[q];
-            let d = body.depth(&rest, q, w);
-            if d < 0.003 {
+            if body.tint_of_joint(j).is_none() {
                 continue;
             }
-            let near_bend = adjacent(p.joint, pq.joint) && {
-                let pivot = rest[child(p.joint, pq.joint)].transform_point(Vec3::ZERO);
-                len(w - pivot) <= zone(child(p.joint, pq.joint))
-            };
-            if pq.joint == p.joint || near_bend {
-                hidden[si] = true;
-            }
+            let pivot = rest[j].transform_point(Vec3::ZERO);
+            // Inside the parent; on or inside the child (an arm may end at it).
+            let up = body.depth_joint(&rest, parent(j), pivot);
+            let own = body.depth_joint(&rest, j, pivot);
+            note(rep, 1, "rest", (0.005 - up).max(-0.001 - own), || {
+                format!("joint {j} pivot depth {up:.3} in its parent, {own:.3} in its own parts")
+            });
         }
-    }
-    // A plug: past the pivot and inside the parent at rest, deeper than
-    // the seam (the band along the parent's surface where a limb comes out
-    // and may show more as it turns: a side-raised arm's armpit).
-    let plug: Vec<bool> = body
-        .samples
-        .iter()
-        .map(|s| {
+
+        // Which samples are meant to be covered at rest: inside their own
+        // part's other solids, a part on the same joint, or the next joint's
+        // parts close to the bend. Anything else inside another part at rest
+        // is an overlap.
+        let mut hidden = vec![false; body.samples.len()];
+        for (si, s) in body.samples.iter().enumerate() {
             let p = &body.parts[s.part];
-            s.plug && {
-                let w = rest[p.joint].transform_point(s.local);
-                body.depth_joint(&rest, parent(p.joint), w) >= SEAM
-            }
-        })
-        .collect();
-    for (h, &p) in hidden.iter_mut().zip(&plug) {
-        *h |= p;
-    }
-    for (si, s) in body.samples.iter().enumerate() {
-        if hidden[si] || s.skipped {
-            continue;
-        }
-        let p = &body.parts[s.part];
-        let w = rest[p.joint].transform_point(s.local);
-        for q in 0..n {
-            let pq = &body.parts[q];
-            let d = body.depth(&rest, q, w);
-            if q != s.part && d > 0.005 && !(adjacent(p.joint, pq.joint) && pq.tint == p.tint) {
-                note(&mut rep, 4, "rest", d - 0.005, || {
-                    format!(
-                        "{} overlaps {} by {:.3} m at rest",
-                        name_of(p),
-                        name_of(pq),
-                        d
-                    )
-                });
+            let w = rest[p.joint].transform_point(s.local);
+            let own = body.planes[s.part]
+                .iter()
+                .enumerate()
+                .filter(|&(k, _)| k != s.solid)
+                .map(|(_, pl)| depth_in(pl, s.local))
+                .fold(-1.0, f32::max);
+            hidden[si] = own >= 0.003;
+            for q in 0..n {
+                if q == s.part {
+                    continue;
+                }
+                let pq = &body.parts[q];
+                let d = body.depth(&rest, q, w);
+                if d < 0.003 {
+                    continue;
+                }
+                let near_bend = adjacent(p.joint, pq.joint) && {
+                    let pivot = rest[child(p.joint, pq.joint)].transform_point(Vec3::ZERO);
+                    len(w - pivot) <= zone(child(p.joint, pq.joint))
+                };
+                if pq.joint == p.joint || near_bend {
+                    hidden[si] = true;
+                }
             }
         }
+        // A plug: past the pivot and inside the parent at rest, deeper than
+        // the seam (the band along the parent's surface where a limb comes out
+        // and may show more as it turns: a side-raised arm's armpit).
+        let plug: Vec<bool> = body
+            .samples
+            .iter()
+            .map(|s| {
+                let p = &body.parts[s.part];
+                s.plug && {
+                    let w = rest[p.joint].transform_point(s.local);
+                    body.depth_joint(&rest, parent(p.joint), w) >= SEAM
+                }
+            })
+            .collect();
+        for (h, &p) in hidden.iter_mut().zip(&plug) {
+            *h |= p;
+        }
+        for (si, s) in body.samples.iter().enumerate() {
+            if hidden[si] || s.skipped {
+                continue;
+            }
+            let p = &body.parts[s.part];
+            let w = rest[p.joint].transform_point(s.local);
+            for q in 0..n {
+                let pq = &body.parts[q];
+                let d = body.depth(&rest, q, w);
+                if q != s.part && d > 0.005 && !(adjacent(p.joint, pq.joint) && pq.tint == p.tint) {
+                    note(rep, 4, "rest", d - 0.005, || {
+                        format!(
+                            "{} overlaps {} by {:.3} m at rest",
+                            name_of(p),
+                            name_of(pq),
+                            d
+                        )
+                    });
+                }
+            }
+        }
+
+        Checker { body, hidden, plug }
     }
 
-    for probe in probes(body.mask) {
+    /// Rules 2 to 5 on one pose, noted under `key`.
+    fn probe(&self, rep: &mut Report, key: &str, probe: &Probe) {
+        let body = &self.body;
+        let (hidden, plug) = (&self.hidden, &self.plug);
+        let n = body.parts.len();
+        let adjacent = |a: usize, b: usize| parent(a) == b || parent(b) == a;
+        let child = |a: usize, b: usize| if parent(a) == b { a } else { b };
         let m = body.matrices(&probe.pose, probe.snap);
-        let key = match probe.clip {
-            Some(c) => clip(c).name.to_string(),
-            None => "crossfades".to_string(),
-        };
         let mut low = f32::MAX;
         for (si, s) in body.samples.iter().enumerate() {
             let p = &body.parts[s.part];
@@ -513,7 +521,7 @@ fn check(tier_bit: u8) -> Report {
                 let d = body.depth_joint(&m, up, w);
                 let same = body.parts.iter().any(|q| q.joint == up && q.tint == p.tint);
                 let tol = if same { TOL_SAME } else { TOL_SKIN };
-                note(&mut rep, 2, &key, -d - tol, || {
+                note(rep, 2, key, -d - tol, || {
                     format!(
                         "{}: {} pokes {:.3} m out of its parent",
                         probe.label,
@@ -535,7 +543,7 @@ fn check(tier_bit: u8) -> Report {
                     .filter(|&q| q != s.part)
                     .map(|q| body.depth(&m, q, w))
                     .fold(own, f32::max);
-                note(&mut rep, 3, &key, -cover - 0.005, || {
+                note(rep, 3, key, -cover - 0.005, || {
                     format!(
                         "{}: open face of {} shows {:.3} m (solid {} at {:.3},{:.3},{:.3})",
                         probe.label,
@@ -570,7 +578,7 @@ fn check(tier_bit: u8) -> Report {
                     }
                 }
                 let d = body.depth(&m, q, w);
-                note(&mut rep, 4, &key, d - SINK, || {
+                note(rep, 4, key, d - SINK, || {
                     format!(
                         "{}: {} {:.3} m into {}",
                         probe.label,
@@ -582,22 +590,67 @@ fn check(tier_bit: u8) -> Report {
             }
         }
         // 5. Turf.
-        note(&mut rep, 5, &key, -0.02 - low, || {
+        note(rep, 5, key, -0.02 - low, || {
             format!("{}: lowest point {:.3} m", probe.label, low)
         });
         if let Some(c) = probe.clip
             && grounded(c)
         {
-            note(
-                &mut rep,
-                5,
-                &format!("{key} (foot down)"),
-                low - 0.10,
-                || format!("{}: lowest point {:.3} m", probe.label, low),
-            );
+            note(rep, 5, &format!("{key} (foot down)"), low - 0.10, || {
+                format!("{}: lowest point {:.3} m", probe.label, low)
+            });
         }
     }
+}
+
+/// A body ready to judge poses: its parts, and which samples are covered
+/// at rest (hidden) or reach into the parent (plugs).
+struct Checker {
+    body: Body,
+    hidden: Vec<bool>,
+    plug: Vec<bool>,
+}
+
+fn check(tier_bit: u8) -> Report {
+    let mut rep = Report::new();
+    let checker = Checker::new(tier_bit, &mut rep);
+    for probe in probes(checker.body.mask) {
+        let key = match probe.clip {
+            Some(c) => clip(c).name.to_string(),
+            None => "crossfades".to_string(),
+        };
+        checker.probe(&mut rep, &key, &probe);
+    }
     rep
+}
+
+/// The rules a pose a real match shows breaks (empty: it fits): for the
+/// match scenarios, which check the frames they play.
+pub(crate) fn pose_breaches(full: bool, pose: &Pose, snap: bool, label: &str) -> Vec<String> {
+    static CHECKERS: std::sync::OnceLock<[Checker; 2]> = std::sync::OnceLock::new();
+    let checkers = CHECKERS.get_or_init(|| {
+        let mut sink = Report::new();
+        [
+            Checker::new(tier::FULL, &mut sink),
+            Checker::new(tier::NEAR, &mut sink),
+        ]
+    });
+    let checker = &checkers[if full { 0 } else { 1 }];
+    let mut rep = Report::new();
+    checker.probe(
+        &mut rep,
+        "frame",
+        &Probe {
+            label: label.to_string(),
+            clip: None,
+            pose: *pose,
+            snap,
+        },
+    );
+    rep.into_values()
+        .filter(|w| w.amount > 0.0)
+        .map(|w| w.detail)
+        .collect()
 }
 
 fn print_and_assert(tier_name: &str, rep: &Report) {

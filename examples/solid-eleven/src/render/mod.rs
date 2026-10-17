@@ -13,7 +13,7 @@
 
 pub mod anim;
 #[cfg(test)]
-mod fit;
+pub(crate) mod fit;
 pub mod menu;
 pub mod studio;
 #[rustfmt::skip]
@@ -927,10 +927,17 @@ fn draw_guides(r: &mut dyn Renderer, m: &Match, v: &MatchView) {
     );
 }
 
+/// The margin around each locomotion speed edge (m/s).
+const HYST: f32 = 0.35;
+
 /// The animation a player's sim state calls for, and how fast it plays.
 pub fn pick_clip(m: &Match, i: usize, dt: f32, st: &mut AnimState) {
     let p = &m.players[i];
-    let speed = p.vel.len().to_f32();
+    // The gait follows a smoothed speed (a fifth of a second): the sim's
+    // small steps and stops would flip walk and stand every few frames.
+    let raw = p.vel.len().to_f32();
+    st.speed += (raw - st.speed) * (dt / 0.2).min(1.0);
+    let speed = st.speed;
     let owner = m.owner == Some(i as u8);
     let keeper = p.role == Role::Gk;
     // Cues the sim's state alone doesn't hold: a header just made, a
@@ -982,11 +989,19 @@ pub fn pick_clip(m: &Match, i: usize, dt: f32, st: &mut AnimState) {
         Act::Hold { .. } => (ClipName::GkHold, false, 1.0, false),
         Act::Celebrate => (ClipName::Celebrate, false, 1.0, false),
         Act::Free => {
+            // Speed bands with a margin around each edge, so a speed
+            // hovering at one doesn't flip the clip every frame.
+            let cur = st.clip;
+            let moving = !matches!(cur, ClipName::Idle | ClipName::GkReady);
+            let edge = |at: f32, above: bool| if above { at - HYST } else { at + HYST };
+            let walk_from = edge(0.6, moving);
+            let jog_from = edge(2.6, matches!(cur, ClipName::Jog | ClipName::Sprint));
+            let sprint_from = edge(6.2, cur == ClipName::Sprint);
             if matches!(m.phase, Phase::Goal { side, .. } if side as usize == side_of(i))
                 && speed < 1.5
             {
                 (ClipName::Celebrate, i.is_multiple_of(2), 1.0, false)
-            } else if speed < 0.6 {
+            } else if speed < walk_from {
                 if keeper {
                     (ClipName::GkReady, false, 1.0, false)
                 } else {
@@ -999,9 +1014,9 @@ pub fn pick_clip(m: &Match, i: usize, dt: f32, st: &mut AnimState) {
                     (speed / 6.0).clamp(0.6, 1.4),
                     false,
                 )
-            } else if speed < 2.6 {
+            } else if speed < jog_from {
                 (ClipName::Walk, false, (speed / 1.6).clamp(0.6, 1.5), false)
-            } else if speed < 6.2 {
+            } else if speed < sprint_from {
                 (ClipName::Jog, false, (speed / 4.6).clamp(0.7, 1.4), false)
             } else {
                 (
@@ -1032,11 +1047,15 @@ fn show(st: &mut AnimState, clip: ClipName, mirror: bool, restart: bool, rate: f
 /// linesman raises his flag while `m.flag` says so.
 pub fn pick_official_clip(m: &Match, k: usize, prev: (f32, f32), dt: f32, st: &mut AnimState) {
     let o = m.officials[k];
-    let speed = {
+    // His speed from his positions, smoothed over 0.4 s (he
+    // steps toward a target that jumps with the ball).
+    let raw = {
         let dx = o.x.to_f32() - prev.0;
         let dz = o.y.to_f32() - prev.1;
         trino_core::math3d::sqrt(dx * dx + dz * dz) / dt.max(1e-3)
     };
+    st.speed += (raw - st.speed) * (dt / 0.4).min(1.0);
+    let speed = st.speed;
     // The referee shows a card for two seconds after one, and points the
     // restart after a foul while the ball is dead.
     let recent = |kinds: &[EventKind], within: u32| {
@@ -1055,9 +1074,9 @@ pub fn pick_official_clip(m: &Match, k: usize, prev: (f32, f32), dt: f32, st: &m
         )
     {
         ClipName::RefPoint
-    } else if speed > 3.0 {
+    } else if speed > 3.0 + if st.clip == ClipName::Jog { -0.6 } else { 0.6 } {
         ClipName::Jog
-    } else if speed > 0.5 {
+    } else if speed > 0.6 + if st.clip == ClipName::Idle { 0.4 } else { -0.4 } {
         ClipName::Walk
     } else {
         ClipName::Idle

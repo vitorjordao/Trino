@@ -7,5 +7,7 @@ pub mod app;
 mod e2e;
 pub mod input;
 pub mod menu;
+#[cfg(test)]
+mod scenarios;
 pub mod session;
 pub mod sound;

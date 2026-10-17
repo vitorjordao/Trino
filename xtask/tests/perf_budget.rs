@@ -287,7 +287,7 @@ fn check_work(target: Target, baseline_path: &str) {
     let scenes = castle64::perf::SCENES
         .iter()
         .map(|s| s.name)
-        .chain([showcase::perf::NAME]);
+        .chain([showcase::perf::MICRO_RIVER, showcase::perf::NAME]);
     for name in scenes {
         let mut r = counting();
         let mut audio = NullAudio;
@@ -297,6 +297,14 @@ fn check_work(target: Target, baseline_path: &str) {
             for _ in 0..n {
                 game.update(&idle, &mut audio, castle64::perf::DT);
                 game.render(&mut r);
+            }
+        } else if name == showcase::perf::MICRO_RIVER {
+            assert_eq!(showcase::perf::MEASURE_FRAMES, n);
+            let mut game = showcase::ShowcaseGame::new();
+            showcase::perf::micro_river_scene(&mut game, screen);
+            for _ in 0..n {
+                showcase::perf::micro_river_update(&mut game);
+                showcase::perf::micro_river_render(&game, &mut r);
             }
         } else {
             assert_eq!(showcase::perf::MEASURE_FRAMES, n);

@@ -154,6 +154,27 @@ mod n64 {
     #[inline(never)]
     fn water_perf(renderer: &mut N64Renderer, audio: &mut N64Audio) {
         let mut g = boxed_showcase();
+        // `micro-river` first: the river alone (issue #69's 1.2 ms budget
+        // read directly), gated like the scenes.
+        showcase::perf::micro_river_scene(&mut g, Vec2::new(320.0, 240.0));
+        let mut times = trino_core::perf::FrameTimes::default();
+        let v0 = runtime::vblanks();
+        renderer.start_profile();
+        for _ in 0..showcase::perf::MEASURE_FRAMES {
+            let t0 = runtime::now_us();
+            showcase::perf::micro_river_update(&mut g);
+            let t1 = runtime::now_us();
+            showcase::perf::micro_river_render(&g, renderer);
+            let t2 = runtime::now_us();
+            times.update += t1.wrapping_sub(t0);
+            times.render += t2.wrapping_sub(t1);
+        }
+        times.vblanks = runtime::vblanks().wrapping_sub(v0);
+        if let Some(p) = renderer.take_profile() {
+            let mut report = alloc::string::String::new();
+            let _ = p.write_report(showcase::perf::MICRO_RIVER, &times, &mut report);
+            runtime::log(&report);
+        }
         showcase::perf::river_scene(&mut g, Vec2::new(320.0, 240.0), audio);
         let idle = InputState::default();
         let mut times = trino_core::perf::FrameTimes::default();

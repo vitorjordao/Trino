@@ -245,10 +245,15 @@ pub fn gate(root: &Path, scenes: &[SceneLine], bless: bool) -> Result<String, St
 /// Scenes that are reported, never gated or blessed: the micro scenes
 /// (`apps/n64/src/n64/micro.rs`, synthetic draw sets measuring the T&L's
 /// fixed costs) and `cpu-*`, the castle64 scenes again with the RSP T&L
-/// path off (a same-ROM A/B).
+/// path off (a same-ROM A/B). [`GATED_MICRO`] scenes are the exception:
+/// synthetic, but gated like the castle64 scenes.
 pub fn is_micro(name: &str) -> bool {
-    name.starts_with("micro-") || name.starts_with("cpu-")
+    (name.starts_with("micro-") || name.starts_with("cpu-")) && !GATED_MICRO.contains(&name)
 }
+
+/// Micro scenes with gates of their own: `micro-river`, the showcase's
+/// river alone (issue #69: its ≤ 1.2 ms budget is read from this line).
+pub const GATED_MICRO: [&str; 1] = ["micro-river"];
 
 /// The castle64 scenes with the RSP T&L path (gated lines) against the same
 /// scenes on the CPU path (`cpu-<scene>`, same ROM). Empty if the ROM did
@@ -571,6 +576,7 @@ mod tests {
         assert!(rsp_ab_report(&gated, &[]).is_empty());
         assert!(is_micro("cpu-hub") && is_micro("micro-tris"));
         assert!(!is_micro("hub"));
+        assert!(!is_micro("micro-river"), "gated: the river alone");
 
         // The cost model's drift note: a CPU-path scene whose T&L time is far
         // from the calibrated estimate says so (without failing).

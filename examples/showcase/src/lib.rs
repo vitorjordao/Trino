@@ -953,7 +953,7 @@ impl Game for ShowcaseGame {
 /// in ares (`cargo xtask test n64`).
 pub mod perf {
     use super::{ShowcaseGame, river};
-    use trino_core::{Audio, Game, InputState, Vec2, Vec3};
+    use trino_core::{Audio, Game, InputState, Renderer, Vec2, Vec3};
 
     pub const NAME: &str = "showcase-river";
     /// Frames measured (each one idle update + render).
@@ -974,6 +974,50 @@ pub mod perf {
         for _ in 0..40 {
             game.update(&walk, audio, DT);
         }
+    }
+
+    /// The river alone (`micro-river`, issue #69): the scene camera, the
+    /// game's light and water material, two ripples, nothing else drawn —
+    /// so the river's own cost is read directly instead of subtracted from
+    /// [`NAME`]. Gated like the castle64 scenes (both baselines).
+    pub const MICRO_RIVER: &str = "micro-river";
+
+    /// Reset `game` for [`MICRO_RIVER`]: the scene camera, a fixed clock,
+    /// one fresh ripple near the ford and one older ring downstream.
+    pub fn micro_river_scene(game: &mut ShowcaseGame, screen: Vec2) {
+        game.reset(screen);
+        game.look.camera = super::panel::CAMERA_SCENE;
+        game.time = 2.0;
+        game.ripples.clear();
+        let (a, b) = (river::COURSE[8], river::COURSE[6]);
+        game.ripples.spawn(Vec2::new(b.x, b.z), super::RIPPLE_ENTER);
+        game.ripples.update(0.9);
+        game.ripples
+            .spawn(Vec2::new(a.x, a.z + 0.4), super::RIPPLE_ENTER);
+    }
+
+    /// One [`MICRO_RIVER`] frame: the water's clock and ripples advance by
+    /// [`DT`] (the "update"), and only the `water` entities are drawn.
+    pub fn micro_river_update(game: &mut ShowcaseGame) {
+        game.time += DT;
+        game.ripples.update(DT);
+    }
+
+    /// Draw [`MICRO_RIVER`]'s frame: what [`ShowcaseGame::render`] sets up
+    /// (camera, light, filter, water state), then the water entities only.
+    pub fn micro_river_render(game: &ShowcaseGame, r: &mut dyn Renderer) {
+        let camera = game.camera();
+        r.begin_frame(game.clear);
+        r.set_camera(&camera);
+        r.set_light(&game.look.light(&game.light));
+        r.set_texture_filter(game.look.filter);
+        r.set_water(game.time, game.ripples.as_slice());
+        for (_, e) in game.world.iter() {
+            if e.has_tag("water") {
+                game.draw_entity(r, e, camera.eye);
+            }
+        }
+        r.end_frame();
     }
 }
 

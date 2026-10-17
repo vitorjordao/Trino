@@ -889,6 +889,14 @@ cargo test --workspace
   only; `trino-runner-pc` turns it on, `TRINO_MSAA=0` off). Its pipelines are built on
   the first `set_msaa(true)`: building them in every `PcRenderer::new` made parallel
   headless tests segfault in RADV. Goldens stay single-sampled.
+- **MSAA and SSAO meet in one pass on the PC.** With MSAA on, the scene's depth is the
+  multisampled target: the AO pass reads it through its own `AoPass` built for
+  `texture_depth_multisampled_2d` (the first sample), the scene pass stores that depth
+  only when AO follows, and the 2D after the AO draws single-sampled over the resolved
+  frame. An `AoPass` caches bind groups by size, not by view: invalidate it whenever
+  the depth view it reads is recreated (`set_msaa`, resizes).
+- **A game drawn at a reduced scale scales its AO too:** `AmbientOcclusion::radius`
+  and `bias` are world units, so Solid Eleven (1/64) passes meters × `WORLD`.
 - **Only one game per binary may export the hot-reload symbols.** `apps/pc` links
   castle64, showcase and solid-eleven statically, and two crates' `export_game!` define
   the same `#[no_mangle] trino_game_*` symbols, so the link fails. A game other than

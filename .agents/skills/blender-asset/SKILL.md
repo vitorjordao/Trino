@@ -345,6 +345,19 @@ about the origin.
   pivot at the center of the parent's opening (the head pivots at the neck top), make
   the plug a frustum that reaches deeper than the parent's rim at the widest bend, and
   close every face a camera can see in some pose (the boot's back, the hair).
+- **The fit test never judges two solids on one joint against each other,** so a part
+  that crosses another on its own joint passes unseen. Solid Eleven's hair cap and skull
+  were two solids of one head: the forehead and temples showed through the hair for two
+  iterations. Make anything that must cover another surface on the same bone (hair,
+  a cap, a collar) a part of its own, built **around** the surface: the surface's own
+  solids pushed out by a margin (a frustum's sides stay parallel, so the gap holds over
+  the top), plus locks that stand off its widest section. Then check it statically
+  (`fit.rs` rule 6: every outer face ≥ 2 mm off) and pose every variant through the
+  clips at once, with variants never judging each other (`Body::judges`). Look at
+  `heads_<tier>.png` / `hair_lineup_<tier>.png` from `solid_eleven_poses head_closeups`.
+- **A taper that narrows to a waist needs whatever rides inside it narrowed too:**
+  the shorts taper in at the top, and a straight shorts leg on the thigh poked 9 mm out
+  of them at the hip (`fit.rs::the_shorts_legs_stay_inside_the_shorts_sides`).
 - **Ground every key by forward kinematics, per tier:** the generator computes each
   key's root height from the lowest point of the posed body, once with the PC body
   (`root`) and once with the console body (`lo`); the game also plants the feet per

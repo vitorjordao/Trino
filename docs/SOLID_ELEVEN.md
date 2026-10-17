@@ -73,13 +73,15 @@ take that player, tap the formation box to change it, or tap **Substitute**.
 
 Modes:
 
-- **Quick match:** any two clubs, either side or CPU against CPU, day, dusk or night,
-  dry or rain.
+- **Quick match:** any two clubs, either side or CPU against CPU, one of three
+  grounds (Central Arena, Harbour Ground, North Park), day, dusk or night, dry or
+  rain, and the difficulty.
 - **Career:** pick a club and play a nine-round season. Each round you play or
-  simulate the match. Gate money, prize money and wages move the budget. Energy,
+  simulate the match, at the home club's ground. Gate money, prize money and wages move the budget. Energy,
   form and morale change between matches, and the table and last results are kept.
-- **Customize:** edit any player's six attributes within his point budget, and his
-  skin tone. Change formations.
+- **Customize:** edit any player's six attributes within his point budget, his
+  skin tone, and his hair: the style (short, buzz cut, curly, long, mohawk, bald)
+  and the color (black, dark brown, brown, blond, red). Change formations.
 - **Transfer market:** buy from other clubs within your budget and squad limits, or
   sell to the club that can best afford it.
 - **Settings:** English or Brazilian Portuguese, difficulty, the half length, keeper
@@ -90,8 +92,10 @@ A season's end shows the champions lifting the trophy under confetti (the title 
 shows the user's club with it once it has won one); titles are kept in the save.
 
 The career and the settings are saved through `Platform::save_*`. The save is a
-1.8 KB fixed layout (version 2: the controls and the titles; version 1 saves still
-load) that fits the N64 cartridge's 2 KB EEPROM. The writes are spread
+1.8 KB fixed layout that fits the N64 cartridge's 2 KB EEPROM. Version 2 added the
+controls and the titles; version 3 keeps each player's look (skin, hair style and
+color, one byte) where the age was, since everyone ages together and the age follows
+from the year. Versions 1 and 2 still load. The writes are spread
 over frames, and never during a match.
 
 ## How it is built
@@ -198,15 +202,26 @@ own bake against a triangle budget:
   that draw them). Consoles draw 7 per player: head, torso, shorts, two arms and two
   kit legs, each kit leg one mesh with the shorts leg and the sock in the kit's
   colors (one of 30 baked pairs, `team::LEG_KITS`); far players drop the arms. The PC
-  draws 15 parts, with sleeves, elbows and knees. A shadow is its own flat draw on the
-  turf. Kits are a per-draw tint, so every part stays on the N64's RSP.
+  draws 15 parts, with sleeves, elbows and knees, plus the hair. A shadow is its own
+  flat draw on the turf. Kits are a per-draw tint, so every part stays on the N64's
+  RSP.
+- **The hair:** the PC's head is the skull alone, and each of five styles (`HAIR` in
+  the same file: short, buzz cut, curly, long, mohawk; bald draws none) is a part of
+  its own on the head joint, tinted with one of five hair colors. A style is built
+  around the skull, never through it: a shell is the skull's own solids above a
+  hairline with every side pushed out by a margin, and the locks at the back and the
+  temples stand off the skull. The consoles bake the hair into the head itself, one
+  of three (dark, light, shaved), so a head stays one draw.
+- **The grounds:** the same stand models, tinted per ground (a tint keeps the N64's
+  light white and every draw on the RSP); Harbour Ground is small, with only the
+  middle sections of the side stands and open ends.
 - **The trophy:** a gold cup, 114 triangles, held between the captain's hands.
 - **The markers and menu props:** the cursor rings, the arrow, the pass dashes, the
   trajectory beads, the pedestal.
 - **`player_rig.glb`:** every PC part on the skeleton with all 22 clips. It is the
   model `model inspect --anim` and the editor's Animation tab read.
 
-The clips (idle, walk, jog, sprint, dribble, pass, lob, shot, tackle, slide, down,
+The clips (idle, walk, jog, sprint, dribble, pass, lob, shot, power shot, tackle, slide, down,
 get up, header, throw-in, celebrate, trophy lift, keeper ready/dive/hold, referee
 point/card, linesman flag) live in one table, `tools/blender/solid_eleven_anim.py`.
 Each key's height is computed there by forward kinematics, once for the PC body and
@@ -227,7 +242,13 @@ to its parent, the end inside its parent (a neck in the collar, a thigh in the s
 stays hidden, no open face shows, no visible surface sinks into another part, and
 nothing goes into the turf (and a planted clip keeps a foot on it). The test found the
 first iteration's floating head, thighs out of the shorts, arms out of the sleeves and
-bodies through the turf in the slide and the dive.
+bodies through the turf in the slide and the dive. A sixth rule holds the hair: no
+outer face of any style comes within 2 mm of the skull (the old cap crossed the
+forehead and the temples, so skin showed through it), and the PC body wears every
+style at once through every clip, so long hair is checked against the collar and the
+arms of a throw-in. A separate check keeps the shorts legs inside the shorts' sides
+at rest and in the run cycles (it found the top of the shorts leg 9 mm out at the
+hip).
 
 Sounds (whistle, kicks, crowd, cheers, the menu theme) are synthesized by
 `tools/solid_eleven/make_sounds.py`; the PC tier's rain and glow sprites come from
@@ -254,9 +275,12 @@ The sim hash is the same on the PC, in ares and in Azahar, and each console's
 `check()` enforces it.
 
 What the PC's native profile adds: the full window resolution with 4× MSAA (Settings ›
-Graphics: or the chunky console-like picture), higher-detail players, crowd, goal and
-ball, rain billboards and the per-pixel wet look, floodlight glows. The 3DS adds its
-touch screen.
+Graphics: or the chunky console-like picture), screen-space ambient occlusion (the
+engine's ADR 0014, scaled to the 1/64 drawing scale), higher-detail players with their
+hair, crowd, goal and ball, rain billboards and the per-pixel wet look, turf kicked up
+at kicks, tackles and slides (`trino_core::ParticleSystem`), floodlight glows. The
+consoles get their ambient occlusion baked into the stands' and the goal's vertex
+colors, at no run-time cost. The 3DS adds its touch screen.
 
 PC strict mode (`TRINO_STRICT=1`, the N64 profile) splits each frame's estimated N64
 time like the console does: a draw the RSP takes costs about 90 µs of CPU plus its
@@ -273,9 +297,10 @@ triangles on the RSP, the rest full CPU T&L. Solid Eleven's worst frame estimate
 | `sim/tests.rs` | The AI sample plays like football (every match ends; the score is the goals logged; every restart happens; players tire; the numbers stay in range). A full match with human input is deterministic. Substitutions follow the rules. The human keeper: hand-over, dive, throw or punt, the hold limit, no hands outside the area; a sent-off keeper's goal kick. |
 | `sim/balance.rs` | Round robins over four seeds: every club can win and none runs away with the league (points per game 0.9–1.9), no side favored, goals, draws, saves and offsides in range, 15 more attribute points win clearly more, the difficulty sharpens the AI, the economy keeps every club afloat, trading is no free money, the title is open. `tuning_table` (ignored) prints the whole table. |
 | `game/scenarios.rs` | Every rule staged in a real match and checked through its events (throw-in, goal kick and corner, goal and kick-off, half time, a reckless slide's yellow, a second yellow, a penalty, offside, substitutions, the keeper's catch and dive), with every frame's pose fit-checked; seven match styles (dry, rain, pressing with high lines, deep blocks with long balls, a bot against the hard and the easy AI, two bots with their keepers) with the gait flicker counted |
-| `render/fit.rs` | The body fits through every clip and crossfade, on the PC, near and far bodies |
-| `sim/team.rs`, `sim/league.rs` | Balanced clubs, the point cap, values; fixtures, a season, the table and the books, transfers and squad limits, lineups, the save's round trip and size |
-| `game/e2e.rs` | Through the buttons only: a quick match from the title to the report with a bot playing the human side; a career round, a purchase and an edit that survive the save on a 2 KB cart; quitting a career match; every screen drawn on every profile; the controls page (rebinding, saving, the PC host's tabs, a lost tab); a rebound pause; the keeper and graphics settings |
+| `render/fit.rs` | The body fits through every clip and crossfade, on the PC (with every hair style), near and far bodies; every hair style stays clear of the skull; the shorts legs stay inside the shorts' sides |
+| `sim/team.rs`, `sim/league.rs` | Balanced clubs, the point cap, values; fixtures, a season, the table and the books, transfers and squad limits, lineups, the save's round trip and size (looks and ages included), version 1 and 2 saves |
+| `game/session.rs` | Kicks, tackles and slides throw up turf that lands as it dies; only the PC tier draws it |
+| `game/e2e.rs` | Through the buttons only: a quick match (a ground and the difficulty picked) from the title to the report with a bot playing the human side; a career round, a purchase and an edit (attributes, skin, hair) that survive the save on a 2 KB cart; quitting a career match; every screen drawn on every profile; the controls page (rebinding, saving, the PC host's tabs, a lost tab); a rebound pause; the keeper and graphics settings |
 | `xtask/tests/solid_eleven_menus.rs` | A crawler over every menu state (a search over the game's cloned states, both languages, three screen sizes) drawn with the real fonts: no text off screen or over another, no dead button; and random input never breaks the game |
 | `render/anim.rs`, `game/input.rs`, `game/menu.rs`, `ui/*` | Clips, mirroring, crossfades, the yaw without trigonometry, input charge and arming, menu repeat and taps, the UI canvas and shapes, every string in the font |
 | `xtask/tests/solid_eleven_budget.rs` | Every draw of the scripted match stays on the N64's RSP. Its cost per sampled frame (draws, triangles, the 3DS GPU's share, the 2D overlay) is pinned in `tests/perf/solid_eleven_work.toml`. |
@@ -283,6 +308,30 @@ triangles on the RSP, the rest full CPU T&L. Solid Eleven's worst frame estimate
 | `xtask/tests/solid_eleven_render.rs` | PC golden frames (N64 look, 3DS look, native, menus), strict mode on the N64 profile, MSAA on the PC profile |
 | The template's self-tests (`templates/football/{n64,n3ds}`) | In ares and Azahar, run by CI: the scripted match, the frame budget, the sim hash equal to the PC's, golden frames |
 | `crates/scaffold` | `--template football` copies the game, its own assets and the console hosts |
+
+## What the issue asked that works differently
+
+- **Billboard impostors for distant players and the crowd.** Not used. An impostor
+  is one view of a *static* model per camera yaw (`trino_core::Impostor`); a player is
+  always animated, so a far player would slide across the pitch in one frozen pose.
+  Far players instead drop their arms (5 parts, all on the RSP). The crowd is already
+  cheap: a mosaic baked into each stand section, one draw per section, where an
+  impostor would add a textured draw and TMEM loads.
+- **The engine's `model.lod` chains.** Not used for the same reason: a player is
+  15 or 7 parts posed per frame, not one model. The game picks its tier per player
+  by view depth (`Detail::{Full, Near, Far}`), which is the same idea.
+- **A "3D rain particle system".** The rain is 220 billboards whose positions follow
+  from the time and a fixed scatter (no state, no allocation), drawn on the PC tier
+  only. It is a particle field, without `ParticleSystem`'s per-particle state. The
+  turf kicked up at kicks does use `ParticleSystem`.
+- **`cargo trino new --template football`.** In this repository the command is
+  `cargo xtask new <name> --standalone <dir> --template football`. A standalone
+  project's `cargo trino` alias runs the same scaffold. The editor's launcher offers
+  the template too.
+- **Real hardware.** Measured in ares and Azahar only. ares doesn't time the RDP, and
+  Azahar isn't cycle-accurate (BACKLOG P2 #16).
+- **Local two-player.** The issue doesn't ask for it, and the sim takes two pads,
+  but no menu offers it yet (BACKLOG P2 #16).
 
 ## Using it as a template
 

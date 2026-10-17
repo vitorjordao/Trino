@@ -33,7 +33,13 @@ start with `n/a:` and give the reason.
   assertions hold on a real GPU and on lavapipe. Window, emulator and
   slow tests are `#[ignore]` and run in their own CI jobs.
 - **Console self-test steps** (`castle64::selftest`) run the same checks on
-  PC (`xtask/tests/engine_checks.rs`), in ares and in Azahar.
+  PC (`xtask/tests/engine_checks.rs`), in ares and in Azahar. `test 3ds`
+  leaves Azahar's GPU timing as you set it. That is off by default, and it keeps
+  the run fast. The goldens hold either way: with
+  `--accurate-timing` (or `TRINO_AZAHAR_GPU_TIMING=1`) the self-test boots with
+  "Simulate 3DS GPU timings" on. Boot to `TRINO_TEST_PASS` took 7.7–8.2 s
+  either way over three runs: the self-test doesn't show the difference. Use it for frame pacing before real
+  hardware, not as a gate (`docs/HARDWARE.md` › Before the 3DS).
 
 Shared fixtures: `crates/core/tests/common/` (a recording renderer that runs
 the real T&L, a mock mixer, an EEPROM-like save medium, TMDL/TFNT/TSCN
@@ -304,8 +310,9 @@ The editor is a binary, so these are unit tests. The App-level flows are
 |---|---|
 | `Editor: commands on a temp project (entities, undo, prefabs, materials, fake objects, scenes, export, play here)` | `crates/editor/src/ui_tests.rs::commands_edit_save_and_export_in_a_temp_project` |
 | `Editor: hierarchy click, command palette, duplicate, undo` | `crates/editor/src/ui_tests.rs::hierarchy_select_palette_duplicate_and_undo` |
-| `Editor: gizmo hits and drags (move, plane, scale, rotate, snapping)` | `crates/editor/src/gizmo.rs::gizmo_handles_are_hit_where_they_are_drawn`, `crates/editor/src/gizmo.rs::drags_move_scale_and_rotate_the_local_transform`, `crates/editor/src/gizmo.rs::rotation_under_a_rotated_parent_stays_in_world_axes`, `crates/editor/src/gizmo.rs::snapped_y_spin_stays_exact_and_continuous` |
+| `Editor: gizmo hits and drags (move, plane, scale, rotate, snapping)` | `crates/editor/src/gizmo.rs::gizmo_handles_are_hit_where_they_are_drawn`, `crates/editor/src/gizmo.rs::planar_handles_move_on_their_plane_and_the_view_ring_turns_the_view_axis`, `crates/editor/src/ui_tests.rs::gizmo_drags_grab_the_handle_under_the_press`, `crates/editor/src/gizmo.rs::drags_move_scale_and_rotate_the_local_transform`, `crates/editor/src/gizmo.rs::rotation_under_a_rotated_parent_stays_in_world_axes`, `crates/editor/src/gizmo.rs::snapped_y_spin_stays_exact_and_continuous` |
 | `Editor: orbit camera, projection, picking` | `crates/editor/src/gizmo.rs::orbit_camera_moves_clamps_and_settles`, `crates/editor/src/gizmo.rs::orbit_camera_views_take_the_short_way_and_match_a_game_camera`, `crates/editor/src/gizmo.rs::projection_helpers_reject_points_behind_and_hit_the_ground`, `crates/editor/src/gizmo.rs::projection_and_ray_agree`, `crates/editor/src/gizmo.rs::ray_hits_box_in_front`, `crates/editor/src/gizmo.rs::affine_inverse_and_box_wireframe` |
+| `Editor: scene navigation (axis widget drag/flip/projection, MMB pan, fly mode, dolly, near-orthographic view, focus pivot)` | `crates/editor/src/gizmo.rs::axis_widget_clicks_look_from_an_axis_then_flip_to_the_other_side`, `crates/editor/src/gizmo.rs::dragging_the_axis_widget_orbits_like_dragging_the_view`, `crates/editor/src/gizmo.rs::axis_widget_hit_test_prefers_the_front_tip_then_the_centre`, `crates/editor/src/gizmo.rs::orthographic_keeps_the_target_plane_and_renders_what_it_projects`, `crates/editor/src/gizmo.rs::fly_mode_looks_around_the_eye_and_moves_along_the_view`, `crates/editor/src/gizmo.rs::dolly_and_focus_pivot`, `crates/editor/src/gizmo.rs::drops_land_near_what_an_orthographic_view_looks_at`, `crates/editor/src/widget_tests.rs::axis_widget_snaps_orbits_and_toggles_the_projection`, `crates/editor/src/ui_tests.rs::scene_view_pans_flies_dollies_and_flips_axes` |
 | `Editor: document undo/redo, selection, save` | `crates/editor/src/doc.rs::edits_coalesce_until_settled_and_undo_restores`, `crates/editor/src/doc.rs::multi_selection_toggles_and_prunes`, `crates/editor/src/doc.rs::save_reload_and_history_bounds`, `crates/editor/src/doc.rs::prefab_docs_serialize_as_prefabs` |
 | `Editor: project bake, load and fake objects` | `crates/editor/src/project.rs::bake_and_load_reads_every_asset_with_its_stats`, `crates/editor/src/project.rs::saving_a_fake_object_rebakes_it_in_place`, `crates/editor/src/project.rs::create_proxy_writes_the_prim_and_the_manifest_entry_then_retargets` |
 | `Editor: inspector material and fake-object editors` | `crates/editor/src/widget_tests.rs::material_editor_sets_shading_sides_and_texture`, `crates/editor/src/widget_tests.rs::primitive_editor_switches_shape_pivot_and_keeps_sizes_valid` |
@@ -400,4 +407,5 @@ the host; CI's console jobs and smoke runs cover them.
 | `xtask build 3ds` | n/a: needs devkitPro (CI `n3ds` job) |
 | `xtask run 3ds` | n/a: needs Azahar (`--device network`: the real-hardware row above, with a stub 3dslink) |
 | `xtask test 3ds` | n/a: needs devkitPro + Azahar (CI `n3ds-emulator` job) |
+| `xtask run, test or watch 3ds --accurate-timing (Azahar GPU timing for one session, TRINO_AZAHAR_GPU_TIMING)` | `xtask/src/n3ds.rs::gpu_timing_is_forced_with_both_lines_in_renderer_only`, `xtask/src/n3ds.rs::gpu_timing_already_on_is_left_as_is`, `xtask/src/n3ds.rs::gpu_timing_goes_into_a_seeded_or_missing_config`, `xtask/src/n3ds.rs::gpu_timing_keeps_windows_line_endings`, `xtask/src/n3ds.rs::gpu_timing_saved_copy_round_trips`, `xtask/src/n3ds.rs::a_session_restores_the_setting_and_recovers_an_interrupted_one`, `xtask/src/n3ds.rs::gpu_timing_is_read_back_from_azahar_boot_log`, `xtask/src/n3ds.rs::accurate_timing_comes_from_the_flag_or_the_environment` |
 | `xtask watch 3ds` | n/a: needs devkitPro + Azahar |

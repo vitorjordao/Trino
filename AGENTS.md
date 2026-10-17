@@ -57,14 +57,17 @@ new skill when none fits. Then run `cargo xtask agents sync`. The steps are in
   running state (`apps/pc` feature `reload`).
 - **Editor** (`cargo xtask editor`, `crates/editor`): dark themed dockable UI (Inter +
   Phosphor icons) — **Scene view** (real `PcRenderer` at panel resolution, orbit camera,
-  z-buffered grid, click picking, move/rotate/scale **gizmo** with snapping, axis widget,
-  drag-and-drop from Assets), **Game view** (scene camera at N64/3DS/PC resolution and
-  look), Hierarchy tree (parenting by drag, rename, visibility, prefab instances),
-  Inspector (components, inline material editing, prefab overrides, scene environment),
-  Assets browser (rendered thumbnails), Console, toasts, status bar. Snapshot
-  **undo/redo**, copy/paste entities **as RON** (Ctrl+C/V — round-trips through any AI
-  chat), keyboard shortcuts (F1). **Play** runs the open scene (`TRINO_SCENE`, live
-  reload) or the game, in a separate process. Every UI action writes a text file.
+  z-buffered grid, click picking, move/rotate/scale **gizmo** with snapping, planar
+  handles and a view ring, Unity-style navigation (MMB pan, Alt+RMB dolly, RMB-held
+  WASD/QE fly), a Blender-style axis widget (drag to orbit, click an axis twice to flip,
+  centre or `5` for a near-orthographic view), drag-and-drop from Assets), **Game view**
+  (scene camera at N64/3DS/PC resolution and look), Hierarchy tree (parenting by drag,
+  rename, visibility, prefab instances), Inspector (components, inline material editing,
+  prefab overrides, scene environment), Assets browser (rendered thumbnails), Console,
+  toasts, status bar. Snapshot **undo/redo**, copy/paste entities **as RON** (Ctrl+C/V —
+  round-trips through any AI chat), keyboard shortcuts (F1). **Play** runs the open
+  scene (`TRINO_SCENE`, live reload) or the game, in a separate process. Every UI action
+  writes a text file.
   Agent hooks: the `editor` skill.
 - **Content formats** (`trino-scene` crate, versioned RON, hot-reloaded):
   scenes v3 (`scenes/*.scene.ron`: nested entities, 3D transforms in degrees, models +
@@ -125,7 +128,9 @@ new skill when none fits. Then run `cargo xtask agents sync`. The steps are in
   `tests/golden/3ds/castle64_hub.png` within a tolerance. All 3D is drawn
   by citro3d with **per-vertex depth** (`trino_3d_draw`). `build 3ds --selftest` + `test 3ds --no-build`
   split build and boot, as CI does. `watch 3ds`
-  rebuilds + relaunches on save. The `SimProfile::N3ds` PC renderer samples
+  rebuilds + relaunches on save. `--accurate-timing` (or `TRINO_AZAHAR_GPU_TIMING=1`)
+  turns on Azahar's "Simulate 3DS GPU timings" for one session and restores the
+  user's setting afterwards (`docs/HARDWARE.md`). The `SimProfile::N3ds` PC renderer samples
   sprites bilinearly (the 3DS GPU default). Skills: `build-3ds`,
   `run-emulator`.
 
@@ -554,6 +559,7 @@ cargo xtask build 3ds     # .3dsx via local devkitPro -> target/3ds/trino.3dsx
 cargo xtask run 3ds       # build + open in Azahar (auto-detected)
 cargo xtask test 3ds      # build test app + assert magic strings (Azahar log)
 cargo xtask watch 3ds     # rebuild .3dsx + relaunch Azahar on save
+cargo xtask run|test|watch 3ds --accurate-timing  # Azahar "Simulate 3DS GPU timings" for one session (or TRINO_AZAHAR_GPU_TIMING=1)
 cargo xtask run n64 --device sc64|everdrive        # real N64 via flashcart USB; log in the terminal
 cargo xtask run 3ds --device network --ip <IP>     # real 3DS via 3dslink (--gdb: Luma3DS gdb script)
 cargo xtask new <name>    # scaffold a game crate under examples/
@@ -851,6 +857,17 @@ cargo test --workspace
 - **`sort_by` is not in `core`** (it needs `alloc`'s stable sort): a `no_std` game
   that sorts uses `sort_unstable_by` with a total order (an index tie-break). The host
   `cargo check` doesn't catch it; the console type-check does.
+- **Azahar's GPU timing key is `simulate_3ds_gpu_timings`** (2126.2), not issue #43's
+  `simulate_gpu_timing`, and it takes `\default=false` beside it or Azahar ignores the
+  value. Read an Azahar setting's name from the boot log's `Renderer_*:` lines.
+  Azahar rewrites qt-config.ini while it runs, so restore a setting after it exits,
+  and only that setting's lines (`n3ds::with_gpu_timing`).
+
+- **The engine has no orthographic projection.** A camera backed far off with a
+  tiny field of view fakes one, but `1 - NEAR/z` depth then resolves metres. The
+  editor draws the world scaled around the target (`gizmo::RenderCam`). Any
+  far-eye trick needs the same scaling.
+
 - **A module pulled into a test with `#[path = "../src/x.rs"]` doesn't count for
   coverage:** llvm-cov reports it under `tests/../src/x.rs`, which the default filter
   drops. Put such tests in the module itself.

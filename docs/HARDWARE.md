@@ -36,6 +36,54 @@ cargo xtask run 3ds --device network --ip <IP> --gdb [--gdb-port 4003]
 - **Stopping and the emulator.** Ctrl+C stops the log. Without `--device` nothing
   changes: the emulator runs as before.
 
+## Before the 3DS: Azahar's GPU timing
+
+Azahar has a setting, **Simulate 3DS GPU timings** (Emulation › Configure ›
+Graphics), off by default since Azahar #2774. As issue #43 describes that change,
+with it off the emulated GPU runs as fast as the host's GPU allows, decoupled from the
+PICA200's real limits, so a frame bound by the GPU can look cheaper than it is. With
+it on, Azahar simulates the 3DS GPU's timing. xtask turns it on for one session:
+
+```
+cargo xtask run 3ds --accurate-timing     # also: test 3ds, watch 3ds, test all
+TRINO_AZAHAR_GPU_TIMING=1 cargo xtask test 3ds   # the same (1, true, on or yes)
+```
+
+- **Keep it off** while you iterate on gameplay and for the golden comparisons.
+  The frames come out the same, but the emulator runs as fast as your PC allows.
+- **Turn it on** to check frame pacing (`fps=` in `TRINO_FRAME`), waits on the GPU and
+  30/60 fps targets before you deploy with `--device network`. It has not been compared
+  with a real 3DS yet, so a real console is still the reference.
+
+What xtask does with Azahar's `qt-config.ini`:
+- **Without the flag**, it does not touch the setting, whatever you chose in Azahar.
+- **With the flag**, `[Renderer]` gets both lines for the session:
+
+  ```ini
+  simulate_3ds_gpu_timings=true
+  simulate_3ds_gpu_timings\default=false
+  ```
+
+  Qt writes `\default=true` while a value is the default, and Azahar then ignores
+  the value, so both lines are needed. The key is `simulate_3ds_gpu_timings`
+  (Azahar 2126.2, the pinned build). Issue #43 calls it `simulate_gpu_timing`, a name
+  Azahar does not read.
+- **After the session**, xtask puts your own two lines back, or removes them if you
+  had none:
+  - `test` puts them back once it stops the emulator;
+  - `run` waits until you close Azahar. Azahar writes `qt-config.ini` while it runs,
+    so the restore comes after it exits, where nothing Azahar saves can undo it;
+  - `watch` puts them back when the loop ends.
+
+  Until then a copy waits in `qt-config.ini.trino-gpu-timing`. If xtask is stopped
+  first (Ctrl+C, a crash), the next `run`, `test` or `watch 3ds` restores it from that
+  copy before it starts Azahar.
+- **Proof.** Azahar logs its configuration at boot. `test 3ds` echoes
+  `Renderer_Simulate3DSGPUTimings: true|false`. With the flag, the test fails if
+  Azahar booted with it off. `run` prints the line after Azahar closes.
+- **Not with `--device`.** A real 3DS has real timing, so xtask refuses the flag
+  there, and on the N64 as well.
+
 ## How the log gets out
 
 | Console | Game side | Host side |

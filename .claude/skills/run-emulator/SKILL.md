@@ -16,6 +16,8 @@ cargo xtask test 3ds           # build test app + assert TRINO_TEST_PASS + golde
 cargo xtask test 3ds --bless   # same, rewriting tests/golden/3ds/castle64_hub.png + castle64_hub_bottom.png + showcase_bottom.png
 cargo xtask build 3ds --selftest && cargo xtask test 3ds --no-build   # build, boot later
 cargo xtask watch 3ds          # rebuild .3dsx + relaunch Azahar on every save
+cargo xtask run|test|watch 3ds --accurate-timing   # Azahar's "Simulate 3DS GPU timings" on for this session
+TRINO_AZAHAR_GPU_TIMING=1 cargo xtask test 3ds     # the same, from the environment
 ```
 
 Real consoles instead of emulators (`run n64 --device sc64|everdrive`,
@@ -111,6 +113,33 @@ tests follow the same pattern: add a step to `castle64::selftest` so the PC suit
 
 ## Notes
 
+- **Azahar GPU timing (`--accurate-timing`, `docs/HARDWARE.md` › Before the 3DS):**
+  - **What it is.** Off by default since Azahar #2774. With it off (per issue #43)
+    the emulated GPU runs at host speed, decoupled from the PICA200's limits, so a
+    GPU-bound frame can look cheap. The flag forces `[Renderer]`
+    `simulate_3ds_gpu_timings=true` *and* `simulate_3ds_gpu_timings\default=false` in
+    `qt-config.ini`. With `\default=true` Azahar ignores the value.
+  - **The key name.** Issue #43's `simulate_gpu_timing` is not a key Azahar reads. Get a
+    name from the binary (`strings usr/bin/azahar | grep -i simulate`) and from the
+    boot log's `Renderer_<Name>:` lines.
+  - **No flag, no change.** The user's setting stands, and CI runs at the default
+    (off).
+  - **Restore after the emulator exits.** Azahar writes qt-config.ini while it runs
+    (`Paths\recentFiles` changes on every boot), and maybe again on a normal close
+    (not checked). So xtask restores after it exits, and only our two lines (`with_gpu_timing`, line-based, keeps CRLF).
+    `test` kills and waits, `run` blocks until Azahar closes, `watch` restores when
+    the loop ends.
+  - **Interrupted sessions.** `qt-config.ini.trino-gpu-timing` holds the user's lines
+    until then. The next 3DS emulator command restores from it, which covers Ctrl+C.
+  - **Proof it applied.** `test` echoes the boot log's
+    `Renderer_Simulate3DSGPUTimings:` and fails if it says false while the flag is set.
+  - **Cost.** On 2026-10-16 the self-test took 7.7–8.2 s from boot to pass with it
+    on or off (three runs, noise-level), and the goldens were unchanged.
+  - **Scripting it.** SIGTERM doesn't close Azahar (use SIGKILL, or close the window).
+    Never `pkill -f AppRun.wrapped`: the pattern matches the shell running it. Use
+    `pgrep -x AppRun.wrapped`.
+  - **Mixing commands.** `run 3ds` rebuilds `target/3ds/trino.3dsx` as the game, so a
+    following `test 3ds --no-build` boots castle64 and "stalls before the first step".
 - **Timeout length:** 300 s by default; `TRINO_EMU_TIMEOUT=<secs>` overrides it (CI uses
   900). On 4 CPUs, ares/lavapipe takes ~95 s and Azahar ~15 s.
 - **A timeout** usually means one of these:

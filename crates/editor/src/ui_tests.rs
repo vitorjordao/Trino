@@ -151,9 +151,27 @@ fn commands_edit_save_and_export_in_a_temp_project() {
             return;
         }
     };
-    let cmd = |h: &mut Harness<'_, App>, c: Cmd| {
+    // Runs a command and returns what the Console got meanwhile. The asset
+    // watcher rebakes earlier steps' files on its own schedule and can log
+    // in the same frames (slower on CI), so a test looks for its line among
+    // these, never at `log.last()` alone.
+    let cmd = |h: &mut Harness<'_, App>, c: Cmd| -> Vec<String> {
+        let from = h.state().log.entries.len();
         h.state_mut().cmds.push(c);
         h.run_steps(2);
+        h.state()
+            .log
+            .entries
+            .iter()
+            .skip(from)
+            .map(|e| e.text.clone())
+            .collect()
+    };
+    let said = |lines: &[String], needle: &str| {
+        assert!(
+            lines.iter().any(|l| l.contains(needle)),
+            "expected a line with `{needle}`, the Console got {lines:?}"
+        );
     };
     h.run_steps(4);
     assert_eq!(h.state().log.counts().1, 0, "the project loads cleanly");
@@ -254,8 +272,8 @@ fn commands_edit_save_and_export_in_a_temp_project() {
     );
     let nested = find(&h.state().doc.scene, "probe");
     assert_eq!(nested.len(), 2, "now a child: {nested:?}");
-    cmd(&mut h, Cmd::Copy(nested.clone()));
-    assert!(h.state().log.last().unwrap().text.contains("copied probe"));
+    let lines = cmd(&mut h, Cmd::Copy(nested.clone()));
+    said(&lines, "copied probe");
 
     // Prefabs: make one from the probe, unpack it, edit a library prefab.
     cmd(
@@ -266,32 +284,16 @@ fn commands_edit_save_and_export_in_a_temp_project() {
     assert!(h.state().lib.prefabs.contains_key("prefabs/probe-prefab"));
     let inst = find(&h.state().doc.scene, "probe");
     assert!(h.state().doc.scene.get(&inst).unwrap().prefab.is_some());
-    cmd(&mut h, Cmd::MakePrefab(inst.clone(), "probe-prefab".into()));
-    assert!(
-        h.state()
-            .log
-            .last()
-            .unwrap()
-            .text
-            .contains("already exists"),
-        "{}",
-        h.state().log.last().unwrap().text
-    );
+    let lines = cmd(&mut h, Cmd::MakePrefab(inst.clone(), "probe-prefab".into()));
+    said(&lines, "already exists");
     cmd(&mut h, Cmd::Unpack(inst.clone()));
     assert!(h.state().doc.scene.get(&inst).unwrap().prefab.is_none());
     cmd(&mut h, Cmd::EditPrefab("prefabs/tree".into()));
     assert!(h.state().doc.is_prefab());
     assert_eq!(h.state().doc.title(), "prefabs/tree");
-    cmd(&mut h, Cmd::Delete(vec![0]));
-    assert!(
-        h.state()
-            .log
-            .last()
-            .unwrap()
-            .text
-            .contains("root cannot be deleted"),
-        "the prefab root is protected"
-    );
+    // The prefab root is protected.
+    let lines = cmd(&mut h, Cmd::Delete(vec![0]));
+    said(&lines, "root cannot be deleted");
     cmd(&mut h, Cmd::ExitPrefab);
     assert!(!h.state().doc.is_prefab());
 
@@ -391,15 +393,8 @@ fn commands_edit_save_and_export_in_a_temp_project() {
     assert_eq!(h.state().doc.scene.name, "probe-level");
     cmd(&mut h, Cmd::CloseScene(0));
     assert!(h.state().open_docs.is_empty());
-    cmd(&mut h, Cmd::NewScene("Bad Name".into()));
-    assert!(
-        h.state()
-            .log
-            .last()
-            .unwrap()
-            .text
-            .contains("not a valid scene name")
-    );
+    let lines = cmd(&mut h, Cmd::NewScene("Bad Name".into()));
+    said(&lines, "not a valid scene name");
 
     // Play here runs the scene inside the Game view, and stops.
     cmd(&mut h, Cmd::PlayHere);
@@ -412,16 +407,9 @@ fn commands_edit_save_and_export_in_a_temp_project() {
         .expect("a play session")
         .frames;
     assert!(frames > 0, "the session advanced");
-    cmd(&mut h, Cmd::StopPlayHere);
+    let lines = cmd(&mut h, Cmd::StopPlayHere);
     assert!(h.state().game_view.play.is_none());
-    assert!(
-        h.state()
-            .log
-            .last()
-            .unwrap()
-            .text
-            .starts_with("play here stopped")
-    );
+    said(&lines, "play here stopped");
 
     // Nothing above leaked into the engine's own content.
     std::env::set_current_dir(&repo).unwrap();
@@ -1264,4 +1252,207 @@ fn launcher_mut<'a>(
         crate::Screen::Launcher(l) => l,
         crate::Screen::Editor(_) => panic!("the editor opened"),
     }
+}
+
+/// Scene view navigation in the real editor, with pointer and keys: MMB
+/// pans, RMB held flies (WASD/QE, the app's own shortcuts stand down), Alt +
+/// RMB dollies, 5 switches the projection, and the axis widget looks from an
+/// axis, then from the opposite one.
+#[test]
+#[ignore = "changes cwd/env: run alone with --ignored --test-threads=1"]
+fn scene_view_pans_flies_dollies_and_flips_axes() {
+    use egui::{Event, Key, Modifiers, PointerButton};
+    let Some((mut h, _tmp, repo)) = temp_project_app(egui::vec2(1600.0, 940.0)) else {
+        return;
+    };
+    let widget = h.get_by_label("View orientation").rect().center();
+    let p = widget + egui::vec2(-300.0, 260.0);
+    let button = |h: &Harness<'static, App>, button, pos, pressed| {
+        h.event(Event::PointerButton {
+            pos,
+            button,
+            pressed,
+            modifiers: h.input().modifiers,
+        })
+    };
+    let drag = |h: &mut Harness<'static, App>, b: PointerButton, by: egui::Vec2| {
+        h.hover_at(p);
+        button(h, b, p, true);
+        for k in 1..=8 {
+            h.hover_at(p + by * (k as f32 / 8.0));
+        }
+        button(h, b, p + by, false);
+        h.run_steps(2);
+    };
+    // Start settled: the editor eases to the scene's game camera on open,
+    // and that ease would read as an orbit below.
+    h.state_mut().scene_view.cam = crate::gizmo::OrbitCam::default();
+    h.hover_at(p);
+    h.run_steps(2);
+
+    // Plain MMB drag: pan (the target moves, the view doesn't turn).
+    let cam = h.state().scene_view.cam;
+    drag(&mut h, PointerButton::Middle, egui::vec2(60.0, 0.0));
+    let now = h.state().scene_view.cam;
+    let moved = now.target - cam.target;
+    assert!(moved.dot(moved) > 1e-4, "MMB pans");
+    assert!(
+        (now.yaw - cam.yaw).abs() < 1e-6,
+        "MMB doesn't orbit any more"
+    );
+    // Ctrl + MMB pans too.
+    h.input_mut().modifiers = Modifiers::COMMAND;
+    drag(&mut h, PointerButton::Middle, egui::vec2(0.0, 40.0));
+    h.input_mut().modifiers = Modifiers::NONE;
+    let moved = h.state().scene_view.cam.target - now.target;
+    assert!(moved.dot(moved) > 1e-4, "Ctrl+MMB pans");
+
+    // Hold RMB: fly. E rises (and doesn't switch the gizmo to rotate),
+    // W moves forward, and Shift+A doesn't open the fake-object dialog.
+    let cam = h.state().scene_view.cam;
+    h.hover_at(p);
+    button(&h, PointerButton::Secondary, p, true);
+    h.run_steps(2);
+    assert!(h.state().scene_view.flying(), "RMB held flies");
+    for key in [Key::E, Key::W] {
+        h.key_down(key);
+        h.run_steps(6);
+        h.key_up(key);
+        h.run_steps(1);
+    }
+    h.key_press_modifiers(Modifiers::SHIFT, Key::A);
+    h.run_steps(2);
+    button(&h, PointerButton::Secondary, p, false);
+    h.run_steps(2);
+    let now = h.state().scene_view.cam;
+    assert!(!h.state().scene_view.flying(), "released");
+    assert!(h.state().dialog.is_none(), "no shortcut fired while flying");
+    assert_eq!(
+        h.state().scene_view.gizmo,
+        crate::gizmo::GizmoMode::Translate
+    );
+    assert!(now.eye().y > cam.eye().y, "E rises");
+    let fwd = cam.target - cam.eye();
+    assert!((now.eye() - cam.eye()).dot(fwd) > 0.0, "W moves forward");
+    assert!(
+        (now.dist - cam.dist).abs() < 1e-4,
+        "flying keeps the orbit distance"
+    );
+
+    // Alt + RMB drag up: dolly in.
+    h.input_mut().modifiers = Modifiers::ALT;
+    drag(&mut h, PointerButton::Secondary, egui::vec2(0.0, -60.0));
+    h.input_mut().modifiers = Modifiers::NONE;
+    assert!(!h.state().scene_view.flying(), "Alt+RMB doesn't fly");
+    assert!(h.state().scene_view.cam.dist < now.dist * 0.9, "dollied in");
+
+    // 5 (with the view hovered): orthographic, and back; flying from an
+    // orthographic view goes perspective.
+    h.hover_at(p);
+    h.key_press(Key::Num5);
+    h.run_steps(2);
+    assert!(h.state().scene_view.cam.ortho);
+    h.key_press(Key::Num5);
+    h.run_steps(2);
+    assert!(!h.state().scene_view.cam.ortho);
+    h.key_press(Key::Num5);
+    h.run_steps(2);
+    button(&h, PointerButton::Secondary, p, true);
+    h.run_steps(2);
+    assert!(!h.state().scene_view.cam.ortho, "flying is perspective");
+    button(&h, PointerButton::Secondary, p, false);
+    h.run_steps(2);
+
+    // The axis widget: +X looks from +X; clicking it again looks from -X.
+    let tip = |h: &Harness<'static, App>, idx: usize| {
+        crate::gizmo::axis_tips(&h.state().scene_view.cam.camera().view(), widget)
+            .into_iter()
+            .find(|t| t.0 == idx)
+            .unwrap()
+            .1
+    };
+    // The ease runs on wall-clock time: step until it arrives (bounded).
+    let click_and_settle = |h: &mut Harness<'static, App>, at: egui::Pos2, want: usize| {
+        h.hover_at(at);
+        h.drag_at(at);
+        h.drop_at(at);
+        let start = std::time::Instant::now();
+        loop {
+            h.run_steps(1);
+            let cam = h.state().scene_view.cam;
+            if crate::gizmo::aligned_axis(cam.yaw, cam.pitch) == Some(want) {
+                break;
+            }
+            assert!(
+                start.elapsed().as_secs_f32() < 5.0,
+                "never looked from axis {want}: yaw {} pitch {}",
+                cam.yaw,
+                cam.pitch
+            );
+        }
+        // Let the last of the ease settle before reading the tips again.
+        h.run_steps(20);
+    };
+    let at = tip(&h, 0);
+    click_and_settle(&mut h, at, 0);
+    let at = tip(&h, 0);
+    click_and_settle(&mut h, at, 3);
+    assert!(h.state().doc.selected.is_none(), "widget clicks don't pick");
+    leave_temp_project(&repo);
+}
+
+/// A gizmo drag takes the handle under where the button went down: a quick
+/// drag off the thin ground-plane square (the pointer already far from it
+/// when egui decides it is a drag) still moves on the ground plane.
+#[test]
+#[ignore = "changes cwd/env: run alone with --ignored --test-threads=1"]
+fn gizmo_drags_grab_the_handle_under_the_press() {
+    use trino_core::Vec3;
+    let Some((mut h, _tmp, repo)) = temp_project_app(egui::vec2(1600.0, 940.0)) else {
+        return;
+    };
+    let rock = find(&h.state().doc.scene, "rock-1");
+    h.state_mut()
+        .cmds
+        .push(crate::app::Cmd::Select(Some(rock.clone())));
+    h.state_mut().scene_view.cam = crate::gizmo::OrbitCam::default();
+    h.run_steps(10);
+    // The view's image: its top-right corner anchors the axis widget.
+    let widget = h.get_by_label("View orientation").rect().center();
+    let (iw, ih) = h.state().scene_view.internal_size();
+    let rect = egui::Rect::from_min_size(
+        egui::pos2(widget.x + 48.0 - iw as f32, widget.y - 52.0),
+        egui::vec2(iw as f32, ih as f32),
+    );
+    let cam = h.state().scene_view.cam.camera();
+    let proj = crate::gizmo::Proj::new(&cam, (iw, ih), rect);
+    let start = h.state().doc.scene.get(&rock).unwrap().transform.pos;
+    let origin = Vec3::new(start[0], start[1], start[2]);
+    let g = crate::gizmo::Gizmo::new(&proj, origin);
+    let square = proj
+        .project(origin + Vec3::new(g.len * 0.32, 0.0, g.len * 0.32))
+        .unwrap();
+    assert_eq!(
+        g.hit(&proj, crate::gizmo::GizmoMode::Translate, square),
+        Some(crate::gizmo::Handle::Plane(1))
+    );
+    h.hover_at(square);
+    h.run_steps(2);
+    h.drag_at(square);
+    h.run_steps(1);
+    // One jump, well off every handle.
+    h.hover_at(square + egui::vec2(-80.0, 50.0));
+    h.run_steps(2);
+    h.drop_at(square + egui::vec2(-80.0, 50.0));
+    h.run_steps(3);
+    let now = h.state().doc.scene.get(&rock).unwrap().transform.pos;
+    assert!(
+        (now[1] - start[1]).abs() < 1e-4,
+        "stays on the ground plane"
+    );
+    assert!(
+        (now[0] - start[0]).abs() > 0.1 && (now[2] - start[2]).abs() > 0.1,
+        "moved in X and Z: {start:?} -> {now:?}"
+    );
+    leave_temp_project(&repo);
 }

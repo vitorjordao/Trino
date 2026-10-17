@@ -65,6 +65,9 @@ in `xtask/src/n3ds.rs`). Traps:
   `App: 0 FPS` for one 960-sample check; now once per presented frame). `fps=` in
   `TRINO_FRAME` and the showcase panel count drawn frames. To check what a person sees,
   record Azahar's window (Wayland: `QT_QPA_PLATFORM=xcb`, GStreamer `ximagesrc xid=…`).
+- **Azahar doesn't simulate the GPU's timing by default** ("Simulate 3DS GPU timings"
+  is off), so the PICA200 side of a frame can look cheaper than on a 3DS. `run|test|watch 3ds --accurate-timing` (or
+  `TRINO_AZAHAR_GPU_TIMING=1`) turns it on for one session (run-emulator skill).
 - **Fog is the shader's, not the PICA fog LUT:** the LUT is indexed by the depth band,
   where a 16–42 m fog spans ~0.0007 of the range. The shader interpolates the fog
   perspective-correctly, so a fogged GPU frame is slightly closer to the true value

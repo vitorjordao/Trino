@@ -1456,3 +1456,97 @@ fn gizmo_drags_grab_the_handle_under_the_press() {
     );
     leave_temp_project(&repo);
 }
+
+/// Ambient occlusion from the editor: the scene's screen-space AO panel
+/// (checkbox, saved to the file, undoable), the Scene view's modes from the
+/// View menu (off, the mask), and a model's baked AO written to the
+/// manifest and rebaked by the watcher.
+#[test]
+#[ignore = "changes cwd/env: run alone with --ignored --test-threads=1"]
+fn ambient_occlusion_panel_view_modes_and_baking() {
+    use crate::app::{AssetSel, Cmd};
+    use trino_platform_pc::AoView;
+    let Some((mut h, _tmp, repo)) = temp_project_app(egui::vec2(1600.0, 1000.0)) else {
+        return;
+    };
+    assert_eq!(h.state().doc.scene.environment.ao, None);
+    h.state_mut().cmds.push(Cmd::Select(None));
+    h.run_steps(3);
+    click(&mut h, "Screen-space AO (PC)");
+    h.run_steps(4);
+    let ao = h.state().doc.scene.environment.ao;
+    assert_eq!(ao, Some(trino_scene::AmbientOcclusionDef::default()));
+    assert!(h.state().scene_view.stats.ao, "the Scene view runs it");
+    // The tuning shows; "Reset" is there.
+    assert!(h.query_by_label_contains("Reset to defaults").is_some());
+    h.state_mut().cmds.push(Cmd::Save);
+    h.run_steps(3);
+    let text = std::fs::read_to_string("scenes/showcase.scene.ron").unwrap();
+    assert!(text.contains("ao: Some("), "saved to the scene file");
+    // Off from the checkbox keeps the tuning in the file.
+    click(&mut h, "Screen-space AO (PC)");
+    h.run_steps(4);
+    let off = h.state().doc.scene.environment.ao.unwrap();
+    assert!(!off.enabled);
+    assert!(!h.state().scene_view.stats.ao);
+    h.state_mut().cmds.push(Cmd::Undo);
+    h.run_steps(4);
+    assert!(h.state().doc.scene.environment.ao.unwrap().enabled, "undo");
+
+    // View › Ambient occlusion: the mask, then off whatever the scene says.
+    click(&mut h, "View");
+    click(&mut h, "Ambient occlusion");
+    click(&mut h, "AO only (mask)");
+    h.run_steps(4);
+    assert_eq!(h.state().scene_view.ao_view, AoView::Mask);
+    assert!(h.state().scene_view.stats.ao);
+    h.state_mut().scene_view.ao_view = AoView::Off;
+    h.run_steps(4);
+    assert!(!h.state().scene_view.stats.ao, "a mode change re-renders");
+
+    // Model › Ambient occlusion (baked): the manifest line, then the bake.
+    h.state_mut()
+        .cmds
+        .push(Cmd::SelectAsset(AssetSel::Model("models/crate".into())));
+    h.run_steps(3);
+    // Through accesskit: a toast (the save, the undo) may cover them. A
+    // lone box hides nothing from itself: the ground contact darkens it.
+    let before = h.state().project.models["models/crate"].tmdl.clone();
+    h.get_by_label_contains("Ground contact").click_accesskit();
+    h.run_steps(2);
+    h.get_by_label_contains("Bake AO to vertex colors")
+        .click_accesskit();
+    h.run_steps(3);
+    let manifest = std::fs::read_to_string("assets/manifest.toml").unwrap();
+    let table = manifest
+        .split("[models.crate]")
+        .nth(1)
+        .and_then(|t| t.split("\n[").next())
+        .unwrap();
+    assert!(
+        table.contains("ao = { strength = 0.8, ground = true }"),
+        "{table}"
+    );
+    assert!(h.query_by_label_contains("Re-bake AO").is_some());
+    let start = std::time::Instant::now();
+    while h.state().project.models["models/crate"].tmdl == before && start.elapsed().as_secs() < 15
+    {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(
+        h.state().project.models["models/crate"].tmdl != before,
+        "the watcher rebaked it with AO"
+    );
+    h.get_by_label_contains("Remove").click_accesskit();
+    h.run_steps(3);
+    let manifest = std::fs::read_to_string("assets/manifest.toml").unwrap();
+    let table = manifest
+        .split("[models.crate]")
+        .nth(1)
+        .and_then(|t| t.split("\n[").next())
+        .unwrap();
+    assert!(!table.contains("ao ="), "{table}");
+    assert!(h.state().project.models["models/crate"].ao.is_none());
+    leave_temp_project(&repo);
+}

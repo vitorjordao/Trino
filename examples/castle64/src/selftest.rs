@@ -72,6 +72,10 @@ pub fn engine_checks(
     if local_lights(renderer)? {
         platform.log("TRINO_STEP:local lights probed\n");
     }
+    platform.log("TRINO_STEP:ambient occlusion\n");
+    if ambient_occlusion(renderer)? {
+        platform.log("TRINO_STEP:ambient occlusion probed\n");
+    }
     platform.log("TRINO_STEP:impostor\n");
     if impostor(renderer, platform)? {
         platform.log("TRINO_STEP:impostor probed\n");
@@ -743,6 +747,71 @@ pub fn palette(renderer: &mut dyn Renderer) -> Result<bool, &'static str> {
                 });
             }
         }
+    }
+    Ok(true)
+}
+
+/// The AO probe panel, with ambient occlusion baked into its vertex colors.
+pub const AO_PANEL: ModelId = ModelId::from_path("models/selftest_ao");
+/// The same file baked without it.
+pub const AO_PANEL_RAW: ModelId = ModelId::from_path("models/selftest_ao_raw");
+
+/// Baked ambient occlusion ([`trino_core::ao`], the consoles' tier): the
+/// white panel between two fins, unlit, baked with `ao` and without. With
+/// it the panel is darker next to the fins and as white as without in its
+/// middle, on every target — the occlusion is plain vertex color, drawn by
+/// the RSP, the PICA200 or the PC alike. `Ok(false)` where `read_pixel`
+/// is unsupported.
+pub fn ambient_occlusion(renderer: &mut dyn Renderer) -> Result<bool, &'static str> {
+    let caps = *renderer.caps();
+    let screen = Vec2::new(caps.screen_width as f32, caps.screen_height as f32);
+    let camera = Camera3 {
+        eye: Vec3::new(0.0, 0.0, -1.5),
+        target: Vec3::ZERO,
+        fov_y: 60.0 * core::f32::consts::PI / 180.0,
+    };
+    let view = camera.view();
+    let half = camera.fov_y * 0.5;
+    let focal = cos(half) / sin(half) * screen.y * 0.5;
+    let params = ModelParams {
+        shading: Shading::Unlit,
+        double_sided: true,
+        ..ModelParams::DEFAULT
+    };
+    // [edge, middle] of the panel, for the raw and the baked model.
+    let mut seen = [[Color::BLACK; 2]; 2];
+    for (k, model) in [AO_PANEL_RAW, AO_PANEL].into_iter().enumerate() {
+        // Several identical frames: the 3DS LCD is double-buffered.
+        for _ in 0..3 {
+            renderer.begin_frame(Color::BLACK);
+            renderer.set_camera(&camera);
+            renderer.set_light(&DEFAULT_LIGHT);
+            renderer.draw_model(model, &Transform3::default(), Material::VertexLit, &params);
+            renderer.end_frame();
+        }
+        for (i, x) in [-0.46f32, 0.0].into_iter().enumerate() {
+            let v = view.transform_point(Vec3::new(x, 0.0, 0.0));
+            let px = screen.x * 0.5 + v.x * focal / v.z;
+            let py = screen.y * 0.5 - v.y * focal / v.z;
+            let Some(c) = renderer.read_pixel(px as u32, py as u32) else {
+                return Ok(false);
+            };
+            seen[k][i] = c;
+        }
+    }
+    let luma = |c: Color| (c.r as i32 * 3 + c.g as i32 * 6 + c.b as i32) / 10;
+    let [[raw_edge, raw_mid], [ao_edge, ao_mid]] = seen;
+    if luma(raw_mid) < 200 || (luma(raw_edge) - luma(raw_mid)).abs() > 24 {
+        return Err("ambient occlusion: the panel without AO is not evenly white");
+    }
+    if (luma(ao_mid) - luma(raw_mid)).abs() > 24 {
+        return Err("ambient occlusion: the open middle of the panel darkened");
+    }
+    if luma(raw_edge) - luma(ao_edge) < 48 {
+        return Err("ambient occlusion: no baked occlusion next to the fins");
+    }
+    if (ao_edge.r as i32 - ao_edge.b as i32).abs() > 24 {
+        return Err("ambient occlusion: the occlusion tinted the panel");
     }
     Ok(true)
 }

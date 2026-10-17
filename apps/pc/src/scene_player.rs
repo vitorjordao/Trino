@@ -170,6 +170,7 @@ impl ScenePlayer {
         };
         r.set_camera(&camera);
         r.set_light(&env.core_light());
+        r.set_ambient_occlusion(env.core_ao().as_ref());
         let resolved = resolve_for(&self.scene, &self.lib, self.time, self.platform);
         let caps = r.caps();
         let screen = Vec2::new(caps.screen_width as f32, caps.screen_height as f32);

@@ -49,6 +49,9 @@ pub struct ModelAsset {
     pub source: String,
     /// Parsed placeholder when `source` is a `.prim.ron`.
     pub proxy: Option<Primitive>,
+    /// Ambient occlusion baked into its vertex colors (the manifest's
+    /// `ao`).
+    pub ao: Option<pipeline::AoBake>,
     pub thumb: Option<egui::TextureHandle>,
 }
 
@@ -145,11 +148,9 @@ impl Project {
         for m in assets.models {
             n += 1;
             let name = m.logical.trim_start_matches("models/").to_string();
-            let source = manifest
-                .as_ref()
-                .and_then(|man| man.models.get(&name))
-                .map(|d| d.file.clone())
-                .unwrap_or_default();
+            let decl = manifest.as_ref().and_then(|man| man.models.get(&name));
+            let source = decl.map(|d| d.file.clone()).unwrap_or_default();
+            let ao = decl.and_then(|d| d.options().ao);
             let src_path = self.resolve_source(&source);
             let proxy = if source.ends_with(".prim.ron") {
                 src_path.as_ref().and_then(|p| Primitive::load(p).ok())
@@ -190,6 +191,7 @@ impl Project {
                 clips,
                 source,
                 proxy,
+                ao,
                 thumb: None,
                 tmdl: m.tmdl,
             };
@@ -320,6 +322,16 @@ impl Project {
         let manifest = self.manifest_path();
         let text = std::fs::read_to_string(&manifest).map_err(|e| e.to_string())?;
         let new = edit::set_model_file(&text, name, file)?;
+        std::fs::write(&manifest, new).map_err(|e| e.to_string())
+    }
+
+    /// Bake ambient occlusion into a model's vertex colors (`Some`) or
+    /// stop (`None`): its manifest `ao` line (live: the watcher rebakes).
+    pub fn set_model_ao(&self, name: &str, ao: Option<&pipeline::AoBake>) -> Result<(), String> {
+        let manifest = self.manifest_path();
+        let text = std::fs::read_to_string(&manifest).map_err(|e| e.to_string())?;
+        let value = ao.map(|a| a.to_toml());
+        let new = edit::set_model_ao(&text, name, value.as_deref())?;
         std::fs::write(&manifest, new).map_err(|e| e.to_string())
     }
 

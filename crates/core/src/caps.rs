@@ -39,6 +39,10 @@ pub struct Caps {
     /// `set_local_lights`). On the N64 every draw a light reaches leaves
     /// the RSP for the CPU T&L, so its cap is small.
     pub max_local_lights: u8,
+    /// How ambient occlusion reaches the picture ([`crate::ao`], ADR
+    /// 0014): a screen-space pass on the PC, baked vertex colors on the
+    /// consoles.
+    pub ao_tier: crate::ao::AoTier,
 }
 
 /// Why a piece of content does not fit in a target's [`Caps`].
@@ -68,6 +72,7 @@ impl Caps {
         save_bytes: 2048,
         light_tier: crate::light::LightTier::PerVertex,
         max_local_lights: 2,
+        ao_tier: crate::ao::AoTier::Baked,
     };
 
     /// Nintendo 3DS (top screen): 400x240, 24-bit.
@@ -83,6 +88,7 @@ impl Caps {
         save_bytes: 64 * 1024,
         light_tier: crate::light::LightTier::PerVertex,
         max_local_lights: 4,
+        ao_tier: crate::ao::AoTier::Baked,
     };
 
     /// PC: generous defaults; the internal resolution follows the active
@@ -99,6 +105,7 @@ impl Caps {
         save_bytes: 1024 * 1024,
         light_tier: crate::light::LightTier::PerPixel,
         max_local_lights: 8,
+        ao_tier: crate::ao::AoTier::ScreenSpace,
     };
 
     /// Validate a texture of `width`x`height` at `bytes_per_pixel` against

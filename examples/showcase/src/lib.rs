@@ -42,9 +42,10 @@ use trino_core::math3d::{atan2, cos, sin, sqrt};
 use trino_core::physics::{Aabb, move_aabb};
 use trino_core::scene::{BakedScene, SceneNode};
 use trino_core::{
-    Ambience, Audio, BlobId, Button, Camera3, Color, Emitter, EntityId, EntityStore, FontId, Game,
-    InputState, Light, Listener, Mat34, Material, MusicId, ParticleSystem, Platform, Renderer,
-    Screen, SoundId, SpriteId, TextAlign, TextBuf, TextParams, Vec2, Vec3, spatialize,
+    Ambience, AmbientOcclusion, Audio, BlobId, Button, Camera3, Color, Emitter, EntityId,
+    EntityStore, FontId, Game, InputState, Light, Listener, Mat34, Material, MusicId,
+    ParticleSystem, Platform, Renderer, Screen, SoundId, SpriteId, TextAlign, TextBuf, TextParams,
+    Vec2, Vec3, spatialize,
 };
 
 pub mod panel;
@@ -57,9 +58,9 @@ mod scene {
 
 pub use scene::NODES;
 
-/// The exported scene's camera, light and clear color.
+/// The exported scene's camera, light, ambient occlusion and clear color.
 pub mod scene_consts {
-    pub use super::scene::{CAMERA, CLEAR, LIGHT};
+    pub use super::scene::{AO, CAMERA, CLEAR, LIGHT};
 }
 
 /// Live entities: the whole exported scene fits with room to spare.
@@ -114,6 +115,9 @@ pub struct ShowcaseGame {
     camera_fov: f32,
     light: Light,
     clear: Color,
+    /// Screen-space ambient occlusion (PC native only; the exported
+    /// scene's `AO`, none from a baked scene unless the host sets it).
+    pub ao: Option<AmbientOcclusion>,
     /// Coin pickup particles (billboards).
     sparks: ParticleSystem<32>,
     /// Scene sound sources (the pond) playing near the camera.
@@ -141,13 +145,15 @@ impl ShowcaseGame {
 
     /// The level from the exported code (`showcase_gen.rs`).
     pub fn with_screen(screen: Vec2) -> Self {
-        Self::from_scene(
+        let mut game = Self::from_scene(
             NODES.iter().copied(),
             scene::CAMERA,
             scene::LIGHT,
             scene::CLEAR,
             screen,
-        )
+        );
+        game.ao = scene::AO;
+        game
     }
 
     /// The level from the baked `TSCN` blob — the same scene loaded at
@@ -195,6 +201,7 @@ impl ShowcaseGame {
             camera_fov: camera.fov_y,
             light,
             clear,
+            ao: None,
             sparks: ParticleSystem::new(SPARKS, 0x5EED),
             ambience: Ambience::new(),
             picked: (0, Vec3::ZERO),
@@ -408,6 +415,8 @@ impl Game for ShowcaseGame {
         // the next game the target's own default).
         r.set_light(&self.look.light(&self.light));
         r.set_texture_filter(self.look.filter);
+        // The scene's screen-space AO (PC native; cleared every frame).
+        r.set_ambient_occlusion(self.ao.as_ref());
         // Everything the editor placed (animated clips included), coins
         // spinning and bobbing on top — game logic driven by tags.
         for (_, e) in self.world.iter() {

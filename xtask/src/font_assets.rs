@@ -297,9 +297,79 @@ pub fn write_slots_gltf(path: &std::path::Path) {
     std::fs::write(path, json).unwrap();
 }
 
+/// Ambient-occlusion probe (`[models.selftest_ao]` with a baked `ao`, and
+/// the same file as `[models.selftest_ao_raw]` without): a 1 m wide white
+/// panel facing -Z, split into 8 columns so its colors can vary across it,
+/// between two fins that stick out 0.5 m toward the viewer at its left and
+/// right edges. The baked AO darkens the panel next to the fins and leaves
+/// its middle open (`castle64::selftest::ambient_occlusion`).
+pub fn write_ao_gltf(path: &std::path::Path) {
+    let (mut pos, mut nrm, mut idx): (Vec<[f32; 3]>, Vec<[f32; 3]>, Vec<u16>) =
+        (Vec::new(), Vec::new(), Vec::new());
+    let (h, cols) = (0.35f32, 8u16);
+    for c in 0..=cols {
+        let x = -0.5 + c as f32 / cols as f32;
+        for y in [-h, h] {
+            pos.push([x, y, 0.0]);
+            nrm.push([0.0, 0.0, -1.0]);
+        }
+    }
+    for c in 0..cols {
+        let (b, n) = (c * 2, c * 2 + 2);
+        // (x1,-y), (x0,-y), (x0,+y), (x1,+y): front faces toward -Z.
+        idx.extend_from_slice(&[n, b, b + 1, n, b + 1, n + 1]);
+    }
+    for (x, nx) in [(-0.5f32, 1.0f32), (0.5, -1.0)] {
+        let b = pos.len() as u16;
+        for (z, y) in [(-0.5f32, -h), (0.0, -h), (0.0, h), (-0.5, h)] {
+            pos.push([x, y, z]);
+            nrm.push([nx, 0.0, 0.0]);
+        }
+        idx.extend_from_slice(&[b, b + 1, b + 2, b, b + 2, b + 3]);
+    }
+    let mut buf: Vec<u8> = Vec::new();
+    for v in pos.iter().chain(&nrm).flatten() {
+        buf.extend_from_slice(&v.to_le_bytes());
+    }
+    for i in &idx {
+        buf.extend_from_slice(&i.to_le_bytes());
+    }
+    let vbytes = pos.len() * 12;
+    let json = format!(
+        r#"{{
+  "asset": {{"version": "2.0"}},
+  "scene": 0,
+  "scenes": [{{"nodes": [0]}}],
+  "nodes": [{{"name": "ao-probe", "mesh": 0}}],
+  "meshes": [{{"primitives": [{{"attributes": {{"POSITION": 0, "NORMAL": 1}}, "indices": 2}}]}}],
+  "buffers": [{{"byteLength": {len}, "uri": "data:application/octet-stream;base64,{data}"}}],
+  "bufferViews": [
+    {{"buffer": 0, "byteOffset": 0, "byteLength": {vbytes}}},
+    {{"buffer": 0, "byteOffset": {vbytes}, "byteLength": {vbytes}}},
+    {{"buffer": 0, "byteOffset": {ioff}, "byteLength": {ibytes}}}
+  ],
+  "accessors": [
+    {{"bufferView": 0, "componentType": 5126, "count": {count}, "type": "VEC3", "min": [-0.5,-{h},-0.5], "max": [0.5,{h},0]}},
+    {{"bufferView": 1, "componentType": 5126, "count": {count}, "type": "VEC3"}},
+    {{"bufferView": 2, "componentType": 5123, "count": {icount}, "type": "SCALAR"}}
+  ]
+}}
+"#,
+        len = buf.len(),
+        data = b64(&buf),
+        ioff = vbytes * 2,
+        ibytes = idx.len() * 2,
+        count = pos.len(),
+        icount = idx.len(),
+    );
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, json).unwrap();
+}
+
 pub fn gen_all(repo_root: &Path, write_png: crate::castle64_assets::PngWriter) {
     write_skinned_gltf(&repo_root.join("assets/shared/models/proxies/selftest-strip.gltf"));
     write_slots_gltf(&repo_root.join("assets/shared/models/proxies/selftest-slots.gltf"));
+    write_ao_gltf(&repo_root.join("assets/shared/models/proxies/selftest-ao.gltf"));
     let (w, h, rgba) = atlas();
     let path = repo_root.join("assets/shared/fonts/trino5x7.png");
     std::fs::create_dir_all(path.parent().unwrap()).expect("create fonts dir");

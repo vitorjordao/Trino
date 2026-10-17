@@ -3,9 +3,9 @@
 
 #[allow(unused_imports)]
 use trino_core::{
-    Camera3, ClipId, Collider, Color, DetailTexture, Fog, Impostor, Light, LodLevel, Lods, Mat34,
-    ModelId, ModelParams, NO_CELL, SceneNode, Shading, Shape, SoundId, SoundSource, SpriteId, Tags,
-    TexFilter, Vec3, VisVolume,
+    AmbientOcclusion, AoQuality, Camera3, ClipId, Collider, Color, DetailTexture, Fog, Impostor,
+    Light, LodLevel, Lods, Mat34, ModelId, ModelParams, NO_CELL, SceneNode, Shading, Shape,
+    SoundId, SoundSource, SpriteId, Tags, TexFilter, Vec3, VisVolume,
 };
 
 pub const CLEAR: Color = Color::rgb(132, 178, 226);
@@ -21,6 +21,8 @@ pub const LIGHT: Light = Light {
     ambient_color: Color::rgba(190, 210, 255, 255),
     fog: Fog { color: Color::rgba(132, 178, 226, 255), near: 16.0, far: 42.0 },
 };
+
+pub const AO: Option<AmbientOcclusion> = None;
 
 pub static NODES: &[SceneNode] = &[
     SceneNode {

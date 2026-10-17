@@ -198,3 +198,36 @@ fn generated_code_lists_every_exported_node_and_component() {
     assert!(!code.contains("\"label\"") && !code.contains("\"hidden\""));
     assert!(!code.contains("-0.0"), "no negative zero churn");
 }
+
+#[test]
+fn codegen_exports_the_scene_ambient_occlusion() {
+    let (mut scene, lib) = (common::scene(), common::library());
+    // None without an `ao` block, and with `enabled: false`.
+    let (code, _) = codegen::to_rust(&scene, &lib);
+    assert!(code.contains("pub const AO: Option<AmbientOcclusion> = None;"));
+    scene.environment.ao = Some(trino_scene::AmbientOcclusionDef {
+        enabled: false,
+        ..Default::default()
+    });
+    let (code, _) = codegen::to_rust(&scene, &lib);
+    assert!(code.contains("pub const AO: Option<AmbientOcclusion> = None;"));
+    scene.environment.ao = Some(trino_scene::AmbientOcclusionDef {
+        radius: 1.25,
+        intensity: 1.5,
+        bias: 0.05,
+        quality: trino_scene::AoQualityDef::High,
+        ..Default::default()
+    });
+    let (code, _) = codegen::to_rust(&scene, &lib);
+    assert!(
+        code.contains(
+            "pub const AO: Option<AmbientOcclusion> = Some(AmbientOcclusion {\n    radius: 1.25,\n    \
+             intensity: 1.5,\n    bias: 0.05,\n    quality: AoQuality::High,\n});"
+        ),
+        "{code}"
+    );
+    // TSCN carries no AO (consoles bake theirs): the blob is unchanged.
+    let with = bake::to_tscn(&scene, &lib).0;
+    scene.environment.ao = None;
+    assert_eq!(with, bake::to_tscn(&scene, &lib).0);
+}

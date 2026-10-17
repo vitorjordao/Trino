@@ -20,6 +20,7 @@
 //! by snapshot tests).
 
 pub mod anim;
+pub mod ao;
 pub mod bake;
 pub mod font;
 pub mod impostor;
@@ -32,6 +33,7 @@ pub mod resolve;
 #[cfg(feature = "watch")]
 pub mod watch;
 
+pub use ao::{AoBake, AoDecl, bake_vertex_ao};
 pub use bake::{BakeError, BakeReport, bake_all};
 pub use font::{BakedFont, FontDecl, bake_font};
 pub use loader::{

@@ -143,6 +143,11 @@ shipping a 3D game first**, then by cost:
     top of that pipeline, under the same per-platform budgets. The legacy examples stay
     until it replaces them: the hot-reload test builds `hello-sprite`, and a PC golden
     and the editor's Level tab use `platformer`.
+15. **Scene-level ambient occlusion bake** (M). Today's baked AO is per model: each
+    model occludes only itself, plus an optional ground plane. For consoles to get
+    contact shadows between models, bake per static instance: a vertex-color copy per
+    instance, under a RAM budget. Also put the scene's `ao` block in TSCN (a version
+    bump) for PC games that load levels as data. (ADR 0014, Consequences.)
 
 ## Engineering hygiene (ongoing)
 
@@ -152,6 +157,31 @@ shipping a 3D game first**, then by cost:
   time) and bless `tests/perf/` on purpose. Host benches stay as regression guards only.
 
 ---
+
+## Done — ambient occlusion per tier (2026-10-16, branch `feat/ambient-occlusion`, GitHub #42, ADR 0014)
+
+| Item | Evidence |
+|---|---|
+| `trino_core::ao` (`AmbientOcclusion`, `AoQuality` 8/16/32 samples, `AoTier`), `Caps::ao_tier` (PC `ScreenSpace`, consoles `Baked`), `Renderer::set_ambient_occlusion` (default no-op, cleared at `begin_frame`) | core unit tests; `renderer_defaults`; `console_profiles_never_run_it` (the N64/3DS sim profiles ignore it, even forced on) |
+| PC SSAO (`renderer/ao.rs`, `ao.wgsl`): depth read-back, normals from the nearer neighbor, a Bayer-rotated cosine kernel, a 5-tap bilateral blur, a multiply composite after the frame's last 3D draw and before the 2D; a fog fade; half resolution above 540 lines with a depth-aware upsample; `AoView` (game/off/on/mask), `TRINO_AO` | `crates/platform-pc/tests/ambient_occlusion.rs`: contacts and creases ≥ 18/25 luma darker, open floor and box tops within 3, background exact, a HUD patch over a contact untouched, no AO = identical frames (and cleared next frame), quality and intensity, fog, half resolution; goldens `ao_native.png`, `ao_mask.png`; every other PC golden unchanged |
+| Baked vertex AO (`ao = { strength, distance, rays, ground }` on `[models.*]`, `asset-pipeline/src/ao.rs`: BVH ray casts, deterministic), `manifest::edit::set_model_ao` | `crates/asset-pipeline/tests/vertex_ao.rs`, unit tests (corner, ground, BVH = brute force, manifest forms, edit helper); the `ambient occlusion` self-test step (`models/selftest_ao` vs `selftest_ao_raw`) on PC, in ares and in Azahar (2026-10-16: probed, `TRINO_TEST_PASS`); disabling the bake makes the step fail |
+| Scenes: `Environment::ao` (`AmbientOcclusionDef`, all fields defaulted, `enabled` keeps the tuning), codegen `AO`, `showcase` and `apps/pc`'s scene player apply it | `crates/scene` unit tests, `export.rs::codegen_exports_the_scene_ambient_occlusion` (TSCN bytes unchanged); `showcase_gen.rs` regenerated (`AO = None`), `scene_codegen` and `showcase_render` pass |
+| Editor: Inspector › Ambient Occlusion (checkbox, radius, intensity, bias, quality; undoable, saved), the Scene view's AO menu (toolbar and View: as the scene, always on, off, mask), model › Ambient occlusion (baked) with Bake / Re-bake / Remove, Play here; hooks `TRINO_EDITOR_AO`, `TRINO_EDITOR_INSPECT=ao` | `ui_tests::ambient_occlusion_panel_view_modes_and_baking` (3/3 runs), the layout audit |
+| castle64 sets SSAO on the PC (radius 0.6, Medium) | evidence `cargo test -p xtask --test ao_shots -- --ignored` (every example and scene, off / on / mask; the baked panel on the native, N64 and 3DS profiles); PC cost (Renoir iGPU, whole hub frame) 360p +1.2 ms, 720p +1.3, 1080p +3.0, 4K +9.4 |
+
+Consoles: no N64 or 3DS backend code changed. Both N64 goldens are identical, and so are
+the three 3DS goldens (means 0.58, 0.02 and 0.00, as before). Every N64 perf scene is
+under its ceiling, and the stack watermark is 58 672 B (gate 61 440).
+
+Deviations from #42:
+- Consoles get AO from vertex colors baked per model: self-occlusion plus an optional
+  ground contact. Occlusion *between* models is PC-only (SSAO).
+- TSCN carries no AO: PC games that load baked scenes set it in code.
+- The bake trigger is in the model inspector, as the issue asked. It writes the
+  manifest, and the watcher rebakes. No vertex colors are edited by hand.
+
+Follow-ups: scene-level AO baking per instance, so static models occlude each other on
+consoles; AO in TSCN.
 
 ## Done — the showcase uses both 3DS screens (2026-10-16, branch `examples/showcase-two-screens`, GitHub #20)
 

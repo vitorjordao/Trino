@@ -497,6 +497,15 @@ pub trait Renderer {
     /// `begin_frame`, like the local lights.
     fn set_wetness(&mut self, _wetness: f32) {}
 
+    /// Screen-space ambient occlusion for this frame ([`crate::ao`]): on
+    /// the [`crate::AoTier::ScreenSpace`] tier (PC native) the 3D drawn
+    /// before the frame's last 3D draw is darkened in creases and where
+    /// models meet; 2D drawn after it is not. Baked-tier targets (the
+    /// consoles) ignore it: their occlusion is baked into vertex colors.
+    /// `None` turns it off. **Cleared at `begin_frame`**, like the local
+    /// lights: set it every frame.
+    fn set_ambient_occlusion(&mut self, _ao: Option<&crate::ao::AmbientOcclusion>) {}
+
     /// What [`TexFilter::Default`] means for the next 3D draws (persists,
     /// like `set_light`): toggle the whole game between crisp and smooth
     /// textures. `TexFilter::Default` restores the target's own default.

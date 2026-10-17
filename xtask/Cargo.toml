@@ -13,6 +13,8 @@ trino-asset-pipeline = { workspace = true, features = ["watch"] }
 trino-scene = { workspace = true }
 # `new --standalone` (shared with the editor's project launcher).
 trino-scaffold = { workspace = true }
+# The showcase's river course: `gen-assets` builds its meshes from it.
+showcase = { workspace = true }
 notify = { workspace = true }
 notify-debouncer-full = { workspace = true }
 png = { workspace = true }

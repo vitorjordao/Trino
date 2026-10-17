@@ -101,6 +101,9 @@ pub fn to_tscn_for(scene: &Scene, lib: &Library, target: Target) -> (Vec<u8>, Ve
         if item.sound.is_some() {
             flags |= 16;
         }
+        if p.water.is_some() {
+            flags |= 64;
+        }
         if p.detail.is_some() {
             flags |= 32;
         }
@@ -172,6 +175,18 @@ pub fn to_tscn_for(scene: &Scene, lib: &Library, target: Target) -> (Vec<u8>, Ve
         };
         out.extend_from_slice(&[p.gloss, filter, p.detail.map_or(0, |d| d.scale_log2), 0]);
         out.extend_from_slice(&p.detail.map_or(0, |d| d.sprite.0).to_le_bytes());
+        let w = p.water.unwrap_or(trino_core::Water::DEFAULT);
+        for v in [
+            w.flow_speed.x,
+            w.flow_speed.y,
+            w.detail_flow.x,
+            w.detail_flow.y,
+            w.wave_amplitude,
+            w.wave_frequency,
+            w.ripple_responsiveness,
+        ] {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
         debug_assert_eq!(out.len() - start, TSCN_NODE_BYTES);
     }
     out.extend_from_slice(&strings);

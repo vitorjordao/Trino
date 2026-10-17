@@ -225,6 +225,15 @@ like any master):
 )
 ```
 
+**Water** (ADR 0015): add `water: Some((flow_speed: (0.0, -0.3), detail_flow: (0.04, -0.55),
+wave_amplitude: 0.04, wave_frequency: 0.55, ripple_responsiveness: 1.0))` (every field
+optional). The `detail` texture is the second flowing layer, blended 50/50 with the
+base. On the N64 both layers share TMEM: use I8 + I4 (or 16-bit) images, never a
+palette (`assets/materials/water.material.ron`, `sprites/tex_water`, `tex_ripples`).
+The mesh's vertex alpha sets the translucency (deep middle opaque, banks clear). The
+showcase's river meshes come from `xtask/src/river_assets.rs` (`cargo xtask
+gen-assets`), driven by the same `showcase::river` table as the game's floor.
+
 Scenes/prefabs reference materials by logical path; games use the equivalent
 `ModelParams` (or export the scene to code — `scene-authoring` skill).
 

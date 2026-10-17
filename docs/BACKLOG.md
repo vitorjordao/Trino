@@ -149,6 +149,18 @@ shipping a 3D game first**, then by cost:
     instance, under a RAM budget. Also put the scene's `ao` block in TSCN (a version
     bump) for PC games that load levels as data. (ADR 0014, Consequences.)
 
+16. **Water on the RSP** (M–L). An overlay command that displaces (two sines and up
+    to four ripples, in fixed point), lights, applies Fresnel and fog, and feeds
+    textured triangles to `RDPQ_Triangle_Send_Async` (S/T s10.5, W and 1/W per
+    vertex). It is the way to issue #49's 1.2 ms river: the CPU path costs 12.5 ms
+    for the showcase's 128-triangle river in ares (ADR 0015, Measurements). It is
+    worth it once the overlay also does fog and colored light (P0 #1c); the showcase
+    has both, so today every one of its draws is on the CPU.
+17. **3DS water: fragment lighting and long surfaces** (S–M). A `C3D_LightEnv` with a
+    Fresnel LUT for a per-pixel glint. Split long water surfaces into pieces so the
+    GPU takes the ones wholly ahead of the camera; the ripple rings then need
+    deduplicating (ADR 0015 §5).
+
 ## Engineering hygiene (ongoing)
 
 - Keep `docs/adr/` current: every format change gets a version bump, a migration and
@@ -157,6 +169,37 @@ shipping a 3D game first**, then by cost:
   time) and bless `tests/perf/` on purpose. Host benches stay as regression guards only.
 
 ---
+
+## Done — water surfaces per tier and the showcase river (2026-10-17, branch `feat/water-surfaces`, GitHub #49, ADR 0015)
+
+| Item | Evidence |
+|---|---|
+| `trino_core::water` (`Water`, `Ripple`, `RippleBuffer`, `WaterState`, `WaveSet`, `sin_turns`, Fresnel, `WaterTier`), `ModelParams::water`, `Renderer::set_water` (default no-op, cleared at `begin_frame`), `Caps::{water_tier, max_ripples}` | core unit tests (sine, gradients by finite differences, ripple rings and decay, the buffer, Fresnel and glint, scroll); `renderer_defaults` |
+| Water T&L in the core (a `WATER` copy of `lit.rs`'s loop): displacement, normals, UV flow, per-vertex light + Fresnel + glint + fog, ripple rings (`tessellate_ripples`); `RspReject::Water`, `GpuReject::Water`, no memo; symmetric clipping; fog-band depth splits | `crates/core/tests/water.rs` (6 tests: unchanged without water, swell, flow, rings drawn last, surface normals, off the RSP/GPU/memo); every castle64 work counter and every PC golden unchanged |
+| PC tiers: `fs_water` (per-pixel normals, Fresnel, glint, ripple crests, depth foam from a depth copy), `fs_water_vertex` (the consoles' 50/50 layer blend), `TriKind::Water` drawn last without depth writes, water sets, strict ripple cap | `crates/platform-pc/tests/water.rs` (7 tests: goldens `water_native`/`water_n64`/`water_n3ds`, the floor through the water, rings and swell per tier, foam per pixel only, state cleared per frame, drawn after the batch under the 2D, strict mode); `xtask/tests/showcase_river.rs` (golden `showcase_river.png`) |
+| N64: a water bucket after the RSP commands; `trino_3d_water` (2-cycle `(TEX1 − TEX0) · ENV_A + TEX0` then × SHADE, TILE1 translated by the layer's flow, `RDPQ_BLENDER_MULTIPLY`, z compare without update) | the `water` self-test step in ares (2026-10-17: probed, `TRINO_TEST_PASS`); `n64_parity` (PC N64 look vs ares, mean 2.79); goldens `showcase.png` (re-blessed) and `showcase_river.png` (new), `castle64_hub.png` unchanged |
+| 3DS: `water.v.pica` (the PICA200 displaces, lights, Fresnel, glint, fog, four ripples in uniform lanes) + TexEnv blend, `gpu_water` constants, CPU fallback with the same TexEnv, `detailoff` on texcoord1 | `crates/core/tests/gpu_water.rs` (the shader's math in f32 = the CPU path within 2/255); Azahar: the `water` step probed, `gpu tnl water` 0 of 960 samples differ (mean 0.08), goldens `showcase_river.png` (new) and `showcase_bottom.png` (re-blessed metrics), castle64's unchanged |
+| Materials (`WaterDef`, ranges in `scene check`), TSCN v4, codegen | `material.rs` unit test, `crates/scene/tests/export.rs` (a pond through TSCN and codegen), `scene_nodes.rs` (v3 refused) |
+| Showcase river: `showcase::river` (course, floor), generated terrain/ribbon/bridge/layers/sounds (`river_assets.rs`), wading, ripples, splashes, a patrolling robot, a shoved crate, `showcase-river` perf scene | showcase tests (wading, patrol, crate, the scripted run splashes), `river_assets` tests (the terrain matches the floor the game walks), `perf_budget` (new `showcase-river` baselines), the console self-tests check the demo splashed |
+| Editor: material › Water (toggle and 7 sliders), Drop a ripple, the views' water clock, budget lines (triangles, combiner cycles, TMEM), `TRINO_EDITOR_RIPPLE`; `scene budget` prints the same | `widget_tests::water_editor_turns_a_surface_on_and_edits_it`, `ui_tests::water_budget_ripples_and_material_edits`, `budget::tmem_counts_padded_rows_and_refuses_palettes` |
+
+N64: the self-test's stack peak fell from 58 672 to 25 072 B. The showcase games used
+to be built on the stack; now one is copied from a static into a box and reset in place.
+
+Deviations from #49:
+- No WGSL vertex shader: the core displaces on every target (ADR 0015 §3). The PC
+  adds its detail per pixel.
+- **The river's N64 budget (≤ 1.2 ms) is not met.** It costs 12.5 ms of CPU T&L in
+  ares. An RSP water command is follow-up 16.
+- **The showcase is not 30 fps on the N64.** It wasn't before either: about 150 ms
+  estimated, with every draw on the CPU because of its colored light and fog. The
+  `showcase-river` scene measures 284 ms per frame and is now gated.
+- The 3DS's Fresnel and glint are per vertex in `water.v.pica`, not a
+  `C3D_LightEnvLut` (follow-up 17).
+- Ripples on the per-vertex tiers are drawn as rings over the displaced surface: a
+  16 × 4 ribbon can't show a 0.55 m ripple in its vertices.
+- One river ribbon of 128 triangles. Under the showcase's own camera it stays on the
+  3DS's CPU water path: part of it is behind the camera.
 
 ## Done — ambient occlusion per tier (2026-10-16, branch `feat/ambient-occlusion`, GitHub #42, ADR 0014)
 

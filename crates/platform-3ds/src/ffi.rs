@@ -63,9 +63,27 @@ unsafe extern "C" {
     /// a half-alpha cutout), null = vertex colors only.
     pub fn trino_3d_draw(verts: *const f32, count: u32, sheet: *mut c_void, clamp: u32);
     /// Sampling of the next `trino_3d_draw` calls: `flags` bit 1 point
-    /// filter, bits 4..8 the detail layer's repeats per base repeat (log2);
-    /// `detail` (null = none) is multiplied over the texture.
-    pub fn trino_3d_material(detail: *mut c_void, flags: u32);
+    /// filter, bits 4..8 the detail layer's repeats per base repeat (log2),
+    /// bit 8 water (ADR 0015: the layers blended half and half times the
+    /// vertex color, blended over the frame without writing depth, the
+    /// detail layer offset by `scroll` = `u << 16 | v` in 1/65536 of its
+    /// repeat); `detail` (null = none) is multiplied over the texture.
+    pub fn trino_3d_material(detail: *mut c_void, flags: u32, scroll: u32);
+    /// Copy a water mesh to linear memory for `trino_water_draw`: `nverts`
+    /// vertices of 24 bytes (x, y, z, u, v floats, r, g, b, a bytes) and
+    /// `nidx` u16 indices. Null when linear memory is short.
+    pub fn trino_water_mesh(
+        verts: *const u8,
+        nverts: u32,
+        idx: *const u16,
+        nidx: u32,
+    ) -> *mut c_void;
+    /// Draw a water mesh on the GPU (`water.v.pica`, ADR 0015): `u` = 104
+    /// floats (the world-to-screen matrix, the model rows, then the
+    /// shader's vectors from `wdir` to `detailoff`), `sheet` the base
+    /// texture (null = none), the material from `trino_3d_material`.
+    /// `flags` bit 0: cull back faces.
+    pub fn trino_water_draw(mesh: *mut c_void, u: *const f32, sheet: *mut c_void, flags: u32);
     /// Copy a mesh to linear memory for the GPU T&L path: `nverts`
     /// vertices of 28 bytes (x, y, z, nx, ny, nz as f32, then r, g, b, a)
     /// and `nidx` u16 indices. Null when linear memory is short.

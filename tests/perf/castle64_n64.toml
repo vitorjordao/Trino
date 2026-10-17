@@ -35,3 +35,12 @@ frame_us = 19800
 tnl_us = 10000
 sort_us = 1000
 submit_us = 2900
+
+# The showcase's river (water, ADR 0015; `showcase::perf::river_scene`):
+# the whole fogged, colored-light showcase on the CPU T&L path, so ~4 fps
+# on the N64 — gated so it doesn't get worse.
+[showcase-river]
+frame_us = 342000
+tnl_us = 211900
+sort_us = 39000
+submit_us = 116800

@@ -28,18 +28,141 @@
         rot: (0.0, 0.0, 0.0),
         scale: (1.0, 1.0, 1.0),
     ),
-    model: Some((path: "models/ground", material: Some("materials/grass"))),
-    collider: Some((shape: Box(size: (40.0, 1.0, 40.0)), offset: (0.0, -0.5, 0.0))),
+    model: Some((path: "models/terrain")),
 ),
 (
-    name: "pond",
+    name: "river",
     transform: (
-        pos: (6.0, 0.1, -5.0),
+        pos: (0.0, 0.0, 0.0),
         rot: (0.0, 0.0, 0.0),
         scale: (1.0, 1.0, 1.0),
     ),
-    model: Some((path: "models/water", material: Some("materials/water"))),
-    sound: Some((path: "sounds/water", radius: 9.0, volume: 0.8)),
+    tags: ["water"],
+    model: Some((path: "models/river", material: Some("materials/water"))),
+),
+(
+    name: "bridge",
+    transform: (
+        pos: (0.0, 0.0, 0.0),
+        rot: (0.0, 0.0, 0.0),
+        scale: (1.0, 1.0, 1.0),
+    ),
+    model: Some((path: "models/bridge", material: Some("materials/wood"))),
+),
+(
+    name: "murmur-west",
+    transform: (
+        pos: (-7.0, 0.0, -0.8),
+        rot: (0.0, 0.0, 0.0),
+        scale: (1.0, 1.0, 1.0),
+    ),
+    sound: Some((path: "sounds/river_flow", radius: 9.0, volume: 0.7)),
+),
+(
+    name: "murmur-east",
+    transform: (
+        pos: (9.0, 0.0, -4.0),
+        rot: (0.0, 0.0, 0.0),
+        scale: (1.0, 1.0, 1.0),
+    ),
+    sound: Some((path: "sounds/river_flow", radius: 10.0, volume: 0.8)),
+),
+(
+    name: "loose-crate",
+    transform: (
+        pos: (-0.3, 0.0, -2.4),
+        rot: (0.0, 8.0, 0.0),
+        scale: (1.0, 1.0, 1.0),
+    ),
+    tags: ["pushable"],
+    model: Some((path: "models/crate", material: Some("materials/wood"))),
+    collider: Some(()),
+),
+(
+    name: "stepping-stones",
+    transform: (
+        pos: (0.0, 0.0, 0.0),
+        rot: (0.0, 0.0, 0.0),
+        scale: (1.0, 1.0, 1.0),
+    ),
+    children: [
+(
+    name: "stone-1",
+    transform: (
+        pos: (1.7, -0.25, -1.55),
+        rot: (0.0, 0.0, 0.0),
+        scale: (0.7, 0.35, 0.7),
+    ),
+    model: Some((path: "models/stone", material: Some("materials/stone"))),
+),
+(
+    name: "stone-2",
+    transform: (
+        pos: (2.25, -0.23, -0.75),
+        rot: (0.0, 37.0, 0.0),
+        scale: (0.7, 0.35, 0.7),
+    ),
+    model: Some((path: "models/stone", material: Some("materials/stone"))),
+),
+(
+    name: "stone-3",
+    transform: (
+        pos: (1.75, -0.26, 0.1),
+        rot: (0.0, 74.0, 0.0),
+        scale: (0.7, 0.35, 0.7),
+    ),
+    model: Some((path: "models/stone", material: Some("materials/stone"))),
+),
+(
+    name: "stone-4",
+    transform: (
+        pos: (2.3, -0.24, 0.95),
+        rot: (0.0, 21.0, 0.0),
+        scale: (0.7, 0.35, 0.7),
+    ),
+    model: Some((path: "models/stone", material: Some("materials/stone"))),
+)
+    ],
+),
+(
+    name: "spring",
+    transform: (
+        pos: (-12.0, 0.0, -3.2),
+        rot: (0.0, 0.0, 0.0),
+        scale: (1.0, 1.0, 1.0),
+    ),
+    children: [
+(
+    name: "spring-rock-1",
+    transform: (
+        pos: (-1.0, 0.15, -0.4),
+        rot: (0.0, 0.0, 0.0),
+        scale: (1.1, 0.8, 1.0),
+    ),
+    model: Some((path: "models/stone", material: Some("materials/stone"))),
+    collider: Some(()),
+),
+(
+    name: "spring-rock-2",
+    transform: (
+        pos: (-0.5, 0.2, 0.7),
+        rot: (0.0, 25.0, 0.0),
+        scale: (0.9, 0.9, 1.1),
+    ),
+    model: Some((path: "models/stone", material: Some("materials/stone"))),
+    collider: Some(()),
+),
+(
+    name: "spring-rock-3",
+    transform: (
+        pos: (-1.4, 0.25, 0.5),
+        rot: (0.0, 50.0, 0.0),
+        scale: (0.8, 1.1, 0.8),
+    ),
+    model: Some((path: "models/stone", material: Some("materials/stone"))),
+    collider: Some(()),
+)
+    ],
 ),
 (
     name: "tree-1",
@@ -54,7 +177,7 @@
 (
     name: "tree-2",
     transform: (
-        pos: (-8.0, 0.0, 1.0),
+        pos: (-8.4, 0.0, 1.6),
         rot: (0.0, 30.0, 0.0),
         scale: (1.3, 1.3, 1.3),
     ),
@@ -64,7 +187,7 @@
 (
     name: "tree-3",
     transform: (
-        pos: (-5.0, 0.0, -3.0),
+        pos: (-6.5, 0.0, -3.6),
         rot: (0.0, 60.0, 0.0),
         scale: (0.9, 0.9, 0.9),
     ),
@@ -94,7 +217,7 @@
 (
     name: "crates",
     transform: (
-        pos: (-3.0, 0.0, 2.0),
+        pos: (-3.2, 0.0, 3.4),
         rot: (0.0, 0.0, 0.0),
         scale: (1.0, 1.0, 1.0),
     ),
@@ -174,7 +297,7 @@
 (
     name: "ramp",
     transform: (
-        pos: (3.0, 0.0, 1.5),
+        pos: (4.6, 0.0, 2.6),
         rot: (0.0, 180.0, 0.0),
         scale: (1.0, 1.0, 1.0),
     ),
@@ -193,7 +316,7 @@
 (
     name: "rock-2",
     transform: (
-        pos: (-9.0, 0.25, -4.0),
+        pos: (-9.2, 0.25, -4.4),
         rot: (0.0, 0.0, 0.0),
         scale: (1.0, 0.6, 1.4),
     ),
@@ -222,7 +345,7 @@
 (
     name: "lamp-2",
     transform: (
-        pos: (2.5, 0.0, -2.0),
+        pos: (3.2, 0.0, -3.4),
         rot: (0.0, 0.0, 0.0),
         scale: (1.0, 1.0, 1.0),
     ),
@@ -231,11 +354,11 @@
 (
     name: "robot-walker",
     transform: (
-        pos: (0.5, 0.0, -0.5),
+        pos: (-2.4, 0.0, -3.0),
         rot: (0.0, 200.0, 0.0),
         scale: (1.0, 1.0, 1.0),
     ),
-    tags: ["npc"],
+    tags: ["npc", "patrol"],
     model: Some((path: "models/robot", material: Some("materials/metal"), anim: Some((clip: "walk", speed: 1.0)))),
 ),
 (
@@ -251,7 +374,7 @@
 (
     name: "windmill",
     transform: (
-        pos: (-7.0, 0.0, -8.0),
+        pos: (-10.0, 0.0, -6.8),
         rot: (0.0, 200.0, 0.0),
         scale: (1.0, 1.0, 1.0),
     ),
@@ -348,6 +471,15 @@
     ),
     tags: ["player"],
     model: Some((path: "models/hero-capsule", material: Some("materials/metal"))),
+),
+(
+    name: "patrol-end",
+    transform: (
+        pos: (-2.4, 0.0, 2.6),
+        rot: (0.0, 0.0, 0.0),
+        scale: (1.0, 1.0, 1.0),
+    ),
+    tags: ["patrol-end"],
 ),
 (
     name: "goal",

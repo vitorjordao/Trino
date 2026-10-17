@@ -14,7 +14,7 @@ use trino_core::render3d::{
     Camera3, GpuReject, Light, Mesh, RspReject, TnlContext, TnlScratch, TnlStats, gpu_check,
     gpu_mesh_check, rsp_check, rsp_mesh_check, tessellate_with,
 };
-use trino_core::{LodPick, ModelId, Vec2};
+use trino_core::{LodPick, ModelId, SpriteId, Vec2};
 
 use crate::{Resolved, Target};
 
@@ -48,6 +48,66 @@ pub struct FrameBudget {
     /// Draws whose whole mesh was outside the view: sent and paid for,
     /// nothing drawn. Their names.
     pub wasted: Vec<String>,
+    /// The water surfaces drawn (ADR 0015).
+    pub water: Vec<WaterDraw>,
+}
+
+/// One water surface's cost: what the N64 tier spends on it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct WaterDraw {
+    pub name: String,
+    /// Triangles that reach the rasterizer (ripple rings not counted: the
+    /// estimate has no ripples).
+    pub tris: u32,
+    /// The N64 combiner: 2 cycles to blend both flowing layers, 1 for one.
+    pub cycles: u8,
+    /// The two layers (TMEM: [`tmem_bytes`] of each, sharing 4096 bytes).
+    pub texture: Option<SpriteId>,
+    pub detail: Option<SpriteId>,
+}
+
+/// TMEM bytes of a `width`×`height` texture in N64 `format` (rows padded to
+/// 8 bytes, as rdpq loads them), or `None` for a palette format (CI4/CI8:
+/// its TLUT takes TMEM's upper half, so it can't share TMEM with a second
+/// layer) or an unknown one.
+pub fn tmem_bytes(width: u32, height: u32, format: &str) -> Option<u32> {
+    let bits = match format {
+        "RGBA32" => 32,
+        "RGBA16" | "RGBA5551" | "IA16" => 16,
+        "I8" | "IA8" => 8,
+        "I4" | "IA4" => 4,
+        _ => return None,
+    };
+    Some((width * bits / 8).next_multiple_of(8) * height)
+}
+
+/// The HUD's and the CLI's water lines, two per surface: its triangles and
+/// combiner cycles, then the layers' TMEM (`tmem` gives a sprite's N64 TMEM
+/// bytes; `None` = a palette, unknown or missing) out of 4096. Short: the
+/// HUD is 210 px wide.
+pub fn water_lines(b: &FrameBudget, tmem: &dyn Fn(SpriteId) -> Option<u32>) -> Vec<String> {
+    let mut out = Vec::new();
+    for w in &b.water {
+        out.push(format!(
+            "Water {} · {} tris · {}-cycle",
+            w.name, w.tris, w.cycles
+        ));
+        let layers: Vec<Option<u32>> = [w.texture, w.detail]
+            .into_iter()
+            .flatten()
+            .map(tmem)
+            .collect();
+        out.push(if layers.is_empty() {
+            "  no texture".to_string()
+        } else if layers.iter().all(Option::is_some) {
+            let sum: u32 = layers.iter().flatten().sum();
+            let fit = if sum <= 4096 { "" } else { " over TMEM" };
+            format!("  TMEM {sum}/4096 B{fit}")
+        } else {
+            "  TMEM: palette layer (detail dropped)".to_string()
+        });
+    }
+    out
 }
 
 impl FrameBudget {
@@ -147,6 +207,17 @@ pub fn estimate<'m>(
         if stats.culled > 0 {
             b.wasted.push(item.name.clone());
         }
+        if item.params.water.is_some() {
+            let texture = mesh.texture_for(&item.params);
+            let detail = texture.and(item.params.detail.map(|d| d.sprite));
+            b.water.push(WaterDraw {
+                name: item.name.clone(),
+                tris: stats.emitted,
+                cycles: if detail.is_some() { 2 } else { 1 },
+                texture,
+                detail,
+            });
+        }
         if target == Target::N3ds {
             match gpu_mesh_check(&mesh)
                 .and_then(|_| gpu_check(&ctx, &mesh, &item.matrix, &item.params))
@@ -195,5 +266,37 @@ fn count<R: PartialEq>(reasons: &mut Vec<(R, u32)>, reason: R) {
     match reasons.iter_mut().find(|(k, _)| *k == reason) {
         Some((_, n)) => *n += 1,
         None => reasons.push((reason, 1)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tmem_counts_padded_rows_and_refuses_palettes() {
+        assert_eq!(tmem_bytes(32, 32, "I8"), Some(1024));
+        assert_eq!(tmem_bytes(32, 32, "I4"), Some(512));
+        assert_eq!(tmem_bytes(32, 32, "RGBA5551"), Some(2048));
+        assert_eq!(tmem_bytes(4, 2, "I4"), Some(16), "rows pad to 8 bytes");
+        assert_eq!(tmem_bytes(32, 32, "CI4"), None);
+        let b = FrameBudget {
+            water: vec![WaterDraw {
+                name: "river".into(),
+                tris: 128,
+                cycles: 2,
+                texture: Some(SpriteId(1)),
+                detail: Some(SpriteId(2)),
+            }],
+            ..FrameBudget::default()
+        };
+        let lines = water_lines(&b, &|s| Some(if s.0 == 1 { 1024 } else { 512 }));
+        assert_eq!(
+            lines,
+            ["Water river · 128 tris · 2-cycle", "  TMEM 1536/4096 B"]
+        );
+        let over = water_lines(&b, &|_| Some(4000));
+        assert!(over[1].contains("over TMEM"), "{over:?}");
+        assert!(water_lines(&b, &|_| None)[1].contains("palette"));
     }
 }

@@ -384,9 +384,9 @@ fn baked_scene_rejects_bad_blobs() {
         BakedScene::parse(leak(magic)).unwrap_err(),
         SceneError::BadMagic
     );
-    // v1 (8-byte LOD records), v2 (no surface) and future versions need a
-    // rebake.
-    for v in [1u8, 2, 4] {
+    // v1 (8-byte LOD records), v2 (no surface), v3 (no water) and future
+    // versions need a rebake.
+    for v in [1u8, 2, 3, 5] {
         let mut other = good.to_vec();
         other[4] = v;
         assert_eq!(

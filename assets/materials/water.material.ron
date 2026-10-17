@@ -1,6 +1,19 @@
 (
     version: 1,
-    tint: (200, 230, 255, 255),
-    shading: Unlit,
-    double_sided: true,
+    tint: (255, 255, 255, 255),
+    shading: Gouraud,
+    texture: Some("sprites/tex_water"),
+    gloss: 170,
+    filter: Bilinear,
+    detail: Some((
+        texture: "sprites/tex_ripples",
+        scale_log2: 1,
+    )),
+    water: Some((
+        flow_speed: (0.0, -0.3),
+        detail_flow: (0.04, -0.55),
+        wave_amplitude: 0.04,
+        wave_frequency: 0.55,
+        ripple_responsiveness: 1.0,
+    )),
 )

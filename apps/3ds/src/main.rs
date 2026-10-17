@@ -150,7 +150,14 @@ mod n3ds {
         drop(g);
         let mut demo =
             alloc::boxed::Box::new(showcase::ShowcaseGame::with_screen(Vec2::new(400.0, 240.0)));
-        gpu_tnl_frame(renderer, "showcase-fog", &mut |r| demo.render(r))
+        gpu_tnl_frame(renderer, "showcase-fog", &mut |r| demo.render(r))?;
+        drop(demo);
+        // Water (ADR 0015): the sheet through water.v.pica against the CPU's
+        // water T&L (swell, a ripple, fog-free sky, glint, both layers).
+        let (camera, params, time, ripples) = castle64::selftest::gpu_water_scene();
+        gpu_tnl_frame(renderer, "water", &mut |r| {
+            castle64::selftest::water_scene(r, &camera, &params, time, &ripples)
+        })
     }
 
     /// Deterministic self-check exercising 3D physics + render + assets,
@@ -212,6 +219,10 @@ mod n3ds {
                     trino_core::Renderer::end_frame(renderer);
                 }
                 return;
+            }
+            // The route wades across the river (ripples, splashes, water).
+            if demo.splashes == 0 {
+                runtime::log("TRINO_TEST_FAIL:showcase: the demo never entered the river\n");
             }
         }
         runtime::log("TRINO_STEP:baked scene\n");
@@ -359,6 +370,17 @@ mod n3ds {
                         Ok(true) => {
                             runtime::log("TRINO_STEP:showcase panel probed\n");
                             renderer.dump_framebuffer_bottom();
+                            // 7) The showcase's river (ADR 0015) under its
+                            // scene camera, the hero wading in: the fourth
+                            // golden, showcase_river.png (top screen).
+                            runtime::log("TRINO_STEP:river golden frame\n");
+                            let mut g = alloc::boxed::Box::new(showcase::ShowcaseGame::blank());
+                            showcase::perf::river_scene(&mut g, Vec2::new(400.0, 240.0), audio);
+                            for _ in 0..3 {
+                                g.render(renderer);
+                            }
+                            renderer.dump_framebuffer();
+                            drop(g);
                             runtime::log("TRINO_TEST_PASS\n");
                         }
                         Ok(false) => fail("showcase panel: no second screen to probe".into()),

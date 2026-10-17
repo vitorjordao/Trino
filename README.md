@@ -38,6 +38,7 @@ impostors) is part of the same pipeline, drawn by the same renderer in the same 
 | Rigid and opt-in smooth skinning, clip crossfade | yes | yes | yes |
 | Local point and spot lights | per pixel, up to 8 | per vertex, up to 2 | per vertex, up to 4 |
 | Ambient occlusion | screen-space (SSAO), plus baked | baked into vertex colors (`ao` in the manifest) | baked into vertex colors |
+| Water surfaces: flowing layers, swell, ripples, Fresnel, glint | per pixel, with shore foam | per vertex, RDP 2-cycle layer blend | PICA200 vertex program, TexEnv layer blend |
 | Billboards, particles, impostors, distance LOD, portal/cell visibility | yes | yes | yes |
 | 2D: sprites, `fill_rect`, bitmap text | yes | yes | yes |
 | Two screens | simulated by the 3DS profile | one screen | top 400x240 and touch bottom 320x240 |
@@ -74,6 +75,8 @@ tables that strict mode and the tools check content against.
 | Local light tier | per pixel | per vertex | per vertex |
 | Local lights per frame | 8 | 2 | 4 |
 | Ambient occlusion tier | screen-space | baked | baked |
+| Water tier | per pixel | per vertex | vertex program |
+| Ripples per frame | 4 | 4 | 4 |
 
 [^pc-res]: The PC's internal picture follows the active console-simulation profile
     (`TRINO_SIM=native|n64|3ds`), not this table.

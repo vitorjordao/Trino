@@ -43,8 +43,16 @@ u16 indices); a draw `gpu_check` accepts is 44 floats of uniforms (matrix, light
 ambient, diffuse, tint, emissive, then the fog row and fog color: the shader fogs per
 vertex from the view depth, a zero row = no fog) and one
 `C3D_DrawElements` through `tnl3d.v.pica` (`trino_gpu_draw`), which transforms, lights
-and projects on the PICA200. Both shaders are assembled by `compile_shader` (`SHADERS`
-in `xtask/src/n3ds.rs`). Traps:
+and projects on the PICA200. All shaders are assembled by `compile_shader` (`SHADERS`
+in `xtask/src/n3ds.rs`: `tri3d`, `tnl3d`, `water`). **Water** (ADR 0015) has its own
+program, `water.v.pica` (`trino_water_mesh`: 24-byte vertices; `trino_water_draw`: 104
+floats of uniforms that `render3d::gpu_water` fills, the four ripples one per lane).
+`crates/core/tests/gpu_water.rs` emulates the program on the host against the CPU
+water; the shader's float24 is checked by the `gpu tnl water` frame in Azahar. Water
+draws use `trino_3d_material` bit 8 (TexEnv INTERPOLATE of the two layers with a
+0x80 constant), are blended and write color only (`GPU_WRITE_COLOR`), and come after
+the frame's opaque 3D. A uniform can only be the first source of a PICA
+instruction. Traps:
 - **The tilt projection mirrors the winding:** the GPU path culls `GPU_CULL_FRONT_CCW`
   (`TRINO_TNL_CULL`). With the other winding only the boxes' inner faces drew and the
   `occlusion` step failed (their bottoms are coplanar with the floor).

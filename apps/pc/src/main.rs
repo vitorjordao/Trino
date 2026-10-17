@@ -15,8 +15,9 @@
 //!   scene exported to `no_std` code — the exact path console builds take)
 //!   instead of castle64.
 //! - `TRINO_GAME=solid-eleven` — run `examples/solid-eleven` (the football
-//!   demo) with its own assets (`examples/solid-eleven/assets`, baked to
-//!   `target/assets/solid-eleven/pc`).
+//!   demo) on `trino-runner-pc`, the host its template uses: its own assets
+//!   (`examples/solid-eleven/assets`, baked to `target/solid-eleven/assets/pc`),
+//!   display settings, key and pad rebinding, MSAA on the native profile.
 
 mod scene_player;
 
@@ -67,19 +68,11 @@ fn solid_eleven() -> bool {
 }
 
 fn assets_root() -> PathBuf {
-    if solid_eleven() {
-        PathBuf::from("examples/solid-eleven/assets")
-    } else {
-        PathBuf::from("assets")
-    }
+    PathBuf::from("assets")
 }
 
 fn baked_dir() -> PathBuf {
-    if solid_eleven() {
-        PathBuf::from("target/assets/solid-eleven/pc")
-    } else {
-        PathBuf::from("target/assets/pc")
-    }
+    PathBuf::from("target/assets/pc")
 }
 
 struct Ctx {
@@ -93,8 +86,6 @@ struct Ctx {
     player: Option<scene_player::ScenePlayer>,
     /// `TRINO_GAME=showcase`: the codegen showcase instead of castle64.
     showcase: Option<showcase::ShowcaseGame>,
-    /// `TRINO_GAME=solid-eleven`: the football demo.
-    solid: Option<solid_eleven::SolidElevenGame>,
     last_frame: Instant,
     #[cfg(feature = "reload")]
     asset_events: std::sync::mpsc::Receiver<Vec<u32>>,
@@ -132,7 +123,6 @@ impl App {
         let title = match (&player, &showcase) {
             (Some(p), _) => p.title(),
             (None, Some(_)) => "Trino — showcase (exported scene)".to_string(),
-            _ if solid_eleven() => "Solid Eleven".to_string(),
             _ => "Trino — castle64".to_string(),
         };
         let attrs = Window::default_attributes()
@@ -147,9 +137,6 @@ impl App {
         let mut renderer =
             pollster::block_on(PcRenderer::new_windowed(window.clone(), self.profile))
                 .expect("failed to initialize wgpu renderer");
-        // Solid Eleven on the PC's own profile: multisampled edges at the
-        // window's resolution (TRINO_MSAA=0: off).
-        renderer.set_msaa(solid_eleven() && std::env::var("TRINO_MSAA").as_deref() != Ok("0"));
         let mut audio = PcAudio::new();
         // Saves go next to the build output, capped at the simulated
         // console's budget (an N64 profile gets the 2 KB EEPROM).
@@ -183,8 +170,6 @@ impl App {
 
         let (iw, ih) = renderer.internal_size();
         let game = castle64::Castle64Game::new(Vec2::new(iw as f32, ih as f32));
-        let solid = solid_eleven()
-            .then(|| solid_eleven::SolidElevenGame::new(Vec2::new(iw as f32, ih as f32)));
 
         window.request_redraw();
         Ctx {
@@ -196,7 +181,6 @@ impl App {
             game,
             player,
             showcase,
-            solid,
             last_frame: Instant::now(),
             #[cfg(feature = "reload")]
             asset_events,
@@ -226,20 +210,6 @@ impl ApplicationHandler for App {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
                 ctx.renderer.resize(size.width, size.height);
-                // Solid Eleven on the PC's own profile renders at the
-                // window's full resolution: the PC's best look (castle64
-                // keeps its chunky 640x480).
-                if solid_eleven()
-                    && self.profile == SimProfile::Native
-                    && size.width > 1
-                    && size.height > 1
-                {
-                    let (w, h) = (size.width & !1, size.height & !1);
-                    ctx.renderer.set_internal_size(w, h);
-                    if let Some(g) = &mut ctx.solid {
-                        g.resize(Vec2::new(w as f32, h as f32));
-                    }
-                }
             }
             ref e if ctx.input.handle_window_event(e, &ctx.renderer) => {}
             WindowEvent::RedrawRequested => {
@@ -269,10 +239,6 @@ impl ApplicationHandler for App {
                     player.update(&input, dt);
                     player.render(&mut ctx.renderer);
                 } else if let Some(game) = &mut ctx.showcase {
-                    use trino_core::Game as _;
-                    game.update_with(&mut ctx.platform, &input, &mut ctx.audio, dt);
-                    game.render(&mut ctx.renderer);
-                } else if let Some(game) = &mut ctx.solid {
                     use trino_core::Game as _;
                     game.update_with(&mut ctx.platform, &input, &mut ctx.audio, dt);
                     game.render(&mut ctx.renderer);
@@ -321,6 +287,13 @@ fn main() {
         .ok()
         .and_then(|v| v.parse().ok());
     let profile = trino_runner_pc::profile_from_env();
+    if solid_eleven() && std::env::var_os("TRINO_SCENE").is_none() {
+        let mut config = trino_runner_pc::RunConfig::new("Solid Eleven", "examples/solid-eleven");
+        config.target = PathBuf::from("target/solid-eleven");
+        config.save_name = "solid-eleven".into();
+        trino_runner_pc::run(config, solid_eleven::SolidElevenGame::new);
+        return;
+    }
 
     let event_loop = EventLoop::new().expect("failed to create event loop");
     let mut app = App {

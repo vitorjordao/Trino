@@ -390,16 +390,25 @@ fn action_at(
     bind: &Bindings,
     peek: Option<&InputPeek>,
 ) -> Option<Action> {
+    // A control that presses two buttons (LT: "LB/LT" is L, "LT" is L2)
+    // shows the specific one's action first, as the match reads it.
+    let mut alias = None;
     for (k, b) in Button::ALL.into_iter().enumerate() {
-        let on = match peek {
-            Some(p) if p.rebindable => p.pads[k].as_str().split('/').any(|n| n == name),
-            _ => button_name(device, b) == Some(name),
+        let (on, exact) = match peek {
+            Some(p) if p.rebindable => {
+                let names = p.pads[k].as_str();
+                (names.split('/').any(|n| n == name), names == name)
+            }
+            _ => (button_name(device, b) == Some(name), true),
         };
-        if on && let Some(a) = action_on(bind, b) {
-            return Some(a);
+        if let (true, Some(a)) = (on, action_on(bind, b)) {
+            if exact {
+                return Some(a);
+            }
+            alias = alias.or(Some(a));
         }
     }
-    None
+    alias
 }
 
 /// A controller drawn as a few shapes, every button as a small cap with

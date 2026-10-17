@@ -1062,15 +1062,20 @@ pub fn human_keeper_plan(m: &mut Match, i: usize, pad: &Pad) -> Option<KickPlan>
         pad.mv.norm()
     };
     if let Some(charge) = pad.pass {
-        let tgt = match pass_target(m, i, dir) {
-            Some(j) => m.players[j as usize].pos,
+        // To a teammate's run (he's told to come for it), or into space.
+        let to = pass_target(m, i, dir);
+        let tgt = match to {
+            Some(j) => {
+                let r = &m.players[j as usize];
+                r.pos + r.vel.scale(Fx::HALF)
+            }
             None => m.players[i].pos + dir.scale(Fx::int(14) + charge.mul(Fx::int(14))),
         };
         let mut plan = pass_plan(
             m,
             i,
             pitch::clamp_to_field(tgt),
-            None,
+            to,
             false,
             KickKind::Distribute,
             Fx::ZERO,
@@ -1184,7 +1189,10 @@ pub fn pick_taker(m: &Match, r: Restart) -> u8 {
     let range = s * SIDE..s * SIDE + SIDE;
     let able = |j: &usize| !m.players[*j].off && m.players[*j].role != Role::Gk;
     match r.kind {
-        RestartKind::GoalKick => (s * SIDE) as u8,
+        // The keeper, or the nearest teammate once he's sent off.
+        RestartKind::GoalKick => m
+            .keeper_of(s)
+            .map_or_else(|| nearest(m, s, r.spot), |k| k as u8),
         RestartKind::KickOff => {
             let f = m.tactics[s].formation();
             (0..SIDE)

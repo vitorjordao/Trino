@@ -506,6 +506,20 @@ fn a_shot_at_his_goal_gives_the_human_the_keeper() {
     m.set_shot(Some(1));
     press(&mut m, Pad::default());
     assert_eq!(m.active[0] as usize, k);
+    // Switch away for the rebound: the shot is still live, but it handed
+    // the keeper over once and doesn't take him back.
+    press(
+        &mut m,
+        Pad {
+            switch: true,
+            ..Pad::default()
+        },
+    );
+    for _ in 0..30 {
+        press(&mut m, Pad::default());
+        assert!(m.shot().is_some());
+        assert_ne!(m.active[0] as usize, k, "the keeper came back");
+    }
     // Not when control of the keeper is off.
     let mut m = keeper_match(false);
     m.set_shot(Some(1));
@@ -577,10 +591,19 @@ fn a_human_keeper_throws_or_punts_from_his_hands() {
         assert_eq!(m.active[0] as usize, k, "holding: the human has him");
         let mv = V2::new(m.ends[0].sign().mul(Fx::int(-1)), Fx::ZERO);
         press(&mut m, Pad { mv, ..pad });
+        let mut aimed = None;
         for _ in 0..20 {
             press(&mut m, Pad::default());
+            if aimed.is_none() && m.owner != Some(k as u8) {
+                aimed = Some(m.receiver);
+            }
         }
         assert_ne!(m.owner, Some(k as u8), "the ball left his hands");
+        if !long {
+            // A throw goes to a teammate, who is told to come for it.
+            let r = aimed.flatten().expect("the throw has a receiver");
+            assert!(side_of(r as usize) == 0 && r as usize != k);
+        }
         let gone = (m.ball.pos.ground() - m.players[k].pos).len();
         assert!(gone > Fx::int(3), "it travelled ({gone:?})");
         let up = m.ball.vel.y.abs() + m.ball.pos.y;
@@ -634,4 +657,28 @@ fn a_keeper_out_of_his_area_has_no_hands() {
         !matches!(m.players[k].act, Act::Hold { .. }),
         "no catch outside the box"
     );
+}
+
+#[test]
+fn a_sent_off_keeper_leaves_the_goal_kick_to_a_teammate() {
+    let mut m = Match::new(&setup(0, 1, 5, 3_600));
+    let k = m.keeper_of(0).unwrap();
+    m.players[k].off = true;
+    let spot = V2::new(Fx::int(-46), Fx::int(5));
+    m.begin_restart(super::rules::Restart {
+        kind: super::rules::RestartKind::GoalKick,
+        team: 0,
+        spot,
+    });
+    let taker = m.taker as usize;
+    assert!(!m.players[taker].off, "taker {taker} is off the pitch");
+    assert!(taker / SIDE == 0);
+    // And it's taken: the ball leaves the spot.
+    for _ in 0..900 {
+        m.step([Pad::default(); 2]);
+        if !(m.ball.pos.ground() - spot).shorter_than(Fx::int(3)) {
+            return;
+        }
+    }
+    panic!("the goal kick was never taken");
 }

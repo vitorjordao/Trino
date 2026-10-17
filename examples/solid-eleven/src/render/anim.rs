@@ -418,7 +418,9 @@ pub fn route(st: &AnimState, want: ClipName) -> ClipName {
         }
         return ClipName::GetUp;
     }
-    let falls = matches!(want, ClipName::GkDive | ClipName::Slide | ClipName::Down);
+    // Only lying clips lead here, and the sim keeps a player `Down` for a
+    // while after one: that is the same fall, not a new one.
+    let falls = matches!(want, ClipName::GkDive | ClipName::Slide);
     if st.clip == ClipName::GetUp && st.time < clip(ClipName::GetUp).seconds && !falls {
         return ClipName::GetUp;
     }

@@ -2,7 +2,7 @@
 //! database every mode reads, so edits and transfers show in quick
 //! matches too), the match in progress, and the save.
 
-use crate::game::input::{ACTIONS, ASSIGNABLE, Action, Bindings};
+use crate::game::input::{ACTIONS, ASSIGNABLE, Action, Bindings, dealias};
 use crate::game::menu::{self, Hits, Nav, Repeat};
 use crate::game::session::{Session, dress};
 use crate::game::sound::{self, Sfx};
@@ -448,7 +448,7 @@ impl SolidElevenGame {
         self.spin += dt * 0.6;
         match self.scene {
             Scene::Match => self.match_frame(input, &prev, &nav, audio, dt),
-            Scene::Pause => self.pause_frame(&nav, tap, audio),
+            Scene::Pause => self.pause_frame(input, &prev, &nav, tap, audio),
             Scene::Controls => self.controls_frame(input, &prev, &nav, tap, audio, dt),
             _ => self.menu_frame(&nav, tap, audio),
         }
@@ -466,9 +466,10 @@ impl SolidElevenGame {
             self.scene = Scene::Title;
             return;
         };
-        // Pause sits on its own (rebindable) button.
+        // Pause sits on its own (rebindable) button; at full time that
+        // button may be the one that confirms the result.
         let pause = s.controls.bindings.of(Action::Pause);
-        if input.just_pressed(prev, pause) && s.human.is_some() {
+        if input.just_pressed(prev, pause) && s.human.is_some() && s.m.phase != Phase::FullTime {
             self.scene = Scene::Pause;
             self.cur.pause = 0;
             sound::play(audio, Sfx::Click);
@@ -496,12 +497,26 @@ impl SolidElevenGame {
         }
     }
 
-    fn pause_frame(&mut self, nav: &Nav, tap: Option<u8>, audio: &mut dyn Audio) {
+    fn pause_frame(
+        &mut self,
+        input: &InputState,
+        prev: &InputState,
+        nav: &Nav,
+        tap: Option<u8>,
+        audio: &mut dyn Audio,
+    ) {
         menu::step(&mut self.cur.pause, 3, nav);
         if let Some(id) = tap {
             self.cur.pause = id as usize;
         }
-        if nav.start || nav.back {
+        // The Pause button closes it too, unless it is A (A picks the row)
+        // or B (back already does).
+        let pause = self
+            .session
+            .as_ref()
+            .map_or(Button::Start, |s| s.controls.bindings.of(Action::Pause));
+        let own = pause != Button::A && input.just_pressed(prev, pause);
+        if nav.start || nav.back || own {
             self.scene = Scene::Match;
             return;
         }
@@ -1061,9 +1076,10 @@ impl SolidElevenGame {
         if let Some(c) = &mut self.capture {
             c.left -= dt;
             let action = c.action;
+            let (now, before) = (dealias(input), dealias(prev));
             let pressed = ASSIGNABLE
                 .into_iter()
-                .find(|&b| input.just_pressed(prev, b));
+                .find(|&b| now.just_pressed(&before, b));
             if let Some(b) = pressed {
                 self.settings.bindings.assign(action, b);
                 self.capture = None;
@@ -1091,7 +1107,10 @@ impl SolidElevenGame {
             self.cur.ctl_top = 0;
         }
         self.cur.ctl_tab = self.cur.ctl_tab.min(tabs - 1);
+        // The host may drop the key and pad tabs (its rebinding went away):
+        // the row must fit the tab that's left.
         let rows = self.control_rows();
+        self.cur.ctl_row = self.cur.ctl_row.min(rows - 1);
         menu::step(&mut self.cur.ctl_row, rows, nav);
         if let Some(id) = tap {
             if id >= 200 {

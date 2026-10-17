@@ -596,3 +596,59 @@ fn the_graphics_setting_asks_the_pc_host_for_its_resolution() {
     // The window keeps its other settings.
     assert!(host.info.settings.fullscreen);
 }
+
+#[test]
+fn a_rebound_pause_button_pauses_resumes_and_leaves_full_time_alone() {
+    use crate::game::input::Action;
+    let mut d = Driver::new(Cart::default());
+    d.idle(2);
+    // Pause on Y: Y pauses and Y resumes.
+    d.g.settings.bindings.assign(Action::Pause, Button::Y);
+    d.g.start_exhibition(0, 1, 3, [true, false], crate::render::Sky::Day, 60);
+    d.idle(5);
+    d.press(Button::Y);
+    assert_eq!(d.g.scene, Scene::Pause);
+    d.press(Button::Y);
+    assert_eq!(d.g.scene, Scene::Match);
+    // Pause on A: at full time A confirms the result, it doesn't pause.
+    d.g.settings.bindings.assign(Action::Pause, Button::A);
+    d.g.start_exhibition(0, 1, 3, [true, false], crate::render::Sky::Day, 60);
+    d.idle(5);
+    d.press(Button::A);
+    assert_eq!(d.g.scene, Scene::Pause, "A pauses during play");
+    d.press(Button::A); // "resume", the first row
+    assert_eq!(d.g.scene, Scene::Match);
+    d.g.session.as_mut().unwrap().m.phase = Phase::FullTime;
+    d.idle(60);
+    d.press(Button::A);
+    assert!(
+        !matches!(d.g.scene, Scene::Match | Scene::Pause),
+        "A at full time finishes the match ({:?})",
+        d.g.scene
+    );
+}
+
+#[test]
+fn the_controls_page_survives_the_host_losing_its_tabs() {
+    let mut g = SolidElevenGame::new(Vec2::new(320.0, 240.0));
+    let mut host = PcHost::default();
+    host_frame(&mut g, &mut host, &InputState::default());
+    g.scene = Scene::Controls;
+    // The pad tab's last row (the reset).
+    host_press(&mut g, &mut host, Button::R);
+    host_press(&mut g, &mut host, Button::R);
+    host_press(&mut g, &mut host, Button::DpadUp);
+    assert_eq!(g.cur.ctl_row + 1, g.control_rows());
+    // Now a host without rebinding: one tab of 8 rows. Confirm picks a row
+    // that exists.
+    let mut cart = Cart::default();
+    let mut press = |g: &mut SolidElevenGame, b: Button| {
+        let mut s = InputState::default();
+        s.set(b, true);
+        g.update_with(&mut cart, &s, &mut Mute, DT);
+        g.update_with(&mut cart, &InputState::default(), &mut Mute, DT);
+    };
+    press(&mut g, Button::A);
+    assert_eq!(g.control_tabs(), 1);
+    assert!(g.cur.ctl_row < g.control_rows());
+}

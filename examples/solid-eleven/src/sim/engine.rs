@@ -336,6 +336,9 @@ pub struct Match {
     pub keeper_ctl: [bool; 2],
     /// The player each human side controls.
     pub active: [u8; 2],
+    /// A shot at this human side's goal already handed it the keeper: it
+    /// may switch away until the shot is over.
+    pub shot_handed: [bool; 2],
     pub difficulty: u8,
     pub wet: bool,
     pub rng: Rng,
@@ -464,6 +467,7 @@ impl Match {
                 setup.keeper_ctl[1] && setup.humans[1],
             ],
             active: [9, 20],
+            shot_handed: [false; 2],
             difficulty: setup.difficulty,
             wet: setup.wet,
             rng: Rng::new(setup.seed),
@@ -2011,6 +2015,12 @@ impl Match {
         self.shot = by;
     }
 
+    /// The side whose shot is in flight.
+    #[cfg(test)]
+    pub fn shot(&self) -> Option<u8> {
+        self.shot
+    }
+
     /// The side's keeper (its first player with the keeper's role).
     pub fn keeper_of(&self, s: usize) -> Option<usize> {
         (s * SIDE..s * SIDE + SIDE)
@@ -2028,8 +2038,11 @@ impl Match {
         }
         let holds = keeper.is_some_and(|k| matches!(self.players[k].act, Act::Hold { .. }));
         let shot_at_us = self.shot.is_some_and(|ss| ss as usize != s) && self.owner.is_none();
+        // Once per shot: a Switch then keeps the defender it picks.
+        let take_shot = shot_at_us && !self.shot_handed[s] && !pad.switch;
+        self.shot_handed[s] = shot_at_us && (self.shot_handed[s] || keeper.is_some());
         if let Some(k) = keeper
-            && (pad.keeper || holds || (shot_at_us && !pad.switch))
+            && (pad.keeper || holds || take_shot)
         {
             // Asked for, holding the ball, or a shot coming at his goal.
             self.active[s] = k as u8;

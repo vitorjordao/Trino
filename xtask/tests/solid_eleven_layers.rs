@@ -42,9 +42,19 @@ fn code(text: &str) -> impl Iterator<Item = (usize, &str)> {
 #[test]
 fn the_sim_layer_is_pure_fixed_point() {
     let mut bad = Vec::new();
+    // Modules `sim/mod.rs` declares under `#[cfg(test)]` (tests, balance).
+    let decl = std::fs::read_to_string(game().join("src/sim/mod.rs")).unwrap();
+    let lines: Vec<&str> = decl.lines().map(str::trim).collect();
+    let test_only: Vec<String> = lines
+        .windows(2)
+        .filter(|w| w[0] == "#[cfg(test)]")
+        .filter_map(|w| w[1].strip_prefix("mod ")?.strip_suffix(';'))
+        .map(|m| format!("{m}.rs"))
+        .collect();
+    assert!(test_only.iter().any(|m| m == "tests.rs"));
     for (path, text) in sources(&game().join("src/sim")) {
         let name = path.file_name().unwrap().to_string_lossy().to_string();
-        let in_tests = name == "tests.rs";
+        let in_tests = test_only.contains(&name);
         let mut test_mod = false;
         for (n, l) in code(&text) {
             if l.contains("#[cfg(test)]") {

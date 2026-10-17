@@ -63,6 +63,26 @@ pub const ASSIGNABLE: [Button; 12] = [
     Button::Select,
 ];
 
+/// On a PC gamepad one control presses two buttons (LT = L and L2, RT = R
+/// and R2, the left stick's click = Select and L3: the engine's default pad
+/// map). The specific button wins, so an action on L2 and another on L
+/// never both fire from LT, and a capture of LT takes L2.
+pub fn dealias(s: &InputState) -> InputState {
+    let mut out = *s;
+    if s.pad {
+        for (specific, alias) in [
+            (Button::L2, Button::L),
+            (Button::R2, Button::R),
+            (Button::L3, Button::Select),
+        ] {
+            if s.is_down(specific) {
+                out.set(alias, false);
+            }
+        }
+    }
+    out
+}
+
 /// The button of each [`Action`] (saved with the settings). No button
 /// does two things: [`assign`](Self::assign) swaps.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -155,6 +175,7 @@ impl Controls {
     /// This frame's pad. `can_kick`: the controlled player has the ball
     /// (or takes the restart).
     pub fn pad(&mut self, now: &InputState, prev: &InputState, dt: f32, can_kick: bool) -> Pad {
+        let (now, prev) = (&dealias(now), &dealias(prev));
         let mut pad = Pad::default();
         let mut stick = now.stick;
         if now.is_down(Button::DpadLeft) {
@@ -317,6 +338,32 @@ mod tests {
             Bindings::from_bytes(&[8, 9, 10, 11, 4, 5, 6]),
             Bindings::DEFAULT
         );
+    }
+
+    #[test]
+    fn a_pad_control_that_presses_two_buttons_fires_one_action() {
+        let mut c = Controls::default();
+        c.bindings.assign(Action::Switch, Button::L);
+        c.bindings.assign(Action::Keeper, Button::L2);
+        c.bindings.assign(Action::Sprint, Button::Select);
+        let none = InputState::default();
+        // LT on a PC pad: L and L2 both down.
+        let mut lt = st(&[Button::L, Button::L2], (0.0, 0.0));
+        lt.pad = true;
+        let pad = c.pad(&lt, &none, 0.016, false);
+        assert!(pad.keeper && !pad.switch, "LT is L2 only");
+        // LB alone is L.
+        let mut lb = st(&[Button::L], (0.0, 0.0));
+        lb.pad = true;
+        assert!(c.pad(&lb, &none, 0.016, false).switch);
+        // The stick click (Select + L3) doesn't sprint through Select.
+        let mut ls = st(&[Button::Select, Button::L3], (0.0, 0.0));
+        ls.pad = true;
+        assert!(!c.pad(&ls, &none, 0.016, false).sprint);
+        // Not a pad (a 3DS with ZL and L both held): both count.
+        let both = st(&[Button::L, Button::L2], (0.0, 0.0));
+        let pad = c.pad(&both, &none, 0.016, false);
+        assert!(pad.keeper && pad.switch);
     }
 
     #[test]

@@ -47,17 +47,21 @@ use winit::window::{Fullscreen, Window, WindowId};
 #[derive(Clone, Debug)]
 pub struct RunConfig {
     pub title: String,
-    /// Project root: holds `assets/manifest.toml`; bakes go to
-    /// `target/assets/pc`, saves to `target/save/<save_name>.sav`.
+    /// Project root: holds `assets/manifest.toml`.
     pub root: PathBuf,
+    /// Build output: bakes go to `<target>/assets/pc`, saves to
+    /// `<target>/save/<save_name>.sav`. `<root>/target` by default.
+    pub target: PathBuf,
     pub save_name: String,
 }
 
 impl RunConfig {
     pub fn new(title: impl Into<String>, root: impl Into<PathBuf>) -> Self {
+        let root = root.into();
         RunConfig {
             title: title.into(),
-            root: root.into(),
+            target: root.join("target"),
+            root,
             save_name: "game".into(),
         }
     }
@@ -67,12 +71,12 @@ impl RunConfig {
     }
 
     pub fn baked_dir(&self) -> PathBuf {
-        self.root.join("target/assets/pc")
+        self.target.join("assets/pc")
     }
 
     pub fn save_file(&self) -> PathBuf {
-        self.root
-            .join("target/save")
+        self.target
+            .join("save")
             .join(format!("{}.sav", self.save_name))
     }
 
@@ -347,6 +351,9 @@ fn refit(ctx: &mut Ctx, profile: SimProfile) {
     let (w, h, _) = picture_for(profile, (out.width, out.height), ctx.settings.pixel_scale);
     if (w, h) != ctx.renderer.internal_size() {
         ctx.renderer.set_internal_size(w, h);
+        // The renderer clamps to the GPU's texture limit: tell the game the
+        // size it got.
+        let (w, h) = ctx.renderer.internal_size();
         ctx.game.resize(Vec2::new(w as f32, h as f32));
     }
     publish(ctx, profile);

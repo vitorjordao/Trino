@@ -1896,6 +1896,14 @@ impl PcRenderer {
             ]
         };
 
+        // The multisampled targets live for this one pass (it clears them
+        // and resolves the color): nothing to write back.
+        let store = if ms.is_some() {
+            wgpu::StoreOp::Discard
+        } else {
+            wgpu::StoreOp::Store
+        };
+
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
@@ -1907,7 +1915,7 @@ impl PcRenderer {
                     resolve_target: pass_resolve,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(clear),
-                        store: wgpu::StoreOp::Store,
+                        store,
                     },
                     depth_slice: None,
                 })],
@@ -1915,7 +1923,7 @@ impl PcRenderer {
                     view: pass_depth,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Store,
+                        store,
                     }),
                     stencil_ops: None,
                 }),

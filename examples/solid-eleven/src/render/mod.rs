@@ -1105,6 +1105,33 @@ mod tests {
         );
     }
 
+    /// The sim keeps a player `Down` after a slide or a dive, longer than
+    /// the clip: the body plays the fall out and gets up all the way, never
+    /// the fouled-fall clip in between, and runs only once up.
+    #[test]
+    fn a_slide_or_a_dive_ends_in_one_whole_get_up() {
+        let dt = 1.0 / 60.0;
+        for fall in [ClipName::Slide, ClipName::GkDive] {
+            let mut st = anim::AnimState::new(ClipName::Jog);
+            let mut seen = std::vec::Vec::new();
+            // The fall, then the sim's `Down`, then free to run.
+            let plan = [(fall, 50), (ClipName::Down, 24), (ClipName::Jog, 90)];
+            for (want, ticks) in plan {
+                for _ in 0..ticks {
+                    show(&mut st, want, false, false, 1.0, dt);
+                    if seen.last() != Some(&st.clip) {
+                        seen.push(st.clip);
+                    }
+                }
+            }
+            assert_eq!(
+                seen,
+                [fall, ClipName::GetUp, ClipName::Jog],
+                "{fall:?}: clips shown in turn"
+            );
+        }
+    }
+
     /// The camera's `target - eye` doesn't move by a bit while it pans (the
     /// N64 draw memo's key).
     #[test]

@@ -234,18 +234,15 @@ CLIPS = {
                "shin_r": (60, 0, 0), "arm_l": (-30, 0, 35), "arm_r": (30, 0, -35)}, (0, 0, 0.15)),
         (1.0, IDLE, (0, 0, 0)),
     ]),
-    # Down onto the left hip, the leading leg out, the other folded under:
-    # the pelvis rolls back with the body (its shadow is drawn apart then).
+    # Down onto the turf, the leading leg out along it, the other splayed
+    # out to the side (straight on the consoles, its knee bent flat on the
+    # PC): the pelvis rolls back onto the left hip, the hips on the grass.
     "slide": (0.6, False, [
         (0.0, {"pelvis": (-25, 0, -8), "torso": (12, 0, 4), "thigh_l": (-50, 0, 0), "shin_l": (10, 0, 0),
                "thigh_r": (-5, 0, 0), "shin_r": (75, 0, 0), "arm_l": (-10, 0, 45), "arm_r": (10, 0, -45),
                "forearm_l": (-20, 0, 0), "forearm_r": (-20, 0, 0)}, (0, 0, 0)),
-        (0.25, {"pelvis": (-62, 0, -18), "torso": (18, 0, 10), "head": (14, 0, 0), "thigh_l": (-28, 0, 4),
-                "thigh_r": (14, 0, -4), "shin_r": (105, 0, 0), "arm_l": (-25, 0, 65), "arm_r": (25, 0, -70),
-                "forearm_l": (-15, 0, 0), "forearm_r": (-15, 0, 0)}, (0, 0, 0)),
-        (1.0, {"pelvis": (-62, 0, -18), "torso": (18, 0, 10), "head": (14, 0, 0), "thigh_l": (-28, 0, 4),
-               "thigh_r": (14, 0, -4), "shin_r": (105, 0, 0), "arm_l": (-25, 0, 65), "arm_r": (25, 0, -70),
-               "forearm_l": (-15, 0, 0), "forearm_r": (-15, 0, 0)}, (0, 0, 0)),
+        (0.25, {"pelvis": (-35, 0, -14), "torso": (-8, 0, 6), "head": (14, 0, 0), "thigh_l": (-49, 0, 2), "shin_l": (0, 0, 0), "thigh_r": (-12, 0, -60), "shin_r": (20, 0, 0), "arm_l": (-25, 0, 65), "arm_r": (25, 0, -70), "forearm_l": (-15, 0, 0), "forearm_r": (-15, 0, 0)}, (0, 0, 0)),
+        (1.0, {"pelvis": (-35, 0, -14), "torso": (-8, 0, 6), "head": (14, 0, 0), "thigh_l": (-49, 0, 2), "shin_l": (0, 0, 0), "thigh_r": (-12, 0, -60), "shin_r": (20, 0, 0), "arm_l": (-25, 0, 65), "arm_r": (25, 0, -70), "forearm_l": (-15, 0, 0), "forearm_r": (-15, 0, 0)}, (0, 0, 0)),
     ]),
     # Knocked onto the back, a beat on the turf, then up through a sit.
     "down": (1.2, False, [

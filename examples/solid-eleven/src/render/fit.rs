@@ -17,7 +17,9 @@
 //! 3. **No holes:** a face left out of a mesh stays covered by another part.
 //! 4. **No interpenetration:** a visible surface never sinks more than
 //!    2.5 cm into another part (arms through the chest, a foot through
-//!    the other shin), except right at the joint that bends it.
+//!    the other shin), except right at the joint that bends it, or where a
+//!    third part covers the point (a shorts corner in a leg, under the
+//!    shorts leg).
 //! 5. **Turf:** nothing goes under the ground, and in clips with a foot
 //!    down the lowest point stays within 10 cm of it.
 //!
@@ -38,6 +40,8 @@ const TOL_SAME: f32 = 0.030;
 const SEAM: f32 = 0.015;
 /// How deep a visible surface may sink into another part.
 const SINK: f32 = 0.025;
+/// How deep inside another part a point is out of sight (rule 4).
+const BURIED: f32 = 0.005;
 /// Around the joint that bends two parts, they may press into each other
 /// (wider at the shoulder: a raised arm bunches into it).
 const JOINT_ZONE: f32 = 0.09;
@@ -578,6 +582,15 @@ impl Checker {
                     }
                 }
                 let d = body.depth(&m, q, w);
+                // Inside a third part, the point isn't visible surface: a
+                // shorts corner in a leg that its shorts leg covers.
+                if d > SINK
+                    && (0..n)
+                        .filter(|&r| r != s.part && r != q)
+                        .any(|r| body.depth(&m, r, w) > BURIED)
+                {
+                    continue;
+                }
                 note(rep, 4, key, d - SINK, || {
                     format!(
                         "{}: {} {:.3} m into {}",

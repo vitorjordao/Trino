@@ -285,7 +285,7 @@ impl SceneNode {
 ///   string table — tags are `\n`-separated
 ///   matrix f32*12 (row-major 3x4)
 ///   flags u32: bit0 model, bit1 anim, bit2 double_sided, bit3 texture,
-///     bit4 sound, bit5 detail layer,
+///     bit4 sound, bit5 detail layer, bit6 water,
 ///     bits 8..10 shading
 ///     (0 gouraud, 1 flat, 2 unlit), bits 12..14 collider shape (0 none,
 ///     1 box, 2 sphere, 3 capsule), bit15 collider trigger
@@ -300,6 +300,8 @@ impl SceneNode {
 ///   2 portal), u8 portal a, u8 portal b, f32*3 world half extents,
 ///   surface (v3): u8 gloss, u8 filter (0 default, 1 point, 2 bilinear),
 ///   u8 detail scale_log2, u8 reserved, u32 detail sprite (flag bit5)
+///   water (v4, flag bit6): f32 flow_speed x y, f32 detail_flow x y,
+///   f32 wave_amplitude, f32 wave_frequency, f32 ripple_responsiveness
 /// data table: UTF-8 strings and LOD records, to the end of the blob: UTF-8 bytes to the end of the blob
 /// ```
 ///
@@ -308,11 +310,15 @@ impl SceneNode {
 pub const TSCN_MAGIC: &[u8; 4] = b"TSCN";
 /// v2 (October 2026): LOD records grew from 8 to 32 bytes (impostor
 /// levels). v3: nodes end with the surface's gloss, texture filter and
-/// detail layer (8 bytes). Older blobs are refused: rebake the scene.
-pub const TSCN_VERSION: u16 = 3;
+/// detail layer (8 bytes). v4: then a water surface (28 bytes, ADR 0015).
+/// Older blobs are refused: rebake the scene.
+pub const TSCN_VERSION: u16 = 4;
 pub const TSCN_HEADER: usize = 12;
 pub const TSCN_ENV_BYTES: usize = 68;
-pub const TSCN_NODE_BYTES: usize = 16 + 48 + 4 + 4 + 4 + 4 + 4 + 4 + 12 + 12 + 4 + 8 + 12 + 16 + 8;
+pub const TSCN_NODE_BYTES: usize =
+    16 + 48 + 4 + 4 + 4 + 4 + 4 + 4 + 12 + 12 + 4 + 8 + 12 + 16 + 8 + TSCN_WATER_BYTES;
+/// The water block at the end of a node (v4).
+pub const TSCN_WATER_BYTES: usize = 28;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SceneError {
@@ -486,6 +492,16 @@ impl BakedScene {
                     crate::render::SpriteId(rd_u32(d, surf + 4)),
                     d[surf + 2],
                 )
+            }),
+            water: (flags & 64 != 0).then(|| {
+                let w = surf + 8;
+                crate::water::Water {
+                    flow_speed: crate::math::Vec2::new(rd_f32(d, w), rd_f32(d, w + 4)),
+                    detail_flow: crate::math::Vec2::new(rd_f32(d, w + 8), rd_f32(d, w + 12)),
+                    wave_amplitude: rd_f32(d, w + 16),
+                    wave_frequency: rd_f32(d, w + 20),
+                    ripple_responsiveness: rd_f32(d, w + 24),
+                }
             }),
             ..ModelParams::DEFAULT
         };
@@ -744,6 +760,7 @@ mod tests {
         b.extend_from_slice(&[3, 2, 1, 4]); // cell 3, portal 1 <-> 4
         f(&mut b, &[0.5, 1.0, 0.25]);
         b.extend_from_slice(&[40, 1, 0, 0, 0, 0, 0, 0]); // gloss 40, point, no detail
+        f(&mut b, &[0.5, -0.25, 0.1, 0.2, 0.05, 0.6, 1.5]); // water (flag bit6 off)
         b.extend_from_slice(b"a/doordoor\nx");
         f(&mut b, &[30.0]);
         b.extend_from_slice(&0u32.to_le_bytes()); // culled beyond 30
@@ -767,6 +784,7 @@ mod tests {
         assert_eq!(n.params.gloss, 40);
         assert_eq!(n.params.filter, crate::render::TexFilter::Point);
         assert_eq!(n.params.detail, None);
+        assert_eq!(n.params.water, None, "flag bit6 off");
         assert_eq!(n.anim, Some((ClipId(9), 2.0)));
         let c = n.collider.unwrap();
         assert!(c.trigger);

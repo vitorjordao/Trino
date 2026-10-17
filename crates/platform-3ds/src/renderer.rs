@@ -9,15 +9,15 @@ use alloc::vec::Vec;
 use core::ffi::c_void;
 
 use trino_core::render3d::{
-    Camera3, DEFAULT_LIGHT, GpuReject, Light, Mesh, MeshLayout, ScreenTri, TexBind, TnlContext,
-    TnlScratch, TnlStats, gpu_check_mv, gpu_mesh_check, gpu_screen_matrix, painter_index,
-    painter_key,
+    Camera3, DEFAULT_LIGHT, GpuReject, GpuWater, Light, Mesh, MeshLayout, ScreenTri, TexBind,
+    TnlContext, TnlScratch, TnlStats, gpu_check_mv, gpu_mesh_check, gpu_screen_matrix, gpu_water,
+    painter_index, painter_key,
 };
 use trino_core::text::{BitmapFont, GlyphIndex};
 use trino_core::{
     BillboardParams, Caps, Color, FontId, FrameStats, LightList, LocalLight, Mat34, Material,
-    ModelId, ModelParams, Renderer, Screen, SpriteId, SpriteParams, TexFilter, TextParams,
-    Transform3, Vec2, Vec3,
+    ModelId, ModelParams, Renderer, Ripple, Screen, SpriteId, SpriteParams, TexFilter, TextParams,
+    Transform3, Vec2, Vec3, WaterState,
 };
 
 use crate::ffi;
@@ -110,7 +110,32 @@ pub struct N3dsRenderer {
     /// The T&L's working memory, reused by every draw (boxed: ~9 KB).
     tnl_scratch: Box<TnlScratch>,
     caps: Caps,
+    /// This frame's water clock and ripples (`set_water`, cleared at
+    /// `begin_frame`).
+    water_state: WaterState,
+    /// The batch's water triangles and what each samples (with its detail
+    /// layer's scroll): drawn after the batch, far to near, blended without
+    /// writing depth.
+    pending_water: Vec<ScreenTri>,
+    pending_water_tex: Vec<Option<TexBind>>,
+    /// Water meshes copied for the GPU water program (`water.v.pica`), by
+    /// model, made on their first water draw (null: no linear memory).
+    gpu_water_meshes: BTreeMap<u32, *mut c_void>,
+    /// The batch's GPU water draws: drawn after its CPU triangles, before
+    /// the CPU water (the ripple rings ride on top).
+    pending_gpu_water: Vec<GpuWaterDraw>,
 }
+
+/// One queued GPU water draw.
+struct GpuWaterDraw {
+    mesh: *mut c_void,
+    uniforms: [f32; WATER_UNIFORM_FLOATS],
+    texture: Option<TexBind>,
+    cull: u32,
+}
+
+/// Floats of uniforms per GPU water draw (`trino_water_draw`).
+const WATER_UNIFORM_FLOATS: usize = 104;
 
 impl N3dsRenderer {
     pub fn new() -> Self {
@@ -139,6 +164,11 @@ impl N3dsRenderer {
             light: DEFAULT_LIGHT,
             locals: LightList::EMPTY,
             caps: Caps::N3DS,
+            water_state: WaterState::NONE,
+            pending_water: Vec::new(),
+            pending_water_tex: Vec::new(),
+            gpu_water_meshes: BTreeMap::new(),
+            pending_gpu_water: Vec::new(),
         }
     }
 
@@ -161,6 +191,75 @@ impl N3dsRenderer {
     /// Triangles are grouped by texture (painter order within a group), one
     /// `trino_3d_draw` per run.
     fn flush_model_batch(&mut self) {
+        self.flush_cpu_batch();
+        self.flush_gpu_water();
+        self.flush_water();
+    }
+
+    /// The batch's GPU water surfaces (`water.v.pica`).
+    fn flush_gpu_water(&mut self) {
+        for d in core::mem::take(&mut self.pending_gpu_water) {
+            let sheet = match d
+                .texture
+                .and_then(|t| self.sprites.get(&t.id).map(|e| (e.ptr, t)))
+            {
+                Some((ptr, t)) => {
+                    let detail = t
+                        .detail
+                        .and_then(|dt| self.sprites.get(&dt.sprite.0).map(|e| (e.ptr, dt)));
+                    let flags = ((t.filter == TexFilter::Point) as u32) << 1
+                        | detail.map_or(0, |(_, dt)| (dt.scale_log2 as u32) << 4)
+                        | 1 << 8;
+                    let dptr = detail.map_or(core::ptr::null_mut(), |(p, _)| p);
+                    unsafe { ffi::trino_3d_material(dptr, flags, 0) };
+                    ptr
+                }
+                None => {
+                    unsafe { ffi::trino_3d_material(core::ptr::null_mut(), 1 << 8, 0) };
+                    core::ptr::null_mut()
+                }
+            };
+            unsafe { ffi::trino_water_draw(d.mesh, d.uniforms.as_ptr(), sheet, d.cull) };
+            self.sprite_depth = SPRITE_DEPTH_HUD;
+        }
+    }
+
+    /// The batch's water, last: far to near, one `trino_3d_draw` per
+    /// surface (water material: blended, depth tested, not written).
+    fn flush_water(&mut self) {
+        if self.pending_water.is_empty() {
+            return;
+        }
+        self.frame_stats.tris += self.pending_water.len() as u32;
+        self.order.clear();
+        for (i, tri) in self.pending_water.iter().enumerate() {
+            let group = self.pending_water_tex[i].map_or(0, |t| t.group());
+            self.order.push((group, painter_key(tri.depth, i)));
+        }
+        self.order.sort_unstable();
+        let mut run: Option<Option<TexBind>> = None;
+        self.verts.clear();
+        for k in 0..self.order.len() {
+            let i = painter_index(self.order[k].1);
+            let tex = self.pending_water_tex[i].filter(|t| self.sprites.contains_key(&t.id));
+            if run != Some(tex) {
+                if let Some(prev) = run {
+                    self.draw_run_with(prev, true);
+                }
+                run = Some(tex);
+            }
+            push_tri(&mut self.verts, &self.pending_water[i], tex.is_some());
+        }
+        if let Some(prev) = run {
+            self.draw_run_with(prev, true);
+        }
+        self.pending_water.clear();
+        self.pending_water_tex.clear();
+        self.sprite_depth = SPRITE_DEPTH_HUD;
+    }
+
+    /// The CPU-tessellated part of the batch (not the water).
+    fn flush_cpu_batch(&mut self) {
         if self.pending_tris.is_empty() {
             return;
         }
@@ -202,21 +301,34 @@ impl N3dsRenderer {
 
     /// Hand the staged vertices to the shim as one citro3d draw.
     fn draw_run(&mut self, tex: Option<TexBind>) {
+        self.draw_run_with(tex, false);
+    }
+
+    /// [`Self::draw_run`], as water (`water`: ADR 0015's material) or not.
+    /// The material is set for every run, so water never leaks into the
+    /// next draw.
+    fn draw_run_with(&mut self, tex: Option<TexBind>, water: bool) {
         if self.verts.is_empty() {
             return;
         }
+        let water_bit = (water as u32) << 8;
         let (sheet, clamp) = match tex.and_then(|t| self.sprites.get(&t.id).map(|e| (e, t))) {
             Some((entry, t)) => {
                 let detail = t
                     .detail
                     .and_then(|d| self.sprites.get(&d.sprite.0).map(|e| (e.ptr, d)));
                 let flags = ((t.filter == TexFilter::Point) as u32) << 1
-                    | detail.map_or(0, |(_, d)| (d.scale_log2 as u32) << 4);
+                    | detail.map_or(0, |(_, d)| (d.scale_log2 as u32) << 4)
+                    | water_bit;
                 let dptr = detail.map_or(core::ptr::null_mut(), |(p, _)| p);
-                unsafe { ffi::trino_3d_material(dptr, flags) };
+                let [u, v] = t.water.unwrap_or([0, 0]);
+                unsafe { ffi::trino_3d_material(dptr, flags, (u as u32) << 16 | v as u32) };
                 (entry.ptr, t.clamp as u32)
             }
-            None => (core::ptr::null_mut(), 0),
+            None => {
+                unsafe { ffi::trino_3d_material(core::ptr::null_mut(), water_bit, 0) };
+                (core::ptr::null_mut(), 0)
+            }
         };
         let count = (self.verts.len() / VERT_FLOATS) as u32;
         unsafe { ffi::trino_3d_draw(self.verts.as_ptr(), count, sheet, clamp) }
@@ -368,6 +480,69 @@ impl Default for N3dsRenderer {
     }
 }
 
+/// Copy a water mesh for `trino_water_draw` (24-byte vertices: position,
+/// UV, color); null when linear memory is short.
+fn upload_water_mesh(mesh: &Mesh) -> *mut c_void {
+    let mut verts = Vec::with_capacity(mesh.vertex_count * 24);
+    for i in 0..mesh.vertex_count {
+        let (p, c) = (mesh.position(i), mesh.color(i));
+        let uv = if mesh.has_uvs() {
+            mesh.uv(i)
+        } else {
+            Vec2::ZERO
+        };
+        for f in [p.x, p.y, p.z, uv.x, uv.y] {
+            verts.extend_from_slice(&f.to_ne_bytes());
+        }
+        verts.extend_from_slice(&[c.r, c.g, c.b, c.a]);
+    }
+    let idx: Vec<u16> = (0..mesh.index_count).map(|i| mesh.index(i)).collect();
+    unsafe {
+        ffi::trino_water_mesh(
+            verts.as_ptr(),
+            mesh.vertex_count as u32,
+            idx.as_ptr(),
+            idx.len() as u32,
+        )
+    }
+}
+
+/// [`GpuWater`] as `trino_water_draw`'s floats: the world-to-screen
+/// matrix with the CPU path's depth band (as `gpu_plan` builds it), the
+/// model rows, then the vectors in `water.v.pica`'s order.
+fn water_uniforms(u: &GpuWater) -> [f32; WATER_UNIFORM_FLOATS] {
+    let s = u.screen;
+    let (b, k) = (TRI_DEPTH_BASE + TRI_DEPTH_RANGE, TRI_DEPTH_RANGE);
+    let band: [f32; 4] = core::array::from_fn(|j| b * s[3][j] - k * s[2][j]);
+    let mut out = [0.0f32; WATER_UNIFORM_FLOATS];
+    let rows = [s[0], s[1], band, s[3], u.model[0], u.model[1], u.model[2]];
+    let vecs = [
+        u.wdir,
+        u.wk,
+        u.wamp,
+        u.rx,
+        u.rz,
+        u.rrad,
+        u.rstr,
+        u.light,
+        u.ambient,
+        u.diffuse,
+        u.tint,
+        u.emissive,
+        u.eye,
+        u.sky,
+        u.glint,
+        u.fog,
+        u.fog_color,
+        u.scroll,
+        u.detail_offset,
+    ];
+    for (i, v) in rows.iter().chain(vecs.iter()).enumerate() {
+        out[i * 4..i * 4 + 4].copy_from_slice(v);
+    }
+    out
+}
+
 /// Normalized depth (0 near .. 1 far) -> nearness inside the 3D band.
 fn band_depth(z: f32) -> f32 {
     TRI_DEPTH_BASE + TRI_DEPTH_RANGE * (1.0 - z).clamp(0.0, 1.0)
@@ -411,6 +586,7 @@ impl Renderer for N3dsRenderer {
     fn begin_frame(&mut self, clear: Color) {
         self.sprite_depth = SPRITE_DEPTH_BG;
         self.frame_stats = FrameStats::default();
+        self.water_state = WaterState::NONE;
         // The last frame may have ended on the touch screen (project to the
         // top again) or with local lights (cleared every frame).
         let was_bottom = self.screen != 0;
@@ -526,6 +702,10 @@ impl Renderer for N3dsRenderer {
         }
     }
 
+    fn set_water(&mut self, time: f32, ripples: &[Ripple]) {
+        self.water_state = WaterState::new(time, ripples, self.caps.max_ripples);
+    }
+
     fn draw_model(
         &mut self,
         model: ModelId,
@@ -574,6 +754,82 @@ impl Renderer for N3dsRenderer {
         let texture = mesh
             .texture_for(params)
             .filter(|t| self.sprites.contains_key(&t.0));
+        if let Some(w) = params.water {
+            // Water: on the GPU's water program when it can take it (the
+            // ripple rings stay on the CPU), else displaced, shaded and
+            // ringed by the CPU T&L; drawn with the batch's water (after
+            // the rest, blended).
+            let ctx = self.tnl_ctx.with_water(&self.water_state);
+            let time = self.water_state.time;
+            let bind =
+                texture.map(|t| TexBind::model(t.0, params, self.tex_filter).with_water(&w, time));
+            let scale = bind
+                .and_then(|t| t.detail)
+                .filter(|d| self.sprites.contains_key(&d.sprite.0))
+                .map_or(1.0, |d| d.scale());
+            let plan = match self.gpu_on {
+                true => gpu_water(&ctx, &mesh, matrix, params, scale),
+                false => Err(GpuReject::Water),
+            };
+            let plan = plan.and_then(|u| {
+                let ptr = *self
+                    .gpu_water_meshes
+                    .entry(model.0)
+                    .or_insert_with(|| upload_water_mesh(&mesh));
+                if ptr.is_null() {
+                    Err(GpuReject::NoGpuMemory)
+                } else {
+                    Ok(GpuWaterDraw {
+                        mesh: ptr,
+                        uniforms: water_uniforms(&u),
+                        texture: bind,
+                        cull: u.cull_back as u32,
+                    })
+                }
+            });
+            let before = self.pending_water.len();
+            let pending = &mut self.pending_water;
+            let tnl = match plan {
+                Ok(d) => {
+                    let tris = (mesh.index_count / 3) as u32;
+                    self.pending_gpu_water.push(d);
+                    self.frame_stats.tris += tris;
+                    let rings = trino_core::render3d::tessellate_ripples(
+                        &ctx,
+                        &mesh,
+                        matrix,
+                        params,
+                        &mut |tri| pending.push(tri),
+                    );
+                    let mut s = TnlStats {
+                        gpu_draws: 1,
+                        gpu_tris: tris,
+                        ..TnlStats::default()
+                    };
+                    s.add(&rings);
+                    s
+                }
+                Err(r) => {
+                    if self.gpu_on {
+                        let n = &mut self.gpu_rejects[r.index()];
+                        *n = n.saturating_add(1);
+                    }
+                    trino_core::render3d::tessellate_with(
+                        &ctx,
+                        &mut self.tnl_scratch,
+                        &mesh,
+                        matrix,
+                        params,
+                        &mut |tri| pending.push(tri),
+                    )
+                }
+            };
+            self.frame_stats.tnl.add(&tnl);
+            let added = self.pending_water.len() - before;
+            self.pending_water_tex
+                .extend(core::iter::repeat_n(bind, added));
+            return;
+        }
         let before = self.pending_tris.len();
         let pending = &mut self.pending_tris;
         let tnl = trino_core::render3d::tessellate_with(

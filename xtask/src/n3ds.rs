@@ -58,8 +58,9 @@ fn tool(dkp: &Path, rel: &str, name: &str) -> Result<PathBuf, String> {
 }
 
 /// The shim's vertex shaders: `tri3d` maps CPU-projected triangles to the
-/// screen, `tnl3d` transforms and lights static meshes on the GPU.
-const SHADERS: [&str; 2] = ["tri3d", "tnl3d"];
+/// screen, `tnl3d` transforms and lights static meshes on the GPU, `water`
+/// displaces and shades water surfaces on the GPU (ADR 0015).
+const SHADERS: [&str; 3] = ["tri3d", "tnl3d", "water"];
 
 /// Assemble each vertex shader with picasso and embed its `.shbin` as a C
 /// array (`target/3ds/<name>_shbin.h`) for the shim.
@@ -109,8 +110,9 @@ fn compile_shim(root: &Path, dkp: &Path) -> Result<(), String> {
     let shim_src = root.join("crates/platform-3ds/shim/trino_shim_3ds.c");
     let shader_h = root.join("target/3ds/tri3d_shbin.h");
     let tnl_h = root.join("target/3ds/tnl3d_shbin.h");
+    let water_h = root.join("target/3ds/water_shbin.h");
     let shim_obj = root.join("target/3ds/shim.o");
-    let newest_input = [&shim_src, &shader_h, &tnl_h]
+    let newest_input = [&shim_src, &shader_h, &tnl_h, &water_h]
         .iter()
         .filter_map(|p| p.metadata().and_then(|m| m.modified()).ok())
         .max();
@@ -1031,6 +1033,15 @@ pub fn test(p: &Project, build_first: bool, bless: bool, accurate: bool) -> Exit
         let msg =
             crate::fbgolden::check_close(root, "3ds", "showcase_bottom", img, bless, 3.0, 0.02)?;
         println!("[3ds] golden frame (showcase bottom): {msg}");
+        // The showcase's river (water, ADR 0015) on the top screen.
+        let img = frames
+            .get(3)
+            .ok_or("showcase river golden frame: not dumped")?
+            .image()
+            .map_err(|e| format!("showcase river golden frame: {e}"))?;
+        let msg =
+            crate::fbgolden::check_close(root, "3ds", "showcase_river", img, bless, 3.0, 0.02)?;
+        println!("[3ds] golden frame (showcase river): {msg}");
         Ok(())
     });
 

@@ -66,6 +66,13 @@ impl Library {
         for (logical, path) in scan(&root.join(MATERIALS_DIR), MATERIAL_EXT, "materials") {
             match MaterialDef::load(&path) {
                 Ok(m) => {
+                    if let Some(w) = &m.water {
+                        lib.errors.extend(
+                            w.problems()
+                                .into_iter()
+                                .map(|p| format!("{}: {p}", path.display())),
+                        );
+                    }
                     lib.materials.insert(logical, m);
                 }
                 Err(e) => lib.errors.push(e),

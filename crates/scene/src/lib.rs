@@ -40,7 +40,7 @@ pub mod prefab;
 pub mod resolve;
 
 pub use library::{Library, ModelBounds};
-pub use material::{DetailDef, FilterDef, MaterialDef, ShadingDef};
+pub use material::{DetailDef, FilterDef, MaterialDef, ShadingDef, WaterDef};
 pub use platform::{PlatformVariants, Target, Variant};
 pub use prefab::{Override, Prefab, PrefabInstance};
 pub use resolve::{DrawItem, LodDraw, LodItem, Resolved, resolve, resolve_for};

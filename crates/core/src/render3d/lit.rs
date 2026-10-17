@@ -19,6 +19,7 @@ use crate::math::{Color, Vec2, Vec3};
 use crate::math3d::Mat34;
 use crate::render::{ModelParams, Shading};
 use crate::render3d::{MAX_JOINTS, Mesh};
+use crate::water::{MAX_RIPPLES, RIPPLE_WIDTH, Ripple, Water, WaveSet};
 
 /// A vertex's surface for per-pixel lighting ([`tessellate_surface`]):
 /// world position, world normal and its unlit color.
@@ -174,6 +175,138 @@ struct LitSetup<'a> {
     locals: &'a [ViewLight; MAX_VERTEX_LIGHTS],
     pick: [u8; MAX_VERTEX_LIGHTS],
     n_pick: usize,
+    /// A water draw's constants (`None` for every other draw).
+    water: Option<WaterSetup>,
+}
+
+/// The per-draw constants of a water surface ([`crate::water`]).
+struct WaterSetup {
+    waves: WaveSet,
+    /// The ripples that reach the draw (at most [`MAX_RIPPLES`]).
+    ripples: [Ripple; MAX_RIPPLES],
+    n_ripples: usize,
+    response: f32,
+    /// The texture's scroll (added to every UV).
+    uv: Vec2,
+    /// World eye, unit direction toward the light, the reflected sky and
+    /// the light's color.
+    eye: Vec3,
+    sun: Vec3,
+    sky: [f32; 4],
+    sun_color: [f32; 4],
+    /// The fog color (0..255).
+    sky_fog: [f32; 3],
+    gloss: u8,
+}
+
+impl WaterSetup {
+    fn new(ctx: &TnlContext, mesh: &Mesh, model: &Mat34, w: &Water, gloss: u8) -> WaterSetup {
+        let state = ctx.water();
+        let light = ctx.light();
+        let f = |c: Color| [c.r as f32, c.g as f32, c.b as f32, c.a as f32];
+        // Ripples whose band can't reach the mesh's bounding circle (x, z)
+        // are left out of every vertex.
+        let reach = mesh.bounds().map(|(c, r)| {
+            let s = model.axis_scales_sq();
+            let c = model.transform_point(c);
+            (c, crate::math3d::sqrt(r * r * s.x.max(s.y).max(s.z)))
+        });
+        let mut ripples = [Ripple::NONE; MAX_RIPPLES];
+        let mut n = 0;
+        if w.ripple_responsiveness != 0.0 {
+            for r in state.ripples() {
+                if let Some((c, rad)) = reach {
+                    let (dx, dz) = (r.pos.x - c.x, r.pos.y - c.z);
+                    let lim = rad + r.radius() + RIPPLE_WIDTH;
+                    if dx * dx + dz * dz >= lim * lim {
+                        continue;
+                    }
+                }
+                ripples[n] = *r;
+                n += 1;
+            }
+        }
+        WaterSetup {
+            waves: WaveSet::new(w, state.time),
+            ripples,
+            n_ripples: n,
+            response: w.ripple_responsiveness,
+            uv: w.scroll(state.time).0,
+            eye: ctx.camera().eye,
+            sun: -ctx.ldir,
+            sky: f(if light.fog.enabled() {
+                light.fog.color
+            } else {
+                light.ambient_color
+            }),
+            sun_color: f(light.color),
+            sky_fog: {
+                let c = light.fog.color;
+                [c.r as f32, c.g as f32, c.b as f32]
+            },
+            gloss,
+        }
+    }
+
+    /// World point `p` moved by the swell and the ripples, and the
+    /// surface's world normal there.
+    #[inline]
+    fn displace(&self, p: Vec3) -> (Vec3, Vec3) {
+        let (h, g) = self.waves.sample(p.x, p.z);
+        let (rh, rg) =
+            crate::water::ripple_sample(&self.ripples[..self.n_ripples], self.response, p.x, p.z);
+        (
+            Vec3::new(p.x, p.y + h + rh, p.z),
+            crate::water::normal_of(g + rg),
+        )
+    }
+
+    /// A water vertex's color: lit by the global light from the displaced
+    /// normal, then the Fresnel sky and the glint, then fog.
+    #[inline]
+    fn color(&self, s: &Setup, c: Color, n: Vec3, wp: Vec3, z: f32) -> Color {
+        let light = s.light;
+        let k = match s.params.shading {
+            Shading::Unlit => [1.0, 1.0, 1.0],
+            _ => {
+                let diffuse = -n.dot(s.ldir);
+                let d = (1.0 - light.ambient) * if diffuse > 0.0 { diffuse } else { 0.0 };
+                [
+                    light.ambient * s.ac[0] + d * s.lc[0],
+                    light.ambient * s.ac[1] + d * s.lc[1],
+                    light.ambient * s.ac[2] + d * s.lc[2],
+                ]
+            }
+        };
+        // Tint × light (+ emissive), in floats to the end.
+        let t = s.tint_k;
+        let e = s.params.emissive;
+        let lit = [
+            c.r as f32 * t[0] * k[0] + e.r as f32,
+            c.g as f32 * t[1] * k[1] + e.g as f32,
+            c.b as f32 * t[2] * k[2] + e.b as f32,
+            c.a as f32 * t[3],
+        ];
+        let to_eye = (self.eye - wp).normalized();
+        let mut out = crate::water::shade_f(
+            lit,
+            n,
+            to_eye,
+            self.sun,
+            self.sky,
+            self.sun_color,
+            self.gloss,
+        );
+        if s.fog_on {
+            let fog = light.fog;
+            let f = ((z - fog.near) / (fog.far - fog.near)).clamp(0.0, 1.0);
+            out[0] += (self.sky_fog[0] - out[0]) * f;
+            out[1] += (self.sky_fog[1] - out[1]) * f;
+            out[2] += (self.sky_fog[2] - out[2]) * f;
+        }
+        let b = crate::water::to_u8;
+        Color::rgba(b(out[0]), b(out[1]), b(out[2]), b(out[3]))
+    }
 }
 
 impl LitSetup<'_> {
@@ -319,6 +452,7 @@ fn setup<'a>(
             params.tint.a as f32 / 255.0,
         ],
         split: split_policy(ctx, mesh, params),
+        fog_band: super::fog_split_band(ctx, mesh, params),
         local_ldir: if mesh.joint_count() == 0 && params.shading == Shading::Gouraud {
             model_space_light(mesh, model, ctx.ldir)
         } else {
@@ -357,6 +491,7 @@ pub(super) fn tessellate_lit(
         locals: &ctx.view_locals,
         pick,
         n_pick,
+        water: None,
     };
     let super::TriScratch {
         cache_pos,
@@ -384,6 +519,223 @@ pub(super) fn tessellate_lit(
         (&mut scratch.skin, &mut scratch.world, &mut scratch.viewm),
         emit,
     ))
+}
+
+/// `tessellate_with` for a [`Water`] draw: every vertex displaced by the
+/// swell and the context's ripples, shaded from the displaced normal with
+/// the Fresnel sky and the glint, its UVs scrolled by the flow (the
+/// per-vertex tiers; the PC's per-pixel tier takes [`tessellate_surface`],
+/// which does the same and hands over the [`SurfaceVert`]s).
+#[inline(never)]
+pub(super) fn tessellate_water(
+    ctx: &TnlContext,
+    scratch: &mut TnlScratch,
+    mesh: &Mesh,
+    model: &Mat34,
+    params: &ModelParams,
+    water: &Water,
+    emit: &mut dyn FnMut(ScreenTri),
+) -> TnlStats {
+    let mv = ctx.view.mul(model);
+    let bound = match cull(ctx, mesh, model, &mv) {
+        Ok(b) => b,
+        Err(culled) => return culled,
+    };
+    let (pick, n_pick) = if ctx.n_locals > 0 && params.shading != Shading::Unlit {
+        pick(ctx, bound)
+    } else {
+        ([0; MAX_VERTEX_LIGHTS], 0)
+    };
+    let s = LitSetup {
+        s: setup(ctx, mesh, model, params),
+        view: &ctx.view,
+        locals: &ctx.view_locals,
+        pick,
+        n_pick,
+        water: Some(WaterSetup::new(ctx, mesh, model, water, params.gloss)),
+    };
+    let super::TriScratch {
+        cache_pos,
+        cache_col,
+        poly_a,
+        poly_b,
+        stack,
+    } = &mut scratch.tri;
+    let mut cache_x = [(); VCACHE];
+    let bufs = Bufs::<(Vec3, Color, Vec2)> {
+        cache_pos,
+        cache_col,
+        cache_x: &mut cache_x,
+        poly_a,
+        poly_b,
+        stack,
+    };
+    let mut stats = run(
+        mesh,
+        model,
+        mv,
+        params,
+        &s,
+        bufs,
+        (&mut scratch.skin, &mut scratch.world, &mut scratch.viewm),
+        emit,
+    );
+    if let Some(w) = &s.water {
+        stats.add(&ripple_rings(ctx, &s.s, w, mesh, model, emit));
+    }
+    stats
+}
+
+/// Segments of a ripple ring ([`tessellate_ripples`]).
+pub const RING_SEGMENTS: usize = 10;
+
+/// The per-vertex tiers' ripples: a water mesh's vertices are too far apart
+/// for a 0.55 m ripple to show in them (the swell does), so each ripple
+/// that reaches the draw also gets a ring on the surface: a band of
+/// [`RING_SEGMENTS`] quads at its radius, light, its alpha fading with
+/// the ripple. Emitted after the draw's triangles, sorted after them
+/// (`depth` 0), never written to the depth buffer by any backend (they are
+/// water). The per-pixel tier draws the rings in its shader instead.
+/// `tessellate_with` adds them to every water draw; a backend that draws
+/// the water surface another way (the 3DS's vertex program) calls this for
+/// the rings alone.
+pub fn tessellate_ripples(
+    ctx: &TnlContext,
+    mesh: &Mesh,
+    model: &Mat34,
+    params: &ModelParams,
+    emit: &mut dyn FnMut(ScreenTri),
+) -> TnlStats {
+    let Some(w) = &params.water else {
+        return TnlStats::default();
+    };
+    let s = setup(ctx, mesh, model, params);
+    let ws = WaterSetup::new(ctx, mesh, model, w, params.gloss);
+    ripple_rings(ctx, &s, &ws, mesh, model, emit)
+}
+
+fn ripple_rings(
+    ctx: &TnlContext,
+    s: &Setup,
+    w: &WaterSetup,
+    mesh: &Mesh,
+    model: &Mat34,
+    emit: &mut dyn FnMut(ScreenTri),
+) -> TnlStats {
+    let mut stats = TnlStats::default();
+    if w.n_ripples == 0 {
+        return stats;
+    }
+    // The surface's rest height: the middle of its bounds (a flat sheet).
+    let plane = match mesh.bounds() {
+        Some((c, _)) => model.transform_point(c).y,
+        None => model.transform_point(Vec3::ZERO).y,
+    };
+    let view = &ctx.view;
+    let mut poly_a = [super::NO_VERT; MAX_POLY];
+    let mut poly_b = [super::NO_VERT; MAX_POLY];
+    for r in &w.ripples[..w.n_ripples] {
+        let decay = r.decay();
+        let a = 210.0 * decay * (r.strength * w.response / 0.08).min(1.0);
+        if a < 4.0 {
+            continue;
+        }
+        let rad = r.radius();
+        let half = 0.07 + 0.05 * r.age;
+        let (r0, r1) = (if rad > half { rad - half } else { 0.0 }, rad + half);
+        // Above the surface by the crest it rides on.
+        let lift = r.strength * w.response * decay + 0.01;
+        let color = Color::rgba(232, 244, 255, a as u8);
+        let at = |k: usize, rr: f32| {
+            let t = k as f32 / RING_SEGMENTS as f32;
+            let (sn, cs) = (crate::water::sin_turns(t), crate::water::cos_turns(t));
+            let (x, z) = (r.pos.x + cs * rr, r.pos.y + sn * rr);
+            let (h, _) = w.waves.sample(x, z);
+            view.transform_point(Vec3::new(x, plane + h + lift, z))
+        };
+        let mut prev = (at(0, r0), at(0, r1));
+        for k in 1..=RING_SEGMENTS {
+            let cur = (at(k, r0), at(k, r1));
+            stats.tris_in += 2;
+            for tri in [[prev.0, cur.1, prev.1], [prev.0, cur.0, cur.1]] {
+                ring_tri(s, &tri, color, &mut poly_a, &mut poly_b, &mut stats, emit);
+            }
+            prev = cur;
+        }
+        stats.verts += 2 * (RING_SEGMENTS as u32 + 1);
+    }
+    stats
+}
+
+/// Clip, project and emit one ring triangle (view space; both faces).
+fn ring_tri(
+    s: &Setup,
+    tri: &[Vec3; 3],
+    color: Color,
+    poly_a: &mut [(Vec3, Color, Vec2); MAX_POLY],
+    poly_b: &mut [(Vec3, Color, Vec2); MAX_POLY],
+    stats: &mut TnlStats,
+    emit: &mut dyn FnMut(ScreenTri),
+) {
+    let (lim_x, lim_y) = (s.lim_x, s.lim_y);
+    if tri.iter().all(|v| v.z <= NEAR) {
+        return;
+    }
+    let fogged = |v: Vec3| s.fog(color, v.z);
+    for k in 0..3 {
+        poly_a[k] = (tri[k], fogged(tri[k]), Vec2::new(0.5, 0.5));
+    }
+    let inside = |v: Vec3| {
+        v.z > NEAR
+            && v.x >= -lim_x * v.z
+            && v.x <= lim_x * v.z
+            && v.y >= -lim_y * v.z
+            && v.y <= lim_y * v.z
+    };
+    let mut n = 3;
+    if !tri.iter().all(|&v| inside(v)) {
+        stats.clipped += 1;
+        n = clip_frustum(poly_a, poly_b, lim_x, lim_y);
+        if n < 3 {
+            return;
+        }
+    }
+    let project = |v: Vec3, inv: f32| {
+        let k = s.focal * inv;
+        Vec2::new(s.center.x + v.x * k, s.center.y - v.y * k)
+    };
+    for k in 1..n - 1 {
+        let mut v = [poly_a[0], poly_a[k], poly_a[k + 1]];
+        let mut inv = [1.0 / v[0].0.z, 1.0 / v[1].0.z, 1.0 / v[2].0.z];
+        let mut pts = [
+            project(v[0].0, inv[0]),
+            project(v[1].0, inv[1]),
+            project(v[2].0, inv[2]),
+        ];
+        let area = (pts[1].x - pts[0].x) * (pts[2].y - pts[0].y)
+            - (pts[2].x - pts[0].x) * (pts[1].y - pts[0].y);
+        if area == 0.0 {
+            continue;
+        }
+        if area < 0.0 {
+            // Seen from below or wound the other way: both faces show.
+            v.swap(0, 1);
+            inv.swap(0, 1);
+            pts.swap(0, 1);
+        }
+        let zn = |inv: f32| 1.0 - NEAR * inv;
+        stats.emitted += 1;
+        emit(ScreenTri {
+            pts,
+            colors: [v[0].1, v[1].1, v[2].1],
+            // Sorted after the surface's triangles (painter keys put the
+            // nearest last).
+            depth: 0.0,
+            z: [zn(inv[0]), zn(inv[1]), zn(inv[2])],
+            uv: [v[0].2, v[1].2, v[2].2],
+            w: [v[0].0.z, v[1].0.z, v[2].0.z],
+        });
+    }
 }
 
 /// [`super::tessellate_with`] that also hands over each vertex's
@@ -416,6 +768,10 @@ pub fn tessellate_surface(
         locals: &ctx.view_locals,
         pick,
         n_pick,
+        water: params
+            .water
+            .as_ref()
+            .map(|w| WaterSetup::new(ctx, mesh, model, w, params.gloss)),
     };
     let SurfaceScratch {
         cache_pos,
@@ -466,7 +822,12 @@ fn run<V: Vert, K: Sink<V::X> + ?Sized>(
     emit: &mut K,
 ) -> TnlStats {
     if mesh.joint_count() == 0 {
-        return joints::<false, false, V, K>(mesh, &[*model], &[mv], s, bufs, emit);
+        // Static water has its own copy: the water vertex and nothing of
+        // the local lights or the faceting (a smaller body on the N64).
+        if s.water.is_some() {
+            return joints::<false, false, true, V, K>(mesh, &[*model], &[mv], s, bufs, emit);
+        }
+        return joints::<false, false, false, V, K>(mesh, &[*model], &[mv], s, bufs, emit);
     }
     let n = mesh.pose(params.anim, skin);
     for j in 0..n {
@@ -474,10 +835,11 @@ fn run<V: Vert, K: Sink<V::X> + ?Sized>(
         viewm[j] = s.view.mul(&world[j]);
     }
     let (world, viewm) = (&world[..n], &viewm[..n]);
+    // Skinned water (rare) shares the lit copies' bodies.
     if mesh.has_blend() {
-        joints::<true, true, V, K>(mesh, world, viewm, s, bufs, emit)
+        joints::<true, true, false, V, K>(mesh, world, viewm, s, bufs, emit)
     } else {
-        joints::<true, false, V, K>(mesh, world, viewm, s, bufs, emit)
+        joints::<true, false, false, V, K>(mesh, world, viewm, s, bufs, emit)
     }
 }
 
@@ -504,13 +866,25 @@ fn clip_plane<V: Vert>(
             if n_out == MAX_POLY {
                 return n_out;
             }
-            let t = da / (da - db);
-            out[n_out] = V::new(
-                a + (b - a) * t,
-                lerp_color(ca, cb, t),
-                ua + (ub - ua) * t,
-                V::mix(xa, xb, t),
-            );
+            // From the inside vertex (see `render3d::clip_plane`): the
+            // neighbor walking the edge the other way gets the same point.
+            out[n_out] = if da >= 0.0 {
+                let t = da / (da - db);
+                V::new(
+                    a + (b - a) * t,
+                    lerp_color(ca, cb, t),
+                    ua + (ub - ua) * t,
+                    V::mix(xa, xb, t),
+                )
+            } else {
+                let t = db / (db - da);
+                V::new(
+                    b + (a - b) * t,
+                    lerp_color(cb, ca, t),
+                    ub + (ua - ub) * t,
+                    V::mix(xb, xa, t),
+                )
+            };
             n_out += 1;
         }
     }
@@ -537,7 +911,13 @@ fn clip_frustum<V: Vert>(
 /// `tessellate_joints` with local lights and the varying (see the module
 /// docs for why it is a copy).
 #[inline(never)]
-fn joints<const SKINNED: bool, const SMOOTH: bool, V: Vert, K: Sink<V::X> + ?Sized>(
+fn joints<
+    const SKINNED: bool,
+    const SMOOTH: bool,
+    const WATER: bool,
+    V: Vert,
+    K: Sink<V::X> + ?Sized,
+>(
     mesh: &Mesh,
     world: &[Mat34],
     viewm: &[Mat34],
@@ -557,10 +937,15 @@ fn joints<const SKINNED: bool, const SMOOTH: bool, V: Vert, K: Sink<V::X> + ?Siz
     let mut stats = TnlStats::default();
     let mut verts = 0u32;
     let joint = |i: usize| if SKINNED { mesh.joint_of(i) } else { 0 };
-    let flat = s.params.shading == Shading::Flat;
+    // Water is shaded from its displaced normals (never faceted).
+    let flat = !WATER && s.params.shading == Shading::Flat && ls.water.is_none();
     let (lim_x, lim_y, focal, center) = (s.lim_x, s.lim_y, s.focal, s.center);
     let mut tag = [u32::MAX; VCACHE];
     let textured = mesh.has_uvs();
+    let uv_scroll = ls.water.as_ref().map(|w| w.uv);
+    // `WATER` copies always have a water setup, the static lit copy never,
+    // a skinned copy may.
+    let water = ls.water.as_ref();
     let mut vertex = |i: usize| -> (Vec3, Color, V::X) {
         let slot = i % VCACHE;
         if tag[slot] == i as u32 {
@@ -569,6 +954,23 @@ fn joints<const SKINNED: bool, const SMOOTH: bool, V: Vert, K: Sink<V::X> + ?Siz
         verts += 1;
         let j = joint(i);
         let local = mesh.position(i);
+        // Static draws know at compile time: the lit copy has no water.
+        if let Some(w) = water.filter(|_| WATER || SKINNED) {
+            // Water: displaced in world space, then viewed.
+            let (wp, n) = w.displace(world[j].transform_point(local));
+            let p = ls.view.transform_point(wp);
+            let col = w.color(s, s.base_color(mesh, i), n, wp, p.z);
+            let x = V::make(|| SurfaceVert {
+                pos: wp,
+                normal: n,
+                base: ls.albedo(mesh, i),
+            });
+            tag[slot] = i as u32;
+            cache_pos[slot] = p;
+            cache_col[slot] = col;
+            cache_x[slot] = x;
+            return (p, col, x);
+        }
         let mut p = viewm[j].transform_point(local);
         let blend = if SMOOTH { mesh.blend_of(i) } else { None };
         if let Some((j2, w)) = blend {
@@ -671,10 +1073,10 @@ fn joints<const SKINNED: bool, const SMOOTH: bool, V: Vert, K: Sink<V::X> + ?Siz
                 && v.y <= lim_y * v.z
         };
         for k in 0..3 {
-            let uv = if textured {
-                mesh.uv(idx[k])
-            } else {
-                Vec2::ZERO
+            let uv = match (textured, uv_scroll) {
+                (true, None) => mesh.uv(idx[k]),
+                (true, Some(o)) => mesh.uv(idx[k]) + o,
+                (false, _) => Vec2::ZERO,
             };
             poly_a[k] = V::new(vs[k], colors[k], uv, xs[k]);
         }
@@ -698,10 +1100,7 @@ fn joints<const SKINNED: bool, const SMOOTH: bool, V: Vert, K: Sink<V::X> + ?Siz
                 top -= 1;
                 let tri = stack[top];
                 let z = |a: usize| tri[a].parts().0.z;
-                let span = |a: usize, b: usize| {
-                    let d = z(a) - z(b);
-                    if d < 0.0 { -d } else { d }
-                };
+                let span = |a: usize, b: usize| super::split_span(z(a), z(b), s.fog_band);
                 let worst = if !s.split {
                     (0.0, 0)
                 } else {

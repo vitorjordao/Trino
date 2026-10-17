@@ -794,8 +794,12 @@ fn engine_gates(
     bless: bool,
 ) -> Result<(), String> {
     // Emulator golden images, in dump order: the showcase's first frame
-    // (fogged: the CPU T&L path) and castle64's hub (the RSP T&L path).
-    for (n, name) in ["showcase", "castle64_hub"].iter().enumerate() {
+    // (fogged: the CPU T&L path), castle64's hub (the RSP T&L path) and the
+    // showcase's river (water, ADR 0015: the `showcase-river` perf scene).
+    for (n, name) in ["showcase", "castle64_hub", "showcase_river"]
+        .iter()
+        .enumerate()
+    {
         let img = frames
             .get(n)
             .ok_or_else(|| format!("golden frame {name}: not dumped"))?

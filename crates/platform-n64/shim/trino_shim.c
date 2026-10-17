@@ -561,6 +561,69 @@ uint32_t trino_3d_texture_ex(void* sprite, void* detail, uint32_t flags)
     return dt != NULL;
 }
 
+// Water (ADR 0015, ffi.rs): translucent, z-compared but not written, alpha
+// from the shade (the T&L's vertex alpha with its Fresnel term). With both
+// layers: the 2-cycle combiner blends them half and half (ENV alpha 0.5)
+// and multiplies by the shade; TILE1 reads the base's coordinates shifted
+// like a detail tile and translated by `scroll` (u << 16 | v, 1/65536 of
+// its repeat), so it flows on its own. The pair must fit TMEM and neither
+// may be a palette, or the layer is dropped.
+uint32_t trino_3d_water(void* sprite, void* detail, uint32_t flags, uint32_t scroll)
+{
+    trino_tmem_owner = NULL;
+    sprite_t* sp = (sprite_t*)sprite;
+    sprite_t* dt = sp ? (sprite_t*)detail : NULL;
+    int shift = (flags >> 4) & 15;
+    if (dt) {
+        int a = trino_tmem_bytes(sp), b = trino_tmem_bytes(dt);
+        if (a < 0 || b < 0 || a + b > 4096) dt = NULL;
+    }
+    trino_mode_standard();
+    if (dt) {
+        rdpq_set_env_color(RGBA32(0, 0, 0, 128));
+        rdpq_mode_combiner(RDPQ_COMBINER2((TEX1, TEX0, ENV_ALPHA, TEX0), (0, 0, 0, SHADE),
+                                          (COMBINED, 0, SHADE, 0), (0, 0, 0, SHADE)));
+    } else if (sp) {
+        rdpq_mode_combiner(RDPQ_COMBINER1((TEX0, 0, SHADE, 0), (0, 0, 0, SHADE)));
+    } else {
+        rdpq_mode_combiner(RDPQ_COMBINER_SHADE);
+    }
+    rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
+    rdpq_mode_zbuf(true, false);
+    rdpq_mode_alphacompare(0);
+    trino_mode_3d = 0;
+    if (!sp) return 0;
+    rdpq_mode_persp(true);
+    rdpq_mode_filter((flags & 2) ? FILTER_POINT : FILTER_BILINEAR);
+    rdpq_texparms_t parms = {
+        .s.repeats = REPEAT_INFINITE,
+        .t.repeats = REPEAT_INFINITE,
+    };
+    if (dt) {
+        // The RDP subtracts a tile's origin from its coordinates: the
+        // texel at uv * scale + offset is at origin = (1 - offset) * size.
+        float su = (float)(scroll >> 16) / 65536.0f;
+        float sv = (float)(scroll & 0xFFFF) / 65536.0f;
+        rdpq_texparms_t dparms = {
+            .s.repeats = REPEAT_INFINITE,
+            .t.repeats = REPEAT_INFINITE,
+            .s.scale_log = trino_log2(sp->width) - trino_log2(dt->width) - shift,
+            .t.scale_log = trino_log2(sp->height) - trino_log2(dt->height) - shift,
+            .s.translate = (1.0f - su) * (float)dt->width,
+            .t.translate = (1.0f - sv) * (float)dt->height,
+        };
+        rdpq_tex_multi_begin();
+        rdpq_sprite_upload(TILE0, sp, &parms);
+        rdpq_sprite_upload(TILE1, dt, &dparms);
+        rdpq_tex_multi_end();
+    } else {
+        rdpq_sprite_upload(TILE0, sp, &parms);
+    }
+    trino_tex_w = (float)sp->width;
+    trino_tex_h = (float)sp->height;
+    return dt != NULL;
+}
+
 // v: 3 vertices x 10 floats (x, y, z, u, v, w, r, g, b, a), colors 0..1,
 // u/v normalized (scaled to texels here), w = view depth (> 0).
 void trino_tri_tex(const float* in)

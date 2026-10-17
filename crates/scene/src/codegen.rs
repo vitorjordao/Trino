@@ -50,7 +50,7 @@ pub fn to_rust_for(scene: &Scene, lib: &Library, target: Target) -> (String, Vec
     );
     let _ = writeln!(
         out,
-        "#[allow(unused_imports)]\nuse trino_core::{{\n    AmbientOcclusion, AoQuality, Camera3, ClipId, Collider, Color, DetailTexture, Fog, Impostor,\n    Light, LodLevel, Lods, Mat34, ModelId, ModelParams, NO_CELL, SceneNode, Shading, Shape,\n    SoundId, SoundSource, SpriteId, Tags, TexFilter, Vec3, VisVolume,\n}};\n"
+        "#[allow(unused_imports)]\nuse trino_core::{{\n    AmbientOcclusion, AoQuality, Camera3, ClipId, Collider, Color, DetailTexture, Fog, Impostor,\n    Light, LodLevel, Lods, Mat34, ModelId, ModelParams, NO_CELL, SceneNode, Shading, Shape,\n    SoundId, SoundSource, SpriteId, Tags, TexFilter, Vec2, Vec3, VisVolume, Water,\n}};\n"
     );
     let env = &scene.environment;
     let cam = env.core_camera();
@@ -191,7 +191,7 @@ pub fn to_rust_for(scene: &Scene, lib: &Library, target: Target) -> (String, Vec
             .collect();
         let _ = writeln!(
             out,
-            "    SceneNode {{\n        name: \"{}\",\n        tags: Tags::List(&[{}]),\n        matrix: Mat34 {{\n            m: [{}],\n        }},\n        model: {},\n        params: ModelParams {{\n            tint: {},\n            emissive: {},\n            shading: Shading::{},\n            double_sided: {},\n            anim: None,\n            texture: {},\n            palette: None,\n            gloss: {},\n            filter: TexFilter::{:?},\n            detail: {},\n        }},\n        anim: {},\n        collider: {},\n        lod: {},\n        sound: {},\n        cell: {},\n        vis: {},\n    }},",
+            "    SceneNode {{\n        name: \"{}\",\n        tags: Tags::List(&[{}]),\n        matrix: Mat34 {{\n            m: [{}],\n        }},\n        model: {},\n        params: ModelParams {{\n            tint: {},\n            emissive: {},\n            shading: Shading::{},\n            double_sided: {},\n            anim: None,\n            texture: {},\n            palette: None,\n            gloss: {},\n            filter: TexFilter::{:?},\n            detail: {},\n            water: {},\n        }},\n        anim: {},\n        collider: {},\n        lod: {},\n        sound: {},\n        cell: {},\n        vis: {},\n    }},",
             esc(&item.name),
             tags.join(", "),
             rows.join(", "),
@@ -210,6 +210,19 @@ pub fn to_rust_for(scene: &Scene, lib: &Library, target: Target) -> (String, Vec
                 Some(d) => format!(
                     "Some(DetailTexture {{ sprite: SpriteId({:#010x}), scale_log2: {} }})",
                     d.sprite.0, d.scale_log2
+                ),
+                None => "None".into(),
+            },
+            match p.water {
+                Some(w) => format!(
+                    "Some(Water {{ flow_speed: Vec2::new({}, {}), detail_flow: Vec2::new({}, {}), wave_amplitude: {}, wave_frequency: {}, ripple_responsiveness: {} }})",
+                    f(w.flow_speed.x),
+                    f(w.flow_speed.y),
+                    f(w.detail_flow.x),
+                    f(w.detail_flow.y),
+                    f(w.wave_amplitude),
+                    f(w.wave_frequency),
+                    f(w.ripple_responsiveness)
                 ),
                 None => "None".into(),
             },

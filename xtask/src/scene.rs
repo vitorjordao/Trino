@@ -242,6 +242,8 @@ fn budget(root: &Path, args: &[&str]) -> ExitCode {
     };
     let camera = scene.environment.core_camera();
     let light = scene.environment.core_light();
+    let tmem = n64_tmem(&assets, &manifest);
+    let tmem = |id: trino_core::SpriteId| tmem.get(&id.0).copied().flatten();
     let mut rows = Vec::new();
     for target in targets {
         let platform = trino_asset_pipeline::Platform::parse(target.key()).unwrap();
@@ -284,8 +286,26 @@ fn budget(root: &Path, args: &[&str]) -> ExitCode {
                     .map(|(r, n)| format!("{{\"reason\":{},\"draws\":{n}}}", q(r.label())))
                     .collect();
                 let wasted: Vec<String> = b.wasted.iter().map(|w| q(w)).collect();
+                let water: Vec<String> = b
+                    .water
+                    .iter()
+                    .map(|w| {
+                        let bytes: Option<u32> = [w.texture, w.detail]
+                            .into_iter()
+                            .flatten()
+                            .map(tmem)
+                            .sum();
+                        format!(
+                            "{{\"name\":{},\"tris\":{},\"cycles\":{},\"tmem_bytes\":{}}}",
+                            q(&w.name),
+                            w.tris,
+                            w.cycles,
+                            bytes.map_or("null".into(), |v| v.to_string())
+                        )
+                    })
+                    .collect();
                 format!(
-                    "{{\"platform\":\"{}\",\"draws\":{},\"tris\":{},\"verts\":{},\"culled\":{},\"billboards\":{},\"lod\":{:?},\"rsp_draws\":{},\"rsp_tris\":{},\"cpu_draws\":{},\"off_rsp\":[{}],\"gpu_draws\":{},\"gpu_tris\":{},\"off_gpu\":[{}],\"wasted\":[{}],\"n64_cpu_us\":{},\"n64_rsp_us\":{},\"n64_frame_us\":{}}}",
+                    "{{\"platform\":\"{}\",\"draws\":{},\"tris\":{},\"verts\":{},\"culled\":{},\"billboards\":{},\"lod\":{:?},\"rsp_draws\":{},\"rsp_tris\":{},\"cpu_draws\":{},\"off_rsp\":[{}],\"gpu_draws\":{},\"gpu_tris\":{},\"off_gpu\":[{}],\"wasted\":[{}],\"water\":[{}],\"n64_cpu_us\":{},\"n64_rsp_us\":{},\"n64_frame_us\":{}}}",
                     b.target.key(),
                     b.draws,
                     b.tris(),
@@ -301,6 +321,7 @@ fn budget(root: &Path, args: &[&str]) -> ExitCode {
                     b.gpu_tris,
                     gpu_reasons.join(","),
                     wasted.join(","),
+                    water.join(","),
                     b.n64_cpu_us(),
                     b.n64_rsp_us(),
                     b.n64_frame_us()
@@ -338,6 +359,9 @@ fn budget(root: &Path, args: &[&str]) -> ExitCode {
                     .collect();
                 println!("       off the RSP fast path: {}", r.join(", "));
             }
+            for line in trino_scene::budget::water_lines(b, &tmem) {
+                println!("       {line}");
+            }
         }
         if b.target == Target::N3ds {
             println!(
@@ -362,6 +386,36 @@ fn budget(root: &Path, args: &[&str]) -> ExitCode {
         }
     }
     ExitCode::SUCCESS
+}
+
+/// Each sprite's N64 TMEM bytes (by handle), from its master's size and
+/// its manifest `n64` format (`None`: a palette or an unknown format).
+fn n64_tmem(
+    assets: &Path,
+    manifest: &trino_asset_pipeline::Manifest,
+) -> std::collections::HashMap<u32, Option<u32>> {
+    manifest
+        .sprites
+        .iter()
+        .filter_map(|(name, d)| {
+            let src = trino_asset_pipeline::resolve_source(
+                assets,
+                trino_asset_pipeline::Platform::N64,
+                &d.file,
+            )
+            .ok()?;
+            let file = std::fs::File::open(src).ok()?;
+            let info = png::Decoder::new(std::io::BufReader::new(file))
+                .read_info()
+                .ok()?;
+            let (w, h) = (info.info().width, info.info().height);
+            let format = d.formats.get("n64").map_or("RGBA5551", String::as_str);
+            Some((
+                trino_core::asset_id(&format!("sprites/{name}")),
+                trino_scene::budget::tmem_bytes(w, h, format),
+            ))
+        })
+        .collect()
 }
 
 #[cfg(test)]

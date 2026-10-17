@@ -48,6 +48,7 @@ fn tscn_blobs_carry_everything_resolve_computed() {
         assert_eq!(node.params.shading, item.params.shading);
         assert_eq!(node.params.double_sided, item.params.double_sided);
         assert_eq!(node.params.texture, item.params.texture);
+        assert_eq!(node.params.water, item.params.water, "{}", item.name);
         assert_eq!(node.anim.map(|a| a.0), item.params.anim.map(|a| a.clip));
         assert_eq!(node.collider, item.collider, "{}", item.name);
         let lod: Vec<_> = node.lod.iter().map(|l| (l.distance, l.model)).collect();
@@ -73,6 +74,11 @@ fn tscn_blobs_carry_everything_resolve_computed() {
         ground.params.texture,
         Some(trino_core::SpriteId::from_path("sprites/rock"))
     );
+    // A water material survives the bake (TSCN v4).
+    let pond = baked.find("pond").unwrap().params.water.unwrap();
+    assert_eq!(pond.flow_speed, trino_core::Vec2::new(0.0, -0.3));
+    assert_eq!(pond.wave_amplitude, 0.05);
+    assert!(baked.find("ground").unwrap().params.water.is_none());
     let hero = baked.find("hero").unwrap();
     assert_eq!(
         hero.anim,
@@ -175,6 +181,8 @@ fn generated_code_lists_every_exported_node_and_component() {
         "LodLevel { distance: 30.0, model: None, impostor: None }",
         "/* models/hat-far */",
         "Some(SoundSource { sound: SoundId(",
+        "water: Some(Water { flow_speed: Vec2::new(0.0, -0.3),",
+        "water: None,",
         "radius: 4.0, volume: 0.8 })",
         "vis: Some(VisVolume::Cell { half: Vec3::new(4.0, 2.0, 4.0) })",
         "vis: Some(VisVolume::Portal {",

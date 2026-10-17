@@ -199,6 +199,11 @@ children by `/`-joined names below the root (`"trunk/leaves"`) and may set `mate
 
 ## Pitfalls
 
+- A water material (`water:` in the material file, ADR 0015) needs a mesh with UVs and
+  its flow in UVs per second. `scene check` reports out-of-range fields. Games call
+  `Renderer::set_water(time, ripples)` every frame; a scene played by `apps/pc` or
+  the editor gets the clock and the editor's ripples.
+
 - Logical paths, not file paths: `models/crate`, `materials/wood`, `prefabs/tree`.
 - Rotations are degrees in files, radians in `trino_core`.
 - Removing/renaming a field is a format change: bump the version and add a migration

@@ -17,8 +17,8 @@ use trino_core::render3d::{
 use trino_core::text::{BitmapFont, GlyphIndex};
 use trino_core::{
     BillboardParams, Caps, Color, FontId, FrameStats, LightList, LocalLight, Mat34, Material,
-    ModelId, ModelParams, Renderer, Shading, SpriteId, SpriteParams, TexFilter, TextParams,
-    Transform3, Vec2, Vec3,
+    ModelId, ModelParams, Renderer, Ripple, Shading, SpriteId, SpriteParams, TexFilter, TextParams,
+    Transform3, Vec2, Vec3, WaterState,
 };
 
 use crate::ffi;
@@ -84,6 +84,14 @@ pub struct N64Renderer {
     /// at equal depth an RSP draw no longer wins over a CPU triangle that
     /// comes later in the same batch (castle64's door-on-wall).
     rsp_stream: bool,
+    /// This frame's water clock and ripples (`set_water`, cleared at
+    /// `begin_frame`).
+    water_state: WaterState,
+    /// The batch's water triangles and what each samples (with its detail
+    /// layer's scroll): drawn after the batch's CPU triangles and RSP
+    /// commands, far to near, blending over them without writing depth.
+    pending_water: Vec<ScreenTri>,
+    pending_water_tex: Vec<Option<TexBind>>,
     /// Last frames' RSP commands by draw (`trino_core::memo`): a draw that
     /// repeats under an unchanged camera and light skips the eligibility
     /// test and the command build (~100 µs each on the console).
@@ -164,6 +172,9 @@ impl N64Renderer {
             rsp_stream: false,
             memo: alloc::vec![MemoSlot::EMPTY; MEMO_SLOTS],
             memo_gen: 0,
+            water_state: WaterState::NONE,
+            pending_water: Vec::new(),
+            pending_water_tex: Vec::new(),
         }
     }
 
@@ -181,6 +192,99 @@ impl N64Renderer {
             self.pending_rsp.clear();
             self.charge(t0, |s| &mut s.submit);
         }
+        self.flush_water();
+    }
+
+    /// The batch's water, last: far to near, each surface's texture state
+    /// bound once (`trino_3d_water`: blended, z-tested, not written).
+    fn flush_water(&mut self) {
+        if self.pending_water.is_empty() {
+            return;
+        }
+        self.frame_stats.tris += self.pending_water.len() as u32;
+        let t0 = self.tick();
+        self.order.clear();
+        for (i, tri) in self.pending_water.iter().enumerate() {
+            let group = self.pending_water_tex[i].map_or(0, |t| t.group());
+            self.order.push((group, painter_key(tri.depth, i)));
+        }
+        self.order.sort_unstable();
+        self.charge(t0, |s| &mut s.sort);
+        let t1 = self.tick();
+        let mut bound: Option<Option<TexBind>> = None;
+        for &(_, key) in &self.order {
+            let i = painter_index(key);
+            let tex = self.pending_water_tex[i];
+            let sprite = tex.and_then(|t| self.sprites.get(&t.id).map(|e| (e.ptr, t)));
+            if bound != Some(tex) {
+                let (ptr, dptr, flags, scroll) = match sprite {
+                    Some((ptr, t)) => {
+                        let detail = t
+                            .detail
+                            .and_then(|d| self.sprites.get(&d.sprite.0).map(|e| (e.ptr, d)));
+                        let flags = ((t.filter == TexFilter::Point) as u32) << 1
+                            | detail.map_or(0, |(_, d)| (d.scale_log2 as u32) << 4);
+                        let [u, v] = t.water.unwrap_or([0, 0]);
+                        (
+                            ptr,
+                            detail.map_or(core::ptr::null_mut(), |(p, _)| p),
+                            flags,
+                            (u as u32) << 16 | v as u32,
+                        )
+                    }
+                    None => (core::ptr::null_mut(), core::ptr::null_mut(), 0, 0),
+                };
+                unsafe { ffi::trino_3d_water(ptr, dptr, flags, scroll) };
+                bound = Some(tex);
+            }
+            if sprite.is_some() {
+                emit_tri_tex(&self.pending_water[i]);
+            } else {
+                emit_tri(&self.pending_water[i]);
+            }
+        }
+        self.charge(t1, |s| &mut s.submit);
+        self.pending_water.clear();
+        self.pending_water_tex.clear();
+    }
+
+    /// A water draw (`ModelParams::water`): the CPU T&L displaces and
+    /// shades it with the frame's ripples, and adds their rings; it goes in
+    /// the water bucket.
+    fn draw_water(&mut self, model: ModelId, matrix: &Mat34, params: &ModelParams) {
+        let Some((tmdl, layout)) = self.meshes.get(&model.0) else {
+            return;
+        };
+        let Some(w) = params.water else {
+            return;
+        };
+        let mesh = Mesh::from_layout(tmdl, layout);
+        self.frame_stats.models += 1;
+        let texture = mesh
+            .texture_for(params)
+            .filter(|t| self.sprites.contains_key(&t.0));
+        let t0 = self.tick();
+        let ctx = self.tnl_ctx.with_water(&self.water_state);
+        let before = self.pending_water.len();
+        let pending = &mut self.pending_water;
+        let tnl = trino_core::render3d::tessellate_with(
+            &ctx,
+            &mut self.tnl_scratch,
+            &mesh,
+            matrix,
+            params,
+            &mut |tri| pending.push(tri),
+        );
+        self.frame_stats.tnl.add(&tnl);
+        if let Some(p) = &mut self.profile {
+            p.record_model(model, now_us().wrapping_sub(t0), &tnl);
+        }
+        let time = self.water_state.time;
+        let bind =
+            texture.map(|t| TexBind::model(t.0, params, self.tex_filter).with_water(&w, time));
+        let added = self.pending_water.len() - before;
+        self.pending_water_tex
+            .extend(core::iter::repeat_n(bind, added));
     }
 
     /// The CPU-tessellated part of the batch: sort + submit.
@@ -530,6 +634,7 @@ impl Renderer for N64Renderer {
 
     fn begin_frame(&mut self, clear: Color) {
         self.frame_stats = FrameStats::default();
+        self.water_state = WaterState::NONE;
         if self.locals.set(&[], 0) {
             self.rebuild_tnl();
         }
@@ -593,6 +698,10 @@ impl Renderer for N64Renderer {
         }
     }
 
+    fn set_water(&mut self, time: f32, ripples: &[Ripple]) {
+        self.water_state = WaterState::new(time, ripples, self.caps.max_ripples);
+    }
+
     fn draw_model(
         &mut self,
         model: ModelId,
@@ -610,6 +719,10 @@ impl Renderer for N64Renderer {
         _material: Material,
         params: &ModelParams,
     ) {
+        if params.water.is_some() {
+            self.draw_water(model, matrix, params);
+            return;
+        }
         // A draw that repeats under the same camera and light: last
         // frame's command.
         let key = if self.rsp_on {

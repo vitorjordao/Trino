@@ -10,6 +10,7 @@
 mod ao;
 mod batch;
 mod lights;
+mod water;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -21,14 +22,14 @@ use trino_core::render3d::{
 };
 use trino_core::{
     AmbientOcclusion, AoTier, Caps, Color, FontId, FrameStats, LightList, LightTier, LocalLight,
-    Mat34, Material, ModelId, ModelParams, Renderer, Screen, SpriteId, SpriteParams, TexFilter,
-    TextParams, Transform3, Vec2,
+    Mat34, Material, ModelId, ModelParams, Renderer, Ripple, Screen, SpriteId, SpriteParams,
+    TexFilter, TextParams, Transform3, Vec2, WaterState, WaterTier,
 };
 
 use crate::sim::SimProfile;
 pub use ao::AoView;
 use batch::{
-    Cmd, INSTANCE_STRIDE, Segment, TRI_VERTEX_STRIDE, TexKey, TriVertex, build_segments,
+    Cmd, INSTANCE_STRIDE, Segment, TRI_VERTEX_STRIDE, TexKey, TriKind, TriVertex, build_segments,
     make_command,
 };
 
@@ -117,6 +118,8 @@ pub struct PcRenderer {
     offscreen_view: wgpu::TextureView,
     offscreen_tex: wgpu::Texture,
     depth_view: wgpu::TextureView,
+    /// The depth target itself: copied for the water's depth foam.
+    depth_tex: wgpu::Texture,
     sprite_pipeline: wgpu::RenderPipeline,
     tri_pipeline: wgpu::RenderPipeline,
     /// Same as `tri_pipeline` with clamped 3-point sampling (billboards).
@@ -191,6 +194,12 @@ pub struct PcRenderer {
     ao_view: AoView,
     ao_pass: Option<ao::AoPass>,
     light_sets: lights::LightSets,
+    /// This frame's water clock and ripples (`set_water`, cleared at
+    /// `begin_frame`), the water surfaces drawn (the water pipelines'
+    /// uniform) and their GPU side.
+    water_state: WaterState,
+    water_sets: water::WaterSets,
+    water: WaterGpu,
     /// The T&L's working memory for per-pixel lit draws.
     surf_scratch: Box<SurfaceScratch>,
     camera: Camera3,
@@ -224,7 +233,7 @@ pub struct PcRenderer {
 }
 
 /// What a lit triangle adds to its vertices: the surface, the gloss and the
-/// light set.
+/// light set (or, for water, its water set).
 #[derive(Clone, Copy, Debug)]
 struct SurfTri {
     v: [SurfaceVert; 3],
@@ -232,6 +241,76 @@ struct SurfTri {
     set: u32,
     /// The local lights that reach the draw (`lights::reach_mask`).
     mask: u32,
+    /// A water triangle (`set` is a water set): the water pipelines, after
+    /// the batch's other triangles.
+    water: bool,
+}
+
+const NO_SURFACE: SurfaceVert = SurfaceVert {
+    pos: trino_core::Vec3::ZERO,
+    normal: trino_core::Vec3::ZERO,
+    base: Color::WHITE,
+};
+
+/// The water pipelines and their group 3: the water sets and a copy of
+/// the scene's depth (the per-pixel tier's foam reads it).
+struct WaterGpu {
+    bgl: wgpu::BindGroupLayout,
+    buf: wgpu::Buffer,
+    depth_copy: wgpu::Texture,
+    bg: wgpu::BindGroup,
+    /// `fs_water`: the per-pixel tier (native).
+    per_pixel: wgpu::RenderPipeline,
+    /// `fs_water_vertex`: the console tiers' combiner (N64 look, 3DS).
+    vertex: wgpu::RenderPipeline,
+}
+
+impl WaterGpu {
+    fn depth_copy(device: &wgpu::Device, size: (u32, u32)) -> wgpu::Texture {
+        device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("trino-water-depth"),
+            size: wgpu::Extent3d {
+                width: size.0,
+                height: size.1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth32Float,
+            usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        })
+    }
+
+    fn bind_group(
+        device: &wgpu::Device,
+        bgl: &wgpu::BindGroupLayout,
+        buf: &wgpu::Buffer,
+        depth: &wgpu::Texture,
+    ) -> wgpu::BindGroup {
+        let view = depth.create_view(&wgpu::TextureViewDescriptor::default());
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("trino-water-bg"),
+            layout: bgl,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+            ],
+        })
+    }
+
+    /// A new size: a new depth copy (and its bind group).
+    fn resize(&mut self, device: &wgpu::Device, size: (u32, u32)) {
+        self.depth_copy = Self::depth_copy(device, size);
+        self.bg = Self::bind_group(device, &self.bgl, &self.buf, &self.depth_copy);
+    }
 }
 
 /// What `TexFilter::Default` means on a profile: nearest texels on the PC
@@ -290,7 +369,12 @@ struct SecondScreen {
 fn create_targets(
     device: &wgpu::Device,
     size: (u32, u32),
-) -> (wgpu::Texture, wgpu::TextureView, wgpu::TextureView) {
+) -> (
+    wgpu::Texture,
+    wgpu::TextureView,
+    wgpu::TextureView,
+    wgpu::Texture,
+) {
     let extent = wgpu::Extent3d {
         width: size.0,
         height: size.1,
@@ -318,12 +402,15 @@ fn create_targets(
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: wgpu::TextureFormat::Depth32Float,
-        // Read back by the screen-space AO passes.
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+        // Read back by the screen-space AO passes; copied for the water's
+        // depth foam.
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::COPY_SRC,
         view_formats: &[],
     });
     let depth_view = depth_tex.create_view(&wgpu::TextureViewDescriptor::default());
-    (offscreen_tex, offscreen_view, depth_view)
+    (offscreen_tex, offscreen_view, depth_view, depth_tex)
 }
 
 /// Scratch target of the VI pass (copied back into the offscreen target).
@@ -509,7 +596,8 @@ impl PcRenderer {
         // Strict mode: enforce the profile's Caps at development time.
         let strict = matches!(std::env::var("TRINO_STRICT").as_deref(), Ok("1" | "true"));
 
-        let (offscreen_tex, offscreen_view, depth_view) = create_targets(&device, internal_size);
+        let (offscreen_tex, offscreen_view, depth_view, depth_tex) =
+            create_targets(&device, internal_size);
 
         // The 3DS GPU samples textures bilinearly by default (citro2d), so
         // its sim profile does too; N64/native use nearest (the N64's
@@ -895,6 +983,97 @@ impl PcRenderer {
             cache: None,
         });
 
+        // Water: the lit vertices, groups 0..2 as the lit pipeline (the
+        // light sets stay bound) and the water sets + the scene's depth in
+        // group 3. Translucent: depth-tested, never written.
+        let water_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("trino-water-bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let water_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("trino-water-sets"),
+            size: (water::SET_BYTES * water::MAX_SETS) as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let water_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("trino-water-layout"),
+            bind_group_layouts: &[
+                Some(&globals_bgl),
+                Some(&tex3d_bgl),
+                Some(&lights_bgl),
+                Some(&water_bgl),
+            ],
+            immediate_size: 0,
+        });
+        let make_water_pipeline = |fragment: &str| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("trino-water-pipeline"),
+                layout: Some(&water_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_tri_lit"),
+                    compilation_options: Default::default(),
+                    buffers: &[wgpu::VertexBufferLayout {
+                        array_stride: TRI_VERTEX_STRIDE,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &lit_attrs,
+                    }],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some(fragment),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: OFFSCREEN_FORMAT,
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth32Float,
+                    depth_write_enabled: Some(false),
+                    depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let water_depth = WaterGpu::depth_copy(&device, internal_size);
+        let water = WaterGpu {
+            bg: WaterGpu::bind_group(&device, &water_bgl, &water_buf, &water_depth),
+            bgl: water_bgl,
+            buf: water_buf,
+            depth_copy: water_depth,
+            per_pixel: make_water_pipeline("fs_water"),
+            vertex: make_water_pipeline("fs_water_vertex"),
+        };
+
         let blit_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("trino-blit-layout"),
             bind_group_layouts: &[Some(&texture_bgl)],
@@ -935,7 +1114,7 @@ impl PcRenderer {
         // The 3DS profile simulates the touch screen too.
         let second = (profile == SimProfile::N3ds).then(|| {
             let size = (320, 240);
-            let (tex, view, depth_view) = create_targets(&device, size);
+            let (tex, view, depth_view, _) = create_targets(&device, size);
             let buf = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("trino-globals-2"),
                 size: 16,
@@ -1054,6 +1233,7 @@ impl PcRenderer {
             offscreen_view,
             offscreen_tex,
             depth_view,
+            depth_tex,
             sprite_pipeline,
             tri_pipeline,
             tri_clamp_pipeline,
@@ -1098,6 +1278,9 @@ impl PcRenderer {
             ao_view: AoView::Game,
             ao_pass: None,
             light_sets: lights::LightSets::default(),
+            water_state: WaterState::NONE,
+            water_sets: water::WaterSets::default(),
+            water,
             surf_scratch: Box::new(SurfaceScratch::new()),
             camera: Camera3::default(),
             light: DEFAULT_LIGHT,
@@ -1180,12 +1363,14 @@ impl PcRenderer {
         if size == self.internal_size {
             return;
         }
-        let (tex, view, depth) = create_targets(&self.device, size);
+        let (tex, view, depth, depth_tex) = create_targets(&self.device, size);
         self.blit_bind_group =
             create_blit_bind_group(&self.device, &self.sprite_bgl, &view, &self.blit_sampler);
         self.offscreen_tex = tex;
         self.offscreen_view = view;
         self.depth_view = depth;
+        self.depth_tex = depth_tex;
+        self.water.resize(&self.device, size);
         if let Some(ao) = &mut self.ao_pass {
             ao.invalidate();
         }
@@ -1495,10 +1680,13 @@ impl PcRenderer {
                 // Per-pixel lit triangles group apart too (another pipeline):
                 // interleaved with plain ones in depth order they cut the
                 // batch into a draw call per switch. The z-buffer resolves
-                // the order between groups.
-                let lit = self.pending_surf.get(i).is_some_and(Option::is_some) as u64;
+                // the order between groups. Water comes last: it blends over
+                // what the batch drew under it, and writes no depth.
+                let surf = self.pending_surf.get(i).copied().flatten();
+                let lit = surf.is_some() as u64;
+                let water = surf.is_some_and(|s| s.water) as u64;
                 (
-                    (group << 1) | lit,
+                    (water << 63) | (group << 1) | lit,
                     trino_core::render3d::painter_key(tri.depth, i),
                 )
             })
@@ -1523,23 +1711,29 @@ impl PcRenderer {
                 c.a as f32 / 255.0,
             ]
         };
+        let kind = |s: &Option<SurfTri>| match s {
+            None => TriKind::Plain,
+            Some(s) if s.water => TriKind::Water,
+            Some(_) => TriKind::Lit,
+        };
         let mut run_start = self.tri_verts.len() as u32;
-        let mut run = order.first().map(|(t, _, s)| (*t, s.is_some()));
+        let mut run = order.first().map(|(t, _, s)| (*t, kind(s)));
         for (tex, tri, surf) in &order {
             let lit = surf.is_some();
-            if Some((*tex, lit)) != run {
+            let k = kind(surf);
+            if Some((*tex, k)) != run {
                 let first = run_start;
                 let count = self.tri_verts.len() as u32 - first;
-                if let Some((texture, lit)) = run {
+                if let Some((texture, kind)) = run {
                     self.commands.push(Cmd::Tris {
                         first,
                         count,
                         texture,
-                        lit,
+                        kind,
                     });
                 }
                 run_start = self.tri_verts.len() as u32;
-                run = Some((*tex, lit));
+                run = Some((*tex, k));
             }
             for i in 0..3 {
                 let p = tri.pts[i];
@@ -1570,19 +1764,20 @@ impl PcRenderer {
                     v.normal = [sv.normal.x, sv.normal.y, sv.normal.z];
                     v.base = rgba(sv.base);
                     v.gloss = s.gloss;
-                    // The set (0..8) and the light mask, packed: exact in f32.
+                    // The set (0..8) and the light mask, packed: exact in f32
+                    // (a water set for water triangles).
                     v.set = (s.set + 8 * s.mask) as f32;
                 }
                 self.tri_verts.push(v);
             }
         }
-        if let Some((texture, lit)) = run {
+        if let Some((texture, kind)) = run {
             let count = self.tri_verts.len() as u32 - run_start;
             self.commands.push(Cmd::Tris {
                 first: run_start,
                 count,
                 texture,
-                lit,
+                kind,
             });
         }
         self.pending_tris.clear();
@@ -1726,14 +1921,37 @@ impl PcRenderer {
         }
         self.times.upload_bytes += tri_bytes.len() as u32;
         self.tri_verts.clear();
-        if segments
-            .iter()
-            .any(|s| matches!(s, Segment::Tris { lit: true, .. }))
-        {
+        if segments.iter().any(|s| {
+            matches!(
+                s,
+                Segment::Tris {
+                    kind: TriKind::Lit | TriKind::Water,
+                    ..
+                }
+            )
+        }) {
             let lights = self.light_sets.bytes();
             self.queue.write_buffer(&self.lights_buf, 0, &lights);
             self.times.upload_bytes += lights.len() as u32;
         }
+        // The first water segment: the water sets go up, and the per-pixel
+        // tier copies the scene's depth before it (its soft foam reads it).
+        let first_water = segments.iter().position(|s| {
+            matches!(
+                s,
+                Segment::Tris {
+                    kind: TriKind::Water,
+                    ..
+                }
+            )
+        });
+        if first_water.is_some() {
+            let sets = self.water_sets.bytes();
+            self.queue.write_buffer(&self.water.buf, 0, &sets);
+            self.times.upload_bytes += sets.len() as u32;
+        }
+        let depth_copy_at =
+            first_water.filter(|_| !second && self.caps.water_tier == WaterTier::PerPixel);
 
         // In N64 look the framebuffer is 16-bit: the clear (an RDP fill, no
         // dither) keeps the top 5 bits, stored expanded like a 5551 readback
@@ -1777,12 +1995,26 @@ impl PcRenderer {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        let draws = self.record_segments(
-            &mut encoder,
-            second,
-            first_part,
-            (wgpu::LoadOp::Clear(clear), wgpu::LoadOp::Clear(1.0)),
-        );
+        let mut load = (wgpu::LoadOp::Clear(clear), wgpu::LoadOp::Clear(1.0));
+        let mut first_part = first_part;
+        if let Some(at) = depth_copy_at.filter(|&at| at < first_part.len()) {
+            // The scene before the water, its depth copied, then the rest.
+            let (before, after) = first_part.split_at(at);
+            let draws = self.record_segments(&mut encoder, second, before, load);
+            self.times.draw_calls += draws;
+            encoder.copy_texture_to_texture(
+                self.depth_tex.as_image_copy(),
+                self.water.depth_copy.as_image_copy(),
+                wgpu::Extent3d {
+                    width: self.internal_size.0,
+                    height: self.internal_size.1,
+                    depth_or_array_layers: 1,
+                },
+            );
+            load = (wgpu::LoadOp::Load, wgpu::LoadOp::Load);
+            first_part = after;
+        }
+        let draws = self.record_segments(&mut encoder, second, first_part, load);
         self.times.draw_calls += draws;
         if let (Some((settings, mask)), Some(_)) = (ao, split) {
             let (w, h) = self.internal_size;
@@ -1920,15 +2152,28 @@ impl PcRenderer {
                     first,
                     count,
                     texture,
-                    lit,
+                    kind,
                 } => {
-                    let pipeline = if *lit {
-                        pass.set_bind_group(2, &self.lights_bg, &[]);
-                        &self.lit_pipeline
-                    } else if texture.is_some_and(|t| t.clamp) {
-                        &self.tri_clamp_pipeline
-                    } else {
-                        &self.tri_pipeline
+                    let pipeline = match kind {
+                        TriKind::Water => {
+                            pass.set_bind_group(2, &self.lights_bg, &[]);
+                            pass.set_bind_group(3, &self.water.bg, &[]);
+                            // The second screen (3DS profile) is never the
+                            // per-pixel tier.
+                            if self.caps.water_tier == WaterTier::PerPixel && !second {
+                                &self.water.per_pixel
+                            } else {
+                                &self.water.vertex
+                            }
+                        }
+                        TriKind::Lit => {
+                            pass.set_bind_group(2, &self.lights_bg, &[]);
+                            &self.lit_pipeline
+                        }
+                        TriKind::Plain if texture.is_some_and(|t| t.clamp) => {
+                            &self.tri_clamp_pipeline
+                        }
+                        TriKind::Plain => &self.tri_pipeline,
                     };
                     pass.set_pipeline(pipeline);
                     pass.set_vertex_buffer(0, self.tri_buf.slice(..));
@@ -2107,6 +2352,8 @@ impl Renderer for PcRenderer {
         self.wetness = 0.0;
         self.ao = None;
         self.light_sets.clear();
+        self.water_state = WaterState::NONE;
+        self.water_sets.clear();
         self.frame_stats = FrameStats::default();
         self.times = PcFrameTimes::default();
     }
@@ -2207,6 +2454,24 @@ impl Renderer for PcRenderer {
         self.wetness = wetness.clamp(0.0, 1.0);
     }
 
+    fn set_water(&mut self, time: f32, ripples: &[Ripple]) {
+        let cap = self.caps.max_ripples;
+        if self.strict {
+            let live = ripples.iter().filter(|r| r.alive()).count();
+            if live > cap as usize {
+                panic!(
+                    "strict mode: {live} live ripples this frame, over the {:?} profile's \
+                     {cap} (the 3DS water vertex program holds {} in its uniforms; every \
+                     target evaluates the first {cap}). Keep a RippleBuffer<{}>.",
+                    self.profile,
+                    trino_core::MAX_RIPPLES,
+                    trino_core::MAX_RIPPLES
+                );
+            }
+        }
+        self.water_state = WaterState::new(time, ripples, cap);
+    }
+
     fn draw_model(
         &mut self,
         model: ModelId,
@@ -2267,6 +2532,74 @@ impl Renderer for PcRenderer {
             }
         }
         let screen = self.current_screen_size();
+        if let Some(w) = params.water {
+            // Water (ADR 0015): displaced and shaded by the core's water
+            // T&L; the per-pixel tier also takes each vertex's surface.
+            let before = self.pending_tris.len();
+            let ctx = tnl_context(&mut self.tnl_ctx, &self.camera, &self.light, screen, &[])
+                .with_water(&self.water_state);
+            let set = self.water_sets.index(water::SetKey {
+                water: w,
+                state: self.water_state,
+                gloss: params.gloss,
+                detail_scale: match (texture, params.detail) {
+                    (Some(_), Some(d)) if self.sprites.contains_key(&d.sprite.0) => d.scale(),
+                    _ => 0.0,
+                },
+                camera: self.camera,
+                light: self.light,
+            });
+            let t0 = Instant::now();
+            self.pending_surf.resize(before, None);
+            let (pending, surf) = (&mut self.pending_tris, &mut self.pending_surf);
+            let gloss = params.gloss as f32 / 255.0;
+            let tnl = if self.caps.water_tier == WaterTier::PerPixel {
+                trino_core::render3d::tessellate_surface(
+                    &ctx,
+                    &mut self.surf_scratch,
+                    &mesh,
+                    matrix,
+                    params,
+                    &mut |tri, v| {
+                        pending.push(tri);
+                        surf.push(Some(SurfTri {
+                            v: *v,
+                            gloss,
+                            set,
+                            mask: 0,
+                            water: true,
+                        }));
+                    },
+                )
+            } else {
+                trino_core::render3d::tessellate_with(
+                    &ctx,
+                    &mut self.tnl_scratch,
+                    &mesh,
+                    matrix,
+                    params,
+                    &mut |tri| {
+                        pending.push(tri);
+                        surf.push(Some(SurfTri {
+                            v: [NO_SURFACE; 3],
+                            gloss,
+                            set,
+                            mask: 0,
+                            water: true,
+                        }));
+                    },
+                )
+            };
+            self.times.tnl_us += micros(t0);
+            self.frame_stats.tnl.add(&tnl);
+            let added = self.pending_tris.len() - before;
+            self.tag_pending(
+                before,
+                added,
+                texture.map(|t| TexKey::model(t.0, params, self.tex_filter)),
+            );
+            return;
+        }
         let before = self.pending_tris.len();
         let per_pixel = self.caps.light_tier == LightTier::PerPixel;
         let ctx = tnl_context(
@@ -2315,6 +2648,7 @@ impl Renderer for PcRenderer {
                         gloss,
                         set,
                         mask: reach,
+                        water: false,
                     }));
                 },
             )

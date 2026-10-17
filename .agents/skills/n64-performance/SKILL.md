@@ -408,6 +408,22 @@ T&L. Every castle64 scene costs 7–13 ms of emulated time (vsync caps it at 60 
   CPU time further.
 - Deferred: hub blocks merged per chunk (2b, ~1–2 ms on the CPU path).
 
+## Water and the showcase river (2026-10-17, ADR 0015)
+
+- `showcase-river` (`showcase::perf`, run by the N64 self-test after the castle64
+  scenes and gated in both baselines): the showcase's scene camera with the hero
+  wading and two ripples. All 46 draws stay on the CPU (colored light and fog).
+  The frame is ~284 ms in ares.
+  - The river: 12.5 ms of CPU T&L (129 vertices, 168 triangles counting 2 rings).
+  - The carved terrain: 20.6 ms, mostly fog depth splits.
+- Water never takes the RSP (`RspReject::Water`). ~25 µs per source triangle on the
+  CPU path means 128 triangles can't meet a 1.2 ms budget. Only an RSP water command
+  can (BACKLOG › "Water on the RSP").
+- **Fog splits only inside the fog's band** (`fog_split_band`): an edge wholly before
+  the fog's start or past its end keeps one factor, and bisecting it changes nothing.
+  The rule is exact (no counter or golden moved for castle64); the terrain went from
+  864 to 738 splits.
+
 ## Hang or slow run? (2026-10-16)
 
 - The harness has a total timeout (`TRINO_EMU_TIMEOUT`, 300 s) and an idle limit

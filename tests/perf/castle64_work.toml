@@ -59,3 +59,14 @@ emitted = 25
 culled = 0
 rsp_draws = 22
 rsp_tris = 446
+
+[showcase-river]
+verts = 4132
+tris_in = 3483
+clipped = 84
+splits = 738
+backfaced = 1606
+emitted = 2578
+culled = 0
+rsp_draws = 0
+rsp_tris = 0

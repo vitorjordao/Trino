@@ -39,6 +39,17 @@ pub const INSTANCE_STRIDE: u64 = core::mem::size_of::<Instance>() as u64;
 /// helper).
 pub use trino_core::render3d::TexBind as TexKey;
 
+/// Which triangle pipeline a run of 3D triangles takes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum TriKind {
+    /// Vertex colors × the texture.
+    Plain,
+    /// Shaded per pixel (local lights, specular, wetness).
+    Lit,
+    /// A water surface (ADR 0015): translucent, after the batch's others.
+    Water,
+}
+
 /// One recorded draw call: a sprite quad or a run of 3D triangle vertices
 /// (already transformed/lit by `trino_core::render3d`; the vertices live in
 /// the renderer's triangle vertex list).
@@ -46,13 +57,12 @@ pub use trino_core::render3d::TexBind as TexKey;
 pub enum Cmd {
     Sprite(DrawCommand),
     /// `texture`: sprite handle sampled by these triangles (None = vertex
-    /// colors only). `lit`: shaded per pixel (local lights, specular,
-    /// wetness: the lit pipeline).
+    /// colors only). `kind`: the pipeline.
     Tris {
         first: u32,
         count: u32,
         texture: Option<TexKey>,
-        lit: bool,
+        kind: TriKind,
     },
 }
 
@@ -95,7 +105,7 @@ pub enum Segment {
         first: u32,
         count: u32,
         texture: Option<TexKey>,
-        lit: bool,
+        kind: TriKind,
     },
 }
 
@@ -178,21 +188,24 @@ pub fn build_segments(commands: &[Cmd]) -> (Vec<Instance>, Vec<Segment>) {
                 first,
                 count,
                 texture,
-                lit,
+                kind,
             } => match segments.last_mut() {
                 Some(Segment::Tris {
                     first: seg_first,
                     count: seg_count,
                     texture: seg_tex,
-                    lit: seg_lit,
-                }) if *seg_first + *seg_count == *first && seg_tex == texture && seg_lit == lit => {
+                    kind: seg_kind,
+                }) if *seg_first + *seg_count == *first
+                    && seg_tex == texture
+                    && seg_kind == kind =>
+                {
                     *seg_count += count;
                 }
                 _ => segments.push(Segment::Tris {
                     first: *first,
                     count: *count,
                     texture: *texture,
-                    lit: *lit,
+                    kind: *kind,
                 }),
             },
         }
@@ -251,7 +264,7 @@ mod tests {
             first,
             count,
             texture: None,
-            lit: false,
+            kind: TriKind::Plain,
         };
         let (instances, segments) = build_segments(&[
             cmd(1),
@@ -264,14 +277,14 @@ mod tests {
                 first: 12,
                 count: 3,
                 texture: Some(tex5()),
-                lit: false,
+                kind: TriKind::Plain,
             },
             // Per-pixel lit: another pipeline, another segment.
             Cmd::Tris {
                 first: 15,
                 count: 3,
                 texture: Some(tex5()),
-                lit: true,
+                kind: TriKind::Lit,
             },
         ]);
         assert_eq!(instances.len(), 2);
@@ -286,7 +299,7 @@ mod tests {
                     first: 0,
                     count: 9,
                     texture: None,
-                    lit: false
+                    kind: TriKind::Plain
                 },
                 Segment::Sprites {
                     sprite: 1,
@@ -296,19 +309,19 @@ mod tests {
                     first: 9,
                     count: 3,
                     texture: None,
-                    lit: false
+                    kind: TriKind::Plain
                 },
                 Segment::Tris {
                     first: 12,
                     count: 3,
                     texture: Some(tex5()),
-                    lit: false
+                    kind: TriKind::Plain
                 },
                 Segment::Tris {
                     first: 15,
                     count: 3,
                     texture: Some(tex5()),
-                    lit: true
+                    kind: TriKind::Lit
                 },
             ]
         );

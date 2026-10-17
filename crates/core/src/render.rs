@@ -300,8 +300,12 @@ pub struct ModelParams {
     /// How the texture is sampled (textured meshes only).
     pub filter: TexFilter,
     /// A detail texture multiplied over the texture (textured meshes only;
-    /// see [`DetailTexture`] for its N64 budget).
+    /// see [`DetailTexture`] for its N64 budget). On a [`water`](Self::water)
+    /// surface it is the second flowing layer, blended half and half.
     pub detail: Option<DetailTexture>,
+    /// A water surface (swell, ripples, flowing layers, Fresnel): see
+    /// [`crate::water`]. `None` = a plain surface.
+    pub water: Option<crate::water::Water>,
 }
 
 /// How a 3D draw's texture is sampled ([`ModelParams::filter`]).
@@ -379,6 +383,7 @@ impl ModelParams {
         gloss: 0,
         filter: TexFilter::Default,
         detail: None,
+        water: None,
     };
 
     /// Default surface with a tint — the common case in game code.
@@ -510,6 +515,14 @@ pub trait Renderer {
     /// like `set_light`): toggle the whole game between crisp and smooth
     /// textures. `TexFilter::Default` restores the target's own default.
     fn set_texture_filter(&mut self, _filter: TexFilter) {}
+
+    /// The water clock and ripples for this frame's
+    /// [`water`](ModelParams::water) draws ([`crate::water`]): `time` in
+    /// seconds drives the swell and the flowing layers, and the first
+    /// [`Caps::max_ripples`] live `ripples` push the surfaces they reach.
+    /// **Cleared at `begin_frame`** (time 0, no ripples), like the local
+    /// lights: set it every frame, before the water draws.
+    fn set_water(&mut self, _time: f32, _ripples: &[crate::water::Ripple]) {}
 
     /// Draw a 3D model (vertex-lit, engine-side T&L — see `render3d`).
     ///

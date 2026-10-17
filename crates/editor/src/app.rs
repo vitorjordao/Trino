@@ -94,6 +94,8 @@ pub enum Cmd {
     /// at the parent's origin.
     AddAssetUnder(AssetPayload, Vec<usize>),
     SaveMaterial(String),
+    /// Ring a ripple out on the water surface of the entity at this path.
+    DropRipple(Vec<usize>),
     NewMaterial(String, MaterialDef),
     CreateProxy(String, pipeline::Primitive, bool),
     SaveProxy(String, pipeline::Primitive),
@@ -224,6 +226,9 @@ pub struct App {
     focus_tab: Option<Tab>,
     /// Dev hook `TRINO_EDITOR_PLAY=here`: start Play here on the first frame.
     play_here_on_start: bool,
+    /// Dev hook `TRINO_EDITOR_RIPPLE=1`: drop a ripple on the selected
+    /// water surface once the scene has resolved (screenshots).
+    ripple_hook: bool,
     /// Dev hook `TRINO_EDITOR_INSPECT=<section>`: the Inspector opens that
     /// section and scrolls to it (`platforms`, `lod`, `impostor`).
     pub inspect_focus: Option<String>,
@@ -246,6 +251,10 @@ pub struct App {
     /// The scene's frame from its camera on the N64 and the 3DS (variants,
     /// LOD and impostors applied), with the content key it is for.
     pub budgets: Option<(u64, [trino_scene::budget::FrameBudget; 2])>,
+    /// Ripples dropped on water surfaces from the material inspector
+    /// ("Drop a ripple"), aged by the real clock: the views ring them out.
+    pub ripples: trino_core::RippleBuffer<{ trino_core::MAX_RIPPLES }>,
+    pub ripple_tick: Instant,
     /// What a console draws that the PC bakes don't say, for the budgets:
     /// the console bake of a model with its own source there (an
     /// `assets/n64/...` override), or `None` for a model that platform does
@@ -493,6 +502,7 @@ impl App {
             // Dev hook: TRINO_EDITOR_PALETTE=<query> opens the palette.
             palette: std::env::var("TRINO_EDITOR_PALETTE").ok(),
             play_here_on_start: std::env::var("TRINO_EDITOR_PLAY").as_deref() == Ok("here"),
+            ripple_hook: std::env::var_os("TRINO_EDITOR_RIPPLE").is_some(),
             inspect_focus: std::env::var("TRINO_EDITOR_INSPECT").ok(),
             // Dev hook: TRINO_EDITOR_LOD_PREVIEW=<m> previews the selected
             // entity's LOD at that distance.
@@ -505,6 +515,8 @@ impl App {
             impostor_thumbs: Default::default(),
             anim: crate::anim_panel::AnimPanel::from_env(),
             budgets: None,
+            ripples: trino_core::RippleBuffer::new(),
+            ripple_tick: Instant::now(),
             console_models: (u64::MAX, ConsoleModels::new()),
             particles: load_particles(&root.join("assets")),
             pending_particles: HashSet::new(),
@@ -537,7 +549,38 @@ impl App {
             animate: self.animate,
             lod_preview: self.lod_preview.as_ref().map(|(p, d)| (p.as_slice(), *d)),
             budgets: self.budgets.as_ref().map(|b| &b.1),
+            tmem: Some(&self.project.tmem),
+            water: (self.water_time(), self.ripples.as_slice()),
         }
+    }
+
+    /// The water clock of the views: the preview clock while animations
+    /// play, frozen at 0 otherwise.
+    pub fn water_time(&self) -> f32 {
+        if self.animate { self.time() } else { 0.0 }
+    }
+
+    /// Drop a ripple on the water surface at entity `path`, as a game would
+    /// where something falls in: on its triangle nearest where the scene's
+    /// camera looks, so the Game view shows it (the middle of a curved
+    /// river's bounds is on the bank).
+    pub fn drop_ripple(&mut self, path: &[usize]) {
+        let Some(item) = self.resolved.items.iter().find(|i| i.owner == path) else {
+            return;
+        };
+        let Some((id, _)) = item.model.as_ref() else {
+            return;
+        };
+        let look = self.doc.scene.environment.core_camera().target;
+        let at = self
+            .project
+            .model_by_id(*id)
+            .and_then(|m| ripple_point(&m.tmdl, &item.matrix, look))
+            .unwrap_or_else(|| {
+                let p = item.matrix.transform_point(trino_core::Vec3::ZERO);
+                trino_core::Vec2::new(p.x, p.z)
+            });
+        self.ripples.spawn(at, 0.12);
     }
 
     /// Entities using a material (inspector "shared by N").
@@ -1136,6 +1179,7 @@ impl App {
                     entity: Box::new(entity),
                 });
             }
+            Cmd::DropRipple(path) => self.drop_ripple(&path),
             Cmd::SaveMaterial(logical) => {
                 // The in-memory library already has the edit (views update
                 // live); the file is written once the interaction settles.
@@ -2624,7 +2668,24 @@ impl eframe::App for App {
         if self.budgets.as_ref().map(|b| b.0) != Some(key) {
             self.budgets = Some((key, self.platform_budgets()));
         }
-        let has_anim = self.resolved.items.iter().any(|i| i.params.anim.is_some());
+        // The ripple hook keeps one ringing on the selection (screenshots).
+        if self.ripple_hook
+            && self.ripples.is_empty()
+            && !self.resolved.items.is_empty()
+            && let Some(path) = self.doc.selected.clone()
+        {
+            self.drop_ripple(&path);
+        }
+        // Water flows and ripples ring out like animations play.
+        let dt = self.ripple_tick.elapsed().as_secs_f32();
+        self.ripple_tick = Instant::now();
+        self.ripples.update(dt.min(0.1));
+        let has_anim = self
+            .resolved
+            .items
+            .iter()
+            .any(|i| i.params.anim.is_some() || i.params.water.is_some())
+            || !self.ripples.is_empty();
         if self.lod_preview.is_some() {
             self.rev += 1; // the preview distance moves without a scene edit
         }
@@ -2801,6 +2862,8 @@ impl egui_dock::TabViewer for TabView<'_> {
                     animate: app.animate,
                     lod_preview: app.lod_preview.as_ref().map(|(p, d)| (p.as_slice(), *d)),
                     budgets: app.budgets.as_ref().map(|b| &b.1),
+                    tmem: Some(&app.project.tmem),
+                    water: (app.water_time(), app.ripples.as_slice()),
                 };
                 let view = if kind == ViewKind::Scene {
                     &mut app.scene_view
@@ -2870,6 +2933,29 @@ pub fn card() -> egui::Frame {
         .stroke(Stroke::new(1.0, c::BORDER))
         .corner_radius(CornerRadius::same(8))
         .inner_margin(Margin::same(10))
+}
+
+/// The centroid (x, z) of the triangle of `tmdl`, placed by `matrix`, nearest
+/// `to` across the ground plane: a point on the surface itself.
+pub fn ripple_point(
+    tmdl: &[u8],
+    matrix: &trino_core::Mat34,
+    to: trino_core::Vec3,
+) -> Option<trino_core::Vec2> {
+    let mesh = trino_core::render3d::Mesh::from_tmdl(tmdl).ok()?;
+    let mut best: Option<(f32, trino_core::Vec2)> = None;
+    for t in 0..mesh.index_count / 3 {
+        let mut c = trino_core::Vec3::ZERO;
+        for k in 0..3 {
+            c += matrix.transform_point(mesh.position(mesh.index(t * 3 + k) as usize));
+        }
+        let c = trino_core::Vec2::new(c.x / 3.0, c.z / 3.0);
+        let d = (c.x - to.x).powi(2) + (c.y - to.z).powi(2);
+        if best.is_none_or(|(b, _)| d < b) {
+            best = Some((d, c));
+        }
+    }
+    best.map(|(_, c)| c)
 }
 
 #[cfg(test)]

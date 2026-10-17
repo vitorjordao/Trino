@@ -42,6 +42,7 @@ pub mod scene;
 pub mod text;
 pub mod tilemap;
 pub mod vis;
+pub mod water;
 
 pub use ao::{AmbientOcclusion, AoQuality, AoTier};
 pub use asset::asset_id;
@@ -80,3 +81,4 @@ pub use scene::{BakedScene, LodLevel, LodPick, Lods, SceneNode, Tags};
 pub use text::{BitmapFont, GlyphIndex, TextBuf};
 pub use tilemap::{TILE_SIZE, Tilemap, TilemapError};
 pub use vis::{Cells, MAX_CELLS, NO_CELL, Portal, VisVolume};
+pub use water::{MAX_RIPPLES, Ripple, RippleBuffer, Water, WaterState, WaterTier};

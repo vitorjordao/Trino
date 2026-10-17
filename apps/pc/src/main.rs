@@ -7,7 +7,8 @@
 //!   hot-lib-reloader swaps the functions under the running state.
 //!
 //! Env knobs:
-//! - `TRINO_SMOKE_FRAMES=N` — exit cleanly after N frames (CI smoke tests).
+//! - `TRINO_SMOKE_FRAMES=N` — exit cleanly after N frames (CI smoke tests),
+//!   printing a `TRINO_FRAME:` line (frame time, draws, the PC GPU T&L split).
 //! - `TRINO_SIM=native|n64|3ds` — console simulation profile (default n64).
 //! - `TRINO_SCENE=scenes/x.scene.ron` — play an editor scene instead of the
 //!   game (reloads on scene/prefab/material edits; see `scene_player`).
@@ -98,6 +99,9 @@ struct App {
     profile: SimProfile,
     frames: u64,
     smoke_frames: Option<u64>,
+    /// Frame time and the 3D split per frame, printed as a `TRINO_FRAME:`
+    /// line when a smoke run ends.
+    meter: trino_platform_pc::FrameMeter,
 }
 
 /// Upload (or re-upload) baked assets by handle (shared with standalone
@@ -269,9 +273,14 @@ impl ApplicationHandler for App {
                 }
 
                 self.frames += 1;
+                self.meter.record(
+                    &trino_core::Renderer::stats(&ctx.renderer),
+                    &ctx.renderer.pc_gpu_rejects(),
+                );
                 if let Some(max) = self.smoke_frames
                     && self.frames >= max
                 {
+                    println!("{}", self.meter.line(&run_label()));
                     event_loop.exit();
                     return;
                 }
@@ -280,6 +289,15 @@ impl ApplicationHandler for App {
             _ => {}
         }
     }
+}
+
+/// The `TRINO_FRAME:` line's name for this run: the scene file, else the
+/// game.
+fn run_label() -> String {
+    std::env::var("TRINO_SCENE")
+        .ok()
+        .or_else(|| std::env::var("TRINO_GAME").ok())
+        .unwrap_or_else(|| "castle64".into())
 }
 
 fn main() {
@@ -301,6 +319,7 @@ fn main() {
         profile,
         frames: 0,
         smoke_frames,
+        meter: trino_platform_pc::FrameMeter::new(profile),
     };
     event_loop.run_app(&mut app).expect("event loop error");
 }

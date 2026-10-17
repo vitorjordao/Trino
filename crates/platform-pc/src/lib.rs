@@ -11,12 +11,14 @@
 //! (which read the offscreen target back instead of presenting it).
 
 pub mod audio;
+pub mod frame_report;
 pub mod input;
 pub mod renderer;
 pub mod sim;
 pub mod system;
 
 pub use audio::PcAudio;
+pub use frame_report::FrameMeter;
 pub use input::PcInput;
 pub use renderer::{AoView, MSAA_SAMPLES, N64Estimate, PcFrameTimes, PcRenderer, RendererError};
 pub use sim::SimProfile;

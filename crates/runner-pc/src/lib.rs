@@ -17,8 +17,8 @@
 //! master rebakes and re-uploads it live.
 //!
 //! Env knobs: `TRINO_SIM=native|n64|3ds` (console simulation, default n64),
-//! `TRINO_SMOKE_FRAMES=N` (exit after N frames and print
-//! `TRINO_RUN_OK frames=N` — CI smoke tests), `TRINO_WINDOWED=1` (start in
+//! `TRINO_SMOKE_FRAMES=N` (exit after N frames and print a `TRINO_FRAME:`
+//! line, then `TRINO_RUN_OK frames=N` — CI smoke tests), `TRINO_WINDOWED=1` (start in
 //! a window whatever the saved settings say).
 //!
 //! **Display:** the game asks for [`DisplaySettings`] through
@@ -194,13 +194,15 @@ pub fn run<G: Game + 'static>(config: RunConfig, make: impl FnOnce(Vec2) -> G + 
         .ok()
         .and_then(|v| v.parse().ok());
     let event_loop = EventLoop::new().expect("failed to create event loop");
+    let profile = profile_from_env();
     let mut host = Host {
         config,
-        profile: profile_from_env(),
+        profile,
         make: Some(Box::new(move |s| Box::new(make(s)) as Box<dyn Game>)),
         ctx: None,
         frames: 0,
         smoke_frames,
+        meter: trino_platform_pc::FrameMeter::new(profile),
     };
     event_loop.run_app(&mut host).expect("event loop error");
 }
@@ -230,6 +232,9 @@ struct Host {
     ctx: Option<Ctx>,
     frames: u64,
     smoke_frames: Option<u64>,
+    /// Frame time and the 3D split per frame (`TRINO_FRAME:` at the end
+    /// of a smoke run).
+    meter: trino_platform_pc::FrameMeter,
 }
 
 impl Host {
@@ -449,9 +454,14 @@ impl ApplicationHandler for Host {
                 apply_input(ctx, &self.config.input_file());
 
                 self.frames += 1;
+                self.meter.record(
+                    &trino_core::Renderer::stats(&ctx.renderer),
+                    &ctx.renderer.pc_gpu_rejects(),
+                );
                 if let Some(max) = self.smoke_frames
                     && self.frames >= max
                 {
+                    println!("{}", self.meter.line(&self.config.save_name));
                     println!("TRINO_RUN_OK frames={}", self.frames);
                     event_loop.exit();
                     return;

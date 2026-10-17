@@ -138,3 +138,32 @@ fn audio_checks_pass_on_pc() {
     }
     castle64::selftest::audio_checks(&mut audio).unwrap();
 }
+
+/// The `instancing` step on the native profile, where the PC counts the
+/// copies and the GPU T&L split (issue #51, Phase 1: decided and reported,
+/// drawn by the CPU path): one call is pixel- and work-identical to the
+/// separate draws, every copy is counted as instanced, and every copy is
+/// one the GPU path takes. The console profiles never take it.
+#[test]
+fn instancing_matches_separate_draws_and_counts_the_pc_gpu_split() {
+    use castle64::selftest::{INSTANCES, instancing};
+    use trino_core::Renderer;
+    let save_dir = tempfile::tempdir().unwrap();
+    for profile in [SimProfile::Native, SimProfile::N64, SimProfile::N3ds] {
+        let Some((mut renderer, _)) = pc_target(profile, save_dir.path()) else {
+            return;
+        };
+        assert_eq!(instancing(&mut renderer), Ok(true), "{profile:?}");
+        let tnl = renderer.stats().tnl;
+        assert_eq!(tnl.instanced, INSTANCES as u32, "{profile:?}");
+        let off = renderer.pc_gpu_rejects();
+        if profile == SimProfile::Native {
+            assert_eq!(tnl.pc_gpu_draws, INSTANCES as u32);
+            assert!(tnl.pc_gpu_tris > 0);
+            assert_eq!(off, [0; trino_core::PcGpuReject::COUNT]);
+        } else {
+            assert_eq!((tnl.pc_gpu_draws, tnl.pc_gpu_tris), (0, 0), "{profile:?}");
+            assert_eq!(off, [0; trino_core::PcGpuReject::COUNT]);
+        }
+    }
+}

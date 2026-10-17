@@ -1,7 +1,8 @@
 //! What a scene costs each platform from a camera: the draws, the software
 //! T&L work behind them (what the PC renderer counts), on the N64 the split
 //! between the RSP fast path and the CPU, on the 3DS between the PICA200's
-//! vertex T&L and the CPU — with the rule each CPU draw failed — the
+//! vertex T&L and the CPU, on the PC native profile what its GPU T&L path
+//! takes (issue #51) — with the rule each CPU draw failed — the
 //! impostors' billboards, the LOD picks, and the draws sent
 //! for nothing (a whole mesh outside the view, still paid for).
 //!
@@ -11,8 +12,9 @@
 
 use trino_core::perf::{FRAME_30FPS_US, N64_COST};
 use trino_core::render3d::{
-    Camera3, GpuReject, Light, Mesh, RspReject, TnlContext, TnlScratch, TnlStats, gpu_check,
-    gpu_mesh_check, rsp_check, rsp_mesh_check, tessellate_with,
+    Camera3, GpuReject, Light, Mesh, PcGpuReject, RspReject, TnlContext, TnlScratch, TnlStats,
+    gpu_check, gpu_mesh_check, pc_gpu_check, pc_gpu_mesh_check, rsp_check, rsp_mesh_check,
+    tessellate_with,
 };
 use trino_core::{LodPick, ModelId, SpriteId, Vec2};
 
@@ -41,6 +43,15 @@ pub struct FrameBudget {
     /// 3DS: why the other draws stay on the CPU, most common first
     /// (`Offscreen` draws are culled there, not drawn).
     pub off_gpu: Vec<(GpuReject, u32)>,
+    /// PC: draws the native profile's GPU T&L path takes
+    /// ([`pc_gpu_check`]) and their source triangles. Phase 1 of issue #51
+    /// decides only: the CPU path still draws them, so `cpu_draws` and
+    /// `cpu_tnl` keep every PC draw.
+    pub pc_gpu_draws: u32,
+    pub pc_gpu_tris: u32,
+    /// PC: why the other draws stay off it, most common first
+    /// (`Offscreen` draws are culled, not drawn).
+    pub off_pc_gpu: Vec<(PcGpuReject, u32)>,
     /// Impostor billboards.
     pub billboards: u32,
     /// What entities with LOD levels drew: full, light, impostor, culled.
@@ -110,6 +121,20 @@ pub fn water_lines(b: &FrameBudget, tmem: &dyn Fn(SpriteId) -> Option<u32>) -> V
     out
 }
 
+/// The HUD's and the CLI's PC GPU line: `PC GPU 12/14 draws · 1840 tris`,
+/// then the most common reason the rest stay on the CPU path. Short: the
+/// HUD is 210 px wide.
+pub fn pc_gpu_line(b: &FrameBudget) -> String {
+    let mut line = format!(
+        "PC GPU {}/{} draws · {} tris",
+        b.pc_gpu_draws, b.draws, b.pc_gpu_tris
+    );
+    if let Some((r, k)) = b.off_pc_gpu.first() {
+        line.push_str(&format!(" · {k} {}", r.label()));
+    }
+    line
+}
+
 impl FrameBudget {
     /// Triangles that reach the rasterizer (+2 per billboard).
     pub fn tris(&self) -> u32 {
@@ -168,6 +193,7 @@ pub fn estimate<'m>(
     let visible = resolved.visible_cells(camera, screen);
     let mut reasons: Vec<(RspReject, u32)> = Vec::new();
     let mut gpu_reasons: Vec<(GpuReject, u32)> = Vec::new();
+    let mut pc_reasons: Vec<(PcGpuReject, u32)> = Vec::new();
     for item in &resolved.items {
         if !trino_core::vis::in_view(item.cell, visible) {
             continue;
@@ -234,6 +260,25 @@ pub fn estimate<'m>(
             }
             continue;
         }
+        if target == Target::Pc {
+            // A glossy draw is shaded per pixel on the PC (the estimate has
+            // no local lights or wetness, the other two reasons).
+            let per_pixel =
+                item.params.gloss > 0 && item.params.shading != trino_core::Shading::Unlit;
+            match pc_gpu_mesh_check(&mesh)
+                .and_then(|_| pc_gpu_check(&ctx, &mesh, &item.matrix, &item.params))
+                .and(match per_pixel {
+                    true => Err(PcGpuReject::PerPixelLit),
+                    false => Ok(()),
+                }) {
+                Ok(()) => {
+                    b.pc_gpu_draws += 1;
+                    b.pc_gpu_tris += (mesh.index_count / 3) as u32;
+                }
+                Err(r) => count(&mut pc_reasons, r),
+            }
+            continue;
+        }
         if target != Target::N64 {
             continue;
         }
@@ -256,8 +301,10 @@ pub fn estimate<'m>(
     }
     reasons.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
     gpu_reasons.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    pc_reasons.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
     b.off_rsp = reasons;
     b.off_gpu = gpu_reasons;
+    b.off_pc_gpu = pc_reasons;
     b
 }
 

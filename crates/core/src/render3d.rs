@@ -53,12 +53,14 @@ use crate::math3d::{Mat34, Quat};
 
 mod hw;
 mod lit;
+mod pc;
 use crate::render::{AnimRef, ClipId, DetailTexture, ModelParams, Shading, SpriteId, TexFilter};
 pub use hw::{
     GpuDraw, GpuReject, GpuWater, gpu_check, gpu_check_mv, gpu_mesh_check, gpu_screen_matrix,
     gpu_water,
 };
 pub use lit::{RING_SEGMENTS, SurfaceScratch, SurfaceVert, tessellate_ripples, tessellate_surface};
+pub use pc::{PcGpuReject, pc_gpu_check, pc_gpu_mesh_check};
 
 /// Mesh blob format ("TMDL", little-endian):
 /// `u32 vertex_count, u32 index_count`, then `positions f32*3*v`,
@@ -1509,6 +1511,20 @@ pub struct TnlStats {
     pub gpu_draws: u32,
     /// Source triangles of those draws.
     pub gpu_tris: u32,
+    /// Draws the PC native profile's GPU T&L path takes ([`pc_gpu_check`]).
+    /// Phase 1 of issue #51: the path only decides, the CPU path still
+    /// draws them, so — unlike `rsp_draws` and `gpu_draws` — their work
+    /// **is** in the fields above. Zero on the consoles and the PC's console
+    /// profiles.
+    pub pc_gpu_draws: u32,
+    /// Source triangles of those draws.
+    pub pc_gpu_tris: u32,
+    /// Draws that came through [`Renderer::draw_model_instances`]
+    /// (one per instance), counted by backends that override it (the PC);
+    /// the default loop leaves it zero.
+    ///
+    /// [`Renderer::draw_model_instances`]: crate::Renderer::draw_model_instances
+    pub instanced: u32,
 }
 
 impl TnlStats {
@@ -1525,6 +1541,9 @@ impl TnlStats {
         self.rsp_tris += o.rsp_tris;
         self.gpu_draws += o.gpu_draws;
         self.gpu_tris += o.gpu_tris;
+        self.pc_gpu_draws += o.pc_gpu_draws;
+        self.pc_gpu_tris += o.pc_gpu_tris;
+        self.instanced += o.instanced;
     }
 }
 

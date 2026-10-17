@@ -285,6 +285,11 @@ fn budget(root: &Path, args: &[&str]) -> ExitCode {
                     .iter()
                     .map(|(r, n)| format!("{{\"reason\":{},\"draws\":{n}}}", q(r.label())))
                     .collect();
+                let pc_reasons: Vec<String> = b
+                    .off_pc_gpu
+                    .iter()
+                    .map(|(r, n)| format!("{{\"reason\":{},\"draws\":{n}}}", q(r.label())))
+                    .collect();
                 let wasted: Vec<String> = b.wasted.iter().map(|w| q(w)).collect();
                 let water: Vec<String> = b
                     .water
@@ -305,7 +310,7 @@ fn budget(root: &Path, args: &[&str]) -> ExitCode {
                     })
                     .collect();
                 format!(
-                    "{{\"platform\":\"{}\",\"draws\":{},\"tris\":{},\"verts\":{},\"culled\":{},\"billboards\":{},\"lod\":{:?},\"rsp_draws\":{},\"rsp_tris\":{},\"cpu_draws\":{},\"off_rsp\":[{}],\"gpu_draws\":{},\"gpu_tris\":{},\"off_gpu\":[{}],\"wasted\":[{}],\"water\":[{}],\"n64_cpu_us\":{},\"n64_rsp_us\":{},\"n64_frame_us\":{}}}",
+                    "{{\"platform\":\"{}\",\"draws\":{},\"tris\":{},\"verts\":{},\"culled\":{},\"billboards\":{},\"lod\":{:?},\"rsp_draws\":{},\"rsp_tris\":{},\"cpu_draws\":{},\"off_rsp\":[{}],\"gpu_draws\":{},\"gpu_tris\":{},\"off_gpu\":[{}],\"pc_gpu_draws\":{},\"pc_gpu_tris\":{},\"off_pc_gpu\":[{}],\"wasted\":[{}],\"water\":[{}],\"n64_cpu_us\":{},\"n64_rsp_us\":{},\"n64_frame_us\":{}}}",
                     b.target.key(),
                     b.draws,
                     b.tris(),
@@ -320,6 +325,9 @@ fn budget(root: &Path, args: &[&str]) -> ExitCode {
                     b.gpu_draws,
                     b.gpu_tris,
                     gpu_reasons.join(","),
+                    b.pc_gpu_draws,
+                    b.pc_gpu_tris,
+                    pc_reasons.join(","),
                     wasted.join(","),
                     water.join(","),
                     b.n64_cpu_us(),
@@ -361,6 +369,17 @@ fn budget(root: &Path, args: &[&str]) -> ExitCode {
             }
             for line in trino_scene::budget::water_lines(b, &tmem) {
                 println!("       {line}");
+            }
+        }
+        if b.target == Target::Pc {
+            println!("       {}", trino_scene::budget::pc_gpu_line(b));
+            if !b.off_pc_gpu.is_empty() {
+                let r: Vec<String> = b
+                    .off_pc_gpu
+                    .iter()
+                    .map(|(r, n)| format!("{n} {}", r.label()))
+                    .collect();
+                println!("       off the PC GPU path: {}", r.join(", "));
             }
         }
         if b.target == Target::N3ds {

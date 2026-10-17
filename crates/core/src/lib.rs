@@ -68,14 +68,14 @@ pub use platform::{
     BindDevice, BlobId, DisplayInfo, DisplaySettings, GamepadStatus, InputInfo, Platform, SaveError,
 };
 pub use render::{
-    AnimBlend, AnimRef, BillboardParams, ClipId, DetailTexture, FontId, FrameStats, Material,
-    MaterialId, ModelId, ModelParams, Palette, Renderer, Screen, Shading, SpriteId, SpriteParams,
-    TexFilter, TextAlign, TextParams, Transform3,
+    AnimBlend, AnimRef, BillboardParams, ClipId, DetailTexture, FontId, FrameStats, Instance,
+    Material, MaterialId, ModelId, ModelParams, Palette, Renderer, Screen, Shading, SpriteId,
+    SpriteParams, TexFilter, TextAlign, TextParams, Transform3,
 };
 pub use render3d::{
     Camera3, ClipInfo, DEFAULT_LIGHT, Fog, Light, MAX_JOINTS, Mesh, MeshError, MeshLayout,
-    RspReject, ScreenTri, SurfaceScratch, SurfaceVert, TnlContext, TnlScratch, TnlStats,
-    tessellate, tessellate_surface, tessellate_with,
+    PcGpuReject, RspReject, ScreenTri, SurfaceScratch, SurfaceVert, TnlContext, TnlScratch,
+    TnlStats, tessellate, tessellate_surface, tessellate_with,
 };
 pub use scene::{BakedScene, LodLevel, LodPick, Lods, SceneNode, Tags};
 pub use text::{BitmapFont, GlyphIndex, TextBuf};

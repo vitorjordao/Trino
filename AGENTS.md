@@ -449,6 +449,27 @@ RDP).
     `gpu tnl water` on the 3DS. Goldens `water_*`, `showcase_river` (PC, N64, 3DS).
   - **Open:** on the N64 the river costs 12.5 ms of CPU T&L, above the issue's 1.2 ms;
     an RSP water command is BACKLOG › "Water on the RSP".
+- **PC hardware T&L, phase 1 (2026-10-17, ADR 0016 draft, GitHub #51):** the decision
+  and the API, not the GPU path yet.
+  - **Instancing on every target:** `Renderer::draw_model_instances(model, &[Instance],
+    &params)` and `draw_model_instances_with(.., &[Palette], ..)`. An `Instance` is a
+    matrix, a tint multiplied over the call's (`(a·b + 127) / 255`) and a palette index
+    (0 = the call's, `k` = `palettes[k - 1]`). The default loops over
+    `draw_model_matrix`, so the N64 and the 3DS need no code; the PC counts copies
+    (`TnlStats::instanced`). The `instancing` self-test step holds one call to the
+    separate draws' pixels and counters on PC, in ares and in Azahar.
+  - **The rule:** `render3d::pc_gpu_check`/`pc_gpu_mesh_check` → `PcGpuReject`
+    (skinned, blended, empty, water, translucent, offscreen, per-pixel lit). The PC
+    native profile calls it per draw and counts `TnlStats::pc_gpu_draws`/`pc_gpu_tris`
+    and `PcRenderer::pc_gpu_rejects()`, **but still draws everything on the CPU path**
+    (goldens and work counters unchanged). The console profiles never call it.
+  - **Reporting:** the PC prints `TRINO_FRAME:<game> profile= … pc_gpu_draws= pc_gpu_tris=
+    instanced= off_pc_gpu=` when a `TRINO_SMOKE_FRAMES` run ends
+    (`trino_platform_pc::FrameMeter`, `apps/pc` and `trino-runner-pc`);
+    `scene budget` (text and `--json`: `pc_gpu_draws`, `pc_gpu_tris`, `off_pc_gpu`), the
+    Game view HUD and the Inspector show `PC GPU 42/46 draws · 2619 tris · …`.
+  - **Next (#51 phases 2–6):** the WGSL vertex stage and resident buffers, skeletons and
+    the instance ring, the parallel CPU fallback, `TRINO_PC_TNL`, the evidence.
 - **Console hardware paths and N64 timing (2026-10-16, ADR 0012, part of #31):**
   the 3DS transforms and lights static meshes on the PICA200 (`render3d::gpu_check`,
   `tnl3d.v.pica`, `gpu tnl` self-test step, `castle64_work_3ds.toml`); text goes to the
@@ -622,7 +643,7 @@ cargo xtask run 3ds --device network --ip <IP>     # real 3DS via 3dslink (--gdb
 cargo xtask new <name>    # scaffold a game crate under examples/
 cargo xtask scene check   # validate scenes/prefabs/materials (text-first loop)
 cargo xtask scene export [--platform pc|n64|3ds] <scene.ron> <out.rs>   # scene -> no_std Rust data (that platform's variants)
-cargo xtask scene budget <scene.ron> [--platform pc|n64|3ds] [--json]   # per-console frame: draws, tris, N64 CPU/RSP, off-RSP reasons, unseen draws
+cargo xtask scene budget <scene.ron> [--platform pc|n64|3ds] [--json]   # per-console frame: draws, tris, N64 CPU/RSP, off-RSP reasons, PC GPU split, unseen draws
 cargo xtask model inspect <file> [--json]       # bake a model like the engine; art gate
 cargo xtask model inspect <file> --anim [--json]                                   # + per-clip stride, slide, floor, bounds
 cargo xtask model pose <models/x> [--clip C --time S] --name <new>                 # a pose as a static model (consoles)
@@ -923,6 +944,21 @@ cargo test --workspace
   (pass the index), and `set` is a reserved word.
 - **`cargo test --workspace` stops at the first failing test binary.** Use
   `--no-fail-fast` to see every failure at once.
+- **A host without `libasound2-dev` or `libopengl0` can still build and run the
+  emulator tests (2026-10-17):** `alsa-sys` only needs pkg-config to name the library
+  (its bindings are bundled), so a scratch `alsa.pc` (`Libs: -L<dir> -lasound`, with
+  `<dir>/libasound.so` → the system's `libasound.so.2`) on `PKG_CONFIG_PATH` builds the PC
+  crates. Azahar's AppImage exits 127 without `libOpenGL.so.0`: `apt-get download
+  libopengl0`, `dpkg-deb -x` it into a scratch dir and put its `usr/lib/x86_64-linux-gnu`
+  on `LD_LIBRARY_PATH` (no sudo either way).
+- **A counter that only *decides* still lands in `TnlStats` for every target.**
+  `pc_gpu_draws` (Phase 1 of #51) counts draws whose work is also in `verts`/`emitted`,
+  unlike `rsp_draws`/`gpu_draws`. Read the field's doc before summing a "CPU work" figure.
+- **Never build a second worktree into this one's `target/`** (`CARGO_TARGET_DIR`). Cargo
+  hashes workspace crates without their path, so the other tree's `trino-core` overwrote
+  this one's and later builds failed with "unresolved import" for code that exists
+  (2026-10-17, an A/B against `main`). Give a baseline worktree its own target, and
+  `cargo clean -p <crate>` if it already happened.
 - **`/tmp` may be a RAM disk (tmpfs).** A second `target/` there (a git worktree's build)
   filled RAM and killed rustc. Put extra worktrees and their targets on a real disk.
 

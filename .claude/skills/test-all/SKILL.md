@@ -32,6 +32,16 @@ cargo test --workspace
 
 GPU-dependent tests skip without an adapter unless `TRINO_REQUIRE_GPU=1`.
 
+**No `libasound2-dev` on the host** (`alsa-sys` panics: "Package alsa was not found"):
+its bindings are bundled, so a scratch `alsa.pc` is enough. Write `Name: alsa`,
+`Version: 1.2.0`, `Libs: -L<dir> -lasound` into `<dir>/alsa.pc`, symlink
+`<dir>/libasound.so` to `/usr/lib/x86_64-linux-gnu/libasound.so.2`, and export
+`PKG_CONFIG_PATH=<dir>` (2026-10-17).
+
+**Clippy's `overly_complex_bool_expr` in `examples/solid-eleven/src/sim/ai.rs`** fires
+on an older local stable (1.93) and not on CI's: it is not yours. Check your own code
+with `-- -D warnings -A clippy::overly_complex_bool_expr` and leave it to its owner.
+
 **Feature matrix and coverage.** `docs/TESTING.md` maps every engine feature to
 its tests; `xtask/tests/feature_matrix.rs` fails when a listed test no longer
 exists, or when a `Renderer`/`Platform`/`Audio` method, a TMDL section, a

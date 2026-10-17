@@ -1962,13 +1962,13 @@ fn ambient_occlusion(ui: &mut egui::Ui, ao: &mut Option<trino_scene::AmbientOccl
 
 fn budget_section(
     ui: &mut egui::Ui,
-    budgets: &[trino_scene::budget::FrameBudget; 2],
+    budgets: &[trino_scene::budget::FrameBudget; 3],
     tmem: &std::collections::BTreeMap<u32, Option<u32>>,
 ) -> Option<String> {
     let line = |ui: &mut egui::Ui, text: String, color: egui::Color32| {
         ui.add(egui::Label::new(RichText::new(text).size(12.0).color(color)).truncate());
     };
-    let [n64, n3ds] = budgets;
+    let [n64, n3ds, pc] = budgets;
     let mut picked = None;
     let pct = n64.n64_frame_percent();
     line(
@@ -2020,6 +2020,16 @@ fn budget_section(
         ),
         c::TEXT_WEAK,
     );
+    // The PC native profile's GPU T&L split (issue #51; Phase 1 decides,
+    // the CPU path still draws).
+    line(ui, trino_scene::budget::pc_gpu_line(pc), c::TEXT_WEAK);
+    for (r, n) in &pc.off_pc_gpu {
+        line(
+            ui,
+            format!("off the PC GPU: {n} × {}", r.label()),
+            c::TEXT_FAINT,
+        );
+    }
     // Water (ADR 0015): what the N64 tier spends on each surface.
     let tmem = |id: trino_core::SpriteId| tmem.get(&id.0).copied().flatten();
     for text in trino_scene::budget::water_lines(n64, &tmem) {

@@ -145,6 +145,9 @@ cd ~/games/space-cat && cargo run -p space-cat-pc           # TRINO_SIM=3ds for 
 cargo trino build n64                                       # the engine's xtask, for this project
 ```
 
+`--template football` starts from Solid Eleven, the football game; `castle64` and
+`showcase` start from those demos.
+
 A standalone project has its own workspace: the portable `game/` crate, a PC host on
 `trino-runner-pc` with live asset reload, `n64/` and `n3ds/` console crates, starter
 assets, a `trino.toml` and an `AGENTS.md`. Console builds need a local engine checkout
@@ -156,6 +159,7 @@ the Docker image live there ([ADR 0008](docs/adr/0008-external-console-projects.
 | Crate | What it is |
 |---|---|
 | [`examples/castle64`](examples/castle64) | The 3D showcase and the default game of every app: a hub, three platforming stages and a throne room, an articulated character, a map on the 3DS bottom screen. Its `selftest` module holds the console self-test steps, and a bot plays it in the tests. |
+| [`examples/solid-eleven`](examples/solid-eleven) | **Solid Eleven**, a low-poly 3D football game and the `football` project template (`cargo xtask new <name> --standalone <dir> --template football`). It has full referee rules, ball physics with curl, a tactical AI, ten balanced clubs, a career with transfers and saves, menus in English and Portuguese, and a touch-screen radar on the 3DS. Run it with `TRINO_GAME=solid-eleven cargo run -p trino-app-pc`. The guide is [docs/SOLID_ELEVEN.md](docs/SOLID_ELEVEN.md). |
 | [`examples/showcase`](examples/showcase) | The editor's demo scene (`scenes/showcase.scene.ron`) exported to `no_std` Rust data. Run it with `TRINO_GAME=showcase cargo run -p trino-app-pc`; a test proves it renders like the scene itself. |
 | [`examples/platformer`](examples/platformer) | **Legacy.** A 2D tilemap platformer from the engine's first phases. Kept for a PC golden test and the editor's Level tab; not the model for new games. |
 | [`examples/hello-sprite`](examples/hello-sprite) | **Legacy.** The minimal sprite example. Kept because the hot-reload end-to-end test builds it. |
@@ -166,6 +170,9 @@ the Docker image live there ([ADR 0008](docs/adr/0008-external-console-projects.
 |---|---|
 | <img src="docs/media/n64-look.png" width="320" alt="The renderer test scene with 3-point filtering and RGBA5551 ordered dither" /> | <img src="docs/media/editor.png" width="320" alt="The Trino editor: Scene view of the showcase scene with fog, trees from a prefab, an animated robot selected with the move gizmo, hierarchy, inspector and asset browser" /> |
 | 3-point filtering and the RDP's dither, quantized to RGBA5551 in the PC shader, so the preview matches the console. | The showcase scene, built from fake objects, two prefabs, materials and animated models. Every panel writes a text file. |
+| **Solid Eleven on the N64 (ares)** | **Solid Eleven's transfer market (PC)** |
+| <img src="docs/media/solid-eleven/match_n64.png" width="320" alt="A Solid Eleven match in ares: broadcast camera, scoreboard, minimap, the controlled player's ring" /> | <img src="docs/media/solid-eleven/market_pc.png" width="320" alt="The Solid Eleven transfer market: players with price and club, the selected player's card" /> |
+| Twenty-two players, the referee and the stadium at about 26 ms a frame in ares, with every draw on the RSP but one. | Menus after the issue's concept art: `fill_rect` panels and bitmap text, so they run on the consoles too. |
 
 ## How it works
 

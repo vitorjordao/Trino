@@ -5,7 +5,7 @@
 //!
 //! - `--git <url> [--rev <rev> | --branch <b>]`: engine crates as git
 //!   dependencies instead of path dependencies on this checkout.
-//! - `--template blank|castle64|showcase`: the game crate starts from the
+//! - `--template blank|castle64|showcase|football`: the game crate starts from the
 //!   blank template (default) or a copy of an engine demo.
 
 use std::io::{BufRead, Write};
@@ -210,7 +210,7 @@ mod tests {
         assert_eq!(s.template, Template::Demo(trino_scaffold::Demo::Castle64));
         let e = parse_args(&["--standalone", "g", "--template", "doom"], &root).unwrap_err();
         assert!(e.contains("unknown template `doom`"), "{e}");
-        assert!(e.contains("blank|castle64|showcase"), "{e}");
+        assert!(e.contains("blank|castle64|showcase|football"), "{e}");
         let e = parse_args(&["--template", "showcase"], &root).unwrap_err();
         assert!(e.contains("--template needs --standalone"), "{e}");
         assert!(parse_args(&["--standalone", "g", "--template"], &root).is_err());

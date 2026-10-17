@@ -16,6 +16,15 @@ description: Understand, change, debug or locally replicate Trino's GitHub Actio
 | `n3ds` | `devkitpro/devkitarm` container | builds the `.3dsx`, then `build 3ds --selftest`, and uploads the result as an artifact |
 | `n3ds-emulator` | ubuntu-24.04 | downloads that artifact, runs `emulators setup azahar`, then `xvfb-run … test 3ds --no-build` (self-test + the castle64 hub golden within a tolerance; on failure uploads `tests/golden/3ds/actual/` as `n3ds-golden-actual`) |
 
+The `n64` job also scaffolds the football template (`ci-football`) and runs
+`test n64 --project` on it, using the template's own goldens and frame gate. The `n3ds`
+job builds that project's self-test app (artifact `football-3ds-selftest`), and
+`n3ds-emulator` boots it with `test 3ds --project … --no-build`. The project needs the
+same scaffold in the booting job: the goldens and the `trino.toml` come from it. Each job runs
+`rm -rf target/test-projects/ci-football` before `xtask new`: the cargo cache restores
+`target/` with the last green run's project in it, and `new` refuses a non-empty folder
+(the second CI run failed that way).
+
 `release.yml` tags new workspace versions on main and publishes editor binaries, demo
 ROMs and SHA256SUMS. A version with a pre-release part (`0.2.0-dev.1`) publishes a GitHub
 pre-release; `docs/releases/v<version>.md`, when present, is the release body (GitHub's

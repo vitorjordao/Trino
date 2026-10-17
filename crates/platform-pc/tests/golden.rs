@@ -415,7 +415,7 @@ fn strict_mode_rejects_3d_over_the_n64_time_ceiling() {
     renderer.upload_mesh(cube, tmdl);
     use trino_core::render3d::Camera3;
     use trino_core::{Renderer as _, Transform3, Vec3};
-    let frame = |renderer: &mut PcRenderer, draws: usize| {
+    let frame = |renderer: &mut PcRenderer, draws: usize, params: trino_core::ModelParams| {
         renderer.begin_frame(Color::BLACK);
         renderer.set_camera(&Camera3::default());
         for k in 0..draws {
@@ -431,16 +431,24 @@ fn strict_mode_rejects_3d_over_the_n64_time_ceiling() {
                     scale: Vec3::new(0.2, 0.2, 0.2),
                 },
                 trino_core::Material::VertexLit,
-                &trino_core::ModelParams::default(),
+                &params,
             );
         }
         renderer.end_frame();
     };
-    // ~0.8 ms of N64 time per cube draw (N64_COST): 10 fit easily.
-    frame(&mut renderer, 10);
-    let result =
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| frame(&mut renderer, 80)));
-    let err = result.expect_err("80 cube draws must bust the N64's 50 ms 3D ceiling");
+    // Flat shading keeps a draw on the CPU T&L (~0.8 ms of N64 time per
+    // cube, N64_COST): 10 fit, 80 bust the 50 ms ceiling.
+    let cpu = trino_core::ModelParams {
+        shading: trino_core::Shading::Flat,
+        ..trino_core::ModelParams::default()
+    };
+    frame(&mut renderer, 10, cpu);
+    let e = renderer.n64_estimate();
+    assert_eq!((e.cpu_draws, e.rsp_draws), (10, 0));
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        frame(&mut renderer, 80, cpu)
+    }));
+    let err = result.expect_err("80 CPU cube draws must bust the N64's 50 ms 3D ceiling");
     let msg = err
         .downcast_ref::<String>()
         .cloned()
@@ -449,4 +457,10 @@ fn strict_mode_rejects_3d_over_the_n64_time_ceiling() {
         msg.contains("strict mode") && msg.contains("N64_COST") && msg.contains("ceiling"),
         "panic message must be actionable, got: {msg}"
     );
+    // The same 80 cubes Gouraud-lit go to the RSP, as on the console:
+    // ~90 µs of CPU each plus their triangles on the RSP — they fit.
+    frame(&mut renderer, 80, trino_core::ModelParams::default());
+    let e = renderer.n64_estimate();
+    assert_eq!((e.cpu_draws, e.rsp_draws), (0, 80));
+    assert!(e.cpu_us < 50_000 && e.rsp_us < 50_000, "{e:?}");
 }

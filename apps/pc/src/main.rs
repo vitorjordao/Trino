@@ -14,6 +14,10 @@
 //! - `TRINO_GAME=showcase` — run `examples/showcase` (the editor's demo
 //!   scene exported to `no_std` code — the exact path console builds take)
 //!   instead of castle64.
+//! - `TRINO_GAME=solid-eleven` — run `examples/solid-eleven` (the football
+//!   demo) on `trino-runner-pc`, the host its template uses: its own assets
+//!   (`examples/solid-eleven/assets`, baked to `target/solid-eleven/assets/pc`),
+//!   display settings, key and pad rebinding, MSAA on the native profile.
 
 mod scene_player;
 
@@ -56,6 +60,11 @@ mod hot_game {
         );
         pub fn trino_game_render(state: &mut Castle64Game, renderer: &mut dyn Renderer);
     }
+}
+
+/// `TRINO_GAME=solid-eleven`: the football demo, with its own asset set.
+fn solid_eleven() -> bool {
+    std::env::var("TRINO_GAME").as_deref() == Ok("solid-eleven")
 }
 
 fn assets_root() -> PathBuf {
@@ -199,7 +208,9 @@ impl ApplicationHandler for App {
         };
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
-            WindowEvent::Resized(size) => ctx.renderer.resize(size.width, size.height),
+            WindowEvent::Resized(size) => {
+                ctx.renderer.resize(size.width, size.height);
+            }
             ref e if ctx.input.handle_window_event(e, &ctx.renderer) => {}
             WindowEvent::RedrawRequested => {
                 // Live asset reload: swap content under stable handles.
@@ -276,6 +287,13 @@ fn main() {
         .ok()
         .and_then(|v| v.parse().ok());
     let profile = trino_runner_pc::profile_from_env();
+    if solid_eleven() && std::env::var_os("TRINO_SCENE").is_none() {
+        let mut config = trino_runner_pc::RunConfig::new("Solid Eleven", "examples/solid-eleven");
+        config.target = PathBuf::from("target/solid-eleven");
+        config.save_name = "solid-eleven".into();
+        trino_runner_pc::run(config, solid_eleven::SolidElevenGame::new);
+        return;
+    }
 
     let event_loop = EventLoop::new().expect("failed to create event loop");
     let mut app = App {

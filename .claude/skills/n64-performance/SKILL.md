@@ -89,8 +89,9 @@ overlay:
   19 µs per fallback draw. That is ~0.1 ms for the hub's 5.
 - **Limits.**
   - ares does not model RDP fill time, so on hardware the RDP may bind first.
-  - `N64_COST` describes CPU-path draws only, and the editor HUD and strict mode
-    still assume CPU T&L for everything.
+  - `N64_COST` describes CPU-path draws only, and the editor HUD still assumes CPU
+    T&L for everything. PC strict mode splits the frame (2026-10-16): 90 µs of CPU per
+    RSP draw (`us_per_rsp_draw`) plus its triangles on the RSP.
 
 ## The gates (keep the data honest over time)
 
@@ -402,8 +403,8 @@ T&L. Every castle64 scene costs 7–13 ms of emulated time (vsync caps it at 60 
     remaining 4.6 ms of CPU T&L);
   - Flat, fog, colored light, emissive;
   - textured draws, rigid skeletons.
-- **Teach the cost model the RSP**, so the editor HUD, strict mode and `model
-  inspect` stop overestimating eligible draws.
+- **Teach the cost model the RSP**, so the editor HUD and `model inspect` stop
+  overestimating eligible draws (strict mode has the split since 2026-10-16).
 - **Real hardware**: ares doesn't model RDP fill time. Measure there before chasing
   CPU time further.
 - Deferred: hub blocks merged per chunk (2b, ~1–2 ms on the CPU path).
@@ -434,6 +435,47 @@ T&L. Every castle64 scene costs 7–13 ms of emulated time (vsync caps it at 60 
   DP_*` after 4 s of emulated time with no frame and no log. Phases: `display_get`,
   `drain (rspq_wait)`, `frame_end (rdpq_detach_show)`, `frame`, `between frames`. A stall
   with no `TRINO_STALL` line is the emulator itself.
+
+## A football match at 30 fps (Solid Eleven, 2026-10-16)
+
+22 players, a referee, a stadium and a HUD: 26.6 ms avg in ares, 76 of 77 draws on the
+RSP (iteration 2, with 15-part bodies split into kit legs, a shadow per player and the
+hull check: 30.9 ms over four code layouts, all 83 draws on the RSP). What got it from
+48.7 ms there:
+
+- **The sim was the cost, not the draws.** Chasers and keepers each predicted the ball
+  on their own: about 740 ball steps a tick. One shared trajectory per tick (`ai::Traj`)
+  needs 72. Measure `update=` in `TRINO_FRAME` before touching the renderer.
+- **Ground:** coarse tiles far, fine tiles near, each culled by its exact rectangle.
+  A big quad whose vertices cross the band under the camera leaves the RSP
+  (`ClipBand`). A draw whose sphere crosses but whose vertices don't is now kept on
+  the RSP by `rsp_hull_check` (vertex by vertex, only when the sphere fails).
+- **Draw memo:** snap the camera's focus to 1/4096. Then `target - eye` stays bit-exact
+  while the camera pans, and the stadium's draws only patch their translation.
+- **Far LOD per part:** past a depth of 30, players drop their arms.
+- **Strict mode splits CPU and RSP now** (it used to price every draw as CPU T&L, and
+  about 100 draws tripped its 50 ms). Still gate with `rsp_check` per draw on the host
+  (`solid_eleven_budget.rs`: every match draw on the RSP) and with `n64_max_frame_us`
+  on the ares run: the RSP side is an estimate.
+- **One draw per kit leg** (iteration 2): shorts and sock were two draws per leg. Each
+  (shorts, socks) pair a match can dress is one baked-color mesh (`se_leg_kNN`, 30 of
+  them, listed by `team::LEG_KITS` and checked by `the_leg_kit_list_is_baked`), so a
+  console player is 7 draws. Draw count is what the N64 pays for.
+
+### Iteration 3 (2026-10-17): CI ran 3.6 ms slower, and where a body's time goes
+
+- The same commit measured 33.9 ms in CI and 30.3 ms locally (pad 0). CI builds with
+  the newest nightly and other paths, so its layout isn't any of the local paddings.
+  Keep ~3 ms of local headroom under a gate.
+- Bisect a frame by switching game code off in a scaffolded project and timing it in
+  ares (scaffold, `cargo xtask test n64 --project <dir>`, read `TRINO_FRAME`). In Solid
+  Eleven the HUD cost ~0; the players cost 15.5 ms. 3.4 ms of that was posing, and the
+  rest was draws.
+- An RSP draw that misses the memo spends ~110 µs *before* the `tnl` stage (key, mesh
+  lookups, `rsp_check_mv`, `view · model`). It showed up by charging that span to the
+  unused `sort` stage. So a moving body part costs ~0.2 ms of CPU.
+- What paid: far players (beyond 24 m) drop their arms and blob shadow (83 → 68 draws,
+  30.7 → 27.4 ms). Moving the threshold to 22 m gained nothing more.
 
 ## Workflow for a perf change
 

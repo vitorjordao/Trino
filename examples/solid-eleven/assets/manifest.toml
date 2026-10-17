@@ -1,0 +1,718 @@
+# Solid Eleven's assets (logical paths → masters under shared/, PC-only
+# parts and overrides under pc/). Models are built by
+# `cargo xtask blender solid-eleven` (tools/blender/solid_eleven_models.py);
+# sprites, sounds and fonts by `cargo xtask gen-assets`... see AGENTS.md.
+#
+# Every console-visible model stays on the N64's RSP: opaque vertex colors,
+# no palette, single-sided faces. Kits are tints at draw time.
+
+version = 1
+
+# ---- pitch (6 x 4 tiles with the lines in) ----
+
+[models.se_pitch_0_0]
+file = "models/pitch_0_0.glb"
+
+[models.se_pitch_0_1]
+file = "models/pitch_0_1.glb"
+
+[models.se_pitch_0_2]
+file = "models/pitch_0_2.glb"
+
+[models.se_pitch_0_3]
+file = "models/pitch_0_3.glb"
+
+[models.se_pitch_1_0]
+file = "models/pitch_1_0.glb"
+
+[models.se_pitch_1_1]
+file = "models/pitch_1_1.glb"
+
+[models.se_pitch_1_2]
+file = "models/pitch_1_2.glb"
+
+[models.se_pitch_1_3]
+file = "models/pitch_1_3.glb"
+
+[models.se_pitch_2_0]
+file = "models/pitch_2_0.glb"
+
+[models.se_pitch_2_1]
+file = "models/pitch_2_1.glb"
+
+[models.se_pitch_2_2]
+file = "models/pitch_2_2.glb"
+
+[models.se_pitch_2_3]
+file = "models/pitch_2_3.glb"
+
+[models.se_pitch_3_0]
+file = "models/pitch_3_0.glb"
+
+[models.se_pitch_3_1]
+file = "models/pitch_3_1.glb"
+
+[models.se_pitch_3_2]
+file = "models/pitch_3_2.glb"
+
+[models.se_pitch_3_3]
+file = "models/pitch_3_3.glb"
+
+[models.se_pitch_4_0]
+file = "models/pitch_4_0.glb"
+
+[models.se_pitch_4_1]
+file = "models/pitch_4_1.glb"
+
+[models.se_pitch_4_2]
+file = "models/pitch_4_2.glb"
+
+[models.se_pitch_4_3]
+file = "models/pitch_4_3.glb"
+
+[models.se_pitch_5_0]
+file = "models/pitch_5_0.glb"
+
+[models.se_pitch_5_1]
+file = "models/pitch_5_1.glb"
+
+[models.se_pitch_5_2]
+file = "models/pitch_5_2.glb"
+
+[models.se_pitch_5_3]
+file = "models/pitch_5_3.glb"
+
+# The same ground in 12 x 8 fine tiles: drawn instead of a coarse tile near
+# the camera (a coarse tile there doesn't fit the N64 RSP's clip band).
+[models.se_pitch_f_0_0]
+file = "models/pitch_f_0_0.glb"
+
+[models.se_pitch_f_0_1]
+file = "models/pitch_f_0_1.glb"
+
+[models.se_pitch_f_0_2]
+file = "models/pitch_f_0_2.glb"
+
+[models.se_pitch_f_0_3]
+file = "models/pitch_f_0_3.glb"
+
+[models.se_pitch_f_0_4]
+file = "models/pitch_f_0_4.glb"
+
+[models.se_pitch_f_0_5]
+file = "models/pitch_f_0_5.glb"
+
+[models.se_pitch_f_0_6]
+file = "models/pitch_f_0_6.glb"
+
+[models.se_pitch_f_0_7]
+file = "models/pitch_f_0_7.glb"
+
+[models.se_pitch_f_1_0]
+file = "models/pitch_f_1_0.glb"
+
+[models.se_pitch_f_1_1]
+file = "models/pitch_f_1_1.glb"
+
+[models.se_pitch_f_1_2]
+file = "models/pitch_f_1_2.glb"
+
+[models.se_pitch_f_1_3]
+file = "models/pitch_f_1_3.glb"
+
+[models.se_pitch_f_1_4]
+file = "models/pitch_f_1_4.glb"
+
+[models.se_pitch_f_1_5]
+file = "models/pitch_f_1_5.glb"
+
+[models.se_pitch_f_1_6]
+file = "models/pitch_f_1_6.glb"
+
+[models.se_pitch_f_1_7]
+file = "models/pitch_f_1_7.glb"
+
+[models.se_pitch_f_2_0]
+file = "models/pitch_f_2_0.glb"
+
+[models.se_pitch_f_2_1]
+file = "models/pitch_f_2_1.glb"
+
+[models.se_pitch_f_2_2]
+file = "models/pitch_f_2_2.glb"
+
+[models.se_pitch_f_2_3]
+file = "models/pitch_f_2_3.glb"
+
+[models.se_pitch_f_2_4]
+file = "models/pitch_f_2_4.glb"
+
+[models.se_pitch_f_2_5]
+file = "models/pitch_f_2_5.glb"
+
+[models.se_pitch_f_2_6]
+file = "models/pitch_f_2_6.glb"
+
+[models.se_pitch_f_2_7]
+file = "models/pitch_f_2_7.glb"
+
+[models.se_pitch_f_3_0]
+file = "models/pitch_f_3_0.glb"
+
+[models.se_pitch_f_3_1]
+file = "models/pitch_f_3_1.glb"
+
+[models.se_pitch_f_3_2]
+file = "models/pitch_f_3_2.glb"
+
+[models.se_pitch_f_3_3]
+file = "models/pitch_f_3_3.glb"
+
+[models.se_pitch_f_3_4]
+file = "models/pitch_f_3_4.glb"
+
+[models.se_pitch_f_3_5]
+file = "models/pitch_f_3_5.glb"
+
+[models.se_pitch_f_3_6]
+file = "models/pitch_f_3_6.glb"
+
+[models.se_pitch_f_3_7]
+file = "models/pitch_f_3_7.glb"
+
+[models.se_pitch_f_4_0]
+file = "models/pitch_f_4_0.glb"
+
+[models.se_pitch_f_4_1]
+file = "models/pitch_f_4_1.glb"
+
+[models.se_pitch_f_4_2]
+file = "models/pitch_f_4_2.glb"
+
+[models.se_pitch_f_4_3]
+file = "models/pitch_f_4_3.glb"
+
+[models.se_pitch_f_4_4]
+file = "models/pitch_f_4_4.glb"
+
+[models.se_pitch_f_4_5]
+file = "models/pitch_f_4_5.glb"
+
+[models.se_pitch_f_4_6]
+file = "models/pitch_f_4_6.glb"
+
+[models.se_pitch_f_4_7]
+file = "models/pitch_f_4_7.glb"
+
+[models.se_pitch_f_5_0]
+file = "models/pitch_f_5_0.glb"
+
+[models.se_pitch_f_5_1]
+file = "models/pitch_f_5_1.glb"
+
+[models.se_pitch_f_5_2]
+file = "models/pitch_f_5_2.glb"
+
+[models.se_pitch_f_5_3]
+file = "models/pitch_f_5_3.glb"
+
+[models.se_pitch_f_5_4]
+file = "models/pitch_f_5_4.glb"
+
+[models.se_pitch_f_5_5]
+file = "models/pitch_f_5_5.glb"
+
+[models.se_pitch_f_5_6]
+file = "models/pitch_f_5_6.glb"
+
+[models.se_pitch_f_5_7]
+file = "models/pitch_f_5_7.glb"
+
+[models.se_pitch_f_6_0]
+file = "models/pitch_f_6_0.glb"
+
+[models.se_pitch_f_6_1]
+file = "models/pitch_f_6_1.glb"
+
+[models.se_pitch_f_6_2]
+file = "models/pitch_f_6_2.glb"
+
+[models.se_pitch_f_6_3]
+file = "models/pitch_f_6_3.glb"
+
+[models.se_pitch_f_6_4]
+file = "models/pitch_f_6_4.glb"
+
+[models.se_pitch_f_6_5]
+file = "models/pitch_f_6_5.glb"
+
+[models.se_pitch_f_6_6]
+file = "models/pitch_f_6_6.glb"
+
+[models.se_pitch_f_6_7]
+file = "models/pitch_f_6_7.glb"
+
+[models.se_pitch_f_7_0]
+file = "models/pitch_f_7_0.glb"
+
+[models.se_pitch_f_7_1]
+file = "models/pitch_f_7_1.glb"
+
+[models.se_pitch_f_7_2]
+file = "models/pitch_f_7_2.glb"
+
+[models.se_pitch_f_7_3]
+file = "models/pitch_f_7_3.glb"
+
+[models.se_pitch_f_7_4]
+file = "models/pitch_f_7_4.glb"
+
+[models.se_pitch_f_7_5]
+file = "models/pitch_f_7_5.glb"
+
+[models.se_pitch_f_7_6]
+file = "models/pitch_f_7_6.glb"
+
+[models.se_pitch_f_7_7]
+file = "models/pitch_f_7_7.glb"
+
+[models.se_pitch_f_8_0]
+file = "models/pitch_f_8_0.glb"
+
+[models.se_pitch_f_8_1]
+file = "models/pitch_f_8_1.glb"
+
+[models.se_pitch_f_8_2]
+file = "models/pitch_f_8_2.glb"
+
+[models.se_pitch_f_8_3]
+file = "models/pitch_f_8_3.glb"
+
+[models.se_pitch_f_8_4]
+file = "models/pitch_f_8_4.glb"
+
+[models.se_pitch_f_8_5]
+file = "models/pitch_f_8_5.glb"
+
+[models.se_pitch_f_8_6]
+file = "models/pitch_f_8_6.glb"
+
+[models.se_pitch_f_8_7]
+file = "models/pitch_f_8_7.glb"
+
+[models.se_pitch_f_9_0]
+file = "models/pitch_f_9_0.glb"
+
+[models.se_pitch_f_9_1]
+file = "models/pitch_f_9_1.glb"
+
+[models.se_pitch_f_9_2]
+file = "models/pitch_f_9_2.glb"
+
+[models.se_pitch_f_9_3]
+file = "models/pitch_f_9_3.glb"
+
+[models.se_pitch_f_9_4]
+file = "models/pitch_f_9_4.glb"
+
+[models.se_pitch_f_9_5]
+file = "models/pitch_f_9_5.glb"
+
+[models.se_pitch_f_9_6]
+file = "models/pitch_f_9_6.glb"
+
+[models.se_pitch_f_9_7]
+file = "models/pitch_f_9_7.glb"
+
+[models.se_pitch_f_10_0]
+file = "models/pitch_f_10_0.glb"
+
+[models.se_pitch_f_10_1]
+file = "models/pitch_f_10_1.glb"
+
+[models.se_pitch_f_10_2]
+file = "models/pitch_f_10_2.glb"
+
+[models.se_pitch_f_10_3]
+file = "models/pitch_f_10_3.glb"
+
+[models.se_pitch_f_10_4]
+file = "models/pitch_f_10_4.glb"
+
+[models.se_pitch_f_10_5]
+file = "models/pitch_f_10_5.glb"
+
+[models.se_pitch_f_10_6]
+file = "models/pitch_f_10_6.glb"
+
+[models.se_pitch_f_10_7]
+file = "models/pitch_f_10_7.glb"
+
+[models.se_pitch_f_11_0]
+file = "models/pitch_f_11_0.glb"
+
+[models.se_pitch_f_11_1]
+file = "models/pitch_f_11_1.glb"
+
+[models.se_pitch_f_11_2]
+file = "models/pitch_f_11_2.glb"
+
+[models.se_pitch_f_11_3]
+file = "models/pitch_f_11_3.glb"
+
+[models.se_pitch_f_11_4]
+file = "models/pitch_f_11_4.glb"
+
+[models.se_pitch_f_11_5]
+file = "models/pitch_f_11_5.glb"
+
+[models.se_pitch_f_11_6]
+file = "models/pitch_f_11_6.glb"
+
+[models.se_pitch_f_11_7]
+file = "models/pitch_f_11_7.glb"
+
+# ---- stadium ----
+
+# Consoles: occlusion baked into the vertex colors (ADR 0014): the rows
+# under the roof and the back of the stand darken. The PC's own stands
+# get screen-space AO instead.
+[models.se_stand_long_a]
+file = "models/stand_long_a.glb"
+ao = { strength = 0.7, distance = 3.0 }
+
+[models.se_stand_long_b]
+file = "models/stand_long_b.glb"
+ao = { strength = 0.7, distance = 3.0 }
+
+[models.se_stand_end_a]
+file = "models/stand_end_a.glb"
+ao = { strength = 0.7, distance = 3.0 }
+
+[models.se_stand_end_b]
+file = "models/stand_end_b.glb"
+ao = { strength = 0.7, distance = 3.0 }
+
+[models.se_flood_tower]
+file = "models/flood_tower.glb"
+
+[models.se_goal]
+file = "models/goal.glb"
+ao = { strength = 0.6, distance = 0.8, ground = true }
+
+[models.se_corner_flag]
+file = "models/corner_flag.glb"
+
+[models.se_ball]
+file = "models/ball.glb"
+
+# ---- players: rigid parts from tools/blender/solid_eleven_anim.py BODY.
+# Consoles draw 9 near the camera (5 far), the PC 15 (pc-only parts below),
+# and a blob shadow on the turf under each player.
+
+[models.se_head]
+file = "models/head.glb"
+
+# The console heads with light hair and a shaved crown (`render::Hair`).
+[models.se_head_light]
+file = "models/head_light.glb"
+
+[models.se_head_shaved]
+file = "models/head_shaved.glb"
+
+[models.se_torso]
+file = "models/torso.glb"
+
+[models.se_shorts]
+file = "models/shorts.glb"
+
+[models.se_player_shadow]
+file = "models/player_shadow.glb"
+
+# The league trophy (the title screen and the season's ceremony).
+[models.se_trophy]
+file = "models/trophy.glb"
+
+[models.se_arm]
+file = "models/arm.glb"
+
+[models.se_shorts_leg]
+file = "models/shorts_leg.glb"
+
+[models.se_leg]
+file = "models/leg.glb"
+
+# The consoles' kit legs: a shorts leg and a sock (with the boot) in one
+# mesh per (shorts, socks) pair of assets/leg_kits.txt, colors baked in.
+
+[models.se_leg_k00]
+file = "models/leg_k00.glb"
+
+[models.se_leg_k01]
+file = "models/leg_k01.glb"
+
+[models.se_leg_k02]
+file = "models/leg_k02.glb"
+
+[models.se_leg_k03]
+file = "models/leg_k03.glb"
+
+[models.se_leg_k04]
+file = "models/leg_k04.glb"
+
+[models.se_leg_k05]
+file = "models/leg_k05.glb"
+
+[models.se_leg_k06]
+file = "models/leg_k06.glb"
+
+[models.se_leg_k07]
+file = "models/leg_k07.glb"
+
+[models.se_leg_k08]
+file = "models/leg_k08.glb"
+
+[models.se_leg_k09]
+file = "models/leg_k09.glb"
+
+[models.se_leg_k10]
+file = "models/leg_k10.glb"
+
+[models.se_leg_k11]
+file = "models/leg_k11.glb"
+
+[models.se_leg_k12]
+file = "models/leg_k12.glb"
+
+[models.se_leg_k13]
+file = "models/leg_k13.glb"
+
+[models.se_leg_k14]
+file = "models/leg_k14.glb"
+
+[models.se_leg_k15]
+file = "models/leg_k15.glb"
+
+[models.se_leg_k16]
+file = "models/leg_k16.glb"
+
+[models.se_leg_k17]
+file = "models/leg_k17.glb"
+
+[models.se_leg_k18]
+file = "models/leg_k18.glb"
+
+[models.se_leg_k19]
+file = "models/leg_k19.glb"
+
+[models.se_leg_k20]
+file = "models/leg_k20.glb"
+
+[models.se_leg_k21]
+file = "models/leg_k21.glb"
+
+[models.se_leg_k22]
+file = "models/leg_k22.glb"
+
+[models.se_leg_k23]
+file = "models/leg_k23.glb"
+
+[models.se_leg_k24]
+file = "models/leg_k24.glb"
+
+[models.se_leg_k25]
+file = "models/leg_k25.glb"
+
+[models.se_leg_k26]
+file = "models/leg_k26.glb"
+
+[models.se_leg_k27]
+file = "models/leg_k27.glb"
+
+[models.se_leg_k28]
+file = "models/leg_k28.glb"
+
+[models.se_leg_k29]
+file = "models/leg_k29.glb"
+
+[models.se_flag_hand]
+file = "models/flag_hand.glb"
+
+[models.se_sleeve]
+file = "models/sleeve.glb"
+platforms = ["pc"]
+
+[models.se_upper_arm]
+file = "models/upper_arm.glb"
+platforms = ["pc"]
+
+[models.se_forearm]
+file = "models/forearm.glb"
+platforms = ["pc"]
+
+[models.se_shorts_leg_hd]
+file = "models/shorts_leg_hd.glb"
+platforms = ["pc"]
+
+[models.se_thigh]
+file = "models/thigh.glb"
+platforms = ["pc"]
+
+[models.se_shin]
+file = "models/shin.glb"
+platforms = ["pc"]
+
+# The animation QA rig (every clip; model inspect --anim, the editor).
+
+[models.se_player_rig]
+file = "models/player_rig.glb"
+platforms = ["pc"]
+anim_fps = 15
+once = ["pass", "lob", "shot", "tackle", "slide", "down", "get_up", "header", "throw", "gk_dive", "ref_point", "ref_card", "flag_up"]
+
+# ---- PC high detail: dense crowd, netted goal, rounder ball, detailed
+# players (the PC's native profile draws these; its N64/3DS profiles draw
+# the console models above, like the consoles) ----
+[models.se_stand_long_a_hd]
+file = "models/stand_long_a_hd.glb"
+platforms = ["pc"]
+
+[models.se_stand_long_b_hd]
+file = "models/stand_long_b_hd.glb"
+platforms = ["pc"]
+
+[models.se_stand_end_a_hd]
+file = "models/stand_end_a_hd.glb"
+platforms = ["pc"]
+
+[models.se_stand_end_b_hd]
+file = "models/stand_end_b_hd.glb"
+platforms = ["pc"]
+
+[models.se_goal_hd]
+file = "models/goal_hd.glb"
+platforms = ["pc"]
+
+[models.se_ball_hd]
+file = "models/ball_hd.glb"
+platforms = ["pc"]
+
+[models.se_head_hd]
+file = "models/head_hd.glb"
+platforms = ["pc"]
+
+# The PC's hair styles (`render::HairStyle`), tinted with the hair's color.
+[models.se_hair_crop]
+file = "models/hair_crop.glb"
+platforms = ["pc"]
+
+[models.se_hair_buzz]
+file = "models/hair_buzz.glb"
+platforms = ["pc"]
+
+[models.se_hair_curly]
+file = "models/hair_curly.glb"
+platforms = ["pc"]
+
+[models.se_hair_long]
+file = "models/hair_long.glb"
+platforms = ["pc"]
+
+[models.se_hair_mohawk]
+file = "models/hair_mohawk.glb"
+platforms = ["pc"]
+
+[models.se_torso_hd]
+file = "models/torso_hd.glb"
+platforms = ["pc"]
+
+[models.se_shorts_hd]
+file = "models/shorts_hd.glb"
+platforms = ["pc"]
+
+# ---- HUD markers and menus ----
+
+[models.se_ring]
+file = "models/ring.glb"
+
+[models.se_ring_small]
+file = "models/ring_small.glb"
+
+[models.se_arrow]
+file = "models/arrow.glb"
+
+[models.se_dash]
+file = "models/dash.glb"
+
+[models.se_dot]
+file = "models/dot.glb"
+
+[models.se_pedestal]
+file = "models/pedestal.glb"
+
+[models.se_blob]
+file = "models/blob.glb"
+
+# ---- fonts (Roboto Condensed Bold, Apache-2.0: fonts/LICENSE-Roboto.txt) ----
+# The UI font is caps, digits, punctuation and Portuguese accents: 11 px, an
+# I4 atlas that fits the N64's TMEM (the resident text path).
+[fonts.se_ui]
+file = "fonts/RobotoCondensed-Bold.ttf"
+size = 11
+antialias = true
+chars = " ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,:;-+/%!?()'&#<>*=_ÁÂÃÀÇÉÊÍÓÔÕÚÜ"
+formats = { n64 = "I4" }
+
+# Titles (and the PC's 2x interface).
+[fonts.se_big]
+file = "fonts/RobotoCondensed-Bold.ttf"
+size = 22
+antialias = true
+chars = " ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,:;-+/%!?()'&#<>*=_ÁÂÃÀÇÉÊÍÓÔÕÚÜ"
+formats = { n64 = "I4" }
+
+# ---- sounds (tools/solid_eleven/make_sounds.py) ----
+[sounds.se_whistle]
+file = "sounds/se_whistle.wav"
+
+[sounds.se_kick]
+file = "sounds/se_kick.wav"
+
+[sounds.se_tap]
+file = "sounds/se_tap.wav"
+
+[sounds.se_post]
+file = "sounds/se_post.wav"
+
+[sounds.se_cheer]
+file = "sounds/se_cheer.wav"
+
+[sounds.se_ooh]
+file = "sounds/se_ooh.wav"
+
+[sounds.se_click]
+file = "sounds/se_click.wav"
+
+[sounds.se_back]
+file = "sounds/se_back.wav"
+
+[music.se_crowd]
+file = "music/se_crowd.wav"
+
+[music.se_theme]
+file = "music/se_theme.wav"
+
+# ---- effect sprites (tools/solid_eleven/make_sprites.py): white masks the
+# PC's native profile draws as billboards (rain, floodlight glows) ----
+[sprites.se_rain]
+file = "sprites/se_rain.png"
+formats = { n64 = "I4" }
+
+[sprites.se_glow]
+file = "sprites/se_glow.png"
+formats = { n64 = "I4" }
+
+# A confetti flake (white, tinted per flake): the trophy ceremony.
+[sprites.se_confetti]
+file = "sprites/se_confetti.png"
+formats = { n64 = "I4" }

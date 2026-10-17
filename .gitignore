@@ -20,3 +20,4 @@ ares-v148
 
 # devkitPro installer leftovers
 install-devkitpro-pacman*
+__pycache__/

@@ -179,7 +179,7 @@ pub fn terrain_height(x: f32, z: f32) -> f32 {
 /// The bridge deck's walking height at `(x, z)`, if `(x, z)` is on it.
 pub fn bridge_height(x: f32, z: f32) -> Option<f32> {
     let dx = x - BRIDGE_X;
-    if !(-BRIDGE_HALF_W..=BRIDGE_HALF_W).contains(&dx) || z < BRIDGE_Z0 || z > BRIDGE_Z1 {
+    if !(-BRIDGE_HALF_W..=BRIDGE_HALF_W).contains(&dx) || !(BRIDGE_Z0..=BRIDGE_Z1).contains(&z) {
         return None;
     }
     let t = (z - BRIDGE_Z0) / (BRIDGE_Z1 - BRIDGE_Z0) * 2.0 - 1.0;

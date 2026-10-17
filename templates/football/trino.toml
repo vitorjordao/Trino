@@ -1,0 +1,27 @@
+# Console packaging for {{name}} (read by the engine's xtask:
+# `cargo trino build|run|test n64|3ds`). Started from Trino's football
+# template (Solid Eleven).
+[project]
+name = "{{name}}"
+title = "{{name}}"
+description = "A low-poly football game made with Trino"
+author = ""
+# platforms = ["pc", "n64", "3ds"]
+
+[n64]
+package = "{{name}}-n64"
+save = "eeprom16k"
+
+[3ds]
+package = "{{name}}-3ds"
+bin = "{{name}}-3ds"
+
+[test]
+# The self-test plays a scripted match at 30 fps: its average frame must
+# stay under 33.3 ms of emulated N64 time.
+n64_max_frame_us = 33333
+# Golden frames dumped after the script (tests/golden/<n64|3ds>/*.png).
+# After changing how the match looks, re-bless them:
+# `cargo trino test n64 --bless`, `cargo trino test 3ds --bless`.
+n64_goldens = ["match"]
+n3ds_goldens = ["match", "match_bottom"]

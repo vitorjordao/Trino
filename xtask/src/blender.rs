@@ -4,6 +4,12 @@
 //! the engine's bake against its triangle budget, QA renders in
 //! `target/blender_castle64/`. Fails when Blender is absent.
 //!
+//! `cargo xtask blender solid-eleven [--only a,b] [--no-render]` — build Solid
+//! Eleven's models (`tools/blender/solid_eleven_models.py`) into
+//! `examples/solid-eleven/assets/{shared,pc}/models/`, gate each against its
+//! triangle budget, QA renders in `target/blender_solid_eleven/`, and
+//! regenerate the game's pose tables from `solid_eleven_anim.py`.
+//!
 //! `cargo xtask blender smoke [--no-render]` — run `tools/blender/smoke_test.py`
 //! headless: builds a static prop and a rigid-part character with the
 //! toolkit, exports them and gates them with the engine's own bake (see the
@@ -61,9 +67,10 @@ pub fn run(root: &Path, args: &[&str]) -> ExitCode {
     match args {
         ["smoke", rest @ ..] => smoke(root, rest),
         ["castle64", rest @ ..] => castle64(root, rest),
+        ["solid-eleven", rest @ ..] => solid_eleven(root, rest),
         _ => {
             eprintln!(
-                "xtask: usage: cargo xtask blender smoke [--no-render] | castle64 [--only a,b] [--no-render]"
+                "xtask: usage: cargo xtask blender smoke [--no-render] | castle64|solid-eleven [--only a,b] [--no-render]"
             );
             ExitCode::FAILURE
         }
@@ -140,14 +147,40 @@ fn smoke(root: &Path, rest: &[&str]) -> ExitCode {
 }
 
 fn castle64(root: &Path, rest: &[&str]) -> ExitCode {
+    models_script(
+        root,
+        rest,
+        "castle64",
+        "castle64_models.py",
+        "blender_castle64",
+    )
+}
+
+/// Solid Eleven's models (`tools/blender/solid_eleven_models.py`): pitch
+/// tiles, stadium, goal, ball, player parts (console + PC), markers and the
+/// animated rig; the script also regenerates the game's pose tables
+/// (`examples/solid-eleven/src/render/clips_gen.rs`).
+fn solid_eleven(root: &Path, rest: &[&str]) -> ExitCode {
+    models_script(
+        root,
+        rest,
+        "solid-eleven",
+        "solid_eleven_models.py",
+        "blender_solid_eleven",
+    )
+}
+
+/// Run a model-building Blender script and print its `TRINO_BLENDER_MODELS`
+/// report: one line per model with its triangles against the budget.
+fn models_script(root: &Path, rest: &[&str], label: &str, script: &str, qa: &str) -> ExitCode {
     let Some(blender) = find_blender() else {
         eprintln!("[blender] Blender not found ($TRINO_BLENDER, PATH, ~/.local/opt/blender*)");
         return ExitCode::FAILURE;
     };
-    println!("[blender] {} building castle64 models", blender.display());
+    println!("[blender] {} building {label} models", blender.display());
     let output = Command::new(&blender)
         .args(["--background", "--factory-startup", "--python"])
-        .arg(root.join("tools/blender/castle64_models.py"))
+        .arg(root.join("tools/blender").join(script))
         .arg("--")
         .args(rest)
         .current_dir(root)
@@ -196,9 +229,9 @@ fn castle64(root: &Path, rest: &[&str]) -> ExitCode {
     }
     if report["ok"].as_bool() == Some(true) {
         println!(
-            "[blender] castle64 models written (Blender {}); QA renders in {}",
+            "[blender] {label} models written (Blender {}); QA renders in {}",
             report["blender"].as_str().unwrap_or("?"),
-            root.join("target/blender_castle64").display()
+            root.join("target").join(qa).display()
         );
         ExitCode::SUCCESS
     } else {

@@ -268,7 +268,14 @@ pub fn bake_assets(p: &Project, test_mode: bool) -> Result<(), String> {
         let font = trino_asset_pipeline::bake_font(&source, decl)
             .map_err(|e| format!("font `{logical}`: {e}"))?;
         // Atlas -> sprite (mksprite, same handle); table -> verbatim TFNT.
-        let png = trino_asset_pipeline::font::encode_png(font.width, font.height, &font.rgba)?;
+        // Intensity formats take alpha from the color: stage the coverage
+        // as the intensity, so antialiased edges stay soft.
+        let rgba = if matches!(format.as_str(), "I4" | "I8") {
+            intensity_from_alpha(&font.rgba)
+        } else {
+            font.rgba.clone()
+        };
+        let png = trino_asset_pipeline::font::encode_png(font.width, font.height, &rgba)?;
         std::fs::write(stage.join(format!("{id:08x}.png")), png).map_err(|e| e.to_string())?;
         script.push_str(&format!(
             "mksprite --format {mksprite_format} -o target/n64/filesystem target/n64/stage/{id:08x}.png\n"
@@ -377,6 +384,15 @@ fn cargo_build(p: &Project) -> Result<(), String> {
         return Err("N64 Rust build failed".into());
     }
     Ok(())
+}
+
+/// White-mask RGBA (a font atlas) as an intensity image for I4/I8: each
+/// texel's gray level and alpha are its coverage. mksprite then derives the
+/// same alpha the PC and 3DS draw with.
+fn intensity_from_alpha(rgba: &[u8]) -> Vec<u8> {
+    rgba.chunks(4)
+        .flat_map(|p| [p[3], p[3], p[3], p[3]])
+        .collect()
 }
 
 /// In-container link (mirroring n64.mk's %.elf recipe, plus
@@ -917,6 +933,15 @@ mod tests {
         let (_, step) = text_pad_for(13);
         assert!(step.contains(".space 16\\n"), "{step}");
         assert!(step.contains("mips64-elf-gcc -c"), "{step}");
+    }
+
+    #[test]
+    fn intensity_atlases_carry_coverage_in_their_gray_level() {
+        let rgba = [255, 255, 255, 128, 0, 0, 0, 0, 255, 255, 255, 255];
+        assert_eq!(
+            intensity_from_alpha(&rgba),
+            vec![128, 128, 128, 128, 0, 0, 0, 0, 255, 255, 255, 255]
+        );
     }
 
     #[test]

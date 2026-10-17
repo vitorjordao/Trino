@@ -367,6 +367,9 @@ impl Launcher {
             for t in Template::ALL {
                 let title = match t {
                     Template::Blank => "Blank".to_string(),
+                    Template::Demo(trino_scaffold::Demo::Football) => {
+                        "Football (Solid Eleven)".to_string()
+                    }
                     Template::Demo(d) => format!("Based on the {} demo", d.key()),
                 };
                 ui.radio_value(&mut self.template, t, title);

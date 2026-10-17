@@ -71,7 +71,7 @@ commands:
                        / pinned Azahar AppImage into target/emulators)
   new <name>           scaffold a new game crate under examples/
   new <name> --standalone <dir> [--git <url> [--rev <r>|--branch <b>]]
-      [--template blank|castle64|showcase]
+      [--template blank|castle64|showcase|football]
                        a game project outside this repo (own workspace,
                        PC host, assets); engine via path (default) or git;
                        the game starts blank or as a copy of a demo
@@ -97,9 +97,10 @@ commands:
                        run the Blender toolkit end to end (prop + rigid
                        character -> export -> model inspect gates); skips
                        when Blender is not installed
-  blender castle64 [--only a,b] [--no-render]
-                       rebuild castle64's Blender-authored models (doors,
-                       player parts, boar) with their triangle gates
+  blender castle64 | solid-eleven [--only a,b] [--no-render]
+                       rebuild a demo's Blender-authored models with their
+                       triangle gates (castle64: doors, player parts, boar;
+                       solid-eleven: pitch, stadium, players, rig + clips)
   agents <sync|check>  mirror .agents/skills/ into tool-specific folders
                        (.claude/skills/) / verify the mirrors are in sync
 ";
@@ -1064,7 +1065,7 @@ fn new_game(name: &str, rest: &[&str]) -> ExitCode {
 
 const NEW_USAGE: &str = "xtask: usage: cargo xtask new <kebab-case-name> \
      [--standalone <dir> [--git <url> [--rev <r> | --branch <b>]] \
-     [--template blank|castle64|showcase]]";
+     [--template blank|castle64|showcase|football]]";
 
 /// Render a standalone project and print what to do next.
 fn make_standalone(root: &Path, names: &Names, s: &standalone::Standalone) -> ExitCode {

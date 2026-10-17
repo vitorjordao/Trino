@@ -412,6 +412,55 @@ fn foam_and_glint_are_the_per_pixel_tier_only() {
     }
 }
 
+/// With MSAA on (`trino-runner-pc`'s default on the native profile) the
+/// scene pass stops before the water, its multisampled depth is copied for
+/// the foam, and the pass goes on before resolving: the same water as the
+/// single-sampled frame (foam at the post included) but the triangles'
+/// edges.
+#[test]
+fn msaa_frames_draw_the_same_water() {
+    let _gpu = gpu();
+    let Some(mut r) = headless(SimProfile::Native) else {
+        return;
+    };
+    setup(&mut r);
+    let calm = ModelParams {
+        water: Some(Water {
+            wave_amplitude: 0.0,
+            ..WATER
+        }),
+        ..water_params()
+    };
+    let single = frame(&mut r, Some((0.5, &[RIPPLE])), &calm);
+    r.set_msaa(true);
+    assert!(r.msaa() > 1);
+    let ms = frame(&mut r, Some((0.5, &[RIPPLE])), &calm);
+    shots(&r, "water_msaa", &ms);
+    let luma = |c: [u8; 3]| (c[0] as i32 * 3 + c[1] as i32 * 6 + c[2] as i32) / 10;
+    // Foam at the post (it reads the multisampled depth copy), none in the
+    // open water.
+    let edge = Vec3::new(1.2, 0.0, 0.5 - 0.33);
+    let open = Vec3::new(1.2, 0.0, -0.9);
+    let (e, o) = (luma(px(&r, &ms, edge)), luma(px(&r, &ms, open)));
+    assert!(e > o + 30, "MSAA: no foam at the post ({e} vs {o})");
+    let (w, h) = r.internal_size();
+    let mut far = 0;
+    for i in 0..(w * h) as usize {
+        let a = [single[i * 4], single[i * 4 + 1], single[i * 4 + 2]];
+        let b = [ms[i * 4], ms[i * 4 + 1], ms[i * 4 + 2]];
+        if (luma(a) - luma(b)).abs() > 24 {
+            far += 1;
+        }
+    }
+    assert!(
+        far * 100 < (w * h) as usize,
+        "{far} pixels differ by more than 24 from the single-sampled water frame"
+    );
+    // Off again: the single-sampled frame comes back exactly.
+    r.set_msaa(false);
+    assert!(frame(&mut r, Some((0.5, &[RIPPLE])), &calm) == single);
+}
+
 #[test]
 fn water_state_is_cleared_every_frame() {
     let _gpu = gpu();

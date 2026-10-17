@@ -264,6 +264,8 @@ pub struct SolidElevenGame {
     /// The controller the controls page draws ([`DEVICE`]; tests preview
     /// the others).
     pub device: Device,
+    /// The pixel scale last asked of the PC host for the graphics setting.
+    asked_scale: Option<u8>,
 }
 
 impl SolidElevenGame {
@@ -315,6 +317,7 @@ impl SolidElevenGame {
             host_ask: None,
             capture: None,
             device: DEVICE,
+            asked_scale: None,
         }
     }
 
@@ -1142,6 +1145,25 @@ impl SolidElevenGame {
         }
     }
 
+    /// The PC's graphics setting on its host: maximum renders at the
+    /// output's full resolution (pixel scale 1), retro at the host's chunky
+    /// automatic scale. Asked once per change (the host persists it).
+    fn apply_graphics(&mut self, platform: &mut dyn Platform) {
+        let Some(info) = platform.display() else {
+            return;
+        };
+        let want = if self.settings.graphics == 0 { 1 } else { 0 };
+        if self.asked_scale != Some(want) {
+            self.asked_scale = Some(want);
+            if info.settings.pixel_scale != want {
+                platform.set_display(trino_core::DisplaySettings {
+                    pixel_scale: want,
+                    ..info.settings
+                });
+            }
+        }
+    }
+
     /// Copy the host's binding labels and rebind state (the PC's).
     fn peek_input(&mut self, platform: &dyn Platform) {
         let Some(info) = platform.input_info() else {
@@ -1208,6 +1230,7 @@ impl Game for SolidElevenGame {
     ) {
         self.persist(platform);
         self.peek_input(platform);
+        self.apply_graphics(platform);
         self.update(input, audio, dt);
         if let Some(ask) = self.host_ask.take() {
             match ask {

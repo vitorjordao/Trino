@@ -183,3 +183,83 @@ fn the_menus_match_their_goldens() {
         golden(tag, w, h, &r.read_offscreen());
     }
 }
+
+/// PC strict mode on the N64 profile holds the match to the console's
+/// budgets, splitting each frame's 3D the way the N64 does (its RSP takes
+/// the eligible draws): it used to price every draw as CPU T&L and fail
+/// Solid Eleven at ~100 draws while ares ran it in time.
+#[test]
+fn the_match_passes_strict_mode_on_the_n64_profile() {
+    let _gpu = GPU.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut r) = renderer(SimProfile::N64, None) else {
+        return;
+    };
+    r.set_strict(true);
+    let (w, h) = r.internal_size();
+    let mut g = SolidElevenGame::new(Vec2::new(w as f32, h as f32));
+    selftest::begin(&mut g);
+    let mut worst = trino_platform_pc::N64Estimate::default();
+    for f in 0..selftest::FRAMES {
+        g.update(&selftest::input(f), &mut Mute, selftest::DT);
+        if f % 5 == 0 {
+            g.render(&mut r);
+            let e = r.n64_estimate();
+            if e.cpu_us.max(e.rsp_us) > worst.cpu_us.max(worst.rsp_us) {
+                worst = e;
+            }
+        }
+    }
+    eprintln!(
+        "worst frame: CPU ~{:.1} ms ({} draws on it, {} on the RSP), RSP ~{:.1} ms ({} triangles)",
+        worst.cpu_us as f32 / 1000.0,
+        worst.cpu_draws,
+        worst.rsp_draws,
+        worst.rsp_us as f32 / 1000.0,
+        worst.rsp_tris
+    );
+    assert_eq!(worst.cpu_draws, 0, "every match draw is the RSP's");
+    assert!(worst.rsp_draws > 50);
+}
+
+/// The PC profile's best look: multisampled edges (`set_msaa`) blend
+/// triangle and sprite edges with what is behind them — more in-between
+/// colors along the players and the lines — and leave the rest alone.
+#[test]
+fn msaa_smooths_the_match_edges_on_the_pc_profile() {
+    let _gpu = GPU.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut r) = renderer(SimProfile::Native, Some((640, 360))) else {
+        return;
+    };
+    let (w, h) = r.internal_size();
+    let shot = |r: &mut PcRenderer| {
+        let mut g = scripted(Vec2::new(w as f32, h as f32));
+        g.render(r);
+        r.read_offscreen()
+    };
+    let plain = shot(&mut r);
+    r.set_msaa(true);
+    assert_eq!(r.msaa(), trino_platform_pc::MSAA_SAMPLES);
+    let smooth = shot(&mut r);
+    let colors = |img: &[u8]| {
+        let mut set = std::collections::HashSet::new();
+        for p in img.chunks(4) {
+            set.insert((p[0], p[1], p[2]));
+        }
+        set.len()
+    };
+    let (a, b) = (colors(&plain), colors(&smooth));
+    let changed = plain
+        .chunks(4)
+        .zip(smooth.chunks(4))
+        .filter(|(x, y)| x != y)
+        .count();
+    eprintln!("colors: {a} single-sampled, {b} multisampled; {changed} pixels differ");
+    assert!(b as f32 > a as f32 * 1.15, "{a} -> {b}");
+    // Only edges change: most of the picture is identical.
+    assert!(changed * 4 < (w * h) as usize, "{changed} of {}", w * h);
+    // Console profiles ignore it.
+    if let Some(mut n64) = renderer(SimProfile::N64, None) {
+        n64.set_msaa(true);
+        assert_eq!(n64.msaa(), 1);
+    }
+}

@@ -549,3 +549,50 @@ fn the_keeper_and_graphics_settings_reach_the_match() {
     assert_eq!(s.m.keeper_ctl, [true, false]);
     assert_eq!(s.view.retro, d.g.settings.graphics == 1);
 }
+
+/// A PC host with display settings (the runner's): records what it is asked.
+struct DisplayHost {
+    info: trino_core::DisplayInfo,
+    asked: std::vec::Vec<u8>,
+}
+
+impl Platform for DisplayHost {
+    fn now_micros(&self) -> u64 {
+        0
+    }
+    fn log(&self, _: &str) {}
+    fn display(&self) -> Option<trino_core::DisplayInfo> {
+        Some(self.info)
+    }
+    fn set_display(&mut self, s: trino_core::DisplaySettings) {
+        self.asked.push(s.pixel_scale);
+        self.info.settings = s;
+    }
+}
+
+#[test]
+fn the_graphics_setting_asks_the_pc_host_for_its_resolution() {
+    let mut host = DisplayHost {
+        info: trino_core::DisplayInfo {
+            settings: trino_core::DisplaySettings::DEFAULT,
+            output: (1920, 1080),
+            monitor: (1920, 1080),
+            screen: (640, 360),
+            pixel_scale: 3,
+        },
+        asked: std::vec::Vec::new(),
+    };
+    let mut g = SolidElevenGame::new(Vec2::new(640.0, 360.0));
+    let idle = InputState::default();
+    // Maximum (the default): the full output resolution, asked once.
+    for _ in 0..3 {
+        g.update_with(&mut host, &idle, &mut Mute, DT);
+    }
+    assert_eq!(host.asked, [1]);
+    // Retro: the host's automatic (chunky) scale.
+    g.settings.graphics = 1;
+    g.update_with(&mut host, &idle, &mut Mute, DT);
+    assert_eq!(host.asked, [1, 0]);
+    // The window keeps its other settings.
+    assert!(host.info.settings.fullscreen);
+}

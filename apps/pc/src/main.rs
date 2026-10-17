@@ -147,6 +147,9 @@ impl App {
         let mut renderer =
             pollster::block_on(PcRenderer::new_windowed(window.clone(), self.profile))
                 .expect("failed to initialize wgpu renderer");
+        // Solid Eleven on the PC's own profile: multisampled edges at the
+        // window's resolution (TRINO_MSAA=0: off).
+        renderer.set_msaa(solid_eleven() && std::env::var("TRINO_MSAA").as_deref() != Ok("0"));
         let mut audio = PcAudio::new();
         // Saves go next to the build output, capped at the simulated
         // console's budget (an N64 profile gets the 2 KB EEPROM).
@@ -221,7 +224,23 @@ impl ApplicationHandler for App {
         };
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
-            WindowEvent::Resized(size) => ctx.renderer.resize(size.width, size.height),
+            WindowEvent::Resized(size) => {
+                ctx.renderer.resize(size.width, size.height);
+                // Solid Eleven on the PC's own profile renders at the
+                // window's full resolution: the PC's best look (castle64
+                // keeps its chunky 640x480).
+                if solid_eleven()
+                    && self.profile == SimProfile::Native
+                    && size.width > 1
+                    && size.height > 1
+                {
+                    let (w, h) = (size.width & !1, size.height & !1);
+                    ctx.renderer.set_internal_size(w, h);
+                    if let Some(g) = &mut ctx.solid {
+                        g.resize(Vec2::new(w as f32, h as f32));
+                    }
+                }
+            }
             ref e if ctx.input.handle_window_event(e, &ctx.renderer) => {}
             WindowEvent::RedrawRequested => {
                 // Live asset reload: swap content under stable handles.

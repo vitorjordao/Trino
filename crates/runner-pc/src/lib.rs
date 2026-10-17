@@ -256,6 +256,8 @@ impl Host {
         let mut renderer =
             pollster::block_on(PcRenderer::new_windowed(window.clone(), self.profile))
                 .expect("failed to initialize wgpu renderer");
+        // The PC's own profile multisamples its edges (TRINO_MSAA=0: off).
+        renderer.set_msaa(std::env::var("TRINO_MSAA").as_deref() != Ok("0"));
         let mut audio = PcAudio::new();
         let mut platform = PcPlatform::new(&self.profile.caps()).with_save_file(cfg.save_file());
         platform.set_second_screen(renderer.second_screen().map(|s| (s.x as u16, s.y as u16)));

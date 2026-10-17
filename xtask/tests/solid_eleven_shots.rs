@@ -55,6 +55,8 @@ fn solid_eleven_menu_shots() {
         (SimProfile::Native, "pc720", Some((1280u32, 720u32))),
     ] {
         let mut r = renderer(profile, size);
+        // The PC's own profile at its best: multisampled.
+        r.set_msaa(profile == SimProfile::Native);
         if profile == SimProfile::N64 {
             r.set_n64_look(true);
         }
@@ -211,6 +213,8 @@ fn solid_eleven_shots() {
         (SimProfile::Native, "pc", Some((960u32, 540u32))),
     ] {
         let mut r = renderer(profile, size);
+        // The PC's own profile at its best: multisampled.
+        r.set_msaa(profile == SimProfile::Native);
         if profile == SimProfile::N64 {
             // No strict mode: its 3D cost estimate prices every draw as CPU
             // T&L, but these draws run on the N64's RSP (measured in ares).
@@ -271,7 +275,9 @@ fn solid_eleven_shots() {
 #[ignore]
 fn pc_frame_time() {
     let mut r = renderer(SimProfile::Native, Some((1920, 1080)));
-    println!("adapter: {}", r.adapter_info());
+    // The PC's best look: multisampled (TRINO_MSAA=0 measures without).
+    r.set_msaa(std::env::var("TRINO_MSAA").as_deref() != Ok("0"));
+    println!("adapter: {}, msaa {}x", r.adapter_info(), r.msaa());
     for (name, sky, rain) in [("day", Sky::Day, false), ("dusk+rain", Sky::Dusk, true)] {
         let mut g =
             SolidElevenGame::exhibition(Vec2::new(1920.0, 1080.0), 0, 1, 7, [false, false], sky);

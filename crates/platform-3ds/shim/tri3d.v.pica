@@ -10,11 +10,13 @@
 ; Inputs (immediate mode, see trino_shim_3ds.c):
 ;   v0 = (x, y, depth, w)   v1 = (u, v, -, -)   v2 = (r, g, b, a) in 0..1
 ;
-; texcoord1 is texcoord0 scaled by `detail.xy`: the detail layer tiles
-; 2^n times per base repeat (ModelParams::detail, texture unit 1).
+; texcoord1 is texcoord0 scaled by `detail.xy` plus `detailoff.xy`: the
+; detail layer tiles 2^n times per base repeat (ModelParams::detail,
+; texture unit 1) and, on water, flows on its own (ADR 0015).
 
 .fvec projection[4]
 .fvec detail
+.fvec detailoff
 
 .constf ones(1.0, 1.0, 1.0, 1.0)
 
@@ -39,7 +41,8 @@
 
     mul outpos, inpos.wwww, r1
     mov outtc0, intc
-    mul outtc1, detail, intc
+    mul r2, detail, intc
+    add outtc1, detailoff, r2
     mov outclr, inclr
     end
 .end

@@ -70,6 +70,10 @@ pub struct Project {
     /// Font glyph tables by logical path (`fonts/x` -> (id, TFNT)); the
     /// atlas is in `sprites` under the same logical path.
     pub fonts: BTreeMap<String, (u32, Vec<u8>)>,
+    /// Each sprite's N64 TMEM bytes, by handle, from its size and its
+    /// manifest `n64` format (`None`: a palette, which can't share TMEM).
+    /// The budget HUD's water lines read it.
+    pub tmem: BTreeMap<u32, Option<u32>>,
     /// Bumped whenever asset content changes (viewports re-upload, caches
     /// invalidate).
     pub generation: u64,
@@ -84,6 +88,7 @@ impl Project {
             sounds: Vec::new(),
             music: Vec::new(),
             fonts: BTreeMap::new(),
+            tmem: BTreeMap::new(),
             generation: 0,
         }
     }
@@ -133,6 +138,16 @@ impl Project {
         let mut n = 0;
         for s in assets.sprites {
             n += 1;
+            let name = s.logical.trim_start_matches("sprites/");
+            let format = manifest
+                .as_ref()
+                .and_then(|m| m.sprites.get(name))
+                .and_then(|d| d.formats.get("n64").cloned())
+                .unwrap_or_else(|| "RGBA5551".into());
+            self.tmem.insert(
+                s.id,
+                trino_scene::budget::tmem_bytes(s.width, s.height, &format),
+            );
             self.sprites.insert(
                 s.logical.clone(),
                 SpriteAsset {

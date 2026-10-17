@@ -43,6 +43,13 @@ pub struct Caps {
     /// 0014): a screen-space pass on the PC, baked vertex colors on the
     /// consoles.
     pub ao_tier: crate::ao::AoTier,
+    /// How water surfaces are drawn ([`crate::water`], ADR 0015).
+    pub water_tier: crate::water::WaterTier,
+    /// Most ripples a frame's water evaluates (the first ones given to
+    /// `set_water`): the 3DS vertex program holds 4 in its uniforms, and
+    /// every target keeps the same cap so the surface moves alike. Strict
+    /// mode panics on more.
+    pub max_ripples: u8,
 }
 
 /// Why a piece of content does not fit in a target's [`Caps`].
@@ -73,6 +80,8 @@ impl Caps {
         light_tier: crate::light::LightTier::PerVertex,
         max_local_lights: 2,
         ao_tier: crate::ao::AoTier::Baked,
+        water_tier: crate::water::WaterTier::PerVertex,
+        max_ripples: crate::water::MAX_RIPPLES as u8,
     };
 
     /// Nintendo 3DS (top screen): 400x240, 24-bit.
@@ -89,6 +98,8 @@ impl Caps {
         light_tier: crate::light::LightTier::PerVertex,
         max_local_lights: 4,
         ao_tier: crate::ao::AoTier::Baked,
+        water_tier: crate::water::WaterTier::VertexProgram,
+        max_ripples: crate::water::MAX_RIPPLES as u8,
     };
 
     /// PC: generous defaults; the internal resolution follows the active
@@ -106,6 +117,8 @@ impl Caps {
         light_tier: crate::light::LightTier::PerPixel,
         max_local_lights: 8,
         ao_tier: crate::ao::AoTier::ScreenSpace,
+        water_tier: crate::water::WaterTier::PerPixel,
+        max_ripples: crate::water::MAX_RIPPLES as u8,
     };
 
     /// Validate a texture of `width`x`height` at `bytes_per_pixel` against

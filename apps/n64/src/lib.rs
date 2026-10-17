@@ -53,43 +53,65 @@ mod n64 {
         }
     }
 
-    // Steps 0b–0d each run out of line: a ShowcaseGame is ~22 KB, built by
-    // value (constructor frame + the caller's slot), and libdragon's main
-    // stack is 64 KB. Inline in `run_self_test`, the baked-scene step stacked
-    // main + run_self_test + check_baked + from_baked past the limit — the
+    // Steps 0b–0d share one ShowcaseGame (~25 KB), boxed once and reset in
+    // place by each step: libdragon's main stack is 64 KB, and a game built
+    // by value per step (constructor frame + the caller's slot) stacked
+    // main + run_self_test + check_baked + from_baked past it — the
     // overflow corrupted memory and hung the ROM at random points. Each
-    // step's frame is gone before the next; `check_stack` guards the limit.
+    // step still runs out of line; `check_stack` guards the limit.
+
+    /// An empty showcase game, copied from ROM into its box: never on the
+    /// stack (`b.write(ShowcaseGame::with_screen(..))` still built it there
+    /// first, 63.5 KB of the 64). The steps reset it in place.
+    static BLANK_SHOWCASE: showcase::ShowcaseGame = showcase::ShowcaseGame::blank();
 
     #[inline(never)]
-    fn showcase_demo(renderer: &mut N64Renderer, audio: &mut N64Audio, platform: &mut N64Platform) {
-        let _ = platform;
+    fn boxed_showcase() -> alloc::boxed::Box<showcase::ShowcaseGame> {
+        let mut b = alloc::boxed::Box::<showcase::ShowcaseGame>::new_uninit();
+        // SAFETY: a bitwise copy of a valid value with no `Drop`, into
+        // memory sized and aligned for it.
+        unsafe {
+            core::ptr::copy_nonoverlapping(&BLANK_SHOWCASE, b.as_mut_ptr(), 1);
+            b.assume_init()
+        }
+    }
+
+    #[inline(never)]
+    fn showcase_demo(
+        demo: &mut showcase::ShowcaseGame,
+        renderer: &mut N64Renderer,
+        audio: &mut N64Audio,
+    ) {
         runtime::log("TRINO_STEP:showcase demo\n");
         // 0b) Collision from scenes + runtime entities: the showcase demo
-        // (editor scene exported to code) plays through every coin to the goal.
-        {
-            let mut demo = showcase::ShowcaseGame::with_screen(Vec2::new(320.0, 240.0));
-            let mut n = 0u32;
-            let result = showcase::run_demo(&mut demo, |g, input| {
-                g.update(input, audio, 1.0 / 60.0);
-                // Physics every frame; render 1:32 — the emulators run the
-                // full-scene software T&L well below real time.
-                if n % 32 == 0 {
-                    g.render(renderer);
-                }
-                n += 1;
-            });
-            if let Err(e) = result {
-                runtime::log(&format!("TRINO_TEST_FAIL:showcase: {e}\n"));
-                loop {
-                    trino_core::Renderer::begin_frame(renderer, trino_core::Color::BLACK);
-                    trino_core::Renderer::end_frame(renderer);
-                }
+        // (editor scene exported to code) plays through every coin to the
+        // goal, wading across the river (ripples, splashes, the water draws).
+        demo.reset(Vec2::new(320.0, 240.0));
+        let mut n = 0u32;
+        let result = showcase::run_demo(demo, |g, input| {
+            g.update(input, audio, 1.0 / 60.0);
+            // Physics every frame; render 1:32 — the emulators run the
+            // full-scene software T&L well below real time.
+            if n % 32 == 0 {
+                g.render(renderer);
             }
+            n += 1;
+        });
+        if let Err(e) = result {
+            runtime::log(&format!("TRINO_TEST_FAIL:showcase: {e}\n"));
+            loop {
+                trino_core::Renderer::begin_frame(renderer, trino_core::Color::BLACK);
+                trino_core::Renderer::end_frame(renderer);
+            }
+        }
+        if demo.splashes == 0 {
+            runtime::log("TRINO_TEST_FAIL:showcase: the demo never entered the river\n");
         }
     }
 
     #[inline(never)]
     fn showcase_baked(
+        game: &mut showcase::ShowcaseGame,
         renderer: &mut N64Renderer,
         audio: &mut N64Audio,
         platform: &mut N64Platform,
@@ -97,43 +119,67 @@ mod n64 {
         runtime::log("TRINO_STEP:baked scene\n");
         // 0c) The same level baked as data ([scenes.showcase] -> TSCN blob),
         // parsed at runtime, must equal the exported code and play through.
-        {
-            let mut n = 0u32;
-            let result = showcase::check_baked(platform, |g, input| {
-                g.update(input, audio, 1.0 / 60.0);
-                // Physics every frame; render 1:32 — the emulators run the
-                // full-scene software T&L well below real time.
-                if n % 32 == 0 {
-                    g.render(renderer);
-                }
-                n += 1;
-            });
-            if let Err(e) = result {
-                runtime::log(&format!("TRINO_TEST_FAIL:baked scene: {e}\n"));
-                loop {
-                    trino_core::Renderer::begin_frame(renderer, trino_core::Color::BLACK);
-                    trino_core::Renderer::end_frame(renderer);
-                }
+        let mut n = 0u32;
+        let result = showcase::check_baked_in(platform, game, |g, input| {
+            g.update(input, audio, 1.0 / 60.0);
+            // Physics every frame; render 1:32 — the emulators run the
+            // full-scene software T&L well below real time.
+            if n % 32 == 0 {
+                g.render(renderer);
+            }
+            n += 1;
+        });
+        if let Err(e) = result {
+            runtime::log(&format!("TRINO_TEST_FAIL:baked scene: {e}\n"));
+            loop {
+                trino_core::Renderer::begin_frame(renderer, trino_core::Color::BLACK);
+                trino_core::Renderer::end_frame(renderer);
             }
         }
     }
 
     #[inline(never)]
-    fn showcase_golden(
-        renderer: &mut N64Renderer,
-        audio: &mut N64Audio,
-        platform: &mut N64Platform,
-    ) {
-        let _ = (audio, platform);
+    fn showcase_golden(g: &mut showcase::ShowcaseGame, renderer: &mut N64Renderer) {
         // 0d) Emulator golden image: the showcase's first frame (fixed state,
         // deterministic T&L), dumped over ISViewer; `cargo xtask test n64`
         // compares it with tests/golden/n64/showcase.png (--bless writes it).
         runtime::log("TRINO_STEP:golden frame\n");
-        {
-            let mut g = showcase::ShowcaseGame::with_screen(Vec2::new(320.0, 240.0));
+        g.reset(Vec2::new(320.0, 240.0));
+        g.render(renderer);
+        renderer.dump_framebuffer();
+    }
+
+    /// The `showcase-river` perf scene (`showcase::perf`): its frames timed
+    /// per stage and per model on the console's clock.
+    #[inline(never)]
+    fn water_perf(renderer: &mut N64Renderer, audio: &mut N64Audio) {
+        let mut g = boxed_showcase();
+        showcase::perf::river_scene(&mut g, Vec2::new(320.0, 240.0), audio);
+        let idle = InputState::default();
+        let mut times = trino_core::perf::FrameTimes::default();
+        let v0 = runtime::vblanks();
+        renderer.start_profile();
+        for _ in 0..showcase::perf::MEASURE_FRAMES {
+            let t0 = runtime::now_us();
+            g.update(&idle, audio, showcase::perf::DT);
+            let t1 = runtime::now_us();
             g.render(renderer);
-            renderer.dump_framebuffer();
+            let t2 = runtime::now_us();
+            times.update += t1.wrapping_sub(t0);
+            times.render += t2.wrapping_sub(t1);
+            audio.poll();
         }
+        times.vblanks = runtime::vblanks().wrapping_sub(v0);
+        if let Some(p) = renderer.take_profile() {
+            let mut report = alloc::string::String::new();
+            let _ = p.write_report(showcase::perf::NAME, &times, &mut report);
+            runtime::log(&report);
+        }
+        // The third emulator golden: the river under the scene camera
+        // (`tests/golden/n64/showcase_river.png`).
+        runtime::log("TRINO_STEP:river golden frame\n");
+        g.render(renderer);
+        renderer.dump_framebuffer();
     }
 
     /// The hub perf scene's first frame, dumped for the second golden.
@@ -255,9 +301,11 @@ mod n64 {
         }
         // Its own frame: the showcase games (~22 KB each) must be gone from
         // the stack before castle64 renders on top of this function.
-        showcase_demo(renderer, audio, platform);
-        showcase_baked(renderer, audio, platform);
-        showcase_golden(renderer, audio, platform);
+        let mut showcase = boxed_showcase();
+        showcase_demo(&mut showcase, renderer, audio);
+        showcase_baked(&mut showcase, renderer, audio, platform);
+        showcase_golden(&mut showcase, renderer);
+        drop(showcase);
         if !check_stack("the showcase steps") {
             loop {
                 trino_core::Renderer::begin_frame(renderer, trino_core::Color::BLACK);
@@ -413,6 +461,10 @@ mod n64 {
                     // ungated): after the castle64 scenes, so their camera
                     // and light cannot leak into those.
                     micro::run(renderer, castle64::perf::MEASURE_FRAMES);
+                    // 7) Water (ADR 0015): the showcase's river under its
+                    // scene camera, the hero wading in (gated like the
+                    // castle64 scenes; the river's own line is `models/river`).
+                    water_perf(renderer, audio);
                     // High-water mark of the whole run (bot, perf scenes).
                     if check_stack("the bot and the perf scenes") {
                         runtime::log("TRINO_TEST_PASS\n");

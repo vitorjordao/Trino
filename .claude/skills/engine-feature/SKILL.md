@@ -65,6 +65,18 @@ A feature is done only when **PC, N64 and 3DS** all run it and an emulator has s
   Sprites don't write depth, so a composite at `end_frame` would darken a HUD over
   geometry.
 
+- **A tiered surface (water, ADR 0015) keeps the geometry in the core** and lets each
+  tier add what its hardware can: the PC per pixel, the 3DS a vertex program
+  (`gpu_water` builds its uniforms and `crates/core/tests/gpu_water.rs` emulates the
+  shader against the CPU path), the N64 the combiner. A per-vertex effect smaller than
+  the vertex spacing (a ripple on a 16 × 4 ribbon) needs geometry of its own on the
+  per-vertex tiers (ring decals), or it doesn't show.
+- **Blended 3D must come after a batch's RSP commands on the N64** and write no depth
+  on any target: the water bucket in `platform-n64/src/renderer.rs` and the 3DS's,
+  `TriKind::Water` on PC.
+- **A new `ModelParams` field costs `EntityStore` capacity times its size** in every
+  game struct. Measure the N64 self-test's stack (`check_stack`) after one.
+
 ## 2. Backends, in matched pairs
 
 - The FFI goes through the shims only: `crates/platform-n64/shim/trino_shim.c` with

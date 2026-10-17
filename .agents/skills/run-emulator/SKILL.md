@@ -57,7 +57,10 @@ detects it and runs `run_self_test` (`apps/<console>/src/…`):
    resolves depth per triangle instead of per pixel.
 2. Audio checks.
 3. The showcase demo and the baked scene.
-4. On N64, the golden frame (showcase).
+4. On N64, the golden frame (showcase). The `water` step runs with the engine
+   steps; the N64 then measures the `showcase-river` perf scene and dumps its frame
+   as the third golden, `tests/golden/n64/showcase_river.png`. The 3DS dumps the
+   same scene after the showcase panel as its fourth, `tests/golden/3ds/showcase_river.png`.
 5. castle64 physics and a bot that plays a full stage.
 6. N64: the perf scenes (`TRINO_PERF_SCENE:` / `TRINO_PERF_MODEL:` lines, gated —
    the `n64-performance` skill). 3DS: the golden frames (castle64 hub perf scene:

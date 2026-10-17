@@ -54,8 +54,11 @@ use crate::math3d::{Mat34, Quat};
 mod hw;
 mod lit;
 use crate::render::{AnimRef, ClipId, DetailTexture, ModelParams, Shading, SpriteId, TexFilter};
-pub use hw::{GpuDraw, GpuReject, gpu_check, gpu_check_mv, gpu_mesh_check, gpu_screen_matrix};
-pub use lit::{SurfaceScratch, SurfaceVert, tessellate_surface};
+pub use hw::{
+    GpuDraw, GpuReject, GpuWater, gpu_check, gpu_check_mv, gpu_mesh_check, gpu_screen_matrix,
+    gpu_water,
+};
+pub use lit::{RING_SEGMENTS, SurfaceScratch, SurfaceVert, tessellate_ripples, tessellate_surface};
 
 /// Mesh blob format ("TMDL", little-endian):
 /// `u32 vertex_count, u32 index_count`, then `positions f32*3*v`,
@@ -1115,6 +1118,8 @@ pub enum RspReject {
     /// A local light reaches it ([`crate::light`]): the overlay only knows
     /// the global light.
     LocalLight,
+    /// A water surface ([`crate::water`]): the CPU T&L displaces it.
+    Water,
 }
 
 impl RspReject {
@@ -1145,6 +1150,7 @@ impl RspReject {
             RspReject::Flat => "flat shading",
             RspReject::NonUniformScale => "sheared or uneven scale",
             RspReject::LocalLight => "local light",
+            RspReject::Water => "water surface",
         }
     }
 }
@@ -1354,6 +1360,9 @@ pub fn rsp_check_mv(
     mv: &Mat34,
     params: &ModelParams,
 ) -> Result<RspDraw, RspReject> {
+    if params.water.is_some() {
+        return Err(RspReject::Water);
+    }
     if !ctx.white {
         return Err(RspReject::ColoredLight);
     }
@@ -1436,6 +1445,31 @@ impl TnlContext {
 #[inline]
 pub fn split_policy(ctx: &TnlContext, mesh: &Mesh, params: &ModelParams) -> bool {
     ctx.fog_on || mesh.has_uvs() || params.tint.a < 255 || !mesh.opaque
+}
+
+/// When fog is a draw's only reason to split ([`split_policy`]: opaque,
+/// untextured), its range `(near, far)`: an edge with both ends nearer than
+/// `near` (or both past `far`) has the same fog factor all along, so
+/// bisecting it changes nothing and it isn't split. Big fogged floors near
+/// the camera split far less (the showcase's carved terrain: 864 splits
+/// to 0 there).
+#[inline]
+pub fn fog_split_band(ctx: &TnlContext, mesh: &Mesh, params: &ModelParams) -> Option<(f32, f32)> {
+    (ctx.fog_on && !mesh.has_uvs() && params.tint.a == 255 && mesh.opaque)
+        .then_some((ctx.light.fog.near, ctx.light.fog.far))
+}
+
+/// The depth span of edge `za`–`zb` for the split rule: zero when it lies
+/// wholly on one side of the fog band (see [`fog_split_band`]).
+#[inline(always)]
+fn split_span(za: f32, zb: f32, band: Option<(f32, f32)>) -> f32 {
+    if let Some((n, f)) = band
+        && ((za <= n && zb <= n) || (za >= f && zb >= f))
+    {
+        return 0.0;
+    }
+    let d = za - zb;
+    if d < 0.0 { -d } else { d }
 }
 /// Subdivision work stack; overflow emits the triangle unsplit (graceful).
 const SPLIT_STACK: usize = 48;
@@ -1530,8 +1564,17 @@ fn clip_plane(
             if n_out == MAX_POLY {
                 return n_out;
             }
-            let t = da / (da - db);
-            out[n_out] = (a + (b - a) * t, lerp_color(ca, cb, t), ua + (ub - ua) * t);
+            // From the inside vertex toward the outside one, whichever comes
+            // first in this polygon: the neighbor sharing the edge walks it
+            // the other way and must get the same point bit for bit, or the
+            // two leave a one-pixel crack between them (seen on the N64).
+            out[n_out] = if da >= 0.0 {
+                let t = da / (da - db);
+                (a + (b - a) * t, lerp_color(ca, cb, t), ua + (ub - ua) * t)
+            } else {
+                let t = db / (db - da);
+                (b + (a - b) * t, lerp_color(cb, ca, t), ub + (ua - ub) * t)
+            };
             n_out += 1;
         }
     }
@@ -1569,6 +1612,9 @@ pub struct TnlContext {
     /// context.
     n_locals: u8,
     view_locals: [ViewLight; MAX_VERTEX_LIGHTS],
+    /// The water clock and ripples ([`TnlContext::with_water`]), read only
+    /// by water draws.
+    water: crate::water::WaterState,
 }
 
 impl TnlContext {
@@ -1602,7 +1648,31 @@ impl TnlContext {
             fog_on: light.fog.enabled(),
             n_locals: 0,
             view_locals: [NO_LIGHT; MAX_VERTEX_LIGHTS],
+            water: crate::water::WaterState::NONE,
         }
+    }
+
+    /// This context with the frame's water clock and ripples (the state a
+    /// backend built from `Renderer::set_water` with its
+    /// [`crate::Caps::max_ripples`]). Only water draws read it.
+    pub fn with_water(mut self, water: &crate::water::WaterState) -> TnlContext {
+        self.water = *water;
+        self
+    }
+
+    /// The water state of [`TnlContext::with_water`].
+    pub fn water(&self) -> &crate::water::WaterState {
+        &self.water
+    }
+
+    /// The camera this context projects with.
+    pub fn camera(&self) -> &Camera3 {
+        &self.camera
+    }
+
+    /// The light this context shades with.
+    pub fn light(&self) -> &Light {
+        &self.light
     }
     /// This context with `lights` (the first [`MAX_VERTEX_LIGHTS`]) added to
     /// the vertex colors of every lit draw they reach — the per-vertex
@@ -1792,6 +1862,11 @@ pub fn tessellate_with(
     params: &ModelParams,
     emit: &mut dyn FnMut(ScreenTri),
 ) -> TnlStats {
+    // Water: displaced and shaded in the lit copy of the T&L (its own
+    // vertex function), out of this path's way.
+    if let Some(w) = &params.water {
+        return lit::tessellate_water(ctx, scratch, mesh, model, params, w, emit);
+    }
     // A local light may reach it: the lit copy of the T&L (render3d/lit.rs),
     // out of this path's way.
     if ctx.n_locals > 0
@@ -1851,6 +1926,7 @@ pub fn tessellate_with(
             params.tint.a as f32 / 255.0,
         ],
         split: split_policy(ctx, mesh, params),
+        fog_band: fog_split_band(ctx, mesh, params),
         local_ldir: if mesh.joint_count() == 0 && params.shading == Shading::Gouraud {
             model_space_light(mesh, model, ctx.ldir)
         } else {
@@ -1906,6 +1982,8 @@ struct Setup<'a> {
     tint_k: [f32; 4],
     /// Apply the [`DEPTH_SPLIT`] rule (see [`split_policy`]).
     split: bool,
+    /// Fog as the only reason to split: its range ([`fog_split_band`]).
+    fog_band: Option<(f32, f32)>,
     /// The light direction in model space, when the static path may light
     /// model-space normals directly ([`model_space_light`]).
     local_ldir: Option<Vec3>,
@@ -1973,7 +2051,25 @@ impl Setup<'_> {
     /// Tint × light, then emissive and fog.
     #[inline(always)]
     fn finish(&self, c: Color, k: [f32; 3], z: f32) -> Color {
-        let light = self.light;
+        self.fog(self.finish_unfogged(c, k), z)
+    }
+
+    /// The fog of [`Setup::finish`] (alpha kept).
+    #[inline(always)]
+    fn fog(&self, mut out: Color, z: f32) -> Color {
+        let fog = self.light.fog;
+        if self.fog_on {
+            let f = ((z - fog.near) / (fog.far - fog.near)).clamp(0.0, 1.0);
+            let a = out.a;
+            out = lerp_color(out, fog.color, f);
+            out.a = a;
+        }
+        out
+    }
+
+    /// Tint × light, then emissive: [`Setup::finish`] before the fog.
+    #[inline(always)]
+    fn finish_unfogged(&self, c: Color, k: [f32; 3]) -> Color {
         let t = self.tint_k;
         // v * (tint / 255) * k, with the quotient from `Setup`: the same
         // operations in the same order as dividing here, so bit-identical.
@@ -1989,13 +2085,6 @@ impl Setup<'_> {
             out.r = out.r.saturating_add(e.r);
             out.g = out.g.saturating_add(e.g);
             out.b = out.b.saturating_add(e.b);
-        }
-        let fog = light.fog;
-        if self.fog_on {
-            let f = ((z - fog.near) / (fog.far - fog.near)).clamp(0.0, 1.0);
-            let a = out.a;
-            out = lerp_color(out, fog.color, f);
-            out.a = a;
         }
         out
     }
@@ -2175,10 +2264,7 @@ fn tessellate_joints<const SKINNED: bool, const SMOOTH: bool>(
                 top -= 1;
                 let tri = stack[top];
                 // Worst depth-spanning edge (cyclic: 0-1, 1-2, 2-0).
-                let span = |a: usize, b: usize| {
-                    let d = tri[a].0.z - tri[b].0.z;
-                    if d < 0.0 { -d } else { d }
-                };
+                let span = |a: usize, b: usize| split_span(tri[a].0.z, tri[b].0.z, s.fog_band);
                 let worst = if !s.split {
                     (0.0, 0)
                 } else {
@@ -2264,6 +2350,11 @@ pub struct TexBind {
     pub clamp: bool,
     pub filter: TexFilter,
     pub detail: Option<DetailTexture>,
+    /// A water draw's detail-layer scroll, in 1/65536 of its repeat (u, v)
+    /// ([`crate::Water::detail_offset`]): consoles scroll the second tile
+    /// by it. `None` for every other draw (and on the PC, which reads the
+    /// scroll from its water sets).
+    pub water: Option<[u16; 2]>,
 }
 
 impl TexBind {
@@ -2277,6 +2368,7 @@ impl TexBind {
                 f => f,
             },
             detail: params.detail,
+            water: None,
         }
     }
 
@@ -2287,6 +2379,19 @@ impl TexBind {
             clamp: true,
             filter: default,
             detail: None,
+            water: None,
+        }
+    }
+
+    /// This binding for a water draw at `time`: its detail layer's scroll
+    /// ([`crate::Water::detail_offset`]) in 1/65536 of a repeat.
+    pub fn with_water(self, water: &crate::Water, time: f32) -> TexBind {
+        let scale = self.detail.map_or(1.0, |d| d.scale());
+        let o = water.detail_offset(time, scale);
+        let q = |v: f32| (crate::math3d::to_i32(v * 65536.0) & 0xFFFF) as u16;
+        TexBind {
+            water: Some([q(o.x), q(o.y)]),
+            ..self
         }
     }
 

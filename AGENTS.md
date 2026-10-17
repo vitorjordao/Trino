@@ -421,6 +421,34 @@ RDP).
     (`models/selftest_ao` vs `selftest_ao_raw`); goldens `tests/golden/pc/ao_*`;
     evidence via `cargo test -p xtask --test ao_shots -- --ignored`.
 
+- **Water surfaces (2026-10-17, ADR 0015, GitHub #49):** one material, a tier per
+  platform (`Caps::water_tier`).
+  - **API:** `ModelParams::water` (`trino_core::water::Water`: flow, detail flow, swell
+    height and frequency, ripple response; `water:` in material files; TSCN v4).
+    `Renderer::set_water(time, &[Ripple])` is cleared at `begin_frame`; games keep a
+    `RippleBuffer<4>`.
+  - **Geometry:** the core displaces every target's water (two sines and up to four
+    ripple rings, `water::sin_turns`) in a `WATER` copy of `render3d/lit.rs`. Water is
+    never on the RSP, the 3DS's static GPU path or the memo.
+  - **PC native:** `fs_water` per pixel (normals, Fresnel, glint, ripple crests, depth
+    foam from a depth copy).
+  - **3DS:** `water.v.pica` on the PICA200 (`gpu_water`; a CPU fallback for draws
+    crossing the near plane) and a TexEnv 50/50 layer blend.
+  - **N64 and the PC's console profiles:** per-vertex shading and the RDP's 2-cycle
+    `(TEX1 − TEX0)·0.5 + TEX0` × shade, TILE1 scrolled.
+  - **Ordering:** water is drawn last in its batch, blended, depth-tested but never
+    written. On the per-vertex tiers each ripple also gets a ring
+    (`tessellate_ripples`).
+  - **The showcase is now a river** (`showcase::river`: the generated terrain, ribbon
+    and bridge, and the floor the game walks): wading, ripples, splashes, a robot
+    patrolling the ford, a crate to shove in. `showcase-river` is a gated N64 perf
+    scene.
+  - **Editor:** material › Water, Drop a ripple, the budget's water lines (triangles,
+    combiner cycles, TMEM).
+  - **Tests and goldens:** the `water` self-test step on PC, ares and Azahar, and
+    `gpu tnl water` on the 3DS. Goldens `water_*`, `showcase_river` (PC, N64, 3DS).
+  - **Open:** on the N64 the river costs 12.5 ms of CPU T&L, above the issue's 1.2 ms;
+    an RSP water command is BACKLOG › "Water on the RSP".
 - **Console hardware paths and N64 timing (2026-10-16, ADR 0012, part of #31):**
   the 3DS transforms and lights static meshes on the PICA200 (`render3d::gpu_check`,
   `tnl3d.v.pica`, `gpu tnl` self-test step, `castle64_work_3ds.toml`); text goes to the
@@ -538,7 +566,7 @@ Super, which the OS takes) are not bindable, so one press never does two things.
 | `docker/` | Toolchain/emulator images: `n64/` (libdragon), `ares/` (headless ares for tests) |
 | `tests/golden/` | Golden images: `pc/` (renderer), `n64/` (ares framebuffer) |
 | `docs/` | `README.md` (index), guides `ARCHITECTURE.md`, `ASSETS.md`, `PLATFORMS.md`, `HARDWARE.md`; `TESTING.md` (feature → test matrix) |
-| `docs/adr/`, `docs/plans/` | Architecture decisions (0007: RSP T&L; 0009: platform-aware authoring); execution plans for big items; `docs/BACKLOG.md` ranked next steps |
+| `docs/adr/`, `docs/plans/` | Architecture decisions (0007: RSP T&L; 0009: platform-aware authoring; 0015: water tiers); execution plans for big items; `docs/BACKLOG.md` ranked next steps |
 | `.github/workflows/` | `ci.yml`, `release.yml` |
 
 ## The one inviolable rule: dependency direction
@@ -602,6 +630,7 @@ cargo xtask particles new <name> --sprite sprites/x | check | inspect <name> [--
 cargo xtask impostor new <name> --model models/x [--views N --pitch DEG --tile PX]   # pre-render a billboard atlas
 cargo xtask impostor bake <name>|--all | check | list [--json]                     # re-render / stale check / list
 cargo xtask agents sync   # mirror .agents/skills/ into .claude/skills/ (check: agents check)
+cargo test -p xtask --test water_shots -- --ignored   # water evidence: tiers, ripples, crate, bridge (target/evidence/water)
 cargo xtask new <name> --standalone <dir> [--git <url> --rev <r>]   # project outside this repo
 cargo xtask new <name> --standalone <dir> --template football       # ... started from Solid Eleven (blank|castle64|showcase|football)
 TRINO_GAME=solid-eleven cargo run -p trino-app-pc                  # play Solid Eleven (its own asset set)
@@ -871,6 +900,29 @@ cargo test --workspace
   output for `TRINO_EMU_IDLE` s) vs `timeout: … still printing`, and the ROM's
   `TRINO_STALL` lines (where the CPU waits). Parallel builds that swap make ares ~3×
   slower in wall time.
+- **`b.write(Big::new())` into a `Box::new_uninit()` still built the value on the N64
+  stack** when the constructor is deep: the showcase game (25 KB once `ModelParams`
+  grew 32 bytes per entity) put the self-test at 63.5 of 64 KB. Copy a `const fn
+  blank()` value from a `static` into the box (`ptr::copy_nonoverlapping`) and reset
+  it in place (`ShowcaseGame::reset_from_scene`). Every `ModelParams` byte is paid
+  `EntityStore` capacity times.
+- **Sutherland-Hodgman must interpolate an edge in one canonical direction.** Two
+  neighbors clipping a shared edge each from their own first vertex got slightly
+  different points, and the N64 showed one-pixel sky cracks in the river terrain.
+  `clip_plane` now always goes from the inside vertex.
+- **On the N64, translucent triangles must come after the batch's RSP commands.**
+  `flush_model_batch` sends the CPU triangles first and the RSP commands after. Water
+  in the CPU batch was painted over by the RSP-drawn riverbed. It has its own bucket,
+  flushed last.
+- **The RDP subtracts a tile's origin** (`rdpq_texparms_t::translate`): to sample a
+  layer at `uv·scale + offset`, translate it by `(1 − offset)·size`.
+- **Per-vertex effects smaller than the vertex spacing alias away.** A 16 × 4 ribbon
+  can't show a 0.55 m ripple. The per-vertex tiers draw a ring decal per ripple;
+  the PC evaluates them per pixel.
+- **WGSL:** a `ptr<uniform, T>` can't be a function parameter without an extension
+  (pass the index), and `set` is a reserved word.
+- **`cargo test --workspace` stops at the first failing test binary.** Use
+  `--no-fail-fast` to see every failure at once.
 - **`/tmp` may be a RAM disk (tmpfs).** A second `target/` there (a git worktree's build)
   filled RAM and killed rustc. Put extra worktrees and their targets on a real disk.
 
@@ -899,6 +951,14 @@ cargo test --workspace
   only when AO follows, and the 2D after the AO draws single-sampled over the resolved
   frame. An `AoPass` caches bind groups by size, not by view: invalidate it whenever
   the depth view it reads is recreated (`set_msaa`, resizes).
+- **MSAA and the per-pixel water share the scene pass on the PC.** The water's foam
+  reads a copy of the scene's depth taken before the first water draw, so the pass
+  splits there. With MSAA on, the first part holds its samples (`MsPass::Hold`: color
+  and depth stored, no resolve), the multisampled depth is copied into a multisampled
+  copy, and the rest resolves (`MsPass::Resolve`). The water pipelines have their own
+  multisampled set (`WaterGpu::ensure_ms`, built by the first `set_msaa(true)`; the
+  shader reads `texture_depth_multisampled_2d`). A new pipeline drawn in the scene pass
+  needs the same multisampled twin (`water::msaa_frames_draw_the_same_water`).
 - **Local padding sweeps don't predict CI's N64 frame.** CI builds with the newest
   nightly and its own paths: Solid Eleven's frame measured 33.9 ms there against
   30.3 ms locally on the same commit (iteration 2 went the other way, -0.4 ms). Keep

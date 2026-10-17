@@ -147,6 +147,13 @@ pub struct EntityId {
 }
 
 impl EntityId {
+    /// A handle no entity ever answers to (fills buffers such as the `ids`
+    /// of [`EntityStore::solids`]).
+    pub const NONE: EntityId = EntityId {
+        index: u16::MAX,
+        generation: u16::MAX,
+    };
+
     pub fn index(self) -> usize {
         self.index as usize
     }

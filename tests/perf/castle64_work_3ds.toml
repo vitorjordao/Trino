@@ -58,3 +58,14 @@ emitted = 25
 culled = 0
 gpu_draws = 22
 gpu_tris = 446
+
+[showcase-river]
+verts = 3043
+tris_in = 1752
+clipped = 77
+splits = 752
+backfaced = 750
+emitted = 1723
+culled = 0
+gpu_draws = 11
+gpu_tris = 1731

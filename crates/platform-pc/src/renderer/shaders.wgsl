@@ -399,6 +399,185 @@ fn fs_tri_lit(in: LitOut) -> @location(0) vec4<f32> {
 }
 
 // ---------------------------------------------------------------------------
+// Water pass (ADR 0015): translucent, depth-tested without writing depth,
+// drawn after the batch's other triangles. The vertices are the engine's
+// displaced, lit water vertices (trino_core::water) with their surface
+// (world position, normal, unlit color) and their water set (water.rs).
+// - fs_water_vertex: the console tiers (N64 look, 3DS profile): the two
+//   flowing layers blended half and half times the vertex color, like the
+//   N64's 2-cycle combiner and the 3DS's TexEnv stages.
+// - fs_water: the per-pixel tier (native): the swell's and the ripples'
+//   normals per pixel, Schlick Fresnel, the sun's glint and soft foam where
+//   the water meets the ground (the scene's depth, copied before the pass).
+
+struct WaterSet {
+    dirs: vec4<f32>,       // swell directions (x z, x z)
+    k_phase: vec4<f32>,    // frequencies (cycles/unit), phases (turns)
+    amp: vec4<f32>,        // heights, ripple response, gloss
+    detail: vec4<f32>,     // detail scale, scroll u v, ripple count
+    ripples: array<vec4<f32>, 4>, // x, z, age, strength
+    sun_dir: vec4<f32>,    // direction the light travels; w: ambient
+    sun_color: vec4<f32>,  // rgb; w: the clock (seconds)
+    ambient: vec4<f32>,    // ambient color
+    sky: vec4<f32>,        // reflected sky (the fog color with fog); w: fog on
+    fog: vec4<f32>,        // near, far, the T&L's near plane
+    eye: vec4<f32>,
+    fwd: vec4<f32>,        // the view's forward axis
+};
+
+struct WaterSets {
+    sets: array<WaterSet, 8>,
+};
+
+@group(3) @binding(0) var<uniform> water_sets: WaterSets;
+@group(3) @binding(1) var t_scene_depth: texture_depth_2d;
+
+const W_TAU: f32 = 6.28318530718;
+// trino_core::water's ripple constants.
+const RIPPLE_SPEED: f32 = 1.6;
+const RIPPLE_WAVELENGTH: f32 = 0.55;
+const RIPPLE_WIDTH: f32 = 0.7;
+const RIPPLE_LIFE: f32 = 2.2;
+
+// The detail layer's UV: the base UV (scrolled by the flow) times the
+// layer's scale, plus its own scroll (water.rs folds the base's out).
+fn water_detail_uv(uv: vec2<f32>, scale: f32, scroll: vec2<f32>) -> vec2<f32> {
+    return uv * max(scale, 1.0) + scroll;
+}
+
+@fragment
+fn fs_water_vertex(in: LitOut) -> @location(0) vec4<f32> {
+    let ws = &water_sets.sets[u32(in.params.y + 0.5) & 7u];
+    let scale = in.tex.y;
+    let duv = water_detail_uv(in.uv, scale, (*ws).detail.yz);
+    // Sampled unconditionally: textureSample requires uniform control flow.
+    var t0 = textureSample(t_sprite, s_sprite, in.uv);
+    var t1 = textureSample(t_detail, s_detail, duv);
+    if globals.look == 1u {
+        let point = in.tex.x > 0.5;
+        t0 = sample_n64(t_sprite, in.uv, point);
+        t1 = sample_n64(t_detail, duv, point);
+    }
+    var texel = t0.rgb;
+    if scale > 0.0 {
+        texel = mix(t0.rgb, t1.rgb, 0.5);
+    }
+    let c = vec4<f32>(in.color.rgb * texel, in.color.a);
+    if globals.look == 1u {
+        // The RDP blends with the full alpha; the stored color is 5551.
+        let q = quantize_5551(c, vec2<u32>(in.clip.xy));
+        return vec4<f32>(q.rgb, c.a);
+    }
+    return c;
+}
+
+// The swell's and the ripples' height gradient at world (x, z) (xy), and
+// the ripples' height (z): the functions the core displaces the vertices
+// with, exact here and per pixel.
+fn water_gradient(si: u32, p: vec2<f32>) -> vec3<f32> {
+    let ws = &water_sets.sets[si];
+    var g = vec2<f32>(0.0);
+    var rh = 0.0;
+    let dirs = (*ws).dirs;
+    let kp = (*ws).k_phase;
+    let amp = (*ws).amp;
+    for (var i = 0; i < 2; i++) {
+        var d = dirs.xy;
+        var k = kp.x;
+        var ph = kp.z;
+        var a = amp.x;
+        if i == 1 {
+            d = dirs.zw;
+            k = kp.y;
+            ph = kp.w;
+            a = amp.y;
+        }
+        let t = k * dot(d, p) - ph;
+        g += d * (a * W_TAU * k * cos(W_TAU * t));
+    }
+    let n = u32((*ws).detail.w + 0.5);
+    for (var i = 0u; i < n; i++) {
+        let r = (*ws).ripples[i];
+        let dv = p - r.xy;
+        let d = length(dv);
+        let rad = r.z * RIPPLE_SPEED;
+        let q = (d - rad) / RIPPLE_WIDTH;
+        let e = 1.0 - q * q;
+        if e <= 0.0 || d < 1e-4 {
+            continue;
+        }
+        let decay = pow(max(1.0 - r.z / RIPPLE_LIFE, 0.0), 2.0);
+        let s = r.w * amp.z * decay;
+        let t = (d - rad) / RIPPLE_WAVELENGTH;
+        let de = 2.0 * e * (-2.0 * q / RIPPLE_WIDTH);
+        let dh = s * (de * cos(W_TAU * t) - e * e * (W_TAU / RIPPLE_WAVELENGTH) * sin(W_TAU * t));
+        g += dv * (dh / d);
+        rh += s * e * e * cos(W_TAU * t);
+    }
+    // Detail the vertices can't carry: two short, fast capillary waves.
+    let clock = (*ws).sun_color.w;
+    let fine = select(0.5, 1.0, amp.x > 0.0);
+    let c1 = vec2<f32>(0.83, 0.56);
+    let c2 = vec2<f32>(-0.42, 0.91);
+    g += c1 * (0.012 * fine * W_TAU * 2.3 * cos(W_TAU * (2.3 * dot(c1, p) - 1.3 * clock)));
+    g += c2 * (0.008 * fine * W_TAU * 3.7 * cos(W_TAU * (3.7 * dot(c2, p) - 1.7 * clock)));
+    return vec3<f32>(g, rh);
+}
+
+@fragment
+fn fs_water(in: LitOut) -> @location(0) vec4<f32> {
+    let si = u32(in.params.y + 0.5) & 7u;
+    let ws = &water_sets.sets[si];
+    let scale = in.tex.y;
+    let duv = water_detail_uv(in.uv, scale, (*ws).detail.yz);
+    let t0 = textureSample(t_sprite, s_sprite, in.uv);
+    let t1 = textureSample(t_detail, s_detail, duv);
+    var texel = t0.rgb;
+    if scale > 0.0 {
+        texel = mix(t0.rgb, t1.rgb, 0.5);
+    }
+    let p = in.world;
+    let gh = water_gradient(si, p.xz);
+    let n = normalize(vec3<f32>(-gh.x, 1.0, -gh.y));
+    // The global light from the per-pixel normal.
+    let sun = -normalize((*ws).sun_dir.xyz);
+    let amb = (*ws).sun_dir.w;
+    let k = amb * (*ws).ambient.rgb + (1.0 - amb) * max(dot(n, sun), 0.0) * (*ws).sun_color.rgb;
+    var rgb = in.base.rgb * texel * k;
+    // Fresnel: the sky at grazing angles, where water also turns opaque.
+    let v = normalize((*ws).eye.xyz - p);
+    let f = 0.02 + 0.98 * pow(1.0 - max(dot(n, v), 0.0), 5.0);
+    rgb = mix(rgb, (*ws).sky.rgb, f * 0.85);
+    var a = in.base.a + (1.0 - in.base.a) * f;
+    // The sun's glint.
+    let gloss = (*ws).amp.w;
+    if gloss > 0.0 && dot(n, sun) > 0.0 {
+        rgb += (*ws).sun_color.rgb * specular(n, sun, v, gloss) * 1.5;
+    }
+    // Depth: the water column under this pixel, from the scene's depth.
+    let zw = dot(p - (*ws).eye.xyz, (*ws).fwd.xyz);
+    let dz = textureLoad(t_scene_depth, vec2<i32>(in.clip.xy), 0);
+    let zs = (*ws).fog.z / max(1.0 - dz, 1e-6);
+    let thick = zs - zw;
+    // Shallow water shows more of the bed; soft foam where it meets the
+    // ground, broken up by the detail layer.
+    a *= mix(0.6, 1.0, clamp(thick / 0.8, 0.0, 1.0));
+    let edge = clamp(1.0 - thick / 0.14, 0.0, 1.0);
+    let foam = edge * edge * smoothstep(0.55, 0.9, t1.r + edge * 0.35);
+    // Ripple crests catch the light: thin bright rings.
+    let crest = clamp(gh.z * 18.0, 0.0, 1.0);
+    let white = max(foam * 0.8, crest * 0.6);
+    rgb = mix(rgb, vec3<f32>(0.93, 0.97, 1.0), white);
+    a = max(a, max(foam * 0.9, crest * 0.7));
+    if (*ws).sky.w > 0.5 {
+        let fog = (*ws).fog;
+        let ff = clamp((zw - fog.x) / (fog.y - fog.x), 0.0, 1.0);
+        rgb = mix(rgb, (*ws).sky.rgb, ff);
+    }
+    return vec4<f32>(min(rgb, vec3<f32>(1.0)), clamp(a, 0.0, 1.0));
+}
+
+// ---------------------------------------------------------------------------
 // Blit pass: offscreen framebuffer -> window surface, nearest-neighbor.
 // Integer scaling and letterboxing are done with the render-pass viewport.
 

@@ -18,6 +18,7 @@ mod n64;
 mod particles;
 mod perf;
 mod project;
+mod river_assets;
 mod scene;
 mod showcase_assets;
 mod standalone;
@@ -592,6 +593,8 @@ fn gen_assets_into(root: &Path) {
     // castle64 (the 3D showcase): blocks, articulated player, boar, doors.
     castle64_assets::gen_all(root, &|path, w, h, rgba| write_png(path, w, h, rgba));
     showcase_assets::gen_all(root, &|path, w, h, rgba| write_png(path, w, h, rgba));
+    // The showcase's river: carved terrain, water ribbon, bridge, layers.
+    river_assets::gen_all(root, &|path, w, h, rgba| write_png(path, w, h, rgba));
     // trino5x7: the default pixel font (bitmap text on every target).
     font_assets::gen_all(root, &|path, w, h, rgba| write_png(path, w, h, rgba));
 }

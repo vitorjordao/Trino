@@ -10,12 +10,64 @@ use trino_scene::{MaterialDef, ShadingDef};
 
 use crate::log::{Level, Log};
 use crate::panels::hierarchy::shape_glyph;
-use crate::panels::inspector::{material_editor, primitive_editor};
+use crate::panels::inspector::{material_editor, primitive_editor, water_editor};
 use crate::theme::icon;
 
 struct MatState {
     def: MaterialDef,
     changes: usize,
+}
+
+/// The material's water section: off by default, on with the engine's
+/// defaults and every slider, off again; a nudged slider reports a change
+/// and the material file round-trips it.
+#[test]
+fn water_editor_turns_a_surface_on_and_edits_it() {
+    let mut h = Harness::new_ui_state(
+        |ui, s: &mut MatState| {
+            if water_editor(ui, &mut s.def.water) {
+                s.changes += 1;
+            }
+        },
+        MatState {
+            def: MaterialDef::default(),
+            changes: 0,
+        },
+    );
+    h.run();
+    assert!(h.query_by_label("Wave height").is_none(), "off: no sliders");
+    h.get_by_label("Water surface").click();
+    h.run();
+    assert_eq!(h.state().def.water, Some(trino_scene::WaterDef::default()));
+    for label in [
+        "Flow u",
+        "Flow v",
+        "Detail flow u",
+        "Detail flow v",
+        "Wave height",
+        "Wave frequency",
+        "Ripples",
+    ] {
+        assert!(h.query_by_label(label).is_some(), "{label}");
+    }
+    let sliders: Vec<_> = h.get_all_by_role(Role::Slider).collect();
+    assert_eq!(sliders.len(), 7);
+    // Keyboard on the wave height slider (the fifth): up a step.
+    sliders[4].focus();
+    h.run();
+    h.key_press(eframe::egui::Key::ArrowRight);
+    h.run();
+    let w = h.state().def.water.unwrap();
+    assert!(
+        w.wave_amplitude > trino_scene::WaterDef::default().wave_amplitude,
+        "{w:?}"
+    );
+    let def = &h.state().def;
+    assert_eq!(&MaterialDef::from_ron(&def.to_ron()).unwrap(), def);
+    h.get_by_label("Water surface").click();
+    h.run();
+    assert_eq!(h.state().def.water, None);
+    assert!(h.state().changes >= 3);
 }
 
 #[test]
@@ -688,4 +740,25 @@ fn axis_widget_snaps_orbits_and_toggles_the_projection() {
         h.state().events,
         vec![AxisEvent::ToggleOrtho, AxisEvent::ToggleOrtho]
     );
+}
+
+/// Framing a big object backs the Scene view's eye off; its fog follows,
+/// so the framed object isn't painted the fog's color. Near, the scene's
+/// fog is unchanged, and no fog stays no fog.
+#[test]
+fn scene_view_fog_follows_a_far_orbit() {
+    use crate::viewport::scene_view_fog;
+    use trino_core::{Color, Fog};
+    let fog = Fog {
+        color: Color::rgb(130, 180, 230),
+        near: 16.0,
+        far: 42.0,
+    };
+    let near = scene_view_fog(fog, 8.0);
+    assert_eq!((near.near, near.far), (16.0, 42.0));
+    let far = scene_view_fog(fog, 45.0);
+    assert_eq!((far.near, far.far), (49.0, 75.0));
+    assert!(far.far > 45.0, "the target stays clear of full fog");
+    let none = Fog { far: 0.0, ..fog };
+    assert_eq!(scene_view_fog(none, 45.0).far, 0.0);
 }

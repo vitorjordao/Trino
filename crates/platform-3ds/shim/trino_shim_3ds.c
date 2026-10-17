@@ -32,6 +32,9 @@
 #include "tri3d_shbin.h"
 // tnl3d.v.pica: vertex T&L on the GPU for static meshes (trino_gpu_draw).
 #include "tnl3d_shbin.h"
+// water.v.pica: water surfaces displaced and shaded on the GPU
+// (trino_water_draw, ADR 0015).
+#include "water_shbin.h"
 // Which winding the GPU T&L path culls as back faces (checked by the
 // `gpu tnl` self-test step against the CPU path).
 #ifndef TRINO_TNL_CULL
@@ -51,6 +54,13 @@ static DVLB_s* s_tri3d_dvlb = NULL;
 static shaderProgram_s s_tri3d;
 static int s_tri3d_proj = -1;
 static int s_tri3d_detail = -1;
+static int s_tri3d_detailoff = -1;
+// Water (trino_3d_material flags bit 8, ADR 0015): the two layers blended
+// half and half times the vertex color, alpha from the vertex, depth
+// tested but not written; the detail layer offset by s_detail_off (its
+// own flow).
+static int s_water = 0;
+static float s_detail_off[2] = {0.0f, 0.0f};
 // The next 3D draws' sampling (trino_3d_material): point filter, and a
 // detail sheet multiplied over the texture (texture unit 1) tiling
 // s_detail_scale times per base repeat.
@@ -84,6 +94,13 @@ static int s_tnl3d_unif[TNL_UNIFORMS];
 // first (trino_tnl_leave), which hands the GPU back to citro2d.
 static int s_tnl_on = 0;
 
+// The water program and its uniforms (in water.v.pica's order; mvp and
+// model are matrices, the rest one vector each).
+static DVLB_s* s_water_dvlb = NULL;
+static shaderProgram_s s_water_prog;
+#define WATER_UNIFORMS 23
+static int s_water_unif[WATER_UNIFORMS];
+
 static void trino_tnl_leave(void)
 {
     if (s_tnl_on) {
@@ -100,6 +117,7 @@ static void trino_tex3d_init(void)
     shaderProgramSetVsh(&s_tri3d, &s_tri3d_dvlb->DVLE[0]);
     s_tri3d_proj = shaderInstanceGetUniformLocation(s_tri3d.vertexShader, "projection");
     s_tri3d_detail = shaderInstanceGetUniformLocation(s_tri3d.vertexShader, "detail");
+    s_tri3d_detailoff = shaderInstanceGetUniformLocation(s_tri3d.vertexShader, "detailoff");
     // The same projections citro2d builds for each screen.
     Mtx_OrthoTilt(&s_proj_top, 0.0f, 400.0f, 240.0f, 0.0f, 1.0f, -1.0f, true);
     Mtx_OrthoTilt(&s_proj_bottom, 0.0f, 320.0f, 240.0f, 0.0f, 1.0f, -1.0f, true);
@@ -112,6 +130,17 @@ static void trino_tex3d_init(void)
         "mvp", "lightdir", "ambient", "diffuse", "tint", "emissive", "fogrow", "fogcolor"};
     for (int i = 0; i < TNL_UNIFORMS; i++) {
         s_tnl3d_unif[i] = shaderInstanceGetUniformLocation(s_tnl3d.vertexShader, names[i]);
+    }
+
+    s_water_dvlb = DVLB_ParseFile((u32*)water_shbin, water_shbin_size);
+    shaderProgramInit(&s_water_prog);
+    shaderProgramSetVsh(&s_water_prog, &s_water_dvlb->DVLE[0]);
+    const char* wnames[WATER_UNIFORMS] = {
+        "mvp",      "model",   "wdir",     "wk",    "wamp",   "rx",       "rz",     "rrad",
+        "rstr",     "lightdir", "ambient", "diffuse", "tint", "emissive", "eye",    "sky",
+        "glint",    "fogrow",  "fogcolor", "scroll", "detailoff", "sub0",  "detail"};
+    for (int i = 0; i < WATER_UNIFORMS; i++) {
+        s_water_unif[i] = shaderInstanceGetUniformLocation(s_water_prog.vertexShader, wnames[i]);
     }
 }
 
@@ -379,11 +408,14 @@ void trino_fill_rect(const trino_fill_t* f)
 // Sampling of the next trino_3d_draw calls: `flags` bit 1 point filter,
 // bits 4..7 the detail layer's repeats per base repeat (log2); `detail`
 // (NULL = none) is a sprite sheet multiplied over the texture.
-void trino_3d_material(void* detail, uint32_t flags)
+void trino_3d_material(void* detail, uint32_t flags, uint32_t scroll)
 {
     s_point = (flags >> 1) & 1;
     s_detail_sheet = (C2D_SpriteSheet)detail;
     s_detail_scale = (float)(1u << ((flags >> 4) & 15));
+    s_water = (flags >> 8) & 1;
+    s_detail_off[0] = s_water ? (float)(scroll >> 16) / 65536.0f : 0.0f;
+    s_detail_off[1] = s_water ? (float)(scroll & 0xFFFF) / 65536.0f : 0.0f;
 }
 
 // Draw `count` vertices (count / 3 triangles), TRI3D_FLOATS each, in
@@ -437,6 +469,8 @@ void trino_3d_draw(const float* v, uint32_t count, void* sheet, uint32_t clamp)
     C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, s_tri3d_proj, s_proj);
     int detail = sheet && s_detail_sheet;
     C3D_FVUnifSet(GPU_VERTEX_SHADER, s_tri3d_detail, s_detail_scale, s_detail_scale, 0.0f, 0.0f);
+    C3D_FVUnifSet(GPU_VERTEX_SHADER, s_tri3d_detailoff, s_detail_off[0], s_detail_off[1], 0.0f,
+                  0.0f);
     C3D_AttrInfo* attr = C3D_GetAttrInfo();
     AttrInfo_Init(attr);
     AttrInfo_AddLoader(attr, 0, GPU_FLOAT, 4); // x, y, depth, w
@@ -470,17 +504,41 @@ void trino_3d_draw(const float* v, uint32_t count, void* sheet, uint32_t clamp)
         C3D_TexEnvInit(C3D_GetTexEnv(i));
     }
     if (detail) {
-        // Stage 1: the lit texel times the detail texel (alpha stays).
         C2D_Image dimg = C2D_SpriteSheetGetImage(s_detail_sheet, 0);
         GPU_TEXTURE_FILTER_PARAM filter = s_point ? GPU_NEAREST : GPU_LINEAR;
         C3D_TexSetFilter(dimg.tex, filter, filter);
         C3D_TexSetWrap(dimg.tex, GPU_REPEAT, GPU_REPEAT);
         C3D_TexBind(1, dimg.tex);
         C3D_TexEnv* env1 = C3D_GetTexEnv(1);
-        C3D_TexEnvSrc(env1, C3D_RGB, GPU_PREVIOUS, GPU_TEXTURE1, 0);
-        C3D_TexEnvFunc(env1, C3D_RGB, GPU_MODULATE);
+        if (s_water) {
+            // Water: stage 0 blends the layers half and half (the N64's
+            // ENV_ALPHA lerp), stage 1 multiplies by the vertex color; the
+            // alpha is the vertex's.
+            C3D_TexEnvInit(env);
+            C3D_TexEnvSrc(env, C3D_RGB, GPU_TEXTURE1, GPU_TEXTURE0, GPU_CONSTANT);
+            C3D_TexEnvFunc(env, C3D_RGB, GPU_INTERPOLATE);
+            C3D_TexEnvColor(env, 0x80808080);
+            C3D_TexEnvSrc(env, C3D_Alpha, GPU_PRIMARY_COLOR, 0, 0);
+            C3D_TexEnvFunc(env, C3D_Alpha, GPU_REPLACE);
+            C3D_TexEnvSrc(env1, C3D_RGB, GPU_PREVIOUS, GPU_PRIMARY_COLOR, 0);
+            C3D_TexEnvFunc(env1, C3D_RGB, GPU_MODULATE);
+        } else {
+            // Stage 1: the lit texel times the detail texel (alpha stays).
+            C3D_TexEnvSrc(env1, C3D_RGB, GPU_PREVIOUS, GPU_TEXTURE1, 0);
+            C3D_TexEnvFunc(env1, C3D_RGB, GPU_MODULATE);
+        }
         C3D_TexEnvSrc(env1, C3D_Alpha, GPU_PREVIOUS, 0, 0);
         C3D_TexEnvFunc(env1, C3D_Alpha, GPU_REPLACE);
+    } else if (s_water && sheet) {
+        // Water with one layer: the texel's color, the vertex's alpha.
+        C3D_TexEnvSrc(env, C3D_Alpha, GPU_PRIMARY_COLOR, 0, 0);
+        C3D_TexEnvFunc(env, C3D_Alpha, GPU_REPLACE);
+    }
+    if (s_water) {
+        // Translucent: blended over what the batch drew, depth tested but
+        // not written (C2D_Prepare below restores citro2d's depth state).
+        C3D_AlphaTest(false, GPU_ALWAYS, 0);
+        C3D_DepthTest(true, GPU_GEQUAL, GPU_WRITE_COLOR);
     }
     C3D_DrawArrays(GPU_TRIANGLES, s_vused, count);
     s_vused += count;
@@ -574,6 +632,135 @@ void trino_gpu_draw(void* mesh, const float* u, uint32_t flags)
     // arrive clockwise.
     C3D_CullFace((flags & 1) ? TRINO_TNL_CULL : GPU_CULL_NONE);
     C3D_DrawElements(GPU_TRIANGLES, m->count, C3D_UNSIGNED_SHORT, m->indices);
+}
+
+// ---------------------------------------------------------------------------
+// GPU water (ADR 0015): a water mesh in linear memory (x, y, z, u, v floats,
+// r, g, b, a bytes), drawn by water.v.pica with the material set by
+// trino_3d_material (the detail layer, the point filter, water on): the
+// layers blended half and half times the vertex color, blended over the
+// frame, depth tested but not written.
+
+#define WATER_VERTEX_BYTES 24
+
+void* trino_water_mesh(const void* verts, uint32_t nverts, const uint16_t* idx, uint32_t nidx)
+{
+    trino_gpu_mesh_t* m = (trino_gpu_mesh_t*)malloc(sizeof(trino_gpu_mesh_t));
+    if (!m) return NULL;
+    m->verts = linearAlloc(nverts * WATER_VERTEX_BYTES);
+    m->indices = (u16*)linearAlloc(nidx * sizeof(u16));
+    if (!m->verts || !m->indices) {
+        if (m->verts) linearFree(m->verts);
+        if (m->indices) linearFree(m->indices);
+        free(m);
+        return NULL;
+    }
+    memcpy(m->verts, verts, nverts * WATER_VERTEX_BYTES);
+    memcpy(m->indices, idx, nidx * sizeof(u16));
+    GSPGPU_FlushDataCache(m->verts, nverts * WATER_VERTEX_BYTES);
+    GSPGPU_FlushDataCache(m->indices, nidx * sizeof(u16));
+    m->count = nidx;
+    return m;
+}
+
+// Draw a trino_water_mesh. `u`: the 4x4 matrix from the world to the
+// screen's pixels and depth band times the view depth (16 floats, rows),
+// then the model matrix's 3 rows and 19 vectors in water.v.pica's order
+// (wdir .. detailoff): 104 floats. `sheet` = the base texture (NULL =
+// vertex colors). flags bit 0: cull back faces.
+void trino_water_draw(void* mesh, const float* u, void* sheet, uint32_t flags)
+{
+    trino_gpu_mesh_t* m = (trino_gpu_mesh_t*)mesh;
+    if (!m) return;
+    trino_tnl_leave();
+    C3D_Mtx screen, mvp;
+    for (int r = 0; r < 4; r++) {
+        screen.r[r].x = u[r * 4 + 0];
+        screen.r[r].y = u[r * 4 + 1];
+        screen.r[r].z = u[r * 4 + 2];
+        screen.r[r].w = u[r * 4 + 3];
+    }
+    Mtx_Multiply(&mvp, s_proj, &screen);
+
+    C2D_Flush();
+    C3D_BindProgram(&s_water_prog);
+    C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, s_water_unif[0], &mvp);
+    for (int r = 0; r < 3; r++) {
+        const float* v = u + 16 + r * 4;
+        C3D_FVUnifSet(GPU_VERTEX_SHADER, s_water_unif[1] + r, v[0], v[1], v[2], v[3]);
+    }
+    for (int i = 2; i < 21; i++) {
+        const float* v = u + 28 + (i - 2) * 4;
+        C3D_FVUnifSet(GPU_VERTEX_SHADER, s_water_unif[i], v[0], v[1], v[2], v[3]);
+    }
+    float l = 0.0f, t = 0.0f, w = 1.0f, h = 1.0f;
+    C2D_Image img = {0};
+    if (sheet) {
+        img = C2D_SpriteSheetGetImage((C2D_SpriteSheet)sheet, 0);
+        l = img.subtex->left;
+        t = img.subtex->top;
+        w = img.subtex->right - l;
+        h = img.subtex->bottom - t;
+    }
+    C3D_FVUnifSet(GPU_VERTEX_SHADER, s_water_unif[21], l, t, w, h);
+    C3D_FVUnifSet(GPU_VERTEX_SHADER, s_water_unif[22], s_detail_scale, s_detail_scale, 0.0f,
+                  0.0f);
+
+    C3D_AttrInfo* attr = C3D_GetAttrInfo();
+    AttrInfo_Init(attr);
+    AttrInfo_AddLoader(attr, 0, GPU_FLOAT, 3);         // position
+    AttrInfo_AddLoader(attr, 1, GPU_FLOAT, 2);         // uv
+    AttrInfo_AddLoader(attr, 2, GPU_UNSIGNED_BYTE, 4); // color
+    C3D_BufInfo* buf = C3D_GetBufInfo();
+    BufInfo_Init(buf);
+    BufInfo_Add(buf, m->verts, WATER_VERTEX_BYTES, 3, 0x210);
+
+    C3D_TexEnv* env = C3D_GetTexEnv(0);
+    C3D_TexEnvInit(env);
+    for (int i = 1; i < 6; i++) {
+        C3D_TexEnvInit(C3D_GetTexEnv(i));
+    }
+    GPU_TEXTURE_FILTER_PARAM filter = s_point ? GPU_NEAREST : GPU_LINEAR;
+    int detail = sheet && s_detail_sheet;
+    if (sheet) {
+        C3D_TexSetFilter(img.tex, filter, filter);
+        C3D_TexSetWrap(img.tex, GPU_REPEAT, GPU_REPEAT);
+        C3D_TexBind(0, img.tex);
+    }
+    if (detail) {
+        C2D_Image dimg = C2D_SpriteSheetGetImage(s_detail_sheet, 0);
+        C3D_TexSetFilter(dimg.tex, filter, filter);
+        C3D_TexSetWrap(dimg.tex, GPU_REPEAT, GPU_REPEAT);
+        C3D_TexBind(1, dimg.tex);
+        // Stage 0: the layers half and half; stage 1: times the vertex
+        // color. The alpha is the vertex's.
+        C3D_TexEnvSrc(env, C3D_RGB, GPU_TEXTURE1, GPU_TEXTURE0, GPU_CONSTANT);
+        C3D_TexEnvFunc(env, C3D_RGB, GPU_INTERPOLATE);
+        C3D_TexEnvColor(env, 0x80808080);
+        C3D_TexEnvSrc(env, C3D_Alpha, GPU_PRIMARY_COLOR, 0, 0);
+        C3D_TexEnvFunc(env, C3D_Alpha, GPU_REPLACE);
+        C3D_TexEnv* env1 = C3D_GetTexEnv(1);
+        C3D_TexEnvSrc(env1, C3D_RGB, GPU_PREVIOUS, GPU_PRIMARY_COLOR, 0);
+        C3D_TexEnvFunc(env1, C3D_RGB, GPU_MODULATE);
+        C3D_TexEnvSrc(env1, C3D_Alpha, GPU_PREVIOUS, 0, 0);
+        C3D_TexEnvFunc(env1, C3D_Alpha, GPU_REPLACE);
+    } else if (sheet) {
+        C3D_TexEnvSrc(env, C3D_RGB, GPU_TEXTURE0, GPU_PRIMARY_COLOR, 0);
+        C3D_TexEnvFunc(env, C3D_RGB, GPU_MODULATE);
+        C3D_TexEnvSrc(env, C3D_Alpha, GPU_PRIMARY_COLOR, 0, 0);
+        C3D_TexEnvFunc(env, C3D_Alpha, GPU_REPLACE);
+    } else {
+        C3D_TexEnvSrc(env, C3D_Both, GPU_PRIMARY_COLOR, 0, 0);
+        C3D_TexEnvFunc(env, C3D_Both, GPU_REPLACE);
+    }
+    C3D_AlphaTest(false, GPU_ALWAYS, 0);
+    C3D_DepthTest(true, GPU_GEQUAL, GPU_WRITE_COLOR);
+    // The tilt projection mirrors the screen (see trino_gpu_draw).
+    C3D_CullFace((flags & 1) ? TRINO_TNL_CULL : GPU_CULL_NONE);
+    C3D_DrawElements(GPU_TRIANGLES, m->count, C3D_UNSIGNED_SHORT, m->indices);
+    C3D_CullFace(GPU_CULL_NONE);
+    // Hand the GPU back to citro2d (program, attributes, texenv, depth).
+    C2D_Prepare();
 }
 
 // ---------------------------------------------------------------------------

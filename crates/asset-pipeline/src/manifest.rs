@@ -139,6 +139,11 @@ pub struct ModelDecl {
     /// nothing).
     #[serde(default)]
     pub platforms: Option<Vec<String>>,
+    /// Bake ambient occlusion into the vertex colors (`ao = true`, or
+    /// `ao = { strength = 0.8, distance = 0.5, rays = 64, ground = true }`):
+    /// how the consoles get AO, at no run-time cost (`crate::ao`).
+    #[serde(default)]
+    pub ao: Option<crate::ao::AoDecl>,
 }
 
 impl ModelDecl {
@@ -157,6 +162,7 @@ impl ModelDecl {
         opts.once = self.once.clone();
         opts.texture = self.texture.clone();
         opts.smooth = self.skinning.as_deref() == Some("smooth");
+        opts.ao = self.ao.as_ref().and_then(|a| a.bake());
         opts
     }
 }
@@ -327,6 +333,47 @@ pub mod edit {
         Err(format!("model `{name}` has no `file` line"))
     }
 
+    /// Set (`Some(value)`, a TOML value such as `{ strength = 0.8 }`) or
+    /// remove (`None`) the `ao` key of `[models.<name>]`: baked vertex
+    /// ambient occlusion (`crate::ao`). Keeps every other line.
+    pub fn set_model_ao(text: &str, name: &str, value: Option<&str>) -> Result<String, String> {
+        let header = format!("[models.{name}]");
+        let mut lines: Vec<String> = text.lines().map(String::from).collect();
+        let start = lines
+            .iter()
+            .position(|l| l.trim() == header)
+            .ok_or_else(|| format!("model `{name}` not found in the manifest"))?;
+        // The table's lines: up to the next header (or the end), without
+        // the blank lines and comments before that header.
+        let mut end = lines
+            .iter()
+            .skip(start + 1)
+            .position(|l| l.trim_start().starts_with('['))
+            .map_or(lines.len(), |i| start + 1 + i);
+        while end > start + 1 && {
+            let t = lines[end - 1].trim();
+            t.is_empty() || t.starts_with('#')
+        } {
+            end -= 1;
+        }
+        let is_ao = |l: &str| {
+            let t = l.trim_start();
+            t.starts_with("ao") && t[2..].trim_start().starts_with('=')
+        };
+        let at = (start + 1..end).find(|&i| is_ao(&lines[i]));
+        match (at, value) {
+            (Some(i), Some(v)) => lines[i] = format!("ao = {v}"),
+            (Some(i), None) => {
+                lines.remove(i);
+            }
+            (None, Some(v)) => lines.insert(end, format!("ao = {v}")),
+            (None, None) => return Ok(text.to_string()),
+        }
+        let mut out = lines.join("\n");
+        out.push('\n');
+        Ok(out)
+    }
+
     pub fn has_table(text: &str, kind: &str, name: &str) -> bool {
         let header = format!("[{kind}.{name}]");
         text.lines().any(|l| l.trim() == header)
@@ -343,6 +390,27 @@ pub mod edit {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[test]
+        fn set_model_ao_adds_replaces_and_removes_only_that_line() {
+            let text = "# top\nversion = 1\n\n[models.rock]\nfile = \"models/rock.glb\"\n\n# a crate\n[models.crate]\nfile = \"models/crate.glb\"\nanim_fps = 12.0\n";
+            let added = set_model_ao(text, "rock", Some("{ strength = 0.8 }")).unwrap();
+            assert!(added.contains(
+                "[models.rock]\nfile = \"models/rock.glb\"\nao = { strength = 0.8 }\n\n# a crate"
+            ));
+            let parsed: crate::Manifest = toml::from_str(&added).unwrap();
+            assert!(parsed.models["rock"].options().ao.is_some());
+            assert!(parsed.models["crate"].options().ao.is_none());
+            let replaced = set_model_ao(&added, "rock", Some("true")).unwrap();
+            assert!(replaced.contains("ao = true\n") && !replaced.contains("strength"));
+            // The last table: appended at its end.
+            let last = set_model_ao(text, "crate", Some("true")).unwrap();
+            assert!(last.ends_with("anim_fps = 12.0\nao = true\n"));
+            let removed = set_model_ao(&replaced, "rock", None).unwrap();
+            assert_eq!(removed, text);
+            assert_eq!(set_model_ao(text, "rock", None).unwrap(), text);
+            assert!(set_model_ao(text, "ghost", None).is_err());
+        }
 
         #[test]
         fn add_and_retarget_keep_comments() {

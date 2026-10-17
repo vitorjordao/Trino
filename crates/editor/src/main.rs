@@ -77,6 +77,7 @@ pub const EDITOR_HOOKS: &[&str] = &[
     "TRINO_EDITOR_PALETTE",
     "TRINO_EDITOR_GAME",
     "TRINO_EDITOR_LOD_PREVIEW",
+    "TRINO_EDITOR_AO",
 ];
 
 /// What the editor opens on start.

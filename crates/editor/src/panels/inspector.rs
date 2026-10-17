@@ -1248,6 +1248,7 @@ fn model_asset(app: &mut App, ui: &mut egui::Ui, logical: &str) {
         m.max[2] - m.min[2],
     ];
     let mut proxy = m.proxy.clone();
+    let baked_ao = m.ao.clone();
 
     card().show(ui, |ui| {
         egui::Grid::new("model-stats")
@@ -1303,6 +1304,7 @@ fn model_asset(app: &mut App, ui: &mut egui::Ui, logical: &str) {
     });
     ui.add_space(8.0);
     crate::panels::impostor::section(app, ui, logical, tris, verts);
+    baked_ao_section(app, ui, &name, baked_ao.as_ref());
 
     if let Some(p) = &mut proxy {
         theme::component(
@@ -1349,6 +1351,90 @@ fn model_asset(app: &mut App, ui: &mut egui::Ui, logical: &str) {
             },
         );
     }
+}
+
+/// Model › Ambient occlusion (baked): the manifest's `ao` for this model.
+/// The bake darkens its vertex colors where the model hides the sky from
+/// itself — how the N64 and 3DS get AO, at no run-time cost.
+fn baked_ao_section(
+    app: &mut App,
+    ui: &mut egui::Ui,
+    name: &str,
+    baked: Option<&trino_asset_pipeline::AoBake>,
+) {
+    let top = ui.cursor().min;
+    if app.inspect_focus.as_deref() == Some("ao") {
+        ui.scroll_to_rect(
+            egui::Rect::from_min_size(top, Vec2::new(1.0, 1.0)),
+            Some(egui::Align::TOP),
+        );
+    }
+    theme::component(
+        ui,
+        "c-ao-bake",
+        icon::CIRCLE_HALF_TILT,
+        c::TEXT,
+        "Ambient occlusion (baked)",
+        |ui| {
+            ui.label(
+                RichText::new(
+                    "Bakes occlusion into the vertex colors: free on the N64 and 3DS, \
+                     the same picture on every target. Rewrites the manifest and rebakes.",
+                )
+                .size(11.5)
+                .color(c::TEXT_FAINT),
+            );
+            let id = ui.id().with(("ao-bake", name));
+            let mut draft = ui.data_mut(|d| {
+                d.get_temp::<trino_asset_pipeline::AoBake>(id)
+                    .unwrap_or_else(|| baked.cloned().unwrap_or_default())
+            });
+            theme::prop(ui, "Strength", |ui| {
+                ui.add(egui::Slider::new(&mut draft.strength, 0.0..=1.0));
+            });
+            theme::prop(ui, "Distance", |ui| {
+                ui.add(
+                    egui::DragValue::new(&mut draft.distance)
+                        .range(0.0..=100.0)
+                        .speed(0.02)
+                        .suffix(" m"),
+                )
+                .on_hover_text("How far occluders count. 0 = a fifth of the model's size");
+            });
+            theme::prop(ui, "Rays", |ui| {
+                ui.add(egui::Slider::new(&mut draft.rays, 16..=256).logarithmic(true));
+            });
+            ui.checkbox(
+                &mut draft.ground,
+                "Ground contact (floor at its lowest point)",
+            );
+            ui.horizontal(|ui| {
+                let label = if baked.is_some() {
+                    "Re-bake AO"
+                } else {
+                    "Bake AO to vertex colors"
+                };
+                if theme::primary_button(ui, format!("{}  {label}", icon::CIRCLE_HALF_TILT))
+                    .clicked()
+                {
+                    app.cmds
+                        .push(Cmd::SetModelAo(name.to_string(), Some(draft.clone())));
+                }
+                if baked.is_some() && ui.button(format!("{}  Remove", icon::TRASH)).clicked() {
+                    app.cmds.push(Cmd::SetModelAo(name.to_string(), None));
+                }
+            });
+            if let Some(b) = baked {
+                ui.label(
+                    RichText::new(format!("Baked: ao = {}", b.to_toml()))
+                        .monospace()
+                        .size(11.0)
+                        .color(c::TEXT_WEAK),
+                );
+            }
+            ui.data_mut(|d| d.insert_temp(id, draft));
+        },
+    );
 }
 
 /// Fields for a placeholder primitive. Returns true on change.
@@ -1641,6 +1727,21 @@ fn scene_settings(app: &mut App, ui: &mut egui::Ui) {
             }
         }
     });
+    let ao_top = ui.cursor().min;
+    theme::component(
+        ui,
+        "env-ao",
+        icon::CIRCLE_HALF_TILT,
+        c::TEXT_WEAK,
+        "Ambient Occlusion",
+        |ui| ambient_occlusion(ui, &mut env.ao),
+    );
+    if app.inspect_focus.as_deref() == Some("ao") {
+        ui.scroll_to_rect(
+            egui::Rect::from_min_size(ao_top, Vec2::new(1.0, 1.0)),
+            Some(egui::Align::TOP),
+        );
+    }
     theme::component(
         ui,
         "env-cam",
@@ -1707,6 +1808,68 @@ fn scene_settings(app: &mut App, ui: &mut egui::Ui) {
 /// reason a draw misses the RSP, the 3DS's triangles, and each draw sent
 /// for nothing (`cargo xtask scene budget` prints the same). Returns the
 /// name of an unseen draw the user clicked.
+/// The scene's screen-space ambient occlusion (`Environment::ao`): what
+/// the PC draws live; the consoles use the AO baked into each model (the
+/// model inspector's "Ambient occlusion (baked)").
+fn ambient_occlusion(ui: &mut egui::Ui, ao: &mut Option<trino_scene::AmbientOcclusionDef>) {
+    use trino_scene::AoQualityDef;
+    let mut on = ao.is_some_and(|a| a.enabled);
+    if ui
+        .checkbox(&mut on, "Screen-space AO (PC)")
+        .on_hover_text(
+            "Darkens creases and where models meet, live on the PC. The N64 and 3DS \
+             can't afford it: bake AO into their models (Assets › model › Ambient \
+             occlusion).",
+        )
+        .changed()
+    {
+        // Keep the tuning when turning it off.
+        match ao {
+            Some(a) => a.enabled = on,
+            None => *ao = Some(trino_scene::AmbientOcclusionDef::default()),
+        }
+    }
+    let Some(a) = ao.as_mut().filter(|a| a.enabled) else {
+        return;
+    };
+    theme::prop(ui, "Radius", |ui| {
+        ui.add(
+            egui::Slider::new(&mut a.radius, 0.05..=4.0)
+                .logarithmic(true)
+                .suffix(" m"),
+        )
+        .on_hover_text("How far around a point occluders count");
+    });
+    theme::prop(ui, "Intensity", |ui| {
+        ui.add(egui::Slider::new(&mut a.intensity, 0.0..=2.0));
+    });
+    theme::prop(ui, "Bias", |ui| {
+        ui.add(
+            egui::Slider::new(&mut a.bias, 0.0..=0.25)
+                .suffix(" m")
+                .max_decimals(3),
+        )
+        .on_hover_text("Raise it if flat or curved surfaces shadow themselves");
+    });
+    theme::prop(ui, "Quality", |ui| {
+        let name = |q: AoQualityDef| match q {
+            AoQualityDef::Low => "Low (8 samples)",
+            AoQualityDef::Medium => "Medium (16 samples)",
+            AoQualityDef::High => "High (32 samples)",
+        };
+        egui::ComboBox::from_id_salt("ao-quality")
+            .selected_text(name(a.quality))
+            .show_ui(ui, |ui| {
+                for q in [AoQualityDef::Low, AoQualityDef::Medium, AoQualityDef::High] {
+                    ui.selectable_value(&mut a.quality, q, name(q));
+                }
+            });
+    });
+    if ui.small_button("Reset to defaults").clicked() {
+        *a = trino_scene::AmbientOcclusionDef::default();
+    }
+}
+
 fn budget_section(
     ui: &mut egui::Ui,
     budgets: &[trino_scene::budget::FrameBudget; 2],

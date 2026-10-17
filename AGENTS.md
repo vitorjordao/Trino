@@ -396,6 +396,31 @@ RDP).
   baked scenes (TSCN v3). The showcase's pillars use it (`materials/stone-grain`);
   `texture filter and detail` self-test step; goldens `tests/golden/pc/texture_filter_*`.
 
+- **Ambient occlusion (2026-10-16, ADR 0014, GitHub #42):** two tiers by
+  `Caps::ao_tier`.
+  - **PC native (`ScreenSpace`):** `Renderer::set_ambient_occlusion(Option<&AmbientOcclusion>)`
+    takes radius, intensity, bias and `AoQuality` (8/16/32 samples). It is cleared at
+    `begin_frame`.
+    - The pass is in `renderer/ao.rs` + `ao.wgsl`. It reads the depth buffer after the
+      frame's last 3D draw, blurs bilaterally, and multiplies the frame before the 2D
+      on top. Pictures over 540 lines compute it at half resolution.
+    - `PcRenderer::set_ao_view(AoView::{Game, Off, On, Mask})`; `TRINO_AO=off|on|mask`
+      in a game window.
+  - **Consoles and the PC's console profiles (`Baked`):** `ao = { strength, distance,
+    rays, ground }` on a `[models.*]` entry bakes occlusion into the vertex colors
+    (`asset-pipeline/src/ao.rs`: rays against the model's own BVH, deterministic).
+    It costs nothing at run time.
+  - **Scenes:** `environment.ao` (`AmbientOcclusionDef`; codegen `AO`; not in TSCN).
+  - **Editor:**
+    - Inspector › Ambient Occlusion;
+    - the Scene view's AO menu (as the scene / on / off / mask), also in View, and
+      `TRINO_EDITOR_AO`;
+    - model › Ambient occlusion (baked) (`manifest::edit::set_model_ao`).
+  - **castle64:** sets SSAO on the PC.
+  - **Tests:** the `ambient occlusion` self-test step on PC, in ares and in Azahar
+    (`models/selftest_ao` vs `selftest_ao_raw`); goldens `tests/golden/pc/ao_*`;
+    evidence via `cargo test -p xtask --test ao_shots -- --ignored`.
+
 - **Console hardware paths and N64 timing (2026-10-16, ADR 0012, part of #31):**
   the 3DS transforms and lights static meshes on the PICA200 (`render3d::gpu_check`,
   `tnl3d.v.pica`, `gpu tnl` self-test step, `castle64_work_3ds.toml`); text goes to the
@@ -557,7 +582,9 @@ cargo xtask blender smoke                        # Blender toolkit end to end (n
 
 Run modes: `TRINO_SCENE=scenes/x.scene.ron cargo run -p trino-app-pc` plays a scene
 (reloads when the scene, prefabs or materials change; model edits need a restart);
-`TRINO_GAME=showcase cargo run -p trino-app-pc` runs the exported-scene game; editor hooks (`TRINO_EDITOR_SCREENSHOT`, `_SELECT`, `_TAB`, `_ECHO_LOG`,
+`TRINO_GAME=showcase cargo run -p trino-app-pc` runs the exported-scene game;
+`TRINO_AO=off|on|mask` forces the PC's screen-space AO off, on (defaults when the game
+sets none) or to the occlusion alone; editor hooks (`TRINO_EDITOR_SCREENSHOT`, `_SELECT`, `_TAB`, `_ECHO_LOG`,
 `_SCENE`) are listed in the `editor` skill.
 
 Before committing, always run the CI-equivalent locally:
@@ -709,6 +736,19 @@ cargo test --workspace
   every `set.lights[j]` reads it back from scratch, per pixel. The PC lit pipeline did
   that: an external project's 4K frame took 19.1 ms instead of 8.6 ms on a Renoir iGPU.
   Take a pointer (`let set = &sets.sets[i];`, then `(*set).lights[j]`).
+- **In WGSL, never index a local array with a runtime value either.** The SSAO's 4×4
+  Bayer table (`var m = array<u32, 16>(..); m[i]`) lived in scratch memory per pixel and
+  nearly doubled the pass on a Renoir iGPU (1080p 11 → 6.7 ms once it became bit
+  arithmetic). Compute such patterns, or put the table in a uniform.
+- **Two example game crates can't link into one test binary.** Each runs
+  `export_game!`, so `hello-sprite` with `platformer` (or `castle64`) fails with
+  duplicate `trino_game_*` symbols. Give each its own test file and share helpers
+  through a `tests/<dir>/mod.rs` (`xtask/tests/ao_evidence/`).
+- **A manifest option that changes no baked byte reaches no one.** The asset watcher
+  reports changed bytes only. `ao` on a convex model (no self-occlusion, no `ground`)
+  bakes the same TMDL, so the editor's model state would never refresh. The editor
+  updates its copy when it writes the manifest. Any new manifest-only option needs the
+  same.
 - **Template manifests are `Cargo.toml.tmpl`.** A placeholder `Cargo.toml` anywhere in
   the repo breaks every git-dependency user, because cargo scans the whole repository.
 

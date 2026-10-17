@@ -27,6 +27,9 @@ editor (and a running `TRINO_SCENE` player) reloads them live. Formats are docum
         camera: (eye: (9.0, 7.0, -13.0), target: (0.0, 1.0, 0.0), fov: 55.0),
         light: (dir: (0.45, -0.75, 0.48), color: (255, 244, 225), ambient: 0.42, ambient_color: (190, 210, 255)),
         fog: Some((color: (132, 178, 226), near: 16.0, far: 42.0)),
+        // Screen-space AO on the PC (consoles: bake `ao` into the models, add-asset).
+        // Every field defaults: `ao: Some(())` works; `enabled: false` keeps the tuning.
+        ao: Some((radius: 0.6, intensity: 1.2, bias: 0.025, quality: High)),  // Low|Medium|High = 8/16/32 samples
     ),
     entities: [
         (

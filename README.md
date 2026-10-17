@@ -37,6 +37,7 @@ impostors) is part of the same pipeline, drawn by the same renderer in the same 
 | Surfaces: Gouraud / Flat / Unlit shading, tint, emissive, distance fog, textures, per-draw filter, detail layer | yes | yes | yes |
 | Rigid and opt-in smooth skinning, clip crossfade | yes | yes | yes |
 | Local point and spot lights | per pixel, up to 8 | per vertex, up to 2 | per vertex, up to 4 |
+| Ambient occlusion | screen-space (SSAO), plus baked | baked into vertex colors (`ao` in the manifest) | baked into vertex colors |
 | Billboards, particles, impostors, distance LOD, portal/cell visibility | yes | yes | yes |
 | 2D: sprites, `fill_rect`, bitmap text | yes | yes | yes |
 | Two screens | simulated by the 3DS profile | one screen | top 400x240 and touch bottom 320x240 |
@@ -72,6 +73,7 @@ tables that strict mode and the tools check content against.
 | Save data | 1 MB | 2048 bytes (16 Kbit EEPROM) | 64 KB |
 | Local light tier | per pixel | per vertex | per vertex |
 | Local lights per frame | 8 | 2 | 4 |
+| Ambient occlusion tier | screen-space | baked | baked |
 
 [^pc-res]: The PC's internal picture follows the active console-simulation profile
     (`TRINO_SIM=native|n64|3ds`), not this table.

@@ -78,7 +78,8 @@ TRINO_EDITOR_SCREENSHOT=target/launcher.png TRINO_EDITOR_SCREENSHOT_FRAME=10 car
 | `TRINO_EDITOR_ECHO_LOG=1` | mirror the Console to stderr (see reloads, errors, saves) |
 | `TRINO_EDITOR_GAME=pc\|n64\|3ds` | the Game view's profile (default n64) — screenshots of each platform's variant |
 | `TRINO_EDITOR_SIZE=960x600` | window size (default 1600x940; never below the 960x600 minimum) — screenshot small windows |
-| `TRINO_EDITOR_INSPECT=platforms\|lod\|impostor\|budget` | the Inspector opens that section and scrolls to it (`budget`: the scene settings' platform budget, with nothing selected) |
+| `TRINO_EDITOR_INSPECT=platforms\|lod\|impostor\|budget\|ao` | the Inspector opens that section and scrolls to it (`budget`: the scene settings' platform budget, with nothing selected; `ao`: the scene's Ambient Occlusion, or a model's baked AO with `TRINO_EDITOR_OPEN=model:<logical>`) |
+| `TRINO_EDITOR_AO=game\|on\|off\|mask` | the Scene view's ambient occlusion mode (as the scene sets it, forced on, off, the occlusion alone) |
 | `TRINO_EDITOR_LOD_PREVIEW=<m>` | preview the selected entity's LOD at that distance (both views) |
 | `TRINO_EDITOR_SMOKE_FRAMES=N` | close after N frames (CI smoke test; the launcher too) |
 | `TRINO_EDITOR_LAUNCHER=1` | show the project launcher even when a scene hook is set (screenshots) |
@@ -223,6 +224,22 @@ Live-edit check: start the editor with `TRINO_EDITOR_ECHO_LOG=1` in the backgrou
   the pointer is by then grabbed a neighbouring handle on a quick drag (the thin
   ground square became the X axis), and it lost the first pixels of motion.
   `ui_tests::gizmo_drags_grab_the_handle_under_the_press` guards it.
+- **Ambient occlusion in the views (ADR 0014):** `Viewport::render` passes the scene's
+  `env.core_ao()` through `RenderCam::ao` (radius and bias are lengths: the
+  near-orthographic world is scaled). The Scene view has its own `ao_view` (toolbar menu
+  and View › Ambient occlusion). A change of mode re-renders through `ao_rendered`, not
+  the `RenderKey`. `Stats::ao` says whether the pass ran. Only the native profile runs
+  it: the Game view's N64/3DS show the baked AO.
+- **The Scene view's floating toolbar is full at 960×600.** The AO menu pushed the
+  camera button onto the axis widget, and the layout audit failed in two flows. A new
+  toolbar button checks `ui.available_width()` and steps aside when there's no room
+  (`viewport.rs` › `room`), with the same action kept in a menu (View).
+- **A radio menu must close itself.** `ui.radio_value` inside `menu_button` leaves the
+  menu open, and the next click (a test's, or the user's) only closes it. Call
+  `ui.close()` on `clicked()` (`viewport::ao_menu`).
+- **Toasts cover the Inspector's lower right.** A test that saved or undid just before
+  clicking a button there can hit the toast. Click such buttons with
+  `click_accesskit()` (the AO bake flow).
 - **Kittest pointer details:**
   - `drag_at`/`drop_at` are Primary only. For MMB/RMB, send
     `Event::PointerButton` yourself.

@@ -53,6 +53,18 @@ A feature is done only when **PC, N64 and 3DS** all run it and an emulator has s
   `trino_core::render3d::rsp_eligible`, which is the safe default, or implement it in
   the overlay behind the oracle and parity checks (`n64-performance` › RSP T&L).
 
+- **A feature the consoles can't run gets a tier, not a PC-only API.** Local lights
+  (ADR 0010) and ambient occlusion (ADR 0014) set the pattern:
+  - a `Caps` field names the tier;
+  - the `Renderer` method has a default no-op and is cleared at `begin_frame`;
+  - the console tier is data the asset bake writes (vertex colors), so the consoles
+    and the PC's console profiles draw the same thing;
+  - the sim profiles never run the PC-only pass, so `n64_parity`/`n3ds_parity` hold.
+- **A PC post pass that must spare the HUD ends the main pass after the frame's last
+  3D draw**, then draws the rest with `LoadOp::Load` (`draw_commands` › `split`).
+  Sprites don't write depth, so a composite at `end_frame` would darken a HUD over
+  geometry.
+
 ## 2. Backends, in matched pairs
 
 - The FFI goes through the shims only: `crates/platform-n64/shim/trino_shim.c` with

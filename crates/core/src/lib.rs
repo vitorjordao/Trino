@@ -18,6 +18,7 @@
 
 #![cfg_attr(not(test), no_std)]
 
+pub mod ao;
 pub mod asset;
 pub mod audio;
 pub mod caps;
@@ -42,6 +43,7 @@ pub mod text;
 pub mod tilemap;
 pub mod vis;
 
+pub use ao::{AmbientOcclusion, AoQuality, AoTier};
 pub use asset::asset_id;
 
 pub use audio::{

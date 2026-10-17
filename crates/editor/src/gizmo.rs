@@ -74,6 +74,15 @@ impl RenderCam {
     }
 
     /// A fog range (world units from the orbit eye) in render space.
+    /// Screen-space AO in render space: its radius and bias are lengths.
+    pub fn ao(&self, ao: trino_core::AmbientOcclusion) -> trino_core::AmbientOcclusion {
+        trino_core::AmbientOcclusion {
+            radius: ao.radius * self.scale,
+            bias: ao.bias * self.scale,
+            ..ao
+        }
+    }
+
     pub fn fog(&self, fog: trino_core::Fog) -> trino_core::Fog {
         if fog.far <= fog.near {
             return fog;

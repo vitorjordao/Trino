@@ -115,7 +115,9 @@ impl N3dsFormat {
         assert_eq!(rgba.len(), (width * height * 4) as usize);
         // tex3ds reads a fully transparent texel as 0 in every channel.
         let src: Vec<[u8; 4]> = rgba
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|p| {
                 if p[3] == 0 {
                     [0; 4]
@@ -574,7 +576,12 @@ pub fn decode_tex3ds_raw(
 pub fn psnr(master: &[u8], got: &[u8]) -> f64 {
     assert_eq!(master.len(), got.len());
     let mut sum = 0f64;
-    for (m, g) in master.chunks_exact(4).zip(got.chunks_exact(4)) {
+    for (m, g) in master
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(got.as_chunks::<4>().0.iter())
+    {
         for c in 0..3 {
             let a = m[c] as f64 * m[3] as f64 / 255.0;
             let b = g[c] as f64 * g[3] as f64 / 255.0;
@@ -733,7 +740,7 @@ fn n64_report(base: TextureReport, rgba: &[u8]) -> TextureReport {
         "RGBA5551" => (Some(psnr(rgba, &quantized)), None),
         "CI4" | "CI8" => {
             let max = if base.format == "CI4" { 16 } else { 256 };
-            let mut colors: Vec<&[u8]> = quantized.chunks_exact(4).collect();
+            let mut colors: Vec<&[u8; 4]> = quantized.as_chunks::<4>().0.iter().collect();
             colors.sort_unstable();
             colors.dedup();
             if colors.len() <= max {

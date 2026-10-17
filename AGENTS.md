@@ -1030,6 +1030,10 @@ cargo test --workspace
   the same `#[no_mangle] trino_game_*` symbols, so the link fails. A game other than
   castle64 puts `export_game!` behind its `hot-reload` feature (showcase,
   solid-eleven).
+- **CI's clippy is the newest stable, maybe newer than yours.** Clippy 1.99 rejects
+  `chunks_exact(4)` with a constant size (`as_chunks::<4>().0.iter()` instead); 1.93
+  passed it, so the Lint job failed on a green local run. Before a push, run
+  `cargo +stable clippy` after `rustup update stable`.
 - **`sort_by` is not in `core`** (it needs `alloc`'s stable sort): a `no_std` game
   that sorts uses `sort_unstable_by` with a total order (an index tie-break). The host
   `cargo check` doesn't catch it; the console type-check does.

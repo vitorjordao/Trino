@@ -171,7 +171,9 @@ fn png_rgba(path: &Path) -> Option<Vec<u8>> {
     match info.color_type {
         png::ColorType::Rgba => Some(buf),
         png::ColorType::Rgb => Some(
-            buf.chunks_exact(3)
+            buf.as_chunks::<3>()
+                .0
+                .iter()
                 .flat_map(|p| [p[0], p[1], p[2], 255])
                 .collect(),
         ),

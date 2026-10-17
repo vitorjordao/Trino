@@ -67,7 +67,9 @@ fn threshold(f: N3dsFormat) -> f64 {
 /// [`master`] made opaque: what a format without alpha is for.
 fn opaque() -> Vec<u8> {
     master()
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .flat_map(|p| [p[0], p[1], p[2], 255])
         .collect()
 }
@@ -88,7 +90,7 @@ fn every_format_keeps_its_psnr() {
         );
         if !f.has_alpha() {
             assert!(
-                p.chunks_exact(4).all(|t| t[3] == 255),
+                p.as_chunks::<4>().0.iter().all(|t| t[3] == 255),
                 "{} is opaque",
                 f.name()
             );
@@ -259,12 +261,23 @@ fn preview_matches_tex3ds() {
                     f.name()
                 );
                 // Same alpha nibbles in ETC1A4.
-                for (a, b) in real.chunks_exact(4).zip(ours.chunks_exact(4)) {
+                for (a, b) in real
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .zip(ours.as_chunks::<4>().0.iter())
+                {
                     assert_eq!(a[3], b[3], "{} alpha", f.name());
                 }
             }
             _ => {
-                for (i, (a, b)) in real.chunks_exact(4).zip(ours.chunks_exact(4)).enumerate() {
+                for (i, (a, b)) in real
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .zip(ours.as_chunks::<4>().0.iter())
+                    .enumerate()
+                {
                     let tol = if matches!(f, N3dsFormat::L8 | N3dsFormat::La8) {
                         1
                     } else {

@@ -3,6 +3,8 @@
 //! imports `trino_core` (its types are floats and handles).
 
 pub mod ai;
+#[cfg(test)]
+mod balance;
 pub mod ball;
 pub mod engine;
 pub mod fx;

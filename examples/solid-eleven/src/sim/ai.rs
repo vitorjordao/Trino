@@ -113,12 +113,18 @@ pub fn anchor(m: &Match, s: usize, k: usize, ball: V2, attacking: bool) -> V2 {
         }
         Role::St | Role::W if attacking => {
             // Play on the last defender's shoulder: drift around the line
-            // (2 m onside to 1 m off, a slow wave per player), the way
+            // (2 m onside to 2 m off, a slow wave per player), the way
             // forwards do — and why offsides happen.
             let off = offside_line(m, s);
             let phase = ((m.tick as i32 + k as i32 * 53) % 240 - 120).abs();
-            let drift = Fx::int(3).mul(Fx::ratio(phase, 120)) - Fx::int(2);
-            x = x.min(off + drift).max(b.x - Fx::int(15));
+            let drift = Fx::int(4).mul(Fx::ratio(phase, 120)) - Fx::int(2);
+            // In the attacking third they push up to it.
+            x = if b.x > Fx::int(15) {
+                off + drift
+            } else {
+                x.min(off + drift)
+            }
+            .max(b.x - Fx::int(15));
         }
         Role::St if !attacking => {
             // The front man stays up for the counter.
@@ -424,7 +430,16 @@ fn mark(m: &Match, i: usize, home: V2, marked: &mut u32) -> Cmd {
     if let Some((j, _)) = best {
         *marked |= 1 << j;
         let opp = m.players[j].pos;
-        let p = opp + (own_goal - opp).norm().scale(Fx::milli(1_800));
+        let mut p = opp + (own_goal - opp).norm().scale(Fx::milli(1_800));
+        // The back four hold their line instead of following a forward
+        // in behind it: he is offside if the pass comes (the trap), or
+        // through on goal if they misjudge it.
+        if matches!(m.players[i].role, Role::Cb | Role::Fb) {
+            let (pt, ht) = (to_team(m, s, p), to_team(m, s, home));
+            if pt.x < ht.x - Fx::int(1) {
+                p = to_world(m, s, V2::new(ht.x - Fx::int(1), pt.y));
+            }
+        }
         return go_to(m, i, p, true);
     }
     go_to(m, i, home, false)
@@ -585,20 +600,20 @@ fn carrier(m: &mut Match, i: usize) -> Cmd {
 
     // 1. Shoot.
     let gd = (goal - ball).len();
-    if settled && gd < Fx::int(32) && ball_ax > Fx::int(16) {
+    if settled && gd < Fx::int(34) && ball_ax > Fx::int(15) {
         let open = shot_openness(m, s, ball);
         let shot = m.attr(i, team::SHOT);
-        let dist_f = (Fx::int(34) - gd).div(Fx::int(24)).clamp(Fx::ZERO, Fx::ONE);
+        let dist_f = (Fx::int(37) - gd).div(Fx::int(25)).clamp(Fx::ZERO, Fx::ONE);
         let q = open
             .mul(dist_f)
             .mul(Fx::milli(500) + shot.mul(Fx::milli(700)));
-        let score = q.mul(Fx::int(4))
+        let score = q.mul(Fx::milli(4_800))
             + if gd < Fx::int(13) && open > Fx::milli(150) {
                 Fx::int(2)
             } else {
                 Fx::ZERO
             };
-        if score > best_score && q > Fx::milli(80) {
+        if score > best_score && q > Fx::milli(60) {
             best_score = score;
             let power = Fx::milli(550) + m.rng.unit().mul(Fx::milli(350));
             let plan = shot_plan(m, i, None, power, err);
@@ -988,7 +1003,7 @@ fn keeper(m: &mut Match, i: usize, _home: V2) -> Cmd {
         let walk = m.top_speed(i, true).mul(tt);
         let reflex = m.attr(i, team::DEFENSE);
         // Reaction time: he can't move for the first ticks of the shot.
-        let react = (Fx::int(16) - reflex.mul(Fx::int(9))).round_int().max(4) as u32;
+        let react = (Fx::int(20) - reflex.mul(Fx::int(9))).round_int().max(6) as u32;
         let since = m.tick.saturating_sub(m.shot_tick);
         if since < react {
             return Cmd::go(V2::ZERO, false);
@@ -997,7 +1012,7 @@ fn keeper(m: &mut Match, i: usize, _home: V2) -> Cmd {
             // He reads the line with an error that shrinks with reflexes
             // (and the AI's difficulty).
             let miss = (Fx::ONE - reflex)
-                .mul(Fx::milli(1_400))
+                .mul(Fx::milli(2_200))
                 .mul(err_scale(m, s));
             let spot = spot + V2::new(Fx::ZERO, m.rng.signed().mul(miss));
             return Cmd {

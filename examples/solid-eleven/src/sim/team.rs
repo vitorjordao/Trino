@@ -459,7 +459,7 @@ pub const CLUBS: [Club; TEAMS] = [
         gk: Rgb(80, 200, 230),
         crest: Crest::Diamond,
         // Physical, long balls.
-        tactics: tac(3, 50, 45, 60, 65, 80, 80),
+        tactics: tac(3, 50, 45, 60, 60, 60, 60),
         style: [-2, -6, 2, -2, 6, 2],
         fame: 8,
     },
@@ -476,7 +476,7 @@ pub const CLUBS: [Club; TEAMS] = [
         gk: Rgb(250, 230, 40),
         crest: Crest::Diamond,
         // Technical dribblers.
-        tactics: tac(2, 60, 55, 55, 35, 10, 40),
+        tactics: tac(2, 60, 55, 55, 50, 25, 50),
         style: [0, 10, 0, 4, -6, -8],
         fame: 9,
     },

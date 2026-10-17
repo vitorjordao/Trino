@@ -119,6 +119,8 @@ pub fn metrics(pairs: &[(usize, usize, u32)], half_ticks: u32) -> Metrics {
         out.diag.to_opp += d.to_opp;
         out.diag.dead += d.dead;
         out.diag.intended += d.intended;
+        out.diag.off_kicks += d.off_kicks;
+        out.diag.off_aimed += d.off_aimed;
         out.diag.ground_mate += d.ground_mate;
         out.diag.ground_opp += d.ground_opp;
         for k in 0..7 {

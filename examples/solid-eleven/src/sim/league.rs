@@ -425,6 +425,11 @@ impl Career {
         self.year += 1;
         self.round = 0;
         self.table = [Row::default(); TEAMS];
+        // Morale settles over the summer (else last season's champion
+        // starts the next one on a streak it never earned).
+        for c in self.clubs.iter_mut() {
+            c.morale = ((c.morale as u32 + 55) / 2) as u8;
+        }
         for p in self.players.iter_mut() {
             p.age = p.age.saturating_add(1).min(40);
             p.energy = 100;

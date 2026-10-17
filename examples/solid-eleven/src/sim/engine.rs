@@ -289,6 +289,11 @@ pub const TACKLE_TICKS: u8 = 14;
 pub const SLIDE_TICKS: u8 = 36;
 pub const DOWN_TICKS: u8 = 50;
 pub const DIVE_TICKS: u8 = 34;
+/// The attribute every action is tuned around (70 of 100), and how much
+/// a point away from it counts ([`Match::attr`]).
+pub const ATTR_MEAN: Fx = Fx::milli(700);
+pub const ATTR_SPREAD: Fx = Fx::int(2);
+
 /// How long a human keeper may hold the ball before it is played for him.
 pub const HUMAN_HOLD: u16 = 240;
 /// How far a human keeper's dive reaches along the stick (m).
@@ -390,6 +395,9 @@ pub struct Diag {
     pub last_lofted: bool,
     /// Carrier decisions: none, shot, pass, through, cross, dribble, clear.
     pub chose: [u32; 7],
+    /// Kicks with someone offside, and passes aimed at a man offside.
+    pub off_kicks: u32,
+    pub off_aimed: u32,
 }
 
 impl Match {
@@ -537,7 +545,13 @@ impl Match {
     pub fn attr(&self, i: usize, a: usize) -> Fx {
         let p = &self.players[i];
         let tired = Fx::milli(820) + p.stamina.mul(Fx::milli(180));
-        Fx::ratio(p.attrs[a] as i32, 100).mul(tired)
+        // Spread around the typical 70: twice the raw difference, so
+        // the editor's and the market's points show on the pitch (an
+        // average player plays as before).
+        let raw = Fx::ratio(p.attrs[a] as i32, 100);
+        let eff =
+            (ATTR_MEAN + (raw - ATTR_MEAN).mul(ATTR_SPREAD)).clamp(Fx::milli(50), Fx::milli(1_050));
+        eff.mul(tired)
     }
 
     /// Top speed of player `i` now.
@@ -1040,6 +1054,15 @@ impl Match {
                 mask: self.offside_mask(s, i),
             })
         };
+        #[cfg(test)]
+        if let Some(w) = self.offside
+            && w.mask != 0
+        {
+            self.diag.off_kicks += 1;
+            if plan.to.is_some_and(|t| w.mask & (1 << t) != 0) {
+                self.diag.off_aimed += 1;
+            }
+        }
         match plan.kind {
             KickKind::Pass
             | KickKind::Through
@@ -1526,10 +1549,10 @@ impl Match {
             // Catch, or parry a hard shot.
             let skill = self.attr(i, team::DEFENSE);
             // Hard shots are parried more often than held.
-            let hold = Fx::milli(1_050)
-                - (speed - Fx::int(12))
+            let hold = Fx::milli(950)
+                - (speed - Fx::int(9))
                     .max(Fx::ZERO)
-                    .mul(Fx::milli(55))
+                    .mul(Fx::milli(75))
                     .mul(Fx::milli(1_300) - skill);
             if !self.touch(i) {
                 return;
@@ -1543,7 +1566,7 @@ impl Match {
                 self.players[i].vel = V2::ZERO;
             } else {
                 // Parried: out into play, or round the post for a corner.
-                let back = self.rng.chance(Fx::milli(550));
+                let back = self.rng.chance(Fx::milli(400));
                 let x = if back {
                     self.ends[s].sign()
                 } else {

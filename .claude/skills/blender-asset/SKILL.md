@@ -335,7 +335,22 @@ about the origin.
   `solid_eleven_layers`). One source keeps the art and the game in step, and a part
   costs one draw with no skinning.
 - **Big flat ground under a low camera:** split it into coarse far tiles and fine
-  near tiles. One 20 m quad under the camera leaves the N64's RSP (clip band).
+  near tiles. One 20 m quad under the camera can leave the N64's RSP (clip band).
+- **Rigid parts need a fit test, not eyeballing** (iteration 2: legs out of the shorts,
+  arms out of the sleeves, a floating head, all worse in motion). The body is a table
+  (`BODY` in `solid_eleven_anim.py`: frustums with skipped faces, a tint, tiers), so
+  `render/fit.rs` can pose it through every clip and crossfade and check five rules:
+  each part stays attached, its plug (the end inside the parent) stays hidden, no
+  holes, nothing sinks into a neighbor of another tint, feet on the turf. Put a joint's
+  pivot at the center of the parent's opening (the head pivots at the neck top), make
+  the plug a frustum that reaches deeper than the parent's rim at the widest bend, and
+  close every face a camera can see in some pose (the boot's back, the hair).
+- **Ground every key by forward kinematics, per tier:** the generator computes each
+  key's root height from the lowest point of the posed body, once with the PC body
+  (`root`) and once with the console body (`lo`); the game also plants the feet per
+  frame from generated contact points. Hand-written root heights floated or sank.
+- **Lying clips need a pelvis roll,** or the torso goes through the turf; give falls
+  and slides a get-up clip, and route a fall to it instead of crossfading to a run.
 - **Generators that write Rust read and write with `encoding="utf-8", newline="\n"`.**
   Windows Python defaults to cp1252. CI's Windows job runs the clip table's
   `--check`, which then saw the em dash in the generated header as drift, on a file

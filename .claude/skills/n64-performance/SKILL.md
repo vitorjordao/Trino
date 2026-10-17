@@ -89,8 +89,9 @@ overlay:
   19 µs per fallback draw. That is ~0.1 ms for the hub's 5.
 - **Limits.**
   - ares does not model RDP fill time, so on hardware the RDP may bind first.
-  - `N64_COST` describes CPU-path draws only, and the editor HUD and strict mode
-    still assume CPU T&L for everything.
+  - `N64_COST` describes CPU-path draws only, and the editor HUD still assumes CPU
+    T&L for everything. PC strict mode splits the frame (2026-10-16): 90 µs of CPU per
+    RSP draw (`us_per_rsp_draw`) plus its triangles on the RSP.
 
 ## The gates (keep the data honest over time)
 
@@ -402,8 +403,8 @@ T&L. Every castle64 scene costs 7–13 ms of emulated time (vsync caps it at 60 
     remaining 4.6 ms of CPU T&L);
   - Flat, fog, colored light, emissive;
   - textured draws, rigid skeletons.
-- **Teach the cost model the RSP**, so the editor HUD, strict mode and `model
-  inspect` stop overestimating eligible draws.
+- **Teach the cost model the RSP**, so the editor HUD and `model inspect` stop
+  overestimating eligible draws (strict mode has the split since 2026-10-16).
 - **Real hardware**: ares doesn't model RDP fill time. Measure there before chasing
   CPU time further.
 - Deferred: hub blocks merged per chunk (2b, ~1–2 ms on the CPU path).
@@ -428,13 +429,20 @@ RSP. What got it from 48.7 ms there:
   on their own: about 740 ball steps a tick. One shared trajectory per tick (`ai::Traj`)
   needs 72. Measure `update=` in `TRINO_FRAME` before touching the renderer.
 - **Ground:** coarse tiles far, fine tiles near, each culled by its exact rectangle.
-  A sphere-culled big quad under the camera leaves the RSP (`ClipBand`).
+  A big quad whose vertices cross the band under the camera leaves the RSP
+  (`ClipBand`). A draw whose sphere crosses but whose vertices don't is now kept on
+  the RSP by `rsp_hull_check` (vertex by vertex, only when the sphere fails).
 - **Draw memo:** snap the camera's focus to 1/4096. Then `target - eye` stays bit-exact
   while the camera pans, and the stadium's draws only patch their translation.
 - **Far LOD per part:** past a depth of 30, players drop their arms.
-- **Strict mode is not the gate for RSP content.** Its estimate prices every draw as
-  CPU T&L (about 100 draws trip its 50 ms). Gate with `rsp_check` per draw on the host
-  (`solid_eleven_budget.rs`) and with `n64_max_frame_us` on the ares run.
+- **Strict mode splits CPU and RSP now** (it used to price every draw as CPU T&L, and
+  about 100 draws tripped its 50 ms). Still gate with `rsp_check` per draw on the host
+  (`solid_eleven_budget.rs`: every match draw on the RSP) and with `n64_max_frame_us`
+  on the ares run: the RSP side is an estimate.
+- **One draw per kit leg** (iteration 2): shorts and sock were two draws per leg. Each
+  (shorts, socks) pair a match can dress is one baked-color mesh (`se_leg_kNN`, 30 of
+  them, listed by `team::LEG_KITS` and checked by `the_leg_kit_list_is_baked`), so a
+  console player is 7 draws. Draw count is what the N64 pays for.
 
 ## Workflow for a perf change
 

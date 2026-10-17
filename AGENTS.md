@@ -716,7 +716,7 @@ cargo test --workspace
 - **`Caps::N64.max_tris_per_frame` is not the CPU T&L budget.** A 30 fps frame
   affords roughly 550–650 source triangles today, fewer with many draws. Use
   `model inspect`'s N64 cost estimate. Strict mode enforces
-  `Caps::max_3d_us_per_frame` (N64: 50 ms estimated).
+  `Caps::max_3d_us_per_frame` (N64: 50 ms estimated, CPU and RSP each).
 - **glTF COLOR_0 is linear.** The bake converts it to display sRGB, so write linear
   values (the generators use `color0_linear`). Before 2026-10-13, Blender-painted
   colors baked much darker.
@@ -822,14 +822,21 @@ cargo test --workspace
   bake wrote white texels everywhere, and I4/I8 take alpha from intensity. The bake now
   writes transparent texels black (like PNG fonts), and the N64 stages I4/I8 font atlases
   with intensity = coverage, so antialiased edges stay soft.
-- **PC strict mode prices every 3D draw as CPU T&L** (`perf::N64_COST`): a scene whose
-  draws run on the N64's RSP trips its 50 ms ceiling at ~100 draws while ares measures
-  25 ms (Solid Eleven). For RSP-heavy content, gate on `rsp_check` per draw on the host
-  (`xtask/tests/solid_eleven_budget.rs`) and on `TRINO_FRAME` in ares instead.
-- **A big flat mesh under the camera leaves the RSP** (`RspReject::ClipBand`): its
-  bounding sphere crosses the band even when only a sliver is on screen. Split the
-  ground (coarse tiles far, fine near) and cull each tile by its rectangle, not a
-  sphere.
+- **PC strict mode splits the N64 frame like the console** (2026-10-16): each 3D draw
+  that `rsp_check` accepts costs `N64_COST.us_per_rsp_draw` (90 µs) of CPU plus its
+  triangles on the RSP, the rest full CPU T&L, and the ceiling applies to the slower of
+  the two (`PcRenderer::n64_estimate`). Before, it priced every draw as CPU T&L and
+  failed Solid Eleven at ~100 draws while ares measured 25 ms. The RSP time is still an
+  estimate (ares doesn't time the RDP): keep gating `TRINO_FRAME` in ares.
+- **A big flat mesh under the camera used to leave the RSP** (`RspReject::ClipBand`):
+  its bounding sphere crosses the band even when every vertex is inside. A draw whose
+  sphere fails the band or the near plane is now checked vertex by vertex
+  (`rsp_hull_check`), so a ground slab stays on the RSP. A mesh whose vertices do cross
+  still leaves it: split the ground (coarse tiles far, fine near).
+- **4× MSAA on the PC is opt-in and lazy** (`PcRenderer::set_msaa`, the native profile
+  only; `trino-runner-pc` turns it on, `TRINO_MSAA=0` off). Its pipelines are built on
+  the first `set_msaa(true)`: building them in every `PcRenderer::new` made parallel
+  headless tests segfault in RADV. Goldens stay single-sampled.
 - **Only one game per binary may export the hot-reload symbols.** `apps/pc` links
   castle64, showcase and solid-eleven statically, and two crates' `export_game!` define
   the same `#[no_mangle] trino_game_*` symbols, so the link fails. A game other than

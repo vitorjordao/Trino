@@ -22,6 +22,7 @@ mod river_assets;
 mod scene;
 mod showcase_assets;
 mod standalone;
+mod texture;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -90,6 +91,9 @@ commands:
                        platform's cap (peak tris, N64 time, position hash)
   impostor check [name..] | list [--json]
                        spot missing or stale impostors (model changed)
+  texture inspect <sprites/x|fonts/x> [--platform pc|n64|3ds] [--json]
+                       format, bytes, PSNR vs the master and TMEM / 3DS
+                       texture-memory share per platform
   model inspect <file> [--fps N] [--once a,b] [--anim] [--json]
                        bake a .glb/.gltf/.prim.ron like the engine and report
                        tris, joints, clips, bounds, N64 budget (art gate)
@@ -244,6 +248,10 @@ fn main() -> ExitCode {
         (Some("particles"), _) => {
             let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
             particles::run(&project.root, &rest)
+        }
+        (Some("texture"), _) => {
+            let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
+            texture::run(&project.root, &rest)
         }
         (Some("impostor"), _) => {
             let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();

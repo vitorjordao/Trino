@@ -34,7 +34,7 @@ assets/
 
 | Master | PC | N64 | 3DS |
 |---|---|---|---|
-| PNG sprite | `TSPR` (RGBA8) | libdragon sprite (`mksprite`) in the ROM's DFS | `.t3x` (`tex3ds`) in RomFS |
+| PNG sprite | `TSPR` (RGBA8), plus the 3DS preview | libdragon sprite (`mksprite`) in the ROM's DFS | `.t3x` (`tex3ds`, any format above) in RomFS |
 | WAV sound or music | `TSND` | `wav64` (`audioconv64`), loops baked in | raw PCM16 |
 | glTF (`.glb`/`.gltf`) or `.prim.ron` model | TMDL | TMDL | TMDL |
 | Font (PNG grid or TTF) | `TFNT` table and an atlas sprite | `TFNT` table and an atlas sprite (`mksprite`) | `TFNT` table and an atlas `.t3x` |
@@ -44,6 +44,48 @@ assets/
 `cargo xtask assets pc|n64|3ds` runs the bake alone. `cargo xtask build n64|3ds` runs it
 as part of the console build, and the PC app bakes on start. With the editor open or
 `cargo xtask watch pc` running, saving a master rebakes it and re-uploads it live.
+
+## Texture formats
+
+Each sprite and font atlas declares a format per platform
+(`formats = { n64 = "CI4", 3ds = "ETC1" }`); a format the platform can't represent
+is a bake error that lists the ones it can.
+
+| Platform | Formats | Default |
+|---|---|---|
+| PC | `RGBA8` | `RGBA8` |
+| N64 | `CI4`, `CI8`, `RGBA5551`, `I4`, `I8` (TMEM is 4 KB) | none: declare one |
+| 3DS | `RGBA8`, `RGB565`, `RGBA5551`, `RGBA4`, `LA8`, `L8`, `A8`, `ETC1`, `ETC1A4` (`tex3ds -f`) | `RGBA8` |
+
+On the 3DS (ADR 0017):
+
+| Format | Bits a texel | Keeps | Use it for |
+|---|---|---|---|
+| `ETC1` | 4 | color in 4×4 blocks, opaque | opaque art: terrain, walls, skies (8× less than RGBA8) |
+| `ETC1A4` | 8 | ETC1 plus 4-bit alpha | foliage, decals, soft cutouts |
+| `RGBA4` | 16 | 4 bits a channel | UI with alpha, flat-colored art |
+| `RGBA5551` | 16 | 5-bit color, 1-bit alpha (≥ 128) | hard cutouts |
+| `RGB565` | 16 | 5/6-bit color, opaque | opaque art without blocks |
+| `LA8` | 16 | gray with alpha | gray masks with a shade |
+| `L8` | 8 | gray, opaque | light maps, detail layers |
+| `A8` | 8 | alpha; drawn **white** with that alpha | fonts, glows: masks tinted at draw time |
+| `RGBA8` | 32 | everything | the default |
+
+- Gray is the Rec. 709 luminance of the linear color, back to sRGB (what `tex3ds`
+  computes). A fully transparent texel becomes 0 in every channel, so in `L8`/`ETC1`
+  it is black.
+- **The PC shows the result:** for each sprite whose 3DS format loses something, the
+  PC bake also writes what the 3DS samples (`<id>.3ds.sprite`, `preview_3ds` in the
+  index), and the PC's 3DS profile (`TRINO_SIM=3ds`, the editor's Game view in 3DS)
+  draws it: ETC1 blocks and 4-bit banding appear on the PC as in Azahar. The preview
+  equals `tex3ds`' output texel for texel for the uncompressed formats; ETC1 uses the
+  pipeline's own encoder, within 0.1 dB of `tex3ds`' quality.
+- **Check a texture:** `cargo xtask texture inspect sprites/x [--platform 3ds]
+  [--json]` prints, per platform, the format, the bytes, the PSNR against the master
+  and the share of TMEM (N64) or texture memory (3DS). PSNR is computed on colors
+  premultiplied by alpha, so invisible texels don't count; above ~35 dB a change is
+  hard to see, below ~25 dB it is obvious. With devkitPro installed, the 3DS line
+  also decodes the real `tex3ds` output.
 
 ## Models: glTF to TMDL
 
@@ -116,6 +158,6 @@ a camera can see, so the CC0 KayKit doorway went from 1068 to 75 triangles.
 1. `cargo xtask assets pc` (and a console build when the toolchains are installed): format
    and size problems are bake errors.
 2. `cargo xtask scene check` when scenes or prefabs reference the asset.
-3. `cargo xtask model inspect <file>` for models, `cargo xtask impostor check` for
-   impostors.
+3. `cargo xtask model inspect <file>` for models, `cargo xtask texture inspect
+   sprites/x` for textures, `cargo xtask impostor check` for impostors.
 4. `cargo xtask test`.

@@ -32,9 +32,10 @@ fn read_png(path: &std::path::Path) -> (u32, u32, Vec<u8>) {
     (info.width, info.height, buf)
 }
 
-/// castle64's hub perf scene rendered by a headless PC renderer on the 3DS
-/// profile (both screens). `None` (skip) without a GPU.
-fn render_hub(root: &std::path::Path) -> Option<PcRenderer> {
+/// A headless PC renderer on the 3DS profile with the engine's assets, each
+/// sprite as its 3DS format samples it (`preview_3ds`). `None` (skip)
+/// without a GPU.
+fn n3ds_renderer(root: &std::path::Path) -> Option<PcRenderer> {
     let baked = tempfile::tempdir().unwrap();
     trino_asset_pipeline::bake_all(
         &root.join("assets"),
@@ -52,7 +53,8 @@ fn render_hub(root: &std::path::Path) -> Option<PcRenderer> {
         }
     };
     for s in assets.sprites {
-        r.upload_sprite(trino_core::SpriteId(s.id), s.width, s.height, &s.rgba);
+        let px = s.pixels_for(trino_asset_pipeline::Platform::N3ds);
+        r.upload_sprite(trino_core::SpriteId(s.id), s.width, s.height, px);
     }
     for m in assets.models {
         r.upload_mesh(trino_core::ModelId(m.id), m.tmdl);
@@ -60,6 +62,13 @@ fn render_hub(root: &std::path::Path) -> Option<PcRenderer> {
     for f in assets.fonts {
         r.upload_font(trino_core::FontId(f.id), f.table);
     }
+    Some(r)
+}
+
+/// castle64's hub perf scene rendered by a headless PC renderer on the 3DS
+/// profile (both screens). `None` (skip) without a GPU.
+fn render_hub(root: &std::path::Path) -> Option<PcRenderer> {
+    let mut r = n3ds_renderer(root)?;
     let hub = &castle64::perf::SCENES[0];
     let mut game = castle64::perf::scene_game(hub, Vec2::new(400.0, 240.0), &mut NullAudio);
     game.render(&mut r);
@@ -156,4 +165,29 @@ fn pc_3ds_bottom_screen_tracks_the_azahar_frame() {
     );
     assert!(mean < 2.5, "mean diff {mean:.2}");
     assert!(far < 0.025, "{:.2}% of pixels far apart", far * 100.0);
+}
+
+/// One card per 3DS texture format (#52, `draw_texture_formats`): the PC's
+/// 3DS profile draws each sprite's decoded 3DS format, which must look like
+/// what Azahar sampled from the `.t3x` (`tests/golden/3ds/texture_formats.png`).
+#[test]
+fn pc_3ds_texture_formats_track_the_azahar_frame() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+    let Some(mut r) = n3ds_renderer(&root) else {
+        return;
+    };
+    castle64::selftest::draw_texture_formats(&mut r, true);
+    let golden = root.join("tests/golden/3ds/texture_formats.png");
+    let (mean, far) = drift(
+        &r.read_offscreen(),
+        r.internal_size(),
+        &golden,
+        "pc_texture_formats.png",
+    );
+    eprintln!(
+        "pc vs azahar (texture formats): mean max-channel diff {mean:.2}, {:.2}% of pixels differ by > 32",
+        far * 100.0
+    );
+    assert!(mean < 1.0, "mean diff {mean:.2}");
+    assert!(far < 0.01, "{:.2}% of pixels far apart", far * 100.0);
 }

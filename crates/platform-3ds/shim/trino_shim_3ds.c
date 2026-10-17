@@ -314,6 +314,26 @@ void trino_frame_end(void)
 // ---------------------------------------------------------------------------
 // Sprites — one .t3x per asset, image 0 of its sheet.
 
+// Texture formats (issue #52): tex3ds writes any PICA200 format and citro2d /
+// citro3d sample it as is: ETC1 opaque, ETC1A4 with its 4-bit alpha, L8 gray
+// opaque, LA8 gray with alpha. A8 (and A4) is the exception: the PICA200
+// samples it as (0, 0, 0, a), while the engine's A8 is a white mask (the PC
+// preview, `trino_asset_pipeline::texture`). Mask textures therefore enter a
+// TexEnv through the "1 - color" operand (black -> white), and a sprite blit
+// of one uses citro2d's solid tint mode (the tint's color, the texel's alpha).
+static int tex_is_mask(const C3D_Tex* t)
+{
+    // `fmt` is a 4-bit enum bitfield that gcc makes signed: GPU_A8 (8)
+    // reads back as -8, so compare its low 4 bits.
+    unsigned fmt = (unsigned)t->fmt & 15u;
+    return fmt == GPU_A8 || fmt == GPU_A4;
+}
+
+static GPU_TEVOP_RGB tex_rgb_op(const C3D_Tex* t)
+{
+    return tex_is_mask(t) ? GPU_TEVOP_RGB_ONE_MINUS_SRC_COLOR : GPU_TEVOP_RGB_SRC_COLOR;
+}
+
 void* trino_sprite_load(const char* romfs_path)
 {
     return C2D_SpriteSheetLoad(romfs_path);
@@ -374,7 +394,18 @@ void trino_sprite_blit(void* sheet, const trino_blit_t* p)
         .angle = p->theta,
     };
 
-    if (p->tint != 0xFFFFFFFFu) {
+    if (tex_is_mask(img.tex)) {
+        // A white mask times the tint: the solid tint mode (blend 1) takes
+        // the tint's color and the texel's alpha, then back to multiply.
+        C2D_ImageTint tint;
+        C2D_PlainImageTint(&tint,
+                           C2D_Color32((p->tint >> 24) & 0xFF, (p->tint >> 16) & 0xFF,
+                                       (p->tint >> 8) & 0xFF, p->tint & 0xFF),
+                           1.0f);
+        C2D_SetTintMode(C2D_TintSolid);
+        C2D_DrawImage(img, &params, &tint);
+        C2D_SetTintMode(C2D_TintMult);
+    } else if (p->tint != 0xFFFFFFFFu) {
         C2D_ImageTint tint;
         C2D_PlainImageTint(&tint,
                            C2D_Color32((p->tint >> 24) & 0xFF, (p->tint >> 16) & 0xFF,
@@ -494,6 +525,7 @@ void trino_3d_draw(const float* v, uint32_t count, void* sheet, uint32_t clamp)
         }
         C3D_TexBind(0, img.tex);
         C3D_TexEnvSrc(env, C3D_Both, GPU_TEXTURE0, GPU_PRIMARY_COLOR, 0);
+        C3D_TexEnvOpRgb(env, tex_rgb_op(img.tex), GPU_TEVOP_RGB_SRC_COLOR, GPU_TEVOP_RGB_SRC_COLOR);
         C3D_TexEnvFunc(env, C3D_Both, GPU_MODULATE);
     } else {
         C3D_AlphaTest(false, GPU_ALWAYS, 0);
@@ -516,6 +548,7 @@ void trino_3d_draw(const float* v, uint32_t count, void* sheet, uint32_t clamp)
             // alpha is the vertex's.
             C3D_TexEnvInit(env);
             C3D_TexEnvSrc(env, C3D_RGB, GPU_TEXTURE1, GPU_TEXTURE0, GPU_CONSTANT);
+            C3D_TexEnvOpRgb(env, tex_rgb_op(dimg.tex), tex_rgb_op(img.tex), GPU_TEVOP_RGB_SRC_COLOR);
             C3D_TexEnvFunc(env, C3D_RGB, GPU_INTERPOLATE);
             C3D_TexEnvColor(env, 0x80808080);
             C3D_TexEnvSrc(env, C3D_Alpha, GPU_PRIMARY_COLOR, 0, 0);
@@ -525,6 +558,7 @@ void trino_3d_draw(const float* v, uint32_t count, void* sheet, uint32_t clamp)
         } else {
             // Stage 1: the lit texel times the detail texel (alpha stays).
             C3D_TexEnvSrc(env1, C3D_RGB, GPU_PREVIOUS, GPU_TEXTURE1, 0);
+            C3D_TexEnvOpRgb(env1, GPU_TEVOP_RGB_SRC_COLOR, tex_rgb_op(dimg.tex), GPU_TEVOP_RGB_SRC_COLOR);
             C3D_TexEnvFunc(env1, C3D_RGB, GPU_MODULATE);
         }
         C3D_TexEnvSrc(env1, C3D_Alpha, GPU_PREVIOUS, 0, 0);
@@ -735,6 +769,7 @@ void trino_water_draw(void* mesh, const float* u, void* sheet, uint32_t flags)
         // Stage 0: the layers half and half; stage 1: times the vertex
         // color. The alpha is the vertex's.
         C3D_TexEnvSrc(env, C3D_RGB, GPU_TEXTURE1, GPU_TEXTURE0, GPU_CONSTANT);
+        C3D_TexEnvOpRgb(env, tex_rgb_op(dimg.tex), tex_rgb_op(img.tex), GPU_TEVOP_RGB_SRC_COLOR);
         C3D_TexEnvFunc(env, C3D_RGB, GPU_INTERPOLATE);
         C3D_TexEnvColor(env, 0x80808080);
         C3D_TexEnvSrc(env, C3D_Alpha, GPU_PRIMARY_COLOR, 0, 0);
@@ -746,6 +781,7 @@ void trino_water_draw(void* mesh, const float* u, void* sheet, uint32_t flags)
         C3D_TexEnvFunc(env1, C3D_Alpha, GPU_REPLACE);
     } else if (sheet) {
         C3D_TexEnvSrc(env, C3D_RGB, GPU_TEXTURE0, GPU_PRIMARY_COLOR, 0);
+        C3D_TexEnvOpRgb(env, tex_rgb_op(img.tex), GPU_TEVOP_RGB_SRC_COLOR, GPU_TEVOP_RGB_SRC_COLOR);
         C3D_TexEnvFunc(env, C3D_RGB, GPU_MODULATE);
         C3D_TexEnvSrc(env, C3D_Alpha, GPU_PRIMARY_COLOR, 0, 0);
         C3D_TexEnvFunc(env, C3D_Alpha, GPU_REPLACE);

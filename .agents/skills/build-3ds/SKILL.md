@@ -18,7 +18,9 @@ install (auto-detected at `$DEVKITPRO`, `C:\devkitPro` or `/opt/devkitpro`).
 1. `compile_shim` — compiles `crates/platform-3ds/shim/trino_shim_3ds.c`
    with devkitARM's `arm-none-eabi-gcc` against the installed libctru
    headers (mtime-cached to `target/3ds/shim.o`).
-2. `bake_assets` — `tex3ds` (sprites → `.t3x`) + wav→raw-PCM16 conversion
+2. `bake_assets` — `tex3ds` (sprites → `.t3x`, `-f` from the manifest's 3DS
+   format through `trino_asset_pipeline::N3dsFormat::tex3ds`: rgba8, rgb565,
+   rgba5551, rgba4, la8, l8, a8, etc1, etc1a4) + wav→raw-PCM16 conversion
    (sounds → `.pcm16`, 12-byte header) into `target/3ds/romfs/` + `index.tsv`.
 3. `cargo +nightly build` — the **built-in Tier 3 target**
    `armv6k-nintendo-3ds` (no custom JSON) with `-Zbuild-std=core,alloc`;
@@ -106,6 +108,25 @@ Rust side, `N3dsRenderer::set_screen` only goes 0 → 1 (the PC's order) and reb
 the T&L context at 320×240, and `begin_frame` goes back to 400×240. A 3D draw on the
 bottom with the top's projection lands about 40 px off. The `dual screen` self-test
 step probes for that.
+
+## Texture formats in the shim (issue #52, ADR 0017)
+
+- citro2d/citro3d sample whatever `.t3x` format `tex3ds` wrote (`Tex3DS_TextureImport`
+  sets `C3D_Tex::fmt`); ETC1, ETC1A4, RGBA4, L8 and LA8 need nothing. **A8 (and A4)
+  sample as (0, 0, 0, a)**, but the engine's A8 is a white mask: `tex_is_mask` /
+  `tex_rgb_op` give such a texture `GPU_TEVOP_RGB_ONE_MINUS_SRC_COLOR` wherever it enters
+  a TexEnv (base, detail, water), and `trino_sprite_blit` draws it with
+  `C2D_TintSolid` (tint color, texel alpha), then back to `C2D_TintMult`.
+- **`C3D_Tex::fmt` is a signed 4-bit bitfield:** compare `(unsigned)fmt & 15`, or every
+  format ≥ 8 (A8, LA4, L4, A4, ETC1, ETC1A4) never matches. This cost a whole Azahar
+  round: the A8 card stayed black with a correct-looking test.
+- The `texture formats` self-test step logs the failing probe
+  (`TRINO_STEP:texture formats A8 2D q0 got 0,0,0 want 255,255,255`): read it before
+  guessing. The step is proven to fail with the 3D operand fix removed (`A8 3D q0`) and
+  with A8 decoded black on the PC.
+- `cargo xtask test 3ds` checks a fifth golden, `tests/golden/3ds/texture_formats.png`
+  (the cards plus a photo-like card in RGBA8/ETC1/RGBA4). `--bless` rewrites all five:
+  restore the four you didn't mean to change (`git checkout tests/golden/3ds/<name>.png`).
 
 ## The shim rule
 

@@ -48,6 +48,12 @@ shipping a 3D game first**, then by cost:
 
 ### P1 — the next quality and reach jump
 
+- **Texture formats, phases 2–5 (#52, ADR 0017)** (M). Phase 1 (the 3DS hardware
+  formats, the PC's decoded preview, `texture inspect`, the `texture formats` step) is
+  done; no texture changed format yet. Next: `auto` per platform with a `min_psnr` guard
+  and `texture report`, applied to castle64, the showcase and Solid Eleven with RomFS and
+  linear memory quoted before/after (2); PC BCn with an RGBA8 fallback (3); the editor's
+  texture inspector (4); Web KTX2 once `platform-web` exists (5).
 - **PC hardware T&L, phases 2–6 (#51, ADR 0016)** (L). Phase 1 (the instancing API,
   `pc_gpu_check` and the reporting) is done; the native profile still draws on the CPU.
   Next: resident mesh buffers and the WGSL vertex stage for static draws behind the
@@ -193,6 +199,28 @@ shipping a 3D game first**, then by cost:
   time) and bless `tests/perf/` on purpose. Host benches stay as regression guards only.
 
 ---
+
+## Done — texture formats, phase 1: 3DS hardware formats and `texture inspect` (2026-10-17, branch `feat/52-texture-formats-3ds`, GitHub #52, ADR 0017 draft)
+
+| Item | Evidence |
+|---|---|
+| 3DS formats `ETC1`, `ETC1A4`, `RGBA4`, `RGBA5551`, `LA8`, `L8`, `A8` (besides `RGBA8`/`RGB565`), mapped to `tex3ds -f` by `N3dsFormat`; an unknown one fails the bake with the list (the PC bake checks it too) | `crates/asset-pipeline/tests/texture_formats.rs` (PSNR per format on a gradient/disc/alpha-ramp master, each 0.5–1 dB under the measured value; `a_bad_3ds_format_fails_the_pc_bake_with_the_list`) |
+| PC preview of the decoded 3DS result (`N3dsFormat::preview`, an ETC1 encoder, `<id>.3ds.sprite` / `preview_3ds`, `LoadedSprite::pixels_for`), drawn by `trino-runner-pc`, the editor's 3DS Game view and the 3DS-profile tests | `preview_matches_tex3ds` with devkitPro's `tex3ds` v2.3.0: every uncompressed format texel for texel (luminance ±1), ETC1 28.75 dB vs `tex3ds` 28.77, ETC1A4 identical alpha; `pc_bake_writes_and_loads_the_3ds_preview` |
+| The shim's A8 as a white mask (TexEnv `1 − color` operand on base/detail/water, `C2D_TintSolid` blits; `C3D_Tex::fmt` read as 4 unsigned bits) | the `texture formats` step in Azahar: `probed 9 formats`, `TEST PASS`; fails with the 3D operand removed (`A8 3D q0 got 0,0,0`) and, on the PC, with A8 decoded black or ETC1A4's alpha dropped |
+| `cargo xtask texture inspect <sprites/x> [--platform] [--json]` | `xtask/tests/texture_cli.rs`; `inspect_reports_each_platform` |
+| The `texture formats` self-test step (9 cards as sprites and 3D cards) and the 3DS golden `texture_formats.png` | `engine_checks` on the N64 and 3DS profiles; `n3ds_parity::pc_3ds_texture_formats_track_the_azahar_frame` (mean 0.19, 0 % far); ares `TEST PASS` |
+
+The four older 3DS goldens pass unchanged (not re-blessed). ares: `texture formats probed 9 formats`,
+`TEST PASS`, `showcase.png`, `castle64_hub.png` and `showcase_river.png` match byte for byte,
+every ceiling held without re-blessing (hub 11.5 ms, throne 17.1 ms, showcase-river
+272.7 ms), stack 25 408 bytes.
+No game texture changed format in this phase, so RomFS and linear memory are unchanged
+(the self-test adds 12 small sprites).
+
+Deviations: ETC1 is encoded by the pipeline for the PC preview and by `tex3ds` for the
+console, so the blocks are alike, not byte-identical (the parity test bounds it). A8 is
+defined as white + alpha on every target, while the PICA200 samples it black; the shim
+enforces the engine's meaning.
 
 ## Done — PC hardware T&L, phase 1: instancing API, `pc_gpu_check` and reporting (2026-10-17, branch `feat/51-pc-gpu-tnl`, GitHub #51, ADR 0016 draft)
 

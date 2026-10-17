@@ -289,6 +289,58 @@ formats = { n64 = "RGBA5551" }
 file = "sprites/selftest_detail.png"
 formats = { n64 = "I4" }
 
+# One card per 3DS texture format (selftest::texture_formats, issue #52):
+# quadrants each format stores exactly; the N64 bakes them as RGBA5551.
+[sprites.selftest_fmt_rgba8]
+file = "sprites/selftest_fmt_rgba8.png"
+formats = { n64 = "RGBA5551", 3ds = "RGBA8" }
+
+[sprites.selftest_fmt_rgb565]
+file = "sprites/selftest_fmt_rgb565.png"
+formats = { n64 = "RGBA5551", 3ds = "RGB565" }
+
+[sprites.selftest_fmt_rgba5551]
+file = "sprites/selftest_fmt_rgba5551.png"
+formats = { n64 = "RGBA5551", 3ds = "RGBA5551" }
+
+[sprites.selftest_fmt_rgba4]
+file = "sprites/selftest_fmt_rgba4.png"
+formats = { n64 = "RGBA5551", 3ds = "RGBA4" }
+
+[sprites.selftest_fmt_la8]
+file = "sprites/selftest_fmt_la8.png"
+formats = { n64 = "RGBA5551", 3ds = "LA8" }
+
+[sprites.selftest_fmt_l8]
+file = "sprites/selftest_fmt_l8.png"
+formats = { n64 = "RGBA5551", 3ds = "L8" }
+
+[sprites.selftest_fmt_a8]
+file = "sprites/selftest_fmt_a8.png"
+formats = { n64 = "RGBA5551", 3ds = "A8" }
+
+[sprites.selftest_fmt_etc1]
+file = "sprites/selftest_fmt_etc1.png"
+formats = { n64 = "RGBA5551", 3ds = "ETC1" }
+
+[sprites.selftest_fmt_etc1a4]
+file = "sprites/selftest_fmt_etc1a4.png"
+formats = { n64 = "RGBA5551", 3ds = "ETC1A4" }
+
+# The photo-like card of the 3DS texture-formats golden, as the master and
+# in two lossy 3DS formats. The N64 never draws it (CI8 only to bake).
+[sprites.selftest_photo]
+file = "sprites/selftest_photo.png"
+formats = { n64 = "CI8", 3ds = "RGBA8" }
+
+[sprites.selftest_photo_etc1]
+file = "sprites/selftest_photo.png"
+formats = { n64 = "CI8", 3ds = "ETC1" }
+
+[sprites.selftest_photo_rgba4]
+file = "sprites/selftest_photo.png"
+formats = { n64 = "CI8", 3ds = "RGBA4" }
+
 # Two-joint strip with one 50/50 vertex: smooth skinning (SKW2) on every
 # target (selftest::smooth_skin).
 [models.selftest_strip]

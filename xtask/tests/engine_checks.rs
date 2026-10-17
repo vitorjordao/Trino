@@ -29,8 +29,14 @@ fn pc_target(profile: SimProfile, save_dir: &std::path::Path) -> Option<(PcRende
     renderer.set_strict(true);
     let mut platform =
         PcPlatform::new(&profile.caps()).with_save_file(save_dir.join("selftest.sav"));
+    // The 3DS profile samples each sprite's 3DS format, like Azahar.
+    let target = match profile {
+        SimProfile::N3ds => trino_asset_pipeline::Platform::N3ds,
+        _ => trino_asset_pipeline::Platform::Pc,
+    };
     for s in assets.sprites {
-        renderer.upload_sprite(trino_core::SpriteId(s.id), s.width, s.height, &s.rgba);
+        let px = s.pixels_for(target);
+        renderer.upload_sprite(trino_core::SpriteId(s.id), s.width, s.height, px);
     }
     for f in assets.fonts {
         renderer.upload_font(trino_core::FontId(f.id), f.table);

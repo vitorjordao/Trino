@@ -351,6 +351,12 @@ about the origin.
   frame from generated contact points. Hand-written root heights floated or sank.
 - **Lying clips need a pelvis roll,** or the torso goes through the turf; give falls
   and slides a get-up clip, and route a fall to it instead of crossfading to a run.
+- **A pose can pass every fit rule and still look wrong:** the slide's hips sat 0.45 m
+  up on a straight leg, a flying kick, with nothing poking through. Look at the pose
+  sheets (`cargo test --release -p xtask --test solid_eleven_poses -- --ignored`) of
+  both bodies: the consoles' legs have no knee, so a folded leg sticks up into the air
+  there. Search a pose with the generator's FK (`lowest`, `frames_of`) against what
+  should touch the turf, on both tiers, then fit-test it.
 - **Generators that write Rust read and write with `encoding="utf-8", newline="\n"`.**
   Windows Python defaults to cp1252. CI's Windows job runs the clip table's
   `--check`, which then saw the em dash in the generated header as drift, on a file

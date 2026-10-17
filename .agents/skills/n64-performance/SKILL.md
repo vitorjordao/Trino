@@ -423,7 +423,9 @@ T&L. Every castle64 scene costs 7–13 ms of emulated time (vsync caps it at 60 
 ## A football match at 30 fps (Solid Eleven, 2026-10-16)
 
 22 players, a referee, a stadium and a HUD: 26.6 ms avg in ares, 76 of 77 draws on the
-RSP. What got it from 48.7 ms there:
+RSP (iteration 2, with 15-part bodies split into kit legs, a shadow per player and the
+hull check: 30.9 ms over four code layouts, all 83 draws on the RSP). What got it from
+48.7 ms there:
 
 - **The sim was the cost, not the draws.** Chasers and keepers each predicted the ball
   on their own: about 740 ball steps a tick. One shared trajectory per tick (`ai::Traj`)

@@ -159,7 +159,11 @@ cargo xtask test 3ds --project target/test-projects/se-demo --no-build
   sim's state after the script, which `check()` holds to the PC's) and
   `TRINO_SE_RENDER_CPU`, then dump the `match` golden (and `match_bottom` on the
   3DS).
-- **Measured results:** ares 26.6 ms avg against a 33.3 ms gate; Azahar 16.8 ms.
+- **Measured results:** ares 30.9 ms avg over four code layouts (first iteration:
+  26.6 ms, with lighter bodies) against a 33.3 ms gate; Azahar 16.8 ms.
+- **No local devkitPro?** Build the project's `.3dsx` in a devkitPro image with Rust
+  nightly (the `n3ds` CI job's container plus rustup), then boot it on the host with
+  `test 3ds --project … --no-build`.
 - **The script must press a kick at each kick-off.** A side the human controls waits
   up to 8 s for one, and the first script idled three seconds of its 300 frames that
   way.

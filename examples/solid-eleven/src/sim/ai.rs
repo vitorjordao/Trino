@@ -1036,6 +1036,63 @@ fn keeper(m: &mut Match, i: usize, _home: V2) -> Cmd {
 
 /// A keeper with the ball in his hands: throw short to a free defender, or
 /// kick long.
+/// A human keeper's kick from his hands: a throw to the teammate the stick
+/// points at (pass), a punt upfield (shoot: higher and longer with the
+/// charge), or a long roll into space (through).
+pub fn human_keeper_plan(m: &mut Match, i: usize, pad: &Pad) -> Option<KickPlan> {
+    let s = side_of(i);
+    let dir = if pad.mv == V2::ZERO {
+        V2::new(m.attacks(s).sign(), Fx::ZERO)
+    } else {
+        pad.mv.norm()
+    };
+    if let Some(charge) = pad.pass {
+        let tgt = match pass_target(m, i, dir) {
+            Some(j) => m.players[j as usize].pos,
+            None => m.players[i].pos + dir.scale(Fx::int(14) + charge.mul(Fx::int(14))),
+        };
+        let mut plan = pass_plan(
+            m,
+            i,
+            pitch::clamp_to_field(tgt),
+            None,
+            false,
+            KickKind::Distribute,
+            Fx::ZERO,
+        );
+        // A throw: a little above the turf.
+        plan.vel.y = Fx::milli(1_500);
+        return Some(plan);
+    }
+    if let Some(charge) = pad.shoot {
+        let tgt = m.players[i].pos + dir.scale(Fx::int(35) + charge.mul(Fx::int(25)));
+        let mut plan = pass_plan(
+            m,
+            i,
+            pitch::clamp_to_field(tgt),
+            None,
+            true,
+            KickKind::Distribute,
+            Fx::ZERO,
+        );
+        plan.vel.y = plan.vel.y.max(Fx::int(9));
+        return Some(plan);
+    }
+    if let Some(charge) = pad.through {
+        let tgt = m.players[i].pos + dir.scale(Fx::int(18) + charge.mul(Fx::int(18)));
+        return Some(pass_plan(
+            m,
+            i,
+            pitch::clamp_to_field(tgt),
+            None,
+            false,
+            KickKind::Distribute,
+            Fx::ZERO,
+        ));
+    }
+    None
+}
+
 pub fn keeper_distribution(m: &mut Match, i: usize) -> KickPlan {
     let s = side_of(i);
     let err = err_scale(m, s);

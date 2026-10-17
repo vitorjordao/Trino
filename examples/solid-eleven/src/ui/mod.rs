@@ -10,6 +10,7 @@
 //! rectangle is one fill command. Shapes that aren't rectangles (the radar,
 //! crests, slants) are drawn as horizontal spans.
 
+pub mod controls;
 pub mod i18n;
 pub mod screens;
 

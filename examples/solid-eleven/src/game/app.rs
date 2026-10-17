@@ -2,6 +2,7 @@
 //! database every mode reads, so edits and transfers show in quick
 //! matches too), the match in progress, and the save.
 
+use crate::game::input::{ACTIONS, ASSIGNABLE, Action, Bindings};
 use crate::game::menu::{self, Hits, Nav, Repeat};
 use crate::game::session::{Session, dress};
 use crate::game::sound::{self, Sfx};
@@ -9,10 +10,12 @@ use crate::render::Sky;
 use crate::render::anim::AnimState;
 use crate::render::clips_gen::ClipName;
 use crate::sim::engine::{N, Phase, SIDE, Setup, Stats};
-use crate::sim::league::{Career, ROUNDS, SAVE_MAX, TransferError};
+use crate::sim::league::{Career, ROUNDS, SAVE_MAX, SETTINGS_LEN, TransferError};
 use crate::sim::team::{self, ATTRS, CLUBS, FORMATIONS, PLAYERS, PlayerRec, TEAMS};
 use crate::ui::i18n::{Lang, S};
-use trino_core::{Audio, Game, InputState, Platform, Renderer, Vec2};
+use trino_core::{
+    Audio, BindDevice, Button, Game, GamepadStatus, InputState, Platform, Renderer, TextBuf, Vec2,
+};
 
 /// The screens.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -35,6 +38,9 @@ pub enum Scene {
     /// Buying and selling.
     Market,
     Settings,
+    /// The settings' controls page: the match's buttons, and on the PC
+    /// the keyboard's and the gamepad's, with the device's layout drawn.
+    Controls,
     /// "Reset the save?"
     Confirm,
     Match,
@@ -59,6 +65,13 @@ pub struct Settings {
     pub difficulty: u8,
     /// Minutes of play per half (real time).
     pub half_mins: u8,
+    /// The human may take his keeper (and gets him on shots at his goal
+    /// and while he holds the ball).
+    pub keeper: bool,
+    /// The match's buttons.
+    pub bindings: Bindings,
+    /// PC graphics: 0 = the PC's best (default), 1 = the console look.
+    pub graphics: u8,
 }
 
 impl Settings {
@@ -66,17 +79,32 @@ impl Settings {
         lang: Lang::En,
         difficulty: 1,
         half_mins: 3,
+        keeper: false,
+        bindings: Bindings::DEFAULT,
+        graphics: 0,
     };
 
-    pub fn bytes(&self) -> [u8; 4] {
-        [self.lang as u8, self.difficulty, self.half_mins, 0]
+    /// The save's settings bytes: language, difficulty, half length, the
+    /// career flag (byte 3, the app's), keeper, graphics, the bindings.
+    pub fn bytes(&self) -> [u8; SETTINGS_LEN] {
+        let mut b = [0u8; SETTINGS_LEN];
+        b[0] = self.lang as u8;
+        b[1] = self.difficulty;
+        b[2] = self.half_mins;
+        b[4] = self.keeper as u8;
+        b[5] = self.graphics;
+        b[6..6 + ACTIONS].copy_from_slice(&self.bindings.to_bytes());
+        b
     }
 
-    pub fn from_bytes(b: [u8; 4]) -> Settings {
+    pub fn from_bytes(b: [u8; SETTINGS_LEN]) -> Settings {
         Settings {
             lang: if b[0] == 1 { Lang::Pt } else { Lang::En },
             difficulty: b[1].min(2),
             half_mins: b[2].clamp(1, 9),
+            keeper: b[4] == 1,
+            bindings: Bindings::from_bytes(&b[6..6 + ACTIONS]),
+            graphics: b[5].min(1),
         }
     }
 }
@@ -134,7 +162,65 @@ pub struct Cursors {
     pub settings: usize,
     pub pause: usize,
     pub confirm: usize,
+    /// The controls page: tab (0 match, 1 keyboard, 2 gamepad), row, and
+    /// the first row shown.
+    pub ctl_tab: u8,
+    pub ctl_row: usize,
+    pub ctl_top: usize,
 }
+
+/// The controller the controls page draws: the console's own, or the PC's
+/// keyboard and gamepad.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Device {
+    Pc,
+    N64,
+    N3ds,
+}
+
+pub const DEVICE: Device = if cfg!(target_os = "none") {
+    Device::N64
+} else if cfg!(target_os = "horizon") {
+    Device::N3ds
+} else {
+    Device::Pc
+};
+
+/// What the PC host says about its bindings (copied every frame by
+/// `update_with`; empty on consoles and without a host).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct InputPeek {
+    /// The host can rebind keys and pad buttons.
+    pub rebindable: bool,
+    /// Each engine button's key and pad button(s), uppercase, in
+    /// `Button::ALL` order ("Z", "ENTER", "LB/LT").
+    pub keys: [TextBuf<14>; 16],
+    pub pads: [TextBuf<14>; 16],
+    /// 0 = no gamepad support, 1 = none connected, 2 = connected.
+    pub gamepad: u8,
+    pub pad_name: TextBuf<28>,
+    /// A rebind waiting for its key or pad button.
+    pub capturing: Option<(Button, BindDevice)>,
+}
+
+/// A request for the PC host, made by the controls page and sent after the
+/// frame's update (the update doesn't see the platform).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum HostAsk {
+    Rebind(Button, BindDevice),
+    Cancel,
+    Reset,
+}
+
+/// The match-button capture: the action waiting for a press, seconds left.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Capture {
+    pub action: Action,
+    pub left: f32,
+}
+
+/// How long the controls page waits for the new button.
+pub const CAPTURE_SECS: f32 = 5.0;
 
 pub struct SolidElevenGame {
     pub screen: Vec2,
@@ -169,6 +255,15 @@ pub struct SolidElevenGame {
     after_full_time: f32,
     /// A substitution asked for from the pause menu.
     sub_asked: bool,
+    /// The PC host's bindings (the controls page).
+    pub peek: InputPeek,
+    /// For the host after this frame.
+    pub host_ask: Option<HostAsk>,
+    /// The controls page waiting for a match button.
+    pub capture: Option<Capture>,
+    /// The controller the controls page draws ([`DEVICE`]; tests preview
+    /// the others).
+    pub device: Device,
 }
 
 impl SolidElevenGame {
@@ -216,6 +311,10 @@ impl SolidElevenGame {
             music: None,
             after_full_time: 0.0,
             sub_asked: false,
+            peek: InputPeek::default(),
+            host_ask: None,
+            capture: None,
+            device: DEVICE,
         }
     }
 
@@ -244,9 +343,13 @@ impl SolidElevenGame {
         sky: Sky,
         half_secs: u32,
     ) {
-        let (setup, names, skins) = crate::quick_setup(home, away, seed, half_secs, humans);
+        let (mut setup, names, skins) = crate::quick_setup(home, away, seed, half_secs, humans);
+        setup.keeper_ctl = [self.settings.keeper; 2];
         let d = dress([setup.sides[0].club, setup.sides[1].club], &skins);
-        self.session = Some(Session::new(&setup, &d, names, sky));
+        let mut session = Session::new(&setup, &d, names, sky);
+        session.controls.bindings = self.settings.bindings;
+        session.view.retro = self.settings.graphics == 1;
+        self.session = Some(session);
         self.scene = Scene::Match;
         self.in_career_match = false;
     }
@@ -268,7 +371,7 @@ impl SolidElevenGame {
             ^ (away as u32) << 4
             ^ (self.time * 1000.0) as u32;
         let half_ticks = self.settings.half_mins as u32 * 60 * 60;
-        let setup: Setup = self.world.setup(
+        let mut setup: Setup = self.world.setup(
             home,
             away,
             half_ticks,
@@ -277,6 +380,7 @@ impl SolidElevenGame {
             self.settings.difficulty,
             rain,
         );
+        setup.keeper_ctl = [self.settings.keeper; 2];
         let mut names = [0u8; N];
         let mut skins = [0u8; N];
         for s in 0..2 {
@@ -287,7 +391,10 @@ impl SolidElevenGame {
             }
         }
         let d = dress([home, away], &skins);
-        self.session = Some(Session::new(&setup, &d, names, sky));
+        let mut session = Session::new(&setup, &d, names, sky);
+        session.controls.bindings = self.settings.bindings;
+        session.view.retro = self.settings.graphics == 1;
+        self.session = Some(session);
         self.scene = Scene::Match;
         self.in_career_match = career;
         self.after_full_time = 0.0;
@@ -338,6 +445,7 @@ impl SolidElevenGame {
         match self.scene {
             Scene::Match => self.match_frame(input, &prev, &nav, audio, dt),
             Scene::Pause => self.pause_frame(&nav, tap, audio),
+            Scene::Controls => self.controls_frame(input, &prev, &nav, tap, audio, dt),
             _ => self.menu_frame(&nav, tap, audio),
         }
     }
@@ -354,7 +462,9 @@ impl SolidElevenGame {
             self.scene = Scene::Title;
             return;
         };
-        if nav.start && s.human.is_some() {
+        // Pause sits on its own (rebindable) button.
+        let pause = s.controls.bindings.of(Action::Pause);
+        if input.just_pressed(prev, pause) && s.human.is_some() {
             self.scene = Scene::Pause;
             self.cur.pause = 0;
             sound::play(audio, Sfx::Click);
@@ -511,7 +621,7 @@ impl SolidElevenGame {
                     self.scene = Scene::Club;
                 }
             }
-            Scene::Match | Scene::Pause => {}
+            Scene::Match | Scene::Pause | Scene::Controls => {}
         }
         if self.scene != before || nav.confirm {
             sound::play(audio, if nav.back { Sfx::Back } else { Sfx::Click });
@@ -855,30 +965,205 @@ impl SolidElevenGame {
         }
     }
 
-    fn settings_menu(&mut self, nav: &Nav, tap: Option<u8>) {
-        menu::step(&mut self.cur.settings, 3, nav);
-        if let Some(id) = tap {
-            self.cur.settings = id as usize;
+    /// The settings page's rows (the graphics row is the PC's).
+    pub fn settings_rows() -> &'static [SettingRow] {
+        if DEVICE == Device::Pc {
+            &[
+                SettingRow::Language,
+                SettingRow::Difficulty,
+                SettingRow::Length,
+                SettingRow::Keeper,
+                SettingRow::Graphics,
+                SettingRow::Controls,
+            ]
+        } else {
+            &[
+                SettingRow::Language,
+                SettingRow::Difficulty,
+                SettingRow::Length,
+                SettingRow::Keeper,
+                SettingRow::Controls,
+            ]
         }
-        let d = menu::lr(nav) + if nav.confirm || tap.is_some() { 1 } else { 0 };
-        if d != 0 {
-            let st = &mut self.settings;
-            match self.cur.settings {
-                0 => {
-                    st.lang = if st.lang == Lang::En {
-                        Lang::Pt
-                    } else {
-                        Lang::En
-                    }
-                }
-                1 => st.difficulty = ((st.difficulty as i32 + d).rem_euclid(3)) as u8,
-                _ => st.half_mins = ((st.half_mins as i32 - 1 + d).rem_euclid(6) + 1) as u8,
+    }
+
+    fn settings_menu(&mut self, nav: &Nav, tap: Option<u8>) {
+        let rows = Self::settings_rows();
+        menu::step(&mut self.cur.settings, rows.len(), nav);
+        if let Some(id) = tap {
+            self.cur.settings = (id as usize).min(rows.len() - 1);
+        }
+        let row = rows[self.cur.settings.min(rows.len() - 1)];
+        if row == SettingRow::Controls {
+            if nav.confirm || tap.is_some() || nav.right {
+                self.scene = Scene::Controls;
+                self.cur.ctl_row = 0;
+                self.cur.ctl_top = 0;
             }
-            self.save_dirty = true;
+        } else {
+            let d = menu::lr(nav) + if nav.confirm || tap.is_some() { 1 } else { 0 };
+            if d != 0 {
+                let st = &mut self.settings;
+                match row {
+                    SettingRow::Language => {
+                        st.lang = if st.lang == Lang::En {
+                            Lang::Pt
+                        } else {
+                            Lang::En
+                        }
+                    }
+                    SettingRow::Difficulty => {
+                        st.difficulty = ((st.difficulty as i32 + d).rem_euclid(3)) as u8
+                    }
+                    SettingRow::Length => {
+                        st.half_mins = ((st.half_mins as i32 - 1 + d).rem_euclid(6) + 1) as u8
+                    }
+                    SettingRow::Keeper => st.keeper = !st.keeper,
+                    SettingRow::Graphics => st.graphics = 1 - st.graphics.min(1),
+                    SettingRow::Controls => {}
+                }
+                self.save_dirty = true;
+            }
         }
         if nav.back {
             self.scene = Scene::Title;
         }
+    }
+
+    /// The tabs the controls page has here (the PC adds its devices).
+    pub fn control_tabs(&self) -> u8 {
+        if self.peek.rebindable { 3 } else { 1 }
+    }
+
+    /// Rows of the controls page's current tab (the last resets it).
+    pub fn control_rows(&self) -> usize {
+        if self.cur.ctl_tab == 0 {
+            ACTIONS + 1
+        } else {
+            Button::ALL.len() + 1
+        }
+    }
+
+    fn controls_frame(
+        &mut self,
+        input: &InputState,
+        prev: &InputState,
+        nav: &Nav,
+        tap: Option<u8>,
+        audio: &mut dyn Audio,
+        dt: f32,
+    ) {
+        // Waiting for the new match button: any assignable press takes it.
+        if let Some(c) = &mut self.capture {
+            c.left -= dt;
+            let action = c.action;
+            let pressed = ASSIGNABLE
+                .into_iter()
+                .find(|&b| input.just_pressed(prev, b));
+            if let Some(b) = pressed {
+                self.settings.bindings.assign(action, b);
+                self.capture = None;
+                self.save_dirty = true;
+                sound::play(audio, Sfx::Click);
+            } else if c.left <= 0.0 {
+                self.capture = None;
+                sound::play(audio, Sfx::Back);
+            }
+            return;
+        }
+        // The host is waiting for a key or pad button: B cancels.
+        if self.peek.capturing.is_some() {
+            if nav.back {
+                self.host_ask = Some(HostAsk::Cancel);
+            }
+            return;
+        }
+        let tabs = self.control_tabs();
+        let before = (self.cur.ctl_tab, self.cur.ctl_row);
+        if nav.l || nav.r {
+            let d = if nav.r { 1 } else { tabs - 1 };
+            self.cur.ctl_tab = (self.cur.ctl_tab + d) % tabs;
+            self.cur.ctl_row = 0;
+            self.cur.ctl_top = 0;
+        }
+        self.cur.ctl_tab = self.cur.ctl_tab.min(tabs - 1);
+        let rows = self.control_rows();
+        menu::step(&mut self.cur.ctl_row, rows, nav);
+        if let Some(id) = tap {
+            if id >= 200 {
+                self.cur.ctl_tab = (id - 200).min(tabs - 1);
+                self.cur.ctl_row = 0;
+                self.cur.ctl_top = 0;
+            } else {
+                self.cur.ctl_row = (id as usize).min(rows - 1);
+            }
+        }
+        // Keep the selection in the visible window.
+        let shown = CONTROL_ROWS_SHOWN;
+        if self.cur.ctl_row < self.cur.ctl_top {
+            self.cur.ctl_top = self.cur.ctl_row;
+        } else if self.cur.ctl_row >= self.cur.ctl_top + shown {
+            self.cur.ctl_top = self.cur.ctl_row + 1 - shown;
+        }
+        if (self.cur.ctl_tab, self.cur.ctl_row) != before {
+            sound::play(audio, Sfx::Tap);
+        }
+        if nav.back {
+            self.scene = Scene::Settings;
+            sound::play(audio, Sfx::Back);
+            return;
+        }
+        if !(nav.confirm || tap.is_some_and(|id| id < 200)) {
+            return;
+        }
+        sound::play(audio, Sfx::Click);
+        let reset = self.cur.ctl_row + 1 == rows;
+        match (self.cur.ctl_tab, reset) {
+            (0, true) => {
+                self.settings.bindings = Bindings::DEFAULT;
+                self.save_dirty = true;
+                self.toast(S::Saved, true);
+            }
+            (0, false) => {
+                self.capture = Some(Capture {
+                    action: Action::ALL[self.cur.ctl_row],
+                    left: CAPTURE_SECS,
+                });
+            }
+            (_, true) => self.host_ask = Some(HostAsk::Reset),
+            (tab, false) => {
+                let device = if tab == 1 {
+                    BindDevice::Keyboard
+                } else {
+                    BindDevice::Gamepad
+                };
+                self.host_ask = Some(HostAsk::Rebind(Button::ALL[self.cur.ctl_row], device));
+            }
+        }
+    }
+
+    /// Copy the host's binding labels and rebind state (the PC's).
+    fn peek_input(&mut self, platform: &dyn Platform) {
+        let Some(info) = platform.input_info() else {
+            self.peek = InputPeek::default();
+            return;
+        };
+        let mut p = InputPeek {
+            rebindable: true,
+            capturing: info.capturing,
+            gamepad: match info.gamepad {
+                GamepadStatus::Unsupported => 0,
+                GamepadStatus::Disconnected => 1,
+                GamepadStatus::Connected => 2,
+            },
+            ..InputPeek::default()
+        };
+        for (k, b) in Button::ALL.into_iter().enumerate() {
+            p.keys[k] = font_safe(platform.binding_label(b, BindDevice::Keyboard));
+            p.pads[k] = font_safe(platform.binding_label(b, BindDevice::Gamepad));
+        }
+        p.pad_name = font_safe(platform.gamepad_name());
+        self.peek = p;
     }
 
     /// Read the save on the first frame; write it when something changed
@@ -922,7 +1207,15 @@ impl Game for SolidElevenGame {
         dt: f32,
     ) {
         self.persist(platform);
+        self.peek_input(platform);
         self.update(input, audio, dt);
+        if let Some(ask) = self.host_ask.take() {
+            match ask {
+                HostAsk::Rebind(b, d) => platform.rebind(b, d),
+                HostAsk::Cancel => platform.cancel_rebind(),
+                HostAsk::Reset => platform.reset_bindings(),
+            }
+        }
     }
 
     fn render(&mut self, renderer: &mut dyn Renderer) {
@@ -933,6 +1226,38 @@ impl Game for SolidElevenGame {
     fn resize(&mut self, screen: Vec2) {
         self.screen = screen;
     }
+}
+
+/// The settings page's rows.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SettingRow {
+    Language,
+    Difficulty,
+    Length,
+    Keeper,
+    Graphics,
+    Controls,
+}
+
+/// Rows the controls page shows at once.
+pub const CONTROL_ROWS_SHOWN: usize = 9;
+
+/// A host label in the UI font's characters (uppercase; others become '?').
+pub fn font_safe<const N: usize>(s: Option<&str>) -> TextBuf<N> {
+    use core::fmt::Write as _;
+    let mut out = TextBuf::<N>::new();
+    if let Some(s) = s {
+        for c in s.chars() {
+            let u = c.to_ascii_uppercase();
+            let c = if crate::ui::FONT_CHARS.contains(u) {
+                u
+            } else {
+                '?'
+            };
+            let _ = out.write_char(c);
+        }
+    }
+    out
 }
 
 /// Names for the clubs' crests (three letters).

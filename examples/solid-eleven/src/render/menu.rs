@@ -9,7 +9,7 @@ use super::{
     CamState, Detail, Frustum, Look, M_PEDESTAL, M_TROPHY, S_CONFETTI, Sky, WORLD, draw_body,
     draw_stadium, plain, unlit,
 };
-use trino_core::{BillboardParams, Color, LightTier, Mat34, Material, Renderer, Vec2, Vec3};
+use trino_core::{BillboardParams, Color, Mat34, Material, Renderer, Vec2, Vec3};
 
 /// The trophy ceremony: at night under the floodlights, the captain
 /// (`looks[0]`, playing `TrophyLift`) lifts the cup over his head between
@@ -23,8 +23,9 @@ pub fn ceremony(
     cam: &CamState,
     at: Vec3,
     time: f32,
+    retro: bool,
 ) {
-    let hifi = r.caps().light_tier == LightTier::PerPixel;
+    let hifi = super::hifi(r, retro);
     r.begin_frame(Sky::Night.clear());
     r.set_camera(&cam.camera());
     // The floodlights: the players stand in daylight-white light in front
@@ -96,7 +97,7 @@ fn confetti(r: &mut dyn Renderer, at: Vec3, time: f32, looks: &[Look; 5]) {
         let (hx, hz, ph) = (h(2_654_435_761), h(2_246_822_519), h(3_266_489_917));
         let fall = time * 1.4 + ph * 6.0;
         let y = 6.0 - (fall - (fall / 6.0) as i32 as f32 * 6.0);
-        let sway = trino_core::math3d::sin(time * 2.0 + ph * 6.28) * 0.3;
+        let sway = trino_core::math3d::sin(time * 2.0 + ph * core::f32::consts::TAU) * 0.3;
         let p = at + Vec3::new((hx - 0.5) * 5.0 + sway, y, (hz - 0.5) * 4.0);
         r.draw_billboard(
             S_CONFETTI,
@@ -111,7 +112,14 @@ fn confetti(r: &mut dyn Renderer, at: Vec3, time: f32, looks: &[Look; 5]) {
 }
 
 /// The title screen's backdrop: the ceremony on the right of the menu.
-pub fn title(r: &mut dyn Renderer, looks: &[Look; 5], anims: &[AnimState], aspect: f32, time: f32) {
+pub fn title(
+    r: &mut dyn Renderer,
+    looks: &[Look; 5],
+    anims: &[AnimState],
+    aspect: f32,
+    time: f32,
+    retro: bool,
+) {
     // The group stands right of the menu, over the club card.
     let at = Vec3::new(10.0, 0.0, 7.0);
     // (Screen right is -x from this side of the pitch.) The eye stays
@@ -123,7 +131,7 @@ pub fn title(r: &mut dyn Renderer, looks: &[Look; 5], anims: &[AnimState], aspec
         back: 9.0,
         fov: 0.72,
     };
-    ceremony(r, looks, anims, aspect, &cam, at, time);
+    ceremony(r, looks, anims, aspect, &cam, at, time, retro);
 }
 
 /// A player on the pedestal, turning slowly, the stadium behind him.
@@ -135,8 +143,9 @@ pub fn pedestal(
     glow: Color,
     aspect: f32,
     shift: f32,
+    retro: bool,
 ) {
-    let hifi = r.caps().light_tier == LightTier::PerPixel;
+    let hifi = super::hifi(r, retro);
     r.begin_frame(Sky::Night.clear());
     // Looking up the pitch from the center spot: the far stand behind.
     // Far enough back for the whole body between the header and the

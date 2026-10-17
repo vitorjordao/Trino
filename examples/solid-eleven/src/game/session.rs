@@ -104,6 +104,7 @@ impl Session {
             rain: setup.wet,
             time: 0.0,
             guides: Guides::default(),
+            retro: false,
         };
         let officials =
             core::array::from_fn(|k| (m.officials[k].x.to_f32(), m.officials[k].y.to_f32()));

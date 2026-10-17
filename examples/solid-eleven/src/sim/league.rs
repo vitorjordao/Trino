@@ -94,6 +94,8 @@ pub struct Career {
     pub last_income: i32,
     pub last_wages: i32,
     pub seed: u32,
+    /// League titles won, per club (this career).
+    pub titles: [u8; TEAMS],
 }
 
 impl Career {
@@ -124,6 +126,7 @@ impl Career {
             last_income: 0,
             last_wages: 0,
             seed,
+            titles: [0; TEAMS],
         }
     }
 
@@ -229,6 +232,7 @@ impl Career {
             seed,
             wet,
             humans,
+            keeper_ctl: [false, false],
             difficulty,
         }
     }
@@ -344,6 +348,12 @@ impl Career {
             p.energy = (p.energy as u32 + 18).min(100) as u8;
         }
         self.round += 1;
+        if self.round as usize == ROUNDS {
+            // The champion: a title and the prize money.
+            let champ = self.standings()[0] as usize;
+            self.titles[champ] = self.titles[champ].saturating_add(1);
+            self.clubs[champ].budget += CHAMPION_PRIZE;
+        }
         results
     }
 
@@ -495,7 +505,7 @@ impl Career {
     /// The save image (≤ [`SAVE_MAX`] bytes). Players are stored as their
     /// differences from the generated database, so the layout is fixed:
     /// club, attributes, energy, form per player.
-    pub fn save(&self, settings: [u8; 4], out: &mut [u8; SAVE_MAX]) -> usize {
+    pub fn save(&self, settings: [u8; SETTINGS_LEN], out: &mut [u8; SAVE_MAX]) -> usize {
         let mut w = Writer { buf: out, at: 0 };
         w.bytes(b"SE11");
         w.u8(SAVE_VERSION);
@@ -524,17 +534,20 @@ impl Career {
             w.u8(p.number);
             w.u8(p.age);
         }
+        w.bytes(&self.titles);
         let sum = checksum(&w.buf[..w.at]);
         w.u16(sum);
         w.at
     }
 
-    /// Restore a save; also returns the settings bytes.
-    pub fn load(data: &[u8]) -> Option<(Career, [u8; 4])> {
-        if data.len() < 6 || &data[..4] != b"SE11" || data[4] != SAVE_VERSION {
+    /// Restore a save (this version or version 1); also returns the
+    /// settings bytes (a version 1 save's four, then zeros: the defaults).
+    pub fn load(data: &[u8]) -> Option<(Career, [u8; SETTINGS_LEN])> {
+        if data.len() < 6 || &data[..4] != b"SE11" || !(1..=SAVE_VERSION).contains(&data[4]) {
             return None;
         }
-        let n = SAVE_LEN;
+        let v1 = data[4] == 1;
+        let n = if v1 { SAVE_LEN_V1 } else { SAVE_LEN };
         if data.len() < n {
             return None;
         }
@@ -543,7 +556,10 @@ impl Career {
             return None;
         }
         let mut r = Reader { buf: data, at: 5 };
-        let settings = [r.u8(), r.u8(), r.u8(), r.u8()];
+        let mut settings = [0u8; SETTINGS_LEN];
+        for b in settings.iter_mut().take(if v1 { 4 } else { SETTINGS_LEN }) {
+            *b = r.u8();
+        }
         let user = r.u8();
         if user as usize >= TEAMS {
             return None;
@@ -585,14 +601,28 @@ impl Career {
             c.players[i].number = r.u8();
             c.players[i].age = r.u8();
         }
+        if !v1 {
+            for t in c.titles.iter_mut() {
+                *t = r.u8();
+            }
+        }
         Some((c, settings))
     }
 }
 
-pub const SAVE_VERSION: u8 = 1;
+/// The league winner's prize (coins).
+pub const CHAMPION_PRIZE: i32 = 6_000;
+
+/// Version 2 added the 16 settings bytes (controls, keeper, graphics) and
+/// the titles; version 1 saves still load.
+pub const SAVE_VERSION: u8 = 2;
+/// Settings bytes in a save (the game's `Settings::bytes`).
+pub const SETTINGS_LEN: usize = 16;
 /// Bytes a save uses (fixed layout).
 pub const SAVE_LEN: usize =
-    4 + 1 + 4 + 1 + 2 + 1 + 4 + TEAMS * 6 + TEAMS * 6 + 5 + 8 + PLAYERS * 11 + 2;
+    4 + 1 + SETTINGS_LEN + 1 + 2 + 1 + 4 + TEAMS * 6 + TEAMS * 6 + 5 + 8 + PLAYERS * 11 + TEAMS + 2;
+/// A version 1 save: 4 settings bytes, no titles.
+const SAVE_LEN_V1: usize = SAVE_LEN - (SETTINGS_LEN - 4) - TEAMS;
 /// The N64's 16 Kbit EEPROM, less the engine's framing.
 pub const SAVE_MAX: usize = 2_000;
 
@@ -862,20 +892,70 @@ mod tests {
             .unwrap();
         c.buy(i).unwrap();
         c.players[3].attrs[0] = 77;
+        c.titles[4] = 2;
         let mut buf = [0u8; SAVE_MAX];
-        let n = c.save([1, 2, 3, 4], &mut buf);
+        let st: [u8; SETTINGS_LEN] = core::array::from_fn(|k| k as u8 + 1);
+        let n = c.save(st, &mut buf);
         assert_eq!(n, SAVE_LEN);
         assert!(
             n <= 2048 - 48,
             "{n} bytes leave room for the engine's framing"
         );
         let (back, settings) = Career::load(&buf[..n]).unwrap();
-        assert_eq!(settings, [1, 2, 3, 4]);
+        assert_eq!(settings, st);
         assert_eq!(back, c);
         // Corruption is caught.
         buf[100] ^= 0x40;
         assert!(Career::load(&buf[..n]).is_none());
         assert!(Career::load(b"nope").is_none());
+    }
+
+    /// A save from before the controls page (version 1: four settings
+    /// bytes, no titles) loads, its settings padded with zeros (defaults).
+    #[test]
+    fn a_version_1_save_still_loads() {
+        let mut c = Career::new(2, 99);
+        c.finish_round(Some((1, 1)));
+        let mut buf = [0u8; SAVE_MAX];
+        let n = c.save(core::array::from_fn(|k| k as u8 + 1), &mut buf);
+        // Rewrite it as version 1.
+        let mut v1 = Vec::new();
+        v1.extend_from_slice(b"SE11");
+        v1.push(1);
+        v1.extend_from_slice(&buf[5..9]);
+        v1.extend_from_slice(&buf[5 + SETTINGS_LEN..n - 2 - TEAMS]);
+        let sum = checksum(&v1);
+        v1.extend_from_slice(&sum.to_le_bytes());
+        assert_eq!(v1.len(), SAVE_LEN_V1);
+        let (back, settings) = Career::load(&v1).unwrap();
+        assert_eq!(&settings[..4], &[1, 2, 3, 4]);
+        assert!(settings[4..].iter().all(|&b| b == 0));
+        assert_eq!(back.titles, [0; TEAMS]);
+        assert_eq!(back.table, c.table);
+        assert_eq!(back.players, c.players);
+    }
+
+    #[test]
+    fn the_champion_gets_a_title_and_the_prize() {
+        let mut c = Career::new(0, 5);
+        for _ in 0..ROUNDS - 1 {
+            c.finish_round(None);
+        }
+        assert_eq!(c.titles, [0; TEAMS]);
+        let before = c.clubs.map(|k| k.budget);
+        c.finish_round(None);
+        let champ = c.standings()[0] as usize;
+        assert_eq!(c.titles.iter().map(|&t| t as u32).sum::<u32>(), 1);
+        assert_eq!(c.titles[champ], 1);
+        // The prize on top of the last round's books.
+        let others: i32 = (0..TEAMS)
+            .filter(|&k| k != champ)
+            .map(|k| c.clubs[k].budget - before[k])
+            .max()
+            .unwrap();
+        assert!(c.clubs[champ].budget - before[champ] >= CHAMPION_PRIZE - 3_000 + others.min(0));
+        c.new_season();
+        assert_eq!(c.titles[champ], 1, "titles carry over seasons");
     }
 
     #[test]

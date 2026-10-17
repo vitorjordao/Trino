@@ -137,6 +137,8 @@ pub struct Pad {
     /// Ask for a substitution: the most tired outfield player goes off at
     /// the next dead ball.
     pub sub: bool,
+    /// Pressed this tick: take control of the keeper (when the side may).
+    pub keeper: bool,
 }
 
 /// A substitute: database index, shirt number, attributes, and whether
@@ -172,6 +174,9 @@ pub struct Setup {
     pub wet: bool,
     /// Which sides a human controls.
     pub humans: [bool; 2],
+    /// A human side may take its keeper ([`Pad::keeper`]; control also goes
+    /// to him on a shot at his goal and while he holds the ball).
+    pub keeper_ctl: [bool; 2],
     /// 0 = easy, 1 = normal, 2 = hard: how sharp the AI is.
     pub difficulty: u8,
 }
@@ -284,6 +289,10 @@ pub const TACKLE_TICKS: u8 = 14;
 pub const SLIDE_TICKS: u8 = 36;
 pub const DOWN_TICKS: u8 = 50;
 pub const DIVE_TICKS: u8 = 34;
+/// How long a human keeper may hold the ball before it is played for him.
+pub const HUMAN_HOLD: u16 = 240;
+/// How far a human keeper's dive reaches along the stick (m).
+pub const DIVE_REACH: i32 = 3;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 struct OffsideWatch {
@@ -318,6 +327,8 @@ pub struct Match {
     pub tactics: [Tactics; 2],
     pub clubs: [u8; 2],
     pub humans: [bool; 2],
+    /// Which human sides may control their keeper ([`Setup::keeper_ctl`]).
+    pub keeper_ctl: [bool; 2],
     /// The player each human side controls.
     pub active: [u8; 2],
     pub difficulty: u8,
@@ -440,6 +451,10 @@ impl Match {
             tactics: [setup.sides[0].tactics, setup.sides[1].tactics],
             clubs: [setup.sides[0].club, setup.sides[1].club],
             humans: setup.humans,
+            keeper_ctl: [
+                setup.keeper_ctl[0] && setup.humans[0],
+                setup.keeper_ctl[1] && setup.humans[1],
+            ],
             active: [9, 20],
             difficulty: setup.difficulty,
             wet: setup.wet,
@@ -1521,7 +1536,10 @@ impl Match {
             }
             if self.rng.chance(hold) {
                 self.owner = Some(i as u8);
-                self.players[i].act = Act::Hold { t: 70 };
+                // A human keeper gets four seconds to distribute (then he
+                // kicks it himself, like the AI after its beat).
+                let t = if self.keeper_ctl[s] { HUMAN_HOLD } else { 70 };
+                self.players[i].act = Act::Hold { t };
                 self.players[i].vel = V2::ZERO;
             } else {
                 // Parried: out into play, or round the post for a corner.
@@ -1958,23 +1976,47 @@ impl Match {
         }
         if pad.pick > 0 {
             let i = s * SIDE + (pad.pick as usize - 1).min(SIDE - 1);
-            if !self.players[i].off && self.players[i].role != Role::Gk {
+            if !self.players[i].off && (self.players[i].role != Role::Gk || self.keeper_ctl[s]) {
                 self.active[s] = i as u8;
             }
         }
     }
 
+    /// A shot in flight, by this side (tests stage one).
+    #[cfg(test)]
+    pub fn set_shot(&mut self, by: Option<u8>) {
+        self.shot = by;
+    }
+
+    /// The side's keeper (its first player with the keeper's role).
+    pub fn keeper_of(&self, s: usize) -> Option<usize> {
+        (s * SIDE..s * SIDE + SIDE)
+            .find(|&i| self.players[i].role == Role::Gk && !self.players[i].off)
+    }
+
     fn human_tick(&mut self, s: usize, pad: &Pad, cmds: &mut [Option<Cmd>; N]) {
-        // Keep control on someone able.
+        let gk_ok = self.keeper_ctl[s];
+        let keeper = if gk_ok { self.keeper_of(s) } else { None };
+        // Keep control on someone able (the keeper only when allowed).
         let a = self.active[s] as usize;
-        if side_of(a) != s || self.players[a].off || self.players[a].role == Role::Gk {
+        let on_gk = self.players[a].role == Role::Gk;
+        if side_of(a) != s || self.players[a].off || (on_gk && !gk_ok) {
             self.active[s] = super::ai::nearest_to_ball(self, s, None).unwrap_or(a as u8);
         }
-        if pad.switch && self.owner.is_none_or(|o| side_of(o as usize) != s) {
+        let holds = keeper.is_some_and(|k| matches!(self.players[k].act, Act::Hold { .. }));
+        let shot_at_us = self.shot.is_some_and(|ss| ss as usize != s) && self.owner.is_none();
+        if let Some(k) = keeper
+            && (pad.keeper || holds || (shot_at_us && !pad.switch))
+        {
+            // Asked for, holding the ball, or a shot coming at his goal.
+            self.active[s] = k as u8;
+        } else if pad.switch && self.owner.is_none_or(|o| side_of(o as usize) != s) {
             if let Some(n) = super::ai::switch_target(self, s) {
                 self.active[s] = n;
             }
-        } else if self.owner.is_some_and(|o| side_of(o as usize) != s) || self.owner.is_none() {
+        } else if (self.owner.is_some_and(|o| side_of(o as usize) != s) || self.owner.is_none())
+            && self.players[self.active[s] as usize].role != Role::Gk
+        {
             // Semi-auto switch on defense: when the ball is far from the
             // active player and a teammate is much closer.
             let a = self.active[s] as usize;
@@ -1988,6 +2030,10 @@ impl Match {
             }
         }
         let a = self.active[s] as usize;
+        if self.players[a].role == Role::Gk {
+            self.keeper_tick(a, pad, cmds);
+            return;
+        }
         let mut cmd = Cmd::go(pad.mv, pad.sprint);
         if self.owner == Some(a as u8) {
             if let Some(plan) = super::ai::human_kick_plan(self, a, pad) {
@@ -2003,6 +2049,45 @@ impl Match {
             cmd.act = Some(CmdAct::Tackle);
         }
         cmds[a] = Some(cmd);
+    }
+
+    /// A human-controlled keeper: his hands only count in his area (the
+    /// catch rules don't change), he dives instead of tackling (the pass
+    /// button, toward the stick or the ball), and with the ball in his
+    /// hands he throws it (pass), punts it (shoot) or rolls it long
+    /// (through) — standing still, as the AI keeper does.
+    fn keeper_tick(&mut self, k: usize, pad: &Pad, cmds: &mut [Option<Cmd>; N]) {
+        let s = side_of(k);
+        if matches!(self.players[k].act, Act::Hold { .. }) && self.owner == Some(k as u8) {
+            if let Some(plan) = super::ai::human_keeper_plan(self, k, pad) {
+                self.players[k].act = Act::Kick { t: 7, plan };
+            }
+            return;
+        }
+        let mut cmd = Cmd::go(pad.mv, pad.sprint);
+        if self.owner == Some(k as u8) {
+            // At his feet (a back pass): an outfield player's kicks.
+            if let Some(plan) = super::ai::human_kick_plan(self, k, pad) {
+                cmd.act = Some(CmdAct::Kick(plan));
+            }
+        } else if pad.tackle {
+            let p = self.players[k];
+            let to = if pad.mv == V2::ZERO {
+                let b = self.ball.pos.ground();
+                p.pos + (b - p.pos).clamp_len(Fx::int(DIVE_REACH))
+            } else {
+                p.pos + pad.mv.norm().scale(Fx::int(DIVE_REACH))
+            };
+            let _ = s;
+            cmd.act = Some(CmdAct::Dive(to));
+        } else if pad.slide {
+            cmd.act = Some(CmdAct::Slide(if pad.mv == V2::ZERO {
+                self.players[k].face
+            } else {
+                pad.mv
+            }));
+        }
+        cmds[k] = Some(cmd);
     }
 }
 

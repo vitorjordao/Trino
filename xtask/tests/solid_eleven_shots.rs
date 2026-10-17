@@ -117,6 +117,27 @@ fn solid_eleven_menu_shots() {
                 save_bottom(&r, &dir, &format!("menu_{name}_3ds_bottom"));
             }
         }
+        // The controls page: each tab, with the PC host's labels.
+        g.scene = Scene::Controls;
+        g.peek = pc_peek();
+        for (tab, name) in [(0u8, "match"), (1, "keyboard"), (2, "gamepad")] {
+            g.cur.ctl_tab = tab;
+            g.cur.ctl_row = 0;
+            g.render(&mut r);
+            save(&r, &dir, &format!("menu_controls_{name}_{tag}"));
+        }
+        g.peek = Default::default();
+        // The consoles' own pads (previewed on the PC).
+        g.cur.ctl_tab = 0;
+        for (device, name) in [
+            (solid_eleven::game::app::Device::N64, "n64pad"),
+            (solid_eleven::game::app::Device::N3ds, "3dspad"),
+        ] {
+            g.device = device;
+            g.render(&mut r);
+            save(&r, &dir, &format!("menu_controls_{name}_{tag}"));
+        }
+        g.device = solid_eleven::game::app::DEVICE;
         // The match's touch screen.
         g.start_exhibition(0, 1, 5, [true, false], Sky::Day, 180);
         for _ in 0..600 {
@@ -129,6 +150,41 @@ fn solid_eleven_menu_shots() {
         g.scene = Scene::Pause;
         g.render(&mut r);
         save(&r, &dir, &format!("menu_pause_{tag}"));
+    }
+}
+
+/// What the PC host reports with its default bindings and a pad plugged in.
+fn pc_peek() -> solid_eleven::game::app::InputPeek {
+    use solid_eleven::game::app::font_safe;
+    let keys = [
+        "Z", "X", "C", "V", "Q", "E", "ENTER", "RSHIFT", "UP", "DOWN", "LEFT", "RIGHT", "", "", "",
+        "",
+    ];
+    let pads = [
+        "A",
+        "B",
+        "X",
+        "Y",
+        "LB/LT",
+        "RB/RT",
+        "START/GUIDE",
+        "BACK",
+        "DPAD UP",
+        "DPAD DOWN",
+        "DPAD LEFT",
+        "DPAD RIGHT",
+        "LT",
+        "RT",
+        "LS",
+        "RS",
+    ];
+    solid_eleven::game::app::InputPeek {
+        rebindable: true,
+        keys: keys.map(|k| font_safe(Some(k))),
+        pads: pads.map(|k| font_safe(Some(k))),
+        gamepad: 2,
+        pad_name: font_safe(Some("Xbox Wireless Controller")),
+        capturing: None,
     }
 }
 

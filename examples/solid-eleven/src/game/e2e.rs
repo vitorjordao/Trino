@@ -343,3 +343,209 @@ fn every_screen_draws_without_panicking_on_every_profile() {
         d.g.render(&mut r);
     }
 }
+
+// ------------------------------------------------------------- controls
+
+/// The PC host as the controls page sees it: labels for every button and
+/// a record of what the page asked for.
+#[derive(Default)]
+struct PcHost {
+    cart: Cart,
+    asked: std::vec::Vec<(Button, trino_core::BindDevice)>,
+    resets: u32,
+    capturing: Option<(Button, trino_core::BindDevice)>,
+}
+
+impl Platform for PcHost {
+    fn now_micros(&self) -> u64 {
+        0
+    }
+    fn log(&self, _: &str) {}
+    fn save_capacity(&self) -> usize {
+        self.cart.save_capacity()
+    }
+    fn save_read(&mut self, buf: &mut [u8]) -> Result<usize, SaveError> {
+        self.cart.save_read(buf)
+    }
+    fn save_write(&mut self, data: &[u8]) -> Result<(), SaveError> {
+        self.cart.save_write(data)
+    }
+    fn input_info(&self) -> Option<trino_core::InputInfo> {
+        Some(trino_core::InputInfo {
+            gamepad: trino_core::GamepadStatus::Connected,
+            capturing: self.capturing,
+        })
+    }
+    fn gamepad_name(&self) -> Option<&str> {
+        Some("Test Pad")
+    }
+    fn binding_label(&self, b: Button, d: trino_core::BindDevice) -> Option<&str> {
+        Some(match (d, b) {
+            (trino_core::BindDevice::Keyboard, Button::A) => "Z",
+            (trino_core::BindDevice::Keyboard, Button::Start) => "Enter",
+            (trino_core::BindDevice::Gamepad, Button::L) => "LB/LT",
+            _ => return None,
+        })
+    }
+    fn rebind(&mut self, b: Button, d: trino_core::BindDevice) {
+        self.asked.push((b, d));
+        self.capturing = Some((b, d));
+    }
+    fn cancel_rebind(&mut self) {
+        self.capturing = None;
+    }
+    fn reset_bindings(&mut self) {
+        self.resets += 1;
+    }
+}
+
+fn host_frame(g: &mut SolidElevenGame, host: &mut PcHost, input: &InputState) {
+    g.update_with(host, input, &mut Mute, DT);
+}
+
+fn host_press(g: &mut SolidElevenGame, host: &mut PcHost, b: Button) {
+    let mut s = InputState::default();
+    s.set(b, true);
+    host_frame(g, host, &s);
+    host_frame(g, host, &InputState::default());
+}
+
+/// Title → settings → the controls row.
+fn open_controls(d: &mut Driver) {
+    d.idle(2);
+    d.presses(Button::DpadDown, 4);
+    d.press(Button::A);
+    assert_eq!(d.g.scene, Scene::Settings);
+    let rows = SolidElevenGame::settings_rows().len();
+    d.presses(Button::DpadDown, rows - 1);
+    d.press(Button::A);
+    assert_eq!(d.g.scene, Scene::Controls);
+}
+
+#[test]
+fn the_controls_page_rebinds_a_match_button_and_saves_it() {
+    use crate::game::input::{Action, Bindings};
+    let mut d = Driver::new(Cart::default());
+    open_controls(&mut d);
+    // Pass is the first row: change it, then press Y.
+    d.press(Button::A);
+    assert!(d.g.capture.is_some(), "waiting for the new button");
+    d.press(Button::Y);
+    assert!(d.g.capture.is_none());
+    let b = d.g.settings.bindings;
+    assert_eq!(b.of(Action::Pass), Button::Y);
+    assert_eq!(
+        b.of(Action::Keeper),
+        Button::A,
+        "the keeper takes pass's old button"
+    );
+    // Saved: a new game on the same cart loads it.
+    d.press(Button::B);
+    d.press(Button::B);
+    d.idle(4);
+    let cart = core::mem::take(&mut d.cart);
+    let mut again = Driver::new(cart);
+    again.idle(2);
+    assert_eq!(again.g.settings.bindings.of(Action::Pass), Button::Y);
+    // A match uses them: Y passes, A takes the keeper.
+    again
+        .g
+        .start_exhibition(0, 1, 3, [true, false], crate::render::Sky::Day, 60);
+    let s = again.g.session.as_ref().unwrap();
+    assert_eq!(s.controls.bindings.of(Action::Pass), Button::Y);
+    // Reset to the defaults (the last row).
+    let mut d = again;
+    d.g.scene = crate::game::app::Scene::Settings;
+    d.g.cur.settings = 0;
+    let rows = SolidElevenGame::settings_rows().len();
+    d.presses(Button::DpadDown, rows - 1);
+    d.press(Button::A);
+    d.presses(Button::DpadUp, 1);
+    d.press(Button::A);
+    assert_eq!(d.g.settings.bindings, Bindings::DEFAULT);
+}
+
+#[test]
+fn a_capture_gives_up_after_its_time() {
+    use crate::game::input::{Action, Bindings};
+    let mut d = Driver::new(Cart::default());
+    open_controls(&mut d);
+    d.presses(Button::DpadDown, 5);
+    d.press(Button::A);
+    let waited = d.g.capture.expect("capturing");
+    assert_eq!(waited.action, Action::Sprint);
+    d.idle((crate::game::app::CAPTURE_SECS / DT) as usize + 2);
+    assert!(d.g.capture.is_none());
+    assert_eq!(d.g.settings.bindings, Bindings::DEFAULT, "nothing changed");
+    // The D-pad moves: pressing it while capturing changes nothing.
+    d.press(Button::A);
+    d.press(Button::DpadUp);
+    assert!(d.g.capture.is_some(), "still waiting");
+}
+
+#[test]
+fn the_pc_tabs_ask_the_host_to_rebind_keys_and_pad_buttons() {
+    let mut g = SolidElevenGame::new(Vec2::new(320.0, 240.0));
+    let mut host = PcHost::default();
+    host_frame(&mut g, &mut host, &InputState::default());
+    assert!(g.peek.rebindable);
+    assert_eq!(g.peek.keys[0].as_str(), "Z");
+    assert_eq!(g.peek.keys[6].as_str(), "ENTER", "uppercased for the font");
+    assert_eq!(g.control_tabs(), 3);
+    g.scene = Scene::Controls;
+    // Keyboard tab, row 0 (A).
+    host_press(&mut g, &mut host, Button::R);
+    assert_eq!(g.cur.ctl_tab, 1);
+    host_press(&mut g, &mut host, Button::A);
+    assert_eq!(host.asked, [(Button::A, trino_core::BindDevice::Keyboard)]);
+    // While the host waits, B cancels it (and the page stays put).
+    host_frame(&mut g, &mut host, &InputState::default());
+    assert!(g.peek.capturing.is_some());
+    host_press(&mut g, &mut host, Button::B);
+    host_frame(&mut g, &mut host, &InputState::default());
+    assert!(host.capturing.is_none());
+    assert_eq!(g.scene, Scene::Controls);
+    // Gamepad tab: L's row, then the reset row.
+    host_press(&mut g, &mut host, Button::R);
+    assert_eq!(g.cur.ctl_tab, 2);
+    for _ in 0..4 {
+        host_press(&mut g, &mut host, Button::DpadDown);
+    }
+    host_press(&mut g, &mut host, Button::A);
+    assert_eq!(host.asked[1], (Button::L, trino_core::BindDevice::Gamepad));
+    host.capturing = None;
+    // Up from row 4 wraps to the last row (the reset).
+    for _ in 0..5 {
+        host_press(&mut g, &mut host, Button::DpadUp);
+    }
+    assert_eq!(g.cur.ctl_row + 1, g.control_rows());
+    host_press(&mut g, &mut host, Button::A);
+    assert_eq!(host.resets, 1, "the last row resets the host's bindings");
+}
+
+#[test]
+fn the_keeper_and_graphics_settings_reach_the_match() {
+    let mut d = Driver::new(Cart::default());
+    d.idle(2);
+    d.g.scene = Scene::Settings;
+    let rows = SolidElevenGame::settings_rows();
+    let k = rows
+        .iter()
+        .position(|r| *r == crate::game::app::SettingRow::Keeper)
+        .unwrap();
+    d.g.cur.settings = k;
+    d.press(Button::DpadRight);
+    assert!(d.g.settings.keeper);
+    if let Some(gfx) = rows
+        .iter()
+        .position(|r| *r == crate::game::app::SettingRow::Graphics)
+    {
+        d.g.cur.settings = gfx;
+        d.press(Button::DpadRight);
+        assert_eq!(d.g.settings.graphics, 1);
+    }
+    d.g.start_exhibition(0, 1, 3, [true, false], crate::render::Sky::Day, 60);
+    let s = d.g.session.as_ref().unwrap();
+    assert_eq!(s.m.keeper_ctl, [true, false]);
+    assert_eq!(s.view.retro, d.g.settings.graphics == 1);
+}

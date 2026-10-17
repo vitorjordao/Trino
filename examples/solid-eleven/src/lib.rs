@@ -73,6 +73,7 @@ pub fn quick_setup(
             seed,
             wet: false,
             humans,
+            keeper_ctl: [false, false],
             difficulty: 1,
         },
         names,

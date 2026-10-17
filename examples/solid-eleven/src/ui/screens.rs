@@ -6,7 +6,7 @@
 
 use core::fmt::Write as _;
 
-use crate::game::app::{Scene, SolidElevenGame};
+use crate::game::app::{Scene, SettingRow, SolidElevenGame};
 use crate::game::session::dress;
 use crate::render::anim::AnimState;
 use crate::render::clips_gen::ClipName;
@@ -159,14 +159,32 @@ pub fn draw(g: &mut SolidElevenGame, r: &mut dyn Renderer) {
             if n > 0 {
                 let i = list[g.cur.squad.min(n - 1)] as usize;
                 let anim = idle_anim(g.time);
-                render::menu::pedestal(r, &look_of(g, i), &anim, g.spin, pal::CYAN, aspect, 0.0);
+                render::menu::pedestal(
+                    r,
+                    &look_of(g, i),
+                    &anim,
+                    g.spin,
+                    pal::CYAN,
+                    aspect,
+                    0.0,
+                    g.settings.graphics == 1,
+                );
             }
             teams(g, r, screen);
         }
         Scene::Edit => {
             if let Some((i, _)) = g.edit {
                 let anim = idle_anim(g.time);
-                render::menu::pedestal(r, &look_of(g, i), &anim, g.spin, pal::CYAN, aspect, 0.0);
+                render::menu::pedestal(
+                    r,
+                    &look_of(g, i),
+                    &anim,
+                    g.spin,
+                    pal::CYAN,
+                    aspect,
+                    0.0,
+                    g.settings.graphics == 1,
+                );
             }
             edit(g, r, screen);
         }
@@ -175,13 +193,34 @@ pub fn draw(g: &mut SolidElevenGame, r: &mut dyn Renderer) {
             if n > 0 {
                 let i = list[g.cur.market.min(n - 1)] as usize;
                 let anim = idle_anim(g.time);
-                render::menu::pedestal(r, &look_of(g, i), &anim, g.spin, pal::LIME, aspect, 0.0);
+                render::menu::pedestal(
+                    r,
+                    &look_of(g, i),
+                    &anim,
+                    g.spin,
+                    pal::LIME,
+                    aspect,
+                    0.0,
+                    g.settings.graphics == 1,
+                );
             }
             market(g, r, screen);
         }
         Scene::Settings | Scene::Confirm => {
             title_backdrop(g, r, aspect);
             settings(g, r, screen);
+        }
+        Scene::Controls => {
+            title_backdrop(g, r, aspect);
+            let lang = g.settings.lang;
+            let mut ui = Ui::new(r, screen);
+            ui.fill(
+                Rect::new(-200.0, 0.0, 720.0, 240.0),
+                Color::rgba(6, 8, 20, 200),
+            );
+            header(&mut ui, tr(lang, S::Controls), true);
+            crate::ui::controls::draw(g, &mut ui);
+            footer(&mut ui, &[(A.0, A.1, S::Change), (B.0, B.1, S::Back)], lang);
         }
         Scene::Results => {
             title_backdrop(g, r, aspect);
@@ -231,7 +270,14 @@ fn title_backdrop(g: &SolidElevenGame, r: &mut dyn Renderer, aspect: f32) {
     } else {
         g.quick.home
     };
-    render::menu::title(r, &ceremony_looks(club), &g.menu_anims, aspect, g.time);
+    render::menu::title(
+        r,
+        &ceremony_looks(club),
+        &g.menu_anims,
+        aspect,
+        g.time,
+        g.settings.graphics == 1,
+    );
 }
 
 // ----------------------------------------------------------------- trophy
@@ -256,6 +302,7 @@ fn trophy(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2, aspect: f
         &cam,
         trino_core::Vec3::ZERO,
         g.time,
+        g.settings.graphics == 1,
     );
     let mut ui = Ui::new(r, screen);
     let club = &CLUBS[champ as usize];
@@ -272,8 +319,21 @@ fn trophy(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2, aspect: f
     );
     let name: TextBuf<20> = upper(club.name);
     let mut b = buf();
-    let _ = write!(b, "{}  {} {}", name.as_str(), tr(lang, S::Season), g.world.year);
-    ui.text(176.0, 40.0, b.as_str(), pal::INK, Size::Small, TextAlign::Center);
+    let _ = write!(
+        b,
+        "{}  {} {}",
+        name.as_str(),
+        tr(lang, S::Season),
+        g.world.year
+    );
+    ui.text(
+        176.0,
+        40.0,
+        b.as_str(),
+        pal::INK,
+        Size::Small,
+        TextAlign::Center,
+    );
     let user = g.world.user;
     let place = order.iter().position(|&c| c == user).unwrap_or(0) + 1;
     b.clear();
@@ -1840,28 +1900,45 @@ fn settings(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
     let st = g.settings;
     let mut mins = TextBuf::<12>::new();
     let _ = write!(mins, "{} {}", st.half_mins, tr(lang, S::Minutes));
-    let rows: [(S, &str); 3] = [
-        (
-            S::Language,
-            if st.lang == Lang::En {
-                "ENGLISH"
-            } else {
-                "PORTUGUÊS"
-            },
-        ),
-        (
-            S::Difficulty,
-            tr(
-                lang,
-                [S::Easy, S::Normal, S::Hard][st.difficulty as usize % 3],
+    let rows = SolidElevenGame::settings_rows();
+    for (k, row) in rows.iter().enumerate() {
+        let (label, value): (S, &str) = match row {
+            SettingRow::Language => (
+                S::Language,
+                if st.lang == Lang::En {
+                    "ENGLISH"
+                } else {
+                    "PORTUGUÊS"
+                },
             ),
-        ),
-        (S::Length, mins.as_str()),
-    ];
-    for (k, (label, value)) in rows.iter().enumerate() {
-        let y = 50.0 + k as f32 * 30.0;
+            SettingRow::Difficulty => (
+                S::Difficulty,
+                tr(
+                    lang,
+                    [S::Easy, S::Normal, S::Hard][st.difficulty as usize % 3],
+                ),
+            ),
+            SettingRow::Length => (S::Length, mins.as_str()),
+            SettingRow::Keeper => (
+                S::Keeper,
+                tr(lang, if st.keeper { S::KeeperYou } else { S::KeeperAi }),
+            ),
+            SettingRow::Graphics => (
+                S::Graphics,
+                tr(
+                    lang,
+                    if st.graphics == 0 {
+                        S::GfxMax
+                    } else {
+                        S::GfxRetro
+                    },
+                ),
+            ),
+            SettingRow::Controls => (S::Controls, tr(lang, S::ControlsSub)),
+        };
+        let y = 40.0 + k as f32 * 26.0;
         let sel = g.cur.settings == k;
-        let rr = Rect::new(40.0, y, 240.0, 24.0);
+        let rr = Rect::new(40.0, y, 240.0, 22.0);
         ui.fill(
             rr,
             if sel {
@@ -1881,17 +1958,21 @@ fn settings(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
         );
         ui.text(
             48.0,
-            y + 6.0,
-            tr(lang, *label),
+            y + 5.0,
+            tr(lang, label),
             pal::DIM,
             Size::Small,
             TextAlign::Left,
         );
         let mut b = buf();
-        let _ = write!(b, "<  {value}  >");
+        if *row == SettingRow::Controls {
+            let _ = write!(b, "{value}  >");
+        } else {
+            let _ = write!(b, "<  {value}  >");
+        }
         ui.text(
             272.0,
-            y + 6.0,
+            y + 5.0,
             b.as_str(),
             pal::INK,
             Size::Small,
@@ -1899,38 +1980,6 @@ fn settings(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
         );
         let hit = ui.rect(rr);
         g.hits.add(hit, Screen::Top, k as u8);
-    }
-    // The controls, for reference.
-    ui.panel(Rect::new(40.0, 148.0, 240.0, 64.0), Color::rgb(60, 70, 120));
-    ui.text(
-        48.0,
-        150.0,
-        tr(lang, S::Controls),
-        pal::CYAN,
-        Size::Small,
-        TextAlign::Left,
-    );
-    let lines = match lang {
-        Lang::En => [
-            "A PASS / TACKLE   B SHOOT / SLIDE",
-            "X THROUGH BALL    L SWITCH  R SPRINT",
-            "HOLD A KICK BUTTON FOR MORE POWER",
-        ],
-        Lang::Pt => [
-            "A PASSE / DESARME  B CHUTE / CARRINHO",
-            "X LANÇAMENTO  L TROCAR  R CORRER",
-            "SEGURE O BOTÃO PARA MAIS FORÇA",
-        ],
-    };
-    for (k, l) in lines.iter().enumerate() {
-        ui.text(
-            48.0,
-            162.0 + k as f32 * 12.0,
-            l,
-            pal::INK,
-            Size::Small,
-            TextAlign::Left,
-        );
     }
     footer(&mut ui, &[(A.0, A.1, S::Select), (B.0, B.1, S::Back)], lang);
 }

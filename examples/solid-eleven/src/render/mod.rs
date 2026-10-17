@@ -268,6 +268,14 @@ pub struct MatchView {
     pub time: f32,
     /// What the HUD draws this frame (the game computes it in update).
     pub guides: Guides,
+    /// The settings' retro graphics: the console models on the PC too.
+    pub retro: bool,
+}
+
+/// The PC tier (15-part players, dense crowd, effects): a per-pixel
+/// renderer, unless the settings ask for the retro look.
+pub fn hifi(r: &dyn Renderer, retro: bool) -> bool {
+    !retro && r.caps().light_tier == LightTier::PerPixel
 }
 
 /// The broadcast camera: a focus that trails the ball, an eye above the
@@ -473,7 +481,7 @@ const EAST: (f32, f32) = (-1.0, 0.0);
 
 /// Draw the match (top screen). `aspect` is the picture's width / height.
 pub fn draw_match(r: &mut dyn Renderer, m: &Match, v: &MatchView, aspect: f32) {
-    let hifi = r.caps().light_tier == LightTier::PerPixel;
+    let hifi = hifi(r, v.retro);
     r.begin_frame(v.sky.clear());
     r.set_camera(&v.cam.camera());
     // Declared every frame: renderer state outlives frames (AGENTS.md).

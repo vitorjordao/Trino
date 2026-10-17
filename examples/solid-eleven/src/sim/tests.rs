@@ -6,6 +6,7 @@ use std::vec::Vec;
 
 use super::engine::MAX_SUBS;
 use super::engine::*;
+use super::fx::{Fx, V2};
 use super::team::{self, CLUBS};
 
 pub fn setup(home: usize, away: usize, seed: u32, half_ticks: u32) -> Setup {
@@ -34,6 +35,7 @@ pub fn setup(home: usize, away: usize, seed: u32, half_ticks: u32) -> Setup {
         seed,
         wet: false,
         humans: [false, false],
+        keeper_ctl: [false, false],
         difficulty: 1,
     }
 }
@@ -446,3 +448,188 @@ fn substitutions_follow_the_rules() {
 }
 
 const SIDE_N: usize = 11;
+
+// ------------------------------------------------------------ keepers
+
+/// A match in play with side 0 human and allowed (or not) to take its
+/// keeper; the ball loose by the touchline at halfway, out of everyone's
+/// reach (a touch would hand control to whoever plays it).
+fn keeper_match(allowed: bool) -> Match {
+    let mut st = setup(0, 1, 11, 3_600);
+    st.humans = [true, false];
+    st.keeper_ctl = [allowed, false];
+    let mut m = Match::new(&st);
+    m.phase = Phase::Play;
+    m.owner = None;
+    m.ball = super::ball::Ball::at_rest(V2::new(Fx::ZERO, Fx::int(32)));
+    m
+}
+
+fn press(m: &mut Match, pad: Pad) {
+    m.step([pad, Pad::default()]);
+}
+
+#[test]
+fn the_keeper_button_hands_over_the_keeper_only_when_allowed() {
+    for allowed in [false, true] {
+        let mut m = keeper_match(allowed);
+        let k = (0..SIDE)
+            .find(|&i| m.players[i].role == team::Role::Gk)
+            .unwrap();
+        press(
+            &mut m,
+            Pad {
+                keeper: true,
+                ..Pad::default()
+            },
+        );
+        assert_eq!(m.active[0] as usize == k, allowed, "allowed = {allowed}");
+        // Switch goes back to the field.
+        press(
+            &mut m,
+            Pad {
+                switch: true,
+                ..Pad::default()
+            },
+        );
+        press(&mut m, Pad::default());
+        assert_ne!(m.active[0] as usize, k, "switch leaves the keeper");
+    }
+}
+
+#[test]
+fn a_shot_at_his_goal_gives_the_human_the_keeper() {
+    let mut m = keeper_match(true);
+    let k = m.keeper_of(0).unwrap();
+    m.set_shot(Some(1));
+    press(&mut m, Pad::default());
+    assert_eq!(m.active[0] as usize, k);
+    // Not when control of the keeper is off.
+    let mut m = keeper_match(false);
+    m.set_shot(Some(1));
+    press(&mut m, Pad::default());
+    assert_ne!(m.active[0] as usize, m.keeper_of(0).unwrap());
+}
+
+#[test]
+fn a_human_keeper_dives_where_the_stick_points() {
+    let mut m = keeper_match(true);
+    let k = m.keeper_of(0).unwrap();
+    press(
+        &mut m,
+        Pad {
+            keeper: true,
+            ..Pad::default()
+        },
+    );
+    let before = m.players[k].pos;
+    press(
+        &mut m,
+        Pad {
+            tackle: true,
+            mv: V2::new(Fx::ZERO, Fx::ONE),
+            ..Pad::default()
+        },
+    );
+    assert!(
+        matches!(m.players[k].act, Act::Dive { .. }),
+        "{:?}",
+        m.players[k].act
+    );
+    for _ in 0..10 {
+        press(&mut m, Pad::default());
+    }
+    assert!(
+        m.players[k].pos.y > before.y + Fx::milli(500),
+        "dove along +y"
+    );
+}
+
+#[test]
+fn a_human_keeper_throws_or_punts_from_his_hands() {
+    for (pad, long) in [
+        (
+            Pad {
+                pass: Some(Fx::milli(300)),
+                ..Pad::default()
+            },
+            false,
+        ),
+        (
+            Pad {
+                shoot: Some(Fx::ONE),
+                ..Pad::default()
+            },
+            true,
+        ),
+    ] {
+        let mut m = keeper_match(true);
+        let k = m.keeper_of(0).unwrap();
+        // He holds the ball in his area.
+        m.players[k].pos =
+            m.ends[0].goal_center() + V2::new(m.ends[0].sign().mul(Fx::int(-6)), Fx::ZERO);
+        m.ball = super::ball::Ball::at_rest(m.players[k].pos);
+        m.owner = Some(k as u8);
+        m.players[k].act = Act::Hold { t: HUMAN_HOLD };
+        press(&mut m, Pad::default());
+        assert_eq!(m.active[0] as usize, k, "holding: the human has him");
+        let mv = V2::new(m.ends[0].sign().mul(Fx::int(-1)), Fx::ZERO);
+        press(&mut m, Pad { mv, ..pad });
+        for _ in 0..20 {
+            press(&mut m, Pad::default());
+        }
+        assert_ne!(m.owner, Some(k as u8), "the ball left his hands");
+        let gone = (m.ball.pos.ground() - m.players[k].pos).len();
+        assert!(gone > Fx::int(3), "it travelled ({gone:?})");
+        let up = m.ball.vel.y.abs() + m.ball.pos.y;
+        assert_eq!(up > Fx::int(2), long, "a punt goes up, a throw stays low");
+    }
+}
+
+#[test]
+fn a_human_keeper_holds_longer_but_not_forever() {
+    let mut m = keeper_match(true);
+    let k = m.keeper_of(0).unwrap();
+    m.players[k].pos =
+        m.ends[0].goal_center() + V2::new(m.ends[0].sign().mul(Fx::int(-5)), Fx::ZERO);
+    m.ball = super::ball::Ball::at_rest(m.players[k].pos);
+    m.owner = Some(k as u8);
+    m.players[k].act = Act::Hold { t: HUMAN_HOLD };
+    let mut released = None;
+    for t in 0..(HUMAN_HOLD as u32 + 60) {
+        press(&mut m, Pad::default());
+        if m.owner != Some(k as u8) {
+            released = Some(t);
+            break;
+        }
+    }
+    let t = released.expect("the ball is played for him in the end");
+    assert!(t + 20 >= HUMAN_HOLD as u32, "not before his time ({t})");
+}
+
+#[test]
+fn a_keeper_out_of_his_area_has_no_hands() {
+    let mut m = keeper_match(true);
+    let k = m.keeper_of(0).unwrap();
+    let out = m.ends[0].goal_center() + V2::new(m.ends[0].sign().mul(Fx::int(-25)), Fx::ZERO);
+    m.players[k].pos = out;
+    assert!(!super::pitch::in_penalty_area(out, m.ends[0]));
+    for p in m.players.iter_mut().filter(|p| p.role != team::Role::Gk) {
+        p.pos = V2::new(Fx::int(40), Fx::int(30));
+    }
+    m.ball = super::ball::Ball::at_rest(out);
+    press(
+        &mut m,
+        Pad {
+            keeper: true,
+            ..Pad::default()
+        },
+    );
+    for _ in 0..5 {
+        press(&mut m, Pad::default());
+    }
+    assert!(
+        !matches!(m.players[k].act, Act::Hold { .. }),
+        "no catch outside the box"
+    );
+}

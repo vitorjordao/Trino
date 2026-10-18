@@ -157,6 +157,7 @@ mod n64 {
         // `micro-river` first: the river alone (issue #69's 1.2 ms budget
         // read directly), gated like the scenes.
         showcase::perf::micro_river_scene(&mut g, Vec2::new(320.0, 240.0));
+        let (ids, n_ids) = showcase::perf::micro_river_ids(&g);
         let mut times = trino_core::perf::FrameTimes::default();
         let v0 = runtime::vblanks();
         renderer.start_profile();
@@ -164,7 +165,7 @@ mod n64 {
             let t0 = runtime::now_us();
             showcase::perf::micro_river_update(&mut g);
             let t1 = runtime::now_us();
-            showcase::perf::micro_river_render(&g, renderer);
+            showcase::perf::micro_river_render(&g, &ids[..n_ids], renderer);
             let t2 = runtime::now_us();
             times.update += t1.wrapping_sub(t0);
             times.render += t2.wrapping_sub(t1);

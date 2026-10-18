@@ -312,9 +312,10 @@ fn check_work(target: Target, baseline_path: &str) {
             assert_eq!(showcase::perf::MEASURE_FRAMES, n);
             let mut game = showcase::ShowcaseGame::new();
             showcase::perf::micro_river_scene(&mut game, screen);
+            let (ids, n_ids) = showcase::perf::micro_river_ids(&game);
             for _ in 0..n {
                 showcase::perf::micro_river_update(&mut game);
-                showcase::perf::micro_river_render(&game, &mut r);
+                showcase::perf::micro_river_render(&game, &ids[..n_ids], &mut r);
             }
         } else {
             assert_eq!(showcase::perf::MEASURE_FRAMES, n);

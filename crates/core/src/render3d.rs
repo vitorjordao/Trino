@@ -3529,10 +3529,24 @@ mod tests {
             rsp_eligible(&ctx, &cube, &at(0.0), &u).unwrap().ambient,
             1.0
         );
-        // A textured mesh never has an RSP copy.
-        assert!(!rsp_mesh_supported(
-            &Mesh::from_tmdl(&textured_cube()).unwrap()
-        ));
+        // A textured mesh has an RSP copy (the textured overlay), and draws
+        // whose edges the CPU wouldn't split go to it.
+        let mut tex_blob = textured_cube();
+        let mut b = std::vec::Vec::new();
+        f32s(&mut b, &[0.0, 0.0, 0.0, 0.87]);
+        section(&mut tex_blob, b"BNDS", &b);
+        let tex = Mesh::from_tmdl(&tex_blob).unwrap();
+        assert!(rsp_mesh_supported(&tex));
+        assert!(rsp_eligible(&ctx, &tex, &at(0.0), &plain).is_some());
+        let deep = Mat34::from_rotation_scale_translation(
+            Vec3::ZERO,
+            Vec3::new(1.0, 1.0, 4.0),
+            Vec3::ZERO,
+        );
+        assert_eq!(
+            rsp_check(&ctx, &tex, &deep, &plain),
+            Err(RspReject::Textured)
+        );
     }
 
     #[test]

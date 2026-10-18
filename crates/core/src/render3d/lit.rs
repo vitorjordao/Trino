@@ -676,9 +676,28 @@ fn ripple_rings(
 /// `model`, seen from above? The owner of a ripple's ring
 /// ([`tessellate_ripples`]).
 fn over_surface(mesh: &Mesh, model: &Mat34, p: Vec2) -> bool {
+    let m = &model.m;
+    // World x, z of a vertex as a 2 x 2 map of its own x, z (a model that
+    // doesn't tilt the surface): the point goes into model space once,
+    // instead of every vertex out of it (the N64 transforms slowly).
+    let det = m[0][0] * m[2][2] - m[0][2] * m[2][0];
+    let (p, flat) = if m[0][1] == 0.0 && m[2][1] == 0.0 && det != 0.0 {
+        let (x, z) = (p.x - m[0][3], p.y - m[2][3]);
+        let inv = 1.0 / det;
+        (
+            Vec2::new(
+                (m[2][2] * x - m[0][2] * z) * inv,
+                (m[0][0] * z - m[2][0] * x) * inv,
+            ),
+            true,
+        )
+    } else {
+        (p, false)
+    };
     (0..mesh.index_count / 3).any(|t| {
         let v: [Vec3; 3] = core::array::from_fn(|k| {
-            model.transform_point(mesh.position(mesh.index(3 * t + k) as usize))
+            let q = mesh.position(mesh.index(3 * t + k) as usize);
+            if flat { q } else { model.transform_point(q) }
         });
         let side = |a: Vec3, b: Vec3| (b.x - a.x) * (p.y - a.z) - (b.z - a.z) * (p.x - a.x);
         let s = [side(v[0], v[1]), side(v[1], v[2]), side(v[2], v[0])];

@@ -953,7 +953,7 @@ impl Game for ShowcaseGame {
 /// in ares (`cargo xtask test n64`).
 pub mod perf {
     use super::{ShowcaseGame, river};
-    use trino_core::{Audio, Game, InputState, Renderer, Vec2, Vec3};
+    use trino_core::{Audio, EntityId, Game, InputState, Renderer, Vec2, Vec3};
 
     pub const NAME: &str = "showcase-river";
     /// Frames measured (each one idle update + render).
@@ -1003,19 +1003,32 @@ pub mod perf {
         game.ripples.update(DT);
     }
 
+    /// The water entities [`MICRO_RIVER`] draws (the river's pieces), found
+    /// once: the frame measures the river, not a walk over every entity.
+    pub fn micro_river_ids(game: &ShowcaseGame) -> ([EntityId; 16], usize) {
+        let mut ids = [EntityId::NONE; 16];
+        let mut n = 0;
+        for (id, e) in game.world.iter() {
+            if e.has_tag("water") && n < ids.len() {
+                ids[n] = id;
+                n += 1;
+            }
+        }
+        (ids, n)
+    }
+
     /// Draw [`MICRO_RIVER`]'s frame: what [`ShowcaseGame::render`] sets up
-    /// (camera, light, filter, water state), then the water entities only.
-    pub fn micro_river_render(game: &ShowcaseGame, r: &mut dyn Renderer) {
+    /// (camera, light, filter, water state), then the water entities `ids`
+    /// ([`micro_river_ids`]).
+    pub fn micro_river_render(game: &ShowcaseGame, ids: &[EntityId], r: &mut dyn Renderer) {
         let camera = game.camera();
         r.begin_frame(game.clear);
         r.set_camera(&camera);
         r.set_light(&game.look.light(&game.light));
         r.set_texture_filter(game.look.filter);
         r.set_water(game.time, game.ripples.as_slice());
-        for (_, e) in game.world.iter() {
-            if e.has_tag("water") {
-                game.draw_entity(r, e, camera.eye);
-            }
+        for e in ids.iter().filter_map(|&id| game.world.get(id)) {
+            game.draw_entity(r, e, camera.eye);
         }
         r.end_frame();
     }

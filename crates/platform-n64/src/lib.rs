@@ -35,6 +35,8 @@ mod assets;
 mod audio;
 #[cfg(target_os = "none")]
 mod host;
+#[cfg(any(target_os = "none", test))]
+pub mod hw;
 #[cfg(target_os = "none")]
 mod input;
 #[cfg(any(target_os = "none", test))]

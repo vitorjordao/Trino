@@ -20,11 +20,11 @@ use eframe::egui::{
 use eframe::egui_wgpu::RenderState;
 use trino_asset_pipeline::MeshData;
 use trino_core::{
-    Color, Fog, Light, LodPick, Material, ModelId, ModelParams, Renderer, Shading, SpriteId,
-    SpriteParams, Vec2 as TVec2, Vec3,
+    Color, Fog, HwTier, Light, LodPick, Material, ModelId, ModelParams, Renderer, Shading,
+    SpriteId, SpriteParams, Vec2 as TVec2, Vec3,
 };
 use trino_platform_pc::{AoView, PcRenderer, SimProfile};
-use trino_scene::{Resolved, Scene, Transform};
+use trino_scene::{Resolved, Scene, Target, Transform};
 
 use crate::gizmo::{self, AxisEvent, Drag, Gizmo, GizmoMode, OrbitCam, Proj, RenderCam};
 use crate::project::Project;
@@ -113,8 +113,8 @@ pub struct ViewInput<'a> {
     /// Inspector › LOD › Preview: draw this entity's LOD as if the camera
     /// were this far away (both views), to see each switch live.
     pub lod_preview: Option<(&'a [usize], f32)>,
-    /// The scene's frame on the N64 and the 3DS (Game view HUD).
-    pub budgets: Option<&'a [trino_scene::budget::FrameBudget; 4]>,
+    /// The scene's frame on every target, the tiers too (Game view HUD).
+    pub budgets: Option<&'a crate::budget::Budgets>,
     /// Each sprite's N64 TMEM bytes (the HUD's water lines).
     pub tmem: Option<&'a std::collections::BTreeMap<u32, Option<u32>>>,
     /// The water clock and ripples (`Renderer::set_water`).
@@ -156,6 +156,11 @@ pub struct Viewport {
     renderer: PcRenderer,
     texture: egui::TextureId,
     pub profile: SimProfile,
+    /// Game view: the console's hardware tier (issue #54, ADR 0020) — the
+    /// N64 with the Expansion Pak, the New 3DS. The look stays the
+    /// console's; the renderer's caps and the resolved variants are the
+    /// tier's.
+    pub tier: HwTier,
     pub cam: OrbitCam,
     pub show_grid: bool,
     /// Draw collider wireframes (world boxes — exactly what the physics
@@ -193,7 +198,8 @@ pub struct Viewport {
 
 const GRID_EXTENT: i32 = 40;
 
-/// The platform whose variants a console-simulation profile shows.
+/// The platform whose variants a console-simulation profile shows (its
+/// base tier: [`Viewport::target`] adds the Game view's tier).
 pub fn target_of(profile: SimProfile) -> trino_scene::Target {
     match profile {
         SimProfile::Native => trino_scene::Target::Pc,
@@ -228,6 +234,7 @@ impl Viewport {
             renderer,
             texture,
             profile,
+            tier: HwTier::Base,
             cam: OrbitCam::default(),
             show_grid: true,
             show_colliders: true,
@@ -272,21 +279,55 @@ impl Viewport {
         );
     }
 
-    /// Switch the Game view's console profile (new renderer, re-upload).
-    pub fn set_profile(&mut self, profile: SimProfile, project: &Project) {
-        if profile == self.profile {
+    /// Switch the Game view's console profile (new renderer, re-upload)
+    /// and hardware tier: `N64` + `Expanded` is the N64 with the Expansion
+    /// Pak, `N3ds` + `Expanded` the New 3DS (the PC and the Web have one
+    /// tier). A new tier on the same console keeps the renderer and
+    /// changes its caps.
+    pub fn set_profile_tier(&mut self, profile: SimProfile, tier: HwTier, project: &Project) {
+        let tier = if profile.has_tiers() {
+            tier
+        } else {
+            HwTier::Base
+        };
+        if profile != self.profile {
+            let device = wgpu::Device::clone(&self.render_state.device);
+            let queue = wgpu::Queue::clone(&self.render_state.queue);
+            self.renderer = PcRenderer::with_device(device, queue, profile);
+            self.renderer.upload_mesh(self.grid, grid_tmdl());
+            project.upload_all(&mut self.renderer);
+            project.upload_platform_sprites(&mut self.renderer, target_of(profile));
+            self.uploaded_gen = project.generation;
+            self.profile = profile;
+            self.reregister();
+        } else if tier == self.tier {
             return;
         }
-        let device = wgpu::Device::clone(&self.render_state.device);
-        let queue = wgpu::Queue::clone(&self.render_state.queue);
-        self.renderer = PcRenderer::with_device(device, queue, profile);
-        self.renderer.upload_mesh(self.grid, grid_tmdl());
-        project.upload_all(&mut self.renderer);
-        project.upload_platform_sprites(&mut self.renderer, target_of(profile));
-        self.uploaded_gen = project.generation;
-        self.profile = profile;
+        self.set_tier(tier);
+    }
+
+    /// Put the Game view on `tier` hardware of its console (nothing to
+    /// re-upload: the renderer keeps its profile and changes its caps).
+    pub fn set_tier(&mut self, tier: HwTier) {
+        self.tier = if self.profile.has_tiers() {
+            tier
+        } else {
+            HwTier::Base
+        };
+        self.renderer.set_hw_tier(self.tier);
         self.rendered = None;
-        self.reregister();
+    }
+
+    /// The platform whose variants this view shows: its profile's, on its
+    /// hardware tier (`n64_expanded`, `n3ds_new`).
+    pub fn target(&self) -> trino_scene::Target {
+        target_of(self.profile).with_tier(self.tier)
+    }
+
+    /// The Game view's name for what it simulates: `N64`, `N64+Pak`,
+    /// `3DS`, `New 3DS`, `PC`, `Web`.
+    pub fn target_label(&self) -> &'static str {
+        self.target().label()
     }
 
     /// Re-upload changed assets (live reload).
@@ -301,13 +342,10 @@ impl Viewport {
         self.renderer.internal_size()
     }
 
+    /// `TRINO_SIM` for a game started from the editor: the profile on its
+    /// tier (`n64x`, `3dsnew`).
     pub fn profile_key(&self) -> &'static str {
-        match self.profile {
-            SimProfile::Native => "native",
-            SimProfile::N64 => "n64",
-            SimProfile::N3ds => "3ds",
-            SimProfile::Web => "web",
-        }
+        self.profile.key(self.tier)
     }
 
     /// Fly mode is on (RMB held on the Scene view): WASD/QE/Shift move the
@@ -989,7 +1027,7 @@ impl Viewport {
         &self,
         painter: &egui::Painter,
         avail: Rect,
-        budgets: Option<&[trino_scene::budget::FrameBudget; 4]>,
+        budgets: Option<&crate::budget::Budgets>,
         tmem: Option<&std::collections::BTreeMap<u32, Option<u32>>>,
         audio: Option<&crate::audio::Totals>,
     ) -> Option<Rect> {
@@ -997,9 +1035,40 @@ impl Viewport {
         let mut rows = crate::budget::rows(&self.stats.frame, &caps, &self.stats.lod);
         // The scene budget is the scene camera's: not while playing.
         let budgets = budgets.filter(|_| self.play.is_none());
-        if let Some([n64, ..]) = budgets {
-            crate::budget::use_rsp_split(&mut rows, n64);
+        let target = self.target();
+        if let Some(b) = budgets {
+            let n64 = if target.base() == Target::N64 {
+                target
+            } else {
+                Target::N64
+            };
+            crate::budget::use_rsp_split(&mut rows, crate::budget::budget_of(b, n64));
         }
+        // The console's two tiers side by side (issue #54): the scene on
+        // the base console and on its expanded tier, then the active tier's
+        // RAM and the hardware it assumes.
+        let tiers = budgets.and_then(|b| crate::budget::tier_table(b, target));
+        let tier_lines: Vec<(String, Color32)> = budgets
+            .zip(tiers.as_ref())
+            .map(|(b, table)| {
+                let share = table.ram[usize::from(self.tier.is_expanded())];
+                let ram =
+                    trino_scene::budget::ram_line(crate::budget::budget_of(b, target)).map(|t| {
+                        let color = if share > 1.0 {
+                            c::ERROR
+                        } else if share > 0.75 {
+                            c::WARN
+                        } else {
+                            c::TEXT_WEAK
+                        };
+                        (t, color)
+                    });
+                let hardware =
+                    trino_scene::budget::hardware_line(target).map(|t| (t, c::TEXT_FAINT));
+                ram.into_iter().chain(hardware).collect()
+            })
+            .unwrap_or_default();
+        let tier_h = 15.0;
         let summary = self.stats.lod.summary();
         let row_h = 18.0;
         // Per platform: the N64 frame (CPU vs RSP, why draws miss the fast
@@ -1036,12 +1105,12 @@ impl Viewport {
                 },
             )
         });
-        let platform_lines: Vec<(String, Color32)> = measured
+        let platform_lines = measured
             .into_iter()
             .chain(audio)
             .chain(
                 budgets
-                    .map(|b| crate::budget::platform_lines(b, &tmem))
+                    .map(|b| crate::budget::platform_lines_on(b, &tmem, self.target()))
                     .unwrap_or_default(),
             )
             .map(|(t, l)| {
@@ -1052,25 +1121,51 @@ impl Viewport {
                     crate::budget::Level::Over => c::ERROR,
                 };
                 (t, color)
-            })
-            .collect();
+            });
+        let platform_lines: Vec<(String, Color32)> =
+            tier_lines.into_iter().chain(platform_lines).collect();
         // As wide as the longest platform line (the PC GPU and 3DS lines
         // name a reason), at least 210 px and never past the view.
         let font = egui::FontId::proportional(10.5);
+        let mono = egui::FontId::monospace(10.5);
+        let text_w = |t: &str, font: &egui::FontId| {
+            painter
+                .layout_no_wrap(t.to_string(), font.clone(), Color32::WHITE)
+                .size()
+                .x
+        };
+        // The tier table's columns: its labels, then each tier's values
+        // under its name.
+        let columns = tiers.as_ref().map(|table| {
+            let label = table
+                .rows
+                .iter()
+                .map(|r| text_w(r.0, &font))
+                .fold(0.0f32, f32::max);
+            let col = |i: usize| {
+                table
+                    .rows
+                    .iter()
+                    .map(|r| text_w(if i == 0 { &r.1 } else { &r.2 }, &mono))
+                    .chain([text_w(table.targets[i].label(), &font)])
+                    .fold(0.0f32, f32::max)
+            };
+            (label, col(0), col(1))
+        });
         let widest = platform_lines
             .iter()
             .map(|(t, _)| t.as_str())
             .chain(summary.as_deref())
-            .map(|t| {
-                painter
-                    .layout_no_wrap(t.to_string(), font.clone(), Color32::WHITE)
-                    .size()
-                    .x
-            })
+            .map(|t| text_w(t, &font))
+            .chain(columns.map(|(l, a, b)| l + a + b + 24.0))
             .fold(0.0f32, f32::max);
         let w = crate::budget::hud_width(widest, avail.width());
-        let extra =
-            if summary.is_some() { row_h } else { 0.0 } + platform_lines.len() as f32 * row_h;
+        let table_h = tiers
+            .as_ref()
+            .map_or(0.0, |t| (t.rows.len() + 1) as f32 * tier_h + 4.0);
+        let extra = table_h
+            + if summary.is_some() { row_h } else { 0.0 }
+            + platform_lines.len() as f32 * row_h;
         let rect = Rect::from_min_size(
             Pos2::new(avail.max.x - w - 10.0, avail.min.y + 50.0),
             Vec2::new(w, 24.0 + rows.len() as f32 * row_h + extra),
@@ -1079,15 +1174,7 @@ impl Viewport {
         painter.text(
             rect.min + Vec2::new(8.0, 6.0),
             egui::Align2::LEFT_TOP,
-            format!(
-                "{} budget",
-                match self.profile {
-                    SimProfile::N64 => "N64",
-                    SimProfile::N3ds => "3DS",
-                    SimProfile::Native => "PC",
-                    SimProfile::Web => "Web",
-                }
-            ),
+            format!("{} budget", self.target_label()),
             egui::FontId::proportional(11.5),
             c::TEXT_WEAK,
         );
@@ -1131,6 +1218,48 @@ impl Viewport {
             }
         }
         let mut y = rect.max.y - extra + 2.0;
+        if let Some((table, (_, _, b))) = tiers.as_ref().zip(columns) {
+            // Right-aligned value columns, the active tier's brighter.
+            let right = [rect.max.x - 8.0 - b - 12.0, rect.max.x - 8.0];
+            for (i, t) in table.targets.iter().enumerate() {
+                painter.text(
+                    Pos2::new(right[i], y),
+                    egui::Align2::RIGHT_TOP,
+                    t.label(),
+                    font.clone(),
+                    if *t == target {
+                        c::ACCENT_TEXT
+                    } else {
+                        c::TEXT_FAINT
+                    },
+                );
+            }
+            y += tier_h;
+            for (label, base, expanded) in &table.rows {
+                painter.text(
+                    Pos2::new(rect.min.x + 8.0, y),
+                    egui::Align2::LEFT_TOP,
+                    *label,
+                    font.clone(),
+                    c::TEXT_WEAK,
+                );
+                for (i, v) in [base, expanded].into_iter().enumerate() {
+                    painter.text(
+                        Pos2::new(right[i], y),
+                        egui::Align2::RIGHT_TOP,
+                        v,
+                        mono.clone(),
+                        if table.targets[i] == target {
+                            c::TEXT
+                        } else {
+                            c::TEXT_WEAK
+                        },
+                    );
+                }
+                y += tier_h;
+            }
+            y += 4.0;
+        }
         // The platform lines' area: clickable (they come from the scene's
         // budget, whose Inspector section names each reason's entities).
         let lines = (!platform_lines.is_empty()).then(|| {
@@ -1284,26 +1413,37 @@ impl Viewport {
                         }
                         ViewKind::Game => {
                             ui.label(RichText::new(icon::GAME_CONTROLLER).color(c::TEXT_WEAK));
-                            let mut profile = self.profile;
+                            let (mut profile, mut tier) = (self.profile, self.tier);
+                            // Both consoles' expanded tiers when the view is
+                            // wide enough, else the simulated console's.
+                            let every_tier = avail.width() >= TOOLBAR_EVERY_TIER;
                             for (p, name) in [
                                 (SimProfile::N64, "N64"),
                                 (SimProfile::N3ds, "3DS"),
                                 (SimProfile::Native, "PC"),
                                 (SimProfile::Web, "Web"),
                             ] {
+                                let on = self.profile == p && !self.tier.is_expanded();
                                 if theme::toggle_icon(
                                     ui,
-                                    profile == p,
+                                    on,
                                     name,
                                     &format!("Simulate {name} output"),
                                 )
                                 .clicked()
                                 {
-                                    profile = p;
+                                    (profile, tier) = (p, HwTier::Base);
+                                }
+                                // The console's expanded tier (issue #54), after it.
+                                if p.has_tiers() && (every_tier || self.profile == p) {
+                                    let on = self.profile == p && self.tier.is_expanded();
+                                    if tier_toggle(ui, p, on).clicked() {
+                                        (profile, tier) = (p, HwTier::Expanded);
+                                    }
                                 }
                             }
-                            if profile != self.profile {
-                                self.set_profile(profile, input.project);
+                            if (profile, tier) != (self.profile, self.tier) {
+                                self.set_profile_tier(profile, tier, input.project);
                             }
                             if self.profile == SimProfile::Web {
                                 let mut canvas = self.web_canvas;
@@ -1366,6 +1506,25 @@ impl Viewport {
                 });
             });
     }
+}
+
+/// Game views at least this wide show both consoles' expanded tiers in the
+/// profile picker (narrower: the simulated console's only).
+const TOOLBAR_EVERY_TIER: f32 = 560.0;
+
+/// The profile picker's toggle for `profile`'s expanded tier: `+Pak` (the
+/// N64 + Expansion Pak) or `New` (the New 3DS), named in full for screen
+/// readers and the UI tests.
+fn tier_toggle(ui: &mut egui::Ui, profile: SimProfile, on: bool) -> egui::Response {
+    let target = target_of(profile).with_tier(HwTier::Expanded);
+    let (glyph, why) = match profile {
+        SimProfile::N64 => ("+Pak", "8 MB of RAM, the same CPU and RSP"),
+        _ => ("New", "804 MHz, 2 cores: twice the crowds and particles"),
+    };
+    let name = target.long_label();
+    let r = theme::toggle_icon(ui, on, glyph, &format!("Simulate {name} output: {why}"));
+    r.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, on, name));
+    r
 }
 
 /// The Scene view's ambient occlusion modes, as radio buttons (toolbar and

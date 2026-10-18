@@ -1,10 +1,15 @@
 //! Boot-time asset loading from the DFS.
 //!
 //! `cargo xtask assets n64` writes `index.tsv` into the filesystem:
-//! one `handle-hex \t kind \t filename` line per asset (sounds and music
-//! add `\t codec \t bus`). Loading by handle keeps game code identical
-//! across platforms (`SpriteId::from_path`). The project's mix
-//! (`audio/mixer`, kind `mixer`) is applied to the audio once all loaded.
+//! one `handle-hex \t kind \t filename` line per asset. Loading by handle
+//! keeps game code identical across platforms (`SpriteId::from_path`).
+//! An optional fourth column names the only hardware tier that loads the
+//! line (`base` or `expanded`, issue #54): a scene or a particle effect
+//! whose tier variants differ is baked twice under one handle, a model
+//! listed for `n64_expanded` only once, and each N64 loads its own.
+//! Sounds and music add `\t codec \t bus` after an empty tier column
+//! (every tier loads them, issue #53). The project's mix (`audio/mixer`,
+//! kind `mixer`) is applied to the audio once all loaded.
 
 use alloc::ffi::CString;
 use alloc::string::String;
@@ -35,6 +40,7 @@ impl N64Assets {
             runtime::log("TRINO_ASSETS: no index.tsv in DFS\n");
             return;
         };
+        let tier = runtime::hw_tier();
         let mut mixer = None;
         for line in index.lines() {
             let mut cols = line.split('\t');
@@ -42,6 +48,9 @@ impl N64Assets {
             else {
                 continue;
             };
+            if !trino_core::asset::loads_on(cols.next(), tier) {
+                continue;
+            }
             let Ok(id) = u32::from_str_radix(id_hex, 16) else {
                 continue;
             };

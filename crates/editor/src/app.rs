@@ -285,9 +285,10 @@ pub struct App {
     pub audio: crate::audio::AudioView,
     /// The project mix the Mixer tab edits (`assets/audio.toml`).
     pub mixer: crate::audio::MixState,
-    /// The scene's frame from its camera on the N64 and the 3DS (variants,
-    /// LOD and impostors applied), with the content key it is for.
-    pub budgets: Option<(u64, [trino_scene::budget::FrameBudget; 4])>,
+    /// The scene's frame from its camera on every target (variants, LOD and
+    /// impostors applied; `budget::BUDGET_TARGETS`), with the content key
+    /// it is for.
+    pub budgets: Option<(u64, crate::budget::Budgets)>,
     /// Ripples dropped on water surfaces from the material inspector
     /// ("Drop a ripple"), aged by the real clock: the views ring them out.
     pub ripples: trino_core::RippleBuffer<{ trino_core::MAX_RIPPLES }>,
@@ -420,15 +421,14 @@ impl App {
         let doc_selected = doc.selected.clone();
         let mut scene_view =
             Viewport::new(render_state.clone(), ViewKind::Scene, SimProfile::Native);
-        // Dev hook: TRINO_EDITOR_GAME=pc|n64|3ds|web picks the Game view's
-        // profile.
-        let game_profile = match std::env::var("TRINO_EDITOR_GAME").as_deref() {
-            Ok("pc") => SimProfile::Native,
-            Ok("3ds") => SimProfile::N3ds,
-            Ok("web") => SimProfile::Web,
-            _ => SimProfile::N64,
-        };
-        let game_view = Viewport::new(render_state.clone(), ViewKind::Game, game_profile);
+        // Dev hook: TRINO_EDITOR_GAME=pc|n64|3ds|web|n64x|3dsnew picks the
+        // Game view's profile (n64x: the Expansion Pak, 3dsnew: the New 3DS).
+        let (game_profile, game_tier) = std::env::var("TRINO_EDITOR_GAME")
+            .ok()
+            .and_then(|v| SimProfile::parse_tier(&v))
+            .unwrap_or((SimProfile::N64, trino_core::HwTier::Base));
+        let mut game_view = Viewport::new(render_state.clone(), ViewKind::Game, game_profile);
+        game_view.set_tier(game_tier);
         // Dev hook: TRINO_EDITOR_AO=game|on|off|mask, the Scene view's
         // ambient occlusion mode.
         if let Some(view) = std::env::var("TRINO_EDITOR_AO")
@@ -697,15 +697,16 @@ impl App {
         h.finish()
     }
 
-    /// The scene's frame on the N64, the 3DS, the PC native profile and the
-    /// Web from its camera (`trino_scene::budget`, what `cargo xtask scene budget`
-    /// prints), in that order: the PC bakes of the models, except where a
-    /// console has its own.
-    pub fn platform_budgets(&self) -> [trino_scene::budget::FrameBudget; 4] {
-        use trino_scene::{Target, budget};
+    /// The scene's frame on the N64, the 3DS, the PC native profile, the
+    /// Web and the consoles' expanded tiers from its camera
+    /// (`trino_scene::budget`, what `cargo xtask scene budget` prints), in
+    /// `budget::BUDGET_TARGETS` order: the PC bakes of the models, except
+    /// where a console has its own.
+    pub fn platform_budgets(&self) -> crate::budget::Budgets {
+        use trino_scene::budget;
         let env = &self.doc.scene.environment;
         let (camera, light) = (env.core_camera(), env.core_light());
-        [Target::N64, Target::N3ds, Target::Pc, Target::Web].map(|t| {
+        crate::budget::BUDGET_TARGETS.map(|t| {
             let resolved = trino_scene::resolve_for(&self.doc.scene, &self.lib, 0.0, t);
             budget::estimate(
                 &resolved,
@@ -2412,7 +2413,7 @@ impl App {
     /// Play the open scene inside the Game view (same process).
     fn start_play_here(&mut self) {
         let screen = self.game_view.internal_size();
-        let target = crate::viewport::target_of(self.game_view.profile);
+        let target = self.game_view.target();
         match crate::play::PlaySession::start(&self.doc.scene, &self.lib, target, screen) {
             Ok(session) => {
                 self.game_view.play = Some(session);
@@ -2852,8 +2853,9 @@ pub fn load_particles(
         .collect()
 }
 
-/// Console model bakes keyed by (platform, model id): `Some` for a model
-/// with its own source on that console, `None` for one it does not bake.
+/// Console model bakes keyed by (target, model id): `Some` for a model
+/// with its own source on that console, `None` for one it does not bake
+/// (the tiers too: a model can be on the New 3DS only).
 pub type ConsoleModels = HashMap<(trino_scene::Target, u32), Option<Vec<u8>>>;
 
 /// The models whose console build differs from the PC's (see
@@ -2865,19 +2867,30 @@ pub fn console_models(assets: &Path) -> ConsoleModels {
     let Ok(manifest) = pipeline::Manifest::load(&assets.join("manifest.toml")) else {
         return out;
     };
-    for (t, p) in [
-        (Target::N64, pipeline::Platform::N64),
-        (Target::N3ds, pipeline::Platform::N3ds),
+    for t in [
+        Target::N64,
+        Target::N3ds,
+        Target::N64Expanded,
+        Target::N3dsNew,
     ] {
+        let p = pipeline::Platform::of(t);
         for (name, d) in &manifest.models {
             let id = trino_core::asset_id(&format!("models/{name}"));
-            if !d.bakes_for(p) {
+            if !d.bakes_for(t) {
                 out.insert((t, id), None);
+                continue;
+            }
+            // A tier draws its console's bake (one build, one source).
+            if let Some(Some(blob)) = out.get(&(t.base(), id)) {
+                let blob = blob.clone();
+                out.insert((t, id), Some(blob));
                 continue;
             }
             let pc = pipeline::resolve_source(assets, pipeline::Platform::Pc, &d.file).ok();
             let own = pipeline::resolve_source(assets, p, &d.file).ok();
-            if own.is_some() && own != pc {
+            // Its own source there, or a model the PC doesn't bake at all
+            // (a console's or a tier's only: the editor has no bake of it).
+            if own.is_some() && (own != pc || !d.bakes_for(Target::Pc)) {
                 let blob = own.and_then(|src| pipeline::bake_model(&src, &d.options()).ok());
                 out.insert((t, id), blob);
             }
@@ -2991,7 +3004,7 @@ impl eframe::App for App {
         // Resolve once per frame; bump the revision when content changed.
         let time = self.time();
         self.resolved = resolve(&self.doc.scene, &self.lib, time);
-        self.resolved_game = match crate::viewport::target_of(self.game_view.profile) {
+        self.resolved_game = match self.game_view.target() {
             trino_scene::Target::Pc => self.resolved.clone(),
             t => trino_scene::resolve_for(&self.doc.scene, &self.lib, time, t),
         };
@@ -3370,13 +3383,15 @@ mod tests {
         std::fs::write(
             assets.join("manifest.toml"),
             "version = 1\n\n[models.coin]\nfile = \"models/coin.glb\"\n\n\
-             [models.pc_only]\nfile = \"models/coin.glb\"\nplatforms = [\"pc\"]\n",
+             [models.pc_only]\nfile = \"models/coin.glb\"\nplatforms = [\"pc\"]\n\n\
+             [models.new_only]\nfile = \"models/coin.glb\"\nplatforms = [\"n3ds_new\"]\n",
         )
         .unwrap();
         let m = console_models(&assets);
-        let (coin, pc_only) = (
+        let (coin, pc_only, new_only) = (
             trino_core::asset_id("models/coin"),
             trino_core::asset_id("models/pc_only"),
+            trino_core::asset_id("models/new_only"),
         );
         let tris = |b: &[u8]| trino_core::Mesh::from_tmdl(b).unwrap().index_count / 3;
         let boar = pipeline::bake_model(&repo.join("boar.glb"), &Default::default()).unwrap();
@@ -3390,7 +3405,18 @@ mod tests {
         );
         assert_eq!(m[&(Target::N64, pc_only)], None);
         assert_eq!(m[&(Target::N3ds, pc_only)], None);
-        assert_eq!(m.len(), 3);
+        // The tiers (issue #54): the console's bake, and their own lists.
+        assert_eq!(m[&(Target::N64Expanded, coin)].as_deref(), Some(n64));
+        assert!(!m.contains_key(&(Target::N3dsNew, coin)));
+        assert_eq!(m[&(Target::N64Expanded, pc_only)], None);
+        assert_eq!(m[&(Target::N3dsNew, pc_only)], None);
+        assert_eq!(m[&(Target::N64, new_only)], None);
+        let coin_bake = pipeline::bake_model(&repo.join("coin.glb"), &Default::default()).unwrap();
+        let new = m[&(Target::N3dsNew, new_only)]
+            .as_deref()
+            .expect("on the New 3DS only: no PC bake to fall back on");
+        assert_eq!(tris(new), tris(&coin_bake));
+        assert_eq!(m.len(), 10);
     }
 
     #[test]

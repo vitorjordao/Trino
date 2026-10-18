@@ -170,8 +170,9 @@ impl N3dsAudio {
         (slot < VOICE_COUNT && self.generations[slot] == generation).then_some(ch)
     }
 
-    /// The core the shim's streaming thread runs on (2 = the New 3DS's
-    /// third core, 0 = the app core).
+    /// The core the shim's streaming thread runs on: the worker's second
+    /// core ([`crate::worker`], #54) — 2 on a New 3DS, 1 on an old one — or
+    /// 0, the app core, when neither was granted.
     pub fn stream_core(&self) -> u32 {
         unsafe { ffi::trino_audio_stat(5) }
     }

@@ -80,8 +80,12 @@ fn variants_round_trip_through_ron_both_ways() {
     // Struct → text → struct, and the text is stable.
     let s = scene();
     let text = s.to_ron();
-    assert!(text.contains("version: 4"), "{text}");
+    assert!(text.contains("version: 5"), "{text}");
     assert!(text.contains("n64: Some(") && text.contains("n3ds: Some("));
+    assert!(
+        !text.contains("n64_expanded"),
+        "no tier variant, no tier key"
+    );
     assert!(text.contains("disabled: true"));
     let back = Scene::from_ron(&text).unwrap();
     assert_eq!(back, s);
@@ -126,18 +130,18 @@ fn v2_scenes_and_v1_prefabs_migrate() {
     )])"#;
     let scene = Scene::from_ron(v2).unwrap();
     assert_eq!(scene.version, SCENE_VERSION);
-    assert_eq!(scene.version, 4);
+    assert_eq!(scene.version, 5);
     assert!(scene.entities[0].platforms.is_empty());
     assert_eq!(scene.entities[0].children[0].name, "door");
-    // Saved, it is a v4 file that reads back identically.
+    // Saved, it is a v5 file that reads back identically.
     let text = scene.to_ron();
-    assert!(text.contains("version: 4"));
+    assert!(text.contains("version: 5"));
     assert_eq!(Scene::from_ron(&text).unwrap(), scene);
 
     let v1 = r#"(version: 1, root: (name: "lamp", children: [(name: "bulb")]))"#;
     let prefab = Prefab::from_ron(v1).unwrap();
     assert_eq!(prefab.version, PREFAB_VERSION);
-    assert!(prefab.to_ron().contains("version: 3"));
+    assert!(prefab.to_ron().contains("version: 4"));
     let future = r#"(version: 9, root: (name: "x"))"#;
     assert!(Prefab::from_ron(future).unwrap_err().contains("newer"));
     // The v2 path still reports bad files as parse errors.
@@ -146,6 +150,81 @@ fn v2_scenes_and_v1_prefabs_migrate() {
         Scene::from_ron(bad)
             .unwrap_err()
             .contains("scene parse error")
+    );
+}
+
+/// The hardware tiers (issue #54, scene v5 / prefab v4): `n64_expanded`
+/// and `n3ds_new` round-trip, a v4 file migrates with none, and each tier
+/// resolves its own variant over its console's, falling back to it.
+#[test]
+fn tier_variants_round_trip_migrate_and_fall_back_to_their_console() {
+    let hand = r#"(
+        version: 5,
+        name: "tiers",
+        entities: [(
+            name: "crowd",
+            model: Some((path: "models/crowd")),
+            platforms: (
+                n64: Some((model: Some("models/crowd-low"))),
+                n64_expanded: Some((model: Some("models/crowd-mid"))),
+                n3ds_new: Some((scale: Some((2.0, 1.0, 1.0)))),
+            ),
+        )],
+    )"#;
+    let s = Scene::from_ron(hand).unwrap();
+    let text = s.to_ron();
+    assert!(text.contains("n64_expanded: Some(") && text.contains("n3ds_new: Some("));
+    assert_eq!(Scene::from_ron(&text).unwrap(), s);
+    let p = &s.entities[0].platforms;
+    assert_eq!(
+        p.get(Target::N64Expanded).unwrap().model.as_deref(),
+        Some("models/crowd-mid")
+    );
+    assert!(p.own(Target::N3ds).is_none());
+    assert_eq!(p.get(Target::N3dsNew).unwrap().scale, Some([2.0, 1.0, 1.0]));
+
+    let lib = common::library();
+    let model = |t: Target| {
+        resolve_for(&s, &lib, 0.0, t).items[0]
+            .model
+            .as_ref()
+            .map(|(_, p)| p.clone())
+    };
+    assert_eq!(model(Target::Pc).as_deref(), Some("models/crowd"));
+    assert_eq!(model(Target::N64).as_deref(), Some("models/crowd-low"));
+    assert_eq!(
+        model(Target::N64Expanded).as_deref(),
+        Some("models/crowd-mid")
+    );
+    assert_eq!(model(Target::N3ds).as_deref(), Some("models/crowd"));
+    assert_eq!(model(Target::N3dsNew).as_deref(), Some("models/crowd"));
+    // Without its own variant a tier is its console.
+    let only_n64 = hand.replace(
+        r#"n64_expanded: Some((model: Some("models/crowd-mid"))),"#,
+        "",
+    );
+    let s = Scene::from_ron(&only_n64).unwrap();
+    assert_eq!(
+        resolve_for(&s, &lib, 0.0, Target::N64Expanded).items[0]
+            .model
+            .as_ref()
+            .map(|(_, p)| p.as_str()),
+        Some("models/crowd-low")
+    );
+
+    // v4 (before the tiers) migrates to v5 unchanged.
+    let v4 = r#"(version: 4, name: "old", entities: [(name: "e",
+        platforms: (n64: Some((visible: Some(false)))))])"#;
+    let old = Scene::from_ron(v4).unwrap();
+    assert_eq!(old.version, 5);
+    assert!(old.entities[0].platforms.own(Target::N64Expanded).is_none());
+    assert_eq!(
+        old.entities[0]
+            .platforms
+            .get(Target::N64Expanded)
+            .unwrap()
+            .visible,
+        Some(false)
     );
 }
 

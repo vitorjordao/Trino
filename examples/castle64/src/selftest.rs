@@ -6,6 +6,7 @@
 //! only, so a pass on a console proves the backend wiring (shim, asset
 //! bake, loader) end to end.
 
+use trino_core::HwTier;
 use trino_core::math3d::{cos, sin};
 use trino_core::{
     BakedScene, BillboardParams, BlobId, Camera3, Cells, Color, DEFAULT_LIGHT, DetailTexture,
@@ -96,6 +97,9 @@ pub fn engine_checks(
     particles(renderer, platform)?;
     platform.log("TRINO_STEP:portals\n");
     portals(renderer, platform)?;
+    platform.log("TRINO_STEP:hw tier\n");
+    let tier = hw_tier(renderer, platform)?;
+    log_tier(platform, &tier);
     platform.log("TRINO_STEP:engine ok\n");
     Ok(())
 }
@@ -1922,4 +1926,126 @@ pub fn portals(
         return Err("portals: facing away should cull the two far rooms");
     }
     Ok(())
+}
+
+/// The hardware-tier probe scene (`[scenes.selftest-tier]`, issue #54): one
+/// card, drawn with [`TIER_CARD`] in the expanded tiers' variant.
+pub const TIER_SCENE: BlobId = BlobId::from_path("scenes/selftest-tier");
+/// A model only the expanded tiers' data has (`platforms = ["n64_expanded",
+/// "n3ds_new"]`): in the ROM / app, loaded on that hardware only.
+pub const TIER_CARD: ModelId = ModelId::from_path("models/selftest_tier_card");
+/// Sparks capped 4, and 6 on the expanded tiers
+/// (`[particles.selftest-tier-sparks]`).
+pub const TIER_SPARKS: BlobId = BlobId::from_path("particles/selftest-tier-sparks");
+
+/// What [`hw_tier`] found: the hardware's tier and the tier the loaded data
+/// was resolved for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TierReport {
+    /// [`Platform::hw_tier`] (the renderer's caps agree).
+    pub tier: HwTier,
+    /// The tier the probe scene, the sparks and the tier-only model were
+    /// loaded for: the hardware's on a console, the base one on the PC and
+    /// the Web, whose one bake serves every simulated tier.
+    pub data: HwTier,
+    pub ram_bytes: u32,
+    pub cpu_cores: u8,
+    /// The tier sparks' baked cap.
+    pub sparks: u16,
+}
+
+/// The hardware tier (issue #54, ADR 0020): the platform's answer and the
+/// renderer's caps agree and are that tier's table (an expanded tier adds
+/// RAM or cores, never takes them); the data the build loaded is one
+/// tier's throughout — the probe scene's card, the tier sparks' cap and the
+/// tier-only model are all base or all expanded — and never the expanded
+/// tier's on base hardware. `cargo xtask test n64|3ds` then holds `data` to
+/// what the emulator ran (the `TRINO_STEP:hw tier` line).
+pub fn hw_tier(
+    renderer: &mut dyn Renderer,
+    platform: &mut dyn Platform,
+) -> Result<TierReport, &'static str> {
+    let caps = *renderer.caps();
+    let tier = platform.hw_tier();
+    if caps.hw_tier != tier {
+        return Err("hw tier: the renderer's caps and the platform disagree");
+    }
+    let table = caps.with_tier(tier);
+    if (table.ram_bytes, table.cpu_cores, table.cpu_mhz)
+        != (caps.ram_bytes, caps.cpu_cores, caps.cpu_mhz)
+        || (table.crowd_percent, table.particle_percent)
+            != (caps.crowd_percent, caps.particle_percent)
+    {
+        return Err("hw tier: the caps are not the tier's table");
+    }
+    let base = caps.base();
+    if caps.ram_bytes < base.ram_bytes || caps.cpu_cores < base.cpu_cores {
+        return Err("hw tier: an expanded tier with less than the base console");
+    }
+    // The probe scene: the card it draws says which tier it resolved for.
+    let bytes = platform
+        .blob(TIER_SCENE)
+        .ok_or("hw tier: probe scene blob missing")?;
+    let scene = BakedScene::parse(bytes).map_err(|_| "hw tier: probe scene does not parse")?;
+    let data = match scene.find("probe").and_then(|n| n.model) {
+        Some(CARD) => HwTier::Base,
+        Some(TIER_CARD) => HwTier::Expanded,
+        _ => return Err("hw tier: the probe draws neither card"),
+    };
+    if data.is_expanded() && !tier.is_expanded() {
+        return Err("hw tier: the expanded tier's data on base hardware");
+    }
+    let sparks = platform
+        .blob(TIER_SPARKS)
+        .ok_or("hw tier: tier sparks blob missing")?;
+    let fx = Effect::parse(sparks).map_err(|_| "hw tier: tier sparks do not parse")?;
+    if fx.max != if data.is_expanded() { 6 } else { 4 } {
+        return Err("hw tier: the sparks' cap is another tier's");
+    }
+    // The tier-only model draws exactly where the expanded data is loaded.
+    renderer.begin_frame(Color::BLACK);
+    renderer.set_camera(&Camera3 {
+        eye: Vec3::new(0.0, 0.0, -2.0),
+        target: Vec3::ZERO,
+        fov_y: 1.0,
+    });
+    renderer.set_light(&DEFAULT_LIGHT);
+    renderer.draw_model(
+        TIER_CARD,
+        &Transform3::default(),
+        Material::VertexLit,
+        &ModelParams::DEFAULT,
+    );
+    renderer.end_frame();
+    if (renderer.stats().models == 1) != data.is_expanded() {
+        return Err("hw tier: the tier-only model is loaded on the wrong tier");
+    }
+    Ok(TierReport {
+        tier,
+        data,
+        ram_bytes: caps.ram_bytes,
+        cpu_cores: caps.cpu_cores,
+        sparks: fx.max,
+    })
+}
+
+/// `TRINO_STEP:hw tier expanded ram=8M cores=1 data=expanded sparks=6`.
+pub fn log_tier(platform: &mut dyn Platform, t: &TierReport) {
+    let mut line: TextBuf<96> = TextBuf::new();
+    let ram = if t.ram_bytes == u32::MAX {
+        0
+    } else {
+        t.ram_bytes >> 20
+    };
+    let _ = core::fmt::Write::write_fmt(
+        &mut line,
+        format_args!(
+            "TRINO_STEP:hw tier {} ram={ram}M cores={} data={} sparks={}\n",
+            t.tier.key(),
+            t.cpu_cores,
+            t.data.key(),
+            t.sparks
+        ),
+    );
+    platform.log(line.as_str());
 }

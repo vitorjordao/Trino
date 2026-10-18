@@ -134,7 +134,7 @@ fn scene_without_a_subcommand_prints_the_usage() {
         assert!(!o.status.success(), "{args:?}");
         assert!(
             text(&o.stderr)
-                .contains("cargo xtask scene export [--platform pc|n64|3ds] <scene.ron> <out.rs>"),
+                .contains("cargo xtask scene export [--platform pc|n64|3ds|web|n64_expanded|n3ds_new] <scene.ron> <out.rs>"),
             "{args:?}: {}",
             text(&o.stderr)
         );
@@ -176,6 +176,48 @@ fn scene_export_applies_the_platform_variants() {
     assert!(n64.contains("scene export --platform n64"));
     let n3ds = export(Some("3ds"));
     assert!(!n3ds.contains("\"rock\""), "disabled on the 3DS: {n3ds}");
+}
+
+/// A hardware tier (issue #54) applies its own variant over its console's,
+/// and falls back to the console's where it has none.
+#[test]
+fn scene_export_applies_the_tier_variants_over_the_consoles() {
+    let tmp = tempfile::tempdir().unwrap();
+    let scene = write(
+        tmp.path(),
+        "tiers.scene.ron",
+        r#"(version: 5, name: "tiers", entities: [(
+            name: "rock",
+            model: Some((path: "models/rock")),
+            platforms: (
+                n64: Some((model: Some("models/crate"))),
+                n64_expanded: Some((model: Some("models/statue"))),
+                n3ds: Some((disabled: true)),
+            ),
+        )])"#,
+    );
+    let hex = |p: &str| format!("ModelId({:#010x})", trino_core::asset_id(p));
+    let export = |platform: &str| {
+        let out = tmp.path().join(format!("{platform}.rs"));
+        let o = xtask(&[
+            "scene",
+            "export",
+            "--platform",
+            platform,
+            scene.as_str(),
+            out.to_str().unwrap(),
+        ]);
+        assert!(o.status.success(), "{}", text(&o.stderr));
+        std::fs::read_to_string(&out).unwrap()
+    };
+    let n64 = export("n64");
+    assert!(n64.contains(&hex("models/crate")) && !n64.contains(&hex("models/statue")));
+    let pak = export("n64_expanded");
+    assert!(pak.contains(&hex("models/statue")) && !pak.contains(&hex("models/crate")));
+    assert!(pak.contains("scene export --platform n64_expanded"));
+    // No `n3ds_new` variant: the New 3DS takes the 3DS's (disabled).
+    let new = export("n3ds_new");
+    assert!(!new.contains("\"rock\""), "{new}");
 }
 
 /// The exported code is exactly what `examples/showcase` commits (the

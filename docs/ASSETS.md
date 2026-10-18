@@ -189,7 +189,7 @@ palette losslessly after RGBA5551 truncation.
   platforms side by side, the decoded previews, the candidates, and writes format,
   `quality` and `min_psnr` back to the manifest.
 
-## Audio: a codec per platform, streaming, buses (ADR 0020)
+## Audio: a codec per platform, streaming, buses (ADR 0021)
 
 One WAV master (16-bit or float, mono or stereo: stereo is averaged to mono) bakes to
 what each platform plays best:

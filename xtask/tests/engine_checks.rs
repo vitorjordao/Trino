@@ -9,6 +9,16 @@ use trino_platform_pc::{PcPlatform, PcRenderer, SimProfile};
 /// A strict PC renderer with every baked asset, and a platform serving the
 /// blobs and a save file. `None` (skip) without a GPU.
 fn pc_target(profile: SimProfile, save_dir: &std::path::Path) -> Option<(PcRenderer, PcPlatform)> {
+    pc_target_on(profile, trino_core::HwTier::Base, save_dir)
+}
+
+/// [`pc_target`] simulating a console's hardware tier (`TRINO_SIM=n64x`,
+/// `3dsnew`; issue #54).
+fn pc_target_on(
+    profile: SimProfile,
+    tier: trino_core::HwTier,
+    save_dir: &std::path::Path,
+) -> Option<(PcRenderer, PcPlatform)> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
     let baked = tempfile::tempdir().unwrap();
     trino_asset_pipeline::bake_all(
@@ -27,8 +37,9 @@ fn pc_target(profile: SimProfile, save_dir: &std::path::Path) -> Option<(PcRende
         }
     };
     renderer.set_strict(true);
-    let mut platform =
-        PcPlatform::new(&profile.caps()).with_save_file(save_dir.join("selftest.sav"));
+    renderer.set_hw_tier(tier);
+    let mut platform = PcPlatform::new(&profile.caps().with_tier(tier))
+        .with_save_file(save_dir.join("selftest.sav"));
     // The 3DS profile samples each sprite's 3DS format, like Azahar.
     let target = match profile {
         SimProfile::N3ds => trino_asset_pipeline::Platform::N3ds,
@@ -79,6 +90,52 @@ fn engine_checks_pass_on_the_pc_3ds_profile() {
         Ok(true),
         "both screens probed"
     );
+}
+
+/// Every check on the simulated expanded tiers (issue #54): the N64 with
+/// the Expansion Pak and the New 3DS. The `hw tier` step sees the tier's
+/// caps and, the PC's one bake serving every tier, the base tier's data.
+#[test]
+fn engine_checks_pass_on_the_simulated_expanded_tiers() {
+    use castle64::selftest::{TierReport, hw_tier};
+    use trino_core::HwTier;
+    let save_dir = tempfile::tempdir().unwrap();
+    for (key, ram, cores, base_ram) in [
+        ("n64x", 8u32 << 20, 1, 4u32 << 20),
+        ("3dsnew", 64 << 20, 2, 64 << 20),
+    ] {
+        let (profile, tier) = SimProfile::parse_tier(key).unwrap();
+        assert_eq!(tier, HwTier::Expanded);
+        let Some((mut renderer, mut platform)) = pc_target_on(profile, tier, save_dir.path())
+        else {
+            return;
+        };
+        castle64::selftest::engine_checks(&mut renderer, &mut platform).unwrap();
+        assert_eq!(
+            hw_tier(&mut renderer, &mut platform),
+            Ok(TierReport {
+                tier: HwTier::Expanded,
+                data: HwTier::Base,
+                ram_bytes: ram,
+                cpu_cores: cores,
+                sparks: 4,
+            }),
+            "{key}"
+        );
+        // The base tier of the same profile, for contrast.
+        let Some((mut renderer, mut platform)) = pc_target(profile, save_dir.path()) else {
+            return;
+        };
+        let base = hw_tier(&mut renderer, &mut platform).unwrap();
+        assert_eq!(
+            (base.tier, base.ram_bytes),
+            (HwTier::Base, base_ram),
+            "{key}"
+        );
+        // A platform claiming a tier its renderer does not simulate fails.
+        platform.set_hw_tier(HwTier::Expanded);
+        assert!(hw_tier(&mut renderer, &mut platform).is_err(), "{key}");
+    }
 }
 
 /// `[scenes.showcase]` baked by the PC pipeline, served by `PcPlatform`,

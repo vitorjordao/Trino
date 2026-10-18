@@ -1123,19 +1123,20 @@ pub fn bake_scene(assets_root: &Path, file: &str) -> Result<Vec<u8>, String> {
     bake_scene_for(assets_root, file, crate::Platform::Pc)
 }
 
-/// [`bake_scene`] for one platform: each entity's variant for `platform`
-/// (`platforms` in the scene) is applied. Colliders always come from the
-/// PC models, so gameplay is the same on every target.
+/// [`bake_scene`] for one platform or hardware tier: each entity's variant
+/// for `target` (`platforms` in the scene; `n64_expanded` falls back to
+/// `n64`) is applied. Colliders always come from the PC models, so gameplay
+/// is the same on every target.
 pub fn bake_scene_for(
     assets_root: &Path,
     file: &str,
-    platform: crate::Platform,
+    target: impl Into<trino_scene::Target>,
 ) -> Result<Vec<u8>, String> {
     bake_scene_with_bounds(
         assets_root,
         file,
         manifest_model_bounds(assets_root),
-        platform,
+        target,
     )
 }
 
@@ -1145,7 +1146,7 @@ pub fn bake_scene_with_bounds(
     assets_root: &Path,
     file: &str,
     bounds: std::collections::BTreeMap<String, ([f32; 3], [f32; 3])>,
-    platform: crate::Platform,
+    target: impl Into<trino_scene::Target>,
 ) -> Result<Vec<u8>, String> {
     let project = assets_root.parent().unwrap_or(Path::new(""));
     let scene = trino_scene::Scene::load(&project.join(file))?;
@@ -1155,7 +1156,7 @@ pub fn bake_scene_with_bounds(
     }
     lib.model_bounds = bounds;
     lib.impostors = crate::impostor::baked(assets_root);
-    let (blob, warnings) = trino_scene::bake::to_tscn_for(&scene, &lib, platform.target());
+    let (blob, warnings) = trino_scene::bake::to_tscn_for(&scene, &lib, target.into());
     if let Some(w) = warnings.first() {
         return Err(format!("scene `{file}`: {w}"));
     }

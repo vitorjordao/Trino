@@ -163,7 +163,8 @@ impl N3dsRenderer {
             tnl_scratch: Box::new(TnlScratch::new()),
             light: DEFAULT_LIGHT,
             locals: LightList::EMPTY,
-            caps: Caps::N3DS,
+            // The New 3DS's table when the boot turned its speedup on.
+            caps: crate::runtime::hw().caps(),
             water_state: WaterState::NONE,
             pending_water: Vec::new(),
             pending_water_tex: Vec::new(),

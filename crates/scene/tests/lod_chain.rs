@@ -169,3 +169,24 @@ fn exports_carry_the_impostor_and_a_missing_one_warns() {
     );
     assert_eq!(r.items[0].lod[1].draw, LodDraw::Cull);
 }
+
+/// A LOD level's start on a hardware tier (issue #54): `n64_expanded: At(d)`
+/// pushes it out on the Expansion Pak; a tier without its own start takes
+/// its console's; the text round-trips.
+#[test]
+fn a_tier_starts_a_level_at_its_own_distance_or_its_consoles() {
+    let at = LodPlatforms {
+        n64: Some(LodAt::At(12.0)),
+        n64_expanded: Some(LodAt::At(20.0)),
+        n3ds: Some(LodAt::Never),
+        ..LodPlatforms::default()
+    };
+    assert_eq!(at.get(Target::N64Expanded), Some(&LodAt::At(20.0)));
+    assert_eq!(at.get(Target::N64), Some(&LodAt::At(12.0)));
+    assert_eq!(at.get(Target::N3dsNew), Some(&LodAt::Never), "the 3DS's");
+    assert_eq!(at.own(Target::N3dsNew), None);
+    assert_eq!(at.get(Target::Pc), None);
+    let text = ron::to_string(&at).unwrap();
+    assert!(text.contains("n64_expanded:Some(At(20.0))"), "{text}");
+    assert_eq!(ron::from_str::<LodPlatforms>(&text).unwrap(), at);
+}

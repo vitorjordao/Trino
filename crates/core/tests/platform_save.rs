@@ -31,6 +31,8 @@ fn platform_defaults_report_no_services() {
     assert_eq!(p.save_read(&mut buf), Err(SaveError::Unsupported));
     assert_eq!(p.save_write(b"x"), Err(SaveError::Unsupported));
     assert_eq!(p.second_screen(), None);
+    // Base hardware unless a backend detects an expanded tier (ADR 0020).
+    assert_eq!(p.hw_tier(), trino_core::HwTier::Base);
     assert_eq!(p.display(), None);
     p.set_display(DisplaySettings {
         fullscreen: false,

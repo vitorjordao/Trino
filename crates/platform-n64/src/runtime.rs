@@ -7,9 +7,26 @@ use core::alloc::{GlobalAlloc, Layout};
 use crate::ffi;
 
 /// Initialize libdragon subsystems (display, rdpq, joypad, dfs, audio,
-/// ISViewer debugging). Call first, once.
+/// ISViewer debugging) and print the hardware tier (`TRINO_HW n64 ram=8M
+/// tier=expanded`, ADR 0020). Call first, once.
 pub fn init() {
     unsafe { ffi::trino_init() }
+    let ram = memory_size();
+    log(&alloc::format!(
+        "TRINO_HW n64 ram={}M tier={}\n",
+        crate::hw::megabytes(ram),
+        crate::hw::tier_of_memory(ram).key()
+    ));
+}
+
+/// RDRAM in bytes: 4 MiB, 8 MiB with the Expansion Pak.
+pub fn memory_size() -> u32 {
+    unsafe { ffi::trino_memory_size() }
+}
+
+/// The hardware tier: `Expanded` with an Expansion Pak (issue #54).
+pub fn hw_tier() -> trino_core::HwTier {
+    crate::hw::tier_of_memory(memory_size())
 }
 
 /// Self-test only: report a stall (`TRINO_STALL`) if no frame begins and

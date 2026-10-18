@@ -161,11 +161,16 @@ for (const run of plan) {
       await page.mouse.move(100, 120);
       await page.keyboard.down("KeyZ");
       await page.keyboard.down("KeyD");
-      await page.waitForFunction(() => /A/.test(globalThis.__trino.info.input || ""), null, { timeout: 10000 }).catch(() => {});
+      // Wait for every part: a frame between the two key presses shows
+      // A with the stick still at rest.
+      const inputOk = (i) => /A/.test(i || "") && /stick=1,0/.test(i || "") && /pointer=/.test(i || "");
+      await page
+        .waitForFunction(`(${inputOk})(globalThis.__trino.info.input)`, null, { timeout: 10000 })
+        .catch(() => {});
       r.input_keys = await page.evaluate(() => globalThis.__trino.info.input);
       await page.keyboard.up("KeyZ");
       await page.keyboard.up("KeyD");
-      r.input_ok = /A/.test(r.input_keys || "") && /stick=1,0/.test(r.input_keys || "") && /pointer=/.test(r.input_keys || "");
+      r.input_ok = inputOk(r.input_keys);
 
       const extra = [];
       if (!r.save_persisted) extra.push("the save did not survive a reload");

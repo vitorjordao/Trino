@@ -5,7 +5,7 @@
 //! bits by audibility, not by waveform, and the square-wave chiptune
 //! masters cost it the most (the decoder is not the cause — lewton matches
 //! libvorbis to > 100 dB, `vorbis::tests`), so its floor is 26 dB at q6 and
-//! the issue's 30 dB holds from q8 (ADR 0020). The fixtures are tonal
+//! the issue's 30 dB holds from q8 (ADR 0021). The fixtures are tonal
 //! (music and effects); noise-like masters land lower and `cargo xtask
 //! audio report` shows them.
 

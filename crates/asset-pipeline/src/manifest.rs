@@ -17,8 +17,40 @@ pub enum Platform {
     Web,
 }
 
+impl From<Platform> for trino_scene::Target {
+    fn from(p: Platform) -> Self {
+        p.target()
+    }
+}
+
 impl Platform {
     pub const ALL: [Platform; 4] = [Platform::Pc, Platform::N64, Platform::N3ds, Platform::Web];
+
+    /// The build platform a scene target runs in (a hardware tier runs in
+    /// its console's build).
+    pub fn of(target: trino_scene::Target) -> Platform {
+        match target.base() {
+            trino_scene::Target::N64 => Platform::N64,
+            trino_scene::Target::N3ds => Platform::N3ds,
+            trino_scene::Target::Web => Platform::Web,
+            _ => Platform::Pc,
+        }
+    }
+
+    /// The scene target of this build on `tier` hardware (the N64 with the
+    /// Expansion Pak, the New 3DS; the PC and the Web have one tier).
+    pub fn target_on(self, tier: trino_core::HwTier) -> trino_scene::Target {
+        self.target().with_tier(tier)
+    }
+
+    /// The hardware tiers a build of this platform holds data for: both
+    /// on the consoles, the base one on the PC and the Web.
+    pub fn tiers(self) -> &'static [trino_core::HwTier] {
+        match self {
+            Platform::N64 | Platform::N3ds => &trino_core::HwTier::ALL,
+            Platform::Pc | Platform::Web => &[trino_core::HwTier::Base],
+        }
+    }
 
     /// The scene crate's name for this platform (variants resolve by it).
     pub fn target(self) -> trino_scene::Target {
@@ -165,7 +197,10 @@ pub struct ModelDecl {
     /// Bake only for these platforms (`["pc"]`: a model too big for a
     /// console's RAM). Default: every platform. A game draws only what
     /// the running platform has (`draw_model` of a missing model draws
-    /// nothing).
+    /// nothing). A console's expanded tier is a key of its own
+    /// (`n64_expanded`, `n3ds_new`): such a model is in the console's ROM
+    /// or app but loaded only on that hardware (ADR 0020); naming the
+    /// console covers its tier too.
     #[serde(default)]
     pub platforms: Option<Vec<String>>,
     /// Bake ambient occlusion into the vertex colors (`ao = true`, or
@@ -176,13 +211,17 @@ pub struct ModelDecl {
 }
 
 impl ModelDecl {
-    /// Is this model baked for `platform`? A list naming the PC bakes for
-    /// the Web too (a PC-class model is a Web model unless the list says
-    /// `web` itself).
-    pub fn bakes_for(&self, platform: Platform) -> bool {
+    /// Is this model baked for `target` (a platform or a hardware tier)? A
+    /// list naming the PC bakes for the Web too (a PC-class model is a Web
+    /// model unless the list says `web` itself), one naming a console for
+    /// its expanded tier too; `n64_expanded` alone is that tier only.
+    pub fn bakes_for(&self, target: impl Into<trino_scene::Target>) -> bool {
+        let target = target.into();
         self.platforms.as_ref().is_none_or(|ps| {
-            let named = |t: Platform| ps.iter().any(|p| Platform::parse(p) == Some(t));
-            named(platform) || platform.fallback().is_some_and(named)
+            let named = |t: trino_scene::Target| {
+                ps.iter().any(|p| trino_scene::Target::parse(p) == Some(t))
+            };
+            named(target) || target.fallback().is_some_and(named)
         })
     }
 
@@ -367,9 +406,10 @@ impl Manifest {
         }
         for (name, m) in &manifest.models {
             for p in m.platforms.iter().flatten() {
-                if Platform::parse(p).is_none() {
+                if trino_scene::Target::parse(p).is_none() {
                     return Err(format!(
-                        "{}: model `{name}`: unknown platform `{p}` (pc, n64, 3ds, web)",
+                        "{}: model `{name}`: unknown platform `{p}` \
+                         (pc, n64, 3ds, web, n64_expanded, n3ds_new)",
                         path.display()
                     ));
                 }
@@ -1003,6 +1043,42 @@ formats = { web = \"BC1\" }
         assert_eq!(Platform::parse("web"), Some(Platform::Web));
         assert_eq!(Platform::Web.fallback(), Some(Platform::Pc));
         assert_eq!(Platform::Web.default_texture_format(), Some("auto"));
+    }
+
+    #[test]
+    fn a_tier_model_bakes_for_its_tier_only_and_a_console_model_for_both() {
+        let m = manifest(
+            r#"
+            version = 1
+            [models.crowd]
+            file = "crowd.glb"
+            platforms = ["n64_expanded", "n3ds_new"]
+            [models.tiny]
+            file = "tiny.glb"
+            platforms = ["n64"]
+            [models.every]
+            file = "every.glb"
+            "#,
+        );
+        use trino_scene::Target;
+        let crowd = &m.models["crowd"];
+        assert!(crowd.bakes_for(Target::N64Expanded) && crowd.bakes_for(Target::N3dsNew));
+        assert!(!crowd.bakes_for(Platform::N64) && !crowd.bakes_for(Platform::N3ds));
+        assert!(!crowd.bakes_for(Platform::Pc));
+        let tiny = &m.models["tiny"];
+        assert!(tiny.bakes_for(Platform::N64) && tiny.bakes_for(Target::N64Expanded));
+        assert!(!tiny.bakes_for(Target::N3dsNew));
+        for t in Target::EVERY {
+            assert!(m.models["every"].bakes_for(t));
+        }
+        assert_eq!(Platform::of(Target::N64Expanded), Platform::N64);
+        assert_eq!(Platform::of(Target::N3dsNew), Platform::N3ds);
+        assert_eq!(
+            Platform::N3ds.target_on(trino_core::HwTier::Expanded),
+            Target::N3dsNew
+        );
+        assert_eq!(Platform::Pc.tiers(), &[trino_core::HwTier::Base]);
+        assert_eq!(Platform::N64.tiers().len(), 2);
     }
 
     #[test]

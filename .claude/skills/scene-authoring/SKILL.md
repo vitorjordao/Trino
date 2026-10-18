@@ -91,6 +91,28 @@ digit).
 - In the editor: Inspector › **Platforms** (PC / N64 / 3DS columns; "= PC" is "same as
   PC"; the N64 column shows the variant's estimated N64 time per draw).
 
+### Hardware tiers: `n64_expanded`, `n3ds_new` (scene v5, prefab v4, ADR 0020)
+
+The N64 with the Expansion Pak (8 MB) and the New 3DS (2 cores at 804 MHz) have keys of
+their own. A tier without a variant takes its console's, which takes the base entity:
+
+```ron
+platforms: (
+    n64: Some((model: Some("models/crowd-low"))),
+    n64_expanded: Some((model: Some("models/crowd-mid"))),   // the Pak's RAM
+    n3ds_new: Some((scale: Some((1.0, 1.0, 1.0)))),          // else the 3DS's
+),
+```
+
+- The same keys go in LOD levels (`platforms: (n64_expanded: Some(At(30.0)))`),
+  particle caps (`n3ds_new: Some((max: Some(48)))`) and manifest model `platforms`
+  (`["n64_expanded"]`: in the ROM, loaded with the Pak only).
+- The console's ROM / app holds both resolutions; the runtime loads its tier's. Content
+  without tier variants bakes exactly as before.
+- Preview: the Game view's "N64 + Expansion Pak" / "New 3DS", `TRINO_SIM=n64x|3dsnew`,
+  `scene export|budget --platform n64_expanded|n3ds_new`. `scene check` resolves the
+  tiers too (a tier-only model drawn on the base console fails it).
+
 ## Gameplay components (all optional)
 
 ```ron

@@ -23,7 +23,7 @@ ADR 0019 is the design; `docs/PLATFORMS.md` › Web the user guide.
   `sound.rs` — TSN2 decode whole or in stream blocks, the bus-settings text: host tests)
   and wasm-only ones (`platform.rs`, `input.rs`, `audio.rs`, `assets.rs`, `runtime.rs`,
   `js.rs` + `glue.js`). Off wasm32 only the first build.
-- Web audio (#53, ADR 0020): pack TPAK v2 (sounds are TSN2, kind 7 the `TMIX` mix; v1
+- Web audio (#53, ADR 0021): pack TPAK v2 (sounds are TSN2, kind 7 the `TMIX` mix; v1
   packs load, `TS16` migrates to PCM16 TSN2). Effects decode into `AudioBuffer`s at
   load; streams are 8192-sample chunks scheduled ≤ 1 s ahead (`audio.rs`), so a hidden
   tab runs dry after 1 s and counts an underrun. Each bus is a gain node fed by

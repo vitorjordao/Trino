@@ -1,4 +1,4 @@
-# ADR 0020: Audio pipeline — a codec per platform, streaming, buses
+# ADR 0021: Audio pipeline — a codec per platform, streaming, buses
 
 Status: accepted (October 2026, GitHub #53). Every phase of the issue's roadmap is
 implemented: buses in the core and every mixer (§5), PC streaming and Vorbis (§3, §4),
@@ -84,8 +84,15 @@ Vorbis `quality` defaults to 6. Stereo masters are averaged to mono, as before.
 - **3DS:** a streamed sound keeps only its header and contexts; each playback reads
   1024-frame chunks from RomFS into three linear wave buffers (24 KB for DSP-ADPCM), each
   with its own decoder context, so loops and seams play exactly what the bake previews.
-  An audio thread woken by ndsp refills them, on the New 3DS's third core when it can
-  start there (#54), else on the app core.
+  An audio thread woken by ndsp refills them. It runs on the second core #54 grants the
+  worker (ADR 0020 §5: core 2 on a New 3DS, core 1 at 30% on an old one), through the
+  same shim function (`trino_second_core_thread`, so the time limit is asked once and
+  both land on one core), one priority above the worker's jobs: a refill preempts a long
+  job instead of waiting behind it. It is a thread of its own, not a worker job — ndsp's
+  callback wakes it every audio frame, and a job submitted from there would queue behind
+  the game's, or run inline in ndsp's thread when the ring is full. Without a second
+  core it runs on the app core. The self-test checks `stream_core` equals
+  `worker::core()` as a New and as an old 3DS.
 - **N64:** every `wav64` already streams from the cartridge; RDRAM holds ~1 KB per open
   file and the mixer's sample buffer per channel.
 - **Web:** chunks decoded ahead in the wasm (§9).
@@ -178,4 +185,4 @@ Azahar and in the browsers.
 - `auto` on the PC/Web choosing PCM16 when Vorbis is bigger: Ogg's headers (~4 KB) make a
   0.05 s click twice its PCM16 size.
 - A per-bus captions/accessibility layer (#60) on top of the buses.
-- 3DS: decide the audio thread's core with the CPU budgets of #54/#56.
+- 3DS: the audio thread's share of the second core in #56's CPU budget.

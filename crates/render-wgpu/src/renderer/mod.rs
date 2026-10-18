@@ -2057,6 +2057,25 @@ impl PcRenderer {
         self.strict = on;
     }
 
+    /// The console profile this renderer simulates.
+    pub fn profile(&self) -> SimProfile {
+        self.profile
+    }
+
+    /// Simulate the profile's console on `tier` hardware (issue #54): the
+    /// N64 with the Expansion Pak, the New 3DS. The look stays the
+    /// console's; [`Renderer::caps`] becomes the tier's table (RAM, cores,
+    /// the crowd and particle scales) so a game's `caps().hw_tier` checks
+    /// run here as on the console. The PC and Web profiles have one tier.
+    pub fn set_hw_tier(&mut self, tier: trino_core::HwTier) {
+        self.caps = self.caps.with_tier(tier);
+    }
+
+    /// The hardware tier [`Renderer::caps`] describes.
+    pub fn hw_tier(&self) -> trino_core::HwTier {
+        self.caps.hw_tier
+    }
+
     /// Change the internal framebuffer resolution (the editor renders its
     /// viewport at the panel's pixel size). Recreates the offscreen color
     /// and depth targets; sprites, meshes and pipelines are kept. Callers
@@ -2859,6 +2878,21 @@ impl PcRenderer {
                     "strict mode: {tris} 3D triangles this frame busts the {:?} \
                      profile budget of {} — simplify the meshes.",
                     self.profile, self.caps.max_tris_per_frame
+                );
+            }
+            // Every registered mesh counts as resident: the console's RAM
+            // for its hardware tier (ADR 0020) is the ceiling.
+            let models: usize = self.meshes.values().map(|(b, _)| b.len()).sum();
+            if models > self.caps.ram_bytes as usize {
+                panic!(
+                    "strict mode: {} KB of models are loaded, over the {:?} profile's \
+                     {} MB of RAM on the {:?} tier — load fewer, or name the extra ones \
+                     for the expanded tier only (`platforms = [\"n64_expanded\"]`, \
+                     ADR 0020).",
+                    models.div_ceil(1024),
+                    self.profile,
+                    self.caps.ram_bytes >> 20,
+                    self.caps.hw_tier
                 );
             }
             if self.caps.max_3d_us_per_frame != u32::MAX {

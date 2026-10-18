@@ -10,7 +10,8 @@
 //!   (or base model) the manifest does not bake for that platform.
 //! - `scene export [--platform pc|n64|3ds] <scene.ron> <out.rs>` writes the
 //!   scene as `no_std` Rust data (`trino_core::SceneNode`) for console
-//!   games, with that platform's variants applied (default `pc`).
+//!   games, with that platform's variants applied (default `pc`; a hardware
+//!   tier, `n64_expanded` / `n3ds_new`, applies its own over its console's).
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -18,8 +19,13 @@ use std::process::ExitCode;
 use trino_scene::{Library, Scene, Target, codegen, resolve_for};
 
 const USAGE: &str = "xtask: usage:\n  cargo xtask scene check [scene.ron ...]\n  \
-                     cargo xtask scene export [--platform pc|n64|3ds] <scene.ron> <out.rs>\n  \
-                     cargo xtask scene budget <scene.ron> [--platform pc|n64|3ds] [--json]";
+                     cargo xtask scene export [--platform pc|n64|3ds|web|n64_expanded|n3ds_new] \
+                     <scene.ron> <out.rs>\n  \
+                     cargo xtask scene budget <scene.ron> \
+                     [--platform pc|n64|3ds|web|n64_expanded|n3ds_new] [--json]";
+
+/// `--platform`'s values, for its error.
+const PLATFORMS: &str = "pc, n64, 3ds, web, n64_expanded or n3ds_new";
 
 pub fn run(root: &Path, args: &[&str]) -> ExitCode {
     match args {
@@ -34,7 +40,7 @@ pub fn run(root: &Path, args: &[&str]) -> ExitCode {
                     match it.next().and_then(|v| Target::parse(v)) {
                         Some(t) => target = t,
                         None => {
-                            eprintln!("xtask: --platform needs pc, n64 or 3ds\n{USAGE}");
+                            eprintln!("xtask: --platform needs {PLATFORMS}\n{USAGE}");
                             return ExitCode::FAILURE;
                         }
                     }
@@ -65,8 +71,12 @@ fn platform_problems(root: &Path, scene: &Scene, lib: &Library) -> Vec<String> {
         return Vec::new();
     };
     let mut out = Vec::new();
-    for target in Target::ALL {
-        let platform = trino_asset_pipeline::Platform::parse(target.key()).unwrap();
+    // (target, entity, model) already reported: a tier drawing what its
+    // console draws is that console's problem, reported once.
+    let mut missing: Vec<(Target, String, String)> = Vec::new();
+    // The hardware tiers too: an `n64_expanded` variant may draw a model
+    // only that tier has (issue #54).
+    for target in Target::EVERY {
         let r = resolve_for(scene, lib, 0.0, target);
         for item in &r.items {
             let paths = item
@@ -80,8 +90,15 @@ fn platform_problems(root: &Path, scene: &Scene, lib: &Library) -> Vec<String> {
             for path in paths {
                 let name = path.strip_prefix("models/").unwrap_or(path);
                 if let Some(decl) = manifest.models.get(name)
-                    && !decl.bakes_for(platform)
+                    && !decl.bakes_for(target)
                 {
+                    let key = (item.name.to_string(), path.to_string());
+                    if target.base() != target
+                        && missing.contains(&(target.base(), key.0.clone(), key.1.clone()))
+                    {
+                        continue;
+                    }
+                    missing.push((target, key.0, key.1));
                     let msg = format!(
                         "{}: draws `{path}` on {}, but the manifest bakes it only for {} \
                          (give the entity a {} variant)",
@@ -130,7 +147,12 @@ fn check(root: &Path, files: &[&str]) -> ExitCode {
         match Scene::load(path) {
             Ok(scene) => {
                 let r = resolve_for(&scene, &lib, 0.0, Target::Pc);
-                for t in [Target::N64, Target::N3ds] {
+                for t in [
+                    Target::N64,
+                    Target::N3ds,
+                    Target::N64Expanded,
+                    Target::N3dsNew,
+                ] {
                     // Only what the console's variants add to the PC's list.
                     for w in resolve_for(&scene, &lib, 0.0, t).warnings {
                         if !r.warnings.contains(&w) {
@@ -197,7 +219,9 @@ fn export(root: &Path, input: &Path, output: &Path, target: Target) -> ExitCode 
 /// `scene budget <scene.ron> [--platform p] [--json]`: what the scene costs
 /// each platform from its camera (`trino_scene::budget`, the editor's
 /// Game-view HUD): draws, T&L work, the N64's RSP/CPU split and why, the
-/// impostors, the LOD picks and the draws sent for nothing.
+/// impostors, the LOD picks and the draws sent for nothing. `--platform
+/// n64_expanded|n3ds_new` estimates a console's expanded tier (its variants,
+/// its RAM and cores; issue #54).
 fn budget(root: &Path, args: &[&str]) -> ExitCode {
     let mut targets = Target::ALL.to_vec();
     let mut json = false;
@@ -209,7 +233,7 @@ fn budget(root: &Path, args: &[&str]) -> ExitCode {
             "--platform" => match it.next().and_then(|v| Target::parse(v)) {
                 Some(t) => targets = vec![t],
                 None => {
-                    eprintln!("xtask: --platform needs pc, n64 or 3ds\n{USAGE}");
+                    eprintln!("xtask: --platform needs {PLATFORMS}\n{USAGE}");
                     return ExitCode::FAILURE;
                 }
             },
@@ -246,12 +270,13 @@ fn budget(root: &Path, args: &[&str]) -> ExitCode {
     let tmem = |id: trino_core::SpriteId| tmem.get(&id.0).copied().flatten();
     let mut rows = Vec::new();
     for target in targets {
-        let platform = trino_asset_pipeline::Platform::parse(target.key()).unwrap();
-        // Each platform's own models (console overrides included).
+        let platform = trino_asset_pipeline::Platform::of(target);
+        // Each platform's own models (console overrides included; a tier
+        // has its console's and its own).
         let meshes: std::collections::HashMap<u32, Vec<u8>> = manifest
             .models
             .iter()
-            .filter(|(_, d)| d.bakes_for(platform))
+            .filter(|(_, d)| d.bakes_for(target))
             .filter_map(|(name, d)| {
                 let src = trino_asset_pipeline::resolve_source(&assets, platform, &d.file).ok()?;
                 let blob = trino_asset_pipeline::bake_model(&src, &d.options()).ok()?;
@@ -324,9 +349,21 @@ fn budget(root: &Path, args: &[&str]) -> ExitCode {
                         )
                     })
                     .collect();
+                let caps = trino_scene::budget::caps_of(b.target);
+                let ram = if caps.ram_bytes == u32::MAX {
+                    "null".to_string()
+                } else {
+                    caps.ram_bytes.to_string()
+                };
                 format!(
-                    "{{\"platform\":\"{}\",\"draws\":{},\"tris\":{},\"verts\":{},\"culled\":{},\"billboards\":{},\"lod\":{:?},\"rsp_draws\":{},\"rsp_tris\":{},\"cpu_draws\":{},\"off_rsp\":[{}],\"gpu_draws\":{},\"gpu_tris\":{},\"off_gpu\":[{}],\"pc_gpu_draws\":{},\"pc_gpu_tris\":{},\"off_pc_gpu\":[{}],\"wasted\":[{}],\"water\":[{}],\"paths\":[{}],\"web_calls\":{},\"web_pipelines\":{},\"web_switches\":{},\"web_warnings\":[{}],\"n64_cpu_us\":{},\"n64_rsp_us\":{},\"n64_frame_us\":{}}}",
+                    "{{\"platform\":\"{}\",\"tier\":\"{}\",\"ram_bytes\":{ram},\"model_bytes\":{},\"cpu_cores\":{},\"cpu_mhz\":{},\"crowd_scale\":{},\"particle_scale\":{},\"draws\":{},\"tris\":{},\"verts\":{},\"culled\":{},\"billboards\":{},\"lod\":{:?},\"rsp_draws\":{},\"rsp_tris\":{},\"cpu_draws\":{},\"off_rsp\":[{}],\"gpu_draws\":{},\"gpu_tris\":{},\"off_gpu\":[{}],\"pc_gpu_draws\":{},\"pc_gpu_tris\":{},\"off_pc_gpu\":[{}],\"wasted\":[{}],\"water\":[{}],\"paths\":[{}],\"web_calls\":{},\"web_pipelines\":{},\"web_switches\":{},\"web_warnings\":[{}],\"n64_cpu_us\":{},\"n64_rsp_us\":{},\"n64_frame_us\":{}}}",
                     b.target.key(),
+                    b.target.hw_tier().key(),
+                    b.model_bytes,
+                    caps.cpu_cores,
+                    caps.cpu_mhz,
+                    caps.crowd_scale(),
+                    caps.particle_scale(),
                     b.draws,
                     b.tris(),
                     b.tnl.verts,
@@ -380,7 +417,14 @@ fn budget(root: &Path, args: &[&str]) -> ExitCode {
             b.billboards,
             b.lod
         );
-        if b.target == Target::N64 {
+        // The tier's hardware and the models' share of its RAM (#54).
+        if let Some(line) = trino_scene::budget::hardware_line(b.target) {
+            println!("       {line}");
+        }
+        if let Some(line) = trino_scene::budget::ram_line(b) {
+            println!("       {line}");
+        }
+        if b.target.base() == Target::N64 {
             println!(
                 "       N64 ≈{:.1} ms ({:.0}% of 30 fps): CPU {:.1} ms on {} draws, RSP {:.1} ms on {} draws",
                 b.n64_frame_us() as f32 / 1000.0,
@@ -423,7 +467,7 @@ fn budget(root: &Path, args: &[&str]) -> ExitCode {
                 println!("       warning: {w}");
             }
         }
-        if b.target == Target::N3ds {
+        if b.target.base() == Target::N3ds {
             println!(
                 "       3DS: GPU T&L on {} draws ({} tris), CPU on {} draws",
                 b.gpu_draws, b.gpu_tris, b.cpu_draws
@@ -509,7 +553,18 @@ mod tests {
         };
         e.platforms.n64 = Some(small.clone());
         e.platforms.n3ds = Some(small);
-        scene.entities[0] = e;
+        scene.entities[0] = e.clone();
         assert!(platform_problems(tmp.path(), &scene, &lib).is_empty());
+
+        // A tier's own variant is checked on that tier.
+        e.platforms.n64_expanded = Some(trino_scene::Variant {
+            model: Some("models/big".into()),
+            ..Default::default()
+        });
+        scene.entities[0] = e;
+        let problems = platform_problems(tmp.path(), &scene, &lib);
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(problems[0].contains("on N64+Pak"));
+        assert!(problems[0].contains("give the entity a n64_expanded variant"));
     }
 }

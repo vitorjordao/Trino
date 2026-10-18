@@ -36,6 +36,15 @@ pub struct TrinoBlit {
 }
 
 unsafe extern "C" {
+    /// The New 3DS check and its speedup (bit 0 New 3DS, bit 1 speedup
+    /// on, bits 8.. application memory MiB; `crate::hw::Probe`).
+    pub fn trino_hw_probe(want_speedup: u32) -> u32;
+    /// Start the worker core (core 2 on a New 3DS, else core 1 at 30%);
+    /// the core, or -1 (`crate::worker`).
+    pub fn trino_worker_start(new3ds: u32) -> i32;
+    /// Queue `job(arg)`; 0 when not queued (the caller runs it).
+    pub fn trino_worker_submit(job: extern "C" fn(u32), arg: u32) -> u32;
+    pub fn trino_worker_wait();
     pub fn trino_init();
     pub fn trino_log(msg: *const c_char);
     pub fn trino_panic(msg: *const c_char) -> !;
@@ -116,7 +125,7 @@ unsafe extern "C" {
     pub fn trino_audio_poll();
     /// 0 streams playing, 1 bytes held by loaded sounds, 2 streaming
     /// buffer bytes, 3 underruns, 4 samples streamed, 5 the audio thread's
-    /// core (2 = the New 3DS's third core, 0 = the app core).
+    /// core (2 or 1, the worker's second core; 0 = the app core).
     pub fn trino_audio_stat(which: u32) -> u32;
     /// Per-channel left/right volume, fixed point (65536 = 1.0): scalar
     /// floats after an int are unsafe across the N64's o32/o64 boundary.

@@ -50,7 +50,14 @@ fn inspect_simulates_each_platform_cap_deterministically() {
     let v: Value = serde_json::from_slice(&o.stdout).unwrap();
     let rows = v["platforms"].as_array().unwrap();
     let cap = |k: &str| rows.iter().find(|r| r["platform"] == k).unwrap().clone();
-    for (k, max) in [("pc", 24), ("n64", 8), ("3ds", 16)] {
+    // No tier variant: each tier simulates its console's cap.
+    for (k, max) in [
+        ("pc", 24),
+        ("n64", 8),
+        ("3ds", 16),
+        ("n64_expanded", 8),
+        ("n3ds_new", 16),
+    ] {
         let r = cap(k);
         assert_eq!(r["cap"], max, "{r}");
         assert!(r["peak"].as_u64().unwrap() <= max, "{r}");
@@ -92,11 +99,20 @@ fn inspect_simulates_each_platform_cap_deterministically() {
     assert_ne!(other["platforms"][0]["hash"], v["platforms"][0]["hash"]);
     let o = xtask(&["particles", "check"]);
     assert!(o.status.success(), "{}", text(&o.stderr));
-    assert!(
-        text(&o.stdout).contains(
-            "ok  selftest-sparks: sprites/selftest_quadrants · max PC 24 / N64 8 / 3DS 16"
-        )
-    );
+    assert!(text(&o.stdout).contains(
+        "ok  selftest-sparks: sprites/selftest_quadrants · max PC 24 / N64 8 / 3DS 16\n"
+    ));
+    // A tier variant shows where it caps differently (issue #54).
+    assert!(text(&o.stdout).contains(
+        "ok  selftest-tier-sparks: sprites/selftest_quadrants · max PC 4 / N64 4 / 3DS 4 \
+         / N64+Pak 6 / New 3DS 6"
+    ));
+    let o = xtask(&["particles", "inspect", "selftest-tier-sparks", "--json"]);
+    let v: Value = serde_json::from_slice(&o.stdout).unwrap();
+    let rows = v["platforms"].as_array().unwrap();
+    let cap = |k: &str| rows.iter().find(|r| r["platform"] == k).unwrap()["cap"].clone();
+    assert_eq!((cap("n64"), cap("n64_expanded")), (4.into(), 6.into()));
+    assert_eq!((cap("3ds"), cap("n3ds_new")), (4.into(), 6.into()));
 }
 
 #[test]
@@ -126,7 +142,7 @@ fn new_declares_an_effect_and_bad_invocations_say_why() {
     let o = xtask(&["particles", "inspect", "dust", "--project", p]);
     assert!(o.status.success());
     assert!(
-        text(&o.stdout).contains("pc   cap  32"),
+        text(&o.stdout).contains("pc           cap  32"),
         "{}",
         text(&o.stdout)
     );

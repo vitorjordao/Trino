@@ -454,6 +454,12 @@ file = "scenes/showcase.scene.ron"
 [scenes.interior]
 file = "scenes/interior.scene.ron"
 
+# Hardware-tier probe (selftest::hw_tier, issue #54): one card whose
+# `n64_expanded` / `n3ds_new` variant draws `models/selftest_tier_card`.
+# The consoles carry a `base` and an `expanded` copy (index.tsv's 4th column).
+[scenes.selftest-tier]
+file = "scenes/selftest-tier.scene.ron"
+
 # 32x32 grayscale tiles for textured 3D (tinted by vertex color/material).
 [sprites.tex_planks]
 file = "sprites/textures/tex_planks.png"
@@ -571,6 +577,13 @@ skinning = "smooth"
 file = "models/proxies/selftest-card.prim.ron"
 texture = "sprites/selftest_quadrants"
 
+# The same card, only in the expanded tiers' data (issue #54): in the N64
+# ROM and the 3DS app, loaded on the Expansion Pak / the New 3DS only
+# (selftest::hw_tier).
+[models.selftest_tier_card]
+file = "models/proxies/selftest-card.prim.ron"
+platforms = ["n64_expanded", "n3ds_new"]
+
 # White card in color slots 0, 1 and 4 (glTF `_SLOT`): a per-draw palette
 # recolors it on every target (selftest::palette).
 [models.selftest_slots]
@@ -601,3 +614,7 @@ file = "impostors/selftest-boar.timp"
 
 [particles.selftest-sparks]
 file = "particles/selftest-sparks.particles.ron"
+
+# Capped 4, 6 on the expanded tiers (selftest::hw_tier, issue #54).
+[particles.selftest-tier-sparks]
+file = "particles/selftest-tier-sparks.particles.ron"

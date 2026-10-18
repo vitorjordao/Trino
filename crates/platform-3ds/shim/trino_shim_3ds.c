@@ -242,6 +242,170 @@ void trino_init(void)
     trino_tex3d_init();
 }
 
+// The hardware tier (issue #54, ADR 0020): is this a New 3DS / New 2DS XL,
+// and if so (and `want_speedup`), turn on its 804 MHz clock and L2 cache.
+// Returns bit 0 = New 3DS, bit 1 = speedup on, bits 8.. = the application
+// memory region in MiB (decoded by src/hw.rs). Call after trino_init.
+uint32_t trino_hw_probe(uint32_t want_speedup)
+{
+    bool is_new = false;
+    APT_CheckNew3DS(&is_new);
+    uint32_t speedup = 0;
+    if (is_new && want_speedup) {
+        osSetSpeedupEnable(true);
+        speedup = 1;
+    }
+    uint32_t app_mib = (uint32_t)(osGetMemRegionSize(MEMREGION_APPLICATION) >> 20);
+    return (is_new ? 1u : 0u) | (speedup << 1) | (app_mib << 8);
+}
+
+// ---------------------------------------------------------------------------
+// The worker core (issue #54 Phase 3, ADR 0020): one thread on the second
+// CPU core for game jobs (AI #56, a crowd's animation). The audio thread
+// (#53) shares that core at a higher priority (trino_audio_init). The New
+// 3DS's core 2 is the app's whole; on an old 3DS the app gets core 1 for 30%
+// of its time (APT_SetAppCpuTimeLimit: the system keeps the rest). Jobs are
+// a function and one word, queued in a ring; trino_worker_wait blocks until
+// every queued job has run. Without a worker (no core granted) nothing is
+// queued and the Rust side runs each job inline.
+
+// The second core, one policy for every thread that wants it (the worker
+// here, the audio thread #53): core 2 on a New 3DS, else core 1 once the app
+// has asked for 30% of it (asked once; the answer is kept). Returns the
+// thread and its core, or NULL and -1 when neither core was granted.
+static Thread trino_second_core_thread(ThreadFunc fn, size_t stack, s32 prio, bool new3ds,
+                                       int32_t* core)
+{
+    static int s_core1 = 0; // 0: not asked yet, 1: granted, -1: refused
+    if (new3ds) {
+        Thread t = threadCreate(fn, NULL, stack, prio, 2, false);
+        if (t) {
+            *core = 2;
+            return t;
+        }
+    }
+    if (s_core1 == 0) {
+        s_core1 = R_SUCCEEDED(APT_SetAppCpuTimeLimit(30)) ? 1 : -1;
+    }
+    if (s_core1 > 0) {
+        Thread t = threadCreate(fn, NULL, stack, prio, 1, false);
+        if (t) {
+            *core = 1;
+            return t;
+        }
+    }
+    *core = -1;
+    return NULL;
+}
+
+#define TRINO_JOBS 32
+
+typedef void (*trino_job_fn)(uint32_t);
+
+static struct {
+    trino_job_fn fn;
+    uint32_t arg;
+} s_jobs[TRINO_JOBS];
+static uint32_t s_job_head; // next job to run (worker)
+static uint32_t s_job_tail; // next free slot (main thread)
+static LightLock s_job_lock;
+static LightSemaphore s_job_ready;
+static LightEvent s_job_idle;
+static uint32_t s_job_pending;
+static volatile bool s_worker_quit;
+static Thread s_worker;
+static int32_t s_worker_core = -1;
+
+static void trino_worker_main(void* unused)
+{
+    (void)unused;
+    for (;;) {
+        LightSemaphore_Acquire(&s_job_ready, 1);
+        if (s_worker_quit) {
+            return;
+        }
+        LightLock_Lock(&s_job_lock);
+        trino_job_fn fn = s_jobs[s_job_head % TRINO_JOBS].fn;
+        uint32_t arg = s_jobs[s_job_head % TRINO_JOBS].arg;
+        s_job_head++;
+        LightLock_Unlock(&s_job_lock);
+        fn(arg);
+        if (__atomic_sub_fetch(&s_job_pending, 1, __ATOMIC_ACQ_REL) == 0) {
+            LightEvent_Signal(&s_job_idle);
+        }
+    }
+}
+
+// Start the worker (once; later calls return the same core): core 2 on a
+// New 3DS, else core 1 with 30% of its time. Returns the core, or -1 when
+// none was granted (jobs then run inline). Call after trino_init.
+int32_t trino_worker_start(uint32_t new3ds)
+{
+    if (s_worker) {
+        return s_worker_core;
+    }
+    LightLock_Init(&s_job_lock);
+    LightSemaphore_Init(&s_job_ready, 0, TRINO_JOBS + 1);
+    LightEvent_Init(&s_job_idle, RESET_ONESHOT);
+    s32 prio = 0x30;
+    svcGetThreadPriority(&prio, CUR_THREAD_HANDLE);
+    // Application threads take 0x18..0x3F; on its own core the worker runs
+    // at the main thread's priority.
+    if (prio < 0x18) prio = 0x18;
+    if (prio > 0x3F) prio = 0x3F;
+    s_worker = trino_second_core_thread(trino_worker_main, 32 * 1024, prio, new3ds != 0,
+                                        &s_worker_core);
+    return s_worker ? s_worker_core : -1;
+}
+
+// Queue job(arg) for the worker. Returns 0 (nothing queued: the caller
+// runs it) without a worker or with the ring full.
+uint32_t trino_worker_submit(trino_job_fn job, uint32_t arg)
+{
+    if (!s_worker) {
+        return 0;
+    }
+    LightLock_Lock(&s_job_lock);
+    if (s_job_tail - s_job_head >= TRINO_JOBS) {
+        LightLock_Unlock(&s_job_lock);
+        return 0;
+    }
+    s_jobs[s_job_tail % TRINO_JOBS].fn = job;
+    s_jobs[s_job_tail % TRINO_JOBS].arg = arg;
+    s_job_tail++;
+    LightLock_Unlock(&s_job_lock);
+    // Counted before the worker can see it, so the count never underflows.
+    __atomic_add_fetch(&s_job_pending, 1, __ATOMIC_ACQ_REL);
+    LightSemaphore_Release(&s_job_ready, 1);
+    return 1;
+}
+
+// Block until every queued job has run (a stale signal from an earlier
+// batch only loops once more).
+void trino_worker_wait(void)
+{
+    if (!s_worker) {
+        return;
+    }
+    while (__atomic_load_n(&s_job_pending, __ATOMIC_ACQUIRE) != 0) {
+        LightEvent_Wait(&s_job_idle);
+    }
+}
+
+// Stop and join the worker (teardown).
+static void trino_worker_stop(void)
+{
+    if (!s_worker) {
+        return;
+    }
+    trino_worker_wait();
+    s_worker_quit = true;
+    LightSemaphore_Release(&s_job_ready, 1);
+    threadJoin(s_worker, U64_MAX);
+    threadFree(s_worker);
+    s_worker = NULL;
+}
+
 // svcOutputDebugString: shows up in Azahar/Citra logs and GDB; also on the
 // 3dslink host when the app was launched by it.
 void trino_log(const char* msg)
@@ -1307,9 +1471,14 @@ static void trino_ndsp_init(void)
     }
 }
 
-// The DSP, the stream bookkeeping and the audio thread — on the New 3DS's
-// third core when the system gives it to us (#54), else on the app core one
-// priority above the main thread (it sleeps between ndsp frames).
+// The DSP, the stream bookkeeping and the audio thread. The thread takes the
+// second core the worker uses (#54: core 2 on a New 3DS, core 1 at 30% on an
+// old one; trino_second_core_thread) one priority above the main thread, so
+// a refill preempts a long game job instead of queueing behind it; it sleeps
+// between ndsp frames. It is a thread of its own, not a worker job: ndsp's
+// callback wakes it every audio frame, and a job submitted from there would
+// wait in the ring, or run inline in ndsp's thread when the ring is full.
+// No second core: the app core, same priority.
 static void trino_audio_init(void)
 {
     trino_ndsp_init();
@@ -1321,10 +1490,9 @@ static void trino_audio_init(void)
     if (prio > 0x18) prio--;
     bool n3ds = false;
     APT_CheckNew3DS(&n3ds);
-    if (n3ds) {
-        s_audio_thread = threadCreate(trino_audio_thread, NULL, 16 * 1024, prio, 2, false);
-        if (s_audio_thread) s_audio_core = 2;
-    }
+    int32_t core = -1;
+    s_audio_thread = trino_second_core_thread(trino_audio_thread, 16 * 1024, prio, n3ds, &core);
+    s_audio_core = core;
     if (!s_audio_thread) {
         s_audio_thread = threadCreate(trino_audio_thread, NULL, 16 * 1024, prio, -2, false);
         s_audio_core = -2;
@@ -1435,7 +1603,7 @@ void trino_audio_poll(void)
 // Audio counters (trino_core::AudioStats): 0 streams playing, 1 bytes held
 // by loaded sounds (linear data + contexts), 2 bytes of streaming buffers,
 // 3 underruns, 4 samples the streams delivered, 5 the audio thread's core
-// (2 = the New 3DS's third core, 0 = the app core).
+// (2 or 1, the second core the worker uses; 0 = the app core).
 uint32_t trino_audio_stat(uint32_t which)
 {
     // Lock-free like trino_ch_playing.
@@ -1455,7 +1623,7 @@ uint32_t trino_audio_stat(uint32_t which)
         break;
     case 1: v = s_resident; break;
     case 3: v = s_underruns; break;
-    case 5: v = s_audio_core == 2 ? 2 : 0; break;
+    case 5: v = s_audio_core > 0 ? (uint32_t)s_audio_core : 0; break;
     }
     return v;
 }
@@ -1512,6 +1680,7 @@ int main(void)
     trino_rust_main();
     // Rust returns when aptMainLoop() says stop: tear down in reverse.
     trino_audio_exit();
+    trino_worker_stop();
     ndspExit();
     C2D_Fini();
     C3D_Fini();

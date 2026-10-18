@@ -456,6 +456,14 @@ uint32_t trino_phys_addr(const void* p)
     return PhysicalAddr(p);
 }
 
+// RDRAM in bytes: 4 MiB, or 8 MiB with the Expansion Pak (the boot's
+// hardware tier, issue #54; the Rust side applies libdragon's
+// is_memory_expanded threshold, src/hw.rs).
+uint32_t trino_memory_size(void)
+{
+    return (uint32_t)get_memory_size();
+}
+
 // Heap use (bytes): the self-test reports it next to the stack watermark.
 uint32_t trino_heap_used(void)
 {

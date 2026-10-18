@@ -12,6 +12,10 @@ A feature is done only when **PC, N64 and 3DS** all run it and an emulator has s
 
 - If the N64 cannot do it, the engine does not expose it (AGENTS.md › Design ceiling).
   Check `Caps` (`crates/core/src/caps.rs`) for the budget it spends.
+- The ceiling is the **base** N64 (4 MB, no Pak). An expanded tier (`Caps::N64_EXPANDED`,
+  `Caps::N3DS_NEW`, ADR 0020) may add memory, cores, crowd or particle scale, never a
+  feature the base console lacks. Per-tier differences are content (`n64_expanded` /
+  `n3ds_new` variants) or a branch on `platform.hw_tier()` at update time.
 - Logic goes in `trino-core` (no_std, zero deps, deterministic f32 through `math3d`).
   Backends only do what needs hardware: rasterizing, audio channels, storage.
   When a backend needs no new code, the feature is in the right place
@@ -158,7 +162,8 @@ A feature is done only when **PC, N64 and 3DS** all run it and an emulator has s
 3. `cargo xtask test n64` and `cargo xtask test 3ds` (`run-emulator`). When render
    or T&L code changed, quote the `test n64` perf table before/after and bless the
    baselines (`n64-performance`); a change in `perf_budget`'s work counters is a
-   cost decision, say so in the commit.
+   cost decision, say so in the commit. A change that touches memory, boot or the
+   asset index boots both tiers: `--expansion-pak both`, `--new3ds both` (CI does).
 4. `cargo xtask scene check` when content changed.
 
 The emulators catch what PC tests can't:

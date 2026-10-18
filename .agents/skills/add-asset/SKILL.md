@@ -22,19 +22,38 @@ formats = { n64 = "CI4", 3ds = "ETC1A4" }  # n64 REQUIRED: CI4, CI8, RGBA5551, I
 # min_psnr = 38                 # overrides quality; also checks an explicit format
 
 [sounds.jump]
-file = "sounds/jump.wav"        # PCM 16-bit or float, mono/stereo
+file = "sounds/jump.wav"        # PCM 16-bit or float, mono/stereo (stereo is averaged)
 # loop = true                   # looping SFX (scene `sound` sources / voices); default false
+# codec = "pcm"                 # or per platform: { n64 = "vadpcm", 3ds = "dspadpcm", pc = "vorbis" }
+                                # auto (default): N64 VADPCM, 3DS DSP-ADPCM, PC/Web Vorbis;
+                                # also n64 "opus"; "pcm" everywhere
+# quality = 6                   # Vorbis 0..10 (default 6)
+# sample_rate = { n64 = 22050 } # resample per platform
+# bus = "ui"                    # sfx (default for sounds), music, voice, ambience, ui
+# stream = true                 # decode while playing instead of loading whole
 
 [music.theme]
-file = "music/theme.wav"        # loops on the music channel (wav64 --wav-loop on N64)
+file = "music/theme.wav"        # loops; streams by default (stream = false to load whole)
 
 [music.fanfare]
 file = "sounds/win.wav"
 loop = false                    # a stinger: Audio::play_stinger, music ducks under it
 ```
 
-On the N64, looped wavs are trimmed to a multiple of 16 frames (wav64 requires it),
-and a sound plays on one channel at a time: re-triggering restarts it.
+The project mix — each bus's starting volume and duck rules — lives in
+`assets/audio.toml` (`version = 1`, `[buses] music = 0.8`, `[[duck]] trigger = "voice"
+target = "music" level = 0.4 attack_ms = 150 release_ms = 300`); `cargo xtask audio mix`
+validates it. Check a sound with `cargo xtask audio inspect sounds/jump` (codec, bytes,
+SNR, RAM per platform), the whole project with `cargo xtask audio report`, and listen to
+each platform's decode with `cargo xtask audio preview sounds/jump` (WAVs under
+`target/audio-preview/`). Noise-like sounds lose the most (24 dB ADPCM, 15 dB Vorbis
+waveform SNR): listen before shipping them.
+
+On the N64 every length becomes whole 16-sample blocks (libdragon's VADPCM loops need
+it): a one-shot gains up to 15 samples of silence, a loop drops up to 15 (shorter ones
+repeat until they fit). Masters above 44.1 kHz bake at 44.1 kHz. A sound plays on one
+channel at a time: re-triggering restarts it. `codec = { n64 = "opus" }` links libopus
+(+99 KB of ROM) and costs ~4.6 ms of a 60 Hz frame while it plays; keep it for long music.
 
 ```rust
 pub const ENEMY: SpriteId = SpriteId::from_path("sprites/enemy");

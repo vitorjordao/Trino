@@ -43,6 +43,9 @@ file = "sounds/coin.wav"
 [sounds.win]
 file = "sounds/win.wav"
 
+# Music streams by default (`stream = true`) in each platform's default
+# codec: VADPCM on the N64, DSP-ADPCM on the 3DS, Vorbis on the PC and Web
+# (issue #53, ASSETS.md "Audio").
 [music.theme]
 file = "music/theme.wav"
 
@@ -420,6 +423,21 @@ file = "fonts/trino5x7.png"
 cell = [6, 10]
 
 # ---- blobs (raw bytes by handle: Platform::blob) ----
+
+# ---- self-test content (castle64::selftest::AudioCodecs, issue #53) ----
+# The same beep as PCM and as the platform's codec; a short track as Opus on
+# the N64 (the platform's default codec elsewhere).
+[sounds.selftest_pcm]
+file = "sounds/beep.wav"
+codec = "pcm"
+
+[sounds.selftest_codec]
+file = "sounds/beep.wav"
+
+[music.selftest_opus]
+file = "sounds/win.wav"
+loop = false
+codec = { n64 = "opus" }
 
 # Read back by the console self-tests (castle64::selftest).
 [blobs.selftest]

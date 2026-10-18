@@ -195,6 +195,23 @@ shim enables the same dither and filter, and `xtask/tests/n64_parity.rs` compare
 frame with the ares golden. `SimProfile::N3ds` uses the 3DS resolution, bilinear sampling
 and both screens, held to the Azahar golden by `n3ds_parity`.
 
+## Audio (issue #53)
+
+One mono WAV master per sound bakes to what each platform's hardware plays best
+([ADR 0021](adr/0021-audio-pipeline.md)): VADPCM on the N64 (the RSP decodes it in
+libdragon's mixer), DSP-ADPCM on the 3DS (the DSP decodes it, free of CPU), Ogg Vorbis on
+the PC and the Web (lewton, pure Rust, also in the wasm). The encoders are the engine's
+own (`asset_pipeline::audio`), and one `encode()` serves every bake, `cargo xtask audio`
+and the editor, so the tools measure the bytes that ship. Music streams on every target:
+a decoder thread and a lock-free ring on the PC, chunks scheduled ahead on the Web, RomFS
+chunks refilled by an audio thread on the 3DS, the cartridge on the N64.
+
+The mixing arithmetic is in the core (`BusMixer`: master × bus × duck, mutes, duck ramps),
+so every backend mixes buses the same way; the `Audio` trait's bus methods have defaults
+that map onto the old master and music volumes. The project's mix (`assets/audio.toml`)
+bakes to a `TMIX` blob each host applies at start, and the player's own volumes persist
+per platform (`BusSettings`).
+
 ## Authored content
 
 Scenes, prefabs, materials, particle effects and fake objects are versioned RON files

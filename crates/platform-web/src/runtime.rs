@@ -145,7 +145,15 @@ pub struct WebHost {
     frames: u64,
     last_audio: Option<bool>,
     last_input: String,
+    /// The player's bus volumes as last stored (`trino-audio:<save_name>`
+    /// in `localStorage`, the PC's `<save_name>.audio`).
+    audio_key: String,
+    audio_saved: trino_core::BusSettings,
     _observer: Option<Observer>,
+}
+
+fn local_storage() -> Option<web_sys::Storage> {
+    web_sys::window().and_then(|w| w.local_storage().ok().flatten())
 }
 
 /// A canvas element's size in device pixels: the exact device-pixel box
@@ -248,6 +256,7 @@ impl WebHost {
         let platform = WebPlatform::new(&config.profile.caps(), &config.save_name);
         let texture_target = TextureTarget::of(&renderer);
         crate::js::trino_info("texture_target", texture_target.name());
+        let audio_key = format!("trino-audio:{}", config.save_name);
         let mut host = WebHost {
             renderer,
             audio: WebAudio::new(),
@@ -263,6 +272,8 @@ impl WebHost {
             frames: 0,
             last_audio: None,
             last_input: String::new(),
+            audio_key,
+            audio_saved: trino_core::BusSettings::default(),
         };
         host.sync_size();
         host.end_audio_state();
@@ -294,7 +305,8 @@ impl WebHost {
             .map_err(|e| format!("{url}: {e}"))
     }
 
-    /// Upload an asset pack already in memory.
+    /// Upload an asset pack already in memory. Its mix (if any) sets the
+    /// buses, then the player's stored volumes win over it.
     pub fn load_pack_bytes(&mut self, bytes: &[u8]) -> Result<LoadReport, String> {
         let report = crate::assets::load(
             bytes,
@@ -303,7 +315,32 @@ impl WebHost {
             &mut self.platform,
         )?;
         crate::js::log(&report.line(self.texture_target));
+        let stored = local_storage()
+            .and_then(|s| s.get_item(&self.audio_key).ok().flatten())
+            .and_then(|t| crate::sound::settings_from_text(&t));
+        if let Some(s) = stored {
+            s.apply(&mut self.audio);
+        }
+        self.audio_saved = self.audio.bus_settings();
         Ok(report)
+    }
+
+    /// `TRINO_AUDIO:` — what the audio holds and does (the PC runner's
+    /// line, plus the context's state).
+    pub fn audio_line(&self) -> String {
+        let s = trino_core::Audio::audio_stats(&self.audio);
+        format!(
+            "TRINO_AUDIO: state={} rate={} resident_bytes={} voices={} streams={} \
+             stream_bytes={} underruns={} streamed_frames={}",
+            self.audio.state(),
+            self.audio.sample_rate(),
+            s.resident_bytes,
+            s.voices,
+            s.streams,
+            s.stream_bytes,
+            s.underruns,
+            s.streamed_frames
+        )
     }
 
     /// The game's picture size (the renderer's internal resolution).
@@ -426,10 +463,19 @@ impl WebHost {
         state
     }
 
-    /// Per-frame housekeeping after the game ran: audio voices and the
-    /// banner, the game's display requests, the frame meter.
+    /// Per-frame housekeeping after the game ran: audio (streams, voices,
+    /// ducks, the player's volumes) and the banner, the game's display
+    /// requests, the frame meter.
     pub fn end_frame(&mut self) {
         self.audio.poll();
+        // The game changed the player's volumes (its options): store them.
+        let now = self.audio.bus_settings();
+        if now != self.audio_saved {
+            self.audio_saved = now;
+            if let Some(s) = local_storage() {
+                let _ = s.set_item(&self.audio_key, &crate::sound::settings_to_text(&now));
+            }
+        }
         let running = self.audio.running();
         if self.last_audio != Some(running) {
             crate::js::trino_audio_banner(!running);
@@ -535,6 +581,7 @@ pub fn run_game<G: Game + 'static>(
             frames += 1;
             if smoke.is_some_and(|n| frames >= n) {
                 crate::js::log(&host.meter.line("game"));
+                crate::js::log(&host.audio_line());
                 crate::js::trino_finish(true, None);
                 return Flow::Stop;
             }

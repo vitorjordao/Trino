@@ -20,11 +20,14 @@
 //! Dev hooks: `TRINO_EDITOR_SMOKE_FRAMES=N` closes after N frames;
 //! `TRINO_EDITOR_SCREENSHOT=out.png` (+ `TRINO_EDITOR_SCREENSHOT_FRAME=N`)
 //! saves a screenshot of the whole window and exits (the launcher too);
-//! `TRINO_EDITOR_TAB=level` opens with the Level tab focused;
+//! `TRINO_EDITOR_TAB=level` opens with the Level tab focused (`mixer`:
+//! the Mixer tab); `TRINO_EDITOR_OPEN=audio:music/theme@n64` opens the
+//! Audio inspector on a sound, its waveform over that platform's decode;
 //! `TRINO_EDITOR_RECENT=<file>` keeps the recent projects there.
 
 mod anim_panel;
 mod app;
+mod audio;
 mod budget;
 mod dialogs;
 mod doc;

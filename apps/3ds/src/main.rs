@@ -272,6 +272,48 @@ mod n3ds {
             }
             return;
         }
+        // Each codec plays and finishes, the music streams from the RomFS
+        // with no underrun, a duck rule ramps (issue #53).
+        runtime::log("TRINO_STEP:audio codecs\n");
+        let codecs = castle64::selftest::audio_codecs(audio, |a| {
+            a.poll();
+            trino_core::Renderer::begin_frame(renderer, trino_core::Color::BLACK);
+            trino_core::Renderer::end_frame(renderer);
+        })
+        .map_err(alloc::string::String::from)
+        .and_then(|s| {
+            // The streaming thread shares the worker's second core (#54):
+            // one grant, the same core on either model (0: neither had one).
+            let worker = trino_platform_3ds::worker::core().map_or(0, u32::from);
+            if audio.stream_core() == worker {
+                Ok(s)
+            } else {
+                Err(format!(
+                    "the audio thread runs on core {}, the worker on {worker}",
+                    audio.stream_core()
+                ))
+            }
+        });
+        match codecs {
+            Ok(s) => runtime::log(&format!(
+                "TRINO_AUDIO: voices={} streams={} resident_bytes={} stream_bytes={} underruns={} streamed_frames={} stream_core={}\n",
+                s.voices,
+                s.streams,
+                s.resident_bytes,
+                s.stream_bytes,
+                s.underruns,
+                s.streamed_frames,
+                audio.stream_core()
+            )),
+            Err(e) => {
+                runtime::log(&format!("TRINO_TEST_FAIL:audio codecs: {e}\n"));
+                while runtime::running() {
+                    trino_core::Renderer::begin_frame(renderer, trino_core::Color::BLACK);
+                    trino_core::Renderer::end_frame(renderer);
+                }
+                return;
+            }
+        }
         runtime::log("TRINO_STEP:input\n");
         if let Err(e) = castle64::selftest::idle_input_checks(&mut N3dsInput) {
             runtime::log(&format!("TRINO_TEST_FAIL:{e}\n"));
@@ -477,6 +519,19 @@ mod n3ds {
                             runtime::log("TRINO_STEP:texture formats golden frame\n");
                             castle64::selftest::draw_texture_formats(renderer, true);
                             renderer.dump_framebuffer();
+                            // The whole run's streaming: castle64's music
+                            // played through every step above.
+                            let s = trino_core::Audio::audio_stats(audio);
+                            runtime::log(&format!(
+                                "TRINO_AUDIO: run voices={} streams={} resident_bytes={} stream_bytes={} underruns={} streamed_frames={} t={}ms\n",
+                                s.voices,
+                                s.streams,
+                                s.resident_bytes,
+                                s.stream_bytes,
+                                s.underruns,
+                                s.streamed_frames,
+                                runtime::now_us() / 1000
+                            ));
                             runtime::log("TRINO_TEST_PASS\n");
                         }
                         Ok(false) => fail("showcase panel: no second screen to probe".into()),

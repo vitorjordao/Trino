@@ -852,6 +852,7 @@ pub fn audio_checks(audio: &mut dyn trino_core::Audio) -> Result<(), &'static st
     let left = SoundParams {
         volume: 0.5,
         pan: -1.0,
+        ..SoundParams::DEFAULT
     };
     let voice = audio
         .play_voice(WATER, &left, true)
@@ -873,9 +874,250 @@ pub fn audio_checks(audio: &mut dyn trino_core::Audio) -> Result<(), &'static st
         &SoundParams {
             volume: 0.2,
             pan: 0.5,
+            ..SoundParams::DEFAULT
         },
     );
     Ok(())
+}
+
+/// The `audio codecs` step's sounds: the same beep baked as PCM and as the
+/// platform's default codec (VADPCM, DSP-ADPCM, Vorbis), with what each
+/// proves (issue #53).
+pub const AUDIO_CODEC_SOUNDS: [(trino_core::SoundId, &str); 2] = [
+    (
+        trino_core::SoundId::from_path("sounds/selftest_pcm"),
+        "audio codecs: the PCM sound",
+    ),
+    (
+        trino_core::SoundId::from_path("sounds/selftest_codec"),
+        "audio codecs: the platform-codec sound",
+    ),
+];
+/// A short track baked as Opus on the N64 (the platform default elsewhere),
+/// played through to its end.
+pub const AUDIO_OPUS: trino_core::MusicId = trino_core::MusicId::from_path("music/selftest_opus");
+/// The streamed track (`[music.theme]`, music streams by default).
+pub const AUDIO_STREAM: trino_core::MusicId = trino_core::MusicId::from_path("music/theme");
+/// Frames the stream must play for, and the samples it must deliver in
+/// them (half a second at the lowest rate a backend uses).
+pub const AUDIO_STREAM_FRAMES: u32 = 60;
+pub const AUDIO_STREAM_MIN_SAMPLES: u32 = 4_000;
+/// Frames a ramp gets to settle (attack and release are 50 ms).
+const AUDIO_DUCK_FRAMES: u32 = 15;
+/// Frames a one-shot gets to finish before decoding counts as stalled.
+const AUDIO_SOUND_TIMEOUT: u32 = 120;
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum CodecPhase {
+    Start,
+    Sound(usize),
+    Opus,
+    Stream,
+    Stopped,
+    Duck,
+    Release,
+    Done,
+}
+
+/// Step `audio codecs` (issue #53) as a state machine, one call per frame
+/// (the Web's animation frames drive it; [`audio_codecs`] loops it on PC
+/// and consoles): the bus API reads back, each codec plays and finishes,
+/// an Opus/default-codec track plays to its end, the streamed track
+/// delivers samples with no underruns and releases its buffers, and a duck
+/// rule ramps the music down and back. Leaves the buses as it found them.
+pub struct AudioCodecs {
+    phase: CodecPhase,
+    frames: u32,
+    voice: Option<trino_core::VoiceId>,
+    volumes: [f32; trino_core::Bus::COUNT],
+    base: trino_core::AudioStats,
+    /// The stats after the stream played (what the runners log).
+    pub streamed: trino_core::AudioStats,
+}
+
+impl Default for AudioCodecs {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AudioCodecs {
+    pub const DUCK: trino_core::DuckRule =
+        trino_core::DuckRule::new(trino_core::Bus::Sfx, trino_core::Bus::Music, 0.4, 50, 50);
+
+    pub fn new() -> Self {
+        AudioCodecs {
+            phase: CodecPhase::Start,
+            frames: 0,
+            voice: None,
+            volumes: [1.0; trino_core::Bus::COUNT],
+            base: trino_core::AudioStats::default(),
+            streamed: trino_core::AudioStats::default(),
+        }
+    }
+
+    /// Advance by one frame (call it, then let a frame of audio play). True
+    /// once the step passed.
+    pub fn step(&mut self, audio: &mut dyn trino_core::Audio) -> Result<bool, &'static str> {
+        use trino_core::{Bus, SoundParams};
+        self.frames += 1;
+        match self.phase {
+            CodecPhase::Start => {
+                for b in Bus::ALL {
+                    self.volumes[b.index()] = audio.bus_volume(b);
+                }
+                audio.set_bus_volume(Bus::Sfx, 0.5);
+                if (audio.bus_volume(Bus::Sfx) - 0.5).abs() > 0.01 {
+                    return Err("audio codecs: a bus volume doesn't read back");
+                }
+                audio.set_master_volume(0.75);
+                audio.set_music_volume(0.6);
+                if (audio.bus_volume(Bus::Master) - 0.75).abs() > 0.01
+                    || (audio.bus_volume(Bus::Music) - 0.6).abs() > 0.01
+                {
+                    return Err("audio codecs: set_master/music_volume don't map to the buses");
+                }
+                audio.set_bus_muted(Bus::Ui, true);
+                if !audio.bus_muted(Bus::Ui) || audio.bus_muted(Bus::Sfx) {
+                    return Err("audio codecs: a bus mute doesn't read back");
+                }
+                audio.set_bus_muted(Bus::Ui, false);
+                self.restore(audio);
+                if audio.audio_stats().resident_bytes == 0 {
+                    return Err("audio codecs: no sound memory reported");
+                }
+                self.start_sound(audio, 0)?;
+            }
+            CodecPhase::Sound(i) => {
+                let v = self.voice.ok_or("audio codecs: lost the voice")?;
+                // `start_sound` saw it playing; how soon it ends depends on
+                // the frame time (a slow frame outlasts a 0.15 s beep).
+                if !audio.voice_playing(v) {
+                    if i + 1 < AUDIO_CODEC_SOUNDS.len() {
+                        self.start_sound(audio, i + 1)?;
+                    } else {
+                        audio.play_music(AUDIO_OPUS, false);
+                        self.enter(CodecPhase::Opus);
+                    }
+                } else if self.frames > AUDIO_SOUND_TIMEOUT {
+                    return Err("audio codecs: a sound never finished (decoding stalled)");
+                }
+            }
+            CodecPhase::Opus => {
+                let s = audio.audio_stats();
+                if self.frames == 2 && s.voices == 0 {
+                    return Err("audio codecs: the Opus/codec track isn't playing");
+                }
+                if self.frames > 2 && s.voices == 0 {
+                    audio.play_music(AUDIO_STREAM, false);
+                    self.base = audio.audio_stats();
+                    self.enter(CodecPhase::Stream);
+                } else if self.frames > AUDIO_SOUND_TIMEOUT {
+                    return Err("audio codecs: the Opus/codec track never finished");
+                }
+            }
+            CodecPhase::Stream => {
+                if self.frames >= AUDIO_STREAM_FRAMES {
+                    let s = audio.audio_stats();
+                    if s.streams == 0 || s.stream_bytes == 0 {
+                        return Err("audio codecs: the music isn't streaming");
+                    }
+                    let got = s.streamed_frames.wrapping_sub(self.base.streamed_frames);
+                    if got < AUDIO_STREAM_MIN_SAMPLES {
+                        return Err("audio codecs: the stream delivered too few samples");
+                    }
+                    if s.underruns != self.base.underruns {
+                        return Err("audio codecs: the stream underran");
+                    }
+                    self.streamed = s;
+                    audio.stop_music();
+                    self.enter(CodecPhase::Stopped);
+                }
+            }
+            CodecPhase::Stopped => {
+                if self.frames >= 2 {
+                    if audio.audio_stats().streams != 0 {
+                        return Err("audio codecs: a stopped stream kept its buffers");
+                    }
+                    audio.set_duck(Self::DUCK);
+                    audio.play_music(AUDIO_STREAM, true);
+                    let v = audio
+                        .play_voice(WATER, &SoundParams::DEFAULT, true)
+                        .ok_or("audio codecs: no voice for the ducking sound")?;
+                    self.voice = Some(v);
+                    self.enter(CodecPhase::Duck);
+                }
+            }
+            CodecPhase::Duck => {
+                if self.frames >= AUDIO_DUCK_FRAMES {
+                    if audio.bus_duck(Bus::Music) > 0.45 {
+                        return Err("audio codecs: the music didn't duck under the sfx");
+                    }
+                    if let Some(v) = self.voice.take() {
+                        audio.stop_voice(v);
+                    }
+                    self.enter(CodecPhase::Release);
+                }
+            }
+            CodecPhase::Release => {
+                if self.frames >= AUDIO_DUCK_FRAMES {
+                    if audio.bus_duck(Bus::Music) < 0.95 {
+                        return Err("audio codecs: the music didn't come back after the duck");
+                    }
+                    let mut off = Self::DUCK;
+                    off.level = 1.0;
+                    audio.set_duck(off);
+                    audio.stop_music();
+                    self.restore(audio);
+                    self.enter(CodecPhase::Done);
+                }
+            }
+            CodecPhase::Done => {}
+        }
+        Ok(self.phase == CodecPhase::Done)
+    }
+
+    fn enter(&mut self, phase: CodecPhase) {
+        self.phase = phase;
+        self.frames = 0;
+    }
+
+    fn start_sound(
+        &mut self,
+        audio: &mut dyn trino_core::Audio,
+        i: usize,
+    ) -> Result<(), &'static str> {
+        let (id, what) = AUDIO_CODEC_SOUNDS[i];
+        let v = audio
+            .play_voice(id, &trino_core::SoundParams::DEFAULT, false)
+            .ok_or(what)?;
+        if !audio.voice_playing(v) {
+            return Err(what);
+        }
+        self.voice = Some(v);
+        self.enter(CodecPhase::Sound(i));
+        Ok(())
+    }
+
+    fn restore(&self, audio: &mut dyn trino_core::Audio) {
+        for b in trino_core::Bus::ALL {
+            audio.set_bus_volume(b, self.volumes[b.index()]);
+        }
+    }
+}
+
+/// [`AudioCodecs`] to the end: `frame` lets one frame of audio play (the
+/// consoles poll their audio and wait a vblank; the PC renders 1/60 s
+/// offline). The stats after the stream played, for the runners' logs.
+pub fn audio_codecs<A: trino_core::Audio>(
+    audio: &mut A,
+    mut frame: impl FnMut(&mut A),
+) -> Result<trino_core::AudioStats, &'static str> {
+    let mut step = AudioCodecs::new();
+    while !step.step(audio)? {
+        frame(audio);
+    }
+    Ok(step.streamed)
 }
 
 /// A smooth-skinned strip (`[models.selftest_strip]`, `skinning = "smooth"`)

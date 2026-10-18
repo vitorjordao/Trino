@@ -63,6 +63,11 @@ bcdec_rs = "0.2"
 # transcoder (C++, built by `cc`). Host tools only: the browser runs the
 # same transcoder compiled to WebAssembly (`apps/web/vendor/basis`).
 basis-universal = "0.3"
+# Audio (#53): Ogg Vorbis on the PC and the Web. lewton decodes (pure Rust,
+# also in the browser's wasm); vorbis_rs encodes in the bake (libvorbis with
+# aoTuV, C built by `cc`: host tools only).
+lewton = "0.10"
+vorbis_rs = "0.5"
 notify = "8"
 notify-debouncer-full = "0.6"
 hot-lib-reloader = "0.8.2"

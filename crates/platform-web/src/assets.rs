@@ -14,7 +14,7 @@
 //! bake measured its PSNR on (as the PC decodes BC blocks on a GPU without
 //! BC).
 
-use trino_core::{BlobId, FontId, ModelId, MusicId, SoundId, SpriteId};
+use trino_core::{BlobId, FontId, MixerConfig, ModelId, MusicId, SoundId, SpriteId};
 use trino_render_wgpu::{CompressedFormat, PcRenderer};
 
 use crate::pack::{self, Kind};
@@ -73,6 +73,8 @@ pub struct LoadReport {
     pub models: u32,
     pub fonts: u32,
     pub blobs: u32,
+    /// The pack carried the project's mix (`assets/audio.toml`).
+    pub mixer: bool,
     /// The pack's bytes (the download).
     pub bytes: u64,
 }
@@ -82,7 +84,7 @@ impl LoadReport {
     pub fn line(&self, target: TextureTarget) -> String {
         format!(
             "TRINO_ASSETS: bytes={} sprites={} ktx2={} ktx2_gpu={} ktx2_rgba8={} target={} \
-             sounds={} models={} fonts={} blobs={}",
+             sounds={} models={} fonts={} blobs={} mixer={}",
             self.bytes,
             self.sprites,
             self.ktx2_compressed + self.ktx2_decoded,
@@ -92,7 +94,8 @@ impl LoadReport {
             self.sounds,
             self.models,
             self.fonts,
-            self.blobs
+            self.blobs,
+            self.mixer
         )
     }
 }
@@ -126,13 +129,20 @@ pub(crate) fn load(
                 r.sprites += 1;
             }
             Kind::Sound | Kind::Music => {
-                let (rate, samples) = pack::read_sound16(e.bytes)?;
-                if e.kind == Kind::Sound {
-                    audio.upload_sound(SoundId(e.id), rate, &samples);
+                let blob = pack::sound_blob(e.kind, e.bytes)?;
+                let loaded = if e.kind == Kind::Sound {
+                    audio.upload_sound_blob(SoundId(e.id), &blob)
                 } else {
-                    audio.upload_music(MusicId(e.id), rate, &samples);
-                }
+                    audio.upload_music_blob(MusicId(e.id), &blob)
+                };
+                loaded.map_err(|err| format!("sound {:08x}: {err}", e.id))?;
                 r.sounds += 1;
+            }
+            Kind::Mixer => {
+                let mix =
+                    MixerConfig::parse(e.bytes).map_err(|err| format!("audio/mixer: {err}"))?;
+                mix.apply(audio);
+                r.mixer = true;
             }
             Kind::Model => {
                 renderer.upload_mesh(ModelId(e.id), e.bytes.to_vec());

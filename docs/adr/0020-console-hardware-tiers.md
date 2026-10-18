@@ -96,8 +96,10 @@ after `APT_SetAppCpuTimeLimit(30)` (the system keeps 70% of it). Jobs are
 `LightSemaphore`, a one-shot `LightEvent` when the pending count reaches 0);
 `submit` runs a job inline when there is no worker or the ring is full, so a game that
 never checks `worker::core()` behaves the same everywhere. Jobs compute into memory the
-main thread reads after `wait()`; the renderer, audio and platform stay on the main
-thread. The N64 has no second CPU, and the PC's T&L already has its own pool.
+main thread reads after `wait()`; the renderer, the audio API and the platform stay on
+the main thread. The audio pipeline's refill thread (#53, ADR 0021 §4) takes this core
+through the same shim function (`trino_second_core_thread`), one priority above the
+jobs. The N64 has no second CPU, and the PC's T&L already has its own pool.
 
 ### 6. Tools, PC simulation and the editor
 

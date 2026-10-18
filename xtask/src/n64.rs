@@ -143,8 +143,10 @@ fn compile_shim(p: &Project) -> Result<(), String> {
     let shim_dir = root.join("crates/platform-n64/shim");
     let shim_src = shim_dir.join("trino_shim.c");
     let rsp_src = shim_dir.join("rsp_trino.S");
+    let opus_src = shim_dir.join("trino_opus.c");
     if !up_to_date(&root.join("target/n64/shim.o"), &[shim_src])
         || !up_to_date(&root.join("target/n64/rsp_trino.o"), &[rsp_src])
+        || !up_to_date(&root.join("target/n64/opus.o"), &[opus_src])
     {
         println!("[n64] compiling C shim + RSP overlay...");
         let script = "set -e\n\
@@ -153,6 +155,10 @@ fn compile_shim(p: &Project) -> Result<(), String> {
             -ffunction-sections -fdata-sections -DN64 \
             -I$N64_INST/mips64-elf/include \
             crates/platform-n64/shim/trino_shim.c -o target/n64/shim.o\n\
+            mips64-elf-gcc -c -std=gnu17 -march=vr4300 -mtune=vr4300 -mabi=o64 -O2 -G0 \
+            -ffunction-sections -fdata-sections -DN64 \
+            -I$N64_INST/mips64-elf/include \
+            crates/platform-n64/shim/trino_opus.c -o target/n64/opus.o\n\
             cd target/n64/rsp\n\
             for u in rsp_trino rsp_trino_color rsp_trino_tex rsp_trino_water; do\n\
             def=; [ $u = rsp_trino_color ] && def=-DTRINO_COLORED\n\
@@ -247,40 +253,65 @@ pub fn bake_assets(p: &Project, test_mode: bool) -> Result<(), String> {
         ));
         index.push_str(&format!("{id:08x}\tsprite\t{id:08x}.sprite\n"));
     }
-    for (name, decl) in &manifest.sounds {
-        let logical = format!("sounds/{name}");
-        let id = trino_core::asset_id(&logical);
-        let source = resolve_source(&root.join("assets"), Platform::N64, &decl.file)?;
-        let staged = stage.join(format!("{id:08x}.wav"));
-        stage_wav(&source, &staged, decl.sound_loops())?;
-        // Looping voices (ambient sources) need the loop in the wav64.
-        let looping = if decl.sound_loops() {
-            "--wav-loop true "
-        } else {
-            ""
-        };
-        script.push_str(&format!(
-            "audioconv64 {looping}-o target/n64/filesystem target/n64/stage/{id:08x}.wav\n"
-        ));
-        index.push_str(&format!("{id:08x}\tsound\t{id:08x}.wav64\n"));
+    // Sounds and music: wav64 files the mixer streams from the ROM, with
+    // the codec and bus as index columns 5 and 6 (issue #53) after an empty
+    // tier column (#54: every tier loads them).
+    let mut opus = false;
+    let audio_sections = [
+        ("sounds", "sound", false, &manifest.sounds),
+        ("music", "music", true, &manifest.music),
+    ];
+    for (prefix, kind, music, section) in audio_sections {
+        for (name, decl) in section {
+            let logical = format!("{prefix}/{name}");
+            let id = trino_core::asset_id(&logical);
+            let source = resolve_source(&root.join("assets"), Platform::N64, &decl.file)?;
+            let settings = decl
+                .audio_settings(music, Platform::N64)
+                .map_err(|e| format!("`{logical}`: {e}"))?;
+            let file = format!("{id:08x}.wav64");
+            let staged = stage.join(format!("{id:08x}.wav"));
+            if stage_audio(&source, &settings, &staged, &fsdir.join(&file))
+                .map_err(|e| format!("`{logical}`: {e}"))?
+            {
+                // Opus: audioconv64 encodes it (CELT at 48 kHz).
+                script.push_str(&format!(
+                    "audioconv64 --wav-compress 3 --wav-loop {} -o target/n64/filesystem \
+                     target/n64/stage/{id:08x}.wav\n",
+                    settings.looped
+                ));
+                opus = true;
+            }
+            // An empty tier column (every tier loads it, #54), then the
+            // codec and the bus.
+            index.push_str(&format!(
+                "{id:08x}\t{kind}\t{file}\t\t{}\t{}\n",
+                settings.codec.label(),
+                settings.bus.label()
+            ));
+        }
     }
-    for (name, decl) in &manifest.music {
-        let logical = format!("music/{name}");
-        let id = trino_core::asset_id(&logical);
-        let source = resolve_source(&root.join("assets"), Platform::N64, &decl.file)?;
-        stage_wav(
-            &source,
-            &stage.join(format!("{id:08x}.wav")),
-            decl.music_loops(),
-        )?;
-        // Loop metadata is baked into the wav64 on the N64; the runtime's
-        // `looped` flag is a no-op there (see the shim). Stingers declare
-        // `loop = false`.
-        let looping = if decl.music_loops() { "true" } else { "false" };
-        script.push_str(&format!(
-            "audioconv64 --wav-loop {looping} -o target/n64/filesystem target/n64/stage/{id:08x}.wav\n"
-        ));
-        index.push_str(&format!("{id:08x}\tmusic\t{id:08x}.wav64\n"));
+    // The ROM links the Opus decoder only when an asset needs it.
+    let opus_marker = root.join(OPUS_MARKER);
+    if opus {
+        std::fs::write(&opus_marker, "1").map_err(|e| e.to_string())?;
+    } else {
+        let _ = std::fs::remove_file(&opus_marker);
+    }
+    // The project's mix (`assets/audio.toml`) as the `audio/mixer` asset the
+    // runtime applies at boot.
+    let mix_path = root
+        .join("assets")
+        .join(trino_asset_pipeline::audio::MixFile::FILE);
+    if mix_path.exists() {
+        let text = std::fs::read_to_string(&mix_path)
+            .map_err(|e| format!("{}: {e}", mix_path.display()))?;
+        let blob = trino_asset_pipeline::audio::MixFile::parse(&text)
+            .and_then(|m| m.bake())
+            .map_err(|e| format!("{}: {e}", mix_path.display()))?;
+        let id = trino_core::asset_id(trino_core::MixerConfig::LOGICAL);
+        std::fs::write(fsdir.join(format!("{id:08x}.mixer")), blob).map_err(|e| e.to_string())?;
+        index.push_str(&format!("{id:08x}\tmixer\t{id:08x}.mixer\n"));
     }
     for (name, decl) in &manifest.models {
         // A model only the expanded tier names is in the image too, loaded
@@ -396,31 +427,53 @@ pub fn bake_assets(p: &Project, test_mode: bool) -> Result<(), String> {
     Ok(())
 }
 
-/// Stage a wav for audioconv64: copied as-is, or — when it loops — with
-/// its frame count trimmed to a multiple of 16 (libdragon asserts the wav64
-/// loop length is; the few dropped samples are inaudible).
-fn stage_wav(source: &Path, out: &Path, looped: bool) -> Result<(), String> {
-    if !looped {
-        return std::fs::copy(source, out)
-            .map(|_| ())
-            .map_err(|e| format!("{}: {e}", source.display()));
+/// `target/n64/opus` (in the project): the bake found an Opus asset, so
+/// [`pack_rom`] links the shim's `trino_opus.o` (and with it libopus).
+const OPUS_MARKER: &str = "target/n64/opus";
+
+/// Bake one sound for the N64 with `trino_asset_pipeline::audio::encode`
+/// (the master as the console plays it: mono, at its `sample_rate` or at
+/// most 44.1 kHz, the mixer's channel limit, in whole 16-sample blocks),
+/// written as a VADPCM wav64 by our encoder (audioconv64's turned
+/// near-silent passages of castle64's theme into full-scale clicks, 7.6 dB
+/// SNR against our 30.8) or a raw one — the same bytes `audio inspect`,
+/// `audio preview` and the editor measure. Opus is staged as a WAV at
+/// `staged` for audioconv64 instead: returns true.
+fn stage_audio(
+    source: &Path,
+    settings: &trino_asset_pipeline::audio::AudioSettings,
+    staged: &Path,
+    out: &Path,
+) -> Result<bool, String> {
+    use trino_asset_pipeline::audio::{self, Codec, N64_MAX_RATE};
+    let master = trino_asset_pipeline::decode_master(source)?;
+    let err = |e: String| format!("{}: {e}", source.display());
+    if settings.codec == Codec::Opus {
+        // audioconv64 encodes Opus from a WAV (and resamples it to 48 kHz).
+        let rate = settings
+            .sample_rate
+            .unwrap_or(master.rate.min(N64_MAX_RATE));
+        let samples = audio::resample(&master.samples, master.rate, rate);
+        let pcm = audio::n64_pcm(audio::to_pcm16(&samples), settings.looped).map_err(err)?;
+        write_wav_mono(staged, rate, &pcm)?;
+        return Ok(true);
     }
-    let mut reader =
-        hound::WavReader::open(source).map_err(|e| format!("{}: {e}", source.display()))?;
-    let spec = reader.spec();
-    let samples: Vec<i32> = reader
-        .samples::<i32>()
-        .collect::<Result<_, _>>()
-        .map_err(|e| format!("{}: {e}", source.display()))?;
-    let ch = spec.channels as usize;
-    let frames = samples.len() / ch;
-    let keep = frames / 16 * 16;
-    if keep == 0 {
-        return Err(format!("{}: too short to loop", source.display()));
-    }
+    let enc = audio::encode(Platform::N64, settings, &master, 0).map_err(err)?;
+    let bytes = enc.blob.ok_or_else(|| err("no wav64".into()))?;
+    std::fs::write(out, bytes).map_err(|e| format!("{}: {e}", out.display()))?;
+    Ok(false)
+}
+
+fn write_wav_mono(out: &Path, rate: u32, pcm: &[i16]) -> Result<(), String> {
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: rate,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
     let mut w = hound::WavWriter::create(out, spec).map_err(|e| e.to_string())?;
-    for s in &samples[..keep * ch] {
-        w.write_sample(*s).map_err(|e| e.to_string())?;
+    for &s in pcm {
+        w.write_sample(s).map_err(|e| e.to_string())?;
     }
     w.finalize().map_err(|e| e.to_string())
 }
@@ -499,12 +552,18 @@ fn pack_rom(p: &Project) -> Result<(), String> {
     let (name, title, save) = (&p.name, &p.title, &p.n64_save);
     let staticlib = p.n64_staticlib();
     let (pad_obj, pad_step) = text_pad_step();
+    // After the Rust code, so linking it moves none of that.
+    let opus_obj = if p.root.join(OPUS_MARKER).exists() {
+        "/engine/target/n64/opus.o"
+    } else {
+        ""
+    };
     let script = format!(
         "set -e\n\
          {pad_step}\
          mips64-elf-g++ -o target/n64/{name}.elf /engine/target/n64/shim.o /engine/target/n64/rsp_trino.o {pad_obj} \
          -Wl,-u,memcpy -Wl,-u,memset -Wl,-u,memmove -Wl,-u,memcmp -Wl,-lc \
-         {staticlib} -lc -mabi=o64 -Wl,-g -Wl,-L$N64_INST/mips64-elf/lib \
+         {staticlib} {opus_obj} -lc -mabi=o64 -Wl,-g -Wl,-L$N64_INST/mips64-elf/lib \
          -Wl,-ldragon -Wl,-lm -Wl,-ldragonsys -Wl,-Tn64.ld \
          -Wl,--gc-sections -Wl,--no-warn-mismatch \
          -Wl,--wrap -Wl,__do_global_ctors \
@@ -1082,33 +1141,82 @@ mod tests {
         };
         let mut w = hound::WavWriter::create(path, spec).unwrap();
         for i in 0..frames * channels as usize {
-            w.write_sample(i as i16).unwrap();
+            w.write_sample((i * 100) as i16).unwrap();
         }
         w.finalize().unwrap();
     }
 
+    fn settings(codec: &str, looped: bool, rate: Option<u32>) -> AudioSettings {
+        let decl: trino_asset_pipeline::manifest::SoundDecl = toml::from_str(&format!(
+            "file = \"x.wav\"\ncodec = \"{codec}\"\nloop = {looped}\n{}",
+            rate.map_or(String::new(), |r| format!("sample_rate = {r}\n"))
+        ))
+        .unwrap();
+        decl.audio_settings(false, Platform::N64).unwrap()
+    }
+
+    use trino_asset_pipeline::audio::AudioSettings;
+    use trino_asset_pipeline::audio::vadpcm::{Wav64Format, decode_wav64, parse_wav64};
+
     #[test]
-    fn looped_wavs_are_trimmed_to_whole_16_frame_blocks() {
+    fn audio_bakes_to_wav64_per_codec_with_whole_block_loops() {
         let dir = tempfile::tempdir().unwrap();
-        let (src, out) = (dir.path().join("in.wav"), dir.path().join("out.wav"));
-        write_wav(&src, 2, 37);
-        stage_wav(&src, &out, true).unwrap();
-        let mut r = hound::WavReader::open(&out).unwrap();
-        assert_eq!(r.spec().channels, 2);
-        let samples: Vec<i16> = r.samples::<i16>().map(Result::unwrap).collect();
-        assert_eq!(samples.len(), 32 * 2, "37 frames trim to 32");
-        assert_eq!(samples[..4], [0, 1, 2, 3], "the head is kept as is");
-        // One-shots are copied byte for byte.
-        stage_wav(&src, &out, false).unwrap();
-        assert_eq!(std::fs::read(&src).unwrap(), std::fs::read(&out).unwrap());
-        // Under 16 frames there is nothing to loop.
-        write_wav(&src, 1, 15);
-        assert!(
-            stage_wav(&src, &out, true)
-                .unwrap_err()
-                .contains("too short")
+        let (src, staged, out) = (
+            dir.path().join("in.wav"),
+            dir.path().join("staged.wav"),
+            dir.path().join("out.wav64"),
         );
-        assert!(stage_wav(&dir.path().join("missing.wav"), &out, true).is_err());
+        write_wav(&src, 2, 37);
+        // A looped VADPCM sound: mono, 37 frames trimmed to 32, ours.
+        assert!(!stage_audio(&src, &settings("vadpcm", true, None), &staged, &out).unwrap());
+        let (info, pcm) = decode_wav64(&std::fs::read(&out).unwrap()).unwrap();
+        assert_eq!(info.format, Wav64Format::Vadpcm);
+        assert_eq!((info.channels, info.sample_rate), (1, 22_050));
+        assert_eq!(
+            (info.frames, info.loop_len),
+            (32, 32),
+            "37 frames trim to 32"
+        );
+        assert_eq!(pcm.len(), 32);
+        // A raw one-shot is padded to 48 frames of which the last 11 are
+        // silence (stereo averaged).
+        assert!(!stage_audio(&src, &settings("pcm", false, None), &staged, &out).unwrap());
+        let (info, pcm) = decode_wav64(&std::fs::read(&out).unwrap()).unwrap();
+        assert_eq!(
+            (info.format, info.frames, info.loop_len),
+            (Wav64Format::Raw, 48, 0)
+        );
+        assert_eq!(pcm[1], 250, "frame 1 = (200 + 300) / 2");
+        assert!(pcm[37..].iter().all(|&s| s == 0));
+        // A resampled one.
+        stage_audio(&src, &settings("pcm", false, Some(11_025)), &staged, &out).unwrap();
+        let info = parse_wav64(&std::fs::read(&out).unwrap()).unwrap();
+        assert_eq!(
+            (info.sample_rate, info.frames),
+            (11_025, 32),
+            "19 frames, padded"
+        );
+        // Opus goes to audioconv64 as a mono WAV.
+        assert!(stage_audio(&src, &settings("opus", false, None), &staged, &out).unwrap());
+        let r = hound::WavReader::open(&staged).unwrap();
+        assert_eq!((r.spec().channels, r.len()), (1, 48));
+        // A loop under 16 frames repeats whole: 15 frames → 240.
+        write_wav(&src, 1, 15);
+        stage_audio(&src, &settings("vadpcm", true, None), &staged, &out).unwrap();
+        let info = parse_wav64(&std::fs::read(&out).unwrap()).unwrap();
+        assert_eq!((info.frames, info.loop_len), (240, 240));
+        write_wav(&src, 1, 0);
+        let err = stage_audio(&src, &settings("vadpcm", true, None), &staged, &out);
+        assert!(err.unwrap_err().contains("can't loop"));
+        assert!(
+            stage_audio(
+                &dir.path().join("missing.wav"),
+                &settings("vadpcm", false, None),
+                &staged,
+                &out
+            )
+            .is_err()
+        );
     }
 
     #[test]

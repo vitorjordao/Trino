@@ -37,6 +37,8 @@ pub enum Tab {
     Hierarchy,
     Inspector,
     Assets,
+    /// The project mix (`assets/audio.toml`, issue #53).
+    Mixer,
     Console,
 }
 
@@ -50,6 +52,7 @@ impl Tab {
             Tab::Hierarchy => (icon::TREE_STRUCTURE, "Hierarchy"),
             Tab::Inspector => (icon::SLIDERS_HORIZONTAL, "Inspector"),
             Tab::Assets => (icon::FOLDER_OPEN, "Assets"),
+            Tab::Mixer => (icon::FADERS_HORIZONTAL, "Mixer"),
             Tab::Console => (icon::TERMINAL, "Console"),
         };
         format!("{glyph}  {name}")
@@ -65,6 +68,8 @@ pub enum AssetSel {
     Sprite(String),
     /// A particle effect, by name (`particles/<name>`).
     Particles(String),
+    /// A sound or music track (`sounds/x`, `music/x`): the audio inspector.
+    Audio(String),
 }
 
 /// Everything panels ask the app to do (applied after the UI pass).
@@ -108,6 +113,14 @@ pub enum Cmd {
     SetTextureFormat(String, pipeline::Platform, Option<String>),
     /// A texture's `quality` or `min_psnr` (`None` removes it).
     SetTextureKey(String, &'static str, Option<String>),
+    /// A sound's `quality`, `stream`, `loop` or `bus` (`None` removes it).
+    SetAudioKey(String, &'static str, Option<String>),
+    /// One platform's `codec` or `sample_rate` entry of a sound (`None`:
+    /// the default).
+    SetAudioPlatform(String, &'static str, pipeline::Platform, Option<String>),
+    /// Play a sound's master (`None`) or a platform's decode on the PC.
+    PlayAudio(String, Option<pipeline::Platform>),
+    StopAudio,
     OpenScene(PathBuf),
     NewScene(String),
     Export(PathBuf),
@@ -267,6 +280,11 @@ pub struct App {
     /// The texture inspector's measurements and the budget's texture
     /// memory (worker threads, keyed on the manifest).
     pub textures: crate::textures::Textures,
+    /// The audio inspector's measurements, the budget's audio memory and
+    /// the preview player (issue #53).
+    pub audio: crate::audio::AudioView,
+    /// The project mix the Mixer tab edits (`assets/audio.toml`).
+    pub mixer: crate::audio::MixState,
     /// The scene's frame from its camera on every target (variants, LOD and
     /// impostors applied; `budget::BUDGET_TARGETS`), with the content key
     /// it is for.
@@ -360,8 +378,9 @@ impl App {
             }
         }
         // Dev hook: TRINO_EDITOR_OPEN=fake-object | material:<logical> |
-        // model:<logical> | prefab:<logical> (edit mode) — screenshots of
-        // dialogs and asset inspectors.
+        // model:<logical> | prefab:<logical> (edit mode) |
+        // audio:<logical>[@pc|n64|3ds|web] — screenshots of dialogs and
+        // asset inspectors.
         let mut assets_tab = crate::panels::assets::AssetTab::Models;
         let open = std::env::var("TRINO_EDITOR_OPEN").unwrap_or_default();
         match open.split_once(':') {
@@ -378,6 +397,13 @@ impl App {
             Some(("prefab", l)) => {
                 assets_tab = crate::panels::assets::AssetTab::Prefabs;
                 cmds.push(Cmd::EditPrefab(l.to_string()));
+            }
+            // `audio:music/theme@n64`: the audio inspector, the waveform
+            // over that platform's decode.
+            Some(("audio", l)) => {
+                assets_tab = crate::panels::assets::AssetTab::Audio;
+                let l = l.split_once('@').map_or(l, |(l, _)| l);
+                cmds.push(Cmd::SelectAsset(AssetSel::Audio(l.to_string())));
             }
             _ if open == "fake-object" => cmds.push(Cmd::Open(Dialog::fake_object(&project))),
             _ if open == "array" => cmds.push(Cmd::Open(Dialog::array())),
@@ -453,6 +479,11 @@ impl App {
         )
         .expect("failed to start file watcher");
         use notify_debouncer_full::notify::RecursiveMode;
+        // The project mix (`assets/audio.toml`): the assets folder itself,
+        // not its subfolders (the pipeline watcher has those).
+        if let Err(e) = file_watcher.watch(project.assets_dir(), RecursiveMode::NonRecursive) {
+            log.warn(format!("cannot watch the assets folder: {e}"));
+        }
         for dir in [
             "scenes",
             "prefabs",
@@ -527,7 +558,9 @@ impl App {
             show_shortcuts: false,
             // Built on the first frame, when the window size is known.
             dock: None,
-            focus_tab: None,
+            // `TRINO_EDITOR_TAB=mixer` brings the Mixer tab to front.
+            focus_tab: (std::env::var("TRINO_EDITOR_TAB").as_deref() == Ok("mixer"))
+                .then_some(Tab::Mixer),
             open_docs: Vec::new(),
             // Dev hook: TRINO_EDITOR_PALETTE=<query> opens the palette.
             palette: std::env::var("TRINO_EDITOR_PALETTE").ok(),
@@ -577,6 +610,16 @@ impl App {
                 t.zoom = zoom.unwrap_or(1.0f32).clamp(1.0, 8.0);
                 t
             },
+            // `TRINO_EDITOR_OPEN=audio:<logical>@n64` overlays the N64.
+            audio: crate::audio::AudioView::new(
+                match open.strip_prefix("audio:").and_then(|o| o.rsplit_once('@')) {
+                    Some((_, "n64")) => 1,
+                    Some((_, "3ds")) => 2,
+                    Some((_, "web")) => 3,
+                    _ => 0,
+                },
+            ),
+            mixer: crate::audio::MixState::load(&root.join("assets")),
             render_state,
         }
     }
@@ -599,6 +642,7 @@ impl App {
             budgets: self.budgets.as_ref().map(|b| &b.1),
             tmem: Some(&self.project.tmem),
             water: (self.water_time(), self.ripples.as_slice()),
+            audio: self.audio.totals.as_ref().map(|(_, t)| t),
         }
     }
 
@@ -763,7 +807,23 @@ impl App {
                 self.written.insert(p.clone(), t.clone());
             }
             let s = p.to_string_lossy().replace('\\', "/");
-            if s.ends_with(".material.ron") || s.ends_with(".prefab.ron") {
+            if p == crate::audio::MixState::path(&self.project.assets_dir()) {
+                // The project mix, edited outside (an agent, a text editor).
+                if text.is_none() && !self.mixer.exists {
+                    continue;
+                }
+                self.mixer.reload(text.as_deref());
+                if let Some(player) = &mut self.audio.player {
+                    self.mixer.apply(&mut player.audio);
+                }
+                match &self.mixer.error {
+                    Some(e) => self.log.toast(Level::Error, e.clone()),
+                    None => self.log.toast(
+                        Level::Ok,
+                        format!("{} {} reloaded", icon::ARROWS_CLOCKWISE, p.display()),
+                    ),
+                }
+            } else if s.ends_with(".material.ron") || s.ends_with(".prefab.ron") {
                 match self.lib.reload_file(Path::new(""), &p) {
                     Ok(Some(logical)) => {
                         self.mark_lib_changed();
@@ -1382,6 +1442,29 @@ impl App {
                     format.as_deref().unwrap_or("default")
                 ));
             }
+            Cmd::SetAudioKey(logical, key, value) => {
+                self.project
+                    .set_audio_key(&logical, key, value.as_deref())?;
+                self.log.info(format!(
+                    "{logical}: {key} {}",
+                    value.as_deref().unwrap_or("default")
+                ));
+            }
+            Cmd::SetAudioPlatform(logical, key, platform, value) => {
+                self.project
+                    .set_audio_platform(&logical, key, platform, value.as_deref())?;
+                self.log.info(format!(
+                    "{logical}: {} {key} {}",
+                    platform.key(),
+                    value.as_deref().unwrap_or("default")
+                ));
+            }
+            Cmd::PlayAudio(logical, platform) => self.play_audio(&logical, platform)?,
+            Cmd::StopAudio => {
+                if let Some(p) = &mut self.audio.player {
+                    p.stop();
+                }
+            }
             Cmd::SetTextureKey(logical, key, value) => {
                 self.project
                     .set_texture_key(&logical, key, value.as_deref())?;
@@ -1478,6 +1561,22 @@ impl App {
         }
         if !mats.is_empty() || !proxies.is_empty() {
             self.thumb_rev += 1;
+        }
+        if std::mem::take(&mut self.mixer.dirty) {
+            match self.mixer.to_text() {
+                Ok(text) => {
+                    let path = crate::audio::MixState::path(&self.project.assets_dir());
+                    match self.write_echo(path, text) {
+                        Ok(()) => {
+                            self.mixer.exists = true;
+                            self.mixer.error = None;
+                        }
+                        Err(e) => self.log.toast(Level::Error, e),
+                    }
+                }
+                // Shown in the Mixer tab; the file keeps the last good mix.
+                Err(e) => self.mixer.error = Some(e),
+            }
         }
         let effects: Vec<String> = self.pending_particles.drain().collect();
         for name in effects {
@@ -2122,6 +2221,7 @@ impl App {
             (Tab::Game, "Game"),
             (Tab::Level, "Level"),
             (Tab::Assets, "Assets"),
+            (Tab::Mixer, "Mixer"),
             (Tab::Console, "Console"),
         ] {
             add(format!("Go to {name} view"), "View", Cmd::FocusTab(tab));
@@ -2261,6 +2361,53 @@ impl App {
             "{} imported {kind}/{name} ({rel}) — baking",
             icon::DOWNLOAD_SIMPLE
         ))
+    }
+
+    /// The audio inspector's Play: the master or `platform`'s decode of
+    /// the sound shown, on its bus, through the PC backend (created on the
+    /// first Play, with the project mix applied).
+    fn play_audio(
+        &mut self,
+        logical: &str,
+        platform: Option<pipeline::Platform>,
+    ) -> Result<(), String> {
+        let Some((_, insp)) = self
+            .audio
+            .current
+            .as_ref()
+            .filter(|(_, i)| i.logical == logical)
+        else {
+            return Err(format!("{logical} isn't measured yet"));
+        };
+        let bus = insp.settings().map_or(trino_core::Bus::Sfx, |s| s.bus);
+        let (pcm, rate) = match platform {
+            None => {
+                let (rate, pcm) = insp.master.as_ref().map_err(Clone::clone)?;
+                (pcm.clone(), *rate)
+            }
+            Some(p) => {
+                let col = insp
+                    .columns
+                    .iter()
+                    .find(|c| c.platform == p)
+                    .ok_or("no such platform")?;
+                let m = col.result.as_ref().map_err(Clone::clone)?;
+                let pcm = m.decoded.clone().ok_or_else(|| {
+                    format!(
+                        "{} is decoded by the console only",
+                        crate::audio::codec_name(m.settings.codec)
+                    )
+                })?;
+                (pcm, m.rate)
+            }
+        };
+        let player = self
+            .audio
+            .player
+            .get_or_insert_with(|| crate::audio::Player::new(&self.mixer.config()));
+        self.mixer.apply(&mut player.audio);
+        player.play((logical.to_string(), platform), &pcm, rate, bus);
+        Ok(())
     }
 
     /// Play the open scene inside the Game view (same process).
@@ -2995,7 +3142,7 @@ impl eframe::App for App {
 /// minimum window size, and their usual share of a big one.
 fn default_dock(width: f32) -> egui_dock::DockState<Tab> {
     // Dev hook (screenshots): TRINO_EDITOR_TAB=scene|game|level picks the
-    // focused center tab.
+    // focused center tab (`mixer` the bottom one: `App::focus_tab`).
     let tabs = match std::env::var("TRINO_EDITOR_TAB").as_deref() {
         Ok("level") => vec![Tab::Level, Tab::Scene, Tab::Game, Tab::Animation],
         Ok("game") => vec![Tab::Game, Tab::Scene, Tab::Level, Tab::Animation],
@@ -3011,7 +3158,8 @@ fn default_dock(width: f32) -> egui_dock::DockState<Tab> {
     let [center, _left] =
         surface.split_left(egui_dock::NodeIndex::root(), left, vec![Tab::Hierarchy]);
     let [center, _right] = surface.split_right(center, 1.0 - right, vec![Tab::Inspector]);
-    let [_, _bottom] = surface.split_below(center, 0.70, vec![Tab::Assets, Tab::Console]);
+    let [_, _bottom] =
+        surface.split_below(center, 0.70, vec![Tab::Assets, Tab::Mixer, Tab::Console]);
     dock
 }
 
@@ -3041,9 +3189,13 @@ impl egui_dock::TabViewer for TabView<'_> {
 
     fn scroll_bars(&self, tab: &Tab) -> [bool; 2] {
         match tab {
-            Tab::Scene | Tab::Game | Tab::Console | Tab::Assets | Tab::Level | Tab::Animation => {
-                [false, false]
-            }
+            Tab::Scene
+            | Tab::Game
+            | Tab::Console
+            | Tab::Assets
+            | Tab::Mixer
+            | Tab::Level
+            | Tab::Animation => [false, false],
             _ => [false, true],
         }
     }
@@ -3057,6 +3209,13 @@ impl egui_dock::TabViewer for TabView<'_> {
                 } else {
                     ViewKind::Game
                 };
+                if kind == ViewKind::Game {
+                    // The HUD's audio line: the totals' worker runs while
+                    // the Game view shows.
+                    let key =
+                        crate::audio::key(&app.project.manifest_path(), app.project.generation);
+                    app.audio.totals(ui.ctx(), &app.project.assets_dir(), key);
+                }
                 let input = ViewInput {
                     scene: &app.doc.scene,
                     resolved: if kind == ViewKind::Game {
@@ -3074,6 +3233,7 @@ impl egui_dock::TabViewer for TabView<'_> {
                     budgets: app.budgets.as_ref().map(|b| &b.1),
                     tmem: Some(&app.project.tmem),
                     water: (app.water_time(), app.ripples.as_slice()),
+                    audio: app.audio.totals.as_ref().map(|(_, t)| t),
                 };
                 let view = if kind == ViewKind::Scene {
                     &mut app.scene_view
@@ -3135,6 +3295,7 @@ impl egui_dock::TabViewer for TabView<'_> {
             Tab::Hierarchy => crate::panels::hierarchy::ui(app, ui),
             Tab::Inspector => crate::panels::inspector::ui(app, ui),
             Tab::Assets => crate::panels::assets::ui(app, ui),
+            Tab::Mixer => crate::panels::mixer::ui(app, ui),
             Tab::Console => app.log.ui(ui),
         }
     }

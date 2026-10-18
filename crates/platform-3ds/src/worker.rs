@@ -1,6 +1,9 @@
 //! The worker core (issue #54 Phase 3, ADR 0020): game jobs on the 3DS's
-//! second CPU core, for the work a frame can hand off — audio mixing
-//! (#53), AI (#56), a crowd's animation.
+//! second CPU core, for the work a frame can hand off — AI (#56), a
+//! crowd's animation. The shim's audio thread (#53, ADR 0021) runs on the
+//! same core, granted by the same policy, one priority above the jobs: ndsp
+//! wakes it every audio frame to refill the streams, so a long job never
+//! holds a refill back (`N3dsAudio::stream_core` says which core).
 //!
 //! [`start`] asks for the New 3DS's core 2 (the app's whole) and falls back
 //! to the old 3DS's core 1, of which the app gets 30%

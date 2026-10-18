@@ -29,6 +29,7 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
             AssetSel::Prefab(l) => prefab_asset(app, ui, &l),
             AssetSel::Sprite(l) => sprite_asset(app, ui, &l),
             AssetSel::Particles(n) => crate::panels::particles::asset(app, ui, &n),
+            AssetSel::Audio(l) => audio_asset(app, ui, &l),
         }
         return;
     }
@@ -1752,6 +1753,22 @@ fn sprite_asset(app: &mut App, ui: &mut egui::Ui, logical: &str) {
     crate::panels::texture::section(app, ui, logical);
 }
 
+fn audio_asset(app: &mut App, ui: &mut egui::Ui, logical: &str) {
+    let music = logical.starts_with("music/");
+    header(
+        ui,
+        if music {
+            icon::MUSIC_NOTES
+        } else {
+            icon::SPEAKER_HIGH
+        },
+        c::ACCENT_TEXT,
+        logical.split_once('/').map_or(logical, |(_, n)| n),
+        if music { "Music track" } else { "Sound" },
+    );
+    crate::panels::audio::section(app, ui, logical);
+}
+
 // ---------------------------------------------------------------- scene --
 
 fn scene_settings(app: &mut App, ui: &mut egui::Ui) {
@@ -1886,6 +1903,7 @@ fn scene_settings(app: &mut App, ui: &mut egui::Ui) {
                 let game = app.game_view.target();
                 let picked = budget_section(ui, budgets, &app.project.tmem, open, game);
                 texture_memory(ui, &mut app.textures, &app.project);
+                crate::panels::audio::budget(ui, &mut app.audio, &app.project);
                 picked
             },
         )

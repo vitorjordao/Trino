@@ -12,6 +12,8 @@ repository.workspace = true
 # base64), which the host tests and `cargo xtask build web` use.
 [dependencies]
 trino-core = { workspace = true }
+# Ogg Vorbis sounds and music (#53), the PC's decoder.
+lewton = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 trino-render-wgpu = { workspace = true }
@@ -64,3 +66,8 @@ web-sys = { workspace = true, features = [
     "Window",
     "console",
 ] }
+
+# Host tests decode real Vorbis bakes (dev-only: the dep-graph rule is about
+# normal dependencies).
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+trino-asset-pipeline = { workspace = true }

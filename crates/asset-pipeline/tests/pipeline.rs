@@ -72,7 +72,7 @@ fn bake_produces_deterministic_index_snapshot() {
     let expected = format!(
         "version = 1\n\n\
          [[asset]]\nlogical = \"sprites/player\"\nid = {player_id}\nkind = \"sprite\"\nfile = \"{player_id:08x}.sprite\"\nformat = \"RGBA8\"\npreview_3ds = \"{player_id:08x}.3ds.sprite\"\n\n\
-         [[asset]]\nlogical = \"sounds/beep\"\nid = {beep_id}\nkind = \"sound\"\nfile = \"{beep_id:08x}.sound\"\nformat = \"F32_MONO\"\n"
+         [[asset]]\nlogical = \"sounds/beep\"\nid = {beep_id}\nkind = \"sound\"\nfile = \"{beep_id:08x}.sound\"\nformat = \"VORBIS\"\n"
     );
     // Snapshot: byte-exact. If this changes, the loader and every platform
     // baker must be reviewed together.
@@ -101,8 +101,11 @@ fn loader_round_trips_baked_data() {
 
     let sound = &assets.sounds[0];
     assert_eq!(sound.sample_rate, 22_050);
-    assert_eq!(sound.samples.len(), 32);
-    assert!((sound.samples[0] - 0.25).abs() < 1e-3); // 8192/32768
+    // The PC's default codec is Vorbis: lossy, the same length.
+    let samples = sound.samples().unwrap();
+    assert_eq!(samples.len(), 32);
+    let mean = samples.iter().sum::<f32>() / 32.0;
+    assert!((mean - 0.25).abs() < 0.05, "{mean}"); // 8192/32768
 }
 
 #[test]

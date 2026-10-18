@@ -38,7 +38,8 @@ assets/
 | Master | PC | N64 | 3DS | Web |
 |---|---|---|---|---|
 | PNG sprite | `TSPR` (RGBA8), plus the 3DS preview | libdragon sprite (`mksprite`) in the ROM's DFS | `.t3x` (`tex3ds`, any format above) in RomFS | KTX2 (Basis Universal) or `TSPR` in the pack |
-| WAV sound or music | `TSND` | `wav64` (`audioconv64`), loops baked in | raw PCM16 | 16-bit PCM (`TS16`) in the pack |
+| WAV sound or music | `TSN2`: Ogg Vorbis (or PCM16) | `wav64`: VADPCM (or Opus, PCM), loops baked in | `T3AU`: DSP-ADPCM (or PCM16) | `TSN2`: Ogg Vorbis (or PCM16) in the pack |
+| `assets/audio.toml` (the project mix) | `TMIX` (`audio/mixer`) | `TMIX` | `TMIX` | `TMIX` |
 | glTF (`.glb`/`.gltf`) or `.prim.ron` model | TMDL | TMDL | TMDL | TMDL |
 | Font (PNG grid or TTF) | `TFNT` table and an atlas sprite | `TFNT` table and an atlas sprite (`mksprite`) | `TFNT` table and an atlas `.t3x` | `TFNT` table and an atlas sprite |
 | Scene (`*.scene.ron`) | `TSCN` blob | `TSCN` blob, N64 variants | `TSCN` blob, 3DS variants | `TSCN` blob, Web variants |
@@ -188,6 +189,83 @@ palette losslessly after RGBA5551 truncation.
   platforms side by side, the decoded previews, the candidates, and writes format,
   `quality` and `min_psnr` back to the manifest.
 
+## Audio: a codec per platform, streaming, buses (ADR 0021)
+
+One WAV master (16-bit or float, mono or stereo: stereo is averaged to mono) bakes to
+what each platform plays best:
+
+| Platform | `auto` | Other codecs | Decoded by | Streams from |
+|---|---|---|---|---|
+| PC | Ogg Vorbis | `pcm` | the CPU (lewton) | RAM: the encoded file, a decoder thread fills a ring |
+| N64 | VADPCM (`wav64`) | `opus`, `pcm` | the RSP (libdragon's mixer); Opus: CPU + RSP | the cartridge (every `wav64` does) |
+| 3DS | DSP-ADPCM (`T3AU`) | `pcm` | the DSP, in hardware | RomFS, chunk by chunk into rotating wave buffers |
+| Web | Ogg Vorbis (the PC's choice) | `pcm` | wasm (lewton) | RAM: the Ogg bytes, decoded in chunks scheduled 1 s ahead |
+
+```toml
+[music.theme]
+file = "music/theme.wav"
+loop = true
+stream = true                  # music streams by default; sounds load whole
+codec = { n64 = "vadpcm", 3ds = "dspadpcm", pc = "vorbis" }  # or "auto" (the default)
+quality = 6                    # Vorbis quality 0..10 (default 6)
+sample_rate = { n64 = 22050 }  # resample per platform (default: the master's; N64 at most 44100)
+bus = "music"                  # music (default for [music.*]), sfx (sounds), voice, ambience, ui
+```
+
+A codec a platform can't play is a bake error that lists the ones it can; the Web takes the
+PC's value when it has none. **Sizes:** VADPCM and DSP-ADPCM are about 28% of PCM16 at any
+quality; Vorbis q6 is 18–30% on music. **Fidelity** (SNR of what plays against the master,
+`cargo xtask audio report`): the ADPCMs keep 30–35 dB on music and tones, 24–25 dB on
+noise (splashes, crowds); Vorbis spends its bits by audibility, so its waveform SNR (27–41 dB
+on music, 15–20 dB on noise) understates how it sounds. Listen with `audio preview`.
+
+**On the N64** the bake writes the `wav64` itself: VADPCM with Trino's encoder (the one
+`audio inspect` and `preview` measure; libdragon's `audioconv64` clipped loud masters —
+castle64's theme at 7.6 dB SNR, 30.8 dB now, same bytes) and raw PCM16 for `pcm`. Only
+`opus` goes through `audioconv64` (`--wav-compress 3`, always 48 kHz). Masters above
+44.1 kHz bake at 44.1 kHz, the mixer's channel limit. Every length becomes whole 16-sample
+blocks, the only loops libdragon's VADPCM plays: a one-shot gains up to 15 samples of
+silence, a loop drops up to 15 (one shorter than 16 repeats until it fits). An Opus asset
+links libopus into the ROM (+99 KB) and raises every channel's rate limit to 48 kHz; a
+project without one pays neither. At 60 Hz a 44.1 kHz VADPCM voice costs ~0.26 ms of the
+frame and an Opus track ~4.6 ms (`audio inspect` quotes it), so keep Opus for long music
+where ROM space matters.
+
+**Streaming** keeps memory flat however long the track: the PC holds the encoded file and
+~320 KB while it plays (a 10-minute track: 739 KB encoded instead of 115 MB of floats), the
+Web the Ogg bytes and about 1 s of decoded chunks, the 3DS three 8 KB wave buffers, the N64
+~1 KB per open `wav64` and the mixer's sample buffer per playing channel (48 KB for a
+44.1 kHz track).
+
+**Buses and the mix.** Every sound plays on a bus (`Bus::Master`, `Music`, `Sfx`, `Voice`,
+`Ambience`, `Ui`): its manifest `bus`, or `SoundParams::on(bus)` per call. Gain is master ×
+bus × ducking; each bus has a mute. `assets/audio.toml` sets each bus's starting volume and the
+duck rules (the editor's Mixer panel writes it, keeping the comments at the top and right
+above each table; `cargo xtask audio mix` validates it):
+
+```toml
+version = 1
+[buses]
+music = 0.8
+[[duck]]
+trigger = "voice"     # while anything plays on the voice bus...
+target = "music"      # ...the music ducks to 0.4, in 150 ms, back in 300 ms
+level = 0.4
+attack_ms = 150
+release_ms = 300
+```
+
+The player's own volumes come from the game (`Audio::set_bus_volume`/`set_bus_muted`, e.g.
+an options menu): the PC keeps them per game in `target/save/<save_name>.audio`; console games
+that want them across power cycles store `BusSettings::to_bytes()` (4 bytes) in their save.
+
+**Checking audio:** `cargo xtask audio inspect music/theme [--platform n64] [--json]` (codec
+and why, bytes against PCM16, SNR, RAM resident and while playing, who decodes it),
+`cargo xtask audio report` (biggest first, totals per platform) and `cargo xtask audio preview
+music/theme` (each platform's decoded result as a WAV, next to the master; the N64's Opus only
+decodes on the console). The editor's Assets › Audio inspector shows the same numbers and
+plays each platform's version.
+
 ## Models: glTF to TMDL
 
 TMDL is the engine's portable mesh format: positions, normals, vertex colors, and
@@ -260,5 +338,6 @@ a camera can see, so the CC0 KayKit doorway went from 1068 to 75 triangles.
    and size problems are bake errors.
 2. `cargo xtask scene check` when scenes or prefabs reference the asset.
 3. `cargo xtask model inspect <file>` for models, `cargo xtask texture inspect
-   sprites/x` for textures, `cargo xtask impostor check` for impostors.
+   sprites/x` for textures, `cargo xtask audio inspect music/x` for sounds,
+   `cargo xtask impostor check` for impostors.
 4. `cargo xtask test`.

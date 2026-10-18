@@ -56,6 +56,7 @@ they read just as well for people. Each one is the most detailed source for its 
 | [0018](adr/0018-n64-rsp-coverage-and-water.md) | N64: the RSP takes fog, colored light, textures, rigid skeletons and water (#69) |
 | [0019](adr/0019-web-target.md) | The Web target: one renderer for PC and browsers, WebGPU with a WebGL2 fallback |
 | [0020](adr/0020-console-hardware-tiers.md) | Console hardware tiers: the Expansion Pak and the New 3DS, one ROM per game, the 3DS's second core |
+| [0021](adr/0021-audio-pipeline.md) | Audio: a codec per platform (VADPCM, DSP-ADPCM, Vorbis), streaming, buses and ducking |
 
 ## Plans and history
 

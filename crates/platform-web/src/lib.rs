@@ -16,20 +16,26 @@
 //! - **Input:** the keyboard by `KeyboardEvent.code` (layout-independent,
 //!   the PC's bindings; game keys don't scroll the page), mouse with
 //!   Pointer Lock, touch as the pointer, gamepads through the Gamepad API.
-//! - **Audio:** Web Audio, every voice its own source → gain → panner;
-//!   music ducks under stingers. Browsers start audio suspended: the first
-//!   click, key or touch resumes it, and a banner says so until then.
+//! - **Audio:** Web Audio, every voice its own source → gain → panner →
+//!   its bus (music, effects, voice, ambience, UI) → master, with the
+//!   core's bus volumes, mutes and duck rules (#53). Sounds come Ogg
+//!   Vorbis (or PCM16) and are decoded by lewton in the wasm module
+//!   ([`sound`]); music streams in chunks scheduled a second ahead. The
+//!   player's bus volumes persist in `localStorage`. Browsers start audio
+//!   suspended: the first click, key or touch resumes it, and a banner says
+//!   so until then.
 //! - **Assets:** one pack per game ([`pack`]), fetched at boot; KTX2
 //!   textures are transcoded by Binomial's transcoder to BC, ETC2, ASTC or
 //!   RGBA8, whichever the GPU samples.
 //!
 //! Off wasm32 only the browser-free parts build ([`keys`], [`pack`],
-//! [`b64`]): the host tests run them, and `cargo xtask build web` writes
-//! packs with [`pack::write`].
+//! [`b64`], [`sound`]): the host tests run them, and `cargo xtask build
+//! web` writes packs with [`pack::write`].
 
 pub mod b64;
 pub mod keys;
 pub mod pack;
+pub mod sound;
 
 #[cfg(target_arch = "wasm32")]
 mod assets;

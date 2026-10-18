@@ -76,6 +76,13 @@ impl N3dsAssets {
                         audio.register_music(id, ptr);
                     }
                 }
+                // The project's mix (`assets/audio.toml`): bus volumes and
+                // duck rules, applied once the sounds are in.
+                "mixer" => {
+                    if let Some(bytes) = read_bytes(&path) {
+                        audio.apply_mixer(&bytes);
+                    }
+                }
                 "model" => {
                     if let Some(bytes) = read_bytes(&path) {
                         renderer.register_mesh(id, bytes);

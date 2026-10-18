@@ -53,7 +53,7 @@ mod system;
 #[cfg(target_os = "none")]
 pub use assets::N64Assets;
 #[cfg(target_os = "none")]
-pub use audio::N64Audio;
+pub use audio::{AudioCost, N64Audio};
 #[cfg(target_os = "none")]
 pub use host::{FrameReport, N64Host};
 #[cfg(target_os = "none")]

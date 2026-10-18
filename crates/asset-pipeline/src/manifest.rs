@@ -266,6 +266,67 @@ pub struct SoundDecl {
     /// stingers, which play once).
     #[serde(default, rename = "loop")]
     pub looped: Option<bool>,
+    /// Play from storage instead of loading whole (#53). Music defaults to
+    /// `true`, sounds to `false`.
+    #[serde(default)]
+    pub stream: Option<bool>,
+    /// `"auto"` (the default: N64 VADPCM, 3DS DSP-ADPCM, PC and Web
+    /// Vorbis), one codec for every platform, or a table
+    /// `{ n64 = "opus", 3ds = "pcm" }` (platforms left out take `auto`;
+    /// the Web takes the PC's). `crate::audio::Codec` lists them.
+    #[serde(default)]
+    pub codec: Option<PerPlatform<String>>,
+    /// Lossy codecs only (Vorbis): 0..=10, like `oggenc -q`. Default 5.
+    #[serde(default)]
+    pub quality: Option<f32>,
+    /// Resample the master per platform: `22050`, or
+    /// `{ n64 = 22050, 3ds = 32728 }` (left out = the master's rate).
+    #[serde(default)]
+    pub sample_rate: Option<PerPlatform<u32>>,
+    /// The mixer bus it plays on by default (`trino_core::Bus` labels:
+    /// music, sfx, voice, ambience, ui). Default: `sfx` for sounds, `music`
+    /// for music.
+    #[serde(default)]
+    pub bus: Option<String>,
+}
+
+/// One value for every platform, or a table by platform key (`pc`, `n64`,
+/// `3ds`, `web`).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(untagged)]
+pub enum PerPlatform<T> {
+    All(T),
+    Each(BTreeMap<String, T>),
+}
+
+impl<T: Clone> PerPlatform<T> {
+    /// The value for `platform`: its own key (`3ds` or `n3ds`), else the
+    /// fallback platform's (the PC's for the Web), else `None`.
+    pub fn get(&self, platform: Platform) -> Option<T> {
+        match self {
+            PerPlatform::All(v) => Some(v.clone()),
+            PerPlatform::Each(map) => {
+                let of = |p: Platform| {
+                    map.iter()
+                        .find(|(k, _)| Platform::parse(k) == Some(p))
+                        .map(|(_, v)| v.clone())
+                };
+                of(platform).or_else(|| platform.fallback().and_then(of))
+            }
+        }
+    }
+
+    /// Keys that name no platform.
+    pub fn unknown_keys(&self) -> Vec<String> {
+        match self {
+            PerPlatform::All(_) => Vec::new(),
+            PerPlatform::Each(map) => map
+                .keys()
+                .filter(|k| Platform::parse(k).is_none())
+                .cloned()
+                .collect(),
+        }
+    }
 }
 
 impl SoundDecl {
@@ -277,6 +338,16 @@ impl SoundDecl {
     /// Loop flag of a `[music.*]` entry.
     pub fn music_loops(&self) -> bool {
         self.looped.unwrap_or(true)
+    }
+
+    /// The bake settings of this sound (`music` = a `[music.*]` entry) for
+    /// `platform`; errors name the key and the accepted values.
+    pub fn audio_settings(
+        &self,
+        music: bool,
+        platform: Platform,
+    ) -> Result<crate::audio::AudioSettings, String> {
+        crate::audio::AudioSettings::from_decl(self, music, platform)
     }
 }
 
@@ -319,6 +390,18 @@ impl Manifest {
                     "{}: `{logical}`: min_psnr {v} (a number of dB, 0 or more)",
                     path.display()
                 ));
+            }
+        }
+        let audio = [
+            ("sounds", false, &manifest.sounds),
+            ("music", true, &manifest.music),
+        ];
+        for (prefix, music, section) in audio {
+            for (name, decl) in section {
+                for platform in Platform::ALL {
+                    decl.audio_settings(music, platform)
+                        .map_err(|e| format!("{}: `{prefix}/{name}`: {e}", path.display()))?;
+                }
             }
         }
         for (name, m) in &manifest.models {
@@ -535,6 +618,126 @@ pub mod edit {
         set_key(text, kind, name, key, value.as_deref())
     }
 
+    /// Set or remove (`None`) a key of `[sounds.<name>]` / `[music.<name>]`
+    /// (`kind`) that is the same on every platform: `quality` (0..=10),
+    /// `stream` and `loop` (`true`/`false`) or `bus` (a bus label, written
+    /// quoted) — what the editor's audio inspector writes. Keeps every
+    /// other line.
+    pub fn set_audio_key(
+        text: &str,
+        kind: &str,
+        name: &str,
+        key: &str,
+        value: Option<&str>,
+    ) -> Result<String, String> {
+        let value = match (key, value) {
+            ("quality" | "stream" | "loop" | "bus", None) => None,
+            ("quality", Some(v)) => {
+                let q: f32 = v
+                    .parse()
+                    .map_err(|_| format!("quality `{v}` is not a number"))?;
+                if !(0.0..=10.0).contains(&q) {
+                    return Err(format!("quality {q} (0 to 10)"));
+                }
+                Some(v.to_string())
+            }
+            ("stream" | "loop", Some(v @ ("true" | "false"))) => Some(v.to_string()),
+            ("stream" | "loop", Some(v)) => return Err(format!("{key} `{v}` (true or false)")),
+            ("bus", Some(b)) => {
+                if trino_core::Bus::from_label(b).is_none_or(|b| b == trino_core::Bus::Master) {
+                    return Err(format!("bus `{b}` (music, sfx, voice, ambience, ui)"));
+                }
+                Some(format!("\"{b}\""))
+            }
+            (other, _) => {
+                return Err(format!(
+                    "`{other}` is not an audio key (quality, stream, loop, bus)"
+                ));
+            }
+        };
+        set_key(text, kind, name, key, value.as_deref())
+    }
+
+    /// Set or remove (`None`) one platform's entry of a per-platform audio
+    /// key of `[sounds.<name>]` / `[music.<name>]`: `codec` (`"vadpcm"`,
+    /// ..., written quoted) or `sample_rate` (a number). A value shared by
+    /// every platform (`codec = "pcm"`) becomes a table first, so the other
+    /// platforms keep it; an empty table removes the line. The table is
+    /// written in platform order (pc, n64, 3ds, web), keys that name no
+    /// platform kept after them.
+    pub fn set_audio_platform(
+        text: &str,
+        kind: &str,
+        name: &str,
+        key: &str,
+        platform: crate::Platform,
+        value: Option<&str>,
+    ) -> Result<String, String> {
+        let literal = match (key, value) {
+            ("codec" | "sample_rate", None) => None,
+            ("codec", Some(c)) => {
+                if c != "auto" && crate::audio::Codec::parse(c).is_none() {
+                    return Err(format!(
+                        "codec `{c}` (auto, pcm, vorbis, vadpcm, opus, dspadpcm)"
+                    ));
+                }
+                Some(toml::Value::String(c.to_string()))
+            }
+            ("sample_rate", Some(r)) => {
+                let r: u32 = r
+                    .parse()
+                    .map_err(|_| format!("sample_rate `{r}` is not a whole number"))?;
+                if !(4_000..=96_000).contains(&r) {
+                    return Err(format!("sample_rate {r} (4000 to 96000)"));
+                }
+                Some(toml::Value::Integer(r as i64))
+            }
+            (other, _) => {
+                return Err(format!(
+                    "`{other}` is not a per-platform audio key (codec, sample_rate)"
+                ));
+            }
+        };
+        let current = table_value(text, kind, name, key)?;
+        // (key as written, value), in file order.
+        let mut entries: Vec<(String, toml::Value)> = match current {
+            None => Vec::new(),
+            Some(v) => {
+                let parsed = toml::from_str::<toml::Table>(&format!("v = {v}"))
+                    .ok()
+                    .and_then(|mut t| t.remove("v"))
+                    .ok_or_else(|| format!("`[{kind}.{name}]`: `{key}` doesn't parse"))?;
+                match parsed {
+                    toml::Value::Table(t) => t.into_iter().collect(),
+                    // The Web falls back to the PC's value.
+                    shared => [
+                        crate::Platform::Pc,
+                        crate::Platform::N64,
+                        crate::Platform::N3ds,
+                    ]
+                    .iter()
+                    .map(|p| (p.key().to_string(), shared.clone()))
+                    .collect(),
+                }
+            }
+        };
+        entries.retain(|(k, _)| crate::Platform::parse(k) != Some(platform));
+        if let Some(v) = literal {
+            entries.push((platform.key().to_string(), v));
+        }
+        let order = |k: &str| {
+            crate::Platform::parse(k)
+                .and_then(|p| crate::Platform::ALL.iter().position(|q| *q == p))
+                .unwrap_or(crate::Platform::ALL.len())
+        };
+        entries.sort_by_key(|(k, _)| order(k));
+        let value = (!entries.is_empty()).then(|| {
+            let items: Vec<String> = entries.iter().map(|(k, v)| format!("{k} = {v}")).collect();
+            format!("{{ {} }}", items.join(", "))
+        });
+        set_key(text, kind, name, key, value.as_deref())
+    }
+
     /// The lines of `[kind.name]`: (header index, end) with the blank lines
     /// and comments before the next header left out.
     fn table_span(lines: &[String], kind: &str, name: &str) -> Result<(usize, usize), String> {
@@ -675,6 +878,90 @@ pub mod edit {
             assert_eq!(back, text);
             assert!(set_texture_format(text, "sprites", "ghost", "pc", None).is_err());
             assert!(set_texture_key(text, "sprites", "grass", "file", Some("x")).is_err());
+        }
+
+        #[test]
+        fn audio_edits_touch_one_key_and_parse_back() {
+            use crate::Platform;
+            use crate::audio::Codec;
+            let text = "version = 1\n\n[sounds.beep]\nfile = \"sounds/beep.wav\"\ncodec = \"pcm\"\n\n# music\n[music.theme]\nfile = \"music/theme.wav\"\n";
+            // A shared codec becomes a table: the other platforms keep it.
+            let a = set_audio_platform(
+                text,
+                "sounds",
+                "beep",
+                "codec",
+                Platform::N64,
+                Some("vadpcm"),
+            )
+            .unwrap();
+            assert!(
+                a.contains("codec = { pc = \"pcm\", n64 = \"vadpcm\", 3ds = \"pcm\" }\n\n# music"),
+                "{a}"
+            );
+            let m: crate::Manifest = toml::from_str(&a).unwrap();
+            let s = |m: &crate::Manifest, p| m.sounds["beep"].audio_settings(false, p).unwrap();
+            assert_eq!(s(&m, Platform::N64).codec, Codec::Vadpcm);
+            assert_eq!(
+                s(&m, Platform::Web).codec,
+                Codec::Pcm,
+                "the Web takes the PC's"
+            );
+            // A table entry written as `n3ds` is replaced, not duplicated.
+            let b = a.replace("3ds = ", "n3ds = ");
+            let b = set_audio_platform(&b, "sounds", "beep", "codec", Platform::N3ds, Some("auto"))
+                .unwrap();
+            assert!(b.contains("3ds = \"auto\" }") && !b.contains("n3ds"), "{b}");
+            // Music: a per-platform rate, then the shared keys.
+            let c = set_audio_platform(
+                text,
+                "music",
+                "theme",
+                "sample_rate",
+                Platform::N64,
+                Some("22050"),
+            )
+            .unwrap();
+            assert!(c.ends_with("sample_rate = { n64 = 22050 }\n"), "{c}");
+            let c = set_audio_key(&c, "music", "theme", "quality", Some("6")).unwrap();
+            let c = set_audio_key(&c, "music", "theme", "stream", Some("false")).unwrap();
+            let c = set_audio_key(&c, "music", "theme", "bus", Some("ambience")).unwrap();
+            let c = set_audio_key(&c, "music", "theme", "loop", Some("false")).unwrap();
+            let m: crate::Manifest = toml::from_str(&c).unwrap();
+            let t = m.music["theme"]
+                .audio_settings(true, Platform::N64)
+                .unwrap();
+            assert_eq!(t.sample_rate, Some(22050));
+            assert_eq!((t.quality, t.stream, t.looped), (6.0, false, false));
+            assert_eq!(t.bus, trino_core::Bus::Ambience);
+            // Removing the last entry and every key gives the text back.
+            let d = set_audio_platform(&c, "music", "theme", "sample_rate", Platform::N64, None)
+                .unwrap();
+            let d = ["quality", "stream", "bus", "loop"].iter().fold(d, |t, k| {
+                set_audio_key(&t, "music", "theme", k, None).unwrap()
+            });
+            assert_eq!(d, text);
+            // Bad values never reach the file.
+            assert!(set_audio_key(text, "music", "theme", "quality", Some("11")).is_err());
+            assert!(set_audio_key(text, "music", "theme", "bus", Some("master")).is_err());
+            assert!(set_audio_key(text, "music", "theme", "stream", Some("yes")).is_err());
+            assert!(set_audio_key(text, "music", "theme", "file", Some("x")).is_err());
+            assert!(
+                set_audio_platform(text, "sounds", "beep", "codec", Platform::Pc, Some("mp3"))
+                    .is_err()
+            );
+            assert!(
+                set_audio_platform(
+                    text,
+                    "sounds",
+                    "beep",
+                    "sample_rate",
+                    Platform::Pc,
+                    Some("100")
+                )
+                .is_err()
+            );
+            assert!(set_audio_key(text, "sounds", "ghost", "loop", Some("true")).is_err());
         }
 
         #[test]

@@ -13,8 +13,9 @@
 //! 3. `3dsxtool` turns the ELF + RomFS into a `.3dsx` for Azahar/hardware.
 //!
 //! Assets arrive through the RomFS: `cargo xtask assets 3ds` bakes masters
-//! with `tex3ds` (sprites, names = `<handle-hex>.t3x`) and a raw-PCM16
-//! conversion (sounds, `<handle-hex>.pcm16`) plus an `index.tsv` mapping
+//! with `tex3ds` (sprites, names = `<handle-hex>.t3x`), sounds to `T3AU`
+//! (DSP-ADPCM or PCM16, `<handle-hex>.t3au`; music streams from the RomFS)
+//! and the project's mix (`<handle-hex>.mixer`), plus an `index.tsv` mapping
 //! handles to files, which [`N3dsAssets::load_all`] reads at boot.
 
 // On any non-3DS target this crate compiles to an empty lib so that plain

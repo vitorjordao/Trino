@@ -214,8 +214,9 @@ pub fn pack_assets(assets: &Path, baked: &Path, pak: &Path, fixtures: bool) -> R
 }
 
 /// A Web bake's `index.toml` as pack entries: sprites as their KTX2 file
-/// when they have one (else the master), sounds as 16-bit PCM, the rest
-/// as baked.
+/// when they have one (else the master), sounds as their `TSN2` blob (Ogg
+/// Vorbis or PCM16, checked), the project's mix as `TMIX`, the rest as
+/// baked.
 pub fn pack_entries(baked: &Path) -> Result<Vec<(Kind, u32, Vec<u8>)>, String> {
     #[derive(serde::Deserialize)]
     struct Index {
@@ -242,8 +243,22 @@ pub fn pack_entries(baked: &Path) -> Result<Vec<(Kind, u32, Vec<u8>)>, String> {
         let entry = match (e.kind.as_str(), &e.ktx2) {
             ("sprite", Some(k)) => (Kind::SpriteKtx2, read(k)?),
             ("sprite", None) => (Kind::Sprite, read(&e.file)?),
-            ("sound", _) => (Kind::Sound, pack::sound16(&read(&e.file)?)?),
-            ("music", _) => (Kind::Music, pack::sound16(&read(&e.file)?)?),
+            ("sound" | "music", _) => {
+                let kind = if e.kind == "music" {
+                    Kind::Music
+                } else {
+                    Kind::Sound
+                };
+                let bytes = read(&e.file)?;
+                pack::sound_blob(kind, &bytes).map_err(|err| format!("{}: {err}", e.file))?;
+                (kind, bytes)
+            }
+            ("mixer", _) => {
+                let bytes = read(&e.file)?;
+                trino_core::MixerConfig::parse(&bytes)
+                    .map_err(|err| format!("{}: {err}", e.file))?;
+                (Kind::Mixer, bytes)
+            }
             ("model", _) => (Kind::Model, read(&e.file)?),
             ("font", _) => (Kind::Font, read(&e.file)?),
             ("blob", _) => (Kind::Blob, read(&e.file)?),
@@ -707,11 +722,11 @@ mod tests {
     }
 
     #[test]
-    fn packs_hold_ktx2_textures_and_16_bit_sounds() {
+    fn packs_hold_ktx2_textures_vorbis_sounds_and_the_mix() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         std::fs::create_dir_all(root.join("assets/shared")).unwrap();
-        // A 16x16 opaque gradient and a 2-sample sound.
+        // A 16x16 opaque gradient, a sound in each codec and the mix.
         let png = root.join("assets/shared/g.png");
         let file = std::fs::File::create(&png).unwrap();
         let mut enc = png::Encoder::new(std::io::BufWriter::new(file), 16, 16);
@@ -720,10 +735,32 @@ mod tests {
             .flat_map(|i| [(i % 16 * 16) as u8, (i / 16 * 16) as u8, 90, 255])
             .collect();
         enc.write_header().unwrap().write_image_data(&px).unwrap();
+        let wav = root.join("assets/shared/tone.wav");
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 22_050,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut w = hound::WavWriter::create(&wav, spec).unwrap();
+        for i in 0..22_050 {
+            let t = i as f32 / 22_050.0;
+            let s = (t * 440.0 * std::f32::consts::TAU).sin() * 0.5;
+            w.write_sample((s * 32767.0) as i16).unwrap();
+        }
+        w.finalize().unwrap();
         std::fs::write(
             root.join("assets/manifest.toml"),
             "version = 1\n[sprites.g]\nfile = \"g.png\"\nformats = { web = \"KTX2-UASTC\" }\n\
-             [sprites.raw]\nfile = \"g.png\"\nformats = { web = \"RGBA8\" }\n",
+             [sprites.raw]\nfile = \"g.png\"\nformats = { web = \"RGBA8\" }\n\
+             [sounds.tone]\nfile = \"tone.wav\"\n\
+             [sounds.tone_pcm]\nfile = \"tone.wav\"\ncodec = { web = \"pcm\" }\n\
+             [music.song]\nfile = \"tone.wav\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("assets/audio.toml"),
+            "version = 1\n[buses]\nmusic = 0.5\n",
         )
         .unwrap();
         let pak = root.join("out/trino.pak");
@@ -740,6 +777,30 @@ mod tests {
                 .starts_with(&trino_asset_pipeline::texture::ktx2::KTX2_MAGIC)
         );
         assert_eq!(find(raw).kind, Kind::Sprite);
+        // Sounds: Vorbis by default (a second of PCM16 is 44 100 bytes),
+        // PCM where asked; music streams; the mix rides along.
+        let sound = |p: &str| {
+            let e = find(trino_core::asset_id(p));
+            let b = trino_core::SoundBlob::parse(e.bytes).unwrap();
+            (e.kind, b.codec, b.stream, b.frames, e.bytes.len())
+        };
+        let (kind, codec, stream, frames, len) = sound("sounds/tone");
+        assert_eq!(
+            (kind, codec, stream, frames),
+            (Kind::Sound, trino_core::SoundCodec::Vorbis, false, 22_050)
+        );
+        assert!(len < 44_100 / 4, "Vorbis: {len} bytes");
+        let (_, codec, _, _, len) = sound("sounds/tone_pcm");
+        assert_eq!((codec, len), (trino_core::SoundCodec::Pcm16, 20 + 44_100));
+        let (kind, codec, stream, ..) = sound("music/song");
+        assert_eq!(
+            (kind, codec, stream),
+            (Kind::Music, trino_core::SoundCodec::Vorbis, true)
+        );
+        let mix = find(trino_core::asset_id(trino_core::MixerConfig::LOGICAL));
+        assert_eq!(mix.kind, Kind::Mixer);
+        let cfg = trino_core::MixerConfig::parse(mix.bytes).unwrap();
+        assert_eq!(cfg.volumes[trino_core::Bus::Music.index()], 0.5);
         // The fixtures: each mode's file and its expected decode.
         let fixture = find(trino_core::asset_id("web/ktx2_uastc"));
         let expected = find(trino_core::asset_id("web/ktx2_uastc.rgba"));

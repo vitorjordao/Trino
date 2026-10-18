@@ -220,6 +220,9 @@ static void trino_link_write(const char* msg, size_t len)
     }
 }
 
+static void trino_audio_init(void);
+static void trino_audio_exit(void);
+
 void trino_init(void)
 {
     trino_link_init();
@@ -235,7 +238,7 @@ void trino_init(void)
     C2D_SetTintMode(C2D_TintMult);
     s_top = C2D_CreateScreenTarget(GFX_TOP, GFX_LEFT);
     s_bottom = C2D_CreateScreenTarget(GFX_BOTTOM, GFX_LEFT);
-    ndspInit();
+    trino_audio_init();
     trino_tex3d_init();
 }
 
@@ -258,12 +261,42 @@ uint32_t trino_hw_probe(uint32_t want_speedup)
 
 // ---------------------------------------------------------------------------
 // The worker core (issue #54 Phase 3, ADR 0020): one thread on the second
-// CPU core for game jobs (audio mixing #53, AI #56). The New 3DS's core 2
-// is the app's whole; on an old 3DS the app gets core 1 for 30% of its time
-// (APT_SetAppCpuTimeLimit: the system keeps the rest). Jobs are a function
-// and one word, queued in a ring; trino_worker_wait blocks until every
-// queued job has run. Without a worker (no core granted) nothing is queued
-// and the Rust side runs each job inline.
+// CPU core for game jobs (AI #56, a crowd's animation). The audio thread
+// (#53) shares that core at a higher priority (trino_audio_init). The New
+// 3DS's core 2 is the app's whole; on an old 3DS the app gets core 1 for 30%
+// of its time (APT_SetAppCpuTimeLimit: the system keeps the rest). Jobs are
+// a function and one word, queued in a ring; trino_worker_wait blocks until
+// every queued job has run. Without a worker (no core granted) nothing is
+// queued and the Rust side runs each job inline.
+
+// The second core, one policy for every thread that wants it (the worker
+// here, the audio thread #53): core 2 on a New 3DS, else core 1 once the app
+// has asked for 30% of it (asked once; the answer is kept). Returns the
+// thread and its core, or NULL and -1 when neither core was granted.
+static Thread trino_second_core_thread(ThreadFunc fn, size_t stack, s32 prio, bool new3ds,
+                                       int32_t* core)
+{
+    static int s_core1 = 0; // 0: not asked yet, 1: granted, -1: refused
+    if (new3ds) {
+        Thread t = threadCreate(fn, NULL, stack, prio, 2, false);
+        if (t) {
+            *core = 2;
+            return t;
+        }
+    }
+    if (s_core1 == 0) {
+        s_core1 = R_SUCCEEDED(APT_SetAppCpuTimeLimit(30)) ? 1 : -1;
+    }
+    if (s_core1 > 0) {
+        Thread t = threadCreate(fn, NULL, stack, prio, 1, false);
+        if (t) {
+            *core = 1;
+            return t;
+        }
+    }
+    *core = -1;
+    return NULL;
+}
 
 #define TRINO_JOBS 32
 
@@ -320,21 +353,9 @@ int32_t trino_worker_start(uint32_t new3ds)
     // at the main thread's priority.
     if (prio < 0x18) prio = 0x18;
     if (prio > 0x3F) prio = 0x3F;
-    if (new3ds) {
-        s_worker = threadCreate(trino_worker_main, NULL, 32 * 1024, prio, 2, false);
-        if (s_worker) {
-            s_worker_core = 2;
-            return 2;
-        }
-    }
-    if (R_SUCCEEDED(APT_SetAppCpuTimeLimit(30))) {
-        s_worker = threadCreate(trino_worker_main, NULL, 32 * 1024, prio, 1, false);
-        if (s_worker) {
-            s_worker_core = 1;
-            return 1;
-        }
-    }
-    return -1;
+    s_worker = trino_second_core_thread(trino_worker_main, 32 * 1024, prio, new3ds != 0,
+                                        &s_worker_core);
+    return s_worker ? s_worker_core : -1;
 }
 
 // Queue job(arg) for the worker. Returns 0 (nothing queued: the caller
@@ -1132,68 +1153,405 @@ uint32_t trino_touch(void)
 }
 
 // ---------------------------------------------------------------------------
-// Audio — raw PCM16 through ndsp. Baked format (cargo xtask assets 3ds):
-// 12-byte header (u32 LE sample_rate, u32 LE channels, u32 LE frame count)
-// followed by interleaved PCM16 LE samples.
+// Audio (issue #53) — `T3AU` sounds through ndsp: DSP-ADPCM (decoded by the
+// DSP itself, ~3.5x smaller than PCM16) or PCM16, mono. Layout, written by
+// `cargo xtask assets 3ds` (trino_asset_pipeline::audio::n3ds_container),
+// little-endian:
+//    0 "T3AU"   4 u8 codec (0 PCM16, 1 DSP-ADPCM)   5 u8 bus
+//    6 u8 flags (bit 0 loop, bit 1 stream)   7 u8 channels (1)
+//    8 u32 rate   12 u32 samples   16 u32 data bytes
+//   20 u32 chunk samples (streamed: samples per wave buffer, 0 = whole)
+//   24 u32 context count   28 16 x u16 DSP-ADPCM coefficients
+//   60 a context per chunk (u16 predictor/scale, s16 last sample, s16 the
+//      one before, u16 0: what ndspAdpcmData holds), then the data.
+// Whole sounds load into linear memory at boot. A streamed one keeps only
+// its header and contexts: each playback reads its data from the RomFS in
+// chunks into three rotating linear buffers, refilled by the audio thread
+// (woken by ndsp every audio frame). Every wave buffer carries its ADPCM
+// context, so loops and chunk seams decode exactly like the bake's preview.
+
+#define T3AU_HEADER 60
+#define TRINO_NDSP_CHANNELS 16
+#define TRINO_STREAM_BUFS 3
+#define TRINO_MAX_STREAMS 4
 
 typedef struct {
-    void* data;          // linearAlloc'd sample memory (ndsp requirement)
-    uint32_t nsamples;   // frames
     uint32_t sample_rate;
-    uint32_t channels;
+    uint32_t nsamples;
+    uint32_t data_bytes;
+    uint32_t chunk_samples;   // streamed: samples per wave buffer
+    uint32_t ncontexts;
+    uint8_t adpcm, bus, looped, stream;
+    u16 coefs[16];
+    ndspAdpcmData* contexts;  // one per chunk (malloc'd), NULL when none
+    ndspAdpcmData start;      // the decoder state at sample 0
+    void* data;               // linearAlloc'd whole sound; NULL when streamed
+    uint32_t data_offset;     // streamed: where the data starts in the file
+    char path[64];            // streamed: the RomFS file
 } trino_wav_t;
 
-#define TRINO_NDSP_CHANNELS 16
+typedef struct {
+    int active;               // a playback owns the slot
+    int ended;                // non-looping: the last chunk is queued
+    uint32_t channel;
+    trino_wav_t* wav;
+    FILE* f;
+    uint32_t next_chunk, nchunks;
+    int looped;
+    uint32_t buf_bytes;
+    void* buf[TRINO_STREAM_BUFS];
+    ndspWaveBuf wb[TRINO_STREAM_BUFS];
+    ndspAdpcmData ctx[TRINO_STREAM_BUFS];
+} trino_stream_t;
+
 static ndspWaveBuf s_wavebufs[TRINO_NDSP_CHANNELS];
+static ndspAdpcmData s_wavectx[TRINO_NDSP_CHANNELS];
+static trino_stream_t s_streams[TRINO_MAX_STREAMS];
+static int s_stream_of[TRINO_NDSP_CHANNELS];
+// Held by the audio thread while it refills, and by the main thread while
+// it starts, stops or releases a stream (the only thread that does).
+static LightLock s_audio_lock;
+static LightEvent s_audio_wake;
+static Thread s_audio_thread = NULL;
+static volatile int s_audio_quit = 0;
+static int s_audio_core = -2;
+// Counters behind trino_audio_stat.
+static uint32_t s_resident = 0;
+static volatile uint32_t s_underruns = 0;
+static volatile uint32_t s_streamed = 0;
+
+static uint32_t rd32(const uint8_t* p)
+{
+    return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
+}
+
+static int16_t rd16(const uint8_t* p)
+{
+    return (int16_t)((uint16_t)p[0] | (uint16_t)p[1] << 8);
+}
 
 void* trino_wav_load(const char* romfs_path)
 {
     FILE* f = fopen(romfs_path, "rb");
     if (!f) return NULL;
-    uint32_t header[3];
-    if (fread(header, sizeof(header), 1, f) != 1) {
+    uint8_t h[T3AU_HEADER];
+    if (fread(h, 1, sizeof(h), f) != sizeof(h) || memcmp(h, "T3AU", 4) != 0 || h[4] > 1 ||
+        h[7] != 1 || strlen(romfs_path) >= sizeof(((trino_wav_t*)0)->path)) {
         fclose(f);
         return NULL;
     }
-    trino_wav_t* wav = malloc(sizeof(trino_wav_t));
-    wav->sample_rate = header[0];
-    wav->channels = header[1] ? header[1] : 1;
-    wav->nsamples = header[2];
-    size_t bytes = (size_t)wav->nsamples * wav->channels * 2;
-    wav->data = linearAlloc(bytes);
-    if (!wav->data || fread(wav->data, 1, bytes, f) != bytes) {
-        if (wav->data) linearFree(wav->data);
-        free(wav);
+    trino_wav_t* w = calloc(1, sizeof(trino_wav_t));
+    if (!w) {
         fclose(f);
         return NULL;
     }
-    DSP_FlushDataCache(wav->data, bytes);
+    w->adpcm = h[4];
+    w->bus = h[5];
+    w->looped = h[6] & 1;
+    w->sample_rate = rd32(h + 8);
+    w->nsamples = rd32(h + 12);
+    w->data_bytes = rd32(h + 16);
+    w->chunk_samples = rd32(h + 20);
+    w->ncontexts = rd32(h + 24);
+    for (int i = 0; i < 16; i++) w->coefs[i] = (u16)rd16(h + 28 + i * 2);
+    // Streams play in whole ADPCM frames (14 samples) per chunk.
+    w->stream = (h[6] & 2) && w->chunk_samples && w->nsamples &&
+                (!w->adpcm || (w->chunk_samples % 14 == 0 &&
+                               w->ncontexts == (w->nsamples + w->chunk_samples - 1) / w->chunk_samples));
+    int ok = 1;
+    if (w->ncontexts) {
+        w->contexts = malloc(w->ncontexts * sizeof(ndspAdpcmData));
+        ok = w->contexts != NULL;
+        for (uint32_t i = 0; ok && i < w->ncontexts; i++) {
+            uint8_t c[8];
+            ok = fread(c, 1, 8, f) == 8;
+            w->contexts[i].index = (u16)rd16(c);
+            w->contexts[i].history0 = rd16(c + 2);
+            w->contexts[i].history1 = rd16(c + 4);
+        }
+        if (ok) s_resident += w->ncontexts * sizeof(ndspAdpcmData);
+    }
+    w->data_offset = T3AU_HEADER + w->ncontexts * 8;
+    if (ok && w->stream) {
+        strcpy(w->path, romfs_path);
+        if (w->adpcm) w->start = w->contexts[0];
+    } else if (ok && w->data_bytes) {
+        w->data = linearAlloc(w->data_bytes);
+        ok = w->data && fread(w->data, 1, w->data_bytes, f) == w->data_bytes;
+        if (ok) {
+            DSP_FlushDataCache(w->data, w->data_bytes);
+            s_resident += w->data_bytes;
+            // Predictor/scale of the first frame, no history: how the
+            // encoder started (and how a loop restarts).
+            if (w->adpcm) w->start.index = ((uint8_t*)w->data)[0];
+        }
+    }
     fclose(f);
-    return wav;
+    if (!ok) {
+        if (w->data) linearFree(w->data);
+        free(w->contexts);
+        free(w);
+        return NULL;
+    }
+    return w;
 }
 
-void trino_wav_play(void* wav_ptr, uint32_t channel, uint32_t looped)
+// Bus and flags of a loaded sound: bits 0..8 the bus (trino_core::Bus),
+// bit 8 streamed, bit 9 DSP-ADPCM, bit 10 baked to loop.
+uint32_t trino_wav_info(void* wav_ptr)
 {
-    trino_wav_t* wav = wav_ptr;
-    if (channel >= TRINO_NDSP_CHANNELS) return;
-    ndspChnReset(channel);
-    ndspChnSetInterp(channel, NDSP_INTERP_LINEAR);
-    ndspChnSetRate(channel, (float)wav->sample_rate);
-    ndspChnSetFormat(channel,
-                     wav->channels == 2 ? NDSP_FORMAT_STEREO_PCM16 : NDSP_FORMAT_MONO_PCM16);
-    ndspWaveBuf* buf = &s_wavebufs[channel];
-    memset(buf, 0, sizeof(*buf));
-    buf->data_vaddr = wav->data;
-    buf->nsamples = wav->nsamples;
-    buf->looping = looped != 0;
-    ndspChnWaveBufAdd(channel, buf);
+    trino_wav_t* w = wav_ptr;
+    if (!w) return 0;
+    return w->bus | (uint32_t)w->stream << 8 | (uint32_t)w->adpcm << 9 | (uint32_t)w->looped << 10;
+}
+
+// Read chunk `st->next_chunk` into buffer `i` and queue it. 0 when there is
+// nothing left (non-looping) or the read failed. Holds s_audio_lock.
+static int stream_queue(trino_stream_t* st, int i)
+{
+    trino_wav_t* w = st->wav;
+    if (st->next_chunk >= st->nchunks) {
+        if (!st->looped) {
+            st->ended = 1;
+            return 0;
+        }
+        st->next_chunk = 0;
+    }
+    uint32_t k = st->next_chunk++;
+    uint32_t first = k * w->chunk_samples;
+    uint32_t n = w->nsamples - first;
+    if (n > w->chunk_samples) n = w->chunk_samples;
+    uint32_t off = w->adpcm ? k * (w->chunk_samples / 14) * 8 : first * 2;
+    uint32_t bytes = w->adpcm ? (n + 13) / 14 * 8 : n * 2;
+    if (bytes > st->buf_bytes || fseek(st->f, (long)(w->data_offset + off), SEEK_SET) != 0 ||
+        fread(st->buf[i], 1, bytes, st->f) != bytes) {
+        st->ended = 1;
+        return 0;
+    }
+    DSP_FlushDataCache(st->buf[i], bytes);
+    ndspWaveBuf* wb = &st->wb[i];
+    memset(wb, 0, sizeof(*wb));
+    wb->data_vaddr = st->buf[i];
+    wb->nsamples = n;
+    if (w->adpcm) {
+        st->ctx[i] = w->contexts[k];
+        wb->adpcm_data = &st->ctx[i];
+    }
+    ndspChnWaveBufAdd((int)st->channel, wb);
+    if (!st->looped && st->next_chunk >= st->nchunks) st->ended = 1;
+    return 1;
+}
+
+// Buffers the DSP is on (or about to be).
+static int stream_pending(const trino_stream_t* st)
+{
+    int n = 0;
+    for (int i = 0; i < TRINO_STREAM_BUFS; i++) {
+        u8 status = st->wb[i].status;
+        n += status == NDSP_WBUF_QUEUED || status == NDSP_WBUF_PLAYING;
+    }
+    return n;
+}
+
+// Count the buffers the DSP finished (they become free). Holds the lock.
+static void stream_collect(trino_stream_t* st)
+{
+    for (int i = 0; i < TRINO_STREAM_BUFS; i++) {
+        if (st->wb[i].status == NDSP_WBUF_DONE) {
+            s_streamed += st->wb[i].nsamples;
+            st->wb[i].status = NDSP_WBUF_FREE;
+        }
+    }
+}
+
+// Release a playback's buffers and file. Holds the lock.
+static void stream_stop(int slot)
+{
+    trino_stream_t* st = &s_streams[slot];
+    // What played of the current buffer still counts as delivered.
+    if (stream_pending(st)) s_streamed += ndspChnGetSamplePos((int)st->channel);
+    ndspChnWaveBufClear((int)st->channel);
+    for (int i = 0; i < TRINO_STREAM_BUFS; i++) {
+        if (st->buf[i]) linearFree(st->buf[i]);
+        st->buf[i] = NULL;
+        st->wb[i].status = NDSP_WBUF_FREE;
+    }
+    if (st->f) fclose(st->f);
+    st->f = NULL;
+    s_stream_of[st->channel] = -1;
+    st->active = 0;
+}
+
+// Start streaming `w` on `channel` (already reset and formatted): open the
+// file, allocate the buffers and fill them here, so the first audio frame
+// never finds them empty.
+static void stream_start(trino_wav_t* w, uint32_t channel, uint32_t looped)
+{
+    LightLock_Lock(&s_audio_lock);
+    int slot = -1;
+    for (int i = 0; i < TRINO_MAX_STREAMS && slot < 0; i++)
+        if (!s_streams[i].active) slot = i;
+    if (slot < 0) {
+        LightLock_Unlock(&s_audio_lock);
+        return;
+    }
+    trino_stream_t* st = &s_streams[slot];
+    memset(st, 0, sizeof(*st));
+    st->wav = w;
+    st->channel = channel;
+    st->looped = looped != 0;
+    st->nchunks = (w->nsamples + w->chunk_samples - 1) / w->chunk_samples;
+    st->buf_bytes = w->adpcm ? w->chunk_samples / 14 * 8 : w->chunk_samples * 2;
+    st->f = fopen(w->path, "rb");
+    int ok = st->f != NULL;
+    for (int i = 0; ok && i < TRINO_STREAM_BUFS; i++) {
+        st->buf[i] = linearAlloc(st->buf_bytes);
+        ok = st->buf[i] != NULL;
+    }
+    st->active = 1;
+    s_stream_of[channel] = slot;
+    if (!ok) {
+        stream_stop(slot);
+    } else {
+        for (int i = 0; i < TRINO_STREAM_BUFS && stream_queue(st, i); i++) {
+        }
+    }
+    LightLock_Unlock(&s_audio_lock);
+}
+
+// The audio thread: after every ndsp frame, count what played, note a
+// stream that ran dry (an underrun: nothing queued and more to come) and
+// refill the free buffers.
+static void trino_audio_thread(void* arg)
+{
+    (void)arg;
+    while (!s_audio_quit) {
+        LightEvent_Wait(&s_audio_wake);
+        LightLock_Lock(&s_audio_lock);
+        for (int s = 0; s < TRINO_MAX_STREAMS; s++) {
+            trino_stream_t* st = &s_streams[s];
+            if (!st->active || st->ended) continue;
+            stream_collect(st);
+            if (stream_pending(st) == 0) s_underruns++;
+            for (int i = 0; i < TRINO_STREAM_BUFS && !st->ended; i++)
+                if (st->wb[i].status == NDSP_WBUF_FREE) stream_queue(st, i);
+        }
+        LightLock_Unlock(&s_audio_lock);
+    }
+}
+
+static void trino_ndsp_frame(void* data)
+{
+    (void)data;
+    LightEvent_Signal(&s_audio_wake);
+}
+
+// ndsp needs the DSP firmware: `sdmc:/3ds/dspfirm.cdc` (dumped from the
+// console) or the Homebrew Launcher's `hb:ndsp`. Without it ndspInit fails
+// and every ndsp call does nothing — sounds sit queued forever. Azahar and
+// Citra emulate the DSP at a high level and never run the firmware, so there
+// (svcGetSystemInfo 0x20000 answers only on them) a placeholder image is
+// enough, and the self-test hears what the console would play.
+static u8 s_dsp_placeholder[0x400];
+
+static void trino_ndsp_init(void)
+{
+    Result rc = ndspInit();
+    s64 emulator = 0;
+    if (R_FAILED(rc) && R_SUCCEEDED(svcGetSystemInfo(&emulator, 0x20000, 0)) && emulator) {
+        ndspUseComponent(s_dsp_placeholder, sizeof(s_dsp_placeholder), 0xFF, 0xFF);
+        rc = ndspInit();
+    }
+    if (R_FAILED(rc)) {
+        char msg[96];
+        snprintf(msg, sizeof(msg),
+                 "TRINO_AUDIO: ndsp unavailable (%08lx): no sdmc:/3ds/dspfirm.cdc\n",
+                 (unsigned long)rc);
+        trino_log(msg);
+    }
+}
+
+// The DSP, the stream bookkeeping and the audio thread. The thread takes the
+// second core the worker uses (#54: core 2 on a New 3DS, core 1 at 30% on an
+// old one; trino_second_core_thread) one priority above the main thread, so
+// a refill preempts a long game job instead of queueing behind it; it sleeps
+// between ndsp frames. It is a thread of its own, not a worker job: ndsp's
+// callback wakes it every audio frame, and a job submitted from there would
+// wait in the ring, or run inline in ndsp's thread when the ring is full.
+// No second core: the app core, same priority.
+static void trino_audio_init(void)
+{
+    trino_ndsp_init();
+    LightLock_Init(&s_audio_lock);
+    LightEvent_Init(&s_audio_wake, RESET_ONESHOT);
+    for (int i = 0; i < TRINO_NDSP_CHANNELS; i++) s_stream_of[i] = -1;
+    s32 prio = 0x30;
+    svcGetThreadPriority(&prio, CUR_THREAD_HANDLE);
+    if (prio > 0x18) prio--;
+    bool n3ds = false;
+    APT_CheckNew3DS(&n3ds);
+    int32_t core = -1;
+    s_audio_thread = trino_second_core_thread(trino_audio_thread, 16 * 1024, prio, n3ds, &core);
+    s_audio_core = core;
+    if (!s_audio_thread) {
+        s_audio_thread = threadCreate(trino_audio_thread, NULL, 16 * 1024, prio, -2, false);
+        s_audio_core = -2;
+    }
+    ndspSetCallback(trino_ndsp_frame, NULL);
+}
+
+static void trino_audio_exit(void)
+{
+    ndspSetCallback(NULL, NULL);
+    if (s_audio_thread) {
+        s_audio_quit = 1;
+        LightEvent_Signal(&s_audio_wake);
+        threadJoin(s_audio_thread, U64_MAX);
+        threadFree(s_audio_thread);
+        s_audio_thread = NULL;
+    }
+    LightLock_Lock(&s_audio_lock);
+    for (int s = 0; s < TRINO_MAX_STREAMS; s++)
+        if (s_streams[s].active) stream_stop(s);
+    LightLock_Unlock(&s_audio_lock);
 }
 
 void trino_channel_stop(uint32_t channel)
 {
     if (channel >= TRINO_NDSP_CHANNELS) return;
-    ndspChnWaveBufClear(channel);
+    LightLock_Lock(&s_audio_lock);
+    if (s_stream_of[channel] >= 0) stream_stop(s_stream_of[channel]);
+    LightLock_Unlock(&s_audio_lock);
+    ndspChnWaveBufClear((int)channel);
     s_wavebufs[channel].status = NDSP_WBUF_DONE;
+}
+
+void trino_wav_play(void* wav_ptr, uint32_t channel, uint32_t looped)
+{
+    trino_wav_t* w = wav_ptr;
+    if (!w || channel >= TRINO_NDSP_CHANNELS) return;
+    trino_channel_stop(channel);
+    ndspChnReset((int)channel);
+    ndspChnSetInterp((int)channel, NDSP_INTERP_LINEAR);
+    ndspChnSetRate((int)channel, (float)w->sample_rate);
+    ndspChnSetFormat((int)channel, w->adpcm ? NDSP_FORMAT_MONO_ADPCM : NDSP_FORMAT_MONO_PCM16);
+    if (w->adpcm) ndspChnSetAdpcmCoefs((int)channel, w->coefs);
+    if (w->stream) {
+        stream_start(w, channel, looped);
+        return;
+    }
+    if (!w->data) return;
+    ndspWaveBuf* buf = &s_wavebufs[channel];
+    memset(buf, 0, sizeof(*buf));
+    buf->data_vaddr = w->data;
+    buf->nsamples = w->nsamples;
+    buf->looping = looped != 0;
+    // Every pass of a loop restarts from the first frame's context.
+    if (w->adpcm) {
+        s_wavectx[channel] = w->start;
+        buf->adpcm_data = &s_wavectx[channel];
+    }
+    ndspChnWaveBufAdd((int)channel, buf);
 }
 
 // Per-channel left/right volume (pan + attenuation, music ducking): the
@@ -1206,27 +1564,68 @@ void trino_ch_volume(uint32_t channel, uint32_t lvol_q16, uint32_t rvol_q16)
     float mix[12] = {0};
     mix[0] = lvol_q16 / 65536.0f;
     mix[1] = rvol_q16 / 65536.0f;
-    ndspChnSetMix(channel, mix);
+    ndspChnSetMix((int)channel, mix);
 }
 
-// Playing = the DSP is on it, or our buffer is still queued (right after a
-// play the DSP has not picked it up yet: ndspChnIsPlaying lags a frame).
+// Playing = our wave buffer is queued or playing. Not ndspChnIsPlaying: it
+// lags a frame after a play and stays true once the buffer ended (the DSP
+// keeps the channel enabled), so a one-shot would never finish. A stream
+// plays until its last chunk has been played.
 int32_t trino_ch_playing(uint32_t channel)
 {
     if (channel >= TRINO_NDSP_CHANNELS) return 0;
+    // No lock: only this (the main) thread starts and stops streams; what
+    // the audio thread changes meanwhile is at worst a frame stale.
+    int slot = s_stream_of[channel];
+    if (slot >= 0) {
+        trino_stream_t* st = &s_streams[slot];
+        return !st->ended || stream_pending(st) > 0;
+    }
     u8 st = s_wavebufs[channel].status;
-    return (ndspChnIsPlaying(channel) || st == NDSP_WBUF_QUEUED || st == NDSP_WBUF_PLAYING) ? 1 : 0;
+    return (st == NDSP_WBUF_QUEUED || st == NDSP_WBUF_PLAYING) ? 1 : 0;
 }
 
-void trino_mixer_set_vol(uint32_t vol_q16)
-{
-    ndspSetMasterVol(vol_q16 / 65536.0f);
-}
-
-// ndsp is callback-driven; nothing to pump. Kept so the platform crates and
-// game loops stay identical across consoles.
+// Once per frame: release the streams that played to their end (next frame
+// if the audio thread is reading a chunk right now).
 void trino_audio_poll(void)
 {
+    if (LightLock_TryLock(&s_audio_lock) != 0) return;
+    for (int s = 0; s < TRINO_MAX_STREAMS; s++) {
+        trino_stream_t* st = &s_streams[s];
+        if (st->active && st->ended && stream_pending(st) == 0) {
+            stream_collect(st);
+            stream_stop(s);
+        }
+    }
+    LightLock_Unlock(&s_audio_lock);
+}
+
+// Audio counters (trino_core::AudioStats): 0 streams playing, 1 bytes held
+// by loaded sounds (linear data + contexts), 2 bytes of streaming buffers,
+// 3 underruns, 4 samples the streams delivered, 5 the audio thread's core
+// (2 or 1, the second core the worker uses; 0 = the app core).
+uint32_t trino_audio_stat(uint32_t which)
+{
+    // Lock-free like trino_ch_playing.
+    uint32_t v = 0;
+    switch (which) {
+    case 0:
+    case 2:
+    case 4:
+        if (which == 4) v = s_streamed;
+        for (int s = 0; s < TRINO_MAX_STREAMS; s++) {
+            trino_stream_t* st = &s_streams[s];
+            if (!st->active) continue;
+            if (which == 0) v += !st->ended || stream_pending(st) > 0;
+            if (which == 2) v += TRINO_STREAM_BUFS * st->buf_bytes;
+            if (which == 4 && stream_pending(st)) v += ndspChnGetSamplePos((int)st->channel);
+        }
+        break;
+    case 1: v = s_resident; break;
+    case 3: v = s_underruns; break;
+    case 5: v = s_audio_core > 0 ? (uint32_t)s_audio_core : 0; break;
+    }
+    return v;
 }
 
 // ---------------------------------------------------------------------------
@@ -1280,6 +1679,7 @@ int main(void)
 {
     trino_rust_main();
     // Rust returns when aptMainLoop() says stop: tear down in reverse.
+    trino_audio_exit();
     trino_worker_stop();
     ndspExit();
     C2D_Fini();

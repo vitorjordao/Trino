@@ -48,7 +48,9 @@ pub use ao::{AmbientOcclusion, AoQuality, AoTier};
 pub use asset::asset_id;
 
 pub use audio::{
-    Ambience, Audio, Listener, MusicId, SoundId, SoundParams, SoundSource, VoiceId, spatialize,
+    Ambience, Audio, AudioStats, Bus, BusMixer, BusSet, BusSettings, DuckRule, Listener,
+    MAX_DUCK_RULES, MixerConfig, MusicId, SoundBlob, SoundCodec, SoundId, SoundParams, SoundSource,
+    VoiceId, spatialize,
 };
 pub use caps::{Caps, CapsError, HwTier};
 pub use collide::{MoveResult, move_and_collide};

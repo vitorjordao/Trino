@@ -15,8 +15,12 @@
 //!   written by a Web bake when the sprite's Web format is `KTX2-ETC1S` or
 //!   `KTX2-UASTC` (`ktx2` in the index). The browser transcodes it to what
 //!   its GPU samples.
-//! - `<hash>.sound`:  magic `TSND`, u32 sample_rate, u32 frame count,
-//!   f32 mono samples.
+//! - `<hash>.sound`: a `TSN2` sound or track (`trino_core::SoundBlob`):
+//!   codec (PCM16 or Ogg Vorbis, `crate::audio`), default bus, loop and
+//!   stream flags, rate, frames, payload. (v1 `TSND` — f32 mono — still
+//!   loads.)
+//! - `<hash>.mixer`: the project's mix (`assets/audio.toml`) as `TMIX`
+//!   (`trino_core::MixerConfig`), logical path `audio/mixer`.
 //!
 //! Writes are skipped when the output bytes are unchanged, so watchers can
 //! diff by "did the file change" and reload only what moved.
@@ -50,7 +54,7 @@ impl std::error::Error for BakeError {}
 pub struct BakedEntry {
     pub logical: String,
     pub id: u32,
-    pub kind: &'static str, // "sprite" | "sound" | "music" | "model" | "font" | "blob"
+    pub kind: &'static str, // "sprite" | "sound" | "music" | "model" | "font" | "blob" | "mixer"
     pub file: String,       // output file name
     pub format: String,
     /// A sprite's 3DS preview file (PC bakes only, when its 3DS format
@@ -144,13 +148,15 @@ pub fn bake_all(
         }
     }
 
-    // Sounds and music share the blob format; the kind drives which audio
-    // registry they land in at load time.
+    // Sounds and music share the blob format (`TSN2`, `crate::audio`); the
+    // kind drives which audio registry they land in at load time. The PC
+    // and the Web get their codec; a console bake writes PCM16 of what the
+    // console will play (its own bakers make the real files in xtask).
     let audio_sections = [
-        ("sounds", "sound", &manifest.sounds),
-        ("music", "music", &manifest.music),
+        ("sounds", "sound", false, &manifest.sounds),
+        ("music", "music", true, &manifest.music),
     ];
-    for (prefix, kind, section) in audio_sections {
+    for (prefix, kind, music, section) in audio_sections {
         for (name, decl) in section {
             let logical = format!("{prefix}/{name}");
             let id = asset_id(&logical);
@@ -160,14 +166,35 @@ pub fn bake_all(
             }
             let result = (|| -> Result<BakedEntry, String> {
                 let source = resolve_source(assets_root, platform, &decl.file)?;
-                let (rate, samples) = decode_wav(&source)?;
-                let mut blob = Vec::with_capacity(12 + samples.len() * 4);
-                blob.extend_from_slice(b"TSND");
-                blob.extend_from_slice(&rate.to_le_bytes());
-                blob.extend_from_slice(&(samples.len() as u32).to_le_bytes());
-                for s in &samples {
-                    blob.extend_from_slice(&s.to_le_bytes());
-                }
+                let settings = decl
+                    .audio_settings(music, platform)
+                    .map_err(|e| format!("`{logical}`: {e}"))?;
+                let master = decode_master(&source)?;
+                let enc = crate::audio::encode(platform, &settings, &master, id)
+                    .map_err(|e| format!("`{logical}`: {e}"))?;
+                let (blob, format) = match enc.blob {
+                    Some(blob) if matches!(platform, Platform::Pc | Platform::Web) => {
+                        (blob, settings.codec.label().to_uppercase())
+                    }
+                    _ => {
+                        // N64 Opus has no host decode: the master at its rate.
+                        let played = enc.decoded.clone().unwrap_or_else(|| {
+                            crate::audio::resample(&master.samples, master.rate, enc.rate)
+                        });
+                        let pcm: Vec<u8> = crate::audio::to_pcm16(&played)
+                            .iter()
+                            .flat_map(|s| s.to_le_bytes())
+                            .collect();
+                        let blob = crate::audio::sound_blob(
+                            trino_core::SoundCodec::Pcm16,
+                            &settings,
+                            enc.rate,
+                            played.len(),
+                            &pcm,
+                        );
+                        (blob, format!("PCM16 ({})", settings.codec.label()))
+                    }
+                };
                 let file = format!("{id:08x}.sound");
                 let changed = write_if_changed(&out_dir.join(&file), &blob)?;
                 Ok(BakedEntry {
@@ -175,7 +202,7 @@ pub fn bake_all(
                     id,
                     kind,
                     file,
-                    format: "F32_MONO".into(),
+                    format,
                     preview_3ds: None,
                     compressed: None,
                     ktx2: None,
@@ -186,6 +213,40 @@ pub fn bake_all(
                 Ok(entry) => report.entries.push(entry),
                 Err(e) => errors.push(e),
             }
+        }
+    }
+
+    // The project's mix (`assets/audio.toml`) → the `audio/mixer` asset.
+    let mix_path = assets_root.join(crate::audio::MixFile::FILE);
+    if mix_path.exists() {
+        let logical = trino_core::MixerConfig::LOGICAL.to_string();
+        let id = asset_id(&logical);
+        let result = (|| -> Result<BakedEntry, String> {
+            if let Some(other) = by_id.insert(id, logical.clone()) {
+                return Err(format!("hash collision between `{other}` and `{logical}`"));
+            }
+            let text = std::fs::read_to_string(&mix_path)
+                .map_err(|e| format!("{}: {e}", mix_path.display()))?;
+            let blob = crate::audio::MixFile::parse(&text)
+                .and_then(|m| m.bake())
+                .map_err(|e| format!("{}: {e}", mix_path.display()))?;
+            let file = format!("{id:08x}.mixer");
+            let changed = write_if_changed(&out_dir.join(&file), &blob)?;
+            Ok(BakedEntry {
+                logical: logical.clone(),
+                id,
+                kind: "mixer",
+                file,
+                format: "TMIX".into(),
+                preview_3ds: None,
+                compressed: None,
+                ktx2: None,
+                changed,
+            })
+        })();
+        match result {
+            Ok(entry) => report.entries.push(entry),
+            Err(e) => errors.push(e),
         }
     }
 
@@ -527,6 +588,13 @@ pub fn decode_png(path: &Path) -> Result<(u32, u32, Vec<u8>), String> {
 }
 
 /// Decode a PCM WAV to mono f32 (stereo is averaged).
+/// A sound master (WAV, mono or stereo — stereo is averaged) as the audio
+/// bake takes it.
+pub fn decode_master(path: &Path) -> Result<crate::audio::Master, String> {
+    let (rate, samples) = decode_wav(path)?;
+    Ok(crate::audio::Master { rate, samples })
+}
+
 fn decode_wav(path: &Path) -> Result<(u32, Vec<f32>), String> {
     let mut reader =
         hound::WavReader::open(path).map_err(|e| format!("{}: {e}", path.display()))?;

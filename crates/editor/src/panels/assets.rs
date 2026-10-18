@@ -232,7 +232,7 @@ fn grid(app: &mut App, ui: &mut egui::Ui) {
                 .chain(app.project.music.iter().map(|s| (s, true)))
             {
                 tiles.push(Tile {
-                    sel: None,
+                    sel: Some(AssetSel::Audio(l.clone())),
                     payload: None,
                     name: l.rsplit('/').next().unwrap_or(l).to_string(),
                     sub: if music {
@@ -441,7 +441,8 @@ fn tile(app: &mut App, ui: &mut egui::Ui, t: &Tile, size: Vec2) {
                 AssetSel::Model(l)
                 | AssetSel::Material(l)
                 | AssetSel::Prefab(l)
-                | AssetSel::Sprite(l) => l.clone(),
+                | AssetSel::Sprite(l)
+                | AssetSel::Audio(l) => l.clone(),
                 AssetSel::Particles(n) => format!("particles/{n}"),
             };
             if ui

@@ -36,6 +36,14 @@ gilrs behind the `gamepad` feature of `trino-platform-pc` and `trino-runner-pc`;
 it links libudev (`libudev-dev`), so it is opt-in there. Keys and pad buttons can be
 rebound from the game (`Platform::rebind`).
 
+Audio goes out through cpal. Sounds are `TSN2` (Ogg Vorbis by default, decoded by lewton
+in Rust): effects decode to f32 at load, music streams — a worker thread decodes into a
+half-second lock-free ring per playback, so a 10-minute track costs its Ogg bytes plus
+~320 KB, and loops are sample-exact. Six buses (master, music, sfx, voice, ambience, ui)
+with mutes and duck rules start from the project's `assets/audio.toml`; the player's
+volumes persist per game in `<save_name>.audio` next to the save
+([ADR 0021](adr/0021-audio-pipeline.md), [ASSETS.md](ASSETS.md#audio-a-codec-per-platform-streaming-buses-adr-0021)).
+
 The editor has its own guide in the [editor](../.agents/skills/editor/SKILL.md) skill,
 including hooks that let a script or an agent screenshot the window.
 
@@ -79,6 +87,14 @@ Things to know:
   `Platform::hw_tier()` and `renderer.caps()` (`Caps::N64_EXPANDED`: 8 MB) follow; content
   takes its `n64_expanded` variants there. The ROM must still run in 4 MB. `run|test|watch
   n64 --expansion-pak on|off` sets ares's switch (`test`: also `both`, what CI runs).
+- Audio: every `wav64` streams from the cartridge (VADPCM by default, written by Trino's
+  encoder; `opus` links libopus, +99 KB, only when an asset asks for it). Call
+  `N64Audio::poll` once per frame: it mixes on the RSP while the CPU waits — ~0.5 ms per
+  60 Hz frame with nothing playing, +0.26 ms per 44.1 kHz VADPCM voice (+0.16 ms at
+  22.05 kHz), ~4.6 ms more for an Opus track (`N64_COST.audio_us`, measured in ares over
+  eight code layouts). The self-test prints them as `TRINO_AUDIO_COST:` lines, and
+  `TRINO_AUDIO:` with resident and streaming bytes and underruns (a poll that finds all
+  four 40 ms output buffers empty: the game went ~160 ms without polling).
 - Troubleshooting: the [build-n64](../.agents/skills/build-n64/SKILL.md) and
   [run-emulator](../.agents/skills/run-emulator/SKILL.md) skills.
 
@@ -127,6 +143,17 @@ Things to know:
   New 3DS (the app's whole) or core 1 on an old one (30% of it), `submit(job, arg)` queues
   an `extern "C" fn(u32)` (or runs it inline without a worker), `wait()` joins. Jobs
   compute into memory; the renderer, audio and platform stay on the main thread.
+- Audio: sounds bake to `T3AU` (DSP-ADPCM by default, decoded by the DSP at no CPU cost,
+  ~3.5× smaller than PCM16). Whole sounds load into linear memory at boot; music streams
+  from the RomFS through three 1024-frame wave buffers per playback (24 KB for ADPCM),
+  refilled by an audio thread woken by ndsp. It runs on the worker's second core (core 2
+  on a New 3DS, core 1 at 30% on an old one; one grant for both, `stream_core=` in the
+  `TRINO_AUDIO` line) one priority above the jobs, so a long job never holds a refill
+  back; without a second core, on the app core. Every buffer carries its ADPCM context, so loops and
+  chunk seams play exactly what the bake previews. On hardware, audio needs the DSP
+  firmware (`sdmc:/3ds/dspfirm.cdc`, or launch through the Homebrew Launcher); without it
+  ndsp does nothing and the log says `TRINO_AUDIO: ndsp unavailable`. Azahar runs without
+  it.
 - Troubleshooting: the [build-3ds](../.agents/skills/build-3ds/SKILL.md) and
   [run-emulator](../.agents/skills/run-emulator/SKILL.md) skills.
 
@@ -172,7 +199,14 @@ What a browser changes:
 
 - **Audio** starts suspended (every browser's autoplay rule, Safari's strictest). The
   first click, key or touch resumes it; a banner says so until then. A browser without
-  Web Audio runs silent, with voices and stingers still keeping time.
+  Web Audio runs silent, with voices and stingers still keeping time. Sounds are the PC's
+  `TSN2` (Ogg Vorbis by default) decoded by lewton in the wasm — the same samples as the
+  PC. Effects decode once into `AudioBuffer`s; music keeps only its Ogg bytes and plays
+  as 8192-sample chunks scheduled up to 1 s ahead, seamless at loops, so a stream holds
+  about 1 s of decoded audio. Each bus is a gain node into a master gain, driven per
+  frame by `BusMixer`; the player's volumes persist in `localStorage`
+  (`trino-audio:<save>`). Not an AudioWorklet (that needs a second wasm instance and a
+  `SharedArrayBuffer`): a hidden tab runs dry after 1 s, and the stats count it.
 - **Input:** the keyboard by `KeyboardEvent.code` (layout-independent) with the PC's
   bindings; game keys (arrows, Space, Tab, WASD, the bound keys) don't scroll the page,
   Ctrl/Cmd shortcuts stay the browser's. The mouse is `InputState::pointer`; **Lock
@@ -189,7 +223,8 @@ What a browser changes:
   `save_capacity() == 0`.
 - **Assets** come in one pack per game (`assets/trino.pak`, `assets/solid-eleven.pak`),
   fetched at boot. Textures are KTX2 (Basis Universal), transcoded at load to BC on
-  desktops, ETC2 or ASTC on phones, RGBA8 elsewhere; sounds are 16-bit PCM (Opus is #53).
+  desktops, ETC2 or ASTC on phones, RGBA8 elsewhere; sounds are `TSN2` (Vorbis by default)
+  and the project's mix rides along (pack TPAK v2; v1 packs still load).
 - **WebGL2's limits:** no MSAA, and wgpu's GL backend can't copy or `textureLoad` a
   depth texture, so the SSAO and the water read the depth through a nearest sampler and
   the water's depth copy is drawn (`renderer/depth_blit.rs`). The picture is the same:

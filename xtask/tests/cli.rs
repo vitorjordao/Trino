@@ -382,10 +382,12 @@ fn assets_pc_bakes_the_repo_manifest() {
         "scenes",
         "particles",
     ]) - not_pc;
-    // A font bakes twice under one handle: atlas sprite + glyph table.
+    // A font bakes twice under one handle: atlas sprite + glyph table; the
+    // project mix (`assets/audio.toml`) is one more asset, `audio/mixer`.
     let fonts = declared(&["fonts"]);
     assert!(fonts > 0);
-    assert_eq!(count, all + fonts, "every manifest entry is baked");
+    let mix = root().join("assets/audio.toml").exists() as usize;
+    assert_eq!(count, all + fonts + mix, "every manifest entry is baked");
     let index = std::fs::read_to_string(root().join("target/assets/pc/index.toml")).unwrap();
     assert_eq!(index.matches("[[asset]]").count(), count);
     let kind = |k: &str| index.matches(&format!("kind = \"{k}\"")).count();
@@ -393,6 +395,7 @@ fn assets_pc_bakes_the_repo_manifest() {
     assert_eq!(kind("sound"), declared(&["sounds"]));
     assert_eq!(kind("music"), declared(&["music"]));
     assert_eq!(kind("font"), fonts);
+    assert_eq!(kind("mixer"), mix);
     assert_eq!(kind("sprite"), declared(&["sprites"]) + fonts);
     // Baked scenes (TSCN) and particle effects (TPFX) are blobs, served
     // like any other blob.

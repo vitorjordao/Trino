@@ -33,6 +33,12 @@
 //! output divided by the pixel scale, its aspect kept within 4:3..21:9
 //! (black bars beyond: a 32:9 monitor gets side bars, never a stretched
 //! picture). The console profiles keep their fixed pictures.
+//!
+//! **Audio:** the project's mix (`assets/audio.toml`, the `audio/mixer`
+//! asset) sets each bus's starting volume and the duck rules; the player's
+//! bus volumes and mutes (`Audio::set_bus_volume`/`set_bus_muted` from the
+//! game's options) persist in `<save_name>.audio` and win over the mix.
+//! Smoke runs print a `TRINO_AUDIO:` line (memory, streams, underruns).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -94,6 +100,12 @@ impl RunConfig {
     pub fn input_file(&self) -> PathBuf {
         self.save_file().with_extension("input")
     }
+
+    /// The player's bus volumes (`<save_name>.audio`, plain text, one line
+    /// per bus: `trino_platform_pc::audio::settings_to_text`).
+    pub fn audio_file(&self) -> PathBuf {
+        self.save_file().with_extension("audio")
+    }
 }
 
 /// The window size for `settings` on a `monitor`: the saved size if it
@@ -127,7 +139,8 @@ pub fn picture_for(profile: SimProfile, output: (u32, u32), pixel_scale: u8) -> 
 }
 
 /// Upload (or re-upload, `only` = changed handles) baked assets from
-/// `baked_dir`. Sounds are resampled to the device rate.
+/// `baked_dir`. Sounds are decoded and resampled to the device rate (music
+/// that streams stays encoded); the project's mix is applied.
 pub fn upload_assets(
     baked_dir: &Path,
     renderer: &mut PcRenderer,
@@ -141,12 +154,18 @@ pub fn upload_assets(
         upload_sprite(renderer, &sprite, target);
     }
     for sound in assets.sounds {
-        let samples = resample(&sound.samples, sound.sample_rate, audio.sample_rate());
-        audio.upload_sound(trino_core::SoundId(sound.id), samples);
+        audio
+            .upload_sound_blob(trino_core::SoundId(sound.id), &sound.blob)
+            .map_err(|e| format!("`{}`: {e}", sound.logical))?;
     }
     for track in assets.music {
-        let samples = resample(&track.samples, track.sample_rate, audio.sample_rate());
-        audio.upload_music(trino_core::MusicId(track.id), samples);
+        audio
+            .upload_music_blob(trino_core::MusicId(track.id), &track.blob)
+            .map_err(|e| format!("`{}`: {e}", track.logical))?;
+    }
+    if let Some(mix) = &assets.mixer {
+        let cfg = trino_core::MixerConfig::parse(mix).map_err(|e| format!("audio/mixer: {e}"))?;
+        cfg.apply(audio);
     }
     for model in assets.models {
         renderer.upload_mesh(trino_core::ModelId(model.id), model.tmdl);
@@ -237,6 +256,43 @@ pub fn resample(samples: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
         .collect()
 }
 
+/// `TRINO_AUDIO:` — what the audio holds and does (smoke runs, #53).
+pub fn audio_line(audio: &PcAudio) -> String {
+    let s = trino_core::Audio::audio_stats(audio);
+    format!(
+        "TRINO_AUDIO: rate={} resident_bytes={} voices={} streams={} stream_bytes={} \
+         underruns={} streamed_frames={}",
+        audio.sample_rate(),
+        s.resident_bytes,
+        s.voices,
+        s.streams,
+        s.stream_bytes,
+        s.underruns,
+        s.streamed_frames
+    )
+}
+
+/// Load the player's bus volumes into `audio`; what it plays with after.
+pub fn load_audio_settings(audio: &mut PcAudio, file: &Path) -> trino_core::BusSettings {
+    if let Ok(t) = std::fs::read_to_string(file) {
+        trino_platform_pc::audio::settings_from_text(&t).apply(audio);
+    }
+    audio.bus_settings()
+}
+
+/// Persist the bus volumes when the game changed them since `saved`.
+pub fn save_audio_settings(audio: &PcAudio, file: &Path, saved: &mut trino_core::BusSettings) {
+    let now = audio.bus_settings();
+    if now == *saved {
+        return;
+    }
+    *saved = now;
+    if let Some(dir) = file.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = std::fs::write(file, trino_platform_pc::audio::settings_to_text(&now));
+}
+
 /// `TRINO_SIM`, defaulting to the N64 look.
 pub fn profile_from_env() -> SimProfile {
     std::env::var("TRINO_SIM")
@@ -282,6 +338,8 @@ struct Ctx {
     monitor: (u32, u32),
     renderer: PcRenderer,
     audio: PcAudio,
+    /// The bus volumes last written to `<save_name>.audio`.
+    audio_saved: trino_core::BusSettings,
     input: PcInput,
     platform: PcPlatform,
     game: Box<dyn Game>,
@@ -354,6 +412,7 @@ impl Host {
             None,
         )
         .unwrap_or_else(|e| panic!("failed to load baked assets: {e}"));
+        let audio_saved = load_audio_settings(&mut audio, &cfg.audio_file());
 
         #[cfg(feature = "watch")]
         let (asset_events, watcher) = {
@@ -389,6 +448,7 @@ impl Host {
             monitor,
             renderer,
             audio,
+            audio_saved,
             input,
             platform,
             game,
@@ -509,6 +569,8 @@ impl ApplicationHandler for Host {
                         Ok(()) => println!("assets reloaded: {} item(s)", changed.len()),
                         Err(e) => eprintln!("asset reload failed: {e}"),
                     }
+                    // A reloaded mix resets the buses: the player's win.
+                    ctx.audio_saved.apply(&mut ctx.audio);
                 }
                 let now = Instant::now();
                 // Clamp dt: pauses and window drags must not teleport.
@@ -522,6 +584,7 @@ impl ApplicationHandler for Host {
                     apply_display(ctx, self.profile, &self.config.display_file(), s);
                 }
                 apply_input(ctx, &self.config.input_file());
+                save_audio_settings(&ctx.audio, &self.config.audio_file(), &mut ctx.audio_saved);
 
                 self.frames += 1;
                 self.meter.record(
@@ -533,6 +596,7 @@ impl ApplicationHandler for Host {
                 {
                     println!("{}", self.meter.line(&self.config.save_name));
                     println!("{}", texture_line(&ctx.renderer));
+                    println!("{}", audio_line(&ctx.audio));
                     println!("TRINO_RUN_OK frames={}", self.frames);
                     event_loop.exit();
                     return;
@@ -565,6 +629,7 @@ mod tests {
             PathBuf::from("/p/target/save/game.display")
         );
         assert_eq!(c.input_file(), PathBuf::from("/p/target/save/game.input"));
+        assert_eq!(c.audio_file(), PathBuf::from("/p/target/save/game.audio"));
     }
 
     #[test]

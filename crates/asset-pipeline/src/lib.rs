@@ -21,6 +21,7 @@
 
 pub mod anim;
 pub mod ao;
+pub mod audio;
 pub mod bake;
 pub mod font;
 pub mod impostor;
@@ -36,8 +37,8 @@ pub mod tier;
 pub mod watch;
 
 pub use ao::{AoBake, AoDecl, bake_vertex_ao};
-pub use bake::decode_png;
 pub use bake::{BakeError, BakeReport, bake_all};
+pub use bake::{decode_master, decode_png};
 pub use font::{BakedFont, FontDecl, bake_font};
 pub use loader::{
     CompressedSprite, LoadedAssets, LoadedBlob, LoadedFont, LoadedModel, LoadedSound, LoadedSprite,

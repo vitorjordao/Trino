@@ -4,7 +4,10 @@
 // serves, runs the self-test page (`?selftest`) and waits for its verdict
 // in `globalThis.__trino` (written by trino-platform-web's glue.js), then
 // checks what only a browser can show: a save in localStorage survives a
-// reload, a click unlocks audio, keys and the mouse reach the game.
+// reload, a click unlocks audio, keys and the mouse reach the game. The
+// self-test's `audio codecs` step needs the audio context running: the
+// harness clicks the page once it is up, as a player's first click would
+// (Chromium still runs with a gesture required).
 //
 //   node run.mjs --url http://127.0.0.1:PORT/ --out target/web-test \
 //       [--browsers chromium,firefox,webkit] [--headed]
@@ -101,6 +104,15 @@ for (const run of plan) {
     // 1) The self-test.
     const first = smoke ? "?frames=120" : "?selftest";
     await page.goto(`${base}${first}&backend=${run.backend}&size=640x480`);
+    if (!smoke) {
+      // The gesture that lets audio run (`audio codecs` waits for it).
+      await page
+        .waitForFunction(() => globalThis.__trino && globalThis.__trino.info && globalThis.__trino.info.audio, null, {
+          timeout: 120000,
+        })
+        .then(() => page.mouse.click(4, 4))
+        .catch(() => {});
+    }
     await page.waitForFunction(() => globalThis.__trino && globalThis.__trino.done, null, {
       timeout: timeoutMs,
       polling: 500,
@@ -110,6 +122,9 @@ for (const run of plan) {
     r.error = state.error;
     r.steps = state.steps;
     r.info = state.info;
+    // `audio codecs` (#53): its verdict and the backend's counters.
+    r.audio_codecs = (state.steps || []).find((l) => l.startsWith("audio codecs ok") || l.startsWith("audio codecs skipped"));
+    r.audio_lines = (state.log || []).filter((l) => l.startsWith("TRINO_AUDIO:"));
     for (const [name, url] of Object.entries(state.frames || {})) {
       const png = Buffer.from(url.split(",")[1], "base64");
       fs.writeFileSync(path.join(dir, `${name}.png`), png);
@@ -187,6 +202,8 @@ for (const run of plan) {
   console.log(`[web-test] ${run.name} (${r.version || "?"}): ${verdict} in ${(r.ms / 1000).toFixed(1)} s` +
     (r.info ? ` · ${r.info.adapter || ""} · textures ${r.info.texture_target || "?"}` : "") +
     (r.error ? ` · ${r.error}` : ""));
+  if (r.audio_codecs) console.log(`[web-test] ${run.name}: ${r.audio_codecs}`);
+  for (const l of r.audio_lines || []) console.log(`[web-test] ${run.name}: ${l}`);
   results.runs.push(r);
 }
 

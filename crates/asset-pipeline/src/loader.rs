@@ -75,7 +75,32 @@ pub struct LoadedSound {
     pub logical: String,
     pub id: u32,
     pub sample_rate: u32,
-    pub samples: Vec<f32>,
+    pub frames: usize,
+    pub codec: trino_core::SoundCodec,
+    pub bus: trino_core::Bus,
+    pub looped: bool,
+    pub stream: bool,
+    /// The `TSN2` blob as baked (`trino_core::SoundBlob`; a v1 `TSND` comes
+    /// converted to PCM16). `PcAudio::upload_*_blob` takes it as is.
+    pub blob: Vec<u8>,
+}
+
+impl LoadedSound {
+    /// Mono samples at `sample_rate` (Vorbis decoded).
+    pub fn samples(&self) -> Result<Vec<f32>, String> {
+        let b = trino_core::SoundBlob::parse(&self.blob).map_err(String::from)?;
+        match b.codec {
+            trino_core::SoundCodec::Pcm16 => Ok(crate::audio::from_pcm16(
+                &b.payload
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|&c| i16::from_le_bytes(c))
+                    .collect::<Vec<_>>(),
+            )),
+            trino_core::SoundCodec::Vorbis => crate::audio::vorbis::decode(b.payload).map(|d| d.1),
+        }
+    }
 }
 
 pub struct LoadedModel {
@@ -108,6 +133,8 @@ pub struct LoadedAssets {
     pub models: Vec<LoadedModel>,
     pub fonts: Vec<LoadedFont>,
     pub blobs: Vec<LoadedBlob>,
+    /// The project's mix (`TMIX`, `trino_core::MixerConfig::parse`).
+    pub mixer: Option<Vec<u8>>,
 }
 
 /// Load every baked asset from `out_dir`. `only` filters by handle (used by
@@ -204,33 +231,35 @@ pub fn load_dir(out_dir: &Path, only: Option<&[u32]>) -> Result<LoadedAssets, St
                 });
             }
             "sound" | "music" => {
-                if bytes.len() < 12 || !bytes.starts_with(b"TSND") {
-                    return Err(format!("{}: bad sound blob", path.display()));
-                }
-                let rest = &bytes[4..];
-                let sample_rate = u32::from_le_bytes(rest[0..4].try_into().unwrap());
-                let count = u32::from_le_bytes(rest[4..8].try_into().unwrap()) as usize;
-                let data = &rest[8..];
-                if data.len() != count * 4 {
-                    return Err(format!("{}: truncated sound data", path.display()));
-                }
-                let samples = data
-                    .as_chunks::<4>()
-                    .0
-                    .iter()
-                    .map(|&c| f32::from_le_bytes(c))
-                    .collect();
+                let blob = if bytes.starts_with(b"TSND") {
+                    tsnd_to_tsn2(&bytes, entry.kind == "music")
+                        .ok_or_else(|| format!("{}: truncated sound data", path.display()))?
+                } else {
+                    bytes
+                };
+                let b = trino_core::SoundBlob::parse(&blob)
+                    .map_err(|e| format!("{}: bad sound blob ({e})", path.display()))?;
                 let loaded = LoadedSound {
                     logical: entry.logical,
                     id: entry.id,
-                    sample_rate,
-                    samples,
+                    sample_rate: b.sample_rate,
+                    frames: b.frames as usize,
+                    codec: b.codec,
+                    bus: b.bus,
+                    looped: b.looped,
+                    stream: b.stream,
+                    blob,
                 };
                 if entry.kind == "music" {
                     out.music.push(loaded);
                 } else {
                     out.sounds.push(loaded);
                 }
+            }
+            "mixer" => {
+                trino_core::MixerConfig::parse(&bytes)
+                    .map_err(|e| format!("{}: {e}", path.display()))?;
+                out.mixer = Some(bytes);
             }
             "model" => {
                 if !bytes.starts_with(b"TMDL") {
@@ -261,4 +290,40 @@ pub fn load_dir(out_dir: &Path, only: Option<&[u32]>) -> Result<LoadedAssets, St
         }
     }
     Ok(out)
+}
+
+/// A v1 `TSND` (f32 mono, no flags) as a PCM16 `TSN2` with the kind's
+/// defaults: music loops and streams on the music bus.
+fn tsnd_to_tsn2(bytes: &[u8], music: bool) -> Option<Vec<u8>> {
+    let rest = bytes.get(4..12)?;
+    let rate = u32::from_le_bytes(rest[0..4].try_into().ok()?);
+    let count = u32::from_le_bytes(rest[4..8].try_into().ok()?) as usize;
+    let data = bytes.get(12..)?;
+    if data.len() != count * 4 {
+        return None;
+    }
+    let pcm: Vec<u8> = data
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|&c| f32::from_le_bytes(c))
+        .flat_map(|s| ((s * 32767.0).round().clamp(-32768.0, 32767.0) as i16).to_le_bytes())
+        .collect();
+    let header = trino_core::SoundBlob {
+        codec: trino_core::SoundCodec::Pcm16,
+        bus: if music {
+            trino_core::Bus::Music
+        } else {
+            trino_core::Bus::Sfx
+        },
+        looped: music,
+        stream: false,
+        sample_rate: rate,
+        frames: count as u32,
+        payload: &pcm,
+    }
+    .header();
+    let mut out = header.to_vec();
+    out.extend_from_slice(&pcm);
+    Some(out)
 }

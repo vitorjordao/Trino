@@ -12,10 +12,12 @@ use std::time::Instant;
 
 use trino_core::{
     BindDevice, BlobId, Button, Caps, DisplayInfo, DisplaySettings, GroupId, GroupTable, InputInfo,
-    LoadState, MemoryReport, Platform, SaveError,
+    LoadState, MemoryReport, Platform, PresetTable, QualityInfo, QualityPreset, QualitySettings,
+    SaveError,
 };
 
 use crate::input::{BINDABLE, BINDINGS, InputRequest, PcInput};
+use crate::quality::{HostedQuality, QualityRequest};
 
 pub struct PcPlatform {
     start: Instant,
@@ -40,6 +42,10 @@ pub struct PcPlatform {
     input_request: Option<InputRequest>,
     /// The simulated console's hardware tier ([`Platform::hw_tier`]).
     hw_tier: trino_core::HwTier,
+    /// The quality ([`Platform::quality`] and its siblings): the console's
+    /// fixed preset on a simulated console, High on the PC until a host
+    /// publishes its own.
+    quality: HostedQuality,
     /// The asset groups the bake holds and where each one is (issue #56):
     /// the game asks here, the host's loader (`trino_runner_pc::GroupLoader`)
     /// serves it every frame.
@@ -71,6 +77,7 @@ impl PcPlatform {
             labels: Default::default(),
             input_request: None,
             hw_tier: caps.hw_tier,
+            quality: HostedQuality::new(caps),
             groups: GroupTable::new(),
             group_blobs: HashMap::new(),
             memory: MemoryReport {
@@ -134,6 +141,24 @@ impl PcPlatform {
     /// The host says the renderer has a second screen (3DS profile).
     pub fn set_second_screen(&mut self, size: Option<(u16, u16)>) {
         self.second_screen = size;
+    }
+
+    /// The host publishes the quality in effect and how it got there
+    /// (`None`: fixed, the game's requests are dropped).
+    pub fn set_quality_info(&mut self, info: Option<QualityInfo>) {
+        self.quality.publish(info);
+    }
+
+    /// The project's presets (`assets/quality.ron`, baked to
+    /// `quality/presets`).
+    pub fn set_quality_presets(&mut self, table: PresetTable) {
+        self.quality.set_presets(table);
+    }
+
+    /// The game's last quality request, for the host to apply after the
+    /// frame.
+    pub fn take_quality_request(&mut self) -> Option<QualityRequest> {
+        self.quality.take_request()
     }
 
     /// The host publishes the display state (window, monitor, picture).
@@ -277,6 +302,26 @@ impl Platform for PcPlatform {
         }
     }
 
+    fn quality(&self) -> QualitySettings {
+        self.quality.settings()
+    }
+
+    fn set_quality(&mut self, settings: QualitySettings) {
+        self.quality.request(settings);
+    }
+
+    fn quality_preset(&self, preset: QualityPreset) -> Option<QualitySettings> {
+        self.quality.preset(preset)
+    }
+
+    fn quality_info(&self) -> Option<QualityInfo> {
+        self.quality.info()
+    }
+
+    fn detect_quality(&mut self) {
+        self.quality.detect();
+    }
+
     fn input_info(&self) -> Option<InputInfo> {
         self.input
     }
@@ -386,6 +431,53 @@ mod tests {
         p.set_display(s);
         assert_eq!(p.take_display_request(), Some(s));
         assert_eq!(p.take_display_request(), None);
+    }
+
+    #[test]
+    fn quality_is_fixed_until_a_host_publishes_it() {
+        use trino_core::{GpuClass, QualitySource};
+        // A simulated console: its fixed preset, requests dropped.
+        let mut n64 = PcPlatform::new(&Caps::N64);
+        assert_eq!(n64.quality(), QualitySettings::fixed(QualityPreset::Low));
+        let n3ds = PcPlatform::new(&Caps::N3DS_NEW);
+        assert_eq!(n3ds.quality().preset, QualityPreset::Medium);
+        n64.set_quality(QualitySettings::ULTRA);
+        n64.detect_quality();
+        assert_eq!(n64.take_quality_request(), None);
+        assert_eq!(n64.quality_preset(QualityPreset::Low), None);
+        assert_eq!(n64.quality_info(), None);
+        // The PC: High until its host publishes, then requests go through.
+        let mut pc = PcPlatform::new(&Caps::PC);
+        assert_eq!(pc.quality(), QualitySettings::HIGH);
+        let table = PresetTable::parse("[low]\nrender_scale=0.6\n");
+        pc.set_quality_presets(table);
+        pc.set_quality_info(Some(QualityInfo {
+            settings: QualitySettings::MEDIUM,
+            scale: 0.9,
+            detected: Some(QualityPreset::Medium),
+            source: QualitySource::Detected,
+            gpu: GpuClass::Integrated,
+            handheld: false,
+            gpu_us: 12_000,
+        }));
+        assert_eq!(pc.quality(), QualitySettings::MEDIUM);
+        assert_eq!(pc.quality_info().unwrap().scale, 0.9);
+        assert_eq!(
+            pc.quality_preset(QualityPreset::Low).unwrap().render_scale,
+            0.6
+        );
+        assert_eq!(pc.quality_preset(QualityPreset::Custom), None);
+        pc.set_quality(QualitySettings {
+            render_scale: 7.0,
+            ..QualitySettings::LOW
+        });
+        let Some(QualityRequest::Set(q)) = pc.take_quality_request() else {
+            panic!("no request");
+        };
+        assert_eq!(q.render_scale, 2.0, "requests are clamped");
+        pc.detect_quality();
+        assert_eq!(pc.take_quality_request(), Some(QualityRequest::Detect));
+        assert_eq!(pc.take_quality_request(), None);
     }
 
     #[test]

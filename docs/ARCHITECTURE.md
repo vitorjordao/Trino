@@ -168,6 +168,23 @@ the browser goldens (`tests/golden/web/`) hold all three engines and the PC rend
 (`xtask/tests/web_parity.rs`) to one picture. Details in
 [ADR 0019](adr/0019-web-target.md) and [PLATFORMS.md](PLATFORMS.md#web-webgpu--webgl2).
 
+### Quality presets on the PC and the Web (issue #55)
+
+The consoles have one hardware table each; a PC or a browser can be anything from a
+phone to a desktop GPU. `trino_core::quality` (`no_std`, zero deps) names the settings a
+host may change — render scale, dynamic resolution, MSAA, an AO cap, LOD bias, particle
+scale, anisotropy, sharpening, the frame limit — and four presets (Low, Medium, High,
+Ultra). A game asks through five default `Platform` methods, so the consoles keep their
+fixed quality and the N64 ceiling is untouched. The shared renderer
+(`crates/render-wgpu`) applies them: the 3D at the render scale in its own targets,
+upscaled and sharpened under a HUD drawn at the output resolution; a PI controller that
+moves the scale to hold a frame-time target; a present mode and limiter per frame cap;
+and a calibration bench that times each preset on a built-in scene to pick the first
+launch's. `HostedQuality` is the host side both `PcPlatform` and `WebPlatform` use — the
+start order (forced, saved, the machine, the project default) and the player's file.
+High is the frame the PC always drew. Details in [ADR 0023](adr/0023-quality-presets.md)
+and [PLATFORMS.md](PLATFORMS.md#quality-presets).
+
 ### 2D in the same pipeline
 
 2D is not a separate engine path. The same `Renderer` draws it in the same frame as the

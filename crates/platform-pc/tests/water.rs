@@ -11,8 +11,8 @@ use std::path::PathBuf;
 use trino_asset_pipeline::{Pivot, Primitive, Shape};
 use trino_core::render3d::{Camera3, Light};
 use trino_core::{
-    Color, DetailTexture, Material, ModelId, ModelParams, Renderer, Ripple, Shading, SpriteId,
-    Transform3, Vec2, Vec3, Water,
+    Color, DetailTexture, DynRes, Material, ModelId, ModelParams, QualitySettings, Renderer,
+    Ripple, Shading, SpriteId, Transform3, Vec2, Vec3, Water,
 };
 use trino_platform_pc::{PcRenderer, SimProfile};
 
@@ -488,6 +488,44 @@ fn msaa_frames_draw_the_same_water() {
     // Off again: the single-sampled frame comes back exactly.
     r.set_msaa(false);
     assert!(frame(&mut r, Some((0.5, &[RIPPLE])), &calm) == single);
+}
+
+#[test]
+fn dynamic_resolutions_corner_draws_the_same_water() {
+    let _gpu = gpu();
+    let Some(mut r) = headless(SimProfile::Native) else {
+        return;
+    };
+    setup(&mut r);
+    // The per-pixel water's depth copy, single- and multisampled, in
+    // targets kept for a range up to 1 (drawn at 0.6) and in targets of
+    // their own at 0.6.
+    for msaa in [1u8, 4] {
+        let at = |dynres: bool| QualitySettings {
+            render_scale: 0.6,
+            msaa,
+            dynamic_resolution: dynres.then_some(DynRes {
+                target_us: 10_000_000,
+                min_scale: 0.5,
+                max_scale: 1.0,
+            }),
+            ..QualitySettings::HIGH
+        };
+        r.apply_quality(&at(true));
+        r.set_render_scale(0.6);
+        assert_ne!(r.scene_size(), r.scene_extent());
+        let corner = frame(&mut r, Some((0.5, &[RIPPLE])), &water_params());
+        r.apply_quality(&at(false));
+        assert_eq!(r.scene_size(), r.scene_extent());
+        let own = frame(&mut r, Some((0.5, &[RIPPLE])), &water_params());
+        shots(&r, &format!("water_dynres_msaa{msaa}"), &corner);
+        let far = corner
+            .iter()
+            .zip(&own)
+            .filter(|(a, b)| a.abs_diff(**b) > 1)
+            .count();
+        assert_eq!(far, 0, "MSAA {msaa}x");
+    }
 }
 
 #[test]

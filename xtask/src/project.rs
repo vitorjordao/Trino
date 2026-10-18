@@ -209,7 +209,24 @@ struct ProjectSection {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PcSection {
-    package: String,
+    #[serde(default)]
+    package: Option<String>,
+    /// `[pc.quality]` (issue #55): validated by
+    /// `trino_asset_pipeline::quality::ProjectQuality`, which the bake, the
+    /// PC host and `xtask quality` read.
+    #[serde(default)]
+    #[allow(dead_code)]
+    quality: Option<PcQuality>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+#[allow(dead_code)]
+struct PcQuality {
+    #[serde(default)]
+    default: Option<String>,
+    #[serde(default)]
+    presets: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -359,6 +376,7 @@ impl Project {
 
     fn parse(text: &str, root: PathBuf, engine: PathBuf) -> Result<Self, String> {
         let f: File = toml::from_str(text).map_err(|e| e.to_string())?;
+        trino_asset_pipeline::quality::ProjectQuality::parse(text)?;
         if f.project.name.is_empty()
             || !f
                 .project
@@ -422,7 +440,7 @@ impl Project {
             engine,
             pc_package: f
                 .pc
-                .map(|pc| pc.package)
+                .and_then(|pc| pc.package)
                 .unwrap_or_else(|| format!("{}-pc", f.project.name)),
             name: f.project.name,
             title: f.project.title,
@@ -601,6 +619,27 @@ watch = ["game"]
         let p = Project::parse(&with, "/g".into(), "/e".into()).unwrap();
         if std::env::var("TRINO_NIGHTLY").is_err() {
             assert_eq!(p.nightly, "nightly-2026-05-06");
+        }
+    }
+
+    #[test]
+    fn the_pc_section_takes_a_quality_table() {
+        let with = format!(
+            "{SAMPLE}\n[pc]\npackage = \"desk\"\n\n[pc.quality]\ndefault = \"medium\"\n\
+             presets = \"assets/quality.ron\"\n"
+        );
+        let p = Project::parse(&with, "/g".into(), "/e".into()).unwrap();
+        assert_eq!(p.pc_package, "desk");
+        // Only the quality: the package keeps its default.
+        let only = format!("{SAMPLE}\n[pc.quality]\ndefault = \"auto\"\n");
+        let p = Project::parse(&only, "/g".into(), "/e".into()).unwrap();
+        assert_eq!(p.pc_package, "my-game-pc");
+        for bad in ["default = \"epic\"", "level = 2"] {
+            let text = format!("{SAMPLE}\n[pc.quality]\n{bad}\n");
+            assert!(
+                Project::parse(&text, "/g".into(), "/e".into()).is_err(),
+                "{bad}"
+            );
         }
     }
 

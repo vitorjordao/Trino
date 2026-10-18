@@ -931,6 +931,7 @@ fn boot_test(p: &Project, bless: bool, pak: bool) -> ExitCode {
     let mut frame_lines = Vec::new();
     let mut hw_line = None;
     let mut tier_step = None;
+    let mut quality_step = None;
     let verdict = loop {
         if let Some(why) = watchdog.expired(Instant::now()) {
             break Err(why);
@@ -966,6 +967,9 @@ fn boot_test(p: &Project, bless: bool, pak: bool) -> ExitCode {
                 if line.contains("TRINO_STEP:hw tier ") {
                     tier_step = Some(line.clone());
                 }
+                if line.contains("TRINO_STEP:quality ") {
+                    quality_step = Some(line.clone());
+                }
                 if line.contains("TRINO_TEST_PASS") {
                     break Ok(());
                 }
@@ -996,6 +1000,10 @@ fn boot_test(p: &Project, bless: bool, pak: bool) -> ExitCode {
         if p.is_engine {
             let data = crate::hwtier::check_data(hw_line.as_deref(), tier_step.as_deref())?;
             println!("[n64] tier data: {data}");
+            // A console's quality preset is fixed: Low with or without the
+            // Pak (issue #55).
+            let q = crate::hwtier::check_quality(quality_step.as_deref(), "low")?;
+            println!("[n64] quality: {q}");
         }
         Ok(())
     });

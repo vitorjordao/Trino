@@ -182,7 +182,8 @@ impl ScenePlayer {
             if !trino_core::vis::in_view(item.cell, visible) {
                 continue;
             }
-            if let Some(id) = item.model_from(camera.eye) {
+            // The quality preset's LOD bias (#55) moves the LOD starts.
+            if let Some(id) = item.lod_from_biased(camera.eye, r.lod_bias()).model() {
                 r.draw_model_matrix(id, &item.matrix, Material::VertexLit, &item.params);
             }
         }

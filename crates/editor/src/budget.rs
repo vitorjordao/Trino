@@ -357,6 +357,23 @@ pub fn web_measured_line(
     )
 }
 
+/// The PC's and the Web's quality line (issue #55): the preset the Game
+/// view draws with, the 3D's live scale (dynamic resolution moves it), MSAA
+/// and the AO cap.
+pub fn quality_line(q: &trino_core::QualitySettings, scale: f32) -> String {
+    let dynres = match q.dynamic_resolution {
+        Some(d) => format!(" (dynres {:.2}-{:.2})", d.min_scale, d.max_scale),
+        None => String::new(),
+    };
+    format!(
+        "Quality {} · 3D {:.2}×{dynres} · MSAA {} · AO {}",
+        q.preset.label(),
+        scale,
+        if q.msaa > 1 { "4×" } else { "off" },
+        q.ao.key()
+    )
+}
+
 /// The HUD's assets RAM line (issue #56, ADR 0022 §6): what `loaded` (a
 /// scene's groups) holds of the RAM `plan`'s tier leaves for assets, as the
 /// Memory tab's bar says it: `N64 assets 289 KB / 1.8 MB RAM (15%)` (`label`:
@@ -401,6 +418,17 @@ pub const HUD_MIN_WIDTH: f32 = 210.0;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_quality_line_shows_the_preset_and_the_live_scale() {
+        let low = super::quality_line(&trino_core::QualitySettings::LOW, 0.8125);
+        assert_eq!(
+            low,
+            "Quality Low · 3D 0.81× (dynres 0.50-1.00) · MSAA off · AO off"
+        );
+        let high = super::quality_line(&trino_core::QualitySettings::HIGH, 1.0);
+        assert_eq!(high, "Quality High · 3D 1.00× · MSAA 4× · AO high");
+    }
+
     #[test]
     fn the_web_line_reads_the_renderers_counters() {
         let times = trino_platform_pc::PcFrameTimes {

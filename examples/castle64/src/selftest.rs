@@ -11,8 +11,9 @@ use trino_core::math3d::{cos, sin};
 use trino_core::{
     BakedScene, BillboardParams, BlobId, Camera3, Cells, Color, DEFAULT_LIGHT, DetailTexture,
     Effect, Emitter, EntityStore, FontId, Impostor, InputState, Instance, Light, LocalLight,
-    Material, ModelId, ModelParams, Palette, ParticleSystem, Platform, Rect, Renderer, Screen,
-    Shading, SpriteId, SpriteParams, TexFilter, TextBuf, TextParams, Transform3, Vec2, Vec3,
+    Material, ModelId, ModelParams, Palette, ParticleSystem, Platform, QualityPreset,
+    QualitySettings, Rect, Renderer, Screen, Shading, SpriteId, SpriteParams, TexFilter, TextBuf,
+    TextParams, Transform3, Vec2, Vec3,
 };
 
 /// The HUD font (also what the checks measure).
@@ -100,6 +101,9 @@ pub fn engine_checks(
     platform.log("TRINO_STEP:hw tier\n");
     let tier = hw_tier(renderer, platform)?;
     log_tier(platform, &tier);
+    platform.log("TRINO_STEP:quality\n");
+    let q = quality(renderer, platform)?;
+    log_quality(platform, &q);
     platform.log("TRINO_STEP:engine ok\n");
     Ok(())
 }
@@ -2045,6 +2049,95 @@ pub fn log_tier(platform: &mut dyn Platform, t: &TierReport) {
             t.cpu_cores,
             t.data.key(),
             t.sparks
+        ),
+    );
+    platform.log(line.as_str());
+}
+
+/// What [`quality`] found (issue #55).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct QualityReport {
+    pub preset: QualityPreset,
+    /// The console's own preset: no host reports one
+    /// ([`Platform::quality_info`] is `None`).
+    pub fixed: bool,
+    /// [`Renderer::lod_bias`] × 100.
+    pub lod_pct: u16,
+    /// The sparks' cap after the quality's particle scale.
+    pub particles: usize,
+}
+
+/// The quality preset (issue #55). A console's is fixed and scales nothing:
+/// `Low` on the N64 (with or without the Expansion Pak) and the 3DS,
+/// `Medium` on the New 3DS ([`QualitySettings::console`]); `set_quality`
+/// changes nothing, no preset table is offered, the renderer's LOD bias is
+/// 1 and the particle caps stay the baked ones. A host that manages the
+/// quality (the PC's native profile, the Web) reports it and offers its
+/// presets; its renderer applies the LOD bias, its particle scale holds.
+pub fn quality(
+    renderer: &mut dyn Renderer,
+    platform: &mut dyn Platform,
+) -> Result<QualityReport, &'static str> {
+    let q = platform.quality();
+    if q.clamped() != q {
+        return Err("quality: settings out of their ranges");
+    }
+    let bytes = platform
+        .blob(SPARKS)
+        .ok_or("quality: effect blob missing")?;
+    let fx = Effect::parse(bytes).map_err(|_| "quality: effect does not parse")?;
+    let mut sparks: ParticleSystem<32> = ParticleSystem::from_effect(&fx, 3);
+    sparks.scale_limit(q.particle_scale);
+    sparks.burst(100);
+    if sparks.len() != q.particle_cap(fx.max as usize).min(32) {
+        return Err("quality: the particle scale does not hold");
+    }
+    let fixed = platform.quality_info().is_none();
+    let bias = renderer.lod_bias();
+    if fixed {
+        if q != QualitySettings::console(renderer.caps()) {
+            return Err("quality: not the console's fixed preset");
+        }
+        if q.render_scale != 1.0 || q.dynamic_resolution.is_some() || q.particle_scale != 1.0 {
+            return Err("quality: a console's preset scales something");
+        }
+        platform.set_quality(QualitySettings::ULTRA);
+        if platform.quality() != q {
+            return Err("quality: set_quality changed a console's preset");
+        }
+        if platform.quality_preset(QualityPreset::Low).is_some() {
+            return Err("quality: a console offers presets");
+        }
+        if bias != 1.0 {
+            return Err("quality: a console's renderer biases its LODs");
+        }
+    } else {
+        if platform.quality_preset(QualityPreset::Low).is_none() {
+            return Err("quality: the host offers no presets");
+        }
+        if (bias - q.lod_bias).abs() > 1e-3 {
+            return Err("quality: the renderer's LOD bias is not the quality's");
+        }
+    }
+    Ok(QualityReport {
+        preset: q.preset,
+        fixed,
+        lod_pct: (bias * 100.0 + 0.5) as u16,
+        particles: sparks.len(),
+    })
+}
+
+/// `TRINO_STEP:quality low fixed lod=100 particles=4`.
+pub fn log_quality(platform: &mut dyn Platform, q: &QualityReport) {
+    let mut line: TextBuf<96> = TextBuf::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut line,
+        format_args!(
+            "TRINO_STEP:quality {} {} lod={} particles={}\n",
+            q.preset.key(),
+            if q.fixed { "fixed" } else { "hosted" },
+            q.lod_pct,
+            q.particles
         ),
     );
     platform.log(line.as_str());

@@ -21,6 +21,8 @@
 //!   loads.)
 //! - `<hash>.mixer`: the project's mix (`assets/audio.toml`) as `TMIX`
 //!   (`trino_core::MixerConfig`), logical path `audio/mixer`.
+//! - `<hash>.blob`, logical path `quality/presets` (PC and Web): the
+//!   project's quality presets (`crate::quality`), `key=value` text.
 //!
 //! Writes are skipped when the output bytes are unchanged, so watchers can
 //! diff by "did the file change" and reload only what moved.
@@ -251,6 +253,43 @@ pub fn bake_all(
         })();
         match result {
             Ok(entry) => report.entries.push(entry),
+            Err(e) => errors.push(e),
+        }
+    }
+
+    // The project's quality presets (`[pc.quality]`, `assets/quality.ron`)
+    // → the `quality/presets` blob, for the PC and the Web (the consoles'
+    // presets are fixed). Nothing to carry when the project changes none.
+    if matches!(platform, Platform::Pc | Platform::Web) {
+        let root = assets_root.parent().unwrap_or(assets_root);
+        let result = crate::quality::ProjectQuality::load(root).and_then(|q| {
+            if !root.join(&q.presets).exists() && q.default == "auto" {
+                return Ok(None);
+            }
+            let logical = crate::quality::LOGICAL.to_string();
+            let id = asset_id(&logical);
+            if let Some(other) = by_id.insert(id, logical.clone()) {
+                return Err(format!("hash collision between `{other}` and `{logical}`"));
+            }
+            let blob = q.bake(root)?;
+            let file = format!("{id:08x}.blob");
+            let changed = write_if_changed(&out_dir.join(&file), &blob)?;
+            Ok(Some(BakedEntry {
+                logical,
+                id,
+                kind: "blob",
+                file,
+                format: "TEXT".into(),
+                preview_3ds: None,
+                compressed: None,
+                ktx2: None,
+                changed,
+                groups: Vec::new(),
+            }))
+        });
+        match result {
+            Ok(Some(entry)) => report.entries.push(entry),
+            Ok(None) => {}
             Err(e) => errors.push(e),
         }
     }

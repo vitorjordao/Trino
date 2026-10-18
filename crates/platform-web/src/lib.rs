@@ -24,6 +24,13 @@
 //!   player's bus volumes persist in `localStorage`. Browsers start audio
 //!   suspended: the first click, key or touch resumes it, and a banner says
 //!   so until then.
+//! - **Quality (#55):** the PC's presets on the Web: `?quality=` forces
+//!   one, else the player's choice (`localStorage`), else a phone's or a
+//!   tablet's browser gets the project's Low ([`device`]) and a desktop's
+//!   the project's default — `auto`, a calibration of at most 2 s drawn
+//!   over the first animation frames. The render scale, dynamic
+//!   resolution (on the frame intervals), MSAA, AO and the frame cap (an
+//!   animation frame skipped) apply as on the PC.
 //! - **Assets:** one pack per game ([`pack`]), fetched at boot; KTX2
 //!   textures are transcoded by Binomial's transcoder to BC, ETC2, ASTC or
 //!   RGBA8, whichever the GPU samples. Asset groups besides `boot`
@@ -31,10 +38,11 @@
 //!   loads them and decoded a slice per frame ([`WebHost::pump_groups`]).
 //!
 //! Off wasm32 only the browser-free parts build ([`keys`], [`pack`],
-//! [`b64`], [`sound`]): the host tests run them, and `cargo xtask build
+//! [`b64`], [`sound`], [`device`]): the host tests run them, and `cargo xtask build
 //! web` writes packs with [`pack::write`].
 
 pub mod b64;
+pub mod device;
 pub mod keys;
 pub mod pack;
 pub mod sound;
@@ -52,6 +60,8 @@ pub mod js;
 #[cfg(target_arch = "wasm32")]
 mod platform;
 #[cfg(target_arch = "wasm32")]
+mod quality;
+#[cfg(target_arch = "wasm32")]
 mod runtime;
 
 #[cfg(target_arch = "wasm32")]
@@ -62,6 +72,8 @@ pub use audio::WebAudio;
 pub use input::WebInput;
 #[cfg(target_arch = "wasm32")]
 pub use platform::WebPlatform;
+#[cfg(target_arch = "wasm32")]
+pub use quality::{BENCH_BUDGET, BENCH_TARGET_US};
 #[cfg(target_arch = "wasm32")]
 pub use runtime::{
     Flow, Query, WebConfig, WebHost, fail, fetch, install_panic_hook, run, run_game,

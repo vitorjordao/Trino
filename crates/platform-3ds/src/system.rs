@@ -94,6 +94,13 @@ impl Platform for N3dsPlatform {
         runtime::hw_tier()
     }
 
+    /// The 3DS's fixed preset (issue #55): `Low`, `Medium` on a New 3DS
+    /// with the speedup, nothing scaled. `set_quality` stays the trait's
+    /// no-op.
+    fn quality(&self) -> trino_core::QualitySettings {
+        trino_core::QualitySettings::console(&trino_core::Caps::N3DS.with_tier(runtime::hw_tier()))
+    }
+
     fn second_screen(&self) -> Option<(u16, u16)> {
         Some((320, 240))
     }

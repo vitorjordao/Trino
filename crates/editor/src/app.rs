@@ -39,6 +39,8 @@ pub enum Tab {
     Assets,
     /// The project mix (`assets/audio.toml`, issue #53).
     Mixer,
+    /// The quality presets (`assets/quality.ron`, issue #55).
+    Quality,
     /// What the assets take of each console's RAM, by group (issue #56).
     Memory,
     Console,
@@ -55,6 +57,7 @@ impl Tab {
             Tab::Inspector => (icon::SLIDERS_HORIZONTAL, "Inspector"),
             Tab::Assets => (icon::FOLDER_OPEN, "Assets"),
             Tab::Mixer => (icon::FADERS_HORIZONTAL, "Mixer"),
+            Tab::Quality => (icon::SPEEDOMETER, "Quality"),
             Tab::Memory => (icon::MEMORY, "Memory"),
             Tab::Console => (icon::TERMINAL, "Console"),
         };
@@ -296,6 +299,8 @@ pub struct App {
     pub audio: crate::audio::AudioView,
     /// The project mix the Mixer tab edits (`assets/audio.toml`).
     pub mixer: crate::audio::MixState,
+    /// The quality presets the Quality tab edits (`assets/quality.ron`).
+    pub quality: crate::quality::QualityState,
     /// The scene's frame from its camera on every target (variants, LOD and
     /// impostors applied; `budget::BUDGET_TARGETS`), with the content key
     /// it is for.
@@ -454,6 +459,24 @@ impl App {
             .unwrap_or((SimProfile::N64, trino_core::HwTier::Base));
         let mut game_view = Viewport::new(render_state.clone(), ViewKind::Game, game_profile);
         game_view.set_tier(game_tier);
+        // Dev hook: TRINO_EDITOR_QUALITY=low|medium|high|ultra[,dynres|,fixed]
+        // picks the preset the Game view's PC and Web profiles draw with
+        // (dynamic resolution as the preset says, else as given).
+        if let Ok(v) = std::env::var("TRINO_EDITOR_QUALITY") {
+            let (preset, mode) = v.split_once(',').unwrap_or((v.as_str(), ""));
+            if let Some(p) = trino_core::QualityPreset::parse(preset)
+                .filter(|p| *p != trino_core::QualityPreset::Custom)
+            {
+                game_view.quality = p;
+                game_view.dynres = match mode {
+                    "dynres" => true,
+                    "fixed" => false,
+                    _ => trino_core::QualitySettings::preset(p)
+                        .dynamic_resolution
+                        .is_some(),
+                };
+            }
+        }
         // Dev hook: TRINO_EDITOR_AO=game|on|off|mask, the Scene view's
         // ambient occlusion mode.
         if let Some(view) = std::env::var("TRINO_EDITOR_AO")
@@ -584,9 +607,11 @@ impl App {
             show_shortcuts: false,
             // Built on the first frame, when the window size is known.
             dock: None,
-            // `TRINO_EDITOR_TAB=mixer|memory` brings that bottom tab to front.
+            // `TRINO_EDITOR_TAB=mixer|quality|memory` brings that bottom tab
+            // to front.
             focus_tab: match std::env::var("TRINO_EDITOR_TAB").as_deref() {
                 Ok("mixer") => Some(Tab::Mixer),
+                Ok("quality") => Some(Tab::Quality),
                 Ok("memory") => Some(Tab::Memory),
                 _ => None,
             },
@@ -649,6 +674,7 @@ impl App {
                 },
             ),
             mixer: crate::audio::MixState::load(&root.join("assets")),
+            quality: crate::quality::QualityState::load(&root),
             render_state,
         }
     }
@@ -672,6 +698,7 @@ impl App {
             tmem: Some(&self.project.tmem),
             water: (self.water_time(), self.ripples.as_slice()),
             audio: self.audio.totals.as_ref().map(|(_, t)| t),
+            quality: Some(&self.quality.table),
             memory: self.groups.ready_plans(),
         }
     }
@@ -847,6 +874,20 @@ impl App {
                     self.mixer.apply(&mut player.audio);
                 }
                 match &self.mixer.error {
+                    Some(e) => self.log.toast(Level::Error, e.clone()),
+                    None => self.log.toast(
+                        Level::Ok,
+                        format!("{} {} reloaded", icon::ARROWS_CLOCKWISE, p.display()),
+                    ),
+                }
+            } else if p == self.quality.path(&self.project.root) {
+                // The quality presets, edited outside (`cargo xtask quality
+                // set`, an agent, a text editor).
+                if text.is_none() && !self.quality.exists {
+                    continue;
+                }
+                self.quality.reload(text.as_deref());
+                match &self.quality.error {
                     Some(e) => self.log.toast(Level::Error, e.clone()),
                     None => self.log.toast(
                         Level::Ok,
@@ -1619,6 +1660,22 @@ impl App {
                 Err(e) => self.mixer.error = Some(e),
             }
         }
+        if std::mem::take(&mut self.quality.dirty) {
+            match self.quality.to_text() {
+                Ok(text) => {
+                    let path = self.quality.path(&self.project.root);
+                    match self.write_echo(path, text) {
+                        Ok(()) => {
+                            self.quality.exists = true;
+                            self.quality.error = None;
+                        }
+                        Err(e) => self.log.toast(Level::Error, e),
+                    }
+                }
+                // Shown in the Quality tab; the file keeps the last good table.
+                Err(e) => self.quality.error = Some(e),
+            }
+        }
         let effects: Vec<String> = self.pending_particles.drain().collect();
         for name in effects {
             if let Some(def) = self.particles.get(&name).cloned() {
@@ -2263,6 +2320,7 @@ impl App {
             (Tab::Level, "Level"),
             (Tab::Assets, "Assets"),
             (Tab::Mixer, "Mixer"),
+            (Tab::Quality, "Quality"),
             (Tab::Memory, "Memory"),
             (Tab::Console, "Console"),
         ] {
@@ -2584,6 +2642,10 @@ impl App {
             .env("TRINO_SIM", self.game_view.profile_key());
         if scene {
             cmd.env("TRINO_SCENE", &self.doc.path);
+        }
+        // The PC runs at the preset the Game view previews (#55).
+        if self.game_view.profile == SimProfile::Native {
+            cmd.env("TRINO_QUALITY", self.game_view.quality.key());
         }
         match cmd.spawn() {
             Ok(child) => {
@@ -3204,7 +3266,13 @@ fn default_dock(width: f32) -> egui_dock::DockState<Tab> {
     let [_, _bottom] = surface.split_below(
         center,
         0.70,
-        vec![Tab::Assets, Tab::Mixer, Tab::Memory, Tab::Console],
+        vec![
+            Tab::Assets,
+            Tab::Mixer,
+            Tab::Quality,
+            Tab::Memory,
+            Tab::Console,
+        ],
     );
     dock
 }
@@ -3240,6 +3308,7 @@ impl egui_dock::TabViewer for TabView<'_> {
             | Tab::Console
             | Tab::Assets
             | Tab::Mixer
+            | Tab::Quality
             | Tab::Memory
             | Tab::Level
             | Tab::Animation => [false, false],
@@ -3287,8 +3356,14 @@ impl egui_dock::TabViewer for TabView<'_> {
                     tmem: Some(&app.project.tmem),
                     water: (app.water_time(), app.ripples.as_slice()),
                     audio: app.audio.totals.as_ref().map(|(_, t)| t),
+                    quality: Some(&app.quality.table),
                     memory: app.groups.ready_plans(),
                 };
+                if kind == ViewKind::Game {
+                    // The previewed preset, as the Quality tab defines it.
+                    let q = app.quality.get(app.game_view.quality);
+                    app.game_view.preview_quality(q);
+                }
                 let view = if kind == ViewKind::Scene {
                     &mut app.scene_view
                 } else {
@@ -3350,6 +3425,7 @@ impl egui_dock::TabViewer for TabView<'_> {
             Tab::Inspector => crate::panels::inspector::ui(app, ui),
             Tab::Assets => crate::panels::assets::ui(app, ui),
             Tab::Mixer => crate::panels::mixer::ui(app, ui),
+            Tab::Quality => crate::panels::quality::ui(app, ui),
             Tab::Memory => crate::panels::memory::ui(app, ui),
             Tab::Console => app.log.ui(ui),
         }

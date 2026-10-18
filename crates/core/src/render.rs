@@ -563,6 +563,16 @@ pub trait Renderer {
     /// lights: set it every frame.
     fn set_ambient_occlusion(&mut self, _ao: Option<&crate::ao::AmbientOcclusion>) {}
 
+    /// The multiplier of LOD start distances this renderer draws with
+    /// ([`crate::QualitySettings::lod_bias`]): `draw_nodes_in` and
+    /// `EntityStore::draw_in` pick their levels with it; code that picks
+    /// levels itself passes it to `lod_from_biased`. The PC and the Web
+    /// report the quality preset's; 1.0 everywhere else (consoles and the
+    /// PC's console profiles: content is authored per console).
+    fn lod_bias(&self) -> f32 {
+        1.0
+    }
+
     /// What [`TexFilter::Default`] means for the next 3D draws (persists,
     /// like `set_light`): toggle the whole game between crisp and smooth
     /// textures. `TexFilter::Default` restores the target's own default.

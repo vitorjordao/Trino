@@ -11,7 +11,8 @@
 //!   as `TRINO_STEP:` / `TRINO_TEST_PASS` lines and to the harness
 //!   (`globalThis.__trino`, `tools/web-test/run.mjs`);
 //! - the backend and look: `?backend=webgpu|webgl2`, `?sim=web|n64|3ds`,
-//!   `?scale=N`, `?size=WxH`, `?msaa=0` (`trino_platform_web::WebConfig`).
+//!   `?scale=N`, `?size=WxH`, `?msaa=0`, `?quality=low|medium|high|ultra|auto`
+//!   (`trino_platform_web::WebConfig`).
 //!
 //! Off wasm32 the crate is empty (the workspace's host builds skip it).
 
@@ -110,7 +111,7 @@ mod web {
                     Which::Showcase => "showcase",
                     Which::SolidEleven => "solid-eleven",
                 };
-                trino_platform_web::js::log(&host.meter.line(label));
+                trino_platform_web::js::log(&host.frame_line(label));
                 trino_platform_web::js::trino_finish(true, None);
                 return Flow::Stop;
             }

@@ -44,6 +44,7 @@ assets/
 | Font (PNG grid or TTF) | `TFNT` table and an atlas sprite | `TFNT` table and an atlas sprite (`mksprite`) | `TFNT` table and an atlas `.t3x` | `TFNT` table and an atlas sprite |
 | Scene (`*.scene.ron`) | `TSCN` blob | `TSCN` blob, N64 variants | `TSCN` blob, 3DS variants | `TSCN` blob, Web variants |
 | Particle effect (`*.particles.ron`) | `TPFX` with the PC cap | `TPFX` with the N64 cap | `TPFX` with the 3DS cap | `TPFX` with the Web cap (else the PC's) |
+| `assets/quality.ron` + `trino.toml [pc.quality]` (the presets) | `quality/presets` text blob | nothing (fixed quality) | nothing (fixed quality) | `quality/presets` in the pack |
 
 `cargo xtask assets pc|n64|3ds|web` runs the bake alone. `cargo xtask build n64|3ds|web`
 runs it as part of the build (the Web packs every asset of a game into one
@@ -378,6 +379,11 @@ a camera can see, so the CC0 KayKit doorway went from 1068 to 75 triangles.
   own distance.
 - **Particle effects** (`*.particles.ron`): emitter settings with a cap per platform.
   `cargo xtask particles new|check|inspect`.
+- **Quality presets** (`assets/quality.ron`, ADR 0023 §6): what Low, Medium, High and
+  Ultra mean for the project on the PC and the Web, each preset naming only what it
+  changes (`(version: 1, low: (render_scale: 0.6, frame_limit: "30"))`); `trino.toml`
+  `[pc.quality] default = "auto"|"low"|…` picks the first launch. Every value is checked
+  by the bake. `cargo xtask quality show|set|reset|check`, or the editor's Quality tab.
 - **Scenes and prefabs** (`scenes/`, `prefabs/`): see the
   [scene-authoring](../.agents/skills/scene-authoring/SKILL.md) skill.
   `cargo xtask scene check` validates them, `scene export` writes one as Rust data,
@@ -390,6 +396,7 @@ a camera can see, so the CC0 KayKit doorway went from 1068 to 75 triangles.
 2. `cargo xtask scene check` when scenes or prefabs reference the asset.
 3. `cargo xtask model inspect <file>` for models, `cargo xtask texture inspect
    sprites/x` for textures, `cargo xtask audio inspect music/x` for sounds,
-   `cargo xtask impostor check` for impostors.
+   `cargo xtask impostor check` for impostors, `cargo xtask quality check` for the
+   presets.
 4. `cargo xtask assets check` (and `assets report`) when groups or scenes changed.
 5. `cargo xtask test`.

@@ -9,7 +9,10 @@
 //!    probes read pixels back where the browser can wait for the GPU
 //!    (WebGL2); on WebGPU they report themselves skipped (`TRINO_STEP:…
 //!    skipped`), and the golden frames below hold the picture instead.
-//!    Then `audio codecs` (#53, `castle64::selftest::AudioCodecs`, a step
+//!    Then `quality bench` (#55): the quality calibration as a page runs
+//!    it on `?quality=auto`, one presented frame per animation frame timed
+//!    by the intervals, done in 3 s with the renderer as it was. Then
+//!    `audio codecs` (#53, `castle64::selftest::AudioCodecs`, a step
 //!    per frame): Vorbis and PCM sounds play and end, a streamed track
 //!    delivers samples with no underruns, a duck rule ramps. It needs the
 //!    audio context running, so it waits for a gesture (the harness clicks
@@ -46,6 +49,7 @@ const BUDGET_MS: u64 = 40;
 /// Where the run is.
 enum Stage {
     Engine,
+    Bench(Box<BenchRun>),
     /// `asset groups`: frames spent waiting for the bundles' downloads.
     Groups(u32),
     GroupSoak(Box<GroupSoak>),
@@ -67,6 +71,15 @@ struct CastleRun {
     ground_y: f32,
     z0: f32,
     peak: f32,
+}
+
+/// Step `quality bench`, frame by frame.
+struct BenchRun {
+    bench: trino_render_wgpu::Bench,
+    /// The page clock at the last bench frame (µs).
+    last: Option<u64>,
+    /// The renderer's render scale and MSAA before, which must come back.
+    before: (f32, u32),
 }
 
 /// Step `audio codecs`, frame by frame.
@@ -322,11 +335,42 @@ impl Run {
             Stage::GroupSoak(soak) => match soak_frame(soak, host) {
                 Ok(false) => {}
                 Ok(true) => {
-                    host.platform.log("TRINO_STEP:audio codecs\n");
-                    self.stage = Stage::Audio(Box::new(AudioRun::new()));
+                    host.platform.log("TRINO_STEP:quality bench\n");
+                    let before = (host.renderer.render_scale(), host.renderer.msaa());
+                    let bench = host.renderer.bench_begin(
+                        &trino_core::PresetTable::BUILT_IN,
+                        trino_platform_web::BENCH_TARGET_US,
+                        trino_platform_web::BENCH_BUDGET,
+                        true,
+                    );
+                    self.stage = Stage::Bench(Box::new(BenchRun {
+                        bench,
+                        last: None,
+                        before,
+                    }));
                 }
                 Err(e) => self.fail(e),
             },
+            Stage::Bench(b) => {
+                let now = host.platform.now_micros();
+                let interval = b.last.map(|t| (now - t).min(u32::MAX as u64) as u32);
+                b.last = Some(now);
+                if let Some(cal) = host.renderer.bench_step(&mut b.bench, interval) {
+                    js::log(&format!("TRINO_STEP:quality bench {}", cal.summary()));
+                    let after = (host.renderer.render_scale(), host.renderer.msaa());
+                    if cal.results.is_empty() || cal.elapsed.as_secs_f32() > 3.0 {
+                        self.fail(format!("quality bench: {}", cal.summary()));
+                    } else if after != b.before {
+                        let before = b.before;
+                        self.fail(format!(
+                            "quality bench: the renderer came back at {after:?}, not {before:?}"
+                        ));
+                    } else {
+                        host.platform.log("TRINO_STEP:audio codecs\n");
+                        self.stage = Stage::Audio(Box::new(AudioRun::new()));
+                    }
+                }
+            }
             Stage::Audio(a) => match audio_frame(a, host, started) {
                 Ok(false) => {}
                 Ok(true) => self.stage = Stage::Demos,

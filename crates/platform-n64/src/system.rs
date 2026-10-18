@@ -175,6 +175,12 @@ impl Platform for N64Platform {
         self.tier
     }
 
+    /// The N64's fixed preset (issue #55): `Low` on both tiers, nothing
+    /// scaled. `set_quality` stays the trait's no-op.
+    fn quality(&self) -> trino_core::QualitySettings {
+        trino_core::QualitySettings::fixed(trino_core::QualityPreset::Low)
+    }
+
     fn save_capacity(&self) -> usize {
         save::capacity(self.eeprom_bytes())
     }

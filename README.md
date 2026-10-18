@@ -47,6 +47,7 @@ impostors) is part of the same pipeline, drawn by the same renderer in the same 
 | Input | keyboard, mouse, gamepads (feature `gamepad`), rebinding | controller | buttons, circle pad, touch |
 | Audio: SFX, music, stingers, positional sound | yes | yes | yes |
 | Save data | file | 16 Kbit EEPROM | SD card |
+| Quality presets (Low…Ultra): auto-detect, dynamic resolution, frame cap, a Graphics options page | yes (and the Web; Steam Deck preset) | fixed | fixed |
 
 | Tooling | What you get |
 |---|---|
@@ -77,6 +78,7 @@ tables that strict mode and the tools check content against.
 | Local light tier | per pixel | per pixel | per vertex | per vertex |
 | Local lights per frame | 8 | 8 | 2 | 4 |
 | Ambient occlusion tier | screen-space | screen-space | baked | baked |
+| Quality presets | Low…Ultra, auto-detected | Low…Ultra (phones Low) | fixed Low | fixed Low (New 3DS Medium) |
 | Water tier | per pixel | per pixel | per vertex | vertex program |
 | Ripples per frame | 4 | 4 | 4 | 4 |
 

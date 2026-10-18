@@ -69,7 +69,7 @@ TRINO_EDITOR_SCREENSHOT=target/launcher.png TRINO_EDITOR_SCREENSHOT_FRAME=10 car
 | `TRINO_EDITOR_SCREENSHOT=out.png` | save a PNG of the whole window, then exit |
 | `TRINO_EDITOR_SCREENSHOT_FRAME=N` | …after N frames (default 30; use ~60 so thumbnails finish) |
 | `TRINO_EDITOR_SELECT=<name>[,<name>…]` | start with those entities selected (the first is active; gizmo + inspector visible) |
-| `TRINO_EDITOR_TAB=scene\|game\|level\|animation\|mixer\|memory` | focused center tab (`mixer`, `memory`: the bottom dock's Mixer or Memory tab) |
+| `TRINO_EDITOR_TAB=scene\|game\|level\|animation\|mixer\|quality\|memory` | focused center tab (`mixer`, `quality`, `memory`: the bottom dock's Mixer, Quality or Memory tab) |
 | `TRINO_EDITOR_ANIM=<model>:<clip>@<time>` | the Animation tab previews that clip, paused at that time |
 | `TRINO_EDITOR_ANIM_VIEW=ghosts=3,blend=wave:0.5,look=n64,palette` | its view options (onion skin, crossfade, look, palette) |
 | `TRINO_EDITOR_OPEN=fake-object` / `array` / `material:<logical>` / `model:<logical>` / `prefab:<logical>` / `particles:<name>[@pc\|n64\|3ds]` / `audio:<sounds/x\|music/x>[@pc\|n64\|3ds\|web]` | open the fake-object or array dialog, an asset inspector (`audio:`: the waveform overlays that platform's decode), or a prefab in edit mode |
@@ -77,6 +77,7 @@ TRINO_EDITOR_SCREENSHOT=target/launcher.png TRINO_EDITOR_SCREENSHOT_FRAME=10 car
 | `TRINO_EDITOR_PLAY=here` | start **Play here** on the first frame: the scene runs inside the Game view (CI smoke) |
 | `TRINO_EDITOR_ECHO_LOG=1` | mirror the Console to stderr (see reloads, errors, saves) |
 | `TRINO_EDITOR_GAME=pc\|n64\|3ds\|web\|n64x\|3dsnew` | the Game view's profile (default n64) — screenshots of each platform's variant; `n64x` / `3dsnew` are the hardware tiers (N64 + Expansion Pak, New 3DS) |
+| `TRINO_EDITOR_QUALITY=low\|medium\|high\|ultra[,dynres]` | the Game view's quality preset on the PC and Web profiles (and the Play run's `TRINO_QUALITY`); `,dynres` turns dynamic resolution on |
 | `TRINO_EDITOR_WEB_CANVAS=responsive\|720\|1080` | the Game view's browser canvas on the Web profile (the picture is the canvas over the auto pixel scale) |
 | `TRINO_EDITOR_SIZE=960x600` | window size (default 1600x940; never below the 960x600 minimum) — screenshot small windows |
 | `TRINO_EDITOR_INSPECT=platforms\|lod\|impostor\|budget\|ao\|audio\|groups` | the Inspector opens that section and scrolls to it (`audio`: the audio inspector's Platforms grid; `budget`: the scene settings' platform budget, with nothing selected; `ao`: the scene's Ambient Occlusion, or a model's baked AO with `TRINO_EDITOR_OPEN=model:<logical>`; `groups`: the scene settings' Asset groups) |
@@ -292,6 +293,27 @@ Live-edit check: start the editor with `TRINO_EDITOR_ECHO_LOG=1` in the backgrou
     `click_accesskit` with `egui::Popup::close_all(&h.ctx)`.
   - Lines that appear when a worker finishes shift what sits below them: draw the same
     number of placeholder lines while measuring.
+
+## Quality tab and the Game view's preset (issue #55, ADR 0023)
+
+- The bottom dock's Quality tab (`panels/quality.rs`) edits `assets/quality.ron` (or what
+  `[pc.quality] presets` names) through `quality.rs::QualityState`: one column per
+  preset, one row per setting, Reset per changed preset, an eye that previews the
+  preset in the Game view. Edits are written once the control is let go (only what
+  differs from the built-in values, `QualityFile::from_table`); an outside edit reloads
+  live; an invalid file shows its error and is never written back. `[pc.quality]
+  default` is shown, edited in `trino.toml`. Same file and checks as `cargo xtask
+  quality set|reset|check`.
+- The Game view's PC and Web profiles have a preset dropdown ("Game view quality") and a
+  "Dynamic resolution" checkbox; the console profiles have none (fixed quality). Play on
+  the PC profile passes the preset as `TRINO_QUALITY`. The budget HUD line reads
+  `Quality Low · 3D 0.81× (dynres 0.50-1.00) · MSAA off · AO off`
+  (`budget.rs::quality_line`).
+- Proof: `ui_tests::quality_tab_writes_the_presets_and_the_game_view_previews_them`
+  (`--ignored --test-threads=1`) and the layout audit's "Quality tab" and "PC Game view"
+  steps. Screenshot: `TRINO_EDITOR_TAB=quality TRINO_EDITOR_SCREENSHOT=q.png cargo xtask
+  editor`; a preset in the Game view: `TRINO_EDITOR_TAB=game TRINO_EDITOR_GAME=pc
+  TRINO_EDITOR_QUALITY=low,dynres`.
 
 ## Asset groups and the Memory tab (issue #56, ADR 0022)
 

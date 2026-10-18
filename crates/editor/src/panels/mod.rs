@@ -10,4 +10,5 @@ pub mod memory;
 pub mod mixer;
 pub mod particles;
 pub mod platforms;
+pub mod quality;
 pub mod texture;

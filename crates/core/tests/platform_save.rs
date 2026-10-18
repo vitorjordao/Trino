@@ -54,6 +54,14 @@ fn platform_defaults_report_no_services() {
         None
     );
     assert_eq!(p.input_info(), None);
+    // A fixed Low quality, nothing scaled, and no way to change it (#55).
+    use trino_core::{QualityPreset, QualitySettings};
+    assert_eq!(p.quality(), QualitySettings::fixed(QualityPreset::Low));
+    p.set_quality(QualitySettings::ULTRA);
+    p.detect_quality();
+    assert_eq!(p.quality(), QualitySettings::fixed(QualityPreset::Low));
+    assert_eq!(p.quality_preset(QualityPreset::High), None);
+    assert_eq!(p.quality_info(), None);
 }
 
 #[test]

@@ -29,6 +29,9 @@ Run modes and switches for `trino-app-pc`:
 | `TRINO_GAME=showcase` | Run `examples/showcase`, the demo scene exported to code |
 | `TRINO_SMOKE_FRAMES=N` | Exit after N frames (CI smoke runs) |
 | `TRINO_BC=0` | Upload BC1/BC3/BC7 textures decoded instead of as blocks (the path of a GPU without BC); a smoke run prints `TRINO_TEXTURES:` with the VRAM either way |
+| `TRINO_QUALITY=low\|medium\|high\|ultra\|auto` | The quality preset for this run (`cargo xtask run pc --quality low`), never saved; `auto` runs the calibration. Native profile only (below) |
+| `TRINO_QUALITY_BENCH=1` | Run the calibration, print its `TRINO_QUALITY: bench` line and exit (`cargo xtask quality bench`) |
+| `TRINO_MSAA=0` | No MSAA, whatever the preset says |
 
 Keyboard mapping: A/B = Z/X, X/Y = C/V, L/R = Q/E, Start = Enter, Select = Right Shift,
 D-pad = arrows, stick = WASD. The mouse feeds `InputState::pointer`. Gamepads go through
@@ -43,6 +46,45 @@ half-second lock-free ring per playback, so a 10-minute track costs its Ogg byte
 with mutes and duck rules start from the project's `assets/audio.toml`; the player's
 volumes persist per game in `<save_name>.audio` next to the save
 ([ADR 0021](adr/0021-audio-pipeline.md), [ASSETS.md](ASSETS.md#audio-a-codec-per-platform-streaming-buses-adr-0021)).
+
+### Quality presets
+
+On the native profile (`TRINO_SIM=native`, a standalone project's PC build) the game runs
+at one of four presets — **Low**, **Medium**, **High**, **Ultra** — each a render scale,
+dynamic resolution, MSAA, AO, LOD bias, particle scale, anisotropy, sharpening and a
+frame limit ([ADR 0023](adr/0023-quality-presets.md)). High is the PC's look before
+presets; Ultra is High supersampled at 1.25×. The consoles' presets are fixed (N64 and
+3DS Low, New 3DS Medium) and change nothing there.
+
+- **First launch:** `trino.toml`'s `[pc.quality] default` — `auto` (the default) draws a
+  built-in scene at each preset for at most 2 s (about 0.5 s on CI's software adapter)
+  and keeps the highest that holds 90% of the display's frame; a software adapter gets
+  Low. A **Steam Deck** (`SteamDeck=1` or its DMI board) starts at Medium capped at
+  60 fps. The result is saved to `<save_name>.quality` next to the save: `key=value`
+  text, safe to edit or delete (every value is clamped on read).
+- **Dynamic resolution** (Low, Medium) moves the 3D's scale within its range to hold the
+  frame time — GPU timestamps where the adapter has them, else the frame intervals. The
+  3D is upscaled bilinearly with contrast-adaptive sharpening; the HUD always draws at
+  the picture's resolution.
+- **Frame limit:** VSync, 30/40/60/120/144 fps or unlimited; a cap under the display's
+  rate presents FIFO and sleeps, over it presents mailbox or immediate.
+- **`TRINO_FRAME`** carries the 1% lows and the quality:
+  `low1_us=… low1_fps=… quality=low scale=0.82 quality_from=detected detected=low gpu_us=…`.
+- **The project's presets** live in `assets/quality.ron` (each preset names only what it
+  changes); `cargo xtask quality show|check|set|reset|bench` and the editor's Quality tab
+  edit it:
+
+```sh
+cargo xtask quality show                      # the table (--json: every value)
+cargo xtask quality set low render_scale=0.6 frame_limit=30
+cargo xtask quality reset low                 # back to the engine's values
+cargo xtask quality bench --json              # calibrate on this machine
+cargo xtask run pc --quality ultra            # one run at a preset
+```
+
+A game reads `Platform::quality()` (and `lod_bias` / `particle_scale` are applied for
+it), changes it with `set_quality` (saved as the player's choice) and can show the
+engine's ready-made **Graphics page**, `trino_core::GraphicsOptions` (castle64: Select).
 
 The editor has its own guide in the [editor](../.agents/skills/editor/SKILL.md) skill,
 including hooks that let a script or an agent screenshot the window.
@@ -204,6 +246,7 @@ The page picks the game and the look by its URL:
 | `?scale=N` | Integer pixel scale of the picture (default auto: about 300 lines) |
 | `?size=WxH` | A fixed canvas in CSS pixels (tests, screenshots); otherwise it fills the page |
 | `?msaa=0` | No 4× MSAA (WebGL2 never has it: it can't sample a multisampled depth) |
+| `?quality=low\|medium\|high\|ultra\|auto` | The quality preset for this visit, never stored ([ADR 0023](adr/0023-quality-presets.md)) |
 | `?frames=N` | Stop after N frames and print a `TRINO_FRAME:` line (smoke runs) |
 | `?selftest` | The browser self-test (below) |
 | `?log` | A log panel under the canvas |
@@ -231,6 +274,12 @@ What a browser changes:
   (`devicePixelContentBoxSize`, or the CSS size × `devicePixelRatio` on Safari), so Retina
   screens stay sharp; the picture is the native profile's (the output over the pixel
   scale). **Fullscreen** is the toolbar's button (or `Platform::set_display`).
+- **Quality:** the PC's presets. A phone's or a tablet's browser starts at the project's
+  Low; a desktop's at the project's default — `auto` calibrates over the first animation
+  frames (one presented bench frame each, timed by their intervals: a frame that holds
+  60 fps comes one refresh after the last), at most 2 s. The choice persists in
+  `localStorage` (`trino-quality:<game>`). A frame cap skips animation frames; dynamic
+  resolution follows the frame intervals. The self-test and `?frames=` runs use High.
 - **Saves** go to `localStorage` (`trino-save:<game>`, base64, at most
   `Caps::WEB.save_bytes` = 1 MiB). A private window without storage reports
   `save_capacity() == 0`.
@@ -250,6 +299,7 @@ What a browser changes:
 `test web` serves the build and drives `?selftest` in each browser: the engine checks
 (blobs, a save to `localStorage`, every renderer step), audio and idle input, the KTX2
 transcode (both Basis modes decode exactly as the bake's native transcoder did), the
+quality calibration as a page runs it (done in 3 s, the renderer restored), the
 showcase demo and its baked scene, castle64's settle/walk/jump and the bot's whole Green
 Hills run, Solid Eleven's scripted match (its sim hash must equal the PC's and the
 consoles'), then three golden frames read back at 640×480 and compared with

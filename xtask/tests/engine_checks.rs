@@ -138,6 +138,35 @@ fn engine_checks_pass_on_the_simulated_expanded_tiers() {
     }
 }
 
+/// The `quality` step (issue #55) on each simulated console: a fixed
+/// preset (Low on the N64 with or without the Pak and on the 3DS, Medium on
+/// the New 3DS), LOD bias 1, the baked particle caps.
+#[test]
+fn the_quality_step_reports_each_consoles_fixed_preset() {
+    use castle64::selftest::quality;
+    use trino_core::{HwTier, QualityPreset};
+    let save_dir = tempfile::tempdir().unwrap();
+    for (key, want) in [
+        ("n64", QualityPreset::Low),
+        ("n64x", QualityPreset::Low),
+        ("3ds", QualityPreset::Low),
+        ("3dsnew", QualityPreset::Medium),
+    ] {
+        let (profile, tier) = SimProfile::parse_tier(key).unwrap();
+        let target = if tier == HwTier::Expanded {
+            pc_target_on(profile, tier, save_dir.path())
+        } else {
+            pc_target(profile, save_dir.path())
+        };
+        let Some((mut renderer, mut platform)) = target else {
+            return;
+        };
+        let q = quality(&mut renderer, &mut platform).unwrap();
+        assert_eq!((q.preset, q.fixed, q.lod_pct), (want, true, 100), "{key}");
+        assert!(q.particles > 0, "{key}");
+    }
+}
+
 /// `[scenes.showcase]` baked by the PC pipeline, served by `PcPlatform`,
 /// parsed by `BakedScene`: identical to the exported code, and playable
 /// (the same `check_baked` the console self-tests run). No GPU needed.

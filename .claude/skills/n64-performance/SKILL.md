@@ -528,7 +528,7 @@ How the last 9 ms came off `micro-river`, and what the tools could and couldn't 
   the frame ~4× and skewed toward loops. What the accumulators found: the water texture
   re-uploaded every frame (~0.25 ms), the 46-word uncached commands (~25 µs each),
   `memcmp` on keys, cache-line fills on fresh arena memory. None of this is in the tree;
-  GitHub issue on profiling tools tracks making it a feature.
+  GitHub #79 tracks making it a feature (CLI and editor).
 - **Check the memo under the real run, not a perf-only ROM:** the full self-test fills
   the water memo before the perf scenes, and clearing it whole mid-frame rebuilt the
   river every frame (T&L 1.84 ms in the full run against 0.97 alone).

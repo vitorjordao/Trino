@@ -19,8 +19,11 @@ install (auto-detected at `$DEVKITPRO`, `C:\devkitPro` or `/opt/devkitpro`).
    with devkitARM's `arm-none-eabi-gcc` against the installed libctru
    headers (mtime-cached to `target/3ds/shim.o`).
 2. `bake_assets` — `tex3ds` (sprites → `.t3x`, `-f` from the manifest's 3DS
-   format through `trino_asset_pipeline::N3dsFormat::tex3ds`: rgba8, rgb565,
-   rgba5551, rgba4, la8, l8, a8, etc1, etc1a4) + wav→raw-PCM16 conversion
+   format, or `auto`'s pick (`texture::choose` on the decoded master, the same call
+   as the PC bake and `texture report`), through
+   `trino_asset_pipeline::N3dsFormat::tex3ds`: rgba8, rgb565, rgba5551, rgba4, la8,
+   l8, a8, etc1, etc1a4; it prints `[3ds] textures: X B of linear memory (Y B as
+   RGBA8): …`) + wav→raw-PCM16 conversion
    (sounds → `.pcm16`, 12-byte header) into `target/3ds/romfs/` + `index.tsv`.
 3. `cargo +nightly build` — the **built-in Tier 3 target**
    `armv6k-nintendo-3ds` (no custom JSON) with `-Zbuild-std=core,alloc`;

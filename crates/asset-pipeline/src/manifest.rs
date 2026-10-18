@@ -42,10 +42,13 @@ impl Platform {
         }
     }
 
-    /// Texture formats this platform can represent.
+    /// Texture formats this platform can represent (`"auto"` is accepted
+    /// besides them: `crate::texture::choose`).
     pub fn supported_texture_formats(self) -> &'static [&'static str] {
         match self {
-            Platform::Pc => &["RGBA8"],
+            // BCn where the GPU samples it (`crate::texture::BcFormat`);
+            // the runner decodes to RGBA8 on a GPU without BC.
+            Platform::Pc => &["RGBA8", "BC1", "BC3", "BC7"],
             // libdragon mksprite formats that fit typical TMEM budgets. I4/I8
             // (intensity, alpha = intensity) suit white masks tinted at draw
             // time — fonts, UI panels — and upload no palette per blit.
@@ -59,14 +62,16 @@ impl Platform {
         }
     }
 
-    /// Format used when the manifest does not declare one for this platform.
+    /// Format used when the manifest does not declare one for this
+    /// platform: `auto` (the smallest format that keeps the texture's
+    /// `quality`) on the PC and the 3DS.
     pub fn default_texture_format(self) -> Option<&'static str> {
         match self {
-            Platform::Pc => Some("RGBA8"),
+            Platform::Pc => Some("auto"),
             // The N64 has no safe default: the developer must choose the
-            // TMEM trade-off explicitly.
+            // TMEM trade-off explicitly (`auto` included).
             Platform::N64 => None,
-            Platform::N3ds => Some("RGBA8"),
+            Platform::N3ds => Some("auto"),
         }
     }
 }
@@ -177,9 +182,17 @@ impl ModelDecl {
 pub struct SpriteDecl {
     /// Source file, relative to `assets/shared/` (or a platform override).
     pub file: String,
-    /// Per-platform texture format, e.g. `{ n64 = "CI4" }`.
+    /// Per-platform texture format, e.g. `{ n64 = "CI4", 3ds = "auto" }`.
     #[serde(default)]
     pub formats: BTreeMap<String, String>,
+    /// `auto`'s quality preset: `low` (30 dB), `normal` (35, the default)
+    /// or `high` (40).
+    #[serde(default)]
+    pub quality: Option<String>,
+    /// The least PSNR (dB) against the master: `auto` keeps it, and a
+    /// declared format below it fails the bake.
+    #[serde(default)]
+    pub min_psnr: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -219,6 +232,34 @@ impl Manifest {
                 manifest.version
             ));
         }
+        let textures = manifest
+            .sprites
+            .iter()
+            .map(|(n, d)| (format!("sprites/{n}"), d.quality.as_deref(), d.min_psnr))
+            .chain(
+                manifest
+                    .fonts
+                    .iter()
+                    .map(|(n, d)| (format!("fonts/{n}"), d.quality.as_deref(), d.min_psnr)),
+            );
+        for (logical, quality, min_psnr) in textures {
+            if let Some(q) = quality
+                && crate::texture::Quality::parse(q).is_none()
+            {
+                return Err(format!(
+                    "{}: `{logical}`: quality `{q}` (low, normal, high)",
+                    path.display()
+                ));
+            }
+            if let Some(v) = min_psnr
+                && !(v.is_finite() && v >= 0.0)
+            {
+                return Err(format!(
+                    "{}: `{logical}`: min_psnr {v} (a number of dB, 0 or more)",
+                    path.display()
+                ));
+            }
+        }
         for (name, m) in &manifest.models {
             for p in m.platforms.iter().flatten() {
                 if Platform::parse(p).is_none() {
@@ -234,19 +275,30 @@ impl Manifest {
 }
 
 impl SpriteDecl {
-    /// The texture format to bake for `platform`, validating support.
-    /// Declared-but-unsupported and undeclared-with-no-default are errors.
+    /// What `crate::texture::choose` needs for `platform`.
+    pub fn settings(&self, platform: Platform) -> crate::texture::TextureSettings {
+        texture_settings(
+            self.formats.get(platform.key()),
+            self.quality.as_deref(),
+            self.min_psnr,
+        )
+    }
+
+    /// The declared format for `platform` (`"auto"` included) or the
+    /// platform's default, validating support; `crate::texture::choose`
+    /// resolves `auto` from the pixels. Declared-but-unsupported and
+    /// undeclared-with-no-default are errors.
     pub fn format_for(&self, logical: &str, platform: Platform) -> Result<String, String> {
         let declared = self.formats.get(platform.key());
         match declared {
             Some(f) => {
-                if platform.supported_texture_formats().contains(&f.as_str()) {
+                if f == "auto" || platform.supported_texture_formats().contains(&f.as_str()) {
                     Ok(f.clone())
                 } else {
                     Err(format!(
-                        "sprite `{logical}`: format `{f}` is not supported on {} (supported: {:?})",
+                        "sprite `{logical}`: format `{f}` is not supported on {} (supported: auto, {})",
                         platform.key(),
-                        platform.supported_texture_formats()
+                        platform.supported_texture_formats().join(", ")
                     ))
                 }
             }
@@ -256,13 +308,29 @@ impl SpriteDecl {
                 .ok_or_else(|| {
                     format!(
                         "sprite `{logical}`: no format declared for {} and this platform has no \
-                     safe default — add `formats = {{ {} = \"CI4\" }}` (or CI8/RGBA5551) \
-                     to the manifest",
+                     safe default — add `formats = {{ {} = \"auto\" }}` (or CI4/CI8/RGBA5551/\
+                     I4/I8) to the manifest",
                         platform.key(),
                         platform.key()
                     )
                 }),
         }
+    }
+}
+
+/// Settings from a sprite's or font's manifest keys (validated at load).
+pub(crate) fn texture_settings(
+    format: Option<&String>,
+    quality: Option<&str>,
+    min_psnr: Option<f64>,
+) -> crate::texture::TextureSettings {
+    crate::texture::TextureSettings {
+        format: format.cloned(),
+        quality: quality
+            .and_then(crate::texture::Quality::parse)
+            .unwrap_or_default(),
+        min_psnr,
+        default: None,
     }
 }
 
@@ -342,14 +410,77 @@ pub mod edit {
     /// remove (`None`) the `ao` key of `[models.<name>]`: baked vertex
     /// ambient occlusion (`crate::ao`). Keeps every other line.
     pub fn set_model_ao(text: &str, name: &str, value: Option<&str>) -> Result<String, String> {
-        let header = format!("[models.{name}]");
-        let mut lines: Vec<String> = text.lines().map(String::from).collect();
+        set_key(text, "models", name, "ao", value)
+    }
+
+    /// Set or remove (`None`) one platform's entry of the `formats` table
+    /// of `[sprites.<name>]` or `[fonts.<name>]` (`kind`): `"auto"`, `"ETC1"`,
+    /// ... — what the editor's texture inspector writes. An empty table
+    /// removes the line. Keeps every other line.
+    pub fn set_texture_format(
+        text: &str,
+        kind: &str,
+        name: &str,
+        platform: &str,
+        format: Option<&str>,
+    ) -> Result<String, String> {
+        let current = table_value(text, kind, name, "formats")?;
+        let mut formats: std::collections::BTreeMap<String, String> = match current {
+            Some(v) => toml::from_str::<toml::Table>(&format!("v = {v}"))
+                .ok()
+                .and_then(|t| t.get("v").cloned())
+                .and_then(|v| v.try_into().ok())
+                .ok_or_else(|| format!("`[{kind}.{name}]`: `formats` is not a table of strings"))?,
+            None => Default::default(),
+        };
+        match format {
+            Some(f) => {
+                formats.insert(platform.to_string(), f.to_string());
+            }
+            None => {
+                formats.remove(platform);
+            }
+        }
+        let value = (!formats.is_empty()).then(|| {
+            let items: Vec<String> = formats
+                .iter()
+                .map(|(k, v)| format!("{k} = \"{v}\""))
+                .collect();
+            format!("{{ {} }}", items.join(", "))
+        });
+        set_key(text, kind, name, "formats", value.as_deref())
+    }
+
+    /// Set or remove a texture's `quality` (`"high"`, written quoted) or
+    /// `min_psnr` (a number): `key` is either.
+    pub fn set_texture_key(
+        text: &str,
+        kind: &str,
+        name: &str,
+        key: &str,
+        value: Option<&str>,
+    ) -> Result<String, String> {
+        let value = match (key, value) {
+            ("quality", Some(q)) => Some(format!("\"{q}\"")),
+            ("min_psnr", Some(v)) => Some(v.to_string()),
+            (_, None) => None,
+            (other, _) => {
+                return Err(format!(
+                    "`{other}` is not a texture key (quality, min_psnr)"
+                ));
+            }
+        };
+        set_key(text, kind, name, key, value.as_deref())
+    }
+
+    /// The lines of `[kind.name]`: (header index, end) with the blank lines
+    /// and comments before the next header left out.
+    fn table_span(lines: &[String], kind: &str, name: &str) -> Result<(usize, usize), String> {
+        let header = format!("[{kind}.{name}]");
         let start = lines
             .iter()
             .position(|l| l.trim() == header)
-            .ok_or_else(|| format!("model `{name}` not found in the manifest"))?;
-        // The table's lines: up to the next header (or the end), without
-        // the blank lines and comments before that header.
+            .ok_or_else(|| format!("`{kind}/{name}` not found in the manifest"))?;
         let mut end = lines
             .iter()
             .skip(start + 1)
@@ -361,17 +492,49 @@ pub mod edit {
         } {
             end -= 1;
         }
-        let is_ao = |l: &str| {
-            let t = l.trim_start();
-            t.starts_with("ao") && t[2..].trim_start().starts_with('=')
-        };
-        let at = (start + 1..end).find(|&i| is_ao(&lines[i]));
+        Ok((start, end))
+    }
+
+    fn is_key(line: &str, key: &str) -> bool {
+        let t = line.trim_start();
+        t.starts_with(key) && t[key.len()..].trim_start().starts_with('=')
+    }
+
+    /// The raw value text of `key` in `[kind.name]`, if set.
+    fn table_value(
+        text: &str,
+        kind: &str,
+        name: &str,
+        key: &str,
+    ) -> Result<Option<String>, String> {
+        let lines: Vec<String> = text.lines().map(String::from).collect();
+        let (start, end) = table_span(&lines, kind, name)?;
+        Ok((start + 1..end)
+            .find(|&i| is_key(&lines[i], key))
+            .map(|i| lines[i].split_once('=').unwrap().1.trim().to_string()))
+    }
+
+    /// Set (`Some`, a TOML value) or remove (`None`) `key` in
+    /// `[kind.name]`, keeping every other line.
+    fn set_key(
+        text: &str,
+        kind: &str,
+        name: &str,
+        key: &str,
+        value: Option<&str>,
+    ) -> Result<String, String> {
+        let mut lines: Vec<String> = text.lines().map(String::from).collect();
+        let (start, end) = table_span(&lines, kind, name).map_err(|_| {
+            let what = kind.trim_end_matches('s');
+            format!("{what} `{name}` not found in the manifest")
+        })?;
+        let at = (start + 1..end).find(|&i| is_key(&lines[i], key));
         match (at, value) {
-            (Some(i), Some(v)) => lines[i] = format!("ao = {v}"),
+            (Some(i), Some(v)) => lines[i] = format!("{key} = {v}"),
             (Some(i), None) => {
                 lines.remove(i);
             }
-            (None, Some(v)) => lines.insert(end, format!("ao = {v}")),
+            (None, Some(v)) => lines.insert(end, format!("{key} = {v}")),
             (None, None) => return Ok(text.to_string()),
         }
         let mut out = lines.join("\n");
@@ -415,6 +578,41 @@ pub mod edit {
             assert_eq!(removed, text);
             assert_eq!(set_model_ao(text, "rock", None).unwrap(), text);
             assert!(set_model_ao(text, "ghost", None).is_err());
+        }
+
+        #[test]
+        fn texture_edits_touch_one_key_and_parse_back() {
+            let text = "version = 1\n\n[sprites.grass]\nfile = \"sprites/grass.png\"\nformats = { n64 = \"CI8\" }\n\n# fonts\n[fonts.ui]\nfile = \"fonts/ui.ttf\"\n";
+            let a = set_texture_format(text, "sprites", "grass", "3ds", Some("ETC1")).unwrap();
+            assert!(
+                a.contains("formats = { 3ds = \"ETC1\", n64 = \"CI8\" }\n\n# fonts"),
+                "{a}"
+            );
+            let b = set_texture_format(&a, "sprites", "grass", "3ds", Some("auto")).unwrap();
+            let c = set_texture_key(&b, "sprites", "grass", "quality", Some("high")).unwrap();
+            let d = set_texture_key(&c, "sprites", "grass", "min_psnr", Some("38")).unwrap();
+            let m: crate::Manifest = toml::from_str(&d).unwrap();
+            let s = m.sprites["grass"].settings(crate::Platform::N3ds);
+            assert_eq!(s.format.as_deref(), Some("auto"));
+            assert_eq!(
+                (s.quality, s.min_psnr),
+                (crate::texture::Quality::High, Some(38.0))
+            );
+            // A font gets its own table; removing the last entry drops the
+            // line.
+            let f = set_texture_format(&d, "fonts", "ui", "pc", Some("BC3")).unwrap();
+            assert!(
+                f.ends_with("[fonts.ui]\nfile = \"fonts/ui.ttf\"\nformats = { pc = \"BC3\" }\n"),
+                "{f}"
+            );
+            let g = set_texture_format(&f, "fonts", "ui", "pc", None).unwrap();
+            assert_eq!(g, d);
+            let back = set_texture_key(&d, "sprites", "grass", "min_psnr", None).unwrap();
+            let back = set_texture_key(&back, "sprites", "grass", "quality", None).unwrap();
+            let back = set_texture_format(&back, "sprites", "grass", "3ds", None).unwrap();
+            assert_eq!(back, text);
+            assert!(set_texture_format(text, "sprites", "ghost", "pc", None).is_err());
+            assert!(set_texture_key(text, "sprites", "grass", "file", Some("x")).is_err());
         }
 
         #[test]
@@ -474,11 +672,39 @@ mod tests {
         let m = manifest("version = 1\n[sprites.p]\nfile = \"p.png\"\n");
         let err = m.sprites["p"].format_for("p", Platform::N64).unwrap_err();
         assert!(err.contains("no format declared"), "{err}");
-        // PC falls back to RGBA8.
+        // PC and 3DS fall back to auto.
         assert_eq!(
             m.sprites["p"].format_for("p", Platform::Pc).unwrap(),
-            "RGBA8"
+            "auto"
         );
+        assert_eq!(
+            m.sprites["p"].format_for("p", Platform::N3ds).unwrap(),
+            "auto"
+        );
+    }
+
+    #[test]
+    fn quality_and_min_psnr_are_validated_at_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("manifest.toml");
+        let load = |extra: &str| {
+            std::fs::write(
+                &path,
+                format!("version = 1\n[sprites.p]\nfile = \"p.png\"\n{extra}\n"),
+            )
+            .unwrap();
+            Manifest::load(&path)
+        };
+        let m = load("quality = \"high\"\nmin_psnr = 38.5").unwrap();
+        let s = m.sprites["p"].settings(Platform::N3ds);
+        assert_eq!(s.quality, crate::texture::Quality::High);
+        assert_eq!((s.format, s.min_psnr), (None, Some(38.5)));
+        assert!(
+            load("quality = \"ultra\"")
+                .unwrap_err()
+                .contains("low, normal, high")
+        );
+        assert!(load("min_psnr = -1.0").unwrap_err().contains("min_psnr"));
     }
 
     #[test]

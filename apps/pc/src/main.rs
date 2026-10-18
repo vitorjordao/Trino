@@ -8,7 +8,9 @@
 //!
 //! Env knobs:
 //! - `TRINO_SMOKE_FRAMES=N` — exit cleanly after N frames (CI smoke tests),
-//!   printing a `TRINO_FRAME:` line (frame time, draws, the PC GPU T&L split).
+//!   printing a `TRINO_FRAME:` line (frame time, draws, the PC GPU T&L split)
+//!   and a `TRINO_TEXTURES:` line (sprite textures on the GPU, BC ones).
+//! - `TRINO_BC=0` — no BC textures: decoded RGBA8, as on a GPU without BC.
 //! - `TRINO_SIM=native|n64|3ds` — console simulation profile (default n64).
 //! - `TRINO_SCENE=scenes/x.scene.ron` — play an editor scene instead of the
 //!   game (reloads on scene/prefab/material edits; see `scene_player`).
@@ -281,6 +283,7 @@ impl ApplicationHandler for App {
                     && self.frames >= max
                 {
                     println!("{}", self.meter.line(&run_label()));
+                    println!("{}", trino_runner_pc::texture_line(&ctx.renderer));
                     event_loop.exit();
                     return;
                 }

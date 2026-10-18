@@ -1,8 +1,9 @@
-# ADR 0017: Texture formats — 3DS hardware formats, a decoded preview, `texture inspect`
+# ADR 0017: Texture formats — hardware formats per platform, `auto`, PC BCn
 
-Status: draft (October 2026, GitHub #52). Phase 1 of the issue's roadmap is
-implemented; Phases 2–5 (`auto` and the PSNR guard, PC BCn, the editor's texture
-inspector, Web KTX2) are not.
+Status: accepted (October 2026, GitHub #52). Phases 1–4 of the issue's roadmap are
+implemented (§1–5: 3DS formats and `texture inspect`; §6: `auto` and the PSNR guard;
+§7: PC BCn; §8: the editor's texture inspector). Phase 5, Web KTX2, belongs to the web
+target and moves to its issue (#47).
 
 ## Context
 
@@ -89,11 +90,64 @@ self-test dumps the frame, with a photo-like card in RGBA8, ETC1 and RGBA4, as t
 `tests/golden/3ds/texture_formats.png` golden, and `n3ds_parity` holds the PC's 3DS
 profile to it.
 
+### 6. `auto` measures; the threshold is the author's
+
+- `formats = { <platform> = "auto" }` measures every format of the platform against
+  the master (the same PSNR as §4) and takes the smallest whose PSNR reaches the
+  threshold. Ties: the higher PSNR; on the N64, formats that fit TMEM come before
+  smaller ones that don't. No content heuristics decide (an ETC1 of an image with
+  alpha simply measures low); the content class (`white mask`, `opaque color`, …) is
+  only reported.
+- The threshold is `min_psnr` when set, else `quality` (`low` 30, `normal` 35,
+  `high` 40 dB). An explicit format is the author's call: it is checked only when the
+  texture sets `min_psnr`, and a miss fails the bake with the formats that would pass
+  and what `auto` would pick. A texture nothing keeps fails with the best measured.
+- **Defaults change:** the PC and the 3DS default to `auto`; the N64 keeps "declare
+  one" (fonts `CI4`), because N64 textures are drawn for TMEM by hand and `mksprite`'s
+  palette quantizer is not modeled. The N64 model: `I4`/`I8` keep a gray master's
+  level, otherwise Rec. 601 luma × alpha stretched to min–max, sampled as
+  (i, i, i, i); `CI4`/`CI8` are measured only when the master's colors after RGBA5551
+  truncation fit the palette.
+- One function decides (`texture::choose`): the PC bake (which also writes the 3DS
+  preview of the 3DS choice), the 3DS and N64 stagers, `texture inspect`,
+  `texture report` and the editor call it on the same decoded master, so they never
+  disagree. `report` fails (exit 1) when any texture fails.
+- Consequence for content: a full alpha ramp in color keeps ~33 dB in 4-bit alpha, so
+  such textures stay RGBA8 at the default; opaque art goes to ETC1/BC1 when it holds
+  35 dB, and photo-like masters often don't (RGB565 then).
+
+### 7. PC BCn: blocks baked, uploaded where sampled, decoded elsewhere
+
+- `BC1`, `BC3` and `BC7` (`BcFormat`). BC1/BC3 are encoded by `texpresso` (cluster
+  fit); BC7 by the pipeline's own mode-6 encoder (principal-axis endpoints, p-bits,
+  two least-squares refits) — one mode, but always at least BC1's quality at BC3's
+  size. Every decode (PSNR, previews, the fallback) is `bcdec_rs`.
+- BC4/BC5 are not offered: wgpu has no texture swizzle, so a one-channel texture
+  can't be sampled as gray or as a white mask like the other targets.
+- Sides must be multiples of 4 (wgpu's rule for block formats); others are not
+  measured and stay RGBA8.
+- The bake writes `<hash>.bc` (`TBCN`, width, height, format code, blocks) beside the
+  master, `compressed` in the index. `PcRenderer` asks for
+  `TEXTURE_COMPRESSION_BC` when the adapter has it (unless `TRINO_BC=0`) and
+  `upload_sprite_bc` creates a `Bc*RgbaUnorm` texture (unorm like the RGBA8 sprites).
+  Without BC, `trino_runner_pc::upload_sprite` uploads the decoded blocks: the same
+  picture, logged once. `PcRenderer::sprite_memory` and the smoke-exit
+  `TRINO_TEXTURES` line report the VRAM. The console profiles of the PC keep drawing
+  the console's own texture (`pixels_for`).
+
+### 8. The editor's texture inspector
+
+Assets › Texture shows a sprite or font on the three platforms side by side: the
+choice and why, every candidate with bytes and PSNR, the decoded preview against the
+master, and the share of the platform's texture memory. Its controls write the
+manifest through `manifest::edit::set_texture_format` / `set_texture_key`, which touch
+one key and keep the rest of the file as written, and the watcher rebakes.
+
 ## Consequences
 
-- No existing texture changed format; RomFS, linear memory and every older golden
-  are unchanged. Switching castle64's and Solid Eleven's textures is Phase 2 (with
-  `auto` and the PSNR guard).
+- Phase 1 changed no texture. Phase 2's `auto` default moves the engine's and Solid
+  Eleven's 3DS and PC textures to smaller formats where they keep 35 dB; the 3DS
+  goldens that show them moved within their tolerance (the PR quotes the numbers).
 - Two traps cost time and are in AGENTS.md › Pitfalls: `C3D_Tex::fmt` is a signed
   4-bit bitfield (GPU_A8 reads back as -8), and the engine's citro2d tint mode is
   multiply, so a black texel stays black under any tint.

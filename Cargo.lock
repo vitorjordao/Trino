@@ -446,6 +446,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9e1b586273c5702936fe7b7d6896644d8be71e6314cfe09d3167c95f712589e8"
 
 [[package]]
+name = "bcdec_rs"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f09c37bc0e9f0924b7dae9988265ef3c76c88538f41a3b06caf4bed07cee5226"
+
+[[package]]
 name = "bit-set"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3635,6 +3641,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "texpresso"
+version = "2.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8550677e2259d675a7841cb1403db35f330cc9e58674c8c5caa12dd12c51dc71"
+dependencies = [
+ "libm",
+]
+
+[[package]]
 name = "thiserror"
 version = "1.0.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3849,6 +3864,7 @@ name = "trino-asset-pipeline"
 version = "0.2.0-dev.1"
 dependencies = [
  "ab_glyph",
+ "bcdec_rs",
  "gltf",
  "hound",
  "notify 8.2.0",
@@ -3857,6 +3873,7 @@ dependencies = [
  "ron",
  "serde",
  "tempfile",
+ "texpresso",
  "toml",
  "trino-core",
  "trino-scene",

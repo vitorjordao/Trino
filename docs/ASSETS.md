@@ -48,16 +48,67 @@ as part of the console build, and the PC app bakes on start. With the editor ope
 ## Texture formats
 
 Each sprite and font atlas declares a format per platform
-(`formats = { n64 = "CI4", 3ds = "ETC1" }`); a format the platform can't represent
-is a bake error that lists the ones it can.
+(`formats = { n64 = "CI4", 3ds = "ETC1", pc = "BC7" }`), or `"auto"`; a format the
+platform can't represent is a bake error that lists the ones it can.
 
 | Platform | Formats | Default |
 |---|---|---|
-| PC | `RGBA8` | `RGBA8` |
-| N64 | `CI4`, `CI8`, `RGBA5551`, `I4`, `I8` (TMEM is 4 KB) | none: declare one |
-| 3DS | `RGBA8`, `RGB565`, `RGBA5551`, `RGBA4`, `LA8`, `L8`, `A8`, `ETC1`, `ETC1A4` (`tex3ds -f`) | `RGBA8` |
+| PC | `RGBA8`, `BC1`, `BC3`, `BC7` | `auto` |
+| N64 | `CI4`, `CI8`, `RGBA5551`, `I4`, `I8` (TMEM is 4 KB), `auto` | none: declare one (fonts: `CI4`) |
+| 3DS | `RGBA8`, `RGB565`, `RGBA5551`, `RGBA4`, `LA8`, `L8`, `A8`, `ETC1`, `ETC1A4` (`tex3ds -f`), `auto` | `auto` |
 
-On the 3DS (ADR 0017):
+### `auto`, `quality` and `min_psnr` (ADR 0017 §6)
+
+`auto` measures every format of the platform against the master and keeps the
+**smallest one whose PSNR reaches the threshold** (same size: the higher PSNR; on the
+N64, a format that fits TMEM first). Nothing is guessed from the content: an ETC1 of
+an image with alpha, or an A8 of a colored one, simply measures low. The PC bake, the
+3DS and N64 builds, `texture inspect`, `texture report` and the editor run the same
+code, so they agree on every texture.
+
+```toml
+[sprites.sky]
+file = "sprites/sky.png"
+formats = { n64 = "RGBA5551" }   # PC and 3DS: auto
+quality = "high"                 # low 30 dB, normal 35 (the default), high 40
+
+[sprites.hud_icons]
+file = "sprites/hud.png"
+formats = { 3ds = "RGBA4" }      # an explicit format...
+min_psnr = 38                    # ...checked: below 38 dB the bake fails
+```
+
+- **Threshold:** `min_psnr` when set, else `quality`. Above ~35 dB a change is hard to
+  see, below ~25 dB it is obvious.
+- **Explicit formats are the author's call:** only a texture with `min_psnr` checks
+  them, and a miss fails the bake naming the formats that would pass and what `auto`
+  would pick.
+- **Not measured:** an N64 palette the master doesn't fit losslessly (`mksprite`'s
+  quantizer is not modeled) and a BCn texture whose sides are not multiples of 4.
+  `auto` never picks those.
+- **Full alpha ramps** (soft glows in color) stay `RGBA8` at the default 35 dB: 4-bit
+  alpha (`RGBA4`, `ETC1A4`) keeps about 33 dB. `quality = "low"` accepts them.
+
+### PC: BCn (ADR 0017 §7)
+
+| Format | Bits a texel | Keeps | Use it for |
+|---|---|---|---|
+| `BC1` | 4 | color in 4×4 blocks, 1-bit alpha | opaque art, hard cutouts |
+| `BC3` | 8 | BC1 color + interpolated 8-bit alpha | masks, soft alpha |
+| `BC7` | 8 | color and alpha, best quality | anything BC1 blurs |
+| `RGBA8` | 32 | everything | sides not multiples of 4, gradients that need it |
+
+- The PC bake writes the blocks (`<id>.bc`, `compressed` in the index); the master
+  stays beside it. The runner and the editor upload the blocks where the GPU samples
+  BC (`TEXTURE_COMPRESSION_BC`, every desktop GPU) and the decoded blocks otherwise,
+  so the picture is the same. `TRINO_BC=0` forces the fallback.
+- BC4/BC5 (one and two channels) are not offered: wgpu has no texture swizzle to
+  sample them as gray or white.
+- A run with `TRINO_SMOKE_FRAMES` prints `TRINO_TEXTURES: textures= bytes= bc=
+  bc_bytes= bc_supported=`: castle64's 31 textures take 19,904 bytes of VRAM instead
+  of 147,712.
+
+### On the 3DS (ADR 0017)
 
 | Format | Bits a texel | Keeps | Use it for |
 |---|---|---|---|
@@ -69,7 +120,7 @@ On the 3DS (ADR 0017):
 | `LA8` | 16 | gray with alpha | gray masks with a shade |
 | `L8` | 8 | gray, opaque | light maps, detail layers |
 | `A8` | 8 | alpha; drawn **white** with that alpha | fonts, glows: masks tinted at draw time |
-| `RGBA8` | 32 | everything | the default |
+| `RGBA8` | 32 | everything | what nothing smaller keeps |
 
 - Gray is the Rec. 709 luminance of the linear color, back to sRGB (what `tex3ds`
   computes). A fully transparent texel becomes 0 in every channel, so in `L8`/`ETC1`
@@ -80,12 +131,37 @@ On the 3DS (ADR 0017):
   draws it: ETC1 blocks and 4-bit banding appear on the PC as in Azahar. The preview
   equals `tex3ds`' output texel for texel for the uncompressed formats; ETC1 uses the
   pipeline's own encoder, within 0.1 dB of `tex3ds`' quality.
-- **Check a texture:** `cargo xtask texture inspect sprites/x [--platform 3ds]
-  [--json]` prints, per platform, the format, the bytes, the PSNR against the master
-  and the share of TMEM (N64) or texture memory (3DS). PSNR is computed on colors
-  premultiplied by alpha, so invisible texels don't count; above ~35 dB a change is
-  hard to see, below ~25 dB it is obvious. With devkitPro installed, the 3DS line
-  also decodes the real `tex3ds` output.
+- `cargo xtask build 3ds` prints the linear memory the textures take, and what they
+  would take as RGBA8, per format.
+
+### On the N64
+
+`auto` is opt-in (an N64 texture is sized for TMEM by hand). The pipeline models
+`mksprite`: `I4`/`I8` keep a gray master's level, otherwise Rec. 601 luma × alpha
+stretched to the full range, and the RDP samples **(i, i, i, i)**, so an intensity
+texture is also translucent: right for glows and fonts, wrong for opaque gray art
+(`auto` picks `CI8` there). `CI4`/`CI8` are measured only when the master fits the
+palette losslessly after RGBA5551 truncation.
+- **Masks in `I4`/`I8` are staged by their coverage** (`texture::n64::stage`):
+  `mksprite` takes a gray master's red channel whatever its alpha, so a white glow
+  became a solid white disc on the console (Solid Eleven's glow and rain, until
+  2026-10-17). A font atlas is staged as its alpha; an all-gray sprite with alpha
+  takes its color or its coverage, whichever previews closer. (i, i, i, i) still
+  attenuates a white mask twice (about 20 dB): the engine has no IA format.
+
+### Checking textures
+
+- `cargo xtask texture inspect sprites/x [--platform 3ds] [--json]`: per platform the
+  format (and why `auto` chose it), every candidate with its bytes and PSNR, and the
+  share of TMEM (N64) or texture memory (3DS). PSNR is computed on colors
+  premultiplied by alpha, so invisible texels don't count. With devkitPro installed,
+  the 3DS line also decodes the real `tex3ds` output.
+- `cargo xtask texture report [--platform pc|n64|3ds] [--json]`: every texture of the
+  project, biggest first, with per-platform totals against RGBA8; it fails when any
+  texture fails its format or its `min_psnr`.
+- The editor: select a sprite or font in **Assets**: its texture inspector shows the three
+  platforms side by side, the decoded previews, the candidates, and writes format,
+  `quality` and `min_psnr` back to the manifest.
 
 ## Models: glTF to TMDL
 

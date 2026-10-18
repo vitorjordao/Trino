@@ -55,6 +55,12 @@ pub struct FontDecl {
     /// Per-platform atlas texture format (N64 defaults to CI4 for fonts).
     #[serde(default)]
     pub formats: std::collections::BTreeMap<String, String>,
+    /// `auto`'s quality preset, like a sprite's.
+    #[serde(default)]
+    pub quality: Option<String>,
+    /// The least PSNR (dB) of the atlas, like a sprite's.
+    #[serde(default)]
+    pub min_psnr: Option<f64>,
 }
 
 fn default_first() -> u32 {
@@ -82,16 +88,31 @@ pub struct BakedFont {
 const ATLAS_WIDTH: u32 = 256;
 
 impl FontDecl {
-    /// Atlas texture format for `platform` (fonts default to CI4 on N64).
+    /// Atlas texture format for `platform` (fonts default to CI4 on N64;
+    /// `"auto"` is resolved by `crate::texture::choose`).
     pub fn format_for(&self, logical: &str, platform: crate::Platform) -> Result<String, String> {
-        let sprite = crate::manifest::SpriteDecl {
-            file: self.file.clone(),
-            formats: self.formats.clone(),
-        };
         if platform == crate::Platform::N64 && !self.formats.contains_key("n64") {
             return Ok("CI4".into());
         }
-        sprite.format_for(logical, platform)
+        self.sprite().format_for(logical, platform)
+    }
+
+    /// What `crate::texture::choose` needs for the atlas on `platform`.
+    pub fn settings(&self, platform: crate::Platform) -> crate::texture::TextureSettings {
+        let mut s = self.sprite().settings(platform);
+        if platform == crate::Platform::N64 {
+            s.default = Some("CI4");
+        }
+        s
+    }
+
+    fn sprite(&self) -> crate::manifest::SpriteDecl {
+        crate::manifest::SpriteDecl {
+            file: self.file.clone(),
+            formats: self.formats.clone(),
+            quality: self.quality.clone(),
+            min_psnr: self.min_psnr,
+        }
     }
 }
 
@@ -555,7 +576,10 @@ mod tests {
         );
         assert_eq!(
             d.format_for("fonts/x", crate::Platform::Pc).unwrap(),
-            "RGBA8"
+            "auto"
         );
+        // A default, not a declaration: `choose` reports it as such.
+        let s = d.settings(crate::Platform::N64);
+        assert_eq!((s.format, s.default), (None, Some("CI4")));
     }
 }

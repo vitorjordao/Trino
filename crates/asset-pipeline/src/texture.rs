@@ -1,5 +1,9 @@
-//! Console texture formats on the host: what each format keeps of a
-//! master, how many bytes it takes, and how far it is from the master.
+//! Texture formats on the host: what each format keeps of a master, how
+//! many bytes it takes, how far it is from the master, and which one a
+//! texture gets ([`choose`]: a declared format, or `auto`'s smallest that
+//! keeps `quality`/`min_psnr` — the one decision every bake, `texture
+//! inspect|report` and the editor share). Per platform: the 3DS below,
+//! PC BCn in [`BcFormat`], the N64's `mksprite` model in [`n64`].
 //!
 //! The 3DS bake hands sprites to `tex3ds` (the `.t3x` the shim loads); this
 //! module reproduces the result in Rust so the PC can show it without
@@ -25,6 +29,17 @@
 //! alpha — a mask tinted at draw time (fonts, glows). The PICA200 itself
 //! samples A8 as black; the shim draws such textures with the vertex or
 //! tint color instead.
+
+mod auto;
+mod bc;
+pub mod n64;
+
+pub use auto::{
+    Candidate, Choice, Content, Quality, Source, TextureSettings, candidates, choose, db, formats,
+    measure,
+};
+pub use bc::{BcFormat, bc7_encode_block};
+pub use n64::N64Format;
 
 /// A 3DS (PICA200) texture format, as the manifest names it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -354,7 +369,7 @@ fn half_average(block: &[[u8; 3]; 16], flip: bool, half: bool) -> [f32; 3] {
 
 /// Encoded base-color candidates around a half's average: the rounded
 /// average shifted along the gray axis (a block's modifiers are gray too).
-fn candidates(avg: [f32; 3], bits: u32) -> Vec<[i32; 3]> {
+fn etc1_bases(avg: [f32; 3], bits: u32) -> Vec<[i32; 3]> {
     let max = (1 << bits) - 1;
     let q = avg.map(|a| (a * max as f32 / 255.0).round() as i32);
     (-2..=2).map(|k| q.map(|v| (v + k).clamp(0, max))).collect()
@@ -387,7 +402,7 @@ pub fn etc1_encode_block(block: &[[u8; 3]; 16]) -> u64 {
         let mut halves = Vec::new();
         for (h, avg) in avgs.iter().enumerate() {
             let mut hb = (u32::MAX, [0; 3], 0, [0u8; 16]);
-            for cand in candidates(*avg, 4) {
+            for cand in etc1_bases(*avg, 4) {
                 let (e, t, idx) = best_table(block, flip, h == 1, expand(cand, 4));
                 if e < hb.0 {
                     hb = (e, cand, t, idx);
@@ -413,9 +428,9 @@ pub fn etc1_encode_block(block: &[[u8; 3]; 16]) -> u64 {
             ));
         }
         // Differential: 5 bits a channel, the second half within -4..=3.
-        for c0 in candidates(avgs[0], 5) {
+        for c0 in etc1_bases(avgs[0], 5) {
             let (e0, t0, idx0) = best_table(block, flip, false, expand(c0, 5));
-            let target = candidates(avgs[1], 5)[2];
+            let target = etc1_bases(avgs[1], 5)[2];
             let mut hb = (u32::MAX, [0; 3], 0, [0u8; 16]);
             for k in -2..=2 {
                 let c1: [i32; 3] = core::array::from_fn(|c| {
@@ -598,10 +613,10 @@ pub fn psnr(master: &[u8], got: &[u8]) -> f64 {
 }
 
 // ---------------------------------------------------------------------------
-// `cargo xtask texture inspect`.
+// `cargo xtask texture inspect` and `texture report`.
 
-/// One platform's view of a texture: its format, bytes, quality against the
-/// master and its share of the platform's texture memory.
+/// One platform's view of a texture: its format and why, bytes, quality
+/// against the master and its share of the platform's texture memory.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextureReport {
     pub platform: crate::Platform,
@@ -614,13 +629,24 @@ pub struct TextureReport {
     /// lossless, `None` when this module does not model the encoder.
     pub psnr: Option<f64>,
     /// The memory the share is of: `TMEM` (N64), `texture memory` (3DS
-    /// linear memory, `Caps::N3DS.texture_memory_bytes`) or none (PC).
+    /// linear memory, `Caps::N3DS.texture_memory_bytes`) or `VRAM` (PC,
+    /// no budget).
     pub memory: &'static str,
     /// Bytes counted against that memory, and its size.
     pub memory_bytes: u64,
     pub memory_budget: Option<u64>,
     /// Notes: why PSNR is unknown, a TMEM overflow.
     pub note: Option<String>,
+    /// Picked by `auto` ([`auto::choose`]).
+    pub auto: bool,
+    /// Why this format: `auto`'s weighing, "declared" or the default.
+    pub reason: String,
+    /// The PSNR it had to keep (`auto`, or a declared `min_psnr`).
+    pub threshold: Option<f64>,
+    /// What the master holds (`white mask`, `opaque color`, ...).
+    pub content: &'static str,
+    /// Every format `auto` measured (empty for a declared format).
+    pub candidates: Vec<Candidate>,
 }
 
 impl TextureReport {
@@ -631,151 +657,168 @@ impl TextureReport {
     }
 }
 
+/// A sprite's or font's settings and master, the way the bake reads them.
+pub struct Master {
+    pub source: Source,
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+}
+
+/// The settings of `logical` (`sprites/x`, `fonts/x`) for `platform` and
+/// its master (that platform's override resolved like the bake).
+pub fn master(
+    assets_root: &std::path::Path,
+    manifest: &crate::Manifest,
+    logical: &str,
+    platform: crate::Platform,
+) -> Result<(TextureSettings, Master), String> {
+    let (kind, name) = logical
+        .split_once('/')
+        .ok_or_else(|| format!("`{logical}`: expected sprites/<name> or fonts/<name>"))?;
+    match kind {
+        "sprites" => {
+            let decl = manifest
+                .sprites
+                .get(name)
+                .ok_or_else(|| format!("sprite `{logical}` is not in the manifest"))?;
+            let source = crate::resolve_source(assets_root, platform, &decl.file)?;
+            let (width, height, rgba) = crate::bake::decode_png(&source)?;
+            Ok((
+                decl.settings(platform),
+                Master {
+                    source: Source::Sprite,
+                    width,
+                    height,
+                    rgba,
+                },
+            ))
+        }
+        "fonts" => {
+            let decl = manifest
+                .fonts
+                .get(name)
+                .ok_or_else(|| format!("font `{logical}` is not in the manifest"))?;
+            let source = crate::resolve_source(assets_root, platform, &decl.file)?;
+            let font =
+                crate::bake_font(&source, decl).map_err(|e| format!("font `{logical}`: {e}"))?;
+            Ok((
+                decl.settings(platform),
+                Master {
+                    source: Source::FontAtlas,
+                    width: font.width,
+                    height: font.height,
+                    rgba: font.rgba,
+                },
+            ))
+        }
+        other => Err(format!(
+            "`{logical}`: no textures under `{other}/` (sprites, fonts)"
+        )),
+    }
+}
+
 /// Inspect a sprite or font atlas (`sprites/x`, `fonts/x`) of the project
-/// at `assets_root` on each of `platforms`, resolving each platform's
-/// override like the bake.
+/// at `assets_root` on each of `platforms`, deciding its format like the
+/// bake.
 pub fn inspect(
     assets_root: &std::path::Path,
     logical: &str,
     platforms: &[crate::Platform],
 ) -> Result<Vec<TextureReport>, String> {
     let manifest = crate::Manifest::load(&assets_root.join("manifest.toml"))?;
-    let (kind, name) = logical
-        .split_once('/')
-        .ok_or_else(|| format!("`{logical}`: expected sprites/<name> or fonts/<name>"))?;
-    let mut out = Vec::new();
-    for &platform in platforms {
-        let (format, master) = match kind {
-            "sprites" => {
-                let decl = manifest
-                    .sprites
-                    .get(name)
-                    .ok_or_else(|| format!("sprite `{logical}` is not in the manifest"))?;
-                let format = decl.format_for(logical, platform)?;
-                let source = crate::resolve_source(assets_root, platform, &decl.file)?;
-                (format, crate::bake::decode_png(&source)?)
-            }
-            "fonts" => {
-                let decl = manifest
-                    .fonts
-                    .get(name)
-                    .ok_or_else(|| format!("font `{logical}` is not in the manifest"))?;
-                let format = decl.format_for(logical, platform)?;
-                let source = crate::resolve_source(assets_root, platform, &decl.file)?;
-                let font = crate::bake_font(&source, decl)
-                    .map_err(|e| format!("font `{logical}`: {e}"))?;
-                (format, (font.width, font.height, font.rgba))
-            }
-            other => {
-                return Err(format!(
-                    "`{logical}`: no textures under `{other}/` (sprites, fonts)"
-                ));
-            }
-        };
-        out.push(report(platform, &format, master));
-    }
-    Ok(out)
+    platforms
+        .iter()
+        .map(|&platform| {
+            let (settings, m) = master(assets_root, &manifest, logical, platform)?;
+            let choice = choose(
+                platform, logical, m.source, &settings, m.width, m.height, &m.rgba,
+            )?;
+            Ok(report(platform, choice, m.width, m.height))
+        })
+        .collect()
 }
 
-fn report(
-    platform: crate::Platform,
-    format: &str,
-    (w, h, rgba): (u32, u32, Vec<u8>),
-) -> TextureReport {
-    let base = TextureReport {
-        platform,
-        format: format.to_string(),
-        width: w,
-        height: h,
-        bytes: 0,
-        psnr: None,
-        memory: "",
-        memory_bytes: 0,
-        memory_budget: None,
-        note: None,
-    };
-    match platform {
-        crate::Platform::Pc => TextureReport {
-            bytes: w as u64 * h as u64 * 4,
-            psnr: Some(f64::INFINITY),
-            ..base
-        },
-        crate::Platform::N3ds => {
-            let f = N3dsFormat::parse(format).expect("validated by format_for");
-            let bytes = f.texture_bytes(w, h);
-            TextureReport {
-                bytes,
-                psnr: Some(psnr(&rgba, &f.preview(w, h, &rgba))),
-                memory: "texture memory",
-                memory_bytes: bytes,
-                memory_budget: Some(trino_core::Caps::N3DS.texture_memory_bytes as u64),
-                ..base
-            }
-        }
-        crate::Platform::N64 => n64_report(base, &rgba),
-    }
+/// One texture of a project in `texture report`.
+#[derive(Clone, Debug)]
+pub struct TextureEntry {
+    pub logical: String,
+    /// Each platform's report, or why its bake would fail.
+    pub platforms: Vec<(crate::Platform, Result<TextureReport, String>)>,
 }
 
-/// The N64 side: texels padded to TMEM rows, a palette's TLUT in TMEM's
-/// upper half. PSNR where the result is known: RGBA5551 truncates like the
-/// 3DS's; a palette is lossless when the master has few enough 16-bit
-/// colors (otherwise `mksprite` quantizes, which isn't modeled here).
-fn n64_report(base: TextureReport, rgba: &[u8]) -> TextureReport {
-    let (w, h) = (base.width, base.height);
-    let bits = match base.format.as_str() {
-        "CI4" | "I4" => 4,
-        "CI8" | "I8" => 8,
-        _ => 16,
-    };
-    let texels = (w * bits / 8).next_multiple_of(8) as u64 * h as u64;
-    let (tlut_bytes, tlut_tmem) = match base.format.as_str() {
-        // 16 or 256 RGBA5551 entries; rdpq loads each 4 times into TMEM's
-        // upper half.
-        "CI4" => (32, 128),
-        "CI8" => (512, 2048),
-        _ => (0, 0),
-    };
-    let quantized = N3dsFormat::Rgba5551.preview(w, h, rgba);
-    let (psnr_v, note) = match base.format.as_str() {
-        "RGBA5551" => (Some(psnr(rgba, &quantized)), None),
-        "CI4" | "CI8" => {
-            let max = if base.format == "CI4" { 16 } else { 256 };
-            let mut colors: Vec<&[u8; 4]> = quantized.as_chunks::<4>().0.iter().collect();
-            colors.sort_unstable();
-            colors.dedup();
-            if colors.len() <= max {
-                (Some(psnr(rgba, &quantized)), None)
-            } else {
-                (
-                    None,
-                    Some(format!(
-                        "{} colors for a {max}-color palette: mksprite quantizes (not modeled)",
-                        colors.len()
-                    )),
-                )
-            }
-        }
-        _ => (
-            None,
-            Some("intensity: mksprite's conversion is not modeled".into()),
+/// Every sprite and font atlas of the project at `assets_root` on each of
+/// `platforms`, in manifest order (`texture report` sorts them).
+pub fn report_project(
+    assets_root: &std::path::Path,
+    platforms: &[crate::Platform],
+) -> Result<Vec<TextureEntry>, String> {
+    let manifest = crate::Manifest::load(&assets_root.join("manifest.toml"))?;
+    let logicals = manifest
+        .sprites
+        .keys()
+        .map(|n| format!("sprites/{n}"))
+        .chain(manifest.fonts.keys().map(|n| format!("fonts/{n}")));
+    Ok(logicals
+        .map(|logical| {
+            let platforms = platforms
+                .iter()
+                .map(|&platform| {
+                    let r = master(assets_root, &manifest, &logical, platform).and_then(
+                        |(settings, m)| {
+                            choose(
+                                platform, &logical, m.source, &settings, m.width, m.height, &m.rgba,
+                            )
+                            .map(|c| report(platform, c, m.width, m.height))
+                        },
+                    );
+                    (platform, r)
+                })
+                .collect();
+            TextureEntry { logical, platforms }
+        })
+        .collect())
+}
+
+/// A [`Choice`] as a report line with the platform's memory.
+pub fn report(platform: crate::Platform, choice: Choice, width: u32, height: u32) -> TextureReport {
+    let chosen = choice
+        .candidates
+        .iter()
+        .find(|c| c.format == choice.format)
+        .cloned();
+    let (memory, memory_bytes, memory_budget) = match platform {
+        crate::Platform::Pc => ("VRAM", choice.bytes, None),
+        crate::Platform::N3ds => (
+            "texture memory",
+            choice.bytes,
+            Some(trino_core::Caps::N3DS.texture_memory_bytes as u64),
         ),
-    };
-    let half = if tlut_tmem > 0 { 2048 } else { 4096 };
-    let note = if texels > half {
-        Some(format!(
-            "{texels} texel bytes overflow TMEM ({half} available)"
-        ))
-    } else {
-        note
+        crate::Platform::N64 => {
+            let f = N64Format::parse(&choice.format).expect("an N64 format");
+            ("TMEM", f.tmem(width, height).0, Some(4096))
+        }
     };
     TextureReport {
-        bytes: (w * h * bits / 8) as u64 + tlut_bytes,
-        psnr: psnr_v,
-        memory: "TMEM",
-        memory_bytes: texels + tlut_tmem,
-        memory_budget: Some(4096),
-        note,
-        ..base
+        platform,
+        format: choice.format,
+        width,
+        height,
+        bytes: choice.bytes,
+        psnr: choice.psnr,
+        memory,
+        memory_bytes,
+        memory_budget,
+        note: chosen.and_then(|c| c.note),
+        auto: choice.auto,
+        reason: choice.reason,
+        threshold: choice.threshold,
+        content: choice.content.describe(),
+        candidates: if choice.auto {
+            choice.candidates
+        } else {
+            Vec::new()
+        },
     }
 }
 

@@ -27,6 +27,7 @@ Run modes and switches for `trino-app-pc`:
 | `TRINO_SCENE=scenes/x.scene.ron` | Play an editor scene instead of the game; it reloads when the scene, its prefabs or materials change |
 | `TRINO_GAME=showcase` | Run `examples/showcase`, the demo scene exported to code |
 | `TRINO_SMOKE_FRAMES=N` | Exit after N frames (CI smoke runs) |
+| `TRINO_BC=0` | Upload BC1/BC3/BC7 textures decoded instead of as blocks (the path of a GPU without BC); a smoke run prints `TRINO_TEXTURES:` with the VRAM either way |
 
 Keyboard mapping: A/B = Z/X, X/Y = C/V, L/R = Q/E, Start = Enter, Select = Right Shift,
 D-pad = arrows, stick = WASD. The mouse feeds `InputState::pointer`. Gamepads go through

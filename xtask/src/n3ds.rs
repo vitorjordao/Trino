@@ -164,6 +164,37 @@ fn tex3ds_format(logical: &str, format: &str) -> Result<&'static str, String> {
         .ok_or_else(|| format!("{logical}: no tex3ds mapping for format {format}"))
 }
 
+/// The 3DS textures of a bake: linear memory taken against RGBA8, and how
+/// many of each format (`[3ds] textures:` line).
+#[derive(Default)]
+struct TextureTally {
+    bytes: u64,
+    rgba8: u64,
+    formats: std::collections::BTreeMap<String, u32>,
+}
+
+impl TextureTally {
+    fn add(&mut self, c: &trino_asset_pipeline::texture::Choice, w: u32, h: u32) {
+        self.bytes += c.bytes;
+        self.rgba8 += trino_asset_pipeline::N3dsFormat::Rgba8.texture_bytes(w, h);
+        *self.formats.entry(c.format.clone()).or_default() += 1;
+    }
+
+    fn line(&self) -> String {
+        let formats: Vec<String> = self
+            .formats
+            .iter()
+            .map(|(f, n)| format!("{f} x{n}"))
+            .collect();
+        format!(
+            "[3ds] textures: {} B of linear memory ({} B as RGBA8): {}",
+            self.bytes,
+            self.rgba8,
+            formats.join(", ")
+        )
+    }
+}
+
 /// Bake 3DS assets into target/3ds/romfs: tex3ds for sprites, raw PCM16
 /// (12-byte header: rate, channels, frames) for sounds, plus the index.tsv
 /// the runtime reads at boot.
@@ -181,16 +212,29 @@ pub fn bake_assets(p: &Project, test_mode: bool) -> Result<(), String> {
     std::fs::create_dir_all(&romfs).map_err(|e| e.to_string())?;
 
     let mut index = String::new();
+    let mut textures = TextureTally::default();
 
     println!("[3ds] baking assets...");
     for (name, decl) in &manifest.sprites {
         let logical = format!("sprites/{name}");
         let id = trino_core::asset_id(&logical);
-        let format = decl.format_for(&logical, Platform::N3ds)?;
+        let source = resolve_source(&root.join("assets"), Platform::N3ds, &decl.file)?;
+        // `auto` (the default) measures the master: the same choice as the
+        // PC bake's 3DS preview.
+        let (w, h, rgba) = trino_asset_pipeline::decode_png(&source)?;
+        let choice = trino_asset_pipeline::texture::choose(
+            Platform::N3ds,
+            &logical,
+            trino_asset_pipeline::texture::Source::Sprite,
+            &decl.settings(Platform::N3ds),
+            w,
+            h,
+            &rgba,
+        )?;
+        textures.add(&choice, w, h);
         // Manifest names follow the hardware format; tex3ds spells them
         // lowercase-compact.
-        let tex3ds_format = tex3ds_format(&logical, &format)?;
-        let source = resolve_source(&root.join("assets"), Platform::N3ds, &decl.file)?;
+        let tex3ds_format = tex3ds_format(&logical, &choice.format)?;
         let staged = stage.join(format!("{id:08x}.png"));
         std::fs::copy(&source, &staged).map_err(|e| e.to_string())?;
         let out = romfs.join(format!("{id:08x}.t3x"));
@@ -239,11 +283,20 @@ pub fn bake_assets(p: &Project, test_mode: bool) -> Result<(), String> {
     for (name, decl) in &manifest.fonts {
         let logical = format!("fonts/{name}");
         let id = trino_core::asset_id(&logical);
-        let format = decl.format_for(&logical, Platform::N3ds)?;
-        let tex3ds_format = tex3ds_format(&logical, &format)?;
         let source = resolve_source(&root.join("assets"), Platform::N3ds, &decl.file)?;
         let font = trino_asset_pipeline::bake_font(&source, decl)
             .map_err(|e| format!("font `{logical}`: {e}"))?;
+        let choice = trino_asset_pipeline::texture::choose(
+            Platform::N3ds,
+            &logical,
+            trino_asset_pipeline::texture::Source::FontAtlas,
+            &decl.settings(Platform::N3ds),
+            font.width,
+            font.height,
+            &font.rgba,
+        )?;
+        textures.add(&choice, font.width, font.height);
+        let tex3ds_format = tex3ds_format(&logical, &choice.format)?;
         // Atlas -> t3x (same handle as the font); table -> verbatim TFNT.
         let staged = stage.join(format!("{id:08x}.png"));
         let png = trino_asset_pipeline::font::encode_png(font.width, font.height, &font.rgba)?;
@@ -300,6 +353,7 @@ pub fn bake_assets(p: &Project, test_mode: bool) -> Result<(), String> {
     }
 
     std::fs::write(romfs.join("index.tsv"), index).map_err(|e| e.to_string())?;
+    println!("{}", textures.line());
     if test_mode {
         std::fs::write(romfs.join("test_mode"), "1").map_err(|e| e.to_string())?;
     }

@@ -382,16 +382,17 @@ fn console_bakes_record_and_validate_each_platforms_format() {
         format_of(Platform::N3ds, "sprites/hero", "sprite"),
         "RGB565"
     );
-    assert_eq!(format_of(Platform::N3ds, "sprites/rgb", "sprite"), "RGBA8");
-    assert_eq!(format_of(Platform::N3ds, "fonts/pixel", "sprite"), "RGBA8");
+    // Undeclared on the 3DS: `auto` measures the master (an opaque
+    // two-color sprite keeps ETC1 lossless enough; the glyphs are a white
+    // mask).
+    assert_eq!(format_of(Platform::N3ds, "sprites/rgb", "sprite"), "ETC1");
+    assert_eq!(format_of(Platform::N3ds, "fonts/pixel", "sprite"), "A8");
 
     // Platform names round-trip; overrides live under the key.
     for p in [Platform::Pc, Platform::N64, Platform::N3ds] {
         assert_eq!(Platform::parse(p.key()), Some(p));
-        assert!(
-            p.supported_texture_formats()
-                .contains(&p.default_texture_format().unwrap_or("CI4"))
-        );
+        let default = p.default_texture_format().unwrap_or("CI4");
+        assert!(default == "auto" || p.supported_texture_formats().contains(&default));
     }
     assert_eq!(Platform::parse("n3ds"), Some(Platform::N3ds));
     assert_eq!(Platform::parse("gba"), None);
@@ -481,7 +482,6 @@ file = "scenes/nope.scene.ron"
     let text = err.to_string();
     assert!(text.starts_with(&format!("asset bake failed with {} error(s)", err.0.len())));
     for needle in [
-        "unsupported PNG color type",
         "3 channels not supported",
         "not found",
         "glTF contains no mesh",
@@ -496,7 +496,8 @@ file = "scenes/nope.scene.ron"
     ] {
         assert!(text.contains(needle), "missing `{needle}` in:\n{text}");
     }
-    assert_eq!(err.0.len(), 12, "{text}");
+    // (A grayscale master is no error: it decodes to RGBA8.)
+    assert_eq!(err.0.len(), 11, "{text}");
     assert!(
         !dir.path().join("out/index.toml").exists(),
         "a failed bake writes no index"

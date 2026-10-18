@@ -23,6 +23,10 @@ Produces `target/n64/trino.z64`. Everything native runs inside the pinned
    (`target/n64/rsp_trino.o`; `mips64-elf-size -G` prints its IMEM/DMEM use, which
    must stay under 4 KB each with the rspq kernel).
 3. `bake_assets` — mksprite/audioconv64 into `target/n64/filesystem/` + `index.tsv`.
+   Sprite formats come from `texture::choose` (declared, or `auto`); an I4/I8 mask is
+   re-encoded with its coverage as the intensity (`texture::n64::stage`) before
+   mksprite, which otherwise keeps a gray master's red channel and ignores alpha.
+   Any other sprite is copied as its master file (an indexed PNG keeps its palette).
 4. `cargo +nightly build` — Rust as a **staticlib** for the custom target
    `platforms/n64/mips-nintendo64-none.json` (o32, `+noabicalls`, build-std).
 5. `pack_rom` — in-container link with `mips64-elf-g++ -mabi=o64

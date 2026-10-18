@@ -470,24 +470,34 @@ RDP).
     Game view HUD and the Inspector show `PC GPU 42/46 draws · 2619 tris · …`.
   - **Next (#51 phases 2–6):** the WGSL vertex stage and resident buffers, skeletons and
     the instance ring, the parallel CPU fallback, `TRINO_PC_TNL`, the evidence.
-- **Texture formats, phase 1 (2026-10-17, ADR 0017 draft, GitHub #52):** the 3DS
-  takes `ETC1`, `ETC1A4`, `RGBA4`, `RGBA5551`, `LA8`, `L8` and `A8` besides `RGBA8`/
-  `RGB565` (`formats = { 3ds = "ETC1" }`, `tex3ds -f`; RGBA8 stays the default).
-  - **Semantics on every target:** L8 gray opaque, LA8 gray + alpha, **A8 white +
-    alpha** (the shim turns the PICA200's black A8 white: `GPU_TEVOP_RGB_ONE_MINUS_SRC_COLOR`
-    in 3D, `C2D_TintSolid` for sprite blits).
-  - **PC preview:** `trino_asset_pipeline::texture` (`N3dsFormat::preview`, its own ETC1
-    encoder, `decode_tex3ds_raw`, `psnr`); the PC bake writes `<id>.3ds.sprite`
-    (`preview_3ds`) and `LoadedSprite::pixels_for(Platform::N3ds)` feeds it to the PC's
-    3DS profile (`trino-runner-pc`, the editor's Game view, the tests). Texel-exact to
-    `tex3ds` for the uncompressed formats, ETC1 within 0.1 dB.
-  - **CLI:** `cargo xtask texture inspect <sprites/x> [--platform] [--json]`: format,
-    bytes, PSNR, TMEM / 3DS texture-memory share (`psnr_tex3ds` with devkitPro).
-  - **Tests:** the `texture formats` self-test step (9 cards, sprite + 3D card, every
-    quadrant probed) on PC, ares and Azahar; the 3DS golden `texture_formats.png` (with
-    a photo-like card in RGBA8/ETC1/RGBA4) and `n3ds_parity` against it.
-  - **Next (#52 phases 2–5):** `auto` + `min_psnr` + `texture report` (and switching
-    castle64/Solid Eleven), PC BCn, the editor's texture inspector, Web KTX2.
+- **Texture formats (2026-10-17, ADR 0017, GitHub #52 phases 1–4):** a hardware format
+  per platform, chosen by measurement.
+  - **3DS:** `ETC1`, `ETC1A4`, `RGBA4`, `RGBA5551`, `LA8`, `L8`, `A8`, `RGB565`, `RGBA8`
+    (`tex3ds -f`). **A8 is white + alpha** on every target (the shim turns the PICA200's
+    black A8 white: `GPU_TEVOP_RGB_ONE_MINUS_SRC_COLOR` in 3D, `C2D_TintSolid` blits).
+  - **`auto` (default on PC and 3DS; opt-in on the N64):** every format is measured
+    against the master (PSNR on premultiplied color + alpha) and the smallest that keeps
+    `min_psnr`, else `quality` (low 30 / normal 35 / high 40 dB), wins.
+    `trino_asset_pipeline::texture::choose` is the one decision: the PC bake, the 3DS
+    and N64 stagers, `texture inspect|report` and the editor all call it. An explicit
+    format with `min_psnr` below it fails the bake with the formats that pass.
+  - **PC BCn:** `BC1`/`BC3` (texpresso) and `BC7` (own mode-6 encoder), decoded by
+    bcdec_rs; `<hash>.bc` beside the master. The runner and the editor upload the blocks
+    where the GPU has `TEXTURE_COMPRESSION_BC`, the decoded blocks otherwise
+    (`TRINO_BC=0`); `TRINO_TEXTURES:` at smoke exit reports the VRAM (castle64 147 712 →
+    19 904 bytes).
+  - **Previews:** the PC bake writes what the 3DS samples (`<id>.3ds.sprite`); the 3DS
+    profile, the editor's Game view and the tests draw it. Texel-exact to `tex3ds` for
+    the uncompressed formats, ETC1 within 0.1 dB.
+  - **Tools:** `cargo xtask texture inspect` (choice, why, every candidate) and
+    `texture report` (every texture, totals vs RGBA8, fails on a failing texture);
+    `build 3ds` prints the linear memory by format. The editor's **Assets › Texture**
+    inspector shows the three platforms side by side and writes format, `quality` and
+    `min_psnr` to the manifest.
+  - **Tests:** the `texture formats` self-test step on PC, ares and Azahar; the 3DS
+    golden `texture_formats.png` and `n3ds_parity`; `bc_textures` (GPU blocks vs the
+    fallback).
+  - **Next:** Web KTX2 (#52 phase 5) is #47's.
 - **Console hardware paths and N64 timing (2026-10-16, ADR 0012, part of #31):**
   the 3DS transforms and lights static meshes on the PICA200 (`render3d::gpu_check`,
   `tnl3d.v.pica`, `gpu tnl` self-test step, `castle64_work_3ds.toml`); text goes to the
@@ -663,7 +673,8 @@ cargo xtask scene check   # validate scenes/prefabs/materials (text-first loop)
 cargo xtask scene export [--platform pc|n64|3ds] <scene.ron> <out.rs>   # scene -> no_std Rust data (that platform's variants)
 cargo xtask scene budget <scene.ron> [--platform pc|n64|3ds] [--json]   # per-console frame: draws, tris, N64 CPU/RSP, off-RSP reasons, PC GPU split, unseen draws
 cargo xtask model inspect <file> [--json]       # bake a model like the engine; art gate
-cargo xtask texture inspect <sprites/x> [--platform pc|n64|3ds] [--json]   # format, bytes, PSNR, TMEM / 3DS memory share
+cargo xtask texture inspect <sprites/x> [--platform pc|n64|3ds] [--json]   # format (auto: why), candidates, bytes, PSNR, memory share
+cargo xtask texture report [--platform pc|n64|3ds] [--json]                # every texture, biggest first, totals vs RGBA8
 cargo xtask model inspect <file> --anim [--json]                                   # + per-clip stride, slide, floor, bounds
 cargo xtask model pose <models/x> [--clip C --time S] --name <new>                 # a pose as a static model (consoles)
 cargo xtask particles new <name> --sprite sprites/x | check | inspect <name> [--json]   # particle effects as text
@@ -1063,6 +1074,17 @@ cargo test --workspace
   16-bit formats (`>> 3`, `>> 4`); its luminance is Rec. 709 on linear light. The
   PC's 3DS preview (`trino_asset_pipeline::texture`) does the same, and
   `preview_matches_tex3ds` checks it where devkitPro is installed.
+- **The PNG decoder must normalize the master** (`decode_png`: EXPAND, STRIP_16, gray and
+  gray+alpha to RGBA). An indexed N64 override (`assets/n64/impostors/selftest-boar.png`)
+  failed the N64 build once `auto` started decoding every master.
+- **N64 `I4`/`I8` sample as (i, i, i, i):** an intensity texture is translucent where it
+  is dark. Right for glows and fonts; opaque gray art needs `CI8` (`auto` measures it).
+  `mksprite` keeps a gray master's red channel and ignores its alpha, so a white glow
+  in I4 was a solid disc on the N64 (Solid Eleven's `se_glow`, found by `texture
+  report` at 2.3 dB). The build now stages masks by coverage (`texture::n64::stage`).
+- **A full alpha ramp keeps ~33 dB in 4-bit alpha** (`RGBA4`, `ETC1A4`), so `auto` at the
+  default 35 dB leaves soft colored glows in `RGBA8`. Use `quality = "low"` when 4-bit
+  alpha is acceptable.
 - Do not add dependencies to `trino-core` — the dep-graph test will fail, and the crate
   must compile for MIPS bare metal.
 - Screen space is X-right, **Y-down**, origin top-left; stick input is Y-up.

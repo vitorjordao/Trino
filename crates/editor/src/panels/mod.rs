@@ -7,3 +7,4 @@ pub mod inspector;
 pub mod lod;
 pub mod particles;
 pub mod platforms;
+pub mod texture;

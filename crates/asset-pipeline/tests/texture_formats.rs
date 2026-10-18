@@ -195,8 +195,11 @@ fn inspect_reports_each_platform() {
     let r = texture::inspect(&root, "sprites/etc1", &Platform::ALL).unwrap();
     assert_eq!(r.len(), 3);
     let (pc, n64, n3ds) = (&r[0], &r[1], &r[2]);
-    assert_eq!((pc.format.as_str(), pc.bytes), ("RGBA8", 64 * 64 * 4));
-    assert!(pc.psnr.unwrap().is_infinite() && pc.share_percent().is_none());
+    // The PC is `auto` by default: a color image with an alpha ramp takes
+    // a byte a texel (BC3 or BC7, whichever keeps more).
+    assert!(pc.auto && pc.format.starts_with("BC"), "{}", pc.reason);
+    assert_eq!(pc.bytes, 64 * 64);
+    assert!(pc.psnr.unwrap() >= 35.0 && pc.share_percent().is_none());
     assert_eq!((n3ds.format.as_str(), n3ds.bytes), ("ETC1", 64 * 64 / 2));
     let preview = N3dsFormat::Etc1.preview(W, H, &master());
     assert_eq!(n3ds.psnr, Some(texture::psnr(&master(), &preview)));
@@ -204,7 +207,7 @@ fn inspect_reports_each_platform() {
     // 64×64 RGBA5551 is 8 KB: twice TMEM, and said so.
     assert_eq!((n64.format.as_str(), n64.bytes), ("RGBA5551", 8192));
     assert!(n64.share_percent().unwrap() > 100.0);
-    assert!(n64.note.as_deref().unwrap().contains("overflow TMEM"));
+    assert!(n64.note.as_deref().unwrap().contains("TMEM bytes > 4096"));
     assert!(texture::inspect(&root, "sprites/ghost", &Platform::ALL).is_err());
     assert!(texture::inspect(&root, "models/x", &Platform::ALL).is_err());
 }
@@ -289,4 +292,204 @@ fn preview_matches_tex3ds() {
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2 and 3 (#52): `auto`, `min_psnr`, `texture report`, PC BCn.
+
+/// A project with one sprite per content kind, every format undeclared
+/// (the PC and 3DS default to `auto`; the N64 asks `auto` explicitly).
+fn auto_project(dir: &Path) -> PathBuf {
+    let root = dir.join("assets");
+    let opaque = opaque();
+    let mask: Vec<u8> = master()
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .flat_map(|p| [255, 255, 255, p[3]])
+        .collect();
+    write_png(&root.join("shared/sprites/photo.png"), W, H, &opaque);
+    write_png(&root.join("shared/sprites/mask.png"), W, H, &mask);
+    write_png(
+        &root.join("shared/sprites/odd.png"),
+        6,
+        6,
+        &opaque[..6 * 6 * 4],
+    );
+    std::fs::write(
+        root.join("manifest.toml"),
+        "version = 1\n\
+         [sprites.photo]\nfile = \"sprites/photo.png\"\nformats = { n64 = \"auto\" }\n\
+         [sprites.mask]\nfile = \"sprites/mask.png\"\nformats = { n64 = \"RGBA5551\" }\n\
+         [sprites.odd]\nfile = \"sprites/odd.png\"\nformats = { n64 = \"auto\" }\nquality = \"low\"\n",
+    )
+    .unwrap();
+    root
+}
+
+#[test]
+fn the_pc_bake_writes_bcn_the_loader_reads_it_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = auto_project(dir.path());
+    let out = dir.path().join("pc");
+    let report = bake_all(&root, Platform::Pc, &out).unwrap_or_else(|e| panic!("{e}"));
+    let entry = |l: &str| report.entries.iter().find(|e| e.logical == l).unwrap();
+    // Opaque: BC1 (4 bits a texel); a white mask: one byte a texel.
+    assert_eq!(entry("sprites/photo").format, "BC1");
+    assert!(["BC3", "BC7"].contains(&entry("sprites/mask").format.as_str()));
+    // 6x6 is not whole 4x4 blocks: RGBA8, no BCn file.
+    assert_eq!(entry("sprites/odd").format, "RGBA8");
+    assert!(entry("sprites/odd").compressed.is_none());
+    let index = std::fs::read_to_string(out.join("index.toml")).unwrap();
+    let photo = asset_id("sprites/photo");
+    assert!(index.contains(&format!("format = \"BC1\"\npreview_3ds = \"{photo:08x}.3ds.sprite\"\ncompressed = \"{photo:08x}.bc\"")), "{index}");
+
+    let loaded = load_dir(&out, None).unwrap();
+    let s = loaded.sprites.iter().find(|s| s.id == photo).unwrap();
+    assert_eq!(
+        s.rgba,
+        opaque(),
+        "the master stays for tools and console profiles"
+    );
+    let c = s.compressed.as_ref().unwrap();
+    assert_eq!(c.format, texture::BcFormat::Bc1);
+    assert_eq!(
+        c.data.len() as u64,
+        texture::BcFormat::Bc1.texture_bytes(W, H)
+    );
+    // What a GPU without BC gets: the blocks decoded, the same as the
+    // preview `auto` measured.
+    let decoded = s.pc_pixels();
+    assert_eq!(
+        &decoded[..],
+        &texture::BcFormat::Bc1.preview(W, H, &opaque())[..]
+    );
+    assert!(texture::psnr(&s.rgba, &decoded) >= 35.0);
+    // A sprite without BCn: the master.
+    let odd = loaded
+        .sprites
+        .iter()
+        .find(|s| s.id == asset_id("sprites/odd"))
+        .unwrap();
+    assert!(odd.compressed.is_none() && odd.pc_pixels()[..] == odd.rgba[..]);
+
+    // A corrupt BCn file is an error, not a panic.
+    std::fs::write(out.join(format!("{photo:08x}.bc")), b"TBCN").unwrap();
+    assert!(load_dir(&out, None).err().unwrap().contains("bad BCn blob"));
+}
+
+#[test]
+fn auto_decides_the_same_on_every_bake_and_in_inspect() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = auto_project(dir.path());
+    for platform in Platform::ALL {
+        let out = dir.path().join(platform.key());
+        let report = bake_all(&root, platform, &out).unwrap_or_else(|e| panic!("{e}"));
+        for e in &report.entries {
+            let r = &texture::inspect(&root, &e.logical, &[platform]).unwrap()[0];
+            assert_eq!(r.format, e.format, "{} on {}", e.logical, platform.key());
+        }
+    }
+    let r = texture::inspect(&root, "sprites/photo", &Platform::ALL).unwrap();
+    // Every `auto` line names its content and the formats it measured.
+    for line in &r {
+        assert!(line.auto, "{line:?}");
+        assert!(line.reason.contains("opaque color"), "{}", line.reason);
+        assert!(!line.candidates.is_empty());
+        assert!(line.psnr.unwrap() >= 35.0, "{}", line.reason);
+    }
+    // The photo's noise keeps ETC1 under 35 dB: the 3DS moves up to a
+    // 16-bit format, and says why.
+    assert_eq!(r[2].format, "RGB565", "{}", r[2].reason);
+    assert!(r[2].reason.contains("not ETC1 28."), "{}", r[2].reason);
+    // `quality = "low"` keeps 30 dB.
+    let odd = texture::inspect(&root, "sprites/odd", &[Platform::N3ds]).unwrap();
+    assert_eq!(odd[0].threshold, Some(30.0));
+}
+
+#[test]
+fn min_psnr_fails_the_bake_with_what_would_pass() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = auto_project(dir.path());
+    let text = std::fs::read_to_string(root.join("manifest.toml")).unwrap();
+    std::fs::write(
+        root.join("manifest.toml"),
+        text.replace(
+            "formats = { n64 = \"RGBA5551\" }",
+            "formats = { n64 = \"RGBA5551\", 3ds = \"ETC1\" }\nmin_psnr = 30",
+        ),
+    )
+    .unwrap();
+    // The PC bake decides the 3DS format too, so it fails first.
+    let err = bake_all(&root, Platform::Pc, &dir.path().join("pc"))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("`sprites/mask`: 3ds ETC1 keeps"), "{err}");
+    assert!(err.contains("< min_psnr 30 (white mask)"), "{err}");
+    assert!(err.contains("`auto` (picks A8, lossless)"), "{err}");
+    assert!(err.contains("or lower `min_psnr`"), "{err}");
+    // The report lists it and keeps going.
+    let entries = texture::report_project(&root, &[Platform::N3ds]).unwrap();
+    assert_eq!(entries.len(), 3);
+    let mask = entries
+        .iter()
+        .find(|e| e.logical == "sprites/mask")
+        .unwrap();
+    assert!(mask.platforms[0].1.is_err());
+    assert!(entries.iter().filter(|e| e.platforms[0].1.is_ok()).count() == 2);
+}
+
+/// Palette, gray and 16-bit masters decode to RGBA8 (an N64 override keeps
+/// its CI palette as an indexed PNG, and the N64 bake measures it).
+#[test]
+fn indexed_gray_and_16_bit_masters_decode() {
+    let dir = tempfile::tempdir().unwrap();
+    let write = |name: &str,
+                 color: png::ColorType,
+                 depth: png::BitDepth,
+                 data: &[u8],
+                 palette: Option<&[u8]>| {
+        let path = dir.path().join(name);
+        let mut enc = png::Encoder::new(std::fs::File::create(&path).unwrap(), 2, 1);
+        enc.set_color(color);
+        enc.set_depth(depth);
+        if let Some(p) = palette {
+            enc.set_palette(p.to_vec());
+            enc.set_trns(vec![255, 0]);
+        }
+        enc.write_header().unwrap().write_image_data(data).unwrap();
+        trino_asset_pipeline::decode_png(&path).unwrap()
+    };
+    let indexed = write(
+        "i.png",
+        png::ColorType::Indexed,
+        png::BitDepth::Eight,
+        &[1, 0],
+        Some(&[10, 20, 30, 40, 50, 60]),
+    );
+    assert_eq!(indexed, (2, 1, vec![40, 50, 60, 0, 10, 20, 30, 255]));
+    let gray = write(
+        "g.png",
+        png::ColorType::Grayscale,
+        png::BitDepth::Eight,
+        &[7, 200],
+        None,
+    );
+    assert_eq!(gray.2, [7, 7, 7, 255, 200, 200, 200, 255]);
+    let ga = write(
+        "ga.png",
+        png::ColorType::GrayscaleAlpha,
+        png::BitDepth::Eight,
+        &[9, 128, 1, 2],
+        None,
+    );
+    assert_eq!(ga.2, [9, 9, 9, 128, 1, 1, 1, 2]);
+    let deep = write(
+        "d.png",
+        png::ColorType::Rgb,
+        png::BitDepth::Sixteen,
+        &[0xff, 0, 0x80, 0, 0, 0, 1, 2, 3, 4, 5, 6],
+        None,
+    );
+    assert_eq!(deep.2, [255, 128, 0, 255, 1, 3, 5, 255]);
 }

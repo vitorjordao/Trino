@@ -41,6 +41,7 @@ mod play;
 mod preview;
 mod project;
 mod recent;
+mod textures;
 mod theme;
 #[cfg(test)]
 mod ui_tests;

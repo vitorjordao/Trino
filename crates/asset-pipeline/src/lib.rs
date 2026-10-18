@@ -35,10 +35,12 @@ pub mod texture;
 pub mod watch;
 
 pub use ao::{AoBake, AoDecl, bake_vertex_ao};
+pub use bake::decode_png;
 pub use bake::{BakeError, BakeReport, bake_all};
 pub use font::{BakedFont, FontDecl, bake_font};
 pub use loader::{
-    LoadedAssets, LoadedBlob, LoadedFont, LoadedModel, LoadedSound, LoadedSprite, load_dir,
+    CompressedSprite, LoadedAssets, LoadedBlob, LoadedFont, LoadedModel, LoadedSound, LoadedSprite,
+    load_dir,
 };
 pub use manifest::{Manifest, Platform};
 pub use model::{
@@ -47,4 +49,4 @@ pub use model::{
 };
 pub use primitive::{Pivot, Primitive, Shape};
 pub use resolve::resolve_source;
-pub use texture::N3dsFormat;
+pub use texture::{BcFormat, N3dsFormat, N64Format};

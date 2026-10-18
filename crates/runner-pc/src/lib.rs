@@ -18,8 +18,10 @@
 //!
 //! Env knobs: `TRINO_SIM=native|n64|3ds` (console simulation, default n64),
 //! `TRINO_SMOKE_FRAMES=N` (exit after N frames and print a `TRINO_FRAME:`
-//! line, then `TRINO_RUN_OK frames=N` — CI smoke tests), `TRINO_WINDOWED=1` (start in
-//! a window whatever the saved settings say).
+//! line and a `TRINO_TEXTURES:` line, then `TRINO_RUN_OK frames=N` — CI smoke
+//! tests), `TRINO_WINDOWED=1` (start in a window whatever the saved settings
+//! say), `TRINO_BC=0` (no BC textures: decoded pixels, as on a GPU without
+//! BC).
 //!
 //! **Display:** the game asks for [`DisplaySettings`] through
 //! `Platform::set_display` (fullscreen or window, window size, pixel scale,
@@ -134,12 +136,7 @@ pub fn upload_assets(
     let assets = trino_asset_pipeline::load_dir(baked_dir, only)?;
     let target = sprite_platform(renderer);
     for sprite in assets.sprites {
-        renderer.upload_sprite(
-            trino_core::SpriteId(sprite.id),
-            sprite.width,
-            sprite.height,
-            sprite.pixels_for(target),
-        );
+        upload_sprite(renderer, &sprite, target);
     }
     for sound in assets.sounds {
         let samples = resample(&sound.samples, sound.sample_rate, audio.sample_rate());
@@ -159,6 +156,52 @@ pub fn upload_assets(
         platform.insert_blob(trino_core::BlobId(blob.id), blob.bytes);
     }
     Ok(())
+}
+
+/// Upload one baked sprite the way `target` shows it: the 3DS preview on
+/// the 3DS profile, the master on the N64's, and on the PC the BCn blocks
+/// where the GPU samples them, else those blocks decoded (logged once).
+pub fn upload_sprite(
+    renderer: &mut PcRenderer,
+    sprite: &trino_asset_pipeline::LoadedSprite,
+    target: trino_asset_pipeline::Platform,
+) {
+    let id = trino_core::SpriteId(sprite.id);
+    if target == trino_asset_pipeline::Platform::Pc
+        && let Some(c) = &sprite.compressed
+    {
+        let format = match c.format {
+            trino_asset_pipeline::BcFormat::Bc1 => trino_platform_pc::CompressedFormat::Bc1,
+            trino_asset_pipeline::BcFormat::Bc3 => trino_platform_pc::CompressedFormat::Bc3,
+            trino_asset_pipeline::BcFormat::Bc7 => trino_platform_pc::CompressedFormat::Bc7,
+        };
+        if renderer.upload_sprite_bc(id, sprite.width, sprite.height, format, &c.data) {
+            return;
+        }
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            eprintln!(
+                "[trino] BC textures are off (no GPU support, or TRINO_BC=0): uploading them decoded"
+            );
+        });
+        renderer.upload_sprite(id, sprite.width, sprite.height, &sprite.pc_pixels());
+        return;
+    }
+    renderer.upload_sprite(id, sprite.width, sprite.height, sprite.pixels_for(target));
+}
+
+/// The `TRINO_TEXTURES:` line: the sprite textures on the GPU (count,
+/// bytes) and how many of them are block-compressed.
+pub fn texture_line(renderer: &PcRenderer) -> String {
+    let m = renderer.sprite_memory();
+    format!(
+        "TRINO_TEXTURES: textures={} bytes={} bc={} bc_bytes={} bc_supported={}",
+        m.textures,
+        m.bytes,
+        m.compressed,
+        m.compressed_bytes,
+        renderer.supports_bc()
+    )
 }
 
 /// Whose sprite pixels a renderer draws: the 3DS profile samples each
@@ -475,6 +518,7 @@ impl ApplicationHandler for Host {
                     && self.frames >= max
                 {
                     println!("{}", self.meter.line(&self.config.save_name));
+                    println!("{}", texture_line(&ctx.renderer));
                     println!("TRINO_RUN_OK frames={}", self.frames);
                     event_loop.exit();
                     return;

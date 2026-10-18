@@ -434,7 +434,11 @@ fn temp_project_app(
         .join("../..")
         .canonicalize()
         .unwrap();
-    let tmp = tempfile::tempdir().unwrap();
+    // Under target/test-projects/, never the system temp dir (a RAM disk
+    // on some machines).
+    let base = repo.join("target/test-projects");
+    std::fs::create_dir_all(&base).unwrap();
+    let tmp = tempfile::tempdir_in(&base).unwrap();
     for dir in ["assets", "scenes", "prefabs"] {
         copy_tree(&repo.join(dir), &tmp.path().join(dir));
     }
@@ -741,6 +745,25 @@ fn editor_layout_is_clean_at_minimum_and_default_sizes() {
             )));
         h.run_steps(4);
         crate::layout_audit::assert_clean(&h, size, true, &what("impostor section"));
+        // The texture inspector, measured, its formats scrolled into view,
+        // with a bake error (ETC1 under a min_psnr) in a column.
+        let photo = "sprites/selftest_photo_etc1";
+        h.state_mut().cmds.push(Cmd::SetTextureKey(
+            photo.into(),
+            "min_psnr",
+            Some("40".into()),
+        ));
+        h.state_mut().inspect_focus = Some("texture".into());
+        h.state_mut()
+            .cmds
+            .push(Cmd::SelectAsset(crate::app::AssetSel::Sprite(photo.into())));
+        wait_for(&mut h, "the texture inspector", |a| {
+            a.textures
+                .current
+                .as_ref()
+                .is_some_and(|(_, i, _)| i.logical == photo && i.settings.min_psnr == Some(40.0))
+        });
+        crate::layout_audit::assert_clean(&h, size, true, &what("texture inspector"));
         leave_temp_project(&repo);
     }
 }
@@ -1072,7 +1095,11 @@ fn platform_budget_shows_rsp_reasons_and_unseen_draws() {
                 .next()
                 .is_some()
         );
-        assert!(h.query_by_label_contains("3DS ").is_some());
+        // The 3DS's frame (its texture memory has a line of its own).
+        assert!(
+            h.query_by_label_contains(&format!("3DS {} tris", b[1].tris()))
+                .is_some()
+        );
         // The PC native profile's GPU T&L split (issue #51), its reasons
         // listed like the RSP's.
         assert_eq!(b[2].target, trino_scene::Target::Pc);
@@ -1626,5 +1653,150 @@ fn ambient_occlusion_panel_view_modes_and_baking() {
         .unwrap();
     assert!(!table.contains("ao ="), "{table}");
     assert!(h.state().project.models["models/crate"].ao.is_none());
+    leave_temp_project(&repo);
+}
+
+/// The manifest table `[kind.name]` of `text`, up to the next table.
+fn manifest_table<'a>(text: &'a str, header: &str) -> &'a str {
+    text.split(header)
+        .nth(1)
+        .and_then(|t| t.split("\n[").next())
+        .unwrap()
+}
+
+/// Close a combo's list left open by an accessibility click: a click on
+/// the grid's "Memory" label, which no list covers (one on the combo could
+/// land on the list's first item instead).
+fn close_popup(h: &mut Harness<'static, App>) {
+    h.get_by_label("Memory").click();
+    h.run_steps(3);
+}
+
+/// Step until `done` (a worker finishing, the watcher rebaking), 30 s at
+/// most.
+fn wait_for(h: &mut Harness<'static, App>, what: &str, done: impl Fn(&App) -> bool) {
+    let start = std::time::Instant::now();
+    while !done(h.state()) {
+        assert!(
+            start.elapsed().as_secs() < 30,
+            "timed out waiting for {what}"
+        );
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(30));
+    }
+    h.run_steps(2);
+}
+
+/// Assets › Sprite › Texture formats (#52): the inspector measures the
+/// photo card on every platform; picking a 3DS format and a quality in
+/// its combos writes the manifest and the columns follow; a `min_psnr`
+/// the declared ETC1 misses is a bake error shown in the panel and the
+/// Console, never a crash; the budget gets the project's texture memory.
+#[test]
+#[ignore = "changes cwd/env: run alone with --ignored --test-threads=1"]
+fn texture_inspector_formats_quality_and_errors() {
+    use crate::app::{AssetSel, Cmd};
+    use trino_asset_pipeline::Platform;
+    let Some((mut h, _tmp, repo)) = temp_project_app(egui::vec2(1600.0, 1000.0)) else {
+        return;
+    };
+    const PHOTO: &str = "sprites/selftest_photo";
+    const TABLE: &str = "[sprites.selftest_photo]";
+    let report = |app: &App, p: Platform| {
+        let (_, insp, _) = app.textures.current.as_ref()?;
+        let col = insp.columns.iter().find(|c| c.platform == p)?;
+        Some(col.report.clone())
+    };
+    let n3ds_format = |app: &App| {
+        report(app, Platform::N3ds)
+            .and_then(|r| r.ok())
+            .map(|r| r.format)
+    };
+    h.state_mut()
+        .cmds
+        .push(Cmd::SelectAsset(AssetSel::Sprite(PHOTO.into())));
+    wait_for(&mut h, "the first measurement", |a| {
+        n3ds_format(a).is_some()
+    });
+    assert_eq!(n3ds_format(h.state()).as_deref(), Some("RGBA8"), "declared");
+    assert!(h.query_by_label_contains("Texture formats").is_some());
+
+    // 3DS format: ETC1 from its combo.
+    click(&mut h, "3DS format");
+    h.get_by_label("ETC1").click_accesskit();
+    h.run_steps(3);
+    close_popup(&mut h);
+    let text = std::fs::read_to_string("assets/manifest.toml").unwrap();
+    let table = manifest_table(&text, TABLE);
+    assert!(table.contains(r#"3ds = "ETC1""#), "{table}");
+    assert!(
+        table.contains(r#"n64 = "CI8""#),
+        "other platforms kept: {table}"
+    );
+    wait_for(&mut h, "the 3DS column to follow", |a| {
+        n3ds_format(a).as_deref() == Some("ETC1")
+    });
+    let etc1 = report(h.state(), Platform::N3ds).unwrap().unwrap();
+    assert!(etc1.psnr.unwrap() < 35.0, "ETC1 loses detail on the photo");
+    let pc_before = report(h.state(), Platform::Pc).unwrap().unwrap();
+    assert!(pc_before.auto);
+
+    // Quality: high, from its combo; `auto` on the PC must keep 40 dB.
+    click(&mut h, "Texture quality");
+    h.get_by_label("high (40 dB)").click_accesskit();
+    h.run_steps(3);
+    close_popup(&mut h);
+    let text = std::fs::read_to_string("assets/manifest.toml").unwrap();
+    assert!(manifest_table(&text, TABLE).contains(r#"quality = "high""#));
+    wait_for(&mut h, "the quality to apply", |a| {
+        a.textures
+            .current
+            .as_ref()
+            .is_some_and(|(_, i, _)| i.quality.as_deref() == Some("high"))
+    });
+    let pc = report(h.state(), Platform::Pc).unwrap().unwrap();
+    assert!(pc.psnr.unwrap() >= 40.0, "{pc:?}");
+    assert_eq!(pc.threshold, Some(40.0));
+
+    // A min_psnr the declared ETC1 misses: the bake's error, in the panel
+    // and the Console.
+    h.state_mut().cmds.push(Cmd::SetTextureKey(
+        PHOTO.into(),
+        "min_psnr",
+        Some("40".into()),
+    ));
+    wait_for(&mut h, "the bake error", |a| {
+        matches!(report(a, Platform::N3ds), Some(Err(_)))
+    });
+    let Some(Err(e)) = report(h.state(), Platform::N3ds) else {
+        unreachable!()
+    };
+    assert!(e.contains("min_psnr 40"), "{e}");
+    assert!(h.query_by_label_contains("bake fails").is_some());
+    assert!(
+        h.state().log.entries.iter().any(|l| l.text == e),
+        "the error reached the Console"
+    );
+    // Back to the default format: the entry leaves the manifest, and the
+    // 3DS goes back to `auto`, which passes.
+    h.state_mut()
+        .cmds
+        .push(Cmd::SetTextureFormat(PHOTO.into(), Platform::N3ds, None));
+    wait_for(&mut h, "auto on the 3DS", |a| {
+        report(a, Platform::N3ds).is_some_and(|r| r.is_ok_and(|r| r.auto))
+    });
+    let text = std::fs::read_to_string("assets/manifest.toml").unwrap();
+    assert!(!manifest_table(&text, TABLE).contains("3ds ="));
+
+    // The scene settings' budget: the project's texture memory.
+    h.state_mut().cmds.push(Cmd::Select(None));
+    h.state_mut().asset_sel = None;
+    h.run_steps(3);
+    wait_for(&mut h, "the texture totals", |a| {
+        a.textures.totals.is_some()
+    });
+    assert!(h.query_by_label_contains("Textures PC").is_some());
+    assert!(h.query_by_label_contains("Textures 3DS").is_some());
+    assert!(h.query_by_label_contains("N64 largest TMEM load").is_some());
     leave_temp_project(&repo);
 }

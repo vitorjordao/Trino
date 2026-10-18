@@ -51,7 +51,7 @@ use trino_core::physics::{Aabb, move_aabb};
 use trino_core::scene::{BakedScene, SceneNode};
 use trino_core::{
     Ambience, AmbientOcclusion, Audio, BlobId, Button, Camera3, Color, Emitter, EntityId,
-    EntityStore, FontId, Game, InputState, Light, Listener, Mat34, Material, MusicId,
+    EntityStore, FontId, Game, InputState, Light, Listener, Mat34, Material, ModelParams, MusicId,
     ParticleSystem, Platform, Renderer, RippleBuffer, Screen, SoundId, SpriteId, TextAlign,
     TextBuf, TextParams, Vec2, Vec3, spatialize,
 };
@@ -65,7 +65,16 @@ mod scene {
     include!("showcase_gen.rs");
 }
 
+/// The same scene with its N64 variants (`platforms`, ADR 0009): what the
+/// N64 build plays, and what the host's N64 predictions draw.
+#[allow(clippy::all, dead_code)]
+#[rustfmt::skip]
+mod scene_n64 {
+    include!("showcase_gen_n64.rs");
+}
+
 pub use scene::NODES;
+pub use scene_n64::NODES as NODES_N64;
 
 /// The exported scene's camera, light, ambient occlusion and clear color.
 pub mod scene_consts {
@@ -73,7 +82,7 @@ pub mod scene_consts {
 }
 
 /// Live entities: the whole exported scene fits with room to spare.
-pub const CAPACITY: usize = 96;
+pub const CAPACITY: usize = 128;
 const FONT: FontId = FontId::from_path("fonts/trino5x7");
 /// The same scene baked as data (`[scenes.showcase]` in the manifest).
 pub const BAKED: BlobId = BlobId::from_path("scenes/showcase");
@@ -243,6 +252,9 @@ pub struct ShowcaseGame {
     /// The scene's own camera (the `SCENE` camera preset) and its yaw.
     scene_camera: Camera3,
     scene_yaw: f32,
+    /// Play the N64's variant of the scene ([`NODES_N64`]): the N64
+    /// build's default, and the host's N64 predictions.
+    n64: bool,
 }
 
 impl ShowcaseGame {
@@ -250,10 +262,26 @@ impl ShowcaseGame {
         Self::with_screen(Vec2::new(320.0, 240.0))
     }
 
-    /// The level from the exported code (`showcase_gen.rs`).
+    /// [`ShowcaseGame::new`] in the N64's variant of the scene, on any
+    /// target (the host's N64 work baseline and parity checks).
+    pub fn n64() -> Self {
+        let mut game = Self::new();
+        game.n64 = true;
+        game.reset(Vec2::new(320.0, 240.0));
+        game
+    }
+
+    /// The exported scene this game plays: [`NODES`], or [`NODES_N64`].
+    pub fn nodes(&self) -> &'static [SceneNode] {
+        if self.n64 { NODES_N64 } else { NODES }
+    }
+
+    /// The level from the exported code (`showcase_gen.rs`, or on the N64
+    /// `showcase_gen_n64.rs`).
     pub fn with_screen(screen: Vec2) -> Self {
+        let n64 = cfg!(target_os = "none");
         let mut game = Self::from_scene(
-            NODES.iter().copied(),
+            (if n64 { NODES_N64 } else { NODES }).iter().copied(),
             scene::CAMERA,
             scene::LIGHT,
             scene::CLEAR,
@@ -348,6 +376,7 @@ impl ShowcaseGame {
                 fov_y: 1.0,
             },
             scene_yaw: 0.0,
+            n64: cfg!(target_os = "none"),
         }
     }
 
@@ -356,7 +385,7 @@ impl ShowcaseGame {
     /// overflowed it).
     pub fn reset(&mut self, screen: Vec2) {
         self.reset_from_scene(
-            NODES.iter().copied(),
+            self.nodes().iter().copied(),
             scene::CAMERA,
             scene::LIGHT,
             scene::CLEAR,
@@ -420,6 +449,8 @@ impl ShowcaseGame {
             dt_since_render,
             scene_camera,
             scene_yaw,
+            // Which scene the game plays: kept by a reset.
+            n64: _,
         } = self;
         world.clear();
         world.spawn_iter(nodes);
@@ -505,10 +536,19 @@ impl ShowcaseGame {
         let Some(model) = e.model_from(eye).filter(|_| e.visible) else {
             return;
         };
-        let mut params = e.params;
-        if let Some((clip, speed)) = e.anim {
-            params.anim = Some(trino_core::AnimRef::new(clip, self.time * speed));
-        }
+        // A copy of the surface only for a clip's pose: every entity's copy
+        // was a hundred bytes per draw on the N64.
+        let posed;
+        let params = match e.anim {
+            Some((clip, speed)) => {
+                posed = ModelParams {
+                    anim: Some(trino_core::AnimRef::new(clip, self.time * speed)),
+                    ..e.params
+                };
+                &posed
+            }
+            None => &e.params,
+        };
         let m = if e.has_tag("coin") {
             let p = e.position();
             let spin = Mat34::from_rotation_scale_translation(
@@ -521,7 +561,7 @@ impl ShowcaseGame {
         } else {
             e.matrix
         };
-        r.draw_model_matrix(model, &m, Material::VertexLit, &params);
+        r.draw_model_matrix(model, &m, Material::VertexLit, params);
     }
 
     /// The yaw walking is relative to: the orbit's, or the scene camera's.
@@ -733,7 +773,7 @@ impl ShowcaseGame {
                     p = self.crate_home;
                     self.crate_state = CrateState::Resting;
                     self.crate_wade = Wader::default();
-                    if let Some(node) = trino_core::scene::find(NODES, "loose-crate")
+                    if let Some(node) = trino_core::scene::find(self.nodes(), "loose-crate")
                         && let Some(e) = self.world.get_mut(id)
                     {
                         e.collider = node.collider;
@@ -953,11 +993,15 @@ impl Game for ShowcaseGame {
 /// in ares (`cargo xtask test n64`).
 pub mod perf {
     use super::{ShowcaseGame, river};
-    use trino_core::{Audio, Game, InputState, Vec2, Vec3};
+    use trino_core::{Audio, EntityId, Game, InputState, Renderer, Vec2, Vec3};
 
     pub const NAME: &str = "showcase-river";
     /// Frames measured (each one idle update + render).
     pub const MEASURE_FRAMES: u32 = 4;
+    /// Frames drawn before the measured ones, neither timed nor counted: a
+    /// running game has drawn the scene before, so a backend's caches of
+    /// its draws (the N64's draw and water memos) hold them.
+    pub const WARM_FRAMES: u32 = 1;
     pub const DT: f32 = 1.0 / 60.0;
 
     /// Reset `game` into the scene: the scene's own camera, the hero walked
@@ -974,6 +1018,63 @@ pub mod perf {
         for _ in 0..40 {
             game.update(&walk, audio, DT);
         }
+    }
+
+    /// The river alone (`micro-river`, issue #69): the scene camera, the
+    /// game's light and water material, two ripples, nothing else drawn —
+    /// so the river's own cost is read directly instead of subtracted from
+    /// [`NAME`]. Gated like the castle64 scenes (both baselines).
+    pub const MICRO_RIVER: &str = "micro-river";
+
+    /// Reset `game` for [`MICRO_RIVER`]: the scene camera, a fixed clock,
+    /// one fresh ripple near the ford and one older ring downstream.
+    pub fn micro_river_scene(game: &mut ShowcaseGame, screen: Vec2) {
+        game.reset(screen);
+        game.look.camera = super::panel::CAMERA_SCENE;
+        game.time = 2.0;
+        game.ripples.clear();
+        let (a, b) = (river::COURSE[8], river::COURSE[6]);
+        game.ripples.spawn(Vec2::new(b.x, b.z), super::RIPPLE_ENTER);
+        game.ripples.update(0.9);
+        game.ripples
+            .spawn(Vec2::new(a.x, a.z + 0.4), super::RIPPLE_ENTER);
+    }
+
+    /// One [`MICRO_RIVER`] frame: the water's clock and ripples advance by
+    /// [`DT`] (the "update"), and only the `water` entities are drawn.
+    pub fn micro_river_update(game: &mut ShowcaseGame) {
+        game.time += DT;
+        game.ripples.update(DT);
+    }
+
+    /// The water entities [`MICRO_RIVER`] draws (the river's pieces), found
+    /// once: the frame measures the river, not a walk over every entity.
+    pub fn micro_river_ids(game: &ShowcaseGame) -> ([EntityId; 16], usize) {
+        let mut ids = [EntityId::NONE; 16];
+        let mut n = 0;
+        for (id, e) in game.world.iter() {
+            if e.has_tag("water") && n < ids.len() {
+                ids[n] = id;
+                n += 1;
+            }
+        }
+        (ids, n)
+    }
+
+    /// Draw [`MICRO_RIVER`]'s frame: what [`ShowcaseGame::render`] sets up
+    /// (camera, light, filter, water state), then the water entities `ids`
+    /// ([`micro_river_ids`]).
+    pub fn micro_river_render(game: &ShowcaseGame, ids: &[EntityId], r: &mut dyn Renderer) {
+        let camera = game.camera();
+        r.begin_frame(game.clear);
+        r.set_camera(&camera);
+        r.set_light(&game.look.light(&game.light));
+        r.set_texture_filter(game.look.filter);
+        r.set_water(game.time, game.ripples.as_slice());
+        for e in ids.iter().filter_map(|&id| game.world.get(id)) {
+            game.draw_entity(r, e, camera.eye);
+        }
+        r.end_frame();
     }
 }
 
@@ -1079,10 +1180,11 @@ pub fn check_baked_in(
 ) -> Result<(), &'static str> {
     let bytes = platform.blob(BAKED).ok_or("baked scene blob missing")?;
     let baked = BakedScene::parse(bytes).map_err(|_| "baked scene does not parse")?;
-    if baked.node_count() != NODES.len() {
+    let nodes = game.nodes();
+    if baked.node_count() != nodes.len() {
         return Err("baked scene node count differs from the exported code");
     }
-    for (a, b) in baked.nodes().zip(NODES) {
+    for (a, b) in baked.nodes().zip(nodes) {
         if a.name != b.name
             || a.model != b.model
             || a.matrix != b.matrix

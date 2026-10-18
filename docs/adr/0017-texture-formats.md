@@ -3,7 +3,7 @@
 Status: accepted (October 2026, GitHub #52). Phases 1–4 of the issue's roadmap are
 implemented (§1–5: 3DS formats and `texture inspect`; §6: `auto` and the PSNR guard;
 §7: PC BCn; §8: the editor's texture inspector). Phase 5, Web KTX2, landed with the
-web target (#47, [ADR 0018](0018-web-target.md)): §9.
+web target (#47, [ADR 0019](0019-web-target.md)): §9.
 
 ## Context
 

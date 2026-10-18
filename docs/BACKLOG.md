@@ -33,22 +33,19 @@ shipping a 3D game first**, then by cost:
        may now bind first.
      - **(b)** Near/guard-band clipping on the RSP. The draws that still clip (big
        floors and walls) are the hub's remaining 4.6 ms of CPU T&L.
-     - **(c)** Overlay coverage: Flat, fog, colored light, emissive, textures, rigid
-       skeletons. Each lands behind the oracle and parity checks. Colored light,
-       emissive and double-sided draws are written (branch `perf/n64-rsp-colored`, a
-       second overlay so white draws keep the old code byte for byte) but held back:
-       nothing used them yet and the N64 frames of an external project moved +1.0 ms
-       on average over 8 code layouts, a shift the current method can't attribute
-       (ADR 0013).
-     - **(d)** An RSP term in `N64_COST`. The HUD, strict mode and `model inspect`
-       still assume CPU T&L for every draw.
+     - **(c)** Overlay coverage: done for Flat, fog, colored light, emissive,
+       double-sided, textures, rigid skeletons and water with its ripples and rings
+       (GitHub #69, ADR 0018). Left: palettes, smooth skins.
+     - ~~**(d)** An RSP term in `N64_COST`~~: **done** (#69, ADR 0018 §7): RSP triangles,
+       water surfaces priced apart (`RspWork`), and the RSP draws' CPU side in
+       `scene budget`.
      - **(e)** Merge the hub's static blocks (2b), deferred.
 2. **Freeze `TSCN` v1 at the first release** (S). Until then the layout may still grow.
    Afterwards, every change bumps the version and adds a migration (ADR 0005 §3).
 
 ### P1 — the next quality and reach jump
 
-- **Web target follow-ups (#47, ADR 0018)** (S–M each).
+- **Web target follow-ups (#47, ADR 0019)** (S–M each).
   - Opus/Vorbis sounds in the packs (#53): Solid Eleven's pack is 3.07 MB, mostly
     16-bit PCM.
   - Lazy asset bundles (#56): the page downloads every pack before the first frame.
@@ -182,13 +179,9 @@ shipping a 3D game first**, then by cost:
       backdrops (that artifact came back twice).
     - Nothing has run on real hardware yet.
 
-17. **Water on the RSP** (M–L). An overlay command that displaces (two sines and up
-    to four ripples, in fixed point), lights, applies Fresnel and fog, and feeds
-    textured triangles to `RDPQ_Triangle_Send_Async` (S/T s10.5, W and 1/W per
-    vertex). It is the way to issue #49's 1.2 ms river: the CPU path costs 12.5 ms
-    for the showcase's 128-triangle river in ares (ADR 0015, Measurements). It is
-    worth it once the overlay also does fog and colored light (P0 #1c); the showcase
-    has both, so today every one of its draws is on the CPU.
+17. ~~**Water on the RSP: the rest**~~: **done** (#69's second part, ADR 0018 §7): the
+    ripples and their rings on the overlay. `micro-river` 1.78 ms (the river's draws
+    0.94 ms), `showcase-river` 26.2 ms in ares. Left: the number on a real N64 (P0 #1a).
 18. **3DS water: fragment lighting and long surfaces** (S–M). A `C3D_LightEnv` with a
     Fresnel LUT for a per-pixel glint. Split long water surfaces into pieces so the
     GPU takes the ones wholly ahead of the camera; the ripple rings then need
@@ -203,7 +196,7 @@ shipping a 3D game first**, then by cost:
 
 ---
 
-## Done — the Web target: WebGPU with a WebGL2 fallback, KTX2 textures, browser CI (2026-10-18, branch `feat/47-web-target`, GitHub #47 and #52 phase 5, ADR 0018)
+## Done — the Web target: WebGPU with a WebGL2 fallback, KTX2 textures, browser CI (2026-10-18, branch `feat/47-web-target`, GitHub #47 and #52 phase 5, ADR 0019)
 
 | Item | Evidence |
 |---|---|
@@ -216,11 +209,39 @@ shipping a 3D game first**, then by cost:
 | Editor: Web profile and canvas presets in the Game view, Web column in Platforms/LOD/texture inspector, Run in Browser / Export Web Package | `ui_tests::platform_variants_reach_the_game_view_and_the_file`, `texture_inspector_formats_quality_and_errors` |
 | `trino.toml` `targets = [..., "web"]` and `[web]`; the standalone template's `web/` host | `project::the_web_section_names_the_host_canvas_and_title`; a standalone castle64 project passes `test web` (CI) |
 
-Packs: castle64 + showcase 868 KB (30 KTX2 textures), Solid Eleven 3.07 MB. Release wasm
+Packs: castle64 + showcase 944 KB (33 KTX2 textures), Solid Eleven 3.07 MB. Release wasm
 5.2 MB with the self-test (4.5 MB standalone), before compression. 600 frames headless,
 960×540: Chromium WebGPU (real GPU) 57 fps on all three games (rAF-paced); Firefox 41 fps
 (its headless rAF pacing); WebKit 65 fps; Chromium WebGL2 on SwiftShader (a CPU
 rasterizer) 59 fps showcase, 22 castle64, 18 Solid Eleven.
+
+## Done — N64 water at budget: ripples and rings on the RSP, the river at 1.2 ms, the showcase at 30 fps (2026-10-18, GitHub #69 second part, ADR 0018 §7)
+
+| Item | Evidence |
+|---|---|
+| The ripple sum per vertex and the ripple rings on `rsp_trino_water`; two vertices per pass; the block split into a static part (per memoized draw) and a frame part (per material) | the water oracles (`micro::water_checks`: swell, ripple), `showcase_river` N64 golden re-blessed, `perf_budget` counters (ROM = PC: `micro-river` 0 CPU triangles, 92 on the RSP) |
+| Streaming starts the RSP (`trino_rsp_flush`); the water texture stays in TMEM; arena lines claimed without a fill; the water memo evicts stale entries | `micro-river` 10.48 → **1.78 ms** (T&L 6.39 → **0.94**, 0.88–0.98), `showcase-river` 75.17 → **26.21 ms** (8 paddings, ares) |
+| Gates at the issue's budgets: `perf::BUDGETS` caps `micro-river` `tnl_us` at 1 200 and `showcase-river` `frame_us` at 33 300 | `tests/perf/castle64_n64.toml`, `perf::tests::budgets_cap_the_ceilings` |
+| Phase 4: `N64_COST` prices water on the RSP (`us_per_rsp_water_tri`, `us_per_rsp_water_draw`, `RspWork`); `scene budget` counts the RSP draws' CPU side | showcase estimate 25.8 ms vs ares 26.2 (was 25.4 vs 75); `scene_budget` tests |
+| Left | a measurement on a real N64 (ares doesn't time the RDP; P0 #1a) |
+
+## Done — N64 RSP coverage: fog, colored light, textures, rigid skeletons and water (2026-10-18, branch `perf/69-n64-water`, GitHub #69 phases 0–3, ADR 0018)
+
+- **Phase 0:** the `micro-river` perf scene (the river alone), gated on the PC (work)
+  and in ares (time).
+- **Phase 2:** `rsp_trino_color` (colored light, emissive, double-sided, per-vertex fog),
+  flat copies for Flat shading, rigid skeletons as a command per joint, and
+  `rsp_trino_tex` (textured triangles). `rsp_plan` is the one rule every predictor uses.
+- **Phase 1:** the showcase terrain in 52 camera-following tiles, the river in pieces,
+  one ring per ripple, lighter props.
+- **Phase 3:** `rsp_trino_water` (swell, displacement, normal, Fresnel, glint, light,
+  fog per vertex), with an oracle and a CPU-vs-RSP pixel check.
+- **Results (ares, 8 paddings):** `micro-river` 19.6 → 10.5 ms, `showcase-river`
+  286.6 → 75.2 ms (0/46 → 85/113 draws on the RSP, 738 → 0 splits); castle64
+  unchanged. The 3DS showcase also moved 11 → 51 draws to the PICA200 (the tiles).
+- **Not met:** #69's 1.2 ms river and 33.3 ms showcase. Left: ripples and rings on the
+  overlay (P2 #17), RSP triangle throughput, per-draw CPU, the RSP cost term and real
+  hardware (P0 #1a, #1d).
 
 ## Done — texture formats, phases 2–4: `auto`, PC BCn, the editor's texture inspector (2026-10-18, branch `feat/52-texture-formats-phases-2-5`, GitHub #52, ADR 0017)
 

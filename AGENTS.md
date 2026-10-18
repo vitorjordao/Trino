@@ -334,6 +334,20 @@ new skill when none fits. Then run `cargo xtask agents sync`. The steps are in
   - Same ROM: hub 38.0 → 13.1 ms, every stage 7–8 ms (vsync caps at 60 fps).
   - Gated by an oracle, CPU-vs-RSP pixel checks, the work split (`rsp_draws`) and
     the `castle64_hub` N64 golden.
+  - **Since #69 (2026-10-18, ADR 0018):** four overlays from the same source:
+    `rsp_trino` (white), `rsp_trino_color` (colored light, emissive, double-sided,
+    per-vertex fog), `rsp_trino_tex` (textured) and `rsp_trino_water` (swell, Fresnel,
+    glint, light and fog per vertex). Flat draws take flat copies; rigid skeletons a
+    command per joint. A fogged, textured or water draw takes the RSP only where the
+    CPU path would split no edge. `render3d::rsp_plan` is the rule every predictor
+    calls. The showcase river went 286.6 → 75.2 ms and `micro-river` 19.6 → 10.5 ms
+    (mean over 8 paddings).
+  - **#69's second part (ADR 0018 §7):** ripples and rings on the water overlay, two
+    vertices per pass, a static block per draw plus a frame block per material,
+    streaming that wakes the RSP (`trino_rsp_flush`). `micro-river` 1.78 ms (its
+    draws 0.94 ms of CPU, ~0.9 ms of RSP beside it) and `showcase-river` 26.2 ms in
+    ares, gated at the issue's 1.2 / 33.3 ms (`perf::BUDGETS`). `N64_COST` prices
+    water on the RSP apart (`RspWork`). Not yet measured on a real N64.
 
 - **External console projects** (2026-10-14, ADR 0008: a project in a separate repo
   with this engine as its `engine/` submodule).
@@ -358,9 +372,8 @@ new skill when none fits. Then run `cargo xtask agents sync`. The steps are in
     `set_rsp_stream`.
 
 Ranked next steps: `docs/BACKLOG.md`. N64 throughput is no longer the top risk for
-castle64. Next for the RSP path: clipping on the RSP, more surface features, an RSP
-term in the cost model, and a measurement on real hardware (ares doesn't time the
-RDP).
+castle64. Next for the RSP path: clipping on the RSP, palettes and smooth skins on the
+overlay, and a measurement on real hardware (ares doesn't time the RDP).
 
 - **Real hardware (2026-10-15, `docs/HARDWARE.md`):** `run n64 --device sc64|everdrive`
   (sc64deployer / UNFLoader over USB) and `run 3ds --device network [--ip <IP>]`
@@ -431,7 +444,8 @@ RDP).
     `RippleBuffer<4>`.
   - **Geometry:** the core displaces every target's water (two sines and up to four
     ripple rings, `water::sin_turns`) in a `WATER` copy of `render3d/lit.rs`. Water is
-    never on the RSP, the 3DS's static GPU path or the memo.
+    never on the 3DS's static GPU path or the memo; on the N64 it has its own RSP
+    overlay since #69 (ADR 0018).
   - **PC native:** `fs_water` per pixel (normals, Fresnel, glint, ripple crests, depth
     foam from a depth copy).
   - **3DS:** `water.v.pica` on the PICA200 (`gpu_water`; a CPU fallback for draws
@@ -449,8 +463,8 @@ RDP).
     combiner cycles, TMEM).
   - **Tests and goldens:** the `water` self-test step on PC, ares and Azahar, and
     `gpu tnl water` on the 3DS. Goldens `water_*`, `showcase_river` (PC, N64, 3DS).
-  - **Open:** on the N64 the river costs 12.5 ms of CPU T&L, above the issue's 1.2 ms;
-    an RSP water command is BACKLOG › "Water on the RSP".
+  - **N64:** the ripples and their rings run on the water overlay since #69's second
+    part (ADR 0018 §7); a ring whose sphere leaves the RSP's band stays a CPU decal.
 - **PC hardware T&L (2026-10-17/18, ADR 0016, GitHub #51):** the PC native profile
   transforms and lights most models on the GPU; the CPU T&L stays the reference.
   - **Instancing on every target:** `Renderer::draw_model_instances(model, &[Instance],
@@ -513,7 +527,7 @@ RDP).
     fallback).
   - **Web KTX2** (#52 phase 5, landed with #47): `KTX2-ETC1S` / `KTX2-UASTC` (Basis
     Universal, ADR 0017 §9), `auto` by download size; transcoded in the browser.
-- **Web target (2026-10-18, ADR 0018, GitHub #47):** Trino games in a browser tab.
+- **Web target (2026-10-18, ADR 0019, GitHub #47):** Trino games in a browser tab.
   - **One renderer:** the PC's moved to `crates/render-wgpu` (re-exported at
     `trino_platform_pc::renderer`); `trino-platform-web` draws with it on a canvas,
     WebGPU or WebGL2 (`WebBackend`, `?backend=`). WebGL2: no MSAA, depth read through a
@@ -962,9 +976,20 @@ cargo test --workspace
   +0.38 ms, and a feature with an unchanged hot path moved an external project +1.0 ms
   on average over 8 paddings (ADR 0013 §4). Measure over 8 paddings against the
   baseline's 8; keep new code out of line and new state out of hot structs.
-- **A colored or dimmed global light sends every N64 draw to the CPU**
-  (`RspReject::ColoredLight`): a "dim room" must stay white (lower ambient, a grazing
-  direction) or be a tint.
+- **A fogged, textured or water draw leaves the N64 RSP when the CPU would split one of
+  its edges** (`RspReject::Fog`, `Textured`, `Water`): one long mesh across the fog
+  band or under the camera stays on the CPU. Cut it in pieces around the camera (the
+  showcase's terrain tiles and river pieces, `xtask/src/river_assets.rs`). Colored and
+  dimmed lights are fine on the RSP since #69.
+- **A textured RSP triangle needs `minW · INVW ≤ 1`** or the RDP samples texel (0, 0)
+  everywhere: `vrcp`'s reciprocal runs up to 0.2 % high, so the overlay stores W 2^-7
+  smaller (ADR 0018 §4).
+- **On the N64, never let a hot path read a float out of an `Option` payload.** LLVM
+  hoists the math above the `is_some` test, and an uninitialized payload can be a
+  denormal, which traps on the VR4300 (`RspFog { on, .. }` instead).
+- **An N64 RSP draw's CPU-side stats must reach the profile too** (`count_rsp_with`):
+  the water draw's ring decals once went to `frame_stats` only, and the ROM's
+  `TRINO_PERF_SCENE` counters disagreed with the PC baseline.
 - **A detail layer and a palette texture can't share the N64's TMEM:** a CI4/CI8 base puts
   its TLUT in TMEM's upper half. The shim then draws without the detail, silently on
   the console. Give a detailed base a 16-bit or intensity format (the showcase's bricks
@@ -1119,6 +1144,27 @@ cargo test --workspace
   ~80–100 µs counted as `tnl`, so a moving body part costs ~0.2 ms a frame. Measured
   in ares by charging that span to an unused profile stage. Fewer draws is the lever
   for animated crowds (Solid Eleven's far players drop arms and shadows).
+- **Streamed RSP commands need `rspq_flush`** (`trino_rsp_flush`): rspq only wakes an
+  idle RSP on a flush, so commands queued during a frame wait for its end. The streamed
+  river drained 0.8 ms after the CPU was done until each streamed chunk flushed (#69).
+- **In ares the RSP costs ~4–5 cycles per instruction, dependent or not.** Pairing the
+  water vertices (two per pass) gained ~20%, what the instruction count says, not the 2×
+  a stall model predicts. Count instructions per vertex; measure an overlay by draining
+  each command (a drain alone costs ~45 µs).
+- **`==` on arrays is `memcmp` on the N64, and newlib's compares byte by byte** (~600
+  cycles for a 72-byte key). Hot key compares use `memo::words_eq`.
+- **libdragon re-uploads a texture on every `rdpq_sprite_upload`** (~0.25 ms of CPU for
+  the water's two layers). The shim keeps what TMEM holds (`trino_t3_*`, `trino_w_*`,
+  cleared by every other upload) and only moves a tile when the scroll changes. A
+  resident CI texture needs its TLUT mode set again after a mode change, or it draws
+  black.
+- **A memo cleared whole when full rebuilds every frame** if a scene's draws straddle the
+  clear (an earlier scene filled it). The water memo drops what the last two frames
+  didn't draw instead.
+- **o64 callees may spill `a2`/`a3` into the caller's 16..31(sp)**, which is the o32
+  Rust caller's own frame: `trino_3d_texture_ex` overwrote a saved pointer there. Every
+  shim export with three or four arguments goes through an out-of-line `*_body` with
+  `TRINO_NOT_A_TAIL_CALL()` (ADR 0002).
 - **A game drawn at a reduced scale scales its AO too:** `AmbientOcclusion::radius`
   and `bias` are world units, so Solid Eleven (1/64) passes meters × `WORLD`.
 - **Only one game per binary may export the hot-reload symbols.** `apps/pc` links

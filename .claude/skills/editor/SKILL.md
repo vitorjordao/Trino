@@ -218,7 +218,7 @@ Live-edit check: start the editor with `TRINO_EDITOR_ECHO_LOG=1` in the backgrou
   item. Budget line queries need exact prefixes (`"3DS {tris} tris"`), since the
   texture line also starts with "3DS".
 
-## The Web (issue #47, ADR 0018)
+## The Web (issue #47, ADR 0019)
 
 - Game view › **Web**: `SimProfile::Web` (the native picture, `Caps::WEB`), a canvas
   combo (`WebCanvas`: responsive = the panel itself, 1280×720, 1920×1080) whose picture is

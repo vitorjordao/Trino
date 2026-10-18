@@ -28,6 +28,12 @@ static void trino_check_trifmt(void);
 // Trino's RSP overlay (rsp_trino.S): vertex T&L for static meshes.
 DEFINE_RSP_UCODE(rsp_trino);
 static uint32_t trino_rsp_id;
+// The colored overlay (defined last in this file, see there).
+static void trino_register_color_overlay(void);
+// The textured overlay (last in this file too).
+static void trino_register_tex_overlay(void);
+// The water overlay (last in this file too).
+static void trino_register_water_overlay(void);
 
 // VI interrupt counter: an independent clock for perf reports (60 per
 // emulated second on NTSC), to cross-check the count-register timings.
@@ -40,6 +46,9 @@ static void trino_on_vi(void) { trino_vblanks++; }
 // the next mode change must be preceded by an explicit SYNC_PIPE.
 static int trino_mode_3d = 0;
 static int trino_rsp_pending = 0;
+// Textured RSP triangles were queued since the last mode change: rdpq never
+// saw them use TMEM and the tiles, so the next upload needs explicit syncs.
+static int trino_rsp_tex_pending = 0;
 // 2D state cache: standard mode + alpha compare already set for blits, and
 // the tint the combiner currently applies (0xFFFFFFFF = none). Consecutive
 // blits (every glyph of a string) then skip the mode setup — one SOM change
@@ -52,11 +61,34 @@ static int trino_fill_ready;
 // once anything else may have loaded TMEM (a blit, a textured 3D draw, a
 // new frame): consecutive strings then skip the atlas upload.
 static void* trino_tmem_owner = NULL;
+// The textured 3D state trino_3d_texture_ex left: the sprites TILE0/TILE1
+// hold and their flags (trino_t3_sp NULL once anything else loaded TMEM),
+// and whether the render mode is still its own (cleared by every mode
+// change). A run of draws with one texture (the showcase's terrain tiles)
+// then uploads it once instead of once per draw.
+static void* trino_t3_sp = NULL;
+static void* trino_t3_dt = NULL;
+static uint32_t trino_t3_flags = 0;
+static int trino_t3_mode = 0;
+// The same for trino_3d_water: the layers TMEM holds and their flags
+// (trino_w_sp NULL once anything else loaded TMEM) and whether the render
+// mode is still the water's. A frame's water draws then upload their layers
+// once; the detail layer's scroll changes every frame, and moving it is a
+// SET_TILE_SIZE, not an upload (~0.25 ms of CPU per frame, issue #69).
+static void* trino_w_sp = NULL;
+static void* trino_w_dt = NULL;
+static uint32_t trino_w_flags = 0;
+static int trino_w_mode = 0;
 
 // Standard render mode + magic-square RGB dither into the 16-bit
 // framebuffer (libdragon's standard mode disables dithering).
 static void trino_mode_standard(void)
 {
+    if (trino_rsp_tex_pending) {
+        rdpq_sync_load();
+        rdpq_sync_tile();
+        trino_rsp_tex_pending = 0;
+    }
     if (trino_rsp_pending) {
         rdpq_sync_pipe();
         trino_rsp_pending = 0;
@@ -64,6 +96,8 @@ static void trino_mode_standard(void)
     trino_mode_3d = 0;
     trino_2d_ready = 0;
     trino_fill_ready = 0;
+    trino_t3_mode = 0;
+    trino_w_mode = 0;
     rdpq_set_mode_standard();
     rdpq_mode_dithering(DITHER_SQUARE_NONE);
 }
@@ -87,6 +121,9 @@ void trino_init(void)
     mixer_init(16);
     trino_check_trifmt();
     trino_rsp_id = rspq_overlay_register(&rsp_trino);
+    trino_register_color_overlay();
+    trino_register_tex_overlay();
+    trino_register_water_overlay();
     register_VI_handler(trino_on_vi);
 }
 
@@ -184,6 +221,11 @@ void trino_frame_begin(uint32_t rgba8888)
     trino_mode_3d = 0;
     trino_2d_ready = 0;
     trino_tmem_owner = NULL;
+    trino_t3_sp = NULL;
+    // TMEM keeps the water's layers across frames (every upload here
+    // clears trino_w_sp), so only its mode is set again.
+    trino_w_mode = 0;
+    trino_t3_mode = 0;
     rdpq_attach(fb, &trino_zbuf);
     rdpq_clear(RGBA32((rgba8888 >> 24) & 0xFF, (rgba8888 >> 16) & 0xFF,
                       (rgba8888 >> 8) & 0xFF, 255));
@@ -267,6 +309,8 @@ void trino_sprite_blit(void* sprite, const trino_blit_t* p)
 {
     trino_2d_setup(p->tint);
     trino_tmem_owner = NULL;
+    trino_t3_sp = NULL;
+    trino_w_sp = NULL;
     rdpq_blitparms_t parms = {
         .s0 = p->src_x,
         .t0 = p->src_y,
@@ -287,7 +331,7 @@ void trino_sprite_blit(void* sprite, const trino_blit_t* p)
 // mode (the blit cache is invalidated: a blit after a fill re-sets its mode).
 static uint32_t trino_fill_color = 0;
 static int trino_fill_blend = 0;
-void trino_fill_rect(uint32_t xy, uint32_t wh, uint32_t color)
+static __attribute__((noinline)) void trino_fill_rect_body(uint32_t xy, uint32_t wh, uint32_t color)
 {
     if (!trino_fill_ready || trino_mode_3d || trino_rsp_pending) {
         trino_mode_standard(); // no blending
@@ -334,6 +378,8 @@ uint32_t trino_text_begin(void* sprite, uint32_t tint)
     if (trino_tmem_owner != sprite) {
         rdpq_sprite_upload(TILE0, sp, NULL);
         trino_tmem_owner = sprite;
+        trino_t3_sp = NULL;
+        trino_w_sp = NULL;
     }
     return 1;
 }
@@ -347,7 +393,7 @@ uint32_t trino_text_begin(void* sprite, uint32_t tint)
 // the constants 1024 / scale, which is what that path computes for every
 // glyph, so the RDP gets the same words. Glyphs that cross the screen's
 // top or left edge take the general path.
-void trino_text_run(const uint32_t* g, uint32_t n, uint32_t scale)
+static __attribute__((noinline)) void trino_text_run_body(const uint32_t* g, uint32_t n, uint32_t scale)
 {
     int32_t k = (int32_t)scale;
     int32_t step = (32 << 7) / (4 * k);
@@ -430,7 +476,7 @@ uint32_t trino_heap_total(void)
 // zs: 3 floats, normalized depth 0..1 (0 = near plane).
 // Vertex layout is driven by TRIFMT_ZBUF_SHADE's own offsets so a libdragon
 // layout change is a behavior-preserving recompile, not silent corruption.
-void trino_tri(const float* pts, const uint8_t* colors, const float* zs)
+static __attribute__((noinline)) void trino_tri_body(const float* pts, const uint8_t* colors, const float* zs)
 {
     // Sized past any TRIFMT layout: the offsets come from libdragon.
     float v[3][16];
@@ -477,6 +523,8 @@ static float trino_tex_w = 1.0f, trino_tex_h = 1.0f;
 void trino_3d_texture(void* sprite, uint32_t clamp)
 {
     trino_tmem_owner = NULL;
+    trino_t3_sp = NULL;
+    trino_w_sp = NULL;
     sprite_t* sp = (sprite_t*)sprite;
     trino_mode_standard();
     rdpq_mode_combiner(RDPQ_COMBINER_TEX_SHADE);
@@ -509,25 +557,15 @@ static int trino_log2(uint32_t v)
     return v ? __builtin_ctz(v) : 0;
 }
 
-// Textured 3D with a filter and an optional detail layer (see ffi.rs):
-// flags bit 0 clamp, bit 1 point filter, bits 4..7 the detail's repeats
-// per base repeat (log2). The detail tile reads the same texture
-// coordinates as TILE0, shifted so it tiles 2^n times per base repeat
-// whatever the two sizes; the 2-cycle combiner multiplies it in:
-// (TEX0 * SHADE) then (COMBINED * TEX1).
-uint32_t trino_3d_texture_ex(void* sprite, void* detail, uint32_t flags)
+#ifndef TRINO_T3_CACHE
+#define TRINO_T3_CACHE 1
+#endif
+// trino_3d_texture_ex's render mode: TEX0 * SHADE (times TEX1 with a
+// detail layer), z-buffered, perspective-correct, filtered by `flags`.
+static void trino_t3_texture_mode(int detail, uint32_t flags)
 {
-    trino_tmem_owner = NULL;
-    sprite_t* sp = (sprite_t*)sprite;
-    sprite_t* dt = (sprite_t*)detail;
-    uint32_t clamp = flags & 1;
-    int shift = (flags >> 4) & 15;
-    if (dt) {
-        int a = trino_tmem_bytes(sp), b = trino_tmem_bytes(dt);
-        if (a < 0 || b < 0 || a + b > 4096) dt = NULL;
-    }
     trino_mode_standard();
-    if (dt) {
+    if (detail) {
         rdpq_mode_combiner(RDPQ_COMBINER2((TEX0, 0, SHADE, 0), (TEX0, 0, SHADE, 0),
                                           (COMBINED, 0, TEX1, 0), (0, 0, 0, COMBINED)));
     } else {
@@ -536,7 +574,43 @@ uint32_t trino_3d_texture_ex(void* sprite, void* detail, uint32_t flags)
     rdpq_mode_zbuf(true, true);
     rdpq_mode_persp(true);
     rdpq_mode_filter((flags & 2) ? FILTER_POINT : FILTER_BILINEAR);
-    rdpq_mode_alphacompare(clamp ? 128 : 1);
+    rdpq_mode_alphacompare((flags & 1) ? 128 : 1);
+    trino_t3_mode = 1;
+}
+
+// Textured 3D with a filter and an optional detail layer (see ffi.rs):
+// flags bit 0 clamp, bit 1 point filter, bits 4..7 the detail's repeats
+// per base repeat (log2). The detail tile reads the same texture
+// coordinates as TILE0, shifted so it tiles 2^n times per base repeat
+// whatever the two sizes; the 2-cycle combiner multiplies it in:
+// (TEX0 * SHADE) then (COMBINED * TEX1).
+static __attribute__((noinline)) uint32_t trino_3d_texture_ex_body(void* sprite, void* detail, uint32_t flags)
+{
+    sprite_t* sp = (sprite_t*)sprite;
+    sprite_t* dt = (sprite_t*)detail;
+    uint32_t clamp = flags & 1;
+    int shift = (flags >> 4) & 15;
+    if (dt) {
+        int a = trino_tmem_bytes(sp), b = trino_tmem_bytes(dt);
+        if (a < 0 || b < 0 || a + b > 4096) dt = NULL;
+    }
+    int resident = TRINO_T3_CACHE && trino_t3_sp == sp && trino_t3_dt == dt && trino_t3_flags == flags;
+    if (resident && trino_t3_mode) return dt != NULL;
+    if (resident) {
+        // Same texels, another mode in between (an untextured RSP draw):
+        // only the mode again, with the palette lookup the upload had set
+        // for a CI texture (the standard mode clears it: CI crates drew
+        // black).
+        trino_t3_texture_mode(dt != NULL, flags);
+        rdpq_mode_tlut(rdpq_tlut_from_format(sprite_get_format(sp)));
+        return dt != NULL;
+    }
+    trino_tmem_owner = NULL;
+    trino_w_sp = NULL;
+    trino_t3_texture_mode(dt != NULL, flags);
+    trino_t3_sp = sp;
+    trino_t3_dt = dt;
+    trino_t3_flags = flags;
     float repeats = clamp ? 1.0f : REPEAT_INFINITE;
     rdpq_texparms_t parms = {
         .s.repeats = repeats,
@@ -568,9 +642,16 @@ uint32_t trino_3d_texture_ex(void* sprite, void* detail, uint32_t flags)
 // like a detail tile and translated by `scroll` (u << 16 | v, 1/65536 of
 // its repeat), so it flows on its own. The pair must fit TMEM and neither
 // may be a palette, or the layer is dropped.
-uint32_t trino_3d_water(void* sprite, void* detail, uint32_t flags, uint32_t scroll)
+// The detail tile's translation for `scroll` (see trino_3d_water_body).
+static float trino_water_translate(uint32_t v, int size)
+{
+    return (1.0f - (float)v / 65536.0f) * (float)size;
+}
+
+static __attribute__((noinline)) uint32_t trino_3d_water_body(void* sprite, void* detail, uint32_t flags, uint32_t scroll)
 {
     trino_tmem_owner = NULL;
+    trino_t3_sp = NULL;
     sprite_t* sp = (sprite_t*)sprite;
     sprite_t* dt = sp ? (sprite_t*)detail : NULL;
     int shift = (flags >> 4) & 15;
@@ -578,23 +659,40 @@ uint32_t trino_3d_water(void* sprite, void* detail, uint32_t flags, uint32_t scr
         int a = trino_tmem_bytes(sp), b = trino_tmem_bytes(dt);
         if (a < 0 || b < 0 || a + b > 4096) dt = NULL;
     }
-    trino_mode_standard();
-    if (dt) {
-        rdpq_set_env_color(RGBA32(0, 0, 0, 128));
-        rdpq_mode_combiner(RDPQ_COMBINER2((TEX1, TEX0, ENV_ALPHA, TEX0), (0, 0, 0, SHADE),
-                                          (COMBINED, 0, SHADE, 0), (0, 0, 0, SHADE)));
-    } else if (sp) {
-        rdpq_mode_combiner(RDPQ_COMBINER1((TEX0, 0, SHADE, 0), (0, 0, 0, SHADE)));
-    } else {
-        rdpq_mode_combiner(RDPQ_COMBINER_SHADE);
+    int resident = sp && trino_w_sp == sp && trino_w_dt == dt && trino_w_flags == flags;
+    if (!resident || !trino_w_mode) {
+        trino_mode_standard();
+        if (dt) {
+            rdpq_set_env_color(RGBA32(0, 0, 0, 128));
+            rdpq_mode_combiner(RDPQ_COMBINER2((TEX1, TEX0, ENV_ALPHA, TEX0), (0, 0, 0, SHADE),
+                                              (COMBINED, 0, SHADE, 0), (0, 0, 0, SHADE)));
+        } else if (sp) {
+            rdpq_mode_combiner(RDPQ_COMBINER1((TEX0, 0, SHADE, 0), (0, 0, 0, SHADE)));
+        } else {
+            rdpq_mode_combiner(RDPQ_COMBINER_SHADE);
+        }
+        rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
+        rdpq_mode_zbuf(true, false);
+        rdpq_mode_alphacompare(0);
+        trino_mode_3d = 0;
+        if (!sp) return 0;
+        rdpq_mode_persp(true);
+        rdpq_mode_filter((flags & 2) ? FILTER_POINT : FILTER_BILINEAR);
+        trino_w_mode = 1;
     }
-    rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
-    rdpq_mode_zbuf(true, false);
-    rdpq_mode_alphacompare(0);
-    trino_mode_3d = 0;
-    if (!sp) return 0;
-    rdpq_mode_persp(true);
-    rdpq_mode_filter((flags & 2) ? FILTER_POINT : FILTER_BILINEAR);
+    if (resident) {
+        // Same layers in TMEM: move the detail tile's origin only, as the
+        // upload below sets it (tex_loader's s0fx = translate * 4; the
+        // repeats are infinite, so the end moves by as much). The RSP's
+        // textured triangles in flight read the tile: sync first.
+        if (dt) {
+            int s0 = (int)(trino_water_translate(scroll >> 16, dt->width) * 4);
+            int t0 = (int)(trino_water_translate(scroll & 0xFFFF, dt->height) * 4);
+            rdpq_sync_tile();
+            rdpq_set_tile_size_fx(TILE1, s0, t0, dt->width * 4 + s0, dt->height * 4 + t0);
+        }
+        return dt != NULL;
+    }
     rdpq_texparms_t parms = {
         .s.repeats = REPEAT_INFINITE,
         .t.repeats = REPEAT_INFINITE,
@@ -602,15 +700,13 @@ uint32_t trino_3d_water(void* sprite, void* detail, uint32_t flags, uint32_t scr
     if (dt) {
         // The RDP subtracts a tile's origin from its coordinates: the
         // texel at uv * scale + offset is at origin = (1 - offset) * size.
-        float su = (float)(scroll >> 16) / 65536.0f;
-        float sv = (float)(scroll & 0xFFFF) / 65536.0f;
         rdpq_texparms_t dparms = {
             .s.repeats = REPEAT_INFINITE,
             .t.repeats = REPEAT_INFINITE,
             .s.scale_log = trino_log2(sp->width) - trino_log2(dt->width) - shift,
             .t.scale_log = trino_log2(sp->height) - trino_log2(dt->height) - shift,
-            .s.translate = (1.0f - su) * (float)dt->width,
-            .t.translate = (1.0f - sv) * (float)dt->height,
+            .s.translate = trino_water_translate(scroll >> 16, dt->width),
+            .t.translate = trino_water_translate(scroll & 0xFFFF, dt->height),
         };
         rdpq_tex_multi_begin();
         rdpq_sprite_upload(TILE0, sp, &parms);
@@ -619,6 +715,9 @@ uint32_t trino_3d_water(void* sprite, void* detail, uint32_t flags, uint32_t scr
     } else {
         rdpq_sprite_upload(TILE0, sp, &parms);
     }
+    trino_w_sp = sp;
+    trino_w_dt = dt;
+    trino_w_flags = flags;
     trino_tex_w = (float)sp->width;
     trino_tex_h = (float)sp->height;
     return dt != NULL;
@@ -713,7 +812,7 @@ void* trino_wav_load(const char* dfs_path)
 
 // `looped` is accepted for cross-platform symmetry but ignored here: on the
 // N64, looping is baked into the wav64 file (audioconv64 --wav-loop).
-void trino_wav_play(void* wav, uint32_t channel, uint32_t looped)
+static __attribute__((noinline)) void trino_wav_play_body(void* wav, uint32_t channel, uint32_t looped)
 {
     (void)looped;
     wav64_play((wav64_t*)wav, (int)channel);
@@ -734,7 +833,7 @@ void trino_mixer_set_vol(uint32_t vol_q16)
 // integer first argument, o32 (Rust) passes following floats in integer
 // registers while o64 (libdragon) uses FP registers — scalar floats after
 // an int would arrive as garbage. Integers and pointers are always safe.
-void trino_ch_volume(uint32_t channel, uint32_t lvol_q16, uint32_t rvol_q16)
+static __attribute__((noinline)) void trino_ch_volume_body(uint32_t channel, uint32_t lvol_q16, uint32_t rvol_q16)
 {
     mixer_ch_set_vol((int)channel, lvol_q16 / 65536.0f, rvol_q16 / 65536.0f);
 }
@@ -792,12 +891,12 @@ uint32_t trino_save_capacity(void)
     return (uint32_t)(eeprom_total_blocks() * EEPROM_BLOCK_SIZE);
 }
 
-void trino_save_read(uint8_t* dest, uint32_t start, uint32_t len)
+static __attribute__((noinline)) void trino_save_read_body(uint8_t* dest, uint32_t start, uint32_t len)
 {
     eeprom_read_bytes(dest, start, len);
 }
 
-void trino_save_write(const uint8_t* src, uint32_t start, uint32_t len)
+static __attribute__((noinline)) void trino_save_write_body(const uint8_t* src, uint32_t start, uint32_t len)
 {
     eeprom_write_bytes(src, start, len);
 }
@@ -879,3 +978,170 @@ void trino_debug_fb_dump(void)
            (unsigned long)hash);
 }
 
+// The same overlay assembled with TRINO_COLORED: per-channel light terms
+// and an emissive add. Its code, data and functions are last in this file,
+// so adding them moved no other shim function or variable (an N64 frame's
+// time moves with code and data layout).
+DEFINE_RSP_UCODE(rsp_trino_color);
+static uint32_t trino_rsp_color_id;
+
+static void trino_register_color_overlay(void)
+{
+    trino_rsp_color_id = rspq_overlay_register(&rsp_trino_color);
+}
+
+// The same draw through the colored overlay (rsp_trino_color's
+// TrinoCmd_Draw): `w` as trino_rsp_draw's, then the 13 words of `c`.
+#define TRINO_RSP_COLOR_WORDS 13
+void trino_rsp_draw_colored(const uint32_t* w, const uint32_t* c)
+{
+    if (!trino_mode_3d) trino_3d_begin();
+    rspq_write_t q = rspq_write_begin(trino_rsp_color_id, 0x1, TRINO_RSP_DRAW_WORDS + TRINO_RSP_COLOR_WORDS);
+    rspq_write_arg(&q, w[0] & 0xFF);
+    for (int i = 1; i < TRINO_RSP_DRAW_WORDS; i++) rspq_write_arg(&q, w[i]);
+    for (int i = 0; i < TRINO_RSP_COLOR_WORDS; i++) rspq_write_arg(&q, c[i]);
+    rspq_write_end(&q);
+    trino_rsp_pending = 1;
+}
+
+// The overlay assembled with TRINO_COLORED and TRINO_TEXTURED: textured
+// draws (S, T, W and 1/W per vertex). Last in this file, like the colored
+// one, so no other shim symbol moves.
+DEFINE_RSP_UCODE(rsp_trino_tex);
+static uint32_t trino_rsp_tex_id;
+
+// A textured draw through rsp_trino_tex's TrinoCmd_Draw, after
+// trino_3d_texture_ex bound its texture and mode: `w` as trino_rsp_draw's,
+// then the 13 color words and the 4 texture words of `c`.
+#define TRINO_RSP_TEX_WORDS 17
+static void trino_register_tex_overlay(void)
+{
+    trino_rsp_tex_id = rspq_overlay_register(&rsp_trino_tex);
+}
+
+void trino_rsp_draw_textured(const uint32_t* w, const uint32_t* c)
+{
+    rspq_write_t q = rspq_write_begin(trino_rsp_tex_id, 0x1, TRINO_RSP_DRAW_WORDS + TRINO_RSP_TEX_WORDS);
+    rspq_write_arg(&q, w[0] & 0xFF);
+    for (int i = 1; i < TRINO_RSP_DRAW_WORDS; i++) rspq_write_arg(&q, w[i]);
+    for (int i = 0; i < TRINO_RSP_TEX_WORDS; i++) rspq_write_arg(&q, c[i]);
+    rspq_write_end(&q);
+    trino_rsp_pending = 1;
+    trino_rsp_tex_pending = 1;
+}
+
+// The overlay assembled with TRINO_WATER as well: water surfaces displaced,
+// lit, Fresnel-shaded and fogged on the RSP (ADR 0015, issue #69).
+DEFINE_RSP_UCODE(rsp_trino_water);
+static uint32_t trino_rsp_water_id;
+
+static void trino_register_water_overlay(void)
+{
+    trino_rsp_water_id = rspq_overlay_register(&rsp_trino_water);
+}
+
+// A water draw through rsp_trino_water's TrinoCmd_Draw, after
+// trino_3d_water bound its texture and blend: `w` as trino_rsp_draw's, then
+// the 17 color and texture words and the water block and ripple buffer
+// addresses of `c`.
+#define TRINO_RSP_WATER_WORDS 19
+void trino_rsp_draw_water(const uint32_t* w, const uint32_t* c)
+{
+    rspq_write_t q = rspq_write_begin(trino_rsp_water_id, 0x1, TRINO_RSP_DRAW_WORDS + TRINO_RSP_WATER_WORDS);
+    rspq_write_arg(&q, w[0] & 0xFF);
+    for (int i = 1; i < TRINO_RSP_DRAW_WORDS; i++) rspq_write_arg(&q, w[i]);
+    for (int i = 0; i < TRINO_RSP_WATER_WORDS; i++) rspq_write_arg(&q, c[i]);
+    rspq_write_end(&q);
+    trino_rsp_pending = 1;
+    trino_rsp_tex_pending = 1;
+}
+
+// The o32/o64 seam (ADR 0002): Rust calls these with o32's 16-byte
+// argument save area, but gcc compiles them for o64, whose callee may spill
+// a2/a3 into the caller's 16(sp)..31(sp). That is the Rust caller's own
+// frame: trino_3d_texture_ex spilling `flags` there overwrote a pointer
+// submit_textured had saved at 16(sp), and the next call read it back as
+// garbage (an address error in ares, 2026-10-18). Every export with three
+// or four arguments is therefore this stub: its own frame holds the 32-byte
+// save area the real function (`*_body`) may spill into, and the call is
+// not a tail call (a jump would hand the body the Rust frame again).
+#define TRINO_NOT_A_TAIL_CALL() __asm__ volatile("" ::: "memory")
+void trino_fill_rect(uint32_t xy, uint32_t wh, uint32_t color)
+{
+    trino_fill_rect_body(xy, wh, color);
+    TRINO_NOT_A_TAIL_CALL();
+}
+
+void trino_text_run(const uint32_t* g, uint32_t n, uint32_t scale)
+{
+    trino_text_run_body(g, n, scale);
+    TRINO_NOT_A_TAIL_CALL();
+}
+
+void trino_tri(const float* pts, const uint8_t* colors, const float* zs)
+{
+    trino_tri_body(pts, colors, zs);
+    TRINO_NOT_A_TAIL_CALL();
+}
+
+uint32_t trino_3d_texture_ex(void* sprite, void* detail, uint32_t flags)
+{
+    uint32_t r = trino_3d_texture_ex_body(sprite, detail, flags);
+    TRINO_NOT_A_TAIL_CALL();
+    return r;
+}
+
+uint32_t trino_3d_water(void* sprite, void* detail, uint32_t flags, uint32_t scroll)
+{
+    uint32_t r = trino_3d_water_body(sprite, detail, flags, scroll);
+    TRINO_NOT_A_TAIL_CALL();
+    return r;
+}
+
+void trino_wav_play(void* wav, uint32_t channel, uint32_t looped)
+{
+    trino_wav_play_body(wav, channel, looped);
+    TRINO_NOT_A_TAIL_CALL();
+}
+
+void trino_ch_volume(uint32_t channel, uint32_t lvol_q16, uint32_t rvol_q16)
+{
+    trino_ch_volume_body(channel, lvol_q16, rvol_q16);
+    TRINO_NOT_A_TAIL_CALL();
+}
+
+void trino_save_read(uint8_t* dest, uint32_t start, uint32_t len)
+{
+    trino_save_read_body(dest, start, len);
+    TRINO_NOT_A_TAIL_CALL();
+}
+
+void trino_save_write(const uint8_t* src, uint32_t start, uint32_t len)
+{
+    trino_save_write_body(src, start, len);
+    TRINO_NOT_A_TAIL_CALL();
+}
+
+// Write `len` bytes at cached address `p` back to RDRAM before the RSP
+// DMAs them (the water draws' per-frame data: cached stores and one
+// writeback cost less than a word at a time to uncached memory).
+// Wake the RSP for what was queued (streaming, see ffi.rs): rspq only
+// starts an idle RSP on a flush.
+void trino_rsp_flush(void)
+{
+    rspq_flush();
+}
+
+void trino_cache_writeback(const void* p, uint32_t len)
+{
+    data_cache_hit_writeback(p, len);
+}
+
+// Claim the 16-byte lines at cached `p` (16-aligned, `len` a multiple of 16)
+// for writing without reading them from RDRAM first (Create Dirty
+// Exclusive): the caller overwrites every byte the RSP will read.
+void trino_cache_create(void* p, uint32_t len)
+{
+    for (char* a = (char*)p; a < (char*)p + len; a += 16)
+        __asm__ volatile("cache 0x0D, 0(%0)" :: "r"(a));
+}

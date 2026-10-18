@@ -2033,12 +2033,14 @@ impl PcRenderer {
     /// otherwise): CPU and RSP time estimated by `trino_core::perf::N64_COST`,
     /// each draw sent where the console sends it ([`N64Estimate`]).
     pub fn n64_estimate(&self) -> N64Estimate {
-        let (cpu_us, rsp_us) = trino_core::perf::N64_COST.split_us(
-            &self.n64.cpu,
-            self.n64.cpu_draws,
-            self.n64.rsp_draws,
-            self.n64.rsp_tris,
-        );
+        let rsp = trino_core::perf::RspWork {
+            draws: self.n64.rsp_draws,
+            tris: self.n64.rsp_tris,
+            water_draws: self.n64.water_draws,
+            water_tris: self.n64.water_tris,
+        };
+        let (cpu_us, rsp_us) =
+            trino_core::perf::N64_COST.split_us(&self.n64.cpu, self.n64.cpu_draws, &rsp);
         N64Estimate {
             cpu_us,
             rsp_us,
@@ -3485,6 +3487,9 @@ struct N64Split {
     cpu_draws: u32,
     rsp_draws: u32,
     rsp_tris: u32,
+    /// Of those, the water surfaces (priced by the water overlay's terms).
+    water_draws: u32,
+    water_tris: u32,
 }
 
 /// The native profile's GPU T&L decision for one draw (issue #51,
@@ -4035,11 +4040,19 @@ impl Renderer for PcRenderer {
             // What the console does with it: its RSP overlay takes the draws
             // `rsp_eligible` accepts (the same rules, from the core); the CPU
             // transforms the rest.
-            let rsp = trino_core::render3d::rsp_mesh_supported(&mesh)
-                && trino_core::render3d::rsp_eligible(&ctx, &mesh, matrix, params).is_some();
-            if rsp {
-                self.n64.rsp_draws += 1;
-                self.n64.rsp_tris += (mesh.index_count / 3) as u32;
+            if let Ok((draws, tris)) = trino_core::render3d::rsp_plan(&ctx, &mesh, matrix, params) {
+                self.n64.rsp_draws += draws;
+                self.n64.rsp_tris += tris;
+                // A water surface on the RSP draws the rings it can there
+                // too; the others stay CPU triangles.
+                if params.water.is_some() {
+                    self.n64.water_draws += draws;
+                    self.n64.water_tris += tris;
+                    let (ring_tris, cpu) =
+                        trino_core::render3d::rsp_water_rings(&ctx, &mesh, matrix, params);
+                    self.n64.rsp_tris += ring_tris;
+                    self.n64.cpu.add(&cpu);
+                }
             } else {
                 self.n64.cpu_draws += 1;
                 self.n64.cpu.add(&tnl);

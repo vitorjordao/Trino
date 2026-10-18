@@ -436,12 +436,9 @@ fn strict_mode_rejects_3d_over_the_n64_time_ceiling() {
         }
         renderer.end_frame();
     };
-    // Flat shading keeps a draw on the CPU T&L (~0.8 ms of N64 time per
-    // cube, N64_COST): 10 fit, 80 bust the 50 ms ceiling.
-    let cpu = trino_core::ModelParams {
-        shading: trino_core::Shading::Flat,
-        ..trino_core::ModelParams::default()
-    };
+    // A translucent tint keeps a draw on the CPU T&L (~0.8 ms of N64 time
+    // per cube, N64_COST): 10 fit, 80 bust the 50 ms ceiling.
+    let cpu = trino_core::ModelParams::tinted(Color::rgba(255, 255, 255, 200));
     frame(&mut renderer, 10, cpu);
     let e = renderer.n64_estimate();
     assert_eq!((e.cpu_draws, e.rsp_draws), (10, 0));

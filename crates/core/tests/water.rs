@@ -279,7 +279,7 @@ fn the_surface_path_hands_over_the_displaced_normals() {
 }
 
 #[test]
-fn water_stays_off_the_rsp_the_gpu_path_and_the_memo() {
+fn water_takes_the_water_overlay_and_stays_off_the_gpu_path_and_the_memo() {
     let blob = sheet(2, 1.0);
     let mesh = Mesh::from_tmdl(&blob).unwrap();
     let ctx = ctx(&WaterState::NONE);
@@ -288,9 +288,35 @@ fn water_stays_off_the_rsp_the_gpu_path_and_the_memo() {
         texture: None,
         ..water(CALM)
     };
+    // The N64's water overlay takes a textured sheet the CPU would neither
+    // clip nor split, lit in world space ...
+    let d = render3d::rsp_check(&ctx, &mesh, &Mat34::IDENTITY, &p).unwrap();
+    assert_eq!(d.ambient, 1.0, "unlit");
     assert_eq!(
-        render3d::rsp_check(&ctx, &mesh, &Mat34::IDENTITY, &p).unwrap_err(),
-        RspReject::Water
+        render3d::rsp_plan(&ctx, &mesh, &Mat34::IDENTITY, &p),
+        Ok((1, 8))
+    );
+    // ... not one the CPU would clip or split (a sheet 40 units wide, 20 a
+    // quad, under the camera) ...
+    let wide = sheet(2, 20.0);
+    let wide_m = Mesh::from_tmdl(&wide).unwrap();
+    assert!(render3d::rsp_check(&ctx, &wide_m, &Mat34::IDENTITY, &p).is_err());
+    // ... nor an untextured one.
+    assert_eq!(
+        render3d::rsp_water_mesh_check(
+            &Mesh::from_tmdl(&tmdl(
+                &[
+                    Vec3::ZERO,
+                    Vec3::new(0.0, 0.0, 1.0),
+                    Vec3::new(1.0, 0.0, 0.0)
+                ],
+                &[Vec3::new(0.0, 1.0, 0.0); 3],
+                &[[40, 110, 230, 160]; 3],
+                &[0, 1, 2],
+            ))
+            .unwrap()
+        ),
+        Err(RspReject::Water)
     );
     assert_eq!(
         render3d::gpu_check(&ctx, &mesh, &Mat34::IDENTITY, &p).unwrap_err(),

@@ -16,7 +16,7 @@ game ──► trino-core ◄── trino-platform-{pc,n64,3ds,web}      apps/* 
 | `crates/core` (`trino-core`) | Traits (`Game`, `Renderer`, `Platform`, `Audio`, `Input`), math, the software T&L, physics, text, scenes as data. `no_std`, zero dependencies |
 | `crates/game-api` | The stable boundary for hot-reloadable game dylibs on PC (`export_game!`) |
 | `crates/platform-pc` | winit window, cpal audio, gilrs pads, the save file; draws with `trino-render-wgpu` |
-| `crates/render-wgpu` | The wgpu renderer the PC and the Web share: the console-simulation profiles, strict mode, the CPU and GPU T&L paths, WebGPU and WebGL2 ([ADR 0018](adr/0018-web-target.md)) |
+| `crates/render-wgpu` | The wgpu renderer the PC and the Web share: the console-simulation profiles, strict mode, the CPU and GPU T&L paths, WebGPU and WebGL2 ([ADR 0019](adr/0019-web-target.md)) |
 | `crates/platform-web` | The browser backend (`wasm32-unknown-unknown`): canvas, Web Audio, keyboard/pointer/touch/gamepad input, `localStorage` saves, asset packs, KTX2 transcoding |
 | `crates/platform-n64` | libdragon backend through a C shim, and the RSP overlay (`shim/rsp_trino.S`) |
 | `crates/platform-3ds` | libctru, citro2d and citro3d backend through a C shim |
@@ -162,7 +162,7 @@ depth texture's GL filter incomplete), and the water's depth copy drawn instead 
 T&L runs on one worker there. `SimProfile::Web` is the native picture with `Caps::WEB`;
 the browser goldens (`tests/golden/web/`) hold all three engines and the PC renderer
 (`xtask/tests/web_parity.rs`) to one picture. Details in
-[ADR 0018](adr/0018-web-target.md) and [PLATFORMS.md](PLATFORMS.md#web-webgpu--webgl2).
+[ADR 0019](adr/0019-web-target.md) and [PLATFORMS.md](PLATFORMS.md#web-webgpu--webgl2).
 
 ### 2D in the same pipeline
 

@@ -168,16 +168,16 @@ fn the_rsp_split_names_each_rule_and_follows_the_scene() {
             .iter()
             .any(|(r, _)| *r == trino_core::RspReject::Translucent)
     );
-    // Fog sends everything to the CPU, for one reason.
+    // Fog: the RSP fogs the rocks per vertex too (their edges are too short
+    // for the CPU path to split), so the split stays what it was.
     scene.environment.fog = Some(trino_scene::FogDef {
         color: [0, 0, 0],
         near: 5.0,
         far: 30.0,
     });
     let fog = estimate(&scene, &lib, &meshes, Target::N64);
-    assert_eq!(fog.rsp_draws, 0);
-    assert_eq!(fog.off_rsp, vec![(trino_core::RspReject::Fog, 3)]);
-    assert!(fog.n64_cpu_us() > b.n64_cpu_us());
+    assert_eq!(fog.rsp_draws, b.rsp_draws);
+    assert_eq!(fog.off_rsp, b.off_rsp);
     // The PC has no RSP: its GPU T&L takes what `pc_gpu_check` accepts
     // (fog included) and the translucent rock stays CPU work.
     let pc = estimate(&scene, &lib, &meshes, Target::Pc);
@@ -362,13 +362,22 @@ fn pc_budget_reports_the_gpu_split() {
     assert_eq!(reasons[0]["reason"], b.off_pc_gpu[0].0.label());
     let paths = pc["paths"].as_array().unwrap();
     assert_eq!(paths.len(), b.paths.len());
-    let river = paths.iter().find(|p| p["name"] == "river").unwrap();
+    let river = paths
+        .iter()
+        .find(|p| p["name"] == "river/piece-0-8")
+        .unwrap();
     assert_eq!(
         (&river["path"], &river["reason"]),
         (&"cpu".into(), &"water surface".into())
     );
-    assert_eq!(b.path_of("river"), Some(RenderPath::Cpu("water surface")));
-    let ground = paths.iter().find(|p| p["name"] == "ground").unwrap();
+    assert_eq!(
+        b.path_of("river/piece-0-8"),
+        Some(RenderPath::Cpu("water surface"))
+    );
+    let ground = paths
+        .iter()
+        .find(|p| p["name"] == "ground/tile-4-2-2")
+        .unwrap();
     assert_eq!(
         (&ground["path"], &ground["reason"]),
         (&"gpu".into(), &serde_json::Value::Null)

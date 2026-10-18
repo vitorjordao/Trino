@@ -13,7 +13,7 @@ cargo xtask test web [--browsers chromium,firefox,webkit] [--headed] [--no-build
 cargo xtask assets web                         # the Web bake alone (KTX2 beside the masters)
 ```
 
-ADR 0018 is the design; `docs/PLATFORMS.md` › Web the user guide.
+ADR 0019 is the design; `docs/PLATFORMS.md` › Web the user guide.
 
 ## What runs where
 
@@ -106,6 +106,6 @@ What the `web` job needs, all found the hard way (reproduce with Docker:
 
 ## Sizes and speed (2026-10-18)
 
-castle64 + showcase pack 868 KB (30 KTX2 textures), Solid Eleven's 3.07 MB (mostly 16-bit
+castle64 + showcase pack 944 KB (33 KTX2 textures), Solid Eleven's 3.07 MB (mostly 16-bit
 PCM: Opus is #53). The release wasm is ~4.5 MB before compression. The self-test takes
 8–15 s per browser locally.

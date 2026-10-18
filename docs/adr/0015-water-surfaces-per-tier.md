@@ -60,8 +60,8 @@ that the hero, a robot and falling objects disturb.
   no `fmodf`, which is software on the N64.
 - The CPU path is a `WATER` instantiation of `render3d/lit.rs`'s copy of the T&L, kept
   out of `tessellate_joints`, whose N64 I-cache budget is untouched.
-- Water never takes the RSP (`RspReject::Water`), the 3DS's static-mesh GPU path
-  (`GpuReject::Water`) or the draw memo.
+- Water never takes the 3DS's static-mesh GPU path (`GpuReject::Water`) or the draw
+  memo. It never took the RSP either until #69 gave it an overlay of its own (ADR 0018).
 - **Deviation from the issue:** there is no `vs_water` WGSL vertex shader. Every PC draw
   arrives already projected by the core (ADR 0003). Displacing on the GPU would need a
   second projection path, and the PC's console profiles must keep drawing exactly what
@@ -159,6 +159,12 @@ positional splash (`sounds/water_splash`). Wading keeps rippling. Two positional
   its scene camera stays on the CPU path: part of it lies behind the camera.
 - **PC:** `crates/platform-pc/tests/water.rs` and the goldens `water_native`,
   `water_n64`, `water_n3ds` and `showcase_river`.
+- **After #69 (ADR 0018 §5):** the water and the rest of the showcase on the N64 RSP:
+  `micro-river` 19.6 → 10.5 ms, `showcase-river` 286.6 → 75.2 ms (mean over 8 paddings).
+- **After #69's second part (ADR 0018 §7):** ripples and rings on the overlay, two
+  vertices per pass, streamed: `micro-river` 1.78 ms a frame, the river's draws 0.94 ms of
+  CPU (0.88–0.98 over 8 paddings, gated at 1.2 ms) and ~0.9 ms of RSP beside it;
+  `showcase-river` 26.2 ms (gated at 33.3 ms, 30 fps). In ares: the RDP is not timed.
 
 ## Consequences
 
@@ -172,7 +178,7 @@ positional splash (`sounds/water_splash`). Wading keeps rippling. Two positional
     - It would displace and shade on the overlay and feed textured triangles to
       `RDPQ_Triangle_Send_Async` (S/T s10.5, W and 1/W per vertex).
     - It needs fog and colored light too, or the showcase can't use it.
-    - It is the way to the 1.2 ms river.
+    - It is the way to the 1.2 ms river. Done in #69 (ADR 0018).
   - **Fragment lighting on the 3DS:** `C3D_LightEnv` with a Fresnel LUT, for a
     per-pixel glint.
   - **Splitting long water surfaces into pieces,** so the 3DS GPU takes the visible

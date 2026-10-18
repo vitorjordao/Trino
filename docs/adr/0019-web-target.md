@@ -1,4 +1,4 @@
-# ADR 0018: The Web target — one renderer for PC and browsers, WebGPU with a WebGL2 fallback
+# ADR 0019: The Web target — one renderer for PC and browsers, WebGPU with a WebGL2 fallback
 
 Status: accepted (October 2026, GitHub #47; #52's phase 5, Web KTX2, is
 [ADR 0017 §9](0017-texture-formats.md)).

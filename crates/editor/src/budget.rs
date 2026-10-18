@@ -338,7 +338,7 @@ mod tests {
         let lines = platform_lines(&[n64.clone(), n3ds, pc.clone(), web.clone()], &|_| None);
         let text: Vec<&str> = lines.iter().map(|(t, _)| t.as_str()).collect();
         assert!(text[0].starts_with("N64 ≈"), "{text:?}");
-        assert_eq!(text[1], "RSP 2/5 draws · 2 fog");
+        assert_eq!(text[1], "RSP 2/5 draws · 2 fog needing splits");
         assert_eq!(text[2], "3DS 2 tris · GPU 4/5 draws · 1 flat shading");
         assert_eq!(text[3], "PC GPU 3/5 draws · 240 tris · 1 translucent");
         assert_eq!(text[4], "Web 4 calls · 2 pipelines · 3 switches");

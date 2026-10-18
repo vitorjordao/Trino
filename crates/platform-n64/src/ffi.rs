@@ -56,10 +56,32 @@ unsafe extern "C" {
     /// RSP T&L of one static mesh draw: 27 words in the overlay's DRAW
     /// layout (`rsp_trino.S`).
     pub fn trino_rsp_draw(words: *const u32);
+    /// The colored draw command (`TrinoCmd_DrawColored`): the 27 words of
+    /// `trino_rsp_draw` and the 7 of `rsp::color_words`.
+    pub fn trino_rsp_draw_colored(words: *const u32, color: *const u32);
+    /// A textured draw (rsp_trino_tex), after `trino_3d_texture_ex` bound its
+    /// texture: the 27 words of `trino_rsp_draw` and the 17 of
+    /// `rsp::tex_words` (color, then texture scale and offset).
+    pub fn trino_rsp_draw_textured(words: *const u32, color: *const u32);
+    /// A water draw (rsp_trino_water), after `trino_3d_water` bound its
+    /// texture and blend: the 27 words of `trino_rsp_draw` and the 19 of
+    /// `rsp::water_entry`.
+    pub fn trino_rsp_draw_water(words: *const u32, color: *const u32);
     /// Uncached, 16-byte aligned RDRAM (the RSP reads it by DMA).
     pub fn trino_alloc_uncached(size: u32) -> *mut c_void;
     /// Physical address of a pointer (what the RSP's DMA takes).
     pub fn trino_phys_addr(p: *const c_void) -> u32;
+    /// Write `len` bytes at cached address `p` back to RDRAM (data the RSP
+    /// DMAs next).
+    pub fn trino_cache_writeback(p: *const c_void, len: u32);
+    /// Start the RSP on what is queued (`rspq_flush`): an idle RSP sleeps
+    /// until then, so commands streamed during a frame would wait for its
+    /// end.
+    pub fn trino_rsp_flush();
+    /// Claim the cache lines at cached `p` (16-aligned, `len` a multiple of
+    /// 16) for writing, without reading RDRAM (every byte read later must be
+    /// written first).
+    pub fn trino_cache_create(p: *mut c_void, len: u32);
     /// Heap bytes in use / in total (libdragon `sys_get_heap_stats`).
     pub fn trino_heap_used() -> u32;
     pub fn trino_heap_total() -> u32;

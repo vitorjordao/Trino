@@ -115,7 +115,7 @@ Things to know:
 ## Web (WebGPU / WebGL2)
 
 A Trino game in a browser tab, from one `wasm32-unknown-unknown` build ([ADR
-0018](adr/0018-web-target.md), issue #47). It runs the PC's own renderer
+0019](adr/0019-web-target.md), issue #47). It runs the PC's own renderer
 (`crates/render-wgpu`, shared by `trino-platform-pc` and `trino-platform-web`): the same
 shaders, the GPU T&L path, per-pixel lights, SSAO and water.
 

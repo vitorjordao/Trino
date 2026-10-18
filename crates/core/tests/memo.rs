@@ -6,7 +6,9 @@
 
 use trino_core::math3d::Mat34;
 use trino_core::memo::{self, MemoKey, MemoSlot};
-use trino_core::{AnimRef, ClipId, Color, ModelParams, Shading, SpriteId, Vec3};
+use trino_core::{
+    AnimRef, ClipId, Color, DetailTexture, ModelParams, Shading, SpriteId, TexFilter, Vec3,
+};
 
 fn at(x: f32) -> Mat34 {
     Mat34::from_rotation_scale_translation(Vec3::ZERO, Vec3::ONE, Vec3::new(x, 0.0, 2.0))
@@ -39,6 +41,16 @@ fn a_repeated_draw_hits_and_anything_it_depends_on_misses() {
                 ..plain
             },
         ),
+        // A double-sided draw's command culls nothing.
+        MemoKey::new(
+            7,
+            0,
+            &at(1.0),
+            &ModelParams {
+                double_sided: true,
+                ..plain
+            },
+        ),
     ];
     for o in other {
         let o = o.unwrap();
@@ -56,19 +68,11 @@ fn only_plain_draws_are_memoized() {
             ..ModelParams::DEFAULT
         },
         ModelParams {
-            double_sided: true,
-            ..ModelParams::DEFAULT
-        },
-        ModelParams {
             anim: Some(AnimRef {
                 clip: ClipId(0),
                 time: 0.0,
                 blend: None,
             }),
-            ..ModelParams::DEFAULT
-        },
-        ModelParams {
-            texture: Some(SpriteId(3)),
             ..ModelParams::DEFAULT
         },
         ModelParams {
@@ -79,6 +83,59 @@ fn only_plain_draws_are_memoized() {
         assert!(MemoKey::new(1, 0, &m, &p).is_none(), "{p:?}");
     }
     assert!(MemoKey::new(1, 0, &m, &ModelParams::tinted(Color::rgba(9, 9, 9, 9))).is_some());
+}
+
+#[test]
+fn textured_draws_are_keyed_by_texture_filter_and_detail() {
+    let m = at(0.0);
+    let tex = |t: u32| ModelParams {
+        texture: Some(SpriteId(t)),
+        ..ModelParams::DEFAULT
+    };
+    let keys = [
+        MemoKey::new(1, 0, &m, &ModelParams::DEFAULT),
+        MemoKey::new(1, 0, &m, &tex(3)),
+        MemoKey::new(1, 0, &m, &tex(4)),
+        MemoKey::new(
+            1,
+            0,
+            &m,
+            &ModelParams {
+                filter: TexFilter::Point,
+                ..tex(3)
+            },
+        ),
+        MemoKey::new(
+            1,
+            0,
+            &m,
+            &ModelParams {
+                detail: Some(DetailTexture {
+                    sprite: SpriteId(9),
+                    scale_log2: 2,
+                }),
+                ..tex(3)
+            },
+        ),
+        MemoKey::new(
+            1,
+            0,
+            &m,
+            &ModelParams {
+                detail: Some(DetailTexture {
+                    sprite: SpriteId(9),
+                    scale_log2: 3,
+                }),
+                ..tex(3)
+            },
+        ),
+    ];
+    for (i, a) in keys.iter().enumerate() {
+        assert!(a.is_some());
+        for b in &keys[i + 1..] {
+            assert_ne!(a, b);
+        }
+    }
 }
 
 #[test]

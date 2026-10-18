@@ -153,8 +153,42 @@ mod n64 {
     /// per stage and per model on the console's clock.
     #[inline(never)]
     fn water_perf(renderer: &mut N64Renderer, audio: &mut N64Audio) {
+        // Streamed RSP draws (`set_rsp_stream`, as the football template's
+        // host sets them): the river's surfaces go to the overlay as they
+        // are issued, so the RSP draws while the CPU builds the next.
+        let stream0 = renderer.rsp_stream();
+        renderer.set_rsp_stream(true);
         let mut g = boxed_showcase();
+        // `micro-river` first: the river alone (issue #69's 1.2 ms budget
+        // read directly), gated like the scenes.
+        showcase::perf::micro_river_scene(&mut g, Vec2::new(320.0, 240.0));
+        let (ids, n_ids) = showcase::perf::micro_river_ids(&g);
+        // Unmeasured frames first: the draw memo is built on the first.
+        for _ in 0..showcase::perf::WARM_FRAMES {
+            showcase::perf::micro_river_render(&g, &ids[..n_ids], renderer);
+        }
+        let mut times = trino_core::perf::FrameTimes::default();
+        let v0 = runtime::vblanks();
+        renderer.start_profile();
+        for _ in 0..showcase::perf::MEASURE_FRAMES {
+            let t0 = runtime::now_us();
+            showcase::perf::micro_river_update(&mut g);
+            let t1 = runtime::now_us();
+            showcase::perf::micro_river_render(&g, &ids[..n_ids], renderer);
+            let t2 = runtime::now_us();
+            times.update += t1.wrapping_sub(t0);
+            times.render += t2.wrapping_sub(t1);
+        }
+        times.vblanks = runtime::vblanks().wrapping_sub(v0);
+        if let Some(p) = renderer.take_profile() {
+            let mut report = alloc::string::String::new();
+            let _ = p.write_report(showcase::perf::MICRO_RIVER, &times, &mut report);
+            runtime::log(&report);
+        }
         showcase::perf::river_scene(&mut g, Vec2::new(320.0, 240.0), audio);
+        for _ in 0..showcase::perf::WARM_FRAMES {
+            g.render(renderer);
+        }
         let idle = InputState::default();
         let mut times = trino_core::perf::FrameTimes::default();
         let v0 = runtime::vblanks();
@@ -180,6 +214,7 @@ mod n64 {
         runtime::log("TRINO_STEP:river golden frame\n");
         g.render(renderer);
         renderer.dump_framebuffer();
+        renderer.set_rsp_stream(stream0);
     }
 
     /// The hub perf scene's first frame, dumped for the second golden.

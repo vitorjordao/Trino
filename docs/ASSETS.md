@@ -129,8 +129,8 @@ min_psnr = 38                    # ...checked: below 38 dB the bake fails
   else UASTC, else RGBA8. Its PSNR is measured on the transcoder's own decode, the
   pixels a browser shows.
 - `texture inspect|report --platform web`: `bytes` is the download, the memory share is
-  the VRAM against `Caps::WEB` (1 GiB). castle64's 30 KTX2 textures and the rest pack
-  into an 868 KB `trino.pak`.
+  the VRAM against `Caps::WEB` (1 GiB). castle64's 33 KTX2 textures and the rest pack
+  into a 944 KB `trino.pak`.
 
 ### On the 3DS (ADR 0017)
 

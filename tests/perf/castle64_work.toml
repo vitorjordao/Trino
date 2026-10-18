@@ -60,13 +60,24 @@ culled = 0
 rsp_draws = 22
 rsp_tris = 446
 
+[micro-river]
+verts = 0
+tris_in = 0
+clipped = 0
+splits = 0
+backfaced = 0
+emitted = 0
+culled = 3
+rsp_draws = 3
+rsp_tris = 92
+
 [showcase-river]
-verts = 4132
-tris_in = 3483
-clipped = 84
-splits = 738
-backfaced = 1606
-emitted = 2578
-culled = 0
-rsp_draws = 0
-rsp_tris = 0
+verts = 0
+tris_in = 0
+clipped = 0
+splits = 0
+backfaced = 0
+emitted = 0
+culled = 26
+rsp_draws = 87
+rsp_tris = 4302

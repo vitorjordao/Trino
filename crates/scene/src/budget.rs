@@ -11,11 +11,10 @@
 //! [`estimate`] on the same resolved scene, so a person and an agent read
 //! the same numbers.
 
-use trino_core::perf::{FRAME_30FPS_US, N64_COST};
+use trino_core::perf::{FRAME_30FPS_US, N64_COST, RspWork};
 use trino_core::render3d::{
     Camera3, GpuReject, Light, Mesh, PcGpuReject, RspReject, TnlContext, TnlScratch, TnlStats,
-    gpu_check, gpu_mesh_check, pc_gpu_check, pc_gpu_mesh_check, rsp_check, rsp_mesh_check,
-    tessellate_with,
+    gpu_check, gpu_mesh_check, pc_gpu_check, pc_gpu_mesh_check, rsp_plan, tessellate_with,
 };
 use trino_core::{LodPick, ModelId, SpriteId, Vec2};
 
@@ -36,6 +35,9 @@ pub struct FrameBudget {
     /// N64: draws on the RSP fast path and their source triangles.
     pub rsp_draws: u32,
     pub rsp_tris: u32,
+    /// N64: of those, the water surfaces (the water overlay's costs).
+    pub rsp_water_draws: u32,
+    pub rsp_water_tris: u32,
     /// N64: why the other draws stay on the CPU, most common first.
     pub off_rsp: Vec<(RspReject, u32)>,
     /// 3DS: draws on the GPU T&L path and their source triangles.
@@ -271,13 +273,25 @@ impl FrameBudget {
     /// N64 CPU time: the CPU-path draws' T&L, sort and submit, and the
     /// billboards (µs, calibrated model).
     pub fn n64_cpu_us(&self) -> u32 {
-        N64_COST.estimate_us(&self.cpu_tnl, self.cpu_draws)
+        N64_COST
+            .split_us(&self.cpu_tnl, self.cpu_draws, &self.rsp_work())
+            .0
             + N64_COST.billboards_us(self.billboards)
     }
 
     /// N64 RSP time of the fast-path draws (µs).
     pub fn n64_rsp_us(&self) -> u32 {
-        N64_COST.rsp_us(self.rsp_tris)
+        N64_COST.rsp_us(&self.rsp_work())
+    }
+
+    /// The frame's RSP draws and triangles, the water surfaces' apart.
+    pub fn rsp_work(&self) -> RspWork {
+        RspWork {
+            draws: self.rsp_draws,
+            tris: self.rsp_tris,
+            water_draws: self.rsp_water_draws,
+            water_tris: self.rsp_water_tris,
+        }
     }
 
     /// The N64 frame: CPU and RSP work in parallel, the slower one bounds.
@@ -441,11 +455,16 @@ pub fn estimate<'m>(
         if target != Target::N64 {
             continue;
         }
-        match rsp_mesh_check(&mesh).and_then(|_| rsp_check(&ctx, &mesh, &item.matrix, &item.params))
-        {
-            Ok(_) => {
+        match rsp_plan(&ctx, &mesh, &item.matrix, &item.params) {
+            // One draw however many commands (a rigid mesh sends one per
+            // joint on screen): `rsp_draws + cpu_draws` stays `draws`.
+            Ok((_, tris)) => {
                 b.rsp_draws += 1;
-                b.rsp_tris += (mesh.index_count / 3) as u32;
+                b.rsp_tris += tris;
+                if item.params.water.is_some() {
+                    b.rsp_water_draws += 1;
+                    b.rsp_water_tris += tris;
+                }
                 b.paths.push(path(item, RenderPath::Hardware));
             }
             Err(r) => {

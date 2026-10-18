@@ -217,4 +217,44 @@ pub trait Platform {
 
     /// Back to the default bindings (persisted too).
     fn reset_bindings(&mut self) {}
+
+    /// Start loading an asset group, or poll one ([`crate::group`], issue
+    /// #56): never blocks. The first call on an unloaded group queues it and
+    /// returns `Loading { progress: 0 }`; the backend then reads it a time
+    /// slice per frame ([`crate::Caps::load_budget_us`]) and later calls
+    /// return its progress, then `Ready`. `boot` is always ready; a group
+    /// this build doesn't hold is `Failed`. The default (a backend without
+    /// groups) knows only `boot`.
+    fn load_group(&mut self, group: crate::GroupId) -> crate::LoadState {
+        self.group_state(group)
+    }
+
+    /// Free an asset group's memory (a load in progress is cancelled). It
+    /// reads as `Unloaded` at once and its assets stop drawing; the memory
+    /// is back before the next frame's update. `boot` stays.
+    fn unload_group(&mut self, _group: crate::GroupId) {}
+
+    /// Where a group is, without asking for it.
+    fn group_state(&self, group: crate::GroupId) -> crate::LoadState {
+        if group == crate::GroupId::BOOT {
+            crate::LoadState::Ready
+        } else {
+            crate::LoadState::Failed
+        }
+    }
+
+    /// Bytes of a blob in any loaded group, boot included: borrowed from the
+    /// platform, valid until its group unloads (copy what must outlive the
+    /// frame, or look it up again). [`blob`](Self::blob) stays the `'static`
+    /// boot-only path.
+    fn group_blob(&self, id: BlobId) -> Option<&[u8]> {
+        self.blob(id)
+    }
+
+    /// The memory this hardware has and what holds it ([`crate::MemoryReport`]):
+    /// heap used/peak/total and the resident assets by category. Zeros where
+    /// the backend doesn't count.
+    fn memory(&self) -> crate::MemoryReport {
+        crate::MemoryReport::default()
+    }
 }

@@ -69,7 +69,7 @@ TRINO_EDITOR_SCREENSHOT=target/launcher.png TRINO_EDITOR_SCREENSHOT_FRAME=10 car
 | `TRINO_EDITOR_SCREENSHOT=out.png` | save a PNG of the whole window, then exit |
 | `TRINO_EDITOR_SCREENSHOT_FRAME=N` | …after N frames (default 30; use ~60 so thumbnails finish) |
 | `TRINO_EDITOR_SELECT=<name>[,<name>…]` | start with those entities selected (the first is active; gizmo + inspector visible) |
-| `TRINO_EDITOR_TAB=scene\|game\|level\|animation\|mixer` | focused center tab (`mixer`: the bottom dock's Mixer tab) |
+| `TRINO_EDITOR_TAB=scene\|game\|level\|animation\|mixer\|memory` | focused center tab (`mixer`, `memory`: the bottom dock's Mixer or Memory tab) |
 | `TRINO_EDITOR_ANIM=<model>:<clip>@<time>` | the Animation tab previews that clip, paused at that time |
 | `TRINO_EDITOR_ANIM_VIEW=ghosts=3,blend=wave:0.5,look=n64,palette` | its view options (onion skin, crossfade, look, palette) |
 | `TRINO_EDITOR_OPEN=fake-object` / `array` / `material:<logical>` / `model:<logical>` / `prefab:<logical>` / `particles:<name>[@pc\|n64\|3ds]` / `audio:<sounds/x\|music/x>[@pc\|n64\|3ds\|web]` | open the fake-object or array dialog, an asset inspector (`audio:`: the waveform overlays that platform's decode), or a prefab in edit mode |
@@ -79,7 +79,8 @@ TRINO_EDITOR_SCREENSHOT=target/launcher.png TRINO_EDITOR_SCREENSHOT_FRAME=10 car
 | `TRINO_EDITOR_GAME=pc\|n64\|3ds\|web\|n64x\|3dsnew` | the Game view's profile (default n64) — screenshots of each platform's variant; `n64x` / `3dsnew` are the hardware tiers (N64 + Expansion Pak, New 3DS) |
 | `TRINO_EDITOR_WEB_CANVAS=responsive\|720\|1080` | the Game view's browser canvas on the Web profile (the picture is the canvas over the auto pixel scale) |
 | `TRINO_EDITOR_SIZE=960x600` | window size (default 1600x940; never below the 960x600 minimum) — screenshot small windows |
-| `TRINO_EDITOR_INSPECT=platforms\|lod\|impostor\|budget\|ao\|audio` | the Inspector opens that section and scrolls to it (`audio`: the audio inspector's Platforms grid; `budget`: the scene settings' platform budget, with nothing selected; `ao`: the scene's Ambient Occlusion, or a model's baked AO with `TRINO_EDITOR_OPEN=model:<logical>`) |
+| `TRINO_EDITOR_INSPECT=platforms\|lod\|impostor\|budget\|ao\|audio\|groups` | the Inspector opens that section and scrolls to it (`audio`: the audio inspector's Platforms grid; `budget`: the scene settings' platform budget, with nothing selected; `ao`: the scene's Ambient Occlusion, or a model's baked AO with `TRINO_EDITOR_OPEN=model:<logical>`; `groups`: the scene settings' Asset groups) |
+| `TRINO_EDITOR_ASSET_GROUP=<group>[@models\|sprites\|audio\|particles]` | the Assets panel opens filtered by that group's chip (on that tab) |
 | `TRINO_EDITOR_TEXTURE=sprites/x\|fonts/x[@pc\|n64\|3ds\|web[,zoom]]` | open the texture inspector on that sprite or font, its preview tab on that platform at that zoom (1–8); with `TRINO_EDITOR_INSPECT=texture` its formats scroll into view |
 | `TRINO_EDITOR_AO=game\|on\|off\|mask` | the Scene view's ambient occlusion mode (as the scene sets it, forced on, off, the occlusion alone) |
 | `TRINO_EDITOR_RIPPLE=1` | keep a ripple ringing on the selected entity's water surface: one drops once the scene resolved, and another whenever it has faded (the inspector's "Drop a ripple"; screenshots of ripple rings) |
@@ -291,6 +292,25 @@ Live-edit check: start the editor with `TRINO_EDITOR_ECHO_LOG=1` in the backgrou
     `click_accesskit` with `egui::Popup::close_all(&h.ctx)`.
   - Lines that appear when a worker finishes shift what sits below them: draw the same
     number of placeholder lines while measuring.
+
+## Asset groups and the Memory tab (issue #56, ADR 0022)
+
+- `src/groups.rs`: the manifest's groups (re-read when its text changes, so an agent's
+  edit or `cargo xtask assets group` shows at once), each asset's groups, the Assets
+  chip filter, and the memory plans of the four console tiers (`TIERS`), measured on a
+  worker keyed on the manifest and the bake generation. `toggles()` is the chip row the
+  scene's Requires and a cell's Groups use (an undeclared group shows as a warning chip
+  to take off).
+- Assets panel: a Groups row of chips (All, each group with its count, "new group"):
+  click filters, dropping a tile on a chip moves it there (`Cmd::SetAssetGroups`, the
+  same manifest line `assets group` writes). A tile shows its group as a pill; its
+  context menu has a Groups submenu (picking boot resets; another drops boot).
+- Inspector: the scene settings' Asset groups (Requires, the cells that stream, `assets
+  check`'s problems, per-tier %, a button to the Memory tab); a Cell's Groups.
+- `src/panels/memory.rs`: one card per tier (RAM split, the open scene's bar, by
+  category, every group). The Game view HUD adds `<target> assets used / budget RAM (%)`
+  under its RAM line (`budget::assets_ram_line`).
+- UI test: `ui_tests::asset_groups_chips_requires_cells_and_memory`.
 
 ## Rules when changing the editor
 

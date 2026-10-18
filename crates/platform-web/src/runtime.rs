@@ -298,11 +298,25 @@ impl WebHost {
         self.last_audio = Some(running);
     }
 
-    /// Fetch `url` (an asset pack) and upload it.
+    /// Fetch `url` (an asset pack) and upload it. The groups it names are
+    /// fetched from beside it when loaded.
     pub async fn load_pack(&mut self, url: &str) -> Result<LoadReport, String> {
         let bytes = fetch(url).await?;
+        self.platform.groups.set_pack_url(url);
         self.load_pack_bytes(&bytes)
             .map_err(|e| format!("{url}: {e}"))
+    }
+
+    /// The asset groups' frame (issue #56): free what the game unloaded,
+    /// decode and upload downloaded groups for `Caps::load_budget_us`. Call
+    /// once per frame, before the game's update.
+    pub fn pump_groups(&mut self) {
+        crate::groups::pump(
+            &mut self.renderer,
+            &mut self.audio,
+            &mut self.platform,
+            self.texture_target,
+        );
     }
 
     /// Upload an asset pack already in memory. Its mix (if any) sets the
@@ -491,6 +505,9 @@ impl WebHost {
             &Renderer::stats(&self.renderer),
             &self.renderer.pc_gpu_rejects(),
         );
+        self.platform.groups.sample();
+        self.meter
+            .record_memory(&trino_core::Platform::memory(&self.platform));
     }
 }
 
@@ -575,6 +592,7 @@ pub fn run_game<G: Game + 'static>(
                 game.resize(screen);
             }
             let input = host.poll_input();
+            host.pump_groups();
             game.update_with(&mut host.platform, &input, &mut host.audio, dt);
             game.render(&mut host.renderer);
             host.end_frame();

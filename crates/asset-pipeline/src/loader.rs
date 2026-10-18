@@ -23,6 +23,9 @@ struct IndexEntry {
     compressed: Option<String>,
     #[serde(default)]
     ktx2: Option<String>,
+    /// The non-boot groups it is in (issue #56); empty = `boot`.
+    #[serde(default)]
+    groups: Vec<String>,
 }
 
 /// A sprite's PC blocks (`<id>.bc`, `crate::texture::BcFormat`).
@@ -138,8 +141,35 @@ pub struct LoadedAssets {
 }
 
 /// Load every baked asset from `out_dir`. `only` filters by handle (used by
-/// live reload to load just what changed); `None` loads everything.
+/// live reload to load just what changed); `None` loads everything, every
+/// group's assets included (tools and the editor show them all; a game host
+/// loads [`load_boot`] and the rest through [`BundleLoad`]).
 pub fn load_dir(out_dir: &Path, only: Option<&[u32]>) -> Result<LoadedAssets, String> {
+    load_where(out_dir, |e| only.is_none_or(|f| f.contains(&e.id)))
+}
+
+/// The `boot` group's assets (issue #56): what a game host loads at start.
+/// Without groups in the manifest that is every asset, as before.
+pub fn load_boot(out_dir: &Path, only: Option<&[u32]>) -> Result<LoadedAssets, String> {
+    load_where(out_dir, |e| {
+        e.groups.is_empty() && only.is_none_or(|f| f.contains(&e.id))
+    })
+}
+
+/// Which groups' bundles a PC or Web bake holds, by handle, read from its
+/// index (`groups` lists).
+pub fn baked_groups(out_dir: &Path) -> Result<Vec<String>, String> {
+    let mut names: Vec<String> = read_index(out_dir)?
+        .assets
+        .into_iter()
+        .flat_map(|e| e.groups)
+        .collect();
+    names.sort();
+    names.dedup();
+    Ok(names)
+}
+
+fn read_index(out_dir: &Path) -> Result<IndexFile, String> {
     let index_path = out_dir.join("index.toml");
     let text = std::fs::read_to_string(&index_path)
         .map_err(|e| format!("cannot read {}: {e}", index_path.display()))?;
@@ -148,148 +178,289 @@ pub fn load_dir(out_dir: &Path, only: Option<&[u32]>) -> Result<LoadedAssets, St
     if index.version != 1 {
         return Err(format!("unsupported index version {}", index.version));
     }
+    Ok(index)
+}
 
+fn load_where(out_dir: &Path, keep: impl Fn(&IndexEntry) -> bool) -> Result<LoadedAssets, String> {
+    let index = read_index(out_dir)?;
     let mut out = LoadedAssets::default();
+    let read = |file: &str| {
+        let path = out_dir.join(file);
+        std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))
+    };
     for entry in index.assets {
-        if let Some(filter) = only
-            && !filter.contains(&entry.id)
-        {
+        if !keep(&entry) {
             continue;
         }
+        let bytes = read(&entry.file)?;
+        let variants = Variants {
+            preview_3ds: entry.preview_3ds.as_deref().map(read).transpose()?,
+            compressed: entry.compressed.as_deref().map(read).transpose()?,
+            ktx2: entry.ktx2.as_deref().map(read).transpose()?,
+        };
         let path = out_dir.join(&entry.file);
-        let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-        match entry.kind.as_str() {
-            "sprite" => {
-                // A truncated file must be an error, not a `split_at` panic.
-                if bytes.len() < 12 || !bytes.starts_with(b"TSPR") {
-                    return Err(format!("{}: bad sprite blob", path.display()));
-                }
-                let rest = &bytes[4..];
-                let width = u32::from_le_bytes(rest[0..4].try_into().unwrap());
-                let height = u32::from_le_bytes(rest[4..8].try_into().unwrap());
-                let rgba = rest[8..].to_vec();
-                if rgba.len() != (width * height * 4) as usize {
-                    return Err(format!("{}: truncated sprite data", path.display()));
-                }
-                let preview_3ds = match &entry.preview_3ds {
-                    Some(file) => {
-                        let path = out_dir.join(file);
-                        let bytes =
-                            std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-                        if bytes.len() != 12 + rgba.len()
-                            || !bytes.starts_with(b"TSPR")
-                            || bytes[4..12] != rest[0..8]
-                        {
-                            return Err(format!("{}: bad 3DS preview", path.display()));
-                        }
-                        Some(bytes[12..].to_vec())
-                    }
-                    None => None,
-                };
-                let compressed = match &entry.compressed {
-                    Some(file) => {
-                        let path = out_dir.join(file);
-                        let bytes =
-                            std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-                        let bad = || format!("{}: bad BCn blob", path.display());
-                        if bytes.len() < 16
-                            || !bytes.starts_with(b"TBCN")
-                            || bytes[4..12] != rest[0..8]
-                        {
-                            return Err(bad());
-                        }
-                        let code = u32::from_le_bytes(bytes[12..16].try_into().unwrap());
-                        let format = crate::texture::BcFormat::from_code(code).ok_or_else(bad)?;
-                        let data = bytes[16..].to_vec();
-                        if data.len() as u64 != format.texture_bytes(width, height) {
-                            return Err(bad());
-                        }
-                        Some(CompressedSprite { format, data })
-                    }
-                    None => None,
-                };
-                let ktx2 = match &entry.ktx2 {
-                    Some(file) => {
-                        let path = out_dir.join(file);
-                        let bytes =
-                            std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-                        crate::texture::ktx2::parse(&bytes)
-                            .map_err(|e| format!("{}: {e}", path.display()))?;
-                        Some(bytes)
-                    }
-                    None => None,
-                };
-                out.sprites.push(LoadedSprite {
-                    logical: entry.logical,
-                    id: entry.id,
-                    width,
-                    height,
-                    rgba,
-                    preview_3ds,
-                    compressed,
-                    ktx2,
-                });
-            }
-            "sound" | "music" => {
-                let blob = if bytes.starts_with(b"TSND") {
-                    tsnd_to_tsn2(&bytes, entry.kind == "music")
-                        .ok_or_else(|| format!("{}: truncated sound data", path.display()))?
-                } else {
-                    bytes
-                };
-                let b = trino_core::SoundBlob::parse(&blob)
-                    .map_err(|e| format!("{}: bad sound blob ({e})", path.display()))?;
-                let loaded = LoadedSound {
-                    logical: entry.logical,
-                    id: entry.id,
-                    sample_rate: b.sample_rate,
-                    frames: b.frames as usize,
-                    codec: b.codec,
-                    bus: b.bus,
-                    looped: b.looped,
-                    stream: b.stream,
-                    blob,
-                };
-                if entry.kind == "music" {
-                    out.music.push(loaded);
-                } else {
-                    out.sounds.push(loaded);
-                }
-            }
-            "mixer" => {
-                trino_core::MixerConfig::parse(&bytes)
-                    .map_err(|e| format!("{}: {e}", path.display()))?;
-                out.mixer = Some(bytes);
-            }
-            "model" => {
-                if !bytes.starts_with(b"TMDL") {
-                    return Err(format!("{}: bad model blob", path.display()));
-                }
-                out.models.push(LoadedModel {
-                    logical: entry.logical,
-                    id: entry.id,
-                    tmdl: bytes,
-                });
-            }
-            "font" => {
-                if let Err(e) = trino_core::text::BitmapFont::parse(&bytes) {
-                    return Err(format!("{}: bad font table: {e:?}", path.display()));
-                }
-                out.fonts.push(LoadedFont {
-                    logical: entry.logical,
-                    id: entry.id,
-                    table: bytes,
-                });
-            }
-            "blob" => out.blobs.push(LoadedBlob {
-                logical: entry.logical,
-                id: entry.id,
-                bytes,
-            }),
-            other => return Err(format!("unknown asset kind `{other}`")),
-        }
+        push_entry(
+            &mut out,
+            &entry.kind,
+            entry.logical,
+            entry.id,
+            bytes,
+            variants,
+            &|| path.display().to_string(),
+        )?;
     }
     Ok(out)
+}
+
+/// A sprite's extra files (`preview_3ds`, `compressed`, `ktx2`).
+#[derive(Default)]
+struct Variants {
+    preview_3ds: Option<Vec<u8>>,
+    compressed: Option<Vec<u8>>,
+    ktx2: Option<Vec<u8>>,
+}
+
+/// Parse one baked asset into `out`; `what` names it in errors.
+fn push_entry(
+    out: &mut LoadedAssets,
+    kind: &str,
+    logical: String,
+    id: u32,
+    bytes: Vec<u8>,
+    variants: Variants,
+    what: &dyn Fn() -> String,
+) -> Result<(), String> {
+    match kind {
+        "sprite" => {
+            // A truncated file must be an error, not a `split_at` panic.
+            if bytes.len() < 12 || !bytes.starts_with(b"TSPR") {
+                return Err(format!("{}: bad sprite blob", what()));
+            }
+            let rest = &bytes[4..];
+            let width = u32::from_le_bytes(rest[0..4].try_into().unwrap());
+            let height = u32::from_le_bytes(rest[4..8].try_into().unwrap());
+            let rgba = rest[8..].to_vec();
+            if rgba.len() != (width * height * 4) as usize {
+                return Err(format!("{}: truncated sprite data", what()));
+            }
+            let preview_3ds = match variants.preview_3ds {
+                Some(bytes) => {
+                    if bytes.len() != 12 + rgba.len()
+                        || !bytes.starts_with(b"TSPR")
+                        || bytes[4..12] != rest[0..8]
+                    {
+                        return Err(format!("{}: bad 3DS preview", what()));
+                    }
+                    Some(bytes[12..].to_vec())
+                }
+                None => None,
+            };
+            let compressed = match variants.compressed {
+                Some(bytes) => {
+                    let bad = || format!("{}: bad BCn blob", what());
+                    if bytes.len() < 16 || !bytes.starts_with(b"TBCN") || bytes[4..12] != rest[0..8]
+                    {
+                        return Err(bad());
+                    }
+                    let code = u32::from_le_bytes(bytes[12..16].try_into().unwrap());
+                    let format = crate::texture::BcFormat::from_code(code).ok_or_else(bad)?;
+                    let data = bytes[16..].to_vec();
+                    if data.len() as u64 != format.texture_bytes(width, height) {
+                        return Err(bad());
+                    }
+                    Some(CompressedSprite { format, data })
+                }
+                None => None,
+            };
+            let ktx2 = match variants.ktx2 {
+                Some(bytes) => {
+                    crate::texture::ktx2::parse(&bytes).map_err(|e| format!("{}: {e}", what()))?;
+                    Some(bytes)
+                }
+                None => None,
+            };
+            out.sprites.push(LoadedSprite {
+                logical,
+                id,
+                width,
+                height,
+                rgba,
+                preview_3ds,
+                compressed,
+                ktx2,
+            });
+        }
+        "sound" | "music" => {
+            let blob = if bytes.starts_with(b"TSND") {
+                tsnd_to_tsn2(&bytes, kind == "music")
+                    .ok_or_else(|| format!("{}: truncated sound data", what()))?
+            } else {
+                bytes
+            };
+            let b = trino_core::SoundBlob::parse(&blob)
+                .map_err(|e| format!("{}: bad sound blob ({e})", what()))?;
+            let loaded = LoadedSound {
+                logical,
+                id,
+                sample_rate: b.sample_rate,
+                frames: b.frames as usize,
+                codec: b.codec,
+                bus: b.bus,
+                looped: b.looped,
+                stream: b.stream,
+                blob,
+            };
+            if kind == "music" {
+                out.music.push(loaded);
+            } else {
+                out.sounds.push(loaded);
+            }
+        }
+        "mixer" => {
+            trino_core::MixerConfig::parse(&bytes).map_err(|e| format!("{}: {e}", what()))?;
+            out.mixer = Some(bytes);
+        }
+        "model" => {
+            if !bytes.starts_with(b"TMDL") {
+                return Err(format!("{}: bad model blob", what()));
+            }
+            out.models.push(LoadedModel {
+                logical,
+                id,
+                tmdl: bytes,
+            });
+        }
+        "font" => {
+            if let Err(e) = trino_core::text::BitmapFont::parse(&bytes) {
+                return Err(format!("{}: bad font table: {e:?}", what()));
+            }
+            out.fonts.push(LoadedFont {
+                logical,
+                id,
+                table: bytes,
+            });
+        }
+        "blob" => out.blobs.push(LoadedBlob { logical, id, bytes }),
+        other => return Err(format!("unknown asset kind `{other}`")),
+    }
+    Ok(())
+}
+
+/// One asset group's bundle (`groups/<name>.tbnd`, issue #56) read a step at
+/// a time: what a PC host's `load_group` runs within its frame budget.
+pub struct BundleLoad {
+    bytes: Vec<u8>,
+    next: usize,
+    tier: trino_core::HwTier,
+    done: u64,
+    total: u64,
+    name: String,
+}
+
+impl BundleLoad {
+    /// Read the bundle file and check its table.
+    pub fn open(path: &Path, tier: trino_core::HwTier) -> Result<BundleLoad, String> {
+        let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        Self::from_bytes(bytes, path.display().to_string(), tier)
+    }
+
+    pub fn from_bytes(
+        bytes: Vec<u8>,
+        name: String,
+        tier: trino_core::HwTier,
+    ) -> Result<BundleLoad, String> {
+        let b = trino_core::bundle::Bundle::parse(&bytes)
+            .map_err(|e| format!("{name}: {}", e.label()))?;
+        if b.file_len() != bytes.len() as u64 {
+            return Err(format!(
+                "{name}: {}",
+                trino_core::bundle::BundleError::Truncated.label()
+            ));
+        }
+        let total = b.read_total(tier);
+        Ok(BundleLoad {
+            bytes,
+            next: 0,
+            tier,
+            done: 0,
+            total,
+            name,
+        })
+    }
+
+    /// The group's handle (`trino_core::GroupId`).
+    pub fn group(&self) -> trino_core::GroupId {
+        trino_core::GroupId(self.bundle().group())
+    }
+
+    fn bundle(&self) -> trino_core::bundle::Bundle<'_> {
+        trino_core::bundle::Bundle::parse(&self.bytes).expect("checked by open")
+    }
+
+    pub fn is_done(&self) -> bool {
+        self.next >= self.bundle().len()
+    }
+
+    /// (bytes read, bytes in all) of the entries for this tier.
+    pub fn progress(&self) -> (u64, u64) {
+        (self.done, self.total)
+    }
+
+    /// Decode the next asset (a sprite with its preview, BCn and KTX2
+    /// entries) into `out`. Entries of another tier are skipped.
+    pub fn step(&mut self, out: &mut LoadedAssets) -> Result<(), String> {
+        use trino_core::bundle::EntryKind as K;
+        let b = trino_core::bundle::Bundle::parse(&self.bytes).expect("checked by open");
+        while self.next < b.len() {
+            let first = b.entry(self.next);
+            self.next += 1;
+            if !first.loads_on(self.tier) {
+                continue;
+            }
+            let decode = |e: &trino_core::bundle::Entry| -> Result<Vec<u8>, String> {
+                let stored = b
+                    .stored(e)
+                    .ok_or_else(|| format!("{}: external entry", self.name))?;
+                let mut raw = vec![0u8; e.raw as usize];
+                trino_core::bundle::decode(e, stored, &mut raw)
+                    .map_err(|err| format!("{}: entry {:08x}: {}", self.name, e.id, err.label()))?;
+                if trino_core::bundle::hash(&raw) != e.hash {
+                    return Err(format!("{}: entry {:08x}: hash mismatch", self.name, e.id));
+                }
+                Ok(raw)
+            };
+            let bytes = decode(&first)?;
+            self.done += first.read_bytes() as u64;
+            let mut variants = Variants::default();
+            while self.next < b.len() {
+                let e = b.entry(self.next);
+                let slot = match e.kind {
+                    K::SpritePreview3ds => &mut variants.preview_3ds,
+                    K::SpriteBc => &mut variants.compressed,
+                    K::SpriteKtx2 => &mut variants.ktx2,
+                    _ => break,
+                };
+                self.next += 1;
+                if e.id != first.id || !e.loads_on(self.tier) {
+                    continue;
+                }
+                *slot = Some(decode(&e)?);
+                self.done += e.read_bytes() as u64;
+            }
+            let name = self.name.clone();
+            let id = first.id;
+            return push_entry(
+                out,
+                first.kind.label(),
+                format!("{id:08x}"),
+                id,
+                bytes,
+                variants,
+                &|| format!("{name}: entry {id:08x}"),
+            );
+        }
+        Ok(())
+    }
 }
 
 /// A v1 `TSND` (f32 mono, no flags) as a PCM16 `TSN2` with the kind's

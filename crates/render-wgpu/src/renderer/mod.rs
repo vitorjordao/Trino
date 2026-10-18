@@ -2390,6 +2390,44 @@ impl PcRenderer {
         );
     }
 
+    /// Free a sprite's texture (its asset group unloaded, issue #56);
+    /// returns the GPU bytes it held. Later draws of the handle draw nothing
+    /// and count `FrameStats::not_loaded`.
+    pub fn remove_sprite(&mut self, id: SpriteId) -> u64 {
+        self.tex3d
+            .retain(|k, _| k.id != id.0 && k.detail.is_none_or(|d| d.sprite != id));
+        self.sprites.remove(&id.0).map_or(0, |e| e.bytes)
+    }
+
+    /// Free a mesh ([`PcRenderer::remove_sprite`]); returns its TMDL bytes.
+    pub fn remove_mesh(&mut self, id: ModelId) -> usize {
+        if let Some(gpu) = &mut self.gpu {
+            gpu.forget_mesh(id.0);
+        }
+        self.meshes.remove(&id.0).map_or(0, |(b, _)| b.len())
+    }
+
+    /// Free a font's glyph table (its atlas is the sprite of the same
+    /// handle); returns the table's bytes.
+    pub fn remove_font(&mut self, id: FontId) -> usize {
+        self.fonts.remove(&id.0).map_or(0, |f| f.table.len())
+    }
+
+    /// GPU bytes of a sprite's texture (0 when not loaded).
+    pub fn sprite_bytes(&self, id: SpriteId) -> u64 {
+        self.sprites.get(&id.0).map_or(0, |e| e.bytes)
+    }
+
+    /// TMDL bytes of a mesh (0 when not loaded).
+    pub fn mesh_bytes(&self, id: ModelId) -> usize {
+        self.meshes.get(&id.0).map_or(0, |(b, _)| b.len())
+    }
+
+    /// Glyph-table bytes of a font (0 when not loaded).
+    pub fn font_bytes(&self, id: FontId) -> usize {
+        self.fonts.get(&id.0).map_or(0, |f| f.table.len())
+    }
+
     /// Window resized: reconfigure the surface (offscreen stays fixed).
     pub fn resize(&mut self, width: u32, height: u32) {
         if let Some(ss) = &mut self.surface
@@ -3675,8 +3713,9 @@ impl Renderer for PcRenderer {
     fn draw_sprite(&mut self, sprite: SpriteId, pos: Vec2, params: &SpriteParams) {
         self.flush_model_batch();
         let Some(entry) = self.sprites.get(&sprite.0) else {
-            // Unknown handle: skip. The asset pipeline (Fase 2) turns this
-            // into a hard error at bake time instead.
+            // Unknown handle or not loaded (its group is not ready): skip,
+            // counted. The bake rejects handles no manifest declares.
+            self.frame_stats.not_loaded += 1;
             return;
         };
         let cmd = make_command(sprite.0, pos, entry.size, params);
@@ -3804,7 +3843,9 @@ impl Renderer for PcRenderer {
         params: &ModelParams,
     ) {
         let Some((tmdl, layout)) = self.meshes.get(&model.0) else {
-            return; // unknown handle: skip, like sprites
+            // Unknown or not loaded (its group is not ready): skip, counted.
+            self.frame_stats.not_loaded += 1;
+            return;
         };
         let mesh = Mesh::from_layout(tmdl, layout);
         self.frame_stats.models += 1;
@@ -4123,6 +4164,7 @@ impl Renderer for PcRenderer {
         let mut rest: Vec<(Mat34, ModelParams)> = Vec::new();
         {
             let Some((tmdl, layout)) = self.meshes.get(&model.0) else {
+                self.frame_stats.not_loaded += instances.len() as u32;
                 return;
             };
             let mesh = Mesh::from_layout(tmdl, layout);
@@ -4175,6 +4217,7 @@ impl Renderer for PcRenderer {
         params: &trino_core::BillboardParams,
     ) {
         let Some(entry) = self.sprites.get(&sprite.0) else {
+            self.frame_stats.not_loaded += 1;
             return;
         };
         let (w, h) = (entry.size.0 as f32, entry.size.1 as f32);
@@ -4271,6 +4314,7 @@ impl Renderer for PcRenderer {
 
     fn draw_text(&mut self, font: FontId, pos: Vec2, text: &str, params: &TextParams) {
         let Some(entry) = self.fonts.get(&font.0).cloned() else {
+            self.frame_stats.not_loaded += 1;
             return;
         };
         let parsed = entry.font();

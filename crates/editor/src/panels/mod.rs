@@ -6,6 +6,7 @@ pub mod hierarchy;
 pub mod impostor;
 pub mod inspector;
 pub mod lod;
+pub mod memory;
 pub mod mixer;
 pub mod particles;
 pub mod platforms;

@@ -26,7 +26,9 @@
 //!   so until then.
 //! - **Assets:** one pack per game ([`pack`]), fetched at boot; KTX2
 //!   textures are transcoded by Binomial's transcoder to BC, ETC2, ASTC or
-//!   RGBA8, whichever the GPU samples.
+//!   RGBA8, whichever the GPU samples. Asset groups besides `boot`
+//!   (issue #56) are bundles beside the pack, downloaded when the game
+//!   loads them and decoded a slice per frame ([`WebHost::pump_groups`]).
 //!
 //! Off wasm32 only the browser-free parts build ([`keys`], [`pack`],
 //! [`b64`], [`sound`]): the host tests run them, and `cargo xtask build
@@ -41,6 +43,8 @@ pub mod sound;
 mod assets;
 #[cfg(target_arch = "wasm32")]
 mod audio;
+#[cfg(target_arch = "wasm32")]
+mod groups;
 #[cfg(target_arch = "wasm32")]
 mod input;
 #[cfg(target_arch = "wasm32")]

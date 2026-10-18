@@ -506,6 +506,26 @@ void* trino_sprite_load(const char* romfs_path)
     return C2D_SpriteSheetLoad(romfs_path);
 }
 
+// A .t3x already in memory (an asset group's bundle entry): citro2d copies
+// the texels to linear memory, the caller frees `data`.
+void* trino_sprite_load_mem(const void* data, uint32_t size)
+{
+    return C2D_SpriteSheetLoadFromMem(data, size);
+}
+
+// Free a sheet (an unloaded group's) once the GPU is past the frames that
+// drew it (the renderer's grave). Unbinds it everywhere a later draw could
+// find it: the detail slot, citro3d's texture units, citro2d's current
+// texture (C2D_Prepare forgets it).
+void trino_sprite_free(void* sheet)
+{
+    if (!sheet) return;
+    if (s_detail_sheet == (C2D_SpriteSheet)sheet) s_detail_sheet = NULL;
+    C2D_SpriteSheetFree((C2D_SpriteSheet)sheet);
+    for (int i = 0; i < 3; i++) C3D_TexBind(i, NULL);
+    C2D_Prepare();
+}
+
 uint32_t trino_sprite_size(void* sheet)
 {
     C2D_Image img = C2D_SpriteSheetGetImage((C2D_SpriteSheet)sheet, 0);
@@ -781,6 +801,17 @@ void* trino_gpu_mesh(const void* verts, uint32_t nverts, const uint16_t* idx, ui
     GSPGPU_FlushDataCache(m->indices, nidx * sizeof(u16));
     m->count = nidx;
     return m;
+}
+
+// Free a trino_gpu_mesh or trino_water_mesh (same layout) once the GPU is
+// past the frames that drew it.
+void trino_gpu_mesh_free(void* mesh)
+{
+    trino_gpu_mesh_t* m = (trino_gpu_mesh_t*)mesh;
+    if (!m) return;
+    linearFree(m->verts);
+    linearFree(m->indices);
+    free(m);
 }
 
 // Draw a trino_gpu_mesh. `u`: the 4x4 matrix to the screen's pixels and
@@ -1305,6 +1336,34 @@ uint32_t trino_wav_info(void* wav_ptr)
     return w->bus | (uint32_t)w->stream << 8 | (uint32_t)w->adpcm << 9 | (uint32_t)w->looped << 10;
 }
 
+void trino_channel_stop(uint32_t channel);
+
+// Free a loaded sound (an unloaded group's): the channels playing it stop
+// first (a stream's slot under the audio lock), then its memory goes.
+void trino_wav_free(void* wav_ptr)
+{
+    trino_wav_t* w = wav_ptr;
+    if (!w) return;
+    for (uint32_t ch = 0; ch < TRINO_NDSP_CHANNELS; ch++) {
+        LightLock_Lock(&s_audio_lock);
+        int slot = s_stream_of[ch];
+        int streams = slot >= 0 && s_streams[slot].active && s_streams[slot].wav == w;
+        LightLock_Unlock(&s_audio_lock);
+        int plays = w->data && s_wavebufs[ch].data_vaddr == w->data;
+        if (streams || plays) {
+            trino_channel_stop(ch);
+            if (plays) s_wavebufs[ch].data_vaddr = NULL;
+        }
+    }
+    if (w->contexts) s_resident -= w->ncontexts * sizeof(ndspAdpcmData);
+    if (w->data) {
+        s_resident -= w->data_bytes;
+        linearFree(w->data);
+    }
+    free(w->contexts);
+    free(w);
+}
+
 // Read chunk `st->next_chunk` into buffer `i` and queue it. 0 when there is
 // nothing left (non-looping) or the read failed. Holds s_audio_lock.
 static int stream_queue(trino_stream_t* st, int i)
@@ -1668,6 +1727,39 @@ void* trino_asset_load(const char* romfs_path, uint32_t* size_out)
 void trino_free(void* ptr)
 {
     free(ptr);
+}
+
+// Ranged reads of one RomFS file (an asset group's bundle: its table, then
+// each entry, never the whole file at once).
+void* trino_file_open(const char* romfs_path)
+{
+    return fopen(romfs_path, "rb");
+}
+
+// `len` bytes at `offset` into `dest`; the bytes read (short = error/EOF).
+uint32_t trino_file_read_at(void* file, uint32_t offset, void* dest, uint32_t len)
+{
+    FILE* f = (FILE*)file;
+    if (!f || fseek(f, (long)offset, SEEK_SET) != 0) return 0;
+    return (uint32_t)fread(dest, 1, len, f);
+}
+
+void trino_file_close(void* file)
+{
+    if (file) fclose((FILE*)file);
+}
+
+extern u32 __ctru_heap_size;
+extern u32 __ctru_linear_heap_size;
+
+// The memory assets live in, for Platform::memory: which 0 = bytes in use
+// (newlib's malloc plus the linear heap: textures, meshes, sounds), 1 = both
+// heaps' size.
+uint32_t trino_heap_stat(uint32_t which)
+{
+    if (which == 1) return __ctru_heap_size + __ctru_linear_heap_size;
+    struct mallinfo mi = mallinfo();
+    return (uint32_t)mi.uordblks + (__ctru_linear_heap_size - linearSpaceFree());
 }
 
 // ---------------------------------------------------------------------------

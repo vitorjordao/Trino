@@ -28,6 +28,11 @@ ADR 0019 is the design; `docs/PLATFORMS.md` › Web the user guide.
   load; streams are 8192-sample chunks scheduled ≤ 1 s ahead (`audio.rs`), so a hidden
   tab runs dry after 1 s and counts an underrun. Each bus is a gain node fed by
   `BusMixer` in `poll()`. The player's volumes: `localStorage` `trino-audio:<save>`.
+- Asset groups (#56, ADR 0022): pack TPAK v3 names each non-boot group (`Kind::Group`);
+  its bundle is `<pack>.<group>.tbnd` beside the pack (`pack::bundle_url`), fetched the
+  first time the game loads the group and kept (`src/groups.rs`). The self-test's
+  `asset groups` step soaks load/unload over animation frames: WebGL2 frees GPU objects
+  only once the event loop turns.
 - `apps/web`: `lib.rs` (game by `?game=`), `selftest.rs` (`?selftest`), `index.html`
   (templated by xtask: `{{TITLE}}`, `{{CANVAS_ID}}`), `vendor/basis/` (Binomial's
   transcoder, the KTX2 decoder in the browser).

@@ -192,6 +192,10 @@ pub struct FrameStats {
     /// Software T&L work behind `tris` (vertex transforms, clipping,
     /// depth splits, culls) — deterministic, so tests pin it per scene.
     pub tnl: crate::render3d::TnlStats,
+    /// Draws of a model or sprite that is not resident: its group is not
+    /// loaded ([`crate::Platform::load_group`]), the platform doesn't bake it,
+    /// or the handle is wrong. They draw nothing.
+    pub not_loaded: u32,
 }
 
 /// How a 3D surface reacts to light. Evaluated per vertex by the engine's

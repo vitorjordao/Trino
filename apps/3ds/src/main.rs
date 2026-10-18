@@ -55,11 +55,58 @@ mod n3ds {
             let dt = (now.wrapping_sub(last) as f32 / 1_000_000.0).min(0.1);
             last = now;
 
+            // Asset groups (issue #56): what the game asked for loads, what
+            // it unloaded is freed, before its update.
+            N3dsAssets::pump(&mut renderer, &mut audio, &mut platform);
             let state = input.poll();
             game.update_with(&mut platform, &state, &mut audio, dt);
             game.render(&mut renderer);
             audio.poll();
+            platform.sample_heap();
         }
+    }
+
+    /// The `asset groups` step's backends and the loader's frame.
+    struct GroupHost<'a> {
+        renderer: &'a mut N3dsRenderer,
+        audio: &'a mut N3dsAudio,
+        platform: &'a mut N3dsPlatform,
+    }
+
+    impl castle64::selftest::GroupHost for GroupHost<'_> {
+        fn parts(&mut self) -> (&mut dyn trino_core::Renderer, &mut dyn trino_core::Platform) {
+            (self.renderer, self.platform)
+        }
+
+        fn pump(&mut self) {
+            N3dsAssets::pump(self.renderer, self.audio, self.platform);
+            self.audio.poll();
+            self.platform.sample_heap();
+        }
+    }
+
+    /// Asset groups (issue #56): load behind a loading bar (LZ4 decoded on
+    /// the worker core), draw, unload, the heap back to its baseline, then
+    /// 600 frames of load/unload.
+    fn asset_groups(
+        renderer: &mut N3dsRenderer,
+        audio: &mut N3dsAudio,
+        platform: &mut N3dsPlatform,
+    ) -> Result<(), alloc::string::String> {
+        let t0 = runtime::now_us();
+        let mut host = GroupHost {
+            renderer,
+            audio,
+            platform,
+        };
+        let r = castle64::selftest::asset_groups(&mut host, 600)?;
+        castle64::selftest::log_groups(host.platform, &r);
+        runtime::log(&format!(
+            "TRINO_STEP:asset groups took {}ms worker={}\n",
+            runtime::now_us().wrapping_sub(t0) / 1000,
+            trino_platform_3ds::worker::core().map_or(-1, i32::from)
+        ));
+        Ok(())
     }
 
     /// The GPU T&L path against the CPU's software T&L on one frame (fixed
@@ -160,14 +207,16 @@ mod n3ds {
         })
     }
 
-    /// `TRINO_FRAME:<scene> avg_us= max_us= frames= fps= cpu_us=`: 30
-    /// frames of a castle64 perf scene (render only). `avg_us` is the wall
-    /// clock, GPU and vsync waits included; `cpu_us` the ARM11's own work,
-    /// what the New 3DS's speedup changes.
+    /// `TRINO_FRAME:<scene> avg_us= max_us= frames= fps= cpu_us= heap=`:
+    /// 30 frames of a castle64 perf scene (render only). `avg_us` is the
+    /// wall clock, GPU and vsync waits included; `cpu_us` the ARM11's own
+    /// work, what the New 3DS's speedup changes; `heap` the heap in use and
+    /// its peak since boot (issue #56).
     fn time_scene(
         scene: &castle64::perf::PerfScene,
         renderer: &mut N3dsRenderer,
         audio: &mut N3dsAudio,
+        platform: &mut N3dsPlatform,
     ) {
         const FRAMES: u32 = 30;
         let mut g = alloc::boxed::Box::new(castle64::perf::scene_game(
@@ -187,11 +236,13 @@ mod n3ds {
             max = max.max(us);
         }
         let avg = total / FRAMES;
+        platform.sample_heap();
         runtime::log(&format!(
-            "TRINO_FRAME:{} avg_us={avg} max_us={max} frames={FRAMES} fps={} cpu_us={}\n",
+            "TRINO_FRAME:{} avg_us={avg} max_us={max} frames={FRAMES} fps={} cpu_us={} {}\n",
             scene.name,
             1_000_000 / avg.max(1),
-            cpu / FRAMES
+            cpu / FRAMES,
+            trino_core::Platform::memory(platform).heap_field()
         ));
     }
 
@@ -262,6 +313,15 @@ mod n3ds {
                 }
                 return;
             }
+        }
+        runtime::log("TRINO_STEP:asset groups\n");
+        if let Err(e) = asset_groups(renderer, audio, platform) {
+            runtime::log(&format!("TRINO_TEST_FAIL:{e}\n"));
+            while runtime::running() {
+                trino_core::Renderer::begin_frame(renderer, trino_core::Color::BLACK);
+                trino_core::Renderer::end_frame(renderer);
+            }
+            return;
         }
         runtime::log("TRINO_STEP:audio\n");
         if let Err(e) = castle64::selftest::audio_checks(audio) {
@@ -489,7 +549,7 @@ mod n3ds {
                     // only: the New 3DS's speedup against the old clock,
                     // issue #54; `--accurate-timing` for the GPU's share).
                     for scene in castle64::perf::SCENES {
-                        time_scene(scene, renderer, audio);
+                        time_scene(scene, renderer, audio, platform);
                     }
                     // 6) The showcase's touch panel (metrics + look
                     // toggles) read back: button fills by state and edges,

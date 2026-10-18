@@ -20,12 +20,18 @@
 //!   atlas is the sprite with the same id). [`Kind::Blob`]: raw bytes.
 //! - [`Kind::Mixer`] (version 2): the project's mix (`assets/audio.toml`
 //!   baked to `TMIX`, [`trino_core::MixerConfig`]).
+//! - [`Kind::Group`] (version 3, issue #56): an asset group the pack's
+//!   assets leave out, by [`trino_core::GroupId`], its bytes the group's
+//!   name. Its bundle (`trino_core::bundle`) sits beside the pack as
+//!   `<pack>.<group>.tbnd` (`assets/trino.level1.tbnd`), fetched when the
+//!   game loads the group.
 
 use std::borrow::Cow;
 
-/// The pack's magic and version (2: `TSN2` sounds and the mixer, #53).
+/// The pack's magic and version (2: `TSN2` sounds and the mixer, #53; 3:
+/// asset groups, #56).
 pub const MAGIC: &[u8; 4] = b"TPAK";
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 /// The oldest version [`parse`] still reads.
 pub const OLDEST: u32 = 1;
 
@@ -40,6 +46,7 @@ pub enum Kind {
     Font = 5,
     Blob = 6,
     Mixer = 7,
+    Group = 8,
 }
 
 impl Kind {
@@ -53,6 +60,7 @@ impl Kind {
             5 => Kind::Font,
             6 => Kind::Blob,
             7 => Kind::Mixer,
+            8 => Kind::Group,
             _ => return None,
         })
     }
@@ -117,6 +125,9 @@ pub fn parse_versioned(pack: &[u8]) -> Result<(u32, Vec<Entry<'_>>), String> {
             .ok_or("truncated asset pack")?;
         if kind == Kind::Mixer && version < 2 {
             return Err(format!("a mixer entry in a version {version} pack"));
+        }
+        if kind == Kind::Group && version < 3 {
+            return Err(format!("a group entry in a version {version} pack"));
         }
         out.push(Entry { kind, id, bytes });
         at += 9 + len;
@@ -183,6 +194,13 @@ pub fn read_sound16(blob: &[u8]) -> Result<(u32, Vec<f32>), String> {
     Ok((rate, samples))
 }
 
+/// Where a group's bundle sits beside the pack at `pack_url`
+/// (`assets/trino.pak` → `assets/trino.level1.tbnd`).
+pub fn bundle_url(pack_url: &str, group: &str) -> String {
+    let stem = pack_url.strip_suffix(".pak").unwrap_or(pack_url);
+    format!("{stem}.{group}.tbnd")
+}
+
 /// A `TSPR` blob: width, height and its RGBA8 pixels.
 pub fn read_sprite(blob: &[u8]) -> Result<(u32, u32, &[u8]), String> {
     if blob.len() < 12 || &blob[..4] != b"TSPR" {
@@ -219,9 +237,9 @@ mod tests {
         extra.push(0);
         assert!(parse(&extra).is_err());
         assert!(parse(b"PNG\0").is_err());
-        let mut v3 = pack;
-        v3[4] = 3;
-        assert!(parse(&v3).unwrap_err().contains("version"));
+        let mut v4 = pack;
+        v4[4] = 4;
+        assert!(parse(&v4).unwrap_err().contains("version"));
     }
 
     #[test]
@@ -261,6 +279,21 @@ mod tests {
         let mut bad = write(&[(Kind::Mixer, 3, b"TMIX".to_vec())]);
         bad[4] = 1;
         assert!(parse(&bad).unwrap_err().contains("mixer"));
+        // Groups came with version 3.
+        let group = write(&[(Kind::Group, 5, b"level1".to_vec())]);
+        assert_eq!(parse(&group).unwrap()[0].bytes, b"level1");
+        let mut old = group;
+        old[4] = 2;
+        assert!(parse(&old).unwrap_err().contains("group"));
+    }
+
+    #[test]
+    fn bundles_sit_beside_their_pack() {
+        assert_eq!(
+            bundle_url("assets/trino.pak", "level1"),
+            "assets/trino.level1.tbnd"
+        );
+        assert_eq!(bundle_url("x", "g"), "x.g.tbnd");
     }
 
     #[test]

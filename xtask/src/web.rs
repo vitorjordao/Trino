@@ -197,7 +197,8 @@ pub fn ktx2_fixtures() -> Result<Vec<(Kind, u32, Vec<u8>)>, String> {
 }
 
 /// Bake `assets` for the Web into `baked` and pack it into `pak` (with the
-/// KTX2 fixtures when `fixtures`). Returns the pack's size.
+/// KTX2 fixtures when `fixtures`), each asset group's bundle beside it
+/// (`pack::bundle_url`, issue #56). Returns the pack's size.
 pub fn pack_assets(assets: &Path, baked: &Path, pak: &Path, fixtures: bool) -> Result<u64, String> {
     bake_all(assets, Platform::Web, baked).map_err(|e| e.to_string())?;
     let entries = pack_entries(baked)?;
@@ -210,13 +211,25 @@ pub fn pack_assets(assets: &Path, baked: &Path, pak: &Path, fixtures: bool) -> R
         std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     }
     std::fs::write(pak, &bytes).map_err(|e| format!("{}: {e}", pak.display()))?;
+    for (kind, _, name) in &entries {
+        if *kind != Kind::Group {
+            continue;
+        }
+        let name = String::from_utf8_lossy(name);
+        let from = baked.join("groups").join(format!("{name}.tbnd"));
+        let to = PathBuf::from(pack::bundle_url(&pak.to_string_lossy(), &name));
+        std::fs::copy(&from, &to).map_err(|e| format!("{}: {e}", from.display()))?;
+        let size = std::fs::metadata(&to).map_or(0, |m| m.len());
+        println!("[web] {}: {size} bytes", to.display());
+    }
     Ok(bytes.len() as u64)
 }
 
 /// A Web bake's `index.toml` as pack entries: sprites as their KTX2 file
 /// when they have one (else the master), sounds as their `TSN2` blob (Ogg
 /// Vorbis or PCM16, checked), the project's mix as `TMIX`, the rest as
-/// baked.
+/// baked. Assets of other groups than `boot` stay in their bundles: the
+/// pack names those groups ([`Kind::Group`]).
 pub fn pack_entries(baked: &Path) -> Result<Vec<(Kind, u32, Vec<u8>)>, String> {
     #[derive(serde::Deserialize)]
     struct Index {
@@ -230,6 +243,8 @@ pub fn pack_entries(baked: &Path) -> Result<Vec<(Kind, u32, Vec<u8>)>, String> {
         file: String,
         #[serde(default)]
         ktx2: Option<String>,
+        #[serde(default)]
+        groups: Vec<String>,
     }
     let path = baked.join("index.toml");
     let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -239,7 +254,12 @@ pub fn pack_entries(baked: &Path) -> Result<Vec<(Kind, u32, Vec<u8>)>, String> {
         std::fs::read(&p).map_err(|e| format!("{}: {e}", p.display()))
     };
     let mut out = Vec::new();
+    let mut groups = std::collections::BTreeSet::new();
     for e in index.assets {
+        if !e.groups.is_empty() {
+            groups.extend(e.groups);
+            continue;
+        }
         let entry = match (e.kind.as_str(), &e.ktx2) {
             ("sprite", Some(k)) => (Kind::SpriteKtx2, read(k)?),
             ("sprite", None) => (Kind::Sprite, read(&e.file)?),
@@ -265,6 +285,13 @@ pub fn pack_entries(baked: &Path) -> Result<Vec<(Kind, u32, Vec<u8>)>, String> {
             (other, _) => return Err(format!("{}: unknown asset kind `{other}`", path.display())),
         };
         out.push((entry.0, e.id, entry.1));
+    }
+    for g in groups {
+        out.push((
+            Kind::Group,
+            trino_core::bundle::group_id(&g),
+            g.into_bytes(),
+        ));
     }
     Ok(out)
 }
@@ -397,6 +424,7 @@ pub fn mime(path: &Path) -> &'static str {
         "css" => "text/css",
         "png" => "image/png",
         "ktx2" => "image/ktx2",
+        // Asset group bundles and packs: bytes.
         _ => "application/octet-stream",
     }
 }
@@ -755,7 +783,9 @@ mod tests {
              [sprites.raw]\nfile = \"g.png\"\nformats = { web = \"RGBA8\" }\n\
              [sounds.tone]\nfile = \"tone.wav\"\n\
              [sounds.tone_pcm]\nfile = \"tone.wav\"\ncodec = { web = \"pcm\" }\n\
-             [music.song]\nfile = \"tone.wav\"\n",
+             [music.song]\nfile = \"tone.wav\"\n\
+             [groups.level]\n\
+             [sprites.level_g]\nfile = \"g.png\"\ngroups = [\"level\"]\n",
         )
         .unwrap();
         std::fs::write(
@@ -808,5 +838,15 @@ mod tests {
             trino_asset_pipeline::texture::ktx2::decode(fixture.bytes).unwrap(),
             expected.bytes
         );
+        // A group's assets stay out of the pack, which names the group;
+        // its bundle sits beside the pack.
+        let level = trino_core::asset_id("sprites/level_g");
+        assert!(entries.iter().all(|e| e.id != level));
+        let group = find(trino_core::bundle::group_id("level"));
+        assert_eq!((group.kind, group.bytes), (Kind::Group, &b"level"[..]));
+        let bundle = std::fs::read(root.join("out/trino.level.tbnd")).unwrap();
+        let b = trino_core::bundle::Bundle::parse(&bundle).unwrap();
+        assert_eq!(b.group(), trino_core::bundle::group_id("level"));
+        assert!(b.entries().any(|e| e.id == level));
     }
 }

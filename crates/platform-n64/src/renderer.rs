@@ -151,7 +151,36 @@ pub struct N64Renderer {
     rigid_scratch: Option<Box<RigidScratch>>,
     /// A ring's angles in fixed point (`rsp::ring_unit`).
     ring_unit: [[i32; 2]; trino_core::render3d::RING_SEGMENTS + 1],
+    /// What unloaded asset groups freed, kept until the frames that could
+    /// still draw from it are done (the RDP reads sprites and the RSP mesh
+    /// copies from RDRAM while a frame drains): (frame, what).
+    grave: Vec<(u32, Grave)>,
 }
+
+/// Freed RDRAM that waits a few frames ([`N64Renderer::grave`]).
+enum Grave {
+    Sprite(*mut c_void),
+    Rsp(RspMesh),
+    Rigid(Rc<RigidCopy>),
+}
+
+impl Grave {
+    /// Free it now; `Err` gives it back when something still holds it.
+    fn free(self) -> Result<(), Grave> {
+        match self {
+            Grave::Sprite(ptr) => unsafe { ffi::trino_sprite_free(ptr) },
+            Grave::Rsp(m) => m.free(),
+            Grave::Rigid(rc) => match Rc::try_unwrap(rc) {
+                Ok(copy) => copy.parts.into_iter().flatten().for_each(RspMesh::free),
+                Err(rc) => return Err(Grave::Rigid(rc)),
+            },
+        }
+        Ok(())
+    }
+}
+
+/// Frames a freed asset waits ([`Grave`]), like replaced water commands.
+const GRAVE_FRAMES: u32 = 4;
 
 /// Memo slots (308 bytes each): a few hundred draws per frame rarely share one.
 const MEMO_SLOTS: usize = 1024;
@@ -246,6 +275,7 @@ impl N64Renderer {
             water_grave: Vec::new(),
             rigid_scratch: None,
             ring_unit: rsp::ring_unit(),
+            grave: Vec::new(),
             water_state: WaterState::NONE,
             pending_water: Vec::new(),
             pending_water_tex: Vec::new(),
@@ -464,6 +494,7 @@ impl N64Renderer {
     /// One RDP sprite blit (no batch flush).
     fn blit(&mut self, sprite: SpriteId, pos: Vec2, params: &SpriteParams) {
         let Some(entry) = self.sprites.get(&sprite.0) else {
+            self.frame_stats.not_loaded += 1;
             return;
         };
         self.frame_stats.sprites += 1;
@@ -723,6 +754,82 @@ impl N64Renderer {
             self.fonts.insert(id, Rc::new(FontEntry { table, index }));
         }
     }
+
+    /// Forget a sprite (its asset group unloaded, issue #56): later draws
+    /// of the handle draw nothing (`FrameStats::not_loaded`); its RDRAM is
+    /// freed [`GRAVE_FRAMES`] frames on. `false` when it wasn't loaded.
+    pub(crate) fn unregister(&mut self, id: u32) -> bool {
+        let Some(entry) = self.sprites.remove(&id) else {
+            return false;
+        };
+        // Memoized commands carry the texture's binding.
+        self.memo_gen = self.memo_gen.wrapping_add(1);
+        self.grave
+            .push((self.water_frame_no, Grave::Sprite(entry.ptr)));
+        true
+    }
+
+    /// Forget a mesh and its RSP copies (flat, rigid, water), freed a few
+    /// frames on like [`N64Renderer::unregister`]'s sprites.
+    pub(crate) fn unregister_mesh(&mut self, id: u32) -> bool {
+        let Some(_) = self.meshes.remove(&id) else {
+            return false;
+        };
+        self.memo_gen = self.memo_gen.wrapping_add(1);
+        let now = self.water_frame_no;
+        if let Some(m) = self.rsp_meshes.remove(&id) {
+            self.grave.push((now, Grave::Rsp(m)));
+        }
+        let flat: Vec<FlatKey> = self
+            .rsp_flat
+            .keys()
+            .filter(|k| k.0 == id)
+            .copied()
+            .collect();
+        for k in flat {
+            if let Some(Some(m)) = self.rsp_flat.remove(&k) {
+                self.grave.push((now, Grave::Rsp(m)));
+            }
+        }
+        if let Some(rc) = self.rsp_rigid.remove(&id) {
+            self.grave.push((now, Grave::Rigid(rc)));
+        }
+        if let Some(water) = self.rsp_water.remove(&id) {
+            // Its remembered water commands point into the copy: they go
+            // to the water grave with it.
+            for m in self.water_memo.drain(..) {
+                if let Some(cmd) = m.cmd {
+                    self.water_grave.push((now, cmd));
+                }
+            }
+            if let Some(m) = water {
+                self.grave.push((now, Grave::Rsp(m)));
+            }
+        }
+        true
+    }
+
+    /// Forget a font's glyph table (its atlas is the sprite of the same
+    /// handle).
+    pub(crate) fn unregister_font(&mut self, id: u32) -> bool {
+        self.fonts.remove(&id).is_some()
+    }
+
+    /// Free what waited [`GRAVE_FRAMES`] frames (rigid copies a draw still
+    /// holds wait on).
+    #[cold]
+    fn bury(&mut self) {
+        let now = self.water_frame_no;
+        let mut keep = Vec::new();
+        for (f, g) in self.grave.drain(..) {
+            if now.wrapping_sub(f) < GRAVE_FRAMES {
+                keep.push((f, g));
+            } else if let Err(g) = g.free() {
+                keep.push((f, g));
+            }
+        }
+        self.grave = keep;
+    }
 }
 
 impl Default for N64Renderer {
@@ -910,6 +1017,9 @@ impl Renderer for N64Renderer {
         if !self.water_grave.is_empty() {
             let now = self.water_frame_no;
             self.water_grave.retain(|(f, _)| now.wrapping_sub(*f) < 4);
+        }
+        if !self.grave.is_empty() {
+            self.bury();
         }
         if self.locals.set(&[], 0) {
             self.rebuild_tnl();
@@ -1100,6 +1210,8 @@ impl Renderer for N64Renderer {
             }
         }
         let Some((tmdl, layout)) = self.meshes.get(&model.0) else {
+            // Unknown or unloaded (its group is not ready): counted.
+            self.frame_stats.not_loaded += 1;
             return;
         };
         let mesh = Mesh::from_layout(tmdl, layout);
@@ -1251,6 +1363,7 @@ impl Renderer for N64Renderer {
     }
     fn draw_billboard(&mut self, sprite: SpriteId, pos: Vec3, params: &BillboardParams) {
         let Some(entry) = self.sprites.get(&sprite.0) else {
+            self.frame_stats.not_loaded += 1;
             return;
         };
         let size = unsafe { ffi::trino_sprite_size(entry.ptr) };
@@ -1312,6 +1425,7 @@ impl Renderer for N64Renderer {
 
     fn draw_text(&mut self, font: FontId, pos: Vec2, text: &str, params: &TextParams) {
         let Some(entry) = self.fonts.get(&font.0).cloned() else {
+            self.frame_stats.not_loaded += 1;
             return;
         };
         let Some(parsed) = entry.font() else {

@@ -80,7 +80,7 @@ fn variants_round_trip_through_ron_both_ways() {
     // Struct → text → struct, and the text is stable.
     let s = scene();
     let text = s.to_ron();
-    assert!(text.contains("version: 5"), "{text}");
+    assert!(text.contains("version: 6"), "{text}");
     assert!(text.contains("n64: Some(") && text.contains("n3ds: Some("));
     assert!(
         !text.contains("n64_expanded"),
@@ -130,12 +130,12 @@ fn v2_scenes_and_v1_prefabs_migrate() {
     )])"#;
     let scene = Scene::from_ron(v2).unwrap();
     assert_eq!(scene.version, SCENE_VERSION);
-    assert_eq!(scene.version, 5);
+    assert_eq!(scene.version, 6);
     assert!(scene.entities[0].platforms.is_empty());
     assert_eq!(scene.entities[0].children[0].name, "door");
-    // Saved, it is a v5 file that reads back identically.
+    // Saved, it is a v6 file that reads back identically.
     let text = scene.to_ron();
-    assert!(text.contains("version: 5"));
+    assert!(text.contains("version: 6"));
     assert_eq!(Scene::from_ron(&text).unwrap(), scene);
 
     let v1 = r#"(version: 1, root: (name: "lamp", children: [(name: "bulb")]))"#;
@@ -216,7 +216,7 @@ fn tier_variants_round_trip_migrate_and_fall_back_to_their_console() {
     let v4 = r#"(version: 4, name: "old", entities: [(name: "e",
         platforms: (n64: Some((visible: Some(false)))))])"#;
     let old = Scene::from_ron(v4).unwrap();
-    assert_eq!(old.version, 5);
+    assert_eq!(old.version, SCENE_VERSION);
     assert!(old.entities[0].platforms.own(Target::N64Expanded).is_none());
     assert_eq!(
         old.entities[0]

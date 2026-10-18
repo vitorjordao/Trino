@@ -583,6 +583,30 @@ overlay, and a measurement on real hardware (ares doesn't time the RDP).
     "N64 + Expansion Pak" and "New 3DS" (`TRINO_EDITOR_GAME=n64x|3dsnew`), a
     base-vs-expanded HUD, and tier columns in Inspector › Platforms, LOD and particle
     caps (editor skill › Hardware tiers).
+- **Asset groups and memory (2026-10-18, ADR 0022, GitHub #56):** assets load in groups,
+  compressed per platform, against a RAM budget per console tier.
+  - **Groups:** `groups = ["level1"]` on an asset (default `boot`: what every earlier
+    build did), `[groups.<name>]` with an optional `compression`. The bake writes
+    `groups/<name>.tbnd` per platform (`trino_core::bundle`, `TBND`; Web: beside the pack,
+    TPAK v3). `Platform::load_group`/`unload_group`/`group_state`/`group_blob`/`memory`;
+    each host pumps its loader for `Caps::load_budget_us` (4 ms N64, 6 ms 3DS, 8 ms PC
+    and Web) before the game's update (`N64Assets::pump`, `N3dsAssets::pump` with the
+    decode on the worker core, `trino_runner_pc::GroupLoader`, the Web's `groups::pump`).
+    Drawing an unloaded asset draws nothing and counts `FrameStats::not_loaded`.
+  - **Compression:** N64 `mkasset -c 1|2|3` in place (`asset_load` decodes), sprites by
+    `mksprite --compress`, wav64 left alone; LZ4 elsewhere. `[groups.boot]` compresses
+    boot on the consoles only (the 3DS packs it into `groups/boot.tbnd`); castle64 and
+    Solid Eleven ship it: DFS/RomFS −21–31 %.
+  - **Memory:** `trino_asset_pipeline::memory` plans each console tier's RAM (`[memory]
+    reserve`, `game`); strict mode (`TRINO_STRICT=1`) panics on a group load past it;
+    `TRINO_MEM`/`TRINO_HEAP` boot lines and the N64 heap watermark (128 KB) in the
+    self-test; `heap=` ends `TRINO_FRAME`. `trino_core::mem` arenas (`FrameArena`,
+    `Arena`, `LevelArena`).
+  - **Scenes:** v6 `requires` (default `["boot"]`) and `cell(groups: [...])`;
+    `trino_core::CellGroups` streams cells' groups by portal visibility.
+  - **Tools:** `cargo xtask assets report|check|group [--json]`; the editor's group chips
+    (Assets), Requires and cell Groups (Inspector), the Memory tab and the Game view
+    HUD's assets RAM line.
 - **Audio pipeline (2026-10-18, ADR 0021, GitHub #53):** one WAV master, a codec per
   platform, streaming, buses.
   - **Codecs (`asset_pipeline::audio`, one `encode()` for every bake, CLI and the
@@ -805,6 +829,9 @@ cargo xtask audio inspect <sounds/x|music/x> [--platform pc|n64|3ds|web] [--json
 cargo xtask audio report [--platform ...] [--json]                          # every sound, biggest first, totals per platform
 cargo xtask audio preview <sounds/x|music/x> [--out dir] [--json]           # the master + each platform's decode as WAVs (target/audio-preview)
 cargo xtask audio mix [--json]                                              # validate and print assets/audio.toml
+cargo xtask assets report [--platform n64|3ds|pc|web] [--tier base|expanded] [--json]  # RAM per console tier: boot, each group, each scene vs the budget
+cargo xtask assets check [--json]                                           # scenes hold to their groups and fit every tier (CI-able)
+cargo xtask assets group <sprites/x|models/x|..> <group[,group..]|boot>    # set an asset's groups in the manifest (declares new ones)
 cargo xtask model inspect <file> --anim [--json]                                   # + per-clip stride, slide, floor, bounds
 cargo xtask model pose <models/x> [--clip C --time S] --name <new>                 # a pose as a static model (consoles)
 cargo xtask particles new <name> --sprite sprites/x | check | inspect <name> [--json]   # particle effects as text
@@ -1203,6 +1230,32 @@ cargo test --workspace
     27–41 dB on the fixtures. Listen with `audio preview` before raising quality.
   - Self-test audio checks must not count frames as time: a slow frame outlasts a 0.15 s
     beep (the browsers' first frames after GPU-heavy steps).
+- **Asset groups (#56):**
+  - mksprite already compresses its output (level 1 by default); `mkasset` must skip
+    `.sprite` files (twice compressed, `sprite_load` reads garbage). A sprite's level is
+    its group's, passed as `mksprite --compress <level>` (`console_groups::n64_sprite_level`).
+  - libdragon levels 2 and 3 need `asset_init_compression(level)` before the first
+    asset: the index carries `<level> \t compression \t libdragon` lines for them first.
+    Level 1 needs nothing.
+  - `mkasset -w 256` (the biggest window) is right only because the runtime reads every
+    compressed file whole with `asset_load`; an `asset_fopen` stream would need that
+    window in RAM.
+  - The 3DS frees an unloaded texture or mesh two frames after its last draw
+    (`GRAVE_FRAMES`): the PICA200 may still read it. Don't free GPU memory in
+    `unload_group` directly.
+  - `[groups.boot]` compression is console-only: `Manifest::compression("boot", Pc|Web)`
+    is `None` whatever the manifest says. A 3DS boot bundle holds no sounds (T3AU streams
+    from loose files).
+  - A scene that draws a grouped asset must `require` one of its groups (or sit in a cell
+    that streams it): `cargo xtask assets check` fails otherwise, and the asset draws
+    nothing at run time.
+  - On WebGL2, wgpu frees the GPU objects an unload dropped only once their GL fences
+    signal, and those signal only when the page's event loop turns: a load/unload soak
+    inside one frame never gets its memory back. Run it over animation frames
+    (`apps/web` `soak_frame`).
+  - The editor measures memory plans on a worker keyed on the manifest's text and the
+    bake generation (`groups::Groups::plans`); a UI test waits on `measured()` after the
+    Memory tab drew once.
 - **`/tmp` may be a RAM disk (tmpfs).** A second `target/` there (a git worktree's build)
   filled RAM and killed rustc. Put extra worktrees and their targets on a real disk.
 

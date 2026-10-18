@@ -121,6 +121,9 @@ pub struct ViewInput<'a> {
     pub water: (f32, &'a [trino_core::Ripple]),
     /// The project's audio per platform (the Game view HUD's audio line).
     pub audio: Option<&'a crate::audio::Totals>,
+    /// The asset memory plans per console tier (the HUD's assets RAM line,
+    /// issue #56).
+    pub memory: Option<&'a [trino_asset_pipeline::memory::MemoryPlan]>,
 }
 
 pub enum ViewAction {
@@ -951,6 +954,7 @@ impl Viewport {
                 input.budgets,
                 input.tmem,
                 input.audio,
+                input.memory.map(|m| (m, input.scene)),
             );
             if let Some(lines) = lines {
                 let hud = ui
@@ -1030,6 +1034,7 @@ impl Viewport {
         budgets: Option<&crate::budget::Budgets>,
         tmem: Option<&std::collections::BTreeMap<u32, Option<u32>>>,
         audio: Option<&crate::audio::Totals>,
+        memory: Option<(&[trino_asset_pipeline::memory::MemoryPlan], &Scene)>,
     ) -> Option<Rect> {
         let caps = *self.renderer.caps();
         let mut rows = crate::budget::rows(&self.stats.frame, &caps, &self.stats.lod);
@@ -1068,6 +1073,28 @@ impl Viewport {
                 ram.into_iter().chain(hardware).collect()
             })
             .unwrap_or_default();
+        // What the scene's groups take of the console's RAM left for assets
+        // (issue #56): the Memory tab's bar for this tier, in one line.
+        let console = match self.profile {
+            SimProfile::N64 => Some(trino_asset_pipeline::Platform::N64),
+            SimProfile::N3ds => Some(trino_asset_pipeline::Platform::N3ds),
+            _ => None,
+        };
+        let assets_ram = memory.zip(console).and_then(|((plans, scene), console)| {
+            let plan = plans
+                .iter()
+                .find(|p| p.platform == console && p.tier == self.tier)?;
+            let groups = trino_asset_pipeline::groups::scene_groups(scene);
+            let refs: Vec<&str> = groups.iter().map(String::as_str).collect();
+            let (line, level) = crate::budget::assets_ram_line(target.label(), plan, &refs);
+            let color = match level {
+                crate::budget::Level::Ok => c::TEXT_WEAK,
+                crate::budget::Level::Near => c::WARN,
+                crate::budget::Level::Over => c::ERROR,
+            };
+            Some((line, color))
+        });
+        let tier_lines: Vec<(String, Color32)> = tier_lines.into_iter().chain(assets_ram).collect();
         let tier_h = 15.0;
         let summary = self.stats.lod.summary();
         let row_h = 18.0;

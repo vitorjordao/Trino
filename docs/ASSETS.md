@@ -266,6 +266,57 @@ music/theme` (each platform's decoded result as a WAV, next to the master; the N
 decodes on the console). The editor's Assets › Audio inspector shows the same numbers and
 plays each platform's version.
 
+## Groups, compression and memory (ADR 0022)
+
+Every asset is in the `boot` group unless it names others. `boot` loads at boot and stays;
+any other group loads when the game asks (`platform.load_group(GroupId::from_name("level1"))`,
+polled each frame until `Ready`; its `progress` drives a loading bar) and frees its memory on
+`unload_group`. Handles never change, and drawing an asset whose group is not loaded draws
+nothing (counted as `not_loaded` in the frame stats).
+
+```toml
+[groups.boot]                        # optional: compress boot on the consoles
+compression = { n64 = 1, 3ds = "lz4" }
+
+[groups.level1]                      # loaded on demand; default N64 level 1, LZ4 elsewhere
+[groups.level2]
+compression = { n64 = 2 }            # aPLib: smaller, slower to decode
+
+[models.boar]
+file = "models/boar.glb"
+groups = ["level1", "level2"]        # loaded once, freed with the last of them
+
+[memory]                             # what is not the assets' (defaults measured in ares/Azahar)
+reserve = { n64 = "2.2M" }
+game = "256K"                        # the game's own heap
+```
+
+- **Bundles:** each group but `boot` bakes to `groups/<name>.tbnd` per platform (Web:
+  `trino.<name>.tbnd` beside the pack, downloaded the first time the game loads it).
+- **Compression:** N64 levels are libdragon's `mkasset` levels (0 none, 1 LZ4, 2 aPLib,
+  3 Shrinkler); sprites are compressed by `mksprite` itself and `wav64` files stream as they
+  are. The 3DS, the PC and the Web take `"lz4"` or `"none"`; the 3DS decodes on its worker
+  core. `boot` is compressed only on the consoles (the 3DS packs it into `groups/boot.tbnd`);
+  castle64's and Solid Eleven's DFS and RomFS are 21–31 % smaller with boot at N64 level 1 /
+  LZ4 (ADR 0022 §3).
+- **Scenes:** a scene's `requires` (default `["boot"]`) lists the groups it needs loaded, and
+  a portal cell can name the groups its contents come from (`cell(size: …, groups: ["cellar"])`):
+  `trino_core::CellGroups` keeps those of the rooms in view, and one doorway further, loaded.
+- **Live reload** (`cargo xtask watch pc`) re-uploads changed `boot` assets; a grouped asset's new
+  bytes are in its rebaked bundle and show the next time its group loads. The editor's play
+  mode loads every asset, so it shows all edits at once.
+
+**Checking memory:** `cargo xtask assets report [--platform n64] [--tier base] [--json]` prints
+each console tier's RAM split (engine reserve, game, the rest for assets), every group's
+assets, RAM and baked size, and each scenario (boot, boot + each group, each scene) against
+the budget. `cargo xtask assets check` fails when a scene draws an asset none of its groups
+loads, names an undeclared group, or would not fit a tier. `cargo xtask assets group
+models/boar level1 [level2…]` sets an asset's groups (declaring new ones; `boot` alone
+removes the key). Strict mode (`TRINO_STRICT=1` with an N64 or 3DS profile) panics on a load
+past the console's RAM. The editor shows the same numbers in its Memory tab, filters the
+Assets panel by group (drop a tile on a chip to move it), and picks a scene's `requires` and a
+cell's groups in the inspector.
+
 ## Models: glTF to TMDL
 
 TMDL is the engine's portable mesh format: positions, normals, vertex colors, and
@@ -340,4 +391,5 @@ a camera can see, so the CC0 KayKit doorway went from 1068 to 75 triangles.
 3. `cargo xtask model inspect <file>` for models, `cargo xtask texture inspect
    sprites/x` for textures, `cargo xtask audio inspect music/x` for sounds,
    `cargo xtask impostor check` for impostors.
-4. `cargo xtask test`.
+4. `cargo xtask assets check` (and `assets report`) when groups or scenes changed.
+5. `cargo xtask test`.

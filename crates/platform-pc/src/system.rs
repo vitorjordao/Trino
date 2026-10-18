@@ -11,7 +11,8 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use trino_core::{
-    BindDevice, BlobId, Button, Caps, DisplayInfo, DisplaySettings, InputInfo, Platform, SaveError,
+    BindDevice, BlobId, Button, Caps, DisplayInfo, DisplaySettings, GroupId, GroupTable, InputInfo,
+    LoadState, MemoryReport, Platform, SaveError,
 };
 
 use crate::input::{BINDABLE, BINDINGS, InputRequest, PcInput};
@@ -39,6 +40,18 @@ pub struct PcPlatform {
     input_request: Option<InputRequest>,
     /// The simulated console's hardware tier ([`Platform::hw_tier`]).
     hw_tier: trino_core::HwTier,
+    /// The asset groups the bake holds and where each one is (issue #56):
+    /// the game asks here, the host's loader (`trino_runner_pc::GroupLoader`)
+    /// serves it every frame.
+    groups: GroupTable,
+    /// Blobs of loaded non-boot groups, freed with their group
+    /// ([`Platform::group_blob`]).
+    group_blobs: HashMap<u32, Vec<u8>>,
+    /// Resident assets by category, kept by the host as it uploads and
+    /// frees them ([`Platform::memory`]).
+    memory: MemoryReport,
+    /// The host's counting allocator, when it installed one.
+    heap: Option<&'static dyn trino_core::mem::HeapStats>,
 }
 
 impl PcPlatform {
@@ -58,7 +71,40 @@ impl PcPlatform {
             labels: Default::default(),
             input_request: None,
             hw_tier: caps.hw_tier,
+            groups: GroupTable::new(),
+            group_blobs: HashMap::new(),
+            memory: MemoryReport {
+                ram_bytes: caps.ram_bytes,
+                ..MemoryReport::default()
+            },
+            heap: None,
         }
+    }
+
+    /// The groups and their states, for the host's loader.
+    pub fn groups_mut(&mut self) -> &mut GroupTable {
+        &mut self.groups
+    }
+
+    /// A non-boot group's blob arrived (its group is loading).
+    pub fn insert_group_blob(&mut self, id: BlobId, bytes: Vec<u8>) {
+        self.group_blobs.insert(id.0, bytes);
+    }
+
+    /// Free a group blob; returns its bytes.
+    pub fn remove_group_blob(&mut self, id: BlobId) -> usize {
+        self.group_blobs.remove(&id.0).map_or(0, |b| b.len())
+    }
+
+    /// The resident-asset counts the host keeps ([`Platform::memory`]).
+    pub fn memory_mut(&mut self) -> &mut MemoryReport {
+        &mut self.memory
+    }
+
+    /// Report `heap`'s use as the heap (`#[global_allocator] static A:
+    /// trino_core::mem::Counting<std::alloc::System>`).
+    pub fn set_heap(&mut self, heap: &'static dyn trino_core::mem::HeapStats) {
+        self.heap = Some(heap);
     }
 
     /// The host simulates a console's tier (`TRINO_SIM=n64x|3dsnew`, the
@@ -115,6 +161,39 @@ impl PcPlatform {
 impl Platform for PcPlatform {
     fn now_micros(&self) -> u64 {
         self.start.elapsed().as_micros() as u64
+    }
+
+    fn load_group(&mut self, group: GroupId) -> LoadState {
+        self.groups.request_load(group)
+    }
+
+    fn unload_group(&mut self, group: GroupId) {
+        self.groups.request_unload(group);
+    }
+
+    fn group_state(&self, group: GroupId) -> LoadState {
+        self.groups.state(group)
+    }
+
+    fn group_blob(&self, id: BlobId) -> Option<&[u8]> {
+        match self.group_blobs.get(&id.0) {
+            Some(b) => Some(b),
+            None => self.blob(id),
+        }
+    }
+
+    fn memory(&self) -> MemoryReport {
+        let clamp = |v: usize| v.min(u32::MAX as usize) as u32;
+        let (heap_used, heap_peak) = self
+            .heap
+            .map_or((0, 0), |h| (clamp(h.used()), clamp(h.peak())));
+        MemoryReport {
+            heap_used,
+            heap_peak,
+            groups_resident: self.groups.resident(),
+            groups_loading: self.groups.loading(),
+            ..self.memory
+        }
     }
 
     fn hw_tier(&self) -> trino_core::HwTier {

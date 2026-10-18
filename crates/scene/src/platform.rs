@@ -238,6 +238,14 @@ impl PlatformVariants {
         }
     }
 
+    /// The other models the variants name (logical paths), in target
+    /// order: assets the scene needs on some platform.
+    pub fn models(&self) -> impl Iterator<Item = &str> {
+        Target::EVERY
+            .into_iter()
+            .filter_map(|t| self.own(t)?.model.as_deref())
+    }
+
     /// Drops variants that change nothing (the editor's "same as PC"). An
     /// empty variant of a target with a fallback (the Web, a tier) stays
     /// while the fallback has one: it is what keeps the target from

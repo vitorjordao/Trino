@@ -60,6 +60,11 @@ mod web {
         }
     }
 
+    /// The page's allocator, counted for `Platform::memory` (issue #56).
+    #[global_allocator]
+    static HEAP: trino_core::mem::Counting<std::alloc::System> =
+        trino_core::mem::Counting::new(std::alloc::System);
+
     #[wasm_bindgen(start)]
     pub fn start() {
         install_panic_hook();
@@ -79,6 +84,7 @@ mod web {
         let save = if selftest { "selftest" } else { &name };
         let save = if save.is_empty() { "castle64" } else { save };
         let mut host = WebHost::new(WebConfig::new(save, &query)).await?;
+        host.platform.set_heap(Some(&HEAP));
         host.load_pack(which.pack()).await?;
         if selftest {
             crate::selftest::start(host);
@@ -92,6 +98,7 @@ mod web {
                 game.resize(screen);
             }
             let input = host.poll_input();
+            host.pump_groups();
             game.update_with(&mut host.platform, &input, &mut host.audio, dt);
             game.render(&mut host.renderer);
             host.end_frame();

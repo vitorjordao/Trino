@@ -25,7 +25,7 @@ fn library() -> trino_scene::Library {
     // The N64's atlas has smaller tiles.
     lib.impostors.insert(
         "impostors/tree".into(),
-        [Some(imp(64)), Some(imp(16)), Some(imp(64))],
+        [Some(imp(64)), Some(imp(16)), Some(imp(64)), Some(imp(64))],
     );
     lib
 }

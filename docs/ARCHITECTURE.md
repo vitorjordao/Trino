@@ -6,21 +6,25 @@ in the [ADRs](adr/); the full rules and pitfalls are in [AGENTS.md](../AGENTS.md
 ## Layers and the dependency rule
 
 ```
-game ──► trino-core ◄── trino-platform-{pc,n64,3ds}          apps/* glue them together
+game ──► trino-core ◄── trino-platform-{pc,n64,3ds,web}      apps/* glue them together
+                  ▲
+                  └──── trino-render-wgpu ◄── trino-platform-{pc,web}
 ```
 
 | Crate | Role |
 |---|---|
 | `crates/core` (`trino-core`) | Traits (`Game`, `Renderer`, `Platform`, `Audio`, `Input`), math, the software T&L, physics, text, scenes as data. `no_std`, zero dependencies |
 | `crates/game-api` | The stable boundary for hot-reloadable game dylibs on PC (`export_game!`) |
-| `crates/platform-pc` | wgpu and winit backend, the console-simulation profiles, strict mode |
+| `crates/platform-pc` | winit window, cpal audio, gilrs pads, the save file; draws with `trino-render-wgpu` |
+| `crates/render-wgpu` | The wgpu renderer the PC and the Web share: the console-simulation profiles, strict mode, the CPU and GPU T&L paths, WebGPU and WebGL2 ([ADR 0019](adr/0019-web-target.md)) |
+| `crates/platform-web` | The browser backend (`wasm32-unknown-unknown`): canvas, Web Audio, keyboard/pointer/touch/gamepad input, `localStorage` saves, asset packs, KTX2 transcoding |
 | `crates/platform-n64` | libdragon backend through a C shim, and the RSP overlay (`shim/rsp_trino.S`) |
 | `crates/platform-3ds` | libctru, citro2d and citro3d backend through a C shim |
 | `crates/asset-pipeline` | Bakes masters into each platform's formats; glTF and fake objects into TMDL |
 | `crates/scene` | Scenes, prefabs and materials (RON): load, migrate, resolve per platform, export to code |
 | `crates/editor` | The egui editor |
 | `crates/runner-pc` | A ready-made PC host for standalone projects |
-| `apps/{pc,n64,3ds}` | Thin binaries that join a game to a backend |
+| `apps/{pc,n64,3ds,web}` | Thin binaries that join a game to a backend (`apps/web` is a wasm module and its page) |
 | `xtask` | The single entry point for building, running, testing and baking |
 
 The rule that holds it together:
@@ -29,8 +33,10 @@ The rule that holds it together:
   metal (N64) and ARM (3DS) unchanged.
 - Game crates depend only on `trino-core` (and `trino-game-api`). No external crates.
   A game that builds for PC therefore builds for both consoles.
-- Platform crates may use external crates, but within the workspace only `trino-core`.
-  libdragon, libctru and wgpu types never appear in the core or in game code.
+- Platform crates may use external crates, but within the workspace only `trino-core` and
+  the renderer the PC and the Web share (`trino-render-wgpu`, which itself depends only on
+  `trino-core`). libdragon, libctru, wgpu and web-sys types never appear in the core or in
+  game code.
 
 `xtask/tests/dep_graph.rs` checks this on every `cargo test --workspace`. Game crates
 start with `#![cfg_attr(any(target_os = "none", target_os = "horizon"), no_std)]`: std
@@ -142,6 +148,21 @@ mesh in one call: a matrix, a tint multiplied over the call's and a palette inde
 3DS draw instances with no backend code; the PC draws the accepted copies as one instanced
 call (`TnlStats::instanced` counts them). The `instancing` self-test step holds one call
 to the separate draws' pixels and counters on PC, in ares and in Azahar.
+
+### The Web: the PC renderer in a browser (issue #47)
+
+`trino-platform-web` draws with the same `PcRenderer` as the PC (`crates/render-wgpu`), on
+a canvas: WebGPU where the browser gives an adapter, WebGL2 otherwise. Everything above
+— the CPU and GPU T&L paths, instancing, per-pixel lights, SSAO, water — runs unchanged
+on WebGPU. WebGL2 differs in three places, all inside the renderer: no MSAA (GLSL ES 3.0
+can't sample a multisampled depth), depth read through a nearest sampler
+(`depth_as_float`: naga can't `textureLoad` a depth texture to GLSL, and wgpu leaves a
+depth texture's GL filter incomplete), and the water's depth copy drawn instead of copied
+(`renderer/depth_blit.rs`). Browser threads would need `SharedArrayBuffer`, so the CPU
+T&L runs on one worker there. `SimProfile::Web` is the native picture with `Caps::WEB`;
+the browser goldens (`tests/golden/web/`) hold all three engines and the PC renderer
+(`xtask/tests/web_parity.rs`) to one picture. Details in
+[ADR 0019](adr/0019-web-target.md) and [PLATFORMS.md](PLATFORMS.md#web-webgpu--webgl2).
 
 ### 2D in the same pipeline
 

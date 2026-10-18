@@ -6,10 +6,12 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
-# Within the workspace this crate may depend only on trino-core
-# (enforced by xtask/tests/dep_graph.rs). External crates are fine.
+# Within the workspace this crate may depend only on trino-core and the
+# shared wgpu renderer (enforced by xtask/tests/dep_graph.rs). External
+# crates are fine.
 [dependencies]
 trino-core = { workspace = true }
+trino-render-wgpu = { workspace = true }
 wgpu = { workspace = true }
 cpal = { workspace = true }
 winit = { workspace = true }

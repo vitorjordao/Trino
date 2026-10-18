@@ -402,7 +402,7 @@ fn scene_budget_cli_prints_the_same_numbers() {
     );
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     let rows = v.as_array().unwrap();
-    assert_eq!(rows.len(), 3);
+    assert_eq!(rows.len(), 4);
     let (meshes, lib) = assets();
     let scene = Scene::load(&root().join("scenes/showcase.scene.ron")).unwrap();
     let n64 = rows.iter().find(|r| r["platform"] == "n64").unwrap();
@@ -411,6 +411,18 @@ fn scene_budget_cli_prints_the_same_numbers() {
     assert_eq!(n64["rsp_draws"], b.rsp_draws);
     assert_eq!(n64["n64_frame_us"], b.n64_frame_us());
     assert!(!n64["off_rsp"].as_array().unwrap().is_empty());
+    // The Web: the PC's GPU split, plus the calls a browser pays for.
+    let web = rows.iter().find(|r| r["platform"] == "web").unwrap();
+    let b = estimate(&scene, &lib, &meshes, Target::Web);
+    assert_eq!(web["pc_gpu_draws"], b.pc_gpu_draws);
+    assert_eq!(web["web_calls"], b.web.calls);
+    assert!(b.web.calls > 0 && b.web.calls <= b.draws + b.billboards);
+    assert!(b.web.pipelines >= 1);
+    assert_eq!(b.web.switches, b.web.calls - 1);
+    assert!(web["web_warnings"].as_array().unwrap().is_empty());
+    let pc = estimate(&scene, &lib, &meshes, Target::Pc);
+    assert_eq!(pc.web, Default::default(), "only the Web counts calls");
+    assert_eq!(pc.pc_gpu_draws, b.pc_gpu_draws, "the Web draws like the PC");
     let one = Command::new(env!("CARGO_BIN_EXE_xtask"))
         .args([
             "scene",
@@ -430,4 +442,25 @@ fn scene_budget_cli_prints_the_same_numbers() {
         .output()
         .unwrap();
     assert!(!bad.status.success());
+}
+
+#[test]
+fn the_web_warns_past_a_phones_budget() {
+    use trino_scene::budget::{WEB_CALLS_WARN, WEB_TRIS_WARN, WebCalls, web_line, web_warnings};
+    let mut b = FrameBudget {
+        target: Target::Web,
+        web: WebCalls {
+            calls: 12,
+            pipelines: 3,
+            switches: 11,
+        },
+        ..FrameBudget::default()
+    };
+    assert_eq!(web_line(&b), "Web 12 calls · 3 pipelines · 11 switches");
+    assert!(web_warnings(&b).is_empty());
+    b.web.calls = WEB_CALLS_WARN + 1;
+    b.pc_gpu_tris = WEB_TRIS_WARN + 1;
+    let w = web_warnings(&b);
+    assert_eq!(w.len(), 2, "{w:?}");
+    assert!(w[0].contains("calls") && w[1].contains("tris"), "{w:?}");
 }

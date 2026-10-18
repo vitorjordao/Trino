@@ -1,4 +1,4 @@
-//! `cargo xtask texture inspect <sprites/x|fonts/x> [--platform pc|n64|3ds]
+//! `cargo xtask texture inspect <sprites/x|fonts/x> [--platform pc|n64|3ds|web]
 //! [--json]` — what each platform keeps of a texture: its format and why
 //! (`auto`'s weighing, with every candidate it measured), bytes, PSNR
 //! against the master and its share of the platform's texture memory
@@ -12,6 +12,10 @@
 //! On the 3DS the PSNR comes from the pipeline's own encoder (what the PC's
 //! 3DS profile draws). With devkitPro installed and a power-of-two master,
 //! `inspect` decodes the real `tex3ds` output too (`psnr_tex3ds`).
+//!
+//! On the Web the bytes are the download (the `.ktx2` file, or RGBA8) and
+//! the memory is its VRAM once a browser transcodes it; the PSNR is of
+//! Binomial's own decode (the transcoder the browser runs).
 
 use std::path::Path;
 use std::process::{Command, ExitCode};
@@ -20,8 +24,8 @@ use trino_asset_pipeline::texture::{self, Candidate, N3dsFormat, TextureReport, 
 use trino_asset_pipeline::{Manifest, Platform};
 
 const USAGE: &str = "xtask: usage:
-  cargo xtask texture inspect <sprites/x|fonts/x> [--platform pc|n64|3ds] [--json]
-  cargo xtask texture report [--platform pc|n64|3ds] [--json]";
+  cargo xtask texture inspect <sprites/x|fonts/x> [--platform pc|n64|3ds|web] [--json]
+  cargo xtask texture report [--platform pc|n64|3ds|web] [--json]";
 
 pub fn run(root: &Path, args: &[&str]) -> ExitCode {
     let (cmd, rest) = match args {
@@ -52,7 +56,7 @@ fn options(rest: &[&str]) -> Option<(Vec<Platform>, bool)> {
             "--platform" => match it.next().and_then(|p| Platform::parse(p)) {
                 Some(p) => platforms = vec![p],
                 None => {
-                    eprintln!("xtask: --platform needs pc, n64 or 3ds");
+                    eprintln!("xtask: --platform needs pc, n64, 3ds or web");
                     return None;
                 }
             },
@@ -135,6 +139,7 @@ fn rgba8_bytes(p: Platform, w: u32, h: u32) -> Option<u64> {
     match p {
         Platform::Pc => Some(w as u64 * h as u64 * 4),
         Platform::N3ds => Some(N3dsFormat::Rgba8.texture_bytes(w, h)),
+        Platform::Web => Some(w as u64 * h as u64 * 4),
         Platform::N64 => None,
     }
 }

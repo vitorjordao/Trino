@@ -19,7 +19,7 @@ fn scenes_round_trip_through_files_with_every_component() {
     let scene = common::scene();
     scene.save(&path).unwrap();
     let text = std::fs::read_to_string(&path).unwrap();
-    assert!(text.contains("version: 3"));
+    assert!(text.contains("version: 4"));
     let back = Scene::load(&path).unwrap();
     assert_eq!(back, scene);
     assert_eq!(back.to_ron(), text, "stable text: clean diffs");

@@ -1,7 +1,7 @@
 # {{name}} — Agent Guide
 
 A standalone [Trino](https://github.com/vitorjordao/Trino) game: one
-codebase for PC, Nintendo 64 and Nintendo 3DS. This file is the entry point
+codebase for PC, Nintendo 64, Nintendo 3DS and the Web. This file is the entry point
 for AI agents and humans.
 
 ## Layout
@@ -11,6 +11,7 @@ for AI agents and humans.
 | `game/` | The game crate (`{{name_snake}}`). Portable: depends only on `trino-core` + `trino-game-api`. |
 | `pc/` | Desktop host (`trino-runner-pc`): window, renderer, audio, input, asset bake. |
 | `n64/`, `n3ds/` | Console hosts (`n64_main!` / `n3ds_main!`) and their emulator self-tests. |
+| `web/` | Browser host (`trino_platform_web::run_game`): the game in a tab, on WebGPU or WebGL2. |
 | `trino.toml` | Target platforms (`[project] platforms`), console packaging (ROM title, save type, 3DS icon), test gates. |
 | `assets/manifest.toml` | Every asset by logical path; masters in `assets/shared/`. |
 | `Cargo.toml` | Workspace; the engine dependencies (path or git) are declared once here. |
@@ -48,11 +49,15 @@ cargo trino test 3ds       # boot the self-test in Azahar
 cargo trino watch n64      # rebuild + relaunch on save (also 3ds)
 cargo trino build all      # every platform in trino.toml's [project] platforms
 cargo trino editor         # the Trino editor on this project
+cargo trino build web      # target/web: index.html, trino.js, trino.wasm, assets/ (WebGPU or WebGL2)
+cargo trino run web        # ... served on 127.0.0.1 and opened in the browser
+cargo trino build web --release --out dist/web   # a folder to upload (itch.io, GitHub Pages)
+cargo trino test web       # a smoke run in Chromium, Firefox and WebKit (needs Node.js)
 ```
 
 `[project] platforms` in `trino.toml` lists the platforms this game ships on
-(missing = all three). Commands for a platform not listed fail and name the
-field; `build all`, `assets all` and `test all` skip it.
+(missing = pc, n64 and 3ds; this project lists the Web too). Commands for a
+platform not listed fail and name the field; `build all`, `assets all` and `test all` skip it.
 
 The self-tests live in `n64/src/lib.rs` and `n3ds/src/main.rs`: drive frames
 with `host.step`, time them with `host.measure` + `host.report_frames`

@@ -11,7 +11,8 @@ the [blender-asset](../.agents/skills/blender-asset/SKILL.md) skill covers model
 assets/
   manifest.toml        every asset, under a logical path
   shared/              masters: sprites/, sounds/, music/, models/, fonts/, data/, particles/, impostors/
-  n64/, 3ds/           optional overrides: a file at the same path wins on that platform only
+  n64/, 3ds/, pc/, web/ optional overrides: a file at the same path wins on that platform only
+                       (the Web falls back to pc/ before shared/)
   materials/           *.material.ron (no manifest entry)
   impostors/           *.impostor.ron (impostor bake settings)
 ```
@@ -28,21 +29,24 @@ assets/
   (`formats = { n64 = "CI4" }`; also CI8, RGBA5551, I4, I8).
 - **Per-platform models:** `assets/n64/models/...` and `assets/3ds/models/...` ship console
   low-poly variants under the same handle. A model listed with `platforms = ["pc"]` is not
-  baked for the consoles, which load every model at boot.
+  baked for the consoles, which load every model at boot. The Web takes the PC's choices
+  where it has none of its own: a list naming `pc` bakes for the Web too, and an
+  `assets/pc/` override wins on the Web unless `assets/web/` has one (issue #47).
 
 ## What gets baked
 
-| Master | PC | N64 | 3DS |
-|---|---|---|---|
-| PNG sprite | `TSPR` (RGBA8), plus the 3DS preview | libdragon sprite (`mksprite`) in the ROM's DFS | `.t3x` (`tex3ds`, any format above) in RomFS |
-| WAV sound or music | `TSND` | `wav64` (`audioconv64`), loops baked in | raw PCM16 |
-| glTF (`.glb`/`.gltf`) or `.prim.ron` model | TMDL | TMDL | TMDL |
-| Font (PNG grid or TTF) | `TFNT` table and an atlas sprite | `TFNT` table and an atlas sprite (`mksprite`) | `TFNT` table and an atlas `.t3x` |
-| Scene (`*.scene.ron`) | `TSCN` blob | `TSCN` blob, N64 variants | `TSCN` blob, 3DS variants |
-| Particle effect (`*.particles.ron`) | `TPFX` with the PC cap | `TPFX` with the N64 cap | `TPFX` with the 3DS cap |
+| Master | PC | N64 | 3DS | Web |
+|---|---|---|---|---|
+| PNG sprite | `TSPR` (RGBA8), plus the 3DS preview | libdragon sprite (`mksprite`) in the ROM's DFS | `.t3x` (`tex3ds`, any format above) in RomFS | KTX2 (Basis Universal) or `TSPR` in the pack |
+| WAV sound or music | `TSND` | `wav64` (`audioconv64`), loops baked in | raw PCM16 | 16-bit PCM (`TS16`) in the pack |
+| glTF (`.glb`/`.gltf`) or `.prim.ron` model | TMDL | TMDL | TMDL | TMDL |
+| Font (PNG grid or TTF) | `TFNT` table and an atlas sprite | `TFNT` table and an atlas sprite (`mksprite`) | `TFNT` table and an atlas `.t3x` | `TFNT` table and an atlas sprite |
+| Scene (`*.scene.ron`) | `TSCN` blob | `TSCN` blob, N64 variants | `TSCN` blob, 3DS variants | `TSCN` blob, Web variants |
+| Particle effect (`*.particles.ron`) | `TPFX` with the PC cap | `TPFX` with the N64 cap | `TPFX` with the 3DS cap | `TPFX` with the Web cap (else the PC's) |
 
-`cargo xtask assets pc|n64|3ds` runs the bake alone. `cargo xtask build n64|3ds` runs it
-as part of the console build, and the PC app bakes on start. With the editor open or
+`cargo xtask assets pc|n64|3ds|web` runs the bake alone. `cargo xtask build n64|3ds|web`
+runs it as part of the build (the Web packs every asset of a game into one
+`assets/<game>.pak`, fetched at boot), and the PC app bakes on start. With the editor open or
 `cargo xtask watch pc` running, saving a master rebakes it and re-uploads it live.
 
 ## Texture formats
@@ -56,6 +60,7 @@ platform can't represent is a bake error that lists the ones it can.
 | PC | `RGBA8`, `BC1`, `BC3`, `BC7` | `auto` |
 | N64 | `CI4`, `CI8`, `RGBA5551`, `I4`, `I8` (TMEM is 4 KB), `auto` | none: declare one (fonts: `CI4`) |
 | 3DS | `RGBA8`, `RGB565`, `RGBA5551`, `RGBA4`, `LA8`, `L8`, `A8`, `ETC1`, `ETC1A4` (`tex3ds -f`), `auto` | `auto` |
+| Web | `KTX2-ETC1S`, `KTX2-UASTC` (Basis Universal, transcoded in the browser), `RGBA8`, `auto` | `auto` |
 
 ### `auto`, `quality` and `min_psnr` (ADR 0017 §6)
 
@@ -108,6 +113,25 @@ min_psnr = 38                    # ...checked: below 38 dB the bake fails
   bc_bytes= bc_supported=`: castle64's 31 textures take 19,904 bytes of VRAM instead
   of 147,712.
 
+### Web: KTX2 (ADR 0017 §9)
+
+| Format | Download | VRAM once transcoded | Use it for |
+|---|---|---|---|
+| `KTX2-ETC1S` | smallest (BasisLZ codebooks, often under 1 bit a texel) | BC1 / ETC2 RGB: ½ byte a texel; with alpha BC3 / ETC2 RGBA: 1 | most art: the download is what a page waits for |
+| `KTX2-UASTC` | 1 byte a texel | BC7 / ASTC 4×4: 1 byte a texel | what ETC1S blurs (gradients, faces, UI) |
+| `RGBA8` | 4 bytes a texel | 4 bytes a texel | sides not multiples of 4, pixel art that must stay exact |
+
+- The bake writes `<id>.ktx2` beside the master (`ktx2` in the index), and `cargo xtask
+  build web` packs the KTX2 instead of the master. The page transcodes each texture
+  once, with Binomial's transcoder, to BC on desktops, ETC2 or ASTC on phones, RGBA8
+  where the GPU has none (`TRINO_ASSETS: … target=BC` in the console says which).
+- `auto` (the default) keeps the smallest download that reaches the threshold: ETC1S,
+  else UASTC, else RGBA8. Its PSNR is measured on the transcoder's own decode, the
+  pixels a browser shows.
+- `texture inspect|report --platform web`: `bytes` is the download, the memory share is
+  the VRAM against `Caps::WEB` (1 GiB). castle64's 33 KTX2 textures and the rest pack
+  into a 944 KB `trino.pak`.
+
 ### On the 3DS (ADR 0017)
 
 | Format | Bits a texel | Keeps | Use it for |
@@ -151,15 +175,16 @@ palette losslessly after RGBA5551 truncation.
 
 ### Checking textures
 
-- `cargo xtask texture inspect sprites/x [--platform 3ds] [--json]`: per platform the
+- `cargo xtask texture inspect sprites/x [--platform 3ds|web] [--json]`: per platform the
   format (and why `auto` chose it), every candidate with its bytes and PSNR, and the
-  share of TMEM (N64) or texture memory (3DS). PSNR is computed on colors
+  share of TMEM (N64), texture memory (3DS) or VRAM (PC, Web; the Web's bytes are its
+  download). PSNR is computed on colors
   premultiplied by alpha, so invisible texels don't count. With devkitPro installed,
   the 3DS line also decodes the real `tex3ds` output.
-- `cargo xtask texture report [--platform pc|n64|3ds] [--json]`: every texture of the
+- `cargo xtask texture report [--platform pc|n64|3ds|web] [--json]`: every texture of the
   project, biggest first, with per-platform totals against RGBA8; it fails when any
   texture fails its format or its `min_psnr`.
-- The editor: select a sprite or font in **Assets**: its texture inspector shows the three
+- The editor: select a sprite or font in **Assets**: its texture inspector shows the four
   platforms side by side, the decoded previews, the candidates, and writes format,
   `quality` and `min_psnr` back to the manifest.
 

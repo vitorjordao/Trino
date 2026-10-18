@@ -1,0 +1,66 @@
+[package]
+name = "trino-platform-web"
+description = "Web backend for Trino (wasm32-unknown-unknown): the shared wgpu renderer on WebGPU or WebGL2, Web Audio, keyboard/pointer/touch/gamepad input, localStorage saves."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Within the workspace this crate may depend only on trino-core and the
+# shared wgpu renderer (enforced by xtask/tests/dep_graph.rs). Off wasm32 it
+# is only its browser-free parts (key and pad mapping, the asset pack,
+# base64), which the host tests and `cargo xtask build web` use.
+[dependencies]
+trino-core = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+trino-render-wgpu = { workspace = true }
+wasm-bindgen = { workspace = true }
+wasm-bindgen-futures = { workspace = true }
+js-sys = { workspace = true }
+web-sys = { workspace = true, features = [
+    "AddEventListenerOptions",
+    "AudioBuffer",
+    "AudioBufferSourceNode",
+    "AudioContext",
+    "AudioContextState",
+    "AudioDestinationNode",
+    "AudioNode",
+    "AudioParam",
+    "AudioScheduledSourceNode",
+    "BaseAudioContext",
+    "CssStyleDeclaration",
+    "Document",
+    "DomRect",
+    "DomRectReadOnly",
+    "Element",
+    "Event",
+    "EventTarget",
+    "FocusEvent",
+    "Gamepad",
+    "GamepadButton",
+    "GamepadMappingType",
+    "GainNode",
+    "HtmlCanvasElement",
+    "HtmlElement",
+    "KeyboardEvent",
+    "Location",
+    "MouseEvent",
+    "Navigator",
+    "Performance",
+    "PointerEvent",
+    "ResizeObserver",
+    "ResizeObserverEntry",
+    "ResizeObserverSize",
+    "Screen",
+    "Response",
+    "StereoPannerNode",
+    "Storage",
+    "Touch",
+    "TouchEvent",
+    "TouchList",
+    "UrlSearchParams",
+    "WheelEvent",
+    "Window",
+    "console",
+] }

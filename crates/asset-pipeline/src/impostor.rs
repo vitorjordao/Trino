@@ -743,12 +743,13 @@ pub fn check(assets_root: &Path, name: &str) -> Result<(), String> {
 /// Every baked impostor's descriptor per platform (`trino_scene::Target`
 /// order), keyed `impostors/<name>` — what `trino_scene::Library`
 /// resolves LOD levels against. Unbaked ones are left out.
-pub fn baked(assets_root: &Path) -> BTreeMap<String, [Option<Impostor>; 3]> {
+pub fn baked(assets_root: &Path) -> BTreeMap<String, [Option<Impostor>; 4]> {
     let mut out = BTreeMap::new();
     for name in names(assets_root) {
         let file = format!("impostors/{name}.timp");
-        let mut per = [None; 3];
-        for platform in [Platform::Pc, Platform::N64, Platform::N3ds] {
+        let mut per = [None; 4];
+        // The Web's: its own override, else the PC's atlas (`resolve_source`).
+        for platform in Platform::ALL {
             per[platform.target().index()] = crate::resolve_source(assets_root, platform, &file)
                 .ok()
                 .and_then(|p| std::fs::read(p).ok())

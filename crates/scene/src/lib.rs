@@ -48,14 +48,18 @@ pub use resolve::{DrawItem, LodDraw, LodItem, Resolved, resolve, resolve_for};
 use serde::{Deserialize, Serialize};
 use trino_core::SpriteId;
 
-/// v3: per-platform variants (`platforms`, see [`platform`]). v2 added 3D
-/// transforms (degrees), nested children, models, prefab instances and the
-/// environment. v1 (2D-only, flat) and v2 are migrated on load.
+/// v4: the Web (issue #47) as a fourth platform: a `web` variant and a
+/// `web` LOD start, which follow the PC's when unset. v3 added per-platform
+/// variants (`platforms`, see [`platform`]); v2 added 3D transforms
+/// (degrees), nested children, models, prefab instances and the
+/// environment. v1 (2D-only, flat), v2 and v3 are migrated on load.
 ///
-/// v3 only adds a field, but it changes what a scene *means* per target:
-/// an engine that ignored `platforms` would ship the PC model to a console
-/// without a word. The bump makes such an engine refuse the file instead.
-pub const SCENE_VERSION: u32 = 3;
+/// v3 and v4 only add fields, but they change what a scene *means* per
+/// target: an engine that ignored `platforms` would ship the PC model to a
+/// console without a word, and one that ignored `web` would drop the Web's
+/// own choices when it saves. The bump makes such an engine refuse the file
+/// instead.
+pub const SCENE_VERSION: u32 = 4;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Scene {
@@ -470,7 +474,9 @@ pub enum LodAt {
     Never,
 }
 
-/// Per-platform [`LodAt`]s of a level (`None` = the level's `distance`).
+/// Per-platform [`LodAt`]s of a level (`None` = the level's `distance`;
+/// the Web takes the PC's when it has none, like
+/// [`PlatformVariants::get`]).
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 pub struct LodPlatforms {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -479,11 +485,13 @@ pub struct LodPlatforms {
     pub n64: Option<LodAt>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub n3ds: Option<LodAt>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub web: Option<LodAt>,
 }
 
 impl LodPlatforms {
     pub fn is_empty(&self) -> bool {
-        self.pc.is_none() && self.n64.is_none() && self.n3ds.is_none()
+        self.pc.is_none() && self.n64.is_none() && self.n3ds.is_none() && self.web.is_none()
     }
 
     pub fn get(&self, target: Target) -> Option<&LodAt> {
@@ -491,6 +499,7 @@ impl LodPlatforms {
             Target::Pc => self.pc.as_ref(),
             Target::N64 => self.n64.as_ref(),
             Target::N3ds => self.n3ds.as_ref(),
+            Target::Web => self.web.as_ref().or(self.pc.as_ref()),
         }
     }
 
@@ -499,6 +508,7 @@ impl LodPlatforms {
             Target::Pc => &mut self.pc,
             Target::N64 => &mut self.n64,
             Target::N3ds => &mut self.n3ds,
+            Target::Web => &mut self.web,
         }
     }
 }
@@ -644,10 +654,11 @@ impl Scene {
             ron::from_str(text).map_err(|e| format!("scene parse error: {e}"))?;
         match versioned.version {
             SCENE_VERSION => ron::from_str(text).map_err(|e| format!("scene parse error: {e}")),
-            // v2 is v3 without variants: same fields, defaults fill the rest.
-            2 => {
-                let mut scene: Scene =
-                    ron::from_str(text).map_err(|e| format!("scene parse error (v2 file): {e}"))?;
+            // v3 is v4 without the Web, v2 is v3 without variants: same
+            // fields, defaults fill the rest.
+            2 | 3 => {
+                let mut scene: Scene = ron::from_str(text)
+                    .map_err(|e| format!("scene parse error (v{} file): {e}", versioned.version))?;
                 scene.version = SCENE_VERSION;
                 Ok(scene)
             }

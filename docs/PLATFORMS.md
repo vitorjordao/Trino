@@ -21,7 +21,7 @@ Run modes and switches for `trino-app-pc`:
 
 | Variable | Effect |
 |---|---|
-| `TRINO_SIM=native\|n64\|3ds` | Console simulation profile (default `n64`): internal resolution, filtering, color depth, the 3DS's two screens |
+| `TRINO_SIM=native\|n64\|3ds\|web` | Console simulation profile (default `n64`): internal resolution, filtering, color depth, the 3DS's two screens; `web` is the native picture with the browser's budget (`Caps::WEB`) |
 | `TRINO_LOOK=off\|n64` | Turns the N64 output emulation off or on, independently of the profile |
 | `TRINO_STRICT=1` | Strict mode: panic when content exceeds the profile's `Caps` |
 | `TRINO_SCENE=scenes/x.scene.ron` | Play an editor scene instead of the game; it reloads when the scene, its prefabs or materials change |
@@ -111,6 +111,92 @@ Things to know:
   through the shim's citro3d path.
 - Troubleshooting: the [build-3ds](../.agents/skills/build-3ds/SKILL.md) and
   [run-emulator](../.agents/skills/run-emulator/SKILL.md) skills.
+
+## Web (WebGPU / WebGL2)
+
+A Trino game in a browser tab, from one `wasm32-unknown-unknown` build ([ADR
+0019](adr/0019-web-target.md), issue #47). It runs the PC's own renderer
+(`crates/render-wgpu`, shared by `trino-platform-pc` and `trino-platform-web`): the same
+shaders, the GPU T&L path, per-pixel lights, SSAO and water.
+
+**Toolchain:** Rust's `wasm32-unknown-unknown` target (`rustup target add
+wasm32-unknown-unknown`, added for you when missing) and the `wasm-bindgen` CLI at the
+exact version of the `wasm-bindgen` crate in `Cargo.lock` (installed into `target/tools`
+the first time, or `$TRINO_WASM_BINDGEN`). `cargo xtask test web` also needs Node.js: it
+drives the browsers with Playwright (`tools/web-test`, `npm ci` and `npx playwright
+install` run for you).
+
+```sh
+cargo xtask build web [--release]       # target/web/{index.html, trino.js, trino.wasm, assets/, basis/}
+cargo xtask run web [--port 8080]       # build, serve on 127.0.0.1, open the browser
+cargo xtask run web --query "?game=solid-eleven"
+cargo xtask build web --release --out dist/web   # a folder to upload (itch.io, GitHub Pages)
+cargo xtask test web                    # the self-test in Chromium (WebGL2 + WebGPU), Firefox, WebKit
+cargo xtask test web --browsers chromium --headed --no-build
+cargo xtask test web --bless            # rewrite tests/golden/web/ (review the PNGs)
+```
+
+The page picks the game and the look by its URL:
+
+| Query | Effect |
+|---|---|
+| `?game=castle64\|showcase\|solid-eleven` | The game (castle64 by default); Solid Eleven loads its own pack |
+| `?backend=auto\|webgpu\|webgl2` | WebGPU where the browser gives an adapter, else WebGL2 (`auto`), or one of them |
+| `?sim=web\|native\|n64\|3ds` | The profile (default `web`); the console looks run in a browser too |
+| `?scale=N` | Integer pixel scale of the picture (default auto: about 300 lines) |
+| `?size=WxH` | A fixed canvas in CSS pixels (tests, screenshots); otherwise it fills the page |
+| `?msaa=0` | No 4× MSAA (WebGL2 never has it: it can't sample a multisampled depth) |
+| `?frames=N` | Stop after N frames and print a `TRINO_FRAME:` line (smoke runs) |
+| `?selftest` | The browser self-test (below) |
+| `?log` | A log panel under the canvas |
+
+What a browser changes:
+
+- **Audio** starts suspended (every browser's autoplay rule, Safari's strictest). The
+  first click, key or touch resumes it; a banner says so until then. A browser without
+  Web Audio runs silent, with voices and stingers still keeping time.
+- **Input:** the keyboard by `KeyboardEvent.code` (layout-independent) with the PC's
+  bindings; game keys (arrows, Space, Tab, WASD, the bound keys) don't scroll the page,
+  Ctrl/Cmd shortcuts stay the browser's. The mouse is `InputState::pointer`; **Lock
+  mouse** (or `canvas.requestPointerLock()`) moves a virtual pointer by the mouse's deltas
+  for 3D navigation. Touch is the pointer and its primary button. Gamepads in the W3C
+  standard mapping act like the PC's (A/B/X/Y, LB+LT = L, RB+RT = R, sticks, analog
+  triggers).
+- **The canvas** follows its element through a `ResizeObserver`, in device pixels
+  (`devicePixelContentBoxSize`, or the CSS size × `devicePixelRatio` on Safari), so Retina
+  screens stay sharp; the picture is the native profile's (the output over the pixel
+  scale). **Fullscreen** is the toolbar's button (or `Platform::set_display`).
+- **Saves** go to `localStorage` (`trino-save:<game>`, base64, at most
+  `Caps::WEB.save_bytes` = 1 MiB). A private window without storage reports
+  `save_capacity() == 0`.
+- **Assets** come in one pack per game (`assets/trino.pak`, `assets/solid-eleven.pak`),
+  fetched at boot. Textures are KTX2 (Basis Universal), transcoded at load to BC on
+  desktops, ETC2 or ASTC on phones, RGBA8 elsewhere; sounds are 16-bit PCM (Opus is #53).
+- **WebGL2's limits:** no MSAA, and wgpu's GL backend can't copy or `textureLoad` a
+  depth texture, so the SSAO and the water read the depth through a nearest sampler and
+  the water's depth copy is drawn (`renderer/depth_blit.rs`). The picture is the same:
+  `tests/golden/web/` holds every browser and the PC to it.
+- **No threads:** the parallel CPU T&L runs on one worker (wasm without
+  `SharedArrayBuffer`); the GPU T&L path takes most draws anyway.
+
+`test web` serves the build and drives `?selftest` in each browser: the engine checks
+(blobs, a save to `localStorage`, every renderer step), audio and idle input, the KTX2
+transcode (both Basis modes decode exactly as the bake's native transcoder did), the
+showcase demo and its baked scene, castle64's settle/walk/jump and the bot's whole Green
+Hills run, Solid Eleven's scripted match (its sim hash must equal the PC's and the
+consoles'), then three golden frames read back at 640×480 and compared with
+`tests/golden/web/` (mean ≤ 3/255, ≤ 2 % far pixels). After the self-test it reloads the
+page (the save is still there), clicks (audio unlocks) and presses keys (they reach the
+game). A browser without WebGPU here reports its WebGPU run as skipped; the WebGL2 runs
+cover it. `xtask/tests/web_parity.rs` holds the PC renderer to the same goldens.
+
+The pixel probes of the engine checks need a synchronous read-back, which no browser
+gives (WebGPU maps buffers between frames; WebGL2's fences only move between tasks), so
+in a browser they report `skipped (no read_pixel)` and the golden frames, read back
+asynchronously, hold the picture. The same probes run on the PC renderer in
+`xtask/tests/engine_checks.rs`.
+
+Troubleshooting: the [build-web](../.agents/skills/build-web/SKILL.md) skill.
 
 ## External projects
 

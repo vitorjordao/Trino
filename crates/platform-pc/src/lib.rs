@@ -1,6 +1,7 @@
 //! # trino-platform-pc
 //!
-//! The PC backend: implements `trino_core`'s `Renderer` (wgpu), `Audio`
+//! The PC backend: implements `trino_core`'s `Renderer` (wgpu, through the
+//! renderer `trino-render-wgpu` shares with the Web backend), `Audio`
 //! (cpal), `Input` (keyboard via winit keycodes) and `Platform` (clock,
 //! blobs, save file).
 //!
@@ -11,12 +12,13 @@
 //! (which read the offscreen target back instead of presenting it).
 
 pub mod audio;
-pub mod frame_report;
 pub mod input;
-pub mod renderer;
-pub mod sim;
 pub mod system;
 pub mod tnl_oracle;
+
+/// The wgpu renderer (`trino-render-wgpu`), at its historical paths:
+/// `trino_platform_pc::renderer::…` and `trino_platform_pc::sim::…`.
+pub use trino_render_wgpu::{frame_report, renderer, sim};
 
 pub use audio::PcAudio;
 pub use frame_report::FrameMeter;

@@ -100,10 +100,12 @@ cargo xtask editor                                           # the editor's laun
 | `[pc]` | `package` (desktop host crate; optional, default `<name>-pc`) |
 | `[n64]` | `package` (staticlib crate); `save` (`eeprom16k` = 2 KB: framing leaves 2040 B). Needed only when n64 is targeted |
 | `[3ds]` | `package`, `bin`, `icon` (a 48×48 PNG). Needed only when 3ds is targeted |
+| `[web]` | `package` (the wasm host crate, default `<name>-web`), `canvas_id`, `page_title`; all optional |
 | `[test]` | `n64_goldens`/`n3ds_goldens` (frames the self-test dumps, in order); `n64_max_frame_us` (gate on `TRINO_FRAME` averages); `watch` dirs |
 
-- **Target platforms:** `platforms = ["pc", "n64", "3ds"]` under `[project]`
-  (missing = all three, the old behavior).
+- **Target platforms:** `platforms = ["pc", "n64", "3ds", "web"]` under `[project]`
+  (missing = pc, n64 and 3ds, the old behavior: the Web needs a host crate, so it is listed
+  by name; new projects list it).
   - Each platform command checks it: `cargo trino build n64` on a project without
     `"n64"` fails, and the message names the field and the file.
   - `build all`, `assets all` and `test all` skip the left-out platforms and print
@@ -145,3 +147,18 @@ cargo xtask editor                                           # the editor's laun
   is the only guard.
 - **Template AGENTS.md files:** they are what a fresh agent reads in a new project.
   Keep their commands in sync with this skill.
+
+## The Web host (`web/`, issue #47)
+
+- New projects have a `web/` crate: a `cdylib` whose `start` calls
+  `trino_platform_web::run_game(WebConfig::new(name, &query), "assets/trino.pak", ctor)`
+  — the Web twin of `trino-runner-pc`. It builds empty off wasm32, so `cargo check` of
+  the workspace stays host-only.
+- `cargo trino build web [--release] [--out dist/web]`, `run web`, `test web` (a smoke
+  run, `?frames=120`, in each browser: the engine's goldens don't apply to a project).
+  The wasm-bindgen CLI follows the project's `Cargo.lock` (copied from the engine's at
+  scaffold time).
+- Older projects add it by hand: copy `templates/standalone/web/` (render the
+  `{{...}}` placeholders), add `"web"` to the workspace members, `wasm-bindgen = "0.2"`
+  and `trino-platform-web` (path or git, like the other engine crates) to
+  `[workspace.dependencies]`, and `"web"` to `[project] platforms`.

@@ -1,19 +1,25 @@
 # Console packaging for {{name}} (read by the engine's xtask:
-# `cargo trino build|run|test n64|3ds`).
+# `cargo trino build|run|test n64|3ds|web`).
 [project]
 name = "{{name}}"
 title = "{{name}}"
 description = "A Trino game"
 author = ""
-# The platforms this project ships on (default: all three). Batch commands
+# The platforms this project ships on (without the line: pc, n64 and 3ds). Batch commands
 # (`cargo trino build all`, `assets all`, `test all`) skip the others, and
 # naming one (`cargo trino build n64`) fails. Remove a console here and its
 # section below may go too.
-# platforms = ["pc", "n64", "3ds"]
+platforms = ["pc", "n64", "3ds", "web"]
 
 # The desktop host crate (`cargo trino build|run pc`); default "<name>-pc".
 # [pc]
 # package = "{{name}}-pc"
+
+# The browser build (`cargo trino build|run|test web`): every key optional.
+# [web]
+# package = "{{name}}-web"   # the wasm host crate (default <name>-web)
+# canvas_id = "trino-canvas"
+# page_title = "{{name}}"
 
 [n64]
 package = "{{name}}-n64"

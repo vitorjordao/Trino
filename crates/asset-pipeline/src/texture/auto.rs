@@ -14,7 +14,7 @@
 //!   losslessly (mksprite's quantizer), a BCn texture whose sides are not
 //!   multiples of 4. `auto` never picks those.
 
-use super::{BcFormat, N3dsFormat, N64Format, n64, psnr};
+use super::{BcFormat, Ktx2Mode, N3dsFormat, N64Format, ktx2, n64, psnr};
 use crate::Platform;
 
 /// A texture's quality preset (`quality = "high"` in the manifest).
@@ -155,6 +155,8 @@ pub fn formats(platform: Platform) -> Vec<&'static str> {
             v.sort_by_key(|f| f.bits_per_texel());
             v.into_iter().map(|f| f.name()).collect()
         }
+        // Smallest download first.
+        Platform::Web => vec!["KTX2-ETC1S", "KTX2-UASTC", "RGBA8"],
     }
 }
 
@@ -196,6 +198,25 @@ pub fn measure(
             let f = N3dsFormat::parse(format).ok_or_else(unknown)?;
             c.bytes = f.texture_bytes(width, height);
             c.psnr = Some(psnr(rgba, &f.preview(width, height, rgba)));
+        }
+        // The Web's bytes are the download (the `.ktx2` file, or the raw
+        // texels); its VRAM is `Ktx2Mode::gpu_bytes` (`texture::report`).
+        Platform::Web if format == "RGBA8" => {
+            c.bytes = width as u64 * height as u64 * 4;
+            c.psnr = Some(f64::INFINITY);
+        }
+        Platform::Web => {
+            let mode = Ktx2Mode::parse(format).ok_or_else(unknown)?;
+            if BcFormat::fits(width, height) {
+                let e = ktx2::encode_cached(mode, width, height, rgba)?;
+                c.bytes = e.ktx2.len() as u64;
+                c.psnr = Some(psnr(rgba, &e.decoded));
+            } else {
+                c.bytes = mode.gpu_bytes(width, height, true);
+                c.note = Some(format!(
+                    "{width}x{height} is not whole 4x4 blocks: the GPU formats KTX2 transcodes to need sides that are multiples of 4"
+                ));
+            }
         }
         Platform::N64 => {
             let f = N64Format::parse(format).ok_or_else(unknown)?;
@@ -279,7 +300,7 @@ pub fn choose(
             ));
         }
         let c = measure(platform, source, &requested, width, height, rgba)?;
-        if let (Platform::Pc, Some(note)) = (platform, &c.note) {
+        if let (Platform::Pc | Platform::Web, Some(note)) = (platform, &c.note) {
             return Err(format!("`{logical}`: {requested}: {note}"));
         }
         if let (Some(min), Some(got)) = (settings.min_psnr, c.psnr)

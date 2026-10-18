@@ -29,8 +29,15 @@ cargo test --workspace
 | `xtask/tests/feature_matrix.rs` | a `docs/TESTING.md` test reference is stale, or a trait method / TMDL section / asset kind / xtask command has no row | add the row with its test (or `n/a: <reason>` when no host test can exist) |
 | `xtask/tests/standalone.rs` | `cargo xtask new --standalone` output no longer builds/tests (windowed smoke with GPU + display) | fix `templates/standalone/` or `trino-runner-pc` |
 | `crates/editor/src/ui_tests.rs` (`#[ignore]`: `cargo test -p trino-editor ui_tests -- --ignored --test-threads=1`, own CI step) | an editor panel flow broke (select → palette → duplicate → undo) | fix the UI; hand-painted widgets need `widget_info` |
+| `xtask/tests/web_parity.rs` | the PC renderer drifted from the browser goldens (`tests/golden/web/`) | find what changed the picture; re-bless with `cargo xtask test web --bless` only on purpose |
 
 GPU-dependent tests skip without an adapter unless `TRINO_REQUIRE_GPU=1`.
+
+**The Web (issue #47)** builds for another target, which the workspace commands never
+compile: `cargo clippy -p trino-render-wgpu -p trino-platform-web -p trino-app-web --target
+wasm32-unknown-unknown -- -D warnings`, then `cargo xtask test web` (`build-web` skill). A
+renderer change also runs `cargo test -p trino-render-wgpu webgl2` (the WebGL2 shaders
+through naga's GLSL ES backend).
 
 **No `libasound2-dev` on the host** (`alsa-sys` panics: "Package alsa was not found"):
 its bindings are bundled, so a scratch `alsa.pc` is enough. Write `Name: alsa`,

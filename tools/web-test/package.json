@@ -1,0 +1,10 @@
+{
+  "name": "trino-web-test",
+  "private": true,
+  "description": "The Web target's browser harness (cargo xtask test web): drives the self-test in Chromium, Firefox and WebKit with Playwright.",
+  "type": "module",
+  "license": "MIT OR Apache-2.0",
+  "dependencies": {
+    "playwright": "1.63.0"
+  }
+}

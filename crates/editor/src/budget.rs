@@ -168,13 +168,14 @@ pub fn use_rsp_split(rows: &mut [Row], n64: &trino_scene::budget::FrameBudget) {
 /// The Game view's per-platform lines for the scene camera's frame: the
 /// N64 time (CPU vs RSP), how many draws take the RSP and the most common
 /// reason the rest don't, the 3DS triangles and GPU split, the PC native
-/// profile's GPU T&L split (issue #51), and draws sent for nothing. Each
+/// profile's GPU T&L split (issue #51), the Web's calls (issue #47), and
+/// draws sent for nothing. Each
 /// with its level (the N64 time against a 30 fps frame).
 pub fn platform_lines(
-    budgets: &[trino_scene::budget::FrameBudget; 3],
+    budgets: &[trino_scene::budget::FrameBudget; 4],
     tmem: &dyn Fn(trino_core::SpriteId) -> Option<u32>,
 ) -> Vec<(String, Level)> {
-    let [n64, n3ds, pc] = budgets;
+    let [n64, n3ds, pc, web] = budgets;
     let pct = n64.n64_frame_percent();
     let level = if pct > 100.0 {
         Level::Over
@@ -208,6 +209,12 @@ pub fn platform_lines(
     }
     out.push((gpu, Level::Ok));
     out.push((trino_scene::budget::pc_gpu_line(pc), Level::Ok));
+    // The Web (issue #47): what a browser's GPU API is asked for, and a
+    // warning past a phone's budget.
+    out.push((trino_scene::budget::web_line(web), Level::Ok));
+    for w in trino_scene::budget::web_warnings(web) {
+        out.push((w, Level::Near));
+    }
     let wasted = n64.wasted.len().max(n3ds.wasted.len());
     if wasted > 0 {
         out.push((format!("{wasted} draws sent but unseen"), Level::Near));
@@ -222,6 +229,29 @@ pub fn platform_lines(
         out.push((line, level));
     }
     out
+}
+
+/// The Game view's measured Web line (issue #47): what its renderer just
+/// drew — GPU draw calls and pipeline changes, the calls a browser pays
+/// for in JavaScript — and the GPU memory of its textures and resident
+/// meshes (the Web's textures are KTX2 transcoded; this is the PC's view of
+/// the same project). The estimate from the scene camera is `web_line`.
+pub fn web_measured_line(
+    times: &trino_platform_pc::PcFrameTimes,
+    textures: u64,
+    meshes: u64,
+) -> String {
+    format!(
+        "Web drawn {} calls · {} {} · {} VRAM",
+        times.draw_calls,
+        times.pipeline_switches,
+        if times.pipeline_switches == 1 {
+            "switch"
+        } else {
+            "switches"
+        },
+        crate::textures::bytes(textures + meshes)
+    )
 }
 
 /// The Game view budget panel's width for its widest text line (`widest`
@@ -239,6 +269,19 @@ pub const HUD_MIN_WIDTH: f32 = 210.0;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_web_line_reads_the_renderers_counters() {
+        let times = trino_platform_pc::PcFrameTimes {
+            draw_calls: 42,
+            pipeline_switches: 7,
+            ..Default::default()
+        };
+        assert_eq!(
+            super::web_measured_line(&times, 1536 * 1024, 512 * 1024),
+            "Web drawn 42 calls · 7 switches · 2.0 MB VRAM"
+        );
+    }
+
     #[test]
     fn the_hud_grows_to_its_longest_line_within_the_view() {
         use super::{HUD_MIN_WIDTH, hud_width};
@@ -283,13 +326,39 @@ mod tests {
             target: Target::Pc,
             ..Default::default()
         };
-        let lines = platform_lines(&[n64.clone(), n3ds, pc.clone()], &|_| None);
+        let web = FrameBudget {
+            target: Target::Web,
+            web: trino_scene::budget::WebCalls {
+                calls: 4,
+                pipelines: 2,
+                switches: 3,
+            },
+            ..pc.clone()
+        };
+        let lines = platform_lines(&[n64.clone(), n3ds, pc.clone(), web.clone()], &|_| None);
         let text: Vec<&str> = lines.iter().map(|(t, _)| t.as_str()).collect();
         assert!(text[0].starts_with("N64 ≈"), "{text:?}");
         assert_eq!(text[1], "RSP 2/5 draws · 2 fog needing splits");
         assert_eq!(text[2], "3DS 2 tris · GPU 4/5 draws · 1 flat shading");
         assert_eq!(text[3], "PC GPU 3/5 draws · 240 tris · 1 translucent");
-        assert_eq!(lines[4], ("1 draws sent but unseen".into(), Level::Near));
+        assert_eq!(text[4], "Web 4 calls · 2 pipelines · 3 switches");
+        assert_eq!(lines[5], ("1 draws sent but unseen".into(), Level::Near));
+        // Past a phone's budget the Web warns.
+        let busy = FrameBudget {
+            web: trino_scene::budget::WebCalls {
+                calls: 999,
+                pipelines: 4,
+                switches: 998,
+            },
+            ..web.clone()
+        };
+        let warned = platform_lines(&[n64.clone(), n64.clone(), pc.clone(), busy], &|_| None);
+        assert!(
+            warned
+                .iter()
+                .any(|(t, l)| t.contains("CPU-bound on mobile") && *l == Level::Near),
+            "{warned:?}"
+        );
         // A light frame is green; one past 33.3 ms is red.
         assert_eq!(lines[0].1, Level::Ok);
         let heavy = FrameBudget {
@@ -297,7 +366,7 @@ mod tests {
             ..n64.clone()
         };
         assert_eq!(
-            platform_lines(&[heavy, n64.clone(), pc.clone()], &|_| None)[0].1,
+            platform_lines(&[heavy, n64.clone(), pc.clone(), web], &|_| None)[0].1,
             Level::Over
         );
         // The HUD's N64 time row takes the CPU/RSP split.
@@ -317,8 +386,12 @@ mod tests {
             ..n64.clone()
         };
         assert_eq!(
-            platform_lines(&[clean.clone(), clean.clone(), clean], &|_| None).len(),
-            4
+            platform_lines(
+                &[clean.clone(), clean.clone(), clean.clone(), clean],
+                &|_| None
+            )
+            .len(),
+            5
         );
     }
 

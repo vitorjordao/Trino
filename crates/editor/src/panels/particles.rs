@@ -69,6 +69,7 @@ fn profile_of(p: Platform) -> SimProfile {
         Platform::Pc => SimProfile::Native,
         Platform::N64 => SimProfile::N64,
         Platform::N3ds => SimProfile::N3ds,
+        Platform::Web => SimProfile::Web,
     }
 }
 

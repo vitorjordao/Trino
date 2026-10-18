@@ -95,7 +95,7 @@ impl FbCapture {
     }
 }
 
-fn write_png(path: &Path, w: u32, h: u32, rgba: &[u8]) -> Result<(), String> {
+pub fn write_png(path: &Path, w: u32, h: u32, rgba: &[u8]) -> Result<(), String> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
@@ -107,7 +107,7 @@ fn write_png(path: &Path, w: u32, h: u32, rgba: &[u8]) -> Result<(), String> {
     writer.write_image_data(rgba).map_err(|e| e.to_string())
 }
 
-fn read_png(path: &Path) -> Result<(u32, u32, Vec<u8>), String> {
+pub fn read_png(path: &Path) -> Result<(u32, u32, Vec<u8>), String> {
     let file = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut dec = png::Decoder::new(std::io::BufReader::new(file));
     dec.set_transformations(png::Transformations::EXPAND);

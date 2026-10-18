@@ -15,6 +15,7 @@ description: Understand, change, debug or locally replicate Trino's GitHub Actio
 | `n64` | ubuntu-24.04 | builds the ROM in `trino-n64`, then runs `test n64` in the `trino-ares` image (self-test, the pixel-exact golden, and the perf gates: T&L counters equal `tests/perf/castle64_work.toml`, emulated times under `tests/perf/castle64_n64.toml`). On failure it uploads `tests/golden/n64/actual/` |
 | `n3ds` | `devkitpro/devkitarm` container | builds the `.3dsx`, then `build 3ds --selftest`, and uploads the result as an artifact |
 | `n3ds-emulator` | ubuntu-24.04 | downloads that artifact, runs `emulators setup azahar`, then `xvfb-run … test 3ds --no-build` (self-test + the castle64 hub golden within a tolerance; on failure uploads `tests/golden/3ds/actual/` as `n3ds-golden-actual`) |
+| `web` | ubuntu-24.04 | wasm32 clippy of the Web crates, `build web --release` once, then `test web --no-build`: the browser self-test in Chromium (WebGL2, and WebGPU on SwiftShader's Vulkan), Firefox and WebKit through Playwright, each against `tests/golden/web/` (and a save surviving a reload, audio unlocking on a click, keys reaching the game); then a scaffolded castle64 project built for the Web and smoke-run in Chromium. Uploads `target/web-test/` (every run's console log and frames) and `tests/golden/web/actual/` |
 
 The `n64` job also scaffolds the football template (`ci-football`) and runs
 `test n64 --project` on it, using the template's own goldens and frame gate. The `n3ds`
@@ -32,6 +33,13 @@ generated changelog is appended). Merging a version bump into main *is* the rele
 write the notes file in the same PR.
 
 ## Why it is shaped like this
+
+- **The Web is one job, not a browser matrix** (issue #47): the wasm build and the cargo
+  cache are shared, the page is served once, and one Playwright process opens each
+  browser in turn. A browser that gives no WebGPU adapter on the runner reports that run
+  skipped; WebGL2 covers it. Replicate it with `cargo xtask build web --release && cargo
+  xtask test web --no-build` (Windows and macOS run it too: there WebGPU and Firefox use
+  the real GPU).
 
 - **3DS: build and boot are separate jobs.** The devkitARM image is Debian, and its
   glibc is too old for the Azahar AppImage. Keep `build 3ds --selftest` and

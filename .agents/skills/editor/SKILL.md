@@ -76,10 +76,11 @@ TRINO_EDITOR_SCREENSHOT=target/launcher.png TRINO_EDITOR_SCREENSHOT_FRAME=10 car
 | `TRINO_EDITOR_PALETTE=<query>` | open the command palette (Ctrl+K) with that query |
 | `TRINO_EDITOR_PLAY=here` | start **Play here** on the first frame: the scene runs inside the Game view (CI smoke) |
 | `TRINO_EDITOR_ECHO_LOG=1` | mirror the Console to stderr (see reloads, errors, saves) |
-| `TRINO_EDITOR_GAME=pc\|n64\|3ds` | the Game view's profile (default n64) — screenshots of each platform's variant |
+| `TRINO_EDITOR_GAME=pc\|n64\|3ds\|web` | the Game view's profile (default n64) — screenshots of each platform's variant |
+| `TRINO_EDITOR_WEB_CANVAS=responsive\|720\|1080` | the Game view's browser canvas on the Web profile (the picture is the canvas over the auto pixel scale) |
 | `TRINO_EDITOR_SIZE=960x600` | window size (default 1600x940; never below the 960x600 minimum) — screenshot small windows |
 | `TRINO_EDITOR_INSPECT=platforms\|lod\|impostor\|budget\|ao` | the Inspector opens that section and scrolls to it (`budget`: the scene settings' platform budget, with nothing selected; `ao`: the scene's Ambient Occlusion, or a model's baked AO with `TRINO_EDITOR_OPEN=model:<logical>`) |
-| `TRINO_EDITOR_TEXTURE=sprites/x\|fonts/x[@pc\|n64\|3ds[,zoom]]` | open the texture inspector on that sprite or font, its preview tab on that platform at that zoom (1–8); with `TRINO_EDITOR_INSPECT=texture` its formats scroll into view |
+| `TRINO_EDITOR_TEXTURE=sprites/x\|fonts/x[@pc\|n64\|3ds\|web[,zoom]]` | open the texture inspector on that sprite or font, its preview tab on that platform at that zoom (1–8); with `TRINO_EDITOR_INSPECT=texture` its formats scroll into view |
 | `TRINO_EDITOR_AO=game\|on\|off\|mask` | the Scene view's ambient occlusion mode (as the scene sets it, forced on, off, the occlusion alone) |
 | `TRINO_EDITOR_RIPPLE=1` | keep a ripple ringing on the selected entity's water surface: one drops once the scene resolved, and another whenever it has faded (the inspector's "Drop a ripple"; screenshots of ripple rings) |
 | `TRINO_EDITOR_LOD_PREVIEW=<m>` | preview the selected entity's LOD at that distance (both views) |
@@ -216,6 +217,26 @@ Live-edit check: start the editor with `TRINO_EDITOR_ECHO_LOG=1` in the backgrou
   covers (the grid's "Memory"); clicking the combo again can land on the list's first
   item. Budget line queries need exact prefixes (`"3DS {tris} tris"`), since the
   texture line also starts with "3DS".
+
+## The Web (issue #47, ADR 0019)
+
+- Game view › **Web**: `SimProfile::Web` (the native picture, `Caps::WEB`), a canvas
+  combo (`WebCanvas`: responsive = the panel itself, 1280×720, 1920×1080) whose picture is
+  what a browser renders (`sim::native_internal`). Its HUD starts with what the view just
+  drew (`budget::web_measured_line`: calls, pipeline switches, VRAM), then the scene
+  estimate's `Web … calls · … pipelines · … switches` and the phone warnings. HUD text is
+  painted, not accessible: kittest checks the Inspector's platform budget instead.
+- Web columns: Inspector › Platforms (four columns from 330 px, stacked below; the Web
+  column starts from the PC's variant, an empty Web variant beside a PC one means "as
+  written"), the LOD panel (`=PC` when the Web follows the PC's start), the texture
+  inspector, a fourth Render path pill. Counting variants uses `PlatformVariants::own`,
+  not `get` (which falls back to the PC for the Web).
+- Play menu and palette: **Run in Browser** (`Cmd::RunInBrowser`, `cargo xtask run web`,
+  held in `play` so Stop ends the server) and **Export Web Package** (`Cmd::ExportWeb`,
+  `build web --release --out dist/web`, a toast when it ends). `App::web_command` builds
+  both command lines (the engine's xtask by manifest path, `--project` outside the engine).
+- The Inspector grew with the Web: a kittest click on a section header below the fold
+  must use `click` (it scrolls into view), not `get_by_label(..).click()`.
 
 ## Rules when changing the editor
 

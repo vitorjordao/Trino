@@ -20,7 +20,7 @@
 //! title = "My Game"         # ROM header (≤ 20 ASCII chars) + 3DS menu
 //! description = "A console game"
 //! author = "Studio"
-//! platforms = ["pc", "n64", "3ds"]   # optional; missing = all three
+//! platforms = ["pc", "n64", "3ds", "web"]  # optional; missing = pc, n64, 3ds
 //!
 //! [pc]
 //! package = "my-game-pc"  # desktop host crate (optional; default <name>-pc)
@@ -33,6 +33,11 @@
 //! package = "my-game-3ds" # bin crate (cargo -p)
 //! bin = "my-game-3ds"     # the ELF's name
 //! icon = "assets/platform/3ds/icon.png"   # 48x48 PNG (optional)
+//!
+//! [web]                   # optional, every field too (issue #47)
+//! package = "my-game-web" # cdylib host crate (default <name>-web)
+//! canvas_id = "trino-canvas"
+//! page_title = "My Game"  # the page's <title> (default: title)
 //!
 //! [test]
 //! n64_goldens = ["level"]         # TRINO_FB dumps compared in order
@@ -56,11 +61,18 @@ pub enum Target {
     Pc,
     N64,
     N3ds,
+    /// A web browser (issue #47): `build|run|test web`.
+    Web,
 }
 
 impl Target {
     /// Every platform, in the order batch commands visit them.
-    pub const ALL: [Target; 3] = [Target::Pc, Target::N64, Target::N3ds];
+    pub const ALL: [Target; 4] = [Target::Pc, Target::N64, Target::N3ds, Target::Web];
+
+    /// What a `trino.toml` without `platforms` targets: the three a project
+    /// targeted before the Web existed (the Web needs a `web` host crate,
+    /// so it is opted into by name).
+    pub const DEFAULT: [Target; 3] = [Target::Pc, Target::N64, Target::N3ds];
 
     /// The spelling `trino.toml` and the command line use.
     pub fn key(self) -> &'static str {
@@ -68,15 +80,17 @@ impl Target {
             Target::Pc => "pc",
             Target::N64 => "n64",
             Target::N3ds => "3ds",
+            Target::Web => "web",
         }
     }
 
-    /// `pc`, `n64`, `3ds` (and the command line's `n3ds` alias).
+    /// `pc`, `n64`, `3ds`, `web` (and the command line's `n3ds` alias).
     pub fn parse(s: &str) -> Option<Target> {
         match s {
             "pc" => Some(Target::Pc),
             "n64" => Some(Target::N64),
             "3ds" | "n3ds" => Some(Target::N3ds),
+            "web" => Some(Target::Web),
             _ => None,
         }
     }
@@ -107,6 +121,11 @@ pub struct Project {
     pub n3ds_package: String,
     pub n3ds_bin: String,
     pub n3ds_icon: Option<PathBuf>,
+    /// The Web host crate (`[web] package`, default `<name>-web`), the
+    /// page's canvas id and title (`[web] canvas_id`, `page_title`).
+    pub web_package: String,
+    pub web_canvas_id: String,
+    pub web_title: String,
     pub test: TestConfig,
     pub watch: Vec<String>,
     /// Rust toolchain for the console builds (`cargo +<nightly>`):
@@ -159,6 +178,8 @@ struct File {
     #[serde(default, rename = "3ds")]
     n3ds: Option<N3dsSection>,
     #[serde(default)]
+    web: Option<WebSection>,
+    #[serde(default)]
     test: TestConfig,
     #[serde(default)]
     toolchain: ToolchainSection,
@@ -201,6 +222,21 @@ struct N3dsSection {
     icon: Option<String>,
 }
 
+/// `[web]`: every field optional.
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct WebSection {
+    #[serde(default)]
+    package: Option<String>,
+    #[serde(default)]
+    canvas_id: Option<String>,
+    #[serde(default)]
+    page_title: Option<String>,
+}
+
+/// The page's canvas id unless `[web] canvas_id` says otherwise.
+pub const DEFAULT_CANVAS_ID: &str = "trino-canvas";
+
 fn default_save() -> String {
     "eeprom16k".into()
 }
@@ -209,7 +245,7 @@ fn default_save() -> String {
 /// one, returned deduplicated in [`Target::ALL`] order.
 fn parse_platforms(list: Option<&[String]>) -> Result<Vec<Target>, String> {
     let Some(list) = list else {
-        return Ok(Target::ALL.to_vec());
+        return Ok(Target::DEFAULT.to_vec());
     };
     let mut out = Vec::new();
     for name in list {
@@ -218,7 +254,7 @@ fn parse_platforms(list: Option<&[String]>) -> Result<Vec<Target>, String> {
             .filter(|_| name != "n3ds")
             .ok_or_else(|| {
                 format!(
-                    "[project] platforms: unknown platform `{name}` (use \"pc\", \"n64\", \"3ds\")"
+                    "[project] platforms: unknown platform `{name}` (use \"pc\", \"n64\", \"3ds\", \"web\")"
                 )
             })?;
         if !out.contains(&t) {
@@ -275,6 +311,9 @@ impl Project {
             n3ds_package: "trino-app-3ds".into(),
             n3ds_bin: "trino-3ds".into(),
             n3ds_icon: None,
+            web_package: "trino-app-web".into(),
+            web_canvas_id: DEFAULT_CANVAS_ID.into(),
+            web_title: "Trino".into(),
             test: TestConfig::default(),
             watch: [
                 "examples",
@@ -349,6 +388,12 @@ impl Project {
             bin: String::new(),
             icon: None,
         });
+        let web = f.web.unwrap_or_default();
+        let web_package = web
+            .package
+            .unwrap_or_else(|| format!("{}-web", f.project.name));
+        let web_canvas_id = web.canvas_id.unwrap_or_else(|| DEFAULT_CANVAS_ID.into());
+        let web_title = web.page_title.unwrap_or_else(|| f.project.title.clone());
         let watch = f.test.watch.clone().unwrap_or_else(|| {
             ["game", "n64", "n3ds", "3ds", "assets"]
                 .iter()
@@ -374,6 +419,9 @@ impl Project {
             n64_save: n64.save,
             n3ds_package: n3ds.package,
             n3ds_bin: n3ds.bin,
+            web_package,
+            web_canvas_id,
+            web_title,
             test: f.test,
             watch,
             root,
@@ -541,18 +589,28 @@ watch = ["game"]
     }
 
     /// A manifest written before `platforms` existed parses as it always
-    /// did and targets every platform.
+    /// did and targets the three platforms of then (the Web is opted into
+    /// by name: it needs a `web` host crate).
     #[test]
     fn a_manifest_without_platforms_targets_everything() {
         let p = Project::parse(SAMPLE, "/g".into(), "/e".into()).unwrap();
-        assert_eq!(p.platforms, Target::ALL);
+        assert_eq!(p.platforms, Target::DEFAULT);
+        assert_eq!(p.web_package, "my-game-web");
+        assert_eq!(p.web_canvas_id, "trino-canvas");
+        assert_eq!(p.web_title, "My Game");
         assert_eq!(p.pc_package, "my-game-pc");
         assert_eq!(p.n64_package, "my-game-n64");
         assert_eq!(p.n3ds_bin, "my-game-3ds");
-        assert!(p.batch().iter().all(|(_, runs)| *runs));
-        for t in Target::ALL {
+        assert_eq!(
+            p.batch().last(),
+            Some(&(Target::Web, false)),
+            "the Web is skipped unless listed"
+        );
+        for t in Target::DEFAULT {
             p.require(t).unwrap();
         }
+        let e = p.require(Target::Web).unwrap_err();
+        assert!(e.contains("does not target web"), "{e}");
     }
 
     fn with_platforms(list: &str) -> String {
@@ -576,7 +634,8 @@ watch = ["game"]
             [
                 (Target::Pc, true),
                 (Target::N64, false),
-                (Target::N3ds, true)
+                (Target::N3ds, true),
+                (Target::Web, false)
             ]
         );
         let pc = format!(
@@ -666,5 +725,30 @@ watch = ["game"]
         );
         assert!(p.rom().ends_with("target/n64/trino.z64"));
         assert!(p.n3ds_elf().ends_with("release/trino-3ds.elf"));
+        assert_eq!(p.web_package, "trino-app-web");
+    }
+
+    #[test]
+    fn the_web_section_names_the_host_canvas_and_title() {
+        let text = with_platforms(r#"["pc", "web"]"#)
+            + "
+[web]
+package = \"game-www\"
+canvas_id = \"stage\"
+page_title = \"My Game ' Web\"
+";
+        let p = Project::parse(&text, "/g".into(), "/e".into()).unwrap();
+        assert_eq!(p.platforms, [Target::Pc, Target::Web]);
+        p.require(Target::Web).unwrap();
+        assert_eq!(
+            (
+                p.web_package.as_str(),
+                p.web_canvas_id.as_str(),
+                p.web_title.as_str()
+            ),
+            ("game-www", "stage", "My Game ' Web")
+        );
+        let bad = text.replace("canvas_id", "canvas");
+        assert!(Project::parse(&bad, "/g".into(), "/e".into()).is_err());
     }
 }

@@ -1,5 +1,6 @@
 //! Hybrid source resolution: platform override beats shared master; nothing
-//! found is an error, never a fallback.
+//! found is an error, never a fallback. The Web's chain has one more link:
+//! `assets/web/`, then the PC's `assets/pc/`, then `assets/shared/`.
 
 use std::path::{Path, PathBuf};
 
@@ -10,18 +11,23 @@ pub fn resolve_source(
     platform: Platform,
     file: &str,
 ) -> Result<PathBuf, String> {
-    let override_path = assets_root.join(platform.key()).join(file);
-    if override_path.is_file() {
-        return Ok(override_path);
+    let mut looked = Vec::new();
+    let chain = std::iter::once(platform).chain(platform.fallback());
+    for p in chain {
+        let override_path = assets_root.join(p.key()).join(file);
+        if override_path.is_file() {
+            return Ok(override_path);
+        }
+        looked.push(override_path.display().to_string());
     }
     let shared = assets_root.join("shared").join(file);
     if shared.is_file() {
         return Ok(shared);
     }
+    looked.push(shared.display().to_string());
     Err(format!(
-        "asset source `{file}` not found: looked at {} and {}",
-        override_path.display(),
-        shared.display()
+        "asset source `{file}` not found: looked at {}",
+        looked.join(" and ")
     ))
 }
 
@@ -43,6 +49,25 @@ mod tests {
         // Other platforms still get the shared master.
         let pc = resolve_source(root, Platform::Pc, "sprites/p.png").unwrap();
         assert!(pc.ends_with(Path::new("shared/sprites/p.png")));
+    }
+
+    #[test]
+    fn the_web_takes_the_pc_override_before_the_shared_master() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        for (d, body) in [("shared", "shared"), ("pc", "pc")] {
+            std::fs::create_dir_all(root.join(d).join("sprites")).unwrap();
+            std::fs::write(root.join(d).join("sprites/p.png"), body).unwrap();
+        }
+        let web = resolve_source(root, Platform::Web, "sprites/p.png").unwrap();
+        assert!(web.ends_with(Path::new("pc/sprites/p.png")));
+        std::fs::create_dir_all(root.join("web/sprites")).unwrap();
+        std::fs::write(root.join("web/sprites/p.png"), "web").unwrap();
+        let web = resolve_source(root, Platform::Web, "sprites/p.png").unwrap();
+        assert!(web.ends_with(Path::new("web/sprites/p.png")));
+        // The PC never looks at the Web's overrides.
+        let pc = resolve_source(root, Platform::Pc, "sprites/p.png").unwrap();
+        assert!(pc.ends_with(Path::new("pc/sprites/p.png")));
     }
 
     #[test]

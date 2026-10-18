@@ -7,7 +7,7 @@
 //! `apps/pc` and `trino-runner-pc` record every frame and print the line
 //! when a `TRINO_SMOKE_FRAMES` run ends.
 
-use std::time::Instant;
+use web_time::Instant;
 
 use trino_core::FrameStats;
 use trino_core::render3d::PcGpuReject;
@@ -103,6 +103,7 @@ impl FrameMeter {
             SimProfile::Native => "native",
             SimProfile::N64 => "n64",
             SimProfile::N3ds => "3ds",
+            SimProfile::Web => "web",
         };
         format!(
             "TRINO_FRAME:{scene} profile={profile} avg_us={avg} max_us={} frames={} fps={fps} \

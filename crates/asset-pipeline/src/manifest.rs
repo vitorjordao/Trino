@@ -11,10 +11,14 @@ pub enum Platform {
     Pc,
     N64,
     N3ds,
+    /// A web browser (issue #47): the PC's content, KTX2 textures. Where
+    /// the manifest or the overrides say nothing about the Web, it takes
+    /// the PC's choice (a model's `platforms`, `assets/pc/` overrides).
+    Web,
 }
 
 impl Platform {
-    pub const ALL: [Platform; 3] = [Platform::Pc, Platform::N64, Platform::N3ds];
+    pub const ALL: [Platform; 4] = [Platform::Pc, Platform::N64, Platform::N3ds, Platform::Web];
 
     /// The scene crate's name for this platform (variants resolve by it).
     pub fn target(self) -> trino_scene::Target {
@@ -22,6 +26,7 @@ impl Platform {
             Platform::Pc => trino_scene::Target::Pc,
             Platform::N64 => trino_scene::Target::N64,
             Platform::N3ds => trino_scene::Target::N3ds,
+            Platform::Web => trino_scene::Target::Web,
         }
     }
 
@@ -30,6 +35,7 @@ impl Platform {
             Platform::Pc => "pc",
             Platform::N64 => "n64",
             Platform::N3ds => "3ds",
+            Platform::Web => "web",
         }
     }
 
@@ -38,6 +44,16 @@ impl Platform {
             "pc" => Some(Platform::Pc),
             "n64" => Some(Platform::N64),
             "3ds" | "n3ds" => Some(Platform::N3ds),
+            "web" => Some(Platform::Web),
+            _ => None,
+        }
+    }
+
+    /// The platform whose choices this one takes where it has none of its
+    /// own: the PC for the Web.
+    pub fn fallback(self) -> Option<Platform> {
+        match self {
+            Platform::Web => Some(Platform::Pc),
             _ => None,
         }
     }
@@ -59,15 +75,18 @@ impl Platform {
             Platform::N3ds => &[
                 "RGBA8", "RGB565", "RGBA5551", "RGBA4", "LA8", "L8", "A8", "ETC1", "ETC1A4",
             ],
+            // KTX2 files of Basis Universal data, transcoded in the browser
+            // to BC, ETC2 or ASTC (`crate::texture::ktx2`), or RGBA8.
+            Platform::Web => &["RGBA8", "KTX2-ETC1S", "KTX2-UASTC"],
         }
     }
 
     /// Format used when the manifest does not declare one for this
     /// platform: `auto` (the smallest format that keeps the texture's
-    /// `quality`) on the PC and the 3DS.
+    /// `quality`) on the PC, the 3DS and the Web.
     pub fn default_texture_format(self) -> Option<&'static str> {
         match self {
-            Platform::Pc => Some("auto"),
+            Platform::Pc | Platform::Web => Some("auto"),
             // The N64 has no safe default: the developer must choose the
             // TMEM trade-off explicitly (`auto` included).
             Platform::N64 => None,
@@ -157,11 +176,14 @@ pub struct ModelDecl {
 }
 
 impl ModelDecl {
-    /// Is this model baked for `platform`?
+    /// Is this model baked for `platform`? A list naming the PC bakes for
+    /// the Web too (a PC-class model is a Web model unless the list says
+    /// `web` itself).
     pub fn bakes_for(&self, platform: Platform) -> bool {
-        self.platforms
-            .as_ref()
-            .is_none_or(|ps| ps.iter().any(|p| Platform::parse(p) == Some(platform)))
+        self.platforms.as_ref().is_none_or(|ps| {
+            let named = |t: Platform| ps.iter().any(|p| Platform::parse(p) == Some(t));
+            named(platform) || platform.fallback().is_some_and(named)
+        })
     }
 
     pub fn options(&self) -> crate::model::ModelOptions {
@@ -264,7 +286,7 @@ impl Manifest {
             for p in m.platforms.iter().flatten() {
                 if Platform::parse(p).is_none() {
                     return Err(format!(
-                        "{}: model `{name}`: unknown platform `{p}` (pc, n64, 3ds)",
+                        "{}: model `{name}`: unknown platform `{p}` (pc, n64, 3ds, web)",
                         path.display()
                     ));
                 }
@@ -649,6 +671,51 @@ mod tests {
 
     fn manifest(text: &str) -> Manifest {
         toml::from_str(text).unwrap()
+    }
+
+    #[test]
+    fn the_web_takes_the_pcs_choices_and_its_own_formats() {
+        let m = manifest(
+            r#"
+            version = 1
+            [models.big]
+            file = "big.glb"
+            platforms = ["pc"]
+            [models.tiny]
+            file = "tiny.glb"
+            platforms = ["n64"]
+            [models.own]
+            file = "own.glb"
+            platforms = ["web"]
+            [sprites.s]
+            file = "s.png"
+            formats = { web = "KTX2-ETC1S", pc = "BC1" }
+            "#,
+        );
+        // A PC-only model is a Web model; a console-only one is not.
+        assert!(m.models["big"].bakes_for(Platform::Web));
+        assert!(!m.models["big"].bakes_for(Platform::N64));
+        assert!(!m.models["tiny"].bakes_for(Platform::Web));
+        assert!(
+            m.models["own"].bakes_for(Platform::Web) && !m.models["own"].bakes_for(Platform::Pc)
+        );
+        // Texture formats are the Web's own (no fallback: BC1 is not one).
+        assert_eq!(
+            m.sprites["s"].format_for("s", Platform::Web).unwrap(),
+            "KTX2-ETC1S"
+        );
+        let bad = manifest(
+            "version = 1
+[sprites.s]
+file = \"s.png\"
+formats = { web = \"BC1\" }
+",
+        );
+        let e = bad.sprites["s"].format_for("s", Platform::Web).unwrap_err();
+        assert!(e.contains("KTX2-UASTC"), "{e}");
+        assert_eq!(Platform::parse("web"), Some(Platform::Web));
+        assert_eq!(Platform::Web.fallback(), Some(Platform::Pc));
+        assert_eq!(Platform::Web.default_texture_format(), Some("auto"));
     }
 
     #[test]

@@ -36,6 +36,53 @@ pub enum ViewKind {
     Game,
 }
 
+/// The Game view's canvas when it simulates a browser (`SimProfile::Web`,
+/// issue #47): a page of a fixed size, or the panel itself like a canvas
+/// that fills its page. The picture is what the browser renders there:
+/// the canvas over the auto pixel scale (`sim::native_internal`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum WebCanvas {
+    /// The panel's own size (a canvas that fills a resizable page).
+    #[default]
+    Responsive,
+    Hd720,
+    Hd1080,
+}
+
+impl WebCanvas {
+    pub const ALL: [WebCanvas; 3] = [WebCanvas::Responsive, WebCanvas::Hd720, WebCanvas::Hd1080];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            WebCanvas::Responsive => "Responsive",
+            WebCanvas::Hd720 => "1280×720",
+            WebCanvas::Hd1080 => "1920×1080",
+        }
+    }
+
+    /// `responsive`, `720`, `1080` (`TRINO_EDITOR_WEB_CANVAS`).
+    pub fn parse(s: &str) -> Option<WebCanvas> {
+        match s {
+            "responsive" => Some(WebCanvas::Responsive),
+            "720" | "720p" => Some(WebCanvas::Hd720),
+            "1080" | "1080p" => Some(WebCanvas::Hd1080),
+            _ => None,
+        }
+    }
+
+    /// The picture a browser renders for this canvas (`panel`: the
+    /// responsive canvas's device pixels).
+    pub fn picture(self, panel: (u32, u32)) -> (u32, u32) {
+        let output = match self {
+            WebCanvas::Responsive => panel,
+            WebCanvas::Hd720 => (1280, 720),
+            WebCanvas::Hd1080 => (1920, 1080),
+        };
+        let (w, h, _) = trino_platform_pc::sim::native_internal(output, 0);
+        (w, h)
+    }
+}
+
 /// What can be dragged from the Assets panel onto a view.
 #[derive(Clone, Debug)]
 pub enum AssetPayload {
@@ -67,7 +114,7 @@ pub struct ViewInput<'a> {
     /// were this far away (both views), to see each switch live.
     pub lod_preview: Option<(&'a [usize], f32)>,
     /// The scene's frame on the N64 and the 3DS (Game view HUD).
-    pub budgets: Option<&'a [trino_scene::budget::FrameBudget; 3]>,
+    pub budgets: Option<&'a [trino_scene::budget::FrameBudget; 4]>,
     /// Each sprite's N64 TMEM bytes (the HUD's water lines).
     pub tmem: Option<&'a std::collections::BTreeMap<u32, Option<u32>>>,
     /// The water clock and ripples (`Renderer::set_water`).
@@ -121,6 +168,8 @@ pub struct Viewport {
     /// Game view: the console budget overlay (tris / sprites / texture vs
     /// the selected profile's Caps).
     pub show_budget: bool,
+    /// Game view, Web profile: the simulated canvas.
+    pub web_canvas: WebCanvas,
     /// Game view: a scene running in the editor (Play ▸ Play here).
     pub play: Option<crate::play::PlaySession>,
     pub gizmo: GizmoMode,
@@ -148,6 +197,7 @@ pub fn target_of(profile: SimProfile) -> trino_scene::Target {
         SimProfile::Native => trino_scene::Target::Pc,
         SimProfile::N64 => trino_scene::Target::N64,
         SimProfile::N3ds => trino_scene::Target::N3ds,
+        SimProfile::Web => trino_scene::Target::Web,
     }
 }
 
@@ -182,6 +232,10 @@ impl Viewport {
             ao_view: AoView::Game,
             ao_rendered: AoView::Game,
             show_budget: true,
+            web_canvas: std::env::var("TRINO_EDITOR_WEB_CANVAS")
+                .ok()
+                .and_then(|v| WebCanvas::parse(&v))
+                .unwrap_or_default(),
             play: None,
             gizmo: GizmoMode::Translate,
             snap: false,
@@ -250,6 +304,7 @@ impl Viewport {
             SimProfile::Native => "native",
             SimProfile::N64 => "n64",
             SimProfile::N3ds => "3ds",
+            SimProfile::Web => "web",
         }
     }
 
@@ -471,6 +526,17 @@ impl Viewport {
                 (px, avail)
             }
             ViewKind::Game => {
+                // A browser's picture follows its canvas (issue #47).
+                if self.profile == SimProfile::Web && self.play.is_none() {
+                    let panel = (
+                        ((avail.width() * ppp) as u32).max(16),
+                        ((avail.height() * ppp) as u32).max(16),
+                    );
+                    let (w, h) = self.web_canvas.picture(panel);
+                    if (w, h) != self.renderer.internal_size() {
+                        self.renderer.set_internal_size(w, h);
+                    }
+                }
                 let (iw, ih) = self.renderer.internal_size();
                 let fit = (avail.width() / iw as f32).min(avail.height() / ih as f32);
                 let s = if fit * ppp >= 1.0 {
@@ -916,7 +982,7 @@ impl Viewport {
         &self,
         painter: &egui::Painter,
         avail: Rect,
-        budgets: Option<&[trino_scene::budget::FrameBudget; 3]>,
+        budgets: Option<&[trino_scene::budget::FrameBudget; 4]>,
         tmem: Option<&std::collections::BTreeMap<u32, Option<u32>>>,
     ) -> Option<Rect> {
         let caps = *self.renderer.caps();
@@ -931,10 +997,26 @@ impl Viewport {
         // Per platform: the N64 frame (CPU vs RSP, why draws miss the fast
         // path), the 3DS triangles, and draws sent for nothing.
         let tmem = |id: trino_core::SpriteId| tmem.and_then(|t| t.get(&id.0).copied().flatten());
-        let platform_lines: Vec<(String, Color32)> = budgets
-            .map(|b| crate::budget::platform_lines(b, &tmem))
-            .unwrap_or_default()
+        // Simulating a browser: first what this view just drew (calls,
+        // pipeline changes, GPU memory), the scene estimate after.
+        let measured = (self.profile == SimProfile::Web).then(|| {
+            let m = self.renderer.sprite_memory();
+            (
+                crate::budget::web_measured_line(
+                    &self.renderer.frame_times(),
+                    m.bytes,
+                    self.renderer.resident_mesh_bytes(),
+                ),
+                crate::budget::Level::Ok,
+            )
+        });
+        let platform_lines: Vec<(String, Color32)> = measured
             .into_iter()
+            .chain(
+                budgets
+                    .map(|b| crate::budget::platform_lines(b, &tmem))
+                    .unwrap_or_default(),
+            )
             .map(|(t, l)| {
                 let color = match l {
                     crate::budget::Level::Ok if t.starts_with("N64") => c::OK,
@@ -976,6 +1058,7 @@ impl Viewport {
                     SimProfile::N64 => "N64",
                     SimProfile::N3ds => "3DS",
                     SimProfile::Native => "PC",
+                    SimProfile::Web => "Web",
                 }
             ),
             egui::FontId::proportional(11.5),
@@ -1179,6 +1262,7 @@ impl Viewport {
                                 (SimProfile::N64, "N64"),
                                 (SimProfile::N3ds, "3DS"),
                                 (SimProfile::Native, "PC"),
+                                (SimProfile::Web, "Web"),
                             ] {
                                 if theme::toggle_icon(
                                     ui,
@@ -1193,6 +1277,26 @@ impl Viewport {
                             }
                             if profile != self.profile {
                                 self.set_profile(profile, input.project);
+                            }
+                            if self.profile == SimProfile::Web {
+                                let mut canvas = self.web_canvas;
+                                egui::ComboBox::from_id_salt("web-canvas")
+                                    .selected_text(canvas.label())
+                                    .width(96.0)
+                                    .show_ui(ui, |ui| {
+                                        for c in WebCanvas::ALL {
+                                            ui.selectable_value(&mut canvas, c, c.label());
+                                        }
+                                    })
+                                    .response
+                                    .on_hover_text(
+                                        "The browser canvas: a page of this size, or the panel \
+                                         itself (a canvas that fills its page)",
+                                    );
+                                if canvas != self.web_canvas {
+                                    self.web_canvas = canvas;
+                                    self.rendered = None;
+                                }
                             }
                             ui.separator();
                             if theme::toggle_icon(
@@ -1499,4 +1603,23 @@ pub(crate) fn grid_tmdl() -> Vec<u8> {
         quad([v, 0.0, -e], [v, 0.0, e], along_z.0, along_z.1, false);
     }
     d.encode().expect("grid mesh")
+}
+
+#[cfg(test)]
+mod web_canvas_tests {
+    use super::WebCanvas;
+
+    /// The Game view renders what a browser would for its canvas: the
+    /// output over the auto pixel scale (`sim::native_internal`).
+    #[test]
+    fn presets_render_the_browsers_picture() {
+        assert_eq!(WebCanvas::Hd1080.picture((10, 10)), (640, 360));
+        assert_eq!(WebCanvas::Hd720.picture((10, 10)), (640, 360));
+        // Responsive: the panel itself (a 1200×800 panel at 2 lines per px).
+        assert_eq!(WebCanvas::Responsive.picture((1200, 800)), (600, 400));
+        assert_eq!(WebCanvas::parse("720"), Some(WebCanvas::Hd720));
+        assert_eq!(WebCanvas::parse("1080p"), Some(WebCanvas::Hd1080));
+        assert_eq!(WebCanvas::parse("responsive"), Some(WebCanvas::Responsive));
+        assert_eq!(WebCanvas::parse("4k"), None);
+    }
 }

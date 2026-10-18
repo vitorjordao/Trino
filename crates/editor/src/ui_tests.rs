@@ -595,8 +595,10 @@ fn platform_variants_reach_the_game_view_and_the_file() {
     assert_eq!(game_model(h.state(), "rock-1"), Some(rock_id));
     let tris_before = h.state().game_view.stats.tris;
 
-    // Open the Platforms section and pick another model for the N64.
-    h.get_by_label_contains("Platforms").click();
+    // Open the Platforms section (scrolled into view: the Inspector grew a
+    // Web column and a fourth render path) and pick another model for the
+    // N64.
+    click(&mut h, "Platforms");
     h.run_steps(2);
     click(&mut h, "N64 model");
     // Popup items: through accessibility (the list scrolls on its own).
@@ -637,13 +639,29 @@ fn platform_variants_reach_the_game_view_and_the_file() {
     assert_eq!(h.state().game_view.stats.tris + rock_tris, tris_before);
     assert!(h.state().resolved.items.iter().any(|i| i.name == "rock-1"));
 
+    // The Web (issue #47) follows the PC: the N64's choices don't reach a
+    // browser's Game view.
+    {
+        let app = h.state_mut();
+        app.game_view
+            .set_profile(trino_platform_pc::SimProfile::Web, &app.project);
+    }
+    h.run_steps(4);
+    assert_eq!(game_model(h.state(), "rock-1"), Some(rock_id), "Web view");
+    {
+        let app = h.state_mut();
+        app.game_view
+            .set_profile(trino_platform_pc::SimProfile::N64, &app.project);
+    }
+    h.run_steps(4);
+
     // GUI → file: saving writes the variant as text an agent can read.
     h.state_mut().cmds.push(Cmd::Save);
     h.run_steps(3);
     let disk = std::fs::read_to_string("scenes/showcase.scene.ron").unwrap();
     let saved = trino_scene::Scene::from_ron(&disk).unwrap();
     let r = saved.get(&rock).unwrap();
-    assert!(disk.contains("version: 3"));
+    assert!(disk.contains("version: 4"));
     assert!(r.platforms.n64.as_ref().unwrap().disabled);
     assert_eq!(
         r.platforms.n64.as_ref().unwrap().model.as_deref(),
@@ -1802,6 +1820,39 @@ fn texture_inspector_formats_quality_and_errors() {
     assert!(etc1.psnr.unwrap() < 35.0, "ETC1 loses detail on the photo");
     let pc_before = report(h.state(), Platform::Pc).unwrap().unwrap();
     assert!(pc_before.auto);
+    // The Web's column (issue #47): `auto` measured KTX2 through Binomial's
+    // decode; its bytes are the download, its memory the VRAM.
+    let web = report(h.state(), Platform::Web).unwrap().unwrap();
+    assert!(web.auto, "{web:?}");
+    assert!(
+        web.candidates.iter().any(|c| c.format == "KTX2-ETC1S"),
+        "{web:?}"
+    );
+    assert!(
+        h.query_by_label("Web format").is_some(),
+        "a format combo per platform"
+    );
+    // KTX2-UASTC from its combo: written as `web = ...`, measured again.
+    click(&mut h, "Web format");
+    h.get_by_label("KTX2-UASTC").click_accesskit();
+    h.run_steps(3);
+    close_popup(&mut h);
+    let text = std::fs::read_to_string("assets/manifest.toml").unwrap();
+    assert!(
+        manifest_table(&text, TABLE).contains(r#"web = "KTX2-UASTC""#),
+        "{text}"
+    );
+    wait_for(&mut h, "the Web column to follow", |a| {
+        report(a, Platform::Web)
+            .and_then(|r| r.ok())
+            .is_some_and(|r| r.format == "KTX2-UASTC" && !r.auto)
+    });
+    h.run_steps(2);
+    // The grid has a Web column too (it once stopped at the 3DS).
+    assert!(
+        h.query_by_label("KTX2-UASTC").is_some(),
+        "the Web column's Uses cell"
+    );
 
     // Quality: high, from its combo; `auto` on the PC must keep 40 dB.
     click(&mut h, "Texture quality");

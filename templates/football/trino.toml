@@ -1,12 +1,12 @@
 # Console packaging for {{name}} (read by the engine's xtask:
-# `cargo trino build|run|test n64|3ds`). Started from Trino's football
+# `cargo trino build|run|test n64|3ds|web`). Started from Trino's football
 # template (Solid Eleven).
 [project]
 name = "{{name}}"
 title = "{{name}}"
 description = "A low-poly football game made with Trino"
 author = ""
-# platforms = ["pc", "n64", "3ds"]
+platforms = ["pc", "n64", "3ds", "web"]
 
 [n64]
 package = "{{name}}-n64"

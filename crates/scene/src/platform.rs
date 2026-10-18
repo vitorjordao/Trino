@@ -17,42 +17,49 @@
 //! )
 //! ```
 //!
-//! A platform without a variant draws the entity as written ("same as PC").
+//! A platform without a variant draws the entity as written ("same as PC"),
+//! except the Web (issue #47), which follows the PC's variant when it has
+//! none of its own: a browser is a PC-class target, so the PC's choices
+//! (a heavier model, a per-pixel material) are its default too.
 
 use serde::{Deserialize, Serialize};
 
 /// The build target a scene is resolved for. Keys match the asset
-/// manifest's platform names (`pc`, `n64`, `3ds`).
+/// manifest's platform names (`pc`, `n64`, `3ds`, `web`).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default, PartialOrd, Ord)]
 pub enum Target {
     #[default]
     Pc,
     N64,
     N3ds,
+    /// A web browser (issue #47); falls back to the PC's variant.
+    Web,
 }
 
 impl Target {
-    pub const ALL: [Target; 3] = [Target::Pc, Target::N64, Target::N3ds];
+    pub const ALL: [Target; 4] = [Target::Pc, Target::N64, Target::N3ds, Target::Web];
 
-    /// The manifest key: `pc`, `n64`, `3ds`.
+    /// The manifest key: `pc`, `n64`, `3ds`, `web`.
     pub fn key(self) -> &'static str {
         match self {
             Target::Pc => "pc",
             Target::N64 => "n64",
             Target::N3ds => "3ds",
+            Target::Web => "web",
         }
     }
 
-    /// Display name: `PC`, `N64`, `3DS`.
+    /// Display name: `PC`, `N64`, `3DS`, `Web`.
     pub fn label(self) -> &'static str {
         match self {
             Target::Pc => "PC",
             Target::N64 => "N64",
             Target::N3ds => "3DS",
+            Target::Web => "Web",
         }
     }
 
-    /// 0, 1, 2 — for per-platform arrays.
+    /// 0, 1, 2, 3 — for per-platform arrays.
     pub fn index(self) -> usize {
         self as usize
     }
@@ -63,6 +70,7 @@ impl Target {
             "pc" | "native" => Some(Target::Pc),
             "n64" => Some(Target::N64),
             "3ds" | "n3ds" => Some(Target::N3ds),
+            "web" | "browser" => Some(Target::Web),
             _ => None,
         }
     }
@@ -78,32 +86,60 @@ pub struct PlatformVariants {
     pub n64: Option<Variant>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub n3ds: Option<Variant>,
+    /// The Web's own variant; without one the Web takes `pc`'s (see the
+    /// module docs). An empty `web: Some(())` beside a `pc` variant means
+    /// "as written" on the Web.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub web: Option<Variant>,
 }
 
 impl PlatformVariants {
     pub fn is_empty(&self) -> bool {
-        self.pc.is_none() && self.n64.is_none() && self.n3ds.is_none()
+        self.pc.is_none() && self.n64.is_none() && self.n3ds.is_none() && self.web.is_none()
     }
 
+    /// The variant `target` draws with: its own, and for the Web the PC's
+    /// when it has none.
     pub fn get(&self, target: Target) -> Option<&Variant> {
         match target {
             Target::Pc => self.pc.as_ref(),
             Target::N64 => self.n64.as_ref(),
             Target::N3ds => self.n3ds.as_ref(),
+            Target::Web => self.web.as_ref().or(self.pc.as_ref()),
         }
     }
 
+    /// The variant written for `target` itself, without the Web's fallback
+    /// to the PC (what a file stores; the editor counts these).
+    pub fn own(&self, target: Target) -> Option<&Variant> {
+        match target {
+            Target::Pc => self.pc.as_ref(),
+            Target::N64 => self.n64.as_ref(),
+            Target::N3ds => self.n3ds.as_ref(),
+            Target::Web => self.web.as_ref(),
+        }
+    }
+
+    /// The variant written for `target` itself (no fallback): what the
+    /// editor's column edits.
     pub fn get_mut(&mut self, target: Target) -> &mut Option<Variant> {
         match target {
             Target::Pc => &mut self.pc,
             Target::N64 => &mut self.n64,
             Target::N3ds => &mut self.n3ds,
+            Target::Web => &mut self.web,
         }
     }
 
-    /// Drops variants that change nothing (the editor's "same as PC").
+    /// Drops variants that change nothing (the editor's "same as PC"). An
+    /// empty Web variant stays while the PC has one: it is what keeps the
+    /// Web from following it.
     pub fn prune(&mut self) {
         for t in Target::ALL {
+            let pc_changes = self.pc.as_ref().is_some_and(|v| !v.is_noop());
+            if t == Target::Web && pc_changes {
+                continue;
+            }
             let slot = self.get_mut(t);
             if slot.as_ref().is_some_and(Variant::is_noop) {
                 *slot = None;
@@ -178,6 +214,7 @@ mod tests {
                 ..Variant::default()
             }),
             n3ds: None,
+            web: None,
         };
         v.prune();
         assert!(v.pc.is_none());
@@ -198,5 +235,32 @@ mod tests {
             ..Variant::default()
         };
         assert!(!Variant::shows(Some(&hide), true));
+    }
+
+    #[test]
+    fn the_web_follows_the_pc_unless_it_has_its_own() {
+        let low = Variant {
+            model: Some("models/tree-low".into()),
+            ..Variant::default()
+        };
+        let mut v = PlatformVariants {
+            pc: Some(low.clone()),
+            ..PlatformVariants::default()
+        };
+        assert_eq!(v.get(Target::Web), Some(&low));
+        assert_eq!(v.get(Target::N64), None);
+        // An empty Web variant means "as written" and survives pruning.
+        v.web = Some(Variant::default());
+        v.prune();
+        assert_eq!(v.get(Target::Web), Some(&Variant::default()));
+        // Without a PC variant to shadow, it is a no-op and goes.
+        v.pc = None;
+        v.prune();
+        assert!(v.web.is_none() && v.is_empty());
+        // RON spells it `web`.
+        v.web = Some(low.clone());
+        let text = ron::to_string(&v).unwrap();
+        assert!(text.contains("web"), "{text}");
+        assert_eq!(ron::from_str::<PlatformVariants>(&text).unwrap(), v);
     }
 }

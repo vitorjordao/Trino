@@ -308,6 +308,15 @@ fn platforms_tab_edits_variants_per_platform() {
         h.state().e.platforms.pc.as_ref().unwrap().visible,
         Some(false)
     );
+    // The Web follows the PC (its column shows the PC's hidden flag)
+    // until it says otherwise: visible there is a Web variant of its own.
+    h.get_by_label("Hidden on Web").click();
+    h.run();
+    assert_eq!(
+        h.state().e.platforms.web,
+        Some(trino_scene::Variant::default()),
+        "the Web keeps an empty variant: as written, not as on PC"
+    );
     // A scale of its own, then back.
     h.get_by_label("Scale on N64").click();
     h.run();
@@ -326,6 +335,10 @@ fn platforms_tab_edits_variants_per_platform() {
         h.state().e.platforms.pc.is_none(),
         "same as written: no block"
     );
+    assert!(
+        h.state().e.platforms.web.is_none(),
+        "with nothing on the PC to override, the Web's empty variant goes too"
+    );
     // What the inspector edited is what the file stores.
     let text = ron::to_string(&h.state().e).unwrap();
     let back: trino_scene::Entity = ron::from_str(&text).unwrap();
@@ -333,7 +346,7 @@ fn platforms_tab_edits_variants_per_platform() {
     assert!(h.state().changes >= 6);
 }
 
-/// The three columns side by side in a wide inspector, stacked in a narrow
+/// The four columns side by side in a wide inspector, stacked in a narrow
 /// one — and in both, nothing runs off the panel or overlaps.
 #[test]
 fn platforms_tab_fits_wide_and_narrow_inspectors() {

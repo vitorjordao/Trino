@@ -214,6 +214,7 @@ const ENGINE_CRATES: &[(&str, &str)] = &[
     ("trino-runner-pc", "crates/runner-pc"),
     ("trino-platform-n64", "crates/platform-n64"),
     ("trino-platform-3ds", "crates/platform-3ds"),
+    ("trino-platform-web", "crates/platform-web"),
 ];
 
 impl EngineSource {
@@ -623,6 +624,8 @@ mod tests {
                 "pc/src/main.rs",
                 "n64/src/lib.rs",
                 "n3ds/src/main.rs",
+                "web/Cargo.toml",
+                "web/src/lib.rs",
                 "assets/manifest.toml",
                 "assets/shared/sprites/hero.png",
             ] {
@@ -663,7 +666,12 @@ mod tests {
                 Template::Demo(Demo::Showcase) => "|_| my_game::MyGameGame::new()",
                 _ => "my_game::MyGameGame::new",
             };
-            for host in ["pc/src/main.rs", "n64/src/lib.rs", "n3ds/src/main.rs"] {
+            for host in [
+                "pc/src/main.rs",
+                "n64/src/lib.rs",
+                "n3ds/src/main.rs",
+                "web/src/lib.rs",
+            ] {
                 let text = std::fs::read_to_string(dest.join(host)).unwrap();
                 assert!(text.contains(ctor), "{}: {host}:\n{text}", template.key());
             }

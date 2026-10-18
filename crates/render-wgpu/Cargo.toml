@@ -1,0 +1,35 @@
+[package]
+name = "trino-render-wgpu"
+description = "Trino's wgpu renderer, shared by the PC and Web backends: software and GPU T&L, console-simulation profiles, offscreen framebuffer."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Within the workspace this crate may depend only on trino-core (enforced by
+# xtask/tests/dep_graph.rs). It is a renderer, not a platform: the window or
+# canvas, input, audio and the clock belong to trino-platform-pc / -web.
+[dependencies]
+trino-core = { workspace = true }
+wgpu = { workspace = true }
+bytemuck = { workspace = true }
+# `std::time::Instant` panics on wasm32-unknown-unknown; this is std's own
+# type on native and `performance.now()` in a browser.
+web-time = { workspace = true }
+
+# The windowed constructor takes a winit window (desktop only: the Web
+# backend hands over its canvas instead).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+winit = { workspace = true }
+pollster = { workspace = true }
+
+# In a browser: WebGPU where the browser has it, WebGL2 otherwise.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wgpu = { workspace = true, features = ["webgl"] }
+web-sys = { workspace = true, features = ["HtmlCanvasElement"] }
+
+[dev-dependencies]
+pollster = { workspace = true }
+# The WebGL2 shaders checked through naga's GLSL ES backend (what wgpu runs
+# in a browser without WebGPU), without a browser.
+naga = { version = "29", features = ["wgsl-in", "glsl-out"] }

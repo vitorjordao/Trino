@@ -18,7 +18,6 @@ use std::ops::Range;
 
 use trino_core::render3d::{Mesh, NEAR_PLANE, TnlContext};
 use trino_core::{Color, Mat34, ModelParams, Shading};
-use wgpu::util::DeviceExt;
 
 use super::OFFSCREEN_FORMAT;
 use super::batch::TexKey;
@@ -342,17 +341,31 @@ impl GpuTnl {
     }
 
     /// Upload (or replace) the resident vertex stream of mesh `model`.
-    pub fn upload_mesh(&mut self, device: &wgpu::Device, model: u32, mesh: &Mesh) {
+    ///
+    /// Written through the queue, not mapped at creation: Chromium's WebGPU
+    /// on SwiftShader (the CI runner) refused a mapped-at-creation buffer
+    /// partway through Solid Eleven's 197 meshes ("createBuffer failed ...
+    /// too large for the implementation when mappedAtCreation == true").
+    pub fn upload_mesh(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        model: u32,
+        mesh: &Mesh,
+    ) {
         let verts = mesh_vertices(mesh);
         if verts.is_empty() {
             self.meshes.remove(&model);
             return;
         }
-        let buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let bytes: &[u8] = bytemuck::cast_slice(&verts);
+        let buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("trino-tnl-mesh"),
-            contents: bytemuck::cast_slice(&verts),
-            usage: wgpu::BufferUsages::VERTEX,
+            size: bytes.len() as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
+        queue.write_buffer(&buf, 0, bytes);
         self.meshes.insert(
             model,
             GpuMesh {
@@ -608,6 +621,9 @@ pub fn bc_alpha(format: super::CompressedFormat, blocks: &[u8]) -> bool {
                 _ => true,
             }
         }),
+        // Not read from the blocks: the caller knows (the Web's KTX2).
+        F::Etc2Rgb8 => false,
+        F::Etc2Rgba8 | F::Astc4x4 => true,
     }
 }
 

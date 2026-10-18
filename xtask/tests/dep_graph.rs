@@ -3,7 +3,9 @@
 //! - `trino-core` has ZERO dependencies (dev-dependencies allowed).
 //! - `trino-game-api` depends only on `trino-core`.
 //! - `trino-platform-*` may use external crates (wgpu, libdragon FFI, ...)
-//!   but among workspace crates may depend only on `trino-core`.
+//!   but among workspace crates may depend only on `trino-core` and the
+//!   wgpu renderer the PC and Web backends share (`trino-render-wgpu`),
+//!   which itself depends only on `trino-core`.
 //! - Game crates (`trino-game*`, anything under `examples/`) depend only on
 //!   `trino-core` and `trino-game-api` — no external crates, so games stay
 //!   portable to all three consoles by construction.
@@ -65,18 +67,26 @@ fn dependency_direction_is_enforced() {
                 &["trino-core"],
                 "trino-game-api may depend only on trino-core",
             )
-        } else if name.starts_with("trino-platform-") {
-            // External crates allowed; workspace crates other than core are not.
+        } else if name.starts_with("trino-platform-") || name == "trino-render-wgpu" {
+            // External crates allowed; within the workspace only core, and
+            // for the PC and Web backends the renderer they share.
+            let allowed: &[&str] = if name == "trino-render-wgpu" {
+                &["trino-core"]
+            } else {
+                &["trino-core", "trino-render-wgpu"]
+            };
             let workspace_names: BTreeSet<&str> = packages
                 .iter()
                 .map(|p| p["name"].as_str().unwrap())
                 .collect();
             let bad: Vec<&String> = deps
                 .iter()
-                .filter(|d| workspace_names.contains(d.as_str()) && d.as_str() != "trino-core")
+                .filter(|d| workspace_names.contains(d.as_str()) && !allowed.contains(&d.as_str()))
                 .collect();
             (!bad.is_empty()).then(|| {
-                format!("{name}: platform crates may depend only on trino-core within the workspace; found: {bad:?}")
+                format!(
+                    "{name}: within the workspace it may depend only on {allowed:?}; found: {bad:?}"
+                )
             })
         } else if name.starts_with("trino-game") || manifest.contains("/examples/") {
             check(

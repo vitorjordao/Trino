@@ -2,8 +2,9 @@
 //! T&L work behind them (what the PC renderer counts), on the N64 the split
 //! between the RSP fast path and the CPU, on the 3DS between the PICA200's
 //! vertex T&L and the CPU, on the PC native profile what its GPU T&L path
-//! takes (issue #51) — with the rule each CPU draw failed — the
-//! impostors' billboards, the LOD picks, and the draws sent
+//! takes (issue #51) — with the rule each CPU draw failed — on the Web
+//! (issue #47) the same split plus the GPU calls and pipelines a browser
+//! pays for, the impostors' billboards, the LOD picks, and the draws sent
 //! for nothing (a whole mesh outside the view, still paid for).
 //!
 //! The editor's Game view HUD and `cargo xtask scene budget` call
@@ -65,6 +66,68 @@ pub struct FrameBudget {
     /// Each drawn entity's path on this platform, in draw order: the
     /// editor's Inspector "Render path" row and the reasons' entity lists.
     pub paths: Vec<DrawPath>,
+    /// Web: what the browser's GPU API is asked for ([`WebCalls`]).
+    pub web: WebCalls,
+}
+
+/// The Web's frame as WebGPU / WebGL2 calls (issue #47), estimated like
+/// the renderer batches it: GPU T&L draws sharing a model and a texture
+/// merge into one instanced call, CPU-path triangles into one call per
+/// texture, each water surface its own. A browser pays per call and per
+/// pipeline change in JavaScript, which on a phone binds long before the
+/// triangles do.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct WebCalls {
+    /// GPU draw calls.
+    pub calls: u32,
+    /// Pipelines (shaders) the frame binds: GPU T&L, CPU triangles,
+    /// per-pixel lit, water.
+    pub pipelines: u32,
+    /// Pipeline and texture changes between those calls (one per call
+    /// after the first: no two calls share both).
+    pub switches: u32,
+}
+
+/// Above this many calls a frame is CPU-bound in a phone's browser (WebGL2
+/// validates every call in JavaScript): the HUD warns.
+pub const WEB_CALLS_WARN: u32 = 300;
+/// Above this many triangles a mid-range phone's GPU drops below 60 fps at
+/// its native resolution (fillrate and vertex work): the HUD warns.
+pub const WEB_TRIS_WARN: u32 = 250_000;
+
+/// The HUD's and the CLI's Web line: `Web 12 calls · 3 pipelines · 11
+/// switches`.
+pub fn web_line(b: &FrameBudget) -> String {
+    format!(
+        "Web {} calls · {} pipelines · {} {}",
+        b.web.calls,
+        b.web.pipelines,
+        b.web.switches,
+        if b.web.switches == 1 {
+            "switch"
+        } else {
+            "switches"
+        }
+    )
+}
+
+/// The Web's warnings for a frame: too many calls, or too many triangles,
+/// for a phone's browser (empty when it fits).
+pub fn web_warnings(b: &FrameBudget) -> Vec<String> {
+    let mut out = Vec::new();
+    if b.web.calls > WEB_CALLS_WARN {
+        out.push(format!(
+            "{} calls > {WEB_CALLS_WARN}: CPU-bound on mobile browsers",
+            b.web.calls
+        ));
+    }
+    let tris = b.tris() + b.pc_gpu_tris;
+    if tris > WEB_TRIS_WARN {
+        out.push(format!(
+            "{tris} tris > {WEB_TRIS_WARN}: over a phone's fillrate"
+        ));
+    }
+    out
 }
 
 /// How one entity's draw runs on a platform ([`FrameBudget::paths`]).
@@ -88,7 +151,7 @@ impl RenderPath {
     pub fn hardware_name(target: Target) -> &'static str {
         match target {
             Target::N64 => "RSP",
-            Target::N3ds | Target::Pc => "GPU",
+            Target::N3ds | Target::Pc | Target::Web => "GPU",
         }
     }
 
@@ -245,7 +308,7 @@ impl FrameBudget {
 /// The screen of a platform's top display (PC: the given size).
 pub fn screen_of(target: Target, pc: Vec2) -> Vec2 {
     match target {
-        Target::Pc => pc,
+        Target::Pc | Target::Web => pc,
         Target::N64 => Vec2::new(320.0, 240.0),
         Target::N3ds => Vec2::new(400.0, 240.0),
     }
@@ -272,6 +335,16 @@ pub fn estimate<'m>(
     let mut reasons: Vec<(RspReject, u32)> = Vec::new();
     let mut gpu_reasons: Vec<(GpuReject, u32)> = Vec::new();
     let mut pc_reasons: Vec<(PcGpuReject, u32)> = Vec::new();
+    // The Web's calls: (pipeline, model, texture) groups, and the
+    // pipelines used as bits.
+    let mut web_groups: Vec<(u8, u32, u32)> = Vec::new();
+    let mut web_pipes = 0u8;
+    let mut web_call = |pipe: u8, model: u32, texture: u32| {
+        web_pipes |= 1 << pipe;
+        if pipe == WEB_WATER || !web_groups.contains(&(pipe, model, texture)) {
+            web_groups.push((pipe, model, texture));
+        }
+    };
     for item in &resolved.items {
         if !trino_core::vis::in_view(item.cell, visible) {
             continue;
@@ -288,8 +361,9 @@ pub fn estimate<'m>(
         }
         let id = match pick {
             LodPick::Model(id) => id,
-            LodPick::Impostor(_) => {
+            LodPick::Impostor(imp) => {
                 b.billboards += 1;
+                web_call(WEB_TRIS, 0, imp.sprite.0);
                 b.paths.push(DrawPath {
                     name: item.name.clone(),
                     path: RenderPath::Impostor,
@@ -344,7 +418,7 @@ pub fn estimate<'m>(
             }
             continue;
         }
-        if target == Target::Pc {
+        if matches!(target, Target::Pc | Target::Web) {
             // A glossy draw is shaded per pixel on the PC (the estimate has
             // no local lights or wetness, the other two reasons).
             let per_pixel =
@@ -356,11 +430,20 @@ pub fn estimate<'m>(
                     false => Ok(()),
                 }) {
                 Ok(()) => {
+                    let texture = mesh.texture_for(&item.params).map_or(0, |t| t.0);
+                    web_call(WEB_GPU, id.0, texture);
                     b.pc_gpu_draws += 1;
                     b.pc_gpu_tris += (mesh.index_count / 3) as u32;
                     b.paths.push(path(item, RenderPath::Hardware));
                 }
                 Err(r) => {
+                    let texture = mesh.texture_for(&item.params).map_or(0, |t| t.0);
+                    let pipe = match r {
+                        PcGpuReject::Water => WEB_WATER,
+                        PcGpuReject::PerPixelLit => WEB_LIT,
+                        _ => WEB_TRIS,
+                    };
+                    web_call(pipe, 0, texture);
                     b.cpu_draws += 1;
                     b.cpu_tnl.add(&stats);
                     count(&mut pc_reasons, r);
@@ -398,8 +481,23 @@ pub fn estimate<'m>(
     b.off_rsp = reasons;
     b.off_gpu = gpu_reasons;
     b.off_pc_gpu = pc_reasons;
+    if target == Target::Web {
+        let calls = web_groups.len() as u32;
+        b.web = WebCalls {
+            calls,
+            pipelines: web_pipes.count_ones(),
+            switches: calls.saturating_sub(1),
+        };
+    }
     b
 }
+
+/// The Web's pipelines ([`WebCalls::pipelines`]), as bit numbers.
+const WEB_GPU: u8 = 0;
+const WEB_TRIS: u8 = 1;
+const WEB_LIT: u8 = 2;
+/// Water: one call per surface (drawn last, blended).
+const WEB_WATER: u8 = 3;
 
 fn path(item: &crate::DrawItem, path: RenderPath) -> DrawPath {
     DrawPath {

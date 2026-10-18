@@ -17,6 +17,11 @@ pub enum SimProfile {
     N64,
     /// 400x240 (3DS top screen), 3DS budgets.
     N3ds,
+    /// A browser (issue #47): the native profile's renderer and picture
+    /// (the GPU T&L path, per-pixel lights, SSAO), with the Web's budgets
+    /// ([`Caps::WEB`]). `trino-platform-web` renders with it, and the
+    /// editor's Game view simulates a browser with it.
+    Web,
 }
 
 impl SimProfile {
@@ -25,6 +30,7 @@ impl SimProfile {
             SimProfile::Native => Caps::PC,
             SimProfile::N64 => Caps::N64,
             SimProfile::N3ds => Caps::N3DS,
+            SimProfile::Web => Caps::WEB,
         }
     }
 
@@ -34,7 +40,16 @@ impl SimProfile {
             SimProfile::Native => (640, 480),
             SimProfile::N64 => (320, 240),
             SimProfile::N3ds => (400, 240),
+            SimProfile::Web => (640, 480),
         }
+    }
+
+    /// The PC's own picture rather than a console's: the native profile and
+    /// the Web, which renders like it (resolution from the output, MSAA,
+    /// the GPU T&L path, per-pixel lights). The console profiles keep their
+    /// console's look.
+    pub fn is_native(self) -> bool {
+        matches!(self, SimProfile::Native | SimProfile::Web)
     }
 
     /// Parse from `TRINO_SIM` env values / CLI flags.
@@ -43,6 +58,7 @@ impl SimProfile {
             "native" | "pc" => Some(SimProfile::Native),
             "n64" => Some(SimProfile::N64),
             "3ds" | "n3ds" => Some(SimProfile::N3ds),
+            "web" | "browser" => Some(SimProfile::Web),
             _ => None,
         }
     }
@@ -129,6 +145,7 @@ mod tests {
         assert_eq!(SimProfile::parse("N64"), Some(SimProfile::N64));
         assert_eq!(SimProfile::parse("3ds"), Some(SimProfile::N3ds));
         assert_eq!(SimProfile::parse("pc"), Some(SimProfile::Native));
+        assert_eq!(SimProfile::parse("web"), Some(SimProfile::Web));
         assert_eq!(SimProfile::parse("dreamcast"), None);
     }
 }

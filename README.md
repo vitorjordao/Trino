@@ -2,8 +2,8 @@
 
 # Trino
 
-**A cross-platform retro 3D engine for PC, Nintendo 64 and Nintendo 3DS, from one Rust
-codebase.**
+**A cross-platform retro 3D engine for PC, the Web, Nintendo 64 and Nintendo 3DS, from one
+Rust codebase.**
 
 [![CI](https://github.com/vitorjordao/Trino/actions/workflows/ci.yml/badge.svg)](https://github.com/vitorjordao/Trino/actions/workflows/ci.yml)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-MIT)
@@ -12,7 +12,8 @@ codebase.**
 <img src="docs/media/castle64.gif" width="640" alt="castle64, Trino's 3D showcase, played by the engine's test bot and recorded from the real renderer with the N64 look" />
 
 *castle64, the 3D showcase, played by the engine's test bot. The same crate boots as a
-`.z64` on the N64, a `.3dsx` on the 3DS and a native window on PC.*
+`.z64` on the N64, a `.3dsx` on the 3DS, a native window on PC and a browser tab on the
+Web.*
 
 </div>
 
@@ -20,7 +21,8 @@ codebase.**
 
 Your game is a `no_std` Rust crate that depends on one small, dependency-free crate,
 `trino-core`. The engine maps it to libdragon on the N64, libctru with citro2d and
-citro3d on the 3DS, and wgpu on PC. The N64 sets the ceiling: if a feature cannot run
+citro3d on the 3DS, and wgpu on PC and in browsers (WebGPU, or WebGL2 where there is none).
+The N64 sets the ceiling: if a feature cannot run
 there, the engine does not expose it. The PC backend can check your content against
 each console's budget while you work, so problems show up during development and not at
 port time.
@@ -62,21 +64,21 @@ impostors) is part of the same pipeline, drawn by the same renderer in the same 
 The numbers come from `Caps` in [`crates/core/src/caps.rs`](crates/core/src/caps.rs), the
 tables that strict mode and the tools check content against.
 
-| | PC | Nintendo 64 | Nintendo 3DS |
-|---|---|---|---|
-| Internal resolution | 1920x1080 by default [^pc-res] | 320x240 | 400x240 (top) [^3ds-bottom] |
-| Color depth | 32-bit | 16-bit | 24-bit |
-| Texture memory | no limit | 4 KB (TMEM) | 6 MB |
-| Largest texture side | 4096 | 256 | 1024 |
-| Sprites per frame (strict-mode budget) | no limit | 512 | 4096 |
-| Triangles per frame (rasterizer cap) | no limit | 4000 [^n64-tris] | 60000 |
-| 3D time per frame (strict mode) | no limit | 50 ms estimated [^n64-time] | no limit |
-| Save data | 1 MB | 2048 bytes (16 Kbit EEPROM) | 64 KB |
-| Local light tier | per pixel | per vertex | per vertex |
-| Local lights per frame | 8 | 2 | 4 |
-| Ambient occlusion tier | screen-space | baked | baked |
-| Water tier | per pixel | per vertex | vertex program |
-| Ripples per frame | 4 | 4 | 4 |
+| | PC | Web | Nintendo 64 | Nintendo 3DS |
+|---|---|---|---|---|
+| Internal resolution | 1920x1080 by default [^pc-res] | the canvas over the pixel scale | 320x240 | 400x240 (top) [^3ds-bottom] |
+| Color depth | 32-bit | 32-bit | 16-bit | 24-bit |
+| Texture memory | no limit | 1 GB | 4 KB (TMEM) | 6 MB |
+| Largest texture side | 4096 | 4096 | 256 | 1024 |
+| Sprites per frame (strict-mode budget) | no limit | no limit | 512 | 4096 |
+| Triangles per frame (rasterizer cap) | no limit | 1 000 000 | 4000 [^n64-tris] | 60000 |
+| 3D time per frame (strict mode) | no limit | no limit | 50 ms estimated [^n64-time] | no limit |
+| Save data | 1 MB | 1 MB (`localStorage`) | 2048 bytes (16 Kbit EEPROM) | 64 KB |
+| Local light tier | per pixel | per pixel | per vertex | per vertex |
+| Local lights per frame | 8 | 8 | 2 | 4 |
+| Ambient occlusion tier | screen-space | screen-space | baked | baked |
+| Water tier | per pixel | per pixel | per vertex | vertex program |
+| Ripples per frame | 4 | 4 | 4 | 4 |
 
 [^pc-res]: The PC's internal picture follows the active console-simulation profile
     (`TRINO_SIM=native|n64|3ds`), not this table.
@@ -120,6 +122,18 @@ cargo xtask run 3ds    # build target/3ds/trino.3dsx (local devkitPro) and open 
 cargo xtask test 3ds   # boot the self-test app: every step and the golden frames
 cargo xtask watch n64  # rebuild and relaunch on every save (watch 3ds too)
 ```
+
+### Web
+
+```sh
+cargo xtask run web    # build the wasm, serve it on 127.0.0.1 and open the browser (WebGPU or WebGL2)
+cargo xtask run web --query "?game=solid-eleven"
+cargo xtask test web   # the self-test in Chromium, Firefox and WebKit (Playwright; needs Node.js)
+cargo xtask build web --release --out dist/web   # a folder to upload to itch.io or GitHub Pages
+```
+
+In the Features table, the browser runs the PC column: the same renderer, on WebGPU or
+WebGL2.
 
 No emulator installed? `cargo xtask emulators setup ares` builds a headless ares image
 (then run with `TRINO_ARES=docker`), and `cargo xtask emulators setup azahar` fetches the

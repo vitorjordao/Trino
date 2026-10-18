@@ -291,6 +291,21 @@ fn budget(root: &Path, args: &[&str]) -> ExitCode {
                     .map(|(r, n)| format!("{{\"reason\":{},\"draws\":{n}}}", q(r.label())))
                     .collect();
                 let wasted: Vec<String> = b.wasted.iter().map(|w| q(w)).collect();
+                let paths: Vec<String> = b
+                    .paths
+                    .iter()
+                    .map(|p| {
+                        let reason = match p.path {
+                            trino_scene::budget::RenderPath::Cpu(r) => q(r),
+                            _ => "null".into(),
+                        };
+                        format!(
+                            "{{\"name\":{},\"path\":\"{}\",\"reason\":{reason}}}",
+                            q(&p.name),
+                            p.path.key(b.target)
+                        )
+                    })
+                    .collect();
                 let water: Vec<String> = b
                     .water
                     .iter()
@@ -310,7 +325,7 @@ fn budget(root: &Path, args: &[&str]) -> ExitCode {
                     })
                     .collect();
                 format!(
-                    "{{\"platform\":\"{}\",\"draws\":{},\"tris\":{},\"verts\":{},\"culled\":{},\"billboards\":{},\"lod\":{:?},\"rsp_draws\":{},\"rsp_tris\":{},\"cpu_draws\":{},\"off_rsp\":[{}],\"gpu_draws\":{},\"gpu_tris\":{},\"off_gpu\":[{}],\"pc_gpu_draws\":{},\"pc_gpu_tris\":{},\"off_pc_gpu\":[{}],\"wasted\":[{}],\"water\":[{}],\"n64_cpu_us\":{},\"n64_rsp_us\":{},\"n64_frame_us\":{}}}",
+                    "{{\"platform\":\"{}\",\"draws\":{},\"tris\":{},\"verts\":{},\"culled\":{},\"billboards\":{},\"lod\":{:?},\"rsp_draws\":{},\"rsp_tris\":{},\"cpu_draws\":{},\"off_rsp\":[{}],\"gpu_draws\":{},\"gpu_tris\":{},\"off_gpu\":[{}],\"pc_gpu_draws\":{},\"pc_gpu_tris\":{},\"off_pc_gpu\":[{}],\"wasted\":[{}],\"water\":[{}],\"paths\":[{}],\"n64_cpu_us\":{},\"n64_rsp_us\":{},\"n64_frame_us\":{}}}",
                     b.target.key(),
                     b.draws,
                     b.tris(),
@@ -330,6 +345,7 @@ fn budget(root: &Path, args: &[&str]) -> ExitCode {
                     pc_reasons.join(","),
                     wasted.join(","),
                     water.join(","),
+                    paths.join(","),
                     b.n64_cpu_us(),
                     b.n64_rsp_us(),
                     b.n64_frame_us()
@@ -340,6 +356,13 @@ fn budget(root: &Path, args: &[&str]) -> ExitCode {
         return ExitCode::SUCCESS;
     }
     println!("{file}: from the scene camera");
+    // "3 fog (pond, river, ...)": a reason with the entities it holds back.
+    let reason = |b: &trino_scene::budget::FrameBudget, label: &str, n: u32| {
+        let names = b.off_path(label);
+        let shown: Vec<&str> = names.iter().copied().take(4).collect();
+        let more = if names.len() > 4 { ", ..." } else { "" };
+        format!("{n} {label} ({}{more})", shown.join(", "))
+    };
     for b in &rows {
         println!(
             "  {:4} {} draws, {} tris, {} billboards, LOD full/light/imp/cull {:?}",
@@ -363,7 +386,7 @@ fn budget(root: &Path, args: &[&str]) -> ExitCode {
                 let r: Vec<String> = b
                     .off_rsp
                     .iter()
-                    .map(|(r, n)| format!("{n} {}", r.label()))
+                    .map(|(r, n)| reason(b, r.label(), *n))
                     .collect();
                 println!("       off the RSP fast path: {}", r.join(", "));
             }
@@ -377,7 +400,7 @@ fn budget(root: &Path, args: &[&str]) -> ExitCode {
                 let r: Vec<String> = b
                     .off_pc_gpu
                     .iter()
-                    .map(|(r, n)| format!("{n} {}", r.label()))
+                    .map(|(r, n)| reason(b, r.label(), *n))
                     .collect();
                 println!("       off the PC GPU path: {}", r.join(", "));
             }
@@ -391,7 +414,7 @@ fn budget(root: &Path, args: &[&str]) -> ExitCode {
                 let r: Vec<String> = b
                     .off_gpu
                     .iter()
-                    .map(|(r, n)| format!("{n} {}", r.label()))
+                    .map(|(r, n)| reason(b, r.label(), *n))
                     .collect();
                 println!("       off the GPU path: {}", r.join(", "));
             }

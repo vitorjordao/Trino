@@ -237,6 +237,9 @@ pub struct App {
     /// Dev hook `TRINO_EDITOR_INSPECT=<section>`: the Inspector opens that
     /// section and scrolls to it (`platforms`, `lod`, `impostor`).
     pub inspect_focus: Option<String>,
+    /// Scroll the Inspector to the platform budget once (a click on the
+    /// Game view's budget HUD).
+    pub scroll_to_budget: bool,
     /// Inspector › LOD › Preview: (entity, distance) both views draw that
     /// entity's LOD at.
     pub lod_preview: Option<(Vec<usize>, f32)>,
@@ -520,6 +523,7 @@ impl App {
             play_here_on_start: std::env::var("TRINO_EDITOR_PLAY").as_deref() == Ok("here"),
             ripple_hook: std::env::var_os("TRINO_EDITOR_RIPPLE").is_some(),
             inspect_focus: std::env::var("TRINO_EDITOR_INSPECT").ok(),
+            scroll_to_budget: false,
             // Dev hook: TRINO_EDITOR_LOD_PREVIEW=<m> previews the selected
             // entity's LOD at that distance.
             lod_preview: std::env::var("TRINO_EDITOR_LOD_PREVIEW")
@@ -2958,6 +2962,10 @@ impl egui_dock::TabViewer for TabView<'_> {
                             app.cmds.push(Cmd::AddAsset(payload, Some(at)))
                         }
                         ViewAction::ToggleAnimate => app.animate = !app.animate,
+                        ViewAction::OpenBudget => {
+                            app.cmds.push(Cmd::Select(None));
+                            app.scroll_to_budget = true;
+                        }
                     }
                 }
             }

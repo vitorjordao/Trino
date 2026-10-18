@@ -253,6 +253,26 @@ fn shots(r: &PcRenderer, name: &str, img: &[u8]) {
     }
 }
 
+/// The frame's GPU T&L draws against the CPU path (`tnl_oracle`, issue #51),
+/// the side-by-side kept under `target/evidence/pc-gpu-tnl`. Returns the
+/// GPU draws (0 on a console profile).
+fn tnl_oracle(
+    r: &mut PcRenderer,
+    name: &str,
+    frame: impl FnMut(&mut PcRenderer) -> Vec<u8>,
+) -> u32 {
+    let Some(d) = trino_platform_pc::tnl_oracle::compare(r, frame) else {
+        return 0;
+    };
+    eprintln!("{name}: {d}");
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/evidence/pc-gpu-tnl");
+    std::fs::create_dir_all(&dir).unwrap();
+    let (w, h, img) = d.side_by_side();
+    write_png(&dir.join(format!("{name}.png")), w, h, &img);
+    d.assert_within(name);
+    d.gpu_draws
+}
+
 #[test]
 fn each_tier_matches_its_golden() {
     let _gpu = gpu();
@@ -270,6 +290,12 @@ fn each_tier_matches_its_golden() {
         shots(&r, &format!("{name}_off"), &off);
         shots(&r, &format!("{name}_on"), &on);
         if profile == SimProfile::Native {
+            let gpu = tnl_oracle(&mut r, "lights_native_off", |r| frame(r, None, 0.0));
+            assert!(gpu > 0, "the unlit frame's draws go to the GPU");
+            tnl_oracle(&mut r, name, |r| frame(r, Some(&lamps()), 0.0));
+            tnl_oracle(&mut r, "lights_native_wet", |r| {
+                frame(r, Some(&lamps()), 0.8)
+            });
             let wet = frame(&mut r, Some(&lamps()), 0.8);
             shots(&r, &format!("{name}_wet"), &wet);
             golden(&r, &wet, "lights_native_wet", tol, 1024);

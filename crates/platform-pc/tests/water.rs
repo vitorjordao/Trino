@@ -279,6 +279,26 @@ fn shots(r: &PcRenderer, name: &str, img: &[u8]) {
     }
 }
 
+/// The frame's GPU T&L draws against the CPU path (`tnl_oracle`, issue #51),
+/// the side-by-side kept under `target/evidence/pc-gpu-tnl`. Returns the
+/// GPU draws (0 on a console profile).
+fn tnl_oracle(
+    r: &mut PcRenderer,
+    name: &str,
+    frame: impl FnMut(&mut PcRenderer) -> Vec<u8>,
+) -> u32 {
+    let Some(d) = trino_platform_pc::tnl_oracle::compare(r, frame) else {
+        return 0;
+    };
+    eprintln!("{name}: {d}");
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/evidence/pc-gpu-tnl");
+    std::fs::create_dir_all(&dir).unwrap();
+    let (w, h, img) = d.side_by_side();
+    write_png(&dir.join(format!("{name}.png")), w, h, &img);
+    d.assert_within(name);
+    d.gpu_draws
+}
+
 const TIERS: [(SimProfile, &str, u8); 3] = [
     (SimProfile::Native, "water_native", 3),
     (SimProfile::N3ds, "water_n3ds", 3),
@@ -296,6 +316,15 @@ fn each_tier_matches_its_golden() {
         let img = frame(&mut r, Some((1.25, &[RIPPLE])), &water_params());
         shots(&r, name, &img);
         golden(&r, &img, name, tol, 1024);
+        if profile == SimProfile::Native {
+            let gpu = tnl_oracle(&mut r, name, |r| {
+                frame(r, Some((1.25, &[RIPPLE])), &water_params())
+            });
+            assert!(
+                gpu > 0,
+                "the riverbed goes to the GPU, the water stays on the CPU"
+            );
+        }
     }
 }
 

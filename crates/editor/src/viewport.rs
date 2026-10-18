@@ -84,6 +84,9 @@ pub enum ViewAction {
     SetTransform(Vec<usize>, Transform),
     Drop(AssetPayload, Vec3),
     ToggleAnimate,
+    /// The budget HUD's platform lines were clicked: show the Inspector's
+    /// platform budget, where each reason lists its entities.
+    OpenBudget,
 }
 
 pub struct Stats {
@@ -836,7 +839,17 @@ impl Viewport {
         if self.kind == ViewKind::Game && self.show_budget {
             // Panel-wide painter: the overlay sits over the letterbox area
             // when there is room, never clipped by the game image.
-            self.budget_overlay(&ui.painter_at(avail), avail, input.budgets, input.tmem);
+            let lines =
+                self.budget_overlay(&ui.painter_at(avail), avail, input.budgets, input.tmem);
+            if let Some(lines) = lines {
+                let hud = ui
+                    .interact(lines, ui.id().with("budget-hud"), egui::Sense::click())
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .on_hover_text("Open the platform budget: each reason lists its entities");
+                if hud.clicked() {
+                    actions.push(ViewAction::OpenBudget);
+                }
+            }
         }
 
         // ---- keyboard (when hovered) ------------------------------------------
@@ -905,7 +918,7 @@ impl Viewport {
         avail: Rect,
         budgets: Option<&[trino_scene::budget::FrameBudget; 3]>,
         tmem: Option<&std::collections::BTreeMap<u32, Option<u32>>>,
-    ) {
+    ) -> Option<Rect> {
         let caps = *self.renderer.caps();
         let mut rows = crate::budget::rows(&self.stats.frame, &caps, &self.stats.lod);
         // The scene budget is the scene camera's: not while playing.
@@ -1008,6 +1021,14 @@ impl Viewport {
             }
         }
         let mut y = rect.max.y - extra + 2.0;
+        // The platform lines' area: clickable (they come from the scene's
+        // budget, whose Inspector section names each reason's entities).
+        let lines = (!platform_lines.is_empty()).then(|| {
+            Rect::from_min_size(
+                Pos2::new(rect.min.x, y),
+                Vec2::new(w, platform_lines.len() as f32 * row_h),
+            )
+        });
         for (text, color) in platform_lines {
             painter.text(
                 Pos2::new(rect.min.x + 8.0, y),
@@ -1027,6 +1048,7 @@ impl Viewport {
                 c::TEXT_WEAK,
             );
         }
+        lines
     }
 
     fn toolbar(

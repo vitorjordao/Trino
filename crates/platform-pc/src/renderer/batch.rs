@@ -64,6 +64,12 @@ pub enum Cmd {
         texture: Option<TexKey>,
         kind: TriKind,
     },
+    /// Instanced draw calls of the GPU T&L path (`gpu_tnl::GpuBatch`
+    /// indices): a batch's opaque GPU draws, ahead of its CPU triangles.
+    Meshes {
+        first: u32,
+        count: u32,
+    },
 }
 
 /// GPU triangle vertex. Must match `shaders.wgsl` (`TriIn`).
@@ -107,6 +113,8 @@ pub enum Segment {
         texture: Option<TexKey>,
         kind: TriKind,
     },
+    /// GPU T&L draw calls (`gpu_tnl::GpuBatch` indices).
+    Meshes { first: u32, count: u32 },
 }
 
 /// Resolve a `draw_sprite` call into a command: apply scale to the sprite's
@@ -206,6 +214,16 @@ pub fn build_segments(commands: &[Cmd]) -> (Vec<Instance>, Vec<Segment>) {
                     count: *count,
                     texture: *texture,
                     kind: *kind,
+                }),
+            },
+            Cmd::Meshes { first, count } => match segments.last_mut() {
+                Some(Segment::Meshes {
+                    first: seg_first,
+                    count: seg_count,
+                }) if *seg_first + *seg_count == *first => *seg_count += count,
+                _ => segments.push(Segment::Meshes {
+                    first: *first,
+                    count: *count,
                 }),
             },
         }

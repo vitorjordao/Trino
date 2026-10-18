@@ -63,6 +63,17 @@ fn entity(app: &mut App, ui: &mut egui::Ui, path: &[usize]) {
     let prefab_names: Vec<String> = app.lib.prefabs.keys().cloned().collect();
     let is_prefab_doc = app.doc.is_prefab();
     let focus = app.inspect_focus.clone();
+    // The entity's render path on each platform (the budget's estimate
+    // from the scene camera; issue #51's "Render path" row).
+    let render_paths = app.budgets.as_ref().zip(app.doc.scene.draw_name(path)).map(
+        |((_, [n64, n3ds, pc]), name)| {
+            [
+                ("PC", trino_scene::Target::Pc, pc.path_of(&name)),
+                ("N64", trino_scene::Target::N64, n64.path_of(&name)),
+                ("3DS", trino_scene::Target::N3ds, n3ds.path_of(&name)),
+            ]
+        },
+    );
     let mut cell_names: Vec<String> = Vec::new();
     app.doc.scene.walk(|_, e| {
         if matches!(e.vis, Some(VisComponent::Cell { .. })) {
@@ -234,6 +245,9 @@ fn entity(app: &mut App, ui: &mut egui::Ui, path: &[usize]) {
                     ))
                     .color(c::WARN),
                 );
+            }
+            if let Some(paths) = &render_paths {
+                render_path_row(ui, paths);
             }
 
             // Material picker + inline editor.
@@ -1851,7 +1865,9 @@ fn scene_settings(app: &mut App, ui: &mut egui::Ui) {
         },
     );
     if let Some((_, budgets)) = &app.budgets {
-        if app.inspect_focus.as_deref() == Some("budget") {
+        if std::mem::take(&mut app.scroll_to_budget)
+            || app.inspect_focus.as_deref() == Some("budget")
+        {
             ui.scroll_to_rect(
                 egui::Rect::from_min_size(ui.cursor().min, Vec2::new(1.0, 1.0)),
                 Some(egui::Align::TOP),
@@ -1864,15 +1880,16 @@ fn scene_settings(app: &mut App, ui: &mut egui::Ui) {
             c::TEXT,
             "Platform budget (scene camera)",
             |ui| {
-                let picked = budget_section(ui, budgets, &app.project.tmem);
+                let open = app.inspect_focus.as_deref() == Some("budget");
+                let picked = budget_section(ui, budgets, &app.project.tmem, open);
                 texture_memory(ui, &mut app.textures, &app.project);
                 picked
             },
         )
         .flatten();
-        // An unseen draw's line selects its entity.
+        // An unseen draw's line, or an entity under a reason, selects it.
         if let Some(name) = picked {
-            let mut found = None;
+            let mut found = app.doc.scene.find_draw_name(&name);
             app.doc.scene.walk(|p, e| {
                 if e.name == name && found.is_none() {
                     found = Some(p.to_vec());
@@ -1890,6 +1907,110 @@ fn scene_settings(app: &mut App, ui: &mut egui::Ui) {
             }
         });
     }
+}
+
+/// The Model component's "Render path" row: per platform, whether the
+/// entity's draw runs on the hardware path (PC GPU T&L, N64 RSP, 3DS
+/// PICA200), on the CPU T&L (with the rule it failed, on hover and below)
+/// or as an impostor, from the scene camera.
+fn render_path_row(
+    ui: &mut egui::Ui,
+    paths: &[(
+        &str,
+        trino_scene::Target,
+        Option<trino_scene::budget::RenderPath>,
+    ); 3],
+) {
+    use trino_scene::budget::RenderPath;
+    let faint = |text: String| RichText::new(text).size(11.5).color(c::TEXT_FAINT);
+    // Indented like the tris line, within the Inspector's width (a
+    // `vertical` in a `horizontal` would grow it instead of wrapping).
+    egui::Frame::new()
+        .inner_margin(egui::Margin {
+            left: 64,
+            ..Default::default()
+        })
+        .show(ui, |ui| {
+            ui.label(faint("Render path".into()));
+            // Wrapped, never squeezed: three pills don't fit a 960 px window's
+            // Inspector on one line.
+            ui.horizontal_wrapped(|ui| {
+                for (name, target, path) in paths {
+                    let (text, fg) = match path {
+                        Some(RenderPath::Hardware) => (
+                            format!("{name} {}", RenderPath::hardware_name(*target)),
+                            c::OK,
+                        ),
+                        Some(RenderPath::Cpu(_)) => (format!("{name} CPU"), c::WARN),
+                        Some(RenderPath::Impostor) => (format!("{name} impostor"), c::TEXT_WEAK),
+                        None => (format!("{name} not drawn"), c::TEXT_FAINT),
+                    };
+                    // A button-shaped pill: its size is known before it is
+                    // placed, so the wrapped row can move it to the next line.
+                    let pill = ui.add(
+                        egui::Button::new(RichText::new(text).size(11.5).color(fg))
+                            .fill(c::BG3)
+                            .stroke(egui::Stroke::NONE)
+                            .corner_radius(99.0)
+                            .sense(egui::Sense::hover()),
+                    );
+                    match path {
+                        Some(p) => pill.on_hover_text(p.text(*target)),
+                        None => pill.on_hover_text(
+                            "Culled, hidden on this platform or outside the scene camera",
+                        ),
+                    };
+                }
+            });
+            // Why each CPU platform misses its hardware path, a line each.
+            for (name, _, path) in paths {
+                if let Some(RenderPath::Cpu(reason)) = path {
+                    ui.add(egui::Label::new(faint(format!("{name}: {reason}"))).truncate());
+                }
+            }
+        });
+}
+
+/// One reason a platform's hardware path rejects draws, as a collapsed
+/// line that opens on the entities it holds back; clicking one selects it
+/// (`picked`, a draw name). `open`: start opened (the PC's reasons under the
+/// `TRINO_EDITOR_INSPECT=budget` hook, for screenshots).
+fn reason_list(
+    ui: &mut egui::Ui,
+    picked: &mut Option<String>,
+    budget: &trino_scene::budget::FrameBudget,
+    prefix: &str,
+    label: &str,
+    n: u32,
+    open: bool,
+) {
+    let names = budget.off_path(label);
+    egui::CollapsingHeader::new(
+        RichText::new(format!("{prefix}: {n} × {label}"))
+            .size(12.0)
+            .color(c::TEXT_FAINT),
+    )
+    .id_salt(("budget-reason", prefix, label))
+    .default_open(open)
+    .show(ui, |ui| {
+        for name in names {
+            let r = ui
+                .add(
+                    egui::Button::new(
+                        RichText::new(format!("{} {name}", icon::CROSSHAIR))
+                            .size(12.0)
+                            .color(c::TEXT_WEAK),
+                    )
+                    .frame(false)
+                    .truncate(),
+                )
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .on_hover_text("Select it");
+            if r.clicked() {
+                *picked = Some(name.to_string());
+            }
+        }
+    });
 }
 
 /// The project's texture memory per platform (every sprite and font
@@ -2035,6 +2156,7 @@ fn budget_section(
     ui: &mut egui::Ui,
     budgets: &[trino_scene::budget::FrameBudget; 3],
     tmem: &std::collections::BTreeMap<u32, Option<u32>>,
+    open: bool,
 ) -> Option<String> {
     let line = |ui: &mut egui::Ui, text: String, color: egui::Color32| {
         ui.add(egui::Label::new(RichText::new(text).size(12.0).color(color)).truncate());
@@ -2068,11 +2190,7 @@ fn budget_section(
         c::TEXT_WEAK,
     );
     for (r, n) in &n64.off_rsp {
-        line(
-            ui,
-            format!("off the RSP: {n} × {}", r.label()),
-            c::TEXT_FAINT,
-        );
+        reason_list(ui, &mut picked, n64, "off the RSP", r.label(), *n, false);
     }
     if n64.billboards > 0 {
         line(
@@ -2091,15 +2209,23 @@ fn budget_section(
         ),
         c::TEXT_WEAK,
     );
-    // The PC native profile's GPU T&L split (issue #51; Phase 1 decides,
-    // the CPU path still draws).
+    for (r, n) in &n3ds.off_gpu {
+        reason_list(
+            ui,
+            &mut picked,
+            n3ds,
+            "off the 3DS GPU",
+            r.label(),
+            *n,
+            false,
+        );
+    }
+    // The PC native profile's GPU T&L split (issue #51): the draws the
+    // GPU path takes, and each reason with the entities it keeps on the
+    // CPU.
     line(ui, trino_scene::budget::pc_gpu_line(pc), c::TEXT_WEAK);
     for (r, n) in &pc.off_pc_gpu {
-        line(
-            ui,
-            format!("off the PC GPU: {n} × {}", r.label()),
-            c::TEXT_FAINT,
-        );
+        reason_list(ui, &mut picked, pc, "off the PC GPU", r.label(), *n, open);
     }
     // Water (ADR 0015): what the N64 tier spends on each surface.
     let tmem = |id: trino_core::SpriteId| tmem.get(&id.0).copied().flatten();

@@ -87,6 +87,12 @@ Coverage: `TRINO_REQUIRE_GPU=1 cargo llvm-cov --workspace --summary-only
   `strict_mode_rejects_3d_over_the_n64_time_ceiling` covers it.
 - Blender toolkit, on machines with Blender: `cargo xtask blender smoke`.
 - Skinning cost: `bench_tnl` includes `skinning_rigid_vs_smooth`.
+- The PC native profile's old CPU path (#51): `TRINO_PC_TNL=cpu TRINO_REQUIRE_GPU=1
+  cargo test -p trino-platform-pc` must pass too (CI runs it; `gpu_tnl.rs` turns the GPU
+  path on itself). The PC frame time, CPU vs GPU T&L: `cargo test --release -p xtask --test pc_tnl_bench --
+  --ignored --nocapture` (`TRINO_POWER=low|high` picks the iGPU or the discrete GPU;
+  on WSL run it with the Windows `cargo.exe` on a copy of the tree under `C:\`: WSL has
+  only llvmpipe).
 
 On Linux the PC crates need `pkg-config` and ALSA headers (`apt install pkg-config libasound2-dev`).
 

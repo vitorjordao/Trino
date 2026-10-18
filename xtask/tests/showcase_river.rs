@@ -4,7 +4,8 @@
 //! state the N64 and 3DS goldens dump (`showcase_river.png` under
 //! `tests/golden/n64` and `tests/golden/3ds`). Per-pixel water: normals,
 //! Fresnel, glint, depth foam, ripples. GPU-gated like the other goldens;
-//! `TRINO_BLESS=1` rewrites it.
+//! `TRINO_BLESS=1` rewrites it. The frame's GPU T&L draws are also held to
+//! the CPU path (`tnl_oracle`, issue #51).
 
 use std::path::PathBuf;
 
@@ -66,10 +67,24 @@ fn the_river_matches_its_golden_on_the_native_profile() {
         r.upload_font(trino_core::FontId(f.id), f.table);
     }
     r.set_internal_size(640, 480);
-    let mut g = showcase::ShowcaseGame::new();
-    showcase::perf::river_scene(&mut g, Vec2::new(640.0, 480.0), &mut NullAudio);
-    g.render(&mut r);
-    let img = r.read_offscreen();
+    let frame = |r: &mut PcRenderer| {
+        let mut g = showcase::ShowcaseGame::new();
+        showcase::perf::river_scene(&mut g, Vec2::new(640.0, 480.0), &mut NullAudio);
+        g.render(r);
+        r.read_offscreen()
+    };
+    if let Some(d) = trino_platform_pc::tnl_oracle::compare(&mut r, frame) {
+        eprintln!("showcase_river: {d}");
+        let (w, h, img) = d.side_by_side();
+        write_png(
+            &root.join("target/evidence/pc-gpu-tnl/showcase_river.png"),
+            w,
+            h,
+            &img,
+        );
+        d.assert_within("showcase_river");
+    }
+    let img = frame(&mut r);
     let path = root.join("tests/golden/pc/showcase_river.png");
     if std::env::var_os("TRINO_BLESS").is_some() {
         write_png(&path, 640, 480, &img);

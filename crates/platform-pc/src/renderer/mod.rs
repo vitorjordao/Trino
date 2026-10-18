@@ -9,6 +9,8 @@
 
 mod ao;
 mod batch;
+mod cpu_tnl;
+mod gpu_tnl;
 mod lights;
 mod water;
 
@@ -63,6 +65,9 @@ struct SpriteEntry {
     /// ([`PcRenderer::sprite_memory`]).
     bytes: u64,
     compressed: bool,
+    /// Some texel is below full alpha (it blends): a model drawn with it
+    /// stays on the CPU path (`PcGpuReject::TextureAlpha`).
+    alpha: bool,
 }
 
 /// A block-compressed sprite format the PC uploads as is
@@ -298,6 +303,20 @@ pub struct PcRenderer {
     screen: u8,
     main_cmds: u32,
     main_tris: u32,
+    /// The GPU T&L path (issue #51): on for the native profile unless
+    /// `TRINO_PC_TNL=cpu` or [`PcRenderer::set_hw_tnl`] turned it off; its
+    /// pipelines and resident meshes, built on the first GPU draw.
+    hw_tnl: bool,
+    gpu: Option<gpu_tnl::GpuTnl>,
+    /// Group 0's layout (the GPU T&L pipelines share it).
+    globals_bgl: wgpu::BindGroupLayout,
+    /// The native profile's CPU draws of the current batch (tessellated at
+    /// the flush, over `tnl_threads` workers), the T&L contexts they use
+    /// and the workers' scratch memory.
+    cpu_jobs: Vec<cpu_tnl::CpuJob>,
+    job_ctxs: Vec<TnlContext>,
+    workers: Vec<cpu_tnl::Scratch>,
+    tnl_threads: usize,
 }
 
 /// What a lit triangle adds to its vertices: the surface, the gloss and the
@@ -980,6 +999,44 @@ fn globals_bytes(width: u32, height: u32, n64_look: bool) -> [u8; 16] {
     b
 }
 
+/// `TRINO_POWER=low|high`: the adapter to ask for where a machine has
+/// two (an iGPU and a discrete GPU), for measurements. Default: wgpu's.
+fn power_from_env() -> wgpu::PowerPreference {
+    match std::env::var("TRINO_POWER").as_deref() {
+        Ok("low") => wgpu::PowerPreference::LowPower,
+        Ok("high") => wgpu::PowerPreference::HighPerformance,
+        _ => wgpu::PowerPreference::default(),
+    }
+}
+
+/// `TRINO_PC_TNL` ([`pc_tnl_setting`]). The console profiles always keep
+/// the CPU path.
+fn hw_tnl_from_env() -> bool {
+    pc_tnl_setting(std::env::var("TRINO_PC_TNL").ok().as_deref())
+}
+
+/// `TRINO_PC_TNL`'s value: `cpu` (or `0`, `off`) keeps every draw on the
+/// CPU T&L; `gpu`, `auto` and anything else (unset too) send the draws
+/// `pc_gpu_check` accepts to the GPU.
+fn pc_tnl_setting(value: Option<&str>) -> bool {
+    !matches!(value, Some("cpu" | "0" | "off"))
+}
+
+/// `TRINO_PC_TNL_THREADS`: workers of the native profile's CPU T&L (1 =
+/// the calling thread only). Default: the machine's parallelism, at most 8.
+fn tnl_threads_from_env() -> usize {
+    std::env::var("TRINO_PC_TNL_THREADS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or_else(|| {
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(1)
+                .min(8)
+        })
+        .max(1)
+}
+
 impl PcRenderer {
     /// Renderer that presents to a window.
     pub async fn new_windowed(
@@ -1031,6 +1088,7 @@ impl PcRenderer {
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 compatible_surface: surface.as_ref().map(|(s, _, _)| s),
+                power_preference: power_from_env(),
                 ..Default::default()
             })
             .await
@@ -1588,6 +1646,13 @@ impl PcRenderer {
             main_tris: 0,
             bc: device_bc,
             adapter_name,
+            hw_tnl: hw_tnl_from_env(),
+            gpu: None,
+            globals_bgl,
+            cpu_jobs: Vec::new(),
+            job_ctxs: Vec::new(),
+            workers: Vec::new(),
+            tnl_threads: tnl_threads_from_env(),
         }
     }
 
@@ -1598,7 +1663,71 @@ impl PcRenderer {
             Ok(m) => m.layout(&tmdl),
             Err(e) => panic!("mesh {id:?}: invalid TMDL blob: {e:?}"),
         };
+        // Resident on the GPU at register when the GPU T&L path is on;
+        // otherwise (and after a re-upload) at its first GPU draw.
+        if self.gpu_tnl_active() {
+            let mesh = Mesh::from_layout(&tmdl, &layout);
+            self.ensure_gpu_tnl();
+            if let Some(gpu) = &mut self.gpu {
+                gpu.upload_mesh(&self.device, id.0, &mesh);
+            }
+        } else if let Some(gpu) = &mut self.gpu {
+            gpu.forget_mesh(id.0);
+        }
         self.meshes.insert(id.0, (tmdl, layout));
+    }
+
+    /// Send the draws `pc_gpu_check` accepts to the GPU (the default on the
+    /// native profile; `TRINO_PC_TNL=cpu` starts with it off), or keep
+    /// every draw on the CPU T&L — the A/B switch for regressions and
+    /// bisecting. The console profiles always keep the CPU path. Takes
+    /// effect at the next draw.
+    pub fn set_hw_tnl(&mut self, on: bool) {
+        self.hw_tnl = on;
+    }
+
+    /// Does the GPU T&L path take draws now ([`PcRenderer::set_hw_tnl`],
+    /// the native profile, not the N64 look)?
+    pub fn hw_tnl(&self) -> bool {
+        self.gpu_tnl_active()
+    }
+
+    /// The [`PcRenderer::set_hw_tnl`] switch itself (on a console profile
+    /// too, where it has no effect).
+    pub fn hw_tnl_setting(&self) -> bool {
+        self.hw_tnl
+    }
+
+    /// Workers of the native profile's CPU T&L (1 = on the calling thread;
+    /// default `TRINO_PC_TNL_THREADS` or the machine's parallelism, at most
+    /// 8). The triangles and counters are the same for any count.
+    pub fn set_tnl_threads(&mut self, threads: usize) {
+        self.tnl_threads = threads.max(1);
+    }
+
+    pub fn tnl_threads(&self) -> usize {
+        self.tnl_threads
+    }
+
+    /// Bytes of mesh vertices resident on the GPU (the GPU T&L path's
+    /// buffers, uploaded once per mesh).
+    pub fn resident_mesh_bytes(&self) -> u64 {
+        self.gpu.as_ref().map_or(0, |g| g.resident_bytes())
+    }
+
+    fn gpu_tnl_active(&self) -> bool {
+        self.hw_tnl && self.profile == SimProfile::Native && !self.n64_look
+    }
+
+    /// Build the GPU T&L path's pipelines and buffers (on first use).
+    fn ensure_gpu_tnl(&mut self) {
+        let samples = self.msaa;
+        let gpu = self.gpu.get_or_insert_with(|| {
+            gpu_tnl::GpuTnl::new(&self.device, [&self.globals_bgl, &self.tex3d_bgl])
+        });
+        if samples > 1 {
+            gpu.ensure_ms(&self.device, samples);
+        }
     }
 
     /// Register a baked font's glyph table (`TFNT`) under its handle; the
@@ -1719,6 +1848,9 @@ impl PcRenderer {
         }
         if samples > 1 {
             self.water.ensure_ms(&self.device, self.internal_size);
+            if let Some(gpu) = &mut self.gpu {
+                gpu.ensure_ms(&self.device, samples);
+            }
         }
         self.msaa_targets =
             (samples > 1).then(|| create_msaa_targets(&self.device, self.internal_size));
@@ -1782,7 +1914,15 @@ impl PcRenderer {
             (width * height * 4) as usize,
             "sprite {id:?}: pixel data does not match {width}x{height} RGBA8"
         );
-        self.install_sprite(id, width, height, OFFSCREEN_FORMAT, rgba, width * 4, height);
+        let alpha = rgba.as_chunks::<4>().0.iter().any(|p| p[3] < 255);
+        self.install_sprite(
+            id,
+            (width, height),
+            OFFSCREEN_FORMAT,
+            rgba,
+            width * 4,
+            alpha,
+        );
     }
 
     /// Does this renderer sample block-compressed sprites
@@ -1829,7 +1969,8 @@ impl PcRenderer {
             (row * height / 4) as usize,
             "sprite {id:?}: block data does not match {width}x{height} {format:?}"
         );
-        self.install_sprite(id, width, height, format.wgpu(), blocks, row, height / 4);
+        let alpha = gpu_tnl::bc_alpha(format, blocks);
+        self.install_sprite(id, (width, height), format.wgpu(), blocks, row, alpha);
         true
     }
 
@@ -1849,19 +1990,23 @@ impl PcRenderer {
         m
     }
 
-    /// Create the texture, write `data` (`rows` of `row_bytes`) and
-    /// register its bind group under `id`.
-    #[allow(clippy::too_many_arguments)]
+    /// Create the texture, write `data` (rows of `row_bytes`: pixels, or
+    /// 4×4 blocks for a compressed format) and register its bind group
+    /// under `id`. `alpha`: some texel is below full alpha.
     fn install_sprite(
         &mut self,
         id: SpriteId,
-        width: u32,
-        height: u32,
+        (width, height): (u32, u32),
         format: wgpu::TextureFormat,
         data: &[u8],
         row_bytes: u32,
-        rows: u32,
+        alpha: bool,
     ) {
+        let rows = if format == OFFSCREEN_FORMAT {
+            height
+        } else {
+            height / 4
+        };
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("trino-sprite"),
             size: wgpu::Extent3d {
@@ -1920,6 +2065,7 @@ impl PcRenderer {
                 size: (width, height),
                 bytes: (row_bytes * rows) as u64,
                 compressed: format != OFFSCREEN_FORMAT,
+                alpha,
             },
         );
     }
@@ -1993,8 +2139,7 @@ impl PcRenderer {
     /// The last finished frame's model draws that stay off the native
     /// profile's GPU T&L path, per reason ([`PcGpuReject::index`]); the
     /// draws it takes are `stats().tnl.pc_gpu_draws`. All zero on the
-    /// console profiles, which never take it (issue #51; Phase 1 decides
-    /// and reports, the CPU path still draws).
+    /// console profiles, which never take it (issue #51).
     pub fn pc_gpu_rejects(&self) -> [u32; PcGpuReject::COUNT] {
         self.last_pc_gpu_off
     }
@@ -2091,13 +2236,71 @@ impl PcRenderer {
     /// with textured draws are then grouped by texture (stable: depth order
     /// holds within each texture) — one texture bind per group, the same
     /// grouping the N64 needs to load TMEM once per texture.
+    ///
+    /// The native profile's batch also holds its CPU draws as jobs (run
+    /// here, [`cpu_tnl`]) and its GPU T&L draws, which become instanced
+    /// draw calls ahead of the CPU triangles: opaque and depth-tested, they
+    /// need no painter order.
     fn flush_model_batch(&mut self) {
-        if self.pending_tris.is_empty() {
+        let gpu = self.gpu.as_ref().is_some_and(|g| g.has_pending());
+        if self.pending_tris.is_empty() && self.cpu_jobs.is_empty() && !gpu {
+            return;
+        }
+        self.run_cpu_jobs();
+        let t0 = Instant::now();
+        if let Some(g) = self.gpu.as_mut().filter(|g| g.has_pending()) {
+            let r = g.flush_batch();
+            self.commands.push(Cmd::Meshes {
+                first: r.start,
+                count: r.end - r.start,
+            });
+        }
+        if !self.pending_tris.is_empty() {
+            self.flush_model_batch_now();
+        }
+        self.times.batch_us += micros(t0);
+    }
+
+    /// Tessellate the batch's CPU jobs (over the workers when there is
+    /// enough work) and append their triangles in submission order, as the
+    /// draws would have one by one.
+    fn run_cpu_jobs(&mut self) {
+        if self.cpu_jobs.is_empty() {
             return;
         }
         let t0 = Instant::now();
-        self.flush_model_batch_now();
-        self.times.batch_us += micros(t0);
+        let jobs = std::mem::take(&mut self.cpu_jobs);
+        let chunks = cpu_tnl::run(
+            &self.meshes,
+            &self.job_ctxs,
+            &jobs,
+            &mut self.workers,
+            self.tnl_threads,
+        );
+        let mut next = jobs.iter();
+        for chunk in &chunks {
+            let mut at = 0;
+            for &(n, stats) in &chunk.per_job {
+                let Some(job) = next.next() else { break };
+                let n = n as usize;
+                let before = self.pending_tris.len();
+                self.pending_tris.extend_from_slice(&chunk.tris[at..at + n]);
+                if matches!(
+                    job.kind,
+                    cpu_tnl::JobKind::Lit { .. } | cpu_tnl::JobKind::Water { .. }
+                ) {
+                    self.pending_surf.resize(before, None);
+                    self.pending_surf.extend_from_slice(&chunk.surf[at..at + n]);
+                }
+                self.tag_pending(before, n, job.texture);
+                self.frame_stats.tnl.add(&stats);
+                at += n;
+            }
+        }
+        self.cpu_jobs = jobs;
+        self.cpu_jobs.clear();
+        self.job_ctxs.clear();
+        self.times.tnl_us += micros(t0);
     }
 
     /// [`Self::flush_model_batch`]'s work: sort the pending triangles and
@@ -2289,7 +2492,8 @@ impl PcRenderer {
                     cmds, self.profile, self.caps.max_sprites_per_frame
                 );
             }
-            let tris = (self.tri_verts.len() / 3) as u32 + self.main_tris;
+            let tris =
+                (self.tri_verts.len() / 3) as u32 + self.main_tris + self.pc_gpu_frame_tris();
             if tris > self.caps.max_tris_per_frame {
                 panic!(
                     "strict mode: {tris} 3D triangles this frame busts the {:?} \
@@ -2323,13 +2527,29 @@ impl PcRenderer {
         let (instances, segments) = build_segments(&self.commands);
         self.commands.clear();
         // 3D texture bind groups must exist before the pass borrows self.
+        let mut textures = Vec::new();
         for seg in &segments {
-            if let Segment::Tris {
-                texture: Some(t), ..
-            } = seg
-            {
-                let _ = self.tex3d_group(*t);
+            match seg {
+                Segment::Tris {
+                    texture: Some(t), ..
+                } => textures.push(*t),
+                Segment::Meshes { first, count } => {
+                    if let Some(g) = &self.gpu {
+                        textures.extend(
+                            g.batches(*first..first + count)
+                                .iter()
+                                .filter_map(|b| b.texture),
+                        );
+                    }
+                }
+                _ => {}
             }
+        }
+        for t in textures {
+            let _ = self.tex3d_group(t);
+        }
+        if let Some(g) = &mut self.gpu {
+            self.times.upload_bytes += g.upload(&self.device, &self.queue);
         }
 
         let bytes: &[u8] = bytemuck::cast_slice(&instances);
@@ -2428,7 +2648,7 @@ impl PcRenderer {
         let split = ao.and_then(|_| {
             segments
                 .iter()
-                .rposition(|s| matches!(s, Segment::Tris { .. }))
+                .rposition(|s| matches!(s, Segment::Tris { .. } | Segment::Meshes { .. }))
                 .map(|i| i + 1)
         });
         let (first_part, rest) = segments.split_at(split.unwrap_or(segments.len()));
@@ -2708,9 +2928,79 @@ impl PcRenderer {
                     pass.draw(*first..*first + *count, 0..1);
                     draws += 1;
                 }
+                Segment::Meshes { first, count } => {
+                    if let Some(g) = &self.gpu {
+                        let texture = |t: Option<TexKey>| {
+                            t.and_then(|t| self.tex3d.get(&t)).unwrap_or(&self.white_bg)
+                        };
+                        draws += g.record(&mut pass, *first..first + count, ms.is_some(), &texture);
+                    }
+                }
             }
         }
         draws
+    }
+
+    /// One instanced GPU T&L draw of `model` (`draw_model_instances` on
+    /// the GPU path): the copies' instances, the call's pose and texture.
+    fn draw_gpu_instances(
+        &mut self,
+        model: ModelId,
+        params: &ModelParams,
+        accepted: &[GpuInstanceOf],
+    ) {
+        let Some((tmdl, layout)) = self.meshes.get(&model.0) else {
+            return;
+        };
+        let mesh = Mesh::from_layout(tmdl, layout);
+        let n = accepted.len() as u32;
+        self.frame_stats.models += n;
+        self.frame_stats.tnl.instanced += n;
+        self.frame_stats.tnl.pc_gpu_draws += n;
+        self.frame_stats.tnl.pc_gpu_tris += n * (mesh.index_count / 3) as u32;
+        if let Some(t) = mesh
+            .texture_for(params)
+            .filter(|t| self.sprites.contains_key(&t.0))
+        {
+            texture_budget(
+                TextureBudget {
+                    sprites: &self.sprites,
+                    caps: &self.caps,
+                    strict: self.strict,
+                    profile: self.profile,
+                    stats: &mut self.frame_stats,
+                },
+                t,
+                true,
+            );
+        }
+        let screen = self.current_screen_size();
+        let ctx = tnl_context(&mut self.tnl_ctx, &self.camera, &self.light, screen, &[]);
+        let gpu = self.gpu.get_or_insert_with(|| {
+            gpu_tnl::GpuTnl::new(&self.device, [&self.globals_bgl, &self.tex3d_bgl])
+        });
+        if !gpu.has_mesh(model.0) {
+            gpu.upload_mesh(&self.device, model.0, &mesh);
+        }
+        if self.msaa > 1 {
+            gpu.ensure_ms(&self.device, self.msaa);
+        }
+        let insts: Vec<gpu_tnl::GpuInstance> = accepted.iter().map(|a| a.0).collect();
+        gpu.draw(
+            &ctx,
+            gpu_tnl::DrawKey {
+                model: model.0,
+                mesh: &mesh,
+                params,
+                texture: accepted[0].1,
+            },
+            &insts,
+        );
+    }
+
+    /// Triangles the GPU T&L path submitted this frame (every copy's).
+    fn pc_gpu_frame_tris(&self) -> u32 {
+        self.frame_stats.tnl.pc_gpu_tris
     }
 
     /// The end of a frame: render what is left (the second screen is
@@ -2815,31 +3105,54 @@ struct N64Split {
 }
 
 /// The native profile's GPU T&L decision for one draw (issue #51,
-/// [`trino_core::render3d::pc_gpu_check`]): counted in `stats`' `tnl`
-/// when taken, under its reason in `off` when not. `lit` = the draw is
-/// shaded per pixel (its surface varyings come from the CPU path).
-fn pc_gpu_split(
-    stats: &mut FrameStats,
-    off: &mut [u32; PcGpuReject::COUNT],
+/// [`trino_core::render3d::pc_gpu_check`]), with the reasons only the
+/// renderer knows: `lit` (shaded per pixel: its surface varyings come from
+/// the CPU path), `alpha` (its texture blends) and `enabled` (the path is
+/// on).
+fn pc_gpu_decide(
     (ctx, mesh, matrix, params): (&TnlContext, &Mesh, &Mat34, &ModelParams),
     lit: bool,
-) {
+    alpha: bool,
+    enabled: bool,
+) -> Result<(), PcGpuReject> {
     use trino_core::render3d::{pc_gpu_check, pc_gpu_mesh_check};
-    let decided = pc_gpu_mesh_check(mesh)
-        .and_then(|_| pc_gpu_check(ctx, mesh, matrix, params))
-        .and(if lit {
-            Err(PcGpuReject::PerPixelLit)
-        } else {
-            Ok(())
-        });
-    match decided {
-        Ok(()) => {
-            stats.tnl.pc_gpu_draws += 1;
-            stats.tnl.pc_gpu_tris += (mesh.index_count / 3) as u32;
-        }
-        Err(r) => off[r.index()] += 1,
+    pc_gpu_mesh_check(mesh)?;
+    pc_gpu_check(ctx, mesh, matrix, params)?;
+    if lit {
+        return Err(PcGpuReject::PerPixelLit);
+    }
+    if alpha {
+        return Err(PcGpuReject::TextureAlpha);
+    }
+    if !enabled {
+        return Err(PcGpuReject::Disabled);
+    }
+    Ok(())
+}
+
+/// The detail layer's UV scale of a textured draw (0 = none, or its sprite
+/// isn't loaded), as the screen-space triangles carry it.
+fn detail_scale(
+    sprites: &HashMap<u32, SpriteEntry>,
+    texture: Option<SpriteId>,
+    params: &ModelParams,
+) -> f32 {
+    match (texture, params.detail) {
+        (Some(_), Some(d)) if sprites.contains_key(&d.sprite.0) => d.scale(),
+        _ => 0.0,
     }
 }
+
+/// `ctx`'s index in a batch's T&L contexts (the last one when equal).
+fn push_ctx(ctxs: &mut Vec<TnlContext>, ctx: TnlContext) -> u32 {
+    if ctxs.last() != Some(&ctx) {
+        ctxs.push(ctx);
+    }
+    ctxs.len() as u32 - 1
+}
+
+/// A copy the GPU T&L path accepted, with its texture state.
+type GpuInstanceOf = (gpu_tnl::GpuInstance, Option<TexKey>);
 
 /// [`PcRenderer::n64_estimate`]: the frame's 3D on the N64.
 #[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
@@ -2930,6 +3243,11 @@ impl Renderer for PcRenderer {
         self.n64 = N64Split::default();
         self.pc_gpu_off = [0; PcGpuReject::COUNT];
         self.times = PcFrameTimes::default();
+        self.cpu_jobs.clear();
+        self.job_ctxs.clear();
+        if let Some(gpu) = &mut self.gpu {
+            gpu.begin_frame();
+        }
     }
 
     fn draw_sprite(&mut self, sprite: SpriteId, pos: Vec2, params: &SpriteParams) {
@@ -3106,6 +3424,11 @@ impl Renderer for PcRenderer {
             }
         }
         let screen = self.current_screen_size();
+        // The native profile defers its CPU T&L to the batch flush (worker
+        // threads, `cpu_tnl`) and sends what `pc_gpu_check` accepts to the
+        // GPU; the console profiles tessellate here, as the consoles do.
+        let native = self.profile == SimProfile::Native;
+        let texkey = texture.map(|t| TexKey::model(t.0, params, self.tex_filter));
         if let Some(w) = params.water {
             // Water (ADR 0015): displaced and shaded by the core's water
             // T&L; the per-pixel tier also takes each vertex's surface.
@@ -3123,11 +3446,30 @@ impl Renderer for PcRenderer {
                 camera: self.camera,
                 light: self.light,
             });
+            let gloss = params.gloss as f32 / 255.0;
+            let per_pixel = self.caps.water_tier == WaterTier::PerPixel;
+            if native {
+                self.pc_gpu_off[PcGpuReject::Water.index()] += 1;
+                let job_ctx = push_ctx(&mut self.job_ctxs, ctx);
+                self.cpu_jobs.push(cpu_tnl::CpuJob {
+                    kind: cpu_tnl::JobKind::Water {
+                        set,
+                        gloss,
+                        per_pixel,
+                    },
+                    model: model.0,
+                    matrix: *matrix,
+                    params: *params,
+                    ctx: job_ctx,
+                    texture: texkey,
+                    tris: (mesh.index_count / 3) as u32,
+                });
+                return;
+            }
             let t0 = Instant::now();
             self.pending_surf.resize(before, None);
             let (pending, surf) = (&mut self.pending_tris, &mut self.pending_surf);
-            let gloss = params.gloss as f32 / 255.0;
-            let tnl = if self.caps.water_tier == WaterTier::PerPixel {
+            let tnl = if per_pixel {
                 trino_core::render3d::tessellate_surface(
                     &ctx,
                     &mut self.surf_scratch,
@@ -3166,20 +3508,8 @@ impl Renderer for PcRenderer {
             };
             self.times.tnl_us += micros(t0);
             self.frame_stats.tnl.add(&tnl);
-            if self.profile == SimProfile::Native {
-                pc_gpu_split(
-                    &mut self.frame_stats,
-                    &mut self.pc_gpu_off,
-                    (&ctx, &mesh, matrix, params),
-                    false,
-                );
-            }
             let added = self.pending_tris.len() - before;
-            self.tag_pending(
-                before,
-                added,
-                texture.map(|t| TexKey::model(t.0, params, self.tex_filter)),
-            );
+            self.tag_pending(before, added, texkey);
             return;
         }
         let before = self.pending_tris.len();
@@ -3205,6 +3535,77 @@ impl Renderer for PcRenderer {
             0
         };
         let lit = per_pixel && !unlit && (reach != 0 || self.wetness > 0.0 || params.gloss > 0);
+        if native {
+            let alpha = texture.is_some_and(|t| self.sprites.get(&t.0).is_some_and(|e| e.alpha));
+            let decided = pc_gpu_decide(
+                (&ctx, &mesh, matrix, params),
+                lit,
+                alpha,
+                self.gpu_tnl_active(),
+            );
+            if decided.is_ok() {
+                let detail = detail_scale(&self.sprites, texture, params);
+                let inst = gpu_tnl::instance(
+                    &ctx,
+                    &mesh,
+                    matrix,
+                    params,
+                    !trino_core::render3d::split_policy(&ctx, &mesh, params),
+                    detail,
+                );
+                let gpu = self.gpu.get_or_insert_with(|| {
+                    gpu_tnl::GpuTnl::new(&self.device, [&self.globals_bgl, &self.tex3d_bgl])
+                });
+                if !gpu.has_mesh(model.0) {
+                    gpu.upload_mesh(&self.device, model.0, &mesh);
+                }
+                if self.msaa > 1 {
+                    gpu.ensure_ms(&self.device, self.msaa);
+                }
+                gpu.draw(
+                    &ctx,
+                    gpu_tnl::DrawKey {
+                        model: model.0,
+                        mesh: &mesh,
+                        params,
+                        texture: texkey,
+                    },
+                    &[inst],
+                );
+                self.frame_stats.tnl.pc_gpu_draws += 1;
+                self.frame_stats.tnl.pc_gpu_tris += (mesh.index_count / 3) as u32;
+                return;
+            }
+            if let Err(r) = decided {
+                self.pc_gpu_off[r.index()] += 1;
+            }
+            self.times.lit_draws += lit as u32;
+            let kind = if lit {
+                cpu_tnl::JobKind::Lit {
+                    set: self.light_sets.index(lights::SetKey::new(
+                        &self.camera,
+                        &self.light,
+                        &self.locals,
+                        self.wetness,
+                    )),
+                    mask: reach,
+                    gloss: params.gloss as f32 / 255.0,
+                }
+            } else {
+                cpu_tnl::JobKind::Plain
+            };
+            let job_ctx = push_ctx(&mut self.job_ctxs, ctx);
+            self.cpu_jobs.push(cpu_tnl::CpuJob {
+                kind,
+                model: model.0,
+                matrix: *matrix,
+                params: *params,
+                ctx: job_ctx,
+                texture: texkey,
+                tris: (mesh.index_count / 3) as u32,
+            });
+            return;
+        }
         let t0 = Instant::now();
         self.times.lit_draws += lit as u32;
         let tnl = if lit {
@@ -3247,14 +3648,6 @@ impl Renderer for PcRenderer {
         };
         self.times.tnl_us += micros(t0);
         self.frame_stats.tnl.add(&tnl);
-        if self.profile == SimProfile::Native {
-            pc_gpu_split(
-                &mut self.frame_stats,
-                &mut self.pc_gpu_off,
-                (&ctx, &mesh, matrix, params),
-                lit,
-            );
-        }
         if self.profile == SimProfile::N64 {
             // What the console does with it: its RSP overlay takes the draws
             // `rsp_eligible` accepts (the same rules, from the core); the CPU
@@ -3270,11 +3663,7 @@ impl Renderer for PcRenderer {
             }
         }
         let added = self.pending_tris.len() - before;
-        self.tag_pending(
-            before,
-            added,
-            texture.map(|t| TexKey::model(t.0, params, self.tex_filter)),
-        );
+        self.tag_pending(before, added, texkey);
     }
 
     fn draw_model_instances_with(
@@ -3284,14 +3673,67 @@ impl Renderer for PcRenderer {
         palettes: &[Palette],
         params: &ModelParams,
     ) {
-        // Phase 1 of issue #51: the trait's loop, counted. The GPU path
-        // (Phase 3) draws the copies in one instanced call instead.
         if !self.meshes.contains_key(&model.0) {
             return;
         }
-        for i in instances {
-            let p = i.params(params, palettes);
-            self.draw_model_matrix(model, &i.matrix, Material::VertexLit, &p);
+        if !self.gpu_tnl_active() {
+            // The trait's loop, counted (the CPU path and the console
+            // profiles).
+            for i in instances {
+                let p = i.params(params, palettes);
+                self.draw_model_matrix(model, &i.matrix, Material::VertexLit, &p);
+                self.frame_stats.tnl.instanced += 1;
+            }
+            return;
+        }
+        // The GPU path: every copy it accepts goes into one instanced draw;
+        // a copy it doesn't (off screen, translucent) takes the CPU path
+        // alone, as a separate draw would.
+        let mut accepted: Vec<GpuInstanceOf> = Vec::with_capacity(instances.len());
+        let mut rest: Vec<(Mat34, ModelParams)> = Vec::new();
+        {
+            let Some((tmdl, layout)) = self.meshes.get(&model.0) else {
+                return;
+            };
+            let mesh = Mesh::from_layout(tmdl, layout);
+            let screen = self.current_screen_size();
+            let ctx = tnl_context(&mut self.tnl_ctx, &self.camera, &self.light, screen, &[]);
+            let per_pixel = self.caps.light_tier == LightTier::PerPixel;
+            for i in instances {
+                let p = i.params(params, palettes);
+                let unlit = p.shading == trino_core::Shading::Unlit;
+                let reach = if per_pixel && !unlit && !self.locals.is_empty() {
+                    lights::reach_mask(&mesh, &i.matrix, self.locals.as_slice())
+                } else {
+                    0
+                };
+                let lit = per_pixel && !unlit && (reach != 0 || self.wetness > 0.0 || p.gloss > 0);
+                let texture = mesh
+                    .texture_for(&p)
+                    .filter(|t| self.sprites.contains_key(&t.0));
+                let alpha =
+                    texture.is_some_and(|t| self.sprites.get(&t.0).is_some_and(|e| e.alpha));
+                // Copies share the call's surface but for tint and palette,
+                // so one texture state and one pose for all of them.
+                if p.water.is_none()
+                    && pc_gpu_decide((&ctx, &mesh, &i.matrix, &p), lit, alpha, true).is_ok()
+                {
+                    let detail = detail_scale(&self.sprites, texture, &p);
+                    let affine = !trino_core::render3d::split_policy(&ctx, &mesh, &p);
+                    accepted.push((
+                        gpu_tnl::instance(&ctx, &mesh, &i.matrix, &p, affine, detail),
+                        texture.map(|t| TexKey::model(t.0, &p, self.tex_filter)),
+                    ));
+                } else {
+                    rest.push((i.matrix, p));
+                }
+            }
+        }
+        if !accepted.is_empty() {
+            self.draw_gpu_instances(model, params, &accepted);
+        }
+        for (m, p) in rest {
+            self.draw_model_matrix(model, &m, Material::VertexLit, &p);
             self.frame_stats.tnl.instanced += 1;
         }
     }
@@ -3328,13 +3770,23 @@ impl Renderer for PcRenderer {
             return;
         };
         self.frame_stats.sprites += 1;
+        let texture = Some(TexKey::billboard(sprite.0, self.tex_filter));
+        if self.profile == SimProfile::Native {
+            // In order with the batch's deferred CPU draws.
+            self.cpu_jobs.push(cpu_tnl::CpuJob {
+                kind: cpu_tnl::JobKind::Ready(tris),
+                model: 0,
+                matrix: Mat34::IDENTITY,
+                params: ModelParams::DEFAULT,
+                ctx: 0,
+                texture,
+                tris: 2,
+            });
+            return;
+        }
         let before = self.pending_tris.len();
         self.pending_tris.extend_from_slice(&tris);
-        self.tag_pending(
-            before,
-            2,
-            Some(TexKey::billboard(sprite.0, self.tex_filter)),
-        );
+        self.tag_pending(before, 2, texture);
     }
 
     fn second_screen(&self) -> Option<Vec2> {
@@ -3377,7 +3829,8 @@ impl Renderer for PcRenderer {
 
     fn end_frame(&mut self) {
         self.flush_model_batch();
-        self.frame_stats.tris = self.main_tris + (self.tri_verts.len() / 3) as u32;
+        self.frame_stats.tris =
+            self.main_tris + (self.tri_verts.len() / 3) as u32 + self.frame_stats.tnl.pc_gpu_tris;
         self.last_stats = self.frame_stats;
         self.last_pc_gpu_off = self.pc_gpu_off;
         let t0 = Instant::now();
@@ -3621,5 +4074,18 @@ mod present_tests {
         // Smaller window: fractional downscale still maps corners.
         let p = window_to_game((640, 480), (320, 240), 319.0, 239.0).unwrap();
         assert!((p.x - 638.0).abs() < 0.01 && (p.y - 478.0).abs() < 0.01);
+    }
+}
+
+#[cfg(test)]
+mod tnl_setting_tests {
+    #[test]
+    fn trino_pc_tnl_cpu_turns_the_gpu_path_off() {
+        for v in [None, Some("gpu"), Some("auto"), Some("1"), Some("")] {
+            assert!(super::pc_tnl_setting(v), "{v:?}");
+        }
+        for v in ["cpu", "0", "off"] {
+            assert!(!super::pc_tnl_setting(Some(v)), "{v}");
+        }
     }
 }

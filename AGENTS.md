@@ -449,27 +449,39 @@ RDP).
     `gpu tnl water` on the 3DS. Goldens `water_*`, `showcase_river` (PC, N64, 3DS).
   - **Open:** on the N64 the river costs 12.5 ms of CPU T&L, above the issue's 1.2 ms;
     an RSP water command is BACKLOG › "Water on the RSP".
-- **PC hardware T&L, phase 1 (2026-10-17, ADR 0016 draft, GitHub #51):** the decision
-  and the API, not the GPU path yet.
+- **PC hardware T&L (2026-10-17/18, ADR 0016, GitHub #51):** the PC native profile
+  transforms and lights most models on the GPU; the CPU T&L stays the reference.
   - **Instancing on every target:** `Renderer::draw_model_instances(model, &[Instance],
     &params)` and `draw_model_instances_with(.., &[Palette], ..)`. An `Instance` is a
     matrix, a tint multiplied over the call's (`(a·b + 127) / 255`) and a palette index
     (0 = the call's, `k` = `palettes[k - 1]`). The default loops over
-    `draw_model_matrix`, so the N64 and the 3DS need no code; the PC counts copies
-    (`TnlStats::instanced`). The `instancing` self-test step holds one call to the
-    separate draws' pixels and counters on PC, in ares and in Azahar.
-  - **The rule:** `render3d::pc_gpu_check`/`pc_gpu_mesh_check` → `PcGpuReject`
-    (skinned, blended, empty, water, translucent, offscreen, per-pixel lit). The PC
-    native profile calls it per draw and counts `TnlStats::pc_gpu_draws`/`pc_gpu_tris`
-    and `PcRenderer::pc_gpu_rejects()`, **but still draws everything on the CPU path**
-    (goldens and work counters unchanged). The console profiles never call it.
-  - **Reporting:** the PC prints `TRINO_FRAME:<game> profile= … pc_gpu_draws= pc_gpu_tris=
-    instanced= off_pc_gpu=` when a `TRINO_SMOKE_FRAMES` run ends
-    (`trino_platform_pc::FrameMeter`, `apps/pc` and `trino-runner-pc`);
-    `scene budget` (text and `--json`: `pc_gpu_draws`, `pc_gpu_tris`, `off_pc_gpu`), the
-    Game view HUD and the Inspector show `PC GPU 42/46 draws · 2619 tris · …`.
-  - **Next (#51 phases 2–6):** the WGSL vertex stage and resident buffers, skeletons and
-    the instance ring, the parallel CPU fallback, `TRINO_PC_TNL`, the evidence.
+    `draw_model_matrix`, so the N64 and the 3DS need no code. The `instancing` self-test
+    step holds one call to the separate draws' pixels and counters on PC, in ares and in
+    Azahar.
+  - **The rule:** `render3d::pc_gpu_check`/`pc_gpu_mesh_check` → `PcGpuReject` (empty,
+    water, translucent, flat-shaded skeleton, offscreen; the renderer adds per-pixel lit,
+    texture alpha and disabled). The console profiles never call it.
+  - **The GPU path** (`renderer/gpu_tnl.rs`, `shaders_tnl.wgsl`): meshes resident from
+    `upload_mesh`; per vertex the CPU path's transform, rigid and `SKW2` joints, Gouraud /
+    Flat / Unlit, palette, tint, emissive and fog; the CPU path's depth and near plane;
+    draws sharing mesh, texture, context and pose merge into instanced calls at each batch
+    flush. Counters are exclusive (`pc_gpu_draws`/`pc_gpu_tris` vs `verts`/`emitted`).
+  - **The oracle:** `trino_platform_pc::tnl_oracle::compare` draws a frame on both paths;
+    every native PC golden and `crates/platform-pc/tests/gpu_tnl.rs` hold the GPU frame
+    to ≤ 1/255 mean and ≤ 0.5% of pixels over 8/255 (evidence PNGs in
+    `target/evidence/pc-gpu-tnl`).
+  - **The parallel CPU fallback** (`renderer/cpu_tnl.rs`): rejected draws run on up to 8
+    workers past 2048 triangles (`TRINO_PC_TNL_THREADS`, `set_tnl_threads`), concatenated
+    in draw order (the serial `ScreenTri` stream, tested).
+  - **Switches:** `TRINO_PC_TNL=gpu|auto|cpu` and `PcRenderer::set_hw_tnl`; `TRINO_POWER=
+    low|high` picks the iGPU or the discrete GPU for measurements.
+  - **Reporting:** `TRINO_FRAME` (`pc_gpu_draws= … off_pc_gpu=`), `scene budget` (each
+    reason with its entities, `paths` in `--json`), the editor's Model › **Render path**
+    row (PC / N64 / 3DS), clickable reasons in the Inspector's platform budget, and the
+    Game view HUD's platform lines opening it.
+  - **Measurements:** `cargo test --release -p xtask --test pc_tnl_bench -- --ignored
+    --nocapture` (castle64 hub, Solid Eleven match, 2000 instanced robots; 1080p/4K; CPU vs
+    GPU path); numbers in ADR 0016 §10.
 - **Texture formats (2026-10-17, ADR 0017, GitHub #52 phases 1–4):** a hardware format
   per platform, chosen by measurement.
   - **3DS:** `ETC1`, `ETC1A4`, `RGBA4`, `RGBA5551`, `LA8`, `L8`, `A8`, `RGB565`, `RGBA8`
@@ -701,6 +713,10 @@ Run modes: `TRINO_SCENE=scenes/x.scene.ron cargo run -p trino-app-pc` plays a sc
 `TRINO_AO=off|on|mask` forces the PC's screen-space AO off, on (defaults when the game
 sets none) or to the occlusion alone; editor hooks (`TRINO_EDITOR_SCREENSHOT`, `_SELECT`, `_TAB`, `_ECHO_LOG`,
 `_SCENE`) are listed in the `editor` skill.
+
+**When a task is done, delete the `target/` folder of the tree you built in** (`rm -rf
+target` in that worktree, after copying anything you need out of `target/evidence`).
+Several worktrees' build trees fill the disk; the next build starts clean.
 
 Before committing, always run the CI-equivalent locally:
 
@@ -981,9 +997,22 @@ cargo test --workspace
   crates. Azahar's AppImage exits 127 without `libOpenGL.so.0`: `apt-get download
   libopengl0`, `dpkg-deb -x` it into a scratch dir and put its `usr/lib/x86_64-linux-gnu`
   on `LD_LIBRARY_PATH` (no sudo either way).
-- **A counter that only *decides* still lands in `TnlStats` for every target.**
-  `pc_gpu_draws` (Phase 1 of #51) counts draws whose work is also in `verts`/`emitted`,
-  unlike `rsp_draws`/`gpu_draws`. Read the field's doc before summing a "CPU work" figure.
+- **A hardware-path counter is exclusive of the CPU counters** (`rsp_draws`, `gpu_draws`,
+  `pc_gpu_draws`): their work is not in `verts`/`emitted`. Phase 1 of #51 briefly counted
+  PC GPU draws in both; since Phase 2 a PC "CPU work" figure is the rejected draws only
+  (`scene budget`'s PC `cpu_draws`). Read the field's doc before summing.
+- **`@interpolate(linear)` loses clipped triangles on Mesa's llvmpipe/lavapipe** (CI's
+  GPU): half of a floor crossing the near plane vanished. The GPU T&L emulates the CPU
+  path's affine color as `(color·w)/w` with both perspective-correct. Test a new varying
+  mode on lavapipe before relying on it.
+- **A GPU path must reproduce the CPU path's approximations, not improve them.** Per-pixel
+  fog on the PC GPU path looked better but missed the oracle by 2.7/255 (23.6% of pixels
+  far) on the showcase river, because the CPU path leaves triangles outside the fog band
+  unsplit. Fog moved to the vertex stage, like the CPU path and the consoles.
+- **The editor's kittest `click` helper only finds widgets the layout audit lists**
+  (buttons, headers, ...). A `Label` with `Sense::click()` is not one: the helper believes
+  it hidden, scrolls the panel around and the click lands nowhere at 960×600. Clickable
+  list items are frameless `egui::Button`s (`reason_list` in the Inspector).
 - **Never build a second worktree into this one's `target/`** (`CARGO_TARGET_DIR`). Cargo
   hashes workspace crates without their path, so the other tree's `trino-core` overwrote
   this one's and later builds failed with "unresolved import" for code that exists

@@ -11,7 +11,7 @@ use std::process::Command;
 
 use trino_core::{Camera3, LodPick, Material, Renderer, Vec2, Vec3};
 use trino_platform_pc::{PcRenderer, SimProfile};
-use trino_scene::budget::{self, FrameBudget};
+use trino_scene::budget::{self, FrameBudget, RenderPath};
 use trino_scene::{Entity, Library, ModelComponent, Scene, Target, resolve_for};
 
 fn root() -> PathBuf {
@@ -178,9 +178,14 @@ fn the_rsp_split_names_each_rule_and_follows_the_scene() {
     assert_eq!(fog.rsp_draws, 0);
     assert_eq!(fog.off_rsp, vec![(trino_core::RspReject::Fog, 3)]);
     assert!(fog.n64_cpu_us() > b.n64_cpu_us());
-    // The PC has no RSP: every draw is CPU work.
+    // The PC has no RSP: its GPU T&L takes what `pc_gpu_check` accepts
+    // (fog included) and the translucent rock stays CPU work.
     let pc = estimate(&scene, &lib, &meshes, Target::Pc);
-    assert_eq!((pc.rsp_draws, pc.cpu_draws), (0, 3));
+    assert_eq!((pc.rsp_draws, pc.pc_gpu_draws, pc.cpu_draws), (0, 2, 1));
+    assert_eq!(
+        pc.off_pc_gpu,
+        vec![(trino_core::PcGpuReject::Translucent, 1)]
+    );
     assert!(pc.off_rsp.is_empty());
     // The 3DS splits by its own rules (`gpu_check`): fog is the vertex
     // shader's, the flat and the translucent rock stay on the CPU.
@@ -307,8 +312,25 @@ fn pc_budget_reports_the_gpu_split() {
         assert_eq!(off, b.off_pc_gpu, "{file}: the same reasons");
         let rest: u32 = b.off_pc_gpu.iter().map(|(_, n)| n).sum();
         assert_eq!(b.pc_gpu_draws + rest, b.draws, "{file}");
-        // Phase 1: the CPU path still draws every PC draw.
-        assert_eq!(b.cpu_draws, b.draws);
+        // The split is exclusive, like the consoles': the CPU path draws
+        // only what the GPU path rejects.
+        assert_eq!(b.cpu_draws, b.draws - b.pc_gpu_draws, "{file}");
+        // Each drawn entity has its path; the reasons list their entities.
+        assert_eq!(b.paths.len() as u32, b.draws, "{file}");
+        let hw = b
+            .paths
+            .iter()
+            .filter(|p| p.path == RenderPath::Hardware)
+            .count();
+        assert_eq!(hw as u32, b.pc_gpu_draws, "{file}");
+        for (r, n) in &b.off_pc_gpu {
+            assert_eq!(
+                b.off_path(r.label()).len() as u32,
+                *n,
+                "{file}: {}",
+                r.label()
+            );
+        }
         assert!(
             budget::pc_gpu_line(&b)
                 .starts_with(&format!("PC GPU {}/{} draws", b.pc_gpu_draws, b.draws))
@@ -338,6 +360,22 @@ fn pc_budget_reports_the_gpu_split() {
     let reasons = pc["off_pc_gpu"].as_array().unwrap();
     assert_eq!(reasons.len(), b.off_pc_gpu.len());
     assert_eq!(reasons[0]["reason"], b.off_pc_gpu[0].0.label());
+    let paths = pc["paths"].as_array().unwrap();
+    assert_eq!(paths.len(), b.paths.len());
+    let river = paths.iter().find(|p| p["name"] == "river").unwrap();
+    assert_eq!(
+        (&river["path"], &river["reason"]),
+        (&"cpu".into(), &"water surface".into())
+    );
+    assert_eq!(b.path_of("river"), Some(RenderPath::Cpu("water surface")));
+    let ground = paths.iter().find(|p| p["name"] == "ground").unwrap();
+    assert_eq!(
+        (&ground["path"], &ground["reason"]),
+        (&"gpu".into(), &serde_json::Value::Null)
+    );
+    assert_eq!(RenderPath::Hardware.text(Target::Pc), "GPU");
+    assert_eq!(RenderPath::Hardware.text(Target::N64), "RSP");
+    assert_eq!(RenderPath::Cpu("fog").text(Target::N64), "CPU: fog");
 }
 
 #[test]

@@ -44,9 +44,8 @@ pub struct FrameBudget {
     /// (`Offscreen` draws are culled there, not drawn).
     pub off_gpu: Vec<(GpuReject, u32)>,
     /// PC: draws the native profile's GPU T&L path takes
-    /// ([`pc_gpu_check`]) and their source triangles. Phase 1 of issue #51
-    /// decides only: the CPU path still draws them, so `cpu_draws` and
-    /// `cpu_tnl` keep every PC draw.
+    /// ([`pc_gpu_check`], issue #51) and their source triangles; the
+    /// others are `cpu_draws` and `cpu_tnl`, like the consoles' splits.
     pub pc_gpu_draws: u32,
     pub pc_gpu_tris: u32,
     /// PC: why the other draws stay off it, most common first
@@ -61,6 +60,71 @@ pub struct FrameBudget {
     pub wasted: Vec<String>,
     /// The water surfaces drawn (ADR 0015).
     pub water: Vec<WaterDraw>,
+    /// Each drawn entity's path on this platform, in draw order: the
+    /// editor's Inspector "Render path" row and the reasons' entity lists.
+    pub paths: Vec<DrawPath>,
+}
+
+/// How one entity's draw runs on a platform ([`FrameBudget::paths`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct DrawPath {
+    pub name: String,
+    pub path: RenderPath,
+}
+
+/// The hardware path (N64 RSP, 3DS PICA200, PC GPU T&L), the CPU path with
+/// the rule the draw failed, or an impostor billboard.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RenderPath {
+    Hardware,
+    Cpu(&'static str),
+    Impostor,
+}
+
+impl RenderPath {
+    /// The hardware path's name on `target`.
+    pub fn hardware_name(target: Target) -> &'static str {
+        match target {
+            Target::N64 => "RSP",
+            Target::N3ds | Target::Pc => "GPU",
+        }
+    }
+
+    /// `GPU`, `CPU: fog`, `impostor` (the Inspector's wording).
+    pub fn text(&self, target: Target) -> String {
+        match self {
+            RenderPath::Hardware => Self::hardware_name(target).to_string(),
+            RenderPath::Cpu(r) => format!("CPU: {r}"),
+            RenderPath::Impostor => "impostor".to_string(),
+        }
+    }
+
+    /// One word for `--json`: `rsp`, `gpu`, `cpu` or `impostor`.
+    pub fn key(&self, target: Target) -> &'static str {
+        match (self, target) {
+            (RenderPath::Hardware, Target::N64) => "rsp",
+            (RenderPath::Hardware, _) => "gpu",
+            (RenderPath::Cpu(_), _) => "cpu",
+            (RenderPath::Impostor, _) => "impostor",
+        }
+    }
+}
+
+impl FrameBudget {
+    /// The path of the entity named `name` (its first draw), if drawn.
+    pub fn path_of(&self, name: &str) -> Option<RenderPath> {
+        self.paths.iter().find(|p| p.name == name).map(|p| p.path)
+    }
+
+    /// The entities off the hardware path for `reason` (a label), in draw
+    /// order.
+    pub fn off_path(&self, reason: &str) -> Vec<&str> {
+        self.paths
+            .iter()
+            .filter(|p| matches!(p.path, RenderPath::Cpu(r) if r == reason))
+            .map(|p| p.name.as_str())
+            .collect()
+    }
 }
 
 /// One water surface's cost: what the N64 tier spends on it.
@@ -212,6 +276,10 @@ pub fn estimate<'m>(
             LodPick::Model(id) => id,
             LodPick::Impostor(_) => {
                 b.billboards += 1;
+                b.paths.push(DrawPath {
+                    name: item.name.clone(),
+                    path: RenderPath::Impostor,
+                });
                 continue;
             }
             LodPick::None => continue,
@@ -251,11 +319,13 @@ pub fn estimate<'m>(
                 Ok(_) => {
                     b.gpu_draws += 1;
                     b.gpu_tris += (mesh.index_count / 3) as u32;
+                    b.paths.push(path(item, RenderPath::Hardware));
                 }
                 Err(r) => {
                     b.cpu_draws += 1;
                     b.cpu_tnl.add(&stats);
                     count(&mut gpu_reasons, r);
+                    b.paths.push(path(item, RenderPath::Cpu(r.label())));
                 }
             }
             continue;
@@ -274,8 +344,14 @@ pub fn estimate<'m>(
                 Ok(()) => {
                     b.pc_gpu_draws += 1;
                     b.pc_gpu_tris += (mesh.index_count / 3) as u32;
+                    b.paths.push(path(item, RenderPath::Hardware));
                 }
-                Err(r) => count(&mut pc_reasons, r),
+                Err(r) => {
+                    b.cpu_draws += 1;
+                    b.cpu_tnl.add(&stats);
+                    count(&mut pc_reasons, r);
+                    b.paths.push(path(item, RenderPath::Cpu(r.label())));
+                }
             }
             continue;
         }
@@ -287,17 +363,15 @@ pub fn estimate<'m>(
             Ok(_) => {
                 b.rsp_draws += 1;
                 b.rsp_tris += (mesh.index_count / 3) as u32;
+                b.paths.push(path(item, RenderPath::Hardware));
             }
             Err(r) => {
                 b.cpu_draws += 1;
                 b.cpu_tnl.add(&stats);
                 count(&mut reasons, r);
+                b.paths.push(path(item, RenderPath::Cpu(r.label())));
             }
         }
-    }
-    if target == Target::Pc {
-        b.cpu_draws = b.draws;
-        b.cpu_tnl = b.tnl;
     }
     reasons.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
     gpu_reasons.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
@@ -306,6 +380,13 @@ pub fn estimate<'m>(
     b.off_gpu = gpu_reasons;
     b.off_pc_gpu = pc_reasons;
     b
+}
+
+fn path(item: &crate::DrawItem, path: RenderPath) -> DrawPath {
+    DrawPath {
+        name: item.name.clone(),
+        path,
+    }
 }
 
 /// One more draw for `reason`.

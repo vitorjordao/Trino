@@ -72,6 +72,23 @@ A feature is done only when **PC, N64 and 3DS** all run it and an emulator has s
   `trino_scene::budget` predicts the same split and a test holds the two equal
   (`xtask/tests/scene_budget.rs::pc_budget_reports_the_gpu_split`). Phase 1 of #51
   shipped exactly that, with the CPU path still drawing.
+- **A GPU path is held to the CPU path by an oracle on every golden scene, not by
+  eye.** The PC's `tnl_oracle::compare` draws one frame on both paths with the same
+  renderer (≤ 1/255 mean, ≤ 0.5% of pixels over 8/255) and the native goldens call
+  it next to their golden check. Reproduce the CPU path's approximations (per-vertex
+  fog, affine color on w = 1 triangles, its truncations and operation order), even
+  where per pixel would look better: the river missed by 2.7/255 with per-pixel fog.
+  Make the counters exclusive when the work moves, and update every test that summed
+  them (`render_e2e`, `scene_budget`, the editor's budget test).
+- **A parallel CPU path must emit the serial stream.** Split the draws into
+  contiguous chunks, give each worker its own scratch, concatenate in draw order, and
+  test the triangles (`cpu_tnl::parallel_runs_emit_the_serial_stream`) and a whole
+  frame's pixels and counters for several worker counts. Keep the console profiles on
+  the serial path.
+- **Per-entity paths make a split actionable.** `FrameBudget::paths` (the entity's draw
+  name, `Scene::draw_name`, and its `RenderPath`) feeds `scene budget`'s entity lists and
+  the editor's Render path row; a new hardware path adds its name to
+  `RenderPath::hardware_name`.
 - **A new draw call with a default `Renderer` method needs no backend code** when it
   is a loop over an existing one (`draw_model_instances` over `draw_model_matrix`).
   Its self-test step compares one call with the separate draws (pixels on a probe

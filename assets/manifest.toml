@@ -443,6 +443,44 @@ codec = { n64 = "opus" }
 [blobs.selftest]
 file = "data/selftest.txt"
 
+# Boot compressed on the consoles (issue #56, ADR 0022): libdragon's LZ4
+# on the N64 (`asset_load` decodes as it reads), LZ4 in `groups/boot.tbnd`
+# on the 3DS (decoded on the worker core at boot). The PC and the Web keep
+# loose files.
+[groups.boot]
+compression = { n64 = 1, 3ds = "lz4" }
+
+# ---- self-test content (castle64::selftest::asset_groups, issue #56) ----
+# Two groups the self-tests load behind a loading bar, draw from and unload
+# (PC, ares, Azahar). The tile is in both: uploaded once, freed with the
+# last of them. `selftest_level2` takes libdragon's aPLib on the N64.
+[groups.selftest_level]
+
+[groups.selftest_level2]
+compression = { n64 = 2 }
+
+[sprites.selftest_level_tile]
+file = "sprites/selftest_quadrants.png"
+formats = { n64 = "CI4" }
+groups = ["selftest_level", "selftest_level2"]
+
+[models.selftest_level_card]
+file = "models/proxies/selftest-card.prim.ron"
+texture = "sprites/selftest_level_tile"
+groups = ["selftest_level"]
+
+[blobs.selftest_level]
+file = "data/selftest_level.txt"
+groups = ["selftest_level"]
+
+[blobs.selftest_level2]
+file = "data/selftest_level.txt"
+groups = ["selftest_level2"]
+
+[sounds.selftest_level]
+file = "sounds/beep.wav"
+groups = ["selftest_level2"]
+
 # ---- scenes (editor scenes baked to TSCN, loaded at runtime) ----
 
 # Paths are relative to the project root. Games read them with

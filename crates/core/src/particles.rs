@@ -121,6 +121,20 @@ impl<const N: usize> ParticleSystem<N> {
         s
     }
 
+    /// Apply a quality's particle scale to the cap
+    /// ([`crate::QualitySettings::particle_cap`]: `limit × scale`, at least
+    /// 1 when the effect is on here, at most `N`). Call it once after
+    /// [`from_effect`](Self::from_effect) with `platform.quality()
+    /// .particle_scale` (1.0 on the consoles: no change). Particles alive
+    /// past a lower cap finish their lives.
+    pub fn scale_limit(&mut self, scale: f32) {
+        let q = crate::QualitySettings {
+            particle_scale: scale,
+            ..crate::QualitySettings::HIGH
+        };
+        self.limit = q.particle_cap(self.limit).min(N);
+    }
+
     pub fn len(&self) -> usize {
         self.count
     }

@@ -11,10 +11,13 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use trino_core::{
-    BindDevice, BlobId, Button, Caps, DisplayInfo, DisplaySettings, InputInfo, Platform, SaveError,
+    BindDevice, BlobId, Button, Caps, DisplayInfo, DisplaySettings, GroupId, GroupTable, InputInfo,
+    LoadState, MemoryReport, Platform, PresetTable, QualityInfo, QualityPreset, QualitySettings,
+    SaveError,
 };
 
 use crate::input::{BINDABLE, BINDINGS, InputRequest, PcInput};
+use crate::quality::{HostedQuality, QualityRequest};
 
 pub struct PcPlatform {
     start: Instant,
@@ -39,6 +42,22 @@ pub struct PcPlatform {
     input_request: Option<InputRequest>,
     /// The simulated console's hardware tier ([`Platform::hw_tier`]).
     hw_tier: trino_core::HwTier,
+    /// The quality ([`Platform::quality`] and its siblings): the console's
+    /// fixed preset on a simulated console, High on the PC until a host
+    /// publishes its own.
+    quality: HostedQuality,
+    /// The asset groups the bake holds and where each one is (issue #56):
+    /// the game asks here, the host's loader (`trino_runner_pc::GroupLoader`)
+    /// serves it every frame.
+    groups: GroupTable,
+    /// Blobs of loaded non-boot groups, freed with their group
+    /// ([`Platform::group_blob`]).
+    group_blobs: HashMap<u32, Vec<u8>>,
+    /// Resident assets by category, kept by the host as it uploads and
+    /// frees them ([`Platform::memory`]).
+    memory: MemoryReport,
+    /// The host's counting allocator, when it installed one.
+    heap: Option<&'static dyn trino_core::mem::HeapStats>,
 }
 
 impl PcPlatform {
@@ -58,7 +77,41 @@ impl PcPlatform {
             labels: Default::default(),
             input_request: None,
             hw_tier: caps.hw_tier,
+            quality: HostedQuality::new(caps),
+            groups: GroupTable::new(),
+            group_blobs: HashMap::new(),
+            memory: MemoryReport {
+                ram_bytes: caps.ram_bytes,
+                ..MemoryReport::default()
+            },
+            heap: None,
         }
+    }
+
+    /// The groups and their states, for the host's loader.
+    pub fn groups_mut(&mut self) -> &mut GroupTable {
+        &mut self.groups
+    }
+
+    /// A non-boot group's blob arrived (its group is loading).
+    pub fn insert_group_blob(&mut self, id: BlobId, bytes: Vec<u8>) {
+        self.group_blobs.insert(id.0, bytes);
+    }
+
+    /// Free a group blob; returns its bytes.
+    pub fn remove_group_blob(&mut self, id: BlobId) -> usize {
+        self.group_blobs.remove(&id.0).map_or(0, |b| b.len())
+    }
+
+    /// The resident-asset counts the host keeps ([`Platform::memory`]).
+    pub fn memory_mut(&mut self) -> &mut MemoryReport {
+        &mut self.memory
+    }
+
+    /// Report `heap`'s use as the heap (`#[global_allocator] static A:
+    /// trino_core::mem::Counting<std::alloc::System>`).
+    pub fn set_heap(&mut self, heap: &'static dyn trino_core::mem::HeapStats) {
+        self.heap = Some(heap);
     }
 
     /// The host simulates a console's tier (`TRINO_SIM=n64x|3dsnew`, the
@@ -90,6 +143,24 @@ impl PcPlatform {
         self.second_screen = size;
     }
 
+    /// The host publishes the quality in effect and how it got there
+    /// (`None`: fixed, the game's requests are dropped).
+    pub fn set_quality_info(&mut self, info: Option<QualityInfo>) {
+        self.quality.publish(info);
+    }
+
+    /// The project's presets (`assets/quality.ron`, baked to
+    /// `quality/presets`).
+    pub fn set_quality_presets(&mut self, table: PresetTable) {
+        self.quality.set_presets(table);
+    }
+
+    /// The game's last quality request, for the host to apply after the
+    /// frame.
+    pub fn take_quality_request(&mut self) -> Option<QualityRequest> {
+        self.quality.take_request()
+    }
+
     /// The host publishes the display state (window, monitor, picture).
     pub fn set_display_info(&mut self, info: Option<DisplayInfo>) {
         self.display = info;
@@ -115,6 +186,39 @@ impl PcPlatform {
 impl Platform for PcPlatform {
     fn now_micros(&self) -> u64 {
         self.start.elapsed().as_micros() as u64
+    }
+
+    fn load_group(&mut self, group: GroupId) -> LoadState {
+        self.groups.request_load(group)
+    }
+
+    fn unload_group(&mut self, group: GroupId) {
+        self.groups.request_unload(group);
+    }
+
+    fn group_state(&self, group: GroupId) -> LoadState {
+        self.groups.state(group)
+    }
+
+    fn group_blob(&self, id: BlobId) -> Option<&[u8]> {
+        match self.group_blobs.get(&id.0) {
+            Some(b) => Some(b),
+            None => self.blob(id),
+        }
+    }
+
+    fn memory(&self) -> MemoryReport {
+        let clamp = |v: usize| v.min(u32::MAX as usize) as u32;
+        let (heap_used, heap_peak) = self
+            .heap
+            .map_or((0, 0), |h| (clamp(h.used()), clamp(h.peak())));
+        MemoryReport {
+            heap_used,
+            heap_peak,
+            groups_resident: self.groups.resident(),
+            groups_loading: self.groups.loading(),
+            ..self.memory
+        }
     }
 
     fn hw_tier(&self) -> trino_core::HwTier {
@@ -196,6 +300,26 @@ impl Platform for PcPlatform {
         if self.display.is_some() {
             self.display_request = Some(settings);
         }
+    }
+
+    fn quality(&self) -> QualitySettings {
+        self.quality.settings()
+    }
+
+    fn set_quality(&mut self, settings: QualitySettings) {
+        self.quality.request(settings);
+    }
+
+    fn quality_preset(&self, preset: QualityPreset) -> Option<QualitySettings> {
+        self.quality.preset(preset)
+    }
+
+    fn quality_info(&self) -> Option<QualityInfo> {
+        self.quality.info()
+    }
+
+    fn detect_quality(&mut self) {
+        self.quality.detect();
     }
 
     fn input_info(&self) -> Option<InputInfo> {
@@ -307,6 +431,53 @@ mod tests {
         p.set_display(s);
         assert_eq!(p.take_display_request(), Some(s));
         assert_eq!(p.take_display_request(), None);
+    }
+
+    #[test]
+    fn quality_is_fixed_until_a_host_publishes_it() {
+        use trino_core::{GpuClass, QualitySource};
+        // A simulated console: its fixed preset, requests dropped.
+        let mut n64 = PcPlatform::new(&Caps::N64);
+        assert_eq!(n64.quality(), QualitySettings::fixed(QualityPreset::Low));
+        let n3ds = PcPlatform::new(&Caps::N3DS_NEW);
+        assert_eq!(n3ds.quality().preset, QualityPreset::Medium);
+        n64.set_quality(QualitySettings::ULTRA);
+        n64.detect_quality();
+        assert_eq!(n64.take_quality_request(), None);
+        assert_eq!(n64.quality_preset(QualityPreset::Low), None);
+        assert_eq!(n64.quality_info(), None);
+        // The PC: High until its host publishes, then requests go through.
+        let mut pc = PcPlatform::new(&Caps::PC);
+        assert_eq!(pc.quality(), QualitySettings::HIGH);
+        let table = PresetTable::parse("[low]\nrender_scale=0.6\n");
+        pc.set_quality_presets(table);
+        pc.set_quality_info(Some(QualityInfo {
+            settings: QualitySettings::MEDIUM,
+            scale: 0.9,
+            detected: Some(QualityPreset::Medium),
+            source: QualitySource::Detected,
+            gpu: GpuClass::Integrated,
+            handheld: false,
+            gpu_us: 12_000,
+        }));
+        assert_eq!(pc.quality(), QualitySettings::MEDIUM);
+        assert_eq!(pc.quality_info().unwrap().scale, 0.9);
+        assert_eq!(
+            pc.quality_preset(QualityPreset::Low).unwrap().render_scale,
+            0.6
+        );
+        assert_eq!(pc.quality_preset(QualityPreset::Custom), None);
+        pc.set_quality(QualitySettings {
+            render_scale: 7.0,
+            ..QualitySettings::LOW
+        });
+        let Some(QualityRequest::Set(q)) = pc.take_quality_request() else {
+            panic!("no request");
+        };
+        assert_eq!(q.render_scale, 2.0, "requests are clamped");
+        pc.detect_quality();
+        assert_eq!(pc.take_quality_request(), Some(QualityRequest::Detect));
+        assert_eq!(pc.take_quality_request(), None);
     }
 
     #[test]

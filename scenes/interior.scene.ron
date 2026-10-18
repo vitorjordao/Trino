@@ -1,9 +1,12 @@
 // Interior visibility demo (`trino_core::vis`): three rooms in a row,
 // each a `Cell`, joined by `Portal` doorways. From inside a room only the
 // rooms seen through the doorways are drawn. Baked as `[scenes.interior]`
-// for the console self-tests (`castle64::selftest::portals`).
+// for the console self-tests (`castle64::selftest::portals`). Rooms B and C
+// also name the asset groups their contents would stream from (scene v6,
+// `trino_core::CellGroups`; `cargo xtask assets check` holds them to the
+// manifest).
 (
-    version: 3,
+    version: 6,
     name: "interior",
     environment: (
         clear: (24, 22, 30),
@@ -65,7 +68,7 @@
         rot: (0.0, 0.0, 0.0),
         scale: (1.0, 1.0, 1.0),
     ),
-    vis: Some(Cell(size: (8.0, 4.0, 8.0))),
+    vis: Some(Cell(size: (8.0, 4.0, 8.0), groups: ["selftest_level"])),
     children: [
 (
     name: "floor",
@@ -103,7 +106,7 @@
         rot: (0.0, 0.0, 0.0),
         scale: (1.0, 1.0, 1.0),
     ),
-    vis: Some(Cell(size: (8.0, 4.0, 8.0))),
+    vis: Some(Cell(size: (8.0, 4.0, 8.0), groups: ["selftest_level2"])),
     children: [
 (
     name: "floor",

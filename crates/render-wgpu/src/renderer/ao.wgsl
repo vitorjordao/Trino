@@ -56,6 +56,13 @@ fn hi() -> vec2<i32> {
     return vec2<i32>(P.size) - vec2<i32>(1, 1);
 }
 
+// The last occlusion texel in use: the targets can be larger (kept across
+// dynamic resolution's sizes), so not their dimensions.
+fn ao_top() -> vec2<i32> {
+    let k = i32(P.scale);
+    return (vec2<i32>(P.size) + vec2<i32>(k - 1, k - 1)) / k - vec2<i32>(1, 1);
+}
+
 // The depth at pixel `p` (the one read of it: WebGL2 reads it as a float
 // texture, `depth_as_float` in mod.rs).
 fn load_depth(p: vec2<i32>) -> f32 {
@@ -186,7 +193,7 @@ fn texel_depth(q: vec2<i32>) -> f32 {
 }
 
 fn blur(p: vec2<i32>, step: vec2<i32>) -> f32 {
-    let top = vec2<i32>(textureDimensions(t_ao)) - vec2<i32>(1, 1);
+    let top = ao_top();
     let d = texel_depth(p);
     let center = textureLoad(t_ao, p, 0).r;
     if d >= 1.0 {
@@ -242,7 +249,7 @@ fn occlusion_at(p: vec2<i32>) -> f32 {
     }
     let zc = view_z(d);
     let tol = zc * 0.08 + 1e-4;
-    let top = vec2<i32>(textureDimensions(t_ao)) - vec2<i32>(1, 1);
+    let top = ao_top();
     let f = vec2<f32>(p) / f32(P.scale);
     let base = vec2<i32>(floor(f));
     let fr = f - floor(f);

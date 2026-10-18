@@ -20,8 +20,10 @@
 //! Dev hooks: `TRINO_EDITOR_SMOKE_FRAMES=N` closes after N frames;
 //! `TRINO_EDITOR_SCREENSHOT=out.png` (+ `TRINO_EDITOR_SCREENSHOT_FRAME=N`)
 //! saves a screenshot of the whole window and exits (the launcher too);
-//! `TRINO_EDITOR_TAB=level` opens with the Level tab focused (`mixer`:
-//! the Mixer tab); `TRINO_EDITOR_OPEN=audio:music/theme@n64` opens the
+//! `TRINO_EDITOR_TAB=level` opens with the Level tab focused (`mixer`,
+//! `quality`, `memory`: the Mixer, the Quality, the Memory tab);
+//! `TRINO_EDITOR_QUALITY=low[,dynres]` previews a quality preset in the Game
+//! view's PC and Web profiles; `TRINO_EDITOR_OPEN=audio:music/theme@n64` opens the
 //! Audio inspector on a sound, its waveform over that platform's decode;
 //! `TRINO_EDITOR_RECENT=<file>` keeps the recent projects there.
 
@@ -32,6 +34,7 @@ mod budget;
 mod dialogs;
 mod doc;
 mod gizmo;
+mod groups;
 mod launcher;
 #[cfg(test)]
 mod layout_audit;
@@ -43,6 +46,7 @@ mod panels;
 mod play;
 mod preview;
 mod project;
+mod quality;
 mod recent;
 mod textures;
 mod theme;
@@ -82,6 +86,8 @@ pub const EDITOR_HOOKS: &[&str] = &[
     "TRINO_EDITOR_GAME",
     "TRINO_EDITOR_LOD_PREVIEW",
     "TRINO_EDITOR_AO",
+    "TRINO_EDITOR_QUALITY",
+    "TRINO_EDITOR_ASSET_GROUP",
 ];
 
 /// What the editor opens on start.

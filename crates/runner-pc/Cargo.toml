@@ -8,7 +8,9 @@ repository.workspace = true
 rust-version.workspace = true
 
 [features]
-default = ["gamepad"]
+default = ["heap-stats", "gamepad"]
+# Count the system allocator as the heap (`HEAP`, `TRINO_FRAME heap=`).
+heap-stats = []
 # Rebake + re-upload assets live when a master changes.
 watch = ["trino-asset-pipeline/watch"]
 # Gamepads through gilrs (Linux: needs libudev-dev at build time).

@@ -5,9 +5,11 @@
 //! contributors and CI never memorize per-platform incantations.
 
 mod agents;
+mod assets_cmd;
 mod audio;
 mod blender;
 mod castle64_assets;
+mod console_groups;
 mod emulators;
 mod fbgolden;
 mod font_assets;
@@ -20,6 +22,7 @@ mod n64;
 mod particles;
 mod perf;
 mod project;
+mod quality;
 mod river_assets;
 mod scene;
 mod showcase_assets;
@@ -59,6 +62,9 @@ commands:
                        golden frames in tests/golden/web/ (--bless rewrites)
   run   <pc|n64|3ds|web> build and launch (emulator for consoles, a
                        local server + the browser for web)
+  run pc --quality <low|medium|high|ultra|auto>
+                       the native profile at that quality preset for this
+                       run (TRINO_QUALITY; auto calibrates; never saved)
   run n64 --device sc64|everdrive
   run 3ds --device network [--ip <IP>] [--gdb [--gdb-port N]]
                        real hardware instead of the emulator (flashcart
@@ -86,6 +92,16 @@ commands:
   test all             the host suite, then each targeted console's
   assets <pc|n64|3ds|web> bake assets into target/assets/<platform>
   assets [all]         bake for every platform the project targets
+  assets report [--platform n64|3ds|pc|web] [--tier base|expanded] [--json]
+                       RAM per console tier: what is left for assets
+                       ([memory]), each group's bytes loaded and baked,
+                       boot / boot + group / each scene's groups (fails
+                       when one does not fit, like strict mode)
+  assets check [--json]
+                       scenes' `requires` and cell groups are declared, what
+                       they draw is in boot or one of them, and they fit
+  assets group <sprites/x|models/x|..> <group[,group..]|boot> [--json]
+                       put an asset in groups (declaring new ones)
   watch <pc|n64>       live-reload session (pc: dylib hot swap; n64: rebuild
                        ROM + relaunch ares). pc: --game <crate> picks the
                        game dylib to rebuild (default: castle64)
@@ -130,6 +146,14 @@ commands:
   audio preview <sounds/x|music/x> [--platform ..] [--out <dir>] [--json]
                        each platform's decoded result as a WAV (+ the master)
   audio mix [--json]   validate assets/audio.toml and print the mix
+  quality show [--json] | check
+                       the project's quality presets (trino.toml [pc.quality],
+                       assets/quality.ron over the built-in Low..Ultra)
+  quality set <preset> <key>=<value>.. [--json] | reset [<preset>..]
+                       change (or drop) a preset's values in assets/quality.ron
+  quality bench [--json]
+                       the first launch's calibration on this machine: each
+                       preset's frame time on the bench scene, and the pick
   model inspect <file> [--fps N] [--once a,b] [--anim] [--json]
                        bake a .glb/.gltf/.prim.ron like the engine and report
                        tris, joints, clips, bounds, N64 budget (art gate)
@@ -296,6 +320,27 @@ fn main() -> ExitCode {
             .map(String::from)
             .collect(),
     };
+    // `run pc --quality <preset|auto>` (issue #55): TRINO_QUALITY for the run.
+    let pc_quality = match web::take_value(&mut args, "--quality") {
+        Ok(Some(q)) => {
+            if quality_choice(&q).is_none() {
+                eprintln!("xtask: --quality needs low, medium, high, ultra or auto");
+                return ExitCode::FAILURE;
+            }
+            if args.first().map(String::as_str) != Some("run")
+                || args.get(1).map(String::as_str) != Some("pc")
+            {
+                eprintln!("xtask: --quality goes with `run pc`");
+                return ExitCode::FAILURE;
+            }
+            Some(q.to_ascii_lowercase())
+        }
+        Ok(None) => None,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
     let mut it = args.iter().map(String::as_str);
 
     match (it.next(), it.next()) {
@@ -306,7 +351,12 @@ fn main() -> ExitCode {
         (Some("assets"), Some("web")) => assets_for(&project, Target::Web),
         (Some("run"), Some("pc")) => {
             let extra: Vec<&str> = it.collect();
-            build_pc(&project, "run", &extra)
+            let envs: Vec<(&str, &str)> = pc_quality
+                .as_deref()
+                .map(|q| ("TRINO_QUALITY", q))
+                .into_iter()
+                .collect();
+            build_pc_with(&project, "run", &extra, &envs)
         }
         (Some("test"), None | Some("pc")) => test_pc(&project, bless),
         // Batch commands: every platform `[project] platforms` lists, in
@@ -326,6 +376,10 @@ fn main() -> ExitCode {
             Target::N3ds => n3ds::test(&project, !no_build, bless, accurate, hw.new3ds_tests()),
             Target::Web => web::test(&project, &web_test),
         }),
+        (Some("assets"), Some("report" | "check" | "group")) => {
+            let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
+            assets_cmd::run(&project.root, &rest)
+        }
         (Some("assets"), Some("n64")) => assets_for(&project, Target::N64),
         (Some("assets"), Some("3ds" | "n3ds")) => assets_for(&project, Target::N3ds),
         (Some("assets"), Some(platform)) => match Platform::parse(platform) {
@@ -364,6 +418,10 @@ fn main() -> ExitCode {
         (Some("texture"), _) => {
             let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
             texture::run(&project.root, &rest)
+        }
+        (Some("quality"), _) => {
+            let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
+            quality::run(&project, &rest)
         }
         (Some("audio"), _) => {
             let mut rest: Vec<String> = args.iter().skip(1).cloned().collect();
@@ -507,6 +565,16 @@ fn assets_for(project: &project::Project, t: Target) -> ExitCode {
 /// `build pc` / `run pc`: the engine's `trino-app-pc`, or an external
 /// project's desktop host (`[pc] package`, default `<name>-pc`).
 fn build_pc(project: &project::Project, verb: &str, extra: &[&str]) -> ExitCode {
+    build_pc_with(project, verb, extra, &[])
+}
+
+/// [`build_pc`] with environment variables (`run pc --quality`).
+fn build_pc_with(
+    project: &project::Project,
+    verb: &str,
+    extra: &[&str],
+    envs: &[(&str, &str)],
+) -> ExitCode {
     let manifest = project.root.join("Cargo.toml");
     let manifest = manifest.to_string_lossy();
     let mut cmd = vec![verb];
@@ -515,7 +583,7 @@ fn build_pc(project: &project::Project, verb: &str, extra: &[&str]) -> ExitCode 
     }
     cmd.extend(["-p", project.pc_package.as_str()]);
     cmd.extend(extra);
-    cargo(&cmd, &[])
+    cargo(&cmd, envs)
 }
 
 /// `test` / `test pc`: the workspace suite (the project's own workspace
@@ -1140,6 +1208,15 @@ fn write_png(path: &Path, width: u32, height: u32, rgba: &[u8]) {
 
 fn cargo_bin() -> String {
     std::env::var("CARGO").unwrap_or_else(|_| "cargo".into())
+}
+
+/// A preset name or `auto` (what `TRINO_QUALITY` takes).
+fn quality_choice(s: &str) -> Option<()> {
+    let s = s.trim();
+    (s.eq_ignore_ascii_case("auto")
+        || trino_core::QualityPreset::parse(s)
+            .is_some_and(|p| p != trino_core::QualityPreset::Custom))
+    .then_some(())
 }
 
 fn cargo(args: &[&str], envs: &[(&str, &str)]) -> ExitCode {

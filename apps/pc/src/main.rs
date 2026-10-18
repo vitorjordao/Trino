@@ -11,6 +11,10 @@
 //!   printing a `TRINO_FRAME:` line (frame time, draws, the PC GPU T&L split)
 //!   and a `TRINO_TEXTURES:` line (sprite textures on the GPU, BC ones).
 //! - `TRINO_BC=0` — no BC textures: decoded RGBA8, as on a GPU without BC.
+//! - `TRINO_QUALITY=low|medium|high|ultra|auto` — the native profile's
+//!   quality preset for this run (`cargo xtask run pc --quality low`; smoke
+//!   runs take High); otherwise the saved `target/save/castle64.quality`, or
+//!   a calibration on the first launch (`trino_runner_pc::QualityHost`).
 //! - `TRINO_SIM=native|n64|3ds|web` — console simulation profile (default
 //!   n64); `n64x` / `3dsnew` add the expanded hardware tier (the N64 with
 //!   the Expansion Pak, the New 3DS: the tier's `Caps` and `hw_tier`).
@@ -86,6 +90,10 @@ struct Ctx {
     audio: PcAudio,
     input: PcInput,
     platform: PcPlatform,
+    /// The native profile's quality (#55; the consoles' is fixed).
+    quality: Option<trino_runner_pc::QualityHost>,
+    /// Serves `Platform::load_group` before every update (issue #56).
+    groups: trino_runner_pc::GroupLoader,
     game: castle64::Castle64Game,
     /// `TRINO_SCENE` mode: play an editor scene instead of the game.
     player: Option<scene_player::ScenePlayer>,
@@ -153,6 +161,9 @@ impl App {
         // console's budget (an N64 profile gets the 2 KB EEPROM).
         let mut platform = PcPlatform::new(&self.profile.caps().with_tier(tier))
             .with_save_file(PathBuf::from("target/save/castle64.sav"));
+        if let Some(h) = trino_runner_pc::heap() {
+            platform.set_heap(h);
+        }
 
         // Bake + load. Dev-time convenience: the app always starts fresh.
         trino_asset_pipeline::bake_all(
@@ -163,6 +174,11 @@ impl App {
         .unwrap_or_else(|e| panic!("{e}"));
         upload_assets(&mut renderer, &mut audio, &mut platform, None)
             .expect("failed to load baked assets");
+        let mut groups = trino_runner_pc::GroupLoader::new(&baked_dir(), &renderer, &mut platform);
+        if let Some(plan) = trino_runner_pc::GroupLoader::strict_plan(&assets_root(), &renderer) {
+            groups = groups.with_plan(plan);
+            groups.check_boot();
+        }
 
         #[cfg(feature = "reload")]
         let (asset_events, watcher) = {
@@ -179,6 +195,23 @@ impl App {
             (rx, Box::new(watcher) as Box<dyn std::any::Any>)
         };
 
+        let quality = self.profile.is_native().then(|| {
+            use trino_core::Platform as _;
+            let baked = platform.blob(trino_core::BlobId::from_path(
+                trino_asset_pipeline::quality::LOGICAL,
+            ));
+            let mut q = trino_runner_pc::QualityHost::new(
+                PathBuf::from("target/save/castle64.quality"),
+                baked,
+            );
+            let hz = window
+                .current_monitor()
+                .and_then(|m| m.refresh_rate_millihertz())
+                .map(|mhz| mhz.div_ceil(1000));
+            q.begin(&mut renderer, &mut platform, hz);
+            q
+        });
+
         let (iw, ih) = renderer.internal_size();
         let game = castle64::Castle64Game::new(Vec2::new(iw as f32, ih as f32));
 
@@ -189,6 +222,8 @@ impl App {
             audio,
             input: PcInput::new(),
             platform,
+            quality,
+            groups,
             game,
             player,
             showcase,
@@ -245,6 +280,8 @@ impl ApplicationHandler for App {
                 ctx.last_frame = now;
 
                 let input = ctx.input.poll();
+                ctx.groups
+                    .pump(&mut ctx.renderer, &mut ctx.audio, &mut ctx.platform);
 
                 if let Some(player) = &mut ctx.player {
                     player.update(&input, dt);
@@ -279,11 +316,17 @@ impl ApplicationHandler for App {
                     }
                 }
 
+                if let Some(q) = &mut ctx.quality {
+                    q.end_frame(&mut ctx.renderer, &mut ctx.platform);
+                    self.meter.set_quality(q.note(&ctx.renderer));
+                }
                 self.frames += 1;
                 self.meter.record(
                     &trino_core::Renderer::stats(&ctx.renderer),
                     &ctx.renderer.pc_gpu_rejects(),
                 );
+                self.meter
+                    .record_memory(&trino_core::Platform::memory(&ctx.platform));
                 if let Some(max) = self.smoke_frames
                     && self.frames >= max
                 {

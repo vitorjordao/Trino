@@ -24,11 +24,14 @@ Run modes and switches for `trino-app-pc`:
 | `TRINO_SIM=native\|n64\|3ds\|web` | Console simulation profile (default `n64`): internal resolution, filtering, color depth, the 3DS's two screens; `web` is the native picture with the browser's budget (`Caps::WEB`) |
 | `TRINO_SIM=n64x\|3dsnew` | A console's expanded hardware tier ([ADR 0020](adr/0020-console-hardware-tiers.md)): the N64 with the Expansion Pak or the New 3DS. The console's look, the tier's `Caps` (`renderer.caps().hw_tier`, RAM, cores, crowd/particle scales) and `Platform::hw_tier()`; `TRINO_SCENE` resolves the tier's variants |
 | `TRINO_LOOK=off\|n64` | Turns the N64 output emulation off or on, independently of the profile |
-| `TRINO_STRICT=1` | Strict mode: panic when content exceeds the profile's `Caps` (also the loaded models against the tier's `ram_bytes`: 4 MB N64, 8 MB with the Pak) |
+| `TRINO_STRICT=1` | Strict mode: panic when content exceeds the profile's `Caps` (also the loaded models against the tier's `ram_bytes`: 4 MB N64, 8 MB with the Pak), and when boot plus the loaded asset groups pass the console's RAM left for assets (`cargo xtask assets report`'s numbers, [ADR 0022](adr/0022-asset-groups-and-memory.md)): the panic names the groups, the overrun and the biggest assets |
 | `TRINO_SCENE=scenes/x.scene.ron` | Play an editor scene instead of the game; it reloads when the scene, its prefabs or materials change |
 | `TRINO_GAME=showcase` | Run `examples/showcase`, the demo scene exported to code |
 | `TRINO_SMOKE_FRAMES=N` | Exit after N frames (CI smoke runs) |
 | `TRINO_BC=0` | Upload BC1/BC3/BC7 textures decoded instead of as blocks (the path of a GPU without BC); a smoke run prints `TRINO_TEXTURES:` with the VRAM either way |
+| `TRINO_QUALITY=low\|medium\|high\|ultra\|auto` | The quality preset for this run (`cargo xtask run pc --quality low`), never saved; `auto` runs the calibration. Native profile only (below) |
+| `TRINO_QUALITY_BENCH=1` | Run the calibration, print its `TRINO_QUALITY: bench` line and exit (`cargo xtask quality bench`) |
+| `TRINO_MSAA=0` | No MSAA, whatever the preset says |
 
 Keyboard mapping: A/B = Z/X, X/Y = C/V, L/R = Q/E, Start = Enter, Select = Right Shift,
 D-pad = arrows, stick = WASD. The mouse feeds `InputState::pointer`. Gamepads go through
@@ -43,6 +46,45 @@ half-second lock-free ring per playback, so a 10-minute track costs its Ogg byte
 with mutes and duck rules start from the project's `assets/audio.toml`; the player's
 volumes persist per game in `<save_name>.audio` next to the save
 ([ADR 0021](adr/0021-audio-pipeline.md), [ASSETS.md](ASSETS.md#audio-a-codec-per-platform-streaming-buses-adr-0021)).
+
+### Quality presets
+
+On the native profile (`TRINO_SIM=native`, a standalone project's PC build) the game runs
+at one of four presets — **Low**, **Medium**, **High**, **Ultra** — each a render scale,
+dynamic resolution, MSAA, AO, LOD bias, particle scale, anisotropy, sharpening and a
+frame limit ([ADR 0023](adr/0023-quality-presets.md)). High is the PC's look before
+presets; Ultra is High supersampled at 1.25×. The consoles' presets are fixed (N64 and
+3DS Low, New 3DS Medium) and change nothing there.
+
+- **First launch:** `trino.toml`'s `[pc.quality] default` — `auto` (the default) draws a
+  built-in scene at each preset for at most 2 s (about 0.5 s on CI's software adapter)
+  and keeps the highest that holds 90% of the display's frame; a software adapter gets
+  Low. A **Steam Deck** (`SteamDeck=1` or its DMI board) starts at Medium capped at
+  60 fps. The result is saved to `<save_name>.quality` next to the save: `key=value`
+  text, safe to edit or delete (every value is clamped on read).
+- **Dynamic resolution** (Low, Medium) moves the 3D's scale within its range to hold the
+  frame time — GPU timestamps where the adapter has them, else the frame intervals. The
+  3D is upscaled bilinearly with contrast-adaptive sharpening; the HUD always draws at
+  the picture's resolution.
+- **Frame limit:** VSync, 30/40/60/120/144 fps or unlimited; a cap under the display's
+  rate presents FIFO and sleeps, over it presents mailbox or immediate.
+- **`TRINO_FRAME`** carries the 1% lows and the quality:
+  `low1_us=… low1_fps=… quality=low scale=0.82 quality_from=detected detected=low gpu_us=…`.
+- **The project's presets** live in `assets/quality.ron` (each preset names only what it
+  changes); `cargo xtask quality show|check|set|reset|bench` and the editor's Quality tab
+  edit it:
+
+```sh
+cargo xtask quality show                      # the table (--json: every value)
+cargo xtask quality set low render_scale=0.6 frame_limit=30
+cargo xtask quality reset low                 # back to the engine's values
+cargo xtask quality bench --json              # calibrate on this machine
+cargo xtask run pc --quality ultra            # one run at a preset
+```
+
+A game reads `Platform::quality()` (and `lod_bias` / `particle_scale` are applied for
+it), changes it with `set_quality` (saved as the player's choice) and can show the
+engine's ready-made **Graphics page**, `trino_core::GraphicsOptions` (castle64: Select).
 
 The editor has its own guide in the [editor](../.agents/skills/editor/SKILL.md) skill,
 including hooks that let a script or an agent screenshot the window.
@@ -95,6 +137,13 @@ Things to know:
   eight code layouts). The self-test prints them as `TRINO_AUDIO_COST:` lines, and
   `TRINO_AUDIO:` with resident and streaming bytes and underruns (a poll that finds all
   four 40 ms output buffers empty: the game went ~160 ms without polling).
+- **Asset groups and RAM** ([ADR 0022](adr/0022-asset-groups-and-memory.md)): boot assets
+  load at boot, a group's from its `groups/<name>.tbnd` file list for 4 ms a frame
+  (`N64Assets::pump`). DFS files are compressed with libdragon's `mkasset` at each group's
+  level (`[groups.boot]` too; castle64 and Solid Eleven ship boot at level 1, 21–31 % off
+  the DFS), sprites by `mksprite --compress`; `asset_load` decodes as it reads. Boot logs
+  `TRINO_MEM: ram= heap_total= before_assets= boot_assets=`, and the self-test fails when
+  the heap's peak leaves less than 128 KB of libdragon's heap (`TRINO_HEAP:` lines).
 - Troubleshooting: the [build-n64](../.agents/skills/build-n64/SKILL.md) and
   [run-emulator](../.agents/skills/run-emulator/SKILL.md) skills.
 
@@ -154,6 +203,12 @@ Things to know:
   firmware (`sdmc:/3ds/dspfirm.cdc`, or launch through the Homebrew Launcher); without it
   ndsp does nothing and the log says `TRINO_AUDIO: ndsp unavailable`. Azahar runs without
   it.
+- **Asset groups and RAM** ([ADR 0022](adr/0022-asset-groups-and-memory.md)): a group's
+  textures, meshes, fonts and blobs are LZ4 entries in `groups/<name>.tbnd`, decoded on
+  the worker core four ahead while the main thread uploads for 6 ms a frame (its sounds stay
+  `T3AU` files beside it). `[groups.boot] compression = { 3ds = "lz4" }` packs boot the same
+  way into `groups/boot.tbnd`, decoded at boot. GPU memory of an unloaded asset is freed two
+  frames after its last draw. Boot logs the same `TRINO_MEM:` line as the N64.
 - Troubleshooting: the [build-3ds](../.agents/skills/build-3ds/SKILL.md) and
   [run-emulator](../.agents/skills/run-emulator/SKILL.md) skills.
 
@@ -191,6 +246,7 @@ The page picks the game and the look by its URL:
 | `?scale=N` | Integer pixel scale of the picture (default auto: about 300 lines) |
 | `?size=WxH` | A fixed canvas in CSS pixels (tests, screenshots); otherwise it fills the page |
 | `?msaa=0` | No 4× MSAA (WebGL2 never has it: it can't sample a multisampled depth) |
+| `?quality=low\|medium\|high\|ultra\|auto` | The quality preset for this visit, never stored ([ADR 0023](adr/0023-quality-presets.md)) |
 | `?frames=N` | Stop after N frames and print a `TRINO_FRAME:` line (smoke runs) |
 | `?selftest` | The browser self-test (below) |
 | `?log` | A log panel under the canvas |
@@ -218,13 +274,21 @@ What a browser changes:
   (`devicePixelContentBoxSize`, or the CSS size × `devicePixelRatio` on Safari), so Retina
   screens stay sharp; the picture is the native profile's (the output over the pixel
   scale). **Fullscreen** is the toolbar's button (or `Platform::set_display`).
+- **Quality:** the PC's presets. A phone's or a tablet's browser starts at the project's
+  Low; a desktop's at the project's default — `auto` calibrates over the first animation
+  frames (one presented bench frame each, timed by their intervals: a frame that holds
+  60 fps comes one refresh after the last), at most 2 s. The choice persists in
+  `localStorage` (`trino-quality:<game>`). A frame cap skips animation frames; dynamic
+  resolution follows the frame intervals. The self-test and `?frames=` runs use High.
 - **Saves** go to `localStorage` (`trino-save:<game>`, base64, at most
   `Caps::WEB.save_bytes` = 1 MiB). A private window without storage reports
   `save_capacity() == 0`.
 - **Assets** come in one pack per game (`assets/trino.pak`, `assets/solid-eleven.pak`),
   fetched at boot. Textures are KTX2 (Basis Universal), transcoded at load to BC on
   desktops, ETC2 or ASTC on phones, RGBA8 elsewhere; sounds are `TSN2` (Vorbis by default)
-  and the project's mix rides along (pack TPAK v2; v1 packs still load).
+  and the project's mix rides along (pack TPAK v3: v3 names asset groups, whose bundles
+  sit beside the pack as `trino.<group>.tbnd` and download the first time the game loads
+  the group, ADR 0022; v1 and v2 packs still load).
 - **WebGL2's limits:** no MSAA, and wgpu's GL backend can't copy or `textureLoad` a
   depth texture, so the SSAO and the water read the depth through a nearest sampler and
   the water's depth copy is drawn (`renderer/depth_blit.rs`). The picture is the same:
@@ -235,6 +299,7 @@ What a browser changes:
 `test web` serves the build and drives `?selftest` in each browser: the engine checks
 (blobs, a save to `localStorage`, every renderer step), audio and idle input, the KTX2
 transcode (both Basis modes decode exactly as the bake's native transcoder did), the
+quality calibration as a page runs it (done in 3 s, the renderer restored), the
 showcase demo and its baked scene, castle64's settle/walk/jump and the bot's whole Green
 Hills run, Solid Eleven's scripted match (its sim hash must equal the PC's and the
 consoles'), then three golden frames read back at 640×480 and compared with

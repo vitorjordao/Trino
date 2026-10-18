@@ -71,6 +71,8 @@ fn provided_renderer_methods_are_harmless_defaults() {
     dyn_r.end_frame();
     assert_eq!(dyn_r.stats(), FrameStats::default());
     assert_eq!(dyn_r.read_pixel(0, 0), None);
+    // No quality preset biases LODs unless the backend applies one (#55).
+    assert_eq!(dyn_r.lod_bias(), 1.0);
     // None of the defaults draws through the required methods.
     assert!(r.sprites.is_empty() && r.models.is_empty());
     assert_eq!(r.frames, 1);

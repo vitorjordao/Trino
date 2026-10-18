@@ -213,6 +213,9 @@ pub fn bake_assets(p: &Project, test_mode: bool) -> Result<(), String> {
 
     let mut index = String::new();
     let mut textures = TextureTally::default();
+    // Asset groups (issue #56): boot lines stay in the index, the others go
+    // to their groups' bundles.
+    let mut groups = crate::console_groups::GroupIndex::new(Platform::N3ds);
 
     println!("[3ds] baking assets...");
     for (name, decl) in &manifest.sprites {
@@ -249,7 +252,12 @@ pub fn bake_assets(p: &Project, test_mode: bool) -> Result<(), String> {
         if !status.success() {
             return Err(format!("tex3ds failed for {logical}"));
         }
-        index.push_str(&format!("{id:08x}\tsprite\t{id:08x}.t3x\n"));
+        groups.route(
+            &manifest,
+            &logical,
+            &format!("{id:08x}\tsprite\t{id:08x}.t3x\n"),
+            &mut index,
+        )?;
     }
     // Sounds and music: one `T3AU` each (DSP-ADPCM unless the manifest says
     // `pcm`; issue #53). Streamed tracks stay in the RomFS and play chunk by
@@ -269,7 +277,12 @@ pub fn bake_assets(p: &Project, test_mode: bool) -> Result<(), String> {
             audio.add(&blob);
             std::fs::write(romfs.join(format!("{id:08x}.t3au")), &blob)
                 .map_err(|e| e.to_string())?;
-            index.push_str(&format!("{id:08x}\t{kind}\t{id:08x}.t3au\n"));
+            groups.route(
+                &manifest,
+                &logical,
+                &format!("{id:08x}\t{kind}\t{id:08x}.t3au\n"),
+                &mut index,
+            )?;
         }
     }
     // The project's mix (`assets/audio.toml`): bus volumes and duck rules
@@ -299,9 +312,12 @@ pub fn bake_assets(p: &Project, test_mode: bool) -> Result<(), String> {
         let blob = trino_asset_pipeline::bake_model(&source, &decl.options())?;
         let file = format!("{id:08x}.tmdl");
         std::fs::write(romfs.join(&file), blob).map_err(|e| e.to_string())?;
-        index.push_str(&trino_asset_pipeline::tier::index_line(
-            id, "model", &file, tier,
-        ));
+        groups.route(
+            &manifest,
+            &logical,
+            &trino_asset_pipeline::tier::index_line(id, "model", &file, tier),
+            &mut index,
+        )?;
     }
 
     for (name, decl) in &manifest.fonts {
@@ -339,15 +355,20 @@ pub fn bake_assets(p: &Project, test_mode: bool) -> Result<(), String> {
         }
         std::fs::write(romfs.join(format!("{id:08x}.font")), &font.table)
             .map_err(|e| e.to_string())?;
-        index.push_str(&format!("{id:08x}\tsprite\t{id:08x}.t3x\n"));
-        index.push_str(&format!("{id:08x}\tfont\t{id:08x}.font\n"));
+        let lines = format!("{id:08x}\tsprite\t{id:08x}.t3x\n{id:08x}\tfont\t{id:08x}.font\n");
+        groups.route(&manifest, &logical, &lines, &mut index)?;
     }
     for (name, decl) in &manifest.blobs {
         let logical = format!("blobs/{name}");
         let id = trino_core::asset_id(&logical);
         let source = resolve_source(&root.join("assets"), Platform::N3ds, &decl.file)?;
         std::fs::copy(&source, romfs.join(format!("{id:08x}.blob"))).map_err(|e| e.to_string())?;
-        index.push_str(&format!("{id:08x}\tblob\t{id:08x}.blob\n"));
+        groups.route(
+            &manifest,
+            &logical,
+            &format!("{id:08x}\tblob\t{id:08x}.blob\n"),
+            &mut index,
+        )?;
     }
     for (name, decl) in &manifest.particles {
         let logical = format!("particles/{name}");
@@ -366,7 +387,12 @@ pub fn bake_assets(p: &Project, test_mode: bool) -> Result<(), String> {
         for twin in twins {
             std::fs::write(romfs.join(twin.file(id, "blob")), &twin.bytes)
                 .map_err(|e| e.to_string())?;
-            index.push_str(&twin.index_line(id, "blob", "blob"));
+            groups.route(
+                &manifest,
+                &logical,
+                &twin.index_line(id, "blob", "blob"),
+                &mut index,
+            )?;
         }
     }
     for (name, decl) in &manifest.scenes {
@@ -380,11 +406,20 @@ pub fn bake_assets(p: &Project, test_mode: bool) -> Result<(), String> {
         for twin in twins {
             std::fs::write(romfs.join(twin.file(id, "blob")), &twin.bytes)
                 .map_err(|e| e.to_string())?;
-            index.push_str(&twin.index_line(id, "blob", "blob"));
+            groups.route(
+                &manifest,
+                &logical,
+                &twin.index_line(id, "blob", "blob"),
+                &mut index,
+            )?;
         }
     }
 
+    index.push_str(&groups.index_lines());
     std::fs::write(romfs.join("index.tsv"), index).map_err(|e| e.to_string())?;
+    for b in groups.write_bundles(&manifest, &romfs)? {
+        println!("{}", b.line("3ds"));
+    }
     println!("{}", textures.line());
     println!("{}", audio.line());
     if test_mode {
@@ -1149,6 +1184,7 @@ fn boot_test(
     let mut is_new = None;
     let mut hw_line = None;
     let mut tier_step = None;
+    let mut quality_step = None;
     let mut worker_step = None;
     let verdict = loop {
         if let Some(why) = watchdog.expired(Instant::now()) {
@@ -1193,6 +1229,9 @@ fn boot_test(
             if line.contains("TRINO_STEP:hw tier ") {
                 tier_step = Some(line.to_string());
             }
+            if line.contains("TRINO_STEP:quality ") {
+                quality_step = Some(line.to_string());
+            }
             if line.contains("TRINO_STEP:worker ") {
                 worker_step = Some(line.to_string());
             }
@@ -1226,6 +1265,11 @@ fn boot_test(
             println!("[3ds] tier data: {data}");
             let worker = crate::hwtier::check_worker(worker_step.as_deref(), new3ds)?;
             println!("[3ds] worker core: {worker}");
+            // A console's quality preset is fixed: Medium on the New 3DS,
+            // Low on the old one (issue #55).
+            let want = if new3ds { "medium" } else { "low" };
+            let q = crate::hwtier::check_quality(quality_step.as_deref(), want)?;
+            println!("[3ds] quality: {q}");
         }
         Ok(())
     });

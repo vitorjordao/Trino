@@ -39,10 +39,48 @@
 //! bus volumes and mutes (`Audio::set_bus_volume`/`set_bus_muted` from the
 //! game's options) persist in `<save_name>.audio` and win over the mix.
 //! Smoke runs print a `TRINO_AUDIO:` line (memory, streams, underruns).
+//!
+//! **Quality** (the `native` profile, issue #55): presets Low…Ultra
+//! ([`trino_core::QualitySettings`]), the project's own in
+//! `assets/quality.ron`. The first launch calibrates (`[pc.quality]
+//! default = "auto"` in `trino.toml`, the default) or takes the project's
+//! preset; a Steam Deck starts on its own; the player's choice
+//! (`Platform::set_quality`) persists in `<save_name>.quality`.
+//! `TRINO_QUALITY=low|medium|high|ultra|auto` forces one for a run (smoke
+//! runs take High); `TRINO_MSAA=0` turns MSAA off whatever the preset. The
+//! `TRINO_FRAME:` line ends with the 1% lows and the quality in effect.
+//! See [`quality::QualityHost`].
+
+pub mod quality;
+
+pub use quality::QualityHost;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
+
+mod groups;
+pub use groups::GroupLoader;
+
+/// The heap every host on this runner reports (`Platform::memory`,
+/// `TRINO_FRAME heap=`): the system allocator, counted. Off with
+/// `default-features = false` for a game that brings its own allocator.
+#[cfg(feature = "heap-stats")]
+#[global_allocator]
+pub static HEAP: trino_core::mem::Counting<std::alloc::System> =
+    trino_core::mem::Counting::new(std::alloc::System);
+
+/// [`HEAP`] for [`PcPlatform::set_heap`] (`None` without `heap-stats`).
+pub fn heap() -> Option<&'static dyn trino_core::mem::HeapStats> {
+    #[cfg(feature = "heap-stats")]
+    {
+        Some(&HEAP)
+    }
+    #[cfg(not(feature = "heap-stats"))]
+    {
+        None
+    }
+}
 
 use trino_core::{DisplayInfo, DisplaySettings, Game, Input, Renderer, Vec2};
 use trino_platform_pc::{PcAudio, PcInput, PcPlatform, PcRenderer, SimProfile};
@@ -103,6 +141,12 @@ impl RunConfig {
         self.save_file().with_extension("input")
     }
 
+    /// The player's quality settings (`<save_name>.quality`, plain text,
+    /// `key=value` lines: `trino_platform_pc::quality::to_text`).
+    pub fn quality_file(&self) -> PathBuf {
+        self.save_file().with_extension("quality")
+    }
+
     /// The player's bus volumes (`<save_name>.audio`, plain text, one line
     /// per bus: `trino_platform_pc::audio::settings_to_text`).
     pub fn audio_file(&self) -> PathBuf {
@@ -140,9 +184,12 @@ pub fn picture_for(profile: SimProfile, output: (u32, u32), pixel_scale: u8) -> 
     }
 }
 
-/// Upload (or re-upload, `only` = changed handles) baked assets from
-/// `baked_dir`. Sounds are decoded and resampled to the device rate (music
-/// that streams stays encoded); the project's mix is applied.
+/// Upload (or re-upload, `only` = changed handles) the `boot` group's baked
+/// assets from `baked_dir` (every asset, without groups in the manifest;
+/// the others load through [`GroupLoader`]). Sounds are decoded and
+/// resampled to the device rate (music that streams stays encoded); the
+/// project's mix is applied. What each holds is counted in
+/// `platform.memory()`.
 pub fn upload_assets(
     baked_dir: &Path,
     renderer: &mut PcRenderer,
@@ -150,33 +197,58 @@ pub fn upload_assets(
     platform: &mut PcPlatform,
     only: Option<&[u32]>,
 ) -> Result<(), String> {
-    let assets = trino_asset_pipeline::load_dir(baked_dir, only)?;
+    use trino_core::bundle::MemoryCategory as C;
+    let assets = trino_asset_pipeline::load_boot(baked_dir, only)?;
     let target = sprite_platform(renderer);
+    let clamp = |v: u64| v.min(u32::MAX as u64) as u32;
+    // A re-upload replaces: take the old bytes off, count the new.
+    let count = |p: &mut PcPlatform, c: C, before: u64, after: u64| {
+        p.memory_mut().sub(c, clamp(before));
+        p.memory_mut().add(c, clamp(after));
+    };
     for sprite in assets.sprites {
+        let id = trino_core::SpriteId(sprite.id);
+        let before = renderer.sprite_bytes(id);
         upload_sprite(renderer, &sprite, target);
+        count(platform, C::Textures, before, renderer.sprite_bytes(id));
     }
-    for sound in assets.sounds {
-        audio
-            .upload_sound_blob(trino_core::SoundId(sound.id), &sound.blob)
-            .map_err(|e| format!("`{}`: {e}", sound.logical))?;
-    }
-    for track in assets.music {
-        audio
-            .upload_music_blob(trino_core::MusicId(track.id), &track.blob)
-            .map_err(|e| format!("`{}`: {e}", track.logical))?;
+    for (list, music) in [(assets.sounds, false), (assets.music, true)] {
+        for sound in list {
+            let before = audio.clip_bytes(sound.id, music) as u64;
+            let up = if music {
+                audio.upload_music_blob(trino_core::MusicId(sound.id), &sound.blob)
+            } else {
+                audio.upload_sound_blob(trino_core::SoundId(sound.id), &sound.blob)
+            };
+            up.map_err(|e| format!("`{}`: {e}", sound.logical))?;
+            let after = audio.clip_bytes(sound.id, music) as u64;
+            count(platform, C::Audio, before, after);
+        }
     }
     if let Some(mix) = &assets.mixer {
         let cfg = trino_core::MixerConfig::parse(mix).map_err(|e| format!("audio/mixer: {e}"))?;
         cfg.apply(audio);
     }
     for model in assets.models {
-        renderer.upload_mesh(trino_core::ModelId(model.id), model.tmdl);
+        let id = trino_core::ModelId(model.id);
+        let before = renderer.mesh_bytes(id) as u64;
+        let after = model.tmdl.len() as u64;
+        renderer.upload_mesh(id, model.tmdl);
+        count(platform, C::Meshes, before, after);
     }
     for font in assets.fonts {
-        renderer.upload_font(trino_core::FontId(font.id), font.table);
+        let id = trino_core::FontId(font.id);
+        let before = renderer.font_bytes(id) as u64;
+        let after = font.table.len() as u64;
+        renderer.upload_font(id, font.table);
+        count(platform, C::Data, before, after);
     }
     for blob in assets.blobs {
-        platform.insert_blob(trino_core::BlobId(blob.id), blob.bytes);
+        let id = trino_core::BlobId(blob.id);
+        let before = trino_core::Platform::blob(platform, id).map_or(0, |b| b.len() as u64);
+        let after = blob.bytes.len() as u64;
+        platform.insert_blob(id, blob.bytes);
+        count(platform, C::Data, before, after);
     }
     Ok(())
 }
@@ -348,6 +420,10 @@ struct Ctx {
     audio_saved: trino_core::BusSettings,
     input: PcInput,
     platform: PcPlatform,
+    /// The `native` profile's quality (the consoles' is fixed).
+    quality: Option<QualityHost>,
+    /// Serves `Platform::load_group` before every update.
+    groups: GroupLoader,
     game: Box<dyn Game>,
     last_frame: Instant,
     #[cfg(feature = "watch")]
@@ -396,14 +472,15 @@ impl Host {
         let mut renderer =
             pollster::block_on(PcRenderer::new_windowed(window.clone(), self.profile))
                 .expect("failed to initialize wgpu renderer");
-        // The PC's own profile multisamples its edges (TRINO_MSAA=0: off).
-        renderer.set_msaa(std::env::var("TRINO_MSAA").as_deref() != Ok("0"));
         let tier = tier_from_env();
         renderer.set_hw_tier(tier);
         let mut audio = PcAudio::new();
         let mut platform =
             PcPlatform::new(&self.profile.caps().with_tier(tier)).with_save_file(cfg.save_file());
         platform.set_second_screen(renderer.second_screen().map(|s| (s.x as u16, s.y as u16)));
+        if let Some(h) = heap() {
+            platform.set_heap(h);
+        }
         trino_asset_pipeline::bake_all(
             &cfg.assets_dir(),
             trino_asset_pipeline::Platform::Pc,
@@ -418,6 +495,11 @@ impl Host {
             None,
         )
         .unwrap_or_else(|e| panic!("failed to load baked assets: {e}"));
+        let mut groups = GroupLoader::new(&cfg.baked_dir(), &renderer, &mut platform);
+        if let Some(plan) = GroupLoader::strict_plan(&cfg.assets_dir(), &renderer) {
+            groups = groups.with_plan(plan);
+            groups.check_boot();
+        }
         let audio_saved = load_audio_settings(&mut audio, &cfg.audio_file());
 
         #[cfg(feature = "watch")]
@@ -440,6 +522,21 @@ impl Host {
         let out = window.inner_size();
         let (w, h, _) = picture_for(self.profile, (out.width, out.height), settings.pixel_scale);
         renderer.set_internal_size(w, h);
+        // The quality (the native profile): calibrated at the picture's
+        // size on a first launch, before the game's first frame.
+        let quality = self.profile.is_native().then(|| {
+            let baked = trino_core::Platform::blob(
+                &platform,
+                trino_core::BlobId::from_path(trino_asset_pipeline::quality::LOGICAL),
+            );
+            let mut q = QualityHost::new(cfg.quality_file(), baked);
+            let hz = window
+                .current_monitor()
+                .and_then(|m| m.refresh_rate_millihertz())
+                .map(|mhz| mhz.div_ceil(1000));
+            q.begin(&mut renderer, &mut platform, hz);
+            q
+        });
         let make = self.make.take().expect("game created once");
         let game = make(Vec2::new(w as f32, h as f32));
         window.request_redraw();
@@ -457,6 +554,8 @@ impl Host {
             audio_saved,
             input,
             platform,
+            quality,
+            groups,
             game,
             last_frame: Instant::now(),
             #[cfg(feature = "watch")]
@@ -583,6 +682,8 @@ impl ApplicationHandler for Host {
                 let dt = (now - ctx.last_frame).as_secs_f32().min(0.1);
                 ctx.last_frame = now;
                 let input = ctx.input.poll();
+                ctx.groups
+                    .pump(&mut ctx.renderer, &mut ctx.audio, &mut ctx.platform);
                 ctx.game
                     .update_with(&mut ctx.platform, &input, &mut ctx.audio, dt);
                 ctx.game.render(&mut ctx.renderer);
@@ -591,12 +692,18 @@ impl ApplicationHandler for Host {
                 }
                 apply_input(ctx, &self.config.input_file());
                 save_audio_settings(&ctx.audio, &self.config.audio_file(), &mut ctx.audio_saved);
+                if let Some(q) = &mut ctx.quality {
+                    q.end_frame(&mut ctx.renderer, &mut ctx.platform);
+                    self.meter.set_quality(q.note(&ctx.renderer));
+                }
 
                 self.frames += 1;
                 self.meter.record(
                     &trino_core::Renderer::stats(&ctx.renderer),
                     &ctx.renderer.pc_gpu_rejects(),
                 );
+                self.meter
+                    .record_memory(&trino_core::Platform::memory(&ctx.platform));
                 if let Some(max) = self.smoke_frames
                     && self.frames >= max
                 {
@@ -633,6 +740,10 @@ mod tests {
         assert_eq!(
             c.display_file(),
             PathBuf::from("/p/target/save/game.display")
+        );
+        assert_eq!(
+            c.quality_file(),
+            PathBuf::from("/p/target/save/game.quality")
         );
         assert_eq!(c.input_file(), PathBuf::from("/p/target/save/game.input"));
         assert_eq!(c.audio_file(), PathBuf::from("/p/target/save/game.audio"));

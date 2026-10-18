@@ -61,6 +61,9 @@ pub struct FontDecl {
     /// The least PSNR (dB) of the atlas, like a sprite's.
     #[serde(default)]
     pub min_psnr: Option<f64>,
+    /// The asset groups it is in (`crate::groups`); default `["boot"]`.
+    #[serde(default)]
+    pub groups: Vec<String>,
 }
 
 fn default_first() -> u32 {
@@ -112,6 +115,7 @@ impl FontDecl {
             formats: self.formats.clone(),
             quality: self.quality.clone(),
             min_psnr: self.min_psnr,
+            groups: self.groups.clone(),
         }
     }
 }

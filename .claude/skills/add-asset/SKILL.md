@@ -305,12 +305,36 @@ gen-assets`), driven by the same `showcase::river` table as the game's floor.
 Scenes/prefabs reference materials by logical path; games use the equivalent
 `ModelParams` (or export the scene to code — `scene-authoring` skill).
 
+## Asset groups and memory (issue #56, ADR 0022)
+
+```toml
+[groups.level1]                  # declared once; compression optional
+compression = { n64 = 2 }        # N64 mkasset level 0..3 (default 1), "lz4"/"none" elsewhere
+[groups.boot]                    # optional: compress boot on the consoles
+compression = { n64 = 1, 3ds = "lz4" }
+
+[models.boar]
+file = "models/boar.glb"
+groups = ["level1"]              # default ["boot"]: loaded at boot, always resident
+```
+
+- `cargo xtask assets group models/boar level1` writes that line (declaring the group);
+  `boot` alone removes it. The game loads a group with `platform.load_group(GroupId::
+  from_name("level1"))` and draws a loading bar until it is `Ready`.
+- `cargo xtask assets report [--platform n64] [--json]` shows each console tier's RAM:
+  boot, every group, every scene's groups against what is left after `[memory]`
+  `reserve` (the engine) and `game` (your state). `cargo xtask assets check` fails a
+  scene that draws an asset none of its groups loads or that would not fit.
+- Live reload re-uploads changed boot assets; a grouped asset's new bytes show the next
+  time its group loads.
+
 ## Verify
 
 1. `cargo xtask assets pc` (and `cargo xtask build n64|3ds` when toolchains exist) — format
    or resolution problems are bake **errors**, never silent fallbacks.
 2. `cargo xtask scene check` if scenes/prefabs reference the asset.
-3. `cargo xtask test`.
+3. `cargo xtask assets check` when it is in a group (or a scene's `requires` changed).
+4. `cargo xtask test`.
 
 ## Rules
 

@@ -71,6 +71,20 @@ jobs:
       - name: Smoke run (Linux, headless)
         if: runner.os == 'Linux'
         run: TRINO_SMOKE_FRAMES=60 xvfb-run -a cargo run -p trino-app-pc
+      # The quality presets (issue #55) on the native profile: a run at each
+      # preset (TRINO_FRAME says it), the first launch's calibration (auto),
+      # then the CLI's check and bench.
+      - name: Quality preset smokes (Linux, headless)
+        if: runner.os == 'Linux'
+        run: |
+          for q in low medium high ultra; do
+            TRINO_SIM=native TRINO_QUALITY=$q TRINO_SMOKE_FRAMES=60 xvfb-run -a cargo run -p trino-app-pc > target/quality-$q.log
+            grep TRINO_FRAME target/quality-$q.log | grep "quality=$q "
+          done
+          TRINO_SIM=native TRINO_QUALITY=auto TRINO_SMOKE_FRAMES=60 xvfb-run -a cargo run -p trino-app-pc > target/quality-auto.log
+          grep "TRINO_QUALITY: bench" target/quality-auto.log
+          cargo xtask quality check
+          xvfb-run -a cargo xtask quality bench --json
       - name: Scene player smoke (Linux, headless)
         if: runner.os == 'Linux'
         run: TRINO_SCENE=scenes/showcase.scene.ron TRINO_SMOKE_FRAMES=60 xvfb-run -a cargo run -p trino-app-pc

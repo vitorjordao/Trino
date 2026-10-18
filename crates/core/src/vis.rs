@@ -10,11 +10,16 @@
 //! they belong to ([`crate::scene::SceneNode::cell`], [`NO_CELL`] = always
 //! drawn: the exterior, the sky). Fixed capacity, no allocation: up to
 //! [`MAX_CELLS`] cells (a `u64` mask) and `P` portals.
+//!
+//! A cell can also name the asset groups its contents come from (issue #56):
+//! [`CellGroups`] keeps those of the cells in view, and of the rooms one
+//! doorway further, loaded.
 
 use crate::math::{Vec2, Vec3};
 use crate::physics::Aabb;
 use crate::render3d::Camera3;
 use crate::scene::SceneNode;
+use crate::{GroupId, LoadState, Platform};
 
 /// A node outside every cell: drawn whenever drawn at all.
 pub const NO_CELL: u8 = 0xFF;
@@ -169,6 +174,24 @@ impl<const P: usize> Cells<P> {
             .map(|i| i as u8)
     }
 
+    /// The cells one portal away from those in `mask` (and not in it): the
+    /// rooms a step through a doorway brings into view.
+    pub fn neighbors(&self, mask: u64) -> u64 {
+        let mut out = 0;
+        for p in &self.portals[..self.portal_count] {
+            if (p.a as usize) >= MAX_CELLS || (p.b as usize) >= MAX_CELLS {
+                continue;
+            }
+            if mask & (1u64 << p.a) != 0 {
+                out |= 1u64 << p.b;
+            }
+            if mask & (1u64 << p.b) != 0 {
+                out |= 1u64 << p.a;
+            }
+        }
+        out & !mask
+    }
+
     /// Bit mask of cells visible from `camera` on a `screen`-sized view.
     /// A camera outside every cell (exterior) sees all of them; a level
     /// without cells is all-visible.
@@ -240,6 +263,138 @@ impl<const P: usize> Cells<P> {
             }
         }
         mask
+    }
+}
+
+/// Asset groups streamed by cell (issue #56, the scene's `cell(groups: …)`):
+/// each cell names the groups its contents come from, and
+/// [`stream`](Self::stream) keeps loaded those of the cells in view and of
+/// their portal neighbours (a room starts loading a doorway before it
+/// shows), and unloads a group once no such cell has named it for `linger`
+/// frames (a camera standing in a doorway does not reload a room every
+/// frame). Groups the level `requires` as a whole stay out of it. Up to `G`
+/// (at most 64) distinct groups; fixed size, no allocation.
+#[derive(Clone, Debug)]
+pub struct CellGroups<const G: usize> {
+    groups: [GroupId; G],
+    count: usize,
+    /// Per cell, its groups as bits (bit i = `groups[i]`).
+    cells: [u64; MAX_CELLS],
+    /// Per group: frames since a wanted cell last named it; `NOT_HELD`
+    /// when this streamer has not asked for it (or let it go).
+    idle: [u16; G],
+    linger: u16,
+}
+
+const NOT_HELD: u16 = u16::MAX;
+
+impl<const G: usize> CellGroups<G> {
+    pub const fn new(linger: u16) -> Self {
+        const { assert!(G <= 64, "a u64 holds the group bits") };
+        CellGroups {
+            groups: [GroupId(0); G],
+            count: 0,
+            cells: [0; MAX_CELLS],
+            idle: [NOT_HELD; G],
+            linger: if linger == NOT_HELD {
+                NOT_HELD - 1
+            } else {
+                linger
+            },
+        }
+    }
+
+    /// `cell`'s contents come from `group`. False when the cell is past
+    /// [`MAX_CELLS`] or `G` groups are taken.
+    pub fn add(&mut self, cell: u8, group: GroupId) -> bool {
+        if cell as usize >= MAX_CELLS {
+            return false;
+        }
+        let i = match self.groups[..self.count].iter().position(|g| *g == group) {
+            Some(i) => i,
+            None if self.count < G => {
+                self.groups[self.count] = group;
+                self.count += 1;
+                self.count - 1
+            }
+            None => return false,
+        };
+        self.cells[cell as usize] |= 1u64 << i;
+        true
+    }
+
+    /// The distinct groups the cells name, in first-named order.
+    pub fn groups(&self) -> &[GroupId] {
+        &self.groups[..self.count]
+    }
+
+    /// The groups the cells in `mask` name, as bits over [`groups`](Self::groups).
+    pub fn wanted(&self, mask: u64) -> u64 {
+        let mut bits = 0;
+        let mut m = mask;
+        while m != 0 {
+            let cell = m.trailing_zeros() as usize;
+            m &= m - 1;
+            bits |= self.cells[cell];
+        }
+        bits
+    }
+
+    /// Whether every group the cells in `mask` name is `Ready` on `platform`.
+    pub fn ready<P: Platform + ?Sized>(&self, platform: &P, mask: u64) -> bool {
+        self.each(self.wanted(mask))
+            .all(|g| platform.group_state(g) == LoadState::Ready)
+    }
+
+    /// Once a frame, after the visibility pass: load the groups of the cells
+    /// in `visible` and of their neighbours in `cells`, unload those that
+    /// lingered unwanted. True when the visible cells' groups are all
+    /// `Ready` (their contents draw); a room still loading draws without
+    /// them, as a group's assets do until it is ready.
+    pub fn stream<P: Platform + ?Sized, const C: usize>(
+        &mut self,
+        platform: &mut P,
+        cells: &Cells<C>,
+        visible: u64,
+    ) -> bool {
+        let want = self.wanted(visible | cells.neighbors(visible));
+        for i in 0..self.count {
+            if want & (1u64 << i) != 0 {
+                self.idle[i] = 0;
+                platform.load_group(self.groups[i]);
+            } else if self.idle[i] != NOT_HELD {
+                self.idle[i] += 1;
+                if self.idle[i] > self.linger {
+                    platform.unload_group(self.groups[i]);
+                    self.idle[i] = NOT_HELD;
+                }
+            }
+        }
+        self.ready(platform, visible)
+    }
+
+    /// Unload every group this streamer holds (leaving the level).
+    pub fn release<P: Platform + ?Sized>(&mut self, platform: &mut P) {
+        for i in 0..self.count {
+            if self.idle[i] != NOT_HELD {
+                platform.unload_group(self.groups[i]);
+                self.idle[i] = NOT_HELD;
+            }
+        }
+    }
+
+    /// Whether this streamer holds `group` (asked for it, not yet let go).
+    pub fn holds(&self, group: GroupId) -> bool {
+        self.groups[..self.count]
+            .iter()
+            .zip(&self.idle)
+            .any(|(g, idle)| *g == group && *idle != NOT_HELD)
+    }
+
+    fn each(&self, bits: u64) -> impl Iterator<Item = GroupId> + '_ {
+        (0..self.count)
+            .filter(move |i| bits & (1u64 << i) != 0)
+            .map(|i| self.groups[i])
     }
 }
 
@@ -405,6 +560,113 @@ mod tests {
             SCREEN,
         );
         assert_eq!(m & 0b111, 0b111, "{m:b}");
+    }
+
+    #[test]
+    fn neighbors_are_one_doorway_away() {
+        let c = level();
+        assert_eq!(c.neighbors(0b001), 0b010);
+        assert_eq!(c.neighbors(0b010), 0b101);
+        assert_eq!(c.neighbors(0b011), 0b100);
+        assert_eq!(c.neighbors(0), 0);
+    }
+
+    /// Groups load as asked (Ready at once) and go when unloaded.
+    #[derive(Default)]
+    struct Streams {
+        loaded: std::vec::Vec<GroupId>,
+        loads: usize,
+        unloads: usize,
+    }
+
+    impl Platform for Streams {
+        fn now_micros(&self) -> u64 {
+            0
+        }
+        fn log(&self, _: &str) {}
+        fn load_group(&mut self, g: GroupId) -> LoadState {
+            if !self.loaded.contains(&g) {
+                self.loaded.push(g);
+                self.loads += 1;
+            }
+            LoadState::Ready
+        }
+        fn unload_group(&mut self, g: GroupId) {
+            self.loaded.retain(|x| *x != g);
+            self.unloads += 1;
+        }
+        fn group_state(&self, g: GroupId) -> LoadState {
+            if self.loaded.contains(&g) {
+                LoadState::Ready
+            } else {
+                LoadState::Unloaded
+            }
+        }
+    }
+
+    #[test]
+    fn cell_groups_follow_the_view_and_linger() {
+        let c = level();
+        let (a, b, kitchen) = (
+            GroupId::from_name("hall"),
+            GroupId::from_name("study"),
+            GroupId::from_name("kitchen"),
+        );
+        let mut s: CellGroups<4> = CellGroups::new(3);
+        assert!(s.add(0, a) && s.add(1, b) && s.add(2, kitchen) && s.add(2, a));
+        assert!(!s.add(64, a), "past the mask");
+        assert_eq!(s.groups(), &[a, b, kitchen]);
+        assert_eq!(s.wanted(0b100), 0b101, "the kitchen names two");
+
+        let mut p = Streams::default();
+        // In the hall: it and the study (a doorway away) load, not the kitchen.
+        assert!(s.stream(&mut p, &c, 0b001));
+        assert!(p.loaded.contains(&a) && p.loaded.contains(&b));
+        assert!(!p.loaded.contains(&kitchen) && !s.holds(kitchen));
+        // Into the kitchen: the hall stays (it names `a` too), the kitchen
+        // loads, the study (its neighbour) stays wanted.
+        assert!(s.stream(&mut p, &c, 0b100));
+        assert!(p.loaded.contains(&kitchen) && p.loaded.contains(&b));
+        // Back in the hall: the kitchen lingers `linger` frames, then goes.
+        for _ in 0..3 {
+            s.stream(&mut p, &c, 0b001);
+            assert!(p.loaded.contains(&kitchen), "lingers");
+        }
+        s.stream(&mut p, &c, 0b001);
+        assert!(!p.loaded.contains(&kitchen) && !s.holds(kitchen));
+        assert_eq!(p.unloads, 1);
+        // A flicker back within the linger reloads nothing.
+        let loads = p.loads;
+        s.stream(&mut p, &c, 0b001);
+        assert_eq!(p.loads, loads);
+
+        s.release(&mut p);
+        assert!(p.loaded.is_empty());
+        assert!(!s.ready(&p, 0b001));
+    }
+
+    #[test]
+    fn a_room_still_loading_is_not_ready() {
+        struct Slow;
+        impl Platform for Slow {
+            fn now_micros(&self) -> u64 {
+                0
+            }
+            fn log(&self, _: &str) {}
+            fn load_group(&mut self, _: GroupId) -> LoadState {
+                LoadState::Loading { progress: 40 }
+            }
+            fn group_state(&self, _: GroupId) -> LoadState {
+                LoadState::Loading { progress: 40 }
+            }
+        }
+        let c = level();
+        let mut s: CellGroups<2> = CellGroups::new(0);
+        s.add(1, GroupId::from_name("study"));
+        assert!(!s.stream(&mut Slow, &c, 0b010));
+        // A cell without groups is ready at once, its loading neighbour
+        // or not.
+        assert!(s.stream(&mut Slow, &c, 0b100));
     }
 
     #[test]

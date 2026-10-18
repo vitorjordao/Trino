@@ -76,6 +76,7 @@ fn entity(app: &mut App, ui: &mut egui::Ui, path: &[usize]) {
             ]
         },
     );
+    let group_names = app.groups.names.clone();
     let mut cell_names: Vec<String> = Vec::new();
     app.doc.scene.walk(|_, e| {
         if matches!(e.vis, Some(VisComponent::Cell { .. })) {
@@ -735,11 +736,32 @@ fn entity(app: &mut App, ui: &mut egui::Ui, path: &[usize]) {
             },
             |ui| {
                 match vis {
-                    VisComponent::Cell { size } => {
+                    VisComponent::Cell { size, groups } => {
                         theme::vec3_row(ui, "Size", size, 0.1, "");
+                        theme::prop(ui, "Groups", |ui| {
+                            // `boot` is always loaded: never a cell's.
+                            let names: Vec<String> = group_names
+                                .iter()
+                                .filter(|g| *g != trino_asset_pipeline::groups::BOOT)
+                                .cloned()
+                                .collect();
+                            if names.is_empty() && groups.is_empty() {
+                                ui.label(
+                                    RichText::new("no groups yet (Assets › Groups)")
+                                        .size(11.5)
+                                        .color(c::TEXT_FAINT),
+                                );
+                            } else if let Some(next) =
+                                crate::groups::toggles(ui, "cell-groups", &names, groups, &[])
+                            {
+                                *groups = next;
+                            }
+                        });
                         ui.label(
                             RichText::new(
-                                "Children belong to this room and draw only while a chain of                                  portals makes it visible from the camera's room.",
+                                "Children belong to this room and draw only while a chain of \
+                                 portals makes it visible from the camera's room. Its groups \
+                                 stream in while it (or a room a doorway away) is in view.",
                             )
                             .size(11.5)
                             .color(c::TEXT_FAINT),
@@ -869,6 +891,7 @@ fn entity(app: &mut App, ui: &mut egui::Ui, path: &[usize]) {
                     {
                         e.vis = Some(VisComponent::Cell {
                             size: [8.0, 4.0, 8.0],
+                            groups: Vec::new(),
                         });
                     }
                     if ui
@@ -1921,12 +1944,115 @@ fn scene_settings(app: &mut App, ui: &mut egui::Ui) {
             }
         }
     }
+    asset_groups(app, ui);
     if !app.resolved.warnings.is_empty() {
         theme::component(ui, "env-warn", icon::WARNING, c::WARN, "Issues", |ui| {
             for w in &app.resolved.warnings {
                 ui.label(RichText::new(w).color(c::WARN).size(12.0));
             }
         });
+    }
+}
+
+/// Scene settings › Asset groups (issue #56): the groups the scene
+/// `requires` (boot always), the cells' own, what `cargo xtask assets
+/// check` finds, and each console tier's share with them all loaded.
+fn asset_groups(app: &mut App, ui: &mut egui::Ui) {
+    if app.doc.is_prefab() {
+        return;
+    }
+    let top = ui.cursor().min;
+    let names = app.groups.names.clone();
+    let rev = app.view_input().rev;
+    let problems = app.groups.scene_problems(&app.doc.scene, &app.lib, rev);
+    let plans = app
+        .groups
+        .plans(ui.ctx(), &app.project.assets_dir(), app.project.generation)
+        .and_then(|p| p.as_ref().ok())
+        .cloned();
+    let scene = &mut app.doc.scene;
+    let open_memory = theme::component(
+        ui,
+        "env-groups",
+        icon::STACK,
+        c::TEXT,
+        "Asset groups",
+        |ui| {
+            theme::prop(ui, "Requires", |ui| {
+                let boot = trino_asset_pipeline::groups::BOOT;
+                if let Some(next) =
+                    crate::groups::toggles(ui, "requires", &names, &scene.requires, &[boot])
+                {
+                    scene.requires = next;
+                }
+            });
+            let cells = scene.cell_groups();
+            if !cells.is_empty() {
+                for (cell, groups) in &cells {
+                    ui.label(
+                        RichText::new(format!(
+                            "{}  {cell} streams {}",
+                            icon::CUBE_TRANSPARENT,
+                            groups.join(", ")
+                        ))
+                        .size(11.5)
+                        .color(c::TEXT_WEAK),
+                    );
+                }
+            }
+            for p in &problems {
+                ui.label(
+                    RichText::new(format!("{} {p}", icon::WARNING))
+                        .size(11.5)
+                        .color(c::WARN),
+                );
+            }
+            let all = trino_asset_pipeline::groups::scene_groups(scene);
+            let refs: Vec<&str> = all.iter().map(String::as_str).collect();
+            if let Some(plans) = &plans {
+                ui.horizontal_wrapped(|ui| {
+                    // Rows as tall as the text when the tiers wrap.
+                    ui.spacing_mut().interact_size.y = 16.0;
+                    for plan in plans {
+                        let used = plan.resident(&refs);
+                        let pct = used * 100 / plan.budget().max(1);
+                        let color = if used > plan.budget() {
+                            c::ERROR
+                        } else {
+                            c::TEXT_WEAK
+                        };
+                        // One unit per tier: wraps between tiers only.
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(format!(
+                                    "{} {} {pct}%",
+                                    trino_asset_pipeline::memory::platform_label(plan.platform),
+                                    plan.tier.key()
+                                ))
+                                .size(11.5)
+                                .color(color),
+                            )
+                            .wrap_mode(egui::TextWrapMode::Extend),
+                        )
+                        .on_hover_text(format!(
+                            "{} of {} for assets",
+                            trino_asset_pipeline::memory::show_bytes(used),
+                            trino_asset_pipeline::memory::show_bytes(plan.budget())
+                        ));
+                    }
+                });
+            }
+            ui.button(format!("{}  Memory tab", icon::MEMORY)).clicked()
+        },
+    );
+    if open_memory == Some(true) {
+        app.cmds.push(Cmd::FocusTab(crate::app::Tab::Memory));
+    }
+    if app.inspect_focus.as_deref() == Some("groups") {
+        ui.scroll_to_rect(
+            egui::Rect::from_min_size(top, Vec2::new(1.0, 1.0)),
+            Some(egui::Align::TOP),
+        );
     }
 }
 

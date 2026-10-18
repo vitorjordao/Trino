@@ -28,6 +28,11 @@ ADR 0019 is the design; `docs/PLATFORMS.md` › Web the user guide.
   load; streams are 8192-sample chunks scheduled ≤ 1 s ahead (`audio.rs`), so a hidden
   tab runs dry after 1 s and counts an underrun. Each bus is a gain node fed by
   `BusMixer` in `poll()`. The player's volumes: `localStorage` `trino-audio:<save>`.
+- Asset groups (#56, ADR 0022): pack TPAK v3 names each non-boot group (`Kind::Group`);
+  its bundle is `<pack>.<group>.tbnd` beside the pack (`pack::bundle_url`), fetched the
+  first time the game loads the group and kept (`src/groups.rs`). The self-test's
+  `asset groups` step soaks load/unload over animation frames: WebGL2 frees GPU objects
+  only once the event loop turns.
 - `apps/web`: `lib.rs` (game by `?game=`), `selftest.rs` (`?selftest`), `index.html`
   (templated by xtask: `{{TITLE}}`, `{{CANVAS_ID}}`), `vendor/basis/` (Binomial's
   transcoder, the KTX2 decoder in the browser).
@@ -52,7 +57,9 @@ ADR 0019 is the design; `docs/PLATFORMS.md` › Web the user guide.
 `?selftest` (spread over animation frames): `castle64::selftest::engine_checks`, audio,
 idle input, `ktx2 transcode` (both Basis modes decode exactly as the bake's native
 transcoder: fixtures `web/ktx2_*` packed by xtask), the showcase demo + baked scene,
-castle64 settle/walk/jump + the bot's Green Hills run, Solid Eleven's scripted match
+castle64 settle/walk/jump + the bot's Green Hills run, `quality bench` (#55: the
+calibration one rAF per frame, each preset's median of frame intervals, ≤ 3 s, the
+renderer restored; `TRINO_STEP:quality bench low=… pick=… elapsed_ms=…`), Solid Eleven's scripted match
 (`TRINO_SE_HASH` must equal `solid_eleven::selftest::EXPECTED_HASH`), then the golden
 frames `showcase`, `castle64_hub`, `texture_formats` at 640×480, single-sampled.
 
@@ -68,6 +75,13 @@ use the real GPU; all four stayed within 0.12/255 of each other on the goldens.
 Debug a run: `target/web-test/<run>/console.log` has every `TRINO_STEP:` and the
 browser's own warnings; `--headed --browsers chromium` shows the page; `?log` adds a log
 panel; `globalThis.__trino` in devtools holds the state (`steps`, `info`, `frames`).
+
+Quality (#55, ADR 0023 §10): `?quality=low|medium|high|ultra|auto` forces a preset for
+the page; the self-test and `?frames=` pin High (deterministic goldens); otherwise the
+start is the saved `localStorage` `trino-quality:<save>`, then a phone or tablet → Low
+(`platform-web/src/device.rs`), then the project default (`auto` benches over the first
+animation frames). The console's `TRINO_QUALITY: preset=… source=… gpu=… mobile=…` line
+says what was picked; WebGPU reports `gpu=unknown` (browsers hide the adapter's name).
 
 ## Traps (all hit while building it)
 

@@ -48,25 +48,35 @@ pub use resolve::{DrawItem, LodDraw, LodItem, Resolved, resolve, resolve_for};
 use serde::{Deserialize, Serialize};
 use trino_core::SpriteId;
 
-/// v5: the consoles' hardware tiers (issue #54): `n64_expanded` and
+/// v6: asset groups (issue #56): `requires`, the groups the scene needs
+/// loaded (`["boot"]` for every older file), and a cell's `groups`, what an
+/// interior streams in as the cell comes into view. v5: the consoles'
+/// hardware tiers (issue #54): `n64_expanded` and
 /// `n3ds_new` variants and LOD starts, which follow their console's when
 /// unset. v4: the Web (issue #47) as a fourth platform: a `web` variant and a
 /// `web` LOD start, which follow the PC's when unset. v3 added per-platform
 /// variants (`platforms`, see [`platform`]); v2 added 3D transforms
 /// (degrees), nested children, models, prefab instances and the
-/// environment. v1 (2D-only, flat), v2, v3 and v4 are migrated on load.
+/// environment. v1 (2D-only, flat) to v5 are migrated on load.
 ///
-/// v3, v4 and v5 only add fields, but they change what a scene *means* per
+/// v3 to v6 only add fields, but they change what a scene *means* per
 /// target: an engine that ignored `platforms` would ship the PC model to a
 /// console without a word, and one that ignored `web` would drop the Web's
 /// own choices when it saves (as one that ignored the tiers would drop
-/// theirs). The bump makes such an engine refuse the file instead.
-pub const SCENE_VERSION: u32 = 5;
+/// theirs, or one that ignored `requires` a level's groups). The bump makes
+/// such an engine refuse the file instead.
+pub const SCENE_VERSION: u32 = 6;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Scene {
     pub version: u32,
     pub name: String,
+    /// The asset groups the scene needs loaded (issue #56, ADR 0022):
+    /// `boot` (always resident) plus a level's own. `cargo xtask assets
+    /// check` holds every asset the scene draws to one of them; the memory
+    /// report and strict mode count them together.
+    #[serde(default = "boot_only")]
+    pub requires: Vec<String>,
     #[serde(default)]
     pub environment: Environment,
     #[serde(default)]
@@ -585,7 +595,13 @@ fn is_false(b: &bool) -> bool {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub enum VisComponent {
     /// A room. Its descendants are drawn only while it is visible.
-    Cell { size: [f32; 3] },
+    /// `groups` (v6): the asset groups its contents come from, streamed in
+    /// while it is in view (`trino_core::vis::CellGroups`).
+    Cell {
+        size: [f32; 3],
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        groups: Vec<String>,
+    },
     /// A doorway joining the cells named `a` and `b` (entity names or
     /// name paths, like `house/kitchen`). Make it cover the opening.
     Portal {
@@ -653,11 +669,16 @@ fn one() -> f32 {
     1.0
 }
 
+fn boot_only() -> Vec<String> {
+    vec!["boot".to_string()]
+}
+
 impl Scene {
     pub fn new(name: impl Into<String>) -> Self {
         Scene {
             version: SCENE_VERSION,
             name: name.into(),
+            requires: boot_only(),
             environment: Environment::default(),
             entities: Vec::new(),
         }
@@ -671,10 +692,10 @@ impl Scene {
             ron::from_str(text).map_err(|e| format!("scene parse error: {e}"))?;
         match versioned.version {
             SCENE_VERSION => ron::from_str(text).map_err(|e| format!("scene parse error: {e}")),
-            // v4 is v5 without the hardware tiers, v3 is v4 without the
-            // Web, v2 is v3 without variants: same fields, defaults fill
-            // the rest.
-            2..=4 => {
+            // v5 is v6 without groups (`requires` defaults to boot), v4 is
+            // v5 without the hardware tiers, v3 is v4 without the Web, v2 is
+            // v3 without variants: same fields, defaults fill the rest.
+            2..=5 => {
                 let mut scene: Scene = ron::from_str(text)
                     .map_err(|e| format!("scene parse error (v{} file): {e}", versioned.version))?;
                 scene.version = SCENE_VERSION;
@@ -698,6 +719,60 @@ impl Scene {
 
     pub fn to_ron(&self) -> String {
         to_ron_pretty(self)
+    }
+
+    /// Every asset the scene names, by logical path (`models/boar`,
+    /// `sprites/hud`, `sounds/water`), each once, sorted: its entities'
+    /// sprites, models (with their LOD levels and platform variants) and
+    /// sounds. Prefab instances' assets live in the prefab files.
+    pub fn asset_refs(&self) -> Vec<String> {
+        fn walk(e: &Entity, out: &mut Vec<String>) {
+            if let Some(s) = &e.sprite {
+                out.push(s.path.clone());
+            }
+            if let Some(m) = &e.model {
+                out.push(m.path.clone());
+                out.extend(m.lod.iter().filter_map(|l| l.path.clone()));
+            }
+            if let Some(s) = &e.sound {
+                out.push(s.path.clone());
+            }
+            out.extend(e.platforms.models().map(String::from));
+            for c in &e.children {
+                walk(c, out);
+            }
+        }
+        let mut out = Vec::new();
+        for e in &self.entities {
+            walk(e, &mut out);
+        }
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    /// The groups of the scene's cells, by name path, in cell order.
+    pub fn cell_groups(&self) -> Vec<(String, Vec<String>)> {
+        fn walk(e: &Entity, path: &str, out: &mut Vec<(String, Vec<String>)>) {
+            let name = if path.is_empty() {
+                e.name.clone()
+            } else {
+                format!("{path}/{}", e.name)
+            };
+            if let Some(VisComponent::Cell { groups, .. }) = &e.vis
+                && !groups.is_empty()
+            {
+                out.push((name.clone(), groups.clone()));
+            }
+            for c in &e.children {
+                walk(c, &name, out);
+            }
+        }
+        let mut out = Vec::new();
+        for e in &self.entities {
+            walk(e, "", &mut out);
+        }
+        out
     }
 
     pub fn load(path: &std::path::Path) -> Result<Scene, String> {

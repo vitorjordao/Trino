@@ -98,11 +98,14 @@ impl N64Host {
         self.step(game, &state, dt);
     }
 
-    /// One frame with scripted input (self-tests, bots).
+    /// One frame with scripted input (self-tests, bots): the asset-group
+    /// loader's step (issue #56), the game, the audio.
     pub fn step(&mut self, game: &mut dyn Game, input: &InputState, dt: f32) {
+        N64Assets::pump(&mut self.renderer, &mut self.audio, &mut self.platform);
         game.update_with(&mut self.platform, input, &mut self.audio, dt);
         game.render(&mut self.renderer);
         self.audio.poll();
+        self.platform.sample_heap();
     }
 
     /// Run `frames` scripted frames (`input(i)` per frame) and time them
@@ -205,7 +208,7 @@ impl N64Host {
         runtime::log(&format!(
             "TRINO_FRAME:{scene} avg_us={} max_us={} frames={} update={} tnl={} sort={} \
              submit={} sprites={} end={} drain={} draws={} rsp={} culled={} draws2d={} vblanks={} \
-             fps={}\n",
+             fps={} {}\n",
             r.avg_us,
             r.max_us,
             r.frames,
@@ -221,7 +224,8 @@ impl N64Host {
             r.culled,
             r.draws2d,
             r.vblanks,
-            (r.frames * 60).checked_div(r.vblanks).unwrap_or(0)
+            (r.frames * 60).checked_div(r.vblanks).unwrap_or(0),
+            trino_core::Platform::memory(&self.platform).heap_field()
         ));
         for (id, calls, us, rsp) in r.top.iter().filter(|t| t.1 > 0) {
             runtime::log(&format!(

@@ -132,6 +132,23 @@ impl N64Audio {
         self.music.insert(id, Clip { wav, bus });
     }
 
+    /// Free a sound (its asset group unloaded, issue #56): the channels
+    /// playing it stop, then the wav64 closes. Later plays are silent.
+    pub(crate) fn unregister_sound(&mut self, id: u32) -> bool {
+        self.sounds.remove(&id).map(|c| self.free(c)).is_some()
+    }
+
+    /// Free a music track or stinger ([`N64Audio::unregister_sound`]).
+    pub(crate) fn unregister_music(&mut self, id: u32) -> bool {
+        self.music.remove(&id).map(|c| self.free(c)).is_some()
+    }
+
+    fn free(&mut self, clip: Clip) {
+        unsafe { ffi::trino_wav_free(clip.wav) };
+        // The shim stopped its channels: no voice of it is playing now.
+        self.playing = unsafe { ffi::trino_audio_playing_mask() };
+    }
+
     /// Enable Opus wav64s (before the first loads); false when the ROM was
     /// linked without the decoder.
     pub(crate) fn enable_opus(&mut self) -> bool {

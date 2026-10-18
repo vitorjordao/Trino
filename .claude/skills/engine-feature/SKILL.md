@@ -133,6 +133,12 @@ A feature is done only when **PC, N64 and 3DS** all run it and an emulator has s
   there), and `cargo test -p trino-render-wgpu webgl2` translates every shader to GLSL ES
   3.00. A new `Platform`/`Audio`/`Input` method needs its `crates/platform-web` side (the
   self-test runs in browsers: `cargo xtask test web`).
+- **A setting only the PC and the Web can change** (quality presets, #55, ADR 0023): a
+  default `Platform` method that returns the console's fixed value (no-op setters,
+  `None` info), and one host-side struct in `crates/render-wgpu` that both `PcPlatform`
+  and `WebPlatform` hold (`quality::HostedQuality`), so the two hosts can't drift. Smoke
+  runs, `?frames` and the self-test pin a deterministic value (High), never the
+  machine's: goldens must not depend on a bench.
 
 ## 3. Tests: every layer, one feature
 

@@ -5193,6 +5193,7 @@ dependencies = [
  "trino-game-api",
  "trino-platform-pc",
  "trino-platform-web",
+ "trino-runner-pc",
  "trino-scaffold",
  "trino-scene",
 ]

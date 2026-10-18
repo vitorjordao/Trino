@@ -1,6 +1,7 @@
 //! 3DS platform services ([`trino_core::Platform`]): clock, debug-channel
-//! log, RomFS blobs and an SD-card save file (framed by `trino_core::save`,
-//! capped at `Caps::N3DS.save_bytes`).
+//! log, RomFS blobs, asset groups (`crate::assets`, issue #56) and an
+//! SD-card save file (framed by `trino_core::save`, capped at
+//! `Caps::N3DS.save_bytes`).
 
 use alloc::collections::BTreeMap;
 use alloc::vec;
@@ -8,7 +9,7 @@ use alloc::vec::Vec;
 use core::cell::Cell;
 
 use trino_core::save::{self, HEADER};
-use trino_core::{BlobId, Caps, Platform, SaveError};
+use trino_core::{BlobId, Caps, GroupId, LoadState, MemoryReport, Platform, SaveError};
 
 use crate::{ffi, runtime};
 
@@ -17,6 +18,8 @@ pub struct N3dsPlatform {
     blobs: BTreeMap<u32, &'static [u8]>,
     last_us: Cell<u32>,
     high: Cell<u64>,
+    /// The asset groups and their loader's state (`N3dsAssets::pump`).
+    pub(crate) groups: crate::assets::Groups,
 }
 
 impl N3dsPlatform {
@@ -25,7 +28,13 @@ impl N3dsPlatform {
             blobs: BTreeMap::new(),
             last_us: Cell::new(runtime::now_us()),
             high: Cell::new(0),
+            groups: crate::assets::Groups::new(),
         }
+    }
+
+    /// Note the heap's use for `Platform::memory`'s peak (once a frame).
+    pub fn sample_heap(&mut self) {
+        self.groups.sample();
     }
 
     pub(crate) fn insert_blob(&mut self, id: u32, bytes: Vec<u8>) {
@@ -58,8 +67,38 @@ impl Platform for N3dsPlatform {
         self.blobs.get(&id.0).copied()
     }
 
+    fn load_group(&mut self, group: GroupId) -> LoadState {
+        self.groups.table.request_load(group)
+    }
+
+    fn unload_group(&mut self, group: GroupId) {
+        self.groups.table.request_unload(group);
+    }
+
+    fn group_state(&self, group: GroupId) -> LoadState {
+        self.groups.table.state(group)
+    }
+
+    fn group_blob(&self, id: BlobId) -> Option<&[u8]> {
+        match self.groups.blobs.get(&id.0) {
+            Some(b) => Some(b),
+            None => self.blob(id),
+        }
+    }
+
+    fn memory(&self) -> MemoryReport {
+        self.groups.report(runtime::hw().caps().ram_bytes)
+    }
+
     fn hw_tier(&self) -> trino_core::HwTier {
         runtime::hw_tier()
+    }
+
+    /// The 3DS's fixed preset (issue #55): `Low`, `Medium` on a New 3DS
+    /// with the speedup, nothing scaled. `set_quality` stays the trait's
+    /// no-op.
+    fn quality(&self) -> trino_core::QualitySettings {
+        trino_core::QualitySettings::console(&trino_core::Caps::N3DS.with_tier(runtime::hw_tier()))
     }
 
     fn second_screen(&self) -> Option<(u16, u16)> {

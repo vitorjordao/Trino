@@ -189,6 +189,45 @@ pub trait Platform {
     /// the picture's size changes; it also persists them.
     fn set_display(&mut self, _settings: DisplaySettings) {}
 
+    /// The quality settings in effect ([`crate::quality`], issue #55): what
+    /// the player chose or the first launch's calibration picked on the PC
+    /// and the Web, a fixed preset on the consoles (the N64 and the 3DS
+    /// `Low`, the New 3DS `Medium`, nothing scaled:
+    /// [`QualitySettings::fixed`](crate::QualitySettings::fixed)). Games
+    /// read it instead of branching per platform: `lod_bias` and
+    /// `particle_scale` for content, the rest for an options page. The
+    /// default is the consoles' `Low`.
+    fn quality(&self) -> crate::QualitySettings {
+        crate::QualitySettings::fixed(crate::QualityPreset::Low)
+    }
+
+    /// Ask for new quality settings (PC and Web; a documented no-op on the
+    /// consoles, whose preset is fixed). The host applies them after the
+    /// frame (render scale, dynamic resolution, MSAA, AO, anisotropy,
+    /// sharpening, frame limit) and persists them.
+    fn set_quality(&mut self, _settings: crate::QualitySettings) {}
+
+    /// What a named preset means on this platform: the project's
+    /// `assets/quality.ron` over the built-in values on the PC and the Web
+    /// (an options page shows and applies these). `None` on the consoles
+    /// and for `Custom`.
+    fn quality_preset(&self, _preset: crate::QualityPreset) -> Option<crate::QualitySettings> {
+        None
+    }
+
+    /// The quality as the host sees it (PC and Web): the live render scale,
+    /// the calibration's pick, the GPU class, a handheld. `None` on the
+    /// consoles.
+    fn quality_info(&self) -> Option<crate::QualityInfo> {
+        None
+    }
+
+    /// Run the calibration again ("Detect again" on an options page): the
+    /// host renders its built-in scene at each preset after the frame and
+    /// applies the highest that holds the frame rate (PC; a no-op
+    /// elsewhere).
+    fn detect_quality(&mut self) {}
+
     /// The input bindings' state, on platforms where they can be remapped
     /// (PC). `None` on consoles.
     fn input_info(&self) -> Option<InputInfo> {
@@ -217,4 +256,44 @@ pub trait Platform {
 
     /// Back to the default bindings (persisted too).
     fn reset_bindings(&mut self) {}
+
+    /// Start loading an asset group, or poll one ([`crate::group`], issue
+    /// #56): never blocks. The first call on an unloaded group queues it and
+    /// returns `Loading { progress: 0 }`; the backend then reads it a time
+    /// slice per frame ([`crate::Caps::load_budget_us`]) and later calls
+    /// return its progress, then `Ready`. `boot` is always ready; a group
+    /// this build doesn't hold is `Failed`. The default (a backend without
+    /// groups) knows only `boot`.
+    fn load_group(&mut self, group: crate::GroupId) -> crate::LoadState {
+        self.group_state(group)
+    }
+
+    /// Free an asset group's memory (a load in progress is cancelled). It
+    /// reads as `Unloaded` at once and its assets stop drawing; the memory
+    /// is back before the next frame's update. `boot` stays.
+    fn unload_group(&mut self, _group: crate::GroupId) {}
+
+    /// Where a group is, without asking for it.
+    fn group_state(&self, group: crate::GroupId) -> crate::LoadState {
+        if group == crate::GroupId::BOOT {
+            crate::LoadState::Ready
+        } else {
+            crate::LoadState::Failed
+        }
+    }
+
+    /// Bytes of a blob in any loaded group, boot included: borrowed from the
+    /// platform, valid until its group unloads (copy what must outlive the
+    /// frame, or look it up again). [`blob`](Self::blob) stays the `'static`
+    /// boot-only path.
+    fn group_blob(&self, id: BlobId) -> Option<&[u8]> {
+        self.blob(id)
+    }
+
+    /// The memory this hardware has and what holds it ([`crate::MemoryReport`]):
+    /// heap used/peak/total and the resident assets by category. Zeros where
+    /// the backend doesn't count.
+    fn memory(&self) -> crate::MemoryReport {
+        crate::MemoryReport::default()
+    }
 }

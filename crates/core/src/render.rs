@@ -192,6 +192,10 @@ pub struct FrameStats {
     /// Software T&L work behind `tris` (vertex transforms, clipping,
     /// depth splits, culls) — deterministic, so tests pin it per scene.
     pub tnl: crate::render3d::TnlStats,
+    /// Draws of a model or sprite that is not resident: its group is not
+    /// loaded ([`crate::Platform::load_group`]), the platform doesn't bake it,
+    /// or the handle is wrong. They draw nothing.
+    pub not_loaded: u32,
 }
 
 /// How a 3D surface reacts to light. Evaluated per vertex by the engine's
@@ -558,6 +562,16 @@ pub trait Renderer {
     /// `None` turns it off. **Cleared at `begin_frame`**, like the local
     /// lights: set it every frame.
     fn set_ambient_occlusion(&mut self, _ao: Option<&crate::ao::AmbientOcclusion>) {}
+
+    /// The multiplier of LOD start distances this renderer draws with
+    /// ([`crate::QualitySettings::lod_bias`]): `draw_nodes_in` and
+    /// `EntityStore::draw_in` pick their levels with it; code that picks
+    /// levels itself passes it to `lod_from_biased`. The PC and the Web
+    /// report the quality preset's; 1.0 everywhere else (consoles and the
+    /// PC's console profiles: content is authored per console).
+    fn lod_bias(&self) -> f32 {
+        1.0
+    }
 
     /// What [`TexFilter::Default`] means for the next 3D draws (persists,
     /// like `set_light`): toggle the whole game between crisp and smooth

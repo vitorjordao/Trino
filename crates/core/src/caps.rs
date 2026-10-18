@@ -113,6 +113,12 @@ pub struct Caps {
     /// stay at 100.
     pub crowd_percent: u16,
     pub particle_percent: u16,
+    /// Main-thread time a frame may spend loading asset groups
+    /// ([`crate::Platform::load_group`], issue #56), in µs: enough to keep a
+    /// loading screen animating at the console's frame rate. On the 3DS the
+    /// worker core's decoding is not counted, only what the main thread does
+    /// (reading, uploading) or a job that ran inline.
+    pub load_budget_us: u32,
 }
 
 /// Why a piece of content does not fit in a target's [`Caps`].
@@ -151,6 +157,7 @@ impl Caps {
         hw_tier: HwTier::Base,
         crowd_percent: 100,
         particle_percent: 100,
+        load_budget_us: 4_000,
     };
 
     /// An N64 with the Expansion Pak: [`Caps::N64`] with 8 MiB of RDRAM.
@@ -186,6 +193,7 @@ impl Caps {
         hw_tier: HwTier::Base,
         crowd_percent: 100,
         particle_percent: 100,
+        load_budget_us: 6_000,
     };
 
     /// A New Nintendo 3DS (or New 2DS XL) with the speedup on: 804 MHz, the
@@ -225,6 +233,7 @@ impl Caps {
         hw_tier: HwTier::Base,
         crowd_percent: 100,
         particle_percent: 100,
+        load_budget_us: 8_000,
     };
 
     /// A web browser (WebGPU, or WebGL2 where there is none; issue #47):
@@ -255,6 +264,7 @@ impl Caps {
         hw_tier: HwTier::Base,
         crowd_percent: 100,
         particle_percent: 100,
+        load_budget_us: 8_000,
     };
 
     /// The same console's table for `tier`: [`Caps::N64`] ↔

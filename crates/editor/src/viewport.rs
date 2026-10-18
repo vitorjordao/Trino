@@ -20,8 +20,8 @@ use eframe::egui::{
 use eframe::egui_wgpu::RenderState;
 use trino_asset_pipeline::MeshData;
 use trino_core::{
-    Color, Fog, HwTier, Light, LodPick, Material, ModelId, ModelParams, Renderer, Shading,
-    SpriteId, SpriteParams, Vec2 as TVec2, Vec3,
+    Color, Fog, HwTier, Light, LodPick, Material, ModelId, ModelParams, QualityPreset,
+    QualitySettings, Renderer, Shading, SpriteId, SpriteParams, Vec2 as TVec2, Vec3,
 };
 use trino_platform_pc::{AoView, PcRenderer, SimProfile};
 use trino_scene::{Resolved, Scene, Target, Transform};
@@ -121,6 +121,11 @@ pub struct ViewInput<'a> {
     pub water: (f32, &'a [trino_core::Ripple]),
     /// The project's audio per platform (the Game view HUD's audio line).
     pub audio: Option<&'a crate::audio::Totals>,
+    /// The project's quality presets (the Game view's preset picker).
+    pub quality: Option<&'a trino_core::PresetTable>,
+    /// The asset memory plans per console tier (the HUD's assets RAM line,
+    /// issue #56).
+    pub memory: Option<&'a [trino_asset_pipeline::memory::MemoryPlan]>,
 }
 
 pub enum ViewAction {
@@ -161,6 +166,13 @@ pub struct Viewport {
     /// console's; the renderer's caps and the resolved variants are the
     /// tier's.
     pub tier: HwTier,
+    /// Game view, PC and Web profiles: the quality preset it previews
+    /// (issue #55; the Quality tab's values) and whether its dynamic
+    /// resolution runs. The consoles' presets are fixed.
+    pub quality: QualityPreset,
+    pub dynres: bool,
+    /// The settings the renderer has (`None`: none applied yet).
+    quality_applied: Option<QualitySettings>,
     pub cam: OrbitCam,
     pub show_grid: bool,
     /// Draw collider wireframes (world boxes — exactly what the physics
@@ -235,6 +247,9 @@ impl Viewport {
             texture,
             profile,
             tier: HwTier::Base,
+            quality: QualityPreset::High,
+            dynres: false,
+            quality_applied: None,
             cam: OrbitCam::default(),
             show_grid: true,
             show_colliders: true,
@@ -299,11 +314,48 @@ impl Viewport {
             project.upload_platform_sprites(&mut self.renderer, target_of(profile));
             self.uploaded_gen = project.generation;
             self.profile = profile;
+            self.quality_applied = None;
             self.reregister();
         } else if tier == self.tier {
             return;
         }
         self.set_tier(tier);
+    }
+
+    /// Game view, PC and Web profiles: draw with `settings` (the previewed
+    /// preset's, from the Quality tab), dynamic resolution as the toolbar
+    /// says and no frame cap (the editor paints when it needs to). The
+    /// console profiles keep their fixed look.
+    pub fn preview_quality(&mut self, settings: QualitySettings) {
+        if self.kind != ViewKind::Game || !self.profile.is_native() {
+            return;
+        }
+        let q = QualitySettings {
+            dynamic_resolution: match (self.dynres, settings.dynamic_resolution) {
+                (false, _) => None,
+                (true, Some(d)) => Some(d),
+                (true, None) => Some(trino_core::DynRes::DEFAULT),
+            },
+            frame_limit: trino_core::FrameLimit::VSync,
+            ..settings
+        };
+        if self.quality_applied != Some(q) {
+            self.renderer.apply_quality(&q);
+            self.quality_applied = Some(q);
+            self.rendered = None;
+        }
+    }
+
+    /// The 3D's render scale now (1 on the consoles; dynamic resolution
+    /// moves it).
+    pub fn render_scale(&self) -> f32 {
+        self.renderer.render_scale()
+    }
+
+    /// The settings the Game view draws with (`None`: a console's fixed
+    /// look).
+    pub fn quality_settings(&self) -> Option<QualitySettings> {
+        self.quality_applied.filter(|_| self.profile.is_native())
     }
 
     /// Put the Game view on `tier` hardware of its console (nothing to
@@ -447,6 +499,8 @@ impl Viewport {
         };
         let r = &mut self.renderer;
         let mut lod = crate::budget::LodCounts::default();
+        // The previewed quality preset's LOD bias (#55; 1 on the consoles).
+        let bias = trino_core::Renderer::lod_bias(&*r);
         for item in &input.resolved.items {
             if !trino_core::vis::in_view(item.cell, visible) {
                 continue;
@@ -455,7 +509,7 @@ impl Viewport {
             // Inspector's preview distance for the entity being tuned).
             let pick = match input.lod_preview {
                 Some((owner, d)) if item.owner == owner && !item.from_prefab => item.lod_at(d),
-                _ => item.lod_from(lod_eye),
+                _ => item.lod_from_biased(lod_eye, bias),
             };
             if !item.lod.is_empty() {
                 match pick {
@@ -606,6 +660,9 @@ impl Viewport {
             anim_time,
         );
         let size_changed = self.rendered.as_ref().map(|r| r.1) != Some(internal);
+        let dynres_live = self
+            .quality_settings()
+            .is_some_and(|q| q.dynamic_resolution.is_some());
         if let Some(session) = self.play.as_mut() {
             // Playing: the game updates and draws every frame, fed by the
             // keyboard (unless a text field has focus).
@@ -626,12 +683,16 @@ impl Viewport {
                 lod: crate::budget::LodCounts::default(),
                 ao: self.renderer.frame_times().ao_passes > 0,
             };
+            if dynres_live {
+                self.renderer.report_frame_time((dt * 1e6) as u32);
+            }
             self.rendered = None;
             ui.ctx().request_repaint();
         } else if self.rendered.as_ref() != Some(&key)
             || flashing
             || cam_moving
             || self.ao_rendered != self.ao_view
+            || dynres_live
         {
             self.ao_rendered = self.ao_view;
             self.render(input, internal);
@@ -639,6 +700,13 @@ impl Viewport {
                 self.reregister();
             }
             self.rendered = Some(key);
+            if dynres_live {
+                // Dynamic resolution follows this view's frames (the
+                // editor's device times none on the GPU): keep drawing.
+                self.renderer
+                    .report_frame_time((self.stats.ms * 1000.0) as u32);
+                ui.ctx().request_repaint();
+            }
         }
         if flashing || cam_moving {
             ui.ctx().request_repaint();
@@ -951,6 +1019,7 @@ impl Viewport {
                 input.budgets,
                 input.tmem,
                 input.audio,
+                input.memory.map(|m| (m, input.scene)),
             );
             if let Some(lines) = lines {
                 let hud = ui
@@ -1030,6 +1099,7 @@ impl Viewport {
         budgets: Option<&crate::budget::Budgets>,
         tmem: Option<&std::collections::BTreeMap<u32, Option<u32>>>,
         audio: Option<&crate::audio::Totals>,
+        memory: Option<(&[trino_asset_pipeline::memory::MemoryPlan], &Scene)>,
     ) -> Option<Rect> {
         let caps = *self.renderer.caps();
         let mut rows = crate::budget::rows(&self.stats.frame, &caps, &self.stats.lod);
@@ -1068,6 +1138,28 @@ impl Viewport {
                 ram.into_iter().chain(hardware).collect()
             })
             .unwrap_or_default();
+        // What the scene's groups take of the console's RAM left for assets
+        // (issue #56): the Memory tab's bar for this tier, in one line.
+        let console = match self.profile {
+            SimProfile::N64 => Some(trino_asset_pipeline::Platform::N64),
+            SimProfile::N3ds => Some(trino_asset_pipeline::Platform::N3ds),
+            _ => None,
+        };
+        let assets_ram = memory.zip(console).and_then(|((plans, scene), console)| {
+            let plan = plans
+                .iter()
+                .find(|p| p.platform == console && p.tier == self.tier)?;
+            let groups = trino_asset_pipeline::groups::scene_groups(scene);
+            let refs: Vec<&str> = groups.iter().map(String::as_str).collect();
+            let (line, level) = crate::budget::assets_ram_line(target.label(), plan, &refs);
+            let color = match level {
+                crate::budget::Level::Ok => c::TEXT_WEAK,
+                crate::budget::Level::Near => c::WARN,
+                crate::budget::Level::Over => c::ERROR,
+            };
+            Some((line, color))
+        });
+        let tier_lines: Vec<(String, Color32)> = tier_lines.into_iter().chain(assets_ram).collect();
         let tier_h = 15.0;
         let summary = self.stats.lod.summary();
         let row_h = 18.0;
@@ -1105,8 +1197,16 @@ impl Viewport {
                 },
             )
         });
+        // The PC's and the Web's quality (#55): preset, the 3D's live scale.
+        let quality = self.quality_settings().map(|q| {
+            (
+                crate::budget::quality_line(&q, self.render_scale()),
+                crate::budget::Level::Ok,
+            )
+        });
         let platform_lines = measured
             .into_iter()
+            .chain(quality)
             .chain(audio)
             .chain(
                 budgets
@@ -1463,6 +1563,54 @@ impl Viewport {
                                 if canvas != self.web_canvas {
                                     self.web_canvas = canvas;
                                     self.rendered = None;
+                                }
+                            }
+                            if self.profile.is_native() {
+                                let mut preset = self.quality;
+                                let r = egui::ComboBox::from_id_salt("game-quality")
+                                    .selected_text(preset.label())
+                                    .width(72.0)
+                                    .show_ui(ui, |ui| {
+                                        for p in QualityPreset::NAMED {
+                                            ui.selectable_value(&mut preset, p, p.label());
+                                        }
+                                    })
+                                    .response
+                                    .on_hover_text(
+                                        "The quality preset the PC and the Web draw with (the \
+                                         Quality tab says what each means)",
+                                    );
+                                r.widget_info(|| {
+                                    egui::WidgetInfo::labeled(
+                                        egui::WidgetType::ComboBox,
+                                        true,
+                                        "Game view quality",
+                                    )
+                                });
+                                if preset != self.quality {
+                                    self.quality = preset;
+                                    // The preset's own choice until toggled.
+                                    self.dynres = input.quality.is_some_and(|t| {
+                                        t.get(preset).dynamic_resolution.is_some()
+                                    });
+                                }
+                                let r = theme::toggle_icon(
+                                    ui,
+                                    self.dynres,
+                                    icon::ARROWS_OUT_SIMPLE,
+                                    "Dynamic resolution: the 3D's scale follows the frame time",
+                                );
+                                let on = self.dynres;
+                                r.widget_info(|| {
+                                    egui::WidgetInfo::selected(
+                                        egui::WidgetType::Checkbox,
+                                        true,
+                                        on,
+                                        "Dynamic resolution",
+                                    )
+                                });
+                                if r.clicked() {
+                                    self.dynres = !self.dynres;
                                 }
                             }
                             ui.separator();

@@ -1,12 +1,16 @@
 //! [`trino_core::Platform`] in a browser: `performance.now()`, the console,
-//! blobs from the asset pack and a save in `localStorage`.
+//! blobs from the asset pack, asset groups downloaded beside it
+//! (`crate::groups`, issue #56) and a save in `localStorage`.
 
 use std::collections::HashMap;
 
+use trino_core::mem::HeapStats;
 use trino_core::{
-    BindDevice, BlobId, Button, Caps, DisplayInfo, DisplaySettings, GamepadStatus, InputInfo,
-    Platform, SaveError,
+    BindDevice, BlobId, Button, Caps, DisplayInfo, DisplaySettings, GamepadStatus, GroupId,
+    InputInfo, LoadState, MemoryReport, Platform, QualityInfo, QualityPreset, QualitySettings,
+    SaveError,
 };
+use trino_render_wgpu::quality::HostedQuality;
 
 pub struct WebPlatform {
     performance: Option<web_sys::Performance>,
@@ -19,6 +23,10 @@ pub struct WebPlatform {
     pub(crate) display_request: Option<DisplaySettings>,
     pub(crate) input: Option<InputInfo>,
     pub(crate) pad_name: Option<String>,
+    /// The quality ([`Platform::quality`] and its siblings), published by
+    /// the host (`crate::quality`).
+    pub(crate) quality: HostedQuality,
+    pub(crate) groups: crate::groups::Groups,
 }
 
 impl WebPlatform {
@@ -34,7 +42,15 @@ impl WebPlatform {
             display_request: None,
             input: None,
             pad_name: None,
+            quality: HostedQuality::new(caps),
+            groups: crate::groups::Groups::new(caps.ram_bytes),
         }
+    }
+
+    /// Count the page's heap in `Platform::memory` (the app's
+    /// `#[global_allocator]`, a `trino_core::mem::Counting`).
+    pub fn set_heap(&mut self, heap: Option<&'static dyn HeapStats>) {
+        self.groups.heap = heap;
     }
 
     /// Register (or replace) a blob.
@@ -112,12 +128,59 @@ impl Platform for WebPlatform {
             .map_err(|_| SaveError::Io)
     }
 
+    fn load_group(&mut self, group: GroupId) -> LoadState {
+        let state = self.groups.table.request_load(group);
+        if matches!(state, LoadState::Loading { .. }) {
+            self.groups.fetch(group);
+        }
+        state
+    }
+
+    fn unload_group(&mut self, group: GroupId) {
+        self.groups.table.request_unload(group);
+    }
+
+    fn group_state(&self, group: GroupId) -> LoadState {
+        self.groups.table.state(group)
+    }
+
+    fn group_blob(&self, id: BlobId) -> Option<&[u8]> {
+        match self.groups.blobs.get(&id.0) {
+            Some(b) => Some(b),
+            None => self.blob(id),
+        }
+    }
+
+    fn memory(&self) -> MemoryReport {
+        self.groups.report()
+    }
+
     fn display(&self) -> Option<DisplayInfo> {
         self.display
     }
 
     fn set_display(&mut self, settings: DisplaySettings) {
         self.display_request = Some(settings);
+    }
+
+    fn quality(&self) -> QualitySettings {
+        self.quality.settings()
+    }
+
+    fn set_quality(&mut self, settings: QualitySettings) {
+        self.quality.request(settings);
+    }
+
+    fn quality_preset(&self, preset: QualityPreset) -> Option<QualitySettings> {
+        self.quality.preset(preset)
+    }
+
+    fn quality_info(&self) -> Option<QualityInfo> {
+        self.quality.info()
+    }
+
+    fn detect_quality(&mut self) {
+        self.quality.detect();
     }
 
     fn input_info(&self) -> Option<InputInfo> {

@@ -59,6 +59,10 @@ unsafe extern "C" {
     pub fn trino_set_screen(bottom: u32);
 
     pub fn trino_sprite_load(romfs_path: *const c_char) -> *mut c_void;
+    /// A `.t3x` in memory (citro2d copies it; the caller keeps `data`).
+    pub fn trino_sprite_load_mem(data: *const u8, size: u32) -> *mut c_void;
+    /// Free a sheet the GPU is done with (unbinds it first).
+    pub fn trino_sprite_free(sheet: *mut c_void);
     pub fn trino_fill_rect(fill: *const TrinoFill);
     /// Returns (width << 16) | height.
     pub fn trino_sprite_size(sheet: *mut c_void) -> u32;
@@ -103,6 +107,8 @@ unsafe extern "C" {
     /// floats each, 44 in all); flags
     /// bit 0 = cull back faces.
     pub fn trino_gpu_draw(mesh: *mut c_void, u: *const f32, flags: u32);
+    /// Free a `trino_gpu_mesh` or `trino_water_mesh` (the GPU is done with it).
+    pub fn trino_gpu_mesh_free(mesh: *mut c_void);
 
     /// Bits 0..13 = `Button` discriminants (12/13 = ZL/ZR, New 3DS).
     pub fn trino_joypad_buttons() -> u32;
@@ -119,6 +125,8 @@ unsafe extern "C" {
     /// Bits 0..8 the bus (`trino_core::Bus`), bit 8 streamed, bit 9
     /// DSP-ADPCM, bit 10 baked to loop.
     pub fn trino_wav_info(wav: *mut c_void) -> u32;
+    /// Free a loaded sound, stopping the channels that play it.
+    pub fn trino_wav_free(wav: *mut c_void);
     pub fn trino_wav_play(wav: *mut c_void, channel: u32, looped: u32);
     pub fn trino_channel_stop(channel: u32);
     /// Once per frame: releases the streams that played to their end.
@@ -136,6 +144,13 @@ unsafe extern "C" {
     pub fn trino_file_exists(romfs_relative_path: *const c_char) -> i32;
     pub fn trino_asset_load(romfs_path: *const c_char, size_out: *mut u32) -> *mut c_void;
     pub fn trino_free(ptr: *mut c_void);
+    /// Ranged reads (asset group bundles): `romfs:/…` path; NULL = missing.
+    pub fn trino_file_open(romfs_path: *const c_char) -> *mut c_void;
+    /// `len` bytes at `offset` into `dest`; returns the bytes read.
+    pub fn trino_file_read_at(file: *mut c_void, offset: u32, dest: *mut u8, len: u32) -> u32;
+    pub fn trino_file_close(file: *mut c_void);
+    /// 0 = heap bytes in use (malloc + linear), 1 = both heaps' size.
+    pub fn trino_heap_stat(which: u32) -> u32;
 
     /// Test hook: RGBA8888 of the top screen (`bottom` = 0) or the touch
     /// screen (1) at (x, y); 0 = unavailable.

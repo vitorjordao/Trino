@@ -11,7 +11,8 @@
 //!   as `TRINO_STEP:` / `TRINO_TEST_PASS` lines and to the harness
 //!   (`globalThis.__trino`, `tools/web-test/run.mjs`);
 //! - the backend and look: `?backend=webgpu|webgl2`, `?sim=web|n64|3ds`,
-//!   `?scale=N`, `?size=WxH`, `?msaa=0` (`trino_platform_web::WebConfig`).
+//!   `?scale=N`, `?size=WxH`, `?msaa=0`, `?quality=low|medium|high|ultra|auto`
+//!   (`trino_platform_web::WebConfig`).
 //!
 //! Off wasm32 the crate is empty (the workspace's host builds skip it).
 
@@ -60,6 +61,11 @@ mod web {
         }
     }
 
+    /// The page's allocator, counted for `Platform::memory` (issue #56).
+    #[global_allocator]
+    static HEAP: trino_core::mem::Counting<std::alloc::System> =
+        trino_core::mem::Counting::new(std::alloc::System);
+
     #[wasm_bindgen(start)]
     pub fn start() {
         install_panic_hook();
@@ -79,6 +85,7 @@ mod web {
         let save = if selftest { "selftest" } else { &name };
         let save = if save.is_empty() { "castle64" } else { save };
         let mut host = WebHost::new(WebConfig::new(save, &query)).await?;
+        host.platform.set_heap(Some(&HEAP));
         host.load_pack(which.pack()).await?;
         if selftest {
             crate::selftest::start(host);
@@ -92,6 +99,7 @@ mod web {
                 game.resize(screen);
             }
             let input = host.poll_input();
+            host.pump_groups();
             game.update_with(&mut host.platform, &input, &mut host.audio, dt);
             game.render(&mut host.renderer);
             host.end_frame();
@@ -103,7 +111,7 @@ mod web {
                     Which::Showcase => "showcase",
                     Which::SolidEleven => "solid-eleven",
                 };
-                trino_platform_web::js::log(&host.meter.line(label));
+                trino_platform_web::js::log(&host.frame_line(label));
                 trino_platform_web::js::trino_finish(true, None);
                 return Flow::Stop;
             }

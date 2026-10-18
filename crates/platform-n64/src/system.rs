@@ -11,7 +11,7 @@ use core::cell::Cell;
 
 use alloc::boxed::Box;
 use trino_core::save::{self, Lz, Medium, SLOT_HEADER, WritePlan};
-use trino_core::{BlobId, Platform, SaveError};
+use trino_core::{BlobId, GroupId, LoadState, MemoryReport, Platform, SaveError};
 
 use crate::{ffi, runtime};
 
@@ -27,6 +27,9 @@ pub struct N64Platform {
     lz: Option<Box<Lz>>,
     /// Detected at boot (`runtime::hw_tier`).
     tier: trino_core::HwTier,
+    /// The asset groups and their loader's state (issue #56,
+    /// `N64Assets::pump`).
+    pub(crate) groups: crate::assets::Groups,
 }
 
 /// An unfinished save: the planned body, how much of it is on the EEPROM,
@@ -64,7 +67,14 @@ impl N64Platform {
             pending: None,
             lz: None,
             tier: runtime::hw_tier(),
+            groups: crate::assets::Groups::new(),
         }
+    }
+
+    /// Note the heap's use for [`Platform::memory`]'s peak (the hosts call
+    /// it at every frame's end).
+    pub fn sample_heap(&mut self) {
+        self.groups.sample();
     }
 
     fn plan(&mut self, data: &[u8]) -> Result<Box<Pending>, SaveError> {
@@ -137,8 +147,38 @@ impl Platform for N64Platform {
         self.blobs.get(&id.0).copied()
     }
 
+    fn load_group(&mut self, group: GroupId) -> LoadState {
+        self.groups.table.request_load(group)
+    }
+
+    fn unload_group(&mut self, group: GroupId) {
+        self.groups.table.request_unload(group);
+    }
+
+    fn group_state(&self, group: GroupId) -> LoadState {
+        self.groups.table.state(group)
+    }
+
+    fn group_blob(&self, id: BlobId) -> Option<&[u8]> {
+        match self.groups.blobs.get(&id.0) {
+            Some(b) => Some(b),
+            None => self.blob(id),
+        }
+    }
+
+    fn memory(&self) -> MemoryReport {
+        let ram = crate::hw::caps_of_memory(runtime::memory_size()).ram_bytes;
+        self.groups.report(ram)
+    }
+
     fn hw_tier(&self) -> trino_core::HwTier {
         self.tier
+    }
+
+    /// The N64's fixed preset (issue #55): `Low` on both tiers, nothing
+    /// scaled. `set_quality` stays the trait's no-op.
+    fn quality(&self) -> trino_core::QualitySettings {
+        trino_core::QualitySettings::fixed(trino_core::QualityPreset::Low)
     }
 
     fn save_capacity(&self) -> usize {

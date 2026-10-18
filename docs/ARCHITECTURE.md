@@ -168,6 +168,23 @@ the browser goldens (`tests/golden/web/`) hold all three engines and the PC rend
 (`xtask/tests/web_parity.rs`) to one picture. Details in
 [ADR 0019](adr/0019-web-target.md) and [PLATFORMS.md](PLATFORMS.md#web-webgpu--webgl2).
 
+### Quality presets on the PC and the Web (issue #55)
+
+The consoles have one hardware table each; a PC or a browser can be anything from a
+phone to a desktop GPU. `trino_core::quality` (`no_std`, zero deps) names the settings a
+host may change — render scale, dynamic resolution, MSAA, an AO cap, LOD bias, particle
+scale, anisotropy, sharpening, the frame limit — and four presets (Low, Medium, High,
+Ultra). A game asks through five default `Platform` methods, so the consoles keep their
+fixed quality and the N64 ceiling is untouched. The shared renderer
+(`crates/render-wgpu`) applies them: the 3D at the render scale in its own targets,
+upscaled and sharpened under a HUD drawn at the output resolution; a PI controller that
+moves the scale to hold a frame-time target; a present mode and limiter per frame cap;
+and a calibration bench that times each preset on a built-in scene to pick the first
+launch's. `HostedQuality` is the host side both `PcPlatform` and `WebPlatform` use — the
+start order (forced, saved, the machine, the project default) and the player's file.
+High is the frame the PC always drew. Details in [ADR 0023](adr/0023-quality-presets.md)
+and [PLATFORMS.md](PLATFORMS.md#quality-presets).
+
 ### 2D in the same pipeline
 
 2D is not a separate engine path. The same `Renderer` draws it in the same frame as the
@@ -212,6 +229,25 @@ that map onto the old master and music volumes. The project's mix (`assets/audio
 bakes to a `TMIX` blob each host applies at start, and the player's own volumes persist
 per platform (`BusSettings`).
 
+## Asset groups and memory (issue #56)
+
+Assets load in groups ([ADR 0022](adr/0022-asset-groups-and-memory.md)): `boot` at boot,
+every other group when the game calls `Platform::load_group`, freed by `unload_group`. The
+bake writes one `TBND` bundle per group and platform (`trino_core::bundle`), compressed with
+what each platform decodes cheaply: libdragon's `mkasset` levels on the N64 (decoded by
+`asset_load` as it reads), LZ4 elsewhere (`trino_core::lz4`, on the 3DS's worker core).
+Loading never blocks a frame: each host pumps its loader for `Caps::load_budget_us` before
+the game's update, and the shared bookkeeping (`trino_core::group::GroupTable`: requests,
+progress, refcounts for assets two groups share) is in the core. `Platform::memory()`
+reports heap used, peak and total and the resident assets by category on every backend.
+
+One memory plan (`trino_asset_pipeline::memory`: each asset's bytes once loaded per console
+tier, against the RAM left after the engine's reserve and the game's state) drives strict
+mode, `cargo xtask assets report|check` and the editor's Memory tab. Scenes list the groups
+they need (`requires`) and portal cells the groups of their rooms, which
+`trino_core::CellGroups` streams as the camera moves. `trino_core::mem` gives `no_std`
+arenas (per frame, per level) for data that dies together, so it never fragments the heap.
+
 ## Authored content
 
 Scenes, prefabs, materials, particle effects and fake objects are versioned RON files
@@ -232,7 +268,8 @@ Games reach that content two ways, both `no_std` on every target:
 
 - **PC:** with the `reload` feature, `cargo xtask watch pc` rebuilds the game dylib on a
   source change and swaps it under the running state; saving a master rebakes and
-  re-uploads that asset under the same handle. The boundary rules (no generics in exports,
+  re-uploads that asset under the same handle (a `boot` asset at once, a grouped one the
+  next time its group loads, ADR 0022). The boundary rules (no generics in exports,
   no statics in the dylib, no layout change between reloads) are in
   `crates/game-api/src/lib.rs` and AGENTS.md.
 - **Consoles:** `watch n64` and `watch 3ds` rebuild and relaunch the emulator on save.

@@ -150,6 +150,20 @@ step probes for that.
 - The index's 4th column (`base` / `expanded`) is filtered in `src/assets.rs` against
   `runtime::hw_tier()`: a tier twin is `<id>.x.blob` in the RomFS.
 
+## Asset groups (issue #56, ADR 0022)
+
+- `xtask/src/console_groups.rs` routes the index: boot lines stay in `index.tsv` (loose
+  RomFS files), a group's textures, meshes, fonts and blobs become LZ4 entries in
+  `groups/<name>.tbnd` (their loose files removed), its `T3AU` sounds stay files beside it
+  (external entries). `[groups.boot] compression = { 3ds = "lz4" }` packs boot's the same
+  way into `groups/boot.tbnd` (`<id> \t boot \t groups/boot.tbnd`); sounds stay loose.
+- Runtime (`src/assets.rs`): `N3dsAssets::pump` reads a group's entries for 6 ms of the
+  main thread, hands each inline entry's bytes to the worker core (`Decode`, four ahead)
+  and uploads results in order, never waiting on the worker (`load_all` does the same
+  for the boot bundle, waiting). Textures and meshes freed by an unload go to the
+  renderer's grave for `GRAVE_FRAMES` (2) frames: the GPU may still read them.
+- Boot logs `TRINO_MEM:` like the N64; the `asset groups` step logs `worker=<core>`.
+
 ## The shim rule
 
 Unlike the N64 there is no ABI hazard (both sides are ARM EABI-hf), but the

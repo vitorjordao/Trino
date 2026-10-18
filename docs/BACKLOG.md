@@ -51,13 +51,23 @@ shipping a 3D game first**, then by cost:
   - Web audio in an AudioWorklet (#53 follow-up): streams schedule chunks 1 s ahead on
     the main thread, so a hidden tab runs dry after 1 s. A worklet needs a second wasm
     instance and a `SharedArrayBuffer` ring (COOP/COEP).
-  - Lazy asset bundles (#56): the page downloads every pack before the first frame.
+  - ~~Lazy asset bundles (#56)~~: **done** (ADR 0022): a group's bundle downloads the
+    first time the game loads it; the pack holds `boot` only.
   - `wasm-opt` on the release wasm (~4.5 MB before compression), and wasm threads
     (they need COOP/COEP from the host).
   - A real-device pass on Safari (macOS/iOS) and a phone GPU: CI runs Playwright's
     WebKit on WebGL2 only.
   - Pixel probes in the browser's `engine_checks`: no synchronous read-back, so they
     are `skipped` there (the goldens cover the pixels).
+- **Quality presets follow-ups (#55, ADR 0023)** (S–M each).
+  - A temporal upscaler (FSR 2-style) once the renderer has motion vectors and jitter.
+  - A bench scene from the game (a project-chosen scene) for games much heavier than
+    the engine's.
+  - Shadow and post levels take effect with #57 and #64.
+  - A run on a real Steam Deck and a phone GPU (measured so far: llvmpipe, SwiftShader,
+    an AMD Radeon iGPU and an RX 7800 XT on Windows).
+  - Dynamic resolution's full-size clear and MSAA resolve (1–3 ms on llvmpipe with 4×
+    MSAA at half scale): a partial resolve if a preset with MSAA ever turns it on.
 - **PC GPU T&L for the draws it still rejects (#51 follow-up, ADR 0016 §11)** (M).
   Translucent draws (the painter order per triangle), water and per-pixel lit draws
   stay on the CPU path. A per-pixel lit GPU path would compute the lit pipeline's
@@ -147,7 +157,11 @@ shipping a 3D game first**, then by cost:
     - the Level tab;
     - Play here.
 11. **Scene streaming** (M). Load and unload TSCN chunks by portal cell or distance, for
-    levels larger than RDRAM.
+    levels larger than RDRAM. The base is in (#56, ADR 0022 §5): cells name asset groups
+    (scene v6) and `trino_core::CellGroups` streams them by visibility, verified on the
+    PC's real groups. Left: TSCN chunks per cell (the scene's nodes still load whole), a
+    distance trigger for exteriors, castle64's interior split into grouped rooms on the
+    consoles.
 12. **Audio**: Doppler and occlusion through portals, only if a game needs them. From
     #53 (ADR 0021 follow-ups): tracker music (XM/MOD; libdragon's `xm64`) on every target;
     Opus on the PC and the Web; stereo masters (mono today, stereo averaged); captions
@@ -204,6 +218,57 @@ shipping a 3D game first**, then by cost:
   time) and bless `tests/perf/` on purpose. Host benches stay as regression guards only.
 
 ---
+
+## Done — quality presets for the PC and the Web: auto-detect, dynamic resolution, frame pacing, a Graphics page (2026-10-18, branch `feat/55-quality-presets`, GitHub #55, ADR 0023)
+
+| Item | Evidence |
+|---|---|
+| `QualitySettings`, Low/Medium/High/Ultra/Custom, `PresetTable`, `classify`, the console presets; five `Platform` defaults and `Renderer::lod_bias` (no `GAME_API_VERSION` bump) | `crates/core/src/quality.rs` (7 tests), `platform_defaults_report_no_services` |
+| Render scale with bilinear upscale + CAS, the HUD at output resolution; High = the PC's old frame; Low and High goldens | `platform-pc/tests/quality.rs` (7 tests), `tests/golden/pc/quality_{low,high}.png` |
+| Dynamic resolution (PI on log area; GPU timestamps or frame intervals; one allocation for its range, drawn in its corner) | `converges_on_the_target_and_never_oscillates_beyond_5_percent` (16.6 ms ±1 ms, scale ±5%), `dynamic_resolution_follows_the_frame_time_within_its_range`, `dynamic_resolution_steps_reuse_one_allocation_and_draw_what_a_fixed_scale_draws`; measured on an AMD Radeon iGPU at 1440p: GPU median 16.71 ms, frame median 17.28 ms at 0.59× (`quality_shots`) |
+| Frame pacing and 1% lows (`TRINO_FRAME low1_us/low1_fps quality=…`) | `caps_hold_within_two_percent` (30/60/120 fps), `the_wait_learns_how_long_the_oss_sleeps_run` (a fake clock whose sleeps run up to 5× what they ask, as CI's macOS VM's do), `one_percent_lows_and_the_quality_note` |
+| Auto-detect bench (≤ 12 frames per preset, 2 s budget) on the PC and, one rAF at a time, in the browser | `the_bench_picks_a_preset_within_three_seconds_and_restores_the_renderer`, `a_budget_spent_in_the_warm_up_still_times_low`; ~0.5 s on llvmpipe (Low), 648 ms on an AMD Radeon iGPU (Medium), 581 ms on an RX 7800 XT (Ultra); the browser's `quality bench` step (~0.5 s) |
+| Start order (forced, saved `<save>.quality` / `localStorage`, Steam Deck → Medium @ 60, phones → Low, project default) | `the_start_follows_forced_saved_the_machine_then_the_project`, `the_steam_deck_is_recognized_by_steam_or_its_board`, `phones_and_tablets_are_mobile_and_desktops_are_not` |
+| LOD bias and particle scale in the engine; the AO cap | `crates/core/tests/quality.rs` (3 tests), `the_preset_ao_caps_the_games` |
+| `assets/quality.ron` + `[pc.quality]` → the `quality/presets` blob | `crates/asset-pipeline/src/quality.rs` (4 tests), `the_pc_section_takes_a_quality_table` |
+| `cargo xtask quality show\|set\|reset\|check\|bench`, `run pc --quality` | `xtask/tests/quality_cli.rs` (3 tests), `bench_lines_parse`; CI smoke runs at every preset + `auto` + `quality bench --json` |
+| Editor: Quality tab, the Game view's preset dropdown and dynres toggle, the budget HUD's quality line | `ui_tests::quality_tab_writes_the_presets_and_the_game_view_previews_them`, the layout audit |
+| `trino_core::GraphicsOptions` (the options page), castle64 on Select | `crates/core/tests/options.rs` (4 tests), `select_opens_the_graphics_page_where_the_host_offers_presets` |
+| Consoles stay fixed (Low; Medium on the New 3DS) | the `quality` self-test step on ares (both tiers) and Azahar (both models), `the_quality_step_reports_each_consoles_fixed_preset` |
+
+Deviations (ADR 0023): `shadows` and `post` are stored levels only until #57 and #64; the
+bench draws the engine's scene, not the game's; WebGL2 never gets MSAA; WebGPU hides the
+adapter's name, so the Web reports `gpu=unknown` there.
+
+## Done — asset groups, bundles, compression and a memory budget (2026-10-18, branch `feat/56-memory-loading`, GitHub #56, ADR 0022)
+
+| Item | Evidence |
+|---|---|
+| Groups in the manifest (`groups = [...]`, `[groups.<name>]`, `boot` = every earlier build), `TBND` bundles per group and platform, deduplicated | `membership_and_defaults`, `bundles_round_trip_and_dedup`, `bundle.rs` round trip and corrupt-bundle tests |
+| Compression: N64 `mkasset` levels 1–3 (+ `mksprite --compress`), LZ4 on the 3DS/PC/Web; `[groups.boot]` on the consoles (the 3DS packs `boot.tbnd`) | `a_compressed_boot_is_packed_on_the_3ds_and_compressed_in_place_on_the_n64`, `lz4.rs` tests; ares and Azahar boot castle64 and Solid Eleven compressed |
+| `Platform::load_group`/`unload_group`/`group_state`/`group_blob`/`memory`, time-sliced (`Caps::load_budget_us`) on every backend; 3DS decoding on the worker core | `group.rs` (9 tests), `asset_groups_load_draw_and_unload_on_pc`; the `asset groups` self-test step in ares (both paks), Azahar (both models), three browsers |
+| RAM plans per console tier (`[memory]`), strict mode, `TRINO_MEM`/`TRINO_HEAP` lines and the N64 heap watermark, `heap=` in `TRINO_FRAME` | `memory.rs` (4 tests), `strict_mode_stops_a_group_past_the_consoles_ram` |
+| Arenas (`FrameArena`, `Arena`, `LevelArena`), the N64 loader's locators off the heap; load/unload soaks | `mem.rs` (4 tests); soaks of 1 000 (N64), 600 (3DS), 10 000 (PC) frames, heap back within 8 KB on the consoles |
+| Scene v6: `requires`, cell groups, `CellGroups` streaming (BACKLOG P2 #11's base) | `crates/scene/tests/asset_groups.rs` (4 tests), `cell_groups_follow_the_view_and_linger`, `cells_stream_their_groups_on_pc` |
+| `cargo xtask assets report\|check\|group` (`--json`) | `xtask/tests/assets_cli.rs` (3 tests) |
+| Editor: group chips and drops in Assets, scene `Requires` with problems and budget, a cell's `Groups`, the Memory tab | `ui_tests::asset_groups_chips_requires_cells_and_memory`, the layout audit |
+
+Sizes with boot compressed (N64 level 1, 3DS LZ4):
+
+| | Before | After | |
+|---|---|---|---|
+| castle64 N64 ROM / DFS | 1 589 248 / 474 365 B | 1 441 792 / 326 296 B | −9.3% / −31.2% |
+| castle64 3DS `.3dsx` / RomFS | 1 299 988 / 494 863 B | 1 141 400 / 342 837 B | −12.2% / −30.7% |
+| Solid Eleven N64 ROM / DFS | 1 638 400 / 522 988 B | 1 523 712 / 411 759 B | −7.0% / −21.3% |
+| Solid Eleven 3DS `.3dsx` / RomFS | 1 474 356 / 531 202 B | 1 343 416 / 411 921 B | −8.9% / −22.5% |
+
+Boot RAM and the heap's peak are unchanged (castle64: 534 112 B of boot assets, peak
+2 144 584 B with the Expansion Pak).
+
+Deviations (ADR 0022): no zstd (LZ4 only off the N64); the PC and the Web keep `boot`
+uncompressed; PC/Web decoding stays on the main thread; live reload of a grouped asset
+waits for its group's next load; the Game view's budget overlay has no RAM line yet (the
+Memory tab has the numbers).
 
 ## Done — audio pipeline: a codec per platform, streaming, buses and ducking (2026-10-18, branch `feat/53-audio-pipeline`, GitHub #53, ADR 0021)
 

@@ -558,7 +558,7 @@ overlay, and a measurement on real hardware (ares doesn't time the RDP).
     `Caps::N3DS_NEW` (2 cores at 804 MHz, crowds and particles ×2) beside the base
     tables, with `ram_bytes`, `cpu_cores`, `cpu_mhz`, `hw_tier`, `crowd_scale()`,
     `particle_scale()`, `with_tier`/`base`; `Platform::hw_tier()` (default `Base`,
-    no `GAME_API_VERSION` bump). The PC and the Web are always `Base` (#55 owns PC tiers).
+    no `GAME_API_VERSION` bump). The PC and the Web are always `Base` (their tiers are #55's quality presets).
   - **Detection:** the N64 boot reads `get_memory_size()` (`platform-n64/src/hw.rs`); the
     3DS boot asks `APT_CheckNew3DS` and turns `osSetSpeedupEnable` on unless
     `trino.toml` `[3ds] speedup = false` (a RomFS `no_speedup` file;
@@ -583,6 +583,30 @@ overlay, and a measurement on real hardware (ares doesn't time the RDP).
     "N64 + Expansion Pak" and "New 3DS" (`TRINO_EDITOR_GAME=n64x|3dsnew`), a
     base-vs-expanded HUD, and tier columns in Inspector › Platforms, LOD and particle
     caps (editor skill › Hardware tiers).
+- **Asset groups and memory (2026-10-18, ADR 0022, GitHub #56):** assets load in groups,
+  compressed per platform, against a RAM budget per console tier.
+  - **Groups:** `groups = ["level1"]` on an asset (default `boot`: what every earlier
+    build did), `[groups.<name>]` with an optional `compression`. The bake writes
+    `groups/<name>.tbnd` per platform (`trino_core::bundle`, `TBND`; Web: beside the pack,
+    TPAK v3). `Platform::load_group`/`unload_group`/`group_state`/`group_blob`/`memory`;
+    each host pumps its loader for `Caps::load_budget_us` (4 ms N64, 6 ms 3DS, 8 ms PC
+    and Web) before the game's update (`N64Assets::pump`, `N3dsAssets::pump` with the
+    decode on the worker core, `trino_runner_pc::GroupLoader`, the Web's `groups::pump`).
+    Drawing an unloaded asset draws nothing and counts `FrameStats::not_loaded`.
+  - **Compression:** N64 `mkasset -c 1|2|3` in place (`asset_load` decodes), sprites by
+    `mksprite --compress`, wav64 left alone; LZ4 elsewhere. `[groups.boot]` compresses
+    boot on the consoles only (the 3DS packs it into `groups/boot.tbnd`); castle64 and
+    Solid Eleven ship it: DFS/RomFS −21–31 %.
+  - **Memory:** `trino_asset_pipeline::memory` plans each console tier's RAM (`[memory]
+    reserve`, `game`); strict mode (`TRINO_STRICT=1`) panics on a group load past it;
+    `TRINO_MEM`/`TRINO_HEAP` boot lines and the N64 heap watermark (128 KB) in the
+    self-test; `heap=` ends `TRINO_FRAME`. `trino_core::mem` arenas (`FrameArena`,
+    `Arena`, `LevelArena`).
+  - **Scenes:** v6 `requires` (default `["boot"]`) and `cell(groups: [...])`;
+    `trino_core::CellGroups` streams cells' groups by portal visibility.
+  - **Tools:** `cargo xtask assets report|check|group [--json]`; the editor's group chips
+    (Assets), Requires and cell Groups (Inspector), the Memory tab and the Game view
+    HUD's assets RAM line.
 - **Audio pipeline (2026-10-18, ADR 0021, GitHub #53):** one WAV master, a codec per
   platform, streaming, buses.
   - **Codecs (`asset_pipeline::audio`, one `encode()` for every bake, CLI and the
@@ -612,6 +636,39 @@ overlay, and a measurement on real hardware (ares doesn't time the RDP).
   - **Found on the way:** 3DS audio never played in Azahar (ndsp had no DSP firmware;
     the shim now feeds a placeholder on Citra/Azahar), and N64 ignored `looped` (a
     one-shot water sound looped forever).
+- **Quality presets on the PC and the Web (2026-10-18, ADR 0023, GitHub #55):** Low,
+  Medium, High, Ultra and Custom.
+  - **Core (`trino_core::quality`, `no_std`):** `QualitySettings` (render scale, `DynRes`,
+    MSAA, AO cap, shadows/post levels for #57/#64, `lod_bias`, `particle_scale`, filter,
+    anisotropy, sharpen, `FrameLimit`), `PresetTable` (`classify`, text), `QualityInfo`;
+    `Platform::{quality, set_quality, quality_preset, quality_info, detect_quality}` and
+    `Renderer::lod_bias` are default methods (no `GAME_API_VERSION` bump). Consoles are
+    fixed (`QualitySettings::console`: Low, Medium on the New 3DS; `quality_info` `None`).
+    High is the PC's old look (the goldens are unchanged); Ultra is High at 1.25×.
+  - **Renderer (`trino-render-wgpu`, PC and Web):** the 3D at `render_scale` into its own
+    targets, bilinear upscale + CAS sharpen, the HUD after it at output resolution
+    (`renderer/upscale.rs`; under dynres one allocation at the range's top, drawn in its
+    top-left corner); `dynres.rs` (PI on log area, GPU timestamps or frame intervals);
+    `pacing.rs` (present mode per `FrameLimit`; a sleep-then-spin limiter that learns how
+    much longer than asked the OS's sleeps run);
+    `renderer/bench.rs` (`calibrate`, or `bench_begin`/`bench_step` a frame at a time:
+    each preset ≤ 12 timed frames, 2 s budget, software adapters → Low); `quality.rs`
+    (`HostedQuality`, `start`: forced > saved > machine > project default, `<save>.quality`,
+    Steam Deck, `baked`). `TRINO_FRAME` gains `low1_us`/`low1_fps` and `quality=…`.
+  - **Content:** `lod_bias` multiplies LOD starts (scene nodes, `EntityStore`),
+    `particle_scale` multiplies particle caps; the AO setting caps the game's AO.
+  - **Projects:** `assets/quality.ron` (only what differs from the built-in presets) and
+    `trino.toml [pc.quality] default/presets` → the `quality/presets` blob (PC and Web
+    bakes only).
+  - **Web:** `trino-platform-web::quality` drives the same bench one rAF at a time, frame
+    caps by skipping rAFs, phones/tablets start Low (`device::is_mobile`), `?quality=`,
+    `localStorage` `trino-quality:<save>`.
+  - **Tools:** `cargo xtask quality show|set|reset|check|bench`, `run pc --quality`; the
+    editor's Quality tab and the Game view's preset dropdown + dynres toggle
+    (`TRINO_EDITOR_TAB=quality`, `TRINO_EDITOR_QUALITY=low[,dynres]`); the
+    `GraphicsOptions` page (`trino_core::options`), opened by castle64 on Select. The
+    self-test's `quality` step (fixed preset on ares/Azahar, hosted on PC/Web) and, in
+    the browser, `quality bench`. CI smoke-runs the PC at every preset and `auto`.
 - **Console hardware paths and N64 timing (2026-10-16, ADR 0012, part of #31):**
   the 3DS transforms and lights static meshes on the PICA200 (`render3d::gpu_check`,
   `tnl3d.v.pica`, `gpu tnl` self-test step, `castle64_work_3ds.toml`); text goes to the
@@ -805,11 +862,18 @@ cargo xtask audio inspect <sounds/x|music/x> [--platform pc|n64|3ds|web] [--json
 cargo xtask audio report [--platform ...] [--json]                          # every sound, biggest first, totals per platform
 cargo xtask audio preview <sounds/x|music/x> [--out dir] [--json]           # the master + each platform's decode as WAVs (target/audio-preview)
 cargo xtask audio mix [--json]                                              # validate and print assets/audio.toml
+cargo xtask assets report [--platform n64|3ds|pc|web] [--tier base|expanded] [--json]  # RAM per console tier: boot, each group, each scene vs the budget
+cargo xtask assets check [--json]                                           # scenes hold to their groups and fit every tier (CI-able)
+cargo xtask assets group <sprites/x|models/x|..> <group[,group..]|boot>    # set an asset's groups in the manifest (declares new ones)
 cargo xtask model inspect <file> --anim [--json]                                   # + per-clip stride, slide, floor, bounds
 cargo xtask model pose <models/x> [--clip C --time S] --name <new>                 # a pose as a static model (consoles)
 cargo xtask particles new <name> --sprite sprites/x | check | inspect <name> [--json]   # particle effects as text
 cargo xtask impostor new <name> --model models/x [--views N --pitch DEG --tile PX]   # pre-render a billboard atlas
 cargo xtask impostor bake <name>|--all | check | list [--json]                     # re-render / stale check / list
+cargo xtask quality show [--json]                                    # [pc.quality] + the four presets (assets/quality.ron over the built-in values)
+cargo xtask quality set low render_scale=0.6 frame_limit=30 [--json] # change a preset (strict ranges); reset [<preset>..] drops changes; check validates
+cargo xtask quality bench [--json]                                   # this machine's first-launch calibration (opens a window)
+cargo xtask run pc --quality low|medium|high|ultra|auto              # TRINO_QUALITY for one run (never saved); the Web: ?quality=
 cargo xtask agents sync   # mirror .agents/skills/ into .claude/skills/ (check: agents check)
 cargo test -p xtask --test water_shots -- --ignored   # water evidence: tiers, ripples, crate, bridge (target/evidence/water)
 cargo xtask new <name> --standalone <dir> [--git <url> --rev <r>]   # project outside this repo
@@ -898,6 +962,17 @@ cargo test --workspace
 
 ## Pitfalls
 
+- **Quality presets only apply to the native profile.** `apps/pc` starts the N64
+  profile, which ignores `TRINO_QUALITY` (as every console profile does): smoke a preset
+  with `TRINO_SIM=native TRINO_QUALITY=low`. Smoke runs, `?frames` and the self-test pin
+  High so goldens never depend on the machine's bench — keep it that way for new ones.
+- **A local run keeps the player's quality in `target/save/<game>.quality`.** After a
+  game's `set_quality` or a bench, later runs start there, not at the project default;
+  delete the file or force `TRINO_QUALITY` when comparing presets.
+- **Draw the HUD after the frame's last 3D draw.** Below or above a render scale of 1,
+  everything up to the last 3D draw (2D included) renders at the preset's scale and is
+  upscaled; only the 2D after it draws at the window's resolution. 2D coordinates are
+  output pixels either way (`screen_size()` is the output's): never scale them yourself.
 - **Never compare a `Caps` with `==` to tell the console.** A tier's table differs
   (`Caps::N64_EXPANDED != Caps::N64`) and the PC renderer's carries its picture size.
   Compare `caps.base()` with the console's table, or ask the renderer's profile
@@ -1203,6 +1278,32 @@ cargo test --workspace
     27–41 dB on the fixtures. Listen with `audio preview` before raising quality.
   - Self-test audio checks must not count frames as time: a slow frame outlasts a 0.15 s
     beep (the browsers' first frames after GPU-heavy steps).
+- **Asset groups (#56):**
+  - mksprite already compresses its output (level 1 by default); `mkasset` must skip
+    `.sprite` files (twice compressed, `sprite_load` reads garbage). A sprite's level is
+    its group's, passed as `mksprite --compress <level>` (`console_groups::n64_sprite_level`).
+  - libdragon levels 2 and 3 need `asset_init_compression(level)` before the first
+    asset: the index carries `<level> \t compression \t libdragon` lines for them first.
+    Level 1 needs nothing.
+  - `mkasset -w 256` (the biggest window) is right only because the runtime reads every
+    compressed file whole with `asset_load`; an `asset_fopen` stream would need that
+    window in RAM.
+  - The 3DS frees an unloaded texture or mesh two frames after its last draw
+    (`GRAVE_FRAMES`): the PICA200 may still read it. Don't free GPU memory in
+    `unload_group` directly.
+  - `[groups.boot]` compression is console-only: `Manifest::compression("boot", Pc|Web)`
+    is `None` whatever the manifest says. A 3DS boot bundle holds no sounds (T3AU streams
+    from loose files).
+  - A scene that draws a grouped asset must `require` one of its groups (or sit in a cell
+    that streams it): `cargo xtask assets check` fails otherwise, and the asset draws
+    nothing at run time.
+  - On WebGL2, wgpu frees the GPU objects an unload dropped only once their GL fences
+    signal, and those signal only when the page's event loop turns: a load/unload soak
+    inside one frame never gets its memory back. Run it over animation frames
+    (`apps/web` `soak_frame`).
+  - The editor measures memory plans on a worker keyed on the manifest's text and the
+    bake generation (`groups::Groups::plans`); a UI test waits on `measured()` after the
+    Memory tab drew once.
 - **`/tmp` may be a RAM disk (tmpfs).** A second `target/` there (a git worktree's build)
   filled RAM and killed rustc. Put extra worktrees and their targets on a real disk.
 

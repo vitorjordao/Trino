@@ -206,6 +206,8 @@ pub fn bake_assets(p: &Project, test_mode: bool) -> Result<(), String> {
 
     let mut index = String::new();
     let mut script = String::from("set -e\n");
+    // Non-boot groups: their lines go to `groups/<g>.tbnd` (issue #56).
+    let mut groups = crate::console_groups::GroupIndex::new(Platform::N64);
 
     for (name, decl) in &manifest.sprites {
         let logical = format!("sprites/{name}");
@@ -248,10 +250,18 @@ pub fn bake_assets(p: &Project, test_mode: bool) -> Result<(), String> {
                 std::fs::copy(&source, &staged_png).map_err(|e| e.to_string())?;
             }
         }
+        let compress = crate::console_groups::mksprite_compress(
+            crate::console_groups::n64_sprite_level(&manifest, &logical)?,
+        );
         script.push_str(&format!(
-            "mksprite --format {mksprite_format} -o target/n64/filesystem target/n64/stage/{id:08x}.png\n"
+            "mksprite {compress}--format {mksprite_format} -o target/n64/filesystem target/n64/stage/{id:08x}.png\n"
         ));
-        index.push_str(&format!("{id:08x}\tsprite\t{id:08x}.sprite\n"));
+        groups.route(
+            &manifest,
+            &logical,
+            &format!("{id:08x}\tsprite\t{id:08x}.sprite\n"),
+            &mut index,
+        )?;
     }
     // Sounds and music: wav64 files the mixer streams from the ROM, with
     // the codec and bus as index columns 5 and 6 (issue #53) after an empty
@@ -284,11 +294,12 @@ pub fn bake_assets(p: &Project, test_mode: bool) -> Result<(), String> {
             }
             // An empty tier column (every tier loads it, #54), then the
             // codec and the bus.
-            index.push_str(&format!(
+            let line = format!(
                 "{id:08x}\t{kind}\t{file}\t\t{}\t{}\n",
                 settings.codec.label(),
                 settings.bus.label()
-            ));
+            );
+            groups.route(&manifest, &logical, &line, &mut index)?;
         }
     }
     // The ROM links the Opus decoder only when an asset needs it.
@@ -326,9 +337,8 @@ pub fn bake_assets(p: &Project, test_mode: bool) -> Result<(), String> {
         let blob = trino_asset_pipeline::bake_model(&source, &decl.options())?;
         let file = format!("{id:08x}.tmdl");
         std::fs::write(fsdir.join(&file), blob).map_err(|e| e.to_string())?;
-        index.push_str(&trino_asset_pipeline::tier::index_line(
-            id, "model", &file, tier,
-        ));
+        let line = trino_asset_pipeline::tier::index_line(id, "model", &file, tier);
+        groups.route(&manifest, &logical, &line, &mut index)?;
     }
 
     for (name, decl) in &manifest.fonts {
@@ -364,20 +374,28 @@ pub fn bake_assets(p: &Project, test_mode: bool) -> Result<(), String> {
         };
         let png = trino_asset_pipeline::font::encode_png(font.width, font.height, &rgba)?;
         std::fs::write(stage.join(format!("{id:08x}.png")), png).map_err(|e| e.to_string())?;
+        let compress = crate::console_groups::mksprite_compress(
+            crate::console_groups::n64_sprite_level(&manifest, &logical)?,
+        );
         script.push_str(&format!(
-            "mksprite --format {mksprite_format} -o target/n64/filesystem target/n64/stage/{id:08x}.png\n"
+            "mksprite {compress}--format {mksprite_format} -o target/n64/filesystem target/n64/stage/{id:08x}.png\n"
         ));
         std::fs::write(fsdir.join(format!("{id:08x}.font")), &font.table)
             .map_err(|e| e.to_string())?;
-        index.push_str(&format!("{id:08x}\tsprite\t{id:08x}.sprite\n"));
-        index.push_str(&format!("{id:08x}\tfont\t{id:08x}.font\n"));
+        let lines = format!("{id:08x}\tsprite\t{id:08x}.sprite\n{id:08x}\tfont\t{id:08x}.font\n");
+        groups.route(&manifest, &logical, &lines, &mut index)?;
     }
     for (name, decl) in &manifest.blobs {
         let logical = format!("blobs/{name}");
         let id = trino_core::asset_id(&logical);
         let source = resolve_source(&root.join("assets"), Platform::N64, &decl.file)?;
         std::fs::copy(&source, fsdir.join(format!("{id:08x}.blob"))).map_err(|e| e.to_string())?;
-        index.push_str(&format!("{id:08x}\tblob\t{id:08x}.blob\n"));
+        groups.route(
+            &manifest,
+            &logical,
+            &format!("{id:08x}\tblob\t{id:08x}.blob\n"),
+            &mut index,
+        )?;
     }
     for (name, decl) in &manifest.particles {
         let logical = format!("particles/{name}");
@@ -396,7 +414,12 @@ pub fn bake_assets(p: &Project, test_mode: bool) -> Result<(), String> {
         for twin in twins {
             std::fs::write(fsdir.join(twin.file(id, "blob")), &twin.bytes)
                 .map_err(|e| e.to_string())?;
-            index.push_str(&twin.index_line(id, "blob", "blob"));
+            groups.route(
+                &manifest,
+                &logical,
+                &twin.index_line(id, "blob", "blob"),
+                &mut index,
+            )?;
         }
     }
     for (name, decl) in &manifest.scenes {
@@ -410,19 +433,34 @@ pub fn bake_assets(p: &Project, test_mode: bool) -> Result<(), String> {
         for twin in twins {
             std::fs::write(fsdir.join(twin.file(id, "blob")), &twin.bytes)
                 .map_err(|e| e.to_string())?;
-            index.push_str(&twin.index_line(id, "blob", "blob"));
+            groups.route(
+                &manifest,
+                &logical,
+                &twin.index_line(id, "blob", "blob"),
+                &mut index,
+            )?;
         }
     }
 
+    index.push_str(&groups.index_lines());
+    index.insert_str(0, &groups.n64_compression_lines(&manifest)?);
     std::fs::write(fsdir.join("index.tsv"), index).map_err(|e| e.to_string())?;
     if test_mode {
         std::fs::write(fsdir.join("test_mode"), "1").map_err(|e| e.to_string())?;
     }
+    // Compress in place what the groups ask for (after mksprite made the
+    // sprites); the DFS's `groups/` exists before the container writes in
+    // it, so the bundles below can be written by this user.
+    script.push_str(&groups.n64_compress_script(&manifest, "target/n64/filesystem")?);
+    std::fs::create_dir_all(fsdir.join("groups")).map_err(|e| e.to_string())?;
 
     println!("[n64] baking assets in container...");
     let status = docker_sh(p, true, &script).map_err(|e| format!("docker: {e}"))?;
     if !status.success() {
         return Err("asset baking failed".into());
+    }
+    for b in groups.write_bundles(&manifest, &fsdir)? {
+        println!("{}", b.line("n64"));
     }
     Ok(())
 }
@@ -893,6 +931,7 @@ fn boot_test(p: &Project, bless: bool, pak: bool) -> ExitCode {
     let mut frame_lines = Vec::new();
     let mut hw_line = None;
     let mut tier_step = None;
+    let mut quality_step = None;
     let verdict = loop {
         if let Some(why) = watchdog.expired(Instant::now()) {
             break Err(why);
@@ -928,6 +967,9 @@ fn boot_test(p: &Project, bless: bool, pak: bool) -> ExitCode {
                 if line.contains("TRINO_STEP:hw tier ") {
                     tier_step = Some(line.clone());
                 }
+                if line.contains("TRINO_STEP:quality ") {
+                    quality_step = Some(line.clone());
+                }
                 if line.contains("TRINO_TEST_PASS") {
                     break Ok(());
                 }
@@ -958,6 +1000,10 @@ fn boot_test(p: &Project, bless: bool, pak: bool) -> ExitCode {
         if p.is_engine {
             let data = crate::hwtier::check_data(hw_line.as_deref(), tier_step.as_deref())?;
             println!("[n64] tier data: {data}");
+            // A console's quality preset is fixed: Low with or without the
+            // Pak (issue #55).
+            let q = crate::hwtier::check_quality(quality_step.as_deref(), "low")?;
+            println!("[n64] quality: {q}");
         }
         Ok(())
     });

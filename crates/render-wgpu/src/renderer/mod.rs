@@ -9,10 +9,13 @@
 
 mod ao;
 mod batch;
+mod bench;
 mod cpu_tnl;
 mod depth_blit;
+mod gpu_timer;
 mod gpu_tnl;
 mod lights;
+mod upscale;
 mod water;
 
 use std::collections::HashMap;
@@ -24,9 +27,10 @@ use trino_core::render3d::{
     SurfaceVert, TnlContext, TnlScratch,
 };
 use trino_core::{
-    AmbientOcclusion, AoTier, Caps, Color, FontId, FrameStats, Instance, LightList, LightTier,
-    LocalLight, Mat34, Material, ModelId, ModelParams, Palette, Renderer, Ripple, Screen, SpriteId,
-    SpriteParams, TexFilter, TextParams, Transform3, Vec2, WaterState, WaterTier,
+    AmbientOcclusion, AoSetting, AoTier, Caps, Color, FontId, FrameLimit, FrameStats, Instance,
+    LightList, LightTier, LocalLight, Mat34, Material, ModelId, ModelParams, Palette,
+    QualitySettings, Renderer, Ripple, Screen, SpriteId, SpriteParams, TexFilter, TextParams,
+    Transform3, Vec2, WaterState, WaterTier,
 };
 
 use crate::sim::SimProfile;
@@ -35,6 +39,7 @@ use batch::{
     Cmd, INSTANCE_STRIDE, Segment, TRI_VERTEX_STRIDE, TexKey, TriKind, TriVertex, build_segments,
     make_command,
 };
+pub use bench::{Bench, Calibration};
 
 const OFFSCREEN_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
@@ -187,6 +192,8 @@ pub struct SpriteMemory {
 struct SurfaceState {
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
+    /// The present modes the surface offers (the frame limit picks one).
+    modes: Vec<wgpu::PresentMode>,
 }
 
 /// A registered font: its glyph table (validated at upload) and the direct
@@ -230,6 +237,9 @@ pub struct PcFrameTimes {
     /// Pipeline changes between those draw calls (what a browser's
     /// WebGL2 or WebGPU pays for in JavaScript, issue #47).
     pub pipeline_switches: u32,
+    /// Upscale passes run (0 or 1: a render scale other than 1 stretched
+    /// the frame's 3D onto the picture, issue #55).
+    pub upscales: u32,
 }
 
 /// Microseconds since `t0`.
@@ -399,6 +409,65 @@ pub struct PcRenderer {
     job_ctxs: Vec<TnlContext>,
     workers: Vec<cpu_tnl::Scratch>,
     tnl_threads: usize,
+    /// The quality settings this renderer applies (issue #55,
+    /// [`PcRenderer::apply_quality`]; the native profile only).
+    quality: QualityState,
+    /// The 3D's own targets while its size differs from the picture's, or
+    /// dynamic resolution is on (one allocation for its whole range), and
+    /// the upscale onto the picture.
+    scene: Option<upscale::SceneTargets>,
+    upscale: Option<upscale::Upscale>,
+    /// Dynamic resolution: the controller, the GPU timer it reads where the
+    /// adapter has timestamps (built on first use), the host's frame
+    /// interval otherwise, and the last measurement.
+    dynres: Option<crate::dynres::DynResController>,
+    gpu_timer: Option<gpu_timer::GpuTimer>,
+    gpu_timer_tried: bool,
+    host_frame_us: Option<u32>,
+    last_gpu_us: u32,
+    /// Bilinear 3D textures' sampler with the quality's anisotropy (`None`
+    /// at 1×).
+    tex3d_aniso: Option<wgpu::Sampler>,
+    /// What the game asked for with `set_texture_filter` (`Default`: the
+    /// quality's, else the profile's).
+    game_filter: TexFilter,
+    /// The adapter's kind ([`PcRenderer::gpu_class`]).
+    gpu_class: trino_core::GpuClass,
+    /// Render without showing the frame (the auto-detect bench).
+    no_present: bool,
+}
+
+/// The quality knobs a renderer holds ([`PcRenderer::apply_quality`]).
+#[derive(Clone, Copy, Debug)]
+struct QualityState {
+    /// The settings last applied (`None`: never, the renderer's defaults).
+    applied: Option<QualitySettings>,
+    /// The 3D's scale now (dynamic resolution moves it).
+    scale: f32,
+    /// Caps the game's AO quality, or drops the pass (`None`: the game's
+    /// as it sets it).
+    ao: Option<AoSetting>,
+    lod_bias: f32,
+    sharpen: f32,
+    anisotropy: u8,
+    filter: TexFilter,
+    frame_limit: FrameLimit,
+    /// The display's refresh rate (the host's monitor; 60 by default).
+    refresh_hz: u32,
+}
+
+impl QualityState {
+    const DEFAULT: QualityState = QualityState {
+        applied: None,
+        scale: 1.0,
+        ao: None,
+        lod_bias: 1.0,
+        sharpen: 0.0,
+        anisotropy: 1,
+        filter: TexFilter::Default,
+        frame_limit: FrameLimit::VSync,
+        refresh_hz: 60,
+    };
 }
 
 /// What a lit triangle adds to its vertices: the surface, the gloss and the
@@ -1330,8 +1399,10 @@ impl PcRenderer {
         // decoded pixels), ETC2 and ASTC on phones (the Web's KTX2
         // textures transcode to whichever the browser has).
         let bc_off = std::env::var("TRINO_BC").is_ok_and(|v| v == "0");
-        let mut wanted =
-            wgpu::Features::TEXTURE_COMPRESSION_ETC2 | wgpu::Features::TEXTURE_COMPRESSION_ASTC;
+        // Timestamps time the GPU's frame for dynamic resolution (#55).
+        let mut wanted = wgpu::Features::TEXTURE_COMPRESSION_ETC2
+            | wgpu::Features::TEXTURE_COMPRESSION_ASTC
+            | wgpu::Features::TIMESTAMP_QUERY;
         if !bc_off {
             wanted |= wgpu::Features::TEXTURE_COMPRESSION_BC;
         }
@@ -1388,7 +1459,11 @@ impl PcRenderer {
                 desired_maximum_frame_latency: 2,
             };
             surface.configure(&device, &config);
-            SurfaceState { surface, config }
+            SurfaceState {
+                surface,
+                config,
+                modes: surface_caps.present_modes.clone(),
+            }
         });
 
         // Browsers hide the GPU's name from WebGPU pages.
@@ -1398,7 +1473,9 @@ impl PcRenderer {
             &info.name
         };
         let name = format!("{shown} ({:?})", info.backend);
-        Ok(Self::build(device, queue, surface, profile, name, limits))
+        let mut r = Self::build(device, queue, surface, profile, name, limits);
+        r.gpu_class = bench::classify_adapter(&info);
+        Ok(r)
     }
 
     fn build(
@@ -1915,6 +1992,18 @@ impl PcRenderer {
             job_ctxs: Vec::new(),
             workers: Vec::new(),
             tnl_threads: tnl_threads_from_env(),
+            quality: QualityState::DEFAULT,
+            scene: None,
+            upscale: None,
+            dynres: None,
+            gpu_timer: None,
+            gpu_timer_tried: false,
+            host_frame_us: None,
+            last_gpu_us: 0,
+            tex3d_aniso: None,
+            game_filter: TexFilter::Default,
+            gpu_class: trino_core::GpuClass::Unknown,
+            no_present: false,
         }
     }
 
@@ -2094,18 +2183,10 @@ impl PcRenderer {
         self.offscreen_view = view;
         self.depth_view = depth;
         self.depth_tex = depth_tex;
-        self.water.resize(&self.device, size);
-        if let Some(ao) = &mut self.ao_pass {
-            ao.invalidate();
-        }
         self.vi_tex = create_vi_target(&self.device, size);
-        if self.msaa > 1 {
-            self.msaa_targets = Some(create_msaa_targets(&self.device, size));
-        }
-        if let Some(ao) = &mut self.ao_pass_ms {
-            ao.invalidate();
-        }
         self.internal_size = size;
+        // The 3D's targets follow the picture (at the render scale).
+        self.rebuild_scene_targets(true);
         // Games read the picture size from the caps (culling, layout).
         self.caps.screen_width = size.0 as u16;
         self.caps.screen_height = size.1 as u16;
@@ -2135,13 +2216,13 @@ impl PcRenderer {
             self.ms_pipelines = Some(scene_pipelines(&self.device, &self.sources, samples));
         }
         if samples > 1 {
-            self.water.ensure_ms(&self.device, self.internal_size);
+            self.water.ensure_ms(&self.device, self.scene_extent());
             if let Some(gpu) = &mut self.gpu {
                 gpu.ensure_ms(&self.device, samples);
             }
         }
         self.msaa_targets =
-            (samples > 1).then(|| create_msaa_targets(&self.device, self.internal_size));
+            (samples > 1).then(|| create_msaa_targets(&self.device, self.scene_extent()));
         if let Some(ao) = &mut self.ao_pass_ms {
             ao.invalidate();
         }
@@ -2150,6 +2231,266 @@ impl PcRenderer {
     /// Samples per pixel of the scene (1 = no multisampling).
     pub fn msaa(&self) -> u32 {
         self.msaa
+    }
+
+    /// Apply quality settings ([`QualitySettings`], issue #55, ADR 0023):
+    /// MSAA, the render scale and dynamic resolution, the AO's quality (or
+    /// none), the LOD bias [`Renderer::lod_bias`] reports, the textures'
+    /// filter and anisotropy, the upscale's sharpening and the present mode
+    /// of the frame limit. The native profile (and the Web) only: the
+    /// console profiles keep their console's look and ignore it, like
+    /// `set_msaa`. Hosts call it at start-up and on every change; the
+    /// sleep-based cap of `FrameLimit::Fps` is theirs
+    /// ([`crate::pacing::FrameLimiter`]).
+    pub fn apply_quality(&mut self, settings: &QualitySettings) {
+        if !self.profile.is_native() {
+            return;
+        }
+        let q = settings.clamped();
+        self.set_msaa(q.msaa > 1);
+        self.quality.ao = Some(q.ao);
+        self.quality.lod_bias = q.lod_bias;
+        self.quality.sharpen = q.sharpen;
+        self.quality.frame_limit = q.frame_limit;
+        if q.texture_filter != self.quality.filter {
+            self.quality.filter = q.texture_filter;
+            self.tex_filter = self.resolve_filter(self.game_filter);
+        }
+        self.set_anisotropy(q.anisotropy);
+        let changed = self.quality.applied.is_none_or(|a| {
+            a.render_scale != q.render_scale || a.dynamic_resolution != q.dynamic_resolution
+        });
+        self.quality.applied = Some(q);
+        if changed {
+            let start = q.start_scale();
+            self.dynres = q.dynamic_resolution.map(|d| {
+                crate::dynres::DynResController::new(
+                    d.target_for(self.frame_interval_us()),
+                    d.min_scale,
+                    d.max_scale,
+                    start,
+                )
+            });
+            self.set_render_scale(start);
+        } else if let (Some(c), Some(d)) = (&mut self.dynres, q.dynamic_resolution) {
+            c.set_target(d.target_for(q.frame_limit.interval_us(self.quality.refresh_hz)));
+        }
+        self.apply_present_mode();
+    }
+
+    /// The quality settings last applied (`None`: never; the console
+    /// profiles never take any).
+    pub fn quality(&self) -> Option<QualitySettings> {
+        self.quality.applied
+    }
+
+    /// The 3D's render scale now (1 = the picture's resolution; dynamic
+    /// resolution moves it).
+    pub fn render_scale(&self) -> f32 {
+        self.quality.scale
+    }
+
+    /// The 3D's size now: the picture's at a scale of 1.
+    pub fn scene_size(&self) -> (u32, u32) {
+        self.scene.as_ref().map_or(self.internal_size, |s| s.size)
+    }
+
+    /// The size the 3D's targets (and their MSAA and water copies) are
+    /// allocated at: [`scene_size`](Self::scene_size) or, under dynamic
+    /// resolution, the largest its range reaches.
+    pub fn scene_extent(&self) -> (u32, u32) {
+        self.scene.as_ref().map_or(self.internal_size, |s| s.extent)
+    }
+
+    /// Draw the 3D at `scale` × the picture's resolution (0.25..=2.0),
+    /// upscaled onto it (the native profile; a no-op elsewhere). Dynamic
+    /// resolution calls it as it goes.
+    pub fn set_render_scale(&mut self, scale: f32) {
+        if !self.profile.is_native() {
+            return;
+        }
+        self.quality.scale = scale.clamp(0.25, 2.0);
+        self.rebuild_scene_targets(false);
+    }
+
+    /// The display's refresh rate (the host's monitor): what VSync and the
+    /// dynamic resolution's default target are measured against.
+    pub fn set_refresh_hz(&mut self, hz: u32) {
+        self.quality.refresh_hz = hz.clamp(20, 1000);
+        if let (Some(c), Some(d)) = (
+            &mut self.dynres,
+            self.quality.applied.and_then(|q| q.dynamic_resolution),
+        ) {
+            c.set_target(
+                d.target_for(
+                    self.quality
+                        .frame_limit
+                        .interval_us(self.quality.refresh_hz),
+                ),
+            );
+        }
+        self.apply_present_mode();
+    }
+
+    /// The display's refresh rate [`set_refresh_hz`](Self::set_refresh_hz)
+    /// gave (60 by default).
+    pub fn refresh_hz(&self) -> u32 {
+        self.quality.refresh_hz
+    }
+
+    /// The host's frame interval, µs: what dynamic resolution holds where
+    /// the adapter has no timestamp queries (WebGL2, some drivers). Call it
+    /// once per frame, after `end_frame`.
+    pub fn report_frame_time(&mut self, us: u32) {
+        self.host_frame_us = Some(us);
+    }
+
+    /// The last measured GPU frame time, µs (timestamp queries, else the
+    /// host's frame interval; 0 before the first measurement).
+    pub fn gpu_frame_us(&self) -> u32 {
+        self.last_gpu_us
+    }
+
+    /// The adapter times its frames with timestamp queries (else dynamic
+    /// resolution follows the host's frame intervals).
+    pub fn has_gpu_timer(&self) -> bool {
+        self.device
+            .features()
+            .contains(wgpu::Features::TIMESTAMP_QUERY)
+    }
+
+    /// The present mode the window uses now (`None` headless).
+    pub fn present_mode(&self) -> Option<wgpu::PresentMode> {
+        self.surface.as_ref().map(|s| s.config.present_mode)
+    }
+
+    /// The frame interval the limit and the display give, µs.
+    fn frame_interval_us(&self) -> u32 {
+        self.quality
+            .frame_limit
+            .interval_us(self.quality.refresh_hz)
+    }
+
+    fn apply_present_mode(&mut self) {
+        let Some(ss) = &mut self.surface else {
+            return;
+        };
+        let mode = crate::pacing::present_mode(
+            self.quality.frame_limit,
+            self.quality.refresh_hz,
+            &ss.modes,
+        );
+        // FIFO is what AutoVsync gives; keep the configuration untouched
+        // until a limit asks for something else.
+        let current = match ss.config.present_mode {
+            wgpu::PresentMode::AutoVsync => wgpu::PresentMode::Fifo,
+            m => m,
+        };
+        if mode != current {
+            ss.config.present_mode = mode;
+            ss.surface.configure(&self.device, &ss.config);
+        }
+    }
+
+    fn set_anisotropy(&mut self, n: u8) {
+        if n == self.quality.anisotropy {
+            return;
+        }
+        self.quality.anisotropy = n;
+        self.tex3d_aniso = (n > 1).then(|| {
+            self.device.create_sampler(&wgpu::SamplerDescriptor {
+                label: Some("trino-tex3d-aniso"),
+                address_mode_u: wgpu::AddressMode::Repeat,
+                address_mode_v: wgpu::AddressMode::Repeat,
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                mipmap_filter: wgpu::MipmapFilterMode::Linear,
+                anisotropy_clamp: n as u16,
+                ..Default::default()
+            })
+        });
+        // Bind groups hold their samplers.
+        self.tex3d.clear();
+    }
+
+    /// What a game's filter means here: `Default` is the quality's filter,
+    /// else the profile's.
+    fn resolve_filter(&self, filter: TexFilter) -> TexFilter {
+        match filter {
+            TexFilter::Default => match self.quality.filter {
+                TexFilter::Default => default_filter(self.profile),
+                f => f,
+            },
+            f => f,
+        }
+    }
+
+    /// The 3D's targets for the current scale: the picture's own at 1, a
+    /// scaled set otherwise. Under dynamic resolution one set covers its
+    /// whole range (allocated at the largest size, drawn at the current
+    /// one), so its steps allocate nothing. `force`: the picture changed,
+    /// rebuild even at the same size.
+    fn rebuild_scene_targets(&mut self, force: bool) {
+        let max = self.device.limits().max_texture_dimension_2d.min(8192);
+        let native = self.profile.is_native();
+        let size = if native {
+            upscale::scene_size(self.internal_size, self.quality.scale, max)
+        } else {
+            self.internal_size
+        };
+        let range = self.dynres.as_ref().filter(|_| native).map(|c| c.range().1);
+        let extent = range.map_or(size, |top| {
+            let e = upscale::scene_size(self.internal_size, top.max(self.quality.scale), max);
+            (e.0.max(size.0), e.1.max(size.1))
+        });
+        let scaled = range.is_some() || size != self.internal_size;
+        if !force {
+            match &mut self.scene {
+                Some(t) if scaled && t.extent == extent => {
+                    t.size = size;
+                    return;
+                }
+                None if !scaled => return,
+                _ => {}
+            }
+        }
+        self.scene = scaled.then(|| upscale::SceneTargets::new(&self.device, extent, size));
+        let alloc = self.scene_extent();
+        self.water.resize(&self.device, alloc);
+        if self.msaa > 1 {
+            self.msaa_targets = Some(create_msaa_targets(&self.device, alloc));
+        }
+        for ao in [&mut self.ao_pass, &mut self.ao_pass_ms]
+            .into_iter()
+            .flatten()
+        {
+            ao.invalidate();
+        }
+    }
+
+    /// After a frame: read the GPU timer (or take the host's interval) and
+    /// let dynamic resolution move the scale.
+    fn after_frame(&mut self) {
+        let measured = match &mut self.gpu_timer {
+            Some(t) => t.read(&self.device),
+            None => self.host_frame_us.take(),
+        };
+        let Some(us) = measured else {
+            return;
+        };
+        self.last_gpu_us = us;
+        let timed = self.gpu_timer.is_some();
+        let Some(c) = &mut self.dynres else {
+            return;
+        };
+        c.set_intervals(!timed);
+        if !c.record(us) {
+            return;
+        }
+        let scale = c.scale();
+        if (scale - self.quality.scale).abs() > 1e-4 {
+            self.set_render_scale(scale);
+        }
     }
 
     /// Toggle the N64 VI dedither filter (on by default; it only runs with
@@ -2179,12 +2520,22 @@ impl PcRenderer {
         self.ao_view
     }
 
-    /// The AO this frame runs with, and whether it shows as the mask.
+    /// The AO this frame runs with, and whether it shows as the mask: the
+    /// game's, its quality replaced (or the pass dropped) by the quality
+    /// settings', then the view's override.
     fn frame_ao(&self) -> Option<(AmbientOcclusion, bool)> {
         if self.caps.ao_tier != AoTier::ScreenSpace {
             return None;
         }
-        self.ao_view.resolve(self.ao)
+        let ao = match self.quality.ao {
+            None => self.ao,
+            Some(level) => self.ao.and_then(|a| {
+                level
+                    .cap(a.quality)
+                    .map(|quality| AmbientOcclusion { quality, ..a })
+            }),
+        };
+        self.ao_view.resolve(ao)
     }
 
     /// View of the internal framebuffer — the editor registers this as an
@@ -2388,6 +2739,44 @@ impl PcRenderer {
                 alpha,
             },
         );
+    }
+
+    /// Free a sprite's texture (its asset group unloaded, issue #56);
+    /// returns the GPU bytes it held. Later draws of the handle draw nothing
+    /// and count `FrameStats::not_loaded`.
+    pub fn remove_sprite(&mut self, id: SpriteId) -> u64 {
+        self.tex3d
+            .retain(|k, _| k.id != id.0 && k.detail.is_none_or(|d| d.sprite != id));
+        self.sprites.remove(&id.0).map_or(0, |e| e.bytes)
+    }
+
+    /// Free a mesh ([`PcRenderer::remove_sprite`]); returns its TMDL bytes.
+    pub fn remove_mesh(&mut self, id: ModelId) -> usize {
+        if let Some(gpu) = &mut self.gpu {
+            gpu.forget_mesh(id.0);
+        }
+        self.meshes.remove(&id.0).map_or(0, |(b, _)| b.len())
+    }
+
+    /// Free a font's glyph table (its atlas is the sprite of the same
+    /// handle); returns the table's bytes.
+    pub fn remove_font(&mut self, id: FontId) -> usize {
+        self.fonts.remove(&id.0).map_or(0, |f| f.table.len())
+    }
+
+    /// GPU bytes of a sprite's texture (0 when not loaded).
+    pub fn sprite_bytes(&self, id: SpriteId) -> u64 {
+        self.sprites.get(&id.0).map_or(0, |e| e.bytes)
+    }
+
+    /// TMDL bytes of a mesh (0 when not loaded).
+    pub fn mesh_bytes(&self, id: ModelId) -> usize {
+        self.meshes.get(&id.0).map_or(0, |(b, _)| b.len())
+    }
+
+    /// Glyph-table bytes of a font (0 when not loaded).
+    pub fn font_bytes(&self, id: FontId) -> usize {
+        self.fonts.get(&id.0).map_or(0, |f| f.table.len())
     }
 
     /// Window resized: reconfigure the surface (offscreen stays fixed).
@@ -2826,14 +3215,16 @@ impl PcRenderer {
                 (true, false) => &self.clamp_nearest,
                 (true, true) => &self.clamp_linear,
                 (false, false) => &self.tex3d_nearest,
-                (false, true) => &self.tex3d_linear,
+                // The quality's anisotropy (#55) on wrapping bilinear
+                // textures.
+                (false, true) => self.tex3d_aniso.as_ref().unwrap_or(&self.tex3d_linear),
             };
             let detail = key
                 .detail
                 .and_then(|d| self.sprites.get(&d.sprite.0))
                 .map_or(&self.white_view, |e| &e.view);
             let dsampler = if linear {
-                &self.tex3d_linear
+                self.tex3d_aniso.as_ref().unwrap_or(&self.tex3d_linear)
             } else {
                 &self.tex3d_nearest
             };
@@ -3037,22 +3428,44 @@ impl PcRenderer {
         };
         // Screen-space AO darkens the 3D, not the 2D drawn over it: the
         // pass ends after the frame's last 3D draw, the AO passes run, and
-        // the rest (HUD, text) draws on top.
+        // the rest (HUD, text) draws on top. A render scale other than 1
+        // (issue #55) splits there too: the 3D draws into its own targets
+        // at the scaled size and is upscaled onto the picture, and the rest
+        // draws at the picture's resolution.
         let ao = if second { None } else { self.frame_ao() };
-        let split = ao.and_then(|_| {
+        let scaled = !second && self.scene.is_some();
+        let split = if ao.is_some() || scaled {
             segments
                 .iter()
                 .rposition(|s| matches!(s, Segment::Tris { .. } | Segment::Meshes { .. }))
                 .map(|i| i + 1)
-        });
+        } else {
+            None
+        };
+        // A scaled frame without 3D (a menu) draws on the picture alone.
+        let scene_pass = scaled && split.is_some();
         let (first_part, rest) = segments.split_at(split.unwrap_or(segments.len()));
 
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        // Dynamic resolution times the main screen's GPU work.
+        let timed = !second && self.dynres.is_some();
+        if timed && !self.gpu_timer_tried {
+            self.gpu_timer_tried = true;
+            self.gpu_timer = gpu_timer::GpuTimer::new(&self.device, &self.queue);
+        }
+        if let (true, Some(t)) = (timed, &mut self.gpu_timer) {
+            t.begin(&mut encoder);
+        }
         // Multisampled (the main screen only): the 3D draws into the MSAA
-        // targets and resolves into the offscreen one at the end of the pass.
-        let ms = !second && self.msaa_targets.is_some() && self.ms_pipelines.is_some();
+        // targets and resolves into the offscreen one (the scaled scene's
+        // when scaled) at the end of the pass. The MSAA targets have the
+        // 3D's size, so a scaled frame without 3D draws single-sampled.
+        let ms = !second
+            && self.msaa_targets.is_some()
+            && self.ms_pipelines.is_some()
+            && (!scaled || scene_pass);
         let mut load = (wgpu::LoadOp::Clear(clear), wgpu::LoadOp::Clear(1.0));
         let mut first_part = first_part;
         if let Some(at) = depth_copy_at.filter(|&at| at < first_part.len()) {
@@ -3061,12 +3474,17 @@ impl PcRenderer {
             // the copy is multisampled too.
             let (before, after) = first_part.split_at(at);
             let hold = if ms { MsPass::Hold } else { MsPass::Off };
-            let (draws, switches) = self.record_segments(&mut encoder, second, before, load, hold);
+            let (draws, switches) =
+                self.record_segments(&mut encoder, second, scene_pass, before, load, hold);
             self.times.draw_calls += draws;
             self.times.pipeline_switches += switches;
+            let (scene_depth_tex, scene_depth_view) = match (&self.scene, scene_pass) {
+                (Some(t), true) => (&t.depth_tex, &t.depth_view),
+                _ => (&self.depth_tex, &self.depth_view),
+            };
             let (src, dst) = match (&self.msaa_targets, &self.water.ms, ms) {
                 (Some(t), Some(w), true) => (&t.depth_tex, &w.depth_copy),
-                _ => (&self.depth_tex, &self.water.depth_copy),
+                _ => (scene_depth_tex, &self.water.depth_copy),
             };
             if self.webgl2 {
                 // GL can't copy a depth attachment: draw it over.
@@ -3074,16 +3492,14 @@ impl PcRenderer {
                     .depth_blit
                     .get_or_insert_with(|| depth_blit::DepthBlit::new(&self.device));
                 let dst = dst.create_view(&wgpu::TextureViewDescriptor::default());
-                blit.copy(&self.device, &mut encoder, &self.depth_view, &dst);
+                blit.copy(&self.device, &mut encoder, scene_depth_view, &dst);
             } else {
+                // Depth copies are whole textures (WebGPU has no partial
+                // ones): under dynamic resolution, its allocated extent.
                 encoder.copy_texture_to_texture(
                     src.as_image_copy(),
                     dst.as_image_copy(),
-                    wgpu::Extent3d {
-                        width: self.internal_size.0,
-                        height: self.internal_size.1,
-                        depth_or_array_layers: 1,
-                    },
+                    src.size(),
                 );
             }
             load = (wgpu::LoadOp::Load, wgpu::LoadOp::Load);
@@ -3096,11 +3512,16 @@ impl PcRenderer {
         } else {
             MsPass::Off
         };
-        let (draws, switches) = self.record_segments(&mut encoder, second, first_part, load, end);
+        let (draws, switches) =
+            self.record_segments(&mut encoder, second, scene_pass, first_part, load, end);
         self.times.draw_calls += draws;
         self.times.pipeline_switches += switches;
         if let (Some((settings, mask)), Some(_)) = (ao, split) {
-            let (w, h) = self.internal_size;
+            let (w, h) = if scene_pass {
+                self.scene_size()
+            } else {
+                self.internal_size
+            };
             let half = self.camera.fov_y * 0.5;
             let focal =
                 trino_core::math3d::cos(half) / trino_core::math3d::sin(half) * h as f32 * 0.5;
@@ -3117,6 +3538,10 @@ impl PcRenderer {
                 },
                 mask,
             };
+            let (color, scene_depth) = match (&self.scene, scene_pass) {
+                (Some(t), true) => (&t.color_view, &t.depth_view),
+                _ => (&self.offscreen_view, &self.depth_view),
+            };
             // With MSAA the occlusion reads the multisampled depth (its
             // first sample); its own pass, as its bind groups hold the view.
             let (pass, depth) = match (&self.msaa_targets, ms) {
@@ -3130,7 +3555,7 @@ impl PcRenderer {
                     self.ao_pass.get_or_insert_with(|| {
                         ao::AoPass::new(&self.device, OFFSCREEN_FORMAT, false, self.webgl2)
                     }),
-                    &self.depth_view,
+                    scene_depth,
                 ),
             };
             self.times.upload_bytes += pass.encode(
@@ -3138,28 +3563,47 @@ impl PcRenderer {
                 &self.queue,
                 &mut encoder,
                 depth,
-                &self.offscreen_view,
+                color,
                 &params,
             );
             self.times.ao_passes += 1;
-            if !rest.is_empty() {
-                // The rest is 2D (no depth test): with MSAA it draws
-                // single-sampled over the resolved, occluded frame.
-                let depth_load = if ms {
-                    wgpu::LoadOp::Clear(1.0)
-                } else {
-                    wgpu::LoadOp::Load
-                };
-                let (draws, switches) = self.record_segments(
+        }
+        if scene_pass {
+            // The scaled 3D onto the picture: bilinear, sharpened below 1.
+            let up = self
+                .upscale
+                .get_or_insert_with(|| upscale::Upscale::new(&self.device));
+            if let Some(scene) = &mut self.scene {
+                self.times.upload_bytes += up.encode(
+                    &self.device,
+                    &self.queue,
                     &mut encoder,
-                    second,
-                    rest,
-                    (wgpu::LoadOp::Load, depth_load),
-                    MsPass::Off,
+                    scene,
+                    (&self.offscreen_view, self.internal_size),
+                    self.quality.sharpen,
                 );
-                self.times.draw_calls += draws;
-                self.times.pipeline_switches += switches;
+                self.times.upscales += 1;
             }
+        }
+        if split.is_some() && !rest.is_empty() {
+            // The rest is 2D (no depth test): with MSAA it draws
+            // single-sampled over the resolved, occluded frame, and a
+            // scaled frame's picture has no depth of its own yet.
+            let depth_load = if ms || scene_pass {
+                wgpu::LoadOp::Clear(1.0)
+            } else {
+                wgpu::LoadOp::Load
+            };
+            let (draws, switches) = self.record_segments(
+                &mut encoder,
+                second,
+                false,
+                rest,
+                (wgpu::LoadOp::Load, depth_load),
+                MsPass::Off,
+            );
+            self.times.draw_calls += draws;
+            self.times.pipeline_switches += switches;
         }
 
         // N64 Video Interface: dedither the finished 16-bit frame, then put
@@ -3200,22 +3644,31 @@ impl PcRenderer {
                 },
             );
         }
+        if let (true, Some(t)) = (timed, &mut self.gpu_timer) {
+            t.end(&mut encoder);
+        }
         self.queue.submit([encoder.finish()]);
+        if let (true, Some(t)) = (timed, &mut self.gpu_timer) {
+            t.submitted();
+        }
     }
 
     /// One render pass over `segments` into the main target (or the
-    /// second screen's), loading or clearing color and depth. Returns the
-    /// GPU draw calls and the pipeline changes between them.
+    /// second screen's, or with `scene` the scaled 3D's), loading or
+    /// clearing color and depth. Returns the GPU draw calls and the
+    /// pipeline changes between them.
     fn record_segments(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         second: bool,
+        scene: bool,
         segments: &[Segment],
         (color_load, depth_load): (wgpu::LoadOp<wgpu::Color>, wgpu::LoadOp<f32>),
         ms: MsPass,
     ) -> (u32, u32) {
-        let (color_view, depth_view, globals_bg) = match (&self.second, second) {
-            (Some(sc), true) => (&sc.view, &sc.depth_view, &sc.globals_bg),
+        let (color_view, depth_view, globals_bg) = match (&self.second, second, &self.scene) {
+            (Some(sc), true, _) => (&sc.view, &sc.depth_view, &sc.globals_bg),
+            (_, false, Some(t)) if scene => (&t.color_view, &t.depth_view, &self.globals_bg),
             _ => (&self.offscreen_view, &self.depth_view, &self.globals_bg),
         };
         // Multisampled: draw into the MSAA targets, resolve the color into
@@ -3293,6 +3746,12 @@ impl PcRenderer {
             occlusion_query_set: None,
             multiview_mask: None,
         });
+        if let (false, Some(t), true) = (second, &self.scene, scene) {
+            // The drawn corner of targets kept for dynamic resolution's range.
+            if t.size != t.extent {
+                pass.set_viewport(0.0, 0.0, t.size.0 as f32, t.size.1 as f32, 0.0, 1.0);
+            }
+        }
         pass.set_bind_group(0, globals_bg, &[]);
         for segment in segments {
             match segment {
@@ -3434,6 +3893,7 @@ impl PcRenderer {
             }
         }
         self.present();
+        self.after_frame();
     }
 
     /// Blit the finished frame(s) to the window, if there is one.
@@ -3453,6 +3913,7 @@ impl PcRenderer {
         let frame =
             self.surface
                 .as_ref()
+                .filter(|_| !self.no_present)
                 .and_then(|ss| match acquire(ss.surface.get_current_texture()) {
                     Ok(frame) => Some(frame),
                     Err(true) => {
@@ -3675,8 +4136,9 @@ impl Renderer for PcRenderer {
     fn draw_sprite(&mut self, sprite: SpriteId, pos: Vec2, params: &SpriteParams) {
         self.flush_model_batch();
         let Some(entry) = self.sprites.get(&sprite.0) else {
-            // Unknown handle: skip. The asset pipeline (Fase 2) turns this
-            // into a hard error at bake time instead.
+            // Unknown handle or not loaded (its group is not ready): skip,
+            // counted. The bake rejects handles no manifest declares.
+            self.frame_stats.not_loaded += 1;
             return;
         };
         let cmd = make_command(sprite.0, pos, entry.size, params);
@@ -3754,10 +4216,12 @@ impl Renderer for PcRenderer {
     }
 
     fn set_texture_filter(&mut self, filter: TexFilter) {
-        self.tex_filter = match filter {
-            TexFilter::Default => default_filter(self.profile),
-            f => f,
-        };
+        self.game_filter = filter;
+        self.tex_filter = self.resolve_filter(filter);
+    }
+
+    fn lod_bias(&self) -> f32 {
+        self.quality.lod_bias
     }
 
     fn set_ambient_occlusion(&mut self, ao: Option<&AmbientOcclusion>) {
@@ -3804,7 +4268,9 @@ impl Renderer for PcRenderer {
         params: &ModelParams,
     ) {
         let Some((tmdl, layout)) = self.meshes.get(&model.0) else {
-            return; // unknown handle: skip, like sprites
+            // Unknown or not loaded (its group is not ready): skip, counted.
+            self.frame_stats.not_loaded += 1;
+            return;
         };
         let mesh = Mesh::from_layout(tmdl, layout);
         self.frame_stats.models += 1;
@@ -4123,6 +4589,7 @@ impl Renderer for PcRenderer {
         let mut rest: Vec<(Mat34, ModelParams)> = Vec::new();
         {
             let Some((tmdl, layout)) = self.meshes.get(&model.0) else {
+                self.frame_stats.not_loaded += instances.len() as u32;
                 return;
             };
             let mesh = Mesh::from_layout(tmdl, layout);
@@ -4175,6 +4642,7 @@ impl Renderer for PcRenderer {
         params: &trino_core::BillboardParams,
     ) {
         let Some(entry) = self.sprites.get(&sprite.0) else {
+            self.frame_stats.not_loaded += 1;
             return;
         };
         let (w, h) = (entry.size.0 as f32, entry.size.1 as f32);
@@ -4271,6 +4739,7 @@ impl Renderer for PcRenderer {
 
     fn draw_text(&mut self, font: FontId, pos: Vec2, text: &str, params: &TextParams) {
         let Some(entry) = self.fonts.get(&font.0).cloned() else {
+            self.frame_stats.not_loaded += 1;
             return;
         };
         let parsed = entry.font();
@@ -4606,6 +5075,7 @@ mod webgl2_tests {
             ("ao.wgsl", include_str!("ao.wgsl")),
             ("shaders_tnl.wgsl", include_str!("shaders_tnl.wgsl")),
             ("depth_blit", depth_blit::SHADER),
+            ("upscale.wgsl", upscale::SHADER),
         ] {
             let n = glsl_es_300(&depth_as_float(source)).unwrap_or_else(|e| panic!("{name}: {e}"));
             assert!(n > 0, "{name}");

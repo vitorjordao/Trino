@@ -8,6 +8,13 @@
 
 version = 1
 
+# Boot compressed on the consoles (issue #56, ADR 0022): libdragon's LZ4
+# on the N64 (`asset_load` decodes as it reads), LZ4 in `groups/boot.tbnd`
+# on the 3DS (decoded on the worker core at boot). The PC and the Web keep
+# loose files.
+[groups.boot]
+compression = { n64 = 1, 3ds = "lz4" }
+
 # ---- pitch (6 x 4 tiles with the lines in) ----
 
 [models.se_pitch_0_0]

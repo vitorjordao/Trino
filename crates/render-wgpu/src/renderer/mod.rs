@@ -1931,7 +1931,7 @@ impl PcRenderer {
             let mesh = Mesh::from_layout(&tmdl, &layout);
             self.ensure_gpu_tnl();
             if let Some(gpu) = &mut self.gpu {
-                gpu.upload_mesh(&self.device, id.0, &mesh);
+                gpu.upload_mesh(&self.device, &self.queue, id.0, &mesh);
             }
         } else if let Some(gpu) = &mut self.gpu {
             gpu.forget_mesh(id.0);
@@ -2465,7 +2465,7 @@ impl PcRenderer {
         let done = std::sync::Arc::new(std::sync::Mutex::new(None));
         let flag = done.clone();
         buffer.slice(..).map_async(wgpu::MapMode::Read, move |r| {
-            *flag.lock().unwrap() = Some(r.is_ok());
+            *flag.lock().unwrap() = Some(r.map_err(|e| e.to_string()));
         });
         PendingRead {
             buffer,
@@ -2478,14 +2478,14 @@ impl PcRenderer {
     /// Poll a [`PendingRead`]: the pixels once the GPU has them.
     pub fn poll_read(&self, read: &PendingRead) -> Option<Vec<u8>> {
         let _ = self.device.poll(wgpu::PollType::Poll);
-        let state = *read.done.lock().unwrap();
+        let state = read.done.lock().unwrap().clone();
         match state {
-            Some(true) => Some(unpad_rows(
+            Some(Ok(())) => Some(unpad_rows(
                 &read.buffer.slice(..).get_mapped_range(),
                 read.size,
                 read.padded,
             )),
-            Some(false) => panic!("failed to map readback buffer"),
+            Some(Err(e)) => panic!("failed to map readback buffer: {e}"),
             None => None,
         }
     }
@@ -2538,6 +2538,13 @@ impl PcRenderer {
     /// Read `tex` back, waiting for the GPU; `None` where the backend
     /// can't wait (a browser's WebGPU).
     fn try_read_texture(&self, tex: &wgpu::Texture, size: (u32, u32)) -> Option<Vec<u8>> {
+        // A browser's WebGPU maps only after the script yields: give up
+        // before allocating. A dropped buffer isn't freed there until the
+        // page's GC runs, and a probe per pixel leaked enough mapped
+        // read-backs that Chromium on SwiftShader destroyed the device.
+        if cfg!(target_arch = "wasm32") && !self.webgl2 {
+            return None;
+        }
         let (buffer, padded) = self.copy_to_readback(tex, size);
         let slice = buffer.slice(..);
         let (tx, rx) = std::sync::mpsc::channel();
@@ -3356,7 +3363,7 @@ impl PcRenderer {
             gpu_tnl::GpuTnl::new(&self.device, [&self.globals_bgl, &self.tex3d_bgl])
         });
         if !gpu.has_mesh(model.0) {
-            gpu.upload_mesh(&self.device, model.0, &mesh);
+            gpu.upload_mesh(&self.device, &self.queue, model.0, &mesh);
         }
         if self.msaa > 1 {
             gpu.ensure_ms(&self.device, self.msaa);
@@ -3933,7 +3940,7 @@ impl Renderer for PcRenderer {
                     gpu_tnl::GpuTnl::new(&self.device, [&self.globals_bgl, &self.tex3d_bgl])
                 });
                 if !gpu.has_mesh(model.0) {
-                    gpu.upload_mesh(&self.device, model.0, &mesh);
+                    gpu.upload_mesh(&self.device, &self.queue, model.0, &mesh);
                 }
                 if self.msaa > 1 {
                     gpu.ensure_ms(&self.device, self.msaa);
@@ -4281,8 +4288,8 @@ pub struct PendingRead {
     buffer: wgpu::Buffer,
     padded: u32,
     size: (u32, u32),
-    /// Set by the map callback: whether the map succeeded.
-    done: std::sync::Arc<std::sync::Mutex<Option<bool>>>,
+    /// Set by the map callback: the map's outcome.
+    done: std::sync::Arc<std::sync::Mutex<Option<Result<(), String>>>>,
 }
 
 impl PendingRead {

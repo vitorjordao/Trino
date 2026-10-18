@@ -85,6 +85,24 @@ panel; `globalThis.__trino` in devtools holds the state (`steps`, `info`, `frame
   the headless shell has none.
 - **Closures handed to JS must outlive their use:** a fire-and-forget sound clears its
   `onended` before its `Closure` drops (`audio.rs`).
+- **wgpu objects aren't freed on drop in a browser** (the page's GC frees them): never
+  allocate per frame or per probe on WebGPU. `try_read_texture` returns `None` there
+  before allocating; mesh uploads go through `queue.write_buffer`, not
+  `mapped_at_creation` (Chromium on SwiftShader refused one partway through Solid
+  Eleven's 197 meshes).
+
+## GPU-less Linux (CI)
+
+What the `web` job needs, all found the hard way (reproduce with Docker:
+`mcr.microsoft.com/playwright:v1.63.0-noble`, `docker run --init --ipc=host`):
+- Chromium WebGPU: `--use-angle=swiftshader --use-vulkan=swiftshader
+  --use-webgpu-adapter=swiftshader` (the harness adds them on Linux). With
+  `--disable-vulkan-surface` the canvas swap chain had no shared-image backing and
+  Chromium destroyed the device (`device.lost` reason `destroyed`) mid-run.
+- Firefox: headless has no WebGL there ("Exhausted GL driver options"); headed under
+  `xvfb-run` it gets llvmpipe. `TRINO_WEB_FIREFOX_HEADED=1` runs it headed.
+- Audio: Firefox's `AudioContext` stays `suspended` without an output device; CI starts
+  PulseAudio with a null sink.
 
 ## Sizes and speed (2026-10-18)
 

@@ -49,7 +49,10 @@ for (const b of browsers) {
       args: [
         "--enable-unsafe-webgpu",
         ...(process.platform === "linux"
-          ? ["--enable-features=Vulkan", "--use-vulkan=swiftshader", "--use-webgpu-adapter=swiftshader", "--disable-vulkan-surface"]
+          ? // ANGLE on SwiftShader too: with `--disable-vulkan-surface` the canvas
+            // swap chain found no shared-image backing, and Chromium destroyed the
+            // device after a few hundred frames.
+            ["--enable-features=Vulkan", "--use-angle=swiftshader", "--use-vulkan=swiftshader", "--use-webgpu-adapter=swiftshader"]
           : []),
       ],
     });
@@ -77,7 +80,10 @@ for (const run of plan) {
   let browser;
   try {
     browser = await engines[run.browser].launch({
-      headless: !headed,
+      // Headless Firefox on a GPU-less Linux has no WebGL at all ("Exhausted
+      // GL driver options"); headed under Xvfb it gets Mesa's llvmpipe. CI
+      // sets TRINO_WEB_FIREFOX_HEADED=1 and runs the harness in xvfb-run.
+      headless: !headed && !(run.browser === "firefox" && process.env.TRINO_WEB_FIREFOX_HEADED === "1"),
       // Chromium: audio waits for a gesture, as on a real page.
       args: run.browser === "chromium" ? [...run.args, "--autoplay-policy=user-gesture-required"] : [],
       channel: run.channel,
@@ -109,7 +115,9 @@ for (const run of plan) {
       fs.writeFileSync(path.join(dir, `${name}.png`), png);
     }
     r.frames = Object.keys(state.frames || {});
-    const noAdapter = /no compatible GPU adapter|requestAdapter|WebGPU/i.test(state.error || "");
+    // Only the renderer's own "no adapter" error: a panic inside wgpu's WebGPU
+    // backend (its path names "webgpu") is a failure, not a skip.
+    const noAdapter = /no compatible GPU adapter/.test(state.error || "");
     if (!r.pass && run.backend === "webgpu" && noAdapter) {
       // A browser without a WebGPU adapter here (no GPU and no software
       // Vulkan): reported, not failed. The WebGL2 run covers the browser.
@@ -151,7 +159,7 @@ for (const run of plan) {
         // Windows): the backend runs silent, which the self-test covered.
         r.audio_note = "no Web Audio in this browser build: silent backend";
       } else if (r.audio_after !== "running") {
-        extra.push(`audio did not unlock on a click ()`);
+        extra.push(`audio did not unlock on a click (${r.audio_before} -> ${r.audio_after})`);
       }
       if (!r.input_ok) extra.push(`keys/pointer did not reach the game (${r.input_keys})`);
       if (extra.length) {
@@ -163,7 +171,8 @@ for (const run of plan) {
   } catch (e) {
     r.pass = false;
     r.error = String(e && e.message ? e.message : e).split("\n")[0];
-    if (run.backend === "webgpu") r.skipped = `WebGPU run did not start: ${r.error}`;
+    // The full Chromium missing (it has WebGPU, the headless shell not).
+    if (run.backend === "webgpu" && !browser) r.skipped = `WebGPU run did not start: ${r.error}`;
   } finally {
     if (browser) await browser.close();
   }

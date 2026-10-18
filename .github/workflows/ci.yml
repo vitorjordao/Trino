@@ -140,11 +140,21 @@ jobs:
       # TRINO_TEST_PASS, the KTX2 transcode, saves across a reload, audio
       # unlocked by a click, input reaching the game, and the golden frames
       # (tests/golden/web/) — per browser.
+      # Firefox: headless on a GPU-less Linux has no WebGL, headed under Xvfb
+      # it gets Mesa's llvmpipe; and its AudioContext never leaves
+      # `suspended` without an output device, so PulseAudio plays into a
+      # null sink.
+      - name: Audio output for the browsers (PulseAudio null sink)
+        run: |
+          sudo apt-get install -y pulseaudio
+          pulseaudio --start --exit-idle-time=-1
+          pactl load-module module-null-sink sink_name=trino
       - name: Browser self-test (Chromium WebGL2 + WebGPU, Firefox, WebKit)
-        run: cargo xtask test web --no-build
+        run: xvfb-run -a cargo xtask test web --no-build
         env:
           TRINO_SKIP_BROWSER_INSTALL: "1"
           TRINO_WEB_TIMEOUT: "900"
+          TRINO_WEB_FIREFOX_HEADED: "1"
       # A project scaffolded from a template, built for the Web and run in
       # Chromium: what `cargo xtask new --standalone` users get.
       - name: Standalone project in the browser

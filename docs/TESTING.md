@@ -339,7 +339,9 @@ the wgpu backend and read pixels back.
 
 The browser itself runs in `cargo xtask test web` (CI's `web` job): Chromium on WebGL2
 and WebGPU, Firefox and WebKit, each through `apps/web`'s `?selftest` page and the
-harness's reload, click and key checks (`tools/web-test/run.mjs`). The rows below are
+harness's reload, click and key checks (`tools/web-test/run.mjs`). On the GPU-less
+runner Chromium uses SwiftShader, and Firefox runs headed under Xvfb (llvmpipe WebGL) with
+PulseAudio's null sink for audio (the build-web skill has why). The rows below are
 the host tests of the same code; the browser runs are named where they add to them.
 
 | Feature | Tests |

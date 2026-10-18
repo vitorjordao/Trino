@@ -1,0 +1,37 @@
+== cargo xtask test n64 --expansion-pak both
+TRINO_HW n64 ram=8M tier=expanded
+TRINO_STEP:quality low fixed lod=100 particles=8
+[n64] golden frame: /home/v/dev/trino-work/wt/55-quality/tests/golden/n64/showcase.png matches
+[n64] golden frame: /home/v/dev/trino-work/wt/55-quality/tests/golden/n64/castle64_hub.png matches
+[n64] golden frame: /home/v/dev/trino-work/wt/55-quality/tests/golden/n64/showcase_river.png matches
+[n64] TEST PASS (with the Expansion Pak)
+TRINO_HW n64 ram=4M tier=base
+TRINO_STEP:quality low fixed lod=100 particles=8
+[n64] golden frame: /home/v/dev/trino-work/wt/55-quality/tests/golden/n64/showcase.png matches
+[n64] golden frame: /home/v/dev/trino-work/wt/55-quality/tests/golden/n64/castle64_hub.png matches
+[n64] golden frame: /home/v/dev/trino-work/wt/55-quality/tests/golden/n64/showcase_river.png matches
+[n64] TEST PASS (without the Expansion Pak)
+
+== cargo xtask test 3ds --new3ds both
+TRINO_HW 3ds new=1 speedup=1 app_ram=96M tier=expanded
+TRINO_STEP:quality medium fixed lod=100 particles=16
+TRINO_STEP:golden frame
+TRINO_STEP:river golden frame
+TRINO_STEP:texture formats golden frame
+[3ds] golden frame: /home/v/dev/trino-work/wt/55-quality/tests/golden/3ds/castle64_hub.png: mean diff 0.52, 0.42% far pixels (limits 3, 2.0%)
+[3ds] golden frame (bottom): /home/v/dev/trino-work/wt/55-quality/tests/golden/3ds/castle64_hub_bottom.png: mean diff 0.02, 0.00% far pixels (limits 3, 2.0%)
+[3ds] golden frame (showcase bottom): /home/v/dev/trino-work/wt/55-quality/tests/golden/3ds/showcase_bottom.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[3ds] golden frame (showcase river): /home/v/dev/trino-work/wt/55-quality/tests/golden/3ds/showcase_river.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[3ds] golden frame (texture formats): /home/v/dev/trino-work/wt/55-quality/tests/golden/3ds/texture_formats.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[3ds] TEST PASS (as a New 3DS)
+TRINO_HW 3ds new=0 speedup=0 app_ram=96M tier=base
+TRINO_STEP:quality low fixed lod=100 particles=16
+TRINO_STEP:golden frame
+TRINO_STEP:river golden frame
+TRINO_STEP:texture formats golden frame
+[3ds] golden frame: /home/v/dev/trino-work/wt/55-quality/tests/golden/3ds/castle64_hub.png: mean diff 0.52, 0.42% far pixels (limits 3, 2.0%)
+[3ds] golden frame (bottom): /home/v/dev/trino-work/wt/55-quality/tests/golden/3ds/castle64_hub_bottom.png: mean diff 0.02, 0.00% far pixels (limits 3, 2.0%)
+[3ds] golden frame (showcase bottom): /home/v/dev/trino-work/wt/55-quality/tests/golden/3ds/showcase_bottom.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[3ds] golden frame (showcase river): /home/v/dev/trino-work/wt/55-quality/tests/golden/3ds/showcase_river.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[3ds] golden frame (texture formats): /home/v/dev/trino-work/wt/55-quality/tests/golden/3ds/texture_formats.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[3ds] TEST PASS (as an old 3DS)

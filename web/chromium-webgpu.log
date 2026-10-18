@@ -1,0 +1,59 @@
+[log] TRINO_WEB: adapter="browser adapter (BrowserWebGpu)" profile=Web canvas=640x480 dpr=1 msaa=4
+[log] TRINO_ASSETS: bytes=456194 sprites=31 ktx2=30 ktx2_gpu=30 ktx2_rgba8=0 target=BC sounds=12 models=106 fonts=1 blobs=11 mixer=true
+[log] TRINO_QUALITY: preset=high source=forced scale=1.00 gpu=unknown mobile=false
+[log] TRINO_STEP:web selftest start
+[log] TRINO_STEP:text
+[log] TRINO_STEP:blob
+[log] TRINO_STEP:save
+[log] TRINO_STEP:textured_3d
+[log] TRINO_STEP:textured_3d skipped (no read_pixel)
+[log] TRINO_STEP:texture filter and detail
+[log] TRINO_STEP:texture formats
+[log] TRINO_STEP:billboards
+[log] TRINO_STEP:occlusion
+[log] TRINO_STEP:fill rect
+[log] TRINO_STEP:dual screen
+[log] TRINO_STEP:dual screen single screen (collapsed)
+[log] TRINO_STEP:smooth skin
+[log] TRINO_STEP:palette
+[log] TRINO_STEP:instancing
+[log] TRINO_STEP:local lights
+[log] TRINO_STEP:ambient occlusion
+[log] TRINO_STEP:water
+[log] TRINO_STEP:impostor
+[log] TRINO_STEP:particles
+[log] TRINO_STEP:particles cap 24
+[log] TRINO_STEP:portals
+[log] TRINO_STEP:hw tier
+[log] TRINO_STEP:hw tier base ram=0M cores=0 data=base sparks=4
+[log] TRINO_STEP:quality
+[log] TRINO_STEP:quality high hosted lod=100 particles=24
+[log] TRINO_STEP:engine ok
+[log] TRINO_STEP:audio
+[log] TRINO_STEP:input
+[log] TRINO_STEP:ktx2 transcode
+[log] TRINO_STEP:ktx2 transcode etc1s+uastc decode exact, gpu target BC
+[log] TRINO_STEP:quality bench
+[log] TRINO_STEP:quality bench low=30981 pick=low gpu=unknown target_us=20833 elapsed_ms=516
+[log] TRINO_STEP:audio codecs
+[log] TRINO_AUDIO: state=running rate=44100 resident_bytes=815468 voices=0 streams=0 stream_bytes=0 underruns=0 streamed_frames=115556
+[log] TRINO_STEP:audio codecs ok, 171 frames in 2832 ms (longest gap 17 ms), audio clock 3.701 s: rate=44100 streamed_frames=100921 stream_bytes=199936 resident_bytes=815468 underruns=0
+[log] TRINO_STEP:showcase demo
+[log] TRINO_STEP:baked scene
+[log] TRINO_STEP:castle64
+[log] TRINO_STEP:castle64 bot reached the star in 747 frames
+[log] TRINO_STEP:solid eleven pack
+[log] TRINO_ASSETS: bytes=2179144 sprites=5 ktx2=3 ktx2_gpu=3 ktx2_rgba8=0 target=BC sounds=10 models=197 fonts=2 blobs=0 mixer=false
+[log] TRINO_STEP:solid eleven match
+[log] TRINO_SE_HASH:0xd51e91bf
+[log] TRINO_STEP:golden frames
+[log] TRINO_STEP:golden frame showcase 640x480
+[log] TRINO_STEP:golden frame castle64_hub 640x480
+[log] TRINO_STEP:golden frame texture_formats 640x480
+[log] TRINO_FRAME:selftest profile=web avg_us=48498 max_us=4096225 frames=197 fps=20 draws=63 tris=43159 pc_gpu_draws=1 pc_gpu_tris=183 instanced=0 off_pc_gpu=per_pixel_lit:62,water:1,flat_skinned:1,offscreen:1,texture_alpha:1 low1_us=2712102 low1_fps=0
+[log] TRINO_AUDIO: state=running rate=44100 resident_bytes=1442194 voices=3 streams=1 stream_bytes=196864 underruns=2 streamed_frames=263147
+[log] TRINO_TEST_PASS
+[log] TRINO_WEB: adapter="browser adapter (BrowserWebGpu)" profile=Web canvas=640x480 dpr=1 msaa=4
+[log] TRINO_ASSETS: bytes=456194 sprites=31 ktx2=30 ktx2_gpu=30 ktx2_rgba8=0 target=BC sounds=12 models=106 fonts=1 blobs=11 mixer=true
+[log] TRINO_QUALITY: bench low=16670 medium=50000 pick=low gpu=unknown target_us=20833 elapsed_ms=1026 adapter=browser adapter (BrowserWebGpu)
+[log] TRINO_QUALITY: preset=low source=detected scale=0.75 gpu=unknown mobile=false

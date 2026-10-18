@@ -1,0 +1,22 @@
+TRINO_FRAME:castle64 profile=native avg_us=3946 max_us=9054 frames=60 fps=253 draws=26 tris=617 pc_gpu_draws=26 pc_gpu_tris=605 instanced=0 off_pc_gpu=- low1_us=9054 low1_fps=110 quality=low scale=1.00 quality_from=forced detected=- gpu_us=1999
+TRINO_FRAME:castle64 profile=native avg_us=11563 max_us=17217 frames=60 fps=86 draws=26 tris=617 pc_gpu_draws=26 pc_gpu_tris=605 instanced=0 off_pc_gpu=- low1_us=17217 low1_fps=58 quality=medium scale=1.00 quality_from=forced detected=- gpu_us=8834
+TRINO_FRAME:castle64 profile=native avg_us=11810 max_us=16675 frames=60 fps=84 draws=26 tris=617 pc_gpu_draws=26 pc_gpu_tris=605 instanced=0 off_pc_gpu=- low1_us=16675 low1_fps=59 quality=high scale=1.00 quality_from=forced detected=- gpu_us=11482
+TRINO_FRAME:castle64 profile=native avg_us=10928 max_us=26087 frames=60 fps=91 draws=26 tris=617 pc_gpu_draws=26 pc_gpu_tris=605 instanced=0 off_pc_gpu=- low1_us=26087 low1_fps=38 quality=ultra scale=1.25 quality_from=forced detected=- gpu_us=10535
+TRINO_QUALITY: bench low=32526 pick=low gpu=software target_us=14994 elapsed_ms=525 picture=640x480 adapter=llvmpipe (LLVM 20.1.2, 256 bits) (Vulkan)
+
+$ xvfb-run -a cargo xtask quality bench --json
+{
+  "adapter": "llvmpipe (LLVM 20.1.2, 256 bits) (Vulkan)",
+  "elapsed_ms": 515,
+  "gpu": "software",
+  "pick": "low",
+  "picture": "640x480",
+  "results": [
+    {
+      "held": false,
+      "median_us": 32544,
+      "preset": "low"
+    }
+  ],
+  "target_us": 14994
+}

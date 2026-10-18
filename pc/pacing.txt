@@ -1,0 +1,7 @@
+dynres: 2560x1440 on AMD Radeon(TM) Graphics (Vulkan) (integrated): full scale 24.7 ms, range 0.35-1x
+target 16.6 ms -> frame median 17.28 ms, GPU median 16.71 ms at scale 0.59 (frames 180-239)
+target 17.3 ms -> frame median 18.13 ms, GPU median 17.54 ms at scale 0.62 (frames 340-399)
+limiter: cap 30 fps -> 30.00 fps (-0.00%)
+limiter: cap 60 fps -> 60.00 fps (-0.00%)
+limiter: cap 120 fps -> 120.00 fps (-0.00%)
+bench: low=12751 medium=13946 high=15994 pick=medium gpu=integrated target_us=15000 elapsed_ms=648

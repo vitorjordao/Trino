@@ -1,0 +1,4 @@
+dynres: 3840x2160 on AMD Radeon RX 7800 XT (Vulkan) (discrete): full scale 2.1 ms, range 0.35-2x
+target 16.6 ms -> frame median 7.85 ms, GPU median 7.30 ms at scale 2.00 (frames 180-239)
+target 10.0 ms -> frame median 7.81 ms, GPU median 7.26 ms at scale 2.00 (frames 340-399)
+bench: low=8678 medium=8494 high=8654 ultra=8926 pick=ultra gpu=discrete target_us=15000 elapsed_ms=581

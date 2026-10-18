@@ -1,0 +1,38 @@
+# Self-test lines after merging #54 (hardware tiers, 3DS worker core) into PR #81
+# commit 1b18c41; local runs on 2026-10-18
+
+## cargo xtask test 3ds --new3ds both  (Azahar)
+[3ds] booting test app in Azahar as a New 3DS (300s timeout, 120s idle limit)...
+[azahar] TRINO_STEP:worker
+[azahar] TRINO_STEP:worker core=2 queued=8 us=6149
+[azahar] TRINO_STEP:audio codecs
+[azahar] TRINO_AUDIO: voices=1 streams=1 resident_bytes=113510 stream_bytes=24576 underruns=0 streamed_frames=101760 stream_core=2
+[azahar] TRINO_AUDIO: run voices=4 streams=1 resident_bytes=113510 stream_bytes=24576 underruns=0 streamed_frames=482803 t=30443ms
+[3ds] worker core: core=2 queued=8 us=6149
+[3ds] TEST PASS (as a New 3DS)
+[3ds] booting test app in Azahar as an old 3DS (300s timeout, 120s idle limit)...
+[azahar] TRINO_STEP:worker
+[azahar] TRINO_STEP:worker core=1 queued=8 us=21291
+[azahar] TRINO_STEP:audio codecs
+[azahar] TRINO_AUDIO: voices=1 streams=1 resident_bytes=113510 stream_bytes=24576 underruns=0 streamed_frames=101975 stream_core=1
+[azahar] TRINO_AUDIO: run voices=4 streams=1 resident_bytes=113510 stream_bytes=24576 underruns=0 streamed_frames=482370 t=22964ms
+[3ds] worker core: core=1 queued=8 us=21291
+[3ds] TEST PASS (as an old 3DS)
+
+## TRINO_ARES=docker cargo xtask test n64 --expansion-pak both  (ares)
+[n64] booting test ROM in ares with the Expansion Pak (300s timeout, 120s idle limit)...
+[ares] TRINO_STEP:audio codecs
+[ares] TRINO_AUDIO: voices=1 streams=1 resident_bytes=12120 stream_bytes=48032 underruns=0 streamed_frames=162188
+[ares] TRINO_AUDIO_COST:idle us_per_s=30389 rsp_us_per_s=28735 voices=0 buffers=25
+[ares] TRINO_AUDIO_COST:vadpcm-1 us_per_s=46324 rsp_us_per_s=37423 voices=1 buffers=25
+[ares] TRINO_AUDIO_COST:vadpcm-3 us_per_s=65879 rsp_us_per_s=51548 voices=3 buffers=25
+[ares] TRINO_AUDIO_COST:opus-1 us_per_s=310925 rsp_us_per_s=64602 voices=1 buffers=13
+[n64] TEST PASS (with the Expansion Pak)
+[n64] booting test ROM in ares without the Expansion Pak (300s timeout, 120s idle limit)...
+[ares] TRINO_STEP:audio codecs
+[ares] TRINO_AUDIO: voices=1 streams=1 resident_bytes=12120 stream_bytes=48032 underruns=0 streamed_frames=162188
+[ares] TRINO_AUDIO_COST:idle us_per_s=30528 rsp_us_per_s=28778 voices=0 buffers=25
+[ares] TRINO_AUDIO_COST:vadpcm-1 us_per_s=46327 rsp_us_per_s=37418 voices=1 buffers=25
+[ares] TRINO_AUDIO_COST:vadpcm-3 us_per_s=66062 rsp_us_per_s=51457 voices=3 buffers=25
+[ares] TRINO_AUDIO_COST:opus-1 us_per_s=309971 rsp_us_per_s=64993 voices=1 buffers=13
+[n64] TEST PASS (without the Expansion Pak)

@@ -73,7 +73,7 @@ pub mod scene_consts {
 }
 
 /// Live entities: the whole exported scene fits with room to spare.
-pub const CAPACITY: usize = 96;
+pub const CAPACITY: usize = 128;
 const FONT: FontId = FontId::from_path("fonts/trino5x7");
 /// The same scene baked as data (`[scenes.showcase]` in the manifest).
 pub const BAKED: BlobId = BlobId::from_path("scenes/showcase");

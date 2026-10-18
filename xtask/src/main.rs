@@ -5,9 +5,11 @@
 //! contributors and CI never memorize per-platform incantations.
 
 mod agents;
+mod assets_cmd;
 mod audio;
 mod blender;
 mod castle64_assets;
+mod console_groups;
 mod emulators;
 mod fbgolden;
 mod font_assets;
@@ -90,6 +92,16 @@ commands:
   test all             the host suite, then each targeted console's
   assets <pc|n64|3ds|web> bake assets into target/assets/<platform>
   assets [all]         bake for every platform the project targets
+  assets report [--platform n64|3ds|pc|web] [--tier base|expanded] [--json]
+                       RAM per console tier: what is left for assets
+                       ([memory]), each group's bytes loaded and baked,
+                       boot / boot + group / each scene's groups (fails
+                       when one does not fit, like strict mode)
+  assets check [--json]
+                       scenes' `requires` and cell groups are declared, what
+                       they draw is in boot or one of them, and they fit
+  assets group <sprites/x|models/x|..> <group[,group..]|boot> [--json]
+                       put an asset in groups (declaring new ones)
   watch <pc|n64>       live-reload session (pc: dylib hot swap; n64: rebuild
                        ROM + relaunch ares). pc: --game <crate> picks the
                        game dylib to rebuild (default: castle64)
@@ -364,6 +376,10 @@ fn main() -> ExitCode {
             Target::N3ds => n3ds::test(&project, !no_build, bless, accurate, hw.new3ds_tests()),
             Target::Web => web::test(&project, &web_test),
         }),
+        (Some("assets"), Some("report" | "check" | "group")) => {
+            let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
+            assets_cmd::run(&project.root, &rest)
+        }
         (Some("assets"), Some("n64")) => assets_for(&project, Target::N64),
         (Some("assets"), Some("3ds" | "n3ds")) => assets_for(&project, Target::N3ds),
         (Some("assets"), Some(platform)) => match Platform::parse(platform) {

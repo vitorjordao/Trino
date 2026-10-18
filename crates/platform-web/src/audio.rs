@@ -396,6 +396,23 @@ impl WebAudio {
         Ok(())
     }
 
+    /// Forget a sound (an unloaded asset group's): the bytes it held. A
+    /// playback already started keeps its own buffer to its end.
+    pub fn remove_sound(&mut self, id: SoundId) -> usize {
+        self.sounds.remove(&id.0).map_or(0, |c| c.bytes())
+    }
+
+    /// Forget a music track or stinger ([`WebAudio::remove_sound`]).
+    pub fn remove_music(&mut self, id: MusicId) -> usize {
+        self.music.remove(&id.0).map_or(0, |c| c.bytes())
+    }
+
+    /// The bytes a loaded sound or track holds (0 when not loaded).
+    pub fn clip_bytes(&self, id: u32, music: bool) -> usize {
+        let map = if music { &self.music } else { &self.sounds };
+        map.get(&id).map_or(0, Clip::bytes)
+    }
+
     fn blob_clip(&self, blob: &[u8]) -> Result<Clip, String> {
         let b = SoundBlob::parse(blob).map_err(String::from)?;
         if b.stream {

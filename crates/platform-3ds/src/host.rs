@@ -91,11 +91,15 @@ impl N3dsHost {
         self.step(game, &state, dt);
     }
 
-    /// One frame with scripted input (self-tests, bots).
+    /// One frame with scripted input (self-tests, bots). The asset groups'
+    /// loader runs first (issue #56): what the game asked for last frame
+    /// loads, what it unloaded is freed.
     pub fn step(&mut self, game: &mut dyn Game, input: &InputState, dt: f32) {
+        N3dsAssets::pump(&mut self.renderer, &mut self.audio, &mut self.platform);
         game.update_with(&mut self.platform, input, &mut self.audio, dt);
         game.render(&mut self.renderer);
         self.audio.poll();
+        self.platform.sample_heap();
     }
 
     /// Run `frames` scripted frames and time them (wall clock, vsync
@@ -147,12 +151,12 @@ impl N3dsHost {
     }
 
     /// Print a [`FrameReport`] as a `TRINO_FRAME:` line (reported only):
-    /// `fps=` from the average frame, and `off_gpu=` listing why the CPU
-    /// draws stayed off the GPU, most common first.
+    /// `fps=` from the average frame, `off_gpu=` listing why the CPU draws
+    /// stayed off the GPU, most common first, and `heap=used/peak`.
     pub fn report_frames(&self, scene: &str, r: &FrameReport) {
         runtime::log(&format!(
             "TRINO_FRAME:{scene} avg_us={} max_us={} frames={} fps={} cpu_us={} gpu_draws={} \
-             gpu_tris={} cpu_draws={} cpu_tris={} off_gpu={}\n",
+             gpu_tris={} cpu_draws={} cpu_tris={} off_gpu={} {}\n",
             r.avg_us,
             r.max_us,
             r.frames,
@@ -162,7 +166,8 @@ impl N3dsHost {
             r.gpu_tris,
             r.cpu_draws,
             r.cpu_tris,
-            off_gpu_list(&r.off_gpu)
+            off_gpu_list(&r.off_gpu),
+            trino_core::Platform::memory(&self.platform).heap_field()
         ));
     }
 

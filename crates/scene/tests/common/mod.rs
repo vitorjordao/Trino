@@ -167,6 +167,7 @@ pub fn scene() -> Scene {
     let mut house = Entity::new("house").at([20.0, 2.0, 0.0]);
     house.vis = Some(VisComponent::Cell {
         size: [8.0, 4.0, 8.0],
+        groups: Vec::new(),
     });
     house
         .children
@@ -175,6 +176,7 @@ pub fn scene() -> Scene {
     let mut yard = Entity::new("yard").at([28.0, 2.0, 0.0]);
     yard.vis = Some(VisComponent::Cell {
         size: [8.0, 4.0, 8.0],
+        groups: Vec::new(),
     });
     s.entities.push(yard);
     // The portal comes before... nothing: cells are named, order-free.

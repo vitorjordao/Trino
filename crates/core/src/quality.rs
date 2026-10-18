@@ -1,5 +1,5 @@
 //! Quality presets: one struct a game reads on every target (issue #55,
-//! ADR 0022).
+//! ADR 0023).
 //!
 //! A PC or a browser can be a Steam Deck, a laptop's integrated GPU or a
 //! desktop card. [`QualitySettings`] gathers the knobs that scale a frame's
@@ -100,7 +100,7 @@ impl QualityPreset {
 }
 
 /// Dynamic resolution: the render scale follows the GPU's frame time
-/// (a PI controller on the PC and the Web; ADR 0022 §3).
+/// (a PI controller on the PC and the Web; ADR 0023 §3).
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct DynRes {
     /// The GPU frame time to hold, µs. `0` = from the frame limit: 90% of
@@ -409,7 +409,7 @@ impl QualitySettings {
         }
     }
 
-    /// The Steam Deck's preset (ADR 0022 §5): Medium at the Deck's 800 lines,
+    /// The Steam Deck's preset (ADR 0023 §5): Medium at the Deck's 800 lines,
     /// capped at 60 fps (40 or 30 on battery are one option away).
     pub const STEAM_DECK: QualitySettings = QualitySettings {
         frame_limit: FrameLimit::Fps(60),

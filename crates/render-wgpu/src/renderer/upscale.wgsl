@@ -1,4 +1,4 @@
-// The render scale's upscale (issue #55, ADR 0022 §3): the 3D drawn at a
+// The render scale's upscale (issue #55, ADR 0023 §3): the 3D drawn at a
 // fraction (or a multiple) of the picture's resolution, stretched onto the
 // picture with bilinear filtering and, below a scale of 1, an optional
 // contrast-adaptive sharpening (after AMD's FidelityFX CAS: the four

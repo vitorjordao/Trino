@@ -430,6 +430,17 @@ impl Project {
         self.edit_manifest(|t| edit::set_audio_platform(t, kind, name, key, platform, value))
     }
 
+    /// Put `logical` in `groups` (issue #56): its manifest `groups` line,
+    /// new groups declared. Live: the watcher rebakes.
+    pub fn set_groups(&self, logical: &str, groups: &[String]) -> Result<(), String> {
+        self.edit_manifest(|t| edit::set_groups(t, logical, groups))
+    }
+
+    /// Declare `[groups.<name>]`.
+    pub fn add_group(&self, name: &str) -> Result<(), String> {
+        self.edit_manifest(|t| edit::add_group(t, name))
+    }
+
     fn edit_manifest(&self, f: impl FnOnce(&str) -> Result<String, String>) -> Result<(), String> {
         let manifest = self.manifest_path();
         let text = std::fs::read_to_string(&manifest).map_err(|e| e.to_string())?;

@@ -264,6 +264,18 @@ void* trino_sprite_load(const char* dfs_path)
     return sprite_load(dfs_path);
 }
 
+// Free a sprite (its asset group unloaded, issue #56). The renderer calls
+// it frames after the last draw that could use it (the RDP reads texels
+// from RDRAM while a frame drains); the TMEM caches forget it first, so a
+// sprite loaded later at the same address is uploaded again.
+void trino_sprite_free(void* sprite)
+{
+    if (trino_tmem_owner == sprite) trino_tmem_owner = NULL;
+    if (trino_t3_sp == sprite || trino_t3_dt == sprite) { trino_t3_sp = NULL; trino_t3_dt = NULL; }
+    if (trino_w_sp == sprite || trino_w_dt == sprite) { trino_w_sp = NULL; trino_w_dt = NULL; }
+    sprite_free((sprite_t*)sprite);
+}
+
 uint32_t trino_sprite_size(void* sprite)
 {
     sprite_t* s = sprite;
@@ -449,6 +461,13 @@ void trino_rsp_draw(const uint32_t* w)
 void* trino_alloc_uncached(uint32_t size)
 {
     return malloc_uncached(size);
+}
+
+// Free what trino_alloc_uncached returned (an RSP mesh copy whose model
+// unloaded, issue #56; the renderer waits frames before calling it).
+void trino_free_uncached(void* p)
+{
+    free_uncached(p);
 }
 
 uint32_t trino_phys_addr(const void* p)
@@ -850,6 +869,32 @@ __attribute__((weak)) uint32_t trino_audio_opus_init(void)
 // The wav64 each channel was last configured for, and whether it looped.
 static void* trino_ch_wave[16];
 static uint8_t trino_ch_loop[16];
+
+// Close and free a wav64 (its asset group unloaded, issue #56): the
+// channels playing it stop first, so the mixer never reads it again.
+// Link and enable libdragon's level 2 or 3 decompressor (level 1 is always
+// there): the index names each level mkasset used before any asset loads.
+void trino_asset_compression(int level)
+{
+    if (level == 2) __asset_init_compression_lvl2();
+    if (level == 3) __asset_init_compression_lvl3();
+}
+
+void trino_wav_free(void* wav)
+{
+    for (int ch = 0; ch < 16; ch++) {
+        if (trino_ch_wave[ch] == wav) {
+            mixer_ch_stop(ch);
+            trino_ch_wave[ch] = NULL;
+        }
+    }
+    uint32_t before = trino_heap_used();
+    wav64_close((wav64_t*)wav);
+    free(wav);
+    uint32_t after = trino_heap_used();
+    uint32_t freed = before > after ? before - after : 0;
+    trino_audio_resident = trino_audio_resident > freed ? trino_audio_resident - freed : 0;
+}
 // Played for no time to make the mixer forget a channel's waveform.
 static waveform_t trino_no_wave = {
     .name = "trino-reset", .bits = 16, .channels = 1, .frequency = 8000,

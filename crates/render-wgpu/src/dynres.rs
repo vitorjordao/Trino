@@ -1,4 +1,4 @@
-//! Dynamic resolution (issue #55, ADR 0022 §3): a PI controller that moves
+//! Dynamic resolution (issue #55, ADR 0023 §3): a PI controller that moves
 //! the 3D's render scale so the GPU's frame time holds a target.
 //!
 //! It works in the log of the rendered area (`scale²`): a frame's GPU time

@@ -98,6 +98,32 @@ pub fn to_rust_for(scene: &Scene, lib: &Library, target: Target) -> (String, Vec
     };
     let _ = writeln!(out, "pub const AO: Option<AmbientOcclusion> = {ao};\n");
 
+    // Asset groups (issue #56): only for a scene that has them, so a
+    // boot-only scene's module is what it always was.
+    let cells: Vec<(usize, &String)> = resolved
+        .cell_groups
+        .iter()
+        .enumerate()
+        .flat_map(|(c, gs)| gs.iter().map(move |g| (c, g)))
+        .collect();
+    if scene.requires != ["boot"] || !cells.is_empty() {
+        let id = |g: &str| format!("trino_core::GroupId::from_name(\"{}\")", esc(g));
+        let requires: Vec<String> = scene.requires.iter().map(|g| id(g)).collect();
+        let _ = writeln!(
+            out,
+            "/// The asset groups the scene needs loaded (`requires`).\npub const REQUIRES: &[trino_core::GroupId] = &[{}];",
+            requires.join(", ")
+        );
+        let _ = writeln!(
+            out,
+            "/// (cell, group): what each cell streams (`trino_core::CellGroups::add`).\npub const CELL_GROUPS: &[(u8, trino_core::GroupId)] = &["
+        );
+        for (c, g) in cells {
+            let _ = writeln!(out, "    ({c}, {}),", id(g));
+        }
+        let _ = writeln!(out, "];\n");
+    }
+
     let _ = writeln!(out, "pub static NODES: &[SceneNode] = &[");
     for item in resolved.items.iter().filter(|i| i.exported()) {
         let m = &item.matrix.m;

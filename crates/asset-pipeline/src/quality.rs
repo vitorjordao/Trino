@@ -1,4 +1,4 @@
-//! The project's quality presets (issue #55, ADR 0022 §6): `assets/quality.ron`
+//! The project's quality presets (issue #55, ADR 0023 §6): `assets/quality.ron`
 //! says what Low, Medium, High and Ultra mean for this game (a preset
 //! names only what it changes from the engine's built-in values), and
 //! `trino.toml`'s `[pc.quality]` picks the first launch's preset

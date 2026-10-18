@@ -17,7 +17,12 @@
 //!    delivers samples with no underruns, a duck rule ramps. It needs the
 //!    audio context running, so it waits for a gesture (the harness clicks
 //!    the page); a context that never runs fails the step, and a browser
-//!    without Web Audio skips it, saying so.
+//!    without Web Audio skips it, saying so. Before it, `asset groups`
+//!    (#56): the level groups' bundles download beside the pack while
+//!    frames go on, `castle64::selftest::asset_groups` loads, draws and
+//!    unloads them as on the consoles, then a soak of load/unload cycles
+//!    runs over animation frames with the heap back at its baseline after
+//!    (WebGL2 frees GPU objects only once the page's event loop turns).
 //! 2. The showcase demo plays every coin to the goal through the river, and
 //!    the same level baked as data plays through too.
 //! 3. castle64: gravity, a walk, a jump and the bot's whole Green Hills run
@@ -45,6 +50,9 @@ const BUDGET_MS: u64 = 40;
 enum Stage {
     Engine,
     Bench(Box<BenchRun>),
+    /// `asset groups`: frames spent waiting for the bundles' downloads.
+    Groups(u32),
+    GroupSoak(Box<GroupSoak>),
     Audio(Box<AudioRun>),
     Demos,
     Castle(Box<CastleRun>),
@@ -87,6 +95,160 @@ struct AudioRun {
     started: Option<u64>,
     last: u64,
     max_gap: u64,
+}
+
+impl AudioRun {
+    fn new() -> Self {
+        AudioRun {
+            step: castle64::selftest::AudioCodecs::new(),
+            waiting_since: None,
+            smooth: 0,
+            frames: 0,
+            started: None,
+            last: 0,
+            max_gap: 0,
+        }
+    }
+}
+
+/// Frames `asset groups` waits for its two bundles to download and decode.
+const GROUP_WAIT_FRAMES: u32 = 600;
+
+/// The page's backends and loader for `castle64::selftest::asset_groups`.
+struct GroupHost<'a>(&'a mut WebHost);
+
+impl castle64::selftest::GroupHost for GroupHost<'_> {
+    fn parts(&mut self) -> (&mut dyn trino_core::Renderer, &mut dyn Platform) {
+        (&mut self.0.renderer, &mut self.0.platform)
+    }
+
+    fn pump(&mut self) {
+        self.0.pump_groups();
+    }
+
+    /// No heap check here: inside one animation frame WebGL2 can't free
+    /// the GPU objects an unload dropped (wgpu waits on GL fences, which
+    /// signal once the event loop turns). [`soak_frame`] checks the heap
+    /// over real frames instead.
+    fn heap_tolerance(&self) -> u32 {
+        u32::MAX
+    }
+}
+
+/// Frames the soak loads and unloads `selftest_level` for, and the frames
+/// it lets go by before reading the heap on either side.
+const SOAK_FRAMES: u32 = 240;
+const SETTLE_FRAMES: u32 = 20;
+/// How far the heap may end above its baseline: wgpu's trackers grow a
+/// little over frames, as on the PC.
+const SOAK_TOLERANCE: u32 = 64 * 1024;
+
+/// The `asset groups` soak over animation frames.
+#[derive(Default)]
+struct GroupSoak {
+    frames: u32,
+    cycles: u32,
+    /// The heap after the first settle (none yet: settling).
+    baseline: Option<u32>,
+    /// The soak's frames are through: the last settle runs.
+    soaked: bool,
+    settle: u32,
+}
+
+/// One frame of the soak: settle, load/unload `selftest_level` for
+/// [`SOAK_FRAMES`], settle, then the heap must be back (`Ok(true)`).
+fn soak_frame(s: &mut GroupSoak, host: &mut WebHost) -> Result<bool, String> {
+    use castle64::selftest::LEVEL;
+    use trino_core::LoadState;
+    host.pump_groups();
+    let settling = s.baseline.is_none() || s.soaked;
+    if settling {
+        host.platform.unload_group(LEVEL);
+        s.settle += 1;
+        if s.settle >= SETTLE_FRAMES && host.platform.group_state(LEVEL) == LoadState::Unloaded {
+            let heap = host.platform.memory().heap_used;
+            s.settle = 0;
+            match s.baseline {
+                None => s.baseline = Some(heap),
+                Some(base) => {
+                    let drift = heap.saturating_sub(base);
+                    js::log(&format!(
+                        "TRINO_STEP:asset groups soak frames={} cycles={} heap_baseline={base} \
+                         heap_drift={drift}",
+                        s.frames, s.cycles
+                    ));
+                    if drift > SOAK_TOLERANCE {
+                        return Err(format!(
+                            "asset groups: the heap ended {drift} bytes above its baseline \
+                             after {} load/unload cycles",
+                            s.cycles
+                        ));
+                    }
+                    return Ok(true);
+                }
+            }
+        }
+    } else {
+        match host.platform.load_group(LEVEL) {
+            LoadState::Ready => {
+                host.platform.unload_group(LEVEL);
+                s.cycles += 1;
+            }
+            LoadState::Failed => return Err("asset groups: a group failed during the soak".into()),
+            _ => {}
+        }
+        s.frames += 1;
+        s.soaked = s.frames >= SOAK_FRAMES;
+    }
+    // A loading screen's frame.
+    let r = &mut host.renderer;
+    let caps = *trino_core::Renderer::caps(r);
+    let (w, h) = (caps.screen_width as f32, caps.screen_height as f32);
+    trino_core::Renderer::begin_frame(r, trino_core::Color::BLACK);
+    let done = w * 0.6 * (s.frames as f32 / SOAK_FRAMES as f32).min(1.0);
+    trino_core::Renderer::fill_rect(
+        r,
+        trino_core::Rect::new(w * 0.2, h * 0.5, done, 8.0),
+        trino_core::Color::rgb(80, 220, 120),
+    );
+    trino_core::Renderer::end_frame(r);
+    Ok(false)
+}
+
+/// One frame of `asset groups`: until both level groups downloaded and
+/// decoded, pump; then unload them and run the consoles' check on the
+/// downloaded bundles (`Ok(true)` once it passed).
+fn groups_frame(host: &mut WebHost, frames: u32) -> Result<bool, String> {
+    use castle64::selftest::{LEVEL, LEVEL2};
+    use trino_core::LoadState;
+    host.pump_groups();
+    let states = [LEVEL, LEVEL2].map(|g| host.platform.group_state(g));
+    if states.contains(&LoadState::Failed) {
+        return Err("asset groups: a bundle failed to download or decode".into());
+    }
+    if states != [LoadState::Ready; 2] {
+        if frames > GROUP_WAIT_FRAMES {
+            return Err(format!(
+                "asset groups: the bundles were not in after {frames} frames ({states:?})"
+            ));
+        }
+        return Ok(false);
+    }
+    js::log(&format!(
+        "TRINO_STEP:asset groups downloaded in {frames} frames"
+    ));
+    host.platform.unload_group(LEVEL);
+    host.platform.unload_group(LEVEL2);
+    host.pump_groups();
+    let t0 = host.platform.now_micros();
+    // The soak runs over animation frames next (`soak_frame`).
+    let r = castle64::selftest::asset_groups(&mut GroupHost(host), 0)?;
+    castle64::selftest::log_groups(&mut host.platform, &r);
+    js::log(&format!(
+        "TRINO_STEP:asset groups took {}ms",
+        (host.platform.now_micros() - t0) / 1000
+    ));
+    Ok(true)
 }
 
 /// How long `audio codecs` waits for the audio context to run (µs).
@@ -156,20 +318,39 @@ impl Run {
                     self.fail(format!("ktx2: {e}"));
                     return Flow::Continue;
                 }
-                host.platform.log("TRINO_STEP:quality bench\n");
-                let before = (host.renderer.render_scale(), host.renderer.msaa());
-                let bench = host.renderer.bench_begin(
-                    &trino_core::PresetTable::BUILT_IN,
-                    trino_platform_web::BENCH_TARGET_US,
-                    trino_platform_web::BENCH_BUDGET,
-                    true,
-                );
-                self.stage = Stage::Bench(Box::new(BenchRun {
-                    bench,
-                    last: None,
-                    before,
-                }));
+                host.platform.log("TRINO_STEP:asset groups\n");
+                let (a, b) = (castle64::selftest::LEVEL, castle64::selftest::LEVEL2);
+                host.platform.load_group(a);
+                host.platform.load_group(b);
+                self.stage = Stage::Groups(0);
             }
+            Stage::Groups(frames) => {
+                *frames += 1;
+                match groups_frame(host, *frames) {
+                    Ok(false) => {}
+                    Ok(true) => self.stage = Stage::GroupSoak(Box::default()),
+                    Err(e) => self.fail(e),
+                }
+            }
+            Stage::GroupSoak(soak) => match soak_frame(soak, host) {
+                Ok(false) => {}
+                Ok(true) => {
+                    host.platform.log("TRINO_STEP:quality bench\n");
+                    let before = (host.renderer.render_scale(), host.renderer.msaa());
+                    let bench = host.renderer.bench_begin(
+                        &trino_core::PresetTable::BUILT_IN,
+                        trino_platform_web::BENCH_TARGET_US,
+                        trino_platform_web::BENCH_BUDGET,
+                        true,
+                    );
+                    self.stage = Stage::Bench(Box::new(BenchRun {
+                        bench,
+                        last: None,
+                        before,
+                    }));
+                }
+                Err(e) => self.fail(e),
+            },
             Stage::Bench(b) => {
                 let now = host.platform.now_micros();
                 let interval = b.last.map(|t| (now - t).min(u32::MAX as u64) as u32);
@@ -186,15 +367,7 @@ impl Run {
                         ));
                     } else {
                         host.platform.log("TRINO_STEP:audio codecs\n");
-                        self.stage = Stage::Audio(Box::new(AudioRun {
-                            step: castle64::selftest::AudioCodecs::new(),
-                            waiting_since: None,
-                            smooth: 0,
-                            frames: 0,
-                            started: None,
-                            last: 0,
-                            max_gap: 0,
-                        }));
+                        self.stage = Stage::Audio(Box::new(AudioRun::new()));
                     }
                 }
             }

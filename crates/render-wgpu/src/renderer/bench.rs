@@ -1,4 +1,4 @@
-//! The auto-detect bench (issue #55, ADR 0022 §2): a short, fixed 3D scene
+//! The auto-detect bench (issue #55, ADR 0023 §2): a short, fixed 3D scene
 //! drawn at each preset, Low first, on the renderer the game will use.
 //!
 //! The scene is a typical native frame: 64 lit spheres (~100k triangles)

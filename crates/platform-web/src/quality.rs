@@ -1,4 +1,4 @@
-//! The quality a page runs with (issue #55, ADR 0022): the PC's presets,
+//! The quality a page runs with (issue #55, ADR 0023): the PC's presets,
 //! start and requests ([`trino_render_wgpu::quality`]) on the Web.
 //!
 //! - **Start:** `?quality=<preset>|auto` forced for the run, else the

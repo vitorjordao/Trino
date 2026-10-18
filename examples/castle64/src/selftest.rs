@@ -2142,3 +2142,275 @@ pub fn log_quality(platform: &mut dyn Platform, q: &QualityReport) {
     );
     platform.log(line.as_str());
 }
+
+// ---------------------------------------------------------------------------
+// Asset groups (issue #56): `Platform::load_group` / `unload_group`.
+
+/// `[groups.selftest_level]`: the card, its texture and a blob.
+pub const LEVEL: trino_core::GroupId = trino_core::GroupId::from_name("selftest_level");
+/// `[groups.selftest_level2]`: the same texture (shared), a sound and a
+/// blob of its own (the N64 compresses it at level 2: aPLib).
+pub const LEVEL2: trino_core::GroupId = trino_core::GroupId::from_name("selftest_level2");
+pub const LEVEL_TILE: SpriteId = SpriteId::from_path("sprites/selftest_level_tile");
+pub const LEVEL_CARD: ModelId = ModelId::from_path("models/selftest_level_card");
+pub const LEVEL_BLOB: BlobId = BlobId::from_path("blobs/selftest_level");
+pub const LEVEL_BLOB_CONTENT: &[u8] = b"trino-group-ok\n";
+pub const LEVEL2_BLOB: BlobId = BlobId::from_path("blobs/selftest_level2");
+
+/// What the `asset groups` check drives: the backends and the host's loader
+/// (`trino_runner_pc::GroupLoader::pump` on the PC, the console hosts' own
+/// pump), one call per frame, before the game's update.
+pub trait GroupHost {
+    fn parts(&mut self) -> (&mut dyn Renderer, &mut dyn Platform);
+    fn pump(&mut self);
+    /// How far the heap may sit above its baseline after an unload: what
+    /// the backend's own bookkeeping grows by while frames go by (the
+    /// consoles: none to speak of; wgpu's trackers grow a few KB per
+    /// thousand frames even without loads).
+    fn heap_tolerance(&self) -> u32 {
+        8 * 1024
+    }
+}
+
+/// Frames a group may take to load before the check gives up.
+const LOAD_FRAMES: u32 = 600;
+
+/// One frame as a game's loading screen draws it: a bar of `percent`, the
+/// host's loader step first.
+fn loading_frame(host: &mut dyn GroupHost, percent: u8) {
+    host.pump();
+    let (renderer, _) = host.parts();
+    let caps = *renderer.caps();
+    let (w, h) = (caps.screen_width as f32, caps.screen_height as f32);
+    renderer.begin_frame(Color::BLACK);
+    let full = w * 0.6;
+    renderer.fill_rect(
+        Rect::new(w * 0.2, h * 0.5, full, 8.0),
+        Color::rgb(60, 60, 60),
+    );
+    let done = full * percent as f32 / 100.0;
+    renderer.fill_rect(
+        Rect::new(w * 0.2, h * 0.5, done, 8.0),
+        Color::rgb(80, 220, 120),
+    );
+    renderer.end_frame();
+}
+
+/// Load `group` behind a loading bar: progress never goes back, and it ends
+/// `Ready` within [`LOAD_FRAMES`]. Returns the frames it took.
+fn load_until_ready(
+    host: &mut dyn GroupHost,
+    group: trino_core::GroupId,
+) -> Result<u32, &'static str> {
+    let mut last = 0u8;
+    for frame in 0..LOAD_FRAMES {
+        let state = host.parts().1.load_group(group);
+        match state {
+            trino_core::LoadState::Ready => return Ok(frame),
+            trino_core::LoadState::Failed => return Err("asset groups: a group failed to load"),
+            trino_core::LoadState::Loading { progress } => {
+                if progress < last {
+                    return Err("asset groups: load progress went back");
+                }
+                last = progress;
+                loading_frame(host, progress);
+            }
+            trino_core::LoadState::Unloaded => {
+                return Err("asset groups: load_group left the group unloaded");
+            }
+        }
+    }
+    Err("asset groups: a group never got ready")
+}
+
+/// Draw the level's tile (8x: 128x128, its four quadrants) and card; the
+/// frame's `not_loaded` count and, where `read_pixel` works, the tile's
+/// top-left quadrant (red) or `None`.
+fn draw_level(host: &mut dyn GroupHost) -> (u32, Option<Color>) {
+    let (renderer, _) = host.parts();
+    let caps = *renderer.caps();
+    let (w, h) = (caps.screen_width as f32, caps.screen_height as f32);
+    let tile = SpriteParams {
+        scale: Vec2::new(8.0, 8.0),
+        ..SpriteParams::DEFAULT
+    };
+    let camera = Camera3 {
+        eye: Vec3::new(0.0, 0.0, -3.0),
+        target: Vec3::ZERO,
+        fov_y: 60.0 * core::f32::consts::PI / 180.0,
+    };
+    let mut not_loaded = 0;
+    // Several identical frames: the 3DS LCD is double-buffered.
+    for _ in 0..3 {
+        renderer.begin_frame(Color::BLACK);
+        renderer.set_camera(&camera);
+        renderer.set_light(&DEFAULT_LIGHT);
+        renderer.draw_model(
+            LEVEL_CARD,
+            &Transform3 {
+                position: Vec3::new(1.2, 0.0, 0.0),
+                ..Transform3::default()
+            },
+            Material::VertexLit,
+            &ModelParams::DEFAULT,
+        );
+        renderer.draw_sprite(LEVEL_TILE, Vec2::new(w * 0.5 - 64.0, h * 0.5 - 64.0), &tile);
+        renderer.end_frame();
+        not_loaded = renderer.stats().not_loaded;
+    }
+    let probe = renderer.read_pixel((w * 0.5 - 32.0) as u32, (h * 0.5 - 32.0) as u32);
+    (not_loaded, probe)
+}
+
+fn is_red(c: Option<Color>) -> bool {
+    c.is_none_or(|c| c.r > 200 && c.g < 60 && c.b < 60)
+}
+
+/// The heap a backend reports (0 where it doesn't count).
+fn heap_used(host: &mut dyn GroupHost) -> u32 {
+    host.parts().1.memory().heap_used
+}
+
+/// What the `asset groups` step measured, for its log line.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct GroupReport {
+    /// Frames the first load took (behind the loading bar).
+    pub load_frames: u32,
+    /// Bytes the level's assets took (`MemoryReport::assets`).
+    pub level_bytes: u32,
+    /// Heap after the warm-up unload, and the most it was above that after
+    /// any later unload.
+    pub heap_baseline: u32,
+    pub heap_drift: u32,
+    /// Load/unload cycles of the soak, and its frames.
+    pub cycles: u32,
+    pub soak_frames: u32,
+}
+
+/// Asset groups end to end: an unloaded group's assets don't draw (counted
+/// as `not_loaded`, never a crash) and its blob isn't there; `load_group`
+/// reaches `Ready` behind a loading bar with progress that never goes back;
+/// its sprite, card and blob are there and its bytes count in `memory()`;
+/// a texture two groups share stays while either is loaded; an unloaded
+/// group frees its memory (the heap back within the host's tolerance of the
+/// warm-up baseline); an unknown group fails. Then `soak_frames` frames of
+/// load/unload cycles (fragmentation): the heap never drifts from the
+/// baseline and the group still loads at the end.
+pub fn asset_groups(
+    host: &mut dyn GroupHost,
+    soak_frames: u32,
+) -> Result<GroupReport, &'static str> {
+    let tolerance = host.heap_tolerance();
+    let mut report = GroupReport::default();
+    let unknown = trino_core::GroupId::from_name("selftest_no_such_group");
+    {
+        let (_, platform) = host.parts();
+        if platform.load_group(trino_core::GroupId::BOOT) != trino_core::LoadState::Ready {
+            return Err("asset groups: boot is not ready");
+        }
+        if platform.group_state(LEVEL) != trino_core::LoadState::Unloaded {
+            return Err("asset groups: the level group is not in this build (or loaded at boot)");
+        }
+        if platform.group_blob(LEVEL_BLOB).is_some() {
+            return Err("asset groups: an unloaded group's blob is there");
+        }
+        if platform.load_group(unknown) != trino_core::LoadState::Failed {
+            return Err("asset groups: an unknown group did not fail");
+        }
+    }
+    let (missing, _) = draw_level(host);
+    if missing < 2 {
+        return Err("asset groups: an unloaded group's draws were not counted as not_loaded");
+    }
+    let before = host.parts().1.memory();
+    report.load_frames = load_until_ready(host, LEVEL)?;
+    let after = host.parts().1.memory();
+    report.level_bytes = after.assets().saturating_sub(before.assets());
+    if report.level_bytes == 0 {
+        return Err("asset groups: the loaded group's assets are not counted in memory()");
+    }
+    if host.parts().1.group_blob(LEVEL_BLOB) != Some(LEVEL_BLOB_CONTENT) {
+        return Err("asset groups: the group's blob is missing or wrong");
+    }
+    let (missing, probe) = draw_level(host);
+    if missing != 0 {
+        return Err("asset groups: a ready group's assets did not draw");
+    }
+    if !is_red(probe) {
+        return Err("asset groups: the group's sprite drew the wrong color");
+    }
+    // The shared texture survives the first group's unload.
+    load_until_ready(host, LEVEL2)?;
+    if host.parts().1.group_blob(LEVEL2_BLOB) != Some(LEVEL_BLOB_CONTENT) {
+        return Err("asset groups: the second group's blob is missing or wrong");
+    }
+    host.parts().1.unload_group(LEVEL);
+    if host.parts().1.group_state(LEVEL) != trino_core::LoadState::Unloaded {
+        return Err("asset groups: unload_group left the group loaded");
+    }
+    host.pump();
+    if host.parts().1.group_blob(LEVEL_BLOB).is_some() {
+        return Err("asset groups: an unloaded group's blob is still there");
+    }
+    let (missing, probe) = draw_level(host);
+    if missing != 1 || !is_red(probe) {
+        return Err("asset groups: a texture both groups hold went with the first unload");
+    }
+    host.parts().1.unload_group(LEVEL2);
+    host.pump();
+    let (missing, _) = draw_level(host);
+    if missing < 2 {
+        return Err("asset groups: the last unload left the shared texture loaded");
+    }
+    let freed = host.parts().1.memory();
+    if freed.assets() != before.assets() {
+        return Err("asset groups: memory() still counts an unloaded group's assets");
+    }
+    // Warm-up done: everything the backends keep around exists now.
+    loading_frame(host, 100);
+    report.heap_baseline = heap_used(host);
+    // The soak: what a game does between levels, one frame at a time (each
+    // frame pumps the loader and draws, as a loading screen would).
+    let mut cycle_frames = 0u32;
+    while cycle_frames < soak_frames {
+        let state = host.parts().1.load_group(LEVEL);
+        match state {
+            trino_core::LoadState::Ready => {
+                host.parts().1.unload_group(LEVEL);
+                loading_frame(host, 100);
+                report.cycles += 1;
+                let drift = heap_used(host).saturating_sub(report.heap_baseline);
+                report.heap_drift = report.heap_drift.max(drift);
+                if drift > tolerance {
+                    return Err("asset groups: the heap grows over load/unload cycles");
+                }
+            }
+            trino_core::LoadState::Loading { progress } => loading_frame(host, progress),
+            _ => return Err("asset groups: a group failed during the soak"),
+        }
+        cycle_frames += 1;
+    }
+    report.soak_frames = cycle_frames;
+    // After the soak (a fragmented heap would fail here) the group loads.
+    load_until_ready(host, LEVEL)?;
+    host.parts().1.unload_group(LEVEL);
+    loading_frame(host, 100);
+    if heap_used(host).saturating_sub(report.heap_baseline) > tolerance {
+        return Err("asset groups: the heap did not return to its baseline after unload");
+    }
+    Ok(report)
+}
+
+/// The `asset groups` step's log line.
+pub fn log_groups(platform: &mut dyn Platform, r: &GroupReport) {
+    let mut line = TextBuf::<160>::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut line,
+        format_args!(
+            "TRINO_STEP:asset groups ok load_frames={} level_bytes={} heap_baseline={} \
+             heap_drift={} cycles={} soak_frames={}\n",
+            r.load_frames, r.level_bytes, r.heap_baseline, r.heap_drift, r.cycles, r.soak_frames
+        ),
+    );
+    platform.log(line.as_str());
+}

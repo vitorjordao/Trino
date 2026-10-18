@@ -2,11 +2,17 @@
 //! sprites and audio as a searchable tile grid with rendered thumbnails.
 //! Click to inspect, double-click to add to the scene, drag onto a view to
 //! place it where you drop.
+//!
+//! Asset groups (issue #56): the chips above the grid filter it by group;
+//! dropping a tile on a chip puts the asset in that group, and its context
+//! menu toggles each group — the manifest's `groups` line, what `cargo
+//! xtask assets group` writes. A tile outside boot shows its group.
 
 use eframe::egui::{self, Color32, CornerRadius, Pos2, Rect, RichText, Sense, Stroke, Vec2};
 
 use crate::app::{App, AssetSel, Cmd};
 use crate::dialogs::Dialog;
+use crate::groups::GroupDrag;
 use crate::theme::{self, c, icon};
 use crate::viewport::AssetPayload;
 
@@ -22,6 +28,9 @@ pub enum AssetTab {
 
 struct Tile {
     sel: Option<AssetSel>,
+    /// The manifest asset it is (groups edit it); `None` for prefabs and
+    /// materials, whose assets are what groups hold.
+    logical: Option<String>,
     payload: Option<AssetPayload>,
     name: String,
     sub: String,
@@ -100,8 +109,82 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
     if !one_row {
         ui.horizontal(|ui| search_row(app, ui));
     }
-    ui.add_space(6.0);
+    group_bar(app, ui);
+    ui.add_space(4.0);
     grid(app, ui);
+}
+
+/// The group chips: click to filter the grid, drop a tile to move the
+/// asset there, and a field to declare a new group.
+fn group_bar(app: &mut App, ui: &mut egui::Ui) {
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 3.0;
+        ui.label(
+            RichText::new(format!("{} Groups", icon::STACK))
+                .size(11.5)
+                .color(c::TEXT_FAINT),
+        );
+        let mut chips: Vec<(Option<String>, String)> = vec![(None, "All".into())];
+        for g in &app.groups.names {
+            chips.push((Some(g.clone()), format!("{g} {}", app.groups.count(g))));
+        }
+        for (group, text) in chips {
+            let on = app.groups.filter == group;
+            let dragging = group.is_some()
+                && (egui::DragAndDrop::has_payload_of_type::<AssetPayload>(ui.ctx())
+                    || egui::DragAndDrop::has_payload_of_type::<GroupDrag>(ui.ctx()));
+            let mut b = egui::Button::new(RichText::new(&text).size(11.5).color(if on {
+                Color32::WHITE
+            } else {
+                c::TEXT_WEAK
+            }))
+            .min_size(Vec2::new(0.0, 22.0))
+            .corner_radius(CornerRadius::same(99));
+            b = if on {
+                b.fill(c::ACCENT_SOFT)
+            } else if dragging {
+                b.fill(c::BG3).stroke(Stroke::new(1.0, c::ACCENT))
+            } else {
+                b.frame_when_inactive(false)
+            };
+            let resp = ui.add(b);
+            let resp = match &group {
+                Some(g) => resp.on_hover_text(format!(
+                    "Show `{g}`'s assets · drop an asset here to put it in `{g}`"
+                )),
+                None => resp.on_hover_text("Every asset"),
+            };
+            if resp.clicked() {
+                app.groups.filter = group.clone();
+            }
+            let Some(g) = group else { continue };
+            let dropped = resp
+                .dnd_release_payload::<AssetPayload>()
+                .and_then(|p| crate::groups::payload_logical(&p).map(String::from))
+                .or_else(|| resp.dnd_release_payload::<GroupDrag>().map(|d| d.0.clone()));
+            if let Some(logical) = dropped {
+                app.cmds.push(Cmd::SetAssetGroups(logical, vec![g]));
+            }
+        }
+        ui.add_space(4.0);
+        let field = ui.add(
+            egui::TextEdit::singleline(&mut app.groups.new_name)
+                .hint_text("new group")
+                .desired_width(84.0),
+        );
+        let name = app.groups.new_name.trim().to_string();
+        let valid = trino_asset_pipeline::manifest::edit::valid_name(&name)
+            && !app.groups.names.contains(&name);
+        let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        let add = ui
+            .add_enabled(valid, egui::Button::new(icon::PLUS).small())
+            .on_hover_text("Declare the group ([groups.<name>] in the manifest)")
+            .on_disabled_hover_text("lowercase letters, digits, - and _; not taken");
+        if valid && (add.clicked() || enter) {
+            app.cmds.push(Cmd::AddGroup(name));
+            app.groups.new_name.clear();
+        }
+    });
 }
 
 /// The search box and the tab's "new" button.
@@ -144,6 +227,7 @@ fn grid(app: &mut App, ui: &mut egui::Ui) {
         AssetTab::Models => {
             for m in app.project.models.values() {
                 tiles.push(Tile {
+                    logical: Some(m.logical.clone()),
                     sel: Some(AssetSel::Model(m.logical.clone())),
                     payload: Some(AssetPayload::Model(m.logical.clone())),
                     name: m.name.clone(),
@@ -170,6 +254,7 @@ fn grid(app: &mut App, ui: &mut egui::Ui) {
                 let mut parts = 0;
                 count(&p.root, &mut parts);
                 tiles.push(Tile {
+                    logical: None,
                     sel: Some(AssetSel::Prefab(l.clone())),
                     payload: Some(AssetPayload::Prefab(l.clone())),
                     name: l.trim_start_matches("prefabs/").to_string(),
@@ -184,6 +269,7 @@ fn grid(app: &mut App, ui: &mut egui::Ui) {
         AssetTab::Materials => {
             for (l, d) in &app.lib.materials {
                 tiles.push(Tile {
+                    logical: None,
                     sel: Some(AssetSel::Material(l.clone())),
                     payload: None,
                     name: l.trim_start_matches("materials/").to_string(),
@@ -198,6 +284,7 @@ fn grid(app: &mut App, ui: &mut egui::Ui) {
         AssetTab::Sprites => {
             for s in app.project.sprites.values() {
                 tiles.push(Tile {
+                    logical: Some(s.logical.clone()),
                     sel: Some(AssetSel::Sprite(s.logical.clone())),
                     payload: Some(AssetPayload::Sprite(s.logical.clone())),
                     name: s.logical.trim_start_matches("sprites/").to_string(),
@@ -212,6 +299,7 @@ fn grid(app: &mut App, ui: &mut egui::Ui) {
         AssetTab::Particles => {
             for (name, d) in &app.particles {
                 tiles.push(Tile {
+                    logical: Some(format!("particles/{name}")),
                     sel: Some(AssetSel::Particles(name.clone())),
                     payload: None,
                     name: name.clone(),
@@ -232,6 +320,7 @@ fn grid(app: &mut App, ui: &mut egui::Ui) {
                 .chain(app.project.music.iter().map(|s| (s, true)))
             {
                 tiles.push(Tile {
+                    logical: Some(l.clone()),
                     sel: Some(AssetSel::Audio(l.clone())),
                     payload: None,
                     name: l.rsplit('/').next().unwrap_or(l).to_string(),
@@ -253,20 +342,33 @@ fn grid(app: &mut App, ui: &mut egui::Ui) {
         }
     }
     tiles.retain(|t| needle.is_empty() || t.name.to_lowercase().contains(&needle));
+    if app.groups.filter.is_some() {
+        tiles.retain(|t| t.logical.as_deref().is_some_and(|l| app.groups.shows(l)));
+    }
 
     if tiles.is_empty() {
-        let (title, hint) = match app.assets_tab {
-            AssetTab::Prefabs => (
-                "No prefabs",
-                "Right-click an entity › Create prefab from this",
+        let (title, hint) = match (app.assets_tab, &app.groups.filter) {
+            (AssetTab::Prefabs | AssetTab::Materials, Some(_)) => (
+                "Not in groups",
+                "Groups hold the models and sprites prefabs and materials use",
             ),
-            AssetTab::Materials => ("No materials", "Press + to create one"),
-            AssetTab::Particles => ("No particle effects", "Press + to create one"),
-            AssetTab::Models => (
-                "No models",
-                "Press + for a fake object, or add a .glb to the manifest",
+            (_, Some(_)) => (
+                "Nothing in this group here",
+                "Drop an asset on the group's chip, or pick All",
             ),
-            _ => ("Nothing here", "Declare assets in assets/manifest.toml"),
+            _ => match app.assets_tab {
+                AssetTab::Prefabs => (
+                    "No prefabs",
+                    "Right-click an entity › Create prefab from this",
+                ),
+                AssetTab::Materials => ("No materials", "Press + to create one"),
+                AssetTab::Particles => ("No particle effects", "Press + to create one"),
+                AssetTab::Models => (
+                    "No models",
+                    "Press + for a fake object, or add a .glb to the manifest",
+                ),
+                _ => ("Nothing here", "Declare assets in assets/manifest.toml"),
+            },
         };
         theme::empty_state(ui, icon::FOLDER_OPEN, title, hint);
         return;
@@ -345,6 +447,27 @@ fn tile(app: &mut App, ui: &mut egui::Ui, t: &Tile, size: Vec2) {
             );
         }
     }
+    // Outside boot: the group it loads with.
+    let groups = t.logical.as_deref().map(|l| app.groups.of(l));
+    if let Some(g) = groups
+        .as_ref()
+        .filter(|g| !g.iter().any(|x| x == trino_asset_pipeline::groups::BOOT))
+    {
+        let text = if g.len() > 1 {
+            format!("{} +{}", g[0], g.len() - 1)
+        } else {
+            g[0].clone()
+        };
+        let galley = painter.layout_no_wrap(text, egui::FontId::proportional(9.5), Color32::WHITE);
+        let w = galley.size().x.min(img.width() - 12.0) + 8.0;
+        let pill = Rect::from_min_size(img.left_top() + Vec2::new(4.0, 4.0), Vec2::new(w, 14.0));
+        painter.rect_filled(pill, CornerRadius::same(99), c::ACCENT.gamma_multiply(0.85));
+        painter.with_clip_rect(pill.shrink(1.0)).galley(
+            pill.left_top() + Vec2::new(4.0, (14.0 - galley.size().y) * 0.5),
+            galley,
+            Color32::WHITE,
+        );
+    }
     if let Some(b) = t.badge {
         let p = img.right_top() + Vec2::new(-12.0, 12.0);
         painter.circle_filled(p, 10.0, c::BG1);
@@ -391,10 +514,13 @@ fn tile(app: &mut App, ui: &mut egui::Ui, t: &Tile, size: Vec2) {
     {
         app.cmds.push(Cmd::AddAsset(p.clone(), None));
     }
-    if resp.drag_started()
-        && let Some(p) = &t.payload
-    {
-        resp.dnd_set_drag_payload(p.clone());
+    if resp.drag_started() {
+        match (&t.payload, &t.logical) {
+            (Some(p), _) => resp.dnd_set_drag_payload(p.clone()),
+            // No scene to drop it in: a group chip still takes it.
+            (None, Some(l)) => resp.dnd_set_drag_payload(GroupDrag(l.clone())),
+            (None, None) => {}
+        }
     }
     if let Some(p) = &t.payload
         && resp.dragged()
@@ -417,7 +543,30 @@ fn tile(app: &mut App, ui: &mut egui::Ui, t: &Tile, size: Vec2) {
     }
     let payload = t.payload.clone();
     let sel = t.sel.clone();
+    let logical = t.logical.clone();
     resp.context_menu(|ui| {
+        if let (Some(l), Some(now)) = (&logical, &groups) {
+            ui.menu_button(format!("{}  Groups", icon::STACK), |ui| {
+                for g in app.groups.names.clone() {
+                    let mut on = now.contains(&g);
+                    if ui.checkbox(&mut on, &g).changed() {
+                        let mut next: Vec<String> =
+                            now.iter().filter(|x| **x != g).cloned().collect();
+                        if on {
+                            next.push(g.clone());
+                        }
+                        // Boot plus another group is boot: picking a
+                        // group drops boot, and boot alone resets.
+                        if on && g == trino_asset_pipeline::groups::BOOT {
+                            next = Vec::new();
+                        } else if on {
+                            next.retain(|x| x != trino_asset_pipeline::groups::BOOT);
+                        }
+                        app.cmds.push(Cmd::SetAssetGroups(l.clone(), next));
+                    }
+                }
+            });
+        }
         if let Some(p) = &payload
             && ui.button(format!("{}  Add to scene", icon::PLUS)).clicked()
         {

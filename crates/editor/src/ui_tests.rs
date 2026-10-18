@@ -1013,8 +1013,163 @@ fn editor_layout_is_clean_at_minimum_and_default_sizes() {
         h.state_mut().cmds.push(Cmd::FocusTab(Tab::Game));
         h.run_steps(3);
         crate::layout_audit::assert_clean(&h, size, true, &what("PC Game view"));
+        // Asset groups (issue #56): the Memory tab measured, the Assets
+        // panel's group chips, the scene settings' Asset groups.
+        h.state_mut().cmds.push(Cmd::FocusTab(Tab::Memory));
+        h.run_steps(3);
+        wait_for(&mut h, "the memory plans", |a| a.groups.measured());
+        crate::layout_audit::assert_clean(&h, size, true, &what("Memory tab"));
+        h.state_mut().cmds.push(Cmd::FocusTab(Tab::Assets));
+        h.state_mut().assets_tab = crate::panels::assets::AssetTab::Sprites;
+        h.state_mut().groups.filter = Some("selftest_level".into());
+        h.state_mut().cmds.push(Cmd::Select(None));
+        h.state_mut().inspect_focus = Some("groups".into());
+        h.run_steps(4);
+        crate::layout_audit::assert_clean(&h, size, true, &what("asset groups"));
+        h.state_mut().inspect_focus = None;
         leave_temp_project(&repo);
     }
+}
+
+/// Asset groups in the editor (issue #56), both ways: a model tile dropped
+/// on a group chip writes the manifest line `cargo xtask assets group`
+/// writes; the scene settings then say the scene draws what it would not
+/// load, until its `requires` takes the group (saved as text); a cell's
+/// groups toggle in its inspector; the Memory tab measures every console
+/// tier; and an agent's manifest edit shows in the chips at once.
+#[test]
+#[ignore = "changes cwd/env: run alone with --ignored --test-threads=1"]
+fn asset_groups_chips_requires_cells_and_memory() {
+    use crate::app::{Cmd, Tab};
+    use egui::accesskit::Role;
+    let Some((mut h, tmp, repo)) = temp_project_app(egui::vec2(1600.0, 940.0)) else {
+        return;
+    };
+    let manifest = tmp.path().join("assets/manifest.toml");
+    // The windmill (the showcase draws it) dropped on `selftest_level`.
+    h.state_mut().cmds.push(Cmd::FocusTab(Tab::Assets));
+    h.state_mut().assets_filter = "windmill".into();
+    h.run_steps(4);
+    // The Assets tile's name (the hierarchy has a `windmill` entity too).
+    let tile = assets_label(&h, "windmill").center() + egui::vec2(0.0, -40.0);
+    let chip = h.get_by_label("selftest_level 3").rect().center();
+    h.hover_at(tile);
+    h.run_steps(2);
+    h.drag_at(tile);
+    h.run_steps(1);
+    for i in 1..=6 {
+        h.hover_at(tile + (chip - tile) * (i as f32 / 6.0));
+        h.run_steps(1);
+    }
+    h.drop_at(chip);
+    h.run_steps(4);
+    let text = std::fs::read_to_string(&manifest).unwrap();
+    assert!(
+        manifest_table(&text, "[models.windmill]").contains("groups = [\"selftest_level\"]"),
+        "{}",
+        manifest_table(&text, "[models.windmill]")
+    );
+    assert_eq!(h.state().groups.of("models/windmill"), ["selftest_level"]);
+    assert!(
+        h.query_by_label("selftest_level 4").is_some(),
+        "the chip counts it"
+    );
+    // The chip filters the grid to the group.
+    h.state_mut().assets_filter.clear();
+    click(&mut h, "selftest_level 4");
+    assert_eq!(h.state().groups.filter.as_deref(), Some("selftest_level"));
+    let in_assets = |h: &Harness<'static, App>, l: &str| {
+        let groups = h.get_by_label_contains("Groups").rect();
+        h.query_all_by_label(l)
+            .any(|n| n.rect().min.y > groups.min.y && n.rect().min.x > groups.min.x - 12.0)
+    };
+    assert!(in_assets(&h, "windmill"));
+    assert!(!in_assets(&h, "crate"), "boot assets are filtered out");
+
+    // The scene settings: the showcase draws the windmill, which boot no
+    // longer loads...
+    h.state_mut().cmds.push(Cmd::Select(None));
+    h.state_mut().inspect_focus = Some("groups".into());
+    h.run_steps(4);
+    assert!(
+        h.query_by_label_contains("draws `models/windmill`")
+            .is_some(),
+        "the problem `assets check` reports"
+    );
+    // ...until the scene requires the group.
+    press(&mut h, Role::Button, "selftest_level");
+    h.run_steps(4);
+    assert_eq!(h.state().doc.scene.requires, ["boot", "selftest_level"]);
+    assert!(
+        h.query_by_label_contains("draws `models/windmill`")
+            .is_none()
+    );
+    h.state_mut().cmds.push(Cmd::Save);
+    h.run_steps(3);
+    let saved = std::fs::read_to_string(tmp.path().join("scenes/showcase.scene.ron")).unwrap();
+    assert!(saved.contains("version: 6"), "migrated on save");
+    assert!(
+        saved.contains("requires: [\n        \"boot\",\n        \"selftest_level\",\n    ],"),
+        "{}",
+        &saved[..400.min(saved.len())]
+    );
+    h.state_mut().inspect_focus = None;
+
+    // The Memory tab: every console tier, the scene's groups ticked.
+    h.state_mut().cmds.push(Cmd::FocusTab(Tab::Memory));
+    h.run_steps(3);
+    wait_for(&mut h, "the memory plans", |a| a.groups.measured());
+    for tier in ["N64 base", "N64 expanded", "3DS base", "3DS expanded"] {
+        assert!(h.query_by_label(tier).is_some(), "{tier}");
+    }
+    assert!(
+        h.query_all_by_label_contains(&format!("{} selftest_level", crate::theme::icon::CHECK))
+            .count()
+            >= 4,
+        "the scene's group is ticked on every tier"
+    );
+
+    // A cell's groups, in the interior scene.
+    h.state_mut()
+        .cmds
+        .push(Cmd::OpenScene(std::path::PathBuf::from(
+            "scenes/interior.scene.ron",
+        )));
+    h.run_steps(4);
+    let room = find(&h.state().doc.scene, "room-a");
+    h.state_mut().cmds.push(Cmd::Select(Some(room.clone())));
+    h.run_steps(4);
+    press(&mut h, Role::Button, "selftest_level2");
+    h.run_steps(3);
+    let cell = h.state().doc.scene.get(&room).unwrap().vis.clone();
+    assert_eq!(
+        cell,
+        Some(trino_scene::VisComponent::Cell {
+            size: [8.0, 4.0, 8.0],
+            groups: vec!["selftest_level2".into()],
+        })
+    );
+    assert!(
+        h.query_by_label("boot").is_none(),
+        "boot is always loaded: no chip for a cell"
+    );
+
+    // An agent declares a group: the chips follow.
+    let text = std::fs::read_to_string(&manifest).unwrap();
+    std::fs::write(&manifest, format!("{text}\n[groups.agent_level]\n")).unwrap();
+    h.run_steps(3);
+    assert!(h.state().groups.names.contains(&"agent_level".to_string()));
+    leave_temp_project(&repo);
+}
+
+/// The rect of the widget labeled `label` in the Assets panel, below and
+/// right of its "Groups" row (a hierarchy entity can share its name).
+fn assets_label(h: &Harness<'static, App>, label: &str) -> egui::Rect {
+    let groups = h.get_by_label_contains("Groups").rect();
+    h.query_all_by_label(label)
+        .map(|n| n.rect())
+        .find(|r| r.min.y > groups.min.y && r.min.x > groups.min.x - 12.0)
+        .unwrap_or_else(|| panic!("no `{label}` in Assets"))
 }
 
 /// Impostors from the Inspector, both ways: "Create and bake" on a model

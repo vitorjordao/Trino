@@ -1,4 +1,4 @@
-//! Quality presets on the PC renderer (issue #55, ADR 0022): the render
+//! Quality presets on the PC renderer (issue #55, ADR 0023): the render
 //! scale draws the 3D smaller and upscales it under a HUD that stays at the
 //! picture's resolution, dynamic resolution follows the measured frame
 //! time, the preset's AO caps the game's and its LOD bias scales the

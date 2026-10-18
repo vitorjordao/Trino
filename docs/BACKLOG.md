@@ -51,14 +51,15 @@ shipping a 3D game first**, then by cost:
   - Web audio in an AudioWorklet (#53 follow-up): streams schedule chunks 1 s ahead on
     the main thread, so a hidden tab runs dry after 1 s. A worklet needs a second wasm
     instance and a `SharedArrayBuffer` ring (COOP/COEP).
-  - Lazy asset bundles (#56): the page downloads every pack before the first frame.
+  - ~~Lazy asset bundles (#56)~~: **done** (ADR 0022): a group's bundle downloads the
+    first time the game loads it; the pack holds `boot` only.
   - `wasm-opt` on the release wasm (~4.5 MB before compression), and wasm threads
     (they need COOP/COEP from the host).
   - A real-device pass on Safari (macOS/iOS) and a phone GPU: CI runs Playwright's
     WebKit on WebGL2 only.
   - Pixel probes in the browser's `engine_checks`: no synchronous read-back, so they
     are `skipped` there (the goldens cover the pixels).
-- **Quality presets follow-ups (#55, ADR 0022)** (S–M each).
+- **Quality presets follow-ups (#55, ADR 0023)** (S–M each).
   - A temporal upscaler (FSR 2-style) once the renderer has motion vectors and jitter.
   - A bench scene from the game (a project-chosen scene) for games much heavier than
     the engine's.
@@ -156,7 +157,11 @@ shipping a 3D game first**, then by cost:
     - the Level tab;
     - Play here.
 11. **Scene streaming** (M). Load and unload TSCN chunks by portal cell or distance, for
-    levels larger than RDRAM.
+    levels larger than RDRAM. The base is in (#56, ADR 0022 §5): cells name asset groups
+    (scene v6) and `trino_core::CellGroups` streams them by visibility, verified on the
+    PC's real groups. Left: TSCN chunks per cell (the scene's nodes still load whole), a
+    distance trigger for exteriors, castle64's interior split into grouped rooms on the
+    consoles.
 12. **Audio**: Doppler and occlusion through portals, only if a game needs them. From
     #53 (ADR 0021 follow-ups): tracker music (XM/MOD; libdragon's `xm64`) on every target;
     Opus on the PC and the Web; stereo masters (mono today, stereo averaged); captions
@@ -214,7 +219,7 @@ shipping a 3D game first**, then by cost:
 
 ---
 
-## Done — quality presets for the PC and the Web: auto-detect, dynamic resolution, frame pacing, a Graphics page (2026-10-18, branch `feat/55-quality-presets`, GitHub #55, ADR 0022)
+## Done — quality presets for the PC and the Web: auto-detect, dynamic resolution, frame pacing, a Graphics page (2026-10-18, branch `feat/55-quality-presets`, GitHub #55, ADR 0023)
 
 | Item | Evidence |
 |---|---|
@@ -231,9 +236,39 @@ shipping a 3D game first**, then by cost:
 | `trino_core::GraphicsOptions` (the options page), castle64 on Select | `crates/core/tests/options.rs` (4 tests), `select_opens_the_graphics_page_where_the_host_offers_presets` |
 | Consoles stay fixed (Low; Medium on the New 3DS) | the `quality` self-test step on ares (both tiers) and Azahar (both models), `the_quality_step_reports_each_consoles_fixed_preset` |
 
-Deviations (ADR 0022): `shadows` and `post` are stored levels only until #57 and #64; the
+Deviations (ADR 0023): `shadows` and `post` are stored levels only until #57 and #64; the
 bench draws the engine's scene, not the game's; WebGL2 never gets MSAA; WebGPU hides the
 adapter's name, so the Web reports `gpu=unknown` there.
+
+## Done — asset groups, bundles, compression and a memory budget (2026-10-18, branch `feat/56-memory-loading`, GitHub #56, ADR 0022)
+
+| Item | Evidence |
+|---|---|
+| Groups in the manifest (`groups = [...]`, `[groups.<name>]`, `boot` = every earlier build), `TBND` bundles per group and platform, deduplicated | `membership_and_defaults`, `bundles_round_trip_and_dedup`, `bundle.rs` round trip and corrupt-bundle tests |
+| Compression: N64 `mkasset` levels 1–3 (+ `mksprite --compress`), LZ4 on the 3DS/PC/Web; `[groups.boot]` on the consoles (the 3DS packs `boot.tbnd`) | `a_compressed_boot_is_packed_on_the_3ds_and_compressed_in_place_on_the_n64`, `lz4.rs` tests; ares and Azahar boot castle64 and Solid Eleven compressed |
+| `Platform::load_group`/`unload_group`/`group_state`/`group_blob`/`memory`, time-sliced (`Caps::load_budget_us`) on every backend; 3DS decoding on the worker core | `group.rs` (9 tests), `asset_groups_load_draw_and_unload_on_pc`; the `asset groups` self-test step in ares (both paks), Azahar (both models), three browsers |
+| RAM plans per console tier (`[memory]`), strict mode, `TRINO_MEM`/`TRINO_HEAP` lines and the N64 heap watermark, `heap=` in `TRINO_FRAME` | `memory.rs` (4 tests), `strict_mode_stops_a_group_past_the_consoles_ram` |
+| Arenas (`FrameArena`, `Arena`, `LevelArena`), the N64 loader's locators off the heap; load/unload soaks | `mem.rs` (4 tests); soaks of 1 000 (N64), 600 (3DS), 10 000 (PC) frames, heap back within 8 KB on the consoles |
+| Scene v6: `requires`, cell groups, `CellGroups` streaming (BACKLOG P2 #11's base) | `crates/scene/tests/asset_groups.rs` (4 tests), `cell_groups_follow_the_view_and_linger`, `cells_stream_their_groups_on_pc` |
+| `cargo xtask assets report\|check\|group` (`--json`) | `xtask/tests/assets_cli.rs` (3 tests) |
+| Editor: group chips and drops in Assets, scene `Requires` with problems and budget, a cell's `Groups`, the Memory tab | `ui_tests::asset_groups_chips_requires_cells_and_memory`, the layout audit |
+
+Sizes with boot compressed (N64 level 1, 3DS LZ4):
+
+| | Before | After | |
+|---|---|---|---|
+| castle64 N64 ROM / DFS | 1 589 248 / 474 365 B | 1 441 792 / 326 296 B | −9.3% / −31.2% |
+| castle64 3DS `.3dsx` / RomFS | 1 299 988 / 494 863 B | 1 141 400 / 342 837 B | −12.2% / −30.7% |
+| Solid Eleven N64 ROM / DFS | 1 638 400 / 522 988 B | 1 523 712 / 411 759 B | −7.0% / −21.3% |
+| Solid Eleven 3DS `.3dsx` / RomFS | 1 474 356 / 531 202 B | 1 343 416 / 411 921 B | −8.9% / −22.5% |
+
+Boot RAM and the heap's peak are unchanged (castle64: 534 112 B of boot assets, peak
+2 144 584 B with the Expansion Pak).
+
+Deviations (ADR 0022): no zstd (LZ4 only off the N64); the PC and the Web keep `boot`
+uncompressed; PC/Web decoding stays on the main thread; live reload of a grouped asset
+waits for its group's next load; the Game view's budget overlay has no RAM line yet (the
+Memory tab has the numbers).
 
 ## Done — audio pipeline: a codec per platform, streaming, buses and ducking (2026-10-18, branch `feat/53-audio-pipeline`, GitHub #53, ADR 0021)
 

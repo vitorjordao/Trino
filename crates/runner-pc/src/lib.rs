@@ -59,6 +59,29 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
+mod groups;
+pub use groups::GroupLoader;
+
+/// The heap every host on this runner reports (`Platform::memory`,
+/// `TRINO_FRAME heap=`): the system allocator, counted. Off with
+/// `default-features = false` for a game that brings its own allocator.
+#[cfg(feature = "heap-stats")]
+#[global_allocator]
+pub static HEAP: trino_core::mem::Counting<std::alloc::System> =
+    trino_core::mem::Counting::new(std::alloc::System);
+
+/// [`HEAP`] for [`PcPlatform::set_heap`] (`None` without `heap-stats`).
+pub fn heap() -> Option<&'static dyn trino_core::mem::HeapStats> {
+    #[cfg(feature = "heap-stats")]
+    {
+        Some(&HEAP)
+    }
+    #[cfg(not(feature = "heap-stats"))]
+    {
+        None
+    }
+}
+
 use trino_core::{DisplayInfo, DisplaySettings, Game, Input, Renderer, Vec2};
 use trino_platform_pc::{PcAudio, PcInput, PcPlatform, PcRenderer, SimProfile};
 
@@ -159,9 +182,12 @@ pub fn picture_for(profile: SimProfile, output: (u32, u32), pixel_scale: u8) -> 
     }
 }
 
-/// Upload (or re-upload, `only` = changed handles) baked assets from
-/// `baked_dir`. Sounds are decoded and resampled to the device rate (music
-/// that streams stays encoded); the project's mix is applied.
+/// Upload (or re-upload, `only` = changed handles) the `boot` group's baked
+/// assets from `baked_dir` (every asset, without groups in the manifest;
+/// the others load through [`GroupLoader`]). Sounds are decoded and
+/// resampled to the device rate (music that streams stays encoded); the
+/// project's mix is applied. What each holds is counted in
+/// `platform.memory()`.
 pub fn upload_assets(
     baked_dir: &Path,
     renderer: &mut PcRenderer,
@@ -169,33 +195,58 @@ pub fn upload_assets(
     platform: &mut PcPlatform,
     only: Option<&[u32]>,
 ) -> Result<(), String> {
-    let assets = trino_asset_pipeline::load_dir(baked_dir, only)?;
+    use trino_core::bundle::MemoryCategory as C;
+    let assets = trino_asset_pipeline::load_boot(baked_dir, only)?;
     let target = sprite_platform(renderer);
+    let clamp = |v: u64| v.min(u32::MAX as u64) as u32;
+    // A re-upload replaces: take the old bytes off, count the new.
+    let count = |p: &mut PcPlatform, c: C, before: u64, after: u64| {
+        p.memory_mut().sub(c, clamp(before));
+        p.memory_mut().add(c, clamp(after));
+    };
     for sprite in assets.sprites {
+        let id = trino_core::SpriteId(sprite.id);
+        let before = renderer.sprite_bytes(id);
         upload_sprite(renderer, &sprite, target);
+        count(platform, C::Textures, before, renderer.sprite_bytes(id));
     }
-    for sound in assets.sounds {
-        audio
-            .upload_sound_blob(trino_core::SoundId(sound.id), &sound.blob)
-            .map_err(|e| format!("`{}`: {e}", sound.logical))?;
-    }
-    for track in assets.music {
-        audio
-            .upload_music_blob(trino_core::MusicId(track.id), &track.blob)
-            .map_err(|e| format!("`{}`: {e}", track.logical))?;
+    for (list, music) in [(assets.sounds, false), (assets.music, true)] {
+        for sound in list {
+            let before = audio.clip_bytes(sound.id, music) as u64;
+            let up = if music {
+                audio.upload_music_blob(trino_core::MusicId(sound.id), &sound.blob)
+            } else {
+                audio.upload_sound_blob(trino_core::SoundId(sound.id), &sound.blob)
+            };
+            up.map_err(|e| format!("`{}`: {e}", sound.logical))?;
+            let after = audio.clip_bytes(sound.id, music) as u64;
+            count(platform, C::Audio, before, after);
+        }
     }
     if let Some(mix) = &assets.mixer {
         let cfg = trino_core::MixerConfig::parse(mix).map_err(|e| format!("audio/mixer: {e}"))?;
         cfg.apply(audio);
     }
     for model in assets.models {
-        renderer.upload_mesh(trino_core::ModelId(model.id), model.tmdl);
+        let id = trino_core::ModelId(model.id);
+        let before = renderer.mesh_bytes(id) as u64;
+        let after = model.tmdl.len() as u64;
+        renderer.upload_mesh(id, model.tmdl);
+        count(platform, C::Meshes, before, after);
     }
     for font in assets.fonts {
-        renderer.upload_font(trino_core::FontId(font.id), font.table);
+        let id = trino_core::FontId(font.id);
+        let before = renderer.font_bytes(id) as u64;
+        let after = font.table.len() as u64;
+        renderer.upload_font(id, font.table);
+        count(platform, C::Data, before, after);
     }
     for blob in assets.blobs {
-        platform.insert_blob(trino_core::BlobId(blob.id), blob.bytes);
+        let id = trino_core::BlobId(blob.id);
+        let before = trino_core::Platform::blob(platform, id).map_or(0, |b| b.len() as u64);
+        let after = blob.bytes.len() as u64;
+        platform.insert_blob(id, blob.bytes);
+        count(platform, C::Data, before, after);
     }
     Ok(())
 }
@@ -365,6 +416,8 @@ struct Ctx {
     platform: PcPlatform,
     /// The `native` profile's quality (the consoles' is fixed).
     quality: Option<QualityHost>,
+    /// Serves `Platform::load_group` before every update.
+    groups: GroupLoader,
     game: Box<dyn Game>,
     last_frame: Instant,
     #[cfg(feature = "watch")]
@@ -419,6 +472,9 @@ impl Host {
         let mut platform =
             PcPlatform::new(&self.profile.caps().with_tier(tier)).with_save_file(cfg.save_file());
         platform.set_second_screen(renderer.second_screen().map(|s| (s.x as u16, s.y as u16)));
+        if let Some(h) = heap() {
+            platform.set_heap(h);
+        }
         trino_asset_pipeline::bake_all(
             &cfg.assets_dir(),
             trino_asset_pipeline::Platform::Pc,
@@ -433,6 +489,11 @@ impl Host {
             None,
         )
         .unwrap_or_else(|e| panic!("failed to load baked assets: {e}"));
+        let mut groups = GroupLoader::new(&cfg.baked_dir(), &renderer, &mut platform);
+        if let Some(plan) = GroupLoader::strict_plan(&cfg.assets_dir(), &renderer) {
+            groups = groups.with_plan(plan);
+            groups.check_boot();
+        }
         let audio_saved = load_audio_settings(&mut audio, &cfg.audio_file());
 
         #[cfg(feature = "watch")]
@@ -488,6 +549,7 @@ impl Host {
             input,
             platform,
             quality,
+            groups,
             game,
             last_frame: Instant::now(),
             #[cfg(feature = "watch")]
@@ -614,6 +676,8 @@ impl ApplicationHandler for Host {
                 let dt = (now - ctx.last_frame).as_secs_f32().min(0.1);
                 ctx.last_frame = now;
                 let input = ctx.input.poll();
+                ctx.groups
+                    .pump(&mut ctx.renderer, &mut ctx.audio, &mut ctx.platform);
                 ctx.game
                     .update_with(&mut ctx.platform, &input, &mut ctx.audio, dt);
                 ctx.game.render(&mut ctx.renderer);
@@ -632,6 +696,8 @@ impl ApplicationHandler for Host {
                     &trino_core::Renderer::stats(&ctx.renderer),
                     &ctx.renderer.pc_gpu_rejects(),
                 );
+                self.meter
+                    .record_memory(&trino_core::Platform::memory(&ctx.platform));
                 if let Some(max) = self.smoke_frames
                     && self.frames >= max
                 {

@@ -1,4 +1,4 @@
-//! Frame pacing (issue #55, ADR 0022 §4): the present mode a
+//! Frame pacing (issue #55, ADR 0023 §4): the present mode a
 //! [`FrameLimit`] asks for, and a sleep-based limiter for fixed caps.
 //!
 //! - `VSync` presents FIFO (the display's rate, no tearing).

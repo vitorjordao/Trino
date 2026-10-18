@@ -69,6 +69,8 @@ pub struct BakedEntry {
     pub ktx2: Option<String>,
     /// True if this bake changed the output bytes on disk.
     pub changed: bool,
+    /// The groups whose bundles hold it (issue #56); empty = `boot`.
+    pub groups: Vec<String>,
 }
 
 #[derive(Debug, Default)]
@@ -142,6 +144,7 @@ pub fn bake_all(
                 compressed: t.compressed,
                 ktx2: t.ktx2,
                 changed: changed || t.changed,
+                groups: Vec::new(),
             })
         })();
         match result {
@@ -209,6 +212,7 @@ pub fn bake_all(
                     compressed: None,
                     ktx2: None,
                     changed,
+                    groups: Vec::new(),
                 })
             })();
             match result {
@@ -244,6 +248,7 @@ pub fn bake_all(
                 compressed: None,
                 ktx2: None,
                 changed,
+                groups: Vec::new(),
             })
         })();
         match result {
@@ -279,6 +284,7 @@ pub fn bake_all(
                 compressed: None,
                 ktx2: None,
                 changed,
+                groups: Vec::new(),
             }))
         });
         match result {
@@ -319,6 +325,7 @@ pub fn bake_all(
                 compressed: None,
                 ktx2: None,
                 changed,
+                groups: Vec::new(),
             })
         })();
         match result {
@@ -365,6 +372,7 @@ pub fn bake_all(
                     compressed: t.compressed,
                     ktx2: t.ktx2,
                     changed: sprite_changed || t.changed,
+                    groups: Vec::new(),
                 },
                 BakedEntry {
                     logical: logical.clone(),
@@ -376,6 +384,7 @@ pub fn bake_all(
                     compressed: None,
                     ktx2: None,
                     changed: table_changed,
+                    groups: Vec::new(),
                 },
             ])
         })();
@@ -407,6 +416,7 @@ pub fn bake_all(
                 compressed: None,
                 ktx2: None,
                 changed,
+                groups: Vec::new(),
             })
         })();
         match result {
@@ -438,6 +448,7 @@ pub fn bake_all(
                 compressed: None,
                 ktx2: None,
                 changed,
+                groups: Vec::new(),
             })
         })();
         match result {
@@ -473,6 +484,7 @@ pub fn bake_all(
                 compressed: None,
                 ktx2: None,
                 changed,
+                groups: Vec::new(),
             })
         })();
         match result {
@@ -484,6 +496,11 @@ pub fn bake_all(
     if !errors.is_empty() {
         return Err(BakeError(errors));
     }
+
+    for e in &mut report.entries {
+        e.groups = manifest.bundles_of(&e.logical);
+    }
+    write_bundles(&manifest, platform, out_dir, &report).map_err(|e| BakeError(vec![e]))?;
 
     // index.toml: deterministic (BTreeMap iteration order), snapshot-testable.
     let mut index = String::from("version = 1\n");
@@ -501,11 +518,65 @@ pub fn bake_all(
         if let Some(k) = &e.ktx2 {
             index.push_str(&format!("ktx2 = \"{k}\"\n"));
         }
+        if !e.groups.is_empty() {
+            let names: Vec<String> = e.groups.iter().map(|g| format!("\"{g}\"")).collect();
+            index.push_str(&format!("groups = [{}]\n", names.join(", ")));
+        }
     }
     write_if_changed(&out_dir.join("index.toml"), index.as_bytes())
         .map_err(|e| BakeError(vec![e]))?;
 
     Ok(report)
+}
+
+/// `groups/<name>.tbnd` for every group but boot (issue #56): each entry's
+/// baked files, compressed as the group says. Bundles of groups that no
+/// longer exist are removed.
+fn write_bundles(
+    manifest: &Manifest,
+    platform: Platform,
+    out_dir: &Path,
+    report: &BakeReport,
+) -> Result<(), String> {
+    use trino_core::bundle::EntryKind as K;
+    let dir = out_dir.join("groups");
+    let mut keep = Vec::new();
+    for group in manifest.group_names().into_iter().skip(1) {
+        let mut b =
+            crate::groups::BundleBuilder::new(&group, manifest.compression(&group, platform)?);
+        for e in report.entries.iter().filter(|e| e.groups.contains(&group)) {
+            let read = |file: &str| {
+                let p = out_dir.join(file);
+                std::fs::read(&p).map_err(|err| format!("{}: {err}", p.display()))
+            };
+            let kind =
+                K::parse(e.kind).ok_or_else(|| format!("`{}`: kind {}", e.logical, e.kind))?;
+            b.add_inline(kind, e.id, None, &read(&e.file)?);
+            let variants = [
+                (K::SpritePreview3ds, &e.preview_3ds),
+                (K::SpriteBc, &e.compressed),
+                (K::SpriteKtx2, &e.ktx2),
+            ];
+            for (kind, file) in variants {
+                if let Some(f) = file {
+                    b.add_inline(kind, e.id, None, &read(f)?);
+                }
+            }
+        }
+        let file = format!("{group}.tbnd");
+        std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        write_if_changed(&dir.join(&file), &b.finish())?;
+        keep.push(file);
+    }
+    if let Ok(read) = std::fs::read_dir(&dir) {
+        for f in read.flatten() {
+            let name = f.file_name().to_string_lossy().into_owned();
+            if name.ends_with(".tbnd") && !keep.contains(&name) {
+                let _ = std::fs::remove_file(f.path());
+            }
+        }
+    }
+    Ok(())
 }
 
 /// A `TSPR` blob: magic, u32 width, u32 height, RGBA8.

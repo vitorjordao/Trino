@@ -24,7 +24,7 @@ Run modes and switches for `trino-app-pc`:
 | `TRINO_SIM=native\|n64\|3ds\|web` | Console simulation profile (default `n64`): internal resolution, filtering, color depth, the 3DS's two screens; `web` is the native picture with the browser's budget (`Caps::WEB`) |
 | `TRINO_SIM=n64x\|3dsnew` | A console's expanded hardware tier ([ADR 0020](adr/0020-console-hardware-tiers.md)): the N64 with the Expansion Pak or the New 3DS. The console's look, the tier's `Caps` (`renderer.caps().hw_tier`, RAM, cores, crowd/particle scales) and `Platform::hw_tier()`; `TRINO_SCENE` resolves the tier's variants |
 | `TRINO_LOOK=off\|n64` | Turns the N64 output emulation off or on, independently of the profile |
-| `TRINO_STRICT=1` | Strict mode: panic when content exceeds the profile's `Caps` (also the loaded models against the tier's `ram_bytes`: 4 MB N64, 8 MB with the Pak) |
+| `TRINO_STRICT=1` | Strict mode: panic when content exceeds the profile's `Caps` (also the loaded models against the tier's `ram_bytes`: 4 MB N64, 8 MB with the Pak), and when boot plus the loaded asset groups pass the console's RAM left for assets (`cargo xtask assets report`'s numbers, [ADR 0022](adr/0022-asset-groups-and-memory.md)): the panic names the groups, the overrun and the biggest assets |
 | `TRINO_SCENE=scenes/x.scene.ron` | Play an editor scene instead of the game; it reloads when the scene, its prefabs or materials change |
 | `TRINO_GAME=showcase` | Run `examples/showcase`, the demo scene exported to code |
 | `TRINO_SMOKE_FRAMES=N` | Exit after N frames (CI smoke runs) |
@@ -52,7 +52,7 @@ volumes persist per game in `<save_name>.audio` next to the save
 On the native profile (`TRINO_SIM=native`, a standalone project's PC build) the game runs
 at one of four presets — **Low**, **Medium**, **High**, **Ultra** — each a render scale,
 dynamic resolution, MSAA, AO, LOD bias, particle scale, anisotropy, sharpening and a
-frame limit ([ADR 0022](adr/0022-quality-presets.md)). High is the PC's look before
+frame limit ([ADR 0023](adr/0023-quality-presets.md)). High is the PC's look before
 presets; Ultra is High supersampled at 1.25×. The consoles' presets are fixed (N64 and
 3DS Low, New 3DS Medium) and change nothing there.
 
@@ -137,6 +137,13 @@ Things to know:
   eight code layouts). The self-test prints them as `TRINO_AUDIO_COST:` lines, and
   `TRINO_AUDIO:` with resident and streaming bytes and underruns (a poll that finds all
   four 40 ms output buffers empty: the game went ~160 ms without polling).
+- **Asset groups and RAM** ([ADR 0022](adr/0022-asset-groups-and-memory.md)): boot assets
+  load at boot, a group's from its `groups/<name>.tbnd` file list for 4 ms a frame
+  (`N64Assets::pump`). DFS files are compressed with libdragon's `mkasset` at each group's
+  level (`[groups.boot]` too; castle64 and Solid Eleven ship boot at level 1, 21–31 % off
+  the DFS), sprites by `mksprite --compress`; `asset_load` decodes as it reads. Boot logs
+  `TRINO_MEM: ram= heap_total= before_assets= boot_assets=`, and the self-test fails when
+  the heap's peak leaves less than 128 KB of libdragon's heap (`TRINO_HEAP:` lines).
 - Troubleshooting: the [build-n64](../.agents/skills/build-n64/SKILL.md) and
   [run-emulator](../.agents/skills/run-emulator/SKILL.md) skills.
 
@@ -196,6 +203,12 @@ Things to know:
   firmware (`sdmc:/3ds/dspfirm.cdc`, or launch through the Homebrew Launcher); without it
   ndsp does nothing and the log says `TRINO_AUDIO: ndsp unavailable`. Azahar runs without
   it.
+- **Asset groups and RAM** ([ADR 0022](adr/0022-asset-groups-and-memory.md)): a group's
+  textures, meshes, fonts and blobs are LZ4 entries in `groups/<name>.tbnd`, decoded on
+  the worker core four ahead while the main thread uploads for 6 ms a frame (its sounds stay
+  `T3AU` files beside it). `[groups.boot] compression = { 3ds = "lz4" }` packs boot the same
+  way into `groups/boot.tbnd`, decoded at boot. GPU memory of an unloaded asset is freed two
+  frames after its last draw. Boot logs the same `TRINO_MEM:` line as the N64.
 - Troubleshooting: the [build-3ds](../.agents/skills/build-3ds/SKILL.md) and
   [run-emulator](../.agents/skills/run-emulator/SKILL.md) skills.
 
@@ -233,7 +246,7 @@ The page picks the game and the look by its URL:
 | `?scale=N` | Integer pixel scale of the picture (default auto: about 300 lines) |
 | `?size=WxH` | A fixed canvas in CSS pixels (tests, screenshots); otherwise it fills the page |
 | `?msaa=0` | No 4× MSAA (WebGL2 never has it: it can't sample a multisampled depth) |
-| `?quality=low\|medium\|high\|ultra\|auto` | The quality preset for this visit, never stored ([ADR 0022](adr/0022-quality-presets.md)) |
+| `?quality=low\|medium\|high\|ultra\|auto` | The quality preset for this visit, never stored ([ADR 0023](adr/0023-quality-presets.md)) |
 | `?frames=N` | Stop after N frames and print a `TRINO_FRAME:` line (smoke runs) |
 | `?selftest` | The browser self-test (below) |
 | `?log` | A log panel under the canvas |
@@ -273,7 +286,9 @@ What a browser changes:
 - **Assets** come in one pack per game (`assets/trino.pak`, `assets/solid-eleven.pak`),
   fetched at boot. Textures are KTX2 (Basis Universal), transcoded at load to BC on
   desktops, ETC2 or ASTC on phones, RGBA8 elsewhere; sounds are `TSN2` (Vorbis by default)
-  and the project's mix rides along (pack TPAK v2; v1 packs still load).
+  and the project's mix rides along (pack TPAK v3: v3 names asset groups, whose bundles
+  sit beside the pack as `trino.<group>.tbnd` and download the first time the game loads
+  the group, ADR 0022; v1 and v2 packs still load).
 - **WebGL2's limits:** no MSAA, and wgpu's GL backend can't copy or `textureLoad` a
   depth texture, so the SSAO and the water read the depth through a nearest sampler and
   the water's depth copy is drawn (`renderer/depth_blit.rs`). The picture is the same:

@@ -124,7 +124,22 @@ pub struct N3dsRenderer {
     /// The batch's GPU water draws: drawn after its CPU triangles, before
     /// the CPU water (the ripple rings ride on top).
     pending_gpu_water: Vec<GpuWaterDraw>,
+    /// Frames begun, and what unloaded asset groups left (issue #56): freed
+    /// once the GPU is [`GRAVE_FRAMES`] frames past the last draw of it.
+    frame_no: u32,
+    grave: Vec<(u32, Grave)>,
 }
+
+/// GPU memory an unregistered asset held, waiting for the GPU to finish
+/// the frames that drew it.
+enum Grave {
+    Sprite(*mut c_void),
+    Mesh(*mut c_void),
+}
+
+/// Frames a freed asset waits: `begin_frame` waits for the previous
+/// frame's GPU work, so one is enough; two for the display transfer.
+const GRAVE_FRAMES: u32 = 2;
 
 /// One queued GPU water draw.
 struct GpuWaterDraw {
@@ -170,7 +185,62 @@ impl N3dsRenderer {
             pending_water_tex: Vec::new(),
             gpu_water_meshes: BTreeMap::new(),
             pending_gpu_water: Vec::new(),
+            frame_no: 0,
+            grave: Vec::new(),
         }
+    }
+
+    /// Forget a sprite (an unloaded group's): draws of it skip (counted in
+    /// `FrameStats::not_loaded`) and its texture is freed
+    /// [`GRAVE_FRAMES`] frames on. `false` when it wasn't loaded.
+    pub(crate) fn unregister(&mut self, id: u32) -> bool {
+        let Some(entry) = self.sprites.remove(&id) else {
+            return false;
+        };
+        self.grave.push((self.frame_no, Grave::Sprite(entry.ptr)));
+        true
+    }
+
+    /// Forget a mesh and its GPU copies (T&L, water), freed like
+    /// [`N3dsRenderer::unregister`]'s sprites.
+    pub(crate) fn unregister_mesh(&mut self, id: u32) -> bool {
+        if self.meshes.remove(&id).is_none() {
+            return false;
+        }
+        self.gpu_mesh_rejects.remove(&id);
+        let now = self.frame_no;
+        if let Some((ptr, _)) = self.gpu_meshes.remove(&id) {
+            self.grave.push((now, Grave::Mesh(ptr)));
+        }
+        if let Some(ptr) = self.gpu_water_meshes.remove(&id)
+            && !ptr.is_null()
+        {
+            self.grave.push((now, Grave::Mesh(ptr)));
+        }
+        true
+    }
+
+    /// Forget a font's glyph table (its atlas is a sprite, unregistered
+    /// on its own).
+    pub(crate) fn unregister_font(&mut self, id: u32) -> bool {
+        self.fonts.remove(&id).is_some()
+    }
+
+    /// Free what waited [`GRAVE_FRAMES`] frames. After `trino_frame_begin`,
+    /// before any draw of the frame.
+    #[cold]
+    fn bury(&mut self) {
+        let now = self.frame_no;
+        self.grave.retain(|(at, g)| {
+            if now.wrapping_sub(*at) < GRAVE_FRAMES {
+                return true;
+            }
+            match *g {
+                Grave::Sprite(ptr) => unsafe { ffi::trino_sprite_free(ptr) },
+                Grave::Mesh(ptr) => unsafe { ffi::trino_gpu_mesh_free(ptr) },
+            }
+            false
+        });
     }
 
     /// The current screen's size: what the T&L projects to.
@@ -601,6 +671,10 @@ impl Renderer for N3dsRenderer {
         self.wait_us = self
             .wait_us
             .wrapping_add(crate::runtime::now_us().wrapping_sub(t0));
+        self.frame_no = self.frame_no.wrapping_add(1);
+        if !self.grave.is_empty() {
+            self.bury();
+        }
     }
 
     fn second_screen(&self) -> Option<Vec2> {
@@ -646,6 +720,7 @@ impl Renderer for N3dsRenderer {
     fn draw_sprite(&mut self, sprite: SpriteId, pos: Vec2, params: &SpriteParams) {
         self.flush_model_batch();
         let Some(entry) = self.sprites.get(&sprite.0) else {
+            self.frame_stats.not_loaded += 1;
             return;
         };
         self.frame_stats.sprites += 1;
@@ -725,6 +800,7 @@ impl Renderer for N3dsRenderer {
         params: &ModelParams,
     ) {
         let Some((tmdl, layout)) = self.meshes.get(&model.0) else {
+            self.frame_stats.not_loaded += 1;
             return;
         };
         let mesh = Mesh::from_layout(tmdl, layout);
@@ -853,6 +929,7 @@ impl Renderer for N3dsRenderer {
 
     fn draw_billboard(&mut self, sprite: SpriteId, pos: Vec3, params: &BillboardParams) {
         let Some(entry) = self.sprites.get(&sprite.0) else {
+            self.frame_stats.not_loaded += 1;
             return;
         };
         let size = unsafe { ffi::trino_sprite_size(entry.ptr) };
@@ -881,6 +958,7 @@ impl Renderer for N3dsRenderer {
 
     fn draw_text(&mut self, font: FontId, pos: Vec2, text: &str, params: &TextParams) {
         let Some(entry) = self.fonts.get(&font.0).cloned() else {
+            self.frame_stats.not_loaded += 1;
             return;
         };
         if let Some(parsed) = entry.font() {

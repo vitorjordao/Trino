@@ -92,6 +92,8 @@ struct Ctx {
     platform: PcPlatform,
     /// The native profile's quality (#55; the consoles' is fixed).
     quality: Option<trino_runner_pc::QualityHost>,
+    /// Serves `Platform::load_group` before every update (issue #56).
+    groups: trino_runner_pc::GroupLoader,
     game: castle64::Castle64Game,
     /// `TRINO_SCENE` mode: play an editor scene instead of the game.
     player: Option<scene_player::ScenePlayer>,
@@ -159,6 +161,9 @@ impl App {
         // console's budget (an N64 profile gets the 2 KB EEPROM).
         let mut platform = PcPlatform::new(&self.profile.caps().with_tier(tier))
             .with_save_file(PathBuf::from("target/save/castle64.sav"));
+        if let Some(h) = trino_runner_pc::heap() {
+            platform.set_heap(h);
+        }
 
         // Bake + load. Dev-time convenience: the app always starts fresh.
         trino_asset_pipeline::bake_all(
@@ -169,6 +174,11 @@ impl App {
         .unwrap_or_else(|e| panic!("{e}"));
         upload_assets(&mut renderer, &mut audio, &mut platform, None)
             .expect("failed to load baked assets");
+        let mut groups = trino_runner_pc::GroupLoader::new(&baked_dir(), &renderer, &mut platform);
+        if let Some(plan) = trino_runner_pc::GroupLoader::strict_plan(&assets_root(), &renderer) {
+            groups = groups.with_plan(plan);
+            groups.check_boot();
+        }
 
         #[cfg(feature = "reload")]
         let (asset_events, watcher) = {
@@ -213,6 +223,7 @@ impl App {
             input: PcInput::new(),
             platform,
             quality,
+            groups,
             game,
             player,
             showcase,
@@ -269,6 +280,8 @@ impl ApplicationHandler for App {
                 ctx.last_frame = now;
 
                 let input = ctx.input.poll();
+                ctx.groups
+                    .pump(&mut ctx.renderer, &mut ctx.audio, &mut ctx.platform);
 
                 if let Some(player) = &mut ctx.player {
                     player.update(&input, dt);
@@ -312,6 +325,8 @@ impl ApplicationHandler for App {
                     &trino_core::Renderer::stats(&ctx.renderer),
                     &ctx.renderer.pc_gpu_rejects(),
                 );
+                self.meter
+                    .record_memory(&trino_core::Platform::memory(&ctx.platform));
                 if let Some(max) = self.smoke_frames
                     && self.frames >= max
                 {

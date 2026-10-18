@@ -323,6 +323,7 @@ mod tests {
             let mut room = Entity::new(name).at([x, 1.5, 2.0]);
             room.vis = Some(VisComponent::Cell {
                 size: [4.0, 3.0, 4.0],
+                groups: Vec::new(),
             });
             room.children.push(
                 Entity::new("lamp")

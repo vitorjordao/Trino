@@ -207,12 +207,18 @@ fn broken_scenes_resolve_with_warnings_instead_of_failing() {
     });
     scene.entities.push(door);
     let mut hall = Entity::new("hall");
-    hall.vis = Some(VisComponent::Cell { size: [4.0; 3] });
+    hall.vis = Some(VisComponent::Cell {
+        size: [4.0; 3],
+        groups: Vec::new(),
+    });
     scene.entities.push(hall);
     // More cells than the visibility mask holds (the hall is cell 0).
     for i in 0..64 {
         let mut c = Entity::new(format!("room{i}"));
-        c.vis = Some(VisComponent::Cell { size: [1.0; 3] });
+        c.vis = Some(VisComponent::Cell {
+            size: [1.0; 3],
+            groups: Vec::new(),
+        });
         scene.entities.push(c);
     }
 

@@ -93,6 +93,21 @@ impl N3dsAudio {
         self.music.insert(id, Self::clip(wav));
     }
 
+    /// Free a sound (an unloaded group's): the channels playing it stop.
+    /// `false` when it wasn't loaded.
+    pub(crate) fn unregister_sound(&mut self, id: u32) -> bool {
+        self.sounds.remove(&id).map(Self::free).is_some()
+    }
+
+    /// Free a music track like [`N3dsAudio::unregister_sound`].
+    pub(crate) fn unregister_music(&mut self, id: u32) -> bool {
+        self.music.remove(&id).map(Self::free).is_some()
+    }
+
+    fn free(clip: Clip) {
+        unsafe { ffi::trino_wav_free(clip.wav) }
+    }
+
     /// The project's mix (`audio/mixer`, baked from `assets/audio.toml`).
     pub(crate) fn apply_mixer(&mut self, bytes: &[u8]) {
         match MixerConfig::parse(bytes) {

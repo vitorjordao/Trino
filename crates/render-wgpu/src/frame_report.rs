@@ -5,7 +5,9 @@
 //! the rest stay on the CPU path, most common first).
 //!
 //! `apps/pc` and `trino-runner-pc` record every frame and print the line
-//! when a `TRINO_SMOKE_FRAMES` run ends. Since issue #55 the line also
+//! when a `TRINO_SMOKE_FRAMES` run ends. After `off_pc_gpu=` comes
+//! `heap=used/peak` (issue #56: the host's counting allocator,
+//! `Platform::memory`), as on the consoles. Since issue #55 the line also
 //! carries the 1% lows (`low1_us`: the mean of the slowest 1% of frames,
 //! `low1_fps` its rate) and, where the host set one, the quality in effect
 //! (`quality= scale= quality_from= detected= gpu_us=`).
@@ -32,6 +34,8 @@ pub struct FrameMeter {
     pc_gpu_tris: u64,
     instanced: u64,
     off: [u64; PcGpuReject::COUNT],
+    /// The last [`FrameMeter::record_memory`]: heap used and peak.
+    heap: (u32, u32),
     /// Every timed frame's µs (the 1% lows).
     samples: Vec<u32>,
     quality: Option<QualityNote>,
@@ -68,6 +72,7 @@ impl FrameMeter {
             pc_gpu_tris: 0,
             instanced: 0,
             off: [0; PcGpuReject::COUNT],
+            heap: (0, 0),
             samples: Vec::new(),
             quality: None,
         }
@@ -101,6 +106,11 @@ impl FrameMeter {
         s.sort_unstable_by(|a, b| b.cmp(a));
         let n = s.len().div_ceil(100);
         s[..n].iter().map(|v| *v as u64).sum::<u64>() / n as u64
+    }
+
+    /// The heap after a frame (`Platform::memory`): the line's `heap=`.
+    pub fn record_memory(&mut self, memory: &trino_core::MemoryReport) {
+        self.heap = (memory.heap_used, memory.heap_peak.max(self.heap.1));
     }
 
     /// One finished frame: its counters (`Renderer::stats`) and the draws
@@ -171,7 +181,7 @@ impl FrameMeter {
         };
         format!(
             "TRINO_FRAME:{scene} profile={profile} avg_us={avg} max_us={} frames={} fps={fps} \
-             draws={} tris={} pc_gpu_draws={} pc_gpu_tris={} instanced={} off_pc_gpu={off} \
+             draws={} tris={} pc_gpu_draws={} pc_gpu_tris={} instanced={} off_pc_gpu={off} {} \
              low1_us={low1} low1_fps={low1_fps}{quality}",
             self.max_us,
             self.frames,
@@ -180,6 +190,7 @@ impl FrameMeter {
             per(self.pc_gpu_draws),
             per(self.pc_gpu_tris),
             per(self.instanced),
+            trino_core::group::HeapField(self.heap.0, self.heap.1),
         )
     }
 }
@@ -205,6 +216,11 @@ mod tests {
         m.add(&stats, &off);
         off[PcGpuReject::Translucent.index()] = 0;
         m.add(&stats, &off);
+        m.record_memory(&trino_core::MemoryReport {
+            heap_used: 900,
+            heap_peak: 1200,
+            ..Default::default()
+        });
         let line = m.line("hub");
         assert!(
             line.starts_with("TRINO_FRAME:hub profile=native "),
@@ -213,13 +229,14 @@ mod tests {
         assert!(
             line.contains(
                 "frames=2 fps=0 draws=10 tris=300 pc_gpu_draws=7 pc_gpu_tris=120 instanced=4 \
-                 off_pc_gpu=water:1,translucent:1"
+                 off_pc_gpu=water:1,translucent:1 heap=900/1200"
             ),
             "{line}"
         );
         let empty = FrameMeter::new(SimProfile::N64).line("x");
         assert!(
-            empty.contains("profile=n64") && empty.ends_with("off_pc_gpu=- low1_us=0 low1_fps=0"),
+            empty.contains("profile=n64")
+                && empty.ends_with("off_pc_gpu=- heap=0/0 low1_us=0 low1_fps=0"),
             "{empty}"
         );
     }

@@ -52,6 +52,25 @@ in matching pairs and keep the restriction. Never call libdragon directly from R
   `<id>.x.blob` in the DFS). The ROM must boot and pass in 4 MB: `cargo xtask test n64
   --expansion-pak off` (CI runs `both`).
 
+## Asset groups and compression (issue #56, ADR 0022)
+
+- The bake routes each index line through `xtask/src/console_groups.rs`: boot lines stay
+  in `index.tsv`, a group's lines become `groups/<name>.tbnd` (a table of external
+  entries: the DFS file and, for sounds, its columns), named by a `<id> \t group \t
+  groups/<name>.tbnd` line.
+- Compression runs in the container after `mksprite`/`audioconv64`: `mkasset -c <level>
+  -w 256 -o <dir> <files>` in place (`n64_compress_script`), `.sprite` files skipped
+  (mksprite wrote them at `--compress <level>`), `.wav64` left alone. Levels 2/3 put
+  `<level> \t compression \t libdragon` lines first in the index; `src/assets.rs` calls
+  `trino_asset_init_compression` for them before any asset. `[groups.boot] compression =
+  { n64 = 1 }` compresses boot too (castle64 and Solid Eleven ship it).
+- Runtime: `N64Assets::pump` reads entries for `Caps::load_budget_us` (4 ms) through
+  `asset_load` / `sprite_load`, each locator in a `FrameArena` (no heap churn). Boot logs
+  `TRINO_MEM: ram= heap_total= before_assets= boot_assets=`; `check_heap` fails the
+  self-test when the heap's peak leaves < 128 KB (`TRINO_HEAP:` lines).
+- Sizes: `cargo xtask build n64` prints each group's entries, raw and stored KB; `cargo
+  xtask assets report` the RAM per tier.
+
 ## Console output conventions (keep PC in sync)
 
 - **16-bit output**: `trino_mode_standard()` sets magic-square RGB dither, and the VI

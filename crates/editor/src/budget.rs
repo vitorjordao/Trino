@@ -374,6 +374,35 @@ pub fn quality_line(q: &trino_core::QualitySettings, scale: f32) -> String {
     )
 }
 
+/// The HUD's assets RAM line (issue #56, ADR 0022 §6): what `loaded` (a
+/// scene's groups) holds of the RAM `plan`'s tier leaves for assets, as the
+/// Memory tab's bar says it: `N64 assets 289 KB / 1.8 MB RAM (15%)` (`label`:
+/// the target's). Near past 85 %, over past the budget (strict mode would
+/// panic).
+pub fn assets_ram_line(
+    label: &str,
+    plan: &trino_asset_pipeline::memory::MemoryPlan,
+    loaded: &[&str],
+) -> (String, Level) {
+    use trino_asset_pipeline::memory::show_bytes;
+    let used = plan.resident(loaded);
+    let budget = plan.budget();
+    let level = if used > budget {
+        Level::Over
+    } else if used * 100 > budget * 85 {
+        Level::Near
+    } else {
+        Level::Ok
+    };
+    let line = format!(
+        "{label} assets {} / {} RAM ({}%)",
+        show_bytes(used),
+        show_bytes(budget),
+        (used * 100).checked_div(budget).unwrap_or(100)
+    );
+    (line, level)
+}
+
 /// The Game view budget panel's width for its widest text line (`widest`
 /// px) in a view `view` px wide: the text plus its margins, at least
 /// [`HUD_MIN_WIDTH`], and never past the view (10 px off each side) unless
@@ -420,6 +449,32 @@ mod tests {
         assert_eq!(hud_width(260.0, 800.0), 276.0, "a long reason fits");
         assert_eq!(hud_width(600.0, 400.0), 380.0, "never past the view");
         assert_eq!(hud_width(600.0, 150.0), HUD_MIN_WIDTH, "a tiny view");
+    }
+
+    #[test]
+    fn the_assets_ram_line_follows_the_memory_plan() {
+        use super::{Level, assets_ram_line};
+        let assets = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets");
+        let mut plan = trino_asset_pipeline::memory::plan(
+            &assets,
+            trino_asset_pipeline::Platform::N64,
+            trino_core::HwTier::Base,
+        )
+        .unwrap();
+        let (line, level) = assets_ram_line("N64", &plan, &["boot"]);
+        assert_eq!(level, Level::Ok, "{line}");
+        assert!(
+            line.starts_with("N64 assets ") && line.contains(" / 1.8 MB RAM ("),
+            "{line}"
+        );
+        // A game that keeps more for itself leaves less for the assets.
+        let boot = plan.resident(&["boot"]);
+        plan.game = plan.ram - plan.reserve - boot - boot / 10;
+        assert_eq!(assets_ram_line("N64", &plan, &["boot"]).1, Level::Near);
+        plan.game = plan.ram - plan.reserve - boot / 2;
+        let (line, level) = assets_ram_line("N64", &plan, &["boot"]);
+        assert_eq!(level, Level::Over);
+        assert!(line.ends_with("(200%)"), "{line}");
     }
 
     use super::*;

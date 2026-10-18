@@ -1,4 +1,4 @@
-//! The render scale's targets and upscale pass (issue #55, ADR 0022 §3).
+//! The render scale's targets and upscale pass (issue #55, ADR 0023 §3).
 //!
 //! With a render scale other than 1 the native profile draws the frame's 3D
 //! (everything up to its last 3D draw) into [`SceneTargets`] at the scaled

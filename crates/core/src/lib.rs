@@ -21,15 +21,19 @@
 pub mod ao;
 pub mod asset;
 pub mod audio;
+pub mod bundle;
 pub mod caps;
 pub mod collide;
 pub mod entity;
 pub mod game;
+pub mod group;
 pub mod impostor;
 pub mod input;
 pub mod light;
+pub mod lz4;
 pub mod math;
 pub mod math3d;
+pub mod mem;
 pub mod memo;
 pub mod options;
 pub mod particles;
@@ -58,6 +62,7 @@ pub use caps::{Caps, CapsError, HwTier};
 pub use collide::{MoveResult, move_and_collide};
 pub use entity::{Entity, EntityId, EntityStore};
 pub use game::Game;
+pub use group::{GroupId, GroupTable, LoadState, MemoryReport};
 pub use impostor::Impostor;
 pub use input::{Button, Input, InputState, Key, KeySet, PointerButton};
 pub use light::{
@@ -89,5 +94,5 @@ pub use render3d::{
 pub use scene::{BakedScene, LodLevel, LodPick, Lods, SceneNode, Tags};
 pub use text::{BitmapFont, GlyphIndex, TextBuf};
 pub use tilemap::{TILE_SIZE, Tilemap, TilemapError};
-pub use vis::{Cells, MAX_CELLS, NO_CELL, Portal, VisVolume};
+pub use vis::{CellGroups, Cells, MAX_CELLS, NO_CELL, Portal, VisVolume};
 pub use water::{MAX_RIPPLES, Ripple, RippleBuffer, Water, WaterState, WaterTier};

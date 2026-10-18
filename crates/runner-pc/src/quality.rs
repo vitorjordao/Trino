@@ -1,4 +1,4 @@
-//! The quality a PC host runs with (issue #55, ADR 0022): the start
+//! The quality a PC host runs with (issue #55, ADR 0023): the start
 //! ([`trino_platform_pc::quality::start`]), the first launch's calibration,
 //! the game's requests, the frame cap and the player's file. Shared by
 //! [`crate::run`] and the repo's own `apps/pc`.

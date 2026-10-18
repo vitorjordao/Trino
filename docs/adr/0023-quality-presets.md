@@ -1,4 +1,4 @@
-# ADR 0022: Quality presets for the PC and the Web
+# ADR 0023: Quality presets for the PC and the Web
 
 Status: accepted (October 2026, GitHub #55). Every phase of the issue is implemented: the
 settings and presets in the core (§1), the calibration bench (§2), dynamic resolution

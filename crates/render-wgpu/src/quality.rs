@@ -1,4 +1,4 @@
-//! The quality settings of a PC or Web host (issue #55, ADR 0022): the
+//! The quality settings of a PC or Web host (issue #55, ADR 0023): the
 //! player's saved settings (the PC's `<save_name>.quality` file, the Web's
 //! `localStorage`), what the first launch starts with, Steam Deck
 //! detection, and the platform side of a game's

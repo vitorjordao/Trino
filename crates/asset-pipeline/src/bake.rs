@@ -6,6 +6,11 @@
 //!   sprite's 3DS format (`crate::texture`), written when that format is not
 //!   RGBA8. The PC's 3DS profile draws it instead (`preview_3ds` in the
 //!   index).
+//! - `<hash>.bc`: magic `TBCN`, u32 width, u32 height, u32 format
+//!   (`BcFormat::code`: 1, 3, 7), the blocks — written when the sprite's PC
+//!   format is BCn (`compressed` in the index). The PC's native profile
+//!   uploads it where the GPU samples BC; the `.sprite` master stays for
+//!   tools, the console profiles and GPUs without BC.
 //! - `<hash>.sound`:  magic `TSND`, u32 sample_rate, u32 frame count,
 //!   f32 mono samples.
 //!
@@ -47,6 +52,8 @@ pub struct BakedEntry {
     /// A sprite's 3DS preview file (PC bakes only, when its 3DS format
     /// loses something: `crate::texture::N3dsFormat::preview`).
     pub preview_3ds: Option<String>,
+    /// A sprite's BCn blocks (PC bakes only, when its PC format is BCn).
+    pub compressed: Option<String>,
     /// True if this bake changed the output bytes on disk.
     pub changed: bool,
 }
@@ -95,29 +102,32 @@ pub fn bake_all(
             continue;
         }
         let result = (|| -> Result<BakedEntry, String> {
-            let format = decl.format_for(&logical, platform)?;
             let source = resolve_source(assets_root, platform, &decl.file)?;
             let (w, h, rgba) = decode_png(&source)?;
-            // PC bakes RGBA8 regardless; console formats are converted by
-            // their platform bakers (Fase 4/5) — the format is validated for
-            // every platform *now* so errors surface before a console port.
+            // The PC keeps the master (tools and the console profiles draw
+            // it) plus its own BCn and the 3DS preview; a console bake here
+            // only decides the format (their bakers convert:
+            // `xtask/src/{n64,n3ds}.rs`).
             let file = format!("{id:08x}.sprite");
             let changed = write_if_changed(&out_dir.join(&file), &tspr(w, h, &rgba))?;
-            let (preview_3ds, preview_changed) = match platform {
-                Platform::Pc => {
-                    let n3ds = decl.format_for(&logical, Platform::N3ds)?;
-                    write_preview_3ds(out_dir, id, &n3ds, w, h, &rgba)?
-                }
-                _ => (None, false),
-            };
+            let t = bake_texture(
+                out_dir,
+                id,
+                &logical,
+                platform,
+                crate::texture::Source::Sprite,
+                &|p| decl.settings(p),
+                (w, h, &rgba),
+            )?;
             Ok(BakedEntry {
                 logical: logical.clone(),
                 id,
                 kind: "sprite",
                 file,
-                format,
-                preview_3ds,
-                changed: changed || preview_changed,
+                format: t.format,
+                preview_3ds: t.preview_3ds,
+                compressed: t.compressed,
+                changed: changed || t.changed,
             })
         })();
         match result {
@@ -159,6 +169,7 @@ pub fn bake_all(
                     file,
                     format: "F32_MONO".into(),
                     preview_3ds: None,
+                    compressed: None,
                     changed,
                 })
             })();
@@ -197,6 +208,7 @@ pub fn bake_all(
                 file,
                 format: "TMDL".into(),
                 preview_3ds: None,
+                compressed: None,
                 changed,
             })
         })();
@@ -214,7 +226,6 @@ pub fn bake_all(
             continue;
         }
         let result = (|| -> Result<Vec<BakedEntry>, String> {
-            let format = decl.format_for(&logical, platform)?;
             let source = resolve_source(assets_root, platform, &decl.file)?;
             let font = crate::font::bake_font(&source, decl)
                 .map_err(|e| format!("font `{logical}`: {e}"))?;
@@ -225,22 +236,25 @@ pub fn bake_all(
             let table_file = format!("{id:08x}.font");
             let sprite_changed = write_if_changed(&out_dir.join(&sprite_file), &atlas)?;
             let table_changed = write_if_changed(&out_dir.join(&table_file), &font.table)?;
-            let (preview_3ds, preview_changed) = match platform {
-                Platform::Pc => {
-                    let n3ds = decl.format_for(&logical, Platform::N3ds)?;
-                    write_preview_3ds(out_dir, id, &n3ds, font.width, font.height, &font.rgba)?
-                }
-                _ => (None, false),
-            };
+            let t = bake_texture(
+                out_dir,
+                id,
+                &logical,
+                platform,
+                crate::texture::Source::FontAtlas,
+                &|p| decl.settings(p),
+                (font.width, font.height, &font.rgba),
+            )?;
             Ok(vec![
                 BakedEntry {
                     logical: logical.clone(),
                     id,
                     kind: "sprite",
                     file: sprite_file,
-                    format,
-                    preview_3ds,
-                    changed: sprite_changed || preview_changed,
+                    format: t.format,
+                    preview_3ds: t.preview_3ds,
+                    compressed: t.compressed,
+                    changed: sprite_changed || t.changed,
                 },
                 BakedEntry {
                     logical: logical.clone(),
@@ -249,6 +263,7 @@ pub fn bake_all(
                     file: table_file,
                     format: "TFNT".into(),
                     preview_3ds: None,
+                    compressed: None,
                     changed: table_changed,
                 },
             ])
@@ -278,6 +293,7 @@ pub fn bake_all(
                 file,
                 format: "RAW".into(),
                 preview_3ds: None,
+                compressed: None,
                 changed,
             })
         })();
@@ -307,6 +323,7 @@ pub fn bake_all(
                 file,
                 format: "TPFX".into(),
                 preview_3ds: None,
+                compressed: None,
                 changed,
             })
         })();
@@ -340,6 +357,7 @@ pub fn bake_all(
                 file,
                 format: "TSCN".into(),
                 preview_3ds: None,
+                compressed: None,
                 changed,
             })
         })();
@@ -363,6 +381,9 @@ pub fn bake_all(
         if let Some(p) = &e.preview_3ds {
             index.push_str(&format!("preview_3ds = \"{p}\"\n"));
         }
+        if let Some(c) = &e.compressed {
+            index.push_str(&format!("compressed = \"{c}\"\n"));
+        }
     }
     write_if_changed(&out_dir.join("index.toml"), index.as_bytes())
         .map_err(|e| BakeError(vec![e]))?;
@@ -380,33 +401,64 @@ fn tspr(w: u32, h: u32, rgba: &[u8]) -> Vec<u8> {
     blob
 }
 
-/// Write `<id>.3ds.sprite`, what the 3DS samples from `format`, unless the
-/// format keeps every bit (RGBA8). Returns the file name and whether it
-/// changed.
-fn write_preview_3ds(
-    out_dir: &Path,
-    id: u32,
-    format: &str,
-    w: u32,
-    h: u32,
-    rgba: &[u8],
-) -> Result<(Option<String>, bool), String> {
-    let format = crate::texture::N3dsFormat::parse(format)
-        .ok_or_else(|| format!("unknown 3DS format `{format}`"))?;
-    if format == crate::texture::N3dsFormat::Rgba8 {
-        return Ok((None, false));
-    }
-    let file = format!("{id:08x}.3ds.sprite");
-    let changed = write_if_changed(
-        &out_dir.join(&file),
-        &tspr(w, h, &format.preview(w, h, rgba)),
-    )?;
-    Ok((Some(file), changed))
+/// A texture's bake on `platform`: the format it takes there, and on a
+/// PC bake its BCn file and 3DS preview.
+struct BakedTexture {
+    format: String,
+    preview_3ds: Option<String>,
+    compressed: Option<String>,
+    changed: bool,
 }
 
-pub(crate) fn decode_png(path: &Path) -> Result<(u32, u32, Vec<u8>), String> {
+fn bake_texture(
+    out_dir: &Path,
+    id: u32,
+    logical: &str,
+    platform: Platform,
+    source: crate::texture::Source,
+    settings: &dyn Fn(Platform) -> crate::texture::TextureSettings,
+    (w, h, rgba): (u32, u32, &[u8]),
+) -> Result<BakedTexture, String> {
+    let choose = |p: Platform| crate::texture::choose(p, logical, source, &settings(p), w, h, rgba);
+    let choice = choose(platform)?;
+    let mut t = BakedTexture {
+        format: choice.format,
+        preview_3ds: None,
+        compressed: None,
+        changed: false,
+    };
+    if platform != Platform::Pc {
+        return Ok(t);
+    }
+    if let Some(bc) = crate::texture::BcFormat::parse(&t.format) {
+        let file = format!("{id:08x}.bc");
+        let mut blob = b"TBCN".to_vec();
+        for v in [w, h, bc.code()] {
+            blob.extend_from_slice(&v.to_le_bytes());
+        }
+        blob.extend_from_slice(&bc.encode(w, h, rgba));
+        t.changed |= write_if_changed(&out_dir.join(&file), &blob)?;
+        t.compressed = Some(file);
+    }
+    // The 3DS format is decided on the PC too, so a bad one fails here
+    // before a console build, and the 3DS profile draws its result.
+    let n3ds =
+        crate::texture::N3dsFormat::parse(&choose(Platform::N3ds)?.format).expect("a 3DS format");
+    if n3ds != crate::texture::N3dsFormat::Rgba8 {
+        let file = format!("{id:08x}.3ds.sprite");
+        t.changed |=
+            write_if_changed(&out_dir.join(&file), &tspr(w, h, &n3ds.preview(w, h, rgba)))?;
+        t.preview_3ds = Some(file);
+    }
+    Ok(t)
+}
+
+pub fn decode_png(path: &Path) -> Result<(u32, u32, Vec<u8>), String> {
     let file = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let decoder = png::Decoder::new(std::io::BufReader::new(file));
+    let mut decoder = png::Decoder::new(std::io::BufReader::new(file));
+    // Palette (an N64 override keeps its CI palette as an indexed PNG),
+    // low-bit gray and 16-bit masters all come out 8 bits a channel.
+    decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
     let mut reader = decoder
         .read_info()
         .map_err(|e| format!("{}: {e}", path.display()))?;
@@ -426,9 +478,16 @@ pub(crate) fn decode_png(path: &Path) -> Result<(u32, u32, Vec<u8>), String> {
             .iter()
             .flat_map(|&[r, g, b]| [r, g, b, 255])
             .collect(),
+        png::ColorType::Grayscale => buf.iter().flat_map(|&v| [v, v, v, 255]).collect(),
+        png::ColorType::GrayscaleAlpha => buf
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .flat_map(|&[v, a]| [v, v, v, a])
+            .collect(),
         other => {
             return Err(format!(
-                "{}: unsupported PNG color type {other:?} (use RGB or RGBA)",
+                "{}: unsupported PNG color type {other:?}",
                 path.display()
             ));
         }

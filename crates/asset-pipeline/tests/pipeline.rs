@@ -67,9 +67,11 @@ fn bake_produces_deterministic_index_snapshot() {
     let player_id = asset_id("sprites/player");
     let beep_id = asset_id("sounds/beep");
     // Sprites bake before sounds; within a kind, manifest (BTreeMap) order.
+    // A 1x1 sprite can't be BCn (whole 4x4 blocks), so the PC keeps RGBA8;
+    // the 3DS's `auto` takes a smaller format, whose preview is recorded.
     let expected = format!(
         "version = 1\n\n\
-         [[asset]]\nlogical = \"sprites/player\"\nid = {player_id}\nkind = \"sprite\"\nfile = \"{player_id:08x}.sprite\"\nformat = \"RGBA8\"\n\n\
+         [[asset]]\nlogical = \"sprites/player\"\nid = {player_id}\nkind = \"sprite\"\nfile = \"{player_id:08x}.sprite\"\nformat = \"RGBA8\"\npreview_3ds = \"{player_id:08x}.3ds.sprite\"\n\n\
          [[asset]]\nlogical = \"sounds/beep\"\nid = {beep_id}\nkind = \"sound\"\nfile = \"{beep_id:08x}.sound\"\nformat = \"F32_MONO\"\n"
     );
     // Snapshot: byte-exact. If this changes, the loader and every platform

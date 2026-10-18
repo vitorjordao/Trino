@@ -48,12 +48,9 @@ shipping a 3D game first**, then by cost:
 
 ### P1 — the next quality and reach jump
 
-- **Texture formats, phases 2–5 (#52, ADR 0017)** (M). Phase 1 (the 3DS hardware
-  formats, the PC's decoded preview, `texture inspect`, the `texture formats` step) is
-  done; no texture changed format yet. Next: `auto` per platform with a `min_psnr` guard
-  and `texture report`, applied to castle64, the showcase and Solid Eleven with RomFS and
-  linear memory quoted before/after (2); PC BCn with an RGBA8 fallback (3); the editor's
-  texture inspector (4); Web KTX2 once `platform-web` exists (5).
+- **Web KTX2 textures (#52 phase 5, moved to #47)** (S, after `platform-web`). The web
+  target's texture path: KTX2/Basis transcoded to what the browser's GPU samples, with
+  `auto` and `min_psnr` deciding like the other targets (ADR 0017 §6).
 - **PC hardware T&L, phases 2–6 (#51, ADR 0016)** (L). Phase 1 (the instancing API,
   `pc_gpu_check` and the reporting) is done; the native profile still draws on the CPU.
   Next: resident mesh buffers and the WGSL vertex stage for static draws behind the
@@ -199,6 +196,21 @@ shipping a 3D game first**, then by cost:
   time) and bless `tests/perf/` on purpose. Host benches stay as regression guards only.
 
 ---
+
+## Done — texture formats, phases 2–4: `auto`, PC BCn, the editor's texture inspector (2026-10-18, branch `feat/52-texture-formats-phases-2-5`, GitHub #52, ADR 0017)
+
+| Item | Evidence |
+|---|---|
+| `auto` per platform (default on PC and 3DS), `quality` (30/35/40 dB) and `min_psnr`; an explicit format below `min_psnr` fails the bake with what passes; one `texture::choose` for the PC bake, the 3DS and N64 stagers, the CLI and the editor | `texture/auto.rs` unit tests, `texture_formats::auto_decides_the_same_on_every_bake_and_in_inspect`, `min_psnr_fails_the_bake_with_what_would_pass` |
+| `cargo xtask texture report [--platform] [--json]` | `texture_cli::report_lists_every_texture_biggest_first_with_totals` |
+| PC BC1/BC3/BC7 (texpresso, an own BC7 mode-6 encoder, bcdec_rs), `<hash>.bc`, uploaded as blocks where the GPU has BC, decoded otherwise (`TRINO_BC=0`), `TRINO_TEXTURES:` | `bc_textures::bc_uploads_draw_like_their_decoded_fallback` (GPU vs fallback ≤ 4 levels); castle64 VRAM 147 712 → 19 904 B |
+| N64 I4/I8 masks staged by coverage (`texture::n64::stage`): Solid Eleven's glow was a solid white disc on the N64 | `n64::masks_are_staged_with_their_coverage_as_intensity`; `se_glow` 2.3 → 19.7 dB; the football template's N64 golden unchanged |
+| The editor's texture inspector and texture memory in the Platform budget | `ui_tests::texture_inspector_formats_quality_and_errors`, the layout audit |
+
+3DS linear memory (engine assets) 113 920 → 58 336 B (game textures 60 928 → 13 504 B);
+Solid Eleven 169 216 → 42 304 B. Every N64 golden byte-identical; the five 3DS goldens
+within tolerance without re-blessing (castle64 hub mean 0.52). Phase 5 (Web KTX2) moved
+to #47.
 
 ## Done — texture formats, phase 1: 3DS hardware formats and `texture inspect` (2026-10-17, branch `feat/52-texture-formats-3ds`, GitHub #52, ADR 0017 draft)
 

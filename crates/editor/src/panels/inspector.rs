@@ -9,7 +9,6 @@
 
 use eframe::egui::{self, RichText, Vec2};
 use trino_asset_pipeline::{Pivot, Primitive, Shape};
-use trino_core::Caps;
 use trino_scene::{
     AnimComponent, Entity, MaterialDef, ModelComponent, Override, PrefabInstance, ShadingDef,
     SpriteComponent, Target, VisComponent,
@@ -1713,33 +1712,28 @@ fn sprite_asset(app: &mut App, ui: &mut egui::Ui, logical: &str) {
         theme::empty_state(ui, icon::IMAGE, "Sprite not found", logical);
         return;
     };
+    let font = logical.starts_with("fonts/");
     header(
         ui,
-        icon::IMAGE,
+        if font { icon::TEXT_AA } else { icon::IMAGE },
         c::SPRITE,
-        logical.trim_start_matches("sprites/"),
-        "Sprite",
+        logical.split_once('/').map_or(logical, |(_, n)| n),
+        if font { "Font atlas" } else { "Sprite" },
     );
     big_thumb(ui, s.thumb.as_ref(), icon::IMAGE);
-    let tmem = Caps::N64.validate_texture(s.width as u16, s.height as u16, 1);
+    let size = format!("{} × {} px", s.width, s.height);
     card().show(ui, |ui| {
-        ui.label(format!("{} × {} px", s.width, s.height));
-        match tmem {
-            Ok(()) => ui.label(
-                RichText::new(format!("{} fits N64 TMEM (CI8)", icon::CHECK_CIRCLE)).color(c::OK),
-            ),
-            Err(e) => {
-                ui.label(RichText::new(format!("{} N64 TMEM: {e:?}", icon::WARNING)).color(c::WARN))
-            }
-        };
+        ui.label(size);
     });
     ui.add_space(8.0);
-    if theme::primary_button(ui, format!("{}  Add to scene", icon::PLUS)).clicked() {
+    if !font && theme::primary_button(ui, format!("{}  Add to scene", icon::PLUS)).clicked() {
         app.cmds.push(Cmd::AddAsset(
             AssetPayload::Sprite(logical.to_string()),
             None,
         ));
     }
+    ui.add_space(8.0);
+    crate::panels::texture::section(app, ui, logical);
 }
 
 // ---------------------------------------------------------------- scene --
@@ -1869,7 +1863,11 @@ fn scene_settings(app: &mut App, ui: &mut egui::Ui) {
             icon::GAUGE,
             c::TEXT,
             "Platform budget (scene camera)",
-            |ui| budget_section(ui, budgets, &app.project.tmem),
+            |ui| {
+                let picked = budget_section(ui, budgets, &app.project.tmem);
+                texture_memory(ui, &mut app.textures, &app.project);
+                picked
+            },
         )
         .flatten();
         // An unseen draw's line selects its entity.
@@ -1891,6 +1889,79 @@ fn scene_settings(app: &mut App, ui: &mut egui::Ui) {
                 ui.label(RichText::new(w).color(c::WARN).size(12.0));
             }
         });
+    }
+}
+
+/// The project's texture memory per platform (every sprite and font
+/// atlas: a console loads them all at boot), measured like the bake on a
+/// worker: the PC's VRAM with what BCn saves, the 3DS's share of its
+/// texture memory, the N64's largest TMEM load.
+fn texture_memory(
+    ui: &mut egui::Ui,
+    textures: &mut crate::textures::Textures,
+    project: &crate::project::Project,
+) {
+    use crate::textures::bytes;
+    let line = |ui: &mut egui::Ui, text: String, color: egui::Color32| {
+        ui.add(egui::Label::new(RichText::new(text).size(12.0).color(color)).truncate())
+    };
+    let key = crate::textures::key(&project.manifest_path(), project.generation);
+    let Some(t) = textures.totals(ui.ctx(), &project.assets_dir(), key) else {
+        line(ui, "Textures: measuring…".into(), c::TEXT_FAINT);
+        return;
+    };
+    let saved = 100.0 - t.pc_bytes as f64 * 100.0 / t.pc_rgba8.max(1) as f64;
+    line(
+        ui,
+        format!(
+            "Textures PC {} VRAM (−{saved:.0}% vs RGBA8)",
+            bytes(t.pc_bytes)
+        ),
+        c::TEXT_WEAK,
+    )
+    .on_hover_text(format!(
+        "{} textures: {} as RGBA8, {} with their PC formats",
+        t.textures,
+        bytes(t.pc_rgba8),
+        bytes(t.pc_bytes)
+    ));
+    let pct = t.n3ds_bytes as f64 * 100.0 / t.n3ds_budget.max(1) as f64;
+    line(
+        ui,
+        format!(
+            "Textures 3DS {} of {} ({pct:.1}%)",
+            bytes(t.n3ds_bytes),
+            bytes(t.n3ds_budget)
+        ),
+        if pct > 100.0 {
+            c::ERROR
+        } else if pct > 75.0 {
+            c::WARN
+        } else {
+            c::TEXT_WEAK
+        },
+    );
+    if let Some((logical, b)) = &t.n64_max {
+        line(
+            ui,
+            format!("N64 largest TMEM load {b} / 4096 ({logical})"),
+            if *b > 4096 { c::WARN } else { c::TEXT_WEAK },
+        )
+        .on_hover_text(format!(
+            "{logical}: {b} bytes. A 3D draw loads its whole texture into the 4 KB TMEM; \
+             2D blits tile"
+        ));
+    }
+    let failing: usize = t.errors.iter().sum();
+    if failing > 0 {
+        line(
+            ui,
+            format!(
+                "{failing} texture bakes fail (PC {}, N64 {}, 3DS {}): cargo xtask texture report",
+                t.errors[0], t.errors[1], t.errors[2]
+            ),
+            c::ERROR,
+        );
     }
 }
 

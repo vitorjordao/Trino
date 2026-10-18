@@ -103,6 +103,11 @@ pub enum Cmd {
     /// Bake (`Some`) or stop baking (`None`) ambient occlusion into a
     /// model's vertex colors: the manifest's `ao` (the watcher rebakes).
     SetModelAo(String, Option<pipeline::AoBake>),
+    /// A texture's manifest `formats` entry for one platform (`None`: the
+    /// platform's default).
+    SetTextureFormat(String, pipeline::Platform, Option<String>),
+    /// A texture's `quality` or `min_psnr` (`None` removes it).
+    SetTextureKey(String, &'static str, Option<String>),
     OpenScene(PathBuf),
     NewScene(String),
     Export(PathBuf),
@@ -248,6 +253,9 @@ pub struct App {
     pub pending_particles: HashSet<String>,
     /// The particle inspector's live preview.
     pub particles_view: crate::panels::particles::ParticlesView,
+    /// The texture inspector's measurements and the budget's texture
+    /// memory (worker threads, keyed on the manifest).
+    pub textures: crate::textures::Textures,
     /// The scene's frame from its camera on the N64 and the 3DS (variants,
     /// LOD and impostors applied), with the content key it is for.
     pub budgets: Option<(u64, [trino_scene::budget::FrameBudget; 3])>,
@@ -362,6 +370,14 @@ impl App {
             _ if open == "fake-object" => cmds.push(Cmd::Open(Dialog::fake_object(&project))),
             _ if open == "array" => cmds.push(Cmd::Open(Dialog::array())),
             _ => {}
+        }
+        // Dev hook: TRINO_EDITOR_TEXTURE=sprites/x | fonts/x [@pc|n64|3ds[,zoom]]
+        // opens the texture inspector on it (that platform's preview).
+        let texture_hook = std::env::var("TRINO_EDITOR_TEXTURE").ok();
+        if let Some(t) = &texture_hook {
+            assets_tab = crate::panels::assets::AssetTab::Sprites;
+            let l = t.split_once('@').map_or(t.as_str(), |(l, _)| l);
+            cmds.push(Cmd::SelectAsset(AssetSel::Sprite(l.to_string())));
         }
 
         let doc_selected = doc.selected.clone();
@@ -528,6 +544,22 @@ impl App {
                     _ => pipeline::Platform::Pc,
                 },
                 ..Default::default()
+            },
+            // `TRINO_EDITOR_TEXTURE=<logical>@3ds,4`: that platform's
+            // preview at 4×.
+            textures: {
+                let at = texture_hook.as_deref().and_then(|t| t.rsplit_once('@'));
+                let (p, zoom) = at.map_or(("pc", None), |(_, a)| match a.split_once(',') {
+                    Some((p, z)) => (p, z.parse().ok()),
+                    None => (a, None),
+                });
+                let mut t = crate::textures::Textures::new(match p {
+                    "n64" => 1,
+                    "3ds" => 2,
+                    _ => 0,
+                });
+                t.zoom = zoom.unwrap_or(1.0f32).clamp(1.0, 8.0);
+                t
             },
             render_state,
         }
@@ -1321,6 +1353,23 @@ impl App {
                         None => format!("models/{name}: baked ambient occlusion removed"),
                     },
                 );
+            }
+            Cmd::SetTextureFormat(logical, platform, format) => {
+                self.project
+                    .set_texture_format(&logical, platform, format.as_deref())?;
+                self.log.info(format!(
+                    "{logical}: {} format {}",
+                    platform.key(),
+                    format.as_deref().unwrap_or("default")
+                ));
+            }
+            Cmd::SetTextureKey(logical, key, value) => {
+                self.project
+                    .set_texture_key(&logical, key, value.as_deref())?;
+                self.log.info(format!(
+                    "{logical}: {key} {}",
+                    value.as_deref().unwrap_or("default")
+                ));
             }
             Cmd::OpenScene(path) => {
                 if self.doc.is_prefab() {

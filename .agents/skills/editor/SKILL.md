@@ -79,6 +79,7 @@ TRINO_EDITOR_SCREENSHOT=target/launcher.png TRINO_EDITOR_SCREENSHOT_FRAME=10 car
 | `TRINO_EDITOR_GAME=pc\|n64\|3ds` | the Game view's profile (default n64) — screenshots of each platform's variant |
 | `TRINO_EDITOR_SIZE=960x600` | window size (default 1600x940; never below the 960x600 minimum) — screenshot small windows |
 | `TRINO_EDITOR_INSPECT=platforms\|lod\|impostor\|budget\|ao` | the Inspector opens that section and scrolls to it (`budget`: the scene settings' platform budget, with nothing selected; `ao`: the scene's Ambient Occlusion, or a model's baked AO with `TRINO_EDITOR_OPEN=model:<logical>`) |
+| `TRINO_EDITOR_TEXTURE=sprites/x\|fonts/x[@pc\|n64\|3ds[,zoom]]` | open the texture inspector on that sprite or font, its preview tab on that platform at that zoom (1–8); with `TRINO_EDITOR_INSPECT=texture` its formats scroll into view |
 | `TRINO_EDITOR_AO=game\|on\|off\|mask` | the Scene view's ambient occlusion mode (as the scene sets it, forced on, off, the occlusion alone) |
 | `TRINO_EDITOR_RIPPLE=1` | keep a ripple ringing on the selected entity's water surface: one drops once the scene resolved, and another whenever it has faded (the inspector's "Drop a ripple"; screenshots of ripple rings) |
 | `TRINO_EDITOR_LOD_PREVIEW=<m>` | preview the selected entity's LOD at that distance (both views) |
@@ -190,6 +191,26 @@ Live-edit check: start the editor with `TRINO_EDITOR_ECHO_LOG=1` in the backgrou
 - Hook: `TRINO_EDITOR_RIPPLE=1` keeps a ripple ringing on the selection, for
   screenshots. A ripple lives 2.2 s and the editor's first frames are slow: take the
   shot at `TRINO_EDITOR_SCREENSHOT_FRAME=40`, not 90, or the ring has faded.
+
+## Texture inspector (ADR 0017 §8)
+
+- Assets › a sprite or font: `panels/texture.rs` (quality, `min_psnr`, a format combo
+  per platform, the PC / N64 / 3DS grid of format, bytes, PSNR and memory share, the
+  reasons, the master vs each platform's decoded preview). Every control writes the
+  manifest through `manifest::edit::set_texture_format` / `set_texture_key`
+  (`Cmd::SetTextureFormat`, `Cmd::SetTextureKey`), and the watcher rebakes.
+- Measuring runs on worker threads (`textures.rs`): `texture::master` + `choose` +
+  `report` per platform, the same calls as the bake and `texture report`, cached on
+  (project generation, manifest text hash). Tests poll with `wait_for`, never a fixed
+  number of `run_steps`.
+- The watcher only prints a failed rebake to stderr; the inspector runs `choose`
+  itself, so the panel (red) and the Console show the bake error.
+- The Platform budget's texture lines (`texture_memory()`) are project-wide: a console
+  loads every texture at boot.
+- kittest: close a combo left open by `click_accesskit` by clicking a label no list
+  covers (the grid's "Memory"); clicking the combo again can land on the list's first
+  item. Budget line queries need exact prefixes (`"3DS {tris} tris"`), since the
+  texture line also starts with "3DS".
 
 ## Rules when changing the editor
 

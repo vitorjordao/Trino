@@ -14,9 +14,12 @@ A file at `assets/<platform>/<same path>` overrides the master for that platform
 ```toml
 [sprites.enemy]
 file = "sprites/enemy.png"      # PNG RGB/RGBA
-formats = { n64 = "CI4", 3ds = "ETC1A4" }  # n64 REQUIRED: CI4, CI8, RGBA5551, I4, I8 (TMEM 4 KB)
-                                # 3ds optional (default RGBA8): RGB565, RGBA5551, RGBA4,
-                                # LA8, L8, A8, ETC1, ETC1A4 — see "3DS texture formats"
+formats = { n64 = "CI4", 3ds = "ETC1A4" }  # n64 REQUIRED: CI4, CI8, RGBA5551, I4, I8 (TMEM 4 KB), or auto
+                                # 3ds optional (default auto): RGBA8, RGB565, RGBA5551, RGBA4,
+                                # LA8, L8, A8, ETC1, ETC1A4 — see "Texture formats"
+                                # pc optional (default auto): RGBA8, BC1, BC3, BC7
+# quality = "high"              # auto's threshold: low 30, normal 35 (default), high 40 dB
+# min_psnr = 38                 # overrides quality; also checks an explicit format
 
 [sounds.jump]
 file = "sounds/jump.wav"        # PCM 16-bit or float, mono/stereo
@@ -95,7 +98,27 @@ ao = { strength = 0.8, ground = true }   # optional: bake ambient occlusion (bel
 - Code: `ModelId::from_path("models/robot")`; animate with
   `ModelParams { anim: Some(AnimRef { clip: ClipId::from_name("walk"), time }), .. }`.
 
-## 3DS texture formats (issue #52, ADR 0017)
+## Texture formats (issue #52, ADR 0017)
+
+- **Leave it to `auto` first** (the PC and 3DS default): every format of the platform
+  is measured against the master and the smallest that keeps the threshold wins. Raise
+  `quality` (or set `min_psnr`) for art where blocks show (faces, UI text on
+  gradients); lower it for distant or busy textures. `cargo xtask texture report`
+  shows every texture's pick and the totals; it fails if any texture fails.
+- **An explicit format is your call:** only `min_psnr` checks it, and a miss fails the
+  bake with the formats that pass and what `auto` would pick.
+- **PC BCn:** `BC1` (opaque, 4 bpp), `BC3`/`BC7` (alpha, 8 bpp; BC7 is the better
+  one). Sides must be multiples of 4, or it stays RGBA8. `TRINO_BC=0` uploads them
+  decoded (a GPU without BC); `TRINO_TEXTURES:` at smoke exit gives the VRAM.
+- **N64:** `I4`/`I8` sample as (i, i, i, i); a gray mask is staged by its coverage
+  (`texture::n64::stage`), so a white glow stays soft. Opaque gray art wants `CI8`.
+  `CI4`/`CI8` are measured only when the master fits the palette losslessly.
+- **The editor:** Assets › Texture shows the three platforms side by side and writes
+  format, `quality` and `min_psnr` back to the manifest.
+- Evidence pictures for `auto`/BC/N64 staging: `cargo test -p xtask --test
+  texture_shots -- --ignored` (`target/evidence/texture_auto/`).
+
+### On the 3DS
 
 - Pick by content: opaque art `ETC1` (4 bpp, 8× less than RGBA8, 4×4 blocks), cutouts
   and soft alpha `ETC1A4`, flat UI with alpha `RGBA4`, hard cutouts `RGBA5551`, gray
@@ -289,7 +312,8 @@ Scenes/prefabs reference materials by logical path; games use the equivalent
 ## Formats and fonts added for external projects (2026-10-14)
 - **N64 sprite and font formats** include `I4` and `I8`: intensity, with alpha equal
   to intensity. They suit white masks tinted at draw time (fonts, UI) and upload no
-  palette per blit. The font bake writes transparent texels **black** for this reason.
+  palette per blit. The font bake writes transparent texels **black** for this reason,
+  and the N64 build stages any gray mask by its coverage (`texture::n64::stage`).
 - **PNG grid fonts:**
   - `chars = "..."` lists each cell's character in order, so accents, `¿`, `€` and
     friends work;

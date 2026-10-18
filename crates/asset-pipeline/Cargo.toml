@@ -22,6 +22,8 @@ hound = { workspace = true }
 gltf = { workspace = true }
 ron = { workspace = true }
 ab_glyph = { workspace = true }
+texpresso = { workspace = true }
+bcdec_rs = { workspace = true }
 notify = { workspace = true, optional = true }
 notify-debouncer-full = { workspace = true, optional = true }
 

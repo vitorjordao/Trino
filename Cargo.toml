@@ -44,6 +44,11 @@ gltf = { version = "1", features = ["extras"] }
 ab_glyph = "0.2"
 # README gameplay recording (dev utility in xtask).
 gif = "0.13"
+# PC BCn textures (#52 phase 3): BC1/BC3 encoder (a libsquish port, pure
+# Rust) and an independent BC1..BC7 decoder for previews and the CPU
+# fallback. BC7 is encoded in-house (`texture/bc.rs`).
+texpresso = { version = "2", default-features = false }
+bcdec_rs = "0.2"
 notify = "8"
 notify-debouncer-full = "0.6"
 hot-lib-reloader = "0.8.2"

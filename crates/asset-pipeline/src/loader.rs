@@ -19,6 +19,14 @@ struct IndexEntry {
     file: String,
     #[serde(default)]
     preview_3ds: Option<String>,
+    #[serde(default)]
+    compressed: Option<String>,
+}
+
+/// A sprite's PC blocks (`<id>.bc`, `crate::texture::BcFormat`).
+pub struct CompressedSprite {
+    pub format: crate::texture::BcFormat,
+    pub data: Vec<u8>,
 }
 
 pub struct LoadedSprite {
@@ -30,9 +38,24 @@ pub struct LoadedSprite {
     /// What the 3DS samples from the sprite's 3DS format, when that format
     /// loses something (`crate::texture`): the PC's 3DS profile draws it.
     pub preview_3ds: Option<Vec<u8>>,
+    /// The PC's BCn blocks, when the sprite's PC format is BCn: the native
+    /// profile uploads them where the GPU samples BC.
+    pub compressed: Option<CompressedSprite>,
 }
 
 impl LoadedSprite {
+    /// What the PC's native profile shows on a GPU without BC: the blocks
+    /// decoded (the same pixels a BC GPU samples), or the master.
+    pub fn pc_pixels(&self) -> std::borrow::Cow<'_, [u8]> {
+        match &self.compressed {
+            Some(c) => c.format.decode(self.width, self.height, &c.data).map_or(
+                std::borrow::Cow::Borrowed(&self.rgba[..]),
+                std::borrow::Cow::Owned,
+            ),
+            None => std::borrow::Cow::Borrowed(&self.rgba),
+        }
+    }
+
     /// The pixels a renderer simulating `platform` should upload: the 3DS
     /// preview on the 3DS, the master everywhere else.
     pub fn pixels_for(&self, platform: crate::Platform) -> &[u8] {
@@ -131,6 +154,28 @@ pub fn load_dir(out_dir: &Path, only: Option<&[u32]>) -> Result<LoadedAssets, St
                     }
                     None => None,
                 };
+                let compressed = match &entry.compressed {
+                    Some(file) => {
+                        let path = out_dir.join(file);
+                        let bytes =
+                            std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+                        let bad = || format!("{}: bad BCn blob", path.display());
+                        if bytes.len() < 16
+                            || !bytes.starts_with(b"TBCN")
+                            || bytes[4..12] != rest[0..8]
+                        {
+                            return Err(bad());
+                        }
+                        let code = u32::from_le_bytes(bytes[12..16].try_into().unwrap());
+                        let format = crate::texture::BcFormat::from_code(code).ok_or_else(bad)?;
+                        let data = bytes[16..].to_vec();
+                        if data.len() as u64 != format.texture_bytes(width, height) {
+                            return Err(bad());
+                        }
+                        Some(CompressedSprite { format, data })
+                    }
+                    None => None,
+                };
                 out.sprites.push(LoadedSprite {
                     logical: entry.logical,
                     id: entry.id,
@@ -138,6 +183,7 @@ pub fn load_dir(out_dir: &Path, only: Option<&[u32]>) -> Result<LoadedAssets, St
                     height,
                     rgba,
                     preview_3ds,
+                    compressed,
                 });
             }
             "sound" | "music" => {

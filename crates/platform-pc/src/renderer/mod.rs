@@ -59,6 +59,52 @@ struct SpriteEntry {
     /// Kept for the 3D (wrapping) bind group, created on first 3D use.
     view: wgpu::TextureView,
     size: (u32, u32),
+    /// GPU bytes of the texture, and whether it is block-compressed
+    /// ([`PcRenderer::sprite_memory`]).
+    bytes: u64,
+    compressed: bool,
+}
+
+/// A block-compressed sprite format the PC uploads as is
+/// ([`PcRenderer::upload_sprite_bc`]); 4×4 blocks in row-major order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CompressedFormat {
+    /// 8 bytes a block: color with 1-bit alpha.
+    Bc1,
+    /// 16 bytes: BC1 color plus interpolated alpha.
+    Bc3,
+    /// 16 bytes: RGBA.
+    Bc7,
+}
+
+impl CompressedFormat {
+    fn wgpu(self) -> wgpu::TextureFormat {
+        // Unorm, like the RGBA8 sprites (`OFFSCREEN_FORMAT`): colors pass
+        // through unconverted.
+        match self {
+            CompressedFormat::Bc1 => wgpu::TextureFormat::Bc1RgbaUnorm,
+            CompressedFormat::Bc3 => wgpu::TextureFormat::Bc3RgbaUnorm,
+            CompressedFormat::Bc7 => wgpu::TextureFormat::Bc7RgbaUnorm,
+        }
+    }
+
+    pub fn block_bytes(self) -> u32 {
+        match self {
+            CompressedFormat::Bc1 => 8,
+            CompressedFormat::Bc3 | CompressedFormat::Bc7 => 16,
+        }
+    }
+}
+
+/// The sprite textures a renderer holds ([`PcRenderer::sprite_memory`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SpriteMemory {
+    pub textures: u32,
+    /// GPU bytes of every sprite texture.
+    pub bytes: u64,
+    /// Of those, the block-compressed ones.
+    pub compressed: u32,
+    pub compressed_bytes: u64,
 }
 
 struct SurfaceState {
@@ -243,6 +289,9 @@ pub struct PcRenderer {
     second: Option<SecondScreen>,
     /// "name (backend)" of the GPU adapter.
     adapter_name: String,
+    /// The device samples BC textures (`TEXTURE_COMPRESSION_BC`) and
+    /// [`PcRenderer::set_bc`] hasn't turned them off.
+    bc: bool,
     /// Where draws go now (0 main, 1 second). `set_screen(1)` renders the
     /// main screen right away and keeps its counts (commands, triangles):
     /// strict mode's budgets and the stats cover the whole frame.
@@ -987,10 +1036,19 @@ impl PcRenderer {
             .await
             .map_err(|e| RendererError::NoAdapter(e.to_string()))?;
 
+        // BC textures where the adapter samples them (every desktop GPU;
+        // `TRINO_BC=0` leaves them off, the runner then uploads decoded
+        // pixels).
+        let bc_off = std::env::var("TRINO_BC").is_ok_and(|v| v == "0");
+        let required_features = if bc_off {
+            wgpu::Features::empty()
+        } else {
+            adapter.features() & wgpu::Features::TEXTURE_COMPRESSION_BC
+        };
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("trino-pc"),
-                required_features: wgpu::Features::empty(),
+                required_features,
                 // Downlevel limits, but the adapter's real texture size:
                 // a 4K or ultrawide window (surface) and full-resolution
                 // pictures need more than downlevel's 2048.
@@ -1049,6 +1107,9 @@ impl PcRenderer {
         profile: SimProfile,
         adapter_name: String,
     ) -> Self {
+        let device_bc = device
+            .features()
+            .contains(wgpu::Features::TEXTURE_COMPRESSION_BC);
         let internal_size = profile.internal_resolution();
         let mut caps = profile.caps();
         // The picture size games see is the internal resolution (the
@@ -1525,6 +1586,7 @@ impl PcRenderer {
             screen: 0,
             main_cmds: 0,
             main_tris: 0,
+            bc: device_bc,
             adapter_name,
         }
     }
@@ -1720,6 +1782,86 @@ impl PcRenderer {
             (width * height * 4) as usize,
             "sprite {id:?}: pixel data does not match {width}x{height} RGBA8"
         );
+        self.install_sprite(id, width, height, OFFSCREEN_FORMAT, rgba, width * 4, height);
+    }
+
+    /// Does this renderer sample block-compressed sprites
+    /// ([`PcRenderer::upload_sprite_bc`])? The device has
+    /// `TEXTURE_COMPRESSION_BC` (requested where the adapter has it, unless
+    /// `TRINO_BC=0`) and [`PcRenderer::set_bc`] left it on.
+    pub fn supports_bc(&self) -> bool {
+        self.bc
+    }
+
+    /// Turn BC uploads off (`false`: [`PcRenderer::upload_sprite_bc`]
+    /// refuses, as on a GPU without BC) or back on where the device has it.
+    pub fn set_bc(&mut self, on: bool) {
+        self.bc = on
+            && self
+                .device
+                .features()
+                .contains(wgpu::Features::TEXTURE_COMPRESSION_BC);
+    }
+
+    /// Upload a block-compressed texture for `id` (`width` and `height`
+    /// multiples of 4, `blocks` in row-major order), replacing any previous
+    /// one. Returns `false` and uploads nothing when the renderer doesn't
+    /// sample BC ([`PcRenderer::supports_bc`]): the caller uploads decoded
+    /// RGBA8 instead.
+    pub fn upload_sprite_bc(
+        &mut self,
+        id: SpriteId,
+        width: u32,
+        height: u32,
+        format: CompressedFormat,
+        blocks: &[u8],
+    ) -> bool {
+        if !self.bc {
+            return false;
+        }
+        assert!(
+            width.is_multiple_of(4) && height.is_multiple_of(4) && width > 0 && height > 0,
+            "sprite {id:?}: {width}x{height} is not whole 4x4 blocks"
+        );
+        let row = width / 4 * format.block_bytes();
+        assert_eq!(
+            blocks.len(),
+            (row * height / 4) as usize,
+            "sprite {id:?}: block data does not match {width}x{height} {format:?}"
+        );
+        self.install_sprite(id, width, height, format.wgpu(), blocks, row, height / 4);
+        true
+    }
+
+    /// The sprite textures held now: how many, their GPU bytes, how many
+    /// are block-compressed (the PC's VRAM figure in `texture report` and
+    /// the `TRINO_TEXTURES` line).
+    pub fn sprite_memory(&self) -> SpriteMemory {
+        let mut m = SpriteMemory::default();
+        for e in self.sprites.values() {
+            m.textures += 1;
+            m.bytes += e.bytes;
+            if e.compressed {
+                m.compressed += 1;
+                m.compressed_bytes += e.bytes;
+            }
+        }
+        m
+    }
+
+    /// Create the texture, write `data` (`rows` of `row_bytes`) and
+    /// register its bind group under `id`.
+    #[allow(clippy::too_many_arguments)]
+    fn install_sprite(
+        &mut self,
+        id: SpriteId,
+        width: u32,
+        height: u32,
+        format: wgpu::TextureFormat,
+        data: &[u8],
+        row_bytes: u32,
+        rows: u32,
+    ) {
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("trino-sprite"),
             size: wgpu::Extent3d {
@@ -1730,7 +1872,7 @@ impl PcRenderer {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: OFFSCREEN_FORMAT,
+            format,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
@@ -1741,11 +1883,11 @@ impl PcRenderer {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            rgba,
+            data,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(width * 4),
-                rows_per_image: None,
+                bytes_per_row: Some(row_bytes),
+                rows_per_image: Some(rows),
             },
             wgpu::Extent3d {
                 width,
@@ -1776,6 +1918,8 @@ impl PcRenderer {
                 bind_group,
                 view,
                 size: (width, height),
+                bytes: (row_bytes * rows) as u64,
+                compressed: format != OFFSCREEN_FORMAT,
             },
         );
     }

@@ -194,15 +194,44 @@ pub fn bake_assets(p: &Project, test_mode: bool) -> Result<(), String> {
     for (name, decl) in &manifest.sprites {
         let logical = format!("sprites/{name}");
         let id = trino_core::asset_id(&logical);
-        let format = decl.format_for(&logical, Platform::N64)?;
+        let source = resolve_source(&root.join("assets"), Platform::N64, &decl.file)?;
+        // A declared format, or `auto`'s pick among the formats whose
+        // result is known (and `min_psnr`, when set).
+        let (w, h, rgba) = trino_asset_pipeline::decode_png(&source)?;
+        let format = trino_asset_pipeline::texture::choose(
+            Platform::N64,
+            &logical,
+            trino_asset_pipeline::texture::Source::Sprite,
+            &decl.settings(Platform::N64),
+            w,
+            h,
+            &rgba,
+        )?
+        .format;
         // Manifest names follow the hardware format; mksprite has its own
         // vocabulary (RGBA5551 is 16-bit color = RGBA16 there).
         let mksprite_format = match format.as_str() {
             "RGBA5551" => "RGBA16",
             other => other, // CI4 / CI8 match 1:1
         };
-        let source = resolve_source(&root.join("assets"), Platform::N64, &decl.file)?;
-        std::fs::copy(&source, stage.join(format!("{id:08x}.png"))).map_err(|e| e.to_string())?;
+        // A mask in I4/I8 is staged with its coverage as the intensity
+        // (`texture::n64::stage`); anything else goes as the master file.
+        let staged_png = stage.join(format!("{id:08x}.png"));
+        match trino_asset_pipeline::N64Format::parse(&format).map(|f| {
+            trino_asset_pipeline::texture::n64::stage(
+                trino_asset_pipeline::texture::Source::Sprite,
+                f,
+                &rgba,
+            )
+        }) {
+            Some(std::borrow::Cow::Owned(staged)) => {
+                let png = trino_asset_pipeline::font::encode_png(w, h, &staged)?;
+                std::fs::write(&staged_png, png).map_err(|e| e.to_string())?;
+            }
+            _ => {
+                std::fs::copy(&source, &staged_png).map_err(|e| e.to_string())?;
+            }
+        }
         script.push_str(&format!(
             "mksprite --format {mksprite_format} -o target/n64/filesystem target/n64/stage/{id:08x}.png\n"
         ));
@@ -259,21 +288,33 @@ pub fn bake_assets(p: &Project, test_mode: bool) -> Result<(), String> {
     for (name, decl) in &manifest.fonts {
         let logical = format!("fonts/{name}");
         let id = trino_core::asset_id(&logical);
-        let format = decl.format_for(&logical, Platform::N64)?;
+        let source = resolve_source(&root.join("assets"), Platform::N64, &decl.file)?;
+        let font = trino_asset_pipeline::bake_font(&source, decl)
+            .map_err(|e| format!("font `{logical}`: {e}"))?;
+        let format = trino_asset_pipeline::texture::choose(
+            Platform::N64,
+            &logical,
+            trino_asset_pipeline::texture::Source::FontAtlas,
+            &decl.settings(Platform::N64),
+            font.width,
+            font.height,
+            &font.rgba,
+        )?
+        .format;
         let mksprite_format = match format.as_str() {
             "RGBA5551" => "RGBA16",
             other => other,
         };
-        let source = resolve_source(&root.join("assets"), Platform::N64, &decl.file)?;
-        let font = trino_asset_pipeline::bake_font(&source, decl)
-            .map_err(|e| format!("font `{logical}`: {e}"))?;
         // Atlas -> sprite (mksprite, same handle); table -> verbatim TFNT.
         // Intensity formats take alpha from the color: stage the coverage
         // as the intensity, so antialiased edges stay soft.
-        let rgba = if matches!(format.as_str(), "I4" | "I8") {
-            intensity_from_alpha(&font.rgba)
-        } else {
-            font.rgba.clone()
+        let rgba = match trino_asset_pipeline::N64Format::parse(&format) {
+            Some(f) => trino_asset_pipeline::texture::n64::stage(
+                trino_asset_pipeline::texture::Source::FontAtlas,
+                f,
+                &font.rgba,
+            ),
+            None => std::borrow::Cow::Borrowed(&font.rgba[..]),
         };
         let png = trino_asset_pipeline::font::encode_png(font.width, font.height, &rgba)?;
         std::fs::write(stage.join(format!("{id:08x}.png")), png).map_err(|e| e.to_string())?;
@@ -384,15 +425,6 @@ fn cargo_build(p: &Project) -> Result<(), String> {
         return Err("N64 Rust build failed".into());
     }
     Ok(())
-}
-
-/// White-mask RGBA (a font atlas) as an intensity image for I4/I8: each
-/// texel's gray level and alpha are its coverage. mksprite then derives the
-/// same alpha the PC and 3DS draw with.
-fn intensity_from_alpha(rgba: &[u8]) -> Vec<u8> {
-    rgba.chunks(4)
-        .flat_map(|p| [p[3], p[3], p[3], p[3]])
-        .collect()
 }
 
 /// In-container link (mirroring n64.mk's %.elf recipe, plus
@@ -933,15 +965,6 @@ mod tests {
         let (_, step) = text_pad_for(13);
         assert!(step.contains(".space 16\\n"), "{step}");
         assert!(step.contains("mips64-elf-gcc -c"), "{step}");
-    }
-
-    #[test]
-    fn intensity_atlases_carry_coverage_in_their_gray_level() {
-        let rgba = [255, 255, 255, 128, 0, 0, 0, 0, 255, 255, 255, 255];
-        assert_eq!(
-            intensity_from_alpha(&rgba),
-            vec![128, 128, 128, 128, 0, 0, 0, 0, 255, 255, 255, 255]
-        );
     }
 
     #[test]

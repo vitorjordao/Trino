@@ -1,32 +1,48 @@
 //! `cargo xtask texture inspect <sprites/x|fonts/x> [--platform pc|n64|3ds]
-//! [--json]` — what each platform keeps of a texture: its format, bytes,
-//! PSNR against the master and its share of the platform's texture memory
+//! [--json]` — what each platform keeps of a texture: its format and why
+//! (`auto`'s weighing, with every candidate it measured), bytes, PSNR
+//! against the master and its share of the platform's texture memory
 //! (`trino_asset_pipeline::texture::inspect`).
+//!
+//! `cargo xtask texture report [--platform ..] [--json]` — every sprite and
+//! font atlas of the project, biggest first, with each platform's totals
+//! against RGBA8. A texture whose bake would fail (a declared format below
+//! its `min_psnr`) is listed with the error and fails the command.
 //!
 //! On the 3DS the PSNR comes from the pipeline's own encoder (what the PC's
 //! 3DS profile draws). With devkitPro installed and a power-of-two master,
-//! the real `tex3ds` output is decoded too (`psnr_tex3ds`).
+//! `inspect` decodes the real `tex3ds` output too (`psnr_tex3ds`).
 
 use std::path::Path;
 use std::process::{Command, ExitCode};
 
-use trino_asset_pipeline::texture::{self, N3dsFormat, TextureReport};
+use trino_asset_pipeline::texture::{self, Candidate, N3dsFormat, TextureReport, db};
 use trino_asset_pipeline::{Manifest, Platform};
 
 const USAGE: &str = "xtask: usage:
-  cargo xtask texture inspect <sprites/x|fonts/x> [--platform pc|n64|3ds] [--json]";
+  cargo xtask texture inspect <sprites/x|fonts/x> [--platform pc|n64|3ds] [--json]
+  cargo xtask texture report [--platform pc|n64|3ds] [--json]";
 
 pub fn run(root: &Path, args: &[&str]) -> ExitCode {
-    match args {
-        ["inspect", logical, rest @ ..] => inspect(root, logical, rest),
+    let (cmd, rest) = match args {
+        ["inspect", logical, rest @ ..] => (Some(*logical), rest),
+        ["report", rest @ ..] => (None, rest),
         _ => {
             eprintln!("{USAGE}");
-            ExitCode::FAILURE
+            return ExitCode::FAILURE;
         }
+    };
+    let Some((platforms, json)) = options(rest) else {
+        return ExitCode::FAILURE;
+    };
+    match cmd {
+        Some(logical) => inspect(root, logical, &platforms, json),
+        None => report(root, &platforms, json),
     }
 }
 
-fn inspect(root: &Path, logical: &str, rest: &[&str]) -> ExitCode {
+/// `--platform` and `--json`.
+fn options(rest: &[&str]) -> Option<(Vec<Platform>, bool)> {
     let mut platforms = Platform::ALL.to_vec();
     let mut json = false;
     let mut it = rest.iter();
@@ -37,17 +53,21 @@ fn inspect(root: &Path, logical: &str, rest: &[&str]) -> ExitCode {
                 Some(p) => platforms = vec![p],
                 None => {
                     eprintln!("xtask: --platform needs pc, n64 or 3ds");
-                    return ExitCode::FAILURE;
+                    return None;
                 }
             },
             other => {
                 eprintln!("xtask: unknown argument `{other}`\n{USAGE}");
-                return ExitCode::FAILURE;
+                return None;
             }
         }
     }
+    Some((platforms, json))
+}
+
+fn inspect(root: &Path, logical: &str, platforms: &[Platform], json: bool) -> ExitCode {
     let assets = root.join("assets");
-    let reports = match texture::inspect(&assets, logical, &platforms) {
+    let reports = match texture::inspect(&assets, logical, platforms) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("error: {e}");
@@ -74,8 +94,11 @@ fn inspect(root: &Path, logical: &str, rest: &[&str]) -> ExitCode {
         println!("{logical}");
         for (r, m) in reports.iter().zip(&measured) {
             let share = match r.share_percent() {
+                Some(p) if p < 0.1 => {
+                    format!("{p:.3}% of {} ({} B)", r.memory, r.memory_budget.unwrap())
+                }
                 Some(p) => format!("{p:.1}% of {} ({} B)", r.memory, r.memory_budget.unwrap()),
-                None => "no budget".into(),
+                None => format!("{} (no budget)", r.memory),
             };
             let mut psnr = db(r.psnr);
             if let Some(m) = m {
@@ -89,20 +112,151 @@ fn inspect(root: &Path, logical: &str, rest: &[&str]) -> ExitCode {
                 r.height,
                 r.bytes
             );
+            println!("       why: {}", r.reason);
             if let Some(n) = &r.note {
                 println!("       note: {n}");
+            }
+            if !r.candidates.is_empty() {
+                let list: Vec<String> = r
+                    .candidates
+                    .iter()
+                    .map(|c| format!("{} {} B {}", c.format, c.bytes, db(c.psnr)))
+                    .collect();
+                println!("       measured: {}", list.join(" | "));
             }
         }
     }
     ExitCode::SUCCESS
 }
 
-fn db(v: Option<f64>) -> String {
-    match v {
-        Some(v) if v.is_infinite() => "lossless".into(),
-        Some(v) => format!("{v:.1} dB"),
-        None => "n/a".into(),
+/// The bytes a platform would take with RGBA8 (the 3DS pads), for the
+/// report's savings; none on the N64 (no RGBA8 there).
+fn rgba8_bytes(p: Platform, w: u32, h: u32) -> Option<u64> {
+    match p {
+        Platform::Pc => Some(w as u64 * h as u64 * 4),
+        Platform::N3ds => Some(N3dsFormat::Rgba8.texture_bytes(w, h)),
+        Platform::N64 => None,
     }
+}
+
+fn report(root: &Path, platforms: &[Platform], json: bool) -> ExitCode {
+    let entries = match texture::report_project(&root.join("assets"), platforms) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let size = |e: &texture::TextureEntry| {
+        e.platforms
+            .iter()
+            .filter_map(|(_, r)| r.as_ref().ok().map(|r| r.bytes))
+            .max()
+            .unwrap_or(0)
+    };
+    let mut entries = entries;
+    entries.sort_by(|a, b| size(b).cmp(&size(a)).then(a.logical.cmp(&b.logical)));
+    let failed = entries
+        .iter()
+        .any(|e| e.platforms.iter().any(|(_, r)| r.is_err()));
+    // Per-platform totals: bytes, bytes as RGBA8, textures `auto` picked.
+    let totals: Vec<serde_json::Value> = platforms
+        .iter()
+        .map(|&p| {
+            let reports = || {
+                entries
+                    .iter()
+                    .flat_map(|e| &e.platforms)
+                    .filter(move |(q, _)| *q == p)
+                    .filter_map(|(_, r)| r.as_ref().ok())
+            };
+            let bytes: u64 = reports().map(|r| r.bytes).sum();
+            let rgba8: Option<u64> = reports().map(|r| rgba8_bytes(p, r.width, r.height)).sum();
+            let mut formats = std::collections::BTreeMap::<&str, u32>::new();
+            for r in reports() {
+                *formats.entry(r.format.as_str()).or_default() += 1;
+            }
+            serde_json::json!({
+                "platform": p.key(),
+                "bytes": bytes,
+                "rgba8_bytes": rgba8,
+                "auto": reports().filter(|r| r.auto).count(),
+                "formats": formats,
+            })
+        })
+        .collect();
+    if json {
+        let list: Vec<serde_json::Value> = entries
+            .iter()
+            .map(|e| {
+                let per: Vec<serde_json::Value> = e
+                    .platforms
+                    .iter()
+                    .map(|(p, r)| match r {
+                        Ok(r) => to_json(r, None),
+                        Err(err) => serde_json::json!({ "platform": p.key(), "error": err }),
+                    })
+                    .collect();
+                serde_json::json!({ "texture": e.logical, "platforms": per })
+            })
+            .collect();
+        let doc = serde_json::json!({ "textures": list, "totals": totals });
+        println!("{}", serde_json::to_string_pretty(&doc).unwrap());
+    } else {
+        println!("{} textures, biggest first", entries.len());
+        for e in &entries {
+            let cells: Vec<String> = e
+                .platforms
+                .iter()
+                .map(|(p, r)| match r {
+                    Ok(r) => format!(
+                        "{} {}{} {} B {}",
+                        p.key(),
+                        r.format,
+                        if r.auto { "*" } else { "" },
+                        r.bytes,
+                        db(r.psnr)
+                    ),
+                    Err(_) => format!("{} FAILS", p.key()),
+                })
+                .collect();
+            println!("  {:<32} {}", e.logical, cells.join("  |  "));
+            for (_, r) in &e.platforms {
+                if let Err(err) = r {
+                    println!("      error: {err}");
+                }
+            }
+        }
+        println!("  (* = picked by auto)");
+        for t in &totals {
+            let rgba8 = t["rgba8_bytes"]
+                .as_u64()
+                .map_or(String::new(), |b| format!(" (RGBA8: {b} B)"));
+            println!(
+                "  total {:<4} {} B{rgba8}, {} by auto: {}",
+                t["platform"].as_str().unwrap(),
+                t["bytes"],
+                t["auto"],
+                t["formats"]
+            );
+        }
+    }
+    if failed {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
+fn candidate_json(c: &Candidate) -> serde_json::Value {
+    serde_json::json!({
+        "format": c.format,
+        "bytes": c.bytes,
+        "psnr": c.psnr.filter(|v| v.is_finite()),
+        "lossless": c.psnr.is_some_and(f64::is_infinite),
+        "fits": c.fits,
+        "note": c.note,
+    })
 }
 
 /// JSON numbers can't be infinite: lossless is `"psnr": null, "lossless": true`.
@@ -122,6 +276,11 @@ fn to_json(r: &TextureReport, tex3ds: Option<f64>) -> serde_json::Value {
         "memory_budget": r.memory_budget,
         "memory_percent": r.share_percent(),
         "note": r.note,
+        "auto": r.auto,
+        "reason": r.reason,
+        "threshold": r.threshold,
+        "content": r.content,
+        "candidates": r.candidates.iter().map(candidate_json).collect::<Vec<_>>(),
     })
 }
 

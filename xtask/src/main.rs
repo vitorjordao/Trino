@@ -92,8 +92,11 @@ commands:
   impostor check [name..] | list [--json]
                        spot missing or stale impostors (model changed)
   texture inspect <sprites/x|fonts/x> [--platform pc|n64|3ds] [--json]
-                       format, bytes, PSNR vs the master and TMEM / 3DS
-                       texture-memory share per platform
+                       format and why (auto's candidates), bytes, PSNR vs the
+                       master and TMEM / 3DS texture-memory share per platform
+  texture report [--platform pc|n64|3ds] [--json]
+                       every texture, biggest first, with totals vs RGBA8;
+                       fails when a bake would (min_psnr)
   model inspect <file> [--fps N] [--once a,b] [--anim] [--json]
                        bake a .glb/.gltf/.prim.ron like the engine and report
                        tris, joints, clips, bounds, N64 budget (art gate)

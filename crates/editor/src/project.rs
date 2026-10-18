@@ -29,6 +29,9 @@ pub struct SpriteAsset {
     /// What the 3DS samples from the sprite's 3DS format (the bake's
     /// `preview_3ds`), drawn by the Game view's 3DS profile.
     pub preview_3ds: Option<Vec<u8>>,
+    /// The PC's BCn blocks (the bake's `compressed`): the Game view's PC
+    /// profile draws them decoded, what any BC GPU samples.
+    pub compressed: Option<pipeline::CompressedSprite>,
     pub thumb: Option<egui::TextureHandle>,
 }
 
@@ -141,15 +144,9 @@ impl Project {
         let mut n = 0;
         for s in assets.sprites {
             n += 1;
-            let name = s.logical.trim_start_matches("sprites/");
-            let format = manifest
-                .as_ref()
-                .and_then(|m| m.sprites.get(name))
-                .and_then(|d| d.formats.get("n64").cloned())
-                .unwrap_or_else(|| "RGBA5551".into());
             self.tmem.insert(
                 s.id,
-                trino_scene::budget::tmem_bytes(s.width, s.height, &format),
+                n64_tmem(manifest.as_ref(), &s.logical, s.width, s.height),
             );
             self.sprites.insert(
                 s.logical.clone(),
@@ -160,6 +157,7 @@ impl Project {
                     height: s.height,
                     rgba: s.rgba,
                     preview_3ds: s.preview_3ds,
+                    compressed: s.compressed,
                     thumb: None,
                 },
             );
@@ -251,9 +249,19 @@ impl Project {
     /// Sprites a console bakes from its own override file — the impostor
     /// atlases, whose N64 version has smaller tiles (and a palette) — so the
     /// Game view's N64 profile samples what the console will; on the 3DS,
-    /// each sprite's 3DS format (ETC1 blocks, 4-bit banding). Every other
-    /// sprite keeps the PC pixels.
+    /// each sprite's 3DS format (ETC1 blocks, 4-bit banding); on the PC,
+    /// the BCn blocks decoded. Every other sprite keeps the master.
     pub fn upload_platform_sprites(&self, r: &mut PcRenderer, target: trino_scene::Target) {
+        if target == trino_scene::Target::Pc {
+            for s in self.sprites.values() {
+                if let Some(c) = &s.compressed
+                    && let Some(px) = c.format.decode(s.width, s.height, &c.data)
+                {
+                    r.upload_sprite(trino_core::SpriteId(s.id), s.width, s.height, &px);
+                }
+            }
+            return;
+        }
         if target == trino_scene::Target::N3ds {
             for s in self.sprites.values() {
                 if let Some(p) = &s.preview_3ds {
@@ -363,6 +371,44 @@ impl Project {
         std::fs::write(&manifest, new).map_err(|e| e.to_string())
     }
 
+    /// Set (`Some`, `"auto"` included) or remove (`None`: the platform's
+    /// default) the `formats` entry of a sprite or font atlas
+    /// (`sprites/x`, `fonts/x`) for `platform`. Live: the watcher rebakes.
+    pub fn set_texture_format(
+        &mut self,
+        logical: &str,
+        platform: pipeline::Platform,
+        format: Option<&str>,
+    ) -> Result<(), String> {
+        let (kind, name) = crate::textures::table(logical)?;
+        self.edit_manifest(|t| edit::set_texture_format(t, kind, name, platform.key(), format))?;
+        // The budget's TMEM map follows the manifest at once (a format with
+        // the same bytes rebakes nothing, and the watcher reports nothing).
+        let manifest = Manifest::load(&self.manifest_path()).ok();
+        if let Some(s) = self.sprites.get(logical) {
+            let tmem = n64_tmem(manifest.as_ref(), logical, s.width, s.height);
+            self.tmem.insert(s.id, tmem);
+        }
+        Ok(())
+    }
+
+    /// Set or remove a texture's `quality` or `min_psnr`.
+    pub fn set_texture_key(
+        &self,
+        logical: &str,
+        key: &str,
+        value: Option<&str>,
+    ) -> Result<(), String> {
+        let (kind, name) = crate::textures::table(logical)?;
+        self.edit_manifest(|t| edit::set_texture_key(t, kind, name, key, value))
+    }
+
+    fn edit_manifest(&self, f: impl FnOnce(&str) -> Result<String, String>) -> Result<(), String> {
+        let manifest = self.manifest_path();
+        let text = std::fs::read_to_string(&manifest).map_err(|e| e.to_string())?;
+        std::fs::write(&manifest, f(&text)?).map_err(|e| e.to_string())
+    }
+
     /// Any free `base`, `base-2`, ... model name.
     pub fn unique_model_name(&self, base: &str) -> String {
         let taken = |n: &str| self.models.contains_key(&format!("models/{n}"));
@@ -374,6 +420,20 @@ impl Project {
             .find(|n| !taken(n))
             .unwrap()
     }
+}
+
+/// A texture's N64 TMEM bytes from its size and its manifest `n64` format
+/// (RGBA5551 when undeclared; `None` for a palette or `auto`).
+fn n64_tmem(manifest: Option<&Manifest>, logical: &str, width: u32, height: u32) -> Option<u32> {
+    let formats = manifest.and_then(|m| match crate::textures::table(logical) {
+        Ok(("fonts", name)) => m.fonts.get(name).map(|d| &d.formats),
+        Ok((_, name)) => m.sprites.get(name).map(|d| &d.formats),
+        Err(_) => None,
+    });
+    let format = formats
+        .and_then(|f| f.get("n64").cloned())
+        .unwrap_or_else(|| "RGBA5551".into());
+    trino_scene::budget::tmem_bytes(width, height, &format)
 }
 
 /// Renders small model/material previews with the real renderer (offscreen,

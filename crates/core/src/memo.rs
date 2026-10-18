@@ -29,17 +29,17 @@ pub struct MemoKey(pub [u32; KEY_WORDS]);
 impl MemoKey {
     /// The key of drawing `model` (a handle) with `matrix` and `params`
     /// under generation `generation`, or `None` when the draw is not a
-    /// plain one (emissive, double-sided, animated, textured or palette
-    /// draws are never memoized: they are rare and their commands depend on
-    /// more; a palette alone is 4 words the key has no room for; water
-    /// moves every frame).
+    /// plain one (emissive, animated, textured or palette draws are never
+    /// memoized: they are rare and their commands depend on more; a palette
+    /// alone is 4 words the key has no room for; water moves every frame).
+    /// Double-sided draws are keyed (their command differs only in its cull
+    /// mode).
     /// A new [`ModelParams`] field must be added here or excluded.
     /// `gloss` is excluded: only the per-pixel tier (PC) reads it, and the
     /// memo serves the N64's RSP draws.
     pub fn new(model: u32, generation: u32, matrix: &Mat34, params: &ModelParams) -> Option<Self> {
         let e = params.emissive;
         if e.r | e.g | e.b != 0
-            || params.double_sided
             || params.anim.is_some()
             || params.texture.is_some()
             || params.palette.is_some()
@@ -52,7 +52,7 @@ impl MemoKey {
         k[1] = generation;
         let t = params.tint;
         k[2] = u32::from_be_bytes([t.r, t.g, t.b, t.a]);
-        k[3] = params.shading as u32;
+        k[3] = params.shading as u32 | (params.double_sided as u32) << 8;
         for (r, row) in matrix.m.iter().enumerate() {
             for (c, v) in row.iter().enumerate() {
                 k[4 + r * 4 + c] = v.to_bits();

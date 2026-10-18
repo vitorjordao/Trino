@@ -53,6 +53,7 @@ they read just as well for people. Each one is the most detailed source for its 
 | [0011](adr/0011-texture-filter-and-detail.md) | Texture filtering per draw and a detail layer |
 | [0012](adr/0012-console-hardware-paths-and-honest-n64-timing.md) | GPU vertex T&L on the 3DS, N64 text in runs, N64 timings over code layouts, hang diagnostics |
 | [0017](adr/0017-texture-formats.md) | Texture formats: 3DS hardware formats, a decoded PC preview, `texture inspect` (draft, #52 phase 1) |
+| [0018](adr/0018-n64-rsp-coverage-and-water.md) | N64: the RSP takes fog, colored light, textures, rigid skeletons and water (#69) |
 
 ## Plans and history
 

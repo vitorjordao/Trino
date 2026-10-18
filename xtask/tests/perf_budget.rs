@@ -19,8 +19,7 @@ use std::fmt::Write as _;
 use std::path::PathBuf;
 
 use trino_core::render3d::{
-    Camera3, DEFAULT_LIGHT, Light, Mesh, TnlContext, TnlStats, gpu_check, gpu_mesh_check,
-    rsp_eligible, rsp_mesh_supported,
+    Camera3, DEFAULT_LIGHT, Light, Mesh, TnlContext, TnlStats, gpu_check, gpu_mesh_check, rsp_plan,
 };
 use trino_core::*;
 
@@ -127,15 +126,26 @@ impl Renderer for Counting {
             .with_local_lights(self.locals.as_slice())
             .with_water(&self.water);
         let tris = (mesh.index_count / 3) as u32;
-        let s = if self.target == Target::N64
-            && rsp_mesh_supported(&mesh)
-            && rsp_eligible(&ctx, &mesh, x, p).is_some()
-        {
-            TnlStats {
-                rsp_draws: 1,
-                rsp_tris: tris,
+        let rsp = (self.target == Target::N64)
+            .then(|| rsp_plan(&ctx, &mesh, x, p).ok())
+            .flatten();
+        let s = if let Some((rsp_draws, rsp_tris)) = rsp {
+            let mut s = TnlStats {
+                rsp_draws,
+                rsp_tris,
                 ..TnlStats::default()
+            };
+            // A water surface on the RSP keeps its ring decals on the CPU.
+            if p.water.is_some() {
+                s.add(&trino_core::render3d::tessellate_ripples(
+                    &ctx,
+                    &mesh,
+                    x,
+                    p,
+                    &mut |_| {},
+                ));
             }
+            s
         } else if self.target == Target::N3ds
             && gpu_mesh_check(&mesh).is_ok()
             && gpu_check(&ctx, &mesh, x, p).is_ok()
@@ -287,7 +297,7 @@ fn check_work(target: Target, baseline_path: &str) {
     let scenes = castle64::perf::SCENES
         .iter()
         .map(|s| s.name)
-        .chain([showcase::perf::NAME]);
+        .chain([showcase::perf::MICRO_RIVER, showcase::perf::NAME]);
     for name in scenes {
         let mut r = counting();
         let mut audio = NullAudio;
@@ -297,6 +307,15 @@ fn check_work(target: Target, baseline_path: &str) {
             for _ in 0..n {
                 game.update(&idle, &mut audio, castle64::perf::DT);
                 game.render(&mut r);
+            }
+        } else if name == showcase::perf::MICRO_RIVER {
+            assert_eq!(showcase::perf::MEASURE_FRAMES, n);
+            let mut game = showcase::ShowcaseGame::new();
+            showcase::perf::micro_river_scene(&mut game, screen);
+            let (ids, n_ids) = showcase::perf::micro_river_ids(&game);
+            for _ in 0..n {
+                showcase::perf::micro_river_update(&mut game);
+                showcase::perf::micro_river_render(&game, &ids[..n_ids], &mut r);
             }
         } else {
             assert_eq!(showcase::perf::MEASURE_FRAMES, n);

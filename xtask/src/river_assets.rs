@@ -227,6 +227,51 @@ fn river() -> Mesh {
     m
 }
 
+/// The ribbon's rings `a..=b`: the same vertices, colors and UVs as
+/// [`river`] (shared edges keep their bits, so pieces meet without cracks).
+fn river_piece(a: usize, b: usize) -> Mesh {
+    let r = river();
+    let mut m = Mesh::default();
+    for v in a * 5..(b + 1) * 5 {
+        m.vert(r.positions[v], r.normals[v], r.colors[v]);
+        m.uvs.push(r.uvs[v]);
+    }
+    for i in 0..(b - a) as u16 {
+        for k in 0..4u16 {
+            let (p, q) = (i * 5 + k, i * 5 + k + 1);
+            let (c, d) = (p + 5, q + 5);
+            m.tri(p, q, d, UP);
+            m.tri(p, d, c, UP);
+        }
+    }
+    m
+}
+
+/// The ribbon cut into pieces by ring ranges, split in halves while the
+/// scene camera would have to clip a piece (`rsp_hull_check`): the river runs
+/// under the camera, and one mesh crossing the near plane kept the whole
+/// river on the CPU. `(first ring, last ring)` per piece, in course order.
+pub fn river_pieces(camera: &trino_core::Camera3) -> Vec<(usize, usize)> {
+    use trino_core::render3d::{DEFAULT_LIGHT, TnlContext, rsp_hull_check};
+    let ctx = TnlContext::new(camera, &DEFAULT_LIGHT, Vec2::new(320.0, 240.0));
+    let view = camera.view();
+    let mut out = Vec::new();
+    let mut todo = vec![(0usize, COURSE.len() - 1)];
+    while let Some((a, b)) = todo.pop() {
+        let blob = tmdl_of(&river_piece(a, b));
+        let mesh = trino_core::Mesh::from_tmdl(&blob).expect("river TMDL");
+        if b - a > 1 && rsp_hull_check(&ctx, &mesh, &view).is_err() {
+            let m = (a + b) / 2;
+            todo.push((m, b));
+            todo.push((a, m));
+        } else {
+            out.push((a, b));
+        }
+    }
+    out.sort();
+    out
+}
+
 const GRASS: Rgba = [118, 176, 84, 255];
 const GRASS_DARK: Rgba = [96, 152, 70, 255];
 const MUD: Rgba = [112, 98, 70, 255];
@@ -364,6 +409,263 @@ fn terrain() -> Mesh {
     }
     smooth_normals(&mut m, ring.iter().flatten().copied().chain([apex]));
     m
+}
+
+/// Side of a terrain cell (m): every triangle is cut along this grid, so
+/// no edge spans more than a cell's diagonal and a bank's drop (~2.9 m),
+/// under the depth-split threshold (`trino_core::render3d::DEPTH_SPLIT`):
+/// the fog never needs the CPU path's splits, and the RSP may fog it.
+const CELL: f32 = 2.0;
+/// Cells per side of the largest tile (8 m): tiles split down to one cell
+/// where the scene camera needs it ([`terrain_tiles`]).
+const TILE_CELLS: usize = 4;
+/// The terrain square's half side (m).
+const HALF: f32 = 20.0;
+/// Cells per side of the terrain square.
+const CELLS: usize = (2.0 * HALF / CELL) as usize;
+
+/// A terrain vertex while it is cut: position, normal, color.
+#[derive(Clone, Copy)]
+struct Cut {
+    p: Vec3,
+    n: Vec3,
+    c: [f32; 4],
+}
+
+/// The point where edge `a`–`b` meets the plane `axis = at` (0 = x, 2 = z).
+/// Always interpolated from the lower endpoint (x, then z, then y), so two
+/// triangles sharing the edge get the same bits (no cracks).
+fn cut_edge(a: Cut, b: Cut, axis: usize, at: f32) -> Cut {
+    let key = |v: &Cut| (v.p.x, v.p.z, v.p.y);
+    let (a, b) = if key(&a) <= key(&b) { (a, b) } else { (b, a) };
+    let get = |v: &Cut| if axis == 0 { v.p.x } else { v.p.z };
+    let t = (at - get(&a)) / (get(&b) - get(&a));
+    let mut p = a.p + (b.p - a.p) * t;
+    if axis == 0 {
+        p.x = at;
+    } else {
+        p.z = at;
+    }
+    let n = a.n + (b.n - a.n) * t;
+    let c = core::array::from_fn(|k| a.c[k] + (b.c[k] - a.c[k]) * t);
+    Cut { p, n, c }
+}
+
+/// Sutherland-Hodgman against one grid line: keep `axis <= at` (`less`)
+/// or `axis >= at`.
+fn clip_line(poly: &[Cut], axis: usize, at: f32, less: bool) -> Vec<Cut> {
+    let get = |v: &Cut| if axis == 0 { v.p.x } else { v.p.z };
+    let inside = |v: &Cut| if less { get(v) <= at } else { get(v) >= at };
+    let mut out = Vec::new();
+    for i in 0..poly.len() {
+        let (a, b) = (poly[i], poly[(i + 1) % poly.len()]);
+        if inside(&a) {
+            out.push(a);
+        }
+        if inside(&a) != inside(&b) {
+            out.push(cut_edge(a, b, axis, at));
+        }
+    }
+    out
+}
+
+/// The terrain's pieces per [`CELL`] (`cz * CELLS + cx`): every triangle
+/// cut along the grid, each piece a convex polygon.
+fn terrain_cells() -> Vec<Vec<Vec<Cut>>> {
+    let t = terrain();
+    let mut cells: Vec<Vec<Vec<Cut>>> = vec![Vec::new(); CELLS * CELLS];
+    let line = |k: usize| -HALF + k as f32 * CELL;
+    let cell_of = |v: f32| (((v + HALF) / CELL).floor().max(0.0) as usize).min(CELLS - 1);
+    for tri in t.indices.chunks(3) {
+        let poly: Vec<Cut> = tri
+            .iter()
+            .map(|&i| {
+                let i = i as usize;
+                Cut {
+                    p: t.positions[i],
+                    n: t.normals[i],
+                    c: t.colors[i].map(|v| v as f32),
+                }
+            })
+            .collect();
+        let span = |f: fn(&Cut) -> f32| {
+            poly.iter()
+                .fold((f32::MAX, f32::MIN), |(a, b), v| (a.min(f(v)), b.max(f(v))))
+        };
+        let (lo_x, hi_x) = span(|v| v.p.x);
+        let (lo_z, hi_z) = span(|v| v.p.z);
+        for cz in cell_of(lo_z)..=cell_of(hi_z) {
+            for cx in cell_of(lo_x)..=cell_of(hi_x) {
+                let mut piece = poly.clone();
+                for (axis, at, less) in [
+                    (0, line(cx), false),
+                    (0, line(cx + 1), true),
+                    (2, line(cz), false),
+                    (2, line(cz + 1), true),
+                ] {
+                    piece = clip_line(&piece, axis, at, less);
+                    if piece.len() < 3 {
+                        break;
+                    }
+                }
+                if piece.len() >= 3 {
+                    cells[cz * CELLS + cx].push(piece);
+                }
+            }
+        }
+    }
+    cells
+}
+
+/// The mesh of the cells `x0..x0 + size`, `z0..z0 + size` (cell units):
+/// each piece fanned, vertices shared by exact bits.
+fn tile_mesh(cells: &[Vec<Vec<Cut>>], x0: usize, z0: usize, size: usize) -> Mesh {
+    let mut m = Mesh::default();
+    let mut index: std::collections::HashMap<[u32; 10], u16> = Default::default();
+    for cz in z0..z0 + size {
+        for cx in x0..x0 + size {
+            for piece in &cells[cz * CELLS + cx] {
+                let ids: Vec<u16> = piece
+                    .iter()
+                    .map(|v| {
+                        let n = v.n.normalized();
+                        let c = v.c.map(|x| x.round().clamp(0.0, 255.0) as u8);
+                        let key = [
+                            v.p.x.to_bits(),
+                            v.p.y.to_bits(),
+                            v.p.z.to_bits(),
+                            n.x.to_bits(),
+                            n.y.to_bits(),
+                            n.z.to_bits(),
+                            c[0] as u32,
+                            c[1] as u32,
+                            c[2] as u32,
+                            c[3] as u32,
+                        ];
+                        *index.entry(key).or_insert_with(|| m.vert(v.p, n, c))
+                    })
+                    .collect();
+                for i in 1..ids.len() - 1 {
+                    let (a, b, c) = (ids[0], ids[i], ids[i + 1]);
+                    let (pa, pb, pc) = (
+                        m.positions[a as usize],
+                        m.positions[b as usize],
+                        m.positions[c as usize],
+                    );
+                    // Slivers from a cut through a vertex: nothing to draw.
+                    let n = (pb - pa).cross(pc - pa);
+                    if n.dot(n) < 1e-10 {
+                        continue;
+                    }
+                    m.tri(a, b, c, UP);
+                }
+            }
+        }
+    }
+    m
+}
+
+/// `m` as a TMDL blob (positions, normals, colors, indices and a bounding
+/// sphere), for the core's RSP rules.
+fn tmdl_of(m: &Mesh) -> Vec<u8> {
+    let mut b = Vec::new();
+    b.extend_from_slice(trino_core::render3d::TMDL_MAGIC);
+    b.extend_from_slice(&(m.positions.len() as u32).to_le_bytes());
+    b.extend_from_slice(&(m.indices.len() as u32).to_le_bytes());
+    for v in m.positions.iter().chain(&m.normals) {
+        for c in [v.x, v.y, v.z] {
+            b.extend_from_slice(&c.to_le_bytes());
+        }
+    }
+    for c in &m.colors {
+        b.extend_from_slice(c);
+    }
+    for i in &m.indices {
+        b.extend_from_slice(&i.to_le_bytes());
+    }
+    let big = Vec3::new(f32::MAX, f32::MAX, f32::MAX);
+    let (lo, hi) = m.positions.iter().fold((big, -big), |(lo, hi), p| {
+        (
+            Vec3::new(lo.x.min(p.x), lo.y.min(p.y), lo.z.min(p.z)),
+            Vec3::new(hi.x.max(p.x), hi.y.max(p.y), hi.z.max(p.z)),
+        )
+    });
+    let c = (lo + hi) * 0.5;
+    let r = m
+        .positions
+        .iter()
+        .map(|&p| (p - c).dot(p - c))
+        .fold(0.0f32, f32::max)
+        .sqrt();
+    b.extend_from_slice(b"BNDS");
+    b.extend_from_slice(&16u32.to_le_bytes());
+    for v in [c.x, c.y, c.z, r] {
+        b.extend_from_slice(&v.to_le_bytes());
+    }
+    b
+}
+
+/// A terrain tile: its cells (`x`, `z`, `size` in [`CELL`]s) and mesh.
+pub struct Tile {
+    pub x: usize,
+    pub z: usize,
+    pub size: usize,
+    mesh: Mesh,
+}
+
+impl Tile {
+    /// The model name (`models/<name>`): `terrain_<x>_<z>_<size>`.
+    pub fn name(&self) -> String {
+        format!("terrain_{}_{}_{}", self.x, self.z, self.size)
+    }
+}
+
+/// The terrain cut into tiles, coarse far from the scene camera and fine
+/// near it: 8 m tiles, each split in four (down to one [`CELL`]) while the
+/// camera's view would have to clip it (`RspReject::NearPlane` or
+/// `ClipBand` from `trino_core::render3d::rsp_check`). One mesh for the
+/// whole ground crossed the near plane and the fog band, so it took the
+/// N64's CPU path with ~740 depth splits; tiles let everything the camera
+/// sees whole go to the RSP, and only small tiles under it clip on the CPU.
+/// Empty tiles are left out.
+pub fn terrain_tiles(camera: &trino_core::Camera3) -> Vec<Tile> {
+    use trino_core::render3d::{DEFAULT_LIGHT, RspReject, TnlContext, rsp_check};
+    let cells = terrain_cells();
+    let ctx = TnlContext::new(camera, &DEFAULT_LIGHT, Vec2::new(320.0, 240.0));
+    let mut out = Vec::new();
+    let mut todo: Vec<(usize, usize, usize)> = Vec::new();
+    for z in (0..CELLS).step_by(TILE_CELLS) {
+        for x in (0..CELLS).step_by(TILE_CELLS) {
+            todo.push((x, z, TILE_CELLS));
+        }
+    }
+    while let Some((x, z, size)) = todo.pop() {
+        let mesh = tile_mesh(&cells, x, z, size);
+        if mesh.indices.is_empty() {
+            continue;
+        }
+        let blob = tmdl_of(&mesh);
+        let core = trino_core::Mesh::from_tmdl(&blob).expect("tile TMDL");
+        let clips = matches!(
+            rsp_check(
+                &ctx,
+                &core,
+                &trino_core::Mat34::IDENTITY,
+                &trino_core::ModelParams::DEFAULT
+            ),
+            Err(RspReject::NearPlane | RspReject::ClipBand)
+        );
+        if clips && size > 1 {
+            let h = size / 2;
+            for (dx, dz) in [(0, 0), (h, 0), (0, h), (h, h)] {
+                todo.push((x + dx, z + dz, h));
+            }
+        } else {
+            out.push(Tile { x, z, size, mesh });
+        }
+    }
+    out.sort_by_key(|t| (t.z, t.x, t.size));
+    out
 }
 
 /// Area-weighted vertex normals for the listed vertices (the corridor),
@@ -687,6 +989,14 @@ fn selftest_water() -> Mesh {
     m
 }
 
+/// The showcase scene's camera (`scenes/showcase.scene.ron`): the terrain
+/// tiles are fine where it looks from up close.
+pub fn scene_camera() -> trino_core::Camera3 {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../scenes/showcase.scene.ron");
+    let scene = trino_scene::Scene::load(&path).unwrap();
+    scene.environment.core_camera()
+}
+
 /// Write every river master under `root/assets/shared/`.
 pub fn gen_all(root: &Path, write_png: PngWriter) {
     let shared = root.join("assets/shared");
@@ -697,8 +1007,21 @@ pub fn gen_all(root: &Path, write_png: PngWriter) {
     std::fs::create_dir_all(shared.join("models/proxies")).unwrap();
     let r = river();
     assert_eq!(r.tris(), 128, "the ribbon is 16 x 4 quads");
-    r.write_glb(&models.join("river.glb"));
-    terrain().write_glb(&models.join("terrain.glb"));
+    // The river pieces and terrain tiles follow the scene camera: old ones
+    // go first.
+    for e in std::fs::read_dir(&models).unwrap().flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        if (name.starts_with("terrain_") || name.starts_with("river")) && name.ends_with(".glb") {
+            std::fs::remove_file(e.path()).unwrap();
+        }
+    }
+    for (a, b) in river_pieces(&scene_camera()) {
+        river_piece(a, b).write_glb(&models.join(format!("river_{a}_{b}.glb")));
+    }
+    for tile in terrain_tiles(&scene_camera()) {
+        tile.mesh
+            .write_glb(&models.join(format!("{}.glb", tile.name())));
+    }
     bridge().write_glb(&models.join("bridge.glb"));
     selftest_water().write_glb(&shared.join("models/proxies/selftest-water.glb"));
     write_png(&textures.join("tex_water.png"), 32, 32, &water_texture());

@@ -6,13 +6,16 @@ use alloc::collections::BTreeMap;
 use alloc::rc::Rc;
 use alloc::vec::Vec;
 use core::ffi::c_void;
+use core::sync::atomic::{AtomicU32, Ordering};
 
 use trino_core::memo::{self, MemoKey, MemoSlot};
 use trino_core::perf::RenderProfile;
 use trino_core::render3d::{
-    Camera3, DEFAULT_LIGHT, Light, Mesh, MeshLayout, NEAR_PLANE, RspPan, ScreenTri, TexBind,
-    TnlContext, TnlScratch, TnlStats, painter_index, painter_key, rsp_band, rsp_eligible_mv,
-    rsp_hull_inside, rsp_mesh_supported,
+    Camera3, DEFAULT_LIGHT, Light, MAX_JOINTS, Mesh, MeshLayout, NEAR_PLANE, RspPan, RspPart,
+    ScreenTri, TexBind, TnlContext, TnlScratch, TnlStats, face_normal, flat_normal, flat_ratios,
+    painter_index, painter_key, rsp_band, rsp_color, rsp_color_terms, rsp_eligible_mv,
+    rsp_hull_inside, rsp_mesh_supported, rsp_part_bounds, rsp_rigid_check, rsp_rigid_draws,
+    rsp_water_mesh_check, water_rsp, water_vertex,
 };
 use trino_core::text::{BitmapFont, GlyphIndex};
 use trino_core::{
@@ -30,6 +33,8 @@ const SCREEN: Vec2 = Vec2::new(320.0, 240.0);
 
 struct SpriteEntry {
     ptr: *mut c_void,
+    /// Width and height in texels (an RSP textured draw scales its UVs).
+    size: [f32; 2],
 }
 
 pub struct N64Renderer {
@@ -73,6 +78,9 @@ pub struct N64Renderer {
     /// RSP draw commands of the pending batch: submitted right after the
     /// batch's CPU triangles, so on equal depth they win like the last
     /// drawn surfaces of a painter-sorted batch do (a door on a wall).
+    /// A colored command (`rsp::COLORED` in word 0) is followed by one more
+    /// entry carrying its `rsp::color_words` (no field of its own: a new
+    /// field in this struct moved hot data and cost every RSP draw, measured).
     pending_rsp: Vec<[u32; rsp::DRAW_WORDS]>,
     /// The overlay's cull mode for back faces: `RDPQ_Triangle_Send_Async`'s
     /// v0, where 0 culls Trino's back faces (its "front" is the opposite
@@ -102,13 +110,33 @@ pub struct N64Renderer {
     /// Bumped whenever the view's rotation or focal, the light, the meshes
     /// or the cull mode change: older memo entries then never match.
     memo_gen: u32,
+    /// Flat RSP copies (`rsp::build_flat`) by mesh and scale ratios
+    /// (`flat_ratios`), baked the first time a mesh is drawn `Shading::Flat`
+    /// on the RSP under them (`None`: it can't have one). Last:
+    /// the hot fields above keep their offsets.
+    rsp_flat: FlatCopies,
+    /// Rigid skinned meshes' RSP parts (`rsp::build_part`), one per joint, and
+    /// their bind-pose spheres (`rsp_part_bounds`): a posed draw becomes a
+    /// command per joint on screen (`rsp_rigid_draws`).
+    rsp_rigid: BTreeMap<u32, Rc<RigidCopy>>,
+    /// Water surfaces' RSP copies (`rsp_trino_water`; `None`: the mesh can't have
+    /// one), baked on their first water draw.
+    rsp_water: BTreeMap<u32, Option<RspMesh>>,
+    /// The batch's RSP water commands and their entries (`rsp::water_block`
+    /// and ripple deltas live in `water_arena`), drawn first in the water
+    /// bucket.
+    pending_water_rsp: Vec<[[u32; rsp::DRAW_WORDS]; 2]>,
+    water_arena: WaterArena,
 }
 
-/// Memo slots (204 bytes each): a few hundred draws per frame rarely share one.
+/// Memo slots (268 bytes each): a few hundred draws per frame rarely share one.
 const MEMO_SLOTS: usize = 1024;
 /// A memo entry: the command, then `RspPan` (s, q, r2) and the view
-/// translation the command was made for, as float bits.
-const MEMO_WORDS: usize = rsp::DRAW_WORDS + 10;
+/// translation the command was made for, as float bits, then a colored
+/// command's color words (`rsp::color_words`).
+const MEMO_WORDS: usize = rsp::DRAW_WORDS + 10 + rsp::COLOR_WORDS;
+/// Where a colored command's color words sit in a memo entry.
+const MEMO_COLOR: usize = rsp::DRAW_WORDS + 10;
 /// Where the view translation sits in a memo entry.
 const MEMO_T: usize = rsp::DRAW_WORDS + 7;
 
@@ -172,6 +200,11 @@ impl N64Renderer {
             rsp_stream: false,
             memo: alloc::vec![MemoSlot::EMPTY; MEMO_SLOTS],
             memo_gen: 0,
+            rsp_flat: BTreeMap::new(),
+            rsp_rigid: BTreeMap::new(),
+            rsp_water: BTreeMap::new(),
+            pending_water_rsp: Vec::new(),
+            water_arena: WaterArena::new(),
             water_state: WaterState::NONE,
             pending_water: Vec::new(),
             pending_water_tex: Vec::new(),
@@ -186,10 +219,7 @@ impl N64Renderer {
         self.flush_cpu_batch();
         if !self.pending_rsp.is_empty() {
             let t0 = self.tick();
-            for w in &self.pending_rsp {
-                unsafe { ffi::trino_rsp_draw(w.as_ptr()) };
-            }
-            self.pending_rsp.clear();
+            self.submit_rsp();
             self.charge(t0, |s| &mut s.submit);
         }
         self.flush_water();
@@ -198,6 +228,14 @@ impl N64Renderer {
     /// The batch's water, last: far to near, each surface's texture state
     /// bound once (`trino_3d_water`: blended, z-tested, not written).
     fn flush_water(&mut self) {
+        if !self.pending_water_rsp.is_empty() {
+            let t0 = self.tick();
+            for [w, e] in &self.pending_water_rsp {
+                submit_water(&self.sprites, w, e);
+            }
+            self.pending_water_rsp.clear();
+            self.charge(t0, |s| &mut s.submit);
+        }
         if self.pending_water.is_empty() {
             return;
         }
@@ -252,6 +290,9 @@ impl N64Renderer {
     /// shades it with the frame's ripples, and adds their rings; it goes in
     /// the water bucket.
     fn draw_water(&mut self, model: ModelId, matrix: &Mat34, params: &ModelParams) {
+        if self.rsp_on && self.draw_water_rsp(model, matrix, params) {
+            return;
+        }
         let Some((tmdl, layout)) = self.meshes.get(&model.0) else {
             return;
         };
@@ -285,6 +326,25 @@ impl N64Renderer {
         let added = self.pending_water.len() - before;
         self.pending_water_tex
             .extend(core::iter::repeat_n(bind, added));
+    }
+
+    /// Hand every pending RSP command to the overlay, in order.
+    fn submit_rsp(&mut self) {
+        let mut i = 0;
+        while i < self.pending_rsp.len() {
+            let w = &self.pending_rsp[i];
+            if w[0] & rsp::TEXTURED != 0 {
+                submit_textured(&self.sprites, w, &self.pending_rsp[i + 1]);
+                i += 2;
+            } else if w[0] & rsp::COLORED != 0 {
+                submit_colored(w, &self.pending_rsp[i + 1]);
+                i += 2;
+            } else {
+                unsafe { ffi::trino_rsp_draw(w.as_ptr()) };
+                i += 1;
+            }
+        }
+        self.pending_rsp.clear();
     }
 
     /// The CPU-tessellated part of the batch: sort + submit.
@@ -380,7 +440,9 @@ impl N64Renderer {
 
     /// Register a `sprite_t` loaded from the DFS under a stable handle.
     pub(crate) fn register(&mut self, id: u32, ptr: *mut c_void) {
-        self.sprites.insert(id, SpriteEntry { ptr });
+        let wh = unsafe { ffi::trino_sprite_size(ptr) };
+        let size = [(wh >> 16) as f32, (wh & 0xFFFF) as f32];
+        self.sprites.insert(id, SpriteEntry { ptr, size });
     }
 
     /// Record the texture of the `added` triangles appended at `before`
@@ -416,6 +478,17 @@ impl N64Renderer {
             && let Some(rm) = rsp::build(&mesh)
         {
             self.rsp_meshes.insert(id, rm);
+        }
+        self.rsp_flat.retain(|k, _| k.0 != id);
+        self.rsp_rigid.remove(&id);
+        self.rsp_water.remove(&id);
+        // A translucent textured mesh is likely a water surface: its water copy
+        // now, not on the first frame that draws it.
+        if !mesh.opaque_colors() && rsp_water_mesh_check(&mesh).is_ok() {
+            self.rsp_water.insert(id, rsp::build(&mesh));
+        }
+        if mesh.joint_count() > 0 && rsp_rigid_check(&mesh).is_ok() {
+            self.rsp_rigid.insert(id, Rc::new(rigid_copy(&mesh)));
         }
         self.meshes.insert(id, (tmdl, layout));
         self.memo_gen = self.memo_gen.wrapping_add(1);
@@ -461,12 +534,22 @@ impl N64Renderer {
             return Err("mesh not registered".into());
         };
         let mesh = Mesh::from_layout(&tmdl, &layout);
-        let Some(rm) = self.rsp_meshes.get(&model.0) else {
-            return Err("mesh has no RSP copy".into());
-        };
         let mv = self.tnl_ctx.projection().0.mul(matrix);
         let Some(d) = rsp_eligible_mv(&self.tnl_ctx, &mesh, matrix, &mv, params) else {
             return Err("draw not RSP-eligible".into());
+        };
+        // A flat draw: its flat copy, each vertex lit by its face's normal.
+        let flat = (params.shading == Shading::Flat).then(|| flat_ratios(matrix));
+        let rm = match flat {
+            Some(ratios) => {
+                let key = (model.0, WHOLE, ratios);
+                bake_flat(&mut self.rsp_flat, key, &mesh);
+                self.rsp_flat.get(&key).and_then(Option::as_ref)
+            }
+            None => self.rsp_meshes.get(&model.0),
+        };
+        let Some(rm) = rm else {
+            return Err("mesh has no RSP copy".into());
         };
         let seg0 = rm.seg0.clone();
         let n = seg0.len();
@@ -474,14 +557,39 @@ impl N64Renderer {
         let phys = unsafe { ffi::trino_phys_addr(buf as *const c_void) };
         let cull = if d.cull_back { self.rsp_cull } else { 2 };
         let words = rsp::draw_words(&self.tnl_ctx, &mv, &d, params.tint, rm, cull, phys);
+        let textured = rm.textured;
+        let tex = mesh
+            .texture_for(params)
+            .and_then(|t| self.sprites.get(&t.0).map(|e| (t.0, e.ptr, e.size)));
+        if textured && tex.is_none() {
+            return Err("texture not loaded".into());
+        }
         self.begin_frame(Color::BLACK);
-        unsafe { ffi::trino_rsp_draw(words.as_ptr()) };
+        // The terms always (a white draw's equal its single intensity): no
+        // float in an `Option` payload, whose garbage the FPU traps on once
+        // LLVM hoists the math out of the branch (see `RspFog`).
+        let terms = rsp_color_terms(&self.tnl_ctx, params);
+        let colored = textured || rsp_color(&self.tnl_ctx, params).is_some();
+        match tex {
+            Some((id, ptr, size)) if textured => unsafe {
+                let e = rsp::tex_entry(&terms, &mv, size, [0.0, 0.0], [id, 0, 0]);
+                ffi::trino_3d_texture_ex(ptr, core::ptr::null_mut(), 0);
+                ffi::trino_rsp_draw_textured(words.as_ptr(), e.as_ptr());
+            },
+            _ if colored => unsafe {
+                ffi::trino_rsp_draw_colored(words.as_ptr(), rsp::color_words(&terms, &mv).as_ptr())
+            },
+            _ => unsafe { ffi::trino_rsp_draw(words.as_ptr()) },
+        }
         self.end_frame();
         unsafe { ffi::trino_drain() };
         let (view, focal, screen) = self.tnl_ctx.projection();
         let mv = view.mul(matrix);
         let (cx, cy) = (screen.x * 0.5, screen.y * 0.5);
         let (mut dxy, mut dz, mut dc) = (0i32, 0i32, 0i32);
+        // Textured: S, T (1/32 texel) and W, 1/W (relative error, 1/1000).
+        let (mut dst, mut dw) = (0i32, 0i32);
+        let tex_size = tex.map_or([1.0, 1.0], |t| t.2);
         for (k, &g) in seg0.iter().enumerate() {
             let g = g as usize;
             let rd = |o: usize| unsafe { buf.add(k * 24 + o).read_volatile() };
@@ -492,23 +600,60 @@ impl N64Renderer {
             let ez = ((1.0 - NEAR_PLANE / p.z) * 32767.0) as i32;
             dxy = dxy.max((rd16(0) - ex).abs()).max((rd16(2) - ey).abs());
             dz = dz.max((rd16(4) - ez).abs());
-            let n = mesh.normal(g);
+            let n = match flat {
+                Some(ratios) => {
+                    let t = core::array::from_fn(|j| mesh.index(3 * (k / 3) + j) as usize);
+                    flat_normal(face_normal(&mesh, t), ratios)
+                }
+                None => mesh.normal(g),
+            };
             let lit = n.dot(d.light);
-            let k = d.ambient + (1.0 - d.ambient) * if lit > 0.0 { lit } else { 0.0 };
+            let lit = if lit > 0.0 { lit } else { 0.0 };
+            let (amb, dif, e) = (terms.ambient, terms.diffuse, terms.emissive);
             let c = mesh.color(g);
             let t = params.tint;
-            let want = [
-                c.r as f32 * (t.r as f32 / 255.0) * k,
-                c.g as f32 * (t.g as f32 / 255.0) * k,
-                c.b as f32 * (t.b as f32 / 255.0) * k,
+            let ch = |v: u8, t: u8, i: usize| {
+                let x = v as f32 * (t as f32 / 255.0) * (amb[i] + dif[i] * lit) + e[i] as f32;
+                if x > 255.0 { 255.0 } else { x }
+            };
+            let mut want = [
+                ch(c.r, t.r, 0),
+                ch(c.g, t.g, 1),
+                ch(c.b, t.b, 2),
                 c.a as f32 * (t.a as f32 / 255.0),
             ];
+            // Fog by view depth after the emissive add (alpha kept).
+            let f = terms.fog;
+            if f.on {
+                let k = ((p.z - f.near) / (f.far - f.near)).clamp(0.0, 1.0);
+                for i in 0..3 {
+                    want[i] += (f.color[i] as f32 - want[i]) * k;
+                }
+            }
             for (ch, w) in want.iter().enumerate() {
                 dc = dc.max((rd(8 + ch) as i32 - *w as i32).abs());
             }
+            // No float from an `Option` payload: LLVM hoists float math out
+            // of the branch and the FPU traps on a None's garbage (RspFog).
+            if textured {
+                let size = tex_size;
+                let uv = mesh.uv(g);
+                let es = (uv.x * size[0] * 32.0) as i32;
+                let et = (uv.y * size[1] * 32.0) as i32;
+                dst = dst.max((rd16(12) - es).abs()).max((rd16(14) - et).abs());
+                let fx = |o: usize| {
+                    let v = u32::from_be_bytes([rd(o), rd(o + 1), rd(o + 2), rd(o + 3)]);
+                    v as i32 as f32 / 65536.0
+                };
+                let rel = |got: f32, want: f32| ((got / want - 1.0).abs() * 1000.0) as i32;
+                dw = dw.max(rel(fx(16), p.z)).max(rel(fx(20), 1.0 / p.z));
+            }
         }
-        let msg = alloc::format!("{n} vertices: xy {dxy}/4 px, z {dz}/32767, color {dc}/255");
-        if dxy > 2 || dz > 64 || dc > 3 {
+        let mut msg = alloc::format!("{n} vertices: xy {dxy}/4 px, z {dz}/32767, color {dc}/255");
+        if textured {
+            msg.push_str(&alloc::format!(", st {dst}/32 texel, w {dw}/1000"));
+        }
+        if dxy > 2 || dz > 64 || dc > 3 || dst > 2 || dw > 12 {
             Err(msg)
         } else {
             Ok(msg)
@@ -529,6 +674,50 @@ impl Default for N64Renderer {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// One colored RSP command: its 27 words and the entry carrying its color
+/// words. Out of line and cold: white-light frames never run it.
+#[cold]
+#[inline(never)]
+fn submit_colored(w: &[u32; rsp::DRAW_WORDS], carrier: &[u32; rsp::DRAW_WORDS]) {
+    unsafe { ffi::trino_rsp_draw_colored(w.as_ptr(), carrier.as_ptr()) };
+}
+
+/// One textured RSP command: its texture and mode bound by the binding in
+/// its carrier entry (`rsp::TEX_BIND`, as `flush_cpu_batch` binds a CPU
+/// triangle group), then the command with its color and texture words.
+#[cold]
+#[inline(never)]
+fn submit_textured(
+    sprites: &BTreeMap<u32, SpriteEntry>,
+    w: &[u32; rsp::DRAW_WORDS],
+    carrier: &[u32; rsp::DRAW_WORDS],
+) {
+    let bind = &carrier[rsp::TEX_BIND..rsp::TEX_BIND + 3];
+    let Some(base) = sprites.get(&bind[0]) else {
+        return;
+    };
+    let detail = sprites
+        .get(&bind[1])
+        .map_or(core::ptr::null_mut(), |e| e.ptr);
+    unsafe {
+        ffi::trino_3d_texture_ex(base.ptr, detail, bind[2]);
+        ffi::trino_rsp_draw_textured(w.as_ptr(), carrier.as_ptr());
+    }
+}
+
+/// Microseconds the profiled frames waited for the RSP and RDP at
+/// `end_frame` (`trino_drain`), since the last [`take_drain_us`]. A static,
+/// not a renderer or profile field: growing those structs moved hot data
+/// and slowed every RSP draw (measured in ares, 2026-10-16).
+static DRAIN_US: AtomicU32 = AtomicU32::new(0);
+
+/// [`DRAIN_US`], reset.
+pub fn take_drain_us() -> u32 {
+    let d = DRAIN_US.load(Ordering::Relaxed);
+    DRAIN_US.store(0, Ordering::Relaxed);
+    d
 }
 
 /// Gouraud triangle (vertex colors only).
@@ -596,20 +785,24 @@ impl N64Renderer {
             && self.pending_tris.is_empty()
             && self.pending_rsp.len() >= RSP_STREAM_CHUNK
         {
-            for w in &self.pending_rsp {
-                unsafe { ffi::trino_rsp_draw(w.as_ptr()) };
-            }
-            self.pending_rsp.clear();
+            self.submit_rsp();
         }
     }
 
     /// Statistics and profile of one RSP draw of `tris` triangles.
     fn count_rsp(&mut self, model: ModelId, t0: u32, tris: u32) {
-        let tnl = TnlStats {
+        self.count_rsp_with(model, t0, tris, &TnlStats::default());
+    }
+
+    /// [`Self::count_rsp`] plus the CPU work `cpu` the draw also did (a
+    /// water draw's ring decals).
+    fn count_rsp_with(&mut self, model: ModelId, t0: u32, tris: u32, cpu: &TnlStats) {
+        let mut tnl = TnlStats {
             rsp_draws: 1,
             rsp_tris: tris,
             ..TnlStats::default()
         };
+        tnl.add(cpu);
         self.frame_stats.tnl.add(&tnl);
         if let Some(p) = &mut self.profile {
             p.record_model(model, now_us().wrapping_sub(t0), &tnl);
@@ -650,6 +843,7 @@ impl Renderer for N64Renderer {
     fn begin_frame(&mut self, clear: Color) {
         self.frame_stats = FrameStats::default();
         self.water_state = WaterState::NONE;
+        self.water_arena.next_frame();
         if self.locals.set(&[], 0) {
             self.rebuild_tnl();
         }
@@ -738,6 +932,14 @@ impl Renderer for N64Renderer {
             self.draw_water(model, matrix, params);
             return;
         }
+        // A rigid skinned mesh: a command per joint on screen, when every
+        // part qualifies.
+        if self.rsp_on
+            && let Some(rc) = self.rsp_rigid.get(&model.0).cloned()
+            && self.draw_rigid(model, matrix, params, &rc)
+        {
+            return;
+        }
         // A draw that repeats under the same camera and light: last
         // frame's command.
         let key = if self.rsp_on {
@@ -767,10 +969,15 @@ impl Renderer for N64Renderer {
             // sphere, or else its vertices: a ground tile whose sphere
             // crosses the band)? Else the draw takes the full path (maybe
             // the CPU's).
+            // A colored command (fog, a colored light) is reused only under
+            // the same camera: its fog row follows the view, and a pan may
+            // move it into the fog band where its edges need splits.
+            let colored = w[0] & rsp::COLORED != 0;
             if !lit
                 && (still
-                    || rsp_band(&self.tnl_ctx, pan.center(mt), pan.r2)
-                    || hull_inside(&self.tnl_ctx, &self.meshes, model, matrix))
+                    || (!colored
+                        && (rsp_band(&self.tnl_ctx, pan.center(mt), pan.r2)
+                            || hull_inside(&self.tnl_ctx, &self.meshes, model, matrix))))
             {
                 let t0 = if self.profile.is_some() { now_us() } else { 0 };
                 if !still {
@@ -784,7 +991,14 @@ impl Renderer for N64Renderer {
                 words.copy_from_slice(&w[..rsp::DRAW_WORDS]);
                 let tris = hit.extra;
                 self.frame_stats.models += 1;
-                self.queue_rsp(words);
+                if colored {
+                    let mut c = [0u32; rsp::DRAW_WORDS];
+                    c[..rsp::COLOR_WORDS].copy_from_slice(&w[MEMO_COLOR..]);
+                    self.pending_rsp.push(words);
+                    self.queue_rsp(c);
+                } else {
+                    self.queue_rsp(words);
+                }
                 self.count_rsp(model, t0, tris);
                 return;
             }
@@ -802,6 +1016,25 @@ impl Renderer for N64Renderer {
             }
             _ => None,
         };
+        // A flat draw goes out with the mesh's flat copy (face normals).
+        let rsp = match rsp {
+            Some((_, d, mv)) if params.shading == Shading::Flat => {
+                let key = (model.0, WHOLE, flat_ratios(matrix));
+                bake_flat(&mut self.rsp_flat, key, &mesh);
+                let rm = self.rsp_flat.get(&key).and_then(Option::as_ref);
+                rm.map(|rm| (rm, d, mv))
+            }
+            r => r,
+        };
+        // A textured copy needs its texture loaded: without it the CPU path
+        // draws the mesh untextured.
+        let tex = match &rsp {
+            Some((rm, ..)) if rm.textured => mesh
+                .texture_for(params)
+                .and_then(|t| self.sprites.get(&t.0).map(|e| (t.0, e.size))),
+            _ => None,
+        };
+        let rsp = rsp.filter(|(rm, ..)| !rm.textured || tex.is_some());
         if let Some((rm, d, mv)) = rsp {
             // The overlay transforms, lights and rasterizes the whole draw;
             // the command goes out with the batch (flush_model_batch).
@@ -809,11 +1042,40 @@ impl Renderer for N64Renderer {
             let cull = if d.cull_back { self.rsp_cull } else { 2 };
             let words = rsp::draw_words(&self.tnl_ctx, &mv, &d, params.tint, rm, cull, 0);
             let tris = (mesh.index_count / 3) as u32;
+            // Textured (44 words, never remembered): the texture's binding,
+            // color and texture words ride in the next entry.
+            if let Some((id, size)) = tex {
+                let b = TexBind::model(id, params, self.tex_filter);
+                let detail = b.detail.filter(|d| self.sprites.contains_key(&d.sprite.0));
+                let flags = b.clamp as u32
+                    | ((b.filter == TexFilter::Point) as u32) << 1
+                    | detail.map_or(0, |d| (d.scale_log2 as u32) << 4);
+                let bind = [id, detail.map_or(0, |d| d.sprite.0), flags];
+                let c = rsp_color_terms(&self.tnl_ctx, params);
+                let entry = rsp::tex_entry(&c, &mv, size, [0.0, 0.0], bind);
+                let mut words = words;
+                words[0] |= rsp::TEXTURED;
+                self.pending_rsp.push(words);
+                self.queue_rsp(entry);
+                self.count_rsp(model, t0, tris);
+                return;
+            }
+            // The colored command (40 words): its color words ride in the
+            // next queue entry, queued together, never split by a streamed
+            // chunk.
+            let color = rsp_color(&self.tnl_ctx, params).map(|c| rsp::color_entry(&c, &mv));
+            let mut words = words;
+            if color.is_some() {
+                words[0] |= rsp::COLORED;
+            }
             if let Some(k) = key
                 && let Some(pan) = RspPan::new(&self.tnl_ctx.projection().0, &mv, &mesh, matrix)
             {
                 let mut entry = [0u32; MEMO_WORDS];
                 entry[..rsp::DRAW_WORDS].copy_from_slice(&words);
+                if let Some(c) = &color {
+                    entry[MEMO_COLOR..].copy_from_slice(&c[..rsp::COLOR_WORDS]);
+                }
                 let v = &self.tnl_ctx.projection().0.m;
                 let aux = [
                     pan.s[0], pan.s[1], pan.s[2], pan.q[0], pan.q[1], pan.q[2], pan.r2, v[0][3],
@@ -824,7 +1086,13 @@ impl Renderer for N64Renderer {
                 }
                 memo::store(&mut self.memo, k, entry, tris);
             }
-            self.queue_rsp(words);
+            match color {
+                Some(c) => {
+                    self.pending_rsp.push(words);
+                    self.queue_rsp(c);
+                }
+                None => self.queue_rsp(words),
+            }
             self.count_rsp(model, t0, tris);
             return;
         }
@@ -884,7 +1152,15 @@ impl Renderer for N64Renderer {
         // Profiling: charge the RSP/RDP work this frame queued to the frame
         // itself (with RSP T&L it is no longer CPU time).
         if self.profile.is_some() {
+            let t1 = now_us();
             unsafe { ffi::trino_drain() }
+            // Plain load and store (one thread; no read-modify-write
+            // atomics needed on the VR4300).
+            let d = now_us().wrapping_sub(t1);
+            DRAIN_US.store(
+                DRAIN_US.load(Ordering::Relaxed).wrapping_add(d),
+                Ordering::Relaxed,
+            );
         }
         self.charge(t0, |s| &mut s.end);
     }
@@ -970,5 +1246,401 @@ impl Renderer for N64Renderer {
     fn read_pixel(&mut self, x: u32, y: u32) -> Option<Color> {
         let c = unsafe { ffi::trino_debug_pixel(x, y) };
         (c != 0).then(|| Color::rgba((c >> 24) as u8, (c >> 16) as u8, (c >> 8) as u8, c as u8))
+    }
+}
+
+/// Flat RSP copies by (mesh, part, scale ratios): see `N64Renderer::rsp_flat`.
+/// The part is a rigid mesh's joint, or [`WHOLE`].
+type FlatKey = (u32, u32, [u16; 3]);
+type FlatCopies = BTreeMap<FlatKey, Option<RspMesh>>;
+/// A flat copy of the whole mesh (not a rigid part).
+const WHOLE: u32 = u32::MAX;
+
+/// A rigid mesh's RSP parts by joint and their bind-pose spheres.
+pub struct RigidCopy {
+    parts: Vec<Option<RspMesh>>,
+    bounds: [Option<(Vec3, f32)>; MAX_JOINTS],
+}
+
+/// Bake a flat RSP copy (`rsp::build_flat`) on its first draw under these
+/// scale ratios.
+fn bake_flat(copies: &mut FlatCopies, key: FlatKey, mesh: &Mesh) {
+    if !copies.contains_key(&key) {
+        bake_flat_cold(copies, key, mesh);
+    }
+}
+
+/// Cold: once per mesh, and castle64 never draws flat.
+#[cold]
+#[inline(never)]
+fn bake_flat_cold(copies: &mut FlatCopies, key: FlatKey, mesh: &Mesh) {
+    let part = (key.1 != WHOLE).then_some(key.1 as usize);
+    copies.insert(key, rsp::build_flat(mesh, part, key.2));
+}
+
+/// The RSP parts of rigid mesh `mesh` ([`RigidCopy`]).
+#[cold]
+#[inline(never)]
+fn rigid_copy(mesh: &Mesh) -> RigidCopy {
+    RigidCopy {
+        parts: (0..mesh.joint_count())
+            .map(|j| rsp::build_part(mesh, j))
+            .collect(),
+        bounds: core::array::from_fn(|j| {
+            if j < mesh.joint_count() {
+                rsp_part_bounds(mesh, j)
+            } else {
+                None
+            }
+        }),
+    }
+}
+
+impl N64Renderer {
+    /// A posed rigid draw on the RSP, a command per joint on screen
+    /// (`rsp_rigid_draws`); `false` when a part needs the CPU path (the
+    /// draw is then tessellated whole). Out of line: castle64's skinned
+    /// characters are split into static parts already.
+    #[inline(never)]
+    fn draw_rigid(
+        &mut self,
+        model: ModelId,
+        matrix: &Mat34,
+        params: &ModelParams,
+        rc: &RigidCopy,
+    ) -> bool {
+        let Some((tmdl, layout)) = self.meshes.get(&model.0) else {
+            return false;
+        };
+        let mesh = Mesh::from_layout(tmdl, layout);
+        let t0 = self.tick();
+        let mut joints = [Mat34::IDENTITY; MAX_JOINTS];
+        mesh.pose(params.anim, &mut joints);
+        let mut parts = [RspPart {
+            joint: 0,
+            model: Mat34::IDENTITY,
+            mv: Mat34::IDENTITY,
+            draw: trino_core::render3d::RspDraw {
+                light: Vec3::ZERO,
+                ambient: 1.0,
+                cull_back: true,
+            },
+        }; MAX_JOINTS];
+        let Ok(n) = rsp_rigid_draws(
+            &self.tnl_ctx,
+            &mesh,
+            matrix,
+            params,
+            &joints,
+            &rc.bounds,
+            &mut parts,
+        ) else {
+            return false;
+        };
+        let color = rsp_color(&self.tnl_ctx, params);
+        let mut out: Vec<([u32; rsp::DRAW_WORDS], Option<[u32; rsp::DRAW_WORDS]>, u32)> =
+            Vec::with_capacity(n);
+        for p in &parts[..n] {
+            let rm = if params.shading == Shading::Flat {
+                let key = (model.0, p.joint as u32, flat_ratios(&p.model));
+                bake_flat(&mut self.rsp_flat, key, &mesh);
+                self.rsp_flat.get(&key).and_then(Option::as_ref)
+            } else {
+                rc.parts.get(p.joint).and_then(Option::as_ref)
+            };
+            let Some(rm) = rm else {
+                return false;
+            };
+            let cull = if p.draw.cull_back { self.rsp_cull } else { 2 };
+            let mut words =
+                rsp::draw_words(&self.tnl_ctx, &p.mv, &p.draw, params.tint, rm, cull, 0);
+            let entry = color.map(|c| rsp::color_entry(&c, &p.mv));
+            if entry.is_some() {
+                words[0] |= rsp::COLORED;
+            }
+            out.push((words, entry, rm.tris()));
+        }
+        self.frame_stats.models += 1;
+        for (k, (words, entry, tris)) in out.into_iter().enumerate() {
+            // The whole build is charged to the first part.
+            let t = if k == 0 { t0 } else { self.tick() };
+            match entry {
+                Some(c) => {
+                    self.pending_rsp.push(words);
+                    self.queue_rsp(c);
+                }
+                None => self.queue_rsp(words),
+            }
+            self.count_rsp(model, t, tris);
+        }
+        true
+    }
+}
+
+/// Uncached RDRAM for the RSP water draws' per-frame data (water blocks and
+/// ripple deltas): three buffers in turn, one per frame, so the CPU never
+/// writes one the RSP may still be reading from the frame before.
+struct WaterArena {
+    bufs: [*mut u8; WATER_ARENA_FRAMES],
+    phys: [u32; WATER_ARENA_FRAMES],
+    cur: usize,
+    used: usize,
+}
+
+const WATER_ARENA_FRAMES: usize = 3;
+/// Bytes per frame: a dozen water draws of 64 vertices with room to spare.
+const WATER_ARENA_BYTES: usize = 16 * 1024;
+
+impl WaterArena {
+    const fn new() -> Self {
+        WaterArena {
+            bufs: [core::ptr::null_mut(); WATER_ARENA_FRAMES],
+            phys: [0; WATER_ARENA_FRAMES],
+            cur: 0,
+            used: 0,
+        }
+    }
+
+    fn next_frame(&mut self) {
+        self.cur = (self.cur + 1) % WATER_ARENA_FRAMES;
+        self.used = 0;
+        if self.bufs[self.cur].is_null() {
+            self.grow();
+        }
+    }
+
+    /// This frame's buffer, allocated once (cold: the first frames only).
+    #[cold]
+    #[inline(never)]
+    fn grow(&mut self) {
+        let p = unsafe { ffi::trino_alloc_uncached(WATER_ARENA_BYTES as u32) } as *mut u8;
+        if !p.is_null() {
+            self.bufs[self.cur] = p;
+            self.phys[self.cur] = unsafe { ffi::trino_phys_addr(p as *const c_void) };
+        }
+    }
+
+    /// `bytes` (8-aligned) of this frame's buffer: (pointer, RSP address).
+    fn alloc(&mut self, bytes: usize) -> Option<(*mut u8, u32)> {
+        let bytes = bytes.div_ceil(8) * 8;
+        if self.bufs[self.cur].is_null() {
+            return None;
+        }
+        if self.used + bytes > WATER_ARENA_BYTES {
+            return None;
+        }
+        let at = self.used;
+        self.used += bytes;
+        Some((
+            unsafe { self.bufs[self.cur].add(at) },
+            self.phys[self.cur] + at as u32,
+        ))
+    }
+}
+
+/// Copy `bytes` (big-endian words) to uncached memory at `dst`.
+fn write_uncached(dst: *mut u8, bytes: &[u8]) {
+    for (k, w) in bytes.as_chunks::<4>().0.iter().enumerate() {
+        unsafe {
+            (dst as *mut u32)
+                .add(k)
+                .write_volatile(u32::from_be_bytes(*w))
+        };
+    }
+}
+
+/// One RSP water command: its texture and blend bound by the binding in its
+/// entry (`rsp::WATER_BIND`, as `flush_water` binds a CPU group), then the
+/// command.
+#[cold]
+#[inline(never)]
+fn submit_water(
+    sprites: &BTreeMap<u32, SpriteEntry>,
+    w: &[u32; rsp::DRAW_WORDS],
+    e: &[u32; rsp::DRAW_WORDS],
+) {
+    let bind = &e[rsp::WATER_BIND..rsp::WATER_BIND + 4];
+    let Some(base) = sprites.get(&bind[0]) else {
+        return;
+    };
+    let detail = sprites
+        .get(&bind[1])
+        .map_or(core::ptr::null_mut(), |s| s.ptr);
+    unsafe {
+        ffi::trino_3d_water(base.ptr, detail, bind[2], bind[3]);
+        ffi::trino_rsp_draw_water(w.as_ptr(), e.as_ptr());
+    }
+}
+
+impl N64Renderer {
+    /// A water draw on the RSP (`rsp_trino_water`): the surface displaced,
+    /// lit and shaded by the overlay, the ripples' deltas computed here for
+    /// its vertices, the ring decals still from the CPU T&L. `false` when
+    /// the draw needs the CPU path (`rsp_check`'s water rule).
+    #[inline(never)]
+    fn draw_water_rsp(&mut self, model: ModelId, matrix: &Mat34, params: &ModelParams) -> bool {
+        let t0 = self.tick();
+        let Some((words, e, tris, bind)) = self.water_command(model, matrix, params, 0) else {
+            return false;
+        };
+        let ctx = self.tnl_ctx.with_water(&self.water_state);
+        let Some((tmdl, layout)) = self.meshes.get(&model.0) else {
+            return false;
+        };
+        let mesh = Mesh::from_layout(tmdl, layout);
+        // The ring decals: CPU triangles in the water bucket, after.
+        let before = self.pending_water.len();
+        let pending = &mut self.pending_water;
+        let rings =
+            trino_core::render3d::tessellate_ripples(&ctx, &mesh, matrix, params, &mut |tri| {
+                pending.push(tri)
+            });
+        let added = self.pending_water.len() - before;
+        self.pending_water_tex
+            .extend(core::iter::repeat_n(Some(bind), added));
+        self.pending_water_rsp.push([words, e]);
+        self.frame_stats.models += 1;
+        self.count_rsp_with(model, t0, tris, &rings);
+        true
+    }
+
+    /// A water draw's RSP command, its entry (color and texture words, the
+    /// water block's and ripple deltas' addresses in `water_arena`, its
+    /// binding), its triangles and its texture binding (for the rings).
+    /// `debug_phys` as `rsp::draw_words`' (the oracle's read-back).
+    fn water_command(
+        &mut self,
+        model: ModelId,
+        matrix: &Mat34,
+        params: &ModelParams,
+        debug_phys: u32,
+    ) -> Option<([u32; rsp::DRAW_WORDS], [u32; rsp::DRAW_WORDS], u32, TexBind)> {
+        let w = params.water?;
+        let ctx = self.tnl_ctx.with_water(&self.water_state);
+        let (tmdl, layout) = self.meshes.get(&model.0)?;
+        let mesh = Mesh::from_layout(tmdl, layout);
+        if !self.rsp_water.contains_key(&model.0) {
+            let copy = rsp_water_mesh_check(&mesh)
+                .ok()
+                .and_then(|_| rsp::build(&mesh));
+            self.rsp_water.insert(model.0, copy);
+        }
+        let rm = self.rsp_water.get(&model.0)?.as_ref()?;
+        let mv = ctx.projection().0.mul(matrix);
+        let d = rsp_eligible_mv(&ctx, &mesh, matrix, &mv, params)?;
+        let t = mesh.texture_for(params)?;
+        let size = self.sprites.get(&t.0)?.size;
+        let ws = water_rsp(&ctx, &mesh, matrix, params)?;
+        let n = rm.order.len();
+        let (ptr, phys) = self
+            .water_arena
+            .alloc(rsp::WATER_BLOCK + n * rsp::RIPPLE_DELTA)?;
+        write_uncached(ptr, &rsp::water_block(&ctx, matrix, &ws));
+        let mut deltas = alloc::vec![0u8; n * rsp::RIPPLE_DELTA];
+        if ws.n_ripples > 0 {
+            for (k, &g) in rm.order.iter().enumerate() {
+                let p = matrix.transform_point(mesh.position(g as usize));
+                let at = k * rsp::RIPPLE_DELTA;
+                deltas[at..at + rsp::RIPPLE_DELTA]
+                    .copy_from_slice(&rsp::ripple_delta(&ws, p.x, p.z));
+            }
+        }
+        write_uncached(unsafe { ptr.add(rsp::WATER_BLOCK) }, &deltas);
+        let cull = if d.cull_back { self.rsp_cull } else { 2 };
+        let words = rsp::draw_words(&ctx, &mv, &d, params.tint, rm, cull, debug_phys);
+        let c = rsp_color_terms(&ctx, params);
+        let scroll = [ws.uv.x * size[0], ws.uv.y * size[1]];
+        let mut e = rsp::tex_entry(&c, &mv, size, scroll, [0; 3]);
+        e[rsp::WATER_PTRS] = phys;
+        e[rsp::WATER_PTRS + 1] = phys + rsp::WATER_BLOCK as u32;
+        let b = TexBind::model(t.0, params, self.tex_filter).with_water(&w, ctx.water().time);
+        let detail = b.detail.filter(|d| self.sprites.contains_key(&d.sprite.0));
+        let [u, v] = b.water.unwrap_or([0, 0]);
+        e[rsp::WATER_BIND] = t.0;
+        e[rsp::WATER_BIND + 1] = detail.map_or(0, |d| d.sprite.0);
+        e[rsp::WATER_BIND + 2] = ((b.filter == TexFilter::Point) as u32) << 1
+            | detail.map_or(0, |d| (d.scale_log2 as u32) << 4);
+        e[rsp::WATER_BIND + 3] = (u as u32) << 16 | v as u32;
+        Some((words, e, rm.tris(), b))
+    }
+}
+
+impl N64Renderer {
+    /// The water overlay against the CPU path (`water_vertex`): a water
+    /// draw's first segment, screen position, depth, color and S, T per
+    /// vertex, under the frame's camera and light and `time`, `ripples`.
+    pub fn rsp_water_oracle(
+        &mut self,
+        model: ModelId,
+        matrix: &Mat34,
+        params: &ModelParams,
+        time: f32,
+        ripples: &[Ripple],
+    ) -> Result<alloc::string::String, alloc::string::String> {
+        self.begin_frame(Color::BLACK);
+        self.water_state = WaterState::new(time, ripples, self.caps.max_ripples);
+        let Some((tmdl, layout)) = self.meshes.get(&model.0).cloned() else {
+            return Err("mesh not registered".into());
+        };
+        let mesh = Mesh::from_layout(&tmdl, &layout);
+        let probe = unsafe { ffi::trino_alloc_uncached(32 * 24) } as *mut u8;
+        let phys = unsafe { ffi::trino_phys_addr(probe as *const c_void) };
+        let Some((words, e, _, _)) = self.water_command(model, matrix, params, phys) else {
+            return Err("water draw not RSP-eligible".into());
+        };
+        submit_water(&self.sprites, &words, &e);
+        self.end_frame();
+        unsafe { ffi::trino_drain() };
+        let Some(Some(rm)) = self.rsp_water.get(&model.0) else {
+            return Err("no water copy".into());
+        };
+        let seg0 = rm.seg0.clone();
+        let ctx = self.tnl_ctx.with_water(&self.water_state);
+        let (_, focal, screen) = ctx.projection();
+        let (cx, cy) = (screen.x * 0.5, screen.y * 0.5);
+        let size = mesh
+            .texture_for(params)
+            .and_then(|t| self.sprites.get(&t.0))
+            .map_or([1.0, 1.0], |s| s.size);
+        let ws = water_rsp(&ctx, &mesh, matrix, params);
+        let scroll = ws.map_or(Vec2::new(0.0, 0.0), |w| w.uv);
+        let (mut dxy, mut dz, mut dc, mut dst) = (0i32, 0i32, 0i32, 0i32);
+        let mut worst = alloc::string::String::new();
+        for (k, &g) in seg0.iter().enumerate() {
+            let g = g as usize;
+            let rd = |o: usize| unsafe { probe.add(k * 24 + o).read_volatile() };
+            let rd16 = |o: usize| i16::from_be_bytes([rd(o), rd(o + 1)]) as i32;
+            let Some((p, c)) = water_vertex(&ctx, &mesh, matrix, params, g) else {
+                return Err("not a water draw".into());
+            };
+            let ex = ((cx + p.x * focal / p.z) * 4.0) as i32;
+            let ey = ((cy - p.y * focal / p.z) * 4.0) as i32;
+            let ez = ((1.0 - NEAR_PLANE / p.z) * 32767.0) as i32;
+            dxy = dxy.max((rd16(0) - ex).abs()).max((rd16(2) - ey).abs());
+            dz = dz.max((rd16(4) - ez).abs());
+            let got = [rd(8), rd(9), rd(10), rd(11)];
+            let want = [c.r, c.g, c.b, c.a];
+            let d = (0..4)
+                .map(|ch| (got[ch] as i32 - want[ch] as i32).abs())
+                .max()
+                .unwrap_or(0);
+            if d > dc {
+                worst = alloc::format!(" (vertex {k}: got {got:?}, want {want:?})");
+            }
+            dc = dc.max(d);
+            let uv = mesh.uv(g);
+            let es = ((uv.x + scroll.x) * size[0] * 32.0) as i32;
+            let et = ((uv.y + scroll.y) * size[1] * 32.0) as i32;
+            dst = dst.max((rd16(12) - es).abs()).max((rd16(14) - et).abs());
+        }
+        let msg = alloc::format!(
+            "{} vertices: xy {dxy}/4 px, z {dz}/32767, color {dc}/255, st {dst}/32 texel{worst}",
+            seg0.len()
+        );
+        if dxy > 4 || dz > 64 || dc > 6 || dst > 4 {
+            Err(msg)
+        } else {
+            Ok(msg)
+        }
     }
 }

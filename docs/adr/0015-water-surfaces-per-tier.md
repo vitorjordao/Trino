@@ -60,8 +60,8 @@ that the hero, a robot and falling objects disturb.
   no `fmodf`, which is software on the N64.
 - The CPU path is a `WATER` instantiation of `render3d/lit.rs`'s copy of the T&L, kept
   out of `tessellate_joints`, whose N64 I-cache budget is untouched.
-- Water never takes the RSP (`RspReject::Water`), the 3DS's static-mesh GPU path
-  (`GpuReject::Water`) or the draw memo.
+- Water never takes the 3DS's static-mesh GPU path (`GpuReject::Water`) or the draw
+  memo. It never took the RSP either until #69 gave it an overlay of its own (ADR 0018).
 - **Deviation from the issue:** there is no `vs_water` WGSL vertex shader. Every PC draw
   arrives already projected by the core (ADR 0003). Displacing on the GPU would need a
   second projection path, and the PC's console profiles must keep drawing exactly what
@@ -159,6 +159,8 @@ positional splash (`sounds/water_splash`). Wading keeps rippling. Two positional
   its scene camera stays on the CPU path: part of it lies behind the camera.
 - **PC:** `crates/platform-pc/tests/water.rs` and the goldens `water_native`,
   `water_n64`, `water_n3ds` and `showcase_river`.
+- **After #69 (ADR 0018 §5):** the water and the rest of the showcase on the N64 RSP:
+  `micro-river` 19.6 → 10.5 ms, `showcase-river` 286.6 → 75.2 ms (mean over 8 paddings).
 
 ## Consequences
 

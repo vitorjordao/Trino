@@ -49,12 +49,25 @@ overlay:
 
 - **Which draws.** `trino_core::render3d::rsp_eligible` (per draw) on meshes that
   `rsp_mesh_supported` accepted (once, at register):
-  - static, untextured, opaque, unit normals, ≤ 16 segments (`rsp_split`);
-  - Gouraud (model-space light, 3c) or Unlit; white light, no fog, no emissive;
-  - the whole bounding sphere inside the guard band and past NEAR, so the CPU path
-    would have clipped nothing.
+  - static or rigid-skinned (one draw per joint, `rsp_rigid_draws`), unit normals,
+    ≤ 64 segments;
+  - Gouraud (model-space light, 3c), Flat (≤ `RSP_FLAT_SEG_TRIS` faces: flat copies
+    keyed by their light ratios) or Unlit;
+  - the whole bounding sphere inside the guard band and past NEAR (or every vertex,
+    `rsp_hull_check`), so the CPU path would have clipped nothing;
+  - since #69 also colored light, emissive and per-vertex fog (`rsp_trino_color`),
+    textured meshes (`rsp_trino_tex`) and water (`rsp_trino_water`), each only when the
+    CPU path would split no edge (`DEPTH_SPLIT`: `max_edge2`/`edge_box` against the
+    view's depth row, `rsp_split_where`).
 
-  Everything else stays on the CPU path, which is still the reference.
+  Everything else stays on the CPU path, which is still the reference. `rsp_plan`
+  (draws, triangles) is what every predictor (`perf_budget`, `scene budget`, PC strict
+  mode) calls, so the PC and the ROM count the same split.
+- **Four overlays, one per surface** (`rsp_trino`, `_color`, `_tex`, `_water`, the same
+  `rsp_trino.S` assembled with `TRINO_COLORED`/`TRINO_TEXTURED`/`TRINO_WATER`): the
+  white path keeps its bytes and its timings. Each has its own oracle in
+  `apps/n64/src/n64/micro.rs` (`rsp_oracle`, `rsp_water_oracle`: worst vertex reported)
+  and a CPU-vs-RSP pixel check.
 - **How.** At register, the N64 renderer bakes an RSP copy in uncached RDRAM:
   segments of ≤ 32 vertices (s15.16 positions, s0.15 normals, colors) plus u8 local
   indices. A draw becomes one 27-word command: the clip-space matrix, the light, the
@@ -82,7 +95,23 @@ overlay:
   - one staging buffer: alternating two dropped every other pair of triangles;
   - v0 = 0 culls Trino's back faces (v0 = 1 culled every front face);
   - the shim keeps the 3D mode current for RSP draws and issues a SYNC_PIPE before
-    the next mode change (rdpq's autosync never sees them).
+    the next mode change (rdpq's autosync never sees them);
+  - textured RSP triangles need `minW · INVW ≤ 1` or RDPQ samples texel (0, 0)
+    everywhere; `vrcp` overshoots up to 0.2 %, so W is stored 2^-7 smaller;
+  - `VADD` consumes the VCO carry a previous `VADDC` left: clear it
+    (`vaddc vtmp, vzero, vzero`) before a plain add;
+  - `lsv`/`ssv` offsets are ±128 elements of the access size: a far DMEM label needs a
+    base register;
+  - a three-lane dot product summed from a vector you already modified reads garbage:
+    sum the product's own lanes;
+  - Newton steps saturate in s15.16 if `w + w/2` overflows: subtract first.
+- **LLVM hoists float math out of `Option` payloads.** On the VR4300 a speculated
+  float of an uninitialized `None` payload can be a denormal, which traps (unimplemented
+  operation). Keep floats in plain fields with a flag (`RspFog { on, .. }`), not in an
+  `Option<f32>` the hot path reads.
+- **Per-vertex CPU work kills an RSP draw.** A float VR4300 step is ~25 µs per vertex:
+  the water command's ripple deltas (one `ripple_sample` per vertex) cost ~2 ms of the
+  river's piece. Put the per-vertex term on the overlay, or skip vertices out of reach.
 - **Cost of the check itself.** A draw that falls back to the CPU still pays
   `rsp_eligible` (a `view·model` product and the sphere tests) outside the T&L timer,
   in `game`. `micro-culled`, 64 draws that never qualify, went 2.3 → 3.5 ms: about

@@ -7,40 +7,43 @@
 # 30 fps = 33333.
 
 [hub]
-frame_us = 13300
-tnl_us = 4000
-sort_us = 600
-submit_us = 2000
+frame_us = 14700
+tnl_us = 4600
+sort_us = 700
+submit_us = 2300
 
 [green-hills]
-frame_us = 9100
-tnl_us = 2900
+frame_us = 8900
+tnl_us = 2300
 sort_us = 600
-submit_us = 1700
+submit_us = 1800
 
 [lava-land]
 frame_us = 9700
-tnl_us = 3200
+tnl_us = 2700
 sort_us = 600
 submit_us = 1800
 
 [sky-tower]
-frame_us = 7800
-tnl_us = 1800
+frame_us = 8900
+tnl_us = 2400
 sort_us = 600
-submit_us = 1200
+submit_us = 1400
 
 [throne]
-frame_us = 19800
-tnl_us = 10000
-sort_us = 1000
-submit_us = 2900
+frame_us = 22400
+tnl_us = 11500
+sort_us = 900
+submit_us = 3200
 
-# The showcase's river (water, ADR 0015; `showcase::perf::river_scene`):
-# the whole fogged, colored-light showcase on the CPU T&L path, so ~4 fps
-# on the N64 — gated so it doesn't get worse.
+[micro-river]
+frame_us = 13300
+tnl_us = 9300
+sort_us = 800
+submit_us = 4200
+
 [showcase-river]
-frame_us = 342000
-tnl_us = 211900
-sort_us = 39000
-submit_us = 116800
+frame_us = 91900
+tnl_us = 36900
+sort_us = 1500
+submit_us = 41900

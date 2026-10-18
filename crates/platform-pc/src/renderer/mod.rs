@@ -3652,11 +3652,19 @@ impl Renderer for PcRenderer {
             // What the console does with it: its RSP overlay takes the draws
             // `rsp_eligible` accepts (the same rules, from the core); the CPU
             // transforms the rest.
-            let rsp = trino_core::render3d::rsp_mesh_supported(&mesh)
-                && trino_core::render3d::rsp_eligible(&ctx, &mesh, matrix, params).is_some();
-            if rsp {
-                self.n64.rsp_draws += 1;
-                self.n64.rsp_tris += (mesh.index_count / 3) as u32;
+            if let Ok((draws, tris)) = trino_core::render3d::rsp_plan(&ctx, &mesh, matrix, params) {
+                self.n64.rsp_draws += draws;
+                self.n64.rsp_tris += tris;
+                // A water surface on the RSP keeps its ring decals on the CPU.
+                if params.water.is_some() {
+                    self.n64.cpu.add(&trino_core::render3d::tessellate_ripples(
+                        &ctx,
+                        &mesh,
+                        matrix,
+                        params,
+                        &mut |_| {},
+                    ));
+                }
             } else {
                 self.n64.cpu_draws += 1;
                 self.n64.cpu.add(&tnl);

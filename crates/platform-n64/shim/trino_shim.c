@@ -32,6 +32,8 @@ static uint32_t trino_rsp_id;
 static void trino_register_color_overlay(void);
 // The textured overlay (last in this file too).
 static void trino_register_tex_overlay(void);
+// The water overlay (last in this file too).
+static void trino_register_water_overlay(void);
 
 // VI interrupt counter: an independent clock for perf reports (60 per
 // emulated second on NTSC), to cross-check the count-register timings.
@@ -101,6 +103,7 @@ void trino_init(void)
     trino_rsp_id = rspq_overlay_register(&rsp_trino);
     trino_register_color_overlay();
     trino_register_tex_overlay();
+    trino_register_water_overlay();
     register_VI_handler(trino_on_vi);
 }
 
@@ -940,6 +943,32 @@ void trino_rsp_draw_textured(const uint32_t* w, const uint32_t* c)
     rspq_write_arg(&q, w[0] & 0xFF);
     for (int i = 1; i < TRINO_RSP_DRAW_WORDS; i++) rspq_write_arg(&q, w[i]);
     for (int i = 0; i < TRINO_RSP_TEX_WORDS; i++) rspq_write_arg(&q, c[i]);
+    rspq_write_end(&q);
+    trino_rsp_pending = 1;
+    trino_rsp_tex_pending = 1;
+}
+
+// The overlay assembled with TRINO_WATER as well: water surfaces displaced,
+// lit, Fresnel-shaded and fogged on the RSP (ADR 0015, issue #69).
+DEFINE_RSP_UCODE(rsp_trino_water);
+static uint32_t trino_rsp_water_id;
+
+static void trino_register_water_overlay(void)
+{
+    trino_rsp_water_id = rspq_overlay_register(&rsp_trino_water);
+}
+
+// A water draw through rsp_trino_water's TrinoCmd_Draw, after
+// trino_3d_water bound its texture and blend: `w` as trino_rsp_draw's, then
+// the 17 color and texture words and the water block and ripple buffer
+// addresses of `c`.
+#define TRINO_RSP_WATER_WORDS 19
+void trino_rsp_draw_water(const uint32_t* w, const uint32_t* c)
+{
+    rspq_write_t q = rspq_write_begin(trino_rsp_water_id, 0x1, TRINO_RSP_DRAW_WORDS + TRINO_RSP_WATER_WORDS);
+    rspq_write_arg(&q, w[0] & 0xFF);
+    for (int i = 1; i < TRINO_RSP_DRAW_WORDS; i++) rspq_write_arg(&q, w[i]);
+    for (int i = 0; i < TRINO_RSP_WATER_WORDS; i++) rspq_write_arg(&q, c[i]);
     rspq_write_end(&q);
     trino_rsp_pending = 1;
     trino_rsp_tex_pending = 1;

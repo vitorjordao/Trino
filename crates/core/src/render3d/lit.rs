@@ -1195,3 +1195,87 @@ fn joints<
     stats.verts = verts;
     stats
 }
+
+/// What the N64's water overlay (`rsp_trino_water`) needs of a water draw:
+/// the swell, the ripples that reach it, the texture's scroll and the
+/// shading constants, the values [`tessellate_with`](super::tessellate_with)
+/// evaluates per vertex.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct WaterRsp {
+    pub waves: WaveSet,
+    /// The ripples that reach the draw, and how strongly they push it.
+    pub ripples: [Ripple; MAX_RIPPLES],
+    pub n_ripples: usize,
+    pub response: f32,
+    /// The texture's scroll, added to every UV.
+    pub uv: Vec2,
+    /// World eye, unit direction toward the light, the reflected sky and
+    /// the light's color (0..255), the material's shininess.
+    pub eye: Vec3,
+    pub sun: Vec3,
+    pub sky: [f32; 4],
+    pub sun_color: [f32; 4],
+    pub gloss: u8,
+}
+
+/// [`WaterRsp`] of a water draw (`None` without `params.water`).
+pub fn water_rsp(
+    ctx: &TnlContext,
+    mesh: &Mesh,
+    model: &Mat34,
+    params: &ModelParams,
+) -> Option<WaterRsp> {
+    let w = params.water.as_ref()?;
+    let s = WaterSetup::new(ctx, mesh, model, w, params.gloss);
+    Some(WaterRsp {
+        waves: s.waves,
+        ripples: s.ripples,
+        n_ripples: s.n_ripples,
+        response: s.response,
+        uv: s.uv,
+        eye: s.eye,
+        sun: s.sun,
+        sky: s.sky,
+        sun_color: s.sun_color,
+        gloss: s.gloss,
+    })
+}
+
+/// Vertex `i` of a water draw as the CPU path computes it: view-space
+/// position (displaced) and color (lit, Fresnel, glint, fog). The N64
+/// overlay's oracle.
+pub fn water_vertex(
+    ctx: &TnlContext,
+    mesh: &Mesh,
+    model: &Mat34,
+    params: &ModelParams,
+    i: usize,
+) -> Option<(Vec3, Color)> {
+    let w = params.water.as_ref()?;
+    let s = setup(ctx, mesh, model, params);
+    let ws = WaterSetup::new(ctx, mesh, model, w, params.gloss);
+    let (wp, n) = ws.displace(model.transform_point(mesh.position(i)));
+    let p = ctx.view.transform_point(wp);
+    Some((p, ws.color(&s, s.base_color(mesh, i), n, wp, p.z)))
+}
+
+/// Ripple ring decals a water draw gets ([`tessellate_ripples`]): each
+/// ripple that reaches it, falls on it and still shows.
+pub fn ripple_ring_count(
+    ctx: &TnlContext,
+    mesh: &Mesh,
+    model: &Mat34,
+    params: &ModelParams,
+) -> u32 {
+    let Some(w) = params.water.as_ref() else {
+        return 0;
+    };
+    let ws = WaterSetup::new(ctx, mesh, model, w, params.gloss);
+    ws.ripples[..ws.n_ripples]
+        .iter()
+        .filter(|r| {
+            let a = 210.0 * r.decay() * (r.strength * ws.response / 0.08).min(1.0);
+            a >= 4.0 && over_surface(mesh, model, r.pos)
+        })
+        .count() as u32
+}

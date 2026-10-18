@@ -59,7 +59,10 @@ pub use hw::{
     GpuDraw, GpuReject, GpuWater, gpu_check, gpu_check_mv, gpu_mesh_check, gpu_screen_matrix,
     gpu_water,
 };
-pub use lit::{RING_SEGMENTS, SurfaceScratch, SurfaceVert, tessellate_ripples, tessellate_surface};
+pub use lit::{
+    RING_SEGMENTS, SurfaceScratch, SurfaceVert, WaterRsp, ripple_ring_count, tessellate_ripples,
+    tessellate_surface, water_rsp, water_vertex,
+};
 pub use pc::{PcGpuReject, pc_gpu_check, pc_gpu_mesh_check};
 
 /// Mesh blob format ("TMDL", little-endian):
@@ -518,6 +521,11 @@ impl<'a> Mesh<'a> {
             }
         }
         (best, bx)
+    }
+
+    /// Every vertex color is opaque (alpha 255; checked at parse).
+    pub fn opaque_colors(&self) -> bool {
+        self.opaque
     }
 
     /// The longest edge squared ([`Mesh::longest_edge2`]) as checked at parse.
@@ -1293,6 +1301,20 @@ impl RspReject {
 
 /// [`rsp_mesh_supported`] with the reason a mesh can never use the RSP.
 pub fn rsp_mesh_check(mesh: &Mesh) -> Result<(), RspReject> {
+    rsp_mesh_check_as(mesh, false)
+}
+
+/// [`rsp_mesh_check`] for a water surface's copy (`rsp_trino_water`): its
+/// vertex alpha is the water's translucency, and it is shaded from its
+/// displaced normals, not its own.
+pub fn rsp_water_mesh_check(mesh: &Mesh) -> Result<(), RspReject> {
+    if !mesh.has_uvs() {
+        return Err(RspReject::Water);
+    }
+    rsp_mesh_check_as(mesh, true)
+}
+
+fn rsp_mesh_check_as(mesh: &Mesh, water: bool) -> Result<(), RspReject> {
     if mesh.joint_count() != 0 {
         return Err(RspReject::Skinned);
     }
@@ -1308,10 +1330,10 @@ pub fn rsp_mesh_check(mesh: &Mesh) -> Result<(), RspReject> {
     if mesh.has_blend() {
         return Err(RspReject::Blended);
     }
-    if !mesh.opaque {
+    if !mesh.opaque && !water {
         return Err(RspReject::TranslucentMesh);
     }
-    if !mesh.unit_normals {
+    if !mesh.unit_normals && !water {
         return Err(RspReject::NormalsNotUnit);
     }
     if mesh.vertex_count == 0 {
@@ -1541,7 +1563,7 @@ pub fn rsp_check_mv(
     params: &ModelParams,
 ) -> Result<RspDraw, RspReject> {
     if params.water.is_some() {
-        return Err(RspReject::Water);
+        return rsp_water_check(ctx, mesh, model, mv, params);
     }
     if params.tint.a < 255 {
         return Err(RspReject::Translucent);
@@ -1680,13 +1702,104 @@ fn rsp_fog_check(
     Err(RspReject::Fog)
 }
 
+/// The N64's water overlay (`rsp_trino_water`) for a water draw: it
+/// displaces (the swell on the RSP, the ripples from the CPU), lights,
+/// adds the Fresnel sky and the glint, fogs and textures each vertex as
+/// the CPU path does, so it takes the draws that path would neither clip
+/// nor split. The vertices move by up to the swell's and the ripples'
+/// heights (`margin`): the sphere grows by it, and the edge rule keeps that
+/// much more room. A textured surface only (the river; an untextured one
+/// stays on the CPU).
+#[cold]
+#[inline(never)]
+fn rsp_water_check(
+    ctx: &TnlContext,
+    mesh: &Mesh,
+    model: &Mat34,
+    mv: &Mat34,
+    params: &ModelParams,
+) -> Result<RspDraw, RspReject> {
+    let Some(w) = params.water else {
+        return Err(RspReject::Water);
+    };
+    if !mesh.has_uvs() {
+        return Err(RspReject::Water);
+    }
+    if params.palette.is_some() && mesh.has_slots() {
+        return Err(RspReject::Palette);
+    }
+    let reach: f32 = ctx
+        .water()
+        .ripples()
+        .iter()
+        .map(|r| r.strength * r.decay())
+        .fold(0.0, f32::max);
+    let margin = w.wave_amplitude * 1.45 + reach * w.ripple_responsiveness.abs() + 0.01;
+    let (c, r) = mesh.bounds().ok_or(RspReject::NoBounds)?;
+    let c = mv.transform_point(c);
+    let s = model.axis_scales_sq();
+    let smax = s.x.max(s.y).max(s.z);
+    let r = crate::math3d::sqrt(r * r * smax) + margin;
+    let r2 = r * r;
+    match rsp_band_check(ctx, c, r2) {
+        Ok(()) => {}
+        Err(RspReject::ClipBand | RspReject::NearPlane) => {
+            // Every vertex, raised and lowered by the margin (world Y).
+            let up = Vec3::new(ctx.view.m[0][1], ctx.view.m[1][1], ctx.view.m[2][1]) * margin;
+            let band = RSP_BAND / GUARD;
+            let (lx, ly) = (ctx.lim_x * band, ctx.lim_y * band);
+            for p in mesh.positions {
+                let v = mv.transform_point(vec3_of(p));
+                for q in [v + up, v - up] {
+                    if q.z <= NEAR {
+                        return Err(RspReject::NearPlane);
+                    }
+                    if lx * q.z <= q.x.abs() || ly * q.z <= q.y.abs() {
+                        return Err(RspReject::ClipBand);
+                    }
+                    if q.z >= RSP_MAX_DEPTH {
+                        return Err(RspReject::TooFar);
+                    }
+                }
+            }
+        }
+        Err(e) => return Err(e),
+    }
+    if ctx.n_locals > 0 && params.shading != Shading::Unlit && ctx.lights_touch(c, r2) {
+        return Err(RspReject::LocalLight);
+    }
+    if smax >= RSP_MAX_SCALE * RSP_MAX_SCALE {
+        return Err(RspReject::TooScaled);
+    }
+    // Translucent and textured: the CPU splits long edges. Two ends move
+    // apart by at most twice the margin along the view's depth.
+    if !short_edges_by(mesh, mv, 2.0 * margin) {
+        return Err(RspReject::Water);
+    }
+    Ok(RspDraw {
+        // World space: the overlay lights the displaced world normal.
+        light: ctx.ldir * -1.0,
+        ambient: if params.shading == Shading::Unlit {
+            1.0
+        } else {
+            ctx.light.ambient
+        },
+        cull_back: !params.double_sided,
+    })
+}
+
 /// No edge of `mesh` can span [`DEPTH_SPLIT`] of view depth under `mv`: an
 /// edge `e` spans `r · e`, with `r` the depth row, and `|r · e| <= |r| |e|`.
 /// The CPU path would then split nothing ([`split_policy`]).
 #[cold]
 #[inline(never)]
 fn short_edges(mesh: &Mesh, mv: &Mat34) -> bool {
-    let limit = DEPTH_SPLIT * 0.999;
+    short_edges_by(mesh, mv, 0.0)
+}
+
+/// [`short_edges`] with `slack` of view depth to spare.
+fn short_edges_by(mesh: &Mesh, mv: &Mat34, slack: f32) -> bool {
+    let limit = DEPTH_SPLIT * 0.999 - slack;
     let r = mv.m[2];
     let stretch2 = r[0] * r[0] + r[1] * r[1] + r[2] * r[2];
     if mesh.max_edge2 * stretch2 <= limit * limit {
@@ -1929,7 +2042,10 @@ pub fn rsp_plan(
     params: &ModelParams,
 ) -> Result<(u32, u32), RspReject> {
     if mesh.joint_count() == 0 {
-        rsp_mesh_check(mesh)?;
+        match params.water {
+            Some(_) => rsp_water_mesh_check(mesh)?,
+            None => rsp_mesh_check(mesh)?,
+        }
         rsp_check(ctx, mesh, model, params)?;
         return Ok((1, (mesh.index_count / 3) as u32));
     }

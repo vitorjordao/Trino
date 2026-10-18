@@ -3655,6 +3655,16 @@ impl Renderer for PcRenderer {
             if let Ok((draws, tris)) = trino_core::render3d::rsp_plan(&ctx, &mesh, matrix, params) {
                 self.n64.rsp_draws += draws;
                 self.n64.rsp_tris += tris;
+                // A water surface on the RSP keeps its ring decals on the CPU.
+                if params.water.is_some() {
+                    self.n64.cpu.add(&trino_core::render3d::tessellate_ripples(
+                        &ctx,
+                        &mesh,
+                        matrix,
+                        params,
+                        &mut |_| {},
+                    ));
+                }
             } else {
                 self.n64.cpu_draws += 1;
                 self.n64.cpu.add(&tnl);

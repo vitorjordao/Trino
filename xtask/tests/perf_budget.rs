@@ -130,11 +130,22 @@ impl Renderer for Counting {
             .then(|| rsp_plan(&ctx, &mesh, x, p).ok())
             .flatten();
         let s = if let Some((rsp_draws, rsp_tris)) = rsp {
-            TnlStats {
+            let mut s = TnlStats {
                 rsp_draws,
                 rsp_tris,
                 ..TnlStats::default()
+            };
+            // A water surface on the RSP keeps its ring decals on the CPU.
+            if p.water.is_some() {
+                s.add(&trino_core::render3d::tessellate_ripples(
+                    &ctx,
+                    &mesh,
+                    x,
+                    p,
+                    &mut |_| {},
+                ));
             }
+            s
         } else if self.target == Target::N3ds
             && gpu_mesh_check(&mesh).is_ok()
             && gpu_check(&ctx, &mesh, x, p).is_ok()

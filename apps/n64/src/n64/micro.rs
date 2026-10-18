@@ -235,6 +235,7 @@ pub fn run(r: &mut N64Renderer, frames: u32) {
         return;
     }
     rsp_checks(r);
+    water_checks(r);
     // Same ROM, both paths: the RSP numbers are free of code-layout noise.
     for (suffix, rsp) in [("", false), ("-rsp", true)] {
         r.set_rsp(rsp);
@@ -537,4 +538,50 @@ fn rigid_grid(pos: &[Vec3], half: usize, radius: f32) -> Vec<u8> {
     b.extend_from_slice(&(skel.len() as u32).to_le_bytes());
     b.extend_from_slice(&skel);
     b
+}
+
+/// The water overlay against the CPU path (`rsp_water_oracle`): castle64's
+/// self-test sheet seen from above, with a swell, a glint, a warm light and
+/// fog, then a ripple ringing out of its middle.
+fn water_checks(r: &mut N64Renderer) {
+    use castle64::selftest::{WATER_DETAIL, WATER_SHEET, WATER_TEX};
+    use trino_core::{DetailTexture, Ripple, Vec2, Water};
+    r.set_camera(&Camera3 {
+        eye: Vec3::new(0.0, 3.0, -2.2),
+        target: Vec3::new(0.0, 0.0, 0.2),
+        fov_y: 60.0 * core::f32::consts::PI / 180.0,
+    });
+    r.set_light(&Light {
+        fog: Fog {
+            color: Color::rgb(132, 178, 226),
+            near: 2.5,
+            far: 6.0,
+        },
+        ..WARM
+    });
+    let params = ModelParams {
+        texture: Some(WATER_TEX),
+        detail: Some(DetailTexture::new(WATER_DETAIL, 1)),
+        gloss: 220,
+        water: Some(Water {
+            wave_amplitude: 0.08,
+            wave_frequency: 0.9,
+            ..Water::DEFAULT
+        }),
+        ..ModelParams::DEFAULT
+    };
+    let ripple = Ripple {
+        pos: Vec2::new(0.1, 0.2),
+        age: 0.4,
+        strength: 0.12,
+    };
+    for (what, ripples) in [("swell", &[][..]), ("ripple", &[ripple][..])] {
+        match r.rsp_water_oracle(WATER_SHEET, &Mat34::IDENTITY, &params, 1.3, ripples) {
+            Ok(m) => runtime::log(&alloc::format!("TRINO_RSP:oracle water {what}: {m}\n")),
+            Err(m) => runtime::log(&alloc::format!(
+                "TRINO_TEST_FAIL:rsp oracle water {what}: {m}\n"
+            )),
+        }
+    }
+    setup(r);
 }

@@ -10,8 +10,8 @@ use core::ffi::c_void;
 
 use trino_core::math3d::to_i32;
 use trino_core::render3d::{
-    Mesh, NEAR_PLANE, RSP_FLAT_SEG_TRIS, RSP_MAX_SEGS, RspColor, RspDraw, TnlContext, face_normal,
-    flat_normal, rsp_part_split, rsp_split,
+    Mesh, NEAR_PLANE, RSP_FLAT_SEG_TRIS, RSP_MAX_SEGS, RspColor, RspDraw, TnlContext, WaterRsp,
+    face_normal, flat_normal, rsp_part_split, rsp_split,
 };
 use trino_core::{Color, Mat34, Vec3};
 
@@ -42,6 +42,9 @@ pub struct RspMesh {
     pub textured: bool,
     /// Local vertex order of segment 0 (global indices), for the oracle.
     pub seg0: Vec<u16>,
+    /// Every segment's vertices in order (global indices): a water draw's
+    /// ripple deltas follow it.
+    pub order: Vec<u16>,
 }
 
 impl RspMesh {
@@ -175,6 +178,9 @@ fn bake(mesh: &Mesh, segs: &[Segment]) -> Option<RspMesh> {
         blob[entry + 4..entry + 6].copy_from_slice(&(seg_bytes(s) as u16).to_be_bytes());
         blob[entry + 6..entry + 8].copy_from_slice(&(s.verts.len() as u16).to_be_bytes());
         blob[entry + 8..entry + 10].copy_from_slice(&(s.tris.len() as u16).to_be_bytes());
+        // +12: the segment's first vertex in the copy's order (water ripple deltas).
+        let first: usize = segs[..n].iter().map(|s| s.verts.len()).sum();
+        blob[entry + 12..entry + 16].copy_from_slice(&(first as u32).to_be_bytes());
         for (&g, &nrm) in s.verts.iter().zip(&s.normals) {
             let g = g as usize;
             let (p, c) = (mesh.position(g), mesh.color(g));
@@ -228,6 +234,7 @@ fn bake(mesh: &Mesh, segs: &[Segment]) -> Option<RspMesh> {
         tris: segs.iter().map(|s| s.tris.len() as u32).sum(),
         textured,
         seg0: segs[0].verts.clone(),
+        order: segs.iter().flat_map(|s| s.verts.iter().copied()).collect(),
     })
 }
 
@@ -401,4 +408,110 @@ pub fn tex_entry(
     e[COLOR_WORDS + 2] = pair(q(offset[0]), q(offset[1]));
     e[TEX_BIND..TEX_BIND + 3].copy_from_slice(&bind);
     e
+}
+
+/// Bytes of the water block (`rsp_trino_water`'s WBLK).
+pub const WATER_BLOCK: usize = 0xE0;
+/// Bytes of one vertex's ripple deltas (`RIP_IN`).
+pub const RIPPLE_DELTA: usize = 8;
+/// Where a water entry keeps the water block's and the ripple deltas'
+/// addresses (after the color and texture words) and then its binding:
+/// the sprite, the detail sprite (0: none), the `trino_3d_water` flags and
+/// scroll.
+pub const WATER_PTRS: usize = TEX_BIND;
+pub const WATER_BIND: usize = TEX_BIND + 2;
+
+/// The water overlay's per-draw block (WBLK, big-endian halves): see
+/// `rsp_trino.S`. `model` is the draw's model matrix, `w` its
+/// [`WaterRsp`] terms; fog per the context.
+#[cold]
+#[inline(never)]
+pub fn water_block(ctx: &TnlContext, model: &Mat34, w: &WaterRsp) -> [u8; WATER_BLOCK] {
+    let mut b = [0u8; WATER_BLOCK];
+    let mut put = |at: usize, v: i16| b[at..at + 2].copy_from_slice(&v.to_be_bytes());
+    // World rows in lanes 5..7 of each column.
+    for c in 0..4 {
+        for r in 0..3 {
+            let (i, f) = fixed(model.m[r][c]);
+            put(c * 6 + r * 2, i);
+            put(0x18 + c * 6 + r * 2, f as i16);
+        }
+    }
+    // UP: what one world unit of height adds to clip x, y, z, w, the fog
+    // factor and world y.
+    let (view, _, _) = ctx.projection();
+    let cm = clip_matrix_mv(ctx, &view);
+    let fog = ctx.light().fog;
+    let fog_up = if fog.enabled() {
+        view.m[2][1] / (fog.far - fog.near)
+    } else {
+        0.0
+    };
+    let up = [
+        cm[0][1], cm[1][1], cm[2][1], cm[3][1], fog_up, 0.0, 1.0, 0.0,
+    ];
+    for (lane, v) in up.iter().enumerate() {
+        let (i, f) = fixed(*v);
+        put(0x30 + lane * 2, i);
+        put(0x40 + lane * 2, f as i16);
+    }
+    // The swell's phases: lanes sin0, cos0, sin1, cos1.
+    let wv = &w.waves;
+    let lane_of = |k: usize| k / 2;
+    for k in 0..4 {
+        let i = lane_of(k);
+        let quarter = if k % 2 == 1 { 0.25 } else { 0.0 };
+        let ax = fixed(wv.k[i] * wv.dir[i].x);
+        let bz = fixed(wv.k[i] * wv.dir[i].y);
+        let c = fixed(quarter - wv.phase[i]);
+        put(0x50 + k * 2, ax.0);
+        put(0x58 + k * 2, ax.1 as i16);
+        put(0x60 + k * 2, bz.0);
+        put(0x68 + k * 2, bz.1 as i16);
+        put(0x70 + k * 2, c.0);
+        put(0x78 + k * 2, c.1 as i16);
+    }
+    // Height per sine (lanes 0, 2), half the gradient per cosine (1, 3).
+    let tau = core::f32::consts::TAU;
+    for i in 0..2 {
+        let g = wv.amp[i] * tau * wv.k[i] * 0.5;
+        put(0x80 + i * 4, s015(wv.amp[i]));
+        put(0x88 + i * 4 + 2, s015(g * wv.dir[i].x));
+        put(0x90 + i * 4 + 2, s015(g * wv.dir[i].y));
+    }
+    // a, b from the screen math, the view's rotation, the sun in view.
+    let (_, focal, screen) = ctx.projection();
+    let (fx, fy) = (focal / (screen.x * 0.5), focal / (screen.y * 0.5));
+    put(0x98, to_i32(8192.0 / fx) as i16);
+    put(0x9A, to_i32(-8192.0 / fy) as i16);
+    for c in 0..3 {
+        for r in 0..3 {
+            put(0xA0 + c * 8 + r * 2, s015(view.m[r][c]));
+        }
+    }
+    let sun = view.transform_dir(w.sun);
+    put(0xB8, s015(sun.x));
+    put(0xBA, s015(sun.y));
+    put(0xBC, s015(sun.z));
+    let byte = |v: f32| ((v.clamp(0.0, 255.0) as u16) << 7) as i16;
+    for i in 0..3 {
+        put(0xC0 + i * 2, byte(w.sky[i]));
+        put(0xC8 + i * 2, byte(w.sun_color[i] * w.gloss as f32 / 255.0));
+    }
+    put(0xC6, byte(255.0));
+    put(0xD0, (w.gloss > 0) as i16);
+    put(0xD2, (w.gloss > 128) as i16);
+    b
+}
+
+/// The ripples' height and half gradient at world `(x, z)` (s0.15 each,
+/// `RIP_IN`'s layout): what the CPU adds to a water vertex the RSP swells.
+#[inline]
+pub fn ripple_delta(w: &WaterRsp, x: f32, z: f32) -> [u8; RIPPLE_DELTA] {
+    let (h, g) = trino_core::water::ripple_sample(&w.ripples[..w.n_ripples], w.response, x, z);
+    let mut d = [0u8; RIPPLE_DELTA];
+    d[0..2].copy_from_slice(&s015(h).to_be_bytes());
+    d[2..4].copy_from_slice(&s015(g.x * 0.5).to_be_bytes());
+    d[4..6].copy_from_slice(&s015(g.y * 0.5).to_be_bytes());
+    d
 }

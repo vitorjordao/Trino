@@ -15,6 +15,7 @@ use trino_core::render3d::{
     ScreenTri, TexBind, TnlContext, TnlScratch, TnlStats, face_normal, flat_normal, flat_ratios,
     painter_index, painter_key, rsp_band, rsp_color, rsp_color_terms, rsp_eligible_mv,
     rsp_hull_inside, rsp_mesh_supported, rsp_part_bounds, rsp_rigid_check, rsp_rigid_draws,
+    rsp_water_mesh_check, water_rsp, water_vertex,
 };
 use trino_core::text::{BitmapFont, GlyphIndex};
 use trino_core::{
@@ -118,6 +119,14 @@ pub struct N64Renderer {
     /// their bind-pose spheres (`rsp_part_bounds`): a posed draw becomes a
     /// command per joint on screen (`rsp_rigid_draws`).
     rsp_rigid: BTreeMap<u32, Rc<RigidCopy>>,
+    /// Water surfaces' RSP copies (`rsp_trino_water`; `None`: the mesh can't have
+    /// one), baked on their first water draw.
+    rsp_water: BTreeMap<u32, Option<RspMesh>>,
+    /// The batch's RSP water commands and their entries (`rsp::water_block`
+    /// and ripple deltas live in `water_arena`), drawn first in the water
+    /// bucket.
+    pending_water_rsp: Vec<[[u32; rsp::DRAW_WORDS]; 2]>,
+    water_arena: WaterArena,
 }
 
 /// Memo slots (268 bytes each): a few hundred draws per frame rarely share one.
@@ -193,6 +202,9 @@ impl N64Renderer {
             memo_gen: 0,
             rsp_flat: BTreeMap::new(),
             rsp_rigid: BTreeMap::new(),
+            rsp_water: BTreeMap::new(),
+            pending_water_rsp: Vec::new(),
+            water_arena: WaterArena::new(),
             water_state: WaterState::NONE,
             pending_water: Vec::new(),
             pending_water_tex: Vec::new(),
@@ -216,6 +228,14 @@ impl N64Renderer {
     /// The batch's water, last: far to near, each surface's texture state
     /// bound once (`trino_3d_water`: blended, z-tested, not written).
     fn flush_water(&mut self) {
+        if !self.pending_water_rsp.is_empty() {
+            let t0 = self.tick();
+            for [w, e] in &self.pending_water_rsp {
+                submit_water(&self.sprites, w, e);
+            }
+            self.pending_water_rsp.clear();
+            self.charge(t0, |s| &mut s.submit);
+        }
         if self.pending_water.is_empty() {
             return;
         }
@@ -270,6 +290,9 @@ impl N64Renderer {
     /// shades it with the frame's ripples, and adds their rings; it goes in
     /// the water bucket.
     fn draw_water(&mut self, model: ModelId, matrix: &Mat34, params: &ModelParams) {
+        if self.rsp_on && self.draw_water_rsp(model, matrix, params) {
+            return;
+        }
         let Some((tmdl, layout)) = self.meshes.get(&model.0) else {
             return;
         };
@@ -458,6 +481,12 @@ impl N64Renderer {
         }
         self.rsp_flat.retain(|k, _| k.0 != id);
         self.rsp_rigid.remove(&id);
+        self.rsp_water.remove(&id);
+        // A translucent textured mesh is likely a water surface: its water copy
+        // now, not on the first frame that draws it.
+        if !mesh.opaque_colors() && rsp_water_mesh_check(&mesh).is_ok() {
+            self.rsp_water.insert(id, rsp::build(&mesh));
+        }
         if mesh.joint_count() > 0 && rsp_rigid_check(&mesh).is_ok() {
             self.rsp_rigid.insert(id, Rc::new(rigid_copy(&mesh)));
         }
@@ -807,6 +836,7 @@ impl Renderer for N64Renderer {
     fn begin_frame(&mut self, clear: Color) {
         self.frame_stats = FrameStats::default();
         self.water_state = WaterState::NONE;
+        self.water_arena.next_frame();
         if self.locals.set(&[], 0) {
             self.rebuild_tnl();
         }
@@ -1337,5 +1367,274 @@ impl N64Renderer {
             self.count_rsp(model, t, tris);
         }
         true
+    }
+}
+
+/// Uncached RDRAM for the RSP water draws' per-frame data (water blocks and
+/// ripple deltas): three buffers in turn, one per frame, so the CPU never
+/// writes one the RSP may still be reading from the frame before.
+struct WaterArena {
+    bufs: [*mut u8; WATER_ARENA_FRAMES],
+    phys: [u32; WATER_ARENA_FRAMES],
+    cur: usize,
+    used: usize,
+}
+
+const WATER_ARENA_FRAMES: usize = 3;
+/// Bytes per frame: a dozen water draws of 64 vertices with room to spare.
+const WATER_ARENA_BYTES: usize = 16 * 1024;
+
+impl WaterArena {
+    const fn new() -> Self {
+        WaterArena {
+            bufs: [core::ptr::null_mut(); WATER_ARENA_FRAMES],
+            phys: [0; WATER_ARENA_FRAMES],
+            cur: 0,
+            used: 0,
+        }
+    }
+
+    fn next_frame(&mut self) {
+        self.cur = (self.cur + 1) % WATER_ARENA_FRAMES;
+        self.used = 0;
+        if self.bufs[self.cur].is_null() {
+            self.grow();
+        }
+    }
+
+    /// This frame's buffer, allocated once (cold: the first frames only).
+    #[cold]
+    #[inline(never)]
+    fn grow(&mut self) {
+        let p = unsafe { ffi::trino_alloc_uncached(WATER_ARENA_BYTES as u32) } as *mut u8;
+        if !p.is_null() {
+            self.bufs[self.cur] = p;
+            self.phys[self.cur] = unsafe { ffi::trino_phys_addr(p as *const c_void) };
+        }
+    }
+
+    /// `bytes` (8-aligned) of this frame's buffer: (pointer, RSP address).
+    fn alloc(&mut self, bytes: usize) -> Option<(*mut u8, u32)> {
+        let bytes = bytes.div_ceil(8) * 8;
+        if self.bufs[self.cur].is_null() {
+            return None;
+        }
+        if self.used + bytes > WATER_ARENA_BYTES {
+            return None;
+        }
+        let at = self.used;
+        self.used += bytes;
+        Some((
+            unsafe { self.bufs[self.cur].add(at) },
+            self.phys[self.cur] + at as u32,
+        ))
+    }
+}
+
+/// Copy `bytes` (big-endian words) to uncached memory at `dst`.
+fn write_uncached(dst: *mut u8, bytes: &[u8]) {
+    for (k, w) in bytes.as_chunks::<4>().0.iter().enumerate() {
+        unsafe {
+            (dst as *mut u32)
+                .add(k)
+                .write_volatile(u32::from_be_bytes(*w))
+        };
+    }
+}
+
+/// One RSP water command: its texture and blend bound by the binding in its
+/// entry (`rsp::WATER_BIND`, as `flush_water` binds a CPU group), then the
+/// command.
+#[cold]
+#[inline(never)]
+fn submit_water(
+    sprites: &BTreeMap<u32, SpriteEntry>,
+    w: &[u32; rsp::DRAW_WORDS],
+    e: &[u32; rsp::DRAW_WORDS],
+) {
+    let bind = &e[rsp::WATER_BIND..rsp::WATER_BIND + 4];
+    let Some(base) = sprites.get(&bind[0]) else {
+        return;
+    };
+    let detail = sprites
+        .get(&bind[1])
+        .map_or(core::ptr::null_mut(), |s| s.ptr);
+    unsafe {
+        ffi::trino_3d_water(base.ptr, detail, bind[2], bind[3]);
+        ffi::trino_rsp_draw_water(w.as_ptr(), e.as_ptr());
+    }
+}
+
+impl N64Renderer {
+    /// A water draw on the RSP (`rsp_trino_water`): the surface displaced,
+    /// lit and shaded by the overlay, the ripples' deltas computed here for
+    /// its vertices, the ring decals still from the CPU T&L. `false` when
+    /// the draw needs the CPU path (`rsp_check`'s water rule).
+    #[inline(never)]
+    fn draw_water_rsp(&mut self, model: ModelId, matrix: &Mat34, params: &ModelParams) -> bool {
+        let t0 = self.tick();
+        let Some((words, e, tris, bind)) = self.water_command(model, matrix, params, 0) else {
+            return false;
+        };
+        let ctx = self.tnl_ctx.with_water(&self.water_state);
+        let Some((tmdl, layout)) = self.meshes.get(&model.0) else {
+            return false;
+        };
+        let mesh = Mesh::from_layout(tmdl, layout);
+        // The ring decals: CPU triangles in the water bucket, after.
+        let before = self.pending_water.len();
+        let pending = &mut self.pending_water;
+        let rings =
+            trino_core::render3d::tessellate_ripples(&ctx, &mesh, matrix, params, &mut |tri| {
+                pending.push(tri)
+            });
+        let added = self.pending_water.len() - before;
+        self.pending_water_tex
+            .extend(core::iter::repeat_n(Some(bind), added));
+        self.pending_water_rsp.push([words, e]);
+        self.frame_stats.models += 1;
+        self.frame_stats.tnl.add(&rings);
+        self.count_rsp(model, t0, tris);
+        true
+    }
+
+    /// A water draw's RSP command, its entry (color and texture words, the
+    /// water block's and ripple deltas' addresses in `water_arena`, its
+    /// binding), its triangles and its texture binding (for the rings).
+    /// `debug_phys` as `rsp::draw_words`' (the oracle's read-back).
+    fn water_command(
+        &mut self,
+        model: ModelId,
+        matrix: &Mat34,
+        params: &ModelParams,
+        debug_phys: u32,
+    ) -> Option<([u32; rsp::DRAW_WORDS], [u32; rsp::DRAW_WORDS], u32, TexBind)> {
+        let w = params.water?;
+        let ctx = self.tnl_ctx.with_water(&self.water_state);
+        let (tmdl, layout) = self.meshes.get(&model.0)?;
+        let mesh = Mesh::from_layout(tmdl, layout);
+        if !self.rsp_water.contains_key(&model.0) {
+            let copy = rsp_water_mesh_check(&mesh)
+                .ok()
+                .and_then(|_| rsp::build(&mesh));
+            self.rsp_water.insert(model.0, copy);
+        }
+        let rm = self.rsp_water.get(&model.0)?.as_ref()?;
+        let mv = ctx.projection().0.mul(matrix);
+        let d = rsp_eligible_mv(&ctx, &mesh, matrix, &mv, params)?;
+        let t = mesh.texture_for(params)?;
+        let size = self.sprites.get(&t.0)?.size;
+        let ws = water_rsp(&ctx, &mesh, matrix, params)?;
+        let n = rm.order.len();
+        let (ptr, phys) = self
+            .water_arena
+            .alloc(rsp::WATER_BLOCK + n * rsp::RIPPLE_DELTA)?;
+        write_uncached(ptr, &rsp::water_block(&ctx, matrix, &ws));
+        let mut deltas = alloc::vec![0u8; n * rsp::RIPPLE_DELTA];
+        if ws.n_ripples > 0 {
+            for (k, &g) in rm.order.iter().enumerate() {
+                let p = matrix.transform_point(mesh.position(g as usize));
+                let at = k * rsp::RIPPLE_DELTA;
+                deltas[at..at + rsp::RIPPLE_DELTA]
+                    .copy_from_slice(&rsp::ripple_delta(&ws, p.x, p.z));
+            }
+        }
+        write_uncached(unsafe { ptr.add(rsp::WATER_BLOCK) }, &deltas);
+        let cull = if d.cull_back { self.rsp_cull } else { 2 };
+        let words = rsp::draw_words(&ctx, &mv, &d, params.tint, rm, cull, debug_phys);
+        let c = rsp_color_terms(&ctx, params);
+        let scroll = [ws.uv.x * size[0], ws.uv.y * size[1]];
+        let mut e = rsp::tex_entry(&c, &mv, size, scroll, [0; 3]);
+        e[rsp::WATER_PTRS] = phys;
+        e[rsp::WATER_PTRS + 1] = phys + rsp::WATER_BLOCK as u32;
+        let b = TexBind::model(t.0, params, self.tex_filter).with_water(&w, ctx.water().time);
+        let detail = b.detail.filter(|d| self.sprites.contains_key(&d.sprite.0));
+        let [u, v] = b.water.unwrap_or([0, 0]);
+        e[rsp::WATER_BIND] = t.0;
+        e[rsp::WATER_BIND + 1] = detail.map_or(0, |d| d.sprite.0);
+        e[rsp::WATER_BIND + 2] = ((b.filter == TexFilter::Point) as u32) << 1
+            | detail.map_or(0, |d| (d.scale_log2 as u32) << 4);
+        e[rsp::WATER_BIND + 3] = (u as u32) << 16 | v as u32;
+        Some((words, e, rm.tris(), b))
+    }
+}
+
+impl N64Renderer {
+    /// The water overlay against the CPU path (`water_vertex`): a water
+    /// draw's first segment, screen position, depth, color and S, T per
+    /// vertex, under the frame's camera and light and `time`, `ripples`.
+    pub fn rsp_water_oracle(
+        &mut self,
+        model: ModelId,
+        matrix: &Mat34,
+        params: &ModelParams,
+        time: f32,
+        ripples: &[Ripple],
+    ) -> Result<alloc::string::String, alloc::string::String> {
+        self.begin_frame(Color::BLACK);
+        self.water_state = WaterState::new(time, ripples, self.caps.max_ripples);
+        let Some((tmdl, layout)) = self.meshes.get(&model.0).cloned() else {
+            return Err("mesh not registered".into());
+        };
+        let mesh = Mesh::from_layout(&tmdl, &layout);
+        let probe = unsafe { ffi::trino_alloc_uncached(32 * 24) } as *mut u8;
+        let phys = unsafe { ffi::trino_phys_addr(probe as *const c_void) };
+        let Some((words, e, _, _)) = self.water_command(model, matrix, params, phys) else {
+            return Err("water draw not RSP-eligible".into());
+        };
+        submit_water(&self.sprites, &words, &e);
+        self.end_frame();
+        unsafe { ffi::trino_drain() };
+        let Some(Some(rm)) = self.rsp_water.get(&model.0) else {
+            return Err("no water copy".into());
+        };
+        let seg0 = rm.seg0.clone();
+        let ctx = self.tnl_ctx.with_water(&self.water_state);
+        let (_, focal, screen) = ctx.projection();
+        let (cx, cy) = (screen.x * 0.5, screen.y * 0.5);
+        let size = mesh
+            .texture_for(params)
+            .and_then(|t| self.sprites.get(&t.0))
+            .map_or([1.0, 1.0], |s| s.size);
+        let ws = water_rsp(&ctx, &mesh, matrix, params);
+        let scroll = ws.map_or(Vec2::new(0.0, 0.0), |w| w.uv);
+        let (mut dxy, mut dz, mut dc, mut dst) = (0i32, 0i32, 0i32, 0i32);
+        let mut worst = alloc::string::String::new();
+        for (k, &g) in seg0.iter().enumerate() {
+            let g = g as usize;
+            let rd = |o: usize| unsafe { probe.add(k * 24 + o).read_volatile() };
+            let rd16 = |o: usize| i16::from_be_bytes([rd(o), rd(o + 1)]) as i32;
+            let Some((p, c)) = water_vertex(&ctx, &mesh, matrix, params, g) else {
+                return Err("not a water draw".into());
+            };
+            let ex = ((cx + p.x * focal / p.z) * 4.0) as i32;
+            let ey = ((cy - p.y * focal / p.z) * 4.0) as i32;
+            let ez = ((1.0 - NEAR_PLANE / p.z) * 32767.0) as i32;
+            dxy = dxy.max((rd16(0) - ex).abs()).max((rd16(2) - ey).abs());
+            dz = dz.max((rd16(4) - ez).abs());
+            let got = [rd(8), rd(9), rd(10), rd(11)];
+            let want = [c.r, c.g, c.b, c.a];
+            let d = (0..4)
+                .map(|ch| (got[ch] as i32 - want[ch] as i32).abs())
+                .max()
+                .unwrap_or(0);
+            if d > dc {
+                worst = alloc::format!(" (vertex {k}: got {got:?}, want {want:?})");
+            }
+            dc = dc.max(d);
+            let uv = mesh.uv(g);
+            let es = ((uv.x + scroll.x) * size[0] * 32.0) as i32;
+            let et = ((uv.y + scroll.y) * size[1] * 32.0) as i32;
+            dst = dst.max((rd16(12) - es).abs()).max((rd16(14) - et).abs());
+        }
+        let msg = alloc::format!(
+            "{} vertices: xy {dxy}/4 px, z {dz}/32767, color {dc}/255, st {dst}/32 texel{worst}",
+            seg0.len()
+        );
+        if dxy > 4 || dz > 64 || dc > 6 || dst > 4 {
+            Err(msg)
+        } else {
+            Ok(msg)
+        }
     }
 }

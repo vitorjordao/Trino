@@ -17,8 +17,10 @@ use trino_core::{Color, Mat34, Vec3};
 
 use crate::ffi;
 
-/// Bytes per vertex in an RSP segment (overlay `VTX_IN_SIZE`).
+/// Bytes per vertex in an RSP segment (overlay `VTX_IN_SIZE`); textured
+/// meshes add their UVs ([`VTX_IN_TEX`], `rsp_trino_tex`).
 const VTX_IN: usize = 32;
+const VTX_IN_TEX: usize = 40;
 /// Words of the draw command (overlay `DRAW_CMD_SIZE` / 4).
 pub const DRAW_WORDS: usize = 27;
 /// Words the colored overlay's draw command adds (its `DRAW_CMD_SIZE` / 4 -
@@ -36,6 +38,8 @@ pub struct RspMesh {
     segs: u16,
     /// Triangles in all segments.
     tris: u32,
+    /// 40-byte vertices with UVs: drawn by `rsp_trino_tex`.
+    pub textured: bool,
     /// Local vertex order of segment 0 (global indices), for the oracle.
     pub seg0: Vec<u16>,
 }
@@ -153,7 +157,9 @@ fn bake(mesh: &Mesh, segs: &[Segment]) -> Option<RspMesh> {
     if segs.is_empty() || segs.len() > RSP_MAX_SEGS {
         return None;
     }
-    let seg_bytes = |s: &Segment| (s.verts.len() * VTX_IN + s.tris.len() * 3).div_ceil(8) * 8;
+    let textured = mesh.has_uvs();
+    let stride = if textured { VTX_IN_TEX } else { VTX_IN };
+    let seg_bytes = |s: &Segment| (s.verts.len() * stride + s.tris.len() * 3).div_ceil(8) * 8;
     let table_bytes = segs.len() * 16;
     let total = table_bytes + segs.iter().map(seg_bytes).sum::<usize>();
     let base = unsafe { ffi::trino_alloc_uncached(total as u32) } as *mut u8;
@@ -193,7 +199,14 @@ fn bake(mesh: &Mesh, segs: &[Segment]) -> Option<RspMesh> {
                 blob[at + k * 2..at + k * 2 + 2].copy_from_slice(&v.to_be_bytes());
             }
             blob[at + 24..at + 28].copy_from_slice(&[c.r, c.g, c.b, c.a]);
-            at += VTX_IN;
+            if textured {
+                // s5.10 repeats (rsp_mesh_check keeps them within 32).
+                let t = mesh.uv(g);
+                let q = |v: f32| (to_i32(v * 1024.0).clamp(-32767, 32767) as i16).to_be_bytes();
+                blob[at + 32..at + 34].copy_from_slice(&q(t.x));
+                blob[at + 34..at + 36].copy_from_slice(&q(t.y));
+            }
+            at += stride;
         }
         for t in &s.tris {
             blob[at..at + 3].copy_from_slice(t);
@@ -213,6 +226,7 @@ fn bake(mesh: &Mesh, segs: &[Segment]) -> Option<RspMesh> {
         table: phys,
         segs: segs.len() as u16,
         tris: segs.iter().map(|s| s.tris.len() as u32).sum(),
+        textured,
         seg0: segs[0].verts.clone(),
     })
 }
@@ -277,7 +291,8 @@ pub fn draw_words(
     let mut w = [0u32; DRAW_WORDS];
     w[0] = cull;
     w[1] = mesh.table;
-    w[2] = ((mesh.segs as u32) << 16) | 0xCD00;
+    // The RDP triangle: shade + z (0xCD), or shade + texture + z (0xCF).
+    w[2] = ((mesh.segs as u32) << 16) | if mesh.textured { 0xCF00 } else { 0xCD00 };
     let pair = |a: i16, b: i16| ((a as u16 as u32) << 16) | b as u16 as u32;
     for col in 0..4 {
         let f: [(i16, u16); 4] = core::array::from_fn(|row| fixed(m[row][col]));
@@ -350,4 +365,40 @@ pub fn color_words(c: &RspColor, mv: &Mat34) -> [u32; COLOR_WORDS] {
         pair(byte(fog[0]), byte(fog[1])),
         pair(byte(fog[2]), 0),
     ]
+}
+
+/// Words the textured overlay's command adds after the color words (its
+/// `DRAW` +0xA0..0xB0): the texture scale and the S/T offset.
+pub const TEX_WORDS: usize = 4;
+/// Bit in a queued command's word 0: a textured draw (`rsp_trino_tex`),
+/// its color and texture words and its binding in the next queue entry
+/// ([`tex_entry`]). The shim drops it.
+pub const TEXTURED: u32 = 0x200;
+/// Where a textured entry keeps the texture binding: the sprite, the
+/// detail sprite (0: none) and the `trino_3d_texture_ex` flags.
+pub const TEX_BIND: usize = COLOR_WORDS + TEX_WORDS;
+
+/// The textured overlay's extra words: [`color_words`], then S, T per u, v
+/// repeat (`size / 32` as s15.16: integer parts, fractional parts; the
+/// overlay reads u, v as s5.10 and writes S, T as s10.5) and the S, T
+/// offset in texels (s10.5), then `bind` ([`TEX_BIND`]).
+#[cold]
+#[inline(never)]
+pub fn tex_entry(
+    c: &RspColor,
+    mv: &Mat34,
+    size: [f32; 2],
+    offset: [f32; 2],
+    bind: [u32; 3],
+) -> [u32; DRAW_WORDS] {
+    let pair = |a: i16, b: i16| ((a as u16 as u32) << 16) | b as u16 as u32;
+    let mut e = [0u32; DRAW_WORDS];
+    e[..COLOR_WORDS].copy_from_slice(&color_words(c, mv));
+    let (s, t) = (fixed(size[0] / 32.0), fixed(size[1] / 32.0));
+    let q = |v: f32| to_i32(v * 32.0).clamp(-32768, 32767) as i16;
+    e[COLOR_WORDS] = pair(s.0, t.0);
+    e[COLOR_WORDS + 1] = pair(s.1 as i16, t.1 as i16);
+    e[COLOR_WORDS + 2] = pair(q(offset[0]), q(offset[1]));
+    e[TEX_BIND..TEX_BIND + 3].copy_from_slice(&bind);
+    e
 }

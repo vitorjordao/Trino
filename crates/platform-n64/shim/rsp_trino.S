@@ -15,6 +15,8 @@
 # rsp_trino_color, for a colored or dimmed light, an emissive draw or fog:
 # per-channel ambient and diffuse terms, an emissive add and a per-vertex
 # fog blend (the fog factor is a fifth row of the clip matrix, lane 4).
+# With TRINO_TEXTURED as well, rsp_trino_tex: textured draws (S, T, W and
+# 1/W per vertex for the RDP's perspective-correct textured triangles).
 # A second overlay, not a second command: rspq reloads an overlay's code on every
 # switch to it, and the colored loop in the same overlay made every
 # white-light frame pay for the bigger code (measured in ares, 2026-10-16).
@@ -27,6 +29,7 @@
 #           +8  x, y, z, 0   s15.16 fractional parts
 #           +16 nx, ny, nz, 0  s16, s0.15
 #           +24 r, g, b, a, 0, 0, 0, 0  u8
+#           +32 u, v, 0, 0  s5.10 (TRINO_TEXTURED only: 40-byte vertices)
 ##############################################################################
 
 #include <rsp_queue.inc>
@@ -36,9 +39,15 @@
     .set at
 
 #define SEG_VERTS       32
+#ifdef TRINO_TEXTURED
+#define VTX_IN_SIZE     40      // + u, v (s5.10, repeats), 4 pad bytes
+#else
 #define VTX_IN_SIZE     32
+#endif
 #define VTX_OUT_SIZE    24
-#ifdef TRINO_COLORED
+#if defined(TRINO_TEXTURED)
+#define DRAW_CMD_SIZE   0xB0    // + the texture scale and offset, see DRAW
+#elif defined(TRINO_COLORED)
 #define DRAW_CMD_SIZE   0xA0    // + the per-channel terms and the fog, see DRAW
 #else
 #define DRAW_CMD_SIZE   0x6C
@@ -53,7 +62,9 @@
     RSPQ_EndOverlayHeader
 
     .align 4
-#ifdef TRINO_COLORED
+#if defined(TRINO_TEXTURED)
+BANNER: .ascii "Trino RSP T&L t "
+#elif defined(TRINO_COLORED)
 BANNER: .ascii "Trino RSP T&L c "
 #else
 BANNER: .ascii "Trino RSP T&L   "
@@ -115,8 +126,13 @@ TEST_VTX:
     #   +0x88 fog row, integer parts, one per matrix column (s15.16):
     #         (view depth - fog near) / (fog far - fog near)
     #   +0x90 fog row, fractional parts   +0x98 fog r, g, b, 0 (u8 << 7)
+#ifdef TRINO_TEXTURED
+    #   +0xA0 texels per u, v repeat / 32, integer parts (s, t)
+    #   +0xA4 the same, fractional parts (s15.16: S = u * scale, s10.5)
+    #   +0xA8 S, T offset (s10.5)       +0xAC unused
+#endif
     .align 4
-DRAW:           .ds.b 0xA0
+DRAW:           .ds.b DRAW_CMD_SIZE
 #else
     .align 4
 DRAW:           .ds.b 0x70
@@ -320,13 +336,46 @@ transform_vertex:
     vmadh vs_f, vo_i, vvs.e4
     vge vs_f, vs_f, vzero
     vadd vs_f, vs_f, vs_f
+#ifdef TRINO_TEXTURED
+    # W = view depth (twice the clip w: 32-bit add) and 1 / W (the
+    # reciprocal above is already 1 / depth), s15.16, for the RDP's
+    # perspective correction. RDPQ_Triangle_Send_Async normalizes 1 / W by
+    # the triangle's smallest W and keeps only the fraction of the product:
+    # vrcp's 1 / W can round up, and W * (1 / W) just over 1.0 came out
+    # near 0, every texel the (0, 0) one (vrcp is off by up to ~0.2%,
+    # measured at depth 1.25). W is stored 2^-7 smaller (the
+    # same factor on every vertex: perspective only reads ratios).
+    vaddc vtmp, vo_f, vo_f
+    vadd vk, vo_i, vo_i
+    mfc2 t0, vk.e3
+    mfc2 t1, vtmp.e3
+    andi t1, 0xFFFF
+    sll t0, 16
+    or t0, t1
+    srl t1, t0, 7
+    subu t0, t1
+    sw t0, 16(dst)
+    ssv vinv_i.e3, 20, dst
+    ssv vinv_f.e3, 22, dst
+    # S, T (s10.5) = u, v (s5.10) * texels per repeat / 32 + offset, in
+    # vtmp until the color is stored over them.
+    llv vp.e0, 32, src
+    llv vd.e0, 0xA0, dptr
+    llv vk.e0, 0xA4, dptr
+    vmudn vtmp, vk, vp
+    vmadh vtmp, vd, vp
+    llv vd.e0, 0xA8, dptr
+    vadd vtmp, vtmp, vd
+#endif
     # The screen math is done: its registers take the per-channel terms.
     ldv vdiff.e0, 0x78, dptr
     li t0, 0x003F                   # no clip flags, inside every plane
     sh t0, 6(dst)
     ldv vambc.e0, 0x70, dptr
+#ifndef TRINO_TEXTURED
     sw zero, 16(dst)                # W, 1/W unused (untextured)
     sw zero, 20(dst)
+#endif
     ldv vemis.e0, 0x80, dptr
 
     # Light, per channel: k = ambient + diffuse * max(0, n . l).
@@ -352,6 +401,9 @@ transform_vertex:
     vand vs_i, vs_i, vinv_f
     vadd vcol, vcol, vs_i
     suv vcol.e0, 8, dst             # RGBA (+ 4 junk bytes over S/T)
+#ifdef TRINO_TEXTURED
+    slv vtmp.e0, 12, dst            # S, T over the junk
+#endif
 #else
     li t0, 0x003F                   # no clip flags, inside every plane
     sh t0, 6(dst)
@@ -395,7 +447,13 @@ transform_vertex:
 
     # Triangles: 3 local u8 indices each, after the vertices.
     lhu t0, 6(seg_ptr)
+#ifdef TRINO_TEXTURED
+    sll t1, t0, 3
+    sll t0, t0, 5
+    addu t0, t1                     # count * VTX_IN_SIZE (40)
+#else
     sll t0, t0, 5                   # count * VTX_IN_SIZE
+#endif
     addiu idx, t0, %lo(VTX_IN)
     lhu count, 8(seg_ptr)
     beqz count, segment_done

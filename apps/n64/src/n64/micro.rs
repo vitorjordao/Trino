@@ -354,11 +354,20 @@ fn rsp_checks(r: &mut N64Renderer) {
     setup(r);
     let (squash, flat) = squashed();
     let faces = r.rsp_oracle(BUMPY, &squash, &flat);
+    // Textured: the self-test card (castle64's asset, a 2x2 texel-quadrant
+    // texture) facing the camera.
+    let card = ModelId::from_path("models/selftest_card");
+    let unlit = ModelParams {
+        shading: Shading::Unlit,
+        ..ModelParams::DEFAULT
+    };
+    let textured = r.rsp_oracle(card, &grid, &unlit);
     for (what, res) in [
         ("colored emissive", colored),
         ("double-sided back", flipped),
         ("fog", fogged),
         ("flat squashed", faces),
+        ("textured", textured),
     ] {
         match res {
             Ok(m) => runtime::log(&alloc::format!("TRINO_RSP:oracle {what}: {m}\n")),
@@ -392,6 +401,12 @@ fn rsp_checks(r: &mut N64Renderer) {
         r.begin_frame(Color::BLACK);
         setup(r);
         r.draw_model_matrix(BUMPY, &squash, Material::VertexLit, &flat);
+        r.end_frame();
+    });
+    pixel_check(r, "textured", &|r| {
+        r.begin_frame(Color::BLACK);
+        setup(r);
+        r.draw_model_matrix(card, &grid, Material::VertexLit, &unlit);
         r.end_frame();
     });
     pixel_check(r, "rigid parts", &|r| {

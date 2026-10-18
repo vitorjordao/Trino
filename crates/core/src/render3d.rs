@@ -137,6 +137,9 @@ pub struct Mesh<'a> {
     /// parse): a fogged draw whose edges are all shorter than [`DEPTH_SPLIT`]
     /// in view space needs no split, so the RSP may fog it ([`rsp_fog_check`]).
     max_edge2: f32,
+    /// The largest |x|, |y| and |z| of any triangle edge (checked at parse):
+    /// a tighter depth bound than the length for long thin edges.
+    edge_box: Vec3,
 }
 
 /// Rigid skeleton + clips (borrowed from the blob).
@@ -171,6 +174,7 @@ pub struct MeshLayout {
     unit_normals: bool,
     axis_normals: bool,
     max_edge2: f32,
+    edge_box: Vec3,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -338,6 +342,7 @@ impl<'a> Mesh<'a> {
             unit_normals: true,
             axis_normals: true,
             max_edge2: 0.0,
+            edge_box: Vec3::ZERO,
         };
         mesh.opaque = mesh.colors.iter().all(|c| c[3] == 255);
         mesh.unit_normals = mesh.normals.iter().all(|n| {
@@ -349,7 +354,7 @@ impl<'a> Mesh<'a> {
             let zeros = [n.x, n.y, n.z].iter().filter(|c| c.abs() < 1e-6).count();
             zeros == 2
         });
-        mesh.max_edge2 = mesh.longest_edge2();
+        (mesh.max_edge2, mesh.edge_box) = mesh.longest_edge2();
 
         // Optional sections.
         let mut at = end;
@@ -452,6 +457,7 @@ impl<'a> Mesh<'a> {
             unit_normals: self.unit_normals,
             axis_normals: self.axis_normals,
             max_edge2: self.max_edge2,
+            edge_box: self.edge_box,
         }
     }
 
@@ -483,13 +489,16 @@ impl<'a> Mesh<'a> {
             unit_normals: l.unit_normals,
             axis_normals: l.axis_normals,
             max_edge2: l.max_edge2,
+            edge_box: l.edge_box,
         }
     }
 
-    /// The longest edge of any triangle, squared (model units); indices
+    /// The longest edge of any triangle, squared, and the largest `|x|`,
+    /// `|y|`, `|z|` of any edge (model units); indices
     /// past the vertices are skipped (the T&L never draws them).
-    fn longest_edge2(&self) -> f32 {
+    fn longest_edge2(&self) -> (f32, Vec3) {
         let mut best = 0.0f32;
+        let mut bx = Vec3::ZERO;
         for t in self.indices.as_flattened().as_chunks::<6>().0 {
             let at = |k: usize| {
                 let i = u16::from_le_bytes([t[2 * k], t[2 * k + 1]]) as usize;
@@ -501,12 +510,17 @@ impl<'a> Mesh<'a> {
             for (p, q) in [(a, b), (b, c), (c, a)] {
                 let d = p - q;
                 best = best.max(d.dot(d));
+                bx = Vec3::new(
+                    bx.x.max(d.x.abs()),
+                    bx.y.max(d.y.abs()),
+                    bx.z.max(d.z.abs()),
+                );
             }
         }
-        best
+        (best, bx)
     }
 
-    /// [`Mesh::longest_edge2`] as checked at parse.
+    /// The longest edge squared ([`Mesh::longest_edge2`]) as checked at parse.
     pub fn max_edge2(&self) -> f32 {
         self.max_edge2
     }
@@ -1197,7 +1211,7 @@ pub enum RspReject {
     // The mesh (decided once per mesh).
     /// A skeleton (skinned or rigid-animated) mesh.
     Skinned,
-    /// UVs (a textured mesh).
+    /// UVs past 32 repeats (the overlay reads them as s5.10).
     TexturedMesh,
     /// Smooth skinning weights.
     Blended,
@@ -1217,6 +1231,8 @@ pub enum RspReject {
     Fog,
     /// A tint with alpha below 255.
     Translucent,
+    /// A textured draw the CPU path would split (an edge spanning
+    /// [`DEPTH_SPLIT`] of view depth: it splits every textured draw).
     Textured,
     /// A palette on a mesh with color slots.
     Palette,
@@ -1250,7 +1266,7 @@ impl RspReject {
     pub const fn label(self) -> &'static str {
         match self {
             RspReject::Skinned => "skinned mesh",
-            RspReject::TexturedMesh => "textured mesh",
+            RspReject::TexturedMesh => "UVs out of range",
             RspReject::Blended => "smooth skinning",
             RspReject::TranslucentMesh => "translucent vertices",
             RspReject::NormalsNotUnit => "normals not unit",
@@ -1259,7 +1275,7 @@ impl RspReject {
             RspReject::TooManySegments => "too many segments",
             RspReject::Fog => "fog needing splits",
             RspReject::Translucent => "translucent tint",
-            RspReject::Textured => "texture",
+            RspReject::Textured => "texture needing splits",
             RspReject::Palette => "palette",
             RspReject::NoBounds => "no bounds",
             RspReject::Offscreen => "off screen",
@@ -1280,7 +1296,13 @@ pub fn rsp_mesh_check(mesh: &Mesh) -> Result<(), RspReject> {
     if mesh.joint_count() != 0 {
         return Err(RspReject::Skinned);
     }
-    if mesh.has_uvs() {
+    // The overlay reads UVs as s5.10: within 32 repeats either way.
+    if mesh.has_uvs()
+        && !(0..mesh.vertex_count).all(|i| {
+            let t = mesh.uv(i);
+            t.x.abs() < 31.9 && t.y.abs() < 31.9
+        })
+    {
         return Err(RspReject::TexturedMesh);
     }
     if mesh.has_blend() {
@@ -1524,9 +1546,6 @@ pub fn rsp_check_mv(
     if params.tint.a < 255 {
         return Err(RspReject::Translucent);
     }
-    if params.texture.is_some() {
-        return Err(RspReject::Textured);
-    }
     // The overlay reads baked vertex colors only.
     if params.palette.is_some() && mesh.has_slots() {
         return Err(RspReject::Palette);
@@ -1551,6 +1570,10 @@ pub fn rsp_check_mv(
     }
     if smax >= RSP_MAX_SCALE * RSP_MAX_SCALE {
         return Err(RspReject::TooScaled);
+    }
+    // Textured: the CPU path splits every textured draw ([`split_policy`]).
+    if mesh.has_uvs() && !short_edges(mesh, mv) {
+        return Err(RspReject::Textured);
     }
     if ctx.fog_on {
         rsp_fog_check(ctx, mesh, mv, c.z, r2)?;
@@ -1590,12 +1613,14 @@ pub fn rsp_color(ctx: &TnlContext, params: &ModelParams) -> Option<RspColor> {
     if e.r | e.g | e.b == 0 && !ctx.fog_on && (ctx.white || params.shading == Shading::Unlit) {
         return None;
     }
-    rsp_color_terms(ctx, params)
+    Some(rsp_color_terms(ctx, params))
 }
 
+/// [`rsp_color`]'s terms for any draw, the white ones too: what the
+/// textured overlay (always per channel) takes.
 #[cold]
 #[inline(never)]
-fn rsp_color_terms(ctx: &TnlContext, params: &ModelParams) -> Option<RspColor> {
+pub fn rsp_color_terms(ctx: &TnlContext, params: &ModelParams) -> RspColor {
     let e = params.emissive;
     let a = ctx.light.ambient;
     let f = ctx.light.fog;
@@ -1608,7 +1633,7 @@ fn rsp_color_terms(ctx: &TnlContext, params: &ModelParams) -> Option<RspColor> {
         },
         false => RspFog::OFF,
     };
-    Some(match params.shading {
+    match params.shading {
         Shading::Unlit => RspColor {
             ambient: [1.0; 3],
             diffuse: [0.0; 3],
@@ -1621,7 +1646,7 @@ fn rsp_color_terms(ctx: &TnlContext, params: &ModelParams) -> Option<RspColor> {
             emissive: [e.r, e.g, e.b],
             fog,
         },
-    })
+    }
 }
 
 /// Whether the RSP may fog a draw ([`rsp_check`] under fog): the overlay
@@ -1649,13 +1674,28 @@ fn rsp_fog_check(
     if clear(fog.near - cz) || clear(cz - fog.far) {
         return Ok(());
     }
+    if short_edges(mesh, mv) {
+        return Ok(());
+    }
+    Err(RspReject::Fog)
+}
+
+/// No edge of `mesh` can span [`DEPTH_SPLIT`] of view depth under `mv`: an
+/// edge `e` spans `r · e`, with `r` the depth row, and `|r · e| <= |r| |e|`.
+/// The CPU path would then split nothing ([`split_policy`]).
+#[cold]
+#[inline(never)]
+fn short_edges(mesh: &Mesh, mv: &Mat34) -> bool {
     let limit = DEPTH_SPLIT * 0.999;
     let r = mv.m[2];
     let stretch2 = r[0] * r[0] + r[1] * r[1] + r[2] * r[2];
     if mesh.max_edge2 * stretch2 <= limit * limit {
-        return Ok(());
+        return true;
     }
-    Err(RspReject::Fog)
+    // Per axis: |r · e| <= sum |r_k| max |e_k| (a tall thin edge, a pillar's
+    // side, seen from above).
+    let b = mesh.edge_box;
+    r[0].abs() * b.x + r[1].abs() * b.y + r[2].abs() * b.z <= limit
 }
 
 /// [`rsp_split`] of one joint's triangles: a rigid mesh's part

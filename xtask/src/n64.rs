@@ -133,7 +133,8 @@ fn up_to_date(obj: &Path, sources: &[std::path::PathBuf]) -> bool {
 
 /// Compile the C shim inside the image (real libdragon headers + o64 ABI),
 /// and the RSP overlays (`rsp_trino.S`, assembled as `rsp_trino` and, with
-/// `TRINO_COLORED`, `rsp_trino_color`) the way libdragon's `n64.mk` builds
+/// `TRINO_COLORED`, `rsp_trino_color`, and with `TRINO_TEXTURED` too,
+/// `rsp_trino_tex`) the way libdragon's `n64.mk` builds
 /// RSP ucode: assemble against `rsp.ld`, cut `.text`/`.data` to binaries,
 /// wrap each in an object exposing `<name>_{text,data}_{start,end}` (what
 /// `DEFINE_RSP_UCODE` expects).
@@ -153,8 +154,9 @@ fn compile_shim(p: &Project) -> Result<(), String> {
             -I$N64_INST/mips64-elf/include \
             crates/platform-n64/shim/trino_shim.c -o target/n64/shim.o\n\
             cd target/n64/rsp\n\
-            for u in rsp_trino rsp_trino_color; do\n\
+            for u in rsp_trino rsp_trino_color rsp_trino_tex; do\n\
             def=; [ $u = rsp_trino_color ] && def=-DTRINO_COLORED\n\
+            [ $u = rsp_trino_tex ] && def='-DTRINO_COLORED -DTRINO_TEXTURED'\n\
             mips64-elf-gcc -march=mips1 -mabi=32 -Wa,--fatal-warnings $def \
             -I$N64_INST/mips64-elf/include -L$N64_INST/mips64-elf/lib -nostartfiles \
             -Wl,-Trsp.ld -Wl,--gc-sections -Wl,-Map=$u.map \
@@ -170,7 +172,8 @@ fn compile_shim(p: &Project) -> Result<(), String> {
               $u.${s}.bin $u.${s}.o; done\n\
             done\n\
             mips64-elf-ld -relocatable rsp_trino.text.o rsp_trino.data.o \
-              rsp_trino_color.text.o rsp_trino_color.data.o -o ../rsp_trino.o";
+              rsp_trino_color.text.o rsp_trino_color.data.o \
+              rsp_trino_tex.text.o rsp_trino_tex.data.o -o ../rsp_trino.o";
         let status = docker_sh(p, false, script).map_err(|e| format!("docker: {e}"))?;
         if !status.success() {
             return Err("shim / RSP overlay compilation failed".into());

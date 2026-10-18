@@ -30,6 +30,8 @@ DEFINE_RSP_UCODE(rsp_trino);
 static uint32_t trino_rsp_id;
 // The colored overlay (defined last in this file, see there).
 static void trino_register_color_overlay(void);
+// The textured overlay (last in this file too).
+static void trino_register_tex_overlay(void);
 
 // VI interrupt counter: an independent clock for perf reports (60 per
 // emulated second on NTSC), to cross-check the count-register timings.
@@ -42,6 +44,9 @@ static void trino_on_vi(void) { trino_vblanks++; }
 // the next mode change must be preceded by an explicit SYNC_PIPE.
 static int trino_mode_3d = 0;
 static int trino_rsp_pending = 0;
+// Textured RSP triangles were queued since the last mode change: rdpq never
+// saw them use TMEM and the tiles, so the next upload needs explicit syncs.
+static int trino_rsp_tex_pending = 0;
 // 2D state cache: standard mode + alpha compare already set for blits, and
 // the tint the combiner currently applies (0xFFFFFFFF = none). Consecutive
 // blits (every glyph of a string) then skip the mode setup — one SOM change
@@ -59,6 +64,11 @@ static void* trino_tmem_owner = NULL;
 // framebuffer (libdragon's standard mode disables dithering).
 static void trino_mode_standard(void)
 {
+    if (trino_rsp_tex_pending) {
+        rdpq_sync_load();
+        rdpq_sync_tile();
+        trino_rsp_tex_pending = 0;
+    }
     if (trino_rsp_pending) {
         rdpq_sync_pipe();
         trino_rsp_pending = 0;
@@ -90,6 +100,7 @@ void trino_init(void)
     trino_check_trifmt();
     trino_rsp_id = rspq_overlay_register(&rsp_trino);
     trino_register_color_overlay();
+    trino_register_tex_overlay();
     register_VI_handler(trino_on_vi);
 }
 
@@ -906,4 +917,30 @@ void trino_rsp_draw_colored(const uint32_t* w, const uint32_t* c)
     for (int i = 0; i < TRINO_RSP_COLOR_WORDS; i++) rspq_write_arg(&q, c[i]);
     rspq_write_end(&q);
     trino_rsp_pending = 1;
+}
+
+// The overlay assembled with TRINO_COLORED and TRINO_TEXTURED: textured
+// draws (S, T, W and 1/W per vertex). Last in this file, like the colored
+// one, so no other shim symbol moves.
+DEFINE_RSP_UCODE(rsp_trino_tex);
+static uint32_t trino_rsp_tex_id;
+
+// A textured draw through rsp_trino_tex's TrinoCmd_Draw, after
+// trino_3d_texture_ex bound its texture and mode: `w` as trino_rsp_draw's,
+// then the 13 color words and the 4 texture words of `c`.
+#define TRINO_RSP_TEX_WORDS 17
+static void trino_register_tex_overlay(void)
+{
+    trino_rsp_tex_id = rspq_overlay_register(&rsp_trino_tex);
+}
+
+void trino_rsp_draw_textured(const uint32_t* w, const uint32_t* c)
+{
+    rspq_write_t q = rspq_write_begin(trino_rsp_tex_id, 0x1, TRINO_RSP_DRAW_WORDS + TRINO_RSP_TEX_WORDS);
+    rspq_write_arg(&q, w[0] & 0xFF);
+    for (int i = 1; i < TRINO_RSP_DRAW_WORDS; i++) rspq_write_arg(&q, w[i]);
+    for (int i = 0; i < TRINO_RSP_TEX_WORDS; i++) rspq_write_arg(&q, c[i]);
+    rspq_write_end(&q);
+    trino_rsp_pending = 1;
+    trino_rsp_tex_pending = 1;
 }

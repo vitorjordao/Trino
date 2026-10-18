@@ -11,10 +11,10 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use trino_core::memo::{self, MemoKey, MemoSlot};
 use trino_core::perf::RenderProfile;
 use trino_core::render3d::{
-    Camera3, DEFAULT_LIGHT, Light, MAX_JOINTS, Mesh, MeshLayout, NEAR_PLANE, RspFog, RspPan,
-    RspPart, ScreenTri, TexBind, TnlContext, TnlScratch, TnlStats, face_normal, flat_normal,
-    flat_ratios, painter_index, painter_key, rsp_band, rsp_color, rsp_eligible_mv, rsp_hull_inside,
-    rsp_mesh_supported, rsp_part_bounds, rsp_rigid_check, rsp_rigid_draws,
+    Camera3, DEFAULT_LIGHT, Light, MAX_JOINTS, Mesh, MeshLayout, NEAR_PLANE, RspPan, RspPart,
+    ScreenTri, TexBind, TnlContext, TnlScratch, TnlStats, face_normal, flat_normal, flat_ratios,
+    painter_index, painter_key, rsp_band, rsp_color, rsp_color_terms, rsp_eligible_mv,
+    rsp_hull_inside, rsp_mesh_supported, rsp_part_bounds, rsp_rigid_check, rsp_rigid_draws,
 };
 use trino_core::text::{BitmapFont, GlyphIndex};
 use trino_core::{
@@ -32,6 +32,8 @@ const SCREEN: Vec2 = Vec2::new(320.0, 240.0);
 
 struct SpriteEntry {
     ptr: *mut c_void,
+    /// Width and height in texels (an RSP textured draw scales its UVs).
+    size: [f32; 2],
 }
 
 pub struct N64Renderer {
@@ -308,7 +310,10 @@ impl N64Renderer {
         let mut i = 0;
         while i < self.pending_rsp.len() {
             let w = &self.pending_rsp[i];
-            if w[0] & rsp::COLORED != 0 {
+            if w[0] & rsp::TEXTURED != 0 {
+                submit_textured(&self.sprites, w, &self.pending_rsp[i + 1]);
+                i += 2;
+            } else if w[0] & rsp::COLORED != 0 {
                 submit_colored(w, &self.pending_rsp[i + 1]);
                 i += 2;
             } else {
@@ -412,7 +417,9 @@ impl N64Renderer {
 
     /// Register a `sprite_t` loaded from the DFS under a stable handle.
     pub(crate) fn register(&mut self, id: u32, ptr: *mut c_void) {
-        self.sprites.insert(id, SpriteEntry { ptr });
+        let wh = unsafe { ffi::trino_sprite_size(ptr) };
+        let size = [(wh >> 16) as f32, (wh & 0xFFFF) as f32];
+        self.sprites.insert(id, SpriteEntry { ptr, size });
     }
 
     /// Record the texture of the `added` triangles appended at `before`
@@ -521,13 +528,29 @@ impl N64Renderer {
         let phys = unsafe { ffi::trino_phys_addr(buf as *const c_void) };
         let cull = if d.cull_back { self.rsp_cull } else { 2 };
         let words = rsp::draw_words(&self.tnl_ctx, &mv, &d, params.tint, rm, cull, phys);
+        let textured = rm.textured;
+        let tex = mesh
+            .texture_for(params)
+            .and_then(|t| self.sprites.get(&t.0).map(|e| (t.0, e.ptr, e.size)));
+        if textured && tex.is_none() {
+            return Err("texture not loaded".into());
+        }
         self.begin_frame(Color::BLACK);
-        let color = rsp_color(&self.tnl_ctx, params);
-        match &color {
-            Some(c) => unsafe {
-                ffi::trino_rsp_draw_colored(words.as_ptr(), rsp::color_words(c, &mv).as_ptr())
+        // The terms always (a white draw's equal its single intensity): no
+        // float in an `Option` payload, whose garbage the FPU traps on once
+        // LLVM hoists the math out of the branch (see `RspFog`).
+        let terms = rsp_color_terms(&self.tnl_ctx, params);
+        let colored = textured || rsp_color(&self.tnl_ctx, params).is_some();
+        match tex {
+            Some((id, ptr, size)) if textured => unsafe {
+                let e = rsp::tex_entry(&terms, &mv, size, [0.0, 0.0], [id, 0, 0]);
+                ffi::trino_3d_texture_ex(ptr, core::ptr::null_mut(), 0);
+                ffi::trino_rsp_draw_textured(words.as_ptr(), e.as_ptr());
             },
-            None => unsafe { ffi::trino_rsp_draw(words.as_ptr()) },
+            _ if colored => unsafe {
+                ffi::trino_rsp_draw_colored(words.as_ptr(), rsp::color_words(&terms, &mv).as_ptr())
+            },
+            _ => unsafe { ffi::trino_rsp_draw(words.as_ptr()) },
         }
         self.end_frame();
         unsafe { ffi::trino_drain() };
@@ -535,6 +558,9 @@ impl N64Renderer {
         let mv = view.mul(matrix);
         let (cx, cy) = (screen.x * 0.5, screen.y * 0.5);
         let (mut dxy, mut dz, mut dc) = (0i32, 0i32, 0i32);
+        // Textured: S, T (1/32 texel) and W, 1/W (relative error, 1/1000).
+        let (mut dst, mut dw) = (0i32, 0i32);
+        let tex_size = tex.map_or([1.0, 1.0], |t| t.2);
         for (k, &g) in seg0.iter().enumerate() {
             let g = g as usize;
             let rd = |o: usize| unsafe { buf.add(k * 24 + o).read_volatile() };
@@ -554,10 +580,7 @@ impl N64Renderer {
             };
             let lit = n.dot(d.light);
             let lit = if lit > 0.0 { lit } else { 0.0 };
-            let (amb, dif, e) = match &color {
-                Some(c) => (c.ambient, c.diffuse, c.emissive),
-                None => ([d.ambient; 3], [1.0 - d.ambient; 3], [0; 3]),
-            };
+            let (amb, dif, e) = (terms.ambient, terms.diffuse, terms.emissive);
             let c = mesh.color(g);
             let t = params.tint;
             let ch = |v: u8, t: u8, i: usize| {
@@ -571,7 +594,7 @@ impl N64Renderer {
                 c.a as f32 * (t.a as f32 / 255.0),
             ];
             // Fog by view depth after the emissive add (alpha kept).
-            let f = color.as_ref().map_or(RspFog::OFF, |c| c.fog);
+            let f = terms.fog;
             if f.on {
                 let k = ((p.z - f.near) / (f.far - f.near)).clamp(0.0, 1.0);
                 for i in 0..3 {
@@ -581,9 +604,27 @@ impl N64Renderer {
             for (ch, w) in want.iter().enumerate() {
                 dc = dc.max((rd(8 + ch) as i32 - *w as i32).abs());
             }
+            // No float from an `Option` payload: LLVM hoists float math out
+            // of the branch and the FPU traps on a None's garbage (RspFog).
+            if textured {
+                let size = tex_size;
+                let uv = mesh.uv(g);
+                let es = (uv.x * size[0] * 32.0) as i32;
+                let et = (uv.y * size[1] * 32.0) as i32;
+                dst = dst.max((rd16(12) - es).abs()).max((rd16(14) - et).abs());
+                let fx = |o: usize| {
+                    let v = u32::from_be_bytes([rd(o), rd(o + 1), rd(o + 2), rd(o + 3)]);
+                    v as i32 as f32 / 65536.0
+                };
+                let rel = |got: f32, want: f32| ((got / want - 1.0).abs() * 1000.0) as i32;
+                dw = dw.max(rel(fx(16), p.z)).max(rel(fx(20), 1.0 / p.z));
+            }
         }
-        let msg = alloc::format!("{n} vertices: xy {dxy}/4 px, z {dz}/32767, color {dc}/255");
-        if dxy > 2 || dz > 64 || dc > 3 {
+        let mut msg = alloc::format!("{n} vertices: xy {dxy}/4 px, z {dz}/32767, color {dc}/255");
+        if textured {
+            msg.push_str(&alloc::format!(", st {dst}/32 texel, w {dw}/1000"));
+        }
+        if dxy > 2 || dz > 64 || dc > 3 || dst > 2 || dw > 12 {
             Err(msg)
         } else {
             Ok(msg)
@@ -612,6 +653,29 @@ impl Default for N64Renderer {
 #[inline(never)]
 fn submit_colored(w: &[u32; rsp::DRAW_WORDS], carrier: &[u32; rsp::DRAW_WORDS]) {
     unsafe { ffi::trino_rsp_draw_colored(w.as_ptr(), carrier.as_ptr()) };
+}
+
+/// One textured RSP command: its texture and mode bound by the binding in
+/// its carrier entry (`rsp::TEX_BIND`, as `flush_cpu_batch` binds a CPU
+/// triangle group), then the command with its color and texture words.
+#[cold]
+#[inline(never)]
+fn submit_textured(
+    sprites: &BTreeMap<u32, SpriteEntry>,
+    w: &[u32; rsp::DRAW_WORDS],
+    carrier: &[u32; rsp::DRAW_WORDS],
+) {
+    let bind = &carrier[rsp::TEX_BIND..rsp::TEX_BIND + 3];
+    let Some(base) = sprites.get(&bind[0]) else {
+        return;
+    };
+    let detail = sprites
+        .get(&bind[1])
+        .map_or(core::ptr::null_mut(), |e| e.ptr);
+    unsafe {
+        ffi::trino_3d_texture_ex(base.ptr, detail, bind[2]);
+        ffi::trino_rsp_draw_textured(w.as_ptr(), carrier.as_ptr());
+    }
 }
 
 /// Microseconds the profiled frames waited for the RSP and RDP at
@@ -925,6 +989,15 @@ impl Renderer for N64Renderer {
             }
             r => r,
         };
+        // A textured copy needs its texture loaded: without it the CPU path
+        // draws the mesh untextured.
+        let tex = match &rsp {
+            Some((rm, ..)) if rm.textured => mesh
+                .texture_for(params)
+                .and_then(|t| self.sprites.get(&t.0).map(|e| (t.0, e.size))),
+            _ => None,
+        };
+        let rsp = rsp.filter(|(rm, ..)| !rm.textured || tex.is_some());
         if let Some((rm, d, mv)) = rsp {
             // The overlay transforms, lights and rasterizes the whole draw;
             // the command goes out with the batch (flush_model_batch).
@@ -932,6 +1005,24 @@ impl Renderer for N64Renderer {
             let cull = if d.cull_back { self.rsp_cull } else { 2 };
             let words = rsp::draw_words(&self.tnl_ctx, &mv, &d, params.tint, rm, cull, 0);
             let tris = (mesh.index_count / 3) as u32;
+            // Textured (44 words, never remembered): the texture's binding,
+            // color and texture words ride in the next entry.
+            if let Some((id, size)) = tex {
+                let b = TexBind::model(id, params, self.tex_filter);
+                let detail = b.detail.filter(|d| self.sprites.contains_key(&d.sprite.0));
+                let flags = b.clamp as u32
+                    | ((b.filter == TexFilter::Point) as u32) << 1
+                    | detail.map_or(0, |d| (d.scale_log2 as u32) << 4);
+                let bind = [id, detail.map_or(0, |d| d.sprite.0), flags];
+                let c = rsp_color_terms(&self.tnl_ctx, params);
+                let entry = rsp::tex_entry(&c, &mv, size, [0.0, 0.0], bind);
+                let mut words = words;
+                words[0] |= rsp::TEXTURED;
+                self.pending_rsp.push(words);
+                self.queue_rsp(entry);
+                self.count_rsp(model, t0, tris);
+                return;
+            }
             // The colored command (40 words): its color words ride in the
             // next queue entry, queued together, never split by a streamed
             // chunk.

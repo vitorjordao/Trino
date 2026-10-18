@@ -59,6 +59,10 @@ unsafe extern "C" {
     /// The colored draw command (`TrinoCmd_DrawColored`): the 27 words of
     /// `trino_rsp_draw` and the 7 of `rsp::color_words`.
     pub fn trino_rsp_draw_colored(words: *const u32, color: *const u32);
+    /// A textured draw (rsp_trino_tex), after `trino_3d_texture_ex` bound its
+    /// texture: the 27 words of `trino_rsp_draw` and the 17 of
+    /// `rsp::tex_words` (color, then texture scale and offset).
+    pub fn trino_rsp_draw_textured(words: *const u32, color: *const u32);
     /// Uncached, 16-byte aligned RDRAM (the RSP reads it by DMA).
     pub fn trino_alloc_uncached(size: u32) -> *mut c_void;
     /// Physical address of a pointer (what the RSP's DMA takes).

@@ -23,7 +23,12 @@ impl GroupHost for PcHost {
         (&mut self.renderer, &mut self.platform)
     }
 
+    /// A frame starts once the GPU has finished the last one, as a window's
+    /// swapchain would pace it: headless, nothing else does, and on Metal
+    /// the CPU runs frames ahead while wgpu holds every texture an unload
+    /// dropped until the GPU is done with it (heap that looks like a leak).
     fn pump(&mut self) {
+        self.renderer.wait_gpu();
         self.loader
             .pump(&mut self.renderer, &mut self.audio, &mut self.platform);
     }
@@ -86,8 +91,10 @@ fn asset_groups_load_draw_and_unload_on_pc() {
         };
         let names = host.loader.group_names();
         assert!(names.contains(&"selftest_level"), "{names:?}");
-        let r = selftest::asset_groups(&mut host, 120)
-            .unwrap_or_else(|e| panic!("{profile:?} {tier:?}: {e}"));
+        let r = selftest::asset_groups(&mut host, 120).unwrap_or_else(|e| {
+            let heap = host.platform.memory().heap_used;
+            panic!("{profile:?} {tier:?}: {e} (heap {heap} B)")
+        });
         assert!(
             r.cycles > 0 && r.level_bytes > 0,
             "{profile:?} {tier:?}: {r:?}"
@@ -103,7 +110,10 @@ fn asset_groups_load_draw_and_unload_on_pc() {
     let Some(mut host) = pc_host(SimProfile::N64, HwTier::Base, baked.path()) else {
         return;
     };
-    let r = selftest::asset_groups(&mut host, 10_000).unwrap();
+    let r = selftest::asset_groups(&mut host, 10_000).unwrap_or_else(|e| {
+        let heap = host.platform.memory().heap_used;
+        panic!("soak: {e} (heap {heap} B)")
+    });
     assert_eq!(r.soak_frames, 10_000);
     assert!(r.cycles >= 1_000, "{r:?}");
     println!("soak: {r:?}");

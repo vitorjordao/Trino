@@ -27,9 +27,11 @@ fn requires_defaults_to_boot_and_round_trips() {
     let mut s = Scene::new("castle");
     s.requires = vec!["boot".into(), "castle".into()];
     let text = s.to_ron();
-    assert!(text.contains("version: 6"), "{text}");
+    // ron's pretty printer ends lines in `\r\n` on Windows.
+    let lf = text.replace("\r\n", "\n");
+    assert!(lf.contains("version: 6"), "{text}");
     assert!(
-        text.contains("requires: [\n        \"boot\",\n        \"castle\",\n    ],"),
+        lf.contains("requires: [\n        \"boot\",\n        \"castle\",\n    ],"),
         "{text}"
     );
     let back = Scene::from_ron(&text).unwrap();
@@ -74,7 +76,10 @@ fn interior() -> Scene {
 fn cell_groups_round_trip_and_resolve_in_cell_order() {
     let s = interior();
     let text = s.to_ron();
-    assert!(text.contains("\"kitchen\",\n"), "{text}");
+    assert!(
+        text.replace("\r\n", "\n").contains("\"kitchen\",\n"),
+        "{text}"
+    );
     assert_eq!(text.matches("groups:").count(), 2, "{text}");
     assert_eq!(Scene::from_ron(&text).unwrap(), s);
     // Hand-written: a cell names its groups beside its size.

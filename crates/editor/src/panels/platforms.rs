@@ -76,6 +76,7 @@ fn glyph(t: Target) -> &'static str {
         Target::Pc => icon::DESKTOP,
         Target::N64 => icon::GAME_CONTROLLER,
         Target::N3ds => icon::DEVICE_MOBILE,
+        Target::Web => icon::BROWSER,
     }
 }
 

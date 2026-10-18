@@ -432,6 +432,12 @@ struct WaterSets {
 @group(3) @binding(0) var<uniform> water_sets: WaterSets;
 @group(3) @binding(1) var t_scene_depth: texture_depth_2d;
 
+// The scene's depth at pixel `p` (the one read of it: WebGL2 reads it as a
+// float texture, `depth_as_float` in mod.rs).
+fn scene_depth(p: vec2<i32>) -> f32 {
+    return textureLoad(t_scene_depth, p, 0);
+}
+
 const W_TAU: f32 = 6.28318530718;
 // trino_core::water's ripple constants.
 const RIPPLE_SPEED: f32 = 1.6;
@@ -556,7 +562,7 @@ fn fs_water(in: LitOut) -> @location(0) vec4<f32> {
     }
     // Depth: the water column under this pixel, from the scene's depth.
     let zw = dot(p - (*ws).eye.xyz, (*ws).fwd.xyz);
-    let dz = textureLoad(t_scene_depth, vec2<i32>(in.clip.xy), 0);
+    let dz = scene_depth(vec2<i32>(in.clip.xy));
     let zs = (*ws).fog.z / max(1.0 - dz, 1e-6);
     let thick = zs - zw;
     // Shallow water shows more of the bed; soft foam where it meets the

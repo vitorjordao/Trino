@@ -1,0 +1,25 @@
+[package]
+name = "trino-app-web"
+description = "Web glue (wasm32-unknown-unknown): platform-web + the games, picked by the page's URL (`?game=solid-eleven`), with the browser self-test (`?selftest`)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# A cdylib for wasm-bindgen (`cargo xtask build web`); off wasm32 it builds
+# empty, so `cargo build --workspace` and clippy stay host-only.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+trino-core = { workspace = true }
+castle64 = { workspace = true }
+showcase = { workspace = true }
+solid-eleven = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+trino-platform-web = { workspace = true }
+trino-render-wgpu = { workspace = true }
+wasm-bindgen = { workspace = true }
+wasm-bindgen-futures = { workspace = true }
+js-sys = { workspace = true }

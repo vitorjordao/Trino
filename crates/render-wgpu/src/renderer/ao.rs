@@ -130,6 +130,8 @@ struct Targets {
 
 pub(super) struct AoPass {
     bgl: wgpu::BindGroupLayout,
+    /// WebGL2's nearest sampler for the depth (`super::depth_as_float`).
+    nearest: Option<wgpu::Sampler>,
     params: wgpu::Buffer,
     ao: wgpu::RenderPipeline,
     blur_h: wgpu::RenderPipeline,
@@ -146,10 +148,13 @@ impl AoPass {
         device: &wgpu::Device,
         color_format: wgpu::TextureFormat,
         multisampled: bool,
+        webgl2: bool,
     ) -> AoPass {
         let source = include_str!("ao.wgsl");
         let source = if multisampled {
             source.replace("texture_depth_2d", "texture_depth_multisampled_2d")
+        } else if webgl2 {
+            super::depth_as_float(source)
         } else {
             source.to_string()
         };
@@ -157,40 +162,45 @@ impl AoPass {
             label: Some("trino-ao"),
             source: wgpu::ShaderSource::Wgsl(source.into()),
         });
+        let mut entries = vec![
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: super::depth_sample_type(webgl2),
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+        ];
+        // WebGL2 reads the depth through a nearest sampler (`depth_as_float`).
+        if webgl2 {
+            entries.push(super::nearest_sampler_entry(super::NEAREST_DEPTH_BINDING.1));
+        }
         let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("trino-ao-bgl"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Depth,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-            ],
+            entries: &entries,
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("trino-ao-layout"),
@@ -238,6 +248,7 @@ impl AoPass {
             },
         };
         AoPass {
+            nearest: webgl2.then(|| super::nearest_sampler(device)),
             params: device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("trino-ao-params"),
                 size: 64,
@@ -286,23 +297,30 @@ impl AoPass {
         let raw = target("trino-ao-raw");
         let tmp = target("trino-ao-tmp");
         let group = |input: &wgpu::TextureView| {
+            let mut entries = vec![
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.params.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(depth),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(input),
+                },
+            ];
+            if let Some(s) = &self.nearest {
+                entries.push(wgpu::BindGroupEntry {
+                    binding: super::NEAREST_DEPTH_BINDING.1,
+                    resource: wgpu::BindingResource::Sampler(s),
+                });
+            }
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("trino-ao-bg"),
                 layout: &self.bgl,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: self.params.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(depth),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::TextureView(input),
-                    },
-                ],
+                entries: &entries,
             })
         };
         let from_raw = group(&raw);

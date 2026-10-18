@@ -21,6 +21,8 @@ struct IndexEntry {
     preview_3ds: Option<String>,
     #[serde(default)]
     compressed: Option<String>,
+    #[serde(default)]
+    ktx2: Option<String>,
 }
 
 /// A sprite's PC blocks (`<id>.bc`, `crate::texture::BcFormat`).
@@ -41,6 +43,9 @@ pub struct LoadedSprite {
     /// The PC's BCn blocks, when the sprite's PC format is BCn: the native
     /// profile uploads them where the GPU samples BC.
     pub compressed: Option<CompressedSprite>,
+    /// The Web's KTX2 file (a Web bake whose format for the sprite is
+    /// KTX2): what a browser loads instead of the master.
+    pub ktx2: Option<Vec<u8>>,
 }
 
 impl LoadedSprite {
@@ -176,6 +181,17 @@ pub fn load_dir(out_dir: &Path, only: Option<&[u32]>) -> Result<LoadedAssets, St
                     }
                     None => None,
                 };
+                let ktx2 = match &entry.ktx2 {
+                    Some(file) => {
+                        let path = out_dir.join(file);
+                        let bytes =
+                            std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+                        crate::texture::ktx2::parse(&bytes)
+                            .map_err(|e| format!("{}: {e}", path.display()))?;
+                        Some(bytes)
+                    }
+                    None => None,
+                };
                 out.sprites.push(LoadedSprite {
                     logical: entry.logical,
                     id: entry.id,
@@ -184,6 +200,7 @@ pub fn load_dir(out_dir: &Path, only: Option<&[u32]>) -> Result<LoadedAssets, St
                     rgba,
                     preview_3ds,
                     compressed,
+                    ktx2,
                 });
             }
             "sound" | "music" => {

@@ -608,6 +608,9 @@ pub fn bc_alpha(format: super::CompressedFormat, blocks: &[u8]) -> bool {
                 _ => true,
             }
         }),
+        // Not read from the blocks: the caller knows (the Web's KTX2).
+        F::Etc2Rgb8 => false,
+        F::Etc2Rgba8 | F::Astc4x4 => true,
     }
 }
 

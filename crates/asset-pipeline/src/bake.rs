@@ -11,6 +11,10 @@
 //!   format is BCn (`compressed` in the index). The PC's native profile
 //!   uploads it where the GPU samples BC; the `.sprite` master stays for
 //!   tools, the console profiles and GPUs without BC.
+//! - `<hash>.ktx2`: a KTX2 file of Basis Universal data (`crate::texture::ktx2`),
+//!   written by a Web bake when the sprite's Web format is `KTX2-ETC1S` or
+//!   `KTX2-UASTC` (`ktx2` in the index). The browser transcodes it to what
+//!   its GPU samples.
 //! - `<hash>.sound`:  magic `TSND`, u32 sample_rate, u32 frame count,
 //!   f32 mono samples.
 //!
@@ -54,6 +58,9 @@ pub struct BakedEntry {
     pub preview_3ds: Option<String>,
     /// A sprite's BCn blocks (PC bakes only, when its PC format is BCn).
     pub compressed: Option<String>,
+    /// A sprite's KTX2 file (Web bakes only, when its Web format is
+    /// `KTX2-ETC1S` or `KTX2-UASTC`).
+    pub ktx2: Option<String>,
     /// True if this bake changed the output bytes on disk.
     pub changed: bool,
 }
@@ -127,6 +134,7 @@ pub fn bake_all(
                 format: t.format,
                 preview_3ds: t.preview_3ds,
                 compressed: t.compressed,
+                ktx2: t.ktx2,
                 changed: changed || t.changed,
             })
         })();
@@ -170,6 +178,7 @@ pub fn bake_all(
                     format: "F32_MONO".into(),
                     preview_3ds: None,
                     compressed: None,
+                    ktx2: None,
                     changed,
                 })
             })();
@@ -209,6 +218,7 @@ pub fn bake_all(
                 format: "TMDL".into(),
                 preview_3ds: None,
                 compressed: None,
+                ktx2: None,
                 changed,
             })
         })();
@@ -254,6 +264,7 @@ pub fn bake_all(
                     format: t.format,
                     preview_3ds: t.preview_3ds,
                     compressed: t.compressed,
+                    ktx2: t.ktx2,
                     changed: sprite_changed || t.changed,
                 },
                 BakedEntry {
@@ -264,6 +275,7 @@ pub fn bake_all(
                     format: "TFNT".into(),
                     preview_3ds: None,
                     compressed: None,
+                    ktx2: None,
                     changed: table_changed,
                 },
             ])
@@ -294,6 +306,7 @@ pub fn bake_all(
                 format: "RAW".into(),
                 preview_3ds: None,
                 compressed: None,
+                ktx2: None,
                 changed,
             })
         })();
@@ -324,6 +337,7 @@ pub fn bake_all(
                 format: "TPFX".into(),
                 preview_3ds: None,
                 compressed: None,
+                ktx2: None,
                 changed,
             })
         })();
@@ -358,6 +372,7 @@ pub fn bake_all(
                 format: "TSCN".into(),
                 preview_3ds: None,
                 compressed: None,
+                ktx2: None,
                 changed,
             })
         })();
@@ -384,6 +399,9 @@ pub fn bake_all(
         if let Some(c) = &e.compressed {
             index.push_str(&format!("compressed = \"{c}\"\n"));
         }
+        if let Some(k) = &e.ktx2 {
+            index.push_str(&format!("ktx2 = \"{k}\"\n"));
+        }
     }
     write_if_changed(&out_dir.join("index.toml"), index.as_bytes())
         .map_err(|e| BakeError(vec![e]))?;
@@ -407,6 +425,7 @@ struct BakedTexture {
     format: String,
     preview_3ds: Option<String>,
     compressed: Option<String>,
+    ktx2: Option<String>,
     changed: bool,
 }
 
@@ -425,8 +444,20 @@ fn bake_texture(
         format: choice.format,
         preview_3ds: None,
         compressed: None,
+        ktx2: None,
         changed: false,
     };
+    if platform == Platform::Web {
+        // The Web's KTX2 beside the master (the browser loads one of the
+        // two: `xtask/src/web.rs` packs the KTX2 when there is one).
+        if let Some(mode) = crate::texture::Ktx2Mode::parse(&t.format) {
+            let file = format!("{id:08x}.ktx2");
+            let e = crate::texture::ktx2::encode_cached(mode, w, h, rgba)?;
+            t.changed |= write_if_changed(&out_dir.join(&file), &e.ktx2)?;
+            t.ktx2 = Some(file);
+        }
+        return Ok(t);
+    }
     if platform != Platform::Pc {
         return Ok(t);
     }

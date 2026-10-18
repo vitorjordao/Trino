@@ -24,6 +24,7 @@ fn label(p: Platform) -> &'static str {
         Platform::Pc => "PC",
         Platform::N64 => "N64",
         Platform::N3ds => "3DS",
+        Platform::Web => "Web",
     }
 }
 

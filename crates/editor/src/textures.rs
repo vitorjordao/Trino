@@ -63,8 +63,13 @@ pub struct Totals {
     pub n3ds_budget: u64,
     /// The largest single TMEM load and its texture.
     pub n64_max: Option<(String, u64)>,
-    /// Textures whose bake fails, per platform (PC, N64, 3DS).
-    pub errors: [usize; 3],
+    /// The Web: what a browser downloads (KTX2 files, raw RGBA8) and the
+    /// VRAM once transcoded, against `Caps::WEB`.
+    pub web_download: u64,
+    pub web_vram: u64,
+    pub web_budget: u64,
+    /// Textures whose bake fails, per platform (PC, N64, 3DS, Web).
+    pub errors: [usize; 4],
 }
 
 /// Previews uploaded to egui (master, decoded per column).
@@ -296,6 +301,14 @@ pub fn decode(
             let f = N64Format::parse(format).ok_or_else(unknown)?;
             f.preview(width, height, &texture::n64::stage(source, f, rgba))
         }
+        Platform::Web if format == "RGBA8" => Ok(rgba.to_vec()),
+        Platform::Web => {
+            let mode = texture::Ktx2Mode::parse(format).ok_or_else(unknown)?;
+            if !BcFormat::fits(width, height) {
+                return Err(format!("{width}x{height} is not whole 4x4 blocks"));
+            }
+            Ok(texture::ktx2::encode_cached(mode, width, height, rgba)?.decoded)
+        }
     }
 }
 
@@ -346,6 +359,7 @@ fn upload(ctx: &egui::Context, insp: &Inspection) -> Shown {
 pub fn totals(assets: &Path) -> Totals {
     let mut t = Totals {
         n3ds_budget: trino_core::Caps::N3DS.texture_memory_bytes as u64,
+        web_budget: trino_core::Caps::WEB.texture_memory_bytes as u64,
         ..Default::default()
     };
     let Ok(entries) = texture::report_project(assets, &Platform::ALL) else {
@@ -368,6 +382,10 @@ pub fn totals(assets: &Path) -> Totals {
                     if t.n64_max.as_ref().is_none_or(|(_, b)| r.memory_bytes > *b) {
                         t.n64_max = Some((e.logical.clone(), r.memory_bytes));
                     }
+                }
+                Platform::Web => {
+                    t.web_download += r.bytes;
+                    t.web_vram += r.memory_bytes;
                 }
             }
         }

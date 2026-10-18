@@ -56,8 +56,14 @@ fn hi() -> vec2<i32> {
     return vec2<i32>(P.size) - vec2<i32>(1, 1);
 }
 
+// The depth at pixel `p` (the one read of it: WebGL2 reads it as a float
+// texture, `depth_as_float` in mod.rs).
+fn load_depth(p: vec2<i32>) -> f32 {
+    return textureLoad(t_depth, p, 0);
+}
+
 fn depth_at(p: vec2<i32>) -> f32 {
-    return textureLoad(t_depth, clamp(p, vec2<i32>(0, 0), hi()), 0);
+    return load_depth(clamp(p, vec2<i32>(0, 0), hi()));
 }
 
 // View depth of a stored depth (`d = 1 - NEAR/z`).
@@ -155,7 +161,7 @@ fn fs_ao(in: FullOut) -> @location(0) vec4<f32> {
         if qi.x < 0 || qi.y < 0 || qi.x > hi().x || qi.y > hi().y {
             continue;
         }
-        let sd = textureLoad(t_depth, qi, 0);
+        let sd = load_depth(qi);
         if sd >= 1.0 {
             continue;
         }

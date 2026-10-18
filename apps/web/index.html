@@ -1,0 +1,62 @@
+<!doctype html>
+<!-- The Web build's page (`cargo xtask build web` fills the {{...}} fields
+     from trino.toml's [web] table). The game draws on the canvas; the rest
+     is the audio banner, the error overlay, a small toolbar and an
+     optional log (?log). -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>{{TITLE}}</title>
+<link rel="icon" href="data:,">
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  body { display: flex; flex-direction: column; font: 13px system-ui, sans-serif; color: #ddd; }
+  #stage { position: relative; flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; }
+  canvas#{{CANVAS_ID}} { display: block; width: 100%; height: 100%; outline: none; touch-action: none; }
+  .banner { position: absolute; left: 50%; top: 16px; transform: translateX(-50%); padding: 8px 14px;
+            border-radius: 6px; background: rgba(20, 20, 28, .88); border: 1px solid #555; cursor: pointer; }
+  #trino-error { position: absolute; inset: 24px; overflow: auto; padding: 16px; white-space: pre-wrap;
+                 background: rgba(60, 10, 10, .92); border: 1px solid #c0392b; border-radius: 6px; font-family: monospace; }
+  #toolbar { position: absolute; right: 8px; bottom: 8px; display: flex; gap: 6px; opacity: .55; }
+  #toolbar:hover { opacity: 1; }
+  #toolbar button { background: #222; color: #ddd; border: 1px solid #555; border-radius: 4px; padding: 4px 8px; cursor: pointer; }
+  #trino-log { height: 160px; margin: 0; overflow: auto; padding: 6px; background: #111; border-top: 1px solid #333;
+               font: 11px monospace; white-space: pre-wrap; }
+  #loading { position: absolute; color: #888; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <span id="loading">Loading…</span>
+  <canvas id="{{CANVAS_ID}}" tabindex="0"></canvas>
+  <div id="trino-audio" class="banner" hidden>Click or press a key to enable sound</div>
+  <div id="trino-error" hidden></div>
+  <div id="toolbar">
+    <button id="btn-lock" title="Lock the mouse to the game (Esc releases it)">Lock mouse</button>
+    <button id="btn-full" title="Fullscreen (Esc leaves it)">Fullscreen</button>
+  </div>
+</div>
+<pre id="trino-log" hidden></pre>
+<script type="module">
+  import init from "./trino.js";
+  const canvas = document.getElementById("{{CANVAS_ID}}");
+  const params = new URLSearchParams(location.search);
+  if (params.has("log") || params.has("selftest")) document.getElementById("trino-log").hidden = false;
+  document.getElementById("btn-full").onclick = () => canvas.requestFullscreen?.();
+  document.getElementById("btn-lock").onclick = () => canvas.requestPointerLock?.();
+  document.getElementById("trino-audio").onclick = () => canvas.focus();
+  canvas.focus();
+  try {
+    await init({ module_or_path: "./trino.wasm" });
+  } catch (e) {
+    const el = document.getElementById("trino-error");
+    el.textContent = "Trino failed to start: " + e;
+    el.hidden = false;
+    globalThis.__trino = Object.assign(globalThis.__trino || {}, { done: true, pass: false, error: String(e) });
+  }
+  document.getElementById("loading").remove();
+</script>
+</body>
+</html>

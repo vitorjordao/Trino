@@ -25,6 +25,8 @@ serde_json = { workspace = true }
 toml = { workspace = true }
 # trino.toml (external console projects).
 serde = { workspace = true }
+# `build web`: the asset pack format (the browser reads it back).
+trino-platform-web = { workspace = true }
 
 [dev-dependencies]
 libloading = { workspace = true }

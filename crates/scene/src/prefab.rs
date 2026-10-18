@@ -12,9 +12,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::Entity;
 
-/// v2: entities may carry per-platform variants (`platforms`, see
-/// [`crate::platform`]); v1 files load unchanged and save as v2.
-pub const PREFAB_VERSION: u32 = 2;
+/// v3: the Web's variant and LOD starts (`web`, issue #47). v2: entities
+/// may carry per-platform variants (`platforms`, see [`crate::platform`]).
+/// v1 and v2 files load unchanged and save as v3.
+pub const PREFAB_VERSION: u32 = 3;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Prefab {
@@ -41,7 +42,7 @@ impl Prefab {
                 p.version
             ));
         }
-        // v1 is v2 without variants.
+        // v1 is v2 without variants, v2 is v3 without the Web.
         p.version = PREFAB_VERSION;
         Ok(p)
     }

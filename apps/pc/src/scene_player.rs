@@ -93,6 +93,7 @@ impl ScenePlayer {
                 trino_platform_pc::SimProfile::Native => Target::Pc,
                 trino_platform_pc::SimProfile::N64 => Target::N64,
                 trino_platform_pc::SimProfile::N3ds => Target::N3ds,
+                trino_platform_pc::SimProfile::Web => Target::Web,
             },
             time: 0.0,
             last_check: Instant::now(),

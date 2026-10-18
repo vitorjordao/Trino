@@ -23,6 +23,7 @@ mod scene;
 mod showcase_assets;
 mod standalone;
 mod texture;
+mod web;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -34,16 +35,28 @@ const HELP: &str = "\
 cargo xtask <command> [platform] [-- extra args]
 
 commands:
-  build <pc|n64|3ds>   compile the app for a platform (--selftest: the
+  build <pc|n64|3ds|web> compile the app for a platform (--selftest: the
                        self-test build `test 3ds --no-build` boots)
   build [all]          every platform the project targets, in turn
   [--project <dir>]    package an external project (its trino.toml; also
                        $TRINO_PROJECT or a trino.toml in the current
                        directory) instead of the engine's demo. Its
-                       [project] platforms = [\"pc\", \"n64\", \"3ds\"] (default:
-                       all) gates every platform command: batch commands
-                       skip the others, naming one fails
-  run   <pc|n64|3ds>   build and launch (emulator for consoles)
+                       [project] platforms = [\"pc\", \"n64\", \"3ds\", \"web\"]
+                       (default: pc, n64, 3ds) gates every platform command:
+                       batch commands skip the others, naming one fails
+  build web [--release] [--out <dir>]
+                       the browser build (issue #47): wasm + wasm-bindgen +
+                       KTX2 asset packs -> target/web/{index.html, trino.js,
+                       trino.wasm, assets/} (--out: an export folder)
+  run web [--release] [--port N] [--query \"?game=solid-eleven\"]
+                       serve target/web on 127.0.0.1 (COOP/COEP headers) and
+                       open the browser (TRINO_NO_BROWSER=1: serve only)
+  test web [--headed] [--browsers chromium,firefox,webkit] [--no-build]
+                       the browser self-test in each browser (Playwright,
+                       tools/web-test): TRINO_TEST_PASS, KTX2, saves and the
+                       golden frames in tests/golden/web/ (--bless rewrites)
+  run   <pc|n64|3ds|web> build and launch (emulator for consoles, a
+                       local server + the browser for web)
   run n64 --device sc64|everdrive
   run 3ds --device network [--ip <IP>] [--gdb [--gdb-port N]]
                        real hardware instead of the emulator (flashcart
@@ -55,11 +68,11 @@ commands:
                        Azahar with \"Simulate 3DS GPU timings\" on for this
                        session (also TRINO_AZAHAR_GPU_TIMING=1); your own
                        setting comes back when Azahar exits
-  test  [pc|n64|3ds] [--bless] [--no-build]
+  test  [pc|n64|3ds|web] [--bless] [--no-build]
                        run the test suite (default: the workspace's host
                        tests); --bless regenerates golden images
   test all             the host suite, then each targeted console's
-  assets <pc|n64|3ds>  bake assets into target/assets/<platform>
+  assets <pc|n64|3ds|web> bake assets into target/assets/<platform>
   assets [all]         bake for every platform the project targets
   watch <pc|n64>       live-reload session (pc: dylib hot swap; n64: rebuild
                        ROM + relaunch ares). pc: --game <crate> picks the
@@ -193,10 +206,55 @@ fn main() -> ExitCode {
         eprintln!("xtask: {e}");
         return ExitCode::FAILURE;
     }
+    // The Web's options (`build|run|test web`).
+    let web_build = web::BuildOptions {
+        release: web::take_flag(&mut args, "--release"),
+        out: match web::take_value(&mut args, "--out") {
+            Ok(v) => v.map(std::path::PathBuf::from),
+            Err(e) => {
+                eprintln!("{e}");
+                return ExitCode::FAILURE;
+            }
+        },
+    };
+    let web_port: u16 = match web::take_value(&mut args, "--port") {
+        Ok(Some(p)) => match p.parse() {
+            Ok(p) => p,
+            Err(_) => {
+                eprintln!("xtask: --port needs a number");
+                return ExitCode::FAILURE;
+            }
+        },
+        Ok(None) => 8080,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let web_query = web::take_value(&mut args, "--query")
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let web_test = web::TestOptions {
+        build: !no_build,
+        bless,
+        headed: web::take_flag(&mut args, "--headed"),
+        browsers: web::take_value(&mut args, "--browsers")
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "chromium,firefox,webkit".into())
+            .split(',')
+            .map(String::from)
+            .collect(),
+    };
     let mut it = args.iter().map(String::as_str);
 
     match (it.next(), it.next()) {
         (Some("build"), Some("pc")) => build_pc(&project, "build", &[]),
+        (Some("build"), Some("web")) => web::build(&project, &web_build),
+        (Some("run"), Some("web")) => web::run(&project, &web_build, web_port, &web_query),
+        (Some("test"), Some("web")) => web::test(&project, &web_test),
+        (Some("assets"), Some("web")) => assets_for(&project, Target::Web),
         (Some("run"), Some("pc")) => {
             let extra: Vec<&str> = it.collect();
             build_pc(&project, "run", &extra)
@@ -208,6 +266,7 @@ fn main() -> ExitCode {
             Target::Pc => build_pc(&project, "build", &[]),
             Target::N64 => n64::build(&project, selftest),
             Target::N3ds => n3ds::build(&project, selftest),
+            Target::Web => web::build(&project, &web_build),
         }),
         (Some("assets"), None | Some("all")) => {
             batch(&project, "assets", |t| assets_for(&project, t))
@@ -216,6 +275,7 @@ fn main() -> ExitCode {
             Target::Pc => test_pc(&project, bless),
             Target::N64 => n64::test(&project, bless),
             Target::N3ds => n3ds::test(&project, !no_build, bless, accurate),
+            Target::Web => web::test(&project, &web_test),
         }),
         (Some("assets"), Some("n64")) => assets_for(&project, Target::N64),
         (Some("assets"), Some("3ds" | "n3ds")) => assets_for(&project, Target::N3ds),
@@ -373,6 +433,7 @@ fn assets_for(project: &project::Project, t: Target) -> ExitCode {
         Target::Pc => return assets(&project.root, Platform::Pc),
         Target::N64 => ("n64", n64::bake_assets(project, false)),
         Target::N3ds => ("3ds", n3ds::bake_assets(project, false)),
+        Target::Web => return assets(&project.root, Platform::Web),
     };
     match made {
         Ok(()) => ExitCode::SUCCESS,

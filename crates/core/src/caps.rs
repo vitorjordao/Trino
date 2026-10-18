@@ -121,6 +121,30 @@ impl Caps {
         max_ripples: crate::water::MAX_RIPPLES as u8,
     };
 
+    /// A web browser (WebGPU, or WebGL2 where there is none; issue #47):
+    /// the PC's tiers with a budget a phone's browser holds. 4096 is the
+    /// texture size every WebGL2 device samples (the spec's floor is 2048,
+    /// no shipping browser stops there), 1 GiB the texture memory of a
+    /// mid-range phone's tab, 1 MiB of save the `localStorage` quota keeps
+    /// with room (it stores base64). The triangle cap is strict mode's
+    /// fillrate warning for mobile GPUs, not a desktop limit.
+    pub const WEB: Caps = Caps {
+        screen_width: 1920,
+        screen_height: 1080,
+        texture_memory_bytes: 1 << 30,
+        max_texture_dim: 4096,
+        max_sprites_per_frame: u32::MAX,
+        max_tris_per_frame: 1_000_000,
+        max_3d_us_per_frame: u32::MAX,
+        color_depth_bits: 32,
+        save_bytes: 1024 * 1024,
+        light_tier: crate::light::LightTier::PerPixel,
+        max_local_lights: 8,
+        ao_tier: crate::ao::AoTier::ScreenSpace,
+        water_tier: crate::water::WaterTier::PerPixel,
+        max_ripples: crate::water::MAX_RIPPLES as u8,
+    };
+
     /// Validate a texture of `width`x`height` at `bytes_per_pixel` against
     /// this budget.
     pub fn validate_texture(
@@ -184,5 +208,19 @@ mod tests {
     #[test]
     fn pc_accepts_large_textures() {
         assert!(Caps::PC.validate_texture(4096, 4096, 4).is_ok());
+    }
+
+    #[test]
+    fn web_has_the_pc_tiers_and_a_browser_budget() {
+        let web = Caps::WEB;
+        assert_eq!(web.light_tier, Caps::PC.light_tier);
+        assert_eq!(web.ao_tier, Caps::PC.ao_tier);
+        assert_eq!(web.water_tier, Caps::PC.water_tier);
+        assert!(web.validate_texture(4096, 4096, 4).is_ok());
+        assert!(matches!(
+            web.validate_texture(8192, 16, 4),
+            Err(CapsError::TextureTooLarge { max_dim: 4096, .. })
+        ));
+        assert!(web.save_bytes >= Caps::N3DS.save_bytes);
     }
 }

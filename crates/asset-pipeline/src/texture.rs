@@ -3,7 +3,8 @@
 //! texture gets ([`choose`]: a declared format, or `auto`'s smallest that
 //! keeps `quality`/`min_psnr` — the one decision every bake, `texture
 //! inspect|report` and the editor share). Per platform: the 3DS below,
-//! PC BCn in [`BcFormat`], the N64's `mksprite` model in [`n64`].
+//! PC BCn in [`BcFormat`], the N64's `mksprite` model in [`n64`], the
+//! Web's KTX2 (Basis Universal) in [`ktx2`].
 //!
 //! The 3DS bake hands sprites to `tex3ds` (the `.t3x` the shim loads); this
 //! module reproduces the result in Rust so the PC can show it without
@@ -32,6 +33,7 @@
 
 mod auto;
 mod bc;
+pub mod ktx2;
 pub mod n64;
 
 pub use auto::{
@@ -39,6 +41,7 @@ pub use auto::{
     measure,
 };
 pub use bc::{BcFormat, bc7_encode_block};
+pub use ktx2::Ktx2Mode;
 pub use n64::N64Format;
 
 /// A 3DS (PICA200) texture format, as the manifest names it.
@@ -630,7 +633,8 @@ pub struct TextureReport {
     pub psnr: Option<f64>,
     /// The memory the share is of: `TMEM` (N64), `texture memory` (3DS
     /// linear memory, `Caps::N3DS.texture_memory_bytes`) or `VRAM` (PC,
-    /// no budget).
+    /// no budget; Web, its transcoded size against `Caps::WEB`, while
+    /// `bytes` is its download).
     pub memory: &'static str,
     /// Bytes counted against that memory, and its size.
     pub memory_bytes: u64,
@@ -798,6 +802,14 @@ pub fn report(platform: crate::Platform, choice: Choice, width: u32, height: u32
             let f = N64Format::parse(&choice.format).expect("an N64 format");
             ("TMEM", f.tmem(width, height).0, Some(4096))
         }
+        // `bytes` is the download; the VRAM is what the transcode makes.
+        crate::Platform::Web => (
+            "VRAM",
+            Ktx2Mode::parse(&choice.format).map_or(width as u64 * height as u64 * 4, |m| {
+                m.gpu_bytes(width, height, !choice.content.opaque)
+            }),
+            Some(trino_core::Caps::WEB.texture_memory_bytes as u64),
+        ),
     };
     TextureReport {
         platform,

@@ -15,6 +15,8 @@ rust-version = "1.93"
 trino-core = { path = "crates/core" }
 trino-game-api = { path = "crates/game-api" }
 trino-platform-pc = { path = "crates/platform-pc" }
+trino-platform-web = { path = "crates/platform-web" }
+trino-render-wgpu = { path = "crates/render-wgpu" }
 trino-platform-n64 = { path = "crates/platform-n64" }
 trino-platform-3ds = { path = "crates/platform-3ds" }
 trino-asset-pipeline = { path = "crates/asset-pipeline" }
@@ -32,6 +34,14 @@ winit = "0.30"
 wgpu = "29"
 cpal = "0.18"
 pollster = "0.4"
+# The Web target (#47): wasm32-unknown-unknown bindings, browser APIs and a
+# clock that works in a browser. wasm-bindgen is pinned exactly: the
+# wasm-bindgen CLI `cargo xtask build web` runs must be the same version.
+wasm-bindgen = "=0.2.126"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = "0.3"
+web-time = "1"
 bytemuck = { version = "1", features = ["derive"] }
 png = "0.18"
 serde_json = "1"
@@ -49,6 +59,10 @@ gif = "0.13"
 # fallback. BC7 is encoded in-house (`texture/bc.rs`).
 texpresso = { version = "2", default-features = false }
 bcdec_rs = "0.2"
+# Web textures (#47, KTX2): Binomial's Basis Universal encoder and
+# transcoder (C++, built by `cc`). Host tools only: the browser runs the
+# same transcoder compiled to WebAssembly (`apps/web/vendor/basis`).
+basis-universal = "0.3"
 notify = "8"
 notify-debouncer-full = "0.6"
 hot-lib-reloader = "0.8.2"

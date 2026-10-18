@@ -148,6 +148,7 @@ pub fn target_of(profile: SimProfile) -> trino_scene::Target {
         SimProfile::Native => trino_scene::Target::Pc,
         SimProfile::N64 => trino_scene::Target::N64,
         SimProfile::N3ds => trino_scene::Target::N3ds,
+        SimProfile::Web => trino_scene::Target::Web,
     }
 }
 
@@ -250,6 +251,7 @@ impl Viewport {
             SimProfile::Native => "native",
             SimProfile::N64 => "n64",
             SimProfile::N3ds => "3ds",
+            SimProfile::Web => "web",
         }
     }
 
@@ -976,6 +978,7 @@ impl Viewport {
                     SimProfile::N64 => "N64",
                     SimProfile::N3ds => "3DS",
                     SimProfile::Native => "PC",
+                    SimProfile::Web => "Web",
                 }
             ),
             egui::FontId::proportional(11.5),

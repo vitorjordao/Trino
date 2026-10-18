@@ -2073,13 +2073,34 @@ fn texture_memory(
              2D blits tile"
         ));
     }
+    let web_pct = t.web_vram as f64 * 100.0 / t.web_budget.max(1) as f64;
+    line(
+        ui,
+        format!(
+            "Textures Web {} download · {} VRAM",
+            bytes(t.web_download),
+            bytes(t.web_vram)
+        ),
+        if web_pct > 100.0 {
+            c::ERROR
+        } else {
+            c::TEXT_WEAK
+        },
+    )
+    .on_hover_text(format!(
+        "{} textures as KTX2 (Basis Universal) or RGBA8: what a browser downloads, and \
+         its GPU memory once transcoded ({web_pct:.2}% of the Web's {})",
+        t.textures,
+        bytes(t.web_budget)
+    ));
     let failing: usize = t.errors.iter().sum();
     if failing > 0 {
         line(
             ui,
             format!(
-                "{failing} texture bakes fail (PC {}, N64 {}, 3DS {}): cargo xtask texture report",
-                t.errors[0], t.errors[1], t.errors[2]
+                "{failing} texture bakes fail (PC {}, N64 {}, 3DS {}, Web {}): cargo xtask \
+                 texture report",
+                t.errors[0], t.errors[1], t.errors[2], t.errors[3]
             ),
             c::ERROR,
         );

@@ -14,7 +14,8 @@ use trino_core::{Color, Emitter, ParticleSystem, SpriteId, Vec2, Vec3};
 
 use crate::Platform;
 
-pub const DEF_VERSION: u32 = 1;
+/// v2: a `web` cap per effect (issue #47); v1 files load unchanged.
+pub const DEF_VERSION: u32 = 2;
 pub const DEF_EXT: &str = ".particles.ron";
 /// The most particles an effect may keep alive (runtime systems are fixed
 /// size; past this a console spends its frame on billboards).
@@ -90,7 +91,8 @@ fn d_max() -> u16 {
     32
 }
 
-/// Per-platform caps (`None` = the effect's `max`).
+/// Per-platform caps (`None` = the effect's `max`; the Web takes the PC's
+/// cap when it has none, like scene variants).
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 pub struct ParticlePlatforms {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -99,11 +101,13 @@ pub struct ParticlePlatforms {
     pub n64: Option<PlatformCap>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub n3ds: Option<PlatformCap>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub web: Option<PlatformCap>,
 }
 
 impl ParticlePlatforms {
     pub fn is_empty(&self) -> bool {
-        self.pc.is_none() && self.n64.is_none() && self.n3ds.is_none()
+        self.pc.is_none() && self.n64.is_none() && self.n3ds.is_none() && self.web.is_none()
     }
 
     pub fn get(&self, p: Platform) -> Option<&PlatformCap> {
@@ -111,6 +115,7 @@ impl ParticlePlatforms {
             Platform::Pc => self.pc.as_ref(),
             Platform::N64 => self.n64.as_ref(),
             Platform::N3ds => self.n3ds.as_ref(),
+            Platform::Web => self.web.as_ref().or(self.pc.as_ref()),
         }
     }
 
@@ -119,6 +124,7 @@ impl ParticlePlatforms {
             Platform::Pc => &mut self.pc,
             Platform::N64 => &mut self.n64,
             Platform::N3ds => &mut self.n3ds,
+            Platform::Web => &mut self.web,
         }
     }
 }
@@ -155,7 +161,7 @@ impl ParticlesDef {
     }
 
     pub fn from_ron(text: &str) -> Result<Self, String> {
-        let d: ParticlesDef =
+        let mut d: ParticlesDef =
             ron::from_str(text).map_err(|e| format!("particles parse error: {e}"))?;
         if d.version > DEF_VERSION {
             return Err(format!(
@@ -163,6 +169,8 @@ impl ParticlesDef {
                 d.version
             ));
         }
+        // v1 is v2 without the Web: it saves as v2.
+        d.version = DEF_VERSION;
         d.validate()?;
         Ok(d)
     }

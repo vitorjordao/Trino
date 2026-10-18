@@ -216,6 +216,9 @@ fn kept(
             f.preview(w, h, &texture::n64::stage(m.source, f, &m.rgba))
                 .unwrap_or_else(|_| m.rgba.clone())
         }
+        Platform::Web => texture::Ktx2Mode::parse(&c.format).map_or(m.rgba.clone(), |k| {
+            texture::ktx2::encode(k, w, h, &m.rgba).unwrap().decoded
+        }),
     };
     (c.format, texture::psnr(&m.rgba, &px), px)
 }

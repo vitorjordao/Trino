@@ -10,13 +10,14 @@
 mod ao;
 mod batch;
 mod cpu_tnl;
+mod depth_blit;
 mod gpu_tnl;
 mod lights;
 mod water;
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Instant;
+use web_time::Instant;
 
 use trino_core::render3d::{
     Camera3, DEFAULT_LIGHT, Light, Mesh, MeshLayout, PcGpuReject, ScreenTri, SurfaceScratch,
@@ -70,8 +71,10 @@ struct SpriteEntry {
     alpha: bool,
 }
 
-/// A block-compressed sprite format the PC uploads as is
-/// ([`PcRenderer::upload_sprite_bc`]); 4×4 blocks in row-major order.
+/// A block-compressed sprite format the renderer uploads as is
+/// ([`PcRenderer::upload_sprite_compressed`]); 4×4 blocks in row-major
+/// order. The PC bakes BC; the Web transcodes its KTX2 textures to
+/// whichever of these the browser's GPU samples (issue #47).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CompressedFormat {
     /// 8 bytes a block: color with 1-bit alpha.
@@ -80,6 +83,12 @@ pub enum CompressedFormat {
     Bc3,
     /// 16 bytes: RGBA.
     Bc7,
+    /// 8 bytes: ETC2 color (phones; ETC1 blocks are ETC2 blocks).
+    Etc2Rgb8,
+    /// 16 bytes: ETC2 color plus EAC alpha.
+    Etc2Rgba8,
+    /// 16 bytes: ASTC 4×4 (RGBA).
+    Astc4x4,
 }
 
 impl CompressedFormat {
@@ -90,13 +99,76 @@ impl CompressedFormat {
             CompressedFormat::Bc1 => wgpu::TextureFormat::Bc1RgbaUnorm,
             CompressedFormat::Bc3 => wgpu::TextureFormat::Bc3RgbaUnorm,
             CompressedFormat::Bc7 => wgpu::TextureFormat::Bc7RgbaUnorm,
+            CompressedFormat::Etc2Rgb8 => wgpu::TextureFormat::Etc2Rgb8Unorm,
+            CompressedFormat::Etc2Rgba8 => wgpu::TextureFormat::Etc2Rgba8Unorm,
+            CompressedFormat::Astc4x4 => wgpu::TextureFormat::Astc {
+                block: wgpu::AstcBlock::B4x4,
+                channel: wgpu::AstcChannel::Unorm,
+            },
         }
     }
 
     pub fn block_bytes(self) -> u32 {
         match self {
-            CompressedFormat::Bc1 => 8,
-            CompressedFormat::Bc3 | CompressedFormat::Bc7 => 16,
+            CompressedFormat::Bc1 | CompressedFormat::Etc2Rgb8 => 8,
+            CompressedFormat::Bc3
+            | CompressedFormat::Bc7
+            | CompressedFormat::Etc2Rgba8
+            | CompressedFormat::Astc4x4 => 16,
+        }
+    }
+
+    /// The device feature that samples it.
+    pub fn feature(self) -> wgpu::Features {
+        match self {
+            CompressedFormat::Bc1 | CompressedFormat::Bc3 | CompressedFormat::Bc7 => {
+                wgpu::Features::TEXTURE_COMPRESSION_BC
+            }
+            CompressedFormat::Etc2Rgb8 | CompressedFormat::Etc2Rgba8 => {
+                wgpu::Features::TEXTURE_COMPRESSION_ETC2
+            }
+            CompressedFormat::Astc4x4 => wgpu::Features::TEXTURE_COMPRESSION_ASTC,
+        }
+    }
+
+    /// A BC format (the PC's; [`PcRenderer::set_bc`] gates them).
+    pub fn is_bc(self) -> bool {
+        matches!(
+            self,
+            CompressedFormat::Bc1 | CompressedFormat::Bc3 | CompressedFormat::Bc7
+        )
+    }
+}
+
+/// What the device behind a renderer can't do, by backend
+/// ([`PcRenderer::new_canvas`] on WebGL2). Desktop backends and WebGPU
+/// have everything.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct BackendLimits {
+    /// wgpu's GL backend in a browser: WebGL2's downlevel limits and no
+    /// multisampled depth sampling (no MSAA).
+    webgl2: bool,
+}
+
+/// The graphics API a browser renderer asks for ([`PcRenderer::new_canvas`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum WebBackend {
+    /// WebGPU when the browser gives an adapter, else WebGL2.
+    #[default]
+    Auto,
+    WebGpu,
+    WebGl2,
+}
+
+impl WebBackend {
+    /// `auto`, `webgpu`, `webgl2` (`webgl` and `gl` too): the Web app's
+    /// `?backend=` value.
+    pub fn parse(s: &str) -> Option<WebBackend> {
+        match s.to_ascii_lowercase().as_str() {
+            "auto" | "" => Some(WebBackend::Auto),
+            "webgpu" | "gpu" => Some(WebBackend::WebGpu),
+            "webgl2" | "webgl" | "gl" => Some(WebBackend::WebGl2),
+            _ => None,
         }
     }
 }
@@ -189,6 +261,13 @@ pub struct PcRenderer {
     /// target at the end of the pass).
     msaa: u32,
     msaa_targets: Option<MsaaTargets>,
+    /// WebGL2 (wgpu's GL backend in a browser): no multisampled depth to
+    /// sample (GLSL ES 3.0 has no `sampler2DMS`), so [`PcRenderer::set_msaa`]
+    /// keeps one sample, and shaders read depth as a float texture
+    /// ([`depth_as_float`]).
+    webgl2: bool,
+    /// WebGL2's depth copy for the water (built on its first use).
+    depth_blit: Option<depth_blit::DepthBlit>,
     lights_buf: wgpu::Buffer,
     lights_bg: wgpu::BindGroup,
     blit_pipeline: wgpu::RenderPipeline,
@@ -346,6 +425,8 @@ struct WaterGpu {
     buf: wgpu::Buffer,
     depth_copy: wgpu::Texture,
     bg: wgpu::BindGroup,
+    /// WebGL2's nearest sampler for the depth copy (`depth_as_float`).
+    nearest: Option<wgpu::Sampler>,
     /// `fs_water`: the per-pixel tier (native).
     per_pixel: wgpu::RenderPipeline,
     /// `fs_water_vertex`: the console tiers' combiner (N64 look, 3DS).
@@ -368,33 +449,102 @@ struct WaterMs {
     vertex: wgpu::RenderPipeline,
 }
 
+/// WebGL2's copy of a shader that reads a depth texture. naga's GLSL
+/// backend can't `textureLoad` a `texture_depth_2d`, so the binding becomes
+/// an unfilterable float texture (WebGPU and wgpu accept a depth view
+/// there, [`depth_sample_type`]); and wgpu's GL backend leaves a depth
+/// texture's own filter at GL's mipmapped-linear default, which makes it
+/// incomplete for a depth format (a `texelFetch` reads 0), so each
+/// shader's one depth read samples it through a nearest sampler
+/// ([`NEAREST_DEPTH_BINDING`]) at the texel's center.
+pub(crate) fn depth_as_float(source: &str) -> String {
+    let mut out = source.replace("texture_depth_2d", "texture_2d<f32>");
+    for (texture, group, binding) in [("t_scene_depth", 3, 2), ("t_depth", 0, 3)] {
+        let read = format!("return textureLoad({texture}, p, 0);");
+        if !out.contains(&read) {
+            continue;
+        }
+        let sampler = format!("s_{texture}");
+        out = out.replace(
+            &read,
+            &format!(
+                "return textureSampleLevel({texture}, {sampler}, (vec2<f32>(p) + vec2<f32>(0.5)) \
+                 / vec2<f32>(textureDimensions({texture})), 0.0).r;"
+            ),
+        );
+        let decl = format!("var {texture}: texture_2d<f32>;");
+        out = out.replace(
+            &decl,
+            &format!("{decl}\n@group({group}) @binding({binding}) var {sampler}: sampler;"),
+        );
+    }
+    out
+}
+
+/// The binding of the nearest sampler [`depth_as_float`] adds on WebGL2:
+/// the water's group 3 and the AO's group 0.
+pub(crate) const NEAREST_DEPTH_BINDING: (u32, u32) = (2, 3);
+
+/// A non-filtering sampler for the WebGL2 depth reads.
+pub(crate) fn nearest_sampler(device: &wgpu::Device) -> wgpu::Sampler {
+    device.create_sampler(&wgpu::SamplerDescriptor {
+        label: Some("trino-depth-nearest"),
+        ..Default::default()
+    })
+}
+
+/// The layout entry of that sampler at `binding`.
+pub(crate) fn nearest_sampler_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
+        count: None,
+    }
+}
+
+/// How a shader binds the scene's depth: as depth, or on WebGL2 as an
+/// unfilterable float texture ([`depth_as_float`]).
+pub(crate) fn depth_sample_type(webgl2: bool) -> wgpu::TextureSampleType {
+    if webgl2 {
+        wgpu::TextureSampleType::Float { filterable: false }
+    } else {
+        wgpu::TextureSampleType::Depth
+    }
+}
+
 /// The group 3 layout of the water pipelines: the sets and the scene's
 /// depth copy (multisampled with MSAA on).
-fn water_bgl(device: &wgpu::Device, multisampled: bool) -> wgpu::BindGroupLayout {
+fn water_bgl(device: &wgpu::Device, multisampled: bool, webgl2: bool) -> wgpu::BindGroupLayout {
+    let mut entries = vec![
+        wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        },
+        wgpu::BindGroupLayoutEntry {
+            binding: 1,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Texture {
+                sample_type: depth_sample_type(webgl2),
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled,
+            },
+            count: None,
+        },
+    ];
+    // WebGL2 reads the depth through a nearest sampler (`depth_as_float`).
+    if webgl2 {
+        entries.push(nearest_sampler_entry(NEAREST_DEPTH_BINDING.0));
+    }
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("trino-water-bgl"),
-        entries: &[
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Depth,
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled,
-                },
-                count: None,
-            },
-        ],
+        entries: &entries,
     })
 }
 
@@ -458,11 +608,12 @@ fn water_pipelines(
 
 impl WaterGpu {
     fn depth_copy(device: &wgpu::Device, size: (u32, u32), samples: u32) -> wgpu::Texture {
-        let mut usage = wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING;
-        if samples > 1 {
-            // WebGPU: a multisampled texture must be a render attachment.
-            usage |= wgpu::TextureUsages::RENDER_ATTACHMENT;
-        }
+        // A render attachment too: multisampled textures must be one
+        // (WebGPU), and WebGL2 copies the depth by drawing it
+        // (`depth_blit`).
+        let usage = wgpu::TextureUsages::COPY_DST
+            | wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::RENDER_ATTACHMENT;
         device.create_texture(&wgpu::TextureDescriptor {
             label: Some("trino-water-depth"),
             size: wgpu::Extent3d {
@@ -484,21 +635,29 @@ impl WaterGpu {
         bgl: &wgpu::BindGroupLayout,
         buf: &wgpu::Buffer,
         depth: &wgpu::Texture,
+        nearest: Option<&wgpu::Sampler>,
     ) -> wgpu::BindGroup {
         let view = depth.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut entries = vec![
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: buf.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(&view),
+            },
+        ];
+        if let Some(s) = nearest {
+            entries.push(wgpu::BindGroupEntry {
+                binding: NEAREST_DEPTH_BINDING.0,
+                resource: wgpu::BindingResource::Sampler(s),
+            });
+        }
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("trino-water-bg"),
             layout: bgl,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&view),
-                },
-            ],
+            entries: &entries,
         })
     }
 
@@ -513,12 +672,12 @@ impl WaterGpu {
             label: Some("trino-shaders-ms-water"),
             source: wgpu::ShaderSource::Wgsl(source.into()),
         });
-        let bgl = water_bgl(device, true);
+        let bgl = water_bgl(device, true, false);
         let [g0, g1, g2] = &self.groups;
         let [per_pixel, vertex] =
             water_pipelines(device, &shader, [g0, g1, g2, &bgl], MSAA_SAMPLES);
         let depth_copy = Self::depth_copy(device, size, MSAA_SAMPLES);
-        let bg = Self::bind_group(device, &bgl, &self.buf, &depth_copy);
+        let bg = Self::bind_group(device, &bgl, &self.buf, &depth_copy, None);
         self.ms = Some(WaterMs {
             bgl,
             depth_copy,
@@ -531,10 +690,16 @@ impl WaterGpu {
     /// A new size: new depth copies (and their bind groups).
     fn resize(&mut self, device: &wgpu::Device, size: (u32, u32)) {
         self.depth_copy = Self::depth_copy(device, size, 1);
-        self.bg = Self::bind_group(device, &self.bgl, &self.buf, &self.depth_copy);
+        self.bg = Self::bind_group(
+            device,
+            &self.bgl,
+            &self.buf,
+            &self.depth_copy,
+            self.nearest.as_ref(),
+        );
         if let Some(ms) = &mut self.ms {
             ms.depth_copy = Self::depth_copy(device, size, MSAA_SAMPLES);
-            ms.bg = Self::bind_group(device, &ms.bgl, &self.buf, &ms.depth_copy);
+            ms.bg = Self::bind_group(device, &ms.bgl, &self.buf, &ms.depth_copy, None);
         }
     }
 }
@@ -544,7 +709,7 @@ impl WaterGpu {
 /// N64 look, bilinear on the 3DS (its GPU default).
 fn default_filter(profile: SimProfile) -> TexFilter {
     match profile {
-        SimProfile::Native => TexFilter::Point,
+        SimProfile::Native | SimProfile::Web => TexFilter::Point,
         SimProfile::N64 | SimProfile::N3ds => TexFilter::Bilinear,
     }
 }
@@ -1039,6 +1204,7 @@ fn tnl_threads_from_env() -> usize {
 
 impl PcRenderer {
     /// Renderer that presents to a window.
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn new_windowed(
         window: Arc<winit::window::Window>,
         profile: SimProfile,
@@ -1067,6 +1233,54 @@ impl PcRenderer {
         Ok(r)
     }
 
+    /// Renderer that presents to a browser canvas (the Web backend, issue
+    /// #47), `width`×`height` physical pixels: WebGPU where the browser has
+    /// it ([`WebBackend::Auto`] falls back to WebGL2 when `navigator.gpu`
+    /// gives no adapter), or the API `backend` names.
+    #[cfg(target_arch = "wasm32")]
+    pub async fn new_canvas(
+        canvas: web_sys::HtmlCanvasElement,
+        width: u32,
+        height: u32,
+        profile: SimProfile,
+        backend: WebBackend,
+    ) -> Result<Self, RendererError> {
+        /// A page's display: wgpu creates canvas surfaces against one.
+        #[derive(Debug)]
+        struct WebDisplay;
+        impl wgpu::rwh::HasDisplayHandle for WebDisplay {
+            fn display_handle(
+                &self,
+            ) -> Result<wgpu::rwh::DisplayHandle<'_>, wgpu::rwh::HandleError> {
+                let raw = wgpu::rwh::RawDisplayHandle::Web(wgpu::rwh::WebDisplayHandle::new());
+                // SAFETY: a web display handle holds no pointer; it stays
+                // valid for the page's life.
+                Ok(unsafe { wgpu::rwh::DisplayHandle::borrow_raw(raw) })
+            }
+        }
+        let mut desc = wgpu::InstanceDescriptor::new_with_display_handle(Box::new(WebDisplay));
+        desc.backends = match backend {
+            WebBackend::Auto => wgpu::Backends::BROWSER_WEBGPU | wgpu::Backends::GL,
+            WebBackend::WebGpu => wgpu::Backends::BROWSER_WEBGPU,
+            WebBackend::WebGl2 => wgpu::Backends::GL,
+        };
+        if backend == WebBackend::WebGpu && !wgpu::util::is_browser_webgpu_supported().await {
+            return Err(RendererError::NoAdapter(
+                "this browser gives no WebGPU adapter (try ?backend=webgl2)".into(),
+            ));
+        }
+        let instance = wgpu::util::new_instance_with_webgpu_detection(desc).await;
+        let surface = instance
+            .create_surface(wgpu::SurfaceTarget::Canvas(canvas))
+            .map_err(|e| RendererError::Surface(e.to_string()))?;
+        Self::init(
+            instance,
+            Some((surface, width.max(1), height.max(1))),
+            profile,
+        )
+        .await
+    }
+
     /// Offscreen-only renderer for tests and tooling.
     pub async fn new_headless(profile: SimProfile) -> Result<Self, RendererError> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
@@ -1077,7 +1291,14 @@ impl PcRenderer {
     /// sharing eframe's device lets the offscreen texture be registered
     /// directly as an egui texture (render-to-texture, zero copies).
     pub fn with_device(device: wgpu::Device, queue: wgpu::Queue, profile: SimProfile) -> Self {
-        Self::build(device, queue, None, profile, "editor device".into())
+        Self::build(
+            device,
+            queue,
+            None,
+            profile,
+            "editor device".into(),
+            BackendLimits::default(),
+        )
     }
 
     async fn init(
@@ -1093,15 +1314,29 @@ impl PcRenderer {
             })
             .await
             .map_err(|e| RendererError::NoAdapter(e.to_string()))?;
+        let info = adapter.get_info();
+        // WebGL2 (wgpu's GL backend in a browser) has the downlevel WebGL2
+        // limits: no storage buffers, 16 KB uniform blocks, no sampling of
+        // multisampled depth.
+        let limits = BackendLimits {
+            webgl2: cfg!(target_arch = "wasm32") && info.backend == wgpu::Backend::Gl,
+        };
 
-        // BC textures where the adapter samples them (every desktop GPU;
-        // `TRINO_BC=0` leaves them off, the runner then uploads decoded
-        // pixels).
+        // Compressed textures where the adapter samples them: BC on every
+        // desktop GPU (`TRINO_BC=0` leaves it off, the runner then uploads
+        // decoded pixels), ETC2 and ASTC on phones (the Web's KTX2
+        // textures transcode to whichever the browser has).
         let bc_off = std::env::var("TRINO_BC").is_ok_and(|v| v == "0");
-        let required_features = if bc_off {
-            wgpu::Features::empty()
+        let mut wanted =
+            wgpu::Features::TEXTURE_COMPRESSION_ETC2 | wgpu::Features::TEXTURE_COMPRESSION_ASTC;
+        if !bc_off {
+            wanted |= wgpu::Features::TEXTURE_COMPRESSION_BC;
+        }
+        let required_features = adapter.features() & wanted;
+        let base = if limits.webgl2 {
+            wgpu::Limits::downlevel_webgl2_defaults()
         } else {
-            adapter.features() & wgpu::Features::TEXTURE_COMPRESSION_BC
+            wgpu::Limits::downlevel_defaults()
         };
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
@@ -1112,7 +1347,7 @@ impl PcRenderer {
                 // pictures need more than downlevel's 2048.
                 required_limits: wgpu::Limits {
                     max_texture_dimension_2d: adapter.limits().max_texture_dimension_2d.min(8192),
-                    ..wgpu::Limits::downlevel_defaults()
+                    ..base
                 },
                 ..Default::default()
             })
@@ -1153,9 +1388,14 @@ impl PcRenderer {
             SurfaceState { surface, config }
         });
 
-        let info = adapter.get_info();
-        let name = format!("{} ({:?})", info.name, info.backend);
-        Ok(Self::build(device, queue, surface, profile, name))
+        // Browsers hide the GPU's name from WebGPU pages.
+        let shown = if info.name.is_empty() {
+            "browser adapter"
+        } else {
+            &info.name
+        };
+        let name = format!("{shown} ({:?})", info.backend);
+        Ok(Self::build(device, queue, surface, profile, name, limits))
     }
 
     fn build(
@@ -1164,6 +1404,7 @@ impl PcRenderer {
         surface: Option<SurfaceState>,
         profile: SimProfile,
         adapter_name: String,
+        limits: BackendLimits,
     ) -> Self {
         let device_bc = device
             .features()
@@ -1237,7 +1478,15 @@ impl PcRenderer {
             ..Default::default()
         });
 
-        let shader = device.create_shader_module(wgpu::include_wgsl!("shaders.wgsl"));
+        let source = include_str!("shaders.wgsl");
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("shaders.wgsl"),
+            source: wgpu::ShaderSource::Wgsl(if limits.webgl2 {
+                depth_as_float(source).into()
+            } else {
+                source.into()
+            }),
+        });
 
         // Group 0: globals uniform (internal resolution).
         let globals_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -1386,7 +1635,7 @@ impl PcRenderer {
         // Water: the lit vertices, groups 0..2 as the lit pipeline (the
         // light sets stay bound) and the water sets + the scene's depth in
         // group 3. Translucent: depth-tested, never written.
-        let water_bgl = water_bgl(&device, false);
+        let water_bgl = water_bgl(&device, false, limits.webgl2);
         let water_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("trino-water-sets"),
             size: (water::SET_BYTES * water::MAX_SETS) as u64,
@@ -1400,8 +1649,16 @@ impl PcRenderer {
             1,
         );
         let water_depth = WaterGpu::depth_copy(&device, internal_size, 1);
+        let water_nearest = limits.webgl2.then(|| nearest_sampler(&device));
         let water = WaterGpu {
-            bg: WaterGpu::bind_group(&device, &water_bgl, &water_buf, &water_depth),
+            bg: WaterGpu::bind_group(
+                &device,
+                &water_bgl,
+                &water_buf,
+                &water_depth,
+                water_nearest.as_ref(),
+            ),
+            nearest: water_nearest,
             bgl: water_bgl,
             buf: water_buf,
             depth_copy: water_depth,
@@ -1578,6 +1835,8 @@ impl PcRenderer {
             sources,
             ms_pipelines: None,
             msaa: 1,
+            webgl2: limits.webgl2,
+            depth_blit: None,
             msaa_targets: None,
             lights_buf,
             lights_bg,
@@ -1702,7 +1961,12 @@ impl PcRenderer {
     /// default `TRINO_PC_TNL_THREADS` or the machine's parallelism, at most
     /// 8). The triangles and counters are the same for any count.
     pub fn set_tnl_threads(&mut self, threads: usize) {
-        self.tnl_threads = threads.max(1);
+        // A browser's wasm has no threads (no SharedArrayBuffer build).
+        self.tnl_threads = if cfg!(target_arch = "wasm32") {
+            1
+        } else {
+            threads.max(1)
+        };
     }
 
     pub fn tnl_threads(&self) -> usize {
@@ -1716,7 +1980,7 @@ impl PcRenderer {
     }
 
     fn gpu_tnl_active(&self) -> bool {
-        self.hw_tnl && self.profile == SimProfile::Native && !self.n64_look
+        self.hw_tnl && self.profile.is_native() && !self.n64_look
     }
 
     /// Build the GPU T&L path's pipelines and buffers (on first use).
@@ -1834,7 +2098,7 @@ impl PcRenderer {
     /// it). The console profiles ignore it — their look is the console's.
     /// Off by default (goldens are single-sampled).
     pub fn set_msaa(&mut self, on: bool) {
-        let samples = if on && self.profile == SimProfile::Native {
+        let samples = if on && self.profile.is_native() && !self.webgl2 {
             MSAA_SAMPLES
         } else {
             1
@@ -1933,6 +2197,16 @@ impl PcRenderer {
         self.bc
     }
 
+    /// Does [`PcRenderer::upload_sprite_compressed`] take `format`: the
+    /// device samples it (BC also needs [`PcRenderer::set_bc`] on).
+    pub fn supports_compressed(&self, format: CompressedFormat) -> bool {
+        if format.is_bc() {
+            self.bc
+        } else {
+            self.device.features().contains(format.feature())
+        }
+    }
+
     /// Turn BC uploads off (`false`: [`PcRenderer::upload_sprite_bc`]
     /// refuses, as on a GPU without BC) or back on where the device has it.
     pub fn set_bc(&mut self, on: bool) {
@@ -1943,11 +2217,8 @@ impl PcRenderer {
                 .contains(wgpu::Features::TEXTURE_COMPRESSION_BC);
     }
 
-    /// Upload a block-compressed texture for `id` (`width` and `height`
-    /// multiples of 4, `blocks` in row-major order), replacing any previous
-    /// one. Returns `false` and uploads nothing when the renderer doesn't
-    /// sample BC ([`PcRenderer::supports_bc`]): the caller uploads decoded
-    /// RGBA8 instead.
+    /// Upload a BC texture for `id` ([`PcRenderer::upload_sprite_compressed`]
+    /// with its alpha read from the blocks).
     pub fn upload_sprite_bc(
         &mut self,
         id: SpriteId,
@@ -1956,7 +2227,26 @@ impl PcRenderer {
         format: CompressedFormat,
         blocks: &[u8],
     ) -> bool {
-        if !self.bc {
+        self.upload_sprite_compressed(id, width, height, format, blocks, None)
+    }
+
+    /// Upload a block-compressed texture for `id` (`width` and `height`
+    /// multiples of 4, `blocks` in row-major order), replacing any previous
+    /// one. Returns `false` and uploads nothing when the renderer doesn't
+    /// sample `format` ([`PcRenderer::supports_compressed`]): the caller
+    /// uploads decoded RGBA8 instead. `alpha`: whether some texel blends
+    /// (a model drawn with it stays on the CPU path); `None` reads it from
+    /// BC blocks, and takes the ETC2 RGBA and ASTC formats as blending.
+    pub fn upload_sprite_compressed(
+        &mut self,
+        id: SpriteId,
+        width: u32,
+        height: u32,
+        format: CompressedFormat,
+        blocks: &[u8],
+        alpha: Option<bool>,
+    ) -> bool {
+        if !self.supports_compressed(format) {
             return false;
         }
         assert!(
@@ -1969,7 +2259,13 @@ impl PcRenderer {
             (row * height / 4) as usize,
             "sprite {id:?}: block data does not match {width}x{height} {format:?}"
         );
-        let alpha = gpu_tnl::bc_alpha(format, blocks);
+        let alpha = alpha.unwrap_or_else(|| match format {
+            CompressedFormat::Bc1 | CompressedFormat::Bc3 | CompressedFormat::Bc7 => {
+                gpu_tnl::bc_alpha(format, blocks)
+            }
+            CompressedFormat::Etc2Rgb8 => false,
+            CompressedFormat::Etc2Rgba8 | CompressedFormat::Astc4x4 => true,
+        });
         self.install_sprite(id, (width, height), format.wgpu(), blocks, row, alpha);
         true
     }
@@ -2150,10 +2446,57 @@ impl PcRenderer {
         self.read_texture(&self.offscreen_tex, self.internal_size)
     }
 
+    /// [`PcRenderer::read_offscreen`] where the backend can wait for the
+    /// GPU: `None` in a browser on WebGPU, which maps buffers only once
+    /// the page's script yields (read it with
+    /// [`PcRenderer::start_read_offscreen`] there).
+    pub fn try_read_offscreen(&self) -> Option<Vec<u8>> {
+        self.try_read_texture(&self.offscreen_tex, self.internal_size)
+    }
+
+    /// Start reading the internal framebuffer back without waiting: poll
+    /// the returned [`PendingRead`] once per frame (a browser maps the
+    /// buffer between frames). The Web's golden frame takes this path.
+    pub fn start_read_offscreen(&self) -> PendingRead {
+        let (buffer, padded) = self.copy_to_readback(&self.offscreen_tex, self.internal_size);
+        let done = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let flag = done.clone();
+        buffer.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+            *flag.lock().unwrap() = Some(r.is_ok());
+        });
+        PendingRead {
+            buffer,
+            padded,
+            size: self.internal_size,
+            done,
+        }
+    }
+
+    /// Poll a [`PendingRead`]: the pixels once the GPU has them.
+    pub fn poll_read(&self, read: &PendingRead) -> Option<Vec<u8>> {
+        let _ = self.device.poll(wgpu::PollType::Poll);
+        let state = *read.done.lock().unwrap();
+        match state {
+            Some(true) => Some(unpad_rows(
+                &read.buffer.slice(..).get_mapped_range(),
+                read.size,
+                read.padded,
+            )),
+            Some(false) => panic!("failed to map readback buffer"),
+            None => None,
+        }
+    }
+
     fn read_texture(&self, tex: &wgpu::Texture, size: (u32, u32)) -> Vec<u8> {
+        self.try_read_texture(tex, size)
+            .expect("map_async callback never ran (a browser's WebGPU can't wait)")
+    }
+
+    /// Copy `tex` into a mappable buffer: the buffer and its padded row
+    /// pitch.
+    fn copy_to_readback(&self, tex: &wgpu::Texture, size: (u32, u32)) -> (wgpu::Buffer, u32) {
         let (w, h) = size;
-        let unpadded = w * 4;
-        let padded = unpadded.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
+        let padded = (w * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
             * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
         let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("trino-readback"),
@@ -2186,24 +2529,29 @@ impl PcRenderer {
             },
         );
         self.queue.submit([encoder.finish()]);
+        (buffer, padded)
+    }
 
+    /// Read `tex` back, waiting for the GPU; `None` where the backend
+    /// can't wait (a browser's WebGPU).
+    fn try_read_texture(&self, tex: &wgpu::Texture, size: (u32, u32)) -> Option<Vec<u8>> {
+        let (buffer, padded) = self.copy_to_readback(tex, size);
         let slice = buffer.slice(..);
         let (tx, rx) = std::sync::mpsc::channel();
         slice.map_async(wgpu::MapMode::Read, move |r| {
             let _ = tx.send(r);
         });
         let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
-        rx.recv()
-            .expect("map_async callback dropped")
-            .expect("failed to map readback buffer");
-
+        // On WebGL2 the poll runs the callback; on WebGPU it fires only
+        // after the script yields, so don't block (a browser can't).
+        let mapped = if cfg!(target_arch = "wasm32") {
+            rx.try_recv().ok()?
+        } else {
+            rx.recv().expect("map_async callback dropped")
+        };
+        mapped.expect("failed to map readback buffer");
         let data = slice.get_mapped_range();
-        let mut out = Vec::with_capacity((unpadded * h) as usize);
-        for row in 0..h {
-            let start = (row * padded) as usize;
-            out.extend_from_slice(&data[start..start + unpadded as usize]);
-        }
-        out
+        Some(unpad_rows(&data, size, padded))
     }
 
     pub fn internal_size(&self) -> (u32, u32) {
@@ -2673,15 +3021,24 @@ impl PcRenderer {
                 (Some(t), Some(w), true) => (&t.depth_tex, &w.depth_copy),
                 _ => (&self.depth_tex, &self.water.depth_copy),
             };
-            encoder.copy_texture_to_texture(
-                src.as_image_copy(),
-                dst.as_image_copy(),
-                wgpu::Extent3d {
-                    width: self.internal_size.0,
-                    height: self.internal_size.1,
-                    depth_or_array_layers: 1,
-                },
-            );
+            if self.webgl2 {
+                // GL can't copy a depth attachment: draw it over.
+                let blit = self
+                    .depth_blit
+                    .get_or_insert_with(|| depth_blit::DepthBlit::new(&self.device));
+                let dst = dst.create_view(&wgpu::TextureViewDescriptor::default());
+                blit.copy(&self.device, &mut encoder, &self.depth_view, &dst);
+            } else {
+                encoder.copy_texture_to_texture(
+                    src.as_image_copy(),
+                    dst.as_image_copy(),
+                    wgpu::Extent3d {
+                        width: self.internal_size.0,
+                        height: self.internal_size.1,
+                        depth_or_array_layers: 1,
+                    },
+                );
+            }
             load = (wgpu::LoadOp::Load, wgpu::LoadOp::Load);
             first_part = after;
         }
@@ -2717,13 +3074,13 @@ impl PcRenderer {
             let (pass, depth) = match (&self.msaa_targets, ms) {
                 (Some(t), true) => (
                     self.ao_pass_ms.get_or_insert_with(|| {
-                        ao::AoPass::new(&self.device, OFFSCREEN_FORMAT, true)
+                        ao::AoPass::new(&self.device, OFFSCREEN_FORMAT, true, false)
                     }),
                     &t.depth,
                 ),
                 _ => (
                     self.ao_pass.get_or_insert_with(|| {
-                        ao::AoPass::new(&self.device, OFFSCREEN_FORMAT, false)
+                        ao::AoPass::new(&self.device, OFFSCREEN_FORMAT, false, self.webgl2)
                     }),
                     &self.depth_view,
                 ),
@@ -3427,7 +3784,7 @@ impl Renderer for PcRenderer {
         // The native profile defers its CPU T&L to the batch flush (worker
         // threads, `cpu_tnl`) and sends what `pc_gpu_check` accepts to the
         // GPU; the console profiles tessellate here, as the consoles do.
-        let native = self.profile == SimProfile::Native;
+        let native = self.profile.is_native();
         let texkey = texture.map(|t| TexKey::model(t.0, params, self.tex_filter));
         if let Some(w) = params.water {
             // Water (ADR 0015): displaced and shaded by the core's water
@@ -3771,7 +4128,7 @@ impl Renderer for PcRenderer {
         };
         self.frame_stats.sprites += 1;
         let texture = Some(TexKey::billboard(sprite.0, self.tex_filter));
-        if self.profile == SimProfile::Native {
+        if self.profile.is_native() {
             // In order with the batch's deferred CPU draws.
             self.cpu_jobs.push(cpu_tnl::CpuJob {
                 kind: cpu_tnl::JobKind::Ready(tris),
@@ -3869,7 +4226,9 @@ impl Renderer for PcRenderer {
         if x >= w || y >= h {
             return None;
         }
-        let rgba = self.read_offscreen();
+        // None where the backend can't wait for the GPU (a browser's
+        // WebGPU): the self-test reports its probes as skipped there.
+        let rgba = self.try_read_offscreen()?;
         let at = ((y * w + x) * 4) as usize;
         Some(Color::rgba(
             rgba[at],
@@ -3887,7 +4246,7 @@ impl Renderer for PcRenderer {
         if x >= w || y >= h {
             return None;
         }
-        let rgba = self.read_second_screen();
+        let rgba = self.try_read_texture(&self.second.as_ref()?.tex, (w, h))?;
         let at = ((y * w + x) * 4) as usize;
         Some(Color::rgba(
             rgba[at],
@@ -3896,6 +4255,35 @@ impl Renderer for PcRenderer {
             rgba[at + 3],
         ))
     }
+}
+
+/// A framebuffer read under way ([`PcRenderer::start_read_offscreen`]).
+pub struct PendingRead {
+    buffer: wgpu::Buffer,
+    padded: u32,
+    size: (u32, u32),
+    /// Set by the map callback: whether the map succeeded.
+    done: std::sync::Arc<std::sync::Mutex<Option<bool>>>,
+}
+
+impl PendingRead {
+    /// The framebuffer size being read.
+    pub fn size(&self) -> (u32, u32) {
+        self.size
+    }
+}
+
+/// Tightly packed rows from a readback buffer whose rows are `padded`
+/// bytes apart.
+fn unpad_rows(data: &[u8], size: (u32, u32), padded: u32) -> Vec<u8> {
+    let (w, h) = size;
+    let unpadded = (w * 4) as usize;
+    let mut out = Vec::with_capacity(unpadded * h as usize);
+    for row in 0..h as usize {
+        let start = row * padded as usize;
+        out.extend_from_slice(&data[start..start + unpadded]);
+    }
+    out
 }
 
 /// The texel `fill_rect` stretches (a handle no asset path hashes to in

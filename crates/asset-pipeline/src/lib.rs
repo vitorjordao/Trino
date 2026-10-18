@@ -30,6 +30,7 @@ pub mod manifest;
 pub mod model;
 pub mod particles;
 pub mod primitive;
+pub mod quality;
 pub mod resolve;
 pub mod texture;
 pub mod tier;

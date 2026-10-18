@@ -117,7 +117,8 @@ impl AoUniform {
 }
 
 /// The two occlusion targets and the bind groups reading each (with the
-/// depth buffer they were made for).
+/// depth buffer they were made for). Allocated at `size`, drawn at most
+/// that: dynamic resolution's frames use their top-left corner.
 struct Targets {
     size: (u32, u32),
     raw: wgpu::TextureView,
@@ -272,9 +273,17 @@ impl AoPass {
     }
 
     fn targets(&mut self, device: &wgpu::Device, size: (u32, u32), depth: &wgpu::TextureView) {
-        if self.targets.as_ref().is_some_and(|t| t.size == size) {
+        if let Some(t) = &self.targets
+            && t.size.0 >= size.0
+            && t.size.1 >= size.1
+        {
             return;
         }
+        // Grown, never shrunk: the larger of the two in each direction.
+        let size = self
+            .targets
+            .as_ref()
+            .map_or(size, |t| (t.size.0.max(size.0), t.size.1.max(size.1)));
         let target = |label| {
             device
                 .create_texture(&wgpu::TextureDescriptor {
@@ -346,7 +355,8 @@ impl AoPass {
         color: &wgpu::TextureView,
         params: &AoUniform,
     ) -> u32 {
-        self.targets(device, params.ao_size(), depth);
+        let ao_size = params.ao_size();
+        self.targets(device, ao_size, depth);
         let bytes = params.bytes();
         queue.write_buffer(&self.params, 0, &bytes);
         let t = self.targets.as_ref().expect("built above");
@@ -354,7 +364,7 @@ impl AoPass {
                    pipeline: &wgpu::RenderPipeline,
                    bg: &wgpu::BindGroup,
                    target: &wgpu::TextureView,
-                   load: wgpu::LoadOp<wgpu::Color>| {
+                   (load, area): (wgpu::LoadOp<wgpu::Color>, (u32, u32))| {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("trino-ao-pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -371,16 +381,18 @@ impl AoPass {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
+            pass.set_viewport(0.0, 0.0, area.0 as f32, area.1 as f32, 0.0, 1.0);
             pass.set_pipeline(pipeline);
             pass.set_bind_group(0, bg, &[]);
             pass.draw(0..3, 0..1);
         };
-        let clear = wgpu::LoadOp::Clear(wgpu::Color::WHITE);
+        let clear = (wgpu::LoadOp::Clear(wgpu::Color::WHITE), ao_size);
         run(encoder, &self.ao, &t.from_tmp, &t.raw, clear);
         run(encoder, &self.blur_h, &t.from_raw, &t.tmp, clear);
         run(encoder, &self.blur_v, &t.from_tmp, &t.raw, clear);
         let composite = if params.mask { &self.mask } else { &self.apply };
-        run(encoder, composite, &t.from_raw, color, wgpu::LoadOp::Load);
+        let load = (wgpu::LoadOp::Load, params.size);
+        run(encoder, composite, &t.from_raw, color, load);
         bytes.len() as u32
     }
 }

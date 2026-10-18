@@ -997,6 +997,22 @@ fn editor_layout_is_clean_at_minimum_and_default_sizes() {
         h.state_mut().cmds.push(Cmd::FocusTab(Tab::Mixer));
         h.run_steps(3);
         crate::layout_audit::assert_clean(&h, size, true, &what("Mixer tab"));
+        // The quality presets (#55): the Quality tab, the Game view's PC
+        // toolbar with its preset picker and the dynres toggle.
+        h.state_mut().cmds.push(Cmd::FocusTab(Tab::Quality));
+        h.run_steps(3);
+        crate::layout_audit::assert_clean(&h, size, true, &what("Quality tab"));
+        {
+            let app = h.state_mut();
+            app.game_view.set_profile_tier(
+                trino_platform_pc::SimProfile::Native,
+                trino_core::HwTier::Base,
+                &app.project,
+            );
+        }
+        h.state_mut().cmds.push(Cmd::FocusTab(Tab::Game));
+        h.run_steps(3);
+        crate::layout_audit::assert_clean(&h, size, true, &what("PC Game view"));
         leave_temp_project(&repo);
     }
 }
@@ -2338,5 +2354,118 @@ fn audio_inspector_and_mixer_write_the_text_files() {
             "the {p} budget line"
         );
     }
+    leave_temp_project(&repo);
+}
+
+/// The Quality tab (#55), both ways: a cell edit writes
+/// `assets/quality.ron` (what `cargo xtask quality show` reads), Reset
+/// takes a preset back to the engine's values; the file edited outside
+/// shows up, an invalid one is an error, not a crash, and is never
+/// written back; the Game view's PC profile previews a preset from its
+/// toolbar (or a column's eye) with the 3D at the preset's scale.
+#[test]
+#[ignore = "changes cwd/env: run alone with --ignored --test-threads=1"]
+fn quality_tab_writes_the_presets_and_the_game_view_previews_them() {
+    use crate::app::{Cmd, Tab};
+    use egui::accesskit::Role;
+    use trino_asset_pipeline::quality::QualityFile;
+    use trino_core::{QualityPreset, QualitySettings};
+    let Some((mut h, _tmp, repo)) = temp_project_app(egui::vec2(1600.0, 1000.0)) else {
+        return;
+    };
+    const FILE: &str = "assets/quality.ron";
+    let table = || {
+        QualityFile::parse(&std::fs::read_to_string(FILE).unwrap())
+            .and_then(|f| f.table())
+            .unwrap()
+    };
+    h.state_mut().cmds.push(Cmd::FocusTab(Tab::Quality));
+    h.run_steps(3);
+    assert!(h.query_by_label_contains("Quality presets").is_some());
+    assert!(h.query_by_label_contains("an edit creates it").is_some());
+    for p in ["low", "medium", "high", "ultra"] {
+        for row in ["msaa", "ao", "frame limit"] {
+            assert!(
+                h.query_by_role_and_label(Role::ComboBox, &format!("{p} {row}"))
+                    .is_some(),
+                "{p} {row}"
+            );
+        }
+    }
+
+    // Low's render scale, High's MSAA: written; the rest stays built in.
+    set_value(&mut h, "low render scale", 0.6);
+    wait_for(&mut h, "the presets to be written", |a| {
+        a.quality.exists && !a.quality.dirty
+    });
+    assert_eq!(table().get(QualityPreset::Low).render_scale, 0.6);
+    pick(&mut h, "high msaa", "off");
+    wait_for(&mut h, "High's MSAA to be written", |a| !a.quality.dirty);
+    assert_eq!(table().get(QualityPreset::High).msaa, 1);
+    assert_eq!(table().get(QualityPreset::Medium), QualitySettings::MEDIUM);
+    press(&mut h, Role::Button, "Reset high");
+    wait_for(&mut h, "High's reset to be written", |a| !a.quality.dirty);
+    assert_eq!(table().get(QualityPreset::High), QualitySettings::HIGH);
+    assert!(
+        !std::fs::read_to_string(FILE).unwrap().contains("high: ("),
+        "an unchanged preset isn't written"
+    );
+
+    // Edited outside: the tab follows, and doesn't write it back.
+    let outside = "(version: 1, medium: (lod_bias: 0.7))\n";
+    std::fs::write(FILE, outside).unwrap();
+    wait_for(&mut h, "the outside edit", |a| {
+        a.quality.get(QualityPreset::Medium).lod_bias == 0.7
+    });
+    assert_eq!(
+        h.state().quality.get(QualityPreset::Low),
+        QualitySettings::LOW
+    );
+    h.run_steps(20);
+    assert_eq!(std::fs::read_to_string(FILE).unwrap(), outside);
+    // Invalid: shown in the tab, the last good table kept.
+    std::fs::write(FILE, "(version: 1, low: (msaa: 3))\n").unwrap();
+    wait_for(&mut h, "the invalid presets", |a| a.quality.error.is_some());
+    let e = h.state().quality.error.clone().unwrap();
+    assert!(e.contains("msaa 3"), "{e}");
+    assert!(h.query_all_by_label_contains("msaa 3").next().is_some());
+    assert_eq!(h.state().quality.get(QualityPreset::Medium).lod_bias, 0.7);
+    std::fs::write(FILE, "(version: 1, low: (render_scale: 0.6))\n").unwrap();
+    wait_for(&mut h, "the fixed presets", |a| {
+        a.quality.error.is_none() && a.quality.get(QualityPreset::Low).render_scale == 0.6
+    });
+
+    // The Game view on the PC: Low from its toolbar draws the 3D at Low's
+    // scale (dynamic resolution as Low says, then toggled off).
+    {
+        let app = h.state_mut();
+        app.game_view.set_profile_tier(
+            trino_platform_pc::SimProfile::Native,
+            trino_core::HwTier::Base,
+            &app.project,
+        );
+    }
+    h.state_mut().cmds.push(Cmd::FocusTab(Tab::Game));
+    h.run_steps(3);
+    pick(&mut h, "Game view quality", "Low");
+    assert_eq!(h.state().game_view.quality, QualityPreset::Low);
+    assert!(h.state().game_view.dynres, "Low's dynamic resolution");
+    press(&mut h, Role::CheckBox, "Dynamic resolution");
+    h.run_steps(3);
+    let gv = &h.state().game_view;
+    assert!(!gv.dynres);
+    assert_eq!(gv.render_scale(), 0.6, "the project's Low");
+    let q = gv.quality_settings().unwrap();
+    assert_eq!((q.preset, q.dynamic_resolution), (QualityPreset::Low, None));
+    // Ultra from the Quality tab's eye: supersampled, Ultra's LOD bias.
+    h.state_mut().cmds.push(Cmd::FocusTab(Tab::Quality));
+    h.run_steps(3);
+    press(&mut h, Role::CheckBox, "Preview ultra");
+    h.state_mut().cmds.push(Cmd::FocusTab(Tab::Game));
+    h.run_steps(4);
+    let gv = &h.state().game_view;
+    assert_eq!(gv.quality, QualityPreset::Ultra);
+    assert_eq!(gv.render_scale(), 1.25);
+    assert_eq!(gv.quality_settings().unwrap().lod_bias, 1.5);
     leave_temp_project(&repo);
 }

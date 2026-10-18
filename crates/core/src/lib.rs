@@ -31,10 +31,12 @@ pub mod light;
 pub mod math;
 pub mod math3d;
 pub mod memo;
+pub mod options;
 pub mod particles;
 pub mod perf;
 pub mod physics;
 pub mod platform;
+pub mod quality;
 pub mod render;
 pub mod render3d;
 pub mod save;
@@ -64,10 +66,15 @@ pub use light::{
 };
 pub use math::{Color, Rect, Vec2, Vec3};
 pub use math3d::{Mat34, Quat};
+pub use options::{GraphicsOptions, OptionsEvent, OptionsRow, OptionsStyle};
 pub use particles::{Effect, Emitter, ParticleSystem};
 pub use physics::{Aabb, Collider, Shape};
 pub use platform::{
     BindDevice, BlobId, DisplayInfo, DisplaySettings, GamepadStatus, InputInfo, Platform, SaveError,
+};
+pub use quality::{
+    AoSetting, DynRes, FrameLimit, GpuClass, PostSetting, PresetTable, QualityInfo, QualityPreset,
+    QualitySettings, QualitySource, ShadowSetting,
 };
 pub use render::{
     AnimBlend, AnimRef, BillboardParams, ClipId, DetailTexture, FontId, FrameStats, Instance,

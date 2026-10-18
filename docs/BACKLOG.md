@@ -58,6 +58,15 @@ shipping a 3D game first**, then by cost:
     WebKit on WebGL2 only.
   - Pixel probes in the browser's `engine_checks`: no synchronous read-back, so they
     are `skipped` there (the goldens cover the pixels).
+- **Quality presets follow-ups (#55, ADR 0022)** (S–M each).
+  - A temporal upscaler (FSR 2-style) once the renderer has motion vectors and jitter.
+  - A bench scene from the game (a project-chosen scene) for games much heavier than
+    the engine's.
+  - Shadow and post levels take effect with #57 and #64.
+  - A run on a real Steam Deck and a phone GPU (measured so far: llvmpipe, SwiftShader,
+    an AMD Radeon iGPU and an RX 7800 XT on Windows).
+  - Dynamic resolution's full-size clear and MSAA resolve (1–3 ms on llvmpipe with 4×
+    MSAA at half scale): a partial resolve if a preset with MSAA ever turns it on.
 - **PC GPU T&L for the draws it still rejects (#51 follow-up, ADR 0016 §11)** (M).
   Translucent draws (the painter order per triangle), water and per-pixel lit draws
   stay on the CPU path. A per-pixel lit GPU path would compute the lit pipeline's
@@ -204,6 +213,27 @@ shipping a 3D game first**, then by cost:
   time) and bless `tests/perf/` on purpose. Host benches stay as regression guards only.
 
 ---
+
+## Done — quality presets for the PC and the Web: auto-detect, dynamic resolution, frame pacing, a Graphics page (2026-10-18, branch `feat/55-quality-presets`, GitHub #55, ADR 0022)
+
+| Item | Evidence |
+|---|---|
+| `QualitySettings`, Low/Medium/High/Ultra/Custom, `PresetTable`, `classify`, the console presets; five `Platform` defaults and `Renderer::lod_bias` (no `GAME_API_VERSION` bump) | `crates/core/src/quality.rs` (7 tests), `platform_defaults_report_no_services` |
+| Render scale with bilinear upscale + CAS, the HUD at output resolution; High = the PC's old frame; Low and High goldens | `platform-pc/tests/quality.rs` (7 tests), `tests/golden/pc/quality_{low,high}.png` |
+| Dynamic resolution (PI on log area; GPU timestamps or frame intervals; one allocation for its range, drawn in its corner) | `converges_on_the_target_and_never_oscillates_beyond_5_percent` (16.6 ms ±1 ms, scale ±5%), `dynamic_resolution_follows_the_frame_time_within_its_range`, `dynamic_resolution_steps_reuse_one_allocation_and_draw_what_a_fixed_scale_draws`; measured on an AMD Radeon iGPU at 1440p: GPU median 16.71 ms, frame median 17.28 ms at 0.59× (`quality_shots`) |
+| Frame pacing and 1% lows (`TRINO_FRAME low1_us/low1_fps quality=…`) | `caps_hold_within_two_percent` (30/60/120 fps), `one_percent_lows_and_the_quality_note` |
+| Auto-detect bench (≤ 12 frames per preset, 2 s budget) on the PC and, one rAF at a time, in the browser | `the_bench_picks_a_preset_within_three_seconds_and_restores_the_renderer`; ~0.5 s on llvmpipe (Low), 648 ms on an AMD Radeon iGPU (Medium), 581 ms on an RX 7800 XT (Ultra); the browser's `quality bench` step (~0.5 s) |
+| Start order (forced, saved `<save>.quality` / `localStorage`, Steam Deck → Medium @ 60, phones → Low, project default) | `the_start_follows_forced_saved_the_machine_then_the_project`, `the_steam_deck_is_recognized_by_steam_or_its_board`, `phones_and_tablets_are_mobile_and_desktops_are_not` |
+| LOD bias and particle scale in the engine; the AO cap | `crates/core/tests/quality.rs` (3 tests), `the_preset_ao_caps_the_games` |
+| `assets/quality.ron` + `[pc.quality]` → the `quality/presets` blob | `crates/asset-pipeline/src/quality.rs` (4 tests), `the_pc_section_takes_a_quality_table` |
+| `cargo xtask quality show\|set\|reset\|check\|bench`, `run pc --quality` | `xtask/tests/quality_cli.rs` (3 tests), `bench_lines_parse`; CI smoke runs at every preset + `auto` + `quality bench --json` |
+| Editor: Quality tab, the Game view's preset dropdown and dynres toggle, the budget HUD's quality line | `ui_tests::quality_tab_writes_the_presets_and_the_game_view_previews_them`, the layout audit |
+| `trino_core::GraphicsOptions` (the options page), castle64 on Select | `crates/core/tests/options.rs` (4 tests), `select_opens_the_graphics_page_where_the_host_offers_presets` |
+| Consoles stay fixed (Low; Medium on the New 3DS) | the `quality` self-test step on ares (both tiers) and Azahar (both models), `the_quality_step_reports_each_consoles_fixed_preset` |
+
+Deviations (ADR 0022): `shadows` and `post` are stored levels only until #57 and #64; the
+bench draws the engine's scene, not the game's; WebGL2 never gets MSAA; WebGPU hides the
+adapter's name, so the Web reports `gpu=unknown` there.
 
 ## Done — audio pipeline: a codec per platform, streaming, buses and ducking (2026-10-18, branch `feat/53-audio-pipeline`, GitHub #53, ADR 0021)
 

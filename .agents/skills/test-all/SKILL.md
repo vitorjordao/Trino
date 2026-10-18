@@ -93,6 +93,15 @@ Coverage: `TRINO_REQUIRE_GPU=1 cargo llvm-cov --workspace --summary-only
   side passes `Caps::max_3d_us_per_frame` (50 ms);
   `strict_mode_rejects_3d_over_the_n64_time_ceiling` covers it.
 - Blender toolkit, on machines with Blender: `cargo xtask blender smoke`.
+- Quality presets (#55), as CI's desktop job: `for q in low medium high ultra; do
+  TRINO_SIM=native TRINO_QUALITY=$q TRINO_SMOKE_FRAMES=60 xvfb-run -a cargo run -p
+  trino-app-pc | grep "TRINO_FRAME.*quality=$q "; done`, then `cargo xtask quality
+  check` and `xvfb-run -a cargo xtask quality bench --json`. `TRINO_SIM=native` is
+  required: `apps/pc` defaults to the N64 profile, which ignores quality. Evidence
+  (castle64 at each preset, the Graphics page, a dynres CSV/chart, the 30/60/120 fps
+  limiter): `cargo test -p xtask --test quality_shots -- --ignored` →
+  `target/evidence/quality/`. On llvmpipe dynres pins its minimum scale (the frame is
+  mostly fixed cost); measure it on a real GPU (Windows `cargo.exe`, as `pc_tnl_bench`).
 - Skinning cost: `bench_tnl` includes `skinning_rigid_vs_smooth`.
 - The PC native profile's old CPU path (#51): `TRINO_PC_TNL=cpu TRINO_REQUIRE_GPU=1
   cargo test -p trino-platform-pc` must pass too (CI runs it; `gpu_tnl.rs` turns the GPU

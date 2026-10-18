@@ -5,8 +5,9 @@ use std::collections::HashMap;
 
 use trino_core::{
     BindDevice, BlobId, Button, Caps, DisplayInfo, DisplaySettings, GamepadStatus, InputInfo,
-    Platform, SaveError,
+    Platform, QualityInfo, QualityPreset, QualitySettings, SaveError,
 };
+use trino_render_wgpu::quality::HostedQuality;
 
 pub struct WebPlatform {
     performance: Option<web_sys::Performance>,
@@ -19,6 +20,9 @@ pub struct WebPlatform {
     pub(crate) display_request: Option<DisplaySettings>,
     pub(crate) input: Option<InputInfo>,
     pub(crate) pad_name: Option<String>,
+    /// The quality ([`Platform::quality`] and its siblings), published by
+    /// the host (`crate::quality`).
+    pub(crate) quality: HostedQuality,
 }
 
 impl WebPlatform {
@@ -34,6 +38,7 @@ impl WebPlatform {
             display_request: None,
             input: None,
             pad_name: None,
+            quality: HostedQuality::new(caps),
         }
     }
 
@@ -118,6 +123,26 @@ impl Platform for WebPlatform {
 
     fn set_display(&mut self, settings: DisplaySettings) {
         self.display_request = Some(settings);
+    }
+
+    fn quality(&self) -> QualitySettings {
+        self.quality.settings()
+    }
+
+    fn set_quality(&mut self, settings: QualitySettings) {
+        self.quality.request(settings);
+    }
+
+    fn quality_preset(&self, preset: QualityPreset) -> Option<QualitySettings> {
+        self.quality.preset(preset)
+    }
+
+    fn quality_info(&self) -> Option<QualityInfo> {
+        self.quality.info()
+    }
+
+    fn detect_quality(&mut self) {
+        self.quality.detect();
     }
 
     fn input_info(&self) -> Option<InputInfo> {

@@ -11,13 +11,16 @@
 //! golden-image tests (which read the offscreen target back instead of
 //! presenting it).
 
+pub mod dynres;
 pub mod frame_report;
+pub mod pacing;
+pub mod quality;
 pub mod renderer;
 pub mod sim;
 
-pub use frame_report::FrameMeter;
+pub use frame_report::{FrameMeter, QualityNote};
 pub use renderer::{
-    AoView, CompressedFormat, MSAA_SAMPLES, N64Estimate, PcFrameTimes, PcRenderer, PendingRead,
-    RendererError, SpriteMemory, WebBackend,
+    AoView, Bench, Calibration, CompressedFormat, MSAA_SAMPLES, N64Estimate, PcFrameTimes,
+    PcRenderer, PendingRead, RendererError, SpriteMemory, WebBackend,
 };
 pub use sim::SimProfile;

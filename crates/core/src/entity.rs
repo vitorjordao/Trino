@@ -114,11 +114,17 @@ impl Entity {
 
     /// What to draw seen from `eye`: the mesh, an impostor or nothing.
     pub fn lod_from(&self, eye: Vec3) -> LodPick {
+        self.lod_from_biased(eye, 1.0)
+    }
+
+    /// [`lod_from`](Self::lod_from) with the LOD starts multiplied by `bias`
+    /// ([`crate::Lods::pick_biased`]).
+    pub fn lod_from_biased(&self, eye: Vec3, bias: f32) -> LodPick {
         if self.lod.is_empty() {
             return self.model.map_or(LodPick::None, LodPick::Model);
         }
         let d = self.position() - eye;
-        self.lod.pick(self.model, d.dot(d))
+        self.lod.pick_biased(self.model, d.dot(d), bias)
     }
 
     pub fn has_tag(&self, tag: &str) -> bool {
@@ -366,11 +372,12 @@ impl<const N: usize> EntityStore<N> {
         eye: Vec3,
         visible: u64,
     ) {
+        let bias = renderer.lod_bias();
         for (_, e) in self.iter() {
             if !crate::vis::in_view(e.cell, visible) {
                 continue;
             }
-            let pick = e.lod_from(eye);
+            let pick = e.lod_from_biased(eye, bias);
             if !e.visible || pick == LodPick::None {
                 continue;
             }

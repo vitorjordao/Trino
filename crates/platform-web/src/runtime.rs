@@ -43,12 +43,21 @@ pub struct WebConfig {
     /// Where Binomial's transcoder lives (the KTX2 textures).
     pub basis_js: String,
     pub basis_wasm: String,
+    /// The quality preset forced for this run (`?quality=low|…|auto`;
+    /// High in a self-test or a smoke run), else the player's choice or
+    /// the project's default (`crate::quality`).
+    pub quality: Option<String>,
+    /// Read and store the player's quality choice in `localStorage` (not
+    /// in a self-test or a smoke run).
+    pub keep_quality: bool,
 }
 
 impl WebConfig {
     /// Defaults for a game called `save_name`, refined by the page's
-    /// [`Query`] (`?backend=webgl2&sim=n64&scale=2&size=640x480&msaa=0`).
+    /// [`Query`] (`?backend=webgl2&sim=n64&scale=2&size=640x480&msaa=0
+    /// &quality=low`).
     pub fn new(save_name: &str, query: &Query) -> Self {
+        let deterministic = query.has("selftest") || query.get("frames").is_some();
         let size = query.get("size").and_then(|s| {
             let (w, h) = s.split_once('x')?;
             Some((w.parse().ok()?, h.parse().ok()?))
@@ -69,6 +78,10 @@ impl WebConfig {
             fixed_size: size,
             basis_js: "basis/basis_transcoder.js".into(),
             basis_wasm: "basis/basis_transcoder.wasm".into(),
+            quality: query
+                .get("quality")
+                .or_else(|| deterministic.then(|| "high".into())),
+            keep_quality: !deterministic,
         }
     }
 }
@@ -149,6 +162,8 @@ pub struct WebHost {
     /// in `localStorage`, the PC's `<save_name>.audio`).
     audio_key: String,
     audio_saved: trino_core::BusSettings,
+    /// The quality presets (#55): start, calibration, cap, requests.
+    quality: crate::quality::WebQuality,
     _observer: Option<Observer>,
 }
 
@@ -257,6 +272,12 @@ impl WebHost {
         let texture_target = TextureTarget::of(&renderer);
         crate::js::trino_info("texture_target", texture_target.name());
         let audio_key = format!("trino-audio:{}", config.save_name);
+        let quality = crate::quality::WebQuality::new(
+            &config.save_name,
+            config.quality.clone(),
+            config.keep_quality,
+            !config.msaa,
+        );
         let mut host = WebHost {
             renderer,
             audio: WebAudio::new(),
@@ -274,6 +295,7 @@ impl WebHost {
             last_input: String::new(),
             audio_key,
             audio_saved: trino_core::BusSettings::default(),
+            quality,
         };
         host.sync_size();
         host.end_audio_state();
@@ -306,7 +328,8 @@ impl WebHost {
     }
 
     /// Upload an asset pack already in memory. Its mix (if any) sets the
-    /// buses, then the player's stored volumes win over it.
+    /// buses, then the player's stored volumes win over it; the first
+    /// pack's quality presets start the quality.
     pub fn load_pack_bytes(&mut self, bytes: &[u8]) -> Result<LoadReport, String> {
         let report = crate::assets::load(
             bytes,
@@ -322,7 +345,21 @@ impl WebHost {
             s.apply(&mut self.audio);
         }
         self.audio_saved = self.audio.bus_settings();
+        self.quality.begin(&mut self.renderer, &mut self.platform);
         Ok(report)
+    }
+
+    /// An animation frame at `now` (ms) runs the game (else it draws the
+    /// calibration, or the frame cap skips it).
+    pub fn frame_due(&mut self, now: f64) -> bool {
+        self.quality
+            .tick(&mut self.renderer, &mut self.platform, now)
+    }
+
+    /// `TRINO_FRAME:` for `scene`, with the quality.
+    pub fn frame_line(&mut self, scene: &str) -> String {
+        self.quality.report(&self.renderer, &mut self.meter);
+        self.meter.line(scene)
     }
 
     /// `TRINO_AUDIO:` — what the audio holds and does (the PC runner's
@@ -464,8 +501,8 @@ impl WebHost {
     }
 
     /// Per-frame housekeeping after the game ran: audio (streams, voices,
-    /// ducks, the player's volumes) and the banner, the game's display
-    /// requests, the frame meter.
+    /// ducks, the player's volumes) and the banner, the game's display and
+    /// quality requests, the frame meter.
     pub fn end_frame(&mut self) {
         self.audio.poll();
         // The game changed the player's volumes (its options): store them.
@@ -487,6 +524,8 @@ impl WebHost {
         if let Some(req) = self.platform.take_display_request() {
             self.set_fullscreen(req.fullscreen);
         }
+        self.quality
+            .end_frame(&mut self.renderer, &mut self.platform);
         self.meter.record(
             &Renderer::stats(&self.renderer),
             &self.renderer.pc_gpu_rejects(),
@@ -518,20 +557,28 @@ pub enum Flow {
     Stop,
 }
 
-/// Call `frame(host, dt)` once per animation frame (`dt` in seconds,
-/// clamped to 0.1 like the PC) until it returns [`Flow::Stop`].
+/// Call `frame(host, dt)` once per animation frame the game runs (`dt` in
+/// seconds since its last, clamped to 0.1 like the PC) until it returns
+/// [`Flow::Stop`]. The quality's calibration and frame cap take some
+/// frames ([`WebHost::frame_due`]).
 pub fn run(host: WebHost, mut frame: impl FnMut(&mut WebHost, f32) -> Flow + 'static) {
     let host = Rc::new(RefCell::new(host));
     let last = Rc::new(Cell::new(None::<f64>));
     let tick: Rc<RefCell<Option<FrameCallback>>> = Rc::new(RefCell::new(None));
     let again = tick.clone();
     *tick.borrow_mut() = Some(Closure::<dyn FnMut(f64)>::new(move |now: f64| {
-        let dt = last
-            .get()
-            .map_or(1.0 / 60.0, |t| ((now - t) / 1000.0) as f32)
-            .clamp(0.0, 0.1);
-        last.set(Some(now));
-        let flow = frame(&mut host.borrow_mut(), dt);
+        let mut h = host.borrow_mut();
+        let flow = if h.frame_due(now) {
+            let dt = last
+                .get()
+                .map_or(1.0 / 60.0, |t| ((now - t) / 1000.0) as f32)
+                .clamp(0.0, 0.1);
+            last.set(Some(now));
+            frame(&mut h, dt)
+        } else {
+            Flow::Continue
+        };
+        drop(h);
         if flow == Flow::Continue
             && let Some(cb) = again.borrow().as_ref()
             && let Some(w) = web_sys::window()
@@ -580,7 +627,7 @@ pub fn run_game<G: Game + 'static>(
             host.end_frame();
             frames += 1;
             if smoke.is_some_and(|n| frames >= n) {
-                crate::js::log(&host.meter.line("game"));
+                crate::js::log(&host.frame_line("game"));
                 crate::js::log(&host.audio_line());
                 crate::js::trino_finish(true, None);
                 return Flow::Stop;

@@ -64,6 +64,8 @@ pub struct Recorder {
     frame: FrameStats,
     last: FrameStats,
     screen_index: u8,
+    /// What [`Renderer::lod_bias`] reports (a quality preset's, #55).
+    pub lod_bias: f32,
 }
 
 impl Default for Recorder {
@@ -85,6 +87,7 @@ impl Recorder {
             frame: FrameStats::default(),
             last: FrameStats::default(),
             screen_index: 0,
+            lod_bias: 1.0,
         }
     }
 
@@ -142,6 +145,10 @@ impl Recorder {
 impl Renderer for Recorder {
     fn caps(&self) -> &Caps {
         &self.caps
+    }
+
+    fn lod_bias(&self) -> f32 {
+        self.lod_bias
     }
 
     fn begin_frame(&mut self, clear: Color) {

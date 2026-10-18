@@ -1149,6 +1149,7 @@ fn boot_test(
     let mut is_new = None;
     let mut hw_line = None;
     let mut tier_step = None;
+    let mut quality_step = None;
     let mut worker_step = None;
     let verdict = loop {
         if let Some(why) = watchdog.expired(Instant::now()) {
@@ -1193,6 +1194,9 @@ fn boot_test(
             if line.contains("TRINO_STEP:hw tier ") {
                 tier_step = Some(line.to_string());
             }
+            if line.contains("TRINO_STEP:quality ") {
+                quality_step = Some(line.to_string());
+            }
             if line.contains("TRINO_STEP:worker ") {
                 worker_step = Some(line.to_string());
             }
@@ -1226,6 +1230,11 @@ fn boot_test(
             println!("[3ds] tier data: {data}");
             let worker = crate::hwtier::check_worker(worker_step.as_deref(), new3ds)?;
             println!("[3ds] worker core: {worker}");
+            // A console's quality preset is fixed: Medium on the New 3DS,
+            // Low on the old one (issue #55).
+            let want = if new3ds { "medium" } else { "low" };
+            let q = crate::hwtier::check_quality(quality_step.as_deref(), want)?;
+            println!("[3ds] quality: {q}");
         }
         Ok(())
     });

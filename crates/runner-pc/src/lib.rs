@@ -39,6 +39,21 @@
 //! bus volumes and mutes (`Audio::set_bus_volume`/`set_bus_muted` from the
 //! game's options) persist in `<save_name>.audio` and win over the mix.
 //! Smoke runs print a `TRINO_AUDIO:` line (memory, streams, underruns).
+//!
+//! **Quality** (the `native` profile, issue #55): presets Low…Ultra
+//! ([`trino_core::QualitySettings`]), the project's own in
+//! `assets/quality.ron`. The first launch calibrates (`[pc.quality]
+//! default = "auto"` in `trino.toml`, the default) or takes the project's
+//! preset; a Steam Deck starts on its own; the player's choice
+//! (`Platform::set_quality`) persists in `<save_name>.quality`.
+//! `TRINO_QUALITY=low|medium|high|ultra|auto` forces one for a run (smoke
+//! runs take High); `TRINO_MSAA=0` turns MSAA off whatever the preset. The
+//! `TRINO_FRAME:` line ends with the 1% lows and the quality in effect.
+//! See [`quality::QualityHost`].
+
+pub mod quality;
+
+pub use quality::QualityHost;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -99,6 +114,12 @@ impl RunConfig {
     /// console button).
     pub fn input_file(&self) -> PathBuf {
         self.save_file().with_extension("input")
+    }
+
+    /// The player's quality settings (`<save_name>.quality`, plain text,
+    /// `key=value` lines: `trino_platform_pc::quality::to_text`).
+    pub fn quality_file(&self) -> PathBuf {
+        self.save_file().with_extension("quality")
     }
 
     /// The player's bus volumes (`<save_name>.audio`, plain text, one line
@@ -342,6 +363,8 @@ struct Ctx {
     audio_saved: trino_core::BusSettings,
     input: PcInput,
     platform: PcPlatform,
+    /// The `native` profile's quality (the consoles' is fixed).
+    quality: Option<QualityHost>,
     game: Box<dyn Game>,
     last_frame: Instant,
     #[cfg(feature = "watch")]
@@ -390,8 +413,6 @@ impl Host {
         let mut renderer =
             pollster::block_on(PcRenderer::new_windowed(window.clone(), self.profile))
                 .expect("failed to initialize wgpu renderer");
-        // The PC's own profile multisamples its edges (TRINO_MSAA=0: off).
-        renderer.set_msaa(std::env::var("TRINO_MSAA").as_deref() != Ok("0"));
         let tier = tier_from_env();
         renderer.set_hw_tier(tier);
         let mut audio = PcAudio::new();
@@ -434,6 +455,21 @@ impl Host {
         let out = window.inner_size();
         let (w, h, _) = picture_for(self.profile, (out.width, out.height), settings.pixel_scale);
         renderer.set_internal_size(w, h);
+        // The quality (the native profile): calibrated at the picture's
+        // size on a first launch, before the game's first frame.
+        let quality = self.profile.is_native().then(|| {
+            let baked = trino_core::Platform::blob(
+                &platform,
+                trino_core::BlobId::from_path(trino_asset_pipeline::quality::LOGICAL),
+            );
+            let mut q = QualityHost::new(cfg.quality_file(), baked);
+            let hz = window
+                .current_monitor()
+                .and_then(|m| m.refresh_rate_millihertz())
+                .map(|mhz| mhz.div_ceil(1000));
+            q.begin(&mut renderer, &mut platform, hz);
+            q
+        });
         let make = self.make.take().expect("game created once");
         let game = make(Vec2::new(w as f32, h as f32));
         window.request_redraw();
@@ -451,6 +487,7 @@ impl Host {
             audio_saved,
             input,
             platform,
+            quality,
             game,
             last_frame: Instant::now(),
             #[cfg(feature = "watch")]
@@ -585,6 +622,10 @@ impl ApplicationHandler for Host {
                 }
                 apply_input(ctx, &self.config.input_file());
                 save_audio_settings(&ctx.audio, &self.config.audio_file(), &mut ctx.audio_saved);
+                if let Some(q) = &mut ctx.quality {
+                    q.end_frame(&mut ctx.renderer, &mut ctx.platform);
+                    self.meter.set_quality(q.note(&ctx.renderer));
+                }
 
                 self.frames += 1;
                 self.meter.record(
@@ -627,6 +668,10 @@ mod tests {
         assert_eq!(
             c.display_file(),
             PathBuf::from("/p/target/save/game.display")
+        );
+        assert_eq!(
+            c.quality_file(),
+            PathBuf::from("/p/target/save/game.quality")
         );
         assert_eq!(c.input_file(), PathBuf::from("/p/target/save/game.input"));
         assert_eq!(c.audio_file(), PathBuf::from("/p/target/save/game.audio"));

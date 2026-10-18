@@ -11,6 +11,11 @@
 //! A (Z) pula, L/R (Q/E) giram a câmera, B (X) volta ao hub, Start (Enter)
 //! reinicia a fase.
 //!
+//! On the PC and the Web, Select (Right Shift, a pad's Back) opens the
+//! engine's ready-made Graphics page ([`trino_core::GraphicsOptions`], issue
+//! #55) over the game, which waits while it is up; the consoles' quality is
+//! fixed, so there Select does nothing.
+//!
 //! Two screens (3DS, and the PC's 3DS profile): the bottom screen shows a
 //! map of the level, the counters around a spinning 3D star, and touch
 //! buttons (camera left/right, back to the hub). Single-screen targets skip
@@ -28,10 +33,10 @@ use levels::{BlockKind, DoorColor, LEVELS, Level, TOTAL_STARS};
 use trino_core::math3d::{atan2, cos, sin};
 use trino_core::physics::{self, Aabb, move_aabb};
 use trino_core::{
-    Audio, BillboardParams, Button, Camera3, Color, DEFAULT_LIGHT, FontId, Game, InputState, Light,
-    LightTier, LocalLight, Material, ModelId, ModelParams, MusicId, PointerButton, Rect, Renderer,
-    Screen, Shading, SoundId, SpriteId, SpriteParams, TextAlign, TextBuf, TextParams, Transform3,
-    Vec2, Vec3, ground_pool,
+    Audio, BillboardParams, Button, Camera3, Color, DEFAULT_LIGHT, FontId, Game, GraphicsOptions,
+    InputState, Light, LightTier, LocalLight, Material, ModelId, ModelParams, MusicId,
+    OptionsStyle, Platform, PointerButton, Rect, Renderer, Screen, Shading, SoundId, SpriteId,
+    SpriteParams, TextAlign, TextBuf, TextParams, Transform3, Vec2, Vec3, ground_pool,
 };
 
 // ------------------------------------------------------------ handles ----
@@ -184,6 +189,8 @@ pub struct Castle64Game {
     screen: Vec2,
     music_started: bool,
     prev: InputState,
+    /// The Graphics page (PC and Web).
+    pub graphics: GraphicsOptions,
 }
 
 /// Onda triangular 0..1 com período 1.
@@ -220,6 +227,7 @@ impl Castle64Game {
             screen,
             music_started: false,
             prev: InputState::default(),
+            graphics: GraphicsOptions::new(),
         };
         game.goto_level(0);
         game
@@ -319,6 +327,29 @@ impl Castle64Game {
 }
 
 impl Game for Castle64Game {
+    fn update_with(
+        &mut self,
+        platform: &mut dyn Platform,
+        input: &InputState,
+        audio: &mut dyn Audio,
+        dt: f32,
+    ) {
+        // Select opens the Graphics page where the host offers presets;
+        // the game waits while it is up.
+        if !self.graphics.is_open()
+            && platform.quality_info().is_some()
+            && input.just_pressed(&self.prev, Button::Select)
+        {
+            self.graphics.open();
+        }
+        if self.graphics.is_open() {
+            self.graphics.update(platform, input, &self.prev);
+            self.prev = *input;
+            return;
+        }
+        self.update(input, audio, dt);
+    }
+
     fn update(&mut self, input: &InputState, audio: &mut dyn Audio, dt: f32) {
         if !self.music_started {
             self.music_started = true;
@@ -979,6 +1010,20 @@ impl Game for Castle64Game {
                     align: TextAlign::Center,
                 },
             );
+        }
+
+        // The Graphics page, over everything on the top screen.
+        if self.graphics.is_open() {
+            let k = if self.screen.x >= 560.0 { 2.0 } else { 1.0 };
+            let style = OptionsStyle {
+                scale: k,
+                line: 12.0 * k,
+                width: 260.0 * k,
+                ..OptionsStyle::DEFAULT
+            };
+            let size = self.graphics.size(&style);
+            self.graphics
+                .draw(renderer, F_HUD, (self.screen - size) * 0.5, &style);
         }
 
         // ---- Bottom screen (3DS touch screen / PC 3DS profile) ----
@@ -1662,6 +1707,61 @@ mod tests {
             );
             let solids = l.blocks.len() + l.movers.len() + l.portals.len();
             assert!(solids <= MAX_SOLIDS, "{}: sólidos demais", l.name);
+        }
+    }
+
+    /// Select opens the Graphics page where the host offers presets (a
+    /// PC or Web platform), the game waits under it, B gives it back; a
+    /// console's fixed quality never opens it.
+    #[test]
+    fn select_opens_the_graphics_page_where_the_host_offers_presets() {
+        use trino_core::{GpuClass, QualityInfo, QualitySettings, QualitySource};
+        struct Hosted(Option<QualityInfo>);
+        impl Platform for Hosted {
+            fn now_micros(&self) -> u64 {
+                0
+            }
+            fn log(&self, _: &str) {}
+            fn quality_info(&self) -> Option<QualityInfo> {
+                self.0
+            }
+        }
+        let info = QualityInfo {
+            settings: QualitySettings::HIGH,
+            scale: 1.0,
+            detected: None,
+            source: QualitySource::Default,
+            gpu: GpuClass::Discrete,
+            handheld: false,
+            gpu_us: 0,
+        };
+        let press = |b: Button| {
+            let mut s = InputState::default();
+            s.set(b, true);
+            s
+        };
+        let mut a = audio();
+        for (mut host, opens) in [(Hosted(None), false), (Hosted(Some(info)), true)] {
+            let mut g = game();
+            settle(&mut g, &mut a);
+            g.update_with(&mut host, &press(Button::Select), &mut a, DT);
+            assert_eq!(g.graphics.is_open(), opens);
+            g.update_with(&mut host, &InputState::default(), &mut a, DT);
+            let at = g.pos;
+            let mut walk = InputState::default();
+            walk.stick = Vec2::new(0.0, 1.0);
+            for _ in 0..30 {
+                g.update_with(&mut host, &walk, &mut a, DT);
+            }
+            assert_eq!(g.pos == at, opens, "the game waits under the page");
+            if opens {
+                g.update_with(&mut host, &press(Button::B), &mut a, DT);
+                assert!(!g.graphics.is_open());
+                for _ in 0..30 {
+                    g.update_with(&mut host, &walk, &mut a, DT);
+                }
+                assert_ne!(g.pos, at, "and plays again once it closes");
+            }
         }
     }
 }

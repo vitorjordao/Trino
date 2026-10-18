@@ -231,6 +231,27 @@ pub fn check_data(hw_line: Option<&str>, step: Option<&str>) -> Result<String, S
     Ok(rest.to_string())
 }
 
+/// The self-test's `TRINO_STEP:quality <preset> fixed …` line (issue #55):
+/// a console's preset is fixed, scales nothing (LOD bias 1) and is the one
+/// its tier gets.
+pub fn check_quality(step: Option<&str>, want: &str) -> Result<String, String> {
+    let step = step.ok_or("quality: the self-test printed no `TRINO_STEP:quality` line")?;
+    let rest = step
+        .split_once("TRINO_STEP:quality ")
+        .map(|(_, r)| r.trim())
+        .ok_or_else(|| format!("quality: bad line `{step}`"))?;
+    let mut words = rest.split_whitespace();
+    let (preset, kind) = (words.next(), words.next());
+    let lod = words.find_map(|w| w.strip_prefix("lod="));
+    if preset != Some(want) || kind != Some("fixed") || lod != Some("100") {
+        return Err(format!(
+            "quality: a console must report its fixed `{want}` preset at LOD bias 1, \
+             the self-test says `{rest}`"
+        ));
+    }
+    Ok(rest.to_string())
+}
+
 /// The 3DS self-test's `TRINO_STEP:worker core=N …` line (issue #54 Phase
 /// 3): a New 3DS runs the jobs on its core 2, an old one on core 1.
 pub fn check_worker(step: Option<&str>, new3ds: bool) -> Result<String, String> {
@@ -386,5 +407,20 @@ mod tests {
         assert!(check_worker(Some(old), true).is_err());
         assert!(check_worker(Some("TRINO_STEP:worker core=-1 queued=0 us=1"), false).is_err());
         assert!(check_worker(None, true).is_err());
+    }
+
+    #[test]
+    fn a_console_reports_its_fixed_quality() {
+        let n64 = "[ares] TRINO_STEP:quality low fixed lod=100 particles=4";
+        assert_eq!(
+            check_quality(Some(n64), "low").unwrap(),
+            "low fixed lod=100 particles=4"
+        );
+        assert!(check_quality(Some(n64), "medium").is_err());
+        let hosted = "TRINO_STEP:quality high hosted lod=100 particles=4";
+        assert!(check_quality(Some(hosted), "high").is_err());
+        let biased = "TRINO_STEP:quality medium fixed lod=80 particles=4";
+        assert!(check_quality(Some(biased), "medium").is_err());
+        assert!(check_quality(None, "low").is_err());
     }
 }

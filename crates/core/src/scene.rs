@@ -188,9 +188,18 @@ impl Lods {
     /// level whose distance is reached, else `base`. Squared distances
     /// keep `sqrt` (software on consoles) out of the per-node cost.
     pub fn pick(&self, base: Option<ModelId>, dist_sq: f32) -> LodPick {
+        self.pick_biased(base, dist_sq, 1.0)
+    }
+
+    /// [`pick`](Self::pick) with every level's start distance multiplied by
+    /// `bias` ([`crate::QualitySettings::lod_bias`], what
+    /// [`crate::Renderer::lod_bias`] reports): above 1 detail stays
+    /// farther out. A bias of 1 picks exactly what `pick` does.
+    pub fn pick_biased(&self, base: Option<ModelId>, dist_sq: f32, bias: f32) -> LodPick {
         let mut pick = base.map_or(LodPick::None, LodPick::Model);
         for level in self.iter() {
-            if dist_sq >= level.distance * level.distance {
+            let start = level.distance * bias;
+            if dist_sq >= start * start {
                 pick = match (level.impostor, level.model) {
                     (Some(imp), _) => LodPick::Impostor(imp),
                     (None, Some(m)) => LodPick::Model(m),
@@ -262,11 +271,17 @@ impl SceneNode {
 
     /// What to draw seen from `eye`: the mesh, an impostor or nothing.
     pub fn lod_from(&self, eye: Vec3) -> LodPick {
+        self.lod_from_biased(eye, 1.0)
+    }
+
+    /// [`lod_from`](Self::lod_from) with the LOD starts multiplied by `bias`
+    /// ([`Lods::pick_biased`]; `renderer.lod_bias()` is the quality's).
+    pub fn lod_from_biased(&self, eye: Vec3, bias: f32) -> LodPick {
         if self.lod.is_empty() {
             return self.model.map_or(LodPick::None, LodPick::Model);
         }
         let d = self.position() - eye;
-        self.lod.pick(self.model, d.dot(d))
+        self.lod.pick_biased(self.model, d.dot(d), bias)
     }
 }
 
@@ -616,11 +631,13 @@ pub fn draw_nodes_in(
     eye: Vec3,
     visible: u64,
 ) {
+    // The quality's LOD bias (1 on the consoles), read once per call.
+    let bias = renderer.lod_bias();
     for node in nodes {
         if !crate::vis::in_view(node.cell, visible) {
             continue;
         }
-        let pick = node.lod_from(eye);
+        let pick = node.lod_from_biased(eye, bias);
         if pick == LodPick::None {
             continue;
         }

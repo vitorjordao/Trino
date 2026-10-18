@@ -17,15 +17,16 @@ pub mod system;
 pub mod tnl_oracle;
 
 /// The wgpu renderer (`trino-render-wgpu`), at its historical paths:
-/// `trino_platform_pc::renderer::…` and `trino_platform_pc::sim::…`.
-pub use trino_render_wgpu::{frame_report, renderer, sim};
+/// `trino_platform_pc::renderer::…` and `trino_platform_pc::sim::…` (plus
+/// the quality's `dynres`, `pacing` and `quality`, issue #55).
+pub use trino_render_wgpu::{dynres, frame_report, pacing, quality, renderer, sim};
 
 pub use audio::PcAudio;
 pub use frame_report::FrameMeter;
 pub use input::PcInput;
 pub use renderer::{
-    AoView, CompressedFormat, MSAA_SAMPLES, N64Estimate, PcFrameTimes, PcRenderer, RendererError,
-    SpriteMemory,
+    AoView, Calibration, CompressedFormat, MSAA_SAMPLES, N64Estimate, PcFrameTimes, PcRenderer,
+    RendererError, SpriteMemory,
 };
 pub use sim::SimProfile;
 pub use system::PcPlatform;

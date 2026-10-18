@@ -54,7 +54,8 @@ fn hierarchy_select_palette_duplicate_and_undo() {
     let roots = h.state().doc.scene.entities.len();
 
     // Click an entity in the Hierarchy: it becomes the selection.
-    h.get_by_label("loose-crate").click();
+    // The scene has long groups (the ground's tiles): scroll to it first.
+    click(&mut h, "loose-crate");
     h.run_steps(2);
     let sel = h
         .state()
@@ -1149,10 +1150,12 @@ fn platform_budget_shows_rsp_reasons_and_unseen_draws() {
         // A PC GPU reason opens on the entities it keeps on the CPU, and
         // one of them selects it; its Model component shows its render
         // path on each platform.
-        if let Some((reason, _)) = b[2].off_pc_gpu.first() {
+        // (The budget as it is now: the unseen rock above is one more draw.)
+        let now = h.state().platform_budgets();
+        if let Some((reason, n)) = now[2].off_pc_gpu.first() {
             let label = reason.label();
-            let name = b[2].off_path(label)[0].to_string();
-            click(&mut h, &format!("off the PC GPU: 1 × {label}"));
+            let name = now[2].off_path(label)[0].to_string();
+            click(&mut h, &format!("off the PC GPU: {n} × {label}"));
             // The header's opening animation moves what follows it.
             h.run_steps(12);
             let item = format!("{} {name}", crate::theme::icon::CROSSHAIR);
@@ -1210,14 +1213,31 @@ fn water_budget_ripples_and_material_edits() {
     };
     let root = tmp.path().to_path_buf();
     let b = h.state().budgets.clone().expect("budgets computed").1;
+    // The river is drawn in pieces (#69): a line for each.
     let river = &b[0].water;
-    assert_eq!(river.len(), 1, "{river:?}");
-    assert_eq!(river[0].cycles, 2, "both layers: the 2-cycle combiner");
-    assert!(river[0].tris > 0);
-    assert!(h.query_by_label_contains("Water river").is_some());
-    assert!(h.query_by_label_contains("TMEM 1536/4096 B").is_some());
-    // Select the river: the inline material editor offers a ripple.
-    let path = find(&h.state().doc.scene, "river");
+    assert!(river.len() > 1, "{river:?}");
+    assert!(
+        river.iter().all(|w| w.name.starts_with("river/")),
+        "{river:?}"
+    );
+    assert!(
+        river.iter().all(|w| w.cycles == 2),
+        "both layers: the 2-cycle combiner"
+    );
+    assert!(river.iter().map(|w| w.tris).sum::<u32>() > 0);
+    assert!(
+        h.query_all_by_label_contains("Water river/piece-0-8")
+            .next()
+            .is_some()
+    );
+    assert!(
+        h.query_all_by_label_contains("TMEM 1536/4096 B")
+            .next()
+            .is_some()
+    );
+    // Select the river's far piece: the inline material editor offers a
+    // ripple.
+    let path = find(&h.state().doc.scene, "piece-0-8");
     h.state_mut().cmds.push(Cmd::Select(Some(path.clone())));
     h.run_steps(3);
     assert!(h.state().ripples.is_empty());
@@ -1228,7 +1248,7 @@ fn water_budget_ripples_and_material_edits() {
     // river's triangles (the middle of its bounds is on the bank, the
     // course bends).
     let at = h.state().ripples.as_slice()[0].pos;
-    let river = h.state().project.models["models/river"].tmdl.clone();
+    let river = h.state().project.models["models/river_0_8"].tmdl.clone();
     let mesh = trino_core::render3d::Mesh::from_tmdl(&river).unwrap();
     let inside = (0..mesh.index_count / 3).any(|t| {
         let p = [0, 1, 2].map(|k| mesh.position(mesh.index(t * 3 + k) as usize));

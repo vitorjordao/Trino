@@ -1,0 +1,43 @@
+[n64] baking assets in container...
+[n64] building Rust (nightly, build-std)...
+warning: dropping unsupported crate type `dylib` for target `mips-nintendo64-none-14744949856826316735`
+
+warning: `ci-football` (lib) generated 1 warning
+    Finished `release` profile [optimized] target(s) in 0.25s
+[n64] linking + packing ROM...
+      text       data        bss      total filename
+   1139512     158804       9420    1307736 target/n64/ci-football.elf
+Skipping empty directory: filesystem/groups
+[n64] ROM: /home/v/dev/trino-work/wt/56-memory/target/test-projects/ci-football/target/n64/ci-football.z64
+[n64] booting test ROM in ares with the Expansion Pak (900s timeout, 120s idle limit)...
+[ares] OpenGL Version: 4.5 (Core Profile) Mesa 25.2.8-0ubuntu0.24.04.4, GLSL: 4.50
+[ares] OpenGL: Failed to load librashader: shaders will be disabled
+[ares] Loaded ci-football
+[ares] Vulkan Enabled: using paraLLEl-RDP
+[ares] TRINO_HW n64 ram=8M tier=expanded
+[ares] TRINO_BOOT
+[ares] TRINO_MEM: ram=8388608 heap_total=7014688 before_assets=802208 boot_assets=477456
+[ares] [WARN]: Stalled compile (compute, d4db6236f1bec5e8): thread 0 - 123566.226 us (mode: sync, success: yes).
+[ares] [WARN]: Stalled compile (compute, 471d277cbebc0024): thread 0 - 8039.821 us (mode: sync, success: yes).
+[ares] [WARN]: Stalled compile (compute, 5e969bd158b09fb3): thread 0 - 5422.148 us (mode: sync, success: yes).
+[ares] TRINO_FRAME:match avg_us=32218 max_us=40349 frames=300 update=6827 tnl=7869 sort=0 submit=43 sprites=2202 end=271 drain=232 draws=68 rsp=68 culled=0 draws2d=97 vblanks=634 fps=28 heap=1508688/1508688
+[ares] TRINO_FRAME_MODEL:match 14240cb2 calls=8 tnl_us=1075 rsp=8
+[ares] TRINO_FRAME_MODEL:match 5d24a3a4 calls=8 tnl_us=1070 rsp=8
+[ares] TRINO_FRAME_MODEL:match c9e9a911 calls=6 tnl_us=864 rsp=6
+[ares] TRINO_FRAME_MODEL:match c870c823 calls=4 tnl_us=709 rsp=4
+[ares] TRINO_FRAME_MODEL:match c6e9a458 calls=5 tnl_us=704 rsp=5
+[ares] TRINO_FRAME_MODEL:match ef2f5258 calls=2 tnl_us=410 rsp=2
+[ares] TRINO_FRAME_MODEL:match b680f595 calls=2 tnl_us=352 rsp=2
+[ares] TRINO_FRAME_MODEL:match c335c1e9 calls=1 tnl_us=251 rsp=1
+[ares] TRINO_SE_HASH:d51e91bf
+[ares] TRINO_SE_RENDER_CPU:3781
+[ares] TRINO_STACK:35688
+[ares] TRINO_HEAP:1508688/7014688
+[ares] TRINO_TEST_PASS
+[n64] hardware tier: ram=8M tier=expanded
+[n64] golden frame match: /home/v/dev/trino-work/wt/56-memory/target/test-projects/ci-football/tests/golden/n64/match.png matches
+[n64] frame time (emulated):
+scene                      avg ms   max ms    fps
+match                       32.22    40.35   31.0
+
+[n64] TEST PASS (with the Expansion Pak)

@@ -1,0 +1,16 @@
+ROM / RomFS sizes, before and after compressing boot (issue #56)
+Same code; "before" = [groups.boot] without compression, "after" = compression = { n64 = 1, 3ds = "lz4" }.
+Solid Eleven = `cargo xtask new ci-football --standalone ... --template football` (as CI scaffolds it).
+
+project       target          before (B)   after (B)    saved
+castle64      N64 DFS            474365       326296   -31.2 %
+castle64      N64 ROM (.z64)    1589248      1441792    -9.3 %
+castle64      3DS RomFS          494863       342837   -30.7 %
+castle64      3DS .3dsx         1299988      1141400   -12.2 %
+Solid Eleven  N64 DFS            522988       411759   -21.3 %
+Solid Eleven  N64 ROM (.z64)    1638400      1523712    -7.0 %
+Solid Eleven  3DS RomFS          531202       411921   -22.5 %
+Solid Eleven  3DS .3dsx         1474356      1343416    -8.9 %
+
+Measured with `ls -l` on the ROM/app and `du -sb` on target/<platform>/filesystem|romfs.
+The ELF sizes are identical before and after (text 1061304 / 1139512): only the assets changed.

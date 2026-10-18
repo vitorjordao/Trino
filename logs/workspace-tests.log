@@ -1,0 +1,2669 @@
+   Compiling trino-core v0.2.0-dev.1 (/home/v/dev/trino-work/wt/56-memory/crates/core)
+   Compiling trino-scene v0.2.0-dev.1 (/home/v/dev/trino-work/wt/56-memory/crates/scene)
+   Compiling trino-game-api v0.2.0-dev.1 (/home/v/dev/trino-work/wt/56-memory/crates/game-api)
+   Compiling trino-render-wgpu v0.2.0-dev.1 (/home/v/dev/trino-work/wt/56-memory/crates/render-wgpu)
+   Compiling trino-platform-web v0.2.0-dev.1 (/home/v/dev/trino-work/wt/56-memory/crates/platform-web)
+   Compiling trino-platform-3ds v0.2.0-dev.1 (/home/v/dev/trino-work/wt/56-memory/crates/platform-3ds)
+   Compiling trino-platform-n64 v0.2.0-dev.1 (/home/v/dev/trino-work/wt/56-memory/crates/platform-n64)
+   Compiling trino-asset-pipeline v0.2.0-dev.1 (/home/v/dev/trino-work/wt/56-memory/crates/asset-pipeline)
+   Compiling platformer v0.2.0-dev.1 (/home/v/dev/trino-work/wt/56-memory/examples/platformer)
+   Compiling trino-platform-pc v0.2.0-dev.1 (/home/v/dev/trino-work/wt/56-memory/crates/platform-pc)
+   Compiling showcase v0.2.0-dev.1 (/home/v/dev/trino-work/wt/56-memory/examples/showcase)
+   Compiling castle64 v0.2.0-dev.1 (/home/v/dev/trino-work/wt/56-memory/examples/castle64)
+   Compiling solid-eleven v0.2.0-dev.1 (/home/v/dev/trino-work/wt/56-memory/examples/solid-eleven)
+   Compiling hello-sprite v0.2.0-dev.1 (/home/v/dev/trino-work/wt/56-memory/examples/hello-sprite)
+   Compiling trino-runner-pc v0.2.0-dev.1 (/home/v/dev/trino-work/wt/56-memory/crates/runner-pc)
+   Compiling xtask v0.2.0-dev.1 (/home/v/dev/trino-work/wt/56-memory/xtask)
+   Compiling trino-editor v0.2.0-dev.1 (/home/v/dev/trino-work/wt/56-memory/crates/editor)
+   Compiling trino-app-3ds v0.2.0-dev.1 (/home/v/dev/trino-work/wt/56-memory/apps/3ds)
+   Compiling trino-app-n64 v0.2.0-dev.1 (/home/v/dev/trino-work/wt/56-memory/apps/n64)
+   Compiling trino-app-web v0.2.0-dev.1 (/home/v/dev/trino-work/wt/56-memory/apps/web)
+   Compiling trino-app-pc v0.2.0-dev.1 (/home/v/dev/trino-work/wt/56-memory/apps/pc)
+    Finished `test` profile [optimized + debuginfo] target(s) in 44.50s
+     Running unittests src/lib.rs (target/debug/deps/castle64-ccc8a834cea3e919)
+
+running 19 tests
+test tests::bottom_screen_buttons_turn_the_camera_and_go_to_the_hub ... ok
+test tests::bot_clears_green_hills ... ok
+test tests::bottom_screen_panel_draws_only_with_a_second_screen ... ok
+test tests::collects_a_coin_on_the_path ... ok
+test tests::dpad_up_walks_toward_the_castle ... ok
+test tests::every_level_fits_the_n64_tri_budget ... ok
+test tests::green_door_teleports_to_green_hills ... ok
+test tests::lava_respawns_the_player ... ok
+test tests::jumps_and_lands_back ... ok
+test tests::level_data_fits_the_engine_limits ... ok
+test tests::full_progression_opens_the_gold_door ... ok
+test tests::music_starts_once ... ok
+test tests::spawns_and_settles_on_the_ground ... ok
+test tests::star_returns_to_hub_and_counts ... ok
+test tests::stomping_kills_the_enemy_and_bounces ... ok
+test tests::touching_the_enemy_from_the_side_respawns ... ok
+test tests::locked_door_blocks_until_stars ... ok
+test tests::update_is_deterministic ... ok
+test tests::bot_plays_the_whole_game ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/hello_sprite-3ac8d34efe812467)
+
+running 4 tests
+test tests::beeps_only_on_a_press_edge ... ok
+test tests::clamps_to_bounds ... ok
+test tests::moves_with_dpad_in_screen_space ... ok
+test tests::update_is_deterministic ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/platformer-95d27f6b8d739a09)
+
+running 7 tests
+test tests::collects_the_coin_on_the_path ... ok
+test tests::jumps_and_lands_back ... ok
+test tests::level_has_the_expected_pickups ... ok
+test tests::music_starts_once ... ok
+test tests::spawns_on_the_ground_after_settling ... ok
+test tests::update_is_deterministic ... ok
+test tests::walks_right_and_left ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/showcase-b8e5f82ec4254d64)
+
+running 20 tests
+test river::tests::crossings_stand_above_the_water ... ok
+test river::tests::the_channel_is_carved_and_the_banks_are_flat ... ok
+test river::tests::wading_is_measured_from_the_surface ... ok
+test tests::far_trees_switch_to_cheaper_lods ... ok
+test tests::panel_buttons_hit_inside_and_miss_just_outside ... ok
+test tests::metric_lines_have_a_fixed_width ... ok
+test tests::panel_colors_are_far_apart_for_the_probes ... ok
+test tests::panel_draws_only_with_a_second_screen ... ok
+test tests::panel_options_change_the_clock_and_the_camera ... ok
+test tests::panel_options_reach_the_renderer ... ok
+test tests::panel_toggles_cycle_back_to_the_default ... ok
+test tests::hero_lands_and_crates_block_it ... ok
+test tests::audio_is_positional_and_the_last_coin_plays_the_fanfare ... ok
+test tests::scene_data_has_what_the_game_needs ... ok
+test tests::panel_taps_and_pad_buttons_toggle_the_look ... ok
+test tests::wading_into_the_river_splashes_and_ripples ... ok
+test tests::the_robot_patrols_through_the_ford ... ok
+test tests::scripted_run_collects_every_coin_and_wins ... ok
+test tests::the_frame_rate_counts_drawn_frames ... ok
+test tests::a_shoved_crate_falls_in_and_floats_away ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src/lib.rs (target/debug/deps/solid_eleven-ac919f659c1237de)
+
+running 127 tests
+test game::e2e::a_capture_gives_up_after_its_time ... ok
+test game::e2e::a_rebound_pause_button_pauses_resumes_and_leaves_full_time_alone ... ok
+test game::e2e::tapping_a_hair_swatch_picks_that_color ... ok
+test game::e2e::quitting_a_career_match_counts_as_a_defeat ... ok
+test game::e2e::the_controls_page_survives_the_host_losing_its_tabs ... ok
+test game::e2e::the_controls_page_rebinds_a_match_button_and_saves_it ... ok
+test game::e2e::the_graphics_setting_asks_the_pc_host_for_its_resolution ... ok
+test game::e2e::the_keeper_and_graphics_settings_reach_the_match ... ok
+test game::input::tests::a_held_shot_fires_on_release_with_its_charge ... ok
+test game::e2e::the_pc_tabs_ask_the_host_to_rebind_keys_and_pad_buttons ... ok
+test game::input::tests::a_pad_control_that_presses_two_buttons_fires_one_action ... ok
+test game::input::tests::a_press_without_the_ball_tackles_and_never_kicks_later ... ok
+test game::input::tests::broken_saved_bindings_fall_back_to_the_defaults ... ok
+test game::input::tests::l_switches_on_press_only ... ok
+test game::input::tests::rebinding_swaps_so_no_button_does_two_things ... ok
+test game::input::tests::stick_up_runs_away_from_the_camera ... ok
+test game::e2e::every_screen_draws_without_panicking_on_every_profile ... ok
+test game::input::tests::the_match_reads_the_rebound_buttons ... ok
+test game::menu::tests::a_held_direction_repeats_after_a_delay ... ok
+test game::menu::tests::lists_scroll_to_the_selection ... ok
+test game::menu::tests::taps_hit_registered_boxes_on_their_screen ... ok
+test game::scenarios::a_second_yellow_sends_him_off_and_his_side_plays_on_with_ten ... ok
+test game::scenarios::a_substitution_waits_for_a_dead_ball_and_stops_at_three ... ok
+test game::scenarios::half_time_swaps_ends_and_the_other_side_starts_the_second_half ... ok
+test game::e2e::a_career_round_trip_survives_the_save ... ok
+test game::scenarios::over_the_goal_line_a_goal_kick_or_a_corner ... ok
+test game::scenarios::a_goal_counts_its_scorer_celebrates_and_the_other_side_kicks_off ... ok
+test game::scenarios::a_foul_in_the_box_is_a_penalty_taken_from_the_spot ... ok
+test game::scenarios::a_reckless_slide_from_behind_is_a_free_kick_and_a_yellow ... ok
+test game::scenarios::the_keeper_catches_a_soft_shot_holds_it_and_plays_it_out ... ok
+test render::anim::tests::a_run_cycle_swings_the_legs_in_opposition ... ok
+test game::scenarios::an_offside_pass_is_flagged_and_the_defenders_get_a_free_kick ... ok
+test render::anim::tests::every_clip_is_well_formed ... ok
+test render::anim::tests::facing_turns_the_body_without_trig ... ok
+test render::anim::tests::loops_wrap_and_one_shots_hold ... ok
+test render::anim::tests::mirroring_swaps_sides ... ok
+test render::anim::tests::the_rest_pose_puts_the_feet_on_the_ground ... ok
+test render::fit::every_clip_and_the_body_are_covered ... ok
+test render::fit::every_hair_style_stays_clear_of_the_skull ... ok
+test game::scenarios::over_the_touchline_the_other_side_throws_it_in ... ok
+test render::anim::tests::crossfades_reach_their_target ... ok
+test game::session::tests::kicks_throw_up_turf_on_the_pc_tier_only ... ok
+test render::fit::the_plane_test_matches_the_frustum ... ok
+test render::fit::the_shorts_legs_stay_inside_the_shorts_sides ... ok
+test render::tests::a_panning_camera_keeps_its_rotation_bit_exact ... ok
+test render::tests::a_slide_or_a_dive_ends_in_one_whole_get_up ... ok
+test render::tests::fine_tile_handles_match_their_paths ... ok
+test selftest::bench::bench_update ... ignored, timing aid
+test game::e2e::a_quick_match_from_the_title_to_the_report_with_a_human_side ... ok
+test selftest::tests::the_script_is_deterministic ... ok
+test game::scenarios::the_keeper_dives_at_a_shot_into_the_corner ... ok
+test game::session::tests::a_substitute_takes_his_own_name_and_look ... ok
+test sim::balance::the_difficulty_sharpens_the_ai ... ok
+test sim::balance::the_economy_keeps_every_club_afloat ... ok
+test render::fit::the_far_console_body_fits_through_every_clip ... ok
+test sim::balance::the_league_title_is_open ... ok
+test sim::balance::trading_is_never_free_money_and_prices_follow_quality ... ok
+test sim::balance::tuning_table ... ignored, tuning aid: a big sample, prints the table
+test sim::balance::which_lever ... ignored, tuning aid
+test sim::ball::tests::a_lofted_ball_flies_bounces_lower_then_rolls ... ok
+test sim::ball::tests::a_rolling_ball_slows_and_stops ... ok
+test sim::ball::tests::a_shot_into_the_net_is_a_goal_and_stays_in ... ok
+test sim::ball::tests::a_wet_pitch_lets_the_ball_run_further ... ok
+test sim::ball::tests::crossing_predicts_where_a_shot_meets_the_line ... ok
+test sim::ball::tests::pass_speed_reaches_the_target ... ok
+test sim::ball::tests::side_spin_curls_the_ball ... ok
+test sim::ball::tests::the_bar_stops_a_rising_shot ... ok
+test sim::ball::tests::the_post_sends_the_ball_back ... ok
+test sim::fx::tests::arithmetic_is_q16_16 ... ok
+test sim::fx::tests::cross_sign_follows_counter_clockwise ... ok
+test sim::fx::tests::long_pitch_vectors_do_not_overflow ... ok
+test sim::fx::tests::norm_turn_and_segment_distance ... ok
+test sim::fx::tests::rng_is_deterministic_and_spread ... ok
+test sim::fx::tests::square_roots_are_exact_floors ... ok
+test sim::league::tests::a_new_season_resets_the_table_and_keeps_the_squads ... ok
+test sim::league::tests::a_season_fills_the_table_and_balances_the_books ... ok
+test sim::league::tests::a_version_1_save_still_loads ... ok
+test sim::league::tests::a_version_2_save_still_loads ... ok
+test sim::league::tests::every_pair_meets_once_and_every_club_plays_each_round ... ok
+test sim::league::tests::lineups_field_a_keeper_and_eleven_different_players ... ok
+test sim::league::tests::seasons_are_deterministic ... ok
+test sim::league::tests::the_champion_gets_a_title_and_the_prize ... ok
+test sim::league::tests::the_save_round_trips_and_fits_the_eeprom ... ok
+test sim::league::tests::the_users_result_is_used_when_played ... ok
+test sim::league::tests::tired_players_rest_on_the_bench ... ok
+test sim::league::tests::transfers_respect_money_and_squad_limits ... ok
+test sim::pitch::tests::areas_follow_the_laws ... ok
+test sim::pitch::tests::the_whole_ball_must_cross_a_line ... ok
+test sim::rules::tests::ends_swap_at_half_time ... ok
+test sim::rules::tests::fouls_in_the_box_are_penalties ... ok
+test sim::rules::tests::goal_line_restart_depends_on_the_last_touch ... ok
+test sim::rules::tests::offside_position_matrix ... ok
+test sim::rules::tests::sanctions_follow_law_12 ... ok
+test sim::rules::tests::touchline_gives_a_throw_in_to_the_other_side ... ok
+test sim::rules::tests::two_yellows_make_a_red ... ok
+test sim::team::balance_report::ovr_by_role ... ignored, tuning aid
+test sim::team::tests::clubs_are_balanced_by_points ... ok
+test sim::team::tests::every_kit_a_match_can_dress_has_a_baked_leg ... ok
+test sim::team::tests::every_squad_has_keepers_and_a_full_eleven ... ok
+test sim::team::tests::identities_show_in_the_attributes ... ok
+test sim::team::tests::kits_of_any_two_clubs_can_be_told_apart ... ok
+test sim::team::tests::the_leg_kit_list_is_baked ... ok
+test sim::team::tests::the_point_cap_holds_while_editing ... ok
+test sim::team::tests::value_rises_with_rating ... ok
+test sim::tests::a_full_match_is_deterministic ... ok
+test sim::tests::a_human_keeper_dives_where_the_stick_points ... ok
+test sim::tests::a_human_keeper_holds_longer_but_not_forever ... ok
+test sim::tests::a_human_keeper_throws_or_punts_from_his_hands ... ok
+test sim::tests::a_keeper_out_of_his_area_has_no_hands ... ok
+test sim::tests::a_sent_off_keeper_leaves_the_goal_kick_to_a_teammate ... ok
+test sim::tests::a_shot_at_his_goal_gives_the_human_the_keeper ... ok
+test sim::balance::better_attributes_win_more ... ok
+test sim::tests::print_metrics ... ignored, tuning aid: prints per-match averages
+test sim::tests::substitutions_follow_the_rules ... ok
+test sim::tests::the_keeper_button_hands_over_the_keeper_only_when_allowed ... ok
+test sim::tests::trace_match ... ignored, debug aid: writes a trace file
+test ui::i18n::tests::every_string_fits_the_font ... ok
+test ui::tests::crests_draw_every_kind ... ok
+test ui::tests::polygons_fill_with_spans_inside_their_bounds ... ok
+test ui::tests::the_canvas_scales_by_whole_steps_and_centers ... ok
+test sim::balance::neither_side_is_favored ... ok
+test render::fit::the_console_body_fits_through_every_clip ... ok
+test sim::tests::ai_matches_play_like_football ... ok
+test sim::balance::the_football_numbers_are_in_range ... ok
+test sim::balance::every_club_can_win_and_none_runs_away_with_it ... ok
+test game::scenarios::every_style_of_match_plays_out_and_every_frame_fits ... ok
+test render::fit::the_pc_body_fits_through_every_clip ... ok
+
+test result: ok. 121 passed; 0 failed; 6 ignored; 0 measured; 0 filtered out; finished in 25.99s
+
+     Running unittests src/main.rs (target/debug/deps/trino_3ds-5a704758537b8b8d)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/trino_app_n64-747a6cae3cfa76a0)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (target/debug/deps/trino_pc-b9b22b71addafea6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/trino_app_web-c79e387f1a1390f4)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/trino_asset_pipeline-ff15d26b4c1fc8a4)
+
+running 104 tests
+test ao::tests::strength_zero_or_no_normals_change_nothing ... ok
+test ao::tests::the_ground_plane_darkens_where_the_model_stands ... ok
+test ao::tests::the_corner_darkens_and_the_open_edges_dont ... ok
+test ao::tests::the_manifest_forms_parse_and_write_back ... ok
+test audio::dspadpcm::tests::hand_built_frames ... ok
+test ao::tests::the_bvh_finds_what_brute_force_finds ... ok
+test audio::dspadpcm::tests::snr_basics ... ok
+test audio::tests::n64_lengths_are_whole_blocks ... ok
+test audio::tests::pcm16_round_trip_and_snr ... ok
+test audio::dspadpcm::tests::silence_and_lengths ... ok
+test audio::tests::mix_files_validate_round_trip_and_bake ... ok
+test audio::tests::settings_default_per_platform_and_validate ... ok
+test audio::vadpcm::tests::decode_follows_the_rsp_past_scale_12 ... ok
+test audio::dspadpcm::tests::context_at_the_ends ... ok
+test audio::vadpcm::tests::encoder_edges ... ok
+test audio::vadpcm::tests::raw_decodes_to_the_source ... ok
+test audio::vadpcm::tests::parses_the_fixtures ... ok
+test audio::vadpcm::tests::vadpcm_decodes_like_libdragon ... ok
+test audio::vadpcm::tests::vadpcm_size_matches_audioconv64 ... ok
+test audio::vadpcm::tests::written_wav64s_round_trip ... ok
+test audio::vadpcm::tests::encoder_quality ... ok
+test audio::vorbis::tests::lewton_matches_libvorbis ... ok
+test font::tests::grid_errors_are_actionable ... ok
+test font::tests::grid_font_trims_and_round_trips_through_core ... ok
+test font::tests::grid_font_with_listed_chars_maps_any_codepoint ... ok
+test audio::vorbis::tests::round_trip_keeps_length_and_is_reproducible ... ok
+test font::tests::monospace_grid_keeps_cells ... ok
+test font::tests::n64_defaults_fonts_to_ci4 ... ok
+test font::tests::monospaced_grid_can_advance_past_its_cell ... ok
+test font::tests::ttf_font_bakes_ascii ... ok
+test groups::tests::bundles_round_trip_and_dedup ... ok
+test groups::tests::membership_and_defaults ... ok
+test impostor::tests::grids_are_powers_of_two_and_squarish ... ok
+test groups::tests::bad_groups_are_load_errors ... ok
+test impostor::tests::median_cut_keeps_distinct_colors_and_is_stable ... ok
+test impostor::tests::n64_tiles_fit_tmem ... ok
+test impostor::tests::settings_validate_and_round_trip ... ok
+test lz4::tests::deterministic ... ok
+test lz4::tests::real_assets_shrink_and_round_trip ... ok
+test manifest::edit::tests::add_and_retarget_keep_comments ... ok
+test manifest::edit::tests::audio_edits_touch_one_key_and_parse_back ... ok
+test manifest::edit::tests::group_edits_declare_groups_and_parse_back ... ok
+test manifest::edit::tests::set_model_ao_adds_replaces_and_removes_only_that_line ... ok
+test manifest::edit::tests::texture_edits_touch_one_key_and_parse_back ... ok
+test manifest::tests::a_tier_model_bakes_for_its_tier_only_and_a_console_model_for_both ... ok
+test manifest::tests::n64_requires_explicit_format ... ok
+test manifest::tests::parses_minimal_manifest ... ok
+test lz4::tests::round_trips_every_shape ... ok
+test manifest::tests::the_web_takes_the_pcs_choices_and_its_own_formats ... ok
+test manifest::tests::unsupported_format_is_an_error ... ok
+test manifest::tests::quality_and_min_psnr_are_validated_at_load ... ok
+test memory::tests::check_names_the_groups_and_the_biggest_asset ... ok
+test memory::tests::residency_counts_shared_assets_once ... ok
+test memory::tests::sizes_parse ... ok
+test model::tests::affine_inverse_undoes_the_matrix ... ok
+test model::tests::color0_is_linear_and_round_trips_every_byte ... ok
+test model::tests::encode_appends_bounds_covering_the_mesh ... ok
+test model::tests::engine_trs_matches_pipeline_trs ... ok
+test model::tests::textured_gltf_keeps_texcoords ... ok
+test model::tests::trs_matrix_round_trips ... ok
+test model::tests::vertex_order_follows_first_use ... ok
+test particles::tests::caps_per_platform ... ok
+test particles::tests::the_web_takes_the_pc_cap_unless_it_has_its_own ... ok
+test primitive::tests::closed_shapes_have_outward_winding ... ok
+test primitive::tests::every_shape_bakes_to_a_valid_tmdl ... ok
+test primitive::tests::fake_objects_get_planar_uvs_when_textured ... ok
+test primitive::tests::plane_faces_up_and_bottom_pivot_sits_on_zero ... ok
+test primitive::tests::ron_round_trip_and_validation ... ok
+test primitive::tests::top_color_blends_by_height ... ok
+test primitive::tests::vertices_are_shared ... ok
+test resolve::tests::missing_everywhere_is_an_error ... ok
+test audio::dspadpcm::tests::encoder_simulates_the_decoder ... ok
+test resolve::tests::override_wins_over_shared ... ok
+test texture::auto::tests::a_font_atlas_is_staged_for_n64_intensity ... ok
+test audio::dspadpcm::tests::quality ... ok
+test resolve::tests::the_web_takes_the_pc_override_before_the_shared_master ... ok
+test texture::auto::tests::bc_needs_whole_blocks_and_n64_needs_a_format ... ok
+test audio::dspadpcm::tests::deterministic ... ok
+test texture::bc::tests::a_white_mask_keeps_its_color_in_bc3 ... ok
+test texture::bc::tests::bc7_keeps_flat_blocks_and_beats_bc1_on_a_gradient ... ok
+test texture::bc::tests::every_format_round_trips_through_an_independent_decoder ... ok
+test texture::auto::tests::an_explicit_format_below_min_psnr_fails_with_the_way_out ... ok
+test texture::auto::tests::quality_and_min_psnr_move_the_pick ... ok
+test audio::tests::resample_keeps_a_tone_and_its_length ... ok
+test texture::n64::tests::intensity_follows_mksprite ... ok
+test texture::n64::tests::masks_are_staged_with_their_coverage_as_intensity ... ok
+test texture::n64::tests::palettes_are_exact_only_when_the_colors_fit ... ok
+test texture::n64::tests::sizes_and_tmem ... ok
+test texture::tests::channel_semantics ... ok
+test texture::tests::etc1_encodes_flat_blocks_closely ... ok
+test texture::tests::etc1_two_color_block_uses_both_halves ... ok
+test texture::tests::names_round_trip_and_sizes ... ok
+test texture::tests::psnr_is_infinite_when_equal_and_ignores_invisible_color ... ok
+test tier::tests::a_tier_only_model_gets_the_expanded_column ... ok
+test tier::tests::differing_tiers_bake_a_base_and_an_expanded_twin ... ok
+test tier::tests::identical_tiers_bake_one_untagged_copy ... ok
+test tier::tests::the_pc_bakes_its_one_tier ... ok
+test texture::ktx2::tests::parse_rejects_other_files ... ok
+test texture::auto::tests::auto_picks_by_content_without_being_told ... ok
+test audio::vadpcm::tests::rejects_garbage ... ok
+test texture::ktx2::tests::both_modes_round_trip_through_the_container ... ok
+test texture::ktx2::tests::encoding_is_deterministic_and_etc1s_is_the_smaller_download ... ok
+test audio::dspadpcm::tests::streaming_matches_one_shot ... ok
+test memory::repo_plan::repo_assets_fit_every_console_tier ... ok
+
+test result: ok. 104 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.42s
+
+     Running tests/animated_model.rs (target/debug/deps/animated_model-6e58875af1c6b8c2)
+
+running 4 tests
+test static_gltf_stays_skeleton_free ... ok
+test node_animation_bakes_to_a_rigid_skeleton ... ok
+test clips_start_at_their_first_keyframe ... ok
+test smooth_skinning_keeps_two_weights_only_when_asked ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/animation_metrics.rs (target/debug/deps/animation_metrics-35cfcbec4b64a4ca)
+
+running 5 tests
+test a_crossfade_half_way_is_the_interpolated_pose ... ok
+test a_walk_cycle_reports_its_stride_speed_and_distance ... ok
+test a_sliding_foot_and_a_foot_through_the_floor_warn ... ok
+test a_pose_bakes_into_a_static_mesh_with_the_same_triangles ... ok
+test export_pose_writes_a_model_and_its_manifest_entry ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/asset_kinds.rs (target/debug/deps/asset_kinds-fbcddaec4d07c453)
+
+running 10 tests
+test an_unwritable_output_directory_is_a_bake_error ... ok
+test manifests_reject_unknown_fields_versions_and_missing_files ... ok
+test a_broken_project_reports_every_error_at_once ... ok
+test manifest_edits_keep_comments_and_retarget_a_model_under_one_handle ... ok
+test the_loader_rejects_corrupt_baked_output ... ok
+test scene_bakes_fail_on_library_errors_and_scene_warnings ... ok
+test console_bakes_record_and_validate_each_platforms_format ... ok
+test a_model_bakes_only_for_the_platforms_it_names ... ok
+test every_asset_kind_bakes_indexes_and_loads_on_pc ... ok
+test colliding_handles_fail_the_bake_for_every_kind ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.98s
+
+     Running tests/audio_codecs.rs (target/debug/deps/audio_codecs-a44538b7fd0c73d2)
+
+running 3 tests
+test pcm_is_exact_and_n64_opus_is_an_estimate ... ok
+test every_codec_clears_its_snr_threshold_on_the_fixtures ... ok
+test per_platform_sample_rates_resample_the_master ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s
+
+     Running tests/color_slots.rs (target/debug/deps/color_slots-548600e218e15c35)
+
+running 4 tests
+test slot_attribute_bakes_per_vertex_through_reordering ... ok
+test a_palette_recolors_the_baked_slots ... ok
+test files_without_slots_bake_as_before ... ok
+test bad_slot_attributes_fail_with_a_reason ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/fake_objects.rs (target/debug/deps/fake_objects-201d850d1e5bc6fa)
+
+running 3 tests
+test invalid_dimensions_are_rejected_with_the_field_name ... ok
+test segments_smoothing_and_colors_shape_the_mesh ... ok
+test every_shape_bakes_from_its_ron_file_at_its_declared_size ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/fonts.rs (target/debug/deps/fonts-c565049e5a79cf32)
+
+running 3 tests
+test ttf_errors_name_the_problem ... ok
+test png_grids_trim_proportional_glyphs_and_keep_monospaced_cells ... ok
+test ttf_masters_rasterize_to_an_atlas_and_a_glyph_table ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests/impostors.rs (target/debug/deps/impostors-850e931649bed173)
+
+running 3 tests
+test bad_settings_and_missing_models_fail_with_a_reason ... ok
+test bake_writes_atlases_tables_and_manifest_entries ... ok
+test baked_impostors_reach_the_bake_and_scene_lod_levels ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+     Running tests/model_pipeline.rs (target/debug/deps/model_pipeline-e12d3b7ca0d4b63f)
+
+running 9 tests
+test mesh_data_encodes_every_tmdl_section_and_rejects_bad_layouts ... ok
+test the_cube_master_bakes_and_tessellates_its_visible_faces ... ok
+test every_channel_and_interpolation_poses_its_joint ... ok
+test rest_rotations_round_trip_for_half_turns_on_every_axis ... ok
+test texture_color_types_are_sampled_into_vertex_colors ... ok
+test skinned_files_give_unskinned_parts_a_static_joint ... ok
+test manifest_model_bounds_cover_every_bakeable_model ... ok
+test line_primitives_are_skipped_and_bad_files_fail_with_a_reason ... ok
+test vertex_colors_come_from_color0_then_texture_then_factor ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/particles.rs (target/debug/deps/particles-be0c20f1901cd81a)
+
+running 4 tests
+test bad_effects_are_refused_with_the_field ... ok
+test effects_round_trip_through_ron_both_ways ... ok
+test the_simulation_is_deterministic_and_keeps_each_cap ... ok
+test each_platform_bakes_its_own_cap ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/pipeline.rs (target/debug/deps/pipeline-a6539b98e94ea0ef)
+
+running 5 tests
+test missing_source_is_a_bake_error ... ok
+test n64_bake_fails_without_explicit_format ... ok
+test loader_round_trips_baked_data ... ok
+test bake_produces_deterministic_index_snapshot ... ok
+test platform_override_wins_and_reload_keeps_handle ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/scene_runtime.rs (target/debug/deps/scene_runtime-cf69a6276e21e022)
+
+running 3 tests
+test each_platform_bakes_its_own_scene_variant ... ok
+test the_interior_scene_culls_rooms_through_its_portals ... ok
+test the_showcase_scene_loads_from_its_blob_and_draws_every_model ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/texture_formats.rs (target/debug/deps/texture_formats-084f58d87d512cf5)
+
+running 10 tests
+test a_bad_3ds_format_fails_the_pc_bake_with_the_list ... ok
+test indexed_gray_and_16_bit_masters_decode ... ok
+test etc1_keeps_opaque_images ... ok
+test every_format_keeps_its_psnr ... ok
+test preview_matches_tex3ds ... ok
+test inspect_reports_each_platform ... ok
+test the_pc_bake_writes_bcn_the_loader_reads_it_back ... ok
+test min_psnr_fails_the_bake_with_what_would_pass ... ok
+test pc_bake_writes_and_loads_the_3ds_preview ... ok
+test auto_decides_the_same_on_every_bake_and_in_inspect ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s
+
+     Running tests/tiers.rs (target/debug/deps/tiers-015ff492e0b57785)
+
+running 2 tests
+test the_tier_probe_bakes_a_twin_per_console_tier ... ok
+test content_without_tier_variants_bakes_one_copy ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/vertex_ao.rs (target/debug/deps/vertex_ao-3d350967326c00bb)
+
+running 2 tests
+test the_engine_manifest_bakes_the_probe_with_and_without_ao ... ok
+test the_bake_darkens_the_panel_by_the_fins_and_leaves_its_middle ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/watch.rs (target/debug/deps/watch-4eeb4a729605f790)
+
+running 1 test
+test saving_a_master_or_a_scene_rebakes_only_what_changed ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.93s
+
+     Running unittests src/lib.rs (target/debug/deps/trino_core-aa29d5d85ec4882f)
+
+running 168 tests
+test ao::tests::clamped_keeps_valid_settings_and_fixes_the_rest ... ok
+test ao::tests::quality_presets_have_8_16_32_samples ... ok
+test asset::tests::index_lines_load_on_their_tier ... ok
+test asset::tests::is_const_and_stable ... ok
+test audio::tests::ambience_starts_steers_and_stops_voices ... ok
+test audio::tests::bus_gain_is_master_times_bus_times_duck ... ok
+test audio::tests::bus_labels_round_trip ... ok
+test audio::tests::duck_table_fills_and_replaces_in_place ... ok
+test audio::tests::ducking_ramps_down_and_back ... ok
+test audio::tests::mixer_config_round_trips_and_rejects_damage ... ok
+test audio::tests::settings_pack_into_four_bytes ... ok
+test audio::tests::sound_blobs_round_trip_and_reject_damage ... ok
+test audio::tests::spatial_falloff_and_pan ... ok
+test bundle::tests::corrupt_bundles_are_errors ... ok
+test caps::tests::expanded_tiers_only_change_what_their_hardware_adds ... ok
+test caps::tests::n64_accepts_texture_within_tmem ... ok
+test caps::tests::n64_rejects_oversized_dimension ... ok
+test caps::tests::n64_rejects_texture_over_tmem ... ok
+test caps::tests::pc_accepts_large_textures ... ok
+test caps::tests::web_has_the_pc_tiers_and_a_browser_budget ... ok
+test bundle::tests::round_trip ... ok
+test collide::tests::ceiling_stops_upward_motion ... ok
+test collide::tests::diagonal_slides_along_floor ... ok
+test collide::tests::big_fall_does_not_tunnel_through_floor ... ok
+test collide::tests::moving_left_stops_at_wall_right_face ... ok
+test caps::tests::with_tier_maps_each_console_to_its_other_table ... ok
+test collide::tests::falls_and_lands_flush_on_floor ... ok
+test entity::tests::solids_and_triggers ... ok
+test collide::tests::wall_blocks_and_slides ... ok
+test collide::tests::free_movement_is_exact ... ok
+test entity::tests::scene_nodes_queries_and_movement ... ok
+test entity::tests::spawn_despawn_and_generations ... ok
+test group::tests::a_failed_load_frees_and_retries_after_unload ... ok
+test group::tests::a_load_progresses_monotonically_to_ready ... ok
+test group::tests::boot_is_ready_and_stays ... ok
+test group::tests::ids_are_the_logical_paths_handles ... ok
+test group::tests::loads_are_served_in_request_order ... ok
+test group::tests::memory_report_sums ... ok
+test group::tests::the_table_is_bounded ... ok
+test group::tests::unknown_groups_fail ... ok
+test group::tests::unload_cancels_a_load_and_frees_first ... ok
+test impostor::tests::blobs_round_trip_and_reject_damage ... ok
+test impostor::tests::regions_follow_the_grid ... ok
+test input::tests::edge_detection ... ok
+test input::tests::every_key_is_its_own_bit ... ok
+test input::tests::key_set_operators_keep_u32_era_code_working ... ok
+test input::tests::new_buttons_sticks_and_triggers ... ok
+test input::tests::pc_keys_are_separate_bits ... ok
+test input::tests::pointer_buttons_and_edges ... ok
+test input::tests::pointer_on_reports_the_pointer_only_on_its_screen ... ok
+test input::tests::set_and_read_buttons ... ok
+test input::tests::the_first_keys_keep_their_old_bits ... ok
+test light::tests::a_point_light_pools_under_itself ... ok
+test light::tests::a_spot_pools_where_its_axis_meets_the_floor ... ok
+test light::tests::falloff_is_smooth_and_zero_past_the_radius ... ok
+test light::tests::spot_cone_fades_between_the_angles ... ok
+test light::tests::the_list_keeps_the_first_lights_up_to_the_cap ... ok
+test lz4::tests::corrupt_blocks_are_errors_not_panics ... ok
+test lz4::tests::literals_only ... ok
+test lz4::tests::long_lengths_use_extension_bytes ... ok
+test lz4::tests::overlapping_match_repeats_a_run ... ok
+test math3d::tests::atan2_is_close_to_std ... ok
+test math3d::tests::decompose_round_trips_euler_scale_translation ... ok
+test math3d::tests::identity_transforms_nothing ... ok
+test math3d::tests::look_at_centers_the_target ... ok
+test math3d::tests::look_at_does_not_mirror ... ok
+test math3d::tests::model_matrix_scales_and_translates ... ok
+test math3d::tests::nlerp_takes_the_short_way_and_stays_unit ... ok
+test math3d::tests::quat_identity_matrix_is_identity ... ok
+test math3d::tests::quat_matches_euler_for_a_single_axis ... ok
+test math3d::tests::sin_cos_are_close_to_std ... ok
+test math3d::tests::sqrt_is_close_to_std ... ok
+test math3d::tests::vec3_cross_and_normalize ... ok
+test math3d::tests::zero_angle_fast_path_matches_sin_cos ... ok
+test math::tests::color_rgba5551_quantization ... ok
+test math::tests::rect_contains_is_half_open ... ok
+test math::tests::rect_intersects ... ok
+test math::tests::vec2_ops ... ok
+test math::tests::vec3_ops ... ok
+test mem::tests::arena_over_borrowed_memory ... ok
+test mem::tests::counting_allocator_follows_use_and_peak ... ok
+test mem::tests::frame_arena_bumps_aligns_and_resets ... ok
+test mem::tests::level_arena_resets_when_its_group_goes ... ok
+test particles::effect_tests::tpfx_round_trips_and_caps_the_system ... ok
+test particles::tests::deterministic_and_bounded ... ok
+test particles::tests::emits_at_rate_and_retires_by_age ... ok
+test particles::tests::spread_respects_the_cone ... ok
+test perf::tests::audio_estimates_match_the_measured_cases ... ok
+test perf::tests::models_accumulate_and_sort_by_cost ... ok
+test perf::tests::n64_cost_model_reproduces_its_calibration ... ok
+test perf::tests::overflow_models_pool_into_other ... ok
+test perf::tests::report_is_per_frame_and_parseable ... ok
+test physics::tests::ceiling_stops_upward_motion ... ok
+test physics::tests::collider_world_boxes ... ok
+test physics::tests::falls_and_lands_on_floor ... ok
+test physics::tests::landing_on_top_never_snags_on_the_side ... ok
+test physics::tests::overlap_queries_and_union ... ok
+test physics::tests::raycast_hits_the_nearest_box_with_its_normal ... ok
+test physics::tests::wall_blocks_horizontal_movement ... ok
+test render3d::hw::tests::every_reason_has_its_own_histogram_slot ... ok
+test render3d::tests::back_faces_are_dropped_before_clipping_and_splitting ... ok
+test render3d::tests::behind_camera_is_dropped ... ok
+test render3d::tests::billboards_face_the_camera_and_cull ... ok
+test render3d::tests::bounds_cull_skips_meshes_outside_the_frustum ... ok
+test render3d::tests::clipping_interpolates_uvs ... ok
+test render3d::tests::crossfade_interpolates_between_clips ... ok
+test render3d::tests::cube_in_front_produces_visible_tris ... ok
+test render3d::tests::farther_mesh_sorts_behind_a_nearer_one ... ok
+test render3d::tests::double_sided_draws_back_faces ... ok
+test render3d::tests::model_space_light_matches_world_space_lighting ... ok
+test render3d::tests::lighting_darkens_faces_away_from_the_light ... ok
+test render3d::tests::ground_crossing_the_near_plane_is_clipped_not_dropped ... ok
+test render3d::tests::fog_pulls_far_geometry_toward_the_fog_color ... ok
+test render3d::tests::flat_shading_gives_one_color_per_triangle ... ok
+test render3d::tests::painter_keys_sort_far_first_then_by_submission ... ok
+test render3d::tests::pose_moves_only_the_joint_owned_vertices ... ok
+test render3d::tests::layout_rebuilds_the_same_mesh ... ok
+test render3d::tests::rsp_eligibility_follows_what_the_overlay_can_draw ... ok
+test render3d::tests::rigid_meshes_go_to_the_rsp_a_part_per_joint ... ok
+test render3d::tests::skeleton_parses_and_clips_are_listed ... ok
+test render3d::tests::split_policy_splits_only_fogged_textured_or_translucent_draws ... ok
+test render3d::tests::smooth_skinning_blends_two_joints ... ok
+test render3d::tests::textured_meshes_carry_uvs_and_view_depth ... ok
+test render3d::tests::tint_multiplies_vertex_colors ... ok
+test render3d::tests::tmdl_rejects_garbage ... ok
+test render3d::tests::tmdl_roundtrip ... ok
+test render3d::tests::too_many_joints_is_an_error ... ok
+test render3d::tests::unknown_sections_are_skipped_and_bad_ones_rejected ... ok
+test render3d::tests::unlit_ignores_the_light_and_emissive_adds ... ok
+test save::tests::frame_round_trip_and_corruption ... ok
+test scene::tests::baked_scene_reads_every_field ... ok
+test scene::tests::baked_scene_rejects_bad_blobs ... ok
+test save::tests::lz_round_trips_and_shrinks_repetitive_data ... ok
+test scene::tests::find_by_name_or_leaf_and_by_tag ... ok
+test scene::tests::lod_selection ... ok
+test scene::tests::packed_tags ... ok
+test scene::tests::solids_skip_triggers ... ok
+test text::tests::floor_handles_negatives ... ok
+test text::tests::layout_aligns_and_skips_empty_glyphs ... ok
+test text::tests::measure_multiline_and_scale ... ok
+test text::tests::parse_and_lookup ... ok
+test text::tests::rejects_bad_blobs ... ok
+test text::tests::text_buf_formats_without_alloc_and_truncates ... ok
+test text::tests::the_index_finds_the_same_glyphs_as_the_search ... ok
+test tilemap::tests::cells_iterates_row_major ... ok
+test tilemap::tests::crlf_levels_parse_identically ... ok
+test tilemap::tests::outside_is_empty ... ok
+test tilemap::tests::parses_dimensions_and_tiles ... ok
+test tilemap::tests::rejects_empty ... ok
+test tilemap::tests::rejects_ragged_lines ... ok
+test tilemap::tests::trailing_newline_is_optional ... ok
+test vis::tests::a_narrow_view_through_a_door_can_still_hide_the_far_room ... ok
+test vis::tests::a_room_still_loading_is_not_ready ... ok
+test vis::tests::a_second_wider_doorway_is_explored_too ... ok
+test vis::tests::cell_groups_follow_the_view_and_linger ... ok
+test vis::tests::exterior_and_empty_levels_see_everything ... ok
+test vis::tests::in_view_masks ... ok
+test vis::tests::looking_away_sees_only_the_own_room ... ok
+test vis::tests::looking_through_the_doors_sees_the_chain ... ok
+test vis::tests::neighbors_are_one_doorway_away ... ok
+test vis::tests::the_portal_rect_narrows_the_view_for_rooms_behind_it ... ok
+test water::tests::fresnel_and_glint ... ok
+test water::tests::ripple_buffer_keeps_the_newest_and_expires ... ok
+test water::tests::ripples_ring_out_and_fade ... ok
+test water::tests::scroll_wraps_to_one_repeat ... ok
+test water::tests::swell_moves_with_time_and_stays_bounded ... ok
+test water::tests::sin_turns_tracks_sine ... ok
+test water::tests::wave_gradient_matches_finite_differences ... ok
+
+test result: ok. 168 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/audio.rs (target/debug/deps/audio-4f70ff1b7ae5f761)
+
+running 7 tests
+test ambience_keeps_the_nearest_sources_voiced_as_the_listener_walks ... ok
+test bus_methods_degrade_to_the_basics ... ok
+test ambience_survives_a_mixer_without_free_voices ... ok
+test gains_split_volume_by_pan ... ok
+test provided_audio_methods_degrade_to_the_basics ... ok
+test spatialize_falls_off_quadratically_and_pans_by_side ... ok
+test voices_and_stingers_on_a_mixing_backend ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/color_slots.rs (target/debug/deps/color_slots-1d7b59799f69162b)
+
+running 5 tests
+test palette_draws_stay_off_the_rsp_and_out_of_the_memo ... ok
+test slot_sections_parse_validate_and_survive_the_layout ... ok
+test unlit_vertices_show_their_palette_entry_exactly ... ok
+test a_palette_multiplies_slotted_vertices_before_tint_and_light ... ok
+test without_a_palette_or_slots_draws_are_unchanged ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/entities.rs (target/debug/deps/entities-75543210c099d686)
+
+running 5 tests
+test a_baked_scene_spawns_into_the_store ... ok
+test entities_move_query_and_collide ... ok
+test handles_are_generational_and_capacity_is_fixed ... ok
+test draw_applies_lod_animation_visibility_and_cells ... ok
+test sound_sources_drive_ambience ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/game_loop.rs (target/debug/deps/game_loop-df94d155d5898c0f)
+
+running 3 tests
+test default_update_with_forwards_to_update_and_resize_is_a_no_op ... ok
+test games_reach_blobs_and_saves_through_update_with ... ok
+test input_state_edges_for_buttons_keys_and_pointer ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/gpu_tnl.rs (target/debug/deps/gpu_tnl-7c5cf3b01886a206)
+
+running 2 tests
+test the_gpu_path_refuses_what_needs_the_cpu ... ok
+test the_shader_constants_reproduce_the_cpu_path ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/gpu_water.rs (target/debug/deps/gpu_water-7303c00d579c019e)
+
+running 2 tests
+test the_gpu_water_path_refuses_what_needs_the_cpu ... ok
+test the_shader_constants_reproduce_the_cpu_water ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/impostors.rs (target/debug/deps/impostors-4142c699417d5ff7)
+
+running 5 tests
+test a_lod_chain_switches_at_the_same_distances_every_time ... ok
+test an_impostor_costs_one_billboard_of_two_triangles ... ok
+test packed_lod_records_carry_the_impostor ... ok
+test the_view_follows_the_camera_yaw_around_the_object ... ok
+test timp_tables_read_back_and_bad_ones_are_refused ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/instancing.rs (target/debug/deps/instancing-a846d6670b0d5a76)
+
+running 3 tests
+test instance_params_multiply_the_tint_and_pick_the_palette ... ok
+test pc_gpu_rules_reject_only_what_the_gpu_path_does_not_port ... ok
+test the_default_loop_draws_what_separate_draws_draw ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/local_lights.rs (target/debug/deps/local_lights-1f3e6d3ea47bf50c)
+
+running 7 tests
+test a_spot_lights_only_inside_its_cone ... ok
+test a_point_light_adds_its_color_to_the_faces_it_sees ... ok
+test faces_turned_away_from_the_light_stay_dark ... ok
+test the_rsp_refuses_lit_draws_and_keeps_the_rest ... ok
+test no_lights_and_lights_out_of_reach_change_nothing ... ok
+test the_surface_path_emits_the_same_triangles_plus_each_vertex_surface ... ok
+test unlit_draws_ignore_local_lights_and_flat_draws_get_them ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/math.rs (target/debug/deps/math-7d0e6eca1633e349)
+
+running 5 tests
+test matrices_compose_transform_and_look ... ok
+test quaternions_interpolate_and_build_trs_matrices ... ok
+test vectors_rects_and_colors ... ok
+test software_trig_and_sqrt_stay_within_their_documented_error ... ok
+test to_i32_matches_the_saturating_cast_everywhere ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/memo.rs (target/debug/deps/memo-a2d5fabc6de56c76)
+
+running 4 tests
+test a_full_memo_replaces_and_an_empty_one_never_hits ... ok
+test a_repeated_draw_hits_and_anything_it_depends_on_misses ... ok
+test only_plain_draws_are_memoized ... ok
+test textured_draws_are_keyed_by_texture_filter_and_detail ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/particle_effects.rs (target/debug/deps/particle_effects-88a9090be0917bb2)
+
+running 4 tests
+test a_platform_cap_holds_against_bursts_and_emission ... ok
+test an_effect_off_on_a_platform_spawns_nothing ... ok
+test tpfx_blobs_round_trip ... ok
+test the_same_seed_plays_the_same_particles ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/particles.rs (target/debug/deps/particles-e40310bb27f31f10)
+
+running 4 tests
+test draw_emits_one_billboard_per_particle_with_fading_and_flipbook ... ok
+test rate_lifetime_and_motion ... ok
+test sideways_jets_spawn_inside_their_cone ... ok
+test same_seed_same_particles_different_seed_different_ones ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/perf_caps.rs (target/debug/deps/perf_caps-0ee937ccd491f7e7)
+
+running 6 tests
+test caps_validate_textures_per_console ... ok
+test models_past_the_tracked_limit_pool_into_other ... ok
+test n64_cost_model_prices_real_tnl_work ... ok
+test n64_cost_model_prices_water_on_the_rsp_apart ... ok
+test render_profile_accumulates_and_reports_per_frame ... ok
+test report_write_errors_propagate ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/physics.rs (target/debug/deps/physics-ee311e2a8009d5f5)
+
+running 7 tests
+test aabb_operations ... ok
+test collider_shapes_become_world_boxes ... ok
+test move_aabb_lands_slides_and_bonks ... ok
+test move_and_collide_runs_a_platformer_step_loop ... ok
+test raycast_finds_the_nearest_face_and_its_normal ... ok
+test raycasts_along_z_and_single_row_tilemaps ... ok
+test tilemap_parses_ascii_levels ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/platform_save.rs (target/debug/deps/platform_save-9728297272c59cc7)
+
+running 7 tests
+test blobs_are_served_by_logical_handle ... ok
+test display_settings_default_is_auto_fullscreen ... ok
+test checksum_is_fnv1a_like_asset_handles ... ok
+test platform_defaults_report_no_services ... ok
+test save_round_trips_through_the_framed_medium ... ok
+test saves_past_capacity_or_without_medium_fail ... ok
+test torn_and_foreign_media_read_back_as_no_save ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/renderer_defaults.rs (target/debug/deps/renderer_defaults-c098b9a856f80d29)
+
+running 6 tests
+test draw_model_matrix_default_decomposes_into_draw_model ... ok
+test provided_renderer_methods_are_harmless_defaults ... ok
+test param_defaults_and_constructors ... ok
+test screen_api_collapses_on_a_single_screen ... ok
+test screen_api_goes_top_then_bottom ... ok
+test recorder_stats_cover_the_last_finished_frame ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/save_slots.rs (target/debug/deps/save_slots-482cf22c1e910be2)
+
+running 9 tests
+test a_4_kbit_eeprom_works_too ... ok
+test blank_medium_reads_as_no_save ... ok
+test incompressible_saves_go_wide_and_still_read_back ... ok
+test compression_makes_big_saves_fit_a_slot ... ok
+test saves_alternate_slots_and_the_newest_wins ... ok
+test too_large_is_an_error ... ok
+test the_write_can_be_split_into_steps ... ok
+test single_frame_saves_still_read_and_migrate_safely ... ok
+test a_power_cut_anywhere_keeps_the_previous_save ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/scene_nodes.rs (target/debug/deps/scene_nodes-09cff67043c58d93)
+
+running 7 tests
+test baked_scene_blob_reads_every_field ... ok
+test baked_scene_plays_like_exported_nodes ... ok
+test draw_nodes_draws_model_nodes_with_lod_and_animation ... ok
+test baked_scene_rejects_bad_blobs ... ok
+test draw_nodes_in_honors_the_cell_mask ... ok
+test exported_nodes_query_by_name_tag_and_collider ... ok
+test lod_levels_switch_models_with_distance ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/tessellate.rs (target/debug/deps/tessellate-f0cc9ec21da3f28d)
+
+running 19 tests
+test a_cube_face_on_emits_its_front_face_only ... ok
+test a_draw_whose_sphere_crosses_the_band_but_whose_vertices_dont_stays_on_the_rsp ... ok
+test billboards_draw_right_up_to_the_near_plane ... ok
+test billboards_face_the_camera_and_respect_fog_and_regions ... ok
+test colored_light_tints_lit_surfaces ... ok
+test degenerate_flat_skinned_and_multi_segment_meshes ... ok
+test a_panned_draw_rebuilds_exactly_from_its_pan_parts ... ok
+test double_sided_draws_keep_back_faces ... ok
+test fog_blends_toward_the_fog_color_with_view_depth ... ok
+test geometry_crossing_the_near_plane_is_clipped_into_the_guard_band ... ok
+test meshes_outside_the_frustum_are_culled_whole ... ok
+test painter_keys_order_far_first_then_submission ... ok
+test rsp_check_names_the_rule_each_draw_fails ... ok
+test shading_modes_tint_and_emissive ... ok
+test rsp_eligibility_with_a_given_view_model_product_matches ... ok
+test skinned_meshes_follow_their_pose ... ok
+test split_policy_and_rsp_eligibility_follow_the_draw ... ok
+test tessellate_with_reuses_context_and_scratch_bit_identically ... ok
+test textured_draws_carry_uvs_and_view_depth ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/text.rs (target/debug/deps/text-3a3a2b0419c987df)
+
+running 7 tests
+test draw_text_lays_out_lines_glyphs_and_alignment ... ok
+test fonts_without_a_fallback_skip_unknown_chars ... ok
+test draw_text_scales_tints_offsets_and_falls_back ... ok
+test textbuf_formats_without_an_allocator_and_truncates_on_char_boundaries ... ok
+test tfnt_parses_and_looks_up_glyphs ... ok
+test tfnt_rejects_bad_tables ... ok
+test the_glyph_index_lays_out_exactly_like_the_table_search ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/tmdl_mesh.rs (target/debug/deps/tmdl_mesh-128ac6dd92c1d097)
+
+running 12 tests
+test base_layout_vertices_normals_colors_indices ... ok
+test blend_to_crossfades_two_clips_per_joint ... ok
+test bnds_section_carries_the_bounding_sphere ... ok
+test hierarchy_composes_parent_before_child_with_inverse_bind ... ok
+test every_mesh_error ... ok
+test posed_vertices_follow_their_joint ... ok
+test single_frame_clips_and_empty_meshes ... ok
+test skel_and_anim_sections_pose_a_rigid_skeleton ... ok
+test layout_rebuilds_an_identical_mesh_without_reparsing ... ok
+test skw2_section_adds_a_second_joint_weight ... ok
+test txuv_and_txid_sections_make_a_textured_mesh ... ok
+test unknown_sections_are_skipped_and_later_ones_still_read ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/vis.rs (target/debug/deps/vis-1166e8a235aabbf4)
+
+running 5 tests
+test baked_cells_match_exported_ones ... ok
+test capacity_limits_and_conservative_fallbacks ... ok
+test cells_and_portals_come_from_scene_nodes ... ok
+test looking_down_the_doors_draws_every_room_looking_away_only_ours ... ok
+test hidden_rooms_never_reach_the_renderer ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/water.rs (target/debug/deps/water-74aa23ec804e6664)
+
+running 6 tests
+test draws_without_water_are_unchanged_by_the_water_state ... ok
+test the_surface_path_hands_over_the_displaced_normals ... ok
+test water_takes_the_water_overlay_and_stays_off_the_gpu_path_and_the_memo ... ok
+test the_texture_flows_and_grazing_angles_turn_to_sky ... ok
+test each_ripple_that_reaches_the_draw_adds_a_ring_drawn_last ... ok
+test the_swell_moves_the_surface_and_its_time_moves_the_swell ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (target/debug/deps/trino_editor-1297ff6c54795209)
+
+running 108 tests
+test anim_panel::tests::playback_wraps_loops_clamps_one_shots_and_steps_frames ... ok
+test anim_panel::tests::the_pose_drawn_carries_the_crossfade ... ok
+test app::tests::long_paths_keep_their_end ... ok
+test anim_panel::tests::the_hook_picks_a_model_clip_and_time ... ok
+test app::tests::watcher_paths_resolve_relative_even_when_canonicalized ... ok
+test app::tests::web_actions_run_the_engines_xtask ... ok
+test budget::tests::levels_follow_the_n64_caps ... ok
+test budget::tests::n64_profile_estimates_3d_time ... ok
+test budget::tests::impostors_add_their_billboard_cost_to_the_n64_time ... ok
+test audio::tests::the_mix_reloads_validates_and_writes_text_that_parses ... ok
+test budget::tests::pc_profile_never_warns ... ok
+test audio::tests::waves_bucket_min_and_max ... ok
+test budget::tests::platform_lines_follow_the_game_views_tier ... ok
+test budget::tests::platform_lines_name_the_rsp_reason_and_unseen_draws ... ok
+test budget::tests::the_hud_grows_to_its_longest_line_within_the_view ... ok
+test budget::tests::the_web_line_reads_the_renderers_counters ... ok
+test budget::tests::tier_tables_put_a_consoles_two_tiers_side_by_side ... ok
+test doc::tests::edits_coalesce_until_settled_and_undo_restores ... ok
+test doc::tests::undo_includes_an_uncommitted_change ... ok
+test doc::tests::multi_selection_toggles_and_prunes ... ok
+test gizmo::tests::axis_widget_clicks_look_from_an_axis_then_flip_to_the_other_side ... ok
+test gizmo::tests::affine_inverse_and_box_wireframe ... ok
+test gizmo::tests::axis_widget_hit_test_prefers_the_front_tip_then_the_centre ... ok
+test gizmo::tests::dolly_and_focus_pivot ... ok
+test doc::tests::prefab_docs_serialize_as_prefabs ... ok
+test gizmo::tests::drags_move_scale_and_rotate_the_local_transform ... ok
+test gizmo::tests::dragging_the_axis_widget_orbits_like_dragging_the_view ... ok
+test gizmo::tests::drops_land_near_what_an_orthographic_view_looks_at ... ok
+test gizmo::tests::gimbal_lock_keeps_x_and_reconstructs_the_matrix ... ok
+test gizmo::tests::fly_mode_looks_around_the_eye_and_moves_along_the_view ... ok
+test gizmo::tests::gizmo_handles_are_hit_where_they_are_drawn ... ok
+test gizmo::tests::orbit_camera_moves_clamps_and_settles ... ok
+test gizmo::tests::orbit_camera_views_take_the_short_way_and_match_a_game_camera ... ok
+test app::tests::console_models_follow_overrides_and_platform_lists ... ok
+test gizmo::tests::orthographic_keeps_the_target_plane_and_renders_what_it_projects ... ok
+test gizmo::tests::planar_handles_move_on_their_plane_and_the_view_ring_turns_the_view_axis ... ok
+test gizmo::tests::projection_and_ray_agree ... ok
+test gizmo::tests::projection_helpers_reject_points_behind_and_hit_the_ground ... ok
+test gizmo::tests::ray_hits_box_in_front ... ok
+test gizmo::tests::rotation_under_a_rotated_parent_stays_in_world_axes ... ok
+test gizmo::tests::rotation_round_trips_through_matrices ... ok
+test gizmo::tests::snapped_y_spin_stays_exact_and_continuous ... ok
+test layout_audit::tests::flags_overflow_and_overlap_only ... ok
+test launcher::tests::projects_need_a_trino_toml_or_an_asset_manifest ... ok
+test level_editor::tests::out_of_bounds_paint_is_ignored ... ok
+test level_editor::tests::paint_writes_the_file_immediately ... ok
+test ops::tests::align_and_distribute ... ok
+test ops::tests::array_makes_offset_named_copies ... ok
+test level_editor::tests::external_change_reloads_but_own_save_does_not ... ok
+test ops::tests::drop_lands_on_the_highest_surface_below ... ok
+test ops::tests::remove_many_keeps_paths_valid ... ok
+test ops::tests::set_world_position_goes_through_the_parent ... ok
+test ops::tests::world_positions_compose_parents ... ok
+test palette::tests::every_align_variant_matches ... ok
+test palette::tests::subsequence_word_starts_win ... ok
+test palette::tests::order_matters_and_case_does_not ... ok
+test play::tests::keys_map_like_the_pc_app ... ok
+test panels::mixer::tests::a_new_rule_takes_a_free_pair ... ok
+test doc::tests::save_reload_and_history_bounds ... ok
+test project::tests::create_proxy_writes_the_prim_and_the_manifest_entry_then_retargets ... ok
+test recent::tests::ages_read_like_a_person_says_them ... ok
+test recent::tests::load_and_save_round_trip_through_the_file ... ok
+test recent::tests::parse_keeps_good_lines_newest_first_once ... ok
+test recent::tests::touch_moves_to_the_top_and_caps_the_list ... ok
+test tests::start_picks_the_launcher_unless_a_project_or_a_scene_hook_says_otherwise ... ok
+test textures::tests::bytes_read_like_people_write_them ... ok
+test textures::tests::tables_name_sprites_and_fonts_only ... ok
+test play::tests::plays_the_showcase_scene_in_memory ... ok
+test ui_tests::ambient_occlusion_panel_view_modes_and_baking ... ignored, changes cwd/env: run alone with --ignored --test-threads=1
+test ui_tests::animation_tab_previews_measures_and_exports ... ignored, changes cwd/env: run alone with --ignored --test-threads=1
+test ui_tests::asset_groups_chips_requires_cells_and_memory ... ignored, changes cwd/env: run alone with --ignored --test-threads=1
+test ui_tests::audio_inspector_and_mixer_write_the_text_files ... ignored, changes cwd/env: run alone with --ignored --test-threads=1
+test ui_tests::commands_edit_save_and_export_in_a_temp_project ... ignored, changes cwd/env: run alone with --ignored --test-threads=1
+test ui_tests::editor_layout_is_clean_at_minimum_and_default_sizes ... ignored, changes cwd/env: run alone with --ignored --test-threads=1
+test ui_tests::gizmo_drags_grab_the_handle_under_the_press ... ignored, changes cwd/env: run alone with --ignored --test-threads=1
+test ui_tests::hierarchy_select_palette_duplicate_and_undo ... ignored, changes cwd/env: run alone with --ignored --test-threads=1
+test ui_tests::impostors_bake_from_the_inspector_and_drive_a_lod_level ... ignored, changes cwd/env: run alone with --ignored --test-threads=1
+test ui_tests::launcher_lists_recent_projects_opens_and_creates ... ignored, changes cwd/env: run alone with --ignored --test-threads=1
+test ui_tests::new_3ds_tier_variant_reaches_the_game_view_the_file_and_the_budget ... ignored, changes cwd/env: run alone with --ignored --test-threads=1
+test ui_tests::particle_effects_preview_caps_and_files ... ignored, changes cwd/env: run alone with --ignored --test-threads=1
+test ui_tests::platform_budget_shows_rsp_reasons_and_unseen_draws ... ignored, changes cwd/env: run alone with --ignored --test-threads=1
+test ui_tests::platform_variants_reach_the_game_view_and_the_file ... ignored, changes cwd/env: run alone with --ignored --test-threads=1
+test ui_tests::scene_view_pans_flies_dollies_and_flips_axes ... ignored, changes cwd/env: run alone with --ignored --test-threads=1
+test ui_tests::texture_inspector_formats_quality_and_errors ... ignored, changes cwd/env: run alone with --ignored --test-threads=1
+test ui_tests::water_budget_ripples_and_material_edits ... ignored, changes cwd/env: run alone with --ignored --test-threads=1
+test viewport::web_canvas_tests::presets_render_the_browsers_picture ... ok
+test budget::tests::the_assets_ram_line_follows_the_memory_plan ... ok
+test widget_tests::axis_widget_snaps_orbits_and_toggles_the_projection ... ok
+test widget_tests::console_counts_filters_and_clears ... ok
+test project::tests::bake_and_load_reads_every_asset_with_its_stats ... ok
+test launcher::tests::create_validates_then_scaffolds_into_folder_slash_name ... ok
+test widget_tests::lod_and_impostor_panels_fit_narrow_inspectors ... ok
+test widget_tests::material_editor_sets_shading_sides_and_texture ... ok
+test widget_tests::lod_panel_builds_a_chain_with_per_platform_distances ... ok
+test project::tests::saving_a_fake_object_rebakes_it_in_place ... ok
+test widget_tests::lod_tier_rows_follow_their_console_until_they_have_their_own ... ok
+test widget_tests::platform_tier_columns_follow_their_console_until_they_have_their_own ... ok
+test widget_tests::platforms_tab_edits_variants_per_platform ... ok
+test widget_tests::particle_editor_sets_fields_and_per_platform_caps ... ok
+test widget_tests::scene_view_fog_follows_a_far_orbit ... ok
+test widget_tests::water_editor_turns_a_surface_on_and_edits_it ... ok
+test widget_tests::primitive_editor_switches_shape_pivot_and_keeps_sizes_valid ... ok
+test widget_tests::particle_tier_caps_follow_their_console_until_they_have_their_own ... ok
+test widget_tests::platform_tier_columns_fit_wide_and_narrow_inspectors ... ok
+test widget_tests::platforms_tab_fits_wide_and_narrow_inspectors ... ok
+test audio::tests::the_theme_is_measured_like_the_bake ... ok
+test textures::tests::the_photo_card_is_measured_like_the_bake ... ok
+test audio::tests::totals_count_every_sound_and_the_budget_lines_read ... ok
+
+test result: ok. 91 passed; 0 failed; 17 ignored; 0 measured; 0 filtered out; finished in 0.27s
+
+     Running unittests src/lib.rs (target/debug/deps/trino_game_api-a9dac87f61fab895)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/export_game.rs (target/debug/deps/export_game-5bdf9b2728e7741e)
+
+running 1 test
+test exports_handshake_and_forward_to_the_game ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/trino_platform_3ds-ce6af60eb870f09c)
+
+running 4 tests
+test hw::tests::a_new_3ds_with_the_speedup_is_the_expanded_tier ... ok
+test pad::tests::zl_zr_and_the_c_stick ... ok
+test worker::tests::the_shims_answer_names_a_core_or_none ... ok
+test worker::tests::without_a_worker_every_job_runs_inline ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/trino_platform_n64-9edbba974f30a01e)
+
+running 2 tests
+test hw::tests::four_mib_is_base_and_an_expansion_pak_is_expanded ... ok
+test pad::tests::c_buttons_are_x_y_and_the_right_stick ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/trino_platform_pc-cd6c1d298ef2ae89)
+
+running 23 tests
+test audio::stream::tests::a_pcm_job_streams_resamples_and_loops ... ok
+test audio::tests::clamps_to_unit_range ... ok
+test audio::tests::buses_scale_mute_and_duck_their_voices ... ok
+test audio::stream::tests::ring_wraps_and_reports ... ok
+test audio::tests::empty_looped_voice_does_not_hang ... ok
+test audio::tests::looped_voice_wraps_and_survives ... ok
+test audio::tests::master_volume_scales ... ok
+test audio::tests::mixes_and_advances ... ok
+test audio::tests::music_ducks_under_a_stinger_and_follows_music_volume ... ok
+test audio::tests::pan_gains_split_channels ... ok
+test audio::tests::settings_text_round_trips_and_forgives ... ok
+test input::tests::buttons_map ... ok
+test input::tests::mouse_buttons_pointer_and_wheel ... ok
+test input::tests::opposite_keys_cancel ... ok
+test input::tests::pad_buttons_are_distinct_bits ... ok
+test input::tests::pc_keys_set_their_bits_too ... ok
+test input::tests::wasd_builds_stick_vector ... ok
+test system::tests::blobs_by_handle ... ok
+test system::tests::display_settings_round_trip_and_requests ... ok
+test tnl_oracle::tests::the_figures_count_channels_and_far_pixels ... ok
+test tnl_oracle::tests::the_tolerance_is_the_issues ... ok
+test system::tests::save_round_trip_and_budget ... ok
+test audio::stream::tests::the_worker_refills_rings_and_finishes ... ok
+
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s
+
+     Running tests/ambient_occlusion.rs (target/debug/deps/ambient_occlusion-b0bd0d76ccf99f07)
+
+running 9 tests
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test console_profiles_never_run_it ... ok
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test fog_fades_the_occlusion ... ok
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test msaa_frames_get_the_same_occlusion ... ok
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test no_ao_draws_exactly_what_the_renderer_drew_before ... ok
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test quality_presets_and_intensity_change_the_occlusion ... ok
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test tall_pictures_compute_it_at_half_resolution_with_the_same_result ... ok
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test the_native_tier_darkens_contacts_and_creases_only ... ok
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test the_2d_drawn_after_the_3d_is_not_darkened ... ok
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test views_force_it_on_or_show_the_mask ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.54s
+
+     Running tests/audio_buses.rs (target/debug/deps/audio_buses-2ed3e28303e1820e)
+
+running 4 tests
+test a_voice_ducks_the_music_and_lets_it_back ... ok
+test bus_volumes_and_mutes_scale_only_their_bus ... ok
+test the_project_mix_and_the_players_settings ... ok
+test streamed_vorbis_loops_without_a_gap ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/audio_stream.rs (target/debug/deps/audio_stream-a2053a3a11667d60)
+
+running 1 test
+test a_ten_minute_stream_plays_with_bounded_ram ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.09s
+
+     Running tests/golden.rs (target/debug/deps/golden-3c9d0678d04d9986)
+
+running 8 tests
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test platformer_scene_matches_golden ... ok
+test n3ds_scene_matches_golden ... ok
+test strict_mode_rejects_texture_over_budget ... ok
+test n64_look_scene_matches_golden ... ok
+test basic_scene_matches_golden ... ok
+test strict_mode_rejects_3d_over_the_n64_time_ceiling ... ok
+test cube3d_scene_matches_golden ... ok
+test vi_dedither_smooths_the_dither_and_keeps_flat_areas ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.34s
+
+     Running tests/gpu_tnl.rs (target/debug/deps/gpu_tnl-d5bb1a53ff2adb24)
+
+running 6 tests
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test animated_and_smooth_skinned_meshes_draw_on_the_gpu ... ok
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test rejected_draws_stay_on_the_cpu_with_their_reason ... ok
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test static_draws_match_the_cpu_path ... ok
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test the_parallel_cpu_fallback_draws_the_same_frame_on_any_worker_count ... ok
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test turning_the_gpu_path_off_restores_the_cpu_path ... ok
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test instanced_copies_are_a_few_draw_calls_and_the_same_pixels ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.66s
+
+     Running tests/input_audio.rs (target/debug/deps/input_audio-766be8d1a16a97f0)
+
+running 7 tests
+test every_console_button_maps_from_its_key_with_edges ... ok
+test gamepad_readings_map_to_buttons_sticks_and_triggers ... ok
+test mixer_gains_ducking_looping_and_clamping ... ok
+test every_pc_key_sets_its_bit ... ok
+test keys_bound_to_l2_r2_are_full_triggers ... ok
+test wasd_stick_and_pointer_state_across_polls ... ok
+ALSA lib confmisc.c:855:(parse_card) cannot find card '0'
+ALSA lib conf.c:5208:(_snd_config_evaluate) function snd_func_card_inum returned error: No such file or directory
+ALSA lib confmisc.c:422:(snd_func_concat) error evaluating strings
+ALSA lib conf.c:5208:(_snd_config_evaluate) function snd_func_concat returned error: No such file or directory
+ALSA lib confmisc.c:1342:(snd_func_refer) error evaluating name
+ALSA lib conf.c:5208:(_snd_config_evaluate) function snd_func_refer returned error: No such file or directory
+ALSA lib conf.c:5731:(snd_config_expand) Evaluate error: No such file or directory
+ALSA lib pcm.c:2721:(snd_pcm_open_noupdate) Unknown PCM default
+ALSA lib confmisc.c:855:(parse_card) cannot find card '0'
+ALSA lib conf.c:5208:(_snd_config_evaluate) function snd_func_card_inum returned error: No such file or directory
+ALSA lib confmisc.c:422:(snd_func_concat) error evaluating strings
+ALSA lib conf.c:5208:(_snd_config_evaluate) function snd_func_concat returned error: No such file or directory
+ALSA lib confmisc.c:1342:(snd_func_refer) error evaluating name
+ALSA lib conf.c:5208:(_snd_config_evaluate) function snd_func_refer returned error: No such file or directory
+ALSA lib conf.c:5731:(snd_config_expand) Evaluate error: No such file or directory
+ALSA lib pcm.c:2721:(snd_pcm_open_noupdate) Unknown PCM default
+ALSA lib confmisc.c:855:(parse_card) cannot find card '0'
+ALSA lib conf.c:5208:(_snd_config_evaluate) function snd_func_card_inum returned error: No such file or directory
+ALSA lib confmisc.c:422:(snd_func_concat) error evaluating strings
+ALSA lib conf.c:5208:(_snd_config_evaluate) function snd_func_concat returned error: No such file or directory
+ALSA lib confmisc.c:1342:(snd_func_refer) error evaluating name
+ALSA lib conf.c:5208:(_snd_config_evaluate) function snd_func_refer returned error: No such file or directory
+ALSA lib conf.c:5731:(snd_config_expand) Evaluate error: No such file or directory
+ALSA lib pcm.c:2721:(snd_pcm_open_noupdate) Unknown PCM default
+test audio_voices_music_and_stingers_bookkeeping ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/local_lights.rs (target/debug/deps/local_lights-8a321877d29cb088)
+
+running 7 tests
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test a_light_that_reaches_no_draw_changes_no_pixel ... ok
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test lights_add_their_color_where_they_reach_on_every_tier ... ok
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test each_tier_matches_its_golden ... ok
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test gloss_and_wetness_add_highlights_per_pixel_only ... ok
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test per_pixel_lights_are_round_on_a_coarse_mesh ... ok
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test no_lights_draw_exactly_what_the_renderer_drew_before ... ok
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test per_vertex_tiers_use_at_most_their_cap ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.01s
+
+     Running tests/platform_services.rs (target/debug/deps/platform_services-14deeed3bbdabb2a)
+
+running 10 tests
+test display_settings_text_round_trip_and_repair ... ok
+test rebinding_a_pad_button ... ok
+test old_bindings_files_still_parse ... ok
+test renderer_errors_are_readable ... ok
+test rebinding_keys_through_the_platform ... ok
+test sim_profiles_and_native_picture_sizes ... ok
+test hw_tier_follows_the_simulated_caps ... ok
+test clock_log_second_screen_and_display_requests ... ok
+test save_file_round_trip_framing_and_errors ... ok
+test baked_blobs_are_served_by_handle ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/render_e2e.rs (target/debug/deps/render_e2e-e0aceed9c7a6ea40)
+
+running 8 tests
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test a_palette_recolors_slot_regions_per_draw ... ok
+test frame_times_count_calls_and_pipeline_switches ... ok
+test baked_sprites_rects_and_text_draw_on_the_pc_renderer ... ok
+test baked_models_light_fog_depth_textures_and_billboards ... ok
+test n64_look_and_strict_mode_budgets ... ok
+test large_frames_grow_buffers_and_batches_mix_textures ... ok
+test internal_size_shared_device_and_tooling_accessors ... ok
+test n3ds_second_screen_renders_reads_back_and_presents_stacked ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.45s
+
+     Running tests/save_file.rs (target/debug/deps/save_file-c12b6ce924e6f1e3)
+
+running 3 tests
+test no_save_file_configured_is_unsupported ... ok
+test a_crash_before_the_rename_keeps_the_new_save ... ok
+test write_read_and_limits ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/texture_filter.rs (target/debug/deps/texture_filter-9f04c3ae470caae9)
+
+running 5 tests
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test point_keeps_texels_and_bilinear_blends_them_in_every_look ... ok
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test strict_mode_rejects_a_detail_pair_over_the_n64_tmem ... ok
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test the_default_filter_is_the_profiles_and_set_texture_filter_changes_it ... ok
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test the_detail_layer_multiplies_the_texture_on_every_path ... ok
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test three_cards_match_the_golden_per_profile ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.92s
+
+     Running tests/water.rs (target/debug/deps/water-bd3adec32331b7b6)
+
+running 8 tests
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test each_tier_matches_its_golden ... ok
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test foam_and_glint_are_the_per_pixel_tier_only ... ok
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test msaa_frames_draw_the_same_water ... ok
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test ripples_ring_and_the_swell_moves_on_every_tier ... ok
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test strict_mode_refuses_more_ripples_than_the_cap - should panic ... ok
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test the_floor_shows_through_on_every_tier ... ok
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test water_is_drawn_after_the_batch_and_the_2d_stays_on_top ... ok
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test water_state_is_cleared_every_frame ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.37s
+
+     Running unittests src/lib.rs (target/debug/deps/trino_platform_web-181de86cc33c8b1d)
+
+running 13 tests
+test keys::tests::a_standard_pad_maps_like_the_pc ... ok
+test keys::tests::game_keys_stop_the_page_scrolling_but_not_browser_shortcuts ... ok
+test keys::tests::keys_press_the_pcs_buttons_and_bits ... ok
+test keys::tests::wasd_is_the_stick_and_opposites_cancel ... ok
+test pack::tests::bundles_sit_beside_their_pack ... ok
+test pack::tests::packs_round_trip_and_reject_damage ... ok
+test pack::tests::sprites_read_back ... ok
+test b64::tests::round_trips_every_length_and_known_vectors ... ok
+test pack::tests::version_1_sounds_migrate_to_tsn2 ... ok
+test sound::tests::bus_settings_round_trip_through_storage_text ... ok
+test sound::tests::damaged_vorbis_fails_to_open_or_ends_early ... ok
+test sound::tests::pcm_decodes_whole_and_by_blocks_with_seamless_loops ... ok
+test sound::vorbis_tests::vorbis_decodes_like_the_pc_whole_and_in_stream_chunks ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src/lib.rs (target/debug/deps/trino_render_wgpu-03b05042f1edad40)
+
+running 30 tests
+test frame_report::tests::the_line_averages_per_frame_and_sorts_the_reasons ... ok
+test renderer::batch::tests::consecutive_same_sprite_draws_share_a_run ... ok
+test renderer::ao::tests::views_resolve_the_game_settings ... ok
+test renderer::ao::tests::the_uniform_matches_the_shader_layout ... ok
+test renderer::batch::tests::flips_swap_uvs ... ok
+test renderer::batch::tests::instance_layout_matches_wgsl_expectations ... ok
+test renderer::batch::tests::region_selects_uvs_and_size ... ok
+test renderer::batch::tests::scale_multiplies_native_size ... ok
+test renderer::batch::tests::tint_is_normalized ... ok
+test renderer::batch::tests::tri_vertex_layout_matches_the_pipelines ... ok
+test renderer::batch::tests::tris_interleave_and_merge_with_order_preserved ... ok
+test renderer::cpu_tnl::tests::chunks_cover_the_jobs_in_order ... ok
+test renderer::gpu_tnl::tests::compressed_alpha_is_found ... ok
+test renderer::gpu_tnl::tests::layouts_match_the_shader ... ok
+test renderer::lights::tests::layout_matches_the_shader ... ok
+test renderer::lights::tests::same_state_shares_a_set_and_the_table_caps ... ok
+test renderer::present_tests::letterboxed_integer_upscale_maps_back ... ok
+test renderer::present_tests::native_pictures_are_never_stretched ... ok
+test renderer::tnl_setting_tests::trino_pc_tnl_cpu_turns_the_gpu_path_off ... ok
+test renderer::present_tests::two_screens_stack_and_map_the_pointer ... ok
+test renderer::water::tests::sets_carry_the_swell_the_ripples_and_the_scroll ... ok
+test renderer::water::tests::layout_matches_the_shader ... ok
+test sim::tests::native_internal_fits_and_clamps_the_aspect ... ok
+test renderer::webgl2_tests::web_backends_parse_from_the_page_query ... ok
+test sim::tests::parse_accepts_aliases ... ok
+test sim::tests::profiles_match_console_specs ... ok
+test sim::tests::tier_values_give_their_consoles_look_and_their_own_caps ... ok
+test renderer::webgl2_tests::depth_reads_go_through_the_nearest_sampler ... ok
+test renderer::webgl2_tests::webgl2_shaders_translate_to_glsl_es_300 ... ok
+test renderer::cpu_tnl::tests::parallel_runs_emit_the_serial_stream ... ok
+
+test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.38s
+
+     Running unittests src/lib.rs (target/debug/deps/trino_runner_pc-0f4db007fa813648)
+
+running 3 tests
+test tests::config_paths ... ok
+test tests::window_and_picture_sizes ... ok
+test tests::resample_halves_and_keeps_identity ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bc_textures.rs (target/debug/deps/bc_textures-a434c2a37e849746)
+
+running 1 test
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test bc_uploads_draw_like_their_decoded_fallback ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
+
+     Running tests/runner.rs (target/debug/deps/runner-69ef81b5d4c40d9a)
+
+running 6 tests
+test profile_knob_reads_trino_sim ... ok
+test resampler_preserves_level_and_duration ... ok
+test run_config_lays_out_the_project ... ok
+test window_and_picture_sizes_follow_settings_and_profiles ... ok
+test bus_volumes_persist_per_game ... ok
+ALSA lib confmisc.c:855:(parse_card) cannot find card '0'
+ALSA lib conf.c:5208:(_snd_config_evaluate) function snd_func_card_inum returned error: No such file or directory
+ALSA lib confmisc.c:422:(snd_func_concat) error evaluating strings
+ALSA lib conf.c:5208:(_snd_config_evaluate) function snd_func_concat returned error: No such file or directory
+ALSA lib confmisc.c:1342:(snd_func_refer) error evaluating name
+ALSA lib conf.c:5208:(_snd_config_evaluate) function snd_func_refer returned error: No such file or directory
+ALSA lib conf.c:5731:(snd_config_expand) Evaluate error: No such file or directory
+ALSA lib pcm.c:2721:(snd_pcm_open_noupdate) Unknown PCM default
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test bake_upload_and_draw_like_the_runner ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+     Running tests/strict_groups.rs (target/debug/deps/strict_groups-ade24da8f338d05a)
+
+running 1 test
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test strict_mode_stops_a_group_past_the_consoles_ram ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+
+     Running unittests src/lib.rs (target/debug/deps/trino_scaffold-e0a2f44808bd4fb6)
+
+running 4 tests
+test tests::demo_renames_touch_only_the_crate_and_its_type ... ok
+test tests::names_take_every_form ... ok
+test tests::templates_parse_their_keys ... ok
+test tests::scaffolds_blank_and_demo_projects ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+     Running unittests src/lib.rs (target/debug/deps/trino_scene-cc67e137d1f49604)
+
+running 34 tests
+test bake::tests::round_trips_through_the_core_reader ... ok
+test budget::tests::tmem_counts_padded_rows_and_refuses_palettes ... ok
+test bake::tests::lod_levels_bake_sorted_and_select_by_distance ... ok
+test bake::tests::cells_and_portals_bake_and_cull ... ok
+test library::tests::logical_paths_ignore_dot_prefixes ... ok
+test codegen::tests::generates_deterministic_node_data ... ok
+test library::tests::overrides_apply_and_stale_ones_are_reported ... ok
+test material::tests::params_map_onto_the_core_surface ... ok
+test library::tests::make_prefab_then_unpack ... ok
+test library::tests::apply_overrides_pushes_them_into_the_prefab ... ok
+test material::tests::round_trip_and_defaults ... ok
+test material::tests::filter_and_detail_round_trip_and_map_onto_the_core ... ok
+test platform::tests::a_tier_follows_its_console_unless_it_has_its_own ... ok
+test material::tests::gloss_round_trips_and_defaults_to_matte ... ok
+test material::tests::water_round_trips_with_defaults_and_maps_onto_the_core ... ok
+test platform::tests::disabled_wins_over_visible ... ok
+test platform::tests::prune_drops_noops_only ... ok
+test platform::tests::the_web_follows_the_pc_unless_it_has_its_own ... ok
+test platform::tests::keys_round_trip ... ok
+test platform::tests::tiers_belong_to_their_console ... ok
+test resolve::tests::colliders_resolve_auto_from_model_bounds ... ok
+test resolve::tests::cycles_and_missing_references_warn_instead_of_failing ... ok
+test resolve::tests::hidden_subtrees_are_skipped_and_anim_time_scales ... ok
+test resolve::tests::prefab_instances_expand_under_the_instance_transform ... ok
+test tests::ambient_occlusion_out_of_range_values_are_clamped ... ok
+test tests::draw_names_join_the_ancestors ... ok
+test tests::ambient_occlusion_is_optional_defaulted_and_round_trips ... ok
+test tests::missing_optional_fields_get_defaults ... ok
+test tests::newer_version_is_rejected_with_guidance ... ok
+test tests::sprite_id_matches_core_hash ... ok
+test tests::tree_editing_paths ... ok
+test tests::round_trip_is_lossless_and_stable ... ok
+test tests::v1_scenes_migrate_to_v2 ... ok
+test library::tests::files_round_trip_through_load ... ok
+
+test result: ok. 34 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/asset_groups.rs (target/debug/deps/asset_groups-c7d82983d345543e)
+
+running 4 tests
+test asset_refs_list_every_asset_once ... ok
+test codegen_names_the_groups_only_when_there_are_some ... ok
+test requires_defaults_to_boot_and_round_trips ... ok
+test cell_groups_round_trip_and_resolve_in_cell_order ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/authoring.rs (target/debug/deps/authoring-cb13c4c677e2c3b2)
+
+running 6 tests
+test entity_tree_edits_keep_paths_consistent ... ok
+test transforms_and_environment_map_onto_the_core_types ... ok
+test prefab_files_and_overrides ... ok
+test old_new_and_broken_scene_files_get_clear_answers ... ok
+test materials_parse_save_and_become_model_params ... ok
+test scenes_round_trip_through_files_with_every_component ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/export.rs (target/debug/deps/export-597f5c9f8d5172bb)
+
+running 4 tests
+test corrupt_tscn_blobs_are_rejected_up_front ... ok
+test tscn_blobs_carry_everything_resolve_computed ... ok
+test codegen_exports_the_scene_ambient_occlusion ... ok
+test generated_code_lists_every_exported_node_and_component ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/library_resolve.rs (target/debug/deps/library_resolve-432401c95696a4e6)
+
+running 5 tests
+test resolve_flattens_every_component ... ok
+test broken_scenes_resolve_with_warnings_instead_of_failing ... ok
+test sprites_accumulate_their_parents_2d_transform ... ok
+test prefabs_can_be_made_applied_unpacked_and_nested ... ok
+test the_library_loads_and_hot_reloads_project_files ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/lod_chain.rs (target/debug/deps/lod_chain-3055f74937e0448d)
+
+running 4 tests
+test each_platform_gets_its_own_chain ... ok
+test exports_carry_the_impostor_and_a_missing_one_warns ... ok
+test a_tier_starts_a_level_at_its_own_distance_or_its_consoles ... ok
+test the_chain_round_trips_through_ron ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/platform_variants.rs (target/debug/deps/platform_variants-33df29a12339ce66)
+
+running 7 tests
+test each_platform_resolves_its_own_variant ... ok
+test exports_pick_the_variant_of_their_platform ... ok
+test prefab_parts_and_instances_take_variants ... ok
+test v2_scenes_and_v1_prefabs_migrate ... ok
+test tier_variants_round_trip_migrate_and_fall_back_to_their_console ... ok
+test the_web_resolves_like_the_pc_unless_it_has_its_own_variant ... ok
+test variants_round_trip_through_ron_both_ways ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (target/debug/deps/xtask-5712f22785eac676)
+
+running 77 tests
+test console_groups::tests::mkasset_headers_give_the_loaded_size ... ok
+test console_groups::tests::index_lines_parse_with_tiers_and_columns ... ok
+test emulators::tests::a_slow_but_printing_run_is_reported_as_a_timeout ... ok
+test emulators::tests::idle_zero_turns_the_silence_limit_off ... ok
+test fbgolden::tests::rebuilds_and_verifies_a_dump ... ok
+test emulators::tests::a_silent_emulator_is_reported_as_a_hang ... ok
+test fbgolden::tests::lost_or_garbled_dump_lines_are_detected ... ok
+test font_assets::tests::atlas_is_consistent ... ok
+test hardware::tests::arguments_after_a_double_dash_are_left_alone ... ok
+test hardware::tests::device_flags_parse_and_reject_bad_combinations ... ok
+test hardware::tests::devices_only_run_on_their_own_console ... ok
+test hardware::tests::gdb_scripts_follow_lumas_ports ... ok
+test hardware::tests::loader_command_lines ... ok
+test hardware::tests::target_flag_becomes_the_positional_platform ... ok
+test hwtier::tests::each_flag_goes_with_its_console ... ok
+test hwtier::tests::flags_parse_and_leave_the_rest ... ok
+test hwtier::tests::the_3ds_line_must_match_the_console_and_the_speedup ... ok
+test hwtier::tests::the_n64_line_must_match_the_expansion_pak ... ok
+test hwtier::tests::the_self_test_data_must_be_the_booted_tiers ... ok
+test hwtier::tests::the_worker_runs_on_the_consoles_second_core ... ok
+test console_groups::tests::a_compressed_boot_is_packed_on_the_3ds_and_compressed_in_place_on_the_n64 ... ok
+test n3ds::tests::gpu_timing_already_on_is_left_as_is ... ok
+test n3ds::tests::accurate_timing_comes_from_the_flag_or_the_environment ... ok
+test n3ds::tests::gpu_timing_is_read_back_from_azahar_boot_log ... ok
+test n3ds::tests::gpu_timing_is_forced_with_both_lines_in_renderer_only ... ok
+test n3ds::tests::gpu_timing_goes_into_a_seeded_or_missing_config ... ok
+test fbgolden::tests::framebuffer_dumps_round_trip_through_bless_and_check ... ok
+test n3ds::tests::gpu_timing_keeps_windows_line_endings ... ok
+test n3ds::tests::gpu_timing_saved_copy_round_trips ... ok
+test n3ds::tests::host_executables_get_the_platform_suffix ... ok
+test n64::tests::docker_paths_map_windows_drives_to_wsl_mounts ... ok
+test n64::tests::frame_lines_parse_and_gate ... ok
+test n64::tests::mem_symbols_must_come_from_newlib ... ok
+test fbgolden::tests::tolerant_goldens_accept_small_drift_and_reject_far_pixels ... ok
+test n64::tests::the_text_pad_is_whole_instructions_before_the_rust_code ... ok
+test perf::tests::budgets_cap_the_ceilings ... ok
+test perf::tests::blessed_ceilings_pass_and_regressions_fail ... ok
+test perf::tests::ceilings_round_up_with_headroom ... ok
+test perf::tests::micro_scenes_are_split_out_and_checked ... ok
+test perf::tests::parses_a_scene_line ... ok
+test perf::tests::perf_reports_compare_rsp_and_cpu_paths ... ok
+test perf::tests::work_counters_must_match_the_pc_baseline ... ok
+test n64::tests::objects_are_up_to_date_only_when_newer_than_every_source ... ok
+test n3ds::tests::a_session_restores_the_setting_and_recovers_an_interrupted_one ... ok
+test project::tests::a_manifest_without_platforms_targets_everything ... ok
+test project::tests::console_sections_are_only_required_for_listed_platforms ... ok
+test project::tests::engine_default_matches_the_in_repo_apps ... ok
+test project::tests::bad_platform_lists_are_rejected ... ok
+test agents::tests::sync_mirrors_the_canonical_tree_and_check_reports_drift ... ok
+test project::tests::nightly_pin_env_over_file_over_floating ... ok
+test project::tests::parses_a_project ... ok
+test project::tests::rejects_bad_names_and_titles ... ok
+test project::tests::platforms_parse_dedupe_and_sort ... ok
+test project::tests::requiring_a_missing_platform_names_the_field_and_the_file ... ok
+test project::tests::targets_parse_their_command_line_spellings ... ok
+test project::tests::the_new_3ds_speedup_can_be_opted_out ... ok
+test n64::tests::audio_bakes_to_wav64_per_codec_with_whole_block_loops ... ok
+test river_assets::tests::ear_clipping_covers_the_polygon ... ok
+test project::tests::the_web_section_names_the_host_canvas_and_title ... ok
+test river_assets::tests::terrain_matches_the_course_the_game_walks_on ... ok
+test perf::tests::perf_gate_blesses_ceilings_then_holds_them ... ok
+test standalone::tests::parses_sources ... ok
+test river_assets::tests::the_ribbon_is_under_the_banks_and_flows_downstream ... ok
+test standalone::tests::parses_templates ... ok
+test standalone::tests::prompts_ask_again_and_default ... ok
+test tests::only_real_filesystem_changes_trigger_a_rebuild ... ok
+test scene::tests::check_flags_models_a_platform_does_not_bake ... ok
+test tests::the_platform_gate_only_stops_left_out_platforms ... ok
+test web::tests::the_cli_version_comes_from_the_lockfile ... ok
+test web::tests::wasm_and_js_get_the_types_browsers_require ... ok
+test agents::tests::malformed_skills_are_rejected ... ok
+test web::tests::the_server_serves_files_with_isolation_headers_and_nothing_outside ... ok
+test tests::scaffold_renders_placeholders ... ok
+test standalone::tests::scaffolded_trino_toml_loads_as_a_project ... ok
+test n3ds::tests::sounds_bake_to_t3au_with_the_manifests_codec ... ok
+test tests::gen_assets_reproduces_the_committed_masters ... ok
+test web::tests::packs_hold_ktx2_textures_vorbis_sounds_and_the_mix ... ok
+
+test result: ok. 77 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests/agents_sync.rs (target/debug/deps/agents_sync-d923f944611d2df4)
+
+running 4 tests
+test every_skill_is_listed_in_agents_md ... ok
+test skill_mirrors_match_canonical_tree ... ok
+test agents::tests::sync_mirrors_the_canonical_tree_and_check_reports_drift ... ok
+test agents::tests::malformed_skills_are_rejected ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/ao_shots.rs (target/debug/deps/ao_shots-941ac3f187e55329)
+
+running 1 test
+test ambient_occlusion_evidence ... ignored, evidence: writes target/evidence/ao (needs a GPU)
+
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/ao_shots_hello.rs (target/debug/deps/ao_shots_hello-7273d2ac1ce93994)
+
+running 1 test
+test ambient_occlusion_evidence ... ignored, evidence: writes target/evidence/ao (needs a GPU)
+
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/ao_shots_platformer.rs (target/debug/deps/ao_shots_platformer-721ea8839fc520cf)
+
+running 1 test
+test ambient_occlusion_evidence ... ignored, evidence: writes target/evidence/ao (needs a GPU)
+
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/asset_groups.rs (target/debug/deps/asset_groups-47241d136a7039a2)
+
+running 1 test
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test asset_groups_load_draw_and_unload_on_pc ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 16.31s
+
+     Running tests/assets_cli.rs (target/debug/deps/assets_cli-55e6bcff24d99584)
+
+running 3 tests
+test bad_invocations_say_what_is_wrong_and_leave_the_manifest ... ok
+test group_check_and_report_hold_scenes_to_their_groups ... ok
+test the_engine_assets_check_clean ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.59s
+
+     Running tests/audio_cli.rs (target/debug/deps/audio_cli-bca15fb71fb81310)
+
+running 5 tests
+test mix_validates_and_prints_the_project_mix ... ok
+test bad_audio_invocations_fail_with_the_usage_or_a_reason ... ok
+test preview_writes_each_platforms_decode_as_a_wav ... ok
+test inspect_reports_codec_bytes_snr_and_memory_per_platform ... ok
+test report_lists_every_sound_biggest_first_with_totals ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.27s
+
+     Running tests/bench_tnl.rs (target/debug/deps/bench_tnl-4f1ac30cdc47a004)
+
+running 2 tests
+test castle64_tnl_cost_per_frame ... ignored, benchmark: run with --release --ignored --nocapture
+test skinning_rigid_vs_smooth ... ignored, benchmark: run with --release --ignored --nocapture
+
+test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/c64_gif.rs (target/debug/deps/c64_gif-cd6c754c5edd17a2)
+
+running 1 test
+test record_castle64_gameplay_gif ... ignored, utilitário local: grava target/c64_shots/gameplay.gif (GPU + assets)
+
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/c64_shots.rs (target/debug/deps/c64_shots-2e5c100c7c562c3a)
+
+running 1 test
+test castle64_level_shots ... ignored, utilitário local: screenshots do castle64 (precisa de GPU + assets)
+
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/cell_streaming.rs (target/debug/deps/cell_streaming-bdd91f7a36e1c970)
+
+running 1 test
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test cells_stream_their_groups_on_pc ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.63s
+
+     Running tests/cli.rs (target/debug/deps/cli-a0eda4188efc105a)
+
+running 12 tests
+test help_and_no_arguments_list_every_command ... ok
+test agents_check_passes_on_the_clean_tree_and_rejects_unknown_subcommands ... ok
+test emulator_and_blender_commands_reject_unknown_subcommands ... ok
+test new_rejects_bad_names_and_bad_options ... ok
+test hardware_tier_flags_go_with_their_console ... ok
+test unknown_invocations_fail_with_the_usage ... ok
+test new_standalone_scaffolds_a_complete_project ... ok
+test project_selection_fails_fast_on_bad_projects ... ok
+test platform_commands_follow_the_project_platforms ... ok
+test new_from_a_demo_template_and_from_the_prompts ... ok
+test assets_web_bakes_ktx2_textures ... ok
+test assets_pc_bakes_the_repo_manifest ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.34s
+
+     Running tests/dep_graph.rs (target/debug/deps/dep_graph-cef8a026877c71f7)
+
+running 1 test
+test dependency_direction_is_enforced ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/engine_checks.rs (target/debug/deps/engine_checks-d10ecc54966f71ea)
+
+running 9 tests
+test instancing_evidence ... ignored, writes evidence PNGs: run with --ignored
+test idle_input_checks_pass_on_pc ... ok
+test baked_showcase_matches_code_and_plays ... ok
+ALSA lib confmisc.c:855:(parse_card) cannot find card '0'
+ALSA lib conf.c:5208:(_snd_config_evaluate) function snd_func_card_inum returned error: No such file or directory
+ALSA lib confmisc.c:422:(snd_func_concat) error evaluating strings
+ALSA lib conf.c:5208:(_snd_config_evaluate) function snd_func_concat returned error: No such file or directory
+ALSA lib confmisc.c:1342:(snd_func_refer) error evaluating name
+ALSA lib conf.c:5208:(_snd_config_evaluate) function snd_func_refer returned error: No such file or directory
+ALSA lib conf.c:5731:(snd_config_expand) Evaluate error: No such file or directory
+ALSA lib pcm.c:2721:(snd_pcm_open_noupdate) Unknown PCM default
+test audio_codecs_pass_on_pc ... ok
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test audio_checks_pass_on_pc ... ok
+test engine_checks_pass_on_the_pc_3ds_profile ... ok
+test engine_checks_pass_on_pc ... ok
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test instancing_matches_separate_draws_and_counts_the_pc_gpu_split ... ok
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test engine_checks_pass_on_the_simulated_expanded_tiers ... ok
+
+test result: ok. 8 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 2.11s
+
+     Running tests/feature_matrix.rs (target/debug/deps/feature_matrix-f18e8992635886d9)
+
+running 3 tests
+test the_guard_parses_its_own_inputs ... ok
+test every_engine_feature_has_a_matrix_row ... ok
+test every_matrix_reference_is_an_existing_test ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+     Running tests/hardware.rs (target/debug/deps/hardware-1cd03f97ffebfdca)
+
+running 7 tests
+test a_failed_upload_stops_the_deploy ... ok
+test no_build_needs_an_existing_rom ... ok
+test everdrive_uploads_and_debugs_in_one_unfloader_call ... ok
+test the_n3ds_alias_deploys_like_3ds ... ok
+test network_deploy_runs_3dslink_with_the_ip_and_writes_the_gdb_script ... ok
+test sc64_uploads_the_rom_then_forwards_the_debug_log ... ok
+test device_flags_and_missing_tools_fail_with_a_reason ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/hero_shot.rs (target/debug/deps/hero_shot-2e988a524a13bba8)
+
+running 1 test
+test regenerate_readme_hero_shot ... ignored, dev utility: regenerates docs/media/platformer.png (needs GPU + assets)
+
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/hot_reload.rs (target/debug/deps/hot_reload-262e3f5915aff5c2)
+
+running 1 test
+test state_survives_dylib_swap_and_behavior_changes ... ignored, slow: builds the game dylib twice; CI runs it in the hot-reload job
+
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/impostor_cli.rs (target/debug/deps/impostor_cli-a5a8186ebf32dfd0)
+
+running 3 tests
+test the_engines_impostors_are_fresh ... ok
+test bad_impostor_invocations_fail_with_the_usage_or_a_reason ... ok
+test new_bake_check_and_list_an_impostor_in_a_project ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/lights_shots.rs (target/debug/deps/lights_shots-455f4d1c09b94417)
+
+running 1 test
+test throne_room_on_every_light_tier ... ignored, evidence: castle64's torches on every light tier (needs a GPU)
+
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/model_inspect.rs (target/debug/deps/model_inspect-99986f7db3d5550c)
+
+running 8 tests
+test static_glb_reports_its_mesh_and_n64_cost ... ok
+test smooth_flag_keeps_two_joint_weights ... ok
+test color_slots_are_counted_per_slot ... ok
+test fake_objects_bake_and_heavy_or_centered_ones_warn ... ok
+test animated_glb_reports_its_skeleton_and_clips ... ok
+test anim_flag_measures_every_clip ... ok
+test bad_invocations_and_files_fail ... ok
+test model_pose_exports_a_static_model ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/n3ds_parity.rs (target/debug/deps/n3ds_parity-55bc6c696effa4b5)
+
+running 3 tests
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test pc_3ds_texture_formats_track_the_azahar_frame ... ok
+test pc_3ds_look_tracks_the_azahar_frame ... ok
+test pc_3ds_bottom_screen_tracks_the_azahar_frame ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.50s
+
+     Running tests/n64_parity.rs (target/debug/deps/n64_parity-2afac2316ecf4d50)
+
+running 1 test
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test pc_n64_look_tracks_the_ares_frame ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.44s
+
+     Running tests/particles_cli.rs (target/debug/deps/particles_cli-b56089cb2a7bd7e5)
+
+running 2 tests
+test inspect_simulates_each_platform_cap_deterministically ... ok
+test new_declares_an_effect_and_bad_invocations_say_why ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/pc_tnl_bench.rs (target/debug/deps/pc_tnl_bench-6602aa3a1b8842a6)
+
+running 1 test
+test cpu_vs_gpu_tnl_frame_times ... ignored, a measurement: run with --release --ignored --nocapture
+
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/perf_budget.rs (target/debug/deps/perf_budget-97038482ac2332b5)
+
+running 2 tests
+test castle64_tnl_work_matches_the_baseline ... ok
+test castle64_3ds_gpu_split_matches_the_baseline ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.36s
+
+     Running tests/record_gif.rs (target/debug/deps/record_gif-351e01c062cd3e0a)
+
+running 1 test
+test record_readme_gameplay_gif ... ignored, dev utility: records docs/media/platformer.gif (needs GPU + assets)
+
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/scene_budget.rs (target/debug/deps/scene_budget-f16405f9545a3ac6)
+
+running 8 tests
+test the_web_warns_past_a_phones_budget ... ok
+test the_rsp_split_names_each_rule_and_follows_the_scene ... ok
+test variants_lod_and_impostors_change_each_platforms_frame ... ok
+test a_mesh_behind_the_camera_is_sent_for_nothing ... ok
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test scene_budget_cli_prints_the_same_numbers ... ok
+test scene_budget_cli_estimates_the_hardware_tiers ... ok
+test the_estimate_matches_the_pc_renderers_counters_on_the_n64_profile ... ok
+test pc_budget_reports_the_gpu_split ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s
+
+     Running tests/scene_cli.rs (target/debug/deps/scene_cli-fdb275e768efa42d)
+
+running 7 tests
+test scene_without_a_subcommand_prints_the_usage ... ok
+test scene_export_writes_the_committed_showcase_code ... ok
+test scene_export_warns_on_dangling_references_and_fails_on_io_errors ... ok
+test scene_check_reports_dangling_references_and_parse_errors ... ok
+test scene_export_applies_the_tier_variants_over_the_consoles ... ok
+test scene_export_applies_the_platform_variants ... ok
+test scene_check_accepts_every_repo_scene ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/scene_codegen.rs (target/debug/deps/scene_codegen-52aa3e5804065922)
+
+running 2 tests
+test showcase_n64_codegen_matches_the_scene ... ok
+test showcase_codegen_matches_the_scene ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/showcase_panel.rs (target/debug/deps/showcase_panel-7e1df8397a12591e)
+
+running 2 tests
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test showcase_panel_collapses_on_the_n64_profile ... ok
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test showcase_panel_is_probed_on_the_pc_3ds_profile ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.05s
+
+     Running tests/showcase_render.rs (target/debug/deps/showcase_render-c8731b70355fe76d)
+
+running 2 tests
+test showcase_gameplay_shots ... ignored, local utility: needs a GPU; writes target/showcase_shots
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test runtime_scene_and_exported_code_render_identically ... ok
+
+test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.45s
+
+     Running tests/showcase_river.rs (target/debug/deps/showcase_river-66bb7fb0589efbe3)
+
+running 1 test
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test the_river_matches_its_golden_on_the_native_profile ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.52s
+
+     Running tests/solid_eleven_budget.rs (target/debug/deps/solid_eleven_budget-ed1233a9ceb8d964)
+
+running 2 tests
+test the_match_frame_cost_is_pinned ... ok
+test every_match_draw_stays_on_the_rsp ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.01s
+
+     Running tests/solid_eleven_layers.rs (target/debug/deps/solid_eleven_layers-ebc44854404cdd41)
+
+running 4 tests
+test the_fonts_bake_the_characters_the_code_writes ... ok
+test render_and_ui_never_mutate_the_match ... ok
+test the_sim_layer_is_pure_fixed_point ... ok
+test the_pose_tables_match_the_clip_source ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.32s
+
+     Running tests/solid_eleven_menus.rs (target/debug/deps/solid_eleven_menus-3a186ab1f5914edd)
+
+running 2 tests
+test random_input_never_breaks_the_game ... ok
+test every_menu_state_draws_cleanly_in_every_language_and_size ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.88s
+
+     Running tests/solid_eleven_poses.rs (target/debug/deps/solid_eleven_poses-efa5c7713e5c0d2f)
+
+running 2 tests
+test head_closeups ... ignored, writes PNGs for review; run with --ignored
+test pose_sheets ... ignored, writes PNGs for review; run with --ignored
+
+test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/solid_eleven_render.rs (target/debug/deps/solid_eleven_render-75f89ef30dd77558)
+
+running 4 tests
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test msaa_smooths_the_match_edges_on_the_pc_profile ... ok
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test the_match_matches_its_goldens_on_every_look ... ok
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test the_match_passes_strict_mode_on_the_n64_profile ... ok
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test the_menus_match_their_goldens ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.76s
+
+     Running tests/solid_eleven_shots.rs (target/debug/deps/solid_eleven_shots-21c9255814a4cba3)
+
+running 3 tests
+test pc_frame_time ... ignored
+test solid_eleven_menu_shots ... ignored, local tool: screenshots (needs a GPU)
+test solid_eleven_shots ... ignored, local tool: screenshots (needs a GPU)
+
+test result: ok. 0 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/standalone.rs (target/debug/deps/standalone-47c33465216feccc)
+
+running 2 tests
+test every_template_compiles_out_of_the_box ... ignored, runs cargo check on three scaffolded projects
+test standalone_project_builds_tests_and_runs ... ok
+
+test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 14.01s
+
+     Running tests/texture_cli.rs (target/debug/deps/texture_cli-92b26ecfffd2a59e)
+
+running 3 tests
+test bad_texture_invocations_fail_with_the_usage_or_a_reason ... ok
+test inspect_reports_format_bytes_psnr_and_memory_per_platform ... ok
+test report_lists_every_texture_biggest_first_with_totals ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.47s
+
+     Running tests/texture_shots.rs (target/debug/deps/texture_shots-b6a6f9edd2b78325)
+
+running 2 tests
+test auto_bc_and_n64_evidence ... ignored, evidence: writes target/evidence/texture_auto
+test texture_format_evidence ... ignored, evidence: writes target/evidence/texture_formats
+
+test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/water_shots.rs (target/debug/deps/water_shots-6eb882887216198d)
+
+running 2 tests
+test water_evidence ... ignored, evidence: writes target/evidence/water (needs a GPU)
+test water_gif ... ignored, evidence: writes target/evidence/water/*.gif (needs a GPU)
+
+test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/web_parity.rs (target/debug/deps/web_parity-e1420649bfbdaa5c)
+
+running 1 test
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+test the_browsers_frames_are_the_pc_renderers ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.42s
+
+   Doc-tests castle64
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests hello_sprite
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests platformer
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests showcase
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests solid_eleven
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests trino_app_web
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests trino_asset_pipeline
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests trino_core
+
+running 4 tests
+test crates/core/src/entity.rs - entity (line 7) ... ignored
+test crates/core/src/impostor.rs - impostor (line 12) ... ignored
+test crates/core/src/particles.rs - particles (line 6) ... ignored
+test crates/core/src/scene.rs - scene (line 13) ... ignored
+
+test result: ok. 0 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+all doctests ran in 0.18s; merged doctests compilation took 0.18s
+   Doc-tests trino_game_api
+
+running 1 test
+test crates/game-api/src/lib.rs - export_game (line 39) ... ignored
+
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+all doctests ran in 0.16s; merged doctests compilation took 0.16s
+   Doc-tests trino_platform_3ds
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests trino_platform_n64
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests trino_platform_pc
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests trino_platform_web
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests trino_render_wgpu
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests trino_runner_pc
+
+running 1 test
+test crates/runner-pc/src/lib.rs - (line 4) ... ignored
+
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+all doctests ran in 0.18s; merged doctests compilation took 0.18s
+   Doc-tests trino_scaffold
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests trino_scene
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

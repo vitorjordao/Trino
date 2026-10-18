@@ -1,0 +1,152 @@
+    Finished `test` profile [optimized + debuginfo] target(s) in 0.37s
+     Running unittests src/main.rs (target/debug/deps/trino_editor-1297ff6c54795209)
+
+running 17 tests
+test ui_tests::ambient_occlusion_panel_view_modes_and_baking ... libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+ok
+test ui_tests::animation_tab_previews_measures_and_exports ... libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+ok
+test ui_tests::asset_groups_chips_requires_cells_and_memory ... libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+ok
+test ui_tests::audio_inspector_and_mixer_write_the_text_files ... libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+ALSA lib confmisc.c:855:(parse_card) cannot find card '0'
+ALSA lib conf.c:5208:(_snd_config_evaluate) function snd_func_card_inum returned error: No such file or directory
+ALSA lib confmisc.c:422:(snd_func_concat) error evaluating strings
+ALSA lib conf.c:5208:(_snd_config_evaluate) function snd_func_concat returned error: No such file or directory
+ALSA lib confmisc.c:1342:(snd_func_refer) error evaluating name
+ALSA lib conf.c:5208:(_snd_config_evaluate) function snd_func_refer returned error: No such file or directory
+ALSA lib conf.c:5731:(snd_config_expand) Evaluate error: No such file or directory
+ALSA lib pcm.c:2721:(snd_pcm_open_noupdate) Unknown PCM default
+ok
+test ui_tests::commands_edit_save_and_export_in_a_temp_project ... libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+ok
+test ui_tests::editor_layout_is_clean_at_minimum_and_default_sizes ... libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+ok
+test ui_tests::gizmo_drags_grab_the_handle_under_the_press ... libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+ok
+test ui_tests::hierarchy_select_palette_duplicate_and_undo ... libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+ok
+test ui_tests::impostors_bake_from_the_inspector_and_drive_a_lod_level ... libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+ok
+test ui_tests::launcher_lists_recent_projects_opens_and_creates ... libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+ok
+test ui_tests::new_3ds_tier_variant_reaches_the_game_view_the_file_and_the_budget ... libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+ok
+test ui_tests::particle_effects_preview_caps_and_files ... libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+ok
+test ui_tests::platform_budget_shows_rsp_reasons_and_unseen_draws ... libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+ok
+test ui_tests::platform_variants_reach_the_game_view_and_the_file ... libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+ok
+test ui_tests::scene_view_pans_flies_dollies_and_flips_axes ... libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+ok
+test ui_tests::texture_inspector_formats_quality_and_errors ... libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+ok
+test ui_tests::water_budget_ripples_and_material_edits ... libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/renderD128: Permission denied
+
+libEGL warning: failed to open /dev/dri/card0: Permission denied
+
+ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 91 filtered out; finished in 34.18s
+

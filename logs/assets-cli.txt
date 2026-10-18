@@ -1,0 +1,34 @@
+$ cargo xtask assets check
+ok  scenes/interior.scene.ron (requires ["boot"])
+ok  scenes/main.scene.ron (requires ["boot"])
+ok  scenes/selftest-tier.scene.ron (requires ["boot"])
+ok  scenes/showcase.scene.ron (requires ["boot"])
+4 scene(s), 3 group(s), 0 problem(s)
+
+$ cargo xtask assets report --platform n64
+[N64 base] 4.0 MB RAM - 2.2 MB engine reserve - 0 B game = 1.8 MB for assets
+  group                    assets     in RAM   baked (stored)
+  boot                        158     287 KB                -
+  selftest_level                3       2 KB            606 B
+  selftest_level2               3       2 KB             5 KB
+  scenario                            in RAM  of the budget
+  boot                                287 KB   15%
+  boot + selftest_level               288 KB   15%
+  boot + selftest_level2              288 KB   15%
+  scene interior                      289 KB   15%
+  scene main                          287 KB   15%
+  scene selftest-tier                 287 KB   15%
+  scene showcase                      287 KB   15%
+[N64 expanded] 8.0 MB RAM - 2.2 MB engine reserve - 0 B game = 5.8 MB for assets
+  group                    assets     in RAM   baked (stored)
+  boot                        159     287 KB                -
+  selftest_level                3       2 KB            606 B
+  selftest_level2               3       2 KB             5 KB
+  scenario                            in RAM  of the budget
+  boot                                287 KB    4%
+  boot + selftest_level               289 KB    4%
+  boot + selftest_level2              289 KB    4%
+  scene interior                      290 KB    4%
+  scene main                          287 KB    4%
+  scene selftest-tier                 287 KB    4%
+  scene showcase                      287 KB    4%

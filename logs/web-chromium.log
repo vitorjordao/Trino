@@ -1,0 +1,152 @@
+[web] /home/v/dev/trino-work/wt/56-memory/target/web/assets/trino.selftest_level.tbnd: 676 bytes
+[web] /home/v/dev/trino-work/wt/56-memory/target/web/assets/trino.selftest_level2.tbnd: 4380 bytes
+[web] assets/trino.pak: 456241 bytes
+[web] assets/solid-eleven.pak: 2179144 bytes
+   Compiling trino-core v0.2.0-dev.1 (/home/v/dev/trino-work/wt/56-memory/crates/core)
+   Compiling trino-game-api v0.2.0-dev.1 (/home/v/dev/trino-work/wt/56-memory/crates/game-api)
+   Compiling trino-render-wgpu v0.2.0-dev.1 (/home/v/dev/trino-work/wt/56-memory/crates/render-wgpu)
+   Compiling trino-platform-web v0.2.0-dev.1 (/home/v/dev/trino-work/wt/56-memory/crates/platform-web)
+   Compiling showcase v0.2.0-dev.1 (/home/v/dev/trino-work/wt/56-memory/examples/showcase)
+   Compiling castle64 v0.2.0-dev.1 (/home/v/dev/trino-work/wt/56-memory/examples/castle64)
+   Compiling solid-eleven v0.2.0-dev.1 (/home/v/dev/trino-work/wt/56-memory/examples/solid-eleven)
+warning: dropping unsupported crate type `dylib` for target `wasm32-unknown-unknown`
+
+warning: `showcase` (lib) generated 1 warning (1 duplicate)
+warning: `castle64` (lib) generated 1 warning (1 duplicate)
+warning: `solid-eleven` (lib) generated 1 warning
+   Compiling trino-app-web v0.2.0-dev.1 (/home/v/dev/trino-work/wt/56-memory/apps/web)
+    Finished `release` profile [optimized] target(s) in 4.54s
+[web] trino.wasm: 5538573 bytes (release)
+[web-test] chromium-webgl2 (153.0.8010.12): PASS in 16.9 s · ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver) (Gl) · textures BC
+[web-test] chromium-webgl2: audio codecs ok, 155 frames in 2566 ms (longest gap 16 ms), audio clock 8.060 s: rate=44100 streamed_frames=100920 stream_bytes=199936 resident_bytes=815468 underruns=0
+[web-test] chromium-webgl2: TRINO_AUDIO: state=running rate=44100 resident_bytes=815468 voices=0 streams=0 stream_bytes=0 underruns=0 streamed_frames=115556
+[web-test] chromium-webgl2: TRINO_AUDIO: state=running rate=44100 resident_bytes=1442194 voices=4 streams=1 stream_bytes=232704 underruns=2 streamed_frames=289258
+[web-test] chromium-webgpu (153.0.8010.12): PASS in 16.6 s · browser adapter (BrowserWebGpu) · textures BC
+[web-test] chromium-webgpu: audio codecs ok, 156 frames in 2583 ms (longest gap 16 ms), audio clock 7.933 s: rate=44100 streamed_frames=101048 stream_bytes=199936 resident_bytes=815468 underruns=0
+[web-test] chromium-webgpu: TRINO_AUDIO: state=running rate=44100 resident_bytes=815468 voices=0 streams=0 stream_bytes=0 underruns=0 streamed_frames=115556
+[web-test] chromium-webgpu: TRINO_AUDIO: state=running rate=44100 resident_bytes=1442194 voices=3 streams=1 stream_bytes=229632 underruns=2 streamed_frames=264810
+[web] chromium-webgl2: /home/v/dev/trino-work/wt/56-memory/tests/golden/web/showcase.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[web] chromium-webgl2: /home/v/dev/trino-work/wt/56-memory/tests/golden/web/castle64_hub.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[web] chromium-webgl2: /home/v/dev/trino-work/wt/56-memory/tests/golden/web/texture_formats.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[web] chromium-webgpu: /home/v/dev/trino-work/wt/56-memory/tests/golden/web/showcase.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[web] chromium-webgpu: /home/v/dev/trino-work/wt/56-memory/tests/golden/web/castle64_hub.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[web] chromium-webgpu: /home/v/dev/trino-work/wt/56-memory/tests/golden/web/texture_formats.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[web] every browser passed (2 runs)
+
+===== chromium-webgl2 console.log (TRINO lines)
+[log] trino TRINO_WEB: adapter="ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver) (Gl)" profile=Web canvas=640x480 dpr=1 msaa=1
+[log] trino TRINO_ASSETS: bytes=456241 sprites=31 ktx2=30 ktx2_gpu=30 ktx2_rgba8=0 target=BC sounds=12 models=106 fonts=1 blobs=11 mixer=true groups=2
+[log] trino TRINO_STEP:web selftest start
+[log] trino TRINO_STEP:text
+[log] trino TRINO_STEP:blob
+[log] trino TRINO_STEP:save
+[log] trino TRINO_STEP:textured_3d
+[log] trino TRINO_STEP:textured_3d skipped (no read_pixel)
+[log] trino TRINO_STEP:texture filter and detail
+[log] trino TRINO_STEP:texture formats
+[log] trino TRINO_STEP:billboards
+[log] trino TRINO_STEP:occlusion
+[log] trino TRINO_STEP:fill rect
+[log] trino TRINO_STEP:dual screen
+[log] trino TRINO_STEP:dual screen single screen (collapsed)
+[log] trino TRINO_STEP:smooth skin
+[log] trino TRINO_STEP:palette
+[log] trino TRINO_STEP:instancing
+[log] trino TRINO_STEP:local lights
+[log] trino TRINO_STEP:ambient occlusion
+[log] trino TRINO_STEP:water
+[log] trino TRINO_STEP:impostor
+[log] trino TRINO_STEP:particles
+[log] trino TRINO_STEP:particles cap 24
+[log] trino TRINO_STEP:portals
+[log] trino TRINO_STEP:hw tier
+[log] trino TRINO_STEP:hw tier base ram=0M cores=0 data=base sparks=4
+[log] trino TRINO_STEP:engine ok
+[log] trino TRINO_STEP:audio
+[log] trino TRINO_STEP:input
+[log] trino TRINO_STEP:ktx2 transcode
+[log] trino TRINO_STEP:ktx2 transcode etc1s+uastc decode exact, gpu target BC
+[log] trino TRINO_STEP:asset groups
+[log] trino TRINO_STEP:asset groups downloaded in 2 frames
+[log] trino TRINO_STEP:asset groups ok load_frames=1 level_bytes=1135 heap_baseline=8943138 heap_drift=0 cycles=0 soak_frames=0
+[log] trino TRINO_STEP:asset groups took 5ms
+[log] trino TRINO_STEP:asset groups soak frames=240 cycles=120 heap_baseline=3695479 heap_drift=0
+[log] trino TRINO_STEP:audio codecs
+[log] trino TRINO_AUDIO: state=running rate=44100 resident_bytes=815468 voices=0 streams=0 stream_bytes=0 underruns=0 streamed_frames=115556
+[log] trino TRINO_STEP:audio codecs ok, 155 frames in 2566 ms (longest gap 16 ms), audio clock 8.060 s: rate=44100 streamed_frames=100920 stream_bytes=199936 resident_bytes=815468 underruns=0
+[log] trino TRINO_STEP:showcase demo
+[log] trino TRINO_STEP:baked scene
+[log] trino TRINO_STEP:castle64
+[log] trino TRINO_STEP:castle64 bot reached the star in 747 frames
+[log] trino TRINO_STEP:solid eleven pack
+[log] trino TRINO_ASSETS: bytes=2179144 sprites=5 ktx2=3 ktx2_gpu=3 ktx2_rgba8=0 target=BC sounds=10 models=197 fonts=2 blobs=0 mixer=false groups=0
+[log] trino TRINO_STEP:solid eleven match
+[log] trino TRINO_SE_HASH:0xd51e91bf
+[log] trino TRINO_STEP:golden frames
+[log] trino TRINO_STEP:golden frame showcase 640x480
+[log] trino TRINO_STEP:golden frame castle64_hub 640x480
+[log] trino TRINO_STEP:golden frame texture_formats 640x480
+[log] trino TRINO_FRAME:selftest profile=web avg_us=31083 max_us=2190725 frames=456 fps=32 draws=0 tris=81 pc_gpu_draws=0 pc_gpu_tris=81 instanced=0 off_pc_gpu=water:1,flat_skinned:1,offscreen:1,texture_alpha:1 heap=6518086/152956655
+[log] trino TRINO_AUDIO: state=running rate=44100 resident_bytes=1442194 voices=4 streams=1 stream_bytes=232704 underruns=2 streamed_frames=289258
+[log] trino TRINO_TEST_PASS
+[log] trino TRINO_WEB: adapter="ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver) (Gl)" profile=Web canvas=640x480 dpr=1 msaa=1
+[log] trino TRINO_ASSETS: bytes=456241 sprites=31 ktx2=30 ktx2_gpu=30 ktx2_rgba8=0 target=BC sounds=12 models=106 fonts=1 blobs=11 mixer=true groups=2
+
+===== chromium-webgpu console.log (TRINO lines)
+[log] trino TRINO_WEB: adapter="browser adapter (BrowserWebGpu)" profile=Web canvas=640x480 dpr=1 msaa=4
+[log] trino TRINO_ASSETS: bytes=456241 sprites=31 ktx2=30 ktx2_gpu=30 ktx2_rgba8=0 target=BC sounds=12 models=106 fonts=1 blobs=11 mixer=true groups=2
+[log] trino TRINO_STEP:web selftest start
+[log] trino TRINO_STEP:text
+[log] trino TRINO_STEP:blob
+[log] trino TRINO_STEP:save
+[log] trino TRINO_STEP:textured_3d
+[log] trino TRINO_STEP:textured_3d skipped (no read_pixel)
+[log] trino TRINO_STEP:texture filter and detail
+[log] trino TRINO_STEP:texture formats
+[log] trino TRINO_STEP:billboards
+[log] trino TRINO_STEP:occlusion
+[log] trino TRINO_STEP:fill rect
+[log] trino TRINO_STEP:dual screen
+[log] trino TRINO_STEP:dual screen single screen (collapsed)
+[log] trino TRINO_STEP:smooth skin
+[log] trino TRINO_STEP:palette
+[log] trino TRINO_STEP:instancing
+[log] trino TRINO_STEP:local lights
+[log] trino TRINO_STEP:ambient occlusion
+[log] trino TRINO_STEP:water
+[log] trino TRINO_STEP:impostor
+[log] trino TRINO_STEP:particles
+[log] trino TRINO_STEP:particles cap 24
+[log] trino TRINO_STEP:portals
+[log] trino TRINO_STEP:hw tier
+[log] trino TRINO_STEP:hw tier base ram=0M cores=0 data=base sparks=4
+[log] trino TRINO_STEP:engine ok
+[log] trino TRINO_STEP:audio
+[log] trino TRINO_STEP:input
+[log] trino TRINO_STEP:ktx2 transcode
+[log] trino TRINO_STEP:ktx2 transcode etc1s+uastc decode exact, gpu target BC
+[log] trino TRINO_STEP:asset groups
+[log] trino TRINO_STEP:asset groups downloaded in 2 frames
+[log] trino TRINO_STEP:asset groups ok load_frames=1 level_bytes=1135 heap_baseline=836407 heap_drift=0 cycles=0 soak_frames=0
+[log] trino TRINO_STEP:asset groups took 3ms
+[log] trino TRINO_STEP:asset groups soak frames=240 cycles=120 heap_baseline=836431 heap_drift=0
+[log] trino TRINO_STEP:audio codecs
+[log] trino TRINO_AUDIO: state=running rate=44100 resident_bytes=815468 voices=0 streams=0 stream_bytes=0 underruns=0 streamed_frames=115556
+[log] trino TRINO_STEP:audio codecs ok, 156 frames in 2583 ms (longest gap 16 ms), audio clock 7.933 s: rate=44100 streamed_frames=101048 stream_bytes=199936 resident_bytes=815468 underruns=0
+[log] trino TRINO_STEP:showcase demo
+[log] trino TRINO_STEP:baked scene
+[log] trino TRINO_STEP:castle64
+[log] trino TRINO_STEP:castle64 bot reached the star in 747 frames
+[log] trino TRINO_STEP:solid eleven pack
+[log] trino TRINO_ASSETS: bytes=2179144 sprites=5 ktx2=3 ktx2_gpu=3 ktx2_rgba8=0 target=BC sounds=10 models=197 fonts=2 blobs=0 mixer=false groups=0
+[log] trino TRINO_STEP:solid eleven match
+[log] trino TRINO_SE_HASH:0xd51e91bf
+[log] trino TRINO_STEP:golden frames
+[log] trino TRINO_STEP:golden frame showcase 640x480
+[log] trino TRINO_STEP:golden frame castle64_hub 640x480
+[log] trino TRINO_STEP:golden frame texture_formats 640x480
+[log] trino TRINO_FRAME:selftest profile=web avg_us=31832 max_us=4108695 frames=459 fps=31 draws=0 tris=80 pc_gpu_draws=0 pc_gpu_tris=79 instanced=0 off_pc_gpu=water:1,flat_skinned:1,offscreen:1,texture_alpha:1 heap=3148040/6510987
+[log] trino TRINO_AUDIO: state=running rate=44100 resident_bytes=1442194 voices=3 streams=1 stream_bytes=229632 underruns=2 streamed_frames=264810
+[log] trino TRINO_TEST_PASS
+[log] trino TRINO_WEB: adapter="browser adapter (BrowserWebGpu)" profile=Web canvas=640x480 dpr=1 msaa=4
+[log] trino TRINO_ASSETS: bytes=456241 sprites=31 ktx2=30 ktx2_gpu=30 ktx2_rgba8=0 target=BC sounds=12 models=106 fonts=1 blobs=11 mixer=true groups=2

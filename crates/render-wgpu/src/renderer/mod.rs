@@ -227,6 +227,9 @@ pub struct PcFrameTimes {
     pub upload_bytes: u32,
     /// Screen-space AO passes run (0 or 1: the frame's 3D, once).
     pub ao_passes: u32,
+    /// Pipeline changes between those draw calls (what a browser's
+    /// WebGL2 or WebGPU pays for in JavaScript, issue #47).
+    pub pipeline_switches: u32,
 }
 
 /// Microseconds since `t0`.
@@ -3015,8 +3018,9 @@ impl PcRenderer {
             // the copy is multisampled too.
             let (before, after) = first_part.split_at(at);
             let hold = if ms { MsPass::Hold } else { MsPass::Off };
-            let draws = self.record_segments(&mut encoder, second, before, load, hold);
+            let (draws, switches) = self.record_segments(&mut encoder, second, before, load, hold);
             self.times.draw_calls += draws;
+            self.times.pipeline_switches += switches;
             let (src, dst) = match (&self.msaa_targets, &self.water.ms, ms) {
                 (Some(t), Some(w), true) => (&t.depth_tex, &w.depth_copy),
                 _ => (&self.depth_tex, &self.water.depth_copy),
@@ -3049,8 +3053,9 @@ impl PcRenderer {
         } else {
             MsPass::Off
         };
-        let draws = self.record_segments(&mut encoder, second, first_part, load, end);
+        let (draws, switches) = self.record_segments(&mut encoder, second, first_part, load, end);
         self.times.draw_calls += draws;
+        self.times.pipeline_switches += switches;
         if let (Some((settings, mask)), Some(_)) = (ao, split) {
             let (w, h) = self.internal_size;
             let half = self.camera.fov_y * 0.5;
@@ -3102,7 +3107,7 @@ impl PcRenderer {
                 } else {
                     wgpu::LoadOp::Load
                 };
-                let draws = self.record_segments(
+                let (draws, switches) = self.record_segments(
                     &mut encoder,
                     second,
                     rest,
@@ -3110,6 +3115,7 @@ impl PcRenderer {
                     MsPass::Off,
                 );
                 self.times.draw_calls += draws;
+                self.times.pipeline_switches += switches;
             }
         }
 
@@ -3156,7 +3162,7 @@ impl PcRenderer {
 
     /// One render pass over `segments` into the main target (or the
     /// second screen's), loading or clearing color and depth. Returns the
-    /// GPU draw calls.
+    /// GPU draw calls and the pipeline changes between them.
     fn record_segments(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -3164,7 +3170,7 @@ impl PcRenderer {
         segments: &[Segment],
         (color_load, depth_load): (wgpu::LoadOp<wgpu::Color>, wgpu::LoadOp<f32>),
         ms: MsPass,
-    ) -> u32 {
+    ) -> (u32, u32) {
         let (color_view, depth_view, globals_bg) = match (&self.second, second) {
             (Some(sc), true) => (&sc.view, &sc.depth_view, &sc.globals_bg),
             _ => (&self.offscreen_view, &self.depth_view, &self.globals_bg),
@@ -3212,6 +3218,15 @@ impl PcRenderer {
             ],
         };
         let mut draws = 0;
+        // Pipeline changes: the kind each segment binds (sprites, plain,
+        // clamped, lit, water, GPU T&L), counted when it differs.
+        let (mut last, mut switches) = (u8::MAX, 0u32);
+        let mut bind = |kind: u8| {
+            if kind != last {
+                switches += (last != u8::MAX) as u32;
+                last = kind;
+            }
+        };
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("trino-sprite-pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -3241,6 +3256,7 @@ impl PcRenderer {
                 Segment::Sprites { sprite, instances } => {
                     if let Some(entry) = self.sprites.get(sprite) {
                         pass.set_pipeline(pipes[0]);
+                        bind(0);
                         pass.set_vertex_buffer(0, self.instance_buf.slice(..));
                         pass.set_bind_group(1, &entry.bind_group, &[]);
                         pass.draw(0..4, instances.clone());
@@ -3253,7 +3269,7 @@ impl PcRenderer {
                     texture,
                     kind,
                 } => {
-                    let pipeline = match kind {
+                    let (pipeline, k) = match kind {
                         TriKind::Water => {
                             pass.set_bind_group(2, &self.lights_bg, &[]);
                             let (bg, per_pixel, vertex) = match (&self.water.ms, ms.is_some()) {
@@ -3264,18 +3280,19 @@ impl PcRenderer {
                             // The second screen (3DS profile) is never the
                             // per-pixel tier.
                             if self.caps.water_tier == WaterTier::PerPixel && !second {
-                                per_pixel
+                                (per_pixel, 4)
                             } else {
-                                vertex
+                                (vertex, 4)
                             }
                         }
                         TriKind::Lit => {
                             pass.set_bind_group(2, &self.lights_bg, &[]);
-                            pipes[3]
+                            (pipes[3], 3)
                         }
-                        TriKind::Plain if texture.is_some_and(|t| t.clamp) => pipes[2],
-                        TriKind::Plain => pipes[1],
+                        TriKind::Plain if texture.is_some_and(|t| t.clamp) => (pipes[2], 2),
+                        TriKind::Plain => (pipes[1], 1),
                     };
+                    bind(k);
                     pass.set_pipeline(pipeline);
                     pass.set_vertex_buffer(0, self.tri_buf.slice(..));
                     let bg = texture
@@ -3290,12 +3307,14 @@ impl PcRenderer {
                         let texture = |t: Option<TexKey>| {
                             t.and_then(|t| self.tex3d.get(&t)).unwrap_or(&self.white_bg)
                         };
+                        bind(5);
                         draws += g.record(&mut pass, *first..first + count, ms.is_some(), &texture);
                     }
                 }
             }
         }
-        draws
+        drop(pass);
+        (draws, switches)
     }
 
     /// One instanced GPU T&L draw of `model` (`draw_model_instances` on
@@ -4475,5 +4494,116 @@ mod tnl_setting_tests {
         for v in ["cpu", "0", "off"] {
             assert!(!super::pc_tnl_setting(Some(v)), "{v}");
         }
+    }
+}
+
+#[cfg(test)]
+mod webgl2_tests {
+    use super::*;
+
+    /// Every entry point of `source` through naga's GLSL ES 3.00 backend,
+    /// the one wgpu's GL backend runs in a browser without WebGPU. `Err`
+    /// names the first entry point that doesn't translate.
+    fn glsl_es_300(source: &str) -> Result<usize, String> {
+        use naga::back::glsl;
+        let module = naga::front::wgsl::parse_str(source).map_err(|e| e.emit_to_string(source))?;
+        let info = naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .map_err(|e| format!("{e:?}"))?;
+        let options = glsl::Options {
+            version: glsl::Version::Embedded {
+                version: 300,
+                is_webgl: true,
+            },
+            ..Default::default()
+        };
+        for ep in &module.entry_points {
+            let pipeline = glsl::PipelineOptions {
+                shader_stage: ep.stage,
+                entry_point: ep.name.clone(),
+                multiview: None,
+            };
+            let mut out = String::new();
+            glsl::Writer::new(
+                &mut out,
+                &module,
+                &info,
+                &options,
+                &pipeline,
+                naga::proc::BoundsCheckPolicies::default(),
+            )
+            .and_then(|mut w| w.write().map(|_| ()))
+            .map_err(|e| format!("{}: {e}", ep.name))?;
+        }
+        Ok(module.entry_points.len())
+    }
+
+    /// The scene, AO and GPU T&L shaders as the WebGL2 renderer builds them
+    /// (`depth_as_float`) translate to GLSL ES 3.00, entry point by entry
+    /// point — and the scene shader as written would not: its depth read is
+    /// why the transform exists (the browser's first run failed there).
+    #[test]
+    fn webgl2_shaders_translate_to_glsl_es_300() {
+        for (name, source) in [
+            ("shaders.wgsl", include_str!("shaders.wgsl")),
+            ("ao.wgsl", include_str!("ao.wgsl")),
+            ("shaders_tnl.wgsl", include_str!("shaders_tnl.wgsl")),
+            ("depth_blit", depth_blit::SHADER),
+        ] {
+            let n = glsl_es_300(&depth_as_float(source)).unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert!(n > 0, "{name}");
+        }
+        let raw = glsl_es_300(include_str!("shaders.wgsl")).unwrap_err();
+        assert!(raw.contains("fs_water"), "{raw}");
+    }
+
+    /// The transform adds one nearest sampler per depth texture, at the
+    /// binding the bind groups give it, and reads the red channel.
+    #[test]
+    fn depth_reads_go_through_the_nearest_sampler() {
+        let water = depth_as_float(include_str!("shaders.wgsl"));
+        assert!(!water.contains("texture_depth_2d"));
+        let (water_slot, ao_slot) = NEAREST_DEPTH_BINDING;
+        assert!(
+            water.contains(&format!(
+                "@group(3) @binding({water_slot}) var s_t_scene_depth: sampler;"
+            )),
+            "the water's sampler"
+        );
+        assert!(water.contains("textureSampleLevel(t_scene_depth, s_t_scene_depth"));
+        let ao = depth_as_float(include_str!("ao.wgsl"));
+        assert!(ao.contains(&format!(
+            "@group(0) @binding({ao_slot}) var s_t_depth: sampler;"
+        )));
+        // A shader without a depth read is left as it was.
+        let tnl = include_str!("shaders_tnl.wgsl");
+        assert_eq!(
+            depth_as_float(tnl),
+            tnl.replace("texture_depth_2d", "texture_2d<f32>")
+        );
+        assert_eq!(
+            depth_sample_type(true),
+            wgpu::TextureSampleType::Float { filterable: false }
+        );
+        assert_eq!(depth_sample_type(false), wgpu::TextureSampleType::Depth);
+    }
+
+    #[test]
+    fn web_backends_parse_from_the_page_query() {
+        assert_eq!(WebBackend::parse("auto"), Some(WebBackend::Auto));
+        assert_eq!(WebBackend::parse("WebGPU"), Some(WebBackend::WebGpu));
+        assert_eq!(WebBackend::parse("webgl"), Some(WebBackend::WebGl2));
+        assert_eq!(WebBackend::parse("vulkan"), None);
+        // ETC2 and ASTC uploads for phones, by their device features.
+        assert_eq!(CompressedFormat::Etc2Rgb8.block_bytes(), 8);
+        assert_eq!(CompressedFormat::Astc4x4.block_bytes(), 16);
+        assert_eq!(
+            CompressedFormat::Astc4x4.feature(),
+            wgpu::Features::TEXTURE_COMPRESSION_ASTC
+        );
+        assert!(CompressedFormat::Bc7.is_bc() && !CompressedFormat::Etc2Rgba8.is_bc());
     }
 }

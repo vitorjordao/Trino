@@ -26,6 +26,9 @@ const base = opt("--url", "http://127.0.0.1:8080/");
 const out = opt("--out", "target/web-test");
 const browsers = opt("--browsers", "chromium,firefox,webkit").split(",");
 const headed = args.includes("--headed");
+// --smoke: a project without the engine's self-test (`?frames=N` runs its
+// game and stops): no save or golden checks, the rest the same.
+const smoke = args.includes("--smoke");
 const timeoutMs = Number(process.env.TRINO_WEB_TIMEOUT || 900) * 1000;
 
 // Chromium runs twice: WebGPU (its primary API; SwiftShader's Vulkan on a
@@ -90,7 +93,8 @@ for (const run of plan) {
     page.on("pageerror", (e) => log.push(`[pageerror] ${e.message}`));
 
     // 1) The self-test.
-    await page.goto(`${base}?selftest&backend=${run.backend}&size=640x480`);
+    const first = smoke ? "?frames=120" : "?selftest";
+    await page.goto(`${base}${first}&backend=${run.backend}&size=640x480`);
     await page.waitForFunction(() => globalThis.__trino && globalThis.__trino.done, null, {
       timeout: timeoutMs,
       polling: 500,
@@ -116,12 +120,13 @@ for (const run of plan) {
       // 2) The save the self-test wrote is still there after a reload,
       // and the game reads it (castle64 boots with it).
       const saved = await page.evaluate(() => localStorage.getItem("trino-save:selftest"));
-      await page.goto(`${base}?game=castle64&backend=${run.backend}&size=640x480`);
+      const game = smoke ? "" : "game=castle64&";
+      await page.goto(`${base}?${game}backend=${run.backend}&size=640x480`);
       await page.waitForFunction(() => globalThis.__trino && globalThis.__trino.info.frames > 5, null, {
         timeout: 120000,
       });
       const after = await page.evaluate(() => localStorage.getItem("trino-save:selftest"));
-      r.save_persisted = saved !== null && saved === after;
+      r.save_persisted = smoke || (saved !== null && saved === after);
 
       // 3) Audio: suspended until a gesture, running after a click.
       r.audio_before = await page.evaluate(() => globalThis.__trino.info.audio);

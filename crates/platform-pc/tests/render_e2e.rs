@@ -925,6 +925,43 @@ fn large_frames_grow_buffers_and_batches_mix_textures() {
     );
 }
 
+/// The frame's GPU calls and the pipeline changes between them
+/// (`PcFrameTimes::draw_calls`, `pipeline_switches`): what a browser pays
+/// for in JavaScript, and what the editor's Web Game view shows (issue #47).
+#[test]
+fn frame_times_count_calls_and_pipeline_switches() {
+    let Some(mut r) = headless(SimProfile::Web) else {
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let assets = bake_project(dir.path());
+    upload(&assets, &mut r, None);
+    // Sprites only: one pipeline, no change.
+    r.begin_frame(CLEAR);
+    r.fill_rect(Rect::new(0.0, 0.0, 8.0, 8.0), Color::WHITE);
+    r.end_frame();
+    let t = r.frame_times();
+    assert!(t.draw_calls >= 1, "{t:?}");
+    assert_eq!(t.pipeline_switches, 0, "{t:?}");
+    // A 3D model, then a sprite over it: 3D, then back to 2D.
+    r.begin_frame(CLEAR);
+    r.set_camera(&camera());
+    r.set_light(&light(Color::WHITE, Fog::NONE));
+    r.set_hw_tnl(false);
+    r.draw_model(
+        model(TBOX),
+        &Transform3::default(),
+        Material::VertexLit,
+        &ModelParams::DEFAULT,
+    );
+    r.fill_rect(Rect::new(0.0, 0.0, 8.0, 8.0), Color::WHITE);
+    r.end_frame();
+    let t = r.frame_times();
+    assert!(t.draw_calls >= 2, "{t:?}");
+    assert!(t.pipeline_switches >= 1, "{t:?}");
+    assert!(t.pipeline_switches < t.draw_calls, "{t:?}");
+}
+
 /// Color slots and a per-draw palette (TMDL `SLOT`, `ModelParams::palette`):
 /// one white card baked with two slot regions, drawn with two different
 /// palettes and without one. The two halves take their palette entries;

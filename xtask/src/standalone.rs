@@ -277,7 +277,12 @@ mod tests {
             let p = crate::project::Project::load(&dest).unwrap();
             assert_eq!(p.name, "my-game");
             assert_eq!(p.pc_package, "my-game-pc");
-            assert_eq!(p.platforms, crate::project::Target::ALL);
+            assert_eq!(
+                p.platforms,
+                crate::project::Target::ALL,
+                "new projects list the Web"
+            );
+            assert_eq!(p.web_package, "my-game-web");
         }
     }
 }

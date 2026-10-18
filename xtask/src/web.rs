@@ -111,10 +111,12 @@ pub fn bindgen_version(engine: &Path) -> Result<String, String> {
     Err("Cargo.lock has no wasm-bindgen: the Web crates are missing".into())
 }
 
-/// The `wasm-bindgen` CLI at `version`: `$TRINO_WASM_BINDGEN`, the one on
-/// PATH when its version matches, `target/tools`, else installed there.
-fn ensure_bindgen(engine: &Path) -> Result<PathBuf, String> {
-    let version = bindgen_version(engine)?;
+/// The `wasm-bindgen` CLI at the version the project's `Cargo.lock` pins (the
+/// engine's for the engine): `$TRINO_WASM_BINDGEN`, the one on PATH when its
+/// version matches, the engine's `target/tools`, else installed there.
+fn ensure_bindgen(project: &Project) -> Result<PathBuf, String> {
+    let engine = &project.engine;
+    let version = bindgen_version(&project.root).or_else(|_| bindgen_version(engine))?;
     let matches = |bin: &Path| {
         Command::new(bin)
             .arg("--version")
@@ -268,7 +270,7 @@ pub fn build(project: &Project, opts: &BuildOptions) -> ExitCode {
 
 fn build_inner(project: &Project, opts: &BuildOptions) -> Result<PathBuf, String> {
     ensure_target()?;
-    let bindgen = ensure_bindgen(&project.engine)?;
+    let bindgen = ensure_bindgen(project)?;
     let out = opts
         .out
         .clone()
@@ -549,6 +551,11 @@ fn test_inner(project: &Project, opts: &TestOptions) -> Result<(), String> {
     if opts.headed {
         cmd.arg("--headed");
     }
+    // A project has no engine self-test: its game runs N frames instead,
+    // and the engine's goldens don't apply.
+    if !project.is_engine {
+        cmd.arg("--smoke");
+    }
     let harness_ok = cmd.status().is_ok_and(|s| s.success());
 
     // The goldens, per browser run that produced frames.
@@ -577,7 +584,8 @@ fn test_inner(project: &Project, opts: &TestOptions) -> Result<(), String> {
             ));
             continue;
         }
-        for golden in GOLDENS {
+        let goldens: &[&str] = if project.is_engine { &GOLDENS } else { &[] };
+        for golden in goldens {
             let png = out.join(&name).join(format!("{golden}.png"));
             let img = match crate::fbgolden::read_png(&png) {
                 Ok(i) => i,

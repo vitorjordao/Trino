@@ -140,15 +140,15 @@ pub fn ui(
         });
         // Where this level starts on each platform: one row when it fits,
         // a row per platform in a narrow inspector.
-        if ui.available_width() >= 360.0 {
+        if ui.available_width() >= 470.0 {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 3.0;
-                for t in [Target::N64, Target::N3ds, Target::Pc] {
+                for t in PLATFORMS {
                     changed |= platform_at(ui, n, t, level);
                 }
             });
         } else {
-            for t in [Target::N64, Target::N3ds, Target::Pc] {
+            for t in PLATFORMS {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 3.0;
                     changed |= platform_at(ui, n, t, level);
@@ -222,12 +222,15 @@ pub fn ui(
 
 /// One platform's start of level `n`: same as the level, its own
 /// distance, or never there.
+/// The platforms a level's start row shows, the consoles first.
+const PLATFORMS: [Target; 4] = [Target::N64, Target::N3ds, Target::Pc, Target::Web];
+
 fn platform_at(ui: &mut egui::Ui, n: usize, t: Target, level: &mut LodDef) -> bool {
     let mut changed = false;
     let base = level.distance;
     let slot = level.platforms.get_mut(t);
     let shown = match slot {
-        None => "=".to_string(),
+        None => (if t == Target::Web { "=PC" } else { "=" }).to_string(),
         Some(LodAt::At(_)) => "at".to_string(),
         Some(LodAt::Never) => "never".to_string(),
     };
@@ -246,7 +249,12 @@ fn platform_at(ui: &mut egui::Ui, n: usize, t: Target, level: &mut LodDef) -> bo
         .selected_text(shown)
         .width(54.0)
         .show_ui(ui, |ui| {
-            for (m, text) in ["= level", "own distance", "never"].into_iter().enumerate() {
+            let same = if t == Target::Web {
+                "= the PC"
+            } else {
+                "= level"
+            };
+            for (m, text) in [same, "own distance", "never"].into_iter().enumerate() {
                 if ui.selectable_label(mode == m, text).clicked() && mode != m {
                     *slot = match m {
                         0 => None,
@@ -262,6 +270,10 @@ fn platform_at(ui: &mut egui::Ui, n: usize, t: Target, level: &mut LodDef) -> bo
             Target::N64 => {
                 "On the N64 an impostor is CPU-submitted (~44 µs): measure before \
                  switching to it early — or skip the level there"
+            }
+            Target::Web => {
+                "Where this level starts in a browser: the PC's start unless the Web \
+                 has its own"
             }
             _ => "Where this level starts on this platform",
         })

@@ -193,8 +193,8 @@ fn inspect_reports_each_platform() {
     let dir = tempfile::tempdir().unwrap();
     let root = project(dir.path());
     let r = texture::inspect(&root, "sprites/etc1", &Platform::ALL).unwrap();
-    assert_eq!(r.len(), 3);
-    let (pc, n64, n3ds) = (&r[0], &r[1], &r[2]);
+    assert_eq!(r.len(), 4);
+    let (pc, n64, n3ds, web) = (&r[0], &r[1], &r[2], &r[3]);
     // The PC is `auto` by default: a color image with an alpha ramp takes
     // a byte a texel (BC3 or BC7, whichever keeps more).
     assert!(pc.auto && pc.format.starts_with("BC"), "{}", pc.reason);
@@ -208,6 +208,18 @@ fn inspect_reports_each_platform() {
     assert_eq!((n64.format.as_str(), n64.bytes), ("RGBA5551", 8192));
     assert!(n64.share_percent().unwrap() > 100.0);
     assert!(n64.note.as_deref().unwrap().contains("TMEM bytes > 4096"));
+    // The Web is `auto` too: a KTX2 (Basis Universal) file, measured
+    // through Binomial's own decode; its bytes are the download, its
+    // memory the VRAM once transcoded (alpha: a byte a texel).
+    assert!(
+        web.auto && web.format.starts_with("KTX2-"),
+        "{}",
+        web.reason
+    );
+    assert!(web.psnr.unwrap() >= 35.0, "{:?}", web.psnr);
+    assert!(web.bytes < 64 * 64 * 4);
+    assert_eq!((web.memory, web.memory_bytes), ("VRAM", 64 * 64));
+    assert_eq!(web.candidates.len(), 3, "ETC1S, UASTC, RGBA8");
     assert!(texture::inspect(&root, "sprites/ghost", &Platform::ALL).is_err());
     assert!(texture::inspect(&root, "models/x", &Platform::ALL).is_err());
 }

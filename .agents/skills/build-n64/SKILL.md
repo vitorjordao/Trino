@@ -48,7 +48,7 @@ in matching pairs and keep the restriction. Never call libdragon directly from R
 - **16-bit output**: `trino_mode_standard()` sets magic-square RGB dither, and the VI
   runs with `FILTERS_RESAMPLE_ANTIALIAS_DEDITHER`. The PC N64 look emulates exactly
   this, so a change here needs the matching change in
-  `crates/platform-pc/src/renderer/shaders.wgsl`, and then
+  `crates/render-wgpu/src/renderer/shaders.wgsl`, and then
   `cargo xtask test n64 --bless` plus the `n64_parity` test.
 - **Saves**: EEPROM 16 Kbit (`ed64romconfig --savetype eeprom16k`), framed by
   `trino_core::save`.

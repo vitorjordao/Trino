@@ -110,7 +110,7 @@ evidence; this ADR records the first one and the shape the rest must keep.
 
 ### 6. Phase 2: the WGSL vertex stage, resident meshes, the oracle
 
-- `crates/platform-pc/src/renderer/shaders_tnl.wgsl` + `gpu_tnl.rs`. A mesh is
+- `crates/render-wgpu/src/renderer/shaders_tnl.wgsl` + `gpu_tnl.rs` (in `crates/platform-pc` until the Web target, issue 47, moved the renderer into the crate both backends share). A mesh is
   uploaded once, at `upload_mesh`, as a vertex buffer of one vertex per triangle
   corner (`MeshVertex`, 56 bytes: position, normal, the triangle's face cross
   product for flat shading, color, UV, joint pair, slot, weight). Per draw the

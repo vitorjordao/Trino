@@ -57,10 +57,13 @@ fn help_and_no_arguments_list_every_command() {
     assert!(help.status.success());
     let text = stdout(&help);
     for cmd in [
-        "build <pc|n64|3ds>",
-        "run   <pc|n64|3ds>",
-        "test  [pc|n64|3ds]",
-        "assets <pc|n64|3ds>",
+        "build <pc|n64|3ds|web>",
+        "run   <pc|n64|3ds|web>",
+        "test  [pc|n64|3ds|web]",
+        "assets <pc|n64|3ds|web>",
+        "build web [--release] [--out <dir>]",
+        "run web [--release] [--port N]",
+        "test web [--headed]",
         "watch <pc|n64>",
         "editor",
         "emulators setup ares|azahar",
@@ -279,6 +282,25 @@ fn agents_check_passes_on_the_clean_tree_and_rejects_unknown_subcommands() {
         &xtask(&["agents", "frob"]),
         "usage: cargo xtask agents <sync|check>",
     );
+}
+
+/// `assets web`: the Web bake (issue #47), KTX2 beside the masters.
+#[test]
+fn assets_web_bakes_ktx2_textures() {
+    let o = xtask(&["assets", "web"]);
+    assert!(o.status.success(), "{}", stderr(&o));
+    assert!(stdout(&o).contains("for web into"), "{}", stdout(&o));
+    let dir = root().join("target/assets/web");
+    let index = std::fs::read_to_string(dir.join("index.toml")).unwrap();
+    let ktx2: Vec<&str> = index
+        .lines()
+        .filter_map(|l| l.strip_prefix("ktx2 = \"")?.strip_suffix('"'))
+        .collect();
+    assert!(!ktx2.is_empty(), "no KTX2 texture in the Web bake");
+    for f in ktx2 {
+        let bytes = std::fs::read(dir.join(f)).unwrap();
+        trino_asset_pipeline::texture::ktx2::parse(&bytes).unwrap_or_else(|e| panic!("{f}: {e}"));
+    }
 }
 
 #[test]

@@ -109,6 +109,17 @@ impl PlatformVariants {
         }
     }
 
+    /// The variant written for `target` itself, without the Web's fallback
+    /// to the PC (what a file stores; the editor counts these).
+    pub fn own(&self, target: Target) -> Option<&Variant> {
+        match target {
+            Target::Pc => self.pc.as_ref(),
+            Target::N64 => self.n64.as_ref(),
+            Target::N3ds => self.n3ds.as_ref(),
+            Target::Web => self.web.as_ref(),
+        }
+    }
+
     /// The variant written for `target` itself (no fallback): what the
     /// editor's column edits.
     pub fn get_mut(&mut self, target: Target) -> &mut Option<Variant> {

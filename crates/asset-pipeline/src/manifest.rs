@@ -674,6 +674,51 @@ mod tests {
     }
 
     #[test]
+    fn the_web_takes_the_pcs_choices_and_its_own_formats() {
+        let m = manifest(
+            r#"
+            version = 1
+            [models.big]
+            file = "big.glb"
+            platforms = ["pc"]
+            [models.tiny]
+            file = "tiny.glb"
+            platforms = ["n64"]
+            [models.own]
+            file = "own.glb"
+            platforms = ["web"]
+            [sprites.s]
+            file = "s.png"
+            formats = { web = "KTX2-ETC1S", pc = "BC1" }
+            "#,
+        );
+        // A PC-only model is a Web model; a console-only one is not.
+        assert!(m.models["big"].bakes_for(Platform::Web));
+        assert!(!m.models["big"].bakes_for(Platform::N64));
+        assert!(!m.models["tiny"].bakes_for(Platform::Web));
+        assert!(
+            m.models["own"].bakes_for(Platform::Web) && !m.models["own"].bakes_for(Platform::Pc)
+        );
+        // Texture formats are the Web's own (no fallback: BC1 is not one).
+        assert_eq!(
+            m.sprites["s"].format_for("s", Platform::Web).unwrap(),
+            "KTX2-ETC1S"
+        );
+        let bad = manifest(
+            "version = 1
+[sprites.s]
+file = \"s.png\"
+formats = { web = \"BC1\" }
+",
+        );
+        let e = bad.sprites["s"].format_for("s", Platform::Web).unwrap_err();
+        assert!(e.contains("KTX2-UASTC"), "{e}");
+        assert_eq!(Platform::parse("web"), Some(Platform::Web));
+        assert_eq!(Platform::Web.fallback(), Some(Platform::Pc));
+        assert_eq!(Platform::Web.default_texture_format(), Some("auto"));
+    }
+
+    #[test]
     fn parses_minimal_manifest() {
         let m = manifest(
             r#"

@@ -66,11 +66,12 @@ fn entity(app: &mut App, ui: &mut egui::Ui, path: &[usize]) {
     // The entity's render path on each platform (the budget's estimate
     // from the scene camera; issue #51's "Render path" row).
     let render_paths = app.budgets.as_ref().zip(app.doc.scene.draw_name(path)).map(
-        |((_, [n64, n3ds, pc]), name)| {
+        |((_, [n64, n3ds, pc, web]), name)| {
             [
                 ("PC", trino_scene::Target::Pc, pc.path_of(&name)),
                 ("N64", trino_scene::Target::N64, n64.path_of(&name)),
                 ("3DS", trino_scene::Target::N3ds, n3ds.path_of(&name)),
+                ("Web", trino_scene::Target::Web, web.path_of(&name)),
             ]
         },
     );
@@ -773,10 +774,10 @@ fn entity(app: &mut App, ui: &mut egui::Ui, path: &[usize]) {
         e.vis = None;
     }
 
-    // Per-platform variants (PC / N64 / 3DS columns).
+    // Per-platform variants (PC / N64 / 3DS / Web columns).
     let variants = Target::ALL
         .iter()
-        .filter(|t| e.platforms.get(**t).is_some())
+        .filter(|t| e.platforms.own(**t).is_some())
         .count();
     let title = if variants == 0 {
         "Platforms".to_string()
@@ -1919,7 +1920,7 @@ fn render_path_row(
         &str,
         trino_scene::Target,
         Option<trino_scene::budget::RenderPath>,
-    ); 3],
+    ); 4],
 ) {
     use trino_scene::budget::RenderPath;
     let faint = |text: String| RichText::new(text).size(11.5).color(c::TEXT_FAINT);
@@ -1932,7 +1933,7 @@ fn render_path_row(
         })
         .show(ui, |ui| {
             ui.label(faint("Render path".into()));
-            // Wrapped, never squeezed: three pills don't fit a 960 px window's
+            // Wrapped, never squeezed: four pills don't fit a 960 px window's
             // Inspector on one line.
             ui.horizontal_wrapped(|ui| {
                 for (name, target, path) in paths {
@@ -2175,14 +2176,14 @@ fn ambient_occlusion(ui: &mut egui::Ui, ao: &mut Option<trino_scene::AmbientOccl
 
 fn budget_section(
     ui: &mut egui::Ui,
-    budgets: &[trino_scene::budget::FrameBudget; 3],
+    budgets: &[trino_scene::budget::FrameBudget; 4],
     tmem: &std::collections::BTreeMap<u32, Option<u32>>,
     open: bool,
 ) -> Option<String> {
     let line = |ui: &mut egui::Ui, text: String, color: egui::Color32| {
         ui.add(egui::Label::new(RichText::new(text).size(12.0).color(color)).truncate());
     };
-    let [n64, n3ds, pc] = budgets;
+    let [n64, n3ds, pc, web] = budgets;
     let mut picked = None;
     let pct = n64.n64_frame_percent();
     line(
@@ -2247,6 +2248,12 @@ fn budget_section(
     line(ui, trino_scene::budget::pc_gpu_line(pc), c::TEXT_WEAK);
     for (r, n) in &pc.off_pc_gpu {
         reason_list(ui, &mut picked, pc, "off the PC GPU", r.label(), *n, open);
+    }
+    // The Web (issue #47): the PC's GPU split on the browser's GPU, and
+    // the calls a browser pays for, warned past a phone's budget.
+    line(ui, trino_scene::budget::web_line(web), c::TEXT_WEAK);
+    for w in trino_scene::budget::web_warnings(web) {
+        line(ui, w, c::WARN);
     }
     // Water (ADR 0015): what the N64 tier spends on each surface.
     let tmem = |id: trino_core::SpriteId| tmem.get(&id.0).copied().flatten();

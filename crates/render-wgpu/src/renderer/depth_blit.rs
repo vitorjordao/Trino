@@ -5,7 +5,7 @@
 //! full-screen triangle reads each depth texel (as a float texture,
 //! [`super::depth_as_float`]) and writes it as `frag_depth`.
 
-const SHADER: &str = r#"
+pub(super) const SHADER: &str = r#"
 @group(0) @binding(0) var t_src: texture_2d<f32>;
 @group(0) @binding(1) var s_src: sampler;
 

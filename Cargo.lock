@@ -3996,6 +3996,7 @@ name = "trino-render-wgpu"
 version = "0.2.0-dev.1"
 dependencies = [
  "bytemuck",
+ "naga",
  "pollster",
  "trino-core",
  "web-sys",

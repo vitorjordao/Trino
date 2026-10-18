@@ -97,8 +97,15 @@ pub const WEB_TRIS_WARN: u32 = 250_000;
 /// switches`.
 pub fn web_line(b: &FrameBudget) -> String {
     format!(
-        "Web {} calls · {} pipelines · {} switches",
-        b.web.calls, b.web.pipelines, b.web.switches
+        "Web {} calls · {} pipelines · {} {}",
+        b.web.calls,
+        b.web.pipelines,
+        b.web.switches,
+        if b.web.switches == 1 {
+            "switch"
+        } else {
+            "switches"
+        }
     )
 }
 

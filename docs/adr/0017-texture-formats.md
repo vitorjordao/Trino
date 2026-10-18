@@ -2,8 +2,8 @@
 
 Status: accepted (October 2026, GitHub #52). Phases 1–4 of the issue's roadmap are
 implemented (§1–5: 3DS formats and `texture inspect`; §6: `auto` and the PSNR guard;
-§7: PC BCn; §8: the editor's texture inspector). Phase 5, Web KTX2, belongs to the web
-target and moves to its issue (#47).
+§7: PC BCn; §8: the editor's texture inspector). Phase 5, Web KTX2, landed with the
+web target (#47, [ADR 0018](0018-web-target.md)): §9.
 
 ## Context
 
@@ -142,6 +142,44 @@ choice and why, every candidate with bytes and PSNR, the decoded preview against
 master, and the share of the platform's texture memory. Its controls write the
 manifest through `manifest::edit::set_texture_format` / `set_texture_key`, which touch
 one key and keep the rest of the file as written, and the watcher rebakes.
+
+### 9. The Web: KTX2 (Basis Universal), transcoded in the browser
+
+A browser's GPU is unknown until the page runs: desktops sample BC, phones ETC2 or
+ASTC, some nothing compressed. So the Web bakes one universal file per texture and the
+page transcodes it, once at load, to what its GPU samples.
+
+| Web format | What it is | Download | VRAM once transcoded |
+|---|---|---|---|
+| `KTX2-ETC1S` | BasisLZ-supercompressed ETC1S | smallest (often < 1 bit a texel) | BC1 / ETC2 RGB (½ byte a texel); with alpha BC3 / ETC2 RGBA (1) |
+| `KTX2-UASTC` | UASTC 4×4 blocks | 1 byte a texel | BC7 / ASTC 4×4 / ETC2 (1 byte a texel) |
+| `RGBA8` | the master | 4 bytes a texel | 4 bytes a texel |
+
+- **Encoder:** Binomial's own (`basis-universal` crate, a host tool: the bake, `texture
+  inspect|report`, the editor), one thread, fixed settings (ETC1S at its top quality
+  level, UASTC at the default level, sRGB), so a bake writes the same bytes every time.
+  Its `.basis` output is moved into a KTX2 container by `texture::ktx2::basis_to_ktx2`,
+  the way the encoder's own `create_ktx2_file` does (the ETC1S codebooks and Huffman
+  tables become the BasisLZ global data; the KTX2 key/value data is left out).
+- **Decoder:** the same transcoder compiled to WebAssembly in the browser
+  (`apps/web/vendor/basis`, three.js's build of Binomial's `webgl/transcoder`), natively
+  in the tools. `auto` and `min_psnr` measure the transcoder's RGBA8 decode against the
+  master (§6), so the PSNR a bake reports is the picture a browser without compressed
+  textures shows; a GPU format adds only its own block quantization. The browser
+  self-test's `ktx2 transcode` step proves it: both modes of a fixture decode in the
+  browser exactly as they did in the bake.
+- **`auto` on the Web** (the default) takes the smallest download that keeps the
+  threshold: ETC1S, else UASTC, else RGBA8. Like BC, a KTX2 texture needs sides that are
+  multiples of 4 (the GPU formats it becomes); others stay RGBA8.
+- **Runtime:** `trino_platform_web` picks BC (BC1/BC3 for ETC1S, BC7 for UASTC) when the
+  device has `TEXTURE_COMPRESSION_BC`, else ETC2, else ASTC 4×4, else RGBA8, and uploads
+  through `PcRenderer::upload_sprite_compressed`, which now takes ETC2 and ASTC blocks too.
+  A texture the device refuses is uploaded decoded.
+- **Reports:** `texture inspect|report --platform web` give the download as `bytes` and
+  the VRAM as the memory share (against `Caps::WEB.texture_memory_bytes`); the editor's
+  texture inspector has a Web column; the platform budget a "Textures Web" line.
+- **Overrides:** the Web resolves `assets/web/` then the PC's `assets/pc/`, then
+  `assets/shared/`; a model whose `platforms` list names `pc` bakes for the Web too.
 
 ## Consequences
 

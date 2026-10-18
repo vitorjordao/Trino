@@ -48,9 +48,16 @@ shipping a 3D game first**, then by cost:
 
 ### P1 — the next quality and reach jump
 
-- **Web KTX2 textures (#52 phase 5, moved to #47)** (S, after `platform-web`). The web
-  target's texture path: KTX2/Basis transcoded to what the browser's GPU samples, with
-  `auto` and `min_psnr` deciding like the other targets (ADR 0017 §6).
+- **Web target follow-ups (#47, ADR 0018)** (S–M each).
+  - Opus/Vorbis sounds in the packs (#53): Solid Eleven's pack is 3.07 MB, mostly
+    16-bit PCM.
+  - Lazy asset bundles (#56): the page downloads every pack before the first frame.
+  - `wasm-opt` on the release wasm (~4.5 MB before compression), and wasm threads
+    (they need COOP/COEP from the host).
+  - A real-device pass on Safari (macOS/iOS) and a phone GPU: CI runs Playwright's
+    WebKit on WebGL2 only.
+  - Pixel probes in the browser's `engine_checks`: no synchronous read-back, so they
+    are `skipped` there (the goldens cover the pixels).
 - **PC GPU T&L for the draws it still rejects (#51 follow-up, ADR 0016 §11)** (M).
   Translucent draws (the painter order per triangle), water and per-pixel lit draws
   stay on the CPU path. A per-pixel lit GPU path would compute the lit pipeline's
@@ -195,6 +202,25 @@ shipping a 3D game first**, then by cost:
   time) and bless `tests/perf/` on purpose. Host benches stay as regression guards only.
 
 ---
+
+## Done — the Web target: WebGPU with a WebGL2 fallback, KTX2 textures, browser CI (2026-10-18, branch `feat/47-web-target`, GitHub #47 and #52 phase 5, ADR 0018)
+
+| Item | Evidence |
+|---|---|
+| `trino-render-wgpu`: the PC renderer (GPU T&L of #51 included) shared by the PC and the browser; `platform-pc` re-exports it | `dep_graph`, every PC golden unchanged, `web_parity` (PC frame vs browser golden: mean 0.15 / 0.06 / 0.14) |
+| `trino-platform-web` + `apps/web`: canvas, input (keyboard, pointer lock, gamepad), Web Audio, `localStorage` saves, packs (`TPAK`), fullscreen; castle64, showcase and Solid Eleven by `?game=` | the browser self-test (`?selftest`): engine checks, audio, castle64 bot star, `TRINO_SE_HASH` equal to the native one |
+| WebGL2: no MSAA, depth through `depth_as_float` + a nearest sampler, `depth_blit` (GL can't copy depth) | `webgl2_shaders_translate_to_glsl_es_300`, `depth_reads_go_through_the_nearest_sampler`, the WebGL2 goldens |
+| KTX2 (ETC1S/UASTC) baked with Basis Universal, `auto` by download size, transcoded in the browser to BC/ETC2/ASTC/RGBA8 (#52 phase 5) | `ktx2` unit tests, `cli::assets_web_bakes_ktx2_textures`, the self-test's `ktx2 transcode` (bit-exact against the native transcoder) |
+| `cargo xtask build/run/test/assets web`, Playwright harness: Chromium WebGL2 + WebGPU, Firefox, WebKit; goldens `tests/golden/web/` | the CI `web` job; locally all four runs pass, goldens within 0.12/255 |
+| Data: `Target::Web` (scene v4, prefab v3, particles v2) falling back to the PC; `Caps::WEB`; the Web budget (calls, pipelines, switches) in `scene budget` and the editor | `platform_variants::the_web_resolves_like_the_pc_unless_it_has_its_own_variant`, `scene_budget::the_web_warns_past_a_phones_budget` |
+| Editor: Web profile and canvas presets in the Game view, Web column in Platforms/LOD/texture inspector, Run in Browser / Export Web Package | `ui_tests::platform_variants_reach_the_game_view_and_the_file`, `texture_inspector_formats_quality_and_errors` |
+| `trino.toml` `targets = [..., "web"]` and `[web]`; the standalone template's `web/` host | `project::the_web_section_names_the_host_canvas_and_title`; a standalone castle64 project passes `test web` (CI) |
+
+Packs: castle64 + showcase 868 KB (30 KTX2 textures), Solid Eleven 3.07 MB. Release wasm
+5.2 MB with the self-test (4.5 MB standalone), before compression. 600 frames headless,
+960×540: Chromium WebGPU (real GPU) 57 fps on all three games (rAF-paced); Firefox 41 fps
+(its headless rAF pacing); WebKit 65 fps; Chromium WebGL2 on SwiftShader (a CPU
+rasterizer) 59 fps showcase, 22 castle64, 18 Solid Eleven.
 
 ## Done — texture formats, phases 2–4: `auto`, PC BCn, the editor's texture inspector (2026-10-18, branch `feat/52-texture-formats-phases-2-5`, GitHub #52, ADR 0017)
 

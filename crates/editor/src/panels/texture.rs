@@ -193,7 +193,7 @@ fn settings(
 fn row(
     ui: &mut egui::Ui,
     title: &str,
-    widths: (f32, f32),
+    widths: (f32, f32, usize),
     mut cell: impl FnMut(&mut egui::Ui, usize),
 ) {
     ui.horizontal(|ui| {
@@ -206,7 +206,7 @@ fn row(
                 ui.add(egui::Label::new(RichText::new(title).color(c::TEXT_WEAK)).truncate());
             },
         );
-        for i in 0..3 {
+        for i in 0..widths.2 {
             ui.allocate_ui_with_layout(
                 egui::vec2(widths.1, 20.0),
                 egui::Layout::left_to_right(egui::Align::Center),
@@ -238,11 +238,12 @@ fn psnr_color(r: &TextureReport, preset: f64) -> Color32 {
 
 fn grid(ui: &mut egui::Ui, logical: &str, insp: &crate::textures::Inspection, cmds: &mut Vec<Cmd>) {
     let label_w = 60.0;
-    let col_w = ((ui.available_width() - label_w - 3.0 * 4.0) / 3.0).floor();
-    let widths = (label_w, col_w);
+    let n = insp.columns.len().max(1);
+    let col_w = ((ui.available_width() - label_w - n as f32 * 4.0) / n as f32).floor();
+    let widths = (label_w, col_w, n);
     let cols = &insp.columns;
     let preset = insp.settings.quality.min_psnr();
-    // A narrow panel can't show a format in a third of its width: one
+    // A narrow panel can't show a format in one column: one
     // full-width combo per platform above the grid instead.
     let narrow = col_w < 90.0;
     if narrow {

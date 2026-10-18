@@ -518,6 +518,12 @@ pub fn run_game<G: Game + 'static>(
             return fail(&e);
         }
         let mut game = make(host.screen());
+        // `?frames=N`: a smoke run (`cargo xtask test web` on a project),
+        // like the PC's TRINO_SMOKE_FRAMES.
+        let smoke = Query::from_location()
+            .get("frames")
+            .and_then(|f| f.parse::<u64>().ok());
+        let mut frames = 0u64;
         run(host, move |host, dt| {
             if let Some(screen) = host.sync_size() {
                 game.resize(screen);
@@ -526,6 +532,12 @@ pub fn run_game<G: Game + 'static>(
             game.update_with(&mut host.platform, &input, &mut host.audio, dt);
             game.render(&mut host.renderer);
             host.end_frame();
+            frames += 1;
+            if smoke.is_some_and(|n| frames >= n) {
+                crate::js::log(&host.meter.line("game"));
+                crate::js::trino_finish(true, None);
+                return Flow::Stop;
+            }
             Flow::Continue
         });
     });

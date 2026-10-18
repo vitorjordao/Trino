@@ -1,7 +1,7 @@
 # Trino — Agent Guide
 
-Trino is a Rust game engine targeting **Nintendo 64, Nintendo 3DS and PC** from a single
-codebase, with a visual editor, console-simulation modes, live reload and emulator-based
+Trino is a Rust game engine targeting **Nintendo 64, Nintendo 3DS, PC and the Web** from a
+single codebase, with a visual editor, console-simulation modes, live reload and emulator-based
 testing. This file is the canonical entry point for **any** AI agent (Claude Code, Codex,
 Gemini CLI, Cursor, Copilot, …) and a good one for humans.
 
@@ -31,6 +31,7 @@ platforms, hardware): `docs/README.md`. Historical plans the engine was first bu
 | `editor` | running the editor, screenshot/selection/log hooks for agents, editor code map |
 | `build-n64` | ROM build via Docker, N64 pipeline troubleshooting |
 | `build-3ds` | .3dsx build via devkitPro, 3DS pipeline troubleshooting |
+| `build-web` | the browser build (wasm, WebGPU/WebGL2): build, run and test for the Web, the Playwright harness, KTX2, the WebGL2 limits |
 | `run-emulator` | ares / Azahar runs, emulator test harness, watch loops |
 | `hardware` | real consoles: SummerCart64 / EverDrive 64 (USB) and 3DS (3dslink) deploys with the debug log in the terminal, Luma3DS gdb |
 | `test-all` | the CI gates + guard tests, console type-checks, T&L benchmark |
@@ -339,7 +340,8 @@ new skill when none fits. Then run `cargo xtask agents sync`. The steps are in
   - `trino.toml` and `cargo xtask build|run|test|watch n64|3ds --project <dir>` (or
     `$TRINO_PROJECT`, or a `trino.toml` in the cwd). The standalone template gives
     `cargo trino`.
-  - `[project] platforms = ["pc", "n64", "3ds"]` (missing = all): naming a left-out
+  - `[project] platforms = ["pc", "n64", "3ds", "web"]` (missing = pc, n64 and 3ds; the Web
+    is listed by name, new projects do): naming a left-out
     platform fails with the field in the message; `build all`, `assets all` and
     `test all` skip it. The PC commands use the project's `[pc] package` and `assets/`.
   - `n64_main!` / `n3ds_main!` with `N64Host` / `N3dsHost` (boot, step, measure, report
@@ -509,7 +511,33 @@ RDP).
   - **Tests:** the `texture formats` self-test step on PC, ares and Azahar; the 3DS
     golden `texture_formats.png` and `n3ds_parity`; `bc_textures` (GPU blocks vs the
     fallback).
-  - **Next:** Web KTX2 (#52 phase 5) is #47's.
+  - **Web KTX2** (#52 phase 5, landed with #47): `KTX2-ETC1S` / `KTX2-UASTC` (Basis
+    Universal, ADR 0017 §9), `auto` by download size; transcoded in the browser.
+- **Web target (2026-10-18, ADR 0018, GitHub #47):** Trino games in a browser tab.
+  - **One renderer:** the PC's moved to `crates/render-wgpu` (re-exported at
+    `trino_platform_pc::renderer`); `trino-platform-web` draws with it on a canvas,
+    WebGPU or WebGL2 (`WebBackend`, `?backend=`). WebGL2: no MSAA, depth read through a
+    nearest sampler (`depth_as_float`), the water's depth copy drawn (`depth_blit.rs`).
+  - **Platform:** `performance.now()`, console log (+ `globalThis.__trino`),
+    `localStorage` saves (base64), blobs from the pack; input by `KeyboardEvent.code`
+    (the PC's bindings), mouse + Pointer Lock, touch, standard-mapping gamepads; Web Audio
+    with the autoplay unlock (banner until a gesture) and a silent fallback;
+    `ResizeObserver` + `devicePixelRatio`; fullscreen.
+  - **Assets:** one pack per game (`assets/<game>.pak`, `TPAK`): KTX2 sprites, 16-bit
+    sounds. `Platform::Web` follows the PC where it has no choice of its own (overrides,
+    model `platforms`, scene/prefab/particle variants: scenes v4, prefabs v3, particles v2).
+  - **`apps/web`:** castle64, showcase or Solid Eleven by `?game=`; `?selftest` runs the
+    consoles' self-test in the browser (engine checks, KTX2, the demos' bots, Solid
+    Eleven's sim hash, three golden frames in `tests/golden/web/`).
+  - **Tools:** `cargo xtask build|run|test|assets web` (`xtask/src/web.rs`: wasm-bindgen
+    at the lockfile's version, a local server with COOP/COEP, the Playwright harness in
+    `tools/web-test`); `trino.toml` `"web"` + `[web]`; the standalone template's `web/`
+    host (`trino_platform_web::run_game`).
+  - **Editor:** Web in the Game view (canvas presets, `TRINO_EDITOR_GAME=web`,
+    `TRINO_EDITOR_WEB_CANVAS`), Web columns (Platforms, LOD, texture inspector), the Web
+    budget lines (`WebCalls`, measured calls and pipeline switches), Run in Browser and
+    Export Web Package.
+  - **CI:** one `web` job: Chromium (WebGL2 + WebGPU), Firefox and WebKit from one build.
 - **Console hardware paths and N64 timing (2026-10-16, ADR 0012, part of #31):**
   the 3DS transforms and lights static meshes on the PICA200 (`render3d::gpu_check`,
   `tnl3d.v.pica`, `gpu tnl` self-test step, `castle64_work_3ds.toml`); text goes to the
@@ -611,12 +639,14 @@ Super, which the OS takes) are not bindable, so one press never does two things.
 |---|---|
 | `crates/core` | Platform-agnostic traits + math + software T&L + `scene::SceneNode`. `no_std`, **zero dependencies** |
 | `crates/game-api` | Stable ABI boundary for hot-reloadable game dylibs |
-| `crates/platform-*` | One backend per target: wgpu (pc), libdragon FFI (n64), ctru/citro FFI (3ds) |
+| `crates/platform-*` | One backend per target: winit/cpal (pc), libdragon FFI (n64), ctru/citro FFI (3ds), web-sys (web, `wasm32-unknown-unknown`) |
+| `crates/render-wgpu` | The wgpu renderer the PC and the Web share (profiles, strict mode, CPU/GPU T&L, WebGPU/WebGL2) |
 | `crates/editor` | egui editor (see the `editor` skill for its file map) |
 | `crates/scene` | Scenes, prefabs, materials (RON), resolve → draw list, codegen |
 | `crates/runner-pc` | Ready-made PC host (window, renderer, audio, asset bake) for standalone projects |
 | `crates/asset-pipeline` | Asset baking (sprites, audio, glTF → TMDL + skeleton, fake objects) + watching |
-| `apps/{pc,n64,3ds}` | Thin glue binaries; `apps/pc` also plays editor scenes (`TRINO_SCENE`) |
+| `apps/{pc,n64,3ds,web}` | Thin glue binaries; `apps/pc` also plays editor scenes (`TRINO_SCENE`); `apps/web` is the wasm module, its page (`index.html`) and the browser self-test, plus the vendored KTX2 transcoder |
+| `tools/web-test` | The Playwright harness `cargo xtask test web` drives (Chromium, Firefox, WebKit) |
 | `examples/` | Games: `castle64` (3D, default), `showcase` (editor scene via codegen), `solid-eleven` (football demo + `football` template, own `assets/`); legacy 2D-only: `platformer`, `hello-sprite` |
 | `assets/` | Masters (`shared/`), per-platform overrides, `manifest.toml`, `materials/` |
 | `scenes/`, `prefabs/` | Authored content (text, hot-reloaded) |
@@ -633,13 +663,16 @@ Super, which the OS takes) are not bindable, so one press never does two things.
 ## The one inviolable rule: dependency direction
 
 ```
-game ──► core ◄── platform-{pc,n64,3ds}          apps glue them together
+game ──► core ◄── platform-{pc,n64,3ds,web}      apps glue them together
+           ▲
+           └──── render-wgpu ◄── platform-{pc,web}
 ```
 
 - `trino-core` must have **zero dependencies** and stay `no_std`.
 - Game crates depend only on `trino-core` (+ `trino-game-api`). No external crates —
   that is what makes games portable to all three consoles by construction.
-- Platform crates may use external crates but, within the workspace, only `trino-core`.
+- Platform crates may use external crates but, within the workspace, only `trino-core` and
+  `trino-render-wgpu` (the renderer the PC and the Web share, itself on `trino-core` only).
 - libdragon/ctru/wgpu types must **never** appear in `core` or game code.
 
 This is enforced by `xtask/tests/dep_graph.rs`, which runs in `cargo test --workspace`
@@ -677,6 +710,9 @@ cargo xtask build 3ds     # .3dsx via local devkitPro -> target/3ds/trino.3dsx
 cargo xtask run 3ds       # build + open in Azahar (auto-detected)
 cargo xtask test 3ds      # build test app + assert magic strings (Azahar log)
 cargo xtask watch 3ds     # rebuild .3dsx + relaunch Azahar on save
+cargo xtask build web     # wasm + wasm-bindgen + KTX2 packs -> target/web (--release; --out dist/web to export)
+cargo xtask run web       # build, serve on 127.0.0.1 (COOP/COEP), open the browser (--query "?game=solid-eleven")
+cargo xtask test web      # the browser self-test in Chromium (WebGL2+WebGPU), Firefox, WebKit + tests/golden/web
 cargo xtask run|test|watch 3ds --accurate-timing  # Azahar "Simulate 3DS GPU timings" for one session (or TRINO_AZAHAR_GPU_TIMING=1)
 cargo xtask run n64 --device sc64|everdrive        # real N64 via flashcart USB; log in the terminal
 cargo xtask run 3ds --device network --ip <IP>     # real 3DS via 3dslink (--gdb: Luma3DS gdb script)
@@ -1018,6 +1054,26 @@ cargo test --workspace
   this one's and later builds failed with "unresolved import" for code that exists
   (2026-10-17, an A/B against `main`). Give a baseline worktree its own target, and
   `cargo clean -p <crate>` if it already happened.
+- **The Web (#47): wgpu's GL backend leaves a depth texture incomplete for sampling.**
+  It sets `NEAREST` only on `Float { filterable: false }` formats, and a depth format reports
+  `Depth`, so its GL filter stays mipmapped-linear: a `texelFetch` (WGSL `textureLoad`) of
+  it reads 0. The water foamed over the whole river in every WebGL2 browser. Read depth
+  through a nearest *sampler* (`depth_as_float` adds one), and check new WebGL2 shaders with
+  `webgl2_shaders_translate_to_glsl_es_300` (naga can't `textureLoad` a `texture_depth_2d`
+  to GLSL at all).
+- **WebGL2 can't copy a depth texture** (`glCopyTexSubImage2D` on a depth attachment: "Depth
+  stencil texture in color attachment"); draw it over (`renderer/depth_blit.rs`).
+- **`std::time::Instant` panics on wasm32-unknown-unknown.** Shared code uses
+  `web_time::Instant` (std's own type on native).
+- **No browser reads the GPU back synchronously.** WebGPU maps buffers between frames, WebGL2's
+  fences only move between tasks: `read_pixel` returns `None` there (the self-test probes say
+  `skipped`), and a frame comes back through `start_read_offscreen` + `poll_read` over frames.
+- **Playwright's Chromium headless shell has no WebGPU adapter;** the full browser (`channel:
+  "chromium"`) has the machine's GPU, and on a GPU-less Linux runner SwiftShader's Vulkan
+  (`--use-webgpu-adapter=swiftshader`). WebGPU also needs a secure context: `127.0.0.1` is
+  one, `about:blank` is not (`navigator.gpu` missing).
+- **Playwright's WebKit on Windows has no Web Audio.** `WebAudio` runs silent there and keeps
+  voices and stingers on the page clock, so `audio_checks` still pass.
 - **`/tmp` may be a RAM disk (tmpfs).** A second `target/` there (a git worktree's build)
   filled RAM and killed rustc. Put extra worktrees and their targets on a real disk.
 

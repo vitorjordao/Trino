@@ -101,6 +101,69 @@ jobs:
         env:
           TRINO_REQUIRE_GPU: "1"
 
+  # The Web target (issue #47) in one job: the wasm build once, then the
+  # browser self-test in Chromium (WebGL2, and WebGPU on SwiftShader's
+  # Vulkan), Firefox and WebKit from the same build, served once — one
+  # runner, one cargo cache, no browser matrix.
+  web:
+    name: Web (Chromium, Firefox, WebKit)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tools/web-test/package-lock.json
+      # xtask links the PC crates (cpal -> ALSA headers).
+      - name: Install Linux system deps
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      # The wasm-bindgen CLI `build web` installs into target/tools, keyed on
+      # the lockfile's wasm-bindgen.
+      - name: Cache the wasm-bindgen CLI
+        uses: actions/cache@v4
+        with:
+          path: target/tools
+          key: wasm-bindgen-cli-${{ hashFiles('Cargo.lock') }}
+      - name: Clippy (wasm32)
+        run: cargo clippy -p trino-render-wgpu -p trino-platform-web -p trino-app-web --target wasm32-unknown-unknown -- -D warnings
+      - name: Playwright and its browsers
+        working-directory: tools/web-test
+        run: npm ci && npx playwright install --with-deps chromium firefox webkit
+      - name: Build (wasm, release)
+        run: cargo xtask build web --release
+      # TRINO_TEST_PASS, the KTX2 transcode, saves across a reload, audio
+      # unlocked by a click, input reaching the game, and the golden frames
+      # (tests/golden/web/) — per browser.
+      - name: Browser self-test (Chromium WebGL2 + WebGPU, Firefox, WebKit)
+        run: cargo xtask test web --no-build
+        env:
+          TRINO_SKIP_BROWSER_INSTALL: "1"
+          TRINO_WEB_TIMEOUT: "900"
+      # A project scaffolded from a template, built for the Web and run in
+      # Chromium: what `cargo xtask new --standalone` users get.
+      - name: Standalone project in the browser
+        run: |
+          rm -rf target/test-projects/ci-web  # the cargo cache restores target/
+          cargo xtask new ci-web --standalone target/test-projects/ci-web --template castle64
+          CARGO_TARGET_DIR=$PWD/target cargo xtask test web --project target/test-projects/ci-web --browsers chromium
+        env:
+          TRINO_SKIP_BROWSER_INSTALL: "1"
+      - name: Upload the browser runs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-test
+          path: |
+            target/web-test/
+            tests/golden/web/actual/
+          if-no-files-found: ignore
+
   hot-reload:
     name: Hot reload E2E
     runs-on: ubuntu-24.04

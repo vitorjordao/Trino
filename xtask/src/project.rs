@@ -589,18 +589,28 @@ watch = ["game"]
     }
 
     /// A manifest written before `platforms` existed parses as it always
-    /// did and targets every platform.
+    /// did and targets the three platforms of then (the Web is opted into
+    /// by name: it needs a `web` host crate).
     #[test]
     fn a_manifest_without_platforms_targets_everything() {
         let p = Project::parse(SAMPLE, "/g".into(), "/e".into()).unwrap();
-        assert_eq!(p.platforms, Target::ALL);
+        assert_eq!(p.platforms, Target::DEFAULT);
+        assert_eq!(p.web_package, "my-game-web");
+        assert_eq!(p.web_canvas_id, "trino-canvas");
+        assert_eq!(p.web_title, "My Game");
         assert_eq!(p.pc_package, "my-game-pc");
         assert_eq!(p.n64_package, "my-game-n64");
         assert_eq!(p.n3ds_bin, "my-game-3ds");
-        assert!(p.batch().iter().all(|(_, runs)| *runs));
-        for t in Target::ALL {
+        assert_eq!(
+            p.batch().last(),
+            Some(&(Target::Web, false)),
+            "the Web is skipped unless listed"
+        );
+        for t in Target::DEFAULT {
             p.require(t).unwrap();
         }
+        let e = p.require(Target::Web).unwrap_err();
+        assert!(e.contains("does not target web"), "{e}");
     }
 
     fn with_platforms(list: &str) -> String {
@@ -624,7 +634,8 @@ watch = ["game"]
             [
                 (Target::Pc, true),
                 (Target::N64, false),
-                (Target::N3ds, true)
+                (Target::N3ds, true),
+                (Target::Web, false)
             ]
         );
         let pc = format!(
@@ -714,5 +725,30 @@ watch = ["game"]
         );
         assert!(p.rom().ends_with("target/n64/trino.z64"));
         assert!(p.n3ds_elf().ends_with("release/trino-3ds.elf"));
+        assert_eq!(p.web_package, "trino-app-web");
+    }
+
+    #[test]
+    fn the_web_section_names_the_host_canvas_and_title() {
+        let text = with_platforms(r#"["pc", "web"]"#)
+            + "
+[web]
+package = \"game-www\"
+canvas_id = \"stage\"
+page_title = \"My Game ' Web\"
+";
+        let p = Project::parse(&text, "/g".into(), "/e".into()).unwrap();
+        assert_eq!(p.platforms, [Target::Pc, Target::Web]);
+        p.require(Target::Web).unwrap();
+        assert_eq!(
+            (
+                p.web_package.as_str(),
+                p.web_canvas_id.as_str(),
+                p.web_title.as_str()
+            ),
+            ("game-www", "stage", "My Game ' Web")
+        );
+        let bad = text.replace("canvas_id", "canvas");
+        assert!(Project::parse(&bad, "/g".into(), "/e".into()).is_err());
     }
 }

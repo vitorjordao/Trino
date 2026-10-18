@@ -80,7 +80,7 @@ fn variants_round_trip_through_ron_both_ways() {
     // Struct → text → struct, and the text is stable.
     let s = scene();
     let text = s.to_ron();
-    assert!(text.contains("version: 3"), "{text}");
+    assert!(text.contains("version: 4"), "{text}");
     assert!(text.contains("n64: Some(") && text.contains("n3ds: Some("));
     assert!(text.contains("disabled: true"));
     let back = Scene::from_ron(&text).unwrap();
@@ -126,18 +126,18 @@ fn v2_scenes_and_v1_prefabs_migrate() {
     )])"#;
     let scene = Scene::from_ron(v2).unwrap();
     assert_eq!(scene.version, SCENE_VERSION);
-    assert_eq!(scene.version, 3);
+    assert_eq!(scene.version, 4);
     assert!(scene.entities[0].platforms.is_empty());
     assert_eq!(scene.entities[0].children[0].name, "door");
-    // Saved, it is a v3 file that reads back identically.
+    // Saved, it is a v4 file that reads back identically.
     let text = scene.to_ron();
-    assert!(text.contains("version: 3"));
+    assert!(text.contains("version: 4"));
     assert_eq!(Scene::from_ron(&text).unwrap(), scene);
 
     let v1 = r#"(version: 1, root: (name: "lamp", children: [(name: "bulb")]))"#;
     let prefab = Prefab::from_ron(v1).unwrap();
     assert_eq!(prefab.version, PREFAB_VERSION);
-    assert!(prefab.to_ron().contains("version: 2"));
+    assert!(prefab.to_ron().contains("version: 3"));
     let future = r#"(version: 9, root: (name: "x"))"#;
     assert!(Prefab::from_ron(future).unwrap_err().contains("newer"));
     // The v2 path still reports bad files as parse errors.
@@ -283,4 +283,32 @@ fn exports_pick_the_variant_of_their_platform() {
     assert!(!code.contains("\"crate\""));
     let (pc_code, _) = codegen::to_rust(&s, &lib);
     assert!(pc_code.contains(&full) && !pc_code.contains("--platform"));
+}
+
+#[test]
+fn the_web_resolves_like_the_pc_unless_it_has_its_own_variant() {
+    let lib = common::library();
+    let mut s = scene();
+    // No PC or Web variant: the Web draws what the PC draws.
+    assert_eq!(names(&s, &lib, Target::Web), names(&s, &lib, Target::Pc));
+    // A PC-only change (the flag hidden on PC) reaches the Web too...
+    let flag = s.entities.iter_mut().find(|e| e.name == "flag").unwrap();
+    flag.platforms.pc = Some(Variant {
+        visible: Some(false),
+        ..Variant::default()
+    });
+    assert!(!names(&s, &lib, Target::Web).contains(&"flag".to_string()));
+    // ...until the Web says otherwise ("as written" there).
+    let flag = s.entities.iter_mut().find(|e| e.name == "flag").unwrap();
+    flag.platforms.web = Some(Variant::default());
+    assert!(names(&s, &lib, Target::Web).contains(&"flag".to_string()));
+    assert!(!names(&s, &lib, Target::Pc).contains(&"flag".to_string()));
+    // The Web's block round-trips as `web` in a v4 file.
+    let text = s.to_ron();
+    assert!(text.contains("web: Some("), "{text}");
+    assert_eq!(Scene::from_ron(&text).unwrap(), s);
+    // A v3 file loads as v4.
+    let v3 = text.replace("version: 4", "version: 3");
+    let old = Scene::from_ron(&v3).unwrap();
+    assert_eq!(old.version, SCENE_VERSION);
 }

@@ -325,7 +325,7 @@ fn budget(root: &Path, args: &[&str]) -> ExitCode {
                     })
                     .collect();
                 format!(
-                    "{{\"platform\":\"{}\",\"draws\":{},\"tris\":{},\"verts\":{},\"culled\":{},\"billboards\":{},\"lod\":{:?},\"rsp_draws\":{},\"rsp_tris\":{},\"cpu_draws\":{},\"off_rsp\":[{}],\"gpu_draws\":{},\"gpu_tris\":{},\"off_gpu\":[{}],\"pc_gpu_draws\":{},\"pc_gpu_tris\":{},\"off_pc_gpu\":[{}],\"wasted\":[{}],\"water\":[{}],\"paths\":[{}],\"n64_cpu_us\":{},\"n64_rsp_us\":{},\"n64_frame_us\":{}}}",
+                    "{{\"platform\":\"{}\",\"draws\":{},\"tris\":{},\"verts\":{},\"culled\":{},\"billboards\":{},\"lod\":{:?},\"rsp_draws\":{},\"rsp_tris\":{},\"cpu_draws\":{},\"off_rsp\":[{}],\"gpu_draws\":{},\"gpu_tris\":{},\"off_gpu\":[{}],\"pc_gpu_draws\":{},\"pc_gpu_tris\":{},\"off_pc_gpu\":[{}],\"wasted\":[{}],\"water\":[{}],\"paths\":[{}],\"web_calls\":{},\"web_pipelines\":{},\"web_switches\":{},\"web_warnings\":[{}],\"n64_cpu_us\":{},\"n64_rsp_us\":{},\"n64_frame_us\":{}}}",
                     b.target.key(),
                     b.draws,
                     b.tris(),
@@ -346,6 +346,14 @@ fn budget(root: &Path, args: &[&str]) -> ExitCode {
                     wasted.join(","),
                     water.join(","),
                     paths.join(","),
+                    b.web.calls,
+                    b.web.pipelines,
+                    b.web.switches,
+                    trino_scene::budget::web_warnings(b)
+                        .iter()
+                        .map(|w| q(w))
+                        .collect::<Vec<_>>()
+                        .join(","),
                     b.n64_cpu_us(),
                     b.n64_rsp_us(),
                     b.n64_frame_us()
@@ -403,6 +411,16 @@ fn budget(root: &Path, args: &[&str]) -> ExitCode {
                     .map(|(r, n)| reason(b, r.label(), *n))
                     .collect();
                 println!("       off the PC GPU path: {}", r.join(", "));
+            }
+        }
+        if b.target == Target::Web {
+            println!(
+                "       {}",
+                trino_scene::budget::pc_gpu_line(b).replacen("PC", "Web", 1)
+            );
+            println!("       {}", trino_scene::budget::web_line(b));
+            for w in trino_scene::budget::web_warnings(b) {
+                println!("       warning: {w}");
             }
         }
         if b.target == Target::N3ds {

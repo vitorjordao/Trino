@@ -1,8 +1,10 @@
-//! Inspector › Platforms: an entity's variants for PC, N64 and 3DS side by
-//! side (`Entity::platforms` in the scene file). Each console column picks
-//! a model and a material ("Same as PC" by default), a scale, hides the
-//! entity or leaves it out, and shows what its model costs. The Game view
-//! draws the variant of the console it simulates.
+//! Inspector › Platforms: an entity's variants for PC, N64, 3DS and the Web
+//! side by side (`Entity::platforms` in the scene file). Each column but
+//! the PC's picks a model and a material ("Same as PC" by default), a
+//! scale, hides the entity or leaves it out, and shows what its model
+//! costs. The Web column starts from the PC's variant (the Web follows the
+//! PC until it has its own, `PlatformVariants::get`). The Game view draws
+//! the variant of the platform it simulates.
 //!
 //! Plain data in, `bool` out: tested without a GPU in `widget_tests.rs`.
 
@@ -26,8 +28,8 @@ pub struct Choices<'a> {
     pub materials: &'a [String],
 }
 
-/// Below this width the three columns stack (the inspector can be narrow).
-pub const COLUMNS_MIN_WIDTH: f32 = 260.0;
+/// Below this width the four columns stack (the inspector can be narrow).
+pub const COLUMNS_MIN_WIDTH: f32 = 330.0;
 
 const SAME: &str = "Same as PC";
 
@@ -121,7 +123,7 @@ fn row(
     });
 }
 
-/// Three columns (PC, N64, 3DS), one property per row.
+/// Four columns (PC, N64, 3DS, Web), one property per row.
 fn grid(
     ui: &mut egui::Ui,
     e: &mut Entity,
@@ -130,14 +132,15 @@ fn grid(
     choices: &Choices,
 ) -> bool {
     let label_w = 52.0;
-    let col_w = ((ui.available_width() - label_w - 3.0 * 4.0) / 3.0).floor();
+    let n = Target::ALL.len() as f32;
+    let col_w = ((ui.available_width() - label_w - n * 4.0) / n).floor();
     let widths = (label_w, col_w);
     let mut vs: Vec<Variant> = Target::ALL
         .iter()
         .map(|t| e.platforms.get(*t).cloned().unwrap_or_default())
         .collect();
     let before = vs.clone();
-    let mut reset = [false; 3];
+    let mut reset = [false; Target::ALL.len()];
 
     row(ui, "", widths, |ui, i, t| {
         ui.label(

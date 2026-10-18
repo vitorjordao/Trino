@@ -136,6 +136,12 @@ pub enum Cmd {
     SavePrefab(String),
     PlayHere,
     StopPlayHere,
+    /// Build the game for the Web and open it in the default browser
+    /// (`cargo xtask run web`); Stop ends the local server.
+    RunInBrowser,
+    /// Write a ready-to-deploy Web package (`cargo xtask build web --release
+    /// --out <dir>`): index.html, trino.js, trino.wasm, assets.
+    ExportWeb(PathBuf),
     /// Files dropped on the window: models / sprites to import.
     ImportFiles(Vec<PathBuf>),
     FocusTab(Tab),
@@ -211,6 +217,8 @@ pub struct App {
     lib_rev: u64,
     seen_lib_rev: u64,
     play: Option<Child>,
+    /// A Web export running (`Cmd::ExportWeb`) and where it writes.
+    export: Option<(Child, PathBuf)>,
     asset_events: Receiver<Vec<u32>>,
     _asset_watcher: Box<dyn std::any::Any>,
     file_events: Receiver<Vec<PathBuf>>,
@@ -261,7 +269,7 @@ pub struct App {
     pub textures: crate::textures::Textures,
     /// The scene's frame from its camera on the N64 and the 3DS (variants,
     /// LOD and impostors applied), with the content key it is for.
-    pub budgets: Option<(u64, [trino_scene::budget::FrameBudget; 3])>,
+    pub budgets: Option<(u64, [trino_scene::budget::FrameBudget; 4])>,
     /// Ripples dropped on water surfaces from the material inspector
     /// ("Drop a ripple"), aged by the real clock: the views ring them out.
     pub ripples: trino_core::RippleBuffer<{ trino_core::MAX_RIPPLES }>,
@@ -386,10 +394,12 @@ impl App {
         let doc_selected = doc.selected.clone();
         let mut scene_view =
             Viewport::new(render_state.clone(), ViewKind::Scene, SimProfile::Native);
-        // Dev hook: TRINO_EDITOR_GAME=pc|n64|3ds picks the Game view's profile.
+        // Dev hook: TRINO_EDITOR_GAME=pc|n64|3ds|web picks the Game view's
+        // profile.
         let game_profile = match std::env::var("TRINO_EDITOR_GAME").as_deref() {
             Ok("pc") => SimProfile::Native,
             Ok("3ds") => SimProfile::N3ds,
+            Ok("web") => SimProfile::Web,
             _ => SimProfile::N64,
         };
         let game_view = Viewport::new(render_state.clone(), ViewKind::Game, game_profile);
@@ -499,6 +509,7 @@ impl App {
             lib_rev: 0,
             seen_lib_rev: 0,
             play: None,
+            export: None,
             asset_events,
             _asset_watcher: Box::new(watcher),
             file_events,
@@ -560,6 +571,7 @@ impl App {
                 let mut t = crate::textures::Textures::new(match p {
                     "n64" => 1,
                     "3ds" => 2,
+                    "web" => 3,
                     _ => 0,
                 });
                 t.zoom = zoom.unwrap_or(1.0f32).clamp(1.0, 8.0);
@@ -641,15 +653,15 @@ impl App {
         h.finish()
     }
 
-    /// The scene's frame on the N64, the 3DS and the PC native profile from
-    /// its camera (`trino_scene::budget`, what `cargo xtask scene budget`
+    /// The scene's frame on the N64, the 3DS, the PC native profile and the
+    /// Web from its camera (`trino_scene::budget`, what `cargo xtask scene budget`
     /// prints), in that order: the PC bakes of the models, except where a
     /// console has its own.
-    pub fn platform_budgets(&self) -> [trino_scene::budget::FrameBudget; 3] {
+    pub fn platform_budgets(&self) -> [trino_scene::budget::FrameBudget; 4] {
         use trino_scene::{Target, budget};
         let env = &self.doc.scene.environment;
         let (camera, light) = (env.core_camera(), env.core_light());
-        [Target::N64, Target::N3ds, Target::Pc].map(|t| {
+        [Target::N64, Target::N3ds, Target::Pc, Target::Web].map(|t| {
             let resolved = trino_scene::resolve_for(&self.doc.scene, &self.lib, 0.0, t);
             budget::estimate(
                 &resolved,
@@ -996,6 +1008,8 @@ impl App {
                 self.mark_lib_changed();
             }
             Cmd::PlayHere => self.start_play_here(),
+            Cmd::RunInBrowser => self.run_in_browser(),
+            Cmd::ExportWeb(out) => self.export_web(out),
             Cmd::StopPlayHere => self.stop_play_here(),
             Cmd::ImportFiles(files) => {
                 for f in files {
@@ -1766,6 +1780,29 @@ impl App {
                     {
                         self.toggle_play(false);
                     }
+                    ui.separator();
+                    if ui
+                        .button(format!("{}  Run in Browser", icon::GLOBE))
+                        .on_hover_text(
+                            "Build for the Web (WebGPU / WebGL2), serve it on 127.0.0.1 and \
+                             open the browser — cargo xtask run web",
+                        )
+                        .clicked()
+                    {
+                        self.cmds.push(Cmd::RunInBrowser);
+                    }
+                    if ui
+                        .button(format!("{}  Export Web Package", icon::EXPORT))
+                        .on_hover_text(
+                            "A ready-to-deploy folder (index.html, trino.js, trino.wasm, \
+                             assets/) in dist/web — cargo xtask build web --release --out \
+                             dist/web",
+                        )
+                        .clicked()
+                    {
+                        self.cmds
+                            .push(Cmd::ExportWeb(self.project.root.join("dist/web")));
+                    }
                 });
             }
             if playing {
@@ -1999,6 +2036,12 @@ impl App {
             Cmd::PlayHere,
         );
         add("Stop playing here".into(), "Esc", Cmd::StopPlayHere);
+        add("Run in Browser".into(), "Web", Cmd::RunInBrowser);
+        add(
+            "Export Web Package (dist/web)".into(),
+            "Web",
+            Cmd::ExportWeb(self.project.root.join("dist/web")),
+        );
         add("New scene…".into(), "File", Cmd::Open(Dialog::new_scene()));
         add(
             "Create fake object…".into(),
@@ -2245,6 +2288,90 @@ impl App {
                 "play here stopped after {} frames ({}/{} coins)",
                 s.frames, s.game.coins, s.game.total_coins
             ));
+        }
+    }
+
+    /// `cargo xtask <verb> web …` for this project (the engine's xtask, so
+    /// it works from any project; `--project` for one outside the engine):
+    /// what the editor's Web actions run, and what an agent types.
+    pub fn web_command(
+        root: &std::path::Path,
+        verb: &str,
+        out: Option<&std::path::Path>,
+    ) -> Vec<String> {
+        let engine = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let mut args: Vec<String> = vec![
+            "run".into(),
+            "--manifest-path".into(),
+            engine.join("Cargo.toml").display().to_string(),
+            "-p".into(),
+            "xtask".into(),
+            "--".into(),
+            verb.into(),
+            "web".into(),
+        ];
+        if root.join("trino.toml").is_file() {
+            args.extend(["--project".into(), root.display().to_string()]);
+        }
+        if let Some(out) = out {
+            args.extend([
+                "--release".into(),
+                "--out".into(),
+                out.display().to_string(),
+            ]);
+        }
+        args
+    }
+
+    /// Build for the Web, serve it and open the default browser (the local
+    /// server runs until Stop, like Play).
+    fn run_in_browser(&mut self) {
+        if self.play.is_some() {
+            self.log
+                .toast(Level::Warn, "a game is already running: Stop it first");
+            return;
+        }
+        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+        let args = Self::web_command(&self.project.root, "run", None);
+        self.log.info(format!("$ cargo {}", args.join(" ")));
+        match Command::new(cargo).args(&args).spawn() {
+            Ok(child) => {
+                self.play = Some(child);
+                self.log.toast(
+                    Level::Ok,
+                    format!(
+                        "{} building for the Web — the browser opens when it is served",
+                        icon::GLOBE
+                    ),
+                );
+            }
+            Err(e) => self
+                .log
+                .toast(Level::Error, format!("run in browser failed: {e}")),
+        }
+    }
+
+    /// Write a ready-to-deploy Web package to `out` in the background.
+    fn export_web(&mut self, out: PathBuf) {
+        if self.export.is_some() {
+            self.log
+                .toast(Level::Warn, "a Web export is already running");
+            return;
+        }
+        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+        let args = Self::web_command(&self.project.root, "build", Some(&out));
+        self.log.info(format!("$ cargo {}", args.join(" ")));
+        match Command::new(cargo).args(&args).spawn() {
+            Ok(child) => {
+                self.export = Some((child, out));
+                self.log.toast(
+                    Level::Ok,
+                    format!("{} exporting the Web package…", icon::GLOBE),
+                );
+            }
+            Err(e) => self
+                .log
+                .toast(Level::Error, format!("Web export failed: {e}")),
         }
     }
 
@@ -2688,6 +2815,22 @@ impl eframe::App for App {
             self.log.info(format!("game exited: {status}"));
             self.play = None;
         }
+        if let Some((child, out)) = &mut self.export
+            && let Ok(Some(status)) = child.try_wait()
+        {
+            if status.success() {
+                self.log.toast(
+                    Level::Ok,
+                    format!("{} Web package written to {}", icon::GLOBE, out.display()),
+                );
+            } else {
+                self.log.toast(
+                    Level::Error,
+                    format!("Web export failed ({status}): see the Console"),
+                );
+            }
+            self.export = None;
+        }
         self.update_thumbnails(&ctx);
 
         // A LOD preview belongs to the entity it was started on.
@@ -3019,6 +3162,34 @@ pub fn ripple_point(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Run in Browser and Export Web Package run the engine's xtask (any
+    /// project), `--project` for one outside the engine, `--out` for an
+    /// export: the command an agent types.
+    #[test]
+    fn web_actions_run_the_engines_xtask() {
+        let dir = tempfile::tempdir().unwrap();
+        let run = App::web_command(dir.path(), "run", None);
+        let i = run.iter().position(|a| a == "--").unwrap();
+        assert_eq!(run[i + 1..], ["run", "web"]);
+        assert!(run.contains(&"xtask".to_string()));
+        assert!(
+            !run.contains(&"--project".to_string()),
+            "no trino.toml: the engine"
+        );
+        std::fs::write(dir.path().join("trino.toml"), "").unwrap();
+        let out = dir.path().join("dist/web");
+        let export = App::web_command(dir.path(), "build", Some(&out));
+        let i = export.iter().position(|a| a == "--").unwrap();
+        assert_eq!(export[i + 1..i + 3], ["build", "web"]);
+        let p = export.iter().position(|a| a == "--project").unwrap();
+        assert_eq!(export[p + 1], dir.path().display().to_string());
+        assert!(export.ends_with(&[
+            "--release".into(),
+            "--out".into(),
+            out.display().to_string()
+        ]));
+    }
 
     /// The budgets see what each console bakes: its own source where it
     /// has one, nothing where the model is not baked, the PC bake

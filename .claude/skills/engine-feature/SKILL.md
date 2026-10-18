@@ -123,6 +123,12 @@ A feature is done only when **PC, N64 and 3DS** all run it and an emulator has s
   of the `Button` discriminants), which needs no new FFI function.
 - The PC backend (`crates/platform-pc`) is the reference. Anything visual must match
   the N64 look (`build-n64` › Console output conventions).
+- **The Web gets the PC renderer for free** (`crates/render-wgpu`, issue #47): a renderer
+  feature is a Web feature. Check it on WebGL2 too: a shader that reads depth goes through
+  `depth_as_float`, a new pipeline in the scene pass needs no `sampler2DMS` (no MSAA
+  there), and `cargo test -p trino-render-wgpu webgl2` translates every shader to GLSL ES
+  3.00. A new `Platform`/`Audio`/`Input` method needs its `crates/platform-web` side (the
+  self-test runs in browsers: `cargo xtask test web`).
 
 ## 3. Tests: every layer, one feature
 

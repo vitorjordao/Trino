@@ -30,3 +30,6 @@ web-sys = { workspace = true, features = ["HtmlCanvasElement"] }
 
 [dev-dependencies]
 pollster = { workspace = true }
+# The WebGL2 shaders checked through naga's GLSL ES backend (what wgpu runs
+# in a browser without WebGPU), without a browser.
+naga = { version = "29", features = ["wgsl-in", "glsl-out"] }

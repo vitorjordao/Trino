@@ -113,7 +113,12 @@ ao = { strength = 0.8, ground = true }   # optional: bake ambient occlusion (bel
 - **N64:** `I4`/`I8` sample as (i, i, i, i); a gray mask is staged by its coverage
   (`texture::n64::stage`), so a white glow stays soft. Opaque gray art wants `CI8`.
   `CI4`/`CI8` are measured only when the master fits the palette losslessly.
-- **The editor:** Assets › Texture shows the three platforms side by side and writes
+- **Web (#47):** `KTX2-ETC1S` (smallest download), `KTX2-UASTC` (a byte a texel, close to
+  the master) or `RGBA8`; `auto` takes the smallest download that keeps the threshold.
+  The browser transcodes to BC, ETC2 or ASTC. `formats = { web = "KTX2-UASTC" }` for art
+  ETC1S blurs. The Web takes `assets/pc/` overrides and PC-only models unless it has its
+  own (`assets/web/`, `platforms = ["web"]`).
+- **The editor:** Assets › Texture shows the four platforms side by side and writes
   format, `quality` and `min_psnr` back to the manifest.
 - Evidence pictures for `auto`/BC/N64 staging: `cargo test -p xtask --test
   texture_shots -- --ignored` (`target/evidence/texture_auto/`).

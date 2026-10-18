@@ -361,6 +361,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_web_takes_the_pc_cap_unless_it_has_its_own() {
+        let mut d = ParticlesDef::new("sprites/smoke");
+        d.max = 40;
+        d.platforms.pc = Some(PlatformCap {
+            max: Some(30),
+            disabled: false,
+        });
+        assert_eq!(d.platforms.get(Platform::Web).and_then(|c| c.max), Some(30));
+        d.platforms.web = Some(PlatformCap {
+            max: Some(64),
+            disabled: false,
+        });
+        assert_eq!(d.platforms.get(Platform::Web).and_then(|c| c.max), Some(64));
+        // v1 files load and save as v2, `web` included.
+        let v1 = d.to_ron().replace("version: 2", "version: 1");
+        let back = ParticlesDef::from_ron(&v1).unwrap();
+        assert_eq!(back.version, DEF_VERSION);
+        assert!(back.to_ron().contains("web:"), "{}", back.to_ron());
+    }
+
+    #[test]
     fn caps_per_platform() {
         let mut d = ParticlesDef::new("sprites/smoke");
         d.max = 40;

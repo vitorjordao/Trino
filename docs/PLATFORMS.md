@@ -22,8 +22,9 @@ Run modes and switches for `trino-app-pc`:
 | Variable | Effect |
 |---|---|
 | `TRINO_SIM=native\|n64\|3ds\|web` | Console simulation profile (default `n64`): internal resolution, filtering, color depth, the 3DS's two screens; `web` is the native picture with the browser's budget (`Caps::WEB`) |
+| `TRINO_SIM=n64x\|3dsnew` | A console's expanded hardware tier ([ADR 0020](adr/0020-console-hardware-tiers.md)): the N64 with the Expansion Pak or the New 3DS. The console's look, the tier's `Caps` (`renderer.caps().hw_tier`, RAM, cores, crowd/particle scales) and `Platform::hw_tier()`; `TRINO_SCENE` resolves the tier's variants |
 | `TRINO_LOOK=off\|n64` | Turns the N64 output emulation off or on, independently of the profile |
-| `TRINO_STRICT=1` | Strict mode: panic when content exceeds the profile's `Caps` |
+| `TRINO_STRICT=1` | Strict mode: panic when content exceeds the profile's `Caps` (also the loaded models against the tier's `ram_bytes`: 4 MB N64, 8 MB with the Pak) |
 | `TRINO_SCENE=scenes/x.scene.ron` | Play an editor scene instead of the game; it reloads when the scene, its prefabs or materials change |
 | `TRINO_GAME=showcase` | Run `examples/showcase`, the demo scene exported to code |
 | `TRINO_SMOKE_FRAMES=N` | Exit after N frames (CI smoke runs) |
@@ -73,6 +74,11 @@ Things to know:
   coplanar surfaces apart.
 - The main stack is 64 KB, and an overflow is silent. Build large structs in place on the
   heap; the self-test fails above 60 KB.
+- **Expansion Pak** ([ADR 0020](adr/0020-console-hardware-tiers.md)): the ROM checks the
+  RAM at boot and logs `TRINO_HW n64 ram=8M tier=expanded` (or `ram=4M tier=base`).
+  `Platform::hw_tier()` and `renderer.caps()` (`Caps::N64_EXPANDED`: 8 MB) follow; content
+  takes its `n64_expanded` variants there. The ROM must still run in 4 MB. `run|test|watch
+  n64 --expansion-pak on|off` sets ares's switch (`test`: also `both`, what CI runs).
 - Troubleshooting: the [build-n64](../.agents/skills/build-n64/SKILL.md) and
   [run-emulator](../.agents/skills/run-emulator/SKILL.md) skills.
 
@@ -109,6 +115,18 @@ Things to know:
   `InputState::pointer_on(Screen::Bottom)` gives touches in its own pixels.
 - Never draw 3D with `C2D_DrawTriangle`: it has one depth per triangle. All 3D goes
   through the shim's citro3d path.
+- **New 3DS** ([ADR 0020](adr/0020-console-hardware-tiers.md)): at boot the app asks
+  `APT_CheckNew3DS` and turns the 804 MHz speedup and the L2 cache on
+  (`osSetSpeedupEnable`), logging `TRINO_HW 3ds new=1 speedup=1 app_ram=…M tier=expanded`.
+  `Platform::hw_tier()` and `renderer.caps()` (`Caps::N3DS_NEW`: 2 cores, crowds and
+  particles ×2) follow; content takes its `n3ds_new` variants. Opt out with
+  `[3ds] speedup = false` in `trino.toml` (or `--speedup off` for one command): the New 3DS
+  then runs at the old clock on the base tier. `run|test|watch 3ds --new3ds on|off` sets
+  Azahar's console (`test`: also `both`, what CI runs).
+- **The second core** (`trino_platform_3ds::worker`): `worker::start()` gets core 2 on a
+  New 3DS (the app's whole) or core 1 on an old one (30% of it), `submit(job, arg)` queues
+  an `extern "C" fn(u32)` (or runs it inline without a worker), `wait()` joins. Jobs
+  compute into memory; the renderer, audio and platform stay on the main thread.
 - Troubleshooting: the [build-3ds](../.agents/skills/build-3ds/SKILL.md) and
   [run-emulator](../.agents/skills/run-emulator/SKILL.md) skills.
 

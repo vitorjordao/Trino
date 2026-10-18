@@ -24,6 +24,19 @@ pub const fn asset_id(logical_path: &str) -> u32 {
     hash
 }
 
+/// Whether a console's asset-index line with the tier column `column`
+/// (`None` = no column: every tier; `"base"` or `"expanded"`, the
+/// [`HwTier::key`](crate::HwTier::key)s) loads on `tier` hardware. The N64
+/// and 3DS builds hold both tiers' data where it differs (issue #54, ADR
+/// 0020): a scene or particle effect baked twice under one handle, a model
+/// listed for the expanded tier only. An unknown tier name loads nowhere.
+pub fn loads_on(column: Option<&str>, tier: crate::HwTier) -> bool {
+    match column.map(str::trim) {
+        None | Some("") => true,
+        Some(name) => name == tier.key(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -36,5 +49,17 @@ mod tests {
         assert_eq!(PLAYER, asset_id("sprites/player"));
         assert_eq!(asset_id(""), 0x811c9dc5);
         assert_ne!(asset_id("sprites/player"), asset_id("sprites/enemy"));
+    }
+
+    #[test]
+    fn index_lines_load_on_their_tier() {
+        use crate::HwTier::{Base, Expanded};
+        for t in [Base, Expanded] {
+            assert!(loads_on(None, t));
+            assert!(loads_on(Some(""), t));
+            assert!(!loads_on(Some("deluxe"), t));
+        }
+        assert!(loads_on(Some("base"), Base) && !loads_on(Some("base"), Expanded));
+        assert!(loads_on(Some("expanded"), Expanded) && !loads_on(Some("expanded"), Base));
     }
 }

@@ -240,6 +240,10 @@ struct PlatState {
 }
 
 fn platforms_harness(width: f32) -> Harness<'static, PlatState> {
+    platforms_harness_sized(width, 900.0)
+}
+
+fn platforms_harness_sized(width: f32, height: f32) -> Harness<'static, PlatState> {
     use crate::panels::platforms::{Choices, ModelInfo};
     let models: &'static [ModelInfo] = Box::leak(Box::new([
         ModelInfo {
@@ -257,7 +261,7 @@ fn platforms_harness(width: f32) -> Harness<'static, PlatState> {
     let mut e = trino_scene::Entity::new("tree");
     e.model = Some(trino_scene::ModelComponent::new("models/tree"));
     let mut h = Harness::builder()
-        .with_size(eframe::egui::vec2(width, 900.0))
+        .with_size(eframe::egui::vec2(width, height))
         .build_ui_state(
             move |ui, s: &mut PlatState| {
                 if !s.fonts {
@@ -371,6 +375,121 @@ fn platforms_tab_fits_wide_and_narrow_inspectors() {
             assert!((n64.top() - n3ds.top()).abs() < 1.0, "columns at {width}");
         } else {
             assert!(n3ds.top() > n64.bottom(), "stacked at {width}");
+        }
+    }
+}
+
+/// The consoles' tiers (issue #54): collapsed under their console until
+/// "Tiers" shows one; its column starts from the console's variant, says
+/// it follows it, writes a variant of its own, and goes back to following.
+#[test]
+fn platform_tier_columns_follow_their_console_until_they_have_their_own() {
+    use trino_scene::Target;
+    let mut h = platforms_harness(520.0);
+    assert!(
+        h.query_by_label("N64+Pak model").is_none(),
+        "collapsed by default"
+    );
+    // An N64 variant: the low tree.
+    h.get_by_label("N64 model").click();
+    h.run();
+    h.get_by_label("models/tree-low-poly-for-consoles").click();
+    h.run();
+    h.get_by_label("Show N64 + Expansion Pak").click();
+    h.run();
+    assert!(h.query_by_label("N64+Pak model").is_some());
+    assert!(
+        h.query_by_label("New 3DS model").is_none(),
+        "one switch per tier"
+    );
+    assert!(h.query_by_label("as on N64").is_some(), "follows the N64");
+    assert_eq!(
+        h.state().e.platforms.get(Target::N64Expanded),
+        h.state().e.platforms.n64.as_ref()
+    );
+    // The Pak's RAM affords the full tree: a variant of its own, the
+    // N64's kept.
+    h.get_by_label("N64+Pak model").click();
+    h.run();
+    h.get_by_label("models/tree").click();
+    h.run();
+    let p = &h.state().e.platforms;
+    assert_eq!(
+        p.n64_expanded.as_ref().unwrap().model.as_deref(),
+        Some("models/tree")
+    );
+    assert_eq!(
+        p.n64.as_ref().unwrap().model.as_deref(),
+        Some("models/tree-low-poly-for-consoles")
+    );
+    assert!(h.query_by_label("as on N64").is_none());
+    assert!(h.query_by_label("own").is_some());
+    // Hidden on the N64 only: the Pak keeps its own look.
+    h.get_by_label("Hidden on N64").click();
+    h.run();
+    assert_eq!(
+        h.state().e.platforms.n64.as_ref().unwrap().visible,
+        Some(false)
+    );
+    assert_eq!(
+        h.state().e.platforms.n64_expanded.as_ref().unwrap().visible,
+        None
+    );
+    // What the inspector edited is what the file stores.
+    let text = ron::to_string(&h.state().e).unwrap();
+    assert!(text.contains("n64_expanded"));
+    let back: trino_scene::Entity = ron::from_str(&text).unwrap();
+    assert_eq!(back, h.state().e);
+    // Back to the N64 look (the N64's reset, then the tier's): the tier
+    // follows again and its column stays shown.
+    let reset = h
+        .get_all_by_label(icon::ARROW_COUNTER_CLOCKWISE)
+        .nth(1)
+        .expect("the tier's reset")
+        .rect();
+    h.get_all_by_label(icon::ARROW_COUNTER_CLOCKWISE)
+        .find(|n| n.rect() == reset)
+        .unwrap()
+        .click();
+    h.run();
+    assert!(h.state().e.platforms.n64_expanded.is_none());
+    assert!(h.query_by_label("as on N64").is_some());
+    assert!(h.query_by_label("N64+Pak model").is_some());
+}
+
+/// With both tiers shown, the Platforms tab still fits: six columns in a
+/// wide inspector, stacked blocks in a narrow one, the tier right after its
+/// console either way.
+#[test]
+fn platform_tier_columns_fit_wide_and_narrow_inspectors() {
+    use crate::panels::platforms::{COLUMNS_MIN_WIDTH, TIER_COLUMN_WIDTH};
+    for width in [260.0, 340.0, 420.0, 520.0, 640.0] {
+        let mut h = platforms_harness_sized(width, 1500.0);
+        h.get_by_label("Show N64 + Expansion Pak").click();
+        h.run();
+        h.get_by_label("Show New 3DS").click();
+        h.run();
+        h.get_by_label("Scale on New 3DS").click();
+        h.run();
+        assert_eq!(
+            h.state().e.platforms.n3ds_new.as_ref().unwrap().scale,
+            Some([1.0; 3])
+        );
+        crate::layout_audit::assert_clean(
+            &h,
+            eframe::egui::vec2(width, 1500.0),
+            false,
+            &format!("Platforms tab with tiers at {width} px"),
+        );
+        let n64 = h.get_by_label("N64 model").rect();
+        let pak = h.get_by_label("N64+Pak model").rect();
+        let n3ds = h.get_by_label("3DS model").rect();
+        if width >= COLUMNS_MIN_WIDTH + 2.0 * TIER_COLUMN_WIDTH + 16.0 {
+            assert!((n64.top() - pak.top()).abs() < 1.0, "columns at {width}");
+            assert!(n64.left() < pak.left() && pak.left() < n3ds.left());
+        } else {
+            assert!(pak.top() > n64.bottom(), "stacked at {width}");
+            assert!(n3ds.top() > pak.bottom(), "the Pak before the 3DS");
         }
     }
 }
@@ -572,6 +691,58 @@ fn lod_and_impostor_panels_fit_narrow_inspectors() {
     }
 }
 
+/// A LOD level's start on a tier (issue #54): hidden until "Tiers" shows
+/// it, then "=N64" (the console's start) until it has its own.
+#[test]
+fn lod_tier_rows_follow_their_console_until_they_have_their_own() {
+    use trino_scene::{LodAt, Target};
+    let chain = vec![trino_scene::LodDef {
+        distance: 30.0,
+        impostor: Some("impostors/tree".into()),
+        platforms: trino_scene::LodPlatforms {
+            n64: Some(LodAt::At(45.0)),
+            ..Default::default()
+        },
+        ..Default::default()
+    }];
+    let mut h = lod_harness(320.0, chain.clone());
+    assert!(h.query_by_label("LOD 1 on N64+Pak").is_none());
+    h.get_by_label("Show N64 + Expansion Pak").click();
+    h.run();
+    assert!(h.query_by_label("LOD 1 on New 3DS").is_none());
+    assert_eq!(
+        h.state().lod[0].distance_on(Target::N64Expanded),
+        Some(45.0),
+        "as on the N64"
+    );
+    // The Pak skips the impostor: never there, the N64 keeps its 45 m.
+    h.get_by_label("LOD 1 on N64+Pak").click();
+    h.run();
+    h.get_by_label("never").click();
+    h.run();
+    let level = &h.state().lod[0];
+    assert_eq!(level.platforms.n64_expanded, Some(LodAt::Never));
+    assert_eq!(level.platforms.n64, Some(LodAt::At(45.0)));
+    assert_eq!(level.distance_on(Target::N64Expanded), None);
+    let text = ron::to_string(&h.state().lod).unwrap();
+    assert!(text.contains("n64_expanded"));
+    assert!(h.state().changes >= 1);
+    // Both tiers shown, in narrow and wide inspectors.
+    for width in [260.0, 320.0, 480.0, 720.0] {
+        let mut h = lod_harness(width, chain.clone());
+        h.get_by_label("Show N64 + Expansion Pak").click();
+        h.run();
+        h.get_by_label("Show New 3DS").click();
+        h.run();
+        crate::layout_audit::assert_clean(
+            &h,
+            eframe::egui::vec2(width, 700.0),
+            false,
+            &format!("LOD panel with tiers at {width} px"),
+        );
+    }
+}
+
 struct PfxState {
     def: trino_asset_pipeline::particles::ParticlesDef,
     changes: usize,
@@ -648,6 +819,55 @@ fn particle_editor_sets_fields_and_per_platform_caps() {
             eframe::egui::vec2(width, 900.0),
             false,
             &format!("particle editor at {width} px"),
+        );
+    }
+}
+
+/// A particle cap per tier (issue #54): the New 3DS row shows under
+/// "Tiers", takes the 3DS's cap until it has its own, and writes its own.
+#[test]
+fn particle_tier_caps_follow_their_console_until_they_have_their_own() {
+    use trino_asset_pipeline::particles::PlatformCap;
+    use trino_scene::Target;
+    let mut h = pfx_harness(340.0);
+    h.state_mut().def.platforms.n3ds = Some(PlatformCap {
+        max: Some(10),
+        disabled: false,
+    });
+    h.run();
+    assert!(h.query_by_label("Off on New 3DS").is_none());
+    h.get_by_label("Show New 3DS").click();
+    h.run();
+    assert!(
+        h.query_by_label_contains("New 3DS (as on 3DS): up to 10")
+            .is_some()
+    );
+    assert_eq!(h.state().def.cap(Target::N3dsNew), 10);
+    // Off on the New 3DS only.
+    h.get_by_label("Off on New 3DS").click();
+    h.run();
+    let def = &h.state().def;
+    assert_eq!(def.cap(Target::N3dsNew), 0);
+    assert_eq!(def.cap(Target::N3ds), 10);
+    assert!(def.platforms.n3ds_new.unwrap().disabled);
+    assert!(h.query_by_label_contains("New 3DS: off").is_some());
+    let text = h.state().def.to_ron();
+    assert!(text.contains("n3ds_new"));
+    assert_eq!(
+        trino_asset_pipeline::particles::ParticlesDef::from_ron(&text).unwrap(),
+        h.state().def
+    );
+    for width in [260.0, 340.0, 480.0] {
+        let mut h = pfx_harness(width);
+        h.get_by_label("Show N64 + Expansion Pak").click();
+        h.run();
+        h.get_by_label("Show New 3DS").click();
+        h.run();
+        crate::layout_audit::assert_clean(
+            &h,
+            eframe::egui::vec2(width, 900.0),
+            false,
+            &format!("particle editor with tiers at {width} px"),
         );
     }
 }

@@ -491,3 +491,27 @@ fn rebinding_a_pad_button() {
     let mut input = trino_platform_pc::PcInput::new();
     assert!(!input.pad_pressed(PadButton::North), "nothing waits");
 }
+
+/// A simulated tier (`TRINO_SIM=n64x|3dsnew`, issue #54): the platform
+/// answers `hw_tier` from the caps it was made with, or the host's choice.
+#[test]
+fn hw_tier_follows_the_simulated_caps() {
+    use trino_core::HwTier;
+    for (caps, tier) in [
+        (Caps::N64, HwTier::Base),
+        (Caps::N64_EXPANDED, HwTier::Expanded),
+        (Caps::N3DS_NEW, HwTier::Expanded),
+        (Caps::PC, HwTier::Base),
+    ] {
+        assert_eq!(PcPlatform::new(&caps).hw_tier(), tier);
+    }
+    let (profile, tier) = SimProfile::parse_tier("3dsnew").unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let mut p =
+        PcPlatform::new(&profile.caps().with_tier(tier)).with_save_file(dir.path().join("g.sav"));
+    assert_eq!(p.hw_tier(), HwTier::Expanded);
+    // The tier changes RAM and cores, not the cartridge's or the SD's save.
+    assert_eq!(p.save_capacity(), Caps::N3DS.save_bytes as usize);
+    p.set_hw_tier(HwTier::Base);
+    assert_eq!(p.hw_tier(), HwTier::Base);
+}

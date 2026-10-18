@@ -144,6 +144,9 @@ unsafe extern "C" {
     pub fn trino_save_read(dest: *mut u8, start: u32, len: u32);
     pub fn trino_save_write(src: *const u8, start: u32, len: u32);
 
+    /// RDRAM bytes (4 MiB, 8 MiB with the Expansion Pak).
+    pub fn trino_memory_size() -> u32;
+
     /// Deepest main-stack use since boot, in bytes (64 KB total).
     pub fn trino_stack_used() -> u32;
 

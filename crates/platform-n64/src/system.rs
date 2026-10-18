@@ -25,6 +25,8 @@ pub struct N64Platform {
     /// A save being written over frames (`save_begin`).
     pending: Option<Box<Pending>>,
     lz: Option<Box<Lz>>,
+    /// Detected at boot (`runtime::hw_tier`).
+    tier: trino_core::HwTier,
 }
 
 /// An unfinished save: the planned body, how much of it is on the EEPROM,
@@ -61,6 +63,7 @@ impl N64Platform {
             high: Cell::new(0),
             pending: None,
             lz: None,
+            tier: runtime::hw_tier(),
         }
     }
 
@@ -132,6 +135,10 @@ impl Platform for N64Platform {
 
     fn blob(&self, id: BlobId) -> Option<&'static [u8]> {
         self.blobs.get(&id.0).copied()
+    }
+
+    fn hw_tier(&self) -> trino_core::HwTier {
+        self.tier
     }
 
     fn save_capacity(&self) -> usize {

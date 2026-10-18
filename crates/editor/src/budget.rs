@@ -4,6 +4,29 @@
 
 use trino_core::perf::{FRAME_30FPS_US, N64_COST};
 use trino_core::{Caps, FrameStats};
+use trino_scene::Target;
+use trino_scene::budget::FrameBudget;
+
+/// The scene camera's frame on every target (`trino_scene::budget`, what
+/// `cargo xtask scene budget` prints), in [`BUDGET_TARGETS`] order.
+pub type Budgets = [FrameBudget; 6];
+
+/// The targets of [`Budgets`]: the N64, the 3DS, the PC, the Web, then the
+/// consoles' expanded tiers (issue #54: the Expansion Pak, the New 3DS).
+pub const BUDGET_TARGETS: [Target; 6] = [
+    Target::N64,
+    Target::N3ds,
+    Target::Pc,
+    Target::Web,
+    Target::N64Expanded,
+    Target::N3dsNew,
+];
+
+/// The budget of `target` in `budgets`.
+pub fn budget_of(budgets: &Budgets, target: Target) -> &FrameBudget {
+    let i = BUDGET_TARGETS.iter().position(|t| *t == target).unwrap();
+    &budgets[i]
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Level {
@@ -119,7 +142,8 @@ pub fn rows(stats: &FrameStats, caps: &Caps, lod: &LodCounts) -> Vec<Row> {
         level: Level::Ok,
         hint: "draw_model calls that reached the T&L (each costs CPU on consoles)",
     });
-    if *caps == Caps::N64 {
+    // Either N64 tier: the Expansion Pak adds RAM, not CPU time.
+    if caps.base() == Caps::N64 {
         // The triangle cap says little about the N64's CPU T&L; the
         // calibrated cost model turns this frame's deterministic T&L work
         // into emulated N64 time (3D only: T&L + sort + submit).
@@ -170,12 +194,25 @@ pub fn use_rsp_split(rows: &mut [Row], n64: &trino_scene::budget::FrameBudget) {
 /// reason the rest don't, the 3DS triangles and GPU split, the PC native
 /// profile's GPU T&L split (issue #51), the Web's calls (issue #47), and
 /// draws sent for nothing. Each
-/// with its level (the N64 time against a 30 fps frame).
-pub fn platform_lines(
-    budgets: &[trino_scene::budget::FrameBudget; 4],
+/// with its level (the N64 time against a 30 fps frame). The console the
+/// Game view shows (`shown`) is read on its hardware tier (issue #54):
+/// `N64+Pak ≈…` and `New 3DS …`; any other console on its base tier.
+pub fn platform_lines_on(
+    budgets: &Budgets,
     tmem: &dyn Fn(trino_core::SpriteId) -> Option<u32>,
+    shown: Target,
 ) -> Vec<(String, Level)> {
-    let [n64, n3ds, pc, web] = budgets;
+    let [n64, n3ds, pc, web, n64x, n3ds_new] = budgets;
+    let (n64, n64_label) = if shown == Target::N64Expanded {
+        (n64x, Target::N64Expanded.label())
+    } else {
+        (n64, "N64")
+    };
+    let (n3ds, n3ds_label) = if shown == Target::N3dsNew {
+        (n3ds_new, Target::N3dsNew.label())
+    } else {
+        (n3ds, "3DS")
+    };
     let pct = n64.n64_frame_percent();
     let level = if pct > 100.0 {
         Level::Over
@@ -186,7 +223,7 @@ pub fn platform_lines(
     };
     let mut out = vec![(
         format!(
-            "N64 ≈{:.1} ms · CPU {:.1} · RSP {:.1}",
+            "{n64_label} ≈{:.1} ms · CPU {:.1} · RSP {:.1}",
             n64.n64_frame_us() as f32 / 1000.0,
             n64.n64_cpu_us() as f32 / 1000.0,
             n64.n64_rsp_us() as f32 / 1000.0
@@ -199,7 +236,7 @@ pub fn platform_lines(
     }
     out.push((rsp, Level::Ok));
     let mut gpu = format!(
-        "3DS {} tris · GPU {}/{} draws",
+        "{n3ds_label} {} tris · GPU {}/{} draws",
         n3ds.tris(),
         n3ds.gpu_draws,
         n3ds.draws
@@ -229,6 +266,72 @@ pub fn platform_lines(
         out.push((line, level));
     }
     out
+}
+
+/// A console's two hardware tiers side by side (issue #54, ADR 0020): the
+/// Game view's HUD and the Inspector's platform budget show what the scene
+/// costs on the base console and on its expanded tier.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TierTable {
+    /// The base console and its expanded tier (`N64` and `N64+Pak`, `3DS`
+    /// and `New 3DS`).
+    pub targets: [Target; 2],
+    /// `(label, base, expanded)`: RAM (the scene's models of the tier's
+    /// RAM), CPU, the frame (the N64's time, the 3DS's triangles), draws,
+    /// and the advisory crowd and particle scales where they differ.
+    pub rows: Vec<(&'static str, String, String)>,
+    /// The models' share of each tier's RAM, 0..=1 (`Caps::ram_bytes`).
+    pub ram: [f32; 2],
+}
+
+/// The [`TierTable`] of `console`'s tiers (either tier names it); `None`
+/// for the PC and the Web, which have one.
+pub fn tier_table(budgets: &Budgets, console: Target) -> Option<TierTable> {
+    let base = console.base();
+    let expanded = base.expanded()?;
+    let b = [budget_of(budgets, base), budget_of(budgets, expanded)];
+    let caps = [base, expanded].map(trino_scene::budget::caps_of);
+    let both = |f: &dyn Fn(usize) -> String| (f(0), f(1));
+    let mut rows = Vec::new();
+    let mut row = |label, (a, x): (String, String)| rows.push((label, a, x));
+    row(
+        "RAM",
+        both(&|i| {
+            format!(
+                "{} KB / {} MB",
+                b[i].model_bytes.div_ceil(1024),
+                caps[i].ram_bytes >> 20
+            )
+        }),
+    );
+    row(
+        "CPU",
+        both(&|i| format!("{}×{} MHz", caps[i].cpu_cores, caps[i].cpu_mhz)),
+    );
+    if base == Target::N64 {
+        row(
+            "Frame",
+            both(&|i| format!("≈{:.1} ms", b[i].n64_frame_us() as f32 / 1000.0)),
+        );
+    } else {
+        row("Tris", both(&|i| b[i].tris().to_string()));
+    }
+    row("Draws", both(&|i| b[i].draws.to_string()));
+    if caps[0].crowd_percent != caps[1].crowd_percent {
+        row("Crowds", both(&|i| format!("×{}", caps[i].crowd_scale())));
+    }
+    if caps[0].particle_percent != caps[1].particle_percent {
+        row(
+            "Particles",
+            both(&|i| format!("×{}", caps[i].particle_scale())),
+        );
+    }
+    let ram = [0, 1].map(|i| b[i].model_bytes as f32 / caps[i].ram_bytes as f32);
+    Some(TierTable {
+        targets: [base, expanded],
+        rows,
+        ram,
+    })
 }
 
 /// The Game view's measured Web line (issue #47): what its renderer just
@@ -335,7 +438,9 @@ mod tests {
             },
             ..pc.clone()
         };
-        let lines = platform_lines(&[n64.clone(), n3ds, pc.clone(), web.clone()], &|_| None);
+        let lines = platform_lines(&six([n64.clone(), n3ds, pc.clone(), web.clone()]), &|_| {
+            None
+        });
         let text: Vec<&str> = lines.iter().map(|(t, _)| t.as_str()).collect();
         assert!(text[0].starts_with("N64 ≈"), "{text:?}");
         assert_eq!(text[1], "RSP 2/5 draws · 2 fog needing splits");
@@ -352,7 +457,9 @@ mod tests {
             },
             ..web.clone()
         };
-        let warned = platform_lines(&[n64.clone(), n64.clone(), pc.clone(), busy], &|_| None);
+        let warned = platform_lines(&six([n64.clone(), n64.clone(), pc.clone(), busy]), &|_| {
+            None
+        });
         assert!(
             warned
                 .iter()
@@ -366,7 +473,7 @@ mod tests {
             ..n64.clone()
         };
         assert_eq!(
-            platform_lines(&[heavy, n64.clone(), pc.clone(), web], &|_| None)[0].1,
+            platform_lines(&six([heavy, n64.clone(), pc.clone(), web]), &|_| None)[0].1,
             Level::Over
         );
         // The HUD's N64 time row takes the CPU/RSP split.
@@ -387,12 +494,123 @@ mod tests {
         };
         assert_eq!(
             platform_lines(
-                &[clean.clone(), clean.clone(), clean.clone(), clean],
+                &six([clean.clone(), clean.clone(), clean.clone(), clean]),
                 &|_| None
             )
             .len(),
             5
         );
+    }
+
+    /// The lines with every console on its base tier.
+    fn platform_lines(
+        budgets: &Budgets,
+        tmem: &dyn Fn(trino_core::SpriteId) -> Option<u32>,
+    ) -> Vec<(String, Level)> {
+        platform_lines_on(budgets, tmem, Target::Pc)
+    }
+
+    /// The four builds' budgets, the consoles' tiers as their console.
+    fn six(b: [FrameBudget; 4]) -> Budgets {
+        let [n64, n3ds, pc, web] = b;
+        let tier = |b: &FrameBudget, t| FrameBudget {
+            target: t,
+            ..b.clone()
+        };
+        let (x, new) = (
+            tier(&n64, Target::N64Expanded),
+            tier(&n3ds, Target::N3dsNew),
+        );
+        [n64, n3ds, pc, web, x, new]
+    }
+
+    /// The Game view on a tier reads that tier's frame in its console's
+    /// lines; the other console keeps its base tier (issue #54).
+    #[test]
+    fn platform_lines_follow_the_game_views_tier() {
+        let n64 = FrameBudget {
+            draws: 2,
+            rsp_draws: 2,
+            target: Target::N64,
+            ..Default::default()
+        };
+        let n3ds = FrameBudget {
+            draws: 2,
+            gpu_draws: 2,
+            target: Target::N3ds,
+            ..Default::default()
+        };
+        let mut b = six([n64, n3ds, FrameBudget::default(), FrameBudget::default()]);
+        b[4].draws = 9;
+        b[4].rsp_draws = 9;
+        b[5].draws = 7;
+        b[5].gpu_draws = 7;
+        let text = |shown| -> Vec<String> {
+            platform_lines_on(&b, &|_| None, shown)
+                .into_iter()
+                .map(|(t, _)| t)
+                .collect()
+        };
+        let base = text(Target::N64);
+        assert!(base[0].starts_with("N64 ≈"), "{base:?}");
+        assert_eq!(base[1], "RSP 2/2 draws");
+        assert!(base[2].starts_with("3DS ") && base[2].ends_with("GPU 2/2 draws"));
+        assert_eq!(base, text(Target::Pc));
+        let pak = text(Target::N64Expanded);
+        assert!(pak[0].starts_with("N64+Pak ≈"), "{pak:?}");
+        assert_eq!(pak[1], "RSP 9/9 draws");
+        assert_eq!(pak[2], base[2], "the 3DS stays on its base tier");
+        let new = text(Target::N3dsNew);
+        assert_eq!(new[1], "RSP 2/2 draws");
+        assert!(new[2].starts_with("New 3DS ") && new[2].ends_with("GPU 7/7 draws"));
+    }
+
+    /// The HUD's and the Inspector's tier columns (issue #54): the base
+    /// console and its expanded tier side by side, from either tier.
+    #[test]
+    fn tier_tables_put_a_consoles_two_tiers_side_by_side() {
+        let models = |t, model_bytes, draws| FrameBudget {
+            target: t,
+            model_bytes,
+            draws,
+            ..Default::default()
+        };
+        let budgets = [
+            models(Target::N64, 412 * 1024, 10),
+            models(Target::N3ds, 2 << 20, 10),
+            models(Target::Pc, 0, 10),
+            models(Target::Web, 0, 10),
+            models(Target::N64Expanded, 900 * 1024, 14),
+            models(Target::N3dsNew, 2 << 20, 12),
+        ];
+        assert_eq!(budget_of(&budgets, Target::N3dsNew).draws, 12);
+        let n64 = tier_table(&budgets, Target::N64).unwrap();
+        assert_eq!(n64, tier_table(&budgets, Target::N64Expanded).unwrap());
+        assert_eq!(n64.targets, [Target::N64, Target::N64Expanded]);
+        let row = |t: &TierTable, l: &str| {
+            let r = t.rows.iter().find(|r| r.0 == l).unwrap();
+            (r.1.clone(), r.2.clone())
+        };
+        assert_eq!(
+            row(&n64, "RAM"),
+            ("412 KB / 4 MB".into(), "900 KB / 8 MB".into())
+        );
+        assert_eq!(row(&n64, "CPU"), ("1×93 MHz".into(), "1×93 MHz".into()));
+        assert_eq!(row(&n64, "Draws"), ("10".into(), "14".into()));
+        assert!(n64.rows.iter().any(|r| r.0 == "Frame"));
+        assert!(
+            n64.rows.iter().all(|r| r.0 != "Crowds"),
+            "the Pak adds RAM only"
+        );
+        assert!((n64.ram[0] - 412.0 / 4096.0).abs() < 1e-4);
+        let n3ds = tier_table(&budgets, Target::N3ds).unwrap();
+        assert_eq!(n3ds.targets, [Target::N3ds, Target::N3dsNew]);
+        assert_eq!(row(&n3ds, "CPU"), ("1×268 MHz".into(), "2×804 MHz".into()));
+        assert_eq!(row(&n3ds, "Crowds"), ("×1".into(), "×2".into()));
+        assert_eq!(row(&n3ds, "Particles"), ("×1".into(), "×2".into()));
+        assert!(n3ds.rows.iter().any(|r| r.0 == "Tris"));
+        assert_eq!(tier_table(&budgets, Target::Pc), None);
+        assert_eq!(tier_table(&budgets, Target::Web), None);
     }
 
     #[test]

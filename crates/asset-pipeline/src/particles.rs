@@ -4,7 +4,10 @@
 //! that games load with `Platform::blob(BlobId::from_path("particles/<name>"))`.
 //!
 //! Each platform can cap the live particles or turn the effect off; the
-//! bake writes that platform's cap. The editor's particle inspector edits
+//! bake writes that platform's cap. The consoles' expanded tiers (the N64's
+//! Expansion Pak, the New 3DS) have caps of their own (`n64_expanded`,
+//! `n3ds_new`, following the console's when unset): their build bakes both
+//! and the console loads the one its hardware has (ADR 0020). The editor's particle inspector edits
 //! these files (live preview, burst, cost) and `cargo xtask particles`
 //! checks and simulates them — the same functions.
 
@@ -12,10 +15,11 @@ use serde::{Deserialize, Serialize};
 use trino_core::particles::{Effect, TPFX_BYTES};
 use trino_core::{Color, Emitter, ParticleSystem, SpriteId, Vec2, Vec3};
 
-use crate::Platform;
+use trino_scene::Target;
 
-/// v2: a `web` cap per effect (issue #47); v1 files load unchanged.
-pub const DEF_VERSION: u32 = 2;
+/// v3: a cap per console hardware tier (`n64_expanded`, `n3ds_new`, issue
+/// #54). v2: a `web` cap (issue #47). v1 and v2 files load unchanged.
+pub const DEF_VERSION: u32 = 3;
 pub const DEF_EXT: &str = ".particles.ron";
 /// The most particles an effect may keep alive (runtime systems are fixed
 /// size; past this a console spends its frame on billboards).
@@ -92,7 +96,8 @@ fn d_max() -> u16 {
 }
 
 /// Per-platform caps (`None` = the effect's `max`; the Web takes the PC's
-/// cap when it has none, like scene variants).
+/// cap when it has none and a hardware tier its console's, like scene
+/// variants).
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 pub struct ParticlePlatforms {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -103,28 +108,45 @@ pub struct ParticlePlatforms {
     pub n3ds: Option<PlatformCap>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub web: Option<PlatformCap>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub n64_expanded: Option<PlatformCap>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub n3ds_new: Option<PlatformCap>,
 }
 
 impl ParticlePlatforms {
     pub fn is_empty(&self) -> bool {
-        self.pc.is_none() && self.n64.is_none() && self.n3ds.is_none() && self.web.is_none()
+        Target::EVERY.iter().all(|t| self.own(*t).is_none())
     }
 
-    pub fn get(&self, p: Platform) -> Option<&PlatformCap> {
-        match p {
-            Platform::Pc => self.pc.as_ref(),
-            Platform::N64 => self.n64.as_ref(),
-            Platform::N3ds => self.n3ds.as_ref(),
-            Platform::Web => self.web.as_ref().or(self.pc.as_ref()),
+    /// The cap `t` uses: its own, else its fallback's (the PC's for the
+    /// Web, the console's for a tier).
+    pub fn get(&self, t: impl Into<Target>) -> Option<&PlatformCap> {
+        let t = t.into();
+        self.own(t)
+            .or_else(|| t.fallback().and_then(|f| self.own(f)))
+    }
+
+    /// The cap written for `t` itself (no fallback).
+    pub fn own(&self, t: impl Into<Target>) -> Option<&PlatformCap> {
+        match t.into() {
+            Target::Pc => self.pc.as_ref(),
+            Target::N64 => self.n64.as_ref(),
+            Target::N3ds => self.n3ds.as_ref(),
+            Target::Web => self.web.as_ref(),
+            Target::N64Expanded => self.n64_expanded.as_ref(),
+            Target::N3dsNew => self.n3ds_new.as_ref(),
         }
     }
 
-    pub fn get_mut(&mut self, p: Platform) -> &mut Option<PlatformCap> {
-        match p {
-            Platform::Pc => &mut self.pc,
-            Platform::N64 => &mut self.n64,
-            Platform::N3ds => &mut self.n3ds,
-            Platform::Web => &mut self.web,
+    pub fn get_mut(&mut self, t: impl Into<Target>) -> &mut Option<PlatformCap> {
+        match t.into() {
+            Target::Pc => &mut self.pc,
+            Target::N64 => &mut self.n64,
+            Target::N3ds => &mut self.n3ds,
+            Target::Web => &mut self.web,
+            Target::N64Expanded => &mut self.n64_expanded,
+            Target::N3dsNew => &mut self.n3ds_new,
         }
     }
 }
@@ -169,7 +191,8 @@ impl ParticlesDef {
                 d.version
             ));
         }
-        // v1 is v2 without the Web: it saves as v2.
+        // v1 is v2 without the Web, v2 is v3 without the tiers: they save
+        // as v3.
         d.version = DEF_VERSION;
         d.validate()?;
         Ok(d)
@@ -207,7 +230,7 @@ impl ParticlesDef {
         }
         let caps = [Some(self.max)]
             .into_iter()
-            .chain(Platform::ALL.map(|p| self.platforms.get(p).and_then(|c| c.max)));
+            .chain(Target::EVERY.map(|t| self.platforms.own(t).and_then(|c| c.max)));
         for c in caps.flatten() {
             if c > MAX_PARTICLES {
                 return Err(format!("max {c}: at most {MAX_PARTICLES}"));
@@ -237,42 +260,45 @@ impl ParticlesDef {
         }
     }
 
-    /// The most particles alive on `platform` (0 = off there).
-    pub fn cap(&self, platform: Platform) -> u16 {
-        match self.platforms.get(platform) {
+    /// The most particles alive on `target` (a build platform or a
+    /// hardware tier; 0 = off there).
+    pub fn cap(&self, target: impl Into<Target>) -> u16 {
+        match self.platforms.get(target) {
             Some(c) if c.disabled => 0,
             Some(c) => c.max.unwrap_or(self.max),
             None => self.max,
         }
     }
 
-    /// The baked effect for `platform`.
-    pub fn effect(&self, platform: Platform) -> Effect {
+    /// The baked effect for `target`.
+    pub fn effect(&self, target: impl Into<Target>) -> Effect {
         Effect {
             emitter: self.emitter(),
-            max: self.cap(platform),
+            max: self.cap(target),
         }
     }
 
-    /// Its `TPFX` blob for `platform`.
-    pub fn tpfx(&self, platform: Platform) -> Vec<u8> {
+    /// Its `TPFX` blob for `target`.
+    pub fn tpfx(&self, target: impl Into<Target>) -> Vec<u8> {
         let mut out = [0u8; TPFX_BYTES];
-        self.effect(platform).write(&mut out);
+        self.effect(target).write(&mut out);
         out.to_vec()
     }
 }
 
-/// Bake the effect file at `path` for `platform`.
-pub fn bake(path: &std::path::Path, platform: Platform) -> Result<Vec<u8>, String> {
+/// Bake the effect file at `path` for `target` (a build platform or a
+/// hardware tier).
+pub fn bake(path: &std::path::Path, target: impl Into<Target>) -> Result<Vec<u8>, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let def = ParticlesDef::from_ron(&text).map_err(|e| format!("{}: {e}", path.display()))?;
-    Ok(def.tpfx(platform))
+    Ok(def.tpfx(target))
 }
 
 /// What an effect costs on a platform, over a deterministic run.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SimReport {
-    pub platform: Platform,
+    /// A build's platform or a hardware tier (`n64_expanded`, `n3ds_new`).
+    pub platform: Target,
     pub cap: u16,
     /// Live particles at the end of the run and the most at once.
     pub live: usize,
@@ -286,8 +312,15 @@ pub struct SimReport {
     pub hash: u32,
 }
 
-/// Run the effect for `seconds` at 30 fps with `seed` on `platform`.
-pub fn simulate(def: &ParticlesDef, platform: Platform, seconds: f32, seed: u32) -> SimReport {
+/// Run the effect for `seconds` at 30 fps with `seed` on `target` (a
+/// platform or a hardware tier).
+pub fn simulate(
+    def: &ParticlesDef,
+    target: impl Into<Target>,
+    seconds: f32,
+    seed: u32,
+) -> SimReport {
+    let platform = target.into();
     let effect = def.effect(platform);
     let mut sys: Box<ParticleSystem<{ MAX_PARTICLES as usize }>> =
         Box::new(ParticleSystem::from_effect(&effect, seed));
@@ -359,6 +392,7 @@ pub fn save(assets_root: &std::path::Path, name: &str, def: &ParticlesDef) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Platform;
 
     #[test]
     fn the_web_takes_the_pc_cap_unless_it_has_its_own() {

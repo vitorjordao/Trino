@@ -4,6 +4,47 @@
 //! target's budget explicit so the PC backend can run in "strict mode" and
 //! reject content that would not fit on a console — at development time,
 //! with an actionable error, instead of at port time.
+//!
+//! Two consoles come in two hardware tiers ([`HwTier`], ADR 0020): an N64
+//! with the Expansion Pak (8 MB of RDRAM instead of 4) and the New Nintendo
+//! 3DS family (804 MHz with an L2 cache instead of 268 MHz, a second
+//! application core). One ROM or app runs on both; the backend detects the
+//! tier at boot and its renderer reports [`Caps::N64_EXPANDED`] or
+//! [`Caps::N3DS_NEW`]. The base tables stay the design ceiling.
+
+/// Which variant of its console a target is ([`Caps::hw_tier`],
+/// [`crate::Platform::hw_tier`]). Detected at boot on the consoles, never
+/// built in: content that wants more on the bigger variant says so as data
+/// (the `n64_expanded` / `n3ds_new` keys of scenes, particle effects, LOD
+/// starts and the manifest), and code can branch on it at update time.
+///
+/// | Target | `Base` | `Expanded` |
+/// |---|---|---|
+/// | N64 | 4 MB RDRAM | Expansion Pak: 8 MB |
+/// | 3DS | 3DS / 2DS: 268 MHz, one application core | New 3DS / New 2DS XL: 804 MHz + 2 MB L2, a second application core |
+/// | PC, Web | always (their scaling is quality presets, issue #55) | — |
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default, PartialOrd, Ord)]
+pub enum HwTier {
+    #[default]
+    Base,
+    Expanded,
+}
+
+impl HwTier {
+    pub const ALL: [HwTier; 2] = [HwTier::Base, HwTier::Expanded];
+
+    /// `base` / `expanded` (boot log, `--json` output).
+    pub const fn key(self) -> &'static str {
+        match self {
+            HwTier::Base => "base",
+            HwTier::Expanded => "expanded",
+        }
+    }
+
+    pub const fn is_expanded(self) -> bool {
+        matches!(self, HwTier::Expanded)
+    }
+}
 
 /// Hardware budget of a target platform.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -50,6 +91,28 @@ pub struct Caps {
     /// every target keeps the same cap so the surface moves alike. Strict
     /// mode panics on more.
     pub max_ripples: u8,
+    /// Main memory a game can plan for, in bytes: the N64's RDRAM (4 MiB,
+    /// 8 MiB with the Expansion Pak; code, framebuffers and the heap all
+    /// come out of it), the 3DS's application memory region (64 MiB on
+    /// every model for a `.3dsx`: the New 3DS's bigger regions need a title
+    /// that asks for them). `u32::MAX` = no budget (PC, Web).
+    pub ram_bytes: u32,
+    /// CPU cores the game may use (the 3DS: application cores; the New
+    /// 3DS adds one, `platform-3ds`'s worker runs there). `0` = the host's,
+    /// not a budget (PC, Web).
+    pub cpu_cores: u8,
+    /// Main CPU clock in MHz (`0` = the host's).
+    pub cpu_mhz: u16,
+    /// Which variant of the console this table describes.
+    pub hw_tier: HwTier,
+    /// Advisory "more when the hardware allows" knobs, in percent of the
+    /// base tier's: how many characters (`crowd`) and particles a game may
+    /// afford ([`crowd_scale`](Self::crowd_scale),
+    /// [`particle_scale`](Self::particle_scale)). Only CPU or GPU headroom
+    /// raises them: the Expansion Pak adds memory, not speed, so the N64's
+    /// stay at 100.
+    pub crowd_percent: u16,
+    pub particle_percent: u16,
 }
 
 /// Why a piece of content does not fit in a target's [`Caps`].
@@ -82,6 +145,23 @@ impl Caps {
         ao_tier: crate::ao::AoTier::Baked,
         water_tier: crate::water::WaterTier::PerVertex,
         max_ripples: crate::water::MAX_RIPPLES as u8,
+        ram_bytes: 4 * 1024 * 1024,
+        cpu_cores: 1,
+        cpu_mhz: 93,
+        hw_tier: HwTier::Base,
+        crowd_percent: 100,
+        particle_percent: 100,
+    };
+
+    /// An N64 with the Expansion Pak: [`Caps::N64`] with 8 MiB of RDRAM.
+    /// The CPU, the RSP, the RDP and TMEM are the same, so every frame
+    /// budget and the scaling knobs are too; what grows is what fits in
+    /// memory (more resident models, textures, sounds, bigger levels).
+    /// libdragon's heap takes the extra 4 MiB by itself.
+    pub const N64_EXPANDED: Caps = Caps {
+        ram_bytes: 8 * 1024 * 1024,
+        hw_tier: HwTier::Expanded,
+        ..Caps::N64
     };
 
     /// Nintendo 3DS (top screen): 400x240, 24-bit.
@@ -100,6 +180,26 @@ impl Caps {
         ao_tier: crate::ao::AoTier::Baked,
         water_tier: crate::water::WaterTier::VertexProgram,
         max_ripples: crate::water::MAX_RIPPLES as u8,
+        ram_bytes: 64 * 1024 * 1024,
+        cpu_cores: 1,
+        cpu_mhz: 268,
+        hw_tier: HwTier::Base,
+        crowd_percent: 100,
+        particle_percent: 100,
+    };
+
+    /// A New Nintendo 3DS (or New 2DS XL) with the speedup on: 804 MHz, the
+    /// 2 MB L2 cache, a second application core. The GPU and the screens
+    /// are the 3DS's. The CPU-bound 3D path (draws off `gpu_check`) and the
+    /// game's own update run up to 3x faster, hence twice the crowds and
+    /// particles. The memory budget stays the `.3dsx`'s 64 MiB.
+    pub const N3DS_NEW: Caps = Caps {
+        cpu_cores: 2,
+        cpu_mhz: 804,
+        hw_tier: HwTier::Expanded,
+        crowd_percent: 200,
+        particle_percent: 200,
+        ..Caps::N3DS
     };
 
     /// PC: generous defaults; the internal resolution follows the active
@@ -119,6 +219,12 @@ impl Caps {
         ao_tier: crate::ao::AoTier::ScreenSpace,
         water_tier: crate::water::WaterTier::PerPixel,
         max_ripples: crate::water::MAX_RIPPLES as u8,
+        ram_bytes: u32::MAX,
+        cpu_cores: 0,
+        cpu_mhz: 0,
+        hw_tier: HwTier::Base,
+        crowd_percent: 100,
+        particle_percent: 100,
     };
 
     /// A web browser (WebGPU, or WebGL2 where there is none; issue #47):
@@ -143,7 +249,70 @@ impl Caps {
         ao_tier: crate::ao::AoTier::ScreenSpace,
         water_tier: crate::water::WaterTier::PerPixel,
         max_ripples: crate::water::MAX_RIPPLES as u8,
+        ram_bytes: u32::MAX,
+        cpu_cores: 0,
+        cpu_mhz: 0,
+        hw_tier: HwTier::Base,
+        crowd_percent: 100,
+        particle_percent: 100,
     };
+
+    /// The same console's table for `tier`: [`Caps::N64`] ↔
+    /// [`Caps::N64_EXPANDED`], [`Caps::N3DS`] ↔ [`Caps::N3DS_NEW`]. Targets
+    /// with one tier (PC, Web) return themselves. Fields a host overrode
+    /// (the PC's internal resolution) are kept.
+    pub const fn with_tier(self, tier: HwTier) -> Caps {
+        // The consoles are told apart by their CPU clock (93 MHz; 268 or
+        // 804 MHz); the PC and the Web leave it 0.
+        let (base, expanded) = match self.cpu_mhz {
+            93 => (Caps::N64, Caps::N64_EXPANDED),
+            268 | 804 => (Caps::N3DS, Caps::N3DS_NEW),
+            _ => return self,
+        };
+        let table = match tier {
+            HwTier::Base => base,
+            HwTier::Expanded => expanded,
+        };
+        Caps {
+            ram_bytes: table.ram_bytes,
+            cpu_cores: table.cpu_cores,
+            cpu_mhz: table.cpu_mhz,
+            hw_tier: table.hw_tier,
+            crowd_percent: table.crowd_percent,
+            particle_percent: table.particle_percent,
+            ..self
+        }
+    }
+
+    /// The base tier's table of the same console ([`with_tier`](Self::with_tier)).
+    pub const fn base(self) -> Caps {
+        self.with_tier(HwTier::Base)
+    }
+
+    /// How many more characters this tier affords than the base one (1.0
+    /// on every base tier and on the Expansion Pak, 2.0 on the New 3DS).
+    /// Advisory: multiply a crowd authored for the base console.
+    pub fn crowd_scale(&self) -> f32 {
+        self.crowd_percent as f32 / 100.0
+    }
+
+    /// How many more particles this tier affords (see
+    /// [`crowd_scale`](Self::crowd_scale)). Particle effects can also name
+    /// a cap per tier in their file (`n64_expanded`, `n3ds_new`).
+    pub fn particle_scale(&self) -> f32 {
+        self.particle_percent as f32 / 100.0
+    }
+
+    /// `n` characters authored for the base tier, scaled for this one, in
+    /// integers (`n × crowd_percent / 100`, rounded down).
+    pub const fn crowd(&self, n: u32) -> u32 {
+        n * self.crowd_percent as u32 / 100
+    }
+
+    /// `n` particles authored for the base tier, scaled for this one.
+    pub const fn particles(&self, n: u32) -> u32 {
+        n * self.particle_percent as u32 / 100
+    }
 
     /// Validate a texture of `width`x`height` at `bytes_per_pixel` against
     /// this budget.
@@ -222,5 +391,69 @@ mod tests {
             Err(CapsError::TextureTooLarge { max_dim: 4096, .. })
         ));
         assert!(web.save_bytes >= Caps::N3DS.save_bytes);
+    }
+
+    #[test]
+    fn expanded_tiers_only_change_what_their_hardware_adds() {
+        // The Expansion Pak: memory only.
+        let x = Caps::N64_EXPANDED;
+        assert_eq!(x.ram_bytes, 2 * Caps::N64.ram_bytes);
+        assert_eq!(x.hw_tier, HwTier::Expanded);
+        assert_eq!(
+            Caps {
+                ram_bytes: Caps::N64.ram_bytes,
+                hw_tier: HwTier::Base,
+                ..x
+            },
+            Caps::N64
+        );
+        assert_eq!((x.crowd_scale(), x.particle_scale()), (1.0, 1.0));
+        // The New 3DS: CPU (clock, a core), so the scaling knobs.
+        let n = Caps::N3DS_NEW;
+        assert_eq!((n.cpu_mhz, n.cpu_cores), (804, 2));
+        assert_eq!((n.crowd_scale(), n.particle_scale()), (2.0, 2.0));
+        assert_eq!((n.crowd(10), n.particles(8)), (20, 16));
+        assert_eq!(n.ram_bytes, Caps::N3DS.ram_bytes);
+        assert_eq!(
+            Caps {
+                cpu_cores: 1,
+                cpu_mhz: 268,
+                hw_tier: HwTier::Base,
+                crowd_percent: 100,
+                particle_percent: 100,
+                ..n
+            },
+            Caps::N3DS
+        );
+        // Base tiers scale by 1.
+        for c in [Caps::N64, Caps::N3DS, Caps::PC, Caps::WEB] {
+            assert_eq!(c.hw_tier, HwTier::Base);
+            assert_eq!((c.crowd(7), c.particles(7)), (7, 7));
+        }
+    }
+
+    #[test]
+    fn with_tier_maps_each_console_to_its_other_table() {
+        assert_eq!(Caps::N64.with_tier(HwTier::Expanded), Caps::N64_EXPANDED);
+        assert_eq!(Caps::N64_EXPANDED.with_tier(HwTier::Base), Caps::N64);
+        assert_eq!(Caps::N3DS.with_tier(HwTier::Expanded), Caps::N3DS_NEW);
+        assert_eq!(Caps::N3DS_NEW.base(), Caps::N3DS);
+        for c in [Caps::N64, Caps::N3DS, Caps::N64_EXPANDED, Caps::N3DS_NEW] {
+            assert_eq!(c.with_tier(c.hw_tier), c);
+        }
+        // One tier on the PC and the Web.
+        assert_eq!(Caps::PC.with_tier(HwTier::Expanded), Caps::PC);
+        assert_eq!(Caps::WEB.with_tier(HwTier::Expanded), Caps::WEB);
+        // A host's own resolution survives (the PC's N64 profile).
+        let sim = Caps {
+            screen_width: 640,
+            ..Caps::N64
+        };
+        let x = sim.with_tier(HwTier::Expanded);
+        assert_eq!(
+            (x.screen_width, x.ram_bytes),
+            (640, Caps::N64_EXPANDED.ram_bytes)
+        );
+        assert_eq!(HwTier::ALL.map(HwTier::key), ["base", "expanded"]);
     }
 }

@@ -236,8 +236,12 @@ jobs:
       - name: Save ares image
         if: steps.ares-cache.outputs.cache-hit != 'true'
         run: docker save trino-ares -o ~/trino-ares.tar
-      - name: Emulator self-test (ares)
-        run: cargo xtask test n64
+      # Both hardware tiers (issue #54): one ROM booted with the Expansion
+      # Pak (8 MB, the expanded tier's data) and without (4 MB, the base
+      # tier's); each run checks the ROM's TRINO_HW line and the data it
+      # loaded against ares's setting.
+      - name: Emulator self-test (ares, with and without the Expansion Pak)
+        run: cargo xtask test n64 --expansion-pak both
         env:
           TRINO_ARES: docker
           # lavapipe on a 4-core runner; the harness default is 300 s.
@@ -328,8 +332,11 @@ jobs:
             libharfbuzz0b libfribidi0
       - name: Set up Azahar
         run: cargo xtask emulators setup azahar
-      - name: Emulator self-test (Azahar)
-        run: xvfb-run -a -s "-screen 0 1280x720x24" cargo xtask test 3ds --no-build
+      # Both hardware tiers (issue #54): Azahar as a New 3DS (speedup on:
+      # the expanded tier, the worker on core 2) and as an old 3DS (the base
+      # tier, the worker on core 1).
+      - name: Emulator self-test (Azahar, New 3DS and old 3DS)
+        run: xvfb-run -a -s "-screen 0 1280x720x24" cargo xtask test 3ds --no-build --new3ds both
         env:
           TRINO_EMU_TIMEOUT: "900"
       # The football template: the same project scaffolded again (its

@@ -283,16 +283,21 @@ pub fn bake_assets(p: &Project, test_mode: bool) -> Result<(), String> {
         index.push_str(&format!("{id:08x}\tmusic\t{id:08x}.wav64\n"));
     }
     for (name, decl) in &manifest.models {
-        if !decl.bakes_for(Platform::N64) {
+        // A model only the expanded tier names is in the image too, loaded
+        // on that hardware only (issue #54).
+        let Some(tier) = trino_asset_pipeline::tier::model_tier(decl, Platform::N64) else {
             continue;
-        }
+        };
         let logical = format!("models/{name}");
         let id = trino_core::asset_id(&logical);
         let source = resolve_source(&root.join("assets"), Platform::N64, &decl.file)?;
         // TMDL is portable: same blob on every platform, no container tool.
         let blob = trino_asset_pipeline::bake_model(&source, &decl.options())?;
-        std::fs::write(fsdir.join(format!("{id:08x}.tmdl")), blob).map_err(|e| e.to_string())?;
-        index.push_str(&format!("{id:08x}\tmodel\t{id:08x}.tmdl\n"));
+        let file = format!("{id:08x}.tmdl");
+        std::fs::write(fsdir.join(&file), blob).map_err(|e| e.to_string())?;
+        index.push_str(&trino_asset_pipeline::tier::index_line(
+            id, "model", &file, tier,
+        ));
     }
 
     for (name, decl) in &manifest.fonts {
@@ -352,22 +357,30 @@ pub fn bake_assets(p: &Project, test_mode: bool) -> Result<(), String> {
             trino_asset_pipeline::Platform::N64,
             &decl.file,
         )?;
-        let blob =
-            trino_asset_pipeline::particles::bake(&source, trino_asset_pipeline::Platform::N64)?;
-        std::fs::write(fsdir.join(format!("{id:08x}.blob")), blob).map_err(|e| e.to_string())?;
-        index.push_str(&format!("{id:08x}\tblob\t{id:08x}.blob\n"));
+        // Each hardware tier's cap: a `base` and an `expanded` copy when
+        // they differ (issue #54).
+        let twins = trino_asset_pipeline::tier_twins(Platform::N64, |t| {
+            trino_asset_pipeline::particles::bake(&source, t)
+        })?;
+        for twin in twins {
+            std::fs::write(fsdir.join(twin.file(id, "blob")), &twin.bytes)
+                .map_err(|e| e.to_string())?;
+            index.push_str(&twin.index_line(id, "blob", "blob"));
+        }
     }
     for (name, decl) in &manifest.scenes {
         let logical = format!("scenes/{name}");
         let id = trino_core::asset_id(&logical);
-        // TSCN is portable: the same blob on every platform.
-        let blob = trino_asset_pipeline::bake_scene_for(
-            &root.join("assets"),
-            &decl.file,
-            trino_asset_pipeline::Platform::N64,
-        )?;
-        std::fs::write(fsdir.join(format!("{id:08x}.blob")), blob).map_err(|e| e.to_string())?;
-        index.push_str(&format!("{id:08x}\tblob\t{id:08x}.blob\n"));
+        // TSCN is portable; the variants resolve per hardware tier (a
+        // `base` and an `expanded` copy when they differ, issue #54).
+        let twins = trino_asset_pipeline::tier_twins(Platform::N64, |t| {
+            trino_asset_pipeline::bake_scene_for(&root.join("assets"), &decl.file, t)
+        })?;
+        for twin in twins {
+            std::fs::write(fsdir.join(twin.file(id, "blob")), &twin.bytes)
+                .map_err(|e| e.to_string())?;
+            index.push_str(&twin.index_line(id, "blob", "blob"));
+        }
     }
 
     std::fs::write(fsdir.join("index.tsv"), index).map_err(|e| e.to_string())?;
@@ -613,7 +626,16 @@ fn ares_command(ares: &Path, rom: &Path, args: &[&str]) -> (Command, Option<Stri
     (cmd, Some(name))
 }
 
-pub fn run(p: &Project) -> ExitCode {
+/// ares's Expansion Pak setting (`--expansion-pak on|off`, issue #54).
+fn pak_setting(pak: bool) -> &'static str {
+    if pak {
+        "Nintendo64/ExpansionPak=true"
+    } else {
+        "Nintendo64/ExpansionPak=false"
+    }
+}
+
+pub fn run(p: &Project, hw: &crate::hwtier::Options) -> ExitCode {
     let code = build(p, false);
     if code != ExitCode::SUCCESS {
         return code;
@@ -622,8 +644,20 @@ pub fn run(p: &Project) -> ExitCode {
         eprintln!("[n64] ares not found (expected ares-v148/ares.exe at the repo root)");
         return ExitCode::FAILURE;
     };
-    println!("[n64] launching ares...");
-    match Command::new(&ares).arg(p.rom()).spawn() {
+    let settings: &[&str] = match hw.pak_run() {
+        Some(pak) => {
+            println!(
+                "[n64] launching ares ({} the Expansion Pak)...",
+                if pak { "with" } else { "without" }
+            );
+            &["--setting", pak_setting(pak)]
+        }
+        None => {
+            println!("[n64] launching ares...");
+            &[]
+        }
+    };
+    match Command::new(&ares).args(settings).arg(p.rom()).spawn() {
         Ok(_) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("[n64] failed to launch ares: {e}");
@@ -635,7 +669,7 @@ pub fn run(p: &Project) -> ExitCode {
 /// Console live-reload loop: watch game source + assets, rebuild the ROM on
 /// change and relaunch ares. No in-place hot reload on the N64 — kill +
 /// relaunch IS the loop (n64.mk-style dev cycle).
-pub fn watch(p: &Project) -> ExitCode {
+pub fn watch(p: &Project, hw: &crate::hwtier::Options) -> ExitCode {
     use std::sync::mpsc;
     use std::time::Duration;
 
@@ -650,9 +684,13 @@ pub fn watch(p: &Project) -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    fn launch(ares: &Path, rom: &Path) -> std::io::Result<std::process::Child> {
-        Command::new(ares).arg(rom).spawn()
-    }
+    let settings: &[&str] = match hw.pak_run() {
+        Some(pak) => &["--setting", pak_setting(pak)],
+        None => &[],
+    };
+    let launch = |ares: &Path, rom: &Path| -> std::io::Result<std::process::Child> {
+        Command::new(ares).args(settings).arg(rom).spawn()
+    };
     let rom = p.rom();
     let mut child = match launch(&ares, &rom) {
         Ok(c) => c,
@@ -713,13 +751,27 @@ pub fn watch(p: &Project) -> ExitCode {
     }
 }
 
-/// Boot the test ROM in ares and watch stdout for the ISViewer magic
-/// strings. Kills the emulator on verdict or timeout.
-pub fn test(p: &Project, bless: bool) -> ExitCode {
+/// Build the test ROM and boot it in ares once per Expansion Pak setting
+/// `pak` asks for (`--expansion-pak on|off|both`; on by default, ares's own
+/// default): one ROM detects its tier at boot (issue #54).
+pub fn test(p: &Project, bless: bool, pak: crate::hwtier::Mode) -> ExitCode {
     let code = build(p, true);
     if code != ExitCode::SUCCESS {
         return code;
     }
+    for &on in pak.runs() {
+        let code = boot_test(p, bless, on);
+        if code != ExitCode::SUCCESS {
+            return code;
+        }
+    }
+    ExitCode::SUCCESS
+}
+
+/// Boot the test ROM in ares (with or without the Expansion Pak) and watch
+/// stdout for the ISViewer magic strings and the `TRINO_HW` line. Kills the
+/// emulator on verdict or timeout.
+fn boot_test(p: &Project, bless: bool, pak: bool) -> ExitCode {
     let root = &p.root;
     let Some(ares) = ares_exe(p) else {
         eprintln!("[n64] ares not found (expected ares-v148/ares.exe at the repo root)");
@@ -728,12 +780,21 @@ pub fn test(p: &Project, bless: bool) -> ExitCode {
 
     let timeout = crate::emulators::timeout_secs();
     let idle = crate::emulators::idle_secs();
-    println!("[n64] booting test ROM in ares ({timeout}s timeout, {idle}s idle limit)...");
+    println!(
+        "[n64] booting test ROM in ares {} the Expansion Pak ({timeout}s timeout, {idle}s idle limit)...",
+        if pak { "with" } else { "without" }
+    );
     // Native-resolution RDP: the golden frame is compared pixel-exactly.
     let (mut cmd, container) = ares_command(
         &ares,
         &p.rom(),
-        &["--no-file-prompt", "--setting", "Video/Quality=SD"],
+        &[
+            "--no-file-prompt",
+            "--setting",
+            "Video/Quality=SD",
+            "--setting",
+            pak_setting(pak),
+        ],
     );
     let mut child = match cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() {
         Ok(c) => c,
@@ -771,6 +832,8 @@ pub fn test(p: &Project, bless: bool) -> ExitCode {
     let mut perf_scenes = Vec::new();
     let mut micro_scenes = Vec::new();
     let mut frame_lines = Vec::new();
+    let mut hw_line = None;
+    let mut tier_step = None;
     let verdict = loop {
         if let Some(why) = watchdog.expired(Instant::now()) {
             break Err(why);
@@ -800,6 +863,12 @@ pub fn test(p: &Project, bless: bool) -> ExitCode {
                 if let Some(f) = parse_frame_line(&line) {
                     frame_lines.push(f);
                 }
+                if hw_line.is_none() && line.contains("TRINO_HW n64") {
+                    hw_line = Some(line.clone());
+                }
+                if line.contains("TRINO_STEP:hw tier ") {
+                    tier_step = Some(line.clone());
+                }
                 if line.contains("TRINO_TEST_PASS") {
                     break Ok(());
                 }
@@ -822,6 +891,17 @@ pub fn test(p: &Project, bless: bool) -> ExitCode {
             .status();
     }
 
+    // The boot's tier against ares's setting (issue #54).
+    let verdict = verdict.and_then(|()| {
+        let hw = crate::hwtier::check_n64(hw_line.as_deref(), pak)?;
+        println!("[n64] hardware tier: {hw}");
+        // The engine self-test loaded that tier's data (castle64's step).
+        if p.is_engine {
+            let data = crate::hwtier::check_data(hw_line.as_deref(), tier_step.as_deref())?;
+            println!("[n64] tier data: {data}");
+        }
+        Ok(())
+    });
     let verdict = if p.is_engine {
         verdict.and_then(|()| engine_gates(root, &frames, &perf_scenes, &micro_scenes, bless))
     } else {
@@ -833,7 +913,10 @@ pub fn test(p: &Project, bless: bool) -> ExitCode {
 
     match verdict {
         Ok(()) => {
-            println!("[n64] TEST PASS");
+            println!(
+                "[n64] TEST PASS ({} the Expansion Pak)",
+                if pak { "with" } else { "without" }
+            );
             ExitCode::SUCCESS
         }
         Err(e) => {

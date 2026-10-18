@@ -552,6 +552,37 @@ overlay, and a measurement on real hardware (ares doesn't time the RDP).
     budget lines (`WebCalls`, measured calls and pipeline switches), Run in Browser and
     Export Web Package.
   - **CI:** one `web` job: Chromium (WebGL2 + WebGPU), Firefox and WebKit from one build.
+- **Console hardware tiers (2026-10-18, ADR 0020, GitHub #54):** one ROM / `.3dsx`
+  serves both variants of each console.
+  - **Core:** `HwTier { Base, Expanded }`; `Caps::N64_EXPANDED` (8 MB) and
+    `Caps::N3DS_NEW` (2 cores at 804 MHz, crowds and particles ×2) beside the base
+    tables, with `ram_bytes`, `cpu_cores`, `cpu_mhz`, `hw_tier`, `crowd_scale()`,
+    `particle_scale()`, `with_tier`/`base`; `Platform::hw_tier()` (default `Base`,
+    no `GAME_API_VERSION` bump). The PC and the Web are always `Base` (#55 owns PC tiers).
+  - **Detection:** the N64 boot reads `get_memory_size()` (`platform-n64/src/hw.rs`); the
+    3DS boot asks `APT_CheckNew3DS` and turns `osSetSpeedupEnable` on unless
+    `trino.toml` `[3ds] speedup = false` (a RomFS `no_speedup` file;
+    `platform-3ds/src/hw.rs`). Both log `TRINO_HW …` first thing.
+  - **3DS worker core** (`trino_platform_3ds::worker`): `start` (core 2 on a New 3DS,
+    core 1 with `APT_SetAppCpuTimeLimit(30)` on an old one), `submit(extern "C" fn(u32),
+    arg)` (inline without a worker or with the 32-job ring full), `wait`.
+  - **Content:** `n64_expanded` / `n3ds_new` keys in scene (v5) and prefab (v4) variants,
+    LOD `At(d)`, particle caps (v3) and manifest model `platforms`; a tier without its
+    own variant takes its console's (`Target::fallback`). Console bakes keep a `base`
+    and an `expanded` copy of a scene or effect that differs (`.x.blob`, index.tsv 4th
+    column, `asset::loads_on`), and tier-only models get the `expanded` column
+    (`asset-pipeline/src/tier.rs`).
+  - **Tools:** `test n64 --expansion-pak on|off|both`, `test 3ds --new3ds on|off|both`
+    (also `run`/`watch` with on/off), `--speedup on|off`; `scene budget --platform
+    n64_expanded|n3ds_new` (RAM line, cores, scales, `--json` fields). Each boot checks
+    the `TRINO_HW` line, the `hw tier` step's `data=` and (3DS) the `worker core=`.
+    CI boots both tiers of each console.
+  - **PC sim:** `TRINO_SIM=n64x|3dsnew` (`SimProfile::parse_tier`,
+    `PcRenderer::set_hw_tier`, `PcPlatform::set_hw_tier`); strict mode also checks the
+    loaded models against the tier's `ram_bytes`. The editor's Game view has
+    "N64 + Expansion Pak" and "New 3DS" (`TRINO_EDITOR_GAME=n64x|3dsnew`), a
+    base-vs-expanded HUD, and tier columns in Inspector › Platforms, LOD and particle
+    caps (editor skill › Hardware tiers).
 - **Console hardware paths and N64 timing (2026-10-16, ADR 0012, part of #31):**
   the 3DS transforms and lights static meshes on the PICA200 (`render3d::gpu_check`,
   `tnl3d.v.pica`, `gpu tnl` self-test step, `castle64_work_3ds.toml`); text goes to the
@@ -728,12 +759,16 @@ cargo xtask build web     # wasm + wasm-bindgen + KTX2 packs -> target/web (--re
 cargo xtask run web       # build, serve on 127.0.0.1 (COOP/COEP), open the browser (--query "?game=solid-eleven")
 cargo xtask test web      # the browser self-test in Chromium (WebGL2+WebGPU), Firefox, WebKit + tests/golden/web
 cargo xtask run|test|watch 3ds --accurate-timing  # Azahar "Simulate 3DS GPU timings" for one session (or TRINO_AZAHAR_GPU_TIMING=1)
+cargo xtask test n64 --expansion-pak both          # boot with and without the Expansion Pak (on|off also for run/watch)
+cargo xtask test 3ds --new3ds both                 # boot as a New 3DS and as an old one (on|off also for run/watch)
+cargo xtask build|run|test 3ds --speedup off       # the New 3DS at 268 MHz (trino.toml [3ds] speedup for one command)
+TRINO_SIM=n64x|3dsnew cargo run -p trino-app-pc    # a console's expanded tier on the PC (its look, the tier's Caps)
 cargo xtask run n64 --device sc64|everdrive        # real N64 via flashcart USB; log in the terminal
 cargo xtask run 3ds --device network --ip <IP>     # real 3DS via 3dslink (--gdb: Luma3DS gdb script)
 cargo xtask new <name>    # scaffold a game crate under examples/
 cargo xtask scene check   # validate scenes/prefabs/materials (text-first loop)
-cargo xtask scene export [--platform pc|n64|3ds] <scene.ron> <out.rs>   # scene -> no_std Rust data (that platform's variants)
-cargo xtask scene budget <scene.ron> [--platform pc|n64|3ds] [--json]   # per-console frame: draws, tris, N64 CPU/RSP, off-RSP reasons, PC GPU split, unseen draws
+cargo xtask scene export [--platform pc|n64|3ds|web|n64_expanded|n3ds_new] <scene.ron> <out.rs>   # scene -> no_std Rust data (that platform's variants)
+cargo xtask scene budget <scene.ron> [--platform pc|n64|3ds|web|n64_expanded|n3ds_new] [--json]   # per-console frame: draws, tris, N64 CPU/RSP, off-RSP reasons, PC GPU split, unseen draws, a tier's RAM/cores
 cargo xtask model inspect <file> [--json]       # bake a model like the engine; art gate
 cargo xtask texture inspect <sprites/x> [--platform pc|n64|3ds] [--json]   # format (auto: why), candidates, bytes, PSNR, memory share
 cargo xtask texture report [--platform pc|n64|3ds] [--json]                # every texture, biggest first, totals vs RGBA8
@@ -829,6 +864,19 @@ cargo test --workspace
   beyond Rust.
 
 ## Pitfalls
+
+- **Never compare a `Caps` with `==` to tell the console.** A tier's table differs
+  (`Caps::N64_EXPANDED != Caps::N64`) and the PC renderer's carries its picture size.
+  Compare `caps.base()` with the console's table, or ask the renderer's profile
+  (`PcRenderer::profile()`), as `runner-pc::sprite_platform` and the editor's budget do.
+- **Azahar's log and `qt-config.ini` are per user, not per worktree.** Two `test 3ds`
+  runs at once (two worktrees, two sessions) read each other's log lines and flip each
+  other's `is_new_3ds` / GPU-timing settings: a failure naming a step your branch does
+  not have is the other run's. Run one Azahar at a time (`pgrep -f AppRun`).
+- **Tier data must stay a twin, never a third copy.** A console bake writes one blob per
+  asset, or a `base` and an `expanded` one (`tier_twins`); the runtime loads the index
+  lines whose 4th column is empty or its tier. A new per-tier asset kind goes through
+  `tier_twins` and `TierBlob::index_line`, or the expanded tier loads both copies.
 
 - **The PC `gamepad` feature is compiled by no default gate.** fmt, clippy and
   `cargo test --workspace` build without it, so gilrs code can rot unseen. Check it with

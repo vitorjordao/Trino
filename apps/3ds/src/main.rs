@@ -160,6 +160,78 @@ mod n3ds {
         })
     }
 
+    /// `TRINO_FRAME:<scene> avg_us= max_us= frames= fps= cpu_us=`: 30
+    /// frames of a castle64 perf scene (render only). `avg_us` is the wall
+    /// clock, GPU and vsync waits included; `cpu_us` the ARM11's own work,
+    /// what the New 3DS's speedup changes.
+    fn time_scene(
+        scene: &castle64::perf::PerfScene,
+        renderer: &mut N3dsRenderer,
+        audio: &mut N3dsAudio,
+    ) {
+        const FRAMES: u32 = 30;
+        let mut g = alloc::boxed::Box::new(castle64::perf::scene_game(
+            scene,
+            Vec2::new(400.0, 240.0),
+            audio,
+        ));
+        g.render(renderer);
+        let _ = renderer.take_wait_us();
+        let (mut total, mut cpu, mut max) = (0u32, 0u32, 0u32);
+        for _ in 0..FRAMES {
+            let t0 = runtime::now_us();
+            g.render(renderer);
+            let us = runtime::now_us().wrapping_sub(t0);
+            total += us;
+            cpu += us.saturating_sub(renderer.take_wait_us());
+            max = max.max(us);
+        }
+        let avg = total / FRAMES;
+        runtime::log(&format!(
+            "TRINO_FRAME:{} avg_us={avg} max_us={max} frames={FRAMES} fps={} cpu_us={}\n",
+            scene.name,
+            1_000_000 / avg.max(1),
+            cpu / FRAMES
+        ));
+    }
+
+    /// The worker core (issue #54 Phase 3): eight jobs on the second core
+    /// compute what the main thread computes meanwhile, and match it. Logs
+    /// `TRINO_STEP:worker core=2 queued=8 …` (core -1: inline, no worker).
+    fn worker_check() -> Result<alloc::string::String, alloc::string::String> {
+        use core::sync::atomic::{AtomicU32, Ordering};
+        use trino_platform_3ds::worker;
+        const JOBS: usize = 8;
+        static OUT: [AtomicU32; JOBS] = [const { AtomicU32::new(0) }; JOBS];
+        fn work(i: u32) -> u32 {
+            let mut x = 0x9E37_79B9u32 ^ i.wrapping_mul(0x85EB_CA6B);
+            for _ in 0..40_000 {
+                x ^= x << 13;
+                x ^= x >> 17;
+                x ^= x << 5;
+            }
+            x
+        }
+        extern "C" fn job(i: u32) {
+            OUT[i as usize].store(work(i), Ordering::Release);
+        }
+        let core = worker::start();
+        let t0 = runtime::now_us();
+        let queued = (0..JOBS as u32).filter(|&i| worker::submit(job, i)).count();
+        let want: [u32; JOBS] = core::array::from_fn(|i| work(i as u32));
+        worker::wait();
+        let us = runtime::now_us().wrapping_sub(t0);
+        for (i, w) in want.iter().enumerate() {
+            if OUT[i].load(Ordering::Acquire) != *w {
+                return Err(format!("worker: job {i} computed the wrong value"));
+            }
+        }
+        Ok(format!(
+            "TRINO_STEP:worker core={} queued={queued} us={us}\n",
+            core.map_or(-1, i32::from)
+        ))
+    }
+
     /// Deterministic self-check exercising 3D physics + render + assets,
     /// reporting through the debug channel: settle on the ground, walk
     /// toward the castle (+Z), then jump and land back.
@@ -178,6 +250,18 @@ mod n3ds {
                 trino_core::Renderer::end_frame(renderer);
             }
             return;
+        }
+        runtime::log("TRINO_STEP:worker\n");
+        match worker_check() {
+            Ok(line) => runtime::log(&line),
+            Err(e) => {
+                runtime::log(&format!("TRINO_TEST_FAIL:{e}\n"));
+                while runtime::running() {
+                    trino_core::Renderer::begin_frame(renderer, trino_core::Color::BLACK);
+                    trino_core::Renderer::end_frame(renderer);
+                }
+                return;
+            }
         }
         runtime::log("TRINO_STEP:audio\n");
         if let Err(e) = castle64::selftest::audio_checks(audio) {
@@ -359,6 +443,12 @@ mod n3ds {
                     renderer.dump_framebuffer();
                     renderer.dump_framebuffer_bottom();
                     drop(g);
+                    // Every castle64 level timed on this hardware (reported
+                    // only: the New 3DS's speedup against the old clock,
+                    // issue #54; `--accurate-timing` for the GPU's share).
+                    for scene in castle64::perf::SCENES {
+                        time_scene(scene, renderer, audio);
+                    }
                     // 6) The showcase's touch panel (metrics + look
                     // toggles) read back: button fills by state and edges,
                     // a top-screen click ignored, two FOG taps through

@@ -5,7 +5,10 @@
 //! takes (issue #51) — with the rule each CPU draw failed — on the Web
 //! (issue #47) the same split plus the GPU calls and pipelines a browser
 //! pays for, the impostors' billboards, the LOD picks, and the draws sent
-//! for nothing (a whole mesh outside the view, still paid for).
+//! for nothing (a whole mesh outside the view, still paid for). A console's
+//! expanded hardware tier (issue #54: `n64_expanded`, `n3ds_new`) is
+//! estimated on its console's paths with its own variants, and reports the
+//! memory its scene's models take against [`trino_core::Caps::ram_bytes`].
 //!
 //! The editor's Game view HUD and `cargo xtask scene budget` call
 //! [`estimate`] on the same resolved scene, so a person and an agent read
@@ -68,6 +71,10 @@ pub struct FrameBudget {
     pub paths: Vec<DrawPath>,
     /// Web: what the browser's GPU API is asked for ([`WebCalls`]).
     pub web: WebCalls,
+    /// The baked bytes of every model the scene can draw from here on
+    /// (each distinct model once, LOD levels included, wherever the camera
+    /// is): what the scene's models take of the console's RAM.
+    pub model_bytes: u32,
 }
 
 /// The Web's frame as WebGPU / WebGL2 calls (issue #47), estimated like
@@ -149,9 +156,9 @@ pub enum RenderPath {
 impl RenderPath {
     /// The hardware path's name on `target`.
     pub fn hardware_name(target: Target) -> &'static str {
-        match target {
+        match target.base() {
             Target::N64 => "RSP",
-            Target::N3ds | Target::Pc | Target::Web => "GPU",
+            _ => "GPU",
         }
     }
 
@@ -166,7 +173,7 @@ impl RenderPath {
 
     /// One word for `--json`: `rsp`, `gpu`, `cpu` or `impostor`.
     pub fn key(&self, target: Target) -> &'static str {
-        match (self, target) {
+        match (self, target.base()) {
             (RenderPath::Hardware, Target::N64) => "rsp",
             (RenderPath::Hardware, _) => "gpu",
             (RenderPath::Cpu(_), _) => "cpu",
@@ -305,13 +312,72 @@ impl FrameBudget {
     }
 }
 
-/// The screen of a platform's top display (PC: the given size).
+/// The screen of a platform's top display (PC: the given size; a tier:
+/// its console's).
 pub fn screen_of(target: Target, pc: Vec2) -> Vec2 {
-    match target {
-        Target::Pc | Target::Web => pc,
+    match target.base() {
         Target::N64 => Vec2::new(320.0, 240.0),
         Target::N3ds => Vec2::new(400.0, 240.0),
+        _ => pc,
     }
+}
+
+/// The hardware budget a target's estimate is held to: its `Caps` table
+/// (the tiers' own, ADR 0020).
+pub fn caps_of(target: Target) -> trino_core::Caps {
+    use trino_core::Caps;
+    match target {
+        Target::Pc => Caps::PC,
+        Target::Web => Caps::WEB,
+        Target::N64 => Caps::N64,
+        Target::N3ds => Caps::N3DS,
+        Target::N64Expanded => Caps::N64_EXPANDED,
+        Target::N3dsNew => Caps::N3DS_NEW,
+    }
+}
+
+/// The HUD's and the CLI's memory line: `RAM 412 KB of 4096 KB models`
+/// (the scene's models against the target's [`trino_core::Caps::ram_bytes`];
+/// `None` where there is no budget: PC, Web).
+pub fn ram_line(b: &FrameBudget) -> Option<String> {
+    let ram = caps_of(b.target).ram_bytes;
+    (ram != u32::MAX).then(|| {
+        format!(
+            "{} RAM {} KB models of {} KB",
+            b.target.label(),
+            b.model_bytes.div_ceil(1024),
+            ram / 1024
+        )
+    })
+}
+
+/// The hardware a target's estimate assumes, in one line: `New 3DS: 2
+/// cores at 804 MHz, 64 MB RAM, crowds x2, particles x2` (`None` on the PC
+/// and the Web, which have no table to hold a scene to).
+pub fn hardware_line(target: Target) -> Option<String> {
+    let caps = caps_of(target);
+    if caps.ram_bytes == u32::MAX {
+        return None;
+    }
+    let cores = if caps.cpu_cores == 1 {
+        "1 core".to_string()
+    } else {
+        format!("{} cores", caps.cpu_cores)
+    };
+    let mut line = format!(
+        "{}: {cores} at {} MHz, {} MB RAM",
+        target.label(),
+        caps.cpu_mhz,
+        caps.ram_bytes / (1024 * 1024)
+    );
+    if caps.crowd_percent != 100 || caps.particle_percent != 100 {
+        line.push_str(&format!(
+            ", crowds x{}, particles x{}",
+            caps.crowd_scale(),
+            caps.particle_scale()
+        ));
+    }
+    Some(line)
 }
 
 /// Estimate the frame of `resolved` (resolved for `target`) from `camera`,
@@ -329,8 +395,11 @@ pub fn estimate<'m>(
     let mut scratch = Box::new(TnlScratch::new());
     let mut b = FrameBudget {
         target,
+        model_bytes: model_bytes(resolved, meshes),
         ..FrameBudget::default()
     };
+    // A tier runs on its console's paths (same GPU, same RSP).
+    let console = target.base();
     let visible = resolved.visible_cells(camera, screen);
     let mut reasons: Vec<(RspReject, u32)> = Vec::new();
     let mut gpu_reasons: Vec<(GpuReject, u32)> = Vec::new();
@@ -400,7 +469,7 @@ pub fn estimate<'m>(
                 detail,
             });
         }
-        if target == Target::N3ds {
+        if console == Target::N3ds {
             match gpu_mesh_check(&mesh)
                 .and_then(|_| gpu_check(&ctx, &mesh, &item.matrix, &item.params))
             {
@@ -418,7 +487,7 @@ pub fn estimate<'m>(
             }
             continue;
         }
-        if matches!(target, Target::Pc | Target::Web) {
+        if matches!(console, Target::Pc | Target::Web) {
             // A glossy draw is shaded per pixel on the PC (the estimate has
             // no local lights or wetness, the other two reasons).
             let per_pixel =
@@ -452,7 +521,7 @@ pub fn estimate<'m>(
             }
             continue;
         }
-        if target != Target::N64 {
+        if console != Target::N64 {
             continue;
         }
         match rsp_plan(&ctx, &mesh, &item.matrix, &item.params) {
@@ -490,6 +559,31 @@ pub fn estimate<'m>(
         };
     }
     b
+}
+
+/// The baked bytes of the distinct models `resolved` can draw (each
+/// entity's model and its LOD levels' models).
+fn model_bytes<'m>(resolved: &Resolved, meshes: &dyn Fn(ModelId) -> Option<&'m [u8]>) -> u32 {
+    let mut seen: Vec<ModelId> = Vec::new();
+    let mut add = |id: ModelId| {
+        if !seen.contains(&id) {
+            seen.push(id);
+        }
+    };
+    for item in &resolved.items {
+        if let Some(m) = &item.model {
+            add(m.0);
+        }
+        for l in &item.lod {
+            if let crate::LodDraw::Model(id, _) = &l.draw {
+                add(*id);
+            }
+        }
+    }
+    seen.iter()
+        .filter_map(|id| meshes(*id))
+        .map(|blob| blob.len() as u32)
+        .sum()
 }
 
 /// The Web's pipelines ([`WebCalls::pipelines`]), as bit numbers.

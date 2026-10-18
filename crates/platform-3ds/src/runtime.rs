@@ -6,10 +6,36 @@ use core::alloc::{GlobalAlloc, Layout};
 
 use crate::ffi;
 
-/// Initialize libctru subsystems (gfx, romfs, citro3d/2d, ndsp).
-/// Call first, once.
+/// Initialize libctru subsystems (gfx, romfs, citro3d/2d, ndsp), detect
+/// the New 3DS and turn its speedup on (unless the RomFS holds
+/// [`crate::hw::NO_SPEEDUP_FILE`]), and print the hardware tier
+/// (`TRINO_HW 3ds new=1 speedup=1 …`, ADR 0020). Call first, once.
 pub fn init() {
     unsafe { ffi::trino_init() }
+    let want = !crate::N3dsAssets::exists(crate::hw::NO_SPEEDUP_FILE);
+    let word = unsafe { ffi::trino_hw_probe(want as u32) };
+    PROBE.store(word, core::sync::atomic::Ordering::Relaxed);
+    let p = hw();
+    log(&alloc::format!(
+        "TRINO_HW 3ds new={} speedup={} app_ram={}M tier={}\n",
+        p.new3ds as u8,
+        p.speedup as u8,
+        p.app_mib,
+        p.tier().key()
+    ));
+}
+
+/// The boot's probe word (`trino_hw_probe`).
+static PROBE: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+/// What the boot found: New 3DS, speedup, application memory.
+pub fn hw() -> crate::hw::Probe {
+    crate::hw::Probe::decode(PROBE.load(core::sync::atomic::Ordering::Relaxed))
+}
+
+/// The hardware tier: `Expanded` on a New 3DS with the speedup on.
+pub fn hw_tier() -> trino_core::HwTier {
+    hw().tier()
 }
 
 pub fn log(msg: &str) {

@@ -196,6 +196,31 @@ shipping a 3D game first**, then by cost:
 
 ---
 
+## Done — console hardware tiers: the Expansion Pak and the New 3DS (2026-10-18, branch `feat/54-hw-tiers`, GitHub #54, ADR 0020)
+
+| Item | Evidence |
+|---|---|
+| `HwTier { Base, Expanded }`; `Caps::N64_EXPANDED` (8 MB) and `Caps::N3DS_NEW` (2 cores, 804 MHz, crowds and particles ×2); `Caps` gains `ram_bytes`, `cpu_cores`, `cpu_mhz`, `hw_tier`, the two scales, `with_tier`/`base`; `Platform::hw_tier` (default `Base`, no API bump) | core unit tests (the tables, `with_tier` both ways, the scales); `platform_save` (the default is `Base`) |
+| Detection at boot, logged first: N64 `get_memory_size()` (the Pak at 8 MB); 3DS `APT_CheckNew3DS` + `osSetSpeedupEnable`, opted out by `[3ds] speedup = false` / `--speedup off` (a RomFS `no_speedup`) | host tests of both `hw.rs` decoders; every ares and Azahar boot checks `TRINO_HW` against the switch (`hwtier::the_n64_line_must_match_the_expansion_pak`, `the_3ds_line_must_match_the_console_and_the_speedup`) |
+| `trino_platform_3ds::worker`: one worker thread on core 2 (New 3DS) or core 1 at 30% (old 3DS), a 32-slot job ring, jobs inline when there is no worker | `worker` host tests; the app's `worker` step (8 jobs checked against the main thread): core 2 in 6.0 ms, core 1 in 19.9 ms (Azahar) |
+| Content keys `n64_expanded` / `n3ds_new` in scenes (v5), prefabs (v4), particles (v3), LOD starts and manifest `platforms`, falling back to their console; tier twins in the console index (`<id>.x.blob`, a 4th `base`/`expanded` column), loaded by `asset::loads_on` | `platform_variants::tier_variants_round_trip_migrate_and_fall_back_to_their_console`, `lod_chain::a_tier_starts_a_level_at_its_own_distance_or_its_consoles`, `asset-pipeline/tests/tiers.rs`, `tier` and `asset` unit tests; every existing ROM and app bakes byte-identical blobs |
+| Self-test `hw tier` step: the probe scene's card, the tier sparks' cap and a tier-only model must all be the booted tier's | ares with and without the Pak, Azahar as a New and an old 3DS (CI boots all four); the PC suite on `n64x` / `3dsnew` (`engine_checks_pass_on_the_simulated_expanded_tiers`) |
+| PC `TRINO_SIM=n64x` / `3dsnew`: the console's look with the tier's `Caps` and `hw_tier` | `sim::tier_values_give_their_consoles_look_and_their_own_caps`, `hw_tier_follows_the_simulated_caps`, the runner's `tier_from_env` |
+| xtask: `test n64 --expansion-pak` and `test 3ds --new3ds` (`on`, `off`, `both`), `--speedup on` / `off`; `scene budget` and `export --platform n64_expanded` / `n3ds_new` (RAM, cores, scales); `particles check` and `inspect` per tier | `cli::hardware_tier_flags_go_with_their_console`, `scene_budget_cli_estimates_the_hardware_tiers`, `scene_export_applies_the_tier_variants_over_the_consoles`, `particles_cli` |
+| Editor: **+Pak** and **New** in the Game view (`TRINO_EDITOR_GAME=n64x` / `3dsnew`), a base-vs-expanded HUD with the RAM and hardware lines, the shown console's platform line on its tier; tier columns in Inspector › Platforms, LOD and particle caps (shown under a Tiers switch, starting from their console) | `ui_tests::new_3ds_tier_variant_reaches_the_game_view_the_file_and_the_budget`, the layout audit at 960×600 and 1600×940 with the tier columns and views, 4 widget tests, `budget::tier_tables_put_a_consoles_two_tiers_side_by_side`, `budget::platform_lines_follow_the_game_views_tier` |
+| PC strict mode: the loaded models against the tier's `ram_bytes` | `render_e2e::n64_look_and_strict_mode_budgets` (5 MB of models panic on the N64, pass with the Pak) |
+
+Measured (ADR 0020 §7):
+- N64, castle64 in ares, one ROM, emulated µs per frame with → without the Pak: hub
+  12 332 → 12 211, green-hills 7 449 → 7 690, lava-land 8 076 → 8 262, sky-tower
+  7 366 → 7 379, throne 18 573 → 18 438, showcase-river 25 000 → 25 470. Layout noise:
+  the Pak adds RAM, not speed.
+- 3DS, Azahar as a New 3DS, `--accurate-timing`, CPU µs per frame with the speedup on →
+  off: castle64 hub 1 703 → 1 703, throne 2 262 → 2 262; Solid Eleven's match
+  5 424 → 5 356 (same hash `d51e91bf`). Azahar ignores the speedup's clock.
+
+Left: the speedup and the Pak on real hardware (`--device`, P0 #1a's session).
+
 ## Done — the Web target: WebGPU with a WebGL2 fallback, KTX2 textures, browser CI (2026-10-18, branch `feat/47-web-target`, GitHub #47 and #52 phase 5, ADR 0019)
 
 | Item | Evidence |

@@ -121,6 +121,35 @@ tests follow the same pattern: add a step to `castle64::selftest` so the PC suit
   - Visual debugging without a window: `renderer.read_pixel` in a TEMP step and
     `runtime::log` the values (that is how the light leak below was found).
 
+## Hardware tiers (issue #54, ADR 0020)
+
+Both consoles have a base and an expanded variant, and one ROM / app runs on both. The
+first line after boot names the one found: `TRINO_HW n64 ram=8M tier=expanded`,
+`TRINO_HW 3ds new=1 speedup=1 app_ram=96M tier=expanded`.
+
+```
+cargo xtask test n64 --expansion-pak both     # with the Pak, then without (CI)
+cargo xtask test 3ds --new3ds both            # as a New 3DS, then an old one (CI)
+cargo xtask test 3ds --speedup off            # the build without the 804 MHz mode
+cargo xtask run n64 --expansion-pak off       # run/watch: on|off, else ares's own setting
+```
+
+- Unset, `test` boots on (the emulators' defaults, what every golden and perf ceiling
+  was measured with); `run`/`watch` leave the emulator's own setting.
+- ares takes `--setting Nintendo64/ExpansionPak=true|false`. Azahar's is `[System]
+  is_new_3ds` in `qt-config.ini`, forced for one session like `--accurate-timing`
+  (both lines, the `\default=false` one too; a `.trino-new-3ds` copy restores it, and
+  the boot echoes `System_IsNew3ds:`).
+- Each boot checks three lines: `TRINO_HW` against the switch; the engine self-test's
+  `TRINO_STEP:hw tier <tier> … data=<tier>` (the probe scene, the tier sparks and the
+  tier-only model were the hardware's tier); on the 3DS `TRINO_STEP:worker core=2` on a
+  New 3DS, `core=1` on an old one.
+- `--no-build` (CI's split): the app's own speedup setting is taken from its
+  `TRINO_HW` line; the rest is still checked.
+- **One Azahar at a time on a machine.** Its log and config are the user's, not the
+  worktree's: two runs at once read each other's lines (a failure in a step your branch
+  doesn't have) and flip each other's `is_new_3ds`.
+
 ## Notes
 
 - **Azahar GPU timing (`--accurate-timing`, `docs/HARDWARE.md` › Before the 3DS):**

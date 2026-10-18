@@ -43,6 +43,15 @@ the wrong register between o32 and o64; pass 16.16 fixed point as `u32` or a
 pointer to floats). When adding FFI: extend `trino_shim.c` + `crates/platform-n64/src/ffi.rs`
 in matching pairs and keep the restriction. Never call libdragon directly from Rust.
 
+## The Expansion Pak (issue #54, ADR 0020)
+
+- `trino_memory_size()` (libdragon's `get_memory_size()`) is read once in
+  `runtime::init`; 8 MB or more is the expanded tier (`src/hw.rs`, host-tested), logged as
+  `TRINO_HW n64 ram=8M tier=expanded`. `renderer.caps()` becomes `Caps::N64_EXPANDED`.
+- `src/assets.rs` skips index lines whose 4th column names the other tier (twins are
+  `<id>.x.blob` in the DFS). The ROM must boot and pass in 4 MB: `cargo xtask test n64
+  --expansion-pak off` (CI runs `both`).
+
 ## Console output conventions (keep PC in sync)
 
 - **16-bit output**: `trino_mode_standard()` sets magic-square RGB dither, and the VI

@@ -76,7 +76,7 @@ TRINO_EDITOR_SCREENSHOT=target/launcher.png TRINO_EDITOR_SCREENSHOT_FRAME=10 car
 | `TRINO_EDITOR_PALETTE=<query>` | open the command palette (Ctrl+K) with that query |
 | `TRINO_EDITOR_PLAY=here` | start **Play here** on the first frame: the scene runs inside the Game view (CI smoke) |
 | `TRINO_EDITOR_ECHO_LOG=1` | mirror the Console to stderr (see reloads, errors, saves) |
-| `TRINO_EDITOR_GAME=pc\|n64\|3ds\|web` | the Game view's profile (default n64) — screenshots of each platform's variant |
+| `TRINO_EDITOR_GAME=pc\|n64\|3ds\|web\|n64x\|3dsnew` | the Game view's profile (default n64) — screenshots of each platform's variant; `n64x` / `3dsnew` are the hardware tiers (N64 + Expansion Pak, New 3DS) |
 | `TRINO_EDITOR_WEB_CANVAS=responsive\|720\|1080` | the Game view's browser canvas on the Web profile (the picture is the canvas over the auto pixel scale) |
 | `TRINO_EDITOR_SIZE=960x600` | window size (default 1600x940; never below the 960x600 minimum) — screenshot small windows |
 | `TRINO_EDITOR_INSPECT=platforms\|lod\|impostor\|budget\|ao` | the Inspector opens that section and scrolls to it (`budget`: the scene settings' platform budget, with nothing selected; `ao`: the scene's Ambient Occlusion, or a model's baked AO with `TRINO_EDITOR_OPEN=model:<logical>`) |
@@ -217,6 +217,26 @@ Live-edit check: start the editor with `TRINO_EDITOR_ECHO_LOG=1` in the backgrou
   covers (the grid's "Memory"); clicking the combo again can land on the list's first
   item. Budget line queries need exact prefixes (`"3DS {tris} tris"`), since the
   texture line also starts with "3DS".
+
+## Hardware tiers (issue #54, ADR 0020)
+
+- Game view picker: **+Pak** after N64 and **New** after 3DS (accessible names "N64 +
+  Expansion Pak", "New 3DS"); below 560 px only the active console's tier toggle shows.
+  `GameView::target()` is the console with its tier (`set_profile_tier`), and it is what
+  `App::resolved_game` and Play here resolve; the renderer gets `set_hw_tier`.
+- HUD on a tier: the title names it (`N64+Pak budget`), a base-vs-expanded table
+  (`budget::tier_table`: RAM, CPU, frame or triangles, draws, the scales when they
+  differ), the RAM line and the hardware line; `budget::platform_lines_on(.., shown)`
+  reads the shown console on its tier (`N64+Pak ≈…`, `New 3DS … tris`), the other
+  console on its base.
+- Inspector › Platforms, LOD and particle caps: one shared **Tiers** switch row
+  (`panels::platforms::tier_toggles`); a tier column sits after its console, starts from
+  the console's value and writes the tier key only when edited (its reset appears then).
+  A tier with its own value is always shown. Columns need 330 px + 70 px per shown tier
+  (LOD 470 + 120), else they stack.
+- The editor loads the PC bake only: a model named for a tier alone (`platforms =
+  ["n64_expanded"]`) is counted in the budgets (`console_models` bakes it) but not drawn,
+  like N64-only models.
 
 ## The Web (issue #47, ADR 0019)
 

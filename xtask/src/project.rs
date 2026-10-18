@@ -33,6 +33,8 @@
 //! package = "my-game-3ds" # bin crate (cargo -p)
 //! bin = "my-game-3ds"     # the ELF's name
 //! icon = "assets/platform/3ds/icon.png"   # 48x48 PNG (optional)
+//! speedup = true          # New 3DS: 804 MHz + L2 at boot (default; false
+//!                         # keeps the old 3DS's clock, issue #54)
 //!
 //! [web]                   # optional, every field too (issue #47)
 //! package = "my-game-web" # cdylib host crate (default <name>-web)
@@ -121,6 +123,11 @@ pub struct Project {
     pub n3ds_package: String,
     pub n3ds_bin: String,
     pub n3ds_icon: Option<PathBuf>,
+    /// `[3ds] speedup` (default true): a New 3DS turns on its 804 MHz clock
+    /// and L2 cache at boot and reports the expanded tier (ADR 0020).
+    /// `false` puts a `no_speedup` file in the RomFS; `--speedup on|off`
+    /// overrides it for one command.
+    pub n3ds_speedup: bool,
     /// The Web host crate (`[web] package`, default `<name>-web`), the
     /// page's canvas id and title (`[web] canvas_id`, `page_title`).
     pub web_package: String,
@@ -220,6 +227,12 @@ struct N3dsSection {
     bin: String,
     #[serde(default)]
     icon: Option<String>,
+    #[serde(default = "default_speedup")]
+    speedup: bool,
+}
+
+fn default_speedup() -> bool {
+    true
 }
 
 /// `[web]`: every field optional.
@@ -311,6 +324,7 @@ impl Project {
             n3ds_package: "trino-app-3ds".into(),
             n3ds_bin: "trino-3ds".into(),
             n3ds_icon: None,
+            n3ds_speedup: true,
             web_package: "trino-app-web".into(),
             web_canvas_id: DEFAULT_CANVAS_ID.into(),
             web_title: "Trino".into(),
@@ -387,6 +401,7 @@ impl Project {
             package: String::new(),
             bin: String::new(),
             icon: None,
+            speedup: true,
         });
         let web = f.web.unwrap_or_default();
         let web_package = web
@@ -419,6 +434,7 @@ impl Project {
             n64_save: n64.save,
             n3ds_package: n3ds.package,
             n3ds_bin: n3ds.bin,
+            n3ds_speedup: n3ds.speedup,
             web_package,
             web_canvas_id,
             web_title,
@@ -556,6 +572,16 @@ watch = ["game"]
         assert_eq!(p.test.n64_goldens, ["level"]);
         assert_eq!(p.test.n64_max_frame_us, Some(33333));
         assert_eq!(p.watch, ["game"]);
+        assert!(p.n3ds_speedup, "the New 3DS speedup is on unless opted out");
+    }
+
+    #[test]
+    fn the_new_3ds_speedup_can_be_opted_out() {
+        let off = SAMPLE.replace("[3ds]\n", "[3ds]\nspeedup = false\n");
+        assert_ne!(off, SAMPLE);
+        let p = Project::parse(&off, "/g".into(), "/e".into()).unwrap();
+        assert!(!p.n3ds_speedup);
+        assert!(Project::engine().n3ds_speedup);
     }
 
     #[test]

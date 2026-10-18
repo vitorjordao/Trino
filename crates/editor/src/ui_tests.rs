@@ -586,8 +586,11 @@ fn platform_variants_reach_the_game_view_and_the_file() {
     h.run_steps(3);
     {
         let app = h.state_mut();
-        app.game_view
-            .set_profile(trino_platform_pc::SimProfile::N64, &app.project);
+        app.game_view.set_profile_tier(
+            trino_platform_pc::SimProfile::N64,
+            trino_core::HwTier::Base,
+            &app.project,
+        );
     }
     h.run_steps(3);
     let rock_id = ModelId(trino_core::asset_id("models/rock"));
@@ -643,15 +646,21 @@ fn platform_variants_reach_the_game_view_and_the_file() {
     // browser's Game view.
     {
         let app = h.state_mut();
-        app.game_view
-            .set_profile(trino_platform_pc::SimProfile::Web, &app.project);
+        app.game_view.set_profile_tier(
+            trino_platform_pc::SimProfile::Web,
+            trino_core::HwTier::Base,
+            &app.project,
+        );
     }
     h.run_steps(4);
     assert_eq!(game_model(h.state(), "rock-1"), Some(rock_id), "Web view");
     {
         let app = h.state_mut();
-        app.game_view
-            .set_profile(trino_platform_pc::SimProfile::N64, &app.project);
+        app.game_view.set_profile_tier(
+            trino_platform_pc::SimProfile::N64,
+            trino_core::HwTier::Base,
+            &app.project,
+        );
     }
     h.run_steps(4);
 
@@ -661,7 +670,7 @@ fn platform_variants_reach_the_game_view_and_the_file() {
     let disk = std::fs::read_to_string("scenes/showcase.scene.ron").unwrap();
     let saved = trino_scene::Scene::from_ron(&disk).unwrap();
     let r = saved.get(&rock).unwrap();
-    assert!(disk.contains("version: 4"));
+    assert!(disk.contains(&format!("version: {}", trino_scene::SCENE_VERSION)));
     assert!(r.platforms.n64.as_ref().unwrap().disabled);
     assert_eq!(
         r.platforms.n64.as_ref().unwrap().model.as_deref(),
@@ -684,8 +693,11 @@ fn platform_variants_reach_the_game_view_and_the_file() {
     assert_eq!(h.state().doc.scene, edited, "the external edit reloaded");
     {
         let app = h.state_mut();
-        app.game_view
-            .set_profile(trino_platform_pc::SimProfile::N3ds, &app.project);
+        app.game_view.set_profile_tier(
+            trino_platform_pc::SimProfile::N3ds,
+            trino_core::HwTier::Base,
+            &app.project,
+        );
     }
     h.run_steps(3);
     assert_eq!(
@@ -697,6 +709,142 @@ fn platform_variants_reach_the_game_view_and_the_file() {
         Some(rock_id),
         "3DS: as on PC"
     );
+    leave_temp_project(&repo);
+}
+
+/// Hardware tiers (issue #54) end to end: "New 3DS" in the Game view's
+/// profile picker, a New 3DS variant in Inspector › Platforms (its column
+/// shown under the 3DS's) that the Game view draws and the 3DS doesn't,
+/// undo and redo, the file, and the platform budget's tiers side by side
+/// with their RAM.
+#[test]
+#[ignore = "changes cwd/env: run alone with --ignored --test-threads=1"]
+fn new_3ds_tier_variant_reaches_the_game_view_the_file_and_the_budget() {
+    use crate::app::{Cmd, Tab};
+    use trino_core::{HwTier, ModelId};
+    use trino_platform_pc::SimProfile;
+    let Some((mut h, _tmp, repo)) = temp_project_app(egui::vec2(1600.0, 1000.0)) else {
+        return;
+    };
+    let rock = find(&h.state().doc.scene, "rock-1");
+    h.state_mut().cmds.push(Cmd::Select(Some(rock.clone())));
+    h.state_mut().cmds.push(Cmd::FocusTab(Tab::Game));
+    h.run_steps(3);
+    let rock_id = ModelId(trino_core::asset_id("models/rock"));
+    let crate_id = ModelId(trino_core::asset_id("models/crate"));
+
+    // The profile picker: the New 3DS, after the 3DS.
+    click(&mut h, "New 3DS");
+    h.run_steps(3);
+    let view = &h.state().game_view;
+    assert_eq!(
+        (view.profile, view.tier),
+        (SimProfile::N3ds, HwTier::Expanded)
+    );
+    assert_eq!(view.target(), trino_scene::Target::N3dsNew);
+    assert_eq!(view.profile_key(), "3dsnew");
+    assert_eq!(view.target_label(), "New 3DS");
+    assert_eq!(game_model(h.state(), "rock-1"), Some(rock_id));
+
+    // Inspector › Platforms: the New 3DS column, collapsed under the 3DS
+    // until shown, follows the 3DS; then a variant of its own.
+    click(&mut h, "Platforms");
+    h.run_steps(2);
+    assert!(h.query_by_label("New 3DS model").is_none(), "collapsed");
+    click(&mut h, "Show New 3DS");
+    h.run_steps(2);
+    assert!(h.query_by_label("as on 3DS").is_some());
+    click(&mut h, "New 3DS model");
+    h.get_by_label("models/crate").click_accesskit();
+    h.run_steps(3);
+    if h.query_by_label("models/crate").is_some() {
+        h.get_by_label("New 3DS model").click();
+        h.run_steps(3);
+    }
+    let e = h.state().doc.scene.get(&rock).unwrap().clone();
+    assert_eq!(
+        e.platforms.n3ds_new.as_ref().unwrap().model.as_deref(),
+        Some("models/crate")
+    );
+    assert!(e.platforms.n3ds.is_none(), "the 3DS keeps the PC look");
+    assert!(h.query_by_label("as on 3DS").is_none());
+    assert!(
+        h.query_by_label("New 3DS model").is_some(),
+        "the expanded column"
+    );
+    assert_eq!(game_model(h.state(), "rock-1"), Some(crate_id), "New 3DS");
+    {
+        let app = h.state_mut();
+        app.game_view
+            .set_profile_tier(SimProfile::N3ds, HwTier::Base, &app.project);
+    }
+    h.run_steps(3);
+    assert_eq!(game_model(h.state(), "rock-1"), Some(rock_id), "3DS");
+    click(&mut h, "New 3DS");
+    h.run_steps(3);
+    assert_eq!(game_model(h.state(), "rock-1"), Some(crate_id));
+
+    // Undo and redo the tier's variant.
+    h.state_mut().cmds.push(Cmd::Undo);
+    h.run_steps(3);
+    let tier = |h: &Harness<'static, App>| {
+        h.state()
+            .doc
+            .scene
+            .get(&rock)
+            .unwrap()
+            .platforms
+            .n3ds_new
+            .clone()
+    };
+    assert_eq!(tier(&h), None, "undone");
+    assert_eq!(game_model(h.state(), "rock-1"), Some(rock_id));
+    h.state_mut().cmds.push(Cmd::Redo);
+    h.run_steps(3);
+    assert_eq!(
+        tier(&h).and_then(|v| v.model).as_deref(),
+        Some("models/crate"),
+        "redone"
+    );
+    assert_eq!(game_model(h.state(), "rock-1"), Some(crate_id));
+
+    // The file says it as text.
+    h.state_mut().cmds.push(Cmd::Save);
+    h.run_steps(3);
+    let disk = std::fs::read_to_string("scenes/showcase.scene.ron").unwrap();
+    assert!(disk.contains("n3ds_new"));
+    let saved = trino_scene::Scene::from_ron(&disk).unwrap();
+    assert_eq!(saved.get(&rock).unwrap().platforms, e.platforms);
+
+    // The platform budget: each console's tiers side by side, their RAM.
+    h.state_mut().cmds.push(Cmd::Select(None));
+    h.state_mut().inspect_focus = Some("budget".into());
+    h.run_steps(4);
+    let budgets = h.state().budgets.as_ref().unwrap().1.clone();
+    let ram = |t| trino_scene::budget::ram_line(crate::budget::budget_of(&budgets, t)).unwrap();
+    let new = ram(trino_scene::Target::N3dsNew);
+    assert!(
+        new.starts_with("New 3DS RAM ") && new.ends_with(" of 65536 KB"),
+        "{new}"
+    );
+    assert!(h.query_by_label(&new).is_some(), "the New 3DS RAM line");
+    for t in [
+        trino_scene::Target::N64,
+        trino_scene::Target::N64Expanded,
+        trino_scene::Target::N3ds,
+    ] {
+        assert!(h.query_by_label(&ram(t)).is_some(), "{}", ram(t));
+    }
+    for line in [
+        "New 3DS: 2 cores at 804 MHz",
+        "N64+Pak: 1 core at 93 MHz, 8 MB RAM",
+    ] {
+        assert!(h.query_by_label_contains(line).is_some(), "{line}");
+    }
+    // The tier tables' columns, the Game view's tier among them.
+    assert!(h.query_all_by_label("New 3DS").count() >= 2);
+    assert!(h.query_by_label("2×804 MHz").is_some());
+    assert!(h.query_by_label("1×268 MHz").is_some());
     leave_temp_project(&repo);
 }
 
@@ -714,7 +862,7 @@ fn editor_layout_is_clean_at_minimum_and_default_sizes() {
         let what = |s: &str| format!("{s} at {}x{}", size.x, size.y);
         crate::layout_audit::assert_clean(&h, size, true, &what("scene settings"));
         let rock = find(&h.state().doc.scene, "rock-1");
-        h.state_mut().cmds.push(Cmd::Select(Some(rock)));
+        h.state_mut().cmds.push(Cmd::Select(Some(rock.clone())));
         h.run_steps(3);
         h.get_by_label_contains("Platforms").click();
         h.run_steps(3);
@@ -722,6 +870,37 @@ fn editor_layout_is_clean_at_minimum_and_default_sizes() {
         h.state_mut().cmds.push(Cmd::FocusTab(Tab::Game));
         h.run_steps(3);
         crate::layout_audit::assert_clean(&h, size, true, &what("Game view"));
+        // The hardware tiers (issue #54): both tier columns shown, the Game
+        // view on each expanded tier. (At 960x600 Platforms is still
+        // closed here: open it scrolled into view.)
+        if h.query_by_label("Show N64 + Expansion Pak").is_none() {
+            click(&mut h, "Platforms");
+            h.run_steps(2);
+        }
+        click(&mut h, "Show N64 + Expansion Pak");
+        click(&mut h, "Show New 3DS");
+        h.run_steps(3);
+        crate::layout_audit::assert_clean(&h, size, true, &what("tier columns"));
+        for profile in [
+            trino_platform_pc::SimProfile::N64,
+            trino_platform_pc::SimProfile::N3ds,
+        ] {
+            {
+                let app = h.state_mut();
+                app.game_view
+                    .set_profile_tier(profile, trino_core::HwTier::Expanded, &app.project);
+            }
+            h.run_steps(3);
+            let label = h.state().game_view.target_label();
+            crate::layout_audit::assert_clean(&h, size, true, &what(&format!("{label} Game view")));
+        }
+        h.state_mut().cmds.push(Cmd::Select(None));
+        h.state_mut().inspect_focus = Some("budget".into());
+        h.run_steps(4);
+        crate::layout_audit::assert_clean(&h, size, true, &what("tier budgets"));
+        h.state_mut().inspect_focus = None;
+        h.state_mut().cmds.push(Cmd::Select(Some(rock.clone())));
+        h.run_steps(3);
         // A LOD chain with an impostor level, previewed.
         let boar = trino_scene::Entity::new("boar").with_model(trino_scene::ModelComponent {
             lod: vec![

@@ -185,20 +185,34 @@ pub fn editor(ui: &mut egui::Ui, def: &mut ParticlesDef, sprites: &[String]) -> 
 }
 
 /// The cap per platform, as a row each: its own max, or off there, and
-/// what its peak costs.
+/// what its peak costs. A console's tier (issue #54), when "Tiers" shows
+/// it, starts from its console's cap and writes its own.
 fn caps(ui: &mut egui::Ui, def: &mut ParticlesDef) -> bool {
+    use crate::panels::platforms::{inherits, tier_short, tier_toggles, with_tiers};
     let mut changed = false;
     theme::section_title(ui, icon::DEVICES, "Per platform");
-    for p in Platform::ALL {
-        let label = p.target().label();
+    let own = |t| def.platforms.own(t).is_some();
+    tier_toggles(ui, own);
+    let targets = with_tiers(ui.ctx(), &Platform::ALL.map(Platform::target), own);
+    for t in targets {
+        let label = t.label();
         let base = def.max;
-        let slot = def.platforms.get_mut(p);
-        let mut cap = slot.unwrap_or_default();
+        let tier = t.hw_tier().is_expanded();
+        let has_own = def.platforms.own(t).is_some();
+        let console = def.platforms.own(t.base()).is_some();
+        let start = if tier {
+            def.platforms.get(t)
+        } else {
+            def.platforms.own(t)
+        };
+        let mut cap = start.copied().unwrap_or_default();
+        let before = cap;
         ui.horizontal(|ui| {
             ui.add_sized(
                 [34.0, 20.0],
-                egui::Label::new(RichText::new(label).color(c::TEXT_WEAK)),
-            );
+                egui::Label::new(RichText::new(tier_short(t)).color(c::TEXT_WEAK)),
+            )
+            .on_hover_text(t.long_label());
             let mut own = cap.max.is_some();
             let r = ui.add(egui::Checkbox::without_text(&mut own));
             r.widget_info(|| {
@@ -229,19 +243,31 @@ fn caps(ui: &mut egui::Ui, def: &mut ParticlesDef) -> bool {
             });
             ui.label(RichText::new("off").size(11.0).color(c::TEXT_FAINT));
         });
-        let new = (cap != PlatformCap::default()).then_some(cap);
+        let slot = def.platforms.get_mut(t);
+        let new = if !tier {
+            (cap != PlatformCap::default()).then_some(cap)
+        } else if cap == before {
+            *slot
+        } else {
+            // A default cap stays written while the console has its own:
+            // it is what keeps the tier from following it.
+            (cap != PlatformCap::default() || console).then_some(cap)
+        };
         if new != *slot {
             *slot = new;
             changed = true;
         }
-        let n = def.cap(p) as u32;
+        let n = def.cap(t) as u32;
+        let from = inherits(t)
+            .filter(|_| tier && !has_own)
+            .map_or(String::new(), |f| format!(" ({f})"));
         ui.add(
             egui::Label::new(
                 RichText::new(if n == 0 {
-                    format!("{label}: off — nothing drawn")
+                    format!("{label}{from}: off — nothing drawn")
                 } else {
                     format!(
-                        "{label}: up to {n} · {} tris · N64 ≈{:.2} ms",
+                        "{label}{from}: up to {n} · {} tris · N64 ≈{:.2} ms",
                         n * 2,
                         N64_COST.billboards_us(n) as f32 / 1000.0
                     )

@@ -2,7 +2,9 @@
 //!
 //! `cargo xtask assets 3ds` writes `index.tsv` into the RomFS: one
 //! `handle-hex \t kind \t filename` line per asset. Loading by handle keeps
-//! game code identical across platforms (`SpriteId::from_path`).
+//! game code identical across platforms (`SpriteId::from_path`). An
+//! optional fourth column names the only hardware tier that loads the line
+//! (`base` or `expanded`, issue #54; `trino_core::asset::loads_on`).
 
 use alloc::ffi::CString;
 use alloc::string::String;
@@ -37,12 +39,16 @@ impl N3dsAssets {
             runtime::log("TRINO_ASSETS: no index.tsv in RomFS\n");
             return;
         };
+        let tier = runtime::hw_tier();
         for line in index.lines() {
             let mut cols = line.split('\t');
             let (Some(id_hex), Some(kind), Some(file)) = (cols.next(), cols.next(), cols.next())
             else {
                 continue;
             };
+            if !trino_core::asset::loads_on(cols.next(), tier) {
+                continue;
+            }
             let Ok(id) = u32::from_str_radix(id_hex, 16) else {
                 continue;
             };

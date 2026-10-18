@@ -4,7 +4,7 @@
 //! add the visual emulation on top (N64 3-point filtering, RGBA5551 dither,
 //! VI stage) and strict-mode validation against `Caps`.
 
-use trino_core::Caps;
+use trino_core::{Caps, HwTier};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum SimProfile {
@@ -52,15 +52,47 @@ impl SimProfile {
         matches!(self, SimProfile::Native | SimProfile::Web)
     }
 
-    /// Parse from `TRINO_SIM` env values / CLI flags.
+    /// Parse from `TRINO_SIM` env values / CLI flags (a hardware tier's
+    /// value, `n64x` / `3dsnew`, gives its console's profile; see
+    /// [`parse_tier`](Self::parse_tier)).
     pub fn parse(s: &str) -> Option<Self> {
+        Self::parse_tier(s).map(|(p, _)| p)
+    }
+
+    /// Parse a profile and a hardware tier (issue #54, ADR 0020): `n64x`
+    /// (or `n64_expanded`) is the N64 with the Expansion Pak, `3dsnew` (or
+    /// `n3ds_new`, `new3ds`) the New 3DS — the console's look, the tier's
+    /// [`Caps`] ([`Caps::with_tier`]). Every other value is the base tier.
+    pub fn parse_tier(s: &str) -> Option<(Self, HwTier)> {
+        let base = |p| Some((p, HwTier::Base));
+        let expanded = |p| Some((p, HwTier::Expanded));
         match s.to_ascii_lowercase().as_str() {
-            "native" | "pc" => Some(SimProfile::Native),
-            "n64" => Some(SimProfile::N64),
-            "3ds" | "n3ds" => Some(SimProfile::N3ds),
-            "web" | "browser" => Some(SimProfile::Web),
+            "native" | "pc" => base(SimProfile::Native),
+            "n64" => base(SimProfile::N64),
+            "3ds" | "n3ds" => base(SimProfile::N3ds),
+            "web" | "browser" => base(SimProfile::Web),
+            "n64x" | "n64_expanded" => expanded(SimProfile::N64),
+            "3dsnew" | "n3ds_new" | "new3ds" => expanded(SimProfile::N3ds),
             _ => None,
         }
+    }
+
+    /// The `TRINO_SIM` value of this profile on `tier` (`n64x`, `3dsnew`;
+    /// the profile's own key where it has one tier).
+    pub fn key(self, tier: HwTier) -> &'static str {
+        match (self, tier) {
+            (SimProfile::Native, _) => "native",
+            (SimProfile::Web, _) => "web",
+            (SimProfile::N64, HwTier::Base) => "n64",
+            (SimProfile::N64, HwTier::Expanded) => "n64x",
+            (SimProfile::N3ds, HwTier::Base) => "3ds",
+            (SimProfile::N3ds, HwTier::Expanded) => "3dsnew",
+        }
+    }
+
+    /// Does this profile simulate a console with an expanded tier?
+    pub fn has_tiers(self) -> bool {
+        matches!(self, SimProfile::N64 | SimProfile::N3ds)
     }
 }
 
@@ -147,5 +179,46 @@ mod tests {
         assert_eq!(SimProfile::parse("pc"), Some(SimProfile::Native));
         assert_eq!(SimProfile::parse("web"), Some(SimProfile::Web));
         assert_eq!(SimProfile::parse("dreamcast"), None);
+    }
+
+    #[test]
+    fn tier_values_give_their_consoles_look_and_their_own_caps() {
+        assert_eq!(
+            SimProfile::parse_tier("n64x"),
+            Some((SimProfile::N64, HwTier::Expanded))
+        );
+        assert_eq!(
+            SimProfile::parse_tier("3DSnew"),
+            Some((SimProfile::N3ds, HwTier::Expanded))
+        );
+        assert_eq!(
+            SimProfile::parse_tier("n64"),
+            Some((SimProfile::N64, HwTier::Base))
+        );
+        assert_eq!(SimProfile::parse("n3ds_new"), Some(SimProfile::N3ds));
+        for p in [
+            SimProfile::Native,
+            SimProfile::N64,
+            SimProfile::N3ds,
+            SimProfile::Web,
+        ] {
+            for t in HwTier::ALL {
+                let (back, tier) = SimProfile::parse_tier(p.key(t)).unwrap();
+                assert_eq!(back, p);
+                assert_eq!(tier, if p.has_tiers() { t } else { HwTier::Base });
+            }
+        }
+        assert_eq!(
+            SimProfile::N64.caps().with_tier(HwTier::Expanded),
+            Caps::N64_EXPANDED
+        );
+        assert_eq!(
+            SimProfile::N3ds.caps().with_tier(HwTier::Expanded),
+            Caps::N3DS_NEW
+        );
+        assert_eq!(
+            SimProfile::Web.caps().with_tier(HwTier::Expanded),
+            Caps::WEB
+        );
     }
 }

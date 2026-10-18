@@ -15,6 +15,8 @@ save = "eeprom16k"
 [3ds]
 package = "{{name}}-3ds"
 bin = "{{name}}-3ds"
+# The New 3DS runs at 804 MHz (its expanded tier, `n3ds_new` content) unless:
+# speedup = false
 
 [test]
 # The self-test plays a scripted match at 30 fps: its average frame must

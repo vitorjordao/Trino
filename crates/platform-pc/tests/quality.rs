@@ -513,3 +513,20 @@ fn the_bench_picks_a_preset_within_three_seconds_and_restores_the_renderer() {
     let img = frame(&mut r);
     assert!(img.iter().any(|v| *v != 0));
 }
+
+/// A budget spent inside Low's warm-up (WARP on CI's Windows VM drew
+/// fewer than three frames in 2 s) still times Low, so the pick is a
+/// measured one.
+#[test]
+fn a_budget_spent_in_the_warm_up_still_times_low() {
+    let _g = gpu();
+    let Some(mut r) = headless(SimProfile::Native) else {
+        return;
+    };
+    r.set_internal_size(SIZE.0, SIZE.1);
+    let cal = r.calibrate(&PresetTable::BUILT_IN, 15_000, Duration::ZERO);
+    assert_eq!(cal.results.len(), 1, "{}", cal.summary());
+    assert_eq!(cal.results[0].0, QualityPreset::Low);
+    assert!(cal.gpu_us() > 0);
+    assert_eq!(cal.pick, QualityPreset::Low);
+}

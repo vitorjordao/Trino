@@ -172,7 +172,14 @@ impl PcRenderer {
                 b.times.push(us);
             }
             let per_preset = b.budget / presets as u32;
-            let spent = b.start.elapsed() >= b.budget;
+            // However slow the adapter, Low draws a frame and reports it.
+            let low = b.preset == 0;
+            let spent = b.start.elapsed() >= b.budget && (b.frame > 0 || !low);
+            if spent && low && b.times.is_empty() {
+                // Out of time inside the warm-up (WARP on CI's Windows VM):
+                // its last frame stands in for the median.
+                b.times.extend(last_us);
+            }
             let enough = b.frame >= WARM_UP + TIMED
                 || (b.since.elapsed() >= per_preset && b.times.len() >= 3);
             if spent || enough {

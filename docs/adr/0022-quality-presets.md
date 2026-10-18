@@ -51,7 +51,9 @@ timed ones, each from `begin_frame` to the GPU's idle, unpresented (a FIFO swap 
 would round every frame up to the refresh). The walk stops at the first preset whose
 median misses the target (90% of the display's frame), or when the 2 s budget is spent;
 the pick is the highest that held, Low when none did, and always Low on a software
-adapter (llvmpipe, lavapipe, SwiftShader, WARP). The renderer's state comes back as it
+adapter (llvmpipe, lavapipe, SwiftShader, WARP). Low always draws a frame and reports a
+time: when the budget runs out inside its warm-up (WARP on CI's Windows VM took over 2 s
+for it), its last warm-up frame stands in for the median. The renderer's state comes back as it
 was. On this repo's CI adapter the whole walk takes about 0.5 s; the acceptance bar is 3 s.
 
 `bench_begin` / `bench_step` are the same walk one frame at a time: the PC loops over
@@ -94,10 +96,14 @@ scaling and sharpening first; revisit when a game needs more.
 `FrameLimit` picks the present mode: `VSync` presents FIFO; a cap at or under the
 display's rate presents FIFO and sleeps to the cap (30 on 60 Hz shows each frame for two
 refreshes); a cap over it, and `Unlimited`, present mailbox, else immediate, and the
-limiter alone holds the cap. The limiter keeps deadlines an interval apart and sleeps to
-1.5 ms before each, then spins: OS sleeps overshoot by up to a millisecond (more on
-Windows), which alone would miss ±2% at 120 fps. A frame later than a whole interval
-restarts the cadence instead of rushing the next ones.
+limiter alone holds the cap. The limiter keeps deadlines an interval apart and sleeps to a
+margin before each, then spins: OS sleeps overshoot by up to a millisecond on a desktop
+(more on Windows), which alone would miss ±2% at 120 fps. The margin starts at 1.5 ms,
+widens at once to the overshoot the limiter measures and narrows back over about a
+second: CI's macOS VM overslept by tens of milliseconds, and a fixed 1.5 ms held a 30 fps
+cap at 17 fps there. Past a frame's length the wait spins the whole frame, until the
+narrowing margin probes the OS again. A frame later than a whole interval restarts the
+cadence instead of rushing the next ones.
 
 `TRINO_FRAME` gains the 1% lows (`low1_us`, `low1_fps`: the mean of the slowest 1% of
 frames, kept for about half an hour) and, on the PC and the Web, the quality in effect:

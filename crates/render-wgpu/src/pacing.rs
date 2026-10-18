@@ -10,14 +10,18 @@
 //!
 //! The limiter keeps a cadence of deadlines `interval` apart and waits for
 //! the next one after each frame; a frame later than a whole interval
-//! restarts the cadence instead of rushing the frames after it. The wait
-//! sleeps until a margin before the deadline and spins the rest: OS sleeps
-//! overshoot by up to a millisecond on a desktop (more on Windows), which
-//! alone would miss a ±2% target at 120 fps. The margin starts at 1.5 ms,
-//! widens at once to an overshoot the limiter measures (a VM or a coarse
-//! timer can oversleep by tens of milliseconds: past the frame, the wait
-//! spins it all) and narrows back over about a second, so a single stall
-//! doesn't keep a core spinning.
+//! restarts the cadence instead of rushing the frames after it.
+//!
+//! The wait sleeps, then spins the last 1.5 ms: a desktop's sleeps
+//! overshoot by up to a millisecond, which alone would miss a ±2% target at
+//! 120 fps. Each sleep asks for the time left divided by the *stretch*, how
+//! many times longer than asked the OS's sleeps have lately run, and the
+//! wait sleeps again while that is worth it. A desktop's stretch stays at 1:
+//! one sleep a frame. CI's macOS VM coalesces timers, and a sleep there
+//! runs up to five times what it asked for (the median 1 ms took 5, 8 ms
+//! took 34). A fixed margin held a 30 fps cap at 17 fps there, and a
+//! margin sized to the overshoot still woke frames 57 ms late. The stretch
+//! is learned from every sleep and relaxes toward 1 over about a second.
 
 use trino_core::FrameLimit;
 use web_time::{Duration, Instant};
@@ -49,21 +53,29 @@ pub fn present_mode(
 pub struct FrameLimiter {
     interval: Option<Duration>,
     next: Option<Instant>,
-    /// How long before a deadline the wait stops sleeping and spins.
-    margin: Duration,
+    /// How many times longer than asked the OS's sleeps have lately run
+    /// (past a sleep's fixed cost): 1 on a desktop.
+    stretch: f64,
 }
 
-/// The spin margin's floor and ceiling.
-const MIN_MARGIN: Duration = Duration::from_micros(1500);
+/// The wait spins this last stretch of time before a deadline.
 #[cfg(not(target_arch = "wasm32"))]
-const MAX_MARGIN: Duration = Duration::from_millis(50);
+const SPIN: Duration = Duration::from_micros(1500);
+/// Shorter sleeps aren't asked for: the rest is spun.
+#[cfg(not(target_arch = "wasm32"))]
+const MIN_SLEEP: Duration = Duration::from_micros(500);
+/// A sleep's fixed cost, left out of the stretch.
+#[cfg(not(target_arch = "wasm32"))]
+const SLEEP_COST: Duration = Duration::from_micros(500);
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_STRETCH: f64 = 16.0;
 
 impl FrameLimiter {
     pub fn new(limit: FrameLimit) -> Self {
         let mut l = FrameLimiter {
             interval: None,
             next: None,
-            margin: MIN_MARGIN,
+            stretch: 1.0,
         };
         l.set(limit);
         l
@@ -109,9 +121,10 @@ impl FrameLimiter {
         self.wait_on(&mut OsClock);
     }
 
-    /// The spin margin now (1.5 ms unless the OS overslept).
-    pub fn margin(&self) -> Duration {
-        self.margin
+    /// How many times longer than asked the OS's sleeps have lately run
+    /// (1 unless they overslept).
+    pub fn stretch(&self) -> f64 {
+        self.stretch
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -119,20 +132,20 @@ impl FrameLimiter {
         let Some(at) = self.deadline(clock.now()) else {
             return;
         };
-        // Narrow toward the floor by a frame's share of a second.
+        // Relax toward 1 by a frame's share of a second.
         let frame = self.interval.unwrap_or_default().as_secs_f64().min(1.0);
-        self.margin -= (self.margin - MIN_MARGIN).mul_f64(frame);
-        let now = clock.now();
-        if at > now + self.margin {
-            let ask = at - now - self.margin;
+        self.stretch -= (self.stretch - 1.0) * frame;
+        loop {
+            let now = clock.now();
+            let left = at.saturating_duration_since(now).saturating_sub(SPIN);
+            let ask = left.div_f64(self.stretch);
+            if ask < MIN_SLEEP {
+                break;
+            }
             clock.sleep(ask);
-            let over = clock
-                .now()
-                .saturating_duration_since(now)
-                .saturating_sub(ask);
-            self.margin = (over + Duration::from_micros(500))
-                .max(self.margin)
-                .min(MAX_MARGIN);
+            let took = clock.now().saturating_duration_since(now);
+            let stretch = took.saturating_sub(SLEEP_COST).as_secs_f64() / ask.as_secs_f64();
+            self.stretch = stretch.max(self.stretch).min(MAX_STRETCH);
         }
         while clock.now() < at {
             clock.spin();
@@ -207,10 +220,16 @@ mod tests {
         assert_eq!(l.interval(), None);
     }
 
-    /// A clock whose sleeps overshoot by `over`; spins advance 20 µs.
+    /// A clock whose sleeps run `stretch` times what they ask (a random
+    /// factor from 1 to `stretch` when `coalesce`) plus `cost`; spins
+    /// advance 20 µs.
     struct Late {
         t: Instant,
-        over: Duration,
+        stretch: f64,
+        coalesce: bool,
+        cost: Duration,
+        seed: u32,
+        sleeps: u32,
         slept: Duration,
     }
 
@@ -219,7 +238,16 @@ mod tests {
             self.t
         }
         fn sleep(&mut self, d: Duration) {
-            self.t += d + self.over;
+            let mut k = self.stretch;
+            if self.coalesce {
+                self.seed = self
+                    .seed
+                    .wrapping_mul(1_664_525)
+                    .wrapping_add(1_013_904_223);
+                k = 1.0 + (k - 1.0) * (self.seed >> 8) as f64 / (1u32 << 24) as f64;
+            }
+            self.t += d.mul_f64(k) + self.cost;
+            self.sleeps += 1;
             self.slept += d;
         }
         fn spin(&mut self) {
@@ -227,62 +255,99 @@ mod tests {
         }
     }
 
+    /// Frames keep their deadlines whatever the OS's sleeps do, once the
+    /// first half second has learned them: a desktop's, 1 ms late, CI's
+    /// macOS VM's (anywhere up to five times what was asked, as measured
+    /// there), and always five times.
     #[test]
-    fn the_margin_follows_an_os_that_oversleeps() {
-        for over in [
-            Duration::ZERO,
-            Duration::from_millis(1),
-            Duration::from_millis(25),
+    fn the_wait_learns_how_long_the_oss_sleeps_run() {
+        let us = Duration::from_micros;
+        for (stretch, coalesce, cost) in [
+            (1.0, false, us(60)),
+            (1.0, false, us(1000)),
+            (5.0, true, us(0)),
+            (5.0, false, us(0)),
         ] {
             for fps in [30u16, 60, 120] {
-                let t0 = Instant::now();
                 let mut c = Late {
-                    t: t0,
-                    over,
+                    t: Instant::now(),
+                    stretch,
+                    coalesce,
+                    cost,
+                    seed: 7,
+                    sleeps: 0,
                     slept: Duration::ZERO,
                 };
                 let mut l = FrameLimiter::new(FrameLimit::Fps(fps));
-                let frames = fps as u32 * 2;
-                l.wait_on(&mut c);
-                let start = c.t;
-                for _ in 0..frames {
+                let frame = |l: &mut FrameLimiter, c: &mut Late| {
                     c.t += Duration::from_millis(1);
-                    l.wait_on(&mut c);
+                    l.wait_on(c);
+                };
+                l.wait_on(&mut c);
+                for _ in 0..fps / 2 {
+                    frame(&mut l, &mut c);
                 }
-                let rate = frames as f64 / (c.t - start).as_secs_f64();
-                let err = (rate - fps as f64).abs() / fps as f64;
-                assert!(
-                    err <= 0.02,
-                    "{fps} fps, sleeps {over:?} late: {rate:.2} fps"
-                );
-                // A punctual OS keeps the 1.5 ms margin and sleeps most of
-                // the frame; a late one widens it.
-                if over <= Duration::from_millis(1) {
-                    assert_eq!(l.margin(), MIN_MARGIN, "{fps}, {over:?}");
-                    assert!(c.slept > (c.t - start) / 2, "{fps}: {:?}", c.slept);
+                // The deadline last waited for: the cadence from here on.
+                let interval = l.interval().unwrap();
+                let (start, cadence) = (c.t, l.next.unwrap() - interval);
+                c.sleeps = 0;
+                c.slept = Duration::ZERO;
+                // A desktop's frames start on their deadlines; a coalescing
+                // OS's within a quarter frame (between its longest sleeps
+                // the stretch relaxes), and the cadence never restarts.
+                let bound = if stretch == 1.0 {
+                    us(100)
                 } else {
-                    assert!(l.margin() > MIN_MARGIN * 2, "{fps}: {:?}", l.margin());
+                    interval / 4
+                };
+                for n in 1..=fps as u32 * 2 {
+                    frame(&mut l, &mut c);
+                    let due = cadence + interval * n;
+                    assert!(
+                        c.t >= due && c.t - due < bound,
+                        "{fps} fps, sleeps ×{stretch} +{cost:?}: frame {n} {:?} after {:?}",
+                        c.t - start,
+                        due - start
+                    );
+                }
+                let what = format!("{fps} fps, ×{stretch} +{cost:?}");
+                // A desktop sleeps once a frame, most of it.
+                if stretch == 1.0 {
+                    assert_eq!(c.sleeps, fps as u32 * 2, "{what}");
+                    assert!(c.slept > (c.t - start) / 2, "{what}: {:?}", c.slept);
+                    assert!(l.stretch() < 1.5, "{what}: {}", l.stretch());
+                } else {
+                    assert!(l.stretch() > 2.0, "{what}: {}", l.stretch());
+                    assert!(c.slept > (c.t - start) / 10, "{what}: {:?}", c.slept);
                 }
             }
         }
     }
 
     /// The acceptance bar: 30/60/120 fps caps within ±2% (real sleeps, a
-    /// light frame). Best of three runs: a shared CI VM can stall the
-    /// process for longer than a frame, which no limiter makes up for.
+    /// light frame), after half a second that learns the OS's sleeps. Best
+    /// of three runs: a shared CI VM can stall the process for longer than
+    /// a frame, which no limiter makes up for.
     #[test]
     fn caps_hold_within_two_percent() {
+        // A frame's work: ~1 ms.
+        let work = || {
+            let w = Instant::now();
+            while w.elapsed() < Duration::from_millis(1) {}
+        };
         for fps in [30u16, 60, 120] {
             let mut runs = Vec::new();
             while runs.len() < 3 {
                 let mut l = FrameLimiter::new(FrameLimit::Fps(fps));
                 let frames = fps as u32;
                 l.wait();
+                for _ in 0..fps / 2 {
+                    work();
+                    l.wait();
+                }
                 let t0 = Instant::now();
                 for _ in 0..frames {
-                    // A frame's work: ~1 ms.
-                    let w = Instant::now();
-                    while w.elapsed() < Duration::from_millis(1) {}
+                    work();
                     l.wait();
                 }
                 let measured = frames as f64 / t0.elapsed().as_secs_f64();

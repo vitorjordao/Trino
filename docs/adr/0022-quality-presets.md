@@ -96,13 +96,18 @@ scaling and sharpening first; revisit when a game needs more.
 `FrameLimit` picks the present mode: `VSync` presents FIFO; a cap at or under the
 display's rate presents FIFO and sleeps to the cap (30 on 60 Hz shows each frame for two
 refreshes); a cap over it, and `Unlimited`, present mailbox, else immediate, and the
-limiter alone holds the cap. The limiter keeps deadlines an interval apart and sleeps to a
-margin before each, then spins: OS sleeps overshoot by up to a millisecond on a desktop
-(more on Windows), which alone would miss ±2% at 120 fps. The margin starts at 1.5 ms,
-widens at once to the overshoot the limiter measures and narrows back over about a
-second: CI's macOS VM overslept by tens of milliseconds, and a fixed 1.5 ms held a 30 fps
-cap at 17 fps there. Past a frame's length the wait spins the whole frame, until the
-narrowing margin probes the OS again. A frame later than a whole interval restarts the
+limiter alone holds the cap. The limiter keeps deadlines an interval apart, sleeps toward
+each and spins the last 1.5 ms: OS sleeps overshoot by up to a millisecond on a desktop,
+which alone would miss ±2% at 120 fps. Each sleep asks for the time left divided by the
+*stretch*, how many times longer than asked the OS's sleeps have lately run, and the
+wait sleeps again while the time left is worth a sleep. A desktop's stretch stays at 1,
+so it sleeps once a frame. CI's macOS VM coalesces timers: measured there, the median
+1 ms sleep took 5 ms, 8 ms took 34 and 30 ms took 74. A fixed 1.5 ms margin held a 30 fps
+cap at 17 fps there, and a margin sized to the overshoot held the rate but woke frames up
+to 57 ms late, because the overshoot grows with the sleep. The stretch is learned from every
+sleep (at most 16) and relaxes toward 1 over about a second, so after a stall a laptop
+goes back to one sleep a frame. With it, the VM held 30/60/120 fps within 2% in 45 of 45
+runs (a third of them with two busy threads), its worst frame waking 7 ms late. A frame later than a whole interval restarts the
 cadence instead of rushing the next ones.
 
 `TRINO_FRAME` gains the 1% lows (`low1_us`, `low1_fps`: the mean of the slowest 1% of

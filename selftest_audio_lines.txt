@@ -1,0 +1,63 @@
+# Self-test audio lines, this branch (2026-10-18)
+
+## N64 (ares, docker): cargo xtask test n64
+[ares] TRINO_STEP:audio
+[ares] TRINO_STEP:audio codecs
+[ares] TRINO_AUDIO: voices=1 streams=1 resident_bytes=12128 stream_bytes=48032 underruns=0 streamed_frames=162188
+[ares] TRINO_STEP:audio cost
+[ares] TRINO_AUDIO_COST:idle us_per_s=29916 rsp_us_per_s=28537 voices=0 buffers=25
+[ares] TRINO_AUDIO_COST:vadpcm-1 us_per_s=46537 rsp_us_per_s=37410 voices=1 buffers=25
+[ares] TRINO_AUDIO_COST:vadpcm-3 us_per_s=66056 rsp_us_per_s=51144 voices=3 buffers=25
+[ares] TRINO_AUDIO_COST:opus-1 us_per_s=305486 rsp_us_per_s=64446 voices=1 buffers=13
+[n64] TEST PASS
+
+## 3DS (Azahar, New 3DS): cargo xtask test 3ds
+[3ds] audio: 12 sounds (3 streamed), 228166 B in RomFS (762488 B as PCM16), 113414 B resident in linear memory
+[azahar] TRINO_STEP:audio
+[azahar] TRINO_STEP:audio codecs
+[azahar] TRINO_AUDIO: voices=1 streams=1 resident_bytes=113510 stream_bytes=24576 underruns=0 streamed_frames=101975 stream_core=2
+[azahar] TRINO_AUDIO: run voices=4 streams=1 resident_bytes=113510 stream_bytes=24576 underruns=0 streamed_frames=370703 t=21086ms
+[3ds] TEST PASS
+
+## Browsers: cargo xtask test web (Chromium on the host; Firefox and WebKit in mcr.microsoft.com/playwright:v1.63.0-noble)
+final_web_docker.log:[web-test] firefox-webgl2 (155.0): PASS in 12.8 s · llvmpipe, or similar (Gl) · textures BC
+final_web_docker.log:[web-test] firefox-webgl2: audio codecs ok, 201 frames in 3389 ms (longest gap 17 ms), audio clock 3.573 s: rate=44100 streamed_frames=101689 stream_bytes=199936 resident_bytes=815468 underruns=0
+final_web_docker.log:[web-test] firefox-webgl2: TRINO_AUDIO: state=running rate=44100 resident_bytes=815468 voices=0 streams=0 stream_bytes=0 underruns=0 streamed_frames=115556
+final_web_docker.log:[web-test] firefox-webgl2: TRINO_AUDIO: state=running rate=44100 resident_bytes=1442194 voices=5 streams=1 stream_bytes=199936 underruns=0 streamed_frames=220394
+final_web_docker.log:[web-test] webkit-webgl2 (26.6): PASS in 9.8 s · Apple GPU (Gl) · textures BC
+final_web_docker.log:[web-test] webkit-webgl2: audio codecs ok, 207 frames in 3337 ms (longest gap 16 ms), audio clock 4.508 s: rate=44100 streamed_frames=99172 stream_bytes=232704 resident_bytes=815468 underruns=0
+final_web_docker.log:[web-test] webkit-webgl2: TRINO_AUDIO: state=running rate=44100 resident_bytes=815468 voices=0 streams=0 stream_bytes=0 underruns=0 streamed_frames=107364
+final_web_docker.log:[web-test] webkit-webgl2: TRINO_AUDIO: state=running rate=44100 resident_bytes=1442194 voices=4 streams=1 stream_bytes=232704 underruns=0 streamed_frames=232426
+final_web_chromium.log:[web-test] chromium-webgl2 (153.0.8010.12): PASS in 11.9 s · ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver) (Gl) · textures BC
+final_web_chromium.log:[web-test] chromium-webgl2: audio codecs ok, 195 frames in 3233 ms (longest gap 16 ms), audio clock 4.032 s: rate=44100 streamed_frames=100921 stream_bytes=199936 resident_bytes=815468 underruns=0
+final_web_chromium.log:[web-test] chromium-webgl2: TRINO_AUDIO: state=running rate=44100 resident_bytes=815468 voices=0 streams=0 stream_bytes=0 underruns=0 streamed_frames=115556
+final_web_chromium.log:[web-test] chromium-webgl2: TRINO_AUDIO: state=running rate=44100 resident_bytes=1442194 voices=4 streams=1 stream_bytes=199936 underruns=3 streamed_frames=312939
+final_web_chromium.log:[web-test] chromium-webgpu (153.0.8010.12): PASS in 11.1 s · browser adapter (BrowserWebGpu) · textures BC
+final_web_chromium.log:[web-test] chromium-webgpu: audio codecs ok, 183 frames in 3033 ms (longest gap 16 ms), audio clock 3.680 s: rate=44100 streamed_frames=101049 stream_bytes=199936 resident_bytes=815468 underruns=0
+final_web_chromium.log:[web-test] chromium-webgpu: TRINO_AUDIO: state=running rate=44100 resident_bytes=815468 voices=0 streams=0 stream_bytes=0 underruns=0 streamed_frames=115556
+final_web_chromium.log:[web-test] chromium-webgpu: TRINO_AUDIO: state=running rate=44100 resident_bytes=1442194 voices=3 streams=1 stream_bytes=196864 underruns=2 streamed_frames=260843
+
+## PC streaming RAM: platform-pc/tests/audio_stream.rs
+TRINO_STREAM_RAM: minutes=10 encoded=738808 B decoded_whole=115200000 B peak_while_playing=317016 B ring=96000 B frames=28799999 underruns=0
+
+## Codec SNR: asset-pipeline/tests/audio_codecs.rs
+tone+chirp       n64  vadpcm        4742 B ( 29.5% of PCM16)  43.9 dB
+tone+chirp       3ds  dspadpcm      4644 B ( 29.0% of PCM16)  45.2 dB
+tone+chirp       pc   vorbis        4800 B ( 29.9% of PCM16)  29.1 dB
+tone+chirp       web  vorbis        4800 B ( 29.9% of PCM16)  29.1 dB
+tone+chirp       pc   vorbis        5213 B ( 32.5% of PCM16)  33.7 dB
+castle64 theme   n64  vadpcm       79604 B ( 28.2% of PCM16)  30.8 dB
+castle64 theme   3ds  dspadpcm     80700 B ( 28.6% of PCM16)  34.5 dB
+castle64 theme   pc   vorbis       52774 B ( 18.7% of PCM16)  27.1 dB
+castle64 theme   web  vorbis       52774 B ( 18.7% of PCM16)  27.1 dB
+castle64 theme   pc   vorbis       63358 B ( 22.4% of PCM16)  29.6 dB
+castle64 win     n64  vadpcm       16604 B ( 28.5% of PCM16)  27.6 dB
+castle64 win     3ds  dspadpcm     16692 B ( 28.7% of PCM16)  30.9 dB
+castle64 win     pc   vorbis       17553 B ( 30.2% of PCM16)  28.7 dB
+castle64 win     web  vorbis       17553 B ( 30.2% of PCM16)  28.7 dB
+castle64 win     pc   vorbis       22269 B ( 38.3% of PCM16)  31.5 dB
+castle64 beep    n64  vadpcm        3950 B ( 29.8% of PCM16)  72.2 dB
+castle64 beep    3ds  dspadpcm      3844 B ( 29.1% of PCM16)  72.2 dB
+castle64 beep    pc   vorbis        4640 B ( 35.1% of PCM16)  41.2 dB
+castle64 beep    web  vorbis        4640 B ( 35.1% of PCM16)  41.2 dB
+castle64 beep    pc   vorbis        5027 B ( 38.0% of PCM16)  40.8 dB

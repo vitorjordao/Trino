@@ -20,7 +20,7 @@ use crate::math3d::Mat34;
 use crate::render::ModelParams;
 
 /// Words in a [`MemoKey`].
-pub const KEY_WORDS: usize = 16;
+pub const KEY_WORDS: usize = 18;
 
 /// Everything a memoized command depends on, as words.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -29,9 +29,10 @@ pub struct MemoKey(pub [u32; KEY_WORDS]);
 impl MemoKey {
     /// The key of drawing `model` (a handle) with `matrix` and `params`
     /// under generation `generation`, or `None` when the draw is not a
-    /// plain one (emissive, animated, textured or palette draws are never
-    /// memoized: they are rare and their commands depend on more; a palette
-    /// alone is 4 words the key has no room for; water moves every frame).
+    /// plain one (emissive, animated or palette draws are never memoized:
+    /// they are rare and their commands depend on more; a palette alone is
+    /// 4 words the key has no room for; water moves every frame). A
+    /// textured draw is keyed by its texture, filter and detail layer.
     /// Double-sided draws are keyed (their command differs only in its cull
     /// mode).
     /// A new [`ModelParams`] field must be added here or excluded.
@@ -41,7 +42,6 @@ impl MemoKey {
         let e = params.emissive;
         if e.r | e.g | e.b != 0
             || params.anim.is_some()
-            || params.texture.is_some()
             || params.palette.is_some()
             || params.water.is_some()
         {
@@ -52,12 +52,17 @@ impl MemoKey {
         k[1] = generation;
         let t = params.tint;
         k[2] = u32::from_be_bytes([t.r, t.g, t.b, t.a]);
-        k[3] = params.shading as u32 | (params.double_sided as u32) << 8;
+        k[3] = params.shading as u32
+            | (params.double_sided as u32) << 8
+            | (params.filter as u32) << 16
+            | params.detail.map_or(0, |d| 1 + d.scale_log2 as u32) << 24;
         for (r, row) in matrix.m.iter().enumerate() {
             for (c, v) in row.iter().enumerate() {
                 k[4 + r * 4 + c] = v.to_bits();
             }
         }
+        k[16] = params.texture.map_or(0, |t| t.0);
+        k[17] = params.detail.map_or(0, |d| d.sprite.0);
         Some(MemoKey(k))
     }
 
@@ -85,10 +90,17 @@ impl<const W: usize> MemoSlot<W> {
     /// matches a real key: backends start at generation 0 and a handle
     /// is a path hash).
     pub const EMPTY: MemoSlot<W> = MemoSlot {
-        key: MemoKey([0, u32::MAX, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+        key: MemoKey([0, u32::MAX, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
         words: [0; W],
         extra: 0,
     };
+}
+
+/// Whether `a` and `b` hold the same words. Not `==`: on the N64 that is a
+/// call to newlib's `memcmp`, which compares byte by byte (~600 cycles for
+/// a memo key; the water draws spent ~10% of their CPU there, issue #69).
+pub fn words_eq(a: &[u32], b: &[u32]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0, |d, (x, y)| d | (x ^ y)) == 0
 }
 
 /// The memoized command for `key`, if `slots` holds it.
@@ -100,7 +112,7 @@ pub fn find<'a, const W: usize>(
         return None;
     }
     let s = &slots[key.slot(slots.len())];
-    (s.key == *key).then_some(s)
+    words_eq(&s.key.0, &key.0).then_some(s)
 }
 
 /// [`find`], to update the command in place (a backend that patches a
@@ -114,7 +126,7 @@ pub fn find_mut<'a, const W: usize>(
     }
     let i = key.slot(slots.len());
     let s = &mut slots[i];
-    (s.key == *key).then_some(s)
+    words_eq(&s.key.0, &key.0).then_some(s)
 }
 
 /// Remember `words` (and `extra`) for `key`, replacing whatever shared its

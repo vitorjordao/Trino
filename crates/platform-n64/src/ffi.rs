@@ -71,6 +71,17 @@ unsafe extern "C" {
     pub fn trino_alloc_uncached(size: u32) -> *mut c_void;
     /// Physical address of a pointer (what the RSP's DMA takes).
     pub fn trino_phys_addr(p: *const c_void) -> u32;
+    /// Write `len` bytes at cached address `p` back to RDRAM (data the RSP
+    /// DMAs next).
+    pub fn trino_cache_writeback(p: *const c_void, len: u32);
+    /// Start the RSP on what is queued (`rspq_flush`): an idle RSP sleeps
+    /// until then, so commands streamed during a frame would wait for its
+    /// end.
+    pub fn trino_rsp_flush();
+    /// Claim the cache lines at cached `p` (16-aligned, `len` a multiple of
+    /// 16) for writing, without reading RDRAM (every byte read later must be
+    /// written first).
+    pub fn trino_cache_create(p: *mut c_void, len: u32);
     /// Heap bytes in use / in total (libdragon `sys_get_heap_stats`).
     pub fn trino_heap_used() -> u32;
     pub fn trino_heap_total() -> u32;

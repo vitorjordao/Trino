@@ -298,6 +298,8 @@ the LOD panel and the impostor section print it next to the mesh's CPU-path cost
 
 | Change | Result on the scenes |
 |---|---|
+| **#69 part 2** (ADR 0018 §7): ripples and rings on `rsp_trino_water`, two vertices per pass, static + frame water blocks, `trino_rsp_flush` for streamed commands, the water texture kept in TMEM, `trino_cache_create` on the arena, `water_plane` in the command, `words_eq`, water-memo eviction | `micro-river` 10.48 → **1.78 ms** (its T&L 6.39 → 0.94), `showcase-river` 75.17 → **26.21 ms** (8 paddings). Biggest single steps: the RSP flush (drain tail 0.8 → 0.35 ms), the TMEM residency (−0.25 ms CPU), the memo eviction (a full self-test run had rebuilt the river every frame: T&L 1.84 vs 0.97). castle64 +0.3…+0.8 ms = layout (a six-line patch to the baseline gives the same numbers); hub golden identical |
+| Indirect RSP command (`DrawAt`: the command image in the cached arena, 2 queue words instead of 27–46) | **no gain**, reverted: `submit` was already 35 µs for the river; for colored/textured commands it was slower (the showcase's `submit` 1.2 → 10 ms) |
 | **Text in runs** (`trino_text_run`: up to 32 glyphs per FFI call, on-screen glyphs straight to `__rdpq_texture_rectangle` with the constant steps `1024 / scale`) + **`GlyphIndex`** (O(1) lookup below codepoint 256; left-aligned text no longer measures its lines), 2026-10-16 | an external project, mean (min–max) over 4 paddings: busiest scene 26.3 (25.1–27.7) → 25.1 (24.8–25.3) ms, two UI-heavy scenes 28.0 → 26.3 and 28.5 → 26.8, UI-only 11.3 → 9.6, its densest far view 56.7 → 54.2; the `sprites` stage −1.0…−1.8 ms (~210–310 2D draws a frame, `draws2d=` in `TRINO_FRAME`). The spread shrank from ~2.6 to ~0.5 ms: fewer, tighter hot functions are less layout-sensitive. Goldens identical |
 | Local lights folded into `tessellate_joints` (never-taken branches, zero-sized generics, 2026-10-15) | **worse with no light set**: the static body 15.6 → 18.0 KB (past the 16 KB I-cache); `micro-tris` T&L 21.5 → 29.0 ms, `micro-gouraud` 12.0 → 17.5 ms. Moved to `render3d/lit.rs` (a copy, dispatched only for lit draws): back to 21.9 / 11.9 ms, body 0x3d04 again |
 | Local lights in castle64's throne room (4 torches, cap 2 per vertex, `ground_pool` decals) | throne 9.3 → 16.0 ms: the star lit on the CPU (0.14 → 1.3 ms), the castle blocks' lit vertices (+0.6 ms), pools/posts/flames on the RSP (~1.2 ms) and the RSP drain. Torch posts lit by their own light cost ~1.7 ms each on the CPU: drawn Unlit on per-vertex tiers |
@@ -506,6 +508,34 @@ hull check: 30.9 ms over four code layouts, all 83 draws on the RSP). What got i
   unused `sort` stage. So a moving body part costs ~0.2 ms of CPU.
 - What paid: far players (beyond 24 m) drop their arms and blob shadow (83 → 68 draws,
   30.7 → 27.4 ms). Moving the threshold to 22 m gained nothing more.
+
+## The river at 1.2 ms (2026-10-18, #69 part 2)
+
+How the last 9 ms came off `micro-river`, and what the tools could and couldn't see:
+
+- **Find the RSP time per command:** drain after each streamed command
+  (`trino_drain`), log model, vertices, triangles and µs, and subtract an empty drain
+  (~45 µs). Fit µs = a · vertices + b · triangles + c: the water overlay was ~8.8 µs a
+  surface vertex, ~3 µs a ring vertex, ~2.6 µs a triangle, ~40 µs a command. Without
+  triangles (a temporary `li count, 0` in the overlay) the vertices alone remain.
+- **Read `end`:** it is `trino_frame_end` plus the drain, i.e. the RSP's tail after the
+  CPU. A tail as long as the RSP's whole work means the RSP never started early: rspq
+  wakes an idle RSP only on `rspq_flush`.
+- **An empty frame** (draws skipped, everything else the same) is the floor of a micro
+  scene: 0.31 ms for `micro-river` (begin, end, camera, light, water state).
+- **CPU sections:** timestamps (`now_us`) into a few static accumulators, printed per
+  frame with the scene, beat a sampling profiler here: a 4 µs timer interrupt inflated
+  the frame ~4× and skewed toward loops. What the accumulators found: the water texture
+  re-uploaded every frame (~0.25 ms), the 46-word uncached commands (~25 µs each),
+  `memcmp` on keys, cache-line fills on fresh arena memory. None of this is in the tree;
+  GitHub #79 tracks making it a feature (CLI and editor).
+- **Check the memo under the real run, not a perf-only ROM:** the full self-test fills
+  the water memo before the perf scenes, and clearing it whole mid-frame rebuilt the
+  river every frame (T&L 1.84 ms in the full run against 0.97 alone).
+- **Layout again:** castle64 moved +0.3…+0.8 ms over all 8 paddings with no change to its
+  draws. A six-line counter patch to the *baseline* reproduced the numbers: paddings
+  don't sample the layout inside the Rust code (ADR 0013 §4). Before calling a change a
+  regression, try that.
 
 ## Workflow for a perf change
 

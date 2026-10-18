@@ -61,23 +61,23 @@ rsp_draws = 22
 rsp_tris = 446
 
 [micro-river]
-verts = 54
-tris_in = 48
-clipped = 8
+verts = 0
+tris_in = 0
+clipped = 0
 splits = 0
 backfaced = 0
-emitted = 35
-culled = 2
+emitted = 0
+culled = 3
 rsp_draws = 3
-rsp_tris = 104
+rsp_tris = 92
 
 [showcase-river]
-verts = 231
-tris_in = 131
-clipped = 8
+verts = 0
+tris_in = 0
+clipped = 0
 splits = 0
-backfaced = 21
-emitted = 102
-culled = 25
-rsp_draws = 85
-rsp_tris = 4231
+backfaced = 0
+emitted = 0
+culled = 26
+rsp_draws = 87
+rsp_tris = 4302

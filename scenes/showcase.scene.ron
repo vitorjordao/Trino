@@ -516,6 +516,7 @@
     ),
     tags: ["water"],
     model: Some((path: "models/river_0_8", material: Some("materials/water"))),
+    platforms: (n64: Some((model: Some("models/river_lite_0_8")))),
 ),
 (
     name: "piece-8-12",
@@ -526,6 +527,7 @@
     ),
     tags: ["water"],
     model: Some((path: "models/river_8_12", material: Some("materials/water"))),
+    platforms: (n64: Some((model: Some("models/river_lite_8_12")))),
 ),
 (
     name: "piece-12-13",
@@ -536,6 +538,7 @@
     ),
     tags: ["water"],
     model: Some((path: "models/river_12_13", material: Some("materials/water"))),
+    platforms: (n64: Some((model: Some("models/river_lite_12_13")))),
 ),
 (
     name: "piece-13-14",
@@ -546,6 +549,7 @@
     ),
     tags: ["water"],
     model: Some((path: "models/river_13_14", material: Some("materials/water"))),
+    platforms: (n64: Some((model: Some("models/river_lite_13_14")))),
 ),
 (
     name: "piece-14-15",
@@ -556,6 +560,7 @@
     ),
     tags: ["water"],
     model: Some((path: "models/river_14_15", material: Some("materials/water"))),
+    platforms: (n64: Some((model: Some("models/river_lite_14_15")))),
 ),
 (
     name: "piece-15-16",
@@ -566,6 +571,7 @@
     ),
     tags: ["water"],
     model: Some((path: "models/river_15_16", material: Some("materials/water"))),
+    platforms: (n64: Some((model: Some("models/river_lite_15_16")))),
 ),
     ],
 ),

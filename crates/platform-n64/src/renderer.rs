@@ -8,20 +8,22 @@ use alloc::vec::Vec;
 use core::ffi::c_void;
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use trino_core::memo::{self, MemoKey, MemoSlot};
+use trino_core::math3d::to_i32;
+use trino_core::memo::{self, MemoKey, MemoSlot, words_eq};
 use trino_core::perf::RenderProfile;
 use trino_core::render3d::{
-    Camera3, DEFAULT_LIGHT, Light, MAX_JOINTS, Mesh, MeshLayout, NEAR_PLANE, RspPan, RspPart,
-    ScreenTri, TexBind, TnlContext, TnlScratch, TnlStats, face_normal, flat_normal, flat_ratios,
-    painter_index, painter_key, rsp_band, rsp_color, rsp_color_terms, rsp_eligible_mv,
-    rsp_hull_inside, rsp_mesh_supported, rsp_part_bounds, rsp_rigid_check, rsp_rigid_draws,
-    rsp_water_mesh_check, water_rsp, water_vertex,
+    Camera3, DEFAULT_LIGHT, Light, MAX_JOINTS, Mesh, MeshLayout, NEAR_PLANE, Ring, RspDraw, RspPan,
+    RspPart, ScreenTri, TexBind, TnlContext, TnlScratch, TnlStats, WaterRsp, face_normal,
+    flat_normal, flat_ratios, painter_index, painter_key, ring_on_rsp, ripple_over_surface,
+    rsp_band, rsp_color, rsp_color_terms, rsp_eligible_mv, rsp_hull_inside, rsp_mesh_supported,
+    rsp_part_bounds, rsp_rigid_check, rsp_rigid_draws, rsp_water_margin, rsp_water_mesh_check,
+    water_plane, water_rings_with, water_rsp, water_rsp_frame, water_vertex,
 };
 use trino_core::text::{BitmapFont, GlyphIndex};
 use trino_core::{
-    BillboardParams, Caps, Color, FontId, FrameStats, LightList, LocalLight, Mat34, Material,
-    ModelId, ModelParams, Renderer, Ripple, Shading, SpriteId, SpriteParams, TexFilter, TextParams,
-    Transform3, Vec2, Vec3, WaterState,
+    BillboardParams, Caps, Color, FontId, FrameStats, LightList, LocalLight, MAX_RIPPLES, Mat34,
+    Material, ModelId, ModelParams, Renderer, Ripple, Shading, SpriteId, SpriteParams, TexFilter,
+    TextParams, Transform3, Vec2, Vec3, WaterState,
 };
 
 use crate::ffi;
@@ -127,18 +129,46 @@ pub struct N64Renderer {
     /// bucket.
     pending_water_rsp: Vec<[[u32; rsp::DRAW_WORDS]; 2]>,
     water_arena: WaterArena,
+    /// The batch's RSP ring commands (`rsp::WATER_RING`), drawn after its
+    /// water surfaces like the CPU path's rings.
+    pending_ring_rsp: Vec<[[u32; rsp::DRAW_WORDS]; 2]>,
+    /// Water draws remembered across frames ([`WaterMemo`]).
+    water_memo: Vec<WaterMemo>,
+    /// The water binding the last RSP water command set (`submit_water`;
+    /// zeros once anything else may have changed the mode or TMEM).
+    water_bound: [u32; 4],
+    /// The frame's water material state ([`WaterNow`]) and the frame count
+    /// it belongs to.
+    water_now: Option<Box<WaterNow>>,
+    water_frame_no: u32,
+    /// The memo of the water draw the CPU path is drawing (to remember a
+    /// cull).
+    water_cpu_memo: Option<usize>,
+    /// Replaced water commands, dropped a few frames later
+    /// ([`WaterCmd::block`] is RSP memory): (frame, command).
+    water_grave: Vec<(u32, alloc::boxed::Box<WaterCmd>)>,
+    /// [`RigidScratch`] (none until the first rigid draw).
+    rigid_scratch: Option<Box<RigidScratch>>,
+    /// A ring's angles in fixed point (`rsp::ring_unit`).
+    ring_unit: [[i32; 2]; trino_core::render3d::RING_SEGMENTS + 1],
 }
 
-/// Memo slots (268 bytes each): a few hundred draws per frame rarely share one.
+/// Memo slots (308 bytes each): a few hundred draws per frame rarely share one.
 const MEMO_SLOTS: usize = 1024;
 /// A memo entry: the command, then `RspPan` (s, q, r2) and the view
 /// translation the command was made for, as float bits, then a colored
-/// command's color words (`rsp::color_words`).
-const MEMO_WORDS: usize = rsp::DRAW_WORDS + 10 + rsp::COLOR_WORDS;
+/// command's color words (`rsp::color_words`) or a textured command's
+/// entry up to its binding (`rsp::tex_entry`).
+const MEMO_WORDS: usize = rsp::DRAW_WORDS + 10 + MEMO_ENTRY;
+/// Words of a textured command's entry the memo keeps.
+const MEMO_ENTRY: usize = rsp::TEX_BIND + 3;
 /// Where a colored command's color words sit in a memo entry.
 const MEMO_COLOR: usize = rsp::DRAW_WORDS + 10;
 /// Where the view translation sits in a memo entry.
 const MEMO_T: usize = rsp::DRAW_WORDS + 7;
+/// A memo entry's word 0 for a draw the CPU path culled whole (no command:
+/// real commands' word 0 is a cull mode and flags below 0x1000).
+const MEMO_CULLED: u32 = 0xC011_ED00;
 
 impl N64Renderer {
     /// Start timing every stage and model (see `trino_core::perf`).
@@ -153,7 +183,8 @@ impl N64Renderer {
 
     fn rebuild_tnl(&mut self) {
         self.tnl_ctx = TnlContext::new(&self.camera, &self.light, SCREEN)
-            .with_local_lights(self.locals.as_slice());
+            .with_local_lights(self.locals.as_slice())
+            .with_water(&self.water_state);
     }
 
     /// Timestamp when profiling (no timer reads otherwise).
@@ -205,6 +236,15 @@ impl N64Renderer {
             rsp_water: BTreeMap::new(),
             pending_water_rsp: Vec::new(),
             water_arena: WaterArena::new(),
+            pending_ring_rsp: Vec::new(),
+            water_memo: Vec::new(),
+            water_bound: [0; 4],
+            water_now: None,
+            water_frame_no: 0,
+            water_cpu_memo: None,
+            water_grave: Vec::new(),
+            rigid_scratch: None,
+            ring_unit: rsp::ring_unit(),
             water_state: WaterState::NONE,
             pending_water: Vec::new(),
             pending_water_tex: Vec::new(),
@@ -223,17 +263,20 @@ impl N64Renderer {
             self.charge(t0, |s| &mut s.submit);
         }
         self.flush_water();
+        // What follows (2D, the next frame) changes the mode and TMEM.
+        self.water_bound = [0; 4];
     }
 
     /// The batch's water, last: far to near, each surface's texture state
     /// bound once (`trino_3d_water`: blended, z-tested, not written).
     fn flush_water(&mut self) {
-        if !self.pending_water_rsp.is_empty() {
+        if !self.pending_water_rsp.is_empty() || !self.pending_ring_rsp.is_empty() {
             let t0 = self.tick();
-            for [w, e] in &self.pending_water_rsp {
-                submit_water(&self.sprites, w, e);
+            for [w, e] in self.pending_water_rsp.iter().chain(&self.pending_ring_rsp) {
+                submit_water(&self.sprites, w, e, &mut self.water_bound);
             }
             self.pending_water_rsp.clear();
+            self.pending_ring_rsp.clear();
             self.charge(t0, |s| &mut s.submit);
         }
         if self.pending_water.is_empty() {
@@ -305,7 +348,7 @@ impl N64Renderer {
             .texture_for(params)
             .filter(|t| self.sprites.contains_key(&t.0));
         let t0 = self.tick();
-        let ctx = self.tnl_ctx.with_water(&self.water_state);
+        let ctx = &self.tnl_ctx;
         let before = self.pending_water.len();
         let pending = &mut self.pending_water;
         let tnl = trino_core::render3d::tessellate_with(
@@ -319,6 +362,17 @@ impl N64Renderer {
         self.frame_stats.tnl.add(&tnl);
         if let Some(p) = &mut self.profile {
             p.record_model(model, now_us().wrapping_sub(t0), &tnl);
+        }
+        // Culled whole: the memo answers next frame (same key, margin).
+        if let Some(i) = self.water_cpu_memo.take()
+            && tnl
+                == (TnlStats {
+                    culled: 1,
+                    ..TnlStats::default()
+                })
+            && let Some(m) = self.water_memo.get_mut(i)
+        {
+            m.culled = true;
         }
         let time = self.water_state.time;
         let bind =
@@ -781,11 +835,17 @@ impl N64Renderer {
     /// n64-performance skill); chunks keep the proven burst pattern.
     fn queue_rsp(&mut self, words: [u32; rsp::DRAW_WORDS]) {
         self.pending_rsp.push(words);
+        self.stream_rsp();
+    }
+
+    /// [`Self::queue_rsp`]'s streaming: a full chunk goes to the overlay.
+    fn stream_rsp(&mut self) {
         if self.rsp_stream
             && self.pending_tris.is_empty()
             && self.pending_rsp.len() >= RSP_STREAM_CHUNK
         {
             self.submit_rsp();
+            unsafe { ffi::trino_rsp_flush() };
         }
     }
 
@@ -843,7 +903,13 @@ impl Renderer for N64Renderer {
     fn begin_frame(&mut self, clear: Color) {
         self.frame_stats = FrameStats::default();
         self.water_state = WaterState::NONE;
+        self.tnl_ctx = self.tnl_ctx.with_water(&self.water_state);
         self.water_arena.next_frame();
+        self.water_frame_no = self.water_frame_no.wrapping_add(1);
+        if !self.water_grave.is_empty() {
+            let now = self.water_frame_no;
+            self.water_grave.retain(|(f, _)| now.wrapping_sub(*f) < 4);
+        }
         if self.locals.set(&[], 0) {
             self.rebuild_tnl();
         }
@@ -892,10 +958,15 @@ impl Renderer for N64Renderer {
     }
 
     fn set_texture_filter(&mut self, filter: TexFilter) {
-        self.tex_filter = match filter {
+        let f = match filter {
             TexFilter::Default => TexFilter::Bilinear,
             f => f,
         };
+        // Remembered textured commands carry the old default's binding.
+        if f != self.tex_filter {
+            self.tex_filter = f;
+            self.memo_gen = self.memo_gen.wrapping_add(1);
+        }
     }
 
     fn set_local_lights(&mut self, lights: &[LocalLight]) {
@@ -909,6 +980,9 @@ impl Renderer for N64Renderer {
 
     fn set_water(&mut self, time: f32, ripples: &[Ripple]) {
         self.water_state = WaterState::new(time, ripples, self.caps.max_ripples);
+        // The context carries it: water draws read it from there (a copy of
+        // the context per draw was most of a water draw's CPU time).
+        self.tnl_ctx = self.tnl_ctx.with_water(&self.water_state);
     }
 
     fn draw_model(
@@ -954,6 +1028,19 @@ impl Renderer for N64Renderer {
             let t = [v[0][3].to_bits(), v[1][3].to_bits(), v[2][3].to_bits()];
             let w = &mut hit.words;
             let still = w[MEMO_T..MEMO_T + 3] == t;
+            // Culled whole under this very camera last time: culled again.
+            if w[0] == MEMO_CULLED && still {
+                let culled = TnlStats {
+                    culled: 1,
+                    ..TnlStats::default()
+                };
+                self.frame_stats.models += 1;
+                self.frame_stats.tnl.add(&culled);
+                if let Some(p) = &mut self.profile {
+                    p.record_model(model, 0, &culled);
+                }
+                return;
+            }
             let f = |w: &[u32; MEMO_WORDS], i: usize| f32::from_bits(w[rsp::DRAW_WORDS + i]);
             let pan = RspPan {
                 s: [f(w, 0), f(w, 1), f(w, 2)],
@@ -972,7 +1059,7 @@ impl Renderer for N64Renderer {
             // A colored command (fog, a colored light) is reused only under
             // the same camera: its fog row follows the view, and a pan may
             // move it into the fog band where its edges need splits.
-            let colored = w[0] & rsp::COLORED != 0;
+            let colored = w[0] & (rsp::COLORED | rsp::TEXTURED) != 0;
             if !lit
                 && (still
                     || (!colored
@@ -987,18 +1074,26 @@ impl Renderer for N64Renderer {
                     w[..rsp::DRAW_WORDS].copy_from_slice(&c);
                     w[MEMO_T..MEMO_T + 3].copy_from_slice(&t);
                 }
-                let mut words = [0u32; rsp::DRAW_WORDS];
-                words.copy_from_slice(&w[..rsp::DRAW_WORDS]);
+                // Straight from the memo into the queue (no copies on the
+                // way: each costs a hit as much as the rest of it).
+                let entry = if w[0] & rsp::TEXTURED != 0 {
+                    MEMO_ENTRY
+                } else if colored {
+                    rsp::COLOR_WORDS
+                } else {
+                    0
+                };
+                let pending = &mut self.pending_rsp;
+                pending.push([0; rsp::DRAW_WORDS]);
+                let n = pending.len();
+                pending[n - 1].copy_from_slice(&w[..rsp::DRAW_WORDS]);
+                if entry > 0 {
+                    pending.push([0; rsp::DRAW_WORDS]);
+                    pending[n][..entry].copy_from_slice(&w[MEMO_COLOR..MEMO_COLOR + entry]);
+                }
                 let tris = hit.extra;
                 self.frame_stats.models += 1;
-                if colored {
-                    let mut c = [0u32; rsp::DRAW_WORDS];
-                    c[..rsp::COLOR_WORDS].copy_from_slice(&w[MEMO_COLOR..]);
-                    self.pending_rsp.push(words);
-                    self.queue_rsp(c);
-                } else {
-                    self.queue_rsp(words);
-                }
+                self.stream_rsp();
                 self.count_rsp(model, t0, tris);
                 return;
             }
@@ -1055,6 +1150,21 @@ impl Renderer for N64Renderer {
                 let entry = rsp::tex_entry(&c, &mv, size, [0.0, 0.0], bind);
                 let mut words = words;
                 words[0] |= rsp::TEXTURED;
+                if let Some(k) = key {
+                    let mut e = [0u32; MEMO_ENTRY];
+                    e.copy_from_slice(&entry[..MEMO_ENTRY]);
+                    remember(
+                        &mut self.memo,
+                        &self.tnl_ctx,
+                        k,
+                        &words,
+                        &e,
+                        &mv,
+                        &mesh,
+                        matrix,
+                        tris,
+                    );
+                }
                 self.pending_rsp.push(words);
                 self.queue_rsp(entry);
                 self.count_rsp(model, t0, tris);
@@ -1068,23 +1178,22 @@ impl Renderer for N64Renderer {
             if color.is_some() {
                 words[0] |= rsp::COLORED;
             }
-            if let Some(k) = key
-                && let Some(pan) = RspPan::new(&self.tnl_ctx.projection().0, &mv, &mesh, matrix)
-            {
-                let mut entry = [0u32; MEMO_WORDS];
-                entry[..rsp::DRAW_WORDS].copy_from_slice(&words);
+            if let Some(k) = key {
+                let mut e = [0u32; MEMO_ENTRY];
                 if let Some(c) = &color {
-                    entry[MEMO_COLOR..].copy_from_slice(&c[..rsp::COLOR_WORDS]);
+                    e[..rsp::COLOR_WORDS].copy_from_slice(&c[..rsp::COLOR_WORDS]);
                 }
-                let v = &self.tnl_ctx.projection().0.m;
-                let aux = [
-                    pan.s[0], pan.s[1], pan.s[2], pan.q[0], pan.q[1], pan.q[2], pan.r2, v[0][3],
-                    v[1][3], v[2][3],
-                ];
-                for (i, a) in aux.iter().enumerate() {
-                    entry[rsp::DRAW_WORDS + i] = a.to_bits();
-                }
-                memo::store(&mut self.memo, k, entry, tris);
+                remember(
+                    &mut self.memo,
+                    &self.tnl_ctx,
+                    k,
+                    &words,
+                    &e,
+                    &mv,
+                    &mesh,
+                    matrix,
+                    tris,
+                );
             }
             match color {
                 Some(c) => {
@@ -1114,6 +1223,23 @@ impl Renderer for N64Renderer {
         if let Some(p) = &mut self.profile {
             p.record_model(model, now_us().wrapping_sub(t0), &tnl);
         }
+        // Culled whole (a tile behind the camera): the memo answers while the
+        // camera stays put.
+        if let Some(k) = key
+            && tnl
+                == (TnlStats {
+                    culled: 1,
+                    ..TnlStats::default()
+                })
+        {
+            let v = &self.tnl_ctx.projection().0.m;
+            let mut entry = [0u32; MEMO_WORDS];
+            entry[0] = MEMO_CULLED;
+            entry[MEMO_T] = v[0][3].to_bits();
+            entry[MEMO_T + 1] = v[1][3].to_bits();
+            entry[MEMO_T + 2] = v[2][3].to_bits();
+            memo::store(&mut self.memo, k, entry, 0);
+        }
         let added = self.pending_tris.len() - before;
         let filter = self.tex_filter;
         self.tag_pending(
@@ -1122,7 +1248,6 @@ impl Renderer for N64Renderer {
             texture.map(|t| TexBind::model(t.0, params, filter)),
         );
     }
-
     fn draw_billboard(&mut self, sprite: SpriteId, pos: Vec3, params: &BillboardParams) {
         let Some(entry) = self.sprites.get(&sprite.0) else {
             return;
@@ -1249,6 +1374,12 @@ impl Renderer for N64Renderer {
     }
 }
 
+/// [`N64Renderer::draw_rigid`]'s pose and parts, kept between draws.
+pub struct RigidScratch {
+    joints: [Mat34; MAX_JOINTS],
+    parts: [RspPart; MAX_JOINTS],
+}
+
 /// Flat RSP copies by (mesh, part, scale ratios): see `N64Renderer::rsp_flat`.
 /// The part is a rigid mesh's joint, or [`WHOLE`].
 type FlatKey = (u32, u32, [u16; 3]);
@@ -1309,41 +1440,82 @@ impl N64Renderer {
         params: &ModelParams,
         rc: &RigidCopy,
     ) -> bool {
-        let Some((tmdl, layout)) = self.meshes.get(&model.0) else {
+        let Some(entry) = self.meshes.get(&model.0) else {
             return false;
         };
+        // SAFETY: the mesh map is only changed by `upload_mesh`, which a draw
+        // never calls; the blob outlives this draw.
+        let (tmdl, layout): &(Vec<u8>, MeshLayout) = unsafe { &*(entry as *const _) };
         let mesh = Mesh::from_layout(tmdl, layout);
         let t0 = self.tick();
-        let mut joints = [Mat34::IDENTITY; MAX_JOINTS];
-        mesh.pose(params.anim, &mut joints);
-        let mut parts = [RspPart {
-            joint: 0,
-            model: Mat34::IDENTITY,
-            mv: Mat34::IDENTITY,
-            draw: trino_core::render3d::RspDraw {
-                light: Vec3::ZERO,
-                ambient: 1.0,
-                cull_back: true,
-            },
-        }; MAX_JOINTS];
+        // The pose and the parts in scratch the renderer keeps (5 KB a draw
+        // to initialize on the stack otherwise).
+        let mut scratch = self.rigid_scratch.take().unwrap_or_else(|| {
+            alloc::boxed::Box::new(RigidScratch {
+                joints: [Mat34::IDENTITY; MAX_JOINTS],
+                parts: [RspPart {
+                    joint: 0,
+                    model: Mat34::IDENTITY,
+                    mv: Mat34::IDENTITY,
+                    draw: RspDraw {
+                        light: Vec3::ZERO,
+                        ambient: 1.0,
+                        cull_back: true,
+                    },
+                }; MAX_JOINTS],
+            })
+        });
+        let done = self.rigid_parts(model, matrix, params, rc, &mesh, &mut scratch, t0);
+        self.rigid_scratch = Some(scratch);
+        done
+    }
+
+    /// [`Self::draw_rigid`] with its scratch: the parts' commands, every one
+    /// or none (`false`: a part lacks its RSP copy).
+    #[allow(clippy::too_many_arguments)]
+    fn rigid_parts(
+        &mut self,
+        model: ModelId,
+        matrix: &Mat34,
+        params: &ModelParams,
+        rc: &RigidCopy,
+        mesh: &Mesh,
+        s: &mut RigidScratch,
+        t0: u32,
+    ) -> bool {
+        mesh.pose(params.anim, &mut s.joints);
         let Ok(n) = rsp_rigid_draws(
             &self.tnl_ctx,
-            &mesh,
+            mesh,
             matrix,
             params,
-            &joints,
+            &s.joints,
             &rc.bounds,
-            &mut parts,
+            &mut s.parts,
         ) else {
             return false;
         };
-        let color = rsp_color(&self.tnl_ctx, params);
-        let mut out: Vec<([u32; rsp::DRAW_WORDS], Option<[u32; rsp::DRAW_WORDS]>, u32)> =
-            Vec::with_capacity(n);
-        for p in &parts[..n] {
-            let rm = if params.shading == Shading::Flat {
+        let flat = params.shading == Shading::Flat;
+        for p in &s.parts[..n] {
+            let ok = if flat {
                 let key = (model.0, p.joint as u32, flat_ratios(&p.model));
-                bake_flat(&mut self.rsp_flat, key, &mesh);
+                bake_flat(&mut self.rsp_flat, key, mesh);
+                self.rsp_flat.get(&key).is_some_and(Option::is_some)
+            } else {
+                rc.parts.get(p.joint).is_some_and(Option::is_some)
+            };
+            if !ok {
+                return false;
+            }
+        }
+        // The color words are the same for every part.
+        let color = rsp_color(&self.tnl_ctx, params).map(|c| rsp::color_entry(&c, matrix));
+        self.frame_stats.models += 1;
+        for (k, p) in s.parts[..n].iter().enumerate() {
+            // The whole build is charged to the first part.
+            let t = if k == 0 { t0 } else { self.tick() };
+            let rm = if flat {
+                let key = (model.0, p.joint as u32, flat_ratios(&p.model));
                 self.rsp_flat.get(&key).and_then(Option::as_ref)
             } else {
                 rc.parts.get(p.joint).and_then(Option::as_ref)
@@ -1354,20 +1526,12 @@ impl N64Renderer {
             let cull = if p.draw.cull_back { self.rsp_cull } else { 2 };
             let mut words =
                 rsp::draw_words(&self.tnl_ctx, &p.mv, &p.draw, params.tint, rm, cull, 0);
-            let entry = color.map(|c| rsp::color_entry(&c, &p.mv));
-            if entry.is_some() {
-                words[0] |= rsp::COLORED;
-            }
-            out.push((words, entry, rm.tris()));
-        }
-        self.frame_stats.models += 1;
-        for (k, (words, entry, tris)) in out.into_iter().enumerate() {
-            // The whole build is charged to the first part.
-            let t = if k == 0 { t0 } else { self.tick() };
-            match entry {
+            let tris = rm.tris();
+            match &color {
                 Some(c) => {
+                    words[0] |= rsp::COLORED;
                     self.pending_rsp.push(words);
-                    self.queue_rsp(c);
+                    self.queue_rsp(*c);
                 }
                 None => self.queue_rsp(words),
             }
@@ -1377,18 +1541,23 @@ impl N64Renderer {
     }
 }
 
-/// Uncached RDRAM for the RSP water draws' per-frame data (water blocks and
-/// ripple deltas): three buffers in turn, one per frame, so the CPU never
-/// writes one the RSP may still be reading from the frame before.
+/// RDRAM for the RSP water draws' per-frame data (water blocks, ring
+/// segments): three buffers in turn, one per frame, so the CPU never
+/// writes one the RSP may still be reading from the frame before. Written
+/// through the cache and written back once ([`WaterArena::flush`]): a word
+/// at a time to uncached memory costs ~45 cycles.
 struct WaterArena {
     bufs: [*mut u8; WATER_ARENA_FRAMES],
     phys: [u32; WATER_ARENA_FRAMES],
     cur: usize,
     used: usize,
+    /// Where this frame's bytes not yet written back start.
+    dirty: usize,
 }
 
 const WATER_ARENA_FRAMES: usize = 3;
-/// Bytes per frame: a dozen water draws of 64 vertices with room to spare.
+/// Bytes per frame: a dozen water draws and their rings, with room to
+/// spare.
 const WATER_ARENA_BYTES: usize = 16 * 1024;
 
 impl WaterArena {
@@ -1398,12 +1567,14 @@ impl WaterArena {
             phys: [0; WATER_ARENA_FRAMES],
             cur: 0,
             used: 0,
+            dirty: 0,
         }
     }
 
     fn next_frame(&mut self) {
         self.cur = (self.cur + 1) % WATER_ARENA_FRAMES;
         self.used = 0;
+        self.dirty = 0;
         if self.bufs[self.cur].is_null() {
             self.grow();
         }
@@ -1415,107 +1586,560 @@ impl WaterArena {
     fn grow(&mut self) {
         let p = unsafe { ffi::trino_alloc_uncached(WATER_ARENA_BYTES as u32) } as *mut u8;
         if !p.is_null() {
-            self.bufs[self.cur] = p;
             self.phys[self.cur] = unsafe { ffi::trino_phys_addr(p as *const c_void) };
+            // The cached view of the same memory (KSEG0).
+            self.bufs[self.cur] = (p as usize & !0x2000_0000) as *mut u8;
         }
     }
 
-    /// `bytes` (8-aligned) of this frame's buffer: (pointer, RSP address).
+    /// `bytes` of this frame's buffer, 16-aligned: (cached pointer, RSP
+    /// address). [`WaterArena::flush`] before the RSP reads it.
     fn alloc(&mut self, bytes: usize) -> Option<(*mut u8, u32)> {
-        let bytes = bytes.div_ceil(8) * 8;
-        if self.bufs[self.cur].is_null() {
-            return None;
-        }
-        if self.used + bytes > WATER_ARENA_BYTES {
+        let bytes = bytes.div_ceil(16) * 16;
+        if self.bufs[self.cur].is_null() || self.used + bytes > WATER_ARENA_BYTES {
             return None;
         }
         let at = self.used;
         self.used += bytes;
+        // Every byte of it is written before the RSP reads it: no fill
+        // from RDRAM (~80 us a frame of the river's writes, in ares).
+        unsafe {
+            ffi::trino_cache_create(self.bufs[self.cur].add(at) as *mut c_void, bytes as u32)
+        };
         Some((
             unsafe { self.bufs[self.cur].add(at) },
             self.phys[self.cur] + at as u32,
         ))
     }
-}
 
-/// Copy `bytes` (big-endian words) to uncached memory at `dst`.
-fn write_uncached(dst: *mut u8, bytes: &[u8]) {
-    for (k, w) in bytes.as_chunks::<4>().0.iter().enumerate() {
-        unsafe {
-            (dst as *mut u32)
-                .add(k)
-                .write_volatile(u32::from_be_bytes(*w))
-        };
+    /// Write back what was written since the last flush.
+    fn flush(&mut self) {
+        if self.used > self.dirty {
+            let p = unsafe { self.bufs[self.cur].add(self.dirty) };
+            unsafe {
+                ffi::trino_cache_writeback(p as *const c_void, (self.used - self.dirty) as u32)
+            };
+            self.dirty = self.used;
+        }
     }
 }
 
+/// Copy `bytes` to arena memory at `dst` (cached; [`WaterArena::flush`]).
+fn write_arena(dst: *mut u8, bytes: &[u8]) {
+    unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), dst, bytes.len()) };
+}
+
 /// One RSP water command: its texture and blend bound by the binding in its
-/// entry (`rsp::WATER_BIND`, as `flush_water` binds a CPU group), then the
-/// command.
+/// entry (`rsp::WATER_BIND`, as `flush_water` binds a CPU group) unless
+/// `bound` says the last water command left them so, then the command.
 #[cold]
 #[inline(never)]
 fn submit_water(
     sprites: &BTreeMap<u32, SpriteEntry>,
     w: &[u32; rsp::DRAW_WORDS],
     e: &[u32; rsp::DRAW_WORDS],
+    bound: &mut [u32; 4],
 ) {
     let bind = &e[rsp::WATER_BIND..rsp::WATER_BIND + 4];
     let Some(base) = sprites.get(&bind[0]) else {
         return;
     };
-    let detail = sprites
-        .get(&bind[1])
-        .map_or(core::ptr::null_mut(), |s| s.ptr);
-    unsafe {
-        ffi::trino_3d_water(base.ptr, detail, bind[2], bind[3]);
-        ffi::trino_rsp_draw_water(w.as_ptr(), e.as_ptr());
+    if !words_eq(bound, bind) {
+        let detail = sprites
+            .get(&bind[1])
+            .map_or(core::ptr::null_mut(), |s| s.ptr);
+        unsafe { ffi::trino_3d_water(base.ptr, detail, bind[2], bind[3]) };
+        bound.copy_from_slice(bind);
+    }
+    unsafe { ffi::trino_rsp_draw_water(w.as_ptr(), e.as_ptr()) };
+}
+
+/// Words of a [`WaterMemo`] key: the model, the memo generation, the
+/// matrix, the surface (tint, shading, texture, filter, detail, gloss) and
+/// the water's own fields and the view's translation.
+const WATER_KEY: usize = 29;
+/// Water draws remembered at once (the showcase's river has six pieces).
+const WATER_MEMOS: usize = 32;
+
+/// A water draw remembered across frames (`N64Renderer::water_memo`): what
+/// its RSP commands need that only the camera, the light or the draw itself
+/// change. A frame then writes only the swell's phases, the ripples, the
+/// scroll and the rings' segments: a rebuild costs the eligibility test (a
+/// walk over the mesh near the camera) and ~150 float conversions.
+struct WaterMemo {
+    key: [u32; WATER_KEY],
+    /// The margin (`rsp_water_margin`'s bits) the answer was made with.
+    margin: u32,
+    /// The RSP command, or `None`: the draw stays on the CPU.
+    cmd: Option<alloc::boxed::Box<WaterCmd>>,
+    /// Which ripples (their position's bits) fall on the surface
+    /// (`ripple_over_surface`), as last asked.
+    owners: [(u64, bool); MAX_RIPPLES],
+    /// The CPU path culled the draw whole under this key and margin: it
+    /// is culled again without the T&L (a river piece behind the camera).
+    culled: bool,
+    /// The last frame (`N64Renderer::water_frame_no`) that drew it.
+    seen: u32,
+}
+
+/// A remembered water draw's RSP commands (see [`WaterMemo`]).
+struct WaterCmd {
+    words: [u32; rsp::DRAW_WORDS],
+    /// The entry: color and texture words and the binding; the scroll, the
+    /// detail layer's scroll and the block's address are this frame's.
+    entry: [u32; rsp::DRAW_WORDS],
+    /// The water block's static part, in RDRAM at `block_phys` (written
+    /// back once); its swell phases and ripples are the frame's
+    /// ([`WaterNow::publish`]).
+    block: StaticBlock,
+    block_phys: u32,
+    tris: u32,
+    /// The texture's size in texels.
+    size: [f32; 2],
+    /// The rings' command (world space, both faces), entry and block; their
+    /// segment table, segment count and the block's phases are this
+    /// frame's.
+    ring: [[u32; rsp::DRAW_WORDS]; 2],
+    ring_block: StaticBlock,
+    ring_phys: u32,
+    /// The surface's rest height, where its rings lie (`water_plane`).
+    plane: f32,
+}
+
+/// A water block's static part (`rsp::WATER_FRAME_PART` bytes), aligned for
+/// the RSP's DMA.
+#[repr(C, align(16))]
+struct StaticBlock([u8; rsp::WATER_FRAME_PART]);
+
+impl StaticBlock {
+    fn of(b: &[u8; rsp::WATER_BLOCK]) -> StaticBlock {
+        let mut s = StaticBlock([0; rsp::WATER_FRAME_PART]);
+        s.0.copy_from_slice(&b[..rsp::WATER_FRAME_PART]);
+        s
+    }
+
+    /// Its RSP address, the bytes written back from the cache.
+    fn publish(&self) -> u32 {
+        let p = self.0.as_ptr() as *const c_void;
+        unsafe { ffi::trino_cache_writeback(p, rsp::WATER_FRAME_PART as u32) };
+        unsafe { ffi::trino_phys_addr(p) }
+    }
+}
+
+fn water_key(
+    model: ModelId,
+    generation: u32,
+    view: &Mat34,
+    matrix: &Mat34,
+    params: &ModelParams,
+) -> [u32; WATER_KEY] {
+    let mut k = [0u32; WATER_KEY];
+    k[0] = model.0;
+    k[1] = generation;
+    for (r, row) in matrix.m.iter().enumerate() {
+        for (c, v) in row.iter().enumerate() {
+            k[2 + r * 4 + c] = v.to_bits();
+        }
+    }
+    let t = params.tint;
+    k[14] = u32::from_be_bytes([t.r, t.g, t.b, t.a]);
+    k[15] = params.shading as u32
+        | (params.double_sided as u32) << 8
+        | (params.filter as u32) << 16
+        | (params.gloss as u32) << 24;
+    k[16] = params.texture.map_or(0, |s| s.0);
+    k[17] = params
+        .detail
+        .map_or(0, |d| d.sprite.0 ^ (d.scale_log2 as u32) << 28);
+    if let Some(w) = params.water {
+        let f = [
+            w.flow_speed.x,
+            w.flow_speed.y,
+            w.detail_flow.x,
+            w.detail_flow.y,
+            w.wave_amplitude,
+            w.wave_frequency,
+            w.ripple_responsiveness,
+        ];
+        for (i, v) in f.iter().enumerate() {
+            k[18 + i] = v.to_bits();
+        }
+        k[25] = 1;
+    }
+    // The view's translation: a pan keeps the generation.
+    for r in 0..3 {
+        k[26 + r] = view.m[r][3].to_bits();
+    }
+    k
+}
+
+/// The frame's [`WaterNow`] of a water material (`params`) under `ctx`.
+#[cold]
+#[inline(never)]
+fn water_now(
+    ctx: &TnlContext,
+    params: &ModelParams,
+    frame: u32,
+    key: [u32; 9],
+    filter: TexFilter,
+) -> Option<alloc::boxed::Box<WaterNow>> {
+    let ws = water_rsp_frame(ctx, params)?;
+    let w = params.water?;
+    let b = TexBind::model(0, params, filter).with_water(&w, ctx.water().time);
+    let [u, v] = b.water.unwrap_or([0, 0]);
+    let mut now = alloc::boxed::Box::new(WaterNow {
+        frame,
+        key,
+        ws,
+        patch: [0; rsp::WATER_BLOCK],
+        detail: (u as u32) << 16 | v as u32,
+        part: [0; 2],
+    });
+    rsp::patch_water(&mut now.patch, &ws, true);
+    Some(now)
+}
+
+/// The entry of `cmd` for this frame (`ws`, the water clock `time`): the
+/// block with the swell's phases and the ripples in `arena`, the scrolls
+/// and the block's address. `filter` is the renderer's default.
+fn water_entry(now: &WaterNow, cmd: &WaterCmd) -> [u32; rsp::DRAW_WORDS] {
+    let mut e = cmd.entry;
+    let q = |v: f32| to_i32(v * 32.0).clamp(-32768, 32767) as i16 as u16 as u32;
+    let uv = now.ws.uv;
+    e[rsp::COLOR_WORDS + 2] = q(uv.x * cmd.size[0]) << 16 | q(uv.y * cmd.size[1]);
+    e[rsp::WATER_PTRS] = cmd.block_phys;
+    e[rsp::WATER_PTRS + 1] = now.part[0];
+    e[rsp::WATER_BIND + 3] = now.detail;
+    e
+}
+
+/// What every draw of one water material shares in a frame
+/// (`N64Renderer::water_now`): its `water_rsp_frame` terms, the water
+/// block's parts they set (the swell's phases, the ripples) and the
+/// detail layer's scroll. Made by the frame's first draw of the material.
+struct WaterNow {
+    frame: u32,
+    /// The water's fields and gloss (bits), the detail layer's scale.
+    key: [u32; 9],
+    ws: WaterRsp,
+    /// A water block whose phases and ripples are this frame's.
+    patch: [u8; rsp::WATER_BLOCK],
+    /// The detail layer's scroll (`trino_3d_water`'s u << 16 | v).
+    detail: u32,
+    /// The RSP addresses of the frame's part of every block: a surface's
+    /// (with the ripples), a ring's (without), from [`WaterNow::publish`].
+    part: [u32; 2],
+}
+
+impl WaterNow {
+    fn key(params: &ModelParams) -> [u32; 9] {
+        let w = params.water.unwrap_or_default();
+        [
+            w.flow_speed.x.to_bits(),
+            w.flow_speed.y.to_bits(),
+            w.detail_flow.x.to_bits(),
+            w.detail_flow.y.to_bits(),
+            w.wave_amplitude.to_bits(),
+            w.wave_frequency.to_bits(),
+            w.ripple_responsiveness.to_bits(),
+            params.gloss as u32,
+            params.detail.map_or(0, |d| 1 + d.scale_log2 as u32),
+        ]
+    }
+
+    /// Bring the frame's parts up to `ctx`'s water clock and ripples: what
+    /// `water_rsp_frame` would give (the swell's phases, every ripple, the
+    /// scroll), in place, without the rest of its terms.
+    fn refresh(&mut self, ctx: &TnlContext, params: &ModelParams, frame: u32, filter: TexFilter) {
+        let Some(w) = params.water else {
+            return;
+        };
+        let state = ctx.water();
+        let time = state.time;
+        self.ws.waves = trino_core::water::WaveSet::new(&w, time);
+        let mut n = 0;
+        if w.ripple_responsiveness != 0.0 {
+            for r in state.ripples() {
+                self.ws.ripples[n] = *r;
+                n += 1;
+            }
+        }
+        self.ws.n_ripples = n;
+        self.ws.uv = w.scroll(time).0;
+        let b = TexBind::model(0, params, filter).with_water(&w, time);
+        let [u, v] = b.water.unwrap_or([0, 0]);
+        self.detail = (u as u32) << 16 | v as u32;
+        rsp::patch_water(&mut self.patch, &self.ws, true);
+        self.frame = frame;
+    }
+
+    /// Put the frame's part of the blocks (the swell's phases, the ripples)
+    /// in `arena`, once for every draw of the material: a surface's and a
+    /// ring's (its ripples cleared). `false`: no room.
+    fn publish(&mut self, arena: &mut WaterArena) -> bool {
+        const PART: usize = rsp::WATER_BLOCK - rsp::WATER_FRAME_PART;
+        let Some((ptr, phys)) = arena.alloc(2 * PART) else {
+            return false;
+        };
+        let at = rsp::WATER_FRAME_PART;
+        write_arena(ptr, &self.patch[at..]);
+        let ring = unsafe { ptr.add(PART) };
+        write_arena(ring, &self.patch[at..at + 0x20]);
+        // No ripples: their count (the part's last row) and the rows
+        // before it are never read.
+        unsafe { core::ptr::write_bytes(ring.add(0x20), 0, PART - 0x20) };
+        arena.flush();
+        self.part = [phys, phys + PART as u32];
+        true
     }
 }
 
 impl N64Renderer {
-    /// A water draw on the RSP (`rsp_trino_water`): the surface displaced,
-    /// lit and shaded by the overlay, the ripples' deltas computed here for
-    /// its vertices, the ring decals still from the CPU T&L. `false` when
-    /// the draw needs the CPU path (`rsp_check`'s water rule).
+    /// A water draw on the RSP (`rsp_trino_water`): the surface displaced
+    /// by the swell and the ripples, lit and shaded by the overlay, and its
+    /// rings as more of the overlay's triangles where the RSP can draw them
+    /// (`ring_on_rsp`; the others are CPU triangles). `false` when the draw
+    /// needs the CPU path (`rsp_check`'s water rule).
     #[inline(never)]
     fn draw_water_rsp(&mut self, model: ModelId, matrix: &Mat34, params: &ModelParams) -> bool {
         let t0 = self.tick();
-        let Some((words, e, tris, bind)) = self.water_command(model, matrix, params, 0) else {
+        self.water_cpu_memo = None;
+        let Some(w) = params.water else {
             return false;
         };
-        let ctx = self.tnl_ctx.with_water(&self.water_state);
-        let Some((tmdl, layout)) = self.meshes.get(&model.0) else {
+        let ctx = &self.tnl_ctx;
+        let key = water_key(model, self.memo_gen, &ctx.projection().0, matrix, params);
+        let margin = rsp_water_margin(&ctx, &w).to_bits();
+        let at = match self
+            .water_memo
+            .iter()
+            .position(|m| m.key[0] == key[0] && words_eq(&m.key, &key))
+        {
+            Some(i) if self.water_memo[i].margin == margin => {
+                self.water_memo[i].seen = self.water_frame_no;
+                i
+            }
+            found => {
+                let cmd = self.water_build(model, matrix, params, 0);
+                let memo = WaterMemo {
+                    key,
+                    margin,
+                    cmd,
+                    owners: [(u64::MAX, false); MAX_RIPPLES],
+                    culled: false,
+                    seen: self.water_frame_no,
+                };
+                // A replaced command's blocks may still be read by the RSP
+                // for a frame or two (the queue runs behind the CPU).
+                let frame = self.water_frame_no;
+                match found {
+                    Some(i) => {
+                        if let Some(old) = self.water_memo[i].cmd.take() {
+                            self.water_grave.push((frame, old));
+                        }
+                        self.water_memo[i] = memo;
+                        i
+                    }
+                    None => {
+                        if self.water_memo.len() == WATER_MEMOS {
+                            // Full: drop what the last two frames didn't draw
+                            // (an earlier scene's, a camera's old pans), all
+                            // of it if that frees nothing.
+                            let grave = &mut self.water_grave;
+                            let mut keep = |m: &mut WaterMemo, stale: bool| {
+                                if stale && let Some(old) = m.cmd.take() {
+                                    grave.push((frame, old));
+                                }
+                                !stale
+                            };
+                            self.water_memo
+                                .retain_mut(|m| keep(m, frame.wrapping_sub(m.seen) > 1));
+                            if self.water_memo.len() == WATER_MEMOS {
+                                self.water_memo.retain_mut(|m| keep(m, true));
+                            }
+                        }
+                        self.water_memo.push(memo);
+                        self.water_memo.len() - 1
+                    }
+                }
+            }
+        };
+        let Some(cmd) = self.water_memo[at].cmd.take() else {
+            if self.water_memo[at].culled {
+                let culled = TnlStats {
+                    culled: 1,
+                    ..TnlStats::default()
+                };
+                self.frame_stats.models += 1;
+                self.frame_stats.tnl.add(&culled);
+                if let Some(p) = &mut self.profile {
+                    p.record_model(model, now_us().wrapping_sub(t0), &culled);
+                }
+                return true;
+            }
+            self.water_cpu_memo = Some(at);
             return false;
         };
-        let mesh = Mesh::from_layout(tmdl, layout);
-        // The ring decals: CPU triangles in the water bucket, after.
-        let before = self.pending_water.len();
-        let pending = &mut self.pending_water;
-        let rings =
-            trino_core::render3d::tessellate_ripples(&ctx, &mesh, matrix, params, &mut |tri| {
-                pending.push(tri)
-            });
-        let added = self.pending_water.len() - before;
-        self.pending_water_tex
-            .extend(core::iter::repeat_n(Some(bind), added));
-        self.pending_water_rsp.push([words, e]);
+        let done = self.water_frame(model, matrix, params, &cmd, at, t0);
+        self.water_memo[at].cmd = Some(cmd);
+        done
+    }
+
+    /// This frame's part of a remembered water draw `cmd` (memo `at`): the
+    /// block, the entry, the rings; then the commands go out (streaming)
+    /// or wait for the batch's water bucket.
+    fn water_frame(
+        &mut self,
+        model: ModelId,
+        matrix: &Mat34,
+        params: &ModelParams,
+        cmd: &WaterCmd,
+        at: usize,
+        t0: u32,
+    ) -> bool {
+        let ctx = &self.tnl_ctx;
+        let key = WaterNow::key(params);
+        let frame = self.water_frame_no;
+        match &mut self.water_now {
+            Some(n) if words_eq(&n.key, &key) => {
+                if n.frame != frame {
+                    n.refresh(ctx, params, frame, self.tex_filter);
+                    if !n.publish(&mut self.water_arena) {
+                        n.frame = frame.wrapping_sub(1);
+                        return false;
+                    }
+                }
+            }
+            slot => {
+                let Some(mut now) = water_now(ctx, params, frame, key, self.tex_filter) else {
+                    return false;
+                };
+                if !now.publish(&mut self.water_arena) {
+                    return false;
+                }
+                *slot = Some(now);
+            }
+        }
+        let Some(now) = self.water_now.as_deref() else {
+            return false;
+        };
+        let ws = now.ws;
+        let ring_part = now.part[1];
+        let e = water_entry(now, cmd);
+        let time = ctx.water().time;
+        if self.rsp_stream {
+            // Streaming: the surface goes out now, before its rings are
+            // built, so the RSP draws it while the CPU works on. What the
+            // batch holds before it must be drawn first (water blends over
+            // it).
+            if !self.pending_tris.is_empty() || !self.pending_rsp.is_empty() {
+                self.flush_cpu_batch();
+                if !self.pending_rsp.is_empty() {
+                    self.submit_rsp();
+                }
+                self.water_bound = [0; 4];
+            }
+            submit_water(&self.sprites, &cmd.words, &e, &mut self.water_bound);
+            unsafe { ffi::trino_rsp_flush() };
+        } else {
+            self.pending_water_rsp.push([cmd.words, e]);
+        }
+        // The rings: which ripples fall on this surface, remembered per
+        // ripple position (a walk over its triangles otherwise).
+        let ctx = &self.tnl_ctx;
+        let owners = &mut self.water_memo[at].owners;
+        let meshes = &self.meshes;
+        let mut rings = [Ring::NONE; MAX_RIPPLES];
+        let n = water_rings_with(&ws, cmd.plane, &mut rings, &mut |r| {
+            let bits = (r.pos.x.to_bits() as u64) << 32 | r.pos.y.to_bits() as u64;
+            match owners.iter().find(|o| o.0 == bits) {
+                Some(o) => o.1,
+                None => {
+                    let owns = meshes.get(&model.0).is_some_and(|(tmdl, layout)| {
+                        ripple_over_surface(&Mesh::from_layout(tmdl, layout), matrix, r.pos)
+                    });
+                    owners.copy_within(..MAX_RIPPLES - 1, 1);
+                    owners[0] = (bits, owns);
+                    owns
+                }
+            }
+        });
+        let mut mask = 0u8;
+        for (i, r) in rings[..n].iter().enumerate() {
+            if ring_on_rsp(ctx, r, &ws.waves) {
+                mask |= 1 << i;
+            }
+        }
+        // The RSP's rings: one command, a segment each (after every water
+        // surface: `flush_water`).
+        let k = mask.count_ones() as usize;
+        if k > 0
+            && let Some((ptr, phys)) = self.water_arena.alloc(16 * k + k * rsp::RING_SEG_BYTES)
+        {
+            let table = 16 * k;
+            for (j, r) in rings[..n]
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| mask & (1 << i) != 0)
+                .map(|(_, r)| r)
+                .enumerate()
+            {
+                let at = table + j * rsp::RING_SEG_BYTES;
+                let entry = rsp::ring_entry(phys + at as u32);
+                write_arena(unsafe { ptr.add(16 * j) }, &entry);
+                unsafe { rsp::ring_segment(ptr.add(at), r, &self.ring_unit) };
+            }
+            let [mut rw, mut re] = cmd.ring;
+            rw[1] = phys;
+            rw[2] = (k as u32) << 16 | (rw[2] & 0xFFFF);
+            re[rsp::WATER_PTRS] = cmd.ring_phys;
+            re[rsp::WATER_PTRS + 1] = ring_part;
+            re[rsp::WATER_BIND..rsp::WATER_BIND + 4]
+                .copy_from_slice(&e[rsp::WATER_BIND..rsp::WATER_BIND + 4]);
+            self.pending_ring_rsp.push([rw, re]);
+        } else {
+            mask = 0;
+        }
+        let mut cpu = TnlStats::default();
+        if mask.count_ones() as usize != n
+            && let Some((tmdl, layout)) = self.meshes.get(&model.0)
+        {
+            let mesh = Mesh::from_layout(tmdl, layout);
+            let before = self.pending_water.len();
+            let pending = &mut self.pending_water;
+            cpu = trino_core::render3d::tessellate_ripples_except(
+                ctx,
+                &mesh,
+                matrix,
+                params,
+                mask,
+                &mut |tri| pending.push(tri),
+            );
+            let added = self.pending_water.len() - before;
+            let t = mesh.texture_for(params).map_or(0, |t| t.0);
+            let w = params.water.unwrap_or_default();
+            let bind = TexBind::model(t, params, self.tex_filter).with_water(&w, time);
+            self.pending_water_tex
+                .extend(core::iter::repeat_n(Some(bind), added));
+        }
+        self.water_arena.flush();
         self.frame_stats.models += 1;
-        self.count_rsp_with(model, t0, tris, &rings);
+        let ring_tris = mask.count_ones() * 2 * trino_core::render3d::RING_SEGMENTS as u32;
+        self.count_rsp_with(model, t0, cmd.tris + ring_tris, &cpu);
         true
     }
 
-    /// A water draw's RSP command, its entry (color and texture words, the
-    /// water block's and ripple deltas' addresses in `water_arena`, its
-    /// binding), its triangles and its texture binding (for the rings).
-    /// `debug_phys` as `rsp::draw_words`' (the oracle's read-back).
-    fn water_command(
+    /// Build a water draw's remembered commands (`None`: it stays on the
+    /// CPU). `debug_phys` as `rsp::draw_words`' (the oracle's read-back).
+    #[cold]
+    #[inline(never)]
+    fn water_build(
         &mut self,
         model: ModelId,
         matrix: &Mat34,
         params: &ModelParams,
         debug_phys: u32,
-    ) -> Option<([u32; rsp::DRAW_WORDS], [u32; rsp::DRAW_WORDS], u32, TexBind)> {
-        let w = params.water?;
+    ) -> Option<alloc::boxed::Box<WaterCmd>> {
         let ctx = self.tnl_ctx.with_water(&self.water_state);
         let (tmdl, layout) = self.meshes.get(&model.0)?;
         let mesh = Mesh::from_layout(tmdl, layout);
@@ -1531,37 +2155,69 @@ impl N64Renderer {
         let t = mesh.texture_for(params)?;
         let size = self.sprites.get(&t.0)?.size;
         let ws = water_rsp(&ctx, &mesh, matrix, params)?;
-        let n = rm.order.len();
-        let (ptr, phys) = self
-            .water_arena
-            .alloc(rsp::WATER_BLOCK + n * rsp::RIPPLE_DELTA)?;
-        write_uncached(ptr, &rsp::water_block(&ctx, matrix, &ws));
-        let mut deltas = alloc::vec![0u8; n * rsp::RIPPLE_DELTA];
-        if ws.n_ripples > 0 {
-            for (k, &g) in rm.order.iter().enumerate() {
-                let p = matrix.transform_point(mesh.position(g as usize));
-                let at = k * rsp::RIPPLE_DELTA;
-                deltas[at..at + rsp::RIPPLE_DELTA]
-                    .copy_from_slice(&rsp::ripple_delta(&ws, p.x, p.z));
-            }
-        }
-        write_uncached(unsafe { ptr.add(rsp::WATER_BLOCK) }, &deltas);
         let cull = if d.cull_back { self.rsp_cull } else { 2 };
         let words = rsp::draw_words(&ctx, &mv, &d, params.tint, rm, cull, debug_phys);
         let c = rsp_color_terms(&ctx, params);
-        let scroll = [ws.uv.x * size[0], ws.uv.y * size[1]];
-        let mut e = rsp::tex_entry(&c, &mv, size, scroll, [0; 3]);
-        e[rsp::WATER_PTRS] = phys;
-        e[rsp::WATER_PTRS + 1] = phys + rsp::WATER_BLOCK as u32;
-        let b = TexBind::model(t.0, params, self.tex_filter).with_water(&w, ctx.water().time);
+        let mut entry = rsp::tex_entry(&c, &mv, size, [0.0, 0.0], [0; 3]);
+        let b = TexBind::model(t.0, params, self.tex_filter);
         let detail = b.detail.filter(|d| self.sprites.contains_key(&d.sprite.0));
-        let [u, v] = b.water.unwrap_or([0, 0]);
-        e[rsp::WATER_BIND] = t.0;
-        e[rsp::WATER_BIND + 1] = detail.map_or(0, |d| d.sprite.0);
-        e[rsp::WATER_BIND + 2] = ((b.filter == TexFilter::Point) as u32) << 1
+        entry[rsp::WATER_BIND] = t.0;
+        entry[rsp::WATER_BIND + 1] = detail.map_or(0, |d| d.sprite.0);
+        entry[rsp::WATER_BIND + 2] = ((b.filter == TexFilter::Point) as u32) << 1
             | detail.map_or(0, |d| (d.scale_log2 as u32) << 4);
-        e[rsp::WATER_BIND + 3] = (u as u32) << 16 | v as u32;
-        Some((words, e, rm.tris(), b))
+        // The rings: world space (the view is their `view · model`), both
+        // faces, white, fogged like the surface; the overlay keeps their
+        // vertex color (the ring block).
+        let view = ctx.projection().0;
+        let ring_draw = RspDraw {
+            cull_back: false,
+            ..d
+        };
+        let ring_words =
+            rsp::draw_words_at(&ctx, &view, &ring_draw, Color::WHITE, (0, 0, true), 2, 0);
+        let ring_entry = rsp::tex_entry(&c, &view, size, [0.0, 0.0], [0; 3]);
+        let mut cmd = alloc::boxed::Box::new(WaterCmd {
+            words,
+            entry,
+            block: StaticBlock::of(&rsp::water_block(&ctx, matrix, &ws, false)),
+            block_phys: 0,
+            tris: rm.tris(),
+            size,
+            ring: [ring_words, ring_entry],
+            ring_block: StaticBlock::of(&rsp::water_block(&ctx, &Mat34::IDENTITY, &ws, true)),
+            ring_phys: 0,
+            plane: water_plane(&mesh, matrix),
+        });
+        cmd.block_phys = cmd.block.publish();
+        cmd.ring_phys = cmd.ring_block.publish();
+        Some(cmd)
+    }
+
+    /// A water draw's RSP command and entry for this frame, its triangles
+    /// and its texture binding (the oracle: no memo). `debug_phys` as
+    /// `rsp::draw_words`'.
+    fn water_command(
+        &mut self,
+        model: ModelId,
+        matrix: &Mat34,
+        params: &ModelParams,
+        debug_phys: u32,
+    ) -> Option<([u32; rsp::DRAW_WORDS], [u32; rsp::DRAW_WORDS], u32, TexBind)> {
+        let cmd = self.water_build(model, matrix, params, debug_phys)?;
+        let ctx = self.tnl_ctx.with_water(&self.water_state);
+        let (tmdl, layout) = self.meshes.get(&model.0)?;
+        let mesh = Mesh::from_layout(tmdl, layout);
+        let now = water_now(&ctx, params, 0, WaterNow::key(params), self.tex_filter)?;
+        let time = ctx.water().time;
+        let mut now = now;
+        if !now.publish(&mut self.water_arena) {
+            return None;
+        }
+        let e = water_entry(&now, &cmd);
+        self.water_arena.flush();
+        let t = mesh.texture_for(params)?;
+        let b = TexBind::model(t.0, params, self.tex_filter).with_water(&params.water?, time);
+        Some((cmd.words, e, cmd.tris, b))
     }
 }
 
@@ -1588,7 +2244,7 @@ impl N64Renderer {
         let Some((words, e, _, _)) = self.water_command(model, matrix, params, phys) else {
             return Err("water draw not RSP-eligible".into());
         };
-        submit_water(&self.sprites, &words, &e);
+        submit_water(&self.sprites, &words, &e, &mut [0; 4]);
         self.end_frame();
         unsafe { ffi::trino_drain() };
         let Some(Some(rm)) = self.rsp_water.get(&model.0) else {
@@ -1643,4 +2299,35 @@ impl N64Renderer {
             Ok(msg)
         }
     }
+}
+
+/// Keep a draw's command (and its colored or textured entry `extra`)
+/// in the memo with what a camera pan needs to patch it.
+#[allow(clippy::too_many_arguments)]
+fn remember(
+    memo: &mut [MemoSlot<MEMO_WORDS>],
+    ctx: &TnlContext,
+    k: MemoKey,
+    words: &[u32; rsp::DRAW_WORDS],
+    extra: &[u32; MEMO_ENTRY],
+    mv: &Mat34,
+    mesh: &Mesh,
+    matrix: &Mat34,
+    tris: u32,
+) {
+    let Some(pan) = RspPan::new(&ctx.projection().0, mv, mesh, matrix) else {
+        return;
+    };
+    let mut entry = [0u32; MEMO_WORDS];
+    entry[..rsp::DRAW_WORDS].copy_from_slice(words);
+    entry[MEMO_COLOR..].copy_from_slice(extra);
+    let v = &ctx.projection().0.m;
+    let aux = [
+        pan.s[0], pan.s[1], pan.s[2], pan.q[0], pan.q[1], pan.q[2], pan.r2, v[0][3], v[1][3],
+        v[2][3],
+    ];
+    for (i, a) in aux.iter().enumerate() {
+        entry[rsp::DRAW_WORDS + i] = a.to_bits();
+    }
+    memo::store(memo, k, entry, tris);
 }

@@ -161,6 +161,10 @@ positional splash (`sounds/water_splash`). Wading keeps rippling. Two positional
   `water_n64`, `water_n3ds` and `showcase_river`.
 - **After #69 (ADR 0018 §5):** the water and the rest of the showcase on the N64 RSP:
   `micro-river` 19.6 → 10.5 ms, `showcase-river` 286.6 → 75.2 ms (mean over 8 paddings).
+- **After #69's second part (ADR 0018 §7):** ripples and rings on the overlay, two
+  vertices per pass, streamed: `micro-river` 1.78 ms a frame, the river's draws 0.94 ms of
+  CPU (0.88–0.98 over 8 paddings, gated at 1.2 ms) and ~0.9 ms of RSP beside it;
+  `showcase-river` 26.2 ms (gated at 33.3 ms, 30 fps). In ares: the RDP is not timed.
 
 ## Consequences
 
@@ -174,7 +178,7 @@ positional splash (`sounds/water_splash`). Wading keeps rippling. Two positional
     - It would displace and shade on the overlay and feed textured triangles to
       `RDPQ_Triangle_Send_Async` (S/T s10.5, W and 1/W per vertex).
     - It needs fog and colored light too, or the showcase can't use it.
-    - It is the way to the 1.2 ms river.
+    - It is the way to the 1.2 ms river. Done in #69 (ADR 0018).
   - **Fragment lighting on the 3DS:** `C3D_LightEnv` with a Fresnel LUT, for a
     per-pixel glint.
   - **Splitting long water surfaces into pieces,** so the 3DS GPU takes the visible

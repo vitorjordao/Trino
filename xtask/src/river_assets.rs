@@ -247,6 +247,32 @@ fn river_piece(a: usize, b: usize) -> Mesh {
     m
 }
 
+/// [`river_piece`] for the N64 (its `platforms` variant): the two edges and
+/// the middle of each ring, half the vertices and triangles. The RSP's cost
+/// is per vertex and per triangle, and at the scene camera's distance the
+/// quarter lines add little to the swell. The kept vertices have the full
+/// ribbon's bits, so lite pieces meet without cracks.
+fn river_lite_piece(a: usize, b: usize) -> Mesh {
+    let r = river();
+    let mut m = Mesh::default();
+    for ring in a..=b {
+        for k in [0, 2, 4] {
+            let v = ring * 5 + k;
+            m.vert(r.positions[v], r.normals[v], r.colors[v]);
+            m.uvs.push(r.uvs[v]);
+        }
+    }
+    for i in 0..(b - a) as u16 {
+        for k in 0..2u16 {
+            let (p, q) = (i * 3 + k, i * 3 + k + 1);
+            let (c, d) = (p + 3, q + 3);
+            m.tri(p, q, d, UP);
+            m.tri(p, d, c, UP);
+        }
+    }
+    m
+}
+
 /// The ribbon cut into pieces by ring ranges, split in halves while the
 /// scene camera would have to clip a piece (`rsp_hull_check`): the river runs
 /// under the camera, and one mesh crossing the near plane kept the whole
@@ -1017,6 +1043,7 @@ pub fn gen_all(root: &Path, write_png: PngWriter) {
     }
     for (a, b) in river_pieces(&scene_camera()) {
         river_piece(a, b).write_glb(&models.join(format!("river_{a}_{b}.glb")));
+        river_lite_piece(a, b).write_glb(&models.join(format!("river_lite_{a}_{b}.glb")));
     }
     for tile in terrain_tiles(&scene_camera()) {
         tile.mesh

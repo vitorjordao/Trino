@@ -383,6 +383,32 @@ texture = "sprites/tex_water"
 file = "models/showcase/river_15_16.glb"
 texture = "sprites/tex_water"
 
+# The N64's river pieces (each piece's platforms variant): the ribbon's edges
+# and middle only, half the RSP's vertices and triangles.
+[models.river_lite_0_8]
+file = "models/showcase/river_lite_0_8.glb"
+texture = "sprites/tex_water"
+
+[models.river_lite_8_12]
+file = "models/showcase/river_lite_8_12.glb"
+texture = "sprites/tex_water"
+
+[models.river_lite_12_13]
+file = "models/showcase/river_lite_12_13.glb"
+texture = "sprites/tex_water"
+
+[models.river_lite_13_14]
+file = "models/showcase/river_lite_13_14.glb"
+texture = "sprites/tex_water"
+
+[models.river_lite_14_15]
+file = "models/showcase/river_lite_14_15.glb"
+texture = "sprites/tex_water"
+
+[models.river_lite_15_16]
+file = "models/showcase/river_lite_15_16.glb"
+texture = "sprites/tex_water"
+
 [models.bridge]
 file = "models/showcase/bridge.glb"
 

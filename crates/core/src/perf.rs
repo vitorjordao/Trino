@@ -43,6 +43,24 @@ pub struct CostModel {
     /// The CPU side of one RSP draw: mesh lookup, eligibility, the view ·
     /// model product and the command (it doesn't run the T&L).
     pub us_per_rsp_draw: f32,
+    /// One triangle (with its share of vertices) of a water surface on the
+    /// RSP (`rsp_trino_water`: swell, normal, Fresnel, glint, light and fog
+    /// per vertex), instead of [`Self::us_per_rsp_tri`].
+    pub us_per_rsp_water_tri: f32,
+    /// The CPU side of one water draw on the RSP (its memo, the frame's
+    /// block, the command; its ripple rings excluded), instead of
+    /// [`Self::us_per_rsp_draw`].
+    pub us_per_rsp_water_draw: f32,
+}
+
+/// The N64's RSP work in a frame ([`CostModel::split_us`]): every RSP draw
+/// and triangle, and how many of them are water surfaces.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct RspWork {
+    pub draws: u32,
+    pub tris: u32,
+    pub water_draws: u32,
+    pub water_tris: u32,
 }
 
 /// The N64 (emulated time under ares), recalibrated 2026-10-13 after the
@@ -78,6 +96,13 @@ pub const N64_COST: CostModel = CostModel {
     // ares, 2026-10-16: Solid Eleven's player parts (TRINO_FRAME_MODEL), each
     // an RSP draw redrawn every frame: 83–106 µs of `tnl` stage per call.
     us_per_rsp_draw: 90.0,
+    // ares, 2026-10-18 (issue #69, `micro-river`): the paired water overlay
+    // drew 52 surface triangles (48 vertices) in ~0.6 ms of RSP, drained per
+    // command, with ~40 µs of each command's fixed cost; its rings come to
+    // ~6 µs a triangle, as `us_per_rsp_tri`. A memoized water draw costs
+    // 100–150 µs of CPU before its rings.
+    us_per_rsp_water_tri: 9.5,
+    us_per_rsp_water_draw: 150.0,
 };
 
 impl CostModel {
@@ -94,22 +119,21 @@ impl CostModel {
     /// The N64 frame's 3D, split as the console runs it: the CPU (draws it
     /// transforms itself, plus the CPU side of each RSP draw) and the RSP
     /// (its triangles), which run in parallel: the frame takes the larger.
-    pub fn split_us(
-        &self,
-        cpu: &TnlStats,
-        cpu_draws: u32,
-        rsp_draws: u32,
-        rsp_tris: u32,
-    ) -> (u32, u32) {
+    pub fn split_us(&self, cpu: &TnlStats, cpu_draws: u32, rsp: &RspWork) -> (u32, u32) {
+        let other = rsp.draws.saturating_sub(rsp.water_draws);
         (
-            self.estimate_us(cpu, cpu_draws) + (self.us_per_rsp_draw * rsp_draws as f32) as u32,
-            self.rsp_us(rsp_tris),
+            self.estimate_us(cpu, cpu_draws)
+                + (self.us_per_rsp_draw * other as f32
+                    + self.us_per_rsp_water_draw * rsp.water_draws as f32) as u32,
+            self.rsp_us(rsp),
         )
     }
 
-    /// Estimated RSP microseconds of `tris` triangles on the RSP path.
-    pub fn rsp_us(&self, tris: u32) -> u32 {
-        (self.us_per_rsp_tri * tris as f32) as u32
+    /// Estimated RSP microseconds of the RSP path's work.
+    pub fn rsp_us(&self, rsp: &RspWork) -> u32 {
+        let other = rsp.tris.saturating_sub(rsp.water_tris);
+        (self.us_per_rsp_tri * other as f32 + self.us_per_rsp_water_tri * rsp.water_tris as f32)
+            as u32
     }
 
     /// Estimated microseconds of `n` billboards (impostors, particles).
@@ -201,6 +225,15 @@ pub struct RenderProfile {
     pub model_count: usize,
     /// Draws of models beyond [`MAX_PROFILED_MODELS`].
     pub other: ModelCost,
+    /// Each model's slot + 1 by a hash of its handle (0: look it up): a
+    /// scene's ~100 draws a frame each found their slot by a linear scan,
+    /// a share of the profiled N64 frame itself.
+    #[doc(hidden)]
+    pub index: [u8; 64],
+    /// Handles known to pool into [`RenderProfile::other`], by the same
+    /// hash (they would scan every slot each draw).
+    #[doc(hidden)]
+    pub pooled: [u32; 64],
 }
 
 impl Default for RenderProfile {
@@ -212,6 +245,8 @@ impl Default for RenderProfile {
             models: [ModelCost::default(); MAX_PROFILED_MODELS],
             model_count: 0,
             other: ModelCost::default(),
+            index: [0; 64],
+            pooled: [0; 64],
         }
     }
 }
@@ -234,18 +269,33 @@ impl RenderProfile {
     pub fn record_model(&mut self, model: ModelId, us: u32, tnl: &TnlStats) {
         self.tnl.add(tnl);
         self.stages.tnl += us;
-        let slot = match self.models[..self.model_count]
-            .iter()
-            .position(|m| m.model == model)
-        {
-            Some(i) => &mut self.models[i],
+        let h = ((model.0 ^ model.0 >> 16) & 63) as usize;
+        let hint = self.index[h] as usize;
+        let found = if hint > 0 && self.models[hint - 1].model == model {
+            Some(hint - 1)
+        } else if self.pooled[h] == model.0 && self.model_count == MAX_PROFILED_MODELS {
+            None
+        } else {
+            self.models[..self.model_count]
+                .iter()
+                .position(|m| m.model == model)
+        };
+        let slot = match found {
+            Some(i) => {
+                self.index[h] = (i + 1) as u8;
+                &mut self.models[i]
+            }
             None if self.model_count < MAX_PROFILED_MODELS => {
                 self.model_count += 1;
+                self.index[h] = self.model_count as u8;
                 let m = &mut self.models[self.model_count - 1];
                 m.model = model;
                 m
             }
-            None => &mut self.other,
+            None => {
+                self.pooled[h] = model.0;
+                &mut self.other
+            }
         };
         slot.calls += 1;
         slot.us += us;

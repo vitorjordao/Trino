@@ -60,8 +60,10 @@ pub use hw::{
     gpu_water,
 };
 pub use lit::{
-    RING_SEGMENTS, SurfaceScratch, SurfaceVert, WaterRsp, ripple_ring_count, tessellate_ripples,
-    tessellate_surface, water_rsp, water_vertex,
+    RING_SEGMENTS, RING_VERTS, Ring, SurfaceScratch, SurfaceVert, WaterRsp, ring_flat, ring_on_rsp,
+    ring_world, ripple_over_surface, ripple_ring_count, rsp_ring_mask, rsp_water_rings,
+    tessellate_ripples, tessellate_ripples_except, tessellate_surface, water_plane, water_rings,
+    water_rings_with, water_rsp, water_rsp_frame, water_vertex,
 };
 pub use pc::{PcGpuReject, pc_gpu_check, pc_gpu_mesh_check};
 
@@ -1598,7 +1600,7 @@ pub fn rsp_check_mv(
         return Err(RspReject::Textured);
     }
     if ctx.fog_on {
-        rsp_fog_check(ctx, mesh, mv, c.z, r2)?;
+        rsp_fog_check(ctx, mesh, mv, c.z, r2, true)?;
     }
     let cull_back = !params.double_sided;
     match params.shading {
@@ -1689,6 +1691,7 @@ fn rsp_fog_check(
     mv: &Mat34,
     cz: f32,
     r2: f32,
+    exact: bool,
 ) -> Result<(), RspReject> {
     let fog = ctx.light.fog;
     // A little margin over the sphere: vertex depths round on their own.
@@ -1696,7 +1699,10 @@ fn rsp_fog_check(
     if clear(fog.near - cz) || clear(cz - fog.far) {
         return Ok(());
     }
-    if short_edges(mesh, mv) {
+    // Opaque and untextured: only edges inside the fog's band split
+    // (`fog_split_band`); otherwise every long edge does.
+    let band = (!mesh.has_uvs() && mesh.opaque).then_some((fog.near, fog.far));
+    if short_edges_in(mesh, mv, 0.0, band, exact) {
         return Ok(());
     }
     Err(RspReject::Fog)
@@ -1728,13 +1734,7 @@ fn rsp_water_check(
     if params.palette.is_some() && mesh.has_slots() {
         return Err(RspReject::Palette);
     }
-    let reach: f32 = ctx
-        .water()
-        .ripples()
-        .iter()
-        .map(|r| r.strength * r.decay())
-        .fold(0.0, f32::max);
-    let margin = w.wave_amplitude * 1.45 + reach * w.ripple_responsiveness.abs() + 0.01;
+    let margin = rsp_water_margin(ctx, &w);
     let (c, r) = mesh.bounds().ok_or(RspReject::NoBounds)?;
     let c = mv.transform_point(c);
     let s = model.axis_scales_sq();
@@ -1788,6 +1788,27 @@ fn rsp_water_check(
     })
 }
 
+/// How far a water draw's vertices may move from rest (the swell and the
+/// ripples' crests, plus a centimetre): the room [`rsp_check`] keeps for
+/// them. Rounded up to 1/32, so a backend may remember its answer while
+/// the ripples decay within one step (the N64's water memo).
+pub fn rsp_water_margin(ctx: &TnlContext, w: &crate::water::Water) -> f32 {
+    let reach: f32 = ctx
+        .water()
+        .ripples()
+        .iter()
+        .map(|r| r.strength * r.decay())
+        .fold(0.0, f32::max);
+    margin_step(w.wave_amplitude * 1.45 + reach * w.ripple_responsiveness.abs() + 0.01)
+}
+
+/// `m` rounded up to the next 1/32.
+fn margin_step(m: f32) -> f32 {
+    let q = m * 32.0;
+    let i = crate::math3d::to_i32(q) as f32;
+    (if i < q { i + 1.0 } else { i }) * (1.0 / 32.0)
+}
+
 /// No edge of `mesh` can span [`DEPTH_SPLIT`] of view depth under `mv`: an
 /// edge `e` spans `r · e`, with `r` the depth row, and `|r · e| <= |r| |e|`.
 /// The CPU path would then split nothing ([`split_policy`]).
@@ -1799,6 +1820,23 @@ fn short_edges(mesh: &Mesh, mv: &Mat34) -> bool {
 
 /// [`short_edges`] with `slack` of view depth to spare.
 fn short_edges_by(mesh: &Mesh, mv: &Mat34, slack: f32) -> bool {
+    short_edges_in(mesh, mv, slack, None, true)
+}
+
+/// [`short_edges_by`] where an edge wholly before `band`'s start or past
+/// its end doesn't count ([`fog_split_band`]: the CPU path doesn't split
+/// it). The bounds first (the longest edge, then per axis); when they fail,
+/// edge by edge, as the CPU path decides: a mesh with a few long edges
+/// that no view stretches past [`DEPTH_SPLIT`] (a doorway, a ramp) still
+/// takes the RSP. That walk costs a transform per corner: the N64 runs it
+/// once per camera (the draw memo).
+fn short_edges_in(
+    mesh: &Mesh,
+    mv: &Mat34,
+    slack: f32,
+    band: Option<(f32, f32)>,
+    exact: bool,
+) -> bool {
     let limit = DEPTH_SPLIT * 0.999 - slack;
     let r = mv.m[2];
     let stretch2 = r[0] * r[0] + r[1] * r[1] + r[2] * r[2];
@@ -1808,7 +1846,34 @@ fn short_edges_by(mesh: &Mesh, mv: &Mat34, slack: f32) -> bool {
     // Per axis: |r · e| <= sum |r_k| max |e_k| (a tall thin edge, a pillar's
     // side, seen from above).
     let b = mesh.edge_box;
-    r[0].abs() * b.x + r[1].abs() * b.y + r[2].abs() * b.z <= limit
+    if r[0].abs() * b.x + r[1].abs() * b.y + r[2].abs() * b.z <= limit {
+        return true;
+    }
+    exact && split_free(mesh, mv, limit, band)
+}
+
+/// No edge of `mesh` under `mv` spans more than `limit` of view depth,
+/// leaving out the edges wholly on one side of `band` (with a millimetre
+/// of slack for the CPU path's own rounding).
+#[cold]
+#[inline(never)]
+fn split_free(mesh: &Mesh, mv: &Mat34, limit: f32, band: Option<(f32, f32)>) -> bool {
+    let r = mv.m[2];
+    let depth = |i: u16| {
+        let p = mesh.position(i as usize);
+        r[0] * p.x + r[1] * p.y + r[2] * p.z + r[3]
+    };
+    let outside = |a: f32, b: f32| match band {
+        Some((n, f)) => (a < n - 1e-3 && b < n - 1e-3) || (a > f + 1e-3 && b > f + 1e-3),
+        None => false,
+    };
+    (0..mesh.index_count / 3).all(|t| {
+        let z = [0, 1, 2].map(|k| depth(mesh.index(3 * t + k)));
+        [(0, 1), (1, 2), (2, 0)].iter().all(|&(a, b)| {
+            let d = z[a] - z[b];
+            outside(z[a], z[b]) || (if d < 0.0 { -d } else { d }) <= limit
+        })
+    })
 }
 
 /// [`rsp_split`] of one joint's triangles: a rigid mesh's part
@@ -2001,7 +2066,9 @@ fn rsp_part_check(
         return Err(RspReject::TooScaled);
     }
     if ctx.fog_on {
-        rsp_fog_check(ctx, mesh, mv, c.z, r2)?;
+        // Bounds only: a part moves every frame, and the edge walk of the
+        // exact rule is for draws the backend remembers.
+        rsp_fog_check(ctx, mesh, mv, c.z, r2, false)?;
     }
     let cull_back = !params.double_sided;
     let light = match params.shading {
@@ -2010,10 +2077,16 @@ fn rsp_part_check(
             model_space_light(mesh, model, ctx.ldir).ok_or(RspReject::NonUniformScale)? * -1.0
         }
         Shading::Flat => {
-            let mut faces = 0;
-            rsp_part_split(mesh, j, &mut |_, t| faces += t.len());
-            if faces.div_ceil(RSP_FLAT_SEG_TRIS) > RSP_MAX_SEGS {
-                return Err(RspReject::Flat);
+            // The part's flat copy holds its faces in chunks of
+            // RSP_FLAT_SEG_TRIS. Counted only when the whole mesh would not
+            // fit: this runs per part per frame on the N64.
+            if rsp_flat_segments(mesh) > RSP_MAX_SEGS {
+                let faces = (0..mesh.index_count / 3)
+                    .filter(|&t| mesh.joint_of(mesh.index(3 * t) as usize) == j)
+                    .count();
+                if faces.div_ceil(RSP_FLAT_SEG_TRIS) > RSP_MAX_SEGS {
+                    return Err(RspReject::Flat);
+                }
             }
             flat_space_light(model, ctx.ldir).ok_or(RspReject::NonUniformScale)? * -1.0
         }

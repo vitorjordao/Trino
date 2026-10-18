@@ -6,7 +6,7 @@ mod common;
 
 use common::*;
 use trino_core::perf::{
-    FRAME_30FPS_US, FrameTimes, MAX_PROFILED_MODELS, N64_COST, RenderProfile, StageTimes,
+    FRAME_30FPS_US, FrameTimes, MAX_PROFILED_MODELS, N64_COST, RenderProfile, RspWork, StageTimes,
 };
 use trino_core::render3d::{Camera3, DEFAULT_LIGHT, Mesh, TnlStats, tessellate};
 use trino_core::{Caps, CapsError, Mat34, ModelId, ModelParams};
@@ -92,6 +92,37 @@ fn n64_cost_model_prices_real_tnl_work() {
         ..TnlStats::default()
     };
     assert_eq!(N64_COST.estimate_us(&split, 0), 255);
+}
+
+#[test]
+fn n64_cost_model_prices_water_on_the_rsp_apart() {
+    let none = TnlStats::default();
+    // Twenty opaque RSP triangles in two draws, then the same with one of
+    // the draws a water surface of ten of them.
+    let plain = RspWork {
+        draws: 2,
+        tris: 20,
+        ..RspWork::default()
+    };
+    let water = RspWork {
+        water_draws: 1,
+        water_tris: 10,
+        ..plain
+    };
+    let (cpu, rsp) = N64_COST.split_us(&none, 0, &plain);
+    assert_eq!(cpu, (2.0 * N64_COST.us_per_rsp_draw) as u32);
+    assert_eq!(rsp, (20.0 * N64_COST.us_per_rsp_tri) as u32);
+    let (cpu_w, rsp_w) = N64_COST.split_us(&none, 0, &water);
+    assert_eq!(
+        cpu_w,
+        (N64_COST.us_per_rsp_draw + N64_COST.us_per_rsp_water_draw) as u32
+    );
+    assert_eq!(
+        rsp_w,
+        (10.0 * N64_COST.us_per_rsp_tri + 10.0 * N64_COST.us_per_rsp_water_tri) as u32
+    );
+    // The water overlay is the dearer one per triangle and per draw.
+    assert!(rsp_w > rsp && cpu_w > cpu);
 }
 
 #[test]

@@ -340,7 +340,13 @@ new skill when none fits. Then run `cargo xtask agents sync`. The steps are in
     command per joint. A fogged, textured or water draw takes the RSP only where the
     CPU path would split no edge. `render3d::rsp_plan` is the rule every predictor
     calls. The showcase river went 286.6 → 75.2 ms and `micro-river` 19.6 → 10.5 ms
-    (mean over 8 paddings); #69's 1.2 ms river and 33.3 ms showcase are still open.
+    (mean over 8 paddings).
+  - **#69's second part (ADR 0018 §7):** ripples and rings on the water overlay, two
+    vertices per pass, a static block per draw plus a frame block per material,
+    streaming that wakes the RSP (`trino_rsp_flush`). `micro-river` 1.78 ms (its
+    draws 0.94 ms of CPU, ~0.9 ms of RSP beside it) and `showcase-river` 26.2 ms in
+    ares, gated at the issue's 1.2 / 33.3 ms (`perf::BUDGETS`). `N64_COST` prices
+    water on the RSP apart (`RspWork`). Not yet measured on a real N64.
 
 - **External console projects** (2026-10-14, ADR 0008: a project in a separate repo
   with this engine as its `engine/` submodule).
@@ -364,9 +370,8 @@ new skill when none fits. Then run `cargo xtask agents sync`. The steps are in
     `set_rsp_stream`.
 
 Ranked next steps: `docs/BACKLOG.md`. N64 throughput is no longer the top risk for
-castle64. Next for the RSP path: clipping on the RSP, ripples and rings on the overlay
-(ADR 0018), an RSP term in the cost model, and a measurement on real hardware (ares doesn't time the
-RDP).
+castle64. Next for the RSP path: clipping on the RSP, palettes and smooth skins on the
+overlay, and a measurement on real hardware (ares doesn't time the RDP).
 
 - **Real hardware (2026-10-15, `docs/HARDWARE.md`):** `run n64 --device sc64|everdrive`
   (sc64deployer / UNFLoader over USB) and `run 3ds --device network [--ip <IP>]`
@@ -456,8 +461,8 @@ RDP).
     combiner cycles, TMEM).
   - **Tests and goldens:** the `water` self-test step on PC, ares and Azahar, and
     `gpu tnl water` on the 3DS. Goldens `water_*`, `showcase_river` (PC, N64, 3DS).
-  - **Open:** on the N64 the river's ripples and rings are still CPU work (~3.4 ms of
-    `micro-river`'s 10.5 ms, ADR 0018 §6); BACKLOG › "Water on the RSP: the rest".
+  - **N64:** the ripples and their rings run on the water overlay since #69's second
+    part (ADR 0018 §7); a ring whose sphere leaves the RSP's band stays a CPU decal.
 - **PC hardware T&L (2026-10-17/18, ADR 0016, GitHub #51):** the PC native profile
   transforms and lights most models on the GPU; the CPU T&L stays the reference.
   - **Instancing on every target:** `Renderer::draw_model_instances(model, &[Instance],
@@ -1083,6 +1088,27 @@ cargo test --workspace
   ~80–100 µs counted as `tnl`, so a moving body part costs ~0.2 ms a frame. Measured
   in ares by charging that span to an unused profile stage. Fewer draws is the lever
   for animated crowds (Solid Eleven's far players drop arms and shadows).
+- **Streamed RSP commands need `rspq_flush`** (`trino_rsp_flush`): rspq only wakes an
+  idle RSP on a flush, so commands queued during a frame wait for its end. The streamed
+  river drained 0.8 ms after the CPU was done until each streamed chunk flushed (#69).
+- **In ares the RSP costs ~4–5 cycles per instruction, dependent or not.** Pairing the
+  water vertices (two per pass) gained ~20%, what the instruction count says, not the 2×
+  a stall model predicts. Count instructions per vertex; measure an overlay by draining
+  each command (a drain alone costs ~45 µs).
+- **`==` on arrays is `memcmp` on the N64, and newlib's compares byte by byte** (~600
+  cycles for a 72-byte key). Hot key compares use `memo::words_eq`.
+- **libdragon re-uploads a texture on every `rdpq_sprite_upload`** (~0.25 ms of CPU for
+  the water's two layers). The shim keeps what TMEM holds (`trino_t3_*`, `trino_w_*`,
+  cleared by every other upload) and only moves a tile when the scroll changes. A
+  resident CI texture needs its TLUT mode set again after a mode change, or it draws
+  black.
+- **A memo cleared whole when full rebuilds every frame** if a scene's draws straddle the
+  clear (an earlier scene filled it). The water memo drops what the last two frames
+  didn't draw instead.
+- **o64 callees may spill `a2`/`a3` into the caller's 16..31(sp)**, which is the o32
+  Rust caller's own frame: `trino_3d_texture_ex` overwrote a saved pointer there. Every
+  shim export with three or four arguments goes through an out-of-line `*_body` with
+  `TRINO_NOT_A_TAIL_CALL()` (ADR 0002).
 - **A game drawn at a reduced scale scales its AO too:** `AmbientOcclusion::radius`
   and `bias` are world units, so Solid Eleven (1/64) passes meters × `WORLD`.
 - **Only one game per binary may export the hot-reload symbols.** `apps/pc` links

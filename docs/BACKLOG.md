@@ -34,10 +34,11 @@ shipping a 3D game first**, then by cost:
      - **(b)** Near/guard-band clipping on the RSP. The draws that still clip (big
        floors and walls) are the hub's remaining 4.6 ms of CPU T&L.
      - **(c)** Overlay coverage: done for Flat, fog, colored light, emissive,
-       double-sided, textures, rigid skeletons and water (GitHub #69, ADR 0018).
-       Left: ripples and their rings on the water overlay, palettes, smooth skins.
-     - **(d)** An RSP term in `N64_COST`. The HUD, strict mode and `model inspect`
-       still assume CPU T&L for every draw.
+       double-sided, textures, rigid skeletons and water with its ripples and rings
+       (GitHub #69, ADR 0018). Left: palettes, smooth skins.
+     - ~~**(d)** An RSP term in `N64_COST`~~: **done** (#69, ADR 0018 §7): RSP triangles,
+       water surfaces priced apart (`RspWork`), and the RSP draws' CPU side in
+       `scene budget`.
      - **(e)** Merge the hub's static blocks (2b), deferred.
 2. **Freeze `TSCN` v1 at the first release** (S). Until then the layout may still grow.
    Afterwards, every change bumps the version and adds a migration (ADR 0005 §3).
@@ -171,11 +172,9 @@ shipping a 3D game first**, then by cost:
       backdrops (that artifact came back twice).
     - Nothing has run on real hardware yet.
 
-17. **Water on the RSP: the rest** (M). The overlay displaces, lights and shades water
-    (ADR 0018), but the ripples' deltas are computed per vertex on the CPU and their
-    rings are CPU decals: ~3.4 ms of `micro-river`'s 10.5 ms. Put both on the
-    overlay, then cut the showcase's RSP triangles (its `submit` is 31 ms) toward
-    #69's 1.2 ms river and 33.3 ms showcase.
+17. ~~**Water on the RSP: the rest**~~: **done** (#69's second part, ADR 0018 §7): the
+    ripples and their rings on the overlay. `micro-river` 1.78 ms (the river's draws
+    0.94 ms), `showcase-river` 26.2 ms in ares. Left: the number on a real N64 (P0 #1a).
 18. **3DS water: fragment lighting and long surfaces** (S–M). A `C3D_LightEnv` with a
     Fresnel LUT for a per-pixel glint. Split long water surfaces into pieces so the
     GPU takes the ones wholly ahead of the camera; the ripple rings then need
@@ -189,6 +188,16 @@ shipping a 3D game first**, then by cost:
   time) and bless `tests/perf/` on purpose. Host benches stay as regression guards only.
 
 ---
+
+## Done — N64 water at budget: ripples and rings on the RSP, the river at 1.2 ms, the showcase at 30 fps (2026-10-18, GitHub #69 second part, ADR 0018 §7)
+
+| Item | Evidence |
+|---|---|
+| The ripple sum per vertex and the ripple rings on `rsp_trino_water`; two vertices per pass; the block split into a static part (per memoized draw) and a frame part (per material) | the water oracles (`micro::water_checks`: swell, ripple), `showcase_river` N64 golden re-blessed, `perf_budget` counters (ROM = PC: `micro-river` 0 CPU triangles, 92 on the RSP) |
+| Streaming starts the RSP (`trino_rsp_flush`); the water texture stays in TMEM; arena lines claimed without a fill; the water memo evicts stale entries | `micro-river` 10.48 → **1.78 ms** (T&L 6.39 → **0.94**, 0.88–0.98), `showcase-river` 75.17 → **26.21 ms** (8 paddings, ares) |
+| Gates at the issue's budgets: `perf::BUDGETS` caps `micro-river` `tnl_us` at 1 200 and `showcase-river` `frame_us` at 33 300 | `tests/perf/castle64_n64.toml`, `perf::tests::budgets_cap_the_ceilings` |
+| Phase 4: `N64_COST` prices water on the RSP (`us_per_rsp_water_tri`, `us_per_rsp_water_draw`, `RspWork`); `scene budget` counts the RSP draws' CPU side | showcase estimate 25.8 ms vs ares 26.2 (was 25.4 vs 75); `scene_budget` tests |
+| Left | a measurement on a real N64 (ares doesn't time the RDP; P0 #1a) |
 
 ## Done — N64 RSP coverage: fog, colored light, textures, rigid skeletons and water (2026-10-18, branch `perf/69-n64-water`, GitHub #69 phases 0–3, ADR 0018)
 

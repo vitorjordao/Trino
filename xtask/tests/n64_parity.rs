@@ -8,7 +8,7 @@
 
 use std::path::PathBuf;
 
-use trino_core::{Game, Vec2};
+use trino_core::Game;
 use trino_platform_pc::{PcRenderer, SimProfile};
 
 fn read_png(path: &std::path::Path) -> (u32, u32, Vec<u8>) {
@@ -52,7 +52,8 @@ fn pc_n64_look_tracks_the_ares_frame() {
     for f in assets.fonts {
         r.upload_font(trino_core::FontId(f.id), f.table);
     }
-    let mut game = showcase::ShowcaseGame::with_screen(Vec2::new(320.0, 240.0));
+    // The scene the ROM plays: its N64 variants.
+    let mut game = showcase::ShowcaseGame::n64();
     game.render(&mut r);
     let pc = r.read_offscreen();
     let (w, h, ares) = read_png(&golden);

@@ -201,9 +201,6 @@ struct WaterSetup {
 
 impl WaterSetup {
     fn new(ctx: &TnlContext, mesh: &Mesh, model: &Mat34, w: &Water, gloss: u8) -> WaterSetup {
-        let state = ctx.water();
-        let light = ctx.light();
-        let f = |c: Color| [c.r as f32, c.g as f32, c.b as f32, c.a as f32];
         // Ripples whose band can't reach the mesh's bounding circle (x, z)
         // are left out of every vertex.
         let reach = mesh.bounds().map(|(c, r)| {
@@ -211,6 +208,15 @@ impl WaterSetup {
             let c = model.transform_point(c);
             (c, crate::math3d::sqrt(r * r * s.x.max(s.y).max(s.z)))
         });
+        Self::within(ctx, reach, w, gloss)
+    }
+
+    /// [`WaterSetup::new`] keeping the ripples that reach the circle
+    /// `reach` (world center, radius), or every ripple (`None`).
+    fn within(ctx: &TnlContext, reach: Option<(Vec3, f32)>, w: &Water, gloss: u8) -> WaterSetup {
+        let state = ctx.water();
+        let light = ctx.light();
+        let f = |c: Color| [c.r as f32, c.g as f32, c.b as f32, c.a as f32];
         let mut ripples = [Ripple::NONE; MAX_RIPPLES];
         let mut n = 0;
         if w.ripple_responsiveness != 0.0 {
@@ -425,6 +431,50 @@ fn cull(
     Ok(Some((c, r2)))
 }
 
+/// Does every triangle of a water draw lie outside one plane of the
+/// frustum (its vertices free to move `margin` along world Y, the swell
+/// and the ripples)? Then clipping leaves nothing of it: a river piece under
+/// the camera whose sphere still touches the view. Out of line and only
+/// for meshes of up to 256 vertices (the outcodes live on the stack).
+#[inline(never)]
+fn every_triangle_out(ctx: &TnlContext, mesh: &Mesh, mv: &Mat34, margin: f32) -> bool {
+    const MAX: usize = 256;
+    if mesh.vertex_count > MAX {
+        return false;
+    }
+    let (lx, ly) = (ctx.lim_x, ctx.lim_y);
+    // World Y in view space, and each plane's reach along it.
+    let u = Vec3::new(ctx.view.m[0][1], ctx.view.m[1][1], ctx.view.m[2][1]);
+    let abs = |v: f32| if v < 0.0 { -v } else { v };
+    let reach = [
+        abs(u.z) * margin,
+        abs(u.x - lx * u.z) * margin,
+        abs(-u.x - lx * u.z) * margin,
+        abs(u.y - ly * u.z) * margin,
+        abs(-u.y - ly * u.z) * margin,
+    ];
+    let mut codes = [0u8; MAX];
+    for (i, code) in codes[..mesh.vertex_count].iter_mut().enumerate() {
+        let v = mv.transform_point(mesh.position(i));
+        let d = [
+            NEAR - v.z,
+            v.x - lx * v.z,
+            -v.x - lx * v.z,
+            v.y - ly * v.z,
+            -v.y - ly * v.z,
+        ];
+        let mut c = (d[0] - reach[0] >= 0.0) as u8;
+        for k in 1..5 {
+            c |= ((d[k] - reach[k] > 0.0) as u8) << k;
+        }
+        *code = c;
+    }
+    (0..mesh.index_count / 3).all(|t| {
+        let c = |k: usize| codes[mesh.index(3 * t + k) as usize];
+        c(0) & c(1) & c(2) != 0
+    })
+}
+
 /// The draw's constant setup (`tessellate_with`'s, same values).
 fn setup<'a>(
     ctx: &'a TnlContext,
@@ -541,6 +591,12 @@ pub(super) fn tessellate_water(
         Ok(b) => b,
         Err(culled) => return culled,
     };
+    if every_triangle_out(ctx, mesh, &mv, super::rsp_water_margin(ctx, water)) {
+        return TnlStats {
+            culled: 1,
+            ..TnlStats::default()
+        };
+    }
     let (pick, n_pick) = if ctx.n_locals > 0 && params.shading != Shading::Unlit {
         pick(ctx, bound)
     } else {
@@ -581,7 +637,7 @@ pub(super) fn tessellate_water(
         emit,
     );
     if let Some(w) = &s.water {
-        stats.add(&ripple_rings(ctx, &s.s, w, mesh, model, emit));
+        stats.add(&ripple_rings(ctx, &s.s, w, mesh, model, 0, emit));
     }
     stats
 }
@@ -606,12 +662,219 @@ pub fn tessellate_ripples(
     params: &ModelParams,
     emit: &mut dyn FnMut(ScreenTri),
 ) -> TnlStats {
+    tessellate_ripples_except(ctx, mesh, model, params, 0, emit)
+}
+
+/// [`tessellate_ripples`] without the rings whose bit is set in `skip`
+/// (bit `i`: the `i`-th of [`water_rings`]): the N64 draws those on the
+/// RSP ([`rsp_ring_mask`]).
+pub fn tessellate_ripples_except(
+    ctx: &TnlContext,
+    mesh: &Mesh,
+    model: &Mat34,
+    params: &ModelParams,
+    skip: u8,
+    emit: &mut dyn FnMut(ScreenTri),
+) -> TnlStats {
     let Some(w) = &params.water else {
         return TnlStats::default();
     };
     let s = setup(ctx, mesh, model, params);
     let ws = WaterSetup::new(ctx, mesh, model, w, params.gloss);
-    ripple_rings(ctx, &s, &ws, mesh, model, emit)
+    ripple_rings(ctx, &s, &ws, mesh, model, skip, emit)
+}
+
+/// Vertices of a ripple ring: its inner and outer edge at each of
+/// [`RING_SEGMENTS`] + 1 angles (the first and last coincide).
+pub const RING_VERTS: usize = 2 * (RING_SEGMENTS + 1);
+
+/// One ripple ring a water draw owns ([`tessellate_ripples`]): the ripple,
+/// the band's radii, the surface's rest height and the lift above it the
+/// ring rides at (before the swell), and its color (alpha fading with the
+/// ripple).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Ring {
+    pub ripple: Ripple,
+    pub r0: f32,
+    pub r1: f32,
+    pub plane: f32,
+    pub lift: f32,
+    pub color: Color,
+}
+
+impl Ring {
+    pub const NONE: Ring = Ring {
+        ripple: Ripple::NONE,
+        r0: 0.0,
+        r1: 0.0,
+        plane: 0.0,
+        lift: 0.0,
+        color: Color::rgba(0, 0, 0, 0),
+    };
+}
+
+/// The rings of `ripples` (pushing with `response`) on `mesh` under
+/// `model`: each ripple that falls on the surface and still shows. A
+/// surface cut in pieces (the showcase's river) rings each ripple once:
+/// from the piece it fell on.
+fn rings_of(
+    ripples: &[Ripple],
+    response: f32,
+    plane: f32,
+    out: &mut [Ring; MAX_RIPPLES],
+    owns: &mut dyn FnMut(&Ripple) -> bool,
+) -> usize {
+    if ripples.is_empty() {
+        return 0;
+    }
+    let mut n = 0;
+    for r in ripples {
+        if !owns(r) {
+            continue;
+        }
+        let decay = r.decay();
+        let a = 210.0 * decay * (r.strength * response / 0.08).min(1.0);
+        if a < 4.0 {
+            continue;
+        }
+        let rad = r.radius();
+        let half = 0.07 + 0.05 * r.age;
+        out[n] = Ring {
+            ripple: *r,
+            r0: if rad > half { rad - half } else { 0.0 },
+            r1: rad + half,
+            plane,
+            // Above the surface by the crest it rides on.
+            lift: r.strength * response * decay + 0.01,
+            color: Color::rgba(232, 244, 255, a as u8),
+        };
+        n += 1;
+    }
+    n
+}
+
+/// The rings a water draw owns, numbered as [`tessellate_ripples_except`]
+/// numbers them.
+pub fn water_rings(
+    ws: &WaterRsp,
+    mesh: &Mesh,
+    model: &Mat34,
+    out: &mut [Ring; MAX_RIPPLES],
+) -> usize {
+    rings_of(
+        &ws.ripples[..ws.n_ripples],
+        ws.response,
+        water_plane(mesh, model),
+        out,
+        &mut |r| over_surface(mesh, model, r.pos),
+    )
+}
+
+/// A water surface's rest height, where its rings lie: the middle of its
+/// bounds under `model` (a flat sheet).
+pub fn water_plane(mesh: &Mesh, model: &Mat34) -> f32 {
+    match mesh.bounds() {
+        Some((c, _)) => model.transform_point(c).y,
+        None => model.transform_point(Vec3::ZERO).y,
+    }
+}
+
+/// [`water_rings`] where `owns` says whether a ripple falls on the surface
+/// (a backend that remembers [`ripple_over_surface`]'s answers), on the
+/// surface's [`water_plane`] `plane`.
+pub fn water_rings_with(
+    ws: &WaterRsp,
+    plane: f32,
+    out: &mut [Ring; MAX_RIPPLES],
+    owns: &mut dyn FnMut(&Ripple) -> bool,
+) -> usize {
+    rings_of(&ws.ripples[..ws.n_ripples], ws.response, plane, out, owns)
+}
+
+/// Does a ripple at world `p` (x, z) fall on `mesh` under `model` (seen
+/// from above)? Its ring is then this surface's ([`water_rings`]).
+pub fn ripple_over_surface(mesh: &Mesh, model: &Mat34, p: Vec2) -> bool {
+    over_surface(mesh, model, p)
+}
+
+/// A ring's vertices in world space, riding the swell `waves`: vertex `2k`
+/// on the inner edge and `2k + 1` on the outer one, at `k / RING_SEGMENTS`
+/// turns. Segment `k`'s triangles are `(2k, 2k + 3, 2k + 1)` and
+/// `(2k, 2k + 2, 2k + 3)`.
+pub fn ring_world(waves: &WaveSet, ring: &Ring) -> [Vec3; RING_VERTS] {
+    let r = &ring.ripple;
+    core::array::from_fn(|i| {
+        let t = (i / 2) as f32 / RING_SEGMENTS as f32;
+        let rr = if i % 2 == 0 { ring.r0 } else { ring.r1 };
+        let (sn, cs) = (crate::water::sin_turns(t), crate::water::cos_turns(t));
+        let (x, z) = (r.pos.x + cs * rr, r.pos.y + sn * rr);
+        let (h, _) = waves.sample(x, z);
+        Vec3::new(x, ring.plane + h + ring.lift, z)
+    })
+}
+
+/// A ring's vertices at rest (no swell), in [`ring_world`]'s order: what
+/// the N64's water overlay displaces itself.
+pub fn ring_flat(ring: &Ring) -> [Vec3; RING_VERTS] {
+    let r = &ring.ripple;
+    let y = ring.plane + ring.lift;
+    core::array::from_fn(|i| {
+        let t = (i / 2) as f32 / RING_SEGMENTS as f32;
+        let rr = if i % 2 == 0 { ring.r0 } else { ring.r1 };
+        let (sn, cs) = (crate::water::sin_turns(t), crate::water::cos_turns(t));
+        Vec3::new(r.pos.x + cs * rr, y, r.pos.y + sn * rr)
+    })
+}
+
+/// Can the N64's RSP draw a ring riding the swell `waves`? It never clips,
+/// so the ring's sphere (its outer radius, and the swell's height above
+/// and below) must lie past the near plane, inside the RSP band and short
+/// of its far limit: then the CPU path would clip none of its triangles.
+pub fn ring_on_rsp(ctx: &TnlContext, ring: &Ring, waves: &WaveSet) -> bool {
+    let r = &ring.ripple;
+    let swell = waves.amp[0].abs() + waves.amp[1].abs() + 0.01;
+    let c = ctx
+        .view
+        .transform_point(Vec3::new(r.pos.x, ring.plane + ring.lift, r.pos.y));
+    super::rsp_band_check(ctx, c, ring.r1 * ring.r1 + swell * swell).is_ok()
+}
+
+/// Which of a water draw's rings ([`water_rings`]) the N64 draws on the RSP
+/// (bit `i`: ring `i`) when the surface itself is there, and how many
+/// rings it has; the others stay CPU triangles
+/// ([`tessellate_ripples_except`]).
+pub fn rsp_ring_mask(
+    ctx: &TnlContext,
+    mesh: &Mesh,
+    model: &Mat34,
+    params: &ModelParams,
+) -> (u8, usize) {
+    let Some(ws) = water_rsp(ctx, mesh, model, params) else {
+        return (0, 0);
+    };
+    let mut rings = [Ring::NONE; MAX_RIPPLES];
+    let n = water_rings(&ws, mesh, model, &mut rings);
+    let mut mask = 0;
+    for (i, r) in rings[..n].iter().enumerate() {
+        if ring_on_rsp(ctx, r, &ws.waves) {
+            mask |= 1 << i;
+        }
+    }
+    (mask, n)
+}
+
+/// What a water draw on the N64's RSP adds for its rings: the triangles of
+/// the rings the RSP draws ([`rsp_ring_mask`]) and the CPU work of the
+/// others. The ROM and every host predictor count rings this way.
+pub fn rsp_water_rings(
+    ctx: &TnlContext,
+    mesh: &Mesh,
+    model: &Mat34,
+    params: &ModelParams,
+) -> (u32, TnlStats) {
+    let (mask, _) = rsp_ring_mask(ctx, mesh, model, params);
+    let cpu = tessellate_ripples_except(ctx, mesh, model, params, mask, &mut |_| {});
+    (mask.count_ones() * 2 * RING_SEGMENTS as u32, cpu)
 }
 
 fn ripple_rings(
@@ -620,54 +883,42 @@ fn ripple_rings(
     w: &WaterSetup,
     mesh: &Mesh,
     model: &Mat34,
+    skip: u8,
     emit: &mut dyn FnMut(ScreenTri),
 ) -> TnlStats {
     let mut stats = TnlStats::default();
-    if w.n_ripples == 0 {
-        return stats;
-    }
-    // The surface's rest height: the middle of its bounds (a flat sheet).
-    let plane = match mesh.bounds() {
-        Some((c, _)) => model.transform_point(c).y,
-        None => model.transform_point(Vec3::ZERO).y,
-    };
+    let mut rings = [Ring::NONE; MAX_RIPPLES];
+    let n = rings_of(
+        &w.ripples[..w.n_ripples],
+        w.response,
+        water_plane(mesh, model),
+        &mut rings,
+        &mut |r| over_surface(mesh, model, r.pos),
+    );
     let view = &ctx.view;
     let mut poly_a = [super::NO_VERT; MAX_POLY];
     let mut poly_b = [super::NO_VERT; MAX_POLY];
-    for r in &w.ripples[..w.n_ripples] {
-        // A surface cut in pieces (the showcase's river) rings each ripple
-        // once: from the piece it fell on.
-        if !over_surface(mesh, model, r.pos) {
+    for (i, ring) in rings[..n].iter().enumerate() {
+        if skip & (1 << i) != 0 {
             continue;
         }
-        let decay = r.decay();
-        let a = 210.0 * decay * (r.strength * w.response / 0.08).min(1.0);
-        if a < 4.0 {
-            continue;
-        }
-        let rad = r.radius();
-        let half = 0.07 + 0.05 * r.age;
-        let (r0, r1) = (if rad > half { rad - half } else { 0.0 }, rad + half);
-        // Above the surface by the crest it rides on.
-        let lift = r.strength * w.response * decay + 0.01;
-        let color = Color::rgba(232, 244, 255, a as u8);
-        let at = |k: usize, rr: f32| {
-            let t = k as f32 / RING_SEGMENTS as f32;
-            let (sn, cs) = (crate::water::sin_turns(t), crate::water::cos_turns(t));
-            let (x, z) = (r.pos.x + cs * rr, r.pos.y + sn * rr);
-            let (h, _) = w.waves.sample(x, z);
-            view.transform_point(Vec3::new(x, plane + h + lift, z))
-        };
-        let mut prev = (at(0, r0), at(0, r1));
-        for k in 1..=RING_SEGMENTS {
-            let cur = (at(k, r0), at(k, r1));
+        let pts = ring_world(&w.waves, ring).map(|p| view.transform_point(p));
+        for k in 0..RING_SEGMENTS {
+            let (a, b, c, d) = (pts[2 * k], pts[2 * k + 1], pts[2 * k + 2], pts[2 * k + 3]);
             stats.tris_in += 2;
-            for tri in [[prev.0, cur.1, prev.1], [prev.0, cur.0, cur.1]] {
-                ring_tri(s, &tri, color, &mut poly_a, &mut poly_b, &mut stats, emit);
+            for tri in [[a, d, b], [a, c, d]] {
+                ring_tri(
+                    s,
+                    &tri,
+                    ring.color,
+                    &mut poly_a,
+                    &mut poly_b,
+                    &mut stats,
+                    emit,
+                );
             }
-            prev = cur;
         }
-        stats.verts += 2 * (RING_SEGMENTS as u32 + 1);
+        stats.verts += RING_VERTS as u32;
     }
     stats
 }
@@ -1260,6 +1511,27 @@ pub fn water_rsp(
     })
 }
 
+/// [`water_rsp`] with every ripple of the frame (`Caps::max_ripples` of
+/// them), not only those that reach one mesh: the same for every draw of a
+/// water material in a frame, so a backend computes it once. Ripples that
+/// can't reach a vertex add nothing to it either way.
+pub fn water_rsp_frame(ctx: &TnlContext, params: &ModelParams) -> Option<WaterRsp> {
+    let w = params.water.as_ref()?;
+    let s = WaterSetup::within(ctx, None, w, params.gloss);
+    Some(WaterRsp {
+        waves: s.waves,
+        ripples: s.ripples,
+        n_ripples: s.n_ripples,
+        response: s.response,
+        uv: s.uv,
+        eye: s.eye,
+        sun: s.sun,
+        sky: s.sky,
+        sun_color: s.sun_color,
+        gloss: s.gloss,
+    })
+}
+
 /// Vertex `i` of a water draw as the CPU path computes it: view-space
 /// position (displaced) and color (lit, Fresnel, glint, fog). The N64
 /// overlay's oracle.
@@ -1290,11 +1562,12 @@ pub fn ripple_ring_count(
         return 0;
     };
     let ws = WaterSetup::new(ctx, mesh, model, w, params.gloss);
-    ws.ripples[..ws.n_ripples]
-        .iter()
-        .filter(|r| {
-            let a = 210.0 * r.decay() * (r.strength * ws.response / 0.08).min(1.0);
-            a >= 4.0 && over_surface(mesh, model, r.pos)
-        })
-        .count() as u32
+    let mut rings = [Ring::NONE; MAX_RIPPLES];
+    rings_of(
+        &ws.ripples[..ws.n_ripples],
+        ws.response,
+        water_plane(mesh, model),
+        &mut rings,
+        &mut |r| over_surface(mesh, model, r.pos),
+    ) as u32
 }

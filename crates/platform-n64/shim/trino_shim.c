@@ -803,19 +803,72 @@ uint32_t trino_joypad_stick(void)
 // ---------------------------------------------------------------------------
 // Audio
 
+// What the audio holds and does, for `Audio::audio_stats` and the
+// `audio codecs` self-test step (issue #53). Every wav64 streams from the
+// ROM through its channel's sample buffer, so the heap the mixer allocates
+// for those buffers (on a channel's first play) is the streaming memory;
+// what `wav64_open` allocates (the struct, a VADPCM codebook, an Opus
+// decoder) is resident. Both are measured as heap deltas
+// (trino_heap_used).
+
+static uint32_t trino_audio_resident;
+static uint32_t trino_audio_stream_bytes;
+static uint32_t trino_audio_underruns;
+static uint32_t trino_audio_streamed;
+static uint64_t trino_audio_ticks;
+static uint32_t trino_audio_polls;
+static uint32_t trino_audio_buffers;
+static uint32_t trino_ch_pos[16];
+extern int64_t __mixer_profile_rsp;
+
 void* trino_wav_load(const char* dfs_path)
 {
+    uint32_t before = trino_heap_used();
     wav64_t* wav = malloc(sizeof(wav64_t));
     wav64_open(wav, dfs_path);
+    trino_audio_resident += trino_heap_used() - before;
     return wav;
 }
 
-// `looped` is accepted for cross-platform symmetry but ignored here: on the
-// N64, looping is baked into the wav64 file (audioconv64 --wav-loop).
+// Opus (wav64 compression level 3) links libopus. The shim's default does
+// nothing and reports 0; `trino_opus.c`, linked by the bake only when an
+// asset is Opus, enables it (and raises the channels' rate limit to the
+// 48 kHz Opus plays at).
+__attribute__((weak)) uint32_t trino_audio_opus_init(void)
+{
+    return 0;
+}
+
+// The wav64 each channel was last configured for, and whether it looped.
+static void* trino_ch_wave[16];
+static uint8_t trino_ch_loop[16];
+// Played for no time to make the mixer forget a channel's waveform.
+static waveform_t trino_no_wave = {
+    .name = "trino-reset", .bits = 16, .channels = 1, .frequency = 8000,
+};
+
+// `looped` loops the whole sound, as on the other platforms (the bake
+// makes every length a multiple of 16, which libdragon wants of a VADPCM
+// loop). The mixer keeps a channel's loop length while the same waveform
+// replays on it, so a changed flag first plays the empty waveform there.
 static __attribute__((noinline)) void trino_wav_play_body(void* wav, uint32_t channel, uint32_t looped)
 {
-    (void)looped;
-    wav64_play((wav64_t*)wav, (int)channel);
+    wav64_t* w = (wav64_t*)wav;
+    looped = looped != 0;
+    if (channel >= 16)
+        return;
+    if (trino_ch_wave[channel] == wav && trino_ch_loop[channel] != looped) {
+        mixer_ch_play((int)channel, &trino_no_wave);
+        mixer_ch_stop((int)channel);
+    }
+    wav64_set_loop(w, looped);
+    trino_ch_wave[channel] = wav;
+    trino_ch_loop[channel] = (uint8_t)looped;
+    // A channel's first play allocates its sample buffer.
+    uint32_t before = trino_heap_used();
+    wav64_play(w, (int)channel);
+    trino_audio_stream_bytes += trino_heap_used() - before;
+    trino_ch_pos[channel] = 0;
 }
 
 void trino_channel_stop(uint32_t channel)
@@ -843,13 +896,63 @@ int32_t trino_ch_playing(uint32_t channel)
     return mixer_ch_playing((int)channel) ? 1 : 0;
 }
 
+// Bit n set = channel n plays (one call per frame instead of 16).
+uint32_t trino_audio_playing_mask(void)
+{
+    uint32_t mask = 0;
+    for (int ch = 0; ch < 16; ch++)
+        if (mixer_ch_playing(ch))
+            mask |= 1u << ch;
+    return mask;
+}
+
+// Feed the AI every free buffer. libdragon keeps 4 of 1/25 s; finding all
+// of them free means the AI played everything it had and went silent: an
+// underrun (the first poll, before anything was queued, doesn't count).
+// The time spent here is the audio's whole frame cost — mixer_poll waits
+// for the RSP (mixing, VADPCM decoding) and decodes Opus on the CPU.
 void trino_audio_poll(void)
 {
+    uint32_t t0 = TICKS_READ();
+    int written = 0;
     while (audio_can_write()) {
         int16_t* buf = audio_write_begin();
         mixer_poll(buf, audio_get_buffer_length());
         audio_write_end();
+        written++;
     }
+    if (written >= 4 && trino_audio_polls > 0)
+        trino_audio_underruns++;
+    trino_audio_buffers += written;
+    trino_audio_polls++;
+    // Progress of every playing channel, in source sample frames.
+    for (int ch = 0; ch < 16; ch++) {
+        if (!mixer_ch_playing(ch))
+            continue;
+        uint32_t pos = (uint32_t)mixer_ch_get_pos(ch);
+        // A loop wrapped (or the channel restarted): count from 0.
+        trino_audio_streamed += pos >= trino_ch_pos[ch] ? pos - trino_ch_pos[ch] : pos;
+        trino_ch_pos[ch] = pos;
+    }
+    trino_audio_ticks += TICKS_READ() - t0;
+}
+
+// out[0..10]: resident bytes, stream bytes, underruns, streamed frames,
+// µs spent in trino_audio_poll, polls, µs the mixer waited for the RSP
+// (mixing; libdragon's __mixer_profile_rsp), output buffers mixed, output
+// samples per buffer, output rate.
+void trino_audio_stats(uint32_t* out)
+{
+    out[0] = trino_audio_resident;
+    out[1] = trino_audio_stream_bytes;
+    out[2] = trino_audio_underruns;
+    out[3] = trino_audio_streamed;
+    out[4] = (uint32_t)TICKS_TO_US(trino_audio_ticks);
+    out[5] = trino_audio_polls;
+    out[6] = (uint32_t)TICKS_TO_US(__mixer_profile_rsp);
+    out[7] = trino_audio_buffers;
+    out[8] = (uint32_t)audio_get_buffer_length();
+    out[9] = (uint32_t)audio_get_frequency();
 }
 
 // ---------------------------------------------------------------------------

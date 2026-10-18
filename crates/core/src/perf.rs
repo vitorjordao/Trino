@@ -51,6 +51,19 @@ pub struct CostModel {
     /// block, the command; its ripple rings excluded), instead of
     /// [`Self::us_per_rsp_draw`].
     pub us_per_rsp_water_draw: f32,
+    /// Audio, per second of output (the frame rate drops out; see
+    /// [`CostModel::audio_us`]): the mixer with nothing playing. On the N64
+    /// the CPU waits in `N64Audio::poll` while the RSP mixes every channel,
+    /// so this is CPU and RSP time alike.
+    pub us_audio_per_s: f32,
+    /// Each playing VADPCM (or raw) voice, per second of output: its fixed
+    /// part (a channel to resample and mix, a ROM read)…
+    pub us_per_voice_per_s: f32,
+    /// …and per source sample it decodes (VADPCM on the RSP).
+    pub us_per_voice_sample: f32,
+    /// One Opus voice (48 kHz CELT, decoded on the CPU with RSP help), per
+    /// second of output, everything included.
+    pub us_per_opus_voice_per_s: f32,
 }
 
 /// The N64's RSP work in a frame ([`CostModel::split_us`]): every RSP draw
@@ -103,7 +116,22 @@ pub const N64_COST: CostModel = CostModel {
     // 100–150 µs of CPU before its rings.
     us_per_rsp_water_tri: 9.5,
     us_per_rsp_water_draw: 150.0,
+    // ares, 2026-10-18 (issue #53, the self-test's `audio cost` step,
+    // `TRINO_AUDIO_COST:` lines): poll time per second of output with
+    // nothing playing, the 44.1 kHz VADPCM theme, two 22.05 kHz VADPCM
+    // loops more, and a 48 kHz Opus track; the voice terms solve the two
+    // VADPCM rates. Mean over 8 `TRINO_N64_TEXT_PAD` layouts.
+    us_audio_per_s: AUDIO_IDLE,
+    us_per_voice_per_s: AUDIO_VOICE,
+    us_per_voice_sample: AUDIO_SAMPLE,
+    us_per_opus_voice_per_s: AUDIO_OPUS,
 };
+
+// The audio terms of [`N64_COST`], µs per second of output.
+const AUDIO_IDLE: f32 = 30_262.0;
+const AUDIO_VOICE: f32 = 4_066.0;
+const AUDIO_SAMPLE: f32 = 0.2615;
+const AUDIO_OPUS: f32 = 276_256.0;
 
 impl CostModel {
     /// Estimated microseconds of `draws` draw calls doing `tnl` work (T&L
@@ -134,6 +162,20 @@ impl CostModel {
         let other = rsp.tris.saturating_sub(rsp.water_tris);
         (self.us_per_rsp_tri * other as f32 + self.us_per_rsp_water_tri * rsp.water_tris as f32)
             as u32
+    }
+
+    /// Estimated microseconds per frame at `fps` of the audio: the mixer,
+    /// one VADPCM/raw voice per entry of `voice_rates` (its source rate in
+    /// Hz) and `opus_voices` Opus voices. The N64 mixes on the RSP while the
+    /// CPU waits, so the frame pays it on both.
+    pub fn audio_us(&self, voice_rates: &[u32], opus_voices: u32, fps: f32) -> u32 {
+        let voices: f32 = voice_rates
+            .iter()
+            .map(|&r| self.us_per_voice_per_s + self.us_per_voice_sample * r as f32)
+            .sum();
+        let per_s =
+            self.us_audio_per_s + voices + self.us_per_opus_voice_per_s * opus_voices as f32;
+        (per_s / fps.max(1.0)) as u32
     }
 
     /// Estimated microseconds of `n` billboards (impostors, particles).
@@ -484,5 +526,28 @@ mod tests {
             model,
             "TRINO_PERF_MODEL:hub model=00001234 calls=0 us=1000 verts=100 tris_in=0 emitted=20 splits=0"
         );
+    }
+
+    /// The audio terms reproduce the `audio cost` step's measurements
+    /// (µs per second of output → per frame) and keep their order: a
+    /// voice costs more at a higher rate, Opus far more than VADPCM.
+    #[test]
+    fn audio_estimates_match_the_measured_cases() {
+        let m = N64_COST;
+        let at = |rates: &[u32], opus| m.audio_us(rates, opus, 1.0) as f32;
+        let measured = [
+            (at(&[], 0), AUDIO_IDLE),
+            (at(&[44_100], 0), 45_858.0),
+            (at(&[44_100, 22_050, 22_050], 0), 65_520.0),
+            (at(&[], 1), 306_518.0),
+        ];
+        for (est, want) in measured {
+            assert!((est - want).abs() / want < 0.01, "{est} vs {want}");
+        }
+        assert!(at(&[44_100], 0) > at(&[22_050], 0));
+        // Per 60 fps frame: the idle mixer ~0.5 ms, an Opus track ~5 ms.
+        assert_eq!(m.audio_us(&[], 0, 60.0), (AUDIO_IDLE / 60.0) as u32);
+        assert!(m.audio_us(&[], 1, 60.0) > 4_000);
+        assert!(m.audio_us(&[44_100], 0, 30.0) > m.audio_us(&[44_100], 0, 60.0));
     }
 }

@@ -1,8 +1,10 @@
 //! Boot-time asset loading from the DFS.
 //!
 //! `cargo xtask assets n64` writes `index.tsv` into the filesystem:
-//! one `handle-hex \t kind \t filename` line per asset. Loading by handle
-//! keeps game code identical across platforms (`SpriteId::from_path`).
+//! one `handle-hex \t kind \t filename` line per asset (sounds and music
+//! add `\t codec \t bus`). Loading by handle keeps game code identical
+//! across platforms (`SpriteId::from_path`). The project's mix
+//! (`audio/mixer`, kind `mixer`) is applied to the audio once all loaded.
 
 use alloc::ffi::CString;
 use alloc::string::String;
@@ -33,6 +35,7 @@ impl N64Assets {
             runtime::log("TRINO_ASSETS: no index.tsv in DFS\n");
             return;
         };
+        let mut mixer = None;
         for line in index.lines() {
             let mut cols = line.split('\t');
             let (Some(id_hex), Some(kind), Some(file)) = (cols.next(), cols.next(), cols.next())
@@ -54,18 +57,35 @@ impl N64Assets {
                         renderer.register(id, ptr);
                     }
                 }
-                "sound" => {
+                "sound" | "music" => {
+                    let codec = cols.next().unwrap_or("vadpcm");
+                    let music = kind == "music";
+                    let bus =
+                        cols.next()
+                            .and_then(trino_core::Bus::from_label)
+                            .unwrap_or(if music {
+                                trino_core::Bus::Music
+                            } else {
+                                trino_core::Bus::Sfx
+                            });
+                    // libdragon asserts on an Opus wav64 it can't decode.
+                    if codec == "opus" && !audio.enable_opus() {
+                        runtime::log(&alloc::format!(
+                            "TRINO_ASSETS: {file} is Opus but the ROM has no Opus decoder\n"
+                        ));
+                        continue;
+                    }
                     let ptr = unsafe { ffi::trino_wav_load(cpath.as_ptr()) };
-                    if !ptr.is_null() {
-                        audio.register_sound(id, ptr);
+                    if ptr.is_null() {
+                        continue;
+                    }
+                    if music {
+                        audio.register_music(id, ptr, bus);
+                    } else {
+                        audio.register_sound(id, ptr, bus);
                     }
                 }
-                "music" => {
-                    let ptr = unsafe { ffi::trino_wav_load(cpath.as_ptr()) };
-                    if !ptr.is_null() {
-                        audio.register_music(id, ptr);
-                    }
-                }
+                "mixer" => mixer = read_bytes(&path),
                 "model" => {
                     if let Some(bytes) = read_bytes(&path) {
                         let _ = renderer.register_mesh(id, bytes);
@@ -82,6 +102,12 @@ impl N64Assets {
                     }
                 }
                 _ => {}
+            }
+        }
+        if let Some(bytes) = mixer {
+            match trino_core::MixerConfig::parse(&bytes) {
+                Ok(cfg) => cfg.apply(audio),
+                Err(e) => runtime::log(&alloc::format!("TRINO_ASSETS: audio/mixer: {e}\n")),
             }
         }
     }

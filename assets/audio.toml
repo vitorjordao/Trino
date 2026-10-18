@@ -1,0 +1,16 @@
+# The project's mix (issue #53, ASSETS.md "Audio"): each bus's starting
+# volume and the duck rules. The editor's Mixer panel writes this file; the
+# player's own volumes (the game's options) persist apart and win.
+version = 1
+
+[buses]
+music = 0.8
+ambience = 0.9
+
+# Dialogue pulls the music down while it plays.
+[[duck]]
+trigger = "voice"
+target = "music"
+level = 0.4
+attack_ms = 150
+release_ms = 300

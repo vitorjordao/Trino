@@ -69,17 +69,17 @@ TRINO_EDITOR_SCREENSHOT=target/launcher.png TRINO_EDITOR_SCREENSHOT_FRAME=10 car
 | `TRINO_EDITOR_SCREENSHOT=out.png` | save a PNG of the whole window, then exit |
 | `TRINO_EDITOR_SCREENSHOT_FRAME=N` | …after N frames (default 30; use ~60 so thumbnails finish) |
 | `TRINO_EDITOR_SELECT=<name>[,<name>…]` | start with those entities selected (the first is active; gizmo + inspector visible) |
-| `TRINO_EDITOR_TAB=scene\|game\|level\|animation` | focused center tab |
+| `TRINO_EDITOR_TAB=scene\|game\|level\|animation\|mixer` | focused center tab (`mixer`: the bottom dock's Mixer tab) |
 | `TRINO_EDITOR_ANIM=<model>:<clip>@<time>` | the Animation tab previews that clip, paused at that time |
 | `TRINO_EDITOR_ANIM_VIEW=ghosts=3,blend=wave:0.5,look=n64,palette` | its view options (onion skin, crossfade, look, palette) |
-| `TRINO_EDITOR_OPEN=fake-object` / `array` / `material:<logical>` / `model:<logical>` / `prefab:<logical>` / `particles:<name>[@pc\|n64\|3ds]` | open the fake-object or array dialog, an asset inspector, or a prefab in edit mode |
+| `TRINO_EDITOR_OPEN=fake-object` / `array` / `material:<logical>` / `model:<logical>` / `prefab:<logical>` / `particles:<name>[@pc\|n64\|3ds]` / `audio:<sounds/x\|music/x>[@pc\|n64\|3ds\|web]` | open the fake-object or array dialog, an asset inspector (`audio:`: the waveform overlays that platform's decode), or a prefab in edit mode |
 | `TRINO_EDITOR_PALETTE=<query>` | open the command palette (Ctrl+K) with that query |
 | `TRINO_EDITOR_PLAY=here` | start **Play here** on the first frame: the scene runs inside the Game view (CI smoke) |
 | `TRINO_EDITOR_ECHO_LOG=1` | mirror the Console to stderr (see reloads, errors, saves) |
 | `TRINO_EDITOR_GAME=pc\|n64\|3ds\|web` | the Game view's profile (default n64) — screenshots of each platform's variant |
 | `TRINO_EDITOR_WEB_CANVAS=responsive\|720\|1080` | the Game view's browser canvas on the Web profile (the picture is the canvas over the auto pixel scale) |
 | `TRINO_EDITOR_SIZE=960x600` | window size (default 1600x940; never below the 960x600 minimum) — screenshot small windows |
-| `TRINO_EDITOR_INSPECT=platforms\|lod\|impostor\|budget\|ao` | the Inspector opens that section and scrolls to it (`budget`: the scene settings' platform budget, with nothing selected; `ao`: the scene's Ambient Occlusion, or a model's baked AO with `TRINO_EDITOR_OPEN=model:<logical>`) |
+| `TRINO_EDITOR_INSPECT=platforms\|lod\|impostor\|budget\|ao\|audio` | the Inspector opens that section and scrolls to it (`audio`: the audio inspector's Platforms grid; `budget`: the scene settings' platform budget, with nothing selected; `ao`: the scene's Ambient Occlusion, or a model's baked AO with `TRINO_EDITOR_OPEN=model:<logical>`) |
 | `TRINO_EDITOR_TEXTURE=sprites/x\|fonts/x[@pc\|n64\|3ds\|web[,zoom]]` | open the texture inspector on that sprite or font, its preview tab on that platform at that zoom (1–8); with `TRINO_EDITOR_INSPECT=texture` its formats scroll into view |
 | `TRINO_EDITOR_AO=game\|on\|off\|mask` | the Scene view's ambient occlusion mode (as the scene sets it, forced on, off, the occlusion alone) |
 | `TRINO_EDITOR_RIPPLE=1` | keep a ripple ringing on the selected entity's water surface: one drops once the scene resolved, and another whenever it has faded (the inspector's "Drop a ripple"; screenshots of ripple rings) |
@@ -177,6 +177,9 @@ Live-edit check: start the editor with `TRINO_EDITOR_ECHO_LOG=1` in the backgrou
 | `layout_audit.rs` | test helper: no widget off the window, none overlapping (accesskit rects) |
 | `ui_tests.rs` | headless UI flows with egui_kittest (real `App` + wgpu): drive panels by accessibility label |
 | `widget_tests.rs` | widget tests with egui_kittest and no renderer (no GPU, not ignored): inspector editors, Console |
+| `audio.rs` | audio measuring on a worker (`audio::encode`, like the bake), per-platform totals for the budgets, the preview player (an offline-capable `PcAudio`), the Mixer's `MixState` |
+| `panels/audio.rs` | Assets › Audio inspector: waveform + codec noise, Play per platform, bake settings, the Platforms grid; the budget lines; `name_slider` |
+| `panels/mixer.rs` | the Mixer tab: bus volumes and preview mutes, duck rules; writes `assets/audio.toml` |
 
 ## Water (ADR 0015)
 
@@ -237,6 +240,37 @@ Live-edit check: start the editor with `TRINO_EDITOR_ECHO_LOG=1` in the backgrou
   both command lines (the engine's xtask by manifest path, `--project` outside the engine).
 - The Inspector grew with the Web: a kittest click on a section header below the fold
   must use `click` (it scrolls into view), not `get_by_label(..).click()`.
+
+## Audio inspector and Mixer (issue #53, ADR 0020)
+
+- Assets › a sound or music track: `panels/audio.rs` measures it on every platform with
+  the bake's own calls (`decl.audio_settings`, `resolve_source`, `decode_master`,
+  `audio::encode`, `Encoded::snr_db`, `Encoded::footprint`) on a worker, keyed on the
+  manifest text and the project generation. Codec and rate per platform, stream, loop,
+  bus and Vorbis quality go to the manifest through `manifest::edit::set_audio_platform`
+  / `set_audio_key` (comments kept; "default" removes the key). N64 Opus has no host
+  decode: no SNR, no preview, an estimated size (≈).
+- SNR colors use `audio::snr_floor` — the floors `asset-pipeline/tests/audio_codecs.rs`
+  asserts (VADPCM 25, DSP-ADPCM 30, Vorbis q6 26 dB).
+- The Mixer tab edits `assets/audio.toml` (`MixFile`): written when the control is let
+  go, reloaded live on an outside edit, an invalid file shows its error and keeps the
+  last good mix. Mutes there are preview-only.
+- Budget lines (scene settings and the Game view HUD): storage per platform, resident
+  RAM, streamed count and the per-stream buffer, from `Encoded::footprint` — the same
+  numbers as `cargo xtask audio report`.
+- egui pitfalls this hit:
+  - A `Slider`/`DragValue` with `max_decimals` or `step_by` snaps the bound value and
+    reports `changed()` every frame unless the value already sits on its grid. Pre-round,
+    or the editor rewrites the file every frame.
+  - Never call `widget_info` on a Slider response: its rect covers the value box and the
+    layout audit flags the overlap. Name it with `panels::audio::name_slider`.
+  - `theme::prop(ui, "X", …)` next to a widget named "X" gives two nodes with that label:
+    query with `get_by_role_and_label`.
+  - kittest 0.35 has no `set_value`: send `AccessKitActionRequest { SetValue,
+    NumericValue }` (`ui_tests::set_value`); close combo lists left open by
+    `click_accesskit` with `egui::Popup::close_all(&h.ctx)`.
+  - Lines that appear when a worker finishes shift what sits below them: draw the same
+    number of placeholder lines while measuring.
 
 ## Rules when changing the editor
 

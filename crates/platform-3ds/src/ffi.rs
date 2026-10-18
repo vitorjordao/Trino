@@ -104,15 +104,24 @@ unsafe extern "C" {
     /// Bit 31 = touching, bits 16..24 = y, bits 0..9 = x (bottom screen px).
     pub fn trino_touch() -> u32;
 
+    /// Load a baked `T3AU` sound (DSP-ADPCM or PCM16): whole into linear
+    /// memory, or just its header and chunk contexts when it streams.
     pub fn trino_wav_load(romfs_path: *const c_char) -> *mut c_void;
+    /// Bits 0..8 the bus (`trino_core::Bus`), bit 8 streamed, bit 9
+    /// DSP-ADPCM, bit 10 baked to loop.
+    pub fn trino_wav_info(wav: *mut c_void) -> u32;
     pub fn trino_wav_play(wav: *mut c_void, channel: u32, looped: u32);
     pub fn trino_channel_stop(channel: u32);
+    /// Once per frame: releases the streams that played to their end.
     pub fn trino_audio_poll();
+    /// 0 streams playing, 1 bytes held by loaded sounds, 2 streaming
+    /// buffer bytes, 3 underruns, 4 samples streamed, 5 the audio thread's
+    /// core (2 = the New 3DS's third core, 0 = the app core).
+    pub fn trino_audio_stat(which: u32) -> u32;
     /// Per-channel left/right volume, fixed point (65536 = 1.0): scalar
     /// floats after an int are unsafe across the N64's o32/o64 boundary.
     pub fn trino_ch_volume(channel: u32, lvol_q16: u32, rvol_q16: u32);
     pub fn trino_ch_playing(channel: u32) -> i32;
-    pub fn trino_mixer_set_vol(vol_q16: u32);
 
     /// Path is romfs-relative, e.g. `/index.tsv` (no `romfs:/`).
     pub fn trino_file_exists(romfs_relative_path: *const c_char) -> i32;

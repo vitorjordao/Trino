@@ -137,10 +137,14 @@ fn audio_checks_pass_on_pc() {
     let assets = trino_asset_pipeline::load_dir(baked.path(), None).unwrap();
     let mut audio = PcAudio::new();
     for s in assets.sounds {
-        audio.upload_sound(trino_core::SoundId(s.id), s.samples);
+        audio
+            .upload_sound_blob(trino_core::SoundId(s.id), &s.blob)
+            .unwrap();
     }
     for m in assets.music {
-        audio.upload_music(trino_core::MusicId(m.id), m.samples);
+        audio
+            .upload_music_blob(trino_core::MusicId(m.id), &m.blob)
+            .unwrap();
     }
     castle64::selftest::audio_checks(&mut audio).unwrap();
 }
@@ -239,4 +243,55 @@ fn instancing_evidence() {
     enc.set_color(png::ColorType::Rgba);
     enc.set_depth(png::BitDepth::Eight);
     enc.write_header().unwrap().write_image_data(&out).unwrap();
+}
+
+/// Step `audio codecs` (issue #53) on the PC backend, offline: each frame
+/// renders 1/60 s, so voices finish, streams drain and duck ramps move as
+/// on a device. The output is audible (RMS) while the codec sounds play.
+#[test]
+fn audio_codecs_pass_on_pc() {
+    use trino_platform_pc::PcAudio;
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+    let baked = tempfile::tempdir().unwrap();
+    trino_asset_pipeline::bake_all(
+        &root.join("assets"),
+        trino_asset_pipeline::Platform::Pc,
+        baked.path(),
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let assets = trino_asset_pipeline::load_dir(baked.path(), None).unwrap();
+    let mut audio = PcAudio::new_offline(48_000);
+    for s in assets.sounds {
+        audio
+            .upload_sound_blob(trino_core::SoundId(s.id), &s.blob)
+            .unwrap();
+    }
+    for m in assets.music {
+        audio
+            .upload_music_blob(trino_core::MusicId(m.id), &m.blob)
+            .unwrap();
+    }
+    let mix = assets
+        .mixer
+        .expect("assets/audio.toml bakes to audio/mixer");
+    trino_core::MixerConfig::parse(&mix)
+        .unwrap()
+        .apply(&mut audio);
+    let music = trino_core::Audio::bus_volume(&audio, trino_core::Bus::Music);
+    assert!((music - 0.8).abs() < 1e-3, "the project's mix: {music}");
+
+    let mut buf = vec![0.0f32; 800 * 2];
+    let (mut energy, mut samples) = (0.0f64, 0usize);
+    let stats = castle64::selftest::audio_codecs(&mut audio, |a| {
+        a.render(&mut buf);
+        energy += buf.iter().map(|&s| (s as f64) * (s as f64)).sum::<f64>();
+        samples += buf.len();
+    })
+    .unwrap_or_else(|e| panic!("{e}"));
+    let rms = (energy / samples as f64).sqrt();
+    assert!(rms > 0.01, "the step was audible: rms {rms}");
+    assert_eq!(stats.underruns, 0);
+    assert!(stats.streamed_frames >= castle64::selftest::AUDIO_STREAM_MIN_SAMPLES);
+    let music = trino_core::Audio::bus_volume(&audio, trino_core::Bus::Music);
+    assert!((music - 0.8).abs() < 1e-3, "the step restores the buses");
 }

@@ -9,6 +9,12 @@
 //!    probes read pixels back where the browser can wait for the GPU
 //!    (WebGL2); on WebGPU they report themselves skipped (`TRINO_STEP:…
 //!    skipped`), and the golden frames below hold the picture instead.
+//!    Then `audio codecs` (#53, `castle64::selftest::AudioCodecs`, a step
+//!    per frame): Vorbis and PCM sounds play and end, a streamed track
+//!    delivers samples with no underruns, a duck rule ramps. It needs the
+//!    audio context running, so it waits for a gesture (the harness clicks
+//!    the page); a context that never runs fails the step, and a browser
+//!    without Web Audio skips it, saying so.
 //! 2. The showcase demo plays every coin to the goal through the river, and
 //!    the same level baked as data plays through too.
 //! 3. castle64: gravity, a walk, a jump and the bot's whole Green Hills run
@@ -35,6 +41,7 @@ const BUDGET_MS: u64 = 40;
 /// Where the run is.
 enum Stage {
     Engine,
+    Audio(Box<AudioRun>),
     Demos,
     Castle(Box<CastleRun>),
     LoadFootball,
@@ -53,6 +60,29 @@ struct CastleRun {
     z0: f32,
     peak: f32,
 }
+
+/// Step `audio codecs`, frame by frame.
+struct AudioRun {
+    step: castle64::selftest::AudioCodecs,
+    /// When it started waiting for the context to run (page clock, µs).
+    waiting_since: Option<u64>,
+    /// Frames in a row that came on time while waiting to start.
+    smooth: u32,
+    frames: u32,
+    /// The page clock at the step's start and its last frame, and the
+    /// longest gap between two of its frames (µs): what a failure reports.
+    started: Option<u64>,
+    last: u64,
+    max_gap: u64,
+}
+
+/// How long `audio codecs` waits for the audio context to run (µs).
+const AUDIO_WAIT_US: u64 = 30_000_000;
+/// The step counts frames (a one-shot must outlive its first frames), so
+/// it starts once frames come steadily: this many in a row, each within
+/// [`SMOOTH_GAP_US`] of the last (the engine checks' GPU work drained).
+const SMOOTH_FRAMES: u32 = 10;
+const SMOOTH_GAP_US: u64 = 50_000;
 
 /// A fetch in flight: its bytes (or error) once the browser has them.
 type PackSlot = std::rc::Rc<std::cell::RefCell<Option<Result<Vec<u8>, String>>>>;
@@ -84,6 +114,11 @@ impl Run {
     }
 
     fn step(&mut self, host: &mut WebHost) -> Flow {
+        // A click or key (the harness clicks the page) resumes the audio
+        // context, as a game's first gesture does.
+        if host.input.take_gesture() {
+            host.audio.unlock();
+        }
         let started = host.platform.now_micros();
         let in_budget = |host: &WebHost| host.platform.now_micros() - started < BUDGET_MS * 1000;
         match &mut self.stage {
@@ -108,8 +143,22 @@ impl Run {
                     self.fail(format!("ktx2: {e}"));
                     return Flow::Continue;
                 }
-                self.stage = Stage::Demos;
+                host.platform.log("TRINO_STEP:audio codecs\n");
+                self.stage = Stage::Audio(Box::new(AudioRun {
+                    step: castle64::selftest::AudioCodecs::new(),
+                    waiting_since: None,
+                    smooth: 0,
+                    frames: 0,
+                    started: None,
+                    last: 0,
+                    max_gap: 0,
+                }));
             }
+            Stage::Audio(a) => match audio_frame(a, host, started) {
+                Ok(false) => {}
+                Ok(true) => self.stage = Stage::Demos,
+                Err(e) => self.fail(e),
+            },
             Stage::Demos => {
                 host.platform.log("TRINO_STEP:showcase demo\n");
                 let screen = Vec2::new(GOLDEN.0 as f32, GOLDEN.1 as f32);
@@ -278,6 +327,7 @@ impl Run {
             }
             Stage::Done => {
                 js::log(&host.meter.line("selftest"));
+                js::log(&host.audio_line());
                 match self.failed.take() {
                     None => {
                         js::log("TRINO_TEST_PASS");
@@ -290,6 +340,80 @@ impl Run {
         }
         host.end_frame();
         Flow::Continue
+    }
+}
+
+/// One frame of `audio codecs`; `Ok(true)` when it is through (or skipped
+/// on a browser without Web Audio).
+fn audio_frame(a: &mut AudioRun, host: &mut WebHost, now_us: u64) -> Result<bool, String> {
+    if !host.audio.has_web_audio() {
+        js::log("TRINO_STEP:audio codecs skipped: no Web Audio in this browser (silent backend)");
+        return Ok(true);
+    }
+    if !host.audio.running() {
+        let since = *a.waiting_since.get_or_insert_with(|| {
+            js::log(&format!(
+                "TRINO_STEP:audio codecs waits for the audio context ({})",
+                host.audio.state()
+            ));
+            now_us
+        });
+        if now_us - since > AUDIO_WAIT_US {
+            return Err(format!(
+                "audio codecs: the audio context never ran ({} after {} s): no audio \
+                 output, or no gesture reached the page",
+                host.audio.state(),
+                AUDIO_WAIT_US / 1_000_000
+            ));
+        }
+        return Ok(false);
+    }
+    let gap = now_us.saturating_sub(a.last);
+    a.last = now_us;
+    if a.started.is_none() {
+        a.smooth = if gap < SMOOTH_GAP_US { a.smooth + 1 } else { 0 };
+        let since = *a.waiting_since.get_or_insert(now_us);
+        if a.smooth < SMOOTH_FRAMES && now_us - since < AUDIO_WAIT_US {
+            return Ok(false);
+        }
+        if a.smooth < SMOOTH_FRAMES {
+            js::log("TRINO_STEP:audio codecs starts on uneven frames (they never settled)");
+        }
+        a.started = Some(now_us);
+    } else {
+        a.max_gap = a.max_gap.max(gap);
+    }
+    a.frames += 1;
+    let timing = |a: &AudioRun, host: &WebHost| {
+        format!(
+            "{} frames in {} ms (longest gap {} ms), audio clock {:.3} s",
+            a.frames,
+            (now_us - a.started.unwrap_or(now_us)) / 1000,
+            a.max_gap / 1000,
+            host.audio.current_time()
+        )
+    };
+    match a.step.step(&mut host.audio) {
+        Ok(false) => Ok(false),
+        Ok(true) => {
+            let s = a.step.streamed;
+            js::log(&host.audio_line());
+            js::log(&format!(
+                "TRINO_STEP:audio codecs ok, {}: rate={} streamed_frames={} \
+                 stream_bytes={} resident_bytes={} underruns={}",
+                timing(a, host),
+                host.audio.sample_rate(),
+                s.streamed_frames,
+                s.stream_bytes,
+                s.resident_bytes,
+                s.underruns
+            ));
+            Ok(true)
+        }
+        Err(e) => {
+            js::log(&host.audio_line());
+            Err(format!("{e} ({})", timing(a, host)))
+        }
     }
 }
 

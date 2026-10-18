@@ -537,8 +537,8 @@ overlay, and a measurement on real hardware (ares doesn't time the RDP).
     (the PC's bindings), mouse + Pointer Lock, touch, standard-mapping gamepads; Web Audio
     with the autoplay unlock (banner until a gesture) and a silent fallback;
     `ResizeObserver` + `devicePixelRatio`; fullscreen.
-  - **Assets:** one pack per game (`assets/<game>.pak`, `TPAK`): KTX2 sprites, 16-bit
-    sounds. `Platform::Web` follows the PC where it has no choice of its own (overrides,
+  - **Assets:** one pack per game (`assets/<game>.pak`, `TPAK` v2): KTX2 sprites, `TSN2`
+    sounds (Vorbis, #53) and the project mix. `Platform::Web` follows the PC where it has no choice of its own (overrides,
     model `platforms`, scene/prefab/particle variants: scenes v4, prefabs v3, particles v2).
   - **`apps/web`:** castle64, showcase or Solid Eleven by `?game=`; `?selftest` runs the
     consoles' self-test in the browser (engine checks, KTX2, the demos' bots, Solid
@@ -552,6 +552,34 @@ overlay, and a measurement on real hardware (ares doesn't time the RDP).
     budget lines (`WebCalls`, measured calls and pipeline switches), Run in Browser and
     Export Web Package.
   - **CI:** one `web` job: Chromium (WebGL2 + WebGPU), Firefox and WebKit from one build.
+- **Audio pipeline (2026-10-18, ADR 0020, GitHub #53):** one WAV master, a codec per
+  platform, streaming, buses.
+  - **Codecs (`asset_pipeline::audio`, one `encode()` for every bake, CLI and the
+    editor):** N64 VADPCM by Trino's own encoder (`audio/vadpcm.rs`, bit-exact with
+    libdragon's RSP decoder; replaces `audioconv64`'s, which clipped castle64's theme to
+    7.6 dB SNR — 30.8 dB now) or opt-in Opus (`audioconv64`, links libopus only when an
+    asset asks); 3DS DSP-ADPCM (`audio/dspadpcm.rs`, `T3AU` container); PC and Web Ogg
+    Vorbis (libvorbis in the bake, lewton at run time, ≡ libvorbis to > 100 dB). PCM16
+    everywhere as `codec = "pcm"`. Manifest keys `codec`, `quality`, `stream`,
+    `sample_rate`, `bus`.
+  - **Streaming:** PC worker thread + lock-free half-second ring (10-minute track: 317 KB
+    heap growth instead of 115 MB); Web 8192-sample chunks scheduled ≤ 1 s ahead; 3DS
+    three RomFS chunk buffers refilled by an audio thread (New 3DS core 2); N64 every
+    wav64 from the cartridge. Loops are sample-exact everywhere.
+  - **Buses (`trino_core::{Bus, BusMixer, DuckRule, MixerConfig, BusSettings}`):**
+    master × bus × duck, mutes, linear duck ramps, ≤ 8 rules; `Audio::set_bus_volume`
+    etc. have defaults that map `Master`/`Music` onto the old calls. `assets/audio.toml`
+    → `TMIX` (`audio/mixer`) sets the project mix; players' volumes persist in
+    `<save_name>.audio` (PC), `localStorage` (Web) or `BusSettings::to_bytes()` (4 bytes,
+    consoles' saves).
+  - **Measured:** `N64_COST.audio_us` (ares, 8 layouts: 504 µs/frame idle, +260 µs per
+    44.1 kHz VADPCM voice, ~4.6 ms Opus); `AudioStats` on every backend; the self-test
+    step `audio codecs` on PC, ares, Azahar and the four browser runs.
+  - **Tools:** `cargo xtask audio inspect|report|preview|mix [--json]`; the editor's
+    Assets › Audio inspector, Mixer tab and audio budget lines.
+  - **Found on the way:** 3DS audio never played in Azahar (ndsp had no DSP firmware;
+    the shim now feeds a placeholder on Citra/Azahar), and N64 ignored `looped` (a
+    one-shot water sound looped forever).
 - **Console hardware paths and N64 timing (2026-10-16, ADR 0012, part of #31):**
   the 3DS transforms and lights static meshes on the PICA200 (`render3d::gpu_check`,
   `tnl3d.v.pica`, `gpu tnl` self-test step, `castle64_work_3ds.toml`); text goes to the
@@ -737,6 +765,10 @@ cargo xtask scene budget <scene.ron> [--platform pc|n64|3ds] [--json]   # per-co
 cargo xtask model inspect <file> [--json]       # bake a model like the engine; art gate
 cargo xtask texture inspect <sprites/x> [--platform pc|n64|3ds] [--json]   # format (auto: why), candidates, bytes, PSNR, memory share
 cargo xtask texture report [--platform pc|n64|3ds] [--json]                # every texture, biggest first, totals vs RGBA8
+cargo xtask audio inspect <sounds/x|music/x> [--platform pc|n64|3ds|web] [--json]  # codec (auto: why), bytes vs PCM16, SNR, RAM, decoder, N64 µs/frame
+cargo xtask audio report [--platform ...] [--json]                          # every sound, biggest first, totals per platform
+cargo xtask audio preview <sounds/x|music/x> [--out dir] [--json]           # the master + each platform's decode as WAVs (target/audio-preview)
+cargo xtask audio mix [--json]                                              # validate and print assets/audio.toml
 cargo xtask model inspect <file> --anim [--json]                                   # + per-clip stride, slide, floor, bounds
 cargo xtask model pose <models/x> [--clip C --time S] --name <new>                 # a pose as a static model (consoles)
 cargo xtask particles new <name> --sprite sprites/x | check | inspect <name> [--json]   # particle effects as text
@@ -1099,6 +1131,29 @@ cargo test --workspace
   one, `about:blank` is not (`navigator.gpu` missing).
 - **Playwright's WebKit on Windows has no Web Audio.** `WebAudio` runs silent there and keeps
   voices and stingers on the page clock, so `audio_checks` still pass.
+- **Audio (#53):**
+  - N64 VADPCM loops must be whole 16-sample blocks or `wav64_open` asserts; the bake pads
+    one-shots and trims loops (`audio::n64_pcm`). Any new N64 audio path must do the same.
+    Don't route VADPCM back through `audioconv64`: its encoder clips loud masters.
+  - libdragon's `mixer_ch_play` keeps a channel's loop length while the same waveform
+    replays there; `trino_wav_play_body` plays an empty waveform first when the loop flag
+    changes. Don't remove it.
+  - N64 Opus wav64 is always 48 kHz, above the mixer's default 44.1 kHz channel limit
+    (asserts), and needs `wav64_init_compression(3)` before `wav64_open`: both live in
+    `trino_opus.c`, linked only when the bake writes `target/n64/opus`.
+  - castle64's perf scenes time update + render; `audio.poll()` is outside them. The
+    audio cost comes from the `audio cost` step's `TRINO_AUDIO_COST:` lines.
+  - 3DS ndsp needs the DSP firmware (`sdmc:/3ds/dspfirm.cdc` or `hb:ndsp`); without it
+    every ndsp call is a silent no-op. Assert playback progress (finished one-shots,
+    streamed samples), never that a buffer was queued. `ndspChnIsPlaying` stays true after
+    a channel's last buffer: use the wave buffer status. DSP-ADPCM wave buffers need
+    `adpcm_data` on every buffer, loops and chunk seams included, or the history clicks.
+  - lewton doesn't trim the last Ogg page's padding: cut the decode at the blob's frame
+    count (`vorbis::last_granule`), or loops gain a gap.
+  - Vorbis's waveform SNR understates it (it spends bits by audibility): q6 measures
+    27–41 dB on the fixtures. Listen with `audio preview` before raising quality.
+  - Self-test audio checks must not count frames as time: a slow frame outlasts a 0.15 s
+    beep (the browsers' first frames after GPU-heavy steps).
 - **`/tmp` may be a RAM disk (tmpfs).** A second `target/` there (a git worktree's build)
   filled RAM and killed rustc. Put extra worktrees and their targets on a real disk.
 

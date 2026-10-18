@@ -189,8 +189,9 @@ fn settings(
     });
 }
 
-/// One row: a label, then a cell per platform.
-fn row(
+/// One row: a label, then a cell per platform (the audio inspector's grid
+/// too).
+pub(crate) fn row(
     ui: &mut egui::Ui,
     title: &str,
     widths: (f32, f32, usize),
@@ -220,7 +221,7 @@ fn row(
     });
 }
 
-fn small(ui: &mut egui::Ui, text: impl Into<String>, color: Color32) -> egui::Response {
+pub(crate) fn small(ui: &mut egui::Ui, text: impl Into<String>, color: Color32) -> egui::Response {
     ui.add(egui::Label::new(RichText::new(text).size(12.0).color(color)).truncate())
 }
 

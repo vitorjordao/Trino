@@ -46,8 +46,11 @@ shipping a 3D game first**, then by cost:
 ### P1 — the next quality and reach jump
 
 - **Web target follow-ups (#47, ADR 0019)** (S–M each).
-  - Opus/Vorbis sounds in the packs (#53): Solid Eleven's pack is 3.07 MB, mostly
-    16-bit PCM.
+  - ~~Opus/Vorbis sounds in the packs (#53)~~: **done** (ADR 0020): Vorbis `TSN2` in
+    pack v2; Solid Eleven's pack 3.07 → 2.18 MB (gzip 1.09 → 0.50 MB).
+  - Web audio in an AudioWorklet (#53 follow-up): streams schedule chunks 1 s ahead on
+    the main thread, so a hidden tab runs dry after 1 s. A worklet needs a second wasm
+    instance and a `SharedArrayBuffer` ring (COOP/COEP).
   - Lazy asset bundles (#56): the page downloads every pack before the first frame.
   - `wasm-opt` on the release wasm (~4.5 MB before compression), and wasm threads
     (they need COOP/COEP from the host).
@@ -145,7 +148,13 @@ shipping a 3D game first**, then by cost:
     - Play here.
 11. **Scene streaming** (M). Load and unload TSCN chunks by portal cell or distance, for
     levels larger than RDRAM.
-12. **Audio**: Doppler and occlusion through portals, only if a game needs them.
+12. **Audio**: Doppler and occlusion through portals, only if a game needs them. From
+    #53 (ADR 0020 follow-ups): tracker music (XM/MOD; libdragon's `xm64`) on every target;
+    Opus on the PC and the Web; stereo masters (mono today, stereo averaged); captions
+    per bus (#60); the 3DS audio thread's core decided with the CPU budgets of #54/#56;
+    a real-hardware listen on the N64 and the 3DS (ares and Azahar only so far); `auto`
+    picking PCM16 on the PC/Web when Vorbis is bigger (Ogg's ~4 KB of headers make a
+    0.05 s click 2× its PCM16 size — Solid Eleven's `se_click`).
 13. **Palette in authored content** (S). `ModelParams::palette` is code-only today.
     Expose it in materials (`*.material.ron`), scene entities, TSCN (version bump),
     scene codegen and the editor inspector.
@@ -195,6 +204,38 @@ shipping a 3D game first**, then by cost:
   time) and bless `tests/perf/` on purpose. Host benches stay as regression guards only.
 
 ---
+
+## Done — audio pipeline: a codec per platform, streaming, buses and ducking (2026-10-18, branch `feat/53-audio-pipeline`, GitHub #53, ADR 0020)
+
+| Item | Evidence |
+|---|---|
+| Codecs per platform from one master, `auto` + manifest overrides (`codec`, `quality`, `stream`, `sample_rate`, `bus`): N64 VADPCM (Trino's encoder) / Opus, 3DS DSP-ADPCM, PC/Web Vorbis, PCM16 everywhere | `audio_codecs` (SNR floors on four fixtures), `vadpcm_decodes_like_libdragon`, `lewton_matches_libvorbis`, `n64::audio_bakes_to_wav64_per_codec_with_whole_block_loops`, `n3ds::sounds_bake_to_t3au_with_the_manifests_codec` |
+| Formats: `TSN2` (PC/Web, `TSND` migrates), `T3AU` (3DS), `wav64` written by the engine (N64), `TMIX` (the mix), Web `TPAK` v2 | `sound_blobs_round_trip_and_reject_damage`, `mixer_config_round_trips_and_rejects_damage`, `version_1_sounds_migrate_to_tsn2`, `written_wav64s_round_trip` |
+| Streaming on every target, sample-exact loops | `a_ten_minute_stream_plays_with_bounded_ram` (317 KB heap growth vs 115 MB), `streamed_vorbis_loops_without_a_gap`, Web `vorbis_decodes_like_the_pc_whole_and_in_stream_chunks`; ares/Azahar/browsers: `TRINO_AUDIO: … underruns=0` |
+| Buses, mutes, duck rules in the core (`BusMixer`), mixed by every backend; the project mix (`assets/audio.toml`); the player's volumes persisted (PC file, Web `localStorage`, 4-byte `BusSettings` for console saves) | `audio_buses.rs` (4 tests), `bus_volumes_persist_per_game`, `settings_pack_into_four_bytes`; the `audio codecs` self-test step on PC, ares, Azahar (New and Old 3DS) and four browser runs |
+| Measured N64 cost: `N64_COST.audio_us` (504 µs/frame idle, +260 µs per 44.1 kHz VADPCM voice, ~4.6 ms Opus; 8 layouts) | `audio_estimates_match_the_measured_cases`; ares `TRINO_AUDIO_COST:` lines |
+| `cargo xtask audio inspect\|report\|preview\|mix` (`--json`) | `xtask/tests/audio_cli.rs` (5 tests) |
+| Editor: Assets › Audio inspector (per-platform codec/rate, SNR, memory, waveform + noise, preview player), Mixer tab, audio budget lines + HUD | `ui_tests::audio_inspector_and_mixer_write_the_text_files`, the layout audit, `editor/src/audio.rs` tests |
+
+Sizes (castle64's 9 original sounds; Solid Eleven's 10):
+
+| | Before (main) | After | |
+|---|---|---|---|
+| PC, castle64 | 1 355 740 B (f32) | 153 893 B (Vorbis) | −88.6% |
+| PC, Solid Eleven | 2 288 904 B | 252 619 B | −89.0% |
+| Web pack audio, castle64 / Solid Eleven | 677 924 / 1 144 512 B | 153 893 / 252 619 B | −77% / −78% |
+| 3DS RomFS, castle64 / Solid Eleven | 677 924 / 1 144 512 B | 194 316 / 327 856 B | −71% each |
+| 3DS linear memory at boot, castle64 / Solid Eleven | 677 816 / 1 144 392 B | ~96 478 / 62 588 B (+24 576 per playing stream) | −86% / −95% |
+| N64 ROM audio, castle64 | 192 708 B (VADPCM, 7.6 dB on the theme) | 192 708 B (VADPCM, 30.8 dB) | same bytes, +23 dB |
+
+Found and fixed on the way: 3DS audio never played in Azahar (ndsp had no DSP firmware;
+the old `audio_checks` only checked a buffer was queued), and the N64 ignored `looped`.
+
+Deviations (ADR 0020): Vorbis q6 measures 27–41 dB of waveform SNR on the fixtures (the
+test floor is 26 dB at q6, 29.5 at q8); the Web plays Vorbis, not Opus; N64 Opus is
+opt-in and only decodes on the console; mono only; `BusSettings` is 4 bytes, not 2; the
+N64 castle64 ROM grows 1 376 256 → 1 507 328 B (libopus for the self-test's Opus track
+and three self-test sounds).
 
 ## Done — the Web target: WebGPU with a WebGL2 fallback, KTX2 textures, browser CI (2026-10-18, branch `feat/47-web-target`, GitHub #47 and #52 phase 5, ADR 0019)
 

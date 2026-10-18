@@ -26,10 +26,12 @@ formats = { n64 = "RGBA5551" }
 
 [sounds.beep]
 file = "sounds/beep.wav"
+codec = "pcm"
 
 [sounds.hum]
 file = "sounds/hum.wav"
 loop = true
+codec = { pc = "pcm" }
 
 [music.theme]
 file = "music/theme.wav"
@@ -173,8 +175,8 @@ fn every_asset_kind_bakes_indexes_and_loads_on_pc() {
     assert_eq!(
         formats,
         [
-            "RGBA8", "RGBA8", "F32_MONO", "F32_MONO", "F32_MONO", "F32_MONO", "TMDL", "TMDL",
-            "RGBA8", "TFNT", "RAW", "TSCN"
+            "RGBA8", "RGBA8", "PCM", "PCM", "VORBIS", "VORBIS", "TMDL", "TMDL", "RGBA8", "TFNT",
+            "RAW", "TSCN"
         ]
     );
     let index = std::fs::read_to_string(out.join("index.toml")).unwrap();
@@ -201,7 +203,8 @@ fn every_asset_kind_bakes_indexes_and_loads_on_pc() {
     assert_eq!((hero.width, hero.height), (4, 2));
     assert_eq!(&hero.rgba[4..8], &[60, 0, 0, 255]);
 
-    // Sounds vs music land in separate registries; stereo is averaged.
+    // Sounds vs music land in separate registries; stereo is averaged. The
+    // sounds asked for PCM (exact); music took the PC's default, Vorbis.
     assert_eq!(loaded.sounds.len(), 2);
     assert_eq!(loaded.music.len(), 2);
     let beep = loaded
@@ -209,22 +212,30 @@ fn every_asset_kind_bakes_indexes_and_loads_on_pc() {
         .iter()
         .find(|s| s.logical == "sounds/beep")
         .unwrap();
-    assert_eq!((beep.sample_rate, beep.samples.len()), (22_050, 8));
-    assert!((beep.samples[0] - 0.5).abs() < 1e-4);
+    let samples = beep.samples().unwrap();
+    assert_eq!((beep.sample_rate, samples.len()), (22_050, 8));
+    assert!((samples[0] - 0.5).abs() < 1e-4);
     let hum = loaded
         .sounds
         .iter()
         .find(|s| s.logical == "sounds/hum")
         .unwrap();
     assert_eq!(hum.sample_rate, 11_025);
-    assert_eq!(hum.samples, [0.375, -0.5]);
+    let samples = hum.samples().unwrap();
+    assert!(
+        (samples[0] - 0.375).abs() < 1e-4 && (samples[1] + 0.5).abs() < 1e-4,
+        "{samples:?}"
+    );
     let theme = loaded
         .music
         .iter()
         .find(|m| m.id == asset_id("music/theme"))
         .unwrap();
     assert_eq!(theme.sample_rate, 32_000);
-    assert!((theme.samples[0] + 0.25).abs() < 1e-4);
+    let blob = trino_core::SoundBlob::parse(&theme.blob).unwrap();
+    assert_eq!(blob.codec, trino_core::SoundCodec::Vorbis);
+    assert!(blob.stream, "music streams by default");
+    assert_eq!(theme.samples().unwrap().len(), 2);
 
     // Models: valid TMDL; the textured fake object keeps UVs and its
     // default texture (TXUV + TXID).
@@ -656,6 +667,13 @@ fn the_loader_rejects_corrupt_baked_output() {
     sound.extend_from_slice(&[0; 4]);
     check("sound", b"TSPR00000000", "bad sound blob");
     check("music", &sound, "truncated sound data");
+    // A v2 blob whose payload is shorter than its header says.
+    let mut tsn2 = b"TSN2\x00\x01\x00\x01".to_vec();
+    for v in [22_050u32, 4, 8] {
+        tsn2.extend_from_slice(&v.to_le_bytes());
+    }
+    tsn2.extend_from_slice(&[0; 6]);
+    check("sound", &tsn2, "bad payload length");
     check("model", b"GLTF", "bad model blob");
     check("font", b"TFNT\x02\x00", "bad font table");
     check("texture", b"", "unknown asset kind `texture`");

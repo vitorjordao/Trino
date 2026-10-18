@@ -492,11 +492,28 @@ fn click(h: &mut Harness<'static, App>, label: &str) {
         };
         all.into_iter()
             .find(|w| (w.rect.min - rect.min).length() < 0.5)
-            .unwrap_or(crate::layout_audit::Widget {
-                role: eframe::egui::accesskit::Role::Unknown,
-                label: label.into(),
-                rect,
-                visible: eframe::egui::Rect::NOTHING,
+            .unwrap_or_else(|| {
+                // Not an audited leaf (a clickable label has a text run
+                // child): its clipped rect from egui's own widget list.
+                let visible = h.ctx.viewport(|v| {
+                    v.this_pass
+                        .widgets
+                        .layers()
+                        .flat_map(|(_, ws)| ws.iter())
+                        .find(|w| {
+                            (w.rect.min - rect.min).length() < 0.5
+                                && (w.rect.max - rect.max).length() < 0.5
+                        })
+                        .map_or(eframe::egui::Rect::NOTHING, |w| {
+                            rect.intersect(w.interact_rect)
+                        })
+                });
+                crate::layout_audit::Widget {
+                    role: eframe::egui::accesskit::Role::Unknown,
+                    label: label.into(),
+                    rect,
+                    visible,
+                }
             })
     };
     let screen = h.ctx.content_rect();
@@ -783,6 +800,24 @@ fn editor_layout_is_clean_at_minimum_and_default_sizes() {
                 .is_some_and(|(_, i, _)| i.logical == photo && i.settings.min_psnr == Some(40.0))
         });
         crate::layout_audit::assert_clean(&h, size, true, &what("texture inspector"));
+        // The audio inspector, measured, its platforms scrolled into view;
+        // then the Mixer tab.
+        h.state_mut().inspect_focus = Some("audio".into());
+        h.state_mut()
+            .cmds
+            .push(Cmd::SelectAsset(crate::app::AssetSel::Audio(
+                "music/theme".into(),
+            )));
+        wait_for(&mut h, "the audio inspector", |a| {
+            a.audio
+                .current
+                .as_ref()
+                .is_some_and(|(_, i)| i.logical == "music/theme")
+        });
+        crate::layout_audit::assert_clean(&h, size, true, &what("audio inspector"));
+        h.state_mut().cmds.push(Cmd::FocusTab(Tab::Mixer));
+        h.run_steps(3);
+        crate::layout_audit::assert_clean(&h, size, true, &what("Mixer tab"));
         leave_temp_project(&repo);
     }
 }
@@ -1159,6 +1194,7 @@ fn platform_budget_shows_rsp_reasons_and_unseen_draws() {
         );
         assert_eq!(after[0].draws, b[0].draws + 1);
         // Its line in the Inspector selects it.
+
         click(&mut h, "unseen: lost-rock");
         h.run_steps(2);
         let lost = find(&h.state().doc.scene, "lost-rock");
@@ -1911,5 +1947,217 @@ fn texture_inspector_formats_quality_and_errors() {
     assert!(h.query_by_label_contains("Textures PC").is_some());
     assert!(h.query_by_label_contains("Textures 3DS").is_some());
     assert!(h.query_by_label_contains("N64 largest TMEM load").is_some());
+    leave_temp_project(&repo);
+}
+
+/// Press the widget with `role` and `label` (exactly, else the one whose
+/// label contains it: icon glyphs prefix button texts) through
+/// accessibility: no pointer, so a widget scrolled out of view, or one
+/// sharing its label with its row's caption ("Stream" the label and the
+/// checkbox), works.
+fn press(h: &mut Harness<'static, App>, role: egui::accesskit::Role, label: &str) {
+    use egui_kittest::kittest::By;
+    match h.query_by_role_and_label(role, label) {
+        Some(n) => n.click_accesskit(),
+        None => h
+            .get(By::new().role(role).label_contains(label))
+            .click_accesskit(),
+    }
+    h.run_steps(3);
+}
+
+/// Pick `item` in the combo labeled `combo`, then close its list.
+fn pick(h: &mut Harness<'static, App>, combo: &str, item: &str) {
+    use egui::accesskit::Role;
+    press(h, Role::ComboBox, combo);
+    press(h, Role::Button, item);
+    egui::Popup::close_all(&h.ctx);
+    h.run_steps(3);
+}
+
+/// Set a slider's or a drag value's number, as a screen reader does.
+fn set_value(h: &mut Harness<'static, App>, label: &str, value: f64) {
+    use egui::accesskit::{Action, ActionData, ActionRequest};
+    use egui_kittest::kittest::NodeT;
+    let (target_node, target_tree) = h.get_by_label(label).accesskit_node().locate();
+    h.event(egui::Event::AccessKitActionRequest(ActionRequest {
+        action: Action::SetValue,
+        target_node,
+        target_tree,
+        data: Some(ActionData::NumericValue(value)),
+    }));
+    h.run_steps(3);
+}
+
+/// Assets › Audio and the Mixer tab (#53), both ways: the inspector
+/// measures the theme on every platform; its combos and checkboxes write
+/// the manifest (comments kept) and the columns follow; Play decodes on
+/// the PC's output; a bus slider and duck-rule edits write
+/// `assets/audio.toml`, which parses; the file edited outside shows up,
+/// an invalid one is an error, not a crash; the budget gets audio lines.
+#[test]
+#[ignore = "changes cwd/env: run alone with --ignored --test-threads=1"]
+fn audio_inspector_and_mixer_write_the_text_files() {
+    use crate::app::{AssetSel, Cmd, Tab};
+    use egui::accesskit::Role;
+    use trino_asset_pipeline::Platform;
+    use trino_asset_pipeline::audio::{Codec, MixFile};
+    use trino_core::Bus;
+    let Some((mut h, _tmp, repo)) = temp_project_app(egui::vec2(1600.0, 1000.0)) else {
+        return;
+    };
+    const THEME: &str = "music/theme";
+    const TABLE: &str = "[music.theme]";
+    let n64 = |app: &App| {
+        let (_, insp) = app.audio.current.as_ref()?;
+        let col = insp.columns.iter().find(|c| c.platform == Platform::N64)?;
+        col.result.as_ref().ok().map(|m| (m.settings.codec, m.rate))
+    };
+    h.state_mut()
+        .cmds
+        .push(Cmd::SelectAsset(AssetSel::Audio(THEME.into())));
+    wait_for(&mut h, "the first measurement", |a| n64(a).is_some());
+    assert_eq!(n64(h.state()).unwrap().0, Codec::Vadpcm, "auto on the N64");
+    for label in ["Waveform", "Bake settings", "Platforms", "Play master"] {
+        assert!(h.query_by_label_contains(label).is_some(), "{label}");
+    }
+    for p in ["PC", "N64", "3DS", "Web"] {
+        assert!(
+            h.query_by_role_and_label(Role::ComboBox, &format!("{p} codec"))
+                .is_some(),
+            "a codec combo per platform ({p})"
+        );
+    }
+
+    // N64 codec: PCM from its combo; the other platforms keep auto.
+    pick(&mut h, "N64 codec", "pcm");
+    let text = std::fs::read_to_string("assets/manifest.toml").unwrap();
+    let table = manifest_table(&text, TABLE);
+    assert!(table.contains(r#"codec = { n64 = "pcm" }"#), "{table}");
+    assert!(
+        text.contains("# Music streams by default"),
+        "comments kept: {text}"
+    );
+    wait_for(&mut h, "the N64 column to follow", |a| {
+        n64(a).is_some_and(|(c, _)| c == Codec::Pcm)
+    });
+    // N64 rate: 16 kHz.
+    pick(&mut h, "N64 rate", "16.0 kHz");
+    let text = std::fs::read_to_string("assets/manifest.toml").unwrap();
+    let table = manifest_table(&text, TABLE);
+    assert!(table.contains("sample_rate = { n64 = 16000 }"), "{table}");
+    wait_for(&mut h, "the N64 rate to follow", |a| {
+        n64(a) == Some((Codec::Pcm, 16_000))
+    });
+    // Stream off (music streams by default), then the bus.
+    press(&mut h, Role::CheckBox, "Stream");
+    let text = std::fs::read_to_string("assets/manifest.toml").unwrap();
+    assert!(
+        manifest_table(&text, TABLE).contains("stream = false"),
+        "{text}"
+    );
+    pick(&mut h, "Bus", "ambience");
+    let text = std::fs::read_to_string("assets/manifest.toml").unwrap();
+    assert!(
+        manifest_table(&text, TABLE).contains(r#"bus = "ambience""#),
+        "{text}"
+    );
+    wait_for(&mut h, "the settings to apply", |a| {
+        a.audio
+            .current
+            .as_ref()
+            .is_some_and(|(_, i)| i.stream == Some(false) && i.bus.as_deref() == Some("ambience"))
+    });
+
+    // Play the N64's decode on the PC's output (silent without a device),
+    // then stop it.
+    press(&mut h, Role::Button, "Play N64");
+    let playing = |h: &mut Harness<'static, App>| {
+        h.state_mut()
+            .audio
+            .player
+            .as_mut()
+            .and_then(|p| p.playing().cloned())
+    };
+    assert_eq!(
+        playing(&mut h),
+        Some((THEME.to_string(), Some(Platform::N64)))
+    );
+    press(&mut h, Role::Button, "Stop");
+    assert_eq!(playing(&mut h), None);
+
+    // The Mixer: a bus slider, a duck rule added, edited and another removed.
+    let mix = || MixFile::parse(&std::fs::read_to_string("assets/audio.toml").unwrap()).unwrap();
+    h.state_mut().cmds.push(Cmd::FocusTab(Tab::Mixer));
+    h.run_steps(3);
+    assert!(h.query_by_label_contains("Project mix").is_some());
+    set_value(&mut h, "music volume", 50.0);
+    wait_for(&mut h, "the mix to be written", |a| !a.mixer.dirty);
+    assert_eq!(mix().buses.get("music"), Some(&0.5));
+    assert_eq!(mix().buses.get("ambience"), Some(&0.9), "the rest kept");
+    press(&mut h, Role::Button, "Add duck rule");
+    let rules = |m: &MixFile| -> Vec<(String, String, f32)> {
+        m.duck
+            .iter()
+            .map(|d| (d.trigger.clone(), d.target.clone(), d.level))
+            .collect()
+    };
+    assert_eq!(
+        rules(&h.state().mixer.file)[1],
+        ("voice".into(), "ambience".into(), 0.4),
+        "a new rule takes a free pair"
+    );
+    pick(&mut h, "Duck 2 target", "sfx");
+    set_value(&mut h, "Duck 2 level", 25.0);
+    press(&mut h, Role::Button, "Remove duck 1");
+    wait_for(&mut h, "the duck rules to be written", |a| !a.mixer.dirty);
+    assert_eq!(
+        rules(&mix()),
+        vec![("voice".into(), "sfx".into(), 0.25)],
+        "{}",
+        std::fs::read_to_string("assets/audio.toml").unwrap()
+    );
+    assert!(h.state().mixer.error.is_none());
+
+    // Edited outside: the tab follows; an invalid mix is shown, not loaded.
+    std::fs::write("assets/audio.toml", "version = 1\n\n[buses]\nmusic = 0.3\n").unwrap();
+    wait_for(&mut h, "the outside edit", |a| {
+        a.mixer.volume(Bus::Music) == 0.3
+    });
+    assert!(h.state().mixer.file.duck.is_empty());
+    // Shown, not written back (a slider rounding what it shows once read
+    // as an edit every frame, and the editor rewrote the file).
+    h.run_steps(20);
+    assert_eq!(
+        std::fs::read_to_string("assets/audio.toml").unwrap(),
+        "version = 1\n\n[buses]\nmusic = 0.3\n"
+    );
+    std::fs::write("assets/audio.toml", "version = 1\n\n[buses]\nradio = 0.5\n").unwrap();
+    wait_for(&mut h, "the invalid mix", |a| a.mixer.error.is_some());
+    let e = h.state().mixer.error.clone().unwrap();
+    assert!(e.contains("unknown bus `radio`"), "{e}");
+    assert_eq!(h.state().mixer.volume(Bus::Music), 0.3, "the last good mix");
+    assert!(
+        h.query_all_by_label_contains("unknown bus `radio`")
+            .next()
+            .is_some(),
+        "shown in the tab"
+    );
+
+    // The budget: the Game view's HUD and the scene settings' lines.
+    h.state_mut().cmds.push(Cmd::FocusTab(Tab::Game));
+    h.run_steps(3);
+    wait_for(&mut h, "the audio totals", |a| a.audio.totals.is_some());
+    let (_, totals) = h.state().audio.totals.as_ref().unwrap();
+    assert!(totals.sounds >= 10, "{}", totals.sounds);
+    h.state_mut().cmds.push(Cmd::Select(None));
+    h.state_mut().asset_sel = None;
+    h.run_steps(4);
+    for p in ["PC", "N64", "3DS", "Web"] {
+        assert!(
+            h.query_by_label_contains(&format!("Audio {p}")).is_some(),
+            "the {p} budget line"
+        );
+    }
     leave_temp_project(&repo);
 }

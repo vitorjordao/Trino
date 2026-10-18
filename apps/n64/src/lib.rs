@@ -276,6 +276,89 @@ mod n64 {
         renderer.dump_framebuffer();
     }
 
+    /// One empty frame: the audio polled, a vblank passes.
+    fn audio_frame(renderer: &mut N64Renderer, audio: &mut N64Audio) {
+        audio.poll();
+        trino_core::Renderer::begin_frame(renderer, trino_core::Color::BLACK);
+        trino_core::Renderer::end_frame(renderer);
+    }
+
+    /// Step `audio codecs` (issue #53): each codec plays and finishes, the
+    /// stream delivers with no underrun, a duck rule ramps (castle64's
+    /// `AudioCodecs`), then the counters as `TRINO_AUDIO:`.
+    #[inline(never)]
+    fn audio_codecs(renderer: &mut N64Renderer, audio: &mut N64Audio) {
+        runtime::log("TRINO_STEP:audio codecs\n");
+        match castle64::selftest::audio_codecs(audio, |a| audio_frame(renderer, a)) {
+            Ok(s) => runtime::log(&format!(
+                "TRINO_AUDIO: voices={} streams={} resident_bytes={} stream_bytes={} \
+                 underruns={} streamed_frames={}\n",
+                s.voices,
+                s.streams,
+                s.resident_bytes,
+                s.stream_bytes,
+                s.underruns,
+                s.streamed_frames
+            )),
+            Err(e) => {
+                runtime::log(&format!("TRINO_TEST_FAIL:audio codecs: {e}\n"));
+                loop {
+                    trino_core::Renderer::begin_frame(renderer, trino_core::Color::BLACK);
+                    trino_core::Renderer::end_frame(renderer);
+                }
+            }
+        }
+    }
+
+    /// The audio's cost on the console's clock (issue #53, the audio terms
+    /// of `N64_COST`): `poll` timed with nothing playing, the theme
+    /// (VADPCM, 44.1 kHz) alone, with two more VADPCM loops (22.05 kHz), and
+    /// the Opus track; per second of output, so the frame rate drops out.
+    /// Reported as `TRINO_AUDIO_COST:`, never gated.
+    #[inline(never)]
+    fn audio_cost(renderer: &mut N64Renderer, audio: &mut N64Audio) {
+        use castle64::selftest::{AUDIO_OPUS, AUDIO_STREAM, WATER};
+        use trino_core::{Audio, SoundId, SoundParams};
+        const FLOW: SoundId = SoundId::from_path("sounds/river_flow");
+        const WARM: u32 = 8;
+        const FRAMES: u32 = 60;
+        runtime::log("TRINO_STEP:audio cost\n");
+        let mut measure = |name: &str, audio: &mut N64Audio, frames: u32| {
+            for _ in 0..WARM {
+                audio_frame(renderer, audio);
+            }
+            let c0 = audio.cost();
+            for _ in 0..frames {
+                audio_frame(renderer, audio);
+            }
+            let c1 = audio.cost();
+            let samples = c1.samples().saturating_sub(c0.samples()).max(1);
+            let per_s = |us: u32| us as u64 * c1.rate as u64 / samples;
+            runtime::log(&format!(
+                "TRINO_AUDIO_COST:{name} us_per_s={} rsp_us_per_s={} voices={} buffers={}\n",
+                per_s(c1.poll_us.wrapping_sub(c0.poll_us)),
+                per_s(c1.rsp_us.wrapping_sub(c0.rsp_us)),
+                audio.audio_stats().voices,
+                c1.buffers.wrapping_sub(c0.buffers)
+            ));
+        };
+        audio.stop_music();
+        measure("idle", audio, FRAMES);
+        audio.play_music(AUDIO_STREAM, true);
+        measure("vadpcm-1", audio, FRAMES);
+        let a = audio.play_voice(WATER, &SoundParams::DEFAULT, true);
+        let b = audio.play_voice(FLOW, &SoundParams::DEFAULT, true);
+        measure("vadpcm-3", audio, FRAMES);
+        for v in [a, b].into_iter().flatten() {
+            audio.stop_voice(v);
+        }
+        audio.stop_music();
+        // The Opus track is 0.66 s: measured while it plays.
+        audio.play_music(AUDIO_OPUS, false);
+        measure("opus-1", audio, 30);
+        audio.stop_music();
+    }
+
     /// Libdragon's main stack is 64 KB and nothing stops an overflow: it
     /// silently corrupts memory (interrupts push onto it too). Report the
     /// high-water mark and fail the self-test well before the limit.
@@ -326,6 +409,8 @@ mod n64 {
                 trino_core::Renderer::end_frame(renderer);
             }
         }
+        audio_codecs(renderer, audio);
+        audio_cost(renderer, audio);
         runtime::log("TRINO_STEP:input\n");
         if let Err(e) = castle64::selftest::idle_input_checks(&mut N64Input) {
             runtime::log(&format!("TRINO_TEST_FAIL:{e}\n"));

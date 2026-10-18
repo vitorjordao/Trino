@@ -119,6 +119,8 @@ pub struct ViewInput<'a> {
     pub tmem: Option<&'a std::collections::BTreeMap<u32, Option<u32>>>,
     /// The water clock and ripples (`Renderer::set_water`).
     pub water: (f32, &'a [trino_core::Ripple]),
+    /// The project's audio per platform (the Game view HUD's audio line).
+    pub audio: Option<&'a crate::audio::Totals>,
 }
 
 pub enum ViewAction {
@@ -905,8 +907,13 @@ impl Viewport {
         if self.kind == ViewKind::Game && self.show_budget {
             // Panel-wide painter: the overlay sits over the letterbox area
             // when there is room, never clipped by the game image.
-            let lines =
-                self.budget_overlay(&ui.painter_at(avail), avail, input.budgets, input.tmem);
+            let lines = self.budget_overlay(
+                &ui.painter_at(avail),
+                avail,
+                input.budgets,
+                input.tmem,
+                input.audio,
+            );
             if let Some(lines) = lines {
                 let hud = ui
                     .interact(lines, ui.id().with("budget-hud"), egui::Sense::click())
@@ -984,6 +991,7 @@ impl Viewport {
         avail: Rect,
         budgets: Option<&[trino_scene::budget::FrameBudget; 4]>,
         tmem: Option<&std::collections::BTreeMap<u32, Option<u32>>>,
+        audio: Option<&crate::audio::Totals>,
     ) -> Option<Rect> {
         let caps = *self.renderer.caps();
         let mut rows = crate::budget::rows(&self.stats.frame, &caps, &self.stats.lod);
@@ -1010,8 +1018,27 @@ impl Viewport {
                 crate::budget::Level::Ok,
             )
         });
+        // The profile's audio (issue #53): storage, RAM, streams.
+        let platform = match self.profile {
+            SimProfile::N64 => trino_asset_pipeline::Platform::N64,
+            SimProfile::N3ds => trino_asset_pipeline::Platform::N3ds,
+            SimProfile::Web => trino_asset_pipeline::Platform::Web,
+            _ => trino_asset_pipeline::Platform::Pc,
+        };
+        let audio = audio.map(|t| {
+            let pt = t.of(platform);
+            (
+                crate::audio::budget_line(pt, platform),
+                if pt.errors > 0 {
+                    crate::budget::Level::Over
+                } else {
+                    crate::budget::Level::Ok
+                },
+            )
+        });
         let platform_lines: Vec<(String, Color32)> = measured
             .into_iter()
+            .chain(audio)
             .chain(
                 budgets
                     .map(|b| crate::budget::platform_lines(b, &tmem))

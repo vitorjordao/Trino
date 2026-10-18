@@ -23,8 +23,10 @@ install (auto-detected at `$DEVKITPRO`, `C:\devkitPro` or `/opt/devkitpro`).
    as the PC bake and `texture report`), through
    `trino_asset_pipeline::N3dsFormat::tex3ds`: rgba8, rgb565, rgba5551, rgba4, la8,
    l8, a8, etc1, etc1a4; it prints `[3ds] textures: X B of linear memory (Y B as
-   RGBA8): …`) + wav→raw-PCM16 conversion
-   (sounds → `.pcm16`, 12-byte header) into `target/3ds/romfs/` + `index.tsv`.
+   RGBA8): …`) + sounds → `T3AU` (`<id>.t3au`: DSP-ADPCM by default, `codec =
+   "pcm"` keeps PCM16; `trino_asset_pipeline::audio::encode`, it prints `[3ds]
+   audio: … B in RomFS, … B resident in linear memory`) + `assets/audio.toml` →
+   `<id>.mixer` (`TMIX`) into `target/3ds/romfs/` + `index.tsv`.
 3. `cargo +nightly build` — the **built-in Tier 3 target**
    `armv6k-nintendo-3ds` (no custom JSON) with `-Zbuild-std=core,alloc`;
    RUSTFLAGS add the shim object and `-lcitro2d -lcitro3d -lctru -lm`, and

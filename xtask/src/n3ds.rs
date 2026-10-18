@@ -195,9 +195,9 @@ impl TextureTally {
     }
 }
 
-/// Bake 3DS assets into target/3ds/romfs: tex3ds for sprites, raw PCM16
-/// (12-byte header: rate, channels, frames) for sounds, plus the index.tsv
-/// the runtime reads at boot.
+/// Bake 3DS assets into target/3ds/romfs: tex3ds for sprites, `T3AU`
+/// (DSP-ADPCM or PCM16, [`bake_t3au`]) for sounds and music, the project's
+/// mix, plus the index.tsv the runtime reads at boot.
 pub fn bake_assets(p: &Project, test_mode: bool) -> Result<(), String> {
     let root = &p.root;
     let dkp = devkitpro()?;
@@ -251,21 +251,40 @@ pub fn bake_assets(p: &Project, test_mode: bool) -> Result<(), String> {
         }
         index.push_str(&format!("{id:08x}\tsprite\t{id:08x}.t3x\n"));
     }
-    for (name, decl) in &manifest.sounds {
-        let logical = format!("sounds/{name}");
-        let id = trino_core::asset_id(&logical);
-        let source = resolve_source(&root.join("assets"), Platform::N3ds, &decl.file)?;
-        let out = romfs.join(format!("{id:08x}.pcm16"));
-        bake_pcm16(&source, &out)?;
-        index.push_str(&format!("{id:08x}\tsound\t{id:08x}.pcm16\n"));
+    // Sounds and music: one `T3AU` each (DSP-ADPCM unless the manifest says
+    // `pcm`; issue #53). Streamed tracks stay in the RomFS and play chunk by
+    // chunk; the rest load whole into linear memory at boot.
+    let mut audio = AudioTally::default();
+    let sections = [
+        ("sounds", "sound", false, &manifest.sounds),
+        ("music", "music", true, &manifest.music),
+    ];
+    for (prefix, kind, music, section) in sections {
+        for (name, decl) in section {
+            let logical = format!("{prefix}/{name}");
+            let id = trino_core::asset_id(&logical);
+            let source = resolve_source(&root.join("assets"), Platform::N3ds, &decl.file)?;
+            let blob =
+                bake_t3au(&source, decl, music, id).map_err(|e| format!("`{logical}`: {e}"))?;
+            audio.add(&blob);
+            std::fs::write(romfs.join(format!("{id:08x}.t3au")), &blob)
+                .map_err(|e| e.to_string())?;
+            index.push_str(&format!("{id:08x}\t{kind}\t{id:08x}.t3au\n"));
+        }
     }
-    for (name, decl) in &manifest.music {
-        let logical = format!("music/{name}");
-        let id = trino_core::asset_id(&logical);
-        let source = resolve_source(&root.join("assets"), Platform::N3ds, &decl.file)?;
-        let out = romfs.join(format!("{id:08x}.pcm16"));
-        bake_pcm16(&source, &out)?;
-        index.push_str(&format!("{id:08x}\tmusic\t{id:08x}.pcm16\n"));
+    // The project's mix (`assets/audio.toml`): bus volumes and duck rules
+    // the runtime applies at boot.
+    let mix = root
+        .join("assets")
+        .join(trino_asset_pipeline::audio::MixFile::FILE);
+    if mix.exists() {
+        let text = std::fs::read_to_string(&mix).map_err(|e| format!("{}: {e}", mix.display()))?;
+        let blob = trino_asset_pipeline::audio::MixFile::parse(&text)
+            .and_then(|m| m.bake())
+            .map_err(|e| format!("{}: {e}", mix.display()))?;
+        let id = trino_core::asset_id(trino_core::MixerConfig::LOGICAL);
+        std::fs::write(romfs.join(format!("{id:08x}.mixer")), blob).map_err(|e| e.to_string())?;
+        index.push_str(&format!("{id:08x}\tmixer\t{id:08x}.mixer\n"));
     }
     for (name, decl) in &manifest.models {
         if !decl.bakes_for(Platform::N3ds) {
@@ -354,39 +373,61 @@ pub fn bake_assets(p: &Project, test_mode: bool) -> Result<(), String> {
 
     std::fs::write(romfs.join("index.tsv"), index).map_err(|e| e.to_string())?;
     println!("{}", textures.line());
+    println!("{}", audio.line());
     if test_mode {
         std::fs::write(romfs.join("test_mode"), "1").map_err(|e| e.to_string())?;
     }
     Ok(())
 }
 
-/// wav -> raw PCM16 LE with a 12-byte header (u32 sample_rate, u32 channels,
-/// u32 frames) — the format `trino_wav_load` in the shim reads into linear
-/// memory for ndsp.
-fn bake_pcm16(wav: &Path, out: &Path) -> Result<(), String> {
-    let mut reader = hound::WavReader::open(wav).map_err(|e| format!("{}: {e}", wav.display()))?;
-    let spec = reader.spec();
-    let samples: Vec<i16> = match (spec.sample_format, spec.bits_per_sample) {
-        (hound::SampleFormat::Int, 16) => reader
-            .samples::<i16>()
-            .collect::<Result<_, _>>()
-            .map_err(|e| e.to_string())?,
-        other => {
-            return Err(format!(
-                "{}: unsupported wav format {other:?} (bake expects 16-bit PCM)",
-                wav.display()
-            ));
+/// A master -> the `T3AU` the shim's `trino_wav_load` reads
+/// (`trino_asset_pipeline::audio::n3ds_container`): the manifest's codec,
+/// rate, loop, stream and bus for the 3DS.
+fn bake_t3au(
+    master: &Path,
+    decl: &trino_asset_pipeline::manifest::SoundDecl,
+    music: bool,
+    id: u32,
+) -> Result<Vec<u8>, String> {
+    let settings = decl.audio_settings(music, Platform::N3ds)?;
+    let master = trino_asset_pipeline::bake::decode_master(master)?;
+    let enc = trino_asset_pipeline::audio::encode(Platform::N3ds, &settings, &master, id)?;
+    enc.blob.ok_or_else(|| "no 3DS container".into())
+}
+
+/// What the audio costs on the 3DS: RomFS bytes, and the linear memory the
+/// non-streamed sounds take at boot (streams take their three chunks only
+/// while they play).
+#[derive(Default)]
+struct AudioTally {
+    count: usize,
+    streamed: usize,
+    romfs: usize,
+    /// The same audio as PCM16 (the format before issue #53).
+    pcm16: usize,
+    resident: usize,
+}
+
+impl AudioTally {
+    fn add(&mut self, blob: &[u8]) {
+        self.count += 1;
+        self.romfs += blob.len();
+        if let Ok(t) = trino_asset_pipeline::audio::T3au::parse(blob) {
+            self.pcm16 += t.samples * 2;
+            if t.stream {
+                self.streamed += 1;
+            } else {
+                self.resident += t.data.len();
+            }
         }
-    };
-    let frames = samples.len() as u32 / spec.channels as u32;
-    let mut bytes = Vec::with_capacity(12 + samples.len() * 2);
-    bytes.extend_from_slice(&spec.sample_rate.to_le_bytes());
-    bytes.extend_from_slice(&(spec.channels as u32).to_le_bytes());
-    bytes.extend_from_slice(&frames.to_le_bytes());
-    for s in samples {
-        bytes.extend_from_slice(&s.to_le_bytes());
     }
-    std::fs::write(out, bytes).map_err(|e| e.to_string())
+
+    fn line(&self) -> String {
+        format!(
+            "[3ds] audio: {} sounds ({} streamed), {} B in RomFS ({} B as PCM16), {} B resident in linear memory",
+            self.count, self.streamed, self.romfs, self.pcm16, self.resident
+        )
+    }
 }
 
 fn cargo_build(p: &Project, dkp: &Path) -> Result<(), String> {
@@ -1217,46 +1258,75 @@ pub fn watch(p: &Project, accurate: bool) -> ExitCode {
 mod tests {
     use super::*;
 
+    /// Masters bake to the `T3AU` the shim reads: DSP-ADPCM by default
+    /// (with a context per chunk when streamed), PCM16 on request; stereo
+    /// and float masters fold to mono; the tally counts linear memory.
     #[test]
-    fn wavs_bake_to_pcm16_with_a_rate_channels_frames_header() {
+    fn sounds_bake_to_t3au_with_the_manifests_codec() {
+        use trino_asset_pipeline::audio::{Codec, N3DS_CHUNK_FRAMES, T3au};
         let dir = tempfile::tempdir().unwrap();
-        let (src, out) = (dir.path().join("in.wav"), dir.path().join("out.pcm"));
+        let src = dir.path().join("in.wav");
         let spec = hound::WavSpec {
             channels: 2,
             sample_rate: 32_000,
             bits_per_sample: 16,
             sample_format: hound::SampleFormat::Int,
         };
+        let frames = 40_000usize;
         let mut w = hound::WavWriter::create(&src, spec).unwrap();
-        for s in [1i16, -2, 300, -400, i16::MAX, i16::MIN] {
+        for i in 0..frames {
+            let t = i as f32 / 32_000.0;
+            let s = ((t * 440.0 * std::f32::consts::TAU).sin() * 9000.0) as i16;
+            w.write_sample(s).unwrap();
             w.write_sample(s).unwrap();
         }
         w.finalize().unwrap();
-        bake_pcm16(&src, &out).unwrap();
-        let b = std::fs::read(&out).unwrap();
-        let u32_at = |i: usize| u32::from_le_bytes(b[i..i + 4].try_into().unwrap());
-        assert_eq!((u32_at(0), u32_at(4), u32_at(8)), (32_000, 2, 3));
-        let samples: Vec<i16> = b[12..]
-            .chunks(2)
-            .map(|c| i16::from_le_bytes([c[0], c[1]]))
-            .collect();
-        assert_eq!(samples, [1, -2, 300, -400, i16::MAX, i16::MIN]);
-
-        // Only 16-bit integer PCM is accepted.
-        let float = hound::WavSpec {
-            bits_per_sample: 32,
-            sample_format: hound::SampleFormat::Float,
-            ..spec
+        let decl = |text: &str| -> trino_asset_pipeline::manifest::SoundDecl {
+            toml::from_str(&format!("file = \"in.wav\"\n{text}")).unwrap()
         };
-        let mut w = hound::WavWriter::create(&src, float).unwrap();
-        w.write_sample(0.5f32).unwrap();
-        w.write_sample(0.5f32).unwrap();
-        w.finalize().unwrap();
-        assert!(
-            bake_pcm16(&src, &out)
-                .unwrap_err()
-                .contains("unsupported wav format")
+
+        // Music: DSP-ADPCM, streamed, looping, on the music bus.
+        let id = trino_core::asset_id("music/x");
+        let blob = bake_t3au(&src, &decl(""), true, id).unwrap();
+        let t = T3au::parse(&blob).unwrap();
+        assert_eq!(
+            (t.codec, t.rate, t.samples),
+            (Codec::DspAdpcm, 32_000, frames)
         );
+        assert!(t.stream && t.looped && t.bus == trino_core::Bus::Music);
+        let chunk = N3DS_CHUNK_FRAMES * 14;
+        assert_eq!(t.chunk_samples, chunk);
+        assert_eq!(t.contexts.len(), frames.div_ceil(chunk));
+        assert!(blob.len() < frames * 2 * 6 / 10, "ADPCM is ~3.5x smaller");
+        let master = trino_asset_pipeline::bake::decode_master(&src).unwrap();
+        let played = trino_asset_pipeline::audio::from_pcm16(&t.decode());
+        let snr = trino_asset_pipeline::audio::snr_db(&master.samples, &played);
+        assert!(snr >= 30.0, "DSP-ADPCM: {snr:.1} dB");
+
+        // A sound with `codec = "pcm"` and a 3DS rate: exact PCM16, whole.
+        let blob = bake_t3au(
+            &src,
+            &decl("codec = { 3ds = \"pcm\" }\nsample_rate = { 3ds = 16000 }\nbus = \"ui\""),
+            false,
+            id,
+        )
+        .unwrap();
+        let t = T3au::parse(&blob).unwrap();
+        assert_eq!((t.codec, t.rate, t.chunk_samples), (Codec::Pcm, 16_000, 0));
+        assert_eq!(t.samples, frames / 2);
+        assert!(!t.stream && !t.looped && t.bus == trino_core::Bus::Ui);
+        let mut tally = AudioTally::default();
+        tally.add(&blob);
+        assert_eq!(tally.resident, frames);
+        assert!(
+            tally.line().contains("1 sounds (0 streamed)"),
+            "{}",
+            tally.line()
+        );
+
+        // A codec the 3DS can't play is an error naming it.
+        let err = bake_t3au(&src, &decl("codec = \"vadpcm\""), false, id).unwrap_err();
+        assert!(err.contains("vadpcm"), "{err}");
     }
 
     /// A slice of a real 2126.2 qt-config.ini, the setting at its default.

@@ -124,7 +124,8 @@ unsafe extern "C" {
     pub fn trino_joypad_stick() -> u32;
 
     pub fn trino_wav_load(dfs_path: *const c_char) -> *mut c_void;
-    /// `looped` is a no-op on N64 (loop lives in the wav64 file).
+    /// `looped` loops the whole sound (the bake's lengths are multiples of
+    /// 16, as libdragon wants of a VADPCM loop).
     pub fn trino_wav_play(wav: *mut c_void, channel: u32, looped: u32);
     pub fn trino_channel_stop(channel: u32);
     pub fn trino_audio_poll();
@@ -133,6 +134,15 @@ unsafe extern "C" {
     pub fn trino_ch_volume(channel: u32, lvol_q16: u32, rvol_q16: u32);
     pub fn trino_ch_playing(channel: u32) -> i32;
     pub fn trino_mixer_set_vol(vol_q16: u32);
+    /// Bit n set = mixer channel n plays.
+    pub fn trino_audio_playing_mask() -> u32;
+    /// Enable Opus wav64s before the first one loads; 0 when the ROM was
+    /// linked without the decoder (no Opus asset in the bake).
+    pub fn trino_audio_opus_init() -> u32;
+    /// Writes 10 counters (see the shim): resident bytes, stream bytes,
+    /// underruns, streamed frames, poll µs, polls, RSP mix µs, buffers,
+    /// samples per buffer, output rate.
+    pub fn trino_audio_stats(out: *mut u32);
 
     /// Path is DFS-relative, e.g. `/index.tsv` (no `rom:/`).
     pub fn trino_file_exists(dfs_relative_path: *const c_char) -> i32;

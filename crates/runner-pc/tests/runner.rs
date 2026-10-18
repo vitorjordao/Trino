@@ -16,7 +16,8 @@ use trino_core::{
 };
 use trino_platform_pc::{PcAudio, PcPlatform, SimProfile};
 use trino_runner_pc::{
-    RunConfig, picture_for, profile_from_env, resample, upload_assets, window_size_for,
+    RunConfig, audio_line, load_audio_settings, picture_for, profile_from_env, resample,
+    save_audio_settings, upload_assets, window_size_for,
 };
 
 #[test]
@@ -36,6 +37,46 @@ fn run_config_lays_out_the_project() {
         c.display_file(),
         Path::new("/work/demo/target/save/slot2.display")
     );
+}
+
+/// The player's bus volumes (`<save>.audio`): loaded at start over the
+/// project's mix, written only when the game changed them, and read back by
+/// the next run.
+#[test]
+fn bus_volumes_persist_per_game() {
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = RunConfig::new("Demo", dir.path());
+    let file = cfg.audio_file();
+    assert_eq!(file, dir.path().join("target/save/game.audio"));
+
+    let mut audio = PcAudio::new_offline(8000);
+    let mut saved = load_audio_settings(&mut audio, &file);
+    assert_eq!(
+        audio.bus_volume(trino_core::Bus::Music),
+        1.0,
+        "no file: defaults"
+    );
+    save_audio_settings(&audio, &file, &mut saved);
+    assert!(!file.exists(), "nothing changed, nothing written");
+
+    // The game's options menu turns the music down and mutes the UI.
+    audio.set_bus_volume(trino_core::Bus::Music, 0.3);
+    audio.set_bus_muted(trino_core::Bus::Ui, true);
+    save_audio_settings(&audio, &file, &mut saved);
+    let text = std::fs::read_to_string(&file).unwrap();
+    assert!(
+        text.contains("music 0.30") && text.contains("ui 1.00 muted"),
+        "{text}"
+    );
+
+    // The next run: the project's mix first, then the player's settings.
+    let mut next = PcAudio::new_offline(8000);
+    next.set_bus_volume(trino_core::Bus::Music, 0.8);
+    let back = load_audio_settings(&mut next, &file);
+    assert_eq!(back, audio.bus_settings());
+    assert!((next.bus_volume(trino_core::Bus::Music) - 0.3).abs() < 1e-6);
+    assert!(next.bus_muted(trino_core::Bus::Ui));
+    assert!(audio_line(&next).starts_with("TRINO_AUDIO: rate=8000 "));
 }
 
 #[test]

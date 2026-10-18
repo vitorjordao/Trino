@@ -403,6 +403,33 @@ impl Project {
         self.edit_manifest(|t| edit::set_texture_key(t, kind, name, key, value))
     }
 
+    /// Set or remove a sound's `quality`, `stream`, `loop` or `bus`
+    /// (`sounds/x`, `music/x`). Live: the watcher rebakes.
+    pub fn set_audio_key(
+        &self,
+        logical: &str,
+        key: &str,
+        value: Option<&str>,
+    ) -> Result<(), String> {
+        let (music, name) = crate::audio::split(logical)?;
+        let kind = if music { "music" } else { "sounds" };
+        self.edit_manifest(|t| edit::set_audio_key(t, kind, name, key, value))
+    }
+
+    /// Set (`Some`, `"auto"` included) or remove (`None`: the default) one
+    /// platform's `codec` or `sample_rate` entry of a sound.
+    pub fn set_audio_platform(
+        &self,
+        logical: &str,
+        key: &str,
+        platform: pipeline::Platform,
+        value: Option<&str>,
+    ) -> Result<(), String> {
+        let (music, name) = crate::audio::split(logical)?;
+        let kind = if music { "music" } else { "sounds" };
+        self.edit_manifest(|t| edit::set_audio_platform(t, kind, name, key, platform, value))
+    }
+
     fn edit_manifest(&self, f: impl FnOnce(&str) -> Result<String, String>) -> Result<(), String> {
         let manifest = self.manifest_path();
         let text = std::fs::read_to_string(&manifest).map_err(|e| e.to_string())?;

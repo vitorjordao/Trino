@@ -5,6 +5,7 @@
 //! contributors and CI never memorize per-platform incantations.
 
 mod agents;
+mod audio;
 mod blender;
 mod castle64_assets;
 mod emulators;
@@ -110,6 +111,14 @@ commands:
   texture report [--platform pc|n64|3ds] [--json]
                        every texture, biggest first, with totals vs RGBA8;
                        fails when a bake would (min_psnr)
+  audio inspect <sounds/x|music/x> [--platform pc|n64|3ds|web] [--json]
+                       codec and why, bytes vs PCM16, SNR vs the master, RAM
+                       resident/playing and who decodes, per platform
+  audio report [--platform ..] [--json]
+                       every sound and track, biggest first, with totals
+  audio preview <sounds/x|music/x> [--platform ..] [--out <dir>] [--json]
+                       each platform's decoded result as a WAV (+ the master)
+  audio mix [--json]   validate assets/audio.toml and print the mix
   model inspect <file> [--fps N] [--once a,b] [--anim] [--json]
                        bake a .glb/.gltf/.prim.ron like the engine and report
                        tris, joints, clips, bounds, N64 budget (art gate)
@@ -315,6 +324,15 @@ fn main() -> ExitCode {
         (Some("texture"), _) => {
             let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
             texture::run(&project.root, &rest)
+        }
+        (Some("audio"), _) => {
+            let mut rest: Vec<String> = args.iter().skip(1).cloned().collect();
+            // `--out` was taken with the Web's options above.
+            if let Some(out) = &web_build.out {
+                rest.extend(["--out".to_string(), out.display().to_string()]);
+            }
+            let rest: Vec<&str> = rest.iter().map(String::as_str).collect();
+            audio::run(&project.root, &rest)
         }
         (Some("impostor"), _) => {
             let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();

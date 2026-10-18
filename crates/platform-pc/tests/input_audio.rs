@@ -5,9 +5,9 @@
 use std::sync::Arc;
 
 use trino_core::{
-    Audio, Button, Input, InputState, Key, MusicId, PointerButton, SoundId, SoundParams, Vec2,
+    Audio, Bus, Button, Input, InputState, Key, MusicId, PointerButton, SoundId, SoundParams, Vec2,
 };
-use trino_platform_pc::audio::mixer::{DUCK, Kind, Voice, mix_into};
+use trino_platform_pc::audio::mixer::{DUCK, Kind, Mixer, Voice};
 use trino_platform_pc::input::{BINDABLE, Bindings, keys_for};
 use trino_platform_pc::{PcAudio, PcInput};
 use winit::event::MouseButton;
@@ -369,6 +369,7 @@ fn audio_voices_music_and_stingers_bookkeeping() {
         &SoundParams {
             volume: 0.5,
             pan: -1.0,
+            ..SoundParams::DEFAULT
         },
     );
     assert!(audio.voice_playing(v), "steering keeps it playing");
@@ -383,6 +384,7 @@ fn audio_voices_music_and_stingers_bookkeeping() {
         &SoundParams {
             volume: 0.3,
             pan: 0.5,
+            ..SoundParams::DEFAULT
         },
     );
     let mut held = Vec::new();
@@ -422,14 +424,21 @@ fn audio_voices_music_and_stingers_bookkeeping() {
 }
 
 fn voice(id: u32, data: &[f32], looped: bool, kind: Kind, gains: (f32, f32)) -> Voice {
-    Voice {
-        id,
-        data: Arc::new(data.to_vec()),
-        cursor: 0,
-        looped,
-        kind,
-        gains,
-    }
+    let bus = if kind == Kind::Sfx {
+        Bus::Sfx
+    } else {
+        Bus::Music
+    };
+    Voice::pcm(id, Arc::new(data.to_vec()), looped, kind, bus, gains)
+}
+
+/// A mixer at 1 kHz with the master and music buses at `master`/`music`.
+fn mixer(voices: Vec<Voice>, master: f32, music: f32) -> Mixer {
+    let mut m = Mixer::new(1000);
+    m.voices = voices;
+    m.buses.set_volume(Bus::Master, master);
+    m.buses.set_volume(Bus::Music, music);
+    m
 }
 
 /// The stereo mixer behind the stream: per-voice gains and pan, master and
@@ -440,16 +449,21 @@ fn mixer_gains_ducking_looping_and_clamping() {
     let left_half = SoundParams {
         volume: 0.5,
         pan: -1.0,
+        ..SoundParams::DEFAULT
     }
     .gains();
     assert!(left_half.0 > 0.4 && left_half.1 < 0.01, "{left_half:?}");
 
     let mut out = [9.0f32; 8];
-    let mut voices = vec![
-        voice(1, &[0.4, 0.4], false, Kind::Sfx, (1.0, 0.5)),
-        voice(2, &[0.2], true, Kind::Music, (1.0, 1.0)),
-    ];
-    mix_into(&mut out, &mut voices, 0.5, 1.0);
+    let mut m = mixer(
+        vec![
+            voice(1, &[0.4, 0.4], false, Kind::Sfx, (1.0, 0.5)),
+            voice(2, &[0.2], true, Kind::Music, (1.0, 1.0)),
+        ],
+        0.5,
+        1.0,
+    );
+    m.mix(&mut out);
     // Frame 0: sfx 0.4×(1, .5)×.5 + music .2×.5.
     assert!(
         (out[0] - 0.3).abs() < 1e-6 && (out[1] - 0.2).abs() < 1e-6,
@@ -457,23 +471,30 @@ fn mixer_gains_ducking_looping_and_clamping() {
     );
     // Frame 2: the one-shot ended, the looped music goes on.
     assert!((out[4] - 0.1).abs() < 1e-6 && (out[5] - 0.1).abs() < 1e-6);
-    assert_eq!(voices.len(), 1, "finished one-shots are dropped");
-    assert_eq!(voices[0].id, 2);
+    assert_eq!(m.voices.len(), 1, "finished one-shots are dropped");
+    assert_eq!(m.voices[0].id, 2);
 
     // A stinger ducks the music (DUCK) and plays at the music level.
-    voices.push(voice(3, &[0.5; 8], false, Kind::Stinger, (1.0, 1.0)));
-    mix_into(&mut out, &mut voices, 1.0, 0.5);
+    m.voices
+        .push(voice(3, &[0.5; 8], false, Kind::Stinger, (1.0, 1.0)));
+    m.buses.set_volume(Bus::Master, 1.0);
+    m.buses.set_volume(Bus::Music, 0.5);
+    m.mix(&mut out);
     let want = 0.2 * 0.5 * DUCK + 0.5 * 0.5;
     assert!((out[0] - want).abs() < 1e-6, "{} vs {want}", out[0]);
 
     // Loud voices clamp to the -1..1 range; an empty looped voice is safe.
-    let mut loud = vec![
-        voice(4, &[0.9; 4], false, Kind::Sfx, (1.0, 1.0)),
-        voice(5, &[-0.9; 4], false, Kind::Sfx, (0.0, 0.0)),
-        voice(6, &[0.9; 4], false, Kind::Sfx, (1.0, -3.0)),
-        voice(7, &[], true, Kind::Sfx, (1.0, 1.0)),
-    ];
-    mix_into(&mut out, &mut loud, 1.0, 1.0);
+    let mut loud = mixer(
+        vec![
+            voice(4, &[0.9; 4], false, Kind::Sfx, (1.0, 1.0)),
+            voice(5, &[-0.9; 4], false, Kind::Sfx, (0.0, 0.0)),
+            voice(6, &[0.9; 4], false, Kind::Sfx, (1.0, -3.0)),
+            voice(7, &[], true, Kind::Sfx, (1.0, 1.0)),
+        ],
+        1.0,
+        1.0,
+    );
+    loud.mix(&mut out);
     assert_eq!((out[0], out[1]), (1.0, -1.0));
-    assert_eq!(loud.len(), 1, "only the looped (empty) voice stays");
+    assert_eq!(loud.voices.len(), 1, "only the looped (empty) voice stays");
 }

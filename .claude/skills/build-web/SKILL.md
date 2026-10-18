@@ -19,9 +19,15 @@ ADR 0019 is the design; `docs/PLATFORMS.md` › Web the user guide.
 
 - `crates/render-wgpu`: the PC's renderer, shared. Anything you change there changes the
   Web too — run `xtask/tests/web_parity.rs` (PC vs `tests/golden/web/`) and a browser.
-- `crates/platform-web`: browser-free modules (`keys.rs`, `pack.rs`, `b64.rs`: host
-  tests) and wasm-only ones (`platform.rs`, `input.rs`, `audio.rs`, `assets.rs`,
-  `runtime.rs`, `js.rs` + `glue.js`). Off wasm32 only the first build.
+- `crates/platform-web`: browser-free modules (`keys.rs`, `pack.rs`, `b64.rs`,
+  `sound.rs` — TSN2 decode whole or in stream blocks, the bus-settings text: host tests)
+  and wasm-only ones (`platform.rs`, `input.rs`, `audio.rs`, `assets.rs`, `runtime.rs`,
+  `js.rs` + `glue.js`). Off wasm32 only the first build.
+- Web audio (#53, ADR 0020): pack TPAK v2 (sounds are TSN2, kind 7 the `TMIX` mix; v1
+  packs load, `TS16` migrates to PCM16 TSN2). Effects decode into `AudioBuffer`s at
+  load; streams are 8192-sample chunks scheduled ≤ 1 s ahead (`audio.rs`), so a hidden
+  tab runs dry after 1 s and counts an underrun. Each bus is a gain node fed by
+  `BusMixer` in `poll()`. The player's volumes: `localStorage` `trino-audio:<save>`.
 - `apps/web`: `lib.rs` (game by `?game=`), `selftest.rs` (`?selftest`), `index.html`
   (templated by xtask: `{{TITLE}}`, `{{CANVAS_ID}}`), `vendor/basis/` (Binomial's
   transcoder, the KTX2 decoder in the browser).
@@ -102,10 +108,21 @@ What the `web` job needs, all found the hard way (reproduce with Docker:
 - Firefox: headless has no WebGL there ("Exhausted GL driver options"); headed under
   `xvfb-run` it gets llvmpipe. `TRINO_WEB_FIREFOX_HEADED=1` runs it headed.
 - Audio: Firefox's `AudioContext` stays `suspended` without an output device; CI starts
-  PulseAudio with a null sink.
+  PulseAudio with a null sink. Playwright's Chromium runs an `AudioContext` with no
+  gesture whatever the autoplay flag, and WebKit starts `running`: only Firefox proves
+  the suspended → running unlock.
+- Firefox and WebKit on WSL: run them in the Playwright Docker image
+  (`mcr.microsoft.com/playwright:v1.63.0-noble`) with `--init` (xvfb-run as PID 1 hangs)
+  and a PulseAudio null sink, and serve the build from inside the container (Docker
+  Desktop's host network is not WSL's localhost).
+- Self-test checks that count frames need steady frames: the first frames after the
+  GPU-heavy steps are slow (the `audio codecs` step waits for 10 steady frames).
+- Never `pkill -f` a pattern that also appears in your own shell command: it kills that
+  shell.
 
 ## Sizes and speed (2026-10-18)
 
-castle64 + showcase pack 944 KB (33 KTX2 textures), Solid Eleven's 3.07 MB (mostly 16-bit
-PCM: Opus is #53). The release wasm is ~4.5 MB before compression. The self-test takes
+castle64 + showcase pack 456 KB (33 KTX2 textures, Vorbis sounds; 944 KB before #53), Solid
+Eleven's 2.18 MB (3.07 MB with 16-bit PCM). The release wasm is ~5.4 MB before compression
+(lewton added 72 KB gzipped). The self-test takes
 8–15 s per browser locally.

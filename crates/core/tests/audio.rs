@@ -46,6 +46,7 @@ fn provided_audio_methods_degrade_to_the_basics() {
         &SoundParams {
             volume: 0.2,
             pan: -1.0,
+            ..SoundParams::DEFAULT
         },
     );
     // No voices: steering calls are no-ops and nothing reports playing.
@@ -63,6 +64,38 @@ fn provided_audio_methods_degrade_to_the_basics() {
     assert_eq!(a.volume, 0.75);
     a.stop_music();
     assert_eq!(a.music, None);
+}
+
+/// The bus API (issue #53) on the original four-method backend: the master
+/// bus is `set_master_volume`, the rest are documented no-ops that read
+/// back as "full volume, unmuted, not ducked, nothing counted".
+#[test]
+fn bus_methods_degrade_to_the_basics() {
+    use trino_core::{AudioStats, Bus, BusSettings, DuckRule, MixerConfig};
+    let mut a = Basic::default();
+    let dyn_a: &mut dyn Audio = &mut a;
+    dyn_a.set_bus_volume(Bus::Master, 0.3);
+    dyn_a.set_bus_volume(Bus::Music, 0.2); // set_music_volume: a no-op here
+    dyn_a.set_bus_volume(Bus::Voice, 0.1);
+    for b in Bus::ALL {
+        assert_eq!(dyn_a.bus_volume(b), 1.0, "{b:?}");
+        dyn_a.set_bus_muted(b, true);
+        assert!(!dyn_a.bus_muted(b));
+        assert_eq!(dyn_a.bus_duck(b), 1.0);
+    }
+    dyn_a.set_duck(DuckRule::new(Bus::Voice, Bus::Music, 0.4, 150, 300));
+    dyn_a.clear_ducks();
+    assert_eq!(dyn_a.audio_stats(), AudioStats::default());
+    // A project mix and saved settings apply through the same calls.
+    let mut mix = MixerConfig::default();
+    mix.volumes[Bus::Master.index()] = 0.6;
+    mix.apply(dyn_a);
+    BusSettings::default().apply(dyn_a);
+    assert_eq!(a.volume, 1.0, "the saved settings won over the mix");
+    // A sound sent to a bus is still the same sound on a basic backend.
+    let beep = SoundId::from_path("sounds/beep");
+    a.play_sound_with(beep, &SoundParams::DEFAULT.on(Bus::Ui));
+    assert_eq!(a.played, [beep]);
 }
 
 #[test]
@@ -97,6 +130,7 @@ fn voices_and_stingers_on_a_mixing_backend() {
     let quiet = SoundParams {
         volume: 0.1,
         pan: 0.5,
+        ..SoundParams::DEFAULT
     };
     a.set_voice(v1, &quiet);
     assert_eq!(a.voice(v1).unwrap().params, quiet);
@@ -113,22 +147,26 @@ fn gains_split_volume_by_pan() {
     let left = SoundParams {
         volume: 0.5,
         pan: -1.0,
+        ..SoundParams::DEFAULT
     };
     assert_eq!(left.gains(), (0.5, 0.0));
     let right = SoundParams {
         volume: 1.0,
         pan: 0.5,
+        ..SoundParams::DEFAULT
     };
     assert_eq!(right.gains(), (0.5, 1.0));
     // Out-of-range input is clamped, negative volume is silence.
     let wild = SoundParams {
         volume: -3.0,
         pan: 9.0,
+        ..SoundParams::DEFAULT
     };
     assert_eq!(wild.gains(), (0.0, 0.0));
     let over = SoundParams {
         volume: 1.0,
         pan: 4.0,
+        ..SoundParams::DEFAULT
     };
     assert_eq!(over.gains(), (0.0, 1.0));
 }

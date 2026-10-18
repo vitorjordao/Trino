@@ -193,7 +193,7 @@ impl Controls {
         let len = trino_core::math3d::sqrt(stick.x * stick.x + stick.y * stick.y);
         if len > 0.2 {
             let k = if len > 1.0 { 1.0 / len } else { 1.0 };
-            pad.mv = V2::new(Fx::from_f32(stick.x * k), Fx::from_f32(-stick.y * k));
+            pad.mv = V2::new(Fx::from_f32(-stick.x * k), Fx::from_f32(-stick.y * k));
         }
         let bind = self.bindings;
         let sprint = bind.of(Action::Sprint);
@@ -264,7 +264,7 @@ mod tests {
             1.0 / 60.0,
             false,
         );
-        assert_eq!(pad.mv.x, Fx::ONE);
+        assert_eq!(pad.mv.x, -Fx::ONE);
     }
 
     #[test]

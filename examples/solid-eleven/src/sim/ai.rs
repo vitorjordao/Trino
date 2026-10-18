@@ -379,7 +379,7 @@ fn press(m: &mut Match, i: usize) -> Cmd {
         let p = carrier.pos + (own_goal - carrier.pos).norm().scale(Fx::int(5));
         return go_to(m, i, p, false);
     }
-    let mut cmd = go_to(m, i, goal_side, d > Fx::int(3));
+    let mut cmd = go_to(m, i, goal_side, d > Fx::milli(1_400));
     cmd.mv = cmd.mv.norm();
     cmd.face = Some((carrier.pos - me.pos).norm());
     let aggr = Fx::ratio(t.aggression as i32, 100);
@@ -389,10 +389,14 @@ fn press(m: &mut Match, i: usize) -> Cmd {
         if m.rng.chance(p) {
             cmd.act = Some(CmdAct::Tackle);
         }
-    } else if d < Fx::milli(3_000) && d > Fx::milli(1_800) && carrier.vel.len() > Fx::int(5) {
+    } else if d < Fx::milli(2_600)
+        && d > Fx::milli(1_800)
+        && carrier.vel.len() > Fx::int(5)
+        && me.cool == 0
+    {
         // A slide at a runner, from the front or side.
         let facing = (carrier.pos - me.pos).norm().dot(carrier.vel.norm());
-        if facing < Fx::milli(300) && m.rng.chance(aggr.mul(Fx::milli(25))) {
+        if facing < Fx::milli(200) && m.rng.chance(aggr.mul(Fx::milli(15))) {
             cmd.act = Some(CmdAct::Slide(
                 (carrier.pos + carrier.vel.scale(Fx::milli(200)) - me.pos).norm(),
             ));

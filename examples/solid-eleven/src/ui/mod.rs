@@ -23,6 +23,7 @@ pub const F_UI: FontId = FontId::from_path("fonts/se_ui");
 pub const FONT_CHARS: &str =
     " ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,:;-+/%!?()'&#<>*=_ÁÂÃÀÇÉÊÍÓÔÕÚÜ";
 pub const F_BIG: FontId = FontId::from_path("fonts/se_big");
+pub const F_HUGE: FontId = FontId::from_path("fonts/se_huge");
 
 /// The design canvas.
 pub const DESIGN_W: f32 = 320.0;
@@ -208,8 +209,10 @@ impl<'a> Ui<'a> {
 
     fn font_for(&self, size: Size) -> (FontId, f32) {
         match size {
+            Size::Small if self.scale >= 3.0 => (F_HUGE, self.scale * 0.25),
             Size::Small if self.scale >= 1.5 => (F_BIG, self.scale * 0.5),
             Size::Small => (F_UI, self.scale),
+            Size::Big if self.scale >= 2.0 => (F_HUGE, self.scale * 0.5),
             Size::Big => (F_BIG, self.scale),
         }
     }

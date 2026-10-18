@@ -97,28 +97,62 @@ fn crest_of(ui: &mut Ui, x: f32, y: f32, w: f32, c: u8, label: bool) {
     );
 }
 
+use crate::game::menu::Hits;
+
+pub const HIT_BACK: u8 = 254;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Btn {
+    A,
+    B,
+    X,
+    Y,
+}
+
+fn btn_prompt(pad: bool, b: Btn) -> (&'static str, Color) {
+    if pad {
+        match b {
+            Btn::A => ("A", pal::GREEN),
+            Btn::B => ("B", pal::RED),
+            Btn::X => ("X", pal::BLUE),
+            Btn::Y => ("Y", pal::YELLOW),
+        }
+    } else {
+        match b {
+            Btn::A => ("ENTER", pal::GREEN),
+            Btn::B => ("ESC", pal::RED),
+            Btn::X => ("C", pal::BLUE),
+            Btn::Y => ("V", pal::YELLOW),
+        }
+    }
+}
+
 /// The slanted screen header ("SELEÇÃO DO TIME").
-fn header(ui: &mut Ui, title: &str, back: bool) {
+fn header(ui: &mut Ui, hits: &mut Hits, title: &str, back: bool) {
     ui.slant(Rect::new(-4.0, 6.0, 200.0, 22.0), pal::NAVY, 6.0);
     if back {
-        ui.slant(Rect::new(-4.0, 6.0, 22.0, 22.0), pal::CYAN, 6.0);
+        let r = Rect::new(-4.0, 6.0, 24.0, 22.0);
+        ui.slant(r, pal::CYAN, 6.0);
         ui.text(8.0, 10.0, "<", pal::NAVY, Size::Small, TextAlign::Center);
+        let hit = ui.rect(Rect::new(0.0, 4.0, 26.0, 26.0));
+        hits.add(hit, Screen::Top, HIT_BACK);
     }
     ui.text_shadow(24.0, 9.0, title, pal::INK, Size::Small, TextAlign::Left);
 }
 
 /// The footer of button hints, after the reference.
-fn footer(ui: &mut Ui, hints: &[(&str, Color, S)], lang: Lang) {
+fn footer(ui: &mut Ui, hits: &mut Hits, pad: bool, lang: Lang, hints: &[(Btn, S)]) {
     let mut x = 6.0;
-    for (letter, c, s) in hints {
-        x += ui.hint(x, 224.0, letter, *c, tr(lang, *s)) + 4.0;
+    for (btn, s) in hints {
+        let (letter, c) = btn_prompt(pad, *btn);
+        let w = ui.hint(x, 224.0, letter, c, tr(lang, *s));
+        if *btn == Btn::B {
+            let hit = ui.rect(Rect::new(x, 222.0, w, 18.0));
+            hits.add(hit, Screen::Top, HIT_BACK);
+        }
+        x += w + 4.0;
     }
 }
-
-const A: (&str, Color) = ("A", pal::GREEN);
-const B: (&str, Color) = ("B", pal::RED);
-const X: (&str, Color) = ("X", pal::BLUE);
-const Y: (&str, Color) = ("Y", pal::YELLOW);
 
 /// Draw the current screen (top) and the 3DS's touch screen.
 pub fn draw(g: &mut SolidElevenGame, r: &mut dyn Renderer) {
@@ -216,14 +250,15 @@ pub fn draw(g: &mut SolidElevenGame, r: &mut dyn Renderer) {
         Scene::Controls => {
             title_backdrop(g, r, aspect);
             let lang = g.settings.lang;
+            let pad = g.pad_layout();
             let mut ui = Ui::new(r, screen);
             ui.fill(
                 Rect::new(-200.0, 0.0, 720.0, 240.0),
                 Color::rgba(6, 8, 20, 200),
             );
-            header(&mut ui, tr(lang, S::Controls), true);
+            header(&mut ui, &mut g.hits, tr(lang, S::Controls), true);
             crate::ui::controls::draw(g, &mut ui);
-            footer(&mut ui, &[(A.0, A.1, S::Change), (B.0, B.1, S::Back)], lang);
+            footer(&mut ui, &mut g.hits, pad, lang, &[(Btn::A, S::Change), (Btn::B, S::Back)]);
         }
         Scene::Results => {
             title_backdrop(g, r, aspect);
@@ -397,7 +432,8 @@ fn trophy(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2, aspect: f
     let c = if place == 1 { pal::LIME } else { pal::CYAN };
     ui.slant_border(Rect::new(160.0 - w * 0.5, 176.0, w, 16.0), c, 4.0, 1.0);
     ui.text(160.0, 178.0, b.as_str(), c, Size::Small, TextAlign::Center);
-    footer(&mut ui, &[(A.0, A.1, S::Continue)], lang);
+    let pad = g.pad_layout();
+    footer(&mut ui, &mut g.hits, pad, lang, &[(Btn::A, S::Continue)]);
 }
 
 // ------------------------------------------------------------------ title
@@ -578,7 +614,8 @@ fn title(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
             TextAlign::Left,
         );
     }
-    footer(&mut ui, &[(A.0, A.1, S::Select)], lang);
+    let pad = g.pad_layout();
+    footer(&mut ui, &mut g.hits, pad, lang, &[(Btn::A, S::Select)]);
 }
 
 // ------------------------------------------------------------ quick match
@@ -650,12 +687,13 @@ fn club_card(ui: &mut Ui, x: f32, y: f32, c: u8, label: S, lang: Lang, g: &Solid
 
 fn quick(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
     let lang = g.settings.lang;
+    let pad = g.pad_layout();
     let mut ui = Ui::new(r, screen);
     ui.fill(
         Rect::new(-200.0, 0.0, 720.0, 240.0),
         Color::rgba(6, 8, 20, 130),
     );
-    header(&mut ui, tr(lang, S::QuickMatch), true);
+    header(&mut ui, &mut g.hits, tr(lang, S::QuickMatch), true);
     club_card(&mut ui, 14.0, 34.0, g.quick.home, S::Home, lang, g);
     club_card(&mut ui, 194.0, 34.0, g.quick.away, S::Away, lang, g);
     ui.text_shadow(160.0, 58.0, "VS", pal::YELLOW, Size::Big, TextAlign::Center);
@@ -754,8 +792,10 @@ fn quick(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
     g.hits.add(hit, Screen::Top, QUICK_GO as u8);
     footer(
         &mut ui,
-        &[(A.0, A.1, S::Confirm), (B.0, B.1, S::Back)],
+        &mut g.hits,
+        pad,
         lang,
+        &[(Btn::A, S::Confirm), (Btn::B, S::Back)],
     );
 }
 
@@ -763,12 +803,13 @@ fn quick(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
 
 fn pick_club(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
     let lang = g.settings.lang;
+    let pad = g.pad_layout();
     let mut ui = Ui::new(r, screen);
     ui.fill(
         Rect::new(-200.0, 0.0, 720.0, 240.0),
         Color::rgba(6, 8, 20, 150),
     );
-    header(&mut ui, tr(lang, S::Career), true);
+    header(&mut ui, &mut g.hits, tr(lang, S::Career), true);
     for c in 0..TEAMS {
         let (col, row) = (c % 5, c / 5);
         let x = 12.0 + col as f32 * 60.0;
@@ -843,8 +884,10 @@ fn pick_club(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
     }
     footer(
         &mut ui,
-        &[(A.0, A.1, S::Confirm), (B.0, B.1, S::Back)],
+        &mut g.hits,
+        pad,
         lang,
+        &[(Btn::A, S::Confirm), (Btn::B, S::Back)],
     );
 }
 
@@ -852,6 +895,7 @@ fn pick_club(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
 
 fn club(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
     let lang = g.settings.lang;
+    let pad = g.pad_layout();
     let w = &g.world;
     let user = w.user;
     let mut ui = Ui::new(r, screen);
@@ -1189,12 +1233,14 @@ fn club(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
     }
     footer(
         &mut ui,
-        &[
-            (A.0, A.1, S::Select),
-            (B.0, B.1, S::Back),
-            (Y.0, Y.1, S::Table),
-        ],
+        &mut g.hits,
+        pad,
         lang,
+        &[
+            (Btn::A, S::Select),
+            (Btn::B, S::Back),
+            (Btn::Y, S::Table),
+        ],
     );
 }
 
@@ -1202,13 +1248,14 @@ fn club(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
 
 fn table(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
     let lang = g.settings.lang;
+    let pad = g.pad_layout();
     let w = &g.world;
     let mut ui = Ui::new(r, screen);
     ui.fill(
         Rect::new(-200.0, 0.0, 720.0, 240.0),
         Color::rgba(6, 8, 20, 160),
     );
-    header(&mut ui, tr(lang, S::Table), true);
+    header(&mut ui, &mut g.hits, tr(lang, S::Table), true);
     let (x, y) = (24.0, 34.0);
     ui.panel(Rect::new(x, y, 272.0, 182.0), pal::CYAN);
     let cols = ["P", "W", "D", "L", "GD", ""];
@@ -1289,7 +1336,7 @@ fn table(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
             TextAlign::Right,
         );
     }
-    footer(&mut ui, &[(B.0, B.1, S::Back)], lang);
+    footer(&mut ui, &mut g.hits, pad, lang, &[(Btn::B, S::Back)]);
 }
 
 // ------------------------------------------------------------------ teams
@@ -1332,10 +1379,11 @@ fn radar_of(ui: &mut Ui, cx: f32, cy: f32, rad: f32, p: &PlayerRec, fill: Color)
 
 fn teams(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
     let lang = g.settings.lang;
+    let pad = g.pad_layout();
     let club = g.cur.team_club;
     let (list, n) = g.squad_list(club);
     let mut ui = Ui::new(r, screen);
-    header(&mut ui, tr(lang, S::TeamSelect), true);
+    header(&mut ui, &mut g.hits, tr(lang, S::TeamSelect), true);
     // Club name and crest, top right.
     ui.slant(Rect::new(212.0, 6.0, 112.0, 22.0), pal::NAVY, 6.0);
     ui.text(
@@ -1494,12 +1542,14 @@ fn teams(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
     );
     footer(
         &mut ui,
-        &[
-            (A.0, A.1, S::Details),
-            (B.0, B.1, S::Back),
-            (X.0, X.1, S::Formation),
-        ],
+        &mut g.hits,
+        pad,
         lang,
+        &[
+            (Btn::A, S::Details),
+            (Btn::B, S::Back),
+            (Btn::X, S::Formation),
+        ],
     );
 }
 
@@ -1516,12 +1566,13 @@ const EDIT_ROWS: [(usize, S); ATTRS] = [
 
 fn edit(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
     let lang = g.settings.lang;
+    let pad = g.pad_layout();
     let Some((i, _)) = g.edit else {
         return;
     };
     let p = g.world.players[i];
     let mut ui = Ui::new(r, screen);
-    header(&mut ui, tr(lang, S::PlayerEdit), true);
+    header(&mut ui, &mut g.hits, tr(lang, S::PlayerEdit), true);
     let name: TextBuf<16> = upper(p.name());
     ui.slant(Rect::new(212.0, 6.0, 112.0, 22.0), pal::NAVY, 6.0);
     ui.text(
@@ -1688,12 +1739,14 @@ fn edit(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
     }
     footer(
         &mut ui,
-        &[
-            (A.0, A.1, S::Save_),
-            (B.0, B.1, S::Cancel),
-            (X.0, X.1, S::Random),
-        ],
+        &mut g.hits,
+        pad,
         lang,
+        &[
+            (Btn::A, S::Save_),
+            (Btn::B, S::Cancel),
+            (Btn::X, S::Random),
+        ],
     );
 }
 
@@ -1706,10 +1759,11 @@ fn swatch(k: usize) -> Rect {
 
 fn market(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
     let lang = g.settings.lang;
+    let pad = g.pad_layout();
     let (list, n) = g.market_list();
     let w = &g.world;
     let mut ui = Ui::new(r, screen);
-    header(&mut ui, tr(lang, S::Transfers), true);
+    header(&mut ui, &mut g.hits, tr(lang, S::Transfers), true);
     let mut b = buf();
     let _ = write!(
         b,
@@ -1936,13 +1990,15 @@ fn market(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
     }
     footer(
         &mut ui,
-        &[
-            (A.0, A.1, if g.cur.market_sell { S::Sell } else { S::Buy }),
-            (B.0, B.1, S::Back),
-            (X.0, X.1, S::Compare),
-            (Y.0, Y.1, S::Swap),
-        ],
+        &mut g.hits,
+        pad,
         lang,
+        &[
+            (Btn::A, if g.cur.market_sell { S::Sell } else { S::Buy }),
+            (Btn::B, S::Back),
+            (Btn::X, S::Compare),
+            (Btn::Y, S::Swap),
+        ],
     );
 }
 
@@ -1950,13 +2006,14 @@ fn market(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
 
 fn settings(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
     let lang = g.settings.lang;
+    let pad = g.pad_layout();
     let mut ui = Ui::new(r, screen);
     ui.fill(
         Rect::new(-200.0, 0.0, 720.0, 240.0),
         Color::rgba(6, 8, 20, 170),
     );
     if g.scene == Scene::Confirm {
-        header(&mut ui, tr(lang, S::Exit), true);
+        header(&mut ui, &mut g.hits, tr(lang, S::Exit), true);
         ui.panel(Rect::new(70.0, 80.0, 180.0, 70.0), pal::PINK);
         ui.text(
             160.0,
@@ -1997,10 +2054,10 @@ fn settings(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
             let hit = ui.rect(rr);
             g.hits.add(hit, Screen::Top, k as u8);
         }
-        footer(&mut ui, &[(A.0, A.1, S::Select), (B.0, B.1, S::Back)], lang);
+        footer(&mut ui, &mut g.hits, pad, lang, &[(Btn::A, S::Select), (Btn::B, S::Back)]);
         return;
     }
-    header(&mut ui, tr(lang, S::Settings), true);
+    header(&mut ui, &mut g.hits, tr(lang, S::Settings), true);
     let st = g.settings;
     let mut mins = TextBuf::<12>::new();
     let _ = write!(mins, "{} {}", st.half_mins, tr(lang, S::Minutes));
@@ -2085,13 +2142,14 @@ fn settings(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
         let hit = ui.rect(rr);
         g.hits.add(hit, Screen::Top, k as u8);
     }
-    footer(&mut ui, &[(A.0, A.1, S::Select), (B.0, B.1, S::Back)], lang);
+    footer(&mut ui, &mut g.hits, pad, lang, &[(Btn::A, S::Select), (Btn::B, S::Back)]);
 }
 
 // ------------------------------------------------------------------ report
 
 fn results(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
     let lang = g.settings.lang;
+    let pad = g.pad_layout();
     let Some(rep) = g.report else {
         return;
     };
@@ -2100,7 +2158,7 @@ fn results(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
         Rect::new(-200.0, 0.0, 720.0, 240.0),
         Color::rgba(6, 8, 20, 170),
     );
-    header(&mut ui, tr(lang, S::Results), false);
+    header(&mut ui, &mut g.hits, tr(lang, S::Results), false);
     // Score line.
     ui.panel(Rect::new(40.0, 32.0, 240.0, 40.0), pal::CYAN);
     crest_of(&mut ui, 48.0, 37.0, 26.0, rep.clubs[0], false);
@@ -2228,7 +2286,7 @@ fn results(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
             TextAlign::Center,
         );
     }
-    footer(&mut ui, &[(A.0, A.1, S::Continue)], lang);
+    footer(&mut ui, &mut g.hits, pad, lang, &[(Btn::A, S::Continue)]);
 }
 
 fn pause(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
@@ -2238,17 +2296,17 @@ fn pause(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
         Rect::new(-200.0, 0.0, 720.0, 240.0),
         Color::rgba(0, 0, 0, 120),
     );
-    ui.panel(Rect::new(90.0, 70.0, 140.0, 84.0), pal::CYAN);
+    ui.panel(Rect::new(90.0, 60.0, 140.0, 110.0), pal::CYAN);
     ui.text(
         160.0,
-        74.0,
+        64.0,
         tr(lang, S::Paused),
         pal::CYAN,
         Size::Small,
         TextAlign::Center,
     );
-    for (k, s) in [S::Resume, S::Quit].iter().enumerate() {
-        let rr = Rect::new(100.0, 86.0 + k as f32 * 26.0, 120.0, 20.0);
+    for (k, s) in [S::Resume, S::Substitute, S::Quit].iter().enumerate() {
+        let rr = Rect::new(100.0, 78.0 + k as f32 * 26.0, 120.0, 20.0);
         let sel = g.cur.pause == k;
         ui.fill(
             rr,

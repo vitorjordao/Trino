@@ -278,6 +278,8 @@ pub struct SolidElevenGame {
     pub device: Device,
     /// The pixel scale last asked of the PC host for the graphics setting.
     asked_scale: Option<u8>,
+    /// Currently using gamepad (true) or keyboard (false).
+    pub using_pad: bool,
 }
 
 impl SolidElevenGame {
@@ -331,7 +333,13 @@ impl SolidElevenGame {
             capture: None,
             device: DEVICE,
             asked_scale: None,
+            using_pad: DEVICE != Device::Pc,
         }
+    }
+
+    #[inline]
+    pub fn pad_layout(&self) -> bool {
+        self.using_pad || self.device != Device::Pc
     }
 
     /// Straight into a match between clubs `home` and `away` with their
@@ -452,8 +460,17 @@ impl SolidElevenGame {
             }
         }
         let prev = self.prev;
-        let nav = self.repeat.nav(input, &prev, dt);
-        let tap = self.hits.tapped(input, &prev);
+        if input.pad {
+            self.using_pad = true;
+        } else if !input.keys.is_empty() {
+            self.using_pad = false;
+        }
+        let mut nav = self.repeat.nav(input, &prev, dt);
+        let mut tap = self.hits.tapped(input, &prev);
+        if tap == Some(crate::ui::screens::HIT_BACK) {
+            nav.back = true;
+            tap = None;
+        }
         // Music: the theme in menus, the crowd in matches.
         let want_crowd = matches!(self.scene, Scene::Match | Scene::Pause);
         if self.music != Some(want_crowd) {

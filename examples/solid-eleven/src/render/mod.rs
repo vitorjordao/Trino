@@ -1069,8 +1069,8 @@ fn draw_guides(r: &mut dyn Renderer, m: &Match, v: &MatchView) {
             Material::VertexLit,
             &unlit(Color::rgb(40, 220, 255)),
         );
-        let bob = 0.08 * trino_core::math3d::sin(v.time * 4.0);
-        let top = Vec3::new(pos.x, 2.25 + bob, pos.z);
+        let bob = 0.04 * trino_core::math3d::sin(v.time * 4.0);
+        let top = Vec3::new(pos.x, 1.75 + bob, pos.z);
         r.draw_model_matrix(
             M_ARROW,
             &place(top, 0.0, 1.0, 1.0),

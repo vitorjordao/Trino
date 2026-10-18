@@ -146,6 +146,7 @@ fn solid_eleven_menu_shots() {
             g.update(&idle, &mut a, 1.0 / 60.0);
         }
         g.render(&mut r);
+        save(&r, &dir, &format!("match_gameplay_{tag}"));
         if profile == SimProfile::N3ds {
             save_bottom(&r, &dir, "match_3ds_bottom");
         }

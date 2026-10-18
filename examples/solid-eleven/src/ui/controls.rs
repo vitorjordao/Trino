@@ -153,7 +153,8 @@ const N3DS: [Spot; 10] = [
 
 /// The keyboard keys drawn (the host's names), by row; WASD and the
 /// arrows move. Keys outside it are listed under the drawing.
-const KEY_ROWS: [&[&str]; 4] = [
+const KEY_ROWS: [&[&str]; 5] = [
+    &["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"],
     &["Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P"],
     &["A", "S", "D", "F", "G", "H", "J", "K", "L", ";"],
     &["LSHIFT", "Z", "X", "C", "V", "B", "N", "M", ",", "."],
@@ -226,7 +227,12 @@ pub fn draw(g: &mut SolidElevenGame, ui: &mut Ui) {
     }
     if tabs > 1 {
         let mut b = TextBuf::<24>::new();
-        let _ = write!(b, "L / R: {}", tr(lang, S::TabsHint));
+        let switch_hint = if !g.using_pad && g.device == Device::Pc {
+            "Q / E"
+        } else {
+            "L / R"
+        };
+        let _ = write!(b, "{}: {}", switch_hint, tr(lang, S::TabsHint));
         ui.text(
             312.0,
             34.0,
@@ -240,6 +246,26 @@ pub fn draw(g: &mut SolidElevenGame, ui: &mut Ui) {
     let bind = g.settings.bindings;
     let rows = g.control_rows();
     let top = g.cur.ctl_top;
+    if top > 0 {
+        ui.polygon(
+            &[
+                Vec2::new(76.0, 46.0),
+                Vec2::new(86.0, 46.0),
+                Vec2::new(81.0, 41.0),
+            ],
+            pal::CYAN,
+        );
+    }
+    if top + CONTROL_ROWS_SHOWN < rows {
+        ui.polygon(
+            &[
+                Vec2::new(76.0, 203.0),
+                Vec2::new(86.0, 203.0),
+                Vec2::new(81.0, 208.0),
+            ],
+            pal::CYAN,
+        );
+    }
     for k in top..rows.min(top + CONTROL_ROWS_SHOWN) {
         let y = 50.0 + (k - top) as f32 * 17.0;
         let r = Rect::new(6.0, y, 150.0, 15.0);
@@ -306,9 +332,9 @@ pub fn draw(g: &mut SolidElevenGame, ui: &mut Ui) {
         }
     }
     // The device, with each action on its button.
-    let at = Vec2::new(164.0, 50.0);
+    let at = Vec2::new(164.0, 45.0);
     ui.panel(
-        Rect::new(at.x - 4.0, at.y - 2.0, 156.0, 120.0),
+        Rect::new(at.x - 4.0, at.y - 2.0, 156.0, 122.0),
         Color::rgb(60, 70, 120),
     );
     match (g.cur.ctl_tab, device) {
@@ -325,7 +351,7 @@ pub fn draw(g: &mut SolidElevenGame, ui: &mut Ui) {
     };
     ui.text(
         238.0,
-        158.0,
+        154.0,
         tr(lang, mv),
         pal::DIM,
         Size::Small,
@@ -531,7 +557,7 @@ fn keyboard(ui: &mut Ui, at: Vec2, peek: &InputPeek, bind: &Bindings, lang: Lang
             None if moves => pal::LIME,
             None => Color::rgb(70, 78, 110),
         };
-        ui.fill(Rect::new(x, y, w - 1.0, 11.0), c);
+        ui.fill(Rect::new(x, y, w - 1.0, 10.0), c);
         // The host's names, as printed on a keyboard.
         let label = match key {
             "LSHIFT" | "RSHIFT" => "SHIFT",
@@ -542,7 +568,7 @@ fn keyboard(ui: &mut Ui, at: Vec2, peek: &InputPeek, bind: &Bindings, lang: Lang
         };
         ui.text(
             x + (w - 1.0) * 0.5,
-            y + 1.5,
+            y + 1.0,
             label,
             pal::NAVY,
             Size::Small,
@@ -551,7 +577,7 @@ fn keyboard(ui: &mut Ui, at: Vec2, peek: &InputPeek, bind: &Bindings, lang: Lang
     };
     let mut y = at.y + 2.0;
     for (row, keys) in KEY_ROWS.iter().enumerate() {
-        let mut x = at.x + [0.0, 4.0, 0.0, 0.0][row];
+        let mut x = at.x + [0.0, 0.0, 4.0, 0.0, 0.0][row];
         for key in keys.iter() {
             let w = match *key {
                 "SPACE" => 36.0,
@@ -561,13 +587,13 @@ fn keyboard(ui: &mut Ui, at: Vec2, peek: &InputPeek, bind: &Bindings, lang: Lang
             cap(ui, x, y, w, key);
             x += w;
         }
-        y += 13.0;
+        y += 11.5;
     }
     // The arrows (they move too; bindable as the D-pad): up beside the
     // bottom row, the others under it.
     let ax = at.x + 118.0;
     for (key, dx, dy) in [
-        ("UP", 11.5, -13.0),
+        ("UP", 11.5, -11.5),
         ("LEFT", 0.0, 0.0),
         ("DOWN", 11.5, 0.0),
         ("RIGHT", 23.0, 0.0),
@@ -576,7 +602,7 @@ fn keyboard(ui: &mut Ui, at: Vec2, peek: &InputPeek, bind: &Bindings, lang: Lang
     }
     // Every action's key (the drawing's legend, and the keys it leaves
     // out).
-    y += 17.0;
+    y += 13.0;
     let mut x = at.x;
     for a in Action::ALL {
         let b = bind.of(a);

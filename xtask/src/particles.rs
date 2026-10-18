@@ -86,13 +86,21 @@ fn check(assets: &Path) -> ExitCode {
     let mut failed = false;
     for (name, def) in &list {
         match def {
-            Ok(d) => println!(
-                "ok  {name}: {} · max PC {} / N64 {} / 3DS {}",
-                d.sprite,
-                d.cap(Platform::Pc),
-                d.cap(Platform::N64),
-                d.cap(Platform::N3ds)
-            ),
+            Ok(d) => {
+                // The hardware tiers where they cap differently (#54).
+                let tiers: String = trino_scene::Target::TIERS
+                    .iter()
+                    .filter(|t| d.cap(**t) != d.cap(t.base()))
+                    .map(|t| format!(" / {} {}", t.label(), d.cap(*t)))
+                    .collect();
+                println!(
+                    "ok  {name}: {} · max PC {} / N64 {} / 3DS {}{tiers}",
+                    d.sprite,
+                    d.cap(Platform::Pc),
+                    d.cap(Platform::N64),
+                    d.cap(Platform::N3ds)
+                )
+            }
             Err(e) => {
                 eprintln!("error: {name}: {e}");
                 failed = true;
@@ -145,9 +153,10 @@ fn inspect(assets: &Path, name: &str, rest: &[&str]) -> ExitCode {
         Ok(d) => d,
         Err(e) => return fail(&e),
     };
-    let reports: Vec<particles::SimReport> = Platform::ALL
+    // Every build and both console tiers (`n64_expanded`, `n3ds_new`).
+    let reports: Vec<particles::SimReport> = trino_scene::Target::EVERY
         .iter()
-        .map(|p| particles::simulate(&def, *p, seconds, seed))
+        .map(|t| particles::simulate(&def, *t, seconds, seed))
         .collect();
     if json {
         let rows: Vec<String> = reports
@@ -167,7 +176,7 @@ fn inspect(assets: &Path, name: &str, rest: &[&str]) -> ExitCode {
         println!("{name}: {} for {seconds} s, seed {seed}", def.sprite);
         for r in &reports {
             println!(
-                "  {:4} cap {:3}  live {:3}  peak {:3}  {:4} tris  N64 ≈{:.2} ms  hash {:08x}",
+                "  {:12} cap {:3}  live {:3}  peak {:3}  {:4} tris  N64 ≈{:.2} ms  hash {:08x}",
                 r.platform.key(),
                 r.cap,
                 r.live,

@@ -59,6 +59,10 @@ If a feature cannot work on the N64, the engine does not expose it. Two things f
   (the N64's 4 KB TMEM, its 2 KB EEPROM save, the local-light tier). The PC's strict mode
   (`TRINO_STRICT=1` or `PcRenderer::set_strict`) panics with an actionable message when
   content exceeds the simulated console's `Caps`, including the estimated N64 3D time.
+- **One console, two hardware tiers.** The N64 with the Expansion Pak and the New 3DS
+  have tables of their own (`Caps::N64_EXPANDED`, `Caps::N3DS_NEW`), detected at boot
+  (`Platform::hw_tier`). One ROM or app carries both tiers' resolved content; the design
+  ceiling stays the base console ([ADR 0020](adr/0020-console-hardware-tiers.md)).
 
 Where a platform can do more, it does it behind the same API, chosen by its tier. Local
 lights are the example: per pixel on PC, per vertex on the 3DS and the N64, with fewer

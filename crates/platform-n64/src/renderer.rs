@@ -222,7 +222,8 @@ impl N64Renderer {
             tnl_scratch: Box::new(TnlScratch::new()),
             light: DEFAULT_LIGHT,
             locals: LightList::EMPTY,
-            caps: Caps::N64,
+            // The Expansion Pak's table when the boot found one (issue #54).
+            caps: crate::hw::caps_of_memory(crate::runtime::memory_size()),
             profile: None,
             rsp_meshes: BTreeMap::new(),
             rsp_on: true,

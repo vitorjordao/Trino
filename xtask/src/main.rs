@@ -11,6 +11,7 @@ mod emulators;
 mod fbgolden;
 mod font_assets;
 mod hardware;
+mod hwtier;
 mod impostor;
 mod model;
 mod n3ds;
@@ -68,6 +69,16 @@ commands:
                        Azahar with \"Simulate 3DS GPU timings\" on for this
                        session (also TRINO_AZAHAR_GPU_TIMING=1); your own
                        setting comes back when Azahar exits
+  run|test|watch n64 --expansion-pak on|off   (test: also both)
+                       ares with or without the Expansion Pak (test: on by
+                       default; it checks the ROM's TRINO_HW line, 8M/4M)
+  run|test|watch 3ds --new3ds on|off          (test: also both)
+                       Azahar as a New 3DS or an old one (test: New by
+                       default); your own setting comes back when it exits
+  build|run|test|watch 3ds --speedup on|off
+                       the New 3DS's 804 MHz mode for this build, over
+                       trino.toml's [3ds] speedup (default on); off keeps a
+                       New 3DS on the base tier
   test  [pc|n64|3ds|web] [--bless] [--no-build]
                        run the test suite (default: the workspace's host
                        tests); --bless regenerates golden images
@@ -140,6 +151,15 @@ fn main() -> ExitCode {
     let accurate_flag = args.iter().any(|a| a == "--accurate-timing");
     args.retain(|a| a != "--accurate-timing");
     let accurate = n3ds::accurate_timing(accurate_flag);
+    // The consoles' hardware tiers (issue #54): `--expansion-pak`,
+    // `--new3ds`, `--speedup`.
+    let hw = match hwtier::parse(&mut args) {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
     // `watch pc --game <crate>`: which game crate feeds the hot-reload dylib.
     let game = match args.iter().position(|a| a == "--game") {
         Some(i) => {
@@ -156,13 +176,17 @@ fn main() -> ExitCode {
     };
     // Console builds package the engine's demo or an external project
     // (`--project <dir>`, $TRINO_PROJECT, or a trino.toml in the cwd).
-    let project = match project::Project::select(&mut args) {
+    let mut project = match project::Project::select(&mut args) {
         Ok(p) => p,
         Err(e) => {
             eprintln!("{e}");
             return ExitCode::FAILURE;
         }
     };
+    if let Some(on) = hw.speedup {
+        project.n3ds_speedup = on;
+    }
+    let project = project;
     // Real hardware (`run n64 --device sc64`, `run --target n64 ...`), parsed
     // after `--project <dir>` is gone so it may come first.
     let device = match hardware::parse(&mut args) {
@@ -190,6 +214,22 @@ fn main() -> ExitCode {
         )
     {
         eprintln!("{e}");
+        return ExitCode::FAILURE;
+    }
+    if let Err(e) = hwtier::check(
+        &hw,
+        args.first().map(String::as_str),
+        args.get(1).map(String::as_str),
+    ) {
+        eprintln!("{e}");
+        return ExitCode::FAILURE;
+    }
+    if device.is_some() && hw.expansion_pak.is_some() {
+        eprintln!("xtask: --expansion-pak sets ares's; real hardware has the Pak it has");
+        return ExitCode::FAILURE;
+    }
+    if device.is_some() && hw.new3ds.is_some() {
+        eprintln!("xtask: --new3ds sets Azahar's; real hardware is the console it is");
         return ExitCode::FAILURE;
     }
     if device.is_some() && selftest && no_build {
@@ -273,8 +313,8 @@ fn main() -> ExitCode {
         }
         (Some("test"), Some("all")) => batch(&project, "test", |t| match t {
             Target::Pc => test_pc(&project, bless),
-            Target::N64 => n64::test(&project, bless),
-            Target::N3ds => n3ds::test(&project, !no_build, bless, accurate),
+            Target::N64 => n64::test(&project, bless, hw.pak_tests()),
+            Target::N3ds => n3ds::test(&project, !no_build, bless, accurate, hw.new3ds_tests()),
             Target::Web => web::test(&project, &web_test),
         }),
         (Some("assets"), Some("n64")) => assets_for(&project, Target::N64),
@@ -325,18 +365,20 @@ fn main() -> ExitCode {
         (Some("build"), Some("n64")) => n64::build(&project, selftest),
         (Some("run"), Some("n64")) => match &device {
             Some(d) => hardware::deploy_n64(&project, d, !no_build, selftest),
-            None => n64::run(&project),
+            None => n64::run(&project, &hw),
         },
-        (Some("test"), Some("n64")) => n64::test(&project, bless),
-        (Some("watch"), Some("n64")) => n64::watch(&project),
+        (Some("test"), Some("n64")) => n64::test(&project, bless, hw.pak_tests()),
+        (Some("watch"), Some("n64")) => n64::watch(&project, &hw),
 
         (Some("build"), Some("3ds")) => n3ds::build(&project, selftest),
         (Some("run"), Some("3ds")) => match &device {
             Some(d) => hardware::deploy_3ds(&project, d, !no_build, selftest),
-            None => n3ds::run(&project, accurate),
+            None => n3ds::run(&project, accurate, &hw),
         },
-        (Some("test"), Some("3ds")) => n3ds::test(&project, !no_build, bless, accurate),
-        (Some("watch"), Some("3ds")) => n3ds::watch(&project, accurate),
+        (Some("test"), Some("3ds")) => {
+            n3ds::test(&project, !no_build, bless, accurate, hw.new3ds_tests())
+        }
+        (Some("watch"), Some("3ds")) => n3ds::watch(&project, accurate, &hw),
         (Some("new"), Some(name)) => {
             let rest: Vec<&str> = args.iter().skip(2).map(String::as_str).collect();
             new_game(name, &rest)

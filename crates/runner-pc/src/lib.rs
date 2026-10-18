@@ -16,7 +16,9 @@
 //! the same backend `apps/pc` uses. With the `watch` feature, saving a
 //! master rebakes and re-uploads it live.
 //!
-//! Env knobs: `TRINO_SIM=native|n64|3ds` (console simulation, default n64),
+//! Env knobs: `TRINO_SIM=native|n64|3ds|web` (console simulation, default
+//! n64; `n64x` / `3dsnew` simulate the N64 with the Expansion Pak and the New
+//! 3DS: the console's look, the tier's `Caps` and `Platform::hw_tier`),
 //! `TRINO_SMOKE_FRAMES=N` (exit after N frames and print a `TRINO_FRAME:`
 //! line and a `TRINO_TEXTURES:` line, then `TRINO_RUN_OK frames=N` — CI smoke
 //! tests), `TRINO_WINDOWED=1` (start in a window whatever the saved settings
@@ -208,8 +210,8 @@ pub fn texture_line(renderer: &PcRenderer) -> String {
 /// sprite's 3DS format (the bake's `preview_3ds`), every other profile the
 /// master.
 pub fn sprite_platform(renderer: &PcRenderer) -> trino_asset_pipeline::Platform {
-    use trino_core::Renderer;
-    if *renderer.caps() == trino_core::Caps::N3DS {
+    // By profile: a tier's Caps (the New 3DS's) are not the console's table.
+    if renderer.profile() == SimProfile::N3ds {
         trino_asset_pipeline::Platform::N3ds
     } else {
         trino_asset_pipeline::Platform::Pc
@@ -241,6 +243,15 @@ pub fn profile_from_env() -> SimProfile {
         .ok()
         .and_then(|v| SimProfile::parse(&v))
         .unwrap_or(SimProfile::N64)
+}
+
+/// `TRINO_SIM`'s hardware tier: `n64x` / `3dsnew` are the expanded tiers
+/// (issue #54); anything else the base one.
+pub fn tier_from_env() -> trino_core::HwTier {
+    std::env::var("TRINO_SIM")
+        .ok()
+        .and_then(|v| SimProfile::parse_tier(&v))
+        .map_or(trino_core::HwTier::Base, |(_, t)| t)
 }
 
 /// Open a window and run the game made by `make(screen)` until closed.
@@ -323,8 +334,11 @@ impl Host {
                 .expect("failed to initialize wgpu renderer");
         // The PC's own profile multisamples its edges (TRINO_MSAA=0: off).
         renderer.set_msaa(std::env::var("TRINO_MSAA").as_deref() != Ok("0"));
+        let tier = tier_from_env();
+        renderer.set_hw_tier(tier);
         let mut audio = PcAudio::new();
-        let mut platform = PcPlatform::new(&self.profile.caps()).with_save_file(cfg.save_file());
+        let mut platform =
+            PcPlatform::new(&self.profile.caps().with_tier(tier)).with_save_file(cfg.save_file());
         platform.set_second_screen(renderer.second_screen().map(|s| (s.x as u16, s.y as u16)));
         trino_asset_pipeline::bake_all(
             &cfg.assets_dir(),

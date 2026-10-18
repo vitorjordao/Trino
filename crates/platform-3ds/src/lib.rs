@@ -34,6 +34,8 @@ mod assets;
 mod audio;
 #[cfg(target_os = "horizon")]
 mod host;
+#[cfg(any(target_os = "horizon", test))]
+pub mod hw;
 #[cfg(target_os = "horizon")]
 mod input;
 #[cfg(any(target_os = "horizon", test))]
@@ -44,6 +46,8 @@ mod renderer;
 pub mod runtime;
 #[cfg(target_os = "horizon")]
 mod system;
+#[cfg(any(target_os = "horizon", test))]
+pub mod worker;
 
 #[cfg(target_os = "horizon")]
 pub use assets::N3dsAssets;

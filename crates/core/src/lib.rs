@@ -50,7 +50,7 @@ pub use asset::asset_id;
 pub use audio::{
     Ambience, Audio, Listener, MusicId, SoundId, SoundParams, SoundSource, VoiceId, spatialize,
 };
-pub use caps::{Caps, CapsError};
+pub use caps::{Caps, CapsError, HwTier};
 pub use collide::{MoveResult, move_and_collide};
 pub use entity::{Entity, EntityId, EntityStore};
 pub use game::Game;

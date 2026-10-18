@@ -116,6 +116,11 @@ fn profile_knob_reads_trino_sim() {
         .and_then(|v| SimProfile::parse(&v))
         .unwrap_or(SimProfile::N64);
     assert_eq!(profile_from_env(), expected);
+    let tier = std::env::var("TRINO_SIM")
+        .ok()
+        .and_then(|v| SimProfile::parse_tier(&v))
+        .map_or(trino_core::HwTier::Base, |(_, t)| t);
+    assert_eq!(trino_runner_pc::tier_from_env(), tier);
 }
 
 /// What a standalone host does at start: bake the project, upload every

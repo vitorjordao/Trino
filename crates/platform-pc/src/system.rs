@@ -37,6 +37,8 @@ pub struct PcPlatform {
     labels: [[Option<String>; 2]; BINDINGS],
     /// The game's last rebind/cancel/reset, for the host to apply.
     input_request: Option<InputRequest>,
+    /// The simulated console's hardware tier ([`Platform::hw_tier`]).
+    hw_tier: trino_core::HwTier,
 }
 
 impl PcPlatform {
@@ -55,7 +57,14 @@ impl PcPlatform {
             pad_name: None,
             labels: Default::default(),
             input_request: None,
+            hw_tier: caps.hw_tier,
         }
+    }
+
+    /// The host simulates a console's tier (`TRINO_SIM=n64x|3dsnew`, the
+    /// editor's Game view): what [`Platform::hw_tier`] answers.
+    pub fn set_hw_tier(&mut self, tier: trino_core::HwTier) {
+        self.hw_tier = tier;
     }
 
     /// The host publishes the input backend's state: support, a pending
@@ -106,6 +115,10 @@ impl PcPlatform {
 impl Platform for PcPlatform {
     fn now_micros(&self) -> u64 {
         self.start.elapsed().as_micros() as u64
+    }
+
+    fn hw_tier(&self) -> trino_core::HwTier {
+        self.hw_tier
     }
 
     fn log(&self, message: &str) {

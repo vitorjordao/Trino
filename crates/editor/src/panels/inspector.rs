@@ -66,7 +66,7 @@ fn entity(app: &mut App, ui: &mut egui::Ui, path: &[usize]) {
     // The entity's render path on each platform (the budget's estimate
     // from the scene camera; issue #51's "Render path" row).
     let render_paths = app.budgets.as_ref().zip(app.doc.scene.draw_name(path)).map(
-        |((_, [n64, n3ds, pc, web]), name)| {
+        |((_, [n64, n3ds, pc, web, ..]), name)| {
             [
                 ("PC", trino_scene::Target::Pc, pc.path_of(&name)),
                 ("N64", trino_scene::Target::N64, n64.path_of(&name)),
@@ -774,8 +774,9 @@ fn entity(app: &mut App, ui: &mut egui::Ui, path: &[usize]) {
         e.vis = None;
     }
 
-    // Per-platform variants (PC / N64 / 3DS / Web columns).
-    let variants = Target::ALL
+    // Per-platform variants (PC / N64 / 3DS / Web columns, and the
+    // consoles' tiers).
+    let variants = Target::EVERY
         .iter()
         .filter(|t| e.platforms.own(**t).is_some())
         .count();
@@ -1882,7 +1883,8 @@ fn scene_settings(app: &mut App, ui: &mut egui::Ui) {
             "Platform budget (scene camera)",
             |ui| {
                 let open = app.inspect_focus.as_deref() == Some("budget");
-                let picked = budget_section(ui, budgets, &app.project.tmem, open);
+                let game = app.game_view.target();
+                let picked = budget_section(ui, budgets, &app.project.tmem, open, game);
                 texture_memory(ui, &mut app.textures, &app.project);
                 picked
             },
@@ -2174,16 +2176,71 @@ fn ambient_occlusion(ui: &mut egui::Ui, ao: &mut Option<trino_scene::AmbientOccl
     }
 }
 
+/// The scene camera's frame on every platform (the Environment's "Platform
+/// budget"); `game` is the Game view's target, whose tier column is lit.
+/// The consoles' hardware tiers side by side (issue #54, ADR 0020): the
+/// N64 and the N64 + Expansion Pak, the 3DS and the New 3DS, then each
+/// tier's RAM line and what the expanded tier's hardware is.
+fn tier_tables(ui: &mut egui::Ui, budgets: &crate::budget::Budgets, game: Target) {
+    let small = |text: &str, color| RichText::new(text).size(12.0).color(color);
+    for console in [Target::N64, Target::N3ds] {
+        let Some(table) = crate::budget::tier_table(budgets, console) else {
+            continue;
+        };
+        ui.add_space(2.0);
+        egui::Grid::new(("budget-tiers", console.key()))
+            .num_columns(3)
+            .spacing([14.0, 1.0])
+            .show(ui, |ui| {
+                ui.label(small("Tier", c::TEXT_FAINT));
+                for t in table.targets {
+                    let color = if t == game {
+                        c::ACCENT_TEXT
+                    } else {
+                        c::TEXT_WEAK
+                    };
+                    ui.label(small(t.label(), color));
+                }
+                ui.end_row();
+                // RAM has its own lines below, in KB.
+                for (label, base, expanded) in table.rows.iter().filter(|r| r.0 != "RAM") {
+                    ui.label(small(label, c::TEXT_WEAK));
+                    ui.label(small(base, c::TEXT));
+                    ui.label(small(expanded, c::TEXT));
+                    ui.end_row();
+                }
+            });
+        for (i, t) in table.targets.into_iter().enumerate() {
+            let Some(text) = trino_scene::budget::ram_line(crate::budget::budget_of(budgets, t))
+            else {
+                continue;
+            };
+            let color = if table.ram[i] > 1.0 {
+                c::ERROR
+            } else if table.ram[i] > 0.75 {
+                c::WARN
+            } else {
+                c::TEXT_WEAK
+            };
+            ui.add(egui::Label::new(small(&text, color)).truncate());
+        }
+        if let Some(text) = trino_scene::budget::hardware_line(table.targets[1]) {
+            ui.add(egui::Label::new(small(&text, c::TEXT_FAINT)).truncate());
+        }
+    }
+}
+
 fn budget_section(
     ui: &mut egui::Ui,
-    budgets: &[trino_scene::budget::FrameBudget; 4],
+    budgets: &crate::budget::Budgets,
     tmem: &std::collections::BTreeMap<u32, Option<u32>>,
     open: bool,
+    game: Target,
 ) -> Option<String> {
     let line = |ui: &mut egui::Ui, text: String, color: egui::Color32| {
         ui.add(egui::Label::new(RichText::new(text).size(12.0).color(color)).truncate());
     };
-    let [n64, n3ds, pc, web] = budgets;
+    let [n64, n3ds, pc, web, ..] = budgets;
     let mut picked = None;
     let pct = n64.n64_frame_percent();
     line(
@@ -2255,6 +2312,7 @@ fn budget_section(
     for w in trino_scene::budget::web_warnings(web) {
         line(ui, w, c::WARN);
     }
+    tier_tables(ui, budgets, game);
     // Water (ADR 0015): what the N64 tier spends on each surface.
     let tmem = |id: trino_core::SpriteId| tmem.get(&id.0).copied().flatten();
     for text in trino_scene::budget::water_lines(n64, &tmem) {

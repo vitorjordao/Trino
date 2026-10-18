@@ -28,6 +28,8 @@ save = "eeprom16k"
 [3ds]
 package = "{{name}}-3ds"
 bin = "{{name}}-3ds"
+# The New 3DS runs at 804 MHz (its expanded tier, `n3ds_new` content) unless:
+# speedup = false
 
 [test]
 # 30 fps in emulated N64 time (the self-test's TRINO_FRAME lines).

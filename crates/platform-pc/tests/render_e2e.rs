@@ -826,6 +826,28 @@ fn n64_look_and_strict_mode_budgets() {
     });
     assert!(msg.contains("invalid TFNT"), "{msg}");
 
+    // More models loaded than the console's RAM: 4 MB on the base N64,
+    // 8 MB with the Expansion Pak (issue #54, ADR 0020).
+    let ball = assets
+        .models
+        .iter()
+        .find(|m| trino_core::ModelId(m.id) == model(BALL))
+        .unwrap()
+        .tmdl
+        .clone();
+    for i in 0..(5 << 20) / ball.len() + 1 {
+        r.upload_mesh(trino_core::ModelId(0x7000_0000 + i as u32), ball.clone());
+    }
+    let empty = |r: &mut PcRenderer| {
+        r.begin_frame(Color::BLACK);
+        r.end_frame();
+    };
+    let msg = panics(&mut r, &|r| empty(r));
+    assert!(msg.contains("of RAM on the Base tier"), "{msg}");
+    r.set_hw_tier(trino_core::HwTier::Expanded);
+    empty(&mut r);
+    r.set_hw_tier(trino_core::HwTier::Base);
+
     // The renderer keeps working after the rejected frames.
     r.set_strict(false);
     r.begin_frame(Color::rgb(0, 0, 248));

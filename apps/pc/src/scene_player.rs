@@ -88,13 +88,15 @@ impl ScenePlayer {
             fov: c.fov.to_radians(),
             scene,
             lib,
-            // The simulated console's variants (`TRINO_SIM`).
+            // The simulated console's variants (`TRINO_SIM`; `n64x` and
+            // `3dsnew` its expanded tier's, issue #54).
             platform: match trino_runner_pc::profile_from_env() {
                 trino_platform_pc::SimProfile::Native => Target::Pc,
                 trino_platform_pc::SimProfile::N64 => Target::N64,
                 trino_platform_pc::SimProfile::N3ds => Target::N3ds,
                 trino_platform_pc::SimProfile::Web => Target::Web,
-            },
+            }
+            .with_tier(trino_runner_pc::tier_from_env()),
             time: 0.0,
             last_check: Instant::now(),
         };

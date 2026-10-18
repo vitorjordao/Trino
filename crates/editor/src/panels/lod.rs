@@ -3,6 +3,9 @@
 //! platform, what each level costs, and a preview slider that makes both
 //! views draw the entity as if the camera were that far (the switch shows
 //! live). Edits the `lod` list of the scene file (`trino_scene::LodDef`).
+//! The consoles' tiers (`n64_expanded`, `n3ds_new`) get a start of their
+//! own when "Tiers" shows them (the Platforms tab's switches), else they
+//! start where their console does.
 //!
 //! Plain data in, `bool` out: tested without a GPU in `widget_tests.rs`.
 
@@ -73,6 +76,12 @@ pub fn ui(
 ) -> bool {
     let mut changed = false;
     let mut remove = None;
+    let own = |t| lod.iter().any(|l| l.platforms.own(t).is_some());
+    if !lod.is_empty() {
+        crate::panels::platforms::tier_toggles(ui, own);
+    }
+    let targets = crate::panels::platforms::with_tiers(ui.ctx(), &PLATFORMS, own);
+    let tiers = (targets.len() - PLATFORMS.len()) as f32;
     for (i, level) in lod.iter_mut().enumerate() {
         let n = i + 1;
         ui.horizontal(|ui| {
@@ -140,15 +149,15 @@ pub fn ui(
         });
         // Where this level starts on each platform: one row when it fits,
         // a row per platform in a narrow inspector.
-        if ui.available_width() >= 470.0 {
+        if ui.available_width() >= 470.0 + tiers * 120.0 {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 3.0;
-                for t in PLATFORMS {
+                for &t in &targets {
                     changed |= platform_at(ui, n, t, level);
                 }
             });
         } else {
-            for t in PLATFORMS {
+            for &t in &targets {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 3.0;
                     changed |= platform_at(ui, n, t, level);
@@ -228,16 +237,24 @@ const PLATFORMS: [Target; 4] = [Target::N64, Target::N3ds, Target::Pc, Target::W
 fn platform_at(ui: &mut egui::Ui, n: usize, t: Target, level: &mut LodDef) -> bool {
     let mut changed = false;
     let base = level.distance;
+    // The Web follows the PC, a tier its console, until it has its own.
+    let from = t.fallback();
     let slot = level.platforms.get_mut(t);
-    let shown = match slot {
-        None => (if t == Target::Web { "=PC" } else { "=" }).to_string(),
-        Some(LodAt::At(_)) => "at".to_string(),
-        Some(LodAt::Never) => "never".to_string(),
+    let shown = match (slot.as_ref(), from) {
+        (None, Some(f)) => format!("={}", f.label()),
+        (None, None) => "=".to_string(),
+        (Some(LodAt::At(_)), _) => "at".to_string(),
+        (Some(LodAt::Never), _) => "never".to_string(),
     };
     ui.add_sized(
         [26.0, 20.0],
-        egui::Label::new(RichText::new(t.label()).size(11.0).color(c::TEXT_WEAK)),
-    );
+        egui::Label::new(
+            RichText::new(crate::panels::platforms::tier_short(t))
+                .size(11.0)
+                .color(c::TEXT_WEAK),
+        ),
+    )
+    .on_hover_text(t.long_label());
     let label = format!("LOD {n} on {}", t.label());
     // 0 = same as the level, 1 = its own distance, 2 = never.
     let mode = match slot {
@@ -249,12 +266,11 @@ fn platform_at(ui: &mut egui::Ui, n: usize, t: Target, level: &mut LodDef) -> bo
         .selected_text(shown)
         .width(54.0)
         .show_ui(ui, |ui| {
-            let same = if t == Target::Web {
-                "= the PC"
-            } else {
-                "= level"
-            };
-            for (m, text) in [same, "own distance", "never"].into_iter().enumerate() {
+            let same = from.map_or("= level".to_string(), |f| format!("= the {}", f.label()));
+            for (m, text) in [same.as_str(), "own distance", "never"]
+                .into_iter()
+                .enumerate()
+            {
                 if ui.selectable_label(mode == m, text).clicked() && mode != m {
                     *slot = match m {
                         0 => None,
@@ -265,18 +281,22 @@ fn platform_at(ui: &mut egui::Ui, n: usize, t: Target, level: &mut LodDef) -> bo
                 }
             }
         });
+    let hint = match t {
+        Target::N64 => "On the N64 an impostor is CPU-submitted (~44 µs): measure before \
+                        switching to it early — or skip the level there"
+            .to_string(),
+        Target::Web => "Where this level starts in a browser: the PC's start unless the Web \
+                        has its own"
+            .to_string(),
+        t if t.hw_tier().is_expanded() => format!(
+            "Where this level starts on the {}: the {}'s start unless it has its own",
+            t.long_label(),
+            t.base().label()
+        ),
+        _ => "Where this level starts on this platform".to_string(),
+    };
     r.response
-        .on_hover_text(match t {
-            Target::N64 => {
-                "On the N64 an impostor is CPU-submitted (~44 µs): measure before \
-                 switching to it early — or skip the level there"
-            }
-            Target::Web => {
-                "Where this level starts in a browser: the PC's start unless the Web \
-                 has its own"
-            }
-            _ => "Where this level starts on this platform",
-        })
+        .on_hover_text(hint)
         .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, &label));
     if let Some(LodAt::At(d)) = slot {
         changed |= ui

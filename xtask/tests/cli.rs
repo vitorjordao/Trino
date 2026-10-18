@@ -82,6 +82,9 @@ fn help_and_no_arguments_list_every_command() {
         "editor [<dir>]",
         "run n64 --device sc64|everdrive",
         "run 3ds --device network",
+        "run|test|watch n64 --expansion-pak on|off",
+        "run|test|watch 3ds --new3ds on|off",
+        "build|run|test|watch 3ds --speedup on|off",
     ] {
         assert!(text.contains(cmd), "help lacks `{cmd}`");
     }
@@ -106,6 +109,44 @@ fn unknown_invocations_fail_with_the_usage() {
     assert_fails_with(
         &xtask(&["watch", "pc", "--game"]),
         "--game needs a crate name",
+    );
+}
+
+/// The hardware-tier switches (issue #54) fail fast, before any toolchain
+/// runs, when their value or their command is wrong.
+#[test]
+fn hardware_tier_flags_go_with_their_console() {
+    assert_fails_with(
+        &xtask(&["test", "n64", "--expansion-pak", "maybe"]),
+        "--expansion-pak takes on, off or both",
+    );
+    assert_fails_with(
+        &xtask(&["build", "n64", "--expansion-pak", "off"]),
+        "--expansion-pak goes with `run|test|watch n64`",
+    );
+    assert_fails_with(
+        &xtask(&["test", "3ds", "--expansion-pak", "off"]),
+        "--expansion-pak goes with `run|test|watch n64`",
+    );
+    assert_fails_with(
+        &xtask(&["run", "3ds", "--new3ds", "both"]),
+        "only `test 3ds` boots twice",
+    );
+    assert_fails_with(
+        &xtask(&["test", "n64", "--new3ds", "off"]),
+        "--new3ds goes with `run|test|watch 3ds`",
+    );
+    assert_fails_with(
+        &xtask(&["build", "n64", "--speedup", "off"]),
+        "--speedup goes with `build|run|test|watch 3ds`",
+    );
+    assert_fails_with(
+        &xtask(&["build", "3ds", "--speedup", "both"]),
+        "--speedup takes on or off",
+    );
+    assert_fails_with(
+        &xtask(&["run", "n64", "--device", "sc64", "--expansion-pak", "off"]),
+        "real hardware has the Pak it has",
     );
 }
 
@@ -321,6 +362,16 @@ fn assets_pc_bakes_the_repo_manifest() {
             .filter(|l| kinds.iter().any(|k| l.starts_with(&format!("[{k}."))))
             .count()
     };
+    // Models named only for another platform or a console tier (issue #54)
+    // are not the PC's.
+    let parsed =
+        trino_asset_pipeline::Manifest::load(&root().join("assets/manifest.toml")).unwrap();
+    let not_pc = parsed
+        .models
+        .values()
+        .filter(|d| !d.bakes_for(trino_asset_pipeline::Platform::Pc))
+        .count();
+    assert!(not_pc > 0, "the self-test's tier-only model");
     let all = declared(&[
         "sprites",
         "sounds",
@@ -330,7 +381,7 @@ fn assets_pc_bakes_the_repo_manifest() {
         "blobs",
         "scenes",
         "particles",
-    ]);
+    ]) - not_pc;
     // A font bakes twice under one handle: atlas sprite + glyph table.
     let fonts = declared(&["fonts"]);
     assert!(fonts > 0);
@@ -338,7 +389,7 @@ fn assets_pc_bakes_the_repo_manifest() {
     let index = std::fs::read_to_string(root().join("target/assets/pc/index.toml")).unwrap();
     assert_eq!(index.matches("[[asset]]").count(), count);
     let kind = |k: &str| index.matches(&format!("kind = \"{k}\"")).count();
-    assert_eq!(kind("model"), declared(&["models"]));
+    assert_eq!(kind("model"), declared(&["models"]) - not_pc);
     assert_eq!(kind("sound"), declared(&["sounds"]));
     assert_eq!(kind("music"), declared(&["music"]));
     assert_eq!(kind("font"), fonts);

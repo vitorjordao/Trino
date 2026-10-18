@@ -131,6 +131,23 @@ step probes for that.
   (the cards plus a photo-like card in RGBA8/ETC1/RGBA4). `--bless` rewrites all five:
   restore the four you didn't mean to change (`git checkout tests/golden/3ds/<name>.png`).
 
+## New 3DS and the second core (issue #54, ADR 0020)
+
+- `trino_hw_probe(want_speedup)` runs right after `trino_init`: `APT_CheckNew3DS`, then
+  `osSetSpeedupEnable(true)` unless the RomFS has `no_speedup` (written by the bake when
+  `trino.toml` says `[3ds] speedup = false` or the command says `--speedup off`). It
+  returns bit 0 New 3DS, bit 1 speedup, bits 8.. the app's memory in MiB
+  (`src/hw.rs::Probe`, host-tested).
+- The worker: `trino_worker_start` creates one thread (`threadCreate`, 32 KB stack, the
+  main thread's priority clamped to 0x18..0x3F) on core 2, else after
+  `APT_SetAppCpuTimeLimit(30)` on core 1; a 32-slot ring under a `LightLock`, a
+  `LightSemaphore` for work, a `LightEvent` (one-shot) when the pending count reaches
+  0. `main` joins it before `ndspExit`. A job is `extern "C" fn(u32)`: two scalar
+  arguments across the shim. Jobs run off the main thread: never call the renderer, the
+  audio or the platform from one.
+- The index's 4th column (`base` / `expanded`) is filtered in `src/assets.rs` against
+  `runtime::hw_tier()`: a tier twin is `<id>.x.blob` in the RomFS.
+
 ## The shim rule
 
 Unlike the N64 there is no ABI hazard (both sides are ARM EABI-hf), but the

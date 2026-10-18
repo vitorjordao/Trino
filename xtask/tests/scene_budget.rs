@@ -444,6 +444,78 @@ fn scene_budget_cli_prints_the_same_numbers() {
     assert!(!bad.status.success());
 }
 
+/// `--platform n64_expanded|n3ds_new` (issue #54): a console's estimate on
+/// its expanded tier, held to that tier's RAM, cores and scales.
+#[test]
+fn scene_budget_cli_estimates_the_hardware_tiers() {
+    let json = |platform: &str| -> serde_json::Value {
+        let out = Command::new(env!("CARGO_BIN_EXE_xtask"))
+            .args([
+                "scene",
+                "budget",
+                "scenes/showcase.scene.ron",
+                "--platform",
+                platform,
+                "--json",
+            ])
+            .current_dir(root())
+            .env_remove("TRINO_PROJECT")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{platform}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        v.as_array().unwrap()[0].clone()
+    };
+    for (tier, console, ram, cores) in [
+        ("n64_expanded", "n64", 8u32 << 20, 1),
+        ("n3ds_new", "3ds", 64 << 20, 2),
+    ] {
+        let (x, b) = (json(tier), json(console));
+        assert_eq!(
+            (&x["platform"], &x["tier"]),
+            (&tier.into(), &"expanded".into())
+        );
+        assert_eq!(b["tier"], "base");
+        assert_eq!(
+            (&x["ram_bytes"], &x["cpu_cores"]),
+            (&ram.into(), &cores.into())
+        );
+        // The showcase has no tier variants: the console's frame and models.
+        for k in ["draws", "tris", "model_bytes"] {
+            assert_eq!(x[k], b[k], "{tier} {k}");
+        }
+        assert!(b["model_bytes"].as_u64().unwrap() > 0);
+    }
+    assert_eq!(json("3ds")["crowd_scale"], 1.0);
+    assert_eq!(json("n3ds_new")["crowd_scale"], 2.0);
+    assert_eq!(json("pc")["ram_bytes"], serde_json::Value::Null);
+    let out = Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .args([
+            "scene",
+            "budget",
+            "scenes/showcase.scene.ron",
+            "--platform",
+            "n3ds_new",
+        ])
+        .current_dir(root())
+        .env_remove("TRINO_PROJECT")
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        text.contains("New 3DS: 2 cores at 804 MHz, 64 MB RAM, crowds x2, particles x2"),
+        "{text}"
+    );
+    assert!(
+        text.contains("New 3DS RAM ") && text.contains("3DS: GPU T&L"),
+        "{text}"
+    );
+}
+
 #[test]
 fn the_web_warns_past_a_phones_budget() {
     use trino_scene::budget::{WEB_CALLS_WARN, WEB_TRIS_WARN, WebCalls, web_line, web_warnings};

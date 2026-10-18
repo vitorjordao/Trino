@@ -84,6 +84,37 @@ What xtask does with Azahar's `qt-config.ini`:
 - **Not with `--device`.** A real 3DS has real timing, so xtask refuses the flag
   there, and on the N64 as well.
 
+## Hardware tiers: the Expansion Pak and the New 3DS
+
+One ROM and one `.3dsx` run on both variants of each console
+([ADR 0020](adr/0020-console-hardware-tiers.md)). The boot line says which one it found,
+before anything else the game logs:
+
+```
+TRINO_HW n64 ram=8M tier=expanded                         # Expansion Pak (4M: base)
+TRINO_HW 3ds new=1 speedup=1 app_ram=96M tier=expanded    # New 3DS, 804 MHz
+TRINO_HW 3ds new=1 speedup=0 app_ram=96M tier=base        # New 3DS, [3ds] speedup = false
+TRINO_HW 3ds new=0 speedup=0 app_ram=96M tier=base        # old 3DS / 2DS
+```
+
+- **N64:** the boot reads libdragon's `get_memory_size()`; 8 MB means the Pak is in.
+  The game must still fit and run in 4 MB: the tier adds RAM, never CPU time.
+- **3DS:** `APT_CheckNew3DS`, then `osSetSpeedupEnable(true)` (804 MHz and the L2 cache)
+  unless the project set `[3ds] speedup = false` in `trino.toml` (the bake writes a
+  `no_speedup` file into the RomFS). A New 3DS without the speedup runs on the base tier,
+  so the game's timing is the old 3DS's. Azahar boots both builds but runs the ARM11 at
+  one clock either way (castle64 and Solid Eleven measure the same CPU time, ADR 0020
+  §7): the speedup's gain is measured here, on the console. `app_ram` is the
+  application memory region the system gave the app, reported, not gated on: Azahar
+  2126.2 gives a `.3dsx` 96 MB in both modes (the lines above); a console's depends on
+  its model and how the app was launched.
+- **Real hardware is the console it is:** `--expansion-pak` and `--new3ds` only set the
+  emulators' switches, and xtask refuses them with `--device`. `--speedup on|off` changes
+  the build, so it works with `--device network` too.
+- **The second core** on the 3DS (`trino_platform_3ds::worker`): core 2 on a New 3DS,
+  core 1 at 30% (`APT_SetAppCpuTimeLimit(30)`) on an old one. The self-test's
+  `TRINO_STEP:worker core=N queued=8 us=…` line shows which one the jobs ran on.
+
 ## How the log gets out
 
 | Console | Game side | Host side |

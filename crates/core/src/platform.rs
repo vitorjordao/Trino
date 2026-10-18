@@ -168,6 +168,16 @@ pub trait Platform {
         None
     }
 
+    /// Which variant of the console the game runs on ([`crate::HwTier`],
+    /// ADR 0020): `Expanded` on an N64 with the Expansion Pak and on a New
+    /// 3DS / New 2DS XL, detected at boot; `Base` everywhere else (and on
+    /// the PC unless `TRINO_SIM=n64x|3dsnew` simulates a tier). The
+    /// renderer's [`caps`](crate::Renderer::caps) is that tier's table.
+    /// Branch on it at update time; content picks its tier variants as data.
+    fn hw_tier(&self) -> crate::HwTier {
+        crate::HwTier::Base
+    }
+
     /// The window/monitor/picture sizes and display settings, on platforms
     /// where they can change (PC). `None` on consoles.
     fn display(&self) -> Option<DisplayInfo> {

@@ -349,7 +349,7 @@ fn visit(
                 .lib
                 .impostors
                 .get(imp)
-                .and_then(|per| per[ctx.target.index()])
+                .and_then(|per| per[ctx.target.base().index()])
             {
                 Some(baked) => LodDraw::Impostor(imp.clone(), baked),
                 None => {

@@ -3,6 +3,10 @@
 //! `cargo xtask assets n64` writes `index.tsv` into the filesystem:
 //! one `handle-hex \t kind \t filename` line per asset. Loading by handle
 //! keeps game code identical across platforms (`SpriteId::from_path`).
+//! An optional fourth column names the only hardware tier that loads the
+//! line (`base` or `expanded`, issue #54): a scene or a particle effect
+//! whose tier variants differ is baked twice under one handle, a model
+//! listed for `n64_expanded` only once, and each N64 loads its own.
 
 use alloc::ffi::CString;
 use alloc::string::String;
@@ -33,12 +37,16 @@ impl N64Assets {
             runtime::log("TRINO_ASSETS: no index.tsv in DFS\n");
             return;
         };
+        let tier = runtime::hw_tier();
         for line in index.lines() {
             let mut cols = line.split('\t');
             let (Some(id_hex), Some(kind), Some(file)) = (cols.next(), cols.next(), cols.next())
             else {
                 continue;
             };
+            if !trino_core::asset::loads_on(cols.next(), tier) {
+                continue;
+            }
             let Ok(id) = u32::from_str_radix(id_hex, 16) else {
                 continue;
             };

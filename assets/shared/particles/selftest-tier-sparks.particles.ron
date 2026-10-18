@@ -1,0 +1,22 @@
+// Sparks for castle64's hardware-tier step (selftest::hw_tier, issue #54):
+// capped 4 on every base console, 6 on the N64 with the Expansion Pak and
+// on the New 3DS. The consoles carry both caps; each loads its tier's.
+(
+    version: 3,
+    sprite: "sprites/selftest_quadrants",
+    rate: 30.0,
+    life: (0.6, 1.2),
+    speed: (1.5, 3.0),
+    direction: (0.0, 1.0, 0.0),
+    spread: 35.0,
+    gravity: (0.0, -6.0, 0.0),
+    size: (0.3, 0.1),
+    color: ((255, 230, 120, 255), (255, 80, 20, 0)),
+    frames: 2,
+    frame_size: (8.0, 8.0),
+    max: 4,
+    platforms: (
+        n64_expanded: Some((max: Some(6))),
+        n3ds_new: Some((max: Some(6))),
+    ),
+)

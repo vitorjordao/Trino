@@ -11,7 +11,9 @@
 //!   printing a `TRINO_FRAME:` line (frame time, draws, the PC GPU T&L split)
 //!   and a `TRINO_TEXTURES:` line (sprite textures on the GPU, BC ones).
 //! - `TRINO_BC=0` — no BC textures: decoded RGBA8, as on a GPU without BC.
-//! - `TRINO_SIM=native|n64|3ds` — console simulation profile (default n64).
+//! - `TRINO_SIM=native|n64|3ds|web` — console simulation profile (default
+//!   n64); `n64x` / `3dsnew` add the expanded hardware tier (the N64 with
+//!   the Expansion Pak, the New 3DS: the tier's `Caps` and `hw_tier`).
 //! - `TRINO_SCENE=scenes/x.scene.ron` — play an editor scene instead of the
 //!   game (reloads on scene/prefab/material edits; see `scene_player`).
 //! - `TRINO_GAME=showcase` — run `examples/showcase` (the editor's demo
@@ -143,10 +145,13 @@ impl App {
         let mut renderer =
             pollster::block_on(PcRenderer::new_windowed(window.clone(), self.profile))
                 .expect("failed to initialize wgpu renderer");
+        // `TRINO_SIM=n64x|3dsnew`: the console's expanded tier (#54).
+        let tier = trino_runner_pc::tier_from_env();
+        renderer.set_hw_tier(tier);
         let mut audio = PcAudio::new();
         // Saves go next to the build output, capped at the simulated
         // console's budget (an N64 profile gets the 2 KB EEPROM).
-        let mut platform = PcPlatform::new(&self.profile.caps())
+        let mut platform = PcPlatform::new(&self.profile.caps().with_tier(tier))
             .with_save_file(PathBuf::from("target/save/castle64.sav"));
 
         // Bake + load. Dev-time convenience: the app always starts fresh.

@@ -58,6 +58,10 @@ impl Platform for N3dsPlatform {
         self.blobs.get(&id.0).copied()
     }
 
+    fn hw_tier(&self) -> trino_core::HwTier {
+        runtime::hw_tier()
+    }
+
     fn second_screen(&self) -> Option<(u16, u16)> {
         Some((320, 240))
     }

@@ -1,8 +1,10 @@
 // Trino placeholder model ("fake object"). Edit and save: it hot-reloads.
 // Replace with real art by pointing the manifest `file` at a .glb —
 // the logical path (and every reference to it) stays the same.
+// 10 segments (100 triangles): five coins of 256 were a quarter of the
+// showcase's N64 RSP time for rings ~20 px wide (issue #69).
 (
     shape: Torus(radius: 0.35, tube: 0.09),
     color: (255, 206, 64, 255),
-    segments: 16,
+    segments: 10,
 )

@@ -72,12 +72,12 @@ rsp_draws = 0
 rsp_tris = 0
 
 [showcase-river]
-verts = 2083
-tris_in = 1163
+verts = 691
+tris_in = 467
 clipped = 38
 splits = 0
-backfaced = 485
-emitted = 655
+backfaced = 131
+emitted = 313
 culled = 23
-rsp_draws = 59
-rsp_tris = 3983
+rsp_draws = 73
+rsp_tris = 3911

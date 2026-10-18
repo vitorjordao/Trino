@@ -13,8 +13,7 @@
 use trino_core::perf::{FRAME_30FPS_US, N64_COST};
 use trino_core::render3d::{
     Camera3, GpuReject, Light, Mesh, PcGpuReject, RspReject, TnlContext, TnlScratch, TnlStats,
-    gpu_check, gpu_mesh_check, pc_gpu_check, pc_gpu_mesh_check, rsp_check, rsp_mesh_check,
-    tessellate_with,
+    gpu_check, gpu_mesh_check, pc_gpu_check, pc_gpu_mesh_check, rsp_plan, tessellate_with,
 };
 use trino_core::{LodPick, ModelId, SpriteId, Vec2};
 
@@ -358,11 +357,10 @@ pub fn estimate<'m>(
         if target != Target::N64 {
             continue;
         }
-        match rsp_mesh_check(&mesh).and_then(|_| rsp_check(&ctx, &mesh, &item.matrix, &item.params))
-        {
-            Ok(_) => {
-                b.rsp_draws += 1;
-                b.rsp_tris += (mesh.index_count / 3) as u32;
+        match rsp_plan(&ctx, &mesh, &item.matrix, &item.params) {
+            Ok((draws, tris)) => {
+                b.rsp_draws += draws;
+                b.rsp_tris += tris;
                 b.paths.push(path(item, RenderPath::Hardware));
             }
             Err(r) => {

@@ -11,10 +11,10 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use trino_core::memo::{self, MemoKey, MemoSlot};
 use trino_core::perf::RenderProfile;
 use trino_core::render3d::{
-    Camera3, DEFAULT_LIGHT, Light, Mesh, MeshLayout, NEAR_PLANE, RspFog, RspPan, ScreenTri,
-    TexBind, TnlContext, TnlScratch, TnlStats, face_normal, flat_normal, flat_ratios,
-    painter_index, painter_key, rsp_band, rsp_color, rsp_eligible_mv, rsp_hull_inside,
-    rsp_mesh_supported,
+    Camera3, DEFAULT_LIGHT, Light, MAX_JOINTS, Mesh, MeshLayout, NEAR_PLANE, RspFog, RspPan,
+    RspPart, ScreenTri, TexBind, TnlContext, TnlScratch, TnlStats, face_normal, flat_normal,
+    flat_ratios, painter_index, painter_key, rsp_band, rsp_color, rsp_eligible_mv, rsp_hull_inside,
+    rsp_mesh_supported, rsp_part_bounds, rsp_rigid_check, rsp_rigid_draws,
 };
 use trino_core::text::{BitmapFont, GlyphIndex};
 use trino_core::{
@@ -111,7 +111,11 @@ pub struct N64Renderer {
     /// (`flat_ratios`), baked the first time a mesh is drawn `Shading::Flat`
     /// on the RSP under them (`None`: it can't have one). Last:
     /// the hot fields above keep their offsets.
-    rsp_flat: BTreeMap<(u32, [u16; 3]), Option<RspMesh>>,
+    rsp_flat: FlatCopies,
+    /// Rigid skinned meshes' RSP parts (`rsp::build_part`), one per joint, and
+    /// their bind-pose spheres (`rsp_part_bounds`): a posed draw becomes a
+    /// command per joint on screen (`rsp_rigid_draws`).
+    rsp_rigid: BTreeMap<u32, Rc<RigidCopy>>,
 }
 
 /// Memo slots (268 bytes each): a few hundred draws per frame rarely share one.
@@ -186,6 +190,7 @@ impl N64Renderer {
             memo: alloc::vec![MemoSlot::EMPTY; MEMO_SLOTS],
             memo_gen: 0,
             rsp_flat: BTreeMap::new(),
+            rsp_rigid: BTreeMap::new(),
             water_state: WaterState::NONE,
             pending_water: Vec::new(),
             pending_water_tex: Vec::new(),
@@ -445,6 +450,10 @@ impl N64Renderer {
             self.rsp_meshes.insert(id, rm);
         }
         self.rsp_flat.retain(|k, _| k.0 != id);
+        self.rsp_rigid.remove(&id);
+        if mesh.joint_count() > 0 && rsp_rigid_check(&mesh).is_ok() {
+            self.rsp_rigid.insert(id, Rc::new(rigid_copy(&mesh)));
+        }
         self.meshes.insert(id, (tmdl, layout));
         self.memo_gen = self.memo_gen.wrapping_add(1);
         true
@@ -497,10 +506,9 @@ impl N64Renderer {
         let flat = (params.shading == Shading::Flat).then(|| flat_ratios(matrix));
         let rm = match flat {
             Some(ratios) => {
-                bake_flat(&mut self.rsp_flat, (model.0, ratios), &mesh);
-                self.rsp_flat
-                    .get(&(model.0, ratios))
-                    .and_then(Option::as_ref)
+                let key = (model.0, WHOLE, ratios);
+                bake_flat(&mut self.rsp_flat, key, &mesh);
+                self.rsp_flat.get(&key).and_then(Option::as_ref)
             }
             None => self.rsp_meshes.get(&model.0),
         };
@@ -823,6 +831,14 @@ impl Renderer for N64Renderer {
             self.draw_water(model, matrix, params);
             return;
         }
+        // A rigid skinned mesh: a command per joint on screen, when every
+        // part qualifies.
+        if self.rsp_on
+            && let Some(rc) = self.rsp_rigid.get(&model.0).cloned()
+            && self.draw_rigid(model, matrix, params, &rc)
+        {
+            return;
+        }
         // A draw that repeats under the same camera and light: last
         // frame's command.
         let key = if self.rsp_on {
@@ -902,7 +918,7 @@ impl Renderer for N64Renderer {
         // A flat draw goes out with the mesh's flat copy (face normals).
         let rsp = match rsp {
             Some((_, d, mv)) if params.shading == Shading::Flat => {
-                let key = (model.0, flat_ratios(matrix));
+                let key = (model.0, WHOLE, flat_ratios(matrix));
                 bake_flat(&mut self.rsp_flat, key, &mesh);
                 let rm = self.rsp_flat.get(&key).and_then(Option::as_ref);
                 rm.map(|rm| (rm, d, mv))
@@ -1105,12 +1121,22 @@ impl Renderer for N64Renderer {
     }
 }
 
-/// Flat RSP copies by (mesh, scale ratios): see `N64Renderer::rsp_flat`.
-type FlatCopies = BTreeMap<(u32, [u16; 3]), Option<RspMesh>>;
+/// Flat RSP copies by (mesh, part, scale ratios): see `N64Renderer::rsp_flat`.
+/// The part is a rigid mesh's joint, or [`WHOLE`].
+type FlatKey = (u32, u32, [u16; 3]);
+type FlatCopies = BTreeMap<FlatKey, Option<RspMesh>>;
+/// A flat copy of the whole mesh (not a rigid part).
+const WHOLE: u32 = u32::MAX;
+
+/// A rigid mesh's RSP parts by joint and their bind-pose spheres.
+pub struct RigidCopy {
+    parts: Vec<Option<RspMesh>>,
+    bounds: [Option<(Vec3, f32)>; MAX_JOINTS],
+}
 
 /// Bake a flat RSP copy (`rsp::build_flat`) on its first draw under these
 /// scale ratios.
-fn bake_flat(copies: &mut FlatCopies, key: (u32, [u16; 3]), mesh: &Mesh) {
+fn bake_flat(copies: &mut FlatCopies, key: FlatKey, mesh: &Mesh) {
     if !copies.contains_key(&key) {
         bake_flat_cold(copies, key, mesh);
     }
@@ -1119,6 +1145,106 @@ fn bake_flat(copies: &mut FlatCopies, key: (u32, [u16; 3]), mesh: &Mesh) {
 /// Cold: once per mesh, and castle64 never draws flat.
 #[cold]
 #[inline(never)]
-fn bake_flat_cold(copies: &mut FlatCopies, key: (u32, [u16; 3]), mesh: &Mesh) {
-    copies.insert(key, rsp::build_flat(mesh, key.1));
+fn bake_flat_cold(copies: &mut FlatCopies, key: FlatKey, mesh: &Mesh) {
+    let part = (key.1 != WHOLE).then_some(key.1 as usize);
+    copies.insert(key, rsp::build_flat(mesh, part, key.2));
+}
+
+/// The RSP parts of rigid mesh `mesh` ([`RigidCopy`]).
+#[cold]
+#[inline(never)]
+fn rigid_copy(mesh: &Mesh) -> RigidCopy {
+    RigidCopy {
+        parts: (0..mesh.joint_count())
+            .map(|j| rsp::build_part(mesh, j))
+            .collect(),
+        bounds: core::array::from_fn(|j| {
+            if j < mesh.joint_count() {
+                rsp_part_bounds(mesh, j)
+            } else {
+                None
+            }
+        }),
+    }
+}
+
+impl N64Renderer {
+    /// A posed rigid draw on the RSP, a command per joint on screen
+    /// (`rsp_rigid_draws`); `false` when a part needs the CPU path (the
+    /// draw is then tessellated whole). Out of line: castle64's skinned
+    /// characters are split into static parts already.
+    #[inline(never)]
+    fn draw_rigid(
+        &mut self,
+        model: ModelId,
+        matrix: &Mat34,
+        params: &ModelParams,
+        rc: &RigidCopy,
+    ) -> bool {
+        let Some((tmdl, layout)) = self.meshes.get(&model.0) else {
+            return false;
+        };
+        let mesh = Mesh::from_layout(tmdl, layout);
+        let t0 = self.tick();
+        let mut joints = [Mat34::IDENTITY; MAX_JOINTS];
+        mesh.pose(params.anim, &mut joints);
+        let mut parts = [RspPart {
+            joint: 0,
+            model: Mat34::IDENTITY,
+            mv: Mat34::IDENTITY,
+            draw: trino_core::render3d::RspDraw {
+                light: Vec3::ZERO,
+                ambient: 1.0,
+                cull_back: true,
+            },
+        }; MAX_JOINTS];
+        let Ok(n) = rsp_rigid_draws(
+            &self.tnl_ctx,
+            &mesh,
+            matrix,
+            params,
+            &joints,
+            &rc.bounds,
+            &mut parts,
+        ) else {
+            return false;
+        };
+        let color = rsp_color(&self.tnl_ctx, params);
+        let mut out: Vec<([u32; rsp::DRAW_WORDS], Option<[u32; rsp::DRAW_WORDS]>, u32)> =
+            Vec::with_capacity(n);
+        for p in &parts[..n] {
+            let rm = if params.shading == Shading::Flat {
+                let key = (model.0, p.joint as u32, flat_ratios(&p.model));
+                bake_flat(&mut self.rsp_flat, key, &mesh);
+                self.rsp_flat.get(&key).and_then(Option::as_ref)
+            } else {
+                rc.parts.get(p.joint).and_then(Option::as_ref)
+            };
+            let Some(rm) = rm else {
+                return false;
+            };
+            let cull = if p.draw.cull_back { self.rsp_cull } else { 2 };
+            let mut words =
+                rsp::draw_words(&self.tnl_ctx, &p.mv, &p.draw, params.tint, rm, cull, 0);
+            let entry = color.map(|c| rsp::color_entry(&c, &p.mv));
+            if entry.is_some() {
+                words[0] |= rsp::COLORED;
+            }
+            out.push((words, entry, rm.tris()));
+        }
+        self.frame_stats.models += 1;
+        for (k, (words, entry, tris)) in out.into_iter().enumerate() {
+            // The whole build is charged to the first part.
+            let t = if k == 0 { t0 } else { self.tick() };
+            match entry {
+                Some(c) => {
+                    self.pending_rsp.push(words);
+                    self.queue_rsp(c);
+                }
+                None => self.queue_rsp(words),
+            }
+            self.count_rsp(model, t, tris);
+        }
+        true
+    }
 }

@@ -1073,14 +1073,15 @@ pub fn face_normal(mesh: &Mesh, t: [usize; 3]) -> Vec3 {
 }
 
 /// The scale ratios a flat RSP copy is baked for: each axis scale of
-/// `model` over the largest, in 1/4096 (`M = R·S`, [`flat_space_light`]).
-/// Draws with the same ratios share a copy; the quantization moves a face
-/// normal by well under a color step.
+/// `model` over the largest, rounded to 1/256 (`M = R·S`,
+/// [`flat_space_light`]). Draws with the same ratios share a copy; the
+/// rounding moves a face normal by under a color step, and keeps an
+/// animated rotation (scales 1 ± 1e-4 from the core's sin/cos) on one copy.
 pub fn flat_ratios(model: &Mat34) -> [u16; 3] {
     let s = model.axis_scales_sq();
     let s = [s.x, s.y, s.z].map(crate::math3d::sqrt);
     let big = s[0].max(s[1]).max(s[2]);
-    s.map(|v| crate::math3d::to_i32(v / big * 4096.0).clamp(1, 4096) as u16)
+    s.map(|v| crate::math3d::to_i32(v / big * 256.0 + 0.5).clamp(1, 256) as u16)
 }
 
 /// A flat copy's vertex normal for face normal `n` under scale `ratios`
@@ -1104,8 +1105,9 @@ pub fn flat_normal(n: Vec3, ratios: [u16; 3]) -> Vec3 {
 pub const RSP_SEG_VERTS: usize = 32;
 /// Triangles per RSP mesh segment (the overlay's index space).
 pub const RSP_SEG_TRIS: usize = 64;
-/// Segments per RSP mesh (the overlay's segment table).
-pub const RSP_MAX_SEGS: usize = 16;
+/// Segments per RSP mesh. The overlay fetches one table entry per segment,
+/// so this only bounds a copy's RAM (64 segments of 32 vertices).
+pub const RSP_MAX_SEGS: usize = 64;
 /// How far beyond the screen an RSP draw may reach, as a multiple of the
 /// half screen (the CPU path's guard band is 1.5). The overlay does not
 /// clip: it only needs every vertex past NEAR and inside its fixed-point
@@ -1133,6 +1135,12 @@ pub type RspSegmentFn<'a> = dyn FnMut(&[u16], &[[u8; 3]]) + 'a;
 /// Returns the segment count. No allocation: the PC (work baseline) and the
 /// N64 (the RSP copy) run the same split.
 pub fn rsp_split(mesh: &Mesh, emit: &mut RspSegmentFn) -> usize {
+    rsp_split_where(mesh, &|_| true, emit)
+}
+
+/// [`rsp_split`] of the triangles `keep` accepts (a rigid mesh's part:
+/// [`rsp_part_split`]).
+fn rsp_split_where(mesh: &Mesh, keep: &dyn Fn([u16; 3]) -> bool, emit: &mut RspSegmentFn) -> usize {
     let mut verts = [0u16; RSP_SEG_VERTS];
     let mut tris = [[0u8; 3]; RSP_SEG_TRIS];
     let (mut nv, mut nt, mut segs) = (0usize, 0usize, 0usize);
@@ -1142,6 +1150,9 @@ pub fn rsp_split(mesh: &Mesh, emit: &mut RspSegmentFn) -> usize {
             u16::from_le_bytes([t[2], t[3]]),
             u16::from_le_bytes([t[4], t[5]]),
         ];
+        if !keep(idx) {
+            continue;
+        }
         let new = (0..3)
             .filter(|&k| !verts[..nv].contains(&idx[k]) && !idx[..k].contains(&idx[k]))
             .count();
@@ -1645,6 +1656,264 @@ fn rsp_fog_check(
         return Ok(());
     }
     Err(RspReject::Fog)
+}
+
+/// [`rsp_split`] of one joint's triangles: a rigid mesh's part
+/// ([`rsp_rigid_check`]). Every triangle of a rigid mesh lies on one joint,
+/// so a part is the triangles whose first vertex follows `joint`.
+pub fn rsp_part_split(mesh: &Mesh, joint: usize, emit: &mut RspSegmentFn) -> usize {
+    rsp_split_where(mesh, &|t| mesh.joint_of(t[0] as usize) == joint, emit)
+}
+
+/// Can the N64's RSP draw this skinned mesh as one draw per joint (its
+/// parts, each a static mesh moved by its joint's matrix)? A rigid
+/// skeleton (no smooth skinning), untextured, opaque, unit normals, every
+/// triangle on one joint, and each part within [`RSP_MAX_SEGS`] segments.
+/// Walks the mesh: call it once (the N64 bakes the parts at register).
+pub fn rsp_rigid_check(mesh: &Mesh) -> Result<(), RspReject> {
+    if mesh.joint_count() == 0 || mesh.has_blend() {
+        return Err(RspReject::Blended);
+    }
+    if mesh.has_uvs() {
+        return Err(RspReject::TexturedMesh);
+    }
+    if !mesh.opaque {
+        return Err(RspReject::TranslucentMesh);
+    }
+    if !mesh.unit_normals {
+        return Err(RspReject::NormalsNotUnit);
+    }
+    if mesh.vertex_count == 0 {
+        return Err(RspReject::Empty);
+    }
+    if !mesh.positions.iter().all(|p| {
+        let p = vec3_of(p);
+        p.x.abs() < 16_384.0 && p.y.abs() < 16_384.0 && p.z.abs() < 16_384.0
+    }) {
+        return Err(RspReject::TooLarge);
+    }
+    for t in 0..mesh.index_count / 3 {
+        let j = mesh.joint_of(mesh.index(3 * t) as usize);
+        if (1..3).any(|k| mesh.joint_of(mesh.index(3 * t + k) as usize) != j) {
+            return Err(RspReject::Skinned);
+        }
+    }
+    for j in 0..mesh.joint_count() {
+        if rsp_part_split(mesh, j, &mut |_, _| {}) > RSP_MAX_SEGS {
+            return Err(RspReject::TooManySegments);
+        }
+    }
+    Ok(())
+}
+
+/// The bounding sphere of joint `j`'s part in bind pose (`None`: the joint
+/// has no triangle): its vertices' box center and farthest distance. The
+/// N64 computes it once per mesh; the host predictors call it per draw,
+/// the same operations.
+pub fn rsp_part_bounds(mesh: &Mesh, j: usize) -> Option<(Vec3, f32)> {
+    let mut lo = Vec3::new(f32::MAX, f32::MAX, f32::MAX);
+    let mut hi = Vec3::new(f32::MIN, f32::MIN, f32::MIN);
+    let mut any = false;
+    let in_part = |i: usize| mesh.joint_of(i) == j;
+    for t in 0..mesh.index_count / 3 {
+        let i = mesh.index(3 * t) as usize;
+        if !in_part(i) {
+            continue;
+        }
+        for k in 0..3 {
+            let p = mesh.position(mesh.index(3 * t + k) as usize);
+            lo = Vec3::new(lo.x.min(p.x), lo.y.min(p.y), lo.z.min(p.z));
+            hi = Vec3::new(hi.x.max(p.x), hi.y.max(p.y), hi.z.max(p.z));
+            any = true;
+        }
+    }
+    if !any {
+        return None;
+    }
+    let c = (lo + hi) * 0.5;
+    let mut r2 = 0.0f32;
+    for i in 0..mesh.vertex_count {
+        if in_part(i) {
+            let d = mesh.position(i) - c;
+            r2 = r2.max(d.dot(d));
+        }
+    }
+    Some((c, crate::math3d::sqrt(r2) * 1.0001 + 1e-4))
+}
+
+/// One part of a rigid draw on the RSP ([`rsp_rigid_draws`]).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct RspPart {
+    /// The joint whose triangles it draws.
+    pub joint: usize,
+    /// Model matrix of the part: the draw's model times the joint's skin.
+    pub model: Mat34,
+    /// `view · model`.
+    pub mv: Mat34,
+    pub draw: RspDraw,
+}
+
+/// A rigid skinned draw ([`rsp_rigid_check`] accepted its mesh) as RSP
+/// parts, one per joint on screen: each part must pass the static draw's
+/// rules ([`rsp_check`]) with its own sphere (`bounds[j]`, from
+/// [`rsp_part_bounds`]) and its own vertices, or the whole draw stays on
+/// the CPU (the T&L draws a mesh whole). Parts wholly off screen are left
+/// out. `joints` are the skinning matrices of `params.anim`
+/// ([`Mesh::pose`]). Writes the parts into `out`, returns how many.
+#[allow(clippy::too_many_arguments)]
+pub fn rsp_rigid_draws(
+    ctx: &TnlContext,
+    mesh: &Mesh,
+    model: &Mat34,
+    params: &ModelParams,
+    joints: &[Mat34; MAX_JOINTS],
+    bounds: &[Option<(Vec3, f32)>],
+    out: &mut [RspPart; MAX_JOINTS],
+) -> Result<usize, RspReject> {
+    if params.water.is_some() {
+        return Err(RspReject::Water);
+    }
+    if params.tint.a < 255 {
+        return Err(RspReject::Translucent);
+    }
+    if params.texture.is_some() {
+        return Err(RspReject::Textured);
+    }
+    if params.palette.is_some() && mesh.has_slots() {
+        return Err(RspReject::Palette);
+    }
+    let mut n = 0;
+    for (j, b) in bounds.iter().enumerate().take(mesh.joint_count()) {
+        let Some((c, r)) = *b else { continue };
+        let m = model.mul(&joints[j]);
+        let mv = ctx.view.mul(&m);
+        match rsp_part_check(ctx, mesh, j, &m, &mv, params, c, r) {
+            Ok(draw) => {
+                out[n] = RspPart {
+                    joint: j,
+                    model: m,
+                    mv,
+                    draw,
+                };
+                n += 1;
+            }
+            Err(RspReject::Offscreen) => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(n)
+}
+
+/// [`rsp_check_mv`]'s draw rules for part `j` of a rigid mesh, whose
+/// bind-pose sphere is `c`, `r` and whose matrices are `model`, `mv`.
+#[allow(clippy::too_many_arguments)]
+fn rsp_part_check(
+    ctx: &TnlContext,
+    mesh: &Mesh,
+    j: usize,
+    model: &Mat34,
+    mv: &Mat34,
+    params: &ModelParams,
+    c: Vec3,
+    r: f32,
+) -> Result<RspDraw, RspReject> {
+    let c = mv.transform_point(c);
+    let s = model.axis_scales_sq();
+    let smax = s.x.max(s.y).max(s.z);
+    let r2 = r * r * smax;
+    match rsp_band_check(ctx, c, r2) {
+        Ok(()) => {}
+        Err(RspReject::ClipBand | RspReject::NearPlane) => {
+            let band = RSP_BAND / GUARD;
+            let (lx, ly) = (ctx.lim_x * band, ctx.lim_y * band);
+            for i in (0..mesh.vertex_count).filter(|&i| mesh.joint_of(i) == j) {
+                let v = mv.transform_point(mesh.position(i));
+                if v.z <= NEAR {
+                    return Err(RspReject::NearPlane);
+                }
+                if lx * v.z <= v.x.abs() || ly * v.z <= v.y.abs() {
+                    return Err(RspReject::ClipBand);
+                }
+                if v.z >= RSP_MAX_DEPTH {
+                    return Err(RspReject::TooFar);
+                }
+            }
+        }
+        Err(e) => return Err(e),
+    }
+    if ctx.n_locals > 0 && params.shading != Shading::Unlit && ctx.lights_touch(c, r2) {
+        return Err(RspReject::LocalLight);
+    }
+    if smax >= RSP_MAX_SCALE * RSP_MAX_SCALE {
+        return Err(RspReject::TooScaled);
+    }
+    if ctx.fog_on {
+        rsp_fog_check(ctx, mesh, mv, c.z, r2)?;
+    }
+    let cull_back = !params.double_sided;
+    let light = match params.shading {
+        Shading::Unlit => Vec3::ZERO,
+        Shading::Gouraud => {
+            model_space_light(mesh, model, ctx.ldir).ok_or(RspReject::NonUniformScale)? * -1.0
+        }
+        Shading::Flat => {
+            let mut faces = 0;
+            rsp_part_split(mesh, j, &mut |_, t| faces += t.len());
+            if faces.div_ceil(RSP_FLAT_SEG_TRIS) > RSP_MAX_SEGS {
+                return Err(RspReject::Flat);
+            }
+            flat_space_light(model, ctx.ldir).ok_or(RspReject::NonUniformScale)? * -1.0
+        }
+    };
+    let ambient = if params.shading == Shading::Unlit {
+        1.0
+    } else {
+        ctx.light.ambient
+    };
+    Ok(RspDraw {
+        light,
+        ambient,
+        cull_back,
+    })
+}
+
+/// How the N64 draws `mesh` with `model` and `params`: RSP commands and
+/// their source triangles (a static mesh: one; a rigid skinned mesh: one
+/// per joint on screen, possibly none), or the rule that keeps it on the
+/// CPU. What the host predictors (`perf_budget`, `scene budget`, the PC's
+/// N64 estimate) count, the N64 renderer's split.
+pub fn rsp_plan(
+    ctx: &TnlContext,
+    mesh: &Mesh,
+    model: &Mat34,
+    params: &ModelParams,
+) -> Result<(u32, u32), RspReject> {
+    if mesh.joint_count() == 0 {
+        rsp_mesh_check(mesh)?;
+        rsp_check(ctx, mesh, model, params)?;
+        return Ok((1, (mesh.index_count / 3) as u32));
+    }
+    rsp_rigid_check(mesh)?;
+    let mut joints = [Mat34::IDENTITY; MAX_JOINTS];
+    mesh.pose(params.anim, &mut joints);
+    let bounds: [Option<(Vec3, f32)>; MAX_JOINTS] =
+        core::array::from_fn(|j| rsp_part_bounds(mesh, j));
+    let mut parts = [RspPart {
+        joint: 0,
+        model: Mat34::IDENTITY,
+        mv: Mat34::IDENTITY,
+        draw: RspDraw {
+            light: Vec3::ZERO,
+            ambient: 1.0,
+            cull_back: true,
+        },
+    }; MAX_JOINTS];
+    let n = rsp_rigid_draws(ctx, mesh, model, params, &joints, &bounds, &mut parts)?;
+    let mut tris = 0u32;
+    for p in &parts[..n] {
+        rsp_part_split(mesh, p.joint, &mut |_, t| tris += t.len() as u32);
+    }
+    Ok((n as u32, tris))
 }
 
 impl TnlContext {
@@ -3111,6 +3380,85 @@ mod tests {
     }
 
     #[test]
+    fn rigid_meshes_go_to_the_rsp_a_part_per_joint() {
+        let screen = Vec2::new(320.0, 240.0);
+        let ctx = TnlContext::new(&Camera3::default(), &DEFAULT_LIGHT, screen);
+        let id = Mat34::IDENTITY;
+        // A triangle across two joints: the T&L's whole mesh, on the CPU.
+        let spanning_blob = skinned_cube();
+        let spanning = Mesh::from_tmdl(&spanning_blob).unwrap();
+        assert_eq!(rsp_rigid_check(&spanning), Err(RspReject::Skinned));
+        let plain = ModelParams::DEFAULT;
+        assert_eq!(
+            rsp_plan(&ctx, &spanning, &id, &plain),
+            Err(RspReject::Skinned)
+        );
+        // Each face on one joint: two parts, every triangle drawn once.
+        let blob = rigid_cube();
+        let rigid = Mesh::from_tmdl(&blob).unwrap();
+        assert_eq!(rsp_rigid_check(&rigid), Ok(()));
+        assert_eq!(rsp_plan(&ctx, &rigid, &id, &plain), Ok((2, 12)));
+        let mut parts = 0;
+        for j in 0..2 {
+            rsp_part_split(&rigid, j, &mut |_, t| parts += t.len());
+        }
+        assert_eq!(parts, 12);
+        // Posed: joint 1 slides 4 units along +X (half a second into the
+        // one-shot clip), its part with it.
+        let slid = ModelParams {
+            anim: Some(AnimRef::new(ClipId::from_name("slide"), 1.0)),
+            ..plain
+        };
+        let mut joints = [Mat34::IDENTITY; MAX_JOINTS];
+        rigid.pose(slid.anim, &mut joints);
+        let bounds: [Option<(Vec3, f32)>; MAX_JOINTS] =
+            core::array::from_fn(|j| rsp_part_bounds(&rigid, j));
+        let mut out = [RspPart {
+            joint: 0,
+            model: id,
+            mv: id,
+            draw: RspDraw {
+                light: Vec3::ZERO,
+                ambient: 1.0,
+                cull_back: true,
+            },
+        }; MAX_JOINTS];
+        let n = rsp_rigid_draws(&ctx, &rigid, &id, &slid, &joints, &bounds, &mut out).unwrap();
+        assert_eq!(n, 2);
+        assert!(
+            (out[1].model.m[0][3] - 4.0).abs() < 1e-4,
+            "{:?}",
+            out[1].model
+        );
+        // A part wholly off screen is left out (joint 0 far left, joint 1
+        // slid back into view); behind the camera, both. One across the near
+        // plane keeps the whole draw on the CPU.
+        let left = Mat34::from_rotation_scale_translation(
+            Vec3::ZERO,
+            Vec3::ONE,
+            Vec3::new(-9.0, 0.0, 0.0),
+        );
+        let n = rsp_rigid_draws(&ctx, &rigid, &left, &slid, &joints, &bounds, &mut out);
+        assert_eq!(n, Ok(1));
+        assert_eq!(out[0].joint, 1);
+        let behind = Mat34::from_rotation_scale_translation(
+            Vec3::ZERO,
+            Vec3::ONE,
+            Vec3::new(0.0, 0.0, -9.0),
+        );
+        assert_eq!(rsp_plan(&ctx, &rigid, &behind, &plain), Ok((0, 0)));
+        let near = Mat34::from_rotation_scale_translation(
+            Vec3::ZERO,
+            Vec3::ONE,
+            Vec3::new(0.0, 0.0, -4.7),
+        );
+        assert_eq!(
+            rsp_plan(&ctx, &rigid, &near, &plain),
+            Err(RspReject::NearPlane)
+        );
+    }
+
+    #[test]
     fn layout_rebuilds_the_same_mesh() {
         for blob in [cube_tmdl(), skinned_cube(), textured_cube()] {
             let parsed = Mesh::from_tmdl(&blob).unwrap();
@@ -3182,13 +3530,27 @@ mod tests {
     /// the vertices, joint 1 (child) the top half; one looping clip "lift"
     /// raising joint 1 by 2 units over one second.
     fn skinned_cube() -> std::vec::Vec<u8> {
+        let mesh_blob = cube_tmdl();
+        let mesh = Mesh::from_tmdl(&mesh_blob).unwrap();
+        rig_cube(&|i| (mesh.position(i).y > 0.0) as u8)
+    }
+
+    /// The cube rigged rigidly: each face (4 vertices) on one joint, the
+    /// first three faces on joint 0 and the rest on joint 1.
+    fn rigid_cube() -> std::vec::Vec<u8> {
+        rig_cube(&|i| (i / 12) as u8)
+    }
+
+    /// The cube with a 2-joint skeleton (vertex `i` on `joint(i)`) and its
+    /// clips "lift" (joint 1 rises) and "slide" (joint 1 moves along +X).
+    fn rig_cube(joint: &dyn Fn(usize) -> u8) -> std::vec::Vec<u8> {
         let mut blob = cube_tmdl();
         let mesh_blob = cube_tmdl();
         let mesh = Mesh::from_tmdl(&mesh_blob).unwrap();
         let mut skel = std::vec::Vec::new();
         skel.extend_from_slice(&2u32.to_le_bytes());
         for i in 0..mesh.vertex_count {
-            skel.push(if mesh.position(i).y > 0.0 { 1 } else { 0 });
+            skel.push(joint(i));
         }
         let ident = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
         let rest = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0];

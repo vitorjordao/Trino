@@ -11,7 +11,7 @@ use core::ffi::c_void;
 use trino_core::math3d::to_i32;
 use trino_core::render3d::{
     Mesh, NEAR_PLANE, RSP_FLAT_SEG_TRIS, RSP_MAX_SEGS, RspColor, RspDraw, TnlContext, face_normal,
-    flat_normal, rsp_split,
+    flat_normal, rsp_part_split, rsp_split,
 };
 use trino_core::{Color, Mat34, Vec3};
 
@@ -34,8 +34,17 @@ pub const COLORED: u32 = 0x100;
 pub struct RspMesh {
     table: u32,
     segs: u16,
+    /// Triangles in all segments.
+    tris: u32,
     /// Local vertex order of segment 0 (global indices), for the oracle.
     pub seg0: Vec<u16>,
+}
+
+impl RspMesh {
+    /// Triangles the copy draws.
+    pub fn tris(&self) -> u32 {
+        self.tris
+    }
 }
 
 /// s15.16 of `v`, split into its integer and fractional halves.
@@ -70,25 +79,31 @@ struct Segment {
     tris: Vec<[u8; 3]>,
 }
 
-/// The core's split ([`rsp_split`]), collected.
-fn segments(mesh: &Mesh) -> Vec<Segment> {
+/// The core's split ([`rsp_split`]; [`rsp_part_split`] for joint `part` of a
+/// rigid mesh), collected.
+fn segments(mesh: &Mesh, part: Option<usize>) -> Vec<Segment> {
     let mut out = Vec::new();
-    rsp_split(mesh, &mut |verts, tris| {
+    let mut emit = |verts: &[u16], tris: &[[u8; 3]]| {
         out.push(Segment {
             verts: verts.to_vec(),
             normals: verts.iter().map(|&g| mesh.normal(g as usize)).collect(),
             tris: tris.to_vec(),
         })
-    });
+    };
+    match part {
+        Some(j) => rsp_part_split(mesh, j, &mut emit),
+        None => rsp_split(mesh, &mut emit),
+    };
     out
 }
 
 /// A flat copy's segments: [`RSP_FLAT_SEG_TRIS`] faces each, three vertices
 /// per face carrying its normal under `ratios` ([`flat_normal`]), so the overlay's
 /// per-vertex lighting is the CPU path's per-face lighting.
-fn flat_segments(mesh: &Mesh, ratios: [u16; 3]) -> Vec<Segment> {
+fn flat_segments(mesh: &Mesh, part: Option<usize>, ratios: [u16; 3]) -> Vec<Segment> {
     let faces: Vec<[usize; 3]> = (0..mesh.index_count / 3)
         .map(|t| core::array::from_fn(|k| mesh.index(3 * t + k) as usize))
+        .filter(|t: &[usize; 3]| part.is_none_or(|j| mesh.joint_of_vertex(t[0]) == j))
         .collect();
     faces
         .chunks(RSP_FLAT_SEG_TRIS)
@@ -114,15 +129,24 @@ fn flat_segments(mesh: &Mesh, ratios: [u16; 3]) -> Vec<Segment> {
 
 /// Bake a mesh's RSP copy (`None` if it has too many segments).
 pub fn build(mesh: &Mesh) -> Option<RspMesh> {
-    bake(mesh, &segments(mesh))
+    bake(mesh, &segments(mesh, None))
+}
+
+/// Bake joint `j`'s part of a rigid mesh (`rsp_rigid_check`): its triangles
+/// in bind pose, drawn with the joint's matrix (`None`: no triangles).
+#[cold]
+#[inline(never)]
+pub fn build_part(mesh: &Mesh, j: usize) -> Option<RspMesh> {
+    bake(mesh, &segments(mesh, Some(j)))
 }
 
 /// Bake a mesh's flat RSP copy for its `Shading::Flat` draws under scale
-/// `ratios` ([`flat_ratios`]; `None` past [`RSP_MAX_SEGS`] segments).
+/// `ratios` ([`flat_ratios`]; `None` past [`RSP_MAX_SEGS`] segments), or of
+/// joint `part`'s triangles for a rigid mesh.
 #[cold]
 #[inline(never)]
-pub fn build_flat(mesh: &Mesh, ratios: [u16; 3]) -> Option<RspMesh> {
-    bake(mesh, &flat_segments(mesh, ratios))
+pub fn build_flat(mesh: &Mesh, part: Option<usize>, ratios: [u16; 3]) -> Option<RspMesh> {
+    bake(mesh, &flat_segments(mesh, part, ratios))
 }
 
 fn bake(mesh: &Mesh, segs: &[Segment]) -> Option<RspMesh> {
@@ -188,6 +212,7 @@ fn bake(mesh: &Mesh, segs: &[Segment]) -> Option<RspMesh> {
     Some(RspMesh {
         table: phys,
         segs: segs.len() as u16,
+        tris: segs.iter().map(|s| s.tris.len() as u32).sum(),
         seg0: segs[0].verts.clone(),
     })
 }

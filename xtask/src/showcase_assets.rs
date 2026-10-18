@@ -413,8 +413,12 @@ fn windmill(dir: &Path) {
         Node {
             name: "tower",
             part: Some(
+                // The wall in two storeys: no face diagonal past 3 m, so the N64
+                // fogs the tower on the RSP without the CPU path's depth splits
+                // (issue #69).
                 Part::default()
-                    .boxc(v3(0.0, 1.4, 0.0), v3(1.6, 2.8, 1.6), wall)
+                    .boxc(v3(0.0, 0.7, 0.0), v3(1.6, 1.4, 1.6), wall)
+                    .boxc(v3(0.0, 2.1, 0.0), v3(1.6, 1.4, 1.6), wall)
                     .boxc(v3(0.0, 3.1, 0.0), v3(1.9, 0.6, 1.9), roof)
                     .boxc(v3(0.0, 0.5, 0.81), v3(0.5, 1.0, 0.04), wood),
             ),

@@ -37,6 +37,9 @@ const GRID2: ModelId = ModelId::from_path("micro/grid2");
 /// faces point different ways, for flat shading on the RSP (98 faces fit
 /// a flat copy, `RSP_FLAT_SEG_TRIS` · `RSP_MAX_SEGS`).
 const BUMPY: ModelId = ModelId::from_path("micro/bumpy");
+/// [`GRID`] as a rigid mesh of two joints (left and right halves, the
+/// middle column duplicated): the RSP draws it as two parts.
+const RIGID: ModelId = ModelId::from_path("micro/rigid");
 
 /// Grid side in vertices. At most 16: two rows (32 vertices) fit the
 /// T&L's 32-slot direct-mapped vertex cache, so every vertex is
@@ -144,6 +147,7 @@ fn register_meshes(r: &mut N64Renderer) -> bool {
         && r.register_mesh(GRID.0, tmdl(&pos, &idx, Vec3::ZERO, r_grid))
         && r.register_mesh(GRID2.0, tmdl(&pos, &idx2, Vec3::ZERO, r_grid))
         && r.register_mesh(BUMPY.0, tmdl(&bumpy, &bidx, Vec3::ZERO, r_grid))
+        && r.register_mesh(RIGID.0, rigid_grid(&pos, n_grid_half(), r_grid))
 }
 
 #[derive(Clone, Copy)]
@@ -390,6 +394,12 @@ fn rsp_checks(r: &mut N64Renderer) {
         r.draw_model_matrix(BUMPY, &squash, Material::VertexLit, &flat);
         r.end_frame();
     });
+    pixel_check(r, "rigid parts", &|r| {
+        r.begin_frame(Color::BLACK);
+        setup(r);
+        r.draw_model_matrix(RIGID, &grid, Material::VertexLit, &ModelParams::DEFAULT);
+        r.end_frame();
+    });
     setup(r);
 }
 
@@ -463,4 +473,53 @@ fn measure(r: &mut N64Renderer, name: &str, suffix: &str, set: Set, frames: u32)
             runtime::log(&report);
         }
     }
+}
+
+/// The grid's middle column: the left part takes columns `0..=half`, the
+/// right one `half..`.
+fn n_grid_half() -> usize {
+    GRID_N / 2
+}
+
+/// [`RIGID`]: the grid's two halves, each with its own copy of the middle
+/// column, and a `SKEL` of two identity joints (the bind pose; no clips).
+fn rigid_grid(pos: &[Vec3], half: usize, radius: f32) -> Vec<u8> {
+    let mut verts = Vec::new();
+    let mut joint = Vec::new();
+    let mut idx = Vec::new();
+    for (j, cols) in [(0u8, 0..half + 1), (1, half..GRID_N)].into_iter() {
+        let base = verts.len() as u16;
+        let w = cols.len();
+        for y in 0..GRID_N {
+            for x in cols.clone() {
+                verts.push(pos[y * GRID_N + x]);
+                joint.push(j);
+            }
+        }
+        for y in 0..GRID_N - 1 {
+            for x in 0..w - 1 {
+                let i = base + (y * w + x) as u16;
+                let n = w as u16;
+                idx.extend_from_slice(&[i, i + n, i + 1, i + 1, i + n, i + n + 1]);
+            }
+        }
+    }
+    let mut b = tmdl(&verts, &idx, Vec3::ZERO, radius);
+    let mut skel = Vec::new();
+    skel.extend_from_slice(&2u32.to_le_bytes());
+    skel.extend_from_slice(&joint);
+    let ident = [
+        1.0f32, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0,
+    ];
+    let rest = [0.0f32, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0];
+    for parent in [-1i32, 0] {
+        skel.extend_from_slice(&parent.to_le_bytes());
+        for v in ident.iter().chain(&rest) {
+            skel.extend_from_slice(&v.to_le_bytes());
+        }
+    }
+    b.extend_from_slice(b"SKEL");
+    b.extend_from_slice(&(skel.len() as u32).to_le_bytes());
+    b.extend_from_slice(&skel);
+    b
 }

@@ -71,12 +71,12 @@ gpu_draws = 0
 gpu_tris = 0
 
 [showcase-river]
-verts = 2935
-tris_in = 1616
+verts = 2959
+tris_in = 1628
 clipped = 34
 splits = 0
-backfaced = 740
-emitted = 854
+backfaced = 748
+emitted = 858
 culled = 19
 gpu_draws = 44
-gpu_tris = 3633
+gpu_tris = 2853

@@ -38,7 +38,6 @@
 #define SEG_VERTS       32
 #define VTX_IN_SIZE     32
 #define VTX_OUT_SIZE    24
-#define MAX_SEGS        16
 #ifdef TRINO_COLORED
 #define DRAW_CMD_SIZE   0xA0    // + the per-channel terms and the fog, see DRAW
 #else
@@ -102,7 +101,8 @@ TEST_VTX:
     .bss
     # The draw command, copied to an aligned place for vector loads:
     #   +0x00 cmd | cull (0 = cull front, 1 = cull back, 2 = none)
-    #   +0x04 segment table (RDRAM)   +0x08 segment count | triangle command
+    #   +0x04 segment table (RDRAM, walked an entry per segment)
+    #   +0x08 segment count | triangle command
     #   +0x0C unused                  +0x10 matrix columns, integer parts
     #   +0x30 matrix columns, fractional parts
     #   +0x50 light (s0.15, model space, toward the light) x, y, z, 0
@@ -122,7 +122,7 @@ DRAW:           .ds.b 0xA0
 DRAW:           .ds.b 0x70
 #endif
     .align 4
-SEG_TABLE:      .ds.b MAX_SEGS * 16
+SEG_TABLE:      .ds.b 16           // the current segment's entry
     .align 4
 VTX_IN:         .ds.b SEG_VERTS * VTX_IN_SIZE + 3 * 64
     .align 4
@@ -172,16 +172,20 @@ TrinoCmd_Draw:
     bgtz t2, 1b
     addiu t1, 4
 
-    # Segment table into SEG_TABLE.
-    lw s0, %lo(DRAW) + 0x04
+    # The segment table stays in RDRAM: each segment's 16-byte entry is
+    # fetched on its turn (DRAW +0x04 walks the table), so a mesh may have
+    # any number of segments.
     lhu seg_left, %lo(DRAW) + 0x08
-    li s4, %lo(SEG_TABLE)
-    sll t0, seg_left, 4
-    jal DMAIn
-    addiu t0, -1
     li seg_ptr, %lo(SEG_TABLE)
 
 draw_segment:
+    lw s0, %lo(DRAW) + 0x04
+    addiu t0, s0, 16
+    sw t0, %lo(DRAW) + 0x04
+    li s4, %lo(SEG_TABLE)
+    jal DMAIn
+    li t0, 15
+
     # One DMA: the segment's vertices then its indices.
     lw s0, 0(seg_ptr)
     lhu t0, 4(seg_ptr)              # bytes
@@ -426,7 +430,7 @@ RDPQ_Triangle_Cull:
 segment_done:
     addiu seg_left, -1
     bgtz seg_left, draw_segment
-    addiu seg_ptr, 16
+    nop
 
 trino_test_done:
     jal_and_j RDPQ_Triangle_Send_End, RSPQ_Loop

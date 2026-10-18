@@ -19,8 +19,7 @@ use std::fmt::Write as _;
 use std::path::PathBuf;
 
 use trino_core::render3d::{
-    Camera3, DEFAULT_LIGHT, Light, Mesh, TnlContext, TnlStats, gpu_check, gpu_mesh_check,
-    rsp_eligible, rsp_mesh_supported,
+    Camera3, DEFAULT_LIGHT, Light, Mesh, TnlContext, TnlStats, gpu_check, gpu_mesh_check, rsp_plan,
 };
 use trino_core::*;
 
@@ -127,13 +126,13 @@ impl Renderer for Counting {
             .with_local_lights(self.locals.as_slice())
             .with_water(&self.water);
         let tris = (mesh.index_count / 3) as u32;
-        let s = if self.target == Target::N64
-            && rsp_mesh_supported(&mesh)
-            && rsp_eligible(&ctx, &mesh, x, p).is_some()
-        {
+        let rsp = (self.target == Target::N64)
+            .then(|| rsp_plan(&ctx, &mesh, x, p).ok())
+            .flatten();
+        let s = if let Some((rsp_draws, rsp_tris)) = rsp {
             TnlStats {
-                rsp_draws: 1,
-                rsp_tris: tris,
+                rsp_draws,
+                rsp_tris,
                 ..TnlStats::default()
             }
         } else if self.target == Target::N3ds

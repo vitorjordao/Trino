@@ -11,7 +11,7 @@ use trino_core::{
     BakedScene, BillboardParams, BlobId, Camera3, Cells, Color, DEFAULT_LIGHT, DetailTexture,
     Effect, Emitter, EntityStore, FontId, Impostor, InputState, Instance, Light, LocalLight,
     Material, ModelId, ModelParams, Palette, ParticleSystem, Platform, Rect, Renderer, Screen,
-    Shading, SpriteId, TexFilter, TextBuf, TextParams, Transform3, Vec2, Vec3,
+    Shading, SpriteId, SpriteParams, TexFilter, TextBuf, TextParams, Transform3, Vec2, Vec3,
 };
 
 /// The HUD font (also what the checks measure).
@@ -43,6 +43,10 @@ pub fn engine_checks(
     platform.log("TRINO_STEP:texture filter and detail\n");
     if texture_detail(renderer)? {
         platform.log("TRINO_STEP:texture filter and detail probed\n");
+    }
+    platform.log("TRINO_STEP:texture formats\n");
+    if texture_formats(renderer, platform)? {
+        platform.log("TRINO_STEP:texture formats probed 9 formats\n");
     }
     platform.log("TRINO_STEP:billboards\n");
     if billboards(renderer)? {
@@ -176,6 +180,212 @@ pub fn texture_detail(renderer: &mut dyn Renderer) -> Result<bool, &'static str>
         };
         if !(near(c.r, want[0]) && near(c.g, want[1]) && near(c.b, want[2])) {
             return Err("texture detail: the detail layer was not multiplied in");
+        }
+    }
+    Ok(true)
+}
+
+/// One card per 3DS texture format (`[sprites.selftest_fmt_*]`, issue #52),
+/// in manifest order with its TL, TR, BL, BR quadrants (`None` =
+/// transparent). The N64 bakes every card as RGBA5551, which stores the same
+/// colors, so each target expects this table.
+pub const FORMAT_CARDS: [(SpriteId, [Option<[u8; 3]>; 4]); 9] = {
+    const R: Option<[u8; 3]> = Some([255, 0, 0]);
+    const G: Option<[u8; 3]> = Some([0, 255, 0]);
+    const B: Option<[u8; 3]> = Some([0, 0, 255]);
+    const W: Option<[u8; 3]> = Some([255, 255, 255]);
+    const GRAY: Option<[u8; 3]> = Some([136, 136, 136]);
+    const DARK: Option<[u8; 3]> = Some([68, 68, 68]);
+    const BLACK: Option<[u8; 3]> = Some([0, 0, 0]);
+    const CLEAR: Option<[u8; 3]> = None;
+    [
+        (
+            SpriteId::from_path("sprites/selftest_fmt_rgba8"),
+            [R, G, B, CLEAR],
+        ),
+        (
+            SpriteId::from_path("sprites/selftest_fmt_rgb565"),
+            [R, G, B, W],
+        ),
+        (
+            SpriteId::from_path("sprites/selftest_fmt_rgba5551"),
+            [R, G, B, CLEAR],
+        ),
+        (
+            SpriteId::from_path("sprites/selftest_fmt_rgba4"),
+            [R, G, B, CLEAR],
+        ),
+        (
+            SpriteId::from_path("sprites/selftest_fmt_la8"),
+            [W, GRAY, DARK, CLEAR],
+        ),
+        (
+            SpriteId::from_path("sprites/selftest_fmt_l8"),
+            [W, GRAY, DARK, BLACK],
+        ),
+        // A8 is a white mask on every target (the 3DS shim tints it).
+        (
+            SpriteId::from_path("sprites/selftest_fmt_a8"),
+            [W, CLEAR, CLEAR, W],
+        ),
+        (
+            SpriteId::from_path("sprites/selftest_fmt_etc1"),
+            [R, G, B, W],
+        ),
+        (
+            SpriteId::from_path("sprites/selftest_fmt_etc1a4"),
+            [R, G, B, CLEAR],
+        ),
+    ]
+};
+
+/// [`FORMAT_CARDS`]' 3DS formats, for the failure log.
+const FORMAT_NAMES: [&str; 9] = [
+    "RGBA8", "RGB565", "RGBA5551", "RGBA4", "LA8", "L8", "A8", "ETC1", "ETC1A4",
+];
+
+/// Log a failed probe: format, 2D or 3D, quadrant, the color read and the
+/// one expected.
+fn log_probe(
+    platform: &mut dyn Platform,
+    i: usize,
+    kind: &str,
+    q: usize,
+    got: Color,
+    want: [u8; 3],
+) {
+    use core::fmt::Write;
+    let mut line: TextBuf<96> = TextBuf::new();
+    let _ = writeln!(
+        line,
+        "TRINO_STEP:texture formats {} {kind} q{q} got {},{},{} want {},{},{}",
+        FORMAT_NAMES[i], got.r, got.g, got.b, want[0], want[1], want[2]
+    );
+    platform.log(line.as_str());
+}
+
+/// The texture-formats frame's background (a transparent texel shows it).
+const FORMATS_BG: [u8; 3] = [96, 0, 96];
+/// Its 3D cards: 0.45 m, 0.5 m apart, centered, 0.8 m below the axis.
+const FORMAT_CARD_SCALE: f32 = 0.45;
+
+fn formats_camera() -> Camera3 {
+    Camera3 {
+        eye: Vec3::new(0.0, 0.0, -3.0),
+        target: Vec3::ZERO,
+        fov_y: 60.0 * core::f32::consts::PI / 180.0,
+    }
+}
+
+/// 2D cards: 32 px, from x = 4, 35 px apart (fits the N64's 320).
+fn format_sprite_at(i: usize) -> Vec2 {
+    Vec2::new(4.0 + 35.0 * i as f32, 8.0)
+}
+
+fn format_card_at(i: usize) -> Vec3 {
+    Vec3::new((i as f32 - 4.0) * 0.5, -0.8, 0.0)
+}
+
+/// The photo-like card of the 3DS golden: master, ETC1, RGBA4.
+pub const FORMAT_PHOTOS: [SpriteId; 3] = [
+    SpriteId::from_path("sprites/selftest_photo"),
+    SpriteId::from_path("sprites/selftest_photo_etc1"),
+    SpriteId::from_path("sprites/selftest_photo_rgba4"),
+];
+
+/// The texture-formats frame (three identical frames: the 3DS LCD is
+/// double-buffered): every [`FORMAT_CARDS`] card as a sprite (top row) and
+/// as a textured 3D card (bottom row). With `photos`, the middle row shows
+/// [`FORMAT_PHOTOS`] side by side (ETC1 blocks, RGBA4 banding): the 3DS
+/// self-test dumps that frame as the `texture_formats.png` golden.
+pub fn draw_texture_formats(renderer: &mut dyn Renderer, photos: bool) {
+    let camera = formats_camera();
+    for _ in 0..3 {
+        renderer.begin_frame(Color::rgb(FORMATS_BG[0], FORMATS_BG[1], FORMATS_BG[2]));
+        renderer.set_camera(&camera);
+        renderer.set_light(&DEFAULT_LIGHT);
+        for (i, (sprite, _)) in FORMAT_CARDS.iter().enumerate() {
+            let s = FORMAT_CARD_SCALE;
+            let transform = Transform3 {
+                position: format_card_at(i),
+                scale: Vec3::new(s, s, s),
+                ..Transform3::default()
+            };
+            let params = ModelParams {
+                shading: Shading::Unlit,
+                texture: Some(*sprite),
+                filter: TexFilter::Point,
+                ..ModelParams::DEFAULT
+            };
+            renderer.draw_model(CARD, &transform, Material::VertexLit, &params);
+        }
+        for (i, (sprite, _)) in FORMAT_CARDS.iter().enumerate() {
+            renderer.draw_sprite(*sprite, format_sprite_at(i), &SpriteParams::DEFAULT);
+        }
+        if photos {
+            for (i, sprite) in FORMAT_PHOTOS.iter().enumerate() {
+                let pos = Vec2::new(56.0 + 100.0 * i as f32, 56.0);
+                renderer.draw_sprite(*sprite, pos, &SpriteParams::DEFAULT);
+            }
+        }
+        renderer.end_frame();
+    }
+}
+
+/// Texture formats: each [`FORMAT_CARDS`] card as a 2D sprite on a purple
+/// background (top row: every quadrant, a transparent one must show the
+/// background) and as a textured 3D card (bottom row: the opaque quadrants
+/// only, since the 3D paths treat texture alpha differently). Catches a
+/// format the shim samples wrong: an ignored ETC1A4 alpha, A8 drawn black,
+/// L8 read as alpha, swapped channels. `Ok(false)` where `read_pixel` is
+/// unsupported.
+pub fn texture_formats(
+    renderer: &mut dyn Renderer,
+    platform: &mut dyn Platform,
+) -> Result<bool, &'static str> {
+    let caps = *renderer.caps();
+    let screen = Vec2::new(caps.screen_width as f32, caps.screen_height as f32);
+    let camera = formats_camera();
+    let view = camera.view();
+    let half = camera.fov_y * 0.5;
+    let focal = cos(half) / sin(half) * screen.y * 0.5;
+    draw_texture_formats(renderer, false);
+    let near = |c: Color, want: [u8; 3]| {
+        let d = |a: u8, b: u8| (a as i32 - b as i32).abs() <= 40;
+        d(c.r, want[0]) && d(c.g, want[1]) && d(c.b, want[2])
+    };
+    // Quadrant centers: (u, v) in the card.
+    const CENTERS: [(f32, f32); 4] = [(0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)];
+    for (i, (_, quadrants)) in FORMAT_CARDS.iter().enumerate() {
+        for (q, want) in quadrants.iter().enumerate() {
+            let (u, v) = CENTERS[q];
+            let p = format_sprite_at(i);
+            let Some(c) = renderer.read_pixel((p.x + 32.0 * u) as u32, (p.y + 32.0 * v) as u32)
+            else {
+                return Ok(false);
+            };
+            if !near(c, want.unwrap_or(FORMATS_BG)) {
+                log_probe(platform, i, "2D", q, c, want.unwrap_or(FORMATS_BG));
+                return Err("texture formats: a 2D sprite sampled its format wrong");
+            }
+            let Some(want) = want else { continue };
+            // Front face at z = -0.05; planar UVs u = x + 0.5, v = 0.5 - y.
+            let local = Vec3::new(u - 0.5, 0.5 - v, -0.05);
+            let world = Vec3::new(
+                format_card_at(i).x + local.x * FORMAT_CARD_SCALE,
+                format_card_at(i).y + local.y * FORMAT_CARD_SCALE,
+                local.z * FORMAT_CARD_SCALE,
+            );
+            let p = view.transform_point(world);
+            let x = screen.x * 0.5 + p.x * focal / p.z;
+            let y = screen.y * 0.5 - p.y * focal / p.z;
+            let Some(c) = renderer.read_pixel(x as u32, y as u32) else {
+                return Ok(false);
+            };
+            if !near(c, *want) {
+                log_probe(platform, i, "3D", q, c, *want);
+                return Err("texture formats: a 3D texture sampled its format wrong");
+            }
         }
     }
     Ok(true)

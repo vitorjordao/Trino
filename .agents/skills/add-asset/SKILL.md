@@ -14,7 +14,9 @@ A file at `assets/<platform>/<same path>` overrides the master for that platform
 ```toml
 [sprites.enemy]
 file = "sprites/enemy.png"      # PNG RGB/RGBA
-formats = { n64 = "CI4" }       # REQUIRED for n64: CI4, CI8 or RGBA5551 (TMEM is 4 KB)
+formats = { n64 = "CI4", 3ds = "ETC1A4" }  # n64 REQUIRED: CI4, CI8, RGBA5551, I4, I8 (TMEM 4 KB)
+                                # 3ds optional (default RGBA8): RGB565, RGBA5551, RGBA4,
+                                # LA8, L8, A8, ETC1, ETC1A4 — see "3DS texture formats"
 
 [sounds.jump]
 file = "sounds/jump.wav"        # PCM 16-bit or float, mono/stereo
@@ -92,6 +94,25 @@ ao = { strength = 0.8, ground = true }   # optional: bake ambient occlusion (bel
   `n64-performance`).
 - Code: `ModelId::from_path("models/robot")`; animate with
   `ModelParams { anim: Some(AnimRef { clip: ClipId::from_name("walk"), time }), .. }`.
+
+## 3DS texture formats (issue #52, ADR 0017)
+
+- Pick by content: opaque art `ETC1` (4 bpp, 8× less than RGBA8, 4×4 blocks), cutouts
+  and soft alpha `ETC1A4`, flat UI with alpha `RGBA4`, hard cutouts `RGBA5551`, gray
+  `L8`/`LA8`, tinted masks (fonts, glows) `A8`. `A8` draws **white** with its alpha on
+  every target (the shim fixes the PICA200's black A8), `L8` is the Rec. 709 luminance.
+- **See it before the console:** `TRINO_SIM=3ds cargo run -p trino-app-pc` (or the
+  editor's Game view in 3DS) draws each sprite's decoded 3DS format — the PC bake writes
+  it as `<id>.3ds.sprite` (`preview_3ds`). Fonts get it too.
+- **Measure it:** `cargo xtask texture inspect sprites/x [--platform 3ds] [--json]`:
+  bytes, PSNR vs the master (alpha-premultiplied; < ~25 dB is visible, > ~35 dB is not),
+  TMEM share on the N64, texture-memory share on the 3DS; `psnr_tex3ds` when devkitPro
+  is installed (the real encoder, decoded).
+- The PC bake validates the 3DS format too: a typo fails `cargo xtask assets pc` with
+  the supported list, before any console build.
+- Evidence pictures: `cargo test -p xtask --test texture_shots -- --ignored`
+  (`target/evidence/texture_formats/`: every format of a photo-like master, and
+  Azahar's frame vs the PC's).
 
 ## Fake objects (placeholder models)
 

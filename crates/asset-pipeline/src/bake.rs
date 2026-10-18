@@ -2,6 +2,10 @@
 //!
 //! PC blob formats (little-endian):
 //! - `<hash>.sprite`: magic `TSPR`, u32 width, u32 height, RGBA8 pixels.
+//! - `<hash>.3ds.sprite`: the same, holding what the 3DS samples from the
+//!   sprite's 3DS format (`crate::texture`), written when that format is not
+//!   RGBA8. The PC's 3DS profile draws it instead (`preview_3ds` in the
+//!   index).
 //! - `<hash>.sound`:  magic `TSND`, u32 sample_rate, u32 frame count,
 //!   f32 mono samples.
 //!
@@ -40,6 +44,9 @@ pub struct BakedEntry {
     pub kind: &'static str, // "sprite" | "sound" | "music" | "model" | "font" | "blob"
     pub file: String,       // output file name
     pub format: String,
+    /// A sprite's 3DS preview file (PC bakes only, when its 3DS format
+    /// loses something: `crate::texture::N3dsFormat::preview`).
+    pub preview_3ds: Option<String>,
     /// True if this bake changed the output bytes on disk.
     pub changed: bool,
 }
@@ -94,20 +101,23 @@ pub fn bake_all(
             // PC bakes RGBA8 regardless; console formats are converted by
             // their platform bakers (Fase 4/5) — the format is validated for
             // every platform *now* so errors surface before a console port.
-            let mut blob = Vec::with_capacity(12 + rgba.len());
-            blob.extend_from_slice(b"TSPR");
-            blob.extend_from_slice(&w.to_le_bytes());
-            blob.extend_from_slice(&h.to_le_bytes());
-            blob.extend_from_slice(&rgba);
             let file = format!("{id:08x}.sprite");
-            let changed = write_if_changed(&out_dir.join(&file), &blob)?;
+            let changed = write_if_changed(&out_dir.join(&file), &tspr(w, h, &rgba))?;
+            let (preview_3ds, preview_changed) = match platform {
+                Platform::Pc => {
+                    let n3ds = decl.format_for(&logical, Platform::N3ds)?;
+                    write_preview_3ds(out_dir, id, &n3ds, w, h, &rgba)?
+                }
+                _ => (None, false),
+            };
             Ok(BakedEntry {
                 logical: logical.clone(),
                 id,
                 kind: "sprite",
                 file,
                 format,
-                changed,
+                preview_3ds,
+                changed: changed || preview_changed,
             })
         })();
         match result {
@@ -148,6 +158,7 @@ pub fn bake_all(
                     kind,
                     file,
                     format: "F32_MONO".into(),
+                    preview_3ds: None,
                     changed,
                 })
             })();
@@ -185,6 +196,7 @@ pub fn bake_all(
                 kind: "model",
                 file,
                 format: "TMDL".into(),
+                preview_3ds: None,
                 changed,
             })
         })();
@@ -206,17 +218,20 @@ pub fn bake_all(
             let source = resolve_source(assets_root, platform, &decl.file)?;
             let font = crate::font::bake_font(&source, decl)
                 .map_err(|e| format!("font `{logical}`: {e}"))?;
-            let mut atlas = Vec::with_capacity(12 + font.rgba.len());
-            atlas.extend_from_slice(b"TSPR");
-            atlas.extend_from_slice(&font.width.to_le_bytes());
-            atlas.extend_from_slice(&font.height.to_le_bytes());
-            atlas.extend_from_slice(&font.rgba);
+            let atlas = tspr(font.width, font.height, &font.rgba);
             // The atlas is a sprite under the font's own handle
             // (`text::atlas_of`); the table is the `font` entry.
             let sprite_file = format!("{id:08x}.sprite");
             let table_file = format!("{id:08x}.font");
             let sprite_changed = write_if_changed(&out_dir.join(&sprite_file), &atlas)?;
             let table_changed = write_if_changed(&out_dir.join(&table_file), &font.table)?;
+            let (preview_3ds, preview_changed) = match platform {
+                Platform::Pc => {
+                    let n3ds = decl.format_for(&logical, Platform::N3ds)?;
+                    write_preview_3ds(out_dir, id, &n3ds, font.width, font.height, &font.rgba)?
+                }
+                _ => (None, false),
+            };
             Ok(vec![
                 BakedEntry {
                     logical: logical.clone(),
@@ -224,7 +239,8 @@ pub fn bake_all(
                     kind: "sprite",
                     file: sprite_file,
                     format,
-                    changed: sprite_changed,
+                    preview_3ds,
+                    changed: sprite_changed || preview_changed,
                 },
                 BakedEntry {
                     logical: logical.clone(),
@@ -232,6 +248,7 @@ pub fn bake_all(
                     kind: "font",
                     file: table_file,
                     format: "TFNT".into(),
+                    preview_3ds: None,
                     changed: table_changed,
                 },
             ])
@@ -260,6 +277,7 @@ pub fn bake_all(
                 kind: "blob",
                 file,
                 format: "RAW".into(),
+                preview_3ds: None,
                 changed,
             })
         })();
@@ -288,6 +306,7 @@ pub fn bake_all(
                 kind: "blob",
                 file,
                 format: "TPFX".into(),
+                preview_3ds: None,
                 changed,
             })
         })();
@@ -320,6 +339,7 @@ pub fn bake_all(
                 kind: "blob",
                 file,
                 format: "TSCN".into(),
+                preview_3ds: None,
                 changed,
             })
         })();
@@ -340,11 +360,48 @@ pub fn bake_all(
             "\n[[asset]]\nlogical = \"{}\"\nid = {}\nkind = \"{}\"\nfile = \"{}\"\nformat = \"{}\"\n",
             e.logical, e.id, e.kind, e.file, e.format
         ));
+        if let Some(p) = &e.preview_3ds {
+            index.push_str(&format!("preview_3ds = \"{p}\"\n"));
+        }
     }
     write_if_changed(&out_dir.join("index.toml"), index.as_bytes())
         .map_err(|e| BakeError(vec![e]))?;
 
     Ok(report)
+}
+
+/// A `TSPR` blob: magic, u32 width, u32 height, RGBA8.
+fn tspr(w: u32, h: u32, rgba: &[u8]) -> Vec<u8> {
+    let mut blob = Vec::with_capacity(12 + rgba.len());
+    blob.extend_from_slice(b"TSPR");
+    blob.extend_from_slice(&w.to_le_bytes());
+    blob.extend_from_slice(&h.to_le_bytes());
+    blob.extend_from_slice(rgba);
+    blob
+}
+
+/// Write `<id>.3ds.sprite`, what the 3DS samples from `format`, unless the
+/// format keeps every bit (RGBA8). Returns the file name and whether it
+/// changed.
+fn write_preview_3ds(
+    out_dir: &Path,
+    id: u32,
+    format: &str,
+    w: u32,
+    h: u32,
+    rgba: &[u8],
+) -> Result<(Option<String>, bool), String> {
+    let format = crate::texture::N3dsFormat::parse(format)
+        .ok_or_else(|| format!("unknown 3DS format `{format}`"))?;
+    if format == crate::texture::N3dsFormat::Rgba8 {
+        return Ok((None, false));
+    }
+    let file = format!("{id:08x}.3ds.sprite");
+    let changed = write_if_changed(
+        &out_dir.join(&file),
+        &tspr(w, h, &format.preview(w, h, rgba)),
+    )?;
+    Ok((Some(file), changed))
 }
 
 pub(crate) fn decode_png(path: &Path) -> Result<(u32, u32, Vec<u8>), String> {

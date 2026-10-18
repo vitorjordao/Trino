@@ -132,12 +132,13 @@ pub fn upload_assets(
     only: Option<&[u32]>,
 ) -> Result<(), String> {
     let assets = trino_asset_pipeline::load_dir(baked_dir, only)?;
+    let target = sprite_platform(renderer);
     for sprite in assets.sprites {
         renderer.upload_sprite(
             trino_core::SpriteId(sprite.id),
             sprite.width,
             sprite.height,
-            &sprite.rgba,
+            sprite.pixels_for(target),
         );
     }
     for sound in assets.sounds {
@@ -158,6 +159,18 @@ pub fn upload_assets(
         platform.insert_blob(trino_core::BlobId(blob.id), blob.bytes);
     }
     Ok(())
+}
+
+/// Whose sprite pixels a renderer draws: the 3DS profile samples each
+/// sprite's 3DS format (the bake's `preview_3ds`), every other profile the
+/// master.
+pub fn sprite_platform(renderer: &PcRenderer) -> trino_asset_pipeline::Platform {
+    use trino_core::Renderer;
+    if *renderer.caps() == trino_core::Caps::N3DS {
+        trino_asset_pipeline::Platform::N3ds
+    } else {
+        trino_asset_pipeline::Platform::Pc
+    }
 }
 
 /// Linear-interpolation resampler (load-time, dev quality).

@@ -50,7 +50,12 @@ impl Platform {
             // (intensity, alpha = intensity) suit white masks tinted at draw
             // time — fonts, UI panels — and upload no palette per blit.
             Platform::N64 => &["CI4", "CI8", "RGBA5551", "I4", "I8"],
-            Platform::N3ds => &["RGBA8", "RGB565"],
+            // The PICA200's formats (`tex3ds -f`, `crate::texture`): ETC1
+            // is 4 bits a texel, ETC1A4 8 with 4-bit alpha; L8/LA8 are gray,
+            // A8 a white mask (the shim tints it).
+            Platform::N3ds => &[
+                "RGBA8", "RGB565", "RGBA5551", "RGBA4", "LA8", "L8", "A8", "ETC1", "ETC1A4",
+            ],
         }
     }
 

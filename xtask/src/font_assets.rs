@@ -407,7 +407,72 @@ pub fn gen_all(repo_root: &Path, write_png: crate::castle64_assets::PngWriter) {
         8,
         &detail,
     );
+
+    // One 32x32 card per 3DS texture format (selftest::texture_formats):
+    // 16x16 quadrants each format stores exactly, so every target probes the
+    // same colors; the N64 bakes them all as RGBA5551.
+    for (name, quadrants) in FORMAT_CARDS {
+        let mut tex = Vec::with_capacity(32 * 32 * 4);
+        for y in 0..32 {
+            for x in 0..32 {
+                tex.extend_from_slice(&quadrants[(y / 16) * 2 + x / 16]);
+            }
+        }
+        let path = repo_root.join(format!("assets/shared/sprites/selftest_fmt_{name}.png"));
+        write_png(&path, 32, 32, &tex);
+    }
+    // A photo-like 64x64 (gradients, a hard-edged disc, noise): where ETC1
+    // blocks and RGBA4 banding show, in the 3DS texture-formats golden.
+    let mut seed = 0x1234_5678u32;
+    let mut photo = Vec::with_capacity(64 * 64 * 4);
+    for y in 0..64i32 {
+        for x in 0..64i32 {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            let n = (seed & 15) as i32 - 8;
+            let disc = (x - 20).pow(2) + (y - 40).pow(2) < 144;
+            let (r, g, b) = if disc {
+                (230, 40, 30)
+            } else {
+                (x * 4, y * 4, 255 - (x + y) * 2)
+            };
+            let c = |v: i32| (v + n).clamp(0, 255) as u8;
+            photo.extend_from_slice(&[c(r), c(g), c(b), 255]);
+        }
+    }
+    write_png(
+        &repo_root.join("assets/shared/sprites/selftest_photo.png"),
+        64,
+        64,
+        &photo,
+    );
 }
+
+/// `selftest_fmt_<format>.png`: TL, TR, BL, BR quadrant colors. The same
+/// table, composited over its background, is what
+/// `castle64::selftest::texture_formats` expects.
+const FORMAT_CARDS: [(&str, [[u8; 4]; 4]); 9] = {
+    const R: [u8; 4] = [255, 0, 0, 255];
+    const G: [u8; 4] = [0, 255, 0, 255];
+    const B: [u8; 4] = [0, 0, 255, 255];
+    const W: [u8; 4] = [255, 255, 255, 255];
+    const CLEAR: [u8; 4] = [0, 0, 0, 0];
+    const GRAY: [u8; 4] = [136, 136, 136, 255];
+    const DARK: [u8; 4] = [68, 68, 68, 255];
+    const BLACK: [u8; 4] = [0, 0, 0, 255];
+    [
+        ("rgba8", [R, G, B, CLEAR]),
+        ("rgb565", [R, G, B, W]),
+        ("rgba5551", [R, G, B, CLEAR]),
+        ("rgba4", [R, G, B, CLEAR]),
+        ("la8", [W, GRAY, DARK, CLEAR]),
+        ("l8", [W, GRAY, DARK, BLACK]),
+        ("a8", [W, CLEAR, CLEAR, W]),
+        ("etc1", [R, G, B, W]),
+        ("etc1a4", [R, G, B, CLEAR]),
+    ]
+};
 
 #[cfg(test)]
 mod tests {

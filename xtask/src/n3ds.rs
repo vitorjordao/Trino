@@ -152,6 +152,18 @@ fn compile_shim(root: &Path, dkp: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// The installed `tex3ds` (`texture inspect` decodes its output).
+pub fn tex3ds_tool() -> Result<PathBuf, String> {
+    tool(&devkitpro()?, "tools/bin", "tex3ds")
+}
+
+/// `tex3ds -f` for a manifest format (`trino_asset_pipeline::N3dsFormat`).
+fn tex3ds_format(logical: &str, format: &str) -> Result<&'static str, String> {
+    trino_asset_pipeline::N3dsFormat::parse(format)
+        .map(|f| f.tex3ds())
+        .ok_or_else(|| format!("{logical}: no tex3ds mapping for format {format}"))
+}
+
 /// Bake 3DS assets into target/3ds/romfs: tex3ds for sprites, raw PCM16
 /// (12-byte header: rate, channels, frames) for sounds, plus the index.tsv
 /// the runtime reads at boot.
@@ -177,11 +189,7 @@ pub fn bake_assets(p: &Project, test_mode: bool) -> Result<(), String> {
         let format = decl.format_for(&logical, Platform::N3ds)?;
         // Manifest names follow the hardware format; tex3ds spells them
         // lowercase-compact.
-        let tex3ds_format = match format.as_str() {
-            "RGBA8" => "rgba8",
-            "RGB565" => "rgb565",
-            other => return Err(format!("{logical}: no tex3ds mapping for format {other}")),
-        };
+        let tex3ds_format = tex3ds_format(&logical, &format)?;
         let source = resolve_source(&root.join("assets"), Platform::N3ds, &decl.file)?;
         let staged = stage.join(format!("{id:08x}.png"));
         std::fs::copy(&source, &staged).map_err(|e| e.to_string())?;
@@ -232,11 +240,7 @@ pub fn bake_assets(p: &Project, test_mode: bool) -> Result<(), String> {
         let logical = format!("fonts/{name}");
         let id = trino_core::asset_id(&logical);
         let format = decl.format_for(&logical, Platform::N3ds)?;
-        let tex3ds_format = match format.as_str() {
-            "RGBA8" => "rgba8",
-            "RGB565" => "rgb565",
-            other => return Err(format!("{logical}: no tex3ds mapping for format {other}")),
-        };
+        let tex3ds_format = tex3ds_format(&logical, &format)?;
         let source = resolve_source(&root.join("assets"), Platform::N3ds, &decl.file)?;
         let font = trino_asset_pipeline::bake_font(&source, decl)
             .map_err(|e| format!("font `{logical}`: {e}"))?;
@@ -1042,6 +1046,16 @@ pub fn test(p: &Project, build_first: bool, bless: bool, accurate: bool) -> Exit
         let msg =
             crate::fbgolden::check_close(root, "3ds", "showcase_river", img, bless, 3.0, 0.02)?;
         println!("[3ds] golden frame (showcase river): {msg}");
+        // One card per texture format (#52): ETC1/ETC1A4/RGBA4/... sampled
+        // by the PICA200 (`castle64::selftest::draw_texture_formats`).
+        let img = frames
+            .get(4)
+            .ok_or("texture formats golden frame: not dumped")?
+            .image()
+            .map_err(|e| format!("texture formats golden frame: {e}"))?;
+        let msg =
+            crate::fbgolden::check_close(root, "3ds", "texture_formats", img, bless, 3.0, 0.02)?;
+        println!("[3ds] golden frame (texture formats): {msg}");
         Ok(())
     });
 

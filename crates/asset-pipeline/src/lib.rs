@@ -30,6 +30,7 @@ pub mod model;
 pub mod particles;
 pub mod primitive;
 pub mod resolve;
+pub mod texture;
 #[cfg(feature = "watch")]
 pub mod watch;
 
@@ -46,3 +47,4 @@ pub use model::{
 };
 pub use primitive::{Pivot, Primitive, Shape};
 pub use resolve::resolve_source;
+pub use texture::N3dsFormat;

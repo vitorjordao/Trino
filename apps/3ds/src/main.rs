@@ -381,6 +381,12 @@ mod n3ds {
                             }
                             renderer.dump_framebuffer();
                             drop(g);
+                            // 8) One card per 3DS texture format (#52), as
+                            // sprites and textured 3D: the fifth golden,
+                            // texture_formats.png (top screen).
+                            runtime::log("TRINO_STEP:texture formats golden frame\n");
+                            castle64::selftest::draw_texture_formats(renderer, true);
+                            renderer.dump_framebuffer();
                             runtime::log("TRINO_TEST_PASS\n");
                         }
                         Ok(false) => fail("showcase panel: no second screen to probe".into()),

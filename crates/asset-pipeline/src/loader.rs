@@ -17,6 +17,8 @@ struct IndexEntry {
     id: u32,
     kind: String,
     file: String,
+    #[serde(default)]
+    preview_3ds: Option<String>,
 }
 
 pub struct LoadedSprite {
@@ -25,6 +27,20 @@ pub struct LoadedSprite {
     pub width: u32,
     pub height: u32,
     pub rgba: Vec<u8>,
+    /// What the 3DS samples from the sprite's 3DS format, when that format
+    /// loses something (`crate::texture`): the PC's 3DS profile draws it.
+    pub preview_3ds: Option<Vec<u8>>,
+}
+
+impl LoadedSprite {
+    /// The pixels a renderer simulating `platform` should upload: the 3DS
+    /// preview on the 3DS, the master everywhere else.
+    pub fn pixels_for(&self, platform: crate::Platform) -> &[u8] {
+        match (platform, &self.preview_3ds) {
+            (crate::Platform::N3ds, Some(p)) => p,
+            _ => &self.rgba,
+        }
+    }
 }
 
 pub struct LoadedSound {
@@ -100,12 +116,28 @@ pub fn load_dir(out_dir: &Path, only: Option<&[u32]>) -> Result<LoadedAssets, St
                 if rgba.len() != (width * height * 4) as usize {
                     return Err(format!("{}: truncated sprite data", path.display()));
                 }
+                let preview_3ds = match &entry.preview_3ds {
+                    Some(file) => {
+                        let path = out_dir.join(file);
+                        let bytes =
+                            std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+                        if bytes.len() != 12 + rgba.len()
+                            || !bytes.starts_with(b"TSPR")
+                            || bytes[4..12] != rest[0..8]
+                        {
+                            return Err(format!("{}: bad 3DS preview", path.display()));
+                        }
+                        Some(bytes[12..].to_vec())
+                    }
+                    None => None,
+                };
                 out.sprites.push(LoadedSprite {
                     logical: entry.logical,
                     id: entry.id,
                     width,
                     height,
                     rgba,
+                    preview_3ds,
                 });
             }
             "sound" | "music" => {

@@ -26,6 +26,9 @@ pub struct SpriteAsset {
     pub width: u32,
     pub height: u32,
     pub rgba: Vec<u8>,
+    /// What the 3DS samples from the sprite's 3DS format (the bake's
+    /// `preview_3ds`), drawn by the Game view's 3DS profile.
+    pub preview_3ds: Option<Vec<u8>>,
     pub thumb: Option<egui::TextureHandle>,
 }
 
@@ -156,6 +159,7 @@ impl Project {
                     width: s.width,
                     height: s.height,
                     rgba: s.rgba,
+                    preview_3ds: s.preview_3ds,
                     thumb: None,
                 },
             );
@@ -246,9 +250,18 @@ impl Project {
 
     /// Sprites a console bakes from its own override file — the impostor
     /// atlases, whose N64 version has smaller tiles (and a palette) — so the
-    /// Game view's N64 profile samples what the console will. Every other
+    /// Game view's N64 profile samples what the console will; on the 3DS,
+    /// each sprite's 3DS format (ETC1 blocks, 4-bit banding). Every other
     /// sprite keeps the PC pixels.
     pub fn upload_platform_sprites(&self, r: &mut PcRenderer, target: trino_scene::Target) {
+        if target == trino_scene::Target::N3ds {
+            for s in self.sprites.values() {
+                if let Some(p) = &s.preview_3ds {
+                    r.upload_sprite(trino_core::SpriteId(s.id), s.width, s.height, p);
+                }
+            }
+            return;
+        }
         if target != trino_scene::Target::N64 {
             return;
         }

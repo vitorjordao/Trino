@@ -635,6 +635,11 @@ fn ripple_rings(
     let mut poly_a = [super::NO_VERT; MAX_POLY];
     let mut poly_b = [super::NO_VERT; MAX_POLY];
     for r in &w.ripples[..w.n_ripples] {
+        // A surface cut in pieces (the showcase's river) rings each ripple
+        // once: from the piece it fell on.
+        if !over_surface(mesh, model, r.pos) {
+            continue;
+        }
         let decay = r.decay();
         let a = 210.0 * decay * (r.strength * w.response / 0.08).min(1.0);
         if a < 4.0 {
@@ -665,6 +670,20 @@ fn ripple_rings(
         stats.verts += 2 * (RING_SEGMENTS as u32 + 1);
     }
     stats
+}
+
+/// Does world point `p` (x, z) lie over one of `mesh`'s triangles under
+/// `model`, seen from above? The owner of a ripple's ring
+/// ([`tessellate_ripples`]).
+fn over_surface(mesh: &Mesh, model: &Mat34, p: Vec2) -> bool {
+    (0..mesh.index_count / 3).any(|t| {
+        let v: [Vec3; 3] = core::array::from_fn(|k| {
+            model.transform_point(mesh.position(mesh.index(3 * t + k) as usize))
+        });
+        let side = |a: Vec3, b: Vec3| (b.x - a.x) * (p.y - a.z) - (b.z - a.z) * (p.x - a.x);
+        let s = [side(v[0], v[1]), side(v[1], v[2]), side(v[2], v[0])];
+        s.iter().all(|&x| x >= 0.0) || s.iter().all(|&x| x <= 0.0)
+    })
 }
 
 /// Clip, project and emit one ring triangle (view space; both faces).

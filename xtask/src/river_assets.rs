@@ -227,6 +227,51 @@ fn river() -> Mesh {
     m
 }
 
+/// The ribbon's rings `a..=b`: the same vertices, colors and UVs as
+/// [`river`] (shared edges keep their bits, so pieces meet without cracks).
+fn river_piece(a: usize, b: usize) -> Mesh {
+    let r = river();
+    let mut m = Mesh::default();
+    for v in a * 5..(b + 1) * 5 {
+        m.vert(r.positions[v], r.normals[v], r.colors[v]);
+        m.uvs.push(r.uvs[v]);
+    }
+    for i in 0..(b - a) as u16 {
+        for k in 0..4u16 {
+            let (p, q) = (i * 5 + k, i * 5 + k + 1);
+            let (c, d) = (p + 5, q + 5);
+            m.tri(p, q, d, UP);
+            m.tri(p, d, c, UP);
+        }
+    }
+    m
+}
+
+/// The ribbon cut into pieces by ring ranges, split in halves while the
+/// scene camera would have to clip a piece (`rsp_hull_check`): the river runs
+/// under the camera, and one mesh crossing the near plane kept the whole
+/// river on the CPU. `(first ring, last ring)` per piece, in course order.
+pub fn river_pieces(camera: &trino_core::Camera3) -> Vec<(usize, usize)> {
+    use trino_core::render3d::{DEFAULT_LIGHT, TnlContext, rsp_hull_check};
+    let ctx = TnlContext::new(camera, &DEFAULT_LIGHT, Vec2::new(320.0, 240.0));
+    let view = camera.view();
+    let mut out = Vec::new();
+    let mut todo = vec![(0usize, COURSE.len() - 1)];
+    while let Some((a, b)) = todo.pop() {
+        let blob = tmdl_of(&river_piece(a, b));
+        let mesh = trino_core::Mesh::from_tmdl(&blob).expect("river TMDL");
+        if b - a > 1 && rsp_hull_check(&ctx, &mesh, &view).is_err() {
+            let m = (a + b) / 2;
+            todo.push((m, b));
+            todo.push((a, m));
+        } else {
+            out.push((a, b));
+        }
+    }
+    out.sort();
+    out
+}
+
 const GRASS: Rgba = [118, 176, 84, 255];
 const GRASS_DARK: Rgba = [96, 152, 70, 255];
 const MUD: Rgba = [112, 98, 70, 255];
@@ -962,13 +1007,16 @@ pub fn gen_all(root: &Path, write_png: PngWriter) {
     std::fs::create_dir_all(shared.join("models/proxies")).unwrap();
     let r = river();
     assert_eq!(r.tris(), 128, "the ribbon is 16 x 4 quads");
-    r.write_glb(&models.join("river.glb"));
-    // The tiles follow the scene camera: old ones go first.
+    // The river pieces and terrain tiles follow the scene camera: old ones
+    // go first.
     for e in std::fs::read_dir(&models).unwrap().flatten() {
         let name = e.file_name().to_string_lossy().into_owned();
-        if name.starts_with("terrain_") && name.ends_with(".glb") {
+        if (name.starts_with("terrain_") || name.starts_with("river")) && name.ends_with(".glb") {
             std::fs::remove_file(e.path()).unwrap();
         }
+    }
+    for (a, b) in river_pieces(&scene_camera()) {
+        river_piece(a, b).write_glb(&models.join(format!("river_{a}_{b}.glb")));
     }
     for tile in terrain_tiles(&scene_camera()) {
         tile.mesh

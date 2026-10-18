@@ -359,8 +359,28 @@ file = "models/showcase/terrain_12_16_4.glb"
 [models.terrain_16_16_4]
 file = "models/showcase/terrain_16_16_4.glb"
 
-[models.river]
-file = "models/showcase/river.glb"
+[models.river_0_8]
+file = "models/showcase/river_0_8.glb"
+texture = "sprites/tex_water"
+
+[models.river_8_12]
+file = "models/showcase/river_8_12.glb"
+texture = "sprites/tex_water"
+
+[models.river_12_13]
+file = "models/showcase/river_12_13.glb"
+texture = "sprites/tex_water"
+
+[models.river_13_14]
+file = "models/showcase/river_13_14.glb"
+texture = "sprites/tex_water"
+
+[models.river_14_15]
+file = "models/showcase/river_14_15.glb"
+texture = "sprites/tex_water"
+
+[models.river_15_16]
+file = "models/showcase/river_15_16.glb"
 texture = "sprites/tex_water"
 
 [models.bridge]

@@ -506,8 +506,68 @@
         rot: (0.0, 0.0, 0.0),
         scale: (1.0, 1.0, 1.0),
     ),
+    children: [
+(
+    name: "piece-0-8",
+    transform: (
+        pos: (0.0, 0.0, 0.0),
+        rot: (0.0, 0.0, 0.0),
+        scale: (1.0, 1.0, 1.0),
+    ),
     tags: ["water"],
-    model: Some((path: "models/river", material: Some("materials/water"))),
+    model: Some((path: "models/river_0_8", material: Some("materials/water"))),
+),
+(
+    name: "piece-8-12",
+    transform: (
+        pos: (0.0, 0.0, 0.0),
+        rot: (0.0, 0.0, 0.0),
+        scale: (1.0, 1.0, 1.0),
+    ),
+    tags: ["water"],
+    model: Some((path: "models/river_8_12", material: Some("materials/water"))),
+),
+(
+    name: "piece-12-13",
+    transform: (
+        pos: (0.0, 0.0, 0.0),
+        rot: (0.0, 0.0, 0.0),
+        scale: (1.0, 1.0, 1.0),
+    ),
+    tags: ["water"],
+    model: Some((path: "models/river_12_13", material: Some("materials/water"))),
+),
+(
+    name: "piece-13-14",
+    transform: (
+        pos: (0.0, 0.0, 0.0),
+        rot: (0.0, 0.0, 0.0),
+        scale: (1.0, 1.0, 1.0),
+    ),
+    tags: ["water"],
+    model: Some((path: "models/river_13_14", material: Some("materials/water"))),
+),
+(
+    name: "piece-14-15",
+    transform: (
+        pos: (0.0, 0.0, 0.0),
+        rot: (0.0, 0.0, 0.0),
+        scale: (1.0, 1.0, 1.0),
+    ),
+    tags: ["water"],
+    model: Some((path: "models/river_14_15", material: Some("materials/water"))),
+),
+(
+    name: "piece-15-16",
+    transform: (
+        pos: (0.0, 0.0, 0.0),
+        rot: (0.0, 0.0, 0.0),
+        scale: (1.0, 1.0, 1.0),
+    ),
+    tags: ["water"],
+    model: Some((path: "models/river_15_16", material: Some("materials/water"))),
+),
+    ],
 ),
 (
     name: "bridge",

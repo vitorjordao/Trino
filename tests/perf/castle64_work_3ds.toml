@@ -60,23 +60,23 @@ gpu_draws = 22
 gpu_tris = 446
 
 [micro-river]
-verts = 129
-tris_in = 168
-clipped = 34
+verts = 144
+tris_in = 160
+clipped = 27
 splits = 0
 backfaced = 0
 emitted = 141
-culled = 0
+culled = 1
 gpu_draws = 0
 gpu_tris = 0
 
 [showcase-river]
-verts = 2959
-tris_in = 1628
-clipped = 34
+verts = 2974
+tris_in = 1620
+clipped = 27
 splits = 0
 backfaced = 748
 emitted = 858
-culled = 19
+culled = 20
 gpu_draws = 44
 gpu_tris = 2853

@@ -50,6 +50,14 @@ impl RspMesh {
     pub fn tris(&self) -> u32 {
         self.tris
     }
+
+    /// Give its uncached RDRAM back (the renderer's grave calls it once no
+    /// frame in flight can read it). `table` is the block's physical
+    /// address: KSEG1 (`| 0xA000_0000`) is the pointer `malloc_uncached`
+    /// returned.
+    pub fn free(self) {
+        unsafe { ffi::trino_free_uncached((self.table | 0xA000_0000) as *mut c_void) }
+    }
 }
 
 /// s15.16 of `v`, split into its integer and fractional halves.

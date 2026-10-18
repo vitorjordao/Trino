@@ -39,6 +39,8 @@ pub enum Tab {
     Assets,
     /// The project mix (`assets/audio.toml`, issue #53).
     Mixer,
+    /// What the assets take of each console's RAM, by group (issue #56).
+    Memory,
     Console,
 }
 
@@ -53,6 +55,7 @@ impl Tab {
             Tab::Inspector => (icon::SLIDERS_HORIZONTAL, "Inspector"),
             Tab::Assets => (icon::FOLDER_OPEN, "Assets"),
             Tab::Mixer => (icon::FADERS_HORIZONTAL, "Mixer"),
+            Tab::Memory => (icon::MEMORY, "Memory"),
             Tab::Console => (icon::TERMINAL, "Console"),
         };
         format!("{glyph}  {name}")
@@ -118,6 +121,12 @@ pub enum Cmd {
     /// One platform's `codec` or `sample_rate` entry of a sound (`None`:
     /// the default).
     SetAudioPlatform(String, &'static str, pipeline::Platform, Option<String>),
+    /// Put an asset (`models/x`, `sprites/x`, ...) in these groups (empty
+    /// or `["boot"]`: boot); new groups are declared (`cargo xtask assets
+    /// group`).
+    SetAssetGroups(String, Vec<String>),
+    /// Declare `[groups.<name>]`.
+    AddGroup(String),
     /// Play a sound's master (`None`) or a platform's decode on the PC.
     PlayAudio(String, Option<pipeline::Platform>),
     StopAudio,
@@ -222,6 +231,8 @@ pub struct App {
     pub hierarchy_filter: String,
     pub assets_tab: crate::panels::assets::AssetTab,
     pub assets_filter: String,
+    /// The manifest's asset groups and the Memory tab's plans (issue #56).
+    pub groups: crate::groups::Groups,
     pub level: LevelEditor,
     pub animate: bool,
     anim_start: Instant,
@@ -409,6 +420,20 @@ impl App {
             _ if open == "array" => cmds.push(Cmd::Open(Dialog::array())),
             _ => {}
         }
+        // Dev hook: TRINO_EDITOR_ASSET_GROUP=<group>[@models|sprites|audio|
+        // particles] shows that group's chip in Assets (on that tab).
+        let asset_group = std::env::var("TRINO_EDITOR_ASSET_GROUP").ok().map(|g| {
+            let (g, tab) = g.split_once('@').unwrap_or((&g, ""));
+            use crate::panels::assets::AssetTab;
+            match tab {
+                "models" => assets_tab = AssetTab::Models,
+                "sprites" => assets_tab = AssetTab::Sprites,
+                "audio" => assets_tab = AssetTab::Audio,
+                "particles" => assets_tab = AssetTab::Particles,
+                _ => {}
+            }
+            g.to_string()
+        });
         // Dev hook: TRINO_EDITOR_TEXTURE=sprites/x | fonts/x [@pc|n64|3ds[,zoom]]
         // opens the texture inspector on it (that platform's preview).
         let texture_hook = std::env::var("TRINO_EDITOR_TEXTURE").ok();
@@ -532,6 +557,7 @@ impl App {
             hierarchy_filter: String::new(),
             assets_tab,
             assets_filter: String::new(),
+            groups: crate::groups::Groups::new(asset_group),
             level: LevelEditor::load(PathBuf::from(LEVEL_PATH)),
             animate: true,
             anim_start: Instant::now(),
@@ -558,9 +584,12 @@ impl App {
             show_shortcuts: false,
             // Built on the first frame, when the window size is known.
             dock: None,
-            // `TRINO_EDITOR_TAB=mixer` brings the Mixer tab to front.
-            focus_tab: (std::env::var("TRINO_EDITOR_TAB").as_deref() == Ok("mixer"))
-                .then_some(Tab::Mixer),
+            // `TRINO_EDITOR_TAB=mixer|memory` brings that bottom tab to front.
+            focus_tab: match std::env::var("TRINO_EDITOR_TAB").as_deref() {
+                Ok("mixer") => Some(Tab::Mixer),
+                Ok("memory") => Some(Tab::Memory),
+                _ => None,
+            },
             open_docs: Vec::new(),
             // Dev hook: TRINO_EDITOR_PALETTE=<query> opens the palette.
             palette: std::env::var("TRINO_EDITOR_PALETTE").ok(),
@@ -643,6 +672,7 @@ impl App {
             tmem: Some(&self.project.tmem),
             water: (self.water_time(), self.ripples.as_slice()),
             audio: self.audio.totals.as_ref().map(|(_, t)| t),
+            memory: self.groups.ready_plans(),
         }
     }
 
@@ -1442,6 +1472,17 @@ impl App {
                     format.as_deref().unwrap_or("default")
                 ));
             }
+            Cmd::SetAssetGroups(logical, groups) => {
+                self.project.set_groups(&logical, &groups)?;
+                self.groups.sync(&self.project.manifest_path());
+                self.log
+                    .info(format!("{logical}: groups {:?}", self.groups.of(&logical)));
+            }
+            Cmd::AddGroup(name) => {
+                self.project.add_group(&name)?;
+                self.groups.sync(&self.project.manifest_path());
+                self.log.info(format!("declared group `{name}`"));
+            }
             Cmd::SetAudioKey(logical, key, value) => {
                 self.project
                     .set_audio_key(&logical, key, value.as_deref())?;
@@ -2222,6 +2263,7 @@ impl App {
             (Tab::Level, "Level"),
             (Tab::Assets, "Assets"),
             (Tab::Mixer, "Mixer"),
+            (Tab::Memory, "Memory"),
             (Tab::Console, "Console"),
         ] {
             add(format!("Go to {name} view"), "View", Cmd::FocusTab(tab));
@@ -2954,6 +2996,7 @@ impl eframe::App for App {
         }
 
         self.sync_files();
+        self.groups.sync(&self.project.manifest_path());
         self.handle_paste(&ctx);
         // Files dropped on the window: import (models / sprites).
         let dropped: Vec<PathBuf> = ctx.input(|i| {
@@ -3158,8 +3201,11 @@ fn default_dock(width: f32) -> egui_dock::DockState<Tab> {
     let [center, _left] =
         surface.split_left(egui_dock::NodeIndex::root(), left, vec![Tab::Hierarchy]);
     let [center, _right] = surface.split_right(center, 1.0 - right, vec![Tab::Inspector]);
-    let [_, _bottom] =
-        surface.split_below(center, 0.70, vec![Tab::Assets, Tab::Mixer, Tab::Console]);
+    let [_, _bottom] = surface.split_below(
+        center,
+        0.70,
+        vec![Tab::Assets, Tab::Mixer, Tab::Memory, Tab::Console],
+    );
     dock
 }
 
@@ -3194,6 +3240,7 @@ impl egui_dock::TabViewer for TabView<'_> {
             | Tab::Console
             | Tab::Assets
             | Tab::Mixer
+            | Tab::Memory
             | Tab::Level
             | Tab::Animation => [false, false],
             _ => [false, true],
@@ -3215,6 +3262,12 @@ impl egui_dock::TabViewer for TabView<'_> {
                     let key =
                         crate::audio::key(&app.project.manifest_path(), app.project.generation);
                     app.audio.totals(ui.ctx(), &app.project.assets_dir(), key);
+                    // And its assets RAM line (issue #56): the memory plans.
+                    let _ = app.groups.plans(
+                        ui.ctx(),
+                        &app.project.assets_dir(),
+                        app.project.generation,
+                    );
                 }
                 let input = ViewInput {
                     scene: &app.doc.scene,
@@ -3234,6 +3287,7 @@ impl egui_dock::TabViewer for TabView<'_> {
                     tmem: Some(&app.project.tmem),
                     water: (app.water_time(), app.ripples.as_slice()),
                     audio: app.audio.totals.as_ref().map(|(_, t)| t),
+                    memory: app.groups.ready_plans(),
                 };
                 let view = if kind == ViewKind::Scene {
                     &mut app.scene_view
@@ -3296,6 +3350,7 @@ impl egui_dock::TabViewer for TabView<'_> {
             Tab::Inspector => crate::panels::inspector::ui(app, ui),
             Tab::Assets => crate::panels::assets::ui(app, ui),
             Tab::Mixer => crate::panels::mixer::ui(app, ui),
+            Tab::Memory => crate::panels::memory::ui(app, ui),
             Tab::Console => app.log.ui(ui),
         }
     }

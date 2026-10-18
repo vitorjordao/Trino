@@ -47,10 +47,85 @@ mod n64 {
             last = now;
 
             let state = input.poll();
+            N64Assets::pump(&mut renderer, &mut audio, &mut platform);
             game.update_with(&mut platform, &state, &mut audio, dt);
             game.render(&mut renderer);
             audio.poll();
+            platform.sample_heap();
         }
+    }
+
+    /// The `asset groups` step's backends and the loader's frame.
+    struct GroupHost<'a> {
+        renderer: &'a mut N64Renderer,
+        audio: &'a mut N64Audio,
+        platform: &'a mut N64Platform,
+    }
+
+    impl castle64::selftest::GroupHost for GroupHost<'_> {
+        fn parts(&mut self) -> (&mut dyn trino_core::Renderer, &mut dyn trino_core::Platform) {
+            (self.renderer, self.platform)
+        }
+
+        fn pump(&mut self) {
+            N64Assets::pump(self.renderer, self.audio, self.platform);
+            self.audio.poll();
+            self.platform.sample_heap();
+        }
+    }
+
+    /// Asset groups (issue #56): load behind a loading bar, draw, unload,
+    /// the heap back to its baseline, then 1 000 frames of load/unload.
+    #[inline(never)]
+    fn asset_groups(renderer: &mut N64Renderer, audio: &mut N64Audio, platform: &mut N64Platform) {
+        runtime::log("TRINO_STEP:asset groups\n");
+        let t0 = runtime::now_us();
+        let mut host = GroupHost {
+            renderer,
+            audio,
+            platform,
+        };
+        match castle64::selftest::asset_groups(&mut host, 1_000) {
+            Ok(r) => {
+                castle64::selftest::log_groups(host.platform, &r);
+                runtime::log(&format!(
+                    "TRINO_STEP:asset groups took {}ms\n",
+                    runtime::now_us().wrapping_sub(t0) / 1000
+                ));
+            }
+            Err(e) => {
+                runtime::log(&format!("TRINO_TEST_FAIL:{e}\n"));
+                loop {
+                    trino_core::Renderer::begin_frame(host.renderer, trino_core::Color::BLACK);
+                    trino_core::Renderer::end_frame(host.renderer);
+                }
+            }
+        }
+    }
+
+    /// The heap's high-water mark (issue #56), like [`check_stack`]: the
+    /// peak since boot must leave [`HEAP_MARGIN`] of libdragon's heap free —
+    /// what a game's next allocation (a level, a display list) needs to
+    /// not fail at a random point.
+    fn check_heap(after: &str, platform: &N64Platform, sampled: u32) -> bool {
+        const HEAP_MARGIN: u32 = 128 * 1024;
+        let mut m = trino_core::Platform::memory(platform);
+        m.heap_peak = m.heap_peak.max(sampled);
+        runtime::log(&format!(
+            "TRINO_HEAP:{}/{} peak={} after {after}\n",
+            m.heap_used, m.heap_total, m.heap_peak
+        ));
+        if m.heap_peak + HEAP_MARGIN > m.heap_total {
+            runtime::log(&format!(
+                "TRINO_TEST_FAIL:heap: peak {} of {} bytes after {after} — less than {} KB \
+                 left (move assets to a group, or shrink them: cargo xtask assets report)\n",
+                m.heap_peak,
+                m.heap_total,
+                HEAP_MARGIN / 1024
+            ));
+            return false;
+        }
+        true
     }
 
     // Steps 0b–0d share one ShowcaseGame (~25 KB), boxed once and reset in
@@ -400,6 +475,7 @@ mod n64 {
             runtime::stack_used(),
             runtime::now_us() / 1000
         ));
+        asset_groups(renderer, audio, platform);
         runtime::log("TRINO_STEP:audio\n");
 
         if let Err(e) = castle64::selftest::audio_checks(audio) {
@@ -439,6 +515,7 @@ mod n64 {
         // Timing of the last frame (emulated clock) and a switch that
         // renders every frame while measuring (step 5).
         let force_render = core::cell::Cell::new(false);
+        let heap_peak = core::cell::Cell::new(0u32);
         let last_update_us = core::cell::Cell::new(0u32);
         let last_render_us = core::cell::Cell::new(0u32);
         let mut frame = |game: &mut castle64::Castle64Game,
@@ -456,6 +533,11 @@ mod n64 {
             last_render_us.set(t2.wrapping_sub(t1));
             frame_no += 1;
             audio.poll();
+            // The heap's peak for `check_heap`, every 8th frame (outside the
+            // timed part: `mallinfo` walks the free lists).
+            if frame_no % 8 == 0 {
+                heap_peak.set(heap_peak.get().max(runtime::heap().0));
+            }
         };
         let idle = InputState::default();
         let mut fwd = InputState::default();
@@ -585,8 +667,10 @@ mod n64 {
                     // scene camera, the hero wading in (gated like the
                     // castle64 scenes; the river's own line is `models/river`).
                     water_perf(renderer, audio);
-                    // High-water mark of the whole run (bot, perf scenes).
-                    if check_stack("the bot and the perf scenes") {
+                    // High-water marks of the whole run (bot, perf scenes).
+                    if check_stack("the bot and the perf scenes")
+                        && check_heap("the bot and the perf scenes", platform, heap_peak.get())
+                    {
                         runtime::log("TRINO_TEST_PASS\n");
                     }
                 }

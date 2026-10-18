@@ -14,6 +14,7 @@
 //! bake measured its PSNR on (as the PC decodes BC blocks on a GPU without
 //! BC).
 
+use trino_core::bundle::MemoryCategory;
 use trino_core::{BlobId, FontId, MixerConfig, ModelId, MusicId, SoundId, SpriteId};
 use trino_render_wgpu::{CompressedFormat, PcRenderer};
 
@@ -75,6 +76,8 @@ pub struct LoadReport {
     pub blobs: u32,
     /// The pack carried the project's mix (`assets/audio.toml`).
     pub mixer: bool,
+    /// Asset groups the pack names (their bundles beside it).
+    pub groups: u32,
     /// The pack's bytes (the download).
     pub bytes: u64,
 }
@@ -84,7 +87,7 @@ impl LoadReport {
     pub fn line(&self, target: TextureTarget) -> String {
         format!(
             "TRINO_ASSETS: bytes={} sprites={} ktx2={} ktx2_gpu={} ktx2_rgba8={} target={} \
-             sounds={} models={} fonts={} blobs={} mixer={}",
+             sounds={} models={} fonts={} blobs={} mixer={} groups={}",
             self.bytes,
             self.sprites,
             self.ktx2_compressed + self.ktx2_decoded,
@@ -95,7 +98,8 @@ impl LoadReport {
             self.models,
             self.fonts,
             self.blobs,
-            self.mixer
+            self.mixer,
+            self.groups
         )
     }
 }
@@ -118,6 +122,8 @@ pub(crate) fn load(
             Kind::Sprite => {
                 let (w, h, px) = pack::read_sprite(e.bytes)?;
                 renderer.upload_sprite(SpriteId(e.id), w, h, px);
+                let n = renderer.sprite_bytes(SpriteId(e.id)) as u32;
+                platform.groups.memory.add(MemoryCategory::Textures, n);
                 r.sprites += 1;
             }
             Kind::SpriteKtx2 => {
@@ -126,6 +132,8 @@ pub(crate) fn load(
                 } else {
                     r.ktx2_decoded += 1;
                 }
+                let n = renderer.sprite_bytes(SpriteId(e.id)) as u32;
+                platform.groups.memory.add(MemoryCategory::Textures, n);
                 r.sprites += 1;
             }
             Kind::Sound | Kind::Music => {
@@ -136,6 +144,8 @@ pub(crate) fn load(
                     audio.upload_music_blob(MusicId(e.id), &blob)
                 };
                 loaded.map_err(|err| format!("sound {:08x}: {err}", e.id))?;
+                let n = audio.clip_bytes(e.id, e.kind == Kind::Music) as u32;
+                platform.groups.memory.add(MemoryCategory::Audio, n);
                 r.sounds += 1;
             }
             Kind::Mixer => {
@@ -146,15 +156,31 @@ pub(crate) fn load(
             }
             Kind::Model => {
                 renderer.upload_mesh(ModelId(e.id), e.bytes.to_vec());
+                let n = renderer.mesh_bytes(ModelId(e.id)) as u32;
+                platform.groups.memory.add(MemoryCategory::Meshes, n);
                 r.models += 1;
             }
             Kind::Font => {
                 renderer.upload_font(FontId(e.id), e.bytes.to_vec());
+                let n = renderer.font_bytes(FontId(e.id)) as u32;
+                platform.groups.memory.add(MemoryCategory::Data, n);
                 r.fonts += 1;
             }
             Kind::Blob => {
                 platform.insert_blob(BlobId(e.id), e.bytes.to_vec());
+                platform
+                    .groups
+                    .memory
+                    .add(MemoryCategory::Data, e.bytes.len() as u32);
                 r.blobs += 1;
+            }
+            // A group the pack leaves out: its bundle is fetched beside it
+            // when the game loads it (`crate::groups`).
+            Kind::Group => {
+                let name = std::str::from_utf8(e.bytes)
+                    .map_err(|_| format!("group {:08x}: its name is not UTF-8", e.id))?;
+                platform.groups.add(e.id, name, None);
+                r.groups += 1;
             }
         }
     }
@@ -163,7 +189,7 @@ pub(crate) fn load(
 
 /// Transcode one KTX2 texture for `target` and upload it: `true` when it
 /// went up block-compressed, `false` when decoded to RGBA8.
-fn upload_ktx2(
+pub(crate) fn upload_ktx2(
     renderer: &mut PcRenderer,
     id: SpriteId,
     ktx2: &[u8],

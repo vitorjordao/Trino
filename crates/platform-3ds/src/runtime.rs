@@ -8,8 +8,10 @@ use crate::ffi;
 
 /// Initialize libctru subsystems (gfx, romfs, citro3d/2d, ndsp), detect
 /// the New 3DS and turn its speedup on (unless the RomFS holds
-/// [`crate::hw::NO_SPEEDUP_FILE`]), and print the hardware tier
-/// (`TRINO_HW 3ds new=1 speedup=1 …`, ADR 0020). Call first, once.
+/// [`crate::hw::NO_SPEEDUP_FILE`]), print the hardware tier
+/// (`TRINO_HW 3ds new=1 speedup=1 …`, ADR 0020) and start the worker core
+/// (`crate::worker`: asset groups decode there, issue #56). Call first,
+/// once.
 pub fn init() {
     unsafe { ffi::trino_init() }
     let want = !crate::N3dsAssets::exists(crate::hw::NO_SPEEDUP_FILE);
@@ -23,6 +25,7 @@ pub fn init() {
         p.app_mib,
         p.tier().key()
     ));
+    crate::worker::start();
 }
 
 /// The boot's probe word (`trino_hw_probe`).

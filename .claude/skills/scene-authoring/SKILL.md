@@ -59,6 +59,14 @@ editor (and a running `TRINO_SCENE` player) reloads them live. Formats are docum
 - Entities with no model/sprite/prefab are **markers** (spawn points, triggers, waypoints):
   game code finds them by name or tag.
 - v2 files load and save as v3 (v3 added `platforms`). Prefabs are v2 (v1 loads).
+- **Asset groups (scene v6, issue #56, ADR 0022):** `requires: ["boot", "level1"]` (the
+  default is `["boot"]`, omitted when so) names the groups the scene needs loaded, and a
+  cell can stream its own: `vis: Some(Cell(size: (8.0, 4.0, 8.0), groups: ["cellar"]))`.
+  The game loads `REQUIRES` (codegen) before the scene and lets `trino_core::CellGroups`
+  (`Resolved::cell_streamer`) keep the cells in view, and a doorway further, loaded.
+  `cargo xtask assets check` fails when a scene draws an asset none of its groups load
+  (`cargo xtask assets group <asset> <group>` moves it), and checks each tier's RAM.
+  Versions 1–5 migrate to 6 on save.
 
 ## Per-platform variants (`platforms`)
 
@@ -157,7 +165,8 @@ rules in mind:
   ground (16-bit z); the showcase pond sits at 10 cm.
 - **Portal visibility:** a camera outside every cell sees everything. Nodes outside
   all cells (`NO_CELL`: walls, sky, exterior) always draw.
-- **Up to 64 cells** per scene.
+- **Up to 64 cells** per scene. A cell's `groups` stream with it (see Asset groups above; up to 64
+  distinct groups).
 
 See `scenes/interior.scene.ron` for a working portal example.
 

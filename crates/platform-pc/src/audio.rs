@@ -397,6 +397,24 @@ impl PcAudio {
         Ok(())
     }
 
+    /// Free a sound (its asset group unloaded, issue #56); returns the
+    /// bytes it held. A voice still playing it keeps its samples until it
+    /// ends; new plays of the handle are silent.
+    pub fn remove_sound(&mut self, id: SoundId) -> usize {
+        self.sounds.remove(&id.0).map_or(0, |c| c.bytes())
+    }
+
+    /// Free a music track or stinger ([`PcAudio::remove_sound`]).
+    pub fn remove_music(&mut self, id: MusicId) -> usize {
+        self.music.remove(&id.0).map_or(0, |c| c.bytes())
+    }
+
+    /// RAM a loaded sound or track holds (0 when not loaded).
+    pub fn clip_bytes(&self, id: u32, music: bool) -> usize {
+        let map = if music { &self.music } else { &self.sounds };
+        map.get(&id).map_or(0, Clip::bytes)
+    }
+
     fn clip(&self, blob: &[u8]) -> Result<Clip, String> {
         let b = SoundBlob::parse(blob).map_err(String::from)?;
         let data = match (b.codec, b.stream) {

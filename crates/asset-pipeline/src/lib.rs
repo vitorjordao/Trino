@@ -24,9 +24,12 @@ pub mod ao;
 pub mod audio;
 pub mod bake;
 pub mod font;
+pub mod groups;
 pub mod impostor;
 pub mod loader;
+pub mod lz4;
 pub mod manifest;
+pub mod memory;
 pub mod model;
 pub mod particles;
 pub mod primitive;
@@ -40,9 +43,10 @@ pub use ao::{AoBake, AoDecl, bake_vertex_ao};
 pub use bake::{BakeError, BakeReport, bake_all};
 pub use bake::{decode_master, decode_png};
 pub use font::{BakedFont, FontDecl, bake_font};
+pub use groups::{BundleBuilder, Compression, GroupDecl};
 pub use loader::{
-    CompressedSprite, LoadedAssets, LoadedBlob, LoadedFont, LoadedModel, LoadedSound, LoadedSprite,
-    load_dir,
+    BundleLoad, CompressedSprite, LoadedAssets, LoadedBlob, LoadedFont, LoadedModel, LoadedSound,
+    LoadedSprite, load_boot, load_dir,
 };
 pub use manifest::{Manifest, Platform};
 pub use model::{

@@ -141,6 +141,9 @@ pub struct Resolved {
     pub items: Vec<DrawItem>,
     /// Missing prefabs/materials, cycles, stale overrides — never fatal.
     pub warnings: Vec<String>,
+    /// Per cell, in cell order: the asset groups its contents come from
+    /// (`cell(groups: …)`, issue #56; empty for most).
+    pub cell_groups: Vec<Vec<String>>,
 }
 
 impl Resolved {
@@ -160,6 +163,28 @@ impl Resolved {
             return u64::MAX;
         }
         self.cells().visible(camera, screen)
+    }
+
+    /// The streamer for the cells' groups (see `trino_core::CellGroups`):
+    /// what a game keeps a frame at a time with
+    /// [`CellGroups::stream`](trino_core::CellGroups::stream). Groups past
+    /// `G` are left out with a warning in `warnings`' style.
+    pub fn cell_streamer<const G: usize>(
+        &self,
+        linger: u16,
+    ) -> (trino_core::CellGroups<G>, Vec<String>) {
+        let mut s = trino_core::CellGroups::new(linger);
+        let mut dropped = Vec::new();
+        for (cell, groups) in self.cell_groups.iter().enumerate() {
+            for g in groups {
+                if !s.add(cell as u8, trino_core::GroupId::from_name(g)) {
+                    dropped.push(format!(
+                        "cell {cell}: group `{g}` past {G} groups — not streamed"
+                    ));
+                }
+            }
+        }
+        (s, dropped)
     }
 }
 
@@ -377,10 +402,11 @@ fn visit(
     });
     let outer_cell = ctx.cell;
     let vis = match &e.vis {
-        Some(crate::VisComponent::Cell { size }) => {
+        Some(crate::VisComponent::Cell { size, groups }) => {
             if ctx.cells.len() < MAX_CELLS {
                 ctx.cell = ctx.cells.len() as u8;
                 ctx.cells.push(name.clone());
+                ctx.out.cell_groups.push(groups.clone());
                 Some(VisVolume::Cell {
                     half: world_half(&base_matrix, *size),
                 })

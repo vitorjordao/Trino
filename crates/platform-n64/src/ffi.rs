@@ -37,6 +37,10 @@ unsafe extern "C" {
     pub fn trino_frame_end();
 
     pub fn trino_sprite_load(dfs_path: *const c_char) -> *mut c_void;
+    /// `sprite_free`, after forgetting the sprite in the TMEM caches.
+    pub fn trino_sprite_free(sprite: *mut c_void);
+    /// `free_uncached` (what `trino_alloc_uncached` returned).
+    pub fn trino_free_uncached(ptr: *mut c_void);
     /// Returns (width << 16) | height.
     pub fn trino_sprite_size(sprite: *mut c_void) -> u32;
     pub fn trino_sprite_blit(sprite: *mut c_void, params: *const TrinoBlit);
@@ -124,6 +128,9 @@ unsafe extern "C" {
     pub fn trino_joypad_stick() -> u32;
 
     pub fn trino_wav_load(dfs_path: *const c_char) -> *mut c_void;
+    /// Stop the channels playing `wav`, `wav64_close` it and free it.
+    pub fn trino_wav_free(wav: *mut c_void);
+    pub fn trino_asset_compression(level: i32);
     /// `looped` loops the whole sound (the bake's lengths are multiples of
     /// 16, as libdragon wants of a VADPCM loop).
     pub fn trino_wav_play(wav: *mut c_void, channel: u32, looped: u32);

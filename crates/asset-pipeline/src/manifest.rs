@@ -162,6 +162,14 @@ pub struct Manifest {
     /// `particles/<name>`.
     #[serde(default)]
     pub particles: BTreeMap<String, BlobDecl>,
+    /// Asset groups (issue #56, `crate::groups`): `[groups.level1]` with an
+    /// optional per-platform `compression`. `boot` needs no table.
+    #[serde(default)]
+    pub groups: BTreeMap<String, crate::groups::GroupDecl>,
+    /// The RAM the engine and the game hold besides the assets, per
+    /// platform (`crate::memory`, strict mode and `assets report`).
+    #[serde(default)]
+    pub memory: Option<crate::memory::MemoryDecl>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -170,6 +178,9 @@ pub struct BlobDecl {
     /// Source file: relative to `assets/shared/` (or a platform override)
     /// for `[blobs.*]`, to the project root for `[scenes.*]`.
     pub file: String,
+    /// The asset groups it is in (`crate::groups`); default `["boot"]`.
+    #[serde(default)]
+    pub groups: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -208,6 +219,9 @@ pub struct ModelDecl {
     /// how the consoles get AO, at no run-time cost (`crate::ao`).
     #[serde(default)]
     pub ao: Option<crate::ao::AoDecl>,
+    /// The asset groups it is in (`crate::groups`); default `["boot"]`.
+    #[serde(default)]
+    pub groups: Vec<String>,
 }
 
 impl ModelDecl {
@@ -254,6 +268,9 @@ pub struct SpriteDecl {
     /// declared format below it fails the bake.
     #[serde(default)]
     pub min_psnr: Option<f64>,
+    /// The asset groups it is in (`crate::groups`); default `["boot"]`.
+    #[serde(default)]
+    pub groups: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -288,6 +305,9 @@ pub struct SoundDecl {
     /// for music.
     #[serde(default)]
     pub bus: Option<String>,
+    /// The asset groups it is in (`crate::groups`); default `["boot"]`.
+    #[serde(default)]
+    pub groups: Vec<String>,
 }
 
 /// One value for every platform, or a table by platform key (`pc`, `n64`,
@@ -404,6 +424,10 @@ impl Manifest {
                 }
             }
         }
+        manifest
+            .check_groups()
+            .and_then(|_| manifest.check_memory())
+            .map_err(|e| format!("{}: {e}", path.display()))?;
         for (name, m) in &manifest.models {
             for p in m.platforms.iter().flatten() {
                 if trino_scene::Target::parse(p).is_none() {
@@ -738,6 +762,55 @@ pub mod edit {
         set_key(text, kind, name, key, value.as_deref())
     }
 
+    /// Append `[groups.<name>]` (issue #56) unless it is there already
+    /// (or is `boot`, which needs none).
+    pub fn add_group(text: &str, name: &str) -> Result<String, String> {
+        if !valid_name(name) {
+            return Err(format!(
+                "`{name}` is not a group name (lowercase letters, digits, `_`, `-`)"
+            ));
+        }
+        if name == crate::groups::BOOT || has_table(text, "groups", name) {
+            return Ok(text.to_string());
+        }
+        let mut out = text.trim_end().to_string();
+        out.push_str(&format!("\n\n[groups.{name}]\n"));
+        Ok(out)
+    }
+
+    /// Put the asset `logical` (`models/boar`) in `groups`, declaring the
+    /// new ones (`[groups.<g>]`): what the editor's group chips and `cargo
+    /// xtask assets group` write. No groups, or `boot` alone, removes the
+    /// key (boot is the default). Keeps every other line.
+    pub fn set_groups(text: &str, logical: &str, groups: &[String]) -> Result<String, String> {
+        let (kind, name) = logical
+            .split_once('/')
+            .ok_or_else(|| format!("`{logical}`: a logical path, such as `models/boar`"))?;
+        if !matches!(
+            kind,
+            "sprites" | "sounds" | "music" | "models" | "fonts" | "blobs" | "scenes" | "particles"
+        ) {
+            return Err(format!("`{logical}`: `{kind}` assets have no groups"));
+        }
+        let mut list: Vec<&str> = Vec::new();
+        for g in groups {
+            if !list.contains(&g.as_str()) {
+                list.push(g);
+            }
+        }
+        let value = (!(list.is_empty() || list == [crate::groups::BOOT])).then(|| {
+            let items: Vec<String> = list.iter().map(|g| format!("\"{g}\"")).collect();
+            format!("[{}]", items.join(", "))
+        });
+        let mut out = text.to_string();
+        if value.is_some() {
+            for g in &list {
+                out = add_group(&out, g)?;
+            }
+        }
+        set_key(&out, kind, name, "groups", value.as_deref())
+    }
+
     /// The lines of `[kind.name]`: (header index, end) with the blank lines
     /// and comments before the next header left out.
     fn table_span(lines: &[String], kind: &str, name: &str) -> Result<(usize, usize), String> {
@@ -823,6 +896,36 @@ pub mod edit {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[test]
+        fn group_edits_declare_groups_and_parse_back() {
+            let text = "version = 1\n\n[models.rock]\nfile = \"models/rock.glb\"\n\n# hud\n[sprites.hud]\nfile = \"sprites/hud.png\"\nformats = { n64 = \"RGBA16\" }\n";
+            let g = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+            let one = set_groups(text, "models/rock", &g(&["level1", "level2", "level1"])).unwrap();
+            assert!(one.contains(
+                "[models.rock]\nfile = \"models/rock.glb\"\ngroups = [\"level1\", \"level2\"]\n\n# hud"
+            ));
+            assert!(
+                one.ends_with("\n\n[groups.level1]\n\n[groups.level2]\n"),
+                "{one}"
+            );
+            let m: crate::Manifest = toml::from_str(&one).unwrap();
+            assert_eq!(m.groups_of("models/rock"), ["level1", "level2"]);
+            assert_eq!(m.groups_of("sprites/hud"), ["boot"]);
+            // A second asset into an existing group declares nothing new.
+            let two = set_groups(&one, "sprites/hud", &g(&["level2"])).unwrap();
+            assert_eq!(two.matches("[groups.level2]").count(), 1);
+            // Back to boot: the key goes, the group declarations stay.
+            let back = set_groups(&two, "models/rock", &g(&["boot"])).unwrap();
+            let back = set_groups(&back, "sprites/hud", &[]).unwrap();
+            assert!(!back.contains("groups = "));
+            assert!(back.starts_with(text.trim_end()));
+            assert!(set_groups(text, "models/ghost", &g(&["x"])).is_err());
+            assert!(set_groups(text, "rock", &g(&["x"])).is_err());
+            assert!(set_groups(text, "models/rock", &g(&["Bad Name"])).is_err());
+            assert!(set_groups(text, "prefabs/rock", &g(&["x"])).is_err());
+            assert_eq!(add_group(text, "boot").unwrap(), text);
+        }
 
         #[test]
         fn set_model_ao_adds_replaces_and_removes_only_that_line() {

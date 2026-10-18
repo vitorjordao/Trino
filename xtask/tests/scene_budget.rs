@@ -362,13 +362,22 @@ fn pc_budget_reports_the_gpu_split() {
     assert_eq!(reasons[0]["reason"], b.off_pc_gpu[0].0.label());
     let paths = pc["paths"].as_array().unwrap();
     assert_eq!(paths.len(), b.paths.len());
-    let river = paths.iter().find(|p| p["name"] == "river").unwrap();
+    let river = paths
+        .iter()
+        .find(|p| p["name"] == "river/piece-0-8")
+        .unwrap();
     assert_eq!(
         (&river["path"], &river["reason"]),
         (&"cpu".into(), &"water surface".into())
     );
-    assert_eq!(b.path_of("river"), Some(RenderPath::Cpu("water surface")));
-    let ground = paths.iter().find(|p| p["name"] == "ground").unwrap();
+    assert_eq!(
+        b.path_of("river/piece-0-8"),
+        Some(RenderPath::Cpu("water surface"))
+    );
+    let ground = paths
+        .iter()
+        .find(|p| p["name"] == "ground/tile-4-2-2")
+        .unwrap();
     assert_eq!(
         (&ground["path"], &ground["reason"]),
         (&"gpu".into(), &serde_json::Value::Null)

@@ -358,8 +358,10 @@ pub fn estimate<'m>(
             continue;
         }
         match rsp_plan(&ctx, &mesh, &item.matrix, &item.params) {
-            Ok((draws, tris)) => {
-                b.rsp_draws += draws;
+            // One draw however many commands (a rigid mesh sends one per
+            // joint on screen): `rsp_draws + cpu_draws` stays `draws`.
+            Ok((_, tris)) => {
+                b.rsp_draws += 1;
                 b.rsp_tris += tris;
                 b.paths.push(path(item, RenderPath::Hardware));
             }

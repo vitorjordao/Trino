@@ -333,6 +333,14 @@ new skill when none fits. Then run `cargo xtask agents sync`. The steps are in
   - Same ROM: hub 38.0 → 13.1 ms, every stage 7–8 ms (vsync caps at 60 fps).
   - Gated by an oracle, CPU-vs-RSP pixel checks, the work split (`rsp_draws`) and
     the `castle64_hub` N64 golden.
+  - **Since #69 (2026-10-18, ADR 0018):** four overlays from the same source:
+    `rsp_trino` (white), `rsp_trino_color` (colored light, emissive, double-sided,
+    per-vertex fog), `rsp_trino_tex` (textured) and `rsp_trino_water` (swell, Fresnel,
+    glint, light and fog per vertex). Flat draws take flat copies; rigid skeletons a
+    command per joint. A fogged, textured or water draw takes the RSP only where the
+    CPU path would split no edge. `render3d::rsp_plan` is the rule every predictor
+    calls. The showcase river went 286.6 → 75.2 ms and `micro-river` 19.6 → 10.5 ms
+    (mean over 8 paddings); #69's 1.2 ms river and 33.3 ms showcase are still open.
 
 - **External console projects** (2026-10-14, ADR 0008: a project in a separate repo
   with this engine as its `engine/` submodule).
@@ -356,8 +364,8 @@ new skill when none fits. Then run `cargo xtask agents sync`. The steps are in
     `set_rsp_stream`.
 
 Ranked next steps: `docs/BACKLOG.md`. N64 throughput is no longer the top risk for
-castle64. Next for the RSP path: clipping on the RSP, more surface features, an RSP
-term in the cost model, and a measurement on real hardware (ares doesn't time the
+castle64. Next for the RSP path: clipping on the RSP, ripples and rings on the overlay
+(ADR 0018), an RSP term in the cost model, and a measurement on real hardware (ares doesn't time the
 RDP).
 
 - **Real hardware (2026-10-15, `docs/HARDWARE.md`):** `run n64 --device sc64|everdrive`
@@ -429,7 +437,8 @@ RDP).
     `RippleBuffer<4>`.
   - **Geometry:** the core displaces every target's water (two sines and up to four
     ripple rings, `water::sin_turns`) in a `WATER` copy of `render3d/lit.rs`. Water is
-    never on the RSP, the 3DS's static GPU path or the memo.
+    never on the 3DS's static GPU path or the memo; on the N64 it has its own RSP
+    overlay since #69 (ADR 0018).
   - **PC native:** `fs_water` per pixel (normals, Fresnel, glint, ripple crests, depth
     foam from a depth copy).
   - **3DS:** `water.v.pica` on the PICA200 (`gpu_water`; a CPU fallback for draws
@@ -447,8 +456,8 @@ RDP).
     combiner cycles, TMEM).
   - **Tests and goldens:** the `water` self-test step on PC, ares and Azahar, and
     `gpu tnl water` on the 3DS. Goldens `water_*`, `showcase_river` (PC, N64, 3DS).
-  - **Open:** on the N64 the river costs 12.5 ms of CPU T&L, above the issue's 1.2 ms;
-    an RSP water command is BACKLOG › "Water on the RSP".
+  - **Open:** on the N64 the river's ripples and rings are still CPU work (~3.4 ms of
+    `micro-river`'s 10.5 ms, ADR 0018 §6); BACKLOG › "Water on the RSP: the rest".
 - **PC hardware T&L (2026-10-17/18, ADR 0016, GitHub #51):** the PC native profile
   transforms and lights most models on the GPU; the CPU T&L stays the reference.
   - **Instancing on every target:** `Renderer::draw_model_instances(model, &[Instance],
@@ -926,9 +935,20 @@ cargo test --workspace
   +0.38 ms, and a feature with an unchanged hot path moved an external project +1.0 ms
   on average over 8 paddings (ADR 0013 §4). Measure over 8 paddings against the
   baseline's 8; keep new code out of line and new state out of hot structs.
-- **A colored or dimmed global light sends every N64 draw to the CPU**
-  (`RspReject::ColoredLight`): a "dim room" must stay white (lower ambient, a grazing
-  direction) or be a tint.
+- **A fogged, textured or water draw leaves the N64 RSP when the CPU would split one of
+  its edges** (`RspReject::Fog`, `Textured`, `Water`): one long mesh across the fog
+  band or under the camera stays on the CPU. Cut it in pieces around the camera (the
+  showcase's terrain tiles and river pieces, `xtask/src/river_assets.rs`). Colored and
+  dimmed lights are fine on the RSP since #69.
+- **A textured RSP triangle needs `minW · INVW ≤ 1`** or the RDP samples texel (0, 0)
+  everywhere: `vrcp`'s reciprocal runs up to 0.2 % high, so the overlay stores W 2^-7
+  smaller (ADR 0018 §4).
+- **On the N64, never let a hot path read a float out of an `Option` payload.** LLVM
+  hoists the math above the `is_some` test, and an uninitialized payload can be a
+  denormal, which traps on the VR4300 (`RspFog { on, .. }` instead).
+- **An N64 RSP draw's CPU-side stats must reach the profile too** (`count_rsp_with`):
+  the water draw's ring decals once went to `frame_stats` only, and the ROM's
+  `TRINO_PERF_SCENE` counters disagreed with the PC baseline.
 - **A detail layer and a palette texture can't share the N64's TMEM:** a CI4/CI8 base puts
   its TLUT in TMEM's upper half. The shim then draws without the detail, silently on
   the console. Give a detailed base a 16-bit or intensity format (the showcase's bricks

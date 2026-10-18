@@ -540,7 +540,8 @@ fn split_policy_and_rsp_eligibility_follow_the_draw() {
 
     // RSP: a static opaque untextured mesh inside the view is eligible.
     assert!(render3d::rsp_mesh_supported(&cube_m));
-    assert!(!render3d::rsp_mesh_supported(&tex_m));
+    // Textured meshes have an RSP copy too (the textured overlay).
+    assert!(render3d::rsp_mesh_supported(&tex_m));
     let rigged = rigged_cube();
     assert!(!render3d::rsp_mesh_supported(
         &Mesh::from_tmdl(&rigged).unwrap()
@@ -574,14 +575,6 @@ fn split_policy_and_rsp_eligibility_follow_the_draw() {
     for (ctx, params, m) in [
         (&fogged, opaque, deep), // edges the CPU would split in the fog band
         (&plain, glass, Mat34::IDENTITY),
-        (
-            &plain,
-            ModelParams {
-                texture: Some(SpriteId(1)),
-                ..opaque
-            },
-            Mat34::IDENTITY,
-        ),
         (&plain, opaque, at(Vec3::new(0.0, 0.0, -4.7))), // crosses the near plane
         (&plain, opaque, at(Vec3::new(300.0, 0.0, 0.0))), // outside the band
     ] {
@@ -896,7 +889,7 @@ fn rsp_check_names_the_rule_each_draw_fails() {
     assert_eq!(render3d::rsp_mesh_check(&cube_m), Ok(()));
     assert_eq!(
         render3d::rsp_mesh_check(&Mesh::from_tmdl(&tex).unwrap()),
-        Err(R::TexturedMesh)
+        Ok(())
     );
     assert_eq!(
         render3d::rsp_mesh_check(&Mesh::from_tmdl(&rig).unwrap()),
@@ -980,12 +973,13 @@ fn rsp_check_names_the_rule_each_draw_fails() {
         ),
         (
             &plain,
+            // A texture on an untextured mesh draws nothing different.
             ModelParams {
                 texture: Some(SpriteId(1)),
                 ..o
             },
             id,
-            Err(R::Textured),
+            Ok(()),
         ),
         (
             &plain,

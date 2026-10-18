@@ -33,13 +33,9 @@ shipping a 3D game first**, then by cost:
        may now bind first.
      - **(b)** Near/guard-band clipping on the RSP. The draws that still clip (big
        floors and walls) are the hub's remaining 4.6 ms of CPU T&L.
-     - **(c)** Overlay coverage: Flat, fog, colored light, emissive, textures, rigid
-       skeletons. Each lands behind the oracle and parity checks. Colored light,
-       emissive and double-sided draws are written (branch `perf/n64-rsp-colored`, a
-       second overlay so white draws keep the old code byte for byte) but held back:
-       nothing used them yet and the N64 frames of an external project moved +1.0 ms
-       on average over 8 code layouts, a shift the current method can't attribute
-       (ADR 0013).
+     - **(c)** Overlay coverage: done for Flat, fog, colored light, emissive,
+       double-sided, textures, rigid skeletons and water (GitHub #69, ADR 0018).
+       Left: ripples and their rings on the water overlay, palettes, smooth skins.
      - **(d)** An RSP term in `N64_COST`. The HUD, strict mode and `model inspect`
        still assume CPU T&L for every draw.
      - **(e)** Merge the hub's static blocks (2b), deferred.
@@ -175,13 +171,11 @@ shipping a 3D game first**, then by cost:
       backdrops (that artifact came back twice).
     - Nothing has run on real hardware yet.
 
-17. **Water on the RSP** (M–L). An overlay command that displaces (two sines and up
-    to four ripples, in fixed point), lights, applies Fresnel and fog, and feeds
-    textured triangles to `RDPQ_Triangle_Send_Async` (S/T s10.5, W and 1/W per
-    vertex). It is the way to issue #49's 1.2 ms river: the CPU path costs 12.5 ms
-    for the showcase's 128-triangle river in ares (ADR 0015, Measurements). It is
-    worth it once the overlay also does fog and colored light (P0 #1c); the showcase
-    has both, so today every one of its draws is on the CPU.
+17. **Water on the RSP: the rest** (M). The overlay displaces, lights and shades water
+    (ADR 0018), but the ripples' deltas are computed per vertex on the CPU and their
+    rings are CPU decals: ~3.4 ms of `micro-river`'s 10.5 ms. Put both on the
+    overlay, then cut the showcase's RSP triangles (its `submit` is 31 ms) toward
+    #69's 1.2 ms river and 33.3 ms showcase.
 18. **3DS water: fragment lighting and long surfaces** (S–M). A `C3D_LightEnv` with a
     Fresnel LUT for a per-pixel glint. Split long water surfaces into pieces so the
     GPU takes the ones wholly ahead of the camera; the ripple rings then need
@@ -195,6 +189,24 @@ shipping a 3D game first**, then by cost:
   time) and bless `tests/perf/` on purpose. Host benches stay as regression guards only.
 
 ---
+
+## Done — N64 RSP coverage: fog, colored light, textures, rigid skeletons and water (2026-10-18, branch `perf/69-n64-water`, GitHub #69 phases 0–3, ADR 0018)
+
+- **Phase 0:** the `micro-river` perf scene (the river alone), gated on the PC (work)
+  and in ares (time).
+- **Phase 2:** `rsp_trino_color` (colored light, emissive, double-sided, per-vertex fog),
+  flat copies for Flat shading, rigid skeletons as a command per joint, and
+  `rsp_trino_tex` (textured triangles). `rsp_plan` is the one rule every predictor uses.
+- **Phase 1:** the showcase terrain in 52 camera-following tiles, the river in pieces,
+  one ring per ripple, lighter props.
+- **Phase 3:** `rsp_trino_water` (swell, displacement, normal, Fresnel, glint, light,
+  fog per vertex), with an oracle and a CPU-vs-RSP pixel check.
+- **Results (ares, 8 paddings):** `micro-river` 19.6 → 10.5 ms, `showcase-river`
+  286.6 → 75.2 ms (0/46 → 85/113 draws on the RSP, 738 → 0 splits); castle64
+  unchanged. The 3DS showcase also moved 11 → 51 draws to the PICA200 (the tiles).
+- **Not met:** #69's 1.2 ms river and 33.3 ms showcase. Left: ripples and rings on the
+  overlay (P2 #17), RSP triangle throughput, per-draw CPU, the RSP cost term and real
+  hardware (P0 #1a, #1d).
 
 ## Done — texture formats, phases 2–4: `auto`, PC BCn, the editor's texture inspector (2026-10-18, branch `feat/52-texture-formats-phases-2-5`, GitHub #52, ADR 0017)
 

@@ -791,11 +791,18 @@ impl N64Renderer {
 
     /// Statistics and profile of one RSP draw of `tris` triangles.
     fn count_rsp(&mut self, model: ModelId, t0: u32, tris: u32) {
-        let tnl = TnlStats {
+        self.count_rsp_with(model, t0, tris, &TnlStats::default());
+    }
+
+    /// [`Self::count_rsp`] plus the CPU work `cpu` the draw also did (a
+    /// water draw's ring decals).
+    fn count_rsp_with(&mut self, model: ModelId, t0: u32, tris: u32, cpu: &TnlStats) {
+        let mut tnl = TnlStats {
             rsp_draws: 1,
             rsp_tris: tris,
             ..TnlStats::default()
         };
+        tnl.add(cpu);
         self.frame_stats.tnl.add(&tnl);
         if let Some(p) = &mut self.profile {
             p.record_model(model, now_us().wrapping_sub(t0), &tnl);
@@ -1493,8 +1500,7 @@ impl N64Renderer {
             .extend(core::iter::repeat_n(Some(bind), added));
         self.pending_water_rsp.push([words, e]);
         self.frame_stats.models += 1;
-        self.frame_stats.tnl.add(&rings);
-        self.count_rsp(model, t0, tris);
+        self.count_rsp_with(model, t0, tris, &rings);
         true
     }
 

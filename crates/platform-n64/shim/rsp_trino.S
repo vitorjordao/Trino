@@ -10,6 +10,15 @@
 # RDPQ_Triangle_Send_Async (rsp_rdpq_tri.inc), the same RDP triangle setup
 # the CPU path's rdpq_triangle runs.
 #
+# Assembled twice (xtask `compile_shim`): as is, rsp_trino, with one light
+# intensity (ambient + (1 - ambient) * n.l); with TRINO_COLORED defined,
+# rsp_trino_color, for a colored or dimmed light, an emissive draw or fog:
+# per-channel ambient and diffuse terms, an emissive add and a per-vertex
+# fog blend (the fog factor is a fifth row of the clip matrix, lane 4).
+# A second overlay, not a second command: rspq reloads an overlay's code on every
+# switch to it, and the colored loop in the same overlay made every
+# white-light frame pay for the bigger code (measured in ares, 2026-10-16).
+#
 # Mesh data (built once by the CPU at register, see the N64 renderer) is a
 # table of segments of at most SEG_VERTS vertices; each segment is one
 # DMA: its 32-byte vertices, then 3 local u8 indices per triangle.
@@ -30,7 +39,11 @@
 #define VTX_IN_SIZE     32
 #define VTX_OUT_SIZE    24
 #define MAX_SEGS        16
+#ifdef TRINO_COLORED
+#define DRAW_CMD_SIZE   0xA0    // + the per-channel terms and the fog, see DRAW
+#else
 #define DRAW_CMD_SIZE   0x6C
+#endif
 #define TRI_SLOT        0xB0    // RDPQ_CMD_STAGING's size: the routine writes up to it
 
     .data
@@ -41,7 +54,11 @@
     RSPQ_EndOverlayHeader
 
     .align 4
+#ifdef TRINO_COLORED
+BANNER: .ascii "Trino RSP T&L c "
+#else
 BANNER: .ascii "Trino RSP T&L   "
+#endif
 
     RSPQ_EmptySavedState
 
@@ -53,8 +70,18 @@ BANNER: .ascii "Trino RSP T&L   "
     # 0x7FFF - 1638.35 / depth, and 0x7FFF here sat one unit farther, which
     # flipped the depth test where RSP and CPU geometry touch.
     .align 4
+#ifdef TRINO_COLORED
+    # Lane 4: 0x4000, the fog factor's s15.16 -> s1.14 scale.
+VIEW_SCALE:     .half 160*4, 120*4, 0x7FFE, 0, 0x4000, 0, 0, 0
+#else
 VIEW_SCALE:     .half 160*4, 120*4, 0x7FFE, 0, 0, 0, 0, 0
+#endif
 VIEW_OFFSET:    .half 160*4, 120*4, 0, 1638, 0, 0, 0, 0
+#ifdef TRINO_COLORED
+    # The fog blend changes red, green and blue, never alpha.
+    .align 4
+FOG_MASK:       .half 0xFFFF, 0xFFFF, 0xFFFF, 0, 0, 0, 0, 0
+#endif
 
     # Milestone 1 check: three screen-space vertices in rsp_rdpq_tri.inc's
     # default layout.
@@ -81,8 +108,19 @@ TEST_VTX:
     #   +0x50 light (s0.15, model space, toward the light) x, y, z, 0
     #   +0x58 tint r, g, b, 0 (s0.15)  +0x60 ambient, 1 - ambient, tint a, 0
     #   +0x68 debug: RDRAM address for segment 0's screen vertices (0 = off)
+#ifdef TRINO_COLORED
+    #   +0x6C unused
+    #   +0x70 ambient r, g, b, 0   +0x78 diffuse r, g, b, 0 (s0.15)
+    #   +0x80 emissive r, g, b, 0 (u8 << 7, the luv layout)
+    #   +0x88 fog row, integer parts, one per matrix column (s15.16):
+    #         (view depth - fog near) / (fog far - fog near)
+    #   +0x90 fog row, fractional parts   +0x98 fog r, g, b, 0 (u8 << 7)
+    .align 4
+DRAW:           .ds.b 0xA0
+#else
     .align 4
 DRAW:           .ds.b 0x70
+#endif
     .align 4
 SEG_TABLE:      .ds.b MAX_SEGS * 16
     .align 4
@@ -180,6 +218,14 @@ draw_segment:
     #define vcol  $v13
     #define vtmp  $v14
     #define vta   $v15
+#ifdef TRINO_COLORED
+    // The per-channel light terms, reloaded per vertex from DRAW into
+    // registers the screen math is done with.
+    #define vdiff $v02
+    #define vambc $v03
+    #define vemis $v04
+    #define dptr  t5
+#endif
 
     li t0, %lo(DRAW)
     ldv vm0i.e0, 0x10, t0
@@ -193,6 +239,19 @@ draw_segment:
     ldv vlight.e0, 0x50, t0
     ldv vtint.e0, 0x58, t0
     ldv vamb.e0, 0x60, t0
+#ifdef TRINO_COLORED
+    # The fog row in lane 4 of each column: the product below then gives
+    # the fog factor (s15.16) in lane 4 of the clip vector, for free.
+    addiu t1, t0, 0x88
+    lsv vm0i.e4, 0x0, t1
+    lsv vm1i.e4, 0x2, t1
+    lsv vm2i.e4, 0x4, t1
+    lsv vm3i.e4, 0x6, t1
+    lsv vm0f.e4, 0x8, t1
+    lsv vm1f.e4, 0xA, t1
+    lsv vm2f.e4, 0xC, t1
+    lsv vm3f.e4, 0xE, t1
+#endif
     li t1, %lo(VIEW_SCALE)
     lqv vvs, 0, t1
     lqv vvo, 0x10, t1
@@ -203,6 +262,9 @@ draw_segment:
     lhu count, 6(seg_ptr)
     li src, %lo(VTX_IN)
     li dst, %lo(VTX_OUT)
+#ifdef TRINO_COLORED
+    li dptr, %lo(DRAW)
+#endif
 
 transform_vertex:
     ldv vpos.e0, 0, src
@@ -246,6 +308,47 @@ transform_vertex:
     vsub vtmp, vvs, vtmp.e3
     vmov vs_i.e2, vtmp.e2
     sdv vs_i.e0, 0, dst             # X, Y, Z (+ W in the flag bytes)
+#ifdef TRINO_COLORED
+    # The fog factor, lane 4 of the clip vector, to s0.15 clamped to
+    # [0, 1]: (int << 16 | frac) * 0x4000 >> 16 saturates to s1.14, then
+    # doubles with saturation (1.0 and beyond are 0x7FFF).
+    vmudn vs_f, vo_f, vvs.e4
+    vmadh vs_f, vo_i, vvs.e4
+    vge vs_f, vs_f, vzero
+    vadd vs_f, vs_f, vs_f
+    # The screen math is done: its registers take the per-channel terms.
+    ldv vdiff.e0, 0x78, dptr
+    li t0, 0x003F                   # no clip flags, inside every plane
+    sh t0, 6(dst)
+    ldv vambc.e0, 0x70, dptr
+    sw zero, 16(dst)                # W, 1/W unused (untextured)
+    sw zero, 20(dst)
+    ldv vemis.e0, 0x80, dptr
+
+    # Light, per channel: k = ambient + diffuse * max(0, n . l).
+    ldv vn.e0, 16, src
+    vmulf vp, vn, vlight
+    vadd vd, vp, vp.e1
+    vadd vd, vd, vp.e2
+    vge vd, vd, vzero
+    vmulf vk, vdiff, vd.e0
+    vadd vk, vk, vambc
+    vmulf vkt, vtint, vk
+    vadd vkt, vkt, vta
+    luv vcol.e0, 24, src
+    vmulf vcol, vcol, vkt
+    vadd vcol, vcol, vemis          # emissive, saturating
+    # Fog: color += (fog - color) * f on red, green and blue, as the CPU
+    # path's lerp toward the fog color (alpha kept).
+    ldv vs_i.e0, 0x98, dptr
+    li t0, %lo(FOG_MASK)
+    lqv vinv_f, 0, t0
+    vsub vs_i, vs_i, vcol
+    vmulf vs_i, vs_i, vs_f.e4
+    vand vs_i, vs_i, vinv_f
+    vadd vcol, vcol, vs_i
+    suv vcol.e0, 8, dst             # RGBA (+ 4 junk bytes over S/T)
+#else
     li t0, 0x003F                   # no clip flags, inside every plane
     sh t0, 6(dst)
     sw zero, 16(dst)                # W, 1/W unused (untextured)
@@ -264,6 +367,7 @@ transform_vertex:
     luv vcol.e0, 24, src
     vmulf vcol, vcol, vkt
     suv vcol.e0, 8, dst             # RGBA (+ 4 junk bytes over S/T)
+#endif
 
     addiu count, -1
     addiu src, VTX_IN_SIZE

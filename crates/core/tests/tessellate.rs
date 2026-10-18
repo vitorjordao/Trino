@@ -554,25 +554,26 @@ fn split_policy_and_rsp_eligibility_follow_the_draw() {
     };
     let u = render3d::rsp_eligible(&plain, &cube_m, &Mat34::IDENTITY, &unlit).unwrap();
     assert_eq!((u.light, u.ambient), (Vec3::ZERO, 1.0));
+    // Double-sided: on the RSP with its cull off.
+    let both = ModelParams {
+        double_sided: true,
+        ..opaque
+    };
+    let b = render3d::rsp_eligible(&plain, &cube_m, &Mat34::IDENTITY, &both).unwrap();
+    assert!(!b.cull_back);
+    // Fog and flat faces: the overlay's too (the cube's short edges need no
+    // depth split; a flat draw takes the mesh's flat copy).
+    assert!(render3d::rsp_eligible(&fogged, &cube_m, &Mat34::IDENTITY, &opaque).is_some());
+    let flat = ModelParams {
+        shading: Shading::Flat,
+        ..opaque
+    };
+    assert!(render3d::rsp_eligible(&plain, &cube_m, &Mat34::IDENTITY, &flat).is_some());
+    let deep =
+        Mat34::from_rotation_scale_translation(Vec3::ZERO, Vec3::new(1.0, 1.0, 4.0), Vec3::ZERO);
     for (ctx, params, m) in [
-        (&fogged, opaque, Mat34::IDENTITY),
+        (&fogged, opaque, deep), // edges the CPU would split in the fog band
         (&plain, glass, Mat34::IDENTITY),
-        (
-            &plain,
-            ModelParams {
-                shading: Shading::Flat,
-                ..opaque
-            },
-            Mat34::IDENTITY,
-        ),
-        (
-            &plain,
-            ModelParams {
-                double_sided: true,
-                ..opaque
-            },
-            Mat34::IDENTITY,
-        ),
         (
             &plain,
             ModelParams {
@@ -954,10 +955,14 @@ fn rsp_check_names_the_rule_each_draw_fails() {
         render3d::rsp_check(&plain, &cube_m, &big, &o).map(|_| ()),
         Err(R::ClipBand)
     );
-    let cases: [(&TnlContext, ModelParams, Mat34, Result<(), R>); 12] = [
+    let deep =
+        Mat34::from_rotation_scale_translation(Vec3::ZERO, Vec3::new(1.0, 1.0, 4.0), Vec3::ZERO);
+    let cases: [(&TnlContext, ModelParams, Mat34, Result<(), R>); 13] = [
         (&plain, o, id, Ok(())),
-        (&colored, o, id, Err(R::ColoredLight)),
-        (&fogged, o, id, Err(R::Fog)),
+        // Colored light, emissive and double-sided: the overlay's.
+        (&colored, o, id, Ok(())),
+        (&fogged, o, id, Ok(())),
+        (&fogged, o, deep, Err(R::Fog)),
         (
             &plain,
             ModelParams::tinted(Color::rgba(255, 255, 255, 100)),
@@ -971,7 +976,7 @@ fn rsp_check_names_the_rule_each_draw_fails() {
                 ..o
             },
             id,
-            Err(R::Emissive),
+            Ok(()),
         ),
         (
             &plain,
@@ -989,7 +994,7 @@ fn rsp_check_names_the_rule_each_draw_fails() {
                 ..o
             },
             id,
-            Err(R::DoubleSided),
+            Ok(()),
         ),
         (
             &plain,
@@ -998,7 +1003,7 @@ fn rsp_check_names_the_rule_each_draw_fails() {
                 ..o
             },
             id,
-            Err(R::Flat),
+            Ok(()),
         ),
         (&plain, o, at(Vec3::new(0.0, 0.0, -4.7)), Err(R::NearPlane)),
         (

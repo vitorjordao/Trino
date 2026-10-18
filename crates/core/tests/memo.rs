@@ -39,6 +39,16 @@ fn a_repeated_draw_hits_and_anything_it_depends_on_misses() {
                 ..plain
             },
         ),
+        // A double-sided draw's command culls nothing.
+        MemoKey::new(
+            7,
+            0,
+            &at(1.0),
+            &ModelParams {
+                double_sided: true,
+                ..plain
+            },
+        ),
     ];
     for o in other {
         let o = o.unwrap();
@@ -53,10 +63,6 @@ fn only_plain_draws_are_memoized() {
     for p in [
         ModelParams {
             emissive: Color::rgb(0, 0, 1),
-            ..ModelParams::DEFAULT
-        },
-        ModelParams {
-            double_sided: true,
             ..ModelParams::DEFAULT
         },
         ModelParams {

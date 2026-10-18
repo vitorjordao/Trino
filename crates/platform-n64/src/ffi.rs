@@ -56,6 +56,9 @@ unsafe extern "C" {
     /// RSP T&L of one static mesh draw: 27 words in the overlay's DRAW
     /// layout (`rsp_trino.S`).
     pub fn trino_rsp_draw(words: *const u32);
+    /// The colored draw command (`TrinoCmd_DrawColored`): the 27 words of
+    /// `trino_rsp_draw` and the 7 of `rsp::color_words`.
+    pub fn trino_rsp_draw_colored(words: *const u32, color: *const u32);
     /// Uncached, 16-byte aligned RDRAM (the RSP reads it by DMA).
     pub fn trino_alloc_uncached(size: u32) -> *mut c_void;
     /// Physical address of a pointer (what the RSP's DMA takes).

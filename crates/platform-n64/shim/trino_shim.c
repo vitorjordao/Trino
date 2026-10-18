@@ -28,6 +28,8 @@ static void trino_check_trifmt(void);
 // Trino's RSP overlay (rsp_trino.S): vertex T&L for static meshes.
 DEFINE_RSP_UCODE(rsp_trino);
 static uint32_t trino_rsp_id;
+// The colored overlay (defined last in this file, see there).
+static void trino_register_color_overlay(void);
 
 // VI interrupt counter: an independent clock for perf reports (60 per
 // emulated second on NTSC), to cross-check the count-register timings.
@@ -87,6 +89,7 @@ void trino_init(void)
     mixer_init(16);
     trino_check_trifmt();
     trino_rsp_id = rspq_overlay_register(&rsp_trino);
+    trino_register_color_overlay();
     register_VI_handler(trino_on_vi);
 }
 
@@ -879,3 +882,28 @@ void trino_debug_fb_dump(void)
            (unsigned long)hash);
 }
 
+// The same overlay assembled with TRINO_COLORED: per-channel light terms
+// and an emissive add. Its code, data and functions are last in this file,
+// so adding them moved no other shim function or variable (an N64 frame's
+// time moves with code and data layout).
+DEFINE_RSP_UCODE(rsp_trino_color);
+static uint32_t trino_rsp_color_id;
+
+static void trino_register_color_overlay(void)
+{
+    trino_rsp_color_id = rspq_overlay_register(&rsp_trino_color);
+}
+
+// The same draw through the colored overlay (rsp_trino_color's
+// TrinoCmd_Draw): `w` as trino_rsp_draw's, then the 13 words of `c`.
+#define TRINO_RSP_COLOR_WORDS 13
+void trino_rsp_draw_colored(const uint32_t* w, const uint32_t* c)
+{
+    if (!trino_mode_3d) trino_3d_begin();
+    rspq_write_t q = rspq_write_begin(trino_rsp_color_id, 0x1, TRINO_RSP_DRAW_WORDS + TRINO_RSP_COLOR_WORDS);
+    rspq_write_arg(&q, w[0] & 0xFF);
+    for (int i = 1; i < TRINO_RSP_DRAW_WORDS; i++) rspq_write_arg(&q, w[i]);
+    for (int i = 0; i < TRINO_RSP_COLOR_WORDS; i++) rspq_write_arg(&q, c[i]);
+    rspq_write_end(&q);
+    trino_rsp_pending = 1;
+}

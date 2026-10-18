@@ -132,10 +132,11 @@ fn up_to_date(obj: &Path, sources: &[std::path::PathBuf]) -> bool {
 }
 
 /// Compile the C shim inside the image (real libdragon headers + o64 ABI),
-/// and the RSP overlay (`rsp_trino.S`) the way libdragon's `n64.mk` builds
+/// and the RSP overlays (`rsp_trino.S`, assembled as `rsp_trino` and, with
+/// `TRINO_COLORED`, `rsp_trino_color`) the way libdragon's `n64.mk` builds
 /// RSP ucode: assemble against `rsp.ld`, cut `.text`/`.data` to binaries,
-/// wrap each in an object exposing `rsp_trino_{text,data}_{start,end}`
-/// (what `DEFINE_RSP_UCODE` expects).
+/// wrap each in an object exposing `<name>_{text,data}_{start,end}` (what
+/// `DEFINE_RSP_UCODE` expects).
 fn compile_shim(p: &Project) -> Result<(), String> {
     let root = &p.engine;
     let shim_dir = root.join("crates/platform-n64/shim");
@@ -152,20 +153,24 @@ fn compile_shim(p: &Project) -> Result<(), String> {
             -I$N64_INST/mips64-elf/include \
             crates/platform-n64/shim/trino_shim.c -o target/n64/shim.o\n\
             cd target/n64/rsp\n\
-            mips64-elf-gcc -march=mips1 -mabi=32 -Wa,--fatal-warnings \
+            for u in rsp_trino rsp_trino_color; do\n\
+            def=; [ $u = rsp_trino_color ] && def=-DTRINO_COLORED\n\
+            mips64-elf-gcc -march=mips1 -mabi=32 -Wa,--fatal-warnings $def \
             -I$N64_INST/mips64-elf/include -L$N64_INST/mips64-elf/lib -nostartfiles \
-            -Wl,-Trsp.ld -Wl,--gc-sections -Wl,-Map=rsp_trino.map \
-            -o rsp_trino.elf ../../../crates/platform-n64/shim/rsp_trino.S\n\
-            mips64-elf-size -G rsp_trino.elf\n\
-            mips64-elf-objcopy -O binary -j .text rsp_trino.elf rsp_trino.text.bin\n\
-            mips64-elf-objcopy -O binary -j .data rsp_trino.elf rsp_trino.data.bin\n\
+            -Wl,-Trsp.ld -Wl,--gc-sections -Wl,-Map=$u.map \
+            -o $u.elf ../../../crates/platform-n64/shim/rsp_trino.S\n\
+            mips64-elf-size -G $u.elf\n\
+            mips64-elf-objcopy -O binary -j .text $u.elf $u.text.bin\n\
+            mips64-elf-objcopy -O binary -j .data $u.elf $u.data.bin\n\
             for s in text data; do mips64-elf-objcopy -I binary -O elf32-bigmips -B mips4300 \
-              --redefine-sym _binary_rsp_trino_${s}_bin_start=rsp_trino_${s}_start \
-              --redefine-sym _binary_rsp_trino_${s}_bin_end=rsp_trino_${s}_end \
-              --redefine-sym _binary_rsp_trino_${s}_bin_size=rsp_trino_${s}_size \
+              --redefine-sym _binary_${u}_${s}_bin_start=${u}_${s}_start \
+              --redefine-sym _binary_${u}_${s}_bin_end=${u}_${s}_end \
+              --redefine-sym _binary_${u}_${s}_bin_size=${u}_${s}_size \
               --set-section-alignment .data=8 --rename-section .text=.data \
-              rsp_trino.${s}.bin rsp_trino.${s}.o; done\n\
-            mips64-elf-ld -relocatable rsp_trino.text.o rsp_trino.data.o -o ../rsp_trino.o";
+              $u.${s}.bin $u.${s}.o; done\n\
+            done\n\
+            mips64-elf-ld -relocatable rsp_trino.text.o rsp_trino.data.o \
+              rsp_trino_color.text.o rsp_trino_color.data.o -o ../rsp_trino.o";
         let status = docker_sh(p, false, script).map_err(|e| format!("docker: {e}"))?;
         if !status.success() {
             return Err("shim / RSP overlay compilation failed".into());

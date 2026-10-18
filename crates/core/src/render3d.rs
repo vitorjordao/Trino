@@ -133,6 +133,10 @@ pub struct Mesh<'a> {
     /// Every normal lies on a coordinate axis (boxes): model-space lighting
     /// then holds under non-uniform scale too.
     axis_normals: bool,
+    /// The longest triangle edge, squared, in model units (checked once, at
+    /// parse): a fogged draw whose edges are all shorter than [`DEPTH_SPLIT`]
+    /// in view space needs no split, so the RSP may fog it ([`rsp_fog_check`]).
+    max_edge2: f32,
 }
 
 /// Rigid skeleton + clips (borrowed from the blob).
@@ -166,6 +170,7 @@ pub struct MeshLayout {
     opaque: bool,
     unit_normals: bool,
     axis_normals: bool,
+    max_edge2: f32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -332,6 +337,7 @@ impl<'a> Mesh<'a> {
             opaque: true,
             unit_normals: true,
             axis_normals: true,
+            max_edge2: 0.0,
         };
         mesh.opaque = mesh.colors.iter().all(|c| c[3] == 255);
         mesh.unit_normals = mesh.normals.iter().all(|n| {
@@ -343,6 +349,7 @@ impl<'a> Mesh<'a> {
             let zeros = [n.x, n.y, n.z].iter().filter(|c| c.abs() < 1e-6).count();
             zeros == 2
         });
+        mesh.max_edge2 = mesh.longest_edge2();
 
         // Optional sections.
         let mut at = end;
@@ -444,6 +451,7 @@ impl<'a> Mesh<'a> {
             opaque: self.opaque,
             unit_normals: self.unit_normals,
             axis_normals: self.axis_normals,
+            max_edge2: self.max_edge2,
         }
     }
 
@@ -474,7 +482,33 @@ impl<'a> Mesh<'a> {
             opaque: l.opaque,
             unit_normals: l.unit_normals,
             axis_normals: l.axis_normals,
+            max_edge2: l.max_edge2,
         }
+    }
+
+    /// The longest edge of any triangle, squared (model units); indices
+    /// past the vertices are skipped (the T&L never draws them).
+    fn longest_edge2(&self) -> f32 {
+        let mut best = 0.0f32;
+        for t in self.indices.as_flattened().as_chunks::<6>().0 {
+            let at = |k: usize| {
+                let i = u16::from_le_bytes([t[2 * k], t[2 * k + 1]]) as usize;
+                self.positions.get(i).map(vec3_of)
+            };
+            let (Some(a), Some(b), Some(c)) = (at(0), at(1), at(2)) else {
+                continue;
+            };
+            for (p, q) in [(a, b), (b, c), (c, a)] {
+                let d = p - q;
+                best = best.max(d.dot(d));
+            }
+        }
+        best
+    }
+
+    /// [`Mesh::longest_edge2`] as checked at parse.
+    pub fn max_edge2(&self) -> f32 {
+        self.max_edge2
     }
 
     fn parse_skeleton(body: &'a [u8], v: usize) -> Result<Skeleton<'a>, MeshError> {
@@ -987,6 +1021,84 @@ fn model_space_light(mesh: &Mesh, model: &Mat34, ldir: Vec3) -> Option<Vec3> {
     Some(Vec3::new(unit(a, la), unit(b, lb), unit(c, lc)))
 }
 
+/// [`model_space_light`] for a flat-shaded draw on the RSP. With orthogonal
+/// columns, `M = R·S` (rotation, positive per-axis scale), and the CPU
+/// path's world-space face normal is `R · normalize(S⁻¹ · n)` for the
+/// model-space face normal `n`: the N64 bakes `normalize(S⁻¹ · n)` into a
+/// flat copy per scale ratio ([`flat_normal`]) and lights it with `Rᵀ · l`,
+/// returned here. `None` for shear or a mirror (`det M < 0` flips a cross
+/// product).
+#[cold]
+#[inline(never)]
+fn flat_space_light(model: &Mat34, ldir: Vec3) -> Option<Vec3> {
+    let m = &model.m;
+    let col = |c: usize| Vec3::new(m[0][c], m[1][c], m[2][c]);
+    let (a, b, c) = (col(0), col(1), col(2));
+    let (la, lb, lc) = (a.dot(a), b.dot(b), c.dot(c));
+    let tol = la.max(lb).max(lc) * 3e-3;
+    let orthogonal = la.min(lb).min(lc) > 0.0
+        && a.dot(b).abs() <= tol
+        && a.dot(c).abs() <= tol
+        && b.dot(c).abs() <= tol
+        && a.cross(b).dot(c) > 0.0;
+    if !orthogonal {
+        return None;
+    }
+    let unit = |v: Vec3, len2: f32| v.dot(ldir) / crate::math3d::sqrt(len2);
+    Some(Vec3::new(unit(a, la), unit(b, lb), unit(c, lc)))
+}
+
+/// Triangles per segment of a mesh's flat RSP copy: each face gets three
+/// vertices of its own (its face normal), [`RSP_SEG_VERTS`] / 3.
+pub const RSP_FLAT_SEG_TRIS: usize = RSP_SEG_VERTS / 3;
+
+/// Segments of a mesh's flat RSP copy (the N64 renderer bakes it the first
+/// time the mesh is drawn `Shading::Flat` on the RSP).
+pub fn rsp_flat_segments(mesh: &Mesh) -> usize {
+    (mesh.index_count / 3).div_ceil(RSP_FLAT_SEG_TRIS)
+}
+
+/// The model-space unit normal of triangle `t` (its three indices): what
+/// the CPU path's flat shading derives in world space, before the model
+/// matrix. Zero for a degenerate triangle.
+pub fn face_normal(mesh: &Mesh, t: [usize; 3]) -> Vec3 {
+    let p = t.map(|i| mesh.position(i));
+    let n = (p[1] - p[0]).cross(p[2] - p[0]);
+    let l2 = n.dot(n);
+    if l2 > 0.0 {
+        n * (1.0 / crate::math3d::sqrt(l2))
+    } else {
+        Vec3::ZERO
+    }
+}
+
+/// The scale ratios a flat RSP copy is baked for: each axis scale of
+/// `model` over the largest, in 1/4096 (`M = R·S`, [`flat_space_light`]).
+/// Draws with the same ratios share a copy; the quantization moves a face
+/// normal by well under a color step.
+pub fn flat_ratios(model: &Mat34) -> [u16; 3] {
+    let s = model.axis_scales_sq();
+    let s = [s.x, s.y, s.z].map(crate::math3d::sqrt);
+    let big = s[0].max(s[1]).max(s[2]);
+    s.map(|v| crate::math3d::to_i32(v / big * 4096.0).clamp(1, 4096) as u16)
+}
+
+/// A flat copy's vertex normal for face normal `n` under scale `ratios`
+/// ([`flat_ratios`]): `normalize(S⁻¹ · n)`.
+pub fn flat_normal(n: Vec3, ratios: [u16; 3]) -> Vec3 {
+    let v = Vec3::new(
+        n.x / ratios[0] as f32,
+        n.y / ratios[1] as f32,
+        n.z / ratios[2] as f32,
+    );
+    let l2 = v.dot(v);
+    if l2 > 0.0 {
+        v * (1.0 / crate::math3d::sqrt(l2))
+    } else {
+        Vec3::ZERO
+    }
+}
+
 /// Vertices per RSP mesh segment: the N64 overlay transforms a segment into
 /// DMEM, then draws its triangles (local u8 indices).
 pub const RSP_SEG_VERTS: usize = 32;
@@ -1089,14 +1201,12 @@ pub enum RspReject {
     /// More vertex segments than the overlay takes.
     TooManySegments,
     // The draw.
-    /// A colored (non-white) light.
-    ColoredLight,
+    /// Fog on a draw the CPU path would split (long edges inside the
+    /// fog band, [`rsp_fog_check`]): the overlay doesn't split.
     Fog,
     /// A tint with alpha below 255.
     Translucent,
-    Emissive,
     Textured,
-    DoubleSided,
     /// A palette on a mesh with color slots.
     Palette,
     /// No bounding sphere.
@@ -1112,7 +1222,7 @@ pub enum RspReject {
     TooFar,
     /// An axis scale past `RSP_MAX_SCALE`.
     TooScaled,
-    /// `Shading::Flat`.
+    /// `Shading::Flat` on a mesh too big for a flat copy.
     Flat,
     /// Lit with a matrix that isn't rotation + uniform scale (a shear, or
     /// an uneven scale on a mesh with sloped normals).
@@ -1136,12 +1246,9 @@ impl RspReject {
             RspReject::Empty => "empty mesh",
             RspReject::TooLarge => "mesh too large",
             RspReject::TooManySegments => "too many segments",
-            RspReject::ColoredLight => "colored light",
-            RspReject::Fog => "fog",
+            RspReject::Fog => "fog needing splits",
             RspReject::Translucent => "translucent tint",
-            RspReject::Emissive => "emissive",
             RspReject::Textured => "texture",
-            RspReject::DoubleSided => "double-sided",
             RspReject::Palette => "palette",
             RspReject::NoBounds => "no bounds",
             RspReject::Offscreen => "off screen",
@@ -1149,7 +1256,7 @@ impl RspReject {
             RspReject::ClipBand => "needs clipping",
             RspReject::TooFar => "too far",
             RspReject::TooScaled => "scale too big",
-            RspReject::Flat => "flat shading",
+            RspReject::Flat => "flat shading (too many faces)",
             RspReject::NonUniformScale => "sheared or uneven scale",
             RspReject::LocalLight => "local light",
             RspReject::Water => "water surface",
@@ -1196,14 +1303,52 @@ pub struct RspDraw {
     pub light: Vec3,
     /// Ambient term (1.0 for `Unlit`).
     pub ambient: f32,
-    /// Back-face culling (always on: double-sided draws stay on the CPU).
+    /// Back-face culling (off for double-sided draws: the overlay then
+    /// draws back faces with the front faces' lighting, like the CPU path).
     pub cull_back: bool,
+}
+
+/// The per-channel lighting of an RSP draw ([`rsp_color`]): a vertex's
+/// color is `color · tint · (ambient + diffuse · max(0, n · l))`, then
+/// `+ emissive`, saturating — [`tessellate`]'s formula.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct RspColor {
+    pub ambient: [f32; 3],
+    pub diffuse: [f32; 3],
+    pub emissive: [u8; 3],
+    /// Fog ([`RspFog::OFF`] without): the overlay blends each vertex toward
+    /// its color by view depth, after the emissive add, alpha kept.
+    pub fog: RspFog,
+}
+
+/// The light's distance fog as an RSP draw applies it ([`RspColor::fog`]).
+/// A flag, not an `Option`: every field stays initialized. The compiler
+/// hoists float math out of a `match` on an `Option` (an LLVM speculation),
+/// and the N64's FPU traps on the denormals an unset `None` payload can
+/// hold (seen in ares: "Invalid floating point value (denormal)").
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct RspFog {
+    pub on: bool,
+    pub color: [u8; 3],
+    pub near: f32,
+    pub far: f32,
+}
+
+impl RspFog {
+    /// No fog.
+    pub const OFF: RspFog = RspFog {
+        on: false,
+        color: [0; 3],
+        near: 0.0,
+        far: 1.0,
+    };
 }
 
 /// Whether the N64 backend may send this draw to its RSP overlay
 /// (`crates/platform-n64/shim/rsp_trino.S`) instead of [`tessellate`]: the
-/// overlay has no clipping, splitting, fog, colored light, emissive, flat
-/// shading or textures, so the draw must need none of them. Its whole
+/// overlay has no clipping, splitting, flat shading or textures, so the
+/// draw must need none of them (colored lights, emissive, double-sided
+/// draws and fog that needs no split it does: [`rsp_fog_check`]). Its whole
 /// bounding sphere must be inside the RSP band and past the near plane, or
 /// failing that every one of its vertices ([`rsp_hull_check`]), so no
 /// triangle could have been clipped. A palette on a mesh with
@@ -1365,24 +1510,11 @@ pub fn rsp_check_mv(
     if params.water.is_some() {
         return Err(RspReject::Water);
     }
-    if !ctx.white {
-        return Err(RspReject::ColoredLight);
-    }
-    if ctx.fog_on {
-        return Err(RspReject::Fog);
-    }
     if params.tint.a < 255 {
         return Err(RspReject::Translucent);
     }
-    if params.emissive.r | params.emissive.g | params.emissive.b != 0 {
-        return Err(RspReject::Emissive);
-    }
     if params.texture.is_some() {
         return Err(RspReject::Textured);
-    }
-    // Back faces through the overlay were never verified: CPU path.
-    if params.double_sided {
-        return Err(RspReject::DoubleSided);
     }
     // The overlay reads baked vertex colors only.
     if params.palette.is_some() && mesh.has_slots() {
@@ -1409,7 +1541,10 @@ pub fn rsp_check_mv(
     if smax >= RSP_MAX_SCALE * RSP_MAX_SCALE {
         return Err(RspReject::TooScaled);
     }
-    let cull_back = true;
+    if ctx.fog_on {
+        rsp_fog_check(ctx, mesh, mv, c.z, r2)?;
+    }
+    let cull_back = !params.double_sided;
     match params.shading {
         Shading::Unlit => Ok(RspDraw {
             light: Vec3::ZERO,
@@ -1422,8 +1557,94 @@ pub fn rsp_check_mv(
             ambient: ctx.light.ambient,
             cull_back,
         }),
-        Shading::Flat => Err(RspReject::Flat),
+        // Each face lit by its own normal: the mesh's flat copy.
+        Shading::Flat if rsp_flat_segments(mesh) > RSP_MAX_SEGS => Err(RspReject::Flat),
+        Shading::Flat => Ok(RspDraw {
+            light: flat_space_light(model, ctx.ldir).ok_or(RspReject::NonUniformScale)? * -1.0,
+            ambient: ctx.light.ambient,
+            cull_back,
+        }),
     }
+}
+
+/// The per-channel terms an RSP draw ([`rsp_check`] accepted it) needs
+/// under a colored or dimmed light, with an emissive color or in fog;
+/// `None` for the common white, non-emissive, fog-free draw, which one
+/// light intensity (`RspDraw::ambient`) describes. Apart from `rsp_check`
+/// on purpose: the N64's hot path and its `RspDraw` stay exactly what they
+/// were (their size and code layout move whole scenes, measured).
+#[inline]
+pub fn rsp_color(ctx: &TnlContext, params: &ModelParams) -> Option<RspColor> {
+    let e = params.emissive;
+    if e.r | e.g | e.b == 0 && !ctx.fog_on && (ctx.white || params.shading == Shading::Unlit) {
+        return None;
+    }
+    rsp_color_terms(ctx, params)
+}
+
+#[cold]
+#[inline(never)]
+fn rsp_color_terms(ctx: &TnlContext, params: &ModelParams) -> Option<RspColor> {
+    let e = params.emissive;
+    let a = ctx.light.ambient;
+    let f = ctx.light.fog;
+    let fog = match ctx.fog_on {
+        true => RspFog {
+            on: true,
+            color: [f.color.r, f.color.g, f.color.b],
+            near: f.near,
+            far: f.far,
+        },
+        false => RspFog::OFF,
+    };
+    Some(match params.shading {
+        Shading::Unlit => RspColor {
+            ambient: [1.0; 3],
+            diffuse: [0.0; 3],
+            emissive: [e.r, e.g, e.b],
+            fog,
+        },
+        _ => RspColor {
+            ambient: core::array::from_fn(|i| a * ctx.ac[i]),
+            diffuse: core::array::from_fn(|i| (1.0 - a) * ctx.lc[i]),
+            emissive: [e.r, e.g, e.b],
+            fog,
+        },
+    })
+}
+
+/// Whether the RSP may fog a draw ([`rsp_check`] under fog): the overlay
+/// fogs per vertex like [`tessellate`] but never splits, so it takes only
+/// draws the CPU path wouldn't split either ([`split_policy`],
+/// [`fog_split_band`]) — the same triangles, the same per-vertex colors.
+/// That holds when the bounding sphere (view depth `cz`, squared radius
+/// `r2`) lies wholly before the fog's start or past its end (every edge
+/// keeps one factor), or when no edge of the mesh can span
+/// [`DEPTH_SPLIT`] of view depth: an edge `e` spans `r · e` of depth, with
+/// `r` the depth row of `mv` (the draw's `view · model`), and
+/// `|r · e| <= |r| |e|` keeps it under the limit when the longest edge does.
+#[cold]
+#[inline(never)]
+fn rsp_fog_check(
+    ctx: &TnlContext,
+    mesh: &Mesh,
+    mv: &Mat34,
+    cz: f32,
+    r2: f32,
+) -> Result<(), RspReject> {
+    let fog = ctx.light.fog;
+    // A little margin over the sphere: vertex depths round on their own.
+    let clear = |d: f32| d > 0.0 && d * d > r2 * 1.0001 + 1e-4;
+    if clear(fog.near - cz) || clear(cz - fog.far) {
+        return Ok(());
+    }
+    let limit = DEPTH_SPLIT * 0.999;
+    let r = mv.m[2];
+    let stretch2 = r[0] * r[0] + r[1] * r[1] + r[2] * r[2];
+    if mesh.max_edge2 * stretch2 <= limit * limit {
+        return Ok(());
+    }
+    Err(RspReject::Fog)
 }
 
 impl TnlContext {
@@ -2763,19 +2984,63 @@ mod tests {
         // Crossing the near plane (clipping needed): CPU path.
         assert!(rsp_eligible(&ctx, &cube, &at(-4.6), &plain).is_none());
         // What the overlay lacks: CPU path.
-        for p in [
-            ModelParams {
-                shading: Shading::Flat,
-                ..plain
-            },
-            ModelParams::tinted(Color::rgba(255, 255, 255, 200)),
-            ModelParams {
-                emissive: Color::rgb(20, 0, 0),
-                ..plain
-            },
-        ] {
-            assert!(rsp_eligible(&ctx, &cube, &at(0.0), &p).is_none(), "{p:?}");
-        }
+        let see_through = ModelParams::tinted(Color::rgba(255, 255, 255, 200));
+        assert!(rsp_eligible(&ctx, &cube, &at(0.0), &see_through).is_none());
+        // Flat: the flat copy (face normals), lit in model space under a
+        // rotation and per-axis scale; a mirror flips the faces: CPU path.
+        let flat = ModelParams {
+            shading: Shading::Flat,
+            ..plain
+        };
+        assert!(rsp_eligible(&ctx, &cube, &at(0.0), &flat).is_some());
+        let squashed = Mat34::from_rotation_scale_translation(
+            Vec3::new(0.2, 0.5, 0.0),
+            Vec3::new(1.0, 0.5, 0.8),
+            Vec3::ZERO,
+        );
+        assert!(rsp_eligible(&ctx, &cube, &squashed, &flat).is_some());
+        let mirrored = Mat34::from_rotation_scale_translation(
+            Vec3::ZERO,
+            Vec3::new(-1.0, 1.0, 1.0),
+            Vec3::ZERO,
+        );
+        assert_eq!(
+            rsp_check(&ctx, &cube, &mirrored, &flat),
+            Err(RspReject::NonUniformScale)
+        );
+        // Emissive and colored light: per-channel terms, white light without
+        // emissive: none (the overlay's single-intensity command).
+        assert!(rsp_eligible(&ctx, &cube, &at(0.0), &plain).is_some());
+        assert_eq!(rsp_color(&ctx, &plain), None);
+        let glow = ModelParams {
+            emissive: Color::rgb(20, 0, 0),
+            ..plain
+        };
+        assert!(rsp_eligible(&ctx, &cube, &at(0.0), &glow).is_some());
+        let c = rsp_color(&ctx, &glow).unwrap();
+        assert_eq!(c.emissive, [20, 0, 0]);
+        assert_eq!(c.ambient, [DEFAULT_LIGHT.ambient; 3]);
+        let warm = Light {
+            color: Color::rgb(255, 150, 70),
+            ..DEFAULT_LIGHT
+        };
+        let warm_ctx = TnlContext::new(&Camera3::default(), &warm, screen);
+        assert!(rsp_eligible(&warm_ctx, &cube, &at(0.0), &plain).is_some());
+        let c = rsp_color(&warm_ctx, &plain).unwrap();
+        assert!(
+            c.diffuse[0] > c.diffuse[1] && c.diffuse[1] > c.diffuse[2],
+            "{c:?}"
+        );
+        let unlit_warm = ModelParams {
+            shading: Shading::Unlit,
+            ..plain
+        };
+        assert!(rsp_eligible(&warm_ctx, &cube, &at(0.0), &unlit_warm).is_some());
+        assert_eq!(
+            rsp_color(&warm_ctx, &unlit_warm),
+            None,
+            "unlit draws ignore the light's color"
+        );
         let fog = Light {
             fog: Fog {
                 color: Color::BLACK,
@@ -2785,7 +3050,33 @@ mod tests {
             ..DEFAULT_LIGHT
         };
         let fogged = TnlContext::new(&Camera3::default(), &fog, screen);
-        assert!(rsp_eligible(&fogged, &cube, &at(0.0), &plain).is_none());
+        // Fog: the cube's edges (1.4 units at most) span less than DEPTH_SPLIT, so the
+        // CPU path wouldn't split them: the overlay fogs it per vertex.
+        assert!(rsp_eligible(&fogged, &cube, &at(0.0), &plain).is_some());
+        let c = rsp_color(&fogged, &plain).unwrap();
+        assert!(c.fog.on && c.fog.near == 1.0 && c.fog.far == 9.0);
+        assert!(!rsp_color(&warm_ctx, &plain).unwrap().fog.on);
+        // Stretched to 3 units deep, inside the fog band: the CPU splits it.
+        let long = Mat34::from_rotation_scale_translation(
+            Vec3::ZERO,
+            Vec3::new(1.0, 1.0, 3.0),
+            Vec3::ZERO,
+        );
+        assert_eq!(
+            rsp_check(&fogged, &cube, &long, &plain),
+            Err(RspReject::Fog)
+        );
+        // The same draw wholly before the fog's start: one factor, no split.
+        let late = Light {
+            fog: Fog {
+                near: 8.0,
+                far: 20.0,
+                ..fog.fog
+            },
+            ..fog
+        };
+        let late_ctx = TnlContext::new(&Camera3::default(), &late, screen);
+        assert!(rsp_check(&late_ctx, &cube, &long, &plain).is_ok());
         // Fixed-point range: too far, or a huge scale, stays on the CPU.
         assert!(rsp_eligible(&ctx, &cube, &at(20_000.0), &plain).is_none());
         let huge = Mat34::from_rotation_scale_translation(
@@ -2794,12 +3085,16 @@ mod tests {
             Vec3::new(0.0, 0.0, 30_000.0),
         );
         assert!(rsp_eligible(&ctx, &cube, &huge, &plain).is_none());
-        // Back faces through the overlay are unverified: CPU path.
+        // Double-sided: the overlay draws back faces (no cull).
         let both = ModelParams {
             double_sided: true,
             ..plain
         };
-        assert!(rsp_eligible(&ctx, &cube, &at(0.0), &both).is_none());
+        assert!(
+            !rsp_eligible(&ctx, &cube, &at(0.0), &both)
+                .unwrap()
+                .cull_back
+        );
         // Unlit: no light, full ambient.
         let u = ModelParams {
             shading: Shading::Unlit,

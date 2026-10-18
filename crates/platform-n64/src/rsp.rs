@@ -9,7 +9,10 @@ use alloc::vec::Vec;
 use core::ffi::c_void;
 
 use trino_core::math3d::to_i32;
-use trino_core::render3d::{Mesh, NEAR_PLANE, RSP_MAX_SEGS, RspDraw, TnlContext, rsp_split};
+use trino_core::render3d::{
+    Mesh, NEAR_PLANE, RSP_FLAT_SEG_TRIS, RSP_MAX_SEGS, RspColor, RspDraw, TnlContext, face_normal,
+    flat_normal, rsp_split,
+};
 use trino_core::{Color, Mat34, Vec3};
 
 use crate::ffi;
@@ -18,6 +21,14 @@ use crate::ffi;
 const VTX_IN: usize = 32;
 /// Words of the draw command (overlay `DRAW_CMD_SIZE` / 4).
 pub const DRAW_WORDS: usize = 27;
+/// Words the colored overlay's draw command adds (its `DRAW_CMD_SIZE` / 4 -
+/// `DRAW_WORDS`): a pad, the ambient, diffuse and emissive vectors, the fog
+/// row and the fog color.
+pub const COLOR_WORDS: usize = 13;
+/// Bit in a queued draw command's word 0 (above the overlay's cull byte):
+/// the draw goes out through the colored overlay, with its
+/// [`color_words`] in the next queue entry. The shim drops it.
+pub const COLORED: u32 = 0x100;
 
 /// A mesh's RSP copy: its segment table in uncached RDRAM.
 pub struct RspMesh {
@@ -54,6 +65,8 @@ const TINT_S015: [i16; 256] = {
 
 struct Segment {
     verts: Vec<u16>,
+    /// Each vertex's normal (its mesh normal, or its face's in a flat copy).
+    normals: Vec<Vec3>,
     tris: Vec<[u8; 3]>,
 }
 
@@ -63,15 +76,56 @@ fn segments(mesh: &Mesh) -> Vec<Segment> {
     rsp_split(mesh, &mut |verts, tris| {
         out.push(Segment {
             verts: verts.to_vec(),
+            normals: verts.iter().map(|&g| mesh.normal(g as usize)).collect(),
             tris: tris.to_vec(),
         })
     });
     out
 }
 
+/// A flat copy's segments: [`RSP_FLAT_SEG_TRIS`] faces each, three vertices
+/// per face carrying its normal under `ratios` ([`flat_normal`]), so the overlay's
+/// per-vertex lighting is the CPU path's per-face lighting.
+fn flat_segments(mesh: &Mesh, ratios: [u16; 3]) -> Vec<Segment> {
+    let faces: Vec<[usize; 3]> = (0..mesh.index_count / 3)
+        .map(|t| core::array::from_fn(|k| mesh.index(3 * t + k) as usize))
+        .collect();
+    faces
+        .chunks(RSP_FLAT_SEG_TRIS)
+        .map(|chunk| {
+            let mut s = Segment {
+                verts: Vec::new(),
+                normals: Vec::new(),
+                tris: Vec::new(),
+            };
+            for (k, &t) in chunk.iter().enumerate() {
+                let n = flat_normal(face_normal(mesh, t), ratios);
+                for &i in &t {
+                    s.verts.push(i as u16);
+                    s.normals.push(n);
+                }
+                let b = (3 * k) as u8;
+                s.tris.push([b, b + 1, b + 2]);
+            }
+            s
+        })
+        .collect()
+}
+
 /// Bake a mesh's RSP copy (`None` if it has too many segments).
 pub fn build(mesh: &Mesh) -> Option<RspMesh> {
-    let segs = segments(mesh);
+    bake(mesh, &segments(mesh))
+}
+
+/// Bake a mesh's flat RSP copy for its `Shading::Flat` draws under scale
+/// `ratios` ([`flat_ratios`]; `None` past [`RSP_MAX_SEGS`] segments).
+#[cold]
+#[inline(never)]
+pub fn build_flat(mesh: &Mesh, ratios: [u16; 3]) -> Option<RspMesh> {
+    bake(mesh, &flat_segments(mesh, ratios))
+}
+
+fn bake(mesh: &Mesh, segs: &[Segment]) -> Option<RspMesh> {
     if segs.is_empty() || segs.len() > RSP_MAX_SEGS {
         return None;
     }
@@ -91,9 +145,9 @@ pub fn build(mesh: &Mesh) -> Option<RspMesh> {
         blob[entry + 4..entry + 6].copy_from_slice(&(seg_bytes(s) as u16).to_be_bytes());
         blob[entry + 6..entry + 8].copy_from_slice(&(s.verts.len() as u16).to_be_bytes());
         blob[entry + 8..entry + 10].copy_from_slice(&(s.tris.len() as u16).to_be_bytes());
-        for &g in &s.verts {
+        for (&g, &nrm) in s.verts.iter().zip(&s.normals) {
             let g = g as usize;
-            let (p, nrm, c) = (mesh.position(g), mesh.normal(g), mesh.color(g));
+            let (p, c) = (mesh.position(g), mesh.color(g));
             let (xi, xf) = fixed(p.x);
             let (yi, yf) = fixed(p.y);
             let (zi, zf) = fixed(p.z);
@@ -217,4 +271,58 @@ pub fn draw_words(
     w[25] = pair(t(tint.a), 0);
     w[26] = debug_phys;
     w
+}
+
+/// [`color_words`] in a queue entry (the renderer queues it right after
+/// the command).
+#[cold]
+#[inline(never)]
+pub fn color_entry(c: &RspColor, mv: &Mat34) -> [u32; DRAW_WORDS] {
+    let mut e = [0u32; DRAW_WORDS];
+    e[..COLOR_WORDS].copy_from_slice(&color_words(c, mv));
+    e
+}
+
+/// The colored overlay's extra words (its `DRAW` +0x6C..0xA0): the
+/// per-channel ambient and diffuse terms (s0.15), the emissive color in
+/// the overlay's `luv` layout (a byte << 7), each `r, g, b, 0`, then the
+/// fog: a fifth clip-matrix row giving `(depth - near) / (far - near)`
+/// (s15.16, one entry per column of `mv`, the draw's `view · model`) and
+/// its color. Without fog the row is zero, and so is the blend.
+#[cold]
+#[inline(never)]
+pub fn color_words(c: &RspColor, mv: &Mat34) -> [u32; COLOR_WORDS] {
+    let pair = |a: i16, b: i16| ((a as u16 as u32) << 16) | b as u16 as u32;
+    let byte = |v: u8| ((v as u16) << 7) as i16;
+    let e = |i: usize| byte(c.emissive[i]);
+    let f = c.fog;
+    let (row, fog) = match f.on {
+        true => {
+            let s = 1.0 / (f.far - f.near);
+            let z = mv.m[2];
+            let row: [(i16, u16); 4] = [
+                fixed(z[0] * s),
+                fixed(z[1] * s),
+                fixed(z[2] * s),
+                fixed((z[3] - f.near) * s),
+            ];
+            (row, f.color)
+        }
+        false => ([(0, 0); 4], [0; 3]),
+    };
+    [
+        0,
+        pair(s015(c.ambient[0]), s015(c.ambient[1])),
+        pair(s015(c.ambient[2]), 0),
+        pair(s015(c.diffuse[0]), s015(c.diffuse[1])),
+        pair(s015(c.diffuse[2]), 0),
+        pair(e(0), e(1)),
+        pair(e(2), 0),
+        pair(row[0].0, row[1].0),
+        pair(row[2].0, row[3].0),
+        pair(row[0].1 as i16, row[1].1 as i16),
+        pair(row[2].1 as i16, row[3].1 as i16),
+        pair(byte(fog[0]), byte(fog[1])),
+        pair(byte(fog[2]), 0),
+    ]
 }

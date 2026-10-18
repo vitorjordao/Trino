@@ -24,7 +24,7 @@ extern crate alloc;
 
 use alloc::string::String;
 use alloc::vec::Vec;
-use trino_core::render3d::{Camera3, DEFAULT_LIGHT, TMDL_MAGIC};
+use trino_core::render3d::{Camera3, DEFAULT_LIGHT, Fog, Light, TMDL_MAGIC};
 use trino_core::{
     Color, Mat34, Material, ModelId, ModelParams, Renderer, Shading, Transform3, Vec3,
 };
@@ -33,6 +33,10 @@ use trino_platform_n64::{N64Renderer, runtime};
 const TRI: ModelId = ModelId::from_path("micro/tri");
 const GRID: ModelId = ModelId::from_path("micro/grid");
 const GRID2: ModelId = ModelId::from_path("micro/grid2");
+/// An 8×8-vertex grid as wide as [`GRID`] with alternate rows raised: its
+/// faces point different ways, for flat shading on the RSP (98 faces fit
+/// a flat copy, `RSP_FLAT_SEG_TRIS` · `RSP_MAX_SEGS`).
+const BUMPY: ModelId = ModelId::from_path("micro/bumpy");
 
 /// Grid side in vertices. At most 16: two rows (32 vertices) fit the
 /// T&L's 32-slot direct-mapped vertex cache, so every vertex is
@@ -115,9 +119,31 @@ fn register_meshes(r: &mut N64Renderer) -> bool {
         }
     }
     let r_grid = half * 1.5;
+    let n = 8usize;
+    let step8 = step * (GRID_N - 1) as f32 / (n - 1) as f32;
+    let mut bumpy = Vec::new();
+    for y in 0..n {
+        for x in 0..n {
+            let lift = if (x + y) % 2 == 0 { 0.0 } else { -0.12 };
+            bumpy.push(Vec3::new(
+                x as f32 * step8 - half,
+                y as f32 * step8 - half,
+                lift,
+            ));
+        }
+    }
+    let mut bidx = Vec::new();
+    for y in 0..n - 1 {
+        for x in 0..n - 1 {
+            let i = (y * n + x) as u16;
+            let w = n as u16;
+            bidx.extend_from_slice(&[i, i + w, i + 1, i + 1, i + w, i + w + 1]);
+        }
+    }
     r.register_mesh(TRI.0, tri)
         && r.register_mesh(GRID.0, tmdl(&pos, &idx, Vec3::ZERO, r_grid))
         && r.register_mesh(GRID2.0, tmdl(&pos, &idx2, Vec3::ZERO, r_grid))
+        && r.register_mesh(BUMPY.0, tmdl(&bumpy, &bidx, Vec3::ZERO, r_grid))
 }
 
 #[derive(Clone, Copy)]
@@ -225,6 +251,63 @@ fn setup(r: &mut N64Renderer) {
     r.set_light(&DEFAULT_LIGHT);
 }
 
+/// A warm key light over a blue ambient: the colored command's case.
+const WARM: Light = Light {
+    color: Color::rgb(255, 150, 70),
+    ambient_color: Color::rgb(90, 110, 200),
+    ..DEFAULT_LIGHT
+};
+
+/// A glowing tint under [`WARM`].
+const GLOW: ModelParams = ModelParams {
+    emissive: Color::rgb(40, 0, 90),
+    tint: Color::rgb(230, 255, 200),
+    ..ModelParams::DEFAULT
+};
+
+/// The scene light with fog across the turned grid's depths: the colored
+/// overlay's per-vertex fog blend.
+const FOGGY: Light = Light {
+    fog: Fog {
+        color: Color::rgb(132, 178, 226),
+        near: 3.6,
+        far: 4.4,
+    },
+    ..DEFAULT_LIGHT
+};
+
+/// The bumpy grid turned and squashed (per-axis scale): flat faces through
+/// a flat copy baked for its scale ratios.
+fn squashed() -> (Mat34, ModelParams) {
+    let m = Transform3 {
+        position: Vec3::new(0.1, 0.0, 4.0),
+        rotation: Vec3::new(0.25, -0.4, 0.15),
+        scale: Vec3::new(1.0, 0.7, 0.85),
+    }
+    .matrix();
+    let p = ModelParams {
+        shading: Shading::Flat,
+        ..ModelParams::DEFAULT
+    };
+    (m, p)
+}
+
+/// The grid turned to show its back (half a turn about Y), drawn
+/// double-sided.
+fn back_of_grid() -> (Mat34, ModelParams) {
+    let m = Transform3 {
+        position: Vec3::new(0.0, 0.0, 4.0),
+        rotation: Vec3::new(0.0, core::f32::consts::PI, 0.0),
+        ..Transform3::default()
+    }
+    .matrix();
+    let p = ModelParams {
+        double_sided: true,
+        ..ModelParams::DEFAULT
+    };
+    (m, p)
+}
+
 /// The RSP overlay against the CPU path: screen vertices (oracle), then the
 /// pixels of the same frame drawn both ways.
 fn rsp_checks(r: &mut N64Renderer) {
@@ -256,9 +339,67 @@ fn rsp_checks(r: &mut N64Renderer) {
             Err(m) => runtime::log(&alloc::format!("TRINO_TEST_FAIL:rsp oracle {what}: {m}\n")),
         }
     }
+    // The colored command (warm light, emissive), and a back face.
+    r.set_light(&WARM);
+    let colored = r.rsp_oracle(GRID, &grid, &GLOW);
+    setup(r);
+    let (back, both) = back_of_grid();
+    let flipped = r.rsp_oracle(GRID, &back, &both);
+    r.set_light(&FOGGY);
+    let fogged = r.rsp_oracle(GRID, &turned, &ModelParams::DEFAULT);
+    setup(r);
+    let (squash, flat) = squashed();
+    let faces = r.rsp_oracle(BUMPY, &squash, &flat);
+    for (what, res) in [
+        ("colored emissive", colored),
+        ("double-sided back", flipped),
+        ("fog", fogged),
+        ("flat squashed", faces),
+    ] {
+        match res {
+            Ok(m) => runtime::log(&alloc::format!("TRINO_RSP:oracle {what}: {m}\n")),
+            Err(m) => runtime::log(&alloc::format!("TRINO_TEST_FAIL:rsp oracle {what}: {m}\n")),
+        }
+    }
+    pixel_check(r, "gouraud", &|r| {
+        render(r, Set::Grid(GRID, Shading::Gouraud))
+    });
+    pixel_check(r, "colored emissive", &|r| {
+        r.begin_frame(Color::BLACK);
+        setup(r);
+        r.set_light(&WARM);
+        r.draw_model_matrix(GRID, &grid, Material::VertexLit, &GLOW);
+        r.end_frame();
+    });
+    pixel_check(r, "double-sided back", &|r| {
+        r.begin_frame(Color::BLACK);
+        setup(r);
+        r.draw_model_matrix(GRID, &back, Material::VertexLit, &both);
+        r.end_frame();
+    });
+    pixel_check(r, "fog", &|r| {
+        r.begin_frame(Color::BLACK);
+        setup(r);
+        r.set_light(&FOGGY);
+        r.draw_model_matrix(GRID, &turned, Material::VertexLit, &ModelParams::DEFAULT);
+        r.end_frame();
+    });
+    pixel_check(r, "flat squashed", &|r| {
+        r.begin_frame(Color::BLACK);
+        setup(r);
+        r.draw_model_matrix(BUMPY, &squash, Material::VertexLit, &flat);
+        r.end_frame();
+    });
+    setup(r);
+}
+
+/// The frame `draw` makes, through the CPU path and through the RSP: a
+/// 12×12 sample of the grid's pixels must agree (a tenth may differ by more
+/// than 24 on edges), and the RSP frame must not be empty.
+fn pixel_check(r: &mut N64Renderer, what: &str, draw: &dyn Fn(&mut N64Renderer)) {
     let sample = |r: &mut N64Renderer, rsp: bool| {
         r.set_rsp(rsp);
-        render(r, Set::Grid(GRID, Shading::Gouraud));
+        draw(r);
         let mut px = Vec::new();
         for y in 0..12 {
             for x in 0..12 {
@@ -286,6 +427,7 @@ fn rsp_checks(r: &mut N64Renderer) {
             map.push('|');
         }
     }
+    r.set_rsp(true);
     let msg = alloc::format!(
         "{} pixels, mean diff {:.2}/255, {far} far (cpu {:?} rsp {:?})",
         cpu.len(),
@@ -293,11 +435,14 @@ fn rsp_checks(r: &mut N64Renderer) {
         cpu[66],
         rsp[66]
     );
-    if far > cpu.len() as u32 / 10 {
-        runtime::log(&alloc::format!("TRINO_RSP:pixel map {map}\n"));
-        runtime::log(&alloc::format!("TRINO_TEST_FAIL:rsp pixels: {msg}\n"));
+    let blank = rsp.iter().all(|c| c.r | c.g | c.b == 0);
+    if far > cpu.len() as u32 / 10 || blank {
+        runtime::log(&alloc::format!("TRINO_RSP:pixel map {what} {map}\n"));
+        runtime::log(&alloc::format!(
+            "TRINO_TEST_FAIL:rsp pixels {what}: {msg}\n"
+        ));
     } else {
-        runtime::log(&alloc::format!("TRINO_RSP:pixels {msg}\n"));
+        runtime::log(&alloc::format!("TRINO_RSP:pixels {what}: {msg}\n"));
     }
 }
 

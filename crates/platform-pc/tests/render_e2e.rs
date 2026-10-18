@@ -241,8 +241,22 @@ fn baked_models_light_fog_depth_textures_and_billboards() {
     assert_near(read(&mut r, 20, 20), [0, 0, 0], 4, "clear around the box");
     let stats = r.stats();
     assert_eq!(stats.models, 1);
-    assert!(stats.tris >= 2 && stats.tnl.verts >= 8, "{stats:?}");
-    assert!(stats.tnl.tris_in >= 12, "a box is 12 source triangles");
+    if r.hw_tnl() {
+        // The GPU T&L path took it (issue #51): its work is not the CPU's.
+        assert_eq!(
+            (
+                stats.tnl.pc_gpu_draws,
+                stats.tnl.pc_gpu_tris,
+                stats.tnl.verts
+            ),
+            (1, 12, 0),
+            "a box is 12 source triangles: {stats:?}"
+        );
+        assert_eq!(stats.tris, 12);
+    } else {
+        assert!(stats.tris >= 2 && stats.tnl.verts >= 8, "{stats:?}");
+        assert!(stats.tnl.tris_in >= 12, "a box is 12 source triangles");
+    }
 
     // Tint multiplies before lighting: green tint under a red light = black;
     // emissive is added after lighting.

@@ -691,6 +691,33 @@ impl Scene {
         Some(e)
     }
 
+    /// The name the resolved draws give the entity at `path`: its
+    /// ancestors' names and its own joined by `/` (`lamp-1/lamp/bulb`), as
+    /// in [`crate::DrawItem::name`] and the budget's entity lists.
+    pub fn draw_name(&self, path: &[usize]) -> Option<String> {
+        let (first, rest) = path.split_first()?;
+        let mut e = self.entities.get(*first)?;
+        let mut name = e.name.clone();
+        for &i in rest {
+            e = e.children.get(i)?;
+            name.push('/');
+            name.push_str(&e.name);
+        }
+        Some(name)
+    }
+
+    /// The index path of the entity whose draws are named `name`
+    /// ([`Scene::draw_name`]).
+    pub fn find_draw_name(&self, name: &str) -> Option<Vec<usize>> {
+        let mut found = None;
+        self.walk(|p, _| {
+            if found.is_none() && self.draw_name(p).as_deref() == Some(name) {
+                found = Some(p.to_vec());
+            }
+        });
+        found
+    }
+
     pub fn get_mut(&mut self, path: &[usize]) -> Option<&mut Entity> {
         let (first, rest) = path.split_first()?;
         let mut e = self.entities.get_mut(*first)?;
@@ -979,6 +1006,19 @@ mod tests {
     fn sprite_id_matches_core_hash() {
         let sprite = SpriteComponent::new("sprites/player");
         assert_eq!(sprite.sprite_id(), SpriteId::from_path("sprites/player"));
+    }
+
+    #[test]
+    fn draw_names_join_the_ancestors() {
+        let scene = sample();
+        let house = scene.get(&[1]).unwrap().name.clone();
+        assert_eq!(scene.draw_name(&[1, 0]), Some(format!("{house}/door")));
+        assert_eq!(
+            scene.find_draw_name(&format!("{house}/door")),
+            Some(vec![1, 0])
+        );
+        assert_eq!(scene.find_draw_name("door"), None);
+        assert_eq!(scene.draw_name(&[9]), None);
     }
 
     #[test]

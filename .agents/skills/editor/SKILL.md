@@ -132,7 +132,12 @@ numbers as `cargo xtask scene budget`): the N64 frame as the slower of CPU and R
 many draws take the RSP and the most common reason the rest don't, the 3DS triangles,
 and draws sent but unseen. The "N64 3D time" row then uses that CPU/RSP split, so the
 HUD's two N64 figures agree. The Inspector's scene settings (nothing selected) list every
-reason (`off the RSP: n × reason`) and each unseen draw; clicking one selects it. The
+reason (`off the RSP: n × reason`, `off the 3DS GPU`, `off the PC GPU`) as a collapsed
+header that opens on the entities it holds back (frameless buttons; clicking one selects
+it), and each unseen draw. Clicking the HUD's platform lines selects nothing and scrolls the
+Inspector there (`ViewAction::OpenBudget`, `App::scroll_to_budget`). A selected model's
+**Render path** row shows PC / N64 / 3DS as GPU, RSP or CPU (the rule on hover and in the
+line below), from `FrameBudget::paths` matched by `Scene::draw_name`. The
 budgets are cached on the scene text, the library revision and the project generation
 (`App::budgets`), and hidden during Play here (the camera is the game's then). They use the
 PC bakes except where a console has its own source (`assets/n64/...`) or does not bake a

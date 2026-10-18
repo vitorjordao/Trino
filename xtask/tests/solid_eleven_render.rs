@@ -130,6 +130,29 @@ fn golden(name: &str, w: u32, h: u32, img: &[u8]) {
     }
 }
 
+/// The frame's GPU T&L draws against the CPU path (`tnl_oracle`, issue #51),
+/// the side-by-side kept under `target/evidence/pc-gpu-tnl`. Returns the
+/// GPU draws (0 on a console profile).
+fn tnl_oracle(
+    r: &mut PcRenderer,
+    name: &str,
+    frame: impl FnMut(&mut PcRenderer) -> Vec<u8>,
+) -> u32 {
+    let Some(d) = trino_platform_pc::tnl_oracle::compare(r, frame) else {
+        return 0;
+    };
+    eprintln!("{name}: {d}");
+    let (w, h, img) = d.side_by_side();
+    write_png(
+        &root().join(format!("target/evidence/pc-gpu-tnl/{name}.png")),
+        w,
+        h,
+        &img,
+    );
+    d.assert_within(name);
+    d.gpu_draws
+}
+
 /// The game after the self-test's script, on `profile`.
 fn scripted(screen: Vec2) -> SolidElevenGame {
     let mut g = SolidElevenGame::new(screen);
@@ -155,6 +178,16 @@ fn the_match_matches_its_goldens_on_every_look() {
         let mut g = scripted(Vec2::new(w as f32, h as f32));
         g.render(&mut r);
         golden(tag, w, h, &r.read_offscreen());
+        if profile == SimProfile::Native {
+            let gpu = tnl_oracle(&mut r, "solid_eleven_match_native", |r| {
+                g.render(r);
+                r.read_offscreen()
+            });
+            assert!(
+                gpu > 0,
+                "the players, the pitch and the stands go to the GPU"
+            );
+        }
         if profile == SimProfile::N3ds {
             golden("match_n3ds_bottom", 320, 240, &r.read_second_screen());
         }
@@ -185,6 +218,10 @@ fn the_menus_match_their_goldens() {
         g.scene = scene;
         g.render(&mut r);
         golden(tag, w, h, &r.read_offscreen());
+        tnl_oracle(&mut r, "solid_eleven_teams_native", |r| {
+            g.render(r);
+            r.read_offscreen()
+        });
     }
 }
 

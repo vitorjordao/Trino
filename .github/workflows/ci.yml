@@ -54,6 +54,14 @@ jobs:
         run: cargo test --workspace
         env:
           TRINO_REQUIRE_GPU: "1"
+      # The PC native profile's old CPU T&L path (issue #51): every PC
+      # renderer test with the GPU path off (`gpu_tnl.rs` turns it on).
+      - name: Tests (Linux — TRINO_PC_TNL=cpu)
+        if: runner.os == 'Linux'
+        run: cargo test -p trino-platform-pc
+        env:
+          TRINO_REQUIRE_GPU: "1"
+          TRINO_PC_TNL: cpu
       - name: Tests (Windows/macOS — golden skipped if no adapter)
         if: runner.os != 'Linux'
         run: cargo test --workspace

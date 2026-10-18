@@ -1146,6 +1146,48 @@ fn platform_budget_shows_rsp_reasons_and_unseen_draws() {
         assert_eq!(h.state().doc.selected, Some(lost));
         h.state_mut().cmds.push(Cmd::Select(None));
         h.run_steps(4);
+        // A PC GPU reason opens on the entities it keeps on the CPU, and
+        // one of them selects it; its Model component shows its render
+        // path on each platform.
+        if let Some((reason, _)) = b[2].off_pc_gpu.first() {
+            let label = reason.label();
+            let name = b[2].off_path(label)[0].to_string();
+            click(&mut h, &format!("off the PC GPU: 1 × {label}"));
+            // The header's opening animation moves what follows it.
+            h.run_steps(12);
+            let item = format!("{} {name}", crate::theme::icon::CROSSHAIR);
+            click(&mut h, &item);
+            h.run_steps(3);
+            let path = h.state().doc.scene.find_draw_name(&name).unwrap();
+            assert_eq!(h.state().doc.selected, Some(path));
+            assert!(h.query_by_label_contains("Render path").is_some());
+            assert!(h.query_by_label_contains("PC CPU").is_some());
+            assert!(
+                h.query_by_label_contains(&format!("PC: {label}")).is_some(),
+                "the reason under the row"
+            );
+            crate::layout_audit::assert_clean(
+                &h,
+                size,
+                true,
+                &format!("render path at {}x{}", size.x, size.y),
+            );
+            h.state_mut().cmds.push(Cmd::Select(None));
+            h.run_steps(4);
+        }
+        // An entity the GPU path takes says so.
+        if let Some(gpu) = b[2]
+            .paths
+            .iter()
+            .find(|p| p.path == trino_scene::budget::RenderPath::Hardware)
+        {
+            let path = h.state().doc.scene.find_draw_name(&gpu.name).unwrap();
+            h.state_mut().cmds.push(Cmd::Select(Some(path)));
+            h.run_steps(4);
+            assert!(h.query_by_label_contains("PC GPU").is_some());
+            h.state_mut().cmds.push(Cmd::Select(None));
+            h.run_steps(4);
+        }
         crate::layout_audit::assert_clean(
             &h,
             size,

@@ -10,7 +10,7 @@ description: Understand, change, debug or locally replicate Trino's GitHub Actio
 | Job | Runs on | What it proves |
 |---|---|---|
 | `lint` | ubuntu | fmt, clippy `-D warnings`, the dependency graph |
-| `desktop` | Linux, Windows, macOS | `cargo test --workspace`, with GPU goldens required on Linux. Linux also runs headless smokes: game, scene player, exported scene, editor, editor UI tests (`--ignored --test-threads=1`), Play here, standalone project |
+| `desktop` | Linux, Windows, macOS | `cargo test --workspace`, with GPU goldens required on Linux. Linux also runs `cargo test -p trino-platform-pc` with `TRINO_PC_TNL=cpu` (the PC's old CPU T&L path, #51) and headless smokes: game, scene player, exported scene, editor, editor UI tests (`--ignored --test-threads=1`), Play here, standalone project |
 | `hot-reload` | ubuntu | the dylib swap end to end |
 | `n64` | ubuntu-24.04 | builds the ROM in `trino-n64`, then runs `test n64` in the `trino-ares` image (self-test, the pixel-exact golden, and the perf gates: T&L counters equal `tests/perf/castle64_work.toml`, emulated times under `tests/perf/castle64_n64.toml`). On failure it uploads `tests/golden/n64/actual/` |
 | `n3ds` | `devkitpro/devkitarm` container | builds the `.3dsx`, then `build 3ds --selftest`, and uploads the result as an artifact |

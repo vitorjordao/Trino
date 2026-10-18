@@ -8,13 +8,14 @@
 //! first rule a draw fails, for `TRINO_FRAME`, the editor's budget HUD and
 //! `cargo xtask scene budget`.
 //!
-//! **Phase 1:** the PC backend still draws every mesh through the CPU path;
-//! these rules only decide and report ([`TnlStats::pc_gpu_draws`]), so the
-//! picture and the CPU work counters are those of the CPU path. The GPU path
-//! itself is Phase 2. The rules are permissive: a desktop GPU can do what the
-//! CPU path does, so a reject names only what the GPU path won't port yet
-//! (skeletons until Phase 3, water, the per-pixel lit surfaces) or what
-//! needs the CPU path's per-triangle order (blending).
+//! **Since Phase 2** the PC backend draws the accepted meshes on the GPU
+//! (WGSL vertex stage, resident vertex buffers, instanced draws), and the
+//! CPU path stays the oracle for everything else. The rules are permissive:
+//! a desktop GPU can do what the CPU path does (skeletons and smooth
+//! skinning included, since Phase 3), so a reject names only what the GPU
+//! path doesn't port (water, the per-pixel lit surfaces, a flat-shaded
+//! skeleton) or what needs the CPU path's per-triangle painter order
+//! (blending: a translucent tint, vertex alpha or a texture with alpha).
 //!
 //! The console simulation profiles (`SimProfile::N64` / `N3ds`) never take
 //! this path: they keep the CPU path and report the RSP / PICA200 splits.
@@ -30,10 +31,6 @@ use crate::render::ModelParams;
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
 pub enum PcGpuReject {
     // The mesh (decided once per mesh, [`pc_gpu_mesh_check`]).
-    /// A skeleton (rigid joints): the joint matrices reach WGSL in Phase 3.
-    Skinned,
-    /// Smooth skinning weights (`SKW2`): Phase 3 too.
-    Blended,
     /// No vertices or no triangles.
     Empty,
     // The draw.
@@ -42,33 +39,46 @@ pub enum PcGpuReject {
     /// A tint with alpha below 255, or vertex alpha below 255: blending
     /// follows the CPU path's per-triangle painter order.
     Translucent,
+    /// [`Shading::Flat`](crate::Shading::Flat) on a skeleton: a face
+    /// normal needs the three corners' posed positions, which a vertex
+    /// stage doesn't see (a static mesh carries its face normal instead).
+    FlatSkinned,
     /// Wholly outside the guard band or behind the near plane: the CPU
     /// path culls it (invisible work).
     Offscreen,
+    // Reported by the renderer, never by [`pc_gpu_check`] (it knows the
+    // lights, the textures and its own settings).
     /// Shaded per pixel by a local light, gloss or wetness: the lit
     /// pipeline's surface varyings come from the CPU path
-    /// ([`tessellate_surface`](super::tessellate_surface)). Reported by the
-    /// renderer, never by [`pc_gpu_check`] (which doesn't see the lights).
+    /// ([`tessellate_surface`](super::tessellate_surface)).
     PerPixelLit,
+    /// A texture with texels below full alpha: they blend, so the draw
+    /// keeps the CPU path's painter order (the budget can't see textures
+    /// and doesn't predict it).
+    TextureAlpha,
+    /// The GPU path is turned off (`TRINO_PC_TNL=cpu`,
+    /// `PcRenderer::set_hw_tnl(false)`): a draw it would have taken.
+    Disabled,
 }
 
 // `ALL` ends with the last variant: a new reason must join it.
-const _: () = assert!(PcGpuReject::PerPixelLit as usize + 1 == PcGpuReject::COUNT);
+const _: () = assert!(PcGpuReject::Disabled as usize + 1 == PcGpuReject::COUNT);
 
 impl PcGpuReject {
     /// Every reason, in [`PcGpuReject::index`] order.
     pub const ALL: [PcGpuReject; PcGpuReject::COUNT] = [
-        PcGpuReject::Skinned,
-        PcGpuReject::Blended,
         PcGpuReject::Empty,
         PcGpuReject::Water,
         PcGpuReject::Translucent,
+        PcGpuReject::FlatSkinned,
         PcGpuReject::Offscreen,
         PcGpuReject::PerPixelLit,
+        PcGpuReject::TextureAlpha,
+        PcGpuReject::Disabled,
     ];
 
     /// Reasons in all ([`PcGpuReject::ALL`]'s length).
-    pub const COUNT: usize = 7;
+    pub const COUNT: usize = 8;
 
     /// The reason's slot in a per-reason histogram (`[u32; COUNT]`).
     pub const fn index(self) -> usize {
@@ -78,39 +88,36 @@ impl PcGpuReject {
     /// A few words for tools (budget reports).
     pub const fn label(self) -> &'static str {
         match self {
-            PcGpuReject::Skinned => "skinned mesh",
-            PcGpuReject::Blended => "smooth skinning",
             PcGpuReject::Empty => "empty mesh",
             PcGpuReject::Water => "water surface",
             PcGpuReject::Translucent => "translucent",
+            PcGpuReject::FlatSkinned => "flat-shaded skeleton",
             PcGpuReject::Offscreen => "off screen",
             PcGpuReject::PerPixelLit => "per-pixel lit",
+            PcGpuReject::TextureAlpha => "texture alpha",
+            PcGpuReject::Disabled => "GPU T&L off",
         }
     }
 
     /// One word for `TRINO_FRAME` lines (`off_pc_gpu=translucent:3,...`).
     pub const fn key(self) -> &'static str {
         match self {
-            PcGpuReject::Skinned => "skinned",
-            PcGpuReject::Blended => "blended",
             PcGpuReject::Empty => "empty",
             PcGpuReject::Water => "water",
             PcGpuReject::Translucent => "translucent",
+            PcGpuReject::FlatSkinned => "flat_skinned",
             PcGpuReject::Offscreen => "offscreen",
             PcGpuReject::PerPixelLit => "per_pixel_lit",
+            PcGpuReject::TextureAlpha => "texture_alpha",
+            PcGpuReject::Disabled => "disabled",
         }
     }
 }
 
 /// Whether a mesh can ever take the PC's GPU T&L path (checked once, at
-/// register).
+/// register). Skeletons (rigid joints, `SKW2` smooth skinning) are fine
+/// since Phase 3: the joint matrices go up per draw.
 pub fn pc_gpu_mesh_check(mesh: &Mesh) -> Result<(), PcGpuReject> {
-    if mesh.joint_count() != 0 {
-        return Err(PcGpuReject::Skinned);
-    }
-    if mesh.has_blend() {
-        return Err(PcGpuReject::Blended);
-    }
     if mesh.vertex_count == 0 || mesh.index_count < 3 {
         return Err(PcGpuReject::Empty);
     }
@@ -134,6 +141,9 @@ pub fn pc_gpu_check(
     }
     if params.tint.a < 255 || !mesh.opaque {
         return Err(PcGpuReject::Translucent);
+    }
+    if params.shading == crate::Shading::Flat && mesh.joint_count() != 0 {
+        return Err(PcGpuReject::FlatSkinned);
     }
     // The CPU path culls a draw wholly outside its guard band or behind the
     // near plane (`tessellate_with`'s sphere test, the same arithmetic): do

@@ -310,6 +310,26 @@ fn read_png(path: &std::path::Path) -> (u32, u32, Vec<u8>) {
     (info.width, info.height, buf)
 }
 
+/// The frame's GPU T&L draws against the CPU path (`tnl_oracle`, issue #51),
+/// the side-by-side kept under `target/evidence/pc-gpu-tnl`. Returns the
+/// GPU draws (0 on a console profile).
+fn tnl_oracle(
+    r: &mut PcRenderer,
+    name: &str,
+    frame: impl FnMut(&mut PcRenderer) -> Vec<u8>,
+) -> u32 {
+    let Some(d) = trino_platform_pc::tnl_oracle::compare(r, frame) else {
+        return 0;
+    };
+    eprintln!("{name}: {d}");
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/evidence/pc-gpu-tnl");
+    std::fs::create_dir_all(&dir).unwrap();
+    let (w, h, img) = d.side_by_side();
+    write_png(&dir.join(format!("{name}.png")), w, h, &img);
+    d.assert_within(name);
+    d.gpu_draws
+}
+
 #[test]
 fn three_cards_match_the_golden_per_profile() {
     let _gpu = gpu();
@@ -369,6 +389,13 @@ fn three_cards_match_the_golden_per_profile() {
         if bad > 512 {
             write_png(&golden.join(format!("actual/{name}.png")), w, h, &img);
             panic!("{name}: {bad} channel values off by more than {tol}");
+        }
+        if profile == SimProfile::Native {
+            let gpu = tnl_oracle(&mut r, name, |r| frame(r, &cards, &wide));
+            assert_eq!(
+                gpu, 3,
+                "textured cards, with and without detail, on the GPU"
+            );
         }
     }
 }

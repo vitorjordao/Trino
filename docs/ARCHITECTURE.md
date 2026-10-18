@@ -111,22 +111,37 @@ palettes, flat shading, local lights, anything crossing the near plane); the 3DS
 
 The PC native profile (and the Web target after it, #47) gets the same kind of per-draw
 decision: `trino_core::render3d::pc_gpu_check` (with `pc_gpu_mesh_check` once per mesh)
-names, as a `PcGpuReject`, what a WGSL vertex stage won't take: skeletons and smooth
-skinning (until Phase 3), water, translucency (its per-triangle painter order) and
-per-pixel lit surfaces; offscreen draws count as culled
-([ADR 0016](adr/0016-pc-hardware-tnl.md)). **Phase 1 only decides and reports**: every
-draw is still drawn by the CPU path, so the picture and the T&L work counters are
-unchanged, and `TnlStats::pc_gpu_draws`/`pc_gpu_tris` count the draws the GPU path would
-take. The split shows in the PC's `TRINO_FRAME` line (`pc_gpu_draws=`, `off_pc_gpu=`),
-the editor's budget (`PC GPU 42/46 draws · …`) and `cargo xtask scene budget --platform
-pc --json`. The console profiles never take it.
+names, as a `PcGpuReject`, what the WGSL vertex stage won't take: water, translucency (its
+per-triangle painter order), flat-shaded skeletons, per-pixel lit surfaces and textures
+with transparent texels (the last two decided by the renderer); offscreen draws count as
+culled ([ADR 0016](adr/0016-pc-hardware-tnl.md)).
+
+An accepted draw costs no CPU vertex work: its mesh is resident on the GPU from
+`upload_mesh` (`renderer/gpu_tnl.rs`), and `shaders_tnl.wgsl` repeats the CPU path per
+vertex — model-view transform, rigid joints and `SKW2` skinning from the CPU's pose,
+Gouraud / Flat / Unlit, palette, tint, emissive, per-vertex fog — with the CPU path's
+depth (`1 − NEAR/z`) and near plane. At each batch flush the GPU draws sharing a mesh,
+texture, context and pose become one instanced call, whether they came from
+`draw_model_instances` or from separate `draw_model` calls. The rejected draws run the CPU
+T&L as before, split over worker threads past 2048 triangles (`renderer/cpu_tnl.rs`) with
+their output concatenated in draw order, so the triangle stream is the serial one.
+
+The CPU path stays the reference: `trino_platform_pc::tnl_oracle` draws a frame on both
+paths, and every native PC golden holds the GPU frame within 1/255 mean and 0.5% of
+pixels over 8/255 of the CPU frame. `TRINO_PC_TNL=cpu` (`PcRenderer::set_hw_tnl(false)`)
+puts every draw back on the CPU path. The counters are exclusive like the consoles':
+`TnlStats::pc_gpu_draws`/`pc_gpu_tris` for the GPU, `verts`/`emitted` for the CPU. The
+split shows in the PC's `TRINO_FRAME` line (`pc_gpu_draws=`, `off_pc_gpu=`), `cargo xtask
+scene budget` (each reason with its entities; `paths` in `--json`) and the editor (the
+Inspector's Render path row, clickable reasons, the Game view HUD). The console profiles
+never take it.
 
 `Renderer::draw_model_instances` (and `_with`, a palette table) draws many copies of one
 mesh in one call: a matrix, a tint multiplied over the call's and a palette index per
 `Instance`. The default implementation loops over `draw_model_matrix`, so the N64 and the
-3DS draw instances with no backend code; the PC counts the copies (`TnlStats::instanced`).
-The `instancing` self-test step holds one call to the separate draws' pixels and counters
-on PC, in ares and in Azahar.
+3DS draw instances with no backend code; the PC draws the accepted copies as one instanced
+call (`TnlStats::instanced` counts them). The `instancing` self-test step holds one call
+to the separate draws' pixels and counters on PC, in ares and in Azahar.
 
 ### 2D in the same pipeline
 

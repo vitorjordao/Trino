@@ -51,12 +51,11 @@ shipping a 3D game first**, then by cost:
 - **Web KTX2 textures (#52 phase 5, moved to #47)** (S, after `platform-web`). The web
   target's texture path: KTX2/Basis transcoded to what the browser's GPU samples, with
   `auto` and `min_psnr` deciding like the other targets (ADR 0017 §6).
-- **PC hardware T&L, phases 2–6 (#51, ADR 0016)** (L). Phase 1 (the instancing API,
-  `pc_gpu_check` and the reporting) is done; the native profile still draws on the CPU.
-  Next: resident mesh buffers and the WGSL vertex stage for static draws behind the
-  CPU-path oracle (2), rigid/`SKW2` skeletons and the instance ring (3), the parallel
-  CPU fallback (4), `TRINO_PC_TNL` and the Inspector's render-path row (5), the
-  measurements (6). The Web target (#47) reuses it.
+- **PC GPU T&L for the draws it still rejects (#51 follow-up, ADR 0016 §11)** (M).
+  Translucent draws (the painter order per triangle), water and per-pixel lit draws
+  stay on the CPU path. A per-pixel lit GPU path would compute the lit pipeline's
+  surface varyings in the vertex stage; translucency needs a sorted GPU path. The Web
+  target (#47) reuses the GPU path as it is.
 
 3. ~~**Console packaging for standalone projects**~~: **done** (2026-10-14, ADR 0008, the
    "Done — external console projects" table below).
@@ -233,6 +232,23 @@ Deviations: ETC1 is encoded by the pipeline for the PC preview and by `tex3ds` f
 console, so the blocks are alike, not byte-identical (the parity test bounds it). A8 is
 defined as white + alpha on every target, while the PICA200 samples it black; the shim
 enforces the engine's meaning.
+
+## Done — PC hardware T&L, phases 2–6: the GPU path, skeletons, instancing, the parallel CPU fallback, tooling, measurements (2026-10-18, branch `feat/51-pc-gpu-tnl-phases-2-6`, GitHub #51, ADR 0016 accepted)
+
+| Item | Evidence |
+|---|---|
+| WGSL vertex stage + resident meshes (`gpu_tnl.rs`, `shaders_tnl.wgsl`): Gouraud/Flat/Unlit, fog per vertex, tint, emissive, palette, detail layer; the CPU path's depth and near plane | `crates/platform-pc/tests/gpu_tnl.rs::static_draws_match_the_cpu_path` (oracle 0.474/255, 0% far); `gpu_tnl::tests::layouts_match_the_shader` |
+| The oracle on every native PC golden (`tnl_oracle::compare`, ≤ 1/255 mean, ≤ 0.5% over 8/255) | `ao_native` 0.003, `ao_mask` 0.006, `lights_native*` 0.000, `texture_filter_native` 0.000, `water_native` 0.000, `showcase_river` 0.252 (0.002% far), `solid_eleven_match_native` 0.000, `solid_eleven_teams_native` 0.070 (0.174% far); every golden unchanged |
+| Rigid and `SKW2` skeletons on the GPU (`FlatSkinned` the only skeleton reason) | `gpu_tnl.rs::animated_and_smooth_skinned_meshes_draw_on_the_gpu` (walk, crossfade, the SKW2 strip: 0.000/255, no re-upload) |
+| Automatic instancing (draws sharing mesh, texture, context, pose merged at each flush) | `gpu_tnl.rs::instanced_copies_are_a_few_draw_calls_and_the_same_pixels` (400 copies in ≤ 4 calls, one call = separate draws pixel for pixel) |
+| Rejects with reasons, `TextureAlpha` at upload | `gpu_tnl.rs::rejected_draws_stay_on_the_cpu_with_their_reason`, `gpu_tnl::tests::compressed_alpha_is_found` |
+| Parallel CPU fallback (`cpu_tnl.rs`, `TRINO_PC_TNL_THREADS`) | `cpu_tnl::tests::parallel_runs_emit_the_serial_stream` (2/3/8/64 workers = serial), `gpu_tnl.rs::the_parallel_cpu_fallback_draws_the_same_frame_on_any_worker_count` |
+| `TRINO_PC_TNL=cpu`, `set_hw_tnl`, `TRINO_POWER` | `gpu_tnl.rs::turning_the_gpu_path_off_restores_the_cpu_path`; the whole `trino-platform-pc` suite with `TRINO_PC_TNL=cpu` (a CI step) |
+| `FrameBudget::paths`, `scene budget` entity lists and `--json` paths, the editor's Render path row, clickable reasons, the HUD opening the budget | `xtask/tests/scene_budget.rs`; the kittest `platform_budget_shows_rsp_reasons_and_unseen_draws` with the layout audit at 960×600 and 1600×1000 |
+| Frame times, CPU vs GPU path | `xtask/tests/pc_tnl_bench.rs`, ADR 0016 §10: 2000 instanced robots 28.1 → 0.46 ms (RX 7800 XT, 1080p) and 40.5 → 6.0 ms (Radeon iGPU); Solid Eleven match 1.78 → 0.76 ms (RX 7800 XT) |
+
+Consoles: the core changed only in `render3d/pc.rs` (reasons the consoles never call) and
+docs; the console goldens and N64 perf gates run in CI's `n64` and `n3ds-emulator` jobs.
 
 ## Done — PC hardware T&L, phase 1: instancing API, `pc_gpu_check` and reporting (2026-10-17, branch `feat/51-pc-gpu-tnl`, GitHub #51, ADR 0016 draft)
 

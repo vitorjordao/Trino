@@ -199,12 +199,25 @@ fn pc_gpu_rules_reject_only_what_the_gpu_path_does_not_port() {
             "x = {x}"
         );
     }
-    // Skeletons and smooth skinning: Phase 3.
+    // Skeletons and smooth skinning take the GPU path since Phase 3; a
+    // flat-shaded skeleton doesn't (no face normal in a vertex stage).
     let rigged = rigged_cube();
+    let rigged = Mesh::from_tmdl(&rigged).unwrap();
+    assert_eq!(pc_gpu_mesh_check(&rigged), Ok(()));
+    let ahead = at(0.0);
     assert_eq!(
-        pc_gpu_mesh_check(&Mesh::from_tmdl(&rigged).unwrap()),
-        Err(PcGpuReject::Skinned)
+        pc_gpu_check(&ctx, &rigged, &ahead, &ModelParams::DEFAULT),
+        Ok(())
     );
+    let flat = ModelParams {
+        shading: trino_core::Shading::Flat,
+        ..ModelParams::DEFAULT
+    };
+    assert_eq!(
+        pc_gpu_check(&ctx, &rigged, &ahead, &flat),
+        Err(PcGpuReject::FlatSkinned)
+    );
+    assert_eq!(check(&ahead, &flat), Ok(()));
     // Every reason has a label and a key, in index order.
     for (i, r) in PcGpuReject::ALL.iter().enumerate() {
         assert_eq!(r.index(), i);

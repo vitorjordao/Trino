@@ -16,6 +16,7 @@ pub mod input;
 pub mod renderer;
 pub mod sim;
 pub mod system;
+pub mod tnl_oracle;
 
 pub use audio::PcAudio;
 pub use frame_report::FrameMeter;

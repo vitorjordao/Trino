@@ -241,6 +241,26 @@ fn shots(r: &PcRenderer, name: &str, img: &[u8]) {
     }
 }
 
+/// The frame's GPU T&L draws against the CPU path (`tnl_oracle`, issue #51),
+/// the side-by-side kept under `target/evidence/pc-gpu-tnl`. Returns the
+/// GPU draws (0 on a console profile).
+fn tnl_oracle(
+    r: &mut PcRenderer,
+    name: &str,
+    frame: impl FnMut(&mut PcRenderer) -> Vec<u8>,
+) -> u32 {
+    let Some(d) = trino_platform_pc::tnl_oracle::compare(r, frame) else {
+        return 0;
+    };
+    eprintln!("{name}: {d}");
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/evidence/pc-gpu-tnl");
+    std::fs::create_dir_all(&dir).unwrap();
+    let (w, h, img) = d.side_by_side();
+    write_png(&dir.join(format!("{name}.png")), w, h, &img);
+    d.assert_within(name);
+    d.gpu_draws
+}
+
 #[test]
 fn the_native_tier_darkens_contacts_and_creases_only() {
     let _gpu = gpu();
@@ -271,6 +291,8 @@ fn the_native_tier_darkens_contacts_and_creases_only() {
     // The cleared background: nothing to occlude, exactly unchanged.
     assert_eq!(at(&r, &off, 4, 4), at(&r, &on, 4, 4));
     golden(&r, &on, "ao_native", 4, 2048);
+    let gpu = tnl_oracle(&mut r, "ao_native", |r| frame(r, Some(Some(AO)), false));
+    assert!(gpu > 0, "the occluded scene's draws go to the GPU");
 }
 
 #[test]
@@ -383,6 +405,7 @@ fn views_force_it_on_or_show_the_mask() {
     let crease = px(&r, &mask, CREASE);
     assert!(crease[0] < 200, "crease in the mask: {crease:?}");
     golden(&r, &mask, "ao_mask", 4, 2048);
+    tnl_oracle(&mut r, "ao_mask", |r| frame(r, Some(Some(AO)), false));
 }
 
 #[test]

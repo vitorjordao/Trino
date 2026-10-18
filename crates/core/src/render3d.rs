@@ -1511,11 +1511,10 @@ pub struct TnlStats {
     pub gpu_draws: u32,
     /// Source triangles of those draws.
     pub gpu_tris: u32,
-    /// Draws the PC native profile's GPU T&L path takes ([`pc_gpu_check`]).
-    /// Phase 1 of issue #51: the path only decides, the CPU path still
-    /// draws them, so — unlike `rsp_draws` and `gpu_draws` — their work
-    /// **is** in the fields above. Zero on the consoles and the PC's console
-    /// profiles.
+    /// Draws the PC native profile's GPU T&L path took ([`pc_gpu_check`],
+    /// issue #51): like `rsp_draws` and `gpu_draws`, their work is not in
+    /// the fields above (it was during Phase 1, when the path only
+    /// decided). Zero on the consoles and the PC's console profiles.
     pub pc_gpu_draws: u32,
     /// Source triangles of those draws.
     pub pc_gpu_tris: u32,
@@ -1608,7 +1607,7 @@ fn clip_plane(
 /// (and on a screen-size change); [`tessellate_with`] takes it by reference.
 /// The values are the same expressions [`tessellate`] used to evaluate per
 /// draw, so the output is bit-identical.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub struct TnlContext {
     camera: Camera3,
     light: Light,

@@ -54,7 +54,7 @@ pub(super) fn label<'b, const V: usize>(
     if !template.is_empty() && !template.contains("{}") {
         let _ = buf.write_str(" ");
     }
-    match values.get(n.bind, item) {
+    match super::values::lookup(values, env.data, n.bind, item) {
         Some(UiValue::Int(v)) => {
             let _ = write!(buf, "{v}");
         }
@@ -114,10 +114,24 @@ impl<const N: usize> Ui<N> {
         renderer.ui_stats(self.stats);
     }
 
-    fn prepare(&mut self, renderer: &mut dyn Renderer, screen: &UiScreen<'_>, env: &UiEnv<'_>) {
+    /// Lay `screen` out when anything changed and scroll a focus set from
+    /// outside ([`set_focus_item`](Self::set_focus_item)) into view,
+    /// without drawing: a game reads [`rect_of_item`](Self::rect_of_item)
+    /// to draw its own art under the screen, then [`draw`](Self::draw)
+    /// (which lays out nothing more while the inputs stay the same).
+    pub fn prepare(&mut self, renderer: &mut dyn Renderer, screen: &UiScreen<'_>, env: &UiEnv<'_>) {
+        let measure: &dyn Renderer = renderer;
         if self.needs_layout(screen, env) {
-            let measure: &dyn Renderer = renderer;
             self.layout(screen, env, measure);
+        }
+        // A focus set from outside scrolls into view now, not a frame late.
+        if core::mem::take(&mut self.reveal)
+            && let Some(at) = self.focus_slot()
+        {
+            self.scroll_into_view(at);
+            if self.needs_layout(screen, env) {
+                self.layout(screen, env, measure);
+            }
         }
     }
 
@@ -214,9 +228,7 @@ impl<const N: usize> Ui<N> {
                     self.fill(r, bx, look.text);
                     let s1 = scale.max(1.0);
                     self.fill(r, shrink(bx, s1), Color::rgb(16, 18, 26));
-                    let on = self
-                        .values
-                        .get(n.bind, slot.item)
+                    let on = super::values::lookup(&self.values, env.data, n.bind, slot.item)
                         .is_some_and(|v| v.truthy());
                     if on {
                         self.fill(r, shrink(bx, 2.0 * s1), screen.theme.accent);
@@ -259,9 +271,7 @@ impl<const N: usize> Ui<N> {
                     let track = self
                         .track(slot.node, slot.item)
                         .unwrap_or_else(|| self.slider_track(rect, &n, lw + gap, scale));
-                    let value = self
-                        .values
-                        .get(n.bind, slot.item)
+                    let value = super::values::lookup(&self.values, env.data, n.bind, slot.item)
                         .and_then(|v| v.int())
                         .unwrap_or(min);
                     let t = if max > min {

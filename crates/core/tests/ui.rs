@@ -1761,3 +1761,188 @@ fn a_languages_font_remap_reaches_layout_and_draw() {
     ui.layout(&screen, &UiEnv::of(&r), &r as &dyn Renderer);
     assert_eq!(rect_of(&ui, &screen, "t").size.x, 12.0);
 }
+
+// ------------------------------------------------- game data (#95) ----
+
+/// A squad far past `MAX_VALUES`, answered by the game on demand.
+struct Squad {
+    names: Vec<String>,
+    lookups: std::cell::Cell<u32>,
+    revision: Option<u32>,
+}
+
+impl trino_core::ui::UiData for Squad {
+    fn value(&self, key: &str, item: u16) -> Option<trino_core::ui::UiValue> {
+        self.lookups.set(self.lookups.get() + 1);
+        match key {
+            "count" => Some(trino_core::ui::UiValue::Int(self.names.len() as i32)),
+            "name" => self
+                .names
+                .get(item as usize)
+                .map(|n| trino_core::ui::text_value(n)),
+            "star" => Some(trino_core::ui::UiValue::Bool(item.is_multiple_of(3))),
+            "title" => Some(trino_core::ui::text_value("SQUAD")),
+            _ => None,
+        }
+    }
+
+    fn revision(&self) -> Option<u32> {
+        self.revision
+    }
+}
+
+fn squad_screen() -> UiScreen<'static> {
+    let mut t = Tree::new();
+    t.open(root());
+    t.open(vstack(0));
+    t.leaf(UiNode {
+        id: "title",
+        bind: "title",
+        ..node(NodeKind::Text)
+    });
+    t.open(UiNode {
+        id: "scroll",
+        size: (Size::Px(100), Size::Px(50)),
+        ..node(NodeKind::Scroll {
+            dir: Dir::Vertical,
+            gap: 0,
+        })
+    });
+    t.open(UiNode {
+        id: "list",
+        bind: "count",
+        ..node(NodeKind::List {
+            dir: Dir::Vertical,
+            gap: 0,
+            max: 0,
+        })
+    });
+    t.open(UiNode {
+        id: "row",
+        bind: "name",
+        action: "pick",
+        size: (Size::Px(80), Size::Px(10)),
+        ..node(NodeKind::Button)
+    });
+    t.leaf(UiNode {
+        id: "star",
+        text: "*",
+        visible_if: "star",
+        anchor: Anchor::Right,
+        ..node(NodeKind::Text)
+    });
+    t.screen()
+}
+
+#[test]
+fn game_data_fills_lists_past_the_value_store_and_the_ui_keeps_precedence() {
+    let s = squad_screen();
+    let names: Vec<String> = (0..40).map(|i| format!("P{i}")).collect();
+    let data = Squad {
+        names: names.clone(),
+        lookups: std::cell::Cell::new(0),
+        revision: None,
+    };
+    let mut r = Rec::sized(320, 240);
+    let mut ui = Ui::<128>::new();
+    let env = env_of(&r).with_data(&data);
+    ui.draw(&mut r, &s, &env);
+    // 40 rows (more than the 24 values a Ui keeps), item values and
+    // per-item `visible_if` from the game; the 50 px box shows five.
+    let rows = ui
+        .slots()
+        .iter()
+        .filter(|sl| sl.item != trino_core::ui::NO_ITEM && s.node(sl.node as usize).id == "row")
+        .count();
+    assert_eq!(rows, 40);
+    let texts: Vec<String> = r.texts().into_iter().map(|t| t.0).collect();
+    assert_eq!(texts, ["SQUAD", "P0", "*", "P1", "P2", "P3", "*", "P4"]);
+    assert_eq!(ui.values().len(), 0, "nothing copied into the Ui");
+    // A value the Ui holds wins over the game's.
+    ui.set_text("title", "MINE");
+    r.calls.clear();
+    ui.draw(&mut r, &s, &env);
+    assert_eq!(r.texts()[0].0, "MINE");
+}
+
+#[test]
+fn game_data_without_a_revision_lays_out_every_draw_and_with_one_only_on_change() {
+    let s = squad_screen();
+    let mut data = Squad {
+        names: vec!["A".into(), "B".into()],
+        lookups: std::cell::Cell::new(0),
+        revision: None,
+    };
+    let mut r = Rec::sized(320, 240);
+    let mut ui = Ui::<64>::new();
+    let base = env_of(&r);
+    ui.draw(&mut r, &s, &base.with_data(&data));
+    // No revision: a change shows on the very next draw.
+    data.names.push("C".into());
+    r.calls.clear();
+    let base = env_of(&r);
+    ui.draw(&mut r, &s, &base.with_data(&data));
+    assert!(r.texts().iter().any(|t| t.0 == "C"));
+    // A revision: no layout (no lookups) while it stays.
+    data.revision = Some(7);
+    let base = env_of(&r);
+    ui.draw(&mut r, &s, &base.with_data(&data));
+    data.lookups.set(0);
+    let before = data.lookups.get();
+    data.names.push("D".into());
+    r.calls.clear();
+    let base = env_of(&r);
+    ui.draw(&mut r, &s, &base.with_data(&data));
+    let layout_lookups = data.lookups.get() - before;
+    assert!(
+        !r.texts().iter().any(|t| t.0 == "D"),
+        "the same revision keeps the layout"
+    );
+    data.revision = Some(8);
+    data.lookups.set(0);
+    r.calls.clear();
+    let base = env_of(&r);
+    ui.draw(&mut r, &s, &base.with_data(&data));
+    assert!(
+        r.texts().iter().any(|t| t.0 == "D"),
+        "a new revision lays out"
+    );
+    assert!(data.lookups.get() > layout_lookups);
+}
+
+#[test]
+fn a_cursor_the_game_keeps_focuses_a_list_row_scrolls_it_in_and_gives_its_rect() {
+    let s = squad_screen();
+    let data = Squad {
+        names: (0..20).map(|i| format!("P{i}")).collect(),
+        lookups: std::cell::Cell::new(0),
+        revision: None,
+    };
+    let mut r = Rec::sized(320, 240);
+    let mut ui = Ui::<128>::new();
+    // Before any layout: the next draw places the focus and reveals it.
+    assert!(ui.set_focus_item(&s, "row", 12));
+    assert!(!ui.set_focus_item(&s, "nope", 0));
+    let env = env_of(&r).with_data(&data);
+    ui.draw(&mut r, &s, &env);
+    assert_eq!(ui.focused(&s), Some(("row", 12)));
+    let texts: Vec<String> = r.texts().into_iter().map(|t| t.0).collect();
+    assert!(texts.contains(&"P12".to_string()), "scrolled in: {texts:?}");
+    assert!(!texts.contains(&"P0".to_string()), "{texts:?}");
+    // Its rect is on screen, inside the scroll box; a hidden row has none.
+    let (on, row) = ui.rect_of_item(&s, "row", 12).expect("visible row");
+    assert_eq!(on, Screen::Top);
+    let view = ui.rect_of(&s, "scroll").unwrap().1;
+    assert!(row.pos.y >= view.pos.y && row.pos.y + row.size.y <= view.pos.y + view.size.y);
+    assert_eq!(ui.rect_of_item(&s, "row", 0), None, "scrolled away");
+    assert!(
+        ui.rect_of_item(&s, "title", 3).is_some(),
+        "outside a list: its one copy"
+    );
+    // Back to the top: the first rows show again on the same draw.
+    ui.set_focus_item(&s, "row", 0);
+    r.calls.clear();
+    ui.draw(&mut r, &s, &env);
+    assert_eq!(r.texts()[1].0, "P0");
+    assert_eq!(ui.scroll_of(3).unwrap().0, 0.0);
+}

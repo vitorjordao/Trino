@@ -13,9 +13,10 @@
 //! - keep every text's ink inside the box it is printed on (the innermost
 //!   panel, button or row drawn before it that holds it).
 //!
-//! The text scale reaches the UI system's screens (the pause menu, which must
-//! draw differently at 200 %) and leaves the hand-drawn menus as they are
-//! (which must draw the same): those keep fixed layouts, see ADR 0027.
+//! The text scale reaches the UI system's screens (`ui_screen`: they must
+//! draw differently at 200 %, within each target's UI budget and with no
+//! text past its box by the UI's own count) and leaves the hand-drawn menus
+//! as they are (which must draw the same), see ADR 0027 §11 and issue #95.
 //!
 //! `cargo test -p xtask --test solid_eleven_menus -- --nocapture` prints
 //! the states, the screens reached and the busiest picture.
@@ -30,7 +31,7 @@ use solid_eleven::ui::i18n::Lang;
 use trino_core::text::BitmapFont;
 use trino_core::{
     Button, Caps, Color, FontId, Game, InputState, Material, ModelId, ModelParams, Rect, Renderer,
-    Screen, SpriteId, SpriteParams, TextAlign, TextParams, Transform3, Vec2,
+    Screen, SpriteId, SpriteParams, TextAlign, TextParams, Transform3, UiStats, Vec2,
 };
 
 struct Mute;
@@ -147,14 +148,23 @@ struct Recorder<'a> {
     rects: usize,
     glyphs: usize,
     missing: Vec<(char, String)>,
+    /// What the UI system reported for each screen it drew this frame.
+    ui: Vec<UiStats>,
 }
 
 impl<'a> Recorder<'a> {
     fn new(w: u16, h: u16, bottom: bool, fonts: &'a Fonts) -> Recorder<'a> {
+        // The target's own table (its family, safe area and UI budget) at
+        // the picture's size.
+        let base = match (w, h) {
+            (320, 240) => Caps::N64,
+            (400, 240) => Caps::N3DS,
+            _ => Caps::PC,
+        };
         let caps = Caps {
             screen_width: w,
             screen_height: h,
-            ..Caps::N64
+            ..base
         };
         Recorder {
             caps,
@@ -167,6 +177,7 @@ impl<'a> Recorder<'a> {
             rects: 0,
             glyphs: 0,
             missing: Vec::new(),
+            ui: Vec::new(),
         }
     }
 
@@ -193,6 +204,10 @@ impl Renderer for Recorder<'_> {
         self.layer = 0;
         self.rects = 0;
         self.glyphs = 0;
+        self.ui.clear();
+    }
+    fn ui_stats(&mut self, stats: UiStats) {
+        self.ui.push(stats);
     }
     fn draw_sprite(&mut self, _: SpriteId, _: Vec2, _: &SpriteParams) {}
     fn draw_model(&mut self, _: ModelId, _: &Transform3, _: Material, _: &ModelParams) {}
@@ -328,17 +343,33 @@ fn holds(outer: Rect, p: Vec2) -> bool {
 /// screen and layer that holds the middle of its ink and is at least as
 /// thick as the ink is tall both ways (a 1-unit rim or divider, a stat bar
 /// with its value over it, a crest's spans are not boxes).
+///
+/// A fill painted over where the text is by a later candidate is not its
+/// box (the toast's panel over a menu button, issue #95).
 fn container<'f>(fills: &'f [Fill], t: &Text, ink: Rect) -> Option<&'f Fill> {
     let mid = Vec2::new(ink.pos.x + ink.size.x * 0.5, ink.pos.y + ink.size.y * 0.5);
-    fills[..t.after]
+    let candidates: Vec<(usize, &Fill)> = fills[..t.after]
         .iter()
-        .filter(|f| {
+        .enumerate()
+        .filter(|(_, f)| {
             f.screen == t.screen
                 && f.layer == t.layer
                 && f.color.a > 0
                 && f.rect.size.y.min(f.rect.size.x) + 0.01 >= ink.size.y
                 && holds(f.rect, mid)
         })
+        .collect();
+    let covers = |outer: Rect, r: Rect| {
+        holds(outer, r.pos) && holds(outer, Vec2::new(r.pos.x + r.size.x, r.pos.y + r.size.y))
+    };
+    candidates
+        .iter()
+        .filter(|(i, _)| {
+            !candidates
+                .iter()
+                .any(|(j, later)| j > i && covers(later.rect, ink))
+        })
+        .map(|(_, f)| *f)
         .min_by(|a, b| {
             let area = |f: &Fill| f.rect.size.x * f.rect.size.y;
             area(a).total_cmp(&area(b))
@@ -410,21 +441,53 @@ fn check(g: &SolidElevenGame, fonts: &Fonts, path: &str, report: &mut Report) {
                 continue;
             }
             report.pictures += 1;
-            // Text scale reaches the UI system's screens (the pause menu)
-            // and leaves the hand-drawn ones as they are.
-            let texts: Vec<(String, Rect)> =
-                r.texts.iter().map(|t| (t.text.clone(), t.rect)).collect();
+            // Text scale reaches the UI system's screens (issue #95) and
+            // leaves the hand-drawn ones as they are.
+            // (The toast is a UI screen over any menu: it grows anywhere.)
+            let toast_text = g
+                .toast
+                .map(|t| solid_eleven::ui::i18n::tr(lang, t.text).to_string());
+            let texts: Vec<(String, Rect)> = r
+                .texts
+                .iter()
+                .filter(|t| toast_text.as_deref() != Some(t.text.as_str()))
+                .map(|t| (t.text.clone(), t.rect))
+                .collect();
             let key = (name, lang);
+            let scene = scene_name(g.scene);
             if text_scale == TEXT_SCALES[0] {
                 report.at_100.insert(key, texts);
             } else if let Some(base) = report.at_100.get(&key) {
                 let changed = base != &texts;
-                if g.scene == Scene::Pause {
-                    report.pause_grew |= changed;
+                if ui_screen(&g) {
+                    if changed {
+                        report.grew.insert(scene.clone());
+                    }
                 } else if changed {
                     report.problems.push(format!(
                         "a hand-drawn screen changed with the text scale: {at}"
                     ));
+                }
+            }
+            // The UI system's own report: within the target's budget, every
+            // node laid out, no text past its box.
+            let caps = *r.caps();
+            for st in &r.ui {
+                if st.nodes > caps.max_ui_nodes || st.draws > caps.max_ui_draws {
+                    report.problems.push(format!(
+                        "over the UI budget ({} nodes of {}, {} draws of {}): {at}",
+                        st.nodes, caps.max_ui_nodes, st.draws, caps.max_ui_draws
+                    ));
+                }
+                if st.dropped > 0 {
+                    report
+                        .problems
+                        .push(format!("{} UI nodes not laid out: {at}", st.dropped));
+                }
+                if st.overflow > 0 {
+                    report
+                        .problems
+                        .push(format!("{} UI texts past their box: {at}", st.overflow));
                 }
             }
             for (c, text) in &r.missing {
@@ -525,12 +588,24 @@ fn check(g: &SolidElevenGame, fonts: &Fonts, path: &str, report: &mut Report) {
 /// The text scales every state is drawn at (`AccessSettings::text_scale`).
 const TEXT_SCALES: [u8; 2] = [100, 200];
 
+/// A scene's name without its fields.
+fn scene_name(s: Scene) -> String {
+    format!("{s:?}").split(' ').next().unwrap().to_string()
+}
+
+/// The screens drawn by the engine's UI system (issue #95): they must grow
+/// with the text scale, and the box check holds them at 200 %.
+fn ui_screen(g: &SolidElevenGame) -> bool {
+    matches!(g.scene, Scene::Pause | Scene::Settings)
+}
+
 #[derive(Default)]
 struct Report {
     /// The texts of the state being checked at 100 %, per picture.
     at_100: HashMap<(&'static str, Lang), Vec<(String, Rect)>>,
-    /// The pause menu drew differently at 200 % (the text scale reached it).
-    pause_grew: bool,
+    /// The UI screens that drew differently at 200 % (the text scale
+    /// reached them).
+    grew: HashSet<String>,
     states: usize,
     pictures: usize,
     problems: Vec<String>,
@@ -687,10 +762,12 @@ fn every_menu_state_draws_cleanly_in_every_language_and_size() {
         "busiest N64 picture: {} rects + glyphs ({})",
         report.busiest.0, report.busiest.1
     );
-    assert!(
-        report.pause_grew,
-        "the pause menu drew the same at every text scale"
-    );
+    for want in ["Pause", "Settings"] {
+        assert!(
+            report.grew.contains(want),
+            "{want} (a UI screen) drew the same at every text scale"
+        );
+    }
     for want in [
         "Title", "Quick", "PickClub", "Club", "Table", "Teams", "Edit", "Market", "Settings",
         "Controls", "Confirm", "Match", "Pause", "Trophy",

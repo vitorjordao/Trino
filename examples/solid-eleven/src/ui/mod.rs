@@ -17,7 +17,16 @@ pub mod i18n;
 pub mod pause_gen {
     include!("pause_gen.rs");
 }
+pub mod scr;
 pub mod screens;
+/// The settings screen (`ui/settings.ui.ron`, issue #95).
+pub mod settings_gen {
+    include!("settings_gen.rs");
+}
+/// The toast over the menus (`ui/toast.ui.ron`).
+pub mod toast_gen {
+    include!("toast_gen.rs");
+}
 
 use trino_core::{Color, FontId, Rect, Renderer, TextAlign, TextParams, Vec2};
 

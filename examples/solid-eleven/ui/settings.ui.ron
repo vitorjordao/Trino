@@ -1,0 +1,121 @@
+// Solid Eleven's settings (issue #95): language, difficulty, half length,
+// keeper, graphics (PC) and the controls page. The game keeps the cursor
+// and the values; the rows grow with the player's text scale and stack
+// their label over their value at 150 % and up (`big`). Shipped as static
+// Rust:
+//   cargo xtask ui export examples/solid-eleven/ui/settings.ui.ron examples/solid-eleven/src/ui/settings_gen.rs
+// `preview` is what `ui check`, `access check` and the editor lay out.
+(
+    version: 1,
+    name: "se_settings",
+    on_back: "back",
+    theme: (
+        font: "fonts/se_ui",
+        text: Some((236, 240, 255, 255)),
+        dim: Some((150, 160, 196, 255)),
+        panel: Some((16, 20, 46, 230)),
+        button: Some((16, 20, 46, 230)),
+        button_text: Some((236, 240, 255, 255)),
+        focus: Some((30, 60, 130, 235)),
+        focus_text: Some((236, 240, 255, 255)),
+        accent: Some((40, 210, 255, 255)),
+        pressed: Some((50, 110, 240, 255)),
+    ),
+    preview: {
+        "rows": Int(6),
+        "small": Bool(true),
+        "label": Text("DIFICULDADE"),
+        "value": Text("< PORTUGUÊS >"),
+        "btn.a": Text("ENTER"),
+        "btn.b": Text("ESC"),
+    },
+    root: (
+        children: [
+            (kind: Rect(), anchor: Fill, bleed: true, color: Some((6, 8, 20, 170))),
+            (
+                kind: Stack(gap: 6, align: Stretch),
+                anchor: StretchCenter,
+                size: (Fill, Fill),
+                max: (320, 0),
+                children: [
+                    (
+                        kind: Stack(dir: Horizontal, gap: 4, align: Center),
+                        id: "header",
+                        min: (200, 22),
+                        padding: (0, 3, 8, 3),
+                        children: [
+                            (kind: Button, id: "back", text: "<", on_click: "back", min: (20, 16), color: Some((40, 210, 255, 0)), padding: (4, 1, 4, 1)),
+                            (kind: Text, key: "settings", text: "SETTINGS"),
+                        ],
+                    ),
+                    (
+                        kind: Scroll(gap: 4),
+                        size: (Fill, Fill),
+                        padding: (24, 0, 24, 0),
+                        children: [
+                            (
+                                kind: List(gap: 4, max: 8),
+                                bind: "rows",
+                                size: (Fill, Fit),
+                                children: [
+                                    (
+                                        kind: Overlay,
+                                        size: (Fill, Fit),
+                                        children: [
+                                            (kind: Button, id: "row", on_click: "row", anchor: Fill, size: (Fill, Fill)),
+                                            (
+                                                kind: Stack(dir: Horizontal, justify: SpaceBetween, align: Center),
+                                                size: (Fill, Fit),
+                                                min: (0, 22),
+                                                padding: (8, 3, 8, 3),
+                                                visible_if: "small",
+                                                children: [
+                                                    (kind: Text, bind: "label", text: "{}", color: Some((150, 160, 196, 255))),
+                                                    (kind: Text, bind: "value", text: "{}"),
+                                                ],
+                                            ),
+                                            (
+                                                kind: Stack(gap: 2),
+                                                size: (Fill, Fit),
+                                                padding: (8, 3, 8, 3),
+                                                visible_if: "big",
+                                                children: [
+                                                    (kind: Text, bind: "label", text: "{}", color: Some((150, 160, 196, 255))),
+                                                    (kind: Text, bind: "value", text: "{}", anchor: Right),
+                                                ],
+                                            ),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                        ],
+                    ),
+                    (
+                        kind: Stack(dir: Horizontal, gap: 4),
+                        padding: (6, 0, 0, 3),
+                        children: [
+                            (
+                                kind: Stack(dir: Horizontal, gap: 3, align: Center),
+                                id: "hint_a",
+                                padding: (2, 2, 5, 2),
+                                children: [
+                                    (kind: Rect(), color: Some((70, 210, 90, 255)), padding: (3, 0, 3, 0), min: (11, 0), children: [(kind: Text, bind: "btn.a", text: "{}", color: Some((18, 22, 52, 255)), anchor: Center)]),
+                                    (kind: Text, key: "select", text: "SELECT"),
+                                ],
+                            ),
+                            (
+                                kind: Stack(dir: Horizontal, gap: 3, align: Center),
+                                id: "hint_b",
+                                padding: (2, 2, 5, 2),
+                                children: [
+                                    (kind: Rect(), color: Some((230, 50, 70, 255)), padding: (3, 0, 3, 0), min: (11, 0), children: [(kind: Text, bind: "btn.b", text: "{}", color: Some((18, 22, 52, 255)), anchor: Center)]),
+                                    (kind: Text, key: "back", text: "BACK"),
+                                ],
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+        ],
+    ),
+)

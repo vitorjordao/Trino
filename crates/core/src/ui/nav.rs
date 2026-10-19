@@ -415,7 +415,7 @@ impl<const N: usize> Ui<N> {
     }
 
     /// Scroll the boxes around slot `at` so it shows.
-    fn scroll_into_view(&mut self, at: usize) {
+    pub(super) fn scroll_into_view(&mut self, at: usize) {
         let r = self.rects[at];
         let mut p = self.slots[at].parent;
         while p != NONE {

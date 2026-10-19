@@ -1,6 +1,12 @@
 //! The values a screen shows and edits, by key: what `bind`, `visible_if`
 //! and `enabled_if` read. The game writes them (`ui.set("money", 1200)`),
 //! toggles and sliders write them back. Fixed capacity, no allocation.
+//!
+//! A game with more to show than [`MAX_VALUES`](super::MAX_VALUES) (a
+//! squad, a league table, a market) answers the screen's keys itself
+//! instead: a [`UiData`] passed with
+//! [`UiEnv::with_data`](super::UiEnv::with_data) (issue #95). A value the
+//! [`Ui`](super::Ui) holds wins over the game's.
 
 use crate::asset::asset_id;
 use crate::text::TextBuf;
@@ -134,6 +140,50 @@ impl<const V: usize> UiValues<V> {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+}
+
+/// Values a game gives a screen when it asks for them, by key and list
+/// item ([`NO_ITEM`] outside a list): nothing stored, no capacity.
+pub trait UiData {
+    fn value(&self, key: &str, item: u16) -> Option<UiValue>;
+
+    /// `Some`: changes whenever any value does, and the screen lays out
+    /// again only then. `None` (the default): the screen lays out on every
+    /// draw, so a value can never go stale (a few float operations per
+    /// node: menus afford it on every target).
+    fn revision(&self) -> Option<u32> {
+        None
+    }
+}
+
+/// No game data: only the [`Ui`](super::Ui)'s own values.
+pub struct NoData;
+
+impl UiData for NoData {
+    fn value(&self, _key: &str, _item: u16) -> Option<UiValue> {
+        None
+    }
+
+    fn revision(&self) -> Option<u32> {
+        Some(0)
+    }
+}
+
+/// `key`'s value for list item `item`: the store's (its item, else its
+/// screen value), else the game's (the item, else the screen's).
+pub(crate) fn lookup<const V: usize>(
+    values: &UiValues<V>,
+    data: &dyn UiData,
+    key: &str,
+    item: u16,
+) -> Option<UiValue> {
+    values.get(key, item).or_else(|| {
+        data.value(key, item).or_else(|| {
+            (item != NO_ITEM)
+                .then(|| data.value(key, NO_ITEM))
+                .flatten()
+        })
+    })
 }
 
 /// A text value from `s` (cut to [`TEXT_LEN`] bytes on a character).

@@ -103,14 +103,14 @@ use crate::game::menu::Hits;
 pub const HIT_BACK: u8 = 254;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Btn {
+pub(crate) enum Btn {
     A,
     B,
     X,
     Y,
 }
 
-fn btn_prompt(pad: bool, b: Btn) -> (&'static str, Color) {
+pub(crate) fn btn_prompt(pad: bool, b: Btn) -> (&'static str, Color) {
     if pad {
         match b {
             Btn::A => ("A", pal::GREEN),
@@ -279,21 +279,32 @@ pub fn draw(g: &mut SolidElevenGame, r: &mut dyn Renderer) {
         }
     }
     if let Some(t) = g.toast {
-        let mut ui = Ui::new(r, screen);
-        let s = tr(lang, t.text);
-        let w = ui.measure(s, Size::Small) + 24.0;
-        let c = if t.good { pal::LIME } else { pal::RED };
-        ui.slant(
-            Rect::new(160.0 - w * 0.5, 196.0, w, 16.0),
-            Color::rgba(10, 12, 30, 235),
-            4.0,
-        );
-        ui.slant_border(Rect::new(160.0 - w * 0.5, 196.0, w, 16.0), c, 4.0, 1.0);
-        ui.text(160.0, 198.0, s, c, Size::Small, TextAlign::Center);
+        toast(g, r, t, lang);
     }
     if r.on_screen(Screen::Bottom) {
         bottom(g, r);
     }
+}
+
+/// The toast: a UI screen over the menu, at the player's text scale.
+fn toast(g: &mut SolidElevenGame, r: &mut dyn Renderer, t: crate::game::app::Toast, lang: Lang) {
+    use super::scr::{flag, txt};
+    struct Toast(crate::game::app::Toast, Lang);
+    impl trino_core::ui::UiData for Toast {
+        fn value(&self, key: &str, _: u16) -> Option<trino_core::ui::UiValue> {
+            match key {
+                "good" => flag(self.0.good),
+                "bad" => flag(!self.0.good),
+                "text" => txt(tr(self.1, self.0.text)),
+                _ => None,
+            }
+        }
+    }
+    let data = Toast(t, lang);
+    let env = trino_core::UiEnv::of(r)
+        .with_access(&g.access)
+        .with_data(&data);
+    g.toast_ui.draw(r, &super::toast_gen::SCREEN, &env);
 }
 
 fn idle_anim(t: f32) -> AnimState {
@@ -2061,12 +2072,12 @@ fn market(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
 fn settings(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
     let lang = g.settings.lang;
     let pad = g.pad_layout();
-    let mut ui = Ui::new(r, screen);
-    ui.fill(
-        Rect::new(-200.0, 0.0, 720.0, 240.0),
-        Color::rgba(6, 8, 20, 170),
-    );
     if g.scene == Scene::Confirm {
+        let mut ui = Ui::new(r, screen);
+        ui.fill(
+            Rect::new(-200.0, 0.0, 720.0, 240.0),
+            Color::rgba(6, 8, 20, 170),
+        );
         header(&mut ui, &mut g.hits, tr(lang, S::Exit), true);
         ui.panel(Rect::new(70.0, 80.0, 180.0, 70.0), pal::PINK);
         ui.text(
@@ -2117,8 +2128,37 @@ fn settings(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
         );
         return;
     }
-    header(&mut ui, &mut g.hits, tr(lang, S::Settings), true);
+    let screen = &super::settings_gen::SCREEN;
+    let rows = SolidElevenGame::settings_rows();
+    super::scr::show(
+        g,
+        r,
+        screen,
+        Some(("row", g.cur.settings as u16)),
+        |g, key, item| settings_value(g, rows, key, item),
+        |_, ui, r| super::scr::chrome(ui, screen, r),
+    );
+    for k in 0..rows.len() {
+        super::scr::hit(g, screen, "row", k as u16, k as u8);
+    }
+    super::scr::back_hits(g, screen);
+}
+
+/// The settings screen's values: a row's label and its value between the
+/// arrows that change it.
+fn settings_value(
+    g: &SolidElevenGame,
+    rows: &[SettingRow],
+    key: &str,
+    item: u16,
+) -> Option<trino_core::ui::UiValue> {
+    use super::scr::{int, txt};
+    let lang = g.settings.lang;
     let st = g.settings;
+    if key == "rows" {
+        return int(rows.len() as i32);
+    }
+    let row = rows.get(item as usize)?;
     let mut mins = TextBuf::<12>::new();
     tr_fmt(
         lang,
@@ -2126,87 +2166,46 @@ fn settings(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
         &[Arg::int("n", st.half_mins as i64)],
         &mut mins,
     );
-    let rows = SolidElevenGame::settings_rows();
-    for (k, row) in rows.iter().enumerate() {
-        let (label, value): (S, &str) = match row {
-            SettingRow::Language => (S::Language, st.lang.name()),
-            SettingRow::Difficulty => (
-                S::Difficulty,
-                tr(
-                    lang,
-                    [S::Easy, S::Normal, S::Hard][st.difficulty as usize % 3],
-                ),
+    let (label, value): (S, &str) = match row {
+        SettingRow::Language => (S::Language, st.lang.name()),
+        SettingRow::Difficulty => (
+            S::Difficulty,
+            tr(
+                lang,
+                [S::Easy, S::Normal, S::Hard][st.difficulty as usize % 3],
             ),
-            SettingRow::Length => (S::Length, mins.as_str()),
-            SettingRow::Keeper => (
-                S::Keeper,
-                tr(lang, if st.keeper { S::KeeperYou } else { S::KeeperAi }),
+        ),
+        SettingRow::Length => (S::Length, mins.as_str()),
+        SettingRow::Keeper => (
+            S::Keeper,
+            tr(lang, if st.keeper { S::KeeperYou } else { S::KeeperAi }),
+        ),
+        SettingRow::Graphics => (
+            S::Graphics,
+            tr(
+                lang,
+                if st.graphics == 0 {
+                    S::GfxMax
+                } else {
+                    S::GfxRetro
+                },
             ),
-            SettingRow::Graphics => (
-                S::Graphics,
-                tr(
-                    lang,
-                    if st.graphics == 0 {
-                        S::GfxMax
-                    } else {
-                        S::GfxRetro
-                    },
-                ),
-            ),
-            SettingRow::Controls => (S::Controls, tr(lang, S::ControlsSub)),
-        };
-        let y = 40.0 + k as f32 * 26.0;
-        let sel = g.cur.settings == k;
-        let rr = Rect::new(40.0, y, 240.0, 22.0);
-        ui.fill(
-            rr,
-            if sel {
-                Color::rgba(30, 60, 130, 235)
+        ),
+        SettingRow::Controls => (S::Controls, tr(lang, S::ControlsSub)),
+    };
+    match key {
+        "label" => txt(tr(lang, label)),
+        "value" => {
+            let mut b = buf();
+            if *row == SettingRow::Controls {
+                let _ = write!(b, "{value}  >");
             } else {
-                pal::PANEL
-            },
-        );
-        ui.border(
-            rr,
-            if sel {
-                pal::CYAN
-            } else {
-                Color::rgb(50, 60, 100)
-            },
-            1.0,
-        );
-        ui.text(
-            48.0,
-            y + 5.0,
-            tr(lang, label),
-            pal::DIM,
-            Size::Small,
-            TextAlign::Left,
-        );
-        let mut b = buf();
-        if *row == SettingRow::Controls {
-            let _ = write!(b, "{value}  >");
-        } else {
-            let _ = write!(b, "<  {value}  >");
+                let _ = write!(b, "<  {value}  >");
+            }
+            txt(b.as_str())
         }
-        ui.text(
-            272.0,
-            y + 5.0,
-            b.as_str(),
-            pal::INK,
-            Size::Small,
-            TextAlign::Right,
-        );
-        let hit = ui.rect(rr);
-        g.hits.add(hit, Screen::Top, k as u8);
+        _ => None,
     }
-    footer(
-        &mut ui,
-        &mut g.hits,
-        pad,
-        lang,
-        &[(Btn::A, S::Select), (Btn::B, S::Back)],
-    );
 }
 
 // ------------------------------------------------------------------ report

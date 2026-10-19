@@ -8,7 +8,7 @@
 //! leave gaps.
 
 use super::node::{Align, AxisAnchor, Dir, ImageFit, Justify, NodeKind, Overflow, Scaling, Size};
-use super::values::NO_ITEM;
+use super::values::{NO_ITEM, lookup};
 use super::{
     Frame, Insets, MAX_DEPTH, MAX_SCROLLS, NONE, ScrollBox, Slot, TextMeasure, Ui, UiEnv, UiNode,
     UiScreen, UiStats, flags,
@@ -228,7 +228,7 @@ impl<const N: usize> Ui<N> {
                 ^ env.access.text_scale.to_bits().rotate_left(13)
                 ^ (env.access.high_contrast as u32) << 31,
             env.strings.revision(),
-            self.values.revision(),
+            self.values.revision() ^ env.data.revision().unwrap_or(0).rotate_left(11),
             scroll,
             (env.safe[0].left as u32) << 24
                 ^ (env.safe[0].top as u32) << 16
@@ -240,6 +240,7 @@ impl<const N: usize> Ui<N> {
     /// Whether [`draw`](Ui::draw) must lay out again.
     pub(super) fn needs_layout(&self, screen: &UiScreen<'_>, env: &UiEnv<'_>) -> bool {
         !self.laid_out
+            || env.data.revision().is_none()
             || self.name != Some(crate::asset::asset_id(screen.name))
             || self.layout_key(screen, env) != self.key
     }
@@ -256,10 +257,7 @@ impl<M: TextMeasure + ?Sized, const N: usize> Solver<'_, '_, '_, M, N> {
     fn visible(&self, n: &UiNode<'_>, item: u16) -> bool {
         n.visible_on.contains(self.env.family)
             && (n.visible_if.is_empty()
-                || self
-                    .ui
-                    .values
-                    .get(n.visible_if, item)
+                || lookup(&self.ui.values, self.env.data, n.visible_if, item)
                     .is_some_and(|v| v.truthy()))
     }
 
@@ -319,10 +317,7 @@ impl<M: TextMeasure + ?Sized, const N: usize> Solver<'_, '_, '_, M, N> {
         let NodeKind::List { max, .. } = n.kind else {
             return 0;
         };
-        let want = self
-            .ui
-            .values
-            .get(n.bind, item)
+        let want = lookup(&self.ui.values, self.env.data, n.bind, item)
             .and_then(|v| v.int())
             .unwrap_or(0)
             .max(0) as usize;
@@ -526,15 +521,18 @@ impl<M: TextMeasure + ?Sized, const N: usize> Solver<'_, '_, '_, M, N> {
         };
         let n = self.screen.node(i);
         let mut f = 0u8;
-        if clip.is_some_and(|c| !inside(&c, &rect)) {
+        // A node a scroll box cuts is not drawn, nor what it holds: a row
+        // shows whole or not at all. A list (or a nested scroll box)
+        // without a fill is only the rows' frame, longer than the box by
+        // design: its rows decide one by one (issue #95).
+        let frame =
+            matches!(n.kind, NodeKind::Scroll { .. } | NodeKind::List { .. }) && n.color.is_none();
+        if !frame && clip.is_some_and(|c| !inside(&c, &rect)) {
             f |= flags::CLIPPED;
         }
         if n.kind.is_focusable() {
             let enabled = n.enabled_if.is_empty()
-                || self
-                    .ui
-                    .values
-                    .get(n.enabled_if, item)
+                || lookup(&self.ui.values, self.env.data, n.enabled_if, item)
                     .is_some_and(|v| v.truthy());
             f |= if enabled {
                 flags::FOCUSABLE

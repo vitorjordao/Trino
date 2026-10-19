@@ -292,6 +292,13 @@ pub struct SolidElevenGame {
     sub_asked: bool,
     /// The pause menu's focus (a UI screen, `ui/pause.ui.ron`).
     pub pause_ui: trino_core::Ui<16>,
+    /// The menu screen up (one at a time): laid out by the engine
+    /// (`ui/*.ui.ron`, issue #95), showing the game's cursors.
+    pub menu_ui: crate::ui::scr::MenuUi,
+    /// Counts menu frames: a screen lays out once a frame.
+    pub menu_frame: u32,
+    /// The toast over the menus (`ui/toast.ui.ron`).
+    pub toast_ui: trino_core::Ui<8>,
     /// The PC host's bindings (the controls page).
     pub peek: InputPeek,
     /// For the host after this frame.
@@ -355,6 +362,9 @@ impl SolidElevenGame {
             spin: 0.0,
             hits: Hits::default(),
             pause_ui: trino_core::Ui::new(),
+            menu_ui: trino_core::Ui::new(),
+            menu_frame: 0,
+            toast_ui: trino_core::Ui::new(),
             repeat: Repeat::default(),
             prev: InputState::default(),
             save_dirty: false,
@@ -491,6 +501,7 @@ impl SolidElevenGame {
     /// One frame of the menus and the match.
     fn step(&mut self, input: &InputState, audio: &mut dyn Audio, dt: f32) {
         self.time += dt;
+        self.menu_frame = self.menu_frame.wrapping_add(1);
         if let Some(t) = &mut self.toast {
             t.left -= dt;
             if t.left <= 0.0 {

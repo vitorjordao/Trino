@@ -312,13 +312,38 @@ fn ui_export_writes_static_code_and_the_committed_exports_are_fresh() {
     let fresh = std::fs::read_to_string(&out).unwrap();
     assert_eq!(r["bytes"], fresh.len());
     assert!(fresh.contains("pub static SCREEN"), "{fresh}");
-    let committed =
-        std::fs::read_to_string(root().join("examples/solid-eleven/src/ui/pause_gen.rs")).unwrap();
-    assert!(
-        committed == fresh,
-        "examples/solid-eleven/src/ui/pause_gen.rs is stale: run `cargo xtask ui export \
-         examples/solid-eleven/ui/pause.ui.ron examples/solid-eleven/src/ui/pause_gen.rs`"
-    );
+    // Every Solid Eleven screen (issue #95) ships as `src/ui/<name>_gen.rs`:
+    // none may be stale.
+    let mut screens = 0;
+    for entry in std::fs::read_dir(root().join("examples/solid-eleven/ui")).unwrap() {
+        let path = entry.unwrap().path();
+        let Some(name) = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .and_then(|n| n.strip_suffix(".ui.ron"))
+        else {
+            continue;
+        };
+        let out = tmp.path().join(format!("{name}_gen.rs"));
+        let o = xtask(&[
+            "ui",
+            "export",
+            path.to_str().unwrap(),
+            out.to_str().unwrap(),
+        ]);
+        assert!(o.status.success(), "{name}: {}", text(&o.stderr));
+        let fresh = std::fs::read_to_string(&out).unwrap();
+        let gen_path = format!("examples/solid-eleven/src/ui/{name}_gen.rs");
+        let committed = std::fs::read_to_string(root().join(&gen_path))
+            .unwrap_or_else(|_| panic!("{gen_path} is missing"));
+        assert!(
+            committed == fresh,
+            "{gen_path} is stale: run `cargo xtask ui export \
+             examples/solid-eleven/ui/{name}.ui.ron {gen_path}`"
+        );
+        screens += 1;
+    }
+    assert!(screens >= 3, "{screens} Solid Eleven screens");
     // A broken screen exports nothing.
     let bad = tmp.path().join("bad.rs");
     let o = xtask(&["ui", "export", &fixture("broken"), bad.to_str().unwrap()]);

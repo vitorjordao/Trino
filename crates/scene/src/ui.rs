@@ -1107,7 +1107,11 @@ pub fn validate(def: &ScreenDef) -> Vec<Issue> {
             _ => {}
         }
         let mut warn = |m: String| out.push(Issue::new(Level::Warning, at, m));
+        // A Button filling its parent both ways is a row's backdrop (the
+        // focus and the tap) under sibling texts (issue #95): no label.
+        let backdrop = n.kind == Kind::Button && n.size == (Size::Fill, Size::Fill);
         if matches!(n.kind, Kind::Text | Kind::Button)
+            && !backdrop
             && n.text.is_empty()
             && n.key.is_empty()
             && n.bind.is_empty()

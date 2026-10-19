@@ -45,6 +45,7 @@ pub mod render;
 pub mod render3d;
 pub mod save;
 pub mod scene;
+pub mod shadow;
 pub mod text;
 pub mod tilemap;
 pub mod vis;
@@ -92,6 +93,10 @@ pub use render3d::{
     TnlStats, tessellate, tessellate_surface, tessellate_with,
 };
 pub use scene::{BakedScene, LodLevel, LodPick, Lods, SceneNode, Tags};
+pub use shadow::{
+    MAX_SHADOW_PLANES, ShadowCast, ShadowFrame, ShadowPlane, ShadowSettings, ShadowStats,
+    ShadowTier,
+};
 pub use text::{BitmapFont, GlyphIndex, TextBuf};
 pub use tilemap::{TILE_SIZE, Tilemap, TilemapError};
 pub use vis::{CellGroups, Cells, MAX_CELLS, NO_CELL, Portal, VisVolume};

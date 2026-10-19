@@ -10,7 +10,7 @@ use trino_scene::{
 
 #[test]
 fn requires_defaults_to_boot_and_round_trips() {
-    assert_eq!(SCENE_VERSION, 6);
+    assert!(SCENE_VERSION >= 6, "`requires` arrived in v6");
     assert_eq!(Scene::new("x").requires, ["boot"]);
     // Every older file needs only boot, as it always did.
     for v in 1..=5 {
@@ -29,7 +29,7 @@ fn requires_defaults_to_boot_and_round_trips() {
     let text = s.to_ron();
     // ron's pretty printer ends lines in `\r\n` on Windows.
     let lf = text.replace("\r\n", "\n");
-    assert!(lf.contains("version: 6"), "{text}");
+    assert!(lf.contains("version: 7"), "{text}");
     assert!(
         lf.contains("requires: [\n        \"boot\",\n        \"castle\",\n    ],"),
         "{text}"

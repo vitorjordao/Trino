@@ -32,6 +32,7 @@ pub fn ceremony(
     // of the night stand.
     r.set_light(&Sky::Day.light());
     super::set_ao(r, hifi);
+    super::set_shadows(r, at.y * WORLD);
     let fr = Frustum::new(cam, aspect);
     draw_stadium(r, &fr, hifi, Sky::Night.tint(), super::Stadium::Arena);
     // The captain in front, the others around him facing the camera.
@@ -50,7 +51,7 @@ pub fn ceremony(
         let pose = anims[k].pose_masked(detail.mask());
         joint_matrices(&body, &pose, &mut j, detail.mask());
         plant(&mut j, detail.mask(), anims[k].grounded(), body.m[1][3]);
-        draw_body(r, &body, &j, &looks[k], detail, Color::WHITE);
+        draw_body(r, &j, &looks[k], detail, Color::WHITE);
         if k == 0 {
             draw_trophy(r, &body, &j, detail);
         }
@@ -165,6 +166,7 @@ pub fn pedestal(
     r.set_camera(&cam.camera());
     r.set_light(&Sky::Dusk.light());
     super::set_ao(r, hifi);
+    super::set_shadows(r, spot.y * WORLD);
     let fr = Frustum::new(&cam, aspect);
     draw_stadium(r, &fr, hifi, Sky::Night.tint(), super::Stadium::Arena);
     let (s, c) = (trino_core::math3d::sin(yaw), trino_core::math3d::cos(yaw));
@@ -181,6 +183,6 @@ pub fn pedestal(
     let pose = anim.pose_masked(detail.mask());
     joint_matrices(&body, &pose, &mut j, detail.mask());
     plant(&mut j, detail.mask(), anim.grounded(), body.m[1][3]);
-    draw_body(r, &body, &j, look, detail, Color::WHITE);
+    draw_body(r, &j, look, detail, Color::WHITE);
     let _ = M_PEDESTAL;
 }

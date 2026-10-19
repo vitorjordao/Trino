@@ -114,6 +114,11 @@ unsafe extern "C" {
     /// detail is on (both fit TMEM and neither is a palette).
     pub fn trino_3d_water(sprite: *mut c_void, detail: *mut c_void, flags: u32, scroll: u32)
     -> u32;
+    /// Bind the shadow mode (ADR 0024): the shade's color blended by its
+    /// alpha, z-tested, not written. `texels`: the blob's `size`² I8
+    /// falloff (uncached, alive while frames draw it) for `trino_tri_tex`;
+    /// null: planar shadows (shade only) for `trino_tri`.
+    pub fn trino_3d_shadow(texels: *const c_void, size: u32);
     /// 30 floats: per vertex x, y, z, u, v, w, r, g, b, a (colors 0..1,
     /// u/v normalized, w = view depth).
     pub fn trino_tri_tex(verts: *const f32);

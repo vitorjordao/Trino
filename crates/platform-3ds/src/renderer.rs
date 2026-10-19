@@ -9,15 +9,16 @@ use alloc::vec::Vec;
 use core::ffi::c_void;
 
 use trino_core::render3d::{
-    Camera3, DEFAULT_LIGHT, GpuReject, GpuWater, Light, Mesh, MeshLayout, ScreenTri, TexBind,
-    TnlContext, TnlScratch, TnlStats, gpu_check_mv, gpu_mesh_check, gpu_screen_matrix, gpu_water,
-    painter_index, painter_key,
+    Camera3, DEFAULT_LIGHT, GpuReject, GpuWater, Light, Mesh, MeshLayout, NEAR_PLANE, ScreenTri,
+    TexBind, TnlContext, TnlScratch, TnlStats, gpu_check_mv, gpu_mesh_check, gpu_screen_matrix,
+    gpu_water, painter_index, painter_key,
 };
+use trino_core::shadow::{self as sh, BLOB_TEXTURE_SIZE, PlanarDraw, SHADOW_Z_STEPS, ShadowPlan};
 use trino_core::text::{BitmapFont, GlyphIndex};
 use trino_core::{
     BillboardParams, Caps, Color, FontId, FrameStats, LightList, LocalLight, Mat34, Material,
-    ModelId, ModelParams, Renderer, Ripple, Screen, SpriteId, SpriteParams, TexFilter, TextParams,
-    Transform3, Vec2, Vec3, WaterState,
+    ModelId, ModelParams, Renderer, Ripple, Screen, ShadowFrame, ShadowPlane, ShadowSettings,
+    ShadowTier, SpriteId, SpriteParams, TexFilter, TextParams, Transform3, Vec2, Vec3, WaterState,
 };
 
 use crate::ffi;
@@ -128,7 +129,33 @@ pub struct N3dsRenderer {
     /// once the GPU is [`GRAVE_FRAMES`] frames past the last draw of it.
     frame_no: u32,
     grave: Vec<(u32, Grave)>,
+    /// This frame's shadows (`set_shadows`, `set_shadow_receivers`;
+    /// cleared at `begin_frame`; boxed: its receivers are ~1.3 KB), the
+    /// batch's CPU shadow triangles (`true`: a blob's) and GPU T&L planar
+    /// shadows, drawn after its opaque 3D and before its water, and the
+    /// softness the shim's blob texture was made with.
+    shadows: Box<ShadowFrame>,
+    pending_shadow: Vec<(ScreenTri, bool)>,
+    pending_gpu_shadow: Vec<GpuShadow>,
+    blob_softness: Option<u8>,
 }
+
+/// A planar shadow the GPU T&L draws: the caster's mesh flattened by its
+/// uniforms, and its receiver's quad on screen (the stencil mark that cuts
+/// it to the receiver; `None` for an endless one).
+struct GpuShadow {
+    mesh: *mut c_void,
+    uniforms: [f32; GPU_UNIFORM_FLOATS],
+    mark: Option<([ScreenTri; 7], usize)>,
+}
+
+/// `trino_3d_material` flags of the shadow draws (ADR 0024): bit 9 a
+/// shadow, bits 10..12 the stencil's part, bit 13 the blob texture.
+const SHADOW: u32 = 1 << 9;
+const SHADOW_ONCE: u32 = SHADOW | 1 << 10;
+const SHADOW_MARK: u32 = SHADOW | 2 << 10;
+const SHADOW_UNMARK: u32 = SHADOW | 4 << 10;
+const SHADOW_BLOB: u32 = SHADOW | 1 << 13;
 
 /// GPU memory an unregistered asset held, waiting for the GPU to finish
 /// the frames that drew it.
@@ -187,6 +214,10 @@ impl N3dsRenderer {
             pending_gpu_water: Vec::new(),
             frame_no: 0,
             grave: Vec::new(),
+            shadows: Box::new(ShadowFrame::OFF),
+            pending_shadow: Vec::new(),
+            pending_gpu_shadow: Vec::new(),
+            blob_softness: None,
         }
     }
 
@@ -263,8 +294,171 @@ impl N3dsRenderer {
     /// `trino_3d_draw` per run.
     fn flush_model_batch(&mut self) {
         self.flush_cpu_batch();
+        self.flush_shadows();
         self.flush_gpu_water();
         self.flush_water();
+    }
+
+    /// The batch's shadows, over its opaque 3D: the CPU's (blobs, then
+    /// planar shadows drawn once per pixel), far to near, then the GPU
+    /// T&L's, each between its receiver's stencil mark and unmark.
+    fn flush_shadows(&mut self) {
+        if self.pending_shadow.is_empty() && self.pending_gpu_shadow.is_empty() {
+            return;
+        }
+        if let Some(s) = self.shadows.settings()
+            && self.blob_softness != Some(s.softness)
+            && self.pending_shadow.iter().any(|(_, blob)| *blob)
+        {
+            let mut texels = [0u8; BLOB_TEXTURE_SIZE * BLOB_TEXTURE_SIZE];
+            sh::blob_texels(s.softness, &mut texels);
+            unsafe { ffi::trino_shadow_blob(texels.as_ptr(), BLOB_TEXTURE_SIZE as u32) };
+            self.blob_softness = Some(s.softness);
+        }
+        self.frame_stats.tris += self.pending_shadow.len() as u32;
+        self.order.clear();
+        for (i, (tri, blob)) in self.pending_shadow.iter().enumerate() {
+            self.order.push((!*blob as u64, painter_key(tri.depth, i)));
+        }
+        self.order.sort_unstable();
+        let mut run = None;
+        self.verts.clear();
+        for k in 0..self.order.len() {
+            let (tri, blob) = self.pending_shadow[painter_index(self.order[k].1)];
+            if run != Some(blob) {
+                if let Some(b) = run {
+                    self.draw_shadow_run(if b { SHADOW_BLOB } else { SHADOW_ONCE });
+                }
+                run = Some(blob);
+            }
+            push_tri(&mut self.verts, &tri, blob);
+        }
+        if let Some(b) = run {
+            self.draw_shadow_run(if b { SHADOW_BLOB } else { SHADOW_ONCE });
+        }
+        self.pending_shadow.clear();
+        for d in core::mem::take(&mut self.pending_gpu_shadow) {
+            let stencil = match &d.mark {
+                Some((tris, n)) => {
+                    for t in &tris[..*n] {
+                        push_tri(&mut self.verts, t, false);
+                    }
+                    self.draw_shadow_run(SHADOW_MARK);
+                    3
+                }
+                None => 1,
+            };
+            unsafe { ffi::trino_gpu_draw(d.mesh, d.uniforms.as_ptr(), 2 | stencil << 4) };
+            if let Some((tris, n)) = &d.mark {
+                for t in &tris[..*n] {
+                    push_tri(&mut self.verts, t, false);
+                }
+                self.draw_shadow_run(SHADOW_UNMARK);
+            }
+        }
+        self.sprite_depth = SPRITE_DEPTH_HUD;
+    }
+
+    /// The staged vertices as one shadow draw (`flags`: which), the
+    /// material back to plain after.
+    fn draw_shadow_run(&mut self, flags: u32) {
+        if self.verts.is_empty() {
+            return;
+        }
+        let count = (self.verts.len() / VERT_FLOATS) as u32;
+        unsafe {
+            ffi::trino_3d_material(core::ptr::null_mut(), flags, 0);
+            ffi::trino_3d_draw(self.verts.as_ptr(), count, core::ptr::null_mut(), 0);
+            ffi::trino_3d_material(core::ptr::null_mut(), 0, 0);
+        }
+        self.verts.clear();
+    }
+
+    /// A caster's shadow into the batch: a blob, or its mesh flattened
+    /// onto the receiver: by the GPU T&L when the mesh has a copy there and
+    /// the shadow lies wholly past the near plane, else by the CPU's.
+    fn cast_shadow(&mut self, model: ModelId, matrix: &Mat34, params: &ModelParams) {
+        if self.shadows.tier() == ShadowTier::None {
+            return;
+        }
+        let plan = self.shadows.plan(params.shadow);
+        if plan == ShadowPlan::None {
+            return;
+        }
+        let Some((tmdl, layout)) = self.meshes.get(&model.0) else {
+            return;
+        };
+        let mesh = Mesh::from_layout(tmdl, layout);
+        let sphere = sh::caster_sphere(mesh.bounds(), matrix);
+        let ctx = &self.tnl_ctx;
+        match plan {
+            ShadowPlan::None => {}
+            ShadowPlan::Blob { radius } => {
+                if let Some(b) = self.shadows.blob(ctx, sphere.0, sphere.1, radius) {
+                    let mut out = [EMPTY_TRI; 7];
+                    let n = sh::blob_tris(ctx, &self.caps, &b, &mut out);
+                    if n > 0 {
+                        self.shadows.stats.blobs += 1;
+                        self.shadows.stats.tris += n as u32;
+                        self.pending_shadow
+                            .extend(out[..n].iter().map(|t| (*t, true)));
+                    }
+                }
+            }
+            ShadowPlan::Planar | ShadowPlan::Map => {
+                let Some(d) = self.shadows.planar(ctx, sphere.0, matrix, params) else {
+                    return;
+                };
+                if self.gpu_on
+                    && params.anim.is_none()
+                    && let Some(&(ptr, tris)) = self.gpu_meshes.get(&model.0)
+                    && let Some(uniforms) =
+                        gpu_shadow_uniforms(ctx, &self.caps, &self.shadows, sphere, &d)
+                {
+                    let mark = self.shadows.receiver_quad(&d).map(|q| {
+                        let mut out = [EMPTY_TRI; 7];
+                        let n = sh::blob_tris(ctx, &self.caps, &q, &mut out);
+                        (out, n)
+                    });
+                    // A receiver wholly off screen: nothing to land on.
+                    if mark.is_some_and(|(_, n)| n == 0) {
+                        return;
+                    }
+                    self.pending_gpu_shadow.push(GpuShadow {
+                        mesh: ptr,
+                        uniforms,
+                        mark,
+                    });
+                    self.shadows.stats.planar += 1;
+                    self.shadows.stats.tris += tris;
+                    self.frame_stats.tris += tris;
+                    self.frame_stats.tnl.add(&TnlStats {
+                        gpu_draws: 1,
+                        gpu_tris: tris,
+                        ..TnlStats::default()
+                    });
+                    return;
+                }
+                let before = self.pending_shadow.len();
+                let pending = &mut self.pending_shadow;
+                let tnl = sh::planar_tris(
+                    &self.shadows,
+                    ctx,
+                    &mut self.tnl_scratch,
+                    &self.caps,
+                    &mesh,
+                    sphere,
+                    &d,
+                    &mut |t| pending.push((t, false)),
+                );
+                self.frame_stats.tnl.add(&tnl);
+                let added = self.pending_shadow.len() - before;
+                if added > 0 {
+                    self.shadows.stats.planar += 1;
+                    self.shadows.stats.tris += added as u32;
+                }
+            }
+        }
     }
 
     /// The batch's GPU water surfaces (`water.v.pica`).
@@ -614,6 +808,61 @@ fn water_uniforms(u: &GpuWater) -> [f32; WATER_UNIFORM_FLOATS] {
     out
 }
 
+/// The GPU T&L uniforms of planar shadow `d` (a caster in `sphere`): the
+/// flattened mesh to the screen, its depth band moved the core's few depth
+/// steps toward the camera ([`sh::shadow_z`]: a constant for the 3DS's
+/// fixed-point depth), unlit in the shadow color, fogged. `None` when the
+/// shadow crosses the near plane or is off screen: the CPU path clips it.
+fn gpu_shadow_uniforms(
+    ctx: &TnlContext,
+    caps: &Caps,
+    frame: &ShadowFrame,
+    sphere: (Vec3, f32),
+    d: &PlanarDraw,
+) -> Option<[f32; GPU_UNIFORM_FLOATS]> {
+    let (c, r) = frame.planar_bounds(ctx, sphere, d);
+    if ctx.view_point(c).z - r <= NEAR_PLANE || !ctx.sphere_visible(c, r) {
+        return None;
+    }
+    let mv = ctx.projection().0.mul(&d.matrix);
+    let s = gpu_screen_matrix(ctx, &mv);
+    let off = SHADOW_Z_STEPS * caps.depth_step(0.0);
+    let (b, k) = (
+        TRI_DEPTH_BASE + TRI_DEPTH_RANGE * (1.0 + off),
+        TRI_DEPTH_RANGE,
+    );
+    let band: [f32; 4] = core::array::from_fn(|j| b * s[3][j] - k * s[2][j]);
+    let mut u = [0.0f32; GPU_UNIFORM_FLOATS];
+    for (i, row) in [s[0], s[1], band, s[3]].iter().enumerate() {
+        u[i * 4..i * 4 + 4].copy_from_slice(row);
+    }
+    let f = |c: u8| c as f32 / 255.0;
+    let (t, e) = (d.params.tint, d.params.emissive);
+    // Unlit: the color is the emissive, the alpha the tint's.
+    u[20..23].copy_from_slice(&[1.0; 3]);
+    u[28..32].copy_from_slice(&[f(t.r), f(t.g), f(t.b), f(t.a)]);
+    u[32..35].copy_from_slice(&[f(e.r), f(e.g), f(e.b)]);
+    let fog = ctx.light().fog;
+    if fog.enabled() {
+        let k = 1.0 / (fog.far - fog.near);
+        let mut row: [f32; 4] = core::array::from_fn(|j| mv.m[2][j] * k);
+        row[3] -= fog.near * k;
+        u[36..40].copy_from_slice(&row);
+        u[40..43].copy_from_slice(&[f(fog.color.r), f(fog.color.g), f(fog.color.b)]);
+    }
+    Some(u)
+}
+
+/// A blank triangle (scratch arrays).
+const EMPTY_TRI: ScreenTri = ScreenTri {
+    pts: [Vec2::ZERO; 3],
+    colors: [Color::BLACK; 3],
+    depth: 0.0,
+    z: [0.0; 3],
+    uv: [Vec2::ZERO; 3],
+    w: [1.0; 3],
+};
+
 /// Normalized depth (0 near .. 1 far) -> nearness inside the 3D band.
 fn band_depth(z: f32) -> f32 {
     TRI_DEPTH_BASE + TRI_DEPTH_RANGE * (1.0 - z).clamp(0.0, 1.0)
@@ -657,6 +906,9 @@ impl Renderer for N3dsRenderer {
     fn begin_frame(&mut self, clear: Color) {
         self.sprite_depth = SPRITE_DEPTH_BG;
         self.frame_stats = FrameStats::default();
+        self.shadows.clear();
+        self.pending_shadow.clear();
+        self.pending_gpu_shadow.clear();
         self.water_state = WaterState::NONE;
         // The last frame may have ended on the touch screen (project to the
         // top again) or with local lights (cleared every frame).
@@ -782,6 +1034,14 @@ impl Renderer for N3dsRenderer {
         self.water_state = WaterState::new(time, ripples, self.caps.max_ripples);
     }
 
+    fn set_shadows(&mut self, settings: Option<&ShadowSettings>) {
+        self.shadows.set(settings, &self.caps, ShadowTier::Map);
+    }
+
+    fn set_shadow_receivers(&mut self, planes: &[ShadowPlane]) {
+        self.shadows.set_receivers(planes);
+    }
+
     fn draw_model(
         &mut self,
         model: ModelId,
@@ -799,6 +1059,9 @@ impl Renderer for N3dsRenderer {
         _material: Material,
         params: &ModelParams,
     ) {
+        if params.shadow.casts() {
+            self.cast_shadow(model, matrix, params);
+        }
         let Some((tmdl, layout)) = self.meshes.get(&model.0) else {
             self.frame_stats.not_loaded += 1;
             return;
@@ -951,6 +1214,7 @@ impl Renderer for N3dsRenderer {
 
     fn end_frame(&mut self) {
         self.flush_model_batch();
+        self.frame_stats.shadows = self.shadows.stats;
         self.last_stats = self.frame_stats;
         self.last_gpu_rejects = core::mem::take(&mut self.gpu_rejects);
         unsafe { ffi::trino_frame_end() }

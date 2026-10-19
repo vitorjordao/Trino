@@ -119,6 +119,20 @@ pub struct Caps {
     /// worker core's decoding is not counted, only what the main thread does
     /// (reading, uploading) or a job that ran inline.
     pub load_budget_us: u32,
+    /// How shadows are drawn ([`crate::shadow`], ADR 0024): blobs on the
+    /// N64, planar projections on the 3DS, a shadow map on the PC and the
+    /// Web.
+    pub shadow_tier: crate::shadow::ShadowTier,
+    /// [`crate::ShadowCast::Mesh`] casters a frame projects below the
+    /// Planar tier (the N64's: each is a CPU T&L draw); 255 = every one.
+    pub max_planar_shadows: u8,
+    /// The depth buffer's precision as the engine's z (`1 - NEAR/z`) sees
+    /// it: fixed-point bits, and with `depth_mantissa` > 0 a compressed
+    /// format whose step also shrinks toward the far plane (the RDP's
+    /// 18-bit z: 11 mantissa bits after the leading ones). See
+    /// [`depth_step`](Self::depth_step).
+    pub depth_bits: u8,
+    pub depth_mantissa: u8,
 }
 
 /// Why a piece of content does not fit in a target's [`Caps`].
@@ -158,6 +172,12 @@ impl Caps {
         crowd_percent: 100,
         particle_percent: 100,
         load_budget_us: 4_000,
+        shadow_tier: crate::shadow::ShadowTier::Blob,
+        max_planar_shadows: 2,
+        // The RDP's z: 18 bits, stored compressed (3-bit exponent, 11-bit
+        // mantissa).
+        depth_bits: 18,
+        depth_mantissa: 11,
     };
 
     /// An N64 with the Expansion Pak: [`Caps::N64`] with 8 MiB of RDRAM.
@@ -194,6 +214,11 @@ impl Caps {
         crowd_percent: 100,
         particle_percent: 100,
         load_budget_us: 6_000,
+        shadow_tier: crate::shadow::ShadowTier::Planar,
+        max_planar_shadows: 255,
+        // DEPTH24_STENCIL8, the 3D in its band (35%) of citro2d's range.
+        depth_bits: 22,
+        depth_mantissa: 0,
     };
 
     /// A New Nintendo 3DS (or New 2DS XL) with the speedup on: 804 MHz, the
@@ -234,6 +259,12 @@ impl Caps {
         crowd_percent: 100,
         particle_percent: 100,
         load_budget_us: 8_000,
+        shadow_tier: crate::shadow::ShadowTier::Map,
+        max_planar_shadows: 255,
+        // Depth32Float: z near 1 keeps 24 bits; two for the rasterizer's
+        // interpolation.
+        depth_bits: 22,
+        depth_mantissa: 0,
     };
 
     /// A web browser (WebGPU, or WebGL2 where there is none; issue #47):
@@ -265,6 +296,12 @@ impl Caps {
         crowd_percent: 100,
         particle_percent: 100,
         load_budget_us: 8_000,
+        shadow_tier: crate::shadow::ShadowTier::Map,
+        max_planar_shadows: 255,
+        // Depth32Float: z near 1 keeps 24 bits; two for the rasterizer's
+        // interpolation.
+        depth_bits: 22,
+        depth_mantissa: 0,
     };
 
     /// The same console's table for `tier`: [`Caps::N64`] ↔
@@ -292,6 +329,20 @@ impl Caps {
             particle_percent: table.particle_percent,
             ..self
         }
+    }
+
+    /// One step of the depth buffer at the engine's `z` (`1 - NEAR/z`,
+    /// 0..1): `2^-depth_bits`, or for a compressed format the coarser of
+    /// that and the mantissa's step (the RDP's: `(1 - z) / 2^11`, an upper
+    /// bound within each exponent). What a blob or planar shadow is moved
+    /// toward the camera by, a few times ([`crate::shadow::shadow_z`]).
+    pub fn depth_step(&self, z: f32) -> f32 {
+        let fixed = 1.0 / (1u32 << self.depth_bits) as f32;
+        if self.depth_mantissa == 0 {
+            return fixed;
+        }
+        let mantissa = (1.0 - z) / (1u32 << self.depth_mantissa) as f32;
+        fixed.max(mantissa)
     }
 
     /// The base tier's table of the same console ([`with_tier`](Self::with_tier)).
@@ -395,12 +446,27 @@ mod tests {
         assert_eq!(web.light_tier, Caps::PC.light_tier);
         assert_eq!(web.ao_tier, Caps::PC.ao_tier);
         assert_eq!(web.water_tier, Caps::PC.water_tier);
+        assert_eq!(web.shadow_tier, Caps::PC.shadow_tier);
         assert!(web.validate_texture(4096, 4096, 4).is_ok());
         assert!(matches!(
             web.validate_texture(8192, 16, 4),
             Err(CapsError::TextureTooLarge { max_dim: 4096, .. })
         ));
         assert!(web.save_bytes >= Caps::N3DS.save_bytes);
+    }
+
+    #[test]
+    fn shadow_tiers_follow_the_hardware() {
+        use crate::shadow::ShadowTier;
+        assert_eq!(Caps::N64.shadow_tier, ShadowTier::Blob);
+        assert_eq!(Caps::N64_EXPANDED.shadow_tier, ShadowTier::Blob);
+        assert_eq!(Caps::N3DS.shadow_tier, ShadowTier::Planar);
+        assert_eq!(Caps::N3DS_NEW.shadow_tier, ShadowTier::Planar);
+        assert_eq!(Caps::PC.shadow_tier, ShadowTier::Map);
+        assert_eq!(Caps::WEB.shadow_tier, ShadowTier::Map);
+        // The N64 projects a couple of hero casters; the rest are blobs.
+        assert_eq!(Caps::N64.max_planar_shadows, 2);
+        assert_eq!((Caps::N64.depth_bits, Caps::N64.depth_mantissa), (18, 11));
     }
 
     #[test]

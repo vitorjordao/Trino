@@ -12,11 +12,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::Entity;
 
-/// v4: the consoles' hardware tiers' variants and LOD starts
+/// v5: an entity's `shadow` (issue #57, ADR 0024: what it casts, whether
+/// it receives). v4: the consoles' hardware tiers' variants and LOD starts
 /// (`n64_expanded`, `n3ds_new`, issue #54). v3: the Web's (`web`, issue
 /// #47). v2: entities may carry per-platform variants (`platforms`, see
-/// [`crate::platform`]). v1 to v3 files load unchanged and save as v4.
-pub const PREFAB_VERSION: u32 = 4;
+/// [`crate::platform`]). v1 to v4 files load unchanged and save as v5.
+pub const PREFAB_VERSION: u32 = 5;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Prefab {
@@ -44,7 +45,7 @@ impl Prefab {
             ));
         }
         // v1 is v2 without variants, v2 is v3 without the Web, v3 is v4
-        // without the tiers.
+        // without the tiers, v4 is v5 without shadows.
         p.version = PREFAB_VERSION;
         Ok(p)
     }

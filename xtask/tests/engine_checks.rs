@@ -264,6 +264,37 @@ fn instancing_matches_separate_draws_and_counts_the_pc_gpu_split() {
     }
 }
 
+/// The `shadows` step at every PC profile's tier (ADR 0024): the map on
+/// native, projected shadows on the 3DS, a blob and a projected post on
+/// the N64; each counted under its own tier.
+#[test]
+fn the_shadows_step_passes_at_every_tier() {
+    use trino_core::{Renderer, ShadowTier};
+    let save_dir = tempfile::tempdir().unwrap();
+    for (profile, tier) in [
+        (SimProfile::Native, ShadowTier::Map),
+        (SimProfile::N64, ShadowTier::Blob),
+        (SimProfile::N3ds, ShadowTier::Planar),
+    ] {
+        let Some((mut renderer, mut platform)) = pc_target(profile, save_dir.path()) else {
+            return;
+        };
+        assert_eq!(
+            castle64::selftest::shadows(&mut renderer, &mut platform),
+            Ok(true),
+            "{profile:?}"
+        );
+        assert_eq!(renderer.shadow_tier(), tier, "{profile:?}");
+        castle64::selftest::shadow_scene(&mut renderer, Some(&trino_core::ShadowSettings::DEFAULT));
+        let s = renderer.stats().shadows;
+        match tier {
+            ShadowTier::Map => assert_eq!((s.mapped, s.blobs, s.planar), (2, 0, 0)),
+            ShadowTier::Planar => assert_eq!((s.mapped, s.blobs, s.planar), (0, 0, 2)),
+            _ => assert_eq!((s.mapped, s.blobs, s.planar), (0, 1, 1)),
+        }
+    }
+}
+
 /// Evidence for issue #51: the `instancing` step's frame on the native
 /// profile as separate draws, as one call, and their difference (black =
 /// identical), side by side in `target/evidence/instancing/instancing.png`.

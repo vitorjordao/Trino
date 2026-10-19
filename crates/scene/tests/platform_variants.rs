@@ -80,7 +80,7 @@ fn variants_round_trip_through_ron_both_ways() {
     // Struct → text → struct, and the text is stable.
     let s = scene();
     let text = s.to_ron();
-    assert!(text.contains("version: 6"), "{text}");
+    assert!(text.contains("version: 7"), "{text}");
     assert!(text.contains("n64: Some(") && text.contains("n3ds: Some("));
     assert!(
         !text.contains("n64_expanded"),
@@ -130,18 +130,18 @@ fn v2_scenes_and_v1_prefabs_migrate() {
     )])"#;
     let scene = Scene::from_ron(v2).unwrap();
     assert_eq!(scene.version, SCENE_VERSION);
-    assert_eq!(scene.version, 6);
+    assert_eq!(scene.version, 7);
     assert!(scene.entities[0].platforms.is_empty());
     assert_eq!(scene.entities[0].children[0].name, "door");
-    // Saved, it is a v6 file that reads back identically.
+    // Saved, it is a v7 file that reads back identically.
     let text = scene.to_ron();
-    assert!(text.contains("version: 6"));
+    assert!(text.contains("version: 7"));
     assert_eq!(Scene::from_ron(&text).unwrap(), scene);
 
     let v1 = r#"(version: 1, root: (name: "lamp", children: [(name: "bulb")]))"#;
     let prefab = Prefab::from_ron(v1).unwrap();
     assert_eq!(prefab.version, PREFAB_VERSION);
-    assert!(prefab.to_ron().contains("version: 4"));
+    assert!(prefab.to_ron().contains("version: 5"));
     let future = r#"(version: 9, root: (name: "x"))"#;
     assert!(Prefab::from_ron(future).unwrap_err().contains("newer"));
     // The v2 path still reports bad files as parse errors.

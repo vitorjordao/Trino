@@ -2,10 +2,10 @@
 //! materials, expanded prefab instances. The editor viewport renders this
 //! list every frame; [`crate::codegen`] bakes it into game code.
 
-use trino_core::physics::{Collider, Shape};
+use trino_core::physics::{Aabb, Collider, Shape};
 use trino_core::{
-    AnimRef, ClipId, LodPick, MAX_CELLS, Mat34, ModelId, ModelParams, NO_CELL, SpriteId, Vec3,
-    VisVolume,
+    AnimRef, ClipId, LodPick, MAX_CELLS, Mat34, ModelId, ModelParams, NO_CELL, ShadowPlane,
+    SpriteId, Vec3, VisVolume,
 };
 
 use crate::{Entity, Library, ModelComponent, Scene, Target, Variant};
@@ -38,6 +38,9 @@ pub struct DrawItem {
     pub cell: u8,
     /// Cell or portal volume (world half extents; cell indices resolved).
     pub vis: Option<VisVolume>,
+    /// The top of its box, when shadows land on it (`shadow(receive:
+    /// true)`, ADR 0024).
+    pub receiver: Option<ShadowPlane>,
     /// True for parts that come from a prefab (not editable in place).
     pub from_prefab: bool,
 }
@@ -151,9 +154,17 @@ pub struct Resolved {
     /// Per cell, in cell order: the asset groups its contents come from
     /// (`cell(groups: …)`, issue #56; empty for most).
     pub cell_groups: Vec<Vec<String>>,
+    /// The scene's shadows (`environment.shadows`, `None` when off).
+    pub shadows: Option<trino_core::ShadowSettings>,
 }
 
 impl Resolved {
+    /// The surfaces blob and planar shadows land on
+    /// (`Renderer::set_shadow_receivers`), in scene order.
+    pub fn receivers(&self) -> Vec<ShadowPlane> {
+        self.items.iter().filter_map(|i| i.receiver).collect()
+    }
+
     /// The scene's cells and portals (see `trino_core::vis`).
     pub fn cells(&self) -> trino_core::Cells<256> {
         trino_core::Cells::from_volumes(
@@ -230,7 +241,10 @@ pub fn resolve_for(scene: &Scene, lib: &Library, time: f32, target: Target) -> R
         lib,
         target,
         time,
-        out: Resolved::default(),
+        out: Resolved {
+            shadows: scene.environment.core_shadows(),
+            ..Resolved::default()
+        },
         stack: Vec::new(),
         cell: NO_CELL,
         cells: Vec::new(),
@@ -359,6 +373,9 @@ fn visit(
         if let Some(a) = &m.anim {
             params.anim = Some(AnimRef::new(ClipId::from_name(&a.clip), ctx.time * a.speed));
         }
+        if let Some(s) = &e.shadow {
+            params.shadow = s.core();
+        }
         (m.model_id(), m.path.clone())
     });
     let sprite = e.sprite.as_ref().map(|s| SpriteDraw {
@@ -407,6 +424,32 @@ fn visit(
         let s = |i: usize| e.transform.scale[i] / transform.scale[i];
         unscale_collider(ctx, &name, c, Vec3::new(s(0), s(1), s(2)))
     });
+    // A receiver's box: its collider (where things stand), else its
+    // model's bounds as drawn.
+    let receiver = match &e.shadow {
+        Some(s) if s.receive => {
+            let bounds = model_c.and_then(|m| ctx.lib.model_bounds.get(&m.path));
+            let world = match (&collider, bounds) {
+                (Some(c), _) => Some(c.world_aabb(&base_matrix)),
+                (None, Some((min, max))) => Some(
+                    Aabb {
+                        min: crate::v3(*min),
+                        max: crate::v3(*max),
+                    }
+                    .transformed(&matrix),
+                ),
+                (None, None) => None,
+            };
+            if world.is_none() {
+                ctx.out.warnings.push(format!(
+                    "{name}: a shadow receiver needs a collider or a model with known \
+                     bounds — it receives nothing"
+                ));
+            }
+            world.map(|b| ShadowPlane::top_of(b.min, b.max))
+        }
+        _ => None,
+    };
     let outer_cell = ctx.cell;
     let vis = match &e.vis {
         Some(crate::VisComponent::Cell { size, groups }) => {
@@ -453,6 +496,7 @@ fn visit(
         }),
         cell: ctx.cell,
         vis,
+        receiver,
         from_prefab,
     });
 

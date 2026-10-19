@@ -433,9 +433,6 @@ file = "models/torso.glb"
 [models.se_shorts]
 file = "models/shorts.glb"
 
-[models.se_player_shadow]
-file = "models/player_shadow.glb"
-
 # The league trophy (the title screen and the season's ceremony).
 [models.se_trophy]
 file = "models/trophy.glb"
@@ -656,9 +653,6 @@ file = "models/dot.glb"
 
 [models.se_pedestal]
 file = "models/pedestal.glb"
-
-[models.se_blob]
-file = "models/blob.glb"
 
 # ---- fonts (Roboto Condensed Bold, Apache-2.0: fonts/LICENSE-Roboto.txt) ----
 # The UI font is caps, digits, punctuation and Portuguese accents: 11 px, an

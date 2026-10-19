@@ -485,6 +485,14 @@ impl App {
         {
             scene_view.ao_view = view;
         }
+        // Dev hook: TRINO_EDITOR_SHADOWS=tier|off|debug, the Scene view's
+        // shadow mode (ADR 0024).
+        if let Some(view) = std::env::var("TRINO_EDITOR_SHADOWS")
+            .ok()
+            .and_then(|v| trino_platform_pc::ShadowView::parse(&v))
+        {
+            scene_view.shadow_view = view;
+        }
         let cam = doc.scene.environment.core_camera();
         scene_view.cam.look_from(cam.eye, cam.target);
         let thumbs = Thumbnailer::new(
@@ -1886,6 +1894,9 @@ impl App {
                 ui.checkbox(&mut self.scene_view.cam.ortho, "Orthographic (5)");
                 ui.menu_button("Ambient occlusion", |ui| {
                     crate::viewport::ao_menu(ui, &mut self.scene_view.ao_view);
+                });
+                ui.menu_button("Shadow view", |ui| {
+                    crate::viewport::shadow_menu(ui, &mut self.scene_view.shadow_view);
                 });
                 ui.separator();
                 if ui

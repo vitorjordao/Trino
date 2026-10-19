@@ -67,6 +67,15 @@ static float s_detail_off[2] = {0.0f, 0.0f};
 static int s_point = 0;
 static C2D_SpriteSheet s_detail_sheet = NULL;
 static float s_detail_scale = 1.0f;
+// Shadows (trino_3d_material flags bit 9, ADR 0024): the vertex color
+// blended by its alpha, depth tested but not written, with bits 10..12 the
+// stencil's part (trino_shadow_stencil) and bit 13 the blob texture's
+// alpha (s_blob, trino_shadow_blob) times the vertex alpha.
+static int s_shadow = 0;
+static int s_stencil = 0;
+static int s_blob_on = 0;
+static C3D_Tex s_blob;
+static int s_blob_ready = 0;
 // One projection per screen (citro2d's own for each): 3D drawn after
 // trino_set_screen(1) lands on the touch screen, projected to its 320x240.
 static C3D_Mtx s_proj_top;
@@ -223,6 +232,26 @@ static void trino_link_write(const char* msg, size_t len)
 static void trino_audio_init(void);
 static void trino_audio_exit(void);
 
+// A screen's target: citro2d's (C2D_CreateScreenTarget, the same output to
+// the LCD) with a 24-bit depth and an 8-bit stencil in place of its 16-bit
+// depth: shadows sit a few depth steps over their receiver at any
+// distance, and planar shadows draw once per pixel through the stencil
+// (ADR 0024). C2D_TargetClear clears the stencil to 0 with the depth.
+static C3D_RenderTarget* trino_screen_target(gfxScreen_t screen, int height)
+{
+    C3D_RenderTarget* t =
+        C3D_RenderTargetCreate(GSP_SCREEN_WIDTH, height, GPU_RB_RGBA8, GPU_RB_DEPTH24_STENCIL8);
+    if (t) {
+        C3D_RenderTargetSetOutput(
+            t, screen, GFX_LEFT,
+            GX_TRANSFER_FLIP_VERT(0) | GX_TRANSFER_OUT_TILED(0) | GX_TRANSFER_RAW_COPY(0) |
+                GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGBA8) |
+                GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB8) |
+                GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO));
+    }
+    return t;
+}
+
 void trino_init(void)
 {
     trino_link_init();
@@ -236,8 +265,8 @@ void trino_init(void)
     // Trino tints are multiplicative (texel * tint), like the PC and N64
     // backends.
     C2D_SetTintMode(C2D_TintMult);
-    s_top = C2D_CreateScreenTarget(GFX_TOP, GFX_LEFT);
-    s_bottom = C2D_CreateScreenTarget(GFX_BOTTOM, GFX_LEFT);
+    s_top = trino_screen_target(GFX_TOP, GSP_SCREEN_HEIGHT_TOP);
+    s_bottom = trino_screen_target(GFX_BOTTOM, GSP_SCREEN_HEIGHT_BOTTOM);
     trino_audio_init();
     trino_tex3d_init();
 }
@@ -623,6 +652,80 @@ void trino_fill_rect(const trino_fill_t* f)
 // 3D triangles: the engine transforms and lights on the CPU
 // (trino_core::render3d); citro2d only rasterizes gouraud-shaded tris.
 
+// The stencil's part in a shadow draw. Values: 0 free, 1 a receiver
+// marked for the GPU T&L shadow on it, 2 shadowed (no more shadow there).
+//   1 once:    CPU shadows (already cut to their receiver): where not yet
+//              shadowed, and mark it so;
+//   2 mark:    a receiver's quad, no color: free -> 1 where it shows;
+//   3 on mark: a GPU T&L shadow: 1 -> 2, nowhere else (cut to the mark);
+//   4 unmark:  the receiver's quad again: 1 -> 0 (what no shadow covered).
+// 0: no stencil (blobs, which blend over each other like the N64's).
+static void trino_shadow_stencil(int mode)
+{
+    switch (mode) {
+    case 1:
+        C3D_StencilTest(true, GPU_NOTEQUAL, 2, 0xFF, 0xFF);
+        C3D_StencilOp(GPU_STENCIL_KEEP, GPU_STENCIL_KEEP, GPU_STENCIL_REPLACE);
+        break;
+    case 2:
+        C3D_StencilTest(true, GPU_EQUAL, 0, 0xFF, 0xFF);
+        C3D_StencilOp(GPU_STENCIL_KEEP, GPU_STENCIL_KEEP, GPU_STENCIL_INCR);
+        break;
+    case 3:
+        C3D_StencilTest(true, GPU_EQUAL, 1, 0xFF, 0xFF);
+        C3D_StencilOp(GPU_STENCIL_KEEP, GPU_STENCIL_KEEP, GPU_STENCIL_INCR);
+        break;
+    case 4:
+        C3D_StencilTest(true, GPU_EQUAL, 1, 0xFF, 0xFF);
+        C3D_StencilOp(GPU_STENCIL_KEEP, GPU_STENCIL_KEEP, GPU_STENCIL_DECR);
+        break;
+    default:
+        C3D_StencilTest(false, GPU_ALWAYS, 0, 0xFF, 0x00);
+        C3D_StencilOp(GPU_STENCIL_KEEP, GPU_STENCIL_KEEP, GPU_STENCIL_KEEP);
+        break;
+    }
+    // The marks write no color; the rest blend the shadow color. Depth is
+    // tested (GEQUAL: citro2d's nearer-is-larger) and never written.
+    C3D_DepthTest(true, GPU_GEQUAL, (mode == 2 || mode == 4) ? 0 : GPU_WRITE_COLOR);
+}
+
+// Back to citro2d's state after a shadow draw (C2D_Prepare restores the
+// depth test; the stencil it never touches).
+static void trino_shadow_leave(void)
+{
+    C3D_StencilTest(false, GPU_ALWAYS, 0, 0xFF, 0x00);
+    C3D_StencilOp(GPU_STENCIL_KEEP, GPU_STENCIL_KEEP, GPU_STENCIL_KEEP);
+    C3D_DepthTest(true, GPU_GEQUAL, GPU_WRITE_ALL);
+}
+
+// The blob texture (trino_core::shadow::blob_texels): `size`² 8-bit alpha
+// values, row-major, made an A8 texture (8x8 tiles, Morton order within;
+// the falloff is round, so which way up the rows go doesn't matter). Made
+// again when the softness changes (`begin_frame` waited for the GPU).
+void trino_shadow_blob(const uint8_t* texels, uint32_t size)
+{
+    if (s_blob_ready && (s_blob.width != size || s_blob.height != size)) {
+        C3D_TexDelete(&s_blob);
+        s_blob_ready = 0;
+    }
+    if (!s_blob_ready) {
+        if (!C3D_TexInit(&s_blob, (u16)size, (u16)size, GPU_A8)) return;
+        C3D_TexSetFilter(&s_blob, GPU_LINEAR, GPU_LINEAR);
+        C3D_TexSetWrap(&s_blob, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
+        s_blob_ready = 1;
+    }
+    uint8_t* dst = (uint8_t*)s_blob.data;
+    for (uint32_t y = 0; y < size; y++) {
+        for (uint32_t x = 0; x < size; x++) {
+            uint32_t tile = ((y >> 3) * (size >> 3) + (x >> 3)) * 64;
+            uint32_t m = (x & 1) | ((y & 1) << 1) | ((x & 2) << 1) | ((y & 2) << 2) |
+                         ((x & 4) << 2) | ((y & 4) << 3);
+            dst[tile + m] = texels[y * size + x];
+        }
+    }
+    C3D_TexFlush(&s_blob);
+}
+
 // Sampling of the next trino_3d_draw calls: `flags` bit 1 point filter,
 // bits 4..7 the detail layer's repeats per base repeat (log2); `detail`
 // (NULL = none) is a sprite sheet multiplied over the texture.
@@ -632,6 +735,9 @@ void trino_3d_material(void* detail, uint32_t flags, uint32_t scroll)
     s_detail_sheet = (C2D_SpriteSheet)detail;
     s_detail_scale = (float)(1u << ((flags >> 4) & 15));
     s_water = (flags >> 8) & 1;
+    s_shadow = (flags >> 9) & 1;
+    s_stencil = s_shadow ? (int)((flags >> 10) & 7) : 0;
+    s_blob_on = s_shadow && ((flags >> 13) & 1) && s_blob_ready;
     s_detail_off[0] = s_water ? (float)(scroll >> 16) / 65536.0f : 0.0f;
     s_detail_off[1] = s_water ? (float)(scroll & 0xFFFF) / 65536.0f : 0.0f;
 }
@@ -761,8 +867,22 @@ void trino_3d_draw(const float* v, uint32_t count, void* sheet, uint32_t clamp)
         C3D_AlphaTest(false, GPU_ALWAYS, 0);
         C3D_DepthTest(true, GPU_GEQUAL, GPU_WRITE_COLOR);
     }
+    if (s_shadow) {
+        // The shadow color by the vertex alpha (times the blob's).
+        C3D_AlphaTest(false, GPU_ALWAYS, 0);
+        if (s_blob_on) {
+            C3D_TexBind(0, &s_blob);
+            C3D_TexEnvInit(env);
+            C3D_TexEnvSrc(env, C3D_RGB, GPU_PRIMARY_COLOR, 0, 0);
+            C3D_TexEnvFunc(env, C3D_RGB, GPU_REPLACE);
+            C3D_TexEnvSrc(env, C3D_Alpha, GPU_TEXTURE0, GPU_PRIMARY_COLOR, 0);
+            C3D_TexEnvFunc(env, C3D_Alpha, GPU_MODULATE);
+        }
+        trino_shadow_stencil(s_stencil);
+    }
     C3D_DrawArrays(GPU_TRIANGLES, s_vused, count);
     s_vused += count;
+    if (s_shadow) trino_shadow_leave();
     // Hand the GPU back to citro2d (program, attributes, buffers, texenv).
     C2D_Prepare();
 }
@@ -863,7 +983,11 @@ void trino_gpu_draw(void* mesh, const float* u, uint32_t flags)
     // The tilt projection mirrors the screen: the engine's front faces
     // arrive clockwise.
     C3D_CullFace((flags & 1) ? TRINO_TNL_CULL : GPU_CULL_NONE);
+    // flags bit 1: a planar shadow (ADR 0024), bits 4..6 its stencil part
+    // (trino_shadow_stencil): blended, depth tested, not written.
+    if (flags & 2) trino_shadow_stencil((int)((flags >> 4) & 7));
     C3D_DrawElements(GPU_TRIANGLES, m->count, C3D_UNSIGNED_SHORT, m->indices);
+    if (flags & 2) trino_shadow_leave();
 }
 
 // ---------------------------------------------------------------------------

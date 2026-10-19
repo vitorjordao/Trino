@@ -239,3 +239,129 @@ fn codegen_exports_the_scene_ambient_occlusion() {
     scene.environment.ao = None;
     assert_eq!(with, bake::to_tscn(&scene, &lib).0);
 }
+
+/// Shadows (ADR 0024, scene v7, TSCN v5): the scene's settings and each
+/// entity's Shadow component reach both game-side forms: the receivers'
+/// tops (a collider's box, else the model's bounds as drawn), each draw's
+/// cast, a prefab part's own; a receiver with no box warns.
+#[test]
+fn shadows_reach_the_tscn_and_the_generated_code() {
+    use trino_core::{ShadowCast, ShadowPlane, Vec3};
+    use trino_scene::{Scene, ShadowCastDef, ShadowComponent, ShadowTierDef, ShadowsDef};
+    let (mut scene, mut lib) = (common::scene(), common::library());
+    // None: no settings, no receivers, in both forms.
+    let resolved = resolve(&scene, &lib, 0.0);
+    assert_eq!(resolved.shadows, None);
+    assert!(resolved.receivers().is_empty());
+    let baked = BakedScene::parse(leak(bake::to_tscn(&scene, &lib).0)).unwrap();
+    assert_eq!(baked.shadows(), None);
+    assert_eq!(baked.receivers().count(), 0);
+    let (code, _) = codegen::to_rust(&scene, &lib);
+    assert!(code.contains("pub const SHADOWS: Option<ShadowSettings> = None;"));
+    assert!(code.contains("pub const RECEIVERS: &[ShadowPlane] = &[\n];"));
+
+    let def = ShadowsDef {
+        enabled: true,
+        tier_max: ShadowTierDef::Planar,
+        map_size: 1024,
+        distance: 25.0,
+        softness: 90,
+        color: [10, 20, 30, 120],
+    };
+    scene.environment.shadows = Some(def);
+    let set = |scene: &mut Scene, name: &str, cast, receive| {
+        let e = scene.entities.iter_mut().find(|e| e.name == name).unwrap();
+        e.shadow = Some(ShadowComponent {
+            cast,
+            radius: 0.4,
+            receive,
+        });
+    };
+    set(&mut scene, "ground", ShadowCastDef::None, true); // its collider
+    set(&mut scene, "crate", ShadowCastDef::Blob, true); // its Auto collider
+    set(&mut scene, "hero", ShadowCastDef::Mesh, false);
+    set(&mut scene, "pond", ShadowCastDef::Auto, true); // no box: warns
+    // A model's bounds, scaled, without a collider.
+    let mut top = trino_scene::Entity::new("crate-top")
+        .at([6.0, 0.0, 0.0])
+        .with_model(trino_scene::ModelComponent::new("models/crate"));
+    top.transform.scale = [2.0, 2.0, 2.0];
+    top.shadow = Some(ShadowComponent {
+        cast: ShadowCastDef::None,
+        receive: true,
+        ..Default::default()
+    });
+    scene.entities.push(top);
+    // A prefab part's own component.
+    let tree = lib.prefabs.get_mut("prefabs/tree").unwrap();
+    tree.root.children[0].shadow = Some(ShadowComponent {
+        cast: ShadowCastDef::Mesh,
+        ..Default::default()
+    });
+
+    let resolved = resolve(&scene, &lib, 0.0);
+    assert_eq!(resolved.shadows, Some(def.core()));
+    let v = Vec3::new;
+    assert_eq!(
+        resolved.receivers(),
+        [
+            ShadowPlane::top_of(v(-5.0, -1.0, -5.0), v(5.0, 0.0, 5.0)),
+            ShadowPlane::top_of(v(-2.5, 0.0, -0.5), v(-1.5, 1.0, 0.5)),
+            ShadowPlane::top_of(v(5.0, 0.0, -1.0), v(7.0, 2.0, 1.0)),
+        ]
+    );
+    assert!(
+        resolved
+            .warnings
+            .iter()
+            .any(|w| w.starts_with("pond: a shadow receiver needs a collider")),
+        "{:?}",
+        resolved.warnings
+    );
+    let cast = |name: &str| {
+        resolved
+            .items
+            .iter()
+            .find(|i| i.name == name)
+            .unwrap()
+            .params
+            .shadow
+    };
+    assert_eq!(cast("hero"), ShadowCast::Mesh);
+    assert_eq!(cast("crate"), ShadowCast::Blob { radius: 0.4 });
+    assert_eq!(cast("pond"), ShadowCast::Auto { blob_radius: 0.4 });
+    assert_eq!(cast("ground"), ShadowCast::None);
+    assert_eq!(cast("coin"), ShadowCast::None, "no component: none");
+    assert_eq!(cast("tree-1/tree/trunk"), ShadowCast::Mesh);
+
+    // TSCN v5: the same, read back by the runtime.
+    let (blob, warnings) = bake::to_tscn(&scene, &lib);
+    assert_eq!(warnings, resolved.warnings);
+    let baked = BakedScene::parse(leak(blob)).unwrap();
+    assert_eq!(baked.shadows(), resolved.shadows);
+    assert_eq!(baked.receivers().collect::<Vec<_>>(), resolved.receivers());
+    for (item, node) in exported(&resolved.items).iter().zip(baked.nodes()) {
+        assert_eq!(node.params.shadow, item.params.shadow, "{}", item.name);
+    }
+
+    // The generated code.
+    let (code, _) = codegen::to_rust(&scene, &lib);
+    for needle in [
+        "pub const SHADOWS: Option<ShadowSettings> = Some(ShadowSettings {\n    \
+         tier_max: ShadowTier::Planar,\n    map_size: 1024,\n    distance: 25.0,\n    \
+         softness: 90,\n    color: Color::rgba(10, 20, 30, 120),\n});",
+        "    ShadowPlane::horizontal(Vec3::new(0.0, 0.0, 0.0), 5.0, 5.0),\n",
+        "    ShadowPlane::horizontal(Vec3::new(6.0, 2.0, 0.0), 1.0, 1.0),\n",
+        "shadow: ShadowCast::Blob { radius: 0.4 },",
+        "shadow: ShadowCast::Auto { blob_radius: 0.4 },",
+        "shadow: ShadowCast::Mesh,",
+    ] {
+        assert!(code.contains(needle), "missing `{needle}` in:\n{code}");
+    }
+    // Off keeps the tuning in the file, and nothing in the game.
+    scene.environment.shadows.as_mut().unwrap().enabled = false;
+    let (code, _) = codegen::to_rust(&scene, &lib);
+    assert!(code.contains("pub const SHADOWS: Option<ShadowSettings> = None;"));
+    let baked = BakedScene::parse(leak(bake::to_tscn(&scene, &lib).0)).unwrap();
+    assert_eq!(baked.shadows(), None);
+}

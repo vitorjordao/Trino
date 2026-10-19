@@ -19,11 +19,13 @@ use trino_core::render3d::{
     rsp_part_bounds, rsp_rigid_check, rsp_rigid_draws, rsp_water_margin, rsp_water_mesh_check,
     water_plane, water_rings_with, water_rsp, water_rsp_frame, water_vertex,
 };
+use trino_core::shadow::{self as sh, BLOB_TEXTURE_SIZE, ShadowPlan};
 use trino_core::text::{BitmapFont, GlyphIndex};
 use trino_core::{
     BillboardParams, Caps, Color, FontId, FrameStats, LightList, LocalLight, MAX_RIPPLES, Mat34,
-    Material, ModelId, ModelParams, Renderer, Ripple, Shading, SpriteId, SpriteParams, TexFilter,
-    TextParams, Transform3, Vec2, Vec3, WaterState,
+    Material, ModelId, ModelParams, Renderer, Ripple, Shading, ShadowFrame, ShadowPlane,
+    ShadowSettings, ShadowTier, SpriteId, SpriteParams, TexFilter, TextParams, Transform3, Vec2,
+    Vec3, WaterState,
 };
 
 use crate::ffi;
@@ -155,6 +157,26 @@ pub struct N64Renderer {
     /// still draw from it are done (the RDP reads sprites and the RSP mesh
     /// copies from RDRAM while a frame drains): (frame, what).
     grave: Vec<(u32, Grave)>,
+    /// This frame's shadows (`set_shadows`, `set_shadow_receivers`;
+    /// cleared at `begin_frame`; boxed: its receivers are ~1.3 KB), the
+    /// batch's blob casters (built all at once at the flush: the blob code
+    /// stays out of the I-cache between the RSP draws) and planar shadow
+    /// triangles, drawn after its opaque ones and before its water, and
+    /// the blob textures by softness (uncached I8, never freed: a frame in
+    /// flight may read one). Last: the hot fields above keep their offsets.
+    shadows: Box<ShadowFrame>,
+    pending_blobs: Vec<PendingBlob>,
+    pending_shadow: Vec<ScreenTri>,
+    blob_tex: Vec<(u8, *mut u8)>,
+}
+
+/// A blob caster of the batch: its bounding sphere (world) and the blob's
+/// radius ([`ShadowFrame::blob`]).
+#[derive(Clone, Copy)]
+struct PendingBlob {
+    center: Vec3,
+    radius: f32,
+    blob: f32,
 }
 
 /// Freed RDRAM that waits a few frames ([`N64Renderer::grave`]).
@@ -279,6 +301,10 @@ impl N64Renderer {
             water_state: WaterState::NONE,
             pending_water: Vec::new(),
             pending_water_tex: Vec::new(),
+            shadows: Box::new(ShadowFrame::OFF),
+            pending_blobs: Vec::new(),
+            pending_shadow: Vec::new(),
+            blob_tex: Vec::new(),
         }
     }
 
@@ -293,9 +319,127 @@ impl N64Renderer {
             self.submit_rsp();
             self.charge(t0, |s| &mut s.submit);
         }
+        self.flush_shadows();
         self.flush_water();
         // What follows (2D, the next frame) changes the mode and TMEM.
         self.water_bound = [0; 4];
+    }
+
+    /// The batch's shadows, over its opaque surfaces: the blobs (built
+    /// here, their texture uploaded once), then the planar ones. In no
+    /// particular order: they all blend the same color, which comes out
+    /// the same in any order, and never write z.
+    fn flush_shadows(&mut self) {
+        if !self.pending_blobs.is_empty() {
+            let softness = self.shadows.settings().map_or(0, |s| s.softness);
+            let texels = self.blob_texture(softness);
+            let mut bound = false;
+            let mut out = [EMPTY_TRI; 7];
+            for i in 0..self.pending_blobs.len() {
+                let t0 = self.tick();
+                let b = self.pending_blobs[i];
+                let n = match self.shadows.blob(&self.tnl_ctx, b.center, b.radius, b.blob) {
+                    Some(q) => sh::blob_tris(&self.tnl_ctx, &self.caps, &q, &mut out),
+                    None => 0,
+                };
+                self.charge(t0, |s| &mut s.tnl);
+                if n == 0 {
+                    continue;
+                }
+                let t1 = self.tick();
+                if !bound {
+                    unsafe {
+                        ffi::trino_3d_shadow(texels as *const c_void, BLOB_TEXTURE_SIZE as u32)
+                    };
+                    bound = true;
+                }
+                for tri in &out[..n] {
+                    emit_tri_tex(tri);
+                }
+                self.charge(t1, |s| &mut s.submit);
+                self.shadows.stats.blobs += 1;
+                self.shadows.stats.tris += n as u32;
+                self.frame_stats.tris += n as u32;
+            }
+            self.pending_blobs.clear();
+        }
+        if !self.pending_shadow.is_empty() {
+            let t0 = self.tick();
+            unsafe { ffi::trino_3d_shadow(core::ptr::null(), 0) };
+            for tri in &self.pending_shadow {
+                emit_tri(tri);
+            }
+            self.charge(t0, |s| &mut s.submit);
+            self.frame_stats.tris += self.pending_shadow.len() as u32;
+            self.pending_shadow.clear();
+        }
+    }
+
+    /// The blob texture for `softness` (`trino_core::shadow::blob_texels`),
+    /// made the first time a frame draws it.
+    fn blob_texture(&mut self, softness: u8) -> *mut u8 {
+        if let Some((_, p)) = self.blob_tex.iter().find(|(s, _)| *s == softness) {
+            return *p;
+        }
+        let mut texels = [0u8; BLOB_TEXTURE_SIZE * BLOB_TEXTURE_SIZE];
+        sh::blob_texels(softness, &mut texels);
+        let p = unsafe { ffi::trino_alloc_uncached(texels.len() as u32) } as *mut u8;
+        if p.is_null() {
+            return p;
+        }
+        // Uncached: the RDP reads what was written, no writeback.
+        unsafe { core::ptr::copy_nonoverlapping(texels.as_ptr(), p, texels.len()) };
+        self.blob_tex.push((softness, p));
+        p
+    }
+
+    /// A caster's shadow into the batch: a blob (queued, built at the
+    /// flush), or (up to the planar budget, `Caps::max_planar_shadows`) its
+    /// mesh flattened onto the receiver by the CPU T&L.
+    fn cast_shadow(&mut self, model: ModelId, matrix: &Mat34, params: &ModelParams) {
+        if self.shadows.tier() == ShadowTier::None {
+            return;
+        }
+        let plan = self.shadows.plan(params.shadow);
+        if plan == ShadowPlan::None {
+            return;
+        }
+        let Some((tmdl, layout)) = self.meshes.get(&model.0) else {
+            return;
+        };
+        let sphere = sh::caster_sphere(layout.bounds(), matrix);
+        if let ShadowPlan::Blob { radius } = plan {
+            self.pending_blobs.push(PendingBlob {
+                center: sphere.0,
+                radius: sphere.1,
+                blob: radius,
+            });
+            return;
+        }
+        let t0 = self.tick();
+        let mesh = Mesh::from_layout(tmdl, layout);
+        let ctx = &self.tnl_ctx;
+        if let Some(d) = self.shadows.planar(ctx, sphere.0, matrix, params) {
+            let before = self.pending_shadow.len();
+            let pending = &mut self.pending_shadow;
+            let tnl = sh::planar_tris(
+                &self.shadows,
+                ctx,
+                &mut self.tnl_scratch,
+                &self.caps,
+                &mesh,
+                sphere,
+                &d,
+                &mut |t| pending.push(t),
+            );
+            self.frame_stats.tnl.add(&tnl);
+            let added = self.pending_shadow.len() - before;
+            if added > 0 {
+                self.shadows.stats.planar += 1;
+                self.shadows.stats.tris += added as u32;
+            }
+        }
+        self.charge(t0, |s| &mut s.tnl);
     }
 
     /// The batch's water, last: far to near, each surface's texture state
@@ -1010,6 +1154,9 @@ impl Renderer for N64Renderer {
 
     fn begin_frame(&mut self, clear: Color) {
         self.frame_stats = FrameStats::default();
+        self.shadows.clear();
+        self.pending_blobs.clear();
+        self.pending_shadow.clear();
         self.water_state = WaterState::NONE;
         self.tnl_ctx = self.tnl_ctx.with_water(&self.water_state);
         self.water_arena.next_frame();
@@ -1089,6 +1236,22 @@ impl Renderer for N64Renderer {
         }
     }
 
+    // Queued blobs are built at the flush, under the settings and
+    // receivers they were drawn with: a change mid-batch flushes first.
+    fn set_shadows(&mut self, settings: Option<&ShadowSettings>) {
+        if !self.pending_blobs.is_empty() {
+            self.flush_model_batch();
+        }
+        self.shadows.set(settings, &self.caps, ShadowTier::Map);
+    }
+
+    fn set_shadow_receivers(&mut self, planes: &[ShadowPlane]) {
+        if !self.pending_blobs.is_empty() {
+            self.flush_model_batch();
+        }
+        self.shadows.set_receivers(planes);
+    }
+
     fn set_water(&mut self, time: f32, ripples: &[Ripple]) {
         self.water_state = WaterState::new(time, ripples, self.caps.max_ripples);
         // The context carries it: water draws read it from there (a copy of
@@ -1116,6 +1279,9 @@ impl Renderer for N64Renderer {
         if params.water.is_some() {
             self.draw_water(model, matrix, params);
             return;
+        }
+        if params.shadow.casts() {
+            self.cast_shadow(model, matrix, params);
         }
         // A rigid skinned mesh: a command per joint on screen, when every
         // part qualifies.
@@ -1385,6 +1551,7 @@ impl Renderer for N64Renderer {
 
     fn end_frame(&mut self) {
         self.flush_model_batch();
+        self.frame_stats.shadows = self.shadows.stats;
         self.last_stats = self.frame_stats;
         let t0 = self.tick();
         unsafe { ffi::trino_frame_end() }
@@ -2446,3 +2613,13 @@ fn remember(
     }
     memo::store(memo, k, entry, tris);
 }
+
+/// A blank triangle (scratch arrays).
+const EMPTY_TRI: ScreenTri = ScreenTri {
+    pts: [Vec2::ZERO; 3],
+    colors: [Color::BLACK; 3],
+    depth: 0.0,
+    z: [0.0; 3],
+    uv: [Vec2::ZERO; 3],
+    w: [1.0; 3],
+};

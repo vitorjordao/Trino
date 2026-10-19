@@ -32,6 +32,7 @@ use core::fmt::Write as _;
 use levels::{BlockKind, DoorColor, LEVELS, Level, TOTAL_STARS};
 use trino_core::math3d::{atan2, cos, sin};
 use trino_core::physics::{self, Aabb, move_aabb};
+use trino_core::shadow::{ShadowCast, ShadowPlane, ShadowSettings};
 use trino_core::{
     Audio, BillboardParams, Button, Camera3, Color, DEFAULT_LIGHT, FontId, Game, GraphicsOptions,
     InputState, Light, LightTier, LocalLight, Material, ModelId, ModelParams, MusicId,
@@ -52,7 +53,6 @@ const M_TORSO: ModelId = ModelId::from_path("models/c64_player_torso");
 const M_ARM: ModelId = ModelId::from_path("models/c64_player_arm");
 const M_LEG: ModelId = ModelId::from_path("models/c64_player_leg");
 const M_BOAR: ModelId = ModelId::from_path("models/c64_boar");
-const M_SHADOW: ModelId = ModelId::from_path("models/c64_shadow");
 /// Porta neutra gerada, tingida por destino (verde/vermelha/azul/cinza).
 const M_DOOR_FRAME: ModelId = ModelId::from_path("models/c64_door_frame");
 /// Entrada do castelo: a doorway do KayKit Dungeon Remastered (CC0) refeita
@@ -72,6 +72,12 @@ const AMBIENT_OCCLUSION: trino_core::AmbientOcclusion = trino_core::AmbientOcclu
     bias: 0.03,
     quality: trino_core::AoQuality::Medium,
 };
+/// The player's shadow (ADR 0024): a blob on the N64, the body's shape
+/// projected on the 3DS, a shadow map on the PC.
+const PLAYER_SHADOWS: ShadowSettings = ShadowSettings::DEFAULT;
+/// The torso casts the blob; the limbs only where shapes are drawn.
+const TORSO_SHADOW: ShadowCast = ShadowCast::auto(0.4);
+const LIMB_SHADOW: ShadowCast = ShadowCast::auto(0.0);
 const TORCH_HEIGHT: f32 = 2.45;
 /// Where torches burn the room is dim: they light it. White (a colored
 /// light sends every N64 draw to the CPU, `RspReject::ColoredLight`), low
@@ -883,9 +889,11 @@ impl Game for Castle64Game {
             }
         }
 
-        // Sombra "blob" no chão sob o player (leitura de aterrissagem).
+        // The player's shadow (the landing read): the engine's, onto the
+        // top of the solid under the player (blob and planar tiers; the
+        // map shades every surface).
         let feet_y = self.pos.y - PLAYER_HALF.y;
-        let mut shadow_top = f32::MIN;
+        let mut under: Option<&Aabb> = None;
         for s in &solids[..n_solids] {
             let a = &s.aabb;
             if self.pos.x > a.min.x - 0.05
@@ -893,23 +901,15 @@ impl Game for Castle64Game {
                 && self.pos.z > a.min.z - 0.05
                 && self.pos.z < a.max.z + 0.05
                 && a.max.y <= feet_y + 0.05
-                && a.max.y > shadow_top
+                && under.is_none_or(|u| a.max.y > u.max.y)
             {
-                shadow_top = a.max.y;
+                under = Some(a);
             }
         }
-        if shadow_top > f32::MIN && feet_y - shadow_top < 10.0 {
-            renderer.draw_model(
-                M_SHADOW,
-                &Transform3 {
-                    position: Vec3::new(self.pos.x, shadow_top + 0.03, self.pos.z),
-                    rotation: Vec3::ZERO,
-                    scale: Vec3::new(0.8, 1.0, 0.8),
-                },
-                Material::VertexLit,
-                &plain,
-            );
+        if let Some(a) = under {
+            renderer.set_shadow_receivers(&[ShadowPlane::top_of(a.min, a.max)]);
         }
+        renderer.set_shadows(Some(&PLAYER_SHADOWS));
 
         // Player articulado: tronco + braços/pernas com pivô no ombro e no
         // quadril — ciclo de caminhada real (o z-buffer resolve as juntas).
@@ -931,6 +931,11 @@ impl Game for Castle64Game {
                 feet + Vec3::new(ox * cy + oz * sy, oy, -ox * sy + oz * cy)
             };
             let part = |renderer: &mut dyn Renderer, model: ModelId, at: Vec3, pitch: f32| {
+                let shadow = if model == M_TORSO {
+                    TORSO_SHADOW
+                } else {
+                    LIMB_SHADOW
+                };
                 renderer.draw_model(
                     model,
                     &Transform3 {
@@ -939,7 +944,7 @@ impl Game for Castle64Game {
                         scale: Vec3::ONE,
                     },
                     Material::VertexLit,
-                    &plain,
+                    &ModelParams { shadow, ..plain },
                 );
             };
             part(renderer, M_TORSO, feet, 0.0);

@@ -265,6 +265,18 @@ pub fn platform_lines_on(
         };
         out.push((line, level));
     }
+    // Shadows (ADR 0024): each tier's casters, a cast past the N64's
+    // planar budget warned.
+    for (b, label) in [(n64, n64_label), (n3ds, n3ds_label), (pc, "PC")] {
+        if let Some(line) = trino_scene::budget::shadow_line(b) {
+            let level = if b.shadows.over_budget > 0 {
+                Level::Near
+            } else {
+                Level::Ok
+            };
+            out.push((format!("{label} {line}"), level));
+        }
+    }
     out
 }
 

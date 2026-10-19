@@ -64,6 +64,10 @@ pub struct CostModel {
     /// One Opus voice (48 kHz CELT, decoded on the CPU with RSP help), per
     /// second of output, everything included.
     pub us_per_opus_voice_per_s: f32,
+    /// One blob shadow ([`crate::shadow`]): its placement on the receiver,
+    /// four corners projected outside the T&L and two textured triangles
+    /// submitted by the CPU after the batch's opaque draws.
+    pub us_per_blob: f32,
 }
 
 /// The N64's RSP work in a frame ([`CostModel::split_us`]): every RSP draw
@@ -125,7 +129,15 @@ pub const N64_COST: CostModel = CostModel {
     us_per_voice_per_s: AUDIO_VOICE,
     us_per_voice_sample: AUDIO_SAMPLE,
     us_per_opus_voice_per_s: AUDIO_OPUS,
+    // ares, 2026-10-19 (issue #57, the self-test's `shadow cost` step):
+    // the frame time (less its vsync wait) of 22 blobs on a floor less the
+    // same frame without them, per blob: 109 µs with the Expansion Pak,
+    // 113 without.
+    us_per_blob: BLOB_US,
 };
+
+/// [`N64_COST`]'s blob term, µs per blob.
+const BLOB_US: f32 = 111.0;
 
 // The audio terms of [`N64_COST`], µs per second of output.
 const AUDIO_IDLE: f32 = 30_262.0;
@@ -181,6 +193,11 @@ impl CostModel {
     /// Estimated microseconds of `n` billboards (impostors, particles).
     pub fn billboards_us(&self, n: u32) -> u32 {
         (self.us_per_billboard * n as f32) as u32
+    }
+
+    /// `n` blob shadows' CPU time.
+    pub fn blobs_us(&self, n: u32) -> u32 {
+        (self.us_per_blob * n as f32) as u32
     }
 
     /// Estimated T&L-only microseconds (no sort/submit) — comparable with

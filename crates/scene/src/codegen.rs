@@ -50,7 +50,7 @@ pub fn to_rust_for(scene: &Scene, lib: &Library, target: Target) -> (String, Vec
     );
     let _ = writeln!(
         out,
-        "#[allow(unused_imports)]\nuse trino_core::{{\n    AmbientOcclusion, AoQuality, Camera3, ClipId, Collider, Color, DetailTexture, Fog, Impostor,\n    Light, LodLevel, Lods, Mat34, ModelId, ModelParams, NO_CELL, SceneNode, Shading, Shape,\n    SoundId, SoundSource, SpriteId, Tags, TexFilter, Vec2, Vec3, VisVolume, Water,\n}};\n"
+        "#[allow(unused_imports)]\nuse trino_core::{{\n    AmbientOcclusion, AoQuality, Camera3, ClipId, Collider, Color, DetailTexture, Fog, Impostor,\n    Light, LodLevel, Lods, Mat34, ModelId, ModelParams, NO_CELL, SceneNode, ShadowCast,\n    ShadowPlane, ShadowSettings, ShadowTier, Shading, Shape, SoundId, SoundSource, SpriteId,\n    Tags, TexFilter, Vec2, Vec3, VisVolume, Water,\n}};\n"
     );
     let env = &scene.environment;
     let cam = env.core_camera();
@@ -97,6 +97,42 @@ pub fn to_rust_for(scene: &Scene, lib: &Library, target: Target) -> (String, Vec
         None => "None".into(),
     };
     let _ = writeln!(out, "pub const AO: Option<AmbientOcclusion> = {ao};\n");
+    // Shadows (ADR 0024): `Renderer::set_shadows(SHADOWS.as_ref())` and
+    // `set_shadow_receivers(RECEIVERS)` every frame.
+    let shadows = match env.core_shadows() {
+        Some(s) => format!(
+            "Some(ShadowSettings {{\n    tier_max: ShadowTier::{:?},\n    map_size: {},\n    distance: {},\n    softness: {},\n    color: {},\n}})",
+            s.tier_max,
+            s.map_size,
+            f(s.distance),
+            s.softness,
+            color(s.color)
+        ),
+        None => "None".into(),
+    };
+    let _ = writeln!(
+        out,
+        "pub const SHADOWS: Option<ShadowSettings> = {shadows};\n"
+    );
+    let receivers: Vec<String> = resolved
+        .receivers()
+        .iter()
+        .map(|p| {
+            format!(
+                "    ShadowPlane::horizontal(Vec3::new({}, {}, {}), {}, {}),\n",
+                f(p.point.x),
+                f(p.point.y),
+                f(p.point.z),
+                f(p.half.x),
+                f(p.half.y)
+            )
+        })
+        .collect();
+    let _ = writeln!(
+        out,
+        "/// Where blob and planar shadows land (receivers' tops).\npub const RECEIVERS: &[ShadowPlane] = &[\n{}];\n",
+        receivers.concat()
+    );
 
     // Asset groups (issue #56): only for a scene that has them, so a
     // boot-only scene's module is what it always was.
@@ -217,7 +253,7 @@ pub fn to_rust_for(scene: &Scene, lib: &Library, target: Target) -> (String, Vec
             .collect();
         let _ = writeln!(
             out,
-            "    SceneNode {{\n        name: \"{}\",\n        tags: Tags::List(&[{}]),\n        matrix: Mat34 {{\n            m: [{}],\n        }},\n        model: {},\n        params: ModelParams {{\n            tint: {},\n            emissive: {},\n            shading: Shading::{},\n            double_sided: {},\n            anim: None,\n            texture: {},\n            palette: None,\n            gloss: {},\n            filter: TexFilter::{:?},\n            detail: {},\n            water: {},\n        }},\n        anim: {},\n        collider: {},\n        lod: {},\n        sound: {},\n        cell: {},\n        vis: {},\n    }},",
+            "    SceneNode {{\n        name: \"{}\",\n        tags: Tags::List(&[{}]),\n        matrix: Mat34 {{\n            m: [{}],\n        }},\n        model: {},\n        params: ModelParams {{\n            tint: {},\n            emissive: {},\n            shading: Shading::{},\n            double_sided: {},\n            anim: None,\n            texture: {},\n            palette: None,\n            gloss: {},\n            filter: TexFilter::{:?},\n            detail: {},\n            water: {},\n            shadow: {},\n        }},\n        anim: {},\n        collider: {},\n        lod: {},\n        sound: {},\n        cell: {},\n        vis: {},\n    }},",
             esc(&item.name),
             tags.join(", "),
             rows.join(", "),
@@ -252,6 +288,7 @@ pub fn to_rust_for(scene: &Scene, lib: &Library, target: Target) -> (String, Vec
                 ),
                 None => "None".into(),
             },
+            shadow_cast(p.shadow),
             anim,
             collider,
             lod,
@@ -283,6 +320,20 @@ pub fn to_rust_for(scene: &Scene, lib: &Library, target: Target) -> (String, Vec
     }
     let _ = writeln!(out, "];");
     (out, resolved.warnings)
+}
+
+/// A [`trino_core::ShadowCast`] as a Rust expression.
+pub(crate) fn shadow_cast(c: trino_core::ShadowCast) -> String {
+    match c {
+        trino_core::ShadowCast::None => "ShadowCast::None".into(),
+        trino_core::ShadowCast::Blob { radius } => {
+            format!("ShadowCast::Blob {{ radius: {} }}", f(radius))
+        }
+        trino_core::ShadowCast::Mesh => "ShadowCast::Mesh".into(),
+        trino_core::ShadowCast::Auto { blob_radius } => {
+            format!("ShadowCast::Auto {{ blob_radius: {} }}", f(blob_radius))
+        }
+    }
 }
 
 fn scene_speed(scene: &Scene, owner: &[usize]) -> Option<f32> {

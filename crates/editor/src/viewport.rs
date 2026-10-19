@@ -23,7 +23,7 @@ use trino_core::{
     Color, Fog, HwTier, Light, LodPick, Material, ModelId, ModelParams, QualityPreset,
     QualitySettings, Renderer, Shading, SpriteId, SpriteParams, Vec2 as TVec2, Vec3,
 };
-use trino_platform_pc::{AoView, PcRenderer, SimProfile};
+use trino_platform_pc::{AoView, PcRenderer, ShadowView, SimProfile};
 use trino_scene::{Resolved, Scene, Target, Transform};
 
 use crate::gizmo::{self, AxisEvent, Drag, Gizmo, GizmoMode, OrbitCam, Proj, RenderCam};
@@ -153,6 +153,9 @@ pub struct Stats {
     pub lod: crate::budget::LodCounts,
     /// The screen-space AO ran on the last frame.
     pub ao: bool,
+    /// The tier the last frame's shadows drew at (`frame.shadows` counts
+    /// them).
+    pub shadow_tier: trino_core::ShadowTier,
 }
 
 pub struct Viewport {
@@ -184,6 +187,10 @@ pub struct Viewport {
     /// The mode the last render used (a change from the View menu
     /// re-renders).
     ao_rendered: AoView,
+    /// Scene view: the shadows at the profile's tier, off, or in the
+    /// debug color (every caster's, even with the scene's off).
+    pub shadow_view: ShadowView,
+    shadow_rendered: ShadowView,
     /// Game view: the console budget overlay (tris / sprites / texture vs
     /// the selected profile's Caps).
     pub show_budget: bool,
@@ -255,6 +262,8 @@ impl Viewport {
             show_colliders: true,
             ao_view: AoView::Game,
             ao_rendered: AoView::Game,
+            shadow_view: ShadowView::Game,
+            shadow_rendered: ShadowView::Game,
             show_budget: true,
             web_canvas: std::env::var("TRINO_EDITOR_WEB_CANVAS")
                 .ok()
@@ -277,6 +286,7 @@ impl Viewport {
                 frame: trino_core::FrameStats::default(),
                 lod: crate::budget::LodCounts::default(),
                 ao: false,
+                shadow_tier: trino_core::ShadowTier::None,
             },
             hover: None,
             box_start: None,
@@ -477,6 +487,15 @@ impl Viewport {
             ViewKind::Game => AoView::Game,
         });
         r.set_ambient_occlusion(env.core_ao().map(|a| rc.ao(a)).as_ref());
+        // The scene's shadows (ADR 0024) at the previewed profile's tier,
+        // onto its receivers; the Scene view's menu turns them off or
+        // paints them in the debug color.
+        r.set_shadow_view(match self.kind {
+            ViewKind::Scene => self.shadow_view,
+            ViewKind::Game => ShadowView::Game,
+        });
+        r.set_shadows(env.core_shadows().as_ref());
+        r.set_shadow_receivers(&input.resolved.receivers());
         // Water surfaces flow with the preview clock; ripples dropped from
         // the material inspector ring out.
         r.set_water(input.water.0, input.water.1);
@@ -580,6 +599,7 @@ impl Viewport {
             frame: r.stats(),
             lod,
             ao: r.frame_times().ao_passes > 0,
+            shadow_tier: r.shadow_tier(),
         };
     }
 
@@ -682,6 +702,7 @@ impl Viewport {
                 frame: self.renderer.stats(),
                 lod: crate::budget::LodCounts::default(),
                 ao: self.renderer.frame_times().ao_passes > 0,
+                shadow_tier: self.renderer.shadow_tier(),
             };
             if dynres_live {
                 self.renderer.report_frame_time((dt * 1e6) as u32);
@@ -692,9 +713,11 @@ impl Viewport {
             || flashing
             || cam_moving
             || self.ao_rendered != self.ao_view
+            || self.shadow_rendered != self.shadow_view
             || dynres_live
         {
             self.ao_rendered = self.ao_view;
+            self.shadow_rendered = self.shadow_view;
             self.render(input, internal);
             if size_changed {
                 self.reregister();
@@ -909,6 +932,9 @@ impl Viewport {
         if self.kind == ViewKind::Scene && self.show_colliders {
             colliders(&painter, &proj, input);
             vis_volumes(&painter, &proj, input);
+        }
+        if self.kind == ViewKind::Scene && self.shadow_view == ShadowView::Debug && !playing {
+            shadow_debug(&painter, &proj, input);
         }
         if let Some(h) = &self.hover
             && Some(h.as_slice()) != input.selected
@@ -1491,6 +1517,28 @@ impl Viewport {
                                     }
                                 ));
                             }
+                            // The shadows' menu, with room for it too
+                            // (else View › Shadow view).
+                            let room = ui.available_width() >= 3.0 * 33.0 + 12.0;
+                            let color = if self.shadow_view == ShadowView::Off {
+                                c::TEXT_WEAK
+                            } else {
+                                c::ACCENT_TEXT
+                            };
+                            let menu = room.then(|| {
+                                ui.menu_button(
+                                    RichText::new(icon::SUN_HORIZON).size(15.0).color(color),
+                                    |ui| {
+                                        if shadow_menu(ui, &mut self.shadow_view) {
+                                            self.rendered = None;
+                                        }
+                                    },
+                                )
+                            });
+                            if let Some(menu) = menu {
+                                menu.response
+                                    .on_hover_text(shadow_hover(self.shadow_view, &self.stats));
+                            }
                             ui.separator();
                             if theme::icon_button(ui, icon::CROSSHAIR, "Frame selection (F)")
                                 .clicked()
@@ -1687,6 +1735,40 @@ pub fn ao_menu(ui: &mut egui::Ui, view: &mut AoView) -> bool {
     *view != before
 }
 
+/// The Scene view's shadow modes, as radio buttons (toolbar and View
+/// menu). Returns true when the mode changed.
+pub fn shadow_menu(ui: &mut egui::Ui, view: &mut ShadowView) -> bool {
+    let before = *view;
+    for v in ShadowView::ALL {
+        if ui
+            .radio_value(view, v, format!("Shadows: {}", v.label().to_lowercase()))
+            .clicked()
+        {
+            ui.close();
+        }
+    }
+    *view != before
+}
+
+/// The shadow button's hover: the mode, the tier drawn and what cast.
+fn shadow_hover(view: ShadowView, stats: &Stats) -> String {
+    let s = &stats.frame.shadows;
+    if stats.shadow_tier == trino_core::ShadowTier::None {
+        return format!(
+            "Shadows: {} (none drawn: the scene has none, or they are off)",
+            view.label().to_lowercase()
+        );
+    }
+    format!(
+        "Shadows: {} — {} tier: {} blobs, {} planar, {} in the map",
+        view.label().to_lowercase(),
+        stats.shadow_tier.label(),
+        s.blobs,
+        s.planar,
+        s.mapped
+    )
+}
+
 pub fn ao_view_label(view: AoView) -> &'static str {
     match view {
         AoView::Game => "As the scene sets it",
@@ -1782,6 +1864,40 @@ fn colliders(painter: &egui::Painter, proj: &Proj, input: &ViewInput) {
             [w.max.x, w.max.y, w.max.z],
         ) {
             painter.line_segment([a, b], stroke);
+        }
+    }
+}
+
+/// The Scene view's shadow debug: each receiver's rectangle (where blob
+/// and planar shadows land) and each caster's bounds, in the debug color
+/// its shadows draw in.
+fn shadow_debug(painter: &egui::Painter, proj: &Proj, input: &ViewInput) {
+    let d = ShadowView::DEBUG_COLOR;
+    let color = Color32::from_rgb(d.r, d.g, d.b);
+    let stroke = Stroke::new(1.4, color);
+    for plane in input.resolved.receivers() {
+        // An endless ground shows its middle 40 m.
+        let h = |v: f32| v.min(20.0);
+        let (hx, hy) = (h(plane.half.x), h(plane.half.y));
+        let corners = [(-hx, -hy), (hx, -hy), (hx, hy), (-hx, hy)]
+            .map(|(x, y)| proj.project(plane.at(TVec2::new(x, y))));
+        for i in 0..4 {
+            if let (Some(a), Some(b)) = (corners[i], corners[(i + 1) % 4]) {
+                painter.line_segment([a, b], stroke);
+            }
+        }
+    }
+    let stroke = Stroke::new(1.0, color.gamma_multiply(0.6));
+    for item in &input.resolved.items {
+        if !item.params.shadow.casts() {
+            continue;
+        }
+        if let Some((id, _)) = &item.model
+            && let Some(m) = input.project.model_by_id(*id)
+        {
+            for [a, b] in gizmo::box_lines(proj, &item.matrix, m.min, m.max) {
+                painter.line_segment([a, b], stroke);
+            }
         }
     }
 }

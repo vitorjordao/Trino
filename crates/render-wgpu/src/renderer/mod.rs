@@ -15,6 +15,8 @@ mod depth_blit;
 mod gpu_timer;
 mod gpu_tnl;
 mod lights;
+mod shadow;
+mod shadow_map;
 mod upscale;
 mod water;
 
@@ -29,8 +31,9 @@ use trino_core::render3d::{
 use trino_core::{
     AmbientOcclusion, AoSetting, AoTier, Caps, Color, FontId, FrameLimit, FrameStats, Instance,
     LightList, LightTier, LocalLight, Mat34, Material, ModelId, ModelParams, Palette,
-    QualitySettings, Renderer, Ripple, Screen, SpriteId, SpriteParams, TexFilter, TextParams,
-    Transform3, Vec2, WaterState, WaterTier,
+    QualitySettings, Renderer, Ripple, Screen, ShadowFrame, ShadowPlane, ShadowSetting,
+    ShadowSettings, ShadowTier, SpriteId, SpriteParams, TexFilter, TextParams, Transform3, Vec2,
+    WaterState, WaterTier,
 };
 
 use crate::sim::SimProfile;
@@ -40,6 +43,7 @@ use batch::{
     make_command,
 };
 pub use bench::{Bench, Calibration};
+pub use shadow::ShadowView;
 
 const OFFSCREEN_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
@@ -240,6 +244,9 @@ pub struct PcFrameTimes {
     /// Upscale passes run (0 or 1: a render scale other than 1 stretched
     /// the frame's 3D onto the picture, issue #55).
     pub upscales: u32,
+    /// Shadow map passes run (0 or 1: the light pass and its composite,
+    /// the frame's 3D, once).
+    pub shadow_maps: u32,
 }
 
 /// Microseconds since `t0`.
@@ -356,6 +363,26 @@ pub struct PcRenderer {
     /// The same over the multisampled depth (MSAA on).
     ao_pass_ms: Option<ao::AoPass>,
     light_sets: lights::LightSets,
+    /// This frame's shadows (`set_shadows`, `set_shadow_receivers`;
+    /// cleared at `begin_frame`), what shows of them (`set_shadow_view`,
+    /// `TRINO_SHADOWS`), the batch's blob and planar shadow triangles
+    /// (drawn after its opaque ones, before its water), their pipelines
+    /// (built on first use, again for MSAA) and the softness the blob
+    /// texture was made with.
+    shadows: ShadowFrame,
+    shadow_game: Option<ShadowSettings>,
+    shadow_view: ShadowView,
+    pending_shadow: Vec<(ScreenTri, shadow::ShadowRun)>,
+    shadow_pipes: Option<shadow::ShadowPipes>,
+    shadow_pipes_ms: Option<shadow::ShadowPipes>,
+    blob_softness: Option<u8>,
+    /// The Map tier: this frame's casters (drawn into the map at the end
+    /// of the 3D), their world triangles, and the map's passes (built on
+    /// first use, again over the multisampled depth).
+    map_casters: Vec<MapCaster>,
+    map_verts: Vec<[f32; 3]>,
+    shadow_map: Option<shadow_map::MapPass>,
+    shadow_map_ms: Option<shadow_map::MapPass>,
     /// This frame's water clock and ripples (`set_water`, cleared at
     /// `begin_frame`), the water surfaces drawn (the water pipelines'
     /// uniform) and their GPU side.
@@ -447,6 +474,8 @@ struct QualityState {
     /// Caps the game's AO quality, or drops the pass (`None`: the game's
     /// as it sets it).
     ao: Option<AoSetting>,
+    /// The shadows' level (`None`: never applied, the full Map tier).
+    shadows: Option<ShadowSetting>,
     lod_bias: f32,
     sharpen: f32,
     anisotropy: u8,
@@ -461,6 +490,7 @@ impl QualityState {
         applied: None,
         scale: 1.0,
         ao: None,
+        shadows: None,
         lod_bias: 1.0,
         sharpen: 0.0,
         anisotropy: 1,
@@ -1302,6 +1332,13 @@ impl PcRenderer {
         {
             r.set_ao_view(view);
         }
+        // And TRINO_SHADOWS=off|debug.
+        if let Some(view) = std::env::var("TRINO_SHADOWS")
+            .ok()
+            .and_then(|v| ShadowView::parse(&v))
+        {
+            r.set_shadow_view(view);
+        }
         Ok(r)
     }
 
@@ -1965,6 +2002,20 @@ impl PcRenderer {
             water_state: WaterState::NONE,
             water_sets: water::WaterSets::default(),
             water,
+            shadows: ShadowFrame::OFF,
+            shadow_game: None,
+            shadow_view: std::env::var("TRINO_SHADOWS")
+                .ok()
+                .and_then(|v| ShadowView::parse(&v))
+                .unwrap_or_default(),
+            pending_shadow: Vec::new(),
+            shadow_pipes: None,
+            shadow_pipes_ms: None,
+            map_casters: Vec::new(),
+            map_verts: Vec::new(),
+            shadow_map: None,
+            shadow_map_ms: None,
+            blob_softness: None,
             surf_scratch: Box::new(SurfaceScratch::new()),
             camera: Camera3::default(),
             light: DEFAULT_LIGHT,
@@ -2130,6 +2181,7 @@ impl PcRenderer {
         };
         let (cpu_us, rsp_us) =
             trino_core::perf::N64_COST.split_us(&self.n64.cpu, self.n64.cpu_draws, &rsp);
+        let cpu_us = cpu_us + trino_core::perf::N64_COST.blobs_us(self.n64.shadow_blobs);
         N64Estimate {
             cpu_us,
             rsp_us,
@@ -2226,6 +2278,9 @@ impl PcRenderer {
         if let Some(ao) = &mut self.ao_pass_ms {
             ao.invalidate();
         }
+        if let Some(m) = &mut self.shadow_map_ms {
+            m.invalidate();
+        }
     }
 
     /// Samples per pixel of the scene (1 = no multisampling).
@@ -2249,6 +2304,7 @@ impl PcRenderer {
         let q = settings.clamped();
         self.set_msaa(q.msaa > 1);
         self.quality.ao = Some(q.ao);
+        self.quality.shadows = Some(q.shadows);
         self.quality.lod_bias = q.lod_bias;
         self.quality.sharpen = q.sharpen;
         self.quality.frame_limit = q.frame_limit;
@@ -2465,6 +2521,12 @@ impl PcRenderer {
             .flatten()
         {
             ao.invalidate();
+        }
+        for m in [&mut self.shadow_map, &mut self.shadow_map_ms]
+            .into_iter()
+            .flatten()
+        {
+            m.invalidate();
         }
     }
 
@@ -3011,7 +3073,11 @@ impl PcRenderer {
     /// need no painter order.
     fn flush_model_batch(&mut self) {
         let gpu = self.gpu.as_ref().is_some_and(|g| g.has_pending());
-        if self.pending_tris.is_empty() && self.cpu_jobs.is_empty() && !gpu {
+        if self.pending_tris.is_empty()
+            && self.cpu_jobs.is_empty()
+            && self.pending_shadow.is_empty()
+            && !gpu
+        {
             return;
         }
         self.run_cpu_jobs();
@@ -3023,7 +3089,7 @@ impl PcRenderer {
                 count: r.end - r.start,
             });
         }
-        if !self.pending_tris.is_empty() {
+        if !self.pending_tris.is_empty() || !self.pending_shadow.is_empty() {
             self.flush_model_batch_now();
         }
         self.times.batch_us += micros(t0);
@@ -3111,6 +3177,23 @@ impl PcRenderer {
                 )
             })
             .collect();
+        // Water comes last in the keys: the batch's shadows go in between,
+        // over the opaque surfaces and under the water.
+        let water_at = keys
+            .iter()
+            .position(|&(k, _)| k >> 63 == 1)
+            .unwrap_or(keys.len());
+        self.push_tri_runs(&order[..water_at]);
+        self.push_shadow_runs();
+        self.push_tri_runs(&order[water_at..]);
+        self.pending_tris.clear();
+        self.pending_tex.clear();
+        self.pending_surf.clear();
+    }
+
+    /// Append `order`'s triangles as GPU vertices and commands, a command
+    /// per run of one texture and pipeline.
+    fn push_tri_runs(&mut self, order: &[(Option<TexKey>, ScreenTri, Option<SurfTri>)]) {
         let rgba = |c: Color| {
             [
                 c.r as f32 / 255.0,
@@ -3126,7 +3209,7 @@ impl PcRenderer {
         };
         let mut run_start = self.tri_verts.len() as u32;
         let mut run = order.first().map(|(t, _, s)| (*t, kind(s)));
-        for (tex, tri, surf) in &order {
+        for (tex, tri, surf) in order {
             let lit = surf.is_some();
             let k = kind(surf);
             if Some((*tex, k)) != run {
@@ -3188,9 +3271,282 @@ impl PcRenderer {
                 kind,
             });
         }
-        self.pending_tris.clear();
-        self.pending_tex.clear();
-        self.pending_surf.clear();
+    }
+
+    /// The batch's shadow triangles (ADR 0024): blobs, then planar ones,
+    /// each far to near; a run drawn once per pixel goes in twice (mark,
+    /// apply).
+    fn push_shadow_runs(&mut self) {
+        if self.pending_shadow.is_empty() {
+            return;
+        }
+        let mut shadow = std::mem::take(&mut self.pending_shadow);
+        shadow.sort_by_key(|(t, run)| (*run, !t.depth.to_bits()));
+        let blob = TexKey::billboard(shadow::BLOB_SPRITE.0, TexFilter::Bilinear);
+        let mut at = 0;
+        while at < shadow.len() {
+            let run = shadow[at].1;
+            let end = at + shadow[at..].iter().take_while(|(_, r)| *r == run).count();
+            let first = self.tri_verts.len() as u32;
+            for (tri, _) in &shadow[at..end] {
+                for i in 0..3 {
+                    let p = tri.pts[i];
+                    let c = tri.colors[i];
+                    let textured = run == shadow::ShadowRun::Blob;
+                    self.tri_verts.push(TriVertex {
+                        pos: [p.x, p.y],
+                        color: [
+                            c.r as f32 / 255.0,
+                            c.g as f32 / 255.0,
+                            c.b as f32 / 255.0,
+                            c.a as f32 / 255.0,
+                        ],
+                        depth: tri.z[i],
+                        w: if textured { tri.w[i] } else { 1.0 },
+                        uv: [tri.uv[i].x, tri.uv[i].y],
+                        world: [0.0; 3],
+                        normal: [0.0; 3],
+                        base: [0.0; 4],
+                        gloss: 0.0,
+                        set: 0.0,
+                        tex: [0.0; 2],
+                    });
+                }
+            }
+            let count = self.tri_verts.len() as u32 - first;
+            let texture = (run == shadow::ShadowRun::Blob).then_some(blob);
+            let kinds: &[TriKind] = match run {
+                shadow::ShadowRun::PlanarOnce => &[TriKind::ShadowMark, TriKind::ShadowApply],
+                _ => &[TriKind::Shadow],
+            };
+            for &kind in kinds {
+                self.commands.push(Cmd::Tris {
+                    first,
+                    count,
+                    texture,
+                    kind,
+                });
+            }
+            at = end;
+        }
+        shadow.clear();
+        self.pending_shadow = shadow;
+    }
+
+    /// The shadow `params.shadow` casts for a draw of `model` at `matrix`
+    /// (ADR 0024): a blob or a planar shadow into the batch's shadow
+    /// bucket. Every profile draws them like its console.
+    fn cast_shadow(&mut self, model: ModelId, matrix: &Mat34, params: &ModelParams) {
+        use trino_core::shadow::{self as sh, ShadowPlan};
+        if self.shadows.tier() == ShadowTier::None {
+            return;
+        }
+        let plan = self.shadows.plan(params.shadow);
+        if plan == ShadowPlan::None {
+            return;
+        }
+        let screen = self.current_screen_size();
+        let ctx = tnl_context(&mut self.tnl_ctx, &self.camera, &self.light, screen, &[]);
+        let Some((tmdl, layout)) = self.meshes.get(&model.0) else {
+            return;
+        };
+        let mesh = Mesh::from_layout(tmdl, layout);
+        let sphere = sh::caster_sphere(mesh.bounds(), matrix);
+        match plan {
+            ShadowPlan::None => {}
+            ShadowPlan::Blob { radius } => {
+                let Some(b) = self.shadows.blob(&ctx, sphere.0, sphere.1, radius) else {
+                    return;
+                };
+                let mut out = [EMPTY_TRI; 7];
+                let n = sh::blob_tris(&ctx, &self.caps, &b, &mut out);
+                if n > 0 {
+                    self.shadows.stats.blobs += 1;
+                    self.shadows.stats.tris += n as u32;
+                    self.pending_shadow
+                        .extend(out[..n].iter().map(|t| (*t, shadow::ShadowRun::Blob)));
+                    if self.profile == SimProfile::N64 {
+                        self.n64.shadow_blobs += 1;
+                    }
+                }
+            }
+            ShadowPlan::Planar => {
+                let Some(d) = self.shadows.planar(&ctx, sphere.0, matrix, params) else {
+                    return;
+                };
+                // The 3DS draws them once per pixel (its stencil); the N64
+                // blends every triangle.
+                let run = if self.profile == SimProfile::N64 {
+                    shadow::ShadowRun::Planar
+                } else {
+                    shadow::ShadowRun::PlanarOnce
+                };
+                let before = self.pending_shadow.len();
+                let pending = &mut self.pending_shadow;
+                let tnl = sh::planar_tris(
+                    &self.shadows,
+                    &ctx,
+                    &mut self.tnl_scratch,
+                    &self.caps,
+                    &mesh,
+                    sphere,
+                    &d,
+                    &mut |t| pending.push((t, run)),
+                );
+                self.frame_stats.tnl.add(&tnl);
+                let added = self.pending_shadow.len() - before;
+                if added > 0 {
+                    self.shadows.stats.planar += 1;
+                    self.shadows.stats.tris += added as u32;
+                }
+                if self.profile == SimProfile::N64 {
+                    self.n64.cpu_draws += 1;
+                    self.n64.cpu.add(&tnl);
+                }
+            }
+            ShadowPlan::Map => {
+                self.shadows.stats.mapped += 1;
+                self.map_casters.push(MapCaster {
+                    model: model.0,
+                    matrix: *matrix,
+                    anim: params.anim,
+                    sphere,
+                });
+            }
+        }
+    }
+
+    /// The shadows this frame draws: the game's through the view
+    /// ([`ShadowView`]), at the profile's tier capped by the quality
+    /// preset (native: `Off` keeps the planar tier, no map). Rebuilds the
+    /// blob texture when the softness changes.
+    fn apply_shadow_view(&mut self) {
+        let settings = self.shadow_view.resolve(self.shadow_game);
+        let cap = match self.quality.shadows {
+            Some(ShadowSetting::Off) if self.profile.is_native() => ShadowTier::Planar,
+            _ => ShadowTier::Map,
+        };
+        self.shadows.set(settings.as_ref(), &self.caps, cap);
+        if let Some(s) = self.shadows.settings()
+            && self.blob_softness != Some(s.softness)
+        {
+            let softness = s.softness;
+            let n = trino_core::shadow::BLOB_TEXTURE_SIZE as u32;
+            self.upload_sprite(shadow::BLOB_SPRITE, n, n, &shadow::blob_rgba(softness));
+            self.blob_softness = Some(softness);
+        }
+    }
+
+    /// The Map tier's frame: the casters' world triangles into
+    /// `map_verts` (posed, every triangle of each caster over the box) and
+    /// the composite's parameters for a `size` picture (its focal length
+    /// set by the caller). `None` without a mapped caster.
+    fn shadow_map_frame(&mut self, size: (u32, u32)) -> Option<shadow_map::MapUniform> {
+        if self.map_casters.is_empty() || self.shadows.tier() != ShadowTier::Map {
+            return None;
+        }
+        let s = *self.shadows.settings()?;
+        let max = self.device.limits().max_texture_dimension_2d;
+        let map_size = shadow_map::map_size(s.map_size, self.quality.shadows, max);
+        let spheres: Vec<_> = self.map_casters.iter().map(|c| c.sphere).collect();
+        let aspect = size.0 as f32 / size.1.max(1) as f32;
+        let fit = trino_core::shadow::map_fit(
+            &self.camera,
+            aspect,
+            self.light.dir,
+            s.distance,
+            map_size as u16,
+            &spheres,
+        )?;
+        let mut verts = std::mem::take(&mut self.map_verts);
+        verts.clear();
+        let mut joints = [Mat34::IDENTITY; trino_core::MAX_JOINTS];
+        for c in &self.map_casters {
+            // Its shadow lands where it is across the box: none outside.
+            let p = fit.matrix.transform_point(c.sphere.0);
+            let k = c.sphere.1 / fit.radius;
+            if p.x.abs() > 1.0 + k || p.y.abs() > 1.0 + k {
+                continue;
+            }
+            let Some((tmdl, layout)) = self.meshes.get(&c.model) else {
+                continue;
+            };
+            let mesh = Mesh::from_layout(tmdl, layout);
+            let n = mesh.pose(c.anim, &mut joints);
+            verts.extend((0..mesh.index_count).map(|k| {
+                let i = mesh.index(k) as usize;
+                let p = if n > 0 {
+                    mesh.posed_position(i, &joints, n)
+                } else {
+                    mesh.position(i)
+                };
+                let w = c.matrix.transform_point(p);
+                [w.x, w.y, w.z]
+            }));
+        }
+        self.map_verts = verts;
+        let fog = self.light.fog;
+        Some(shadow_map::MapUniform {
+            size,
+            focal: 0.0,
+            near: trino_core::render3d::NEAR_PLANE,
+            fog: if fog.enabled() {
+                (fog.near, fog.far)
+            } else {
+                (0.0, 0.0)
+            },
+            view: self.camera.view(),
+            fit,
+            light: self.light.dir,
+            color: s.color,
+            softness: s.softness,
+            distance: s.distance,
+            map_size,
+            taps: shadow_map::taps(self.quality.shadows),
+        })
+    }
+
+    /// What the shadows show ([`ShadowView`]: as the game sets them, off,
+    /// or in a debug color), from the next `set_shadows` on.
+    pub fn set_shadow_view(&mut self, view: ShadowView) {
+        self.shadow_view = view;
+        self.apply_shadow_view();
+    }
+
+    pub fn shadow_view(&self) -> ShadowView {
+        self.shadow_view
+    }
+
+    /// The tier this frame's shadows draw at (`None` without any).
+    pub fn shadow_tier(&self) -> ShadowTier {
+        self.shadows.tier()
+    }
+
+    /// Build the shadow pipelines a frame's commands use (the MSAA set
+    /// when the scene is multisampled).
+    fn ensure_shadow_pipes(&mut self) {
+        let used = self.commands.iter().any(|c| {
+            matches!(
+                c,
+                Cmd::Tris {
+                    kind: TriKind::Shadow | TriKind::ShadowMark | TriKind::ShadowApply,
+                    ..
+                }
+            )
+        });
+        if !used {
+            return;
+        }
+        if self.shadow_pipes.is_none() {
+            self.shadow_pipes = Some(shadow::ShadowPipes::new(&self.device, &self.sources, 1));
+        }
+        if self.msaa > 1 && self.shadow_pipes_ms.is_none() {
+            self.shadow_pipes_ms = Some(shadow::ShadowPipes::new(
+                &self.device,
+                &self.sources,
+                self.msaa,
+            ));
+        }
     }
 
     /// Record the texture of the `added` triangles appended at `before`
@@ -3251,6 +3607,7 @@ impl PcRenderer {
     /// Render the recorded commands into the main target, or (`second`)
     /// into the second screen's, and submit.
     fn draw_commands(&mut self, second: bool) {
+        self.ensure_shadow_pipes();
         if self.strict {
             // With two screens, the main screen's counts are in `main_*`:
             // the budgets are per frame, both screens together.
@@ -3434,7 +3791,20 @@ impl PcRenderer {
         // draws at the picture's resolution.
         let ao = if second { None } else { self.frame_ao() };
         let scaled = !second && self.scene.is_some();
-        let split = if ao.is_some() || scaled {
+        // The Map tier's casters (their world triangles into `map_verts`)
+        // and the box over the view: its passes run at the split too,
+        // before the AO.
+        let map = if second {
+            None
+        } else {
+            let size = if scaled {
+                self.scene_size()
+            } else {
+                self.internal_size
+            };
+            self.shadow_map_frame(size)
+        };
+        let split = if ao.is_some() || scaled || map.is_some() {
             segments
                 .iter()
                 .rposition(|s| matches!(s, Segment::Tris { .. } | Segment::Meshes { .. }))
@@ -3507,7 +3877,7 @@ impl PcRenderer {
         }
         let end = if ms {
             MsPass::Resolve {
-                keep_depth: ao.is_some() && split.is_some(),
+                keep_depth: (ao.is_some() || map.is_some()) && split.is_some(),
             }
         } else {
             MsPass::Off
@@ -3516,6 +3886,47 @@ impl PcRenderer {
             self.record_segments(&mut encoder, second, scene_pass, first_part, load, end);
         self.times.draw_calls += draws;
         self.times.pipeline_switches += switches;
+        if let (Some(mut params), Some(_)) = (map, split) {
+            let (color, scene_depth) = match (&self.scene, scene_pass) {
+                (Some(t), true) => (&t.color_view, &t.depth_view),
+                _ => (&self.offscreen_view, &self.depth_view),
+            };
+            params.size = if scene_pass {
+                self.scene_size()
+            } else {
+                self.internal_size
+            };
+            let half = self.camera.fov_y * 0.5;
+            params.focal = trino_core::math3d::cos(half) / trino_core::math3d::sin(half)
+                * params.size.1 as f32
+                * 0.5;
+            // With MSAA the composite reads the multisampled depth (its
+            // first sample), as the AO does.
+            let (pass, depth) = match (&self.msaa_targets, ms) {
+                (Some(t), true) => (
+                    self.shadow_map_ms.get_or_insert_with(|| {
+                        shadow_map::MapPass::new(&self.device, OFFSCREEN_FORMAT, true, false)
+                    }),
+                    &t.depth,
+                ),
+                _ => (
+                    self.shadow_map.get_or_insert_with(|| {
+                        shadow_map::MapPass::new(&self.device, OFFSCREEN_FORMAT, false, self.webgl2)
+                    }),
+                    scene_depth,
+                ),
+            };
+            self.times.upload_bytes += pass.encode(
+                &self.device,
+                &self.queue,
+                &mut encoder,
+                &self.map_verts,
+                depth,
+                color,
+                &params,
+            );
+            self.times.shadow_maps += 1;
+        }
         if let (Some((settings, mask)), Some(_)) = (ao, split) {
             let (w, h) = if scene_pass {
                 self.scene_size()
@@ -3704,6 +4115,10 @@ impl PcRenderer {
                 wgpu::StoreOp::Store,
             ),
         };
+        let shadow_pipes = match ms {
+            Some(_) => self.shadow_pipes_ms.as_ref(),
+            None => self.shadow_pipes.as_ref(),
+        };
         let pipes = match ms {
             Some((_, p, _)) => [&p[0], &p[1], &p[2], &p[3]],
             None => [
@@ -3793,6 +4208,18 @@ impl PcRenderer {
                         }
                         TriKind::Plain if texture.is_some_and(|t| t.clamp) => (pipes[2], 2),
                         TriKind::Plain => (pipes[1], 1),
+                        TriKind::Shadow | TriKind::ShadowMark | TriKind::ShadowApply => {
+                            // Built by `ensure_shadow_pipes` before the
+                            // frame's passes.
+                            let Some(sp) = shadow_pipes else {
+                                continue;
+                            };
+                            match kind {
+                                TriKind::Shadow => (&sp.blend, 6),
+                                TriKind::ShadowMark => (&sp.mark, 7),
+                                _ => (&sp.apply, 8),
+                            }
+                        }
                     };
                     bind(k);
                     pass.set_pipeline(pipeline);
@@ -3985,6 +4412,8 @@ struct N64Split {
     /// Of those, the water surfaces (priced by the water overlay's terms).
     water_draws: u32,
     water_tris: u32,
+    /// Blob shadows (the CPU's, [`trino_core::perf::CostModel::us_per_blob`]).
+    shadow_blobs: u32,
 }
 
 /// The native profile's GPU T&L decision for one draw (issue #51,
@@ -4122,6 +4551,11 @@ impl Renderer for PcRenderer {
         self.light_sets.clear();
         self.water_state = WaterState::NONE;
         self.water_sets.clear();
+        self.shadows.clear();
+        self.shadow_game = None;
+        self.pending_shadow.clear();
+        self.map_casters.clear();
+        self.apply_shadow_view();
         self.frame_stats = FrameStats::default();
         self.n64 = N64Split::default();
         self.pc_gpu_off = [0; PcGpuReject::COUNT];
@@ -4232,6 +4666,15 @@ impl Renderer for PcRenderer {
         self.wetness = wetness.clamp(0.0, 1.0);
     }
 
+    fn set_shadows(&mut self, shadows: Option<&ShadowSettings>) {
+        self.shadow_game = shadows.copied();
+        self.apply_shadow_view();
+    }
+
+    fn set_shadow_receivers(&mut self, receivers: &[ShadowPlane]) {
+        self.shadows.set_receivers(receivers);
+    }
+
     fn set_water(&mut self, time: f32, ripples: &[Ripple]) {
         let cap = self.caps.max_ripples;
         if self.strict {
@@ -4267,6 +4710,9 @@ impl Renderer for PcRenderer {
         _material: Material,
         params: &ModelParams,
     ) {
+        if params.shadow.casts() {
+            self.cast_shadow(model, matrix, params);
+        }
         let Some((tmdl, layout)) = self.meshes.get(&model.0) else {
             // Unknown or not loaded (its group is not ready): skip, counted.
             self.frame_stats.not_loaded += 1;
@@ -4587,6 +5033,8 @@ impl Renderer for PcRenderer {
         // alone, as a separate draw would.
         let mut accepted: Vec<GpuInstanceOf> = Vec::with_capacity(instances.len());
         let mut rest: Vec<(Mat34, ModelParams)> = Vec::new();
+        // The accepted copies' shadows (the rest cast theirs as draws).
+        let mut cast: Vec<Mat34> = Vec::new();
         {
             let Some((tmdl, layout)) = self.meshes.get(&model.0) else {
                 self.frame_stats.not_loaded += instances.len() as u32;
@@ -4615,6 +5063,9 @@ impl Renderer for PcRenderer {
                 if p.water.is_none()
                     && pc_gpu_decide((&ctx, &mesh, &i.matrix, &p), lit, alpha, true).is_ok()
                 {
+                    if p.shadow.casts() {
+                        cast.push(i.matrix);
+                    }
                     let detail = detail_scale(&self.sprites, texture, &p);
                     let affine = !trino_core::render3d::split_policy(&ctx, &mesh, &p);
                     accepted.push((
@@ -4625,6 +5076,9 @@ impl Renderer for PcRenderer {
                     rest.push((i.matrix, p));
                 }
             }
+        }
+        for m in &cast {
+            self.cast_shadow(model, m, params);
         }
         if !accepted.is_empty() {
             self.draw_gpu_instances(model, params, &accepted);
@@ -4727,6 +5181,7 @@ impl Renderer for PcRenderer {
 
     fn end_frame(&mut self) {
         self.flush_model_batch();
+        self.frame_stats.shadows = self.shadows.stats;
         self.frame_stats.tris =
             self.main_tris + (self.tri_verts.len() / 3) as u32 + self.frame_stats.tnl.pc_gpu_tris;
         self.last_stats = self.frame_stats;
@@ -4831,6 +5286,25 @@ fn unpad_rows(data: &[u8], size: (u32, u32), padded: u32) -> Vec<u8> {
 /// The texel `fill_rect` stretches (a handle no asset path hashes to in
 /// practice: fnv1a of a reserved name).
 const FILL_SPRITE: SpriteId = SpriteId::from_path("\0trino/fill");
+
+/// A caster of the Map tier: what the light pass draws of it.
+struct MapCaster {
+    model: u32,
+    matrix: Mat34,
+    anim: Option<trino_core::AnimRef>,
+    /// Its bounding sphere, world.
+    sphere: (trino_core::Vec3, f32),
+}
+
+/// A blank triangle (scratch arrays).
+const EMPTY_TRI: ScreenTri = ScreenTri {
+    pts: [Vec2::ZERO; 3],
+    colors: [Color::BLACK; 3],
+    depth: 0.0,
+    z: [0.0; 3],
+    uv: [Vec2::ZERO; 3],
+    w: [1.0; 3],
+};
 
 /// Where the internal framebuffer lands in the window: nearest integer
 /// upscale, centered (fractional only when the window is smaller than the

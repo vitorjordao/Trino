@@ -114,9 +114,6 @@ file = "models/castle64/player_leg.glb"
 [models.c64_boar]
 file = "models/castle64/boar.glb"
 
-[models.c64_shadow]
-file = "models/castle64/shadow.glb"
-
 [models.c64_door_frame]
 file = "models/castle64/door_frame.glb"
 
@@ -636,6 +633,17 @@ ao = { strength = 0.9, distance = 0.5 }
 
 [models.selftest_ao_raw]
 file = "models/proxies/selftest-ao.gltf"
+
+# The shadows step (selftest::shadows, ADR 0024): a floor, a post that
+# casts its shape and a ball held up that casts by tier.
+[models.selftest_shadow_floor]
+file = "models/proxies/selftest-shadow-floor.prim.ron"
+
+[models.selftest_shadow_post]
+file = "models/proxies/selftest-shadow-post.prim.ron"
+
+[models.selftest_shadow_ball]
+file = "models/proxies/selftest-shadow-ball.prim.ron"
 
 # A translucent 4 x 4 m water sheet (8 x 8 quads) for the water step
 # (selftest::water): generated with the river by `cargo xtask gen-assets`.

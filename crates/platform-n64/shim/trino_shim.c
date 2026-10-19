@@ -750,6 +750,35 @@ static __attribute__((noinline)) uint32_t trino_3d_water_body(void* sprite, void
     return dt != NULL;
 }
 
+// Shadows (ADR 0024): blob and planar shadow triangles blend the shade's
+// color over the 3D by its alpha, z-tested and never written, like water
+// (the core moved them a few z steps in front of their receiver).
+// `texels`: the blob's `size`² I8 falloff in uncached RDRAM, its alpha
+// (TEX0's alpha is its intensity), for trino_tri_tex; NULL: planar
+// shadows, the shade alone, for trino_tri.
+void trino_3d_shadow(const void* texels, uint32_t size)
+{
+    trino_tmem_owner = NULL;
+    trino_t3_sp = NULL;
+    trino_w_sp = NULL;
+    trino_mode_standard();
+    rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
+    rdpq_mode_zbuf(true, false);
+    rdpq_mode_alphacompare(0);
+    if (!texels) {
+        rdpq_mode_combiner(RDPQ_COMBINER_SHADE);
+        return;
+    }
+    rdpq_mode_combiner(RDPQ_COMBINER1((0, 0, 0, SHADE), (TEX0, 0, SHADE, 0)));
+    rdpq_mode_persp(true);
+    rdpq_mode_filter(FILTER_BILINEAR);
+    // Clamped (no repeats): the falloff's outer texels are 0.
+    surface_t surf = surface_make_linear((void*)texels, FMT_I8, size, size);
+    rdpq_tex_upload(TILE0, &surf, NULL);
+    trino_tex_w = (float)size;
+    trino_tex_h = (float)size;
+}
+
 // v: 3 vertices x 10 floats (x, y, z, u, v, w, r, g, b, a), colors 0..1,
 // u/v normalized (scaled to texels here), w = view depth (> 0).
 void trino_tri_tex(const float* in)

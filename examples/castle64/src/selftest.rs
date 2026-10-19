@@ -12,8 +12,8 @@ use trino_core::{
     BakedScene, BillboardParams, BlobId, Camera3, Cells, Color, DEFAULT_LIGHT, DetailTexture,
     Effect, Emitter, EntityStore, FontId, Impostor, InputState, Instance, Light, LocalLight,
     Material, ModelId, ModelParams, Palette, ParticleSystem, Platform, QualityPreset,
-    QualitySettings, Rect, Renderer, Screen, Shading, SpriteId, SpriteParams, TexFilter, TextBuf,
-    TextParams, Transform3, Vec2, Vec3,
+    QualitySettings, Rect, Renderer, Screen, Shading, ShadowCast, ShadowPlane, ShadowSettings,
+    ShadowTier, SpriteId, SpriteParams, TexFilter, TextBuf, TextParams, Transform3, Vec2, Vec3,
 };
 
 /// The HUD font (also what the checks measure).
@@ -85,6 +85,10 @@ pub fn engine_checks(
     platform.log("TRINO_STEP:ambient occlusion\n");
     if ambient_occlusion(renderer)? {
         platform.log("TRINO_STEP:ambient occlusion probed\n");
+    }
+    platform.log("TRINO_STEP:shadows\n");
+    if shadows(renderer, platform)? {
+        platform.log("TRINO_STEP:shadows probed\n");
     }
     platform.log("TRINO_STEP:water\n");
     if water(renderer)? {
@@ -1438,6 +1442,251 @@ pub fn ambient_occlusion(renderer: &mut dyn Renderer) -> Result<bool, &'static s
         return Err("ambient occlusion: the occlusion tinted the panel");
     }
     Ok(true)
+}
+
+/// The shadows step's floor, post and ball (`[models.selftest_shadow_*]`).
+pub const SHADOW_FLOOR: ModelId = ModelId::from_path("models/selftest_shadow_floor");
+pub const SHADOW_POST: ModelId = ModelId::from_path("models/selftest_shadow_post");
+pub const SHADOW_BALL: ModelId = ModelId::from_path("models/selftest_shadow_ball");
+/// Where the post stands and the ball floats.
+pub const SHADOW_POST_AT: Vec3 = Vec3::new(-1.2, 0.0, 0.6);
+pub const SHADOW_BALL_AT: Vec3 = Vec3::new(0.6, 0.9, -0.6);
+
+/// The shadows step's sun.
+pub const SHADOW_SUN: Light = Light {
+    dir: Vec3::new(0.45, -0.8, 0.35),
+    ..DEFAULT_LIGHT
+};
+
+/// The shadows step's camera.
+pub fn shadow_camera() -> Camera3 {
+    Camera3 {
+        eye: Vec3::new(0.0, 4.2, -6.5),
+        target: Vec3::new(0.0, 0.2, 0.4),
+        fov_y: 50.0 * core::f32::consts::PI / 180.0,
+    }
+}
+
+/// One frame of the shadows scene: the floor (the receiver), the post
+/// (`ShadowCast::Mesh`) and the ball (`ShadowCast::Auto`), with
+/// `shadows` (or none).
+pub fn shadow_scene(renderer: &mut dyn Renderer, shadows: Option<&ShadowSettings>) {
+    renderer.begin_frame(Color::rgb(140, 175, 220));
+    renderer.set_camera(&shadow_camera());
+    renderer.set_light(&SHADOW_SUN);
+    renderer.set_shadows(shadows);
+    renderer.set_shadow_receivers(&[ShadowPlane::horizontal(Vec3::ZERO, 4.0, 4.0)]);
+    let at = |p: Vec3| Transform3 {
+        position: p,
+        ..Default::default()
+    };
+    let cast = |shadow| ModelParams {
+        shadow,
+        ..ModelParams::DEFAULT
+    };
+    renderer.draw_model(
+        SHADOW_FLOOR,
+        &at(Vec3::ZERO),
+        Material::VertexLit,
+        &ModelParams::DEFAULT,
+    );
+    renderer.draw_model(
+        SHADOW_POST,
+        &at(SHADOW_POST_AT),
+        Material::VertexLit,
+        &cast(ShadowCast::Mesh),
+    );
+    renderer.draw_model(
+        SHADOW_BALL,
+        &at(SHADOW_BALL_AT),
+        Material::VertexLit,
+        &cast(ShadowCast::auto(0.35)),
+    );
+    renderer.end_frame();
+}
+
+/// Shadows ([`trino_core::shadow`], ADR 0024), at each target's tier: the
+/// post's shadow along the light (projected on the N64 and the 3DS, the
+/// map on the PC) and the ball's (a blob straight down on the N64, along
+/// the light elsewhere) darken the floor where they land; the open floor
+/// stays as it was. `Ok(false)` where `read_pixel` is unsupported.
+pub fn shadows(
+    renderer: &mut dyn Renderer,
+    platform: &mut dyn Platform,
+) -> Result<bool, &'static str> {
+    let caps = *renderer.caps();
+    let screen = Vec2::new(caps.screen_width as f32, caps.screen_height as f32);
+    let camera = shadow_camera();
+    let view = camera.view();
+    let half = camera.fov_y * 0.5;
+    let focal = cos(half) / sin(half) * screen.y * 0.5;
+    // Where the light's ray through `p` meets the floor.
+    let l = SHADOW_SUN.dir;
+    let ground = |p: Vec3| Vec3::new(p.x - l.x * p.y / l.y, 0.0, p.z - l.z * p.y / l.y);
+    let post = ground(SHADOW_POST_AT + Vec3::new(0.0, 1.0, 0.0));
+    let ball = if caps.shadow_tier == ShadowTier::Blob {
+        Vec3::new(SHADOW_BALL_AT.x, 0.0, SHADOW_BALL_AT.z - 0.1)
+    } else {
+        ground(SHADOW_BALL_AT)
+    };
+    let open = Vec3::new(-2.6, 0.0, -2.0);
+    let points = [post, ball, open];
+    let mut seen = [[Color::BLACK; 3]; 2];
+    let mut stats = trino_core::ShadowStats::default();
+    for (k, on) in [false, true].into_iter().enumerate() {
+        let settings = on.then_some(ShadowSettings::DEFAULT);
+        // Several identical frames: the 3DS LCD is double-buffered.
+        for _ in 0..3 {
+            shadow_scene(renderer, settings.as_ref());
+        }
+        if on {
+            stats = renderer.stats().shadows;
+        }
+        for (i, p) in points.into_iter().enumerate() {
+            let v = view.transform_point(p);
+            let px = screen.x * 0.5 + v.x * focal / v.z;
+            let py = screen.y * 0.5 - v.y * focal / v.z;
+            let Some(c) = renderer.read_pixel(px as u32, py as u32) else {
+                return Ok(false);
+            };
+            seen[k][i] = c;
+        }
+    }
+    let luma = |c: Color| (c.r as i32 * 3 + c.g as i32 * 6 + c.b as i32) / 10;
+    let [off, on] = seen;
+    let mut line = TextBuf::<160>::new();
+    let _ = core::fmt::write(
+        &mut line,
+        format_args!(
+            "TRINO_SHADOWS: tier={} blobs={} planar={} mapped={} tris={} post={}->{} ball={}->{} \
+             open={}->{}\n",
+            caps.shadow_tier.key(),
+            stats.blobs,
+            stats.planar,
+            stats.mapped,
+            stats.tris,
+            luma(off[0]),
+            luma(on[0]),
+            luma(off[1]),
+            luma(on[1]),
+            luma(off[2]),
+            luma(on[2]),
+        ),
+    );
+    platform.log(line.as_str());
+    if luma(off[0]) - luma(on[0]) < 30 {
+        return Err("shadows: no shadow of the post on the floor");
+    }
+    if luma(off[1]) - luma(on[1]) < 30 {
+        return Err("shadows: no shadow of the ball on the floor");
+    }
+    if (luma(off[2]) - luma(on[2])).abs() > 6 {
+        return Err("shadows: the open floor changed");
+    }
+    if stats.blobs + stats.planar + stats.mapped < 2 {
+        return Err("shadows: the frame counted no shadows");
+    }
+    Ok(true)
+}
+
+/// The far-blob golden's distances (`shadow_far_scene`), meters.
+pub const SHADOW_FAR_AT: [f32; 6] = [4.0, 9.0, 18.0, 35.0, 60.0, 100.0];
+
+/// The far-blob golden (the N64's `shadows_far`, ADR 0024): blobs on a
+/// 256 m floor (the shadows floor 32 times over) out to 100 m from a low
+/// camera, where the RDP's compressed z steps are coarsest: each lies on
+/// the floor without fighting it. The casters are small balls on the
+/// floor, each blob wider the farther it is (a pixel tall or more).
+pub fn shadow_far_scene(renderer: &mut dyn Renderer) {
+    renderer.begin_frame(Color::rgb(140, 175, 220));
+    renderer.set_camera(&shadow_far_camera());
+    renderer.set_light(&SHADOW_SUN);
+    renderer.set_shadows(Some(&ShadowSettings {
+        distance: 200.0,
+        ..ShadowSettings::DEFAULT
+    }));
+    renderer.set_shadow_receivers(&[ShadowPlane::ground(0.0)]);
+    renderer.draw_model(
+        SHADOW_FLOOR,
+        &Transform3 {
+            scale: Vec3::new(32.0, 1.0, 32.0),
+            ..Default::default()
+        },
+        Material::VertexLit,
+        &ModelParams::DEFAULT,
+    );
+    for (k, z) in SHADOW_FAR_AT.iter().enumerate() {
+        renderer.draw_model(
+            SHADOW_BALL,
+            &Transform3 {
+                position: shadow_far_ball(k),
+                scale: Vec3::new(0.1, 0.1, 0.1),
+                ..Default::default()
+            },
+            Material::VertexLit,
+            &ModelParams {
+                shadow: ShadowCast::Blob {
+                    radius: 0.5 + z * 0.06,
+                },
+                ..ModelParams::DEFAULT
+            },
+        );
+    }
+    renderer.end_frame();
+}
+
+/// [`shadow_far_scene`]'s camera: eye height 3 m, looking down the floor.
+pub fn shadow_far_camera() -> Camera3 {
+    Camera3 {
+        eye: Vec3::new(0.0, 3.0, -4.0),
+        target: Vec3::new(0.0, 0.6, 40.0),
+        fov_y: 50.0 * core::f32::consts::PI / 180.0,
+    }
+}
+
+/// Where [`shadow_far_scene`]'s `k`th ball sits (alternating sides).
+pub fn shadow_far_ball(k: usize) -> Vec3 {
+    let z = SHADOW_FAR_AT[k];
+    let side = if k % 2 == 0 { -0.3 } else { 0.3 };
+    Vec3::new(side * z * 0.2, 0.08, z)
+}
+
+/// Blob casters in [`shadow_crowd_scene`]: a football match's players.
+pub const SHADOW_CROWD: usize = 22;
+
+/// The blob cost scene (the N64's `shadow cost`): [`SHADOW_CROWD`] small
+/// balls in a 6 x 4 grid over the shadows floor, each casting a blob
+/// (`shadows` on) or not.
+pub fn shadow_crowd_scene(renderer: &mut dyn Renderer, shadows: bool) {
+    renderer.begin_frame(Color::rgb(140, 175, 220));
+    renderer.set_camera(&shadow_camera());
+    renderer.set_light(&SHADOW_SUN);
+    renderer.set_shadows(shadows.then_some(&ShadowSettings::DEFAULT));
+    renderer.set_shadow_receivers(&[ShadowPlane::horizontal(Vec3::ZERO, 4.0, 4.0)]);
+    renderer.draw_model(
+        SHADOW_FLOOR,
+        &Transform3::default(),
+        Material::VertexLit,
+        &ModelParams::DEFAULT,
+    );
+    let cast = ModelParams {
+        shadow: ShadowCast::Blob { radius: 0.3 },
+        ..ModelParams::DEFAULT
+    };
+    for i in 0..SHADOW_CROWD {
+        let (x, z) = ((i % 6) as f32 - 2.5, (i / 6) as f32 - 1.5);
+        renderer.draw_model(
+            SHADOW_BALL,
+            &Transform3 {
+                position: Vec3::new(x * 1.1, 0.3, z * 1.2),
+                scale: Vec3::new(0.5, 0.5, 0.5),
+                ..Default::default()
+            },
+            Material::VertexLit,
+            &cast,
+        );
+    }
+    renderer.end_frame();
 }
 
 /// One frame of the water test scene: the sheet (`params`) over a red

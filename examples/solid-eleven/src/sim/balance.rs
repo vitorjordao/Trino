@@ -571,3 +571,29 @@ fn the_league_title_is_open() {
         "one club won too often: {titles:?}"
     );
 }
+
+/// Tuning aid: [`neither_side_is_favored`] over four times the matches.
+#[test]
+#[ignore = "tuning aid"]
+fn print_side_bias() {
+    let mut jobs = Vec::new();
+    for c in 0..TEAMS {
+        for seed in 0..40u32 {
+            jobs.push((c, seed * 7919 + c as u32 * 13 + 1));
+        }
+    }
+    let res = par(&jobs, |&(c, seed)| result(&setup(c, c, seed, HALF)));
+    let mut side = Rec::default();
+    for s in &res {
+        side.add(s[0], s[1]);
+    }
+    std::println!(
+        "{} mirror matches: side 0 won {}, drew {}, side 1 won {} (goals {} - {})",
+        side.played(),
+        side.w,
+        side.d,
+        side.l,
+        side.gf,
+        side.ga
+    );
+}

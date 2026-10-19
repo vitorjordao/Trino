@@ -32,6 +32,40 @@ pub const PASS_ARRIVE: Fx = Fx::int(7);
 /// facing a human (easy, normal, hard).
 const ERROR: [Fx; 3] = [Fx::milli(1_700), Fx::milli(1_000), Fx::milli(650)];
 
+/// How hard a side hunts the ball without it, per difficulty for a side
+/// facing a human (easy, normal, hard); AI against AI plays Normal's
+/// (issue #86). 0 is the old, patient pressing. With urgency `u`:
+/// - the presser hunts `u` × [`PRESS_ZONE`] further up the pitch and
+///   closes down anyone within 8 + `u` × [`PRESS_NEAR`] m;
+/// - he tackles more from the front (× 1 + `u` × [`TACKLE_FRONT`]) and
+///   less from behind, where a tackle is mostly a foul
+///   (× 1 − `u` × [`TACKLE_BEHIND`]);
+/// - the second chaser contests every loose ball, not only the other
+///   side's;
+/// - markers stand ball-side as well as goal-side of their man
+///   ([`MARK_BALL_SIDE`]), in the passing lane to him.
+const URGENCY: [Fx; 3] = [Fx::ZERO, Fx::ONE, Fx::milli(1_300)];
+const PRESS_ZONE: Fx = Fx::int(14);
+const PRESS_NEAR: Fx = Fx::int(6);
+const TACKLE_FRONT: Fx = Fx::milli(600);
+const TACKLE_BEHIND: Fx = Fx::milli(500);
+const MARK_BALL_SIDE: Fx = Fx::milli(700);
+
+pub fn urgency(m: &Match, s: usize) -> Fx {
+    #[cfg(test)]
+    if let Some(u) = m.urgency_test {
+        return u[s];
+    }
+    if m.humans[s] {
+        // A human side's teammates play like the AI at Normal.
+        URGENCY[1]
+    } else if !m.humans[1 - s] {
+        URGENCY[1]
+    } else {
+        URGENCY[m.difficulty.min(2) as usize]
+    }
+}
+
 fn err_scale(m: &Match, s: usize) -> Fx {
     if m.humans[s] || !m.humans[1 - s] {
         Fx::ONE
@@ -310,7 +344,9 @@ pub fn think(m: &mut Match, cmds: &mut [Option<Cmd>; N]) {
                 let ball_close = ball_dist < Fx::int(3);
                 let hurry = opp_near || !ball_close;
                 chase(m, i, hurry)
-            } else if poss.is_none() && (Some(i as u8) == c1 || (Some(i as u8) == c2 && !attacking))
+            } else if poss.is_none()
+                && (Some(i as u8) == c1
+                    || (Some(i as u8) == c2 && (!attacking || urgency(m, s) > Fx::ZERO)))
             {
                 chase(m, i, true)
             } else if poss.is_some() && Some(i as u8) == c1 {
@@ -322,7 +358,10 @@ pub fn think(m: &mut Match, cmds: &mut [Option<Cmd>; N]) {
             } else {
                 go_to(m, i, home, false)
             };
-            m.players[i].target = home;
+            if m.owner != Some(i as u8) {
+                // (The carrier keeps the run he chose: `carrier` set it.)
+                m.players[i].target = home;
+            }
             cmds[i] = Some(cmd);
         }
     }
@@ -371,8 +410,9 @@ fn press(m: &mut Match, i: usize) -> Cmd {
     let d = (carrier.pos - me.pos).len();
     // Pressing zone: how far up the side hunts.
     let press = Fx::ratio(t.press as i32, 100);
-    let zone = -HALF_LEN + press.mul(Fx::int(85)) + Fx::int(10);
-    let in_zone = m.ax(1 - s, carrier.pos) > -zone || d < Fx::int(8);
+    let u = urgency(m, s);
+    let zone = -HALF_LEN + press.mul(Fx::int(85)) + Fx::int(10) + u.mul(PRESS_ZONE);
+    let in_zone = m.ax(1 - s, carrier.pos) > -zone || d < Fx::int(8) + u.mul(PRESS_NEAR);
     if matches!(carrier.act, Act::Hold { .. }) {
         // A keeper with the ball: back off.
         return go_to(m, i, m.players[i].target, false);
@@ -389,8 +429,16 @@ fn press(m: &mut Match, i: usize) -> Cmd {
     cmd.sprint = closing && me.stamina > Fx::milli(120);
     let aggr = Fx::ratio(t.aggression as i32, 100);
     let err = err_scale(m, s);
+    // From behind a tackle is mostly a foul: an urgent presser goes in
+    // from the front, and holds off once he is behind his man.
+    let behind = me.face.dot(carrier.face) > Fx::milli(500);
     if d < Fx::milli(1_500) && me.cool == 0 {
         let p = (Fx::milli(70) + aggr.mul(Fx::milli(80))).div(err);
+        let p = if behind {
+            p.mul(Fx::ONE - u.mul(TACKLE_BEHIND).min(Fx::ONE))
+        } else {
+            p.mul(Fx::ONE + u.mul(TACKLE_FRONT))
+        };
         if m.rng.chance(p) {
             cmd.act = Some(CmdAct::Tackle);
         }
@@ -439,7 +487,17 @@ fn mark(m: &Match, i: usize, home: V2, marked: &mut u32) -> Cmd {
     if let Some((j, _)) = best {
         *marked |= 1 << j;
         let opp = m.players[j].pos;
-        let mut p = opp + (own_goal - opp).norm().scale(Fx::milli(1_800));
+        // Goal-side, and with urgency ball-side too: between his man and
+        // the ball, to cut the pass to him.
+        let u = urgency(m, s);
+        let ball = m.ball.pos.ground();
+        let side = (own_goal - opp).norm() + (ball - opp).norm().scale(u.mul(MARK_BALL_SIDE));
+        let side = if side == V2::ZERO {
+            (own_goal - opp).norm()
+        } else {
+            side.norm()
+        };
+        let mut p = opp + side.scale(Fx::milli(1_800));
         // The back four hold their line instead of following a forward
         // in behind it: he is offside if the pass comes (the trap), or
         // through on goal if they misjudge it.
@@ -810,7 +868,9 @@ fn carrier(m: &mut Match, i: usize) -> Cmd {
     let mut space = Fx::int(12);
     for j in (1 - s) * SIDE..(1 - s) * SIDE + SIDE {
         let o = &m.players[j];
-        if o.off || o.role == Role::Gk {
+        // A keeper come out at him is a man to go round, too.
+        let keeper_out = o.role == Role::Gk && (o.pos - me.pos).shorter_than(Fx::int(7));
+        if o.off || (o.role == Role::Gk && !keeper_out) {
             continue;
         }
         let d = o.pos - me.pos;
@@ -894,6 +954,12 @@ pub fn shot_openness(m: &Match, s: usize, p: V2) -> Fx {
         let d = q.pos.dist_to_segment(p, end.goal_center());
         if d < Fx::milli(1_200) {
             blocked += Fx::milli(300);
+            // A keeper come out at the shooter fills more of the goal
+            // the closer he is: he has closed the angle.
+            let near = (q.pos - p).len();
+            if q.role == Role::Gk && near < Fx::int(6) {
+                blocked += (Fx::int(6) - near).mul(Fx::milli(200));
+            }
         }
     }
     (wide - blocked).max(Fx::ZERO)
@@ -1033,6 +1099,56 @@ fn keeper(m: &mut Match, i: usize, _home: V2) -> Cmd {
         c.face = Some((b - me.pos).norm());
         return c;
     }
+    // A 1v1: an attacker with the ball in the box and nobody goal-side
+    // of him. The keeper decides once (his handling, and how well he is
+    // set on the ball's line) whether to stay or come out.
+    if let Some(o) = m.owner
+        && side_of(o as usize) != s
+        && one_on_one(m, o as usize)
+    {
+        let key = m.owned_since + 1;
+        if m.rush[s].0 != key {
+            let c = m.players[o as usize].pos;
+            let line = (c - goal).norm().dot((me.pos - goal).norm()).max(Fx::ZERO);
+            let rating = m.attr(i, team::DEFENSE);
+            let p = (Fx::milli(250) + (rating - Fx::milli(700)).mul(RUSH_PER_POINT))
+                .mul(Fx::milli(500) + line.mul(Fx::milli(500)))
+                .clamp(Fx::milli(50), Fx::milli(800));
+            let out = m.rng.chance(p);
+            m.rush[s] = (key, out);
+            #[cfg(test)]
+            if out {
+                m.diag.rushes += 1;
+            }
+        }
+        if m.rush[s].1 {
+            let c = m.players[o as usize];
+            // Off his line at the ball: close the angle, then go down at
+            // his feet once in reach.
+            let d = (b - me.pos).len();
+            if d < Fx::milli(2_400) && me.cool == 0 && matches!(me.act, Act::Free) {
+                return Cmd {
+                    act: Some(CmdAct::Dive(b + c.vel.scale(Fx::milli(150)))),
+                    ..Cmd::go(V2::ZERO, false)
+                };
+            }
+            // Meet him on the ball's line, never further out than the
+            // penalty spot (he narrows the angle; his hands only count in
+            // his area).
+            let mut p = b + (goal - b).norm().scale(Fx::milli(1_200));
+            let depth = end.sign().mul(end.goal_x() - p.x);
+            if depth > RUSH_DEPTH {
+                p = goal + (p - goal).scale(RUSH_DEPTH.div(depth.max(Fx::ONE)));
+            }
+            let mut cmd = go_to(m, i, p, true);
+            cmd.mv = cmd.mv.norm();
+            cmd.sprint = true;
+            cmd.face = Some((b - me.pos).norm());
+            return cmd;
+        }
+    } else {
+        m.rush[s] = (0, false);
+    }
     // Loose in his area and he's the closest: claim it.
     if m.owner.is_none()
         && pitch::in_penalty_area(b, end)
@@ -1056,6 +1172,31 @@ fn keeper(m: &mut Match, i: usize, _home: V2) -> Cmd {
     let mut c = go_to(m, i, p, false);
     c.face = Some(dir);
     c
+}
+
+/// How far off his line a keeper comes to meet a 1v1 (the penalty spot).
+const RUSH_DEPTH: Fx = Fx::int(11);
+/// A keeper of the typical 70 comes out of a quarter of 1v1s (when set
+/// on the ball's line); each effective point of handling above adds this.
+const RUSH_PER_POINT: Fx = Fx::milli(800);
+
+/// Attacker `o` has the ball bearing down on the box he attacks (in it,
+/// or within 26 m of goal and central) with no outfield defender
+/// goal-side of him: one against the keeper.
+pub fn one_on_one(m: &Match, o: usize) -> bool {
+    let s = side_of(o);
+    let p = m.players[o].pos;
+    let goal = m.attacks(s).goal_center();
+    let near = (goal - p).shorter_than(Fx::int(26)) && p.y.abs() < pitch::PEN_AREA_HALF_W;
+    if !near && !pitch::in_penalty_area(p, m.attacks(s)) {
+        return false;
+    }
+    let me = m.ax(s, p);
+    let d = 1 - s;
+    !(d * SIDE..d * SIDE + SIDE).any(|j| {
+        let q = &m.players[j];
+        !q.off && q.role != Role::Gk && m.ax(s, q.pos) > me - Fx::ONE
+    })
 }
 
 /// A keeper with the ball in his hands: throw short to a free defender, or
@@ -1247,14 +1388,12 @@ pub fn restart_spot(m: &Match, i: usize, r: Restart) -> V2 {
     let s = side_of(i);
     let k = i % SIDE;
     let taking = s == r.team as usize;
-    if r.kind == RestartKind::KickOff {
-        if i == m.taker as usize {
-            return r.spot - V2::new(m.attacks(s).sign().mul(Fx::milli(600)), Fx::ZERO);
-        }
-        return kickoff_spot(m, i, taking);
-    }
     if i == m.taker as usize {
-        return r.spot;
+        // Behind the ball (on the line for a throw-in): he walks there.
+        return m.taker_stance(r).0;
+    }
+    if r.kind == RestartKind::KickOff {
+        return kickoff_spot(m, i, taking);
     }
     let own_end = m.ends[s];
     if m.players[i].role == Role::Gk {

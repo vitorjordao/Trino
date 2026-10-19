@@ -62,7 +62,7 @@ pub fn input(frame: u32) -> InputState {
 
 /// The state hash after [`FRAMES`] of the script, pinned on the PC by
 /// `cargo test` (`tests::the_script_is_deterministic`).
-pub const EXPECTED_HASH: u32 = 0xdecf_bf87;
+pub const EXPECTED_HASH: u32 = 0xb6f6_4c76;
 
 /// After the script: the sim hash matches the PC's, and the match is sane.
 pub fn check(game: &SolidElevenGame) -> Result<(), &'static str> {
@@ -107,6 +107,30 @@ mod tests {
             g.update(&input(f), &mut Mute, DT);
         }
         g
+    }
+
+    #[test]
+    fn the_script_kicks_off_at_once_and_plays() {
+        // The human's kick-off is released on frame 20 (tick 40): the
+        // taker lines up and kicks within a few ticks, so most of the
+        // window is open play (a lost button would idle the AI's
+        // eight-second timeout instead).
+        let mut g = SolidElevenGame::new(Vec2::new(320.0, 240.0));
+        begin(&mut g);
+        let mut first_play = None;
+        let mut play_ticks = 0;
+        for f in 0..FRAMES {
+            g.update(&input(f), &mut Mute, DT);
+            let m = &g.session.as_ref().unwrap().m;
+            if m.phase == crate::sim::engine::Phase::Play {
+                first_play.get_or_insert(m.tick);
+                play_ticks += 2;
+            }
+        }
+        let first = first_play.expect("never kicked off");
+        std::println!("kick-off at tick {first}, {play_ticks} ticks of play");
+        assert!(first <= 60, "kicked off at tick {first}");
+        assert!(play_ticks >= 300, "{play_ticks} ticks of play");
     }
 
     #[test]

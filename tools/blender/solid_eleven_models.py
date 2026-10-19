@@ -604,6 +604,38 @@ def flag_hand():
     return m
 
 
+def card():
+    """The referee's card, white (the game tints it yellow or red): held
+    at the hand (drawn at the arm's end like the linesman's flag), it
+    stands out of the fist along the arm, turned 40 degrees about the arm
+    so both the player and the broadcast camera see its face."""
+    m = Model("card")
+    # Larger than life (a real one is 8 x 12 cm), so it reads at the
+    # broadcast distance.
+    w, h, d = 0.16, 0.22, 0.02
+    y0, y1 = -0.015 - h, -0.015
+    a = math.radians(40)
+    rot = lambda x, z: (x * math.cos(a) + z * math.sin(a), -x * math.sin(a) + z * math.cos(a))
+
+    def p(x, y, z):
+        rx, rz = rot(x, z)
+        return (rx, y, rz)
+
+    xs, zs = (-w / 2, w / 2), (-d / 2, d / 2)
+    faces = [
+        ([p(xs[0], y0, zs[1]), p(xs[1], y0, zs[1]), p(xs[1], y1, zs[1]), p(xs[0], y1, zs[1])], (0, 0, 1), 0.97),
+        ([p(xs[1], y0, zs[0]), p(xs[0], y0, zs[0]), p(xs[0], y1, zs[0]), p(xs[1], y1, zs[0])], (0, 0, -1), 0.9),
+        ([p(xs[1], y0, zs[1]), p(xs[1], y0, zs[0]), p(xs[1], y1, zs[0]), p(xs[1], y1, zs[1])], (1, 0, 0), 0.86),
+        ([p(xs[0], y0, zs[0]), p(xs[0], y0, zs[1]), p(xs[0], y1, zs[1]), p(xs[0], y1, zs[0])], (-1, 0, 0), 0.86),
+        ([p(xs[0], y1, zs[1]), p(xs[1], y1, zs[1]), p(xs[1], y1, zs[0]), p(xs[0], y1, zs[0])], (0, 1, 0), 1.0),
+        ([p(xs[0], y0, zs[0]), p(xs[1], y0, zs[0]), p(xs[1], y0, zs[1]), p(xs[0], y0, zs[1])], (0, -1, 0), 0.8),
+    ]
+    for pts, n, light in faces:
+        rx, rz = rot(n[0], n[2])
+        m.poly(pts, shade((255, 255, 255), light), out=(rx, n[1], rz))
+    return m
+
+
 # ---------------------------------------------------------------- markers
 
 def ring(name, r0, r1, n, rgb):
@@ -788,6 +820,7 @@ for _i, _shorts, _socks in leg_kits():
         anim.BODY["shorts_leg_x"][3] + anim.BODY["leg_x"][3], ((0, 0, -0.45), 1.1))
 
 reg("flag_hand", flag_hand, SHARED, 18, ((0, 0, 0.25), 0.8))
+reg("card", card, SHARED, 12, ((0, 0, -0.07), 0.3))
 reg("ring", lambda: ring("ring", 0.55, 0.68, 16, (255, 255, 255)), SHARED, 32, ((0, 0, 0), 1.6))
 reg("ring_small", lambda: ring("ring_small", 0.4, 0.48, 10, (255, 255, 255)), SHARED, 20, ((0, 0, 0), 1.2))
 reg("arrow", arrow, SHARED, 8, ((0, 0, 0.1), 0.6))

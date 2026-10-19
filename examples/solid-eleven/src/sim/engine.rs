@@ -264,8 +264,16 @@ pub const EVENTS: usize = 16;
 
 /// Ticks of each pause.
 pub const DEAD_TICKS: u16 = 50;
+/// Players walk into place for a restart; after this many ticks play
+/// restarts as soon as the taker is on the ball and the positions are
+/// legal, even if some are still walking to their spots.
 pub const SETUP_TICKS: u16 = 100;
-pub const GOAL_TICKS: u16 = 170;
+/// A safety cap on the walk-in (never reached in play: the restart is
+/// legal long before).
+pub const SETUP_CAP: u16 = 60 * 25;
+/// The scorers' celebration; then everyone jogs back to his half for
+/// the kick-off (no teleport: [`Phase::Setup`]).
+pub const GOAL_TICKS: u16 = 150;
 pub const HALF_TIME_TICKS: u16 = 150;
 /// A human taker who doesn't kick: the AI takes it after this.
 pub const READY_TIMEOUT: u16 = 60 * 8;
@@ -298,6 +306,33 @@ pub const ATTR_SPREAD: Fx = Fx::int(2);
 pub const HUMAN_HOLD: u16 = 240;
 /// How far a human keeper's dive reaches along the stick (m).
 pub const DIVE_REACH: i32 = 3;
+
+/// The taker's distance behind the ball at a restart, and behind the
+/// touchline at a throw-in.
+pub const TAKER_R: Fx = Fx::milli(600);
+pub const THROW_R: Fx = Fx::milli(300);
+/// The most a walk-in or an orbit moves a man in one tick (a jog).
+pub const STEP_MAX: Fx = Fx::milli(85);
+/// An AI taker who can't line up in this many ticks kicks anyway.
+pub const ORBIT_TICKS: u16 = 90;
+
+/// A card on its way: the referee walks up to the offender and shows
+/// it to him there ([`Match::booking`]).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct Booking {
+    pub player: u8,
+    pub card: Card,
+    /// Ticks since the whistle.
+    pub t: u16,
+    /// Ticks the card has been held up (0 = he is still on his way).
+    pub shown: u16,
+}
+
+/// How long the referee holds a card up, how close he comes to show it,
+/// and the longest he may take to get there.
+pub const CARD_TICKS: u16 = 80;
+pub const CARD_DIST: Fx = Fx::milli(1_700);
+pub const BOOKING_CAP: u16 = 60 * 8;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 struct OffsideWatch {
@@ -346,6 +381,8 @@ pub struct Match {
     pub officials: [V2; 3],
     /// A linesman's raised flag: which (1 or 2) and for how long.
     pub flag: (u8, u16),
+    /// A card being given (the ball is dead until it has been shown).
+    pub booking: Option<Booking>,
     events: [Event; EVENTS],
     /// Events logged so far (the next one's sequence number).
     pub event_seq: u32,
@@ -372,6 +409,16 @@ pub struct Match {
     pub(super) traj: super::ai::Traj,
     /// Morale (0..100) per side, as set up.
     pub morale: [u8; 2],
+    /// The restart kick decided (by the AI, or a human's released
+    /// button) and the Ready tick it was decided on: the taker walks
+    /// round the ball to line up with it, then kicks.
+    pub restart_plan: Option<(KickPlan, u16)>,
+    /// Where the restart taker means to play the ball (unit).
+    pub aim: V2,
+    /// Each keeper's call on the 1v1 in his box: the carrier's
+    /// possession it was made for (`owned_since + 1`, 0 = none) and
+    /// whether he comes out.
+    pub rush: [(u32, bool); 2],
     /// Each side's substitutes left on the bench, and changes made.
     pub bench: [[BenchSlot; BENCH]; 2],
     pub bench_n: [u8; 2],
@@ -381,6 +428,9 @@ pub struct Match {
     /// Tuning counters (tests only).
     #[cfg(test)]
     pub diag: Diag,
+    /// Tests: each side's pressing urgency instead of the difficulty's.
+    #[cfg(test)]
+    pub urgency_test: Option<[Fx; 2]>,
 }
 
 /// Where passes end (tests only: the AI tuning reads them).
@@ -401,6 +451,21 @@ pub struct Diag {
     /// Kicks with someone offside, and passes aimed at a man offside.
     pub off_kicks: u32,
     pub off_aimed: u32,
+    /// Possessions won from the other side in open play (a loose ball,
+    /// a tackle or an interception ending with the ball at a man's feet
+    /// or in a keeper's hands), and tackles or slides tried.
+    pub won: u32,
+    /// Possessions won by each side.
+    pub won_by: [u32; 2],
+    /// Of those, won in the winner's attacking half (a high press).
+    pub won_high: u32,
+    pub won_high_by: [u32; 2],
+    /// Keepers' rushes decided to come out, and balls they smothered.
+    pub rushes: u32,
+    pub smothers: u32,
+    pub tried: u32,
+    /// The side that last had the ball at its feet (2 = nobody yet).
+    pub poss_side: u8,
 }
 
 impl Match {
@@ -477,6 +542,7 @@ impl Match {
                 V2::new(Fx::ZERO, HALF_WID + Fx::int(1)),
             ],
             flag: (0, 0),
+            booking: None,
             events: [Event {
                 tick: 0,
                 kind: EventKind::KickOff,
@@ -497,6 +563,9 @@ impl Match {
             drain: Fx(((Fx::ONE.0 as i64 * 24 / 10) / total as i64).max(1) as i32),
             plan_tick: [0; N],
             traj: super::ai::Traj::default(),
+            restart_plan: None,
+            rush: [(0, false); 2],
+            aim: V2::new(Fx::ONE, Fx::ZERO),
             morale: [setup.sides[0].morale, setup.sides[1].morale],
             bench: [setup.sides[0].bench, setup.sides[1].bench],
             bench_n: [
@@ -506,7 +575,12 @@ impl Match {
             subs: [0; 2],
             sub_wanted: [false; 2],
             #[cfg(test)]
-            diag: Diag::default(),
+            urgency_test: None,
+            #[cfg(test)]
+            diag: Diag {
+                poss_side: 2,
+                ..Diag::default()
+            },
         };
         m.begin_restart(Restart {
             kind: RestartKind::KickOff,
@@ -645,8 +719,8 @@ impl Match {
                 }
             }
             Phase::Goal { t, side } => {
-                self.celebrate(side as usize);
-                self.move_players(&[None; N]);
+                let cmds = self.celebrate(side as usize);
+                self.move_players(&cmds);
                 if t == 0 {
                     self.begin_restart(Restart {
                         kind: RestartKind::KickOff,
@@ -661,7 +735,10 @@ impl Match {
             Phase::Dead { t } => {
                 self.drift_players();
                 self.ball.step(self.wet);
-                if t == 0 {
+                if self.booking.is_some() {
+                    // Play waits for the card.
+                    self.book();
+                } else if t == 0 {
                     if self.clock >= self.half_ticks {
                         self.end_half();
                     } else {
@@ -674,41 +751,72 @@ impl Match {
             }
             Phase::Setup { t } => {
                 self.setup_players();
+                let k = self.taker as usize;
+                let taker_set =
+                    (self.players[k].pos - self.players[k].target).shorter_than(Fx::milli(250));
                 let ready = (0..N).all(|i| {
                     self.players[i].off
                         || (self.players[i].pos - self.players[i].target).shorter_than(Fx::int(1))
                 });
-                if t >= SETUP_TICKS || (ready && t > 20) {
+                // Nobody is glided into place: play restarts once the taker
+                // has walked to the ball and everyone is where the laws
+                // want him (in his half, the distance kept), whoever is
+                // still jogging to his own spot.
+                let go =
+                    t > 20 && taker_set && (ready || (t >= SETUP_TICKS && self.restart_legal()));
+                if go || t >= SETUP_CAP {
                     self.phase = Phase::Ready { t: 0 };
-                    self.snap_taker();
+                    self.take_ball();
                 } else {
                     self.phase = Phase::Setup { t: t + 1 };
                 }
             }
             Phase::Ready { t } => {
-                self.hold_restart_positions();
+                self.walk_in(false);
                 let s = self.restart.team as usize;
                 let human = self.humans[s];
-                let mut plan = None;
-                if human && t < READY_TIMEOUT {
-                    // The taker aims with the stick, kicks with a button.
-                    let pad = pads[s];
-                    if pad.mv != V2::ZERO {
-                        let p = &mut self.players[self.taker as usize];
-                        p.face = p.face.turn_toward(pad.mv.norm(), Fx::milli(150));
+                if self.restart_plan.is_none() {
+                    if human && t < READY_TIMEOUT {
+                        // The taker aims with the stick (he walks round the
+                        // ball to it) and kicks with a button.
+                        let pad = pads[s];
+                        if pad.mv != V2::ZERO {
+                            self.aim = pad.mv.norm();
+                        }
+                        if let Some(plan) = self.human_kick(self.taker as usize, &pad) {
+                            self.restart_plan = Some((plan, t));
+                        }
+                    } else if !human || t >= READY_TIMEOUT {
+                        let plan = self.ai_restart_kick();
+                        self.restart_plan = Some((plan, t));
                     }
-                    plan = self.human_kick(self.taker as usize, &pad);
-                } else if t >= 45 {
-                    plan = Some(self.ai_restart_kick());
                 }
+                if let Some((plan, _)) = self.restart_plan {
+                    let d = plan.vel.ground();
+                    if d != V2::ZERO {
+                        self.aim = d.norm();
+                    }
+                }
+                let lined_up = self.orbit_taker();
                 // Keep the ball on the spot under the taker's control.
                 self.owner = Some(self.taker);
                 self.ball = Ball::at_rest(self.restart.spot);
                 if self.restart.kind == RestartKind::ThrowIn {
                     self.ball.pos.y = Fx::milli(2_100);
                 }
+                // The AI takes a beat over the ball; anyone kicks once lined
+                // up with the kick (a human's buffered button included).
+                let plan = match self.restart_plan {
+                    Some((plan, at))
+                        if (human || t >= 45) && (lined_up || t >= at + ORBIT_TICKS) =>
+                    {
+                        Some(plan)
+                    }
+                    _ => None,
+                };
                 match plan {
                     Some(plan) => {
+                        self.restart_plan = None;
                         self.restart_kick = Some(self.restart.kind);
                         let k = self.taker as usize;
                         self.players[k].act = Act::Kick {
@@ -880,8 +988,18 @@ impl Match {
         }
     }
 
-    /// Between phases: walk to targets.
+    /// Between phases: walk to targets (a booked man waits for the
+    /// referee where he is, up on his feet as he arrives).
     fn drift_players(&mut self) {
+        if let Some(b) = self.booking {
+            let p = &mut self.players[b.player as usize];
+            p.target = p.pos;
+            if matches!(p.act, Act::Down { .. })
+                && (self.officials[0] - p.pos).shorter_than(Fx::int(6))
+            {
+                p.act = Act::Free;
+            }
+        }
         for i in 0..N {
             if self.players[i].off {
                 continue;
@@ -910,6 +1028,10 @@ impl Match {
         let p = self.players[i];
         if !matches!(p.act, Act::Free) {
             return;
+        }
+        #[cfg(test)]
+        if matches!(a, CmdAct::Tackle | CmdAct::Slide(_)) {
+            self.diag.tried += 1;
         }
         match a {
             CmdAct::Kick(plan) => {
@@ -991,6 +1113,9 @@ impl Match {
                     };
                 }
                 Act::Dive { t, .. } => {
+                    if t > DIVE_TICKS / 3 && self.smother(i) {
+                        continue;
+                    }
                     if t == 0 {
                         self.players[i].act = Act::Down { t: 20 };
                         self.players[i].vel = V2::ZERO;
@@ -1017,6 +1142,52 @@ impl Match {
         }
     }
 
+    /// A keeper diving at an attacker's feet in his own area: when his
+    /// hands reach the ball, he smothers it (his handling against the
+    /// carrier's dribbling) or is beaten and goes down. Returns `true`
+    /// once it is decided.
+    fn smother(&mut self, k: usize) -> bool {
+        let Some(o) = self.owner else {
+            return false;
+        };
+        let o = o as usize;
+        let s = side_of(k);
+        let me = self.players[k];
+        if side_of(o) == s
+            || me.role != Role::Gk
+            || !pitch::in_penalty_area(me.pos, self.ends[s])
+            || !(self.ball.pos.ground() - me.pos).shorter_than(HANDS_REACH + Fx::milli(300))
+        {
+            return false;
+        }
+        let p = (Fx::milli(400)
+            + (self.attr(k, team::DEFENSE) - self.attr(o, team::DRIBBLE)).mul(Fx::milli(700)))
+        .clamp(Fx::milli(150), Fx::milli(850));
+        if self.rng.chance(p) {
+            // At his feet: the keeper has it in his hands.
+            self.owner = None;
+            if self.touch(k) {
+                self.owner = Some(k as u8);
+                #[cfg(test)]
+                self.diag_possess(s);
+                let t = if self.keeper_ctl[s] { HUMAN_HOLD } else { 70 };
+                self.players[k].act = Act::Hold { t };
+                self.players[k].vel = V2::ZERO;
+                self.players[o].cool = 20;
+                self.log(EventKind::Tackle, s, k as u8);
+                #[cfg(test)]
+                {
+                    self.diag.smothers += 1;
+                }
+            }
+        } else {
+            // Round him: the keeper is left on the turf.
+            self.players[k].act = Act::Down { t: 24 };
+            self.players[k].vel = self.players[k].vel.scale(Fx::milli(300));
+        }
+        true
+    }
+
     /// The ball leaves player `i` with `plan`.
     pub(super) fn release(&mut self, i: usize, plan: KickPlan) {
         let s = side_of(i);
@@ -1025,7 +1196,9 @@ impl Match {
         // A throw-in leaves from over the head; kicks from the feet, a
         // little ahead of the kicker.
         let from = if plan.kind == KickKind::Throw {
-            V3::from_ground(p.pos + p.face.scale(Fx::milli(300)), Fx::milli(2_000))
+            // From over his head, on the line where the ball went out
+            // (however he turned to aim it).
+            V3::from_ground(self.ball.pos.ground(), Fx::milli(2_000))
         } else if plan.kind == KickKind::Distribute && matches!(vel.y, y if y > Fx::int(4)) {
             V3::from_ground(p.pos + p.face.scale(Fx::milli(400)), Fx::milli(900))
         } else {
@@ -1355,21 +1528,56 @@ impl Match {
         let card = rules::sanction(challenge, in_box);
         self.stats[s].fouls += 1;
         self.log(EventKind::Foul, s, i as u8);
-        let (yellows, red) = rules::accumulate(me.yellow, card);
-        self.players[i].yellow = yellows;
-        if card == Card::Yellow {
-            self.stats[s].yellows += 1;
-            self.log(EventKind::Yellow, s, i as u8);
-        }
-        if red {
-            self.stats[s].reds += 1;
-            self.log(EventKind::Red, s, i as u8);
-            self.send_off(i);
-        }
         self.players[v].act = Act::Down { t: DOWN_TICKS };
         self.players[v].vel = me.vel.scale(Fx::milli(400));
         let r = rules::foul_restart(at, vs as u8, self.ends[s]);
         self.whistle(r);
+        if card != Card::None {
+            // The referee goes to him to show it ([`Match::book`]).
+            self.booking = Some(Booking {
+                player: i as u8,
+                card,
+                t: 0,
+                shown: 0,
+            });
+        }
+    }
+
+    /// A booking, one tick: the offender waits, the referee comes up to
+    /// him ([`Match::move_officials`]) and holds the card up there; then
+    /// the card counts (a second yellow or a red sends him off).
+    fn book(&mut self) {
+        let Some(mut b) = self.booking else {
+            return;
+        };
+        let i = b.player as usize;
+        b.t = b.t.saturating_add(1);
+        let near = (self.officials[0] - self.players[i].pos).shorter_than(CARD_DIST);
+        if b.shown == 0 && (near || b.t >= BOOKING_CAP) {
+            // Up goes the card: it counts from here.
+            let s = side_of(i);
+            let (yellows, red) = rules::accumulate(self.players[i].yellow, b.card);
+            self.players[i].yellow = yellows;
+            if b.card == Card::Yellow {
+                self.stats[s].yellows += 1;
+                self.log(EventKind::Yellow, s, i as u8);
+            }
+            if red {
+                self.stats[s].reds += 1;
+                self.log(EventKind::Red, s, i as u8);
+            }
+        }
+        if b.shown > 0 || near || b.t >= BOOKING_CAP {
+            b.shown += 1;
+        }
+        if b.shown >= CARD_TICKS {
+            self.booking = None;
+            if self.players[i].yellow >= 2 || b.card == Card::Red {
+                self.send_off(i);
+            }
+        } else {
+            self.booking = Some(b);
+        }
     }
 
     /// The victim had the ball with only the keeper (or nobody) between
@@ -1421,6 +1629,13 @@ impl Match {
                 self.ball.pos =
                     V3::from_ground(p.pos + p.face.scale(Fx::milli(350)), Fx::milli(1_000));
                 self.ball.vel = V3::from_ground(p.vel, Fx::ZERO);
+                return;
+            }
+            if let Act::Kick { plan, .. } = p.act
+                && plan.kind == KickKind::Throw
+            {
+                // A throw-in winding up: over his head, on the line.
+                self.ball.vel = V3::ZERO;
                 return;
             }
             // Dribbling: the ball runs a touch ahead of the feet, further
@@ -1504,6 +1719,15 @@ impl Match {
         }
         if !own {
             self.players[toucher].act = Act::Celebrate;
+            // He wheels away toward the corner flag on his side, a dozen
+            // meters at most (he jogs all the way back for the kick-off).
+            let from = self.players[toucher].pos;
+            let y = if from.y < Fx::ZERO { -Fx::ONE } else { Fx::ONE };
+            let flag = V2::new(
+                self.attacks(side).goal_x().mul(Fx::milli(800)),
+                HALF_WID.mul(Fx::milli(800)).mul(y),
+            );
+            self.players[toucher].target = from + (flag - from).clamp_len(Fx::int(12));
         }
     }
 
@@ -1560,6 +1784,8 @@ impl Match {
             }
             if self.rng.chance(hold) {
                 self.owner = Some(i as u8);
+                #[cfg(test)]
+                self.diag_possess(s);
                 // A human keeper gets four seconds to distribute (then he
                 // kicks it himself, like the AI after its beat).
                 let t = if self.keeper_ctl[s] { HUMAN_HOLD } else { 70 };
@@ -1661,6 +1887,8 @@ impl Match {
         if self.rng.chance(control) {
             self.owner = Some(i as u8);
             self.owned_since = self.tick;
+            #[cfg(test)]
+            self.diag_possess(s);
             self.ball.pos.y = BALL_R;
             self.ball.vel = V3::from_ground(self.players[i].vel, Fx::ZERO);
             self.ball.spin = Fx::ZERO;
@@ -1687,8 +1915,28 @@ impl Match {
             b.y.mul(Fx::milli(400)) - Fx::int(8),
         );
         let r = &mut self.officials[0];
-        let d = target - *r;
-        *r += d.clamp_len(Fx::milli(6_000).mul(DT));
+        if let Some(bk) = self.booking {
+            // To the offender: a run, then a walk for the last meters; he
+            // stops at arm's length to show the card.
+            let p = self.players[bk.player as usize].pos;
+            let (dir, len) = (*r - p).norm_len();
+            let dir = if dir == V2::ZERO {
+                V2::new(Fx::ZERO, -Fx::ONE)
+            } else {
+                dir
+            };
+            let stand = p + dir.scale(Fx::milli(1_200));
+            let speed = if len > Fx::milli(3_000) {
+                Fx::milli(7_500)
+            } else {
+                Fx::milli(2_200)
+            };
+            let d = stand - *r;
+            *r += d.clamp_len(speed.mul(DT));
+        } else {
+            let d = target - *r;
+            *r += d.clamp_len(Fx::milli(6_000).mul(DT));
+        }
         // Linesman 1 on the -y touchline covers the half at -x, linesman 2
         // the half at +x (the usual diagonal).
         for (k, sign) in [(1usize, -Fx::ONE), (2usize, Fx::ONE)] {
@@ -1758,36 +2006,45 @@ impl Match {
         }
     }
 
-    fn celebrate(&mut self, side: usize) {
+    /// The goal's commands: the scorer races off toward the corner flag
+    /// ([`Match::goal`] set his target), his teammates run to him; the
+    /// side that conceded walks back to its kick-off places (after an own
+    /// goal, both sides do).
+    fn celebrate(&mut self, side: usize) -> [Option<Cmd>; N] {
         let scorer = self.last_touch as usize;
-        let corner = V2::new(
-            self.attacks(side).goal_x().mul(Fx::milli(800)),
-            HALF_WID
-                .mul(Fx::milli(800))
-                .mul(if self.players[scorer].pos.y < Fx::ZERO {
-                    -Fx::ONE
-                } else {
-                    Fx::ONE
-                }),
-        );
+        let own = side_of(scorer) != side;
+        let mut cmds = [None; N];
         for i in 0..N {
-            if self.players[i].off {
+            if self.players[i].off || i == scorer && !own {
                 continue;
             }
-            self.players[i].target = if side_of(i) == side {
-                if i == scorer || side_of(scorer) != side {
-                    corner
-                } else {
-                    // Teammates run to the scorer.
-                    let k = Fx::int((i % SIDE) as i32 - 5).mul(Fx::milli(500));
-                    self.players[scorer].pos + V2::new(k, Fx::milli(800))
-                }
+            let near = (self.players[i].pos - self.players[scorer].pos).shorter_than(Fx::int(22));
+            if side_of(i) == side && !own && near {
+                // Teammates nearby run to the scorer and mob him, two rows
+                // a body apart (no pile-up for the bodies to push out of);
+                // the back line starts back at once.
+                let k = i % SIDE;
+                let x = Fx::int((k % 5) as i32 - 2).mul(Fx::milli(900));
+                let y = Fx::milli(900) + Fx::int((k / 5) as i32).mul(Fx::milli(900));
+                self.players[i].target = self.players[scorer].pos + V2::new(x, y);
             } else {
-                // The others trudge back toward their own half.
-                let home = super::ai::kickoff_spot(self, i, false);
-                self.players[i].pos + (home - self.players[i].pos).scale(Fx::milli(30))
-            };
+                // The others trudge back to their places for the kick-off,
+                // at a walk.
+                let home = super::ai::kickoff_spot(self, i, side_of(i) != side);
+                self.players[i].target = home;
+                cmds[i] = Some(self.walk_cmd(i, Fx::milli(450), false));
+            }
         }
+        cmds
+    }
+
+    /// Walk (or jog, `urgency` of the top speed) to the target, slowing
+    /// on arrival; `sprint` only when far.
+    fn walk_cmd(&self, i: usize, urgency: Fx, sprint: bool) -> Cmd {
+        let d = self.players[i].target - self.players[i].pos;
+        let (dir, len) = d.norm_len();
+        let u = len.div(Fx::int(2)).min(Fx::ONE).mul(urgency);
+        Cmd::go(dir.scale(u), sprint && len > Fx::int(3))
     }
 
     // ------------------------------------------------------ set pieces
@@ -1799,6 +2056,7 @@ impl Match {
             self.consider_sub(side);
         }
         self.restart = r;
+        self.restart_plan = None;
         self.phase = Phase::Setup { t: 0 };
         self.owner = None;
         self.offside = None;
@@ -1947,44 +2205,45 @@ impl Match {
     }
 
     fn setup_players(&mut self) {
-        for i in 0..N {
-            if self.players[i].off {
-                continue;
-            }
-            let d = self.players[i].target - self.players[i].pos;
-            let (dir, len) = d.norm_len();
-            // Brisk: set pieces shouldn't drag.
-            let cmd = Cmd::go(dir.scale(len.min(Fx::int(2)).div(Fx::int(2))), true);
-            self.move_one(i, &cmd);
-            let p = &mut self.players[i];
-            if len < Fx::milli(300) {
-                p.pos = p.target;
-                p.vel = V2::ZERO;
-            }
-            if matches!(p.act, Act::Down { .. }) && len > Fx::ZERO {
+        // Brisk for set pieces (a run when far); a jog back for kick-offs.
+        let brisk = self.restart.kind != RestartKind::KickOff;
+        self.walk_in(brisk);
+        for p in self.players.iter_mut() {
+            if !p.off && matches!(p.act, Act::Down { .. }) && p.pos != p.target {
                 p.act = Act::Free;
-            }
-        }
-        // Faster than legs: after a second, glide the stragglers.
-        if let Phase::Setup { t } = self.phase
-            && t > 60
-        {
-            for p in self.players.iter_mut() {
-                if !p.off {
-                    p.pos += (p.target - p.pos).scale(Fx::milli(120));
-                }
             }
         }
     }
 
-    /// The taker stands behind the ball facing up the pitch; the ball is
-    /// his.
-    fn snap_taker(&mut self) {
-        let k = self.taker as usize;
-        let s = side_of(k);
+    /// Everyone but the taker (once he is on the ball) walks to his
+    /// target: legs only, never a glide; the last few centimeters are
+    /// one step (less than a jog's tick).
+    fn walk_in(&mut self, sprint: bool) {
+        let ready = matches!(self.phase, Phase::Ready { .. });
+        for i in 0..N {
+            if self.players[i].off || (ready && i == self.taker as usize) {
+                continue;
+            }
+            let len = (self.players[i].target - self.players[i].pos).len();
+            if len < Fx::milli(60) {
+                let p = &mut self.players[i];
+                p.vel = (p.target - p.pos).scale(Fx::int(ball::HZ));
+                p.pos = p.target;
+                p.vel = p.vel.clamp_len(Fx::milli(500));
+                continue;
+            }
+            let cmd = self.walk_cmd(i, Fx::ONE, sprint);
+            self.move_one(i, &cmd);
+        }
+    }
+
+    /// Where the taker of `r` stands, and which way he faces: behind the
+    /// ball facing up the pitch (a throw-in: on the line facing in).
+    pub fn taker_stance(&self, r: Restart) -> (V2, V2) {
+        let s = r.team as usize;
         let goal = self.attacks(s).goal_center();
-        let spot = self.restart.spot;
-        let face = match self.restart.kind {
+        let spot = r.spot;
+        let face = match r.kind {
             RestartKind::ThrowIn => V2::new(Fx::ZERO, -spot.y.signum()),
             RestartKind::Corner => {
                 (V2::new(spot.x - goal.x.mul(Fx::milli(220)), Fx::ZERO) - spot).norm()
@@ -1997,30 +2256,113 @@ impl Match {
         } else {
             face
         };
-        let p = &mut self.players[k];
-        p.face = face;
-        p.pos = spot
-            - face.scale(Fx::milli(if self.restart.kind == RestartKind::ThrowIn {
-                300
+        let back = if r.kind == RestartKind::ThrowIn {
+            THROW_R
+        } else {
+            TAKER_R
+        };
+        (spot - face.scale(back), face)
+    }
+
+    /// The restart may be taken: everyone in his own half at a kick-off
+    /// (the side not kicking off outside the circle), the opponents at
+    /// their distance otherwise.
+    fn restart_legal(&self) -> bool {
+        let r = self.restart;
+        let t = r.team as usize;
+        (0..N).all(|i| {
+            let p = &self.players[i];
+            if p.off || i == self.taker as usize {
+                return true;
+            }
+            let s = side_of(i);
+            if r.kind == RestartKind::KickOff {
+                self.ax(s, p.pos) <= Fx::ZERO && (s == t || !p.pos.shorter_than(pitch::CIRCLE_R))
             } else {
-                600
-            }));
-        p.vel = V2::ZERO;
+                s == t || !(p.pos - r.spot).shorter_than(r.kind.distance() - Fx::milli(500))
+            }
+        })
+    }
+
+    /// The taker is on the ball: it is his (he keeps walking to it if the
+    /// cap ended the walk-in early: [`Match::orbit_taker`]).
+    fn take_ball(&mut self) {
+        let k = self.taker as usize;
+        let s = side_of(k);
+        let (_, face) = self.taker_stance(self.restart);
+        self.aim = face;
+        self.restart_plan = None;
+        let p = &mut self.players[k];
         p.act = Act::Free;
         p.cool = 0;
         self.owner = Some(self.taker);
         self.owned_since = self.tick;
+        #[cfg(test)]
+        {
+            self.diag.poss_side = s as u8;
+        }
+        let _ = s;
     }
 
-    fn hold_restart_positions(&mut self) {
-        for i in 0..N {
-            let p = &mut self.players[i];
-            if p.off || i == self.taker as usize {
-                continue;
+    /// The taker steps round the ball until he stands behind it on the
+    /// line of [`Match::aim`], turning to face it (a thrower turns on
+    /// the spot). Returns `true` once lined up.
+    fn orbit_taker(&mut self) -> bool {
+        let k = self.taker as usize;
+        let r = self.restart;
+        let spot = r.spot;
+        let p = self.players[k];
+        let mut aim = self.aim;
+        let want = if r.kind == RestartKind::ThrowIn {
+            // Into the pitch only.
+            let inward = V2::new(Fx::ZERO, -spot.y.signum());
+            if aim.dot(inward) < Fx::milli(300) {
+                aim = (aim + inward.scale(Fx::milli(800))).norm();
             }
-            p.vel = p.vel.scale(Fx::milli(800));
-            p.pos += p.vel.scale(DT);
-        }
+            self.taker_stance(r).0
+        } else {
+            let (odir, olen) = (p.pos - spot).norm_len();
+            let odir = if olen < Fx::milli(50) { -p.face } else { odir };
+            let mut behind = -aim;
+            if r.kind == RestartKind::KickOff {
+                // The kicker stays in his own half: beside the ball for
+                // a pass back.
+                let s = side_of(k);
+                if self.ax(s, spot + behind) > Fx::ZERO {
+                    behind = V2::new(Fx::ZERO, behind.y);
+                    behind = if behind == V2::ZERO {
+                        V2::new(Fx::ZERO, Fx::ONE)
+                    } else {
+                        behind.norm()
+                    };
+                }
+            }
+            // Round the ball, not through it (and never stuck facing the
+            // wrong way: a nudge sideways when exactly opposite).
+            let from = if odir.dot(behind) < -Fx::milli(900) {
+                (odir + odir.perp().scale(Fx::milli(400))).norm()
+            } else {
+                odir
+            };
+            let ndir = from.turn_toward(behind, Fx::milli(140));
+            let nlen = olen + (TAKER_R - olen).clamp(-Fx::milli(60), Fx::milli(60));
+            if ndir.dot(behind) > Fx::milli(999) {
+                spot + behind.scale(TAKER_R)
+            } else {
+                spot + ndir.scale(nlen)
+            }
+        };
+        let step = (want - p.pos).clamp_len(STEP_MAX);
+        let face = if p.face.dot(aim) < -Fx::milli(900) {
+            (p.face + p.face.perp().scale(Fx::milli(400))).norm()
+        } else {
+            p.face
+        };
+        let pl = &mut self.players[k];
+        pl.pos += step;
+        pl.vel = step.scale(Fx::int(ball::HZ));
+        pl.face = face.turn_toward(aim, Fx::milli(120));
+        pl.face.dot(aim) > Fx::milli(985) && (want - pl.pos).shorter_than(Fx::milli(120))
     }
 
     /// Human pad at a restart (or with the ball): the kick it asks for.
@@ -2051,6 +2393,20 @@ impl Match {
                 self.active[s] = i as u8;
             }
         }
+    }
+
+    /// Count a possession won from the other side (tests only).
+    #[cfg(test)]
+    fn diag_possess(&mut self, s: usize) {
+        if self.diag.poss_side as usize != s && self.diag.poss_side < 2 {
+            self.diag.won += 1;
+            self.diag.won_by[s] += 1;
+            if self.ax(s, self.ball.pos.ground()) > Fx::ZERO {
+                self.diag.won_high += 1;
+                self.diag.won_high_by[s] += 1;
+            }
+        }
+        self.diag.poss_side = s as u8;
     }
 
     /// A shot in flight, by this side (tests stage one).

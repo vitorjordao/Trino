@@ -123,6 +123,11 @@ pub fn metrics(pairs: &[(usize, usize, u32)], half_ticks: u32) -> Metrics {
         out.diag.off_aimed += d.off_aimed;
         out.diag.ground_mate += d.ground_mate;
         out.diag.ground_opp += d.ground_opp;
+        out.diag.won += d.won;
+        out.diag.won_high += d.won_high;
+        out.diag.rushes += d.rushes;
+        out.diag.smothers += d.smothers;
+        out.diag.tried += d.tried;
         for k in 0..7 {
             out.diag.chose[k] += d.chose[k];
         }
@@ -704,4 +709,250 @@ fn start_second_half_transitions_smoothly() {
     assert_eq!(m.half, 2);
     assert_eq!(m.clock, 0);
     assert_eq!(m.players[0].vel, V2::ZERO);
+}
+
+/// Tuning aid: ticks per phase over the sample (the dead time restarts
+/// cost now that everyone walks into place), and the longest walk-in.
+/// `cargo test -p solid-eleven --release print_phase_ticks -- --ignored --nocapture`
+#[test]
+#[ignore = "tuning aid"]
+fn print_phase_ticks() {
+    for &(h, a, seed) in &SAMPLE {
+        let mut m = Match::new(&setup(h, a, seed, 60 * 60 * 3));
+        let mut per = [0u32; 7];
+        let mut n = 0;
+        let mut longest = (0u16, super::rules::RestartKind::KickOff);
+        let mut longest_ready = (0u16, super::rules::RestartKind::KickOff);
+        while !m.finished() && n < 60 * 60 * 30 {
+            let ph = match m.phase {
+                Phase::Setup { t } => {
+                    if t > longest.0 {
+                        longest = (t, m.restart.kind);
+                    }
+                    0
+                }
+                Phase::Ready { t } => {
+                    if t > longest_ready.0 {
+                        longest_ready = (t, m.restart.kind);
+                    }
+                    1
+                }
+                Phase::Play => 2,
+                Phase::Dead { .. } => 3,
+                Phase::Goal { .. } => 4,
+                Phase::HalfTime { .. } => 5,
+                Phase::FullTime => 6,
+            };
+            per[ph] += 1;
+            m.step([Pad::default(); 2]);
+            n += 1;
+        }
+        std::println!(
+            "{h}v{a}: per phase {per:?} total {n} longest setup {longest:?} ready {longest_ready:?}"
+        );
+    }
+}
+
+/// Tuning aid: the sample's numbers over 60 matches, in parallel.
+/// `cargo test -p solid-eleven --release print_big_metrics -- --ignored --nocapture`
+#[test]
+#[ignore = "tuning aid"]
+fn print_big_metrics() {
+    let mut pairs = Vec::new();
+    for k in 0..60u32 {
+        let h = (k % 10) as usize;
+        let a = ((k / 10 + 1 + k % 10) % 10) as usize;
+        let a = if a == h { (a + 1) % 10 } else { a };
+        pairs.push((h, a, k * 13 + 5));
+    }
+    let out = std::sync::Mutex::new(Vec::new());
+    std::thread::scope(|sc| {
+        for chunk in pairs.chunks(5) {
+            let out = &out;
+            sc.spawn(move || {
+                let m = metrics(chunk, 60 * 60 * 3);
+                out.lock().unwrap().push(m);
+            });
+        }
+    });
+    let all = out.into_inner().unwrap();
+    let sum = |f: &dyn Fn(&Metrics) -> u32| all.iter().map(f).sum::<u32>() as f32;
+    let n = sum(&|m| m.matches);
+    std::println!(
+        "{n} matches: goals {:.2} shots {:.1} fouls {:.1} yellows {:.2} reds {:.2} pens {:.2} tackles {:.1} won {:.1} high {:.1} tried {:.1} rushes {:.2} smothers {:.2} completion {:.1}% owned {:.1}%",
+        sum(&|m| m.goals) / n,
+        sum(&|m| m.shots) / n,
+        sum(&|m| m.fouls) / n,
+        sum(&|m| m.yellows) / n,
+        sum(&|m| m.reds) / n,
+        sum(&|m| m.penalties) / n,
+        sum(&|m| m.tackles) / n,
+        sum(&|m| m.diag.won) / n,
+        sum(&|m| m.diag.won_high) / n,
+        sum(&|m| m.diag.tried) / n,
+        sum(&|m| m.diag.rushes) / n,
+        sum(&|m| m.diag.smothers) / n,
+        100.0 * sum(&|m| m.completed) / sum(&|m| m.passes),
+        100.0 * sum(&|m| m.owned) / sum(&|m| m.play),
+    );
+}
+
+/// Issue #86: nobody is teleported between the whistle and the restart
+/// (after goals, throw-ins, free kicks, corners, goal kicks, cards): every
+/// move is a step on his legs, a sprint at most. And the taker walks round
+/// the ball to line up his kick: at the kick he faces where it goes.
+#[test]
+fn restarts_never_teleport_anyone_and_takers_line_up() {
+    let mut restarts = 0;
+    let mut lined_up = 0;
+    let mut walked_round = 0;
+    for &(h, a, seed) in &SAMPLE[..3] {
+        let mut m = Match::new(&setup(h, a, seed, 60 * 60 * 3));
+        let mut ready_from: Option<V2> = None;
+        let mut n = 0;
+        while !m.finished() && n < 60 * 60 * 12 {
+            let before: [V2; N] = core::array::from_fn(|i| m.players[i].pos);
+            let off: [bool; N] = core::array::from_fn(|i| m.players[i].off);
+            let phase = m.phase;
+            m.step([Pad::default(); 2]);
+            n += 1;
+            if matches!(phase, Phase::Ready { t: 0 }) {
+                ready_from = Some(before[m.taker as usize]);
+            }
+            // Walking into place: a sprint's step at most. While the ball
+            // is dead or a goal is cheered, bodies still shove each other
+            // apart (`separate`), as in play.
+            let max = match phase {
+                Phase::Setup { .. } | Phase::Ready { .. } => Fx::milli(165),
+                Phase::Dead { .. } | Phase::Goal { .. } => Fx::milli(300),
+                _ => Fx::int(999),
+            };
+            {
+                for i in 0..N {
+                    if off[i] || m.players[i].off {
+                        continue;
+                    }
+                    let d = (m.players[i].pos - before[i]).len();
+                    assert!(
+                        d <= max,
+                        "{h} v {a}: player {i} jumped {:.3} m in {phase:?} (tick {})",
+                        d.to_f32(),
+                        m.tick
+                    );
+                }
+            }
+            if matches!(phase, Phase::Ready { .. }) && m.phase == Phase::Play {
+                let k = m.taker as usize;
+                if let Act::Kick { plan, .. } = m.players[k].act {
+                    restarts += 1;
+                    let dir = plan.vel.ground().norm();
+                    if m.players[k].face.dot(dir) > Fx::milli(980) {
+                        lined_up += 1;
+                    }
+                    if let Some(p) = ready_from
+                        && !(m.players[k].pos - p).shorter_than(Fx::milli(300))
+                    {
+                        walked_round += 1;
+                    }
+                }
+            }
+        }
+        assert!(m.finished());
+    }
+    assert!(restarts > 30, "{restarts} restarts");
+    assert!(
+        lined_up * 10 >= restarts * 9,
+        "{lined_up} of {restarts} lined up"
+    );
+    assert!(
+        walked_round * 4 >= restarts,
+        "{walked_round} of {restarts} walked round the ball"
+    );
+}
+
+/// One side pressing with Normal's urgency against the same club with
+/// none (the old pressing), sides swapped every other match, `n` matches
+/// in parallel. Per side (urgent, other): possessions won, goals, fouls,
+/// possessions won in the winner's attacking half, ticks on the ball;
+/// then the other side's passes completed and tried.
+fn press_duel(n: u32) -> [u32; 12] {
+    let mut jobs = Vec::new();
+    for k in 0..n {
+        let h = (k % 10) as usize;
+        let a = ((k / 10 + 1 + k % 10) % 10) as usize;
+        let a = if a == h { (a + 1) % 10 } else { a };
+        jobs.push((h, a, k * 13 + 5, (k % 2) as usize));
+    }
+    let out = std::sync::Mutex::new([0u32; 12]);
+    std::thread::scope(|sc| {
+        for chunk in jobs.chunks(5) {
+            let out = &out;
+            sc.spawn(move || {
+                for &(h, a, seed, urgent) in chunk {
+                    let mut m = Match::new(&setup(h, a, seed, 60 * 60 * 3));
+                    let mut u = [Fx::ZERO; 2];
+                    u[urgent] = Fx::ONE;
+                    m.urgency_test = Some(u);
+                    play(&mut m, 60 * 60 * 12);
+                    assert!(m.finished());
+                    let o = 1 - urgent;
+                    let mut t = out.lock().unwrap();
+                    t[0] += m.diag.won_by[urgent];
+                    t[1] += m.diag.won_by[o];
+                    t[2] += m.score[urgent] as u32;
+                    t[3] += m.score[o] as u32;
+                    t[4] += m.stats[urgent].fouls as u32;
+                    t[5] += m.stats[o].fouls as u32;
+                    t[6] += m.diag.won_high_by[urgent];
+                    t[7] += m.diag.won_high_by[o];
+                    t[8] += m.stats[urgent].possession;
+                    t[9] += m.stats[o].possession;
+                    t[10] += m.stats[o].completed as u32;
+                    t[11] += m.stats[o].passes as u32;
+                }
+            });
+        }
+    });
+    out.into_inner().unwrap()
+}
+
+/// Issue #86: Normal's pressing hunts the ball higher and harder than
+/// the old pressing, within the laws. Against the same clubs pressing the
+/// old way it wins the ball back in the opponents' half more often, keeps
+/// more of the ball, and commits no more fouls (it tackles from the
+/// front, not from behind).
+#[test]
+fn normal_pressing_wins_the_ball_back_higher_within_the_laws() {
+    let o = press_duel(30);
+    std::println!("press duel: {o:?}");
+    assert!(
+        o[6] * 100 > o[7] * 115,
+        "high recoveries {} vs {}",
+        o[6],
+        o[7]
+    );
+    let poss = o[8] as f32 / (o[8] + o[9]) as f32;
+    assert!(poss > 0.52, "possession {poss:.3}");
+    assert!(o[4] <= o[5], "fouls {} vs {}", o[4], o[5]);
+}
+
+/// Tuning aid: [`press_duel`] over 60 matches, printed.
+#[test]
+#[ignore = "tuning aid"]
+fn print_press_duel() {
+    let o = press_duel(60);
+    std::println!(
+        "urgent side: won {} vs {} ({:.1}%), goals {} vs {}, fouls {} vs {}, high {} vs {}, possession {:.1}%, the other's completion {:.1}%",
+        o[0],
+        o[1],
+        100.0 * o[0] as f32 / (o[0] + o[1]) as f32,
+        o[2],
+        o[3],
+        o[4],
+        o[5],
+        o[6],
+        o[7],
+        100.0 * o[8] as f32 / (o[8] + o[9]) as f32,
+        100.0 * o[10] as f32 / o[11] as f32
+    );
 }

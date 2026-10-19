@@ -1953,388 +1953,221 @@ fn pause(g: &mut SolidElevenGame, r: &mut dyn Renderer) {
     g.pause_ui.draw(r, &super::pause_gen::SCREEN, &env);
 }
 
-fn half_time(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
-    let lang = g.settings.lang;
-    let pad = g.pad_layout();
-    let mut ui = Ui::new(r, screen);
-    ui.fill(
-        Rect::new(-200.0, 0.0, 720.0, 240.0),
-        Color::rgba(0, 0, 0, 160),
+fn half_time(g: &mut SolidElevenGame, r: &mut dyn Renderer, _screen: Vec2) {
+    use super::scr::{int, txt};
+    let Some(m) = g.session.as_ref().map(|s| (s.m.score, s.m.stats)) else {
+        return;
+    };
+    let (score, st) = m;
+    let screen = &super::half_time_gen::SCREEN;
+    const IDS: [&str; 3] = ["continue", "substitute", "quit"];
+    let tot = (st[0].possession + st[1].possession).max(1);
+    let poss = (st[0].possession * 100) / tot;
+    let rows: [(S, u32, u32, bool); 4] = [
+        (S::Shots, st[0].shots as u32, st[1].shots as u32, false),
+        (S::Fouls, st[0].fouls as u32, st[1].fouls as u32, false),
+        (
+            S::Corners,
+            st[0].corners as u32,
+            st[1].corners as u32,
+            false,
+        ),
+        (S::Possession, poss, 100 - poss, true),
+    ];
+    super::scr::show(
+        g,
+        r,
+        screen,
+        Some((IDS[g.cur.half_time.min(2)], NO_ITEM)),
+        super::scr::rev(&score),
+        |g, key, item| {
+            let lang = g.settings.lang;
+            let mut b = buf();
+            match key {
+                "score" => {
+                    let _ = write!(b, "{}  -  {}", score[0], score[1]);
+                    txt(b.as_str())
+                }
+                "rows" => int(rows.len() as i32),
+                "label" => txt(tr(lang, rows.get(item as usize)?.0)),
+                "a" | "b" => {
+                    let (_, a, bv, pct) = *rows.get(item as usize)?;
+                    let v = if key == "a" { a } else { bv };
+                    let _ = write!(b, "{v}{}", if pct { "%" } else { "" });
+                    txt(b.as_str())
+                }
+                _ => None,
+            }
+        },
+        |_, ui, r| {
+            if let Some((mut a, size)) = super::scr::art(r, ui, screen, "panel", NO_ITEM) {
+                a.fill(Rect::new(0.0, 0.0, size.x, size.y), pal::PANEL);
+            }
+            super::scr::chrome(ui, screen, r);
+        },
     );
-    ui.panel(Rect::new(45.0, 24.0, 230.0, 184.0), pal::CYAN);
-    ui.text(
-        160.0,
-        30.0,
-        tr(lang, S::HalfTime),
-        pal::CYAN,
-        Size::Big,
-        TextAlign::Center,
-    );
-    if let Some(s) = &g.session {
-        let [h, a] = s.m.score;
-        let mut score_str = TextBuf::<32>::new();
-        let _ = write!(score_str, "{}  -  {}", h, a);
-        ui.text(
-            160.0,
-            52.0,
-            score_str.as_str(),
-            pal::INK,
-            Size::Big,
-            TextAlign::Center,
-        );
-        let h_shots = s.m.stats[0].shots as u32;
-        let a_shots = s.m.stats[1].shots as u32;
-        let h_fouls = s.m.stats[0].fouls as u32;
-        let a_fouls = s.m.stats[1].fouls as u32;
-        let h_corners = s.m.stats[0].corners as u32;
-        let a_corners = s.m.stats[1].corners as u32;
-        let tot_poss = (s.m.stats[0].possession + s.m.stats[1].possession).max(1);
-        let h_poss = (s.m.stats[0].possession * 100) / tot_poss;
-        let a_poss = 100 - h_poss;
-
-        let stats: [(&str, u32, u32); 3] = [
-            (tr(lang, S::Shots), h_shots, a_shots),
-            (tr(lang, S::Fouls), h_fouls, a_fouls),
-            (tr(lang, S::Corners), h_corners, a_corners),
-        ];
-        for (k, (lbl, v0, v1)) in stats.iter().enumerate() {
-            let y = 78.0 + k as f32 * 17.0;
-            let mut b0 = TextBuf::<12>::new();
-            let _ = write!(b0, "{}", v0);
-            let mut b1 = TextBuf::<12>::new();
-            let _ = write!(b1, "{}", v1);
-            ui.text(
-                78.0,
-                y,
-                b0.as_str(),
-                pal::CYAN,
-                Size::Small,
-                TextAlign::Right,
-            );
-            ui.text(160.0, y, lbl, pal::DIM, Size::Small, TextAlign::Center);
-            ui.text(
-                242.0,
-                y,
-                b1.as_str(),
-                pal::CYAN,
-                Size::Small,
-                TextAlign::Left,
-            );
-        }
-        let y = 78.0 + 3.0 * 17.0;
-        let mut b0 = TextBuf::<12>::new();
-        let _ = write!(b0, "{}%", h_poss);
-        let mut b1 = TextBuf::<12>::new();
-        let _ = write!(b1, "{}%", a_poss);
-        ui.text(
-            78.0,
-            y,
-            b0.as_str(),
-            pal::CYAN,
-            Size::Small,
-            TextAlign::Right,
-        );
-        ui.text(
-            160.0,
-            y,
-            tr(lang, S::Possession),
-            pal::DIM,
-            Size::Small,
-            TextAlign::Center,
-        );
-        ui.text(
-            242.0,
-            y,
-            b1.as_str(),
-            pal::CYAN,
-            Size::Small,
-            TextAlign::Left,
-        );
+    for (k, id) in IDS.iter().enumerate() {
+        super::scr::hit(g, screen, id, NO_ITEM, k as u8);
     }
-    for (k, s) in [S::Continue, S::Substitute, S::Quit].iter().enumerate() {
-        let rr = Rect::new(55.0 + k as f32 * 72.0, 168.0, 66.0, 24.0);
-        let sel = g.cur.half_time == k;
-        ui.fill(
-            rr,
-            if sel {
-                Color::rgba(30, 60, 130, 240)
-            } else {
-                pal::PANEL
-            },
-        );
-        ui.border(
-            rr,
-            if sel {
-                pal::CYAN
-            } else {
-                Color::rgb(50, 60, 100)
-            },
-            1.0,
-        );
-        ui.text(
-            rr.pos.x + rr.size.x * 0.5,
-            rr.pos.y + 6.0,
-            tr(lang, *s),
-            pal::INK,
-            Size::Small,
-            TextAlign::Center,
-        );
-        let hit = ui.rect(rr);
-        g.hits.add(hit, Screen::Top, k as u8);
-    }
-    footer(&mut ui, &mut g.hits, pad, lang, &[(Btn::A, S::Select)]);
 }
 
 fn substitutions(
     g: &mut SolidElevenGame,
     r: &mut dyn Renderer,
-    screen: Vec2,
+    _screen: Vec2,
     _from_half_time: bool,
 ) {
-    let lang = g.settings.lang;
-    let pad = g.pad_layout();
-    let mut ui = Ui::new(r, screen);
-    ui.fill(
-        Rect::new(-200.0, 0.0, 720.0, 240.0),
-        Color::rgba(8, 10, 24, 235),
-    );
-    header(&mut ui, &mut g.hits, tr(lang, S::Substitute), true);
-
+    use super::scr::{art, flag, int, txt};
+    let screen = &super::substitutions_gen::SCREEN;
     let Some(s) = &g.session else {
         return;
     };
     let side = s.human.unwrap_or(0);
-    let subs_used = s.m.subs[side];
-    let max_subs = crate::sim::engine::MAX_SUBS;
-    let subs_left = max_subs.saturating_sub(subs_used);
-
-    // Subs left count at top right
-    let mut sub_stat = TextBuf::<48>::new();
-    let _ = write!(
-        sub_stat,
-        "{}: {}/{}",
-        tr(lang, S::SubsRemaining),
-        subs_left,
-        max_subs
-    );
-    ui.text(
-        312.0,
-        12.0,
-        sub_stat.as_str(),
-        if subs_left > 0 { pal::CYAN } else { pal::RED },
-        Size::Small,
-        TextAlign::Right,
-    );
-
-    // On-pitch squad (left pane)
-    let pitch_pane_sel = g.cur.sub_pane == 0;
-    ui.text(
-        12.0,
-        32.0,
-        tr(lang, S::OnPitch),
-        pal::YELLOW,
-        Size::Small,
-        TextAlign::Left,
-    );
-    for slot in 0..SIDE {
-        let i = side * SIDE + slot;
-        let p = &s.m.players[i];
-        let y = 44.0 + slot as f32 * 15.0;
-        let rr = Rect::new(8.0, y, 148.0, 14.0);
-        let is_cursor = pitch_pane_sel && g.cur.sub_pitch == slot;
-        let is_locked = g.cur.sub_selected_pitch == Some(slot);
-        ui.fill(
-            rr,
-            if is_locked {
-                Color::rgba(160, 120, 20, 240)
-            } else if is_cursor {
-                Color::rgba(30, 60, 130, 240)
-            } else {
-                pal::PANEL
-            },
-        );
-        ui.border(
-            rr,
-            if is_locked {
-                pal::YELLOW
-            } else if is_cursor {
-                pal::CYAN
-            } else {
-                Color::rgb(40, 48, 80)
-            },
-            1.0,
-        );
-
-        // Player number
-        let mut num_str = TextBuf::<8>::new();
-        let _ = write!(num_str, "{}", p.number);
-        ui.text(
-            12.0,
-            y + 2.0,
-            num_str.as_str(),
-            pal::DIM,
-            Size::Small,
-            TextAlign::Left,
-        );
-
-        // Role / Pos
-        ui.text(
-            28.0,
-            y + 2.0,
-            pos_short(lang, p.role.pos()),
-            pal::CYAN,
-            Size::Small,
-            TextAlign::Left,
-        );
-
-        // Name
-        let name_idx = s.names[i] as usize % SURNAMES.len();
-        let name: TextBuf<16> = upper(SURNAMES[name_idx]);
-        ui.text(
-            50.0,
-            y + 2.0,
-            name.as_str(),
-            pal::INK,
-            Size::Small,
-            TextAlign::Left,
-        );
-
-        // Yellow card indicator
-        if p.yellow > 0 {
-            ui.fill(Rect::new(122.0, y + 3.0, 4.0, 7.0), pal::YELLOW);
-        }
-
-        // Stamina bar
-        ui.bar(
-            Rect::new(130.0, y + 4.0, 22.0, 5.0),
-            p.stamina.to_f32(),
-            pal::LIME,
-        );
-
-        let hit = ui.rect(rr);
-        g.hits.add(hit, Screen::Top, slot as u8);
-    }
-
-    // Bench squad (right pane)
+    let subs_left = crate::sim::engine::MAX_SUBS.saturating_sub(s.m.subs[side]);
     let bench_n = s.m.bench_n[side] as usize;
-    let bench_pane_sel = g.cur.sub_pane == 1;
-    ui.text(
-        168.0,
-        32.0,
-        tr(lang, S::Bench),
-        pal::YELLOW,
-        Size::Small,
-        TextAlign::Left,
-    );
-    if bench_n == 0 {
-        ui.text(
-            238.0,
-            80.0,
-            tr(lang, S::NoSubsLeft),
-            pal::DIM,
-            Size::Small,
-            TextAlign::Center,
-        );
+    let big = g.big_text();
+    let (pitch_id, bench_id, meta_id) = if big {
+        ("pitch_big", "bench_big", "meta_big")
     } else {
-        for k in 0..bench_n {
-            let (db, number, attrs, is_gk) = s.m.bench[side][k];
-            let y = 44.0 + k as f32 * 16.5;
-            let rr = Rect::new(164.0, y, 148.0, 15.5);
-            let is_cursor = bench_pane_sel && g.cur.sub_bench == k;
-            ui.fill(
-                rr,
-                if is_cursor {
-                    Color::rgba(30, 60, 130, 240)
-                } else {
-                    pal::PANEL
-                },
-            );
-            ui.border(
-                rr,
-                if is_cursor {
-                    pal::CYAN
-                } else {
-                    Color::rgb(40, 48, 80)
-                },
-                1.0,
-            );
-
-            // Number
-            let mut num_str = TextBuf::<8>::new();
-            let _ = write!(num_str, "{}", number);
-            ui.text(
-                168.0,
-                y + 2.5,
-                num_str.as_str(),
-                pal::DIM,
-                Size::Small,
-                TextAlign::Left,
-            );
-
-            // Pos
-            let pos_name = if is_gk {
-                pos_short(lang, crate::sim::team::Pos::Gk)
-            } else {
-                pos_short(lang, crate::sim::team::Pos::Mf)
-            };
-            ui.text(
-                184.0,
-                y + 2.5,
-                pos_name,
-                pal::CYAN,
-                Size::Small,
-                TextAlign::Left,
-            );
-
-            // Name
-            let name_idx =
-                g.world.players[db as usize % team::PLAYERS].surname as usize % SURNAMES.len();
-            let name: TextBuf<16> = upper(SURNAMES[name_idx]);
-            ui.text(
-                206.0,
-                y + 2.5,
-                name.as_str(),
-                pal::INK,
-                Size::Small,
-                TextAlign::Left,
-            );
-
-            // Overall rating
-            let sum: u32 = attrs.iter().map(|&a| a as u32).sum();
-            let ovr = sum / ATTRS as u32;
-            let mut ovr_str = TextBuf::<8>::new();
-            let _ = write!(ovr_str, "{}", ovr);
-            ui.text(
-                304.0,
-                y + 2.5,
-                ovr_str.as_str(),
-                pal::YELLOW,
-                Size::Small,
-                TextAlign::Right,
-            );
-
-            let hit = ui.rect(rr);
-            g.hits.add(hit, Screen::Top, (20 + k) as u8);
+        ("pitch", "bench", "meta")
+    };
+    let focus = if g.cur.sub_pane == 0 {
+        (pitch_id, g.cur.sub_pitch as u16)
+    } else {
+        (bench_id, g.cur.sub_bench as u16)
+    };
+    let locked = g.cur.sub_selected_pitch;
+    super::scr::show(
+        g,
+        r,
+        screen,
+        Some(focus),
+        super::scr::rev(&(
+            g.cur.sub_pane,
+            locked,
+            s.m.subs[side],
+            bench_n,
+            s.m.bench[side].map(|b| b.0),
+        )),
+        |g, key, item| {
+            let lang = g.settings.lang;
+            let s = g.session.as_ref()?;
+            let mut b = buf();
+            match key {
+                "left" => {
+                    let _ = write!(
+                        b,
+                        "{}: {}/{}",
+                        tr(lang, S::SubsRemaining),
+                        subs_left,
+                        crate::sim::engine::MAX_SUBS
+                    );
+                    return txt(b.as_str());
+                }
+                "subs_ok" => return flag(subs_left > 0),
+                "subs_out" => return flag(subs_left == 0),
+                "pane_pitch" => return flag(g.cur.sub_pane == 0),
+                "pane_bench" => return flag(g.cur.sub_pane == 1),
+                "pitch_n" => return int(SIDE as i32),
+                "bench_n" => return int(bench_n as i32),
+                "no_bench" => return flag(bench_n == 0),
+                "a_label" => {
+                    return txt(tr(
+                        lang,
+                        if locked.is_some() {
+                            S::Confirm
+                        } else {
+                            S::Select
+                        },
+                    ));
+                }
+                "b_label" => {
+                    return txt(tr(lang, if locked.is_some() { S::Cancel } else { S::Back }));
+                }
+                _ => {}
+            }
+            let k = item as usize;
+            match key {
+                "p_num" | "p_name" => {
+                    let i = side * SIDE + k.min(SIDE - 1);
+                    let p = &s.m.players[i];
+                    if key == "p_num" {
+                        let _ = write!(b, "{} {}", p.number, pos_short(lang, p.role.pos()));
+                        txt(b.as_str())
+                    } else {
+                        txt(upper::<16>(SURNAMES[s.names[i] as usize % SURNAMES.len()]).as_str())
+                    }
+                }
+                "b_num" | "b_name" | "b_ovr" => {
+                    let (db, number, attrs, is_gk) = *s.m.bench[side][..bench_n].get(k)?;
+                    match key {
+                        "b_num" => {
+                            let pos = if is_gk {
+                                crate::sim::team::Pos::Gk
+                            } else {
+                                crate::sim::team::Pos::Mf
+                            };
+                            let _ = write!(b, "{} {}", number, pos_short(lang, pos));
+                            txt(b.as_str())
+                        }
+                        "b_name" => {
+                            let name = g.world.players[db as usize % team::PLAYERS].surname;
+                            txt(upper::<16>(SURNAMES[name as usize % SURNAMES.len()]).as_str())
+                        }
+                        _ => {
+                            let sum: u32 = attrs.iter().map(|&a| a as u32).sum();
+                            int((sum / ATTRS as u32) as i32)
+                        }
+                    }
+                }
+                _ => None,
+            }
+        },
+        |_, ui, r| {
+            super::scr::chrome(ui, screen, r);
+            // The rows' fills: the player picked to go off in gold.
+            for k in 0..SIDE {
+                if let Some((mut a, size)) = art(r, ui, screen, pitch_id, k as u16) {
+                    let c = if locked == Some(k) {
+                        Color::rgba(160, 120, 20, 240)
+                    } else {
+                        pal::PANEL
+                    };
+                    a.fill(Rect::new(0.0, 0.0, size.x, size.y), c);
+                }
+            }
+            for k in 0..bench_n {
+                if let Some((mut a, size)) = art(r, ui, screen, bench_id, k as u16) {
+                    a.fill(Rect::new(0.0, 0.0, size.x, size.y), pal::PANEL);
+                }
+            }
+        },
+    );
+    // A yellow card and the stamina left, per player on the pitch.
+    let ui = core::mem::take(&mut g.menu_ui);
+    if let Some(s) = &g.session {
+        for k in 0..SIDE {
+            let p = &s.m.players[side * SIDE + k];
+            if let Some((mut a, size)) = art(r, &ui, screen, meta_id, k as u16) {
+                if p.yellow > 0 {
+                    a.fill(Rect::new(0.0, 0.0, 4.0, size.y), pal::YELLOW);
+                }
+                a.bar(
+                    Rect::new(8.0, 1.0, size.x - 8.0, size.y - 2.0),
+                    p.stamina.to_f32(),
+                    pal::LIME,
+                );
+            }
         }
     }
-
-    if g.cur.sub_selected_pitch.is_some() {
-        footer(
-            &mut ui,
-            &mut g.hits,
-            pad,
-            lang,
-            &[(Btn::A, S::Confirm), (Btn::B, S::Cancel)],
-        );
-    } else {
-        footer(
-            &mut ui,
-            &mut g.hits,
-            pad,
-            lang,
-            &[(Btn::A, S::Select), (Btn::B, S::Back)],
-        );
+    g.menu_ui = ui;
+    for k in 0..SIDE {
+        super::scr::hit(g, screen, pitch_id, k as u16, k as u8);
     }
+    for k in 0..bench_n {
+        super::scr::hit(g, screen, bench_id, k as u16, (20 + k) as u8);
+    }
+    super::scr::back_hits(g, screen);
 }
 
 // ----------------------------------------------------------- touch screen

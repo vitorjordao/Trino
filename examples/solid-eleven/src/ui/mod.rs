@@ -35,6 +35,10 @@ pub mod confirm_gen {
 pub mod edit_gen {
     include!("edit_gen.rs");
 }
+/// The half-time break (`ui/half_time.ui.ron`).
+pub mod half_time_gen {
+    include!("half_time_gen.rs");
+}
 /// The transfer market (`ui/market.ui.ron`).
 pub mod market_gen {
     include!("market_gen.rs");
@@ -54,6 +58,10 @@ pub mod results_gen {
 /// The league table (`ui/table.ui.ron`).
 pub mod table_gen {
     include!("table_gen.rs");
+}
+/// Substitutions in a match (`ui/substitutions.ui.ron`).
+pub mod substitutions_gen {
+    include!("substitutions_gen.rs");
 }
 /// Team selection (`ui/teams.ui.ron`).
 pub mod teams_gen {

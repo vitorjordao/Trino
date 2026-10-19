@@ -1,0 +1,113 @@
+// Solid Eleven's half-time break (issue #95): the score, shots, fouls,
+// corners and possession, and Continue / Substitute / Quit (the buttons
+// wrap at large text). The game keeps the choice (`cur.half_time`).
+//   cargo xtask ui export examples/solid-eleven/ui/half_time.ui.ron examples/solid-eleven/src/ui/half_time_gen.rs
+(
+    version: 1,
+    name: "se_half_time",
+    on_back: "back",
+    theme: (
+        font: "fonts/se_ui",
+        text: Some((236, 240, 255, 255)),
+        dim: Some((150, 160, 196, 255)),
+        panel: Some((16, 20, 46, 230)),
+        button: Some((16, 20, 46, 230)),
+        button_text: Some((236, 240, 255, 255)),
+        focus: Some((30, 60, 130, 235)),
+        focus_text: Some((236, 240, 255, 255)),
+        accent: Some((40, 210, 255, 255)),
+        pressed: Some((50, 110, 240, 255)),
+    ),
+    preview: {
+    "score": Text("2  -  1"),
+    "rows": Int(4),
+    "a": Text("55%"),
+    "b": Text("45%"),
+    "label": Text("POSSE DE BOLA"),
+    "btn.a": Text("ENTER"),
+    },
+    root: (
+        children: [
+            (kind: Rect(), anchor: Fill, bleed: true, color: Some((6, 8, 20, 160))),
+            (
+                kind: Stack(gap: 4, align: Stretch),
+                anchor: StretchCenter,
+                size: (Fill, Fill),
+                max: (320, 0),
+                children: [
+                    (kind: Overlay, min: (0, 4)),
+                    (
+                        kind: Overlay,
+                        size: (Fill, Fill),
+                        padding: (30, 4, 30, 0),
+                        children: [
+                            (
+                                kind: Scroll(gap: 0),
+                                size: (Fill, Fill),
+                                children: [
+                                    (
+                                        kind: Rect(border: 1, border_color: Some((40, 210, 255, 255))),
+                                        id: "panel",
+                                        size: (Fill, Fit),
+                                        padding: (8, 4, 8, 6),
+                                        children: [
+                                            (
+                                                kind: Stack(gap: 6, align: Stretch),
+                                                size: (Fill, Fit),
+                                                children: [
+                                                    (kind: Text, key: "half_time", text: "HALF TIME", font: "fonts/se_big", color: Some((40, 210, 255, 255)), align: Center),
+                                                    (kind: Text, bind: "score", text: "{}", font: "fonts/se_big", align: Center),
+                                                    (
+                                                        kind: List(gap: 2, max: 4),
+                                                        bind: "rows",
+                                                        size: (Fill, Fit),
+                                                        children: [
+                                                            (
+                                                                kind: Stack(dir: Horizontal, gap: 4, justify: SpaceBetween, align: Center),
+                                                                size: (Fill, Fit),
+                                                                children: [
+                                                                    (kind: Text, bind: "a", text: "{}", color: Some((40, 210, 255, 255)), min: (28, 0), align: Right),
+                                                                    (kind: Text, bind: "label", text: "{}", color: Some((150, 160, 196, 255)), align: Center),
+                                                                    (kind: Text, bind: "b", text: "{}", color: Some((40, 210, 255, 255)), min: (28, 0)),
+                                                                ],
+                                                            ),
+                                                        ],
+                                                    ),
+                                                    (
+                                                        kind: Stack(dir: Horizontal, gap: 6, justify: Center, wrap: true),
+                                                        size: (Fill, Fit),
+                                                        children: [
+                                                            (kind: Button, id: "continue", key: "continue", text: "CONTINUE", on_click: "continue", min: (66, 24), padding: (4, 3, 4, 3)),
+                                                            (kind: Button, id: "substitute", key: "pause.substitute", text: "SUBSTITUTE", on_click: "substitute", min: (66, 24), padding: (4, 3, 4, 3)),
+                                                            (kind: Button, id: "quit", key: "pause.quit", text: "QUIT", on_click: "quit", min: (66, 24), padding: (4, 3, 4, 3)),
+                                                        ],
+                                                    ),
+                                                ],
+                                            ),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                        ],
+                    ),
+                    (
+                        kind: Stack(dir: Horizontal, gap: 3, wrap: true),
+                        size: (Fill, Fit),
+                        padding: (6, 0, 0, 3),
+                        children: [
+                            (
+                                kind: Stack(dir: Horizontal, gap: 3, align: Center),
+                                id: "hint_a",
+                                padding: (2, 2, 5, 2),
+                                children: [
+                                    (kind: Rect(), color: Some((70, 210, 90, 255)), padding: (3, 0, 3, 0), min: (11, 0), children: [(kind: Text, bind: "btn.a", text: "{}", color: Some((18, 22, 52, 255)), anchor: Center)]),
+                                    (kind: Text, key: "select", text: "SELECT"),
+                                ],
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+        ],
+    ),
+)

@@ -618,6 +618,8 @@ fn ui_screen(g: &SolidElevenGame) -> bool {
             | Scene::Teams
             | Scene::Edit
             | Scene::Market
+            | Scene::HalfTime
+            | Scene::Substitutions { .. }
     )
 }
 
@@ -750,6 +752,38 @@ fn every_menu_state_draws_cleanly_in_every_language_and_size() {
             }
         }
     }
+    // The match's own menus, which the walk reaches only by playing: the
+    // half-time break and the substitutions with the cursor on each pane
+    // and a player picked to go off.
+    let mut h = g.clone();
+    h.start_exhibition(0, 1, 7, [true, false], solid_eleven::render::Sky::Day, 60);
+    for _ in 0..30 {
+        h.update(&InputState::default(), &mut Mute, 1.0 / 30.0);
+    }
+    for (scene, pane, locked) in [
+        (Scene::HalfTime, 0, None),
+        (
+            Scene::Substitutions {
+                from_half_time: true,
+            },
+            0,
+            Some(3),
+        ),
+        (
+            Scene::Substitutions {
+                from_half_time: true,
+            },
+            1,
+            None,
+        ),
+    ] {
+        h.scene = scene;
+        h.cur.sub_pane = pane;
+        h.cur.sub_bench = 2;
+        h.cur.sub_selected_pitch = locked;
+        report.states += 1;
+        check(&h, fonts, &format!("{scene:?} pane {pane}"), &mut report);
+    }
     let mut q = g.clone();
     q.scene = Scene::Quick;
     for stadium in 0..3 {
@@ -785,8 +819,19 @@ fn every_menu_state_draws_cleanly_in_every_language_and_size() {
         report.busiest.0, report.busiest.1
     );
     for want in [
-        "Pause", "Settings", "Table", "Confirm", "Quick", "Results", "Club", "PickClub", "Teams",
+        "Pause",
+        "Settings",
+        "Table",
+        "Confirm",
+        "Quick",
+        "Results",
+        "Club",
+        "PickClub",
+        "Teams",
         "Edit",
+        "Market",
+        "HalfTime",
+        "Substitutions",
     ] {
         assert!(
             report.grew.contains(want),
@@ -794,8 +839,8 @@ fn every_menu_state_draws_cleanly_in_every_language_and_size() {
         );
     }
     for want in [
-        "Title", "Quick", "PickClub", "Club", "Table", "Teams", "Edit", "Market", "Market",
-        "Settings", "Controls", "Confirm", "Match", "Pause", "Trophy",
+        "Title", "Quick", "PickClub", "Club", "Table", "Teams", "Edit", "Market", "Settings",
+        "Controls", "Confirm", "Match", "Pause", "Trophy",
     ] {
         assert!(report.scenes.contains(want), "never reached {want}");
     }

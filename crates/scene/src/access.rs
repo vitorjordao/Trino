@@ -1,4 +1,4 @@
-//! Accessibility data as text (issue #60, ADR 0026) and the checks behind
+//! Accessibility data as text (issue #60, ADR 0027) and the checks behind
 //! `cargo xtask access check` and the editor's Accessibility tab:
 //!
 //! - `assets/palettes.ron`: semantic colors (`team.home`, `status.danger`)

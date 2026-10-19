@@ -2475,14 +2475,10 @@ impl N64Renderer {
         Some(cmd)
     }
 
-    /// A water draw's RSP command and entry for this frame, its triangles
-    /// and its texture binding (the oracle: no memo). `debug_phys` as
-    /// `rsp::draw_words`'. The entry points the RSP at the command's static
-    /// block (`block_phys`), so the caller keeps the returned box alive
-    /// until the RSP has run (`trino_drain`): dropped earlier, the overlay
-    /// DMAs freed memory, which the next allocation may overwrite (the
-    /// oracle failed on a 4 MB N64 once the heap moved, 2026-10-19).
-    #[allow(clippy::type_complexity)]
+    /// A water draw's RSP command (keep it until the RSP has read its
+    /// block) and entry for this frame, its triangles and its texture
+    /// binding (the oracle: no memo). `debug_phys` as
+    /// `rsp::draw_words`'.
     fn water_command(
         &mut self,
         model: ModelId,
@@ -2534,13 +2530,16 @@ impl N64Renderer {
         let mesh = Mesh::from_layout(&tmdl, &layout);
         let probe = unsafe { ffi::trino_alloc_uncached(32 * 24) } as *mut u8;
         let phys = unsafe { ffi::trino_phys_addr(probe as *const c_void) };
+        // `cmd` holds the static block the RSP DMAs (`e`'s block address):
+        // it lives until the queue has drained. Dropping it at the end of
+        // `water_command` let the second oracle read a freed block (a layout
+        // that reused the memory failed the ripple check, CI 2026-10-19).
         let Some((cmd, e, _, _)) = self.water_command(model, matrix, params, phys) else {
             return Err("water draw not RSP-eligible".into());
         };
         submit_water(&self.sprites, &cmd.words, &e, &mut [0; 4]);
         self.end_frame();
         unsafe { ffi::trino_drain() };
-        // The RSP has read the command's block: it may go now.
         drop(cmd);
         let Some(Some(rm)) = self.rsp_water.get(&model.0) else {
             return Err("no water copy".into());

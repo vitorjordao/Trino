@@ -1,4 +1,4 @@
-# ADR 0026: Accessibility on every target
+# ADR 0027: Accessibility on every target
 
 Status: accepted (October 2026, GitHub #60). Every phase of the issue is implemented: the
 settings and their persistence (§1), semantic palettes with color-vision alternatives and

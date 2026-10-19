@@ -44,6 +44,7 @@
 pub mod b64;
 pub mod device;
 pub mod keys;
+pub mod language;
 pub mod pack;
 pub mod sound;
 

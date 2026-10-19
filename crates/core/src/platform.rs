@@ -188,6 +188,16 @@ pub trait Platform {
         crate::HwTier::Base
     }
 
+    /// The language the system is set to ([`crate::i18n`], issue #59): the
+    /// OS locale on the PC (`TRINO_LANG` overrides it), `navigator.language`
+    /// on the Web, the system setting on the 3DS (a bare language, `pt`,
+    /// with no region). `None` on the N64, which has no such setting: the
+    /// game's default language, then the player's saved choice
+    /// ([`Localizer::pick`](crate::Localizer::pick)).
+    fn system_language(&self) -> Option<crate::LangTag> {
+        None
+    }
+
     /// The window/monitor/picture sizes and display settings, on platforms
     /// where they can change (PC). `None` on consoles.
     fn display(&self) -> Option<DisplayInfo> {

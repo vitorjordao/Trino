@@ -1,4 +1,4 @@
-//! `cargo xtask access <check|shot>` (issue #60, ADR 0026) — accessibility
+//! `cargo xtask access <check|shot>` (issue #60, ADR 0027) — accessibility
 //! as a text-first loop, for people, agents and CI:
 //!
 //! - `access check [dir] [--platform p] [--json]`: the project's semantic

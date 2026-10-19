@@ -1,4 +1,4 @@
-//! The color-vision simulation view (issue #60, ADR 0026): the finished
+//! The color-vision simulation view (issue #60, ADR 0027): the finished
 //! frame as a viewer with protanopia, deuteranopia, tritanopia or no color
 //! vision sees it — Machado et al. 2009 at severity 1.0 in linear RGB, the
 //! same matrices as `trino_core::access::color`. A review tool for the

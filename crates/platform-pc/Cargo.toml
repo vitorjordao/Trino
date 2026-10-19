@@ -18,6 +18,8 @@ lewton = { workspace = true }
 winit = { workspace = true }
 bytemuck = { workspace = true }
 pollster = { workspace = true }
+# The OS locale (Platform::system_language, issue #59).
+sys-locale = "0.3"
 # Gamepads (feature `gamepad`). On Linux gilrs links libudev: install
 # libudev-dev (Debian/Ubuntu) / systemd-devel (Fedora) to enable it.
 gilrs = { version = "0.11", optional = true }

@@ -69,7 +69,8 @@ TRINO_EDITOR_SCREENSHOT=target/launcher.png TRINO_EDITOR_SCREENSHOT_FRAME=10 car
 | `TRINO_EDITOR_SCREENSHOT=out.png` | save a PNG of the whole window, then exit |
 | `TRINO_EDITOR_SCREENSHOT_FRAME=N` | …after N frames (default 30; use ~60 so thumbnails finish) |
 | `TRINO_EDITOR_SELECT=<name>[,<name>…]` | start with those entities selected (the first is active; gizmo + inspector visible) |
-| `TRINO_EDITOR_TAB=scene\|game\|level\|animation\|mixer\|quality\|memory\|accessibility\|ui` | focused center tab (`mixer`, `quality`, `memory`, `accessibility`: the bottom dock's tab) |
+| `TRINO_EDITOR_TAB=scene\|game\|level\|animation\|mixer\|quality\|memory\|accessibility\|ui\|localization` | focused center tab (`mixer`, `quality`, `memory`, `accessibility`: the bottom dock's Mixer, Quality or Memory tab) |
+| `TRINO_EDITOR_LANG=<tag>` | the editor-wide preview language (issue #59): the Localization tab's, the UI tab's (unless `TRINO_EDITOR_UI` names one) and Play's `TRINO_LANG` |
 | `TRINO_EDITOR_ACCESS=cvd=deuteranopia,text=200,contrast=on` | the Accessibility tab's simulation at start: the Scene, Game and UI views through that color vision, the UI tab at that text size and contrast (`AccessSettings::parse_text` keys) |
 | `TRINO_EDITOR_UI=<screen>[,n64\|3ds\|pc\|4k\|wide\|web[,<lang>\|default[,<node id>]]]` | open the UI tab on `ui/<screen>.ui.ron` for that target and language with that node selected, e.g. `TRINO_EDITOR_UI=pause,3ds,pt-BR,quit` |
 | `TRINO_EDITOR_ANIM=<model>:<clip>@<time>` | the Animation tab previews that clip, paused at that time |
@@ -186,6 +187,7 @@ Live-edit check: start the editor with `TRINO_EDITOR_ECHO_LOG=1` in the backgrou
 | `panels/audio.rs` | Assets › Audio inspector: waveform + codec noise, Play per platform, bake settings, the Platforms grid; the budget lines; `name_slider` |
 | `panels/mixer.rs` | the Mixer tab: bus volumes and preview mutes, duck rules; writes `assets/audio.toml` |
 | `ui_screens.rs`, `panels/ui_screens.rs` | the UI tab (issue #58): edits `ui/*.ui.ron` live — tree (add/duplicate/delete/drag), inspector, preview through the real renderer profile per target (3DS: both screens) and language, focus-order/selection/overflow overlays, issues from `validate` + `audit`; saves when the pointer and keyboard are idle, keeping the leading comments; outside edits reload. Tests: `ui_tests.rs::ui_tab_edits_screens_and_follows_their_files` (GPU, `--ignored --test-threads=1`) |
+| `localization.rs`, `panels/localization.rs` | the Localization tab (issue #59): keys × languages from `assets/i18n/*.ron` (default first, pseudo-locales last), cells marked own / fallback (amber) / missing (red), edits written through `write_echo` (comments are not kept), add or remove keys and languages, a pseudo-locale, CSV at `assets/i18n/strings.csv`, `check()` issues with click-to-select, glyph coverage and N64 TMEM per checked font and language measured on a worker; the preview language is editor-wide (UI tab, Play's `TRINO_LANG`). Wide tables page sideways (‹ ›) so the layout audit stays clean. Tests: `ui_tests.rs::localization_tab_edits_the_tables_and_follows_their_files` (GPU, `--ignored --test-threads=1`) |
 
 ## Water (ADR 0015)
 
@@ -338,7 +340,7 @@ Live-edit check: start the editor with `TRINO_EDITOR_ECHO_LOG=1` in the backgrou
   under its RAM line (`budget::assets_ram_line`).
 - UI test: `ui_tests::asset_groups_chips_requires_cells_and_memory`.
 
-## Accessibility tab (issue #60, ADR 0026)
+## Accessibility tab (issue #60, ADR 0027)
 
 `access.rs` (`AccessState`: the palettes, `preview` = the views' simulation, the
 checklist) and `panels/access.rs` (the tab, `simulation_menu` for View › Accessibility

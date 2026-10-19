@@ -30,6 +30,8 @@ pub struct WebPlatform {
     /// The player's accessibility settings (`localStorage`
     /// `trino-access:<name>`, loaded and stored by the runtime).
     pub(crate) access: trino_core::HostedAccess,
+    /// `?lang=`, else `navigator.language` (`crate::language`).
+    language: Option<trino_core::LangTag>,
 }
 
 impl WebPlatform {
@@ -48,7 +50,13 @@ impl WebPlatform {
             quality: HostedQuality::new(caps),
             groups: crate::groups::Groups::new(caps.ram_bytes),
             access: trino_core::HostedAccess::new(),
+            language: crate::language::detect(),
         }
+    }
+
+    /// Replace the system language (a host that knows better).
+    pub fn set_system_language(&mut self, language: Option<trino_core::LangTag>) {
+        self.language = language;
     }
 
     /// Count the page's heap in `Platform::memory` (the app's
@@ -157,6 +165,10 @@ impl Platform for WebPlatform {
 
     fn memory(&self) -> MemoryReport {
         self.groups.report()
+    }
+
+    fn system_language(&self) -> Option<trino_core::LangTag> {
+        self.language
     }
 
     fn display(&self) -> Option<DisplayInfo> {

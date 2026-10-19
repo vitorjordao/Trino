@@ -29,7 +29,12 @@ struct NodeDrag(Vec<usize>);
 type TreeEdit = fn(&mut ScreenDef, &[usize]) -> Option<Vec<usize>>;
 
 pub fn ui(app: &mut App, ui: &mut egui::Ui) {
+    let lang_before = app.ui_screens.lang.clone();
     toolbar(app, ui);
+    // The language picked here is the editor's preview language (#59).
+    if app.ui_screens.lang != lang_before {
+        app.localization.preview = app.ui_screens.lang.clone();
+    }
     if app.ui_screens.new_name.is_some() {
         new_screen_form(app, ui);
     }

@@ -49,6 +49,8 @@ pub enum Tab {
     /// Accessibility (issue #60): semantic palettes, the views' color-vision
     /// simulation, the checklist.
     Accessibility,
+    /// The string tables (`assets/i18n/*.ron`, issue #59).
+    Localization,
 }
 
 impl Tab {
@@ -67,6 +69,7 @@ impl Tab {
             Tab::Console => (icon::TERMINAL, "Console"),
             Tab::Ui => (icon::LAYOUT, "UI"),
             Tab::Accessibility => (icon::EYE, "Accessibility"),
+            Tab::Localization => (icon::TRANSLATE, "Localization"),
         };
         format!("{glyph}  {name}")
     }
@@ -312,6 +315,8 @@ pub struct App {
     pub access: crate::access::AccessState,
     /// The UI tab: the screens (`ui/*.ui.ron`), the open one, its preview.
     pub ui_screens: crate::ui_screens::UiScreens,
+    /// The Localization tab: the string tables, the preview language.
+    pub localization: crate::localization::Localization,
     /// The scene's frame from its camera on every target (variants, LOD and
     /// impostors applied; `budget::BUDGET_TARGETS`), with the content key
     /// it is for.
@@ -580,6 +585,8 @@ impl App {
         }
 
         let screenshot = screenshot_from_env();
+        // Dev hook: TRINO_EDITOR_LANG=<tag> previews that language.
+        let localization = crate::localization::Localization::from_env(&root);
 
         App {
             project,
@@ -642,6 +649,7 @@ impl App {
                 Ok("memory") => Some(Tab::Memory),
                 Ok("ui") => Some(Tab::Ui),
                 Ok("accessibility") => Some(Tab::Accessibility),
+                Ok("localization") => Some(Tab::Localization),
                 _ if std::env::var_os("TRINO_EDITOR_UI").is_some() => Some(Tab::Ui),
                 _ => None,
             },
@@ -708,7 +716,15 @@ impl App {
             access: crate::access::AccessState::load(&root),
             // Dev hook: TRINO_EDITOR_UI=<screen>[,<platform>[,<lang>[,<node
             // id>]]] opens the UI tab on that screen.
-            ui_screens: crate::ui_screens::UiScreens::from_env(&root),
+            ui_screens: {
+                let mut s = crate::ui_screens::UiScreens::from_env(&root);
+                // TRINO_EDITOR_LANG: the editor-wide preview language.
+                if s.lang.is_none() {
+                    s.lang = localization.preview.clone();
+                }
+                s
+            },
+            localization,
             render_state,
         }
     }
@@ -819,7 +835,7 @@ impl App {
 
     // ------------------------------------------------------------ files --
 
-    fn write_echo(&mut self, path: PathBuf, text: String) -> Result<(), String> {
+    pub(crate) fn write_echo(&mut self, path: PathBuf, text: String) -> Result<(), String> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
@@ -959,9 +975,10 @@ impl App {
                     None => {}
                 }
             } else if s.starts_with("assets/i18n/") && s.ends_with(".ron") {
-                // The UI's string tables.
+                // The string tables: the UI tab and the Localization tab.
                 let root = self.project.root.clone();
                 self.ui_screens.reload_langs(&root);
+                self.localization.reload(&root);
                 match &self.ui_screens.langs_error {
                     Some(e) => self.log.toast(Level::Error, e.clone()),
                     None => self.log.toast(
@@ -1768,6 +1785,17 @@ impl App {
             && let Err(e) = self.write_echo(path, text)
         {
             self.log.toast(Level::Error, e);
+        }
+        // String tables edited in the Localization tab: written, then the
+        // UI tab reads them (the watcher skips our own writes).
+        if self.localization.has_writes() {
+            let root = self.project.root.clone();
+            for (path, text) in self.localization.take_writes(&root) {
+                if let Err(e) = self.write_echo(path, text) {
+                    self.log.toast(Level::Error, e);
+                }
+            }
+            self.ui_screens.reload_langs(&root);
         }
         let effects: Vec<String> = self.pending_particles.drain().collect();
         for name in effects {
@@ -2748,6 +2776,11 @@ impl App {
         if self.game_view.profile == SimProfile::Native {
             cmd.env("TRINO_QUALITY", self.game_view.quality.key());
         }
+        // The language the editor previews (#59): the PC platform's
+        // `system_language` reads it.
+        if let Some(lang) = &self.localization.preview {
+            cmd.env("TRINO_LANG", lang);
+        }
         match cmd.spawn() {
             Ok(child) => {
                 self.play = Some(child);
@@ -3351,10 +3384,38 @@ fn default_dock(width: f32) -> egui_dock::DockState<Tab> {
     // picks the focused center tab (`mixer` the bottom one:
     // `App::focus_tab`).
     let tabs = match std::env::var("TRINO_EDITOR_TAB").as_deref() {
-        Ok("level") => vec![Tab::Level, Tab::Scene, Tab::Game, Tab::Animation, Tab::Ui],
-        Ok("game") => vec![Tab::Game, Tab::Scene, Tab::Level, Tab::Animation, Tab::Ui],
-        Ok("animation") => vec![Tab::Animation, Tab::Scene, Tab::Game, Tab::Level, Tab::Ui],
-        _ => vec![Tab::Scene, Tab::Game, Tab::Level, Tab::Animation, Tab::Ui],
+        Ok("level") => vec![
+            Tab::Level,
+            Tab::Scene,
+            Tab::Game,
+            Tab::Animation,
+            Tab::Ui,
+            Tab::Localization,
+        ],
+        Ok("game") => vec![
+            Tab::Game,
+            Tab::Scene,
+            Tab::Level,
+            Tab::Animation,
+            Tab::Ui,
+            Tab::Localization,
+        ],
+        Ok("animation") => vec![
+            Tab::Animation,
+            Tab::Scene,
+            Tab::Game,
+            Tab::Level,
+            Tab::Ui,
+            Tab::Localization,
+        ],
+        _ => vec![
+            Tab::Scene,
+            Tab::Game,
+            Tab::Level,
+            Tab::Animation,
+            Tab::Ui,
+            Tab::Localization,
+        ],
     };
     let mut dock = egui_dock::DockState::new(tabs);
     let surface = dock.main_surface_mut();
@@ -3416,7 +3477,8 @@ impl egui_dock::TabViewer for TabView<'_> {
             | Tab::Accessibility
             | Tab::Level
             | Tab::Animation
-            | Tab::Ui => [false, false],
+            | Tab::Ui
+            | Tab::Localization => [false, false],
             _ => [false, true],
         }
     }
@@ -3538,6 +3600,7 @@ impl egui_dock::TabViewer for TabView<'_> {
             Tab::Accessibility => crate::panels::access::ui(app, ui),
             Tab::Console => app.log.ui(ui),
             Tab::Ui => crate::panels::ui_screens::ui(app, ui),
+            Tab::Localization => crate::panels::localization::ui(app, ui),
         }
     }
 }

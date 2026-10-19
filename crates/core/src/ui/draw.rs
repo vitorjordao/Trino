@@ -199,7 +199,7 @@ impl<const N: usize> Ui<N> {
                     let content = inset_px(rect, &n, scale);
                     let lh = r
                         .measure_text(
-                            font_of(screen, &n),
+                            font_of(screen, env, &n),
                             "",
                             text_scale(screen, &n) * scale * self.text_mul,
                         )
@@ -244,7 +244,7 @@ impl<const N: usize> Ui<N> {
                     let text = label(screen, &self.values, env, &n, slot.item, &mut buf);
                     let lw = r
                         .measure_text(
-                            font_of(screen, &n),
+                            font_of(screen, env, &n),
                             text,
                             text_scale(screen, &n) * scale * self.text_mul,
                         )
@@ -470,7 +470,7 @@ impl<const N: usize> Ui<N> {
         if text.is_empty() {
             return;
         }
-        let font = font_of(screen, n);
+        let font = font_of(screen, env, n);
         let px = text_scale(screen, n) * scale * self.text_mul;
         let measure: &dyn Renderer = r;
         let width = |s: &str| measure.measure_text(font, s, px).x;
@@ -620,8 +620,15 @@ fn inset_px(rect: Rect, n: &UiNode<'_>, scale: f32) -> Rect {
     )
 }
 
-fn font_of(screen: &UiScreen<'_>, n: &UiNode<'_>) -> crate::render::FontId {
-    n.font.unwrap_or(screen.theme.font)
+/// The font a node's text measures and draws with: its own or the
+/// theme's, through the language's remap (a per-language atlas, #59). The
+/// layout calls it too, so the two never disagree.
+pub(super) fn font_of(
+    screen: &UiScreen<'_>,
+    env: &UiEnv<'_>,
+    n: &UiNode<'_>,
+) -> crate::render::FontId {
+    env.strings.font(n.font.unwrap_or(screen.theme.font))
 }
 
 fn text_scale(screen: &UiScreen<'_>, n: &UiNode<'_>) -> f32 {

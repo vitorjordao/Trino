@@ -66,6 +66,10 @@ pub fn engine_checks(
     if ui_layout(renderer, platform)? {
         platform.log("TRINO_STEP:ui layout probed focus, pad and touch\n");
     }
+    platform.log("TRINO_STEP:i18n\n");
+    if i18n(renderer, platform)? {
+        platform.log("TRINO_STEP:i18n probed 3 languages\n");
+    }
     platform.log("TRINO_STEP:dual screen\n");
     if dual_screen(renderer)? {
         platform.log("TRINO_STEP:dual screen probed both screens\n");
@@ -743,6 +747,133 @@ pub fn blob(platform: &mut dyn Platform) -> Result<(), &'static str> {
         Some(_) => Err("blob content mismatch"),
         None => Err("blob missing"),
     }
+}
+
+/// The localized font (`[fonts.i18n]`: `chars = "auto"`, one atlas per
+/// language).
+pub const I18N_FONT: FontId = FontId::from_path("fonts/i18n");
+
+/// Localization (issue #59) end to end: every baked language loads from
+/// `i18n/languages`, the system language picks one, and in each of en-US,
+/// pt-BR and es-ES a key, its fallback, a plural and a price come out in
+/// the language's words and number format, drawn with the language's own
+/// glyph-subset atlas. Pixels: the price's last glyph columns are lit and
+/// the columns just past its measured width are dark, so the drawn text is
+/// the language's (the three prices differ in width). `Ok(false)` where
+/// `read_pixel` is unsupported (the logic still ran).
+#[inline(never)]
+pub fn i18n(
+    renderer: &mut dyn Renderer,
+    platform: &mut dyn Platform,
+) -> Result<bool, &'static str> {
+    use trino_core::i18n::{Arg, LangId, Localizer, StrKey};
+    const HELLO: StrKey = StrKey::new("selftest.hello");
+    const PRICE: StrKey = StrKey::new("selftest.price");
+    const COINS: StrKey = StrKey::new("selftest.coins");
+    const ONLY_EN: StrKey = StrKey::new("selftest.only_en");
+    let mut loc: Localizer<'static, 4> = Localizer::new();
+    if loc.load(platform) < 3 {
+        return Err("i18n: i18n/languages or a language's table is missing");
+    }
+    if loc.tag() != "en-US" {
+        return Err("i18n: the default language is not loaded first");
+    }
+    // Whatever the system says, the pick is a loaded language.
+    let system = platform.system_language();
+    let picked = loc.pick(None, system);
+    if loc.table(picked).is_none() {
+        return Err("i18n: the system language's pick is not a loaded language");
+    }
+    let cases: [(&str, &str, &str, &str, &str, &str); 3] = [
+        (
+            "en-US",
+            "Hello",
+            "Price: $1,200.00",
+            "1 coin",
+            "0 coins",
+            "fonts/i18n",
+        ),
+        (
+            "pt-BR",
+            "Olá",
+            "Preço: R$ 1.200,00",
+            "1 moeda",
+            "0 moeda",
+            "fonts/i18n@pt-BR",
+        ),
+        (
+            "es-ES",
+            "Hola",
+            "Precio: 1200,00 €",
+            "1 moneda",
+            "0 monedas",
+            "fonts/i18n@es-ES",
+        ),
+    ];
+    let mut probed = true;
+    let mut buf: TextBuf<48> = TextBuf::new();
+    for (tag, hello, price, one, zero, atlas) in cases {
+        if !loc.set_language(LangId::new(tag)) {
+            return Err("i18n: a language did not load");
+        }
+        if loc.tr(HELLO) != hello {
+            return Err("i18n: a key is not in the language's words");
+        }
+        if loc.tr(ONLY_EN) != "Fallback" {
+            return Err("i18n: a missing key did not fall back to en-US");
+        }
+        if loc.tr_fmt(COINS, &[Arg::int("n", 1)], &mut buf) != one
+            || loc.tr_fmt(COINS, &[Arg::int("n", 0)], &mut buf) != zero
+        {
+            return Err("i18n: a plural picked the wrong form");
+        }
+        let font = loc.font(I18N_FONT);
+        if font != FontId::from_path(atlas) {
+            return Err("i18n: the language does not draw with its own atlas");
+        }
+        let text = loc.tr_fmt(PRICE, &[Arg::money("amount", 120_000)], &mut buf);
+        if text != price {
+            return Err("i18n: a price is not in the language's number format");
+        }
+        let size = renderer.measure_text(font, text, 1.0);
+        if size.x < 20.0 || size.y < 8.0 {
+            return Err("i18n: the language's atlas is not loaded");
+        }
+        if renderer.measure_text(I18N_FONT, "Hello", 1.0).x < 10.0 {
+            return Err("i18n: the default atlas is not loaded");
+        }
+        // Several identical frames: the 3DS LCDs are double-buffered.
+        let at = Vec2::new(8.0, 8.0);
+        for _ in 0..3 {
+            renderer.begin_frame(Color::BLACK);
+            renderer.draw_text(font, at, text, &TextParams::DEFAULT);
+            renderer.end_frame();
+        }
+        let lit = |r: &mut dyn Renderer, x0: f32, x1: f32| -> Option<bool> {
+            let mut any = false;
+            let mut x = x0;
+            while x < x1 {
+                for y in (at.y as u32 + 1..(at.y + size.y) as u32).step_by(2) {
+                    let c = r.read_pixel(x as u32, y)?;
+                    any |= c.r as u16 + c.g as u16 + c.b as u16 > 240;
+                }
+                x += 1.0;
+            }
+            Some(any)
+        };
+        let end = at.x + size.x;
+        let last = lit(renderer, end - 4.0, end);
+        match (last, lit(renderer, end + 3.0, end + 14.0)) {
+            (Some(true), Some(false)) => {}
+            (Some(_), Some(_)) => {
+                return Err("i18n: the drawn price does not end where its language's ends");
+            }
+            _ => probed = false,
+        }
+    }
+    // Back to the language the system picked.
+    loc.set_language(picked);
+    Ok(probed)
 }
 
 /// `ui/selftest.ui.ron`, baked as a blob on every target (issue #58).

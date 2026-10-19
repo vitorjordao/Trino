@@ -281,7 +281,7 @@ impl<M: TextMeasure + ?Sized, const N: usize> Solver<'_, '_, '_, M, N> {
             self.screen.theme.text_scale.max(1)
         };
         (
-            n.font.unwrap_or(self.screen.theme.font),
+            super::draw::font_of(self.screen, self.env, n),
             scale as f32 * self.ui.text_mul,
         )
     }

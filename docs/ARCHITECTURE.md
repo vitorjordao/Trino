@@ -250,8 +250,20 @@ wraps the game's `Audio` and draws a caption box (on the 3DS touch screen if ask
 `CameraFx`, `ScreenFlash` and `HoldToggle` follow the motion, flash and input settings.
 The PC renderer adds a simulation view for review (`set_cvd_view`, `TRINO_CVD`) and warns
 on raw strobes in strict mode. `cargo xtask access check` validates palettes, the theme,
-captions and every screen at 200 %. Details in [ADR 0026](adr/0026-accessibility.md) and
+captions and every screen at 200 %. Details in [ADR 0027](adr/0027-accessibility.md) and
 [ACCESSIBILITY.md](ACCESSIBILITY.md).
+### Localization (issue #59)
+
+`trino_core::i18n` holds a game's languages (`Localizer`): string tables with a fallback
+chain, CLDR plural forms and locale formats (numbers, money, dates) written into a
+`TextBuf` with integers only, so every target prints the same digits. Each language's
+baked table also names the fonts it draws with: a glyph-subset atlas per language
+(`chars = "auto"`, `per_language`) or a font for its script. The UI measures and draws
+through that remap (`UiStrings::font`) in one function, so overflow checks and pixels
+agree. `Platform::system_language()` reports the OS, browser or 3DS setting (the N64 has
+none). `cargo xtask i18n check` holds every language to its keys, placeholders, fonts and
+UI boxes on every target; the editor's Localization tab edits the same RON files. Details
+in [ADR 0026](adr/0026-localization.md) and [ASSETS.md](ASSETS.md#localization).
 
 ### Legacy 2D
 

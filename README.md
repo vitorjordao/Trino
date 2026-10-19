@@ -51,6 +51,7 @@ impostors) is part of the same pipeline, drawn by the same renderer in the same 
 | Billboards, particles, impostors, distance LOD, portal/cell visibility | yes | yes | yes |
 | 2D: sprites, `fill_rect`, bitmap text | yes | yes | yes |
 | UI screens (`ui/*.ui.ron`): layout per target, focus by pad, mouse or touch, string tables | 1080p ×4, 4K ×9, 21:9; mouse | inside the TV-safe area; pad and C buttons | touch screen nodes and taps |
+| Localization (`assets/i18n/<lang>.ron`): fallback, plurals, number/money/date formats, fonts subset per language | the OS language (`TRINO_LANG`), the browser's on the Web | the game's default, then the saved choice; atlases sized for TMEM | the system language |
 | Two screens | simulated by the 3DS profile | one screen | top 400x240 and touch bottom 320x240 |
 | Input | keyboard, mouse, gamepads (feature `gamepad`), rebinding | controller | buttons, circle pad, touch |
 | Audio: SFX, music, stingers, positional sound | yes | yes | yes |
@@ -67,6 +68,7 @@ impostors) is part of the same pipeline, drawn by the same renderer in the same 
 | Editor | Scene and Game views on the real renderer, hierarchy, inspector, asset browser, prefabs, per-platform variants, LOD and impostor baking, an animation tab, a per-console frame budget HUD, each console's shadow tier in the Game view. |
 | UI tools | `cargo xtask ui check` proves on every target that the pad reaches every control, the screen fits the console's UI budget and no translation overflows; `ui shot` renders a screen as a target shows it; the editor's UI tab edits screens with a focus-order overlay. Every new project starts with title, pause, options and controls screens. |
 | Accessibility tools | `cargo xtask access check` proves semantic colors stay apart and readable in every color-vision mode, the high-contrast theme keeps 7:1, every caption key exists in every language and every screen fits at 200 % text on every target; `access shot` renders a screen or scene as a player with those settings sees it; the editor's Accessibility tab simulates color vision in every view and edits the palettes. New projects start with an Accessibility screen. |
+| Localization tools | `cargo xtask i18n check` holds every language to its keys, placeholders, plural forms, the glyphs its fonts bake and every UI box on every target; `i18n pseudo` finds hard-coded text and tight boxes; CSV for translators; the editor's Localization tab edits the tables. |
 | Live reload | Game code reloads as a dylib on PC (`cargo xtask watch pc`); consoles rebuild and relaunch in the emulator on save (`watch n64`, `watch 3ds`). |
 | Emulator self-tests and goldens | `cargo xtask test n64` and `test 3ds` boot the game in ares or Azahar, run a self-test step for every engine service, have a bot play a stage, and compare frames with golden images. The N64 run also gates frame time. |
 | Real hardware | `run n64 --device sc64\|everdrive` and `run 3ds --device network` deploy to a console and print its debug log in your terminal. Tested with stub loaders so far ([docs/HARDWARE.md](docs/HARDWARE.md)). |

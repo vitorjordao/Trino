@@ -32,13 +32,14 @@
 //! overflowing text, unreachable controls, missing glyphs and the target's
 //! node and draw budgets (`cargo xtask ui check`, the editor's UI tab).
 //!
-//! String tables (`assets/i18n/<lang>.ron`, [`StringsDef`]) are the plain
-//! strings of issue #59's format, baked into `TSTR` blobs (`i18n/<lang>`).
+//! String tables (`assets/i18n/<lang>.ron`, [`StringsDef`]) live in
+//! [`crate::i18n`] (issue #59), baked into `TSTR` blobs (`i18n/<lang>`).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write as _;
 use std::path::Path;
 
+pub use crate::i18n::{HostStrings, Langs, StringsDef, strings_blob_path};
 use serde::{Deserialize, Serialize};
 use trino_core::render3d::Camera3;
 use trino_core::text::BitmapFont;
@@ -1183,131 +1184,6 @@ impl Fonts {
             }
         }
     }
-}
-
-/// String tables by language (host side; the runtime reads `TSTR`).
-#[derive(Clone, Debug, Default)]
-pub struct Langs {
-    pub tables: BTreeMap<String, StringsDef>,
-}
-
-impl Langs {
-    /// Every `<dir>/*.ron` file.
-    pub fn load_dir(dir: &Path) -> Result<Langs, String> {
-        let mut langs = Langs::default();
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            return Ok(langs);
-        };
-        let mut paths: Vec<_> = entries
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.extension().is_some_and(|e| e == "ron"))
-            .collect();
-        paths.sort();
-        for p in paths {
-            let table = StringsDef::load(&p)?;
-            langs.tables.insert(table.lang.clone(), table);
-        }
-        Ok(langs)
-    }
-
-    pub fn names(&self) -> Vec<String> {
-        self.tables.keys().cloned().collect()
-    }
-
-    /// `lang`'s strings with its fallback chain (`None` = no table: the
-    /// nodes' default texts).
-    pub fn strings(&self, lang: &str) -> HostStrings<'_> {
-        let mut chain = Vec::new();
-        let mut at = self.tables.get(lang);
-        while let Some(t) = at {
-            if chain.iter().any(|c: &&StringsDef| c.lang == t.lang) {
-                break;
-            }
-            chain.push(t);
-            at = self.tables.get(&t.fallback);
-        }
-        HostStrings {
-            chain,
-            revision: trino_core::asset_id(lang),
-        }
-    }
-}
-
-/// [`UiStrings`] over loaded tables.
-pub struct HostStrings<'a> {
-    chain: Vec<&'a StringsDef>,
-    revision: u32,
-}
-
-impl UiStrings for HostStrings<'_> {
-    fn get(&self, key: &str) -> Option<&str> {
-        self.chain
-            .iter()
-            .find_map(|t| t.entries.get(key).map(String::as_str))
-    }
-
-    fn revision(&self) -> u32 {
-        self.revision
-    }
-}
-
-impl HostStrings<'_> {
-    /// The language's own table has the key (no fallback).
-    pub fn has_own(&self, key: &str) -> bool {
-        self.chain
-            .first()
-            .is_some_and(|t| t.entries.contains_key(key))
-    }
-}
-
-/// A language's strings: `assets/i18n/<lang>.ron` (issue #59's format,
-/// plain strings).
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
-#[serde(rename = "Strings", deny_unknown_fields)]
-pub struct StringsDef {
-    pub lang: String,
-    /// The language read for keys this one lacks.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub fallback: String,
-    pub entries: BTreeMap<String, String>,
-}
-
-impl StringsDef {
-    pub fn from_ron(text: &str) -> Result<StringsDef, String> {
-        ron::from_str(text).map_err(|e| format!("string table parse error: {e}"))
-    }
-
-    pub fn load(path: &Path) -> Result<StringsDef, String> {
-        let text = std::fs::read_to_string(path)
-            .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-        StringsDef::from_ron(&text).map_err(|e| format!("{}: {e}", path.display()))
-    }
-
-    /// The `TSTR` blob (`i18n/<lang>`).
-    pub fn to_tstr(&self) -> Result<Vec<u8>, String> {
-        let mut entries: Vec<(&str, &str)> = self
-            .entries
-            .iter()
-            .map(|(k, v)| (k.as_str(), v.as_str()))
-            .collect();
-        let mut out = Vec::new();
-        core_ui::strings::encode_tstr(&self.lang, &self.fallback, &mut entries, &mut |b| {
-            out.extend_from_slice(b)
-        })
-        .map_err(|(hash, at)| {
-            format!(
-                "{}: key \"{}\" collides with another (hash {hash:#010x})",
-                self.lang, entries[at].0
-            )
-        })?;
-        Ok(out)
-    }
-}
-
-/// The blob a language bakes into.
-pub fn strings_blob_path(lang: &str) -> String {
-    format!("i18n/{lang}")
 }
 
 /// Bakes the screen into a `TUIL` blob ([`UiScreen::parse`]).

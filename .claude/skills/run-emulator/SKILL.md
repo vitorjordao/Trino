@@ -125,7 +125,9 @@ tests follow the same pattern: add a step to `castle64::selftest` so the PC suit
 
 Both consoles have a base and an expanded variant, and one ROM / app runs on both. The
 first line after boot names the one found: `TRINO_HW n64 ram=8M tier=expanded`,
-`TRINO_HW 3ds new=1 speedup=1 app_ram=96M tier=expanded`.
+`TRINO_HW 3ds new=1 speedup=1 app_ram=96M tier=expanded`. The 3DS then logs its system
+language, `TRINO_LANG en` (a bare tag; `none` when CFGU fails), which the `i18n` step's
+`Localizer::pick` matches by primary subtag (issue #59).
 
 ```
 cargo xtask test n64 --expansion-pak both     # with the Pak, then without (CI)

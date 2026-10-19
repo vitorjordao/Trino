@@ -6,6 +6,7 @@ pub mod audio;
 pub mod hierarchy;
 pub mod impostor;
 pub mod inspector;
+pub mod localization;
 pub mod lod;
 pub mod memory;
 pub mod mixer;

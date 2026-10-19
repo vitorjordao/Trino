@@ -34,6 +34,7 @@ pub mod access;
 pub mod bake;
 pub mod budget;
 pub mod codegen;
+pub mod i18n;
 pub mod library;
 pub mod material;
 pub mod platform;

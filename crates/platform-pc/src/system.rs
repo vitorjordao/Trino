@@ -61,6 +61,8 @@ pub struct PcPlatform {
     /// The player's accessibility settings ([`Platform::access`]); the host
     /// loads and persists them (`<save>.access`).
     access: trino_core::HostedAccess,
+    /// The system language, read once ([`crate::language`]).
+    language: Option<trino_core::LangTag>,
 }
 
 impl PcPlatform {
@@ -89,7 +91,13 @@ impl PcPlatform {
             },
             heap: None,
             access: trino_core::HostedAccess::new(),
+            language: crate::language::detect(),
         }
+    }
+
+    /// Replace the system language (tests, a host that knows better).
+    pub fn set_system_language(&mut self, language: Option<trino_core::LangTag>) {
+        self.language = language;
     }
 
     /// The groups and their states, for the host's loader.
@@ -238,6 +246,10 @@ impl Platform for PcPlatform {
 
     fn hw_tier(&self) -> trino_core::HwTier {
         self.hw_tier
+    }
+
+    fn system_language(&self) -> Option<trino_core::LangTag> {
+        self.language
     }
 
     fn log(&self, message: &str) {

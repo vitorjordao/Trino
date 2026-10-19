@@ -3,7 +3,7 @@ name: accessibility
 description: Make a Trino game accessible on every target — color vision through semantic palettes (`assets/palettes.ron`) and icons (`cvd_icon`), captions for sounds, UI text scale up to 200 % and high contrast, reduced motion, the flash guard, hold-to-toggle — validated with `cargo xtask access check`, reviewed with `access shot` and the editor's Accessibility tab. Use for "color blind", "CVD", "captions/subtitles", "text size", "high contrast", "photosensitivity/flashes", "camera shake", "hold vs toggle", or when an accessibility check fails.
 ---
 
-# accessibility (issue #60, ADR 0026, docs/ACCESSIBILITY.md)
+# accessibility (issue #60, ADR 0027, docs/ACCESSIBILITY.md)
 
 The player's settings come from `platform.access()` (`AccessSettings`); everything that
 honors them is content (text files) plus small core helpers, so the N64, the 3DS, the PC

@@ -1,4 +1,4 @@
-//! What the Accessibility tab edits and shows (issue #60, ADR 0026):
+//! What the Accessibility tab edits and shows (issue #60, ADR 0027):
 //! `assets/palettes.ron` (the semantic colors and their color-vision
 //! alternatives — the same file an agent writes by hand), the simulation
 //! the Scene, Game and UI views draw through (a color-vision mode, the UI's

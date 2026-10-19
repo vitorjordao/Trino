@@ -108,6 +108,11 @@ impl Platform for N3dsPlatform {
         self.access.set(settings);
     }
 
+    /// The system setting, read at boot: a bare language (`pt`, `en`).
+    fn system_language(&self) -> Option<trino_core::LangTag> {
+        runtime::system_language()
+    }
+
     /// The 3DS's fixed preset (issue #55): `Low`, `Medium` on a New 3DS
     /// with the speedup, nothing scaled. `set_quality` stays the trait's
     /// no-op.

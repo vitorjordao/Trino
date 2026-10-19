@@ -170,6 +170,10 @@ pub struct Manifest {
     /// platform (`crate::memory`, strict mode and `assets report`).
     #[serde(default)]
     pub memory: Option<crate::memory::MemoryDecl>,
+    /// Localization (issue #59, `crate::i18n`): the default and shipped
+    /// languages, glyph subsetting, per-language font atlases.
+    #[serde(default)]
+    pub i18n: Option<crate::i18n::I18nDecl>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -400,8 +404,10 @@ impl Manifest {
     pub fn load(path: &Path) -> Result<Self, String> {
         let text = std::fs::read_to_string(path)
             .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-        let manifest: Manifest =
+        let mut manifest: Manifest =
             toml::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+        crate::i18n::resolve(&mut manifest, path.parent().unwrap_or(Path::new("")))
+            .map_err(|e| format!("{}: {e}", path.display()))?;
         if manifest.version != 1 {
             return Err(format!(
                 "{}: unsupported manifest version {} (expected 1)",

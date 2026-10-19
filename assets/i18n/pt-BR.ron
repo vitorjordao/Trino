@@ -1,0 +1,13 @@
+Strings(
+    lang: "pt-BR",
+    fallback: "en-US",
+    name: "Português (Brasil)",
+    entries: {
+        "cap.coin": "[moeda tilinta]",
+        "cap.hurt": "[ai]",
+        "cap.star": "[fanfarra: estrela coletada]",
+        "selftest.coins": Plural(one: "{n} moeda", other: "{n} moedas"),
+        "selftest.hello": "Olá",
+        "selftest.price": "Preço: {amount:currency}",
+    },
+)

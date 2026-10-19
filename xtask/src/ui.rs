@@ -292,6 +292,9 @@ fn check_one(
             let sizes =
                 |s: &str| trino_asset_pipeline::ui::sprite_size(froot, manifest, platform, s);
             let flat = Flat::new(&def, &sizes);
+            // Each language measures with the font it draws on this target.
+            let langs = trino_asset_pipeline::i18n::with_remaps(langs.clone(), manifest, platform);
+            let langs = &langs;
             for lang in lang_list {
                 let report = audit(
                     &flat,
@@ -356,7 +359,7 @@ fn check_one(
     )
 }
 
-fn caps_of(f: Family) -> Caps {
+pub(crate) fn caps_of(f: Family) -> Caps {
     f.caps()
 }
 

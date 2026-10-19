@@ -328,7 +328,7 @@ groups = ["level1"]              # default ["boot"]: loaded at boot, always resi
 - Live reload re-uploads changed boot assets; a grouped asset's new bytes show the next
   time its group loads.
 
-## Accessibility data (issue #60, ADR 0026)
+## Accessibility data (issue #60, ADR 0027)
 
 - Captions on a sound or a music track: `caption = "cap.x"` (a key in every
   `assets/i18n/<lang>.ron`), `important = true` (shown in the "important" mode, and an

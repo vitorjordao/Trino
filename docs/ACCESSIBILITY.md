@@ -5,7 +5,7 @@ every target, the N64 included: color vision through semantic palettes, a second
 of icons, text scale and high contrast in the UI, captions for sounds, damped camera
 motion, a flash guard and hold-to-toggle. Each one is a text file a person, an agent or
 the editor writes, checked by `cargo xtask access check` before it ships. The design and
-its trade-offs are in [ADR 0026](adr/0026-accessibility.md).
+its trade-offs are in [ADR 0027](adr/0027-accessibility.md).
 
 | Setting | What the engine does | N64 | 3DS | PC / Web |
 |---|---|---|---|---|

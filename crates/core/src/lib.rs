@@ -28,6 +28,7 @@ pub mod collide;
 pub mod entity;
 pub mod game;
 pub mod group;
+pub mod i18n;
 pub mod impostor;
 pub mod input;
 pub mod light;
@@ -70,6 +71,7 @@ pub use collide::{MoveResult, move_and_collide};
 pub use entity::{Entity, EntityId, EntityStore};
 pub use game::Game;
 pub use group::{GroupId, GroupTable, LoadState, MemoryReport};
+pub use i18n::{Arg, LangId, LangTag, Localizer, StrKey};
 pub use impostor::Impostor;
 pub use input::{Button, Input, InputState, Key, KeySet, PointerButton};
 pub use light::{

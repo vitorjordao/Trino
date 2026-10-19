@@ -68,7 +68,7 @@ shipping a 3D game first**, then by cost:
     an AMD Radeon iGPU and an RX 7800 XT on Windows).
   - Dynamic resolution's full-size clear and MSAA resolve (1–3 ms on llvmpipe with 4×
     MSAA at half scale): a partial resolve if a preset with MSAA ever turns it on.
-- **Accessibility follow-ups (#60, ADR 0026)** (S–M each).
+- **Accessibility follow-ups (#60, ADR 0027)** (S–M each).
   - The PC/Web correction filter (daltonization) for content without semantic palettes:
     #64's post stack (the simulation view is review-only).
   - Text scale for text a game draws itself (`draw_text` HUDs: castle64's counters,
@@ -88,12 +88,24 @@ shipping a 3D game first**, then by cost:
     first); each one moved deletes hand-placed coordinates and hit boxes.
   - Text entry (a name, a save slot): an on-screen keyboard screen for the consoles.
   - Transitions and animated focus (a slide, a fade) — today a screen changes in one frame.
-  - Localization beyond plain strings (#59: plurals, number and date formats) on top of
-    `UiStrings`. ~~Text scale and high-contrast themes (#60)~~: **done** (ADR 0026).
+  - ~~Localization beyond plain strings (#59)~~: **done** (ADR 0026). ~~Text scale with
+    high-contrast themes (#60)~~: **done** (ADR 0027).
   - The interface scale on the Graphics page (`DisplaySettings::ui_scale` is stored and
     applied, but only a game's own options page sets it).
   - A scissor for partly visible children in a `Scroll` (2D has none on the consoles, so
     a child is drawn whole or not at all).
+- **Localization follow-ups (#59, ADR 0026)** (S–M each).
+  - Plan & Party (another repository) on the engine's tables: its `pnp8` glyph set
+    becomes `chars = "auto"` + `extra_chars`, its `i18n.rs` a `Localizer`.
+  - Gender and grammatical case (Fluent-style selectors) as a `Select` entry: a new
+    `TSTR` record flag.
+  - Right-to-left scripts and shaping: the text layout is left to right.
+  - Keep a table's comments when the editor or `i18n import` rewrites it (both rewrite
+    the whole file today).
+  - A language menu page in `trino_core::options` (the tables' `name`s), next to the
+    Graphics page.
+  - Solid Eleven picks its first language from `Platform::system_language()` (it starts
+    in English and saves the player's choice).
 - **PC GPU T&L for the draws it still rejects (#51 follow-up, ADR 0016 §11)** (M).
   Translucent draws (the painter order per triangle), water and per-pixel lit draws
   stay on the CPU path. A per-pixel lit GPU path would compute the lit pipeline's
@@ -191,7 +203,7 @@ shipping a 3D game first**, then by cost:
 12. **Audio**: Doppler and occlusion through portals, only if a game needs them. From
     #53 (ADR 0021 follow-ups): tracker music (XM/MOD; libdragon's `xm64`) on every target;
     Opus on the PC and the Web; stereo masters (mono today, stereo averaged);
-    ~~captions (#60)~~ **done** per sound (ADR 0026); the 3DS audio thread's share of the second core in #56's CPU budget;
+    ~~captions (#60)~~ **done** per sound (ADR 0027); the 3DS audio thread's share of the second core in #56's CPU budget;
     a real-hardware listen on the N64 and the 3DS (ares and Azahar only so far); `auto`
     picking PCM16 on the PC/Web when Vorbis is bigger (Ogg's ~4 KB of headers make a
     0.05 s click 2× its PCM16 size — Solid Eleven's `se_click`).
@@ -255,7 +267,7 @@ shipping a 3D game first**, then by cost:
 
 ---
 
-## Done — accessibility on every target: color vision through palettes, captions, text scale and high contrast, motion and flash guards (2026-10-19, branch `feat/60-accessibility`, GitHub #60, ADR 0026)
+## Done — accessibility on every target: color vision through palettes, captions, text scale and high contrast, motion and flash guards (2026-10-19, branch `feat/60-accessibility`, GitHub #60, ADR 0027)
 
 | Item | Evidence |
 |---|---|
@@ -271,11 +283,33 @@ shipping a 3D game first**, then by cost:
 | Editor: the Accessibility tab (simulation in every view, palettes, checklist), View › Accessibility simulation, `TRINO_EDITOR_ACCESS`, the UI tab's preview at the simulated settings | `accessibility_tab_palettes_simulation_and_checklist`, the layout audit at 960×600 and 1600×940 |
 | Adopters: castle64's doors and captions, Solid Eleven's kits for every color vision and its captions, the starter Accessibility screen; the starter screens and Solid Eleven's pause menu grow with their text | `kits_stay_apart_for_every_color_vision`, `the_accessibility_screen_sets_the_platforms_settings`, `access_check_passes_on_the_projects_the_repo_ships` |
 
-Deviations (ADR 0026): the correction filter on the PC/Web stays with #64 (the view is a
+Deviations (ADR 0027): the correction filter on the PC/Web stays with #64 (the view is a
 simulation for review); high-contrast outlines on 3D objects and text scale for a game's
 own `draw_text` are follow-ups; the semantic colors are edited in the Accessibility tab,
 not the Inspector; text scale is whole glyph pixels where the UI scales by whole pixels
 (100 % or 200 % on the consoles).
+
+## Done — localization: string tables, per-language glyph subsets, plurals and locale formats (2026-10-19, branch `feat/59-localization`, GitHub #59, ADR 0026)
+
+| Item | Evidence |
+|---|---|
+| `trino_core::i18n` (`no_std`, no allocation): `Localizer` (fallback chain, `tr`, `tr_fmt`, `plural`, `pick`, `best_match`, `font`, `group`), `StrKey`/`LangId`/`LangTag`, CLDR plural rules, `Locale` defaults by tag, integer-only formatting (numbers, money, dates); `Platform::system_language` and `UiStrings::font` as defaults (no `GAME_API_VERSION` bump) | `crates/core/tests/i18n.rs` (11 tests, pt-BR/en-US/es-ES fixtures), `a_languages_font_remap_reaches_layout_and_draw` |
+| `TSTR` v2 (locale, plural records, font remaps, group); v1 still parses | `tstr_v2_round_trips_its_locale_fonts_and_group`, `tstr_v1_still_parses` |
+| `assets/i18n/<lang>.ron` with `Plural`/`Format` entries, `plural`, `locale` (bare optional fields), `[i18n]` in the manifest, `i18n/languages`, pseudo-locales on PC/Web only | `crates/scene/src/i18n.rs` (7 tests), `crates/asset-pipeline/tests/i18n_bake.rs` (4 tests) |
+| Glyph subsetting: `chars = "auto"`, `per_language` atlases (in `i18n-<lang>` groups with `groups = true`), overrides per platform, the TMEM report | `auto_fonts_bake_exactly_the_glyphs_the_languages_use`, `each_languages_table_names_its_atlas_and_group`, `the_font_report_sees_every_atlas_and_its_tmem`, `a_languages_atlas_loads_and_unloads_with_its_group` (the PC loader; the consoles' group loading is #56's `asset groups` step); the engine's `fonts/i18n`: three 2 KB N64 I4 atlases (41–49 glyphs), half of TMEM each |
+| `cargo xtask i18n check\|pseudo\|export\|import\|stats\|fonts\|list --json` (missing/extra/unused keys, placeholders, plural forms, missing glyphs per target, UI overflow per language and target, TMEM) | `xtask/tests/i18n_cli.rs` (5 tests, one fixture with every kind of problem) |
+| System language: PC (`sys-locale`, `TRINO_LANG`), Web (`navigator.language`, `?lang=`), 3DS (`CFGU_GetSystemLanguage` through the shim, `TRINO_LANG` boot line); none on the N64 | `the_override_wins_then_the_os_locale`, `the_query_wins_then_the_browser`, `every_cfg_language_maps_to_its_tag`; the `i18n` step's `pick` on every target |
+| Self-test step `i18n` on PC, ares, Azahar and the browsers: every language loaded, keys, fallback, plurals, prices (`$1,200.00`, `R$ 1.200,00`, `1200,00 €`), the per-language atlas, pixels where the price ends; fails when the fallback or the drawn text is broken (checked by mutation) | `engine_checks_pass_on_pc`, `engine_checks_pass_on_the_pc_3ds_profile`, `engine_checks_pass_on_the_simulated_expanded_tiers`; `TRINO_STEP:i18n` in ares and Azahar |
+| Editor: Localization tab (keys × languages, fallback and missing cells, add key/language, pseudo-locale, CSV, issues, glyph coverage and N64 TMEM per font), preview language shared with the UI tab and Play | `localization_tab_edits_the_tables_and_follows_their_files`, the layout audit at 960×600 and 1600×940 |
+| Solid Eleven: 187 strings (the ad hoc `P1: CASA`, `PORTUGUÊS` and `N MIN` among them) in `assets/i18n/{en-US,pt-BR}.ron`, read as static code (`strings_gen.rs`); fonts `chars = "auto"` | `every_string_fits_the_font`, `the_tables_say_what_the_code_said`, the fresh-export test; 78/78 menu, match and pause screenshots (N64, 3DS and PC looks, English and Portuguese) byte-identical to `main` |
+
+Deviations (ADR 0026): locale rules live in each language's file (with defaults by tag),
+not in the manifest; `Format("…")` is a marker (any string formats); Plan & Party is
+not in this repository; the editor and `i18n import` drop a table's comments; the
+editor's preview language reaches the UI tab and Play (`TRINO_LANG`), not Play here or
+the Scene and Game views (they draw scenes, which have no text); per-language groups are
+loaded at run time by the PC test, and on the consoles through #56's generic group
+loader (the engine's own `fonts/i18n` stays in boot).
 
 ## Done — shadows per tier: blobs on the N64, planar on the 3DS, a shadow map on the PC and the Web (2026-10-18, branch `feat/57-shadows`, GitHub #57, ADR 0025)
 

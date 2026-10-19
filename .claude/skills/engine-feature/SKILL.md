@@ -123,13 +123,21 @@ A feature is done only when **PC, N64 and 3DS** all run it and an emulator has s
   PC/Web bake, the N64 and 3DS images and the memory plan all iterate it — one function,
   no five-place edit. Count it in `xtask/tests/cli.rs::assets_pc_bakes_the_repo_manifest`.
 - **A player setting with a default must take the old code path at the default**
-  (ADR 0026): multiply by exactly 1.0, keep the old theme, and put the setting in any
+  (ADR 0027): multiply by exactly 1.0, keep the old theme, and put the setting in any
   cache key the old path has (the UI's layout key). Every golden then stays byte-identical
   and the change can be proven by running the existing goldens unchanged.
 - **A setting the player changes at run time on every platform** (accessibility): a
   `Hosted*` struct in the core held by every backend (apply now, record a change), the
   host persisting after the frame (`take_*_change`), a forced env/URL value that is never
   written back, and nothing persisted on smoke or self-test runs.
+- **Content the bake generates for a language** (the `i18n/<lang>` tables and
+  `i18n/languages`, issue #59) goes through `asset_pipeline::ui::bake`, which every
+  platform already calls; a manifest option resolved at load (`chars = "auto"`,
+  `per_language` atlases) belongs in `Manifest::load` (`asset_pipeline::i18n::resolve`)
+  so the bakes, the memory plan, the reports and the editor all see the same fonts.
+- **When a runtime value changes what the layout measures** (the language's font, #59),
+  route the layout and the draw through one function (`ui::draw::font_of`) and test
+  that both use it, or overflow checks and pixels disagree.
 - **A RON format an editor round-trips denies unknown fields**
   (`#[serde(default, deny_unknown_fields)]`): with only `default`, a misspelt field
   parses as the default and the next save drops it.

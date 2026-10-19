@@ -123,6 +123,10 @@ struct Rec {
     calls: Vec<Call>,
     stats: Vec<UiStats>,
     camera: Option<Camera3>,
+    /// A font measured twice as wide (a per-language atlas, #59).
+    wide: Option<FontId>,
+    /// The font of every `draw_text`.
+    fonts: Vec<FontId>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -142,6 +146,8 @@ impl Rec {
             calls: Vec::new(),
             stats: Vec::new(),
             camera: None,
+            wide: None,
+            fonts: Vec::new(),
         }
     }
 
@@ -195,18 +201,20 @@ impl Renderer for Rec {
     fn fill_rect(&mut self, rect: Rect, color: Color) {
         self.calls.push(Call::Fill(rect, color, self.on));
     }
-    fn draw_text(&mut self, _font: FontId, pos: Vec2, text: &str, params: &TextParams) {
+    fn draw_text(&mut self, font: FontId, pos: Vec2, text: &str, params: &TextParams) {
+        self.fonts.push(font);
         self.calls
             .push(Call::Text(text.to_string(), pos, *params, self.on));
     }
-    fn measure_text(&self, _font: FontId, text: &str, scale: f32) -> Vec2 {
+    fn measure_text(&self, font: FontId, text: &str, scale: f32) -> Vec2 {
+        let cell = if Some(font) == self.wide { 12.0 } else { 6.0 };
         let w = text
             .split('\n')
             .map(|l| l.chars().count())
             .max()
             .unwrap_or(0);
         let lines = text.split('\n').count();
-        Vec2::new(w as f32 * 6.0 * scale, lines as f32 * 10.0 * scale)
+        Vec2::new(w as f32 * cell * scale, lines as f32 * 10.0 * scale)
     }
     fn second_screen(&self) -> Option<Vec2> {
         self.bottom
@@ -1712,4 +1720,44 @@ fn menus_work_before_their_first_draw() {
     ui.reset();
     ui.update(&s, &IDLE, &IDLE, 0.0);
     assert_eq!(ui.frame(Screen::Top).safe.pos, Vec2::new(16.0, 12.0));
+}
+
+/// A language that draws the theme's font with its own atlas (issue #59):
+/// the layout measures with it and the draw uses it, so overflow checks and
+/// the pixels agree.
+#[test]
+fn a_languages_font_remap_reaches_layout_and_draw() {
+    use trino_core::i18n::table::{EntrySpec, TableSpec, encode_tstr_with};
+    let base = Theme::DEFAULT.font;
+    let pt_font = FontId::from_path("fonts/trino5x7@pt-BR");
+    let remap = [(base.0, pt_font.0)];
+    let spec = TableSpec {
+        fonts: &remap,
+        ..TableSpec::plain("pt-BR", "")
+    };
+    let mut entries = [("title", EntrySpec::Text("Olá"))];
+    let mut bytes = Vec::new();
+    encode_tstr_with(&spec, &mut entries, &mut |b| bytes.extend_from_slice(b)).unwrap();
+    let pt = StringTable::parse(&bytes).unwrap();
+    let screen = Tree::new()
+        .open(root())
+        .leaf(UiNode {
+            id: "t",
+            key: "title",
+            text: "Hi",
+            ..node(NodeKind::Text)
+        })
+        .screen();
+    let mut r = Rec::sized(320, 240);
+    r.wide = Some(pt_font);
+    let env = UiEnv::of(&r).with_strings(&pt);
+    let mut ui = Ui::<64>::new();
+    ui.layout(&screen, &env, &r as &dyn Renderer);
+    assert_eq!(rect_of(&ui, &screen, "t").size.x, 36.0, "3 chars at 12 px");
+    ui.draw(&mut r, &screen, &env);
+    assert_eq!(r.fonts, vec![pt_font]);
+    // Without the table: the theme's font, the node's own text.
+    let mut ui = Ui::<64>::new();
+    ui.layout(&screen, &UiEnv::of(&r), &r as &dyn Renderer);
+    assert_eq!(rect_of(&ui, &screen, "t").size.x, 12.0);
 }

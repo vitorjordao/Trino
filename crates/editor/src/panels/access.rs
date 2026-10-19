@@ -1,4 +1,4 @@
-//! The Accessibility tab (issue #60, ADR 0026):
+//! The Accessibility tab (issue #60, ADR 0027):
 //!
 //! - **Simulation:** the Scene, Game and UI views show the picture as a
 //!   viewer with protanopia, deuteranopia, tritanopia or no color vision

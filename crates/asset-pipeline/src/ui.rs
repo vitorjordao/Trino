@@ -1,7 +1,8 @@
 //! UI screens and string tables as generated blobs (issue #58): every
 //! `ui/<name>.ui.ron` of the project → a `TUIL` blob at `ui/<name>`, every
-//! `assets/i18n/<lang>.ron` → a `TSTR` blob at `i18n/<lang>`, on every
-//! target, with no manifest section. A game reads them with
+//! shipped `assets/i18n/<lang>.ron` → a `TSTR` blob at `i18n/<lang>` (its
+//! locale and font remaps, `crate::i18n`) plus `i18n/languages`, on every
+//! target, with no manifest entry. A game reads them with
 //! `platform.blob(BlobId::from_path("ui/pause"))` and
 //! `UiScreen::parse` / `StringTable::parse`.
 
@@ -40,9 +41,17 @@ pub fn screen_files(root: &Path) -> Vec<PathBuf> {
     files
 }
 
-/// The project's string tables (`assets/i18n/*.ron`).
+/// The project's string tables (`assets/i18n/*.ron`), with the manifest's
+/// default language when the project has a readable manifest.
 pub fn langs(root: &Path) -> Result<Langs, String> {
-    Langs::load_dir(&root.join("assets").join(I18N_DIR))
+    let assets = root.join("assets");
+    let decl = std::fs::read_to_string(assets.join("manifest.toml"))
+        .ok()
+        .and_then(|t| toml::from_str::<toml::Value>(&t).ok())
+        .and_then(|v| v.get("i18n")?.get("default")?.as_str().map(str::to_string));
+    let mut langs = Langs::load_dir(&assets.join(I18N_DIR))?;
+    langs.default = decl;
+    Ok(langs)
 }
 
 /// A sprite's size on `platform`, from its master (or override) PNG's
@@ -103,16 +112,33 @@ pub fn bake(root: &Path, manifest: &Manifest, platform: Platform) -> Result<Vec<
             Err(e) => errors.push(e),
         }
     }
-    match langs(root) {
+    match crate::i18n::langs(&root.join("assets"), manifest.i18n.as_ref()) {
         Ok(langs) => {
-            for table in langs.tables.values() {
-                match table.to_tstr() {
+            // The languages this platform ships (pseudo-locales only on the
+            // PC and the Web), each with the fonts it draws with, and the
+            // list the runtime loads them by (`i18n/languages`).
+            let blobs = manifest.i18n.as_ref().is_none_or(|d| d.blobs);
+            let tables = if blobs {
+                crate::i18n::baked_for(&langs, manifest.i18n.as_ref(), platform)
+            } else {
+                Vec::new()
+            };
+            for table in &tables {
+                let (fonts, group) = crate::i18n::remaps(manifest, &table.lang, platform);
+                match table.to_tstr_with(&fonts, group) {
                     Ok(bytes) => out.push(UiBlob {
                         logical: trino_scene::ui::strings_blob_path(&table.lang),
                         bytes,
                     }),
                     Err(e) => errors.push(e),
                 }
+            }
+            if !tables.is_empty() {
+                let list: String = tables.iter().map(|t| format!("{}\n", t.lang)).collect();
+                out.push(UiBlob {
+                    logical: trino_scene::i18n::LANGUAGES_BLOB_PATH.into(),
+                    bytes: list.into_bytes(),
+                });
             }
         }
         Err(e) => errors.push(e),

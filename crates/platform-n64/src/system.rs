@@ -189,6 +189,12 @@ impl Platform for N64Platform {
         self.access.set(settings);
     }
 
+    /// The N64 has no language setting (issue #59): `None`, so the game
+    /// starts in its default language, then the player's saved choice.
+    fn system_language(&self) -> Option<trino_core::LangTag> {
+        None
+    }
+
     /// The N64's fixed preset (issue #55): `Low` on both tiers, nothing
     /// scaled. `set_quality` stays the trait's no-op.
     fn quality(&self) -> trino_core::QualitySettings {

@@ -1,4 +1,4 @@
-//! Accessibility (issue #60, ADR 0026): the player's settings and the
+//! Accessibility (issue #60, ADR 0027): the player's settings and the
 //! engine pieces that honor them on every target, the N64 included.
 //!
 //! - [`AccessSettings`]: color vision, text scale, high contrast, captions,

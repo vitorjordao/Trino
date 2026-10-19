@@ -2475,8 +2475,9 @@ impl N64Renderer {
         Some(cmd)
     }
 
-    /// A water draw's RSP command and entry for this frame, its triangles
-    /// and its texture binding (the oracle: no memo). `debug_phys` as
+    /// A water draw's RSP command (keep it until the RSP has read its
+    /// block) and entry for this frame, its triangles and its texture
+    /// binding (the oracle: no memo). `debug_phys` as
     /// `rsp::draw_words`'.
     fn water_command(
         &mut self,
@@ -2484,7 +2485,12 @@ impl N64Renderer {
         matrix: &Mat34,
         params: &ModelParams,
         debug_phys: u32,
-    ) -> Option<([u32; rsp::DRAW_WORDS], [u32; rsp::DRAW_WORDS], u32, TexBind)> {
+    ) -> Option<(
+        alloc::boxed::Box<WaterCmd>,
+        [u32; rsp::DRAW_WORDS],
+        u32,
+        TexBind,
+    )> {
         let cmd = self.water_build(model, matrix, params, debug_phys)?;
         let ctx = self.tnl_ctx.with_water(&self.water_state);
         let (tmdl, layout) = self.meshes.get(&model.0)?;
@@ -2499,7 +2505,8 @@ impl N64Renderer {
         self.water_arena.flush();
         let t = mesh.texture_for(params)?;
         let b = TexBind::model(t.0, params, self.tex_filter).with_water(&params.water?, time);
-        Some((cmd.words, e, cmd.tris, b))
+        let tris = cmd.tris;
+        Some((cmd, e, tris, b))
     }
 }
 
@@ -2523,12 +2530,17 @@ impl N64Renderer {
         let mesh = Mesh::from_layout(&tmdl, &layout);
         let probe = unsafe { ffi::trino_alloc_uncached(32 * 24) } as *mut u8;
         let phys = unsafe { ffi::trino_phys_addr(probe as *const c_void) };
-        let Some((words, e, _, _)) = self.water_command(model, matrix, params, phys) else {
+        // `cmd` holds the static block the RSP DMAs (`e`'s block address):
+        // it lives until the queue has drained. Dropping it at the end of
+        // `water_command` let the second oracle read a freed block (a layout
+        // that reused the memory failed the ripple check, CI 2026-10-19).
+        let Some((cmd, e, _, _)) = self.water_command(model, matrix, params, phys) else {
             return Err("water draw not RSP-eligible".into());
         };
-        submit_water(&self.sprites, &words, &e, &mut [0; 4]);
+        submit_water(&self.sprites, &cmd.words, &e, &mut [0; 4]);
         self.end_frame();
         unsafe { ffi::trino_drain() };
+        drop(cmd);
         let Some(Some(rm)) = self.rsp_water.get(&model.0) else {
             return Err("no water copy".into());
         };

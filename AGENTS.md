@@ -1079,6 +1079,15 @@ cargo test --workspace
 - **Never lift a shadow by hand.** `shadow::shadow_z` offsets by the target's own depth
   steps; a fixed lift z-fights far away on the N64's compressed z and floats near.
 
+- **Whatever an RSP command DMAs must outlive the queue.** `rsp_water_oracle` dropped
+  the boxed `WaterCmd` whose static block address was in the command it had just
+  queued; the RSP read the block after the drop, and one data layout (CI's) reused the
+  memory, so the ripple oracle failed in CI only (PR #92). The draw path parks replaced
+  commands in `water_grave` for two frames; anything new that hands the RSP a heap
+  address does the same, or keeps the owner alive until `trino_drain`.
+- **An N64 failure only CI sees can be the data layout:** CI's toolchain path (in the
+  ROM's panic strings) differs from yours. Rebuild with `--remap-path-prefix` to CI's
+  path (the `ci` skill › Debugging) before calling it flaky.
 - **An `Option` field of a hand-written RON format reads `Some(x)`, not `x`.** A table's
   `locale: (currency: "R$")` failed with "Expected option" until its fields took a bare
   deserializer (`deserialize_with = "bare"`, `trino_scene::i18n::LocaleDef`). Give any

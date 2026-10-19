@@ -1,0 +1,26 @@
+[n64] baking assets in container...
+[n64] building Rust (nightly, build-std)...
+[n64] linking + packing ROM...
+[n64] ROM: /home/v/Documents/projects/Trino/target/test-projects/ci-football/target/n64/ci-football.z64
+[n64] booting test ROM in ares with the Expansion Pak (300s timeout, 120s idle limit)...
+[ares] TRINO_STACK:35936
+[n64] hardware tier: ram=8M tier=expanded
+[n64] golden frame match: /home/v/Documents/projects/Trino/target/test-projects/ci-football/tests/golden/n64/match.png matches
+[n64] frame time (emulated):
+[n64] TEST PASS (with the Expansion Pak)
+N64 exit=0
+[3ds] baking assets...
+[3ds] group boot: 185 entries, 210 KB raw, 98 KB stored (lz4)
+[3ds] textures: 116032 B of linear memory (464128 B as RGBA8): A8 x7
+[3ds] audio: 10 sounds (2 streamed), 327856 B in RomFS (1144392 B as PCM16), 62384 B resident in linear memory
+[3ds] building Rust (nightly, build-std)...
+[3ds] packing .3dsx...
+[3ds] app: /home/v/Documents/projects/Trino/target/test-projects/ci-football/target/3ds/ci-football.3dsx
+[3ds] is_new_3ds=true for this session (was on)
+[3ds] booting test app in Azahar as a New 3DS (300s timeout, 120s idle limit)...
+[3ds] restored your is_new_3ds setting
+[3ds] hardware tier: new=1 speedup=1 tier=expanded
+[3ds] golden frame match: /home/v/Documents/projects/Trino/target/test-projects/ci-football/tests/golden/3ds/match.png: mean diff 0.05, 0.07% far pixels (limits 3, 2.0%)
+[3ds] golden frame match_bottom: /home/v/Documents/projects/Trino/target/test-projects/ci-football/tests/golden/3ds/match_bottom.png: mean diff 0.01, 0.00% far pixels (limits 3, 2.0%)
+[3ds] TEST PASS (as a New 3DS)
+3DS exit=0

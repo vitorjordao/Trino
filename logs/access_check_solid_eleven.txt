@@ -1,0 +1,7 @@
+ok   [theme] high-contrast theme (the engine's) keeps 7:1 for text
+ok   [captions] sounds/se_cheer has caption "cap.cheer" in every language
+ok   [captions] sounds/se_ooh has caption "cap.ooh" in every language
+ok   [captions] sounds/se_post has caption "cap.post" in every language
+ok   [captions] sounds/se_whistle has caption "cap.whistle" in every language
+ok   [ui] se_pause fits at 200 % text on every target and language
+access check: 0 colors (0 groups, 0 pairs), 4 captions (1 important), 0 icons, engine theme, 1 screens at 200 % on n64/3ds/pc/web: 0 errors, 0 warnings

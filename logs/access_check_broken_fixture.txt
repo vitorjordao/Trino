@@ -1,0 +1,25 @@
+FAIL [palettes] team.home and team.away stay apart in every mode
+FAIL [palettes] hud.text on hud.panel keeps 4.5:1 in every mode
+FAIL [theme] high-contrast theme (ui/themes/high_contrast.ron) keeps 7:1 for text
+FAIL [captions] sounds/alarm (important) has a caption
+FAIL [captions] sounds/whistle has caption "cap.whistle" in every language
+FAIL [ui] menu fits at 200 % text on every target and language
+  error: [palettes] team.home / team.away (deuteranopia): they look 11.1 apart (ΔE), under the 20 they must keep: give one of them a `deuteranopia` alternative
+  error: [palettes] team.home / team.away (grayscale): they look 13.9 apart (ΔE), under the 20 they must keep: give one of them a `grayscale` alternative
+  error: [palettes] hud.text on hud.panel (off): contrast 1.56:1, under 4.5:1
+  error: [palettes] hud.text on hud.panel (protanopia): contrast 1.56:1, under 4.5:1
+  error: [palettes] hud.text on hud.panel (deuteranopia): contrast 1.56:1, under 4.5:1
+  error: [palettes] hud.text on hud.panel (tritanopia): contrast 1.56:1, under 4.5:1
+  error: [palettes] hud.text on hud.panel (grayscale): contrast 1.56:1, under 4.5:1
+  error: [theme] text on panel: contrast 3.04:1, under 7.0:1
+  error: [captions] sounds/alarm: an important sound has no caption (`caption = "cap.x"`)
+  warning: [captions] sounds/whistle: pt-BR has no "cap.whistle": its fallback's text shows
+  error: [ui] menu Button "go": text overflows its box at 200 % [n64, en-US]
+  error: [ui] menu Button "go": text overflows its box at 200 % [n64, pt-BR]
+  error: [ui] menu Button "go": text overflows its box at 200 % [3ds, en-US]
+  error: [ui] menu Button "go": text overflows its box at 200 % [3ds, pt-BR]
+  error: [ui] menu Button "go": text overflows its box at 200 % [pc, en-US]
+  error: [ui] menu Button "go": text overflows its box at 200 % [pc, pt-BR]
+  error: [ui] menu Button "go": text overflows its box at 200 % [web, en-US]
+  error: [ui] menu Button "go": text overflows its box at 200 % [web, pt-BR]
+access check: 4 colors (1 groups, 1 pairs), 1 captions (1 important), 0 icons, own theme, 1 screens at 200 % on n64/3ds/pc/web: 17 errors, 1 warnings

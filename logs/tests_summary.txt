@@ -1,0 +1,5 @@
+TRINO_REQUIRE_GPU=1 cargo test --workspace --no-fail-fast: 1347 passed, 2 failed, 65 ignored (162 test binaries)
+Failures (both fail identically on origin/main on this machine's RADV driver; checked in a worktree of 86e3364):
+  test dynamic_resolution_steps_reuse_one_allocation_and_draw_what_a_fixed_scale_draws ... FAILED
+  test dynamic_resolutions_corner_draws_the_same_water ... FAILED
+engine_checks: SIGSEGV inside libvulkan (set_debug_utils_object_name, parallel device creation; see the test-all skill); serial run: 12 passed, 0 failed

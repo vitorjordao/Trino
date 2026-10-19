@@ -1,0 +1,50 @@
+[n64] baking assets in container...
+[n64] group selftest_level: 3 entries, 2 KB raw, 1 KB stored (libdragon level 1)
+[n64] group selftest_level2: 3 entries, 5 KB raw, 5 KB stored (libdragon level 2)
+[n64] building Rust (nightly, build-std)...
+[n64] linking + packing ROM...
+[n64] ROM: /home/v/Documents/projects/Trino/target/n64/trino.z64
+[n64] booting test ROM in ares with the Expansion Pak (300s timeout, 120s idle limit)...
+[ares] TRINO_MEM: ram=8388608 heap_total=6758544 before_assets=802848 boot_assets=546232
+[ares] TRINO_STEP:accessibility
+[ares] TRINO_STEP:accessibility probed palette swap, captions and contrast
+[ares] TRINO_STACK:27272 bytes t=2931ms
+[ares] TRINO_STACK:27272 bytes after the showcase steps
+[ares] TRINO_PERF:castle64 hub frame update=333us render=13658us total=13991us (emulated N64 time; 60 fps = 16667us, 30 fps = 33333us)
+[ares] TRINO_PERF:castle64 hub frame update=303us render=46019us total=46323us (emulated N64 time; 60 fps = 16667us, 30 fps = 33333us)
+[ares] TRINO_RSP:oracle water swell: 32 vertices: xy 2/4 px, z 1/32767, color 3/255, st 1/32 texel (vertex 10: got [247, 199, 171, 161], want [250, 200, 171, 161])
+[ares] TRINO_RSP:oracle water ripple: 32 vertices: xy 2/4 px, z 1/32767, color 3/255, st 1/32 texel (vertex 10: got [247, 199, 171, 161], want [250, 200, 171, 161])
+[ares] TRINO_STACK:27272 bytes after the bot and the perf scenes
+[n64] hardware tier: ram=8M tier=expanded
+[n64] tier data: expanded ram=8M cores=1 data=expanded sparks=6
+[n64] quality: low fixed lod=100 particles=8
+[n64] golden frame: /home/v/Documents/projects/Trino/tests/golden/n64/showcase.png matches
+[n64] golden frame: /home/v/Documents/projects/Trino/tests/golden/n64/castle64_hub.png matches
+[n64] golden frame: /home/v/Documents/projects/Trino/tests/golden/n64/showcase_river.png matches
+[n64] golden frame: /home/v/Documents/projects/Trino/tests/golden/n64/shadows_far.png matches
+[n64] perf (emulated us per frame):
+[n64] castle64, RSP T&L vs CPU T&L (same ROM, emulated us per frame):
+[n64] T&L fixed costs (micro scenes, ungated):
+[n64] TEST PASS (with the Expansion Pak)
+[n64] booting test ROM in ares without the Expansion Pak (300s timeout, 120s idle limit)...
+[ares] TRINO_MEM: ram=4194304 heap_total=2564240 before_assets=802848 boot_assets=542632
+[ares] TRINO_STEP:accessibility
+[ares] TRINO_STEP:accessibility probed palette swap, captions and contrast
+[ares] TRINO_STACK:27272 bytes t=2922ms
+[ares] TRINO_STACK:27272 bytes after the showcase steps
+[ares] TRINO_PERF:castle64 hub frame update=304us render=17981us total=18286us (emulated N64 time; 60 fps = 16667us, 30 fps = 33333us)
+[ares] TRINO_PERF:castle64 hub frame update=296us render=45444us total=45740us (emulated N64 time; 60 fps = 16667us, 30 fps = 33333us)
+[ares] TRINO_RSP:oracle water swell: 32 vertices: xy 2/4 px, z 1/32767, color 3/255, st 1/32 texel (vertex 10: got [247, 199, 171, 161], want [250, 200, 171, 161])
+[ares] TRINO_RSP:oracle water ripple: 32 vertices: xy 2/4 px, z 1/32767, color 3/255, st 1/32 texel (vertex 10: got [247, 199, 171, 161], want [250, 200, 171, 161])
+[ares] TRINO_STACK:27272 bytes after the bot and the perf scenes
+[n64] hardware tier: ram=4M tier=base
+[n64] tier data: base ram=4M cores=1 data=base sparks=4
+[n64] quality: low fixed lod=100 particles=8
+[n64] golden frame: /home/v/Documents/projects/Trino/tests/golden/n64/showcase.png matches
+[n64] golden frame: /home/v/Documents/projects/Trino/tests/golden/n64/castle64_hub.png matches
+[n64] golden frame: /home/v/Documents/projects/Trino/tests/golden/n64/showcase_river.png matches
+[n64] golden frame: /home/v/Documents/projects/Trino/tests/golden/n64/shadows_far.png matches
+[n64] perf (emulated us per frame):
+[n64] castle64, RSP T&L vs CPU T&L (same ROM, emulated us per frame):
+[n64] T&L fixed costs (micro scenes, ungated):
+[n64] TEST PASS (without the Expansion Pak)

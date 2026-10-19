@@ -1,0 +1,7 @@
+ok   [theme] high-contrast theme (the engine's) keeps 7:1 for text
+ok   [ui] accessibility fits at 200 % text on every target and language
+ok   [ui] controls fits at 200 % text on every target and language
+ok   [ui] options fits at 200 % text on every target and language
+ok   [ui] pause fits at 200 % text on every target and language
+ok   [ui] title fits at 200 % text on every target and language
+access check: 0 colors (0 groups, 0 pairs), 0 captions (0 important), 0 icons, engine theme, 5 screens at 200 % on n64/3ds/pc/web: 0 errors, 0 warnings

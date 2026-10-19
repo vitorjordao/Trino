@@ -1,0 +1,40 @@
+[3ds] compiling C shim...
+[3ds] baking assets...
+[3ds] group boot: 151 entries, 258 KB raw, 109 KB stored (lz4)
+[3ds] group selftest_level: 3 entries, 2 KB raw, 1 KB stored (lz4)
+[3ds] group selftest_level2: 3 entries, 4 KB raw, 4 KB stored (lz4)
+[3ds] textures: 58528 B of linear memory (158720 B as RGBA8): A8 x4, ETC1 x13, ETC1A4 x2, L8 x2, LA8 x1, RGB565 x2, RGBA4 x3, RGBA5551 x4, RGBA8 x2
+[3ds] audio: 13 sounds (3 streamed), 232010 B in RomFS (775718 B as PCM16), 117198 B resident in linear memory
+[3ds] building Rust (nightly, build-std)...
+[3ds] packing .3dsx...
+[3ds] app: /home/v/Documents/projects/Trino/target/3ds/trino.3dsx
+[3ds] is_new_3ds=true for this session (was on)
+[3ds] booting test app in Azahar as a New 3DS (300s timeout, 120s idle limit)...
+[azahar] [   4.199308] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:accessibility
+[azahar] [   4.768587] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:accessibility probed palette swap, captions and contrast
+[3ds] restored your is_new_3ds setting
+[3ds] hardware tier: new=1 speedup=1 tier=expanded
+[3ds] tier data: expanded ram=64M cores=2 data=expanded sparks=6
+[3ds] worker core: core=2 queued=8 us=6105
+[3ds] quality: medium fixed lod=100 particles=16
+[3ds] golden frame: /home/v/Documents/projects/Trino/tests/golden/3ds/castle64_hub.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[3ds] golden frame (bottom): /home/v/Documents/projects/Trino/tests/golden/3ds/castle64_hub_bottom.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[3ds] golden frame (showcase bottom): /home/v/Documents/projects/Trino/tests/golden/3ds/showcase_bottom.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[3ds] golden frame (showcase river): /home/v/Documents/projects/Trino/tests/golden/3ds/showcase_river.png: mean diff 0.27, 0.29% far pixels (limits 3, 2.0%)
+[3ds] golden frame (texture formats): /home/v/Documents/projects/Trino/tests/golden/3ds/texture_formats.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[3ds] TEST PASS (as a New 3DS)
+[3ds] is_new_3ds=false for this session (was on)
+[3ds] booting test app in Azahar as an old 3DS (300s timeout, 120s idle limit)...
+[azahar] [   3.919603] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:accessibility
+[azahar] [   4.486364] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:accessibility probed palette swap, captions and contrast
+[3ds] restored your is_new_3ds setting
+[3ds] hardware tier: new=0 speedup=0 tier=base
+[3ds] tier data: base ram=64M cores=1 data=base sparks=4
+[3ds] worker core: core=1 queued=8 us=20928
+[3ds] quality: low fixed lod=100 particles=16
+[3ds] golden frame: /home/v/Documents/projects/Trino/tests/golden/3ds/castle64_hub.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[3ds] golden frame (bottom): /home/v/Documents/projects/Trino/tests/golden/3ds/castle64_hub_bottom.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[3ds] golden frame (showcase bottom): /home/v/Documents/projects/Trino/tests/golden/3ds/showcase_bottom.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[3ds] golden frame (showcase river): /home/v/Documents/projects/Trino/tests/golden/3ds/showcase_river.png: mean diff 0.27, 0.29% far pixels (limits 3, 2.0%)
+[3ds] golden frame (texture formats): /home/v/Documents/projects/Trino/tests/golden/3ds/texture_formats.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[3ds] TEST PASS (as an old 3DS)

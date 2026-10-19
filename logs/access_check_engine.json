@@ -1,0 +1,74 @@
+{
+  "captions": 3,
+  "checklist": [
+    {
+      "area": "palettes",
+      "check": "castle64.door.green and castle64.door.red stay apart in every mode",
+      "passed": true
+    },
+    {
+      "area": "palettes",
+      "check": "castle64.door.green and castle64.door.blue stay apart in every mode",
+      "passed": true
+    },
+    {
+      "area": "palettes",
+      "check": "castle64.door.red and castle64.door.blue stay apart in every mode",
+      "passed": true
+    },
+    {
+      "area": "palettes",
+      "check": "selftest.team_a and selftest.team_b stay apart in every mode",
+      "passed": true
+    },
+    {
+      "area": "palettes",
+      "check": "hud.text on hud.shadow keeps 7.0:1 in every mode",
+      "passed": true
+    },
+    {
+      "area": "theme",
+      "check": "high-contrast theme (the engine's) keeps 7:1 for text",
+      "passed": true
+    },
+    {
+      "area": "captions",
+      "check": "sounds/beep has caption \"cap.hurt\" in every language",
+      "passed": true
+    },
+    {
+      "area": "captions",
+      "check": "sounds/coin has caption \"cap.coin\" in every language",
+      "passed": true
+    },
+    {
+      "area": "captions",
+      "check": "sounds/win has caption \"cap.star\" in every language",
+      "passed": true
+    },
+    {
+      "area": "ui",
+      "check": "selftest fits at 200 % text on every target and language",
+      "passed": true
+    }
+  ],
+  "colors": 7,
+  "contrast_pairs": 1,
+  "distinct_groups": 2,
+  "errors": 0,
+  "findings": [],
+  "icons": 1,
+  "important": 2,
+  "languages": [
+    "en-US"
+  ],
+  "platforms": [
+    "pc",
+    "n64",
+    "3ds",
+    "web"
+  ],
+  "screens": 1,
+  "theme": false,
+  "warnings": 0
+}

@@ -1,0 +1,11 @@
+ok   [palettes] castle64.door.green and castle64.door.red stay apart in every mode
+ok   [palettes] castle64.door.green and castle64.door.blue stay apart in every mode
+ok   [palettes] castle64.door.red and castle64.door.blue stay apart in every mode
+ok   [palettes] selftest.team_a and selftest.team_b stay apart in every mode
+ok   [palettes] hud.text on hud.shadow keeps 7.0:1 in every mode
+ok   [theme] high-contrast theme (the engine's) keeps 7:1 for text
+ok   [captions] sounds/beep has caption "cap.hurt" in every language
+ok   [captions] sounds/coin has caption "cap.coin" in every language
+ok   [captions] sounds/win has caption "cap.star" in every language
+ok   [ui] selftest fits at 200 % text on every target and language
+access check: 7 colors (2 groups, 1 pairs), 3 captions (2 important), 1 icons, engine theme, 1 screens at 200 % on pc/n64/3ds/web: 0 errors, 0 warnings

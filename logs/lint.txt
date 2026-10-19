@@ -1,0 +1,8 @@
+cargo fmt --all --check: ok
+cargo clippy --workspace --all-targets -- -D warnings: ok
+cargo clippy -p trino-render-wgpu -p trino-platform-web -p trino-app-web --target wasm32-unknown-unknown -- -D warnings: ok
+cargo clippy -p trino-platform-pc --features gamepad --all-targets -- -D warnings: ok
+cargo +nightly check (N64 mips target, trino-app-n64): ok
+cargo +nightly check (armv6k-nintendo-3ds: platform-3ds, castle64, showcase): ok
+cargo xtask agents check: ok
+cargo xtask scene check: ok

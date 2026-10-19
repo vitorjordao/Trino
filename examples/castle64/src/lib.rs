@@ -20,6 +20,11 @@
 //! map of the level, the counters around a spinning 3D star, and touch
 //! buttons (camera left/right, back to the hub). Single-screen targets skip
 //! it (`Renderer::on_screen` says no).
+//!
+//! Accessibility (issue #60): the stage doors take the player's
+//! color-vision alternatives from `assets/palettes.ron` (the same tinted
+//! draw, another color), and the coin, star and hurt sounds show captions
+//! (`caption = ".."` in the manifest) when `Platform::access` asks for them.
 
 #![cfg_attr(any(target_os = "none", target_os = "horizon"), no_std)]
 
@@ -34,10 +39,11 @@ use trino_core::math3d::{atan2, cos, sin};
 use trino_core::physics::{self, Aabb, move_aabb};
 use trino_core::shadow::{ShadowCast, ShadowPlane, ShadowSettings};
 use trino_core::{
-    Audio, BillboardParams, Button, Camera3, Color, DEFAULT_LIGHT, FontId, Game, GraphicsOptions,
-    InputState, Light, LightTier, LocalLight, Material, ModelId, ModelParams, MusicId,
-    OptionsStyle, Platform, PointerButton, Rect, Renderer, Screen, Shading, SoundId, SpriteId,
-    SpriteParams, TextAlign, TextBuf, TextParams, Transform3, Vec2, Vec3, ground_pool,
+    AccessBlob, AccessSettings, Audio, BillboardParams, Button, Camera3, CaptionStyle, Captions,
+    Color, CvdMode, DEFAULT_LIGHT, FontId, Game, GraphicsOptions, InputState, Light, LightTier,
+    LocalLight, Material, ModelId, ModelParams, MusicId, OptionsStyle, Outline, Platform,
+    PointerButton, Rect, Renderer, Screen, Shading, SoundId, SpriteId, SpriteParams, TextAlign,
+    TextBuf, TextParams, Transform3, Vec2, Vec3, ground_pool,
 };
 
 // ------------------------------------------------------------ handles ----
@@ -197,6 +203,14 @@ pub struct Castle64Game {
     prev: InputState,
     /// The Graphics page (PC and Web).
     pub graphics: GraphicsOptions,
+    /// The player's accessibility settings (`Platform::access`, each frame).
+    access: AccessSettings,
+    /// The project's `access/data`: the doors' color-vision alternatives
+    /// and the sounds' captions.
+    access_data: AccessBlob,
+    pub captions: Captions,
+    /// The captions' texts (`assets/i18n/en-US.ron`).
+    strings: trino_core::ui::StringsBlob,
 }
 
 /// Onda triangular 0..1 com período 1.
@@ -234,6 +248,10 @@ impl Castle64Game {
             music_started: false,
             prev: InputState::default(),
             graphics: GraphicsOptions::new(),
+            access: AccessSettings::DEFAULT,
+            access_data: AccessBlob::new(),
+            captions: Captions::new(),
+            strings: trino_core::ui::StringsBlob::new("en-US"),
         };
         game.goto_level(0);
         game
@@ -353,7 +371,15 @@ impl Game for Castle64Game {
             self.prev = *input;
             return;
         }
-        self.update(input, audio, dt);
+        self.access = platform.access();
+        self.captions
+            .configure(self.access_data.get(platform), &self.access);
+        self.strings.get(platform);
+        // Everything the game plays goes through the caption queue.
+        let mut captions = self.captions;
+        captions.update(dt);
+        self.update(input, &mut captions.wrap(audio), dt);
+        self.captions = captions;
     }
 
     fn update(&mut self, input: &InputState, audio: &mut dyn Audio, dt: f32) {
@@ -810,7 +836,7 @@ impl Game for Castle64Game {
             let params = if locked {
                 ModelParams::tinted(Color::rgb(115, 115, 120))
             } else {
-                ModelParams::tinted(open_tint)
+                ModelParams::tinted(self.door_tint(p.color, open_tint))
             };
             renderer.draw_model(
                 model,
@@ -876,7 +902,15 @@ impl Game for Castle64Game {
         for i in 0..l.enemies.len().min(MAX_ENEMIES) {
             let e = self.enemies[i];
             if e.alive && visible(e.pos) {
-                renderer.draw_model(
+                // High contrast: the boars ringed in red-orange.
+                let ring = Outline::new(
+                    Color::rgb(255, 90, 40),
+                    e.pos + Vec3::new(0.0, 0.3, 0.0),
+                    0.6,
+                );
+                trino_core::access::draw_outlined(
+                    renderer,
+                    &camera,
                     M_BOAR,
                     &Transform3 {
                         position: e.pos,
@@ -885,6 +919,7 @@ impl Game for Castle64Game {
                     },
                     Material::VertexLit,
                     &plain,
+                    self.access.high_contrast.then_some(&ring),
                 );
             }
         }
@@ -930,13 +965,23 @@ impl Game for Castle64Game {
             let joint = |ox: f32, oy: f32, oz: f32| {
                 feet + Vec3::new(ox * cy + oz * sy, oy, -ox * sy + oz * cy)
             };
+            // High contrast: every part ringed around one sphere (the
+            // whole body), so no part's copy paints onto another.
+            let ring = Outline::new(
+                trino_core::access::OUTLINE_COLOR,
+                feet + Vec3::new(0.0, 0.55, 0.0),
+                0.75,
+            );
+            let ring = self.access.high_contrast.then_some(ring);
             let part = |renderer: &mut dyn Renderer, model: ModelId, at: Vec3, pitch: f32| {
                 let shadow = if model == M_TORSO {
                     TORSO_SHADOW
                 } else {
                     LIMB_SHADOW
                 };
-                renderer.draw_model(
+                trino_core::access::draw_outlined(
+                    renderer,
+                    &camera,
                     model,
                     &Transform3 {
                         position: at,
@@ -945,6 +990,7 @@ impl Game for Castle64Game {
                     },
                     Material::VertexLit,
                     &ModelParams { shadow, ..plain },
+                    ring.as_ref(),
                 );
             };
             part(renderer, M_TORSO, feet, 0.0);
@@ -1031,6 +1077,14 @@ impl Game for Castle64Game {
                 .draw(renderer, F_HUD, (self.screen - size) * 0.5, &style);
         }
 
+        // Captions over the top screen, last (nothing while none is up).
+        match self.strings.table() {
+            Some(t) => self.captions.draw(renderer, t, &self.caption_style()),
+            None => self
+                .captions
+                .draw(renderer, &trino_core::ui::NoStrings, &self.caption_style()),
+        }
+
         // ---- Bottom screen (3DS touch screen / PC 3DS profile) ----
         // Single-screen targets refuse it: no extra work there.
         if renderer.on_screen(Screen::Bottom) {
@@ -1059,6 +1113,39 @@ fn map_color(kind: BlockKind) -> Color {
         BlockKind::Castle => Color::rgb(196, 186, 164),
         BlockKind::Roof => Color::rgb(164, 52, 62),
         BlockKind::Lava => Color::rgb(240, 104, 32),
+    }
+}
+
+impl Castle64Game {
+    /// A stage door's open tint: its color, or the alternative the
+    /// player's color-vision mode takes from `assets/palettes.ron`.
+    fn door_tint(&self, door: DoorColor, base: Color) -> Color {
+        let name = match door {
+            DoorColor::Green => "castle64.door.green",
+            DoorColor::Red => "castle64.door.red",
+            DoorColor::Blue => "castle64.door.blue",
+            DoorColor::Gold => return base,
+        };
+        if self.access.cvd == CvdMode::Off {
+            return base;
+        }
+        self.access_data
+            .data()
+            .and_then(|d| d.color(name, self.access.cvd))
+            .unwrap_or(base)
+    }
+
+    /// Captions in the HUD's font.
+    fn caption_style(&self) -> CaptionStyle {
+        CaptionStyle {
+            font: F_HUD,
+            ..CaptionStyle::DEFAULT
+        }
+    }
+
+    /// The player's accessibility settings as the game last read them.
+    pub fn access(&self) -> AccessSettings {
+        self.access
     }
 }
 

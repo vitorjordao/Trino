@@ -130,12 +130,24 @@ impl<const N: usize> Ui<N> {
     ) {
         let focus = self.focus_slot();
         let pressed = self.pressed;
+        // High contrast: the theme's colors over the screen's and the
+        // nodes' own (images and 3D models keep theirs).
+        let hc = env.access.high_contrast;
+        let themed = UiScreen {
+            theme: env.access.theme(&screen.theme),
+            ..*screen
+        };
+        let screen = if hc { &themed } else { screen };
+        let icons = env.access.cvd != crate::access::CvdMode::Off;
         for i in 0..self.count {
             let slot = self.slots[i];
             if slot.on != which || self.hidden(i) {
                 continue;
             }
-            let n = screen.node(slot.node as usize);
+            let mut n = screen.node(slot.node as usize);
+            if hc && !matches!(n.kind, NodeKind::Image { .. } | NodeKind::Model3d { .. }) {
+                n.color = None;
+            }
             let rect = self.rects[i];
             let is_focus = focus == Some(i);
             let is_pressed = is_focus
@@ -149,6 +161,11 @@ impl<const N: usize> Ui<N> {
                     border_color,
                 } => {
                     self.fill(r, rect, n.color.unwrap_or(screen.theme.panel));
+                    let border_color = if hc {
+                        screen.theme.accent
+                    } else {
+                        border_color
+                    };
                     if border > 0 && border_color.a > 0 {
                         self.outline(r, rect, round(border as f32 * scale).max(1.0), border_color);
                     }
@@ -164,6 +181,8 @@ impl<const N: usize> Ui<N> {
                     }
                     if look.focused {
                         self.focus_ring(r, rect, screen, scale);
+                    } else if hc && !slot.has(flags::DISABLED) {
+                        self.outline(r, rect, round(scale).max(1.0), screen.theme.text);
                     }
                     let content = inset_px(rect, &n, scale);
                     self.text(r, screen, env, &n, &slot, content, look.text, scale);
@@ -174,10 +193,16 @@ impl<const N: usize> Ui<N> {
                     }
                     if look.focused {
                         self.focus_ring(r, rect, screen, scale);
+                    } else if hc && !slot.has(flags::DISABLED) {
+                        self.outline(r, rect, round(scale).max(1.0), screen.theme.text);
                     }
                     let content = inset_px(rect, &n, scale);
                     let lh = r
-                        .measure_text(font_of(screen, env, &n), "", text_scale(screen, &n) * scale)
+                        .measure_text(
+                            font_of(screen, env, &n),
+                            "",
+                            text_scale(screen, &n) * scale * self.text_mul,
+                        )
                         .y;
                     let side = lh.min(content.size.y).max(scale);
                     let bx = Rect::new(
@@ -211,6 +236,8 @@ impl<const N: usize> Ui<N> {
                     }
                     if look.focused {
                         self.focus_ring(r, rect, screen, scale);
+                    } else if hc && !slot.has(flags::DISABLED) {
+                        self.outline(r, rect, round(scale).max(1.0), screen.theme.text);
                     }
                     let content = inset_px(rect, &n, scale);
                     let mut buf = TextBuf::<LABEL_LEN>::new();
@@ -219,7 +246,7 @@ impl<const N: usize> Ui<N> {
                         .measure_text(
                             font_of(screen, env, &n),
                             text,
-                            text_scale(screen, &n) * scale,
+                            text_scale(screen, &n) * scale * self.text_mul,
                         )
                         .x;
                     let gap = if lw > 0.0 {
@@ -316,7 +343,37 @@ impl<const N: usize> Ui<N> {
                     }
                 }
             }
+            if icons && let Some(icon) = n.cvd_icon {
+                self.cvd_icon(r, rect, icon, scale);
+            }
         }
+    }
+
+    /// A node's color-vision icon: at the layout's scale (smaller if the
+    /// node is), at its right end, centered vertically.
+    fn cvd_icon(&mut self, r: &mut dyn Renderer, rect: Rect, icon: super::CvdIcon, scale: f32) {
+        let (w, h) = (icon.size.0.max(1) as f32, icon.size.1.max(1) as f32);
+        let k = scale
+            .max(1.0)
+            .min(rect.size.x / w)
+            .min(rect.size.y / h)
+            .max(0.0);
+        if k <= 0.0 {
+            return;
+        }
+        let at = Vec2::new(
+            floor(rect.pos.x + rect.size.x - w * k),
+            floor(rect.pos.y + (rect.size.y - h * k) * 0.5),
+        );
+        r.draw_sprite(
+            icon.sprite,
+            at,
+            &SpriteParams {
+                scale: Vec2::new(k, k),
+                ..SpriteParams::DEFAULT
+            },
+        );
+        self.stats.draws = self.stats.draws.saturating_add(1);
     }
 
     fn look(
@@ -414,7 +471,7 @@ impl<const N: usize> Ui<N> {
             return;
         }
         let font = font_of(screen, env, n);
-        let px = text_scale(screen, n) * scale;
+        let px = text_scale(screen, n) * scale * self.text_mul;
         let measure: &dyn Renderer = r;
         let width = |s: &str| measure.measure_text(font, s, px).x;
         let lh = measure.measure_text(font, "", px).y;

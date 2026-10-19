@@ -23,6 +23,9 @@ pub enum Lang {
 }
 
 impl Lang {
+    /// Every language the game ships, in table order.
+    pub const ALL: [Lang; 2] = [Lang::En, Lang::Pt];
+
     /// The engine's id of the language's table.
     pub const fn id(self) -> LangId {
         match self {

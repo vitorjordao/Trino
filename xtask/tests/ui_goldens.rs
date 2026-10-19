@@ -73,6 +73,8 @@ fn starter_screens_match_their_goldens_on_every_profile() {
                 lang: Some("en-US"),
                 interface_scale: 1.0,
                 focus: None,
+                access: trino_core::ui::UiAccess::NONE,
+                simulate: None,
             };
             let shot = match ui_render::render(&root, &manifest, &langs, &def, &opts) {
                 Ok(s) => s,
@@ -135,6 +137,8 @@ fn starter_screens_fill_wide_and_4k_pictures() {
             lang: Some("en-US"),
             interface_scale: 1.0,
             focus: None,
+            access: trino_core::ui::UiAccess::NONE,
+            simulate: None,
         };
         let shot = match ui_render::render(&root, &manifest, &langs, &def, &opts) {
             Ok(s) => s,

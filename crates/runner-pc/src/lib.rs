@@ -152,6 +152,12 @@ impl RunConfig {
     pub fn audio_file(&self) -> PathBuf {
         self.save_file().with_extension("audio")
     }
+
+    /// The player's accessibility settings (`<save_name>.access`, plain
+    /// text, `key=value` lines: `trino_platform_pc::system::access_settings_to_text`).
+    pub fn access_file(&self) -> PathBuf {
+        self.save_file().with_extension("access")
+    }
 }
 
 /// The window size for `settings` on a `monitor`: the saved size if it
@@ -367,6 +373,37 @@ pub fn save_audio_settings(audio: &PcAudio, file: &Path, saved: &mut trino_core:
     let _ = std::fs::write(file, trino_platform_pc::audio::settings_to_text(&now));
 }
 
+/// Load the player's accessibility settings into `platform`: `file`, then
+/// `TRINO_ACCESS` over it (`cvd=deuteranopia,text_scale=200,...`, for
+/// screenshots and tests). Returns whether the game's changes may be
+/// persisted: not while `TRINO_ACCESS` forces settings, not on smoke runs.
+pub fn load_access_settings(platform: &mut PcPlatform, file: &Path, smoke: bool) -> bool {
+    let mut s = std::fs::read_to_string(file)
+        .map(|t| trino_platform_pc::system::access_settings_from_text(&t))
+        .unwrap_or_default();
+    let forced = std::env::var("TRINO_ACCESS").ok();
+    if let Some(f) = &forced {
+        s = trino_core::AccessSettings::parse_text(s, f);
+    }
+    platform.load_access(s);
+    forced.is_none() && !smoke
+}
+
+/// Persist the accessibility settings when the game changed them (and
+/// `persist`, from [`load_access_settings`]).
+pub fn save_access_settings(platform: &mut PcPlatform, file: &Path, persist: bool) {
+    let Some(s) = platform.take_access_change() else {
+        return;
+    };
+    if !persist {
+        return;
+    }
+    if let Some(dir) = file.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = std::fs::write(file, trino_platform_pc::system::access_settings_to_text(&s));
+}
+
 /// `TRINO_SIM`, defaulting to the N64 look.
 pub fn profile_from_env() -> SimProfile {
     std::env::var("TRINO_SIM")
@@ -418,6 +455,8 @@ struct Ctx {
     audio: PcAudio,
     /// The bus volumes last written to `<save_name>.audio`.
     audio_saved: trino_core::BusSettings,
+    /// Whether accessibility changes go to `<save_name>.access`.
+    access_persist: bool,
     input: PcInput,
     platform: PcPlatform,
     /// The `native` profile's quality (the consoles' is fixed).
@@ -501,6 +540,11 @@ impl Host {
             groups.check_boot();
         }
         let audio_saved = load_audio_settings(&mut audio, &cfg.audio_file());
+        let access_persist = load_access_settings(
+            &mut platform,
+            &cfg.access_file(),
+            self.smoke_frames.is_some(),
+        );
 
         #[cfg(feature = "watch")]
         let (asset_events, watcher) = {
@@ -552,6 +596,7 @@ impl Host {
             renderer,
             audio,
             audio_saved,
+            access_persist,
             input,
             platform,
             quality,
@@ -692,6 +737,11 @@ impl ApplicationHandler for Host {
                 }
                 apply_input(ctx, &self.config.input_file());
                 save_audio_settings(&ctx.audio, &self.config.audio_file(), &mut ctx.audio_saved);
+                save_access_settings(
+                    &mut ctx.platform,
+                    &self.config.access_file(),
+                    ctx.access_persist,
+                );
                 if let Some(q) = &mut ctx.quality {
                     q.end_frame(&mut ctx.renderer, &mut ctx.platform);
                     self.meter.set_quality(q.note(&ctx.renderer));
@@ -732,6 +782,40 @@ mod tests {
         assert_eq!(resample(&s, 200, 100), vec![0.0, 2.0]);
     }
 
+    /// The player's accessibility settings: loaded from `<save>.access`,
+    /// `TRINO_ACCESS` over them (and then never written), a change saved
+    /// once; never on a smoke run.
+    #[test]
+    fn access_settings_load_and_persist() {
+        use trino_core::{AccessSettings, CvdMode, Platform};
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("save/game.access");
+        let mut p = PcPlatform::new(&trino_core::Caps::PC);
+        assert!(
+            load_access_settings(&mut p, &file, false),
+            "a player run persists"
+        );
+        assert_eq!(p.access(), AccessSettings::DEFAULT);
+        let s = AccessSettings {
+            cvd: CvdMode::Grayscale,
+            high_contrast: true,
+            ..AccessSettings::DEFAULT
+        };
+        p.set_access(s);
+        save_access_settings(&mut p, &file, true);
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert!(text.contains("cvd=grayscale") && text.contains("high_contrast=on"));
+        let mut again = PcPlatform::new(&trino_core::Caps::PC);
+        load_access_settings(&mut again, &file, false);
+        assert_eq!(again.access(), s);
+        // A smoke run never writes.
+        let mut smoke = PcPlatform::new(&trino_core::Caps::PC);
+        assert!(!load_access_settings(&mut smoke, &file, true));
+        smoke.set_access(AccessSettings::DEFAULT);
+        save_access_settings(&mut smoke, &file, false);
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), text);
+    }
+
     #[test]
     fn config_paths() {
         let c = RunConfig::new("t", "/p");
@@ -747,6 +831,7 @@ mod tests {
         );
         assert_eq!(c.input_file(), PathBuf::from("/p/target/save/game.input"));
         assert_eq!(c.audio_file(), PathBuf::from("/p/target/save/game.audio"));
+        assert_eq!(c.access_file(), PathBuf::from("/p/target/save/game.access"));
     }
 
     #[test]

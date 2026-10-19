@@ -20,6 +20,8 @@ pub struct N3dsPlatform {
     high: Cell<u64>,
     /// The asset groups and their loader's state (`N3dsAssets::pump`).
     pub(crate) groups: crate::assets::Groups,
+    /// Accessibility settings, for the session (`Platform::access`).
+    access: trino_core::HostedAccess,
 }
 
 impl N3dsPlatform {
@@ -29,6 +31,7 @@ impl N3dsPlatform {
             last_us: Cell::new(runtime::now_us()),
             high: Cell::new(0),
             groups: crate::assets::Groups::new(),
+            access: trino_core::HostedAccess::new(),
         }
     }
 
@@ -92,6 +95,17 @@ impl Platform for N3dsPlatform {
 
     fn hw_tier(&self) -> trino_core::HwTier {
         runtime::hw_tier()
+    }
+
+    /// The player's accessibility settings for this session (issue #60):
+    /// RAM only; a game keeps them across power cycles by storing
+    /// `AccessSettings::pack` in its own save.
+    fn access(&self) -> trino_core::AccessSettings {
+        self.access.get()
+    }
+
+    fn set_access(&mut self, settings: trino_core::AccessSettings) {
+        self.access.set(settings);
     }
 
     /// The system setting, read at boot: a bare language (`pt`, `en`).

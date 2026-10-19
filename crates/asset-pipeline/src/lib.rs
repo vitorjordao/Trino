@@ -19,6 +19,7 @@
 //! plus `index.toml` (the manifest of what was baked, used by loaders and
 //! by snapshot tests).
 
+pub mod access;
 pub mod anim;
 pub mod ao;
 pub mod audio;

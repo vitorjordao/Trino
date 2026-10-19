@@ -1,0 +1,2 @@
+// Gray on black: not high contrast.
+(text: Some((90, 90, 90, 255)))

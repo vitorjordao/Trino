@@ -58,6 +58,9 @@ pub struct PcPlatform {
     memory: MemoryReport,
     /// The host's counting allocator, when it installed one.
     heap: Option<&'static dyn trino_core::mem::HeapStats>,
+    /// The player's accessibility settings ([`Platform::access`]); the host
+    /// loads and persists them (`<save>.access`).
+    access: trino_core::HostedAccess,
     /// The system language, read once ([`crate::language`]).
     language: Option<trino_core::LangTag>,
 }
@@ -87,6 +90,7 @@ impl PcPlatform {
                 ..MemoryReport::default()
             },
             heap: None,
+            access: trino_core::HostedAccess::new(),
             language: crate::language::detect(),
         }
     }
@@ -167,6 +171,17 @@ impl PcPlatform {
     /// frame.
     pub fn take_quality_request(&mut self) -> Option<QualityRequest> {
         self.quality.take_request()
+    }
+
+    /// The host's saved (or forced) accessibility settings, at start-up.
+    pub fn load_access(&mut self, settings: trino_core::AccessSettings) {
+        self.access.load(settings);
+    }
+
+    /// The settings the game changed since the last call, for the host to
+    /// persist.
+    pub fn take_access_change(&mut self) -> Option<trino_core::AccessSettings> {
+        self.access.take_change()
     }
 
     /// The host publishes the display state (window, monitor, picture).
@@ -314,6 +329,14 @@ impl Platform for PcPlatform {
         }
     }
 
+    fn access(&self) -> trino_core::AccessSettings {
+        self.access.get()
+    }
+
+    fn set_access(&mut self, settings: trino_core::AccessSettings) {
+        self.access.set(settings);
+    }
+
     fn quality(&self) -> QualitySettings {
         self.quality.settings()
     }
@@ -364,6 +387,20 @@ impl Platform for PcPlatform {
             self.input_request = Some(InputRequest::Reset);
         }
     }
+}
+
+/// Accessibility settings as a small text file (`key=value` lines, with a
+/// comment), so players can read and fix it by hand.
+pub fn access_settings_to_text(s: &trino_core::AccessSettings) -> String {
+    let mut out = String::from("# Trino accessibility settings (issue #60)\n");
+    let _ = s.write_text(&mut out);
+    out
+}
+
+/// Parse [`access_settings_to_text`]; unknown or broken lines keep the
+/// default.
+pub fn access_settings_from_text(text: &str) -> trino_core::AccessSettings {
+    trino_core::AccessSettings::parse_text(trino_core::AccessSettings::DEFAULT, text)
 }
 
 /// Display settings as a small text file (`key=value` lines), so players

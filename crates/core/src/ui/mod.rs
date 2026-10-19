@@ -59,8 +59,8 @@ pub mod values;
 
 pub use asset::{ScreenBlob, StringsBlob};
 pub use node::{
-    Align, Anchor, AxisAnchor, Dir, ImageFit, Justify, NONE, NodeKind, Nodes, Overflow, Scaling,
-    Size, Targets, Theme, UiNode, UiScreen, VAlign,
+    Align, Anchor, AxisAnchor, CvdIcon, Dir, ImageFit, Justify, NONE, NodeKind, Nodes, Overflow,
+    Scaling, Size, Targets, Theme, UiNode, UiScreen, VAlign,
 };
 pub use strings::{Fallback, NoStrings, StringTable, StringsError, UiStrings};
 pub use values::{NO_ITEM, TEXT_LEN, UiValue, UiValues, text_value};
@@ -150,6 +150,68 @@ pub struct UiEnv<'a> {
     /// 1 elsewhere).
     pub interface_scale: f32,
     pub strings: &'a dyn UiStrings,
+    /// The player's accessibility settings the screen honors
+    /// ([`with_access`](Self::with_access)).
+    pub access: UiAccess,
+}
+
+/// What a player's accessibility settings change in a screen (issue #60).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct UiAccess {
+    /// Every text's size times this (1 ..= 2). Where the screen scales by
+    /// whole pixels ([`Scaling::Integer`]) a glyph's pixel size is rounded
+    /// to a whole number, so bitmap fonts stay crisp (and the N64 keeps its
+    /// fast text path): at ×1 (the consoles) 150 % and up draw at 200 %.
+    pub text_scale: f32,
+    /// Draw with [`contrast`](Self::contrast) (or [`Theme::HIGH_CONTRAST`]):
+    /// node colors give way to the theme's, controls get outlines.
+    pub high_contrast: bool,
+    /// The project's high-contrast theme (`ui/themes/high_contrast.ron`).
+    pub contrast: Option<Theme>,
+    /// Nodes with a [`cvd_icon`](UiNode::cvd_icon) show it while this is
+    /// not `Off`.
+    pub cvd: crate::access::CvdMode,
+}
+
+impl UiAccess {
+    /// No change: today's look.
+    pub const NONE: UiAccess = UiAccess {
+        text_scale: 1.0,
+        high_contrast: false,
+        contrast: None,
+        cvd: crate::access::CvdMode::Off,
+    };
+
+    /// The theme a screen draws with.
+    pub fn theme(&self, screen: &Theme) -> Theme {
+        if self.high_contrast {
+            screen.with_colors_of(self.contrast.as_ref().unwrap_or(&Theme::HIGH_CONTRAST))
+        } else {
+            *screen
+        }
+    }
+
+    /// The factor a text's size is multiplied by on a frame whose layout
+    /// scale is `frame_scale` pixels per unit.
+    pub fn text_mul(&self, scaling: Scaling, frame_scale: f32) -> f32 {
+        let t = self.text_scale.clamp(1.0, 2.0);
+        if t == 1.0 {
+            return 1.0;
+        }
+        if scaling == Scaling::Integer && frame_scale >= 1.0 {
+            // Whole glyph pixels: `base × mul × frame_scale` is a whole
+            // number for any whole `base`.
+            let px = ((t * frame_scale) + 0.5) as i32 as f32;
+            return (px / frame_scale).max(1.0);
+        }
+        t
+    }
+}
+
+impl Default for UiAccess {
+    fn default() -> Self {
+        Self::NONE
+    }
 }
 
 impl UiEnv<'static> {
@@ -170,6 +232,7 @@ impl UiEnv<'static> {
             ],
             interface_scale: 1.0,
             strings: &NoStrings,
+            access: UiAccess::NONE,
         }
     }
 
@@ -186,11 +249,41 @@ impl UiEnv<'static> {
             ],
             interface_scale: 1.0,
             strings: &NoStrings,
+            access: UiAccess::NONE,
         }
     }
 }
 
 impl<'a> UiEnv<'a> {
+    /// The same for a player's settings: the text scale, the high-contrast
+    /// theme, the color-vision mode (`platform.access()`). The project's
+    /// own high-contrast theme comes from its `access/data`
+    /// ([`with_contrast_theme`](Self::with_contrast_theme)).
+    pub fn with_access(self, settings: &crate::access::AccessSettings) -> UiEnv<'a> {
+        let s = settings.clamped();
+        UiEnv {
+            access: UiAccess {
+                text_scale: s.text_factor(),
+                high_contrast: s.high_contrast,
+                cvd: s.cvd,
+                ..self.access
+            },
+            ..self
+        }
+    }
+
+    /// The same with a project's high-contrast theme (used while
+    /// `high_contrast` is on): `access.or_empty().contrast_theme()`.
+    pub fn with_contrast_theme(self, theme: Option<Theme>) -> UiEnv<'a> {
+        UiEnv {
+            access: UiAccess {
+                contrast: theme,
+                ..self.access
+            },
+            ..self
+        }
+    }
+
     /// The same with a string table.
     pub fn with_strings<'b>(self, strings: &'b dyn UiStrings) -> UiEnv<'b>
     where
@@ -404,6 +497,8 @@ pub struct Ui<const N: usize = 64> {
     /// The last target laid out for (no strings): what `update` lays out
     /// for when no draw has yet ([`CellMeasure`]).
     last_env: Option<EnvHint>,
+    /// Text sizes times this ([`UiAccess::text_mul`] at the last layout).
+    text_mul: f32,
 }
 
 /// A [`UiEnv`] without its string table, kept across frames.
@@ -414,6 +509,7 @@ pub(crate) struct EnvHint {
     bottom: Option<Vec2>,
     safe: [Insets; 2],
     interface_scale: f32,
+    access: UiAccess,
 }
 
 impl EnvHint {
@@ -424,6 +520,7 @@ impl EnvHint {
             bottom: env.bottom,
             safe: env.safe,
             interface_scale: env.interface_scale,
+            access: env.access,
         }
     }
 
@@ -435,6 +532,7 @@ impl EnvHint {
             bottom: None,
             safe: [Insets::ZERO; 2],
             interface_scale: 1.0,
+            access: UiAccess::NONE,
         }
     }
 
@@ -446,6 +544,7 @@ impl EnvHint {
             safe: self.safe,
             interface_scale: self.interface_scale,
             strings: &NoStrings,
+            access: self.access,
         }
     }
 }
@@ -500,6 +599,7 @@ impl<const N: usize> Ui<N> {
                 dropped: 0,
             },
             last_env: None,
+            text_mul: 1.0,
         }
     }
 

@@ -4,7 +4,7 @@
 
 use crate::game::input::{ACTIONS, ASSIGNABLE, Action, Bindings, dealias};
 use crate::game::menu::{self, Hits, Nav, Repeat};
-use crate::game::session::{Session, dress};
+use crate::game::session::{Session, dress_for};
 use crate::game::sound::{self, Sfx};
 use crate::render::Sky;
 use crate::render::anim::AnimState;
@@ -249,6 +249,18 @@ pub struct SolidElevenGame {
     pub screen: Vec2,
     pub scene: Scene,
     pub settings: Settings,
+    /// The player's color vision (`Platform::access`, issue #60): kick-off
+    /// picks kits that look apart to them.
+    pub cvd: trino_core::CvdMode,
+    /// The player's accessibility settings (`Platform::access`): the pause
+    /// menu's text scale and contrast.
+    pub access: trino_core::AccessSettings,
+    /// The project's `access/data` (the sounds' captions) and the caption
+    /// queue the match's whistle, cheers and posts fill (issue #60).
+    access_data: trino_core::AccessBlob,
+    pub captions: trino_core::Captions,
+    /// The captions' texts: `i18n/en-US` and `i18n/pt-BR`.
+    pub caption_texts: [trino_core::ui::StringsBlob; 2],
     /// The clubs and players every mode uses; the career when `career_on`.
     pub world: Career,
     pub career_on: bool,
@@ -301,6 +313,14 @@ impl SolidElevenGame {
             screen,
             scene: Scene::Title,
             settings: Settings::DEFAULT,
+            cvd: trino_core::CvdMode::Off,
+            access: trino_core::AccessSettings::DEFAULT,
+            access_data: trino_core::AccessBlob::new(),
+            captions: trino_core::Captions::new(),
+            caption_texts: [
+                trino_core::ui::StringsBlob::new("en-US"),
+                trino_core::ui::StringsBlob::new("pt-BR"),
+            ],
             world: Career::new(0, 0x5011_D11E),
             career_on: false,
             session: None,
@@ -383,7 +403,11 @@ impl SolidElevenGame {
     ) {
         let (mut setup, names, people) = crate::quick_setup(home, away, seed, half_secs, humans);
         setup.keeper_ctl = [self.settings.keeper; 2];
-        let d = dress([setup.sides[0].club, setup.sides[1].club], &people);
+        let d = dress_for(
+            [setup.sides[0].club, setup.sides[1].club],
+            &people,
+            self.cvd,
+        );
         let mut session = Session::new(&setup, &d, names, sky);
         session.controls.bindings = self.settings.bindings;
         session.view.retro = self.settings.graphics == 1;
@@ -428,7 +452,7 @@ impl SolidElevenGame {
                 people[s * SIDE + k] = self.world.players[db].appearance();
             }
         }
-        let d = dress([home, away], &people);
+        let d = dress_for([home, away], &people, self.cvd);
         let mut session = Session::new(&setup, &d, names, sky);
         session.controls.bindings = self.settings.bindings;
         session.view.retro = self.settings.graphics == 1;
@@ -1498,9 +1522,24 @@ impl Game for SolidElevenGame {
         dt: f32,
     ) {
         self.persist(platform);
+        let access = platform.access();
+        self.cvd = access.cvd;
+        self.access = access;
+        if let Some(s) = self.session.as_mut() {
+            s.view.outline = access.high_contrast;
+        }
+        self.captions
+            .configure(self.access_data.get(platform), &access);
+        for t in &mut self.caption_texts {
+            t.get(platform);
+        }
         self.peek_input(platform);
         self.apply_graphics(platform);
-        self.update(input, audio, dt);
+        // What the match plays goes through the caption queue.
+        let mut captions = self.captions;
+        captions.update(dt);
+        self.update(input, &mut captions.wrap(audio), dt);
+        self.captions = captions;
         if let Some(ask) = self.host_ask.take() {
             match ask {
                 HostAsk::Rebind(b, d) => platform.rebind(b, d),

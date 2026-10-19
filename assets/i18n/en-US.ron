@@ -4,6 +4,10 @@ Strings(
     lang: "en-US",
     name: "English",
     entries: {
+        // castle64's captions (issue #60): `caption = ".."` on a sound.
+        "cap.coin": "[coin chimes]",
+        "cap.hurt": "[ouch]",
+        "cap.star": "[fanfare: star collected]",
         "selftest.coins": Plural(one: "{n} coin", other: "{n} coins"),
         "selftest.hello": "Hello",
         "selftest.only_en": "Fallback",

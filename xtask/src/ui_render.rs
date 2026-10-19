@@ -21,6 +21,12 @@ pub struct ShotOptions<'a> {
     pub interface_scale: f32,
     /// The control to show focused (default: the screen's first).
     pub focus: Option<&'a str>,
+    /// The player's accessibility settings (text scale, high contrast, the
+    /// color-vision icons; `cargo xtask access shot`).
+    pub access: trino_core::ui::UiAccess,
+    /// Show the picture as a viewer with this color vision sees it (the
+    /// renderer's simulation view).
+    pub simulate: Option<trino_core::CvdMode>,
 }
 
 /// A rendered screen: RGBA8, the 3DS's two screens stacked (top above,
@@ -72,10 +78,15 @@ pub fn upload(
     }
     let mut sprites = Vec::new();
     let mut models = Vec::new();
-    def.root.walk(&mut |n| match &n.kind {
-        Kind::Image { sprite, .. } => sprites.push(sprite.clone()),
-        Kind::Model3d { model, .. } => models.push(model.clone()),
-        _ => {}
+    def.root.walk(&mut |n| {
+        match &n.kind {
+            Kind::Image { sprite, .. } => sprites.push(sprite.clone()),
+            Kind::Model3d { model, .. } => models.push(model.clone()),
+            _ => {}
+        }
+        if !n.cvd_icon.is_empty() {
+            sprites.push(n.cvd_icon.clone());
+        }
     });
     for logical in sprites {
         let Some(decl) = logical
@@ -118,6 +129,9 @@ pub fn render(
         r.set_internal_size(w, h);
     }
     upload(&mut r, root, manifest, platform, def)?;
+    if let Some(mode) = opts.simulate {
+        r.set_cvd_view(mode);
+    }
     let sizes = |s: &str| trino_asset_pipeline::ui::sprite_size(root, manifest, platform, s);
     let flat = Flat::new(def, &sizes);
     let screen = flat.screen();
@@ -126,7 +140,10 @@ pub fn render(
     apply_preview(&mut ui, def);
     let idle = InputState::default();
     for frame in 0..3 {
-        let env = UiEnv::of(&r).with_interface_scale(opts.interface_scale);
+        let env = UiEnv {
+            access: opts.access,
+            ..UiEnv::of(&r).with_interface_scale(opts.interface_scale)
+        };
         let env = match &strings {
             Some(s) => env.with_strings(s),
             None => env,

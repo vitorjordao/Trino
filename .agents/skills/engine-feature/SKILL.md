@@ -118,6 +118,18 @@ A feature is done only when **PC, N64 and 3DS** all run it and an emulator has s
   (after the mixer: write `{id:08x}.blob` and an index line), `memory.rs` (the plan),
   `watch.rs` and `xtask/src/project.rs`'s `watch` lists (live reload). The Web pack
   takes every baked blob already.
+- **Generated data a game reads can ride the UI bake:** `asset_pipeline::ui::bake` returns
+  every generated blob (screens, string tables and, since #60, `access/data`), and the
+  PC/Web bake, the N64 and 3DS images and the memory plan all iterate it — one function,
+  no five-place edit. Count it in `xtask/tests/cli.rs::assets_pc_bakes_the_repo_manifest`.
+- **A player setting with a default must take the old code path at the default**
+  (ADR 0027): multiply by exactly 1.0, keep the old theme, and put the setting in any
+  cache key the old path has (the UI's layout key). Every golden then stays byte-identical
+  and the change can be proven by running the existing goldens unchanged.
+- **A setting the player changes at run time on every platform** (accessibility): a
+  `Hosted*` struct in the core held by every backend (apply now, record a change), the
+  host persisting after the frame (`take_*_change`), a forced env/URL value that is never
+  written back, and nothing persisted on smoke or self-test runs.
 - **Content the bake generates for a language** (the `i18n/<lang>` tables and
   `i18n/languages`, issue #59) goes through `asset_pipeline::ui::bake`, which every
   platform already calls; a manifest option resolved at load (`chars = "auto"`,
@@ -232,6 +244,9 @@ The emulators catch what PC tests can't:
 - One commit per backlog item, so a reviewer can revert one feature cleanly. If two
   items had to share a commit, say so in the BACKLOG Done table.
 - To compare against the base commit, use `git worktree`. Never `git stash` a dirty tree.
+  Give the worktree its own `CARGO_TARGET_DIR`: sharing this one makes the two
+  checkouts' path crates overwrite each other's rlibs (same metadata hash), and the
+  branch then fails to compile until its sources are touched (2026-10-19).
 - Commit locally. Push or open a PR only when the user asks.
 
 ## Closing: the knowledge loop (mandatory)

@@ -69,8 +69,9 @@ TRINO_EDITOR_SCREENSHOT=target/launcher.png TRINO_EDITOR_SCREENSHOT_FRAME=10 car
 | `TRINO_EDITOR_SCREENSHOT=out.png` | save a PNG of the whole window, then exit |
 | `TRINO_EDITOR_SCREENSHOT_FRAME=N` | …after N frames (default 30; use ~60 so thumbnails finish) |
 | `TRINO_EDITOR_SELECT=<name>[,<name>…]` | start with those entities selected (the first is active; gizmo + inspector visible) |
-| `TRINO_EDITOR_TAB=scene\|game\|level\|animation\|mixer\|quality\|memory\|ui\|localization` | focused center tab (`mixer`, `quality`, `memory`: the bottom dock's Mixer, Quality or Memory tab) |
+| `TRINO_EDITOR_TAB=scene\|game\|level\|animation\|mixer\|quality\|memory\|accessibility\|ui\|localization` | focused center tab (`mixer`, `quality`, `memory`, `accessibility`: the bottom dock's Mixer, Quality or Memory tab) |
 | `TRINO_EDITOR_LANG=<tag>` | the editor-wide preview language (issue #59): the Localization tab's, the UI tab's (unless `TRINO_EDITOR_UI` names one) and Play's `TRINO_LANG` |
+| `TRINO_EDITOR_ACCESS=cvd=deuteranopia,text=200,contrast=on` | the Accessibility tab's simulation at start: the Scene, Game and UI views through that color vision, the UI tab at that text size and contrast (`AccessSettings::parse_text` keys) |
 | `TRINO_EDITOR_UI=<screen>[,n64\|3ds\|pc\|4k\|wide\|web[,<lang>\|default[,<node id>]]]` | open the UI tab on `ui/<screen>.ui.ron` for that target and language with that node selected, e.g. `TRINO_EDITOR_UI=pause,3ds,pt-BR,quit` |
 | `TRINO_EDITOR_ANIM=<model>:<clip>@<time>` | the Animation tab previews that clip, paused at that time |
 | `TRINO_EDITOR_ANIM_VIEW=ghosts=3,blend=wave:0.5,look=n64,palette` | its view options (onion skin, crossfade, look, palette) |
@@ -338,6 +339,18 @@ Live-edit check: start the editor with `TRINO_EDITOR_ECHO_LOG=1` in the backgrou
   category, every group). The Game view HUD adds `<target> assets used / budget RAM (%)`
   under its RAM line (`budget::assets_ram_line`).
 - UI test: `ui_tests::asset_groups_chips_requires_cells_and_memory`.
+
+## Accessibility tab (issue #60, ADR 0027)
+
+`access.rs` (`AccessState`: the palettes, `preview` = the views' simulation, the
+checklist) and `panels/access.rs` (the tab, `simulation_menu` for View › Accessibility
+simulation). The tab writes `assets/palettes.ron` through `write_echo` and then marks the
+checklist stale (it reads the file: running it before the write showed the old result);
+the watcher reloads outside edits and marks it stale on any `assets/` or `ui/` change.
+`TabView::ui` copies `preview.cvd` into both viewports' `cvd_view` every frame; the
+viewport re-renders when it changes (`cvd_rendered`). The UI tab takes the same
+settings (`UiScreens::access`, part of its render key). The colors table's header names
+the modes too: a kittest click on "Deuteranopia" must pick the first match.
 
 ## Rules when changing the editor
 

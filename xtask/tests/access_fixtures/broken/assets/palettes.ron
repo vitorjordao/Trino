@@ -1,0 +1,12 @@
+// Red and green without alternatives: one olive to a deuteranope.
+(
+    version: 1,
+    colors: {
+        "team.home": (base: (200, 40, 40)),
+        "team.away": (base: (40, 160, 60)),
+        "hud.text": (base: (120, 120, 120)),
+        "hud.panel": (base: (90, 90, 90)),
+    },
+    distinct: [["team.home", "team.away"]],
+    contrast: [(fg: "hud.text", bg: "hud.panel")],
+)

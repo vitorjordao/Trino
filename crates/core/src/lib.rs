@@ -18,6 +18,7 @@
 
 #![cfg_attr(not(test), no_std)]
 
+pub mod access;
 pub mod ao;
 pub mod asset;
 pub mod audio;
@@ -53,6 +54,10 @@ pub mod ui;
 pub mod vis;
 pub mod water;
 
+pub use access::{
+    AccessBlob, AccessData, AccessSettings, CameraFx, CaptionMode, CaptionPlace, CaptionStyle,
+    Captions, CvdMode, FlashMonitor, HoldToggle, HostedAccess, Outline, ScreenFlash,
+};
 pub use ao::{AmbientOcclusion, AoQuality, AoTier};
 pub use asset::asset_id;
 

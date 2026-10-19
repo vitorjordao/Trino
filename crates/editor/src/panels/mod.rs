@@ -1,5 +1,6 @@
 //! Dockable panels.
 
+pub mod access;
 pub mod assets;
 pub mod audio;
 pub mod hierarchy;

@@ -475,6 +475,11 @@ pub struct NodeDef {
     pub enabled_if: String,
     #[serde(skip_serializing_if = "Nav::is_default")]
     pub nav: Nav,
+    /// A sprite (logical path) shown at the node's right end while the
+    /// player's color-vision mode is on: a pattern or a shape, the second
+    /// channel for a color (issue #60). Its size comes from the manifest.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub cvd_icon: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<NodeDef>,
 }
@@ -561,7 +566,12 @@ impl ThemeDef {
     }
 
     pub fn core(&self) -> core_ui::Theme {
-        let d = core_ui::Theme::DEFAULT;
+        self.core_over(core_ui::Theme::DEFAULT)
+    }
+
+    /// The theme with the fields it leaves out taken from `d` (the
+    /// high-contrast theme file starts from `Theme::HIGH_CONTRAST`).
+    pub fn core_over(&self, d: core_ui::Theme) -> core_ui::Theme {
         let c = |v: Option<[u8; 4]>, or: Color| v.map(rgba).unwrap_or(or);
         core_ui::Theme {
             font: if self.font.is_empty() {
@@ -955,6 +965,10 @@ impl<'a> Flat<'a> {
             visible_if: &n.visible_if,
             enabled_if: &n.enabled_if,
             nav: [NONE; 4],
+            cvd_icon: (!n.cvd_icon.is_empty()).then(|| core_ui::CvdIcon {
+                sprite: SpriteId::from_path(&n.cvd_icon),
+                size: sprites(&n.cvd_icon).unwrap_or((8, 8)),
+            }),
         });
         self.paths.push(path.clone());
         for (i, c) in n.children.iter().enumerate() {
@@ -992,16 +1006,18 @@ pub fn missing_assets(def: &ScreenDef, has: &dyn Fn(&str) -> bool) -> Vec<Issue>
     let mut out = Vec::new();
     for (i, (_, n)) in def.nodes().iter().enumerate() {
         let path = match &n.kind {
-            Kind::Image { sprite, .. } => sprite,
-            Kind::Model3d { model, .. } => model,
-            _ => continue,
+            Kind::Image { sprite, .. } => Some(sprite),
+            Kind::Model3d { model, .. } => Some(model),
+            _ => None,
         };
-        if !path.is_empty() && !has(path) {
-            out.push(Issue::new(
-                Level::Error,
-                Some((i, *n)),
-                format!("{path} is not in the project's manifest"),
-            ));
+        for path in path.into_iter().chain(Some(&n.cvd_icon)) {
+            if !path.is_empty() && !has(path) {
+                out.push(Issue::new(
+                    Level::Error,
+                    Some((i, *n)),
+                    format!("{path} is not in the project's manifest"),
+                ));
+            }
         }
     }
     out
@@ -1220,6 +1236,10 @@ pub struct Report {
     pub stats: UiStats,
     /// Nodes whose text overflows (depth-first indices), for highlights.
     pub overflow: Vec<usize>,
+    /// Nodes (not `bleed`, nor inside one, nor scrolled out) that reach past
+    /// the target's safe area or off the screen: `access check` fails them
+    /// at 200 % text (issue #60). `ui check` leaves them to the designer.
+    pub outside_safe: Vec<usize>,
 }
 
 /// A target's screen: `caps`, the interface scale, a language.
@@ -1228,6 +1248,9 @@ pub struct Target<'a> {
     pub caps: Caps,
     pub lang: Option<&'a str>,
     pub interface_scale: f32,
+    /// The player's accessibility settings to lay out with (issue #60:
+    /// `access check` audits every screen at 200 % text).
+    pub access: core_ui::UiAccess,
 }
 
 impl<'a> Target<'a> {
@@ -1236,6 +1259,7 @@ impl<'a> Target<'a> {
             caps,
             lang: None,
             interface_scale: 1.0,
+            access: core_ui::UiAccess::NONE,
         }
     }
 }
@@ -1255,7 +1279,10 @@ pub fn audit(flat: &Flat<'_>, target: Target<'_>, fonts: &Fonts, langs: &Langs) 
     let strings = target.lang.map(|l| langs.strings(l));
     let mut ui: Box<Ui<1024>> = Box::new(Ui::new());
     apply_preview(&mut ui, flat.def);
-    let env = UiEnv::of(&probe).with_interface_scale(target.interface_scale);
+    let env = UiEnv {
+        access: target.access,
+        ..UiEnv::of(&probe).with_interface_scale(target.interface_scale)
+    };
     let env = match &strings {
         Some(s) => env.with_strings(s),
         None => env,
@@ -1292,6 +1319,42 @@ pub fn audit(flat: &Flat<'_>, target: Target<'_>, fonts: &Fonts, langs: &Langs) 
                     (size.y / scale).round()
                 ),
             )));
+        }
+    }
+    // Nodes past the safe area (a TV's overscan, a phone's notch, the
+    // screen's edge): what a bigger text pushes out.
+    {
+        let slots = ui.slots();
+        let in_bleed = |mut k: usize| loop {
+            let n = &flat.nodes[slots[k].node as usize];
+            if n.bleed {
+                return true;
+            }
+            match slots[k].parent {
+                NONE => return false,
+                p => k = p as usize,
+            }
+        };
+        let mut seen = HashSet::new();
+        for (k, sl) in slots.iter().enumerate() {
+            if sl.flags & core_ui::flags::CLIPPED != 0 || in_bleed(k) {
+                continue;
+            }
+            let f = ui.frame(sl.on);
+            let safe = trino_core::Rect::new(
+                f.safe.pos.x * f.scale,
+                f.safe.pos.y * f.scale,
+                f.safe.size.x * f.scale,
+                f.safe.size.y * f.scale,
+            );
+            let r = ui.rect(k);
+            let past = r.pos.x < safe.pos.x - 0.5
+                || r.pos.y < safe.pos.y - 0.5
+                || r.pos.x + r.size.x > safe.pos.x + safe.size.x + 0.5
+                || r.pos.y + r.size.y > safe.pos.y + safe.size.y + 0.5;
+            if past && seen.insert(sl.node) {
+                report.outside_safe.push(sl.node as usize);
+            }
         }
     }
     // Controls whose boxes overlap: a click or a tap there could mean either
@@ -1626,6 +1689,23 @@ pub fn to_rust(flat: &Flat<'_>) -> String {
         if n.nav != d.nav {
             let v: Vec<String> = n.nav.iter().map(|&t| idx(t)).collect();
             field("nav", format!("[{}]", v.join(", ")));
+        }
+        if let Some(icon) = n.cvd_icon {
+            let path = flat
+                .def
+                .root
+                .at(&flat.paths[i])
+                .map(|d| d.cvd_icon.clone())
+                .unwrap_or_default();
+            field(
+                "cvd_icon",
+                format!(
+                    "Some(trino_core::ui::CvdIcon {{ sprite: trino_core::SpriteId::from_path(\"{}\"), size: ({}, {}) }})",
+                    esc(&path),
+                    icon.size.0,
+                    icon.size.1
+                ),
+            );
         }
         let _ = writeln!(out, "        ..UiNode::DEFAULT\n    }},");
     }

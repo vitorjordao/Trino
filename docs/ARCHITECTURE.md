@@ -237,6 +237,21 @@ control and that the screen fits `Caps::max_ui_nodes` and `max_ui_draws`; the ed
 UI tab edits the same files. Details in [ADR 0024](adr/0024-ui-system.md) and
 [ASSETS.md](ASSETS.md#ui-screens).
 
+### Accessibility (issue #60)
+
+`trino_core::access` holds the player's settings (`Platform::access`: color vision, text
+scale, high contrast, captions, reduced motion, the flash guard, hold-to-toggle) and the
+pieces that honor them with no backend code. Color vision is **content**, not a shader:
+semantic colors in `assets/palettes.ron` carry an alternative per mode, baked into the
+`access/data` blob, and a game passes the mode's color as the tint or palette it already
+draws with — the same draw on the N64, the 3DS and the PC. The UI scales its text in
+whole glyph pixels and swaps in a high-contrast theme (`UiEnv::with_access`); `Captions`
+wraps the game's `Audio` and draws a caption box (on the 3DS touch screen if asked);
+`CameraFx`, `ScreenFlash` and `HoldToggle` follow the motion, flash and input settings.
+The PC renderer adds a simulation view for review (`set_cvd_view`, `TRINO_CVD`) and warns
+on raw strobes in strict mode. `cargo xtask access check` validates palettes, the theme,
+captions and every screen at 200 %. Details in [ADR 0027](adr/0027-accessibility.md) and
+[ACCESSIBILITY.md](ACCESSIBILITY.md).
 ### Localization (issue #59)
 
 `trino_core::i18n` holds a game's languages (`Localizer`): string tables with a fallback

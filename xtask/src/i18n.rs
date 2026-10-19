@@ -219,10 +219,16 @@ fn check(
     Ok(errors == 0 && (!strict || warnings == 0))
 }
 
-/// Every key a UI screen names, and every string literal of the project's
-/// Rust sources (a key the game passes to `StrKey::new`).
+/// Every key a UI screen names, every sound's `caption` in the manifest
+/// (issue #60), and every string literal of the project's Rust sources (a
+/// key the game passes to `StrKey::new`).
 fn used_keys(root: &Path) -> BTreeSet<String> {
     let mut used = BTreeSet::new();
+    if let Ok(m) = trino_asset_pipeline::Manifest::load(&root.join("assets/manifest.toml")) {
+        for c in trino_asset_pipeline::access::captions(&m) {
+            used.extend(c.caption);
+        }
+    }
     for path in trino_asset_pipeline::ui::screen_files(root) {
         if let Ok(def) = ScreenDef::load(&path) {
             for (_, n) in def.nodes() {
@@ -356,6 +362,7 @@ fn overflow_issues(
                         caps: crate::ui::caps_of(f),
                         lang: Some(&t.lang),
                         interface_scale: 1.0,
+                        access: trino_core::ui::UiAccess::NONE,
                     },
                     &fonts,
                     &langs,

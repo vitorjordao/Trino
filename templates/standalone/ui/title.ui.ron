@@ -16,7 +16,8 @@
                 text: "{{name}}",
                 anchor: Top,
                 offset: (0, 48),
-                size: (Percent(90), Px(20)),
+                size: (Percent(90), Fit),
+                min: (0, 20),
                 text_scale: 2,
                 align: Center,
                 overflow: Ellipsis,
@@ -28,8 +29,8 @@
                 anchor: Center,
                 offset: (0, 24),
                 children: [
-                    (kind: Button, id: "play", key: "title.play", text: "Play", on_click: "play", size: (Px(112), Px(18))),
-                    (kind: Button, id: "options", key: "title.options", text: "Options", on_click: "options", size: (Px(112), Px(18))),
+                    (kind: Button, id: "play", key: "title.play", text: "Play", on_click: "play", min: (112, 18), padding: (6, 3, 6, 3)),
+                    (kind: Button, id: "options", key: "title.options", text: "Options", on_click: "options", min: (112, 18), padding: (6, 3, 6, 3)),
                 ],
             ),
             (

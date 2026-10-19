@@ -91,6 +91,7 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
     };
     // Laid out and drawn after this frame's edits: the preview shows them.
     let rs = app.render_state.clone();
+    app.ui_screens.access = app.access.preview;
     app.ui_screens.refresh(ui.ctx(), &rs, &app.project);
     preview(app, ui, view_rect);
     ui.allocate_rect(avail, Sense::hover());

@@ -228,6 +228,21 @@ impl<'a> Ui<'a> {
         self.r.measure_text(font, s, k).x / self.scale
     }
 
+    /// `s` as one line if it fits in `room` design units, else split at the
+    /// last space that lets the first line fit (`(s, "")` when none does).
+    pub fn wrap2<'s>(&self, s: &'s str, size: Size, room: f32) -> (&'s str, &'s str) {
+        if self.measure(s, size) <= room {
+            return (s, "");
+        }
+        let mut best = (s, "");
+        for (i, _) in s.match_indices(' ') {
+            if self.measure(&s[..i], size) <= room {
+                best = (&s[..i], &s[i + 1..]);
+            }
+        }
+        best
+    }
+
     /// A horizontal bar: track, fill (0..1) and value.
     pub fn bar(&mut self, r: Rect, value: f32, c: Color) {
         self.fill(r, Color::rgba(8, 10, 26, 220));

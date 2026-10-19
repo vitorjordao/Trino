@@ -31,6 +31,8 @@ cargo test --workspace
 | `crates/editor/src/ui_tests.rs` (`#[ignore]`: `cargo test -p trino-editor ui_tests -- --ignored --test-threads=1`, own CI step) | an editor panel flow broke (select → palette → duplicate → undo) | fix the UI; hand-painted widgets need `widget_info` |
 | `xtask/tests/ui_goldens.rs` | a starter UI screen (`templates/standalone/ui/`) renders differently on the N64, 3DS or PC profile (`tests/golden/pc/ui_*.png`; the diff lands in `tests/golden/pc/actual/`) | a layout, theme or font change? intended: `TRINO_BLESS=1 cargo test -p xtask --test ui_goldens` and review the PNGs |
 | `xtask/tests/ui_cli.rs` | a shipped screen fails `ui check`, or a committed `ui export` (Solid Eleven's `pause_gen.rs`) is stale | fix the screen; re-export with `cargo xtask ui export examples/solid-eleven/ui/pause.ui.ron examples/solid-eleven/src/ui/pause_gen.rs` |
+| `xtask/tests/access_cli.rs` | a shipped project fails `access check` (palettes per color-vision mode, the theme, caption keys, a screen at 200 %) | fix the content the finding names (`accessibility` skill) |
+| `xtask/tests/access_goldens.rs` | the palette swap or the simulation view renders differently (`tests/golden/pc/access_*.png`), or the GPU view drifted from the CPU simulation | intended? `TRINO_BLESS=1 cargo test -p xtask --test access_goldens`, review the PNGs |
 | `xtask/tests/web_parity.rs` | the PC renderer drifted from the browser goldens (`tests/golden/web/`) | find what changed the picture; re-bless with `cargo xtask test web --bless` only on purpose |
 
 GPU-dependent tests skip without an adapter unless `TRINO_REQUIRE_GPU=1`.
@@ -121,7 +123,7 @@ cargo test -p solid-eleven --release                       # rules, ball, league
 cargo test -p xtask --test solid_eleven_budget --test solid_eleven_layers --test solid_eleven_render
 TRINO_BLESS=1 cargo test -p xtask --test solid_eleven_budget   # re-pin the frame cost (review the TOML)
 TRINO_BLESS=1 cargo test -p xtask --test solid_eleven_render   # re-bless the PC goldens (view the PNGs)
-cargo test --release -p xtask --test solid_eleven_menus   # menu crawler (every state, EN/PT, 3 sizes) + random play
+cargo test --release -p xtask --test solid_eleven_menus   # menu crawler (every state and club, EN/PT, 4 sizes, 100/200 % text, text in its box) + random play
 cargo test --release -p xtask --test solid_eleven_shots -- --ignored --nocapture   # screenshots + pc_frame_time
 cargo test --release -p xtask --test solid_eleven_poses -- --ignored               # pose sheets, target/solid_eleven_poses
 cargo test -p solid-eleven --release tuning_table -- --ignored --nocapture        # the balance table, big sample
@@ -150,6 +152,11 @@ several `PcRenderer`s from parallel test threads segfaults about once in 10–40
 newer GPU test files hold a binary-wide mutex (`gpu()` in
 `crates/platform-pc/tests/local_lights.rs`); a SIGSEGV in another GPU binary is this
 flake, so rerun it before suspecting the code.
+
+Seen again 2026-10-19 in `engine_checks` (gdb: `libvulkan.so.1` inside
+`set_debug_utils_object_name` while another thread built a `PcRenderer`); it crashed with
+and without the new test, never with `--test-threads=1` (tracked in GitHub #94; the
+video-capture test counts on RADV are #93, a different bug).
 
 More pipelines per renderer make it much worse: building the four 4× MSAA pipelines in
 every `PcRenderer::new` took `render_e2e` to 2 crashes in 3 runs (2026-10-16). A mutex

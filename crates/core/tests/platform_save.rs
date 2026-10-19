@@ -62,6 +62,15 @@ fn platform_defaults_report_no_services() {
     assert_eq!(p.quality(), QualitySettings::fixed(QualityPreset::Low));
     assert_eq!(p.quality_preset(QualityPreset::High), None);
     assert_eq!(p.quality_info(), None);
+    // Accessibility (#60): a platform that keeps no settings reports the
+    // defaults and ignores changes (every engine backend keeps them).
+    use trino_core::{AccessSettings, CvdMode};
+    assert_eq!(p.access(), AccessSettings::DEFAULT);
+    p.set_access(AccessSettings {
+        cvd: CvdMode::Protanopia,
+        ..AccessSettings::DEFAULT
+    });
+    assert_eq!(p.access(), AccessSettings::DEFAULT);
 }
 
 #[test]

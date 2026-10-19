@@ -17,7 +17,9 @@ use crate::sim::team::{Appearance, SQUAD, generate_player};
 use crate::sim::team::{CLUBS, Rgb};
 use crate::ui::Ui;
 use crate::ui::i18n::{Lang, S};
-use trino_core::{Audio, Color, Emitter, InputState, ParticleSystem, Quat, Renderer, Vec2, Vec3};
+use trino_core::{
+    Audio, Color, CvdMode, Emitter, InputState, ParticleSystem, Quat, Renderer, Vec2, Vec3,
+};
 
 /// Seconds of sim per tick.
 const TICK: f32 = 1.0 / ball::HZ as f32;
@@ -34,14 +36,50 @@ pub struct Dress {
 /// Pick kits (the away side changes when the shirts clash) and dress the
 /// players. `people[i]` is how player `i` looks (skin and hair).
 pub fn dress(clubs: [u8; 2], people: &[Appearance; N]) -> Dress {
+    dress_for(clubs, people, CvdMode::Off)
+}
+
+/// [`dress`] for a player with `cvd`'s color vision (issue #60): the kits
+/// are compared as that player sees them (`trino_core::access`), so a red
+/// side meets a green one in its away kit when red and green read as one,
+/// and both sides change when that is still too close. The shirts are the
+/// clubs' own: no new colors, no extra draw, nothing off the N64's RSP.
+pub fn dress_for(clubs: [u8; 2], people: &[Appearance; N], cvd: CvdMode) -> Dress {
     let home = &CLUBS[clubs[0] as usize];
     let away = &CLUBS[clubs[1] as usize];
-    let away_kit = if away.home.shirt.dist2(home.home.shirt) < 30_000 {
-        away.away
+    let kits = if cvd == CvdMode::Off {
+        let away_kit = if away.home.shirt.dist2(home.home.shirt) < 30_000 {
+            away.away
+        } else {
+            away.home
+        };
+        [home.home, away_kit]
     } else {
-        away.home
+        // As the player sees them: the visitors change first, and when no
+        // away kit is far enough the hosts change too (the pair that looks
+        // farthest apart).
+        let seen = |a: &crate::sim::team::Kit, b: &crate::sim::team::Kit| {
+            trino_core::access::delta_e_seen(cvd, rgb(a.shirt), rgb(b.shirt))
+        };
+        let enough = trino_core::access::color::MIN_DELTA_E;
+        let pairs = [
+            (home.home, away.home),
+            (home.home, away.away),
+            (home.away, away.home),
+            (home.away, away.away),
+        ];
+        match pairs.iter().find(|(h, a)| seen(h, a) >= enough) {
+            Some(&(h, a)) => [h, a],
+            None => {
+                let best = pairs
+                    .iter()
+                    .copied()
+                    .max_by(|x, y| seen(&x.0, &x.1).total_cmp(&seen(&y.0, &y.1)))
+                    .expect("four pairs");
+                [best.0, best.1]
+            }
+        }
     };
-    let kits = [home.home, away_kit];
     let gks = [home.gk, away.gk];
     let looks = core::array::from_fn(|i| {
         let s = side_of(i);
@@ -142,6 +180,7 @@ impl Session {
             time: 0.0,
             guides: Guides::default(),
             retro: false,
+            outline: false,
         };
         let officials =
             core::array::from_fn(|k| (m.officials[k].x.to_f32(), m.officials[k].y.to_f32()));
@@ -505,6 +544,40 @@ mod tests {
         fn measure_text(&self, _: trino_core::FontId, t: &str, scale: f32) -> Vec2 {
             NullRenderer { caps: self.caps }.measure_text(trino_core::FontId(0), t, scale)
         }
+    }
+
+    /// The kits each side wears stay apart for every color vision (issue
+    /// #60): FC Rouge (red) meets Verde Rovers (green) in whatever kit a
+    /// deuteranope tells apart, while normal vision keeps today's choice.
+    #[test]
+    fn kits_stay_apart_for_every_color_vision() {
+        use crate::sim::team::TEAMS;
+        use trino_core::access::delta_e_seen;
+        let people = [crate::sim::team::Appearance::default(); N];
+        let mut worst = (f32::MAX, 0, 0, CvdMode::Off);
+        for a in 0..TEAMS as u8 {
+            for b in 0..TEAMS as u8 {
+                if a == b {
+                    continue;
+                }
+                assert_eq!(
+                    dress_for([a, b], &people, CvdMode::Off),
+                    dress([a, b], &people)
+                );
+                for cvd in CvdMode::ALL {
+                    let d = dress_for([a, b], &people, cvd);
+                    let e = delta_e_seen(cvd, d.colors.shirt[0], d.colors.shirt[1]);
+                    if e < worst.0 {
+                        worst = (e, a, b, cvd);
+                    }
+                }
+            }
+        }
+        // Every pair keeps the semantic palettes' default distance.
+        assert!(
+            worst.0 >= trino_core::access::color::MIN_DELTA_E,
+            "{worst:?}"
+        );
     }
 
     /// A substitute comes on with his own name and look (skin, hair), not

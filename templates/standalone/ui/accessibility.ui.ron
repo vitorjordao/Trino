@@ -1,0 +1,55 @@
+// Accessibility (issue #60): the player's settings, kept by the host
+// (`platform.set_access`; the PC's `<save>.access`, the Web's
+// localStorage, a console for the session). The game draws every screen
+// with them (`UiEnv::with_access`): the text size and high contrast apply
+// to this screen as the player changes them. `cargo trino access check`
+// lays it out at 200 % on every target.
+(
+    version: 1,
+    name: "accessibility",
+    focus: "cvd",
+    on_back: "back",
+    preview: {
+        "cvd": Text("Off"),
+        "text": Int(100),
+        "contrast": Bool(false),
+        "captions": Text("Off"),
+        "motion": Bool(false),
+        "flash": Bool(true),
+        "hold": Bool(false),
+    },
+    root: (
+        children: [
+            (kind: Rect(), anchor: Fill, bleed: true, color: Some((0, 0, 0, 200))),
+            (
+                kind: Rect(border: 1, border_color: Some((255, 244, 200, 255))),
+                anchor: Center,
+                padding: (12, 8, 12, 10),
+                children: [
+                    (
+                        kind: Stack(gap: 3, align: Stretch),
+                        children: [
+                            (kind: Text, key: "access.title", text: "Accessibility", align: Center, color: Some((255, 214, 90, 255))),
+                            // The rows scroll with the focus when a big text
+                            // makes them taller than the N64's safe area.
+                            (
+                                kind: Scroll(gap: 3),
+                                max: (0, 150),
+                                children: [
+                                    (kind: Button, id: "cvd", key: "access.cvd", text: "Color vision", bind: "cvd", on_click: "cvd", min: (180, 14), padding: (4, 2, 4, 2)),
+                                    (kind: Slider(min: 100, max: 200, step: 25), id: "text", key: "access.text", text: "Text size", bind: "text", min: (180, 14)),
+                                    (kind: Toggle, id: "contrast", key: "access.contrast", text: "High contrast", bind: "contrast", min: (180, 14), padding: (4, 2, 4, 2)),
+                                    (kind: Button, id: "captions", key: "access.captions", text: "Captions", bind: "captions", on_click: "captions", min: (180, 14), padding: (4, 2, 4, 2)),
+                                    (kind: Toggle, id: "motion", key: "access.motion", text: "Reduce motion", bind: "motion", min: (180, 14), padding: (4, 2, 4, 2)),
+                                    (kind: Toggle, id: "flash", key: "access.flash", text: "Flash guard", bind: "flash", min: (180, 14), padding: (4, 2, 4, 2)),
+                                    (kind: Toggle, id: "hold", key: "access.hold", text: "Hold to toggle", bind: "hold", min: (180, 14), padding: (4, 2, 4, 2)),
+                                    (kind: Button, id: "back", key: "access.back", text: "Back", on_click: "back", min: (180, 14), padding: (4, 2, 4, 2)),
+                                ],
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+        ],
+    ),
+)

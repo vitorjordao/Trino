@@ -11,6 +11,7 @@ mod ao;
 mod batch;
 mod bench;
 mod cpu_tnl;
+mod cvd;
 mod depth_blit;
 mod gpu_timer;
 mod gpu_tnl;
@@ -408,6 +409,18 @@ pub struct PcRenderer {
     vi_dedither: bool,
     vi_pipeline: wgpu::RenderPipeline,
     vi_tex: wgpu::Texture,
+    /// The color-vision simulation view (issue #60): off unless a tool
+    /// asks ([`PcRenderer::set_cvd_view`], `TRINO_CVD`).
+    cvd_view: trino_core::CvdMode,
+    /// Its pass, built on first use.
+    cvd: Option<cvd::CvdPass>,
+    /// The brightest full-screen fill this frame (relative luminance ×
+    /// alpha × coverage), for the strobe check (issue #60).
+    flash_level: f32,
+    /// Strobes in the stream of frames (more than three flashes a second);
+    /// strict mode warns on each.
+    flash_monitor: trino_core::FlashMonitor,
+    flash_frames: u64,
     strict: bool,
     /// The main screen's safe area when the host knows better than the
     /// profile (a test, a TV's overscan setting).
@@ -1340,6 +1353,13 @@ impl PcRenderer {
         {
             r.set_ao_view(view);
         }
+        // And TRINO_CVD=protanopia|deuteranopia|tritanopia|grayscale.
+        if let Some(mode) = std::env::var("TRINO_CVD")
+            .ok()
+            .and_then(|v| trino_core::CvdMode::parse(&v))
+        {
+            r.set_cvd_view(mode);
+        }
         // And TRINO_SHADOWS=off|debug.
         if let Some(view) = std::env::var("TRINO_SHADOWS")
             .ok()
@@ -2035,6 +2055,11 @@ impl PcRenderer {
             internal_size,
             n64_look,
             vi_dedither: true,
+            cvd_view: trino_core::CvdMode::Off,
+            cvd: None,
+            flash_level: 0.0,
+            flash_monitor: trino_core::FlashMonitor::new(),
+            flash_frames: 0,
             vi_pipeline,
             vi_tex,
             strict,
@@ -2607,6 +2632,27 @@ impl PcRenderer {
     /// Scene view toggle and `TRINO_AO=off|on|mask`. Only the native
     /// profile runs the pass (`Caps::ao_tier`); the console profiles show
     /// what the consoles do, the AO baked into the models.
+    /// Show every frame as a viewer with `mode`'s color vision sees it
+    /// (Machado 2009; `Off` = as drawn): a review view for the editor,
+    /// `cargo xtask access shot` and `TRINO_CVD`, never a game's look. It
+    /// applies at `end_frame`, after the VI filter, to both screens, so the
+    /// window, the editor and read-backs all see it.
+    pub fn set_cvd_view(&mut self, mode: trino_core::CvdMode) {
+        self.cvd_view = mode;
+    }
+
+    pub fn cvd_view(&self) -> trino_core::CvdMode {
+        self.cvd_view
+    }
+
+    /// Strobes seen so far: frames where a full-screen fill (a quarter of
+    /// the picture or more) brightened the frame more than three times in
+    /// a second (frames counted at 60 Hz). Strict mode logs a warning on
+    /// each; `trino_core::ScreenFlash` under `flash_guard` never makes one.
+    pub fn flash_strobes(&self) -> u32 {
+        self.flash_monitor.strobes
+    }
+
     pub fn set_ao_view(&mut self, view: AoView) {
         self.ao_view = view;
     }
@@ -4088,6 +4134,29 @@ impl PcRenderer {
                 },
             );
         }
+        // The color-vision simulation view, last: what the frame looks like
+        // to the viewer it simulates.
+        if self.cvd_view != trino_core::CvdMode::Off {
+            let (tex, view, size) = match (second, &self.second) {
+                (true, Some(s)) => (&s.tex, &s.view, s.size),
+                _ => (
+                    &self.offscreen_tex,
+                    &self.offscreen_view,
+                    self.internal_size,
+                ),
+            };
+            self.cvd
+                .get_or_insert_with(|| cvd::CvdPass::new(&self.device))
+                .encode(
+                    &self.device,
+                    &mut encoder,
+                    tex,
+                    view,
+                    size,
+                    self.cvd_view,
+                    second as usize,
+                );
+        }
         if let (true, Some(t)) = (timed, &mut self.gpu_timer) {
             t.end(&mut encoder);
         }
@@ -4657,6 +4726,17 @@ impl Renderer for PcRenderer {
             tint: color,
             ..SpriteParams::DEFAULT
         };
+        if self.screen == 0 {
+            let (w, h) = (self.internal_size.0 as f32, self.internal_size.1 as f32);
+            let cw = (rect.pos.x + rect.size.x).min(w) - rect.pos.x.max(0.0);
+            let ch = (rect.pos.y + rect.size.y).min(h) - rect.pos.y.max(0.0);
+            let coverage = (cw.max(0.0) * ch.max(0.0)) / (w * h).max(1.0);
+            if coverage >= 0.25 {
+                self.flash_level = self
+                    .flash_level
+                    .max(trino_core::FlashMonitor::level_of(color, coverage));
+            }
+        }
         let mut cmd = make_command(FILL_SPRITE.0, rect.pos, (1, 1), &params);
         // The shader's flat-color sentinel (fs_sprite).
         cmd.uv0 = [-2.0, -2.0];
@@ -5268,6 +5348,19 @@ impl Renderer for PcRenderer {
             self.main_tris + (self.tri_verts.len() / 3) as u32 + self.frame_stats.tnl.pc_gpu_tris;
         self.last_stats = self.frame_stats;
         self.last_pc_gpu_off = self.pc_gpu_off;
+        let now = self.flash_frames as f32 / 60.0;
+        self.flash_frames += 1;
+        if self
+            .flash_monitor
+            .frame(now, core::mem::take(&mut self.flash_level))
+            && self.strict
+        {
+            eprintln!(
+                "strict mode: warning: full-screen flashes more than {} times a second                  (a strobe, frame {}): photosensitive players are at risk. Draw flashes                  with trino_core::ScreenFlash, which keeps them to 3 a second under the                  player's flash_guard (issue #60).",
+                trino_core::access::MAX_FLASHES_PER_SECOND,
+                self.flash_frames
+            );
+        }
         let t0 = Instant::now();
         self.flush();
         self.times.submit_us += micros(t0);
@@ -5668,6 +5761,10 @@ mod webgl2_tests {
             ("shaders_tnl.wgsl", include_str!("shaders_tnl.wgsl")),
             ("depth_blit", depth_blit::SHADER),
             ("upscale.wgsl", upscale::SHADER),
+            (
+                "cvd (deuteranopia)",
+                &cvd::shader(trino_core::CvdMode::Deuteranopia),
+            ),
         ] {
             let n = glsl_es_300(&depth_as_float(source)).unwrap_or_else(|e| panic!("{name}: {e}"));
             assert!(n > 0, "{name}");

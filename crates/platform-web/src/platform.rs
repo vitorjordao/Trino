@@ -27,6 +27,9 @@ pub struct WebPlatform {
     /// the host (`crate::quality`).
     pub(crate) quality: HostedQuality,
     pub(crate) groups: crate::groups::Groups,
+    /// The player's accessibility settings (`localStorage`
+    /// `trino-access:<name>`, loaded and stored by the runtime).
+    pub(crate) access: trino_core::HostedAccess,
     /// `?lang=`, else `navigator.language` (`crate::language`).
     language: Option<trino_core::LangTag>,
 }
@@ -46,6 +49,7 @@ impl WebPlatform {
             pad_name: None,
             quality: HostedQuality::new(caps),
             groups: crate::groups::Groups::new(caps.ram_bytes),
+            access: trino_core::HostedAccess::new(),
             language: crate::language::detect(),
         }
     }
@@ -173,6 +177,14 @@ impl Platform for WebPlatform {
 
     fn set_display(&mut self, settings: DisplaySettings) {
         self.display_request = Some(settings);
+    }
+
+    fn access(&self) -> trino_core::AccessSettings {
+        self.access.get()
+    }
+
+    fn set_access(&mut self, settings: trino_core::AccessSettings) {
+        self.access.set(settings);
     }
 
     fn quality(&self) -> QualitySettings {

@@ -42,9 +42,10 @@ pub fn action_color(a: Action) -> Color {
 fn badge(ui: &mut Ui, x: f32, y: f32, a: Action) {
     const DIGITS: [&str; ACTIONS] = ["1", "2", "3", "4", "5", "6", "7"];
     ui.fill(Rect::new(x, y, 9.0, 9.0), action_color(a));
+    // At the top: the PC's big font inks a pixel lower than the 11 px one.
     ui.text(
         x + 4.5,
-        y + 0.5,
+        y,
         DIGITS[a as usize],
         pal::NAVY,
         Size::Small,
@@ -520,7 +521,7 @@ fn diagram(
         ui.fill(Rect::new(p.x - w * 0.5, p.y - 4.0, w, 9.0), c);
         ui.text(
             p.x,
-            p.y - 3.5,
+            p.y - 4.0,
             s.name,
             pal::NAVY,
             Size::Small,

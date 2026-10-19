@@ -60,6 +60,21 @@ and clicks it; Enter and Escape work like A and B. A saved screen or string tabl
 in the running game. With `TRINO_STRICT=1` on a console profile, a screen over that
 console's UI budget panics.
 
+### Accessibility
+
+The player's accessibility settings ([ADR 0027](adr/0027-accessibility.md)) live in
+`target/save/<save_name>.access` (`key=value` lines, written when the game changes them,
+never on smoke runs); castle64 keeps `target/save/castle64.access`.
+`TRINO_ACCESS=cvd=deuteranopia,text_scale=200,high_contrast=on,captions=all` forces
+settings for one run (nothing is written then), and `TRINO_CVD=protanopia|deuteranopia|
+tritanopia|grayscale` shows the window as a viewer with that color vision sees it (the
+renderer's simulation view, a review tool: the game's colors are unchanged). In strict
+mode the renderer warns when full-screen fills strobe more than three times a second.
+In a browser the settings live in `localStorage` (`trino-access:<name>`), `?access=...`
+forces them and `?cvd=deuteranopia` turns the simulation view on. The consoles keep them for the session: a game stores `AccessSettings::pack`
+(3 bytes) in its save to keep them longer; everything else (palettes, captions, text
+scale, high contrast, icons, motion, flashes) runs the same on the N64 and the 3DS.
+
 ### Shadows
 
 A draw's `ModelParams::shadow` says what it casts once, and each target draws the best it

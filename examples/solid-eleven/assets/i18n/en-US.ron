@@ -9,6 +9,12 @@ Strings(
     lang: "en-US",
     name: "ENGLISH",
     entries: {
+        // The sounds' captions (issue #60; the game draws them from the baked
+        // `i18n/<lang>` table). The font has no brackets.
+        "cap.cheer": "CROWD CHEERS",
+        "cap.ooh": "CROWD: OOH!",
+        "cap.post": "OFF THE POST",
+        "cap.whistle": "WHISTLE!",
         "act_keeper": "TAKE THE KEEPER",
         "act_pass": "PASS / TACKLE",
         "act_pause": "PAUSE",

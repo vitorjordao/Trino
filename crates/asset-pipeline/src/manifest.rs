@@ -275,6 +275,12 @@ pub struct SpriteDecl {
     /// The asset groups it is in (`crate::groups`); default `["boot"]`.
     #[serde(default)]
     pub groups: Vec<String>,
+    /// A sprite (`sprites/x`) drawn with this one while the player's
+    /// color-vision mode is on (issue #60): a pattern or a shape, the second
+    /// channel for its color. Baked into `access/data`
+    /// (`AccessData::icon`).
+    #[serde(default)]
+    pub cvd_icon: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -312,6 +318,25 @@ pub struct SoundDecl {
     /// The asset groups it is in (`crate::groups`); default `["boot"]`.
     #[serde(default)]
     pub groups: Vec<String>,
+    /// A string-table key (`cap.whistle`) shown as a caption while it
+    /// plays, when the player's caption mode wants it (issue #60). Every
+    /// language should have it (`cargo xtask access check`).
+    #[serde(default)]
+    pub caption: Option<String>,
+    /// Shown in the `important` caption mode, and must have a caption: a
+    /// whistle, an alarm, a line the game depends on.
+    #[serde(default)]
+    pub important: Option<bool>,
+    /// 0..=255: a full caption queue drops the lowest first. Default 0
+    /// (100 when `important`).
+    #[serde(default)]
+    pub caption_priority: Option<u8>,
+    /// The caption points at the sound (an arrow from its pan).
+    #[serde(default)]
+    pub direction: Option<bool>,
+    /// How long the caption stays, seconds (default 3).
+    #[serde(default)]
+    pub caption_seconds: Option<f32>,
 }
 
 /// One value for every platform, or a table by platform key (`pc`, `n64`,
@@ -427,6 +452,34 @@ impl Manifest {
                 for platform in Platform::ALL {
                     decl.audio_settings(music, platform)
                         .map_err(|e| format!("{}: `{prefix}/{name}`: {e}", path.display()))?;
+                }
+                if let Some(s) = decl.caption_seconds
+                    && !(s.is_finite() && s > 0.0 && s <= 60.0)
+                {
+                    return Err(format!(
+                        "{}: `{prefix}/{name}`: caption_seconds {s} (more than 0, at most 60)",
+                        path.display()
+                    ));
+                }
+                if decl.caption.as_deref().is_some_and(str::is_empty) {
+                    return Err(format!(
+                        "{}: `{prefix}/{name}`: caption is empty (a string-table key)",
+                        path.display()
+                    ));
+                }
+            }
+        }
+        for (name, decl) in &manifest.sprites {
+            if let Some(icon) = &decl.cvd_icon {
+                let known = icon
+                    .strip_prefix("sprites/")
+                    .is_some_and(|n| manifest.sprites.contains_key(n));
+                if !known {
+                    return Err(format!(
+                        "{}: `sprites/{name}`: cvd_icon `{icon}` is not a sprite of the manifest \
+                         (`sprites/<name>`)",
+                        path.display()
+                    ));
                 }
             }
         }

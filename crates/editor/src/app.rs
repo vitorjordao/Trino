@@ -46,6 +46,9 @@ pub enum Tab {
     Console,
     /// The UI screens (`ui/*.ui.ron`, issue #58).
     Ui,
+    /// Accessibility (issue #60): semantic palettes, the views' color-vision
+    /// simulation, the checklist.
+    Accessibility,
     /// The string tables (`assets/i18n/*.ron`, issue #59).
     Localization,
 }
@@ -65,6 +68,7 @@ impl Tab {
             Tab::Memory => (icon::MEMORY, "Memory"),
             Tab::Console => (icon::TERMINAL, "Console"),
             Tab::Ui => (icon::LAYOUT, "UI"),
+            Tab::Accessibility => (icon::EYE, "Accessibility"),
             Tab::Localization => (icon::TRANSLATE, "Localization"),
         };
         format!("{glyph}  {name}")
@@ -307,6 +311,8 @@ pub struct App {
     pub mixer: crate::audio::MixState,
     /// The quality presets the Quality tab edits (`assets/quality.ron`).
     pub quality: crate::quality::QualityState,
+    /// The Accessibility tab's palettes, simulation and checklist.
+    pub access: crate::access::AccessState,
     /// The UI tab: the screens (`ui/*.ui.ron`), the open one, its preview.
     pub ui_screens: crate::ui_screens::UiScreens,
     /// The Localization tab: the string tables, the preview language.
@@ -642,6 +648,7 @@ impl App {
                 Ok("quality") => Some(Tab::Quality),
                 Ok("memory") => Some(Tab::Memory),
                 Ok("ui") => Some(Tab::Ui),
+                Ok("accessibility") => Some(Tab::Accessibility),
                 Ok("localization") => Some(Tab::Localization),
                 _ if std::env::var_os("TRINO_EDITOR_UI").is_some() => Some(Tab::Ui),
                 _ => None,
@@ -706,6 +713,7 @@ impl App {
             ),
             mixer: crate::audio::MixState::load(&root.join("assets")),
             quality: crate::quality::QualityState::load(&root),
+            access: crate::access::AccessState::load(&root),
             // Dev hook: TRINO_EDITOR_UI=<screen>[,<platform>[,<lang>[,<node
             // id>]]] opens the UI tab on that screen.
             ui_screens: {
@@ -906,6 +914,11 @@ impl App {
                 self.written.insert(p.clone(), t.clone());
             }
             let s = p.to_string_lossy().replace('\\', "/");
+            // The Accessibility checklist reads the manifest, the string
+            // tables, the screens and the theme: run it again.
+            if s.starts_with("assets/") || s.starts_with("ui/") {
+                self.access.stale();
+            }
             if p == crate::audio::MixState::path(&self.project.assets_dir()) {
                 // The project mix, edited outside (an agent, a text editor).
                 if text.is_none() && !self.mixer.exists {
@@ -916,6 +929,20 @@ impl App {
                     self.mixer.apply(&mut player.audio);
                 }
                 match &self.mixer.error {
+                    Some(e) => self.log.toast(Level::Error, e.clone()),
+                    None => self.log.toast(
+                        Level::Ok,
+                        format!("{} {} reloaded", icon::ARROWS_CLOCKWISE, p.display()),
+                    ),
+                }
+            } else if p == crate::access::AccessState::path(&self.project.root) {
+                // The semantic palettes, edited outside (an agent, a text
+                // editor): the Accessibility tab follows.
+                if text.is_none() && !self.access.exists {
+                    continue;
+                }
+                self.access.reload(text.as_deref());
+                match &self.access.error {
                     Some(e) => self.log.toast(Level::Error, e.clone()),
                     None => self.log.toast(
                         Level::Ok,
@@ -1725,6 +1752,18 @@ impl App {
                 Err(e) => self.mixer.error = Some(e),
             }
         }
+        if std::mem::take(&mut self.access.dirty) {
+            let path = crate::access::AccessState::path(&self.project.root);
+            match self.write_echo(path, self.access.to_text()) {
+                Ok(()) => {
+                    self.access.exists = true;
+                    self.access.error = None;
+                    // The checklist reads the file: run it on what was written.
+                    self.access.stale();
+                }
+                Err(e) => self.log.toast(Level::Error, e),
+            }
+        }
         if std::mem::take(&mut self.quality.dirty) {
             match self.quality.to_text() {
                 Ok(text) => {
@@ -1971,6 +2010,9 @@ impl App {
                 });
                 ui.menu_button("Shadow view", |ui| {
                     crate::viewport::shadow_menu(ui, &mut self.scene_view.shadow_view);
+                });
+                ui.menu_button("Accessibility simulation", |ui| {
+                    crate::panels::access::simulation_menu(ui, &mut self.access.preview);
                 });
                 ui.separator();
                 if ui
@@ -2407,6 +2449,7 @@ impl App {
             (Tab::Mixer, "Mixer"),
             (Tab::Quality, "Quality"),
             (Tab::Memory, "Memory"),
+            (Tab::Accessibility, "Accessibility"),
             (Tab::Console, "Console"),
             (Tab::Ui, "UI"),
         ] {
@@ -3391,6 +3434,7 @@ fn default_dock(width: f32) -> egui_dock::DockState<Tab> {
             Tab::Mixer,
             Tab::Quality,
             Tab::Memory,
+            Tab::Accessibility,
             Tab::Console,
         ],
     );
@@ -3430,6 +3474,7 @@ impl egui_dock::TabViewer for TabView<'_> {
             | Tab::Mixer
             | Tab::Quality
             | Tab::Memory
+            | Tab::Accessibility
             | Tab::Level
             | Tab::Animation
             | Tab::Ui
@@ -3440,6 +3485,9 @@ impl egui_dock::TabViewer for TabView<'_> {
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Tab) {
         let app = &mut *self.app;
+        // The Accessibility tab's simulation, in every view.
+        app.scene_view.cvd_view = app.access.preview.cvd;
+        app.game_view.cvd_view = app.access.preview.cvd;
         match tab {
             Tab::Scene | Tab::Game => {
                 let kind = if *tab == Tab::Scene {
@@ -3549,6 +3597,7 @@ impl egui_dock::TabViewer for TabView<'_> {
             Tab::Mixer => crate::panels::mixer::ui(app, ui),
             Tab::Quality => crate::panels::quality::ui(app, ui),
             Tab::Memory => crate::panels::memory::ui(app, ui),
+            Tab::Accessibility => crate::panels::access::ui(app, ui),
             Tab::Console => app.log.ui(ui),
             Tab::Ui => crate::panels::ui_screens::ui(app, ui),
             Tab::Localization => crate::panels::localization::ui(app, ui),

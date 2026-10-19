@@ -694,8 +694,13 @@ extra_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789#%&'*+;<=>?_Ü"
 formats = { n64 = "I4" }
 
 # ---- sounds (tools/solid_eleven/make_sounds.py) ----
+# Captions (issue #60): keys of assets/i18n/<lang>.ron. The whistle starts
+# and stops play, so it shows even in the "important" caption mode.
 [sounds.se_whistle]
 file = "sounds/se_whistle.wav"
+caption = "cap.whistle"
+important = true
+caption_priority = 200
 
 [sounds.se_kick]
 file = "sounds/se_kick.wav"
@@ -705,12 +710,16 @@ file = "sounds/se_tap.wav"
 
 [sounds.se_post]
 file = "sounds/se_post.wav"
+caption = "cap.post"
 
 [sounds.se_cheer]
 file = "sounds/se_cheer.wav"
+caption = "cap.cheer"
+caption_priority = 50
 
 [sounds.se_ooh]
 file = "sounds/se_ooh.wav"
+caption = "cap.ooh"
 
 [sounds.se_click]
 file = "sounds/se_click.wav"

@@ -3,6 +3,9 @@ Strings(
     fallback: "en-US",
     name: "Español",
     entries: {
+        "cap.coin": "[tintineo de moneda]",
+        "cap.hurt": "[ay]",
+        "cap.star": "[fanfarria: estrella conseguida]",
         "selftest.coins": Plural(one: "{n} moneda", other: "{n} monedas"),
         "selftest.hello": "Hola",
         "selftest.price": "Precio: {amount:currency}",

@@ -31,9 +31,9 @@
                         kind: Stack(gap: 6, align: Center),
                         children: [
                             (kind: Text, key: "pause.title", text: "PAUSED", color: Some((40, 210, 255, 255))),
-                            (kind: Button, id: "resume", key: "pause.resume", text: "RESUME", on_click: "resume", size: (Px(120), Px(20))),
-                            (kind: Button, id: "substitute", key: "pause.substitute", text: "SUBSTITUTE", on_click: "substitute", size: (Px(120), Px(20))),
-                            (kind: Button, id: "quit", key: "pause.quit", text: "QUIT MATCH", on_click: "quit", size: (Px(120), Px(20))),
+                            (kind: Button, id: "resume", key: "pause.resume", text: "RESUME", on_click: "resume", min: (120, 20), padding: (6, 3, 6, 3)),
+                            (kind: Button, id: "substitute", key: "pause.substitute", text: "SUBSTITUTE", on_click: "substitute", min: (120, 20), padding: (6, 3, 6, 3)),
+                            (kind: Button, id: "quit", key: "pause.quit", text: "QUIT MATCH", on_click: "quit", min: (120, 20), padding: (6, 3, 6, 3)),
                         ],
                     ),
                 ],

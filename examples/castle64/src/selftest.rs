@@ -110,6 +110,11 @@ pub fn engine_checks(
     particles(renderer, platform)?;
     platform.log("TRINO_STEP:portals\n");
     portals(renderer, platform)?;
+    platform.log("TRINO_STEP:accessibility\n");
+    if accessibility(renderer, platform)? {
+        platform
+            .log("TRINO_STEP:accessibility probed palette swap, outline, captions and contrast\n");
+    }
     platform.log("TRINO_STEP:hw tier\n");
     let tier = hw_tier(renderer, platform)?;
     log_tier(platform, &tier);
@@ -2929,4 +2934,451 @@ pub fn log_groups(platform: &mut dyn Platform, r: &GroupReport) {
         ),
     );
     platform.log(line.as_str());
+}
+
+/// The stripe pattern `sprites/selftest_quadrants` shows under a
+/// color-vision mode (`cvd_icon` in the manifest, and on `ui/selftest`'s
+/// first button).
+pub const CVD_STRIPES: SpriteId = SpriteId::from_path("sprites/cvd_stripes");
+
+/// Audio that only counts what reaches it: the caption wrapper must pass
+/// every call through.
+struct CountingAudio {
+    sounds: u32,
+    music: u32,
+}
+
+impl trino_core::Audio for CountingAudio {
+    fn play_sound(&mut self, _: trino_core::SoundId) {
+        self.sounds += 1;
+    }
+    fn play_music(&mut self, _: trino_core::MusicId, _: bool) {
+        self.music += 1;
+    }
+    fn stop_music(&mut self) {}
+    fn set_master_volume(&mut self, _: f32) {}
+}
+
+/// Accessibility (issue #60): the platform keeps the player's settings and
+/// the 3-byte save form round-trips; the baked `access/data` holds the
+/// semantic colors, the captions and the icons; a slotted card drawn with
+/// the deuteranopia palette shows the alternatives (the same draw as the
+/// base palette: no shader); the caption queue fills through the audio
+/// wrapper and draws a dark box with text over the scene (on the touch
+/// screen with `SecondScreen`, where there is one); the UI at 200 % text
+/// keeps its texts in their boxes, the high-contrast theme fills the
+/// focused button with its yellow and a color-vision mode adds the
+/// button's icon; a high-contrast outline rings a card in its color; the
+/// flash guard keeps a 10 Hz strobe to 3 flashes a second, reduced motion
+/// damps a shake, hold-to-toggle latches. `Ok(false)`
+/// after the non-pixel checks where `read_pixel` is unsupported.
+#[inline(never)]
+pub fn accessibility(
+    renderer: &mut dyn Renderer,
+    platform: &mut dyn Platform,
+) -> Result<bool, &'static str> {
+    use trino_core::access::{CaptionMode, MAX_FLASHES_PER_SECOND};
+    use trino_core::ui::{NoStrings, Ui, UiEnv, UiScreen};
+    use trino_core::{
+        AccessBlob, AccessSettings, Audio, CameraFx, CaptionPlace, CaptionStyle, Captions, CvdMode,
+        FlashMonitor, HoldToggle, ScreenFlash,
+    };
+
+    // 1. Settings: the save form, the platform round trip.
+    let want = AccessSettings {
+        cvd: CvdMode::Deuteranopia,
+        text_scale: 200,
+        high_contrast: true,
+        captions: CaptionMode::All,
+        reduce_motion: true,
+        flash_guard: true,
+        hold_to_toggle: true,
+    };
+    if AccessSettings::unpack(want.pack()) != Some(want) {
+        return Err("accessibility: the packed settings do not round-trip");
+    }
+    let saved = platform.access();
+    platform.set_access(want);
+    let kept = platform.access();
+    platform.set_access(saved);
+    if kept != want || platform.access() != saved {
+        return Err("accessibility: the platform does not keep its settings");
+    }
+
+    // 2. The baked data.
+    let mut blob = AccessBlob::new();
+    let data = *blob
+        .get(platform)
+        .ok_or("accessibility: blob access/data missing or broken")?;
+    let rgb = |r, g, b| Color::rgb(r, g, b);
+    let (a_base, b_base) = (rgb(220, 40, 40), rgb(40, 160, 60));
+    let (a_deut, b_deut) = (rgb(240, 160, 0), rgb(40, 90, 220));
+    if data.color("selftest.team_a", CvdMode::Off) != Some(a_base)
+        || data.color("selftest.team_b", CvdMode::Deuteranopia) != Some(b_deut)
+        || data.color("selftest.team_a", CvdMode::Tritanopia) != Some(a_base)
+    {
+        return Err("accessibility: a semantic color has the wrong value");
+    }
+    if data.icon(QUADRANTS) != Some(CVD_STRIPES) {
+        return Err("accessibility: the quadrants' color-vision icon is missing");
+    }
+    let coin = trino_core::SoundId::from_path("sounds/coin");
+    let win = trino_core::SoundId::from_path("sounds/win");
+    match (data.caption(coin.0), data.caption(win.0)) {
+        (Some(c), Some(w)) if c.key == "cap.coin" && !c.important && w.important => {}
+        _ => return Err("accessibility: the sounds' captions are wrong"),
+    }
+
+    // 3. Motion, flashes, held input (no renderer).
+    let mut flash = ScreenFlash::new();
+    let guarded = AccessSettings::DEFAULT;
+    let open = AccessSettings {
+        flash_guard: false,
+        ..guarded
+    };
+    let mut shown = 0;
+    for _ in 0..10 {
+        shown += flash.trigger(Color::WHITE, 0.05, &guarded) as usize;
+        flash.update(0.1);
+    }
+    if shown != MAX_FLASHES_PER_SECOND || flash.dropped != 7 {
+        return Err("accessibility: the flash guard let a 10 Hz strobe through");
+    }
+    let mut free = ScreenFlash::new();
+    let free_shown = (0..10)
+        .map(|_| {
+            let s = free.trigger(Color::WHITE, 0.05, &open);
+            free.update(0.1);
+            s as usize
+        })
+        .sum::<usize>();
+    if free_shown != 10 || flash.current().a > trino_core::access::motion::GUARDED_ALPHA {
+        return Err("accessibility: flashes without the guard were dropped");
+    }
+    let mut monitor = FlashMonitor::new();
+    let strobe = (0..60).any(|f| monitor.frame(f as f32 / 60.0, ((f / 3) % 2) as f32));
+    let mut calm = FlashMonitor::new();
+    let slow = (0..120).any(|f| calm.frame(f as f32 / 60.0, ((f / 30) % 2) as f32));
+    if !strobe || slow {
+        return Err("accessibility: the strobe monitor is wrong");
+    }
+    let mut fx = CameraFx::new();
+    fx.shake(1.0, 1.0);
+    fx.kick_fov(0.3, 1.0);
+    fx.update(0.05);
+    let full = fx.offset(&guarded);
+    let damped = fx.offset(&want);
+    let (full2, damped2) = (full.dot(full), damped.dot(damped));
+    // Squared lengths: the damped shake is at most a fifth of the full one.
+    if damped2 > full2 * 0.21 * 0.21 + 1e-8
+        || full2 <= 0.0
+        || fx.fov_delta(&want) != 0.0
+        || fx.fov_delta(&guarded) <= 0.0
+    {
+        return Err("accessibility: reduced motion does not damp the camera");
+    }
+    let mut press = InputState::default();
+    press.set(trino_core::Button::B, true);
+    let idle = InputState::default();
+    let (mut hold, mut toggle) = (HoldToggle::new(), HoldToggle::new());
+    hold.update(&press, &idle, trino_core::Button::B, &guarded);
+    toggle.update(&press, &idle, trino_core::Button::B, &want);
+    let held = hold.update(&idle, &press, trino_core::Button::B, &guarded);
+    let latched = toggle.update(&idle, &press, trino_core::Button::B, &want);
+    if held || !latched {
+        return Err("accessibility: hold-to-toggle does not latch");
+    }
+
+    // 4. Captions through the audio wrapper.
+    let mut captions = Captions::new();
+    captions.configure(Some(&data), &want);
+    let mut sink = CountingAudio {
+        sounds: 0,
+        music: 0,
+    };
+    {
+        let mut audio = captions.wrap(&mut sink);
+        audio.play_sound(coin);
+        audio.play_sound(trino_core::SoundId::from_path("sounds/jump"));
+        audio.play_music(trino_core::MusicId::from_path("music/theme"), true);
+    }
+    if sink.sounds != 2 || sink.music != 1 || captions.len() != 1 {
+        return Err("accessibility: the caption wrapper lost a sound or a caption");
+    }
+    captions.configure(
+        Some(&data),
+        &AccessSettings {
+            captions: CaptionMode::Important,
+            ..want
+        },
+    );
+    if captions.on_sound(coin.0, None) || !captions.on_sound(win.0, None) {
+        return Err("accessibility: the important mode shows the wrong sounds");
+    }
+
+    // 5. The UI at 200 % text, in high contrast, with the icons.
+    let bytes = platform
+        .blob(UI_SCREEN)
+        .ok_or("accessibility: blob ui/selftest missing")?;
+    let screen = UiScreen::parse(bytes).map_err(|_| "accessibility: ui/selftest does not parse")?;
+    let mut ui: Ui<16> = Ui::new();
+    let draw_ui = |r: &mut dyn Renderer, env: &UiEnv<'_>, ui: &mut Ui<16>| {
+        for _ in 0..3 {
+            r.begin_frame(Color::BLACK);
+            ui.draw(r, &screen, env);
+            r.end_frame();
+        }
+        ui.stats()
+    };
+    let env = UiEnv::of(renderer);
+    let plain = draw_ui(renderer, &env, &mut ui);
+    let big = draw_ui(
+        renderer,
+        &env.with_access(&AccessSettings {
+            text_scale: 200,
+            ..guarded
+        }),
+        &mut ui,
+    );
+    if big.overflow != 0 || plain.overflow != 0 {
+        return Err("accessibility: a text overflows its button at 200 %");
+    }
+    let icons = draw_ui(
+        renderer,
+        &env.with_access(&AccessSettings {
+            cvd: CvdMode::Deuteranopia,
+            ..guarded
+        }),
+        &mut ui,
+    );
+    if icons.draws != plain.draws + 1 {
+        return Err("accessibility: the color-vision icon is not drawn");
+    }
+    let contrast_env = env.with_access(&AccessSettings {
+        high_contrast: true,
+        ..guarded
+    });
+    // The first button takes the focus on the first update.
+    let _ = ui.update(&screen, &idle, &idle, 0.0);
+    draw_ui(renderer, &contrast_env, &mut ui);
+    let (_, one) = ui
+        .rect_of(&screen, "one")
+        .ok_or("accessibility: no `one`")?;
+    let probe = (one.pos.x + 4.0, one.pos.y + 3.0);
+    let Some(focus) = renderer.read_pixel(probe.0 as u32, probe.1 as u32) else {
+        return Ok(false);
+    };
+    let near = |c: Color, w: Color, t: i32| {
+        (c.r as i32 - w.r as i32).abs() <= t
+            && (c.g as i32 - w.g as i32).abs() <= t
+            && (c.b as i32 - w.b as i32).abs() <= t
+    };
+    if !near(focus, trino_core::ui::Theme::HIGH_CONTRAST.focus, 40) {
+        return Err("accessibility: the high-contrast focus is not its yellow");
+    }
+
+    // 6. The palette swap on a slotted card: the same draw, the colors of
+    //    the mode.
+    let caps = *renderer.caps();
+    let size = Vec2::new(caps.screen_width as f32, caps.screen_height as f32);
+    let camera = Camera3 {
+        eye: Vec3::new(0.0, 0.0, -1.5),
+        target: Vec3::ZERO,
+        fov_y: 60.0 * core::f32::consts::PI / 180.0,
+    };
+    let view = camera.view();
+    let half = camera.fov_y * 0.5;
+    let focal = cos(half) / sin(half) * size.y * 0.5;
+    let names = ["selftest.team_a", "", "", "selftest.team_b"];
+    for (mode, want_cols) in [
+        (CvdMode::Off, [Color::WHITE, a_base, b_base]),
+        (CvdMode::Deuteranopia, [Color::WHITE, a_deut, b_deut]),
+    ] {
+        let params = ModelParams {
+            shading: Shading::Unlit,
+            palette: Some(data.palette(names, mode)),
+            ..ModelParams::DEFAULT
+        };
+        for _ in 0..3 {
+            renderer.begin_frame(Color::BLACK);
+            renderer.set_camera(&camera);
+            renderer.set_light(&DEFAULT_LIGHT);
+            renderer.draw_model(
+                SLOTS_CARD,
+                &Transform3::default(),
+                Material::VertexLit,
+                &params,
+            );
+            renderer.end_frame();
+        }
+        for (x, w) in [-0.4f32, 0.0, 0.4].into_iter().zip(want_cols) {
+            let v = view.transform_point(Vec3::new(x, 0.0, 0.0));
+            let px = size.x * 0.5 + v.x * focal / v.z;
+            let py = size.y * 0.5 - v.y * focal / v.z;
+            let got = renderer
+                .read_pixel(px as u32, py as u32)
+                .ok_or("accessibility: read-back stopped")?;
+            if !near(got, w, 48) {
+                return Err(if mode == CvdMode::Off {
+                    "accessibility: the base palette shows the wrong colors"
+                } else {
+                    "accessibility: the deuteranopia palette shows the wrong colors"
+                });
+            }
+        }
+    }
+
+    // 7. A high-contrast outline: the white card ringed in yellow (a
+    //    second, unlit draw pushed behind it), black there without one.
+    let ring = trino_core::Outline::new(trino_core::access::OUTLINE_COLOR, Vec3::ZERO, 0.68)
+        .with_pixels(6.0);
+    let white = ModelParams {
+        shading: Shading::Unlit,
+        ..ModelParams::DEFAULT
+    };
+    let edge = view.transform_point(Vec3::new(0.6, 0.0, 0.0));
+    let edge_x = size.x * 0.5 + edge.x * focal / edge.z;
+    for with in [true, false] {
+        for _ in 0..3 {
+            renderer.begin_frame(Color::BLACK);
+            renderer.set_camera(&camera);
+            renderer.set_light(&DEFAULT_LIGHT);
+            trino_core::access::draw_outlined(
+                renderer,
+                &camera,
+                SLOTS_CARD,
+                &Transform3::default(),
+                Material::VertexLit,
+                &white,
+                with.then_some(&ring),
+            );
+            renderer.end_frame();
+        }
+        let out = renderer
+            .read_pixel((edge_x + 2.0) as u32, (size.y * 0.5) as u32)
+            .ok_or("accessibility: read-back stopped")?;
+        let mid = renderer
+            .read_pixel((size.x * 0.5) as u32, (size.y * 0.5) as u32)
+            .ok_or("accessibility: read-back stopped")?;
+        let want_out = if with {
+            trino_core::access::OUTLINE_COLOR
+        } else {
+            Color::BLACK
+        };
+        if !near(out, want_out, 48) || !near(mid, Color::WHITE, 48) {
+            return Err(if with {
+                "accessibility: the outline does not ring the card"
+            } else {
+                "accessibility: without an outline the card is not alone"
+            });
+        }
+    }
+
+    //    At a gameplay distance (a boar-sized card 15 m away), where the
+    //    N64's 16-bit z has about 7 cm a step against the copy's 18 cm gap:
+    //    the card stays white, the ring still shows.
+    let far = Camera3 {
+        eye: camera.eye * 10.0,
+        ..camera
+    };
+    let small = Transform3 {
+        scale: Vec3::new(0.9, 0.9, 0.9),
+        ..Transform3::default()
+    };
+    let ring = trino_core::Outline::new(trino_core::access::OUTLINE_COLOR, Vec3::ZERO, 0.6)
+        .with_pixels(4.0);
+    let far_view = far.view();
+    let edge = far_view.transform_point(Vec3::new(0.54, 0.0, 0.0));
+    let edge_x = size.x * 0.5 + edge.x * focal / edge.z;
+    for _ in 0..3 {
+        renderer.begin_frame(Color::BLACK);
+        renderer.set_camera(&far);
+        renderer.set_light(&DEFAULT_LIGHT);
+        trino_core::access::draw_outlined(
+            renderer,
+            &far,
+            SLOTS_CARD,
+            &small,
+            Material::VertexLit,
+            &white,
+            Some(&ring),
+        );
+        renderer.end_frame();
+    }
+    let out = renderer
+        .read_pixel((edge_x + 2.0) as u32, (size.y * 0.5) as u32)
+        .ok_or("accessibility: read-back stopped")?;
+    let mid = renderer
+        .read_pixel((size.x * 0.5) as u32, (size.y * 0.5) as u32)
+        .ok_or("accessibility: read-back stopped")?;
+    if !near(mid, Color::WHITE, 48) {
+        return Err("accessibility: a far outline shows through its object");
+    }
+    if !near(out, trino_core::access::OUTLINE_COLOR, 48) {
+        return Err("accessibility: a far outline does not ring its object");
+    }
+
+    // 8. The caption box: dark under the text, the scene around it, a
+    //    glyph inside; then on the touch screen where there is one.
+    let mut captions = Captions::new();
+    captions.configure(Some(&data), &want);
+    captions.on_sound(coin.0, None);
+    let gray = Color::rgb(200, 200, 200);
+    for place in [CaptionPlace::Bottom, CaptionPlace::SecondScreen] {
+        let style = CaptionStyle {
+            font: FONT,
+            place,
+            ..CaptionStyle::DEFAULT
+        };
+        let on = match place {
+            CaptionPlace::SecondScreen => match renderer.screen_size(Screen::Bottom) {
+                Some(_) => Screen::Bottom,
+                None => continue,
+            },
+            _ => Screen::Top,
+        };
+        for _ in 0..3 {
+            renderer.begin_frame(gray);
+            if on == Screen::Bottom && renderer.on_screen(Screen::Bottom) {
+                // The touch screen's own background, gray like the top's.
+                renderer.fill_rect(Rect::new(0.0, 0.0, 320.0, 240.0), gray);
+            }
+            captions.draw(renderer, &NoStrings, &style);
+            renderer.end_frame();
+        }
+        let screen_px = renderer
+            .screen_size(on)
+            .ok_or("accessibility: no caption screen")?;
+        let boxes = captions.boxes(
+            renderer,
+            &NoStrings,
+            &style,
+            screen_px,
+            CaptionPlace::Bottom,
+        );
+        let r = boxes[0].ok_or("accessibility: no caption box")?;
+        let read = |r: &mut dyn Renderer, x: f32, y: f32| {
+            r.read_screen_pixel(on, x as u32, y as u32)
+                .ok_or("accessibility: read-back stopped")
+        };
+        // The box's left padding, half-way down (clear of the text and of
+        // the high-contrast top and bottom rules).
+        let inside = read(renderer, r.pos.x + 1.0, r.pos.y + r.size.y * 0.5)?;
+        let outside = read(renderer, r.pos.x + 1.0, r.pos.y - 3.0)?;
+        if inside.r > 90 || outside.r < 150 {
+            return Err("accessibility: the caption box is not where it should be");
+        }
+        let px = captions.text_px(screen_px.y);
+        let y = r.pos.y + 2.0 * px + 3.0 * px;
+        let mut glyph = false;
+        let mut x = r.pos.x + 2.0 * px;
+        while x < r.pos.x + r.size.x - 2.0 * px && !glyph {
+            glyph = read(renderer, x, y)?.r > 150;
+            x += 1.0;
+        }
+        if !glyph {
+            return Err("accessibility: the caption box has no text");
+        }
+    }
+    Ok(true)
 }

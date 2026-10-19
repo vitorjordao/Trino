@@ -81,7 +81,8 @@ pub fn png_size(path: &Path) -> Option<(u16, u16)> {
     Some((w.min(u16::MAX as u32) as u16, h.min(u16::MAX as u32) as u16))
 }
 
-/// Every screen and string table, baked for `platform`. A screen with
+/// Every screen and string table (and the project's `access/data`, issue
+/// #60), baked for `platform`. A screen with
 /// structural errors ([`validate`]) fails the bake; layout warnings are
 /// `cargo xtask ui check`'s.
 pub fn bake(root: &Path, manifest: &Manifest, platform: Platform) -> Result<Vec<UiBlob>, String> {
@@ -140,6 +141,16 @@ pub fn bake(root: &Path, manifest: &Manifest, platform: Platform) -> Result<Vec<
                 });
             }
         }
+        Err(e) => errors.push(e),
+    }
+    // The accessibility data (issue #60): palettes, captions, icons and the
+    // high-contrast theme, resident like the screens that use it.
+    match crate::access::bake(root, manifest) {
+        Ok(Some(bytes)) => out.push(UiBlob {
+            logical: crate::access::LOGICAL.to_string(),
+            bytes,
+        }),
+        Ok(None) => {}
         Err(e) => errors.push(e),
     }
     if errors.is_empty() {

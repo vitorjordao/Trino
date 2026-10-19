@@ -84,6 +84,11 @@ fn baked_dir() -> PathBuf {
     PathBuf::from("target/assets/pc")
 }
 
+/// The player's accessibility settings (`<save>.access`).
+fn access_file() -> PathBuf {
+    PathBuf::from("target/save/castle64.access")
+}
+
 struct Ctx {
     window: Arc<Window>,
     renderer: PcRenderer,
@@ -99,6 +104,8 @@ struct Ctx {
     player: Option<scene_player::ScenePlayer>,
     /// `TRINO_GAME=showcase`: the codegen showcase instead of castle64.
     showcase: Option<showcase::ShowcaseGame>,
+    /// Whether accessibility changes go to `target/save/castle64.access`.
+    access_persist: bool,
     last_frame: Instant,
     #[cfg(feature = "reload")]
     asset_events: std::sync::mpsc::Receiver<Vec<u32>>,
@@ -214,6 +221,11 @@ impl App {
 
         let (iw, ih) = renderer.internal_size();
         let game = castle64::Castle64Game::new(Vec2::new(iw as f32, ih as f32));
+        let access_persist = trino_runner_pc::load_access_settings(
+            &mut platform,
+            &access_file(),
+            self.smoke_frames.is_some(),
+        );
 
         window.request_redraw();
         Ctx {
@@ -227,6 +239,7 @@ impl App {
             game,
             player,
             showcase,
+            access_persist,
             last_frame: Instant::now(),
             #[cfg(feature = "reload")]
             asset_events,
@@ -316,6 +329,11 @@ impl ApplicationHandler for App {
                     }
                 }
 
+                trino_runner_pc::save_access_settings(
+                    &mut ctx.platform,
+                    &access_file(),
+                    ctx.access_persist,
+                );
                 if let Some(q) = &mut ctx.quality {
                     q.end_frame(&mut ctx.renderer, &mut ctx.platform);
                     self.meter.set_quality(q.note(&ctx.renderer));

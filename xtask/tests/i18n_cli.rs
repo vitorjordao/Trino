@@ -289,7 +289,8 @@ fn stats_and_fonts_report_per_language() {
         .iter()
         .find(|s| s["lang"] == "en-US")
         .unwrap();
-    assert_eq!(en["keys"], 4);
+    // The self-test's four and castle64's three captions (#60).
+    assert_eq!(en["keys"], 7);
     let r = json(&xtask(&["i18n", "fonts", "--platform", "n64", "--json"]));
     let atlases: Vec<(&str, &str)> = r
         .as_array()

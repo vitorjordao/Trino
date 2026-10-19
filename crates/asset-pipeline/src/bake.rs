@@ -294,6 +294,45 @@ pub fn bake_all(
         }
     }
 
+    // The project's UI screens (`ui/*.ui.ron`) and string tables
+    // (`assets/i18n/*.ron`) → `ui/<name>` and `i18n/<lang>` blobs, on every
+    // target (issue #58).
+    {
+        let root = assets_root.parent().unwrap_or(assets_root);
+        match crate::ui::bake(root, &manifest, platform) {
+            Ok(blobs) => {
+                for b in blobs {
+                    let id = asset_id(&b.logical);
+                    if let Some(other) = by_id.insert(id, b.logical.clone()) {
+                        errors.push(format!(
+                            "hash collision between `{other}` and `{}`",
+                            b.logical
+                        ));
+                        continue;
+                    }
+                    let file = format!("{id:08x}.blob");
+                    let format = String::from_utf8_lossy(&b.bytes[..4]).into_owned();
+                    match write_if_changed(&out_dir.join(&file), &b.bytes) {
+                        Ok(changed) => report.entries.push(BakedEntry {
+                            logical: b.logical,
+                            id,
+                            kind: "blob",
+                            file,
+                            format,
+                            preview_3ds: None,
+                            compressed: None,
+                            ktx2: None,
+                            changed,
+                            groups: Vec::new(),
+                        }),
+                        Err(e) => errors.push(e),
+                    }
+                }
+            }
+            Err(e) => errors.push(e),
+        }
+    }
+
     // Model bounds for baked scenes' `Auto` colliders, collected as models
     // bake (no second bake per scene).
     let mut model_bounds = BTreeMap::new();

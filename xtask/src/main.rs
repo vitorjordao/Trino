@@ -28,6 +28,8 @@ mod scene;
 mod showcase_assets;
 mod standalone;
 mod texture;
+mod ui;
+mod ui_render;
 mod web;
 
 use std::path::{Path, PathBuf};
@@ -122,6 +124,16 @@ commands:
   scene check [file..] validate scenes/prefabs/materials (text-first loop)
   scene export [--platform pc|n64|3ds] <scene.ron> <out.rs>
                        bake a scene into no_std Rust data for games
+  ui check [screen..] [--platform n64|3ds|pc|web] [--lang <lang>] [--json]
+                       validate ui/*.ui.ron and lay each out per target and
+                       language: overflowing text, controls the pad cannot
+                       reach, missing glyphs/keys, node and draw budgets
+  ui shot <screen> [--platform n64|3ds|pc|web] [--size WxH] [--lang <lang>]
+      [--scale S] [--focus <id>] [--out <file.png>] [--json]
+                       render a screen headless as the target shows it
+  ui export <screen> <out.rs> [--platform ..] [--json]
+                       a screen as no_std Rust (static UiScreen) for games
+  ui list [--json]     the screens and the string tables
   impostor new <name> --model models/x [--views N] [--pitch DEG] [--tile PX]
   impostor bake <name>.. | --all
                        pre-render a model from N yaws into a billboard atlas
@@ -431,6 +443,15 @@ fn main() -> ExitCode {
             }
             let rest: Vec<&str> = rest.iter().map(String::as_str).collect();
             audio::run(&project.root, &rest)
+        }
+        (Some("ui"), _) => {
+            let mut rest: Vec<String> = args.iter().skip(1).cloned().collect();
+            // `--out` was taken with the Web's options above.
+            if let Some(out) = &web_build.out {
+                rest.extend(["--out".to_string(), out.display().to_string()]);
+            }
+            let rest: Vec<&str> = rest.iter().map(String::as_str).collect();
+            ui::run(&project, &rest)
         }
         (Some("impostor"), _) => {
             let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();

@@ -3,6 +3,8 @@
 //! (geometry, overrides, wrap, reachability), pointer and touch, values,
 //! lists and scrolling, drawing, and the TUIL / TSTR formats.
 
+mod common;
+
 use trino_core::render3d::Camera3;
 use trino_core::ui::tuil::{self, HEADER, RECORD};
 use trino_core::ui::{
@@ -1627,4 +1629,35 @@ fn every_caps_table_names_its_family_and_ui_budget() {
         UiEnv::of_caps(&Caps::N64).safe[0],
         Insets::symmetric(16, 12)
     );
+}
+
+#[test]
+fn baked_blobs_are_parsed_once_and_again_when_the_platform_swaps_them() {
+    use trino_core::BlobId;
+    use trino_core::ui::{ScreenBlob, StringsBlob};
+    let mut platform = common::MemoryPlatform::new(0);
+    let mut pause = ScreenBlob::new("pause");
+    assert!(pause.get(&platform).is_none(), "no blob yet");
+    platform.insert_blob(BlobId::from_path("ui/pause"), bake(&menu()));
+    assert_eq!(pause.get(&platform).map(|s| s.len()), Some(5));
+    // A live reload hands out new bytes: the screen follows.
+    let mut t = Tree::new();
+    t.open(root());
+    t.leaf(button("only", "only"));
+    platform.insert_blob(BlobId::from_path("ui/pause"), bake(&t.screen()));
+    assert_eq!(pause.get(&platform).map(|s| s.len()), Some(2));
+    assert_eq!(pause.screen().unwrap().node(1).id, "only");
+    // Broken bytes: no screen, and why.
+    platform.insert_blob(BlobId::from_path("ui/pause"), b"TUIL".to_vec());
+    assert!(pause.get(&platform).is_none());
+    assert_eq!(pause.error, Some(trino_core::ui::UiError::Truncated));
+    let mut bytes = Vec::new();
+    let mut entries = [("a", "b")];
+    strings::encode_tstr("pt-BR", "", &mut entries, &mut |b| {
+        bytes.extend_from_slice(b)
+    })
+    .unwrap();
+    platform.insert_blob(BlobId::from_path("i18n/pt-BR"), bytes);
+    let mut pt = StringsBlob::new("pt-BR");
+    assert_eq!(pt.get(&platform).and_then(|t| t.lookup("a")), Some("b"));
 }

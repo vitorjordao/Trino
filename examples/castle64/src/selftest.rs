@@ -62,6 +62,10 @@ pub fn engine_checks(
     if fill_rect(renderer)? {
         platform.log("TRINO_STEP:fill rect probed\n");
     }
+    platform.log("TRINO_STEP:ui layout\n");
+    if ui_layout(renderer, platform)? {
+        platform.log("TRINO_STEP:ui layout probed focus, pad and touch\n");
+    }
     platform.log("TRINO_STEP:dual screen\n");
     if dual_screen(renderer)? {
         platform.log("TRINO_STEP:dual screen probed both screens\n");
@@ -731,6 +735,138 @@ pub fn blob(platform: &mut dyn Platform) -> Result<(), &'static str> {
         Some(_) => Err("blob content mismatch"),
         None => Err("blob missing"),
     }
+}
+
+/// `ui/selftest.ui.ron`, baked as a blob on every target (issue #58).
+pub const UI_SCREEN: BlobId = BlobId::from_path("ui/selftest");
+
+/// The UI system (issue #58) end to end: the baked `ui/selftest` screen
+/// parses, lays out inside the target's safe area, draws its focused
+/// button in the theme's focus color, moves the focus with the D-pad,
+/// clicks with A, and a touch on the bottom screen (the main one where
+/// there is one screen) taps the `touch` button. `Ok(false)` where
+/// `read_pixel` is unsupported (the logic still ran).
+#[inline(never)]
+pub fn ui_layout(
+    renderer: &mut dyn Renderer,
+    platform: &mut dyn Platform,
+) -> Result<bool, &'static str> {
+    use trino_core::ui::{Theme, Ui, UiEnv, UiScreen};
+    let bytes = platform
+        .blob(UI_SCREEN)
+        .ok_or("ui layout: blob ui/selftest missing")?;
+    let screen = UiScreen::parse(bytes).map_err(|_| "ui layout: ui/selftest does not parse")?;
+    let mut ui: Ui<16> = Ui::new();
+    let env = UiEnv::of(renderer);
+    let idle = InputState::default();
+    let frame = |r: &mut dyn Renderer, ui: &mut Ui<16>| {
+        // Several identical frames: the 3DS LCDs are double-buffered.
+        for _ in 0..3 {
+            r.begin_frame(Color::BLACK);
+            ui.draw(r, &screen, &env);
+            r.end_frame();
+        }
+    };
+    frame(renderer, &mut ui);
+    let _ = ui.update(&screen, &idle, &idle, 0.0);
+    if ui.focused(&screen).map(|f| f.0) != Some("one") {
+        return Err("ui layout: the first button is not focused");
+    }
+    if ui.unreachable(&screen).is_some() {
+        return Err("ui layout: the pad cannot reach every button");
+    }
+    // The stack sits inside the safe area, centered.
+    let (_, one) = ui.rect_of(&screen, "one").ok_or("ui layout: no `one`")?;
+    let top = renderer
+        .screen_size(Screen::Top)
+        .ok_or("ui layout: no screen")?;
+    let safe = renderer.safe_area(Screen::Top);
+    let mid = one.pos.x + one.size.x * 0.5;
+    if (mid - top.x * 0.5).abs() > 1.0 || one.pos.y < safe.top as f32 {
+        return Err("ui layout: the stack is not centered in the safe area");
+    }
+    // D-pad down: `two` takes the focus; A clicks it.
+    let mut down = InputState::default();
+    down.set(trino_core::Button::DpadDown, true);
+    let _ = ui.update(&screen, &down, &idle, 1.0 / 60.0);
+    let _ = ui.update(&screen, &idle, &down, 1.0 / 60.0);
+    if ui.focused(&screen).map(|f| f.0) != Some("two") {
+        return Err("ui layout: D-pad down did not move the focus to `two`");
+    }
+    let mut a = InputState::default();
+    a.set(trino_core::Button::A, true);
+    if ui.update(&screen, &a, &idle, 1.0 / 60.0).clicked() != Some("two") {
+        return Err("ui layout: A did not click the focused button");
+    }
+    let _ = ui.update(&screen, &idle, &a, 1.0 / 60.0);
+    frame(renderer, &mut ui);
+    let (_, two) = ui.rect_of(&screen, "two").ok_or("ui layout: no `two`")?;
+    let theme = Theme::DEFAULT;
+    // Left of the centered label, inside the focus ring.
+    let at = |r: Rect| {
+        (
+            (r.pos.x + r.size.x * 0.1) as u32,
+            (r.pos.y + r.size.y * 0.5) as u32,
+        )
+    };
+    let close = |c: Color, want: Color| {
+        (c.r as i32 - want.r as i32).abs() <= 40
+            && (c.g as i32 - want.g as i32).abs() <= 40
+            && (c.b as i32 - want.b as i32).abs() <= 40
+    };
+    let (x, y) = at(two);
+    let Some(focused) = renderer.read_screen_pixel(Screen::Top, x, y) else {
+        return ui_touch(&screen, &mut ui).map(|_| false);
+    };
+    if !close(focused, theme.focus) {
+        return Err("ui layout: the focused button is not in the focus color");
+    }
+    let (x, y) = at(one);
+    if !renderer
+        .read_screen_pixel(Screen::Top, x, y)
+        .is_some_and(|c| close(c, theme.button))
+    {
+        return Err("ui layout: an unfocused button is not in the button color");
+    }
+    ui_touch(&screen, &mut ui)?;
+    // The tap focused `touch`: probe it where it is drawn.
+    frame(renderer, &mut ui);
+    let (on, touch) = ui
+        .rect_of(&screen, "touch")
+        .ok_or("ui layout: no `touch`")?;
+    let (x, y) = at(touch);
+    if !renderer
+        .read_screen_pixel(on, x, y)
+        .is_some_and(|c| close(c, theme.focus))
+    {
+        return Err("ui layout: the tapped button is not focused on its screen");
+    }
+    Ok(true)
+}
+
+/// A tap (press, then the finger lifts with no position, as on the 3DS)
+/// on the `touch` button's screen clicks it.
+fn ui_touch(
+    screen: &trino_core::ui::UiScreen<'_>,
+    ui: &mut trino_core::ui::Ui<16>,
+) -> Result<(), &'static str> {
+    let (on, touch) = ui.rect_of(screen, "touch").ok_or("ui layout: no `touch`")?;
+    let mut press = InputState::default();
+    press.pointer = Some(Vec2::new(
+        touch.pos.x + touch.size.x * 0.5,
+        touch.pos.y + touch.size.y * 0.5,
+    ));
+    press.pointer_screen = on.index();
+    press.set_pointer_button(trino_core::PointerButton::Primary, true);
+    let _ = ui.update(screen, &press, &InputState::default(), 1.0 / 60.0);
+    let lift = InputState::default();
+    if ui.update(screen, &lift, &press, 1.0 / 60.0).clicked() != Some("touch") {
+        return Err("ui layout: a tap did not click the touch button");
+    }
+    if ui.focused(screen).map(|f| f.0) != Some("touch") {
+        return Err("ui layout: a tap did not focus the touch button");
+    }
+    Ok(())
 }
 
 /// Save data round-trips through the real medium (EEPROM / SD / file).

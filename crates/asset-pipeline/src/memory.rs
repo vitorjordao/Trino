@@ -415,6 +415,16 @@ pub fn plan(assets_root: &Path, platform: Platform, tier: HwTier) -> Result<Memo
             blob.len() as u64,
         );
     }
+    // UI screens and string tables (issue #58), resident like the mix.
+    let root = assets_root.parent().unwrap_or(assets_root);
+    for b in crate::ui::bake(root, &manifest, platform)? {
+        add(
+            &b.logical,
+            "blob",
+            MemoryCategory::Data,
+            b.bytes.len() as u64,
+        );
+    }
     Ok(MemoryPlan {
         platform,
         tier,

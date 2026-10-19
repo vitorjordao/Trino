@@ -74,6 +74,11 @@ fn engine_checks_pass_on_pc() {
         Ok(false),
         "single screen"
     );
+    assert_eq!(
+        castle64::selftest::ui_layout(&mut renderer, &mut platform),
+        Ok(true),
+        "the UI probed on one screen (the touch button on the main one)"
+    );
 }
 
 /// Every check on the 3DS profile, whose simulated second screen the
@@ -89,6 +94,11 @@ fn engine_checks_pass_on_the_pc_3ds_profile() {
         castle64::selftest::dual_screen(&mut renderer),
         Ok(true),
         "both screens probed"
+    );
+    assert_eq!(
+        castle64::selftest::ui_layout(&mut renderer, &mut platform),
+        Ok(true),
+        "the UI probed on both screens (a tap on the touch screen)"
     );
 }
 
@@ -380,4 +390,22 @@ fn audio_codecs_pass_on_pc() {
     assert!(stats.streamed_frames >= castle64::selftest::AUDIO_STREAM_MIN_SAMPLES);
     let music = trino_core::Audio::bus_volume(&audio, trino_core::Bus::Music);
     assert!((music - 0.8).abs() < 1e-3, "the step restores the buses");
+}
+
+/// The `ui layout` step (issue #58) on the native profile at 1080p, 4K and
+/// 21:9: whole-pixel scaling, the stack centered, the same probes.
+#[test]
+fn the_ui_layout_step_passes_at_pc_resolutions() {
+    let save_dir = tempfile::tempdir().unwrap();
+    let Some((mut renderer, mut platform)) = pc_target(SimProfile::Native, save_dir.path()) else {
+        return;
+    };
+    for (w, h) in [(1920, 1080), (3840, 2160), (2560, 1080)] {
+        renderer.set_internal_size(w, h);
+        assert_eq!(
+            castle64::selftest::ui_layout(&mut renderer, &mut platform),
+            Ok(true),
+            "{w}x{h}"
+        );
+    }
 }

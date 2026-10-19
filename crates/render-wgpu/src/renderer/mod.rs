@@ -382,6 +382,11 @@ pub struct PcRenderer {
     vi_pipeline: wgpu::RenderPipeline,
     vi_tex: wgpu::Texture,
     strict: bool,
+    /// The main screen's safe area when the host knows better than the
+    /// profile (the Web: a phone's notch, CSS `env(safe-area-inset-*)`).
+    safe_area: Option<trino_core::Insets>,
+    /// The last UI frame's counts ([`Renderer::ui_stats`]).
+    ui_stats: Option<trino_core::UiStats>,
     /// The 3DS profile's touch screen (320×240, 2D and 3D).
     second: Option<SecondScreen>,
     /// "name (backend)" of the GPU adapter.
@@ -1979,6 +1984,8 @@ impl PcRenderer {
             vi_pipeline,
             vi_tex,
             strict,
+            safe_area: None,
+            ui_stats: None,
             second,
             screen: 0,
             main_cmds: 0,
@@ -2144,6 +2151,19 @@ impl PcRenderer {
     /// Defaults to off; `TRINO_STRICT=1` enables it.
     pub fn set_strict(&mut self, on: bool) {
         self.strict = on;
+    }
+
+    /// Override the main screen's safe area ([`Renderer::safe_area`]);
+    /// `None` goes back to the profile's (`Caps::safe_area`: the N64's TV
+    /// overscan, zero elsewhere).
+    pub fn set_safe_area(&mut self, insets: Option<trino_core::Insets>) {
+        self.safe_area = insets;
+    }
+
+    /// The counts the UI system reported last ([`trino_core::ui`]): nodes
+    /// laid out, draws, overflowing texts.
+    pub fn last_ui_stats(&self) -> Option<trino_core::UiStats> {
+        self.ui_stats
     }
 
     /// The console profile this renderer simulates.
@@ -4722,6 +4742,39 @@ impl Renderer for PcRenderer {
                 self.internal_size.1 as f32,
             )),
             Screen::Bottom => self.second_screen(),
+        }
+    }
+
+    fn safe_area(&self, screen: Screen) -> trino_core::Insets {
+        match (screen, self.safe_area) {
+            (Screen::Top, Some(insets)) => insets,
+            (Screen::Top, None) => trino_core::Insets::symmetric(
+                self.caps.safe_area.0 as u16,
+                self.caps.safe_area.1 as u16,
+            ),
+            (Screen::Bottom, _) => trino_core::Insets::ZERO,
+        }
+    }
+
+    fn ui_stats(&mut self, stats: trino_core::UiStats) {
+        self.ui_stats = Some(stats);
+        if self.strict {
+            if stats.nodes > self.caps.max_ui_nodes {
+                panic!(
+                    "strict mode: a UI screen laid out {} nodes, over the {:?} profile's {} \
+                     (Caps::max_ui_nodes) — fewer list items or nodes; `cargo xtask ui \
+                     check` reports it per target",
+                    stats.nodes, self.profile, self.caps.max_ui_nodes
+                );
+            }
+            if stats.draws > self.caps.max_ui_draws {
+                panic!(
+                    "strict mode: a UI screen drew {} fills, sprites and glyphs this frame, \
+                     over the {:?} profile's {} (Caps::max_ui_draws) — less text or fewer \
+                     nodes; `cargo xtask ui check` reports it per target",
+                    stats.draws, self.profile, self.caps.max_ui_draws
+                );
+            }
         }
     }
 

@@ -1,0 +1,33 @@
+// The engine self-test's screen (castle64::selftest::ui_layout, issue #58):
+// a full-screen panel, three buttons in a centered stack (pad navigation,
+// focus colors) and a button on the 3DS touch screen (a tap), baked as the
+// `ui/selftest` blob on every target.
+(
+    version: 1,
+    name: "selftest",
+    on_back: "back",
+    root: (
+        children: [
+            (kind: Rect(), anchor: Fill, bleed: true, color: Some((0, 0, 120, 255))),
+            (
+                kind: Stack(gap: 8),
+                anchor: Center,
+                children: [
+                    (kind: Button, id: "one", text: "ONE", on_click: "one", size: (Px(96), Px(24))),
+                    (kind: Button, id: "two", text: "TWO", on_click: "two", size: (Px(96), Px(24))),
+                    (kind: Button, id: "three", text: "THREE", on_click: "three", size: (Px(96), Px(24))),
+                ],
+            ),
+            (
+                kind: Button,
+                id: "touch",
+                text: "TOUCH",
+                on_click: "touch",
+                screen: Bottom,
+                anchor: BottomRight,
+                offset: (-8, -8),
+                size: (Px(96), Px(32)),
+            ),
+        ],
+    ),
+)

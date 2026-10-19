@@ -48,6 +48,7 @@
 //! [`Caps::max_ui_draws`] are each target's budget: strict mode on the PC
 //! fails a screen past them ([`Renderer::ui_stats`]).
 
+mod asset;
 mod draw;
 mod layout;
 mod nav;
@@ -56,6 +57,7 @@ pub mod strings;
 pub mod tuil;
 pub mod values;
 
+pub use asset::{ScreenBlob, StringsBlob};
 pub use node::{
     Align, Anchor, AxisAnchor, Dir, ImageFit, Justify, NONE, NodeKind, Nodes, Overflow, Scaling,
     Size, Targets, Theme, UiNode, UiScreen, VAlign,

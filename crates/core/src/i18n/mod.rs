@@ -327,8 +327,33 @@ impl<'a, const N: usize> Localizer<'a, N> {
         args: &[Arg<'_>],
         out: &mut dyn core::fmt::Write,
     ) -> core::fmt::Result {
-        let locale = self.locale();
-        let pattern = match self.entry(key) {
+        self.write_fmt_in(self.language(), key, args, out)
+    }
+
+    /// [`tr_fmt`](Self::tr_fmt) in `lang` rather than the current language
+    /// (a game that keeps the language itself, or shows two at once).
+    pub fn tr_fmt_in<'b, const M: usize>(
+        &self,
+        lang: LangId,
+        key: StrKey,
+        args: &[Arg<'_>],
+        out: &'b mut TextBuf<M>,
+    ) -> &'b str {
+        out.clear();
+        let _ = self.write_fmt_in(lang, key, args, out);
+        out.as_str()
+    }
+
+    /// [`write_fmt`](Self::write_fmt) in `lang`.
+    pub fn write_fmt_in(
+        &self,
+        lang: LangId,
+        key: StrKey,
+        args: &[Arg<'_>],
+        out: &mut dyn core::fmt::Write,
+    ) -> core::fmt::Result {
+        let locale = self.table(lang).map_or(Locale::EN_US, |t| t.locale());
+        let pattern = match self.entry_in(lang, key) {
             Some(Entry::Text(t)) => t,
             Some(Entry::Plural(p)) => {
                 let form = format::count_arg(args)

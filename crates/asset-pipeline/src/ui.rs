@@ -116,7 +116,12 @@ pub fn bake(root: &Path, manifest: &Manifest, platform: Platform) -> Result<Vec<
             // The languages this platform ships (pseudo-locales only on the
             // PC and the Web), each with the fonts it draws with, and the
             // list the runtime loads them by (`i18n/languages`).
-            let tables = crate::i18n::baked_for(&langs, manifest.i18n.as_ref(), platform);
+            let blobs = manifest.i18n.as_ref().is_none_or(|d| d.blobs);
+            let tables = if blobs {
+                crate::i18n::baked_for(&langs, manifest.i18n.as_ref(), platform)
+            } else {
+                Vec::new()
+            };
             for table in &tables {
                 let (fonts, group) = crate::i18n::remaps(manifest, &table.lang, platform);
                 match table.to_tstr_with(&fonts, group) {

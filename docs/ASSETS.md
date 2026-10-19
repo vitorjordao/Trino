@@ -46,7 +46,7 @@ assets/
 | Particle effect (`*.particles.ron`) | `TPFX` with the PC cap | `TPFX` with the N64 cap | `TPFX` with the 3DS cap | `TPFX` with the Web cap (else the PC's) |
 | `assets/quality.ron` + `trino.toml [pc.quality]` (the presets) | `quality/presets` text blob | nothing (fixed quality) | nothing (fixed quality) | `quality/presets` in the pack |
 | UI screen (`ui/<name>.ui.ron`, no manifest entry) | `TUIL` blob `ui/<name>` | `TUIL` blob | `TUIL` blob | `TUIL` blob in the pack |
-| String table (`assets/i18n/<lang>.ron`, no manifest entry) | `TSTR` blob `i18n/<lang>` | `TSTR` blob | `TSTR` blob | `TSTR` blob in the pack |
+| String table (`assets/i18n/<lang>.ron`, no manifest entry; `[i18n]` optional) | `TSTR` blob `i18n/<lang>` + `i18n/languages` | `TSTR` blob (no pseudo-locales) | `TSTR` blob (no pseudo-locales) | `TSTR` blob in the pack |
 
 `cargo xtask assets pc|n64|3ds|web` runs the bake alone. `cargo xtask build n64|3ds|web`
 runs it as part of the build (the Web packs every asset of a game into one
@@ -445,7 +445,8 @@ target that does not exist fails the bake). Every new project starts with `title
   `enabled_if` (a bound value), `overflow: Visible | Clip | Ellipsis | Wrap`, `nav: (down:
   "id")` overrides, `preview: {"volume": Int(7)}` for the tools.
 - **String tables:** `assets/i18n/en-US.ron` is `Strings(lang: "en-US", fallback: "",
-  entries: {"pause.title": "Paused"})`; `i18n/<lang>` blobs, read with `StringsBlob`.
+  entries: {"pause.title": "Paused"})`; `i18n/<lang>` blobs, read with `StringsBlob` or a
+  `Localizer` (plurals, formats, per-language fonts: [Localization](#localization)).
 
 The game keeps a `ScreenBlob::new("pause")`, fetches it in `update_with` (it re-parses after
 a live edit), and drives a `Ui<N>` with it; a game without blobs (tests, a server) uses
@@ -463,6 +464,79 @@ cargo xtask ui list --json
 `max_ui_draws`, a text that overflows its box in any language, a glyph the font lacks, a
 font, sprite or model not in the manifest, a key in no table. The editor's
 UI tab edits the same file and shows the focus order, the overflows and each target.
+
+## Localization
+
+One file per language, `assets/i18n/<lang>.ron`, named after its `lang` ([ADR
+0026](adr/0026-localization.md), issue #59; the `localization` skill has the loop):
+
+```ron
+Strings(
+    lang: "pt-BR",
+    fallback: "en-US",                 // keys this table lacks come from en-US
+    name: "Português (Brasil)",        // for a language menu (Localizer / StringTable::name)
+    locale: (currency: "R$"),          // optional: overrides of the tag's defaults, written bare
+    entries: {
+        "menu.play": "Jogar",
+        "guests.count": Plural(one: "{n} convidado", other: "{n} convidados"),
+        "money": Format("{amount:currency}"),
+    },
+)
+```
+
+- **Entries:** text, `Plural(zero:, one:, two:, few:, many:, other:)` (the forms the
+  language's CLDR rule uses; `plural: "Slavic"` overrides the rule) or `Format("…")`.
+  Placeholders `{n}`, `{n:int}`, `{y:raw}`, `{x:num}`, `{amount:currency}`, `{d:date}`,
+  `{s:str}`; `{{` and `}}` are braces. Number, money and date formats come from the
+  language's `Locale` (`R$ 1.200,00`, `$1,200.00`, `1200,00 €`; dates `31/12/2026`,
+  `12/31/2026`, `2026/12/31`).
+- **Bake:** every shipped language → `i18n/<lang>` (`TSTR` v2: the locale, plural entries,
+  the fonts it draws with) and `i18n/languages` (the tags, the default first), on every
+  target, no manifest entry. A `qps-*` pseudo-locale bakes on the PC and the Web only.
+- **Manifest:**
+
+  ```toml
+  [i18n]
+  default = "en-US"
+  languages = ["en-US", "pt-BR"]   # shipped (default: every table but pseudo-locales)
+  extra_chars = "0123456789"       # every auto font also bakes these
+  groups = true                    # per-language atlases in group i18n-<lang>
+  check_fonts = ["fonts/ui"]       # what `i18n check` holds to each language
+  blobs = false                    # the game keeps its tables in code (i18n export --rust)
+
+  [i18n.overrides.ja-JP]
+  "fonts/ui" = { pc = "fonts/ui-ja", web = "fonts/ui-ja" }
+
+  [fonts.ui]
+  file = "fonts/Roboto.ttf"
+  size = 11
+  chars = "auto"                   # exactly the glyphs the languages and the screens use
+  extra_chars = "#*"
+  per_language = true              # fonts/ui (the default's) + fonts/ui@pt-BR, ...
+  ```
+
+  `chars = "auto"` (TTF/OTF) bakes the shipped languages' glyphs, the UI screens' literal
+  texts, the extras, the space and `?`. A glyph nothing uses is not baked.
+  `per_language` gives each language its own atlas, smaller and N64-TMEM friendly; its
+  `TSTR` maps the font to it and the UI swaps it with no game code.
+- **Runtime:** `Localizer::load(platform)` reads every language; `pick(saved,
+  platform.system_language())`; `tr(StrKey::new("menu.play"))`, `tr_fmt(key, &[Arg::money
+  ("amount", 120_000)], &mut TextBuf)`, `plural`, `font`, `group`; the UI takes a
+  `Localizer` as its `UiStrings`.
+
+```sh
+cargo xtask i18n check [--platform n64] [--strict] [--dir examples/x] [--json]
+cargo xtask i18n pseudo [--from en-US] [--expand 40]      # assets/i18n/qps-ploc.ron
+cargo xtask i18n export --csv strings.csv                  # import --csv to read it back
+cargo xtask i18n export --rust src/strings_gen.rs          # static StringTable code
+cargo xtask i18n stats | fonts [--platform n64] | list [--json]
+```
+
+`i18n check` fails on missing keys no fallback covers, placeholders that differ from the
+default language's, glyphs a font lacks for a language on a target, and UI text that
+overflows in a language on a target. It warns on plural forms a rule needs, keys only one
+language has and atlases past the N64's TMEM, and notes keys nothing uses. The editor's
+**Localization** tab edits the same files.
 
 ## Checking your work
 

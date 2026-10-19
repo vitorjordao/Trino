@@ -412,6 +412,10 @@ pub struct Langs {
     /// The game's default language (the manifest's `[i18n] default`).
     /// `None`: [`Langs::default_lang`] guesses.
     pub default: Option<String>,
+    /// Per language, the fonts it draws with another (`(font, replacement)`
+    /// hashes: per-language atlases, overrides), as its `TSTR` carries them
+    /// for one platform (`trino_asset_pipeline::i18n::with_remaps`).
+    pub fonts: BTreeMap<String, Vec<(u32, u32)>>,
 }
 
 impl Langs {
@@ -491,6 +495,7 @@ impl Langs {
         HostStrings {
             chain: self.chain(lang),
             revision: trino_core::asset_id(lang),
+            fonts: self.fonts.get(lang).cloned().unwrap_or_default(),
         }
     }
 
@@ -537,6 +542,7 @@ impl Langs {
 pub struct HostStrings<'a> {
     chain: Vec<&'a StringsDef>,
     revision: u32,
+    fonts: Vec<(u32, u32)>,
 }
 
 impl UiStrings for HostStrings<'_> {
@@ -548,6 +554,13 @@ impl UiStrings for HostStrings<'_> {
 
     fn revision(&self) -> u32 {
         self.revision
+    }
+
+    fn font(&self, font: trino_core::FontId) -> trino_core::FontId {
+        match self.fonts.iter().find(|(f, _)| *f == font.0) {
+            Some((_, to)) => trino_core::FontId(*to),
+            None => font,
+        }
     }
 }
 
@@ -836,26 +849,41 @@ pub fn unused(langs: &Langs, used: &BTreeSet<String>) -> Vec<I18nIssue> {
 // -------------------------------------------------------------- glyphs ----
 
 /// Every character `table` draws: its texts without their placeholders,
-/// its name, and, when it formats numbers, digits, the minus sign and its
-/// locale's separators and currency symbol.
+/// its name, and what its placeholders print by kind in its locale:
+/// numbers (untyped, `int`, `num`, `raw`) digits, the minus sign and the
+/// separators; `currency` those and the symbol; `date` digits and the date
+/// separator; `str` nothing. Money goes in `{x:currency}` (an untyped
+/// placeholder is counted as a number).
 pub fn glyphs(table: &StringsDef) -> BTreeSet<char> {
     let mut set = BTreeSet::new();
-    let mut numbers = false;
+    let (mut numbers, mut money, mut dates) = (false, false, false);
     for e in table.entries.values() {
         for (_, text) in e.texts() {
             strip_placeholders(text, &mut |c| {
                 set.insert(c);
             });
-            format::placeholders(text, &mut |_, kind| {
-                numbers |= kind != "str";
+            format::placeholders(text, &mut |_, kind| match kind {
+                "str" => {}
+                "currency" => money = true,
+                "date" => dates = true,
+                _ => numbers = true,
             });
         }
     }
     set.extend(table.name.chars());
-    if numbers && let Ok(l) = table.locale() {
-        set.extend("0123456789-".chars());
-        for s in [l.decimal, l.thousands, l.currency, l.date_sep] {
-            set.extend(s.chars());
+    if let Ok(l) = table.locale() {
+        if numbers || money || dates {
+            set.extend("0123456789".chars());
+        }
+        if numbers || money {
+            set.insert('-');
+            set.extend(l.decimal.chars().chain(l.thousands.chars()));
+        }
+        if money {
+            set.extend(l.currency.chars());
+        }
+        if dates {
+            set.extend(l.date_sep.chars());
         }
     }
     set.remove(&'\n');
@@ -1359,7 +1387,7 @@ mod tests {
             "a": "Olá {{x}}", "m": Format("{v:currency}"),
         })"#);
         let g: String = glyphs(&s).into_iter().collect();
-        assert_eq!(g, " $,-./0123456789OPRltx{}á");
+        assert_eq!(g, " $,-.0123456789OPRltx{}á");
         let plain = t(r#"Strings(lang: "en-US", entries: {"a": "{who} hi"})"#);
         let g: String = glyphs(&plain).into_iter().collect();
         assert!(

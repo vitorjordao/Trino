@@ -27,6 +27,8 @@ pub struct WebPlatform {
     /// the host (`crate::quality`).
     pub(crate) quality: HostedQuality,
     pub(crate) groups: crate::groups::Groups,
+    /// `?lang=`, else `navigator.language` (`crate::language`).
+    language: Option<trino_core::LangTag>,
 }
 
 impl WebPlatform {
@@ -44,7 +46,13 @@ impl WebPlatform {
             pad_name: None,
             quality: HostedQuality::new(caps),
             groups: crate::groups::Groups::new(caps.ram_bytes),
+            language: crate::language::detect(),
         }
+    }
+
+    /// Replace the system language (a host that knows better).
+    pub fn set_system_language(&mut self, language: Option<trino_core::LangTag>) {
+        self.language = language;
     }
 
     /// Count the page's heap in `Platform::memory` (the app's
@@ -153,6 +161,10 @@ impl Platform for WebPlatform {
 
     fn memory(&self) -> MemoryReport {
         self.groups.report()
+    }
+
+    fn system_language(&self) -> Option<trino_core::LangTag> {
+        self.language
     }
 
     fn display(&self) -> Option<DisplayInfo> {

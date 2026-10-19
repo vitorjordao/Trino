@@ -15,6 +15,7 @@ mod fbgolden;
 mod font_assets;
 mod hardware;
 mod hwtier;
+mod i18n;
 mod impostor;
 mod model;
 mod n3ds;
@@ -134,6 +135,18 @@ commands:
   ui export <screen> <out.rs> [--platform ..] [--json]
                        a screen as no_std Rust (static UiScreen) for games
   ui list [--json]     the screens and the string tables
+  i18n check [--platform p] [--strict] [--dir <project>] [--json]
+                       string tables: missing/extra/unused keys, placeholders,
+                       plural forms, missing glyphs, UI overflow per language
+                       and target, font atlases past the N64's TMEM
+  i18n pseudo [--from <lang>] [--tag qps-ploc] [--expand 40]
+                       write a pseudo-locale (PC/Web builds only)
+  i18n export --csv <f> | import --csv <f>
+                       translators' CSV round trip
+  i18n export --rust <out.rs> [--platform p]
+                       every shipped language as static StringTable code
+  i18n stats | fonts [--platform p] | list [--json]
+                       words per language, atlases and their TMEM, languages
   impostor new <name> --model models/x [--views N] [--pitch DEG] [--tile PX]
   impostor bake <name>.. | --all
                        pre-render a model from N yaws into a billboard atlas
@@ -452,6 +465,10 @@ fn main() -> ExitCode {
             }
             let rest: Vec<&str> = rest.iter().map(String::as_str).collect();
             ui::run(&project, &rest)
+        }
+        (Some("i18n"), _) => {
+            let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
+            i18n::run(&project, &rest)
         }
         (Some("impostor"), _) => {
             let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();

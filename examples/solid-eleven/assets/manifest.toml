@@ -654,14 +654,25 @@ file = "models/dot.glb"
 [models.se_pedestal]
 file = "models/pedestal.glb"
 
+# ---- strings (issue #59: assets/i18n/en-US.ron, pt-BR.ron) ----
+# The game reads its tables as static code (src/ui/strings_gen.rs, `cargo
+# xtask i18n export --rust`), so no build bakes the i18n/* blobs.
+[i18n]
+default = "en-US"
+blobs = false
+check_fonts = ["fonts/se_ui", "fonts/se_big", "fonts/se_huge"]
+
 # ---- fonts (Roboto Condensed Bold, Apache-2.0: fonts/LICENSE-Roboto.txt) ----
 # The UI font is caps, digits, punctuation and Portuguese accents: 11 px, an
-# I4 atlas that fits the N64's TMEM (the resident text path).
+# I4 atlas that fits the N64's TMEM (the resident text path). `auto`: the
+# glyphs both languages use, plus what names and scores need
+# (`ui::FONT_CHARS`, which the `solid_eleven_layers` test holds equal).
 [fonts.se_ui]
 file = "fonts/RobotoCondensed-Bold.ttf"
 size = 11
 antialias = true
-chars = " ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,:;-+/%!?()'&#<>*=_ÁÂÃÀÇÉÊÍÓÔÕÚÜ"
+chars = "auto"
+extra_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789#%&'*+;<=>?_Ü"
 formats = { n64 = "I4" }
 
 # Titles (and the PC's 2x interface).
@@ -669,7 +680,8 @@ formats = { n64 = "I4" }
 file = "fonts/RobotoCondensed-Bold.ttf"
 size = 22
 antialias = true
-chars = " ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,:;-+/%!?()'&#<>*=_ÁÂÃÀÇÉÊÍÓÔÕÚÜ"
+chars = "auto"
+extra_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789#%&'*+;<=>?_Ü"
 formats = { n64 = "I4" }
 
 # PC high-resolution font (crisp text on 1080p, 1440p / 2K, 4K displays).
@@ -677,7 +689,8 @@ formats = { n64 = "I4" }
 file = "fonts/RobotoCondensed-Bold.ttf"
 size = 44
 antialias = true
-chars = " ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,:;-+/%!?()'&#<>*=_ÁÂÃÀÇÉÊÍÓÔÕÚÜ"
+chars = "auto"
+extra_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789#%&'*+;<=>?_Ü"
 formats = { n64 = "I4" }
 
 # ---- sounds (tools/solid_eleven/make_sounds.py) ----

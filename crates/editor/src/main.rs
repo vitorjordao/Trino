@@ -41,6 +41,7 @@ mod launcher;
 #[cfg(test)]
 mod layout_audit;
 mod level_editor;
+mod localization;
 mod log;
 mod ops;
 mod palette;
@@ -93,6 +94,7 @@ pub const EDITOR_HOOKS: &[&str] = &[
     "TRINO_EDITOR_QUALITY",
     "TRINO_EDITOR_ASSET_GROUP",
     "TRINO_EDITOR_UI",
+    "TRINO_EDITOR_LANG",
 ];
 
 /// What the editor opens on start.

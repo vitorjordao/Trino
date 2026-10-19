@@ -1,0 +1,12 @@
+// The engine's own string tables (castle64's self-test `i18n` step, issue
+// #59): English is the default; pt-BR and es-ES fall back to it.
+Strings(
+    lang: "en-US",
+    name: "English",
+    entries: {
+        "selftest.coins": Plural(one: "{n} coin", other: "{n} coins"),
+        "selftest.hello": "Hello",
+        "selftest.only_en": "Fallback",
+        "selftest.price": "Price: {amount:currency}",
+    },
+)

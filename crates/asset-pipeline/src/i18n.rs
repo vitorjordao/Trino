@@ -8,6 +8,7 @@
 //! extra_chars = "0123456789"         # dynamic text (player names, scores)
 //! groups = true                      # per-language atlases in group i18n-<lang> (lowercase)
 //! check_fonts = ["fonts/ui"]         # fonts `i18n check` holds to every language
+//! blobs = false                      # tables as static code instead (`i18n export --rust`)
 //!
 //! [i18n.overrides.ja-JP]             # a font only one language draws with
 //! "fonts/ui" = { pc = "fonts/ui-ja", web = "fonts/ui-ja" }
@@ -22,7 +23,8 @@
 //!
 //! - `chars = "auto"` (TTF/OTF only) bakes the union of every shipped
 //!   language's glyphs ([`trino_scene::i18n::glyphs`]), every UI screen's
-//!   literal text, `[i18n] extra_chars` and the font's `extra_chars`.
+//!   literal text, `[i18n] extra_chars`, the font's `extra_chars`, the
+//!   space and `?` (the runtime's glyph for a character an atlas lacks).
 //!   Pseudo-locales (`qps-*`) never add glyphs.
 //! - `per_language = true` (with `auto`) bakes `fonts/<name>` with the
 //!   default language's glyphs and one `fonts/<name>@<lang>` per other
@@ -44,7 +46,7 @@ use trino_scene::i18n::{Langs, StringsDef, glyphs, is_pseudo};
 use crate::manifest::{Manifest, PerPlatform, Platform};
 
 /// `[i18n]` in the manifest.
-#[derive(Debug, Default, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct I18nDecl {
     /// The game's default language (the first the runtime loads, the one
@@ -60,6 +62,10 @@ pub struct I18nDecl {
     /// Per-language atlases in asset group `i18n-<lang>`.
     #[serde(default)]
     pub groups: bool,
+    /// Bake the `i18n/<lang>` blobs (default). `false` for a game that
+    /// keeps its tables as static code (`cargo xtask i18n export --rust`).
+    #[serde(default = "yes")]
+    pub blobs: bool,
     /// Fonts `i18n check` holds to every language's glyphs (default: the
     /// fonts the UI screens use and every `auto` font).
     #[serde(default)]
@@ -71,6 +77,25 @@ pub struct I18nDecl {
     /// What [`resolve`] derived (not in the file).
     #[serde(skip)]
     pub resolved: Resolved,
+}
+
+fn yes() -> bool {
+    true
+}
+
+impl Default for I18nDecl {
+    fn default() -> Self {
+        I18nDecl {
+            default: None,
+            languages: Vec::new(),
+            extra_chars: String::new(),
+            groups: false,
+            blobs: true,
+            check_fonts: Vec::new(),
+            overrides: BTreeMap::new(),
+            resolved: Resolved::default(),
+        }
+    }
 }
 
 /// The `[i18n]` facts every bake needs, from [`resolve`].
@@ -213,7 +238,9 @@ pub fn resolve(manifest: &mut Manifest, assets_dir: &Path) -> Result<(), String>
         let mut base: BTreeSet<char> = ui_chars.clone();
         base.extend(decl.extra_chars.chars());
         base.extend(font.extra_chars.as_deref().unwrap_or("").chars());
-        base.insert(' ');
+        // The space, and `?`: what the runtime draws for a glyph the atlas
+        // lacks (dynamic text), which measures it too.
+        base.extend([' ', '?']);
         let logical = format!("fonts/{name}");
         let all = |set: &mut BTreeSet<char>, langs: &mut dyn Iterator<Item = &BTreeSet<char>>| {
             for g in langs {
@@ -326,6 +353,18 @@ pub fn remaps(manifest: &Manifest, lang: &str, platform: Platform) -> (Vec<(u32,
         0
     };
     (out, group)
+}
+
+/// `langs` with every language's font remaps on `platform` (what its
+/// `TSTR` carries), so host layouts measure with the fonts the runtime
+/// draws (`ui check`, `i18n check`, the editor).
+pub fn with_remaps(mut langs: Langs, manifest: &Manifest, platform: Platform) -> Langs {
+    langs.fonts = langs
+        .tables
+        .keys()
+        .map(|l| (l.clone(), remaps(manifest, l, platform).0))
+        .collect();
+    langs
 }
 
 /// The fonts `i18n check` holds to each language: `[i18n] check_fonts`, or

@@ -419,6 +419,22 @@ file = "models/showcase/bridge.glb"
 file = "fonts/trino5x7.png"
 cell = [6, 10]
 
+# Localized text (castle64::selftest::i18n, issue #59): Roboto Condensed
+# (Apache-2.0, fonts/LICENSE-Roboto.txt) baked with exactly the glyphs
+# assets/i18n/ uses, one atlas per language (`fonts/i18n@pt-BR`, ...).
+[fonts.i18n]
+file = "fonts/RobotoCondensed-Bold.ttf"
+size = 11
+chars = "auto"
+per_language = true
+formats = { n64 = "I4" }
+
+[i18n]
+default = "en-US"
+# The localized text draws with fonts/i18n (the UI self-test screen's
+# trino5x7 shows its own ASCII labels).
+check_fonts = ["fonts/i18n"]
+
 # ---- blobs (raw bytes by handle: Platform::blob) ----
 
 # ---- self-test content (castle64::selftest::AudioCodecs, issue #53) ----

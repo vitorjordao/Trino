@@ -416,6 +416,17 @@ fn copy_demo(engine: &Path, dest: &Path, demo: Demo, names: &Names) -> Result<()
             copy_tree(&from, &dest.join(dir), &mut |_, b| b)?;
         }
     }
+    // The engine's string tables are its self-test's (issue #59): the
+    // project keeps the starter's, which its `ui/` screens read.
+    let i18n = dest.join("assets/i18n");
+    if i18n.is_dir() {
+        std::fs::remove_dir_all(&i18n).map_err(|e| format!("{}: {e}", i18n.display()))?;
+    }
+    copy_tree(
+        &engine.join("templates/standalone/assets/i18n"),
+        &i18n,
+        &mut |_, b| b,
+    )?;
     Ok(())
 }
 
@@ -710,6 +721,10 @@ mod tests {
             manifest.contains("[models.c64_boar]"),
             "the engine's manifest"
         );
+        // The starter's string table, not the engine's self-test ones.
+        let en = std::fs::read_to_string(c64.join("assets/i18n/en-US.ron")).unwrap();
+        assert!(en.contains("\"title.play\""), "{en}");
+        assert!(!c64.join("assets/i18n/pt-BR.ron").exists());
         let show = tmp.path().join("showcase");
         assert!(show.join("game/src/showcase_gen.rs").is_file());
         let game = std::fs::read_to_string(show.join("game/Cargo.toml")).unwrap();

@@ -1,0 +1,10 @@
+// `ui check` fixture: an image and a model the project's manifest does not
+// have (they would draw nothing on every target).
+(
+    version: 1,
+    name: "missing",
+    root: (kind: Stack(), children: [
+        (kind: Image(sprite: "sprites/no-such-sprite"), size: (Px(16), Px(16))),
+        (kind: Model3d(model: "models/no-such-model"), size: (Px(32), Px(32))),
+    ]),
+)

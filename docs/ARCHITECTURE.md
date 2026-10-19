@@ -200,6 +200,23 @@ and [PLATFORMS.md](PLATFORMS.md#quality-presets).
   3DS top or bottom screen. Single-screen targets return `false` for the bottom so the
   game can skip those draws.
 
+### Interfaces: the UI system (issue #58)
+
+Menus, HUDs and dialogs are data. `trino_core::ui` (`no_std`, no allocation) lays a
+screen out for the picture it gets — virtual units against a reference size, a
+whole-pixel scale (×4 at 1080p, ×9 at 4K, ×1 on the consoles) with the anchors at the
+real edges of a 21:9 monitor, inside `Renderer::safe_area` (the N64's overscan, a phone's
+notch), with `screen: Bottom` nodes on the 3DS touch screen — moves the focus with the
+pad, the mouse or touch, and draws with `fill_rect`, `draw_sprite` and `draw_text`, so
+every backend runs it unchanged. A screen is `ui/<name>.ui.ron`, baked into a `TUIL`
+blob on every target (or exported to static Rust), with string tables from
+`assets/i18n/`. `cargo xtask ui check` proves per target that the pad reaches every
+control and that the screen fits `Caps::max_ui_nodes` and `max_ui_draws`; the editor's
+UI tab edits the same files. Details in [ADR 0024](adr/0024-ui-system.md) and
+[ASSETS.md](ASSETS.md#ui-screens).
+
+### Legacy 2D
+
 The 2D-only path the engine started with (the `hello-sprite` and `platformer` examples)
 is legacy. A redesigned 2D sprite and tile system is planned for a future release
 ([BACKLOG.md](BACKLOG.md)).
@@ -264,12 +281,17 @@ Games reach that content two ways, both `no_std` on every target:
 - A `[scenes.*]` manifest entry bakes a scene into a `TSCN` blob that `BakedScene` parses
   at run time.
 
+UI screens (`ui/*.ui.ron`) follow the same two ways: `cargo xtask ui export` writes
+static Rust, and the bake turns every screen into a `ui/<name>` blob with no manifest
+entry ([ADR 0024](adr/0024-ui-system.md)).
+
 ## Hot reload and determinism
 
 - **PC:** with the `reload` feature, `cargo xtask watch pc` rebuilds the game dylib on a
   source change and swaps it under the running state; saving a master rebakes and
   re-uploads that asset under the same handle (a `boot` asset at once, a grouped one the
-  next time its group loads, ADR 0022). The boundary rules (no generics in exports,
+  next time its group loads, ADR 0022). Saving a UI screen or a string table rebakes
+  its blob, and `ScreenBlob` re-parses it on the next frame. The boundary rules (no generics in exports,
   no statics in the dylib, no layout change between reloads) are in
   `crates/game-api/src/lib.rs` and AGENTS.md.
 - **Consoles:** `watch n64` and `watch 3ds` rebuild and relaunch the emulator on save.

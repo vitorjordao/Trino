@@ -232,6 +232,8 @@ pub const QUICK_GO: usize = QUICK_ROWS - 1;
 /// The player editor's rows: the attributes, the skin tone, the hair style
 /// and the hair color.
 pub const EDIT_ROWS: usize = ATTRS + 3;
+/// The pause menu's buttons, top to bottom (`ui/pause.ui.ron` ids).
+pub const PAUSE_ROWS: [&str; 3] = ["resume", "substitute", "quit"];
 
 #[derive(Clone)]
 pub struct SolidElevenGame {
@@ -267,6 +269,8 @@ pub struct SolidElevenGame {
     after_full_time: f32,
     /// A substitution asked for from the pause menu.
     sub_asked: bool,
+    /// The pause menu's focus (a UI screen, `ui/pause.ui.ron`).
+    pub pause_ui: trino_core::Ui<16>,
     /// The PC host's bindings (the controls page).
     pub peek: InputPeek,
     /// For the host after this frame.
@@ -319,6 +323,7 @@ impl SolidElevenGame {
             }),
             spin: 0.0,
             hits: Hits::default(),
+            pause_ui: trino_core::Ui::new(),
             repeat: Repeat::default(),
             prev: InputState::default(),
             save_dirty: false,
@@ -473,7 +478,7 @@ impl SolidElevenGame {
         self.spin += dt * 0.6;
         match self.scene {
             Scene::Match => self.match_frame(input, &prev, &nav, audio, dt),
-            Scene::Pause => self.pause_frame(input, &prev, &nav, tap, audio),
+            Scene::Pause => self.pause_frame(input, &prev, &nav, audio, dt),
             Scene::Controls => self.controls_frame(input, &prev, &nav, tap, audio, dt),
             _ => self.menu_frame(&nav, tap, audio),
         }
@@ -497,6 +502,7 @@ impl SolidElevenGame {
         if input.just_pressed(prev, pause) && s.human.is_some() && s.m.phase != Phase::FullTime {
             self.scene = Scene::Pause;
             self.cur.pause = 0;
+            self.pause_ui.reset();
             sound::play(audio, Sfx::Click);
             return;
         }
@@ -527,13 +533,18 @@ impl SolidElevenGame {
         input: &InputState,
         prev: &InputState,
         nav: &Nav,
-        tap: Option<u8>,
         audio: &mut dyn Audio,
+        dt: f32,
     ) {
-        menu::step(&mut self.cur.pause, 3, nav);
-        if let Some(id) = tap {
-            self.cur.pause = id as usize;
-        }
+        // The menu is a UI screen: the pad, the mouse and a tap move the
+        // focus and pick a row.
+        let screen = &crate::ui::pause_gen::SCREEN;
+        let events = self.pause_ui.update(screen, input, prev, dt);
+        let focused = self.pause_ui.focused(screen).map(|f| f.0);
+        self.cur.pause = PAUSE_ROWS
+            .iter()
+            .position(|id| Some(*id) == focused)
+            .unwrap_or(0);
         // The Pause button closes it too, unless it is A (A picks the row)
         // or B (back already does).
         let pause = self
@@ -541,19 +552,21 @@ impl SolidElevenGame {
             .as_ref()
             .map_or(Button::Start, |s| s.controls.bindings.of(Action::Pause));
         let own = pause != Button::A && input.just_pressed(prev, pause);
-        if nav.start || nav.back || own {
+        if nav.start || nav.back || events.back() || own {
             self.scene = Scene::Match;
             return;
         }
-        if nav.confirm || tap.is_some() {
-            sound::play(audio, Sfx::Click);
-            if self.cur.pause == 0 {
-                self.scene = Scene::Match;
-            } else if self.cur.pause == 1 {
+        let Some(action) = events.clicked() else {
+            return;
+        };
+        sound::play(audio, Sfx::Click);
+        match action {
+            "substitute" => {
                 // The most tired player goes off at the next dead ball.
                 self.sub_asked = true;
                 self.scene = Scene::Match;
-            } else {
+            }
+            "quit" => {
                 // Quit: a career match counts as a 3-0 defeat.
                 if self.in_career_match
                     && let Some((h, _)) = self.world.user_fixture()
@@ -570,6 +583,7 @@ impl SolidElevenGame {
                     Scene::Title
                 };
             }
+            _ => self.scene = Scene::Match,
         }
     }
 

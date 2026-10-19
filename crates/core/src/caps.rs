@@ -46,6 +46,42 @@ impl HwTier {
     }
 }
 
+/// Which kind of target a [`Caps`] table describes (the PC's console
+/// profiles report the console's): what UI screens' `visible_on` and
+/// per-target tools key on.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default, PartialOrd, Ord)]
+pub enum Family {
+    #[default]
+    Pc,
+    N64,
+    N3ds,
+    Web,
+}
+
+impl Family {
+    pub const ALL: [Family; 4] = [Family::Pc, Family::N64, Family::N3ds, Family::Web];
+
+    /// `pc` / `n64` / `3ds` / `web` (CLI flags, `--json`).
+    pub const fn key(self) -> &'static str {
+        match self {
+            Family::Pc => "pc",
+            Family::N64 => "n64",
+            Family::N3ds => "3ds",
+            Family::Web => "web",
+        }
+    }
+
+    /// The base console's (or host's) table.
+    pub const fn caps(self) -> Caps {
+        match self {
+            Family::Pc => Caps::PC,
+            Family::N64 => Caps::N64,
+            Family::N3ds => Caps::N3DS,
+            Family::Web => Caps::WEB,
+        }
+    }
+}
+
 /// Hardware budget of a target platform.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Caps {
@@ -119,6 +155,19 @@ pub struct Caps {
     /// worker core's decoding is not counted, only what the main thread does
     /// (reading, uploading) or a job that ran inline.
     pub load_budget_us: u32,
+    /// The kind of target.
+    pub family: Family,
+    /// Pixels a UI keeps clear at the left/right and top/bottom of the main
+    /// screen ([`crate::Renderer::safe_area`]): the N64's TV overscan
+    /// (action-safe 5%). Zero on screens that show every pixel; the Web's
+    /// come from the page (a phone's notch) at run time.
+    pub safe_area: (u8, u8),
+    /// Most UI nodes one screen lays out ([`crate::ui`]); strict mode fails
+    /// a screen past it.
+    pub max_ui_nodes: u16,
+    /// Most 2D draws (fills, sprites, glyphs) one UI screen issues per
+    /// frame; strict mode fails a screen past it.
+    pub max_ui_draws: u16,
 }
 
 /// Why a piece of content does not fit in a target's [`Caps`].
@@ -158,6 +207,10 @@ impl Caps {
         crowd_percent: 100,
         particle_percent: 100,
         load_budget_us: 4_000,
+        family: Family::N64,
+        safe_area: (16, 12),
+        max_ui_nodes: 64,
+        max_ui_draws: 384,
     };
 
     /// An N64 with the Expansion Pak: [`Caps::N64`] with 8 MiB of RDRAM.
@@ -194,6 +247,10 @@ impl Caps {
         crowd_percent: 100,
         particle_percent: 100,
         load_budget_us: 6_000,
+        family: Family::N3ds,
+        safe_area: (0, 0),
+        max_ui_nodes: 128,
+        max_ui_draws: 2048,
     };
 
     /// A New Nintendo 3DS (or New 2DS XL) with the speedup on: 804 MHz, the
@@ -234,6 +291,10 @@ impl Caps {
         crowd_percent: 100,
         particle_percent: 100,
         load_budget_us: 8_000,
+        family: Family::Pc,
+        safe_area: (0, 0),
+        max_ui_nodes: 512,
+        max_ui_draws: 16_384,
     };
 
     /// A web browser (WebGPU, or WebGL2 where there is none; issue #47):
@@ -265,6 +326,10 @@ impl Caps {
         crowd_percent: 100,
         particle_percent: 100,
         load_budget_us: 8_000,
+        family: Family::Web,
+        safe_area: (0, 0),
+        max_ui_nodes: 512,
+        max_ui_draws: 16_384,
     };
 
     /// The same console's table for `tier`: [`Caps::N64`] ↔

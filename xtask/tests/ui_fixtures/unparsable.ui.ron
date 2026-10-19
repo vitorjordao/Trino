@@ -1,0 +1,7 @@
+// `ui check` fixture: not a screen at all (a kind without its parentheses
+// is fine, an unknown field is not).
+(
+    version: 1,
+    name: "unparsable",
+    root: (colour: Red),
+)

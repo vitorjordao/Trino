@@ -87,7 +87,7 @@ pub fn watch(
         .watch(&watched_root, RecursiveMode::Recursive)
         .map_err(|e| format!("failed to watch {}: {e}", watched_root.display()))?;
     if let Some(project) = watched_root.parent() {
-        for dir in ["scenes", "prefabs"] {
+        for dir in ["scenes", "prefabs", crate::ui::UI_DIR] {
             let d = project.join(dir);
             if d.is_dir() {
                 debouncer

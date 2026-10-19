@@ -11,3 +11,8 @@ formats = { n64 = "CI4" }
 
 [sounds.beep]
 file = "sounds/beep.wav"
+
+# The engine's pixel font: what the UI screens in ui/ draw with.
+[fonts.trino5x7]
+file = "fonts/trino5x7.png"
+cell = [6, 10]

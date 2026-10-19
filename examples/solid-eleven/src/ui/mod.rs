@@ -12,6 +12,11 @@
 
 pub mod controls;
 pub mod i18n;
+/// The pause menu, exported from `ui/pause.ui.ron` (`cargo xtask ui export`;
+/// included, so rustfmt leaves the generated text as it is).
+pub mod pause_gen {
+    include!("pause_gen.rs");
+}
 pub mod screens;
 
 use trino_core::{Color, FontId, Rect, Renderer, TextAlign, TextParams, Vec2};

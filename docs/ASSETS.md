@@ -45,6 +45,8 @@ assets/
 | Scene (`*.scene.ron`) | `TSCN` blob | `TSCN` blob, N64 variants | `TSCN` blob, 3DS variants | `TSCN` blob, Web variants |
 | Particle effect (`*.particles.ron`) | `TPFX` with the PC cap | `TPFX` with the N64 cap | `TPFX` with the 3DS cap | `TPFX` with the Web cap (else the PC's) |
 | `assets/quality.ron` + `trino.toml [pc.quality]` (the presets) | `quality/presets` text blob | nothing (fixed quality) | nothing (fixed quality) | `quality/presets` in the pack |
+| UI screen (`ui/<name>.ui.ron`, no manifest entry) | `TUIL` blob `ui/<name>` | `TUIL` blob | `TUIL` blob | `TUIL` blob in the pack |
+| String table (`assets/i18n/<lang>.ron`, no manifest entry) | `TSTR` blob `i18n/<lang>` | `TSTR` blob | `TSTR` blob | `TSTR` blob in the pack |
 
 `cargo xtask assets pc|n64|3ds|web` runs the bake alone. `cargo xtask build n64|3ds|web`
 runs it as part of the build (the Web packs every asset of a game into one
@@ -389,6 +391,70 @@ a camera can see, so the CC0 KayKit doorway went from 1068 to 75 triangles.
   `cargo xtask scene check` validates them, `scene export` writes one as Rust data,
   `scene budget` reports each console's frame cost.
 
+## UI screens
+
+A screen is a RON file in the project's `ui/` folder (ADR 0024); the bake turns it into the
+`ui/<name>` blob on every target and checks its structure (a duplicate id or a navigation
+target that does not exist fails the bake). Every new project starts with `title`, `pause`,
+`options` and `controls`.
+
+```ron
+(
+    version: 1,
+    name: "pause",
+    on_back: "resume",                 // what B / Escape sends
+    theme: (font: "fonts/trino5x7"),   // and colors: panel, button, focus, focus_text...
+    root: (
+        children: [
+            (kind: Rect(), anchor: Fill, bleed: true, color: Some((0, 0, 0, 160))),
+            (
+                kind: Stack(gap: 6),
+                anchor: Center,
+                children: [
+                    (kind: Text, key: "pause.title", text: "Paused"),
+                    (kind: Button, id: "resume", key: "pause.resume", text: "Resume", on_click: "resume", size: (Px(120), Px(18))),
+                    (kind: Toggle, id: "music", text: "Music", bind: "music"),
+                    (kind: Slider(min: 0, max: 10), id: "volume", text: "Volume", bind: "volume"),
+                    (kind: Text, text: "Press START", visible_on: [N64, N3ds]),
+                    (kind: Button, id: "map", text: "Map", on_click: "map", screen: Bottom),
+                ],
+            ),
+        ],
+    ),
+)
+```
+
+- **Kinds:** containers `Overlay`, `Stack()`, `Grid()`, `Scroll()`, `List()`; leaves `Text`,
+  `Image(sprite: "sprites/x")`, `Rect()`, `Button`, `Toggle`, `Slider()`, `Model3d(model:
+  "models/x")`. A kind with settings needs its parentheses even without any (`Stack()`).
+- **Layout:** `size: (Fit | Px(n) | Percent(n) | Fill, ...)`, `anchor` (nine points or
+  `Fill`), `offset`, `padding`, `min`/`max`, in virtual units against `reference` (320×240
+  by default; whole-pixel scaling). `bleed: true` ignores the safe area; `screen: Bottom`
+  is the 3DS touch screen (the main screen elsewhere); `visible_on: [N64, N3ds, Pc, Web]`.
+- **Data:** `text` (`{}` takes the bound value), `key` (a string table entry, `text` is
+  the default), `bind` (a value the game sets: `ui.set("volume", 7)`), `visible_if` and
+  `enabled_if` (a bound value), `overflow: Visible | Clip | Ellipsis | Wrap`, `nav: (down:
+  "id")` overrides, `preview: {"volume": Int(7)}` for the tools.
+- **String tables:** `assets/i18n/en-US.ron` is `Strings(lang: "en-US", fallback: "",
+  entries: {"pause.title": "Paused"})`; `i18n/<lang>` blobs, read with `StringsBlob`.
+
+The game keeps a `ScreenBlob::new("pause")`, fetches it in `update_with` (it re-parses after
+a live edit), and drives a `Ui<N>` with it; a game without blobs (tests, a server) uses
+`cargo xtask ui export ui/pause.ui.ron src/ui/pause_gen.rs` and `include!`s the file.
+
+```sh
+cargo xtask ui check [screen..] [--platform n64] [--lang pt-BR] [--json]   # every target × language
+cargo xtask ui shot pause --platform 3ds --lang pt-BR --focus quit --out pause.png
+cargo xtask ui export pause src/ui/pause_gen.rs
+cargo xtask ui list --json
+```
+
+`ui check` fails on any issue: a control the pad cannot reach (an error on the N64 and the
+3DS), two controls whose boxes overlap, a screen over `Caps::max_ui_nodes` or
+`max_ui_draws`, a text that overflows its box in any language, a glyph the font lacks, a
+font, sprite or model not in the manifest, a key in no table. The editor's
+UI tab edits the same file and shows the focus order, the overflows and each target.
+
 ## Checking your work
 
 1. `cargo xtask assets pc` (and a console build when the toolchains are installed): format
@@ -399,4 +465,5 @@ a camera can see, so the CC0 KayKit doorway went from 1068 to 75 triangles.
    `cargo xtask impostor check` for impostors, `cargo xtask quality check` for the
    presets.
 4. `cargo xtask assets check` (and `assets report`) when groups or scenes changed.
-5. `cargo xtask test`.
+5. `cargo xtask ui check` when screens or string tables changed.
+6. `cargo xtask test`.

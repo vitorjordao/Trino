@@ -1,0 +1,11 @@
+// `ui check` fixture: "b" cannot be reached with the pad from "a" (whose
+// overrides all point at itself) — an error on the N64 and the 3DS, a
+// warning on the PC and the Web (the mouse reaches it).
+(
+    version: 1,
+    name: "unreachable",
+    root: (children: [
+        (kind: Button, id: "a", text: "A", nav: (up: "a", down: "a", left: "a", right: "a")),
+        (kind: Button, id: "b", text: "B", anchor: BottomRight),
+    ]),
+)

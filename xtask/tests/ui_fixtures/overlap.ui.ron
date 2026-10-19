@@ -1,0 +1,10 @@
+// `ui check` fixture: two buttons whose boxes overlap — a click or a tap
+// in the shared corner could mean either (both stay reachable by the pad).
+(
+    version: 1,
+    name: "overlap",
+    root: (children: [
+        (kind: Button, id: "a", text: "A", anchor: Center, size: (Px(60), Px(20))),
+        (kind: Button, id: "b", text: "B", anchor: Center, offset: (30, 10), size: (Px(60), Px(20))),
+    ]),
+)

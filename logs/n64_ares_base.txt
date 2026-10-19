@@ -1,0 +1,54 @@
+[ares] TRINO_STEP:text
+[ares] TRINO_STEP:blob
+[ares] TRINO_STEP:save
+[ares] TRINO_STEP:textured_3d
+[ares] TRINO_STEP:textured_3d probed 4 quadrants
+[ares] TRINO_STEP:texture filter and detail
+[ares] TRINO_STEP:texture filter and detail probed
+[ares] TRINO_STEP:texture formats
+[ares] TRINO_STEP:texture formats probed 9 formats
+[ares] TRINO_STEP:billboards
+[ares] TRINO_STEP:billboards probed
+[ares] TRINO_STEP:occlusion
+[ares] TRINO_STEP:occlusion probed
+[ares] TRINO_STEP:fill rect
+[ares] TRINO_STEP:fill rect probed
+[ares] TRINO_STEP:ui layout
+[ares] TRINO_STEP:ui layout probed focus, pad and touch
+[ares] TRINO_STEP:dual screen
+[ares] TRINO_STEP:dual screen single screen (collapsed)
+[ares] TRINO_STEP:smooth skin
+[ares] TRINO_STEP:palette
+[ares] TRINO_STEP:palette probed 3 slots
+[ares] TRINO_STEP:instancing
+[ares] TRINO_STEP:instancing probed
+[ares] TRINO_STEP:local lights
+[ares] TRINO_STEP:local lights probed
+[ares] TRINO_STEP:ambient occlusion
+[ares] TRINO_STEP:ambient occlusion probed
+[ares] TRINO_STEP:water
+[ares] TRINO_STEP:water probed
+[ares] TRINO_STEP:impostor
+[ares] TRINO_STEP:impostor probed
+[ares] TRINO_STEP:particles
+[ares] TRINO_STEP:particles cap 8
+[ares] TRINO_STEP:portals
+[ares] TRINO_STEP:hw tier
+[ares] TRINO_STEP:hw tier base ram=4M cores=1 data=base sparks=4
+[ares] TRINO_STEP:quality
+[ares] TRINO_STEP:quality low fixed lod=100 particles=8
+[ares] TRINO_STEP:engine ok
+[ares] TRINO_STEP:asset groups
+[ares] TRINO_STEP:asset groups ok load_frames=2 level_bytes=2415 heap_baseline=1556288 heap_drift=2920 cycles=417 soak_frames=1000
+[ares] TRINO_STEP:asset groups took 16996ms
+[ares] TRINO_STEP:audio
+[ares] TRINO_STEP:audio codecs
+[ares] TRINO_STEP:audio cost
+[ares] TRINO_STEP:input
+[ares] TRINO_STEP:showcase demo
+[ares] TRINO_STEP:baked scene
+[ares] TRINO_STEP:golden frame
+[ares] TRINO_STEP:castle64 golden frame
+[ares] TRINO_STEP:river golden frame
+[ares] TRINO_TEST_PASS
+[n64] TEST PASS (without the Expansion Pak)

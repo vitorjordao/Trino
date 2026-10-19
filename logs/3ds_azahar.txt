@@ -1,0 +1,120 @@
+TRINO_STEP:text
+TRINO_STEP:blob
+TRINO_STEP:save
+TRINO_STEP:textured_3d
+TRINO_STEP:textured_3d probed 4 quadrants
+TRINO_STEP:texture filter and detail
+TRINO_STEP:texture filter and detail probed
+TRINO_STEP:texture formats
+TRINO_STEP:texture formats probed 9 formats
+TRINO_STEP:billboards
+TRINO_STEP:billboards probed
+TRINO_STEP:occlusion
+TRINO_STEP:occlusion probed
+TRINO_STEP:fill rect
+TRINO_STEP:fill rect probed
+TRINO_STEP:ui layout
+TRINO_STEP:ui layout probed focus, pad and touch
+TRINO_STEP:dual screen
+TRINO_STEP:dual screen probed both screens
+TRINO_STEP:smooth skin
+TRINO_STEP:palette
+TRINO_STEP:palette probed 3 slots
+TRINO_STEP:instancing
+TRINO_STEP:instancing probed
+TRINO_STEP:local lights
+TRINO_STEP:local lights probed
+TRINO_STEP:ambient occlusion
+TRINO_STEP:ambient occlusion probed
+TRINO_STEP:water
+TRINO_STEP:water probed
+TRINO_STEP:impostor
+TRINO_STEP:impostor probed
+TRINO_STEP:particles
+TRINO_STEP:particles cap 16
+TRINO_STEP:portals
+TRINO_STEP:hw tier
+TRINO_STEP:hw tier expanded ram=64M cores=2 data=expanded sparks=6
+TRINO_STEP:quality
+TRINO_STEP:quality medium fixed lod=100 particles=16
+TRINO_STEP:engine ok
+TRINO_STEP:worker
+TRINO_STEP:worker core=2 queued=8 us=6105
+TRINO_STEP:asset groups
+TRINO_STEP:asset groups ok load_frames=1 level_bytes=1183 heap_baseline=5894016 heap_drift=256 cycles=292 soak_frames=600
+TRINO_STEP:asset groups took 10427ms worker=2
+TRINO_STEP:audio
+TRINO_STEP:audio codecs
+TRINO_STEP:input
+TRINO_STEP:showcase demo
+TRINO_STEP:baked scene
+TRINO_STEP:gpu tnl hub draws=26 of 27 gpu_tris=603 off_gpu=NearPlane:1 cpu_draws_reference=0 differ=6/960 mean=0.56
+TRINO_STEP:gpu tnl showcase-fog draws=51 of 102 gpu_tris=3011 off_gpu=Flat:22,Offscreen:17,TexturedMesh:14,Skinned:3,NearPlane:1 cpu_draws_reference=0 differ=1/960 mean=0.69
+TRINO_STEP:gpu tnl water draws=2 of 2 gpu_tris=140 off_gpu=TexturedMesh:1 cpu_draws_reference=0 differ=0/960 mean=0.09
+TRINO_STEP:golden frame
+TRINO_STEP:showcase panel
+TRINO_STEP:showcase panel probed
+TRINO_STEP:river golden frame
+TRINO_STEP:texture formats golden frame
+TRINO_TEST_PASS
+[3ds] TEST PASS (as a New 3DS)
+TRINO_STEP:text
+TRINO_STEP:blob
+TRINO_STEP:save
+TRINO_STEP:textured_3d
+TRINO_STEP:textured_3d probed 4 quadrants
+TRINO_STEP:texture filter and detail
+TRINO_STEP:texture filter and detail probed
+TRINO_STEP:texture formats
+TRINO_STEP:texture formats probed 9 formats
+TRINO_STEP:billboards
+TRINO_STEP:billboards probed
+TRINO_STEP:occlusion
+TRINO_STEP:occlusion probed
+TRINO_STEP:fill rect
+TRINO_STEP:fill rect probed
+TRINO_STEP:ui layout
+TRINO_STEP:ui layout probed focus, pad and touch
+TRINO_STEP:dual screen
+TRINO_STEP:dual screen probed both screens
+TRINO_STEP:smooth skin
+TRINO_STEP:palette
+TRINO_STEP:palette probed 3 slots
+TRINO_STEP:instancing
+TRINO_STEP:instancing probed
+TRINO_STEP:local lights
+TRINO_STEP:local lights probed
+TRINO_STEP:ambient occlusion
+TRINO_STEP:ambient occlusion probed
+TRINO_STEP:water
+TRINO_STEP:water probed
+TRINO_STEP:impostor
+TRINO_STEP:impostor probed
+TRINO_STEP:particles
+TRINO_STEP:particles cap 16
+TRINO_STEP:portals
+TRINO_STEP:hw tier
+TRINO_STEP:hw tier base ram=64M cores=1 data=base sparks=4
+TRINO_STEP:quality
+TRINO_STEP:quality low fixed lod=100 particles=16
+TRINO_STEP:engine ok
+TRINO_STEP:worker
+TRINO_STEP:worker core=1 queued=8 us=21486
+TRINO_STEP:asset groups
+TRINO_STEP:asset groups ok load_frames=2 level_bytes=1183 heap_baseline=5884536 heap_drift=256 cycles=214 soak_frames=600
+TRINO_STEP:asset groups took 10479ms worker=1
+TRINO_STEP:audio
+TRINO_STEP:audio codecs
+TRINO_STEP:input
+TRINO_STEP:showcase demo
+TRINO_STEP:baked scene
+TRINO_STEP:gpu tnl hub draws=26 of 27 gpu_tris=603 off_gpu=NearPlane:1 cpu_draws_reference=0 differ=6/960 mean=0.56
+TRINO_STEP:gpu tnl showcase-fog draws=51 of 102 gpu_tris=3011 off_gpu=Flat:22,Offscreen:17,TexturedMesh:14,Skinned:3,NearPlane:1 cpu_draws_reference=0 differ=1/960 mean=0.69
+TRINO_STEP:gpu tnl water draws=2 of 2 gpu_tris=140 off_gpu=TexturedMesh:1 cpu_draws_reference=0 differ=0/960 mean=0.09
+TRINO_STEP:golden frame
+TRINO_STEP:showcase panel
+TRINO_STEP:showcase panel probed
+TRINO_STEP:river golden frame
+TRINO_STEP:texture formats golden frame
+TRINO_TEST_PASS
+[3ds] TEST PASS (as an old 3DS)

@@ -1,0 +1,5 @@
+ui/controls.ui.ron: ok (pc 10/512 nodes 52/16384 draws, n64 10/64 nodes 52/384 draws, 3ds 10/128 nodes 52/2048 draws, web 10/512 nodes 52/16384 draws)
+ui/options.ui.ron: ok (pc 10/512 nodes 57/16384 draws, n64 8/64 nodes 39/384 draws, 3ds 8/128 nodes 39/2048 draws, web 9/512 nodes 48/16384 draws)
+ui/pause.ui.ron: ok (pc 8/512 nodes 39/16384 draws, n64 8/64 nodes 39/384 draws, 3ds 8/128 nodes 39/2048 draws, web 8/512 nodes 39/16384 draws)
+ui/title.ui.ron: ok (pc 7/512 nodes 43/16384 draws, n64 7/64 nodes 31/384 draws, 3ds 7/128 nodes 31/2048 draws, web 7/512 nodes 43/16384 draws)
+ui check: 4 screen(s), 4 target(s), 1 language(s): 0 error(s), 0 warning(s)

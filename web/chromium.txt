@@ -1,0 +1,14 @@
+[web-test] chromium-webgl2 (153.0.8010.12): PASS in 17.7 s · ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver) (Gl) · textures BC
+[web-test] chromium-webgl2: audio codecs ok, 154 frames in 2550 ms (longest gap 16 ms), audio clock 8.861 s: rate=44100 streamed_frames=100921 stream_bytes=199936 resident_bytes=815468 underruns=0
+[web-test] chromium-webgl2: TRINO_AUDIO: state=running rate=44100 resident_bytes=815468 voices=0 streams=0 stream_bytes=0 underruns=0 streamed_frames=115556
+[web-test] chromium-webgl2: TRINO_AUDIO: state=running rate=44100 resident_bytes=1442194 voices=4 streams=1 stream_bytes=199936 underruns=2 streamed_frames=288747
+[web-test] chromium-webgpu (153.0.8010.12): PASS in 17.9 s · browser adapter (BrowserWebGpu) · textures BC
+[web-test] chromium-webgpu: audio codecs ok, 155 frames in 2566 ms (longest gap 17 ms), audio clock 8.461 s: rate=44100 streamed_frames=101048 stream_bytes=199936 resident_bytes=815468 underruns=0
+[web-test] chromium-webgpu: TRINO_AUDIO: state=running rate=44100 resident_bytes=815468 voices=0 streams=0 stream_bytes=0 underruns=0 streamed_frames=115556
+[web-test] chromium-webgpu: TRINO_AUDIO: state=running rate=44100 resident_bytes=1442194 voices=3 streams=1 stream_bytes=196864 underruns=2 streamed_frames=268779
+[web] chromium-webgl2: tests/golden/web/showcase.png: mean diff 0.05, 0.00% far pixels (limits 3, 2.0%)
+[web] chromium-webgl2: tests/golden/web/castle64_hub.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[web] chromium-webgl2: tests/golden/web/texture_formats.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[web] chromium-webgpu: tests/golden/web/showcase.png: mean diff 0.05, 0.00% far pixels (limits 3, 2.0%)
+[web] chromium-webgpu: tests/golden/web/castle64_hub.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[web] chromium-webgpu: tests/golden/web/texture_formats.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)

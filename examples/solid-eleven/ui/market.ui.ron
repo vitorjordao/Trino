@@ -1,0 +1,337 @@
+// Solid Eleven's transfer market (issue #95): the sort keys, the players
+// (five rows, three at large text, the game scrolling `cur.market_top`),
+// the selected player's card, the deal. The game keeps the cursor
+// (`cur.market`), the sort (X) and buying or selling (Y, L, R), and draws
+// the portraits, bars, radar and the deal's slanted button into their
+// boxes. At 150 % text and up the selected row opens with the player's age
+// and stats, the sort joins the mode, and the list scrolls (`_big` ids).
+//   cargo xtask ui export examples/solid-eleven/ui/market.ui.ron examples/solid-eleven/src/ui/market_gen.rs
+(
+    version: 1,
+    name: "se_market",
+    on_back: "back",
+    theme: (
+        font: "fonts/se_ui",
+        text: Some((236, 240, 255, 255)),
+        dim: Some((150, 160, 196, 255)),
+        panel: Some((16, 20, 46, 230)),
+        button: Some((16, 20, 46, 230)),
+        button_text: Some((236, 240, 255, 255)),
+        focus: Some((30, 60, 130, 235)),
+        focus_text: Some((236, 240, 255, 255)),
+        accent: Some((40, 210, 255, 255)),
+        pressed: Some((50, 110, 240, 255)),
+    ),
+    preview: {
+    "small": Bool(true),
+    "any": Bool(true),
+    "rows": Int(5),
+    "name": Text("10. RODRIGUES (MEI)"),
+    "ovr": Text("GER 77"),
+    "price": Text("12.500"),
+    "club": Text("ROU"),
+    "sorts": Int(4),
+    "on": Bool(true),
+    "sort": Text("PREÇO"),
+    "card_name": Text("RODRIGUES"),
+    "pos": Text("POSIÇÃO: MEI"),
+    "age": Text("IDADE: 24"),
+    "team": Text("TIME: ROU"),
+    "stat0": Text("VELOCIDADE: 74"),
+    "deal": Text("COMPRAR - 12.500"),
+    "balance": Text("SALDO: 19.020 MOEDAS"),
+    "mode": Text("COMPRAR"),
+    "btn.a": Text("ENTER"),
+    "btn.b": Text("ESC"),
+    "btn.x": Text("C"),
+    "btn.y": Text("V"),
+    },
+    root: (
+        children: [
+            (kind: Rect(), anchor: Fill, bleed: true, color: Some((6, 8, 20, 0))),
+            (
+                kind: Stack(gap: 4, align: Stretch),
+                anchor: StretchCenter,
+                size: (Fill, Fill),
+                max: (320, 0),
+                children: [
+                    (
+                        kind: Stack(dir: Horizontal, gap: 4, align: Center, justify: SpaceBetween, wrap: true),
+                        id: "header_row",
+                        size: (Fill, Fit),
+                        min: (200, 22),
+                        padding: (0, 3, 8, 3),
+                        children: [
+                            (
+                                kind: Stack(dir: Horizontal, gap: 4, align: Center),
+                                id: "header",
+                                children: [
+                                    (kind: Button, id: "back", text: "<", on_click: "back", min: (20, 16), color: Some((40, 210, 255, 0)), padding: (4, 1, 4, 1)),
+                                    (kind: Text, key: "transfers", text: "TRANSFERS"),
+                                ],
+                            ),
+                            (
+                                kind: Stack(dir: Horizontal, gap: 4, align: Center),
+                                id: "header_side",
+                                children: [
+                                    (
+                                        kind: Stack(gap: 0, align: End),
+                                        children: [
+                                            (kind: Text, bind: "balance", text: "{}", color: Some((255, 214, 40, 255))),
+                                            (kind: Text, bind: "mode", text: "{}", color: Some((190, 255, 60, 255))),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                        ],
+                    ),
+                    (
+                        kind: Stack(dir: Horizontal, gap: 4),
+                        size: (Fill, Fill),
+                        visible_if: "small",
+                        padding: (2, 0, 2, 0),
+                        children: [
+                            (
+                                kind: List(gap: 3, max: 4),
+                                bind: "sorts",
+                                min: (44, 0),
+                                max: (44, 0),
+                                size: (Fit, Fit),
+                                children: [
+                                    (
+                                        kind: Overlay,
+                                        size: (Fill, Fit),
+                                        children: [
+                                            (kind: Rect(border: 1, border_color: Some((190, 255, 60, 255))), anchor: Fill, size: (Fill, Fill), visible_if: "on"),
+                                            (kind: Rect(border: 1, border_color: Some((60, 70, 110, 255))), anchor: Fill, size: (Fill, Fill), visible_if: "off"),
+                                            (kind: Text, bind: "sort", text: "{}", color: Some((190, 255, 60, 255)), align: Center, size: (Fill, Fit), min: (0, 17), visible_if: "on"),
+                                            (kind: Text, bind: "sort", text: "{}", color: Some((150, 160, 196, 255)), align: Center, size: (Fill, Fit), min: (0, 17), visible_if: "off"),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                            (
+                                kind: Scroll(gap: 0),
+                                min: (106, 0),
+                                max: (106, 0),
+                                size: (Fit, Fill),
+                                children: [
+                                    (
+                                        kind: List(gap: 2, max: 5),
+                                        bind: "rows",
+                                        size: (Fill, Fit),
+                                        children: [
+                                            (
+                                                kind: Overlay,
+                                                size: (Fill, Fit),
+                                                children: [
+                                                    (kind: Button, id: "row", on_click: "pick", anchor: Fill, size: (Fill, Fill)),
+                                                    (
+                                                        kind: Stack(dir: Horizontal, gap: 3, align: Center),
+                                                        size: (Fill, Fit),
+                                                        min: (0, 32),
+                                                        padding: (3, 1, 4, 1),
+                                                        children: [
+                                                            (kind: Overlay, id: "portrait", min: (16, 16)),
+                                                            (
+                                                                kind: Stack(gap: 0, align: Stretch),
+                                                                size: (Fill, Fit),
+                                                                children: [
+                                                                    (kind: Text, bind: "name", text: "{}", size: (Fill, Fit), overflow: Ellipsis),
+                                                                    (kind: Text, bind: "ovr", text: "{}", color: Some((150, 160, 196, 255))),
+                                                                    (
+                                                                        kind: Stack(dir: Horizontal, justify: SpaceBetween, wrap: true),
+                                                                        size: (Fill, Fit),
+                                                                        children: [
+                                                                            (kind: Text, bind: "price", text: "{}", color: Some((255, 214, 40, 255))),
+                                                                            (kind: Text, bind: "club", text: "{}"),
+                                                                        ],
+                                                                    ),
+                                                                ],
+                                                            ),
+                                                        ],
+                                                    ),
+                                                ],
+                                            ),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                            (kind: Overlay, size: (Fill, Fill)),
+                            (
+                                kind: Rect(border: 1, border_color: Some((60, 70, 130, 255))),
+                                id: "card",
+                                color: Some((0, 0, 0, 0)),
+                                min: (98, 0),
+                                max: (98, 0),
+                                size: (Fit, Fill),
+                                padding: (4, 2, 3, 2),
+                                visible_if: "any",
+                                children: [
+                                    (
+                                        kind: Stack(gap: 0, align: Stretch),
+                                        size: (Fill, Fit),
+                                        children: [
+                                            (kind: Text, bind: "card_name", text: "{}", overflow: Ellipsis, size: (Fill, Fit)),
+                                            (kind: Text, bind: "pos", text: "{}", color: Some((255, 214, 40, 255))),
+                                            (kind: Text, bind: "age", text: "{}", color: Some((255, 214, 40, 255))),
+                                            (kind: Text, bind: "team", text: "{}", color: Some((255, 214, 40, 255))),
+                                            (
+                                                kind: Stack(gap: 1, align: Stretch),
+                                                size: (Fill, Fit),
+                                                padding: (0, 3, 0, 0),
+                                                children: [
+                                                    (
+                                                        kind: Stack(gap: 1, align: Stretch),
+                                                        size: (Fill, Fit),
+                                                        children: [
+                                                            (kind: Text, bind: "stat0", text: "{}"),
+                                                            (kind: Overlay, id: "bar0", size: (Px(66), Px(3))),
+                                                        ],
+                                                    ),
+                                                    (
+                                                        kind: Stack(gap: 1, align: Stretch),
+                                                        size: (Fill, Fit),
+                                                        children: [
+                                                            (kind: Text, bind: "stat1", text: "{}"),
+                                                            (kind: Overlay, id: "bar1", size: (Px(66), Px(3))),
+                                                        ],
+                                                    ),
+                                                    (
+                                                        kind: Stack(gap: 1, align: Stretch),
+                                                        size: (Fill, Fit),
+                                                        children: [
+                                                            (kind: Text, bind: "stat2", text: "{}"),
+                                                            (kind: Overlay, id: "bar2", size: (Px(66), Px(3))),
+                                                        ],
+                                                    ),
+                                                    (
+                                                        kind: Stack(gap: 1, align: Stretch),
+                                                        size: (Fill, Fit),
+                                                        children: [
+                                                            (kind: Text, bind: "stat3", text: "{}"),
+                                                            (kind: Overlay, id: "bar3", size: (Px(66), Px(3))),
+                                                        ],
+                                                    ),
+                                                ],
+                                            ),
+                                            (kind: Text, key: "for_sale", text: "FOR SALE", color: Some((190, 255, 60, 255))),
+                                            (kind: Overlay, id: "radar", size: (Fill, Px(32))),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                        ],
+                    ),
+                    (
+                        kind: Overlay,
+                        size: (Fill, Fit),
+                        visible_if: "small",
+                        children: [
+                            (
+                                kind: Overlay,
+                                id: "deal",
+                                anchor: Top,
+                                visible_if: "any",
+                                children: [
+                                    (kind: Text, bind: "deal", text: "{}", color: Some((18, 22, 52, 255)), align: Center, min: (100, 16), padding: (8, 2, 8, 2)),
+                                ],
+                            ),
+                        ],
+                    ),
+                    (
+                        kind: Scroll(gap: 0),
+                        size: (Fill, Fill),
+                        visible_if: "big",
+                        padding: (6, 0, 6, 0),
+                        children: [
+                            (
+                                kind: List(gap: 2, max: 5),
+                                bind: "rows",
+                                size: (Fill, Fit),
+                                children: [
+                                    (
+                                        kind: Overlay,
+                                        size: (Fill, Fit),
+                                        children: [
+                                            (kind: Button, id: "row_big", on_click: "pick", anchor: Fill, size: (Fill, Fill)),
+                                            (
+                                                kind: Stack(dir: Horizontal, gap: 3, align: Center),
+                                                size: (Fill, Fit),
+                                                min: (0, 32),
+                                                padding: (3, 1, 4, 1),
+                                                children: [
+                                                    (kind: Overlay, id: "portrait_big", min: (16, 16)),
+                                                    (
+                                                        kind: Stack(gap: 0, align: Stretch),
+                                                        size: (Fill, Fit),
+                                                        children: [
+                                                            (kind: Text, bind: "name", text: "{}", size: (Fill, Fit), overflow: Wrap),
+                                                            (kind: Text, bind: "ovr", text: "{}", color: Some((150, 160, 196, 255))),
+                                                            (
+                                                                kind: Stack(dir: Horizontal, justify: SpaceBetween, wrap: true),
+                                                                size: (Fill, Fit),
+                                                                children: [
+                                                                    (kind: Text, bind: "price", text: "{}", color: Some((255, 214, 40, 255))),
+                                                                    (kind: Text, bind: "club", text: "{}"),
+                                                                ],
+                                                            ),
+                                                                (kind: Text, bind: "row_stats", text: "{}", color: Some((40, 210, 255, 255)), overflow: Wrap, visible_if: "is_sel"),
+                                                        ],
+                                                    ),
+                                                ],
+                                            ),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                        ],
+                    ),
+                    (
+                        kind: Stack(dir: Horizontal, gap: 3, wrap: true),
+                        size: (Fill, Fit),
+                        padding: (6, 0, 0, 3),
+                        children: [
+                            (
+                                kind: Stack(dir: Horizontal, gap: 3, align: Center),
+                                id: "hint_a",
+                                padding: (2, 2, 5, 2),
+                                children: [
+                                    (kind: Rect(), color: Some((70, 210, 90, 255)), padding: (3, 0, 3, 0), min: (11, 0), children: [(kind: Text, bind: "btn.a", text: "{}", color: Some((18, 22, 52, 255)), anchor: Center)]),
+                                    (kind: Text, bind: "act_label", text: "{}"),
+                                ],
+                            ),
+                            (
+                                kind: Stack(dir: Horizontal, gap: 3, align: Center),
+                                id: "hint_b",
+                                padding: (2, 2, 5, 2),
+                                children: [
+                                    (kind: Rect(), color: Some((230, 50, 70, 255)), padding: (3, 0, 3, 0), min: (11, 0), children: [(kind: Text, bind: "btn.b", text: "{}", color: Some((18, 22, 52, 255)), anchor: Center)]),
+                                    (kind: Text, key: "back", text: "BACK"),
+                                ],
+                            ),
+                            (
+                                kind: Stack(dir: Horizontal, gap: 3, align: Center),
+                                id: "hint_x",
+                                padding: (2, 2, 5, 2),
+                                children: [
+                                    (kind: Rect(), color: Some((50, 110, 240, 255)), padding: (3, 0, 3, 0), min: (11, 0), children: [(kind: Text, bind: "btn.x", text: "{}", color: Some((18, 22, 52, 255)), anchor: Center)]),
+                                    (kind: Text, key: "compare", text: "SORT"),
+                                ],
+                            ),
+                            (
+                                kind: Stack(dir: Horizontal, gap: 3, align: Center),
+                                id: "hint_y",
+                                padding: (2, 2, 5, 2),
+                                children: [
+                                    (kind: Rect(), color: Some((255, 214, 40, 255)), padding: (3, 0, 3, 0), min: (11, 0), children: [(kind: Text, bind: "btn.y", text: "{}", color: Some((18, 22, 52, 255)), anchor: Center)]),
+                                    (kind: Text, key: "swap", text: "SWAP"),
+                                ],
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+        ],
+    ),
+)

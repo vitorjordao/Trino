@@ -35,6 +35,10 @@ pub mod confirm_gen {
 pub mod edit_gen {
     include!("edit_gen.rs");
 }
+/// The transfer market (`ui/market.ui.ron`).
+pub mod market_gen {
+    include!("market_gen.rs");
+}
 /// The career's club pick (`ui/pick.ui.ron`).
 pub mod pick_gen {
     include!("pick_gen.rs");

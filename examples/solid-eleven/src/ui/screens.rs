@@ -23,7 +23,7 @@ use trino_core::i18n::Arg;
 use trino_core::ui::NO_ITEM;
 use trino_core::{Color, Rect, Renderer, Screen, TextAlign, TextBuf, Vec2};
 
-type Buf = TextBuf<48>;
+type Buf = TextBuf<64>;
 
 fn buf() -> Buf {
     TextBuf::new()
@@ -1217,24 +1217,6 @@ fn table(g: &mut SolidElevenGame, r: &mut dyn Renderer, _screen: Vec2) {
 
 // ------------------------------------------------------------------ teams
 
-fn stat_bars(ui: &mut Ui, x: f32, y: f32, p: &PlayerRec, lang: Lang, rows: &[(usize, S)]) {
-    for (k, (a, s)) in rows.iter().enumerate() {
-        let yy = y + k as f32 * 15.0;
-        let mut b = buf();
-        let _ = write!(b, "{}: {}", tr(lang, *s), p.attrs[*a]);
-        ui.text(x, yy, b.as_str(), pal::INK, Size::Small, TextAlign::Left);
-        let v = p.attrs[*a] as f32 / 100.0;
-        let c = if p.attrs[*a] >= 80 {
-            pal::GREEN
-        } else if p.attrs[*a] >= 65 {
-            pal::CYAN
-        } else {
-            pal::ORANGE
-        };
-        ui.bar(Rect::new(x, yy + 11.0, 66.0, 3.0), v, c);
-    }
-}
-
 fn radar_of(ui: &mut Ui, cx: f32, cy: f32, rad: f32, p: &PlayerRec, fill: Color) {
     let v = |a: usize| p.attrs[a] as f32 / 100.0;
     ui.radar(
@@ -1556,249 +1538,190 @@ fn edit(g: &mut SolidElevenGame, r: &mut dyn Renderer, _screen: Vec2) {
 
 // ------------------------------------------------------------------ market
 
-fn market(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
-    let lang = g.settings.lang;
-    let pad = g.pad_layout();
+fn market(g: &mut SolidElevenGame, r: &mut dyn Renderer, _screen: Vec2) {
+    use super::scr::{art, flag, int, txt};
+    let screen = &super::market_gen::SCREEN;
     let (list, n) = g.market_list();
-    let w = &g.world;
-    let mut ui = Ui::new(r, screen);
-    header(&mut ui, &mut g.hits, tr(lang, S::Transfers), true);
-    let mut b = buf();
-    let _ = write!(
-        b,
-        "{}: {} {}",
-        tr(lang, S::Balance),
-        coins(w.clubs[w.user as usize].budget).as_str(),
-        tr(lang, S::Coins)
+    let top = g.cur.market_top;
+    let shown = g.market_rows().min(n.saturating_sub(top));
+    let big = g.big_text();
+    let row = if big { "row_big" } else { "row" };
+    let sel = g.cur.market.min(n.saturating_sub(1));
+    let picked = (n > 0).then(|| list[sel] as usize);
+    let sell = g.cur.market_sell;
+    const STATS: [(usize, S); 4] = [
+        (team::SPEED, S::Speed),
+        (team::SHOT, S::Shot),
+        (team::PASS, S::Pass),
+        (team::DRIBBLE, S::Dribble),
+    ];
+    const SORTS: [S; 4] = [S::Price, S::Position, S::Ovr, S::Team];
+    let user = g.world.user;
+    super::scr::show(
+        g,
+        r,
+        screen,
+        (n > 0).then_some((row, sel.saturating_sub(top) as u16)),
+        super::scr::rev(&(
+            top,
+            sel,
+            sell,
+            g.cur.market_sort,
+            n,
+            g.world.clubs[user as usize].budget,
+            picked,
+        )),
+        |g, key, item| {
+            let lang = g.settings.lang;
+            let w = &g.world;
+            let price = |i: usize| {
+                if sell {
+                    w.sell_price(i)
+                } else {
+                    w.buy_price(i)
+                }
+            };
+            let mut b = buf();
+            match key {
+                "rows" => return int(shown as i32),
+                "any" => return flag(n > 0),
+                "sorts" => return int(4),
+                "sort" => return txt(tr(lang, *SORTS.get(item as usize)?)),
+                "on" => return flag(g.cur.market_sort as u16 == item),
+                "off" => return flag(g.cur.market_sort as u16 != item),
+                "balance" => {
+                    let _ = write!(
+                        b,
+                        "{}: {} {}",
+                        tr(lang, S::Balance),
+                        coins(w.clubs[user as usize].budget).as_str(),
+                        tr(lang, S::Coins)
+                    );
+                    return txt(b.as_str());
+                }
+                "act_label" => return txt(tr(lang, if sell { S::Sell } else { S::Buy })),
+                "mode" => {
+                    let mode = tr(lang, if sell { S::Sell } else { S::Buy });
+                    if !g.big_text() {
+                        return txt(mode);
+                    }
+                    let sort = tr(lang, SORTS[g.cur.market_sort as usize % 4]);
+                    let _ = write!(b, "{mode} - {sort}");
+                    return txt(b.as_str());
+                }
+                _ => {}
+            }
+            if let Some(k) = key.strip_prefix("stat")
+                && let Ok(k) = k.parse::<usize>()
+            {
+                let (a, s) = STATS[k % 4];
+                let _ = write!(b, "{}: {}", tr(lang, s), w.players[picked?].attrs[a]);
+                return txt(b.as_str());
+            }
+            match key {
+                "card_name" => return txt(upper::<16>(w.players[picked?].name()).as_str()),
+                "pos" => {
+                    let p = &w.players[picked?];
+                    let _ = write!(b, "{}: {}", tr(lang, S::Position), pos_short(lang, p.pos));
+                    return txt(b.as_str());
+                }
+                "age" => {
+                    let _ = write!(b, "{}: {}", tr(lang, S::Age), w.players[picked?].age);
+                    return txt(b.as_str());
+                }
+                "team" => {
+                    let i = picked?;
+                    let _ = write!(
+                        b,
+                        "{}: {}",
+                        tr(lang, S::Team),
+                        CLUBS[w.club_of[i] as usize % TEAMS].short
+                    );
+                    return txt(b.as_str());
+                }
+                "deal" => {
+                    let _ = write!(
+                        b,
+                        "{} - {}",
+                        tr(lang, if sell { S::Sell } else { S::Buy }),
+                        coins(price(picked?)).as_str()
+                    );
+                    return txt(b.as_str());
+                }
+                _ => {}
+            }
+            let i = *list[..n].get(top + item as usize)? as usize;
+            let p = &w.players[i];
+            match key {
+                "is_sel" => flag(top + item as usize == sel),
+                "row_stats" => {
+                    let _ = write!(b, "{} {}", tr(lang, S::Age), p.age);
+                    for (a, s) in STATS {
+                        let _ = write!(b, "  {} {}", tr(lang, s), p.attrs[a]);
+                    }
+                    txt(b.as_str())
+                }
+                "name" => txt(name_line(p, lang).as_str()),
+                "ovr" => {
+                    let _ = write!(b, "{} {}", tr(lang, S::Ovr), p.ovr());
+                    txt(b.as_str())
+                }
+                "price" => txt(coins(price(i)).as_str()),
+                "club" => txt(CLUBS[w.club_of[i] as usize % TEAMS].short),
+                _ => None,
+            }
+        },
+        |_, ui, r| {
+            super::scr::chrome(ui, screen, r);
+            if let Some((mut a, size)) = art(r, ui, screen, "card", NO_ITEM) {
+                a.fill(Rect::new(0.0, 0.0, size.x, size.y), pal::PANEL);
+            }
+            if let Some((mut a, size)) = art(r, ui, screen, "deal", NO_ITEM) {
+                a.slant(Rect::new(0.0, 0.0, size.x, size.y), pal::LIME, 4.0);
+            }
+        },
     );
-    ui.slant(Rect::new(196.0, 6.0, 128.0, 14.0), pal::NAVY, 4.0);
-    ui.text(
-        312.0,
-        7.0,
-        b.as_str(),
-        pal::YELLOW,
-        Size::Small,
-        TextAlign::Right,
-    );
-    ui.text(
-        312.0,
-        21.0,
-        tr(lang, if g.cur.market_sell { S::Sell } else { S::Buy }),
-        pal::LIME,
-        Size::Small,
-        TextAlign::Right,
-    );
-    // Sort keys.
-    for (k, s) in [S::Price, S::Position, S::Ovr, S::Team].iter().enumerate() {
-        let y = 36.0 + k as f32 * 20.0;
-        let sel = g.cur.market_sort as usize == k;
-        let rr = Rect::new(4.0, y, 44.0, 17.0);
-        ui.fill(rr, pal::PANEL);
-        ui.border(
-            rr,
-            if sel {
-                pal::LIME
-            } else {
-                Color::rgb(60, 70, 110)
-            },
-            1.0,
-        );
-        ui.text(
-            26.0,
-            y + 3.0,
-            tr(lang, *s),
-            if sel { pal::LIME } else { pal::DIM },
-            Size::Small,
-            TextAlign::Center,
-        );
-    }
-    // The list.
-    for row in 0..5 {
-        let k = g.cur.market_top + row;
-        if k >= n {
-            break;
+    let ui = core::mem::take(&mut g.menu_ui);
+    let portrait_id = if big { "portrait_big" } else { "portrait" };
+    for k in 0..shown {
+        let i = list[top + k] as usize;
+        if let Some((mut a, _)) = art(r, &ui, screen, portrait_id, k as u16) {
+            portrait(&mut a, 0.0, 0.0, &look_of(g, i));
         }
-        let i = list[k] as usize;
-        let p = &w.players[i];
-        let y = 34.0 + row as f32 * 34.0;
-        let sel = g.cur.market == k;
-        let rr = Rect::new(52.0, y, 106.0, 32.0);
-        ui.fill(
-            rr,
-            if sel {
-                Color::rgba(40, 60, 20, 235)
-            } else {
-                pal::PANEL
-            },
-        );
-        ui.border(
-            rr,
-            if sel {
-                pal::LIME
-            } else {
-                Color::rgb(50, 60, 100)
-            },
-            1.0,
-        );
-        portrait(&mut ui, 55.0, y + 8.0, &look_of(g, i));
-        let nl = name_line(p, lang);
-        ui.text(
-            74.0,
-            y + 2.0,
-            nl.as_str(),
-            pal::INK,
-            Size::Small,
-            TextAlign::Left,
-        );
-        let mut bb = buf();
-        let _ = write!(bb, "{} {}", tr(lang, S::Ovr), p.ovr());
-        ui.text(
-            74.0,
-            y + 12.0,
-            bb.as_str(),
-            pal::DIM,
-            Size::Small,
-            TextAlign::Left,
-        );
-        bb.clear();
-        let price = if g.cur.market_sell {
-            w.sell_price(i)
-        } else {
-            w.buy_price(i)
-        };
-        let _ = write!(bb, "{}", coins(price).as_str());
-        ui.text(
-            74.0,
-            y + 21.0,
-            bb.as_str(),
-            pal::YELLOW,
-            Size::Small,
-            TextAlign::Left,
-        );
-        ui.text(
-            154.0,
-            y + 21.0,
-            CLUBS[w.club_of[i] as usize % TEAMS].short,
-            pal::INK,
-            Size::Small,
-            TextAlign::Right,
-        );
-        let hit = ui.rect(rr);
-        g.hits.add(hit, Screen::Top, k as u8);
     }
-    // The selected player's card.
-    if n > 0 {
-        let i = list[g.cur.market.min(n - 1)] as usize;
-        let p = w.players[i];
-        ui.panel(Rect::new(218.0, 34.0, 98.0, 160.0), Color::rgb(60, 70, 130));
-        let name: TextBuf<16> = upper(p.name());
-        ui.text(
-            222.0,
-            36.0,
-            name.as_str(),
-            pal::INK,
-            Size::Small,
-            TextAlign::Left,
-        );
-        let mut bb = buf();
-        let _ = write!(bb, "{}: {}", tr(lang, S::Position), pos_short(lang, p.pos));
-        ui.text(
-            222.0,
-            48.0,
-            bb.as_str(),
-            pal::YELLOW,
-            Size::Small,
-            TextAlign::Left,
-        );
-        bb.clear();
-        let _ = write!(bb, "{}: {}", tr(lang, S::Age), p.age);
-        ui.text(
-            222.0,
-            59.0,
-            bb.as_str(),
-            pal::YELLOW,
-            Size::Small,
-            TextAlign::Left,
-        );
-        bb.clear();
-        let _ = write!(
-            bb,
-            "{}: {}",
-            tr(lang, S::Team),
-            CLUBS[w.club_of[i] as usize % TEAMS].short
-        );
-        ui.text(
-            222.0,
-            70.0,
-            bb.as_str(),
-            pal::YELLOW,
-            Size::Small,
-            TextAlign::Left,
-        );
-        stat_bars(
-            &mut ui,
-            222.0,
-            84.0,
-            &p,
-            lang,
-            &[
-                (team::SPEED, S::Speed),
-                (team::SHOT, S::Shot),
-                (team::PASS, S::Pass),
-                (team::DRIBBLE, S::Dribble),
-            ],
-        );
-        ui.text(
-            222.0,
-            146.0,
-            tr(lang, S::ForSale),
-            pal::LIME,
-            Size::Small,
-            TextAlign::Left,
-        );
-        radar_of(
-            &mut ui,
-            268.0,
-            174.0,
-            15.0,
-            &p,
-            Color::rgba(220, 240, 90, 200),
-        );
-        // The big button.
-        let price = if g.cur.market_sell {
-            w.sell_price(i)
-        } else {
-            w.buy_price(i)
-        };
-        let mut bt = buf();
-        let _ = write!(
-            bt,
-            "{} - {}",
-            tr(lang, if g.cur.market_sell { S::Sell } else { S::Buy }),
-            coins(price).as_str()
-        );
-        ui.slant(Rect::new(110.0, 204.0, 100.0, 16.0), pal::LIME, 4.0);
-        ui.text(
-            160.0,
-            206.0,
-            bt.as_str(),
-            pal::NAVY,
-            Size::Small,
-            TextAlign::Center,
-        );
+    if let Some(i) = picked {
+        let p = g.world.players[i];
+        for (k, (attr, _)) in STATS.iter().enumerate() {
+            const BARS: [&str; 4] = ["bar0", "bar1", "bar2", "bar3"];
+            if let Some((mut a, size)) = art(r, &ui, screen, BARS[k], NO_ITEM) {
+                let v = p.attrs[*attr];
+                let c = if v >= 80 {
+                    pal::GREEN
+                } else if v >= 65 {
+                    pal::CYAN
+                } else {
+                    pal::ORANGE
+                };
+                a.bar(Rect::new(0.0, 0.0, size.x, size.y), v as f32 / 100.0, c);
+            }
+        }
+        if let Some((mut a, size)) = art(r, &ui, screen, "radar", NO_ITEM) {
+            let rad = (size.y * 0.5 - 1.0).min(size.x * 0.5 - 1.0);
+            radar_of(
+                &mut a,
+                size.x * 0.5,
+                size.y * 0.5,
+                rad,
+                &p,
+                Color::rgba(220, 240, 90, 200),
+            );
+        }
     }
-    footer(
-        &mut ui,
-        &mut g.hits,
-        pad,
-        lang,
-        &[
-            (Btn::A, if g.cur.market_sell { S::Sell } else { S::Buy }),
-            (Btn::B, S::Back),
-            (Btn::X, S::Compare),
-            (Btn::Y, S::Swap),
-        ],
-    );
+    g.menu_ui = ui;
+    for k in 0..shown {
+        super::scr::hit(g, screen, row, k as u16, (top + k) as u8);
+    }
+    super::scr::back_hits(g, screen);
 }
 
 // ---------------------------------------------------------------- settings

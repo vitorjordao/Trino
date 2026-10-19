@@ -617,6 +617,7 @@ fn ui_screen(g: &SolidElevenGame) -> bool {
             | Scene::PickClub { .. }
             | Scene::Teams
             | Scene::Edit
+            | Scene::Market
     )
 }
 
@@ -793,8 +794,8 @@ fn every_menu_state_draws_cleanly_in_every_language_and_size() {
         );
     }
     for want in [
-        "Title", "Quick", "PickClub", "Club", "Table", "Teams", "Edit", "Market", "Settings",
-        "Controls", "Confirm", "Match", "Pause", "Trophy",
+        "Title", "Quick", "PickClub", "Club", "Table", "Teams", "Edit", "Market", "Market",
+        "Settings", "Controls", "Confirm", "Match", "Pause", "Trophy",
     ] {
         assert!(report.scenes.contains(want), "never reached {want}");
     }

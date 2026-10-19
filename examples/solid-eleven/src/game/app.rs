@@ -1103,6 +1103,11 @@ impl SolidElevenGame {
         }
     }
 
+    /// Players the market shows at once (fewer, taller ones at large text).
+    pub fn market_rows(&self) -> usize {
+        if self.big_text() { 3 } else { 5 }
+    }
+
     /// Squad rows Teams shows at once (fewer, taller ones at large text).
     pub fn squad_rows(&self) -> usize {
         if self.big_text() { 3 } else { 6 }
@@ -1263,7 +1268,8 @@ impl SolidElevenGame {
         if let Some(id) = tap {
             self.cur.market = id as usize;
         }
-        menu::scroll(&mut self.cur.market_top, self.cur.market, 5);
+        let rows = self.market_rows();
+        menu::scroll(&mut self.cur.market_top, self.cur.market, rows);
         if nav.x {
             self.cur.market_sort = (self.cur.market_sort + 1) % 4;
             self.cur.market = 0;

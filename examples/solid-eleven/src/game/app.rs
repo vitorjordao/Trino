@@ -524,6 +524,7 @@ impl SolidElevenGame {
             self.scene = Scene::Title;
             return;
         };
+        s.view.cam.wide = self.screen.y > 0.0 && (self.screen.x / self.screen.y) > 1.45;
         // Pause sits on its own (rebindable) button; at full time that
         // button may be the one that confirms the result.
         let pause = s.controls.bindings.of(Action::Pause);

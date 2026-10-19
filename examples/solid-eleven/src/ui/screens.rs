@@ -385,6 +385,7 @@ fn trophy(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2, aspect: f
         height: 0.6,
         back: 7.5,
         fov: 0.72,
+        wide: false,
     };
     render::menu::ceremony(
         r,
@@ -2589,10 +2590,11 @@ fn substitutions(
 
         // Name
         let name_idx = s.names[i] as usize % SURNAMES.len();
+        let name: TextBuf<16> = upper(SURNAMES[name_idx]);
         ui.text(
             50.0,
             y + 2.0,
-            SURNAMES[name_idx],
+            name.as_str(),
             pal::INK,
             Size::Small,
             TextAlign::Left,
@@ -2688,10 +2690,11 @@ fn substitutions(
             // Name
             let name_idx =
                 g.world.players[db as usize % team::PLAYERS].surname as usize % SURNAMES.len();
+            let name: TextBuf<16> = upper(SURNAMES[name_idx]);
             ui.text(
                 206.0,
                 y + 2.5,
-                SURNAMES[name_idx],
+                name.as_str(),
                 pal::INK,
                 Size::Small,
                 TextAlign::Left,

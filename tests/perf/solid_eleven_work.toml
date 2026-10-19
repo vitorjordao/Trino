@@ -7,71 +7,71 @@
 # N64 pays.
 
 [frame-29]
-draws = 58
-tris = 1460
-gpu_draws_3ds = 58
+draws = 49
+tris = 976
+gpu_draws_3ds = 49
 rects = 71
 glyphs = 26
 
 [frame-59]
-draws = 59
-tris = 1554
-gpu_draws_3ds = 59
+draws = 74
+tris = 1166
+gpu_draws_3ds = 74
 rects = 71
-glyphs = 26
+glyphs = 27
 
 [frame-89]
-draws = 83
-tris = 1882
-gpu_draws_3ds = 83
-rects = 71
-glyphs = 26
+draws = 53
+tris = 968
+gpu_draws_3ds = 53
+rects = 73
+glyphs = 27
 
 [frame-119]
-draws = 61
-tris = 1408
-gpu_draws_3ds = 61
+draws = 75
+tris = 1138
+gpu_draws_3ds = 75
 rects = 71
-glyphs = 26
+glyphs = 27
 
 [frame-149]
-draws = 62
-tris = 1426
-gpu_draws_3ds = 62
+draws = 64
+tris = 1008
+gpu_draws_3ds = 64
 rects = 71
-glyphs = 26
+glyphs = 27
 
 [frame-179]
-draws = 65
-tris = 1512
-gpu_draws_3ds = 65
+draws = 59
+tris = 948
+gpu_draws_3ds = 59
 rects = 71
-glyphs = 26
+glyphs = 27
 
 [frame-209]
-draws = 61
-tris = 1482
-gpu_draws_3ds = 61
+draws = 56
+tris = 1032
+gpu_draws_3ds = 56
 rects = 71
 glyphs = 27
 
 [frame-239]
-draws = 79
-tris = 1730
-gpu_draws_3ds = 79
-rects = 71
+draws = 44
+tris = 946
+gpu_draws_3ds = 44
+rects = 73
 glyphs = 27
 
 [frame-269]
-draws = 78
-tris = 1734
-gpu_draws_3ds = 78
+draws = 45
+tris = 1022
+gpu_draws_3ds = 45
 rects = 71
 glyphs = 27
 
 [frame-299]
-draws = 74
-tris = 1720
-gpu_draws_3ds = 74
+draws = 45
+tris = 1022
+gpu_draws_3ds = 45
 rects = 71
-glyphs = 29
+glyphs = 27

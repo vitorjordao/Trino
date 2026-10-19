@@ -442,6 +442,8 @@ pub struct CamState {
     pub height: f32,
     pub back: f32,
     pub fov: f32,
+    /// Widescreen (PC/browser) tracks deeper into lateral touchlines.
+    pub wide: bool,
 }
 
 impl CamState {
@@ -450,6 +452,7 @@ impl CamState {
         height: 18.0,
         back: 17.0,
         fov: 0.66,
+        wide: false,
     };
 
     pub fn eye(&self) -> Vec3 {
@@ -480,10 +483,15 @@ impl CamState {
     /// Ease the focus toward the ball (and a little ahead of its run).
     pub fn follow(&mut self, ball: Vec3, vel: Vec3, dt: f32) {
         let ahead = Vec3::new(vel.x * 0.35, 0.0, vel.z * 0.25);
+        let (z_scale, min_z, max_z) = if self.wide {
+            (0.92, -HALF_WID.to_f32() + 4.0, HALF_WID.to_f32() - 4.0)
+        } else {
+            (0.55, -HALF_WID.to_f32() + 12.0, HALF_WID.to_f32() - 8.0)
+        };
         let want = Vec3::new(
-            (ball.x + ahead.x).clamp(-HALF_LEN.to_f32() + 8.0, HALF_LEN.to_f32() - 8.0),
+            (ball.x + ahead.x).clamp(-HALF_LEN.to_f32() + 14.0, HALF_LEN.to_f32() - 14.0),
             0.0,
-            (ball.z + ahead.z).clamp(-HALF_WID.to_f32() + 4.0, HALF_WID.to_f32() - 4.0),
+            ((ball.z + ahead.z) * z_scale).clamp(min_z, max_z),
         );
         let k = (dt * 3.2).min(1.0);
         self.focus = self.focus + (want - self.focus) * k;
@@ -544,6 +552,8 @@ pub(crate) struct Frustum {
     up: Vec3,
     tan_y: f32,
     tan_x: f32,
+    hyp_x: f32,
+    hyp_y: f32,
 }
 
 impl Frustum {
@@ -553,13 +563,18 @@ impl Frustum {
         let right = Vec3::new(0.0, 1.0, 0.0).cross(fwd).normalized();
         let up = fwd.cross(right);
         let tan_y = trino_core::math3d::sin(cam.fov * 0.5) / trino_core::math3d::cos(cam.fov * 0.5);
+        let tan_x = tan_y * aspect;
+        let hyp_x = trino_core::math3d::sqrt(1.0 + tan_x * tan_x);
+        let hyp_y = trino_core::math3d::sqrt(1.0 + tan_y * tan_y);
         Frustum {
             eye,
             fwd,
             right,
             up,
             tan_y,
-            tan_x: tan_y * aspect,
+            tan_x,
+            hyp_x,
+            hyp_y,
         }
     }
 
@@ -572,9 +587,8 @@ impl Frustum {
         }
         let x = d.dot(self.right).abs();
         let y = d.dot(self.up).abs();
-        // Distance past each side plane, conservatively (no normalization:
-        // the planes' normals have length sqrt(1 + tan²) > 1).
-        x - z * self.tan_x < r * (1.0 + self.tan_x) && y - z * self.tan_y < r * (1.0 + self.tan_y)
+        // Distance past each side plane: exact sphere-plane test.
+        x - z * self.tan_x < r * self.hyp_x && y - z * self.tan_y < r * self.hyp_y
     }
 
     /// A ground rectangle (y = 0) may be on screen: exact for a flat tile,
@@ -784,7 +798,9 @@ pub(crate) fn draw_stadium(
         let z = -30.0 + 20.0 * i as f32;
         for (x, (fx, fz)) in [(-60.5f32, WEST), (60.5, EAST)] {
             let p = Vec3::new(x, 0.0, z);
-            if fr.sees(p + Vec3::new(0.0, 5.0, 0.0), 14.0) {
+            let c = p + Vec3::new(fx * -1.55, 4.0, fz * -1.55);
+            let rad = if hifi { 12.5 } else { 11.4 };
+            if fr.sees(c, rad) {
                 let mdl = if hifi {
                     M_STAND_END_HD[i % 2]
                 } else {

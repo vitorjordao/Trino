@@ -133,6 +133,7 @@ pub fn title(
         height: 1.4,
         back: 9.0,
         fov: 0.72,
+        wide: false,
     };
     ceremony(r, looks, anims, aspect, &cam, at, time, retro);
 }
@@ -161,6 +162,7 @@ pub fn pedestal(
         height: 1.15,
         back: 10.9,
         fov: 0.5,
+        wide: false,
     };
     r.set_camera(&cam.camera());
     r.set_light(&Sky::Dusk.light());

@@ -75,6 +75,21 @@ not in the repo. Rebuild them from the job definitions when needed.
 
 ## Debugging a red job
 
+- **An N64 self-test failure that passes locally** (PR #92: the RSP water ripple
+  oracle failed in CI on every rerun, never locally): the ROM's only absolute paths
+  are the toolchain's `library/` sources in panic messages, so CI's
+  `/home/runner/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu` shifts the data
+  layout against yours. Build CI's layout locally with the same nightly and a remap:
+
+  ```sh
+  rustup toolchain install nightly-YYYY-MM-DD --profile minimal -c rust-src  # the job's `rustc -V` date + 1
+  L=$HOME/.rustup/toolchains/nightly-YYYY-MM-DD-x86_64-unknown-linux-gnu
+  RUSTFLAGS="--remap-path-prefix=$L=/home/runner/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu" \
+    TRINO_NIGHTLY=nightly-YYYY-MM-DD TRINO_ARES=docker cargo xtask test n64 --expansion-pak on
+  ```
+
+  `strings target/n64/trino.elf | grep /home/runner` confirms the remap. A failure that
+  follows the layout is a real bug (there: a freed buffer the RSP still read).
 - **The golden mismatch artifact** (`n64-golden-actual`): diff it against
   `tests/golden/n64/showcase.png`. Re-bless only when the change was intended.
 - **A perf gate failure** (`n64` job, `perf gate:` table): a `ROM X, PC baseline Y`

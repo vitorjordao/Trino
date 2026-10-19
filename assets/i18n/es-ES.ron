@@ -1,0 +1,10 @@
+Strings(
+    lang: "es-ES",
+    fallback: "en-US",
+    name: "Español",
+    entries: {
+        "selftest.coins": Plural(one: "{n} moneda", other: "{n} monedas"),
+        "selftest.hello": "Hola",
+        "selftest.price": "Precio: {amount:currency}",
+    },
+)

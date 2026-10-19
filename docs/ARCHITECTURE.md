@@ -237,6 +237,19 @@ control and that the screen fits `Caps::max_ui_nodes` and `max_ui_draws`; the ed
 UI tab edits the same files. Details in [ADR 0024](adr/0024-ui-system.md) and
 [ASSETS.md](ASSETS.md#ui-screens).
 
+### Localization (issue #59)
+
+`trino_core::i18n` holds a game's languages (`Localizer`): string tables with a fallback
+chain, CLDR plural forms and locale formats (numbers, money, dates) written into a
+`TextBuf` with integers only, so every target prints the same digits. Each language's
+baked table also names the fonts it draws with: a glyph-subset atlas per language
+(`chars = "auto"`, `per_language`) or a font for its script. The UI measures and draws
+through that remap (`UiStrings::font`) in one function, so overflow checks and pixels
+agree. `Platform::system_language()` reports the OS, browser or 3DS setting (the N64 has
+none). `cargo xtask i18n check` holds every language to its keys, placeholders, fonts and
+UI boxes on every target; the editor's Localization tab edits the same RON files. Details
+in [ADR 0026](adr/0026-localization.md) and [ASSETS.md](ASSETS.md#localization).
+
 ### Legacy 2D
 
 The 2D-only path the engine started with (the `hello-sprite` and `platformer` examples)

@@ -92,7 +92,8 @@ fn ui_check_accepts_the_shipped_screens() {
     assert!(n64["nodes"].as_u64().unwrap() <= 64);
     // Every new project's starter screens, in its own language and fonts
     // (the template folder holds `ui/` and `assets/manifest.toml`), and
-    // Solid Eleven's pause menu against Solid Eleven's assets.
+    // Solid Eleven's pause menu against Solid Eleven's assets and its two
+    // languages (issue #59).
     let o = xtask(&[
         "ui",
         "check",
@@ -105,7 +106,7 @@ fn ui_check_accepts_the_shipped_screens() {
     let out = text(&o.stdout);
     assert!(o.status.success(), "{out}{}", text(&o.stderr));
     assert!(
-        out.contains("5 screen(s), 4 target(s), 1 language(s): 0 error(s), 0 warning(s)"),
+        out.contains("5 screen(s), 4 target(s), 2 language(s): 0 error(s), 0 warning(s)"),
         "{out}"
     );
 }
@@ -197,11 +198,12 @@ fn ui_check_reports_each_fixture_with_its_platform_and_level() {
         "{}",
         text(&o.stdout)
     );
-    // Warnings fail too (an overflow is a bug a player sees).
+    // Warnings fail too (an overflow is a bug a player sees): once with the
+    // default texts and once per language of the engine's tables (#59).
     let o = xtask(&["ui", "check", &fixture("overflow"), "--platform", "pc"]);
     assert!(!o.status.success());
     assert!(
-        text(&o.stdout).contains("0 error(s), 1 warning(s)"),
+        text(&o.stdout).contains("0 error(s), 4 warning(s)"),
         "{}",
         text(&o.stdout)
     );

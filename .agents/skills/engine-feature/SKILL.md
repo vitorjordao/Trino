@@ -118,6 +118,14 @@ A feature is done only when **PC, N64 and 3DS** all run it and an emulator has s
   (after the mixer: write `{id:08x}.blob` and an index line), `memory.rs` (the plan),
   `watch.rs` and `xtask/src/project.rs`'s `watch` lists (live reload). The Web pack
   takes every baked blob already.
+- **Content the bake generates for a language** (the `i18n/<lang>` tables and
+  `i18n/languages`, issue #59) goes through `asset_pipeline::ui::bake`, which every
+  platform already calls; a manifest option resolved at load (`chars = "auto"`,
+  `per_language` atlases) belongs in `Manifest::load` (`asset_pipeline::i18n::resolve`)
+  so the bakes, the memory plan, the reports and the editor all see the same fonts.
+- **When a runtime value changes what the layout measures** (the language's font, #59),
+  route the layout and the draw through one function (`ui::draw::font_of`) and test
+  that both use it, or overflow checks and pixels disagree.
 - **A RON format an editor round-trips denies unknown fields**
   (`#[serde(default, deny_unknown_fields)]`): with only `default`, a misspelt field
   parses as the default and the next save drops it.

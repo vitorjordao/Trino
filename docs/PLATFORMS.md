@@ -17,6 +17,10 @@ cargo xtask watch pc          # live reload: game code as a dylib, assets rebake
 cargo xtask test              # the workspace suite (same as CI)
 ```
 
+The system language (`Platform::system_language()`, [ADR 0026](adr/0026-localization.md))
+is the OS locale (`sys-locale`); `TRINO_LANG=pt-BR` overrides it for a run (the editor's
+Play passes its preview language that way).
+
 Run modes and switches for `trino-app-pc`:
 
 | Variable | Effect |
@@ -145,6 +149,9 @@ Things to know:
   coplanar surfaces apart.
 - The main stack is 64 KB, and an overflow is silent. Build large structs in place on the
   heap; the self-test fails above 60 KB.
+- **No system language:** `Platform::system_language()` is `None` ([ADR
+  0026](adr/0026-localization.md)). A game starts in its default language and saves the
+  player's choice (a `LangId` is 4 bytes of EEPROM).
 - **Expansion Pak** ([ADR 0020](adr/0020-console-hardware-tiers.md)): the ROM checks the
   RAM at boot and logs `TRINO_HW n64 ram=8M tier=expanded` (or `ram=4M tier=base`).
   `Platform::hw_tier()` and `renderer.caps()` (`Caps::N64_EXPANDED`: 8 MB) follow; content
@@ -212,6 +219,10 @@ Things to know:
   `InputState::pointer_on(Screen::Bottom)` gives touches in its own pixels.
 - Never draw 3D with `C2D_DrawTriangle`: it has one depth per triangle. All 3D goes
   through the shim's citro3d path.
+- **System language** ([ADR 0026](adr/0026-localization.md)): the boot reads the
+  console's language (`CFGU_GetSystemLanguage`) and logs `TRINO_LANG <tag>` after the
+  `TRINO_HW` line. It is a bare language (`pt`, `es`, `zh-CN`): `Localizer::pick` matches
+  it to `pt-BR` by its primary subtag.
 - **New 3DS** ([ADR 0020](adr/0020-console-hardware-tiers.md)): at boot the app asks
   `APT_CheckNew3DS` and turns the 804 MHz speedup and the L2 cache on
   (`osSetSpeedupEnable`), logging `TRINO_HW 3ds new=1 speedup=1 app_ram=…M tier=expanded`.
@@ -256,6 +267,9 @@ A Trino game in a browser tab, from one `wasm32-unknown-unknown` build ([ADR
 0019](adr/0019-web-target.md), issue #47). It runs the PC's own renderer
 (`crates/render-wgpu`, shared by `trino-platform-pc` and `trino-platform-web`): the same
 shaders, the GPU T&L path, per-pixel lights, SSAO and water.
+
+The system language is `navigator.language`; `?lang=pt-BR` overrides it ([ADR
+0026](adr/0026-localization.md)).
 
 **Toolchain:** Rust's `wasm32-unknown-unknown` target (`rustup target add
 wasm32-unknown-unknown`, added for you when missing) and the `wasm-bindgen` CLI at the

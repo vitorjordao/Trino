@@ -105,8 +105,10 @@ fn report_lists_every_texture_biggest_first_with_totals() {
     assert!(o.status.success(), "{}", text(&o.stderr));
     let doc: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
     let textures = doc["textures"].as_array().unwrap();
-    let manifest = std::fs::read_to_string(root().join("assets/manifest.toml")).unwrap();
-    let declared = manifest.matches("\n[sprites.").count() + manifest.matches("\n[fonts.").count();
+    // Every sprite and font atlas, the per-language ones (issue #59) too.
+    let manifest =
+        trino_asset_pipeline::Manifest::load(&root().join("assets/manifest.toml")).unwrap();
+    let declared = manifest.sprites.len() + manifest.fonts.len();
     assert_eq!(textures.len(), declared);
     // Biggest first: the largest platform size never grows down the list.
     let size = |t: &serde_json::Value| {

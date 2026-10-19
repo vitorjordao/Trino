@@ -384,8 +384,11 @@ fn assets_pc_bakes_the_repo_manifest() {
     ]) - not_pc;
     // A font bakes twice under one handle: atlas sprite + glyph table; the
     // project mix (`assets/audio.toml`) is one more asset, `audio/mixer`.
-    let fonts = declared(&["fonts"]);
-    assert!(fonts > 0);
+    // `per_language` fonts (issue #59) add an atlas per other language.
+    let fonts = parsed.fonts.len();
+    let atlases = fonts - declared(&["fonts"]);
+    assert!(atlases > 0, "the self-test's per-language font");
+    let all = all + atlases;
     let mix = root().join("assets/audio.toml").exists() as usize;
     // UI screens (`ui/*.ui.ron`) and string tables (`assets/i18n/*.ron`)
     // bake to blobs with no manifest entry (issue #58).
@@ -398,7 +401,9 @@ fn assets_pc_bakes_the_repo_manifest() {
             })
             .unwrap_or(0)
     };
-    let ui = files("ui", ".ui.ron") + files("assets/i18n", ".ron");
+    // ... plus `i18n/languages`, the list of the tables (issue #59).
+    let tables = files("assets/i18n", ".ron");
+    let ui = files("ui", ".ui.ron") + tables + (tables > 0) as usize;
     assert!(ui > 0, "the self-test's screen");
     assert_eq!(
         count,

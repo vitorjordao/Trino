@@ -1,6 +1,18 @@
 //! Every string the game shows, in English and Brazilian Portuguese (the
-//! reference art's language). `Lang` is a setting; text is uppercase where
-//! the UI font only has capitals.
+//! reference art's language). The texts live in the engine's string tables
+//! (issue #59): `assets/i18n/en-US.ron` and `pt-BR.ron`, read as static code
+//! (`strings_gen.rs`). After editing a table, export it again and check it
+//! (the commands are at the top of each `.ron`; a test fails on a stale
+//! export). [`S`] names each string and [`tr`] reads it. Text is uppercase
+//! where the UI font only has capitals.
+
+use trino_core::TextBuf;
+use trino_core::i18n::{Arg, LangId, Localizer, StrKey, StringTable};
+
+#[allow(clippy::all)]
+mod tables {
+    include!("strings_gen.rs");
+}
 
 /// Interface language.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
@@ -10,202 +22,254 @@ pub enum Lang {
     Pt,
 }
 
-/// A string id; [`tr`] gives its text.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-#[repr(u8)]
-pub enum S {
-    // Match events.
-    Goal,
-    OwnGoal,
-    Offside,
-    Foul,
-    YellowCard,
-    RedCard,
-    Corner,
-    ThrowIn,
-    GoalKick,
-    FreeKick,
-    Penalty,
-    HalfTime,
-    FullTime,
-    KickOff,
-    Save,
-    Post,
-    // Menus.
-    PlayNow,
-    QuickMatch,
-    Career,
-    ManageClub,
-    Customize,
-    CustomizeSub,
-    Transfers,
-    TransfersSub,
-    Settings,
-    SettingsSub,
-    Exit,
-    ExitSub,
-    Select,
-    Back,
-    Confirm,
-    Details,
-    Formation,
-    Menu,
-    Squad,
-    Tactics,
-    TeamSelect,
-    PlayerEdit,
-    PointsLeft,
-    Save_,
-    Cancel,
-    Random,
-    Buy,
-    Sell,
-    Balance,
-    Coins,
-    Price,
-    Position,
-    Ovr,
-    Team,
-    Age,
-    Club,
-    Finances,
-    Players,
-    Matches,
-    NextMatch,
-    Round,
-    Play,
-    Simulate,
-    WeeklyIncome,
-    Wages,
-    Positive,
-    Negative,
-    Morale,
-    Energy,
-    Fitness,
-    LastResults,
-    Home,
-    Away,
-    Stadium,
-    Weather,
-    Clear,
-    Rain,
-    Day,
-    Dusk,
-    Night,
-    Length,
-    Minutes,
-    Difficulty,
-    Easy,
-    Normal,
-    Hard,
-    Language,
-    Camera,
-    Broadcast,
-    Close,
-    Results,
-    Possession,
-    Shots,
-    OnTarget,
-    Passes,
-    Fouls,
-    Corners,
-    Offsides,
-    Continue,
-    Paused,
-    Resume,
-    Quit,
-    Speed,
-    Dribble,
-    Shot,
-    Pass,
-    Stamina,
-    Defense,
-    Table,
-    Pts,
-    Champion,
-    ForSale,
-    NotEnough,
-    SquadFull,
-    SquadMin,
-    Bought,
-    Sold,
-    Filter,
-    Compare,
-    Win,
-    Draw,
-    Loss,
-    Controls,
-    Credits,
-    PressStart,
-    Fame,
-    Level,
-    Saved,
-    Swap,
-    Market,
-    Substitution,
-    Substitute,
-    LeagueWon,
-    FinishedAt,
-    Season,
-    Keeper,
-    KeeperAi,
-    KeeperYou,
-    Graphics,
-    GfxMax,
-    GfxRetro,
-    ControlsSub,
-    TabMatch,
-    TabKeyboard,
-    TabPad,
-    ActPass,
-    ActShoot,
-    ActThrough,
-    ActKeeper,
-    ActSwitch,
-    ActSprint,
-    ActPause,
-    ShortPass,
-    ShortShoot,
-    ShortThrough,
-    ShortKeeper,
-    ShortSwitch,
-    ShortSprint,
-    ShortPause,
-    ResetDefaults,
-    PressButton,
-    PressKey,
-    PressPad,
-    NoPad,
-    PadUnsupported,
-    MoveStick,
-    MoveKeys,
-    NotOnPad,
-    TabsHint,
-    Change,
-    OtherKeys,
-    Action,
-    Button,
-    Hair,
-    HairCrop,
-    HairBuzz,
-    HairCurly,
-    HairLong,
-    HairMohawk,
-    HairBald,
-    KickoffTime,
-    StadiumArena,
-    StadiumHarbour,
-    StadiumPark,
-    Bench,
-    OnPitch,
-    SubsRemaining,
-    NoSubsLeft,
+impl Lang {
+    /// The engine's id of the language's table.
+    pub const fn id(self) -> LangId {
+        match self {
+            Lang::En => LangId::new("en-US"),
+            Lang::Pt => LangId::new("pt-BR"),
+        }
+    }
+
+    /// The language's own name (`ENGLISH`, `PORTUGUÊS`: the tables' `name`).
+    pub fn name(self) -> &'static str {
+        LOC.table(self.id()).map_or("", |t| t.name())
+    }
+}
+
+/// Both tables: en-US first (the default), pt-BR falling back to it.
+pub static LOC: Localizer<'static, 2> =
+    Localizer::from_tables([Some(tables::EN_US), Some(tables::PT_BR)]);
+
+/// The baked tables, for tests.
+pub const TABLES: [StringTable<'static>; 2] = tables::TABLES;
+
+macro_rules! strings {
+    ($($v:ident => $k:literal,)*) => {
+        /// A string id; [`tr`] gives its text.
+        #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+        #[allow(non_camel_case_types)]
+        #[repr(u8)]
+        pub enum S {
+            $($v,)*
+        }
+
+        impl S {
+            /// The key of `self` in the string tables (hashed at compile
+            /// time).
+            pub const fn key(self) -> StrKey {
+                match self {
+                    $(S::$v => {
+                        const K: StrKey = StrKey::new($k);
+                        K
+                    })*
+                }
+            }
+
+            /// The key as written in the tables.
+            pub const fn key_str(self) -> &'static str {
+                match self {
+                    $(S::$v => $k,)*
+                }
+            }
+        }
+    };
+}
+
+strings! {
+    Goal => "goal",
+    OwnGoal => "own_goal",
+    Offside => "offside",
+    Foul => "foul",
+    YellowCard => "yellow_card",
+    RedCard => "red_card",
+    Corner => "corner",
+    ThrowIn => "throw_in",
+    GoalKick => "goal_kick",
+    FreeKick => "free_kick",
+    Penalty => "penalty",
+    HalfTime => "half_time",
+    FullTime => "full_time",
+    KickOff => "kick_off",
+    Save => "save",
+    Post => "post",
+    PlayNow => "play_now",
+    QuickMatch => "quick_match",
+    Career => "career",
+    ManageClub => "manage_club",
+    Customize => "customize",
+    CustomizeSub => "customize_sub",
+    Transfers => "transfers",
+    TransfersSub => "transfers_sub",
+    Settings => "settings",
+    SettingsSub => "settings_sub",
+    Exit => "exit",
+    ExitSub => "exit_sub",
+    Select => "select",
+    Back => "back",
+    Confirm => "confirm",
+    Details => "details",
+    Formation => "formation",
+    Menu => "menu",
+    Squad => "squad",
+    Tactics => "tactics",
+    TeamSelect => "team_select",
+    PlayerEdit => "player_edit",
+    PointsLeft => "points_left",
+    Save_ => "save_action",
+    Cancel => "cancel",
+    Random => "random",
+    Buy => "buy",
+    Sell => "sell",
+    Balance => "balance",
+    Coins => "coins",
+    Price => "price",
+    Position => "position",
+    Ovr => "ovr",
+    Team => "team",
+    Age => "age",
+    Club => "club",
+    Finances => "finances",
+    Players => "players",
+    Matches => "matches",
+    NextMatch => "next_match",
+    Round => "round",
+    Play => "play",
+    Simulate => "simulate",
+    WeeklyIncome => "weekly_income",
+    Wages => "wages",
+    Positive => "positive",
+    Negative => "negative",
+    Morale => "morale",
+    Energy => "energy",
+    Fitness => "fitness",
+    LastResults => "last_results",
+    Home => "home",
+    Away => "away",
+    Stadium => "stadium",
+    Weather => "weather",
+    Clear => "clear",
+    Rain => "rain",
+    Day => "day",
+    Dusk => "dusk",
+    Night => "night",
+    Length => "length",
+    Minutes => "minutes",
+    Difficulty => "difficulty",
+    Easy => "easy",
+    Normal => "normal",
+    Hard => "hard",
+    Language => "language",
+    Camera => "camera",
+    Broadcast => "broadcast",
+    Close => "close",
+    Results => "results",
+    Possession => "possession",
+    Shots => "shots",
+    OnTarget => "on_target",
+    Passes => "passes",
+    Fouls => "fouls",
+    Corners => "corners",
+    Offsides => "offsides",
+    Continue => "continue",
+    Paused => "pause.title",
+    Resume => "pause.resume",
+    Quit => "pause.quit",
+    Speed => "speed",
+    Dribble => "dribble",
+    Shot => "shot",
+    Pass => "pass",
+    Stamina => "stamina",
+    Defense => "defense",
+    Table => "table",
+    Pts => "pts",
+    Champion => "champion",
+    ForSale => "for_sale",
+    NotEnough => "not_enough",
+    SquadFull => "squad_full",
+    SquadMin => "squad_min",
+    Bought => "bought",
+    Sold => "sold",
+    Filter => "filter",
+    Compare => "compare",
+    Win => "win",
+    Draw => "draw",
+    Loss => "loss",
+    Controls => "controls",
+    Credits => "credits",
+    PressStart => "press_start",
+    Fame => "fame",
+    Level => "level",
+    Saved => "saved",
+    Swap => "swap",
+    Market => "market",
+    Substitution => "substitution",
+    Substitute => "pause.substitute",
+    LeagueWon => "league_won",
+    FinishedAt => "finished_at",
+    Season => "season",
+    Keeper => "keeper",
+    KeeperAi => "keeper_ai",
+    KeeperYou => "keeper_you",
+    Graphics => "graphics",
+    GfxMax => "gfx_max",
+    GfxRetro => "gfx_retro",
+    ControlsSub => "controls_sub",
+    TabMatch => "tab_match",
+    TabKeyboard => "tab_keyboard",
+    TabPad => "tab_pad",
+    ActPass => "act_pass",
+    ActShoot => "act_shoot",
+    ActThrough => "act_through",
+    ActKeeper => "act_keeper",
+    ActSwitch => "act_switch",
+    ActSprint => "act_sprint",
+    ActPause => "act_pause",
+    ShortPass => "short_pass",
+    ShortShoot => "short_shoot",
+    ShortThrough => "short_through",
+    ShortKeeper => "short_keeper",
+    ShortSwitch => "short_switch",
+    ShortSprint => "short_sprint",
+    ShortPause => "short_pause",
+    ResetDefaults => "reset_defaults",
+    PressButton => "press_button",
+    PressKey => "press_key",
+    PressPad => "press_pad",
+    NoPad => "no_pad",
+    PadUnsupported => "pad_unsupported",
+    MoveStick => "move_stick",
+    MoveKeys => "move_keys",
+    NotOnPad => "not_on_pad",
+    TabsHint => "tabs_hint",
+    Change => "change",
+    OtherKeys => "other_keys",
+    Action => "action",
+    Button => "button",
+    Hair => "hair",
+    HairCrop => "hair_crop",
+    HairBuzz => "hair_buzz",
+    HairCurly => "hair_curly",
+    HairLong => "hair_long",
+    HairMohawk => "hair_mohawk",
+    HairBald => "hair_bald",
+    KickoffTime => "kickoff_time",
+    StadiumArena => "stadium_arena",
+    StadiumHarbour => "stadium_harbour",
+    StadiumPark => "stadium_park",
+    Bench => "bench",
+    OnPitch => "on_pitch",
+    SubsRemaining => "subs_remaining",
+    NoSubsLeft => "no_subs_left",
+    SideHome => "side_home",
+    SideAway => "side_away",
+    SideCpu => "side_cpu",
 }
 
 impl S {
     /// The last string id: tests walk the enum up to it, so a string added
     /// after it must move it.
-    pub const LAST: S = S::NoSubsLeft;
+    pub const LAST: S = S::SideCpu;
 
     /// A hair style's name, by [`crate::render::HairStyle`] index.
     pub fn hair_style(i: usize) -> S {
@@ -220,235 +284,44 @@ impl S {
     }
 }
 
-/// The text of `s` in `lang`.
+/// The text of `s` in `lang` (pt-BR falls back to en-US).
 pub fn tr(lang: Lang, s: S) -> &'static str {
-    let (en, pt) = match s {
-        S::Goal => ("GOAL!", "GOL!"),
-        S::OwnGoal => ("OWN GOAL", "GOL CONTRA"),
-        S::Offside => ("OFFSIDE", "IMPEDIMENTO"),
-        S::Foul => ("FOUL", "FALTA"),
-        S::YellowCard => ("YELLOW CARD", "CARTÃO AMARELO"),
-        S::RedCard => ("RED CARD", "CARTÃO VERMELHO"),
-        S::Corner => ("CORNER", "ESCANTEIO"),
-        S::ThrowIn => ("THROW-IN", "LATERAL"),
-        S::GoalKick => ("GOAL KICK", "TIRO DE META"),
-        S::FreeKick => ("FREE KICK", "TIRO LIVRE"),
-        S::Penalty => ("PENALTY", "PÊNALTI"),
-        S::HalfTime => ("HALF TIME", "INTERVALO"),
-        S::FullTime => ("FULL TIME", "FIM DE JOGO"),
-        S::KickOff => ("KICK OFF", "SAÍDA DE BOLA"),
-        S::Save => ("SAVE!", "DEFESA!"),
-        S::Post => ("OFF THE POST!", "NA TRAVE!"),
-        S::PlayNow => ("PLAY NOW", "JOGAR AGORA"),
-        S::QuickMatch => ("QUICK MATCH", "PARTIDA RÁPIDA"),
-        S::Career => ("CAREER", "MODO CARREIRA"),
-        S::ManageClub => ("MANAGE YOUR CLUB", "GERENCIAR CLUBE"),
-        S::Customize => ("CUSTOMIZE", "PERSONALIZAR"),
-        S::CustomizeSub => ("EDIT PLAYERS AND TEAMS", "EDIÇÃO DE JOGADORES E TIMES"),
-        S::Transfers => ("TRANSFER MARKET", "MERCADO DE TRANSFERÊNCIAS"),
-        S::TransfersSub => ("BUY AND SELL PLAYERS", "COMPRE E VENDA JOGADORES"),
-        S::Settings => ("SETTINGS", "CONFIGURAÇÕES"),
-        S::SettingsSub => ("MATCH AND LANGUAGE", "PARTIDA E IDIOMA"),
-        S::Exit => ("RESET SAVE", "APAGAR PROGRESSO"),
-        S::ExitSub => ("START A NEW CAREER", "COMEÇAR NOVA CARREIRA"),
-        S::Select => ("SELECT", "SELECIONAR"),
-        S::Back => ("BACK", "VOLTAR"),
-        S::Confirm => ("CONFIRM", "CONFIRMAR"),
-        S::Details => ("DETAILS", "DETALHES"),
-        S::Formation => ("FORMATION", "FORMAÇÃO"),
-        S::Menu => ("MENU", "MENU"),
-        S::Squad => ("SQUAD", "ELENCO"),
-        S::Tactics => ("TACTICS", "TÁTICA"),
-        S::TeamSelect => ("TEAM SELECTION", "SELEÇÃO DO TIME"),
-        S::PlayerEdit => ("PLAYER EDITOR", "EDIÇÃO DE PERSONAGEM"),
-        S::PointsLeft => ("POINTS LEFT", "PONTOS DISPONÍVEIS"),
-        S::Save_ => ("SAVE", "SALVAR"),
-        S::Cancel => ("CANCEL", "CANCELAR"),
-        S::Random => ("RANDOM", "ALEATÓRIO"),
-        S::Buy => ("BUY", "COMPRAR"),
-        S::Sell => ("SELL", "VENDER"),
-        S::Balance => ("BALANCE", "SALDO"),
-        S::Coins => ("COINS", "MOEDAS"),
-        S::Price => ("PRICE", "PREÇO"),
-        S::Position => ("POSITION", "POSIÇÃO"),
-        S::Ovr => ("OVR", "OVR"),
-        S::Team => ("TEAM", "TIME"),
-        S::Age => ("AGE", "IDADE"),
-        S::Club => ("CLUB", "CLUBE"),
-        S::Finances => ("FINANCES", "FINANCEIRO"),
-        S::Players => ("PLAYERS", "JOGADORES"),
-        S::Matches => ("MATCHES", "PARTIDAS"),
-        S::NextMatch => ("NEXT MATCH", "PRÓXIMO JOGO"),
-        S::Round => ("ROUND", "RODADA"),
-        S::Play => ("PLAY MATCH", "JOGAR PARTIDA"),
-        S::Simulate => ("SIMULATE", "SIMULAR"),
-        S::WeeklyIncome => ("INCOME", "RECEITA"),
-        S::Wages => ("WAGES", "SALÁRIOS"),
-        S::Positive => ("POSITIVE", "POSITIVO"),
-        S::Negative => ("NEGATIVE", "NEGATIVO"),
-        S::Morale => ("MORALE", "MORAL"),
-        S::Energy => ("ENERGY", "ENERGIA"),
-        S::Fitness => ("TEAM FITNESS", "PREPARO FÍSICO"),
-        S::LastResults => ("LAST RESULTS", "ÚLTIMAS PARTIDAS"),
-        S::Home => ("HOME", "CASA"),
-        S::Away => ("AWAY", "FORA"),
-        S::Stadium => ("STADIUM", "ESTÁDIO"),
-        S::Weather => ("WEATHER", "CLIMA"),
-        S::Clear => ("CLEAR", "LIMPO"),
-        S::Rain => ("RAIN", "CHUVA"),
-        S::Day => ("DAY", "DIA"),
-        S::Dusk => ("DUSK", "ENTARDECER"),
-        S::Night => ("NIGHT", "NOITE"),
-        S::Length => ("HALF LENGTH", "TEMPO DE CADA ETAPA"),
-        S::Minutes => ("MIN", "MIN"),
-        S::Difficulty => ("DIFFICULTY", "DIFICULDADE"),
-        S::Easy => ("EASY", "FÁCIL"),
-        S::Normal => ("NORMAL", "NORMAL"),
-        S::Hard => ("HARD", "DIFÍCIL"),
-        S::Language => ("LANGUAGE", "IDIOMA"),
-        S::Camera => ("CAMERA", "CÂMERA"),
-        S::Broadcast => ("BROADCAST", "TRANSMISSÃO"),
-        S::Close => ("CLOSE", "PERTO"),
-        S::Results => ("MATCH REPORT", "RELATÓRIO DA PARTIDA"),
-        S::Possession => ("POSSESSION", "POSSE DE BOLA"),
-        S::Shots => ("SHOTS", "FINALIZAÇÕES"),
-        S::OnTarget => ("ON TARGET", "NO ALVO"),
-        S::Passes => ("PASSES", "PASSES"),
-        S::Fouls => ("FOULS", "FALTAS"),
-        S::Corners => ("CORNERS", "ESCANTEIOS"),
-        S::Offsides => ("OFFSIDES", "IMPEDIMENTOS"),
-        S::Continue => ("CONTINUE", "CONTINUAR"),
-        S::Paused => ("PAUSED", "PAUSADO"),
-        S::Resume => ("RESUME", "VOLTAR AO JOGO"),
-        S::Quit => ("QUIT MATCH", "ABANDONAR"),
-        S::Speed => ("SPEED", "VELOCIDADE"),
-        S::Dribble => ("DRIBBLE", "DRIBLE"),
-        S::Shot => ("SHOT", "CHUTE"),
-        S::Pass => ("PASS", "PASSE"),
-        S::Stamina => ("STAMINA", "FÔLEGO"),
-        S::Defense => ("DEFENSE", "DEFESA"),
-        S::Table => ("TABLE", "CLASSIFICAÇÃO"),
-        S::Pts => ("PTS", "PTS"),
-        S::Champion => ("CHAMPIONS!", "CAMPEÃO!"),
-        S::ForSale => ("ON THE MARKET", "À VENDA"),
-        S::NotEnough => ("NOT ENOUGH COINS", "SALDO INSUFICIENTE"),
-        S::SquadFull => ("SQUAD IS FULL", "ELENCO CHEIO"),
-        S::SquadMin => ("SQUAD TOO SMALL", "ELENCO MÍNIMO"),
-        S::Bought => ("SIGNED!", "CONTRATADO!"),
-        S::Sold => ("SOLD!", "VENDIDO!"),
-        S::Filter => ("FILTER", "FILTRAR"),
-        S::Compare => ("SORT", "ORDENAR"),
-        S::Win => ("W", "V"),
-        S::Draw => ("D", "E"),
-        S::Loss => ("L", "D"),
-        S::Controls => ("CONTROLS", "CONTROLES"),
-        S::Credits => ("CREDITS", "CRÉDITOS"),
-        S::PressStart => ("PRESS START", "APERTE START"),
-        S::Fame => ("FAME", "FAMA"),
-        S::Level => ("LEVEL", "NÍVEL"),
-        S::Saved => ("SAVED", "SALVO"),
-        S::Swap => ("SWAP", "TROCAR"),
-        S::Market => ("MARKET", "MERCADO"),
-        S::Substitution => ("SUBSTITUTION", "SUBSTITUIÇÃO"),
-        S::Substitute => ("SUBSTITUTE", "SUBSTITUIR"),
-        S::LeagueWon => ("YOU WON THE LEAGUE!", "VOCÊ GANHOU A LIGA!"),
-        S::FinishedAt => ("YOUR CLUB FINISHED", "SEU CLUBE TERMINOU EM"),
-        S::Season => ("SEASON", "TEMPORADA"),
-        S::Keeper => ("GOALKEEPER", "GOLEIRO"),
-        S::KeeperAi => ("COMPUTER", "COMPUTADOR"),
-        S::KeeperYou => ("YOU CAN TAKE HIM", "VOCÊ PODE CONTROLAR"),
-        S::Graphics => ("GRAPHICS", "GRÁFICOS"),
-        S::GfxMax => ("MAXIMUM", "MÁXIMO"),
-        S::GfxRetro => ("RETRO (CONSOLE)", "RETRÔ (CONSOLE)"),
-        S::ControlsSub => ("BUTTONS AND KEYS", "BOTÕES E TECLAS"),
-        S::TabMatch => ("MATCH", "PARTIDA"),
-        S::TabKeyboard => ("KEYBOARD", "TECLADO"),
-        S::TabPad => ("GAMEPAD", "CONTROLE"),
-        S::ActPass => ("PASS / TACKLE", "PASSE / DESARME"),
-        S::ActShoot => ("SHOOT / SLIDE", "CHUTE / CARRINHO"),
-        S::ActThrough => ("THROUGH / CROSS", "LANÇAR / CRUZAR"),
-        S::ActKeeper => ("TAKE THE KEEPER", "CONTROLAR GOLEIRO"),
-        S::ActSwitch => ("SWITCH PLAYER", "TROCAR JOGADOR"),
-        S::ActSprint => ("SPRINT", "CORRER"),
-        S::ActPause => ("PAUSE", "PAUSAR"),
-        S::ShortPass => ("PASS", "PASSE"),
-        S::ShortShoot => ("SHOOT", "CHUTE"),
-        S::ShortThrough => ("THRU", "LANÇA"),
-        S::ShortKeeper => ("GK", "GOL"),
-        S::ShortSwitch => ("SWAP", "TROCA"),
-        S::ShortSprint => ("RUN", "CORRE"),
-        S::ShortPause => ("PAUSE", "PAUSA"),
-        S::ResetDefaults => ("RESET TO DEFAULTS", "RESTAURAR PADRÃO"),
-        S::PressButton => ("PRESS THE NEW BUTTON", "APERTE O NOVO BOTÃO"),
-        S::PressKey => (
-            "PRESS A KEY - ESC CANCELS",
-            "APERTE UMA TECLA - ESC CANCELA",
-        ),
-        S::PressPad => (
-            "PRESS A PAD BUTTON - B CANCELS",
-            "APERTE UM BOTÃO - B CANCELA",
-        ),
-        S::NoPad => ("NO GAMEPAD CONNECTED", "NENHUM CONTROLE CONECTADO"),
-        S::PadUnsupported => ("NO GAMEPAD SUPPORT", "SEM SUPORTE A CONTROLE"),
-        S::MoveStick => ("MOVE: STICK OR D-PAD", "MOVER: ANALÓGICO OU DIRECIONAL"),
-        S::MoveKeys => ("MOVE: WASD OR ARROWS", "MOVER: WASD OU SETAS"),
-        S::NotOnPad => ("NOT ON THIS CONTROLLER", "NÃO EXISTE NESTE CONTROLE"),
-        S::TabsHint => ("TABS", "ABAS"),
-        S::Change => ("CHANGE", "MUDAR"),
-        S::OtherKeys => ("OTHER KEYS", "OUTRAS TECLAS"),
-        S::Action => ("ACTION", "AÇÃO"),
-        S::Button => ("BUTTON", "BOTÃO"),
-        S::Hair => ("HAIR", "CABELO"),
-        S::HairCrop => ("SHORT", "CURTO"),
-        S::HairBuzz => ("BUZZ CUT", "RASPADO"),
-        S::HairCurly => ("CURLY", "CACHEADO"),
-        S::HairLong => ("LONG", "LONGO"),
-        S::HairMohawk => ("MOHAWK", "MOICANO"),
-        S::HairBald => ("BALD", "CARECA"),
-        S::KickoffTime => ("TIME", "HORÁRIO"),
-        S::StadiumArena => ("CENTRAL ARENA", "ARENA CENTRAL"),
-        S::StadiumHarbour => ("HARBOUR GROUND", "ESTÁDIO DO PORTO"),
-        S::StadiumPark => ("NORTH PARK", "PARQUE NORTE"),
-        S::Bench => ("BENCH", "BANCO"),
-        S::OnPitch => ("ON PITCH", "EM CAMPO"),
-        S::SubsRemaining => ("SUBS LEFT", "SUBSTITUIÇÕES RESTANTES"),
-        S::NoSubsLeft => ("NO SUBS LEFT", "SEM SUBSTITUIÇÕES"),
-    };
-    match lang {
-        Lang::En => en,
-        Lang::Pt => pt,
-    }
+    LOC.get_in(lang.id(), s.key()).unwrap_or("")
+}
+
+/// `s` with its placeholders filled by `lang`'s locale.
+pub fn tr_fmt<'b, const N: usize>(
+    lang: Lang,
+    s: S,
+    args: &[Arg<'_>],
+    out: &'b mut TextBuf<N>,
+) -> &'b str {
+    LOC.tr_fmt_in(lang.id(), s.key(), args, out)
 }
 
 /// Position abbreviations as in lists (GK/DF/MF/FW; GOL/ZAG/MEI/ATA).
 pub fn pos_short(lang: Lang, p: crate::sim::team::Pos) -> &'static str {
     use crate::sim::team::Pos;
-    match (lang, p) {
-        (Lang::En, Pos::Gk) => "GK",
-        (Lang::En, Pos::Df) => "DF",
-        (Lang::En, Pos::Mf) => "MF",
-        (Lang::En, Pos::Fw) => "FW",
-        (Lang::Pt, Pos::Gk) => "GOL",
-        (Lang::Pt, Pos::Df) => "ZAG",
-        (Lang::Pt, Pos::Mf) => "MEI",
-        (Lang::Pt, Pos::Fw) => "ATA",
-    }
+    const GK: StrKey = StrKey::new("pos.gk");
+    const DF: StrKey = StrKey::new("pos.df");
+    const MF: StrKey = StrKey::new("pos.mf");
+    const FW: StrKey = StrKey::new("pos.fw");
+    let key = match p {
+        Pos::Gk => GK,
+        Pos::Df => DF,
+        Pos::Mf => MF,
+        Pos::Fw => FW,
+    };
+    LOC.get_in(lang.id(), key).unwrap_or("")
 }
 
-/// The UI system's string keys (`ui/*.ui.ron`, issue #58) read through
-/// [`tr`]: the screens stay in the game's own two languages.
+/// The UI system's string keys (`ui/*.ui.ron`, issue #58) read from the
+/// same tables: the pause screen's `pause.*` keys are [`S`]'s.
 pub struct UiTr(pub Lang);
 
 impl trino_core::ui::UiStrings for UiTr {
     fn get(&self, key: &str) -> Option<&str> {
-        let s = match key {
-            "pause.title" => S::Paused,
-            "pause.resume" => S::Resume,
-            "pause.substitute" => S::Substitute,
-            "pause.quit" => S::Quit,
-            _ => return None,
-        };
-        Some(tr(self.0, s))
+        LOC.get_in(self.0.id(), StrKey::new(key))
     }
 
     fn revision(&self) -> u32 {
@@ -460,20 +333,27 @@ impl trino_core::ui::UiStrings for UiTr {
 mod tests {
     use super::*;
 
-    /// Every string is in both languages and uses only characters the UI
-    /// font bakes (the manifest's `chars`).
+    fn all() -> impl Iterator<Item = S> {
+        // Walk the enum through its discriminants.
+        (0..=S::LAST as u8).map(|i| unsafe { core::mem::transmute::<u8, S>(i) })
+    }
+
+    /// Every string is in both languages' own tables (no fallback) and,
+    /// formatted, uses only characters the UI font bakes.
     #[test]
     fn every_string_fits_the_font() {
         const CHARS: &str = super::super::FONT_CHARS;
         let mut n = 0;
-        for i in 0..200u8 {
-            // Walk the enum through its discriminants.
-            if i as usize > S::LAST as usize {
-                break;
-            }
-            let s: S = unsafe { core::mem::transmute(i) };
-            for lang in [Lang::En, Lang::Pt] {
-                let t = tr(lang, s);
+        let mut buf = TextBuf::<64>::new();
+        for s in all() {
+            for (lang, table) in [(Lang::En, TABLES[0]), (Lang::Pt, TABLES[1])] {
+                assert!(
+                    table.entry(s.key()).is_some(),
+                    "{s:?}: \"{}\" is not in {}",
+                    s.key_str(),
+                    table.lang()
+                );
+                let t = tr_fmt(lang, s, &[Arg::int("n", 90)], &mut buf);
                 assert!(!t.is_empty());
                 for c in t.chars() {
                     assert!(
@@ -485,5 +365,22 @@ mod tests {
             n += 1;
         }
         assert_eq!(n, S::LAST as usize + 1);
+        assert_eq!(Lang::En.name(), "ENGLISH");
+        assert_eq!(Lang::Pt.name(), "PORTUGUÊS");
+    }
+
+    /// The strings the code used to hold, through the tables.
+    #[test]
+    fn the_tables_say_what_the_code_said() {
+        use crate::sim::team::Pos;
+        assert_eq!(tr(Lang::En, S::Goal), "GOAL!");
+        assert_eq!(tr(Lang::Pt, S::YellowCard), "CARTÃO AMARELO");
+        assert_eq!(tr(Lang::Pt, S::SideCpu), "CPU X CPU");
+        assert_eq!(pos_short(Lang::Pt, Pos::Df), "ZAG");
+        let mut buf = TextBuf::<16>::new();
+        assert_eq!(
+            tr_fmt(Lang::Pt, S::Minutes, &[Arg::int("n", 5)], &mut buf),
+            "5 MIN"
+        );
     }
 }

@@ -71,7 +71,8 @@ performance and tests.
 | `game/src/sim/` | The match and the league: pure Q16.16 fixed point at 60 Hz (rules, ball physics, tactical AI, clubs, career, save). Keep it free of floats and of `trino_core`: the same inputs must give the same match on every target. |
 | `game/src/game/` | Screens and flows (`app.rs`), the match session, charged-kick controls, menu navigation, button-driven end-to-end tests |
 | `game/src/render/` | Broadcast camera, culling, stadium, players posed from `clips_gen.rs`, ball, markers, HUD, menu backdrops |
-| `game/src/ui/` | The UI toolkit, every screen, strings in English and Portuguese (keep to `ui::FONT_CHARS`) |
+| `game/src/ui/` | The UI toolkit, every screen, the string ids (`i18n.rs`) and their tables exported as static code (`strings_gen.rs`) |
+| `assets/i18n/` | The strings in English and Portuguese (the engine's tables): edit, then `cargo trino i18n export --rust game/src/ui/strings_gen.rs` and `cargo trino i18n check`. Keep to `ui::FONT_CHARS` |
 | `game/src/selftest.rs` | The console self-tests' scripted match and its pinned sim hash |
 | `assets/` | The game's models (built by the engine's `tools/blender/solid_eleven_models.py`), fonts, sounds |
 | `tests/golden/{n64,3ds}/` | The self-tests' golden frames |

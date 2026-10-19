@@ -25,6 +25,7 @@ pub mod audio;
 pub mod bake;
 pub mod font;
 pub mod groups;
+pub mod i18n;
 pub mod impostor;
 pub mod loader;
 pub mod lz4;

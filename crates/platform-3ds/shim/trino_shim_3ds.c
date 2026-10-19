@@ -288,6 +288,20 @@ uint32_t trino_hw_probe(uint32_t want_speedup)
     return (is_new ? 1u : 0u) | (speedup << 1) | (app_mib << 8);
 }
 
+// The system language (issue #59): CFG_Language (0 Japanese, 1 English, ...
+// 11 traditional Chinese, mapped to tags by src/language.rs), or -1 when the
+// config service can't be read. Opens and closes CFGU itself; call once.
+int trino_system_language(void)
+{
+    if (R_FAILED(cfguInit())) {
+        return -1;
+    }
+    u8 lang = 0;
+    Result rc = CFGU_GetSystemLanguage(&lang);
+    cfguExit();
+    return R_FAILED(rc) ? -1 : (int)lang;
+}
+
 // ---------------------------------------------------------------------------
 // The worker core (issue #54 Phase 3, ADR 0020): one thread on the second
 // CPU core for game jobs (AI #56, a crowd's animation). The audio thread

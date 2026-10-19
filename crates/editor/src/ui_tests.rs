@@ -1062,6 +1062,27 @@ fn editor_layout_is_clean_at_minimum_and_default_sizes() {
         h.state_mut().ui_screens.selected = Some(vec![2]);
         h.run_steps(4);
         crate::layout_audit::assert_clean(&h, size, true, &what("UI tab on the 3DS"));
+        // The Localization tab (#59): the table, its issues and fonts, over
+        // tables with a missing key, a fallback and a plural.
+        let i18n = std::path::Path::new("assets/i18n");
+        std::fs::create_dir_all(i18n).unwrap();
+        std::fs::copy(
+            repo.join("templates/standalone/assets/i18n/en-US.ron"),
+            i18n.join("en-US.ron"),
+        )
+        .unwrap();
+        std::fs::write(i18n.join("pt-BR.ron"), PT_BR).unwrap();
+        std::fs::write(
+            i18n.join("ru.ron"),
+            "Strings(lang: \"ru\", entries: {\"n\": Plural(one: \"{n}\", other: \"{n}\")})\n",
+        )
+        .unwrap();
+        let root = h.state().project.root.clone();
+        h.state_mut().localization.reload(&root);
+        h.state_mut().cmds.push(Cmd::FocusTab(Tab::Localization));
+        h.run_steps(4);
+        assert!(h.query_by_label("Preview language").is_some());
+        crate::layout_audit::assert_clean(&h, size, true, &what("Localization tab"));
         leave_temp_project(&repo);
     }
 }
@@ -3019,5 +3040,156 @@ fn ui_tab_edits_screens_and_follows_their_files() {
     let shop = ScreenDef::load(std::path::Path::new("ui/shop.ui.ron")).unwrap();
     assert!(trino_scene::ui::validate(&shop).is_empty());
     assert!(h.state().ui_screens.files.len() >= 5);
+    leave_temp_project(&repo);
+}
+
+/// The Localization tab (#59), both ways: `TRINO_EDITOR_TAB=localization`
+/// and `TRINO_EDITOR_LANG` open it with a preview language the UI tab
+/// shares; a cell edited → its language's RON file on disk; the file
+/// edited outside → the cell; a language added → its file, falling back to
+/// the default; the pseudo-locale and the CSV written as files; the fonts
+/// measured per language.
+#[test]
+#[ignore = "changes cwd/env: run alone with --ignored --test-threads=1"]
+fn localization_tab_edits_the_tables_and_follows_their_files() {
+    use egui::Event;
+    use egui::accesskit::Role;
+    use trino_scene::i18n::StringsDef;
+    let setup = |repo: &std::path::Path, dir: &std::path::Path| {
+        let i18n = dir.join("assets/i18n");
+        let _ = std::fs::remove_dir_all(&i18n);
+        std::fs::create_dir_all(&i18n).unwrap();
+        std::fs::copy(
+            repo.join("templates/standalone/assets/i18n/en-US.ron"),
+            i18n.join("en-US.ron"),
+        )
+        .unwrap();
+        std::fs::write(i18n.join("pt-BR.ron"), PT_BR).unwrap();
+        std::fs::write(
+            i18n.join("es-ES.ron"),
+            "Strings(lang: \"es-ES\", fallback: \"en-US\", entries: {\"pause.title\": \"Pausa\"})\n",
+        )
+        .unwrap();
+    };
+    // SAFETY: --ignored --test-threads=1 only (module docs).
+    unsafe {
+        std::env::set_var("TRINO_EDITOR_TAB", "localization");
+        std::env::set_var("TRINO_EDITOR_LANG", "pt-BR");
+    }
+    let started = temp_project_app_with(egui::vec2(1600.0, 940.0), setup);
+    // SAFETY: as above.
+    unsafe {
+        std::env::remove_var("TRINO_EDITOR_TAB");
+        std::env::remove_var("TRINO_EDITOR_LANG");
+    }
+    let Some((mut h, _tmp, repo)) = started else {
+        return;
+    };
+    const PT: &str = "assets/i18n/pt-BR.ron";
+    let disk = |f: &str| StringsDef::load(std::path::Path::new(f)).unwrap();
+    h.run_steps(3);
+    assert!(
+        h.query_by_label("Preview language").is_some(),
+        "the Localization tab is in front"
+    );
+    assert_eq!(h.state().localization.preview.as_deref(), Some("pt-BR"));
+    assert_eq!(
+        h.state().ui_screens.lang.as_deref(),
+        Some("pt-BR"),
+        "shared"
+    );
+    assert_eq!(
+        h.state().localization.columns()[0],
+        "en-US",
+        "the default first"
+    );
+    // pt-BR lacks some keys the template has: they fall back to en-US.
+    assert!(
+        h.state()
+            .localization
+            .issues
+            .iter()
+            .any(|i| i.lang == "pt-BR")
+    );
+
+    // A cell edited: the file on disk follows once the field is left.
+    h.get_by_label("pt-BR pause.resume").focus();
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(Event::Text("Retomar".into()));
+    h.key_press(egui::Key::Enter);
+    wait_for(&mut h, "the edit to be written", |_| {
+        disk(PT)
+            .entries
+            .get("pause.resume")
+            .map(|e| e.text().to_string())
+            == Some("Retomar".into())
+    });
+    // A missing cell typed into: the key joins the language.
+    h.get_by_label("es-ES pause.quit").focus();
+    h.run_steps(2);
+    h.event(Event::Text("Salir".into()));
+    h.key_press(egui::Key::Enter);
+    wait_for(&mut h, "the new es-ES key to be written", |_| {
+        disk("assets/i18n/es-ES.ron")
+            .entries
+            .contains_key("pause.quit")
+    });
+
+    // Edited outside: the tab follows and doesn't write it back.
+    let outside = std::fs::read_to_string(PT)
+        .unwrap()
+        .replace("Pausado", "Em pausa");
+    std::fs::write(PT, &outside).unwrap();
+    let row = crate::localization::Row {
+        key: "pause.title".into(),
+        form: None,
+    };
+    wait_for(&mut h, "the outside edit", |a| {
+        a.localization.text("pt-BR", &row) == "Em pausa"
+    });
+    h.run_steps(20);
+    assert_eq!(std::fs::read_to_string(PT).unwrap(), outside);
+
+    // A language added: its file, falling back to the default.
+    press(&mut h, Role::Button, "Add language");
+    h.get_by_label("New language tag").focus();
+    h.run_steps(2);
+    h.event(Event::Text("fr_FR".into()));
+    h.run_steps(2);
+    press(&mut h, Role::Button, "Create language");
+    wait_for(&mut h, "fr-FR to be written", |_| {
+        std::path::Path::new("assets/i18n/fr-FR.ron").exists()
+    });
+    assert_eq!(disk("assets/i18n/fr-FR.ron").fallback, "en-US");
+
+    // The pseudo-locale and the CSV are files too.
+    press(&mut h, Role::Button, "Make pseudo-locale");
+    wait_for(&mut h, "qps-ploc to be written", |_| {
+        std::path::Path::new("assets/i18n/qps-ploc.ron").exists()
+    });
+    assert!(
+        disk("assets/i18n/qps-ploc.ron").entries["pause.title"]
+            .text()
+            .starts_with('[')
+    );
+    press(&mut h, Role::Button, "Export CSV");
+    let csv = std::fs::read_to_string(crate::localization::CSV_PATH).unwrap();
+    assert!(csv.starts_with("key,en-US,"), "{csv}");
+    assert!(csv.contains("Retomar"));
+
+    // The preview language picked here is the UI tab's.
+    pick(&mut h, "Preview language", "es-ES");
+    assert_eq!(h.state().ui_screens.lang.as_deref(), Some("es-ES"));
+
+    // The fonts: measured on a worker, a line per checked font × language.
+    wait_for(&mut h, "the fonts to be measured", |a| {
+        !a.localization.fonts_measuring() && !a.localization.fonts.is_empty()
+    });
+    let f = &h.state().localization.fonts;
+    assert!(
+        f.iter().any(|r| r.lang == "pt-BR" && r.n64_bytes.is_some()),
+        "{f:?}"
+    );
     leave_temp_project(&repo);
 }

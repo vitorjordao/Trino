@@ -100,13 +100,26 @@ fn render_and_ui_never_mutate_the_match() {
 
 #[test]
 fn the_fonts_bake_the_characters_the_code_writes() {
-    let manifest = std::fs::read_to_string(game().join("assets/manifest.toml")).unwrap();
-    let wanted = format!("chars = \"{}\"", solid_eleven::ui::FONT_CHARS);
-    assert_eq!(
-        manifest.matches(&wanted).count(),
-        3,
-        "the fonts (se_ui, se_big, se_huge) must bake ui::FONT_CHARS exactly"
-    );
+    // `chars = "auto"` (issue #59): the strings' glyphs plus `extra_chars`,
+    // resolved by the manifest loader. The set must stay ui::FONT_CHARS,
+    // which names and scores are uppercased into.
+    let manifest =
+        trino_asset_pipeline::Manifest::load(&game().join("assets/manifest.toml")).unwrap();
+    let sorted = |s: &str| {
+        let mut v: Vec<char> = s.chars().collect();
+        v.sort();
+        v.dedup();
+        v.into_iter().collect::<String>()
+    };
+    let wanted = sorted(solid_eleven::ui::FONT_CHARS);
+    for font in ["se_ui", "se_big", "se_huge"] {
+        let chars = manifest.fonts[font].chars.as_deref().unwrap();
+        assert_eq!(
+            sorted(chars),
+            wanted,
+            "fonts/{font} must bake ui::FONT_CHARS exactly"
+        );
+    }
 }
 
 #[test]

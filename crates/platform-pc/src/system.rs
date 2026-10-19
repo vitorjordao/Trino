@@ -58,6 +58,8 @@ pub struct PcPlatform {
     memory: MemoryReport,
     /// The host's counting allocator, when it installed one.
     heap: Option<&'static dyn trino_core::mem::HeapStats>,
+    /// The system language, read once ([`crate::language`]).
+    language: Option<trino_core::LangTag>,
 }
 
 impl PcPlatform {
@@ -85,7 +87,13 @@ impl PcPlatform {
                 ..MemoryReport::default()
             },
             heap: None,
+            language: crate::language::detect(),
         }
+    }
+
+    /// Replace the system language (tests, a host that knows better).
+    pub fn set_system_language(&mut self, language: Option<trino_core::LangTag>) {
+        self.language = language;
     }
 
     /// The groups and their states, for the host's loader.
@@ -223,6 +231,10 @@ impl Platform for PcPlatform {
 
     fn hw_tier(&self) -> trino_core::HwTier {
         self.hw_tier
+    }
+
+    fn system_language(&self) -> Option<trino_core::LangTag> {
+        self.language
     }
 
     fn log(&self, message: &str) {

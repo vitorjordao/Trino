@@ -39,6 +39,9 @@ unsafe extern "C" {
     /// The New 3DS check and its speedup (bit 0 New 3DS, bit 1 speedup
     /// on, bits 8.. application memory MiB; `crate::hw::Probe`).
     pub fn trino_hw_probe(want_speedup: u32) -> u32;
+    /// The system language (`CFG_Language`: 0 Japanese … 11 traditional
+    /// Chinese), or -1 when CFGU can't be read (`crate::language`).
+    pub fn trino_system_language() -> i32;
     /// Start the worker core (core 2 on a New 3DS, else core 1 at 30%);
     /// the core, or -1 (`crate::worker`).
     pub fn trino_worker_start(new3ds: u32) -> i32;

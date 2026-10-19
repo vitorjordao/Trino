@@ -276,7 +276,7 @@ impl<M: TextMeasure + ?Sized, const N: usize> Solver<'_, '_, '_, M, N> {
         } else {
             self.screen.theme.text_scale.max(1)
         };
-        (n.font.unwrap_or(self.screen.theme.font), scale as f32)
+        (super::draw::font_of(self.screen, self.env, n), scale as f32)
     }
 
     fn line_height(&self, n: &UiNode<'_>) -> f32 {

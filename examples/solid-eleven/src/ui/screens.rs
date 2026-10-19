@@ -17,8 +17,9 @@ use crate::sim::league::ROUNDS;
 use crate::sim::team::{
     self, ATTRS, Appearance, CLUBS, Crest, FORMATIONS, PlayerRec, SURNAMES, TEAMS,
 };
-use crate::ui::i18n::{Lang, S, pos_short, tr};
+use crate::ui::i18n::{Lang, S, pos_short, tr, tr_fmt};
 use crate::ui::{Size, Ui, pal};
+use trino_core::i18n::Arg;
 use trino_core::{Color, Rect, Renderer, Screen, TextAlign, TextBuf, Vec2};
 
 type Buf = TextBuf<48>;
@@ -709,14 +710,14 @@ fn quick(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
     club_card(&mut ui, 14.0, 34.0, g.quick.home, S::Home, lang, g);
     club_card(&mut ui, 194.0, 34.0, g.quick.away, S::Away, lang, g);
     ui.text_shadow(160.0, 58.0, "VS", pal::YELLOW, Size::Big, TextAlign::Center);
-    let side = match (g.quick.side, lang) {
-        (0, Lang::En) => "P1: HOME",
-        (1, Lang::En) => "P1: AWAY",
-        (_, Lang::En) => "CPU V CPU",
-        (0, Lang::Pt) => "P1: CASA",
-        (1, Lang::Pt) => "P1: FORA",
-        (_, Lang::Pt) => "CPU X CPU",
-    };
+    let side = tr(
+        lang,
+        match g.quick.side {
+            0 => S::SideHome,
+            1 => S::SideAway,
+            _ => S::SideCpu,
+        },
+    );
     let sky = [S::Day, S::Dusk, S::Night][g.quick.sky as usize % 3];
     let stadium =
         [S::StadiumArena, S::StadiumHarbour, S::StadiumPark][g.quick.stadium as usize % 3];
@@ -2070,18 +2071,16 @@ fn settings(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
     header(&mut ui, &mut g.hits, tr(lang, S::Settings), true);
     let st = g.settings;
     let mut mins = TextBuf::<12>::new();
-    let _ = write!(mins, "{} {}", st.half_mins, tr(lang, S::Minutes));
+    tr_fmt(
+        lang,
+        S::Minutes,
+        &[Arg::int("n", st.half_mins as i64)],
+        &mut mins,
+    );
     let rows = SolidElevenGame::settings_rows();
     for (k, row) in rows.iter().enumerate() {
         let (label, value): (S, &str) = match row {
-            SettingRow::Language => (
-                S::Language,
-                if st.lang == Lang::En {
-                    "ENGLISH"
-                } else {
-                    "PORTUGUÊS"
-                },
-            ),
+            SettingRow::Language => (S::Language, st.lang.name()),
             SettingRow::Difficulty => (
                 S::Difficulty,
                 tr(

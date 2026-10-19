@@ -25,7 +25,21 @@ pub fn init() {
         p.app_mib,
         p.tier().key()
     ));
+    let lang = unsafe { ffi::trino_system_language() };
+    LANGUAGE.store(lang, core::sync::atomic::Ordering::Relaxed);
+    log(&alloc::format!(
+        "TRINO_LANG {}\n",
+        system_language().as_ref().map_or("none", |t| t.as_str())
+    ));
     crate::worker::start();
+}
+
+/// The boot's `trino_system_language` code (-1: none).
+static LANGUAGE: core::sync::atomic::AtomicI32 = core::sync::atomic::AtomicI32::new(-1);
+
+/// The system language the boot read (`crate::language`).
+pub fn system_language() -> Option<trino_core::LangTag> {
+    crate::language::tag(LANGUAGE.load(core::sync::atomic::Ordering::Relaxed))
 }
 
 /// The boot's probe word (`trino_hw_probe`).

@@ -30,6 +30,7 @@ platforms, hardware): `docs/README.md`. Historical plans the engine was first bu
 | `blender-asset` | modeling / coloring / rigging / animating a model in Blender for Trino's real limits; export + `model inspect` gate |
 | `scene-authoring` | writing scenes, prefabs, materials as text; `scene check`; exporting scenes to console code |
 | `ui-authoring` | menus, HUDs and dialogs as `ui/*.ui.ron` screens: layout per target, focus, string tables, `ui check/shot/export`, driving a screen from game code |
+| `localization` | languages as `assets/i18n/<lang>.ron`: plurals, number/money/date formats, fallback, glyph-subset fonts per language (TMEM), `i18n check/pseudo/export/import/fonts`, the Localization tab, `Localizer` in game code |
 | `editor` | running the editor, screenshot/selection/log hooks for agents, editor code map |
 | `build-n64` | ROM build via Docker, N64 pipeline troubleshooting |
 | `build-3ds` | .3dsx build via devkitPro, 3DS pipeline troubleshooting |
@@ -691,6 +692,46 @@ overlay, and a measurement on real hardware (ares doesn't time the RDP).
     and the template game's menus; Solid Eleven's pause menu (exported static code).
     Self-test step `ui layout` (`castle64::selftest::ui_layout`); goldens
     `tests/golden/pc/ui_*.png`.
+- **Localization (2026-10-19, ADR 0026, GitHub #59):** string tables, plurals and
+  locale formats, fonts subset per language.
+  - **Core (`trino_core::i18n`, `no_std`, no allocation):** `Localizer<'a, N>` (`load`
+    reads `i18n/languages`, `pick(saved, system)`, `tr`/`get` through the fallback chain,
+    `plural`, `tr_fmt` and `tr_fmt_in` into a `TextBuf`, `locale`, `font`, `group`),
+    `StrKey`/`LangId` (`const` fnv1a), `LangTag`, `Arg`/`Value` (integers only: money in
+    minor units, fixed-point decimals, dates), CLDR `PluralRule`s, `Locale::for_tag`.
+    `TSTR` v2 carries the locale, plural records (forms joined by U+001F), font remaps
+    and a group; v1 still parses. `UiStrings::font` (one `ui::draw::font_of` for layout
+    and draw) and `Platform::system_language` are defaults: no `GAME_API_VERSION` bump.
+  - **System language:**
+    - PC: `TRINO_LANG`, else `sys-locale`.
+    - Web: `?lang=`, else `navigator.language`.
+    - 3DS: `CFGU_GetSystemLanguage` through the shim, a bare tag, logged `TRINO_LANG`
+      at boot.
+    - N64: `None`.
+  - **Data:** `assets/i18n/<lang>.ron` (`Plural(...)`, `Format(...)`, `plural:`,
+    `locale: (...)` written bare) and `[i18n]` in the manifest (`default`, `languages`,
+    `extra_chars`, `groups`, `blobs`, `check_fonts`, `[i18n.overrides.<lang>]`).
+    - Fonts `chars = "auto"` bake exactly the shipped languages' glyphs, the UI texts,
+      the extras, the space and `?`.
+    - `per_language = true` bakes `fonts/<name>@<lang>` atlases, in group `i18n-<lang>`
+      with `groups`.
+    - `Manifest::load` resolves all of it (`asset_pipeline::i18n::resolve`).
+    - Pseudo-locales (`qps-*`) bake on the PC and the Web only.
+  - **Tools:**
+    - `cargo xtask i18n check|pseudo|export --csv|import --csv|export --rust|stats|
+      fonts|list` (`--dir`, `--json`);
+    - the editor's Localization tab (`TRINO_EDITOR_TAB=localization`,
+      `TRINO_EDITOR_LANG`), whose preview language drives the UI tab and Play
+      (`TRINO_LANG`).
+  - **Content:**
+    - the engine's `assets/i18n/{en-US,pt-BR,es-ES}.ron` and `fonts/i18n` (Roboto
+      Condensed, three 2 KB I4 atlases);
+    - the `i18n` self-test step (`castle64::selftest::i18n`) on PC, ares, Azahar and
+      the browsers;
+    - Solid Eleven's 187 strings in its own `assets/i18n/`, read as static code
+      (`src/ui/strings_gen.rs`, `[i18n] blobs = false`); its menus are byte-identical
+      to before.
+
 - **Quality presets on the PC and the Web (2026-10-18, ADR 0023, GitHub #55):** Low,
   Medium, High, Ultra and Custom.
   - **Core (`trino_core::quality`, `no_std`):** `QualitySettings` (render scale, `DynRes`,
@@ -933,6 +974,11 @@ cargo xtask ui check [screen..] [--platform n64|3ds|pc|web] [--lang l] [--json] 
 cargo xtask ui shot <screen> [--platform p] [--size WxH] [--lang l] [--scale S] [--focus id] [--out x.png] [--json]  # headless render (3DS: both screens)
 cargo xtask ui export <screen> <out.rs> [--json]                    # static Rust for include! (a game without blobs)
 cargo xtask ui list [--json]                                        # screens and languages
+cargo xtask i18n check [--platform p] [--strict] [--dir <project>] [--json]   # keys, placeholders, plurals, glyphs per target, UI overflow per language, TMEM
+cargo xtask i18n pseudo [--from en-US] [--expand 40]                # assets/i18n/qps-ploc.ron (PC/Web builds only)
+cargo xtask i18n export --csv f.csv | import --csv f.csv            # translators' round trip
+cargo xtask i18n export --rust <out.rs> [--dir <project>]           # static StringTable code (Solid Eleven)
+cargo xtask i18n stats | fonts [--platform n64] | list [--json]     # words per language; every atlas's glyphs and TMEM
 cargo xtask agents sync   # mirror .agents/skills/ into .claude/skills/ (check: agents check)
 cargo test -p xtask --test water_shots -- --ignored   # water evidence: tiers, ripples, crate, bridge (target/evidence/water)
 cargo xtask new <name> --standalone <dir> [--git <url> --rev <r>]   # project outside this repo
@@ -1033,6 +1079,28 @@ cargo test --workspace
 - **Never lift a shadow by hand.** `shadow::shadow_z` offsets by the target's own depth
   steps; a fixed lift z-fights far away on the N64's compressed z and floats near.
 
+- **Whatever an RSP command DMAs must outlive the queue.** `rsp_water_oracle` dropped
+  the boxed `WaterCmd` whose static block address was in the command it had just
+  queued; the RSP read the block after the drop, and one data layout (CI's) reused the
+  memory, so the ripple oracle failed in CI only (PR #92). The draw path parks replaced
+  commands in `water_grave` for two frames; anything new that hands the RSP a heap
+  address does the same, or keeps the owner alive until `trino_drain`.
+- **An N64 failure only CI sees can be the data layout:** CI's toolchain path (in the
+  ROM's panic strings) differs from yours. Rebuild with `--remap-path-prefix` to CI's
+  path (the `ci` skill › Debugging) before calling it flaky.
+- **An `Option` field of a hand-written RON format reads `Some(x)`, not `x`.** A table's
+  `locale: (currency: "R$")` failed with "Expected option" until its fields took a bare
+  deserializer (`deserialize_with = "bare"`, `trino_scene::i18n::LocaleDef`). Give any
+  optional field an agent writes by hand the same, or a plain default instead of
+  `Option`.
+- **Asset group names are lowercase** (`check_groups`): a per-language group is
+  `i18n-pt-br`, not `i18n-pt-BR` (`asset_pipeline::i18n::group_name`).
+- **A missing glyph measures and draws as `?`, and as nothing when the font has no
+  `?`.** A pseudo-locale's accents then shrink the text and hide the overflow it was
+  meant to find. `chars = "auto"` always bakes `?`; give hand-listed fonts one too.
+- **The engine's own `assets/i18n/` holds the self-test's strings.** Scaffolds that copy
+  the engine's assets (the castle64 and showcase templates) put the starter's tables
+  back (`trino-scaffold::copy_demo`), so a project's `ui/` screens keep their keys.
 - **A UI kind with settings needs its parentheses in RON even without any:** `Stack()`,
   `Grid()`, `Rect()`, `Slider()`; a bare `Stack` is a parse error (the message says so).
   Unknown fields are errors too.

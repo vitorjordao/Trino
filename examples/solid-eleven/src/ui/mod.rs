@@ -31,6 +31,10 @@ pub mod club_gen {
 pub mod confirm_gen {
     include!("confirm_gen.rs");
 }
+/// The career's club pick (`ui/pick.ui.ron`).
+pub mod pick_gen {
+    include!("pick_gen.rs");
+}
 /// The quick match setup (`ui/quick.ui.ron`).
 pub mod quick_gen {
     include!("quick_gen.rs");

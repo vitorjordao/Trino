@@ -820,94 +820,82 @@ fn quick(g: &mut SolidElevenGame, r: &mut dyn Renderer, _screen: Vec2) {
 
 // --------------------------------------------------------------- pick club
 
-fn pick_club(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
-    let lang = g.settings.lang;
-    let pad = g.pad_layout();
-    let mut ui = Ui::new(r, screen);
-    ui.fill(
-        Rect::new(-200.0, 0.0, 720.0, 240.0),
-        Color::rgba(6, 8, 20, 150),
+fn pick_club(g: &mut SolidElevenGame, r: &mut dyn Renderer, _screen: Vec2) {
+    use super::scr::{art, txt};
+    const CARDS: [&str; TEAMS] = [
+        "club0", "club1", "club2", "club3", "club4", "club5", "club6", "club7", "club8", "club9",
+    ];
+    const CRESTS: [&str; TEAMS] = [
+        "crest0", "crest1", "crest2", "crest3", "crest4", "crest5", "crest6", "crest7", "crest8",
+        "crest9",
+    ];
+    let screen = &super::pick_gen::SCREEN;
+    let c = g.cur.pick.min(TEAMS - 1);
+    super::scr::show(
+        g,
+        r,
+        screen,
+        Some((CARDS[c], NO_ITEM)),
+        // The identity shows the pick.
+        super::scr::rev(&(c, g.world.year)),
+        |g, key, _| {
+            let lang = g.settings.lang;
+            if let Some(k) = key.strip_prefix("short") {
+                return txt(CLUBS[k.parse::<usize>().ok()? % TEAMS].short);
+            }
+            let club = &CLUBS[c];
+            match key {
+                "name" => txt(upper::<20>(club.name).as_str()),
+                "facts" => {
+                    let mut b = buf();
+                    let _ = write!(
+                        b,
+                        "{}  {} {}  {} {}",
+                        FORMATIONS[club.tactics.formation as usize].name,
+                        tr(lang, S::Ovr),
+                        g.world.strength(c as u8),
+                        tr(lang, S::Balance),
+                        coins(g.world.clubs[c].budget).as_str()
+                    );
+                    txt(b.as_str())
+                }
+                _ => None,
+            }
+        },
+        |_, ui, r| {
+            super::scr::chrome(ui, screen, r);
+            for id in ["ident", "ident_big"] {
+                if let Some((mut a, size)) = art(r, ui, screen, id, NO_ITEM) {
+                    let rect = Rect::new(0.0, 0.0, size.x, size.y);
+                    a.panel(rect, rgb(CLUBS[c].home.shirt));
+                }
+            }
+        },
     );
-    header(&mut ui, &mut g.hits, tr(lang, S::Career), true);
-    for c in 0..TEAMS {
-        let (col, row) = (c % 5, c / 5);
-        let x = 12.0 + col as f32 * 60.0;
-        let y = 36.0 + row as f32 * 66.0;
-        let sel = g.cur.pick == c;
-        let rr = Rect::new(x, y, 56.0, 62.0);
-        ui.panel(
-            rr,
-            if sel {
-                pal::CYAN
-            } else {
-                Color::rgba(60, 70, 120, 255)
-            },
-        );
-        crest_of(&mut ui, x + 14.0, y + 6.0, 28.0, c as u8, false);
-        ui.text(
-            x + 28.0,
-            y + 44.0,
-            CLUBS[c].short,
-            if sel { pal::YELLOW } else { pal::INK },
-            Size::Small,
-            TextAlign::Center,
-        );
-        let hit = ui.rect(rr);
-        g.hits.add(hit, Screen::Top, c as u8);
+    let ui = core::mem::take(&mut g.menu_ui);
+    for (k, id) in CRESTS.iter().enumerate() {
+        if let Some((mut a, size)) = art(r, &ui, screen, id, NO_ITEM) {
+            crest_of(&mut a, (size.x - 28.0) * 0.5, 0.0, 28.0, k as u8, false);
+        }
     }
-    // The pick's identity.
-    let c = g.cur.pick;
-    let club = &CLUBS[c];
-    ui.panel(Rect::new(12.0, 172.0, 296.0, 46.0), rgb(club.home.shirt));
-    let name: TextBuf<20> = upper(club.name);
-    ui.text(
-        18.0,
-        175.0,
-        name.as_str(),
-        pal::INK,
-        Size::Small,
-        TextAlign::Left,
-    );
-    let t = &club.tactics;
-    let mut b = buf();
-    let _ = write!(
-        b,
-        "{}  {} {}  {} {}",
-        FORMATIONS[t.formation as usize].name,
-        tr(lang, S::Ovr),
-        g.world.strength(c as u8),
-        tr(lang, S::Balance),
-        coins(g.world.clubs[c].budget).as_str()
-    );
-    ui.text(
-        18.0,
-        187.0,
-        b.as_str(),
-        pal::YELLOW,
-        Size::Small,
-        TextAlign::Left,
-    );
-    // Style bars: press, line, width, tempo.
-    for (k, (v, label)) in [
-        (t.press, "PRESS"),
-        (t.line, "LINE"),
-        (t.tempo, "TEMPO"),
-        (t.direct, "DIRECT"),
-    ]
-    .iter()
-    .enumerate()
-    {
-        let x = 18.0 + k as f32 * 72.0;
-        ui.text(x, 199.0, label, pal::DIM, Size::Small, TextAlign::Left);
-        ui.bar(Rect::new(x, 211.0, 60.0, 3.0), *v as f32 / 100.0, pal::CYAN);
+    let t = &CLUBS[c].tactics;
+    for (k, v) in [t.press, t.line, t.tempo, t.direct].iter().enumerate() {
+        const STYLE: [&str; 4] = ["style0", "style1", "style2", "style3"];
+        const STYLE_BIG: [&str; 4] = ["style0_big", "style1_big", "style2_big", "style3_big"];
+        let id = if g.big_text() { STYLE_BIG[k] } else { STYLE[k] };
+        if let Some((mut a, size)) = art(r, &ui, screen, id, NO_ITEM) {
+            a.bar(
+                Rect::new(0.0, 0.0, size.x, size.y),
+                *v as f32 / 100.0,
+                pal::CYAN,
+            );
+        }
     }
-    footer(
-        &mut ui,
-        &mut g.hits,
-        pad,
-        lang,
-        &[(Btn::A, S::Confirm), (Btn::B, S::Back)],
-    );
+    g.menu_ui = ui;
+    for (k, id) in CARDS.iter().enumerate() {
+        super::scr::hit(g, screen, id, NO_ITEM, k as u8);
+    }
+    super::scr::back_hits(g, screen);
 }
 
 // ----------------------------------------------------------------- club hub

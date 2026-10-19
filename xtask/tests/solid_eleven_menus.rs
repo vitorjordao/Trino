@@ -614,6 +614,7 @@ fn ui_screen(g: &SolidElevenGame) -> bool {
             | Scene::Quick
             | Scene::Results
             | Scene::Club
+            | Scene::PickClub { .. }
     )
 }
 
@@ -781,7 +782,7 @@ fn every_menu_state_draws_cleanly_in_every_language_and_size() {
         report.busiest.0, report.busiest.1
     );
     for want in [
-        "Pause", "Settings", "Table", "Confirm", "Quick", "Results", "Club",
+        "Pause", "Settings", "Table", "Confirm", "Quick", "Results", "Club", "PickClub",
     ] {
         assert!(
             report.grew.contains(want),

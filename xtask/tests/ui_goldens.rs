@@ -21,6 +21,13 @@ fn tolerance(family: Family) -> u8 {
     if family == Family::N64 { 9 } else { 2 }
 }
 
+/// Channel values allowed past the tolerance: the N64 profile's dither
+/// ties round differently across GPU drivers (Metal moves a few dozen of
+/// a 320×240 picture's text edges), as in `platform-pc/tests/golden.rs`.
+fn allowed_bad(family: Family) -> usize {
+    if family == Family::N64 { 256 } else { 0 }
+}
+
 fn repo() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..")
 }
@@ -97,11 +104,12 @@ fn starter_screens_match_their_goldens_on_every_profile() {
                 .zip(&want)
                 .filter(|(a, b)| a.abs_diff(**b) > tol)
                 .count();
-            if bad > 0 {
+            if bad > allowed_bad(family) {
                 let actual = golden.join(format!("actual/{name}.png"));
                 ui_render::write_png(&actual, shot.width, shot.height, &shot.rgba).unwrap();
                 failures.push(format!(
-                    "{name}: {bad} channel values differ by more than {tol} (actual at {})",
+                    "{name}: {bad} channel values differ by more than {tol} (allowed {}, actual at {})",
+                    allowed_bad(family),
                     actual.display()
                 ));
             }

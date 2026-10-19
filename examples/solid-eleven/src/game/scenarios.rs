@@ -288,6 +288,261 @@ fn a_goal_counts_its_scorer_celebrates_and_the_other_side_kicks_off() {
     assert!(s.breaches.is_empty(), "{:?}", s.breaches);
 }
 
+/// The most a player can move in one tick on his legs (a top sprint),
+/// and at a jog: anything more is a teleport.
+fn sprint_step() -> f32 {
+    0.165
+}
+
+fn jog_step(m: &Match, i: usize) -> f32 {
+    m.top_speed(i, false).to_f32() / 60.0 + 0.002
+}
+
+#[test]
+fn after_a_goal_everyone_jogs_back_to_his_half_before_the_kick_off() {
+    let mut s = Stage::in_play(7);
+    let scorer = forward(0);
+    let goal = s.m.attacks(0);
+    s.m.last_touch = scorer as u8;
+    let from = goal.goal_center() - V2::new(goal.sign().mul(Fx::int(3)), Fx::ZERO);
+    // He scores from close in: a long way back to his half.
+    s.m.players[scorer].pos = from - V2::new(goal.sign().mul(Fx::int(2)), Fx::int(2));
+    s.m.players[s.m.keeper_of(1).unwrap()].pos = goal.goal_center() + V2::new(Fx::ZERO, Fx::int(5));
+    s.ball(
+        from,
+        ((goal.sign().mul(Fx::int(20_000))).to_f32() as i32, 500, 0),
+    );
+    assert!(s.until(120, |m| m.score[0] == 1), "{:?}", s.log);
+    // The celebration: legs only (a sprint at most, no pile-up pushes).
+    let mut worst = (0.0f32, 0usize);
+    let mut prev: Vec<V2> = s.m.players.iter().map(|p| p.pos).collect();
+    while matches!(s.m.phase, Phase::Goal { .. }) {
+        s.step([Pad::default(); 2]);
+        for i in 0..N {
+            let d = (s.m.players[i].pos - prev[i]).len().to_f32();
+            if d > worst.0 {
+                worst = (d, i);
+            }
+            prev[i] = s.m.players[i].pos;
+        }
+    }
+    assert!(worst.0 <= sprint_step(), "celebration step {worst:?}");
+    assert_eq!(s.m.restart.kind, RestartKind::KickOff);
+    // Then the walk back: nobody faster than his jog, nobody glided, and
+    // the scorer had a long way to go.
+    let back = (s.m.ax(0, s.m.players[scorer].pos)).to_f32();
+    assert!(
+        back > 25.0,
+        "the scorer celebrated {back:.1} m into their half"
+    );
+    let mut ticks = 0;
+    while matches!(s.m.phase, Phase::Setup { .. }) {
+        s.step([Pad::default(); 2]);
+        ticks += 1;
+        for i in 0..N {
+            let d = (s.m.players[i].pos - prev[i]).len().to_f32();
+            assert!(
+                d <= jog_step(&s.m, i),
+                "player {i} moved {d:.3} m in a tick on the way back (tick {ticks})"
+            );
+            prev[i] = s.m.players[i].pos;
+        }
+        assert!(ticks < 60 * 20, "they never got back");
+    }
+    // The referee restarts only once everyone is in his own half (the
+    // side not kicking off outside the circle).
+    assert!(matches!(s.m.phase, Phase::Ready { .. }));
+    for i in 0..N {
+        let p = s.m.players[i].pos;
+        let side = i / SIDE;
+        assert!(s.m.ax(side, p) <= Fx::ZERO, "player {i} in the other half");
+        if side == 0 {
+            assert!(!p.shorter_than(pitch::CIRCLE_R), "player {i} in the circle");
+        }
+    }
+    assert!(ticks > 60 * 3, "a real walk back ({ticks} ticks)");
+    assert!(s.until(60 * 4, |m| m.phase == Phase::Play), "kicked off");
+    assert!(s.breaches.is_empty(), "{:?}", s.breaches);
+}
+
+#[test]
+fn at_a_throw_in_the_thrower_and_the_others_walk_into_place() {
+    let mut s = Stage::in_play(3);
+    s.m.last_touch = forward(0) as u8;
+    let spot = V2::new(Fx::int(10), pitch::HALF_WID - Fx::milli(300));
+    s.ball(spot, (0, 0, 6_000));
+    assert!(s.until(120, |m| m.phase != Phase::Play));
+    assert_eq!(s.m.restart.kind, RestartKind::ThrowIn);
+    let mut prev: Vec<V2> = s.m.players.iter().map(|p| p.pos).collect();
+    let mut walked = 0.0f32;
+    let mut taker_from = None;
+    let mut ticks = 0;
+    while s.m.phase != Phase::Play {
+        s.step([Pad::default(); 2]);
+        ticks += 1;
+        if taker_from.is_none() && matches!(s.m.phase, Phase::Setup { .. }) {
+            taker_from = Some(prev[s.m.taker as usize]);
+        }
+        for i in 0..N {
+            let d = (s.m.players[i].pos - prev[i]).len().to_f32();
+            assert!(
+                d <= sprint_step(),
+                "player {i} jumped {d:.3} m (tick {ticks})"
+            );
+            if taker_from.is_some() && i == s.m.taker as usize {
+                walked += d;
+            }
+            prev[i] = s.m.players[i].pos;
+        }
+        assert!(ticks < 60 * 15, "the throw was never taken");
+    }
+    // The thrower got there on his legs, over the distance he stood from
+    // the line.
+    let taker = s.m.taker as usize;
+    let from = taker_from.unwrap();
+    let gap = (s.m.taker_stance(s.m.restart).0 - from).len().to_f32();
+    assert!(gap > 1.0, "the thrower started at the line ({gap:.1} m)");
+    assert!(walked + 0.2 >= gap, "walked {walked:.1} m of {gap:.1} m");
+    assert_eq!(s.anims[taker].clip, ClipName::Throw);
+}
+
+#[test]
+fn the_kicker_walks_round_the_ball_to_line_up_his_kick() {
+    // An AI kick-off: the pass goes to a teammate behind him, so he steps
+    // round the ball (staying in his half) and turns to it.
+    let (st, _, _) = crate::quick_setup(0, 1, 11, 180, [false, false]);
+    let mut s = Stage::from_setup(&st);
+    assert!(s.until(200, |m| matches!(m.phase, Phase::Ready { .. })));
+    let k = s.m.taker as usize;
+    let spot = s.m.restart.spot;
+    let start = (s.m.players[k].pos - spot).norm();
+    let face0 = s.m.players[k].face;
+    let mut prev = s.m.players[k].pos;
+    let mut turned = Fx::ONE;
+    let mut ticks = 0;
+    while matches!(s.m.phase, Phase::Ready { .. }) {
+        s.step([Pad::default(); 2]);
+        ticks += 1;
+        let p = s.m.players[k].pos;
+        let step = (p - prev).len();
+        assert!(
+            step <= crate::sim::engine::STEP_MAX + Fx::milli(2),
+            "a jump of {step:?}"
+        );
+        let r = (p - spot).len().to_f32();
+        assert!((0.25..1.0).contains(&r), "he left the ball ({r:.2} m)");
+        turned = turned.min((p - spot).norm().dot(start));
+        prev = p;
+        assert!(ticks < 300);
+    }
+    let Act::Kick { plan, .. } = s.m.players[k].act else {
+        panic!("no kick: {:?}", s.m.players[k].act);
+    };
+    let dir = plan.vel.ground().norm();
+    assert!(
+        s.m.players[k].face.dot(dir) > Fx::milli(980),
+        "lined up with the kick"
+    );
+    assert!(
+        face0.dot(dir) < Fx::milli(700),
+        "the kick wasn't straight ahead"
+    );
+    assert!(
+        turned < Fx::milli(700),
+        "he walked round the ball ({turned:?})"
+    );
+    // In his own half all along.
+    assert!(s.m.ax(k / SIDE, s.m.players[k].pos) <= Fx::milli(10));
+}
+
+/// One attacker through on goal against the keeper (rated `rating`),
+/// on `n` seeds: per seed whether the keeper came out, how far off his
+/// line he got, and whether the attacker scored.
+fn one_on_ones(rating: u8, n: u32) -> Vec<(bool, Fx, bool)> {
+    let mut out = Vec::new();
+    for seed in 0..n {
+        let mut s = Stage::in_play(100 + seed);
+        let end = s.m.attacks(0);
+        let keeper = s.m.keeper_of(1).unwrap();
+        s.m.players[keeper].attrs[crate::sim::team::DEFENSE] = rating;
+        s.m.players[keeper].pos =
+            V2::new(end.goal_x() - end.sign().mul(Fx::milli(1_500)), Fx::ZERO);
+        let carrier = forward(0);
+        let at = V2::new(end.goal_x() - end.sign().mul(Fx::int(25)), Fx::int(3));
+        // The defenders beaten, chasing back behind him.
+        for j in SIDE..N {
+            if j != keeper {
+                let y = Fx::int((j % SIDE) as i32 * 4 - 22);
+                s.m.players[j].pos = at - V2::new(end.sign().mul(Fx::int(9)), y);
+                s.m.players[j].vel = V2::ZERO;
+            }
+        }
+        s.m.players[carrier].pos = at;
+        s.m.players[carrier].vel = V2::new(end.sign().mul(Fx::int(4)), Fx::ZERO);
+        s.m.players[carrier].face = V2::new(end.sign(), Fx::ZERO);
+        s.m.players[carrier].act = Act::Free;
+        s.ball(
+            at + V2::new(end.sign().mul(Fx::milli(500)), Fx::ZERO),
+            (0, 0, 0),
+        );
+        s.m.owner = Some(carrier as u8);
+        s.m.owned_since = s.m.tick;
+        assert!(crate::sim::ai::one_on_one(&s.m, carrier));
+        let line = end.goal_x();
+        let mut came = false;
+        let mut far = Fx::ZERO;
+        for _ in 0..240 {
+            s.step([Pad::default(); 2]);
+            came |= s.m.rush[1].1;
+            far = far.max((s.m.players[keeper].pos.x - line).abs());
+            if s.m.owner == Some(keeper as u8) || s.m.phase != Phase::Play {
+                break;
+            }
+        }
+        out.push((came, far, s.m.score[0] > 0));
+    }
+    out
+}
+
+#[test]
+fn in_a_1v1_the_keeper_comes_out_more_often_the_better_he_is() {
+    let good = one_on_ones(95, 24);
+    let poor = one_on_ones(35, 24);
+    let rate = |r: &[(bool, Fx, bool)]| r.iter().filter(|o| o.0).count() as f32 / r.len() as f32;
+    // Sometimes, not always; the better keeper far more often.
+    let (g, p) = (rate(&good), rate(&poor));
+    assert!(g > 0.35 && g < 0.9, "a good keeper came out {g:.2}");
+    assert!(p < 0.2, "a poor keeper came out {p:.2}");
+    assert!(g > p + 0.25, "good {g:.2} v poor {p:.2}");
+    // Coming out he leaves his line for the ball and narrows the angle:
+    // fewer of those chances go in than when he stays.
+    let mut rushed = (0, 0);
+    let mut stayed = (0, 0);
+    let mut out_far = Fx::ZERO;
+    for &(came, far, goal) in good.iter().chain(&poor) {
+        let r = if came { &mut rushed } else { &mut stayed };
+        r.0 += 1;
+        r.1 += goal as u32;
+        if came {
+            out_far += far;
+        } else {
+            assert!(far < Fx::int(3), "he stayed on his line ({far:?})");
+        }
+    }
+    // He set off from 1.5 m: off his line at the ball, most of the way to
+    // the penalty spot.
+    let mean = out_far.div(Fx::int(rushed.0.max(1) as i32));
+    assert!(
+        mean > Fx::int(6),
+        "he came off his line ({mean:?} on average)"
+    );
+    let conceded = |r: (u32, u32)| r.1 as f32 / r.0.max(1) as f32;
+    assert!(
+        conceded(rushed) + 0.3 < conceded(stayed),
+        "goals conceded coming out {rushed:?}, staying {stayed:?}"
+    );
+}
+
 #[test]
 fn half_time_swaps_ends_and_the_other_side_starts_the_second_half() {
     let mut s = Stage::in_play(9);
@@ -348,19 +603,31 @@ fn slide_from_behind(at: V2, seed: u32, yellows: u8) -> (Stage, usize, usize) {
 fn a_reckless_slide_from_behind_is_a_free_kick_and_a_yellow() {
     let (mut s, carrier, tackler) = slide_from_behind(v2(-5, 6), 21, 0);
     assert_eq!(s.events(EventKind::Foul).len(), 1, "{:?}", s.log);
-    assert_eq!(
-        s.events(EventKind::Yellow).len(),
-        1,
-        "from behind: a caution"
-    );
-    assert_eq!(s.m.players[tackler].yellow, 1);
     assert_eq!(s.m.restart.kind, RestartKind::FreeKick { direct: true });
     assert_eq!(s.m.restart.team, 0);
-    // The fouled man goes down, the slider slid, the referee shows it.
-    s.run(30);
+    // The card waits for the referee: he comes to the slider first.
+    let b = s.m.booking.expect("from behind: a caution on its way");
+    assert_eq!(b.player as usize, tackler);
+    assert_eq!(b.card, crate::sim::rules::Card::Yellow);
+    assert_eq!(s.m.players[tackler].yellow, 0, "not shown yet");
+    let (yellow, ref_dist) = book_and_measure(&mut s, tackler);
+    assert_eq!(yellow.player as usize, tackler);
+    assert!(
+        ref_dist < crate::sim::engine::CARD_DIST.to_f32(),
+        "the card was shown from {ref_dist:.1} m"
+    );
+    assert_eq!(s.m.players[tackler].yellow, 1);
+    // The fouled man went down, the slider slid, the referee holds the
+    // card up where he stands.
+    s.run(10);
     assert!(s.showed(carrier, ClipName::Down), "{:?}", s.shown[carrier]);
     assert!(s.showed(tackler, ClipName::Slide), "{:?}", s.shown[tackler]);
-    assert!(s.showed(N, ClipName::RefCard), "{:?}", s.shown[N]);
+    assert_eq!(s.anims[N].clip, ClipName::RefCard);
+    assert_eq!(
+        crate::render::shown_card(&s.m),
+        Some(false),
+        "a yellow card"
+    );
     s.check_poses("foul");
     assert!(
         s.until(60 * 15, |m| m.phase == Phase::Play),
@@ -369,11 +636,50 @@ fn a_reckless_slide_from_behind_is_a_free_kick_and_a_yellow() {
     assert!(s.breaches.is_empty(), "{:?}", s.breaches);
 }
 
+/// Play out a booking of `who`: the referee runs up to him and the card
+/// counts once shown. Returns the card's event and how far the referee
+/// stood from him then; checks no card was raised on the way.
+fn book_and_measure(s: &mut Stage, who: usize) -> (Event, f32) {
+    let start = (s.m.officials[0] - s.m.players[who].pos).len().to_f32();
+    for _ in 0..60 * 10 {
+        let before = s.log.len();
+        s.step([Pad::default(); 2]);
+        if let Some(e) = s.log[before..]
+            .iter()
+            .copied()
+            .find(|e| matches!(e.kind, EventKind::Yellow | EventKind::Red))
+        {
+            let d = (s.m.officials[0] - s.m.players[who].pos).len().to_f32();
+            assert!(
+                start > d + 1.0 || start < crate::sim::engine::CARD_DIST.to_f32(),
+                "the referee walked up ({start:.1} m -> {d:.1} m)"
+            );
+            return (e, d);
+        }
+        assert_ne!(
+            s.anims[N].clip,
+            ClipName::RefCard,
+            "a card raised from a distance"
+        );
+    }
+    panic!("no card shown: {:?}", s.log);
+}
+
 #[test]
 fn a_second_yellow_sends_him_off_and_his_side_plays_on_with_ten() {
-    let (s, _, tackler) = slide_from_behind(v2(-5, -6), 23, 1);
-    assert_eq!(s.events(EventKind::Red).len(), 1, "{:?}", s.log);
-    assert!(s.m.players[tackler].off);
+    let (mut s, _, tackler) = slide_from_behind(v2(-5, -6), 23, 1);
+    assert!(!s.m.players[tackler].off, "not before the card");
+    let (card, ref_dist) = book_and_measure(&mut s, tackler);
+    // The second yellow, and with it the red, as he stands by him.
+    let reds = s.events(EventKind::Red);
+    assert_eq!(reds.len(), 1, "{:?}", s.log);
+    assert_eq!(reds[0].tick, card.tick);
+    assert!(ref_dist < crate::sim::engine::CARD_DIST.to_f32());
+    assert_eq!(crate::render::shown_card(&s.m), Some(true), "a red card");
+    // He leaves once the card has been shown.
+    assert!(s.until(crate::sim::engine::CARD_TICKS as u32 + 2, |m| {
+        m.players[tackler].off
+    }));
     let on = (SIDE..N).filter(|&i| !s.m.players[i].off).count();
     assert_eq!(on, SIDE - 1);
 }
@@ -392,7 +698,9 @@ fn a_foul_in_the_box_is_a_penalty_taken_from_the_spot() {
     assert_eq!(s.m.restart.team, 0);
     // The kick: the taker on the spot, the keeper on his line, everyone
     // else out of the box.
-    assert!(s.until(60 * 10, |m| matches!(m.phase, Phase::Ready { .. })));
+    // (The referee books the slider first: he runs over from the far
+    // side of the staged play.)
+    assert!(s.until(60 * 20, |m| matches!(m.phase, Phase::Ready { .. })));
     let taker = s.m.taker as usize;
     assert!((s.m.players[taker].pos - end.pen_spot()).len() < Fx::int(2));
     let keeper = s.m.keeper_of(1).unwrap();

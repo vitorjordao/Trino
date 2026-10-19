@@ -1402,6 +1402,11 @@ cargo test --workspace
 - **The PC `gamepad` feature links libudev on Linux** (`libudev-dev`). Keep it opt-in
   for Linux builds.
 
+- **PC strict mode counts an offscreen draw as an N64 CPU draw** (`RspReject::Offscreen`
+  in `n64_estimate`). A test that asserts "no CPU draws in the worst frame"
+  (`solid_eleven_render`) then fails when a moved match changes which frame is worst.
+  Cull markers and guides by the frustum like the bodies (Solid Eleven's
+  `draw_guides`, issue #86).
 - **egui: a truncating `ComboBox` sizes its text to the space available, not to its
   `.width()`.** A long name pushed the button after it out of the Inspector. Wrap it in
   `theme::fixed_width` (the layout audit catches the next one).

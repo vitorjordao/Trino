@@ -542,6 +542,9 @@ file = "models/leg_k29.glb"
 [models.se_flag_hand]
 file = "models/flag_hand.glb"
 
+[models.se_card]
+file = "models/card.glb"
+
 [models.se_sleeve]
 file = "models/sleeve.glb"
 platforms = ["pc"]

@@ -251,3 +251,124 @@ fn the_match_frame_cost_is_pinned() {
         );
     }
 }
+
+/// Issue #86: the referee's card, held up where he books a player, is an
+/// N64 RSP draw like the bodies (and a 3DS GPU draw), near the camera and
+/// far from it (where the referee keeps his arms to hold it: the far
+/// console body has none). The scripted match has no booking, so this
+/// stages one: a slide from behind, a yellow.
+#[test]
+fn the_referees_card_stays_on_the_rsp_near_and_far() {
+    use solid_eleven::render::{FAR_DEPTH, M_CARD, Sky};
+    use solid_eleven::sim::ball::Ball;
+    use solid_eleven::sim::engine::{Act, Pad, Phase, SIDE};
+    use solid_eleven::sim::fx::{Fx, V2};
+    let meshes = meshes();
+    let mut g =
+        SolidElevenGame::exhibition(Vec2::new(320.0, 240.0), 0, 1, 21, [false, false], Sky::Day);
+    let tick = |g: &mut SolidElevenGame| {
+        g.update(&trino_core::InputState::default(), &mut Mute, 1.0 / 60.0)
+    };
+    for _ in 0..60 * 30 {
+        if g.session.as_ref().unwrap().m.phase == Phase::Play {
+            break;
+        }
+        tick(&mut g);
+    }
+    let m = &mut g.session.as_mut().unwrap().m;
+    m.humans = [false, true];
+    let (carrier, tackler) = (9, SIDE + 4);
+    let at = V2::new(-Fx::int(5), Fx::int(6));
+    let fwd = m.attacks(0).sign();
+    m.players[carrier].pos = at;
+    m.players[carrier].face = V2::new(fwd, Fx::ZERO);
+    m.players[carrier].vel = V2::ZERO;
+    m.players[carrier].act = Act::Free;
+    m.ball = Ball::at_rest(at + V2::new(fwd.mul(Fx::milli(1_500)), Fx::ZERO));
+    m.owner = Some(carrier as u8);
+    m.players[tackler].pos = at - V2::new(fwd.mul(Fx::milli(1_200)), Fx::ZERO);
+    m.players[tackler].face = V2::new(fwd, Fx::ZERO);
+    m.players[tackler].act = Act::Free;
+    m.active[1] = tackler as u8;
+    let slide = Pad {
+        slide: true,
+        mv: V2::new(fwd, Fx::ZERO),
+        ..Pad::default()
+    };
+    m.step([Pad::default(), slide]);
+    for _ in 0..60 * 12 {
+        // Long enough for the arm to have gone up (the clip and its fade).
+        if g.session
+            .as_ref()
+            .unwrap()
+            .m
+            .booking
+            .is_some_and(|b| b.shown > 40)
+        {
+            break;
+        }
+        tick(&mut g);
+    }
+    assert!(
+        g.session
+            .as_ref()
+            .unwrap()
+            .m
+            .booking
+            .is_some_and(|b| b.shown > 0),
+        "no card was shown"
+    );
+    let mut r = Rec::default();
+    for (label, back) in [("near", None), ("far", Some(FAR_DEPTH + 12.0))] {
+        let s = g.session.as_mut().unwrap();
+        let referee = s.m.officials[0];
+        // The broadcast camera on the referee; for the far shot, backed off
+        // beyond the far-detail depth.
+        s.view.cam.focus = trino_core::Vec3::new(referee.x.to_f32(), 0.9, referee.y.to_f32());
+        if let Some(back) = back {
+            s.view.cam.back = back;
+            s.view.cam.height = 6.0;
+        }
+        g.render(&mut r);
+        let light = r.light.unwrap_or(DEFAULT_LIGHT);
+        let cards = r.draws.iter().filter(|d| d.0 == M_CARD).count();
+        assert_eq!(cards, 1, "{label}: the card is drawn once");
+        for (id, mat, params, cam) in &r.draws {
+            let mesh = Mesh::from_tmdl(&meshes[&id.0]).unwrap();
+            rsp_mesh_check(&mesh).unwrap();
+            let ctx = TnlContext::new(cam, &light, Vec2::new(320.0, 240.0));
+            // (The far shot's camera is staged: only the card is checked
+            // there; the stadium may cross its near plane.)
+            if back.is_some() && *id != M_CARD {
+                continue;
+            }
+            if let Err(e) = rsp_check(&ctx, &mesh, mat, params) {
+                assert_eq!(
+                    e,
+                    trino_core::RspReject::Offscreen,
+                    "{label}: {:08x} leaves the RSP",
+                    id.0
+                );
+                assert_ne!(*id, M_CARD, "{label}: the card is off screen");
+            }
+            if *id == M_CARD {
+                // In his raised hand, over his head: not at a joint the far
+                // body never posed.
+                let w = solid_eleven::render::WORLD;
+                let (x, y, z) = (mat.m[0][3] / w, mat.m[1][3] / w, mat.m[2][3] / w);
+                let (dx, dz) = (x - referee.x.to_f32(), z - referee.y.to_f32());
+                assert!(
+                    dx * dx + dz * dz < 1.0 && (1.6..2.9).contains(&y),
+                    "{label}: the card at ({x:.2}, {y:.2}, {z:.2}), the referee at {:?}",
+                    referee.to_f32()
+                );
+                let ctx3 = TnlContext::new(cam, &light, Vec2::new(400.0, 240.0));
+                assert!(trino_core::render3d::gpu_mesh_check(&mesh).is_ok());
+                assert!(
+                    trino_core::render3d::gpu_check(&ctx3, &mesh, mat, params).is_ok(),
+                    "{label}: the card leaves the 3DS GPU"
+                );
+            }
+        }
+    }
+}

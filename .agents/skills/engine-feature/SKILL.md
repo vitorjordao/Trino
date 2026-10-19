@@ -219,6 +219,23 @@ A feature is done only when **PC, N64 and 3DS** all run it and an emulator has s
 - Tests that spawn `cargo` should reuse this workspace's `target/`
   (`CARGO_TARGET_DIR`), or they rebuild the world.
 
+### Tuning a deterministic game sim (Solid Eleven, issue #86)
+
+- Fixed-seed statistical tests (`sim/balance.rs`, the AI sample) sit near their
+  limits: any sim change reshuffles every seed. Measure on bigger tuning samples
+  first (`cargo test -p solid-eleven --release print_big_metrics print_press_duel
+  print_side_bias -- --ignored --nocapture`, 60 to 400 matches, seconds in release),
+  then pick constants that pass *every* fixed-seed test at once.
+- Measure a one-sided behavior (pressing, a keeper's rush) as a duel: one side
+  with it, the same clubs without, sides swapped every other match
+  (`press_duel`, the test-only `Match::urgency_test`). Shares that alternate by
+  construction (possessions won) stay at 50 %; use territory, possession, fouls.
+- Prove a "no teleport" change with a whole-match per-tick step bound and run that
+  test on the old code once (a scratch `git worktree` with its own `target/`): it
+  must fail there.
+- Evidence for motion: a top-down trace (one dot per tick per player) shows a
+  jump as a gap; `xtask/tests/solid_eleven_gameplay_shots.rs` writes them.
+
 ## 4. Verify on every platform
 
 1. The `test-all` gates: fmt, clippy `-D warnings`, `cargo test --workspace` (with a GPU).

@@ -66,3 +66,26 @@ cargo xtask test n64 --project <that dir>                     # its ares self-te
   1/4096): the N64's draw memo then patches the stadium's draws.
 - A human side waits up to 8 s at a kick-off: scripts must press a kick once
   the players are set (the self-test once idled three seconds of its window).
+- Restarts are walked, never glided (issue #86): `walk_in` caps a step at the
+  player's legs and play restarts once the taker is set and the positions are
+  legal (`restart_legal`). A Setup that waits for *everyone* to arrive costs
+  seconds per restart; a Setup that times out and teleports is what the issue
+  removed. `restarts_never_teleport_anyone_and_takers_line_up` fails the old code.
+- A throw-in starts from the ball's spot and the ball stays overhead through the
+  wind-up (`release`, `ball_tick`). Starting it from the thrower's feet + facing
+  put the ball over the line once the thrower turned to aim, and a corner-flag
+  throw-in looped forever (a match never finished: a balance test "hangs").
+- `think` used to overwrite the carrier's `target` with his shape slot every
+  tick, so between his thoughts (3 ticks in 4) he ran back toward it: a 1v1
+  runner turned round at the box. The carrier now keeps the run he chose.
+- Possessions won alternate between the sides, so a "share of balls won" is
+  always ~50 %: measure pressing as balls won in the opponents' half, possession
+  and fouls in a duel against the old pressing (`press_duel`, `urgency_test`).
+- The balance tests (`sim/balance.rs`) sit near their limits on fixed seeds:
+  side bias and club spread move by chance with any sim change. Tune on the
+  60-match aids (`print_big_metrics`, `print_press_duel`, `print_side_bias`) and
+  pick constants that pass every fixed-seed test, not one that passes one.
+- `solid_eleven_render::the_match_passes_strict_mode_on_the_n64_profile` checks
+  only the worst frame: an offscreen draw counts as an N64 CPU draw
+  (`RspReject::Offscreen`). Cull the guides like the players (`draw_guides` takes
+  the frustum) or a moved match fails it.

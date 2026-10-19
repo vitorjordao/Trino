@@ -1,3 +1,17 @@
+== After merging origin/main 07b15b5 (#85): ares (golden re-blessed: #85's hexagon blob -> the engine's soft blob)
+[n64] golden frame match: target/test-projects/ci-football/tests/golden/n64/match.png matches
+scene                      avg ms   max ms    fps
+match                       27.57    39.22   36.3
+[n64] TEST PASS (with the Expansion Pak)
+N64_RC=0
+
+== After merging #85: Azahar
+[3ds] golden frame match: target/test-projects/ci-football/tests/golden/3ds/match.png: mean diff 0.04, 0.07% far pixels (limits 3, 2.0%)
+[3ds] golden frame match_bottom: target/test-projects/ci-football/tests/golden/3ds/match_bottom.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[3ds] TEST PASS (as a New 3DS)
+3DS_RC=0
+
+== Before the merge (c10ffe9)
 [n64] golden frame match: target/test-projects/ci-football/tests/golden/n64/match.png matches
 scene                      avg ms   max ms    fps
 match                       30.98    40.10   32.3

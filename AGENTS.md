@@ -1138,10 +1138,10 @@ cargo test --workspace
   crashed whole test binaries inside `libvulkan` (9 runs in 12 of `engine_checks`; 0 in
   20 without the names). `PcRenderer::new_headless` uses `renderer::headless_flags()`
   (the build's flags minus `DEBUG`); `WGPU_DEBUG=1` brings the names back for a capture.
-  A test that builds its own `wgpu::Instance` takes the same flags. Parallel devices on
-  RADV also, rarely, read back the previous frame's pixels (`render_e2e`: 2 in 25
-  parallel, 0 in 30 serial): a GPU test binary holds a binary-wide `gpu()` guard
-  (`crates/platform-pc/tests/common`).
+  A test that builds its own `wgpu::Instance` takes the same flags: while
+  `render_e2e`'s shared-device check still named its objects, a parallel test read back
+  the previous frame's pixels (2 runs in 25); with names nowhere, 0 in 85 (RADV) and 0
+  in 60 (lavapipe) parallel runs.
 - **4× MSAA resolves are not bit-exact across target sizes on RADV** (GitHub #93): a
   partly covered pixel resolves 1/255 apart in a 240×136 and a 480×272 target, and the
   CAS sharpening amplifies it to 2–3/255. Lavapipe (CI) is exact, so a GPU test that

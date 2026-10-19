@@ -36,17 +36,6 @@ pub fn font() -> FontId {
     FontId::from_path(FONT)
 }
 
-/// One GPU test at a time in a test binary: RADV, with renderers created on
-/// parallel test threads, crashed inside `libvulkan` (GitHub #94, fixed by
-/// [`trino_platform_pc::renderer::headless_flags`]) and, rarely, drew a
-/// frame with the previous frame's pixels (`render_e2e`: 2 runs in 25
-/// parallel, 0 in 30 serial). Hold the guard for the whole test.
-static GPU: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-pub fn gpu() -> std::sync::MutexGuard<'static, ()> {
-    GPU.lock().unwrap_or_else(|e| e.into_inner())
-}
-
 /// Headless renderer for `profile`, or `None` on GPU-less machines unless
 /// `TRINO_REQUIRE_GPU` insists (CI on lavapipe).
 pub fn headless(profile: SimProfile) -> Option<PcRenderer> {

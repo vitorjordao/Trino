@@ -27,7 +27,6 @@ fn read(r: &mut PcRenderer, x: u32, y: u32) -> [u8; 4] {
 /// rectangles and bitmap text from baked assets, plus the per-frame stats.
 #[test]
 fn baked_sprites_rects_and_text_draw_on_the_pc_renderer() {
-    let _gpu = gpu();
     let Some(mut r) = headless(SimProfile::Native) else {
         return;
     };
@@ -206,7 +205,6 @@ fn light(color: Color, fog: Fog) -> Light {
 /// textured model, billboards and the T&L stats.
 #[test]
 fn baked_models_light_fog_depth_textures_and_billboards() {
-    let _gpu = gpu();
     let Some(mut r) = headless(SimProfile::Native) else {
         return;
     };
@@ -448,7 +446,6 @@ fn baked_models_light_fog_depth_textures_and_billboards() {
 /// tooling accessors and the window mapping without a window.
 #[test]
 fn internal_size_shared_device_and_tooling_accessors() {
-    let _gpu = gpu();
     let Some(mut r) = headless(SimProfile::N64) else {
         return;
     };
@@ -571,7 +568,6 @@ fn internal_size_shared_device_and_tooling_accessors() {
 /// separately and presented under the main one.
 #[test]
 fn n3ds_second_screen_renders_reads_back_and_presents_stacked() {
-    let _gpu = gpu();
     let Some(mut r) = headless(SimProfile::N3ds) else {
         return;
     };
@@ -699,7 +695,6 @@ fn n3ds_second_screen_renders_reads_back_and_presents_stacked() {
 /// strict mode's budget checks on content that would not fit the console.
 #[test]
 fn n64_look_and_strict_mode_budgets() {
-    let _gpu = gpu();
     let Some(mut r) = headless(SimProfile::N64) else {
         return;
     };
@@ -867,7 +862,6 @@ fn n64_look_and_strict_mode_budgets() {
 /// textures; a billboard behind the camera is skipped.
 #[test]
 fn large_frames_grow_buffers_and_batches_mix_textures() {
-    let _gpu = gpu();
     let Some(mut r) = headless(SimProfile::Native) else {
         return;
     };
@@ -960,7 +954,6 @@ fn large_frames_grow_buffers_and_batches_mix_textures() {
 /// for in JavaScript, and what the editor's Web Game view shows (issue #47).
 #[test]
 fn frame_times_count_calls_and_pipeline_switches() {
-    let _gpu = gpu();
     let Some(mut r) = headless(SimProfile::Web) else {
         return;
     };
@@ -999,7 +992,6 @@ fn frame_times_count_calls_and_pipeline_switches() {
 /// without a palette the card stays white.
 #[test]
 fn a_palette_recolors_slot_regions_per_draw() {
-    let _gpu = gpu();
     let Some(mut r) = headless(SimProfile::Native) else {
         return;
     };

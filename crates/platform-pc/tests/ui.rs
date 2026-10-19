@@ -7,14 +7,6 @@ use trino_core::ui::{Anchor, NONE, NodeKind, Nodes, Scaling, Size, Theme, UiNode
 use trino_core::{Caps, Color, Insets, Renderer, Screen, Ui, UiEnv};
 use trino_platform_pc::{PcRenderer, SimProfile};
 
-/// One GPU test at a time in this binary (RADV with parallel renderers:
-/// GitHub #94; see `common::gpu`).
-static GPU: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-fn gpu() -> std::sync::MutexGuard<'static, ()> {
-    GPU.lock().unwrap_or_else(|e| e.into_inner())
-}
-
 fn headless(profile: SimProfile) -> Option<PcRenderer> {
     match pollster::block_on(PcRenderer::new_headless(profile)) {
         Ok(r) => Some(r),
@@ -78,7 +70,6 @@ fn draw(r: &mut PcRenderer, nodes: &[UiNode<'_>]) {
 
 #[test]
 fn strict_mode_fails_a_ui_screen_over_the_n64_node_budget() {
-    let _gpu = gpu();
     let Some(mut r) = headless(SimProfile::N64) else {
         return;
     };
@@ -111,7 +102,6 @@ fn strict_mode_fails_a_ui_screen_over_the_n64_node_budget() {
 
 #[test]
 fn strict_mode_fails_a_ui_screen_over_the_n64_draw_budget() {
-    let _gpu = gpu();
     let Some(mut r) = headless(SimProfile::N64) else {
         return;
     };
@@ -132,7 +122,6 @@ fn strict_mode_fails_a_ui_screen_over_the_n64_draw_budget() {
 
 #[test]
 fn safe_areas_follow_the_profile_and_an_override() {
-    let _gpu = gpu();
     let Some(mut n64) = headless(SimProfile::N64) else {
         return;
     };

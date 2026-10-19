@@ -75,14 +75,6 @@ fn read_png(path: &std::path::Path) -> (u32, u32, Vec<u8>) {
 
 /// Headless renderer for a sim profile, or None on GPU-less machines
 /// (unless TRINO_REQUIRE_GPU insists).
-/// One GPU test at a time in this binary (RADV with parallel renderers:
-/// GitHub #94; see `common::gpu`).
-static GPU: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-fn gpu() -> std::sync::MutexGuard<'static, ()> {
-    GPU.lock().unwrap_or_else(|e| e.into_inner())
-}
-
 fn headless_renderer(profile: SimProfile) -> Option<PcRenderer> {
     match pollster::block_on(PcRenderer::new_headless(profile)) {
         Ok(r) => Some(r),
@@ -203,7 +195,6 @@ fn check_golden_tolerant(
 
 #[test]
 fn basic_scene_matches_golden() {
-    let _gpu = gpu();
     let Some(mut renderer) = headless_renderer(SimProfile::N64) else {
         return;
     };
@@ -216,7 +207,6 @@ fn basic_scene_matches_golden() {
 
 #[test]
 fn n64_look_scene_matches_golden() {
-    let _gpu = gpu();
     let Some(mut renderer) = headless_renderer(SimProfile::N64) else {
         return;
     };
@@ -233,7 +223,6 @@ fn n64_look_scene_matches_golden() {
 /// pixel).
 #[test]
 fn vi_dedither_smooths_the_dither_and_keeps_flat_areas() {
-    let _gpu = gpu();
     let Some(mut renderer) = headless_renderer(SimProfile::N64) else {
         return;
     };
@@ -279,7 +268,6 @@ fn vi_dedither_smooths_the_dither_and_keeps_flat_areas() {
 
 #[test]
 fn n3ds_scene_matches_golden() {
-    let _gpu = gpu();
     // 400x240 + bilinear sprite sampling (the 3DS GPU default).
     let Some(mut renderer) = headless_renderer(SimProfile::N3ds) else {
         return;
@@ -290,7 +278,6 @@ fn n3ds_scene_matches_golden() {
 
 #[test]
 fn platformer_scene_matches_golden() {
-    let _gpu = gpu();
     // The real showcase game after a deterministic input script, rendered
     // with procedural stand-in sprites (goldens must not depend on the
     // committed PNG masters).
@@ -351,7 +338,6 @@ fn platformer_scene_matches_golden() {
 
 #[test]
 fn cube3d_scene_matches_golden() {
-    let _gpu = gpu();
     // The 3D pipeline end to end: glTF master -> TMDL bake -> upload ->
     // software T&L -> triangle rasterization.
     let Some(mut renderer) = headless_renderer(SimProfile::N64) else {
@@ -386,7 +372,6 @@ fn cube3d_scene_matches_golden() {
 
 #[test]
 fn strict_mode_rejects_texture_over_budget() {
-    let _gpu = gpu();
     let Some(mut renderer) = headless_renderer(SimProfile::N64) else {
         return;
     };
@@ -420,7 +405,6 @@ fn strict_mode_rejects_texture_over_budget() {
 
 #[test]
 fn strict_mode_rejects_3d_over_the_n64_time_ceiling() {
-    let _gpu = gpu();
     let Some(mut renderer) = headless_renderer(SimProfile::N64) else {
         return;
     };

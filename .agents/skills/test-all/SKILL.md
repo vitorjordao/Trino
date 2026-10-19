@@ -156,12 +156,14 @@ it is 0 in 20 and 0 in 5 loops of every `trino-platform-pc` binary.
 - `PcRenderer::new_headless` builds its instance with `renderer::headless_flags()` (the
   build's flags minus `DEBUG`, then the `WGPU_*` variables). A test that makes its own
   `wgpu::Instance` (`render_e2e`'s shared-device check) passes the same flags.
-- Parallel devices on RADV can also hand back the previous frame's pixels, rarely
-  (`render_e2e`'s tint check read red where it drew blue: 2 in 25 parallel runs, 0 in 30
-  serial). Every GPU test file holds a binary-wide guard for the whole test: `gpu()` in
-  `crates/platform-pc/tests/common` (or the file's own copy).
-- A SIGSEGV or a stale frame in a GPU binary without that guard is this; add the guard,
-  then rerun with `--test-threads=1` to tell it from a real failure.
+- One named instance is enough: while `render_e2e`'s shared-device check still built
+  its own instance with the default (debug) flags, a parallel test in that binary read
+  back the previous frame's pixels (the tint check read red where it drew blue: 2 runs
+  in 25). With the names gone everywhere: 0 in 85 parallel runs on RADV, 0 in 60 on
+  lavapipe, no mutex.
+- A SIGSEGV in `libvulkan` or a stale frame in a GPU binary: look for a
+  `wgpu::Instance` built without `headless_flags()`, then rerun with
+  `--test-threads=1` to tell it from a real failure.
 
 The loop that measured it (counts SIGSEGVs per binary):
 

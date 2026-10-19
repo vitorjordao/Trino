@@ -1,0 +1,28 @@
+    Finished `test` profile [optimized + debuginfo] target(s) in 0.30s
+     Running unittests src/main.rs (target/debug/deps/trino_editor-f83f1dd4152b7c78)
+
+running 21 tests
+test ui_tests::ambient_occlusion_panel_view_modes_and_baking ... ok
+test ui_tests::animation_tab_previews_measures_and_exports ... ok
+test ui_tests::asset_groups_chips_requires_cells_and_memory ... ok
+test ui_tests::audio_inspector_and_mixer_write_the_text_files ... ok
+test ui_tests::commands_edit_save_and_export_in_a_temp_project ... ok
+test ui_tests::editor_layout_is_clean_at_minimum_and_default_sizes ... ok
+test ui_tests::gizmo_drags_grab_the_handle_under_the_press ... ok
+test ui_tests::hierarchy_select_palette_duplicate_and_undo ... ok
+test ui_tests::impostors_bake_from_the_inspector_and_drive_a_lod_level ... ok
+test ui_tests::launcher_lists_recent_projects_opens_and_creates ... ok
+test ui_tests::localization_tab_edits_the_tables_and_follows_their_files ... ok
+test ui_tests::new_3ds_tier_variant_reaches_the_game_view_the_file_and_the_budget ... ok
+test ui_tests::particle_effects_preview_caps_and_files ... ok
+test ui_tests::platform_budget_shows_rsp_reasons_and_unseen_draws ... ok
+test ui_tests::platform_variants_reach_the_game_view_and_the_file ... ok
+test ui_tests::quality_tab_writes_the_presets_and_the_game_view_previews_them ... ok
+test ui_tests::scene_view_pans_flies_dollies_and_flips_axes ... ok
+test ui_tests::shadows_panel_components_tiers_and_view_modes ... ok
+test ui_tests::texture_inspector_formats_quality_and_errors ... ok
+test ui_tests::ui_tab_edits_screens_and_follows_their_files ... ok
+test ui_tests::water_budget_ripples_and_material_edits ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 101 filtered out; finished in 84.60s
+

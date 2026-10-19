@@ -1,0 +1,249 @@
+   Compiling serde_core v1.0.228
+   Compiling proc-macro2 v1.0.106
+   Compiling cfg-if v1.0.4
+   Compiling quote v1.0.46
+   Compiling unicode-ident v1.0.24
+   Compiling pkg-config v0.3.33
+   Compiling shlex v2.0.1
+   Compiling find-msvc-tools v0.1.9
+   Compiling once_cell v1.21.4
+   Compiling libc v0.2.186
+   Compiling log v0.4.33
+   Compiling rustix v1.1.4
+   Compiling cfg_aliases v0.2.1
+   Compiling smallvec v1.15.2
+   Compiling linux-raw-sys v0.12.1
+   Compiling libm v0.2.16
+   Compiling libloading v0.8.9
+   Compiling autocfg v1.5.1
+   Compiling scoped-tls v1.0.1
+   Compiling cc v1.2.65
+   Compiling dlib v0.5.3
+   Compiling memchr v2.8.2
+   Compiling zerocopy v0.8.52
+   Compiling downcast-rs v1.2.1
+   Compiling thiserror v2.0.18
+   Compiling wayland-client v0.31.14
+   Compiling equivalent v1.0.2
+   Compiling arrayvec v0.7.8
+   Compiling allocator-api2 v0.2.21
+   Compiling foldhash v0.2.0
+   Compiling naga v29.0.4
+   Compiling hashbrown v0.17.1
+   Compiling num-traits v0.2.19
+   Compiling wayland-sys v0.31.11
+   Compiling thiserror v1.0.69
+   Compiling rustix v0.38.44
+   Compiling unicode-width v0.2.2
+   Compiling ash v0.38.0+1.3.281
+   Compiling raw-window-handle v0.6.2
+   Compiling hashbrown v0.16.1
+   Compiling bit-vec v0.9.1
+   Compiling parking_lot_core v0.9.12
+   Compiling quick-xml v0.39.4
+   Compiling codespan-reporting v0.13.1
+   Compiling bit-set v0.9.1
+   Compiling foldhash v0.1.5
+   Compiling khronos-egl v6.0.0
+   Compiling linux-raw-sys v0.4.15
+   Compiling hexf-parse v0.2.1
+   Compiling syn v2.0.118
+   Compiling indexmap v2.14.0
+   Compiling scopeguard v1.2.0
+   Compiling rustc-hash v1.1.0
+   Compiling lock_api v0.4.14
+   Compiling hashbrown v0.15.5
+   Compiling wgpu-hal v29.0.4
+   Compiling crc32fast v1.5.0
+   Compiling serde v1.0.228
+   Compiling getrandom v0.3.4
+   Compiling simd-adler32 v0.3.9
+   Compiling slab v0.4.12
+   Compiling presser v0.3.1
+   Compiling ttf-parser v0.25.1
+   Compiling wayland-backend v0.3.15
+   Compiling ogg_next_sys v0.1.5
+   Compiling wayland-scanner v0.31.10
+   Compiling parking_lot v0.12.5
+   Compiling xcursor v0.3.10
+   Compiling profiling v1.0.18
+   Compiling adler2 v2.0.1
+   Compiling ab_glyph_rasterizer v0.1.10
+   Compiling trino-core v0.2.0-dev.1 (/home/v/Documents/projects/Trino-2-main/crates/core)
+   Compiling glow v0.17.0
+   Compiling zmij v1.0.21
+   Compiling smithay-client-toolkit v0.19.2
+   Compiling xkeysym v0.2.1
+   Compiling arrayref v0.3.9
+   Compiling renderdoc-sys v1.1.0
+   Compiling version_check v0.9.5
+   Compiling cursor-icon v1.2.0
+   Compiling ordered-float v5.3.0
+   Compiling strict-num v0.1.1
+   Compiling miniz_oxide v0.8.9
+   Compiling ahash v0.8.12
+   Compiling memmap2 v0.9.11
+   Compiling x11-dl v2.21.0
+   Compiling alsa-sys v0.4.0
+   Compiling bitflags v2.13.0
+   Compiling wgpu-core v29.0.4
+   Compiling byteorder v1.5.0
+   Compiling spirv v0.4.0+sdk-1.4.341.0
+   Compiling gpu-descriptor-types v0.2.0
+   Compiling serde_json v1.0.150
+   Compiling typeid v1.0.3
+   Compiling gpu-descriptor v0.3.2
+   Compiling litrs v1.0.0
+   Compiling flate2 v1.1.9
+   Compiling aotuv_lancer_vorbis_sys v0.1.6
+   Compiling basis-universal-sys v0.3.1
+   Compiling fdeflate v0.3.7
+   Compiling wgpu v29.0.4
+   Compiling winit v0.30.13
+   Compiling x11rb-protocol v0.13.2
+   Compiling document-features v0.2.12
+   Compiling tracing-core v0.1.36
+   Compiling as-raw-xcb-connection v1.0.1
+   Compiling getrandom v0.4.3
+   Compiling tinyvec v1.13.3
+   Compiling owned_ttf_parser v0.25.1
+   Compiling pin-project-lite v0.2.17
+   Compiling ab_glyph v0.2.32
+   Compiling zune-core v0.5.1
+   Compiling itoa v1.0.18
+   Compiling pxfm v0.1.29
+   Compiling inflections v1.1.1
+   Compiling zune-jpeg v0.5.15
+   Compiling tracing v0.1.44
+   Compiling png v0.18.1
+   Compiling bytemuck_derive v1.10.2
+   Compiling thiserror-impl v2.0.18
+   Compiling zerocopy-derive v0.8.52
+   Compiling thiserror-impl v1.0.69
+   Compiling bytemuck v1.25.0
+   Compiling serde_derive v1.0.228
+   Compiling wgpu-types v29.0.4
+   Compiling tiny-skia-path v0.11.4
+   Compiling gltf-derive v1.4.1
+   Compiling tiny-skia v0.11.4
+   Compiling polling v3.11.0
+   Compiling calloop v0.13.0
+   Compiling wayland-csd-frame v0.3.0
+   Compiling wayland-protocols v0.32.13
+   Compiling calloop-wayland-source v0.3.0
+   Compiling wayland-cursor v0.31.14
+   Compiling gethostname v1.1.0
+   Compiling moxcms v0.8.1
+   Compiling ogg v0.8.0
+   Compiling xkbcommon-dl v0.4.2
+   Compiling static_assertions v1.1.0
+   Compiling percent-encoding v2.3.2
+   Compiling byteorder-lite v0.1.0
+   Compiling dpi v0.1.2
+   Compiling half v2.7.1
+   Compiling smol_str v0.2.2
+   Compiling cpal v0.18.1
+   Compiling winnow v1.0.3
+   Compiling lazy_static v1.5.0
+   Compiling alsa v0.11.0
+   Compiling lewton v0.10.2
+   Compiling toml_parser v1.1.2+spec-1.1.0
+   Compiling ron v0.12.2
+   Compiling gltf-json v1.4.1
+   Compiling gpu-allocator v0.28.0
+   Compiling x11rb v0.13.2
+   Compiling image v0.25.10
+   Compiling wayland-protocols-wlr v0.3.12
+   Compiling wayland-protocols-plasma v0.3.12
+   Compiling toml_datetime v1.1.1+spec-1.1.0
+   Compiling serde_spanned v1.1.1
+   Compiling errno v0.3.14
+   Compiling web-time v1.1.0
+   Compiling dasp_sample v0.11.0
+   Compiling bitflags v1.3.2
+   Compiling base64 v0.13.1
+   Compiling pollster v0.4.0
+   Compiling urlencoding v2.1.3
+   Compiling toml_writer v1.1.1+spec-1.1.0
+   Compiling gltf v1.4.1
+   Compiling toml v1.1.2+spec-1.1.0
+   Compiling sctk-adwaita v0.10.1
+   Compiling vorbis_rs v0.5.6
+   Compiling trino-scene v0.2.0-dev.1 (/home/v/Documents/projects/Trino-2-main/crates/scene)
+   Compiling trino-game-api v0.2.0-dev.1 (/home/v/Documents/projects/Trino-2-main/crates/game-api)
+   Compiling texpresso v2.0.2
+   Compiling fastrand v2.4.1
+   Compiling hound v3.5.1
+   Compiling bcdec_rs v0.2.0
+   Compiling tempfile v3.27.0
+   Compiling platformer v0.2.0-dev.1 (/home/v/Documents/projects/Trino-2-main/examples/platformer)
+   Compiling wgpu-naga-bridge v29.0.4
+   Compiling wgpu-core-deps-windows-linux-android v29.0.4
+   Compiling trino-render-wgpu v0.2.0-dev.1 (/home/v/Documents/projects/Trino-2-main/crates/render-wgpu)
+   Compiling trino-platform-pc v0.2.0-dev.1 (/home/v/Documents/projects/Trino-2-main/crates/platform-pc)
+   Compiling basis-universal v0.3.1
+   Compiling trino-asset-pipeline v0.2.0-dev.1 (/home/v/Documents/projects/Trino-2-main/crates/asset-pipeline)
+    Finished `test` profile [optimized + debuginfo] target(s) in 1m 47s
+     Running tests/quality.rs (target/debug/deps/quality-5e1a9dfbc44d8f88)
+
+running 9 tests
+test each_preset_draws_its_own_frame_and_low_and_high_match_their_goldens ... ok
+test the_console_profiles_ignore_quality ... ok
+test a_budget_spent_in_the_warm_up_still_times_low ... ok
+test the_preset_ao_caps_the_games ... ok
+test the_bench_picks_a_preset_within_three_seconds_and_restores_the_renderer ... ok
+test dynamic_resolution_steps_reuse_one_allocation_and_draw_what_a_fixed_scale_draws ... FAILED
+test the_high_preset_draws_the_frame_the_native_profile_always_drew ... ok
+test dynamic_resolution_follows_the_frame_time_within_its_range ... ok
+test a_scaled_scene_is_upscaled_and_sharpened_under_a_crisp_hud ... ok
+
+failures:
+
+---- dynamic_resolution_steps_reuse_one_allocation_and_draw_what_a_fixed_scale_draws stdout ----
+
+thread 'dynamic_resolution_steps_reuse_one_allocation_and_draw_what_a_fixed_scale_draws' (428813) panicked at crates/platform-pc/tests/quality.rs:455:9:
+assertion `left == right` failed: scale 0.5
+  left: 92
+ right: 0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    dynamic_resolution_steps_reuse_one_allocation_and_draw_what_a_fixed_scale_draws
+
+test result: FAILED. 8 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.34s
+
+error: test failed, to rerun pass `-p trino-platform-pc --test quality`
+     Running tests/water.rs (target/debug/deps/water-7e99420573a96779)
+
+running 9 tests
+test dynamic_resolutions_corner_draws_the_same_water ... FAILED
+test msaa_frames_draw_the_same_water ... ok
+test foam_and_glint_are_the_per_pixel_tier_only ... ok
+test strict_mode_refuses_more_ripples_than_the_cap - should panic ... ok
+test ripples_ring_and_the_swell_moves_on_every_tier ... ok
+test water_state_is_cleared_every_frame ... ok
+test the_floor_shows_through_on_every_tier ... ok
+test each_tier_matches_its_golden ... ok
+test water_is_drawn_after_the_batch_and_the_2d_stays_on_top ... ok
+
+failures:
+
+---- dynamic_resolutions_corner_draws_the_same_water stdout ----
+
+thread 'dynamic_resolutions_corner_draws_the_same_water' (429092) panicked at crates/platform-pc/tests/water.rs:527:9:
+assertion `left == right` failed: MSAA 4x
+  left: 465
+ right: 0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    dynamic_resolutions_corner_draws_the_same_water
+
+test result: FAILED. 8 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.17s
+
+error: test failed, to rerun pass `-p trino-platform-pc --test water`
+error: 2 targets failed:
+    `-p trino-platform-pc --test quality`
+    `-p trino-platform-pc --test water`

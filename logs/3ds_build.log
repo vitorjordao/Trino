@@ -1,0 +1,70 @@
+[3ds] compiling C shim...
+[3ds] baking assets...
+Used lz11 for compression
+Used lzss for compression
+Used lz11 for compression
+Used lz11 for compression
+Used huff for compression
+Used lz11 for compression
+Used lzss for compression
+Used lz11 for compression
+Used lz11 for compression
+Used lz11 for compression
+Used lzss for compression
+Used rle for compression
+Used lz11 for compression
+Used lz11 for compression
+Used rle for compression
+Used lz11 for compression
+Used lz11 for compression
+Used lz11 for compression
+Used lz11 for compression
+Used lz11 for compression
+Used huff for compression
+Used huff for compression
+Used none for compression
+Used lzss for compression
+Used huff for compression
+Used huff for compression
+Used lzss for compression
+Used none for compression
+Used lzss for compression
+Used lzss for compression
+Used none for compression
+Used lz11 for compression
+Used lz11 for compression
+Used lz11 for compression
+Used lz11 for compression
+[3ds] group boot: 156 entries, 261 KB raw, 112 KB stored (lz4)
+[3ds] group selftest_level: 3 entries, 2 KB raw, 1 KB stored (lz4)
+[3ds] group selftest_level2: 3 entries, 4 KB raw, 4 KB stored (lz4)
+[3ds] textures: 70752 B of linear memory (207616 B as RGBA8): A8 x7, ETC1 x13, ETC1A4 x2, L8 x1, LA8 x1, RGB565 x2, RGBA4 x3, RGBA5551 x4, RGBA8 x2
+[3ds] audio: 13 sounds (3 streamed), 232010 B in RomFS (775718 B as PCM16), 117198 B resident in linear memory
+[3ds] building Rust (nightly, build-std)...
+    Updating crates.io index
+ Downloading crates ...
+  Downloaded getopts v0.2.24
+  Downloaded memchr v2.8.3
+  Downloaded rustc-literal-escaper v0.0.8
+  Downloaded addr2line v0.27.1
+  Downloaded rustc-demangle v0.1.28
+  Downloaded miniz_oxide v0.9.1
+  Downloaded gimli v0.34.0
+  Downloaded object v0.39.1
+  Downloaded libc v0.2.189
+   Compiling compiler_builtins v0.1.160 (/opt/rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/compiler-builtins/compiler-builtins)
+   Compiling trino-app-3ds v0.2.0-dev.1 (/home/v/Documents/projects/Trino-2/apps/3ds)
+   Compiling alloc v0.0.0 (/opt/rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc)
+   Compiling trino-core v0.2.0-dev.1 (/home/v/Documents/projects/Trino-2/crates/core)
+   Compiling trino-game-api v0.2.0-dev.1 (/home/v/Documents/projects/Trino-2/crates/game-api)
+   Compiling trino-platform-3ds v0.2.0-dev.1 (/home/v/Documents/projects/Trino-2/crates/platform-3ds)
+   Compiling showcase v0.2.0-dev.1 (/home/v/Documents/projects/Trino-2/examples/showcase)
+   Compiling castle64 v0.2.0-dev.1 (/home/v/Documents/projects/Trino-2/examples/castle64)
+warning: dropping unsupported crate type `dylib` for target `armv6k-nintendo-3ds`
+
+warning: `showcase` (lib) generated 1 warning (1 duplicate)
+warning: `castle64` (lib) generated 1 warning
+    Finished `release` profile [optimized] target(s) in 15.25s
+[3ds] packing .3dsx...
+[3ds] app: /home/v/Documents/projects/Trino-2/target/3ds/trino.3dsx
+exit 0

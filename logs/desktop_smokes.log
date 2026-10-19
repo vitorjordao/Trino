@@ -1,0 +1,85 @@
+=== clippy
+    Checking trino-editor v0.2.0-dev.1 (/home/v/Documents/projects/Trino-2/crates/editor)
+    Checking trino-app-pc v0.2.0-dev.1 (/home/v/Documents/projects/Trino-2/apps/pc)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 17.35s
+rc=0
+=== tnl-cpu
+    `-p trino-platform-pc --test quality`
+    `-p trino-platform-pc --test render_e2e`
+    `-p trino-platform-pc --test water`
+rc=101
+=== build-app
+   Compiling trino-app-pc v0.2.0-dev.1 (/home/v/Documents/projects/Trino-2/apps/pc)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 9.18s
+rc=0
+=== build-reload
+   Compiling trino-runner-pc v0.2.0-dev.1 (/home/v/Documents/projects/Trino-2/crates/runner-pc)
+   Compiling trino-app-pc v0.2.0-dev.1 (/home/v/Documents/projects/Trino-2/apps/pc)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 8.85s
+rc=0
+=== build-editor
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.57s
+rc=0
+=== smoke
+     Running `target/debug/trino-pc`
+TRINO_FRAME:castle64 profile=n64 avg_us=16431 max_us=47376 frames=60 fps=60 draws=25 tris=320 pc_gpu_draws=0 pc_gpu_tris=0 instanced=0 off_pc_gpu=- heap=4239603/4380474 low1_us=47376 low1_fps=21
+TRINO_TEXTURES: textures=35 bytes=30144 bc=33 bc_bytes=25024 bc_supported=true
+rc=0
+=== quality-low
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.21s
+     Running `target/debug/trino-pc`
+TRINO_FRAME:castle64 profile=native avg_us=16348 max_us=45796 frames=60 fps=61 draws=25 tris=675 pc_gpu_draws=25 pc_gpu_tris=593 instanced=0 off_pc_gpu=- heap=4475269/4603820 low1_us=45796 low1_fps=21 quality=low scale=1.00 quality_from=forced detected=- gpu_us=105
+rc=0
+=== quality-medium
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.20s
+     Running `target/debug/trino-pc`
+TRINO_FRAME:castle64 profile=native avg_us=16110 max_us=48090 frames=60 fps=62 draws=25 tris=605 pc_gpu_draws=25 pc_gpu_tris=593 instanced=0 off_pc_gpu=- heap=4770637/4881185 low1_us=48090 low1_fps=20 quality=medium scale=1.00 quality_from=forced detected=- gpu_us=851
+rc=0
+=== quality-high
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.20s
+     Running `target/debug/trino-pc`
+TRINO_FRAME:castle64 profile=native avg_us=16099 max_us=33147 frames=60 fps=62 draws=25 tris=605 pc_gpu_draws=25 pc_gpu_tris=593 instanced=0 off_pc_gpu=- heap=5139797/5297626 low1_us=33147 low1_fps=30 quality=high scale=1.00 quality_from=forced detected=- gpu_us=16642
+rc=0
+=== quality-ultra
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.19s
+     Running `target/debug/trino-pc`
+TRINO_FRAME:castle64 profile=native avg_us=16680 max_us=34328 frames=60 fps=59 draws=25 tris=605 pc_gpu_draws=25 pc_gpu_tris=593 instanced=0 off_pc_gpu=- heap=5200966/5300980 low1_us=34328 low1_fps=29 quality=ultra scale=1.25 quality_from=forced detected=- gpu_us=16353
+rc=0
+=== quality-auto
+  ],
+  "target_us": 14994
+}
+rc=0
+=== scene
+     Running `target/debug/trino-pc`
+TRINO_FRAME:scenes/showcase.scene.ron profile=n64 avg_us=16378 max_us=48056 frames=60 fps=61 draws=102 tris=2926 pc_gpu_draws=0 pc_gpu_tris=0 instanced=0 off_pc_gpu=- heap=6256812/7002196 low1_us=48056 low1_fps=20
+TRINO_TEXTURES: textures=34 bytes=26048 bc=33 bc_bytes=25024 bc_supported=true
+rc=0
+=== showcase
+     Running `target/debug/trino-pc`
+TRINO_FRAME:showcase profile=n64 avg_us=16988 max_us=64343 frames=60 fps=58 draws=102 tris=2854 pc_gpu_draws=0 pc_gpu_tris=0 instanced=0 off_pc_gpu=- heap=6308394/6965287 low1_us=64343 low1_fps=15
+TRINO_TEXTURES: textures=34 bytes=26048 bc=33 bc_bytes=25024 bc_supported=true
+rc=0
+=== se-lang
+TRINO_TEXTURES: textures=8 bytes=111780 bc=6 bc_bytes=107680 bc_supported=true
+TRINO_AUDIO: rate=48000 resident_bytes=1140518 voices=1 streams=1 stream_bytes=96000 underruns=0 streamed_frames=47616
+TRINO_RUN_OK frames=60
+rc=0
+=== editor
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.26s
+     Running `target/debug/trino-editor .`
+rc=0
+=== launcher
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.26s
+     Running `target/debug/trino-editor`
+rc=0
+=== play-here
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.27s
+     Running `target/debug/trino-editor`
+rc=0
+=== standalone
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 53.76s
+
+rc=0
+ALL_DONE

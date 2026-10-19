@@ -1,0 +1,404 @@
+[web] installing wasm-bindgen-cli 0.2.126 into /home/v/Documents/projects/Trino-2/target/tools (once; about a minute)
+    Updating crates.io index
+ Downloading crates ...
+  Downloaded wasm-bindgen-cli v0.2.126
+  Installing wasm-bindgen-cli v0.2.126
+warning: default toolchain implicitly overridden with `stable-x86_64-unknown-linux-gnu` by rustup toolchain file
+  |
+  = help: use `cargo +stable install` if you meant to use the stable toolchain
+  = note: rustup selects the toolchain based on the parent environment and not the environment of the package being installed
+    Updating crates.io index
+warning: package `der v0.8.0` in Cargo.lock is yanked in registry `crates-io`
+  |
+  = help: consider running without --locked
+    Updating crates.io index
+ Downloading crates ...
+  Downloaded alloc-no-stdlib v2.0.4
+  Downloaded alloc-stdlib v0.2.4
+  Downloaded aho-corasick v1.1.4
+  Downloaded anstream v1.0.0
+  Downloaded anyhow v1.0.102
+  Downloaded anstyle-query v1.1.5
+  Downloaded anstyle-parse v1.0.0
+  Downloaded anstyle v1.0.14
+  Downloaded buf_redux v0.8.4
+  Downloaded ascii v1.1.0
+  Downloaded chunked_transfer v1.5.0
+  Downloaded clap_lex v1.1.0
+  Downloaded colorchoice v1.0.5
+  Downloaded defmt-parser v1.0.0
+  Downloaded deranged v0.5.8
+  Downloaded crossbeam-deque v0.8.6
+  Downloaded defmt-macros v1.1.0
+  Downloaded base64 v0.22.1
+  Downloaded crossbeam-epoch v0.9.18
+  Downloaded clap_derive v4.6.1
+  Downloaded defmt v1.1.0
+  Downloaded env_filter v1.0.1
+  Downloaded clap v4.6.1
+  Downloaded fallible-iterator v0.3.0
+  Downloaded leb128fmt v0.1.0
+  Downloaded env_logger v0.11.10
+  Downloaded httpdate v1.0.3
+  Downloaded getrandom v0.2.17
+  Downloaded id-arena v2.3.0
+  Downloaded is_terminal_polyfill v1.70.2
+  Downloaded leb128 v0.2.7
+  Downloaded httparse v1.10.1
+  Downloaded iana-time-zone v0.1.65
+  Downloaded num_cpus v1.17.0
+  Downloaded mime v0.3.17
+  Downloaded num-conv v0.2.2
+  Downloaded quick-error v1.2.3
+  Downloaded safemem v0.3.3
+  Downloaded sha1_smol v1.0.1
+  Downloaded rand_chacha v0.3.1
+  Downloaded proc-macro-error-attr2 v2.0.0
+  Downloaded num_threads v0.1.7
+  Downloaded powerfmt v0.2.0
+  Downloaded time-core v0.1.9
+  Downloaded subtle v2.6.1
+  Downloaded threadpool v1.8.1
+  Downloaded strsim v0.11.1
+  Downloaded untrusted v0.9.0
+  Downloaded wasm-bindgen-test-shared v0.2.126
+  Downloaded utf8-zero v0.8.1
+  Downloaded ppv-lite86 v0.2.21
+  Downloaded shlex v1.3.0
+  Downloaded utf8parse v0.2.2
+  Downloaded walrus-macro v0.26.0
+  Downloaded rand_core v0.6.4
+  Downloaded rustc-demangle v0.1.27
+  Downloaded twoway v0.1.8
+  Downloaded unicase v2.9.0
+  Downloaded rustls-pki-types v1.14.1
+  Downloaded mime_guess v2.0.5
+  Downloaded zeroize v1.9.0
+  Downloaded proc-macro-error2 v2.0.1
+  Downloaded brotli-decompressor v5.0.3
+  Downloaded tiny_http v0.12.0
+  Downloaded ureq-proto v0.6.0
+  Downloaded http v1.4.2
+  Downloaded multipart v0.18.0
+  Downloaded rayon-core v1.13.0
+  Downloaded rand v0.8.6
+  Downloaded clap_builder v4.6.0
+  Downloaded rouille v3.6.2
+  Downloaded wasm-encoder v0.245.1
+  Downloaded rustls-webpki v0.103.13
+  Downloaded chrono v0.4.45
+  Downloaded ureq v3.3.0
+  Downloaded regex v1.12.4
+  Downloaded rayon v1.12.0
+  Downloaded wasm-bindgen-cli-support v0.2.126
+  Downloaded walrus v0.26.4
+  Downloaded gimli v0.32.3
+  Downloaded webpki-roots v1.0.8
+  Downloaded wasmparser v0.245.1
+  Downloaded time v0.3.51
+  Downloaded rustls v0.23.41
+  Downloaded regex-automata v0.4.14
+  Downloaded jiff v0.2.29
+  Downloaded ring v0.17.14
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.46
+   Compiling unicode-ident v1.0.24
+   Compiling libc v0.2.186
+   Compiling stable_deref_trait v1.2.1
+   Compiling cfg-if v1.0.4
+   Compiling serde_core v1.0.228
+   Compiling memchr v2.8.2
+   Compiling log v0.4.33
+   Compiling crossbeam-utils v0.8.21
+   Compiling writeable v0.6.3
+   Compiling shlex v2.0.1
+   Compiling find-msvc-tools v0.1.9
+   Compiling litemap v0.8.2
+   Compiling utf8_iter v1.0.4
+   Compiling icu_normalizer_data v2.2.0
+   Compiling zerocopy v0.8.52
+   Compiling icu_properties_data v2.2.0
+   Compiling bitflags v2.13.0
+   Compiling cc v1.2.65
+   Compiling itoa v1.0.18
+   Compiling rayon-core v1.13.0
+   Compiling serde v1.0.228
+   Compiling httparse v1.10.1
+   Compiling utf8parse v0.2.2
+   Compiling getrandom v0.4.3
+   Compiling unicase v2.9.0
+   Compiling heck v0.5.0
+   Compiling hashbrown v0.17.1
+   Compiling once_cell v1.21.4
+   Compiling smallvec v1.15.2
+   Compiling equivalent v1.0.2
+   Compiling autocfg v1.5.1
+   Compiling rustix v1.1.4
+   Compiling zmij v1.0.21
+   Compiling zeroize v1.9.0
+   Compiling mime_guess v2.0.5
+   Compiling rustls-pki-types v1.14.1
+   Compiling aho-corasick v1.1.4
+   Compiling anstyle-parse v1.0.0
+   Compiling anyhow v1.0.102
+   Compiling crossbeam-epoch v0.9.18
+   Compiling num-traits v0.2.19
+   Compiling untrusted v0.9.0
+   Compiling foldhash v0.2.0
+   Compiling linux-raw-sys v0.12.1
+   Compiling percent-encoding v2.3.2
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling anstyle-query v1.1.5
+   Compiling syn v2.0.118
+   Compiling anstyle v1.0.14
+   Compiling regex-syntax v0.8.11
+   Compiling crossbeam-deque v0.8.6
+   Compiling either v1.16.0
+   Compiling crc32fast v1.5.0
+   Compiling serde_json v1.0.150
+   Compiling colorchoice v1.0.5
+   Compiling anstream v1.0.0
+   Compiling getrandom v0.2.17
+   Compiling base64 v0.22.1
+   Compiling bytes v1.12.0
+   Compiling rand_core v0.6.4
+   Compiling semver v1.0.28
+   Compiling ring v0.17.14
+   Compiling safemem v0.3.3
+   Compiling alloc-no-stdlib v2.0.4
+   Compiling simd-adler32 v0.3.9
+   Compiling adler2 v2.0.1
+   Compiling fastrand v2.4.1
+   Compiling wasm-bindgen-shared v0.2.126
+   Compiling leb128fmt v0.1.0
+   Compiling mime v0.3.17
+   Compiling rustls v0.23.41
+   Compiling fallible-iterator v0.3.0
+   Compiling wasm-encoder v0.245.1
+   Compiling rayon v1.12.0
+   Compiling http v1.4.2
+   Compiling miniz_oxide v0.8.9
+   Compiling alloc-stdlib v0.2.4
+   Compiling regex-automata v0.4.14
+   Compiling buf_redux v0.8.4
+   Compiling num_cpus v1.17.0
+   Compiling indexmap v2.14.0
+   Compiling hashbrown v0.16.1
+   Compiling tempfile v3.27.0
+   Compiling gimli v0.32.3
+   Compiling form_urlencoded v1.2.2
+   Compiling twoway v0.1.8
+   Compiling httpdate v1.0.3
+   Compiling leb128 v0.2.7
+   Compiling chunked_transfer v1.5.0
+   Compiling ascii v1.1.0
+   Compiling ppv-lite86 v0.2.21
+   Compiling quick-error v1.2.3
+   Compiling clap_lex v1.1.0
+   Compiling time-core v0.1.9
+   Compiling powerfmt v0.2.0
+   Compiling synstructure v0.13.2
+   Compiling num_threads v0.1.7
+   Compiling subtle v2.6.1
+   Compiling num-conv v0.2.2
+   Compiling id-arena v2.3.0
+   Compiling deranged v0.5.8
+   Compiling rand_chacha v0.3.1
+   Compiling iana-time-zone v0.1.65
+   Compiling strsim v0.11.1
+   Compiling tiny_http v0.12.0
+   Compiling chrono v0.4.45
+   Compiling regex v1.12.4
+   Compiling rand v0.8.6
+   Compiling clap_builder v4.6.0
+   Compiling env_filter v1.0.1
+   Compiling ureq-proto v0.6.0
+   Compiling multipart v0.18.0
+   Compiling time v0.3.51
+   Compiling threadpool v1.8.1
+   Compiling zerofrom-derive v0.1.7
+   Compiling yoke-derive v0.8.2
+   Compiling zerovec-derive v0.11.3
+   Compiling displaydoc v0.2.6
+   Compiling serde_derive v1.0.228
+   Compiling walrus-macro v0.26.0
+   Compiling clap_derive v4.6.1
+   Compiling flate2 v1.1.9
+   Compiling brotli-decompressor v5.0.3
+   Compiling zerofrom v0.1.8
+   Compiling filetime v0.2.29
+   Compiling yoke v0.8.3
+   Compiling webpki-roots v1.0.8
+   Compiling base64 v0.13.1
+   Compiling zerovec v0.11.6
+   Compiling zerotrie v0.2.4
+   Compiling jiff v0.2.29
+   Compiling utf8-zero v0.8.1
+   Compiling sha1_smol v1.0.1
+   Compiling rustc-demangle v0.1.27
+   Compiling shlex v1.3.0
+   Compiling wasm-bindgen-test-shared v0.2.126
+   Compiling tinystr v0.8.3
+   Compiling potential_utf v0.1.5
+   Compiling icu_collections v2.2.0
+   Compiling icu_locale_core v2.2.0
+   Compiling clap v4.6.1
+   Compiling icu_provider v2.2.0
+   Compiling icu_normalizer v2.2.0
+   Compiling icu_properties v2.2.0
+   Compiling wasmparser v0.245.1
+   Compiling idna_adapter v1.2.2
+   Compiling idna v1.1.0
+   Compiling env_logger v0.11.10
+   Compiling url v2.5.8
+   Compiling rouille v3.6.2
+   Compiling rustls-webpki v0.103.13
+   Compiling walrus v0.26.4
+   Compiling ureq v3.3.0
+   Compiling wasm-bindgen-cli-support v0.2.126
+   Compiling wasm-bindgen-cli v0.2.126
+    Finished `release` profile [optimized] target(s) in 53.27s
+warning: the following packages contain code that will be rejected by a future version of Rust: buf_redux v0.8.4, multipart v0.18.0
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+  Installing /home/v/Documents/projects/Trino-2/target/tools/bin/wasm-bindgen
+  Installing /home/v/Documents/projects/Trino-2/target/tools/bin/wasm-bindgen-test-runner
+  Installing /home/v/Documents/projects/Trino-2/target/tools/bin/wasm2es6js
+   Installed package `wasm-bindgen-cli v0.2.126` (executables `wasm-bindgen`, `wasm-bindgen-test-runner`, `wasm2es6js`)
+warning: be sure to add `/home/v/Documents/projects/Trino-2/target/tools/bin` to your PATH to be able to run the installed binaries
+[web] /home/v/Documents/projects/Trino-2/target/web/assets/trino.selftest_level.tbnd: 676 bytes
+[web] /home/v/Documents/projects/Trino-2/target/web/assets/trino.selftest_level2.tbnd: 4380 bytes
+[web] assets/trino.pak: 467868 bytes
+[web] assets/solid-eleven.pak: 2246122 bytes
+   Compiling unicode-ident v1.0.24
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.46
+   Compiling wasm-bindgen-shared v0.2.126
+   Compiling rustversion v1.0.22
+   Compiling cfg-if v1.0.4
+   Compiling cfg_aliases v0.2.1
+   Compiling bumpalo v3.20.3
+   Compiling once_cell v1.21.4
+   Compiling slab v0.4.12
+   Compiling pin-project-lite v0.2.17
+   Compiling futures-task v0.3.32
+   Compiling futures-core v0.3.32
+   Compiling autocfg v1.5.1
+   Compiling libm v0.2.16
+   Compiling zerocopy v0.8.52
+   Compiling thiserror v2.0.18
+   Compiling version_check v0.9.5
+   Compiling naga v29.0.4
+   Compiling bit-vec v0.9.1
+   Compiling futures-util v0.3.32
+   Compiling bitflags v2.13.0
+   Compiling unicode-width v0.2.2
+   Compiling hashbrown v0.17.1
+   Compiling equivalent v1.0.2
+   Compiling parking_lot_core v0.9.12
+   Compiling foldhash v0.2.0
+   Compiling log v0.4.33
+   Compiling raw-window-handle v0.6.2
+   Compiling slotmap v1.1.1
+   Compiling num-traits v0.2.19
+   Compiling bit-set v0.9.1
+   Compiling hashbrown v0.16.1
+   Compiling codespan-reporting v0.13.1
+   Compiling scopeguard v1.2.0
+   Compiling arrayvec v0.7.8
+   Compiling smallvec v1.15.2
+   Compiling hexf-parse v0.2.1
+   Compiling rustc-hash v1.1.0
+   Compiling lock_api v0.4.14
+   Compiling wgpu-hal v29.0.4
+   Compiling trino-core v0.2.0-dev.1 (/home/v/Documents/projects/Trino-2/crates/core)
+   Compiling profiling v1.0.18
+   Compiling wgpu-core v29.0.4
+   Compiling wasm-bindgen v0.2.126
+   Compiling litrs v1.0.0
+   Compiling wgpu v29.0.4
+   Compiling syn v2.0.118
+   Compiling parking_lot v0.12.5
+   Compiling byteorder v1.5.0
+   Compiling static_assertions v1.1.0
+   Compiling tinyvec v1.13.3
+   Compiling indexmap v2.14.0
+   Compiling ogg v0.8.0
+   Compiling document-features v0.2.12
+   Compiling lewton v0.10.2
+   Compiling trino-game-api v0.2.0-dev.1 (/home/v/Documents/projects/Trino-2/crates/game-api)
+   Compiling wasm-bindgen-macro-support v0.2.126
+   Compiling zerocopy-derive v0.8.52
+   Compiling bytemuck_derive v1.10.2
+   Compiling thiserror-impl v2.0.18
+   Compiling bytemuck v1.25.0
+   Compiling showcase v0.2.0-dev.1 (/home/v/Documents/projects/Trino-2/examples/showcase)
+   Compiling solid-eleven v0.2.0-dev.1 (/home/v/Documents/projects/Trino-2/examples/solid-eleven)
+   Compiling castle64 v0.2.0-dev.1 (/home/v/Documents/projects/Trino-2/examples/castle64)
+warning: dropping unsupported crate type `dylib` for target `wasm32-unknown-unknown`
+
+   Compiling wasm-bindgen-macro v0.2.126
+warning: `showcase` (lib) generated 1 warning (1 duplicate)
+warning: `castle64` (lib) generated 1 warning
+   Compiling js-sys v0.3.103
+   Compiling half v2.7.1
+warning: `solid-eleven` (lib) generated 1 warning (1 duplicate)
+   Compiling web-sys v0.3.103
+   Compiling wasm-bindgen-futures v0.4.76
+   Compiling web-time v1.1.0
+   Compiling wgpu-types v29.0.4
+   Compiling glow v0.17.0
+   Compiling wgpu-naga-bridge v29.0.4
+   Compiling wgpu-core-deps-wasm v29.0.4
+   Compiling trino-render-wgpu v0.2.0-dev.1 (/home/v/Documents/projects/Trino-2/crates/render-wgpu)
+   Compiling trino-platform-web v0.2.0-dev.1 (/home/v/Documents/projects/Trino-2/crates/platform-web)
+   Compiling trino-app-web v0.2.0-dev.1 (/home/v/Documents/projects/Trino-2/apps/web)
+    Finished `release` profile [optimized] target(s) in 1m 03s
+[web] trino.wasm: 6313113 bytes (release)
+[web] ready: /home/v/Documents/projects/Trino-2/target/web
+[web] installing the Playwright harness (npm ci in /home/v/Documents/projects/Trino-2/tools/web-test)
+
+added 2 packages, and audited 3 packages in 2s
+
+found 0 vulnerabilities
+Downloading Chrome for Testing 153.0.8010.12 (playwright chromium v1243)[2m from https://cdn.playwright.dev/builds/cft/153.0.8010.12/linux64/chrome-linux64.zip[22m
+|                                                                                |   0% of 186.8 MiB
+|■■■■■■■■                                                                        |  10% of 186.8 MiB
+|■■■■■■■■■■■■■■■■                                                                |  20% of 186.8 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■                                                        |  30% of 186.8 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                                |  40% of 186.8 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                        |  50% of 186.8 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                |  60% of 186.8 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                        |  70% of 186.8 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                |  80% of 186.8 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■        |  90% of 186.8 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■| 100% of 186.8 MiB
+Chrome for Testing 153.0.8010.12 (playwright chromium v1243) downloaded to /home/v/.cache/ms-playwright/chromium-1243
+Downloading Chrome Headless Shell 153.0.8010.12 (playwright chromium-headless-shell v1243)[2m from https://cdn.playwright.dev/builds/cft/153.0.8010.12/linux64/chrome-headless-shell-linux64.zip[22m
+|                                                                                |   0% of 114.3 MiB
+|■■■■■■■■                                                                        |  10% of 114.3 MiB
+|■■■■■■■■■■■■■■■■                                                                |  20% of 114.3 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■                                                        |  30% of 114.3 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                                |  40% of 114.3 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                        |  50% of 114.3 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                |  60% of 114.3 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                        |  70% of 114.3 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                |  80% of 114.3 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■        |  90% of 114.3 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■| 100% of 114.3 MiB
+Chrome Headless Shell 153.0.8010.12 (playwright chromium-headless-shell v1243) downloaded to /home/v/.cache/ms-playwright/chromium_headless_shell-1243
+[web-test] chromium-webgl2 (153.0.8010.12): PASS in 48.5 s · ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver) (Gl) · textures BC
+[web-test] chromium-webgl2: audio codecs ok, 156 frames in 2583 ms (longest gap 20 ms), audio clock 13.248 s: rate=48000 streamed_frames=100636 stream_bytes=199936 resident_bytes=815468 underruns=0
+[web-test] chromium-webgl2: TRINO_AUDIO: state=running rate=48000 resident_bytes=815468 voices=0 streams=0 stream_bytes=0 underruns=0 streamed_frames=115556
+[web-test] chromium-webgl2: TRINO_AUDIO: state=running rate=48000 resident_bytes=1442194 voices=3 streams=1 stream_bytes=199936 underruns=9 streamed_frames=705649
+[web-test] chromium-webgpu (153.0.8010.12): PASS in 37.8 s · browser adapter (BrowserWebGpu) · textures BC
+[web-test] chromium-webgpu: audio codecs ok, 156 frames in 2583 ms (longest gap 19 ms), audio clock 11.040 s: rate=48000 streamed_frames=100636 stream_bytes=199936 resident_bytes=815468 underruns=0
+[web-test] chromium-webgpu: TRINO_AUDIO: state=running rate=48000 resident_bytes=815468 voices=0 streams=0 stream_bytes=0 underruns=0 streamed_frames=115556
+[web-test] chromium-webgpu: TRINO_AUDIO: state=running rate=48000 resident_bytes=1442194 voices=3 streams=1 stream_bytes=200960 underruns=6 streamed_frames=472342
+[web] chromium-webgl2: /home/v/Documents/projects/Trino-2/tests/golden/web/showcase.png: mean diff 0.05, 0.00% far pixels (limits 3, 2.0%)
+[web] chromium-webgl2: /home/v/Documents/projects/Trino-2/tests/golden/web/castle64_hub.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[web] chromium-webgl2: /home/v/Documents/projects/Trino-2/tests/golden/web/texture_formats.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[web] chromium-webgpu: /home/v/Documents/projects/Trino-2/tests/golden/web/showcase.png: mean diff 0.05, 0.00% far pixels (limits 3, 2.0%)
+[web] chromium-webgpu: /home/v/Documents/projects/Trino-2/tests/golden/web/castle64_hub.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[web] chromium-webgpu: /home/v/Documents/projects/Trino-2/tests/golden/web/texture_formats.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[web] every browser passed (2 runs)
+exit 0

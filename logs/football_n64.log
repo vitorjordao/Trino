@@ -1,0 +1,61 @@
+created standalone project target/test-projects/ci-football (football template)
+
+next steps:
+  cd target/test-projects/ci-football
+  cargo run -p ci-football-pc   # play (TRINO_SIM=3ds for the 3DS look)
+  cargo test               # the game's unit tests
+  cargo trino editor       # open it in the editor
+[n64] baking assets in container...
+[n64] building Rust (nightly, build-std)...
+   Compiling compiler_builtins v0.1.160 (/home/v/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/compiler-builtins/compiler-builtins)
+   Compiling core v0.0.0 (/home/v/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core)
+   Compiling alloc v0.0.0 (/home/v/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc)
+   Compiling trino-core v0.2.0-dev.1 (/home/v/Documents/projects/Trino-2/crates/core)
+   Compiling trino-game-api v0.2.0-dev.1 (/home/v/Documents/projects/Trino-2/crates/game-api)
+   Compiling trino-platform-n64 v0.2.0-dev.1 (/home/v/Documents/projects/Trino-2/crates/platform-n64)
+   Compiling ci-football v0.1.0 (/home/v/Documents/projects/Trino-2/target/test-projects/ci-football/game)
+warning: dropping unsupported crate type `dylib` for target `mips-nintendo64-none-14744949856826316735`
+
+warning: `ci-football` (lib) generated 1 warning
+   Compiling ci-football-n64 v0.1.0 (/home/v/Documents/projects/Trino-2/target/test-projects/ci-football/n64)
+    Finished `release` profile [optimized] target(s) in 1m 27s
+[n64] linking + packing ROM...
+      text       data        bss      total filename
+   1378296     172236       9420    1559952 target/n64/ci-football.elf
+Skipping empty directory: filesystem/groups
+[n64] ROM: /home/v/Documents/projects/Trino-2/target/test-projects/ci-football/target/n64/ci-football.z64
+[n64] booting test ROM in ares with the Expansion Pak (300s timeout, 120s idle limit)...
+[ares] OpenGL Version: 4.5 (Core Profile) Mesa 25.2.8-0ubuntu0.24.04.4, GLSL: 4.50
+[ares] OpenGL: Failed to load librashader: shaders will be disabled
+[ares] Loaded ci-football
+[ares] Vulkan Enabled: using paraLLEl-RDP
+[ares] TRINO_HW n64 ram=8M tier=expanded
+[ares] TRINO_BOOT
+[ares] TRINO_MEM: ram=8388608 heap_total=6762480 before_assets=803936 boot_assets=558096
+[ares] [WARN]: Stalled compile (compute, a2d3c33efb49ccd2): thread 0 - 5623.920 us (mode: sync, success: yes).
+[ares] [WARN]: Stalled compile (compute, ff6863004fc9ee60): thread 0 - 7548.761 us (mode: sync, success: yes).
+[ares] [WARN]: Stalled compile (compute, d4db6236f1bec5e8): thread 0 - 286671.655 us (mode: sync, success: yes).
+[ares] [WARN]: Stalled compile (compute, 471d277cbebc0024): thread 0 - 15265.608 us (mode: sync, success: yes).
+[ares] [WARN]: Stalled compile (compute, 5e969bd158b09fb3): thread 0 - 10837.290 us (mode: sync, success: yes).
+[ares] TRINO_FRAME:match avg_us=26462 max_us=37677 frames=300 update=6872 tnl=5376 sort=0 submit=346 sprites=1628 end=297 drain=260 draws=53 rsp=53 culled=0 draws2d=98 vblanks=549 fps=32 heap=1594032/1594032
+[ares] TRINO_FRAME_MODEL:match c9e9a911 calls=6 tnl_us=660 rsp=6
+[ares] TRINO_FRAME_MODEL:match 14240cb2 calls=6 tnl_us=660 rsp=6
+[ares] TRINO_FRAME_MODEL:match 5d24a3a4 calls=6 tnl_us=655 rsp=6
+[ares] TRINO_FRAME_MODEL:match c870c823 calls=3 tnl_us=428 rsp=3
+[ares] TRINO_FRAME_MODEL:match c6e9a458 calls=4 tnl_us=416 rsp=4
+[ares] TRINO_FRAME_MODEL:match b680f595 calls=2 tnl_us=292 rsp=2
+[ares] TRINO_FRAME_MODEL:match ef2f5258 calls=2 tnl_us=283 rsp=2
+[ares] TRINO_FRAME_MODEL:match cae9aaa4 calls=1 tnl_us=185 rsp=1
+[ares] TRINO_SE_HASH:decfbf87
+[ares] TRINO_SE_RENDER_CPU:2921
+[ares] TRINO_STACK:35912
+[ares] TRINO_HEAP:1594032/6762480
+[ares] TRINO_TEST_PASS
+[n64] hardware tier: ram=8M tier=expanded
+[n64] golden frame match: /home/v/Documents/projects/Trino-2/target/test-projects/ci-football/tests/golden/n64/match.png matches
+[n64] frame time (emulated):
+scene                      avg ms   max ms    fps
+match                       26.46    37.68   37.8
+
+[n64] TEST PASS (with the Expansion Pak)
+exit 0

@@ -1,0 +1,61 @@
+[3ds] baking assets...
+Used huff for compression
+Used huff for compression
+Used lzss for compression
+Used lz11 for compression
+Used lz11 for compression
+Used lz11 for compression
+Used lz11 for compression
+[3ds] group boot: 185 entries, 216 KB raw, 104 KB stored (lz4)
+[3ds] textures: 181568 B of linear memory (726272 B as RGBA8): A8 x7
+[3ds] audio: 10 sounds (2 streamed), 327856 B in RomFS (1144392 B as PCM16), 62384 B resident in linear memory
+[3ds] building Rust (nightly, build-std)...
+    Updating crates.io index
+    Updating crates.io index
+ Downloading crates ...
+  Downloaded foldhash v0.2.0
+  Downloaded getopts v0.2.24
+  Downloaded cfg-if v1.0.4
+  Downloaded addr2line v0.27.1
+  Downloaded adler2 v2.0.1
+  Downloaded rustc-literal-escaper v0.0.8
+  Downloaded miniz_oxide v0.9.1
+  Downloaded rustc-demangle v0.1.28
+  Downloaded memchr v2.8.3
+  Downloaded hashbrown v0.17.1
+  Downloaded gimli v0.34.0
+  Downloaded object v0.39.1
+  Downloaded libc v0.2.189
+   Compiling compiler_builtins v0.1.160 (/opt/rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/compiler-builtins/compiler-builtins)
+   Compiling core v0.0.0 (/opt/rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core)
+   Compiling ci-football-3ds v0.1.0 (/home/v/Documents/projects/Trino-2/target/test-projects/ci-football/n3ds)
+   Compiling alloc v0.0.0 (/opt/rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc)
+   Compiling trino-core v0.2.0-dev.1 (/home/v/Documents/projects/Trino-2/crates/core)
+   Compiling trino-game-api v0.2.0-dev.1 (/home/v/Documents/projects/Trino-2/crates/game-api)
+   Compiling trino-platform-3ds v0.2.0-dev.1 (/home/v/Documents/projects/Trino-2/crates/platform-3ds)
+   Compiling ci-football v0.1.0 (/home/v/Documents/projects/Trino-2/target/test-projects/ci-football/game)
+warning: dropping unsupported crate type `dylib` for target `armv6k-nintendo-3ds`
+
+warning: `ci-football` (lib) generated 1 warning
+    Finished `release` profile [optimized] target(s) in 34.11s
+[3ds] packing .3dsx...
+[3ds] app: /home/v/Documents/projects/Trino-2/target/test-projects/ci-football/target/3ds/ci-football.3dsx
+build exit 0
+[3ds] is_new_3ds=true for this session (was on)
+[3ds] booting test app in Azahar as a New 3DS (300s timeout, 120s idle limit)...
+[azahar] [   0.227560] Config <Info> common/settings.cpp:operator():85: Renderer_Simulate3DSGPUTimings: false
+[azahar] [   0.228023] Config <Info> common/settings.cpp:operator():85: System_IsNew3ds: true
+QPixmap::scaled: Pixmap is a null pixmap
+[azahar] [   0.996575] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_HW 3ds new=1 speedup=1 app_ram=96M tier=expanded
+[azahar] [   0.999082] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_LANG en
+[azahar] [   0.999907] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_BOOT
+[azahar] [   1.119439] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_MEM: ram=67108864 heap_total=128876544 before_assets=5296896 boot_assets=707952
+[azahar] [   6.261034] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_FRAME:match avg_us=16797 max_us=41315 frames=300 fps=60 cpu_us=4948 gpu_draws=64 gpu_tris=1312 cpu_draws=0 cpu_tris=0 off_gpu=Offscreen:1 heap=6044384/6044384
+[azahar] [   6.262624] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_SE_HASH:decfbf87
+[azahar] [   6.417427] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_TEST_PASS
+[3ds] restored your is_new_3ds setting
+[3ds] hardware tier: new=1 speedup=1 tier=expanded
+[3ds] golden frame match: /home/v/Documents/projects/Trino-2/target/test-projects/ci-football/tests/golden/3ds/match.png: mean diff 0.05, 0.07% far pixels (limits 3, 2.0%)
+[3ds] golden frame match_bottom: /home/v/Documents/projects/Trino-2/target/test-projects/ci-football/tests/golden/3ds/match_bottom.png: mean diff 0.01, 0.00% far pixels (limits 3, 2.0%)
+[3ds] TEST PASS (as a New 3DS)
+exit 0

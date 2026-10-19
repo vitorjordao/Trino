@@ -1,0 +1,71 @@
+[log] %ctrino%c TRINO_WEB: adapter="ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver) (Gl)" profile=Web canvas=640x480 dpr=1 msaa=1 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[warning] [.WebGL-0x18bc001c7200]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels
+[log] %ctrino%c TRINO_ASSETS: bytes=467868 sprites=34 ktx2=33 ktx2_gpu=33 ktx2_rgba8=0 target=BC sounds=12 models=108 fonts=4 blobs=16 mixer=true groups=2 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_QUALITY: preset=high source=forced scale=1.00 gpu=software mobile=false color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_STEP:web selftest start color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_STEP:text color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_STEP:blob color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_STEP:save color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_STEP:textured_3d color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_STEP:textured_3d skipped (no read_pixel) color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_STEP:texture filter and detail color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_STEP:texture formats color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_STEP:billboards color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_STEP:occlusion color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_STEP:fill rect color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_STEP:ui layout color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_STEP:i18n color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_STEP:dual screen color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_STEP:dual screen single screen (collapsed) color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_STEP:smooth skin color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_STEP:palette color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_STEP:instancing color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_STEP:local lights color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_STEP:ambient occlusion color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_STEP:shadows color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_STEP:water color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_STEP:impostor color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_STEP:particles color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_STEP:particles cap 24 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_STEP:portals color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_STEP:hw tier color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_STEP:hw tier base ram=0M cores=0 data=base sparks=4 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_STEP:quality color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_STEP:quality high hosted lod=100 particles=24 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_STEP:engine ok color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_STEP:audio color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_STEP:input color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_STEP:ktx2 transcode color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_STEP:ktx2 transcode etc1s+uastc decode exact, gpu target BC color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_STEP:asset groups color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[warning] [.WebGL-0x18bc001c7200]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels
+[log] %ctrino%c TRINO_STEP:asset groups downloaded in 3 frames color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_STEP:asset groups ok load_frames=1 level_bytes=1135 heap_baseline=9276250 heap_drift=0 cycles=0 soak_frames=0 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_STEP:asset groups took 62ms color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[warning] [.WebGL-0x18bc001c7200]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels
+[warning] [.WebGL-0x18bc001c7200]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels (this message will no longer repeat)
+[log] %ctrino%c TRINO_STEP:asset groups soak frames=240 cycles=120 heap_baseline=4021439 heap_drift=1904 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_STEP:quality bench color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_STEP:quality bench low=113925 pick=low gpu=software target_us=20833 elapsed_ms=1323 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_STEP:audio codecs color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_AUDIO: state=running rate=48000 resident_bytes=815468 voices=0 streams=0 stream_bytes=0 underruns=0 streamed_frames=115556 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_STEP:audio codecs ok, 156 frames in 2583 ms (longest gap 20 ms), audio clock 13.248 s: rate=48000 streamed_frames=100636 stream_bytes=199936 resident_bytes=815468 underruns=0 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_STEP:showcase demo color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_STEP:baked scene color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_STEP:castle64 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_STEP:castle64 bot reached the star in 747 frames color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_STEP:solid eleven pack color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_ASSETS: bytes=2246122 sprites=6 ktx2=4 ktx2_gpu=4 ktx2_rgba8=0 target=BC sounds=10 models=195 fonts=3 blobs=1 mixer=false groups=0 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_STEP:solid eleven match color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_SE_HASH:0xdecfbf87 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_STEP:golden frames color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_STEP:golden frame showcase 640x480 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_STEP:golden frame castle64_hub 640x480 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_STEP:golden frame texture_formats 640x480 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_FRAME:selftest profile=web avg_us=85797 max_us=5858735 frames=475 fps=11 draws=25 tris=16475 pc_gpu_draws=1 pc_gpu_tris=81 instanced=0 off_pc_gpu=per_pixel_lit:24,water:1,flat_skinned:1,offscreen:1,texture_alpha:1 heap=46637560/163667055 low1_us=3662098 low1_fps=0 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_AUDIO: state=running rate=48000 resident_bytes=1442194 voices=3 streams=1 stream_bytes=199936 underruns=9 streamed_frames=705649 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_TEST_PASS color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_WEB: adapter="ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver) (Gl)" profile=Web canvas=640x480 dpr=1 msaa=1 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_ASSETS: bytes=467868 sprites=34 ktx2=33 ktx2_gpu=33 ktx2_rgba8=0 target=BC sounds=12 models=108 fonts=4 blobs=16 mixer=true groups=2 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_QUALITY: bench low=216654 pick=low gpu=software target_us=20833 elapsed_ms=1141 adapter=ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver) (Gl) color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[log] %ctrino%c TRINO_QUALITY: preset=low source=detected scale=0.75 gpu=software mobile=false color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 

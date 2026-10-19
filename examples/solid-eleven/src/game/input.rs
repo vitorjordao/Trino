@@ -219,7 +219,7 @@ impl Controls {
                 self.held[k] += dt;
             }
             if now.just_released(prev, b) {
-                if self.armed[k] && can_kick {
+                if self.armed[k] {
                     let c = Fx::from_f32((self.held[k] / FULL_CHARGE).min(1.0));
                     match k {
                         0 => pad.pass = Some(c),

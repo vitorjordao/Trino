@@ -62,7 +62,7 @@ pub fn input(frame: u32) -> InputState {
 
 /// The state hash after [`FRAMES`] of the script, pinned on the PC by
 /// `cargo test` (`tests::the_script_is_deterministic`).
-pub const EXPECTED_HASH: u32 = 0xbbd0_cb11;
+pub const EXPECTED_HASH: u32 = 0xdecf_bf87;
 
 /// After the script: the sim hash matches the PC's, and the match is sane.
 pub fn check(game: &SolidElevenGame) -> Result<(), &'static str> {

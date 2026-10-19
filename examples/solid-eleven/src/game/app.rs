@@ -45,6 +45,10 @@ pub enum Scene {
     Confirm,
     Match,
     Pause,
+    HalfTime,
+    Substitutions {
+        from_half_time: bool,
+    },
     Results,
     /// The season's end: the champion lifts the trophy.
     Trophy,
@@ -163,6 +167,11 @@ pub struct Cursors {
     pub market_sell: bool,
     pub settings: usize,
     pub pause: usize,
+    pub half_time: usize,
+    pub sub_pane: usize,
+    pub sub_pitch: usize,
+    pub sub_bench: usize,
+    pub sub_selected_pitch: Option<usize>,
     pub confirm: usize,
     /// The controls page: tab (0 match, 1 keyboard, 2 gamepad), row, and
     /// the first row shown.
@@ -472,7 +481,10 @@ impl SolidElevenGame {
             tap = None;
         }
         // Music: the theme in menus, the crowd in matches.
-        let want_crowd = matches!(self.scene, Scene::Match | Scene::Pause);
+        let want_crowd = matches!(
+            self.scene,
+            Scene::Match | Scene::Pause | Scene::HalfTime | Scene::Substitutions { .. }
+        );
         if self.music != Some(want_crowd) {
             self.music = Some(want_crowd);
             audio.play_music(
@@ -491,6 +503,10 @@ impl SolidElevenGame {
         match self.scene {
             Scene::Match => self.match_frame(input, &prev, &nav, audio, dt),
             Scene::Pause => self.pause_frame(input, &prev, &nav, tap, audio),
+            Scene::HalfTime => self.half_time_frame(input, &prev, &nav, tap, audio),
+            Scene::Substitutions { from_half_time } => {
+                self.substitutions_frame(input, &prev, &nav, tap, audio, from_half_time)
+            }
             Scene::Controls => self.controls_frame(input, &prev, &nav, tap, audio, dt),
             _ => self.menu_frame(&nav, tap, audio),
         }
@@ -531,6 +547,11 @@ impl SolidElevenGame {
             }
         }
         s.update(input, prev, audio, dt, touch);
+        if matches!(s.m.phase, Phase::HalfTime { .. }) && s.human.is_some() {
+            self.scene = Scene::HalfTime;
+            self.cur.half_time = 0;
+            return;
+        }
         if s.m.phase == Phase::FullTime {
             self.after_full_time += dt;
             if self.after_full_time > 3.0 || (nav.confirm && self.after_full_time > 0.8) {
@@ -567,9 +588,11 @@ impl SolidElevenGame {
             if self.cur.pause == 0 {
                 self.scene = Scene::Match;
             } else if self.cur.pause == 1 {
-                // The most tired player goes off at the next dead ball.
-                self.sub_asked = true;
-                self.scene = Scene::Match;
+                self.cur.sub_pane = 0;
+                self.cur.sub_selected_pitch = None;
+                self.scene = Scene::Substitutions {
+                    from_half_time: false,
+                };
             } else {
                 // Quit: a career match counts as a 3-0 defeat.
                 if self.in_career_match
@@ -586,6 +609,144 @@ impl SolidElevenGame {
                 } else {
                     Scene::Title
                 };
+            }
+        }
+    }
+
+    fn half_time_frame(
+        &mut self,
+        _input: &InputState,
+        _prev: &InputState,
+        nav: &Nav,
+        tap: Option<u8>,
+        audio: &mut dyn Audio,
+    ) {
+        menu::step(&mut self.cur.half_time, 3, nav);
+        if let Some(id) = tap {
+            self.cur.half_time = (id as usize).min(2);
+        }
+        if nav.confirm || tap.is_some() {
+            sound::play(audio, Sfx::Click);
+            if self.cur.half_time == 0 {
+                if let Some(s) = &mut self.session {
+                    s.m.start_second_half();
+                }
+                self.scene = Scene::Match;
+            } else if self.cur.half_time == 1 {
+                self.cur.sub_pane = 0;
+                self.cur.sub_selected_pitch = None;
+                self.scene = Scene::Substitutions {
+                    from_half_time: true,
+                };
+            } else {
+                // Quit match
+                if self.in_career_match
+                    && let Some((h, _)) = self.world.user_fixture()
+                {
+                    let user_home = h == self.world.user;
+                    self.world
+                        .finish_round(Some(if user_home { (0, 3) } else { (3, 0) }));
+                    self.save_dirty = true;
+                }
+                self.session = None;
+                self.scene = if self.in_career_match {
+                    Scene::Club
+                } else {
+                    Scene::Title
+                };
+            }
+        }
+    }
+
+    fn substitutions_frame(
+        &mut self,
+        _input: &InputState,
+        _prev: &InputState,
+        nav: &Nav,
+        tap: Option<u8>,
+        audio: &mut dyn Audio,
+        from_half_time: bool,
+    ) {
+        let Some(s) = &mut self.session else {
+            self.scene = Scene::Title;
+            return;
+        };
+        let side = s.human.unwrap_or(0);
+        let bench_n = s.m.bench_n[side] as usize;
+        if nav.back {
+            sound::play(audio, Sfx::Tap);
+            if self.cur.sub_selected_pitch.is_some() {
+                self.cur.sub_selected_pitch = None;
+            } else {
+                self.scene = if from_half_time {
+                    Scene::HalfTime
+                } else {
+                    Scene::Pause
+                };
+            }
+            return;
+        }
+        if nav.left {
+            self.cur.sub_pane = 0;
+            sound::play(audio, Sfx::Tap);
+        } else if nav.right && bench_n > 0 {
+            self.cur.sub_pane = 1;
+            sound::play(audio, Sfx::Tap);
+        }
+        if self.cur.sub_pane == 0 {
+            menu::step(&mut self.cur.sub_pitch, SIDE, nav);
+        } else if bench_n > 0 {
+            menu::step(&mut self.cur.sub_bench, bench_n, nav);
+        }
+        if let Some(id) = tap {
+            let id = id as usize;
+            if id < SIDE {
+                self.cur.sub_pane = 0;
+                self.cur.sub_pitch = id;
+                self.cur.sub_selected_pitch = Some(id);
+                sound::play(audio, Sfx::Click);
+            } else if id >= 20 && id < 20 + bench_n {
+                self.cur.sub_pane = 1;
+                self.cur.sub_bench = id - 20;
+                if let Some(p_idx) = self.cur.sub_selected_pitch {
+                    let b_idx = self.cur.sub_bench;
+                    if s.m.substitute_player(side, p_idx, b_idx) {
+                        sound::play(audio, Sfx::Whistle);
+                        self.cur.sub_selected_pitch = None;
+                        if s.m.bench_n[side] == 0 {
+                            self.cur.sub_pane = 0;
+                        } else {
+                            self.cur.sub_bench =
+                                self.cur.sub_bench.min(s.m.bench_n[side] as usize - 1);
+                        }
+                    } else {
+                        sound::play(audio, Sfx::Tap);
+                    }
+                } else {
+                    sound::play(audio, Sfx::Click);
+                }
+            }
+        } else if nav.confirm {
+            if self.cur.sub_pane == 0 {
+                self.cur.sub_selected_pitch = Some(self.cur.sub_pitch);
+                if bench_n > 0 {
+                    self.cur.sub_pane = 1;
+                }
+                sound::play(audio, Sfx::Click);
+            } else if let Some(p_idx) = self.cur.sub_selected_pitch {
+                let b_idx = self.cur.sub_bench;
+                if s.m.substitute_player(side, p_idx, b_idx) {
+                    sound::play(audio, Sfx::Whistle);
+                    self.cur.sub_selected_pitch = None;
+                    if s.m.bench_n[side] == 0 {
+                        self.cur.sub_pane = 0;
+                    } else {
+                        self.cur.sub_bench =
+                            self.cur.sub_bench.min(s.m.bench_n[side] as usize - 1);
+                    }
+                } else {
+                    sound::play(audio, Sfx::Tap);
+                }
             }
         }
     }
@@ -682,7 +843,11 @@ impl SolidElevenGame {
                     self.scene = Scene::Club;
                 }
             }
-            Scene::Match | Scene::Pause | Scene::Controls => {}
+            Scene::Match
+            | Scene::Pause
+            | Scene::HalfTime
+            | Scene::Substitutions { .. }
+            | Scene::Controls => {}
         }
         if self.scene != before || nav.confirm {
             sound::play(audio, if nav.back { Sfx::Back } else { Sfx::Click });
@@ -1288,7 +1453,12 @@ impl SolidElevenGame {
             }
         }
         // Never write during a match (the EEPROM steals frame time).
-        if self.save_dirty && !matches!(self.scene, Scene::Match | Scene::Pause) {
+        if self.save_dirty
+            && !matches!(
+                self.scene,
+                Scene::Match | Scene::Pause | Scene::HalfTime | Scene::Substitutions { .. }
+            )
+        {
             self.save_dirty = false;
             let mut buf = [0u8; SAVE_MAX];
             let mut st = self.settings.bytes();

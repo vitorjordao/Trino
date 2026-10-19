@@ -481,9 +481,9 @@ impl CamState {
     pub fn follow(&mut self, ball: Vec3, vel: Vec3, dt: f32) {
         let ahead = Vec3::new(vel.x * 0.35, 0.0, vel.z * 0.25);
         let want = Vec3::new(
-            (ball.x + ahead.x).clamp(-HALF_LEN.to_f32() + 14.0, HALF_LEN.to_f32() - 14.0),
+            (ball.x + ahead.x).clamp(-HALF_LEN.to_f32() + 8.0, HALF_LEN.to_f32() - 8.0),
             0.0,
-            ((ball.z + ahead.z) * 0.55).clamp(-HALF_WID.to_f32() + 12.0, HALF_WID.to_f32() - 8.0),
+            (ball.z + ahead.z).clamp(-HALF_WID.to_f32() + 4.0, HALF_WID.to_f32() - 4.0),
         );
         let k = (dt * 3.2).min(1.0);
         self.focus = self.focus + (want - self.focus) * k;
@@ -625,7 +625,14 @@ pub(crate) fn unlit(tint: Color) -> ModelParams {
 
 /// A placement matrix: `pos` (m) and a ground facing (unit fx, fz).
 pub(crate) fn place(pos: Vec3, fx: f32, fz: f32, scale: f32) -> Mat34 {
-    body_matrix(pos, fx, fz, scale * WORLD)
+    let s = scale * WORLD;
+    Mat34 {
+        m: [
+            [fz * s, 0.0, fx * s, pos.x * WORLD],
+            [0.0, s, 0.0, pos.y * WORLD],
+            [-fx * s, 0.0, fz * s, pos.z * WORLD],
+        ],
+    }
 }
 
 /// The yaw of the four stands' sides: (facing x, facing z).
@@ -1258,13 +1265,21 @@ pub fn pick_official_clip(m: &Match, k: usize, prev: (f32, f32), dt: f32, st: &m
     let o = m.officials[k];
     // His speed from his positions, smoothed over 0.4 s (he
     // steps toward a target that jumps with the ball).
-    let raw = {
-        let dx = o.x.to_f32() - prev.0;
-        let dz = o.y.to_f32() - prev.1;
-        trino_core::math3d::sqrt(dx * dx + dz * dz) / dt.max(1e-3)
-    };
+    let (dx, dz) = (o.x.to_f32() - prev.0, o.y.to_f32() - prev.1);
+    let dist = trino_core::math3d::sqrt(dx * dx + dz * dz);
+    let raw = dist / dt.max(1e-3);
     st.speed += (raw - st.speed) * (dt / 0.4).min(1.0);
     let speed = st.speed;
+    // Officials face the ball. Check if the referee is backing away from play.
+    let b = m.ball.pos.ground();
+    let d = (b - o).norm();
+    let (fx, fz) = (d.x.to_f32(), d.y.to_f32());
+    let dot = if dist > 1e-4 {
+        (dx * fx + dz * fz) / dist
+    } else {
+        1.0
+    };
+    let backing = k == 0 && dot < -0.15;
     // The referee shows a card for two seconds after one, and points the
     // restart after a foul while the ball is dead.
     let recent = |kinds: &[EventKind], within: u32| {
@@ -1291,7 +1306,14 @@ pub fn pick_official_clip(m: &Match, k: usize, prev: (f32, f32), dt: f32, st: &m
         ClipName::Idle
     };
     st.play(clip, false, false);
-    st.advance(dt, 1.0);
+    let rate = if backing {
+        -(speed / 1.5).clamp(0.7, 1.4)
+    } else if matches!(clip, ClipName::Walk | ClipName::Jog) {
+        (speed / if clip == ClipName::Jog { 4.0 } else { 1.5 }).clamp(0.6, 1.4)
+    } else {
+        1.0
+    };
+    st.advance(dt, rate);
 }
 
 /// Keep the unused-import list honest for the pose type.

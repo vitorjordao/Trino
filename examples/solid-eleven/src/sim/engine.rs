@@ -973,10 +973,7 @@ impl Match {
                 }
                 Act::Slide { t, dir, touched } => {
                     let touched = touched || self.slide_contact(i, dir, t);
-                    if self.phase != Phase::Play {
-                        return;
-                    }
-                    self.players[i].act = if t == 0 {
+                    self.players[i].act = if t == 0 || self.phase != Phase::Play {
                         Act::Down { t: 24 }
                     } else {
                         Act::Slide {
@@ -1821,9 +1818,15 @@ impl Match {
                 self.players[i].target = super::ai::restart_spot(self, i, r);
                 if matches!(
                     self.players[i].act,
-                    Act::Celebrate | Act::Kick { .. } | Act::Tackle { .. } | Act::Dive { .. }
+                    Act::Celebrate
+                        | Act::Kick { .. }
+                        | Act::Tackle { .. }
+                        | Act::Dive { .. }
+                        | Act::Slide { .. }
+                        | Act::Down { .. }
                 ) {
                     self.players[i].act = Act::Free;
+                    self.players[i].vel = V2::ZERO;
                 }
             }
         }
@@ -1900,6 +1903,46 @@ impl Match {
         p.goals = 0;
         p.act = Act::Free;
         self.log(EventKind::Substitution, s, i as u8);
+    }
+
+    /// Manually substitute an on-field player with a bench player.
+    pub fn substitute_player(&mut self, s: usize, on_field_slot: usize, bench_idx: usize) -> bool {
+        if self.subs[s] >= MAX_SUBS || self.bench_n[s] == 0 || bench_idx >= self.bench_n[s] as usize {
+            return false;
+        }
+        let i = s * SIDE + on_field_slot.min(SIDE - 1);
+        let p = &self.players[i];
+        if p.off {
+            return false;
+        }
+        let (db, number, attrs, is_gk) = self.bench[s][bench_idx];
+        if (p.role == Role::Gk) != is_gk {
+            return false;
+        }
+        let n = self.bench_n[s] as usize;
+        self.bench[s][bench_idx] = self.bench[s][n - 1];
+        self.bench_n[s] -= 1;
+        self.subs[s] += 1;
+        let p = &mut self.players[i];
+        p.db = db;
+        p.number = number;
+        let morale = (self.morale[s] as i32 - 50) / 10;
+        for k in 0..ATTRS {
+            p.attrs[k] = (attrs[k] as i32 + morale).clamp(1, 99) as u8;
+        }
+        p.stamina = Fx::ONE;
+        p.yellow = 0;
+        p.goals = 0;
+        p.act = Act::Free;
+        self.log(EventKind::Substitution, s, i as u8);
+        true
+    }
+
+    /// Start the second half from an intermission screen.
+    pub fn start_second_half(&mut self) {
+        if self.half == 1 {
+            self.second_half();
+        }
     }
 
     fn setup_players(&mut self) {
@@ -2071,17 +2114,20 @@ impl Match {
             return;
         }
         let mut cmd = Cmd::go(pad.mv, pad.sprint);
-        if self.owner == Some(a as u8) {
+        let near_ball = self.owner == Some(a as u8)
+            || (self.owner.is_none()
+                && (self.players[a].pos - self.ball.pos.ground()).len() < Fx::milli(1_600));
+        if near_ball {
             if let Some(plan) = super::ai::human_kick_plan(self, a, pad) {
                 cmd.act = Some(CmdAct::Kick(plan));
             }
-        } else if pad.slide {
+        } else if pad.slide && self.phase == Phase::Play {
             cmd.act = Some(CmdAct::Slide(if pad.mv == V2::ZERO {
                 self.players[a].face
             } else {
                 pad.mv
             }));
-        } else if pad.tackle {
+        } else if pad.tackle && self.phase == Phase::Play {
             cmd.act = Some(CmdAct::Tackle);
         }
         cmds[a] = Some(cmd);

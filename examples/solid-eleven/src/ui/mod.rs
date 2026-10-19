@@ -424,17 +424,18 @@ impl<'a> Ui<'a> {
     /// A controller hint like the reference's footer: a colored pill with
     /// the button letter, then the action.
     pub fn hint(&mut self, x: f32, y: f32, letter: &str, c: Color, label: &str) -> f32 {
+        let bw = (self.measure(letter, Size::Small) + 6.0).max(11.0);
         let lw = self.measure(label, Size::Small);
-        let w = 16.0 + lw + 6.0;
+        let w = bw + lw + 8.0;
         self.slant(
             Rect::new(x, y, w, 13.0),
             Color::rgba(c.r / 3, c.g / 3, c.b / 3, 230),
             3.0,
         );
         self.slant_border(Rect::new(x, y, w, 13.0), c, 3.0, 1.0);
-        self.fill(Rect::new(x + 3.0, y + 2.0, 10.0, 9.0), c);
+        self.fill(Rect::new(x + 2.0, y + 2.0, bw, 9.0), c);
         self.text(
-            x + 8.0,
+            x + 2.0 + bw * 0.5,
             y + 1.0,
             letter,
             pal::NAVY,
@@ -442,7 +443,7 @@ impl<'a> Ui<'a> {
             TextAlign::Center,
         );
         self.text(
-            x + 16.0,
+            x + bw + 4.0,
             y + 1.0,
             label,
             pal::INK,

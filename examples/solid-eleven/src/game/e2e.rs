@@ -195,7 +195,10 @@ fn a_quick_match_from_the_title_to_the_report_with_a_human_side() {
     );
     // The bot plays the home side to full time.
     let mut frame = 0;
-    while d.g.scene == Scene::Match && frame < 30 * 60 * 6 {
+    while matches!(d.g.scene, Scene::Match | Scene::HalfTime) && frame < 30 * 60 * 6 {
+        if d.g.scene == Scene::HalfTime {
+            d.press(Button::A);
+        }
         let input = bot(&d.g, 0, frame);
         d.frame(&input);
         frame += 1;

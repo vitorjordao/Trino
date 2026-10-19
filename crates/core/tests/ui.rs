@@ -1661,3 +1661,27 @@ fn baked_blobs_are_parsed_once_and_again_when_the_platform_swaps_them() {
     let mut pt = StringsBlob::new("pt-BR");
     assert_eq!(pt.get(&platform).and_then(|t| t.lookup("a")), Some("b"));
 }
+
+#[test]
+fn menus_work_before_their_first_draw() {
+    // No layout, no draw: update lays the screen out at its reference size
+    // with the engine font's cell (headless tests, update before render).
+    let s = menu();
+    let mut ui = Ui::<64>::new();
+    ui.update(&s, &IDLE, &IDLE, 0.0);
+    assert_eq!(ui.focused(&s).unwrap().0, "resume");
+    step(&mut ui, &s, Button::DpadDown);
+    let e = step(&mut ui, &s, Button::A);
+    assert_eq!(clicks(&e).len(), 1);
+    assert!(clicks(&e)[0].contains("\"options\""), "{e:?}");
+    // A draw lays it out for the real target, keeping the focus; after a
+    // reset, update lays out for that target again.
+    let mut r = Rec::new(Caps::N64);
+    let env = env_of(&r);
+    ui.draw(&mut r, &s, &env);
+    assert_eq!(ui.focused(&s).unwrap().0, "options");
+    assert_eq!(rect_of(&ui, &s, "resume").pos.x, 120.0);
+    ui.reset();
+    ui.update(&s, &IDLE, &IDLE, 0.0);
+    assert_eq!(ui.frame(Screen::Top).safe.pos, Vec2::new(16.0, 12.0));
+}

@@ -138,6 +138,18 @@ fn families(project: &Project) -> Vec<Family> {
         .collect()
 }
 
+/// The project a screen file belongs to: the folder holding its `ui/` and
+/// an `assets/manifest.toml` (an example's own assets), else `root`.
+fn root_of(root: &Path, file: &Path) -> PathBuf {
+    let dir = file
+        .parent()
+        .filter(|d| d.file_name().is_some_and(|n| n == "ui"));
+    match dir.and_then(Path::parent) {
+        Some(p) if p.join("assets/manifest.toml").is_file() => p.to_path_buf(),
+        _ => root.to_path_buf(),
+    }
+}
+
 /// `pause` → `<root>/ui/pause.ui.ron`; a path stays a path.
 fn screen_path(root: &Path, screen: &str) -> PathBuf {
     if screen.ends_with(".ron") {
@@ -163,8 +175,6 @@ fn rel(root: &Path, p: &Path) -> String {
 
 fn check(project: &Project, screens: &[&str], opts: &Opts, json: bool) -> Result<bool, String> {
     let root = &project.root;
-    let manifest = manifest(root)?;
-    let langs = trino_asset_pipeline::ui::langs(root)?;
     let files: Vec<PathBuf> = if screens.is_empty() {
         trino_asset_pipeline::ui::screen_files(root)
     } else {
@@ -174,24 +184,31 @@ fn check(project: &Project, screens: &[&str], opts: &Opts, json: bool) -> Result
         Some(f) => vec![f],
         None => families(project),
     };
-    let lang_list: Vec<Option<String>> = match &opts.lang {
-        Some(l) => {
-            if !langs.tables.contains_key(l) {
-                return Err(format!(
-                    "--lang {l}: no assets/i18n/{l}.ron (have: {})",
-                    langs.names().join(", ")
-                ));
-            }
-            vec![Some(l.clone())]
-        }
-        None => std::iter::once(None)
-            .chain(langs.names().into_iter().map(Some))
-            .collect(),
-    };
     let mut reports = Vec::new();
+    let mut languages = std::collections::BTreeSet::new();
     let (mut errors, mut warnings) = (0usize, 0usize);
     for file in &files {
-        let (report, ok_text) = check_one(root, &manifest, &langs, file, &families, &lang_list);
+        // A screen of an example with its own assets checks against those.
+        let froot = root_of(root, file);
+        let manifest = manifest(&froot)?;
+        let langs = trino_asset_pipeline::ui::langs(&froot)?;
+        let lang_list: Vec<Option<String>> = match &opts.lang {
+            Some(l) => {
+                if !langs.tables.contains_key(l) {
+                    return Err(format!(
+                        "--lang {l}: no assets/i18n/{l}.ron (have: {})",
+                        langs.names().join(", ")
+                    ));
+                }
+                vec![Some(l.clone())]
+            }
+            None => std::iter::once(None)
+                .chain(langs.names().into_iter().map(Some))
+                .collect(),
+        };
+        languages.extend(langs.names());
+        let (report, ok_text) =
+            check_one(root, &froot, &manifest, &langs, file, &families, &lang_list);
         for i in report["issues"].as_array().into_iter().flatten() {
             if i["level"] == "error" {
                 errors += 1;
@@ -209,7 +226,7 @@ fn check(project: &Project, screens: &[&str], opts: &Opts, json: bool) -> Result
             "{}",
             serde_json::to_string_pretty(&json!({
                 "screens": reports,
-                "languages": langs.names(),
+                "languages": languages,
                 "errors": errors,
                 "warnings": warnings,
             }))
@@ -223,7 +240,7 @@ fn check(project: &Project, screens: &[&str], opts: &Opts, json: bool) -> Result
              {warnings} warning(s)",
             files.len(),
             families.len(),
-            langs.tables.len()
+            languages.len()
         );
     }
     Ok(errors == 0 && warnings == 0)
@@ -232,6 +249,7 @@ fn check(project: &Project, screens: &[&str], opts: &Opts, json: bool) -> Result
 /// One screen's report (JSON) and its text form.
 fn check_one(
     root: &Path,
+    froot: &Path,
     manifest: &Manifest,
     langs: &Langs,
     file: &Path,
@@ -255,9 +273,9 @@ fn check_one(
     if !structural {
         for &f in families {
             let platform = ui_render::pipeline_platform(f);
-            let fonts = trino_asset_pipeline::ui::fonts(root, manifest, platform);
+            let fonts = trino_asset_pipeline::ui::fonts(froot, manifest, platform);
             let sizes =
-                |s: &str| trino_asset_pipeline::ui::sprite_size(root, manifest, platform, s);
+                |s: &str| trino_asset_pipeline::ui::sprite_size(froot, manifest, platform, s);
             let flat = Flat::new(&def, &sizes);
             for lang in lang_list {
                 let report = audit(
@@ -341,8 +359,8 @@ fn load(root: &Path, screen: &str) -> Result<(PathBuf, ScreenDef), String> {
 }
 
 fn shot(project: &Project, screen: &str, opts: &Opts, json: bool) -> Result<bool, String> {
-    let root = &project.root;
-    let (_, def) = load(root, screen)?;
+    let (path, def) = load(&project.root, screen)?;
+    let root = &root_of(&project.root, &path);
     let manifest = manifest(root)?;
     let langs = trino_asset_pipeline::ui::langs(root)?;
     if let Some(l) = &opts.lang
@@ -412,8 +430,8 @@ fn export(
     opts: &Opts,
     json: bool,
 ) -> Result<bool, String> {
-    let root = &project.root;
-    let (path, def) = load(root, screen)?;
+    let (path, def) = load(&project.root, screen)?;
+    let root = &root_of(&project.root, &path);
     let manifest = manifest(root)?;
     let platform = ui_render::pipeline_platform(opts.platform.unwrap_or(Family::Pc));
     let sizes = |s: &str| trino_asset_pipeline::ui::sprite_size(root, &manifest, platform, s);

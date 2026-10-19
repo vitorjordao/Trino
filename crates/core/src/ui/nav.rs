@@ -55,6 +55,11 @@ impl<const N: usize> Ui<N> {
     /// One frame of input against the last layout: focus moves, presses,
     /// value changes. `prev` is the previous frame's input (edges), `dt`
     /// the frame time (held directions repeat). Returns what happened.
+    ///
+    /// Before the first [`draw`](Self::draw) (or after a [`reset`](Self::reset))
+    /// it lays the screen out itself, for the last target drawn to (its
+    /// reference size at first) with text measured as [`CellMeasure`]:
+    /// menus work headless, and the next draw lays out for real.
     pub fn update<'a>(
         &mut self,
         screen: &UiScreen<'a>,
@@ -64,7 +69,16 @@ impl<const N: usize> Ui<N> {
     ) -> UiEvents<'a> {
         let mut events = UiEvents::new();
         self.time += dt;
-        if !self.laid_out || self.count == 0 {
+        if !self.laid_out {
+            // Not drawn yet (or reset): lay out for the last target with
+            // the engine font's cell, so the menu works before its draw.
+            let env = self
+                .last_env
+                .unwrap_or_else(|| super::EnvHint::reference(screen))
+                .env();
+            self.layout(screen, &env, &super::CellMeasure);
+        }
+        if self.count == 0 {
             return events;
         }
         if self

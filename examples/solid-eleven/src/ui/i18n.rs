@@ -458,3 +458,24 @@ mod tests {
         assert_eq!(n, S::LAST as usize + 1);
     }
 }
+
+/// The UI system's string keys (`ui/*.ui.ron`, issue #58) read through
+/// [`tr`]: the screens stay in the game's own two languages.
+pub struct UiTr(pub Lang);
+
+impl trino_core::ui::UiStrings for UiTr {
+    fn get(&self, key: &str) -> Option<&str> {
+        let s = match key {
+            "pause.title" => S::Paused,
+            "pause.resume" => S::Resume,
+            "pause.substitute" => S::Substitute,
+            "pause.quit" => S::Quit,
+            _ => return None,
+        };
+        Some(tr(self.0, s))
+    }
+
+    fn revision(&self) -> u32 {
+        self.0 as u32 + 1
+    }
+}

@@ -1425,18 +1425,35 @@ pub fn audit(flat: &Flat<'_>, target: Target<'_>, fonts: &Fonts, langs: &Langs) 
             ),
         )));
     }
+    // Fonts by the paths the screen names them with.
+    let mut paths: HashMap<u32, String> = HashMap::new();
+    paths.insert(
+        FontId::from_path(flat.def.theme.font_path()).0,
+        flat.def.theme.font_path().into(),
+    );
+    for (_, n) in &nodes {
+        if !n.font.is_empty() {
+            paths.insert(FontId::from_path(&n.font).0, n.font.clone());
+        }
+    }
+    let font_name = |id: u32| {
+        paths
+            .get(&id)
+            .cloned()
+            .unwrap_or_else(|| fonts.name(FontId(id)))
+    };
     for (font, ch) in probe.missing.iter() {
         report.issues.push(tag(Issue::new(
             Level::Warning,
             None,
-            format!("font {} has no glyph for {ch:?}", fonts.name(FontId(*font))),
+            format!("font {} has no glyph for {ch:?}", font_name(*font)),
         )));
     }
     for name in probe.unknown_fonts.iter() {
         report.issues.push(tag(Issue::new(
             Level::Error,
             None,
-            format!("font {} is not in the project", fonts.name(FontId(*name))),
+            format!("font {} is not in the project", font_name(*name)),
         )));
     }
     if let Some(s) = &strings {

@@ -399,6 +399,70 @@ pub struct Ui<const N: usize = 64> {
     laid_out: bool,
     name: Option<u32>,
     stats: UiStats,
+    /// The last target laid out for (no strings): what `update` lays out
+    /// for when no draw has yet ([`CellMeasure`]).
+    last_env: Option<EnvHint>,
+}
+
+/// A [`UiEnv`] without its string table, kept across frames.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) struct EnvHint {
+    family: Family,
+    top: Vec2,
+    bottom: Option<Vec2>,
+    safe: [Insets; 2],
+    interface_scale: f32,
+}
+
+impl EnvHint {
+    pub(crate) fn of(env: &UiEnv<'_>) -> EnvHint {
+        EnvHint {
+            family: env.family,
+            top: env.top,
+            bottom: env.bottom,
+            safe: env.safe,
+            interface_scale: env.interface_scale,
+        }
+    }
+
+    /// A screen's reference size on the PC, before any target is known.
+    pub(crate) fn reference(screen: &UiScreen<'_>) -> EnvHint {
+        EnvHint {
+            family: Family::Pc,
+            top: Vec2::new(screen.reference.0 as f32, screen.reference.1 as f32),
+            bottom: None,
+            safe: [Insets::ZERO; 2],
+            interface_scale: 1.0,
+        }
+    }
+
+    pub(crate) fn env(self) -> UiEnv<'static> {
+        UiEnv {
+            family: self.family,
+            top: self.top,
+            bottom: self.bottom,
+            safe: self.safe,
+            interface_scale: self.interface_scale,
+            strings: &NoStrings,
+        }
+    }
+}
+
+/// Text measured as the engine font's 6 × 10 cell: how [`Ui::update`]
+/// lays a screen out before its first draw (headless tests, a game's
+/// update before its render), so the pad already moves by geometry.
+pub struct CellMeasure;
+
+impl TextMeasure for CellMeasure {
+    fn text_size(&self, _font: FontId, text: &str, scale: f32) -> Vec2 {
+        let mut widest = 0usize;
+        let mut lines = 0usize;
+        for line in text.split('\n') {
+            widest = widest.max(line.chars().count());
+            lines += 1;
+        }
+        Vec2::new(widest as f32 * 6.0 * scale, lines as f32 * 10.0 * scale)
+    }
 }
 
 impl<const N: usize> Default for Ui<N> {
@@ -433,6 +497,7 @@ impl<const N: usize> Ui<N> {
                 overflow: 0,
                 dropped: 0,
             },
+            last_env: None,
         }
     }
 

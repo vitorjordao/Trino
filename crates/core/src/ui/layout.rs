@@ -205,6 +205,7 @@ impl<const N: usize> Ui<N> {
         self.stats.nodes = self.count as u16;
         self.laid_out = true;
         self.key = self.layout_key(screen, env);
+        self.last_env = Some(super::EnvHint::of(env));
     }
 
     /// What a layout depends on, to skip one that would change nothing.

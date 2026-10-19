@@ -563,3 +563,219 @@ fn the_map_shadows_with_msaa_and_a_render_scale() {
     r.set_msaa(false);
     r.set_render_scale(1.0);
 }
+
+/// Contact hardening and distance attenuation on the map (#86): one cube,
+/// resting on the floor, then 0.5 and 2 units above it, under a slanted
+/// sun and a camera looking down on the shadow's free side.
+mod contact {
+    use super::*;
+
+    pub const CUBE: ModelId = ModelId(0x5706);
+
+    pub const CAMERA: Camera3 = Camera3 {
+        eye: Vec3::new(1.1, 4.6, -1.6),
+        target: Vec3::new(1.1, 0.0, 0.25),
+        fov_y: 55.0 * core::f32::consts::PI / 180.0,
+    };
+
+    /// Down at 37° from the vertical toward +x: a point `h` up casts
+    /// `0.75·h` farther along x.
+    pub const SUN: Light = Light {
+        dir: Vec3::new(0.6, -0.8, 0.0),
+        ambient: 0.45,
+        color: Color::rgb(255, 246, 228),
+        ambient_color: Color::rgb(190, 205, 240),
+        fog: trino_core::Fog::NONE,
+    };
+
+    pub const ON: ShadowSettings = ShadowSettings {
+        soft_growth: 0.1,
+        fade_distance: 4.0,
+        ..ShadowSettings::DEFAULT
+    };
+
+    pub const OFF: ShadowSettings = ShadowSettings {
+        soft_growth: 0.0,
+        fade_distance: 0.0,
+        ..ON
+    };
+
+    pub fn setup(r: &mut PcRenderer) {
+        super::setup(r, 12.0);
+        r.upload_mesh(
+            CUBE,
+            prim(
+                Shape::Box {
+                    size: [0.6, 0.6, 0.6],
+                },
+                [235, 120, 90, 255],
+                Pivot::Bottom,
+            ),
+        );
+    }
+
+    /// The floor and the cube `h` above it; `casts`: its shadow, or the
+    /// same frame without (the baseline the probes compare with).
+    pub fn frame(r: &mut PcRenderer, s: &ShadowSettings, h: f32, casts: bool) -> Vec<u8> {
+        r.begin_frame(Color::rgb(140, 175, 220));
+        r.set_camera(&CAMERA);
+        r.set_light(&SUN);
+        r.set_shadows(Some(s));
+        r.set_shadow_receivers(&[ShadowPlane::ground(0.0)]);
+        r.draw_model(
+            FLOOR,
+            &Transform3::default(),
+            Material::VertexLit,
+            &ModelParams::DEFAULT,
+        );
+        r.draw_model(
+            CUBE,
+            &Transform3 {
+                position: Vec3::new(0.0, h, 0.0),
+                ..Default::default()
+            },
+            Material::VertexLit,
+            &ModelParams {
+                shadow: if casts {
+                    ShadowCast::Mesh
+                } else {
+                    ShadowCast::None
+                },
+                ..ModelParams::DEFAULT
+            },
+        );
+        r.end_frame();
+        r.read_offscreen()
+    }
+
+    /// The blocker distance along the light at the probe line.
+    pub fn dist(h: f32) -> f32 {
+        (h + 0.16) / 0.8
+    }
+
+    pub fn luma_at(r: &PcRenderer, img: &[u8], p: Vec3) -> f32 {
+        let (w, h) = r.internal_size();
+        let v = CAMERA.view().transform_point(p);
+        let half = CAMERA.fov_y * 0.5;
+        let focal = half.cos() / half.sin() * h as f32 * 0.5;
+        let x = (w as f32 * 0.5 + v.x * focal / v.z) as u32;
+        let y = (h as f32 * 0.5 - v.y * focal / v.z) as u32;
+        let i = ((y * w + x) * 4) as usize;
+        luma([img[i], img[i + 1], img[i + 2]]) as f32
+    }
+
+    /// The shadow of the cube `h` up: how much it darkens the floor in
+    /// its middle (luma), and the width of its edge along z, 10% to 90%
+    /// of that (meters). The probe line is 0.12 past the cube's foot, where
+    /// the light grazes its lit face 0.16 above its bottom: `dist(h)` from
+    /// the floor along the light.
+    pub fn measure(r: &mut PcRenderer, s: &ShadowSettings, h: f32) -> (f32, f32) {
+        let on = frame(r, s, h, true);
+        let off = frame(r, s, h, false);
+        let x = 0.75 * h + 0.42;
+        let dark = |z: f32| {
+            let p = Vec3::new(x, 0.0, z);
+            luma_at(r, &off, p) - luma_at(r, &on, p)
+        };
+        // The middle, averaged over a few probes.
+        let mid = (0..5).map(|k| dark(-0.1 + 0.05 * k as f32)).sum::<f32>() / 5.0;
+        let (mut z90, mut z10) = (None, None);
+        let mut z = 0.0f32;
+        while z < 0.8 {
+            let d = dark(z);
+            if d >= 0.9 * mid {
+                z90 = Some(z);
+            }
+            if z10.is_none() && d <= 0.1 * mid {
+                z10 = Some(z);
+            }
+            z += 0.005;
+        }
+        let (z90, z10) = (z90.expect("a dark middle"), z10.expect("an edge"));
+        (mid, z10 - z90)
+    }
+}
+
+#[test]
+fn contact_shadows_harden_at_contact_and_fade_with_height() {
+    let _gpu = gpu();
+    let Some(mut r) = headless(SimProfile::Native) else {
+        return;
+    };
+    contact::setup(&mut r);
+    if let Ok(dir) = std::env::var("TRINO_SHADOW_SHOTS") {
+        for h in [0.0, 0.5, 1.0, 2.0] {
+            for (tag, s) in [("after", contact::ON), ("before", contact::OFF)] {
+                let img = contact::frame(&mut r, &s, h, true);
+                let (w, hh) = r.internal_size();
+                write_png(
+                    &PathBuf::from(&dir).join(format!("contact_h{h}_{tag}.png")),
+                    w,
+                    hh,
+                    &img,
+                );
+            }
+        }
+    }
+    let m: Vec<(f32, f32)> = [0.0, 0.5, 2.0]
+        .iter()
+        .map(|&h| contact::measure(&mut r, &contact::ON, h))
+        .collect();
+    eprintln!("contact on: (darkening, edge m) at 0, 0.5, 2: {m:?}");
+    let (touch, low, high) = (m[0], m[1], m[2]);
+    // Darkest at contact, fading with height (linearly in the distance
+    // along the light, gone at `fade_distance`).
+    assert!(touch.0 > low.0 + 3.0 && low.0 > high.0 + 6.0, "{m:?}");
+    assert!(high.0 > 3.0, "still a shadow 2 up: {m:?}");
+    let lift = |h: f32| 1.0 - contact::dist(h) / contact::ON.fade_distance;
+    // At most the fade's ratio: the wider filter and the cube's higher
+    // texels in the blocker mean only lighten it further.
+    assert!(
+        high.0 / touch.0 <= lift(2.0) / lift(0.0) + 0.05,
+        "the fade's ratio: {m:?}"
+    );
+    // Sharpest at contact, softer above.
+    assert!(touch.1 + 0.03 < low.1 && low.1 <= high.1 + 0.01, "{m:?}");
+    assert!(touch.1 < 0.7 * high.1, "{m:?}");
+
+    // Without contact hardening (ADR 0025's even filter, the default) the
+    // same probes see the same shadow at every height: the test above
+    // fails on it.
+    let flat: Vec<(f32, f32)> = [0.0, 2.0]
+        .iter()
+        .map(|&h| contact::measure(&mut r, &contact::OFF, h))
+        .collect();
+    eprintln!("contact off: {flat:?}");
+    assert!((flat[0].0 - flat[1].0).abs() <= 3.0, "{flat:?}");
+    assert!((flat[0].1 - flat[1].1).abs() <= 0.02, "{flat:?}");
+    // Near contact the shadow keeps most of the even filter's strength
+    // and sharpness (the blocker mean also sees the cube's higher texels).
+    assert!(touch.0 >= 0.75 * flat[0].0, "{m:?} vs {flat:?}");
+    assert!(
+        touch.1 <= 1.6 * flat[0].1 && high.1 > 2.0 * flat[1].1,
+        "{m:?} vs {flat:?}"
+    );
+}
+
+/// Contact hardening with MSAA and a render scale: the composite's
+/// blocker search reads the same map; the shadow still fades with height.
+#[test]
+fn contact_shadows_hold_with_msaa_and_a_render_scale() {
+    let _gpu = gpu();
+    let Some(mut r) = headless(SimProfile::Native) else {
+        return;
+    };
+    contact::setup(&mut r);
+    for (msaa, scale) in [(true, 1.0), (false, 0.6), (true, 0.6)] {
+        r.set_msaa(msaa);
+        r.set_render_scale(scale);
+        let touch = contact::measure(&mut r, &contact::ON, 0.0);
+        let high = contact::measure(&mut r, &contact::ON, 2.0);
+        assert!(
+            touch.0 > high.0 + 6.0 && touch.1 < high.1,
+            "msaa {msaa} scale {scale}: {touch:?} vs {high:?}"
+        );
+    }
+    r.set_msaa(false);
+    r.set_render_scale(1.0);
+}

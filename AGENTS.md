@@ -670,6 +670,12 @@ overlay, and a measurement on real hardware (ares doesn't time the RDP).
     golden frame` and `shadow cost` (ares); PC goldens `tests/golden/pc/shadows_*.png`.
     castle64's player and Solid Eleven's players and ball use it; the hand-made discs
     are gone.
+  - **Contact hardening and height fade (2026-10-19, #86 item 9, ADR 0025 §12):**
+    `ShadowSettings::{soft_growth, fade_distance}` (0 and 0 by default: every golden
+    unchanged). On the map a blocker search widens the PCF with the caster's distance
+    along the light and fades the shadow (WebGL2 reads the map through a second float
+    binding); blobs fade over `fade_distance` when set. Solid Eleven opts in. Not in
+    TSCN v5.
 - **Accessibility (2026-10-19, ADR 0027, GitHub #60, `docs/ACCESSIBILITY.md`):** the
   player's settings and what honors them on every target.
   - **Core (`trino_core::access`, `no_std`):** `AccessSettings` (`cvd`, `text_scale`
@@ -1475,6 +1481,11 @@ cargo test --workspace
   through a nearest *sampler* (`depth_as_float` adds one), and check new WebGL2 shaders with
   `webgl2_shaders_translate_to_glsl_es_300` (naga can't `textureLoad` a `texture_depth_2d`
   to GLSL at all).
+- **A shader that reads the shadow map's raw depth needs the WebGL2 rewrite too**
+  (`shadow_map::map_read_as_float`): the map is a `texture_depth_2d` with a comparison
+  sampler, and naga refuses a depth `textureLoad` for GLSL. Bind the same view again as
+  unfilterable float with a nearest sampler, and keep the map spelled `SHADOWMAP` in the
+  source so the MSAA and `depth_as_float` rewrites leave it alone.
 - **WebGL2 can't copy a depth texture** (`glCopyTexSubImage2D` on a depth attachment: "Depth
   stencil texture in color attachment"); draw it over (`renderer/depth_blit.rs`).
 - **`std::time::Instant` panics on wasm32-unknown-unknown.** Shared code uses

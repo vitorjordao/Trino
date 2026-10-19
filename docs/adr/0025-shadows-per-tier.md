@@ -227,6 +227,75 @@ and adds the blobs' time to the N64 CPU estimate.
 - Scene v7, TSCN v5 and codegen round trips; the budget against the renderer and the
   CLI; an editor kittest plus the layout audit at 960×600 and 1600×940.
 
+### 12. Contact hardening and distance attenuation (2026-10-19, GitHub #86 item 9)
+
+Issue #86 asked for "smooth projected soft contact shadows with distance attenuation" on
+the PC and the Web, blobs kept on the consoles. The audit found most of it done by this
+ADR: the Map tier already shadowed Solid Eleven's players and ball by their shapes (PCF),
+and the blob already faded and shrank with its caster's height (§4: to 60 % and nothing at
+`4·radius + 1` m). What was missing was the map's dependence on height: a shadow as sharp
+and dark 2 m under a ball in the air as under a boot.
+
+- **Two fields on `ShadowSettings`, plain `f32` (no `Option`: the N64 pitfall):**
+  - `soft_growth`: how much the soft edge widens per world unit between caster and
+    receiver along the light. Unitless (the light's apparent size), so it holds at any
+    drawing scale.
+  - `fade_distance`: the caster–receiver distance at which the shadow is gone, world
+    units (a game drawn at 1/64 multiplies it, as it does `distance`). Linear fade.
+  - Both 0 by default: **every existing frame is unchanged**. `shadows_native`,
+    `shadows_n3ds` and `shadows_n64` render pixel-identical to their goldens with the
+    new code (checked byte for byte, 2026-10-19); `clamped` turns NaN and negatives
+    into 0, caps `soft_growth` at 4, and lets `fade_distance` be infinite.
+- **The map composite (`shadow_map.wgsl`), PCSS-lite:** only when either field is set
+  (a uniform branch):
+  1. *Blocker search:* nearest reads of the map's depth (no comparison) where the even
+     filter's taps look, so the two agree on thin casters, plus a sparse 4×4 grid as
+     wide as the filter may grow. Texels count when they are in front of the receiver by
+     more than a texel's depth per texel off center (a receiver sloping up to 45° to the
+     light never finds itself).
+  2. Their mean depth gives the distance to the receiver along the light, world units
+     (`fit.depth` converts map z).
+  3. The filter radius grows by `soft_growth · dist / 2` (uv: `/ 2·fit.radius`), up to
+     three times the preset's taps per side 2.5 texels apart (Low 6, Medium 9, High 12
+     per side). The tap count follows the radius, so bilinear compares never leave gaps.
+  4. The shadow's strength is multiplied by `1 − dist / fade_distance`.
+
+  Without a blocker found, the pixel takes the even filter at full strength (ADR 0025's).
+  With both fields 0, the shader runs exactly the old arithmetic: `side = taps`, the old
+  spacing, a `× 1.0`.
+- **WebGL2:** naga has no GLSL for a `textureLoad` of a `texture_depth_2d`, and a
+  sampler-less read of a depth texture reads 0 under wgpu's GL backend. `MapPass::new`
+  binds the map a second time as an unfilterable float texture (binding 5) and reads it
+  through the nearest sampler (binding 6), as `depth_as_float` does for the scene depth
+  (`map_read_as_float`; `webgl2_shaders_translate_to_glsl_es_300` checks both the
+  rewrite and that the raw read fails). Verified at run time once, with castle64's player
+  shadow temporarily opted in: `cargo xtask test web --browsers chromium` drew the same
+  softened shadow on WebGL2 (SwiftShader) and WebGPU (a read of 0 would have faded it
+  out). MSAA needs nothing new: the composite still
+  reads the scene depth's first sample, and the map is single-sampled.
+- **Blobs:** `fade_distance`, when set, replaces the `4·radius + 1` reach
+  (`ShadowSettings::blob_fade`); 0 keeps it bit for bit. Still one division per blob,
+  no new state per frame, no `Option` read. `soft_growth` does not apply to blobs (the
+  blob texture's falloff is the softness).
+- **Planar (3DS):** unchanged. A per-caster alpha by height would be cheap, but it moves
+  the Azahar goldens; left as a follow-up if a game asks.
+- **Authoring:** `ShadowsDef` gains both fields (optional, defaulted, not written when
+  0; no scene version bump) and codegen writes them. **TSCN v5 does not carry them**: a
+  baked scene gets 0 and 0 (ADR 0025's look), and changing that is a TSCN version bump,
+  left as a follow-up with the editor's Inspector fields.
+- **Solid Eleven opts in** (`soft_growth: 0.12`, `fade_distance: 7 m × WORLD`): its ball
+  in the air casts a softer, fainter shadow the higher it flies. Only
+  `solid_eleven_match_native.png` moved (0.5 % of pixels past 8/255) and was re-blessed;
+  castle64, the showcase and every console golden stay as they were.
+- **Tests:** `a_blob_fades_and_shrinks_with_its_casters_height`,
+  `contact_settings_clamp_and_default_to_the_old_look` (core);
+  `contact_shadows_harden_at_contact_and_fade_with_height` (a cube on the floor, then
+  0.5 and 2 up: the shadow darkens the floor by 73 / 59 / 17 luma levels and its edge
+  widens 0.21 / 0.27 / 0.39 m on RADV, 0.43 m at 2 on lavapipe; with both fields 0 the
+  same probes read 87 and 0.145 m at every height) and
+  `contact_shadows_hold_with_msaa_and_a_render_scale` (PC GPU, RADV and lavapipe); the
+  uniform layout and the WebGL2 rewrite (render-wgpu unit tests).
+
 ## Consequences
 
 - Every caster gets grounded on every target with one component and one setting per
@@ -239,4 +308,6 @@ and adds the blobs' time to the N64 CPU estimate.
   - baked static shadows;
   - cascades on Ultra;
   - receivers other than horizontal box tops in the editor (the API takes any plane);
-  - an RSP shadow command if the N64 ever needs more projected shapes.
+  - an RSP shadow command if the N64 ever needs more projected shapes;
+  - contact hardening (§12) in TSCN and the editor's Inspector, and a height fade on the
+    planar tier.

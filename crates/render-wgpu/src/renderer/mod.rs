@@ -3599,6 +3599,8 @@ impl PcRenderer {
             distance: s.distance,
             map_size,
             taps: shadow_map::taps(self.quality.shadows),
+            soft_growth: s.soft_growth,
+            fade_distance: s.fade_distance,
         })
     }
 
@@ -5804,6 +5806,18 @@ mod webgl2_tests {
         }
         let raw = glsl_es_300(include_str!("shaders.wgsl")).unwrap_err();
         assert!(raw.contains("fs_water"), "{raw}");
+        // The shadow map's composite as `MapPass::new` builds it for
+        // WebGL2: the scene depth and the blocker search's map read
+        // through nearest samplers (#86).
+        let map = |s: &str| s.replace("SHADOWMAP", "texture_depth_2d");
+        let wgsl = include_str!("shadow_map.wgsl");
+        let webgl2 = map(&shadow_map::map_read_as_float(&depth_as_float(wgsl)));
+        let n = glsl_es_300(&webgl2).unwrap_or_else(|e| panic!("shadow_map.wgsl: {e}"));
+        assert!(n > 0);
+        // ...and as written it would not: naga has no GLSL for a depth
+        // texture's `textureLoad`, which is why the map read is rewritten.
+        let raw = glsl_es_300(&map(&depth_as_float(wgsl))).unwrap_err();
+        assert!(raw.contains("textureLoad"), "{raw}");
     }
 
     /// The transform adds one nearest sampler per depth texture, at the

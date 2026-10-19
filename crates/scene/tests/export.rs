@@ -267,6 +267,8 @@ fn shadows_reach_the_tscn_and_the_generated_code() {
         distance: 25.0,
         softness: 90,
         color: [10, 20, 30, 120],
+        soft_growth: 0.0,
+        fade_distance: 0.0,
     };
     scene.environment.shadows = Some(def);
     let set = |scene: &mut Scene, name: &str, cast, receive| {
@@ -349,7 +351,8 @@ fn shadows_reach_the_tscn_and_the_generated_code() {
     for needle in [
         "pub const SHADOWS: Option<ShadowSettings> = Some(ShadowSettings {\n    \
          tier_max: ShadowTier::Planar,\n    map_size: 1024,\n    distance: 25.0,\n    \
-         softness: 90,\n    color: Color::rgba(10, 20, 30, 120),\n});",
+         softness: 90,\n    color: Color::rgba(10, 20, 30, 120),\n    soft_growth: 0.0,\n    \
+         fade_distance: 0.0,\n});",
         "    ShadowPlane::horizontal(Vec3::new(0.0, 0.0, 0.0), 5.0, 5.0),\n",
         "    ShadowPlane::horizontal(Vec3::new(6.0, 2.0, 0.0), 1.0, 1.0),\n",
         "shadow: ShadowCast::Blob { radius: 0.4 },",

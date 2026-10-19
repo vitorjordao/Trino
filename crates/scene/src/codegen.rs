@@ -101,12 +101,19 @@ pub fn to_rust_for(scene: &Scene, lib: &Library, target: Target) -> (String, Vec
     // `set_shadow_receivers(RECEIVERS)` every frame.
     let shadows = match env.core_shadows() {
         Some(s) => format!(
-            "Some(ShadowSettings {{\n    tier_max: ShadowTier::{:?},\n    map_size: {},\n    distance: {},\n    softness: {},\n    color: {},\n}})",
+            "Some(ShadowSettings {{\n    tier_max: ShadowTier::{:?},\n    map_size: {},\n    distance: {},\n    softness: {},\n    color: {},\n    soft_growth: {},\n    fade_distance: {},\n}})",
             s.tier_max,
             s.map_size,
             f(s.distance),
             s.softness,
-            color(s.color)
+            color(s.color),
+            f(s.soft_growth),
+            // Infinity never fades: not a literal `{:?}` can print.
+            if s.fade_distance.is_infinite() {
+                "f32::INFINITY".to_string()
+            } else {
+                f(s.fade_distance)
+            }
         ),
         None => "None".into(),
     };

@@ -54,6 +54,9 @@ fn provided_renderer_methods_are_harmless_defaults() {
     dyn_r.set_wetness(0.5);
     dyn_r.set_ambient_occlusion(Some(&trino_core::AmbientOcclusion::DEFAULT));
     dyn_r.set_ambient_occlusion(None);
+    dyn_r.set_shadows(Some(&trino_core::ShadowSettings::DEFAULT));
+    dyn_r.set_shadow_receivers(&[trino_core::ShadowPlane::ground(0.0)]);
+    dyn_r.set_shadows(None);
     dyn_r.set_water(
         1.5,
         &[trino_core::Ripple {

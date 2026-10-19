@@ -32,6 +32,7 @@ Run modes and switches for `trino-app-pc`:
 | `TRINO_QUALITY=low\|medium\|high\|ultra\|auto` | The quality preset for this run (`cargo xtask run pc --quality low`), never saved; `auto` runs the calibration. Native profile only (below) |
 | `TRINO_QUALITY_BENCH=1` | Run the calibration, print its `TRINO_QUALITY: bench` line and exit (`cargo xtask quality bench`) |
 | `TRINO_MSAA=0` | No MSAA, whatever the preset says |
+| `TRINO_SHADOWS=off\|debug` | No shadows, or every shadow in magenta at full strength (where each caster's lands); [ADR 0025](adr/0025-shadows-per-tier.md) |
 
 Keyboard mapping: A/B = Z/X, X/Y = C/V, L/R = Q/E, Start = Enter, Select = Right Shift,
 D-pad = arrows, stick = WASD. The mouse feeds `InputState::pointer`. Gamepads go through
@@ -54,6 +55,18 @@ the anchors at the monitor's real edges — times the player's interface scale
 and clicks it; Enter and Escape work like A and B. A saved screen or string table reloads
 in the running game. With `TRINO_STRICT=1` on a console profile, a screen over that
 console's UI budget panics.
+
+### Shadows
+
+A draw's `ModelParams::shadow` says what it casts once, and each target draws the best it
+affords ([ADR 0025](adr/0025-shadows-per-tier.md)). The native profile and the Web draw a
+shadow map: every surface in the light's view within `distance` meters, PCF-filtered.
+The quality preset sizes it (1024 texels on Low, 2048 above) and sets the filter (2×2,
+3×3, 4×4 taps); `shadows: Off` in a preset keeps the planar shadows and runs no map pass.
+The console profiles draw the console's tier, blobs on `n64` and planar shadows on `3ds`,
+so a PC run or the editor's Game view shows what the console shows. Blob and planar
+shadows land only on the receivers the game sets (`set_shadow_receivers`); the map
+ignores them.
 
 ### Quality presets
 
@@ -152,6 +165,12 @@ Things to know:
   the DFS), sprites by `mksprite --compress`; `asset_load` decodes as it reads. Boot logs
   `TRINO_MEM: ram= heap_total= before_assets= boot_assets=`, and the self-test fails when
   the heap's peak leaves less than 128 KB of libdragon's heap (`TRINO_HEAP:` lines).
+- **Shadows** ([ADR 0025](adr/0025-shadows-per-tier.md)): a blob under each caster on
+  the receiver below it (~111 µs of CPU each, after the opaque batch; 22 blobs ≈
+  14.7 ms in ares), and the first two `ShadowCast::Mesh` casters of a frame projected
+  flat instead (the rest cast nothing: `ShadowStats::over_budget`). Blobs sit four steps
+  of the RDP's 18-bit compressed z in front of their receiver, so they never z-fight.
+  The `shadows`, `shadows golden frame` and `shadow cost` self-test steps hold them.
 - **UI** ([ADR 0024](adr/0024-ui-system.md)): a screen's root keeps 16×12 pixels inside
   the 320×240 picture, the margin a TV's overscan hides (`Caps::safe_area`; `bleed` nodes
   fill it). The budget is 64 laid-out nodes and 384 2D draws a frame; `cargo xtask ui
@@ -222,6 +241,9 @@ Things to know:
   `T3AU` files beside it). `[groups.boot] compression = { 3ds = "lz4" }` packs boot the same
   way into `groups/boot.tbnd`, decoded at boot. GPU memory of an unloaded asset is freed two
   frames after its last draw. Boot logs the same `TRINO_MEM:` line as the N64.
+- **Shadows** ([ADR 0025](adr/0025-shadows-per-tier.md)): each caster's mesh flattened
+  onto the receiver under it along the light by the GPU T&L, and drawn through the
+  stencil so overlapping shadows darken once. A `Blob` cast draws a blob.
 - **UI** ([ADR 0024](adr/0024-ui-system.md)): nodes with `screen: Bottom` go to the
   320×240 touch screen and a tap clicks them (on a one-screen target they join the main
   screen); the pad reaches both screens. The budget is 128 nodes and 2048 2D draws.
@@ -309,6 +331,8 @@ What a browser changes:
   depth texture, so the SSAO and the water read the depth through a nearest sampler and
   the water's depth copy is drawn (`renderer/depth_blit.rs`). The picture is the same:
   `tests/golden/web/` holds every browser and the PC to it.
+- **Shadows:** the PC's shadow map ([ADR 0025](adr/0025-shadows-per-tier.md)). On WebGL2
+  the composite reads the scene's depth through the same nearest sampler as the SSAO.
 - **No threads:** the parallel CPU T&L runs on one worker (wasm without
   `SharedArrayBuffer`); the GPU T&L path takes most draws anyway.
 

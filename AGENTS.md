@@ -638,6 +638,36 @@ overlay, and a measurement on real hardware (ares doesn't time the RDP).
   - **Found on the way:** 3DS audio never played in Azahar (ndsp had no DSP firmware;
     the shim now feeds a placeholder on Citra/Azahar), and N64 ignored `looped` (a
     one-shot water sound looped forever).
+- **Shadows per tier (2026-10-18, ADR 0025, GitHub #57):** one caster model, the best
+  shadow each target affords.
+  - **Core (`trino_core::shadow`, `no_std`):** `ModelParams::shadow: ShadowCast`
+    (`None`, `Blob{radius}`, `Mesh`, `Auto{blob_radius}`), `ShadowTier`
+    (`None < Blob < Planar < Map`, `Caps::shadow_tier`), `ShadowSettings` (`tier_max`,
+    `map_size`, `distance`, `softness`, `color`), `ShadowPlane` receivers
+    (`top_of(min,max)`, `ground(y)`, ≤ `MAX_SHADOW_PLANES` 32), `ShadowFrame` (plans
+    casts, `receiver_under`, blob/planar triangles cut to the receiver, `map_fit`),
+    `shadow_z` (`SHADOW_Z_STEPS` × `Caps::depth_step`; the RDP's compressed z on the N64).
+    `Renderer::{set_shadows, set_shadow_receivers}` are defaults, cleared at
+    `begin_frame` (no `GAME_API_VERSION` bump). `ShadowStats` in `Renderer::stats`.
+  - **Backends:** N64 blobs queued and built after the opaque batch (`flush_shadows`,
+    `trino_3d_shadow` + `trino_tri_tex`, 111 µs each, `N64_COST::us_per_blob`), two
+    planar `Mesh` casters a frame (`Caps::max_planar_shadows`); 3DS planar by the GPU T&L
+    with a stencil draw-once (`trino_3d_material` bits 9–13, `trino_shadow_blob`); PC
+    native and Web a `Depth32Float` map + composite (`renderer/shadow_map.rs`, PCF taps
+    and size from the quality preset, `Off` caps at planar). PC console profiles draw the
+    console's tier. `ShadowView` game/off/debug (`PcRenderer::set_shadow_view`,
+    `TRINO_SHADOWS`).
+  - **Authoring:** scene v7 `environment.shadows: Option<ShadowsDef>`, entity
+    `shadow: Option<ShadowComponent{cast, radius, receive}>` (receive = the top of its
+    collider, else its model's bounds), prefab v5, TSCN v5 (`BakedScene::{shadows,
+    receivers}`), codegen `SHADOWS`/`RECEIVERS`; `FrameBudget::shadows` + `scene budget
+    --json`.
+  - **Tools:** Inspector › Shadows and the Shadow component, the Game view per platform,
+    the Scene view's as tier/off/debug (`TRINO_EDITOR_SHADOWS`,
+    `TRINO_EDITOR_INSPECT=shadows`). Self-test steps `shadows` (all targets), `shadows
+    golden frame` and `shadow cost` (ares); PC goldens `tests/golden/pc/shadows_*.png`.
+    castle64's player and Solid Eleven's players and ball use it; the hand-made discs
+    are gone.
 - **UI system (2026-10-18, ADR 0024, GitHub #58):** menus, HUDs and dialogs as data.
   - **Core (`trino_core::ui`, `no_std`, no allocation):** `UiScreen` (a static slice or a
     `TUIL` blob view), `Ui<N>` (slots, focus, scroll, 24 values, events), containers
@@ -664,7 +694,7 @@ overlay, and a measurement on real hardware (ares doesn't time the RDP).
 - **Quality presets on the PC and the Web (2026-10-18, ADR 0023, GitHub #55):** Low,
   Medium, High, Ultra and Custom.
   - **Core (`trino_core::quality`, `no_std`):** `QualitySettings` (render scale, `DynRes`,
-    MSAA, AO cap, shadows/post levels for #57/#64, `lod_bias`, `particle_scale`, filter,
+    MSAA, AO cap, the shadow level (ADR 0025), a post level for #64, `lod_bias`, `particle_scale`, filter,
     anisotropy, sharpen, `FrameLimit`), `PresetTable` (`classify`, text), `QualityInfo`;
     `Platform::{quality, set_quality, quality_preset, quality_info, detect_quality}` and
     `Renderer::lod_bias` are default methods (no `GAME_API_VERSION` bump). Consoles are
@@ -990,6 +1020,18 @@ cargo test --workspace
   beyond Rust.
 
 ## Pitfalls
+
+- **Shadows land only on receivers on the blob and planar tiers.** A caster with no
+  `set_shadow_receivers` plane under its bounding-sphere center draws nothing on the
+  N64 and the 3DS (the PC map shades everything). Pass the floor's top
+  (`ShadowPlane::top_of` / `ground`) every frame: both calls are cleared at
+  `begin_frame`. In a scene, the receiver is the top of the entity's box, so a big
+  bridge collider above the floor catches every blob under it.
+- **`ShadowCast::Mesh` on the N64 is capped at two a frame.** The rest cast nothing and
+  count in `ShadowStats::over_budget`; use `Auto { blob_radius }` for crowds, and
+  `Auto(0)` for a character's limbs when the body casts the blob.
+- **Never lift a shadow by hand.** `shadow::shadow_z` offsets by the target's own depth
+  steps; a fixed lift z-fights far away on the N64's compressed z and floats near.
 
 - **A UI kind with settings needs its parentheses in RON even without any:** `Stack()`,
   `Grid()`, `Rect()`, `Slider()`; a bare `Stack` is a parse error (the message says so).

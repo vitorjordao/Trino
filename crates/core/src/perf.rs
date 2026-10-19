@@ -129,7 +129,7 @@ pub const N64_COST: CostModel = CostModel {
     us_per_voice_per_s: AUDIO_VOICE,
     us_per_voice_sample: AUDIO_SAMPLE,
     us_per_opus_voice_per_s: AUDIO_OPUS,
-    // ares, 2026-10-19 (issue #57, the self-test's `shadow cost` step):
+    // ares, 2026-10-18 (issue #57, the self-test's `shadow cost` step):
     // the frame time (less its vsync wait) of 22 blobs on a floor less the
     // same frame without them, per blob: 109 µs with the Expansion Pak,
     // 113 without.

@@ -292,6 +292,13 @@ frames. Trust the cost model.
 
 ## What worked, what didn't (keep this list honest)
 
+`N64_COST.us_per_blob` (111 µs: a blob shadow's four corners projected on the CPU and two
+textured triangles, 109 µs with the Expansion Pak and 113 µs without) comes from the
+self-test's `shadow cost` step (22 casters with and without blobs, `TRINO_SHADOW_COST:`).
+The step fails when that frame passes 33.3 ms. Blobs are built after the opaque batch
+(`flush_shadows`), so the RSP draws keep their I-cache locality; a projected `Mesh`
+shadow runs the CPU T&L (two a frame at most). The scene budget adds the blobs' time.
+
 `N64_COST.us_per_billboard` (44 µs: two CPU-submitted textured triangles) carries the
 impostor measurement below into the estimates: the editor's budget HUD adds it per impostor drawn, and
 the LOD panel and the impostor section print it next to the mesh's CPU-path cost.

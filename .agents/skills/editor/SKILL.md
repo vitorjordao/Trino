@@ -81,10 +81,11 @@ TRINO_EDITOR_SCREENSHOT=target/launcher.png TRINO_EDITOR_SCREENSHOT_FRAME=10 car
 | `TRINO_EDITOR_QUALITY=low\|medium\|high\|ultra[,dynres]` | the Game view's quality preset on the PC and Web profiles (and the Play run's `TRINO_QUALITY`); `,dynres` turns dynamic resolution on |
 | `TRINO_EDITOR_WEB_CANVAS=responsive\|720\|1080` | the Game view's browser canvas on the Web profile (the picture is the canvas over the auto pixel scale) |
 | `TRINO_EDITOR_SIZE=960x600` | window size (default 1600x940; never below the 960x600 minimum) — screenshot small windows |
-| `TRINO_EDITOR_INSPECT=platforms\|lod\|impostor\|budget\|ao\|audio\|groups` | the Inspector opens that section and scrolls to it (`audio`: the audio inspector's Platforms grid; `budget`: the scene settings' platform budget, with nothing selected; `ao`: the scene's Ambient Occlusion, or a model's baked AO with `TRINO_EDITOR_OPEN=model:<logical>`; `groups`: the scene settings' Asset groups) |
+| `TRINO_EDITOR_INSPECT=platforms\|lod\|impostor\|budget\|ao\|shadows\|audio\|groups` | the Inspector opens that section and scrolls to it (`audio`: the audio inspector's Platforms grid; `budget`: the scene settings' platform budget, with nothing selected; `ao`: the scene's Ambient Occlusion, or a model's baked AO with `TRINO_EDITOR_OPEN=model:<logical>`; `shadows`: the scene's Shadows with each platform's line; `groups`: the scene settings' Asset groups) |
 | `TRINO_EDITOR_ASSET_GROUP=<group>[@models\|sprites\|audio\|particles]` | the Assets panel opens filtered by that group's chip (on that tab) |
 | `TRINO_EDITOR_TEXTURE=sprites/x\|fonts/x[@pc\|n64\|3ds\|web[,zoom]]` | open the texture inspector on that sprite or font, its preview tab on that platform at that zoom (1–8); with `TRINO_EDITOR_INSPECT=texture` its formats scroll into view |
 | `TRINO_EDITOR_AO=game\|on\|off\|mask` | the Scene view's ambient occlusion mode (as the scene sets it, forced on, off, the occlusion alone) |
+| `TRINO_EDITOR_SHADOWS=tier\|off\|debug` | the Scene view's shadow mode (as the tier draws them, none, debug: magenta shadows with every receiver and caster outlined) |
 | `TRINO_EDITOR_RIPPLE=1` | keep a ripple ringing on the selected entity's water surface: one drops once the scene resolved, and another whenever it has faded (the inspector's "Drop a ripple"; screenshots of ripple rings) |
 | `TRINO_EDITOR_LOD_PREVIEW=<m>` | preview the selected entity's LOD at that distance (both views) |
 | `TRINO_EDITOR_SMOKE_FRAMES=N` | close after N frames (CI smoke test; the launcher too) |
@@ -396,6 +397,13 @@ Live-edit check: start the editor with `TRINO_EDITOR_ECHO_LOG=1` in the backgrou
   and View › Ambient occlusion). A change of mode re-renders through `ao_rendered`, not
   the `RenderKey`. `Stats::ao` says whether the pass ran. Only the native profile runs
   it: the Game view's N64/3DS show the baked AO.
+- **Shadows follow the same split as AO** (ADR 0025): `env.core_shadows()` and
+  `resolved.receivers()` go to the renderer every render. The Scene view has its own
+  `shadow_view` (the sun-on-horizon toolbar menu, View › Shadow view), re-rendered
+  through `shadow_rendered`; the Game view always draws `ShadowView::Game` at the
+  previewed profile's tier (blobs on N64, planar on 3DS, the map on PC). The View
+  submenu is "Shadow view", not "Shadows": kittest's label queries would hit the
+  Inspector's Shadows header too.
 - **The Scene view's floating toolbar is full at 960×600.** The AO menu pushed the
   camera button onto the axis widget, and the layout audit failed in two flows. A new
   toolbar button checks `ui.available_width()` and steps aside when there's no room

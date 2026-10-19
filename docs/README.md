@@ -61,6 +61,7 @@ they read just as well for people. Each one is the most detailed source for its 
 | [0022](adr/0022-asset-groups-and-memory.md) | Asset groups, `TBND` bundles, compression per platform, loading in time slices, a RAM budget per console tier, cell streaming |
 | [0023](adr/0023-quality-presets.md) | Quality presets for the PC and the Web: Low to Ultra, render scale with upscale, dynamic resolution, frame pacing, an auto-detect bench |
 | [0024](adr/0024-ui-system.md) | A declarative UI system for every target: `ui/*.ui.ron` screens, whole-pixel layout with safe areas and the 3DS touch screen, pad/mouse/touch focus, string tables, budgets, `ui check` |
+| [0025](adr/0025-shadows-per-tier.md) | Shadows per tier: blobs on the N64, planar shadows on the 3DS, a shadow map on the PC and the Web; depth-safe placement, scene shadows and receivers, budget, editor views |
 
 ## Plans and history
 

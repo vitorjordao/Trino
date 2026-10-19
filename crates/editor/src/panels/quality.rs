@@ -139,7 +139,7 @@ impl Row {
             Row::DynMin | Row::DynMax => "Dynamic resolution's range",
             Row::Msaa => "Multisampled edges",
             Row::Ao => "Caps the game's ambient occlusion (High keeps it as authored)",
-            Row::Shadows => "Shadow quality (read by the shadows of issue #57)",
+            Row::Shadows => "Shadow map size and filtering (Off: planar shadows only)",
             Row::Post => "Post-processing quality (read by the post stack of issue #64)",
             Row::LodBias => "Multiplies every LOD distance (above 1: detail further away)",
             Row::Particles => "Multiplies every particle effect's cap",

@@ -984,6 +984,28 @@ impl<'a> Flat<'a> {
     }
 }
 
+/// The images and models a screen names that the project does not have:
+/// `has` says whether a logical path (`sprites/x`, `models/x`) is in its
+/// manifest. Without them the node draws nothing on every target.
+pub fn missing_assets(def: &ScreenDef, has: &dyn Fn(&str) -> bool) -> Vec<Issue> {
+    let mut out = Vec::new();
+    for (i, (_, n)) in def.nodes().iter().enumerate() {
+        let path = match &n.kind {
+            Kind::Image { sprite, .. } => sprite,
+            Kind::Model3d { model, .. } => model,
+            _ => continue,
+        };
+        if !path.is_empty() && !has(path) {
+            out.push(Issue::new(
+                Level::Error,
+                Some((i, *n)),
+                format!("{path} is not in the project's manifest"),
+            ));
+        }
+    }
+    out
+}
+
 /// Structural problems: what makes a screen wrong on every target.
 pub fn validate(def: &ScreenDef) -> Vec<Issue> {
     let mut out = Vec::new();
@@ -1394,6 +1416,38 @@ pub fn audit(flat: &Flat<'_>, target: Target<'_>, fonts: &Fonts, langs: &Langs) 
                     (size.y / scale).round()
                 ),
             )));
+        }
+    }
+    // Controls whose boxes overlap: a click or a tap there could mean either
+    // (list rows count once: the same node twice is a pair of rows).
+    let slots = ui.slots();
+    let controls: Vec<usize> = (0..slots.len())
+        .filter(|&k| {
+            slots[k].flags & core_ui::flags::FOCUSABLE != 0
+                && slots[k].flags & core_ui::flags::CLIPPED == 0
+        })
+        .collect();
+    let mut pairs = HashSet::new();
+    for (n, &a) in controls.iter().enumerate() {
+        for &b in &controls[n + 1..] {
+            let (sa, sb) = (slots[a], slots[b]);
+            if sa.on != sb.on {
+                continue;
+            }
+            let (ra, rb) = (ui.rect(a), ui.rect(b));
+            // Touching edges are fine: they must share a whole pixel.
+            let w = (ra.pos.x + ra.size.x).min(rb.pos.x + rb.size.x) - ra.pos.x.max(rb.pos.x);
+            let h = (ra.pos.y + ra.size.y).min(rb.pos.y + rb.size.y) - ra.pos.y.max(rb.pos.y);
+            if w >= 1.0 && h >= 1.0 && pairs.insert((sa.node, sb.node)) {
+                report.issues.push(tag(Issue::new(
+                    Level::Warning,
+                    at(sb.node as usize),
+                    format!(
+                        "overlaps {}: a click or a tap there could mean either",
+                        nodes[sa.node as usize].1.label()
+                    ),
+                )));
+            }
         }
     }
     if let Some(slot) = ui.unreachable(&screen) {

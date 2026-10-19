@@ -22,7 +22,9 @@ use std::process::ExitCode;
 use serde_json::json;
 use trino_asset_pipeline::Manifest;
 use trino_core::{Caps, Family};
-use trino_scene::ui::{Flat, Issue, Langs, Level, ScreenDef, Target, audit, to_rust, validate};
+use trino_scene::ui::{
+    Flat, Issue, Langs, Level, ScreenDef, Target, audit, missing_assets, to_rust, validate,
+};
 
 use crate::project::{Project, Target as Platform};
 use crate::ui_render::{self, ShotOptions};
@@ -274,6 +276,14 @@ fn check_one(
     };
     let mut issues: Vec<Issue> = validate(&def);
     let structural = issues.iter().any(|i| i.level == Level::Error);
+    issues.extend(missing_assets(
+        &def,
+        &|path: &str| match path.split_once('/') {
+            Some(("sprites", name)) => manifest.sprites.contains_key(name),
+            Some(("models", name)) => manifest.models.contains_key(name),
+            _ => false,
+        },
+    ));
     let mut targets = Vec::new();
     if !structural {
         for &f in families {

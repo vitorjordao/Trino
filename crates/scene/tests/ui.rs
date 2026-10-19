@@ -5,7 +5,7 @@ use trino_core::ui::{NONE, NodeKind, UiScreen, UiStrings};
 use trino_core::{Caps, Color, Family, FontId, Screen, SpriteId};
 use trino_scene::ui::{
     Anchor, Flat, Fonts, Kind, Langs, Level, NodeDef, Sample, ScreenDef, Size, StringsDef, Target,
-    audit, screen_name, to_rust, to_tuil, validate,
+    audit, missing_assets, screen_name, to_rust, to_tuil, validate,
 };
 
 const PAUSE: &str = r#"(
@@ -397,16 +397,67 @@ fn previews_set_values_and_list_counts() {
     assert_eq!(Family::Pc.key(), "pc");
 }
 
+/// Controls that overlap are flagged (a click there is ambiguous); ones
+/// that only touch are not. Images and models the manifest lacks are errors.
+#[test]
+fn overlapping_controls_and_missing_assets_are_reported() {
+    let text = r#"(
+        version: 1,
+        root: (children: [
+            (kind: Button, id: "a", text: "A", anchor: Center, size: (Px(60), Px(20))),
+            (kind: Button, id: "b", text: "B", anchor: Center, offset: (30, 10), size: (Px(60), Px(20))),
+            (kind: Button, id: "c", text: "C", anchor: Center, offset: (0, 20), size: (Px(60), Px(20))),
+            (kind: Image(sprite: "sprites/known"), anchor: TopLeft, size: (Px(8), Px(8))),
+            (kind: Model3d(model: "models/gone"), anchor: TopRight, size: (Px(8), Px(8))),
+        ]),
+    )"#;
+    let def = ScreenDef::from_ron(text).unwrap();
+    let flat = Flat::new(&def, &no_sprites);
+    let r = audit(
+        &flat,
+        Target::of(Caps::PC),
+        &engine_font(),
+        &Langs::default(),
+    );
+    let overlaps: Vec<_> = r
+        .issues
+        .iter()
+        .filter(|i| i.message.starts_with("overlaps"))
+        .map(|i| (i.label.as_str(), i.message.as_str()))
+        .collect();
+    // b overlaps a and c; a and c only touch (c starts where a ends).
+    assert_eq!(overlaps.len(), 2, "{overlaps:?}");
+    assert!(
+        overlaps
+            .iter()
+            .all(|(l, _)| *l == "Button \"b\"" || *l == "Button \"c\"")
+    );
+    assert!(overlaps.iter().any(|(_, m)| m.contains("Button \"a\"")));
+    let missing = missing_assets(&def, &|p: &str| p == "sprites/known");
+    assert_eq!(missing.len(), 1, "{missing:?}");
+    assert_eq!((missing[0].level, missing[0].node), (Level::Error, Some(5)));
+    assert!(missing[0].message.contains("models/gone"));
+}
+
 /// A misspelt field is an error, not a value that silently vanishes on
 /// the editor's next save — on nodes, kinds, themes, screens and tables.
 #[test]
 fn unknown_fields_are_errors() {
     for (text, field) in [
-        ("(version: 1, root: (colour: Some((1, 2, 3, 255))))", "colour"),
+        (
+            "(version: 1, root: (colour: Some((1, 2, 3, 255))))",
+            "colour",
+        ),
         ("(version: 1, root: (kind: Stack(gaps: 4)))", "gaps"),
-        ("(version: 1, theme: (focus_colour: None), root: ())", "focus_colour"),
+        (
+            "(version: 1, theme: (focus_colour: None), root: ())",
+            "focus_colour",
+        ),
         ("(version: 1, title: \"x\", root: ())", "title"),
-        ("(version: 1, root: (nav: (down: \"a\", forward: \"b\")))", "forward"),
+        (
+            "(version: 1, root: (nav: (down: \"a\", forward: \"b\")))",
+            "forward",
+        ),
     ] {
         let e = ScreenDef::from_ron(text).unwrap_err();
         assert!(e.contains(field), "{text}: {e}");

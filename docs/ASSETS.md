@@ -450,8 +450,9 @@ cargo xtask ui list --json
 ```
 
 `ui check` fails on any issue: a control the pad cannot reach (an error on the N64 and the
-3DS), a screen over `Caps::max_ui_nodes` or `max_ui_draws`, a text that overflows its box
-in any language, a glyph the font lacks, an unknown font, a key in no table. The editor's
+3DS), two controls whose boxes overlap, a screen over `Caps::max_ui_nodes` or
+`max_ui_draws`, a text that overflows its box in any language, a glyph the font lacks, a
+font, sprite or model not in the manifest, a key in no table. The editor's
 UI tab edits the same file and shows the focus order, the overflows and each target.
 
 ## Checking your work

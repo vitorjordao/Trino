@@ -21,7 +21,9 @@ A running PC game, the editor's UI tab and an agent editing the file all see the
    - `text overflows its W×H box` — in which `[platform]` and language; widen the box,
      `overflow: Ellipsis` (a choice, not an error), or `Wrap`;
    - `font X has no glyph for 'ã'` — the font (trino5x7 is ASCII) or the text;
-   - `key "x" is in no table` — add it to `assets/i18n/<lang>.ron`.
+   - `key "x" is in no table` — add it to `assets/i18n/<lang>.ron`;
+   - `overlaps Button "a"` — two controls share pixels, so a click or a tap is ambiguous;
+   - `sprites/x is not in the project's manifest` (or a model) — declare it (`add-asset`).
    Warnings fail the check too.
 3. `cargo xtask ui shot <name> --platform n64|3ds|pc|web [--size 2560x1080] [--lang pt-BR]
    [--focus quit] --out x.png` and *look* (the 3DS shot stacks both screens).

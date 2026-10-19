@@ -899,7 +899,7 @@ cargo xtask quality show [--json]                                    # [pc.quali
 cargo xtask quality set low render_scale=0.6 frame_limit=30 [--json] # change a preset (strict ranges); reset [<preset>..] drops changes; check validates
 cargo xtask quality bench [--json]                                   # this machine's first-launch calibration (opens a window)
 cargo xtask run pc --quality low|medium|high|ultra|auto              # TRINO_QUALITY for one run (never saved); the Web: ?quality=
-cargo xtask ui check [screen..] [--platform n64|3ds|pc|web] [--lang l] [--json]   # every screen × target × language: reach, budgets, overflow, glyphs, keys
+cargo xtask ui check [screen..] [--platform n64|3ds|pc|web] [--lang l] [--json]   # every screen × target × language: reach, overlaps, budgets, overflow, glyphs, keys, assets
 cargo xtask ui shot <screen> [--platform p] [--size WxH] [--lang l] [--scale S] [--focus id] [--out x.png] [--json]  # headless render (3DS: both screens)
 cargo xtask ui export <screen> <out.rs> [--json]                    # static Rust for include! (a game without blobs)
 cargo xtask ui list [--json]                                        # screens and languages

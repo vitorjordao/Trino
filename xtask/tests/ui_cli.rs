@@ -148,8 +148,30 @@ fn ui_check_reports_each_fixture_with_its_platform_and_level() {
         ),
         ("broken", "", "error", "a Slider needs max > min (5..5)"),
         ("unparsable", "", "error", "Unexpected field named `colour`"),
+        ("overlap", "pc", "warning", "overlaps Button \"a\""),
+        ("overlap", "3ds", "warning", "overlaps Button \"a\""),
+        (
+            "missing",
+            "",
+            "error",
+            "sprites/no-such-sprite is not in the project's manifest",
+        ),
+        (
+            "missing",
+            "",
+            "error",
+            "models/no-such-model is not in the project's manifest",
+        ),
     ];
-    for name in ["unreachable", "budget", "overflow", "broken", "unparsable"] {
+    for name in [
+        "unreachable",
+        "budget",
+        "overflow",
+        "broken",
+        "unparsable",
+        "overlap",
+        "missing",
+    ] {
         let o = xtask(&["ui", "check", &fixture(name), "--json"]);
         assert!(!o.status.success(), "{name} must fail the check");
         let report = json(&o);

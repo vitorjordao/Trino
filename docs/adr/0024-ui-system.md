@@ -107,8 +107,9 @@ fails when a committed export is stale.
 
 `ui check` validates each screen (ids, nav targets, kinds, ranges) and audits it per
 target and per language: an unreachable control (an error on the N64 and the 3DS, a
-warning on the PC and the Web, where the mouse reaches it), a budget overrun (§8), a text
-that overflows, a glyph a font lacks, a font the project does not have, a key in no table.
+warning on the PC and the Web, where the mouse reaches it), controls whose boxes overlap
+(a click or a tap there could mean either), a budget overrun (§8), a text that overflows,
+a glyph a font lacks, a font, sprite or model the project does not have, a key in no table.
 Any issue fails it, warnings included. `ui shot` renders a screen headless on a target's
 profile and size (the 3DS's two screens stacked), with `--lang`, `--scale` and `--focus`.
 `ui list` names the screens and languages. Every command takes `--json`. A screen in an

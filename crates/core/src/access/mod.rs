@@ -27,17 +27,21 @@
 //!   itself under `reduce_motion`; [`ScreenFlash`] keeps full-screen flashes
 //!   to at most [`MAX_FLASHES_PER_SECOND`] under `flash_guard`;
 //!   [`FlashMonitor`] finds raw strobes (the PC's strict mode).
+//! - **Outlines:** [`Outline`] / [`draw_outlined`] ring a key 3D object in
+//!   high contrast: a second, unlit draw of its model pushed behind it.
 //! - **Input:** [`HoldToggle`] turns a held action into a toggle.
 
 pub mod captions;
 pub mod color;
 pub mod data;
 pub mod motion;
+pub mod outline;
 
 pub use captions::{CaptionPlace, CaptionStyle, Captioned, Captions};
 pub use color::{contrast_ratio, delta_e, delta_e_seen, luminance, simulate};
 pub use data::{AccessBlob, AccessData, AccessError, CaptionInfo};
 pub use motion::{CameraFx, FlashMonitor, HoldToggle, MAX_FLASHES_PER_SECOND, ScreenFlash};
+pub use outline::{OUTLINE_COLOR, Outline, draw_outlined};
 
 use core::fmt::Write;
 

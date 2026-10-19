@@ -7,7 +7,8 @@
 //!
 //! FC Rouge (red) against Verde Rovers (green): the kits normal vision picks,
 //! as a deuteranope sees them, and the kits `dress_for` picks for that player,
-//! as they see them; and the match's captions (the kick-off whistle).
+//! as they see them; the match's captions (the kick-off whistle); and the
+//! ball without and with the high-contrast outline.
 
 #[allow(dead_code)]
 #[path = "support/solid_eleven.rs"]
@@ -77,4 +78,35 @@ fn solid_eleven_kits_and_captions_for_a_deuteranope() {
         }
     }
     r.set_cvd_view(CvdMode::Off);
+}
+
+#[test]
+#[ignore = "evidence: writes target/evidence/access (needs a GPU)"]
+fn solid_eleven_ball_outline_off_and_on() {
+    let Some(mut r) = support::try_renderer(SimProfile::Native, Some((960, 540))) else {
+        return;
+    };
+    let out = support::root().join("target/evidence/access");
+    let mut p = platform();
+    let idle = InputState::default();
+    for (high_contrast, tag) in [(false, "off"), (true, "on")] {
+        p.set_access(AccessSettings {
+            high_contrast,
+            ..AccessSettings::DEFAULT
+        });
+        let mut g = solid_eleven::SolidElevenGame::new(trino_core::Vec2::new(960.0, 540.0));
+        g.update_with(&mut p, &idle, &mut Mute, 1.0 / 60.0);
+        g.start_exhibition(0, 2, 5, [false, false], Sky::Day, 180);
+        for _ in 0..90 {
+            g.update_with(&mut p, &idle, &mut Mute, 1.0 / 60.0);
+        }
+        g.render(&mut r);
+        let (w, h) = r.internal_size();
+        support::write_png(
+            &out.join(format!("solid_eleven_ball_outline_{tag}.png")),
+            w,
+            h,
+            &r.read_offscreen(),
+        );
+    }
 }

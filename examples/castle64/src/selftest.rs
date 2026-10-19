@@ -112,7 +112,8 @@ pub fn engine_checks(
     portals(renderer, platform)?;
     platform.log("TRINO_STEP:accessibility\n");
     if accessibility(renderer, platform)? {
-        platform.log("TRINO_STEP:accessibility probed palette swap, captions and contrast\n");
+        platform
+            .log("TRINO_STEP:accessibility probed palette swap, outline, captions and contrast\n");
     }
     platform.log("TRINO_STEP:hw tier\n");
     let tier = hw_tier(renderer, platform)?;
@@ -2967,8 +2968,9 @@ impl trino_core::Audio for CountingAudio {
 /// screen with `SecondScreen`, where there is one); the UI at 200 % text
 /// keeps its texts in their boxes, the high-contrast theme fills the
 /// focused button with its yellow and a color-vision mode adds the
-/// button's icon; the flash guard keeps a 10 Hz strobe to 3 flashes a
-/// second, reduced motion damps a shake, hold-to-toggle latches. `Ok(false)`
+/// button's icon; a high-contrast outline rings a card in its color; the
+/// flash guard keeps a 10 Hz strobe to 3 flashes a second, reduced motion
+/// damps a shake, hold-to-toggle latches. `Ok(false)`
 /// after the non-pixel checks where `read_pixel` is unsupported.
 #[inline(never)]
 pub fn accessibility(
@@ -3226,7 +3228,53 @@ pub fn accessibility(
         }
     }
 
-    // 7. The caption box: dark under the text, the scene around it, a
+    // 7. A high-contrast outline: the white card ringed in yellow (a
+    //    second, unlit draw pushed behind it), black there without one.
+    let ring = trino_core::Outline::new(trino_core::access::OUTLINE_COLOR, Vec3::ZERO, 0.68)
+        .with_pixels(6.0);
+    let white = ModelParams {
+        shading: Shading::Unlit,
+        ..ModelParams::DEFAULT
+    };
+    let edge = view.transform_point(Vec3::new(0.6, 0.0, 0.0));
+    let edge_x = size.x * 0.5 + edge.x * focal / edge.z;
+    for with in [true, false] {
+        for _ in 0..3 {
+            renderer.begin_frame(Color::BLACK);
+            renderer.set_camera(&camera);
+            renderer.set_light(&DEFAULT_LIGHT);
+            trino_core::access::draw_outlined(
+                renderer,
+                &camera,
+                SLOTS_CARD,
+                &Transform3::default(),
+                Material::VertexLit,
+                &white,
+                with.then_some(&ring),
+            );
+            renderer.end_frame();
+        }
+        let out = renderer
+            .read_pixel((edge_x + 2.0) as u32, (size.y * 0.5) as u32)
+            .ok_or("accessibility: read-back stopped")?;
+        let mid = renderer
+            .read_pixel((size.x * 0.5) as u32, (size.y * 0.5) as u32)
+            .ok_or("accessibility: read-back stopped")?;
+        let want_out = if with {
+            trino_core::access::OUTLINE_COLOR
+        } else {
+            Color::BLACK
+        };
+        if !near(out, want_out, 48) || !near(mid, Color::WHITE, 48) {
+            return Err(if with {
+                "accessibility: the outline does not ring the card"
+            } else {
+                "accessibility: without an outline the card is not alone"
+            });
+        }
+    }
+
+    // 8. The caption box: dark under the text, the scene around it, a
     //    glyph inside; then on the touch screen where there is one.
     let mut captions = Captions::new();
     captions.configure(Some(&data), &want);

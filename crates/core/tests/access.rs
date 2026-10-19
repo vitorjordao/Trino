@@ -908,3 +908,126 @@ fn tuil_v2_carries_cvd_icons_and_v1_still_loads() {
     short[14..16].copy_from_slice(&(tuil::RECORD_V1 as u16).to_le_bytes());
     assert!(UiScreen::parse(&short).is_err());
 }
+
+// ------------------------------------------------------------ outlines ----
+
+/// Screen bounds of a run of triangles.
+fn bounds(tris: &[trino_core::ScreenTri]) -> (Vec2, Vec2) {
+    let mut lo = Vec2::new(f32::MAX, f32::MAX);
+    let mut hi = Vec2::new(f32::MIN, f32::MIN);
+    for p in tris.iter().flat_map(|t| t.pts) {
+        lo = Vec2::new(lo.x.min(p.x), lo.y.min(p.y));
+        hi = Vec2::new(hi.x.max(p.x), hi.y.max(p.y));
+    }
+    (lo, hi)
+}
+
+/// The nearest normalized depth of `tris` at screen point `p` (`1/z`, and
+/// so `1 - NEAR/z`, is affine on screen).
+fn depth_at(tris: &[trino_core::ScreenTri], p: Vec2) -> Option<f32> {
+    let mut best: Option<f32> = None;
+    for t in tris {
+        let [a, b, c] = t.pts;
+        let area = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+        if area.abs() < 1e-6 {
+            continue;
+        }
+        let w1 = ((p.x - a.x) * (c.y - a.y) - (p.y - a.y) * (c.x - a.x)) / area;
+        let w2 = ((b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x)) / area;
+        let w0 = 1.0 - w1 - w2;
+        if w0 < 0.0 || w1 < 0.0 || w2 < 0.0 {
+            continue;
+        }
+        let z = w0 * t.z[0] + w1 * t.z[1] + w2 * t.z[2];
+        best = Some(best.map_or(z, |b| b.min(z)));
+    }
+    best
+}
+
+#[test]
+fn an_outline_is_a_larger_unlit_copy_behind_the_object() {
+    use common::{Call, Recorder, bounded_cube};
+    use trino_core::access::{OUTLINE_COLOR, draw_outlined};
+    use trino_core::{Camera3, Material, ModelId, ModelParams, Outline, Shading, Transform3};
+
+    let cube = ModelId::from_path("models/cube");
+    let camera = Camera3 {
+        eye: Vec3::new(0.0, 1.0, -4.0),
+        target: Vec3::ZERO,
+        fov_y: 60.0 * core::f32::consts::PI / 180.0,
+    };
+    let at = Transform3::default();
+    let params = ModelParams::DEFAULT;
+    let ring = Outline::new(OUTLINE_COLOR, Vec3::ZERO, 0.87).with_pixels(3.0);
+
+    // Without an outline: exactly the plain draw.
+    let mut plain = Recorder::new();
+    plain.add_mesh(cube, bounded_cube());
+    plain.set_camera(&camera);
+    plain.draw_model(cube, &at, Material::VertexLit, &params);
+    let mut off = Recorder::new();
+    off.add_mesh(cube, bounded_cube());
+    off.set_camera(&camera);
+    draw_outlined(
+        &mut off,
+        &camera,
+        cube,
+        &at,
+        Material::VertexLit,
+        &params,
+        None,
+    );
+    assert_eq!(off.calls, plain.calls);
+
+    // With one: the ring's copy first, then the object, unchanged.
+    let mut on = Recorder::new();
+    on.add_mesh(cube, bounded_cube());
+    on.set_camera(&camera);
+    draw_outlined(
+        &mut on,
+        &camera,
+        cube,
+        &at,
+        Material::VertexLit,
+        &params,
+        Some(&ring),
+    );
+    assert_eq!(on.calls.len(), 2);
+    assert_eq!(on.calls[1], plain.calls[0]);
+    let Call::Model {
+        params: copy,
+        emitted,
+        ..
+    } = &on.calls[0]
+    else {
+        panic!("the ring is a model draw: {:?}", on.calls[0]);
+    };
+    assert_eq!(copy.shading, Shading::Unlit);
+    assert_eq!(copy.emissive, OUTLINE_COLOR);
+    let (ring_tris, object_tris) = on.tris.split_at(*emitted);
+    assert!(ring_tris.iter().all(|t| t.colors == [OUTLINE_COLOR; 3]));
+
+    // Behind per pixel (what the z-buffer compares): wherever the object
+    // covers the screen the copy is deeper, its slanted top face too, so the
+    // object draws whole.
+    let (lo, hi) = bounds(object_tris);
+    let mut checked = 0;
+    for y in lo.y as i32..=hi.y as i32 {
+        for x in lo.x as i32..=hi.x as i32 {
+            let p = Vec2::new(x as f32 + 0.5, y as f32 + 0.5);
+            if let (Some(o), Some(c)) = (depth_at(object_tris, p), depth_at(ring_tris, p)) {
+                assert!(c > o, "the copy covers the object at {p:?}");
+                checked += 1;
+            }
+        }
+    }
+    assert!(checked > 1000);
+
+    // Larger on every side, by about the ring's pixels: exactly that at the
+    // sphere's center depth, less where the silhouette is nearer the camera
+    // (the cube's front edges), more where it is farther.
+    let (rlo, rhi) = bounds(ring_tris);
+    for grow in [lo.x - rlo.x, lo.y - rlo.y, rhi.x - hi.x, rhi.y - hi.y] {
+        assert!((1.0..=6.0).contains(&grow), "grew {grow} px");
+    }
+}

@@ -691,6 +691,9 @@ overlay, and a measurement on real hardware (ares doesn't time the RDP).
     priority, `draw`, `CaptionPlace::SecondScreen` on the 3DS), `CameraFx`, `ScreenFlash`
     (≤ 3 flashes/s under the guard), `FlashMonitor` (PC strict mode warns on raw
     strobes), `HoldToggle`.
+  - **Outlines:** `access::Outline`/`draw_outlined` ring key 3D objects in high contrast
+    with a second unlit draw just behind them (no backend code; castle64's player and
+    boars, Solid Eleven's ball).
   - **Tools:** `cargo xtask access check|shot --json` (every screen at 200 % on each
     target and language: overflow, safe area, budgets); the PC simulation view
     (`PcRenderer::set_cvd_view`, `TRINO_CVD`); the editor's Accessibility tab (simulation
@@ -1131,7 +1134,7 @@ cargo test --workspace
 - **Parallel GPU tests can crash inside `libvulkan`** (`set_debug_utils_object_name` while
   several devices are created at once, seen 2026-10-19 on this machine): a SIGSEGV of a
   whole test binary, not a test failure. Rerun with `--test-threads=1` to tell the two
-  apart.
+  apart (GitHub #94).
 
 - **Shadows land only on receivers on the blob and planar tiers.** A caster with no
   `set_shadow_receivers` plane under its bounding-sphere center draws nothing on the

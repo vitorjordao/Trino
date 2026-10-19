@@ -56,7 +56,7 @@ pub mod water;
 
 pub use access::{
     AccessBlob, AccessData, AccessSettings, CameraFx, CaptionMode, CaptionPlace, CaptionStyle,
-    Captions, CvdMode, FlashMonitor, HoldToggle, HostedAccess, ScreenFlash,
+    Captions, CvdMode, FlashMonitor, HoldToggle, HostedAccess, Outline, ScreenFlash,
 };
 pub use ao::{AmbientOcclusion, AoQuality, AoTier};
 pub use asset::asset_id;

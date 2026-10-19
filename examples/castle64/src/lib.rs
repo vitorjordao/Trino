@@ -41,9 +41,9 @@ use trino_core::shadow::{ShadowCast, ShadowPlane, ShadowSettings};
 use trino_core::{
     AccessBlob, AccessSettings, Audio, BillboardParams, Button, Camera3, CaptionStyle, Captions,
     Color, CvdMode, DEFAULT_LIGHT, FontId, Game, GraphicsOptions, InputState, Light, LightTier,
-    LocalLight, Material, ModelId, ModelParams, MusicId, OptionsStyle, Platform, PointerButton,
-    Rect, Renderer, Screen, Shading, SoundId, SpriteId, SpriteParams, TextAlign, TextBuf,
-    TextParams, Transform3, Vec2, Vec3, ground_pool,
+    LocalLight, Material, ModelId, ModelParams, MusicId, OptionsStyle, Outline, Platform,
+    PointerButton, Rect, Renderer, Screen, Shading, SoundId, SpriteId, SpriteParams, TextAlign,
+    TextBuf, TextParams, Transform3, Vec2, Vec3, ground_pool,
 };
 
 // ------------------------------------------------------------ handles ----
@@ -902,7 +902,15 @@ impl Game for Castle64Game {
         for i in 0..l.enemies.len().min(MAX_ENEMIES) {
             let e = self.enemies[i];
             if e.alive && visible(e.pos) {
-                renderer.draw_model(
+                // High contrast: the boars ringed in red-orange.
+                let ring = Outline::new(
+                    Color::rgb(255, 90, 40),
+                    e.pos + Vec3::new(0.0, 0.3, 0.0),
+                    0.6,
+                );
+                trino_core::access::draw_outlined(
+                    renderer,
+                    &camera,
                     M_BOAR,
                     &Transform3 {
                         position: e.pos,
@@ -911,6 +919,7 @@ impl Game for Castle64Game {
                     },
                     Material::VertexLit,
                     &plain,
+                    self.access.high_contrast.then_some(&ring),
                 );
             }
         }
@@ -956,13 +965,23 @@ impl Game for Castle64Game {
             let joint = |ox: f32, oy: f32, oz: f32| {
                 feet + Vec3::new(ox * cy + oz * sy, oy, -ox * sy + oz * cy)
             };
+            // High contrast: every part ringed around one sphere (the
+            // whole body), so no part's copy paints onto another.
+            let ring = Outline::new(
+                trino_core::access::OUTLINE_COLOR,
+                feet + Vec3::new(0.0, 0.55, 0.0),
+                0.75,
+            );
+            let ring = self.access.high_contrast.then_some(ring);
             let part = |renderer: &mut dyn Renderer, model: ModelId, at: Vec3, pitch: f32| {
                 let shadow = if model == M_TORSO {
                     TORSO_SHADOW
                 } else {
                     LIMB_SHADOW
                 };
-                renderer.draw_model(
+                trino_core::access::draw_outlined(
+                    renderer,
+                    &camera,
                     model,
                     &Transform3 {
                         position: at,
@@ -971,6 +990,7 @@ impl Game for Castle64Game {
                     },
                     Material::VertexLit,
                     &ModelParams { shadow, ..plain },
+                    ring.as_ref(),
                 );
             };
             part(renderer, M_TORSO, feet, 0.0);

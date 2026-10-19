@@ -73,9 +73,6 @@ shipping a 3D game first**, then by cost:
     #64's post stack (the simulation view is review-only).
   - Text scale for text a game draws itself (`draw_text` HUDs: castle64's counters,
     Solid Eleven's hand-drawn menus); the UI system and the captions scale today.
-  - High-contrast outlines on key 3D objects (the issue's "outlines on gameplay
-    objects"): games read `high_contrast` today; an engine outline needs a tier per
-    target (an inverted hull on the consoles).
   - The Inspector's palette slots by semantic name (`ModelParams::palette` in authored
     content is P2 #13); the Accessibility tab edits the palettes today.
   - Plan & Party's status colors and the rest of Solid Eleven's menus on semantic
@@ -278,14 +275,14 @@ shipping a 3D game first**, then by cost:
 | Captions: manifest fields, the queue, `Captions::wrap` forwarding every `Audio` call, the box (3DS touch screen optional) | `the_caption_wrapper_forwards_every_call_and_captions_what_plays`, `captions_follow_the_mode_priority_and_time`, `captions_draw_a_readable_box_where_the_style_puts_it`; the step's caption box read back (on the touch screen on Azahar) |
 | UI text scale (whole glyph pixels), high contrast, icons; every existing golden unchanged | `the_ui_scales_text_in_whole_pixels_and_keeps_the_default_draws`, `high_contrast_and_color_vision_icons_change_only_the_look`, the UI goldens |
 | Motion, flashes, held input: `CameraFx`, `ScreenFlash`, `FlashMonitor` (strict-mode warning), `HoldToggle` | `the_flash_guard_holds_a_synthetic_strobe_to_three_a_second`, `strict_mode_finds_a_raw_strobe`, `camera_effects_damp_under_reduced_motion_and_fade_out`, `hold_to_toggle_latches_a_held_action` |
+| High-contrast outlines on 3D objects: `Outline`, `draw_outlined` (a second, unlit draw just behind; no backend code); castle64's player and boars, Solid Eleven's ball | `an_outline_is_a_larger_unlit_copy_behind_the_object`, `the_copy_lies_behind_what_it_copies_and_rings_it_by_the_pixels`; the `accessibility` step's outline probe on the PC profiles, ares, Azahar and the browsers |
 | `cargo xtask access check\|shot` (`--json`); every screen at 200 % (overflow, safe area, budgets) | `access_cli.rs` (4 tests, a fixture with one problem of each kind) |
 | The PC simulation view (`set_cvd_view`, `TRINO_CVD`), both screens, WebGL2 | `the_simulation_view_matches_the_cpu_simulation`, `webgl2_shaders_translate_to_glsl_es_300` |
 | Editor: the Accessibility tab (simulation in every view, palettes, checklist), View › Accessibility simulation, `TRINO_EDITOR_ACCESS`, the UI tab's preview at the simulated settings | `accessibility_tab_palettes_simulation_and_checklist`, the layout audit at 960×600 and 1600×940 |
 | Adopters: castle64's doors and captions, Solid Eleven's kits for every color vision and its captions, the starter Accessibility screen; the starter screens and Solid Eleven's pause menu grow with their text | `kits_stay_apart_for_every_color_vision`, `the_accessibility_screen_sets_the_platforms_settings`, `access_check_passes_on_the_projects_the_repo_ships` |
 
 Deviations (ADR 0027): the correction filter on the PC/Web stays with #64 (the view is a
-simulation for review); high-contrast outlines on 3D objects and text scale for a game's
-own `draw_text` are follow-ups; the semantic colors are edited in the Accessibility tab,
+simulation for review); text scale for a game's own `draw_text` is a follow-up; the semantic colors are edited in the Accessibility tab,
 not the Inspector; text scale is whole glyph pixels where the UI scales by whole pixels
 (100 % or 200 % on the consoles).
 

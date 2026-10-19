@@ -406,6 +406,8 @@ pub struct MatchView {
     pub guides: Guides,
     /// The settings' retro graphics: the console models on the PC too.
     pub retro: bool,
+    /// High contrast (accessibility): the ball ringed in yellow.
+    pub outline: bool,
 }
 
 /// The PC tier (15-part players, dense crowd, effects): a per-pixel
@@ -1094,6 +1096,14 @@ fn draw_ball(r: &mut dyn Renderer, m: &Match, v: &MatchView, fr: &Frustum, hifi:
     } else {
         ShadowCast::Blob { radius: BALL_BLOB }
     };
+    if v.outline {
+        let ring = trino_core::Outline::new(
+            trino_core::access::OUTLINE_COLOR,
+            p * WORLD,
+            crate::sim::pitch::BALL_R.to_f32() * WORLD,
+        );
+        ring.draw(r, &v.cam.camera(), mdl, &rot, Material::VertexLit);
+    }
     r.draw_model_matrix(
         mdl,
         &rot,

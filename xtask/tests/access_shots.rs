@@ -10,6 +10,8 @@
 //!   for that player, and as that player sees the base colors and the
 //!   alternatives (the renderer's simulation view);
 //! - castle64 with a caption up, in normal and high contrast at 200 %;
+//! - castle64's hub at spawn (the player and a boar) without and with the
+//!   high-contrast outlines;
 //! - the starter Accessibility and Options screens at 100 %, 200 % and in high
 //!   contrast on the N64, the 3DS and the PC.
 
@@ -202,6 +204,39 @@ fn castle64_captions_normal_and_high_contrast() {
                 w,
                 h,
                 &rgba,
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "evidence: writes target/evidence/access (needs a GPU)"]
+fn castle64_outlines_off_and_on() {
+    const DT: f32 = 1.0 / 60.0;
+    for (profile, size, tag) in [
+        (SimProfile::N64, None, "n64"),
+        (SimProfile::Native, Some((1280, 720)), "pc"),
+        (SimProfile::N3ds, None, "3ds"),
+    ] {
+        let (mut r, mut p) = castle64_target(profile, size);
+        let (w, h) = r.internal_size();
+        for (high_contrast, name) in [(false, "off"), (true, "on")] {
+            p.set_access(AccessSettings {
+                high_contrast,
+                ..AccessSettings::DEFAULT
+            });
+            let mut game = castle64::Castle64Game::new(Vec2::new(w as f32, h as f32));
+            let mut audio = NullAudio;
+            let idle = InputState::default();
+            for _ in 0..45 {
+                game.update_with(&mut p, &idle, &mut audio, DT);
+            }
+            game.render(&mut r);
+            save(
+                &out().join(format!("castle64_outline_{name}_{tag}.png")),
+                w,
+                h,
+                &r.read_offscreen(),
             );
         }
     }

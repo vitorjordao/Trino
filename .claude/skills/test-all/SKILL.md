@@ -155,7 +155,8 @@ flake, so rerun it before suspecting the code.
 
 Seen again 2026-10-19 in `engine_checks` (gdb: `libvulkan.so.1` inside
 `set_debug_utils_object_name` while another thread built a `PcRenderer`); it crashed with
-and without the new test, never with `--test-threads=1`.
+and without the new test, never with `--test-threads=1` (tracked in GitHub #94; the
+video-capture test counts on RADV are #93, a different bug).
 
 More pipelines per renderer make it much worse: building the four 4× MSAA pipelines in
 every `PcRenderer::new` took `render_e2e` to 2 crashes in 3 runs (2026-10-16). A mutex

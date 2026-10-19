@@ -1520,6 +1520,9 @@ impl Game for SolidElevenGame {
         self.persist(platform);
         let access = platform.access();
         self.cvd = access.cvd;
+        if let Some(s) = self.session.as_mut() {
+            s.view.outline = access.high_contrast;
+        }
         self.captions
             .configure(self.access_data.get(platform), &access);
         for t in &mut self.caption_texts {

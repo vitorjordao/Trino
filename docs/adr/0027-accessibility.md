@@ -116,7 +116,38 @@ there is none), so it is drawn last — the screen order (top, then bottom) is a
   not a budget.
 - `HoldToggle`: a held action as held, or as a press-on/press-off toggle.
 
-### 7. The `access/data` blob (`TACC`)
+### 7. Outlines on 3D objects (high contrast)
+
+`trino_core::access::Outline` rings a key object (the player, an enemy, the ball) in a
+solid color, the same on every target with no backend code: a second draw of the object's
+own model, unlit, solid (a black tint and the color as emissive), scaled about the
+object's bounding sphere so it projects `pixels` larger (in a 240-line picture's pixels,
+so a taller PC picture gets a ring as wide for the eye) and pushed back along the view ray
+just enough that every point of the copy lies behind the point it copies
+(`push = R·(k − 0.7)/(1 − R·k/d)`, with `k` the projected growth). The z-buffer shows the
+copy only around the silhouette, and where one part stands in front of another (a
+toon-style inner line). `draw_outlined` draws the ring and then the object with the same
+`draw_model` call as without one; `Outline::draw` rings a part drawn with
+`draw_model_matrix`. The parts of a multi-part character share one sphere.
+
+- **Why not an inverted hull or a stencil.** An inverted hull needs front-face culling,
+  which none of the three T&L paths (the core's, the N64 overlay, the PICA200 shader)
+  exposes; a stencil or a post pass has no N64 equivalent. The copy is one more ordinary
+  draw: on the N64 an unlit draw with an emissive stays on the RSP.
+- **Why this push.** Pushed entirely behind the sphere (2R and more), the floor right
+  behind a character on the ground hid most of its ring (the first try, in castle64's
+  hub). The smaller push keeps the object whole (a margin of 0.3R also keeps a slanted top
+  face seen from a raised camera in front of its copy, `an_outline_is_a_larger_unlit_copy_
+  behind_the_object`) and hides only the ring under the feet.
+- **Limits.** Geometry right behind the object (the floor under its feet, a wall it
+  touches) hides the ring there; the ring is thinner where the silhouette is nearer the
+  camera than the sphere's center and wider where it is farther; the PC's screen-space AO
+  darkens it a little where it meets the object; in fog the copy fades a little more.
+- **Cost.** One extra draw per outlined part while high contrast is on, nothing while it
+  is off. castle64 outlines the player (5 parts, one sphere) and the boars, Solid Eleven
+  the ball.
+
+### 8. The `access/data` blob (`TACC`)
 
 One generated blob, no manifest entry, baked beside the UI blobs by `ui::bake` — so the
 PC/Web bake, the N64 and 3DS images and the memory plan get it with no new code path.
@@ -127,7 +158,7 @@ re-parses after a live reload. A project with none of it bakes no blob. A palett
 `distinct` group a mode cannot tell apart **fails the bake**: a mode would ship colors
 that don't work.
 
-### 8. The CLI: `cargo xtask access check|shot`
+### 9. The CLI: `cargo xtask access check|shot`
 
 - `access check [dir] [--platform p] [--json]`: every distinct group apart and every pair
   readable in every mode, the high-contrast theme at 7:1, every caption key in every
@@ -140,7 +171,7 @@ that don't work.
   [--platform p] [--size WxH] [--lang l] [--out x.png] [--json]`: a screen (with the
   player's settings) or a scene, rendered headless and shown through the simulation view.
 
-### 9. The simulation view and the editor
+### 10. The simulation view and the editor
 
 `PcRenderer::set_cvd_view(mode)` (and `TRINO_CVD` in a game window) runs a pass after the
 VI filter on both screens: copy the frame aside, draw it back through the mode's matrix
@@ -155,14 +186,16 @@ contrast) applied to the Scene, Game and UI views (also View › Accessibility s
 sees it (edits write `assets/palettes.ron`, outside edits show live), and the checklist
 from the same `check_project` the CLI runs. A kittest flow and the layout audit cover it.
 
-### 10. Adopters
+### 11. Adopters
 
 - castle64: the stage doors' open tints come from `palettes.ron` per mode; the coin, star
-  and hurt sounds have captions (the star and the hurt are important).
+  and hurt sounds have captions (the star and the hurt are important); in high contrast
+  the player is ringed in yellow and the boars in red-orange.
 - Solid Eleven: `dress_for(clubs, people, cvd)` compares kits as the player sees them and
   changes the visitors' (then the hosts') kit until every pair keeps ΔE 20 in every mode —
   the clubs' own kits, no new colors, no draw off the RSP. Its whistle (important),
-  cheers, "ooh" and post have captions in English and Portuguese. Its pause menu and the
+  cheers, "ooh" and post have captions in English and Portuguese; in high contrast the
+  ball is ringed in yellow. Its pause menu and the
   starter screens grow with their text (`min` sizes instead of fixed ones).
 - New projects get an Accessibility screen (`ui/accessibility.ui.ron`) reached from
   Options; its rows scroll when 200 % text makes them taller than the N64's safe area.
@@ -182,7 +215,8 @@ from the same `check_project` the CLI runs. A kittest flow and the layout audit 
   math against reference values) and `crates/core/tests/access.rs` (TACC, the blob's live
   reload, the wrapper forwarding every call, the queue, the caption box per placement,
   motion, the guard on a synthetic strobe, hold-to-toggle, the UI's text scale, contrast
-  and icons, TUIL v2 and v1).
+  and icons, TUIL v2 and v1, the outline's copy behind the object per pixel and larger on
+  every side).
 - Formats and checks: `crates/scene/src/access.rs`, `crates/asset-pipeline/tests/access_bake.rs`.
 - Hosts: `platform_services.rs` (PC), `runner-pc` (the file and `TRINO_ACCESS`).
 - Renderer: `xtask/tests/access_goldens.rs` — the palette swap golden
@@ -193,4 +227,5 @@ from the same `check_project` the CLI runs. A kittest flow and the layout audit 
 - Self-test step `accessibility` (castle64) on the PC profiles, ares, Azahar and the
   browsers: settings round trip, the baked data, the logic, the caption wrapper, the UI at
   200 % and its icon, the high-contrast focus color read back, the palette swap read back,
+  the outline around a card read back (and black without one),
   the caption box read back (on the 3DS touch screen too).

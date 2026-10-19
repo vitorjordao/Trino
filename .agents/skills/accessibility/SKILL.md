@@ -51,6 +51,11 @@ and the Web run the same thing. The guide with code is `docs/ACCESSIBILITY.md`.
   `captions.draw(renderer, strings, &style)` **last** (`SecondScreen` switches to the 3DS
   touch screen). The wrapper forwards every `Audio` call.
 - UI: `UiEnv::of(r).with_access(&settings).with_contrast_theme(data.contrast_theme())`.
+- Outlines (high contrast): `access::draw_outlined(r, &camera, model, &transform,
+  material, &params, settings.high_contrast.then_some(&ring))` with
+  `Outline::new(color, center, radius)` — the object's bounding sphere, shared by every
+  part of a character; `ring.draw(..)` for a `draw_model_matrix` part. Draw the ring
+  before the object.
 - `CameraFx` (`apply` to the camera), `ScreenFlash` (`trigger` with the settings, `draw`
   after the world), `HoldToggle::update(input, prev, button, &settings)`.
 - Consoles keep the settings for the session: store `settings.pack()` (3 bytes) in the
@@ -78,14 +83,20 @@ and the Web run the same thing. The guide with code is `docs/ACCESSIBILITY.md`.
   `?WHISTLE?` until its texts lost them (look at `access_shots_solid_eleven`).
 - `palettes.ron` with a `distinct` group a mode can't separate fails the **bake**, not
   only the check: fix the palette before `cargo xtask build`.
+- An outline copy is only a ring if it is solid and behind: `tint` multiplies vertex
+  colors (a colored model under a yellow tint is not yellow), so the copy is a black tint
+  plus the color as `emissive`. Pushed entirely behind the bounding sphere, the floor
+  behind a standing character hid most of its ring; the push is the smallest that keeps
+  each point of the copy behind the point it copies, plus 0.3R for slanted top faces
+  (`an_outline_is_a_larger_unlit_copy_behind_the_object` checks it per pixel).
 - Parallel GPU test binaries can SIGSEGV inside `libvulkan` on some drivers (device
-  creation): rerun with `--test-threads=1` before suspecting the code.
+  creation, GitHub #94): rerun with `--test-threads=1` before suspecting the code.
 
 ## Where the code is
 
 | Piece | Path |
 |---|---|
-| Settings, color math, `TACC`, captions, motion | `crates/core/src/access/{mod,color,data,captions,motion}.rs` |
+| Settings, color math, `TACC`, captions, motion, outlines | `crates/core/src/access/{mod,color,data,captions,motion,outline}.rs` |
 | UI integration | `crates/core/src/ui/{mod,layout,draw,tuil}.rs` (`UiAccess`, `text_mul`, `cvd_icon`) |
 | RON models and checks | `crates/scene/src/access.rs` |
 | Bake and `check_project` | `crates/asset-pipeline/src/access.rs` (called by `ui::bake`) |

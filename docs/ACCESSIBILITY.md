@@ -11,7 +11,7 @@ its trade-offs are in [ADR 0027](adr/0027-accessibility.md).
 |---|---|---|---|---|
 | Color vision (`cvd`) | semantic colors swap to the mode's alternative; UI nodes and sprites show their icon | same draw, another color | same | same, plus a simulation view for review (`TRINO_CVD`) |
 | Text scale (100–200 %) | every UI text grows; Fit boxes grow with it | whole glyph pixels: 100 % or 200 % | same | 5, 6, 7… pixels a glyph pixel at 1080p |
-| High contrast | the UI draws with the high-contrast theme, controls outlined | yes | yes | yes |
+| High contrast | the UI draws with the high-contrast theme, controls outlined; `Outline` rings key 3D objects | yes | yes | yes |
 | Captions (off / important / all) | sounds with a `caption` show a box with their text | yes | yes, optionally on the touch screen | yes |
 | Reduce motion | `CameraFx` keeps 20 % of a shake or punch, no FOV kick | yes | yes | yes |
 | Flash guard (on by default) | `ScreenFlash` shows at most 3 flashes a second, softer | yes | yes | yes; strict mode warns on raw strobes |
@@ -133,6 +133,34 @@ focus, 7:1) or the project's `ui/themes/high_contrast.ron`:
 // ui/themes/high_contrast.ron: a screen theme; what it leaves out is the engine's
 (focus: Some((0, 200, 255, 255)), focus_text: Some((0, 0, 0, 255)))
 ```
+
+## Outlines on 3D objects
+
+In high contrast, ring the objects a player must not lose (the player, enemies, the ball)
+with `Outline`: a second, unlit draw of the same model, a few pixels larger and just
+behind it, so only a solid ring around the silhouette shows. No backend code; one extra
+draw per part, on the N64's RSP like any unlit draw.
+
+```rust
+use trino_core::access::{self, OUTLINE_COLOR};
+let ring = settings.high_contrast.then_some(
+    Outline::new(OUTLINE_COLOR, center, radius), // the object's bounding sphere, world space
+);
+// draw_model plus its ring (exactly the plain draw when `ring` is None):
+access::draw_outlined(renderer, &camera, model, &transform, Material::VertexLit, &params, ring.as_ref());
+// a part drawn with draw_model_matrix: ring.draw(renderer, &camera, model, &m, material)
+```
+
+- Give every part of a multi-part character the same sphere: the ring hugs the whole body
+  and draws a thin line where one part stands in front of another.
+- `with_pixels(n)` sets the ring's width in a 240-line picture's pixels (2 by default); a
+  taller picture scales it, so it looks as wide on a 1080p PC as on a console.
+- What lies right behind the object (the floor under its feet, a wall it touches) hides
+  the ring there.
+
+castle64 rings its player in yellow and its boars in red-orange; Solid Eleven rings the
+ball (`cargo test -p xtask --test access_shots -- --ignored` writes
+`castle64_outline_{off,on}_{n64,3ds,pc}.png`).
 
 ## Motion, flashes, held input
 

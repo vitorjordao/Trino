@@ -874,6 +874,16 @@ overlay, and a measurement on real hardware (ares doesn't time the RDP).
     (`TRINO_SE_HASH`), and the template is checked against a frame budget and
     goldens in CI. `TRINO_GAME=solid-eleven cargo run -p trino-app-pc` plays it.
 
+- **Gamepad families (2026-10-19, #86 item 7, ADR 0028):** `trino_core::pad` —
+  `PadFamily { Xbox, PlayStation, Nintendo, EightBitDo, Generic }` detected from USB ids
+  then the name (`PadFamily::detect`; the PC's gilrs glue copies them through
+  `PcInput::note_pad`, the Web parses `Gamepad.id` in `keys::parse_pad_id`),
+  `PadSlot::standard(Button)` (positional: `A` is the bottom face button) and
+  `PadFamily::glyph`/`button_glyph` (Xbox colored letters, PlayStation symbols,
+  Nintendo's swapped letters, ASCII labels). `Platform::gamepad_family` (default
+  `None`: consoles, no pad). Solid Eleven's `ui/glyphs.rs` holds its badge colors,
+  PlayStation symbol spans and per-family diagrams.
+
 PC keyboard mapping: A/B = Z/X, X/Y = C/V, L/R = Q/E, Start = Enter,
 Select = Right Shift, D-pad = arrows, stick = WASD; L2/R2/L3/R3 have no default key
 (see `crates/platform-pc/src/input.rs`). Gamepads (gilrs): A/B/X/Y, L = LB+LT, R = RB+RT,
@@ -1444,6 +1454,10 @@ cargo test --workspace
   the PC evaluates them per pixel.
 - **WGSL:** a `ptr<uniform, T>` can't be a function parameter without an extension
   (pass the index), and `set` is a reserved word.
+- **`TRINO_BLESS=1` on `solid_eleven_render` rewrites every frame of the test**, the
+  console looks too, and those differ by a few pixels of driver noise between machines.
+  Restore the goldens your change doesn't touch (`git checkout tests/golden/pc/...`)
+  before committing.
 - **`cargo test --workspace` stops at the first failing test binary.** Use
   `--no-fail-fast` to see every failure at once.
 - **A host without `libasound2-dev` or `libopengl0` can still build and run the

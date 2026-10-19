@@ -166,7 +166,7 @@ pub fn draw(g: &mut SolidElevenGame, r: &mut dyn Renderer) {
                 s.render(r, screen, lang);
             }
             match g.scene {
-                Scene::Pause => pause(g, r, screen),
+                Scene::Pause => pause(g, r),
                 Scene::HalfTime => half_time(g, r, screen),
                 Scene::Substitutions { from_half_time } => {
                     substitutions(g, r, screen, from_half_time)
@@ -2305,53 +2305,12 @@ fn results(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
     footer(&mut ui, &mut g.hits, pad, lang, &[(Btn::A, S::Continue)]);
 }
 
-fn pause(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
-    let lang = g.settings.lang;
-    let mut ui = Ui::new(r, screen);
-    ui.fill(
-        Rect::new(-200.0, 0.0, 720.0, 240.0),
-        Color::rgba(0, 0, 0, 120),
-    );
-    ui.panel(Rect::new(90.0, 60.0, 140.0, 110.0), pal::CYAN);
-    ui.text(
-        160.0,
-        64.0,
-        tr(lang, S::Paused),
-        pal::CYAN,
-        Size::Small,
-        TextAlign::Center,
-    );
-    for (k, s) in [S::Resume, S::Substitute, S::Quit].iter().enumerate() {
-        let rr = Rect::new(100.0, 78.0 + k as f32 * 26.0, 120.0, 20.0);
-        let sel = g.cur.pause == k;
-        ui.fill(
-            rr,
-            if sel {
-                Color::rgba(30, 60, 130, 240)
-            } else {
-                pal::PANEL
-            },
-        );
-        ui.border(
-            rr,
-            if sel {
-                pal::CYAN
-            } else {
-                Color::rgb(50, 60, 100)
-            },
-            1.0,
-        );
-        ui.text(
-            160.0,
-            rr.pos.y + 4.0,
-            tr(lang, *s),
-            pal::INK,
-            Size::Small,
-            TextAlign::Center,
-        );
-        let hit = ui.rect(rr);
-        g.hits.add(hit, Screen::Top, k as u8);
-    }
+/// The pause menu: a UI screen (`ui/pause.ui.ron`, issue #58) in the
+/// game's language, laid out and scaled by the engine.
+fn pause(g: &mut SolidElevenGame, r: &mut dyn Renderer) {
+    let strings = super::i18n::UiTr(g.settings.lang);
+    let env = trino_core::UiEnv::of(r).with_strings(&strings);
+    g.pause_ui.draw(r, &super::pause_gen::SCREEN, &env);
 }
 
 fn half_time(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {

@@ -42,8 +42,10 @@ pub struct DisplaySettings {
     /// (integer, so the upscale stays crisp). 0 = auto (about 300–600
     /// lines, see the backend).
     pub pixel_scale: u8,
-    /// Interface scale for the game to apply (0 = auto). The engine only
-    /// stores and persists it.
+    /// Interface scale in quarters: 4 is 100%, 6 is 150%, 8 is 200%; 0 =
+    /// auto (100%). The UI system applies it on top of its whole-pixel fit
+    /// ([`interface_scale`](Self::interface_scale),
+    /// `UiEnv::with_interface_scale`).
     pub ui_scale: u8,
 }
 
@@ -57,6 +59,14 @@ impl DisplaySettings {
         pixel_scale: 0,
         ui_scale: 0,
     };
+
+    /// The interface scale as a factor (`ui_scale` / 4; auto is 1).
+    pub fn interface_scale(&self) -> f32 {
+        match self.ui_scale {
+            0 => 1.0,
+            n => n as f32 * 0.25,
+        }
+    }
 }
 
 impl Default for DisplaySettings {

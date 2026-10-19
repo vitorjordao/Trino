@@ -417,6 +417,14 @@ impl WebHost {
             let mut s = self.input.shared.borrow_mut();
             s.canvas_px = (size.0 as f64, size.1 as f64);
             s.dpr = dpr;
+            // A phone's notch and home bar (`Renderer::safe_area`): they
+            // move with the orientation, which resizes the canvas.
+            let css = crate::js::trino_safe_area(&self.canvas);
+            let mut window = [0.0f32; 4];
+            for (i, v) in window.iter_mut().enumerate() {
+                *v = (css.get(i as u32).as_f64().unwrap_or(0.0) * dpr) as f32;
+            }
+            self.renderer.set_window_safe_area(window);
         }
         let before = self.renderer.internal_size();
         if self.config.profile.is_native() {

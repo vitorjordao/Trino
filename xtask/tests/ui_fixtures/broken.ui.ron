@@ -1,0 +1,11 @@
+// `ui check` fixture: structural errors — a duplicate id, a navigation
+// override naming no node and a Slider with an empty range.
+(
+    version: 1,
+    name: "broken",
+    root: (kind: Stack(), children: [
+        (kind: Button, id: "ok", text: "OK", nav: (down: "nowhere")),
+        (kind: Button, id: "ok", text: "OK AGAIN"),
+        (kind: Slider(min: 5, max: 5, step: 1), id: "volume", bind: "volume"),
+    ]),
+)

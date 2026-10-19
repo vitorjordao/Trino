@@ -1,0 +1,55 @@
+// The title screen (Trino UI system: docs/ASSETS.md "UI screens"). Edit it
+// by hand, in the editor's UI tab, or with an agent; then:
+//   cargo trino ui check                        lay it out on every target
+//   cargo trino ui shot title --platform n64    see it as the N64 shows it
+// On the 3DS the menu sits on the touch screen (`screen: Bottom`); on one
+// screen it is centered on the main one.
+(
+    version: 1,
+    name: "title",
+    focus: "play",
+    root: (
+        children: [
+            (kind: Rect(), anchor: Fill, bleed: true, color: Some((24, 26, 40, 255))),
+            (
+                kind: Text,
+                text: "{{name}}",
+                anchor: Top,
+                offset: (0, 48),
+                size: (Percent(90), Px(20)),
+                text_scale: 2,
+                align: Center,
+                overflow: Ellipsis,
+                color: Some((255, 214, 90, 255)),
+            ),
+            (
+                kind: Stack(gap: 6, align: Center),
+                screen: Bottom,
+                anchor: Center,
+                offset: (0, 24),
+                children: [
+                    (kind: Button, id: "play", key: "title.play", text: "Play", on_click: "play", size: (Px(112), Px(18))),
+                    (kind: Button, id: "options", key: "title.options", text: "Options", on_click: "options", size: (Px(112), Px(18))),
+                ],
+            ),
+            (
+                kind: Text,
+                key: "title.hint.pad",
+                text: "A: select",
+                visible_on: [N64, N3ds],
+                anchor: Bottom,
+                offset: (0, -8),
+                color: Some((130, 140, 165, 255)),
+            ),
+            (
+                kind: Text,
+                key: "title.hint.pointer",
+                text: "Enter or click to select",
+                visible_on: [Pc, Web],
+                anchor: Bottom,
+                offset: (0, -8),
+                color: Some((130, 140, 165, 255)),
+            ),
+        ],
+    ),
+)

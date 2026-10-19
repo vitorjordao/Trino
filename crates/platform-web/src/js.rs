@@ -17,6 +17,8 @@ extern "C" {
     pub fn trino_info(key: &str, value: &str);
     pub fn trino_frame(name: &str, width: u32, height: u32, rgba: &[u8]);
     pub fn trino_audio_banner(show: bool);
+    /// The canvas's unsafe borders, CSS pixels `[left, top, right, bottom]`.
+    pub fn trino_safe_area(canvas: &web_sys::HtmlCanvasElement) -> js_sys::Array;
     pub fn trino_error_overlay(text: &str);
 }
 

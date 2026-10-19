@@ -21,7 +21,7 @@ folder, which becomes the working directory.
 - **When it shows:** with no project argument. A hook that acts on an open scene
   skips it and opens the working directory as before. The hooks are
   `TRINO_EDITOR_SCENE`, `SELECT`, `TAB`, `OPEN`, `PLAY`, `INSPECT`, `ANIM`,
-  `ANIM_VIEW`, `PALETTE`, `GAME` and `LOD_PREVIEW` (`main.rs::EDITOR_HOOKS`).
+  `ANIM_VIEW`, `PALETTE`, `GAME`, `LOD_PREVIEW` and `UI` (`main.rs::EDITOR_HOOKS`).
   `--launcher` or `TRINO_EDITOR_LAUNCHER=1` always show it. The rule is
   `main.rs::start`, unit-tested.
 - **Recent projects:** each row shows the name, the path (elided at the start), the
@@ -69,7 +69,8 @@ TRINO_EDITOR_SCREENSHOT=target/launcher.png TRINO_EDITOR_SCREENSHOT_FRAME=10 car
 | `TRINO_EDITOR_SCREENSHOT=out.png` | save a PNG of the whole window, then exit |
 | `TRINO_EDITOR_SCREENSHOT_FRAME=N` | …after N frames (default 30; use ~60 so thumbnails finish) |
 | `TRINO_EDITOR_SELECT=<name>[,<name>…]` | start with those entities selected (the first is active; gizmo + inspector visible) |
-| `TRINO_EDITOR_TAB=scene\|game\|level\|animation\|mixer\|quality\|memory` | focused center tab (`mixer`, `quality`, `memory`: the bottom dock's Mixer, Quality or Memory tab) |
+| `TRINO_EDITOR_TAB=scene\|game\|level\|animation\|mixer\|quality\|memory\|ui` | focused center tab (`mixer`, `quality`, `memory`: the bottom dock's Mixer, Quality or Memory tab) |
+| `TRINO_EDITOR_UI=<screen>[,n64\|3ds\|pc\|4k\|wide\|web[,<lang>\|default[,<node id>]]]` | open the UI tab on `ui/<screen>.ui.ron` for that target and language with that node selected, e.g. `TRINO_EDITOR_UI=pause,3ds,pt-BR,quit` |
 | `TRINO_EDITOR_ANIM=<model>:<clip>@<time>` | the Animation tab previews that clip, paused at that time |
 | `TRINO_EDITOR_ANIM_VIEW=ghosts=3,blend=wave:0.5,look=n64,palette` | its view options (onion skin, crossfade, look, palette) |
 | `TRINO_EDITOR_OPEN=fake-object` / `array` / `material:<logical>` / `model:<logical>` / `prefab:<logical>` / `particles:<name>[@pc\|n64\|3ds]` / `audio:<sounds/x\|music/x>[@pc\|n64\|3ds\|web]` | open the fake-object or array dialog, an asset inspector (`audio:`: the waveform overlays that platform's decode), or a prefab in edit mode |
@@ -182,6 +183,7 @@ Live-edit check: start the editor with `TRINO_EDITOR_ECHO_LOG=1` in the backgrou
 | `audio.rs` | audio measuring on a worker (`audio::encode`, like the bake), per-platform totals for the budgets, the preview player (an offline-capable `PcAudio`), the Mixer's `MixState` |
 | `panels/audio.rs` | Assets › Audio inspector: waveform + codec noise, Play per platform, bake settings, the Platforms grid; the budget lines; `name_slider` |
 | `panels/mixer.rs` | the Mixer tab: bus volumes and preview mutes, duck rules; writes `assets/audio.toml` |
+| `ui_screens.rs`, `panels/ui_screens.rs` | the UI tab (issue #58): edits `ui/*.ui.ron` live — tree (add/duplicate/delete/drag), inspector, preview through the real renderer profile per target (3DS: both screens) and language, focus-order/selection/overflow overlays, issues from `validate` + `audit`; saves when the pointer and keyboard are idle, keeping the leading comments; outside edits reload. Tests: `ui_tests.rs::ui_tab_edits_screens_and_follows_their_files` (GPU, `--ignored --test-threads=1`) |
 
 ## Water (ADR 0015)
 

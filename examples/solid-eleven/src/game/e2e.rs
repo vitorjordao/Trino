@@ -754,9 +754,6 @@ fn tapping_back_button_in_header_navigates_back() {
 /// Selecting 'Quit' in the pause menu (option 2) exits the match and clears session.
 #[test]
 fn pause_menu_quit_exits_match_to_title() {
-    use crate::selftest::NullRenderer;
-    use trino_core::PointerButton;
-
     let mut d = Driver::new(Cart::default());
     d.idle(2);
     d.press(Button::A); // Quick
@@ -768,17 +765,10 @@ fn pause_menu_quit_exits_match_to_title() {
     d.press(Button::Start);
     assert_eq!(d.g.scene, Scene::Pause);
 
-    let mut r = NullRenderer {
-        caps: trino_core::Caps::N3DS,
-    };
-    d.g.render(&mut r);
-
-    // Option 2 (Quit) is drawn at y = 78 + 2 * 26 = 130
-    let mut tap = InputState::default();
-    tap.pointer = Some(Vec2::new(160.0, 138.0));
-    tap.set_pointer_button(PointerButton::Primary, true);
-    d.frame(&tap);
-    d.idle(1);
+    // Navigate to Option 2 (Quit) and confirm
+    d.press(Button::DpadDown);
+    d.press(Button::DpadDown);
+    d.press(Button::A);
 
     assert_eq!(
         d.g.scene,
@@ -849,4 +839,80 @@ fn movement_left_right_up_down_matches_screen_space() {
     down.set(Button::DpadDown, true);
     let pad_d = c.pad(&down, &none, 1.0 / 60.0, false);
     assert_eq!(pad_d.mv.y, Fx::ONE, "DpadDown runs toward the camera (+Y)");
+}
+
+/// The pause menu (a UI screen since issue #58) draws the three rows its
+/// logic has — before, it drew two, and the second ("QUIT MATCH") asked
+/// for a substitution — in both languages, and the pad walks them.
+#[test]
+fn the_pause_menu_draws_and_walks_its_three_rows() {
+    use crate::ui::i18n::Lang;
+    struct Texts {
+        caps: trino_core::Caps,
+        texts: Vec<String>,
+    }
+    impl trino_core::Renderer for Texts {
+        fn caps(&self) -> &trino_core::Caps {
+            &self.caps
+        }
+        fn begin_frame(&mut self, _: trino_core::Color) {
+            self.texts.clear();
+        }
+        fn draw_sprite(&mut self, _: trino_core::SpriteId, _: Vec2, _: &trino_core::SpriteParams) {}
+        fn draw_model(
+            &mut self,
+            _: trino_core::ModelId,
+            _: &trino_core::Transform3,
+            _: trino_core::Material,
+            _: &trino_core::ModelParams,
+        ) {
+        }
+        fn end_frame(&mut self) {}
+        fn draw_text(
+            &mut self,
+            _: trino_core::FontId,
+            _: Vec2,
+            text: &str,
+            _: &trino_core::TextParams,
+        ) {
+            self.texts.push(text.to_string());
+        }
+        fn measure_text(&self, _: trino_core::FontId, t: &str, scale: f32) -> Vec2 {
+            Vec2::new(t.chars().count() as f32 * 6.0 * scale, 11.0 * scale)
+        }
+    }
+    let mut d = Driver::new(Cart::default());
+    d.idle(2);
+    d.g.start_exhibition(0, 1, 3, [true, false], crate::render::Sky::Day, 60);
+    d.idle(5);
+    d.press(Button::Start);
+    assert_eq!(d.g.scene, Scene::Pause);
+    for (lang, rows) in [
+        (Lang::En, ["PAUSED", "RESUME", "SUBSTITUTE", "QUIT MATCH"]),
+        (
+            Lang::Pt,
+            ["PAUSADO", "VOLTAR AO JOGO", "SUBSTITUIR", "ABANDONAR"],
+        ),
+    ] {
+        d.g.settings.lang = lang;
+        let mut r = Texts {
+            caps: trino_core::Caps::N64,
+            texts: Vec::new(),
+        };
+        d.g.render(&mut r);
+        for row in rows {
+            assert!(
+                r.texts.iter().any(|t| t == row),
+                "{lang:?}: {row} in {:?}",
+                r.texts
+            );
+        }
+    }
+    assert_eq!(d.g.cur.pause, 0);
+    d.press(Button::DpadDown);
+    assert_eq!(d.g.cur.pause, 1, "substitute");
+    d.press(Button::DpadDown);
+    assert_eq!(d.g.cur.pause, 2, "quit");
+    d.press(Button::B);
+    assert_eq!(d.g.scene, Scene::Match, "B resumes");
 }

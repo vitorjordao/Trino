@@ -349,6 +349,7 @@ impl Project {
             watch: [
                 "examples",
                 "assets",
+                "ui",
                 "apps",
                 "crates/platform-n64",
                 "crates/platform-3ds",
@@ -428,7 +429,7 @@ impl Project {
         let web_canvas_id = web.canvas_id.unwrap_or_else(|| DEFAULT_CANVAS_ID.into());
         let web_title = web.page_title.unwrap_or_else(|| f.project.title.clone());
         let watch = f.test.watch.clone().unwrap_or_else(|| {
-            ["game", "n64", "n3ds", "3ds", "assets"]
+            ["game", "n64", "n3ds", "3ds", "assets", "ui"]
                 .iter()
                 .filter(|d| root.join(d).is_dir())
                 .map(|d| d.to_string())

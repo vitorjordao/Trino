@@ -1,0 +1,35 @@
+// Controls (the PC): each row shows the key a button is bound to (the game
+// sets `key.a` from `platform.binding_label`) and a click rebinds it
+// (`platform.rebind`): the next key pressed takes its place, Escape
+// cancels. The bindings persist with the player's settings.
+(
+    version: 1,
+    name: "controls",
+    focus: "a",
+    on_back: "back",
+    preview: {"key.a": Text("Z"), "key.b": Text("X"), "key.start": Text("ENTER")},
+    root: (
+        children: [
+            (kind: Rect(), anchor: Fill, bleed: true, color: Some((0, 0, 0, 200))),
+            (
+                kind: Rect(border: 1, border_color: Some((255, 244, 200, 255))),
+                anchor: Center,
+                padding: (12, 10, 12, 12),
+                children: [
+                    (
+                        kind: Stack(gap: 6, align: Stretch),
+                        children: [
+                            (kind: Text, key: "controls.title", text: "Controls", text_scale: 2, align: Center),
+                            (kind: Button, id: "a", key: "controls.a", text: "Accept", bind: "key.a", on_click: "rebind:a", size: (Px(180), Px(16))),
+                            (kind: Button, id: "b", key: "controls.b", text: "Cancel", bind: "key.b", on_click: "rebind:b", size: (Px(180), Px(16))),
+                            (kind: Button, id: "start", key: "controls.start", text: "Pause", bind: "key.start", on_click: "rebind:start", size: (Px(180), Px(16))),
+                            (kind: Text, key: "controls.waiting", text: "Press a key (Esc: cancel)", visible_if: "waiting", align: Center),
+                            (kind: Button, id: "reset", key: "controls.reset", text: "Reset", on_click: "reset", size: (Px(180), Px(16))),
+                            (kind: Button, id: "back", key: "controls.back", text: "Back", on_click: "back", size: (Px(180), Px(16))),
+                        ],
+                    ),
+                ],
+            ),
+        ],
+    ),
+)

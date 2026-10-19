@@ -47,6 +47,14 @@ with mutes and duck rules start from the project's `assets/audio.toml`; the play
 volumes persist per game in `<save_name>.audio` next to the save
 ([ADR 0021](adr/0021-audio-pipeline.md), [ASSETS.md](ASSETS.md#audio-a-codec-per-platform-streaming-buses-adr-0021)).
 
+UI screens ([ADR 0024](adr/0024-ui-system.md), [ASSETS.md](ASSETS.md#ui-screens)) scale by
+whole pixels against their reference size — ×4 at 1080p, ×9 at 4K, ×4 at 2560×1080 with
+the anchors at the monitor's real edges — times the player's interface scale
+(`DisplaySettings::ui_scale`, in quarters: 6 is 150 %). The mouse focuses what it hovers
+and clicks it; Enter and Escape work like A and B. A saved screen or string table reloads
+in the running game. With `TRINO_STRICT=1` on a console profile, a screen over that
+console's UI budget panics.
+
 ### Quality presets
 
 On the native profile (`TRINO_SIM=native`, a standalone project's PC build) the game runs
@@ -144,6 +152,11 @@ Things to know:
   the DFS), sprites by `mksprite --compress`; `asset_load` decodes as it reads. Boot logs
   `TRINO_MEM: ram= heap_total= before_assets= boot_assets=`, and the self-test fails when
   the heap's peak leaves less than 128 KB of libdragon's heap (`TRINO_HEAP:` lines).
+- **UI** ([ADR 0024](adr/0024-ui-system.md)): a screen's root keeps 16×12 pixels inside
+  the 320×240 picture, the margin a TV's overscan hides (`Caps::safe_area`; `bleed` nodes
+  fill it). The budget is 64 laid-out nodes and 384 2D draws a frame; `cargo xtask ui
+  check` fails a screen past it, or one with a control the pad cannot reach (the D-pad, the
+  stick and the C buttons move the focus).
 - Troubleshooting: the [build-n64](../.agents/skills/build-n64/SKILL.md) and
   [run-emulator](../.agents/skills/run-emulator/SKILL.md) skills.
 
@@ -209,6 +222,9 @@ Things to know:
   `T3AU` files beside it). `[groups.boot] compression = { 3ds = "lz4" }` packs boot the same
   way into `groups/boot.tbnd`, decoded at boot. GPU memory of an unloaded asset is freed two
   frames after its last draw. Boot logs the same `TRINO_MEM:` line as the N64.
+- **UI** ([ADR 0024](adr/0024-ui-system.md)): nodes with `screen: Bottom` go to the
+  320×240 touch screen and a tap clicks them (on a one-screen target they join the main
+  screen); the pad reaches both screens. The budget is 128 nodes and 2048 2D draws.
 - Troubleshooting: the [build-3ds](../.agents/skills/build-3ds/SKILL.md) and
   [run-emulator](../.agents/skills/run-emulator/SKILL.md) skills.
 
@@ -313,6 +329,12 @@ gives (WebGPU maps buffers between frames; WebGL2's fences only move between tas
 in a browser they report `skipped (no read_pixel)` and the golden frames, read back
 asynchronously, hold the picture. The same probes run on the PC renderer in
 `xtask/tests/engine_checks.rs`.
+
+UI screens ([ADR 0024](adr/0024-ui-system.md)) keep clear of a phone's notch and home
+bar: the page sets `viewport-fit=cover`, and the backend reads CSS
+`env(safe-area-inset-*)` on every resize (an orientation change is one) and hands the
+renderer the part inside the canvas, in device pixels; the renderer keeps what the
+letterbox's bars do not already cover. Touch taps controls like the mouse clicks them.
 
 Troubleshooting: the [build-web](../.agents/skills/build-web/SKILL.md) skill.
 

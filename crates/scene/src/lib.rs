@@ -38,6 +38,7 @@ pub mod material;
 pub mod platform;
 pub mod prefab;
 pub mod resolve;
+pub mod ui;
 
 pub use library::{Library, ModelBounds};
 pub use material::{DetailDef, FilterDef, MaterialDef, ShadingDef, WaterDef};

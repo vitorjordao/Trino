@@ -107,6 +107,15 @@ A feature is done only when **PC, N64 and 3DS** all run it and an emulator has s
 - **Blended 3D must come after a batch's RSP commands on the N64** and write no depth
   on any target: the water bucket in `platform-n64/src/renderer.rs` and the 3DS's,
   `TriKind::Water` on PC.
+- **Content the bake generates without a manifest entry** (the `audio/mixer`, the
+  `quality/presets`, the UI's `ui/<name>` and `i18n/<lang>` blobs) touches five places:
+  `asset-pipeline/src/bake.rs` (PC/Web), `xtask/src/n64.rs` and `xtask/src/n3ds.rs`
+  (after the mixer: write `{id:08x}.blob` and an index line), `memory.rs` (the plan),
+  `watch.rs` and `xtask/src/project.rs`'s `watch` lists (live reload). The Web pack
+  takes every baked blob already.
+- **A RON format an editor round-trips denies unknown fields**
+  (`#[serde(default, deny_unknown_fields)]`): with only `default`, a misspelt field
+  parses as the default and the next save drops it.
 - **A new `ModelParams` field costs `EntityStore` capacity times its size** in every
   game struct. Measure the N64 self-test's stack (`check_stack`) after one.
 
@@ -154,6 +163,9 @@ A feature is done only when **PC, N64 and 3DS** all run it and an emulator has s
   bytes, compare counts. A step that only calls the API and prints proves nothing.
   Then break the feature on purpose (one line in the PC backend) and make sure the
   step fails. The first `dual screen` probes passed with a wrong projection.
+- A step that probes pixels must still run its logic where `read_screen_pixel` is
+  `None` (the browsers): return `Ok(false)` ("probe skipped") after the non-pixel checks
+  instead of skipping the whole step (`ui_layout` taps the touch screen either way).
 - Tests that change the cwd or the environment (`set_current_dir`, `set_var`) race
   with other tests in the same binary. Mark them `#[ignore]` and run them alone
   with `--test-threads=1`, as the editor UI tests do, or don't touch global state.

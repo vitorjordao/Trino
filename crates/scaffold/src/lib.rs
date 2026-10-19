@@ -644,6 +644,7 @@ mod tests {
                 "ui/title.ui.ron",
                 "ui/pause.ui.ron",
                 "ui/options.ui.ron",
+                "ui/controls.ui.ron",
             ] {
                 assert!(dest.join(f).is_file(), "{}: {f}", template.key());
             }

@@ -99,12 +99,13 @@ fn ui_check_accepts_the_shipped_screens() {
         "templates/standalone/ui/title.ui.ron",
         "templates/standalone/ui/pause.ui.ron",
         "templates/standalone/ui/options.ui.ron",
+        "templates/standalone/ui/controls.ui.ron",
         "examples/solid-eleven/ui/pause.ui.ron",
     ]);
     let out = text(&o.stdout);
     assert!(o.status.success(), "{out}{}", text(&o.stderr));
     assert!(
-        out.contains("4 screen(s), 4 target(s), 1 language(s): 0 error(s), 0 warning(s)"),
+        out.contains("5 screen(s), 4 target(s), 1 language(s): 0 error(s), 0 warning(s)"),
         "{out}"
     );
 }

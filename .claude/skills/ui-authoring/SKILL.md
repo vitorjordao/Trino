@@ -12,7 +12,7 @@ A running PC game, the editor's UI tab and an agent editing the file all see the
 
 ## The loop
 
-1. Edit `ui/<name>.ui.ron` (start from `templates/standalone/ui/{title,pause,options}.ui.ron`).
+1. Edit `ui/<name>.ui.ron` (start from `templates/standalone/ui/{title,pause,options,controls}.ui.ron`).
 2. `cargo xtask ui check <name> --json` — exit 0 means every target × language is clean:
    - `the pad cannot reach this control` — an error on the N64 and the 3DS: move it in
      line with the others or add a `nav: (down: "id")` override;

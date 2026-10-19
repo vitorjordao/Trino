@@ -395,8 +395,8 @@ a camera can see, so the CC0 KayKit doorway went from 1068 to 75 triangles.
 
 A screen is a RON file in the project's `ui/` folder (ADR 0024); the bake turns it into the
 `ui/<name>` blob on every target and checks its structure (a duplicate id or a navigation
-target that does not exist fails the bake). Every new project starts with `title`, `pause`
-and `options`.
+target that does not exist fails the bake). Every new project starts with `title`, `pause`,
+`options` and `controls`.
 
 ```ron
 (

@@ -57,7 +57,7 @@ impostors) is part of the same pipeline, drawn by the same renderer in the same 
 | Blender automation | Python helpers in `tools/blender/` and `cargo xtask blender` commands that build, check and export models within the N64 budget. |
 | Authored content as text | Scenes, prefabs, materials, particle effects, fake objects and UI screens are RON files. The editor writes them, any tool or AI agent can edit them, and a running editor or game reloads them live. |
 | Editor | Scene and Game views on the real renderer, hierarchy, inspector, asset browser, prefabs, per-platform variants, LOD and impostor baking, an animation tab, a per-console frame budget HUD. |
-| UI tools | `cargo xtask ui check` proves on every target that the pad reaches every control, the screen fits the console's UI budget and no translation overflows; `ui shot` renders a screen as a target shows it; the editor's UI tab edits screens with a focus-order overlay. Every new project starts with title, pause and options screens. |
+| UI tools | `cargo xtask ui check` proves on every target that the pad reaches every control, the screen fits the console's UI budget and no translation overflows; `ui shot` renders a screen as a target shows it; the editor's UI tab edits screens with a focus-order overlay. Every new project starts with title, pause, options and controls screens. |
 | Live reload | Game code reloads as a dylib on PC (`cargo xtask watch pc`); consoles rebuild and relaunch in the emulator on save (`watch n64`, `watch 3ds`). |
 | Emulator self-tests and goldens | `cargo xtask test n64` and `test 3ds` boot the game in ares or Azahar, run a self-test step for every engine service, have a bot play a stage, and compare frames with golden images. The N64 run also gates frame time. |
 | Real hardware | `run n64 --device sc64\|everdrive` and `run 3ds --device network` deploy to a console and print its debug log in your terminal. Tested with stub loaders so far ([docs/HARDWARE.md](docs/HARDWARE.md)). |
@@ -170,7 +170,7 @@ cargo trino build n64                                       # the engine's xtask
 
 A standalone project has its own workspace: the portable `game/` crate, a PC host on
 `trino-runner-pc` with live asset reload, `n64/` and `n3ds/` console crates, starter
-assets, title, pause and options screens in `ui/`, a `trino.toml` and an `AGENTS.md`. Console builds need a local engine checkout
+assets, title, pause, options and controls screens in `ui/`, a `trino.toml` and an `AGENTS.md`. Console builds need a local engine checkout
 (a path dependency or an `engine/` git submodule), because the shims, the target spec and
 the Docker image live there ([ADR 0008](docs/adr/0008-external-console-projects.md)).
 

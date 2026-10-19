@@ -139,11 +139,16 @@ screenshots and tests.
 
 ### 10. Starter screens in every new project
 
-`templates/standalone/ui/` holds `title`, `pause` and `options` screens and an `en-US`
-table; new projects get them with the `trino5x7` font, and the template game drives its
-title, pause and options modes through them (the options' toggle and slider set the
-music volume, the PC's display settings give the interface scale). `ui check` passes on
-them on every target.
+`templates/standalone/ui/` holds `title`, `pause`, `options` and `controls` screens and
+an `en-US` table; new projects get them with the `trino5x7` font, and the template game
+drives its menus through them. Options has music and effects sliders (the mixer's `Music`
+and `Sfx` buses, read back from the host's saved volumes), opens the engine's Graphics page
+(quality presets) where the host has one, and the Controls screen where keys can be
+rebound (the PC): each row shows its key (`Platform::binding_label`), asks the host to
+capture a new one (`Platform::rebind`; Escape cancels) and `Reset` restores the defaults.
+Rows a host cannot serve are hidden by `visible_on` and by values the game sets from
+`quality_info` and `input_info`. The PC's display settings give the interface scale.
+`ui check` passes on them on every target.
 
 ### 11. First adopter: Solid Eleven's pause menu
 

@@ -1,5 +1,11 @@
 <div align="center">
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/media/trino-logo-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/media/trino-logo-light.png">
+  <img alt="Trino Engine Logo" src="docs/media/trino-logo-light.png" width="220" />
+</picture>
+
 # Trino
 
 **A cross-platform retro 3D engine for PC, the Web, Nintendo 64 and Nintendo 3DS, from one

@@ -704,7 +704,7 @@ pub static NODES: [UiNode<'static>; 73] = [
 pub static SCREEN: UiScreen<'static> = UiScreen {
     name: "se_teams",
     reference: (320, 240),
-    scaling: Scaling::Integer,
+    scaling: Scaling::Snap,
     wrap: false,
     focus: NONE,
     on_back: "back",

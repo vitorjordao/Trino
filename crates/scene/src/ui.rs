@@ -119,7 +119,7 @@ mirror!(
 );
 mirror!(
     /// Whole-pixel scaling (crisp pixel art) or any scale.
-    Scaling => core_ui::Scaling { Integer, Fractional } default Integer
+    Scaling => core_ui::Scaling { Integer, Fractional, Snap } default Integer
 );
 /// Horizontal text alignment.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]

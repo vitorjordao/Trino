@@ -5,6 +5,7 @@
 (
     version: 1,
     name: "se_toast",
+    scaling: Snap,
     theme: (
         font: "fonts/se_ui",
         text: Some((236, 240, 255, 255)),

@@ -243,7 +243,7 @@ pub static NODES: [UiNode<'static>; 23] = [
 pub static SCREEN: UiScreen<'static> = UiScreen {
     name: "se_confirm",
     reference: (320, 240),
-    scaling: Scaling::Integer,
+    scaling: Scaling::Snap,
     wrap: false,
     focus: NONE,
     on_back: "back",

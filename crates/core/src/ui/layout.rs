@@ -119,6 +119,7 @@ pub(super) fn frame_for(
     let fit = (px.x / reference.0 as f32).min(px.y / reference.1 as f32) * interface;
     let scale = match scaling {
         Scaling::Integer if fit >= 1.0 => floor(fit),
+        Scaling::Snap if fit >= 1.0 && fit - floor(fit) < fit * 0.15 => floor(fit),
         _ => fit,
     }
     .max(1.0 / 64.0);
@@ -323,10 +324,12 @@ impl<M: TextMeasure + ?Sized, const N: usize> Solver<'_, '_, '_, M, N> {
         } else {
             self.screen.theme.text_scale.max(1)
         };
-        (
-            super::draw::font_of(self.screen, self.env, n),
-            scale as f32 * self.ui.text_mul,
-        )
+        // The game may draw this pixel size with another font (a bigger
+        // bitmap at large scales): measure what will be drawn.
+        let frame = self.ui.frames[0].scale.max(1.0 / 64.0);
+        let virt = scale as f32 * self.ui.text_mul;
+        let (font, px) = super::draw::sized_font(self.screen, self.env, n, virt * frame);
+        (font, px / frame)
     }
 
     fn line_height(&self, n: &UiNode<'_>) -> f32 {

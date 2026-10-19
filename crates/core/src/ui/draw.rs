@@ -231,13 +231,13 @@ impl<const N: usize> Ui<N> {
                         self.outline(r, rect, round(scale).max(1.0), screen.theme.text);
                     }
                     let content = inset_px(rect, &n, scale);
-                    let lh = r
-                        .measure_text(
-                            font_of(screen, env, &n),
-                            "",
-                            text_scale(screen, &n) * scale * self.text_mul,
-                        )
-                        .y;
+                    let (f, px) = sized_font(
+                        screen,
+                        env,
+                        &n,
+                        text_scale(screen, &n) * scale * self.text_mul,
+                    );
+                    let lh = r.measure_text(f, "", px).y;
                     let side = lh.min(content.size.y).max(scale);
                     let bx = Rect::new(
                         content.pos.x,
@@ -274,13 +274,13 @@ impl<const N: usize> Ui<N> {
                     let content = inset_px(rect, &n, scale);
                     let mut buf = TextBuf::<LABEL_LEN>::new();
                     let text = label(screen, &self.values, env, &n, slot.item, &mut buf);
-                    let lw = r
-                        .measure_text(
-                            font_of(screen, env, &n),
-                            text,
-                            text_scale(screen, &n) * scale * self.text_mul,
-                        )
-                        .x;
+                    let (f, px) = sized_font(
+                        screen,
+                        env,
+                        &n,
+                        text_scale(screen, &n) * scale * self.text_mul,
+                    );
+                    let lw = r.measure_text(f, text, px).x;
                     let gap = if lw > 0.0 {
                         super::layout::INNER_GAP * scale
                     } else {
@@ -500,8 +500,12 @@ impl<const N: usize> Ui<N> {
         if text.is_empty() {
             return;
         }
-        let font = font_of(screen, env, n);
-        let px = text_scale(screen, n) * scale * self.text_mul;
+        let (font, px) = sized_font(
+            screen,
+            env,
+            n,
+            text_scale(screen, n) * scale * self.text_mul,
+        );
         let measure: &dyn Renderer = r;
         let width = |s: &str| measure.measure_text(font, s, px).x;
         let lh = measure.measure_text(font, "", px).y;
@@ -650,15 +654,19 @@ fn inset_px(rect: Rect, n: &UiNode<'_>, scale: f32) -> Rect {
     )
 }
 
-/// The font a node's text measures and draws with: its own or the
-/// theme's, through the language's remap (a per-language atlas, #59). The
-/// layout calls it too, so the two never disagree.
-pub(super) fn font_of(
+/// The font and pixel scale node `n` draws its text with at `px` pixels
+/// per font pixel: the language's font ([`UiStrings::font`]), maybe swapped
+/// by the game for this size ([`UiStrings::sized`]).
+///
+/// [`UiStrings::font`]: super::UiStrings::font
+/// [`UiStrings::sized`]: super::UiStrings::sized
+pub(super) fn sized_font(
     screen: &UiScreen<'_>,
     env: &UiEnv<'_>,
     n: &UiNode<'_>,
-) -> crate::render::FontId {
-    env.strings.font(n.font.unwrap_or(screen.theme.font))
+    px: f32,
+) -> (crate::render::FontId, f32) {
+    env.strings.sized(n.font.unwrap_or(screen.theme.font), px)
 }
 
 fn text_scale(screen: &UiScreen<'_>, n: &UiNode<'_>) -> f32 {

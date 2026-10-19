@@ -25,6 +25,16 @@ pub trait UiStrings {
     fn font(&self, font: FontId) -> FontId {
         font
     }
+
+    /// The font and scale that draw `font` at `px` pixels per font pixel
+    /// (issue #95): a game with the same face baked at several sizes
+    /// returns a bigger one at a large scale (an 11 px font at ×4 as its
+    /// 44 px twin at ×1), so text stays crisp between whole pixels. The
+    /// layout measures through it too. Default: [`font`](Self::font) at
+    /// `px`.
+    fn sized(&self, font: FontId, px: f32) -> (FontId, f32) {
+        (self.font(font), px)
+    }
 }
 
 /// No table: every node shows its own `text`.

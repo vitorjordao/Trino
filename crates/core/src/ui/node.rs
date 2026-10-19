@@ -220,6 +220,12 @@ pub enum Scaling {
     Integer,
     /// Exactly the fit (text may land between pixels).
     Fractional,
+    /// Whole pixels when the fit is within 15 % of a whole number, else
+    /// exactly the fit (issue #95): a 640×360 window draws at 1.5 instead
+    /// of shrinking to 1, a 960×540 one at a crisp 2. Pair it with
+    /// [`UiStrings::sized`](super::UiStrings::sized) so text between
+    /// pixels takes a bigger bitmap font.
+    Snap,
 }
 
 /// What a node is. Containers place their children; leaves draw. Any node

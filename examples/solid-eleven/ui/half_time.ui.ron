@@ -5,6 +5,7 @@
 (
     version: 1,
     name: "se_half_time",
+    scaling: Snap,
     on_back: "back",
     theme: (
         font: "fonts/se_ui",

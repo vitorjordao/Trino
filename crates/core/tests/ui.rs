@@ -2094,3 +2094,79 @@ fn a_panel_taller_than_its_scroll_box_shows_the_lines_that_fit() {
     ui.draw(&mut r, &s, &env);
     assert_eq!(r.texts()[0].0, "ONE");
 }
+
+#[test]
+fn snap_scaling_keeps_whole_pixels_near_a_whole_fit_and_follows_the_fit_elsewhere() {
+    let mut t = Tree::new();
+    t.open(root());
+    t.leaf(button("a", "A"));
+    let s = UiScreen {
+        scaling: Scaling::Snap,
+        ..t.screen()
+    };
+    for ((w, h), want) in [
+        ((320, 240), 1.0),
+        ((640, 360), 1.5),
+        ((960, 540), 2.0),
+        ((1280, 720), 3.0),
+        ((1920, 1080), 4.0),
+        ((1000, 600), 2.5),
+    ] {
+        let r = Rec::sized(w, h);
+        let ui = laid_out_n::<64>(&s, &r);
+        assert_eq!(ui.frame(Screen::Top).scale, want, "{w}x{h}");
+    }
+}
+
+/// A game's twice-as-big copy of its font, used from ×2 up.
+struct Twice;
+const BIG: FontId = FontId::from_path("fonts/big");
+impl trino_core::ui::UiStrings for Twice {
+    fn get(&self, _key: &str) -> Option<&str> {
+        None
+    }
+    fn sized(&self, font: FontId, px: f32) -> (FontId, f32) {
+        if px >= 2.0 {
+            (BIG, px * 0.5)
+        } else {
+            (font, px)
+        }
+    }
+}
+
+#[test]
+fn a_game_draws_large_text_with_its_bigger_font_and_the_layout_measures_it() {
+    let mut t = Tree::new();
+    t.open(root());
+    t.leaf(UiNode {
+        id: "t",
+        text: "HELLO",
+        ..node(NodeKind::Text)
+    });
+    let s = t.screen();
+    for (w, h, font, scale) in [(320, 240, Theme::DEFAULT.font, 1.0), (640, 480, BIG, 1.0)] {
+        let mut r = Rec::sized(w, h);
+        // The big font's cells are twice as wide: at half the scale it
+        // covers what the small one would at the full scale.
+        r.wide = Some(BIG);
+        let mut ui = Ui::<16>::new();
+        let env = env_of(&r).with_strings(&Twice);
+        ui.draw(&mut r, &s, &env);
+        assert_eq!(r.fonts.last(), Some(&font), "{w}x{h}");
+        assert_eq!(r.texts()[0].2.scale, scale, "{w}x{h}");
+        let frame = ui.frame(Screen::Top).scale;
+        assert_eq!(rect_of_n(&ui, &s, "t").size.x, 30.0 * frame, "{w}x{h}");
+        assert_eq!(ui.stats().overflow, 0);
+    }
+}
+
+fn laid_out_n<const N: usize>(screen: &UiScreen<'_>, r: &Rec) -> Ui<N> {
+    let mut ui = Ui::<N>::new();
+    let m: &dyn Renderer = r;
+    ui.layout(screen, &env_of(r), m);
+    ui
+}
+
+fn rect_of_n<const N: usize>(ui: &Ui<N>, screen: &UiScreen<'_>, id: &str) -> Rect {
+    ui.rect_of(screen, id).expect(id).1
+}

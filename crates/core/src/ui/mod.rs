@@ -200,7 +200,9 @@ impl UiAccess {
         if t == 1.0 {
             return 1.0;
         }
-        if scaling == Scaling::Integer && frame_scale >= 1.0 {
+        let whole = frame_scale >= 1.0 && (frame_scale as i32) as f32 == frame_scale;
+        if (scaling == Scaling::Integer || scaling == Scaling::Snap && whole) && frame_scale >= 1.0
+        {
             // Whole glyph pixels: `base × mul × frame_scale` is a whole
             // number for any whole `base`.
             let px = ((t * frame_scale) + 0.5) as i32 as f32;

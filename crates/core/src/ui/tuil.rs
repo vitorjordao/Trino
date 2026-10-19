@@ -194,7 +194,11 @@ impl<'a> UiScreen<'a> {
         let screen = UiScreen {
             name: header_str(20)?,
             reference: (rd16(bytes, 8).max(1), rd16(bytes, 10).max(1)),
-            scaling: if flags & 1 != 0 {
+            // Bit 2 (snap) is new in version 2's spare flags: older blobs
+            // read Integer or Fractional as before.
+            scaling: if flags & 4 != 0 {
+                Scaling::Snap
+            } else if flags & 1 != 0 {
                 Scaling::Fractional
             } else {
                 Scaling::Integer
@@ -235,7 +239,9 @@ pub fn encode_header(
     let mut h = [0u8; HEADER];
     h[0..4].copy_from_slice(MAGIC);
     wr16(&mut h, 4, VERSION);
-    let flags = u16::from(screen.scaling == Scaling::Fractional) | (u16::from(screen.wrap) << 1);
+    let flags = u16::from(screen.scaling == Scaling::Fractional)
+        | (u16::from(screen.wrap) << 1)
+        | (u16::from(screen.scaling == Scaling::Snap) << 2);
     wr16(&mut h, 6, flags);
     wr16(&mut h, 8, screen.reference.0);
     wr16(&mut h, 10, screen.reference.1);

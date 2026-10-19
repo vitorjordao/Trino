@@ -6,6 +6,7 @@
 (
     version: 1,
     name: "se_results",
+    scaling: Snap,
     on_back: "continue",
     theme: (
         font: "fonts/se_ui",

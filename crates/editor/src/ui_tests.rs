@@ -2272,7 +2272,8 @@ fn shadows_panel_components_tiers_and_view_modes() {
     assert_eq!(h.state().scene_view.stats.shadow_tier, ShadowTier::None);
     h.state_mut().cmds.push(Cmd::Select(None));
     h.run_steps(3);
-    click(&mut h, "Shadows (every platform)");
+    // The save's toast can cover the Inspector: click through accesskit.
+    h.get_by_label("Shadows (every platform)").click_accesskit();
     h.run_steps(3);
     assert!(!h.state().doc.scene.environment.shadows.unwrap().enabled);
     h.state_mut().scene_view.shadow_view = ShadowView::Debug;

@@ -68,6 +68,17 @@ shipping a 3D game first**, then by cost:
     an AMD Radeon iGPU and an RX 7800 XT on Windows).
   - Dynamic resolution's full-size clear and MSAA resolve (1–3 ms on llvmpipe with 4×
     MSAA at half scale): a partial resolve if a preset with MSAA ever turns it on.
+- **UI system follow-ups (#58, ADR 0024)** (S–M each).
+  - The rest of Solid Eleven's menus and Plan & Party's as screens (the pause menu is the
+    first); each one moved deletes hand-placed coordinates and hit boxes.
+  - Text entry (a name, a save slot): an on-screen keyboard screen for the consoles.
+  - Transitions and animated focus (a slide, a fade) — today a screen changes in one frame.
+  - Localization beyond plain strings (#59: plurals, number and date formats) and text
+    scale with high-contrast themes (#60), both on top of `UiStrings` and `Theme`.
+  - The interface scale on the Graphics page (`DisplaySettings::ui_scale` is stored and
+    applied, but only a game's own options page sets it).
+  - A scissor for partly visible children in a `Scroll` (2D has none on the consoles, so
+    a child is drawn whole or not at all).
 - **PC GPU T&L for the draws it still rejects (#51 follow-up, ADR 0016 §11)** (M).
   Translucent draws (the painter order per triangle), water and per-pixel lit draws
   stay on the CPU path. A per-pixel lit GPU path would compute the lit pipeline's
@@ -218,6 +229,24 @@ shipping a 3D game first**, then by cost:
   time) and bless `tests/perf/` on purpose. Host benches stay as regression guards only.
 
 ---
+
+## Done — a declarative UI system for every target (2026-10-18, branch `feat/58-ui-system`, GitHub #58, ADR 0024)
+
+| Item | Evidence |
+|---|---|
+| `trino_core::ui` (`no_std`, no allocation): containers and leaves, virtual units, whole-pixel scaling, the interface scale, safe areas and `bleed`, the 3DS bottom screen, `visible_on`/`visible_if`, lazy layout; two `Renderer` defaults (`safe_area`, `ui_stats`), no `GAME_API_VERSION` bump | `crates/core/tests/ui.rs` (35 tests), `provided_renderer_methods_are_harmless_defaults` |
+| Focus by the D-pad, the sticks and the C buttons with overrides and wrap; A/B, Enter/Escape; mouse hover and click; touch taps; toggles, sliders, lists, scroll; `Ui::unreachable` | the same file's input tests; the `ui layout` self-test step (pad, A, a tap on the touch screen) |
+| `ui/*.ui.ron` (unknown fields are errors) → `TUIL` blobs `ui/<name>` and `assets/i18n/*.ron` → `TSTR` blobs on every target; `ScreenBlob`/`StringsBlob` follow live edits; static Rust export | `crates/scene/tests/ui.rs` (11 tests), `crates/asset-pipeline/tests/ui_bake.rs` (2 tests), `baked_blobs_are_parsed_once_and_again_when_the_platform_swaps_them` |
+| `cargo xtask ui check\|shot\|export\|list --json`, one fixture per problem | `xtask/tests/ui_cli.rs` (6 tests), `xtask/tests/ui_fixtures/` |
+| `Caps::max_ui_nodes`/`max_ui_draws` (N64 64/384, 3DS 128/2048, PC and Web 512/16384), strict mode | `crates/platform-pc/tests/ui.rs` (3 tests), the audit's budget errors |
+| Web safe areas (CSS `env(safe-area-inset-*)` past the letterbox); the PC's `DisplaySettings::ui_scale` as the interface scale | `window_insets_become_picture_insets_past_the_letterbox`, `the_display_ui_scale_is_the_interface_scale` |
+| Starter `title`, `pause` and `options` screens in every new project, the template game's menus | `ui_goldens` (N64, 3DS and PC goldens; 1080p, 4K, 21:9), `standalone_project_builds_tests_and_runs`, `scaffolds_blank_and_demo_projects` |
+| Editor: the UI tab (targets, hierarchy, inspector, focus order, languages, overflow, two-way file sync) | see TESTING.md › Editor |
+| Solid Eleven's pause menu as a screen: three rows drawn (two before, the second asking for a substitution) | `the_pause_menu_draws_and_walks_its_three_rows`, the menu crawler |
+| Self-test step `ui layout` on the PC profiles, ares, Azahar and the browsers | `the_ui_layout_step_passes_at_pc_resolutions`, `engine_checks_pass_on_pc`, `engine_checks_pass_on_the_pc_3ds_profile` |
+
+Deviations (ADR 0024): no text entry, transitions or partial clipping yet; the templates
+ship English only (their font is ASCII).
 
 ## Done — quality presets for the PC and the Web: auto-detect, dynamic resolution, frame pacing, a Graphics page (2026-10-18, branch `feat/55-quality-presets`, GitHub #55, ADR 0023)
 

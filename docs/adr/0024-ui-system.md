@@ -179,7 +179,8 @@ adapter to the game's own EN/PT tables. It draws the three rows its logic walks.
 - Self-test step `ui layout` (castle64): parse the baked `ui/selftest`, check the focus,
   reach and the safe area, move with the pad, accept, read back the focus and button
   colors, tap the 3DS touch screen's button; on the PC profiles (N64, 3DS, 1080p, 4K,
-  21:9), in the browsers (Chromium WebGL2 and WebGPU, Firefox, WebKit), on ares and Azahar.
+  21:9), on ares and Azahar, and in the browsers (Chromium WebGL2 and WebGPU, Firefox,
+  WebKit; with no synchronous read-back there, the pixel probes report skipped).
 - Renderer: window insets become picture insets past the letterbox; strict mode fails a
   screen over budget.
 - Solid Eleven: its pause menu draws three rows in English and Portuguese and the pad

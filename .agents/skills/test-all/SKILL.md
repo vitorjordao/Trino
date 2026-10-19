@@ -29,6 +29,8 @@ cargo test --workspace
 | `xtask/tests/feature_matrix.rs` | a `docs/TESTING.md` test reference is stale, or a trait method / TMDL section / asset kind / xtask command has no row | add the row with its test (or `n/a: <reason>` when no host test can exist) |
 | `xtask/tests/standalone.rs` | `cargo xtask new --standalone` output no longer builds/tests (windowed smoke with GPU + display) | fix `templates/standalone/` or `trino-runner-pc` |
 | `crates/editor/src/ui_tests.rs` (`#[ignore]`: `cargo test -p trino-editor ui_tests -- --ignored --test-threads=1`, own CI step) | an editor panel flow broke (select → palette → duplicate → undo) | fix the UI; hand-painted widgets need `widget_info` |
+| `xtask/tests/ui_goldens.rs` | a starter UI screen (`templates/standalone/ui/`) renders differently on the N64, 3DS or PC profile (`tests/golden/pc/ui_*.png`; the diff lands in `tests/golden/pc/actual/`) | a layout, theme or font change? intended: `TRINO_BLESS=1 cargo test -p xtask --test ui_goldens` and review the PNGs |
+| `xtask/tests/ui_cli.rs` | a shipped screen fails `ui check`, or a committed `ui export` (Solid Eleven's `pause_gen.rs`) is stale | fix the screen; re-export with `cargo xtask ui export examples/solid-eleven/ui/pause.ui.ron examples/solid-eleven/src/ui/pause_gen.rs` |
 | `xtask/tests/web_parity.rs` | the PC renderer drifted from the browser goldens (`tests/golden/web/`) | find what changed the picture; re-bless with `cargo xtask test web --bless` only on purpose |
 
 GPU-dependent tests skip without an adapter unless `TRINO_REQUIRE_GPU=1`.

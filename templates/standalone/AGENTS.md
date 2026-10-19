@@ -14,6 +14,8 @@ for AI agents and humans.
 | `web/` | Browser host (`trino_platform_web::run_game`): the game in a tab, on WebGPU or WebGL2. |
 | `trino.toml` | Target platforms (`[project] platforms`), console packaging (ROM title, save type, 3DS icon), test gates. |
 | `assets/manifest.toml` | Every asset by logical path; masters in `assets/shared/`. |
+| `ui/` | Menus as UI screens (`title`, `pause`, `options` to start): RON files the bake turns into `ui/<name>` blobs; the game drives them with `ScreenBlob` + `Ui`. |
+| `assets/i18n/` | String tables (`en-US.ron`) the screens' `key`s read. |
 | `Cargo.toml` | Workspace; the engine dependencies (path or git) are declared once here. |
 
 ## Rules for game code
@@ -25,6 +27,10 @@ for AI agents and humans.
 - Screen space is X-right, **Y-down**, origin top-left; stick input is Y-up.
 - If a feature cannot work on the N64, the engine does not expose it —
   budgets live in `trino_core::Caps`.
+- Menus are data: edit `ui/*.ui.ron` (or the editor's UI tab) and run `cargo trino ui
+  check`, which proves on every target that the pad reaches every control, the screen
+  fits the console's UI budget and no text overflows. A running game reloads a saved
+  screen. See the engine's `ui-authoring` skill.
 
 ## Commands
 
@@ -49,6 +55,8 @@ cargo trino test 3ds       # boot the self-test in Azahar
 cargo trino watch n64      # rebuild + relaunch on save (also 3ds)
 cargo trino build all      # every platform in trino.toml's [project] platforms
 cargo trino editor         # the Trino editor on this project
+cargo trino ui check       # every UI screen on every target and language (--json)
+cargo trino ui shot title --platform 3ds --out title.png   # see a screen as a target shows it
 cargo trino build web      # target/web: index.html, trino.js, trino.wasm, assets/ (WebGPU or WebGL2)
 cargo trino run web        # ... served on 127.0.0.1 and opened in the browser
 cargo trino build web --release --out dist/web   # a folder to upload (itch.io, GitHub Pages)

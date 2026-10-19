@@ -176,7 +176,11 @@ fn solid_eleven_menus_fit_their_boxes() {
             g.update_with(&mut p, &start, &mut Mute, 1.0 / 30.0);
             g.update_with(&mut p, &idle, &mut Mute, 1.0 / 30.0);
             assert_eq!(g.scene, Scene::Pause);
-            shot(&mut g, &mut r, &format!("pause_{lang:?}_{ts}").to_lowercase());
+            shot(
+                &mut g,
+                &mut r,
+                &format!("pause_{lang:?}_{ts}").to_lowercase(),
+            );
         }
     }
 }

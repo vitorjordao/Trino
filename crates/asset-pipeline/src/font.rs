@@ -64,6 +64,17 @@ pub struct FontDecl {
     /// The asset groups it is in (`crate::groups`); default `["boot"]`.
     #[serde(default)]
     pub groups: Vec<String>,
+    /// With `chars = "auto"`: characters baked besides the languages' own
+    /// (dynamic text: names, scores). Issue #59, `crate::i18n`.
+    #[serde(default)]
+    pub extra_chars: Option<String>,
+    /// With `chars = "auto"`: one atlas per language (`fonts/<name>@<lang>`)
+    /// instead of one for all of them.
+    #[serde(default)]
+    pub per_language: bool,
+    /// `chars` came from `"auto"` ([`crate::i18n::resolve`]).
+    #[serde(skip)]
+    pub auto_resolved: bool,
 }
 
 fn default_first() -> u32 {
@@ -121,6 +132,12 @@ impl FontDecl {
 }
 
 pub fn bake_font(source: &Path, decl: &FontDecl) -> Result<BakedFont, String> {
+    if decl.chars.as_deref() == Some("auto") {
+        return Err(format!(
+            "{}: chars = \"auto\" was not resolved (load the manifest with Manifest::load)",
+            source.display()
+        ));
+    }
     let ext = source
         .extension()
         .and_then(|e| e.to_str())

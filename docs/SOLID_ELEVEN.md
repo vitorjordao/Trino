@@ -153,7 +153,8 @@ pure function in `sim/rules.rs`, with a test matrix next to it:
   some players are still on their way. After a goal the scorer wheels away toward
   the corner flag and the teammates near him mob him. The side that conceded walks
   back during the celebration, then everyone jogs back to his half. The kick-off waits
-  for them (about ten seconds in all).
+  for them: 2.5 s of celebration and up to 11 s of walking back (a 6-minute match now
+  takes 7.6 minutes, from 7.0).
 - **The taker lines up his kick.** At a kick-off or a set piece, he walks round the
   ball to stand behind it on the line of the kick he chose, turning to face it, and
   kicks once he is lined up. A human taker aims with the stick, and a button pressed
@@ -246,7 +247,8 @@ own bake against a triangle budget:
   that draw them). Consoles draw 7 per player: head, torso, shorts, two arms and two
   kit legs, each kit leg one mesh with the shorts leg and the sock in the kit's
   colors (one of 30 baked pairs, `team::LEG_KITS`). Players beyond 24 m of view
-  depth (`FAR_DEPTH`; the referee too) drop their arms and their blob shadow: each N64
+  depth (`FAR_DEPTH`; the referee too, unless he is holding a card up) drop their arms
+  and their blob shadow: each N64
   draw costs about 0.2 ms of CPU, and at 320x240 those are a pixel or two. The PC
   draws 15 parts, with sleeves, elbows and knees, plus the hair. A shadow is its own
   flat draw on the turf. Kits are a per-draw tint, so every part stays on the N64's

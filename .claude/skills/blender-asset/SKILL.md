@@ -329,7 +329,10 @@ about the origin.
   from the broadcast camera: turn it about the arm (40°) and make it larger than
   life (16 × 22 cm) or it reads as a stick. White vertex colors, tinted per draw
   (yellow or red), 12 triangles: it stays on the RSP. Force the body's arms
-  (`Detail::Near`) while it shows: the far console body has none.
+  (`Detail::Near`) while it shows: the far console body has none (`Detail::Far` poses
+  `mask::NO_ARMS`), and the broadcast camera already shows the referee far;
+  `solid_eleven_budget::the_referees_card_stays_on_the_rsp_near_and_far` fails
+  without it.
 
 - **One generator, two tiers:** `tools/blender/solid_eleven_models.py`
   (`cargo xtask blender solid-eleven [--only a,b]`) builds console and PC models from

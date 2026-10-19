@@ -1087,7 +1087,7 @@ mod tests {
     fn rdp_quantize(z: f32) -> u32 {
         let fixed = (z.clamp(0.0, 1.0) * 262_143.0) as u32;
         let ones = (fixed << 14).leading_ones().min(7);
-        let shift = if ones >= 6 { 0 } else { 6 - ones };
+        let shift = 6u32.saturating_sub(ones);
         (fixed >> shift) << shift
     }
 

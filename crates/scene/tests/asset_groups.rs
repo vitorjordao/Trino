@@ -10,7 +10,7 @@ use trino_scene::{
 
 #[test]
 fn requires_defaults_to_boot_and_round_trips() {
-    assert!(SCENE_VERSION >= 6, "`requires` arrived in v6");
+    const { assert!(SCENE_VERSION >= 6, "`requires` arrived in v6") };
     assert_eq!(Scene::new("x").requires, ["boot"]);
     // Every older file needs only boot, as it always did.
     for v in 1..=5 {

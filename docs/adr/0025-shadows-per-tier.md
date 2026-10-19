@@ -85,7 +85,8 @@ z-buffer. No blob fights the floor.
   - The mode is blended, z-tested and never z-written, so blobs need no sort among
     themselves.
   - Cost on ares (the `shadow cost` step: 22 casters, frame time less its vsync wait,
-    with and without blobs): **109 µs per blob with the Expansion Pak, 113 µs without**.
+    with and without blobs): **103–113 µs per blob** over two builds and both RAM tiers
+    (code layout moves it).
     `N64_COST::us_per_blob` = 111 µs. The 22-blob frame is ~14.7 ms. The step fails past
     33.3 ms, so a Solid Eleven crowd keeps 30 fps.
 - **Planar, N64:**
@@ -188,7 +189,8 @@ and adds the blobs' time to the N64 CPU estimate.
     before, which keeps the N64 match frame where it was.
   - The ball casts its shape on the hi-fi look and a blob otherwise.
   - The hand-made `player_shadow` and `blob` models are gone.
-  - The football template's N64 match ran at 31.7 ms on ares, against main's 32.1 ms.
+  - The football template's N64 match frame stayed where it was: 31.0–31.7 ms on ares
+    over two builds against main's 32.1 ms, within layout noise (no win is claimed).
 
 ### 10. Phases 4 and 5: evaluated, not built
 
@@ -219,7 +221,9 @@ and adds the blobs' time to the N64 CPU estimate.
   3DS's draw-once overlap, the quality caps, MSAA and render scale, and the views.
 - The `shadows` self-test step on the PC, in ares (both RAM tiers) and Azahar (both
   models). It checks a darker floor where the post's and the ball's shadows land, and an
-  unchanged open floor. ares also runs `shadows golden frame` and `shadow cost`.
+  unchanged open floor. ares also runs `shadows golden frame` and `shadow cost`. The
+  browsers run the step too; its pixel probes are skipped there (no synchronous
+  `read_pixel`), and the castle64 golden frame holds the map's shadow.
 - Scene v7, TSCN v5 and codegen round trips; the budget against the renderer and the
   CLI; an editor kittest plus the layout audit at 960×600 and 1600×940.
 

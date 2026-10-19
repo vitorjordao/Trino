@@ -1783,7 +1783,7 @@ pub fn shadow_far_camera() -> Camera3 {
 /// Where [`shadow_far_scene`]'s `k`th ball sits (alternating sides).
 pub fn shadow_far_ball(k: usize) -> Vec3 {
     let z = SHADOW_FAR_AT[k];
-    let side = if k % 2 == 0 { -0.3 } else { 0.3 };
+    let side = if k.is_multiple_of(2) { -0.3 } else { 0.3 };
     Vec3::new(side * z * 0.2, 0.08, z)
 }
 

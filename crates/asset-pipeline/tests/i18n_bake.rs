@@ -96,10 +96,11 @@ fn auto_fonts_bake_exactly_the_glyphs_the_languages_use() {
     // The default language's atlas: its glyphs, the screen's literal text,
     // the extras; no Ê (pt-BR), no Ñ (es-ES), no pseudo glyph.
     let en = chars(&m, "ui");
-    for c in "PLAYCOINS V1#*0123456789-.,$/English".chars() {
+    for c in "PLAYCOINS V1#*?0123456789-.,English".chars() {
         assert!(en.contains(&c), "en atlas lacks {c:?}");
     }
-    for c in "ÊÑƤJ".chars() {
+    // `{n}` prints digits and separators, never a currency symbol.
+    for c in "ÊÑƤJ$".chars() {
         assert!(!en.contains(&c), "en atlas has {c:?}");
     }
     let pt = chars(&m, "ui@pt-BR");

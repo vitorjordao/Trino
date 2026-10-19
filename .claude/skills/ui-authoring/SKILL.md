@@ -9,6 +9,8 @@ A screen is a RON file in the project's `ui/` folder (ADR 0024, `docs/ASSETS.md`
 screens has the whole format). The asset bake turns it into the `ui/<name>` blob on every
 target, string tables `assets/i18n/<lang>.ron` into `i18n/<lang>` blobs; no manifest entry.
 A running PC game, the editor's UI tab and an agent editing the file all see the same thing.
+Translations, plurals, number formats and per-language fonts are the `localization`
+skill's (`cargo xtask i18n check` audits every screen in every language too).
 
 ## The loop
 
@@ -21,7 +23,7 @@ A running PC game, the editor's UI tab and an agent editing the file all see the
    - `text overflows its W×H box` — in which `[platform]` and language; widen the box,
      `overflow: Ellipsis` (a choice, not an error), or `Wrap`;
    - `font X has no glyph for 'ã'` — the font (trino5x7 is ASCII) or the text;
-   - `key "x" is in no table` — add it to `assets/i18n/<lang>.ron`;
+   - `key "x" is in no table` — add it to `assets/i18n/<lang>.ron` (`localization`);
    - `overlaps Button "a"` — two controls share pixels, so a click or a tap is ambiguous;
    - `sprites/x is not in the project's manifest` (or a model) — declare it (`add-asset`).
    Warnings fail the check too.

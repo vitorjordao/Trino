@@ -173,9 +173,9 @@ strings! {
     Corners => "corners",
     Offsides => "offsides",
     Continue => "continue",
-    Paused => "paused",
-    Resume => "resume",
-    Quit => "quit",
+    Paused => "pause.title",
+    Resume => "pause.resume",
+    Quit => "pause.quit",
     Speed => "speed",
     Dribble => "dribble",
     Shot => "shot",
@@ -205,7 +205,7 @@ strings! {
     Swap => "swap",
     Market => "market",
     Substitution => "substitution",
-    Substitute => "substitute",
+    Substitute => "pause.substitute",
     LeagueWon => "league_won",
     FinishedAt => "finished_at",
     Season => "season",
@@ -316,20 +316,13 @@ pub fn pos_short(lang: Lang, p: crate::sim::team::Pos) -> &'static str {
     LOC.get_in(lang.id(), key).unwrap_or("")
 }
 
-/// The UI system's string keys (`ui/*.ui.ron`, issue #58) read through
-/// [`tr`]: the screens stay in the game's own two languages.
+/// The UI system's string keys (`ui/*.ui.ron`, issue #58) read from the
+/// same tables: the pause screen's `pause.*` keys are [`S`]'s.
 pub struct UiTr(pub Lang);
 
 impl trino_core::ui::UiStrings for UiTr {
     fn get(&self, key: &str) -> Option<&str> {
-        let s = match key {
-            "pause.title" => S::Paused,
-            "pause.resume" => S::Resume,
-            "pause.substitute" => S::Substitute,
-            "pause.quit" => S::Quit,
-            _ => return None,
-        };
-        Some(tr(self.0, s))
+        LOC.get_in(self.0.id(), StrKey::new(key))
     }
 
     fn revision(&self) -> u32 {

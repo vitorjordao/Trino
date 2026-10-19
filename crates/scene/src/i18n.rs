@@ -890,6 +890,29 @@ pub fn glyphs(table: &StringsDef) -> BTreeSet<char> {
     set
 }
 
+/// What `lang` shows, as one table: its own entries plus every key its
+/// fallback chain supplies (drawn with `lang`'s fonts too), its name and
+/// locale. `None` when `lang` has no table.
+pub fn effective(langs: &Langs, lang: &str) -> Option<StringsDef> {
+    let chain = langs.chain(lang);
+    let own = chain.first()?;
+    let mut t = (*own).clone();
+    for other in chain.iter().skip(1) {
+        for (k, e) in &other.entries {
+            t.entries.entry(k.clone()).or_insert_with(|| e.clone());
+        }
+    }
+    Some(t)
+}
+
+/// [`glyphs`] of what `lang` shows ([`effective`]): a language's font must
+/// also draw the fallback's texts it borrows.
+pub fn shown_glyphs(langs: &Langs, lang: &str) -> BTreeSet<char> {
+    effective(langs, lang)
+        .map(|t| glyphs(&t))
+        .unwrap_or_default()
+}
+
 /// Calls `f` with every character of `text` outside its placeholders
 /// (`{{` and `}}` as one brace).
 pub fn strip_placeholders(text: &str, f: &mut dyn FnMut(char)) {
@@ -1397,6 +1420,18 @@ mod tests {
         let words = t(r#"Strings(lang: "en-US", entries: {"a": "{who:str} hi"})"#);
         let g: String = glyphs(&words).into_iter().collect();
         assert_eq!(g, " hi");
+    }
+
+    #[test]
+    fn a_language_shows_and_needs_the_glyphs_its_fallback_lends() {
+        let l = langs(&[
+            r#"Strings(lang: "en-US", entries: {"a": "Fallback", "b": "x"})"#,
+            r#"Strings(lang: "pt-BR", fallback: "en-US", entries: {"b": "ç"})"#,
+        ]);
+        let g = shown_glyphs(&l, "pt-BR");
+        assert!(g.contains(&'F') && g.contains(&'ç') && !g.contains(&'x'));
+        assert_eq!(effective(&l, "pt-BR").unwrap().entries.len(), 2);
+        assert!(effective(&l, "de").is_none());
     }
 
     #[test]

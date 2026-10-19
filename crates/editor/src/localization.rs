@@ -14,7 +14,7 @@ use trino_asset_pipeline as pipeline;
 use trino_core::i18n::{LangTag, PluralForm};
 use trino_scene::i18n::{
     EntryDef, I18nIssue, Langs, PSEUDO_TAG, PluralDef, Severity, StringsDef, check, from_csv,
-    glyphs, is_pseudo, pseudo, to_csv,
+    is_pseudo, pseudo, shown_glyphs, to_csv,
 };
 
 /// Where Export / Import CSV read and write, under the project.
@@ -521,7 +521,7 @@ pub fn measure_fonts(root: &Path, langs: &Langs) -> Result<Vec<FontRow>, String>
                 continue;
             }
             let draws_with = pipeline::i18n::font_for(&m, font, &t.lang, Platform::N64);
-            let used = glyphs(t);
+            let used = shown_glyphs(langs, &t.lang);
             let set = have(&draws_with).unwrap_or_default();
             let missing: String = used
                 .iter()

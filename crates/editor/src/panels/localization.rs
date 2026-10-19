@@ -428,12 +428,21 @@ fn table(app: &mut App, ui: &mut egui::Ui) {
                     (None, _) => row.key.clone(),
                 };
                 let color = if selected { c::ACCENT_TEXT } else { c::TEXT };
-                let r = ui.add_sized(
-                    [key_w, 22.0],
-                    egui::Button::new(RichText::new(&label).color(color).size(12.5))
-                        .frame(selected)
-                        .truncate(),
-                );
+                // Keys read from the left, like the files list them.
+                let r = ui
+                    .allocate_ui_with_layout(
+                        egui::vec2(key_w, 22.0),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            ui.set_width(key_w);
+                            ui.add(
+                                egui::Button::new(RichText::new(&label).color(color).size(12.5))
+                                    .frame(selected)
+                                    .truncate(),
+                            )
+                        },
+                    )
+                    .inner;
                 let r = r.on_hover_text(&row.key);
                 if r.clicked() {
                     loc.selected = Some(row.key.clone());

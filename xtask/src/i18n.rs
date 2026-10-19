@@ -299,7 +299,7 @@ fn glyph_issues(
         let platform = ui_render::pipeline_platform(f);
         let fonts = trino_asset_pipeline::ui::fonts(root, manifest, platform);
         for t in pipe::baked_for(langs, manifest.i18n.as_ref(), platform) {
-            let need = tables::glyphs(t);
+            let need = tables::shown_glyphs(langs, &t.lang);
             for font in &checked {
                 let draws = pipe::font_for(manifest, font, &t.lang, platform);
                 let Some(table) = fonts.get(FontId::from_path(&draws)) else {

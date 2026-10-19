@@ -41,7 +41,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use serde::Deserialize;
-use trino_scene::i18n::{Langs, StringsDef, glyphs, is_pseudo};
+use trino_scene::i18n::{Langs, StringsDef, is_pseudo, shown_glyphs};
 
 use crate::manifest::{Manifest, PerPlatform, Platform};
 
@@ -207,9 +207,11 @@ pub fn resolve(manifest: &mut Manifest, assets_dir: &Path) -> Result<(), String>
     let default = langs.default_lang().map(str::to_string);
     let project_root = assets_dir.parent().unwrap_or(Path::new(""));
     let ui_chars = screen_texts(project_root);
+    // What each language shows: its own texts and those its fallback
+    // chain lends it (drawn with its atlas too).
     let per_lang: BTreeMap<&str, BTreeSet<char>> = shipped
         .iter()
-        .map(|t| (t.lang.as_str(), glyphs(t)))
+        .map(|t| (t.lang.as_str(), shown_glyphs(&langs, &t.lang)))
         .collect();
     let mut resolved = Resolved {
         default: default.clone(),

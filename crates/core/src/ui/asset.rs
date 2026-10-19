@@ -58,6 +58,7 @@ impl ScreenBlob {
 }
 
 /// A language's string table (`i18n/<lang>`), like [`ScreenBlob`].
+#[derive(Clone, Copy, Debug)]
 pub struct StringsBlob {
     id: BlobId,
     bytes: Option<&'static [u8]>,

@@ -1,0 +1,19 @@
+// Solid Eleven's strings for the engine's tools (issue #60): the sounds'
+// captions, which the game draws from the baked `i18n/en-US` table, and the
+// pause screen's keys (`ui/pause.ui.ron`), which the game reads through its
+// own tables (`ui::i18n::tr`) — kept equal to them here so `ui check` and
+// `access check` measure the real texts. The font is upper case and has no
+// brackets (`fonts/se_ui`'s `chars`).
+Strings(
+    lang: "en-US",
+    entries: {
+        "pause.title": "PAUSED",
+        "pause.resume": "RESUME",
+        "pause.substitute": "SUBSTITUTE",
+        "pause.quit": "QUIT MATCH",
+        "cap.whistle": "WHISTLE!",
+        "cap.cheer": "CROWD CHEERS",
+        "cap.ooh": "CROWD: OOH!",
+        "cap.post": "OFF THE POST",
+    },
+)

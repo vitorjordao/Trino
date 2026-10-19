@@ -16,9 +16,9 @@
                         kind: Stack(gap: 6, align: Center),
                         children: [
                             (kind: Text, key: "pause.title", text: "Paused", text_scale: 2),
-                            (kind: Button, id: "resume", key: "pause.resume", text: "Resume", on_click: "resume", size: (Px(128), Px(18))),
-                            (kind: Button, id: "options", key: "pause.options", text: "Options", on_click: "options", size: (Px(128), Px(18))),
-                            (kind: Button, id: "quit", key: "pause.quit", text: "Quit to title", on_click: "quit", size: (Px(128), Px(18))),
+                            (kind: Button, id: "resume", key: "pause.resume", text: "Resume", on_click: "resume", min: (128, 18), padding: (6, 3, 6, 3)),
+                            (kind: Button, id: "options", key: "pause.options", text: "Options", on_click: "options", min: (128, 18), padding: (6, 3, 6, 3)),
+                            (kind: Button, id: "quit", key: "pause.quit", text: "Quit to title", on_click: "quit", min: (128, 18), padding: (6, 3, 6, 3)),
                         ],
                     ),
                 ],

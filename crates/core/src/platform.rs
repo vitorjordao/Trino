@@ -238,6 +238,23 @@ pub trait Platform {
     /// elsewhere).
     fn detect_quality(&mut self) {}
 
+    /// The player's accessibility settings ([`crate::access`], issue #60):
+    /// color vision, text scale, high contrast, captions, reduced motion,
+    /// the flash guard, hold-to-toggle. The PC and the Web keep them for the
+    /// player (`<save>.access`, `localStorage`); the consoles keep them for
+    /// the session (a game stores [`AccessSettings::pack`](crate::AccessSettings::pack)
+    /// in its save to keep them longer). The default — a platform that keeps
+    /// nothing — is [`AccessSettings::DEFAULT`](crate::AccessSettings::DEFAULT).
+    fn access(&self) -> crate::AccessSettings {
+        crate::AccessSettings::DEFAULT
+    }
+
+    /// Change the accessibility settings. They apply at once (the next
+    /// `access()` returns them, clamped); the PC and the Web persist them
+    /// after the frame. A documented no-op on a platform that keeps none
+    /// (the default).
+    fn set_access(&mut self, _settings: crate::AccessSettings) {}
+
     /// The input bindings' state, on platforms where they can be remapped
     /// (PC). `None` on consoles.
     fn input_info(&self) -> Option<InputInfo> {

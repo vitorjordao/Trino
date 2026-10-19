@@ -1,0 +1,62 @@
+// Semantic colors (issue #60, docs/ACCESSIBILITY.md): what a color means,
+// its value, and what each color-vision mode shows instead. A game asks
+// `AccessData::color("castle64.door.green", settings.cvd)` (or `palette`
+// for a slotted mesh) and draws with the answer: the same draw, no shader,
+// on every target. `cargo xtask access check` keeps each `distinct` group
+// apart (ΔE ≥ min_delta_e) and each `contrast` pair readable, in every mode.
+(
+    version: 1,
+    colors: {
+        // castle64's stage doors: red and green read as one olive to a
+        // red-green deficiency, so those modes move them onto the
+        // blue-yellow axis (and apart in lightness for grayscale).
+        "castle64.door.green": (
+            base: (95, 205, 95),
+            protanopia: (240, 200, 60),
+            deuteranopia: (240, 200, 60),
+            tritanopia: (30, 90, 30),
+            grayscale: (235, 235, 235),
+            note: "door to green-hills",
+        ),
+        "castle64.door.red": (
+            base: (230, 95, 80),
+            protanopia: (90, 70, 40),
+            deuteranopia: (120, 70, 30),
+            tritanopia: (230, 60, 140),
+            grayscale: (70, 70, 70),
+            note: "door to lava-land",
+        ),
+        "castle64.door.blue": (
+            base: (95, 130, 235),
+            protanopia: (60, 140, 255),
+            deuteranopia: (60, 140, 255),
+            tritanopia: (40, 200, 220),
+            grayscale: (150, 150, 150),
+            note: "door to sky-tower",
+        ),
+        // The self-test's two teams (selftest::accessibility probes the
+        // swap through a slotted card).
+        "selftest.team_a": (
+            base: (220, 40, 40),
+            protanopia: (240, 160, 0),
+            deuteranopia: (240, 160, 0),
+            note: "the accessibility step's first team",
+        ),
+        "selftest.team_b": (
+            base: (40, 160, 60),
+            protanopia: (40, 90, 220),
+            deuteranopia: (40, 90, 220),
+            grayscale: (20, 20, 20),
+            note: "the accessibility step's second team",
+        ),
+        "hud.text": (base: (255, 255, 255)),
+        "hud.shadow": (base: (16, 16, 24)),
+    },
+    distinct: [
+        ["castle64.door.green", "castle64.door.red", "castle64.door.blue"],
+        ["selftest.team_a", "selftest.team_b"],
+    ],
+    contrast: [
+        (fg: "hud.text", bg: "hud.shadow", min: 7.0),
+    ],
+)

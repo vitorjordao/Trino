@@ -173,6 +173,7 @@ pub fn draw(g: &mut SolidElevenGame, r: &mut dyn Renderer) {
                 }
                 _ => {}
             }
+            captions(g, r);
         }
         Scene::Title => {
             title_backdrop(g, r, aspect);
@@ -344,6 +345,23 @@ const CEREMONY_PEOPLE: [Appearance; 22] = {
     }
     out
 };
+
+/// The match's captions (issue #60), over everything, in the menu font and
+/// the player's language; nothing while the queue is empty.
+fn captions(g: &SolidElevenGame, r: &mut dyn Renderer) {
+    let style = trino_core::CaptionStyle {
+        font: trino_core::FontId::from_path("fonts/se_ui"),
+        ..trino_core::CaptionStyle::DEFAULT
+    };
+    let lang = match g.settings.lang {
+        super::i18n::Lang::En => 0,
+        super::i18n::Lang::Pt => 1,
+    };
+    match g.caption_texts[lang].table() {
+        Some(t) => g.captions.draw(r, t, &style),
+        None => g.captions.draw(r, &trino_core::ui::NoStrings, &style),
+    }
+}
 
 /// Five players of `club` in its home kit: the captain first.
 fn ceremony_looks(club: u8) -> [Look; 5] {

@@ -1,0 +1,11 @@
+// The engine's own strings in English: castle64's captions (issue #60).
+// `caption = "cap.coin"` on a sound in assets/manifest.toml names a key
+// here; `cargo xtask access check` fails a key a language lacks.
+Strings(
+    lang: "en-US",
+    entries: {
+        "cap.coin": "[coin chimes]",
+        "cap.star": "[fanfare: star collected]",
+        "cap.hurt": "[ouch]",
+    },
+)

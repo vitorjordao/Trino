@@ -29,6 +29,7 @@ platforms, hardware): `docs/README.md`. Historical plans the engine was first bu
 | `add-asset` | sprites, sounds, music, models, fake objects, materials → manifest, bake, verify |
 | `blender-asset` | modeling / coloring / rigging / animating a model in Blender for Trino's real limits; export + `model inspect` gate |
 | `scene-authoring` | writing scenes, prefabs, materials as text; `scene check`; exporting scenes to console code |
+| `accessibility` | color vision through semantic palettes (`assets/palettes.ron`) and icons, captions, text scale and high contrast, motion/flash/hold helpers; `access check/shot`, the editor's Accessibility tab |
 | `ui-authoring` | menus, HUDs and dialogs as `ui/*.ui.ron` screens: layout per target, focus, string tables, `ui check/shot/export`, driving a screen from game code |
 | `editor` | running the editor, screenshot/selection/log hooks for agents, editor code map |
 | `build-n64` | ROM build via Docker, N64 pipeline troubleshooting |
@@ -668,6 +669,34 @@ overlay, and a measurement on real hardware (ares doesn't time the RDP).
     golden frame` and `shadow cost` (ares); PC goldens `tests/golden/pc/shadows_*.png`.
     castle64's player and Solid Eleven's players and ball use it; the hand-made discs
     are gone.
+- **Accessibility (2026-10-19, ADR 0026, GitHub #60, `docs/ACCESSIBILITY.md`):** the
+  player's settings and what honors them on every target.
+  - **Core (`trino_core::access`, `no_std`):** `AccessSettings` (`cvd`, `text_scale`
+    100–200, `high_contrast`, `captions`, `reduce_motion`, `flash_guard` on by default,
+    `hold_to_toggle`; `pack`/`unpack` = 3 bytes for a console save; `key=value` text),
+    `Platform::{access, set_access}` (defaults; `HostedAccess` in every backend: PC
+    `<save>.access` + `TRINO_ACCESS`, Web `localStorage` + `?access`, consoles for the
+    session). `access::color`: Machado 2009 simulation, WCAG contrast, CIE76 ΔE.
+  - **Color vision as content:** `assets/palettes.ron` (alternatives per mode, `distinct`
+    groups, `contrast` pairs) + the manifest's `caption*`/`important`/`direction` on
+    sounds and `cvd_icon` on sprites + `ui/themes/high_contrast.ron` → the `access/data`
+    (`TACC`) blob, baked with the UI blobs (`asset_pipeline::access`, no manifest entry);
+    `AccessBlob`/`AccessData::{color, palette, caption, icon, contrast_theme}`. The
+    palette swap is the draw the game already makes (a tint stays on the N64's RSP).
+  - **UI:** `UiEnv::with_access` (text scale in whole glyph pixels, `Theme::HIGH_CONTRAST`
+    or the project's, `cvd_icon` per node: TUIL v2, v1 still loads); defaults take the old
+    path (goldens unchanged).
+  - **Captions/motion/flash/input:** `Captions` (`wrap` an `Audio`, queue by mode and
+    priority, `draw`, `CaptionPlace::SecondScreen` on the 3DS), `CameraFx`, `ScreenFlash`
+    (≤ 3 flashes/s under the guard), `FlashMonitor` (PC strict mode warns on raw
+    strobes), `HoldToggle`.
+  - **Tools:** `cargo xtask access check|shot --json` (every screen at 200 % on each
+    target and language: overflow, safe area, budgets); the PC simulation view
+    (`PcRenderer::set_cvd_view`, `TRINO_CVD`); the editor's Accessibility tab (simulation
+    in every view, palettes, checklist; `TRINO_EDITOR_ACCESS`); the starter
+    `ui/accessibility.ui.ron`. Adopters: castle64's doors and captions, Solid Eleven's kits
+    (`dress_for`) and captions. Self-test step `accessibility`; goldens
+    `tests/golden/pc/access_*.png`.
 - **UI system (2026-10-18, ADR 0024, GitHub #58):** menus, HUDs and dialogs as data.
   - **Core (`trino_core::ui`, `no_std`, no allocation):** `UiScreen` (a static slice or a
     `TUIL` blob view), `Ui<N>` (slots, focus, scroll, 24 values, events), containers
@@ -933,6 +962,8 @@ cargo xtask ui check [screen..] [--platform n64|3ds|pc|web] [--lang l] [--json] 
 cargo xtask ui shot <screen> [--platform p] [--size WxH] [--lang l] [--scale S] [--focus id] [--out x.png] [--json]  # headless render (3DS: both screens)
 cargo xtask ui export <screen> <out.rs> [--json]                    # static Rust for include! (a game without blobs)
 cargo xtask ui list [--json]                                        # screens and languages
+cargo xtask access check [dir] [--platform p] [--json]              # palettes apart/readable per color-vision mode, theme 7:1, captions per language, every screen at 200 %
+cargo xtask access shot <screen|scene.ron> [--cvd m] [--view m|off] [--text 200] [--contrast] [--platform p] [--out x.png] [--json]   # as a player with those settings sees it
 cargo xtask agents sync   # mirror .agents/skills/ into .claude/skills/ (check: agents check)
 cargo test -p xtask --test water_shots -- --ignored   # water evidence: tiers, ripples, crate, bridge (target/evidence/water)
 cargo xtask new <name> --standalone <dir> [--git <url> --rev <r>]   # project outside this repo
@@ -1020,6 +1051,41 @@ cargo test --workspace
   beyond Rust.
 
 ## Pitfalls
+
+- **A new accessibility default must take the old code path.** `UiAccess::NONE` keeps the
+  text multiplier at exactly 1 and the screen's theme, so every golden stayed
+  unchanged (only `ui_options_*` moved: a new button); a "harmless" 0.999 or a rounded interface scale would have moved them
+  all. Put any new setting in the UI's layout key too, or a change doesn't re-lay out.
+- **Fixed UI boxes overflow at 200 % text.** Give controls `min: (w, h)` + `padding`
+  instead of `size: (Px(w), Px(h))` (the starter screens and Solid Eleven's pause did
+  that with unchanged goldens) and long lists a `Scroll` with a `max` height:
+  `access check` fails a node past the N64's safe area.
+- **The UI rounds scaled text to whole glyph pixels** (`UiAccess::text_mul`): at ×1 (the
+  consoles) 125 % draws at 100 % and 150 % at 200 %. That keeps bitmap fonts crisp and
+  the N64 on its integer-scale text path; don't "fix" it with a fractional scale.
+- **A palette draw leaves the N64's RSP; a tint doesn't.** Semantic colors on a slotted
+  mesh cost the CPU T&L there (`RspReject::Palette`); castle64's doors and Solid Eleven's
+  kits change a tint or pick between existing kits to stay on the RSP.
+- **Captions on the 3DS touch screen switch screens:** `CaptionPlace::SecondScreen` calls
+  `on_screen(Bottom)`, so draw captions after everything else on the top screen.
+- **A string table at the engine root changes `ui check`'s counts:** `assets/i18n/en-US.ron`
+  (castle64's captions) makes every root screen audited in en-US too (the fixtures report
+  each issue twice).
+- **Memory the RSP DMAs must outlive the command until `trino_drain`.** The water oracle
+  dropped its `Box<WaterCmd>` while the queued entry still pointed the overlay at the
+  box's static block: on main the freed memory happened to stay intact, but a larger
+  binary (#60) moved the 4 MB heap and the N64 test failed without the Expansion Pak
+  (vertex colors off by 199/255). Keep such boxes alive past the drain (or in a memo);
+  a test path that only "works" with the Pak is a use-after-free, not a precision bug.
+- **Never share `CARGO_TARGET_DIR` between two worktrees of this workspace.** The path
+  crates get the same metadata hash, so a build in the base worktree overwrites the
+  branch's `trino_core` rlib and the branch then fails with "no `access` in
+  `trino_core`" until its sources are touched. Give a comparison worktree its own target
+  (on a real disk), or touch `crates/*/src/lib.rs` afterwards.
+- **Parallel GPU tests can crash inside `libvulkan`** (`set_debug_utils_object_name` while
+  several devices are created at once, seen 2026-10-19 on this machine): a SIGSEGV of a
+  whole test binary, not a test failure. Rerun with `--test-threads=1` to tell the two
+  apart.
 
 - **Shadows land only on receivers on the blob and planar tiers.** A caster with no
   `set_shadow_receivers` plane under its bounding-sphere center draws nothing on the

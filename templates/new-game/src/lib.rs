@@ -10,13 +10,15 @@
 //! lays it out, moves the focus with the pad, the mouse or touch, and
 //! reports clicks. Options sets the music and effects volumes and, where
 //! the host has them, opens the engine's Graphics page (quality presets)
-//! and the Controls screen (key rebinding).
+//! and the Controls screen (key rebinding). The Accessibility screen sets
+//! the player's settings (`Platform::set_access`): every screen draws with
+//! their text size, high contrast and color-vision icons.
 
 #![cfg_attr(any(target_os = "none", target_os = "horizon"), no_std)]
 
 use trino_core::ui::{ScreenBlob, StringsBlob, UiEvent};
 use trino_core::{
-    Audio, BindDevice, Bus, Button, Color, FontId, Game, GraphicsOptions, InputState,
+    AccessSettings, Audio, BindDevice, CaptionMode, CvdMode, Bus, Button, Color, FontId, Game, GraphicsOptions, InputState,
     OptionsStyle, Platform, Renderer, SoundId, SpriteId, SpriteParams, Ui, UiEnv, Vec2,
 };
 
@@ -44,6 +46,8 @@ pub enum Mode {
     Options { from_pause: bool },
     /// Key rebinding, opened from Options (the PC).
     Controls { from_pause: bool },
+    /// The player's accessibility settings, opened from Options.
+    Access { from_pause: bool },
 }
 
 /// What a menu asks of the platform; `update_with` (which has it) applies it.
@@ -75,7 +79,14 @@ pub struct {{name_camel}}Game {
     pause: ScreenBlob,
     options: ScreenBlob,
     controls: ScreenBlob,
+    access: ScreenBlob,
     strings: StringsBlob,
+    /// The player's accessibility settings: read from the platform, changed
+    /// by the Accessibility screen, sent back (`dirty`) after the frame.
+    pub settings: AccessSettings,
+    dirty: bool,
+    /// The Accessibility screen's values are set (from `settings`).
+    shown: bool,
     /// The engine's Graphics page (quality presets on the PC and the Web).
     graphics: GraphicsOptions,
     ask: Option<Ask>,
@@ -103,7 +114,11 @@ impl {{name_camel}}Game {
             pause: ScreenBlob::new("pause"),
             options: ScreenBlob::new("options"),
             controls: ScreenBlob::new("controls"),
+            access: ScreenBlob::new("accessibility"),
             strings: StringsBlob::new("en-US"),
+            settings: AccessSettings::DEFAULT,
+            dirty: false,
+            shown: false,
             graphics: GraphicsOptions::new(),
             ask: None,
             waiting: false,
@@ -128,7 +143,10 @@ impl {{name_camel}}Game {
                 from_pause: self.mode == Mode::Paused,
             }),
             (Mode::Options { from_pause }, "controls") => Some(Mode::Controls { from_pause }),
-            (Mode::Controls { from_pause }, "back") => Some(Mode::Options { from_pause }),
+            (Mode::Options { from_pause }, "accessibility") => Some(Mode::Access { from_pause }),
+            (Mode::Controls { from_pause } | Mode::Access { from_pause }, "back") => {
+                Some(Mode::Options { from_pause })
+            }
             (Mode::Options { from_pause: true }, "back") => Some(Mode::Paused),
             (Mode::Options { from_pause: false }, "back") => Some(Mode::Title),
             _ => None,
@@ -142,6 +160,7 @@ impl {{name_camel}}Game {
             Mode::Paused => &self.pause,
             Mode::Options { .. } => &self.options,
             Mode::Controls { .. } => &self.controls,
+            Mode::Access { .. } => &self.access,
             Mode::Play => return,
         };
         if self.waiting {
@@ -167,9 +186,11 @@ impl {{name_camel}}Game {
                 UiEvent::Click { action, .. } => {
                     audio.play_sound(BEEP);
                     self.ask = self.ask.or(ask_for(action));
+                    self.change_access(action, 0);
                     self.action(action)
                 }
                 UiEvent::Changed { bind, value, .. } => {
+                    self.change_access(bind, value);
                     let bus = match bind {
                         "music" => Some(Bus::Music),
                         "sfx" => Some(Bus::Sfx),
@@ -192,6 +213,45 @@ impl {{name_camel}}Game {
     }
 }
 
+impl {{name_camel}}Game {
+    /// An Accessibility row changed (`cvd` and `captions` cycle on a click,
+    /// the rest carry their value).
+    fn change_access(&mut self, what: &str, value: i32) {
+        let s = &mut self.settings;
+        match what {
+            "cvd" => s.cvd = s.cvd.next(),
+            "captions" => s.captions = s.captions.next(),
+            "text" => s.text_scale = value.clamp(100, 200) as u8,
+            "contrast" => s.high_contrast = value != 0,
+            "motion" => s.reduce_motion = value != 0,
+            "flash" => s.flash_guard = value != 0,
+            "hold" => s.hold_to_toggle = value != 0,
+            _ => return,
+        }
+        self.dirty = true;
+        self.show_access();
+    }
+
+    /// The Accessibility screen's values from [`settings`](Self::settings).
+    fn show_access(&mut self) {
+        let s = self.settings;
+        let cvd = match s.cvd {
+            CvdMode::Off => "Off",
+            CvdMode::Protanopia => "Protan",
+            CvdMode::Deuteranopia => "Deutan",
+            CvdMode::Tritanopia => "Tritan",
+            CvdMode::Grayscale => "Gray",
+        };
+        self.ui.set_text("cvd", cvd);
+        self.ui.set_text("captions", s.captions.label());
+        self.ui.set("text", s.text_scale as i32);
+        self.ui.set_bool("contrast", s.high_contrast);
+        self.ui.set_bool("motion", s.reduce_motion);
+        self.ui.set_bool("flash", s.flash_guard);
+        self.ui.set_bool("hold", s.hold_to_toggle);
+    }
+}
+
 impl Game for {{name_camel}}Game {
     fn update_with(
         &mut self,
@@ -206,7 +266,14 @@ impl Game for {{name_camel}}Game {
         self.pause.get(platform);
         self.options.get(platform);
         self.controls.get(platform);
+        self.access.get(platform);
         self.strings.get(platform);
+        // The host's settings, unless the screen just changed them.
+        if !self.dirty && (platform.access() != self.settings || !self.shown) {
+            self.settings = platform.access();
+            self.show_access();
+            self.shown = true;
+        }
         self.interface_scale = platform
             .display()
             .map_or(1.0, |d| d.settings.interface_scale());
@@ -231,6 +298,9 @@ impl Game for {{name_camel}}Game {
             }
         }
         self.update(input, audio, dt);
+        if core::mem::take(&mut self.dirty) {
+            platform.set_access(self.settings);
+        }
         match self.ask.take() {
             Some(Ask::Graphics) => self.graphics.open(),
             Some(Ask::Rebind(button)) => platform.rebind(button, BindDevice::Keyboard),
@@ -285,12 +355,15 @@ impl Game for {{name_camel}}Game {
             Mode::Paused => Some(&self.pause),
             Mode::Options { .. } => Some(&self.options),
             Mode::Controls { .. } => Some(&self.controls),
+            Mode::Access { .. } => Some(&self.access),
         };
         if self.mode != Mode::Title {
             renderer.draw_sprite(PLAYER, self.pos, &SpriteParams::default());
         }
         if let Some(screen) = blob.and_then(ScreenBlob::screen) {
-            let env = UiEnv::of(renderer).with_interface_scale(self.interface_scale);
+            let env = UiEnv::of(renderer)
+                .with_interface_scale(self.interface_scale)
+                .with_access(&self.settings);
             match self.strings.table() {
                 Some(t) => self.ui.draw(renderer, screen, &env.with_strings(t)),
                 None => self.ui.draw(renderer, screen, &env),
@@ -376,6 +449,55 @@ mod tests {
         host.capturing = false;
         game.update_with(&mut host, &idle, &mut NullAudio, 0.016);
         assert!(host.reset && !game.ui.get_bool("waiting"));
+    }
+
+    /// A console-like host that keeps the accessibility settings.
+    #[derive(Default)]
+    struct Keeper {
+        access: AccessSettings,
+    }
+    impl Platform for Keeper {
+        fn now_micros(&self) -> u64 {
+            0
+        }
+        fn log(&self, _: &str) {}
+        fn access(&self) -> AccessSettings {
+            self.access
+        }
+        fn set_access(&mut self, s: AccessSettings) {
+            self.access = s;
+        }
+    }
+
+    #[test]
+    fn the_accessibility_screen_sets_the_platforms_settings() {
+        let mut game = {{name_camel}}Game::new(Vec2::new(320.0, 240.0));
+        game.mode = Mode::Options { from_pause: false };
+        assert_eq!(
+            game.action("accessibility"),
+            Some(Mode::Access { from_pause: false })
+        );
+        game.mode = Mode::Access { from_pause: false };
+        let mut host = Keeper::default();
+        let idle = InputState::default();
+        game.update_with(&mut host, &idle, &mut NullAudio, 0.016);
+        assert_eq!(game.ui.values().get("cvd", NO_ITEM), Some(text_value("Off")));
+        game.change_access("cvd", 0);
+        game.change_access("cvd", 0);
+        game.change_access("text", 175);
+        game.change_access("contrast", 1);
+        game.change_access("captions", 0);
+        game.update_with(&mut host, &idle, &mut NullAudio, 0.016);
+        assert_eq!(host.access.cvd, CvdMode::Deuteranopia);
+        assert_eq!(host.access.text_scale, 175);
+        assert!(host.access.high_contrast);
+        assert_eq!(host.access.captions, CaptionMode::Important);
+        assert_eq!(game.ui.values().get("cvd", NO_ITEM), Some(text_value("Deutan")));
+        // A change from the host (a saved file) shows on the screen.
+        host.access.reduce_motion = true;
+        game.update_with(&mut host, &idle, &mut NullAudio, 0.016);
+        assert!(game.ui.get_bool("motion"));
+        assert_eq!(game.action("back"), Some(Mode::Options { from_pause: false }));
     }
 
     #[test]

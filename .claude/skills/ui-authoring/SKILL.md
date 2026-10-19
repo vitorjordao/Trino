@@ -45,6 +45,16 @@ A running PC game, the editor's UI tab and an agent editing the file all see the
   `Volume 7` (the bound value is appended; `{}` places it).
 - `preview: {"volume": Int(7), "music": Bool(true), "rows": Int(3)}` is what tools show;
   the game sets the real values.
+- **Screens grow with the player's text (issue #60, `accessibility` skill):** give
+  controls `min: (w, h)` and `padding`, not fixed `size: (Px(w), Px(h))` — the same
+  picture at 100 % (the starter screens kept their goldens) and room at 200 % — and put
+  long lists in `Scroll(..)` with `max: (0, h)`. `cargo xtask access check` lays every
+  screen out at 200 % and fails overflow and nodes past the N64's safe area.
+- `cvd_icon: "sprites/x"` on a node shows that sprite at its right end while the
+  player's color-vision mode is on (a pattern for a colored marker).
+- Draw with the player's settings: `UiEnv::of(r).with_access(&platform.access())`
+  (text scale, high contrast, icons); the project's high-contrast theme is
+  `ui/themes/high_contrast.ron` (`with_contrast_theme`).
 
 ## Driving a screen from game code
 

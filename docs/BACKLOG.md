@@ -68,13 +68,28 @@ shipping a 3D game first**, then by cost:
     an AMD Radeon iGPU and an RX 7800 XT on Windows).
   - Dynamic resolution's full-size clear and MSAA resolve (1–3 ms on llvmpipe with 4×
     MSAA at half scale): a partial resolve if a preset with MSAA ever turns it on.
+- **Accessibility follow-ups (#60, ADR 0026)** (S–M each).
+  - The PC/Web correction filter (daltonization) for content without semantic palettes:
+    #64's post stack (the simulation view is review-only).
+  - Text scale for text a game draws itself (`draw_text` HUDs: castle64's counters,
+    Solid Eleven's hand-drawn menus); the UI system and the captions scale today.
+  - High-contrast outlines on key 3D objects (the issue's "outlines on gameplay
+    objects"): games read `high_contrast` today; an engine outline needs a tier per
+    target (an inverted hull on the consoles).
+  - The Inspector's palette slots by semantic name (`ModelParams::palette` in authored
+    content is P2 #13); the Accessibility tab edits the palettes today.
+  - Plan & Party's status colors and the rest of Solid Eleven's menus on semantic
+    palettes and screens; speaker names and colors for dialogue captions; caption fonts
+    per language with #59.
+  - A ready-made Accessibility page in the core (like `GraphicsOptions`) for games that
+    don't use the starter screen.
 - **UI system follow-ups (#58, ADR 0024)** (S–M each).
   - The rest of Solid Eleven's menus and Plan & Party's as screens (the pause menu is the
     first); each one moved deletes hand-placed coordinates and hit boxes.
   - Text entry (a name, a save slot): an on-screen keyboard screen for the consoles.
   - Transitions and animated focus (a slide, a fade) — today a screen changes in one frame.
-  - Localization beyond plain strings (#59: plurals, number and date formats) and text
-    scale with high-contrast themes (#60), both on top of `UiStrings` and `Theme`.
+  - Localization beyond plain strings (#59: plurals, number and date formats) on top of
+    `UiStrings`. ~~Text scale and high-contrast themes (#60)~~: **done** (ADR 0026).
   - The interface scale on the Graphics page (`DisplaySettings::ui_scale` is stored and
     applied, but only a game's own options page sets it).
   - A scissor for partly visible children in a `Scroll` (2D has none on the consoles, so
@@ -175,8 +190,8 @@ shipping a 3D game first**, then by cost:
     consoles.
 12. **Audio**: Doppler and occlusion through portals, only if a game needs them. From
     #53 (ADR 0021 follow-ups): tracker music (XM/MOD; libdragon's `xm64`) on every target;
-    Opus on the PC and the Web; stereo masters (mono today, stereo averaged); captions
-    per bus (#60); the 3DS audio thread's share of the second core in #56's CPU budget;
+    Opus on the PC and the Web; stereo masters (mono today, stereo averaged);
+    ~~captions (#60)~~ **done** per sound (ADR 0026); the 3DS audio thread's share of the second core in #56's CPU budget;
     a real-hardware listen on the N64 and the 3DS (ares and Azahar only so far); `auto`
     picking PCM16 on the PC/Web when Vorbis is bigger (Ogg's ~4 KB of headers make a
     0.05 s click 2× its PCM16 size — Solid Eleven's `se_click`).
@@ -239,6 +254,28 @@ shipping a 3D game first**, then by cost:
   time) and bless `tests/perf/` on purpose. Host benches stay as regression guards only.
 
 ---
+
+## Done — accessibility on every target: color vision through palettes, captions, text scale and high contrast, motion and flash guards (2026-10-19, branch `feat/60-accessibility`, GitHub #60, ADR 0026)
+
+| Item | Evidence |
+|---|---|
+| `trino_core::access` (`no_std`, zero deps): `AccessSettings` (+ `pack`/`unpack`, text), `HostedAccess`, `Platform::access`/`set_access` (defaults, no `GAME_API_VERSION` bump); PC `<save>.access` + `TRINO_ACCESS`, Web `localStorage` + `?access`, consoles for the session | `pack_round_trips_every_mode_and_refuses_blank_bytes`, `accessibility_settings_through_the_platform_and_the_file`, `access_settings_load_and_persist`, `platform_defaults_report_no_services`; the `accessibility` step's round trip on ares, Azahar and the browsers |
+| Color-vision math (Machado 2009, sRGB tables, WCAG contrast, CIE76 ΔE) | `simulation_matches_the_reference_values` (an independent float64 implementation, ±1) and three more |
+| Semantic palettes (`assets/palettes.ron`), icons (`cvd_icon` on sprites and UI nodes, TUIL v2), the high-contrast theme file, all in the `access/data` (`TACC`) blob on every target | `tacc_round_trips_and_answers_per_mode`, `damaged_tacc_blobs_are_refused`, `palettes_and_the_theme_bake_on_every_target_and_read_back`, `tuil_v2_carries_cvd_icons_and_v1_still_loads`, `cvd_icons_reach_the_bake_and_the_export` |
+| The palette swap: the same draw with the mode's palette, every target | `palette_swap_and_simulation_match_their_goldens` (`access_palettes.png`, `access_cvd_deuteranopia.png`); the step's palette probe on ares and Azahar |
+| Captions: manifest fields, the queue, `Captions::wrap` forwarding every `Audio` call, the box (3DS touch screen optional) | `the_caption_wrapper_forwards_every_call_and_captions_what_plays`, `captions_follow_the_mode_priority_and_time`, `captions_draw_a_readable_box_where_the_style_puts_it`; the step's caption box read back (on the touch screen on Azahar) |
+| UI text scale (whole glyph pixels), high contrast, icons; every existing golden unchanged | `the_ui_scales_text_in_whole_pixels_and_keeps_the_default_draws`, `high_contrast_and_color_vision_icons_change_only_the_look`, the UI goldens |
+| Motion, flashes, held input: `CameraFx`, `ScreenFlash`, `FlashMonitor` (strict-mode warning), `HoldToggle` | `the_flash_guard_holds_a_synthetic_strobe_to_three_a_second`, `strict_mode_finds_a_raw_strobe`, `camera_effects_damp_under_reduced_motion_and_fade_out`, `hold_to_toggle_latches_a_held_action` |
+| `cargo xtask access check\|shot` (`--json`); every screen at 200 % (overflow, safe area, budgets) | `access_cli.rs` (4 tests, a fixture with one problem of each kind) |
+| The PC simulation view (`set_cvd_view`, `TRINO_CVD`), both screens, WebGL2 | `the_simulation_view_matches_the_cpu_simulation`, `webgl2_shaders_translate_to_glsl_es_300` |
+| Editor: the Accessibility tab (simulation in every view, palettes, checklist), View › Accessibility simulation, `TRINO_EDITOR_ACCESS`, the UI tab's preview at the simulated settings | `accessibility_tab_palettes_simulation_and_checklist`, the layout audit at 960×600 and 1600×940 |
+| Adopters: castle64's doors and captions, Solid Eleven's kits for every color vision and its captions, the starter Accessibility screen; the starter screens and Solid Eleven's pause menu grow with their text | `kits_stay_apart_for_every_color_vision`, `the_accessibility_screen_sets_the_platforms_settings`, `access_check_passes_on_the_projects_the_repo_ships` |
+
+Deviations (ADR 0026): the correction filter on the PC/Web stays with #64 (the view is a
+simulation for review); high-contrast outlines on 3D objects and text scale for a game's
+own `draw_text` are follow-ups; the semantic colors are edited in the Accessibility tab,
+not the Inspector; text scale is whole glyph pixels where the UI scales by whole pixels
+(100 % or 200 % on the consoles).
 
 ## Done — shadows per tier: blobs on the N64, planar on the 3DS, a shadow map on the PC and the Web (2026-10-18, branch `feat/57-shadows`, GitHub #57, ADR 0025)
 

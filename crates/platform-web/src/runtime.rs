@@ -50,6 +50,16 @@ pub struct WebConfig {
     /// Read and store the player's quality choice in `localStorage` (not
     /// in a self-test or a smoke run).
     pub keep_quality: bool,
+    /// Accessibility settings forced for this run
+    /// (`?access=cvd=deuteranopia,text_scale=200`), over the stored ones.
+    pub access: Option<String>,
+    /// Read and store the player's accessibility settings in `localStorage`
+    /// (`trino-access:<name>`; not in a self-test, a smoke run or under
+    /// `?access`).
+    pub keep_access: bool,
+    /// The color-vision simulation view (`?cvd=deuteranopia`, a review
+    /// tool like the PC's `TRINO_CVD`).
+    pub cvd: trino_core::CvdMode,
 }
 
 impl WebConfig {
@@ -82,6 +92,12 @@ impl WebConfig {
                 .get("quality")
                 .or_else(|| deterministic.then(|| "high".into())),
             keep_quality: !deterministic,
+            access: query.get("access"),
+            keep_access: !deterministic && query.get("access").is_none(),
+            cvd: query
+                .get("cvd")
+                .and_then(|m| trino_core::CvdMode::parse(&m))
+                .unwrap_or_default(),
         }
     }
 }
@@ -162,6 +178,9 @@ pub struct WebHost {
     /// in `localStorage`, the PC's `<save_name>.audio`).
     audio_key: String,
     audio_saved: trino_core::BusSettings,
+    /// The accessibility settings' `localStorage` key
+    /// (`trino-access:<save_name>`, the PC's `<save_name>.access`).
+    access_key: String,
     /// The quality presets (#55): start, calibration, cap, requests.
     quality: crate::quality::WebQuality,
     _observer: Option<Observer>,
@@ -272,6 +291,18 @@ impl WebHost {
         let texture_target = TextureTarget::of(&renderer);
         crate::js::trino_info("texture_target", texture_target.name());
         let audio_key = format!("trino-audio:{}", config.save_name);
+        let access_key = format!("trino-access:{}", config.save_name);
+        let mut platform = platform;
+        let mut access = trino_core::AccessSettings::DEFAULT;
+        if config.keep_access
+            && let Some(t) = local_storage().and_then(|s| s.get_item(&access_key).ok().flatten())
+        {
+            access = trino_core::AccessSettings::parse_text(access, &t);
+        }
+        if let Some(forced) = &config.access {
+            access = trino_core::AccessSettings::parse_text(access, forced);
+        }
+        platform.access.load(access);
         let quality = crate::quality::WebQuality::new(
             &config.save_name,
             config.quality.clone(),
@@ -295,8 +326,10 @@ impl WebHost {
             last_input: String::new(),
             audio_key,
             audio_saved: trino_core::BusSettings::default(),
+            access_key,
             quality,
         };
+        host.renderer.set_cvd_view(host.config.cvd);
         host.sync_size();
         host.end_audio_state();
         Ok(host)
@@ -534,6 +567,15 @@ impl WebHost {
             if let Some(s) = local_storage() {
                 let _ = s.set_item(&self.audio_key, &crate::sound::settings_to_text(&now));
             }
+        }
+        // The game changed the player's accessibility settings: store them.
+        if let Some(a) = self.platform.access.take_change()
+            && self.config.keep_access
+            && let Some(s) = local_storage()
+        {
+            let mut text = String::new();
+            let _ = a.write_text(&mut text);
+            let _ = s.set_item(&self.access_key, &text);
         }
         let running = self.audio.running();
         if self.last_audio != Some(running) {

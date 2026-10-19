@@ -71,6 +71,8 @@ fn help_and_no_arguments_list_every_command() {
         "gen-assets",
         "scene check",
         "scene export",
+        "access check",
+        "access shot",
         "model inspect",
         "blender smoke",
         "agents <sync|check>",
@@ -400,9 +402,12 @@ fn assets_pc_bakes_the_repo_manifest() {
     };
     let ui = files("ui", ".ui.ron") + files("assets/i18n", ".ron");
     assert!(ui > 0, "the self-test's screen");
+    // The accessibility data (palettes, captions, icons; issue #60) is one
+    // more generated blob, `access/data`.
+    let access = root().join("assets/palettes.ron").exists() as usize;
     assert_eq!(
         count,
-        all + fonts + mix + ui,
+        all + fonts + mix + ui + access,
         "every manifest entry is baked"
     );
     let index = std::fs::read_to_string(root().join("target/assets/pc/index.toml")).unwrap();
@@ -418,7 +423,7 @@ fn assets_pc_bakes_the_repo_manifest() {
     // like any other blob.
     assert_eq!(
         kind("blob"),
-        declared(&["blobs", "scenes", "particles"]) + ui
+        declared(&["blobs", "scenes", "particles"]) + ui + access
     );
 }
 

@@ -1,0 +1,11 @@
+# A project with one problem of each kind `cargo xtask access check` finds
+# (xtask/tests/access_cli.rs).
+version = 1
+
+[sounds.alarm]
+file = "sounds/alarm.wav"
+important = true
+
+[sounds.whistle]
+file = "sounds/whistle.wav"
+caption = "cap.whistle"

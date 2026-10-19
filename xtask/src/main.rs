@@ -4,6 +4,7 @@
 //! target. Wraps cargo, the asset pipeline, Docker (N64) and emulators so
 //! contributors and CI never memorize per-platform incantations.
 
+mod access;
 mod agents;
 mod assets_cmd;
 mod audio;
@@ -134,6 +135,15 @@ commands:
   ui export <screen> <out.rs> [--platform ..] [--json]
                        a screen as no_std Rust (static UiScreen) for games
   ui list [--json]     the screens and the string tables
+  access check [dir] [--platform n64|3ds|pc|web] [--json]
+                       accessibility: semantic palettes apart and readable
+                       in every color-vision mode, the high-contrast theme,
+                       caption keys in every language, UI at 200 % text
+  access shot <screen|scene.ron> [--cvd <mode>] [--view <mode>|off]
+      [--text 100..200] [--contrast] [--platform ..] [--size WxH]
+      [--lang <lang>] [--out <file.png>] [--json]
+                       render a screen or scene as a player with those
+                       settings gets it, seen through the CVD simulation
   impostor new <name> --model models/x [--views N] [--pitch DEG] [--tile PX]
   impostor bake <name>.. | --all
                        pre-render a model from N yaws into a billboard atlas
@@ -452,6 +462,15 @@ fn main() -> ExitCode {
             }
             let rest: Vec<&str> = rest.iter().map(String::as_str).collect();
             ui::run(&project, &rest)
+        }
+        (Some("access"), _) => {
+            let mut rest: Vec<String> = args.iter().skip(1).cloned().collect();
+            // `--out` was taken with the Web's options above.
+            if let Some(out) = &web_build.out {
+                rest.extend(["--out".to_string(), out.display().to_string()]);
+            }
+            let rest: Vec<&str> = rest.iter().map(String::as_str).collect();
+            access::run(&project, &rest)
         }
         (Some("impostor"), _) => {
             let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();

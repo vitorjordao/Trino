@@ -30,6 +30,7 @@
 //! - Removing/renaming a field or changing its meaning bumps the version
 //!   and adds a migration. Adding an optional field with a default does not.
 
+pub mod access;
 pub mod bake;
 pub mod budget;
 pub mod codegen;

@@ -1,0 +1,15 @@
+// Solid Eleven in Portuguese: see en-US.ron.
+Strings(
+    lang: "pt-BR",
+    fallback: "en-US",
+    entries: {
+        "pause.title": "PAUSADO",
+        "pause.resume": "VOLTAR AO JOGO",
+        "pause.substitute": "SUBSTITUIR",
+        "pause.quit": "ABANDONAR",
+        "cap.whistle": "APITO!",
+        "cap.cheer": "TORCIDA VIBRA",
+        "cap.ooh": "TORCIDA: UUH!",
+        "cap.post": "NA TRAVE",
+    },
+)

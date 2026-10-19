@@ -30,6 +30,8 @@ pub struct N64Platform {
     /// The asset groups and their loader's state (issue #56,
     /// `N64Assets::pump`).
     pub(crate) groups: crate::assets::Groups,
+    /// Accessibility settings, for the session (`Platform::access`).
+    access: trino_core::HostedAccess,
 }
 
 /// An unfinished save: the planned body, how much of it is on the EEPROM,
@@ -68,6 +70,7 @@ impl N64Platform {
             lz: None,
             tier: runtime::hw_tier(),
             groups: crate::assets::Groups::new(),
+            access: trino_core::HostedAccess::new(),
         }
     }
 
@@ -173,6 +176,17 @@ impl Platform for N64Platform {
 
     fn hw_tier(&self) -> trino_core::HwTier {
         self.tier
+    }
+
+    /// The player's accessibility settings for this session (issue #60):
+    /// RAM only; a game keeps them across power cycles by storing
+    /// `AccessSettings::pack` in its own save.
+    fn access(&self) -> trino_core::AccessSettings {
+        self.access.get()
+    }
+
+    fn set_access(&mut self, settings: trino_core::AccessSettings) {
+        self.access.set(settings);
     }
 
     /// The N64's fixed preset (issue #55): `Low` on both tiers, nothing

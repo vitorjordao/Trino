@@ -98,7 +98,14 @@ fn profile_of(family: Family) -> SimProfile {
 
 /// What a preview and the issues were made from: the edit, the target,
 /// the language, the assets, the string tables.
-type Key = (u64, usize, Option<String>, u64, u64);
+type Key = (
+    u64,
+    usize,
+    Option<String>,
+    u64,
+    u64,
+    trino_core::AccessSettings,
+);
 
 pub struct UiScreens {
     /// The project's screens, sorted.
@@ -127,6 +134,9 @@ pub struct UiScreens {
     pub langs: Langs,
     pub langs_error: Option<String>,
     langs_rev: u64,
+    /// The Accessibility tab's simulation (issue #60): the preview's text
+    /// size, high contrast, color-vision icons and simulation view.
+    pub access: trino_core::AccessSettings,
     /// Overlays: the pad's focus order, overflowing texts.
     pub show_focus: bool,
     pub show_overflow: bool,
@@ -158,6 +168,7 @@ impl UiScreens {
             langs: Langs::default(),
             langs_error: None,
             langs_rev: 0,
+            access: trino_core::AccessSettings::DEFAULT,
             show_focus: true,
             show_overflow: true,
             new_name: None,
@@ -428,6 +439,7 @@ impl UiScreens {
             self.lang.clone(),
             project.generation,
             self.langs_rev,
+            self.access,
         );
         let target = &TARGETS[self.target];
         if self.issues_key.as_ref() != Some(&key) {
@@ -444,6 +456,7 @@ impl UiScreens {
                     caps,
                     lang: self.lang.as_deref(),
                     interface_scale: 1.0,
+                    access: ui_access(&project.root, &self.access),
                 },
                 &fonts(project),
                 &self.langs,
@@ -461,6 +474,8 @@ impl UiScreens {
             .preview
             .get_or_insert_with(|| UiPreview::new(rs.clone(), profile));
         if p.key.as_ref() != Some(&key) {
+            p.access = ui_access(&project.root, &self.access);
+            p.simulate = self.access.cvd;
             p.render(ctx, def, project, &self.langs, self.lang.as_deref(), target);
             p.key = Some(key);
         }
@@ -826,6 +841,10 @@ pub struct UiPreview {
     uploaded: Option<u64>,
     /// Where the last frame put the screens.
     pub placed: Option<Placed>,
+    /// What the player's settings change in the screen, and the color
+    /// vision the picture is shown through.
+    access: trino_core::ui::UiAccess,
+    simulate: trino_core::CvdMode,
 }
 
 impl UiPreview {
@@ -850,6 +869,8 @@ impl UiPreview {
             key: None,
             uploaded: None,
             placed: None,
+            access: trino_core::ui::UiAccess::NONE,
+            simulate: trino_core::CvdMode::Off,
         }
     }
 
@@ -893,8 +914,12 @@ impl UiPreview {
         *ui = Ui::new();
         apply_preview(ui, def);
         let idle = InputState::default();
+        r.set_cvd_view(self.simulate);
         for frame in 0..2 {
-            let env = UiEnv::of(&*r);
+            let env = UiEnv {
+                access: self.access,
+                ..UiEnv::of(&*r)
+            };
             let env = match &strings {
                 Some(s) => env.with_strings(s),
                 None => env,
@@ -1043,6 +1068,25 @@ fn pad_order<const N: usize>(ui: &Ui<N>, screen: &UiScreen<'_>) -> Vec<usize> {
         }
     }
     order
+}
+
+/// The UI's accessibility for a preview: the simulated settings and the
+/// project's own high-contrast theme (`ui/themes/high_contrast.ron`).
+fn ui_access(root: &Path, s: &trino_core::AccessSettings) -> trino_core::ui::UiAccess {
+    let contrast = if s.high_contrast {
+        trino_scene::access::load_theme(root)
+            .ok()
+            .flatten()
+            .map(|t| trino_scene::access::contrast_theme(&t))
+    } else {
+        None
+    };
+    trino_core::ui::UiAccess {
+        text_scale: s.text_factor(),
+        high_contrast: s.high_contrast,
+        contrast,
+        cvd: s.cvd,
+    }
 }
 
 #[cfg(test)]

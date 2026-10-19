@@ -13,6 +13,7 @@ explain the engine by topic and link the detailed material instead of repeating 
 | [ASSETS.md](ASSETS.md) | The manifest, masters and per-platform overrides, glTF to TMDL, fake objects, Blender, materials, impostors, particles, baked scenes, UI screens and string tables, validation commands |
 | [PLATFORMS.md](PLATFORMS.md) | PC (console looks, strict mode, live reload), Web (wasm, WebGPU/WebGL2, the browser self-test), N64 (Docker toolchain, ares), 3DS (devkitPro, Azahar), external projects |
 | [HARDWARE.md](HARDWARE.md) | Deploying to a real N64 (SummerCart64, EverDrive 64) or 3DS (3dslink), the debug log in the terminal, Luma3DS gdb |
+| [ACCESSIBILITY.md](ACCESSIBILITY.md) | The player's accessibility settings on every target: color vision through semantic palettes and icons, text scale and high contrast, captions, reduced motion, the flash guard, hold-to-toggle; `access check` and the editor's simulation |
 | [TESTING.md](TESTING.md) | The kinds of tests, coverage, and the feature-to-test matrix that a guard test keeps current |
 | [BACKLOG.md](BACKLOG.md) | The ranked roadmap and the record of what each pass delivered |
 | [SOLID_ELEVEN.md](SOLID_ELEVEN.md) | Solid Eleven, the football demo and `football` project template: playing it, its rules, AI and career, its art pipeline, performance on each console, tests, and customizing it |
@@ -27,6 +28,7 @@ they read just as well for people. Each one is the most detailed source for its 
 | [add-asset](../.agents/skills/add-asset/SKILL.md) | Every asset kind: manifest entries, formats, baking, live reload |
 | [blender-asset](../.agents/skills/blender-asset/SKILL.md) | Modeling, coloring, rigging and exporting within Trino's limits |
 | [scene-authoring](../.agents/skills/scene-authoring/SKILL.md) | Scenes, prefabs and materials as text; `scene check`, `scene export` |
+| [accessibility](../.agents/skills/accessibility/SKILL.md) | Semantic palettes, captions, text scale and high contrast; `access check`, `access shot`, the editor's simulation |
 | [ui-authoring](../.agents/skills/ui-authoring/SKILL.md) | Menus, HUDs and dialogs as `ui/*.ui.ron` screens; `ui check`, `ui shot`, driving a screen from game code |
 | [editor](../.agents/skills/editor/SKILL.md) | Running and driving the editor, its hooks, its code map |
 | [build-n64](../.agents/skills/build-n64/SKILL.md), [build-3ds](../.agents/skills/build-3ds/SKILL.md) | How the console builds work and how to fix them |
@@ -62,6 +64,7 @@ they read just as well for people. Each one is the most detailed source for its 
 | [0023](adr/0023-quality-presets.md) | Quality presets for the PC and the Web: Low to Ultra, render scale with upscale, dynamic resolution, frame pacing, an auto-detect bench |
 | [0024](adr/0024-ui-system.md) | A declarative UI system for every target: `ui/*.ui.ron` screens, whole-pixel layout with safe areas and the 3DS touch screen, pad/mouse/touch focus, string tables, budgets, `ui check` |
 | [0025](adr/0025-shadows-per-tier.md) | Shadows per tier: blobs on the N64, planar shadows on the 3DS, a shadow map on the PC and the Web; depth-safe placement, scene shadows and receivers, budget, editor views |
+| [0026](adr/0026-accessibility.md) | Accessibility on every target: settings and persistence, semantic palettes per color-vision mode (no shader), icons, captions, text scale and high contrast, motion and flash guards, `access check`, the simulation view |
 
 ## Plans and history
 

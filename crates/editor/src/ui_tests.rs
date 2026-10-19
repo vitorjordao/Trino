@@ -1029,6 +1029,13 @@ fn editor_layout_is_clean_at_minimum_and_default_sizes() {
         h.run_steps(3);
         wait_for(&mut h, "the memory plans", |a| a.groups.measured());
         crate::layout_audit::assert_clean(&h, size, true, &what("Memory tab"));
+        // The Accessibility tab (issue #60): simulation, colors, checklist.
+        h.state_mut().cmds.push(Cmd::FocusTab(Tab::Accessibility));
+        h.run_steps(3);
+        wait_for(&mut h, "the accessibility checklist", |a| {
+            a.access.report.is_some()
+        });
+        crate::layout_audit::assert_clean(&h, size, true, &what("Accessibility tab"));
         h.state_mut().cmds.push(Cmd::FocusTab(Tab::Assets));
         h.state_mut().assets_tab = crate::panels::assets::AssetTab::Sprites;
         h.state_mut().groups.filter = Some("selftest_level".into());
@@ -2063,6 +2070,92 @@ fn gizmo_drags_grab_the_handle_under_the_press() {
     leave_temp_project(&repo);
 }
 
+/// Accessibility from the editor (issue #60): the tab's checklist is the
+/// CLI's, its color-vision simulation reaches the Scene, Game and UI views
+/// (and View › Accessibility simulation turns it off), an edit to a
+/// semantic color is written to `assets/palettes.ron` and the checklist
+/// reruns, and an outside edit of the file shows live.
+#[test]
+#[ignore = "changes cwd/env: run alone with --ignored --test-threads=1"]
+fn accessibility_tab_palettes_simulation_and_checklist() {
+    use crate::app::{Cmd, Tab};
+    use trino_core::CvdMode;
+    let Some((mut h, _tmp, repo)) = temp_project_app(egui::vec2(1600.0, 1000.0)) else {
+        return;
+    };
+    h.state_mut().cmds.push(Cmd::FocusTab(Tab::Accessibility));
+    h.run_steps(3);
+    wait_for(&mut h, "the checklist", |a| a.access.report.is_some());
+    {
+        let r = h.state().access.report.as_ref().unwrap().as_ref().unwrap();
+        assert!(r.findings.is_empty(), "{:#?}", r.findings);
+        assert_eq!(r.colors, 7);
+        assert!(r.checklist.iter().all(|l| l.passed));
+    }
+    assert!(h.query_by_label("castle64.door.green").is_some());
+    assert!(
+        h.query_all_by_label_contains("stay apart in every mode")
+            .count()
+            >= 2
+    );
+
+    // The simulation: the tab's mode reaches every view.
+    // The simulation row's button (the colors table names the modes too).
+    h.query_all_by_label("Deuteranopia")
+        .next()
+        .unwrap()
+        .click_accesskit();
+    h.run_steps(4);
+    assert_eq!(h.state().access.preview.cvd, CvdMode::Deuteranopia);
+    assert_eq!(h.state().scene_view.cvd_view, CvdMode::Deuteranopia);
+    assert_eq!(h.state().game_view.cvd_view, CvdMode::Deuteranopia);
+    assert_eq!(
+        h.state().ui_screens.access.cvd,
+        CvdMode::Off,
+        "the UI tab picks it up when shown"
+    );
+    click(&mut h, "View");
+    click(&mut h, "Accessibility simulation");
+    click(&mut h, "Color vision: as drawn");
+    h.run_steps(4);
+    assert_eq!(h.state().scene_view.cvd_view, CvdMode::Off);
+
+    // An edit that makes two teams one color for a deuteranope: written,
+    // and the checklist says so.
+    let before = std::fs::read_to_string("assets/palettes.ron").unwrap();
+    {
+        let a = &mut h.state_mut().access;
+        a.palettes
+            .colors
+            .get_mut("selftest.team_a")
+            .unwrap()
+            .set_alternative(CvdMode::Deuteranopia, Some([40, 90, 220]));
+        a.edited();
+    }
+    h.run_steps(4);
+    let text = std::fs::read_to_string("assets/palettes.ron").unwrap();
+    assert!(text.contains("deuteranopia: Some((40, 90, 220))"), "{text}");
+    {
+        let r = h.state().access.report.as_ref().unwrap().as_ref().unwrap();
+        assert!(
+            r.findings
+                .iter()
+                .any(|f| f.mode == Some("deuteranopia") && f.subject.contains("selftest.team_a")),
+            "{:#?}",
+            r.findings
+        );
+    }
+    // An outside edit (an agent, a text editor) shows live.
+    std::fs::write("assets/palettes.ron", &before).unwrap();
+    wait_for(&mut h, "the outside edit", |a| {
+        a.access.palettes.colors["selftest.team_a"].deuteranopia == Some([240, 160, 0])
+    });
+    h.run_steps(3);
+    let r = h.state().access.report.as_ref().unwrap().as_ref().unwrap();
+    assert!(r.findings.is_empty(), "{:#?}", r.findings);
+    leave_temp_project(&repo);
+}
+
 /// Ambient occlusion from the editor: the scene's screen-space AO panel
 /// (checkbox, saved to the file, undoable), the Scene view's modes from the
 /// View menu (off, the mask), and a model's baked AO written to the
@@ -2839,7 +2932,25 @@ fn ui_tab_edits_screens_and_follows_their_files() {
                 repo.join(format!("templates/standalone/ui/{name}.ui.ron")),
             )
             .unwrap();
-            let text = text.replace("{{name}}", "orbit-cat");
+            let mut text = text.replace("{{name}}", "orbit-cat");
+            if name == "pause" {
+                // A fixed box for Quit, so pt-BR's longer text overflows it
+                // (the starter screens grow with their text since #60).
+                text = text
+                    .lines()
+                    .map(|l| {
+                        if l.contains("id: \"quit\"") {
+                            l.replace(
+                                "min: (128, 18), padding: (6, 3, 6, 3)",
+                                "size: (Px(128), Px(18))",
+                            )
+                        } else {
+                            l.to_string()
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+            }
             std::fs::write(dir.join(format!("ui/{name}.ui.ron")), text).unwrap();
         }
         std::fs::create_dir_all(dir.join("assets/i18n")).unwrap();

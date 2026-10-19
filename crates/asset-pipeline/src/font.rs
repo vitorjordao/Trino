@@ -116,6 +116,7 @@ impl FontDecl {
             quality: self.quality.clone(),
             min_psnr: self.min_psnr,
             groups: self.groups.clone(),
+            cvd_icon: None,
         }
     }
 }

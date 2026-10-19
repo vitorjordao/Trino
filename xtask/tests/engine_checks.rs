@@ -440,3 +440,26 @@ fn the_ui_layout_step_passes_at_pc_resolutions() {
         );
     }
 }
+
+/// The `accessibility` step (issue #60) probes on every PC profile: the
+/// palette swap, the caption box (on the 3DS profile's touch screen too),
+/// the high-contrast focus and the settings round trip.
+#[test]
+fn the_accessibility_step_passes_on_every_profile() {
+    let save_dir = tempfile::tempdir().unwrap();
+    for profile in [
+        SimProfile::N64,
+        SimProfile::N3ds,
+        SimProfile::Native,
+        SimProfile::Web,
+    ] {
+        let Some((mut renderer, mut platform)) = pc_target(profile, save_dir.path()) else {
+            return;
+        };
+        assert_eq!(
+            castle64::selftest::accessibility(&mut renderer, &mut platform),
+            Ok(true),
+            "{profile:?}"
+        );
+    }
+}

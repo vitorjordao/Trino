@@ -2,16 +2,17 @@
 //! target). Zero-copy: [`UiScreen::parse`] checks the header, the tree and
 //! the string pool once, then nodes decode on demand.
 //!
-//! Layout (little-endian), version 1:
+//! Layout (little-endian), version 2 (version 1 still loads: its records
+//! are 94 bytes and have no `cvd_icon`):
 //!
 //! | Offset | Size | Field |
 //! |---|---|---|
 //! | 0 | 4 | magic `TUIL` |
-//! | 4 | 2 | version (1) |
+//! | 4 | 2 | version (2) |
 //! | 6 | 2 | flags: bit 0 fractional scaling, bit 1 wrap focus |
 //! | 8 | 4 | reference width, height (u16 each) |
 //! | 12 | 2 | node count |
-//! | 14 | 2 | record size (≥ 94; longer records are read by their prefix) |
+//! | 14 | 2 | record size (≥ 102, ≥ 94 in version 1; longer records are read by their prefix) |
 //! | 16 | 2 | first focus node (`0xffff` = none) |
 //! | 18 | 2 | reserved |
 //! | 20 | 8 | name, on_back (string refs) |
@@ -26,23 +27,26 @@
 //! color, 1 bottom screen, 2 bleed, 3 has font), parent, end, anchor,
 //! visible_on, offset, size (kind + value per axis), min, max, padding,
 //! text scale, align, valign, overflow, color, font, four focus overrides,
-//! seven string refs (id, text, key, bind, action, visible_if, enabled_if)
-//! and a 16-byte payload per kind (see [`encode_record`]).
+//! seven string refs (id, text, key, bind, action, visible_if, enabled_if),
+//! a 16-byte payload per kind (see [`encode_record`]) and, from version 2,
+//! the `cvd_icon` (sprite id, width and height as u16; sprite 0 = none).
 
 use super::UiError;
 use super::node::{
-    Align, Anchor, Dir, ImageFit, Justify, NodeKind, Nodes, Overflow, Scaling, Size, Targets,
-    Theme, UiNode, UiScreen, VAlign,
+    Align, Anchor, CvdIcon, Dir, ImageFit, Justify, NodeKind, Nodes, Overflow, Scaling, Size,
+    Targets, Theme, UiNode, UiScreen, VAlign,
 };
 use crate::math::Color;
 use crate::render::{FontId, ModelId, Screen, SpriteId, TextAlign};
 
 pub const MAGIC: &[u8; 4] = b"TUIL";
-pub const VERSION: u16 = 1;
+pub const VERSION: u16 = 2;
 /// Header bytes.
 pub const HEADER: usize = 84;
-/// Node record bytes (version 1).
-pub const RECORD: usize = 94;
+/// Node record bytes (version 2).
+pub const RECORD: usize = 102;
+/// Node record bytes in version 1 (no `cvd_icon`).
+pub const RECORD_V1: usize = 94;
 
 /// A baked screen's node records and string pool ([`Nodes::Baked`]).
 #[derive(Clone, Copy, Debug)]
@@ -51,6 +55,8 @@ pub struct Records<'a> {
     size: usize,
     count: usize,
     pool: &'a str,
+    /// Whether the records carry a `cvd_icon` (version 2).
+    icons: bool,
 }
 
 impl<'a> Records<'a> {
@@ -71,7 +77,7 @@ impl<'a> Records<'a> {
     /// Node `i` (panics past [`len`](Self::len)).
     pub fn node(&self, i: usize) -> UiNode<'a> {
         assert!(i < self.count, "TUIL node {i} of {}", self.count);
-        let b = &self.records[i * self.size..i * self.size + RECORD];
+        let b = &self.records[i * self.size..i * self.size + self.size];
         let flags = b[1];
         let s = |at| self.str(b, at);
         UiNode {
@@ -118,6 +124,14 @@ impl<'a> Records<'a> {
             visible_if: s(70),
             enabled_if: s(74),
             nav: [rd16(b, 42), rd16(b, 44), rd16(b, 46), rd16(b, 48)],
+            cvd_icon: if self.icons && rd32(b, 94) != 0 {
+                Some(CvdIcon {
+                    sprite: SpriteId(rd32(b, 94)),
+                    size: (rd16(b, 98), rd16(b, 100)),
+                })
+            } else {
+                None
+            },
         }
     }
 }
@@ -132,7 +146,7 @@ impl<'a> UiScreen<'a> {
             return Err(UiError::BadMagic);
         }
         let version = rd16(bytes, 4);
-        if version != VERSION {
+        if version != VERSION && version != 1 {
             return Err(UiError::UnsupportedVersion(version));
         }
         let count = rd16(bytes, 12) as usize;
@@ -140,7 +154,7 @@ impl<'a> UiScreen<'a> {
         let at = rd32(bytes, 28) as usize;
         let pool_at = rd32(bytes, 32) as usize;
         let pool_len = rd32(bytes, 36) as usize;
-        if size < RECORD {
+        if size < if version == 1 { RECORD_V1 } else { RECORD } {
             return Err(UiError::Truncated);
         }
         let records = at
@@ -157,6 +171,7 @@ impl<'a> UiScreen<'a> {
             size,
             count,
             pool,
+            icons: version >= 2,
         };
         // Every string ref must land on characters of the pool.
         for i in 0..count {
@@ -330,6 +345,11 @@ pub fn encode_record(
         wr16(&mut b, 52 + 4 * k, l);
     }
     b[78..94].copy_from_slice(&payload);
+    if let Some(icon) = node.cvd_icon {
+        wr32(&mut b, 94, icon.sprite.0);
+        wr16(&mut b, 98, icon.size.0);
+        wr16(&mut b, 100, icon.size.1);
+    }
     b
 }
 

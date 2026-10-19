@@ -1,7 +1,8 @@
 // Options: the music and effects volumes (sliders bound to values the
 // game applies with `audio.set_bus_volume`), and where the host has them,
 // the engine's Graphics page (the PC's and the Web's quality presets) and
-// the Controls screen (the PC's key rebinding). `preview` holds what the
+// the Controls screen (the PC's key rebinding), and the Accessibility
+// screen everywhere. `preview` holds what the
 // editor and `ui shot` show; the game sets the real values.
 (
     version: 1,
@@ -21,11 +22,12 @@
                         kind: Stack(gap: 6, align: Stretch),
                         children: [
                             (kind: Text, key: "options.title", text: "Options", text_scale: 2, align: Center),
-                            (kind: Slider(min: 0, max: 10, step: 1), id: "music", key: "options.music", text: "Music", bind: "music", size: (Px(160), Px(14))),
-                            (kind: Slider(min: 0, max: 10, step: 1), id: "sfx", key: "options.sfx", text: "Effects", bind: "sfx", size: (Px(160), Px(14))),
-                            (kind: Button, id: "graphics", key: "options.graphics", text: "Graphics", on_click: "graphics", visible_on: [Pc, Web], visible_if: "graphics", size: (Px(160), Px(18))),
-                            (kind: Button, id: "controls", key: "options.controls", text: "Controls", on_click: "controls", visible_on: [Pc], visible_if: "rebind", size: (Px(160), Px(18))),
-                            (kind: Button, id: "back", key: "options.back", text: "Back", on_click: "back", size: (Px(160), Px(18))),
+                            (kind: Slider(min: 0, max: 10, step: 1), id: "music", key: "options.music", text: "Music", bind: "music", min: (160, 14)),
+                            (kind: Slider(min: 0, max: 10, step: 1), id: "sfx", key: "options.sfx", text: "Effects", bind: "sfx", min: (160, 14)),
+                            (kind: Button, id: "graphics", key: "options.graphics", text: "Graphics", on_click: "graphics", visible_on: [Pc, Web], visible_if: "graphics", min: (160, 18), padding: (6, 3, 6, 3)),
+                            (kind: Button, id: "controls", key: "options.controls", text: "Controls", on_click: "controls", visible_on: [Pc], visible_if: "rebind", min: (160, 18), padding: (6, 3, 6, 3)),
+                            (kind: Button, id: "accessibility", key: "options.access", text: "Accessibility", on_click: "accessibility", min: (160, 18), padding: (6, 3, 6, 3)),
+                            (kind: Button, id: "back", key: "options.back", text: "Back", on_click: "back", min: (160, 18), padding: (6, 3, 6, 3)),
                         ],
                     ),
                 ],

@@ -56,6 +56,7 @@ impostors) is part of the same pipeline, drawn by the same renderer in the same 
 | Audio: SFX, music, stingers, positional sound | yes | yes | yes |
 | Save data | file | 16 Kbit EEPROM | SD card |
 | Quality presets (Low…Ultra): auto-detect, dynamic resolution, frame cap, a Graphics options page | yes (and the Web; Steam Deck preset) | fixed | fixed |
+| Accessibility: color vision through semantic palettes and icons, text scale and high contrast, captions, reduced motion, a flash guard, hold-to-toggle ([docs/ACCESSIBILITY.md](docs/ACCESSIBILITY.md)) | yes; settings saved for the player, plus a color-vision simulation view | yes; settings for the session (3 bytes in a game's save) | yes; captions on the touch screen if asked |
 
 | Tooling | What you get |
 |---|---|
@@ -65,6 +66,7 @@ impostors) is part of the same pipeline, drawn by the same renderer in the same 
 | Authored content as text | Scenes, prefabs, materials, particle effects, fake objects and UI screens are RON files. The editor writes them, any tool or AI agent can edit them, and a running editor or game reloads them live. |
 | Editor | Scene and Game views on the real renderer, hierarchy, inspector, asset browser, prefabs, per-platform variants, LOD and impostor baking, an animation tab, a per-console frame budget HUD, each console's shadow tier in the Game view. |
 | UI tools | `cargo xtask ui check` proves on every target that the pad reaches every control, the screen fits the console's UI budget and no translation overflows; `ui shot` renders a screen as a target shows it; the editor's UI tab edits screens with a focus-order overlay. Every new project starts with title, pause, options and controls screens. |
+| Accessibility tools | `cargo xtask access check` proves semantic colors stay apart and readable in every color-vision mode, the high-contrast theme keeps 7:1, every caption key exists in every language and every screen fits at 200 % text on every target; `access shot` renders a screen or scene as a player with those settings sees it; the editor's Accessibility tab simulates color vision in every view and edits the palettes. New projects start with an Accessibility screen. |
 | Live reload | Game code reloads as a dylib on PC (`cargo xtask watch pc`); consoles rebuild and relaunch in the emulator on save (`watch n64`, `watch 3ds`). |
 | Emulator self-tests and goldens | `cargo xtask test n64` and `test 3ds` boot the game in ares or Azahar, run a self-test step for every engine service, have a bot play a stage, and compare frames with golden images. The N64 run also gates frame time. |
 | Real hardware | `run n64 --device sc64\|everdrive` and `run 3ds --device network` deploy to a console and print its debug log in your terminal. Tested with stub loaders so far ([docs/HARDWARE.md](docs/HARDWARE.md)). |

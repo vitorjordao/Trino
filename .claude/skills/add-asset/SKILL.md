@@ -328,6 +328,18 @@ groups = ["level1"]              # default ["boot"]: loaded at boot, always resi
 - Live reload re-uploads changed boot assets; a grouped asset's new bytes show the next
   time its group loads.
 
+## Accessibility data (issue #60, ADR 0026)
+
+- Captions on a sound or a music track: `caption = "cap.x"` (a key in every
+  `assets/i18n/<lang>.ron`), `important = true` (shown in the "important" mode, and an
+  important sound must have a caption), `caption_priority = 0..=255`, `direction = true`
+  (an arrow from its pan), `caption_seconds = 1.5` (default 3).
+- `cvd_icon = "sprites/x"` on a sprite: the icon a color-vision mode shows with it (must
+  be a sprite of the manifest; the load refuses an unknown one).
+- Semantic colors live in `assets/palettes.ron`, the high-contrast theme in
+  `ui/themes/high_contrast.ron`; all of it bakes into the `access/data` blob with the UI
+  blobs. Check with `cargo xtask access check` (the `accessibility` skill).
+
 ## Verify
 
 1. `cargo xtask assets pc` (and `cargo xtask build n64|3ds` when toolchains exist) — format

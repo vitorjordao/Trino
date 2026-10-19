@@ -464,6 +464,27 @@ cargo xtask ui list --json
 font, sprite or model not in the manifest, a key in no table. The editor's
 UI tab edits the same file and shows the focus order, the overflows and each target.
 
+## Accessibility data (ADR 0026)
+
+Three sources bake into one generated blob, `access/data`, on every target (no manifest
+entry; `AccessData` / `AccessBlob` read it):
+
+- `assets/palettes.ron`: semantic colors with an alternative per color-vision mode
+  (`protanopia`, `deuteranopia`, `tritanopia`, `grayscale`; a mode left out keeps the
+  `base`), `distinct` groups that must look apart in every mode (`min_delta_e`, default
+  20 CIE76 ΔE) and `contrast` pairs (`min`, default 4.5:1). A group a mode can't tell apart
+  fails the bake.
+- The manifest: `caption`, `important`, `caption_priority`, `direction` and
+  `caption_seconds` on a `[sounds.*]` or `[music.*]` entry; `cvd_icon = "sprites/x"` on a
+  `[sprites.*]` entry (the sprite a color-vision mode shows with it).
+- `ui/themes/high_contrast.ron`: the UI's high-contrast theme (a screen `theme`; what it
+  leaves out is the engine's `Theme::HIGH_CONTRAST`).
+
+A UI node takes `cvd_icon: "sprites/x"` too (TUIL version 2). Caption keys live in the
+same `assets/i18n/<lang>.ron` tables as the screens' keys. `cargo xtask access check`
+validates all of it and lays every screen out at 200 % text;
+[ACCESSIBILITY.md](ACCESSIBILITY.md) shows the game side.
+
 ## Checking your work
 
 1. `cargo xtask assets pc` (and a console build when the toolchains are installed): format
@@ -475,4 +496,6 @@ UI tab edits the same file and shows the focus order, the overflows and each tar
    presets.
 4. `cargo xtask assets check` (and `assets report`) when groups or scenes changed.
 5. `cargo xtask ui check` when screens or string tables changed.
-6. `cargo xtask test`.
+6. `cargo xtask access check` when palettes, captions, the high-contrast theme or screens
+   changed (every screen at 200 % text).
+7. `cargo xtask test`.

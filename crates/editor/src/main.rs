@@ -29,6 +29,7 @@
 //! Audio inspector on a sound, its waveform over that platform's decode;
 //! `TRINO_EDITOR_RECENT=<file>` keeps the recent projects there.
 
+mod access;
 mod anim_panel;
 mod app;
 mod audio;
@@ -93,6 +94,7 @@ pub const EDITOR_HOOKS: &[&str] = &[
     "TRINO_EDITOR_QUALITY",
     "TRINO_EDITOR_ASSET_GROUP",
     "TRINO_EDITOR_UI",
+    "TRINO_EDITOR_ACCESS",
 ];
 
 /// What the editor opens on start.

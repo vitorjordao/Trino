@@ -47,6 +47,13 @@ TRINO_PERF_MODEL:hub model=e2dd959e calls=3 us=8659 verts=264 tris_in=132 emitte
 Most castle64 draws never run `tessellate` on the N64. They go to Trino's rspq
 overlay:
 
+- **Lifetime rule.** Whatever a queued command points the overlay at (a water block,
+  a ring block, an uncached mesh copy) must stay allocated until the RSP ran it
+  (`trino_drain`, or the renderer's grave for meshes). The water oracle once dropped its
+  `Box<WaterCmd>` before the drain; it passed by luck until the heap moved (#60) and then
+  failed only on a 4 MB N64 (`rsp oracle water swell … color 199/255`). A failure that
+  appears or vanishes with `--expansion-pak on|off` is a lifetime bug first.
+
 - **Which draws.** `trino_core::render3d::rsp_eligible` (per draw) on meshes that
   `rsp_mesh_supported` accepted (once, at register):
   - static or rigid-skinned (one draw per joint, `rsp_rigid_draws`), unit normals,

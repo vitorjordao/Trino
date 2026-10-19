@@ -365,6 +365,19 @@ pub struct UiNode<'a> {
     /// Explicit focus targets for up, down, left, right ([`NONE`] =
     /// by geometry).
     pub nav: [u16; 4],
+    /// A second channel for color (issue #60): a pattern or a shape shown
+    /// over the node's right end while the player's color-vision mode is
+    /// on ([`UiEnv::with_access`](super::UiEnv::with_access)), so a
+    /// colored marker, kit or status still reads without its hue.
+    pub cvd_icon: Option<CvdIcon>,
+}
+
+/// A [`UiNode::cvd_icon`]: a sprite and its size in pixels (drawn at the
+/// layout's scale).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct CvdIcon {
+    pub sprite: SpriteId,
+    pub size: (u16, u16),
 }
 
 impl UiNode<'static> {
@@ -397,6 +410,7 @@ impl UiNode<'static> {
         visible_if: "",
         enabled_if: "",
         nav: [NONE; 4],
+        cvd_icon: None,
     };
 }
 
@@ -436,6 +450,35 @@ impl Theme {
         accent: Color::rgb(255, 244, 200),
         pressed: Color::rgb(255, 160, 60),
     };
+}
+
+impl Theme {
+    /// The engine's high-contrast colors (WCAG AAA: 7:1 or more for text):
+    /// white on black panels, a yellow focus with black text, white
+    /// outlines. A project overrides them with `ui/themes/high_contrast.ron`.
+    pub const HIGH_CONTRAST: Theme = Theme {
+        font: FontId::from_path("fonts/trino5x7"),
+        text_scale: 1,
+        text: Color::WHITE,
+        dim: Color::rgb(200, 200, 200),
+        panel: Color::rgb(0, 0, 0),
+        button: Color::rgb(0, 0, 0),
+        button_text: Color::WHITE,
+        focus: Color::rgb(255, 230, 0),
+        focus_text: Color::rgb(0, 0, 0),
+        accent: Color::rgb(255, 230, 0),
+        pressed: Color::WHITE,
+    };
+
+    /// This theme with `contrast`'s colors (its font and text scale stay:
+    /// the layout measures with them).
+    pub const fn with_colors_of(&self, contrast: &Theme) -> Theme {
+        Theme {
+            font: self.font,
+            text_scale: self.text_scale,
+            ..*contrast
+        }
+    }
 }
 
 impl Default for Theme {

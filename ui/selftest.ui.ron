@@ -1,7 +1,8 @@
 // The engine self-test's screen (castle64::selftest::ui_layout, issue #58):
 // a full-screen panel, three buttons in a centered stack (pad navigation,
 // focus colors) and a button on the 3DS touch screen (a tap), baked as the
-// `ui/selftest` blob on every target.
+// `ui/selftest` blob on every target. `one` shows a stripe icon while a
+// color-vision mode is on (castle64::selftest::accessibility, issue #60).
 (
     version: 1,
     name: "selftest",
@@ -13,7 +14,7 @@
                 kind: Stack(gap: 8),
                 anchor: Center,
                 children: [
-                    (kind: Button, id: "one", text: "ONE", on_click: "one", size: (Px(96), Px(24))),
+                    (kind: Button, id: "one", text: "ONE", on_click: "one", size: (Px(96), Px(24)), cvd_icon: "sprites/cvd_stripes"),
                     (kind: Button, id: "two", text: "TWO", on_click: "two", size: (Px(96), Px(24))),
                     (kind: Button, id: "three", text: "THREE", on_click: "three", size: (Px(96), Px(24))),
                 ],

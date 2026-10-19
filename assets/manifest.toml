@@ -33,15 +33,25 @@ formats = { n64 = "CI4" }
 
 [sounds.beep]
 file = "sounds/beep.wav"
+caption = "cap.hurt"
+important = true
+caption_priority = 150
 
 [sounds.jump]
 file = "sounds/jump.wav"
 
+# Captions (issue #60): a string-table key (assets/i18n/<lang>.ron) shown
+# while the sound plays, when the player's caption mode wants it; an
+# `important` sound shows in the "important" mode too and must have one.
 [sounds.coin]
 file = "sounds/coin.wav"
+caption = "cap.coin"
 
 [sounds.win]
 file = "sounds/win.wav"
+caption = "cap.star"
+important = true
+caption_priority = 200
 
 # Music streams by default (`stream = true`) in each platform's default
 # codec: VADPCM on the N64, DSP-ADPCM on the 3DS, Vorbis on the PC and Web
@@ -537,6 +547,14 @@ formats = { n64 = "CI4" }
 [sprites.selftest_quadrants]
 file = "sprites/selftest_quadrants.png"
 formats = { n64 = "CI4" }
+# Its second channel while a color-vision mode is on (issue #60,
+# selftest::accessibility): diagonal stripes.
+cvd_icon = "sprites/cvd_stripes"
+
+# An 8×8 stripe pattern: a color-vision icon (`cvd_icon`).
+[sprites.cvd_stripes]
+file = "sprites/cvd_stripes.png"
+formats = { n64 = "RGBA5551" }
 
 # The same quadrants in 16-bit color, and a detail layer (I4) to multiply
 # over them: base + detail share the N64's TMEM, which a palette texture

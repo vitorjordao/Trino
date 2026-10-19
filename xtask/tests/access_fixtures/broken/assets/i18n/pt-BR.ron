@@ -1,0 +1,2 @@
+// No "cap.whistle": the caption falls back to English.
+Strings(lang: "pt-BR", fallback: "en-US", entries: {"menu.go": "VAI"})

@@ -191,6 +191,10 @@ pub struct Viewport {
     /// debug color (every caster's, even with the scene's off).
     pub shadow_view: ShadowView,
     shadow_rendered: ShadowView,
+    /// Scene and Game views: the picture as a viewer with this color
+    /// vision sees it (the Accessibility tab's simulation, issue #60).
+    pub cvd_view: trino_core::CvdMode,
+    cvd_rendered: trino_core::CvdMode,
     /// Game view: the console budget overlay (tris / sprites / texture vs
     /// the selected profile's Caps).
     pub show_budget: bool,
@@ -264,6 +268,8 @@ impl Viewport {
             ao_rendered: AoView::Game,
             shadow_view: ShadowView::Game,
             shadow_rendered: ShadowView::Game,
+            cvd_view: trino_core::CvdMode::Off,
+            cvd_rendered: trino_core::CvdMode::Off,
             show_budget: true,
             web_canvas: std::env::var("TRINO_EDITOR_WEB_CANVAS")
                 .ok()
@@ -495,6 +501,7 @@ impl Viewport {
             ViewKind::Game => ShadowView::Game,
         });
         r.set_shadows(env.core_shadows().as_ref());
+        r.set_cvd_view(self.cvd_view);
         r.set_shadow_receivers(&input.resolved.receivers());
         // Water surfaces flow with the preview clock; ripples dropped from
         // the material inspector ring out.
@@ -714,10 +721,12 @@ impl Viewport {
             || cam_moving
             || self.ao_rendered != self.ao_view
             || self.shadow_rendered != self.shadow_view
+            || self.cvd_rendered != self.cvd_view
             || dynres_live
         {
             self.ao_rendered = self.ao_view;
             self.shadow_rendered = self.shadow_view;
+            self.cvd_rendered = self.cvd_view;
             self.render(input, internal);
             if size_changed {
                 self.reregister();

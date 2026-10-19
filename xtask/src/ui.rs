@@ -118,7 +118,7 @@ impl Opts {
     }
 }
 
-fn family(name: &str) -> Option<Family> {
+pub(crate) fn family(name: &str) -> Option<Family> {
     match name {
         "pc" => Some(Family::Pc),
         "n64" => Some(Family::N64),
@@ -129,7 +129,7 @@ fn family(name: &str) -> Option<Family> {
 }
 
 /// The targets the project builds for, as UI families.
-fn families(project: &Project) -> Vec<Family> {
+pub(crate) fn families(project: &Project) -> Vec<Family> {
     project
         .platforms
         .iter()
@@ -144,7 +144,7 @@ fn families(project: &Project) -> Vec<Family> {
 
 /// The project a screen file belongs to: the folder holding its `ui/` and
 /// an `assets/manifest.toml` (an example's own assets), else `root`.
-fn root_of(root: &Path, file: &Path) -> PathBuf {
+pub(crate) fn root_of(root: &Path, file: &Path) -> PathBuf {
     let dir = file
         .parent()
         .filter(|d| d.file_name().is_some_and(|n| n == "ui"));
@@ -155,7 +155,7 @@ fn root_of(root: &Path, file: &Path) -> PathBuf {
 }
 
 /// `pause` → `<root>/ui/pause.ui.ron`; a path stays a path.
-fn screen_path(root: &Path, screen: &str) -> PathBuf {
+pub(crate) fn screen_path(root: &Path, screen: &str) -> PathBuf {
     if screen.ends_with(".ron") {
         let p = PathBuf::from(screen);
         if p.is_file() || p.is_absolute() {
@@ -169,7 +169,7 @@ fn screen_path(root: &Path, screen: &str) -> PathBuf {
     }
 }
 
-fn manifest(root: &Path) -> Result<Manifest, String> {
+pub(crate) fn manifest(root: &Path) -> Result<Manifest, String> {
     Manifest::load(&root.join("assets").join("manifest.toml"))
 }
 
@@ -299,6 +299,7 @@ fn check_one(
                         caps: caps_of(f),
                         lang: lang.as_deref(),
                         interface_scale: 1.0,
+                        access: trino_core::ui::UiAccess::NONE,
                     },
                     &fonts,
                     langs,
@@ -395,6 +396,8 @@ fn shot(project: &Project, screen: &str, opts: &Opts, json: bool) -> Result<bool
             lang: opts.lang.as_deref(),
             interface_scale: opts.scale.unwrap_or(1.0),
             focus: opts.focus.as_deref(),
+            access: trino_core::ui::UiAccess::NONE,
+            simulate: None,
         },
     )?;
     let out = opts.out.clone().unwrap_or_else(|| {

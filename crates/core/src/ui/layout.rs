@@ -173,6 +173,7 @@ impl<const N: usize> Ui<N> {
             ),
             None => Frame::NONE,
         };
+        self.text_mul = env.access.text_mul(screen.scaling, self.frames[0].scale);
         self.count = 0;
         self.stats = UiStats::default();
         for s in self.scroll.iter_mut() {
@@ -222,7 +223,10 @@ impl<const N: usize> Ui<N> {
             env.top.x.to_bits() ^ env.top.y.to_bits().rotate_left(7),
             env.bottom
                 .map_or(0, |b| b.x.to_bits() ^ b.y.to_bits().rotate_left(7)),
-            env.family as u32 ^ env.interface_scale.to_bits().rotate_left(3),
+            env.family as u32
+                ^ env.interface_scale.to_bits().rotate_left(3)
+                ^ env.access.text_scale.to_bits().rotate_left(13)
+                ^ (env.access.high_contrast as u32) << 31,
             env.strings.revision(),
             self.values.revision(),
             scroll,
@@ -276,7 +280,10 @@ impl<M: TextMeasure + ?Sized, const N: usize> Solver<'_, '_, '_, M, N> {
         } else {
             self.screen.theme.text_scale.max(1)
         };
-        (n.font.unwrap_or(self.screen.theme.font), scale as f32)
+        (
+            n.font.unwrap_or(self.screen.theme.font),
+            scale as f32 * self.ui.text_mul,
+        )
     }
 
     fn line_height(&self, n: &UiNode<'_>) -> f32 {

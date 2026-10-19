@@ -515,3 +515,55 @@ fn hw_tier_follows_the_simulated_caps() {
     p.set_hw_tier(HwTier::Base);
     assert_eq!(p.hw_tier(), HwTier::Base);
 }
+
+/// Accessibility (issue #60): the PC platform keeps the player's settings,
+/// clamps them, hands a change to the host once to persist, and the text
+/// file round-trips and repairs.
+#[test]
+fn accessibility_settings_through_the_platform_and_the_file() {
+    use trino_core::{AccessSettings, CaptionMode, CvdMode, Platform};
+    use trino_platform_pc::system::{access_settings_from_text, access_settings_to_text};
+    let mut p = trino_platform_pc::PcPlatform::new(&trino_core::Caps::PC);
+    assert_eq!(p.access(), AccessSettings::DEFAULT);
+    assert_eq!(p.take_access_change(), None);
+    // The host's saved file: no change to persist.
+    let saved = AccessSettings {
+        cvd: CvdMode::Deuteranopia,
+        ..AccessSettings::DEFAULT
+    };
+    p.load_access(saved);
+    assert_eq!(p.access(), saved);
+    assert_eq!(p.take_access_change(), None);
+    // The game's change: applied at once, persisted once, clamped.
+    let wanted = AccessSettings {
+        text_scale: 240,
+        captions: CaptionMode::Important,
+        ..saved
+    };
+    p.set_access(wanted);
+    let got = p.access();
+    assert_eq!(got.text_scale, 200);
+    assert_eq!(got.captions, CaptionMode::Important);
+    assert_eq!(p.take_access_change(), Some(got));
+    assert_eq!(p.take_access_change(), None);
+    p.set_access(got);
+    assert_eq!(
+        p.take_access_change(),
+        None,
+        "the same settings change nothing"
+    );
+    // The file.
+    let text = access_settings_to_text(&got);
+    assert!(
+        text.starts_with('#') && text.contains("cvd=deuteranopia"),
+        "{text}"
+    );
+    assert_eq!(access_settings_from_text(&text), got);
+    assert_eq!(
+        access_settings_from_text("cvd=?\ntext_scale=150\nnoise"),
+        AccessSettings {
+            text_scale: 150,
+            ..AccessSettings::DEFAULT
+        }
+    );
+}

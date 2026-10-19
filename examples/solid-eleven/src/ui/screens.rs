@@ -678,199 +678,144 @@ fn title(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
 
 // ------------------------------------------------------------ quick match
 
-fn club_card(ui: &mut Ui, x: f32, y: f32, c: u8, label: S, lang: Lang, g: &SolidElevenGame) {
-    let club = &CLUBS[c as usize];
-    ui.panel(Rect::new(x, y, 112.0, 74.0), rgb(club.home.shirt));
-    ui.text(
-        x + 56.0,
-        y + 2.0,
-        tr(lang, label),
-        pal::DIM,
-        Size::Small,
-        TextAlign::Center,
-    );
-    crest_of(ui, x + 8.0, y + 16.0, 30.0, c, true);
-    // The name on two lines when it is too long for one (VIOLET WANDERERS),
-    // the kit and the rating below it.
-    let name: TextBuf<20> = upper(club.name);
-    let (first, second) = ui.wrap2(name.as_str(), Size::Small, 112.0 - 44.0 - 3.0);
-    ui.text(
-        x + 44.0,
-        y + 16.0,
-        first,
-        pal::INK,
-        Size::Small,
-        TextAlign::Left,
-    );
-    let below = if second.is_empty() {
-        0.0
-    } else {
-        ui.text(
-            x + 44.0,
-            y + 24.0,
-            second,
-            pal::INK,
-            Size::Small,
-            TextAlign::Left,
-        );
-        6.0
+fn quick(g: &mut SolidElevenGame, r: &mut dyn Renderer, _screen: Vec2) {
+    use super::scr::{art, int, txt};
+    let screen = &super::quick_gen::SCREEN;
+    let big = g.access.clamped().text_factor() >= 1.5;
+    let focus = match g.cur.quick {
+        0 => (if big { "card_home_big" } else { "card_home" }, NO_ITEM),
+        1 => (if big { "card_away_big" } else { "card_away" }, NO_ITEM),
+        QUICK_GO => ("go", NO_ITEM),
+        k => ("row", (k - 2) as u16),
     };
-    // Kit swatches.
-    for (k, col) in [club.home.shirt, club.home.shorts, club.home.socks]
-        .iter()
-        .enumerate()
-    {
-        ui.fill(
-            Rect::new(x + 44.0 + k as f32 * 12.0, y + 30.0 + below, 10.0, 8.0),
-            rgb(*col),
-        );
-    }
-    let mut b = buf();
-    let _ = write!(
-        b,
-        "{} {}   {}",
-        tr(lang, S::Ovr),
-        g.world.strength(c),
-        FORMATIONS[g.world.clubs[c as usize].formation as usize % FORMATIONS.len()].name
-    );
-    ui.text(
-        x + 44.0,
-        y + 42.0 + below,
-        b.as_str(),
-        pal::YELLOW,
-        Size::Small,
-        TextAlign::Left,
-    );
-    ui.text(
-        x + 8.0,
-        y + 58.0,
-        "<",
-        pal::CYAN,
-        Size::Small,
-        TextAlign::Left,
-    );
-    ui.text(
-        x + 104.0,
-        y + 58.0,
-        ">",
-        pal::CYAN,
-        Size::Small,
-        TextAlign::Right,
-    );
-}
-
-fn quick(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
-    let lang = g.settings.lang;
-    let pad = g.pad_layout();
-    let mut ui = Ui::new(r, screen);
-    ui.fill(
-        Rect::new(-200.0, 0.0, 720.0, 240.0),
-        Color::rgba(6, 8, 20, 130),
-    );
-    header(&mut ui, &mut g.hits, tr(lang, S::QuickMatch), true);
-    club_card(&mut ui, 14.0, 34.0, g.quick.home, S::Home, lang, g);
-    club_card(&mut ui, 194.0, 34.0, g.quick.away, S::Away, lang, g);
-    ui.text_shadow(160.0, 58.0, "VS", pal::YELLOW, Size::Big, TextAlign::Center);
-    let side = tr(
-        lang,
-        match g.quick.side {
-            0 => S::SideHome,
-            1 => S::SideAway,
-            _ => S::SideCpu,
+    super::scr::show(
+        g,
+        r,
+        screen,
+        Some(focus),
+        super::scr::rev(&(g.quick, g.settings.difficulty, g.world.year)),
+        |g, key, item| {
+            let lang = g.settings.lang;
+            let club = |c: u8| &CLUBS[c as usize];
+            let ovr = |c: u8| {
+                let mut b = buf();
+                let _ = write!(
+                    b,
+                    "{} {}   {}",
+                    tr(lang, S::Ovr),
+                    g.world.strength(c),
+                    FORMATIONS[g.world.clubs[c as usize].formation as usize % FORMATIONS.len()]
+                        .name
+                );
+                b
+            };
+            match key {
+                "rows" => return int(5),
+                "home_name" => return txt(upper::<20>(club(g.quick.home).name).as_str()),
+                "away_name" => return txt(upper::<20>(club(g.quick.away).name).as_str()),
+                "home_ovr" => return txt(ovr(g.quick.home).as_str()),
+                "away_ovr" => return txt(ovr(g.quick.away).as_str()),
+                _ => {}
+            }
+            let side = match g.quick.side {
+                0 => S::SideHome,
+                1 => S::SideAway,
+                _ => S::SideCpu,
+            };
+            let sky = [S::Day, S::Dusk, S::Night][g.quick.sky as usize % 3];
+            let stadium =
+                [S::StadiumArena, S::StadiumHarbour, S::StadiumPark][g.quick.stadium as usize % 3];
+            let (label, value) = match item {
+                0 => (S::Team, side),
+                1 => (S::Stadium, stadium),
+                2 => (S::KickoffTime, sky),
+                3 => (S::Weather, if g.quick.rain { S::Rain } else { S::Clear }),
+                4 => (
+                    S::Difficulty,
+                    [S::Easy, S::Normal, S::Hard][g.settings.difficulty as usize % 3],
+                ),
+                _ => return None,
+            };
+            match key {
+                "label" => txt(tr(lang, label)),
+                "value" => {
+                    let mut b = buf();
+                    let _ = write!(b, "<  {}  >", tr(lang, value));
+                    txt(b.as_str())
+                }
+                _ => None,
+            }
+        },
+        |g, ui, r| {
+            super::scr::chrome(ui, screen, r);
+            // Kick off: the reference's slanted lime pill.
+            if let Some((mut a, size)) = art(r, ui, screen, "go", NO_ITEM) {
+                let lit = g.cur.quick == QUICK_GO;
+                a.slant(
+                    Rect::new(0.0, 0.0, size.x, size.y),
+                    if lit {
+                        pal::LIME
+                    } else {
+                        Color::rgb(120, 160, 40)
+                    },
+                    5.0,
+                );
+            }
         },
     );
-    let sky = [S::Day, S::Dusk, S::Night][g.quick.sky as usize % 3];
-    let stadium =
-        [S::StadiumArena, S::StadiumHarbour, S::StadiumPark][g.quick.stadium as usize % 3];
-    let rows: [(S, &str); 5] = [
-        (S::Team, side),
-        (S::Stadium, tr(lang, stadium)),
-        (S::KickoffTime, tr(lang, sky)),
-        (
-            S::Weather,
-            tr(lang, if g.quick.rain { S::Rain } else { S::Clear }),
-        ),
-        (
-            S::Difficulty,
-            tr(
-                lang,
-                [S::Easy, S::Normal, S::Hard][g.settings.difficulty as usize % 3],
+    // Each card: its club's rim, crest and kit.
+    let ui = core::mem::take(&mut g.menu_ui);
+    let cards = if big {
+        [
+            (
+                "card_home_big",
+                "crest_home_big",
+                "kit_home_big",
+                g.quick.home,
             ),
-        ),
-    ];
-    for (k, (label, value)) in rows.iter().enumerate() {
-        let id = k + 2;
-        let y = 114.0 + k as f32 * 16.0;
-        let sel = g.cur.quick == id;
-        let rr = Rect::new(54.0, y, 212.0, 14.0);
-        ui.fill(
-            rr,
-            if sel {
-                Color::rgba(30, 60, 130, 235)
-            } else {
-                pal::PANEL
-            },
-        );
-        if sel {
-            ui.border(rr, pal::CYAN, 1.0);
+            (
+                "card_away_big",
+                "crest_away_big",
+                "kit_away_big",
+                g.quick.away,
+            ),
+        ]
+    } else {
+        [
+            ("card_home", "crest_home", "kit_home", g.quick.home),
+            ("card_away", "crest_away", "kit_away", g.quick.away),
+        ]
+    };
+    for (card, crest, kit, c) in cards {
+        let club = &CLUBS[c as usize];
+        // The club's rim, inside the focus ring.
+        if let Some((mut a, size)) = art(r, &ui, screen, card, NO_ITEM) {
+            a.border(
+                Rect::new(2.0, 2.0, size.x - 4.0, size.y - 4.0),
+                rgb(club.home.shirt),
+                1.0,
+            );
         }
-        ui.text(
-            60.0,
-            y + 1.0,
-            tr(lang, *label),
-            pal::DIM,
-            Size::Small,
-            TextAlign::Left,
-        );
-        let mut b = buf();
-        let _ = write!(b, "<  {value}  >");
-        ui.text(
-            260.0,
-            y + 1.0,
-            b.as_str(),
-            pal::INK,
-            Size::Small,
-            TextAlign::Right,
-        );
-        let hit = ui.rect(rr);
-        g.hits.add(hit, Screen::Top, id as u8);
-    }
-    // Highlight the club cards when selected.
-    for (k, x) in [(0usize, 14.0f32), (1, 194.0)] {
-        if g.cur.quick == k {
-            ui.border(Rect::new(x - 1.0, 33.0, 114.0, 76.0), pal::CYAN, 1.0);
+        if let Some((mut a, size)) = art(r, &ui, screen, crest, NO_ITEM) {
+            crest_of(&mut a, 0.0, 0.0, size.x, c, true);
         }
-        let hit = ui.rect(Rect::new(x, 34.0, 112.0, 74.0));
-        g.hits.add(hit, Screen::Top, k as u8);
+        if let Some((mut a, _)) = art(r, &ui, screen, kit, NO_ITEM) {
+            for (k, col) in [club.home.shirt, club.home.shorts, club.home.socks]
+                .iter()
+                .enumerate()
+            {
+                a.fill(Rect::new(k as f32 * 12.0, 0.0, 10.0, 8.0), rgb(*col));
+            }
+        }
     }
-    let sel = g.cur.quick == QUICK_GO;
-    let go = Rect::new(96.0, 198.0, 128.0, 18.0);
-    ui.slant(
-        go,
-        if sel {
-            pal::LIME
-        } else {
-            Color::rgb(120, 160, 40)
-        },
-        5.0,
-    );
-    ui.text(
-        160.0,
-        201.0,
-        tr(lang, S::KickOff),
-        pal::NAVY,
-        Size::Small,
-        TextAlign::Center,
-    );
-    let hit = ui.rect(go);
-    g.hits.add(hit, Screen::Top, QUICK_GO as u8);
-    footer(
-        &mut ui,
-        &mut g.hits,
-        pad,
-        lang,
-        &[(Btn::A, S::Confirm), (Btn::B, S::Back)],
-    );
+    g.menu_ui = ui;
+    super::scr::hit(g, screen, cards[0].0, NO_ITEM, 0);
+    super::scr::hit(g, screen, cards[1].0, NO_ITEM, 1);
+    for k in 0..5u16 {
+        super::scr::hit(g, screen, "row", k, k as u8 + 2);
+    }
+    super::scr::hit(g, screen, "go", NO_ITEM, QUICK_GO as u8);
+    super::scr::back_hits(g, screen);
 }
 
 // --------------------------------------------------------------- pick club
@@ -1331,6 +1276,7 @@ fn table(g: &mut SolidElevenGame, r: &mut dyn Renderer, _screen: Vec2) {
         r,
         screen,
         Some((row, g.cur.table as u16)),
+        super::scr::rev(&(g.world.round, g.world.year, g.world.user, g.career_on)),
         |g, key, item| {
             let lang = g.settings.lang;
             if key == "rows" {
@@ -2055,63 +2001,23 @@ fn market(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
 
 // ---------------------------------------------------------------- settings
 
-fn settings(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
-    let lang = g.settings.lang;
-    let pad = g.pad_layout();
+fn settings(g: &mut SolidElevenGame, r: &mut dyn Renderer, _screen: Vec2) {
     if g.scene == Scene::Confirm {
-        let mut ui = Ui::new(r, screen);
-        ui.fill(
-            Rect::new(-200.0, 0.0, 720.0, 240.0),
-            Color::rgba(6, 8, 20, 170),
+        let screen = &super::confirm_gen::SCREEN;
+        let ids = ["cancel", "confirm"];
+        super::scr::show(
+            g,
+            r,
+            screen,
+            Some((ids[g.cur.confirm.min(1)], NO_ITEM)),
+            0,
+            |_, _, _| None,
+            |_, ui, r| super::scr::chrome(ui, screen, r),
         );
-        header(&mut ui, &mut g.hits, tr(lang, S::Exit), true);
-        ui.panel(Rect::new(70.0, 80.0, 180.0, 70.0), pal::PINK);
-        ui.text(
-            160.0,
-            86.0,
-            tr(lang, S::ExitSub),
-            pal::INK,
-            Size::Small,
-            TextAlign::Center,
-        );
-        for (k, s) in [S::Cancel, S::Confirm].iter().enumerate() {
-            let rr = Rect::new(86.0 + k as f32 * 76.0, 116.0, 70.0, 20.0);
-            let sel = g.cur.confirm == k;
-            ui.fill(
-                rr,
-                if sel {
-                    Color::rgba(110, 20, 60, 240)
-                } else {
-                    pal::PANEL
-                },
-            );
-            ui.border(
-                rr,
-                if sel {
-                    pal::PINK
-                } else {
-                    Color::rgb(80, 60, 90)
-                },
-                1.0,
-            );
-            ui.text(
-                rr.pos.x + 35.0,
-                120.0,
-                tr(lang, *s),
-                pal::INK,
-                Size::Small,
-                TextAlign::Center,
-            );
-            let hit = ui.rect(rr);
-            g.hits.add(hit, Screen::Top, k as u8);
+        for (k, id) in ids.iter().enumerate() {
+            super::scr::hit(g, screen, id, NO_ITEM, k as u8);
         }
-        footer(
-            &mut ui,
-            &mut g.hits,
-            pad,
-            lang,
-            &[(Btn::A, S::Select), (Btn::B, S::Back)],
-        );
+        super::scr::back_hits(g, screen);
         return;
     }
     let screen = &super::settings_gen::SCREEN;
@@ -2121,6 +2027,7 @@ fn settings(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
         r,
         screen,
         Some(("row", g.cur.settings as u16)),
+        super::scr::rev(&g.settings.bytes()),
         |g, key, item| settings_value(g, rows, key, item),
         |_, ui, r| super::scr::chrome(ui, screen, r),
     );

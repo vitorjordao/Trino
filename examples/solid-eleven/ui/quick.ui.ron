@@ -1,0 +1,307 @@
+// Solid Eleven's quick match (issue #95): the two clubs' cards, the side,
+// stadium, time, weather and difficulty rows, and Kick off. The game keeps
+// the cursor (`cur.quick`: 0 and 1 the cards, 2..=6 the rows, 7 Kick off)
+// and draws the crests, kits and club-colored rims into their boxes. At
+// 150 % text and up the cards stack (`_big` ids), a row stacks its label
+// over its value and the screen scrolls to the cursor.
+//   cargo xtask ui export examples/solid-eleven/ui/quick.ui.ron examples/solid-eleven/src/ui/quick_gen.rs
+(
+    version: 1,
+    name: "se_quick",
+    on_back: "back",
+    theme: (
+        font: "fonts/se_ui",
+        text: Some((236, 240, 255, 255)),
+        dim: Some((150, 160, 196, 255)),
+        panel: Some((16, 20, 46, 230)),
+        button: Some((16, 20, 46, 230)),
+        button_text: Some((236, 240, 255, 255)),
+        focus: Some((30, 60, 130, 235)),
+        focus_text: Some((236, 240, 255, 255)),
+        accent: Some((40, 210, 255, 255)),
+        pressed: Some((50, 110, 240, 255)),
+    ),
+    preview: {
+        "rows": Int(5),
+        "small": Bool(true),
+        "label": Text("HORÁRIO DO JOGO"),
+        "value": Text("<  COMPUTADOR X COMPUTADOR  >"),
+        "home_name": Text("VIOLET WANDERERS"),
+        "away_name": Text("CRIMSON HAWKS"),
+        "home_ovr": Text("GER 78   4-3-3"),
+        "away_ovr": Text("GER 74   4-4-2"),
+        "btn.a": Text("ENTER"),
+        "btn.b": Text("ESC"),
+    },
+    root: (
+        children: [
+            (kind: Rect(), anchor: Fill, bleed: true, color: Some((6, 8, 20, 130))),
+            (
+                kind: Stack(gap: 4, align: Stretch),
+                anchor: StretchCenter,
+                size: (Fill, Fill),
+                max: (320, 0),
+                children: [
+                    (
+                        kind: Stack(dir: Horizontal, gap: 4, align: Center),
+                        id: "header",
+                        min: (200, 22),
+                        padding: (0, 3, 8, 3),
+                        children: [
+                            (kind: Button, id: "back", text: "<", on_click: "back", min: (20, 16), color: Some((40, 210, 255, 0)), padding: (4, 1, 4, 1)),
+                            (kind: Text, key: "quick_match", text: "QUICK MATCH"),
+                        ],
+                    ),
+                    (
+                        kind: Scroll(gap: 3),
+                        size: (Fill, Fill),
+                        padding: (12, 0, 12, 0),
+                        children: [
+                            (
+                                kind: Stack(dir: Horizontal, gap: 4, align: Center),
+                                size: (Fill, Fit),
+                                visible_if: "small",
+                                children: [
+                                    (
+                                        kind: Overlay,
+                                        size: (Fill, Fit),
+                                        children: [
+                                            (kind: Button, id: "card_home", on_click: "card", anchor: Fill, size: (Fill, Fill)),
+                                            (
+                                                kind: Stack(gap: 2, align: Stretch),
+                                                size: (Fill, Fit),
+                                                padding: (6, 2, 6, 3),
+                                                children: [
+                                                    (
+                                                        kind: Stack(dir: Horizontal, gap: 5),
+                                                        size: (Fill, Fit),
+                                                        children: [
+                                                            (kind: Overlay, id: "crest_home", min: (30, 34)),
+                                                            (
+                                                                kind: Stack(gap: 3),
+                                                                size: (Fill, Fit),
+                                                                children: [
+                                                                    (kind: Text, bind: "home_name", text: "{}", size: (Fill, Fit), overflow: Wrap),
+                                                                    (kind: Overlay, id: "kit_home", min: (34, 8)),
+                                                                ],
+                                                            ),
+                                                        ],
+                                                    ),
+                                                    (kind: Text, bind: "home_ovr", text: "{}", color: Some((255, 214, 40, 255)), overflow: Wrap),
+                                                    (
+                                                        kind: Stack(dir: Horizontal, justify: SpaceBetween, align: Center),
+                                                        size: (Fill, Fit),
+                                                        children: [
+                                                            (kind: Text, text: "<", color: Some((40, 210, 255, 255))),
+                                                            (kind: Text, key: "home", text: "HOME", color: Some((150, 160, 196, 255))),
+                                                            (kind: Text, text: ">", color: Some((40, 210, 255, 255))),
+                                                        ],
+                                                    ),
+                                                ],
+                                            ),
+                                        ],
+                                    ),
+                                    (kind: Text, text: "VS", font: "fonts/se_big", color: Some((255, 214, 40, 255))),
+                                    (
+                                        kind: Overlay,
+                                        size: (Fill, Fit),
+                                        children: [
+                                            (kind: Button, id: "card_away", on_click: "card", anchor: Fill, size: (Fill, Fill)),
+                                            (
+                                                kind: Stack(gap: 2, align: Stretch),
+                                                size: (Fill, Fit),
+                                                padding: (6, 2, 6, 3),
+                                                children: [
+                                                    (
+                                                        kind: Stack(dir: Horizontal, gap: 5),
+                                                        size: (Fill, Fit),
+                                                        children: [
+                                                            (kind: Overlay, id: "crest_away", min: (30, 34)),
+                                                            (
+                                                                kind: Stack(gap: 3),
+                                                                size: (Fill, Fit),
+                                                                children: [
+                                                                    (kind: Text, bind: "away_name", text: "{}", size: (Fill, Fit), overflow: Wrap),
+                                                                    (kind: Overlay, id: "kit_away", min: (34, 8)),
+                                                                ],
+                                                            ),
+                                                        ],
+                                                    ),
+                                                    (kind: Text, bind: "away_ovr", text: "{}", color: Some((255, 214, 40, 255)), overflow: Wrap),
+                                                    (
+                                                        kind: Stack(dir: Horizontal, justify: SpaceBetween, align: Center),
+                                                        size: (Fill, Fit),
+                                                        children: [
+                                                            (kind: Text, text: "<", color: Some((40, 210, 255, 255))),
+                                                            (kind: Text, key: "away", text: "AWAY", color: Some((150, 160, 196, 255))),
+                                                            (kind: Text, text: ">", color: Some((40, 210, 255, 255))),
+                                                        ],
+                                                    ),
+                                                ],
+                                            ),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                            (
+                                kind: Overlay,
+                                size: (Fill, Fit),
+                                visible_if: "big",
+                                children: [
+                                    (kind: Button, id: "card_home_big", on_click: "card", anchor: Fill, size: (Fill, Fill)),
+                                    (
+                                        kind: Stack(gap: 2, align: Stretch),
+                                        size: (Fill, Fit),
+                                        padding: (6, 2, 6, 3),
+                                        children: [
+                                            (
+                                                kind: Stack(dir: Horizontal, gap: 5),
+                                                size: (Fill, Fit),
+                                                children: [
+                                                    (kind: Overlay, id: "crest_home_big", min: (30, 34)),
+                                                    (
+                                                        kind: Stack(gap: 3),
+                                                        size: (Fill, Fit),
+                                                        children: [
+                                                            (kind: Text, bind: "home_name", text: "{}", size: (Fill, Fit), overflow: Wrap),
+                                                            (kind: Overlay, id: "kit_home_big", min: (34, 8)),
+                                                        ],
+                                                    ),
+                                                ],
+                                            ),
+                                            (kind: Text, bind: "home_ovr", text: "{}", color: Some((255, 214, 40, 255)), overflow: Wrap),
+                                            (
+                                                kind: Stack(dir: Horizontal, justify: SpaceBetween, align: Center),
+                                                size: (Fill, Fit),
+                                                children: [
+                                                    (kind: Text, text: "<", color: Some((40, 210, 255, 255))),
+                                                    (kind: Text, key: "home", text: "HOME", color: Some((150, 160, 196, 255))),
+                                                    (kind: Text, text: ">", color: Some((40, 210, 255, 255))),
+                                                ],
+                                            ),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                            (kind: Text, text: "VS", font: "fonts/se_big", color: Some((255, 214, 40, 255)), align: Center, visible_if: "big"),
+                            (
+                                kind: Overlay,
+                                size: (Fill, Fit),
+                                visible_if: "big",
+                                children: [
+                                    (kind: Button, id: "card_away_big", on_click: "card", anchor: Fill, size: (Fill, Fill)),
+                                    (
+                                        kind: Stack(gap: 2, align: Stretch),
+                                        size: (Fill, Fit),
+                                        padding: (6, 2, 6, 3),
+                                        children: [
+                                            (
+                                                kind: Stack(dir: Horizontal, gap: 5),
+                                                size: (Fill, Fit),
+                                                children: [
+                                                    (kind: Overlay, id: "crest_away_big", min: (30, 34)),
+                                                    (
+                                                        kind: Stack(gap: 3),
+                                                        size: (Fill, Fit),
+                                                        children: [
+                                                            (kind: Text, bind: "away_name", text: "{}", size: (Fill, Fit), overflow: Wrap),
+                                                            (kind: Overlay, id: "kit_away_big", min: (34, 8)),
+                                                        ],
+                                                    ),
+                                                ],
+                                            ),
+                                            (kind: Text, bind: "away_ovr", text: "{}", color: Some((255, 214, 40, 255)), overflow: Wrap),
+                                            (
+                                                kind: Stack(dir: Horizontal, justify: SpaceBetween, align: Center),
+                                                size: (Fill, Fit),
+                                                children: [
+                                                    (kind: Text, text: "<", color: Some((40, 210, 255, 255))),
+                                                    (kind: Text, key: "away", text: "AWAY", color: Some((150, 160, 196, 255))),
+                                                    (kind: Text, text: ">", color: Some((40, 210, 255, 255))),
+                                                ],
+                                            ),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                            (
+                                kind: List(gap: 1, max: 8),
+                                bind: "rows",
+                                size: (Fill, Fit),
+                                padding: (30, 0, 30, 0),
+                                children: [
+                                    (
+                                        kind: Overlay,
+                                        size: (Fill, Fit),
+                                        children: [
+                                            (kind: Button, id: "row", on_click: "row", anchor: Fill, size: (Fill, Fill)),
+                                            (
+                                                kind: Stack(dir: Horizontal, justify: SpaceBetween, align: Center),
+                                                size: (Fill, Fit),
+                                                min: (0, 14),
+                                                padding: (6, 1, 6, 1),
+                                                visible_if: "small",
+                                                children: [
+                                                    (kind: Text, bind: "label", text: "{}", color: Some((150, 160, 196, 255))),
+                                                    (kind: Text, bind: "value", text: "{}"),
+                                                ],
+                                            ),
+                                            (
+                                                kind: Stack(gap: 1),
+                                                size: (Fill, Fit),
+                                                padding: (6, 2, 6, 2),
+                                                visible_if: "big",
+                                                children: [
+                                                    (kind: Text, bind: "label", text: "{}", color: Some((150, 160, 196, 255))),
+                                                    (kind: Text, bind: "value", text: "{}", overflow: Wrap),
+                                                ],
+                                            ),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                            (
+                                kind: Overlay,
+                                size: (Fill, Fit),
+                                children: [
+                                    (
+                                        kind: Overlay,
+                                        anchor: Top,
+                                        children: [
+                                            (kind: Button, id: "go", on_click: "go", anchor: Fill, size: (Fill, Fill), color: Some((120, 160, 40, 0))),
+                                            (kind: Text, key: "kick_off", text: "KICK OFF", color: Some((18, 22, 52, 255)), align: Center, min: (128, 18), padding: (8, 3, 8, 3)),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                        ],
+                    ),
+                    (
+                        kind: Stack(dir: Horizontal, gap: 4),
+                        padding: (6, 0, 0, 3),
+                        children: [
+                            (
+                                kind: Stack(dir: Horizontal, gap: 3, align: Center),
+                                id: "hint_a",
+                                padding: (2, 2, 5, 2),
+                                children: [
+                                    (kind: Rect(), color: Some((70, 210, 90, 255)), padding: (3, 0, 3, 0), min: (11, 0), children: [(kind: Text, bind: "btn.a", text: "{}", color: Some((18, 22, 52, 255)), anchor: Center)]),
+                                    (kind: Text, key: "confirm", text: "CONFIRM"),
+                                ],
+                            ),
+                            (
+                                kind: Stack(dir: Horizontal, gap: 3, align: Center),
+                                id: "hint_b",
+                                padding: (2, 2, 5, 2),
+                                children: [
+                                    (kind: Rect(), color: Some((230, 50, 70, 255)), padding: (3, 0, 3, 0), min: (11, 0), children: [(kind: Text, bind: "btn.b", text: "{}", color: Some((18, 22, 52, 255)), anchor: Center)]),
+                                    (kind: Text, key: "back", text: "BACK"),
+                                ],
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+        ],
+    ),
+)

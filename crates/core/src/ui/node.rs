@@ -536,6 +536,18 @@ impl<'a> UiScreen<'a> {
         }
     }
 
+    /// Node `i` by reference where the screen is static Rust (a decoded
+    /// copy for a baked blob): the layout reads nodes many times per node,
+    /// and copying a ~200-byte node each time was most of a menu's layout
+    /// on the N64 (issue #95).
+    #[inline]
+    pub fn node_at(&self, i: usize) -> NodeRef<'_, 'a> {
+        match self.nodes {
+            Nodes::Slice(s) => NodeRef::Ref(&s[i]),
+            Nodes::Baked(r) => NodeRef::Own(r.node(i)),
+        }
+    }
+
     /// The first node named `id`.
     pub fn find(&self, id: &str) -> Option<u16> {
         (0..self.len())
@@ -583,7 +595,26 @@ impl<'a> UiScreen<'a> {
         Children {
             screen: self,
             next: i + 1,
-            end: self.node(i).end as usize,
+            end: self.node_at(i).end as usize,
+        }
+    }
+}
+
+/// A node read by [`UiScreen::node_at`]: borrowed from a static screen,
+/// decoded from a baked one.
+pub enum NodeRef<'s, 'a> {
+    Ref(&'s UiNode<'a>),
+    Own(UiNode<'a>),
+}
+
+impl<'a> core::ops::Deref for NodeRef<'_, 'a> {
+    type Target = UiNode<'a>;
+
+    #[inline]
+    fn deref(&self) -> &UiNode<'a> {
+        match self {
+            NodeRef::Ref(n) => n,
+            NodeRef::Own(n) => n,
         }
     }
 }
@@ -604,7 +635,7 @@ impl Iterator for Children<'_, '_> {
         }
         let i = self.next;
         // A malformed end can't loop: subtrees always move forward.
-        self.next = (self.screen.node(i).end as usize).max(i + 1);
+        self.next = (self.screen.node_at(i).end as usize).max(i + 1);
         Some(i)
     }
 }

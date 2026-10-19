@@ -23,6 +23,14 @@ pub mod screens;
 pub mod settings_gen {
     include!("settings_gen.rs");
 }
+/// The "reset the save?" dialog (`ui/confirm.ui.ron`).
+pub mod confirm_gen {
+    include!("confirm_gen.rs");
+}
+/// The quick match setup (`ui/quick.ui.ron`).
+pub mod quick_gen {
+    include!("quick_gen.rs");
+}
 /// The league table (`ui/table.ui.ron`).
 pub mod table_gen {
     include!("table_gen.rs");

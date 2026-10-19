@@ -114,7 +114,7 @@ impl Settings {
 }
 
 /// The quick-match choices.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct QuickCfg {
     pub home: u8,
     pub away: u8,
@@ -297,9 +297,9 @@ pub struct SolidElevenGame {
     /// The menu screen up (one at a time): laid out by the engine
     /// (`ui/*.ui.ron`, issue #95), showing the game's cursors.
     pub menu_ui: crate::ui::scr::MenuUi,
-    /// The menu screens' data revision: moves on any menu input, tap or
-    /// scene change, and every 30 frames (a timer's text), so a screen
-    /// lays out only then (a layout is milliseconds on the N64).
+    /// Part of the menu screens' data revision (with each screen's own
+    /// state, `ui::scr::rev`): moves on a scene change or a toast, and
+    /// every 30 frames (a timer's text).
     pub menu_frame: u32,
     menu_ticks: u32,
     /// The toast over the menus (`ui/toast.ui.ron`).
@@ -524,11 +524,7 @@ impl SolidElevenGame {
         let scene_before = self.scene;
         let toast_before = self.toast.map(|t| t.text);
         self.menu_ticks = self.menu_ticks.wrapping_add(1);
-        if nav != Nav::default()
-            || tap.is_some()
-            || input.keys != prev.keys
-            || self.menu_ticks.is_multiple_of(30)
-        {
+        if self.menu_ticks.is_multiple_of(30) {
             self.menu_frame = self.menu_frame.wrapping_add(1);
         }
         if tap == Some(crate::ui::screens::HIT_BACK) {

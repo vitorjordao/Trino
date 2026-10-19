@@ -24,16 +24,43 @@ pub(super) const INNER_GAP: f32 = 4.0;
 /// Longest label, bytes (a bound value substituted in).
 pub(super) const LABEL_LEN: usize = 96;
 
-/// A 64-bit FNV-1a hash of `words`, never 0 (0 marks an empty memo slot).
-fn memo_key(words: &[u64]) -> u64 {
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for w in words {
-        for b in w.to_le_bytes() {
-            h ^= b as u64;
-            h = h.wrapping_mul(0x0000_0100_0000_01b3);
-        }
+/// What a layout memo entry was measured for: a node and list item, and
+/// two more words (the room offered, or a wrapped label's width). Compared
+/// whole, so entries never collide; `node == u32::MAX` marks an empty one.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) struct MemoKey {
+    pub node: u32,
+    pub a: u32,
+    pub b: u32,
+}
+
+impl MemoKey {
+    pub(super) const EMPTY: MemoKey = MemoKey {
+        node: u32::MAX,
+        a: 0,
+        b: 0,
+    };
+}
+
+/// `table`'s entry for `key`, or `measure` stored there (direct-mapped:
+/// one 32-bit hash per lookup, cheap on the N64).
+fn memo(
+    table: &[core::cell::Cell<(MemoKey, Vec2)>],
+    key: MemoKey,
+    measure: impl FnOnce() -> Vec2,
+) -> Vec2 {
+    if table.is_empty() {
+        return measure();
     }
-    h.max(1)
+    let h = (key.node ^ key.a.rotate_left(11) ^ key.b.rotate_left(22)).wrapping_mul(0x9e37_79b1);
+    let slot = &table[(h >> 16) as usize % table.len()];
+    let (k, size) = slot.get();
+    if k == key {
+        return size;
+    }
+    let size = measure();
+    slot.set((key, size));
+    size
 }
 
 pub(super) fn floor(v: f32) -> f32 {
@@ -192,8 +219,8 @@ impl<const N: usize> Ui<N> {
             s.max = 0.0;
         }
         self.tracks = [(NONE, 0, Rect::new(0.0, 0.0, 0.0, 0.0)); super::MAX_SLIDERS];
-        for m in self.text_memo.iter() {
-            m.set((0, Vec2::ZERO));
+        for m in self.text_memo.iter().chain(self.size_memo.iter()) {
+            m.set((MemoKey::EMPTY, Vec2::ZERO));
         }
         if !screen.is_empty() {
             let mut solver = Solver {
@@ -202,7 +229,7 @@ impl<const N: usize> Ui<N> {
                 env,
                 measure,
             };
-            let root = screen.node(0);
+            let root = screen.node_at(0);
             if solver.visible(&root, NO_ITEM) {
                 let on = solver.screen_of(&root, Screen::Top);
                 let frame = solver.ui.frames[on.index() as usize];
@@ -310,36 +337,23 @@ impl<M: TextMeasure + ?Sized, const N: usize> Solver<'_, '_, '_, M, N> {
     }
 
     /// The node's label, its size, and whether it wraps past `max_w`.
-    fn label_size(&self, n: &UiNode<'_>, item: u16, max_w: f32) -> Vec2 {
-        // The same node and item at the same font, scale and (wrapped)
-        // width make the same label: measure it once per layout.
-        let (font, scale) = self.font(n);
+    fn label_size(&self, i: usize, n: &UiNode<'_>, item: u16, max_w: f32) -> Vec2 {
+        // The same node and item at the same (wrapped) width make the same
+        // label: measure it once per layout. The font and scale are the
+        // node's, fixed for the layout.
         let wrap_w = if n.overflow == Overflow::Wrap {
             max_w.to_bits()
         } else {
             0
         };
-        let key = memo_key(&[
-            n.text.as_ptr() as usize as u64,
-            n.bind.as_ptr() as usize as u64,
-            n.key.as_ptr() as usize as u64,
-            (n.text.len() as u64) << 32 | n.bind.len() as u64,
-            (item as u64) << 32 | font.0 as u64,
-            (scale.to_bits() as u64) << 32 | wrap_w as u64,
-            n.kind.name().as_ptr() as usize as u64,
-        ]);
-        let at = (key % N.max(1) as u64) as usize;
-        if let Some(m) = self.ui.text_memo.get(at) {
-            let (k, size) = m.get();
-            if k == key {
-                return size;
-            }
-        }
-        let size = self.measure_label(n, item, max_w);
-        if let Some(m) = self.ui.text_memo.get(at) {
-            m.set((key, size));
-        }
-        size
+        let key = MemoKey {
+            node: (i as u32) << 16 | item as u32,
+            a: wrap_w,
+            b: 0,
+        };
+        memo(&self.ui.text_memo, key, || {
+            self.measure_label(n, item, max_w)
+        })
     }
 
     fn measure_label(&self, n: &UiNode<'_>, item: u16, max_w: f32) -> Vec2 {
@@ -376,12 +390,24 @@ impl<M: TextMeasure + ?Sized, const N: usize> Solver<'_, '_, '_, M, N> {
     fn kids(&self, i: usize, item: u16) -> impl Iterator<Item = usize> + '_ {
         self.screen
             .children(i)
-            .filter(move |&c| self.visible(&self.screen.node(c), item))
+            .filter(move |&c| self.visible(&self.screen.node_at(c), item))
     }
 
-    /// The node's outer size when its parent offers `avail`.
+    /// The node's outer size when its parent offers `avail` (once per
+    /// layout for the same node, item and room).
     fn outer(&self, i: usize, item: u16, avail: Vec2, depth: usize) -> Vec2 {
-        let n = self.screen.node(i);
+        let key = MemoKey {
+            node: (i as u32) << 16 | item as u32,
+            a: avail.x.to_bits(),
+            b: avail.y.to_bits(),
+        };
+        memo(&self.ui.size_memo, key, || {
+            self.measure_outer(i, item, avail, depth)
+        })
+    }
+
+    fn measure_outer(&self, i: usize, item: u16, avail: Vec2, depth: usize) -> Vec2 {
+        let n = self.screen.node_at(i);
         let pad = Vec2::new(
             (n.padding[0] + n.padding[2]) as f32,
             (n.padding[1] + n.padding[3]) as f32,
@@ -419,18 +445,18 @@ impl<M: TextMeasure + ?Sized, const N: usize> Solver<'_, '_, '_, M, N> {
         if depth >= MAX_DEPTH {
             return Vec2::ZERO;
         }
-        let n = self.screen.node(i);
+        let n = self.screen.node_at(i);
         let avail = Vec2::new(avail.x.max(0.0), avail.y.max(0.0));
         let own = match n.kind {
-            NodeKind::Text | NodeKind::Button => self.label_size(&n, item, avail.x),
+            NodeKind::Text | NodeKind::Button => self.label_size(i, &n, item, avail.x),
             NodeKind::Toggle => {
                 let lh = self.line_height(&n);
-                let l = self.label_size(&n, item, avail.x - lh - INNER_GAP);
+                let l = self.label_size(i, &n, item, avail.x - lh - INNER_GAP);
                 Vec2::new(lh + INNER_GAP + l.x, l.y.max(lh))
             }
             NodeKind::Slider { .. } => {
                 let lh = self.line_height(&n);
-                let l = self.label_size(&n, item, avail.x);
+                let l = self.label_size(i, &n, item, avail.x);
                 let gap = if l.x > 0.0 { INNER_GAP } else { 0.0 };
                 Vec2::new(l.x + gap + TRACK_MIN, l.y.max(lh))
             }
@@ -441,7 +467,7 @@ impl<M: TextMeasure + ?Sized, const N: usize> Solver<'_, '_, '_, M, N> {
                 for c in self.kids(i, item) {
                     let s = self.outer(c, item, avail, depth + 1);
                     let (m, x) = axis(s, dir);
-                    if axis_size(&self.screen.node(c), dir) != Size::Fill {
+                    if axis_size(&self.screen.node_at(c), dir) != Size::Fill {
                         main += m;
                     }
                     cross = cross.max(x);
@@ -507,7 +533,7 @@ impl<M: TextMeasure + ?Sized, const N: usize> Solver<'_, '_, '_, M, N> {
         // Anything else lays its children over each other.
         let mut all = own;
         for c in self.kids(i, item) {
-            let cn = self.screen.node(c);
+            let cn = self.screen.node_at(c);
             let s = self.outer(c, item, avail, depth + 1);
             let (ax, ay) = cn.anchor.axes();
             if ax != AxisAnchor::Stretch {
@@ -566,7 +592,7 @@ impl<M: TextMeasure + ?Sized, const N: usize> Solver<'_, '_, '_, M, N> {
         let Some(slot) = self.alloc(i, item, parent, on) else {
             return;
         };
-        let n = self.screen.node(i);
+        let n = self.screen.node_at(i);
         let mut f = 0u8;
         // A node a scroll box cuts is not drawn, nor what it holds: a row
         // shows whole or not at all. A list (or a nested scroll box)
@@ -589,7 +615,7 @@ impl<M: TextMeasure + ?Sized, const N: usize> Solver<'_, '_, '_, M, N> {
         }
         let content = super::layout::inset(rect, n.padding);
         if n.kind.has_text() {
-            f |= self.text_fit(&n, item, content);
+            f |= self.text_fit(i, &n, item, content);
             if f & flags::OVERFLOW != 0 {
                 self.ui.stats.overflow = self.ui.stats.overflow.saturating_add(1);
             }
@@ -599,7 +625,7 @@ impl<M: TextMeasure + ?Sized, const N: usize> Solver<'_, '_, '_, M, N> {
         if let NodeKind::Slider { .. } = n.kind
             && let Some(k) = self.ui.tracks.iter().position(|t| t.0 == NONE)
         {
-            let l = self.label_size(&n, item, content.size.x);
+            let l = self.label_size(i, &n, item, content.size.x);
             let gap = if l.x > 0.0 { INNER_GAP } else { 0.0 };
             let x = content.pos.x + l.x + gap;
             let w = (content.size.x - l.x - gap).max(TRACK_MIN.min(content.size.x));
@@ -677,7 +703,7 @@ impl<M: TextMeasure + ?Sized, const N: usize> Solver<'_, '_, '_, M, N> {
             _ => {
                 let screen = self.screen;
                 for c in screen.children(i) {
-                    let cn = self.screen.node(c);
+                    let cn = self.screen.node_at(c);
                     if !self.visible(&cn, item) {
                         continue;
                     }
@@ -701,7 +727,7 @@ impl<M: TextMeasure + ?Sized, const N: usize> Solver<'_, '_, '_, M, N> {
 
     /// A child's rect inside `room` by its anchor, offset and size.
     fn anchored(&self, c: usize, item: u16, room: Rect, depth: usize) -> Rect {
-        let n = self.screen.node(c);
+        let n = self.screen.node_at(c);
         let (ax, ay) = n.anchor.axes();
         let size = self.outer(c, item, room.size, depth + 1);
         let place = |a: AxisAnchor, start: f32, len: f32, size: f32, off: i16| match a {
@@ -734,7 +760,7 @@ impl<M: TextMeasure + ?Sized, const N: usize> Solver<'_, '_, '_, M, N> {
         let gap = gap as f32;
         let (mut fixed, mut fills, mut k) = (0.0f32, 0u32, 0u32);
         for c in self.kids(i, item) {
-            if axis_size(&self.screen.node(c), dir) == Size::Fill {
+            if axis_size(&self.screen.node_at(c), dir) == Size::Fill {
                 fills += 1;
             } else {
                 fixed += axis(self.outer(c, item, content.size, depth + 1), dir).0;
@@ -764,7 +790,7 @@ impl<M: TextMeasure + ?Sized, const N: usize> Solver<'_, '_, '_, M, N> {
         let start = pos;
         let screen = self.screen;
         for c in screen.children(i) {
-            let cn = self.screen.node(c);
+            let cn = self.screen.node_at(c);
             if !self.visible(&cn, item) {
                 continue;
             }
@@ -816,14 +842,14 @@ impl<M: TextMeasure + ?Sized, const N: usize> Solver<'_, '_, '_, M, N> {
         let mut row = [0u16; 32];
         let mut y = content.pos.y;
         let screen = self.screen;
-        let end = screen.node(i).end as usize;
+        let end = screen.node_at(i).end as usize;
         let mut next = i + 1;
         loop {
             let mut k = 0;
             while k < cols && next < end {
                 let c = next;
-                next = (screen.node(c).end as usize).max(c + 1);
-                if self.visible(&screen.node(c), item) {
+                next = (screen.node_at(c).end as usize).max(c + 1);
+                if self.visible(&screen.node_at(c), item) {
                     row[k] = c as u16;
                     k += 1;
                 }
@@ -837,7 +863,7 @@ impl<M: TextMeasure + ?Sized, const N: usize> Solver<'_, '_, '_, M, N> {
                 .fold(0.0f32, f32::max);
             for (col, &c) in row[..k].iter().enumerate() {
                 let c = c as usize;
-                let cn = screen.node(c);
+                let cn = screen.node_at(c);
                 let mut s = self.outer(c, item, cell, depth + 1);
                 if cn.size.0 == Size::Fill {
                     s.x = cell_w;
@@ -884,13 +910,13 @@ impl<M: TextMeasure + ?Sized, const N: usize> Solver<'_, '_, '_, M, N> {
     }
 
     /// Overflow flags of a text-bearing node in `content`.
-    fn text_fit(&self, n: &UiNode<'_>, item: u16, content: Rect) -> u8 {
+    fn text_fit(&self, i: usize, n: &UiNode<'_>, item: u16, content: Rect) -> u8 {
         let room = match n.kind {
             NodeKind::Toggle => content.size.x - self.line_height(n) - INNER_GAP,
             NodeKind::Slider { .. } => content.size.x - TRACK_MIN - INNER_GAP,
             _ => content.size.x,
         };
-        let need = self.label_size(n, item, room.max(0.0));
+        let need = self.label_size(i, n, item, room.max(0.0));
         let wide = need.x > room + 0.5;
         let tall = need.y > content.size.y + 0.5;
         match n.overflow {

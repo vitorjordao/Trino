@@ -65,12 +65,14 @@ fn common(g: &SolidElevenGame, key: &str) -> Option<UiValue> {
 }
 
 /// A screen's values: the common keys, then the screen's own. Its
-/// revision moves with the menu input and the cursors
-/// (`SolidElevenGame::menu_frame`): the screen lays out only when a value
-/// may have changed, at most once a frame (the art under it reads the
-/// rects the draw uses).
+/// revision is the screen's `rev` (a hash of the state its values read,
+/// [`rev`]), the common keys' inputs and `SolidElevenGame::menu_frame` (a
+/// scene change, a toast, every 30 frames): the screen lays out only when
+/// a value may have changed, not on every cursor move (a layout is
+/// milliseconds on the N64), at most once a frame.
 struct Values<'g, F: Fn(&str, u16) -> Option<UiValue>> {
     g: &'g SolidElevenGame,
+    rev: u32,
     own: F,
 }
 
@@ -80,13 +82,18 @@ impl<F: Fn(&str, u16) -> Option<UiValue>> UiData for Values<'_, F> {
     }
 
     fn revision(&self) -> Option<u32> {
-        // The cursors too: a test or a tool that moves one by hand still
-        // sees it.
-        use core::hash::Hash;
-        let mut h = Fnv(0x811c_9dc5);
-        self.g.cur.hash(&mut h);
-        Some(self.g.menu_frame ^ h.0)
+        let g = self.g;
+        let common = rev(&(g.pad_layout(), g.access.clamped().text_factor() >= 1.5));
+        Some(self.rev ^ common.rotate_left(7) ^ g.menu_frame.rotate_left(17))
     }
+}
+
+/// A revision from what a screen's values read: hash every field they
+/// depend on (the cursors only where a value shows the cursor's choice).
+pub fn rev(state: &impl core::hash::Hash) -> u32 {
+    let mut h = Fnv(0x811c_9dc5);
+    state.hash(&mut h);
+    h.0
 }
 
 /// FNV-1a, for the revision.
@@ -105,14 +112,17 @@ impl core::hash::Hasher for Fnv {
 }
 
 /// Lay out and draw `screen` with the cursor on `focus` (a node id and its
-/// list item). `values` answers the screen's own keys (see [`common`]);
+/// list item). `state` is [`rev`] of what `values` reads; `values` answers
+/// the screen's own keys (see [`common`]);
 /// `under` draws art beneath the screen once it is laid out. Then read
 /// rects for art on top and taps from `g.menu_ui`.
+#[allow(clippy::too_many_arguments)]
 pub fn show<F>(
     g: &mut SolidElevenGame,
     r: &mut dyn Renderer,
     screen: &UiScreen<'_>,
     focus: Option<(&str, u16)>,
+    state: u32,
     values: F,
     under: impl FnOnce(&SolidElevenGame, &MenuUi, &mut dyn Renderer),
 ) where
@@ -130,6 +140,7 @@ pub fn show<F>(
         let strings = UiTr(g.settings.lang);
         let data = Values {
             g,
+            rev: state,
             own: |key: &str, item: u16| values(g, key, item),
         };
         let env = UiEnv::of(r)

@@ -116,7 +116,7 @@ impl<const N: usize> Ui<N> {
         if let (true, Some(d)) = (fire, dir)
             && let Some(at) = self.focus_slot()
         {
-            let node = screen.node(self.slots[at].node as usize);
+            let node = screen.node_at(self.slots[at].node as usize);
             let adjusts = matches!(node.kind, NodeKind::Slider { .. } | NodeKind::Toggle);
             if adjusts && (d == LEFT || d == RIGHT) {
                 self.adjust(screen, at, if d == LEFT { -1 } else { 1 }, &mut events);
@@ -146,7 +146,7 @@ impl<const N: usize> Ui<N> {
         {
             let s = self.slots[at];
             events.push(UiEvent::Moved {
-                id: screen.node(s.node as usize).id,
+                id: screen.node_at(s.node as usize).id,
                 item: s.item,
             });
             self.scroll_into_view(at);
@@ -186,7 +186,7 @@ impl<const N: usize> Ui<N> {
             && let Some(i) = self.slot_of(pressed)
             && self.slots[i].on == on
         {
-            let node = screen.node(pressed.0 as usize);
+            let node = screen.node_at(pressed.0 as usize);
             if let NodeKind::Slider { .. } = node.kind
                 && input.pointer_down(PointerButton::Primary)
             {
@@ -242,7 +242,7 @@ impl<const N: usize> Ui<N> {
         if !s.has(flags::FOCUSABLE) {
             return;
         }
-        let node = screen.node(s.node as usize);
+        let node = screen.node_at(s.node as usize);
         if let NodeKind::Toggle = node.kind {
             self.adjust(screen, at, 0, events);
         }
@@ -265,7 +265,7 @@ impl<const N: usize> Ui<N> {
         events: &mut UiEvents<'a>,
     ) {
         let s = self.slots[at];
-        let node = screen.node(s.node as usize);
+        let node = screen.node_at(s.node as usize);
         if node.bind.is_empty() {
             return;
         }
@@ -300,7 +300,7 @@ impl<const N: usize> Ui<N> {
     /// A slider dragged to pixel `x`.
     fn drag<'a>(&mut self, screen: &UiScreen<'a>, at: usize, x: f32, events: &mut UiEvents<'a>) {
         let s = self.slots[at];
-        let node = screen.node(s.node as usize);
+        let node = screen.node_at(s.node as usize);
         let NodeKind::Slider { min, max, step } = node.kind else {
             return;
         };
@@ -368,7 +368,7 @@ impl<const N: usize> Ui<N> {
         dir: u8,
         wrap: bool,
     ) -> Option<usize> {
-        let node = screen.node(self.slots[from].node as usize);
+        let node = screen.node_at(self.slots[from].node as usize);
         let explicit = node.nav[dir as usize];
         if explicit != NONE {
             return self

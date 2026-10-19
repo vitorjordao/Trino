@@ -3505,3 +3505,25 @@ mod ui_cost_tests {
         assert_eq!(ui.stats().dropped, 0);
     }
 }
+
+#[cfg(test)]
+mod ui_cost_bench {
+    use super::*;
+    #[test]
+    #[ignore]
+    fn bench_layout() {
+        use trino_core::ui::{CellMeasure, UiEnv};
+        let mut ui = trino_core::Ui::<128>::new();
+        let n = 2000;
+        let t = std::time::Instant::now();
+        for k in 0..n {
+            let data = UiCostData { revision: k };
+            let env = UiEnv::of_caps(&trino_core::Caps::N64).with_data(&data);
+            ui.layout(&UI_COST_SCREEN, &env, &CellMeasure);
+        }
+        println!(
+            "layout {:.1} us",
+            t.elapsed().as_secs_f64() * 1e6 / n as f64
+        );
+    }
+}

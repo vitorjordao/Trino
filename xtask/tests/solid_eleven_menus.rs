@@ -485,9 +485,18 @@ fn check(g: &SolidElevenGame, fonts: &Fonts, path: &str, report: &mut Report) {
                         .push(format!("{} UI nodes not laid out: {at}", st.dropped));
                 }
                 if st.overflow > 0 {
-                    report
-                        .problems
-                        .push(format!("{} UI texts past their box: {at}", st.overflow));
+                    // Which nodes (index and list item) in the menu screen.
+                    let nodes: Vec<String> = g
+                        .menu_ui
+                        .slots()
+                        .iter()
+                        .filter(|s| s.has(trino_core::ui::flags::OVERFLOW))
+                        .map(|s| format!("#{}/{}", s.node, s.item))
+                        .collect();
+                    report.problems.push(format!(
+                        "{} UI texts past their box {nodes:?}: {at}",
+                        st.overflow
+                    ));
                 }
             }
             for (c, text) in &r.missing {
@@ -596,7 +605,10 @@ fn scene_name(s: Scene) -> String {
 /// The screens drawn by the engine's UI system (issue #95): they must grow
 /// with the text scale, and the box check holds them at 200 %.
 fn ui_screen(g: &SolidElevenGame) -> bool {
-    matches!(g.scene, Scene::Pause | Scene::Settings | Scene::Table)
+    matches!(
+        g.scene,
+        Scene::Pause | Scene::Settings | Scene::Table | Scene::Confirm | Scene::Quick
+    )
 }
 
 #[derive(Default)]
@@ -762,7 +774,7 @@ fn every_menu_state_draws_cleanly_in_every_language_and_size() {
         "busiest N64 picture: {} rects + glyphs ({})",
         report.busiest.0, report.busiest.1
     );
-    for want in ["Pause", "Settings", "Table"] {
+    for want in ["Pause", "Settings", "Table", "Confirm", "Quick"] {
         assert!(
             report.grew.contains(want),
             "{want} (a UI screen) drew the same at every text scale"

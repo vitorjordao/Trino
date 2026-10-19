@@ -515,11 +515,16 @@ pub struct Ui<const N: usize = 64> {
     /// The focus was set from outside: scroll it into view at the next
     /// draw.
     reveal: bool,
-    /// Label sizes measured by the current layout, by a hash of what makes
-    /// the label (issue #95): a fit size asks a text at every level of its
-    /// tree, and building a label (a value, a format) is the expensive part
-    /// on the N64. Cleared at each layout.
-    text_memo: [core::cell::Cell<(u64, Vec2)>; N],
+    /// Label sizes measured by the current layout, by node and list item
+    /// (issue #95): a fit size asks a text at every level of its tree, and
+    /// building a label (a value, a format) is the expensive part on the
+    /// N64. Cleared at each layout.
+    text_memo: [core::cell::Cell<(layout::MemoKey, Vec2)>; N],
+    /// Outer sizes measured by the current layout, by node, item and the
+    /// room offered: a fit size measures its content once for its width
+    /// and once for its height, so nested fit containers would measure
+    /// their subtrees 2^depth times.
+    size_memo: [core::cell::Cell<(layout::MemoKey, Vec2)>; N],
 }
 
 /// A [`UiEnv`] without its string table, kept across frames.
@@ -623,7 +628,8 @@ impl<const N: usize> Ui<N> {
             last_env: None,
             text_mul: 1.0,
             reveal: false,
-            text_memo: [const { core::cell::Cell::new((0, Vec2::ZERO)) }; N],
+            text_memo: [const { core::cell::Cell::new((layout::MemoKey::EMPTY, Vec2::ZERO)) }; N],
+            size_memo: [const { core::cell::Cell::new((layout::MemoKey::EMPTY, Vec2::ZERO)) }; N],
         }
     }
 

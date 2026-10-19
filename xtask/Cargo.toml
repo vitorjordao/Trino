@@ -27,8 +27,9 @@ toml = { workspace = true }
 serde = { workspace = true }
 # `build web`: the asset pack format (the browser reads it back).
 trino-platform-web = { workspace = true }
-# `ui shot`: a screen rendered headless as each target shows it.
-trino-platform-pc = { workspace = true }
+# `ui shot`: a screen rendered headless as each target shows it (the
+# renderer alone: no audio, so no ALSA for the console jobs).
+trino-render-wgpu = { workspace = true }
 pollster = { workspace = true }
 
 [dev-dependencies]
@@ -41,5 +42,6 @@ platformer = { workspace = true }
 castle64 = { workspace = true }
 showcase = { workspace = true }
 solid-eleven = { workspace = true }
+trino-platform-pc = { workspace = true }
 trino-runner-pc = { workspace = true }
 gif = { workspace = true }

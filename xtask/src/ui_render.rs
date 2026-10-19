@@ -8,7 +8,7 @@ use trino_asset_pipeline::{Manifest, Platform, resolve_source};
 use trino_core::{
     Color, Family, FontId, InputState, ModelId, Renderer, SpriteId, Ui, UiEnv, UiStats,
 };
-use trino_platform_pc::{PcRenderer, SimProfile};
+use trino_render_wgpu::{PcRenderer, SimProfile};
 use trino_scene::ui::{Flat, Kind, Langs, ScreenDef, apply_preview};
 
 /// What to render.

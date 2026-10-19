@@ -197,6 +197,7 @@ impl Size {
 
 /// A node's kind and its kind-specific settings.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(deny_unknown_fields)]
 pub enum Kind {
     /// Children placed by their own anchors.
     #[default]
@@ -385,7 +386,7 @@ impl Kind {
 
 /// Explicit focus moves, by target id (empty = by geometry).
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct Nav {
     #[serde(skip_serializing_if = "String::is_empty")]
     pub up: String,
@@ -409,7 +410,7 @@ impl Nav {
 
 /// One node of a screen.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct NodeDef {
     pub kind: Kind,
     /// A name for focus overrides, events and the game's lookups.
@@ -525,7 +526,7 @@ impl NodeDef {
 
 /// Overrides of the engine's default look.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct ThemeDef {
     /// A font's logical path; empty = `fonts/trino5x7`.
     #[serde(skip_serializing_if = "String::is_empty")]
@@ -605,8 +606,10 @@ pub enum Sample {
     Items(Vec<String>),
 }
 
-/// A screen: `ui/<name>.ui.ron`.
+/// A screen: `ui/<name>.ui.ron`. Unknown fields are errors: a misspelt
+/// one would otherwise vanish on the next save.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct ScreenDef {
     pub version: u32,
     /// Defaults to the file's stem.
@@ -1223,7 +1226,7 @@ impl HostStrings<'_> {
 /// A language's strings: `assets/i18n/<lang>.ron` (issue #59's format,
 /// plain strings).
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
-#[serde(rename = "Strings")]
+#[serde(rename = "Strings", deny_unknown_fields)]
 pub struct StringsDef {
     pub lang: String,
     /// The language read for keys this one lacks.

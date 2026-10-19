@@ -79,7 +79,9 @@ struct Opts {
 impl Opts {
     fn take(args: &mut Vec<String>) -> Result<Opts, String> {
         let platform = match crate::web::take_value(args, "--platform")? {
-            Some(p) => Some(family(&p).ok_or("--platform needs n64, 3ds, pc or web")?),
+            Some(p) => {
+                Some(family(&p).ok_or(format!("--platform {p}: needs n64, 3ds, pc or web"))?)
+            }
             None => None,
         };
         let size = match crate::web::take_value(args, "--size")? {
@@ -260,6 +262,9 @@ fn check_one(
     let def = match ScreenDef::load(file) {
         Ok(d) => d,
         Err(e) => {
+            // `load` names the file; the report already does.
+            let prefix = format!("{}: ", file.display());
+            let e = e.strip_prefix(&prefix).unwrap_or(&e).to_string();
             let issue = json!({"level": "error", "node": null, "label": "screen", "message": e});
             return (
                 json!({"file": name, "issues": [issue]}),

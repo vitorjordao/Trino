@@ -397,6 +397,24 @@ fn previews_set_values_and_list_counts() {
     assert_eq!(Family::Pc.key(), "pc");
 }
 
+/// A misspelt field is an error, not a value that silently vanishes on
+/// the editor's next save — on nodes, kinds, themes, screens and tables.
+#[test]
+fn unknown_fields_are_errors() {
+    for (text, field) in [
+        ("(version: 1, root: (colour: Some((1, 2, 3, 255))))", "colour"),
+        ("(version: 1, root: (kind: Stack(gaps: 4)))", "gaps"),
+        ("(version: 1, theme: (focus_colour: None), root: ())", "focus_colour"),
+        ("(version: 1, title: \"x\", root: ())", "title"),
+        ("(version: 1, root: (nav: (down: \"a\", forward: \"b\")))", "forward"),
+    ] {
+        let e = ScreenDef::from_ron(text).unwrap_err();
+        assert!(e.contains(field), "{text}: {e}");
+    }
+    let e = StringsDef::from_ron("(lang: \"en\", entries: {}, notes: \"x\")").unwrap_err();
+    assert!(e.contains("notes"), "{e}");
+}
+
 /// A TFNT v1 with one glyph, 'A' (5 × 8, advance 6).
 fn tiny_font() -> Vec<u8> {
     use trino_core::text;

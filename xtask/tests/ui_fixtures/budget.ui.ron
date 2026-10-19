@@ -1,0 +1,10 @@
+// `ui check` fixture: a list of 100 rows is past the N64's 64 nodes
+// (Caps::max_ui_nodes) but fits the PC's 512.
+(
+    version: 1,
+    name: "budget",
+    preview: {"n": Int(100)},
+    root: (children: [
+        (kind: List(max: 100), bind: "n", children: [(kind: Rect(), size: (Px(2), Px(2)))]),
+    ]),
+)

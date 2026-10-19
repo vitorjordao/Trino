@@ -1,0 +1,97 @@
+[web] installing wasm-bindgen-cli 0.2.126 into /home/v/Documents/projects/Trino/target/tools (once; about a minute)
+    Updating crates.io index
+  Installing wasm-bindgen-cli v0.2.126
+warning: default toolchain implicitly overridden with `stable-x86_64-unknown-linux-gnu` by rustup toolchain file
+  |
+  = help: use `cargo +stable install` if you meant to use the stable toolchain
+  = note: rustup selects the toolchain based on the parent environment and not the environment of the package being installed
+    Updating crates.io index
+warning: package `der v0.8.0` in Cargo.lock is yanked in registry `crates-io`
+  |
+  = help: consider running without --locked
+    Updating crates.io index
+    Finished `release` profile [optimized] target(s) in 55.03s
+warning: the following packages contain code that will be rejected by a future version of Rust: buf_redux v0.8.4, multipart v0.18.0
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+  Installing /home/v/Documents/projects/Trino/target/tools/bin/wasm-bindgen
+  Installing /home/v/Documents/projects/Trino/target/tools/bin/wasm-bindgen-test-runner
+  Installing /home/v/Documents/projects/Trino/target/tools/bin/wasm2es6js
+   Installed package `wasm-bindgen-cli v0.2.126` (executables `wasm-bindgen`, `wasm-bindgen-test-runner`, `wasm2es6js`)
+warning: be sure to add `/home/v/Documents/projects/Trino/target/tools/bin` to your PATH to be able to run the installed binaries
+[web] /home/v/Documents/projects/Trino/target/web/assets/trino.selftest_level.tbnd: 676 bytes
+[web] /home/v/Documents/projects/Trino/target/web/assets/trino.selftest_level2.tbnd: 4380 bytes
+[web] assets/trino.pak: 469056 bytes
+[web] assets/solid-eleven.pak: 2246338 bytes
+warning: dropping unsupported crate type `dylib` for target `wasm32-unknown-unknown`
+warning: `showcase` (lib) generated 1 warning
+warning: `castle64` (lib) generated 1 warning (1 duplicate)
+warning: `solid-eleven` (lib) generated 1 warning (1 duplicate)
+    Finished `release` profile [optimized] target(s) in 59.25s
+[web] trino.wasm: 6399694 bytes (release)
+Downloading Firefox 155.0 (playwright firefox v1543)[2m from https://cdn.playwright.dev/dbazure/download/playwright/builds/firefox/1543/firefox-ubuntu-24.04.zip[22m
+Error: Request to https://playwright.download.prss.microsoft.com/dbazure/download/playwright/builds/firefox/1543/firefox-ubuntu-24.04.zip timed out after 30000ms
+Downloading Firefox 155.0 (playwright firefox v1543)[2m from https://playwright.download.prss.microsoft.com/dbazure/download/playwright/builds/firefox/1543/firefox-ubuntu-24.04.zip[22m
+|                                                                                |   0% of 109.5 MiB
+|■■■■■■■■                                                                        |  10% of 109.5 MiB
+|■■■■■■■■■■■■■■■■                                                                |  20% of 109.5 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■                                                        |  30% of 109.5 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                                |  40% of 109.5 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                        |  50% of 109.5 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                |  60% of 109.5 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                        |  70% of 109.5 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                |  80% of 109.5 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■        |  90% of 109.5 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■| 100% of 109.5 MiB
+Firefox 155.0 (playwright firefox v1543) downloaded to /home/v/.cache/ms-playwright/firefox-1543
+Downloading WebKit 26.6 (playwright webkit v2359)[2m from https://cdn.playwright.dev/dbazure/download/playwright/builds/webkit/2359/webkit-ubuntu-26.04.zip[22m
+|                                                                                |   0% of 95.3 MiB
+|■■■■■■■■                                                                        |  10% of 95.3 MiB
+|■■■■■■■■■■■■■■■■                                                                |  20% of 95.3 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■                                                        |  30% of 95.3 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                                |  40% of 95.3 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                        |  50% of 95.3 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                |  60% of 95.3 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                        |  70% of 95.3 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                |  80% of 95.3 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■        |  90% of 95.3 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■| 100% of 95.3 MiB
+WebKit 26.6 (playwright webkit v2359) downloaded to /home/v/.cache/ms-playwright/webkit-2359
+Playwright Host validation warning: 
+╔══════════════════════════════════════════════════════╗
+║ Host system is missing dependencies to run browsers. ║
+║ Please install them with the following command:      ║
+║                                                      ║
+║     sudo npx playwright install-deps                 ║
+║                                                      ║
+║ Alternatively, use apt:                              ║
+║     sudo apt-get install libevent-2.1-7t64\          ║
+║         libavif16\                                   ║
+║         libmanette-0.2-0                             ║
+║                                                      ║
+║ <3 Playwright Team                                   ║
+╚══════════════════════════════════════════════════════╝
+[web-test] chromium-webgl2 (153.0.8010.12): PASS in 29.3 s · ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver) (Gl) · textures BC
+[web-test] chromium-webgl2: audio codecs ok, 156 frames in 2583 ms (longest gap 17 ms), audio clock 9.387 s: rate=48000 streamed_frames=101106 stream_bytes=199936 resident_bytes=815468 underruns=0
+[web-test] chromium-webgl2: TRINO_AUDIO: state=running rate=48000 resident_bytes=815468 voices=0 streams=0 stream_bytes=0 underruns=0 streamed_frames=115556
+[web-test] chromium-webgl2: TRINO_AUDIO: state=running rate=48000 resident_bytes=1442194 voices=4 streams=1 stream_bytes=199936 underruns=4 streamed_frames=402740
+[web-test] chromium-webgpu (153.0.8010.12): PASS in 30.9 s · browser adapter (BrowserWebGpu) · textures BC
+[web-test] chromium-webgpu: audio codecs ok, 156 frames in 2582 ms (longest gap 17 ms), audio clock 9.387 s: rate=48000 streamed_frames=100636 stream_bytes=199936 resident_bytes=815468 underruns=0
+[web-test] chromium-webgpu: TRINO_AUDIO: state=running rate=48000 resident_bytes=815468 voices=0 streams=0 stream_bytes=0 underruns=0 streamed_frames=115556
+[web-test] chromium-webgpu: TRINO_AUDIO: state=running rate=48000 resident_bytes=1442194 voices=3 streams=1 stream_bytes=199168 underruns=3 streamed_frames=383418
+[web-test] firefox-webgl2 (155.0): PASS in 14.3 s · Radeon HD 3200 Graphics, or similar (Gl) · textures BC
+[web-test] firefox-webgl2: audio codecs ok, 156 frames in 2582 ms (longest gap 17 ms), audio clock 8.635 s: rate=48000 streamed_frames=101106 stream_bytes=199936 resident_bytes=815468 underruns=0
+[web-test] firefox-webgl2: TRINO_AUDIO: state=running rate=48000 resident_bytes=815468 voices=0 streams=0 stream_bytes=0 underruns=0 streamed_frames=115556
+[web-test] firefox-webgl2: TRINO_AUDIO: state=running rate=48000 resident_bytes=1442194 voices=7 streams=2 stream_bytes=218056 underruns=0 streamed_frames=151677
+[web-test] webkit-webgl2 (?): FAIL in 0.2 s · browserType.launch: 
+[web] chromium-webgl2: /home/v/Documents/projects/Trino/tests/golden/web/showcase.png: mean diff 0.05, 0.00% far pixels (limits 3, 2.0%)
+[web] chromium-webgl2: /home/v/Documents/projects/Trino/tests/golden/web/castle64_hub.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[web] chromium-webgl2: /home/v/Documents/projects/Trino/tests/golden/web/texture_formats.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[web] chromium-webgpu: /home/v/Documents/projects/Trino/tests/golden/web/showcase.png: mean diff 0.05, 0.00% far pixels (limits 3, 2.0%)
+[web] chromium-webgpu: /home/v/Documents/projects/Trino/tests/golden/web/castle64_hub.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[web] chromium-webgpu: /home/v/Documents/projects/Trino/tests/golden/web/texture_formats.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[web] firefox-webgl2: /home/v/Documents/projects/Trino/tests/golden/web/showcase.png: mean diff 0.10, 0.03% far pixels (limits 3, 2.0%)
+[web] firefox-webgl2: /home/v/Documents/projects/Trino/tests/golden/web/castle64_hub.png: mean diff 0.05, 0.02% far pixels (limits 3, 2.0%)
+[web] firefox-webgl2: /home/v/Documents/projects/Trino/tests/golden/web/texture_formats.png: mean diff 0.09, 0.02% far pixels (limits 3, 2.0%)
+[web] failures:
+  webkit-webgl2: browserType.launch: 
+WEB exit=1

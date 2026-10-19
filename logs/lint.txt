@@ -6,3 +6,4 @@ cargo +nightly check (N64 mips target, trino-app-n64): ok
 cargo +nightly check (armv6k-nintendo-3ds: platform-3ds, castle64, showcase): ok
 cargo xtask agents check: ok
 cargo xtask scene check: ok
+cargo xtask access check (engine, examples/solid-eleven): 0 errors, 0 warnings

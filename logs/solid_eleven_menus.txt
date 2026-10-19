@@ -1,0 +1,4 @@
+random play visited: {"Edit", "Results", "Club", "Title", "Match", "Substitutions", "Pause", "Market", "PickClub", "Quick", "Trophy", "Teams", "Confirm", "Controls", "Settings", "Table"}
+.1703 menu states, 27248 pictures checked; screens reached: ["Club", "Confirm", "Controls", "Edit", "Market", "Match", "Pause", "PickClub", "Quick", "Results", "Settings", "Substitutions", "Table", "Teams", "Title", "Trophy"]
+busiest N64 picture: 729 rects + glyphs (PickClub { then: Market } on n64 (Pt, text 100 %) via start DpadUp A DpadUp A DpadUp DpadUp A DpadUp)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.66s

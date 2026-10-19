@@ -9,6 +9,7 @@ test ui_tests::gizmo_drags_grab_the_handle_under_the_press ... ok
 test ui_tests::hierarchy_select_palette_duplicate_and_undo ... ok
 test ui_tests::impostors_bake_from_the_inspector_and_drive_a_lod_level ... ok
 test ui_tests::launcher_lists_recent_projects_opens_and_creates ... ok
+test ui_tests::localization_tab_edits_the_tables_and_follows_their_files ... ok
 test ui_tests::new_3ds_tier_variant_reaches_the_game_view_the_file_and_the_budget ... ok
 test ui_tests::particle_effects_preview_caps_and_files ... ok
 test ui_tests::platform_budget_shows_rsp_reasons_and_unseen_draws ... ok
@@ -17,7 +18,6 @@ test ui_tests::quality_tab_writes_the_presets_and_the_game_view_previews_them ..
 test ui_tests::scene_view_pans_flies_dollies_and_flips_axes ... ok
 test ui_tests::shadows_panel_components_tiers_and_view_modes ... ok
 test ui_tests::texture_inspector_formats_quality_and_errors ... ok
-test ui_tests::ui_tab_edits_screens_and_follows_their_files ... FAILED
+test ui_tests::ui_tab_edits_screens_and_follows_their_files ... ok
 test ui_tests::water_budget_ripples_and_material_edits ... ok
-test result: FAILED. 20 passed; 1 failed; 0 ignored; 0 measured; 98 filtered out; finished in 87.58s
-after the ui_tab_edits_screens_and_follows_their_files fixture fix: 1 passed (rerun alone)
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 101 filtered out; finished in 83.22s

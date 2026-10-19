@@ -523,6 +523,34 @@ fn integer_scaling_fills_wide_and_tall_screens_and_follows_the_interface_scale()
     }
 }
 
+/// The PC's stored interface scale (`DisplaySettings::ui_scale`, in
+/// quarters) is the factor the layout multiplies its fit by.
+#[test]
+fn the_display_ui_scale_is_the_interface_scale() {
+    use trino_core::DisplaySettings;
+    let at = |ui_scale| DisplaySettings {
+        ui_scale,
+        ..DisplaySettings::DEFAULT
+    };
+    assert_eq!(at(0).interface_scale(), 1.0, "auto");
+    assert_eq!(at(4).interface_scale(), 1.0);
+    assert_eq!(at(6).interface_scale(), 1.5);
+    assert_eq!(at(8).interface_scale(), 2.0);
+    let mut t = Tree::new();
+    t.open(root());
+    t.leaf(boxed(10, 10, Anchor::Center));
+    let s = t.screen();
+    let r = Rec::sized(1920, 1080);
+    let mut ui = Ui::<8>::new();
+    let m: &dyn Renderer = &r;
+    ui.layout(
+        &s,
+        &env_of(&r).with_interface_scale(at(6).interface_scale()),
+        m,
+    );
+    assert_eq!(ui.frame(Screen::Top).scale, 6.0, "4 × 150%");
+}
+
 #[test]
 fn the_n64_safe_area_insets_the_root_and_bleed_ignores_it() {
     let mut t = Tree::new();

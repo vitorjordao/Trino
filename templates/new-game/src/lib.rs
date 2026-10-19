@@ -40,6 +40,8 @@ pub struct {{name_camel}}Game {
     pause: ScreenBlob,
     options: ScreenBlob,
     strings: StringsBlob,
+    /// The player's interface scale (the PC's display settings; 1 elsewhere).
+    interface_scale: f32,
     /// The menus' state: the focus, and the values they show and edit.
     pub ui: Ui<32>,
 }
@@ -59,6 +61,7 @@ impl {{name_camel}}Game {
             pause: ScreenBlob::new("pause"),
             options: ScreenBlob::new("options"),
             strings: StringsBlob::new("en-US"),
+            interface_scale: 1.0,
             ui,
         }
     }
@@ -135,6 +138,9 @@ impl Game for {{name_camel}}Game {
         self.pause.get(platform);
         self.options.get(platform);
         self.strings.get(platform);
+        self.interface_scale = platform
+            .display()
+            .map_or(1.0, |d| d.settings.interface_scale());
         self.update(input, audio, dt);
     }
 
@@ -182,7 +188,7 @@ impl Game for {{name_camel}}Game {
             renderer.draw_sprite(PLAYER, self.pos, &SpriteParams::default());
         }
         if let Some(screen) = blob.and_then(ScreenBlob::screen) {
-            let env = UiEnv::of(renderer);
+            let env = UiEnv::of(renderer).with_interface_scale(self.interface_scale);
             match self.strings.table() {
                 Some(t) => self.ui.draw(renderer, screen, &env.with_strings(t)),
                 None => self.ui.draw(renderer, screen, &env),

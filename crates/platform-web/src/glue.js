@@ -113,6 +113,31 @@ export function trino_frame(name, width, height, rgba) {
   state.frames[name] = c.toDataURL("image/png");
 }
 
+// The canvas's unsafe borders, CSS pixels `[left, top, right, bottom]`: a
+// phone's notch and home bar (`env(safe-area-inset-*)`, read through a
+// hidden probe; the page sets `viewport-fit=cover`), less the part outside
+// the canvas.
+let safeProbe = null;
+export function trino_safe_area(canvas) {
+  if (!safeProbe) {
+    safeProbe = document.createElement("div");
+    safeProbe.style.cssText =
+      "position:fixed;left:0;top:0;visibility:hidden;pointer-events:none;" +
+      "padding:env(safe-area-inset-top) env(safe-area-inset-right) " +
+      "env(safe-area-inset-bottom) env(safe-area-inset-left)";
+    document.body.appendChild(safeProbe);
+  }
+  const s = getComputedStyle(safeProbe);
+  const px = (v) => parseFloat(v) || 0;
+  const r = canvas.getBoundingClientRect();
+  return [
+    Math.max(0, px(s.paddingLeft) - r.left),
+    Math.max(0, px(s.paddingTop) - r.top),
+    Math.max(0, px(s.paddingRight) - (window.innerWidth - r.right)),
+    Math.max(0, px(s.paddingBottom) - (window.innerHeight - r.bottom)),
+  ];
+}
+
 // Show or hide the "click to enable sound" banner.
 export function trino_audio_banner(show) {
   const el = document.getElementById("trino-audio");

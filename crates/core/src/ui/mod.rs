@@ -10,12 +10,10 @@
 //! focus, scroll offsets, the values the screen shows.
 //!
 //! ```ignore
-//! // update_with: the blob is &'static, keep the parsed screen.
-//! if self.pause.is_none() {
-//!     self.pause = platform.blob(BlobId::from_path("ui/pause"))
-//!         .and_then(|b| UiScreen::parse(b).ok());
-//! }
-//! if let Some(screen) = &self.pause {
+//! // update_with (where the platform is): `pause` is a
+//! // `ScreenBlob::new("pause")`, parsed once, again after a live edit.
+//! self.pause.get(platform);
+//! if let Some(screen) = self.pause.screen() {
 //!     for e in self.ui.update(screen, input, &self.prev, dt).iter() {
 //!         match e {
 //!             UiEvent::Click { action: "resume", .. } | UiEvent::Back { .. } => self.paused = false,
@@ -24,7 +22,9 @@
 //!     }
 //! }
 //! // render, after the world:
-//! self.ui.draw(renderer, screen, &UiEnv::of(renderer));
+//! if let Some(screen) = self.pause.screen() {
+//!     self.ui.draw(renderer, screen, &UiEnv::of(renderer));
+//! }
 //! ```
 //!
 //! **Layout.** Sizes and offsets are virtual units against the screen's
@@ -145,7 +145,8 @@ pub struct UiEnv<'a> {
     pub bottom: Option<Vec2>,
     /// Safe areas of the top and the bottom screen, pixels.
     pub safe: [Insets; 2],
-    /// The player's interface scale (PC `DisplaySettings::interface_scale`,
+    /// The player's interface scale (the PC's
+    /// [`DisplaySettings::interface_scale`](crate::DisplaySettings::interface_scale),
     /// 1 elsewhere).
     pub interface_scale: f32,
     pub strings: &'a dyn UiStrings,
@@ -198,7 +199,8 @@ impl<'a> UiEnv<'a> {
         UiEnv { strings, ..self }
     }
 
-    /// The same at an interface scale (the PC's `DisplaySettings`).
+    /// The same at an interface scale: the PC's
+    /// `platform.display().map_or(1.0, |d| d.settings.interface_scale())`.
     pub fn with_interface_scale(self, scale: f32) -> UiEnv<'a> {
         UiEnv {
             interface_scale: if scale > 0.0 { scale } else { 1.0 },

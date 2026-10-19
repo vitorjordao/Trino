@@ -110,3 +110,73 @@ fn solid_eleven_ball_outline_off_and_on() {
         );
     }
 }
+
+/// Solid Eleven's menus after the box check (`solid_eleven_menus`): the
+/// longest club name on the title's card and the quick match's, the club
+/// screen's buttons in Portuguese; and the pause menu (a UI-system screen)
+/// at 100 % and 200 % text in both languages.
+#[test]
+#[ignore = "evidence: writes target/evidence/access (needs a GPU)"]
+fn solid_eleven_menus_fit_their_boxes() {
+    use solid_eleven::game::app::Scene;
+    use solid_eleven::ui::i18n::Lang;
+    let Some(mut r) = support::try_renderer(SimProfile::N64, None) else {
+        return;
+    };
+    let out = support::root().join("target/evidence/access");
+    let mut p = platform();
+    let idle = InputState::default();
+    let shot = |g: &mut solid_eleven::SolidElevenGame,
+                r: &mut trino_platform_pc::PcRenderer,
+                name: &str| {
+        g.render(r);
+        let (w, h) = r.internal_size();
+        support::write_png(
+            &out.join(format!("solid_eleven_{name}.png")),
+            w,
+            h,
+            &r.read_offscreen(),
+        );
+    };
+    let fresh = |p: &mut PcPlatform, lang: Lang, text_scale: u8| {
+        p.set_access(AccessSettings {
+            text_scale,
+            ..AccessSettings::DEFAULT
+        });
+        let mut g = solid_eleven::SolidElevenGame::new(trino_core::Vec2::new(320.0, 240.0));
+        for _ in 0..4 {
+            g.update_with(p, &idle, &mut Mute, 1.0 / 30.0);
+        }
+        g.settings.lang = lang;
+        g
+    };
+    // Violet Wanderers (club 6) on the title's card and the quick match.
+    let mut g = fresh(&mut p, Lang::Pt, 100);
+    g.quick.home = 6;
+    g.quick.away = 9;
+    shot(&mut g, &mut r, "title_card_long_name");
+    g.scene = Scene::Quick;
+    shot(&mut g, &mut r, "quick_long_names");
+    // The club screen's buttons in Portuguese.
+    let mut g = fresh(&mut p, Lang::Pt, 100);
+    g.world = solid_eleven::sim::league::Career::new(6, 9);
+    g.career_on = true;
+    g.scene = Scene::Club;
+    shot(&mut g, &mut r, "club_buttons_pt");
+    // The pause menu at both text scales.
+    for lang in Lang::ALL {
+        for ts in [100u8, 200] {
+            let mut g = fresh(&mut p, lang, ts);
+            g.start_exhibition(0, 2, 5, [true, false], Sky::Day, 180);
+            for _ in 0..10 {
+                g.update_with(&mut p, &idle, &mut Mute, 1.0 / 30.0);
+            }
+            let mut start = InputState::default();
+            start.set(trino_core::Button::Start, true);
+            g.update_with(&mut p, &start, &mut Mute, 1.0 / 30.0);
+            g.update_with(&mut p, &idle, &mut Mute, 1.0 / 30.0);
+            assert_eq!(g.scene, Scene::Pause);
+            shot(&mut g, &mut r, &format!("pause_{lang:?}_{ts}").to_lowercase());
+        }
+    }
+}

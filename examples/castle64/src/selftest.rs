@@ -3274,6 +3274,50 @@ pub fn accessibility(
         }
     }
 
+    //    At a gameplay distance (a boar-sized card 15 m away), where the
+    //    N64's 16-bit z has about 7 cm a step against the copy's 18 cm gap:
+    //    the card stays white, the ring still shows.
+    let far = Camera3 {
+        eye: camera.eye * 10.0,
+        ..camera
+    };
+    let small = Transform3 {
+        scale: Vec3::new(0.9, 0.9, 0.9),
+        ..Transform3::default()
+    };
+    let ring = trino_core::Outline::new(trino_core::access::OUTLINE_COLOR, Vec3::ZERO, 0.6)
+        .with_pixels(4.0);
+    let far_view = far.view();
+    let edge = far_view.transform_point(Vec3::new(0.54, 0.0, 0.0));
+    let edge_x = size.x * 0.5 + edge.x * focal / edge.z;
+    for _ in 0..3 {
+        renderer.begin_frame(Color::BLACK);
+        renderer.set_camera(&far);
+        renderer.set_light(&DEFAULT_LIGHT);
+        trino_core::access::draw_outlined(
+            renderer,
+            &far,
+            SLOTS_CARD,
+            &small,
+            Material::VertexLit,
+            &white,
+            Some(&ring),
+        );
+        renderer.end_frame();
+    }
+    let out = renderer
+        .read_pixel((edge_x + 2.0) as u32, (size.y * 0.5) as u32)
+        .ok_or("accessibility: read-back stopped")?;
+    let mid = renderer
+        .read_pixel((size.x * 0.5) as u32, (size.y * 0.5) as u32)
+        .ok_or("accessibility: read-back stopped")?;
+    if !near(mid, Color::WHITE, 48) {
+        return Err("accessibility: a far outline shows through its object");
+    }
+    if !near(out, trino_core::access::OUTLINE_COLOR, 48) {
+        return Err("accessibility: a far outline does not ring its object");
+    }
+
     // 8. The caption box: dark under the text, the scene around it, a
     //    glyph inside; then on the touch screen where there is one.
     let mut captions = Captions::new();

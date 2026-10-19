@@ -602,15 +602,30 @@ fn title(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
         g.quick.home
     };
     crest_of(&mut ui, x + 6.0, y + 16.0, 22.0, c, false);
+    // The name on two lines when it is too long for one (VIOLET WANDERERS).
     let name: TextBuf<20> = upper(CLUBS[c as usize].name);
+    let (first, second) = ui.wrap2(name.as_str(), Size::Small, 110.0 - 33.0 - 3.0);
     ui.text(
         x + 33.0,
         y + 16.0,
-        name.as_str(),
+        first,
         pal::INK,
         Size::Small,
         TextAlign::Left,
     );
+    let below = if second.is_empty() {
+        0.0
+    } else {
+        ui.text(
+            x + 33.0,
+            y + 26.0,
+            second,
+            pal::INK,
+            Size::Small,
+            TextAlign::Left,
+        );
+        10.0
+    };
     let mut b = buf();
     let _ = write!(
         b,
@@ -620,7 +635,7 @@ fn title(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
     );
     ui.text(
         x + 33.0,
-        y + 27.0,
+        y + 27.0 + below,
         b.as_str(),
         pal::YELLOW,
         Size::Small,
@@ -663,22 +678,38 @@ fn club_card(ui: &mut Ui, x: f32, y: f32, c: u8, label: S, lang: Lang, g: &Solid
         TextAlign::Center,
     );
     crest_of(ui, x + 8.0, y + 16.0, 30.0, c, true);
+    // The name on two lines when it is too long for one (VIOLET WANDERERS),
+    // the kit and the rating below it.
     let name: TextBuf<20> = upper(club.name);
+    let (first, second) = ui.wrap2(name.as_str(), Size::Small, 112.0 - 44.0 - 3.0);
     ui.text(
         x + 44.0,
         y + 16.0,
-        name.as_str(),
+        first,
         pal::INK,
         Size::Small,
         TextAlign::Left,
     );
+    let below = if second.is_empty() {
+        0.0
+    } else {
+        ui.text(
+            x + 44.0,
+            y + 24.0,
+            second,
+            pal::INK,
+            Size::Small,
+            TextAlign::Left,
+        );
+        6.0
+    };
     // Kit swatches.
     for (k, col) in [club.home.shirt, club.home.shorts, club.home.socks]
         .iter()
         .enumerate()
     {
         ui.fill(
-            Rect::new(x + 44.0 + k as f32 * 12.0, y + 30.0, 10.0, 8.0),
+            Rect::new(x + 44.0 + k as f32 * 12.0, y + 30.0 + below, 10.0, 8.0),
             rgb(*col),
         );
     }
@@ -692,7 +723,7 @@ fn club_card(ui: &mut Ui, x: f32, y: f32, c: u8, label: S, lang: Lang, g: &Solid
     );
     ui.text(
         x + 44.0,
-        y + 42.0,
+        y + 42.0 + below,
         b.as_str(),
         pal::YELLOW,
         Size::Small,
@@ -2323,10 +2354,13 @@ fn results(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
 }
 
 /// The pause menu: a UI screen (`ui/pause.ui.ron`, issue #58) in the
-/// game's language, laid out and scaled by the engine.
+/// game's language, laid out and scaled by the engine, at the player's
+/// text scale and contrast.
 fn pause(g: &mut SolidElevenGame, r: &mut dyn Renderer) {
     let strings = super::i18n::UiTr(g.settings.lang);
-    let env = trino_core::UiEnv::of(r).with_strings(&strings);
+    let env = trino_core::UiEnv::of(r)
+        .with_strings(&strings)
+        .with_access(&g.access);
     g.pause_ui.draw(r, &super::pause_gen::SCREEN, &env);
 }
 

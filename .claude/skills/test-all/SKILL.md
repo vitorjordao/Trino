@@ -123,7 +123,7 @@ cargo test -p solid-eleven --release                       # rules, ball, league
 cargo test -p xtask --test solid_eleven_budget --test solid_eleven_layers --test solid_eleven_render
 TRINO_BLESS=1 cargo test -p xtask --test solid_eleven_budget   # re-pin the frame cost (review the TOML)
 TRINO_BLESS=1 cargo test -p xtask --test solid_eleven_render   # re-bless the PC goldens (view the PNGs)
-cargo test --release -p xtask --test solid_eleven_menus   # menu crawler (every state, EN/PT, 3 sizes) + random play
+cargo test --release -p xtask --test solid_eleven_menus   # menu crawler (every state and club, EN/PT, 4 sizes, 100/200 % text, text in its box) + random play
 cargo test --release -p xtask --test solid_eleven_shots -- --ignored --nocapture   # screenshots + pc_frame_time
 cargo test --release -p xtask --test solid_eleven_poses -- --ignored               # pose sheets, target/solid_eleven_poses
 cargo test -p solid-eleven --release tuning_table -- --ignored --nocapture        # the balance table, big sample

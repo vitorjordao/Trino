@@ -89,6 +89,14 @@ and the Web run the same thing. The guide with code is `docs/ACCESSIBILITY.md`.
   behind a standing character hid most of its ring; the push is the smallest that keeps
   each point of the copy behind the point it copies, plus 0.3R for slanted top faces
   (`an_outline_is_a_larger_unlit_copy_behind_the_object` checks it per pixel).
+- Hand-drawn menus (Solid Eleven's `ui::Ui`) don't take the text scale: their
+  fixed boxes have no room (57 % of the texts can't grow 125 %). Check them against
+  their boxes instead: `solid_eleven_menus` reads each text's ink from the font atlas
+  and its box from the fills drawn before it (a slant's shifted strips merge, a
+  crest's straight spans don't). Its overlap test compares ink, not line boxes (two
+  lines of a wrapped name touch only in their line boxes).
+- Solid Eleven's 44 px PC font inks about a pixel lower than its 11 px font times 4: a
+  label snug in a 9-unit chip spilled at 1080p only. Test every picture size.
 - Parallel GPU test binaries can SIGSEGV inside `libvulkan` on some drivers (device
   creation, GitHub #94): rerun with `--test-threads=1` before suspecting the code.
 

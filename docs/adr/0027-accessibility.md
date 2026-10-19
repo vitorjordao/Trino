@@ -145,7 +145,11 @@ toon-style inner line). `draw_outlined` draws the ring and then the object with 
   darkens it a little where it meets the object; in fog the copy fades a little more.
 - **Cost.** One extra draw per outlined part while high contrast is on, nothing while it
   is off. castle64 outlines the player (5 parts, one sphere) and the boars, Solid Eleven
-  the ball.
+  the ball. Measured once in ares on one ROM (castle64's hub at spawn with high contrast on
+  against off): 6 more draws (the player's 5 parts and a boar), all still on the RSP
+  (24 → 30 RSP draws, 581 → 789 RSP triangles), frame 12.4 → 14.3 ms, still 60 fps. The
+  self-test also probes a boar-sized card 15 m away, where the N64's 16-bit z steps
+  about 7 cm against the copy's 18 cm gap: the card stays white in ares.
 
 ### 8. The `access/data` blob (`TACC`)
 
@@ -195,7 +199,17 @@ from the same `check_project` the CLI runs. A kittest flow and the layout audit 
   changes the visitors' (then the hosts') kit until every pair keeps ΔE 20 in every mode —
   the clubs' own kits, no new colors, no draw off the RSP. Its whistle (important),
   cheers, "ooh" and post have captions in English and Portuguese; in high contrast the
-  ball is ringed in yellow. Its pause menu and the
+  ball is ringed in yellow.
+- Solid Eleven's texts are checked against their boxes: its menu crawler
+  (`solid_eleven_menus`) finds the box each text is printed on (the innermost panel,
+  button or row drawn before it, at least as thick as the text) and fails on ink outside
+  it, in every language, at four picture sizes and at 100 % and 200 % text, with every
+  club's names. It found and fixed the Portuguese club buttons, the longest club names on
+  two cards (they wrap now) and the Controls chips at 1080p. The pause menu (a UI-system
+  screen) takes the player's text scale; the hand-drawn menus don't, and the crawler holds
+  them to that. Measured at 320×240, 57 % of their texts have no room in their box for
+  even 125 % and 11 % for 200 %: growing them in place would mix sizes on one screen. The
+  fix is moving them to UI-system screens (the #58 follow-up). Its pause menu and the
   starter screens grow with their text (`min` sizes instead of fixed ones).
 - New projects get an Accessibility screen (`ui/accessibility.ui.ron`) reached from
   Options; its rows scroll when 200 % text makes them taller than the N64's safe area.

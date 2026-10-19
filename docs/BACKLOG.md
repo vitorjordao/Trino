@@ -72,7 +72,11 @@ shipping a 3D game first**, then by cost:
   - The PC/Web correction filter (daltonization) for content without semantic palettes:
     #64's post stack (the simulation view is review-only).
   - Text scale for text a game draws itself (`draw_text` HUDs: castle64's counters,
-    Solid Eleven's hand-drawn menus); the UI system and the captions scale today.
+    Solid Eleven's hand-drawn menus and match HUD); the UI system (Solid Eleven's
+    pause menu) and the captions scale today. Measured on Solid Eleven's 320×240
+    menus: 57 % of the texts have no room in their box for even 125 %, 11 % for
+    200 %, so growing them in place would mix sizes on one screen; the fix is those
+    menus as UI-system screens (the #58 follow-up below), where Fit boxes grow.
   - The Inspector's palette slots by semantic name (`ModelParams::palette` in authored
     content is P2 #13); the Accessibility tab edits the palettes today.
   - Plan & Party's status colors and the rest of Solid Eleven's menus on semantic
@@ -276,13 +280,16 @@ shipping a 3D game first**, then by cost:
 | UI text scale (whole glyph pixels), high contrast, icons; every existing golden unchanged | `the_ui_scales_text_in_whole_pixels_and_keeps_the_default_draws`, `high_contrast_and_color_vision_icons_change_only_the_look`, the UI goldens |
 | Motion, flashes, held input: `CameraFx`, `ScreenFlash`, `FlashMonitor` (strict-mode warning), `HoldToggle` | `the_flash_guard_holds_a_synthetic_strobe_to_three_a_second`, `strict_mode_finds_a_raw_strobe`, `camera_effects_damp_under_reduced_motion_and_fade_out`, `hold_to_toggle_latches_a_held_action` |
 | High-contrast outlines on 3D objects: `Outline`, `draw_outlined` (a second, unlit draw just behind; no backend code); castle64's player and boars, Solid Eleven's ball | `an_outline_is_a_larger_unlit_copy_behind_the_object`, `the_copy_lies_behind_what_it_copies_and_rings_it_by_the_pixels`; the `accessibility` step's outline probe on the PC profiles, ares, Azahar and the browsers |
+| Solid Eleven's texts checked against their boxes: the menu crawler finds each text's box (the innermost panel, button or row drawn before it) and fails on ink outside it, in every language, at four sizes and at 100 % and 200 % text, for every club; the overflows it found fixed (the Portuguese club buttons, the longest club names on the title and quick match cards, the Controls chips at 1080p); the pause menu takes the player's text scale | `every_menu_state_draws_cleanly_in_every_language_and_size` (three mutations fail it: a narrower button, a pause menu without the settings, two lines of a name on each other); `solid_eleven_menus_fit_their_boxes` (evidence) |
 | `cargo xtask access check\|shot` (`--json`); every screen at 200 % (overflow, safe area, budgets) | `access_cli.rs` (4 tests, a fixture with one problem of each kind) |
 | The PC simulation view (`set_cvd_view`, `TRINO_CVD`), both screens, WebGL2 | `the_simulation_view_matches_the_cpu_simulation`, `webgl2_shaders_translate_to_glsl_es_300` |
 | Editor: the Accessibility tab (simulation in every view, palettes, checklist), View › Accessibility simulation, `TRINO_EDITOR_ACCESS`, the UI tab's preview at the simulated settings | `accessibility_tab_palettes_simulation_and_checklist`, the layout audit at 960×600 and 1600×940 |
 | Adopters: castle64's doors and captions, Solid Eleven's kits for every color vision and its captions, the starter Accessibility screen; the starter screens and Solid Eleven's pause menu grow with their text | `kits_stay_apart_for_every_color_vision`, `the_accessibility_screen_sets_the_platforms_settings`, `access_check_passes_on_the_projects_the_repo_ships` |
 
 Deviations (ADR 0027): the correction filter on the PC/Web stays with #64 (the view is a
-simulation for review); text scale for a game's own `draw_text` is a follow-up; the semantic colors are edited in the Accessibility tab,
+simulation for review); text scale for a game's own `draw_text` is a follow-up (Solid
+Eleven's hand-drawn menus are checked against their boxes at 100 % and 200 % but don't
+grow: 57 % of their texts have no room for 125 %); the semantic colors are edited in the Accessibility tab,
 not the Inspector; text scale is whole glyph pixels where the UI scales by whole pixels
 (100 % or 200 % on the consoles).
 

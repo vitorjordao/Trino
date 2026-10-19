@@ -252,6 +252,9 @@ pub struct SolidElevenGame {
     /// The player's color vision (`Platform::access`, issue #60): kick-off
     /// picks kits that look apart to them.
     pub cvd: trino_core::CvdMode,
+    /// The player's accessibility settings (`Platform::access`): the pause
+    /// menu's text scale and contrast.
+    pub access: trino_core::AccessSettings,
     /// The project's `access/data` (the sounds' captions) and the caption
     /// queue the match's whistle, cheers and posts fill (issue #60).
     access_data: trino_core::AccessBlob,
@@ -311,6 +314,7 @@ impl SolidElevenGame {
             scene: Scene::Title,
             settings: Settings::DEFAULT,
             cvd: trino_core::CvdMode::Off,
+            access: trino_core::AccessSettings::DEFAULT,
             access_data: trino_core::AccessBlob::new(),
             captions: trino_core::Captions::new(),
             caption_texts: [
@@ -1520,6 +1524,7 @@ impl Game for SolidElevenGame {
         self.persist(platform);
         let access = platform.access();
         self.cvd = access.cvd;
+        self.access = access;
         if let Some(s) = self.session.as_mut() {
             s.view.outline = access.high_contrast;
         }

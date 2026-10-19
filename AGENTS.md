@@ -699,7 +699,9 @@ overlay, and a measurement on real hardware (ares doesn't time the RDP).
     (`PcRenderer::set_cvd_view`, `TRINO_CVD`); the editor's Accessibility tab (simulation
     in every view, palettes, checklist; `TRINO_EDITOR_ACCESS`); the starter
     `ui/accessibility.ui.ron`. Adopters: castle64's doors and captions, Solid Eleven's kits
-    (`dress_for`) and captions. Self-test step `accessibility`; goldens
+    (`dress_for`) and captions; Solid Eleven's texts checked against their boxes at
+    100 % and 200 % in every language (`solid_eleven_menus`), its pause menu at the
+    player's text scale. Self-test step `accessibility`; goldens
     `tests/golden/pc/access_*.png`.
 - **UI system (2026-10-18, ADR 0024, GitHub #58):** menus, HUDs and dialogs as data.
   - **Core (`trino_core::ui`, `no_std`, no allocation):** `UiScreen` (a static slice or a

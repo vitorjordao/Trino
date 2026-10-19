@@ -1,14 +1,21 @@
 //! Every Solid Eleven menu, explored through its buttons: a breadth-first
 //! walk from the title (and from a season that just ended) presses every
-//! button on every screen state it reaches, and draws each state on the
-//! N64, the 3DS (both screens) and the PC at two sizes, in English and
-//! Portuguese, through a renderer that records the 2D it is given, with
-//! the game's real fonts. Each picture must:
+//! button on every screen state it reaches (and every club's names and
+//! squad), and draws each state on the N64, the 3DS (both screens) and the
+//! PC at two sizes, in every language, at 100 % and 200 % text scale,
+//! through a renderer that records the 2D it is given, with the game's real
+//! fonts. Each picture must:
 //!
 //! - draw without panicking,
 //! - keep every text and tap target on its screen,
 //! - have a glyph for every character it prints,
-//! - not print two different texts over each other.
+//! - not print two different texts over each other,
+//! - keep every text's ink inside the box it is printed on (the innermost
+//!   panel, button or row drawn before it that holds it).
+//!
+//! The text scale reaches the UI system's screens (the pause menu, which must
+//! draw differently at 200 %) and leaves the hand-drawn menus as they are
+//! (which must draw the same): those keep fixed layouts, see ADR 0027.
 //!
 //! `cargo test -p xtask --test solid_eleven_menus -- --nocapture` prints
 //! the states, the screens reached and the busiest picture.
@@ -34,15 +41,25 @@ impl trino_core::Audio for Mute {
     fn set_master_volume(&mut self, _: f32) {}
 }
 
+/// A baked font: its table and, per glyph (by atlas position), the box of
+/// the pixels it inks inside its cell (the cell holds the line's full
+/// height; the ink is what a reader sees overflow).
+struct Font {
+    table: Vec<u8>,
+    ink: HashMap<(u16, u16), Rect>,
+}
+
+type Fonts = HashMap<u32, Font>;
+
 /// The game's fonts, baked by the asset pipeline once per test binary:
 /// both tests baking into one directory at once let one read the index
 /// while the other rewrote it (a flaky failure on macOS CI).
-fn fonts() -> HashMap<u32, Vec<u8>> {
-    static FONTS: std::sync::OnceLock<HashMap<u32, Vec<u8>>> = std::sync::OnceLock::new();
-    FONTS.get_or_init(bake_fonts).clone()
+fn fonts() -> &'static Fonts {
+    static FONTS: std::sync::OnceLock<Fonts> = std::sync::OnceLock::new();
+    FONTS.get_or_init(bake_fonts)
 }
 
-fn bake_fonts() -> HashMap<u32, Vec<u8>> {
+fn bake_fonts() -> Fonts {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
     let baked = root.join("target/assets/solid-eleven/menus");
     trino_asset_pipeline::bake_all(
@@ -52,7 +69,41 @@ fn bake_fonts() -> HashMap<u32, Vec<u8>> {
     )
     .unwrap_or_else(|e| panic!("{e}"));
     let assets = trino_asset_pipeline::load_dir(&baked, None).unwrap();
-    assets.fonts.into_iter().map(|f| (f.id, f.table)).collect()
+    let mut fonts = Fonts::new();
+    for f in assets.fonts {
+        // The atlas is the sprite with the font's handle.
+        let atlas = assets.sprites.iter().find(|s| s.id == f.id).expect("atlas");
+        let font = BitmapFont::parse(&f.table).unwrap();
+        let mut ink = HashMap::new();
+        for g in solid_eleven::ui::FONT_CHARS
+            .chars()
+            .filter_map(|c| font.glyph(c))
+        {
+            let (mut x0, mut y0, mut x1, mut y1) = (u32::MAX, u32::MAX, 0, 0);
+            for y in 0..g.h as u32 {
+                for x in 0..g.w as u32 {
+                    let (ax, ay) = (g.x as u32 + x, g.y as u32 + y);
+                    if atlas.rgba[((ay * atlas.width + ax) * 4 + 3) as usize] > 96 {
+                        (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x + 1), y1.max(y + 1));
+                    }
+                }
+            }
+            if x0 < x1 {
+                ink.insert(
+                    (g.x, g.y),
+                    Rect::new(x0 as f32, y0 as f32, (x1 - x0) as f32, (y1 - y0) as f32),
+                );
+            }
+        }
+        fonts.insert(
+            f.id,
+            Font {
+                table: f.table,
+                ink,
+            },
+        );
+    }
+    fonts
 }
 
 #[derive(Clone, Debug)]
@@ -63,7 +114,25 @@ struct Text {
     /// layers may cover each other.
     layer: u32,
     rect: Rect,
+    /// The pixels its glyphs ink (`None`: only spaces).
+    ink: Option<Rect>,
+    /// Fills drawn before it (an index into `Recorder::fills`).
+    after: usize,
     text: String,
+}
+
+/// A fill: the boxes texts sit in. A slanted header's 2-pixel strips are
+/// merged into one box (their bounds).
+#[derive(Clone, Debug)]
+struct Fill {
+    screen: u8,
+    layer: u32,
+    rect: Rect,
+    color: Color,
+    /// The width of the strips merged into it (0: a plain fill).
+    strip: f32,
+    /// Where the last strip merged into it starts.
+    strip_x: f32,
 }
 
 /// A renderer that keeps the 2D it draws.
@@ -71,8 +140,9 @@ struct Recorder<'a> {
     caps: Caps,
     bottom: Option<Vec2>,
     screen: u8,
-    fonts: &'a HashMap<u32, Vec<u8>>,
+    fonts: &'a Fonts,
     texts: Vec<Text>,
+    fills: Vec<Fill>,
     layer: u32,
     rects: usize,
     glyphs: usize,
@@ -80,7 +150,7 @@ struct Recorder<'a> {
 }
 
 impl<'a> Recorder<'a> {
-    fn new(w: u16, h: u16, bottom: bool, fonts: &'a HashMap<u32, Vec<u8>>) -> Recorder<'a> {
+    fn new(w: u16, h: u16, bottom: bool, fonts: &'a Fonts) -> Recorder<'a> {
         let caps = Caps {
             screen_width: w,
             screen_height: h,
@@ -92,6 +162,7 @@ impl<'a> Recorder<'a> {
             screen: 0,
             fonts,
             texts: Vec::new(),
+            fills: Vec::new(),
             layer: 0,
             rects: 0,
             glyphs: 0,
@@ -118,6 +189,7 @@ impl Renderer for Recorder<'_> {
     fn begin_frame(&mut self, _: Color) {
         self.screen = 0;
         self.texts.clear();
+        self.fills.clear();
         self.layer = 0;
         self.rects = 0;
         self.glyphs = 0;
@@ -125,22 +197,79 @@ impl Renderer for Recorder<'_> {
     fn draw_sprite(&mut self, _: SpriteId, _: Vec2, _: &SpriteParams) {}
     fn draw_model(&mut self, _: ModelId, _: &Transform3, _: Material, _: &ModelParams) {}
     fn end_frame(&mut self) {}
-    fn fill_rect(&mut self, r: Rect, _: Color) {
+    fn fill_rect(&mut self, r: Rect, color: Color) {
         self.rects += 1;
         let s = self.size(self.screen);
         if r.size.x * r.size.y > s.x * s.y * 0.5 {
             self.layer += 1;
         }
+        // The next strip of a slant: same color and width, right below the
+        // last one, shifted by a little (a polygon's straight sides, the
+        // crests', don't shift: those spans stay apart, too thin for a box).
+        if let Some(last) = self.fills.last_mut() {
+            let end = last.rect.pos.y + last.rect.size.y;
+            let strip = if last.strip > 0.0 {
+                last.strip
+            } else {
+                last.rect.size.x
+            };
+            if last.screen == self.screen
+                && last.layer == self.layer
+                && last.color == color
+                && r.size.y <= 2.0
+                && (r.size.x - strip).abs() < 0.01
+                && (r.pos.y - end).abs() < 0.01
+                && (r.pos.x - last.strip_x).abs() > 0.01
+                && (r.pos.x - last.strip_x).abs() < strip * 0.5
+                && (last.strip > 0.0 || last.rect.size.y <= 2.0)
+            {
+                let x0 = last.rect.pos.x.min(r.pos.x);
+                let x1 = (last.rect.pos.x + last.rect.size.x).max(r.pos.x + r.size.x);
+                last.rect = Rect::new(
+                    x0,
+                    last.rect.pos.y,
+                    x1 - x0,
+                    end + r.size.y - last.rect.pos.y,
+                );
+                last.strip = strip;
+                last.strip_x = r.pos.x;
+                return;
+            }
+        }
+        self.fills.push(Fill {
+            screen: self.screen,
+            layer: self.layer,
+            rect: r,
+            color,
+            strip: 0.0,
+            strip_x: r.pos.x,
+        });
     }
     fn draw_text(&mut self, font: FontId, pos: Vec2, text: &str, p: &TextParams) {
         let size = self.measure_text(font, text, p.scale);
-        if let Some(bytes) = self.fonts.get(&font.0) {
-            let f = BitmapFont::parse(bytes).unwrap();
+        let mut ink: Option<Rect> = None;
+        if let Some(fnt) = self.fonts.get(&font.0) {
+            let f = BitmapFont::parse(&fnt.table).unwrap();
             for c in text.chars() {
                 if c != ' ' && c != '\n' && f.glyph(c).is_none() {
                     self.missing.push((c, text.to_string()));
                 }
             }
+            trino_core::text::layout(&f, pos, text, p, &mut |region, at| {
+                let key = (region.pos.x as u16, region.pos.y as u16);
+                if let Some(g) = fnt.ink.get(&key) {
+                    let r = Rect::new(
+                        at.x + g.pos.x * p.scale,
+                        at.y + g.pos.y * p.scale,
+                        g.size.x * p.scale,
+                        g.size.y * p.scale,
+                    );
+                    ink = Some(match ink {
+                        None => r,
+                        Some(u) => union(u, r),
+                    });
+                }
+            });
         }
         let x = match p.align {
             TextAlign::Left => pos.x,
@@ -152,12 +281,14 @@ impl Renderer for Recorder<'_> {
             screen: self.screen,
             layer: self.layer,
             rect: Rect::new(x, pos.y, size.x, size.y),
+            ink,
+            after: self.fills.len(),
             text: text.to_string(),
         });
     }
     fn measure_text(&self, font: FontId, text: &str, scale: f32) -> Vec2 {
         match self.fonts.get(&font.0) {
-            Some(bytes) => BitmapFont::parse(bytes).unwrap().measure(text, scale),
+            Some(f) => BitmapFont::parse(&f.table).unwrap().measure(text, scale),
             None => Vec2::ZERO,
         }
     }
@@ -176,6 +307,42 @@ impl Renderer for Recorder<'_> {
             Screen::Top
         }
     }
+}
+
+fn union(a: Rect, b: Rect) -> Rect {
+    let x0 = a.pos.x.min(b.pos.x);
+    let y0 = a.pos.y.min(b.pos.y);
+    let x1 = (a.pos.x + a.size.x).max(b.pos.x + b.size.x);
+    let y1 = (a.pos.y + a.size.y).max(b.pos.y + b.size.y);
+    Rect::new(x0, y0, x1 - x0, y1 - y0)
+}
+
+fn holds(outer: Rect, p: Vec2) -> bool {
+    p.x >= outer.pos.x
+        && p.y >= outer.pos.y
+        && p.x <= outer.pos.x + outer.size.x
+        && p.y <= outer.pos.y + outer.size.y
+}
+
+/// The box `t` is printed on: the innermost fill drawn before it on its
+/// screen and layer that holds the middle of its ink and is at least as
+/// thick as the ink is tall both ways (a 1-unit rim or divider, a stat bar
+/// with its value over it, a crest's spans are not boxes).
+fn container<'f>(fills: &'f [Fill], t: &Text, ink: Rect) -> Option<&'f Fill> {
+    let mid = Vec2::new(ink.pos.x + ink.size.x * 0.5, ink.pos.y + ink.size.y * 0.5);
+    fills[..t.after]
+        .iter()
+        .filter(|f| {
+            f.screen == t.screen
+                && f.layer == t.layer
+                && f.color.a > 0
+                && f.rect.size.y.min(f.rect.size.x) + 0.01 >= ink.size.y
+                && holds(f.rect, mid)
+        })
+        .min_by(|a, b| {
+            let area = |f: &Fill| f.rect.size.x * f.rect.size.y;
+            area(a).total_cmp(&area(b))
+        })
 }
 
 /// The pictures every state is drawn at: (name, width, height, 3DS bottom).
@@ -222,20 +389,44 @@ fn press(g: &mut SolidElevenGame, b: Button) {
 }
 
 /// Problems found drawing one state.
-fn check(g: &SolidElevenGame, fonts: &HashMap<u32, Vec<u8>>, path: &str, report: &mut Report) {
+fn check(g: &SolidElevenGame, fonts: &Fonts, path: &str, report: &mut Report) {
     for &(name, w, h, bottom) in &SCREENS {
-        for lang in [Lang::En, Lang::Pt] {
+        for (lang, text_scale) in Lang::ALL
+            .into_iter()
+            .flat_map(|l| TEXT_SCALES.map(|t| (l, t)))
+        {
             let mut g = g.clone();
             g.settings.lang = lang;
+            g.access.text_scale = text_scale;
             g.resize(Vec2::new(w as f32, h as f32));
             let mut r = Recorder::new(w, h, bottom, fonts);
             let drew = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| g.render(&mut r)));
-            let at = format!("{:?} on {name} ({lang:?}) via {path}", g.scene);
+            let at = format!(
+                "{:?} on {name} ({lang:?}, text {text_scale} %) via {path}",
+                g.scene
+            );
             if drew.is_err() {
                 report.problems.push(format!("panic drawing {at}"));
                 continue;
             }
             report.pictures += 1;
+            // Text scale reaches the UI system's screens (the pause menu)
+            // and leaves the hand-drawn ones as they are.
+            let texts: Vec<(String, Rect)> =
+                r.texts.iter().map(|t| (t.text.clone(), t.rect)).collect();
+            let key = (name, lang);
+            if text_scale == TEXT_SCALES[0] {
+                report.at_100.insert(key, texts);
+            } else if let Some(base) = report.at_100.get(&key) {
+                let changed = base != &texts;
+                if g.scene == Scene::Pause {
+                    report.pause_grew |= changed;
+                } else if changed {
+                    report.problems.push(format!(
+                        "a hand-drawn screen changed with the text scale: {at}"
+                    ));
+                }
+            }
             for (c, text) in &r.missing {
                 report
                     .problems
@@ -252,6 +443,24 @@ fn check(g: &SolidElevenGame, fonts: &HashMap<u32, Vec<u8>>, path: &str, report:
                     report.problems.push(format!(
                         "{:?} off screen {} at {:?}: {at}",
                         t.text, t.screen, rc
+                    ));
+                }
+            }
+            // Ink outside the box it is printed on.
+            for t in &r.texts {
+                let Some(ink) = t.ink else { continue };
+                let Some(b) = container(&r.fills, t, ink) else {
+                    continue;
+                };
+                let o = b.rect;
+                let out = (o.pos.x - ink.pos.x)
+                    .max(o.pos.y - ink.pos.y)
+                    .max(ink.pos.x + ink.size.x - (o.pos.x + o.size.x))
+                    .max(ink.pos.y + ink.size.y - (o.pos.y + o.size.y));
+                if out > 0.5 {
+                    report.problems.push(format!(
+                        "{:?} spills {out:.0} px out of its box {o:?} (ink {ink:?}): {at}",
+                        t.text
                     ));
                 }
             }
@@ -273,10 +482,13 @@ fn check(g: &SolidElevenGame, fonts: &HashMap<u32, Vec<u8>>, path: &str, report:
                     {
                         continue;
                     }
-                    let ox = (a.rect.pos.x + a.rect.size.x).min(b.rect.pos.x + b.rect.size.x)
-                        - a.rect.pos.x.max(b.rect.pos.x);
-                    let oy = (a.rect.pos.y + a.rect.size.y).min(b.rect.pos.y + b.rect.size.y)
-                        - a.rect.pos.y.max(b.rect.pos.y);
+                    // What they ink (two lines of one name touch only in
+                    // their line boxes).
+                    let (ra, rb) = (a.ink.unwrap_or(a.rect), b.ink.unwrap_or(b.rect));
+                    let ox =
+                        (ra.pos.x + ra.size.x).min(rb.pos.x + rb.size.x) - ra.pos.x.max(rb.pos.x);
+                    let oy =
+                        (ra.pos.y + ra.size.y).min(rb.pos.y + rb.size.y) - ra.pos.y.max(rb.pos.y);
                     // Overlapping by more than a pixel row of each other's
                     // glyphs, both ways (scaled with the picture).
                     let k = (h as f32 / 240.0).floor().max(1.0);
@@ -310,8 +522,15 @@ fn check(g: &SolidElevenGame, fonts: &HashMap<u32, Vec<u8>>, path: &str, report:
     }
 }
 
+/// The text scales every state is drawn at (`AccessSettings::text_scale`).
+const TEXT_SCALES: [u8; 2] = [100, 200];
+
 #[derive(Default)]
 struct Report {
+    /// The texts of the state being checked at 100 %, per picture.
+    at_100: HashMap<(&'static str, Lang), Vec<(String, Rect)>>,
+    /// The pause menu drew differently at 200 % (the text scale reached it).
+    pause_grew: bool,
     states: usize,
     pictures: usize,
     problems: Vec<String>,
@@ -320,7 +539,7 @@ struct Report {
 }
 
 /// Breadth-first from `start`, up to `limit` states.
-fn walk(start: SolidElevenGame, fonts: &HashMap<u32, Vec<u8>>, limit: usize, report: &mut Report) {
+fn walk(start: SolidElevenGame, fonts: &Fonts, limit: usize, report: &mut Report) {
     let mut seen = HashSet::new();
     let mut queue = VecDeque::new();
     seen.insert(key(&start));
@@ -368,7 +587,7 @@ fn every_menu_state_draws_cleanly_in_every_language_and_size() {
     for _ in 0..4 {
         g.update(&InputState::default(), &mut Mute, 1.0 / 30.0);
     }
-    walk(g.clone(), &fonts, 1_500, &mut report);
+    walk(g.clone(), fonts, 1_500, &mut report);
     // A career whose season just ended: the trophy, the new season.
     let mut c = g.clone();
     c.world = solid_eleven::sim::league::Career::new(2, 9);
@@ -377,7 +596,38 @@ fn every_menu_state_draws_cleanly_in_every_language_and_size() {
         c.world.finish_round(None);
     }
     c.scene = Scene::Trophy;
-    walk(c, &fonts, 300, &mut report);
+    walk(c, fonts, 300, &mut report);
+    // Every club's names and squad, which the walk's key leaves out (it
+    // doesn't tell clubs apart): the title's card and the quick match with
+    // each club, and a career as each club, walked from its club screen.
+    for club in 0..solid_eleven::sim::team::TEAMS as u8 {
+        let mut t = g.clone();
+        t.quick.home = club;
+        t.quick.away = (club + 5) % solid_eleven::sim::team::TEAMS as u8;
+        for scene in [Scene::Title, Scene::Quick] {
+            t.scene = scene;
+            report.states += 1;
+            check(
+                &t,
+                fonts,
+                &format!("{scene:?} with club {club}"),
+                &mut report,
+            );
+        }
+        let mut c = g.clone();
+        c.world = solid_eleven::sim::league::Career::new(club, 9);
+        c.career_on = true;
+        c.scene = Scene::Title;
+        report.states += 1;
+        check(
+            &c,
+            fonts,
+            &format!("title in a career as club {club}"),
+            &mut report,
+        );
+        c.scene = Scene::Club;
+        walk(c, fonts, 200, &mut report);
+    }
     // Values the walk's key leaves out, each with its row selected: every
     // hair style and color in the player editor, every quick match option.
     let mut e = g.clone();
@@ -396,7 +646,7 @@ fn every_menu_state_draws_cleanly_in_every_language_and_size() {
                 report.states += 1;
                 check(
                     &e,
-                    &fonts,
+                    fonts,
                     &format!("edit: style {style}, hair {hair}, row {row}"),
                     &mut report,
                 );
@@ -416,7 +666,7 @@ fn every_menu_state_draws_cleanly_in_every_language_and_size() {
                 report.states += 1;
                 check(
                     &q,
-                    &fonts,
+                    fonts,
                     &format!("quick: stadium {stadium}, sky {sky}, row {row}"),
                     &mut report,
                 );
@@ -436,6 +686,10 @@ fn every_menu_state_draws_cleanly_in_every_language_and_size() {
     println!(
         "busiest N64 picture: {} rects + glyphs ({})",
         report.busiest.0, report.busiest.1
+    );
+    assert!(
+        report.pause_grew,
+        "the pause menu drew the same at every text scale"
     );
     for want in [
         "Title", "Quick", "PickClub", "Club", "Table", "Teams", "Edit", "Market", "Settings",
@@ -461,7 +715,7 @@ fn every_menu_state_draws_cleanly_in_every_language_and_size() {
         problems.len(),
         problems
             .iter()
-            .take(120)
+            .take(400)
             .cloned()
             .collect::<Vec<_>>()
             .join("\n")
@@ -480,7 +734,7 @@ fn random_input_never_breaks_the_game() {
         seed >> 8
     };
     let mut g = SolidElevenGame::new(Vec2::new(400.0, 240.0));
-    let mut r = Recorder::new(400, 240, true, &fonts);
+    let mut r = Recorder::new(400, 240, true, fonts);
     let mut scenes = HashSet::new();
     let mut prev = InputState::default();
     for f in 0..30_000u32 {

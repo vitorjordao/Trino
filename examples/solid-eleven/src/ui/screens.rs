@@ -1454,7 +1454,7 @@ fn edit(g: &mut SolidElevenGame, r: &mut dyn Renderer, _screen: Vec2) {
                     }
                 }
                 "ovr" => return int(p.ovr() as i32),
-                "points" => return int(p.available() as i32),
+                "points" => return int(p.available()),
                 "points_left" => return flag(p.available() > 0),
                 "no_points" => return flag(p.available() == 0),
                 "style" => {

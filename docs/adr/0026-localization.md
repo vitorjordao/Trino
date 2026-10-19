@@ -104,7 +104,8 @@ code (one pool literal per text) for a game that keeps its strings in code.
 report see concrete fonts:
 - `chars = "auto"` (TTF/OTF only; a PNG grid's cells are its glyphs) bakes the union of
   the following. A glyph nothing uses is not baked.
-  - every shipped language's glyphs: its texts without placeholders, its name, and what
+  - every shipped language's glyphs: its texts without placeholders and those its fallback
+    chain lends it (they draw with its atlas too), its name, and what
     its placeholders print in its locale (digits and separators; the currency symbol
     only for `:currency`; the date separator for `:date`);
   - every UI screen's literal `text`;
@@ -145,7 +146,7 @@ report see concrete fonts:
 ## Consequences
 
 - The engine's own tables (`assets/i18n/{en-US,pt-BR,es-ES}.ron`) and a subset Roboto
-  Condensed font (`fonts/i18n`, three atlases of 33–37 glyphs, 2 KB each as N64 I4: half
+  Condensed font (`fonts/i18n`, three atlases of 41–49 glyphs, 2 KB each as N64 I4: half
   of TMEM) back the self-test's `i18n` step on PC, ares, Azahar and the browsers. The
   step:
   - loads every language from `i18n/languages` and picks by the system language;

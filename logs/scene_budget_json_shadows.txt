@@ -1,0 +1,50 @@
+[
+ {
+  "platform": "pc",
+  "shadows": {
+   "tier": "map",
+   "casters": 23,
+   "blobs": 0,
+   "planar": 0,
+   "mapped": 23,
+   "over_budget": 0,
+   "receivers": 52
+  }
+ },
+ {
+  "platform": "n64",
+  "shadows": {
+   "tier": "blob",
+   "casters": 23,
+   "blobs": 23,
+   "planar": 0,
+   "mapped": 0,
+   "over_budget": 0,
+   "receivers": 52
+  }
+ },
+ {
+  "platform": "3ds",
+  "shadows": {
+   "tier": "planar",
+   "casters": 23,
+   "blobs": 0,
+   "planar": 23,
+   "mapped": 0,
+   "over_budget": 0,
+   "receivers": 52
+  }
+ },
+ {
+  "platform": "web",
+  "shadows": {
+   "tier": "map",
+   "casters": 23,
+   "blobs": 0,
+   "planar": 0,
+   "mapped": 23,
+   "over_budget": 0,
+   "receivers": 52
+  }
+ }
+]

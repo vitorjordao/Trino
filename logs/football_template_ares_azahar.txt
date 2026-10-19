@@ -1,0 +1,10 @@
+[n64] golden frame match: target/test-projects/ci-football/tests/golden/n64/match.png matches
+scene                      avg ms   max ms    fps
+match                       30.98    40.10   32.3
+[n64] TEST PASS (with the Expansion Pak)
+RC=0
+
+[3ds] golden frame match: target/test-projects/ci-football/tests/golden/3ds/match.png: mean diff 0.06, 0.06% far pixels (limits 3, 2.0%)
+[3ds] golden frame match_bottom: target/test-projects/ci-football/tests/golden/3ds/match_bottom.png: mean diff 0.01, 0.00% far pixels (limits 3, 2.0%)
+[3ds] TEST PASS (as a New 3DS)
+RC=0

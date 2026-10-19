@@ -1,0 +1,6 @@
+cargo fmt --all --check                                                   rc=0
+cargo clippy --workspace --all-targets -- -D warnings (stable 1.93)       RC=0
+cargo +1.99.1 clippy --workspace --all-targets -- -D warnings (CI stable) RC=0
+cargo +1.99.1 clippy (wasm32: render-wgpu, platform-web, app-web)         RC=0
+cargo clippy -p trino-platform-pc --features gamepad --all-targets        RC=0
+cargo xtask scene check / agents check                                    rc=0 / rc=0 (see ci_smokes_local.txt)

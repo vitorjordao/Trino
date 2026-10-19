@@ -1,0 +1,37 @@
+target/test-projects/shadow-shot/scenes/showcase.scene.ron: from the scene camera
+  pc   102 draws, 2509 tris, 0 billboards, LOD full/light/imp/cull [7, 3, 0, 0]
+       shadows: map — 23 casters: 0 blobs, 0 planar, 23 in the map; 52 receivers
+       PC GPU 58/102 draws · 3522 tris · 37 off screen
+       off the PC GPU path: 37 off screen (ground/tile-0-0-4, ground/tile-4-0-2, ground/tile-6-0-2, ground/tile-8-0-2, ...), 6 water surface (river/piece-0-8, river/piece-8-12, river/piece-12-13, river/piece-13-14, ...), 1 flat-shaded skeleton (windmill)
+       sent but unseen (41): ground/tile-0-0-4, ground/tile-4-0-2, ground/tile-6-0-2, ground/tile-8-0-2, ground/tile-10-0-2, ground/tile-12-0-2, ground/tile-14-0-2, ground/tile-16-0-4, ground/tile-4-2-2, ground/tile-6-2-2, ground/tile-8-2-2, ground/tile-10-2-1, ground/tile-11-2-1, ground/tile-12-2-2, ground/tile-14-2-2, ground/tile-10-3-1, ground/tile-11-3-1, ground/tile-14-4-1, ground/tile-15-4-1, ground/tile-16-4-2, ground/tile-18-4-2, ground/tile-14-5-1, ground/tile-15-5-1, ground/tile-14-6-2, ground/tile-16-6-1, ground/tile-17-6-1, ground/tile-18-6-2, ground/tile-16-7-1, ground/tile-17-7-1, ground/tile-16-8-2, ground/tile-18-8-2, ground/tile-16-10-2, ground/tile-18-10-2, ground/tile-16-12-4, ground/tile-16-16-4, river/piece-12-13, river/piece-13-14, river/piece-14-15, river/piece-15-16, tree-5/tree/trunk, tree-5/tree/leaves
+  n64  102 draws, 2469 tris, 0 billboards, LOD full/light/imp/cull [7, 3, 0, 0]
+       N64: 1 core at 93 MHz, 4 MB RAM
+       N64 RAM 157 KB models of 4096 KB
+       shadows: blob — 23 casters: 23 blobs, 0 planar, 0 in the map; 52 receivers; blobs ≈2.6 ms of N64 CPU
+       N64 ≈30.6 ms (92% of 30 fps): CPU 30.6 ms on 46 draws, RSP 22.0 ms on 56 draws
+       off the RSP fast path: 41 off screen (ground/tile-0-0-4, ground/tile-4-0-2, ground/tile-6-0-2, ground/tile-8-0-2, ...), 5 needs clipping (ground/tile-8-4-4, ground/tile-12-4-2, ground/tile-12-6-2, ground/tile-12-8-4, ...)
+       Water river/piece-0-8 · 32 tris · 2-cycle
+         TMEM 1536/4096 B
+       Water river/piece-8-12 · 11 tris · 2-cycle
+         TMEM 1536/4096 B
+       Water river/piece-12-13 · 0 tris · 2-cycle
+         TMEM 1536/4096 B
+       Water river/piece-13-14 · 0 tris · 2-cycle
+         TMEM 1536/4096 B
+       Water river/piece-14-15 · 0 tris · 2-cycle
+         TMEM 1536/4096 B
+       Water river/piece-15-16 · 0 tris · 2-cycle
+         TMEM 1536/4096 B
+       sent but unseen (41): ground/tile-0-0-4, ground/tile-4-0-2, ground/tile-6-0-2, ground/tile-8-0-2, ground/tile-10-0-2, ground/tile-12-0-2, ground/tile-14-0-2, ground/tile-16-0-4, ground/tile-4-2-2, ground/tile-6-2-2, ground/tile-8-2-2, ground/tile-10-2-1, ground/tile-11-2-1, ground/tile-12-2-2, ground/tile-14-2-2, ground/tile-10-3-1, ground/tile-11-3-1, ground/tile-14-4-1, ground/tile-15-4-1, ground/tile-16-4-2, ground/tile-18-4-2, ground/tile-14-5-1, ground/tile-15-5-1, ground/tile-14-6-2, ground/tile-16-6-1, ground/tile-17-6-1, ground/tile-18-6-2, ground/tile-16-7-1, ground/tile-17-7-1, ground/tile-16-8-2, ground/tile-18-8-2, ground/tile-16-10-2, ground/tile-18-10-2, ground/tile-16-12-4, ground/tile-16-16-4, river/piece-12-13, river/piece-13-14, river/piece-14-15, river/piece-15-16, tree-5/tree/trunk, tree-5/tree/leaves
+  3ds  102 draws, 2651 tris, 0 billboards, LOD full/light/imp/cull [7, 3, 0, 0]
+       3DS: 1 core at 268 MHz, 64 MB RAM
+       3DS RAM 159 KB models of 65536 KB
+       shadows: planar — 23 casters: 0 blobs, 23 planar, 0 in the map; 52 receivers
+       3DS: GPU T&L on 28 draws (2464 tris), CPU on 74 draws
+       off the GPU path: 32 off screen (ground/tile-0-0-4, ground/tile-4-0-2, ground/tile-6-0-2, ground/tile-8-0-2, ...), 22 flat shading (bridge, stepping-stones/stone-1, stepping-stones/stone-2, stepping-stones/stone-3, ...), 14 textured mesh (river/piece-0-8, river/piece-8-12, river/piece-12-13, river/piece-13-14, ...), 3 skinned mesh (robot-walker, robot-greeter, windmill), 3 crosses the near plane (ground/tile-8-2-2, ground/tile-8-4-4, ground/tile-12-4-2)
+       sent but unseen (38): ground/tile-0-0-4, ground/tile-4-0-2, ground/tile-6-0-2, ground/tile-8-0-2, ground/tile-10-0-2, ground/tile-12-0-2, ground/tile-14-0-2, ground/tile-16-0-4, ground/tile-4-2-2, ground/tile-6-2-2, ground/tile-10-2-1, ground/tile-11-2-1, ground/tile-12-2-2, ground/tile-14-2-2, ground/tile-10-3-1, ground/tile-11-3-1, ground/tile-14-4-1, ground/tile-15-4-1, ground/tile-16-4-2, ground/tile-18-4-2, ground/tile-14-5-1, ground/tile-15-5-1, ground/tile-14-6-2, ground/tile-16-6-1, ground/tile-17-6-1, ground/tile-18-6-2, ground/tile-16-7-1, ground/tile-17-7-1, ground/tile-16-8-2, ground/tile-18-8-2, ground/tile-16-10-2, ground/tile-18-10-2, river/piece-12-13, river/piece-13-14, river/piece-14-15, river/piece-15-16, tree-5/tree/trunk, tree-5/tree/leaves
+  web  102 draws, 2509 tris, 0 billboards, LOD full/light/imp/cull [7, 3, 0, 0]
+       shadows: map — 23 casters: 0 blobs, 0 planar, 23 in the map; 52 receivers
+       Web GPU 58/102 draws · 3522 tris · 37 off screen
+       Web 39 calls · 3 pipelines · 38 switches
+       sent but unseen (41): ground/tile-0-0-4, ground/tile-4-0-2, ground/tile-6-0-2, ground/tile-8-0-2, ground/tile-10-0-2, ground/tile-12-0-2, ground/tile-14-0-2, ground/tile-16-0-4, ground/tile-4-2-2, ground/tile-6-2-2, ground/tile-8-2-2, ground/tile-10-2-1, ground/tile-11-2-1, ground/tile-12-2-2, ground/tile-14-2-2, ground/tile-10-3-1, ground/tile-11-3-1, ground/tile-14-4-1, ground/tile-15-4-1, ground/tile-16-4-2, ground/tile-18-4-2, ground/tile-14-5-1, ground/tile-15-5-1, ground/tile-14-6-2, ground/tile-16-6-1, ground/tile-17-6-1, ground/tile-18-6-2, ground/tile-16-7-1, ground/tile-17-7-1, ground/tile-16-8-2, ground/tile-18-8-2, ground/tile-16-10-2, ground/tile-18-10-2, ground/tile-16-12-4, ground/tile-16-16-4, river/piece-12-13, river/piece-13-14, river/piece-14-15, river/piece-15-16, tree-5/tree/trunk, tree-5/tree/leaves

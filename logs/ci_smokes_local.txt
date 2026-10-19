@@ -1,0 +1,47 @@
+== fmt
+rc=0
+== scene-check
+rc=0
+== agents-check
+rc=0
+== build-app
+rc=0
+== build-reload
+rc=0
+== build-editor
+rc=0
+== smoke
+rc=0
+== quality low
+1
+== quality medium
+1
+== quality high
+1
+== quality ultra
+1
+== quality auto
+1
+== quality-check
+rc=0
+== quality-bench
+rc=0
+== scene-player
+rc=0
+== exported-showcase
+rc=0
+== shadows-off
+rc=0
+== shadows-debug
+rc=0
+== editor-smoke
+rc=0
+== editor-launcher
+rc=0
+== editor-play-here
+rc=0
+== hot-reload
+rc=0
+== standalone
+rc=0
+== ALL DONE

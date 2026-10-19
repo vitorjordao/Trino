@@ -1,0 +1,9 @@
+[web] installing the Playwright harness (npm ci in tools/web-test)
+[web] chromium-webgl2: tests/golden/web/showcase.png: mean diff 0.05, 0.00% far pixels (limits 3, 2.0%)
+[web] chromium-webgl2: tests/golden/web/castle64_hub.png: mean diff 0.29, 0.29% far pixels (limits 3, 2.0%)
+[web] chromium-webgl2: tests/golden/web/texture_formats.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[web] chromium-webgpu: tests/golden/web/showcase.png: mean diff 0.05, 0.00% far pixels (limits 3, 2.0%)
+[web] chromium-webgpu: tests/golden/web/castle64_hub.png: mean diff 0.29, 0.29% far pixels (limits 3, 2.0%)
+[web] chromium-webgpu: tests/golden/web/texture_formats.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[web] every browser passed (2 runs)
+RC=0

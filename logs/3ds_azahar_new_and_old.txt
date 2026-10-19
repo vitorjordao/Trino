@@ -1,0 +1,27 @@
+TRINO_HW 3ds new=1 speedup=1 app_ram=96M tier=expanded
+TRINO_STEP:shadows
+TRINO_SHADOWS: tier=planar blobs=0 planar=2 mapped=0 tris=92 post=158->71 ball=158->71 open=158->158
+TRINO_STEP:shadows probed
+TRINO_STEP:golden frame
+TRINO_STEP:river golden frame
+TRINO_STEP:texture formats golden frame
+[3ds] golden frame: tests/golden/3ds/castle64_hub.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[3ds] golden frame (bottom): tests/golden/3ds/castle64_hub_bottom.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[3ds] golden frame (showcase bottom): tests/golden/3ds/showcase_bottom.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[3ds] golden frame (showcase river): tests/golden/3ds/showcase_river.png: mean diff 0.19, 0.29% far pixels (limits 3, 2.0%)
+[3ds] golden frame (texture formats): tests/golden/3ds/texture_formats.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[3ds] TEST PASS (as a New 3DS)
+TRINO_HW 3ds new=0 speedup=0 app_ram=96M tier=base
+TRINO_STEP:shadows
+TRINO_SHADOWS: tier=planar blobs=0 planar=2 mapped=0 tris=92 post=158->71 ball=158->71 open=158->158
+TRINO_STEP:shadows probed
+TRINO_STEP:golden frame
+TRINO_STEP:river golden frame
+TRINO_STEP:texture formats golden frame
+[3ds] golden frame: tests/golden/3ds/castle64_hub.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[3ds] golden frame (bottom): tests/golden/3ds/castle64_hub_bottom.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[3ds] golden frame (showcase bottom): tests/golden/3ds/showcase_bottom.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[3ds] golden frame (showcase river): tests/golden/3ds/showcase_river.png: mean diff 0.19, 0.29% far pixels (limits 3, 2.0%)
+[3ds] golden frame (texture formats): tests/golden/3ds/texture_formats.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[3ds] TEST PASS (as an old 3DS)
+RC=0

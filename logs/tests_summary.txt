@@ -1,0 +1,63 @@
+== TRINO_REQUIRE_GPU=1 cargo test --workspace
+   157 test binaries: 1312 passed, 0 failed, 60 ignored
+   the shadow tests (docs/TESTING.md rows) in this run:
+        ok  baked_scene_blob_reads_every_field
+        ok  blobs_show_at_every_distance_on_a_large_floor
+        ok  budget::tests::platform_lines_list_each_tiers_shadows
+        ok  caps::tests::shadow_tiers_follow_the_hardware
+        ok  castle64_3ds_gpu_split_matches_the_baseline
+        ok  castle64_tnl_work_matches_the_baseline
+        ok  each_tier_matches_its_golden
+        ok  planar_shadows_draw_once_per_pixel_on_the_3ds_and_twice_on_the_n64
+        ok  provided_renderer_methods_are_harmless_defaults
+        ok  renderer::ao::tests::the_uniform_matches_the_shader_layout
+        ok  renderer::shadow::tests::the_blob_texture_is_white_with_the_falloff_in_alpha
+        ok  renderer::shadow::tests::views_parse_and_resolve
+        ok  renderer::shadow_map::tests::sizes_and_taps_follow_the_quality_preset
+        ok  renderer::shadow_map::tests::the_uniform_matches_the_shader_layout
+        ok  scene::tests::baked_scene_reads_every_field
+        ok  shadow::tests::a_blob_lands_on_the_receiver_under_its_caster_and_is_cut_to_it
+        ok  shadow::tests::blob_triangles_sit_just_in_front_of_their_receiver
+        ok  shadow::tests::casts_plan_per_tier_and_the_n64_budgets_its_planar_casters
+        ok  shadow::tests::planar_shadows_are_flat_offset_and_cut
+        ok  shadow::tests::rdp_steps_follow_the_compressed_format
+        ok  shadow::tests::receiver_clips_keep_inside_triangles_whole_and_cut_the_rest
+        ok  shadow::tests::the_blob_offset_beats_every_targets_depth_precision
+        ok  shadow::tests::the_blob_texture_is_a_soft_disc_that_ends_at_the_rim
+        ok  shadow::tests::the_map_covers_the_view_and_the_casters_above_it
+        ok  shadow::tests::the_map_moves_in_whole_texels
+        ok  shadow::tests::the_planar_matrix_is_the_ray_plane_intersection
+        ok  shadow::tests::tiers_follow_the_target_the_game_and_the_cap
+        ok  shadow_casters_are_counted_per_tier_like_the_renderer
+        ok  shadows_are_cleared_at_begin_frame_and_follow_the_view
+        ok  shadows_darken_the_ground_under_each_caster_on_every_tier
+        ok  shadows_reach_the_tscn_and_the_generated_code
+        ok  tests::shadow_settings_out_of_range_are_clamped
+        ok  tests::shadows_are_optional_defaulted_and_round_trip
+        ok  tests::v6_scenes_load_as_v7_without_shadows
+        ok  the_map_shadows_with_msaa_and_a_render_scale
+        ok  the_match_frame_cost_is_pinned
+        ok  the_match_matches_its_goldens_on_every_look
+        ok  the_menus_match_their_goldens
+        ok  the_quality_preset_caps_the_native_tier
+        ok  the_shadows_step_passes_at_every_tier
+   ignored  ui_tests::editor_layout_is_clean_at_minimum_and_default_sizes (run with --ignored below)
+   ignored  ui_tests::shadows_panel_components_tiers_and_view_modes (run with --ignored below)
+
+== TRINO_PC_TNL=cpu cargo test -p trino-platform-pc
+   17 test binaries: 120 passed, 0 failed, 0 ignored
+   the shadow tests (docs/TESTING.md rows) in this run:
+        ok  blobs_show_at_every_distance_on_a_large_floor
+        ok  each_tier_matches_its_golden
+        ok  planar_shadows_draw_once_per_pixel_on_the_3ds_and_twice_on_the_n64
+        ok  shadows_are_cleared_at_begin_frame_and_follow_the_view
+        ok  shadows_darken_the_ground_under_each_caster_on_every_tier
+        ok  the_map_shadows_with_msaa_and_a_render_scale
+        ok  the_quality_preset_caps_the_native_tier
+
+== cargo test -p trino-editor ui_tests -- --ignored --test-threads=1
+   1 test binaries: 20 passed, 0 failed, 0 ignored
+   the shadow tests (docs/TESTING.md rows) in this run:
+        ok  ui_tests::editor_layout_is_clean_at_minimum_and_default_sizes
+        ok  ui_tests::shadows_panel_components_tiers_and_view_modes
+

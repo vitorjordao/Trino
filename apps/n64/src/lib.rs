@@ -292,6 +292,71 @@ mod n64 {
         renderer.set_rsp_stream(stream0);
     }
 
+    /// The fourth emulator golden: blobs on a 256 m floor out to 100 m
+    /// (`tests/golden/n64/shadows_far.png`), where the RDP's compressed z
+    /// is coarsest: none may fight the floor.
+    #[inline(never)]
+    fn shadows_golden(renderer: &mut N64Renderer) {
+        runtime::log("TRINO_STEP:shadows golden frame\n");
+        castle64::selftest::shadow_far_scene(renderer);
+        renderer.dump_framebuffer();
+    }
+
+    /// Step `shadow cost`: the 22 blob casters of `shadow_crowd_scene`
+    /// timed with their blobs and without, per stage on the console's
+    /// clock; the difference per blob is `N64_COST`'s blob term. Reported
+    /// as `TRINO_SHADOW_COST:`; the frame with every blob must fit 30 fps
+    /// (a Solid Eleven match's crowd, ADR 0025).
+    #[inline(never)]
+    fn shadow_cost(renderer: &mut N64Renderer) {
+        use castle64::selftest::{SHADOW_CROWD, shadow_crowd_scene};
+        const FRAMES: u32 = 16;
+        runtime::log("TRINO_STEP:shadow cost\n");
+        let mut measure = |shadows: bool| {
+            for _ in 0..4 {
+                shadow_crowd_scene(renderer, shadows);
+            }
+            renderer.start_profile();
+            let t0 = runtime::now_us();
+            for _ in 0..FRAMES {
+                shadow_crowd_scene(renderer, shadows);
+            }
+            let total = runtime::now_us().wrapping_sub(t0) / FRAMES;
+            let p = renderer.take_profile();
+            let stage = |f: fn(&trino_core::perf::StageTimes) -> u32| {
+                p.as_ref().map_or(0, |p| f(&p.stages) / FRAMES)
+            };
+            let blobs = trino_core::Renderer::stats(renderer).shadows.blobs;
+            // The frame without its vsync wait (`begin`), as the perf
+            // ceilings count it.
+            (
+                total.saturating_sub(stage(|s| s.begin)),
+                stage(|s| s.tnl),
+                stage(|s| s.sort + s.submit),
+                blobs,
+            )
+        };
+        let (off, off_tnl, off_submit, _) = measure(false);
+        let (on, on_tnl, on_submit, blobs) = measure(true);
+        let per = |a: u32, b: u32| a.saturating_sub(b) / (blobs as u32).max(1);
+        runtime::log(&format!(
+            "TRINO_SHADOW_COST: casters={SHADOW_CROWD} blobs={blobs} frame_us={off}->{on} \
+             blob_us={} tnl_us_per_blob={} submit_us_per_blob={}\n",
+            per(on, off),
+            per(on_tnl, off_tnl),
+            per(on_submit, off_submit),
+        ));
+        if blobs as usize != SHADOW_CROWD {
+            runtime::log("TRINO_TEST_FAIL:shadow cost: not every caster drew its blob\n");
+        }
+        if on > trino_core::perf::FRAME_30FPS_US {
+            runtime::log(&format!(
+                "TRINO_TEST_FAIL:shadow cost: {SHADOW_CROWD} blob casters take {on} us, past \
+                 the 30 fps frame\n"
+            ));
+        }
+    }
+
     /// The hub perf scene's first frame, dumped for the second golden.
     #[inline(never)]
     fn castle64_golden(renderer: &mut N64Renderer, audio: &mut N64Audio) {
@@ -667,6 +732,10 @@ mod n64 {
                     // scene camera, the hero wading in (gated like the
                     // castle64 scenes; the river's own line is `models/river`).
                     water_perf(renderer, audio);
+                    // 8) Shadows (ADR 0025): the far-blob golden and what
+                    // a blob costs (ungated, the `N64_COST` blob term).
+                    shadows_golden(renderer);
+                    shadow_cost(renderer);
                     // High-water marks of the whole run (bot, perf scenes).
                     if check_stack("the bot and the perf scenes")
                         && check_heap("the bot and the perf scenes", platform, heap_peak.get())

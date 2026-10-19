@@ -19,7 +19,7 @@ fn scenes_round_trip_through_files_with_every_component() {
     let scene = common::scene();
     scene.save(&path).unwrap();
     let text = std::fs::read_to_string(&path).unwrap();
-    assert!(text.contains("version: 6"));
+    assert!(text.contains("version: 7"));
     let back = Scene::load(&path).unwrap();
     assert_eq!(back, scene);
     assert_eq!(back.to_ron(), text, "stable text: clean diffs");
@@ -71,7 +71,7 @@ fn old_new_and_broken_scene_files_get_clear_answers() {
 
     for (text, needle) in [
         (r#"(version: 0, name: "x")"#, "no migration path"),
-        (r#"(version: 7, name: "x")"#, "newer than this engine"),
+        (r#"(version: 8, name: "x")"#, "newer than this engine"),
         (r#"(version: 1, name: 5)"#, "scene (v1) parse error"),
         (
             r#"(version: 2, name: "x", entities: 3)"#,

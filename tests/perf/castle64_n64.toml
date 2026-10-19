@@ -8,34 +8,34 @@
 # micro-river tnl_us 1200 and showcase-river frame_us 33300.
 
 [hub]
-frame_us = 15200
-tnl_us = 4500
+frame_us = 15900
+tnl_us = 4800
 sort_us = 600
-submit_us = 2400
+submit_us = 2500
 
 [green-hills]
-frame_us = 9300
-tnl_us = 2200
+frame_us = 9800
+tnl_us = 2400
 sort_us = 600
-submit_us = 1600
+submit_us = 2000
 
 [lava-land]
-frame_us = 10500
+frame_us = 10600
 tnl_us = 2800
+sort_us = 600
+submit_us = 2100
+
+[sky-tower]
+frame_us = 9500
+tnl_us = 2300
 sort_us = 600
 submit_us = 1600
 
-[sky-tower]
-frame_us = 9200
-tnl_us = 2200
-sort_us = 600
-submit_us = 1300
-
 [throne]
-frame_us = 22900
-tnl_us = 11200
-sort_us = 1000
-submit_us = 2900
+frame_us = 23200
+tnl_us = 11100
+sort_us = 900
+submit_us = 3500
 
 [micro-river]
 frame_us = 2700
@@ -44,7 +44,7 @@ sort_us = 500
 submit_us = 600
 
 [showcase-river]
-frame_us = 32000
-tnl_us = 16400
+frame_us = 31500
+tnl_us = 16600
 sort_us = 600
 submit_us = 2000

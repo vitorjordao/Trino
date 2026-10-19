@@ -52,9 +52,12 @@ use trino_core::scene::{BakedScene, SceneNode};
 use trino_core::{
     Ambience, AmbientOcclusion, Audio, BlobId, Button, Camera3, Color, Emitter, EntityId,
     EntityStore, FontId, Game, InputState, Light, Listener, Mat34, Material, ModelParams, MusicId,
-    ParticleSystem, Platform, Renderer, RippleBuffer, Screen, SoundId, SpriteId, TextAlign,
-    TextBuf, TextParams, Vec2, Vec3, spatialize,
+    ParticleSystem, Platform, Renderer, RippleBuffer, Screen, ShadowPlane, ShadowSettings, SoundId,
+    SpriteId, TextAlign, TextBuf, TextParams, Vec2, Vec3, spatialize,
 };
+
+/// Receivers a showcase level keeps (no allocator on the consoles).
+pub const MAX_RECEIVERS: usize = 8;
 
 pub mod panel;
 pub mod river;
@@ -215,6 +218,11 @@ pub struct ShowcaseGame {
     /// Screen-space ambient occlusion (PC native only; the exported
     /// scene's `AO`, none from a baked scene unless the host sets it).
     pub ao: Option<AmbientOcclusion>,
+    /// The scene's shadows and the first [`MAX_RECEIVERS`] receivers
+    /// (ADR 0025: `SHADOWS`/`RECEIVERS`, or the baked scene's).
+    pub shadows: Option<ShadowSettings>,
+    receivers: [ShadowPlane; MAX_RECEIVERS],
+    n_receivers: u8,
     /// Coin pickup particles (billboards).
     sparks: ParticleSystem<32>,
     /// Droplets where things enter the river.
@@ -288,19 +296,37 @@ impl ShowcaseGame {
             screen,
         );
         game.ao = scene::AO;
+        game.set_shadows(scene::SHADOWS, scene::RECEIVERS.iter().copied());
         game
+    }
+
+    /// The level's shadows: its settings and receivers (the first
+    /// [`MAX_RECEIVERS`]).
+    pub fn set_shadows(
+        &mut self,
+        shadows: Option<ShadowSettings>,
+        receivers: impl IntoIterator<Item = ShadowPlane>,
+    ) {
+        self.shadows = shadows;
+        self.n_receivers = 0;
+        for (slot, r) in self.receivers.iter_mut().zip(receivers) {
+            *slot = r;
+            self.n_receivers += 1;
+        }
     }
 
     /// The level from the baked `TSCN` blob — the same scene loaded at
     /// runtime (data-driven levels; no rebuild to change the layout).
     pub fn from_baked(baked: &BakedScene, screen: Vec2) -> Self {
-        Self::from_scene(
+        let mut game = Self::from_scene(
             baked.nodes(),
             baked.camera(),
             baked.light(),
             baked.clear(),
             screen,
-        )
+        );
+        game.set_shadows(baked.shadows(), baked.receivers());
+        game
     }
 
     pub fn from_scene(
@@ -342,6 +368,9 @@ impl ShowcaseGame {
             light: trino_core::DEFAULT_LIGHT,
             clear: Color::BLACK,
             ao: None,
+            shadows: None,
+            receivers: [ShadowPlane::ground(0.0); MAX_RECEIVERS],
+            n_receivers: 0,
             sparks: ParticleSystem::new(SPARKS, 0x5EED),
             splash: ParticleSystem::new(SPLASH, 0x5A1A),
             ripples: RippleBuffer::new(),
@@ -392,6 +421,7 @@ impl ShowcaseGame {
             screen,
         );
         self.ao = scene::AO;
+        self.set_shadows(scene::SHADOWS, scene::RECEIVERS.iter().copied());
     }
 
     /// [`Self::from_scene`] into this game, in place: every field is set
@@ -428,6 +458,9 @@ impl ShowcaseGame {
             light: lgt,
             clear: clr,
             ao,
+            shadows,
+            receivers: _,
+            n_receivers,
             sparks,
             splash,
             ripples,
@@ -476,6 +509,8 @@ impl ShowcaseGame {
         *lgt = light;
         *clr = clear;
         *ao = None;
+        *shadows = None;
+        *n_receivers = 0;
         *sparks = ParticleSystem::new(SPARKS, 0x5EED);
         *splash = ParticleSystem::new(SPLASH, 0x5A1A);
         ripples.clear();
@@ -934,6 +969,9 @@ impl Game for ShowcaseGame {
         r.set_texture_filter(self.look.filter);
         // The scene's screen-space AO (PC native; cleared every frame).
         r.set_ambient_occlusion(self.ao.as_ref());
+        // The scene's shadows and receivers (cleared every frame).
+        r.set_shadows(self.shadows.as_ref());
+        r.set_shadow_receivers(&self.receivers[..self.n_receivers as usize]);
         // The river's clock and ripples (cleared every frame, like AO).
         r.set_water(self.time, self.ripples.as_slice());
         // Everything the editor placed (animated clips included), coins

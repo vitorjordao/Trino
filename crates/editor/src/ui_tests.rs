@@ -1036,7 +1036,21 @@ fn editor_layout_is_clean_at_minimum_and_default_sizes() {
         h.state_mut().inspect_focus = Some("groups".into());
         h.run_steps(4);
         crate::layout_audit::assert_clean(&h, size, true, &what("asset groups"));
+        // Shadows (ADR 0025): the scene's section with its tier lines, an
+        // entity's Shadow component.
+        h.state_mut().doc.scene.environment.shadows = Some(trino_scene::ShadowsDef::default());
+        let rock_shadow = trino_scene::ShadowComponent {
+            receive: true,
+            ..Default::default()
+        };
+        h.state_mut().doc.scene.get_mut(&rock).unwrap().shadow = Some(rock_shadow);
+        h.state_mut().inspect_focus = Some("shadows".into());
+        h.run_steps(4);
+        crate::layout_audit::assert_clean(&h, size, true, &what("scene shadows"));
         h.state_mut().inspect_focus = None;
+        h.state_mut().cmds.push(Cmd::Select(Some(rock.clone())));
+        h.run_steps(3);
+        crate::layout_audit::assert_clean(&h, size, true, &what("Shadow component"));
         // The UI tab (#58): the self-test screen with a node selected (its
         // inspector), then on the 3DS (both screens) with another.
         h.state_mut().cmds.push(Cmd::FocusTab(Tab::Ui));
@@ -1128,7 +1142,7 @@ fn asset_groups_chips_requires_cells_and_memory() {
     h.state_mut().cmds.push(Cmd::Save);
     h.run_steps(3);
     let saved = std::fs::read_to_string(tmp.path().join("scenes/showcase.scene.ron")).unwrap();
-    assert!(saved.contains("version: 6"), "migrated on save");
+    assert!(saved.contains("version: 7"), "migrated on save");
     assert!(
         saved.contains("requires: [\n        \"boot\",\n        \"selftest_level\",\n    ],"),
         "{}",
@@ -2140,6 +2154,152 @@ fn ambient_occlusion_panel_view_modes_and_baking() {
         .unwrap();
     assert!(!table.contains("ao ="), "{table}");
     assert!(h.state().project.models["models/crate"].ao.is_none());
+    leave_temp_project(&repo);
+}
+
+/// Shadows from the editor (ADR 0025): the scene's Shadows section (on,
+/// saved to the file, undoable), an entity's Shadow component from Add
+/// component (a model casts, a bare collider receives), the Scene view
+/// drawing them at each previewed profile's tier (the map on the PC, blobs
+/// on the N64, projected shapes on the 3DS), the Scene view's modes from
+/// View › Shadow view (off; debug, even with the scene's off), and each
+/// tier's line in the section.
+#[test]
+#[ignore = "changes cwd/env: run alone with --ignored --test-threads=1"]
+fn shadows_panel_components_tiers_and_view_modes() {
+    use crate::app::Cmd;
+    use crate::theme::icon;
+    use trino_core::{HwTier, ShadowTier};
+    use trino_platform_pc::{ShadowView, SimProfile};
+    let Some((mut h, _tmp, repo)) = temp_project_app(egui::vec2(1600.0, 1000.0)) else {
+        return;
+    };
+    assert_eq!(h.state().doc.scene.environment.shadows, None);
+    // The scene's shadows on.
+    h.state_mut().cmds.push(Cmd::Select(None));
+    h.run_steps(3);
+    click(&mut h, "Shadows (every platform)");
+    h.run_steps(3);
+    assert_eq!(
+        h.state().doc.scene.environment.shadows,
+        Some(trino_scene::ShadowsDef::default())
+    );
+    assert!(h.query_by_label_contains("Best tier").is_some());
+
+    // A floor (a bare collider) under the rock: Add component › Shadow
+    // makes it a receiver, the rock a caster.
+    let add_shadow = |h: &mut Harness<'static, App>| {
+        click(h, "Add component");
+        h.get_by_label(&format!("{}  Shadow", icon::SUN_HORIZON))
+            .click_accesskit();
+        h.run_steps(3);
+    };
+    let mut floor = trino_scene::Entity::new("shadow-floor");
+    floor.transform.pos = [5.0, 0.0, 8.0];
+    floor.collider = Some(trino_scene::ColliderComponent {
+        shape: trino_scene::ShapeDef::Box {
+            size: [8.0, 0.1, 8.0],
+        },
+        ..Default::default()
+    });
+    h.state_mut().cmds.push(Cmd::Create {
+        parent: None,
+        entity: Box::new(floor),
+    });
+    h.run_steps(3);
+    add_shadow(&mut h);
+    let floor = find(&h.state().doc.scene, "shadow-floor");
+    let shadow = h.state().doc.scene.get(&floor).unwrap().shadow;
+    assert_eq!(
+        shadow,
+        Some(trino_scene::ShadowComponent {
+            cast: trino_scene::ShadowCastDef::None,
+            receive: true,
+            ..Default::default()
+        }),
+        "a bare collider receives"
+    );
+    let rock = find(&h.state().doc.scene, "rock-1");
+    h.state_mut().cmds.push(Cmd::Select(Some(rock.clone())));
+    h.run_steps(3);
+    add_shadow(&mut h);
+    let shadow = h.state().doc.scene.get(&rock).unwrap().shadow;
+    assert_eq!(shadow, Some(trino_scene::ShadowComponent::default()));
+    assert!(h.query_by_label_contains("N64: blob 0.50 m").is_some());
+    assert_eq!(h.state().resolved.receivers().len(), 1);
+
+    // The Scene view, looking at the rock, at each profile's tier.
+    h.state_mut().scene_view.cam.look_from(
+        trino_core::Vec3::new(5.0, 4.0, 14.0),
+        trino_core::Vec3::new(5.0, 0.3, 8.0),
+    );
+    let preview = |h: &mut Harness<'static, App>, profile| {
+        {
+            let app = h.state_mut();
+            app.scene_view
+                .set_profile_tier(profile, HwTier::Base, &app.project);
+        }
+        h.run_steps(4);
+        let s = &h.state().scene_view.stats;
+        (s.shadow_tier, s.frame.shadows)
+    };
+    let (tier, s) = preview(&mut h, SimProfile::Native);
+    assert_eq!(tier, ShadowTier::Map);
+    assert!(s.mapped >= 1, "{s:?}");
+    let (tier, s) = preview(&mut h, SimProfile::N64);
+    assert_eq!(tier, ShadowTier::Blob);
+    assert!(s.blobs >= 1 && s.mapped == 0, "{s:?}");
+    let (tier, s) = preview(&mut h, SimProfile::N3ds);
+    assert_eq!(tier, ShadowTier::Planar);
+    assert!(s.planar >= 1 && s.blobs == 0, "{s:?}");
+    preview(&mut h, SimProfile::Native);
+
+    // Saved as text.
+    h.state_mut().cmds.push(Cmd::Save);
+    h.run_steps(3);
+    let text = std::fs::read_to_string("scenes/showcase.scene.ron").unwrap();
+    assert!(text.contains("shadows: Some("), "{text}");
+    assert!(text.contains("shadow: Some("), "the components saved");
+    assert!(text.contains("receive: true"), "the floor saved");
+
+    // View › Shadow view: off whatever the scene says, then the debug
+    // color even with the scene's off.
+    click(&mut h, "View");
+    click(&mut h, "Shadow view");
+    click(&mut h, "Shadows: off");
+    h.run_steps(4);
+    assert_eq!(h.state().scene_view.shadow_view, ShadowView::Off);
+    assert_eq!(h.state().scene_view.stats.shadow_tier, ShadowTier::None);
+    h.state_mut().cmds.push(Cmd::Select(None));
+    h.run_steps(3);
+    // The save's toast can cover the Inspector: click through accesskit.
+    h.get_by_label("Shadows (every platform)").click_accesskit();
+    h.run_steps(3);
+    assert!(!h.state().doc.scene.environment.shadows.unwrap().enabled);
+    h.state_mut().scene_view.shadow_view = ShadowView::Debug;
+    h.run_steps(4);
+    let stats = &h.state().scene_view.stats;
+    assert_eq!(
+        stats.shadow_tier,
+        ShadowTier::Map,
+        "a mode change re-renders"
+    );
+    assert!(stats.frame.shadows.mapped >= 1);
+    h.state_mut().cmds.push(Cmd::Undo);
+    h.run_steps(4);
+    assert!(
+        h.state().doc.scene.environment.shadows.unwrap().enabled,
+        "undo"
+    );
+    // Each tier's line under the section.
+    wait_for(&mut h, "the budgets", |a| a.budgets.is_some());
+    for line in [
+        "N64 shadows: blob",
+        "3DS shadows: planar",
+        "PC shadows: map",
+    ] {
+        assert!(h.query_by_label_contains(line).is_some(), "{line}");
+    }
     leave_temp_project(&repo);
 }
 

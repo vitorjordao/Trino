@@ -224,6 +224,8 @@ fn level_blob() -> &'static [u8] {
     crate_.tint = [255, 200, 200, 255];
     crate_.double_sided = true;
     crate_.texture = Some(77);
+    crate_.shadow = Some((3, 0.4));
+    crate_.receiver = Some((Vec3::new(0.0, 1.0, 0.0), 0.5, 0.5));
     let mut lamp = TscnNode::new("yard/lamp").at(Vec3::new(2.0, 0.0, 0.0));
     lamp.model = Some(CUBE.0);
     lamp.lods = vec![(10.0, CUBE_FAR.0), (30.0, 0)];
@@ -281,6 +283,26 @@ fn baked_scene_blob_reads_every_field() {
     assert_eq!(c.params.tint, Color::rgba(255, 200, 200, 255));
     assert!(c.params.double_sided);
     assert_eq!(c.params.texture, Some(SpriteId(77)));
+    // Shadows (TSCN v5): its cast, and the receiver its top is; the scene's
+    // shadows off.
+    assert_eq!(
+        c.params.shadow,
+        trino_core::ShadowCast::Auto { blob_radius: 0.4 }
+    );
+    let tops: Vec<_> = s.receivers().collect();
+    assert_eq!(
+        tops,
+        [trino_core::ShadowPlane::horizontal(
+            Vec3::new(0.0, 1.0, 0.0),
+            0.5,
+            0.5
+        )]
+    );
+    assert_eq!(s.shadows(), None);
+    assert_eq!(
+        s.find("lamp").unwrap().params.shadow,
+        trino_core::ShadowCast::None
+    );
     assert_eq!(
         c.collider.unwrap().shape,
         Shape::Box {
@@ -384,9 +406,9 @@ fn baked_scene_rejects_bad_blobs() {
         BakedScene::parse(leak(magic)).unwrap_err(),
         SceneError::BadMagic
     );
-    // v1 (8-byte LOD records), v2 (no surface), v3 (no water) and future
-    // versions need a rebake.
-    for v in [1u8, 2, 3, 5] {
+    // v1 (8-byte LOD records), v2 (no surface), v3 (no water), v4 (no
+    // shadows) and future versions need a rebake.
+    for v in [1u8, 2, 3, 4, 6] {
         let mut other = good.to_vec();
         other[4] = v;
         assert_eq!(

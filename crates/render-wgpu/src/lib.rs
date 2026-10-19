@@ -21,6 +21,6 @@ pub mod sim;
 pub use frame_report::{FrameMeter, QualityNote};
 pub use renderer::{
     AoView, Bench, Calibration, CompressedFormat, MSAA_SAMPLES, N64Estimate, PcFrameTimes,
-    PcRenderer, PendingRead, RendererError, SpriteMemory, WebBackend,
+    PcRenderer, PendingRead, RendererError, ShadowView, SpriteMemory, WebBackend,
 };
 pub use sim::SimProfile;

@@ -792,6 +792,10 @@ pub struct TscnNode {
     pub cell: u8,
     /// (kind 1 cell / 2 portal, a, b, half)
     pub vis: Option<(u8, u8, u8, [f32; 3])>,
+    /// (kind 1 blob / 2 mesh / 3 auto, blob radius) (v5)
+    pub shadow: Option<(u8, f32)>,
+    /// The receiver's top: (center, half x, half z) (v5)
+    pub receiver: Option<(Vec3, f32, f32)>,
 }
 
 impl TscnNode {
@@ -812,6 +816,8 @@ impl TscnNode {
             sound: None,
             cell: trino_core::NO_CELL,
             vis: None,
+            shadow: None,
+            receiver: None,
         }
     }
 
@@ -830,7 +836,8 @@ pub struct TscnEnv {
     pub light: Light,
 }
 
-/// Encode a TSCN v1 blob, leaked to `'static` like `Platform::blob` bytes.
+/// Encode a TSCN blob (the current version, shadows off), leaked to
+/// `'static` like `Platform::blob` bytes.
 pub fn tscn(env: &TscnEnv, nodes: &[TscnNode]) -> &'static [u8] {
     use trino_core::scene::{
         TSCN_ENV_BYTES, TSCN_HEADER, TSCN_MAGIC, TSCN_NODE_BYTES, TSCN_VERSION,
@@ -854,6 +861,8 @@ pub fn tscn(env: &TscnEnv, nodes: &[TscnNode]) -> &'static [u8] {
         b.extend_from_slice(&[col.r, col.g, col.b, col.a]);
     }
     f32s(&mut b, &[l.fog.near, l.fog.far]);
+    // Shadows (v5): off.
+    b.extend_from_slice(&[0; trino_core::scene::TSCN_ENV_SHADOW_BYTES]);
     assert_eq!(b.len(), TSCN_HEADER + TSCN_ENV_BYTES);
 
     let mut data: Vec<u8> = Vec::new();
@@ -913,6 +922,11 @@ pub fn tscn(env: &TscnEnv, nodes: &[TscnNode]) -> &'static [u8] {
         // water (v4, flag bit6 off).
         b.extend_from_slice(&[0; 8]);
         b.extend_from_slice(&[0; trino_core::scene::TSCN_WATER_BYTES]);
+        // Shadow (v5): the cast, and the receiver's top.
+        let (cast, radius) = n.shadow.unwrap_or((0, 0.0));
+        b.extend_from_slice(&[cast, u8::from(n.receiver.is_some()), 0, 0]);
+        let (c, hx, hz) = n.receiver.unwrap_or((Vec3::ZERO, 0.0, 0.0));
+        f32s(&mut b, &[radius, c.x, c.y, c.z, hx, hz]);
         assert_eq!(b.len() - start, TSCN_NODE_BYTES);
     }
     b.extend_from_slice(&data);

@@ -182,6 +182,14 @@ pub struct MeshLayout {
     edge_box: Vec3,
 }
 
+impl MeshLayout {
+    /// The mesh's bounding sphere ([`Mesh::bounds`]) without rebuilding
+    /// the mesh.
+    pub fn bounds(&self) -> Option<(Vec3, f32)> {
+        self.bounds
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 struct SkeletonLayout {
     joint_of_vertex: Span,
@@ -647,6 +655,16 @@ impl<'a> Mesh<'a> {
 
     pub fn bounds(&self) -> Option<(Vec3, f32)> {
         self.bounds
+    }
+
+    /// This mesh without its bounding sphere: [`tessellate_with`] then
+    /// skips its whole-mesh cull (a draw whose matrix stretches the sphere
+    /// past what that test assumes, a planar shadow's, culls itself).
+    pub fn without_bounds(self) -> Mesh<'a> {
+        Mesh {
+            bounds: None,
+            ..self
+        }
     }
 
     /// Joints of the rigid skeleton (0 = static mesh).
@@ -1556,7 +1574,9 @@ pub fn rsp_check(
     rsp_check_mv(ctx, mesh, model, &ctx.view.mul(model), params)
 }
 
-/// [`rsp_eligible_mv`] with the reason.
+/// [`rsp_eligible_mv`] with the reason. [`ModelParams::shadow`] plays no
+/// part: the shadow is a draw of its own (`crate::shadow`), the caster's
+/// command is the same with or without it.
 pub fn rsp_check_mv(
     ctx: &TnlContext,
     mesh: &Mesh,
@@ -2411,6 +2431,61 @@ impl TnlContext {
     pub fn light(&self) -> &Light {
         &self.light
     }
+
+    /// `p` (world) in view space: x right, y up, z the view depth.
+    #[inline]
+    pub fn view_point(&self, p: Vec3) -> Vec3 {
+        self.view.transform_point(p)
+    }
+
+    /// The screen size this context projects to.
+    pub fn screen(&self) -> Vec2 {
+        self.screen
+    }
+
+    /// The focal length, pixels: a view-space point projects to
+    /// `center + (x, -y) · focal / z`.
+    pub fn focal(&self) -> f32 {
+        self.focal
+    }
+
+    /// The screen center (the projection's origin).
+    pub fn center(&self) -> Vec2 {
+        self.center
+    }
+
+    /// The guard band's half-extents per unit of view depth (x, y): the
+    /// side planes every triangle is clipped to.
+    pub fn guard(&self) -> (f32, f32) {
+        (self.lim_x, self.lim_y)
+    }
+
+    /// `color` under the light's distance fog at view depth `zv` (alpha
+    /// kept), as the T&L fogs an unlit vertex.
+    pub fn fogged(&self, color: Color, zv: f32) -> Color {
+        let fog = self.light.fog;
+        if !fog.enabled() {
+            return color;
+        }
+        let f = ((zv - fog.near) / (fog.far - fog.near)).clamp(0.0, 1.0);
+        let mut c = lerp_color(color, fog.color, f);
+        c.a = color.a;
+        c
+    }
+
+    /// Whether a world sphere can touch the guard-band frustum (the T&L's
+    /// whole-mesh cull, as a test).
+    pub fn sphere_visible(&self, c: Vec3, r: f32) -> bool {
+        let c = self.view.transform_point(c);
+        let r2 = r * r;
+        let outside = |d: f32, lim: f32| d < 0.0 && d * d > r2 * (lim * lim + 1.0);
+        let behind = c.z <= NEAR && (NEAR - c.z) * (NEAR - c.z) >= r2;
+        !(behind
+            || outside(self.lim_x * c.z - c.x, self.lim_x)
+            || outside(self.lim_x * c.z + c.x, self.lim_x)
+            || outside(self.lim_y * c.z - c.y, self.lim_y)
+            || outside(self.lim_y * c.z + c.y, self.lim_y))
+    }
     /// This context with `lights` (the first [`MAX_VERTEX_LIGHTS`]) added to
     /// the vertex colors of every lit draw they reach — the per-vertex
     /// tier ([`crate::LightTier::PerVertex`]). Lights with no radius or no
@@ -3256,7 +3331,7 @@ pub fn billboard_with(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]

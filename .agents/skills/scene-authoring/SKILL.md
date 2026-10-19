@@ -30,6 +30,9 @@ editor (and a running `TRINO_SCENE` player) reloads them live. Formats are docum
         // Screen-space AO on the PC (consoles: bake `ao` into the models, add-asset).
         // Every field defaults: `ao: Some(())` works; `enabled: false` keeps the tuning.
         ao: Some((radius: 0.6, intensity: 1.2, bias: 0.025, quality: High)),  // Low|Medium|High = 8/16/32 samples
+        // Shadows on every target (scene v7, ADR 0025): blobs on the N64, planar on the
+        // 3DS, a map on the PC/Web. Every field defaults: `shadows: Some(())` works.
+        shadows: Some((tier_max: Map, distance: 40.0, softness: 160, color: (0, 0, 0, 140), map_size: 0)),
     ),
     entities: [
         (
@@ -142,6 +145,12 @@ platforms: (
     collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), offset: (0.0, 0.5, 0.0))),
 ),
 (name: "coin", collider: Some((shape: Sphere(radius: 0.5), trigger: true)), tags: ["coin"]),
+// Shadows (scene v7, prefab v5): cast None|Blob|Mesh|Auto (default Auto: the shape
+// where the tier draws shapes, a `radius` m blob on the N64); `receive: true` makes the
+// top of the entity's box (collider, else model bounds) a surface shadows land on.
+(name: "ground", collider: Some((shape: Box(size: (40.0, 1.0, 40.0)), offset: (0.0, -0.5, 0.0))),
+ shadow: Some((cast: None, receive: true))),
+(name: "barrel", model: Some((path: "models/barrel")), shadow: Some((cast: Auto, radius: 0.4))),
 // Positional looping sound (Ambience plays the nearest sources). On N64 the
 // sound needs `loop = true` in the manifest.
 (name: "waterfall", sound: Some((path: "sounds/water", radius: 9.0, volume: 0.8))),
@@ -161,6 +170,12 @@ rules in mind:
   impostor baked; otherwise `scene check` warns and that level draws nothing. Games draw a
   chain with `scene::draw_nodes` (or `SceneNode::lod_from(eye).draw(..)`), which handles
   impostor levels. TSCN is v2 since impostor levels (32-byte LOD records): rebake.
+- **Blob and planar shadows need a receiver under the caster.** Only the PC map shades
+  every surface; on the N64 and the 3DS a caster with no `receive: true` box top below
+  its center draws nothing. A big receiver box above the floor (a bridge's collider)
+  catches every shadow under it: give such entities a tight collider or no `receive`.
+  `cargo xtask scene budget` prints each platform's `shadows:` line (casters, blobs,
+  planar, mapped, over budget, receivers).
 - **Coplanar surfaces z-fight on the N64.** Keep decals and water several cm above the
   ground (16-bit z); the showcase pond sits at 10 cm.
 - **Portal visibility:** a camera outside every cell sees everything. Nodes outside

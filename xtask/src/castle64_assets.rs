@@ -1,5 +1,5 @@
 //! Master-asset generator for the castle64 example (the 3D showcase game):
-//! vertex-colored GLB models (blocks, coin, star, shadow) and the HUD star
+//! vertex-colored GLB models (blocks, coin, star) and the HUD star
 //! icon. Called from `cargo xtask gen-assets` so every generated master stays
 //! reproducible from code, like the platformer's assets.
 //!
@@ -97,10 +97,6 @@ impl MeshBuf {
         }
     }
 
-    fn boxc(&mut self, center: Vec3, size: Vec3, c: Rgba) {
-        self.boxx(center, size, [c; 6]);
-    }
-
     /// Bipyramid: ring of `sides` vertices at `center.y`, apexes at ±h.
     fn bipyramid(
         &mut self,
@@ -182,10 +178,6 @@ impl MeshBuf {
         glb.extend_from_slice(&bin);
         std::fs::write(path, glb).unwrap();
     }
-}
-
-fn v3(x: f32, y: f32, z: f32) -> Vec3 {
-    Vec3::new(x, y, z)
 }
 
 /// Unit block (1x1x1 at the origin) with top/side/bottom colors.
@@ -286,10 +278,7 @@ pub fn gen_all(repo_root: &Path, write_png: PngWriter) {
         [255, 190, 40, 255],
     );
     star.write_glb(&models.join("star.glb"));
-
-    let mut shadow = MeshBuf::default();
-    shadow.boxc(Vec3::ZERO, v3(1.0, 0.02, 1.0), [35, 35, 40, 255]);
-    shadow.write_glb(&models.join("shadow.glb"));
+    // The player's shadow is the engine's (ADR 0025): no disc model.
 
     hud_sprites(&sprites, write_png);
 }

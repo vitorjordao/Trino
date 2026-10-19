@@ -81,7 +81,14 @@ unsafe extern "C" {
     /// vertex color, blended over the frame without writing depth, the
     /// detail layer offset by `scroll` = `u << 16 | v` in 1/65536 of its
     /// repeat); `detail` (null = none) is multiplied over the texture.
+    /// Bit 9: a shadow (ADR 0025: the vertex color blended by its alpha,
+    /// depth tested, not written), bits 10..12 its stencil part (the
+    /// shim's `trino_shadow_stencil`: 1 once, 2 mark, 3 on the mark, 4
+    /// unmark), bit 13 times the blob texture's alpha (`trino_shadow_blob`).
     pub fn trino_3d_material(detail: *mut c_void, flags: u32, scroll: u32);
+    /// The blob texture of shadow draws: `size`² 8-bit alpha values,
+    /// row-major (`trino_core::shadow::blob_texels`), copied.
+    pub fn trino_shadow_blob(texels: *const u8, size: u32);
     /// Copy a water mesh to linear memory for `trino_water_draw`: `nverts`
     /// vertices of 24 bytes (x, y, z, u, v floats, r, g, b, a bytes) and
     /// `nidx` u16 indices. Null when linear memory is short.
@@ -105,7 +112,9 @@ unsafe extern "C" {
     /// Draw a `trino_gpu_mesh`: `u` = the 4x4 screen matrix (16 floats, rows)
     /// then light, ambient, diffuse, tint, emissive, fog row, fog color (4
     /// floats each, 44 in all); flags
-    /// bit 0 = cull back faces.
+    /// bit 0 = cull back faces, bit 1 = a planar shadow (blended, depth
+    /// tested, not written) with bits 4..6 its stencil part (as
+    /// `trino_3d_material`'s bits 10..12).
     pub fn trino_gpu_draw(mesh: *mut c_void, u: *const f32, flags: u32);
     /// Free a `trino_gpu_mesh` or `trino_water_mesh` (the GPU is done with it).
     pub fn trino_gpu_mesh_free(mesh: *mut c_void);

@@ -174,9 +174,10 @@ const BASELINE: &str = "tests/perf/solid_eleven_work.toml";
 
 /// The scripted match's cost, pinned: every 30th frame's 3D draws, source
 /// triangles, the 3DS GPU's share (`gpu_check` on the 400-wide top
-/// screen) and the 2D overlay's rectangles and glyphs. Deterministic (the
-/// sim is fixed point, the camera and culling are the game's), so a number
-/// that moves is a content or engine change: rewrite with
+/// screen), the blob shadows cast (ADR 0025: each is a few CPU triangles
+/// on the consoles) and the 2D overlay's rectangles and glyphs.
+/// Deterministic (the sim is fixed point, the camera and culling are the
+/// game's), so a number that moves is a content or engine change: rewrite with
 /// `TRINO_BLESS=1 cargo test -p xtask --test solid_eleven_budget` and
 /// review — a number going up is a cost the N64 pays.
 #[test]
@@ -189,7 +190,8 @@ fn the_match_frame_cost_is_pinned() {
     let mut out = String::from(
         "# Solid Eleven's self-test match, frame by frame (every 30th of\n\
          # solid_eleven::selftest's script, N64 profile): 3D draws, source\n\
-         # triangles, the 3DS GPU's share of them, 2D rectangles + glyphs.\n\
+         # triangles, the 3DS GPU's share of them, blob shadows, 2D\n\
+         # rectangles + glyphs.\n\
          # Checked for equality by xtask/tests/solid_eleven_budget.rs;\n\
          # rewrite with `TRINO_BLESS=1 cargo test -p xtask --test\n\
          # solid_eleven_budget` and review: a number going up is a cost the\n\
@@ -203,6 +205,11 @@ fn the_match_frame_cost_is_pinned() {
         g.render(&mut r);
         let light = r.light.unwrap_or(DEFAULT_LIGHT);
         let (mut tris, mut gpu_draws) = (0u32, 0u32);
+        let blobs = r
+            .draws
+            .iter()
+            .filter(|d| matches!(d.2.shadow, trino_core::shadow::ShadowCast::Blob { .. }))
+            .count();
         for (id, mat, params, cam) in &r.draws {
             let mesh = Mesh::from_tmdl(&meshes[&id.0]).unwrap();
             tris += (mesh.index_count / 3) as u32;
@@ -215,7 +222,7 @@ fn the_match_frame_cost_is_pinned() {
         }
         let _ = writeln!(
             out,
-            "\n[frame-{f}]\ndraws = {}\ntris = {tris}\ngpu_draws_3ds = {gpu_draws}\nrects = {}\nglyphs = {}",
+            "\n[frame-{f}]\ndraws = {}\ntris = {tris}\ngpu_draws_3ds = {gpu_draws}\nblobs = {blobs}\nrects = {}\nglyphs = {}",
             r.draws.len(),
             r.rects,
             r.glyphs

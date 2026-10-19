@@ -27,6 +27,7 @@ use crate::sim::pitch::{HALF_LEN, HALF_WID};
 use crate::sim::team::{CLUBS, Rgb, Role};
 use anim::{AnimState, Pose, Tint, body_matrix, joint, joint_matrices, mask};
 use clips_gen::{ClipName, JOINTS};
+use trino_core::shadow::{ShadowCast, ShadowPlane, ShadowSettings};
 use trino_core::{
     BillboardParams, Camera3, Color, DEFAULT_LIGHT, Light, LightTier, Mat34, Material, ModelId,
     ModelParams, Renderer, Shading, SpriteId, Vec2, Vec3,
@@ -88,8 +89,6 @@ pub const M_ARROW: ModelId = model("models/se_arrow");
 pub const M_DASH: ModelId = model("models/se_dash");
 pub const M_DOT: ModelId = model("models/se_dot");
 pub const M_PEDESTAL: ModelId = model("models/se_pedestal");
-pub const M_BLOB: ModelId = model("models/se_blob");
-pub const M_PLAYER_SHADOW: ModelId = model("models/se_player_shadow");
 pub const M_TROPHY: ModelId = model("models/se_trophy");
 
 /// The 6 x 4 pitch tiles, row-major by x then z.
@@ -425,6 +424,39 @@ const AO: trino_core::AmbientOcclusion = trino_core::AmbientOcclusion {
     quality: trino_core::AoQuality::Low,
 };
 
+/// The engine's shadows (ADR 0025), in the drawing scale: on the PC every
+/// body part and the ball in the shadow map, which covers the pitch the
+/// camera sees; on the consoles a blob under each near player and the
+/// ball (the N64's and the 3DS's: 22 projected bodies would cost the 3DS
+/// more than the match).
+const SHADOWS: ShadowSettings = ShadowSettings {
+    distance: 70.0 * WORLD,
+    ..ShadowSettings::DEFAULT
+};
+/// A near player's blob, under the pelvis (the old disc's width).
+const PLAYER_BLOB: f32 = 0.38 * WORLD;
+const BALL_BLOB: f32 = 0.22 * WORLD;
+
+/// Declare the frame's shadows (cleared by `begin_frame`), cast onto the
+/// turf at height `turf_y` (the drawing scale's: a body matrix's `m[1][3]`).
+pub fn set_shadows(r: &mut dyn Renderer, turf_y: f32) {
+    r.set_shadows(Some(&SHADOWS));
+    r.set_shadow_receivers(&[ShadowPlane::ground(turf_y)]);
+}
+
+/// What a body part on `joint` casts at `detail` (see [`SHADOWS`]): far
+/// console players cast nothing, as before the engine had shadows (a
+/// pixel or two at 320x240).
+fn part_shadow(detail: Detail, joint: usize) -> ShadowCast {
+    match detail {
+        Detail::Full => ShadowCast::Mesh,
+        Detail::Near if joint == joint::PELVIS => ShadowCast::Blob {
+            radius: PLAYER_BLOB,
+        },
+        _ => ShadowCast::None,
+    }
+}
+
 /// Declare the frame's ambient occlusion (cleared by `begin_frame`): on
 /// for the PC tier, a no-op where the renderer bakes it.
 pub fn set_ao(r: &mut dyn Renderer, hifi: bool) {
@@ -663,6 +695,7 @@ pub fn draw_match(r: &mut dyn Renderer, m: &Match, v: &MatchView, aspect: f32) {
     // Declared every frame: renderer state outlives frames (AGENTS.md).
     r.set_light(&v.sky.light());
     set_ao(r, hifi);
+    set_shadows(r, 0.0);
     if hifi && v.rain {
         r.set_wetness(0.55);
     }
@@ -883,7 +916,7 @@ fn draw_people(r: &mut dyn Renderer, m: &Match, v: &MatchView, fr: &Frustum, hif
         let pose = v.anims[i].pose_masked(m);
         joint_matrices(&body, &pose, &mut joints, m);
         anim::plant(&mut joints, m, v.anims[i].grounded(), body.m[1][3]);
-        draw_body(r, &body, &joints, &v.looks[i], detail, v.sky.tint());
+        draw_body(r, &joints, &v.looks[i], detail, v.sky.tint());
     }
     // Officials: the referee in black, linesmen in yellow with flags.
     use crate::sim::team::OFFICIAL_BLACK as BLACK;
@@ -923,7 +956,6 @@ fn draw_people(r: &mut dyn Renderer, m: &Match, v: &MatchView, fr: &Frustum, hif
         );
         draw_body(
             r,
-            &body,
             &joints,
             if k == 0 { &ref_look } else { &lm_look },
             detail,
@@ -953,24 +985,15 @@ fn draw_people(r: &mut dyn Renderer, m: &Match, v: &MatchView, fr: &Frustum, hif
     }
 }
 
-/// Draw a posed body: its blob shadow on the turf under the pelvis (the
-/// turf is `body`'s height), then the parts of `detail`'s tier.
+/// Draw a posed body: the parts of `detail`'s tier, each casting its
+/// shadow ([`part_shadow`]; the scene declares them, [`set_shadows`]).
 pub(crate) fn draw_body(
     r: &mut dyn Renderer,
-    body: &Mat34,
     j: &[Mat34; JOINTS],
     look: &Look,
     detail: Detail,
     env: Color,
 ) {
-    if detail != Detail::Far {
-        let pelvis = &j[joint::PELVIS];
-        let mut shadow = *body;
-        shadow.m[0][3] = pelvis.m[0][3];
-        shadow.m[2][3] = pelvis.m[2][3];
-        shadow.m[1][3] = body.m[1][3] + SHADOW_LIFT * body.m[1][1];
-        r.draw_model_matrix(M_PLAYER_SHADOW, &shadow, Material::VertexLit, &plain(env));
-    }
     let colors = [
         plain(mul(look.skin, env)),
         plain(mul(look.shirt, env)),
@@ -999,7 +1022,10 @@ pub(crate) fn draw_body(
             model,
             &j[p.joint],
             Material::VertexLit,
-            &colors[p.tint as usize],
+            &ModelParams {
+                shadow: part_shadow(detail, p.joint),
+                ..colors[p.tint as usize]
+            },
         );
     }
     if detail == Detail::Full
@@ -1009,7 +1035,10 @@ pub(crate) fn draw_body(
             h.model,
             &j[h.joint],
             Material::VertexLit,
-            &colors[Tint::Hair as usize],
+            &ModelParams {
+                shadow: part_shadow(detail, h.joint),
+                ..colors[Tint::Hair as usize]
+            },
         );
     }
     if kit_legs {
@@ -1046,13 +1075,9 @@ pub const M_LEG_KIT: [ModelId; crate::sim::team::LEG_KITS.1] = {
 pub const POWER_SHOT: f32 = 30.0;
 
 /// Beyond this view depth (m) a console player is drawn far: no arms, no
-/// blob shadow (each RSP draw costs the N64 about 0.2 ms of CPU; at
-/// 320x240 a far player's arms and shadow are a pixel or two).
+/// blob (each RSP draw costs the N64 about 0.2 ms of CPU; at 320x240 a
+/// far player's arms and shadow are a pixel or two).
 pub const FAR_DEPTH: f32 = 24.0;
-
-/// How high the shadow floats over the turf (m): the N64's 16-bit depth
-/// resolves 4 cm at the drawing scale.
-const SHADOW_LIFT: f32 = 0.04;
 
 fn draw_ball(r: &mut dyn Renderer, m: &Match, v: &MatchView, fr: &Frustum, hifi: bool) {
     let b = m.ball.pos;
@@ -1062,20 +1087,21 @@ fn draw_ball(r: &mut dyn Renderer, m: &Match, v: &MatchView, fr: &Frustum, hifi:
     }
     let rot = Mat34::from_trs(p * WORLD, v.ball_rot, Vec3::new(WORLD, WORLD, WORLD));
     let mdl = if hifi { M_BALL_HD } else { M_BALL };
-    r.draw_model_matrix(mdl, &rot, Material::VertexLit, &plain(v.sky.tint()));
-    // Its shadow: a flattened dark bead on the turf.
-    let shadow = Mat34 {
-        m: [
-            [1.6 * WORLD, 0.0, 0.0, p.x * WORLD],
-            [0.0, 0.05 * WORLD, 0.0, 0.035 * WORLD],
-            [0.0, 0.0, 1.6 * WORLD, p.z * WORLD],
-        ],
+    // Its shadow tells where it is over the turf: its shape in the PC's
+    // map, a blob on the consoles.
+    let shadow = if hifi {
+        ShadowCast::Mesh
+    } else {
+        ShadowCast::Blob { radius: BALL_BLOB }
     };
     r.draw_model_matrix(
-        M_DOT,
-        &shadow,
+        mdl,
+        &rot,
         Material::VertexLit,
-        &unlit(Color::rgb(34, 66, 28)),
+        &ModelParams {
+            shadow,
+            ..plain(v.sky.tint())
+        },
     );
 }
 

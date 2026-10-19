@@ -1,0 +1,8 @@
+// Trino placeholder model ("fake object"). Edit and save: it hot-reloads.
+// The shadows self-test's post (selftest::shadows): a 0.5 x 1.6 x 0.5 m box
+// standing on the floor, casting its shape (`ShadowCast::Mesh`).
+(
+    shape: Box(size: (0.5, 1.6, 0.5)),
+    color: (200, 70, 50, 255),
+    pivot: Bottom,
+)

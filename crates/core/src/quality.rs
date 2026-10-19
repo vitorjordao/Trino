@@ -185,9 +185,11 @@ level_enum!(
     AoSetting
 );
 level_enum!(
-    /// Shadow quality. Stored, persisted and authored today; the shadows of
-    /// issue #57 consume it (map size and filtering per tier). No renderer
-    /// reads it yet.
+    /// Shadow quality on the native profile (ADR 0025): `Off` caps the tier
+    /// at planar (casters stay grounded, no map pass), `Low` draws a
+    /// 1024-texel map with 2×2 PCF taps, `Medium` 2048 with 3×3, `High`
+    /// 2048 with 4×4. A game's own `ShadowSettings::map_size` wins.
+    /// Consoles draw their tier and ignore it.
     ShadowSetting
 );
 level_enum!(
@@ -274,7 +276,7 @@ pub struct QualitySettings {
     /// Samples per pixel of the 3D: 1 or 4 (2 and 8 round to 4).
     pub msaa: u8,
     pub ao: AoSetting,
-    /// #57 (not consumed yet).
+    /// Caps the shadows' tier and sizes the map (ADR 0025).
     pub shadows: ShadowSetting,
     /// #64 (not consumed yet).
     pub post: PostSetting,

@@ -64,6 +64,11 @@ A feature is done only when **PC, N64 and 3DS** all run it and an emulator has s
   - the console tier is data the asset bake writes (vertex colors), so the consoles
     and the PC's console profiles draw the same thing;
   - the sim profiles never run the PC-only pass, so `n64_parity`/`n3ds_parity` hold.
+  Shadows (ADR 0025) are the run-time variant: each console tier draws at run time
+  (blobs, planar), and the PC renderer draws the same tier on the console profiles
+  (`Caps::shadow_tier` of the profile), so the editor's Game view and the goldens show
+  what the console shows. Place coplanar geometry by the target's depth step
+  (`Caps::depth_step`, `shadow::shadow_z`), never a fixed lift.
 - **A PC post pass that must spare the HUD ends the main pass after the frame's last
   3D draw**, then draws the rest with `LoadOp::Load` (`draw_commands` › `split`).
   Sprites don't write depth, so a composite at `end_frame` would darken a HUD over

@@ -58,6 +58,7 @@ pub fn figure_framed(
     };
     r.set_camera(&cs.camera());
     r.set_light(&Sky::Day.light());
+    super::set_shadows(r, 0.0);
     // The four fine tiles around the center spot.
     for (ix, iz) in [(5usize, 3usize), (5, 4), (6, 3), (6, 4)] {
         r.draw_model_matrix(
@@ -71,5 +72,5 @@ pub fn figure_framed(
     let mut j = [Mat34::IDENTITY; JOINTS];
     joint_matrices(&body, pose, &mut j, detail.mask());
     plant(&mut j, detail.mask(), snap, body.m[1][3]);
-    draw_body(r, &body, &j, look, detail, Color::WHITE);
+    draw_body(r, &j, look, detail, Color::WHITE);
 }

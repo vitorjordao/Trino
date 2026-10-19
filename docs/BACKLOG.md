@@ -63,7 +63,7 @@ shipping a 3D game first**, then by cost:
   - A temporal upscaler (FSR 2-style) once the renderer has motion vectors and jitter.
   - A bench scene from the game (a project-chosen scene) for games much heavier than
     the engine's.
-  - Shadow and post levels take effect with #57 and #64.
+  - The post level takes effect with #64 (shadows read theirs since #57, ADR 0025).
   - A run on a real Steam Deck and a phone GPU (measured so far: llvmpipe, SwiftShader,
     an AMD Radeon iGPU and an RX 7800 XT on Windows).
   - Dynamic resolution's full-size clear and MSAA resolve (1–3 ms on llvmpipe with 4×
@@ -220,6 +220,16 @@ shipping a 3D game first**, then by cost:
     Fresnel LUT for a per-pixel glint. Split long water surfaces into pieces so the
     GPU takes the ones wholly ahead of the camera; the ripple rings then need
     deduplicating (ADR 0015 §5).
+19. **Shadows follow-ups** (S–M each, from #57, ADR 0025 §10 and Consequences).
+    - Baked static shadows into static receivers' vertex colors (with item 15's
+      per-instance bake): free at run time on the consoles.
+    - Cascades for the PC map on Ultra, for long views past the shadow distance.
+    - Receivers other than horizontal box tops in the editor (slopes, ramps); the API
+      already takes any plane.
+    - An RSP shadow command if an N64 game ever needs more than two projected shapes (a
+      blob would save at most ~20 µs there).
+    - Nothing has run on real hardware yet: blob cost on an N64, the stencil path on a
+      3DS.
 
 ## Engineering hygiene (ongoing)
 
@@ -229,6 +239,25 @@ shipping a 3D game first**, then by cost:
   time) and bless `tests/perf/` on purpose. Host benches stay as regression guards only.
 
 ---
+
+## Done — shadows per tier: blobs on the N64, planar on the 3DS, a shadow map on the PC and the Web (2026-10-18, branch `feat/57-shadows`, GitHub #57, ADR 0025)
+
+| Item | Evidence |
+|---|---|
+| `trino_core::shadow` (`no_std`, zero deps): `ShadowTier`, `ShadowCast` on `ModelParams` (`None`/`Blob`/`Mesh`/`Auto`), `ShadowSettings`, `ShadowPlane` receivers, the planar matrix, blob building and cutting, the map fit; `Caps::shadow_tier`, `max_planar_shadows`, `depth_step`; two `Renderer` defaults, no `GAME_API_VERSION` bump | the core unit tests in `shadow.rs` and `caps.rs`, `provided_renderer_methods_are_harmless_defaults` |
+| Depth-safe placement: 4 steps of the target's own depth buffer (the RDP's 18-bit compressed z on the N64), no hand-tuned lifts | `the_blob_offset_beats_every_targets_depth_precision`, `rdp_steps_follow_the_compressed_format`, `blobs_show_at_every_distance_on_a_large_floor`; ares's `shadows golden frame` (`shadows_far.png`, 4–120 m on one floor) |
+| N64: blobs after the opaque batch (`trino_3d_shadow` + `trino_tri_tex`), two projected `Mesh` casters a frame; 111 µs a blob (`N64_COST::us_per_blob`) | the `shadows` and `shadow cost` steps on ares at both RAM tiers (103–113 µs; 22 blobs ≈ 14.7 ms, the step fails past 33.3 ms) |
+| 3DS: the mesh flattened by the GPU T&L, drawn once per pixel through the stencil (`trino_3d_material` bits 9–13, `trino_shadow_blob`) | the `shadows` step on Azahar (old and New 3DS), `planar_shadows_draw_once_per_pixel_on_the_3ds_and_twice_on_the_n64` |
+| PC and Web: a `Depth32Float` map over the first `distance` meters, a fullscreen composite with normal offset, bias and PCF; size and taps from the quality preset, `Off` keeps planar; MSAA, render scale and WebGL2's depth sampler | `each_tier_matches_its_golden` (`shadows_native/n3ds/n64.png`), `the_map_shadows_with_msaa_and_a_render_scale`, `the_quality_preset_caps_the_native_tier`, the browsers' castle64 golden (`tests/golden/web/castle64_hub.png`, re-blessed: the map's shadow) in Chromium (WebGPU, WebGL2), Firefox and WebKit |
+| `ShadowView` game/off/debug, `TRINO_SHADOWS` | `shadows_are_cleared_at_begin_frame_and_follow_the_view`, `views_parse_and_resolve` |
+| Scenes v7 (`environment.shadows`, the entity `shadow` component), prefabs v5, TSCN v5, codegen `SHADOWS`/`RECEIVERS`; migrations from v6 / v4 | `shadows_are_optional_defaulted_and_round_trip`, `v6_scenes_load_as_v7_without_shadows`, `shadows_reach_the_tscn_and_the_generated_code`, `baked_scene_blob_reads_every_field` |
+| Budget per tier (`FrameBudget::shadows`, the blobs' N64 time), `scene budget` text and `--json` | `shadow_casters_are_counted_per_tier_like_the_renderer` (against the PC renderer's counters on the N64 profile) |
+| Editor: Inspector › Shadows, the Shadow component, each platform's tier in the Game view, the Scene view's as tier / off / debug (receivers and casters outlined), `TRINO_EDITOR_SHADOWS`, `TRINO_EDITOR_INSPECT=shadows` | `shadows_panel_components_tiers_and_view_modes`, `platform_lines_list_each_tiers_shadows`, the layout audit at 960×600 and 1600×940 |
+| castle64 and Solid Eleven on engine shadows; the `c64_shadow` disc, `player_shadow.glb` and `blob.glb` gone | `the_match_matches_its_goldens_on_every_look`, `the_match_frame_cost_is_pinned`, `castle64_tnl_work_matches_the_baseline`; ares `castle64_hub.png`, the football template's `match.png` |
+
+Deviations (ADR 0025): receivers are horizontal box tops in the editor; no cascades;
+the N64 projects at most two shapes a frame (the rest cast nothing); Phases 4 (an RSP
+shadow command) and 5 (baked static shadows) were evaluated and left as follow-ups.
 
 ## Done — a declarative UI system for every target (2026-10-18, branch `feat/58-ui-system`, GitHub #58, ADR 0024)
 
@@ -265,7 +294,7 @@ ship English only (their font is ASCII).
 | `trino_core::GraphicsOptions` (the options page), castle64 on Select | `crates/core/tests/options.rs` (4 tests), `select_opens_the_graphics_page_where_the_host_offers_presets` |
 | Consoles stay fixed (Low; Medium on the New 3DS) | the `quality` self-test step on ares (both tiers) and Azahar (both models), `the_quality_step_reports_each_consoles_fixed_preset` |
 
-Deviations (ADR 0023): `shadows` and `post` are stored levels only until #57 and #64; the
+Deviations (ADR 0023): `post` is a stored level only until #64 (`shadows` is read since #57); the
 bench draws the engine's scene, not the game's; WebGL2 never gets MSAA; WebGPU hides the
 adapter's name, so the Web reports `gpu=unknown` there.
 

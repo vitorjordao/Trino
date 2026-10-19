@@ -60,6 +60,13 @@ pub fn to_tscn_for(scene: &Scene, lib: &Library, target: Target) -> (Vec<u8>, Ve
     rgba(&mut out, light.ambient_color);
     rgba(&mut out, light.fog.color);
     f32s(&mut out, &[light.fog.near, light.fog.far]);
+    let shadows = env.core_shadows();
+    let s = shadows.unwrap_or(trino_core::ShadowSettings::DEFAULT);
+    out.extend_from_slice(&[shadows.is_some() as u8, s.tier_max as u8]);
+    out.extend_from_slice(&s.map_size.to_le_bytes());
+    f32s(&mut out, &[s.distance]);
+    out.extend_from_slice(&[s.softness, 0, 0, 0]);
+    rgba(&mut out, s.color);
     debug_assert_eq!(out.len(), TSCN_HEADER + TSCN_ENV_BYTES);
 
     let mut strings = Vec::new();
@@ -187,6 +194,22 @@ pub fn to_tscn_for(scene: &Scene, lib: &Library, target: Target) -> (Vec<u8>, Ve
         ] {
             out.extend_from_slice(&v.to_le_bytes());
         }
+        let (cast, radius) = match p.shadow {
+            trino_core::ShadowCast::None => (0u8, 0.0),
+            trino_core::ShadowCast::Blob { radius } => (1, radius),
+            trino_core::ShadowCast::Mesh => (2, 0.0),
+            trino_core::ShadowCast::Auto { blob_radius } => (3, blob_radius),
+        };
+        out.extend_from_slice(&[cast, item.receiver.is_some() as u8, 0, 0]);
+        let r = item.receiver.unwrap_or(trino_core::ShadowPlane::horizontal(
+            trino_core::Vec3::ZERO,
+            0.0,
+            0.0,
+        ));
+        f32s(
+            &mut out,
+            &[radius, r.point.x, r.point.y, r.point.z, r.half.x, r.half.y],
+        );
         debug_assert_eq!(out.len() - start, TSCN_NODE_BYTES);
     }
     out.extend_from_slice(&strings);

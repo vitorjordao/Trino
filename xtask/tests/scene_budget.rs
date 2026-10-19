@@ -536,3 +536,172 @@ fn the_web_warns_past_a_phones_budget() {
     assert_eq!(w.len(), 2, "{w:?}");
     assert!(w[0].contains("calls") && w[1].contains("tris"), "{w:?}");
 }
+
+/// Shadows (ADR 0025): a floor that receives and rocks that cast. The
+/// estimate counts each tier's casters as its renderer plans them (blobs
+/// on the N64, the `Mesh` ones past its planar budget casting nothing;
+/// projected shapes on the 3DS; the map on the PC), the N64's blobs cost
+/// CPU time, the PC renderer's N64 profile counts the same, and `cargo
+/// xtask scene budget --json` prints them.
+#[test]
+fn shadow_casters_are_counted_per_tier_like_the_renderer() {
+    use trino_scene::{ShadowCastDef, ShadowComponent, ShadowsDef};
+    let (meshes, lib) = assets();
+    let mut scene = Scene::new("shadows");
+    scene.environment.camera.eye = [0.0, 6.0, -10.0];
+    scene.environment.camera.target = [0.0, 0.0, 0.0];
+    let mut floor = Entity::new("floor");
+    floor.collider = Some(trino_scene::ColliderComponent {
+        shape: trino_scene::ShapeDef::Box {
+            size: [20.0, 0.2, 20.0],
+        },
+        offset: [0.0, -0.1, 0.0],
+        trigger: false,
+    });
+    floor.shadow = Some(ShadowComponent {
+        cast: ShadowCastDef::None,
+        receive: true,
+        ..Default::default()
+    });
+    scene.entities.push(floor);
+    let caster = |name: &str, x: f32, cast| {
+        let mut e = rock_at(name, [x, 0.5, 0.0]);
+        e.shadow = Some(ShadowComponent {
+            cast,
+            ..Default::default()
+        });
+        e
+    };
+    for (i, x) in [-3.0, -1.0, 1.0].into_iter().enumerate() {
+        scene
+            .entities
+            .push(caster(&format!("auto-{i}"), x, ShadowCastDef::Auto));
+    }
+    for (i, x) in [3.0, 4.0, 5.0].into_iter().enumerate() {
+        scene
+            .entities
+            .push(caster(&format!("mesh-{i}"), x, ShadowCastDef::Mesh));
+    }
+    // Off: the casters listed, none drawn, nothing spent.
+    let off = estimate(&scene, &lib, &meshes, Target::N64);
+    assert_eq!(off.shadows.tier, trino_core::ShadowTier::None);
+    assert_eq!(off.shadows.blobs + off.shadows.planar, 0);
+    let line = budget::shadow_line(&off).unwrap();
+    assert!(
+        line.starts_with("shadows: none — 6 casters: 0 blobs"),
+        "{line}"
+    );
+    let mut bare = scene.clone();
+    bare.entities.iter_mut().for_each(|e| e.shadow = None);
+    assert_eq!(
+        budget::shadow_line(&estimate(&bare, &lib, &meshes, Target::N64)),
+        None
+    );
+    scene.environment.shadows = Some(ShadowsDef::default());
+
+    let n64 = estimate(&scene, &lib, &meshes, Target::N64);
+    let s = n64.shadows;
+    assert_eq!(s.tier, trino_core::ShadowTier::Blob);
+    assert_eq!((s.casters, s.blobs, s.planar, s.mapped), (6, 3, 2, 0));
+    assert_eq!(s.over_budget, 1, "the N64 projects two meshes a frame");
+    assert_eq!(s.receivers, 1);
+    assert!(
+        n64.n64_cpu_us() >= off.n64_cpu_us() + trino_core::perf::N64_COST.blobs_us(3),
+        "{} vs {}",
+        n64.n64_cpu_us(),
+        off.n64_cpu_us()
+    );
+    let line = budget::shadow_line(&n64).unwrap();
+    assert!(
+        line.starts_with("shadows: blob — 6 casters: 3 blobs, 2 planar, 0 in the map")
+            && line.contains("1 past the planar budget"),
+        "{line}"
+    );
+    let n3ds = estimate(&scene, &lib, &meshes, Target::N3ds).shadows;
+    assert_eq!(n3ds.tier, trino_core::ShadowTier::Planar);
+    assert_eq!((n3ds.blobs, n3ds.planar, n3ds.over_budget), (0, 6, 0));
+    let pc = estimate(&scene, &lib, &meshes, Target::Pc).shadows;
+    assert_eq!(pc.tier, trino_core::ShadowTier::Map);
+    assert_eq!((pc.blobs, pc.planar, pc.mapped), (0, 0, 6));
+    // `tier_max: Blob` gives every target the N64's look.
+    scene.environment.shadows = Some(ShadowsDef {
+        tier_max: trino_scene::ShadowTierDef::Blob,
+        ..Default::default()
+    });
+    let capped = estimate(&scene, &lib, &meshes, Target::Pc).shadows;
+    assert_eq!(
+        (capped.tier, capped.blobs),
+        (trino_core::ShadowTier::Blob, 3)
+    );
+    scene.environment.shadows = Some(ShadowsDef::default());
+
+    // The PC renderer's N64 profile plans the same frame.
+    if let Ok(mut r) = pollster::block_on(PcRenderer::new_headless(SimProfile::N64)) {
+        for (id, blob) in &meshes {
+            r.upload_mesh(trino_core::ModelId(*id), blob.clone());
+        }
+        let resolved = resolve_for(&scene, &lib, 0.0, Target::N64);
+        let env = &scene.environment;
+        r.begin_frame(trino_core::Color::BLACK);
+        r.set_camera(&env.core_camera());
+        r.set_light(&env.core_light());
+        r.set_shadows(resolved.shadows.as_ref());
+        r.set_shadow_receivers(&resolved.receivers());
+        for item in &resolved.items {
+            if let LodPick::Model(id) = item.lod_from(env.core_camera().eye) {
+                r.draw_model_matrix(id, &item.matrix, Material::VertexLit, &item.params);
+            }
+        }
+        r.end_frame();
+        let got = r.stats().shadows;
+        assert_eq!(
+            (got.blobs as u32, got.planar as u32, got.over_budget as u32),
+            (s.blobs, s.planar, s.over_budget),
+            "{got:?}"
+        );
+    } else {
+        assert!(std::env::var("TRINO_REQUIRE_GPU").is_err());
+    }
+
+    // The CLI prints them per platform.
+    let dir = root().join("target/test-projects");
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("shadow-budget.scene.ron");
+    scene.save(&file).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .args(["scene", "budget", file.to_str().unwrap(), "--json"])
+        .current_dir(root())
+        .env_remove("TRINO_PROJECT")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let row = |p: &str| {
+        v.as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["platform"] == p)
+            .unwrap()["shadows"]
+            .clone()
+    };
+    let n64_json = row("n64");
+    assert_eq!(n64_json["tier"], "blob");
+    assert_eq!(n64_json["casters"], 6);
+    assert_eq!(n64_json["blobs"], 3);
+    assert_eq!(n64_json["over_budget"], 1);
+    assert_eq!(n64_json["receivers"], 1);
+    assert_eq!(row("3ds")["planar"], 6);
+    assert_eq!(row("pc")["mapped"], 6);
+    let text = Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .args(["scene", "budget", file.to_str().unwrap()])
+        .current_dir(root())
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&text.stdout);
+    assert!(text.contains(&line), "{text}");
+    std::fs::remove_file(&file).unwrap();
+}

@@ -185,6 +185,28 @@ start order (forced, saved, the machine, the project default) and the player's f
 High is the frame the PC always drew. Details in [ADR 0023](adr/0023-quality-presets.md)
 and [PLATFORMS.md](PLATFORMS.md#quality-presets).
 
+### Shadows per tier (issue #57)
+
+A game describes each draw's shadow once, `ModelParams::shadow: ShadowCast`
+(`None`, `Blob { radius }`, `Mesh`, `Auto { blob_radius }`), and each target draws the
+best it can afford (`Caps::shadow_tier`):
+
+- **N64 (`Blob`):** a soft textured disc on the receiver under the caster, built after the
+  batch's opaque draws (~111 µs each on ares). Up to two `Mesh` casters a frame are
+  projected flat instead.
+- **3DS (`Planar`):** the caster's mesh flattened onto the receiver along the light by the
+  GPU T&L, drawn once per pixel through the stencil.
+- **PC native and Web (`Map`):** a `Depth32Float` map fitted over the camera's first
+  meters, compared in a fullscreen composite with PCF taps sized by the quality preset.
+
+`Renderer::set_shadows` tunes them (best tier, distance, softness, color) and
+`set_shadow_receivers` names the surfaces blobs and planar shadows land on: the tops of
+boxes. Blob and planar triangles sit a few steps of the target's own depth buffer toward
+the camera (`Caps::depth_step`, the RDP's compressed z on the N64), so they never
+z-fight. Scenes carry the settings and per-entity casters and receivers, the budget
+counts them per platform, and the editor previews every tier. Details in
+[ADR 0025](adr/0025-shadows-per-tier.md) and [PLATFORMS.md](PLATFORMS.md#shadows).
+
 ### 2D in the same pipeline
 
 2D is not a separate engine path. The same `Renderer` draws it in the same frame as the

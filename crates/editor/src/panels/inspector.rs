@@ -663,6 +663,24 @@ fn entity(app: &mut App, ui: &mut egui::Ui, path: &[usize]) {
         e.collider = None;
     }
 
+    // Shadow (ADR 0025).
+    let mut remove_shadow = false;
+    if let Some(sh) = &mut e.shadow {
+        let has_model = e.model.is_some();
+        let has_box = has_model || e.collider.is_some();
+        theme::component(
+            ui,
+            "c-shadow",
+            icon::SUN_HORIZON,
+            c::TEXT_WEAK,
+            "Shadow",
+            |ui| remove_shadow = shadow_component(ui, sh, has_model, has_box),
+        );
+    }
+    if remove_shadow {
+        e.shadow = None;
+    }
+
     // Sound source.
     let mut remove_sound = false;
     if let Some(snd) = &mut e.sound {
@@ -872,6 +890,23 @@ fn entity(app: &mut App, ui: &mut egui::Ui, path: &[usize]) {
                         .clicked()
                 {
                     e.collider = Some(trino_scene::ColliderComponent::default());
+                }
+                if e.shadow.is_none()
+                    && ui
+                        .button(format!("{}  Shadow", icon::SUN_HORIZON))
+                        .clicked()
+                {
+                    // A model casts; a model-less box (a floor's collider)
+                    // receives.
+                    e.shadow = Some(if e.model.is_some() {
+                        trino_scene::ShadowComponent::default()
+                    } else {
+                        trino_scene::ShadowComponent {
+                            cast: trino_scene::ShadowCastDef::None,
+                            receive: true,
+                            ..Default::default()
+                        }
+                    });
                 }
                 if e.sound.is_none()
                     && ui
@@ -1882,6 +1917,22 @@ fn scene_settings(app: &mut App, ui: &mut egui::Ui) {
             Some(egui::Align::TOP),
         );
     }
+    let shadows_top = ui.cursor().min;
+    let budgets = app.budgets.as_ref().map(|(_, b)| b);
+    theme::component(
+        ui,
+        "env-shadows",
+        icon::SUN_HORIZON,
+        c::TEXT_WEAK,
+        "Shadows",
+        |ui| scene_shadows(ui, &mut env.shadows, budgets),
+    );
+    if app.inspect_focus.as_deref() == Some("shadows") {
+        ui.scroll_to_rect(
+            egui::Rect::from_min_size(shadows_top, Vec2::new(1.0, 1.0)),
+            Some(egui::Align::TOP),
+        );
+    }
     theme::component(
         ui,
         "env-cam",
@@ -2318,6 +2369,180 @@ fn ambient_occlusion(ui: &mut egui::Ui, ao: &mut Option<trino_scene::AmbientOccl
     if ui.small_button("Reset to defaults").clicked() {
         *a = trino_scene::AmbientOcclusionDef::default();
     }
+}
+
+/// Scene settings › Shadows (ADR 0025): one setting for every platform,
+/// each drawing it at its tier (the N64 blobs, the 3DS projects shapes,
+/// the PC and the Web a shadow map). The lines under it are what each
+/// tier draws from the scene camera.
+fn scene_shadows(
+    ui: &mut egui::Ui,
+    shadows: &mut Option<trino_scene::ShadowsDef>,
+    budgets: Option<&crate::budget::Budgets>,
+) {
+    use trino_scene::ShadowTierDef;
+    let mut on = shadows.is_some_and(|s| s.enabled);
+    if ui
+        .checkbox(&mut on, "Shadows (every platform)")
+        .on_hover_text(
+            "Entities with a Shadow component cast onto the receivers: a blob on \
+             the N64, the shape projected on the 3DS, a shadow map on the PC and \
+             the Web. Preview a tier with the Scene view's profile.",
+        )
+        .changed()
+    {
+        // Keep the tuning when turning them off.
+        match shadows {
+            Some(s) => s.enabled = on,
+            None => *shadows = Some(trino_scene::ShadowsDef::default()),
+        }
+    }
+    let Some(s) = shadows.as_mut().filter(|s| s.enabled) else {
+        return;
+    };
+    theme::prop(ui, "Best tier", |ui| {
+        let name = |t: ShadowTierDef| match t {
+            ShadowTierDef::None => "None",
+            ShadowTierDef::Blob => "Blob (the N64's look everywhere)",
+            ShadowTierDef::Planar => "Planar (no shadow map)",
+            ShadowTierDef::Map => "Map (each platform's best)",
+        };
+        egui::ComboBox::from_id_salt("shadow-tier")
+            .selected_text(name(s.tier_max))
+            .show_ui(ui, |ui| {
+                for t in ShadowTierDef::ALL {
+                    ui.selectable_value(&mut s.tier_max, t, name(t));
+                }
+            });
+    });
+    theme::prop(ui, "Distance", |ui| {
+        ui.add(
+            egui::Slider::new(&mut s.distance, 2.0..=500.0)
+                .logarithmic(true)
+                .suffix(" m"),
+        )
+        .on_hover_text("How far from the camera shadows reach");
+    });
+    theme::prop(ui, "Softness", |ui| {
+        ui.add(egui::Slider::new(&mut s.softness, 0..=255))
+            .on_hover_text("The blob's falloff and the shadow map's filter radius");
+    });
+    // What a shadowed surface blends toward; alpha is the strength.
+    theme::prop(ui, "Color", |ui| theme::color_rgba(ui, &mut s.color));
+    theme::prop(ui, "Map size", |ui| {
+        let name = |n: u16| match n {
+            0 => "Quality preset's".to_string(),
+            n => format!("{n} × {n}"),
+        };
+        egui::ComboBox::from_id_salt("shadow-map-size")
+            .selected_text(name(s.map_size))
+            .show_ui(ui, |ui| {
+                for n in [0, 256, 512, 1024, 2048, 4096] {
+                    ui.selectable_value(&mut s.map_size, n, name(n));
+                }
+            });
+    });
+    if ui.small_button("Reset to defaults").clicked() {
+        *s = trino_scene::ShadowsDef::default();
+    }
+    let Some(budgets) = budgets else {
+        return;
+    };
+    let [n64, n3ds, pc, ..] = budgets;
+    for (b, label) in [(n64, "N64"), (n3ds, "3DS"), (pc, "PC")] {
+        let Some(line) = trino_scene::budget::shadow_line(b) else {
+            continue;
+        };
+        let color = if b.shadows.over_budget > 0 {
+            c::WARN
+        } else {
+            c::TEXT_WEAK
+        };
+        ui.add(
+            egui::Label::new(
+                RichText::new(format!("{label} {line}"))
+                    .size(12.0)
+                    .color(color),
+            )
+            .wrap(),
+        );
+    }
+}
+
+/// An entity's Shadow component: what its model casts on each tier and
+/// whether the top of its box receives. Returns true to remove it.
+fn shadow_component(
+    ui: &mut egui::Ui,
+    sh: &mut trino_scene::ShadowComponent,
+    has_model: bool,
+    has_box: bool,
+) -> bool {
+    use trino_scene::ShadowCastDef;
+    let name = |k: ShadowCastDef| match k {
+        ShadowCastDef::None => "None",
+        ShadowCastDef::Blob => "Blob",
+        ShadowCastDef::Mesh => "Mesh (its shape)",
+        ShadowCastDef::Auto => "Auto (the tier's best)",
+    };
+    theme::prop(ui, "Cast", |ui| {
+        egui::ComboBox::from_id_salt("shadow-cast")
+            .selected_text(name(sh.cast))
+            .show_ui(ui, |ui| {
+                for k in ShadowCastDef::ALL {
+                    ui.selectable_value(&mut sh.cast, k, name(k));
+                }
+            });
+    });
+    if matches!(sh.cast, ShadowCastDef::Blob | ShadowCastDef::Auto) {
+        theme::prop(ui, "Radius", |ui| {
+            ui.add(
+                egui::DragValue::new(&mut sh.radius)
+                    .speed(0.02)
+                    .range(0.0..=50.0)
+                    .suffix(" m"),
+            )
+            .on_hover_text("The blob's radius: 0 draws none (a limb whose body casts one)");
+        });
+    }
+    theme::prop(ui, "Receive", |ui| {
+        ui.checkbox(&mut sh.receive, "top of its box")
+            .on_hover_text(
+                "Blob and planar shadows land on the top of its collider (else its \
+             model's bounds): a floor, a table, a platform",
+            );
+    });
+    // What each tier draws for it.
+    let blob = if sh.radius > 0.0 {
+        format!("blob {:.2} m", sh.radius)
+    } else {
+        "nothing".to_string()
+    };
+    let tiers = match sh.cast {
+        ShadowCastDef::None => "Casts nothing".to_string(),
+        ShadowCastDef::Blob => format!("A {blob} on every tier"),
+        ShadowCastDef::Mesh => {
+            "N64: its shape (the frame's first 2) · 3DS: its shape · PC/Web: shadow map".into()
+        }
+        ShadowCastDef::Auto => format!("N64: {blob} · 3DS: its shape · PC/Web: shadow map"),
+    };
+    ui.add(egui::Label::new(RichText::new(tiers).size(12.0).color(c::TEXT_FAINT)).wrap());
+    if sh.cast != ShadowCastDef::None && !has_model {
+        ui.label(
+            RichText::new(format!("{} Casting needs a Model component", icon::WARNING))
+                .color(c::WARN),
+        );
+    }
+    if sh.receive && !has_box {
+        ui.label(
+            RichText::new(format!(
+                "{} Receiving needs a Collider or a Model (its box)",
+                icon::WARNING
+            ))
+            .color(c::WARN),
+        );
+    }
+    ui.small_button(RichText::new(format!("{} Remove", icon::TRASH)).color(c::ERROR))
+        .clicked()
 }
 
 /// The scene camera's frame on every platform (the Environment's "Platform

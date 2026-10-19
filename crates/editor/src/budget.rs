@@ -265,6 +265,18 @@ pub fn platform_lines_on(
         };
         out.push((line, level));
     }
+    // Shadows (ADR 0025): each tier's casters, a cast past the N64's
+    // planar budget warned.
+    for (b, label) in [(n64, n64_label), (n3ds, n3ds_label), (pc, "PC")] {
+        if let Some(line) = trino_scene::budget::shadow_line(b) {
+            let level = if b.shadows.over_budget > 0 {
+                Level::Near
+            } else {
+                Level::Ok
+            };
+            out.push((format!("{label} {line}"), level));
+        }
+    }
     out
 }
 
@@ -646,6 +658,77 @@ mod tests {
         let new = text(Target::N3dsNew);
         assert_eq!(new[1], "RSP 2/2 draws");
         assert!(new[2].starts_with("New 3DS ") && new[2].ends_with("GPU 7/7 draws"));
+    }
+
+    /// Shadows (ADR 0025): a line per console and the PC with its tier and
+    /// casters, warned when the N64's planar budget leaves some without;
+    /// none for a scene without any.
+    #[test]
+    fn platform_lines_list_each_tiers_shadows() {
+        use trino_core::ShadowTier;
+        use trino_scene::budget::ShadowBudget;
+        let with = |target, s: ShadowBudget| FrameBudget {
+            target,
+            shadows: s,
+            ..Default::default()
+        };
+        let none = six([
+            with(Target::N64, ShadowBudget::default()),
+            with(Target::N3ds, ShadowBudget::default()),
+            with(Target::Pc, ShadowBudget::default()),
+            FrameBudget::default(),
+        ]);
+        let lines = platform_lines_on(&none, &|_| None, Target::N64);
+        assert!(lines.iter().all(|(t, _)| !t.contains("shadows")));
+        let b = six([
+            with(
+                Target::N64,
+                ShadowBudget {
+                    tier: ShadowTier::Blob,
+                    casters: 5,
+                    blobs: 2,
+                    planar: 2,
+                    over_budget: 1,
+                    receivers: 1,
+                    ..Default::default()
+                },
+            ),
+            with(
+                Target::N3ds,
+                ShadowBudget {
+                    tier: ShadowTier::Planar,
+                    casters: 5,
+                    planar: 5,
+                    receivers: 1,
+                    ..Default::default()
+                },
+            ),
+            with(
+                Target::Pc,
+                ShadowBudget {
+                    tier: ShadowTier::Map,
+                    casters: 5,
+                    mapped: 5,
+                    receivers: 1,
+                    ..Default::default()
+                },
+            ),
+            FrameBudget::default(),
+        ]);
+        let lines = platform_lines_on(&b, &|_| None, Target::N64);
+        let line = |p: &str| {
+            lines
+                .iter()
+                .find(|(t, _)| t.starts_with(p))
+                .unwrap_or_else(|| panic!("{p}: {lines:?}"))
+                .clone()
+        };
+        let (n64, level) = line("N64 shadows: blob — 5 casters: 2 blobs, 2 planar");
+        assert!(n64.contains("1 past the planar budget"), "{n64}");
+        assert!(n64.contains("of N64 CPU"), "the blobs' cost: {n64}");
+        assert_eq!(level, Level::Near);
+        assert_eq!(line("3DS shadows: planar").1, Level::Ok);
+        assert!(line("PC shadows: map").0.contains("5 in the map"));
     }
 
     /// The HUD's and the Inspector's tier columns (issue #54): the base

@@ -13,8 +13,8 @@ splits = 0
 backfaced = 8
 emitted = 5
 culled = 0
-rsp_draws = 25
-rsp_tris = 593
+rsp_draws = 24
+rsp_tris = 581
 
 [green-hills]
 verts = 0
@@ -24,8 +24,8 @@ splits = 0
 backfaced = 0
 emitted = 0
 culled = 2
-rsp_draws = 14
-rsp_tris = 304
+rsp_draws = 13
+rsp_tris = 292
 
 [lava-land]
 verts = 0
@@ -35,8 +35,8 @@ splits = 0
 backfaced = 0
 emitted = 0
 culled = 0
-rsp_draws = 16
-rsp_tris = 326
+rsp_draws = 15
+rsp_tris = 314
 
 [sky-tower]
 verts = 0
@@ -46,8 +46,8 @@ splits = 0
 backfaced = 0
 emitted = 0
 culled = 7
-rsp_draws = 12
-rsp_tris = 280
+rsp_draws = 11
+rsp_tris = 268
 
 [throne]
 verts = 150
@@ -57,8 +57,8 @@ splits = 0
 backfaced = 47
 emitted = 25
 culled = 0
-rsp_draws = 22
-rsp_tris = 446
+rsp_draws = 21
+rsp_tris = 434
 
 [micro-river]
 verts = 0

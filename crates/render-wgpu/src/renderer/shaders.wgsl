@@ -252,6 +252,36 @@ fn fs_tri(in: TriOut) -> @location(0) vec4<f32> {
     return plain;
 }
 
+// Blob and planar shadows, blended (shadow.rs): the shadow color times the
+// blob texture (white for planar ones). The N64 look samples like the RDP
+// and, as the RDP does, blends with the full alpha and stores 5551.
+@fragment
+fn fs_shadow(in: TriOut) -> @location(0) vec4<f32> {
+    // Sampled unconditionally: textureSample requires uniform control flow.
+    let c = textureSample(t_sprite, s_sprite, in.uv) * in.color;
+    if globals.look == 1u {
+        let n = sample_3point(in.uv) * in.color;
+        let q = quantize_5551(n, vec2<u32>(in.clip.xy));
+        return vec4<f32>(q.rgb, n.a);
+    }
+    return c;
+}
+
+// Planar shadows drawn once per pixel (shadow.rs): `mark` keeps 1 - the
+// shadow's strength in the target's alpha (blended with Min: the strongest
+// over overlaps), `apply` blends the shadow color by it (OneMinusDstAlpha,
+// DstAlpha) and resets the alpha to 1, so later fragments there are no-ops.
+@fragment
+fn fs_shadow_mark(in: TriOut) -> @location(0) vec4<f32> {
+    let a = textureSample(t_sprite, s_sprite, in.uv).a * in.color.a;
+    return vec4<f32>(0.0, 0.0, 0.0, 1.0 - a);
+}
+
+@fragment
+fn fs_shadow_apply(in: TriOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(in.color.rgb, 1.0);
+}
+
 // ---------------------------------------------------------------------------
 // Lit triangle pass: the per-pixel lighting tier (native profile). The
 // vertex color already holds ambient + the global light's diffuse (per

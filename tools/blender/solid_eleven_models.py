@@ -596,14 +596,6 @@ def trophy():
     return m
 
 
-def player_shadow():
-    """A player's blob shadow, drawn on the turf under the pelvis (a part
-    of its own: the pelvis rises and falls with the stride)."""
-    m = Model("player_shadow")
-    m.disc((0, 0, 0.02), 0.4, 0.3, (36, 70, 30), n=6, y=0.0)
-    return m
-
-
 def flag_hand():
     """The linesman's flag, held at the hand (drawn at the forearm's end)."""
     m = Model("flag_hand")
@@ -651,13 +643,6 @@ def dot():
         for y in (r, -r):
             tri = [a, b, (0, y, 0)]
             m.poly(tri, (255, 255, 255), out=((a[0] + b[0]) / 2, y, (a[2] + b[2]) / 2))
-    return m
-
-
-def blob():
-    """The ball's shadow: a small dark disc (drawn 3.5 cm over the turf)."""
-    m = Model("blob")
-    m.disc((0, 0, 0), 0.16, 0.16, (34, 66, 28), n=8, y=0.0)
     return m
 
 
@@ -797,7 +782,6 @@ for _style, (_budget, _solids) in anim.HAIR.items():
     reg(f"hair_{_style}", (lambda st=_style: hair_part(st)), PC, _budget, ((0, 0, 0.33), 0.6))
 for _name in ("head_light", "head_shaved"):
     reg(_name, (lambda n=_name: console_head(n)), SHARED, anim.BODY["head"][3], ((0, 0, 0.17), 0.8))
-reg("player_shadow", player_shadow, SHARED, 4, ((0, 0, 0), 1.0))
 reg("trophy", trophy, SHARED, 120, ((0, 0, 0.2), 0.7))
 for _i, _shorts, _socks in leg_kits():
     reg(f"leg_k{_i:02}", (lambda a=_shorts, b=_socks: leg_kit(a, b)), SHARED,
@@ -810,7 +794,6 @@ reg("arrow", arrow, SHARED, 8, ((0, 0, 0.1), 0.6))
 reg("dash", dash, SHARED, 2, ((0, 0, 0), 1.2))
 reg("dot", dot, SHARED, 8, ((0, 0, 0), 0.4))
 reg("pedestal", pedestal, SHARED, 60, ((0, 0, 0), 2.2))
-reg("blob", lambda: blob(), SHARED, 8, ((0, 0, 0), 0.5))
 reg("player_rig", player_rig, PC, 400, ((0, 0, 0.9), 2.4))
 
 

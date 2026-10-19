@@ -23,6 +23,7 @@ use crate::math3d::Mat34;
 use crate::physics::{Aabb, Collider, Shape};
 use crate::render::{AnimRef, ClipId, Material, ModelId, ModelParams, Renderer, Shading};
 use crate::render3d::{Camera3, Fog, Light};
+use crate::shadow::{ShadowCast, ShadowPlane, ShadowSettings, ShadowTier};
 use crate::vis::VisVolume;
 
 /// An entity's tags: a static list (exported code) or a packed,
@@ -294,7 +295,10 @@ impl SceneNode {
 /// magic "TSCN"  u16 version (2)  u16 reserved  u32 node_count
 /// environment: clear rgb u8*3 + pad u8, camera eye f32*3 target f32*3
 ///   fov_y f32 (radians), light dir f32*3 ambient f32 color rgba
-///   ambient_color rgba, fog color rgba near f32 far f32      (= 68 bytes)
+///   ambient_color rgba, fog color rgba near f32 far f32,
+///   shadows (v5): u8 on, u8 tier_max (0 none, 1 blob, 2 planar, 3 map),
+///   u16 map_size, f32 distance, u8 softness, u8 reserved*3, color rgba
+///                                                             (= 84 bytes)
 /// node_count records of NODE_BYTES:
 ///   name (u32 offset, u32 len) and tags (u32 offset, u32 len) into the
 ///   string table — tags are `\n`-separated
@@ -317,6 +321,9 @@ impl SceneNode {
 ///   u8 detail scale_log2, u8 reserved, u32 detail sprite (flag bit5)
 ///   water (v4, flag bit6): f32 flow_speed x y, f32 detail_flow x y,
 ///   f32 wave_amplitude, f32 wave_frequency, f32 ripple_responsiveness
+///   shadow (v5): u8 cast (0 none, 1 blob, 2 mesh, 3 auto), u8 receiver,
+///   u16 reserved, f32 blob radius, receiver top f32*3 center and f32*2
+///   half sizes (x, z)
 /// data table: UTF-8 strings and LOD records, to the end of the blob: UTF-8 bytes to the end of the blob
 /// ```
 ///
@@ -326,14 +333,35 @@ pub const TSCN_MAGIC: &[u8; 4] = b"TSCN";
 /// v2 (October 2026): LOD records grew from 8 to 32 bytes (impostor
 /// levels). v3: nodes end with the surface's gloss, texture filter and
 /// detail layer (8 bytes). v4: then a water surface (28 bytes, ADR 0015).
+/// v5: the environment ends with the shadows (16 bytes) and nodes with
+/// what they cast and the receiver they are (28 bytes, ADR 0025).
 /// Older blobs are refused: rebake the scene.
-pub const TSCN_VERSION: u16 = 4;
+pub const TSCN_VERSION: u16 = 5;
 pub const TSCN_HEADER: usize = 12;
-pub const TSCN_ENV_BYTES: usize = 68;
-pub const TSCN_NODE_BYTES: usize =
-    16 + 48 + 4 + 4 + 4 + 4 + 4 + 4 + 12 + 12 + 4 + 8 + 12 + 16 + 8 + TSCN_WATER_BYTES;
+pub const TSCN_ENV_BYTES: usize = 68 + TSCN_ENV_SHADOW_BYTES;
+/// The shadows block at the end of the environment (v5).
+pub const TSCN_ENV_SHADOW_BYTES: usize = 16;
+pub const TSCN_NODE_BYTES: usize = 16
+    + 48
+    + 4
+    + 4
+    + 4
+    + 4
+    + 4
+    + 4
+    + 12
+    + 12
+    + 4
+    + 8
+    + 12
+    + 16
+    + 8
+    + TSCN_WATER_BYTES
+    + TSCN_SHADOW_BYTES;
 /// The water block at the end of a node (v4).
 pub const TSCN_WATER_BYTES: usize = 28;
+/// The shadow block at the end of a node (v5).
+pub const TSCN_SHADOW_BYTES: usize = 28;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SceneError {
@@ -465,6 +493,44 @@ impl BakedScene {
         }
     }
 
+    /// The scene's shadows (`None`: off), for `Renderer::set_shadows`.
+    pub fn shadows(&self) -> Option<ShadowSettings> {
+        let e = TSCN_HEADER + 68;
+        let d = self.bytes;
+        if d[e] == 0 {
+            return None;
+        }
+        Some(
+            ShadowSettings {
+                tier_max: match d[e + 1] {
+                    0 => ShadowTier::None,
+                    1 => ShadowTier::Blob,
+                    2 => ShadowTier::Planar,
+                    _ => ShadowTier::Map,
+                },
+                map_size: u16::from_le_bytes([d[e + 2], d[e + 3]]),
+                distance: rd_f32(d, e + 4),
+                softness: d[e + 8],
+                color: rd_rgba(d, e + 12),
+            }
+            .clamped(),
+        )
+    }
+
+    /// The top of node `i`'s box, when shadows land on it.
+    pub fn receiver(&self, i: usize) -> Option<ShadowPlane> {
+        let s = self.node_at(i) + TSCN_NODE_BYTES - TSCN_SHADOW_BYTES;
+        let d = self.bytes;
+        (d[s + 1] != 0).then(|| {
+            ShadowPlane::horizontal(rd_vec3(d, s + 8), rd_f32(d, s + 20), rd_f32(d, s + 24))
+        })
+    }
+
+    /// Every receiver, in node order (`Renderer::set_shadow_receivers`).
+    pub fn receivers(&self) -> impl Iterator<Item = ShadowPlane> + '_ {
+        (0..self.node_count).filter_map(|i| self.receiver(i))
+    }
+
     /// Node `i` (`i < node_count()`), decoded (strings borrowed).
     pub fn node(&self, i: usize) -> SceneNode {
         let d = self.bytes;
@@ -518,6 +584,18 @@ impl BakedScene {
                     ripple_responsiveness: rd_f32(d, w + 24),
                 }
             }),
+            shadow: {
+                let s = at + TSCN_NODE_BYTES - TSCN_SHADOW_BYTES;
+                let radius = rd_f32(d, s + 4);
+                match d[s] {
+                    1 => ShadowCast::Blob { radius },
+                    2 => ShadowCast::Mesh,
+                    3 => ShadowCast::Auto {
+                        blob_radius: radius,
+                    },
+                    _ => ShadowCast::None,
+                }
+            },
             ..ModelParams::DEFAULT
         };
         let (x, y, z) = (rd_f32(d, b + 24), rd_f32(d, b + 28), rd_f32(d, b + 32));
@@ -755,6 +833,11 @@ mod tests {
         f(&mut b, &[0.0, -1.0, 0.0, 0.5]); // light dir + ambient
         b.extend_from_slice(&[255, 255, 255, 255, 200, 200, 255, 255, 1, 2, 3, 255]);
         f(&mut b, &[5.0, 20.0]);
+        // Shadows on: tier_max blob, map 512, 30 m, softness 90, color.
+        b.extend_from_slice(&[1, 1]);
+        b.extend_from_slice(&512u16.to_le_bytes());
+        f(&mut b, &[30.0]);
+        b.extend_from_slice(&[90, 0, 0, 0, 10, 20, 30, 120]);
         assert_eq!(b.len(), TSCN_HEADER + TSCN_ENV_BYTES);
         // name "a/door" @0 (6), tags "door\nx" @6 (6)
         for v in [0u32, 6, 6, 6] {
@@ -778,6 +861,9 @@ mod tests {
         f(&mut b, &[0.5, 1.0, 0.25]);
         b.extend_from_slice(&[40, 1, 0, 0, 0, 0, 0, 0]); // gloss 40, point, no detail
         f(&mut b, &[0.5, -0.25, 0.1, 0.2, 0.05, 0.6, 1.5]); // water (flag bit6 off)
+        // Casts a 0.4 m blob (auto), receives: a 2 x 1 top at (3, 1, -2).
+        b.extend_from_slice(&[3, 1, 0, 0]);
+        f(&mut b, &[0.4, 3.0, 1.0, -2.0, 1.0, 0.5]);
         b.extend_from_slice(b"a/doordoor\nx");
         f(&mut b, &[30.0]);
         b.extend_from_slice(&0u32.to_le_bytes()); // culled beyond 30
@@ -823,6 +909,16 @@ mod tests {
                 a: 1,
                 b: 4
             })
+        );
+        assert_eq!(n.params.shadow, ShadowCast::Auto { blob_radius: 0.4 });
+        let sh = s.shadows().unwrap();
+        assert_eq!(sh.tier_max, ShadowTier::Blob);
+        assert_eq!((sh.map_size, sh.distance, sh.softness), (512, 30.0, 90));
+        assert_eq!(sh.color, Color::rgba(10, 20, 30, 120));
+        let r: std::vec::Vec<ShadowPlane> = s.receivers().collect();
+        assert_eq!(
+            r,
+            [ShadowPlane::horizontal(Vec3::new(3.0, 1.0, -2.0), 1.0, 0.5)]
         );
     }
 

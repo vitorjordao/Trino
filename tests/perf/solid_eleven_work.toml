@@ -1,77 +1,88 @@
 # Solid Eleven's self-test match, frame by frame (every 30th of
 # solid_eleven::selftest's script, N64 profile): 3D draws, source
-# triangles, the 3DS GPU's share of them, 2D rectangles + glyphs.
+# triangles, the 3DS GPU's share of them, blob shadows, 2D
+# rectangles + glyphs.
 # Checked for equality by xtask/tests/solid_eleven_budget.rs;
 # rewrite with `TRINO_BLESS=1 cargo test -p xtask --test
 # solid_eleven_budget` and review: a number going up is a cost the
 # N64 pays.
 
 [frame-29]
-draws = 49
-tris = 976
-gpu_draws_3ds = 49
+draws = 47
+tris = 964
+gpu_draws_3ds = 47
+blobs = 2
 rects = 71
 glyphs = 26
 
 [frame-59]
-draws = 74
-tris = 1166
-gpu_draws_3ds = 74
+draws = 70
+tris = 1146
+gpu_draws_3ds = 70
+blobs = 4
 rects = 71
 glyphs = 27
 
 [frame-89]
-draws = 53
-tris = 968
-gpu_draws_3ds = 53
+draws = 51
+tris = 956
+gpu_draws_3ds = 51
+blobs = 2
 rects = 73
 glyphs = 27
 
 [frame-119]
-draws = 75
-tris = 1138
-gpu_draws_3ds = 75
+draws = 72
+tris = 1122
+gpu_draws_3ds = 72
+blobs = 3
 rects = 71
 glyphs = 27
 
 [frame-149]
-draws = 64
-tris = 1008
-gpu_draws_3ds = 64
+draws = 61
+tris = 992
+gpu_draws_3ds = 61
+blobs = 3
 rects = 71
 glyphs = 27
 
 [frame-179]
-draws = 59
-tris = 948
-gpu_draws_3ds = 59
+draws = 57
+tris = 936
+gpu_draws_3ds = 57
+blobs = 2
 rects = 71
 glyphs = 27
 
 [frame-209]
-draws = 56
-tris = 1032
-gpu_draws_3ds = 56
+draws = 54
+tris = 1020
+gpu_draws_3ds = 54
+blobs = 2
 rects = 71
 glyphs = 27
 
 [frame-239]
-draws = 44
-tris = 946
-gpu_draws_3ds = 44
+draws = 42
+tris = 934
+gpu_draws_3ds = 42
+blobs = 2
 rects = 73
 glyphs = 27
 
 [frame-269]
-draws = 45
-tris = 1022
-gpu_draws_3ds = 45
+draws = 44
+tris = 1018
+gpu_draws_3ds = 44
+blobs = 1
 rects = 71
 glyphs = 27
 
 [frame-299]
-draws = 45
-tris = 1022
-gpu_draws_3ds = 45
+draws = 44
+tris = 1018
+gpu_draws_3ds = 44
+blobs = 1
 rects = 71
 glyphs = 27

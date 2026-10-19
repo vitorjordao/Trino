@@ -26,7 +26,7 @@ pub use frame_report::FrameMeter;
 pub use input::PcInput;
 pub use renderer::{
     AoView, Calibration, CompressedFormat, MSAA_SAMPLES, N64Estimate, PcFrameTimes, PcRenderer,
-    RendererError, SpriteMemory,
+    RendererError, ShadowView, SpriteMemory,
 };
 pub use sim::SimProfile;
 pub use system::PcPlatform;

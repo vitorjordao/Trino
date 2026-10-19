@@ -390,6 +390,15 @@ a camera can see, so the CC0 KayKit doorway went from 1068 to 75 triangles.
   [scene-authoring](../.agents/skills/scene-authoring/SKILL.md) skill.
   `cargo xtask scene check` validates them, `scene export` writes one as Rust data,
   `scene budget` reports each console's frame cost.
+- **Shadows** (scene v7, prefab v5, TSCN v5, [ADR 0025](adr/0025-shadows-per-tier.md)):
+  `environment.shadows: Some((tier_max: Map, distance: 40.0, softness: 160, color: (0, 0,
+  0, 140), map_size: 0))` (every field defaults, `enabled: false` keeps the tuning) and an
+  entity's `shadow: Some((cast: Auto, radius: 0.5, receive: false))`. `cast` is `None`,
+  `Blob`, `Mesh` or `Auto` (the shape where the tier draws shapes, a blob on the N64);
+  `receive: true` makes the top of the entity's collider, or else its model's bounds, a
+  surface blob and planar shadows land on. Older files load with no shadows. The bake
+  writes them into the TSCN (`BakedScene::shadows`, `receivers`), and `scene export` into
+  `SHADOWS` and `RECEIVERS`; a game hands both to the renderer each frame.
 
 ## UI screens
 

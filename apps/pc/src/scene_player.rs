@@ -175,6 +175,9 @@ impl ScenePlayer {
         r.set_light(&env.core_light());
         r.set_ambient_occlusion(env.core_ao().as_ref());
         let resolved = resolve_for(&self.scene, &self.lib, self.time, self.platform);
+        // Shadows (ADR 0025): the target's tier, onto the scene's receivers.
+        r.set_shadows(resolved.shadows.as_ref());
+        r.set_shadow_receivers(&resolved.receivers());
         let caps = r.caps();
         let screen = Vec2::new(caps.screen_width as f32, caps.screen_height as f32);
         let visible = resolved.visible_cells(&camera, screen);

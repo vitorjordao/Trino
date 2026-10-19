@@ -49,7 +49,9 @@ pub use resolve::{DrawItem, LodDraw, LodItem, Resolved, resolve, resolve_for};
 use serde::{Deserialize, Serialize};
 use trino_core::SpriteId;
 
-/// v6: asset groups (issue #56): `requires`, the groups the scene needs
+/// v7: shadows (issue #57, ADR 0025): `environment.shadows` and an entity's
+/// `shadow` (what its model casts, whether its top receives). v6: asset
+/// groups (issue #56): `requires`, the groups the scene needs
 /// loaded (`["boot"]` for every older file), and a cell's `groups`, what an
 /// interior streams in as the cell comes into view. v5: the consoles'
 /// hardware tiers (issue #54): `n64_expanded` and
@@ -58,7 +60,7 @@ use trino_core::SpriteId;
 /// `web` LOD start, which follow the PC's when unset. v3 added per-platform
 /// variants (`platforms`, see [`platform`]); v2 added 3D transforms
 /// (degrees), nested children, models, prefab instances and the
-/// environment. v1 (2D-only, flat) to v5 are migrated on load.
+/// environment. v1 (2D-only, flat) to v6 are migrated on load.
 ///
 /// v3 to v6 only add fields, but they change what a scene *means* per
 /// target: an engine that ignored `platforms` would ship the PC model to a
@@ -66,7 +68,7 @@ use trino_core::SpriteId;
 /// own choices when it saves (as one that ignored the tiers would drop
 /// theirs, or one that ignored `requires` a level's groups). The bump makes
 /// such an engine refuse the file instead.
-pub const SCENE_VERSION: u32 = 6;
+pub const SCENE_VERSION: u32 = 7;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Scene {
@@ -100,6 +102,12 @@ pub struct Environment {
     /// baked into model vertex colors — `trino_core::ao`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ao: Option<AmbientOcclusionDef>,
+    /// Shadows (`trino_core::shadow`, ADR 0025): each target draws its own
+    /// tier (a blob on the N64, the caster's shape on the 3DS, a shadow
+    /// map on the PC and the Web), capped by `tier_max`. Entities cast and
+    /// receive through their `shadow` component.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shadows: Option<ShadowsDef>,
 }
 
 fn default_clear() -> [u8; 3] {
@@ -114,6 +122,7 @@ impl Default for Environment {
             light: LightDef::default(),
             fog: None,
             ao: None,
+            shadows: None,
         }
     }
 }
@@ -233,11 +242,184 @@ impl AmbientOcclusionDef {
     }
 }
 
+/// A scene's shadows ([`trino_core::shadow::ShadowSettings`]). Every field
+/// has a default, so `shadows: ()` is a valid start; `enabled: false`
+/// keeps the tuning while turning them off.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+pub struct ShadowsDef {
+    #[serde(default = "yes")]
+    pub enabled: bool,
+    /// The best tier wanted (`Blob` gives every target the N64's look).
+    #[serde(default)]
+    pub tier_max: ShadowTierDef,
+    /// Shadow map texels per side (a power of two, 256 to 4096); 0 takes
+    /// the quality preset's.
+    #[serde(default)]
+    pub map_size: u16,
+    /// How far from the camera shadows reach, meters.
+    #[serde(default = "default_shadow_distance")]
+    pub distance: f32,
+    /// 0 (hard) to 255: the blob's falloff and the map's filter radius.
+    #[serde(default = "default_shadow_softness")]
+    pub softness: u8,
+    /// What a shadowed surface blends toward (RGBA: alpha is the
+    /// strength).
+    #[serde(default = "default_shadow_color")]
+    pub color: [u8; 4],
+}
+
+/// [`trino_core::shadow::ShadowTier`] in files.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ShadowTierDef {
+    None,
+    Blob,
+    Planar,
+    #[default]
+    Map,
+}
+
+impl ShadowTierDef {
+    pub const ALL: [ShadowTierDef; 4] = [
+        ShadowTierDef::None,
+        ShadowTierDef::Blob,
+        ShadowTierDef::Planar,
+        ShadowTierDef::Map,
+    ];
+
+    pub fn core(self) -> trino_core::shadow::ShadowTier {
+        use trino_core::shadow::ShadowTier as T;
+        match self {
+            ShadowTierDef::None => T::None,
+            ShadowTierDef::Blob => T::Blob,
+            ShadowTierDef::Planar => T::Planar,
+            ShadowTierDef::Map => T::Map,
+        }
+    }
+}
+
+fn default_shadow_distance() -> f32 {
+    trino_core::shadow::ShadowSettings::DEFAULT.distance
+}
+fn default_shadow_softness() -> u8 {
+    trino_core::shadow::ShadowSettings::DEFAULT.softness
+}
+fn default_shadow_color() -> [u8; 4] {
+    let c = trino_core::shadow::ShadowSettings::DEFAULT.color;
+    [c.r, c.g, c.b, c.a]
+}
+
+impl Default for ShadowsDef {
+    fn default() -> Self {
+        ShadowsDef {
+            enabled: true,
+            tier_max: ShadowTierDef::Map,
+            map_size: 0,
+            distance: default_shadow_distance(),
+            softness: default_shadow_softness(),
+            color: default_shadow_color(),
+        }
+    }
+}
+
+impl ShadowsDef {
+    /// The engine settings, enabled or not (clamped to their ranges).
+    pub fn core(&self) -> trino_core::shadow::ShadowSettings {
+        let [r, g, b, a] = self.color;
+        trino_core::shadow::ShadowSettings {
+            tier_max: self.tier_max.core(),
+            map_size: self.map_size,
+            distance: self.distance,
+            softness: self.softness,
+            color: trino_core::Color::rgba(r, g, b, a),
+        }
+        .clamped()
+    }
+}
+
+/// What an entity's model casts and whether shadows land on it
+/// (`trino_core::shadow`, ADR 0025). `shadow: ()` casts the tier's pick
+/// with a half-meter blob.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+pub struct ShadowComponent {
+    #[serde(default)]
+    pub cast: ShadowCastDef,
+    /// The blob's radius, meters (`Blob`, and `Auto` on the blob tier: 0
+    /// draws none there, for a character's limbs whose body casts it).
+    #[serde(default = "default_blob_radius")]
+    pub radius: f32,
+    /// Blob and planar shadows land on the top of this entity's box (its
+    /// collider, else its model's bounds): a floor, a table, a platform.
+    /// The map tier shades every surface regardless.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub receive: bool,
+}
+
+/// [`trino_core::ShadowCast`] in files.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ShadowCastDef {
+    /// Nothing (a receiver that casts nothing).
+    None,
+    /// A blob on every tier.
+    Blob,
+    /// The model's shape (projected, or in the map); on the blob tier the
+    /// first few of a frame (the N64's two).
+    Mesh,
+    /// The shape where the tier draws shapes, a blob on the blob tier.
+    #[default]
+    Auto,
+}
+
+impl ShadowCastDef {
+    pub const ALL: [ShadowCastDef; 4] = [
+        ShadowCastDef::None,
+        ShadowCastDef::Blob,
+        ShadowCastDef::Mesh,
+        ShadowCastDef::Auto,
+    ];
+}
+
+fn default_blob_radius() -> f32 {
+    0.5
+}
+
+impl Default for ShadowComponent {
+    fn default() -> Self {
+        ShadowComponent {
+            cast: ShadowCastDef::Auto,
+            radius: default_blob_radius(),
+            receive: false,
+        }
+    }
+}
+
+impl ShadowComponent {
+    /// What the draw casts ([`trino_core::ModelParams::shadow`]).
+    pub fn core(&self) -> trino_core::ShadowCast {
+        let radius = if self.radius.is_finite() {
+            self.radius.max(0.0)
+        } else {
+            0.0
+        };
+        match self.cast {
+            ShadowCastDef::None => trino_core::ShadowCast::None,
+            ShadowCastDef::Blob => trino_core::ShadowCast::Blob { radius },
+            ShadowCastDef::Mesh => trino_core::ShadowCast::Mesh,
+            ShadowCastDef::Auto => trino_core::ShadowCast::auto(radius),
+        }
+    }
+}
+
 impl Environment {
     /// What `Renderer::set_ambient_occlusion` takes: `None` without an
     /// `ao` block or with `enabled: false`.
     pub fn core_ao(&self) -> Option<trino_core::AmbientOcclusion> {
         self.ao.filter(|a| a.enabled).map(|a| a.core())
+    }
+
+    /// What `Renderer::set_shadows` takes: `None` without a `shadows`
+    /// block or with `enabled: false`.
+    pub fn core_shadows(&self) -> Option<trino_core::shadow::ShadowSettings> {
+        self.shadows.filter(|s| s.enabled).map(|s| s.core())
     }
 
     pub fn core_camera(&self) -> trino_core::Camera3 {
@@ -302,6 +484,10 @@ pub struct Entity {
     /// cells) — see `trino_core::vis`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vis: Option<VisComponent>,
+    /// What its model casts, whether shadows land on it (ADR 0025; drawn
+    /// while `environment.shadows` is on).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shadow: Option<ShadowComponent>,
     /// What changes on PC, N64 and 3DS (model, material, scale,
     /// visibility, or not there at all) — see [`platform`].
     #[serde(default, skip_serializing_if = "PlatformVariants::is_empty")]
@@ -331,6 +517,7 @@ impl Entity {
             collider: None,
             sound: None,
             vis: None,
+            shadow: None,
             platforms: PlatformVariants::default(),
             children: Vec::new(),
         }
@@ -693,10 +880,11 @@ impl Scene {
             ron::from_str(text).map_err(|e| format!("scene parse error: {e}"))?;
         match versioned.version {
             SCENE_VERSION => ron::from_str(text).map_err(|e| format!("scene parse error: {e}")),
-            // v5 is v6 without groups (`requires` defaults to boot), v4 is
-            // v5 without the hardware tiers, v3 is v4 without the Web, v2 is
-            // v3 without variants: same fields, defaults fill the rest.
-            2..=5 => {
+            // v6 is v7 without shadows, v5 is v6 without groups (`requires`
+            // defaults to boot), v4 is v5 without the hardware tiers, v3 is
+            // v4 without the Web, v2 is v3 without variants: same fields,
+            // defaults fill the rest.
+            2..=6 => {
                 let mut scene: Scene = ron::from_str(text)
                     .map_err(|e| format!("scene parse error (v{} file): {e}", versioned.version))?;
                 scene.version = SCENE_VERSION;
@@ -1028,6 +1216,130 @@ mod tests {
         assert_eq!(ao.radius, 1.25);
         assert_eq!(ao.quality, trino_core::AoQuality::High);
         assert_eq!(ao.quality.samples(), 32);
+    }
+
+    #[test]
+    fn shadows_are_optional_defaulted_and_round_trip() {
+        // Absent: neither field is written; nothing casts.
+        let plain = Scene::new("plain");
+        let text = plain.to_ron();
+        assert!(!text.contains("shadows:") && !text.contains("shadow:"));
+        assert_eq!(plain.environment.core_shadows(), None);
+        // `Some(())` everywhere: the defaults (an Auto caster, a
+        // half-meter blob, receiving nothing).
+        let text = "(version: 7, name: \"a\", environment: (shadows: Some(())), \
+                    entities: [(name: \"e\", shadow: Some(()))])";
+        let scene = Scene::from_ron(text).unwrap();
+        assert_eq!(scene.environment.shadows, Some(ShadowsDef::default()));
+        assert_eq!(
+            scene.environment.core_shadows(),
+            Some(trino_core::ShadowSettings::DEFAULT)
+        );
+        let c = scene.entities[0].shadow.unwrap();
+        assert_eq!(c, ShadowComponent::default());
+        assert_eq!(c.core(), trino_core::ShadowCast::auto(0.5));
+        // Tuned, then off: the tuning stays in the file, the shadows go.
+        let mut tuned = Scene::new("tuned");
+        tuned.environment.shadows = Some(ShadowsDef {
+            enabled: false,
+            tier_max: ShadowTierDef::Planar,
+            map_size: 1024,
+            distance: 25.0,
+            softness: 90,
+            color: [10, 20, 30, 120],
+        });
+        let mut floor = Entity::new("floor");
+        floor.shadow = Some(ShadowComponent {
+            cast: ShadowCastDef::None,
+            receive: true,
+            ..Default::default()
+        });
+        let mut ball = Entity::new("ball");
+        ball.shadow = Some(ShadowComponent {
+            cast: ShadowCastDef::Blob,
+            radius: 0.3,
+            receive: false,
+        });
+        tuned.entities = vec![floor, ball];
+        let text = tuned.to_ron();
+        assert!(text.contains("receive: true"));
+        assert_eq!(text.matches("receive:").count(), 1, "false is not written");
+        let back = Scene::from_ron(&text).unwrap();
+        assert_eq!(back, tuned);
+        assert_eq!(back.environment.core_shadows(), None);
+        tuned.environment.shadows.as_mut().unwrap().enabled = true;
+        let s = tuned.environment.core_shadows().unwrap();
+        assert_eq!(s.tier_max, trino_core::ShadowTier::Planar);
+        assert_eq!((s.map_size, s.distance, s.softness), (1024, 25.0, 90));
+        assert_eq!(s.color, trino_core::Color::rgba(10, 20, 30, 120));
+        let casts: Vec<_> = tuned
+            .entities
+            .iter()
+            .map(|e| e.shadow.unwrap().core())
+            .collect();
+        assert_eq!(
+            casts,
+            [
+                trino_core::ShadowCast::None,
+                trino_core::ShadowCast::Blob { radius: 0.3 }
+            ]
+        );
+        // Every kind maps to its engine cast.
+        let cast = |cast| ShadowComponent {
+            cast,
+            radius: 0.0,
+            receive: false,
+        };
+        assert_eq!(
+            cast(ShadowCastDef::Mesh).core(),
+            trino_core::ShadowCast::Mesh
+        );
+        assert_eq!(
+            cast(ShadowCastDef::Auto).core(),
+            trino_core::ShadowCast::Auto { blob_radius: 0.0 },
+            "0: no blob on the blob tier"
+        );
+        for t in ShadowTierDef::ALL {
+            assert_eq!(t.core().key(), format!("{t:?}").to_lowercase());
+        }
+    }
+
+    #[test]
+    fn shadow_settings_out_of_range_are_clamped() {
+        let def = ShadowsDef {
+            map_size: 300,
+            distance: 0.0,
+            ..ShadowsDef::default()
+        };
+        let s = def.core();
+        assert_eq!(s.map_size, 512, "a power of two");
+        assert_eq!(s.distance, 1.0);
+        let big = ShadowsDef {
+            map_size: 60000,
+            distance: f32::NAN,
+            ..ShadowsDef::default()
+        };
+        assert_eq!(big.core().map_size, 4096);
+        assert_eq!(
+            big.core().distance,
+            trino_core::ShadowSettings::DEFAULT.distance
+        );
+    }
+
+    #[test]
+    fn v6_scenes_load_as_v7_without_shadows() {
+        let text = r#"(version: 6, name: "old", environment: (ao: Some(())),
+            entities: [(name: "rock", model: Some((path: "models/rock")))])"#;
+        let scene = Scene::from_ron(text).unwrap();
+        assert_eq!(scene.version, SCENE_VERSION);
+        assert_eq!(SCENE_VERSION, 7);
+        assert_eq!(scene.environment.shadows, None);
+        assert!(scene.entities[0].shadow.is_none());
+        assert!(scene.environment.ao.is_some(), "the rest kept");
+        // Saved as v7, it reloads the same.
+        let saved = scene.to_ron();
+        assert!(saved.contains("version: 7"));
+        assert_eq!(Scene::from_ron(&saved).unwrap(), scene);
     }
 
     #[test]

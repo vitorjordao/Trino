@@ -1,0 +1,7 @@
+// Trino placeholder model ("fake object"). Edit and save: it hot-reloads.
+// The shadows self-test's floor (selftest::shadows): 8 x 8 m, light gray,
+// its top the receiver every caster's shadow lands on.
+(
+    shape: Plane(size: (8.0, 8.0)),
+    color: (180, 180, 180, 255),
+)

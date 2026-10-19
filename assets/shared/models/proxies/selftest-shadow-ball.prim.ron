@@ -1,0 +1,8 @@
+// Trino placeholder model ("fake object"). Edit and save: it hot-reloads.
+// The shadows self-test's ball (selftest::shadows): 0.35 m radius, held up
+// in the air, casting a blob or its shape by tier (`ShadowCast::Auto`).
+(
+    shape: Sphere(radius: 0.35),
+    color: (70, 170, 90, 255),
+    segments: 10,
+)

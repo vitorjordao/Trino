@@ -12,8 +12,8 @@ splits = 0
 backfaced = 8
 emitted = 5
 culled = 0
-gpu_draws = 25
-gpu_tris = 593
+gpu_draws = 24
+gpu_tris = 581
 
 [green-hills]
 verts = 0
@@ -23,8 +23,8 @@ splits = 0
 backfaced = 0
 emitted = 0
 culled = 0
-gpu_draws = 16
-gpu_tris = 384
+gpu_draws = 15
+gpu_tris = 372
 
 [lava-land]
 verts = 24
@@ -34,8 +34,8 @@ splits = 0
 backfaced = 8
 emitted = 7
 culled = 0
-gpu_draws = 15
-gpu_tris = 314
+gpu_draws = 14
+gpu_tris = 302
 
 [sky-tower]
 verts = 0
@@ -45,8 +45,8 @@ splits = 0
 backfaced = 0
 emitted = 0
 culled = 6
-gpu_draws = 13
-gpu_tris = 292
+gpu_draws = 12
+gpu_tris = 280
 
 [throne]
 verts = 150
@@ -56,8 +56,8 @@ splits = 0
 backfaced = 47
 emitted = 25
 culled = 0
-gpu_draws = 22
-gpu_tris = 446
+gpu_draws = 21
+gpu_tris = 434
 
 [micro-river]
 verts = 124

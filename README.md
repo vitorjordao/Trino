@@ -40,6 +40,7 @@ impostors) is part of the same pipeline, drawn by the same renderer in the same 
 | Rigid and opt-in smooth skinning, clip crossfade | yes | yes | yes |
 | Local point and spot lights | per pixel, up to 8 | per vertex, up to 2 | per vertex, up to 4 |
 | Ambient occlusion | screen-space (SSAO), plus baked | baked into vertex colors (`ao` in the manifest) | baked into vertex colors |
+| Shadows (`ModelParams::shadow`, scene receivers) | a shadow map with PCF on every surface (and the Web) | a soft blob per caster on the surface under it; two projected shapes a frame | the caster's shape projected onto the surface under it, stencil-merged |
 | Water surfaces: flowing layers, swell, ripples, Fresnel, glint | per pixel, with shore foam | per vertex, RDP 2-cycle layer blend | PICA200 vertex program, TexEnv layer blend |
 | Billboards, particles, impostors, distance LOD, portal/cell visibility | yes | yes | yes |
 | 2D: sprites, `fill_rect`, bitmap text | yes | yes | yes |
@@ -56,7 +57,7 @@ impostors) is part of the same pipeline, drawn by the same renderer in the same 
 | Asset pipeline | One master per asset, optional per-platform overrides, per-console formats baked at build time. glTF becomes TMDL, the engine's portable mesh format. Placeholder "fake objects" you can swap for real art later without touching references. |
 | Blender automation | Python helpers in `tools/blender/` and `cargo xtask blender` commands that build, check and export models within the N64 budget. |
 | Authored content as text | Scenes, prefabs, materials, particle effects, fake objects and UI screens are RON files. The editor writes them, any tool or AI agent can edit them, and a running editor or game reloads them live. |
-| Editor | Scene and Game views on the real renderer, hierarchy, inspector, asset browser, prefabs, per-platform variants, LOD and impostor baking, an animation tab, a per-console frame budget HUD. |
+| Editor | Scene and Game views on the real renderer, hierarchy, inspector, asset browser, prefabs, per-platform variants, LOD and impostor baking, an animation tab, a per-console frame budget HUD, each console's shadow tier in the Game view. |
 | UI tools | `cargo xtask ui check` proves on every target that the pad reaches every control, the screen fits the console's UI budget and no translation overflows; `ui shot` renders a screen as a target shows it; the editor's UI tab edits screens with a focus-order overlay. Every new project starts with title, pause, options and controls screens. |
 | Live reload | Game code reloads as a dylib on PC (`cargo xtask watch pc`); consoles rebuild and relaunch in the emulator on save (`watch n64`, `watch 3ds`). |
 | Emulator self-tests and goldens | `cargo xtask test n64` and `test 3ds` boot the game in ares or Azahar, run a self-test step for every engine service, have a bot play a stage, and compare frames with golden images. The N64 run also gates frame time. |
@@ -80,6 +81,7 @@ tables that strict mode and the tools check content against.
 | Local light tier | per pixel | per pixel | per vertex | per vertex |
 | Local lights per frame | 8 | 8 | 2 | 4 |
 | Ambient occlusion tier | screen-space | screen-space | baked | baked |
+| Shadow tier | map | map | blob (2 planar a frame) | planar |
 | Quality presets | Low…Ultra, auto-detected | Low…Ultra (phones Low) | fixed Low | fixed Low (New 3DS Medium) |
 | Water tier | per pixel | per pixel | per vertex | vertex program |
 | Ripples per frame | 4 | 4 | 4 | 4 |

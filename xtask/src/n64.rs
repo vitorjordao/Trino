@@ -1048,9 +1048,11 @@ fn engine_gates(
     bless: bool,
 ) -> Result<(), String> {
     // Emulator golden images, in dump order: the showcase's first frame
-    // (fogged: the CPU T&L path), castle64's hub (the RSP T&L path) and the
-    // showcase's river (water, ADR 0015: the `showcase-river` perf scene).
-    for (n, name) in ["showcase", "castle64_hub", "showcase_river"]
+    // (fogged: the CPU T&L path), castle64's hub (the RSP T&L path), the
+    // showcase's river (water, ADR 0015: the `showcase-river` perf scene)
+    // and blobs on a large floor (shadows, ADR 0025: no z-fighting out to
+    // 100 m).
+    for (n, name) in ["showcase", "castle64_hub", "showcase_river", "shadows_far"]
         .iter()
         .enumerate()
     {

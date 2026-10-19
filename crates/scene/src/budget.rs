@@ -10,6 +10,10 @@
 //! estimated on its console's paths with its own variants, and reports the
 //! memory its scene's models take against [`trino_core::Caps::ram_bytes`].
 //!
+//! With `environment.shadows` on, each platform's shadows too (ADR 0025):
+//! its tier, the casters drawn as blobs, projected or in the map, the
+//! N64's planar casters past its budget, and the blobs' N64 CPU time.
+//!
 //! The editor's Game view HUD and `cargo xtask scene budget` call
 //! [`estimate`] on the same resolved scene, so a person and an agent read
 //! the same numbers.
@@ -19,6 +23,7 @@ use trino_core::render3d::{
     Camera3, GpuReject, Light, Mesh, PcGpuReject, RspReject, TnlContext, TnlScratch, TnlStats,
     gpu_check, gpu_mesh_check, pc_gpu_check, pc_gpu_mesh_check, rsp_plan, tessellate_with,
 };
+use trino_core::shadow::{ShadowFrame, ShadowPlan, ShadowTier};
 use trino_core::{LodPick, ModelId, SpriteId, Vec2};
 
 use crate::{Resolved, Target};
@@ -75,6 +80,74 @@ pub struct FrameBudget {
     /// (each distinct model once, LOD levels included, wherever the camera
     /// is): what the scene's models take of the console's RAM.
     pub model_bytes: u32,
+    /// The frame's shadows on this platform.
+    pub shadows: ShadowBudget,
+}
+
+/// A platform's shadows ([`trino_core::shadow`]): its tier and what each
+/// caster comes out as there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ShadowBudget {
+    /// The tier drawn: the platform's, capped by the scene's `tier_max`
+    /// (`None` without `environment.shadows`).
+    pub tier: ShadowTier,
+    /// Draws that cast (`shadow` with a `cast`).
+    pub casters: u32,
+    pub blobs: u32,
+    /// Projected onto their receiver (the 3DS's GPU, the N64's CPU T&L).
+    pub planar: u32,
+    /// In the shadow map (the PC, the Web).
+    pub mapped: u32,
+    /// `Mesh` casters past the N64's planar budget: they cast nothing.
+    pub over_budget: u32,
+    /// Surfaces blob and planar shadows land on.
+    pub receivers: u32,
+}
+
+impl Default for ShadowBudget {
+    fn default() -> Self {
+        ShadowBudget {
+            tier: ShadowTier::None,
+            casters: 0,
+            blobs: 0,
+            planar: 0,
+            mapped: 0,
+            over_budget: 0,
+            receivers: 0,
+        }
+    }
+}
+
+/// `shadows: blob — 3 casters: 3 blobs, 0 planar, 0 in the map; 1
+/// receiver` (`None` when the scene has no shadows and nothing casts).
+pub fn shadow_line(b: &FrameBudget) -> Option<String> {
+    let s = &b.shadows;
+    if s.tier == ShadowTier::None && s.casters == 0 {
+        return None;
+    }
+    let mut line = format!(
+        "shadows: {} — {} casters: {} blobs, {} planar, {} in the map",
+        s.tier.key(),
+        s.casters,
+        s.blobs,
+        s.planar,
+        s.mapped
+    );
+    if s.over_budget > 0 {
+        line += &format!(" ({} past the planar budget cast nothing)", s.over_budget);
+    }
+    line += &format!(
+        "; {} receiver{}",
+        s.receivers,
+        if s.receivers == 1 { "" } else { "s" }
+    );
+    if b.target.base() == Target::N64 && s.blobs > 0 {
+        line += &format!(
+            "; blobs ≈{:.1} ms of N64 CPU",
+            N64_COST.blobs_us(s.blobs) as f32 / 1000.0
+        );
+    }
+    Some(line)
 }
 
 /// The Web's frame as WebGPU / WebGL2 calls (issue #47), estimated like
@@ -284,6 +357,7 @@ impl FrameBudget {
             .split_us(&self.cpu_tnl, self.cpu_draws, &self.rsp_work())
             .0
             + N64_COST.billboards_us(self.billboards)
+            + N64_COST.blobs_us(self.shadows.blobs)
     }
 
     /// N64 RSP time of the fast-path draws (µs).
@@ -400,6 +474,12 @@ pub fn estimate<'m>(
     };
     // A tier runs on its console's paths (same GPU, same RSP).
     let console = target.base();
+    // The shadows as the platform's renderer plans them (its tier, the
+    // N64's planar budget), at the best quality.
+    let mut shadows = Box::new(ShadowFrame::OFF);
+    shadows.set(resolved.shadows.as_ref(), &caps_of(target), ShadowTier::Map);
+    b.shadows.tier = shadows.tier();
+    b.shadows.receivers = resolved.receivers().len() as u32;
     let visible = resolved.visible_cells(camera, screen);
     let mut reasons: Vec<(RspReject, u32)> = Vec::new();
     let mut gpu_reasons: Vec<(GpuReject, u32)> = Vec::new();
@@ -457,6 +537,22 @@ pub fn estimate<'m>(
         b.tnl.add(&stats);
         if stats.culled > 0 {
             b.wasted.push(item.name.clone());
+        }
+        if item.params.shadow.casts() {
+            b.shadows.casters += 1;
+            match shadows.plan(item.params.shadow) {
+                ShadowPlan::Blob { .. } => b.shadows.blobs += 1,
+                ShadowPlan::Map => b.shadows.mapped += 1,
+                ShadowPlan::Planar => {
+                    b.shadows.planar += 1;
+                    // The N64 flattens it through the CPU T&L: about the
+                    // caster's own T&L again.
+                    if console == Target::N64 {
+                        b.cpu_tnl.add(&stats);
+                    }
+                }
+                ShadowPlan::None => {}
+            }
         }
         if item.params.water.is_some() {
             let texture = mesh.texture_for(&item.params);
@@ -550,6 +646,7 @@ pub fn estimate<'m>(
     b.off_rsp = reasons;
     b.off_gpu = gpu_reasons;
     b.off_pc_gpu = pc_reasons;
+    b.shadows.over_budget = shadows.stats.over_budget as u32;
     if target == Target::Web {
         let calls = web_groups.len() as u32;
         b.web = WebCalls {

@@ -196,6 +196,8 @@ pub struct FrameStats {
     /// loaded ([`crate::Platform::load_group`]), the platform doesn't bake it,
     /// or the handle is wrong. They draw nothing.
     pub not_loaded: u32,
+    /// The shadows drawn ([`crate::shadow::ShadowStats`]).
+    pub shadows: crate::shadow::ShadowStats,
 }
 
 /// How a 3D surface reacts to light. Evaluated per vertex by the engine's
@@ -310,6 +312,10 @@ pub struct ModelParams {
     /// A water surface (swell, ripples, flowing layers, Fresnel): see
     /// [`crate::water`]. `None` = a plain surface.
     pub water: Option<crate::water::Water>,
+    /// What this draw casts while the frame has shadows
+    /// ([`Renderer::set_shadows`], [`crate::shadow`]): a blob, its shape,
+    /// or the tier's pick. Doesn't change the draw itself.
+    pub shadow: crate::shadow::ShadowCast,
 }
 
 /// How a 3D draw's texture is sampled ([`ModelParams::filter`]).
@@ -388,6 +394,7 @@ impl ModelParams {
         filter: TexFilter::Default,
         detail: None,
         water: None,
+        shadow: crate::shadow::ShadowCast::None,
     };
 
     /// Default surface with a tint — the common case in game code.
@@ -562,6 +569,21 @@ pub trait Renderer {
     /// `None` turns it off. **Cleared at `begin_frame`**, like the local
     /// lights: set it every frame.
     fn set_ambient_occlusion(&mut self, _ao: Option<&crate::ao::AmbientOcclusion>) {}
+
+    /// Shadows for this frame ([`crate::shadow`], ADR 0025): the draws
+    /// whose [`ModelParams::shadow`] casts one get it at the tier
+    /// [`Caps::shadow_tier`] gives (capped by `tier_max` and, on the PC, the
+    /// quality preset). `None` turns them off. **Cleared at
+    /// `begin_frame`**, like the local lights: set it every frame, before
+    /// the draws that cast.
+    fn set_shadows(&mut self, _shadows: Option<&crate::shadow::ShadowSettings>) {}
+
+    /// The surfaces blob and planar shadows land on this frame (the first
+    /// [`crate::shadow::MAX_SHADOW_PLANES`]): each caster's goes onto the
+    /// receiver under it, cut to its rectangle. The Map tier shades every
+    /// surface and ignores them. **Cleared at `begin_frame`**; set them
+    /// before the draws that cast.
+    fn set_shadow_receivers(&mut self, _receivers: &[crate::shadow::ShadowPlane]) {}
 
     /// The multiplier of LOD start distances this renderer draws with
     /// ([`crate::QualitySettings::lod_bias`]): `draw_nodes_in` and

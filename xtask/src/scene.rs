@@ -355,8 +355,19 @@ fn budget(root: &Path, args: &[&str]) -> ExitCode {
                 } else {
                     caps.ram_bytes.to_string()
                 };
+                let s = &b.shadows;
+                let shadows = format!(
+                    "{{\"tier\":\"{}\",\"casters\":{},\"blobs\":{},\"planar\":{},\"mapped\":{},\"over_budget\":{},\"receivers\":{}}}",
+                    s.tier.key(),
+                    s.casters,
+                    s.blobs,
+                    s.planar,
+                    s.mapped,
+                    s.over_budget,
+                    s.receivers
+                );
                 format!(
-                    "{{\"platform\":\"{}\",\"tier\":\"{}\",\"ram_bytes\":{ram},\"model_bytes\":{},\"cpu_cores\":{},\"cpu_mhz\":{},\"crowd_scale\":{},\"particle_scale\":{},\"draws\":{},\"tris\":{},\"verts\":{},\"culled\":{},\"billboards\":{},\"lod\":{:?},\"rsp_draws\":{},\"rsp_tris\":{},\"cpu_draws\":{},\"off_rsp\":[{}],\"gpu_draws\":{},\"gpu_tris\":{},\"off_gpu\":[{}],\"pc_gpu_draws\":{},\"pc_gpu_tris\":{},\"off_pc_gpu\":[{}],\"wasted\":[{}],\"water\":[{}],\"paths\":[{}],\"web_calls\":{},\"web_pipelines\":{},\"web_switches\":{},\"web_warnings\":[{}],\"n64_cpu_us\":{},\"n64_rsp_us\":{},\"n64_frame_us\":{}}}",
+                    "{{\"platform\":\"{}\",\"tier\":\"{}\",\"ram_bytes\":{ram},\"model_bytes\":{},\"cpu_cores\":{},\"cpu_mhz\":{},\"crowd_scale\":{},\"particle_scale\":{},\"draws\":{},\"tris\":{},\"verts\":{},\"culled\":{},\"billboards\":{},\"lod\":{:?},\"rsp_draws\":{},\"rsp_tris\":{},\"cpu_draws\":{},\"off_rsp\":[{}],\"gpu_draws\":{},\"gpu_tris\":{},\"off_gpu\":[{}],\"pc_gpu_draws\":{},\"pc_gpu_tris\":{},\"off_pc_gpu\":[{}],\"wasted\":[{}],\"water\":[{}],\"paths\":[{}],\"web_calls\":{},\"web_pipelines\":{},\"web_switches\":{},\"web_warnings\":[{}],\"shadows\":{shadows},\"n64_cpu_us\":{},\"n64_rsp_us\":{},\"n64_frame_us\":{}}}",
                     b.target.key(),
                     b.target.hw_tier().key(),
                     b.model_bytes,
@@ -422,6 +433,9 @@ fn budget(root: &Path, args: &[&str]) -> ExitCode {
             println!("       {line}");
         }
         if let Some(line) = trino_scene::budget::ram_line(b) {
+            println!("       {line}");
+        }
+        if let Some(line) = trino_scene::budget::shadow_line(b) {
             println!("       {line}");
         }
         if b.target.base() == Target::N64 {

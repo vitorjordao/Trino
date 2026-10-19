@@ -1,5 +1,5 @@
 //! Shadow maps: the PC native (and Web) tier of [`trino_core::shadow`]
-//! (ADR 0024). The core fits the light's box over the view
+//! (ADR 0025). The core fits the light's box over the view
 //! ([`trino_core::shadow::map_fit`]); this module owns the depth map, the
 //! light pass that draws the casters' triangles into it and the
 //! fullscreen composite that shadows every surface of the frame by it

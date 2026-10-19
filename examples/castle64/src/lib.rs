@@ -72,7 +72,7 @@ const AMBIENT_OCCLUSION: trino_core::AmbientOcclusion = trino_core::AmbientOcclu
     bias: 0.03,
     quality: trino_core::AoQuality::Medium,
 };
-/// The player's shadow (ADR 0024): a blob on the N64, the body's shape
+/// The player's shadow (ADR 0025): a blob on the N64, the body's shape
 /// projected on the 3DS, a shadow map on the PC.
 const PLAYER_SHADOWS: ShadowSettings = ShadowSettings::DEFAULT;
 /// The torso casts the blob; the limbs only where shapes are drawn.

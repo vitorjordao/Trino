@@ -732,7 +732,7 @@ mod n64 {
                     // scene camera, the hero wading in (gated like the
                     // castle64 scenes; the river's own line is `models/river`).
                     water_perf(renderer, audio);
-                    // 8) Shadows (ADR 0024): the far-blob golden and what
+                    // 8) Shadows (ADR 0025): the far-blob golden and what
                     // a blob costs (ungated, the `N64_COST` blob term).
                     shadows_golden(renderer);
                     shadow_cost(renderer);

@@ -10,7 +10,7 @@ explain the engine by topic and link the detailed material instead of repeating 
 | Guide | What it covers |
 |---|---|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | The dependency rule, the `no_std` core, the N64 as the design ceiling, the software T&L and the N64 RSP fast path, 2D in the 3D pipeline, authored content, hot reload |
-| [ASSETS.md](ASSETS.md) | The manifest, masters and per-platform overrides, glTF to TMDL, fake objects, Blender, materials, impostors, particles, baked scenes, validation commands |
+| [ASSETS.md](ASSETS.md) | The manifest, masters and per-platform overrides, glTF to TMDL, fake objects, Blender, materials, impostors, particles, baked scenes, UI screens and string tables, validation commands |
 | [PLATFORMS.md](PLATFORMS.md) | PC (console looks, strict mode, live reload), Web (wasm, WebGPU/WebGL2, the browser self-test), N64 (Docker toolchain, ares), 3DS (devkitPro, Azahar), external projects |
 | [HARDWARE.md](HARDWARE.md) | Deploying to a real N64 (SummerCart64, EverDrive 64) or 3DS (3dslink), the debug log in the terminal, Luma3DS gdb |
 | [TESTING.md](TESTING.md) | The kinds of tests, coverage, and the feature-to-test matrix that a guard test keeps current |
@@ -27,6 +27,7 @@ they read just as well for people. Each one is the most detailed source for its 
 | [add-asset](../.agents/skills/add-asset/SKILL.md) | Every asset kind: manifest entries, formats, baking, live reload |
 | [blender-asset](../.agents/skills/blender-asset/SKILL.md) | Modeling, coloring, rigging and exporting within Trino's limits |
 | [scene-authoring](../.agents/skills/scene-authoring/SKILL.md) | Scenes, prefabs and materials as text; `scene check`, `scene export` |
+| [ui-authoring](../.agents/skills/ui-authoring/SKILL.md) | Menus, HUDs and dialogs as `ui/*.ui.ron` screens; `ui check`, `ui shot`, driving a screen from game code |
 | [editor](../.agents/skills/editor/SKILL.md) | Running and driving the editor, its hooks, its code map |
 | [build-n64](../.agents/skills/build-n64/SKILL.md), [build-3ds](../.agents/skills/build-3ds/SKILL.md) | How the console builds work and how to fix them |
 | [run-emulator](../.agents/skills/run-emulator/SKILL.md) | ares and Azahar: runs, the self-test harness, goldens, watch loops |
@@ -59,6 +60,7 @@ they read just as well for people. Each one is the most detailed source for its 
 | [0021](adr/0021-audio-pipeline.md) | Audio: a codec per platform (VADPCM, DSP-ADPCM, Vorbis), streaming, buses and ducking |
 | [0022](adr/0022-asset-groups-and-memory.md) | Asset groups, `TBND` bundles, compression per platform, loading in time slices, a RAM budget per console tier, cell streaming |
 | [0023](adr/0023-quality-presets.md) | Quality presets for the PC and the Web: Low to Ultra, render scale with upscale, dynamic resolution, frame pacing, an auto-detect bench |
+| [0024](adr/0024-ui-system.md) | A declarative UI system for every target: `ui/*.ui.ron` screens, whole-pixel layout with safe areas and the 3DS touch screen, pad/mouse/touch focus, string tables, budgets, `ui check` |
 
 ## Plans and history
 

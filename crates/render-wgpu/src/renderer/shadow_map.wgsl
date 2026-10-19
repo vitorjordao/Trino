@@ -1,4 +1,4 @@
-// Shadow maps (the PC's Map tier, ADR 0024).
+// Shadow maps (the PC's Map tier, ADR 0025).
 //
 // Two passes, after the 3D and before the screen-space AO and the 2D:
 //   vs_light          the casters' world triangles into a depth map from

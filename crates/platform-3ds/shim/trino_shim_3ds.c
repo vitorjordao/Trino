@@ -67,7 +67,7 @@ static float s_detail_off[2] = {0.0f, 0.0f};
 static int s_point = 0;
 static C2D_SpriteSheet s_detail_sheet = NULL;
 static float s_detail_scale = 1.0f;
-// Shadows (trino_3d_material flags bit 9, ADR 0024): the vertex color
+// Shadows (trino_3d_material flags bit 9, ADR 0025): the vertex color
 // blended by its alpha, depth tested but not written, with bits 10..12 the
 // stencil's part (trino_shadow_stencil) and bit 13 the blob texture's
 // alpha (s_blob, trino_shadow_blob) times the vertex alpha.
@@ -236,7 +236,7 @@ static void trino_audio_exit(void);
 // the LCD) with a 24-bit depth and an 8-bit stencil in place of its 16-bit
 // depth: shadows sit a few depth steps over their receiver at any
 // distance, and planar shadows draw once per pixel through the stencil
-// (ADR 0024). C2D_TargetClear clears the stencil to 0 with the depth.
+// (ADR 0025). C2D_TargetClear clears the stencil to 0 with the depth.
 static C3D_RenderTarget* trino_screen_target(gfxScreen_t screen, int height)
 {
     C3D_RenderTarget* t =
@@ -983,7 +983,7 @@ void trino_gpu_draw(void* mesh, const float* u, uint32_t flags)
     // The tilt projection mirrors the screen: the engine's front faces
     // arrive clockwise.
     C3D_CullFace((flags & 1) ? TRINO_TNL_CULL : GPU_CULL_NONE);
-    // flags bit 1: a planar shadow (ADR 0024), bits 4..6 its stencil part
+    // flags bit 1: a planar shadow (ADR 0025), bits 4..6 its stencil part
     // (trino_shadow_stencil): blended, depth tested, not written.
     if (flags & 2) trino_shadow_stencil((int)((flags >> 4) & 7));
     C3D_DrawElements(GPU_TRIANGLES, m->count, C3D_UNSIGNED_SHORT, m->indices);

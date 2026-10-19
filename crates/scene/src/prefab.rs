@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::Entity;
 
-/// v5: an entity's `shadow` (issue #57, ADR 0024: what it casts, whether
+/// v5: an entity's `shadow` (issue #57, ADR 0025: what it casts, whether
 /// it receives). v4: the consoles' hardware tiers' variants and LOD starts
 /// (`n64_expanded`, `n3ds_new`, issue #54). v3: the Web's (`web`, issue
 /// #47). v2: entities may carry per-platform variants (`platforms`, see

@@ -324,6 +324,14 @@ pub fn bake_assets(p: &Project, test_mode: bool) -> Result<(), String> {
         std::fs::write(fsdir.join(format!("{id:08x}.mixer")), blob).map_err(|e| e.to_string())?;
         index.push_str(&format!("{id:08x}\tmixer\t{id:08x}.mixer\n"));
     }
+    // The project's UI screens and string tables (issue #58): `ui/<name>`
+    // and `i18n/<lang>` blobs, resident from boot.
+    for b in trino_asset_pipeline::ui::bake(root, &manifest, Platform::N64)? {
+        let id = trino_core::asset_id(&b.logical);
+        std::fs::write(fsdir.join(format!("{id:08x}.blob")), &b.bytes)
+            .map_err(|e| e.to_string())?;
+        index.push_str(&format!("{id:08x}\tblob\t{id:08x}.blob\n"));
+    }
     for (name, decl) in &manifest.models {
         // A model only the expanded tier names is in the image too, loaded
         // on that hardware only (issue #54).
@@ -1042,7 +1050,7 @@ fn engine_gates(
     // Emulator golden images, in dump order: the showcase's first frame
     // (fogged: the CPU T&L path), castle64's hub (the RSP T&L path), the
     // showcase's river (water, ADR 0015: the `showcase-river` perf scene)
-    // and blobs on a large floor (shadows, ADR 0024: no z-fighting out to
+    // and blobs on a large floor (shadows, ADR 0025: no z-fighting out to
     // 100 m).
     for (n, name) in ["showcase", "castle64_hub", "showcase_river", "shadows_far"]
         .iter()

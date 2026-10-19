@@ -240,7 +240,7 @@ fn codegen_exports_the_scene_ambient_occlusion() {
     assert_eq!(with, bake::to_tscn(&scene, &lib).0);
 }
 
-/// Shadows (ADR 0024, scene v7, TSCN v5): the scene's settings and each
+/// Shadows (ADR 0025, scene v7, TSCN v5): the scene's settings and each
 /// entity's Shadow component reach both game-side forms: the receivers'
 /// tops (a collider's box, else the model's bounds as drawn), each draw's
 /// cast, a prefab part's own; a receiver with no box warns.

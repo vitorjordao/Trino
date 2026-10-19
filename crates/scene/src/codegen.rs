@@ -97,7 +97,7 @@ pub fn to_rust_for(scene: &Scene, lib: &Library, target: Target) -> (String, Vec
         None => "None".into(),
     };
     let _ = writeln!(out, "pub const AO: Option<AmbientOcclusion> = {ao};\n");
-    // Shadows (ADR 0024): `Renderer::set_shadows(SHADOWS.as_ref())` and
+    // Shadows (ADR 0025): `Renderer::set_shadows(SHADOWS.as_ref())` and
     // `set_shadow_receivers(RECEIVERS)` every frame.
     let shadows = match env.core_shadows() {
         Some(s) => format!(

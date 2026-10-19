@@ -149,7 +149,7 @@ struct GpuShadow {
     mark: Option<([ScreenTri; 7], usize)>,
 }
 
-/// `trino_3d_material` flags of the shadow draws (ADR 0024): bit 9 a
+/// `trino_3d_material` flags of the shadow draws (ADR 0025): bit 9 a
 /// shadow, bits 10..12 the stencil's part, bit 13 the blob texture.
 const SHADOW: u32 = 1 << 9;
 const SHADOW_ONCE: u32 = SHADOW | 1 << 10;

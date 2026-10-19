@@ -12,3 +12,4 @@ pub mod particles;
 pub mod platforms;
 pub mod quality;
 pub mod texture;
+pub mod ui_screens;

@@ -39,7 +39,7 @@ pub struct DrawItem {
     /// Cell or portal volume (world half extents; cell indices resolved).
     pub vis: Option<VisVolume>,
     /// The top of its box, when shadows land on it (`shadow(receive:
-    /// true)`, ADR 0024).
+    /// true)`, ADR 0025).
     pub receiver: Option<ShadowPlane>,
     /// True for parts that come from a prefab (not editable in place).
     pub from_prefab: bool,

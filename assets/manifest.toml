@@ -634,7 +634,7 @@ ao = { strength = 0.9, distance = 0.5 }
 [models.selftest_ao_raw]
 file = "models/proxies/selftest-ao.gltf"
 
-# The shadows step (selftest::shadows, ADR 0024): a floor, a post that
+# The shadows step (selftest::shadows, ADR 0025): a floor, a post that
 # casts its shape and a ball held up that casts by tier.
 [models.selftest_shadow_floor]
 file = "models/proxies/selftest-shadow-floor.prim.ron"

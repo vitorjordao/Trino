@@ -537,7 +537,7 @@ fn the_web_warns_past_a_phones_budget() {
     assert!(w[0].contains("calls") && w[1].contains("tris"), "{w:?}");
 }
 
-/// Shadows (ADR 0024): a floor that receives and rocks that cast. The
+/// Shadows (ADR 0025): a floor that receives and rocks that cast. The
 /// estimate counts each tier's casters as its renderer plans them (blobs
 /// on the N64, the `Mesh` ones past its planar budget casting nothing;
 /// projected shapes on the 3DS; the map on the PC), the N64's blobs cost

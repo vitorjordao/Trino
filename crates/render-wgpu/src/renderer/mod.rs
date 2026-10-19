@@ -409,6 +409,14 @@ pub struct PcRenderer {
     vi_pipeline: wgpu::RenderPipeline,
     vi_tex: wgpu::Texture,
     strict: bool,
+    /// The main screen's safe area when the host knows better than the
+    /// profile (a test, a TV's overscan setting).
+    safe_area: Option<trino_core::Insets>,
+    /// The window's unsafe borders, window pixels (`left, top, right,
+    /// bottom`): a phone's notch and home bar on the Web.
+    window_safe: [f32; 4],
+    /// The last UI frame's counts ([`Renderer::ui_stats`]).
+    ui_stats: Option<trino_core::UiStats>,
     /// The 3DS profile's touch screen (320×240, 2D and 3D).
     second: Option<SecondScreen>,
     /// "name (backend)" of the GPU adapter.
@@ -2030,6 +2038,9 @@ impl PcRenderer {
             vi_pipeline,
             vi_tex,
             strict,
+            safe_area: None,
+            window_safe: [0.0; 4],
+            ui_stats: None,
             second,
             screen: 0,
             main_cmds: 0,
@@ -2196,6 +2207,28 @@ impl PcRenderer {
     /// Defaults to off; `TRINO_STRICT=1` enables it.
     pub fn set_strict(&mut self, on: bool) {
         self.strict = on;
+    }
+
+    /// Override the main screen's safe area ([`Renderer::safe_area`]);
+    /// `None` goes back to the profile's (`Caps::safe_area`: the N64's TV
+    /// overscan, zero elsewhere).
+    pub fn set_safe_area(&mut self, insets: Option<trino_core::Insets>) {
+        self.safe_area = insets;
+    }
+
+    /// The window's unsafe borders in window pixels (`left, top, right,
+    /// bottom`; the Web's CSS `env(safe-area-inset-*)` × the device pixel
+    /// ratio): [`Renderer::safe_area`] adds what of them the letterbox's
+    /// bars do not already cover, in picture pixels, as the window and
+    /// the picture change size.
+    pub fn set_window_safe_area(&mut self, window: [f32; 4]) {
+        self.window_safe = window;
+    }
+
+    /// The counts the UI system reported last ([`trino_core::ui`]): nodes
+    /// laid out, draws, overflowing texts.
+    pub fn last_ui_stats(&self) -> Option<trino_core::UiStats> {
+        self.ui_stats
     }
 
     /// The console profile this renderer simulates.
@@ -3273,7 +3306,7 @@ impl PcRenderer {
         }
     }
 
-    /// The batch's shadow triangles (ADR 0024): blobs, then planar ones,
+    /// The batch's shadow triangles (ADR 0025): blobs, then planar ones,
     /// each far to near; a run drawn once per pixel goes in twice (mark,
     /// apply).
     fn push_shadow_runs(&mut self) {
@@ -3334,7 +3367,7 @@ impl PcRenderer {
     }
 
     /// The shadow `params.shadow` casts for a draw of `model` at `matrix`
-    /// (ADR 0024): a blob or a planar shadow into the batch's shadow
+    /// (ADR 0025): a blob or a planar shadow into the batch's shadow
     /// bucket. Every profile draws them like its console.
     fn cast_shadow(&mut self, model: ModelId, matrix: &Mat34, params: &ModelParams) {
         use trino_core::shadow::{self as sh, ShadowPlan};
@@ -5179,6 +5212,55 @@ impl Renderer for PcRenderer {
         }
     }
 
+    fn safe_area(&self, screen: Screen) -> trino_core::Insets {
+        let own = match (screen, self.safe_area) {
+            (Screen::Top, Some(insets)) => insets,
+            (Screen::Top, None) => trino_core::Insets::symmetric(
+                self.caps.safe_area.0 as u16,
+                self.caps.safe_area.1 as u16,
+            ),
+            (Screen::Bottom, _) => return trino_core::Insets::ZERO,
+        };
+        match &self.surface {
+            Some(ss) if self.window_safe.iter().any(|v| *v > 0.0) => {
+                let window = picture_insets(
+                    self.internal_size,
+                    (ss.config.width, ss.config.height),
+                    self.window_safe,
+                );
+                trino_core::Insets {
+                    left: own.left.max(window.left),
+                    top: own.top.max(window.top),
+                    right: own.right.max(window.right),
+                    bottom: own.bottom.max(window.bottom),
+                }
+            }
+            _ => own,
+        }
+    }
+
+    fn ui_stats(&mut self, stats: trino_core::UiStats) {
+        self.ui_stats = Some(stats);
+        if self.strict {
+            if stats.nodes > self.caps.max_ui_nodes {
+                panic!(
+                    "strict mode: a UI screen laid out {} nodes, over the {:?} profile's {} \
+                     (Caps::max_ui_nodes) — fewer list items or nodes; `cargo xtask ui \
+                     check` reports it per target",
+                    stats.nodes, self.profile, self.caps.max_ui_nodes
+                );
+            }
+            if stats.draws > self.caps.max_ui_draws {
+                panic!(
+                    "strict mode: a UI screen drew {} fills, sprites and glyphs this frame, \
+                     over the {:?} profile's {} (Caps::max_ui_draws) — less text or fewer \
+                     nodes; `cargo xtask ui check` reports it per target",
+                    stats.draws, self.profile, self.caps.max_ui_draws
+                );
+            }
+        }
+    }
+
     fn end_frame(&mut self) {
         self.flush_model_batch();
         self.frame_stats.shadows = self.shadows.stats;
@@ -5316,6 +5398,25 @@ fn present_rect(internal: (u32, u32), surface: (u32, u32)) -> (f32, f32, f32, f3
     let scale = if fit >= 1.0 { fit.floor() } else { fit };
     let (vw, vh) = (iw * scale, ih * scale);
     ((sw - vw) * 0.5, (sh - vh) * 0.5, vw, vh)
+}
+
+/// The window's unsafe borders (`left, top, right, bottom`, window
+/// pixels) as picture pixels: what the letterbox's bars leave of each,
+/// over the upscale, rounded up so nothing lands under a notch.
+fn picture_insets(
+    internal: (u32, u32),
+    surface: (u32, u32),
+    window: [f32; 4],
+) -> trino_core::Insets {
+    let (x, y, w, _) = present_rect(internal, surface);
+    let k = (w / internal.0.max(1) as f32).max(1e-3);
+    let inside = |inset: f32, bar: f32| ((inset - bar).max(0.0) / k).ceil() as u16;
+    trino_core::Insets {
+        left: inside(window[0], x),
+        top: inside(window[1], y),
+        right: inside(window[2], x),
+        bottom: inside(window[3], y),
+    }
 }
 
 /// A picture's place in the window: `(x, y, width, height)`, pixels.
@@ -5461,6 +5562,23 @@ mod present_tests {
             window_to_screen((400, 240), s, (1280, 960), 250.0, 600.0),
             None
         );
+    }
+
+    #[test]
+    fn window_insets_become_picture_insets_past_the_letterbox() {
+        // A phone in landscape, 2532×1170 device pixels, a 141 px notch on
+        // the left and a 63 px home bar at the bottom; a 320×240 picture
+        // at ×4 (1280×960) leaves bars of 626 px left and right and 105 px
+        // top and bottom: they already cover both.
+        let i = picture_insets((320, 240), (2532, 1170), [141.0, 0.0, 141.0, 63.0]);
+        assert_eq!(i, trino_core::Insets::ZERO);
+        // A picture of half the device pixels fills the window at ×2: the
+        // notch and the home bar land inside it, halved and rounded up.
+        let i = picture_insets((1266, 585), (2532, 1170), [141.0, 0.0, 141.0, 63.0]);
+        assert_eq!((i.left, i.top, i.right, i.bottom), (71, 0, 71, 32));
+        // Partly covered by the bar: only the rest counts.
+        let i = picture_insets((640, 480), (1400, 960), [100.0, 0.0, 0.0, 0.0]);
+        assert_eq!(i.left, 20);
     }
 
     #[test]

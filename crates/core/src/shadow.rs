@@ -1,6 +1,6 @@
 //! Shadows: every caster grounded on every target, each the way its
 //! hardware affords ([`ShadowTier`], from [`crate::Caps::shadow_tier`], ADR
-//! 0024). One component on the draw ([`ModelParams::shadow`],
+//! 0025). One component on the draw ([`ModelParams::shadow`],
 //! [`ShadowCast`]), one setting per frame ([`ShadowSettings`],
 //! [`crate::Renderer::set_shadows`]) and the surfaces shadows land on
 //! ([`ShadowPlane`], [`crate::Renderer::set_shadow_receivers`]):

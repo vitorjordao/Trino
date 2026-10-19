@@ -334,7 +334,7 @@ pub const TSCN_MAGIC: &[u8; 4] = b"TSCN";
 /// levels). v3: nodes end with the surface's gloss, texture filter and
 /// detail layer (8 bytes). v4: then a water surface (28 bytes, ADR 0015).
 /// v5: the environment ends with the shadows (16 bytes) and nodes with
-/// what they cast and the receiver they are (28 bytes, ADR 0024).
+/// what they cast and the receiver they are (28 bytes, ADR 0025).
 /// Older blobs are refused: rebake the scene.
 pub const TSCN_VERSION: u16 = 5;
 pub const TSCN_HEADER: usize = 12;

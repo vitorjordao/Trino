@@ -387,7 +387,24 @@ fn assets_pc_bakes_the_repo_manifest() {
     let fonts = declared(&["fonts"]);
     assert!(fonts > 0);
     let mix = root().join("assets/audio.toml").exists() as usize;
-    assert_eq!(count, all + fonts + mix, "every manifest entry is baked");
+    // UI screens (`ui/*.ui.ron`) and string tables (`assets/i18n/*.ron`)
+    // bake to blobs with no manifest entry (issue #58).
+    let files = |dir: &str, ext: &str| {
+        std::fs::read_dir(root().join(dir))
+            .map(|d| {
+                d.flatten()
+                    .filter(|e| e.file_name().to_string_lossy().ends_with(ext))
+                    .count()
+            })
+            .unwrap_or(0)
+    };
+    let ui = files("ui", ".ui.ron") + files("assets/i18n", ".ron");
+    assert!(ui > 0, "the self-test's screen");
+    assert_eq!(
+        count,
+        all + fonts + mix + ui,
+        "every manifest entry is baked"
+    );
     let index = std::fs::read_to_string(root().join("target/assets/pc/index.toml")).unwrap();
     assert_eq!(index.matches("[[asset]]").count(), count);
     let kind = |k: &str| index.matches(&format!("kind = \"{k}\"")).count();
@@ -399,7 +416,10 @@ fn assets_pc_bakes_the_repo_manifest() {
     assert_eq!(kind("sprite"), declared(&["sprites"]) + fonts);
     // Baked scenes (TSCN) and particle effects (TPFX) are blobs, served
     // like any other blob.
-    assert_eq!(kind("blob"), declared(&["blobs", "scenes", "particles"]));
+    assert_eq!(
+        kind("blob"),
+        declared(&["blobs", "scenes", "particles"]) + ui
+    );
 }
 
 #[test]

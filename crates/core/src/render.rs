@@ -570,7 +570,7 @@ pub trait Renderer {
     /// lights: set it every frame.
     fn set_ambient_occlusion(&mut self, _ao: Option<&crate::ao::AmbientOcclusion>) {}
 
-    /// Shadows for this frame ([`crate::shadow`], ADR 0024): the draws
+    /// Shadows for this frame ([`crate::shadow`], ADR 0025): the draws
     /// whose [`ModelParams::shadow`] casts one get it at the tier
     /// [`Caps::shadow_tier`] gives (capped by `tier_max` and, on the PC, the
     /// quality preset). `None` turns them off. **Cleared at
@@ -769,6 +769,26 @@ pub trait Renderer {
             Screen::Bottom => self.second_screen(),
         }
     }
+
+    /// Pixels of `screen` a UI keeps clear at each edge ([`crate::ui`]):
+    /// the main screen's [`Caps::safe_area`] (the N64's TV overscan) by
+    /// default, nothing on the bottom screen. The Web reports the page's
+    /// insets (a phone's notch, `env(safe-area-inset-*)`).
+    fn safe_area(&self, screen: Screen) -> crate::ui::Insets {
+        match screen {
+            Screen::Top => {
+                let (x, y) = self.caps().safe_area;
+                crate::ui::Insets::symmetric(x as u16, y as u16)
+            }
+            Screen::Bottom => crate::ui::Insets::ZERO,
+        }
+    }
+
+    /// What a UI screen just cost ([`crate::ui::Ui::draw`] reports it):
+    /// PC strict mode fails a screen past [`Caps::max_ui_nodes`] or
+    /// [`Caps::max_ui_draws`] (the N64's budget on the N64 profile). A no-op
+    /// on the consoles.
+    fn ui_stats(&mut self, _stats: crate::ui::UiStats) {}
 
     /// **Test hook** (slow, never per frame): color of the last finished
     /// frame at internal pixel `(x, y)`, or `None` if this backend cannot

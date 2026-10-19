@@ -10,7 +10,7 @@
 //! estimated on its console's paths with its own variants, and reports the
 //! memory its scene's models take against [`trino_core::Caps::ram_bytes`].
 //!
-//! With `environment.shadows` on, each platform's shadows too (ADR 0024):
+//! With `environment.shadows` on, each platform's shadows too (ADR 0025):
 //! its tier, the casters drawn as blobs, projected or in the map, the
 //! N64's planar casters past its budget, and the blobs' N64 CPU time.
 //!

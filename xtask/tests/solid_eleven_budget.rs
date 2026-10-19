@@ -174,7 +174,7 @@ const BASELINE: &str = "tests/perf/solid_eleven_work.toml";
 
 /// The scripted match's cost, pinned: every 30th frame's 3D draws, source
 /// triangles, the 3DS GPU's share (`gpu_check` on the 400-wide top
-/// screen), the blob shadows cast (ADR 0024: each is a few CPU triangles
+/// screen), the blob shadows cast (ADR 0025: each is a few CPU triangles
 /// on the consoles) and the 2D overlay's rectangles and glyphs.
 /// Deterministic (the sim is fixed point, the camera and culling are the
 /// game's), so a number that moves is a content or engine change: rewrite with

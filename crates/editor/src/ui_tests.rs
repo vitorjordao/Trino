@@ -431,6 +431,15 @@ fn commands_edit_save_and_export_in_a_temp_project() {
 fn temp_project_app(
     size: egui::Vec2,
 ) -> Option<(Harness<'static, App>, tempfile::TempDir, std::path::PathBuf)> {
+    temp_project_app_with(size, |_, _| {})
+}
+
+/// [`temp_project_app`] with `setup` run on the project folder (the repo,
+/// the project) before the editor opens it.
+fn temp_project_app_with(
+    size: egui::Vec2,
+    setup: impl FnOnce(&std::path::Path, &std::path::Path),
+) -> Option<(Harness<'static, App>, tempfile::TempDir, std::path::PathBuf)> {
     let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .canonicalize()
@@ -440,13 +449,14 @@ fn temp_project_app(
     let base = repo.join("target/test-projects");
     std::fs::create_dir_all(&base).unwrap();
     let tmp = tempfile::tempdir_in(&base).unwrap();
-    for dir in ["assets", "scenes", "prefabs"] {
+    for dir in ["assets", "scenes", "prefabs", "ui"] {
         copy_tree(&repo.join(dir), &tmp.path().join(dir));
     }
     copy_tree(
         &repo.join("examples/platformer/src"),
         &tmp.path().join("examples/platformer/src"),
     );
+    setup(&repo, tmp.path());
     std::env::set_current_dir(tmp.path()).unwrap();
     // SAFETY: --ignored --test-threads=1 only (module docs).
     unsafe { std::env::set_var("TRINO_EDITOR_SCENE", "scenes/showcase.scene.ron") };
@@ -1026,7 +1036,7 @@ fn editor_layout_is_clean_at_minimum_and_default_sizes() {
         h.state_mut().inspect_focus = Some("groups".into());
         h.run_steps(4);
         crate::layout_audit::assert_clean(&h, size, true, &what("asset groups"));
-        // Shadows (ADR 0024): the scene's section with its tier lines, an
+        // Shadows (ADR 0025): the scene's section with its tier lines, an
         // entity's Shadow component.
         h.state_mut().doc.scene.environment.shadows = Some(trino_scene::ShadowsDef::default());
         let rock_shadow = trino_scene::ShadowComponent {
@@ -1041,6 +1051,17 @@ fn editor_layout_is_clean_at_minimum_and_default_sizes() {
         h.state_mut().cmds.push(Cmd::Select(Some(rock.clone())));
         h.run_steps(3);
         crate::layout_audit::assert_clean(&h, size, true, &what("Shadow component"));
+        // The UI tab (#58): the self-test screen with a node selected (its
+        // inspector), then on the 3DS (both screens) with another.
+        h.state_mut().cmds.push(Cmd::FocusTab(Tab::Ui));
+        h.state_mut().ui_screens.selected = Some(vec![1, 0]);
+        h.run_steps(4);
+        assert!(h.query_by_label("UI preview").is_some());
+        crate::layout_audit::assert_clean(&h, size, true, &what("UI tab"));
+        h.state_mut().ui_screens.target = 1;
+        h.state_mut().ui_screens.selected = Some(vec![2]);
+        h.run_steps(4);
+        crate::layout_audit::assert_clean(&h, size, true, &what("UI tab on the 3DS"));
         leave_temp_project(&repo);
     }
 }
@@ -2136,7 +2157,7 @@ fn ambient_occlusion_panel_view_modes_and_baking() {
     leave_temp_project(&repo);
 }
 
-/// Shadows from the editor (ADR 0024): the scene's Shadows section (on,
+/// Shadows from the editor (ADR 0025): the scene's Shadows section (on,
 /// saved to the file, undoable), an entity's Shadow component from Add
 /// component (a model casts, a bare collider receives), the Scene view
 /// drawing them at each previewed profile's tier (the map on the PC, blobs
@@ -2781,5 +2802,221 @@ fn quality_tab_writes_the_presets_and_the_game_view_previews_them() {
     assert_eq!(gv.quality, QualityPreset::Ultra);
     assert_eq!(gv.render_scale(), 1.25);
     assert_eq!(gv.quality_settings().unwrap().lod_bias, 1.5);
+    leave_temp_project(&repo);
+}
+
+/// A language longer than English, for the UI tab's overflow highlight.
+const PT_BR: &str = r#"Strings(
+    lang: "pt-BR",
+    fallback: "en-US",
+    entries: {
+        "pause.title": "Pausado",
+        "pause.resume": "Continuar",
+        "pause.options": "Opcoes",
+        "pause.quit": "Voltar para a tela inicial",
+    },
+)
+"#;
+
+/// The UI tab (#58), both ways: `TRINO_EDITOR_UI` opens it on a screen; a
+/// screen picked, a node selected in the tree and its text edited → the
+/// file on disk (its comments kept); the file edited outside → the tab
+/// (not written back); a node added into the menu, duplicated, deleted,
+/// dragged before a sibling and moved up; on the 3DS the menu is on the
+/// touch screen; a language whose text is too long is highlighted and
+/// listed; clicks on the preview and on an issue select the node.
+#[test]
+#[ignore = "changes cwd/env: run alone with --ignored --test-threads=1"]
+fn ui_tab_edits_screens_and_follows_their_files() {
+    use egui::accesskit::Role;
+    use egui::{Event, PointerButton};
+    use trino_core::Screen;
+    use trino_scene::ui::ScreenDef;
+    let setup = |repo: &std::path::Path, dir: &std::path::Path| {
+        for name in ["title", "pause", "options"] {
+            let text = std::fs::read_to_string(
+                repo.join(format!("templates/standalone/ui/{name}.ui.ron")),
+            )
+            .unwrap();
+            let text = text.replace("{{name}}", "orbit-cat");
+            std::fs::write(dir.join(format!("ui/{name}.ui.ron")), text).unwrap();
+        }
+        std::fs::create_dir_all(dir.join("assets/i18n")).unwrap();
+        std::fs::copy(
+            repo.join("templates/standalone/assets/i18n/en-US.ron"),
+            dir.join("assets/i18n/en-US.ron"),
+        )
+        .unwrap();
+        std::fs::write(dir.join("assets/i18n/pt-BR.ron"), PT_BR).unwrap();
+    };
+    // SAFETY: --ignored --test-threads=1 only (module docs).
+    unsafe { std::env::set_var("TRINO_EDITOR_UI", "options,n64") };
+    let started = temp_project_app_with(egui::vec2(1600.0, 1000.0), setup);
+    // SAFETY: as above.
+    unsafe { std::env::remove_var("TRINO_EDITOR_UI") };
+    let Some((mut h, _tmp, repo)) = started else {
+        return;
+    };
+    const PAUSE: &str = "ui/pause.ui.ron";
+    let disk = || ScreenDef::from_ron(&std::fs::read_to_string(PAUSE).unwrap()).unwrap();
+    let ids = |d: &ScreenDef| -> Vec<String> {
+        let stack = d.root.at(&[1, 0]).unwrap();
+        stack.children.iter().map(|c| c.id.clone()).collect()
+    };
+    let node = |a: &App, path: &[usize]| a.ui_screens.def.as_ref()?.root.at(path).cloned();
+
+    // The hook: the UI tab, on Options, the N64's preview.
+    h.run_steps(3);
+    assert!(
+        h.query_by_label("UI screen").is_some(),
+        "the UI tab is in front"
+    );
+    assert_eq!(h.state().ui_screens.name(), "options");
+    assert_eq!(
+        h.state().ui_screens.preview.as_ref().unwrap().size,
+        (320, 240)
+    );
+
+    // Pause, its Resume button selected in the tree, its text edited.
+    pick(&mut h, "UI screen", "pause");
+    assert_eq!(h.state().ui_screens.name(), "pause");
+    click(&mut h, "Button \"resume\"");
+    assert_eq!(h.state().ui_screens.selected, Some(vec![1, 0, 1]));
+    // The pad's order from the first focus: Resume, Options, Quit.
+    let order = &h.state().ui_screens.preview.as_ref().unwrap().order;
+    assert_eq!(order.len(), 3, "{order:?}");
+    h.get_by_label("Node text").focus();
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(Event::Text("Continue".into()));
+    h.key_press(egui::Key::Enter);
+    wait_for(&mut h, "the edit to be written", |a| {
+        !a.ui_screens.dirty && node(a, &[1, 0, 1]).is_some_and(|n| n.text == "Continue")
+    });
+    let text = std::fs::read_to_string(PAUSE).unwrap();
+    assert!(
+        text.starts_with("// The pause menu"),
+        "comments kept:\n{text}"
+    );
+    assert_eq!(disk().root.at(&[1, 0, 1]).unwrap().text, "Continue");
+
+    // Edited outside: the tab follows (the selection kept) and doesn't
+    // write it back.
+    let outside = text.replace("Quit to title", "Leave");
+    std::fs::write(PAUSE, &outside).unwrap();
+    wait_for(&mut h, "the outside edit", |a| {
+        node(a, &[1, 0, 3]).is_some_and(|n| n.text == "Leave")
+    });
+    assert_eq!(h.state().ui_screens.selected, Some(vec![1, 0, 1]));
+    h.run_steps(20);
+    assert_eq!(std::fs::read_to_string(PAUSE).unwrap(), outside);
+
+    // A text added into the menu's stack, Options duplicated and deleted.
+    click(&mut h, "Stack");
+    press(&mut h, Role::Button, "Add node");
+    press(&mut h, Role::Button, "Add Text");
+    egui::Popup::close_all(&h.ctx);
+    h.run_steps(3);
+    assert_eq!(h.state().ui_screens.selected, Some(vec![1, 0, 4]));
+    click(&mut h, "Button \"options\"");
+    press(&mut h, Role::Button, "Duplicate node");
+    assert_eq!(h.state().ui_screens.selected, Some(vec![1, 0, 3]));
+    assert_eq!(node(h.state(), &[1, 0, 3]).unwrap().id, "options2");
+    press(&mut h, Role::Button, "Delete node");
+    wait_for(&mut h, "the new node to be written", |a| {
+        !a.ui_screens.dirty
+    });
+    assert_eq!(ids(&disk()), ["", "resume", "options", "quit", ""]);
+    assert_eq!(disk().root.at(&[1, 0, 4]).unwrap().text, "Text");
+
+    // Quit dragged onto Resume's upper half: before it.
+    let from = h.get_by_label("Button \"quit\"").rect();
+    let onto = h.get_by_label("Button \"resume\"").rect();
+    let (a, b) = (from.center(), egui::pos2(onto.center().x, onto.min.y + 4.0));
+    h.hover_at(a);
+    h.run_steps(1);
+    let button = |h: &Harness<'static, App>, pos, pressed| {
+        h.event(Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        })
+    };
+    button(&h, a, true);
+    h.run_steps(1);
+    for k in 1..=10 {
+        h.hover_at(a + (b - a) * (k as f32 / 10.0));
+        h.run_steps(1);
+    }
+    button(&h, b, false);
+    h.run_steps(3);
+    assert_eq!(h.state().ui_screens.selected, Some(vec![1, 0, 1]));
+    // And the new text moved up past Options.
+    click(&mut h, "Text 'Text'");
+    press(&mut h, Role::Button, "Move node up");
+    wait_for(&mut h, "the moves to be written", |a| !a.ui_screens.dirty);
+    assert_eq!(ids(&disk()), ["", "quit", "resume", "", "options"]);
+
+    // The title on the 3DS: the menu on the touch screen, both shown.
+    pick(&mut h, "UI target", "3DS");
+    pick(&mut h, "UI screen", "title");
+    let s = &h.state().ui_screens;
+    let p = s.preview.as_ref().unwrap();
+    assert_eq!((p.size, p.bottom_size), ((400, 240), Some((320, 240))));
+    let play = p.paths.iter().position(|q| q == &[2, 0]).unwrap();
+    let slot =
+        p.ui.slots()
+            .iter()
+            .find(|s| s.node as usize == play)
+            .unwrap();
+    assert_eq!(slot.on, Screen::Bottom);
+    assert!(p.placed.unwrap().bottom.is_some());
+    assert!(s.issues.is_empty(), "{:?}", s.issues);
+
+    // Pause in Portuguese: Quit's text runs past its button.
+    pick(&mut h, "UI language", "pt-BR");
+    pick(&mut h, "UI screen", "pause");
+    let s = &h.state().ui_screens;
+    let quit = s
+        .def
+        .as_ref()
+        .unwrap()
+        .nodes()
+        .iter()
+        .position(|(_, n)| n.id == "quit");
+    assert_eq!(s.overflowing(), [quit.unwrap()]);
+    assert!(h.query_by_label_contains("1 overflowing").is_some());
+    let issue = h.get_by_label_contains("text overflows").rect();
+    // A click on the preview selects what is under it (Options, on the
+    // 3DS's top screen); one on the issue selects Quit.
+    let at = h.state().ui_screens.node_point(&[1, 0, 4]).unwrap();
+    h.hover_at(at);
+    button(&h, at, true);
+    button(&h, at, false);
+    h.run_steps(3);
+    assert_eq!(h.state().ui_screens.selected, Some(vec![1, 0, 4]));
+    h.hover_at(issue.center());
+    button(&h, issue.center(), true);
+    button(&h, issue.center(), false);
+    h.run_steps(3);
+    assert_eq!(h.state().ui_screens.selected, Some(vec![1, 0, 1]));
+    // Nothing above was written as a side effect of looking.
+    assert_eq!(ids(&disk()), ["", "quit", "resume", "", "options"]);
+
+    // A new screen: written, opened, valid.
+    press(&mut h, Role::Button, "New screen");
+    h.get_by_label("New screen name").focus();
+    h.run_steps(2);
+    h.event(Event::Text("shop".into()));
+    h.run_steps(2);
+    press(&mut h, Role::Button, "Create screen");
+    wait_for(&mut h, "the new screen to be written", |a| {
+        !a.ui_screens.dirty && std::path::Path::new("ui/shop.ui.ron").exists()
+    });
+    assert_eq!(h.state().ui_screens.name(), "shop");
+    let shop = ScreenDef::load(std::path::Path::new("ui/shop.ui.ron")).unwrap();
+    assert!(trino_scene::ui::validate(&shop).is_empty());
+    assert!(h.state().ui_screens.files.len() >= 5);
     leave_temp_project(&repo);
 }

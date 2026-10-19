@@ -219,7 +219,7 @@ pub struct ShowcaseGame {
     /// scene's `AO`, none from a baked scene unless the host sets it).
     pub ao: Option<AmbientOcclusion>,
     /// The scene's shadows and the first [`MAX_RECEIVERS`] receivers
-    /// (ADR 0024: `SHADOWS`/`RECEIVERS`, or the baked scene's).
+    /// (ADR 0025: `SHADOWS`/`RECEIVERS`, or the baked scene's).
     pub shadows: Option<ShadowSettings>,
     receivers: [ShadowPlane; MAX_RECEIVERS],
     n_receivers: u8,

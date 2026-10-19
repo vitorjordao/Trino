@@ -73,6 +73,14 @@ fn provided_renderer_methods_are_harmless_defaults() {
     assert_eq!(dyn_r.read_pixel(0, 0), None);
     // No quality preset biases LODs unless the backend applies one (#55).
     assert_eq!(dyn_r.lod_bias(), 1.0);
+    // The caps' safe area (none on the 3DS) and no UI budget check (#58).
+    assert_eq!(dyn_r.safe_area(Screen::Top), trino_core::Insets::ZERO);
+    assert_eq!(dyn_r.safe_area(Screen::Bottom), trino_core::Insets::ZERO);
+    dyn_r.ui_stats(trino_core::UiStats {
+        nodes: u16::MAX,
+        draws: u16::MAX,
+        ..Default::default()
+    });
     // None of the defaults draws through the required methods.
     assert!(r.sprites.is_empty() && r.models.is_empty());
     assert_eq!(r.frames, 1);

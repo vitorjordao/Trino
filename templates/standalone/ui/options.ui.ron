@@ -1,0 +1,35 @@
+// Options: the music and effects volumes (sliders bound to values the
+// game applies with `audio.set_bus_volume`), and where the host has them,
+// the engine's Graphics page (the PC's and the Web's quality presets) and
+// the Controls screen (the PC's key rebinding). `preview` holds what the
+// editor and `ui shot` show; the game sets the real values.
+(
+    version: 1,
+    name: "options",
+    focus: "music",
+    on_back: "back",
+    preview: {"music": Int(8), "sfx": Int(10), "graphics": Bool(true), "rebind": Bool(true)},
+    root: (
+        children: [
+            (kind: Rect(), anchor: Fill, bleed: true, color: Some((0, 0, 0, 200))),
+            (
+                kind: Rect(border: 1, border_color: Some((255, 244, 200, 255))),
+                anchor: Center,
+                padding: (12, 10, 12, 12),
+                children: [
+                    (
+                        kind: Stack(gap: 6, align: Stretch),
+                        children: [
+                            (kind: Text, key: "options.title", text: "Options", text_scale: 2, align: Center),
+                            (kind: Slider(min: 0, max: 10, step: 1), id: "music", key: "options.music", text: "Music", bind: "music", size: (Px(160), Px(14))),
+                            (kind: Slider(min: 0, max: 10, step: 1), id: "sfx", key: "options.sfx", text: "Effects", bind: "sfx", size: (Px(160), Px(14))),
+                            (kind: Button, id: "graphics", key: "options.graphics", text: "Graphics", on_click: "graphics", visible_on: [Pc, Web], visible_if: "graphics", size: (Px(160), Px(18))),
+                            (kind: Button, id: "controls", key: "options.controls", text: "Controls", on_click: "controls", visible_on: [Pc], visible_if: "rebind", size: (Px(160), Px(18))),
+                            (kind: Button, id: "back", key: "options.back", text: "Back", on_click: "back", size: (Px(160), Px(18))),
+                        ],
+                    ),
+                ],
+            ),
+        ],
+    ),
+)

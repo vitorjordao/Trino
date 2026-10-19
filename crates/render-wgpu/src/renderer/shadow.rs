@@ -1,5 +1,5 @@
 //! Blob and planar shadows on the PC renderer ([`trino_core::shadow`], ADR
-//! 0024): the triangles come from the core (blob quads, flattened casters,
+//! 0025): the triangles come from the core (blob quads, flattened casters,
 //! cut to their receiver and moved a few depth steps in front of it); this
 //! module owns the pipelines that blend them over the 3D.
 //!

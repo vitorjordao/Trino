@@ -48,6 +48,7 @@ pub mod scene;
 pub mod shadow;
 pub mod text;
 pub mod tilemap;
+pub mod ui;
 pub mod vis;
 pub mod water;
 
@@ -59,7 +60,7 @@ pub use audio::{
     MAX_DUCK_RULES, MixerConfig, MusicId, SoundBlob, SoundCodec, SoundId, SoundParams, SoundSource,
     VoiceId, spatialize,
 };
-pub use caps::{Caps, CapsError, HwTier};
+pub use caps::{Caps, CapsError, Family, HwTier};
 pub use collide::{MoveResult, move_and_collide};
 pub use entity::{Entity, EntityId, EntityStore};
 pub use game::Game;
@@ -99,5 +100,6 @@ pub use shadow::{
 };
 pub use text::{BitmapFont, GlyphIndex, TextBuf};
 pub use tilemap::{TILE_SIZE, Tilemap, TilemapError};
+pub use ui::{Insets, Ui, UiEnv, UiEvent, UiEvents, UiScreen, UiStats};
 pub use vis::{CellGroups, Cells, MAX_CELLS, NO_CELL, Portal, VisVolume};
 pub use water::{MAX_RIPPLES, Ripple, RippleBuffer, Water, WaterState, WaterTier};

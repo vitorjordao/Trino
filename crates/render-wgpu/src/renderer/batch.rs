@@ -48,7 +48,7 @@ pub enum TriKind {
     Lit,
     /// A water surface (ADR 0015): translucent, after the batch's others.
     Water,
-    /// Blob and planar shadows (ADR 0024, `shadow.rs`): blended over the
+    /// Blob and planar shadows (ADR 0025, `shadow.rs`): blended over the
     /// batch's opaque triangles, before its water.
     Shadow,
     /// Planar shadows drawn once per pixel: the alpha mark, then the blend

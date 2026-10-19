@@ -750,7 +750,7 @@ static __attribute__((noinline)) uint32_t trino_3d_water_body(void* sprite, void
     return dt != NULL;
 }
 
-// Shadows (ADR 0024): blob and planar shadow triangles blend the shade's
+// Shadows (ADR 0025): blob and planar shadow triangles blend the shade's
 // color over the 3D by its alpha, z-tested and never written, like water
 // (the core moved them a few z steps in front of their receiver).
 // `texels`: the blob's `size`² I8 falloff in uncached RDRAM, its alpha

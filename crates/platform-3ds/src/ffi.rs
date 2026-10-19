@@ -81,7 +81,7 @@ unsafe extern "C" {
     /// vertex color, blended over the frame without writing depth, the
     /// detail layer offset by `scroll` = `u << 16 | v` in 1/65536 of its
     /// repeat); `detail` (null = none) is multiplied over the texture.
-    /// Bit 9: a shadow (ADR 0024: the vertex color blended by its alpha,
+    /// Bit 9: a shadow (ADR 0025: the vertex color blended by its alpha,
     /// depth tested, not written), bits 10..12 its stencil part (the
     /// shim's `trino_shadow_stencil`: 1 once, 2 mark, 3 on the mark, 4
     /// unmark), bit 13 times the blob texture's alpha (`trino_shadow_blob`).

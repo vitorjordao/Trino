@@ -278,7 +278,7 @@ pub fn gen_all(repo_root: &Path, write_png: PngWriter) {
         [255, 190, 40, 255],
     );
     star.write_glb(&models.join("star.glb"));
-    // The player's shadow is the engine's (ADR 0024): no disc model.
+    // The player's shadow is the engine's (ADR 0025): no disc model.
 
     hud_sprites(&sprites, write_png);
 }

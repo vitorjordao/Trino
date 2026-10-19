@@ -663,7 +663,7 @@ fn entity(app: &mut App, ui: &mut egui::Ui, path: &[usize]) {
         e.collider = None;
     }
 
-    // Shadow (ADR 0024).
+    // Shadow (ADR 0025).
     let mut remove_shadow = false;
     if let Some(sh) = &mut e.shadow {
         let has_model = e.model.is_some();
@@ -2371,7 +2371,7 @@ fn ambient_occlusion(ui: &mut egui::Ui, ao: &mut Option<trino_scene::AmbientOccl
     }
 }
 
-/// Scene settings › Shadows (ADR 0024): one setting for every platform,
+/// Scene settings › Shadows (ADR 0025): one setting for every platform,
 /// each drawing it at its tier (the N64 blobs, the 3DS projects shapes,
 /// the PC and the Web a shadow map). The lines under it are what each
 /// tier draws from the scene camera.

@@ -175,7 +175,7 @@ impl ScenePlayer {
         r.set_light(&env.core_light());
         r.set_ambient_occlusion(env.core_ao().as_ref());
         let resolved = resolve_for(&self.scene, &self.lib, self.time, self.platform);
-        // Shadows (ADR 0024): the target's tier, onto the scene's receivers.
+        // Shadows (ADR 0025): the target's tier, onto the scene's receivers.
         r.set_shadows(resolved.shadows.as_ref());
         r.set_shadow_receivers(&resolved.receivers());
         let caps = r.caps();

@@ -1,4 +1,4 @@
-//! Shadows on the PC renderer, per tier (ADR 0024): the N64 profile draws
+//! Shadows on the PC renderer, per tier (ADR 0025): the N64 profile draws
 //! blobs (and projects its two hero casters), the 3DS profile projects
 //! every shape onto its receiver once per pixel, the native profile draws a
 //! shadow map. Goldens per tier (`tests/golden/pc/shadows_*`, `cargo xtask

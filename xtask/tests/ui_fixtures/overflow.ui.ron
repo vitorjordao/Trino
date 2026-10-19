@@ -1,0 +1,8 @@
+// `ui check` fixture: a sentence in a box two characters wide.
+(
+    version: 1,
+    name: "overflow",
+    root: (children: [
+        (kind: Text, text: "THIS SENTENCE DOES NOT FIT", size: (Px(12), Px(10))),
+    ]),
+)

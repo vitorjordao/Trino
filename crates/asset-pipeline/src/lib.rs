@@ -37,6 +37,7 @@ pub mod quality;
 pub mod resolve;
 pub mod texture;
 pub mod tier;
+pub mod ui;
 #[cfg(feature = "watch")]
 pub mod watch;
 

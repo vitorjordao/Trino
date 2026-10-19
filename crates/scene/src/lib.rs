@@ -38,6 +38,7 @@ pub mod material;
 pub mod platform;
 pub mod prefab;
 pub mod resolve;
+pub mod ui;
 
 pub use library::{Library, ModelBounds};
 pub use material::{DetailDef, FilterDef, MaterialDef, ShadingDef, WaterDef};
@@ -48,7 +49,7 @@ pub use resolve::{DrawItem, LodDraw, LodItem, Resolved, resolve, resolve_for};
 use serde::{Deserialize, Serialize};
 use trino_core::SpriteId;
 
-/// v7: shadows (issue #57, ADR 0024): `environment.shadows` and an entity's
+/// v7: shadows (issue #57, ADR 0025): `environment.shadows` and an entity's
 /// `shadow` (what its model casts, whether its top receives). v6: asset
 /// groups (issue #56): `requires`, the groups the scene needs
 /// loaded (`["boot"]` for every older file), and a cell's `groups`, what an
@@ -101,7 +102,7 @@ pub struct Environment {
     /// baked into model vertex colors — `trino_core::ao`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ao: Option<AmbientOcclusionDef>,
-    /// Shadows (`trino_core::shadow`, ADR 0024): each target draws its own
+    /// Shadows (`trino_core::shadow`, ADR 0025): each target draws its own
     /// tier (a blob on the N64, the caster's shape on the 3DS, a shadow
     /// map on the PC and the Web), capped by `tier_max`. Entities cast and
     /// receive through their `shadow` component.
@@ -336,7 +337,7 @@ impl ShadowsDef {
 }
 
 /// What an entity's model casts and whether shadows land on it
-/// (`trino_core::shadow`, ADR 0024). `shadow: ()` casts the tier's pick
+/// (`trino_core::shadow`, ADR 0025). `shadow: ()` casts the tier's pick
 /// with a half-meter blob.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
 pub struct ShadowComponent {
@@ -483,7 +484,7 @@ pub struct Entity {
     /// cells) — see `trino_core::vis`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vis: Option<VisComponent>,
-    /// What its model casts, whether shadows land on it (ADR 0024; drawn
+    /// What its model casts, whether shadows land on it (ADR 0025; drawn
     /// while `environment.shadows` is on).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shadow: Option<ShadowComponent>,

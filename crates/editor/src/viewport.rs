@@ -487,7 +487,7 @@ impl Viewport {
             ViewKind::Game => AoView::Game,
         });
         r.set_ambient_occlusion(env.core_ao().map(|a| rc.ao(a)).as_ref());
-        // The scene's shadows (ADR 0024) at the previewed profile's tier,
+        // The scene's shadows (ADR 0025) at the previewed profile's tier,
         // onto its receivers; the Scene view's menu turns them off or
         // paints them in the debug color.
         r.set_shadow_view(match self.kind {

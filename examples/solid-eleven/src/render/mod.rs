@@ -424,7 +424,7 @@ const AO: trino_core::AmbientOcclusion = trino_core::AmbientOcclusion {
     quality: trino_core::AoQuality::Low,
 };
 
-/// The engine's shadows (ADR 0024), in the drawing scale: on the PC every
+/// The engine's shadows (ADR 0025), in the drawing scale: on the PC every
 /// body part and the ball in the shadow map, which covers the pitch the
 /// camera sees; on the consoles a blob under each near player and the
 /// ball (the N64's and the 3DS's: 22 projected bodies would cost the 3DS

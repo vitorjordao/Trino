@@ -251,6 +251,16 @@ pub struct PcFrameTimes {
 }
 
 /// Microseconds since `t0`.
+/// The instance flags of [`PcRenderer::new_headless`]: the build's defaults
+/// without [`wgpu::InstanceFlags::DEBUG`], so no object names reach the
+/// driver, then the `WGPU_*` environment variables (`WGPU_DEBUG=1` puts the
+/// names back). On AMD RADV, `vkSetDebugUtilsObjectNameEXT` from one
+/// thread while another created its device crashed whole test binaries
+/// inside `libvulkan` (GitHub #94: 9 runs in 12 of `engine_checks`).
+pub fn headless_flags() -> wgpu::InstanceFlags {
+    (wgpu::InstanceFlags::from_build_config() - wgpu::InstanceFlags::DEBUG).with_env()
+}
+
 fn micros(t0: Instant) -> u32 {
     t0.elapsed().as_micros().min(u32::MAX as u128) as u32
 }
@@ -1419,8 +1429,15 @@ impl PcRenderer {
     }
 
     /// Offscreen-only renderer for tests and tooling.
+    ///
+    /// Its instance gives the driver no debug names ([`headless_flags`]):
+    /// tests create renderers on parallel threads, and naming objects then
+    /// crashed RADV's Vulkan loader (GitHub #94). `WGPU_DEBUG=1` turns the
+    /// names back on for a debugger or a capture tool.
     pub async fn new_headless(profile: SimProfile) -> Result<Self, RendererError> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+        desc.flags = headless_flags();
+        let instance = wgpu::Instance::new(desc);
         Self::init(instance, None, profile).await
     }
 
@@ -5583,6 +5600,22 @@ fn window_to_game(
         u * internal.0 as f32,
         v * internal.1 as f32,
     ))
+}
+
+#[cfg(test)]
+mod headless_tests {
+    /// Headless renderers name nothing for the driver (GitHub #94) unless
+    /// the run asks with `WGPU_DEBUG`, and keep the build's other flags.
+    #[test]
+    fn headless_instances_give_the_driver_no_debug_names() {
+        let flags = super::headless_flags();
+        let asked = std::env::var("WGPU_DEBUG").is_ok_and(|v| v != "0");
+        assert_eq!(flags.contains(wgpu::InstanceFlags::DEBUG), asked);
+        let rest = wgpu::InstanceFlags::from_build_config() - wgpu::InstanceFlags::DEBUG;
+        if std::env::vars().all(|(k, _)| !k.starts_with("WGPU_")) {
+            assert_eq!(flags, rest);
+        }
+    }
 }
 
 #[cfg(test)]

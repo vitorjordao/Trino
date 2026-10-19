@@ -87,6 +87,19 @@ MSAA, +2–10 ms without, on llvmpipe at 1080p. The price is a full-size clear a
 resolve: 1–3 ms on llvmpipe with 4× MSAA at half scale, nothing measurable without
 MSAA (Low and Medium, the presets with dynamic resolution on).
 
+The corner draws what targets of its own size draw: the same to the bit without MSAA on
+every driver tested (the upscale's UVs and texel clamps land on the same texels). With 4×
+MSAA, AMD's RADV (Renoir, Mesa 26) resolves a partly covered pixel 1/255 differently in a
+small target (240×136, 288×164) than in the range's 480×272 one; lavapipe resolves both
+the same (GitHub #93). Vulkan leaves a resolve's averaging to the implementation; RADV's
+compression is not the cause (`RADV_DEBUG=nodcc,nofmask,nohiz` changes nothing), and
+every differing pixel is a geometry edge, never the corner's border, so a step between
+scales shows no seam. The CAS sharpening then pushes a pixel away from its neighbours by
+up to `4k` (k = 1/8 to 1/5), turning that 1/255 into at most `(1 + 4k)/(1 − 4k)` (4/255
+at the presets' 0.4; 2–3/255 measured). The tests hold the two frames to exactly that:
+0 at 1×, 1/255 at 4× unsharpened, the CAS bound sharpened, and fewer than 0.5 % of the
+pixels over 1/255.
+
 Rejected: temporal upscalers (FSR 2/3, DLSS) — they need motion vectors, history and
 jitter the engine's T&L paths don't produce, and they are heavy for WebGL2. Spatial
 scaling and sharpening first; revisit when a game needs more.
@@ -220,7 +233,8 @@ game frames' intervals. WebGL2 never gets MSAA (ADR 0019).
   profile always drew; a scaled 3D under a crisp HUD; the AO cap; dynamic resolution
   within its range; the console profiles ignore quality; the bench picks in ≤ 3 s and
   restores the renderer; dynamic resolution's steps allocate nothing and draw what a
-  fixed scale draws. `dynres` and `pacing` unit tests: the PI settles a modeled frame
+  fixed scale draws (within one MSAA resolve rounding, §3: RADV
+  at 4× MSAA, exact on lavapipe). `dynres` and `pacing` unit tests: the PI settles a modeled frame
   on 16.6 ms within ±1 ms, its scale within ±5%, from any start; the limiter holds 30,
   60 and 120 fps within ±2%.
 - Measured (`xtask/tests/quality_shots.rs`, castle64's hub): on an AMD Radeon

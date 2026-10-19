@@ -11,6 +11,8 @@
 //! `TRINO_QUALITY_SHOTS=<dir>` also writes every preset's frame, for
 //! review.
 
+mod common;
+
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -428,31 +430,74 @@ fn dynamic_resolution_steps_reuse_one_allocation_and_draw_what_a_fixed_scale_dra
     let Some(mut r) = headless(SimProfile::Native) else {
         return;
     };
-    // High: 4x MSAA and the game's AO, every target the 3D owns.
-    let ranged = QualitySettings {
-        dynamic_resolution: Some(DynRes {
-            target_us: 10_000_000,
-            min_scale: 0.5,
-            max_scale: 1.0,
-        }),
-        ..fixed(QualityPreset::High)
-    };
-    for scale in [0.5, 0.7, 0.85, 1.0, 0.6] {
-        r.apply_quality(&ranged);
-        assert_eq!(r.scene_extent(), SIZE, "allocated for the range's top");
-        r.set_render_scale(scale);
-        assert_eq!(r.scene_extent(), SIZE, "a step allocates nothing");
-        let stepped = frame(&mut r);
-        let size = r.scene_size();
-        // The same scale in targets of its own size (none at 1).
-        r.apply_quality(&QualitySettings {
-            render_scale: scale,
-            ..fixed(QualityPreset::High)
-        });
-        assert_eq!((r.scene_size(), r.scene_extent()), (size, size));
-        let own = frame(&mut r);
-        shot(&r, &format!("dynres_corner_{scale}"), &stepped);
-        assert_eq!(diff(&stepped, &own, 1), 0, "scale {scale}");
+    // High: 4x MSAA and the game's AO, every target the 3D owns; then 1x
+    // and no sharpening, where the two must be the same to the bit.
+    let high = fixed(QualityPreset::High);
+    for (msaa, sharpen) in [
+        (high.msaa, high.sharpen),
+        (high.msaa, 0.0),
+        (1, high.sharpen),
+    ] {
+        let base = QualitySettings {
+            msaa,
+            sharpen,
+            ..high
+        };
+        let ranged = QualitySettings {
+            dynamic_resolution: Some(DynRes {
+                target_us: 10_000_000,
+                min_scale: 0.5,
+                max_scale: 1.0,
+            }),
+            ..base
+        };
+        let tolerance = common::corner_tolerance(msaa, sharpen);
+        for scale in [0.5, 0.7, 0.85, 1.0, 0.6] {
+            r.apply_quality(&ranged);
+            assert_eq!(r.scene_extent(), SIZE, "allocated for the range's top");
+            r.set_render_scale(scale);
+            assert_eq!(r.scene_extent(), SIZE, "a step allocates nothing");
+            let stepped = frame(&mut r);
+            let size = r.scene_size();
+            // The same scale in targets of its own size (none at 1).
+            r.apply_quality(&QualitySettings {
+                render_scale: scale,
+                ..base
+            });
+            assert_eq!((r.scene_size(), r.scene_extent()), (size, size));
+            let own = frame(&mut r);
+            if msaa == high.msaa {
+                let name = format!("dynres_{scale}_sharpen{sharpen}");
+                shot(&r, &format!("{name}_corner"), &stepped);
+                shot(&r, &format!("{name}_own"), &own);
+                // The difference ×64: where the two resolves part.
+                let amp: Vec<u8> = stepped
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .zip(own.as_chunks::<4>().0)
+                    .flat_map(|(a, b)| {
+                        let d = (0..3).map(|c| a[c].abs_diff(b[c])).max().unwrap();
+                        let v = d.saturating_mul(64);
+                        [v, v, v, 255]
+                    })
+                    .collect();
+                shot(&r, &format!("{name}_diff_x64"), &amp);
+            }
+            // Within one resolve rounding, sharpened (GitHub #93).
+            let (max, far) = common::corner_diff(&stepped, &own);
+            let what = format!("scale {scale}, {msaa}x MSAA, sharpen {sharpen}");
+            eprintln!("{what}: {max}/255 apart at most, {far} pixels over 1/255");
+            assert!(
+                max <= tolerance,
+                "{what}: {max}/255 apart, {tolerance} allowed"
+            );
+            let limit = common::corner_far_limit((SIZE.0 * SIZE.1) as usize);
+            assert!(
+                far <= limit,
+                "{what}: {far} pixels over 1/255, {limit} allowed"
+            );
+        }
     }
 }
 

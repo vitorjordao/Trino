@@ -1133,10 +1133,20 @@ cargo test --workspace
   branch's `trino_core` rlib and the branch then fails with "no `access` in
   `trino_core`" until its sources are touched. Give a comparison worktree its own target
   (on a real disk), or touch `crates/*/src/lib.rs` afterwards.
-- **Parallel GPU tests can crash inside `libvulkan`** (`set_debug_utils_object_name` while
-  several devices are created at once, seen 2026-10-19 on this machine): a SIGSEGV of a
-  whole test binary, not a test failure. Rerun with `--test-threads=1` to tell the two
-  apart (GitHub #94).
+- **Headless renderers give the driver no debug names** (GitHub #94). On RADV,
+  `vkSetDebugUtilsObjectNameEXT` from one test thread while another created its device
+  crashed whole test binaries inside `libvulkan` (9 runs in 12 of `engine_checks`; 0 in
+  20 without the names). `PcRenderer::new_headless` uses `renderer::headless_flags()`
+  (the build's flags minus `DEBUG`); `WGPU_DEBUG=1` brings the names back for a capture.
+  A test that builds its own `wgpu::Instance` takes the same flags. Parallel devices on
+  RADV also, rarely, read back the previous frame's pixels (`render_e2e`: 2 in 25
+  parallel, 0 in 30 serial): a GPU test binary holds a binary-wide `gpu()` guard
+  (`crates/platform-pc/tests/common`).
+- **4× MSAA resolves are not bit-exact across target sizes on RADV** (GitHub #93): a
+  partly covered pixel resolves 1/255 apart in a 240×136 and a 480×272 target, and the
+  CAS sharpening amplifies it to 2–3/255. Lavapipe (CI) is exact, so a GPU test that
+  compares two MSAA frames from different allocations uses
+  `common::corner_tolerance` (exact at 1×), never `== 0`.
 
 - **Shadows land only on receivers on the blob and planar tiers.** A caster with no
   `set_shadow_receivers` plane under its bounding-sphere center draws nothing on the

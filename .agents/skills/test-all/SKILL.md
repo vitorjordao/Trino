@@ -144,21 +144,46 @@ cargo test -p solid-eleven --release tuning_table -- --ignored --nocapture      
 The console half is the football template's self-test (`new-project` › Overlays).
 The sim hash must match the PC's (`selftest::EXPECTED_HASH`).
 
-## GPU tests crash now and then on RADV
+## GPU tests on RADV: crashes and frames from parallel devices
 
-On AMD's RADV (this repo's dev machine, 2026-10-15) a test binary that creates and drops
-several `PcRenderer`s from parallel test threads segfaults about once in 10–40 runs
-(`render_e2e` on main: 1/40; a five-test binary: 3/30). Serial runs never crash. The
-newer GPU test files hold a binary-wide mutex (`gpu()` in
-`crates/platform-pc/tests/local_lights.rs`); a SIGSEGV in another GPU binary is this
-flake, so rerun it before suspecting the code.
+On AMD's RADV (this repo's dev machine) a test binary that created several `PcRenderer`s
+from parallel test threads segfaulted inside `libvulkan.so.1`, in
+`set_debug_utils_object_name` while another thread built its device (GitHub #94:
+`engine_checks` 9 runs in 12 on 2026-10-19; `render_e2e` 1/40 on 2026-10-15). The debug
+names were the trigger: `WGPU_DEBUG=1` brings the crash back (4 in 8), and without them
+it is 0 in 20 and 0 in 5 loops of every `trino-platform-pc` binary.
 
-Seen again 2026-10-19 in `engine_checks` (gdb: `libvulkan.so.1` inside
-`set_debug_utils_object_name` while another thread built a `PcRenderer`); it crashed with
-and without the new test, never with `--test-threads=1` (tracked in GitHub #94; the
-video-capture test counts on RADV are #93, a different bug).
+- `PcRenderer::new_headless` builds its instance with `renderer::headless_flags()` (the
+  build's flags minus `DEBUG`, then the `WGPU_*` variables). A test that makes its own
+  `wgpu::Instance` (`render_e2e`'s shared-device check) passes the same flags.
+- Parallel devices on RADV can also hand back the previous frame's pixels, rarely
+  (`render_e2e`'s tint check read red where it drew blue: 2 in 25 parallel runs, 0 in 30
+  serial). Every GPU test file holds a binary-wide guard for the whole test: `gpu()` in
+  `crates/platform-pc/tests/common` (or the file's own copy).
+- A SIGSEGV or a stale frame in a GPU binary without that guard is this; add the guard,
+  then rerun with `--test-threads=1` to tell it from a real failure.
 
-More pipelines per renderer make it much worse: building the four 4× MSAA pipelines in
+The loop that measured it (counts SIGSEGVs per binary):
+
+```sh
+for b in $(cargo test -p trino-platform-pc --no-run 2>&1 | sed -n 's/.*(\(target[^)]*\)).*/\1/p'); do
+  for i in 1 2 3 4 5; do TRINO_REQUIRE_GPU=1 $b >/dev/null 2>&1; [ $? -eq 139 ] && echo "$b crashed"; done
+done
+```
+
+Before the fix, more pipelines per renderer made it much worse: building the four 4× MSAA pipelines in
 every `PcRenderer::new` took `render_e2e` to 2 crashes in 3 runs (2026-10-16). A mutex
 around `new_headless` alone did not help; building them only on `set_msaa(true)` did
 (0 in 5 full `trino-platform-pc` runs). Keep optional GPU objects lazy.
+
+## MSAA frames from two allocations differ by a resolve rounding on RADV
+
+The dynamic-resolution tests compare a frame drawn in the corner of big targets with the
+same scale in targets of its own size. With 4× MSAA RADV resolves edge pixels 1/255 apart
+between the two sizes (and the CAS sharpening makes it 2–3/255); lavapipe is exact
+(GitHub #93, ADR 0023 §3). Compare such frames with `common::corner_diff` and
+`corner_tolerance(msaa, sharpen)` (0 at 1×, 1 unsharpened, the CAS bound sharpened).
+To find which pass parts two frames, toggle one setting at a time (MSAA, AO, sharpen)
+and count differences at tolerance 0 and 1, on both ICDs:
+`VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/{radeon,lvp}_icd.json`.
+

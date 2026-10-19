@@ -301,7 +301,7 @@ pub fn bake_assets(p: &Project, test_mode: bool) -> Result<(), String> {
     }
     // The project's UI screens and string tables (issue #58): `ui/<name>`
     // and `i18n/<lang>` blobs, resident from boot.
-    for b in trino_asset_pipeline::ui::bake(&root, &manifest, Platform::N3ds)? {
+    for b in trino_asset_pipeline::ui::bake(root, &manifest, Platform::N3ds)? {
         let id = trino_core::asset_id(&b.logical);
         std::fs::write(romfs.join(format!("{id:08x}.blob")), &b.bytes)
             .map_err(|e| e.to_string())?;

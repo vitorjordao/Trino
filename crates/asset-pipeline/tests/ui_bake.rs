@@ -95,14 +95,14 @@ fn a_broken_screen_fails_the_bake_with_its_file_and_problem() {
         r#"(version: 1, root: (children: [(kind: Button, id: "a", text: "A"), (kind: Button, id: "a", text: "B")]))"#,
     )
     .unwrap();
-    let err = bake_all(
+    let Err(err) = bake_all(
         &dir.path().join("assets"),
         Platform::N64,
         &dir.path().join("out"),
-    )
-    .err()
-    .expect("a duplicate id fails the bake")
-    .to_string();
+    ) else {
+        panic!("a duplicate id fails the bake");
+    };
+    let err = err.to_string();
     assert!(
         err.contains("broken.ui.ron") && err.contains("duplicate id"),
         "{err}"
@@ -113,13 +113,13 @@ fn a_broken_screen_fails_the_bake_with_its_file_and_problem() {
         "(version: 99, root: ())",
     )
     .unwrap();
-    let err = bake_all(
+    let Err(err) = bake_all(
         &dir.path().join("assets"),
         Platform::Pc,
         &dir.path().join("out"),
-    )
-    .err()
-    .unwrap()
-    .to_string();
+    ) else {
+        panic!("a newer format fails the bake");
+    };
+    let err = err.to_string();
     assert!(err.contains("newer than this engine"), "{err}");
 }

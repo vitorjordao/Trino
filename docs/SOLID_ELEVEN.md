@@ -138,10 +138,27 @@ pure function in `sim/rules.rs`, with a test matrix next to it:
   - Excessive force or denying an obvious goal-scoring opportunity gets a red.
     In the area, a DOGSO foul with a try for the ball gets a yellow instead.
   - Two yellows make a red. A sent-off player leaves, and his side plays with ten.
+  - **The booking.** Play waits while the referee runs up to the offender. Once he
+    stands at arm's length, he holds the yellow or red card up there. The card
+    counts and its banner shows from that moment. A sent-off player leaves after
+    the card has been shown.
 - **Restarts.** Fouls are direct free kicks, or a penalty in the offender's own
   area. Offside gives an indirect free kick. Opponents stand 9.15 m away; a wall
   forms for a free kick near goal. At a penalty, everyone else is outside the area
   and the arc.
+- **Nobody is teleported to a restart.** After the whistle everyone walks or jogs
+  into place: at a sprint when far for a throw-in or a set piece, at a jog for a
+  kick-off. Play restarts once the taker is on the ball and the positions are legal
+  (the opponents at their distance; everyone in his own half at a kick-off), even if
+  some players are still on their way. After a goal the scorer wheels away toward
+  the corner flag and the teammates near him mob him. The side that conceded walks
+  back during the celebration, then everyone jogs back to his half. The kick-off waits
+  for them (about ten seconds in all).
+- **The taker lines up his kick.** At a kick-off or a set piece, he walks round the
+  ball to stand behind it on the line of the kick he chose, turning to face it, and
+  kicks once he is lined up. A human taker aims with the stick, and a button pressed
+  early is kept until he is lined up. A kick-off taker stays in his own half: for a
+  pass back he stands beside the ball. A thrower turns on the spot.
 - **The match.** It has two halves, with a kick-off at the start of each and after
   every goal, sides swapped at half time, fatigue, and **three substitutions** from a
   five-man bench at dead balls only. The AI makes them after half an hour; a human
@@ -169,11 +186,32 @@ player has a job:
   full backs.
 - **Out of possession:** the nearest player presses goal-side and tackles according to
   the club's aggression. The second covers, and the rest mark the opponent in their
-  zone, goal-side of him.
+  zone, goal-side of him. On **Normal** (and AI against AI) the pressing is more
+  urgent than on Easy (issue #86), and Hard is sharper still:
+  - the presser hunts the carrier further up the pitch;
+  - he tackles more often from the front and holds off once he is behind his man,
+    where a tackle is mostly a foul;
+  - the second chaser contests every loose ball;
+  - the markers stand ball-side as well as goal-side of their man, in the lane of
+    the pass to him.
+
+  Against the same clubs pressing the old way (60 matches,
+  `sim/tests.rs::print_press_duel`), Normal wins about a quarter more balls back in
+  the opponents' half, has 55 % of the ball, and commits about a fifth fewer fouls.
 - **The keeper** positions on the ball–goal line. He reacts after a delay that his
   reflexes set and dives toward the predicted crossing point with an error. He
   catches or parries depending on the shot's pace, claims loose balls in his area,
   and throws or punts.
+  - **1v1s.** When an attacker is through on goal with nobody goal-side of him
+    (in the box, or within 26 m and central), the keeper decides once whether to
+    come out. His handling and how well he is set on the ball's line drive the
+    decision: a 70-rated keeper comes out of about a quarter of them, a 95 of
+    about half, a 35 almost never.
+  - Coming out, he meets the attacker on the ball's line, up to the penalty spot,
+    which closes the angle. Within reach he dives at the attacker's feet and
+    smothers the ball (his handling against the attacker's dribbling), or he is
+    rounded and left on the turf.
+  - An attacker steers round a keeper who has come out at him.
 
 All ten clubs have distinct tactics: pressing, line height, width, tempo, directness
 and aggression. A ten-match AI sample (`sim/tests.rs::ai_matches_play_like_football`)
@@ -302,9 +340,9 @@ triangles on the RSP, the rest full CPU T&L. Solid Eleven's worst frame estimate
 |---|---|
 | `sim/rules.rs` | The rules matrix: restarts by last touch, offside position and exemptions, sanctions, penalties, two yellows |
 | `sim/ball.rs`, `sim/fx.rs` | Roll, wet roll, loft and bounces, curl, posts, bar, net, pass speed; the fixed-point math |
-| `sim/tests.rs` | The AI sample plays like football (every match ends; the score is the goals logged; every restart happens; players tire; the numbers stay in range). A full match with human input is deterministic. Substitutions follow the rules. The human keeper: hand-over, dive, throw or punt, the hold limit, no hands outside the area; a sent-off keeper's goal kick. |
+| `sim/tests.rs` | The AI sample plays like football (every match ends; the score is the goals logged; every restart happens; players tire; the numbers stay in range). A full match with human input is deterministic. Substitutions follow the rules. The human keeper: hand-over, dive, throw or punt, the hold limit, no hands outside the area; a sent-off keeper's goal kick. Nobody moves faster than his legs between a whistle and the restart, and takers line up their kicks (whole matches). Normal pressing against the old pressing: more balls won high, more possession, no more fouls. Tuning aids (ignored): `print_metrics`, `print_big_metrics`, `print_press_duel`, `print_phase_ticks`. |
 | `sim/balance.rs` | Round robins over four seeds: every club can win and none runs away with the league (points per game 0.9–1.9), no side favored, goals, draws, saves and offsides in range, 15 more attribute points win clearly more, the difficulty sharpens the AI, the economy keeps every club afloat, trading is no free money, the title is open. `tuning_table` (ignored) prints the whole table. |
-| `game/scenarios.rs` | Every rule staged in a real match and checked through its events (throw-in, goal kick and corner, goal and kick-off, half time, a reckless slide's yellow, a second yellow, a penalty, offside, substitutions, the keeper's catch and dive), with every frame's pose fit-checked; seven match styles (dry, rain, pressing with high lines, deep blocks with long balls, a bot against the hard and the easy AI, two bots with their keepers) with the gait flicker counted |
+| `game/scenarios.rs` | Every rule staged in a real match and checked through its events (throw-in, goal kick and corner, goal and kick-off, half time, a reckless slide's yellow shown up close, a second yellow, a penalty, offside, substitutions, the keeper's catch and dive, the walk back after a goal, a throw-in walked into, the taker walking round the ball, the keeper's 1v1 rush by his rating), with every frame's pose fit-checked; seven match styles (dry, rain, pressing with high lines, deep blocks with long balls, a bot against the hard and the easy AI, two bots with their keepers) with the gait flicker counted |
 | `render/fit.rs` | The body fits through every clip and crossfade, on the PC (with every hair style), near and far bodies; every hair style stays clear of the skull; the shorts legs stay inside the shorts' sides |
 | `sim/team.rs`, `sim/league.rs` | Balanced clubs, the point cap, values; fixtures, a season, the table and the books, transfers and squad limits, lineups, the save's round trip and size (looks and ages included), version 1 and 2 saves |
 | `game/session.rs` | Kicks, tackles and slides throw up turf that lands as it dies; only the PC tier draws it |

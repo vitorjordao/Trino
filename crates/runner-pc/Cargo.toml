@@ -8,7 +8,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [features]
-default = ["heap-stats", "gamepad"]
+default = ["heap-stats"]
 # Count the system allocator as the heap (`HEAP`, `TRINO_FRAME heap=`).
 heap-stats = []
 # Rebake + re-upload assets live when a master changes.

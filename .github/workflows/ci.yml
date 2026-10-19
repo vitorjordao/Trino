@@ -48,7 +48,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev mesa-vulkan-drivers xvfb libxkbcommon-x11-0
+          sudo apt-get install -y libasound2-dev libudev-dev mesa-vulkan-drivers xvfb libxkbcommon-x11-0
       - name: Tests (Linux — golden images required)
         if: runner.os == 'Linux'
         run: cargo test --workspace

@@ -430,9 +430,14 @@ const AO: trino_core::AmbientOcclusion = trino_core::AmbientOcclusion {
 /// body part and the ball in the shadow map, which covers the pitch the
 /// camera sees; on the consoles a blob under each near player and the
 /// ball (the N64's and the 3DS's: 22 projected bodies would cost the 3DS
-/// more than the match).
+/// more than the match). On the PC a shadow is sharp and dark where a foot
+/// or the ball touches the turf and softer and fainter the higher its
+/// caster is, gone 7 m up (contact hardening, #86): the ball in the air
+/// reads its height from its shadow. Consoles' blobs keep their own fade.
 const SHADOWS: ShadowSettings = ShadowSettings {
     distance: 70.0 * WORLD,
+    soft_growth: 0.12,
+    fade_distance: 7.0 * WORLD,
     ..ShadowSettings::DEFAULT
 };
 /// A near player's blob, under the pelvis (the old disc's width).

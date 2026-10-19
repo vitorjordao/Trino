@@ -670,6 +670,12 @@ overlay, and a measurement on real hardware (ares doesn't time the RDP).
     golden frame` and `shadow cost` (ares); PC goldens `tests/golden/pc/shadows_*.png`.
     castle64's player and Solid Eleven's players and ball use it; the hand-made discs
     are gone.
+  - **Contact hardening and height fade (2026-10-19, #86 item 9, ADR 0025 §12):**
+    `ShadowSettings::{soft_growth, fade_distance}` (0 and 0 by default: every golden
+    unchanged). On the map a blocker search widens the PCF with the caster's distance
+    along the light and fades the shadow (WebGL2 reads the map through a second float
+    binding); blobs fade over `fade_distance` when set. Solid Eleven opts in. Not in
+    TSCN v5.
 - **Accessibility (2026-10-19, ADR 0027, GitHub #60, `docs/ACCESSIBILITY.md`):** the
   player's settings and what honors them on every target.
   - **Core (`trino_core::access`, `no_std`):** `AccessSettings` (`cvd`, `text_scale`
@@ -867,6 +873,16 @@ overlay, and a measurement on real hardware (ares doesn't time the RDP).
     base) self-test a scripted match. The sim hash equals the PC's
     (`TRINO_SE_HASH`), and the template is checked against a frame budget and
     goldens in CI. `TRINO_GAME=solid-eleven cargo run -p trino-app-pc` plays it.
+
+- **Gamepad families (2026-10-19, #86 item 7, ADR 0028):** `trino_core::pad` —
+  `PadFamily { Xbox, PlayStation, Nintendo, EightBitDo, Generic }` detected from USB ids
+  then the name (`PadFamily::detect`; the PC's gilrs glue copies them through
+  `PcInput::note_pad`, the Web parses `Gamepad.id` in `keys::parse_pad_id`),
+  `PadSlot::standard(Button)` (positional: `A` is the bottom face button) and
+  `PadFamily::glyph`/`button_glyph` (Xbox colored letters, PlayStation symbols,
+  Nintendo's swapped letters, ASCII labels). `Platform::gamepad_family` (default
+  `None`: consoles, no pad). Solid Eleven's `ui/glyphs.rs` holds its badge colors,
+  PlayStation symbol spans and per-family diagrams.
 
 PC keyboard mapping: A/B = Z/X, X/Y = C/V, L/R = Q/E, Start = Enter,
 Select = Right Shift, D-pad = arrows, stick = WASD; L2/R2/L3/R3 have no default key
@@ -1438,6 +1454,10 @@ cargo test --workspace
   the PC evaluates them per pixel.
 - **WGSL:** a `ptr<uniform, T>` can't be a function parameter without an extension
   (pass the index), and `set` is a reserved word.
+- **`TRINO_BLESS=1` on `solid_eleven_render` rewrites every frame of the test**, the
+  console looks too, and those differ by a few pixels of driver noise between machines.
+  Restore the goldens your change doesn't touch (`git checkout tests/golden/pc/...`)
+  before committing.
 - **`cargo test --workspace` stops at the first failing test binary.** Use
   `--no-fail-fast` to see every failure at once.
 - **A host without `libasound2-dev` or `libopengl0` can still build and run the
@@ -1475,6 +1495,11 @@ cargo test --workspace
   through a nearest *sampler* (`depth_as_float` adds one), and check new WebGL2 shaders with
   `webgl2_shaders_translate_to_glsl_es_300` (naga can't `textureLoad` a `texture_depth_2d`
   to GLSL at all).
+- **A shader that reads the shadow map's raw depth needs the WebGL2 rewrite too**
+  (`shadow_map::map_read_as_float`): the map is a `texture_depth_2d` with a comparison
+  sampler, and naga refuses a depth `textureLoad` for GLSL. Bind the same view again as
+  unfilterable float with a nearest sampler, and keep the map spelled `SHADOWMAP` in the
+  source so the MSAA and `depth_as_float` rewrites leave it alone.
 - **WebGL2 can't copy a depth texture** (`glCopyTexSubImage2D` on a depth attachment: "Depth
   stencil texture in color attachment"); draw it over (`renderer/depth_blit.rs`).
 - **`std::time::Instant` panics on wasm32-unknown-unknown.** Shared code uses

@@ -567,3 +567,60 @@ fn accessibility_settings_through_the_platform_and_the_file() {
         }
     );
 }
+
+/// The connected pad's family reaches the game through the platform
+/// (issue #86): the host copies the pad layer's name and USB ids into the
+/// input backend (`note_pad`, what the gilrs glue does every poll), then
+/// publishes it with the rest of the input state.
+#[test]
+fn the_pads_family_reaches_the_game() {
+    use trino_core::{Button, PadFamily, PadSlot, Platform};
+    use trino_platform_pc::input::PadIdent;
+
+    let mut p = PcPlatform::new(&Caps::PC);
+    let mut input = trino_platform_pc::PcInput::new();
+    assert_eq!(p.gamepad_family(), None, "nothing published");
+    p.publish_input(&input);
+    assert_eq!(p.gamepad_family(), None, "no pad");
+    for (name, usb, family) in [
+        (
+            "DualSense Wireless Controller",
+            Some((0x054c, 0x0ce6)),
+            PadFamily::PlayStation,
+        ),
+        (
+            "Nintendo Switch Pro Controller",
+            Some((0x057e, 0x2009)),
+            PadFamily::Nintendo,
+        ),
+        ("Xbox Wireless Controller", None, PadFamily::Xbox),
+        (
+            "Generic USB Joystick",
+            Some((0x0079, 0x0006)),
+            PadFamily::Generic,
+        ),
+    ] {
+        input.note_pad(Some(PadIdent {
+            name: name.into(),
+            vendor: usb.map(|u: (u16, u16)| u.0),
+            product: usb.map(|u: (u16, u16)| u.1),
+        }));
+        p.publish_input(&input);
+        assert_eq!(p.gamepad_family(), Some(family), "{name}");
+        assert_eq!(p.gamepad_name(), Some(name));
+    }
+    // What a menu prints for A on the last pad family it saw: a Switch
+    // Pro's bottom button is labelled B.
+    input.note_pad(Some(PadIdent {
+        name: "Pro Controller".into(),
+        vendor: Some(0x057e),
+        product: Some(0x2009),
+    }));
+    p.publish_input(&input);
+    let f = p.gamepad_family().unwrap();
+    assert_eq!(f.button_glyph(Button::A).short, "B");
+    assert_eq!(f.glyph(PadSlot::standard(Button::Start)).short, "+");
+    input.note_pad(None);
+    p.publish_input(&input);
+    assert_eq!(p.gamepad_family(), None, "unplugged");
+}

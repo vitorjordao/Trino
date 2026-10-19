@@ -23,6 +23,7 @@ pub struct WebPlatform {
     pub(crate) display_request: Option<DisplaySettings>,
     pub(crate) input: Option<InputInfo>,
     pub(crate) pad_name: Option<String>,
+    pub(crate) pad_family: Option<trino_core::PadFamily>,
     /// The quality ([`Platform::quality`] and its siblings), published by
     /// the host (`crate::quality`).
     pub(crate) quality: HostedQuality,
@@ -47,6 +48,7 @@ impl WebPlatform {
             display_request: None,
             input: None,
             pad_name: None,
+            pad_family: None,
             quality: HostedQuality::new(caps),
             groups: crate::groups::Groups::new(caps.ram_bytes),
             access: trino_core::HostedAccess::new(),
@@ -216,6 +218,10 @@ impl Platform for WebPlatform {
 
     fn gamepad_name(&self) -> Option<&str> {
         self.pad_name.as_deref()
+    }
+
+    fn gamepad_family(&self) -> Option<trino_core::PadFamily> {
+        self.pad_family
     }
 
     fn binding_label(&self, button: Button, device: BindDevice) -> Option<&str> {

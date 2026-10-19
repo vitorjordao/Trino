@@ -111,6 +111,14 @@ says what was picked; WebGPU reports `gpu=unknown` (browsers hide the adapter's 
   `mapped_at_creation` (Chromium on SwiftShader refused one partway through Solid
   Eleven's 197 meshes).
 
+- **The shadow map's raw depth (#86's blocker search) is read through a second binding
+  on WebGL2** (the map again as unfilterable float, binding 5, and the nearest sampler,
+  binding 6: `shadow_map::map_read_as_float`). A `textureLoad` of the map itself fails
+  naga's GLSL translation. To check a renderer feature no web golden turns on, opt
+  castle64 in locally, run `cargo xtask test web --browsers chromium` (both Chromium runs
+  pass the golden within its tolerance even with a small change), and compare
+  `target/web-test/chromium-webgl2/castle64_hub.png` with the WebGPU one: they should match.
+
 ## GPU-less Linux (CI)
 
 What the `web` job needs, all found the hard way (reproduce with Docker:

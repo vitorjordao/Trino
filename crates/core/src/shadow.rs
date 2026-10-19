@@ -90,6 +90,24 @@ pub struct ShadowSettings {
     pub softness: u8,
     /// What a shadowed surface blends toward; alpha is the strength.
     pub color: Color,
+    /// Contact hardening on the [`ShadowTier::Map`] tier: how much wider a
+    /// shadow's soft edge grows per unit of distance between the caster
+    /// and the surface it lands on, measured along the light. Unitless (the
+    /// light's apparent size), so it holds at any drawing scale: 0.1 widens
+    /// the edge by 0.1 m for a caster 1 m above the ground. A shadow is as
+    /// sharp as [`softness`](Self::softness) says where its caster touches
+    /// the ground and softer the higher it is, up to a filter of twice the
+    /// quality preset's taps per side. 0 (the default) keeps ADR 0025's
+    /// even filter. Blob and planar shadows ignore it.
+    pub soft_growth: f32,
+    /// How far above the surface it lands on a caster's shadow fades out
+    /// completely, world units (so a game drawn at a reduced scale scales
+    /// it, as it does [`distance`](Self::distance)): along the light on the
+    /// [`ShadowTier::Map`] tier, straight up from its receiver for a blob.
+    /// The shadow is at full strength at contact and fades linearly. 0 (the
+    /// default) keeps ADR 0025's: a blob fades over `4 × its radius + 1`
+    /// m, the map never; planar shadows never fade with height.
+    pub fade_distance: f32,
 }
 
 impl ShadowSettings {
@@ -99,15 +117,35 @@ impl ShadowSettings {
         distance: 40.0,
         softness: 160,
         color: Color::rgba(0, 0, 0, 140),
+        soft_growth: 0.0,
+        fade_distance: 0.0,
     };
 
+    /// Largest [`soft_growth`](Self::soft_growth) [`clamped`](Self::clamped)
+    /// keeps.
+    pub const MAX_SOFT_GROWTH: f32 = 4.0;
+
     /// Every field in its valid range: `map_size` 0 or a power of two in
-    /// 256..=4096, a distance of 1 to 1000 m (NaN takes the default).
+    /// 256..=4096, a distance of 1 to 1000 m (NaN takes the default), a
+    /// `soft_growth` of 0 to [`MAX_SOFT_GROWTH`](Self::MAX_SOFT_GROWTH)
+    /// and a `fade_distance` of 0 or more (NaN and negatives take 0, the
+    /// old look; infinity never fades).
     pub fn clamped(&self) -> ShadowSettings {
         let d = ShadowSettings::DEFAULT;
         let map_size = match self.map_size {
             0 => 0,
             s => s.clamp(256, 4096).next_power_of_two().min(4096),
+        };
+        // `!(x > 0)` also catches NaN.
+        let soft_growth = if self.soft_growth > 0.0 {
+            self.soft_growth.min(Self::MAX_SOFT_GROWTH)
+        } else {
+            0.0
+        };
+        let fade_distance = if self.fade_distance > 0.0 {
+            self.fade_distance
+        } else {
+            0.0
         };
         ShadowSettings {
             map_size,
@@ -116,7 +154,26 @@ impl ShadowSettings {
             } else {
                 self.distance.clamp(1.0, 1000.0)
             },
+            soft_growth,
+            fade_distance,
             ..*self
+        }
+    }
+
+    /// Whether the map draws contact hardening or a height fade (the
+    /// composite's blocker search runs only then).
+    pub fn contact(&self) -> bool {
+        self.soft_growth > 0.0 || self.fade_distance > 0.0
+    }
+
+    /// The height over which a blob of `blob_radius` fades out:
+    /// [`fade_distance`](Self::fade_distance), or ADR 0025's
+    /// `4 × blob_radius + 1` when it is 0.
+    pub fn blob_fade(&self, blob_radius: f32) -> f32 {
+        if self.fade_distance > 0.0 {
+            self.fade_distance
+        } else {
+            4.0 * blob_radius + 1.0
         }
     }
 
@@ -516,9 +573,10 @@ impl ShadowFrame {
 
     /// The blob of a caster whose bounding sphere is `center`, `radius`
     /// (world): `blob_radius` wide on the receiver under it, shrinking to
-    /// 60% and fading out as the sphere's bottom rises to `4·blob_radius +
-    /// 1` m above it, faded with distance, cut to the receiver. `None` with
-    /// nothing to draw.
+    /// 60% and fading out as the sphere's bottom rises to
+    /// [`ShadowSettings::blob_fade`] above it (`4·blob_radius + 1` m unless
+    /// the game sets [`ShadowSettings::fade_distance`]), faded with
+    /// distance, cut to the receiver. `None` with nothing to draw.
     pub fn blob(
         &self,
         ctx: &TnlContext,
@@ -534,7 +592,7 @@ impl ShadowFrame {
         }
         let zv = ctx.view_point(center).z;
         let fade = s.fade(zv);
-        let rise = ((h - radius).max(0.0) / (4.0 * blob_radius + 1.0)).min(1.0);
+        let rise = ((h - radius).max(0.0) / s.blob_fade(blob_radius)).min(1.0);
         let alpha = s.color.a as f32 * fade * (1.0 - rise);
         if alpha < 1.0 {
             return None;
@@ -1292,6 +1350,70 @@ mod tests {
                 .is_none()
         );
         assert!(f.blob(&ctx(), Vec3::new(9.0, 0.5, 0.0), 0.5, 0.4).is_none());
+    }
+
+    /// Distance attenuation (#86): a blob is darkest and widest at contact
+    /// and fades and shrinks as its caster rises, over `fade_distance` when
+    /// the game sets one, else ADR 0025's `4·radius + 1` (bit for bit).
+    #[test]
+    fn a_blob_fades_and_shrinks_with_its_casters_height() {
+        let ground = [ShadowPlane::ground(0.0)];
+        let blob = |s: ShadowSettings, y: f32| {
+            frame_with(&Caps::N64, s, &ground).blob(&ctx(), Vec3::new(0.0, y, 0.0), 0.25, 0.4)
+        };
+        let width = |b: &BlobQuad| b.corners[1].x - b.corners[0].x;
+        let old = ShadowSettings::DEFAULT;
+        let fade = ShadowSettings {
+            fade_distance: 2.0,
+            ..ShadowSettings::DEFAULT
+        };
+        // At contact (the sphere's bottom on the ground): full strength,
+        // full width, whatever the fade.
+        for s in [old, fade] {
+            let b = blob(s, 0.25).unwrap();
+            assert_eq!(b.color.a, s.color.a);
+            assert!((width(&b) - 0.8).abs() < 1e-5);
+        }
+        // Rising: monotonically fainter and narrower, gone at the fade.
+        let mut last = (u8::MAX, f32::MAX);
+        for k in 1..8 {
+            let b = blob(fade, 0.25 + k as f32 * 0.25).unwrap();
+            assert!(b.color.a < last.0 && width(&b) < last.1, "{k}: {b:?}");
+            last = (b.color.a, width(&b));
+        }
+        assert!(blob(fade, 0.25 + 2.0).is_none(), "faded out at 2 m");
+        // Half way: half the strength, 80% of the width.
+        let half = blob(fade, 0.25 + 1.0).unwrap();
+        assert_eq!(half.color.a, (140.0f32 * 0.5 + 0.5) as u8);
+        assert!((width(&half) - 0.8 * 0.8).abs() < 1e-5);
+        // 0 keeps the old reach exactly: 4·0.4 + 1 = 2.6 m.
+        assert_eq!(old.blob_fade(0.4), 4.0 * 0.4 + 1.0);
+        assert!(blob(old, 0.25 + 2.5).is_some());
+        assert!(blob(old, 0.25 + 2.6).is_none());
+        let legacy = blob(old, 1.3).unwrap();
+        let rise = (1.3f32 - 0.25) / (4.0 * 0.4 + 1.0);
+        assert_eq!(legacy.color.a, (140.0 * (1.0 - rise) + 0.5) as u8);
+    }
+
+    #[test]
+    fn contact_settings_clamp_and_default_to_the_old_look() {
+        let d = ShadowSettings::DEFAULT;
+        assert!(!d.contact(), "off by default: goldens unchanged");
+        assert_eq!((d.soft_growth, d.fade_distance), (0.0, 0.0));
+        let c = |g: f32, f: f32| {
+            ShadowSettings {
+                soft_growth: g,
+                fade_distance: f,
+                ..d
+            }
+            .clamped()
+        };
+        assert_eq!(c(f32::NAN, f32::NAN), d);
+        assert_eq!(c(-1.0, -3.0), d);
+        assert_eq!(c(99.0, 1.5).soft_growth, ShadowSettings::MAX_SOFT_GROWTH);
+        assert_eq!(c(0.2, 1.5).fade_distance, 1.5);
+        assert_eq!(c(0.0, f32::INFINITY).fade_distance, f32::INFINITY);
+        assert!(c(0.2, 0.0).contact() && c(0.0, 3.0).contact());
     }
 
     #[test]

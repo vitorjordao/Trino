@@ -40,7 +40,8 @@
 //! mapping. Bound keys set theirs too (Z sets `Key::Z` and presses A).
 
 use trino_core::{
-    BindDevice, Button, GamepadStatus, Input, InputInfo, InputState, Key, PointerButton, Vec2,
+    BindDevice, Button, GamepadStatus, Input, InputInfo, InputState, Key, PadFamily, PointerButton,
+    Vec2,
 };
 use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::keyboard::{KeyCode, PhysicalKey};
@@ -528,8 +529,28 @@ pub struct PcInput {
     /// The pad button that just completed a rebind: it presses nothing
     /// until released (else the game would see the press that bound it).
     held_after_bind: Option<PadButton>,
+    /// The first connected pad as the pad layer names it ([`PcInput::note_pad`]).
+    pad: Option<PadIdent>,
     #[cfg(feature = "gamepad")]
     pads: Option<gilrs::Gilrs>,
+}
+
+/// A connected pad's identity, copied out of the pad layer: its name and,
+/// where the system reports them, its USB vendor and product ids.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct PadIdent {
+    pub name: String,
+    pub vendor: Option<u16>,
+    pub product: Option<u16>,
+}
+
+impl PadIdent {
+    /// Its family ([`PadFamily::detect`]: the ids where they name one,
+    /// else the name, else generic).
+    pub fn family(&self) -> PadFamily {
+        let usb = self.vendor.zip(self.product);
+        PadFamily::detect(&self.name, usb)
+    }
 }
 
 impl PcInput {
@@ -610,6 +631,9 @@ impl PcInput {
 
     /// The first connected gamepad's name.
     pub fn gamepad_name(&self) -> Option<String> {
+        if let Some(p) = &self.pad {
+            return Some(p.name.clone());
+        }
         #[cfg(feature = "gamepad")]
         {
             self.pads
@@ -618,6 +642,19 @@ impl PcInput {
         }
         #[cfg(not(feature = "gamepad"))]
         None
+    }
+
+    /// The first connected gamepad's family (`None` without one), from what
+    /// [`note_pad`](Self::note_pad) was told.
+    pub fn gamepad_family(&self) -> Option<PadFamily> {
+        self.pad.as_ref().map(PadIdent::family)
+    }
+
+    /// The pad layer's first connected pad (`None`: none). The gilrs glue
+    /// calls it every poll with copied values; a host without gilrs, or a
+    /// test, calls it directly.
+    pub fn note_pad(&mut self, pad: Option<PadIdent>) {
+        self.pad = pad;
     }
 
     /// A pad button went down: completes a pending pad rebind (true), else
@@ -874,6 +911,12 @@ impl PcInput {
         }
         let Some(g) = self.pads.as_ref() else { return };
         let readings: Vec<PadReading> = g.gamepads().map(|(_, p)| Self::read_gilrs(&p)).collect();
+        let first = g.gamepads().next().map(|(_, p)| PadIdent {
+            name: p.name().to_string(),
+            vendor: p.vendor_id(),
+            product: p.product_id(),
+        });
+        self.note_pad(first);
         if let Some(h) = self.held_after_bind
             && !readings.iter().any(|r| r.is_held(h))
         {
@@ -981,6 +1024,72 @@ mod tests {
         assert!(!s.pad);
         input.handle_key(KeyCode::Escape, false);
         assert!(!input.poll().key(Key::Escape));
+    }
+
+    /// gilrs' names and ids, as the glue copies them, to a family.
+    #[test]
+    fn pad_idents_detect_their_family() {
+        let id = |name: &str, usb: Option<(u16, u16)>| PadIdent {
+            name: name.into(),
+            vendor: usb.map(|u| u.0),
+            product: usb.map(|u| u.1),
+        };
+        let cases = [
+            (
+                id("Xbox 360 Controller", Some((0x045e, 0x028e))),
+                PadFamily::Xbox,
+            ),
+            (
+                id("Xbox Wireless Controller", Some((0x045e, 0x0b13))),
+                PadFamily::Xbox,
+            ),
+            (
+                id("DualSense Wireless Controller", Some((0x054c, 0x0ce6))),
+                PadFamily::PlayStation,
+            ),
+            (
+                id("PS4 Controller", Some((0x054c, 0x05c4))),
+                PadFamily::PlayStation,
+            ),
+            (
+                id("Wireless Controller", Some((0x054c, 0x09cc))),
+                PadFamily::PlayStation,
+            ),
+            (
+                id("Nintendo Switch Pro Controller", Some((0x057e, 0x2009))),
+                PadFamily::Nintendo,
+            ),
+            (
+                id("8BitDo SN30 Pro+", Some((0x2dc8, 0x6002))),
+                PadFamily::EightBitDo,
+            ),
+            // XInput mode: Microsoft's ids win over the 8BitDo name.
+            (id("8BitDo Pro 2", Some((0x045e, 0x028e))), PadFamily::Xbox),
+            // No ids (some backends): the name decides.
+            (
+                id("Sony Interactive Entertainment Wireless Controller", None),
+                PadFamily::PlayStation,
+            ),
+            (
+                id("PowerA Xbox Series X Controller", Some((0x24c6, 0x581a))),
+                PadFamily::Xbox,
+            ),
+            (
+                id("Logitech Dual Action", Some((0x046d, 0xc216))),
+                PadFamily::Generic,
+            ),
+            (id("USB Gamepad", None), PadFamily::Generic),
+        ];
+        for (ident, want) in cases {
+            assert_eq!(ident.family(), want, "{ident:?}");
+        }
+        let mut input = PcInput::new();
+        assert_eq!(input.gamepad_family(), None);
+        input.note_pad(Some(id("Pro Controller", Some((0x057e, 0x2009)))));
+        assert_eq!(input.gamepad_family(), Some(PadFamily::Nintendo));
+        assert_eq!(input.gamepad_name().as_deref(), Some("Pro Controller"));
+        input.note_pad(None);
+        assert_eq!(input.gamepad_family(), None);
     }
 
     #[cfg(feature = "gamepad")]

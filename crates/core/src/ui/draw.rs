@@ -541,7 +541,10 @@ impl<const N: usize> Ui<N> {
         let mut count = 0;
         if single.is_none() {
             let base = text.as_ptr() as usize;
-            wrap(text, content.size.x, &width, &mut |line| {
+            // A pixel of slack: rects are rounded to whole pixels, so at a
+            // fractional scale a line the layout fit can come out a hair
+            // too wide here and wrap into a line the box has no room for.
+            wrap(text, content.size.x + 1.0, &width, &mut |line| {
                 if count < MAX_LINES {
                     let at = line.as_ptr() as usize - base;
                     lines[count] = (at as u16, (at + line.len()) as u16);

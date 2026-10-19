@@ -94,7 +94,7 @@ pub static NODES: [UiNode<'static>; 23] = [
         end: 14,
         anchor: Anchor::Center,
         max: (280, 0),
-        padding: [10, 6, 10, 8],
+        padding: [10, 8, 10, 8],
         ..UiNode::DEFAULT
     },
     // 9: Stack

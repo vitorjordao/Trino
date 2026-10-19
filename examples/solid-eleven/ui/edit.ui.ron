@@ -156,9 +156,9 @@
                                                 children: [
                                                     (kind: Button, id: "style", on_click: "style", anchor: Fill, size: (Fill, Fill)),
                                                     (
-                                                        kind: Stack(gap: 0, align: Center),
+                                                        kind: Stack(gap: 2, align: Center),
                                                         size: (Fill, Fit),
-                                                        padding: (4, 1, 4, 1),
+                                                        padding: (4, 2, 4, 4),
                                                         children: [
                                                             (kind: Text, key: "hair", text: "HAIR", color: Some((150, 160, 196, 255))),
                                                             (kind: Text, bind: "style", text: "{}", color: Some((255, 214, 40, 255)), overflow: Wrap),
@@ -231,9 +231,9 @@
                                 children: [
                                     (kind: Button, id: "style_big", on_click: "style", anchor: Fill, size: (Fill, Fill)),
                                     (
-                                        kind: Stack(gap: 0, align: Center),
+                                        kind: Stack(gap: 2, align: Center),
                                         size: (Fill, Fit),
-                                        padding: (4, 1, 4, 1),
+                                        padding: (4, 2, 4, 4),
                                         children: [
                                             (kind: Text, key: "hair", text: "HAIR", color: Some((150, 160, 196, 255))),
                                             (kind: Text, bind: "style", text: "{}", color: Some((255, 214, 40, 255)), overflow: Wrap),

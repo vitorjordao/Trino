@@ -350,11 +350,11 @@ pub static NODES: [UiNode<'static>; 74] = [
     },
     // 34: Stack
     UiNode {
-        kind: NodeKind::Stack { dir: Dir::Vertical, gap: 0, align: Align::Center, justify: Justify::Start, wrap: false },
+        kind: NodeKind::Stack { dir: Dir::Vertical, gap: 2, align: Align::Center, justify: Justify::Start, wrap: false },
         parent: 32,
         end: 37,
         size: (Size::Fill, Size::Fit),
-        padding: [4, 1, 4, 1],
+        padding: [4, 2, 4, 4],
         ..UiNode::DEFAULT
     },
     // 35: Text 'HAIR'
@@ -559,11 +559,11 @@ pub static NODES: [UiNode<'static>; 74] = [
     },
     // 55: Stack
     UiNode {
-        kind: NodeKind::Stack { dir: Dir::Vertical, gap: 0, align: Align::Center, justify: Justify::Start, wrap: false },
+        kind: NodeKind::Stack { dir: Dir::Vertical, gap: 2, align: Align::Center, justify: Justify::Start, wrap: false },
         parent: 53,
         end: 58,
         size: (Size::Fill, Size::Fit),
-        padding: [4, 1, 4, 1],
+        padding: [4, 2, 4, 4],
         ..UiNode::DEFAULT
     },
     // 56: Text 'HAIR'

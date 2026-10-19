@@ -24,6 +24,18 @@ pub(super) const INNER_GAP: f32 = 4.0;
 /// Longest label, bytes (a bound value substituted in).
 pub(super) const LABEL_LEN: usize = 96;
 
+/// A 64-bit FNV-1a hash of `words`, never 0 (0 marks an empty memo slot).
+fn memo_key(words: &[u64]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for w in words {
+        for b in w.to_le_bytes() {
+            h ^= b as u64;
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    h.max(1)
+}
+
 pub(super) fn floor(v: f32) -> f32 {
     let t = v as i32 as f32;
     if t > v { t - 1.0 } else { t }
@@ -180,6 +192,9 @@ impl<const N: usize> Ui<N> {
             s.max = 0.0;
         }
         self.tracks = [(NONE, 0, Rect::new(0.0, 0.0, 0.0, 0.0)); super::MAX_SLIDERS];
+        for m in self.text_memo.iter() {
+            m.set((0, Vec2::ZERO));
+        }
         if !screen.is_empty() {
             let mut solver = Solver {
                 ui: self,
@@ -296,6 +311,38 @@ impl<M: TextMeasure + ?Sized, const N: usize> Solver<'_, '_, '_, M, N> {
 
     /// The node's label, its size, and whether it wraps past `max_w`.
     fn label_size(&self, n: &UiNode<'_>, item: u16, max_w: f32) -> Vec2 {
+        // The same node and item at the same font, scale and (wrapped)
+        // width make the same label: measure it once per layout.
+        let (font, scale) = self.font(n);
+        let wrap_w = if n.overflow == Overflow::Wrap {
+            max_w.to_bits()
+        } else {
+            0
+        };
+        let key = memo_key(&[
+            n.text.as_ptr() as usize as u64,
+            n.bind.as_ptr() as usize as u64,
+            n.key.as_ptr() as usize as u64,
+            (n.text.len() as u64) << 32 | n.bind.len() as u64,
+            (item as u64) << 32 | font.0 as u64,
+            (scale.to_bits() as u64) << 32 | wrap_w as u64,
+            n.kind.name().as_ptr() as usize as u64,
+        ]);
+        let at = (key % N.max(1) as u64) as usize;
+        if let Some(m) = self.ui.text_memo.get(at) {
+            let (k, size) = m.get();
+            if k == key {
+                return size;
+            }
+        }
+        let size = self.measure_label(n, item, max_w);
+        if let Some(m) = self.ui.text_memo.get(at) {
+            m.set((key, size));
+        }
+        size
+    }
+
+    fn measure_label(&self, n: &UiNode<'_>, item: u16, max_w: f32) -> Vec2 {
         let mut buf = TextBuf::<LABEL_LEN>::new();
         let text = super::draw::label(self.screen, &self.ui.values, self.env, n, item, &mut buf);
         let lh = self.line_height(n);

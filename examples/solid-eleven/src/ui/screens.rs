@@ -20,6 +20,7 @@ use crate::sim::team::{
 use crate::ui::i18n::{Lang, S, pos_short, tr, tr_fmt};
 use crate::ui::{Size, Ui, pal};
 use trino_core::i18n::Arg;
+use trino_core::ui::NO_ITEM;
 use trino_core::{Color, Rect, Renderer, Screen, TextAlign, TextBuf, Vec2};
 
 type Buf = TextBuf<48>;
@@ -1315,97 +1316,82 @@ fn club(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
 
 // ------------------------------------------------------------------ table
 
-fn table(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
-    let lang = g.settings.lang;
-    let pad = g.pad_layout();
-    let w = &g.world;
-    let mut ui = Ui::new(r, screen);
-    ui.fill(
-        Rect::new(-200.0, 0.0, 720.0, 240.0),
-        Color::rgba(6, 8, 20, 160),
+fn table(g: &mut SolidElevenGame, r: &mut dyn Renderer, _screen: Vec2) {
+    use super::scr::{art, int, txt};
+    let screen = &super::table_gen::SCREEN;
+    let order = g.world.standings();
+    let big = g.access.clamped().text_factor() >= 1.5;
+    let (row, crest) = if big {
+        ("row_big", "crest_big")
+    } else {
+        ("row", "crest")
+    };
+    super::scr::show(
+        g,
+        r,
+        screen,
+        Some((row, g.cur.table as u16)),
+        |g, key, item| {
+            let lang = g.settings.lang;
+            if key == "rows" {
+                return int(TEAMS as i32);
+            }
+            let c = *order.get(item as usize)? as usize;
+            let t = &g.world.table[c];
+            let mut b = buf();
+            match key {
+                "pos" => int(item as i32 + 1),
+                "name" => txt(upper::<20>(CLUBS[c].name).as_str()),
+                "p" => int(t.played as i32),
+                "w" => int(t.won as i32),
+                "d" => int(t.drawn as i32),
+                "l" => int(t.lost as i32),
+                "gd" => int(t.gd() as i32),
+                "pts" => int(t.points() as i32),
+                "record" => {
+                    let _ = write!(
+                        b,
+                        "P {}  W {}  D {}  L {}  GD {}",
+                        t.played,
+                        t.won,
+                        t.drawn,
+                        t.lost,
+                        t.gd()
+                    );
+                    let _ = lang;
+                    txt(b.as_str())
+                }
+                _ => None,
+            }
+        },
+        |g, ui, r| {
+            super::scr::chrome(ui, screen, r);
+            if let Some((mut a, size)) = art(r, ui, screen, "panel", NO_ITEM) {
+                a.fill(Rect::new(0.0, 0.0, size.x, size.y), pal::PANEL);
+            }
+            // The player's club, highlighted under its row.
+            for (k, &c) in order.iter().enumerate() {
+                if c == g.world.user
+                    && g.career_on
+                    && let Some((mut a, size)) = art(r, ui, screen, row, k as u16)
+                {
+                    a.fill(
+                        Rect::new(-2.0, -1.0, size.x + 4.0, size.y + 1.0),
+                        Color::rgba(30, 70, 140, 220),
+                    );
+                }
+            }
+        },
     );
-    header(&mut ui, &mut g.hits, tr(lang, S::Table), true);
-    let (x, y) = (24.0, 34.0);
-    ui.panel(Rect::new(x, y, 272.0, 182.0), pal::CYAN);
-    let cols = ["P", "W", "D", "L", "GD", ""];
-    for (k, c) in cols.iter().enumerate() {
-        ui.text(
-            x + 148.0 + k as f32 * 20.0,
-            y + 3.0,
-            c,
-            pal::DIM,
-            Size::Small,
-            TextAlign::Center,
-        );
-    }
-    ui.text(
-        x + 262.0,
-        y + 3.0,
-        tr(lang, S::Pts),
-        pal::DIM,
-        Size::Small,
-        TextAlign::Right,
-    );
-    for (k, &c) in w.standings().iter().enumerate() {
-        let row = &w.table[c as usize];
-        let yy = y + 16.0 + k as f32 * 16.0;
-        if c == w.user && g.career_on {
-            ui.fill(
-                Rect::new(x + 2.0, yy - 1.0, 268.0, 15.0),
-                Color::rgba(30, 70, 140, 220),
-            );
+    // The crests, over their boxes.
+    let ui = core::mem::take(&mut g.menu_ui);
+    for (k, &c) in order.iter().enumerate() {
+        if let Some((mut a, size)) = art(r, &ui, screen, crest, k as u16) {
+            crest_of(&mut a, 0.0, (size.y - 10.0) * 0.5, 10.0, c, false);
         }
-        let mut b = buf();
-        let _ = write!(b, "{}", k + 1);
-        ui.text(
-            x + 12.0,
-            yy,
-            b.as_str(),
-            pal::DIM,
-            Size::Small,
-            TextAlign::Center,
-        );
-        crest_of(&mut ui, x + 22.0, yy, 10.0, c, false);
-        let name: TextBuf<20> = upper(CLUBS[c as usize].name);
-        ui.text(
-            x + 36.0,
-            yy,
-            name.as_str(),
-            pal::INK,
-            Size::Small,
-            TextAlign::Left,
-        );
-        let vals = [
-            row.played as i16,
-            row.won as i16,
-            row.drawn as i16,
-            row.lost as i16,
-            row.gd(),
-        ];
-        for (j, v) in vals.iter().enumerate() {
-            b.clear();
-            let _ = write!(b, "{v}");
-            ui.text(
-                x + 148.0 + j as f32 * 20.0,
-                yy,
-                b.as_str(),
-                pal::INK,
-                Size::Small,
-                TextAlign::Center,
-            );
-        }
-        b.clear();
-        let _ = write!(b, "{}", row.points());
-        ui.text(
-            x + 262.0,
-            yy,
-            b.as_str(),
-            pal::YELLOW,
-            Size::Small,
-            TextAlign::Right,
-        );
     }
-    footer(&mut ui, &mut g.hits, pad, lang, &[(Btn::B, S::Back)]);
+    g.menu_ui = ui;
+    super::scr::back_hits(g, screen);
 }
 
 // ------------------------------------------------------------------ teams

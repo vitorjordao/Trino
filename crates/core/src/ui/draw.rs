@@ -55,9 +55,7 @@ pub(super) fn label<'b, const V: usize>(
         let _ = buf.write_str(" ");
     }
     match super::values::lookup(values, env.data, n.bind, item) {
-        Some(UiValue::Int(v)) => {
-            let _ = write!(buf, "{v}");
-        }
+        Some(UiValue::Int(v)) => push_int(buf, v),
         Some(UiValue::Bool(b)) => {
             let _ = buf.write_str(if b { "On" } else { "Off" });
         }
@@ -68,6 +66,28 @@ pub(super) fn label<'b, const V: usize>(
     }
     let _ = buf.write_str(after);
     buf.as_str()
+}
+
+/// `v` in decimal, without `core::fmt` (its machinery costs tens of
+/// microseconds a call on the N64, and a layout builds every label).
+fn push_int<const L: usize>(buf: &mut TextBuf<L>, v: i32) {
+    let mut digits = [0u8; 11];
+    let mut at = digits.len();
+    let mut n = v.unsigned_abs();
+    loop {
+        at -= 1;
+        digits[at] = b'0' + (n % 10) as u8;
+        n /= 10;
+        if n == 0 {
+            break;
+        }
+    }
+    if v < 0 {
+        at -= 1;
+        digits[at] = b'-';
+    }
+    // ASCII digits are always UTF-8.
+    let _ = buf.write_str(core::str::from_utf8(&digits[at..]).unwrap_or(""));
 }
 
 /// Most lines a wrapped text draws.

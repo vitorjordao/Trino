@@ -3382,3 +3382,126 @@ pub fn accessibility(
     }
     Ok(true)
 }
+
+/// Rows of [`UI_COST_SCREEN`]'s list.
+pub const UI_COST_ROWS: u16 = 41;
+
+/// A screen of 126 laid-out nodes (a 41-row list of a label and a number
+/// in a scroll box, issue #95): what the N64 pays to lay out and draw a
+/// menu at the UI budget (`TRINO_UI_COST:` in the ares self-test).
+pub static UI_COST_SCREEN: trino_core::ui::UiScreen<'static> = {
+    use trino_core::ui::{
+        Align, Dir, Justify, NONE, NodeKind, Nodes, Scaling, Size, Theme, UiNode, UiScreen,
+    };
+    static NODES: [UiNode<'static>; 6] = [
+        UiNode {
+            kind: NodeKind::Overlay,
+            end: 6,
+            size: (Size::Fill, Size::Fill),
+            ..UiNode::DEFAULT
+        },
+        UiNode {
+            kind: NodeKind::Scroll {
+                dir: Dir::Vertical,
+                gap: 0,
+            },
+            parent: 0,
+            end: 6,
+            size: (Size::Fill, Size::Fill),
+            ..UiNode::DEFAULT
+        },
+        UiNode {
+            kind: NodeKind::List {
+                dir: Dir::Vertical,
+                gap: 1,
+                max: 64,
+            },
+            parent: 1,
+            end: 6,
+            bind: "rows",
+            size: (Size::Fill, Size::Fit),
+            ..UiNode::DEFAULT
+        },
+        UiNode {
+            kind: NodeKind::Stack {
+                dir: Dir::Horizontal,
+                gap: 4,
+                align: Align::Center,
+                justify: Justify::SpaceBetween,
+            },
+            parent: 2,
+            end: 6,
+            size: (Size::Fill, Size::Fit),
+            ..UiNode::DEFAULT
+        },
+        UiNode {
+            kind: NodeKind::Text,
+            parent: 3,
+            end: 5,
+            text: "{}",
+            bind: "name",
+            ..UiNode::DEFAULT
+        },
+        UiNode {
+            kind: NodeKind::Text,
+            parent: 3,
+            end: 6,
+            text: "{}",
+            bind: "n",
+            ..UiNode::DEFAULT
+        },
+    ];
+    UiScreen {
+        name: "ui_cost",
+        reference: (320, 240),
+        scaling: Scaling::Integer,
+        wrap: false,
+        focus: NONE,
+        on_back: "",
+        theme: Theme::DEFAULT,
+        nodes: Nodes::Slice(&NODES),
+    }
+};
+
+/// [`UI_COST_SCREEN`]'s values, from the game on demand ([`UiData`]): a
+/// new revision lays the screen out again.
+///
+/// [`UiData`]: trino_core::ui::UiData
+pub struct UiCostData {
+    pub revision: u32,
+}
+
+impl trino_core::ui::UiData for UiCostData {
+    fn value(&self, key: &str, item: u16) -> Option<trino_core::ui::UiValue> {
+        use trino_core::ui::{UiValue, text_value};
+        match key {
+            "rows" => Some(UiValue::Int(UI_COST_ROWS as i32)),
+            "name" => Some(text_value("PLAYER NAME")),
+            "n" => Some(UiValue::Int(item as i32 * 7 + self.revision as i32 % 3)),
+            _ => None,
+        }
+    }
+
+    fn revision(&self) -> Option<u32> {
+        Some(self.revision)
+    }
+}
+
+#[cfg(test)]
+mod ui_cost_tests {
+    use super::*;
+
+    /// The N64's cost screen sits at the 128-node UI budget and lays out
+    /// again on each new revision only.
+    #[test]
+    fn the_ui_cost_screen_lays_out_126_nodes() {
+        use trino_core::ui::{CellMeasure, UiEnv};
+        let mut ui = trino_core::Ui::<128>::new();
+        let data = UiCostData { revision: 1 };
+        let env = UiEnv::of_caps(&trino_core::Caps::N64).with_data(&data);
+        ui.layout(&UI_COST_SCREEN, &env, &CellMeasure);
+        assert_eq!(ui.stats().nodes, 3 + 3 * UI_COST_ROWS);
+        assert!(ui.stats().nodes <= trino_core::Caps::N64.max_ui_nodes);
+        assert_eq!(ui.stats().dropped, 0);
+    }
+}

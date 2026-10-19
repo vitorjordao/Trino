@@ -1946,3 +1946,28 @@ fn a_cursor_the_game_keeps_focuses_a_list_row_scrolls_it_in_and_gives_its_rect()
     assert_eq!(r.texts()[1].0, "P0");
     assert_eq!(ui.scroll_of(3).unwrap().0, 0.0);
 }
+
+#[test]
+fn bound_ints_print_in_decimal_with_their_sign() {
+    let mut t = Tree::new();
+    t.open(root());
+    t.open(vstack(0));
+    for (id, bind) in [("a", "a"), ("b", "b"), ("c", "c")] {
+        t.leaf(UiNode {
+            id,
+            bind,
+            text: "N {}",
+            ..node(NodeKind::Text)
+        });
+    }
+    let s = t.screen();
+    let mut r = Rec::sized(320, 240);
+    let mut ui = Ui::<16>::new();
+    ui.set("a", 0);
+    ui.set("b", -42);
+    ui.set("c", i32::MIN);
+    let env = env_of(&r);
+    ui.draw(&mut r, &s, &env);
+    let texts: Vec<String> = r.texts().into_iter().map(|t| t.0).collect();
+    assert_eq!(texts, ["N 0", "N -42", "N -2147483648"]);
+}

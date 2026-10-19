@@ -65,9 +65,10 @@ fn common(g: &SolidElevenGame, key: &str) -> Option<UiValue> {
 }
 
 /// A screen's values: the common keys, then the screen's own. Its
-/// revision is the menu frame, so a frame lays the screen out once (the
-/// art under it reads the same rects the draw uses) and never shows a
-/// stale value.
+/// revision moves with the menu input and the cursors
+/// (`SolidElevenGame::menu_frame`): the screen lays out only when a value
+/// may have changed, at most once a frame (the art under it reads the
+/// rects the draw uses).
 struct Values<'g, F: Fn(&str, u16) -> Option<UiValue>> {
     g: &'g SolidElevenGame,
     own: F,
@@ -79,7 +80,27 @@ impl<F: Fn(&str, u16) -> Option<UiValue>> UiData for Values<'_, F> {
     }
 
     fn revision(&self) -> Option<u32> {
-        Some(self.g.menu_frame)
+        // The cursors too: a test or a tool that moves one by hand still
+        // sees it.
+        use core::hash::Hash;
+        let mut h = Fnv(0x811c_9dc5);
+        self.g.cur.hash(&mut h);
+        Some(self.g.menu_frame ^ h.0)
+    }
+}
+
+/// FNV-1a, for the revision.
+struct Fnv(u32);
+
+impl core::hash::Hasher for Fnv {
+    fn write(&mut self, bytes: &[u8]) {
+        for b in bytes {
+            self.0 = (self.0 ^ *b as u32).wrapping_mul(0x0100_0193);
+        }
+    }
+
+    fn finish(&self) -> u64 {
+        self.0 as u64
     }
 }
 

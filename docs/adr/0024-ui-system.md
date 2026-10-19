@@ -119,7 +119,7 @@ example with its own assets (`ui/` next to an `assets/manifest.toml`) checks aga
 
 | Target | Nodes | 2D draws a frame | Safe area |
 |---|---|---|---|
-| N64 | 64 | 384 | 16 × 12 |
+| N64 | 128 (64 before issue #95) | 384 | 16 × 12 |
 | 3DS | 128 | 2048 | 0 |
 | PC, Web | 512 | 16384 | 0 (Web: the notch) |
 

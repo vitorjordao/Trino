@@ -148,12 +148,14 @@ pub struct Toast {
 }
 
 /// Menu cursors.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
 pub struct Cursors {
     pub title: usize,
     pub quick: usize,
     pub pick: usize,
     pub club: usize,
+    /// The table row the view follows (scrolling at large text).
+    pub table: usize,
     /// The club shown in Teams.
     pub team_club: u8,
     pub squad: usize,
@@ -295,8 +297,11 @@ pub struct SolidElevenGame {
     /// The menu screen up (one at a time): laid out by the engine
     /// (`ui/*.ui.ron`, issue #95), showing the game's cursors.
     pub menu_ui: crate::ui::scr::MenuUi,
-    /// Counts menu frames: a screen lays out once a frame.
+    /// The menu screens' data revision: moves on any menu input, tap or
+    /// scene change, and every 30 frames (a timer's text), so a screen
+    /// lays out only then (a layout is milliseconds on the N64).
     pub menu_frame: u32,
+    menu_ticks: u32,
     /// The toast over the menus (`ui/toast.ui.ron`).
     pub toast_ui: trino_core::Ui<8>,
     /// The PC host's bindings (the controls page).
@@ -364,6 +369,7 @@ impl SolidElevenGame {
             pause_ui: trino_core::Ui::new(),
             menu_ui: trino_core::Ui::new(),
             menu_frame: 0,
+            menu_ticks: 0,
             toast_ui: trino_core::Ui::new(),
             repeat: Repeat::default(),
             prev: InputState::default(),
@@ -501,7 +507,6 @@ impl SolidElevenGame {
     /// One frame of the menus and the match.
     fn step(&mut self, input: &InputState, audio: &mut dyn Audio, dt: f32) {
         self.time += dt;
-        self.menu_frame = self.menu_frame.wrapping_add(1);
         if let Some(t) = &mut self.toast {
             t.left -= dt;
             if t.left <= 0.0 {
@@ -516,6 +521,16 @@ impl SolidElevenGame {
         }
         let mut nav = self.repeat.nav(input, &prev, dt);
         let mut tap = self.hits.tapped(input, &prev);
+        let scene_before = self.scene;
+        let toast_before = self.toast.map(|t| t.text);
+        self.menu_ticks = self.menu_ticks.wrapping_add(1);
+        if nav != Nav::default()
+            || tap.is_some()
+            || input.keys != prev.keys
+            || self.menu_ticks.is_multiple_of(30)
+        {
+            self.menu_frame = self.menu_frame.wrapping_add(1);
+        }
         if tap == Some(crate::ui::screens::HIT_BACK) {
             nav.back = true;
             tap = None;
@@ -549,6 +564,11 @@ impl SolidElevenGame {
             }
             Scene::Controls => self.controls_frame(input, &prev, &nav, tap, audio, dt),
             _ => self.menu_frame(&nav, tap, audio),
+        }
+        // What the frame changed without a press (a scene opened by the
+        // game, a toast) shows at once.
+        if self.scene != scene_before || self.toast.map(|t| t.text) != toast_before {
+            self.menu_frame = self.menu_frame.wrapping_add(1);
         }
     }
 
@@ -846,6 +866,8 @@ impl SolidElevenGame {
             Scene::PickClub { then } => self.pick_club(nav, tap, then),
             Scene::Club => self.club(nav, tap),
             Scene::Table => {
+                // Up and down scroll it (it shows whole at 100 % text).
+                menu::step(&mut self.cur.table, TEAMS, nav);
                 if nav.back || nav.confirm || nav.y || tap.is_some() {
                     self.scene = Scene::Club;
                 }

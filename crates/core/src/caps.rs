@@ -229,7 +229,9 @@ impl Caps {
         depth_mantissa: 11,
         family: Family::N64,
         safe_area: (16, 12),
-        max_ui_nodes: 64,
+        // 128 (issue #95): a 41-row menu list lays out in ~TBD ms and draws
+        // in ~TBD ms on the console (`TRINO_UI_COST`, the ares self-test).
+        max_ui_nodes: 128,
         max_ui_draws: 384,
     };
 

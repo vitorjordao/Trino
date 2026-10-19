@@ -74,7 +74,7 @@ fn strict_mode_fails_a_ui_screen_over_the_n64_node_budget() {
         return;
     };
     r.set_strict(true);
-    // 64 nodes: exactly the N64's budget.
+    // Exactly the N64's budget.
     let fits = rects(Caps::N64.max_ui_nodes as usize - 1);
     draw(&mut r, &fits);
     let stats = r.last_ui_stats().expect("the UI reported its counts");
@@ -83,7 +83,7 @@ fn strict_mode_fails_a_ui_screen_over_the_n64_node_budget() {
     // One more fails, naming the cap and the check that would have caught it.
     let over = rects(Caps::N64.max_ui_nodes as usize);
     let err = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| draw(&mut r, &over)))
-        .expect_err("strict mode must reject 65 nodes on the N64");
+        .expect_err("strict mode must reject one node over the N64's budget");
     let msg = err.downcast_ref::<String>().cloned().unwrap_or_default();
     assert!(
         msg.contains("Caps::max_ui_nodes") && msg.contains("ui check"),
@@ -95,7 +95,10 @@ fn strict_mode_fails_a_ui_screen_over_the_n64_node_budget() {
     };
     pc.set_strict(true);
     draw(&mut pc, &over);
-    assert_eq!(pc.last_ui_stats().unwrap().nodes, 65);
+    assert_eq!(
+        pc.last_ui_stats().unwrap().nodes,
+        Caps::N64.max_ui_nodes + 1
+    );
     r.set_strict(false);
     draw(&mut r, &over);
 }

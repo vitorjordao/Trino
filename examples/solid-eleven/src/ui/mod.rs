@@ -23,6 +23,10 @@ pub mod screens;
 pub mod settings_gen {
     include!("settings_gen.rs");
 }
+/// The league table (`ui/table.ui.ron`).
+pub mod table_gen {
+    include!("table_gen.rs");
+}
 /// The toast over the menus (`ui/toast.ui.ron`).
 pub mod toast_gen {
     include!("toast_gen.rs");

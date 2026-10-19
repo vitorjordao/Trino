@@ -672,6 +672,14 @@ antialias = true
 chars = " ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,:;-+/%!?()'&#<>*=_ÁÂÃÀÇÉÊÍÓÔÕÚÜ"
 formats = { n64 = "I4" }
 
+# PC high-resolution font (crisp text on 1080p, 1440p / 2K, 4K displays).
+[fonts.se_huge]
+file = "fonts/RobotoCondensed-Bold.ttf"
+size = 44
+antialias = true
+chars = " ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,:;-+/%!?()'&#<>*=_ÁÂÃÀÇÉÊÍÓÔÕÚÜ"
+formats = { n64 = "I4" }
+
 # ---- sounds (tools/solid_eleven/make_sounds.py) ----
 [sounds.se_whistle]
 file = "sounds/se_whistle.wav"

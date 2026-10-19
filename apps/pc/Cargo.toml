@@ -11,10 +11,12 @@ name = "trino-pc"
 path = "src/main.rs"
 
 [features]
-default = []
+default = ["gamepad"]
 # Live reload: game code hot-swaps as a dylib, assets rebake+reupload on
 # save. Dev-only; console/release builds link everything statically.
 reload = ["dep:hot-lib-reloader", "trino-asset-pipeline/watch"]
+# Gamepads through gilrs
+gamepad = ["trino-runner-pc/gamepad", "trino-platform-pc/gamepad"]
 
 [dependencies]
 trino-core = { workspace = true }

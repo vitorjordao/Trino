@@ -195,7 +195,10 @@ fn a_quick_match_from_the_title_to_the_report_with_a_human_side() {
     );
     // The bot plays the home side to full time.
     let mut frame = 0;
-    while d.g.scene == Scene::Match && frame < 30 * 60 * 6 {
+    while matches!(d.g.scene, Scene::Match | Scene::HalfTime) && frame < 30 * 60 * 6 {
+        if d.g.scene == Scene::HalfTime {
+            d.press(Button::A);
+        }
         let input = bot(&d.g, 0, frame);
         d.frame(&input);
         frame += 1;
@@ -715,6 +718,127 @@ fn tapping_a_hair_swatch_picks_that_color() {
         assert_eq!(d.g.world.players[i].hair, k, "tapped swatch {k}");
         assert_eq!(d.g.cur.edit_attr, crate::sim::team::ATTRS + 2);
     }
+}
+
+/// Tapping the `<` back button in the screen header goes back to the parent screen.
+#[test]
+fn tapping_back_button_in_header_navigates_back() {
+    use crate::selftest::NullRenderer;
+    use trino_core::PointerButton;
+
+    let mut d = Driver::new(Cart::default());
+    d.idle(2);
+    // Enter Quick Match setup
+    d.press(Button::A);
+    assert_eq!(d.g.scene, Scene::Quick);
+
+    let mut r = NullRenderer {
+        caps: trino_core::Caps::N3DS,
+    };
+    d.g.render(&mut r);
+
+    // Tap on the '<' back button at the top-left (e.g. x: 10, y: 12)
+    let mut tap = InputState::default();
+    tap.pointer = Some(Vec2::new(10.0, 12.0));
+    tap.set_pointer_button(PointerButton::Primary, true);
+    d.frame(&tap);
+    d.idle(1);
+
+    assert_eq!(
+        d.g.scene,
+        Scene::Title,
+        "tapping header back button returns to Title"
+    );
+}
+
+/// Selecting 'Quit' in the pause menu (option 2) exits the match and clears session.
+#[test]
+fn pause_menu_quit_exits_match_to_title() {
+    let mut d = Driver::new(Cart::default());
+    d.idle(2);
+    d.press(Button::A); // Quick
+    d.presses(Button::DpadDown, 6); // To start button
+    d.press(Button::A); // Kick off
+    assert_eq!(d.g.scene, Scene::Match);
+
+    // Pause the match
+    d.press(Button::Start);
+    assert_eq!(d.g.scene, Scene::Pause);
+
+    // Navigate to Option 2 (Quit) and confirm
+    d.press(Button::DpadDown);
+    d.press(Button::DpadDown);
+    d.press(Button::A);
+
+    assert_eq!(
+        d.g.scene,
+        Scene::Title,
+        "tapping quit in pause menu exits match to Title"
+    );
+    assert!(d.g.session.is_none(), "session is cleared on quit");
+}
+
+/// The layout dynamically switches between Gamepad (pad) and Keyboard.
+#[test]
+fn dynamic_layout_switches_between_gamepad_and_keyboard() {
+    let mut g = SolidElevenGame::new(Vec2::new(320.0, 240.0));
+    let mut mute = Mute;
+
+    // Use gamepad input: state.pad = true
+    let mut pad_input = InputState::default();
+    pad_input.pad = true;
+    g.update(&pad_input, &mut mute, DT);
+    assert!(g.using_pad, "active gamepad sets using_pad to true");
+    assert!(g.pad_layout(), "gamepad layout is active");
+
+    // Use keyboard input: key is pressed without pad
+    let mut key_input = InputState::default();
+    key_input.keys.set(trino_core::Key::Space, true);
+    g.update(&key_input, &mut mute, DT);
+    assert!(!g.using_pad, "keyboard press switches using_pad to false");
+    assert!(!g.pad_layout(), "keyboard layout is active on PC");
+}
+
+/// Movement directions Left, Right, Up, Down match on-screen broadcast camera view.
+#[test]
+fn movement_left_right_up_down_matches_screen_space() {
+    use crate::game::input::Controls;
+    use crate::sim::fx::Fx;
+
+    let mut c = Controls::default();
+    let none = InputState::default();
+
+    // Right: stick.x = +1.0 -> screen right is world -X
+    let mut right = InputState::default();
+    right.set(Button::DpadRight, true);
+    let pad_r = c.pad(&right, &none, 1.0 / 60.0, false);
+    assert_eq!(
+        pad_r.mv.x,
+        -Fx::ONE,
+        "DpadRight moves player to screen right (-X)"
+    );
+
+    // Left: stick.x = -1.0 -> screen left is world +X
+    let mut left = InputState::default();
+    left.set(Button::DpadLeft, true);
+    let pad_l = c.pad(&left, &none, 1.0 / 60.0, false);
+    assert_eq!(
+        pad_l.mv.x,
+        Fx::ONE,
+        "DpadLeft moves player to screen left (+X)"
+    );
+
+    // Up: stick.y = +1.0 -> runs away from camera into screen (-Y world Z)
+    let mut up = InputState::default();
+    up.set(Button::DpadUp, true);
+    let pad_u = c.pad(&up, &none, 1.0 / 60.0, false);
+    assert_eq!(pad_u.mv.y, -Fx::ONE, "DpadUp runs into the pitch (-Y)");
+
+    // Down: stick.y = -1.0 -> runs toward camera (+Y world Z)
+    let mut down = InputState::default();
+    down.set(Button::DpadDown, true);
+    let pad_d = c.pad(&down, &none, 1.0 / 60.0, false);
+    assert_eq!(pad_d.mv.y, Fx::ONE, "DpadDown runs toward the camera (+Y)");
 }
 
 /// The pause menu (a UI screen since issue #58) draws the three rows its

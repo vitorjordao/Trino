@@ -101,6 +101,7 @@ pub struct RunConfig {
     /// `<target>/save/<save_name>.sav`. `<root>/target` by default.
     pub target: PathBuf,
     pub save_name: String,
+    pub default_profile: Option<SimProfile>,
 }
 
 impl RunConfig {
@@ -111,6 +112,7 @@ impl RunConfig {
             target: root.join("target"),
             root,
             save_name: "game".into(),
+            default_profile: None,
         }
     }
 
@@ -389,7 +391,11 @@ pub fn run<G: Game + 'static>(config: RunConfig, make: impl FnOnce(Vec2) -> G + 
         .ok()
         .and_then(|v| v.parse().ok());
     let event_loop = EventLoop::new().expect("failed to create event loop");
-    let profile = profile_from_env();
+    let profile = std::env::var("TRINO_SIM")
+        .ok()
+        .and_then(|v| SimProfile::parse(&v))
+        .or(config.default_profile)
+        .unwrap_or(SimProfile::N64);
     let mut host = Host {
         config,
         profile,

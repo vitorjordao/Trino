@@ -298,16 +298,19 @@ pub fn think(m: &mut Match, cmds: &mut [Option<Cmd>; N]) {
                 continue;
             }
             let home = anchor(m, s, k, ball, attacking);
+            let ball_dist = (ball - m.players[i].pos).len();
             let cmd = if m.players[i].role == Role::Gk {
                 keeper(m, i, home)
             } else if m.owner == Some(i as u8) {
                 carrier(m, i)
             } else if poss == Some(s) {
                 support(m, i, home)
-            } else if poss.is_none()
-                && (Some(i as u8) == m.receiver
-                    || Some(i as u8) == c1
-                    || (Some(i as u8) == c2 && !attacking))
+            } else if poss.is_none() && Some(i as u8) == m.receiver {
+                let opp_near = opp_distance(m, s, m.players[i].pos) < Fx::milli(3_000);
+                let ball_close = ball_dist < Fx::int(3);
+                let hurry = opp_near || !ball_close;
+                chase(m, i, hurry)
+            } else if poss.is_none() && (Some(i as u8) == c1 || (Some(i as u8) == c2 && !attacking))
             {
                 chase(m, i, true)
             } else if poss.is_some() && Some(i as u8) == c1 {
@@ -379,9 +382,11 @@ fn press(m: &mut Match, i: usize) -> Cmd {
         let p = carrier.pos + (own_goal - carrier.pos).norm().scale(Fx::int(5));
         return go_to(m, i, p, false);
     }
-    let mut cmd = go_to(m, i, goal_side, d > Fx::int(3));
+    let closing = d > Fx::milli(1_400);
+    let mut cmd = go_to(m, i, goal_side, closing);
     cmd.mv = cmd.mv.norm();
     cmd.face = Some((carrier.pos - me.pos).norm());
+    cmd.sprint = closing && me.stamina > Fx::milli(120);
     let aggr = Fx::ratio(t.aggression as i32, 100);
     let err = err_scale(m, s);
     if d < Fx::milli(1_500) && me.cool == 0 {
@@ -389,10 +394,14 @@ fn press(m: &mut Match, i: usize) -> Cmd {
         if m.rng.chance(p) {
             cmd.act = Some(CmdAct::Tackle);
         }
-    } else if d < Fx::milli(3_000) && d > Fx::milli(1_800) && carrier.vel.len() > Fx::int(5) {
+    } else if d < Fx::milli(2_600)
+        && d > Fx::milli(1_800)
+        && carrier.vel.len() > Fx::int(5)
+        && me.cool == 0
+    {
         // A slide at a runner, from the front or side.
         let facing = (carrier.pos - me.pos).norm().dot(carrier.vel.norm());
-        if facing < Fx::milli(300) && m.rng.chance(aggr.mul(Fx::milli(25))) {
+        if facing < Fx::milli(200) && m.rng.chance(aggr.mul(Fx::milli(15))) {
             cmd.act = Some(CmdAct::Slide(
                 (carrier.pos + carrier.vel.scale(Fx::milli(200)) - me.pos).norm(),
             ));
@@ -1491,11 +1500,27 @@ pub fn human_kick_plan(m: &mut Match, i: usize, pad: &Pad) -> Option<KickPlan> {
     };
     let throw_in =
         m.phase != Phase::Play && m.restart.kind == RestartKind::ThrowIn && m.taker as usize == i;
-    if let Some(charge) = pad.pass.or(if throw_in {
-        pad.through.or(pad.shoot)
-    } else {
-        None
-    }) {
+    if throw_in && let Some(charge) = pad.shoot {
+        let tgt = m.players[i].pos + dir.scale(Fx::int(18) + charge.mul(Fx::int(14)));
+        let to = pass_target(m, i, dir);
+        let mut p = pass_plan(
+            m,
+            i,
+            pitch::clamp_to_field(tgt),
+            to,
+            false,
+            KickKind::Throw,
+            Fx::milli(500),
+        );
+        let (d, _sp) = V2::new(p.vel.x, p.vel.z).norm_len();
+        p.vel = ball::launch(
+            d,
+            (Fx::int(11) + charge.mul(Fx::int(7))).min(Fx::int(18)),
+            Fx::milli(400),
+        );
+        return Some(p);
+    }
+    if let Some(charge) = pad.pass.or(if throw_in { pad.through } else { None }) {
         let to = pass_target(m, i, dir);
         let plan = match to {
             Some(j) => {

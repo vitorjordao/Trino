@@ -54,6 +54,7 @@ pub fn figure_framed(
         height: cam.0,
         back: cam.1,
         fov: framing.fov,
+        wide: false,
     };
     r.set_camera(&cs.camera());
     r.set_light(&Sky::Day.light());

@@ -498,3 +498,18 @@ fn mixer_gains_ducking_looping_and_clamping() {
     assert_eq!((out[0], out[1]), (1.0, -1.0));
     assert_eq!(loud.voices.len(), 1, "only the looped (empty) voice stays");
 }
+
+#[test]
+fn newly_supported_keys_are_bindable_with_labels() {
+    use trino_platform_pc::input::key_label;
+    use winit::keyboard::KeyCode;
+
+    assert_eq!(key_label(KeyCode::Space), Some("SPACE"));
+    assert_eq!(key_label(KeyCode::Tab), Some("TAB"));
+    assert_eq!(key_label(KeyCode::Backspace), Some("BACKSPACE"));
+    assert_eq!(key_label(KeyCode::Digit1), Some("1"));
+    assert_eq!(key_label(KeyCode::Digit2), Some("2"));
+    assert_eq!(key_label(KeyCode::Digit3), Some("3"));
+    assert_eq!(key_label(KeyCode::KeyR), Some("R"));
+    assert_eq!(key_label(KeyCode::KeyT), Some("T"));
+}

@@ -28,6 +28,7 @@ pub const F_UI: FontId = FontId::from_path("fonts/se_ui");
 pub const FONT_CHARS: &str =
     " ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,:;-+/%!?()'&#<>*=_ÁÂÃÀÇÉÊÍÓÔÕÚÜ";
 pub const F_BIG: FontId = FontId::from_path("fonts/se_big");
+pub const F_HUGE: FontId = FontId::from_path("fonts/se_huge");
 
 /// The design canvas.
 pub const DESIGN_W: f32 = 320.0;
@@ -213,8 +214,10 @@ impl<'a> Ui<'a> {
 
     fn font_for(&self, size: Size) -> (FontId, f32) {
         match size {
+            Size::Small if self.scale >= 3.0 => (F_HUGE, self.scale * 0.25),
             Size::Small if self.scale >= 1.5 => (F_BIG, self.scale * 0.5),
             Size::Small => (F_UI, self.scale),
+            Size::Big if self.scale >= 2.0 => (F_HUGE, self.scale * 0.5),
             Size::Big => (F_BIG, self.scale),
         }
     }
@@ -426,17 +429,18 @@ impl<'a> Ui<'a> {
     /// A controller hint like the reference's footer: a colored pill with
     /// the button letter, then the action.
     pub fn hint(&mut self, x: f32, y: f32, letter: &str, c: Color, label: &str) -> f32 {
+        let bw = (self.measure(letter, Size::Small) + 6.0).max(11.0);
         let lw = self.measure(label, Size::Small);
-        let w = 16.0 + lw + 6.0;
+        let w = bw + lw + 8.0;
         self.slant(
             Rect::new(x, y, w, 13.0),
             Color::rgba(c.r / 3, c.g / 3, c.b / 3, 230),
             3.0,
         );
         self.slant_border(Rect::new(x, y, w, 13.0), c, 3.0, 1.0);
-        self.fill(Rect::new(x + 3.0, y + 2.0, 10.0, 9.0), c);
+        self.fill(Rect::new(x + 2.0, y + 2.0, bw, 9.0), c);
         self.text(
-            x + 8.0,
+            x + 2.0 + bw * 0.5,
             y + 1.0,
             letter,
             pal::NAVY,
@@ -444,7 +448,7 @@ impl<'a> Ui<'a> {
             TextAlign::Center,
         );
         self.text(
-            x + 16.0,
+            x + bw + 4.0,
             y + 1.0,
             label,
             pal::INK,

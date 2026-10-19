@@ -104,8 +104,8 @@ fn the_fonts_bake_the_characters_the_code_writes() {
     let wanted = format!("chars = \"{}\"", solid_eleven::ui::FONT_CHARS);
     assert_eq!(
         manifest.matches(&wanted).count(),
-        2,
-        "both fonts (se_ui, se_big) must bake ui::FONT_CHARS exactly"
+        3,
+        "the fonts (se_ui, se_big, se_huge) must bake ui::FONT_CHARS exactly"
     );
 }
 

@@ -159,7 +159,8 @@ pub fn render(
     let pixels = r.read_second_screen();
     let width = w.max(bw);
     let height = h + bh;
-    let mut rgba = vec![0u8; (width * height * 4) as usize];
+    // The margin beside the narrower bottom screen: the 3DS's black bezel.
+    let mut rgba = [0u8, 0, 0, 255].repeat((width * height) as usize);
     for y in 0..h {
         let from = (y * w * 4) as usize;
         let to = (y * width * 4) as usize;

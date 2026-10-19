@@ -45,11 +45,15 @@ pub(super) fn label<'b, const V: usize>(
         return template;
     }
     buf.clear();
+    // `{}` marks the value's place; without one it follows the text.
     let (before, after) = match template.find("{}") {
         Some(at) => (&template[..at], &template[at + 2..]),
         None => (template, ""),
     };
     let _ = buf.write_str(before);
+    if !template.is_empty() && !template.contains("{}") {
+        let _ = buf.write_str(" ");
+    }
     match values.get(n.bind, item) {
         Some(UiValue::Int(v)) => {
             let _ = write!(buf, "{v}");

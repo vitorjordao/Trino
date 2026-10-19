@@ -347,7 +347,8 @@ pub struct UiNode<'a> {
     pub valign: VAlign,
     pub overflow: Overflow,
     /// The text in the default language (and the template for `bind`: `{}`
-    /// is replaced by the bound value).
+    /// is replaced by the bound value; without `{}` the value follows the
+    /// text after a space).
     pub text: &'a str,
     /// A string-table key ([`UiStrings`](super::UiStrings)): the text in the
     /// current language when the table has it.

@@ -1,0 +1,31 @@
+// Options: a toggle and a slider bound to values the game reads
+// (`ui.get_bool("music")`, `ui.get("volume")`). `preview` holds what the
+// editor and `ui shot` show; the game sets the real values.
+(
+    version: 1,
+    name: "options",
+    focus: "music",
+    on_back: "back",
+    preview: {"music": Bool(true), "volume": Int(7)},
+    root: (
+        children: [
+            (kind: Rect(), anchor: Fill, bleed: true, color: Some((0, 0, 0, 200))),
+            (
+                kind: Rect(border: 1, border_color: Some((255, 244, 200, 255))),
+                anchor: Center,
+                padding: (12, 10, 12, 12),
+                children: [
+                    (
+                        kind: Stack(gap: 6, align: Stretch),
+                        children: [
+                            (kind: Text, key: "options.title", text: "Options", text_scale: 2, align: Center),
+                            (kind: Toggle, id: "music", key: "options.music", text: "Music", bind: "music", size: (Px(160), Px(14))),
+                            (kind: Slider(min: 0, max: 10, step: 1), id: "volume", key: "options.volume", text: "Volume", bind: "volume", size: (Px(160), Px(14))),
+                            (kind: Button, id: "back", key: "options.back", text: "Back", on_click: "back", size: (Px(160), Px(18))),
+                        ],
+                    ),
+                ],
+            ),
+        ],
+    ),
+)

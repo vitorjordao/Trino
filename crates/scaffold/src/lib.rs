@@ -314,8 +314,9 @@ pub fn scaffold(
     // repo itself otherwise).
     std::fs::rename(dest.join("gitignore"), dest.join(".gitignore")).map_err(|e| e.to_string())?;
     std::fs::rename(dest.join("cargo"), dest.join(".cargo")).map_err(|e| e.to_string())?;
-    // Starter assets: the engine's own hero sprite and beep.
-    for rel in ["sprites/hero.png", "sounds/beep.wav"] {
+    // Starter assets: the engine's own hero sprite and beep, and its pixel
+    // font (the UI screens in `ui/` draw with it).
+    for rel in ["sprites/hero.png", "sounds/beep.wav", "fonts/trino5x7.png"] {
         let to = dest.join("assets/shared").join(rel);
         std::fs::create_dir_all(to.parent().unwrap()).map_err(|e| e.to_string())?;
         std::fs::copy(engine_root.join("assets/shared").join(rel), &to)
@@ -401,9 +402,15 @@ fn copy_demo(engine: &Path, dest: &Path, demo: Demo, names: &Names) -> Result<()
         // Replace the starter manifest with the demo's, keep the starter
         // masters next to its own.
         copy_tree(&src.join("assets"), &dest.join("assets"), &mut |_, b| b)?;
+        // The starter UI screens (`ui/`) draw with the engine's font.
+        let manifest = dest.join("assets/manifest.toml");
+        let text = read(&manifest)?;
+        if !text.contains("[fonts.trino5x7]") {
+            write(&manifest, &format!("{text}{UI_FONT_DECL}"))?;
+        }
         return Ok(());
     }
-    for dir in ["assets", "scenes", "prefabs"] {
+    for dir in ["assets", "scenes", "prefabs", "ui"] {
         let from = engine.join(dir);
         if from.is_dir() {
             copy_tree(&from, &dest.join(dir), &mut |_, b| b)?;
@@ -411,6 +418,10 @@ fn copy_demo(engine: &Path, dest: &Path, demo: Demo, names: &Names) -> Result<()
     }
     Ok(())
 }
+
+/// The engine font's manifest entry, for a demo manifest that lacks it.
+const UI_FONT_DECL: &str = "\n# The engine's pixel font: what the UI screens in ui/ draw with.\n\
+                            [fonts.trino5x7]\nfile = \"fonts/trino5x7.png\"\ncell = [6, 10]\n";
 
 /// Copy a template overlay over the project: text files rendered like the
 /// standalone base (`*.tmpl` suffix dropped), others byte for byte.
@@ -628,6 +639,11 @@ mod tests {
                 "web/src/lib.rs",
                 "assets/manifest.toml",
                 "assets/shared/sprites/hero.png",
+                "assets/shared/fonts/trino5x7.png",
+                "assets/i18n/en-US.ron",
+                "ui/title.ui.ron",
+                "ui/pause.ui.ron",
+                "ui/options.ui.ron",
             ] {
                 assert!(dest.join(f).is_file(), "{}: {f}", template.key());
             }

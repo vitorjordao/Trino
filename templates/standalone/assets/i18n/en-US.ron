@@ -1,0 +1,20 @@
+// The game's strings in English (the UI screens' `key`s). Add a language
+// with one more file (`pt-BR.ron`, `fallback: "en-US"`) and a font that
+// has its glyphs; `cargo trino ui check --lang pt-BR` shows what overflows.
+Strings(
+    lang: "en-US",
+    entries: {
+        "title.play": "Play",
+        "title.options": "Options",
+        "title.hint.pad": "A: select",
+        "title.hint.pointer": "Enter or click to select",
+        "pause.title": "Paused",
+        "pause.resume": "Resume",
+        "pause.options": "Options",
+        "pause.quit": "Quit to title",
+        "options.title": "Options",
+        "options.music": "Music",
+        "options.volume": "Volume",
+        "options.back": "Back",
+    },
+)

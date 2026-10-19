@@ -47,6 +47,10 @@ pub mod results_gen {
 pub mod table_gen {
     include!("table_gen.rs");
 }
+/// Team selection (`ui/teams.ui.ron`).
+pub mod teams_gen {
+    include!("teams_gen.rs");
+}
 /// The toast over the menus (`ui/toast.ui.ron`).
 pub mod toast_gen {
     include!("toast_gen.rs");

@@ -1253,180 +1253,155 @@ fn radar_of(ui: &mut Ui, cx: f32, cy: f32, rad: f32, p: &PlayerRec, fill: Color)
     );
 }
 
-fn teams(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
-    let lang = g.settings.lang;
-    let pad = g.pad_layout();
+fn teams(g: &mut SolidElevenGame, r: &mut dyn Renderer, _screen: Vec2) {
+    use super::scr::{art, flag, int, txt};
+    let screen = &super::teams_gen::SCREEN;
     let club = g.cur.team_club;
     let (list, n) = g.squad_list(club);
-    let mut ui = Ui::new(r, screen);
-    header(&mut ui, &mut g.hits, tr(lang, S::TeamSelect), true);
-    // Club name and crest, top right.
-    ui.slant(Rect::new(212.0, 6.0, 112.0, 22.0), pal::NAVY, 6.0);
-    ui.text(
-        276.0,
-        10.0,
-        CLUBS[club as usize].short,
-        pal::INK,
-        Size::Small,
-        TextAlign::Center,
+    let top = g.cur.squad_top;
+    let shown = g.squad_rows().min(n.saturating_sub(top));
+    let big = g.big_text();
+    let row = if big { "row_big" } else { "row" };
+    let sel = g.cur.squad.min(n.saturating_sub(1));
+    let picked = (n > 0).then(|| g.world.players[list[sel] as usize]);
+    const STATS: [(usize, S); 4] = [
+        (team::SPEED, S::Speed),
+        (team::SHOT, S::Shot),
+        (team::PASS, S::Pass),
+        (team::STAMINA, S::Stamina),
+    ];
+    let formation = g.world.clubs[club as usize].formation;
+    super::scr::show(
+        g,
+        r,
+        screen,
+        Some((row, sel.saturating_sub(top) as u16)),
+        super::scr::rev(&(club, top, sel, formation, picked.map(|p| p.attrs), n)),
+        |g, key, item| {
+            let lang = g.settings.lang;
+            let f = FORMATIONS[formation as usize % FORMATIONS.len()];
+            match key {
+                "rows" => return int(shown as i32),
+                "club" => {
+                    if !g.big_text() {
+                        return txt(CLUBS[club as usize].short);
+                    }
+                    let mut b = buf();
+                    let _ = write!(b, "{} {}", CLUBS[club as usize].short, f.name);
+                    return txt(b.as_str());
+                }
+                "stats_line" => {
+                    let p = picked?;
+                    let mut b = buf();
+                    for (k, (a, s)) in STATS.iter().enumerate() {
+                        let sep = if k > 0 { "  " } else { "" };
+                        let _ = write!(b, "{sep}{} {}", tr(lang, *s), p.attrs[*a]);
+                    }
+                    return txt(b.as_str());
+                }
+                "formation" => return txt(f.name),
+                "formation_line" => {
+                    let mut b = buf();
+                    let _ = write!(b, "{}: {}", tr(lang, S::Formation), f.name);
+                    return txt(b.as_str());
+                }
+                _ => {}
+            }
+            if let Some(k) = key.strip_prefix("stat") {
+                let (a, s) = STATS[k.parse::<usize>().ok()? % 4];
+                let mut b = buf();
+                let _ = write!(b, "{}: {}", tr(lang, s), picked?.attrs[a]);
+                return txt(b.as_str());
+            }
+            let idx = top + item as usize;
+            let p = g.world.players.get(*list[..n].get(idx)? as usize)?;
+            match key {
+                "name" => txt(name_line(p, lang).as_str()),
+                "starter" => flag(idx < 11),
+                "bench" => flag(idx >= 11),
+                "ovr" => int(p.ovr() as i32),
+                _ => None,
+            }
+        },
+        |_, ui, r| super::scr::chrome(ui, screen, r),
     );
-    crest_of(&mut ui, 296.0, 4.0, 20.0, club, false);
-    // Squad list.
-    ui.text_shadow(
-        8.0,
-        32.0,
-        tr(lang, S::Squad),
-        pal::INK,
-        Size::Small,
-        TextAlign::Left,
-    );
-    for row in 0..6 {
-        let k = g.cur.squad_top + row;
-        if k >= n {
-            break;
+    let ui = core::mem::take(&mut g.menu_ui);
+    if let Some((mut a, size)) = art(r, &ui, screen, "club_crest", NO_ITEM) {
+        crest_of(&mut a, 0.0, 0.0, size.x, club, false);
+    }
+    // The rows' portraits and the starters' purple rims.
+    let portrait_id = if big { "portrait_big" } else { "portrait" };
+    for k in 0..shown {
+        let i = list[top + k] as usize;
+        if let Some((mut a, size)) = art(r, &ui, screen, row, k as u16)
+            && top + k < 11
+            && top + k != sel
+        {
+            a.border(Rect::new(0.0, 0.0, size.x, size.y), pal::PURPLE, 1.0);
         }
-        let i = list[k] as usize;
-        let p = &g.world.players[i];
-        let y = 46.0 + row as f32 * 28.0;
-        let sel = g.cur.squad == k;
-        let rr = Rect::new(6.0, y, 112.0, 26.0);
-        ui.fill(
-            rr,
-            if sel {
-                Color::rgba(30, 150, 200, 230)
-            } else {
-                pal::PANEL
-            },
+        if let Some((mut a, _)) = art(r, &ui, screen, portrait_id, k as u16) {
+            portrait(&mut a, 0.0, 0.0, &look_of(g, i));
+        }
+    }
+    if let Some(p) = picked {
+        for (k, (attr, _)) in STATS.iter().enumerate() {
+            const BARS: [&str; 4] = ["bar0", "bar1", "bar2", "bar3"];
+            if let Some((mut a, size)) = art(r, &ui, screen, BARS[k], NO_ITEM) {
+                let v = p.attrs[*attr];
+                let c = if v >= 80 {
+                    pal::GREEN
+                } else if v >= 65 {
+                    pal::CYAN
+                } else {
+                    pal::ORANGE
+                };
+                a.bar(Rect::new(0.0, 0.0, size.x, size.y), v as f32 / 100.0, c);
+            }
+        }
+    }
+    // The tactics board: the pitch and the eleven numbers.
+    if let Some((mut a, size)) = art(r, &ui, screen, "board", NO_ITEM) {
+        let (bw, bh) = (size.x, size.y);
+        let pitch = Rect::new(0.0, 0.0, bw, bh);
+        a.fill(pitch, Color::rgb(40, 130, 60));
+        a.border(pitch, Color::rgba(230, 240, 230, 220), 1.0);
+        a.fill(
+            Rect::new(0.0, bh * 0.5, bw, 1.0),
+            Color::rgba(230, 240, 230, 200),
         );
-        ui.border(
-            rr,
-            if sel {
-                pal::CYAN
-            } else if k < 11 {
-                pal::PURPLE
-            } else {
-                Color::rgb(50, 50, 80)
-            },
+        a.border(
+            Rect::new(bw * 0.25, bh - 22.0, bw * 0.5, 22.0),
+            Color::rgba(230, 240, 230, 200),
             1.0,
         );
-        portrait(&mut ui, 9.0, y + 5.0, &look_of(g, i));
-        let nl = name_line(p, lang);
-        ui.text(
-            28.0,
-            y + 2.0,
-            nl.as_str(),
-            pal::INK,
-            Size::Small,
-            TextAlign::Left,
-        );
-        let mut b = buf();
-        let _ = write!(b, "{}", p.ovr());
-        ui.text(
-            114.0,
-            y + 13.0,
-            b.as_str(),
-            if k < 11 { pal::YELLOW } else { pal::DIM },
-            Size::Small,
-            TextAlign::Right,
-        );
-        if k < 11 {
-            ui.text(
-                28.0,
-                y + 13.0,
-                "*",
-                pal::YELLOW,
+        let f = FORMATIONS[formation as usize % FORMATIONS.len()];
+        let xi = g.world.lineup(club);
+        for k in 0..11 {
+            let b = f.base(k);
+            // Normalized team space: x -1 (own goal, bottom) .. 0 (halfway).
+            let px = (0.5 + b.y.to_f32() * 0.42) * bw;
+            let py = bh * (0.5 - b.x.to_f32() * 0.46);
+            a.fill(
+                Rect::new(px - 6.0, py - 5.0, 12.0, 10.0),
+                if k == 0 { pal::GREEN } else { pal::RED },
+            );
+            let mut nb = buf();
+            let _ = write!(nb, "{}", g.world.players[xi[k] as usize].number);
+            a.text(
+                px,
+                py - 5.0,
+                nb.as_str(),
+                pal::INK,
                 Size::Small,
-                TextAlign::Left,
+                TextAlign::Center,
             );
         }
-        let hit = ui.rect(rr);
-        g.hits.add(hit, Screen::Top, k as u8);
     }
-    // Stats under the model.
-    if n > 0 {
-        let p = g.world.players[list[g.cur.squad.min(n - 1)] as usize];
-        ui.fill(
-            Rect::new(124.0, 158.0, 72.0, 62.0),
-            Color::rgba(10, 12, 30, 170),
-        );
-        stat_bars(
-            &mut ui,
-            128.0,
-            160.0,
-            &p,
-            lang,
-            &[
-                (team::SPEED, S::Speed),
-                (team::SHOT, S::Shot),
-                (team::PASS, S::Pass),
-                (team::STAMINA, S::Stamina),
-            ],
-        );
+    g.menu_ui = ui;
+    for k in 0..shown {
+        super::scr::hit(g, screen, row, k as u16, (top + k) as u8);
     }
-    // Tactics board.
-    let (bx, by, bw, bh) = (226.0, 34.0, 88.0, 150.0);
-    ui.text_shadow(
-        bx,
-        by - 2.0,
-        tr(lang, S::Tactics),
-        pal::INK,
-        Size::Small,
-        TextAlign::Left,
-    );
-    let pitch = Rect::new(bx, by + 10.0, bw, bh - 10.0);
-    ui.fill(pitch, Color::rgb(40, 130, 60));
-    ui.border(pitch, Color::rgba(230, 240, 230, 220), 1.0);
-    ui.fill(
-        Rect::new(bx, by + 10.0 + (bh - 10.0) * 0.5, bw, 1.0),
-        Color::rgba(230, 240, 230, 200),
-    );
-    ui.border(
-        Rect::new(bx + bw * 0.25, by + bh - 22.0, bw * 0.5, 22.0),
-        Color::rgba(230, 240, 230, 200),
-        1.0,
-    );
-    let f = FORMATIONS[g.world.clubs[club as usize].formation as usize % FORMATIONS.len()];
-    let xi = g.world.lineup(club);
-    for k in 0..11 {
-        let b = f.base(k);
-        // Normalized team space: x -1 (own goal, bottom) .. 0 (halfway).
-        let px = bx + (0.5 + b.y.to_f32() * 0.42) * bw;
-        let py = by + 10.0 + (bh - 10.0) * (0.5 - b.x.to_f32() * 0.46);
-        let keeper = k == 0;
-        ui.fill(
-            Rect::new(px - 6.0, py - 5.0, 12.0, 10.0),
-            if keeper { pal::GREEN } else { pal::RED },
-        );
-        let mut nb = buf();
-        let _ = write!(nb, "{}", g.world.players[xi[k] as usize].number);
-        ui.text(
-            px,
-            py - 5.0,
-            nb.as_str(),
-            pal::INK,
-            Size::Small,
-            TextAlign::Center,
-        );
-    }
-    ui.text(
-        bx + bw * 0.5,
-        by + bh + 2.0,
-        f.name,
-        pal::YELLOW,
-        Size::Small,
-        TextAlign::Center,
-    );
-    footer(
-        &mut ui,
-        &mut g.hits,
-        pad,
-        lang,
-        &[
-            (Btn::A, S::Details),
-            (Btn::B, S::Back),
-            (Btn::X, S::Formation),
-        ],
-    );
+    super::scr::back_hits(g, screen);
 }
 
 // ------------------------------------------------------------------ editor

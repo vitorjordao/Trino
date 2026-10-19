@@ -1620,12 +1620,12 @@ fn values_keep_ints_bools_texts_per_item_and_refuse_when_full() {
     assert_eq!(ui.get("b"), Some(1));
     ui.set_text(
         "c",
-        "a very long name that does not fit in thirty-two bytes",
+        "a very long name that does not fit in sixty-four bytes, not even close",
     );
     let Some(UiValue::Text(t)) = ui.values().get("c", u16::MAX) else {
         panic!()
     };
-    assert_eq!(t.as_str().len(), 32);
+    assert_eq!(t.as_str().len(), trino_core::ui::TEXT_LEN);
     ui.set_item("d", 2, UiValue::Int(5));
     assert_eq!(ui.values().get("d", 2), Some(UiValue::Int(5)));
     assert_eq!(ui.values().get("d", 3), None);

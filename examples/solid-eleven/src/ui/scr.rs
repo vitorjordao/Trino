@@ -17,7 +17,7 @@
 //!   radar, slanted headers) is drawn into a node's rect with the
 //!   immediate toolkit ([`art`]): the node sizes it, the art fills it.
 
-use trino_core::ui::{NO_ITEM, UiData, UiScreen, UiValue, text_value};
+use trino_core::ui::{NO_ITEM, TEXT_LEN, UiData, UiScreen, UiValue, text_value};
 use trino_core::{Color, Rect, Renderer, UiEnv, Vec2};
 
 use crate::SolidElevenGame;
@@ -29,8 +29,13 @@ use crate::ui::{Ui, pal};
 /// screen up), so the game struct grows by one, not by a screen count.
 pub type MenuUi = trino_core::Ui<128>;
 
-/// A text value.
+/// A text value (at most [`TEXT_LEN`] bytes: the tests fail a longer one
+/// instead of letting the screen cut it).
 pub fn txt(s: &str) -> Option<UiValue> {
+    debug_assert!(
+        s.len() <= TEXT_LEN,
+        "{s:?} is past a UI text value's {TEXT_LEN} bytes"
+    );
     Some(text_value(s))
 }
 

@@ -11,8 +11,9 @@
 use crate::asset::asset_id;
 use crate::text::TextBuf;
 
-/// Longest text value, bytes.
-pub const TEXT_LEN: usize = 32;
+/// Longest text value, bytes (64 since issue #95: a game's own texts, in
+/// Portuguese with two-byte accents, outgrew 32).
+pub const TEXT_LEN: usize = 64;
 
 /// One value.
 #[derive(Clone, Copy, PartialEq, Debug)]

@@ -1103,6 +1103,11 @@ impl SolidElevenGame {
         }
     }
 
+    /// Squad rows Teams shows at once (fewer, taller ones at large text).
+    pub fn squad_rows(&self) -> usize {
+        if self.big_text() { 3 } else { 6 }
+    }
+
     /// The player reads at 150 % or more: menus lay out for large text.
     pub fn big_text(&self) -> bool {
         self.access.clamped().text_factor() >= 1.5
@@ -1133,7 +1138,8 @@ impl SolidElevenGame {
         if let Some(id) = tap {
             self.cur.squad = id as usize;
         }
-        menu::scroll(&mut self.cur.squad_top, self.cur.squad, 6);
+        let rows = self.squad_rows();
+        menu::scroll(&mut self.cur.squad_top, self.cur.squad, rows);
         // L/R: another club (outside a career, any club can be edited).
         if (nav.l || nav.r) && !self.career_on {
             let d = if nav.r { 1 } else { TEAMS as u8 - 1 };

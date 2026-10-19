@@ -412,7 +412,7 @@ fn budget_issues(root: &Path, manifest: &Manifest, families: &[Family]) -> Vec<I
                 "",
                 format!(
                     "{} on n64: {}x{} {} atlas is {} bytes, past TMEM ({} bytes): its glyphs \
-                     upload per run (chars = \"auto\" or per_language shrink it)",
+                     upload per run (fewer glyphs, a smaller size or per_language shrink it)",
                     c.font,
                     c.width,
                     c.height,

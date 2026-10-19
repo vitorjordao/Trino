@@ -259,7 +259,7 @@ shipping a 3D game first**, then by cost:
 | `trino_core::i18n` (`no_std`, no allocation): `Localizer` (fallback chain, `tr`, `tr_fmt`, `plural`, `pick`, `best_match`, `font`, `group`), `StrKey`/`LangId`/`LangTag`, CLDR plural rules, `Locale` defaults by tag, integer-only formatting (numbers, money, dates); `Platform::system_language` and `UiStrings::font` as defaults (no `GAME_API_VERSION` bump) | `crates/core/tests/i18n.rs` (11 tests, pt-BR/en-US/es-ES fixtures), `a_languages_font_remap_reaches_layout_and_draw` |
 | `TSTR` v2 (locale, plural records, font remaps, group); v1 still parses | `tstr_v2_round_trips_its_locale_fonts_and_group`, `tstr_v1_still_parses` |
 | `assets/i18n/<lang>.ron` with `Plural`/`Format` entries, `plural`, `locale` (bare optional fields), `[i18n]` in the manifest, `i18n/languages`, pseudo-locales on PC/Web only | `crates/scene/src/i18n.rs` (7 tests), `crates/asset-pipeline/tests/i18n_bake.rs` (4 tests) |
-| Glyph subsetting: `chars = "auto"`, `per_language` atlases (in `i18n-<lang>` groups with `groups = true`), overrides per platform, the TMEM report | `auto_fonts_bake_exactly_the_glyphs_the_languages_use`, `each_languages_table_names_its_atlas_and_group`, `the_font_report_sees_every_atlas_and_its_tmem`; the engine's `fonts/i18n`: three 2 KB N64 I4 atlases (41–49 glyphs), half of TMEM each |
+| Glyph subsetting: `chars = "auto"`, `per_language` atlases (in `i18n-<lang>` groups with `groups = true`), overrides per platform, the TMEM report | `auto_fonts_bake_exactly_the_glyphs_the_languages_use`, `each_languages_table_names_its_atlas_and_group`, `the_font_report_sees_every_atlas_and_its_tmem`, `a_languages_atlas_loads_and_unloads_with_its_group` (the PC loader; the consoles' group loading is #56's `asset groups` step); the engine's `fonts/i18n`: three 2 KB N64 I4 atlases (41–49 glyphs), half of TMEM each |
 | `cargo xtask i18n check\|pseudo\|export\|import\|stats\|fonts\|list --json` (missing/extra/unused keys, placeholders, plural forms, missing glyphs per target, UI overflow per language and target, TMEM) | `xtask/tests/i18n_cli.rs` (5 tests, one fixture with every kind of problem) |
 | System language: PC (`sys-locale`, `TRINO_LANG`), Web (`navigator.language`, `?lang=`), 3DS (`CFGU_GetSystemLanguage` through the shim, `TRINO_LANG` boot line); none on the N64 | `the_override_wins_then_the_os_locale`, `the_query_wins_then_the_browser`, `every_cfg_language_maps_to_its_tag`; the `i18n` step's `pick` on every target |
 | Self-test step `i18n` on PC, ares, Azahar and the browsers: every language loaded, keys, fallback, plurals, prices (`$1,200.00`, `R$ 1.200,00`, `1200,00 €`), the per-language atlas, pixels where the price ends; fails when the fallback or the drawn text is broken (checked by mutation) | `engine_checks_pass_on_pc`, `engine_checks_pass_on_the_pc_3ds_profile`, `engine_checks_pass_on_the_simulated_expanded_tiers`; `TRINO_STEP:i18n` in ares and Azahar |
@@ -268,7 +268,11 @@ shipping a 3D game first**, then by cost:
 
 Deviations (ADR 0026): locale rules live in each language's file (with defaults by tag),
 not in the manifest; `Format("…")` is a marker (any string formats); Plan & Party is
-not in this repository; the editor and `i18n import` drop a table's comments.
+not in this repository; the editor and `i18n import` drop a table's comments; the
+editor's preview language reaches the UI tab and Play (`TRINO_LANG`), not Play here or
+the Scene and Game views (they draw scenes, which have no text); per-language groups are
+loaded at run time by the PC test, and on the consoles through #56's generic group
+loader (the engine's own `fonts/i18n` stays in boot).
 
 ## Done — shadows per tier: blobs on the N64, planar on the 3DS, a shadow map on the PC and the Web (2026-10-18, branch `feat/57-shadows`, GitHub #57, ADR 0025)
 

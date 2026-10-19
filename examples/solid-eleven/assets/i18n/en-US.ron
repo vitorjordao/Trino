@@ -1,7 +1,10 @@
 // Every string Solid Eleven shows (issue #59: the engine's string tables).
-// The game reads them as static code: after an edit, run
-//   cargo xtask i18n export --rust examples/solid-eleven/src/ui/strings_gen.rs --dir examples/solid-eleven
-// and `cargo xtask i18n check --dir examples/solid-eleven`.
+// The game reads them as static code: after an edit, export and check —
+//   in the engine:  cargo xtask i18n export --rust examples/solid-eleven/src/ui/strings_gen.rs --dir examples/solid-eleven
+//                   cargo xtask i18n check --dir examples/solid-eleven
+//   in a project from the football template:
+//                   cargo trino i18n export --rust game/src/ui/strings_gen.rs
+//                   cargo trino i18n check
 Strings(
     lang: "en-US",
     name: "ENGLISH",

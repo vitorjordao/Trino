@@ -1,11 +1,10 @@
 //! Every string the game shows, in English and Brazilian Portuguese (the
 //! reference art's language). The texts live in the engine's string tables
-//! (issue #59): `assets/i18n/en-US.ron` and `pt-BR.ron`, checked by `cargo
-//! xtask i18n check --dir examples/solid-eleven` and exported as static
-//! code (`strings_gen.rs`, `cargo xtask i18n export --rust
-//! examples/solid-eleven/src/ui/strings_gen.rs --dir examples/solid-eleven`;
-//! a test fails on a stale export). [`S`] names each string and [`tr`]
-//! reads it. Text is uppercase where the UI font only has capitals.
+//! (issue #59): `assets/i18n/en-US.ron` and `pt-BR.ron`, read as static code
+//! (`strings_gen.rs`). After editing a table, export it again and check it
+//! (the commands are at the top of each `.ron`; a test fails on a stale
+//! export). [`S`] names each string and [`tr`] reads it. Text is uppercase
+//! where the UI font only has capitals.
 
 use trino_core::TextBuf;
 use trino_core::i18n::{Arg, LangId, Localizer, StrKey, StringTable};

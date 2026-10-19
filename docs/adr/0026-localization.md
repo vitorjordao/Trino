@@ -174,3 +174,9 @@ report see concrete fonts:
   variant within `TSTR` (a new record flag).
 - Right-to-left scripts and shaping. The text renderer lays glyphs out left to right.
 - Comments in a table are lost when the editor or `i18n import` rewrites the file.
+- The editor's preview language drives the UI tab and Play (`TRINO_LANG`). Play here and
+  the Scene and Game views draw scenes, which hold no text, so it doesn't reach them.
+- The per-language groups are loaded at run time by a PC test
+  (`a_languages_atlas_loads_and_unloads_with_its_group`). The consoles load them through
+  #56's generic loader, which its `asset groups` step covers; the engine's own
+  `fonts/i18n` stays in boot, so the console self-test switches languages without a load.

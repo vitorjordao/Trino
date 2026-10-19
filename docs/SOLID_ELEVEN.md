@@ -353,7 +353,7 @@ A project made with `--template football` contains the whole game. Its README is
 | How players decide | `game/src/sim/ai.rs` (`carrier`, `support`, `press`, `keeper`) |
 | Rules | `game/src/sim/rules.rs` and its matrix |
 | Season, money, transfers | `game/src/sim/league.rs` |
-| Strings and languages | `game/src/ui/i18n.rs` (keep to the font's `FONT_CHARS`) |
+| Strings and languages | `assets/i18n/{en-US,pt-BR}.ron` (the engine's tables, issue #59), then `cargo trino i18n export --rust game/src/ui/strings_gen.rs` and `cargo trino i18n check`; a new string also gets its `S` in `game/src/ui/i18n.rs`. Keep to the font's `FONT_CHARS` (the fonts are `chars = "auto"`) |
 | Screens | `game/src/ui/screens.rs`, flows in `game/src/game/app.rs` |
 | Models | `assets/shared/models/*.glb` (the engine's `tools/blender/solid_eleven_models.py` builds them) |
 

@@ -1064,6 +1064,10 @@ impl<M: TextMeasure + ?Sized, const N: usize> Solver<'_, '_, '_, M, N> {
 
     /// Overflow flags of a text-bearing node in `content`.
     fn text_fit(&self, i: usize, n: &UiNode<'_>, item: u16, content: Rect) -> u8 {
+        // No label at all (a row's backdrop button): nothing to overflow.
+        if n.text.is_empty() && n.key.is_empty() && n.bind.is_empty() {
+            return 0;
+        }
         let room = match n.kind {
             NodeKind::Toggle => content.size.x - self.line_height(n) - INNER_GAP,
             NodeKind::Slider { .. } => content.size.x - TRACK_MIN - INNER_GAP,

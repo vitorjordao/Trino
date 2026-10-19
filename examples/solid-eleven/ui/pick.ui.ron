@@ -37,13 +37,20 @@
                 max: (320, 0),
                 children: [
                     (
-                        kind: Stack(dir: Horizontal, gap: 4, align: Center),
-                        id: "header",
+                        kind: Stack(dir: Horizontal, gap: 4, align: Center, justify: SpaceBetween, wrap: true),
+                        id: "header_row",
+                        size: (Fill, Fit),
                         min: (200, 22),
                         padding: (0, 3, 8, 3),
                         children: [
-                            (kind: Button, id: "back", text: "<", on_click: "back", min: (20, 16), color: Some((40, 210, 255, 0)), padding: (4, 1, 4, 1)),
-                            (kind: Text, key: "career", text: "CAREER"),
+                            (
+                                kind: Stack(dir: Horizontal, gap: 4, align: Center),
+                                id: "header",
+                                children: [
+                                    (kind: Button, id: "back", text: "<", on_click: "back", min: (20, 16), color: Some((40, 210, 255, 0)), padding: (4, 1, 4, 1)),
+                                    (kind: Text, key: "career", text: "CAREER"),
+                                ],
+                            ),
                         ],
                     ),
                     (

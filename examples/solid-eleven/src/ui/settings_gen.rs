@@ -9,12 +9,12 @@ use trino_core::ui::{
 #[allow(unused_imports)]
 use trino_core::{Color, FontId, ModelId, Screen, SpriteId, TextAlign};
 
-pub static NODES: [UiNode<'static>; 25] = [
+pub static NODES: [UiNode<'static>; 26] = [
     // 0: Overlay
     UiNode {
         kind: NodeKind::Overlay,
         parent: NONE,
-        end: 25,
+        end: 26,
         ..UiNode::DEFAULT
     },
     // 1: Rect
@@ -31,28 +31,37 @@ pub static NODES: [UiNode<'static>; 25] = [
     UiNode {
         kind: NodeKind::Stack { dir: Dir::Vertical, gap: 6, align: Align::Stretch, justify: Justify::Start, wrap: false },
         parent: 0,
-        end: 25,
+        end: 26,
         anchor: Anchor::StretchCenter,
         size: (Size::Fill, Size::Fill),
         max: (320, 0),
         ..UiNode::DEFAULT
     },
-    // 3: Stack "header"
+    // 3: Stack "header_row"
     UiNode {
-        kind: NodeKind::Stack { dir: Dir::Horizontal, gap: 4, align: Align::Center, justify: Justify::Start, wrap: false },
-        id: "header",
+        kind: NodeKind::Stack { dir: Dir::Horizontal, gap: 4, align: Align::Center, justify: Justify::SpaceBetween, wrap: true },
+        id: "header_row",
         parent: 2,
-        end: 6,
+        end: 7,
+        size: (Size::Fill, Size::Fit),
         min: (200, 22),
         padding: [0, 3, 8, 3],
         ..UiNode::DEFAULT
     },
-    // 4: Button "back"
+    // 4: Stack "header"
+    UiNode {
+        kind: NodeKind::Stack { dir: Dir::Horizontal, gap: 4, align: Align::Center, justify: Justify::Start, wrap: false },
+        id: "header",
+        parent: 3,
+        end: 7,
+        ..UiNode::DEFAULT
+    },
+    // 5: Button "back"
     UiNode {
         kind: NodeKind::Button,
         id: "back",
-        parent: 3,
-        end: 5,
+        parent: 4,
+        end: 6,
         min: (20, 16),
         padding: [4, 1, 4, 1],
         color: Some(Color::rgba(40, 210, 255, 0)),
@@ -61,196 +70,196 @@ pub static NODES: [UiNode<'static>; 25] = [
         action: "back",
         ..UiNode::DEFAULT
     },
-    // 5: Text 'SETTINGS'
+    // 6: Text 'SETTINGS'
     UiNode {
         kind: NodeKind::Text,
-        parent: 3,
-        end: 6,
+        parent: 4,
+        end: 7,
         text: "SETTINGS",
         key: "settings",
         ..UiNode::DEFAULT
     },
-    // 6: Scroll
+    // 7: Scroll
     UiNode {
         kind: NodeKind::Scroll { dir: Dir::Vertical, gap: 4 },
         parent: 2,
-        end: 16,
+        end: 17,
         size: (Size::Fill, Size::Fill),
         padding: [24, 0, 24, 0],
         ..UiNode::DEFAULT
     },
-    // 7: List
+    // 8: List
     UiNode {
         kind: NodeKind::List { dir: Dir::Vertical, gap: 4, max: 8 },
-        parent: 6,
-        end: 16,
+        parent: 7,
+        end: 17,
         size: (Size::Fill, Size::Fit),
         bind: "rows",
         ..UiNode::DEFAULT
     },
-    // 8: Overlay
+    // 9: Overlay
     UiNode {
         kind: NodeKind::Overlay,
-        parent: 7,
-        end: 16,
+        parent: 8,
+        end: 17,
         size: (Size::Fill, Size::Fit),
         ..UiNode::DEFAULT
     },
-    // 9: Button "row"
+    // 10: Button "row"
     UiNode {
         kind: NodeKind::Button,
         id: "row",
-        parent: 8,
-        end: 10,
+        parent: 9,
+        end: 11,
         anchor: Anchor::Fill,
         size: (Size::Fill, Size::Fill),
         align: TextAlign::Center,
         action: "row",
         ..UiNode::DEFAULT
     },
-    // 10: Stack
+    // 11: Stack
     UiNode {
         kind: NodeKind::Stack { dir: Dir::Horizontal, gap: 0, align: Align::Center, justify: Justify::SpaceBetween, wrap: false },
-        parent: 8,
-        end: 13,
+        parent: 9,
+        end: 14,
         size: (Size::Fill, Size::Fit),
         min: (0, 22),
         padding: [8, 3, 8, 3],
         visible_if: "small",
         ..UiNode::DEFAULT
     },
-    // 11: Text '{}'
+    // 12: Text '{}'
     UiNode {
         kind: NodeKind::Text,
-        parent: 10,
-        end: 12,
+        parent: 11,
+        end: 13,
         color: Some(Color::rgba(150, 160, 196, 255)),
         text: "{}",
         bind: "label",
         ..UiNode::DEFAULT
     },
-    // 12: Text '{}'
+    // 13: Text '{}'
     UiNode {
         kind: NodeKind::Text,
-        parent: 10,
-        end: 13,
+        parent: 11,
+        end: 14,
         text: "{}",
         bind: "value",
         ..UiNode::DEFAULT
     },
-    // 13: Stack
+    // 14: Stack
     UiNode {
         kind: NodeKind::Stack { dir: Dir::Vertical, gap: 2, align: Align::Start, justify: Justify::Start, wrap: false },
-        parent: 8,
-        end: 16,
+        parent: 9,
+        end: 17,
         size: (Size::Fill, Size::Fit),
         padding: [8, 3, 8, 3],
         visible_if: "big",
         ..UiNode::DEFAULT
     },
-    // 14: Text '{}'
+    // 15: Text '{}'
     UiNode {
         kind: NodeKind::Text,
-        parent: 13,
-        end: 15,
+        parent: 14,
+        end: 16,
         color: Some(Color::rgba(150, 160, 196, 255)),
         text: "{}",
         bind: "label",
         ..UiNode::DEFAULT
     },
-    // 15: Text '{}'
+    // 16: Text '{}'
     UiNode {
         kind: NodeKind::Text,
-        parent: 13,
-        end: 16,
+        parent: 14,
+        end: 17,
         anchor: Anchor::Right,
         text: "{}",
         bind: "value",
         ..UiNode::DEFAULT
     },
-    // 16: Stack
+    // 17: Stack
     UiNode {
         kind: NodeKind::Stack { dir: Dir::Horizontal, gap: 3, align: Align::Start, justify: Justify::Start, wrap: true },
         parent: 2,
-        end: 25,
+        end: 26,
         size: (Size::Fill, Size::Fit),
         padding: [6, 0, 0, 3],
         ..UiNode::DEFAULT
     },
-    // 17: Stack "hint_a"
+    // 18: Stack "hint_a"
     UiNode {
         kind: NodeKind::Stack { dir: Dir::Horizontal, gap: 3, align: Align::Center, justify: Justify::Start, wrap: false },
         id: "hint_a",
-        parent: 16,
-        end: 21,
+        parent: 17,
+        end: 22,
         padding: [2, 2, 5, 2],
         ..UiNode::DEFAULT
     },
-    // 18: Rect
+    // 19: Rect
     UiNode {
         kind: NodeKind::Rect { border: 0, border_color: Color::rgba(0, 0, 0, 0) },
-        parent: 17,
-        end: 20,
+        parent: 18,
+        end: 21,
         min: (11, 0),
         padding: [3, 0, 3, 0],
         color: Some(Color::rgba(70, 210, 90, 255)),
         ..UiNode::DEFAULT
     },
-    // 19: Text '{}'
+    // 20: Text '{}'
     UiNode {
         kind: NodeKind::Text,
-        parent: 18,
-        end: 20,
+        parent: 19,
+        end: 21,
         anchor: Anchor::Center,
         color: Some(Color::rgba(18, 22, 52, 255)),
         text: "{}",
         bind: "btn.a",
         ..UiNode::DEFAULT
     },
-    // 20: Text 'SELECT'
+    // 21: Text 'SELECT'
     UiNode {
         kind: NodeKind::Text,
-        parent: 17,
-        end: 21,
+        parent: 18,
+        end: 22,
         text: "SELECT",
         key: "select",
         ..UiNode::DEFAULT
     },
-    // 21: Stack "hint_b"
+    // 22: Stack "hint_b"
     UiNode {
         kind: NodeKind::Stack { dir: Dir::Horizontal, gap: 3, align: Align::Center, justify: Justify::Start, wrap: false },
         id: "hint_b",
-        parent: 16,
-        end: 25,
+        parent: 17,
+        end: 26,
         padding: [2, 2, 5, 2],
         ..UiNode::DEFAULT
     },
-    // 22: Rect
+    // 23: Rect
     UiNode {
         kind: NodeKind::Rect { border: 0, border_color: Color::rgba(0, 0, 0, 0) },
-        parent: 21,
-        end: 24,
+        parent: 22,
+        end: 25,
         min: (11, 0),
         padding: [3, 0, 3, 0],
         color: Some(Color::rgba(230, 50, 70, 255)),
         ..UiNode::DEFAULT
     },
-    // 23: Text '{}'
+    // 24: Text '{}'
     UiNode {
         kind: NodeKind::Text,
-        parent: 22,
-        end: 24,
+        parent: 23,
+        end: 25,
         anchor: Anchor::Center,
         color: Some(Color::rgba(18, 22, 52, 255)),
         text: "{}",
         bind: "btn.b",
         ..UiNode::DEFAULT
     },
-    // 24: Text 'BACK'
+    // 25: Text 'BACK'
     UiNode {
         kind: NodeKind::Text,
-        parent: 21,
-        end: 25,
+        parent: 22,
+        end: 26,
         text: "BACK",
         key: "back",
         ..UiNode::DEFAULT

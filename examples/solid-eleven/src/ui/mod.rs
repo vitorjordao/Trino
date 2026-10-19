@@ -31,6 +31,10 @@ pub mod club_gen {
 pub mod confirm_gen {
     include!("confirm_gen.rs");
 }
+/// The player editor (`ui/edit.ui.ron`).
+pub mod edit_gen {
+    include!("edit_gen.rs");
+}
 /// The career's club pick (`ui/pick.ui.ron`).
 pub mod pick_gen {
     include!("pick_gen.rs");

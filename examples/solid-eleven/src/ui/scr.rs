@@ -209,6 +209,9 @@ pub fn chrome(ui: &MenuUi, screen: &UiScreen<'_>, r: &mut dyn Renderer) {
     if let Some((mut a, size)) = art(r, ui, screen, "header", NO_ITEM) {
         a.slant(Rect::new(-4.0, 0.0, size.x + 10.0, size.y), pal::NAVY, 6.0);
     }
+    if let Some((mut a, size)) = art(r, ui, screen, "header_side", NO_ITEM) {
+        a.slant(Rect::new(-8.0, 0.0, size.x + 12.0, size.y), pal::NAVY, 6.0);
+    }
     if let Some((mut a, size)) = art(r, ui, screen, "back", NO_ITEM) {
         a.slant(Rect::new(-2.0, 0.0, size.x + 4.0, size.y), pal::CYAN, 6.0);
     }

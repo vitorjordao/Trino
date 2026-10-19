@@ -1415,191 +1415,143 @@ const EDIT_ROWS: [(usize, S); ATTRS] = [
     (team::DEFENSE, S::Defense),
 ];
 
-fn edit(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
-    let lang = g.settings.lang;
-    let pad = g.pad_layout();
+fn edit(g: &mut SolidElevenGame, r: &mut dyn Renderer, _screen: Vec2) {
+    use super::scr::{art, flag, int, txt};
     let Some((i, _)) = g.edit else {
         return;
     };
+    let screen = &super::edit_gen::SCREEN;
     let p = g.world.players[i];
-    let mut ui = Ui::new(r, screen);
-    header(&mut ui, &mut g.hits, tr(lang, S::PlayerEdit), true);
-    let name: TextBuf<16> = upper(p.name());
-    ui.slant(Rect::new(212.0, 6.0, 112.0, 22.0), pal::NAVY, 6.0);
-    ui.text(
-        266.0,
-        10.0,
-        name.as_str(),
-        pal::INK,
-        Size::Small,
-        TextAlign::Center,
-    );
-    // Left: attributes.
-    ui.panel(Rect::new(6.0, 34.0, 110.0, 176.0), pal::CYAN);
-    for (k, (a, s)) in EDIT_ROWS.iter().enumerate() {
-        let y = 38.0 + k as f32 * 24.0;
-        let sel = g.cur.edit_attr == k;
-        if sel {
-            ui.fill(
-                Rect::new(8.0, y - 1.0, 106.0, 22.0),
-                Color::rgba(30, 90, 150, 230),
-            );
-        }
-        let mut b = buf();
-        let _ = write!(b, "{}", tr(lang, *s));
-        ui.text(12.0, y, b.as_str(), pal::INK, Size::Small, TextAlign::Left);
-        b.clear();
-        if sel {
-            let _ = write!(b, "< {} >", p.attrs[*a]);
-        } else {
-            let _ = write!(b, "{}", p.attrs[*a]);
-        }
-        ui.text(
-            110.0,
-            y,
-            b.as_str(),
-            pal::YELLOW,
-            Size::Small,
-            TextAlign::Right,
-        );
-        ui.bar(
-            Rect::new(12.0, y + 13.0, 98.0, 4.0),
-            p.attrs[*a] as f32 / 100.0,
-            pal::CYAN,
-        );
-        let hit = ui.rect(Rect::new(8.0, y - 1.0, 106.0, 22.0));
-        g.hits.add(hit, Screen::Top, k as u8);
-    }
-    // Skin tone row.
-    let y = 38.0 + ATTRS as f32 * 24.0;
-    let sel = g.cur.edit_attr == ATTRS;
-    if sel {
-        ui.fill(
-            Rect::new(8.0, y - 1.0, 106.0, 26.0),
-            Color::rgba(30, 90, 150, 230),
-        );
-    }
-    for k in 0..8 {
-        let rr = Rect::new(11.0 + k as f32 * 12.5, y + 4.0, 11.0, 16.0);
-        ui.fill(rr, SKIN_TONES[k]);
-        if p.skin as usize == k {
-            ui.border(rr, pal::CYAN, 1.0);
-        }
-    }
-    let hit = ui.rect(Rect::new(8.0, y - 1.0, 106.0, 26.0));
-    g.hits.add(hit, Screen::Top, ATTRS as u8);
-    // Right: overall and points left, the radar, the hair.
-    ui.panel(Rect::new(214.0, 34.0, 100.0, 176.0), pal::CYAN);
-    ui.text(
-        222.0,
-        38.0,
-        tr(lang, S::Ovr),
-        pal::DIM,
-        Size::Small,
-        TextAlign::Left,
-    );
-    let mut b = buf();
-    let _ = write!(b, "{}", p.ovr());
-    ui.text(
-        222.0,
-        48.0,
-        b.as_str(),
-        pal::INK,
-        Size::Big,
-        TextAlign::Left,
-    );
-    radar_of(
-        &mut ui,
-        264.0,
-        96.0,
-        24.0,
-        &p,
-        Color::rgba(100, 220, 120, 210),
-    );
-    ui.text(
-        264.0,
-        124.0,
-        tr(lang, S::PointsLeft),
-        pal::DIM,
-        Size::Small,
-        TextAlign::Center,
-    );
-    b.clear();
-    let _ = write!(b, "{}", p.available());
-    ui.text(
-        264.0,
-        134.0,
-        b.as_str(),
-        if p.available() > 0 {
-            pal::YELLOW
-        } else {
-            pal::DIM
+    let big = g.big_text();
+    let id = |small: &'static str, large: &'static str| if big { large } else { small };
+    let row = g.cur.edit_attr;
+    let focus = match row {
+        k if k < ATTRS => (id("attr", "attr_big"), k as u16),
+        k if k == ATTRS => (id("skin", "skin_big"), NO_ITEM),
+        k if k == ATTRS + 1 => (id("style", "style_big"), NO_ITEM),
+        _ => (id("hair", "hair_big"), NO_ITEM),
+    };
+    super::scr::show(
+        g,
+        r,
+        screen,
+        Some(focus),
+        super::scr::rev(&(i, p.attrs, p.skin, p.style, p.hair, row)),
+        |g, key, item| {
+            let lang = g.settings.lang;
+            let look = p.appearance();
+            let mut b = buf();
+            match key {
+                "name" => return txt(upper::<16>(p.name()).as_str()),
+                "attrs" => return int(ATTRS as i32),
+                "label" => return txt(tr(lang, EDIT_ROWS.get(item as usize)?.1)),
+                "value" => {
+                    let (a, _) = EDIT_ROWS.get(item as usize)?;
+                    if row == item as usize {
+                        let _ = write!(b, "< {} >", p.attrs[*a]);
+                    } else {
+                        let _ = write!(b, "{}", p.attrs[*a]);
+                    }
+                }
+                "ovr" => return int(p.ovr() as i32),
+                "points" => return int(p.available() as i32),
+                "points_left" => return flag(p.available() > 0),
+                "no_points" => return flag(p.available() == 0),
+                "style" => {
+                    let style = tr(lang, S::hair_style(look.style as usize));
+                    if row == ATTRS + 1 {
+                        let _ = write!(b, "< {style} >");
+                    } else {
+                        let _ = write!(b, "{style}");
+                    }
+                }
+                "summary" => {
+                    let _ = write!(
+                        b,
+                        "{} {}  {} {}",
+                        tr(lang, S::Ovr),
+                        p.ovr(),
+                        tr(lang, S::PointsLeft),
+                        p.available()
+                    );
+                }
+                _ => return None,
+            }
+            txt(b.as_str())
         },
-        Size::Big,
-        TextAlign::Center,
+        |_, ui, r| {
+            super::scr::chrome(ui, screen, r);
+            for panel in ["left", "right"] {
+                if let Some((mut a, size)) = art(r, ui, screen, panel, NO_ITEM) {
+                    a.fill(Rect::new(0.0, 0.0, size.x, size.y), pal::PANEL);
+                }
+            }
+        },
     );
-    // Hair: the style by name, then the colors.
-    let look = p.appearance();
-    for (row, y) in [(ATTRS + 1, 158.0f32), (ATTRS + 2, 182.0)] {
-        if g.cur.edit_attr == row {
-            ui.fill(
-                Rect::new(216.0, y - 1.0, 96.0, 24.0),
-                Color::rgba(30, 90, 150, 230),
+    let ui = core::mem::take(&mut g.menu_ui);
+    for (k, (a, _)) in EDIT_ROWS.iter().enumerate() {
+        if let Some((mut d, size)) = art(r, &ui, screen, id("abar", "abar_big"), k as u16) {
+            d.bar(
+                Rect::new(0.0, 0.0, size.x, size.y),
+                p.attrs[*a] as f32 / 100.0,
+                pal::CYAN,
             );
         }
-        if row == ATTRS + 2 {
-            // A tap on a swatch picks that color (before the row's box:
-            // the first box hit wins).
-            for k in 0..render::HAIR_COLORS.len() {
-                let hit = ui.rect(swatch(k));
-                g.hits.add(hit, Screen::Top, (EDIT_ROW_COUNT + k) as u8);
+    }
+    if let Some((mut d, _)) = art(r, &ui, screen, id("skins", "skins_big"), NO_ITEM) {
+        for k in 0..8 {
+            let rr = Rect::new(k as f32 * 12.5, 0.0, 11.0, 16.0);
+            d.fill(rr, SKIN_TONES[k]);
+            if p.skin as usize == k {
+                d.border(rr, pal::CYAN, 1.0);
             }
         }
-        let hit = ui.rect(Rect::new(216.0, y - 1.0, 96.0, 24.0));
-        g.hits.add(hit, Screen::Top, row as u8);
     }
-    ui.text(
-        222.0,
-        158.0,
-        tr(lang, S::Hair),
-        pal::DIM,
-        Size::Small,
-        TextAlign::Left,
-    );
-    b.clear();
-    let style = tr(lang, S::hair_style(look.style as usize));
-    if g.cur.edit_attr == ATTRS + 1 {
-        let _ = write!(b, "< {style} >");
-    } else {
-        let _ = write!(b, "{style}");
+    if let Some((mut d, size)) = art(r, &ui, screen, "radar", NO_ITEM) {
+        let rad = (size.y * 0.5 - 2.0).min(size.x * 0.5 - 2.0);
+        radar_of(
+            &mut d,
+            size.x * 0.5,
+            size.y * 0.5,
+            rad,
+            &p,
+            Color::rgba(100, 220, 120, 210),
+        );
     }
-    ui.text(
-        264.0,
-        168.0,
-        b.as_str(),
-        pal::YELLOW,
-        Size::Small,
-        TextAlign::Center,
-    );
-    for (k, &c) in render::HAIR_COLORS.iter().enumerate() {
-        let rr = swatch(k);
-        ui.fill(rr, c);
-        if look.hair as usize == k {
-            ui.border(rr, pal::CYAN, 1.0);
+    // The hair colors; a tap on one picks it (before the row's own box:
+    // the first box hit wins).
+    let look = p.appearance();
+    if let Some((mut d, _)) = art(r, &ui, screen, id("swatches", "swatches_big"), NO_ITEM) {
+        for (k, &c) in render::HAIR_COLORS.iter().enumerate() {
+            let rr = Rect::new(k as f32 * 17.5, 0.0, 15.0, 16.0);
+            d.fill(rr, c);
+            if look.hair as usize == k {
+                d.border(rr, pal::CYAN, 1.0);
+            }
+            let hit = d.rect(rr);
+            g.hits.add(hit, Screen::Top, (EDIT_ROW_COUNT + k) as u8);
         }
     }
-    footer(
-        &mut ui,
-        &mut g.hits,
-        pad,
-        lang,
-        &[(Btn::A, S::Save_), (Btn::B, S::Cancel), (Btn::X, S::Random)],
+    g.menu_ui = ui;
+    for k in 0..ATTRS {
+        super::scr::hit(g, screen, id("attr", "attr_big"), k as u16, k as u8);
+    }
+    super::scr::hit(g, screen, id("skin", "skin_big"), NO_ITEM, ATTRS as u8);
+    super::scr::hit(
+        g,
+        screen,
+        id("style", "style_big"),
+        NO_ITEM,
+        (ATTRS + 1) as u8,
     );
-}
-
-/// The player editor's hair color swatch `k`.
-fn swatch(k: usize) -> Rect {
-    Rect::new(221.0 + k as f32 * 17.5, 186.0, 15.0, 16.0)
+    super::scr::hit(
+        g,
+        screen,
+        id("hair", "hair_big"),
+        NO_ITEM,
+        (ATTRS + 2) as u8,
+    );
+    super::scr::back_hits(g, screen);
 }
 
 // ------------------------------------------------------------------ market

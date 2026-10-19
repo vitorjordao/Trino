@@ -360,6 +360,7 @@ fn main() {
         let mut config = trino_runner_pc::RunConfig::new("Solid Eleven", "examples/solid-eleven");
         config.target = PathBuf::from("target/solid-eleven");
         config.save_name = "solid-eleven".into();
+        config.default_profile = Some(trino_platform_pc::SimProfile::Native);
         trino_runner_pc::run(config, solid_eleven::SolidElevenGame::new);
         return;
     }

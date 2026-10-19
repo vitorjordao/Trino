@@ -65,13 +65,19 @@ impl Repeat {
             down: fire[1],
             left: fire[2],
             right: fire[3],
-            confirm: press(Button::A),
-            back: press(Button::B),
+            confirm: press(Button::A)
+                || now.key_pressed(prev, trino_core::Key::Enter)
+                || now.key_pressed(prev, trino_core::Key::Space),
+            back: press(Button::B)
+                || now.key_pressed(prev, trino_core::Key::Escape)
+                || now.key_pressed(prev, trino_core::Key::Backspace),
             x: press(Button::X),
             y: press(Button::Y),
-            l: press(Button::L),
-            r: press(Button::R),
-            start: press(Button::Start),
+            l: press(Button::L) || now.key_pressed(prev, trino_core::Key::Q),
+            r: press(Button::R)
+                || now.key_pressed(prev, trino_core::Key::E)
+                || now.key_pressed(prev, trino_core::Key::Tab),
+            start: press(Button::Start) || now.key_pressed(prev, trino_core::Key::Enter),
         }
     }
 }

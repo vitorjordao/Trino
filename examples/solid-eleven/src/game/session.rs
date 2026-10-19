@@ -175,7 +175,12 @@ impl Session {
         };
         let a = self.m.active[s];
         match self.m.phase {
-            Phase::Play => self.m.owner == Some(a),
+            Phase::Play => {
+                self.m.owner == Some(a)
+                    || (self.m.owner.is_none()
+                        && (self.m.players[a as usize].pos - self.m.ball.pos.ground()).len()
+                            < Fx::milli(1_600))
+            }
             Phase::Ready { .. } | Phase::Setup { .. } => {
                 self.m.restart.team as usize == s && self.m.taker == a
             }

@@ -682,3 +682,26 @@ fn a_sent_off_keeper_leaves_the_goal_kick_to_a_teammate() {
     }
     panic!("the goal kick was never taken");
 }
+
+#[test]
+fn manual_substitution_swaps_player_attributes_and_stamina() {
+    let mut m = Match::new(&setup(0, 1, 5, 3_600));
+    let orig_db = m.players[1].db;
+    let bench_db = m.bench[0][1].0;
+    let bench_before = m.bench_n[0];
+    assert!(m.substitute_player(0, 1, 1));
+    assert_eq!(m.players[1].db, bench_db);
+    assert_ne!(m.players[1].db, orig_db);
+    assert_eq!(m.players[1].stamina, Fx::ONE);
+    assert_eq!(m.bench_n[0], bench_before - 1);
+    assert_eq!(m.subs[0], 1);
+}
+
+#[test]
+fn start_second_half_transitions_smoothly() {
+    let mut m = Match::new(&setup(0, 1, 5, 3_600));
+    m.start_second_half();
+    assert_eq!(m.half, 2);
+    assert_eq!(m.clock, 0);
+    assert_eq!(m.players[0].vel, V2::ZERO);
+}

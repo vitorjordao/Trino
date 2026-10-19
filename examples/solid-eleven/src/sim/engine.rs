@@ -1907,7 +1907,8 @@ impl Match {
 
     /// Manually substitute an on-field player with a bench player.
     pub fn substitute_player(&mut self, s: usize, on_field_slot: usize, bench_idx: usize) -> bool {
-        if self.subs[s] >= MAX_SUBS || self.bench_n[s] == 0 || bench_idx >= self.bench_n[s] as usize {
+        if self.subs[s] >= MAX_SUBS || self.bench_n[s] == 0 || bench_idx >= self.bench_n[s] as usize
+        {
             return false;
         }
         let i = s * SIDE + on_field_slot.min(SIDE - 1);

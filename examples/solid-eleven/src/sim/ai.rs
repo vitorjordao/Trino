@@ -310,9 +310,7 @@ pub fn think(m: &mut Match, cmds: &mut [Option<Cmd>; N]) {
                 let ball_close = ball_dist < Fx::int(3);
                 let hurry = opp_near || !ball_close;
                 chase(m, i, hurry)
-            } else if poss.is_none()
-                && (Some(i as u8) == c1
-                    || (Some(i as u8) == c2 && !attacking))
+            } else if poss.is_none() && (Some(i as u8) == c1 || (Some(i as u8) == c2 && !attacking))
             {
                 chase(m, i, true)
             } else if poss.is_some() && Some(i as u8) == c1 {
@@ -1522,11 +1520,7 @@ pub fn human_kick_plan(m: &mut Match, i: usize, pad: &Pad) -> Option<KickPlan> {
         );
         return Some(p);
     }
-    if let Some(charge) = pad.pass.or(if throw_in {
-        pad.through
-    } else {
-        None
-    }) {
+    if let Some(charge) = pad.pass.or(if throw_in { pad.through } else { None }) {
         let to = pass_target(m, i, dir);
         let plan = match to {
             Some(j) => {

@@ -822,13 +822,21 @@ fn movement_left_right_up_down_matches_screen_space() {
     let mut right = InputState::default();
     right.set(Button::DpadRight, true);
     let pad_r = c.pad(&right, &none, 1.0 / 60.0, false);
-    assert_eq!(pad_r.mv.x, -Fx::ONE, "DpadRight moves player to screen right (-X)");
+    assert_eq!(
+        pad_r.mv.x,
+        -Fx::ONE,
+        "DpadRight moves player to screen right (-X)"
+    );
 
     // Left: stick.x = -1.0 -> screen left is world +X
     let mut left = InputState::default();
     left.set(Button::DpadLeft, true);
     let pad_l = c.pad(&left, &none, 1.0 / 60.0, false);
-    assert_eq!(pad_l.mv.x, Fx::ONE, "DpadLeft moves player to screen left (+X)");
+    assert_eq!(
+        pad_l.mv.x,
+        Fx::ONE,
+        "DpadLeft moves player to screen left (+X)"
+    );
 
     // Up: stick.y = +1.0 -> runs away from camera into screen (-Y world Z)
     let mut up = InputState::default();
@@ -842,4 +850,3 @@ fn movement_left_right_up_down_matches_screen_space() {
     let pad_d = c.pad(&down, &none, 1.0 / 60.0, false);
     assert_eq!(pad_d.mv.y, Fx::ONE, "DpadDown runs toward the camera (+Y)");
 }
-

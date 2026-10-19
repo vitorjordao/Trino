@@ -513,4 +513,3 @@ fn newly_supported_keys_are_bindable_with_labels() {
     assert_eq!(key_label(KeyCode::KeyR), Some("R"));
     assert_eq!(key_label(KeyCode::KeyT), Some("T"));
 }
-

@@ -741,8 +741,7 @@ impl SolidElevenGame {
                     if s.m.bench_n[side] == 0 {
                         self.cur.sub_pane = 0;
                     } else {
-                        self.cur.sub_bench =
-                            self.cur.sub_bench.min(s.m.bench_n[side] as usize - 1);
+                        self.cur.sub_bench = self.cur.sub_bench.min(s.m.bench_n[side] as usize - 1);
                     }
                 } else {
                     sound::play(audio, Sfx::Tap);

@@ -263,7 +263,13 @@ pub fn draw(g: &mut SolidElevenGame, r: &mut dyn Renderer) {
             );
             header(&mut ui, &mut g.hits, tr(lang, S::Controls), true);
             crate::ui::controls::draw(g, &mut ui);
-            footer(&mut ui, &mut g.hits, pad, lang, &[(Btn::A, S::Change), (Btn::B, S::Back)]);
+            footer(
+                &mut ui,
+                &mut g.hits,
+                pad,
+                lang,
+                &[(Btn::A, S::Change), (Btn::B, S::Back)],
+            );
         }
         Scene::Results => {
             title_backdrop(g, r, aspect);
@@ -1241,11 +1247,7 @@ fn club(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
         &mut g.hits,
         pad,
         lang,
-        &[
-            (Btn::A, S::Select),
-            (Btn::B, S::Back),
-            (Btn::Y, S::Table),
-        ],
+        &[(Btn::A, S::Select), (Btn::B, S::Back), (Btn::Y, S::Table)],
     );
 }
 
@@ -1747,11 +1749,7 @@ fn edit(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
         &mut g.hits,
         pad,
         lang,
-        &[
-            (Btn::A, S::Save_),
-            (Btn::B, S::Cancel),
-            (Btn::X, S::Random),
-        ],
+        &[(Btn::A, S::Save_), (Btn::B, S::Cancel), (Btn::X, S::Random)],
     );
 }
 
@@ -2059,7 +2057,13 @@ fn settings(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
             let hit = ui.rect(rr);
             g.hits.add(hit, Screen::Top, k as u8);
         }
-        footer(&mut ui, &mut g.hits, pad, lang, &[(Btn::A, S::Select), (Btn::B, S::Back)]);
+        footer(
+            &mut ui,
+            &mut g.hits,
+            pad,
+            lang,
+            &[(Btn::A, S::Select), (Btn::B, S::Back)],
+        );
         return;
     }
     header(&mut ui, &mut g.hits, tr(lang, S::Settings), true);
@@ -2147,7 +2151,13 @@ fn settings(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
         let hit = ui.rect(rr);
         g.hits.add(hit, Screen::Top, k as u8);
     }
-    footer(&mut ui, &mut g.hits, pad, lang, &[(Btn::A, S::Select), (Btn::B, S::Back)]);
+    footer(
+        &mut ui,
+        &mut g.hits,
+        pad,
+        lang,
+        &[(Btn::A, S::Select), (Btn::B, S::Back)],
+    );
 }
 
 // ------------------------------------------------------------------ report
@@ -2393,16 +2403,37 @@ fn half_time(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
             let _ = write!(b0, "{}", v0);
             let mut b1 = TextBuf::<12>::new();
             let _ = write!(b1, "{}", v1);
-            ui.text(78.0, y, b0.as_str(), pal::CYAN, Size::Small, TextAlign::Right);
+            ui.text(
+                78.0,
+                y,
+                b0.as_str(),
+                pal::CYAN,
+                Size::Small,
+                TextAlign::Right,
+            );
             ui.text(160.0, y, lbl, pal::DIM, Size::Small, TextAlign::Center);
-            ui.text(242.0, y, b1.as_str(), pal::CYAN, Size::Small, TextAlign::Left);
+            ui.text(
+                242.0,
+                y,
+                b1.as_str(),
+                pal::CYAN,
+                Size::Small,
+                TextAlign::Left,
+            );
         }
         let y = 78.0 + 3.0 * 17.0;
         let mut b0 = TextBuf::<12>::new();
         let _ = write!(b0, "{}%", h_poss);
         let mut b1 = TextBuf::<12>::new();
         let _ = write!(b1, "{}%", a_poss);
-        ui.text(78.0, y, b0.as_str(), pal::CYAN, Size::Small, TextAlign::Right);
+        ui.text(
+            78.0,
+            y,
+            b0.as_str(),
+            pal::CYAN,
+            Size::Small,
+            TextAlign::Right,
+        );
         ui.text(
             160.0,
             y,
@@ -2411,7 +2442,14 @@ fn half_time(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
             Size::Small,
             TextAlign::Center,
         );
-        ui.text(242.0, y, b1.as_str(), pal::CYAN, Size::Small, TextAlign::Left);
+        ui.text(
+            242.0,
+            y,
+            b1.as_str(),
+            pal::CYAN,
+            Size::Small,
+            TextAlign::Left,
+        );
     }
     for (k, s) in [S::Continue, S::Substitute, S::Quit].iter().enumerate() {
         let rr = Rect::new(55.0 + k as f32 * 72.0, 168.0, 66.0, 24.0);
@@ -2880,10 +2918,24 @@ mod tests {
             &[(Btn::A, S::Confirm), (Btn::B, S::Back)],
             &[(Btn::A, S::Select), (Btn::B, S::Back), (Btn::Y, S::Table)],
             &[(Btn::B, S::Back)],
-            &[(Btn::A, S::Details), (Btn::B, S::Back), (Btn::X, S::Formation)],
+            &[
+                (Btn::A, S::Details),
+                (Btn::B, S::Back),
+                (Btn::X, S::Formation),
+            ],
             &[(Btn::A, S::Save_), (Btn::B, S::Cancel), (Btn::X, S::Random)],
-            &[(Btn::A, S::Sell), (Btn::B, S::Back), (Btn::X, S::Compare), (Btn::Y, S::Swap)],
-            &[(Btn::A, S::Buy), (Btn::B, S::Back), (Btn::X, S::Compare), (Btn::Y, S::Swap)],
+            &[
+                (Btn::A, S::Sell),
+                (Btn::B, S::Back),
+                (Btn::X, S::Compare),
+                (Btn::Y, S::Swap),
+            ],
+            &[
+                (Btn::A, S::Buy),
+                (Btn::B, S::Back),
+                (Btn::X, S::Compare),
+                (Btn::Y, S::Swap),
+            ],
             &[(Btn::A, S::Select), (Btn::B, S::Back)],
             &[(Btn::A, S::Confirm), (Btn::B, S::Cancel)],
         ];
@@ -2910,4 +2962,3 @@ mod tests {
         }
     }
 }
-

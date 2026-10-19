@@ -21,7 +21,9 @@
 //! `TRINO_EDITOR_SCREENSHOT=out.png` (+ `TRINO_EDITOR_SCREENSHOT_FRAME=N`)
 //! saves a screenshot of the whole window and exits (the launcher too);
 //! `TRINO_EDITOR_TAB=level` opens with the Level tab focused (`mixer`,
-//! `quality`, `memory`: the Mixer, the Quality, the Memory tab);
+//! `quality`, `memory`, `ui`: the Mixer, the Quality, the Memory, the UI
+//! tab); `TRINO_EDITOR_UI=<screen>[,<platform>[,<lang>[,<node id>]]]` opens
+//! the UI tab on a screen (`pause,3ds,en-US,resume`);
 //! `TRINO_EDITOR_QUALITY=low[,dynres]` previews a quality preset in the Game
 //! view's PC and Web profiles; `TRINO_EDITOR_OPEN=audio:music/theme@n64` opens the
 //! Audio inspector on a sound, its waveform over that platform's decode;
@@ -50,6 +52,7 @@ mod quality;
 mod recent;
 mod textures;
 mod theme;
+mod ui_screens;
 #[cfg(test)]
 mod ui_tests;
 mod viewport;
@@ -88,6 +91,7 @@ pub const EDITOR_HOOKS: &[&str] = &[
     "TRINO_EDITOR_AO",
     "TRINO_EDITOR_QUALITY",
     "TRINO_EDITOR_ASSET_GROUP",
+    "TRINO_EDITOR_UI",
 ];
 
 /// What the editor opens on start.

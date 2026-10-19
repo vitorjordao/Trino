@@ -44,6 +44,8 @@ pub enum Tab {
     /// What the assets take of each console's RAM, by group (issue #56).
     Memory,
     Console,
+    /// The UI screens (`ui/*.ui.ron`, issue #58).
+    Ui,
 }
 
 impl Tab {
@@ -60,6 +62,7 @@ impl Tab {
             Tab::Quality => (icon::SPEEDOMETER, "Quality"),
             Tab::Memory => (icon::MEMORY, "Memory"),
             Tab::Console => (icon::TERMINAL, "Console"),
+            Tab::Ui => (icon::LAYOUT, "UI"),
         };
         format!("{glyph}  {name}")
     }
@@ -301,6 +304,8 @@ pub struct App {
     pub mixer: crate::audio::MixState,
     /// The quality presets the Quality tab edits (`assets/quality.ron`).
     pub quality: crate::quality::QualityState,
+    /// The UI tab: the screens (`ui/*.ui.ron`), the open one, its preview.
+    pub ui_screens: crate::ui_screens::UiScreens,
     /// The scene's frame from its camera on every target (variants, LOD and
     /// impostors applied; `budget::BUDGET_TARGETS`), with the content key
     /// it is for.
@@ -535,6 +540,7 @@ impl App {
         for dir in [
             "scenes",
             "prefabs",
+            "ui",
             "assets/materials",
             "assets/impostors",
             "assets/shared/particles",
@@ -550,6 +556,13 @@ impl App {
             if let Err(e) = file_watcher.watch(Path::new(dir), RecursiveMode::Recursive) {
                 log.warn(format!("cannot watch {dir}: {e}"));
             }
+        }
+        // The UI's string tables, where the project has them.
+        let i18n = Path::new("assets/i18n");
+        if i18n.is_dir()
+            && let Err(e) = file_watcher.watch(i18n, RecursiveMode::NonRecursive)
+        {
+            log.warn(format!("cannot watch {}: {e}", i18n.display()));
         }
 
         let screenshot = screenshot_from_env();
@@ -607,12 +620,14 @@ impl App {
             show_shortcuts: false,
             // Built on the first frame, when the window size is known.
             dock: None,
-            // `TRINO_EDITOR_TAB=mixer|quality|memory` brings that bottom tab
-            // to front.
+            // `TRINO_EDITOR_TAB=mixer|quality|memory|ui` brings that tab to
+            // front, as `TRINO_EDITOR_UI` does the UI tab.
             focus_tab: match std::env::var("TRINO_EDITOR_TAB").as_deref() {
                 Ok("mixer") => Some(Tab::Mixer),
                 Ok("quality") => Some(Tab::Quality),
                 Ok("memory") => Some(Tab::Memory),
+                Ok("ui") => Some(Tab::Ui),
+                _ if std::env::var_os("TRINO_EDITOR_UI").is_some() => Some(Tab::Ui),
                 _ => None,
             },
             open_docs: Vec::new(),
@@ -675,6 +690,9 @@ impl App {
             ),
             mixer: crate::audio::MixState::load(&root.join("assets")),
             quality: crate::quality::QualityState::load(&root),
+            // Dev hook: TRINO_EDITOR_UI=<screen>[,<platform>[,<lang>[,<node
+            // id>]]] opens the UI tab on that screen.
+            ui_screens: crate::ui_screens::UiScreens::from_env(&root),
             render_state,
         }
     }
@@ -888,6 +906,28 @@ impl App {
                 }
                 self.quality.reload(text.as_deref());
                 match &self.quality.error {
+                    Some(e) => self.log.toast(Level::Error, e.clone()),
+                    None => self.log.toast(
+                        Level::Ok,
+                        format!("{} {} reloaded", icon::ARROWS_CLOCKWISE, p.display()),
+                    ),
+                }
+            } else if s.starts_with("ui/") && s.ends_with(".ui.ron") {
+                // A UI screen edited outside (an agent, a text editor,
+                // `cargo xtask ui`): the UI tab follows.
+                let root = self.project.root.clone();
+                match self.ui_screens.file_changed(&root, &p, text.as_deref()) {
+                    Some(Ok(m)) => self
+                        .log
+                        .toast(Level::Ok, format!("{} {m}", icon::ARROWS_CLOCKWISE)),
+                    Some(Err(e)) => self.log.toast(Level::Error, e),
+                    None => {}
+                }
+            } else if s.starts_with("assets/i18n/") && s.ends_with(".ron") {
+                // The UI's string tables.
+                let root = self.project.root.clone();
+                self.ui_screens.reload_langs(&root);
+                match &self.ui_screens.langs_error {
                     Some(e) => self.log.toast(Level::Error, e.clone()),
                     None => self.log.toast(
                         Level::Ok,
@@ -1676,6 +1716,12 @@ impl App {
                 Err(e) => self.quality.error = Some(e),
             }
         }
+        if std::mem::take(&mut self.ui_screens.dirty)
+            && let Some((path, text)) = self.ui_screens.to_text()
+            && let Err(e) = self.write_echo(path, text)
+        {
+            self.log.toast(Level::Error, e);
+        }
         let effects: Vec<String> = self.pending_particles.drain().collect();
         for name in effects {
             if let Some(def) = self.particles.get(&name).cloned() {
@@ -2323,6 +2369,7 @@ impl App {
             (Tab::Quality, "Quality"),
             (Tab::Memory, "Memory"),
             (Tab::Console, "Console"),
+            (Tab::Ui, "UI"),
         ] {
             add(format!("Go to {name} view"), "View", Cmd::FocusTab(tab));
         }
@@ -3246,13 +3293,14 @@ impl eframe::App for App {
 /// the Inspector keep a usable width (200 / 300 px) at the editor's
 /// minimum window size, and their usual share of a big one.
 fn default_dock(width: f32) -> egui_dock::DockState<Tab> {
-    // Dev hook (screenshots): TRINO_EDITOR_TAB=scene|game|level picks the
-    // focused center tab (`mixer` the bottom one: `App::focus_tab`).
+    // Dev hook (screenshots): TRINO_EDITOR_TAB=scene|game|level|animation|ui
+    // picks the focused center tab (`mixer` the bottom one:
+    // `App::focus_tab`).
     let tabs = match std::env::var("TRINO_EDITOR_TAB").as_deref() {
-        Ok("level") => vec![Tab::Level, Tab::Scene, Tab::Game, Tab::Animation],
-        Ok("game") => vec![Tab::Game, Tab::Scene, Tab::Level, Tab::Animation],
-        Ok("animation") => vec![Tab::Animation, Tab::Scene, Tab::Game, Tab::Level],
-        _ => vec![Tab::Scene, Tab::Game, Tab::Level, Tab::Animation],
+        Ok("level") => vec![Tab::Level, Tab::Scene, Tab::Game, Tab::Animation, Tab::Ui],
+        Ok("game") => vec![Tab::Game, Tab::Scene, Tab::Level, Tab::Animation, Tab::Ui],
+        Ok("animation") => vec![Tab::Animation, Tab::Scene, Tab::Game, Tab::Level, Tab::Ui],
+        _ => vec![Tab::Scene, Tab::Game, Tab::Level, Tab::Animation, Tab::Ui],
     };
     let mut dock = egui_dock::DockState::new(tabs);
     let surface = dock.main_surface_mut();
@@ -3311,7 +3359,8 @@ impl egui_dock::TabViewer for TabView<'_> {
             | Tab::Quality
             | Tab::Memory
             | Tab::Level
-            | Tab::Animation => [false, false],
+            | Tab::Animation
+            | Tab::Ui => [false, false],
             _ => [false, true],
         }
     }
@@ -3428,6 +3477,7 @@ impl egui_dock::TabViewer for TabView<'_> {
             Tab::Quality => crate::panels::quality::ui(app, ui),
             Tab::Memory => crate::panels::memory::ui(app, ui),
             Tab::Console => app.log.ui(ui),
+            Tab::Ui => crate::panels::ui_screens::ui(app, ui),
         }
     }
 }

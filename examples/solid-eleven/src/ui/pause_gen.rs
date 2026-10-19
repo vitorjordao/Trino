@@ -38,7 +38,7 @@ pub static NODES: [UiNode<'static>; 8] = [
     },
     // 3: Stack
     UiNode {
-        kind: NodeKind::Stack { dir: Dir::Vertical, gap: 6, align: Align::Center, justify: Justify::Start },
+        kind: NodeKind::Stack { dir: Dir::Vertical, gap: 6, align: Align::Center, justify: Justify::Start, wrap: false },
         parent: 2,
         end: 8,
         ..UiNode::DEFAULT

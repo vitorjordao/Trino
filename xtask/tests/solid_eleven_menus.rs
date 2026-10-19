@@ -607,7 +607,13 @@ fn scene_name(s: Scene) -> String {
 fn ui_screen(g: &SolidElevenGame) -> bool {
     matches!(
         g.scene,
-        Scene::Pause | Scene::Settings | Scene::Table | Scene::Confirm | Scene::Quick
+        Scene::Pause
+            | Scene::Settings
+            | Scene::Table
+            | Scene::Confirm
+            | Scene::Quick
+            | Scene::Results
+            | Scene::Club
     )
 }
 
@@ -774,7 +780,9 @@ fn every_menu_state_draws_cleanly_in_every_language_and_size() {
         "busiest N64 picture: {} rects + glyphs ({})",
         report.busiest.0, report.busiest.1
     );
-    for want in ["Pause", "Settings", "Table", "Confirm", "Quick"] {
+    for want in [
+        "Pause", "Settings", "Table", "Confirm", "Quick", "Results", "Club",
+    ] {
         assert!(
             report.grew.contains(want),
             "{want} (a UI screen) drew the same at every text scale"

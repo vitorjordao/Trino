@@ -23,6 +23,10 @@ pub mod screens;
 pub mod settings_gen {
     include!("settings_gen.rs");
 }
+/// The club hub (`ui/club.ui.ron`).
+pub mod club_gen {
+    include!("club_gen.rs");
+}
 /// The "reset the save?" dialog (`ui/confirm.ui.ron`).
 pub mod confirm_gen {
     include!("confirm_gen.rs");
@@ -30,6 +34,10 @@ pub mod confirm_gen {
 /// The quick match setup (`ui/quick.ui.ron`).
 pub mod quick_gen {
     include!("quick_gen.rs");
+}
+/// The match report (`ui/results.ui.ron`).
+pub mod results_gen {
+    include!("results_gen.rs");
 }
 /// The league table (`ui/table.ui.ron`).
 pub mod table_gen {

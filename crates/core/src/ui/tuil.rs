@@ -362,10 +362,13 @@ fn encode_kind(kind: &NodeKind) -> (u8, [u8; 16]) {
             gap,
             align,
             justify,
+            wrap,
         } => {
             p[0] = dir as u8;
             p[1] = align as u8;
             p[2] = justify as u8;
+            // A spare byte in version 2: older blobs read 0, no wrap.
+            p[3] = wrap as u8;
             wr16(&mut p, 4, gap as u16);
             1
         }
@@ -462,6 +465,7 @@ fn decode_kind(b: &[u8]) -> NodeKind {
                 _ => Justify::Start,
             },
             gap: i16_at(4),
+            wrap: p[3] != 0,
         },
         2 => NodeKind::Grid {
             cols: p[0].max(1),

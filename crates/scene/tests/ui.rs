@@ -178,7 +178,7 @@ fn the_rust_export_names_every_non_default_field() {
     assert!(code.starts_with("// @generated"));
     assert!(code.contains("pub static NODES: [UiNode<'static>; 6] = ["));
     assert!(code.contains("anchor: Anchor::Center,"));
-    assert!(code.contains("NodeKind::Stack { dir: Dir::Vertical, gap: 4, align: Align::Center, justify: Justify::Start }"));
+    assert!(code.contains("NodeKind::Stack { dir: Dir::Vertical, gap: 4, align: Align::Center, justify: Justify::Start, wrap: false }"));
     assert!(code.contains("nav: [NONE, 4, NONE, NONE],"));
     assert!(code.contains("color: Some(Color::rgba(0, 0, 0, 160)),"));
     assert!(code.contains("pub static SCREEN: UiScreen<'static> = UiScreen {"));
@@ -311,12 +311,12 @@ fn the_audit_fails_unreachable_controls_on_consoles_and_budgets_everywhere() {
         Level::Warning,
         "the mouse reaches it on the PC"
     );
-    // A list of 100 items is past the N64's node budget.
+    // A list of 200 items is past the N64's node budget (128).
     let text = r#"(
         version: 1,
-        preview: {"n": Int(100)},
+        preview: {"n": Int(200)},
         root: (children: [
-            (kind: List(max: 100), bind: "n", children: [(kind: Rect(), size: (Px(2), Px(2)))]),
+            (kind: List(max: 200), bind: "n", children: [(kind: Rect(), size: (Px(1), Px(1)))]),
         ]),
     )"#;
     let def = ScreenDef::from_ron(text).unwrap();

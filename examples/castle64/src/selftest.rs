@@ -3428,6 +3428,7 @@ pub static UI_COST_SCREEN: trino_core::ui::UiScreen<'static> = {
                 gap: 4,
                 align: Align::Center,
                 justify: Justify::SpaceBetween,
+                wrap: false,
             },
             parent: 2,
             end: 6,

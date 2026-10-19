@@ -229,12 +229,16 @@ pub enum Scaling {
 pub enum NodeKind {
     /// Children placed by their anchors.
     Overlay,
-    /// Children one after the other.
+    /// Children one after the other. With `wrap`, a child that doesn't fit
+    /// the rest of the line starts a new one, `gap` apart (issue #95): a
+    /// row of hints or chips that grows with the text takes two lines
+    /// instead of running off the screen.
     Stack {
         dir: Dir,
         gap: i16,
         align: Align,
         justify: Justify,
+        wrap: bool,
     },
     /// Children in rows of `cols` equal columns.
     Grid { cols: u8, gap: (i16, i16) },

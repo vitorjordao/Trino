@@ -156,6 +156,9 @@ pub struct Cursors {
     pub club: usize,
     /// The table row the view follows (scrolling at large text).
     pub table: usize,
+    /// The match report's part the view follows (scrolling at large
+    /// text): the score, six stats, the scorers, the income.
+    pub results: usize,
     /// The club shown in Teams.
     pub team_club: u8,
     pub squad: usize,
@@ -892,6 +895,8 @@ impl SolidElevenGame {
                 }
             }
             Scene::Results => {
+                // Up and down scroll it (it shows whole at 100 % text).
+                menu::step(&mut self.cur.results, 9, nav);
                 if nav.confirm || nav.back || tap.is_some() {
                     let career = self.report.is_some_and(|r| r.career);
                     // The last round: the champion's ceremony first.
@@ -1024,8 +1029,18 @@ impl SolidElevenGame {
     }
 
     fn club(&mut self, nav: &Nav, tap: Option<u8>) {
-        // 0 play, 1 simulate, 2 squad, 3 market, 4 table.
-        menu::step(&mut self.cur.club, 5, nav);
+        // 0 play, 1 simulate, 2 squad, 3 market, 4 table. At large text the
+        // panels above them take the cursor too (5 finances, 6 players, 7
+        // matches): a small screen shows one at a time, and the pad must
+        // reach each.
+        let order: &[usize] = if self.big_text() {
+            &[5, 6, 7, 0, 1, 2, 3, 4]
+        } else {
+            &[0, 1, 2, 3, 4]
+        };
+        let mut at = order.iter().position(|&k| k == self.cur.club).unwrap_or(3);
+        menu::step(&mut at, order.len(), nav);
+        self.cur.club = order[at];
         if let Some(id) = tap {
             self.cur.club = id as usize;
         }
@@ -1082,8 +1097,15 @@ impl SolidElevenGame {
                 self.scene = Scene::Teams;
             }
             3 => self.scene = Scene::Market,
-            _ => self.scene = Scene::Table,
+            4 => self.scene = Scene::Table,
+            // A panel: nothing to pick.
+            _ => {}
         }
+    }
+
+    /// The player reads at 150 % or more: menus lay out for large text.
+    pub fn big_text(&self) -> bool {
+        self.access.clamped().text_factor() >= 1.5
     }
 
     /// The squad list Teams and the editor show (database indices).

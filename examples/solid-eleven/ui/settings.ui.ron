@@ -91,7 +91,8 @@
                         ],
                     ),
                     (
-                        kind: Stack(dir: Horizontal, gap: 4),
+                        kind: Stack(dir: Horizontal, gap: 3, wrap: true),
+                        size: (Fill, Fit),
                         padding: (6, 0, 0, 3),
                         children: [
                             (

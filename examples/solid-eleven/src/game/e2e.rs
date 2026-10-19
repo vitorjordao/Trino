@@ -737,9 +737,19 @@ fn tapping_back_button_in_header_navigates_back() {
     };
     d.g.render(&mut r);
 
-    // Tap on the '<' back button at the top-left (e.g. x: 10, y: 12)
+    // Tap the middle of the header's '<' (where the screen laid it out).
+    let back =
+        d.g.hits
+            .iter()
+            .find(|h| h.id == crate::ui::screens::HIT_BACK)
+            .expect("the header's back arrow is a tap target")
+            .rect;
+    assert!(back.pos.y < 40.0, "in the header: {back:?}");
     let mut tap = InputState::default();
-    tap.pointer = Some(Vec2::new(10.0, 12.0));
+    tap.pointer = Some(Vec2::new(
+        back.pos.x + back.size.x * 0.5,
+        back.pos.y + back.size.y * 0.5,
+    ));
     tap.set_pointer_button(PointerButton::Primary, true);
     d.frame(&tap);
     d.idle(1);

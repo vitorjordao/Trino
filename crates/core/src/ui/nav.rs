@@ -433,7 +433,8 @@ impl<const N: usize> Ui<N> {
                 } else {
                     (r.pos.x, r.size.x, view.pos.x, view.size.x)
                 };
-                let delta = if lo < vlo {
+                // Something taller than the box shows from its top.
+                let delta = if lo < vlo || len > vlen {
                     lo - vlo
                 } else if lo + len > vlo + vlen {
                     lo + len - (vlo + vlen)

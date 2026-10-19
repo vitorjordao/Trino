@@ -327,6 +327,10 @@ pub mod flags {
     pub const DISABLED: u8 = 8;
     /// Takes the focus (a control, enabled).
     pub const FOCUSABLE: u8 = 16;
+    /// Bigger than its scroll box, so it could never show whole: not drawn
+    /// itself, its children shown or cut one by one (issue #95: a panel
+    /// taller than a small screen at large text shows the lines that fit).
+    pub const CUT: u8 = 32;
 }
 
 /// One laid-out node: a node of the screen, once per list item it is in.
@@ -814,6 +818,9 @@ impl<const N: usize> Ui<N> {
 
     /// Not drawn: clipped by a scroll box (or inside one that is).
     pub(super) fn hidden(&self, i: usize) -> bool {
+        if self.slots[i].has(flags::CUT) {
+            return true;
+        }
         let mut at = i;
         loop {
             let s = self.slots[at];

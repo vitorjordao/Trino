@@ -912,351 +912,238 @@ fn pick_club(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
 
 // ----------------------------------------------------------------- club hub
 
-fn club(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
-    let lang = g.settings.lang;
-    let pad = g.pad_layout();
-    let w = &g.world;
-    let user = w.user;
-    let mut ui = Ui::new(r, screen);
-    ui.fill(
-        Rect::new(-200.0, 0.0, 720.0, 240.0),
-        Color::rgba(6, 8, 20, 140),
-    );
-    // Header: crest, title, balance, fame.
-    crest_of(&mut ui, 6.0, 4.0, 26.0, user, false);
-    ui.slant(Rect::new(36.0, 4.0, 180.0, 14.0), pal::NAVY, 4.0);
-    ui.text(
-        42.0,
-        5.0,
-        tr(lang, S::ManageClub),
-        pal::INK,
-        Size::Small,
-        TextAlign::Left,
-    );
-    let mut b = buf();
-    let _ = write!(
-        b,
-        "{}: {} {}",
-        tr(lang, S::Balance),
-        coins(w.clubs[user as usize].budget).as_str(),
-        tr(lang, S::Coins)
-    );
-    ui.text(
-        40.0,
-        19.0,
-        b.as_str(),
-        pal::YELLOW,
-        Size::Small,
-        TextAlign::Left,
-    );
-    b.clear();
-    let _ = write!(
-        b,
-        "{}: {} {}",
-        tr(lang, S::Fame),
-        tr(lang, S::Level),
-        CLUBS[user as usize].fame
-    );
-    ui.text(
-        312.0,
-        19.0,
-        b.as_str(),
-        pal::CYAN,
-        Size::Small,
-        TextAlign::Right,
-    );
-
-    // FINANCES (blue): the last round's books and every club's budget.
-    let (x, y) = (6.0, 34.0);
-    ui.panel(Rect::new(x, y, 152.0, 92.0), pal::BLUE);
-    ui.text(
-        x + 4.0,
-        y + 2.0,
-        tr(lang, S::Finances),
-        pal::INK,
-        Size::Small,
-        TextAlign::Left,
-    );
-    let max = (0..TEAMS)
-        .map(|c| w.clubs[c].budget.max(1))
-        .max()
-        .unwrap_or(1) as f32;
-    for c in 0..TEAMS {
-        let v = w.clubs[c].budget.max(0) as f32 / max;
-        let h = (v * 34.0).max(1.0);
-        let col = if c as u8 == user {
-            pal::LIME
-        } else {
-            Color::rgb(60, 140, 80)
-        };
-        ui.fill(
-            Rect::new(x + 6.0 + c as f32 * 14.0, y + 50.0 - h, 10.0, h),
-            col,
-        );
-    }
-    b.clear();
-    let _ = write!(
-        b,
-        "{}: +{}",
-        tr(lang, S::WeeklyIncome),
-        coins(w.last_income).as_str()
-    );
-    ui.text(
-        x + 4.0,
-        y + 56.0,
-        b.as_str(),
-        pal::GREEN,
-        Size::Small,
-        TextAlign::Left,
-    );
-    b.clear();
-    let _ = write!(
-        b,
-        "{}: -{}",
-        tr(lang, S::Wages),
-        coins(w.last_wages).as_str()
-    );
-    ui.text(
-        x + 4.0,
-        y + 67.0,
-        b.as_str(),
-        pal::RED,
-        Size::Small,
-        TextAlign::Left,
-    );
-    let net = w.last_income - w.last_wages;
-    ui.text(
-        x + 4.0,
-        y + 78.0,
-        tr(lang, if net >= 0 { S::Positive } else { S::Negative }),
-        if net >= 0 { pal::GREEN } else { pal::RED },
-        Size::Small,
-        TextAlign::Left,
-    );
-
-    // PLAYERS (green): squad size, morale, the three best with energy.
-    let (x, y) = (162.0, 34.0);
-    ui.panel(Rect::new(x, y, 152.0, 92.0), pal::GREEN);
-    ui.text(
-        x + 4.0,
-        y + 2.0,
-        tr(lang, S::Players),
-        pal::INK,
-        Size::Small,
-        TextAlign::Left,
-    );
-    b.clear();
-    let _ = write!(
-        b,
-        "{}/{}  {} {}",
-        w.squad_len(user),
-        team::MAX_SQUAD,
-        tr(lang, S::Morale),
-        w.clubs[user as usize].morale
-    );
-    ui.text(
-        x + 4.0,
-        y + 14.0,
-        b.as_str(),
-        pal::DIM,
-        Size::Small,
-        TextAlign::Left,
-    );
-    let mut best = [0usize; 3];
-    let mut n = 0;
+fn club(g: &mut SolidElevenGame, r: &mut dyn Renderer, _screen: Vec2) {
+    use super::scr::{art, flag, int, txt};
+    let screen = &super::club_gen::SCREEN;
+    let user = g.world.user;
+    let big = g.access.clamped().text_factor() >= 1.5;
+    let sfx = |id: &'static str, big_id: &'static str| if big { big_id } else { id };
+    // The three best of the squad.
     let mut order: [u16; team::MAX_SQUAD] = [0; team::MAX_SQUAD];
-    for i in w.squad(user) {
+    let mut n = 0;
+    for i in g.world.squad(user) {
         if n < order.len() {
             order[n] = i as u16;
             n += 1;
         }
     }
-    order[..n].sort_unstable_by_key(|&i| core::cmp::Reverse(w.players[i as usize].ovr()));
-    for k in 0..3.min(n) {
-        best[k] = order[k] as usize;
-    }
-    for k in 0..3.min(n) {
-        let p = &w.players[best[k]];
-        let yy = y + 28.0 + k as f32 * 20.0;
-        portrait(&mut ui, x + 4.0, yy, &look_of(g, best[k]));
-        let mut bb = buf();
-        let _ = write!(bb, "{}", p.ovr());
-        ui.text(
-            x + 28.0,
-            yy + 2.0,
-            bb.as_str(),
-            pal::INK,
-            Size::Small,
-            TextAlign::Left,
-        );
-        ui.bar(
-            Rect::new(x + 46.0, yy + 6.0, 96.0, 4.0),
-            p.energy as f32 / 100.0,
-            pal::GREEN,
-        );
-    }
-
-    // MATCHES (orange): next fixture, fitness, form; the actions.
-    let (x, y) = (6.0, 130.0);
-    ui.panel(Rect::new(x, y, 308.0, 88.0), pal::ORANGE);
-    ui.text(
-        x + 4.0,
-        y + 2.0,
-        tr(lang, S::Matches),
-        pal::INK,
-        Size::Small,
-        TextAlign::Left,
-    );
-    let season_over = w.round as usize >= ROUNDS;
-    if let Some((h, a)) = w.user_fixture() {
-        let opp = if h == user { a } else { h };
-        crest_of(&mut ui, x + 8.0, y + 16.0, 26.0, opp, false);
-        b.clear();
-        let _ = write!(
-            b,
-            "{}: VS {}",
-            tr(lang, S::NextMatch),
-            CLUBS[opp as usize].short
-        );
-        ui.text(
-            x + 40.0,
-            y + 16.0,
-            b.as_str(),
-            pal::GREEN,
-            Size::Small,
-            TextAlign::Left,
-        );
-        b.clear();
-        let _ = write!(
-            b,
-            "{} {}/{}  {}",
-            tr(lang, S::Round),
-            w.round + 1,
-            ROUNDS,
-            tr(lang, if h == user { S::Home } else { S::Away })
-        );
-        ui.text(
-            x + 40.0,
-            y + 27.0,
-            b.as_str(),
-            pal::YELLOW,
-            Size::Small,
-            TextAlign::Left,
-        );
-    } else if season_over {
-        let leader = w.standings()[0];
-        let mut bb = buf();
-        let _ = write!(
-            bb,
-            "{} {}",
-            CLUBS[leader as usize].short,
-            tr(lang, S::Champion)
-        );
-        ui.text(
-            x + 10.0,
-            y + 18.0,
-            bb.as_str(),
-            pal::YELLOW,
-            Size::Small,
-            TextAlign::Left,
-        );
-    }
-    let xi = w.lineup(user);
-    let fit: u32 = xi
-        .iter()
-        .map(|&i| w.players[i as usize].energy as u32)
-        .sum::<u32>()
-        / 11;
-    b.clear();
-    let _ = write!(b, "{}: {}%", tr(lang, S::Fitness), fit);
-    ui.text(
-        x + 40.0,
-        y + 38.0,
-        b.as_str(),
-        pal::DIM,
-        Size::Small,
-        TextAlign::Left,
-    );
-    ui.bar(
-        Rect::new(x + 40.0, y + 50.0, 100.0, 4.0),
-        fit as f32 / 100.0,
-        pal::GREEN,
-    );
-    // Last results: chips.
-    ui.text(
-        x + 160.0,
-        y + 16.0,
-        tr(lang, S::LastResults),
-        pal::DIM,
-        Size::Small,
-        TextAlign::Left,
-    );
-    for (k, &f) in w.form.iter().enumerate() {
-        if f == 0 {
-            continue;
-        }
-        let (s, c) = match f {
-            1 => (S::Win, pal::GREEN),
-            2 => (S::Draw, Color::rgb(140, 140, 150)),
-            _ => (S::Loss, pal::RED),
-        };
-        let cx = x + 160.0 + k as f32 * 16.0;
-        ui.fill(Rect::new(cx, y + 28.0, 13.0, 13.0), c);
-        ui.text(
-            cx + 6.5,
-            y + 29.0,
-            tr(lang, s),
-            pal::INK,
-            Size::Small,
-            TextAlign::Center,
-        );
-    }
-    // Actions.
+    order[..n].sort_unstable_by_key(|&i| core::cmp::Reverse(g.world.players[i as usize].ovr()));
+    let best = n.min(3);
+    let season_over = g.world.round as usize >= ROUNDS;
     let acts: [S; 5] = if season_over {
         [S::Continue, S::Continue, S::Squad, S::Market, S::Table]
     } else {
         [S::Play, S::Simulate, S::Squad, S::Market, S::Table]
     };
-    for (k, s) in acts.iter().enumerate() {
-        let bx = x + 4.0 + k as f32 * 61.0;
-        let rr = Rect::new(bx, y + 62.0, 58.0, 20.0);
-        let sel = g.cur.club == k;
-        ui.fill(
-            rr,
-            if sel {
-                Color::rgba(90, 50, 10, 240)
-            } else {
-                pal::PANEL
-            },
-        );
-        ui.border(
-            rr,
-            if sel {
-                pal::ORANGE
-            } else {
-                Color::rgb(90, 70, 50)
-            },
-            1.0,
-        );
-        let label = tr(lang, *s);
-        ui.text(
-            bx + 29.0,
-            y + 66.0,
-            label,
-            if sel { pal::YELLOW } else { pal::INK },
-            Size::Small,
-            TextAlign::Center,
-        );
-        let hit = ui.rect(rr);
-        g.hits.add(hit, Screen::Top, k as u8);
-    }
-    footer(
-        &mut ui,
-        &mut g.hits,
-        pad,
-        lang,
-        &[(Btn::A, S::Select), (Btn::B, S::Back), (Btn::Y, S::Table)],
+    // The results played so far, oldest first (unplayed slots are 0).
+    let form = g.world.form;
+    let form_n = form.iter().filter(|&&f| f != 0).count();
+    super::scr::show(
+        g,
+        r,
+        screen,
+        Some(match g.cur.club {
+            5 => ("fin_big", NO_ITEM),
+            6 => ("pl_big", NO_ITEM),
+            7 => ("matches", NO_ITEM),
+            k => (sfx("act", "act_big"), k.min(4) as u16),
+        }),
+        super::scr::rev(&(
+            g.world.round,
+            g.world.year,
+            g.world.clubs[user as usize].budget,
+            g.world.clubs[user as usize].morale,
+            g.world.squad_len(user),
+            form,
+        )),
+        |g, key, item| {
+            let lang = g.settings.lang;
+            let w = &g.world;
+            let mut b = buf();
+            match key {
+                "balance" => {
+                    let _ = write!(
+                        b,
+                        "{}: {} {}",
+                        tr(lang, S::Balance),
+                        coins(w.clubs[user as usize].budget).as_str(),
+                        tr(lang, S::Coins)
+                    );
+                }
+                "fame" => {
+                    let _ = write!(
+                        b,
+                        "{}: {} {}",
+                        tr(lang, S::Fame),
+                        tr(lang, S::Level),
+                        CLUBS[user as usize].fame
+                    );
+                }
+                "income" => {
+                    let _ = write!(
+                        b,
+                        "{}: +{}",
+                        tr(lang, S::WeeklyIncome),
+                        coins(w.last_income).as_str()
+                    );
+                }
+                "wages" => {
+                    let _ = write!(
+                        b,
+                        "{}: -{}",
+                        tr(lang, S::Wages),
+                        coins(w.last_wages).as_str()
+                    );
+                }
+                "net_up" => return flag(w.last_income >= w.last_wages),
+                "net_down" => return flag(w.last_income < w.last_wages),
+                "squad" => {
+                    let _ = write!(
+                        b,
+                        "{}/{}  {} {}",
+                        w.squad_len(user),
+                        team::MAX_SQUAD,
+                        tr(lang, S::Morale),
+                        w.clubs[user as usize].morale
+                    );
+                }
+                "best" => return int(best as i32),
+                "ovr" => {
+                    return int(w.players[*order[..best].get(item as usize)? as usize].ovr() as i32);
+                }
+                "fixture" => return flag(w.user_fixture().is_some()),
+                "over" => return flag(w.user_fixture().is_none() && season_over),
+                "next" | "round" => {
+                    let (h, a) = w.user_fixture()?;
+                    let opp = if h == user { a } else { h };
+                    if key == "next" {
+                        let _ = write!(
+                            b,
+                            "{}: VS {}",
+                            tr(lang, S::NextMatch),
+                            CLUBS[opp as usize].short
+                        );
+                    } else {
+                        let _ = write!(
+                            b,
+                            "{} {}/{}  {}",
+                            tr(lang, S::Round),
+                            w.round + 1,
+                            ROUNDS,
+                            tr(lang, if h == user { S::Home } else { S::Away })
+                        );
+                    }
+                }
+                "champion" => {
+                    let leader = w.standings()[0];
+                    let _ = write!(
+                        b,
+                        "{} {}",
+                        CLUBS[leader as usize].short,
+                        tr(lang, S::Champion)
+                    );
+                }
+                "fitness" => {
+                    let xi = w.lineup(user);
+                    let fit: u32 = xi
+                        .iter()
+                        .map(|&i| w.players[i as usize].energy as u32)
+                        .sum::<u32>()
+                        / 11;
+                    let _ = write!(b, "{}: {}%", tr(lang, S::Fitness), fit);
+                }
+                "form" => return int(form_n as i32),
+                "win" | "draw" | "loss" => {
+                    let f = form
+                        .iter()
+                        .copied()
+                        .filter(|&f| f != 0)
+                        .nth(item as usize)?;
+                    return flag(match key {
+                        "win" => f == 1,
+                        "draw" => f == 2,
+                        _ => f >= 3,
+                    });
+                }
+                "acts" => return int(acts.len() as i32),
+                "act" => return txt(tr(lang, *acts.get(item as usize)?)),
+                _ => return None,
+            }
+            txt(b.as_str())
+        },
+        |_, ui, r| {
+            super::scr::chrome(ui, screen, r);
+            // The panels' fills under their colored rims.
+            for id in ["fin", "pl", "fin_big", "pl_big", "matches"] {
+                if let Some((mut a, size)) = art(r, ui, screen, id, NO_ITEM) {
+                    a.fill(Rect::new(0.0, 0.0, size.x, size.y), pal::PANEL);
+                }
+            }
+        },
     );
+    let ui = core::mem::take(&mut g.menu_ui);
+    let w = &g.world;
+    if let Some((mut a, size)) = art(r, &ui, screen, "crest", NO_ITEM) {
+        crest_of(&mut a, 0.0, 0.0, size.x, user, false);
+    }
+    // Every club's budget, the player's in lime.
+    if let Some((mut a, size)) = art(r, &ui, screen, sfx("budgets", "budgets_big"), NO_ITEM) {
+        let max = (0..TEAMS)
+            .map(|c| w.clubs[c].budget.max(1))
+            .max()
+            .unwrap_or(1) as f32;
+        let step = size.x / TEAMS as f32;
+        for c in 0..TEAMS {
+            let v = w.clubs[c].budget.max(0) as f32 / max;
+            let h = (v * (size.y - 2.0)).max(1.0);
+            let col = if c as u8 == user {
+                pal::LIME
+            } else {
+                Color::rgb(60, 140, 80)
+            };
+            a.fill(
+                Rect::new(c as f32 * step + 2.0, size.y - h, step - 4.0, h),
+                col,
+            );
+        }
+    }
+    for k in 0..best {
+        let i = order[k] as usize;
+        if let Some((mut a, _)) = art(r, &ui, screen, sfx("portrait", "portrait_big"), k as u16) {
+            portrait(&mut a, 0.0, 0.0, &look_of(g, i));
+        }
+        if let Some((mut a, size)) = art(r, &ui, screen, sfx("energy", "energy_big"), k as u16) {
+            a.bar(
+                Rect::new(0.0, 0.0, size.x, size.y),
+                w.players[i].energy as f32 / 100.0,
+                pal::GREEN,
+            );
+        }
+    }
+    if let Some((h, a2)) = w.user_fixture()
+        && let Some((mut a, size)) = art(r, &ui, screen, "opp", NO_ITEM)
+    {
+        let opp = if h == user { a2 } else { h };
+        crest_of(&mut a, 0.0, 0.0, size.x, opp, false);
+    }
+    if let Some((mut a, size)) = art(r, &ui, screen, "fit", NO_ITEM) {
+        let xi = w.lineup(user);
+        let fit: u32 = xi
+            .iter()
+            .map(|&i| w.players[i as usize].energy as u32)
+            .sum::<u32>()
+            / 11;
+        a.bar(
+            Rect::new(0.0, 0.0, size.x, size.y),
+            fit as f32 / 100.0,
+            pal::GREEN,
+        );
+    }
+    g.menu_ui = ui;
+    for k in 0..acts.len() {
+        super::scr::hit(g, screen, sfx("act", "act_big"), k as u16, k as u8);
+    }
+    super::scr::back_hits(g, screen);
 }
 
 // ------------------------------------------------------------------ table
@@ -2103,50 +1990,13 @@ fn settings_value(
 
 // ------------------------------------------------------------------ report
 
-fn results(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
-    let lang = g.settings.lang;
-    let pad = g.pad_layout();
+fn results(g: &mut SolidElevenGame, r: &mut dyn Renderer, _screen: Vec2) {
+    use super::scr::{art, flag, int, txt};
     let Some(rep) = g.report else {
         return;
     };
-    let mut ui = Ui::new(r, screen);
-    ui.fill(
-        Rect::new(-200.0, 0.0, 720.0, 240.0),
-        Color::rgba(6, 8, 20, 170),
-    );
-    header(&mut ui, &mut g.hits, tr(lang, S::Results), false);
-    // Score line.
-    ui.panel(Rect::new(40.0, 32.0, 240.0, 40.0), pal::CYAN);
-    crest_of(&mut ui, 48.0, 37.0, 26.0, rep.clubs[0], false);
-    crest_of(&mut ui, 246.0, 37.0, 26.0, rep.clubs[1], false);
-    ui.text(
-        96.0,
-        40.0,
-        CLUBS[rep.clubs[0] as usize].short,
-        pal::INK,
-        Size::Small,
-        TextAlign::Center,
-    );
-    ui.text(
-        224.0,
-        40.0,
-        CLUBS[rep.clubs[1] as usize].short,
-        pal::INK,
-        Size::Small,
-        TextAlign::Center,
-    );
-    let mut b = buf();
-    let _ = write!(b, "{} - {}", rep.score[0], rep.score[1]);
-    ui.text(
-        160.0,
-        36.0,
-        b.as_str(),
-        pal::YELLOW,
-        Size::Big,
-        TextAlign::Center,
-    );
-    // Stats: two bars from the middle.
-    let st = &rep.stats;
+    let screen = &super::results_gen::SCREEN;
+    let st = rep.stats;
     let poss = (st[0].possession + st[1].possession).max(1);
     let rows: [(S, u32, u32); 6] = [
         (
@@ -2160,89 +2010,98 @@ fn results(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
         (S::Fouls, st[0].fouls as u32, st[1].fouls as u32),
         (S::Corners, st[0].corners as u32, st[1].corners as u32),
     ];
-    if st[0].passes + st[1].passes > 0 {
-        for (k, (s, a, bv)) in rows.iter().enumerate() {
-            let y = 80.0 + k as f32 * 17.0;
-            ui.text(
-                160.0,
-                y,
-                tr(lang, *s),
-                pal::DIM,
-                Size::Small,
-                TextAlign::Center,
-            );
-            let tot = (*a + *bv).max(1) as f32;
-            ui.bar(
-                Rect::new(40.0, y + 11.0, 116.0, 3.0),
-                *a as f32 / tot,
-                pal::CYAN,
-            );
-            ui.bar(
-                Rect::new(164.0, y + 11.0, 116.0, 3.0),
-                *bv as f32 / tot,
-                pal::ORANGE,
-            );
-            let mut nb = buf();
-            let _ = write!(nb, "{a}");
-            ui.text(40.0, y, nb.as_str(), pal::INK, Size::Small, TextAlign::Left);
-            nb.clear();
-            let _ = write!(nb, "{bv}");
-            ui.text(
-                280.0,
-                y,
-                nb.as_str(),
-                pal::INK,
-                Size::Small,
-                TextAlign::Right,
-            );
-        }
-    }
-    // Scorers.
-    for k in 0..rep.n_goals.min(4) as usize {
-        let (db, side, minute) = rep.goals[k];
+    let goals = &rep.goals[..rep.n_goals.min(10) as usize];
+    // The k-th goal of `side`, as "NAME 23'".
+    let goal_of = |g: &SolidElevenGame, side: u8, k: usize| -> Option<Buf> {
+        let &(db, _, minute) = goals.iter().filter(|x| x.1 == side).nth(k)?;
         let name: TextBuf<16> = upper(
             SURNAMES
                 [g.world.players[db as usize % team::PLAYERS].surname as usize % SURNAMES.len()],
         );
-        let mut nb = buf();
-        let _ = write!(nb, "{} {}'", name.as_str(), minute);
-        let x = if side == 0 { 44.0 } else { 276.0 };
-        let align = if side == 0 {
-            TextAlign::Left
-        } else {
-            TextAlign::Right
-        };
-        ui.text(
-            x,
-            184.0 + (k / 2) as f32 * 11.0 + (k % 2) as f32 * 0.0,
-            nb.as_str(),
-            pal::INK,
-            Size::Small,
-            align,
-        );
+        let mut b = buf();
+        let _ = write!(b, "{} {}'", name.as_str(), minute);
+        Some(b)
+    };
+    // What scrolls into view at large text: the score, the stat rows,
+    // the scorers, the income.
+    let focus = match g.cur.results {
+        0 => ("score", NO_ITEM),
+        k @ 1..=6 => ("stat", (k - 1) as u16),
+        7 => ("goals", NO_ITEM),
+        _ => (if rep.income >= 0 { "income" } else { "loss" }, NO_ITEM),
+    };
+    super::scr::show(
+        g,
+        r,
+        screen,
+        Some(focus),
+        super::scr::rev(&(rep.score, rep.n_goals, rep.income)),
+        |g, key, item| {
+            let lang = g.settings.lang;
+            let count = |side: u8| goals.iter().filter(|x| x.1 == side).count() as i32;
+            match key {
+                "home" => txt(CLUBS[rep.clubs[0] as usize].short),
+                "away" => txt(CLUBS[rep.clubs[1] as usize].short),
+                "score" => {
+                    let mut b = buf();
+                    let _ = write!(b, "{} - {}", rep.score[0], rep.score[1]);
+                    txt(b.as_str())
+                }
+                "stats" => flag(st[0].passes + st[1].passes > 0),
+                "rows" => int(rows.len() as i32),
+                "label" => txt(tr(lang, rows.get(item as usize)?.0)),
+                "a" => int(rows.get(item as usize)?.1 as i32),
+                "b" => int(rows.get(item as usize)?.2 as i32),
+                "home_goals" => int(count(0)),
+                "away_goals" => int(count(1)),
+                "home_goal" => txt(goal_of(g, 0, item as usize)?.as_str()),
+                "away_goal" => txt(goal_of(g, 1, item as usize)?.as_str()),
+                "gain" => flag(rep.career && rep.income >= 0),
+                "loss" => flag(rep.career && rep.income < 0),
+                "income" => {
+                    let mut b = buf();
+                    let _ = write!(
+                        b,
+                        "{}: {}",
+                        tr(lang, S::Balance),
+                        coins(rep.income).as_str()
+                    );
+                    txt(b.as_str())
+                }
+                _ => None,
+            }
+        },
+        |_, ui, r| {
+            super::scr::chrome(ui, screen, r);
+            if let Some((mut a, size)) = art(r, ui, screen, "score", NO_ITEM) {
+                a.fill(Rect::new(0.0, 0.0, size.x, size.y), pal::PANEL);
+            }
+        },
+    );
+    let ui = core::mem::take(&mut g.menu_ui);
+    for (id, c) in [("crest_home", rep.clubs[0]), ("crest_away", rep.clubs[1])] {
+        if let Some((mut a, size)) = art(r, &ui, screen, id, NO_ITEM) {
+            crest_of(&mut a, 0.0, 0.0, size.x, c, false);
+        }
     }
-    if rep.career {
-        let mut nb = buf();
-        let _ = write!(
-            nb,
-            "{}: {}",
-            tr(lang, S::Balance),
-            coins(rep.income).as_str()
-        );
-        ui.text(
-            160.0,
-            206.0,
-            nb.as_str(),
-            if rep.income >= 0 {
-                pal::GREEN
-            } else {
-                pal::RED
-            },
-            Size::Small,
-            TextAlign::Center,
-        );
+    // Two bars from the middle, each side's share.
+    for (k, (_, a, b)) in rows.iter().enumerate() {
+        if let Some((mut d, size)) = art(r, &ui, screen, "bars", k as u16) {
+            let tot = (*a + *b).max(1) as f32;
+            let half = (size.x - 8.0) * 0.5;
+            d.bar(
+                Rect::new(0.0, 0.0, half, size.y),
+                *a as f32 / tot,
+                pal::CYAN,
+            );
+            d.bar(
+                Rect::new(half + 8.0, 0.0, half, size.y),
+                *b as f32 / tot,
+                pal::ORANGE,
+            );
+        }
     }
-    footer(&mut ui, &mut g.hits, pad, lang, &[(Btn::A, S::Continue)]);
+    g.menu_ui = ui;
 }
 
 /// The pause menu: a UI screen (`ui/pause.ui.ron`, issue #58) in the

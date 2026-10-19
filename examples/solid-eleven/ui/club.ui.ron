@@ -1,0 +1,313 @@
+// Solid Eleven's club hub (issue #95): the balance and fame, FINANCES
+// (every club's budget as bars, the last round's books), PLAYERS (squad,
+// morale, the three best with their energy), MATCHES (the next fixture,
+// fitness, the last results) and the five actions. The game keeps the
+// cursor (`cur.club`: an action, or at large text a panel too) and draws
+// the crests, bars, portraits and panel fills into their boxes. At 150 %
+// text and up the panels stack and the actions go one per line (`_big`
+// ids); the screen scrolls to the cursor.
+//   cargo xtask ui export examples/solid-eleven/ui/club.ui.ron examples/solid-eleven/src/ui/club_gen.rs
+(
+    version: 1,
+    name: "se_club",
+    on_back: "back",
+    theme: (
+        font: "fonts/se_ui",
+        text: Some((236, 240, 255, 255)),
+        dim: Some((150, 160, 196, 255)),
+        panel: Some((16, 20, 46, 230)),
+        button: Some((16, 20, 46, 230)),
+        button_text: Some((236, 240, 255, 255)),
+        focus: Some((90, 50, 10, 240)),
+        focus_text: Some((255, 214, 40, 255)),
+        accent: Some((255, 140, 40, 255)),
+        pressed: Some((255, 140, 40, 255)),
+    ),
+    preview: {
+        "small": Bool(true),
+        "balance": Text("SALDO: 19.020 MOEDAS"), "fame": Text("FAMA: NÍVEL 12"),
+        "income": Text("RENDA SEMANAL: +5.160"), "wages": Text("SALÁRIOS: -1.010"), "net_up": Bool(true),
+        "squad": Text("17/20  MORAL 63"), "best": Int(3), "ovr": Int(88),
+        "fixture": Bool(true), "next": Text("PRÓXIMO JOGO: VS AZU"), "round": Text("RODADA 2/9  FORA"),
+        "fitness": Text("FORMA DO TIME: 94%"), "form": Int(5), "win": Bool(true),
+        "acts": Int(5), "act": Text("SIMULAR"),
+        "btn.a": Text("ENTER"), "btn.b": Text("ESC"), "btn.y": Text("V"),
+    },
+    root: (
+        children: [
+            (kind: Rect(), anchor: Fill, bleed: true, color: Some((6, 8, 20, 140))),
+            (
+                kind: Stack(gap: 2, align: Stretch),
+                anchor: StretchCenter,
+                size: (Fill, Fill),
+                max: (320, 0),
+                children: [
+                    (
+                        kind: Stack(dir: Horizontal, gap: 6, align: Center),
+                        size: (Fill, Fit),
+                        padding: (4, 2, 4, 0),
+                        children: [
+                            (kind: Overlay, id: "crest", min: (22, 24)),
+                            (
+                                kind: Stack(gap: 1, align: Stretch),
+                                size: (Fill, Fit),
+                                children: [
+                                    (kind: Text, id: "header", key: "manage_club", text: "MANAGE YOUR CLUB", padding: (4, 0, 8, 0)),
+                                    (
+                                        kind: Stack(dir: Horizontal, gap: 6, justify: SpaceBetween, wrap: true),
+                                        size: (Fill, Fit),
+                                        children: [
+                                            (kind: Text, bind: "balance", text: "{}", color: Some((255, 214, 40, 255)), overflow: Wrap),
+                                            (kind: Text, bind: "fame", text: "{}", color: Some((40, 210, 255, 255)), align: Right, overflow: Wrap),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                        ],
+                    ),
+                    (
+                        kind: Scroll(gap: 3),
+                        size: (Fill, Fill),
+                        padding: (4, 0, 4, 0),
+                        children: [
+                        (
+                            kind: Stack(dir: Horizontal, gap: 4),
+                            size: (Fill, Fit),
+                            visible_if: "small",
+                            children: [
+                                (
+                                    kind: Rect(border: 1, border_color: Some((50, 110, 240, 255))),
+                                    id: "fin",
+                                    color: Some((0, 0, 0, 0)),
+                                    size: (Fill, Fit),
+                                    padding: (3, 1, 3, 2),
+                                    children: [
+                                        (
+                                            kind: Stack(gap: 1, align: Stretch),
+                                            size: (Fill, Fit),
+                                            children: [
+                                                (kind: Text, key: "finances", text: "FINANCES"),
+                                                (kind: Overlay, id: "budgets", size: (Fill, Px(26))),
+                                                (kind: Text, bind: "income", text: "{}", color: Some((70, 210, 90, 255)), overflow: Wrap),
+                                                (kind: Text, bind: "wages", text: "{}", color: Some((230, 50, 70, 255)), overflow: Wrap),
+                                                (kind: Text, key: "positive", text: "POSITIVE", color: Some((70, 210, 90, 255)), visible_if: "net_up"),
+                                                (kind: Text, key: "negative", text: "NEGATIVE", color: Some((230, 50, 70, 255)), visible_if: "net_down"),
+                                            ],
+                                        ),
+                                    ],
+                                ),
+                                (
+                                    kind: Rect(border: 1, border_color: Some((70, 210, 90, 255))),
+                                    id: "pl",
+                                    color: Some((0, 0, 0, 0)),
+                                    size: (Fill, Fit),
+                                    padding: (3, 1, 3, 2),
+                                    children: [
+                                        (
+                                            kind: Stack(gap: 2, align: Stretch),
+                                            size: (Fill, Fit),
+                                            children: [
+                                                (
+                                                    kind: Stack(dir: Horizontal, gap: 6, wrap: true),
+                                                    size: (Fill, Fit),
+                                                    children: [
+                                                        (kind: Text, key: "players", text: "PLAYERS"),
+                                                        (kind: Text, bind: "squad", text: "{}", color: Some((150, 160, 196, 255))),
+                                                    ],
+                                                ),
+                                                (
+                                                    kind: List(gap: 3, max: 3),
+                                                    bind: "best",
+                                                    size: (Fill, Fit),
+                                                    children: [
+                                                        (
+                                                            kind: Stack(dir: Horizontal, gap: 4, align: Center),
+                                                            size: (Fill, Fit),
+                                                            children: [
+                                                                (kind: Overlay, id: "portrait", min: (16, 16)),
+                                                                (kind: Text, bind: "ovr", text: "{}", min: (16, 0)),
+                                                                (kind: Overlay, id: "energy", size: (Fill, Px(4))),
+                                                            ],
+                                                        ),
+                                                    ],
+                                                ),
+                                            ],
+                                        ),
+                                    ],
+                                ),
+                            ],
+                        ),
+                        (
+                            kind: Rect(border: 1, border_color: Some((50, 110, 240, 255))),
+                            id: "fin_big",
+                            color: Some((0, 0, 0, 0)),
+                            size: (Fill, Fit),
+                            visible_if: "big",
+                            padding: (3, 1, 3, 2),
+                            children: [
+                                (
+                                    kind: Stack(gap: 1, align: Stretch),
+                                    size: (Fill, Fit),
+                                    children: [
+                                        (kind: Text, key: "finances", text: "FINANCES"),
+                                        (kind: Overlay, id: "budgets_big", size: (Fill, Px(26))),
+                                        (kind: Text, bind: "income", text: "{}", color: Some((70, 210, 90, 255)), overflow: Wrap),
+                                        (kind: Text, bind: "wages", text: "{}", color: Some((230, 50, 70, 255)), overflow: Wrap),
+                                        (kind: Text, key: "positive", text: "POSITIVE", color: Some((70, 210, 90, 255)), visible_if: "net_up"),
+                                        (kind: Text, key: "negative", text: "NEGATIVE", color: Some((230, 50, 70, 255)), visible_if: "net_down"),
+                                    ],
+                                ),
+                            ],
+                        ),
+                        (
+                            kind: Rect(border: 1, border_color: Some((70, 210, 90, 255))),
+                            id: "pl_big",
+                            color: Some((0, 0, 0, 0)),
+                            size: (Fill, Fit),
+                            visible_if: "big",
+                            padding: (3, 1, 3, 2),
+                            children: [
+                                (
+                                    kind: Stack(gap: 2, align: Stretch),
+                                    size: (Fill, Fit),
+                                    children: [
+                                        (
+                                            kind: Stack(dir: Horizontal, gap: 6, wrap: true),
+                                            size: (Fill, Fit),
+                                            children: [
+                                                (kind: Text, key: "players", text: "PLAYERS"),
+                                                (kind: Text, bind: "squad", text: "{}", color: Some((150, 160, 196, 255))),
+                                            ],
+                                        ),
+                                        (
+                                            kind: List(gap: 3, max: 3),
+                                            bind: "best",
+                                            size: (Fill, Fit),
+                                            children: [
+                                                (
+                                                    kind: Stack(dir: Horizontal, gap: 4, align: Center),
+                                                    size: (Fill, Fit),
+                                                    children: [
+                                                        (kind: Overlay, id: "portrait_big", min: (16, 16)),
+                                                        (kind: Text, bind: "ovr", text: "{}", min: (16, 0)),
+                                                        (kind: Overlay, id: "energy_big", size: (Fill, Px(4))),
+                                                    ],
+                                                ),
+                                            ],
+                                        ),
+                                    ],
+                                ),
+                            ],
+                        ),
+                        (
+                            kind: Rect(border: 1, border_color: Some((255, 140, 40, 255))),
+                            id: "matches",
+                            color: Some((0, 0, 0, 0)),
+                            size: (Fill, Fit),
+                            padding: (4, 2, 4, 4),
+                            children: [
+                                (
+                                    kind: Stack(gap: 3, align: Stretch),
+                                    size: (Fill, Fit),
+                                    children: [
+                                        (kind: Text, key: "matches", text: "MATCHES"),
+                                        (
+                                            kind: Stack(dir: Horizontal, gap: 6, wrap: true),
+                                            size: (Fill, Fit),
+                                            children: [
+                                                (kind: Overlay, id: "opp", min: (26, 30), visible_if: "fixture"),
+                                                (
+                                                    kind: Stack(gap: 1, align: Stretch),
+                                                    children: [
+                                                        (kind: Text, bind: "next", text: "{}", color: Some((70, 210, 90, 255)), overflow: Wrap, visible_if: "fixture"),
+                                                        (kind: Text, bind: "round", text: "{}", color: Some((255, 214, 40, 255)), overflow: Wrap, visible_if: "fixture"),
+                                                        (kind: Text, bind: "champion", text: "{}", color: Some((255, 214, 40, 255)), overflow: Wrap, visible_if: "over"),
+                                                        (kind: Text, bind: "fitness", text: "{}", color: Some((150, 160, 196, 255)), overflow: Wrap),
+                                                        (kind: Overlay, id: "fit", size: (Px(100), Px(4))),
+                                                    ],
+                                                ),
+                                                (
+                                                    kind: Stack(gap: 2),
+                                                    children: [
+                                                        (kind: Text, key: "last_results", text: "LAST RESULTS", color: Some((150, 160, 196, 255))),
+                                                        (
+                                                            kind: List(dir: Horizontal, gap: 2, max: 5),
+                                                            bind: "form",
+                                                            children: [
+                                                                (
+                                                                    kind: Overlay,
+                                                                    children: [
+                                        (kind: Rect(), color: Some((70, 210, 90, 255)), min: (13, 13), visible_if: "win", children: [(kind: Text, key: "win", text: "W", anchor: Center)]),
+                                        (kind: Rect(), color: Some((140, 140, 150, 255)), min: (13, 13), visible_if: "draw", children: [(kind: Text, key: "draw", text: "D", anchor: Center)]),
+                                        (kind: Rect(), color: Some((230, 50, 70, 255)), min: (13, 13), visible_if: "loss", children: [(kind: Text, key: "loss", text: "L", anchor: Center)]),
+                                                                    ],
+                                                                ),
+                                                            ],
+                                                        ),
+                                                    ],
+                                                ),
+                                            ],
+                                        ),
+                                    ],
+                                ),
+                            ],
+                        ),
+                        (
+                            kind: List(dir: Horizontal, gap: 2, max: 5),
+                            bind: "acts",
+                            size: (Fill, Fit),
+                            visible_if: "small",
+                            children: [
+                                (kind: Button, id: "act", bind: "act", text: "{}", on_click: "act", min: (52, 20), padding: (2, 3, 2, 3), align: Center),
+                            ],
+                        ),
+                        (
+                            kind: List(gap: 3, max: 5),
+                            bind: "acts",
+                            size: (Fill, Fit),
+                            visible_if: "big",
+                            children: [
+                                (kind: Button, id: "act_big", bind: "act", text: "{}", on_click: "act", size: (Fill, Fit), min: (0, 20), padding: (6, 3, 6, 3)),
+                            ],
+                        ),
+                        ],
+                    ),
+                    (
+                        kind: Stack(dir: Horizontal, gap: 3, wrap: true),
+                        size: (Fill, Fit),
+                        padding: (6, 0, 0, 3),
+                        children: [
+                            (
+                                kind: Stack(dir: Horizontal, gap: 3, align: Center),
+                                id: "hint_a",
+                                padding: (2, 2, 5, 2),
+                                children: [
+                                    (kind: Rect(), color: Some((70, 210, 90, 255)), padding: (3, 0, 3, 0), min: (11, 0), children: [(kind: Text, bind: "btn.a", text: "{}", color: Some((18, 22, 52, 255)), anchor: Center)]),
+                                    (kind: Text, key: "select", text: "SELECT"),
+                                ],
+                            ),
+                            (
+                                kind: Stack(dir: Horizontal, gap: 3, align: Center),
+                                id: "hint_b",
+                                padding: (2, 2, 5, 2),
+                                children: [
+                                    (kind: Rect(), color: Some((230, 50, 70, 255)), padding: (3, 0, 3, 0), min: (11, 0), children: [(kind: Text, bind: "btn.b", text: "{}", color: Some((18, 22, 52, 255)), anchor: Center)]),
+                                    (kind: Text, key: "back", text: "BACK"),
+                                ],
+                            ),
+                            (
+                                kind: Stack(dir: Horizontal, gap: 3, align: Center),
+                                id: "hint_y",
+                                padding: (2, 2, 5, 2),
+                                children: [
+                                    (kind: Rect(), color: Some((255, 214, 40, 255)), padding: (3, 0, 3, 0), min: (11, 0), children: [(kind: Text, bind: "btn.y", text: "{}", color: Some((18, 22, 52, 255)), anchor: Center)]),
+                                    (kind: Text, key: "table", text: "TABLE"),
+                                ],
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+        ],
+    ),
+)

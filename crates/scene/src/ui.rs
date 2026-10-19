@@ -213,6 +213,10 @@ pub enum Kind {
         align: Align,
         #[serde(default, skip_serializing_if = "Justify::is_default")]
         justify: Justify,
+        /// A child that doesn't fit the rest of the line starts a new one
+        /// (issue #95: hint rows and chips at large text).
+        #[serde(default, skip_serializing_if = "is_false")]
+        wrap: bool,
     },
     /// Children in rows of `cols` equal columns.
     Grid {
@@ -300,6 +304,7 @@ impl Kind {
                 gap: 0,
                 align: Align::Start,
                 justify: Justify::Start,
+                wrap: false,
             },
             Kind::Grid {
                 cols: 2,
@@ -870,11 +875,13 @@ impl<'a> Flat<'a> {
                 gap,
                 align,
                 justify,
+                wrap,
             } => NodeKind::Stack {
                 dir: dir.core(),
                 gap: *gap,
                 align: align.core(),
                 justify: justify.core(),
+                wrap: *wrap,
             },
             Kind::Grid { cols, gap } => NodeKind::Grid {
                 cols: *cols,
@@ -1769,8 +1776,9 @@ fn kind_rust(k: &NodeKind) -> String {
             gap,
             align,
             justify,
+            wrap,
         } => format!(
-            "NodeKind::Stack {{ dir: Dir::{dir:?}, gap: {gap}, align: Align::{align:?}, justify: Justify::{justify:?} }}"
+            "NodeKind::Stack {{ dir: Dir::{dir:?}, gap: {gap}, align: Align::{align:?}, justify: Justify::{justify:?}, wrap: {wrap} }}"
         ),
         NodeKind::Grid { cols, gap } => {
             format!(

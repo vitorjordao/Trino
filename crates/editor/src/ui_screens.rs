@@ -579,6 +579,7 @@ fn starter(name: &str) -> ScreenDef {
                         gap: 6,
                         align: Align::Center,
                         justify: Justify::Start,
+                        wrap: false,
                     })
                 },
             ],

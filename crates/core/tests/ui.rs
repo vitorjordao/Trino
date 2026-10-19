@@ -111,6 +111,7 @@ fn vstack(gap: i16) -> UiNode<'static> {
         gap,
         align: Align::Start,
         justify: Justify::Start,
+        wrap: false,
     })
 }
 
@@ -331,6 +332,7 @@ fn stacks_place_children_in_order_with_gaps_alignment_and_fill() {
             gap: 6,
             align: Align::Center,
             justify: Justify::Start,
+            wrap: false,
         })
     });
     t.leaf(UiNode {
@@ -356,6 +358,7 @@ fn stacks_place_children_in_order_with_gaps_alignment_and_fill() {
             gap: 0,
             align: Align::Stretch,
             justify: Justify::SpaceBetween,
+            wrap: false,
         })
     });
     for id in ["x", "y", "z"] {
@@ -1416,6 +1419,7 @@ fn tuil_round_trips_every_node_kind_and_field() {
             gap: -3,
             align: Align::End,
             justify: Justify::SpaceBetween,
+            wrap: false,
         })
     });
     t.leaf(UiNode {
@@ -1970,4 +1974,123 @@ fn bound_ints_print_in_decimal_with_their_sign() {
     ui.draw(&mut r, &s, &env);
     let texts: Vec<String> = r.texts().into_iter().map(|t| t.0).collect();
     assert_eq!(texts, ["N 0", "N -42", "N -2147483648"]);
+}
+
+#[test]
+fn a_wrapping_stack_starts_a_new_line_when_the_next_child_does_not_fit() {
+    let mut t = Tree::new();
+    t.open(root());
+    t.open(UiNode {
+        id: "row",
+        size: (Size::Px(200), Size::Fit),
+        ..node(NodeKind::Stack {
+            dir: Dir::Horizontal,
+            gap: 4,
+            align: Align::Start,
+            justify: Justify::Start,
+            wrap: true,
+        })
+    });
+    for id in ["a", "b", "c", "d", "e"] {
+        t.leaf(button(id, id));
+    }
+    let s = t.screen();
+    let r = Rec::sized(320, 240);
+    let ui = laid_out(&s, &r);
+    // 80 px buttons, 4 px apart, in 200 px: two a line, three lines.
+    let at = |id| rect_of(&ui, &s, id);
+    assert_eq!((at("a").pos.x, at("a").pos.y), (0.0, 0.0));
+    assert_eq!((at("b").pos.x, at("b").pos.y), (84.0, 0.0));
+    assert_eq!((at("c").pos.x, at("c").pos.y), (0.0, 20.0), "a new line");
+    assert_eq!((at("d").pos.x, at("d").pos.y), (84.0, 20.0));
+    assert_eq!((at("e").pos.x, at("e").pos.y), (0.0, 40.0));
+    // The stack fits its lines: 16 + 4 + 16 + 4 + 16.
+    assert_eq!(rect_of(&ui, &s, "row").size.y, 56.0);
+    // Wider room: one line holds them all; nothing overflows.
+    assert_eq!(ui.stats().overflow, 0);
+}
+
+#[test]
+fn wrap_survives_the_baked_format_and_old_blobs_do_not_wrap() {
+    let mut t = Tree::new();
+    t.open(root());
+    t.open(UiNode {
+        id: "row",
+        ..node(NodeKind::Stack {
+            dir: Dir::Horizontal,
+            gap: 2,
+            align: Align::Center,
+            justify: Justify::End,
+            wrap: true,
+        })
+    });
+    t.leaf(button("a", "A"));
+    let s = t.screen();
+    let blob = bake(&s);
+    let back = UiScreen::parse(&blob).expect("parses");
+    assert_eq!(back.node(1).kind, s.node(1).kind);
+    // A version-2 blob written before wrap existed has 0 in that byte.
+    let mut old = blob.clone();
+    let rec = HEADER + RECORD; // node 1
+    old[rec + 78 + 3] = 0;
+    let back = UiScreen::parse(&old).expect("parses");
+    assert!(matches!(
+        back.node(1).kind,
+        NodeKind::Stack { wrap: false, .. }
+    ));
+}
+
+#[test]
+fn a_panel_taller_than_its_scroll_box_shows_the_lines_that_fit() {
+    let mut t = Tree::new();
+    t.open(root());
+    t.open(UiNode {
+        id: "scroll",
+        size: (Size::Px(120), Size::Px(50)),
+        ..node(NodeKind::Scroll {
+            dir: Dir::Vertical,
+            gap: 0,
+        })
+    });
+    t.open(UiNode {
+        id: "panel",
+        color: Some(Color::rgb(20, 20, 60)),
+        size: (Size::Fill, Size::Fit),
+        ..node(NodeKind::Rect {
+            border: 0,
+            border_color: Color::TRANSPARENT,
+        })
+    });
+    t.open(vstack(0));
+    for (id, text) in [
+        ("l0", "ONE"),
+        ("l1", "TWO"),
+        ("l2", "THREE"),
+        ("l3", "FOUR"),
+        ("l4", "FIVE"),
+        ("l5", "SIX"),
+    ] {
+        t.leaf(UiNode {
+            id,
+            text,
+            ..node(NodeKind::Text)
+        });
+    }
+    let s = t.screen();
+    let mut r = Rec::sized(320, 240);
+    let mut ui = Ui::<64>::new();
+    let env = env_of(&r);
+    ui.draw(&mut r, &s, &env);
+    // 60 px of lines in a 50 px box: the panel is cut (its fill not drawn),
+    // the five lines that fit show, the sixth waits.
+    let texts: Vec<String> = r.texts().into_iter().map(|t| t.0).collect();
+    assert_eq!(texts, ["ONE", "TWO", "THREE", "FOUR", "FIVE"]);
+    assert_eq!(ui.rect_of_item(&s, "panel", trino_core::ui::NO_ITEM), None);
+    assert!(ui.rect_of_item(&s, "l4", trino_core::ui::NO_ITEM).is_some());
+    assert_eq!(ui.rect_of_item(&s, "l5", trino_core::ui::NO_ITEM), None);
+    // Revealing it shows its top, not its bottom.
+    ui.set_focus_item(&s, "panel", 0);
+    r.calls.clear();
+    ui.draw(&mut r, &s, &env);
+    assert_eq!(r.texts()[0].0, "ONE");
 }

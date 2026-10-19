@@ -29,7 +29,7 @@ pub static NODES: [UiNode<'static>; 41] = [
     },
     // 2: Stack
     UiNode {
-        kind: NodeKind::Stack { dir: Dir::Vertical, gap: 6, align: Align::Stretch, justify: Justify::Start },
+        kind: NodeKind::Stack { dir: Dir::Vertical, gap: 6, align: Align::Stretch, justify: Justify::Start, wrap: false },
         parent: 0,
         end: 41,
         anchor: Anchor::StretchCenter,
@@ -39,7 +39,7 @@ pub static NODES: [UiNode<'static>; 41] = [
     },
     // 3: Stack "header"
     UiNode {
-        kind: NodeKind::Stack { dir: Dir::Horizontal, gap: 4, align: Align::Center, justify: Justify::Start },
+        kind: NodeKind::Stack { dir: Dir::Horizontal, gap: 4, align: Align::Center, justify: Justify::Start, wrap: false },
         id: "header",
         parent: 2,
         end: 6,
@@ -83,7 +83,7 @@ pub static NODES: [UiNode<'static>; 41] = [
     },
     // 7: Stack
     UiNode {
-        kind: NodeKind::Stack { dir: Dir::Vertical, gap: 3, align: Align::Stretch, justify: Justify::Start },
+        kind: NodeKind::Stack { dir: Dir::Vertical, gap: 3, align: Align::Stretch, justify: Justify::Start, wrap: false },
         parent: 6,
         end: 36,
         size: (Size::Fill, Size::Fill),
@@ -91,7 +91,7 @@ pub static NODES: [UiNode<'static>; 41] = [
     },
     // 8: Stack
     UiNode {
-        kind: NodeKind::Stack { dir: Dir::Horizontal, gap: 0, align: Align::Center, justify: Justify::Start },
+        kind: NodeKind::Stack { dir: Dir::Horizontal, gap: 0, align: Align::Center, justify: Justify::Start, wrap: false },
         parent: 7,
         end: 16,
         size: (Size::Fill, Size::Fit),
@@ -194,7 +194,7 @@ pub static NODES: [UiNode<'static>; 41] = [
     },
     // 18: Stack "row"
     UiNode {
-        kind: NodeKind::Stack { dir: Dir::Horizontal, gap: 0, align: Align::Center, justify: Justify::Start },
+        kind: NodeKind::Stack { dir: Dir::Horizontal, gap: 0, align: Align::Center, justify: Justify::Start, wrap: false },
         id: "row",
         parent: 17,
         end: 28,
@@ -313,7 +313,7 @@ pub static NODES: [UiNode<'static>; 41] = [
     },
     // 29: Stack "row_big"
     UiNode {
-        kind: NodeKind::Stack { dir: Dir::Vertical, gap: 0, align: Align::Stretch, justify: Justify::Start },
+        kind: NodeKind::Stack { dir: Dir::Vertical, gap: 0, align: Align::Stretch, justify: Justify::Start, wrap: false },
         id: "row_big",
         parent: 28,
         end: 36,
@@ -322,7 +322,7 @@ pub static NODES: [UiNode<'static>; 41] = [
     },
     // 30: Stack
     UiNode {
-        kind: NodeKind::Stack { dir: Dir::Horizontal, gap: 2, align: Align::Center, justify: Justify::Start },
+        kind: NodeKind::Stack { dir: Dir::Horizontal, gap: 2, align: Align::Center, justify: Justify::Start, wrap: false },
         parent: 29,
         end: 35,
         size: (Size::Fill, Size::Fit),
@@ -385,15 +385,16 @@ pub static NODES: [UiNode<'static>; 41] = [
     },
     // 36: Stack
     UiNode {
-        kind: NodeKind::Stack { dir: Dir::Horizontal, gap: 4, align: Align::Start, justify: Justify::Start },
+        kind: NodeKind::Stack { dir: Dir::Horizontal, gap: 3, align: Align::Start, justify: Justify::Start, wrap: true },
         parent: 2,
         end: 41,
+        size: (Size::Fill, Size::Fit),
         padding: [6, 0, 0, 3],
         ..UiNode::DEFAULT
     },
     // 37: Stack "hint_b"
     UiNode {
-        kind: NodeKind::Stack { dir: Dir::Horizontal, gap: 3, align: Align::Center, justify: Justify::Start },
+        kind: NodeKind::Stack { dir: Dir::Horizontal, gap: 3, align: Align::Center, justify: Justify::Start, wrap: false },
         id: "hint_b",
         parent: 36,
         end: 41,

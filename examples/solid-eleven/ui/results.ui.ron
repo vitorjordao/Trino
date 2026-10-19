@@ -1,0 +1,138 @@
+// Solid Eleven's match report (issue #95): the score with both crests, the
+// stats as two bars from the middle (the game draws each row's bars into
+// its `bars` box), the scorers of each side, and a career match's income.
+// Up/down scroll it at large text (`cur.results`).
+//   cargo xtask ui export examples/solid-eleven/ui/results.ui.ron examples/solid-eleven/src/ui/results_gen.rs
+(
+    version: 1,
+    name: "se_results",
+    on_back: "continue",
+    theme: (
+        font: "fonts/se_ui",
+        text: Some((236, 240, 255, 255)),
+        dim: Some((150, 160, 196, 255)),
+        panel: Some((16, 20, 46, 230)),
+        button: Some((16, 20, 46, 230)),
+        button_text: Some((236, 240, 255, 255)),
+        focus: Some((30, 60, 130, 235)),
+        focus_text: Some((236, 240, 255, 255)),
+        accent: Some((40, 210, 255, 255)),
+        pressed: Some((50, 110, 240, 255)),
+    ),
+    preview: {
+        "home": Text("ROU"), "away": Text("AZU"), "score": Text("2 - 1"),
+        "stats": Bool(true), "rows": Int(6),
+        "label": Text("CHUTES NO GOL"), "a": Int(55), "b": Int(45),
+        "home_goals": Int(5), "away_goals": Int(5), "home_goal": Text("OLIVEIRA 88'"), "away_goal": Text("WILLIAMSON 90'"),
+        "gain": Bool(true), "income": Text("SALDO: +1.250"),
+        "btn.a": Text("ENTER"),
+    },
+    root: (
+        children: [
+            (kind: Rect(), anchor: Fill, bleed: true, color: Some((6, 8, 20, 170))),
+            (
+                kind: Stack(gap: 4, align: Stretch),
+                anchor: StretchCenter,
+                size: (Fill, Fill),
+                max: (320, 0),
+                children: [
+                    (
+                        kind: Stack(dir: Horizontal, gap: 4, align: Center),
+                        id: "header",
+                        min: (200, 22),
+                        padding: (24, 3, 8, 3),
+                        children: [(kind: Text, key: "results", text: "RESULTS")],
+                    ),
+                    (
+                        kind: Scroll(gap: 4),
+                        size: (Fill, Fill),
+                        padding: (36, 0, 36, 0),
+                        children: [
+                            (
+                                kind: Rect(border: 1, border_color: Some((40, 210, 255, 255))),
+                                id: "score",
+                                size: (Fill, Fit),
+                                padding: (6, 4, 6, 4),
+                                children: [
+                                    (
+                                        kind: Stack(dir: Horizontal, gap: 6, align: Center, justify: SpaceBetween),
+                                        size: (Fill, Fit),
+                                        children: [
+                                            (kind: Overlay, id: "crest_home", min: (26, 30)),
+                                            (kind: Text, bind: "home", text: "{}"),
+                                            (kind: Text, bind: "score", text: "{}", font: "fonts/se_big", color: Some((255, 214, 40, 255))),
+                                            (kind: Text, bind: "away", text: "{}"),
+                                            (kind: Overlay, id: "crest_away", min: (26, 30)),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                            (
+                                kind: List(gap: 3, max: 8),
+                                bind: "rows",
+                                size: (Fill, Fit),
+                                visible_if: "stats",
+                                children: [
+                                    (
+                                        kind: Stack(gap: 1, align: Stretch),
+                                        id: "stat",
+                                        size: (Fill, Fit),
+                                        children: [
+                                            (
+                                                kind: Stack(dir: Horizontal, gap: 4, align: Center, justify: SpaceBetween),
+                                                size: (Fill, Fit),
+                                                children: [
+                                                    (kind: Text, bind: "a", text: "{}"),
+                                                    (kind: Text, bind: "label", text: "{}", align: Center, color: Some((150, 160, 196, 255))),
+                                                    (kind: Text, bind: "b", text: "{}"),
+                                                ],
+                                            ),
+                                            (kind: Overlay, id: "bars", size: (Fill, Px(3))),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                            (
+                                kind: Stack(dir: Horizontal, gap: 8),
+                                id: "goals",
+                                size: (Fill, Fit),
+                                children: [
+                                    (
+                                        kind: List(gap: 0, max: 10),
+                                        bind: "home_goals",
+                                        size: (Fill, Fit),
+                                        children: [(kind: Text, bind: "home_goal", text: "{}", overflow: Wrap)],
+                                    ),
+                                    (
+                                        kind: List(gap: 0, max: 10),
+                                        bind: "away_goals",
+                                        size: (Fill, Fit),
+                                        children: [(kind: Text, bind: "away_goal", text: "{}", align: Right, overflow: Wrap)],
+                                    ),
+                                ],
+                            ),
+                            (kind: Text, id: "income", bind: "income", text: "{}", align: Center, color: Some((70, 210, 90, 255)), visible_if: "gain"),
+                            (kind: Text, id: "loss", bind: "income", text: "{}", align: Center, color: Some((230, 50, 70, 255)), visible_if: "loss"),
+                        ],
+                    ),
+                    (
+                        kind: Stack(dir: Horizontal, gap: 3, wrap: true),
+                        size: (Fill, Fit),
+                        padding: (6, 0, 0, 3),
+                        children: [
+                            (
+                                kind: Stack(dir: Horizontal, gap: 3, align: Center),
+                                id: "hint_a",
+                                padding: (2, 2, 5, 2),
+                                children: [
+                                    (kind: Rect(), color: Some((70, 210, 90, 255)), padding: (3, 0, 3, 0), min: (11, 0), children: [(kind: Text, bind: "btn.a", text: "{}", color: Some((18, 22, 52, 255)), anchor: Center)]),
+                                    (kind: Text, key: "continue", text: "CONTINUE"),
+                                ],
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+        ],
+    ),
+)

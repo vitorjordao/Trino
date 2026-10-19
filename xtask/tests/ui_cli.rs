@@ -88,8 +88,8 @@ fn ui_check_accepts_the_shipped_screens() {
         .iter()
         .find(|t| t["platform"] == "n64")
         .unwrap();
-    assert_eq!(n64["max_nodes"], 64);
-    assert!(n64["nodes"].as_u64().unwrap() <= 64);
+    assert_eq!(n64["max_nodes"], 128);
+    assert!(n64["nodes"].as_u64().unwrap() <= 128);
     // Every new project's starter screens, in its own language and fonts
     // (the template folder holds `ui/` and `assets/manifest.toml`), and
     // Solid Eleven's pause menu against Solid Eleven's assets and its two
@@ -138,7 +138,7 @@ fn ui_check_reports_each_fixture_with_its_platform_and_level() {
             "budget",
             "n64",
             "error",
-            "over the target's 64 (Caps::max_ui_nodes)",
+            "over the target's 128 (Caps::max_ui_nodes)",
         ),
         ("overflow", "n64", "warning", "text overflows its 12×10 box"),
         ("broken", "", "error", "duplicate id \"ok\""),
@@ -194,7 +194,7 @@ fn ui_check_reports_each_fixture_with_its_platform_and_level() {
     let o = xtask(&["ui", "check", &fixture("budget"), "--platform", "pc"]);
     assert!(o.status.success(), "{}", text(&o.stdout));
     assert!(
-        text(&o.stdout).contains("102/512 nodes"),
+        text(&o.stdout).contains("202/512 nodes"),
         "{}",
         text(&o.stdout)
     );

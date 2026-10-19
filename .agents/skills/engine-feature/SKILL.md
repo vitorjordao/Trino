@@ -148,9 +148,11 @@ A feature is done only when **PC, N64 and 3DS** all run it and an emulator has s
   whose 0 runs the old arithmetic** (contact shadows, #86: `soft_growth`,
   `fade_distance`). Guard the new shader work with a uniform branch and make the old
   path's operations identical (same tap count, same spacing, a `× 1.0`), then prove it:
-  write the frames (`TRINO_SHADOW_SHOTS`) and compare them with the goldens pixel for
-  pixel, RGB included (PIL's `getbbox` of an RGBA difference reads only alpha). Opt the
-  one game that wants it in, and re-bless only that game's native golden.
+  write the frames (`TRINO_SHADOW_SHOTS`) from this branch and from the base commit in
+  a separate worktree with its own `target/`, on the same GPU, and compare bytes. Not
+  against the goldens: they were blessed elsewhere and differ by driver noise. And not
+  with PIL's `getbbox` of an RGBA difference, which reads only alpha. Opt the one game
+  that wants it in, and re-bless only that game's native golden.
 - **Something the host identifies (a pad's family, #86) is a pure core function over
   what the host copies out** (`PadFamily::detect(name, usb)`), fed by the PC's glue
   (`PcInput::note_pad`) and a non-wasm parser on the Web (`keys::parse_pad_id`), exposed

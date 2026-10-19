@@ -242,15 +242,19 @@ and dark 2 m under a ball in the air as under a boot.
     drawing scale.
   - `fade_distance`: the caster–receiver distance at which the shadow is gone, world
     units (a game drawn at 1/64 multiplies it, as it does `distance`). Linear fade.
-  - Both 0 by default: **every existing frame is unchanged**. `shadows_native`,
-    `shadows_n3ds` and `shadows_n64` render pixel-identical to their goldens with the
-    new code (checked byte for byte, 2026-10-19); `clamped` turns NaN and negatives
+  - Both 0 by default: **every existing frame is unchanged**. All twelve frames
+    `crates/platform-pc/tests/shadows.rs` writes (every tier, MSAA on and off, a 0.6
+    render scale, the quality cap) are byte-identical to the same test built from the
+    base commit in a separate worktree on the same GPU (2026-10-19). The goldens
+    themselves can't prove it: they were blessed on another machine and differ from
+    this one's frames by driver noise on every tier. `clamped` turns NaN and negatives
     into 0, caps `soft_growth` at 4, and lets `fade_distance` be infinite.
 - **The map composite (`shadow_map.wgsl`), PCSS-lite:** only when either field is set
   (a uniform branch):
-  1. *Blocker search:* nearest reads of the map's depth (no comparison) where the even
-     filter's taps look, so the two agree on thin casters, plus a sparse 4×4 grid as
-     wide as the filter may grow. Texels count when they are in front of the receiver by
+  1. *Blocker search,* after the even filter ran: nearest reads of the map's depth (no
+     comparison) on a sparse 4×4 grid as wide as the filter may grow, plus, where the
+     even filter found shade, at its own taps (so the two agree on thin casters). Lit
+     ground far from every caster pays 16 reads and nothing else. Texels count when they are in front of the receiver by
      more than a texel's depth per texel off center (a receiver sloping up to 45° to the
      light never finds itself).
   2. Their mean depth gives the distance to the receiver along the light, world units
@@ -260,9 +264,13 @@ and dark 2 m under a ball in the air as under a boot.
      per side). The tap count follows the radius, so bilinear compares never leave gaps.
   4. The shadow's strength is multiplied by `1 − dist / fade_distance`.
 
-  Without a blocker found, the pixel takes the even filter at full strength (ADR 0025's).
-  With both fields 0, the shader runs exactly the old arithmetic: `side = taps`, the old
-  spacing, a `× 1.0`.
+  Without a blocker found, the pixel keeps the even filter at full strength (ADR 0025's);
+  with both fields 0 the shader runs only the old arithmetic and a `× 1.0`.
+- **Cost:** Solid Eleven at 1920×1080 with 4× MSAA and SSAO on the Renoir iGPU
+  (`solid_eleven_shots pc_frame_time`, the day match): 9.24 ms off, 10.16 ms on in the
+  quietest pair of six runs, so about +0.9 ms (the machine was loaded, runs spread
+  9–17 ms). A first version that searched every pixel's even-filter taps too cost about
+  twice that.
 - **WebGL2:** naga has no GLSL for a `textureLoad` of a `texture_depth_2d`, and a
   sampler-less read of a depth texture reads 0 under wgpu's GL backend. `MapPass::new`
   binds the map a second time as an unfilterable float texture (binding 5) and reads it

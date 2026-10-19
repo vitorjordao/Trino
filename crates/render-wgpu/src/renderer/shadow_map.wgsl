@@ -144,6 +144,20 @@ fn blockers(uv: vec2<f32>, reference: f32, n: u32, step: f32, texel: f32) -> vec
     return vec2<f32>(sum, found);
 }
 
+// How much of the light a `side`×`side` grid of bilinear compares
+// `spacing` (uv) apart around `uv` finds blocked, 0..1 (PCF).
+fn pcf(uv: vec2<f32>, reference: f32, side: u32, spacing: f32) -> f32 {
+    let k = (f32(side) - 1.0) * 0.5;
+    var lit = 0.0;
+    for (var j = 0u; j < side; j = j + 1u) {
+        for (var i = 0u; i < side; i = i + 1u) {
+            let o = (vec2<f32>(f32(i), f32(j)) - vec2<f32>(k, k)) * spacing;
+            lit = lit + textureSampleCompareLevel(t_shadow, s_shadow, uv + o, reference);
+        }
+    }
+    return 1.0 - lit / f32(side * side);
+}
+
 @fragment
 fn fs_shadow_map(in: FullOut) -> @location(0) vec4<f32> {
     let p = vec2<i32>(in.clip.xy);
@@ -183,8 +197,9 @@ fn fs_shadow_map(in: FullOut) -> @location(0) vec4<f32> {
     }
     let uv = vec2<f32>(m.x * 0.5 + 0.5, 0.5 - m.y * 0.5);
     let reference = m.z - P.bias;
-    var side = P.taps;
-    var spacing = P.spacing;
+    // The even filter (ADR 0025's, and the whole story without contact
+    // hardening).
+    var blocked = pcf(uv, reference, P.taps, P.spacing);
     var lift = 1.0;
     if P.growth > 0.0 || P.fade > 0.0 {
         // The widest filter: three times the taps per side, 2.5 texels
@@ -194,35 +209,28 @@ fn fs_shadow_map(in: FullOut) -> @location(0) vec4<f32> {
         let gap = max(P.spacing, 2.5 * texel);
         let base = (f32(P.taps) - 1.0) * 0.5 * P.spacing;
         let widest = max(base, (f32(wide) - 1.0) * 0.5 * gap);
-        // Blockers where the even filter looks (its taps, so the two agree
-        // on thin casters), then a sparse grid as wide as the filter grows.
-        let near = blockers(uv, reference, P.taps, P.spacing, texel);
-        let far = blockers(uv, reference, 4u, widest * 2.0 / 3.0, texel);
-        let found = near + far;
-        var dist = 0.0;
+        // Blockers on a sparse grid as wide as the filter grows, and where
+        // the even filter looks (its taps, so the two agree on thin
+        // casters) when it found shade: lit ground far from every caster
+        // pays 16 reads.
+        var found = blockers(uv, reference, 4u, widest * 2.0 / 3.0, texel);
+        if blocked > 0.0 {
+            found = found + blockers(uv, reference, P.taps, P.spacing, texel);
+        }
         if found.y > 0.0 {
             // Their mean distance to the receiver along the light, world.
-            dist = max(m.z - found.x / found.y, 0.0) * P.depth;
-        }
-        if P.fade > 0.0 {
-            lift = clamp(1.0 - dist / P.fade, 0.0, 1.0);
-        }
-        let grow = min(dist * P.growth, widest - base);
-        if grow > 0.0 {
-            let r = base + grow;
-            side = clamp(u32(ceil(2.0 * r / gap - 0.001)) + 1u, P.taps, wide);
-            spacing = 2.0 * r / f32(side - 1u);
-        }
-    }
-    let k = (f32(side) - 1.0) * 0.5;
-    var lit = 0.0;
-    for (var j = 0u; j < side; j = j + 1u) {
-        for (var i = 0u; i < side; i = i + 1u) {
-            let o = (vec2<f32>(f32(i), f32(j)) - vec2<f32>(k, k)) * spacing;
-            lit = lit + textureSampleCompareLevel(t_shadow, s_shadow, uv + o, reference);
+            let dist = max(m.z - found.x / found.y, 0.0) * P.depth;
+            if P.fade > 0.0 {
+                lift = clamp(1.0 - dist / P.fade, 0.0, 1.0);
+            }
+            let grow = min(dist * P.growth, widest - base);
+            if grow > 0.0 && lift > 0.0 {
+                let r = base + grow;
+                let side = clamp(u32(ceil(2.0 * r / gap - 0.001)) + 1u, P.taps, wide);
+                blocked = pcf(uv, reference, side, 2.0 * r / f32(side - 1u));
+            }
         }
     }
-    let blocked = 1.0 - lit / f32(side * side);
     var fog = 0.0;
     if P.fog_far > P.fog_near {
         fog = clamp((c.z - P.fog_near) / (P.fog_far - P.fog_near), 0.0, 1.0);

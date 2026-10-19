@@ -46,6 +46,7 @@ fn platform_defaults_report_no_services() {
     // No remapping on a platform that does not offer it.
     assert_eq!(p.input_info(), None);
     assert_eq!(p.gamepad_name(), None);
+    assert_eq!(p.gamepad_family(), None);
     p.rebind(trino_core::Button::A, trino_core::BindDevice::Keyboard);
     p.cancel_rebind();
     p.reset_bindings();

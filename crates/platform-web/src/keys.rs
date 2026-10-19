@@ -8,7 +8,7 @@
 //! L2/R2 = LT/RT, L3/R3 = stick clicks, Start = Start+Guide,
 //! Select = Back+LS.
 
-use trino_core::{Button, InputState, Key, Vec2};
+use trino_core::{Button, InputState, Key, PadFamily, Vec2};
 
 /// The [`Key`] bits a `KeyboardEvent.code` sets (empty for keys without
 /// one). Like the PC: the numpad's 1–3, Enter, + and − alias the main row,
@@ -251,6 +251,55 @@ pub fn merge_pad(state: &mut InputState, pad: &PadReading) {
     state.triggers = Vec2::new(state.triggers.x.max(t.x), state.triggers.y.max(t.y));
 }
 
+/// A `Gamepad.id` split into the pad's name and its USB vendor and product
+/// ids, in each browser's form:
+///
+/// - Chrome and Edge: `DualSense Wireless Controller (STANDARD GAMEPAD
+///   Vendor: 054c Product: 0ce6)`, `8BitDo SN30 Pro+ (Vendor: 2dc8 Product:
+///   6002)`, or for XInput pads `Xbox 360 Controller (XInput STANDARD
+///   GAMEPAD)` (no ids);
+/// - Firefox: `054c-0ce6-DualSense Wireless Controller` (on some systems
+///   without the leading zeros, `45e-28e-...`; on Windows a bare
+///   `xinput`);
+/// - Safari: the name alone.
+pub fn parse_pad_id(id: &str) -> (&str, Option<(u16, u16)>) {
+    let id = id.trim();
+    // Chrome: the ids (if any) in a trailing parenthesis.
+    if id.ends_with(')')
+        && let Some(open) = id.rfind('(')
+    {
+        let inner = &id[open + 1..id.len() - 1];
+        let hex_after = |key: &str| {
+            let at = inner.find(key)? + key.len();
+            let digits: &str = inner[at..].split_whitespace().next()?;
+            u16::from_str_radix(digits, 16).ok()
+        };
+        let usb = hex_after("Vendor:").zip(hex_after("Product:"));
+        if usb.is_some() || inner.contains("GAMEPAD") || inner.contains("XInput") {
+            return (id[..open].trim_end(), usb);
+        }
+    }
+    // Firefox: `vvvv-pppp-name`, 1 to 4 hex digits each.
+    let mut parts = id.splitn(3, '-');
+    if let (Some(v), Some(p), Some(name)) = (parts.next(), parts.next(), parts.next()) {
+        let hex = |t: &str| (1..=4).contains(&t.len()) && t.bytes().all(|c| c.is_ascii_hexdigit());
+        if hex(v) && hex(p) {
+            let usb = u16::from_str_radix(v, 16)
+                .ok()
+                .zip(u16::from_str_radix(p, 16).ok());
+            return (name.trim(), usb);
+        }
+    }
+    (id, None)
+}
+
+/// The family of the pad a `Gamepad.id` describes ([`parse_pad_id`], then
+/// [`PadFamily::detect`]: the ids where they name one, else the name).
+pub fn pad_family(id: &str) -> PadFamily {
+    let (name, usb) = parse_pad_id(id);
+    PadFamily::detect(name, usb)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -323,5 +372,94 @@ mod tests {
         );
         assert_eq!(s.stick, Vec2::new(0.0, 1.0));
         assert!(!s.pad);
+    }
+
+    #[test]
+    fn gamepad_ids_parse_in_every_browsers_form() {
+        type Case = (&'static str, &'static str, Option<(u16, u16)>, PadFamily);
+        let cases: [Case; 14] = [
+            // Chrome / Edge.
+            (
+                "Xbox 360 Controller (XInput STANDARD GAMEPAD)",
+                "Xbox 360 Controller",
+                None,
+                PadFamily::Xbox,
+            ),
+            (
+                "Xbox Wireless Controller (STANDARD GAMEPAD Vendor: 045e Product: 0b13)",
+                "Xbox Wireless Controller",
+                Some((0x045e, 0x0b13)),
+                PadFamily::Xbox,
+            ),
+            (
+                "DualSense Wireless Controller (STANDARD GAMEPAD Vendor: 054c Product: 0ce6)",
+                "DualSense Wireless Controller",
+                Some((0x054c, 0x0ce6)),
+                PadFamily::PlayStation,
+            ),
+            (
+                "Wireless Controller (STANDARD GAMEPAD Vendor: 054c Product: 09cc)",
+                "Wireless Controller",
+                Some((0x054c, 0x09cc)),
+                PadFamily::PlayStation,
+            ),
+            (
+                "Pro Controller (STANDARD GAMEPAD Vendor: 057e Product: 2009)",
+                "Pro Controller",
+                Some((0x057e, 0x2009)),
+                PadFamily::Nintendo,
+            ),
+            (
+                "8BitDo SN30 Pro+ (Vendor: 2dc8 Product: 6002)",
+                "8BitDo SN30 Pro+",
+                Some((0x2dc8, 0x6002)),
+                PadFamily::EightBitDo,
+            ),
+            (
+                "USB Gamepad (Vendor: 0079 Product: 0011)",
+                "USB Gamepad",
+                Some((0x0079, 0x0011)),
+                PadFamily::Generic,
+            ),
+            // Firefox.
+            (
+                "054c-0ce6-DualSense Wireless Controller",
+                "DualSense Wireless Controller",
+                Some((0x054c, 0x0ce6)),
+                PadFamily::PlayStation,
+            ),
+            (
+                "45e-28e-Xbox 360 Wired Controller",
+                "Xbox 360 Wired Controller",
+                Some((0x045e, 0x028e)),
+                PadFamily::Xbox,
+            ),
+            (
+                "057e-2009-Pro Controller",
+                "Pro Controller",
+                Some((0x057e, 0x2009)),
+                PadFamily::Nintendo,
+            ),
+            ("xinput", "xinput", None, PadFamily::Xbox),
+            // Safari.
+            (
+                "DualSense Wireless Controller",
+                "DualSense Wireless Controller",
+                None,
+                PadFamily::PlayStation,
+            ),
+            (
+                "Xbox Wireless Controller Extended Gamepad",
+                "Xbox Wireless Controller Extended Gamepad",
+                None,
+                PadFamily::Xbox,
+            ),
+            // A name with dashes and parentheses that aren't ids.
+            ("Joy-Con (L)", "Joy-Con (L)", None, PadFamily::Nintendo),
+        ];
+        for (id, name, usb, family) in cases {
+            assert_eq!(parse_pad_id(id), (name, usb), "{id}");
+            assert_eq!(pad_family(id), family, "{id}");
+        }
     }
 }

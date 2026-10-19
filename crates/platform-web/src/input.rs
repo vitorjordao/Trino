@@ -12,7 +12,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use trino_core::{GamepadStatus, Input, InputState, PointerButton, Vec2};
+use trino_core::{GamepadStatus, Input, InputState, PadFamily, PointerButton, Vec2};
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 use web_sys::{HtmlCanvasElement, KeyboardEvent, MouseEvent, TouchEvent, WheelEvent};
@@ -42,6 +42,7 @@ pub struct WebInput {
     pub(crate) pointer: Option<(Vec2, u8)>,
     pad_status: GamepadStatus,
     pad_name: Option<String>,
+    pad_family: Option<PadFamily>,
     _listeners: Vec<Listener>,
 }
 
@@ -244,6 +245,7 @@ impl WebInput {
             pointer: None,
             pad_status: GamepadStatus::Disconnected,
             pad_name: None,
+            pad_family: None,
             _listeners: listeners,
         }
     }
@@ -262,6 +264,12 @@ impl WebInput {
         self.pad_name.clone()
     }
 
+    /// The first connected pad's family, from its `Gamepad.id`
+    /// ([`crate::keys::pad_family`]).
+    pub fn gamepad_family(&self) -> Option<PadFamily> {
+        self.pad_family
+    }
+
     /// Every connected pad in the standard mapping.
     fn read_pads(&mut self) -> Vec<PadReading> {
         let Some(nav) = web_sys::window().map(|w| w.navigator()) else {
@@ -272,6 +280,7 @@ impl WebInput {
         };
         let mut out = Vec::new();
         self.pad_name = None;
+        self.pad_family = None;
         for pad in list.iter() {
             let Ok(pad) = pad.dyn_into::<web_sys::Gamepad>() else {
                 continue;
@@ -280,7 +289,9 @@ impl WebInput {
                 continue;
             }
             if self.pad_name.is_none() {
-                self.pad_name = Some(pad.id());
+                let id = pad.id();
+                self.pad_family = Some(crate::keys::pad_family(&id));
+                self.pad_name = Some(id);
             }
             let buttons = pad
                 .buttons()

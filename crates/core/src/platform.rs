@@ -276,6 +276,16 @@ pub trait Platform {
         None
     }
 
+    /// The first connected gamepad's family ([`crate::PadFamily`], issue
+    /// #86): Xbox, PlayStation, Nintendo, 8BitDo or generic, detected by the
+    /// PC from the pad's USB ids and name, by the Web from `Gamepad.id`.
+    /// A menu prints its buttons with it ([`crate::PadFamily::button_glyph`]).
+    /// `None` without a pad, and on the consoles, whose buttons are fixed
+    /// and known to the game (the N64's A/B/C, the 3DS's Nintendo layout).
+    fn gamepad_family(&self) -> Option<crate::PadFamily> {
+        None
+    }
+
     /// What `button` is bound to on `device` ("Z", "Enter", "LB"…), for a
     /// remapping screen. `None` when unbound or not remappable.
     fn binding_label(&self, _button: crate::Button, _device: BindDevice) -> Option<&str> {

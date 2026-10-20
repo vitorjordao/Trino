@@ -6,6 +6,8 @@
 //!
 //! `TRINO_WATER_SHOTS=<dir>` also writes each tier's frames, for review.
 
+mod common;
+
 use std::path::PathBuf;
 
 use trino_asset_pipeline::{Pivot, Primitive, Shape};
@@ -519,12 +521,21 @@ fn dynamic_resolutions_corner_draws_the_same_water() {
         assert_eq!(r.scene_size(), r.scene_extent());
         let own = frame(&mut r, Some((0.5, &[RIPPLE])), &water_params());
         shots(&r, &format!("water_dynres_msaa{msaa}"), &corner);
-        let far = corner
-            .iter()
-            .zip(&own)
-            .filter(|(a, b)| a.abs_diff(**b) > 1)
-            .count();
-        assert_eq!(far, 0, "MSAA {msaa}x");
+        // The same to the bit single-sampled; within one resolve rounding,
+        // sharpened, with 4x MSAA (GitHub #93, `common::corner_tolerance`).
+        let tolerance = common::corner_tolerance(msaa, QualitySettings::HIGH.sharpen);
+        let (max, far) = common::corner_diff(&corner, &own);
+        eprintln!("MSAA {msaa}x: {max}/255 apart at most, {far} pixels over 1/255");
+        assert!(
+            max <= tolerance,
+            "MSAA {msaa}x: {max}/255 apart, {tolerance} allowed"
+        );
+        let (w, h) = r.internal_size();
+        let limit = common::corner_far_limit((w * h) as usize);
+        assert!(
+            far <= limit,
+            "MSAA {msaa}x: {far} pixels over 1/255, {limit} allowed"
+        );
     }
 }
 

@@ -1,0 +1,306 @@
+// Solid Eleven's controls screen (issue #95, issue #86 item 7): a tab for the
+// match's buttons (every target) and, on the PC, tabs for the keyboard's keys
+// and the gamepad's buttons. The game keeps the tab and row cursors
+// (`cur.ctl_tab`, `cur.ctl_row`, `cur.ctl_top`) and draws the action badges,
+// the button pills and the controller or keyboard diagram into their boxes.
+// At 150 % text and up the list takes the width and scrolls (`_big` ids).
+//   cargo xtask ui export examples/solid-eleven/ui/controls.ui.ron examples/solid-eleven/src/ui/controls_gen.rs
+(
+    version: 1,
+    name: "se_controls",
+    scaling: Snap,
+    on_back: "back",
+    theme: (
+        font: "fonts/se_ui",
+        text: Some((236, 240, 255, 255)),
+        dim: Some((150, 160, 196, 255)),
+        panel: Some((16, 20, 46, 230)),
+        button: Some((16, 20, 46, 230)),
+        button_text: Some((236, 240, 255, 255)),
+        focus: Some((30, 60, 130, 235)),
+        focus_text: Some((236, 240, 255, 255)),
+        accent: Some((40, 210, 255, 255)),
+        pressed: Some((50, 110, 240, 255)),
+    ),
+    preview: {
+    "small": Bool(true),
+    "pc_tabs": Bool(true),
+    "tabs_hint": Text("L / R: TABS"),
+    "rows": Int(8),
+    "is_bind": Bool(true),
+    "has_badge": Bool(true),
+    "badge_num": Text("1"),
+    "row_left": Text("PASS / TACKLE"),
+    "row_right": Text("A"),
+    "move_hint": Text("MOVE: STICK OR D-PAD"),
+    "has_status": Bool(false),
+    "status": Text("PRESS THE NEW BUTTON"),
+    "btn.a": Text("ENTER"),
+    "btn.b": Text("ESC"),
+    },
+    root: (
+        children: [
+            (kind: Rect(), anchor: Fill, bleed: true, color: Some((6, 8, 20, 150))),
+            (
+                kind: Stack(gap: 3, align: Stretch),
+                anchor: StretchCenter,
+                size: (Fill, Fill),
+                max: (320, 0),
+                children: [
+                    (
+                        kind: Stack(dir: Horizontal, gap: 4, align: Center, justify: SpaceBetween, wrap: true),
+                        id: "header_row",
+                        size: (Fill, Fit),
+                        min: (200, 22),
+                        padding: (0, 3, 8, 3),
+                        children: [
+                            (
+                                kind: Stack(dir: Horizontal, gap: 4, align: Center),
+                                id: "header",
+                                children: [
+                                    (kind: Button, id: "back", text: "<", on_click: "back", min: (20, 16), color: Some((40, 210, 255, 0)), padding: (4, 1, 4, 1)),
+                                    (kind: Text, key: "controls", text: "CONTROLS"),
+                                ],
+                            ),
+                        ],
+                    ),
+                    (
+                        kind: Stack(dir: Horizontal, gap: 4, align: Center, justify: SpaceBetween, wrap: true),
+                        size: (Fill, Fit),
+                        padding: (8, 0, 8, 0),
+                        children: [
+                            (
+                                kind: Stack(dir: Horizontal, gap: 4, align: Center, wrap: true),
+                                children: [
+                                    (kind: Button, id: "tab0", key: "tab_match", text: "MATCH", on_click: "tab0", padding: (6, 2, 6, 2)),
+                                    (kind: Button, id: "tab1", key: "tab_keyboard", text: "KEYBOARD", on_click: "tab1", padding: (6, 2, 6, 2), visible_if: "pc_tabs"),
+                                    (kind: Button, id: "tab2", key: "tab_pad", text: "GAMEPAD", on_click: "tab2", padding: (6, 2, 6, 2), visible_if: "pc_tabs"),
+                                ],
+                            ),
+                            (kind: Text, bind: "tabs_hint", text: "{}", color: Some((150, 160, 196, 255)), visible_if: "pc_tabs"),
+                        ],
+                    ),
+                    (
+                        kind: Stack(dir: Horizontal, gap: 4),
+                        size: (Fill, Fill),
+                        visible_if: "small",
+                        padding: (2, 0, 2, 0),
+                        children: [
+                            (
+                                kind: Scroll(gap: 0),
+                                min: (132, 0),
+                                max: (132, 0),
+                                size: (Fit, Fill),
+                                children: [
+                                    (
+                                        kind: List(gap: 2, max: 9),
+                                        bind: "rows",
+                                        size: (Fill, Fit),
+                                        children: [
+                                            (
+                                                kind: Overlay,
+                                                size: (Fill, Fit),
+                                                children: [
+                                                    (kind: Button, id: "row", on_click: "pick", anchor: Fill, size: (Fill, Fill)),
+                                                    (
+                                                        kind: Stack(dir: Horizontal, gap: 4, align: Center, justify: SpaceBetween),
+                                                        size: (Fill, Fit),
+                                                        min: (0, 15),
+                                                        padding: (4, 2, 4, 2),
+                                                        visible_if: "is_bind",
+                                                        children: [
+                                                            (
+                                                                kind: Stack(dir: Horizontal, gap: 4, align: Center),
+                                                                size: (Fill, Fit),
+                                                                children: [
+                                                                    (
+                                                                        kind: Rect(),
+                                                                        id: "badge",
+                                                                        visible_if: "has_badge",
+                                                                        color: Some((50, 215, 110, 0)),
+                                                                        padding: (2, 1, 2, 1),
+                                                                        children: [
+                                                                            (kind: Text, bind: "badge_num", text: "{}", color: Some((10, 12, 30, 255))),
+                                                                        ],
+                                                                    ),
+                                                                    (kind: Text, bind: "row_left", text: "{}", size: (Fill, Fit), overflow: Ellipsis),
+                                                                ],
+                                                            ),
+                                                            (
+                                                                kind: Rect(),
+                                                                id: "pill",
+                                                                color: Some((40, 210, 255, 0)),
+                                                                padding: (3, 1, 3, 1),
+                                                                children: [
+                                                                    (kind: Text, bind: "row_right", text: "{}", color: Some((10, 12, 30, 255))),
+                                                                ],
+                                                            ),
+                                                        ],
+                                                    ),
+                                                    (
+                                                        kind: Stack(dir: Horizontal, align: Center, justify: Center),
+                                                        size: (Fill, Fit),
+                                                        min: (0, 15),
+                                                        padding: (4, 2, 4, 2),
+                                                        visible_if: "is_reset",
+                                                        children: [
+                                                            (kind: Text, key: "reset_defaults", text: "RESET TO DEFAULTS", color: Some((255, 214, 40, 255))),
+                                                        ],
+                                                    ),
+                                                ],
+                                            ),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                            (
+                                kind: Stack(gap: 3, align: Stretch),
+                                size: (Fill, Fill),
+                                children: [
+                                    (
+                                        kind: Rect(),
+                                        id: "diagram",
+                                        size: (Fill, Fill),
+                                        color: Some((16, 20, 46, 230)),
+                                        padding: (4, 2, 4, 3),
+                                        children: [
+                                            (
+                                                kind: Text,
+                                                bind: "move_hint",
+                                                text: "{}",
+                                                anchor: Bottom,
+                                                color: Some((150, 160, 196, 255)),
+                                                align: Center,
+                                                size: (Fill, Fit),
+                                                overflow: Wrap,
+                                            ),
+                                        ],
+                                    ),
+                                    (
+                                        kind: Rect(),
+                                        id: "status_box",
+                                        visible_if: "has_status",
+                                        size: (Fill, Fit),
+                                        color: Some((10, 12, 30, 235)),
+                                        padding: (6, 2, 6, 2),
+                                        children: [
+                                            (
+                                                kind: Text,
+                                                bind: "status",
+                                                text: "{}",
+                                                color: Some((236, 240, 255, 255)),
+                                                align: Center,
+                                                size: (Fill, Fit),
+                                                overflow: Wrap,
+                                            ),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                        ],
+                    ),
+                    (
+                        kind: Stack(gap: 2, align: Stretch),
+                        size: (Fill, Fill),
+                        visible_if: "big",
+                        padding: (6, 0, 6, 0),
+                        children: [
+                            (
+                                kind: Rect(),
+                                id: "status_big",
+                                visible_if: "has_status",
+                                size: (Fill, Fit),
+                                color: Some((10, 12, 30, 235)),
+                                padding: (4, 1, 4, 1),
+                                children: [
+                                    (
+                                        kind: Text,
+                                        bind: "status",
+                                        text: "{}",
+                                        color: Some((236, 240, 255, 255)),
+                                        align: Center,
+                                        size: (Fill, Fit),
+                                        overflow: Wrap,
+                                    ),
+                                ],
+                            ),
+                            (
+                                kind: Scroll(gap: 0),
+                                size: (Fill, Fill),
+                                children: [
+                                    (
+                                        kind: List(gap: 2, max: 3),
+                                        bind: "rows",
+                                        size: (Fill, Fit),
+                                        children: [
+                                            (
+                                                kind: Overlay,
+                                                size: (Fill, Fit),
+                                                children: [
+                                                    (kind: Button, id: "row_big", on_click: "pick", anchor: Fill, size: (Fill, Fill)),
+                                                    (
+                                                        kind: Stack(dir: Horizontal, gap: 4, align: Center, justify: SpaceBetween, wrap: true),
+                                                        size: (Fill, Fit),
+                                                        padding: (4, 2, 4, 2),
+                                                        visible_if: "is_bind",
+                                                        children: [
+                                                            (
+                                                                kind: Stack(dir: Horizontal, gap: 4, align: Center),
+                                                                size: (Fill, Fit),
+                                                                children: [
+                                                                    (
+                                                                        kind: Rect(),
+                                                                        id: "badge_big",
+                                                                        visible_if: "has_badge",
+                                                                        color: Some((50, 215, 110, 0)),
+                                                                        padding: (2, 1, 2, 1),
+                                                                        children: [
+                                                                            (kind: Text, bind: "badge_num", text: "{}", color: Some((10, 12, 30, 255))),
+                                                                        ],
+                                                                    ),
+                                                                    (kind: Text, bind: "row_left", text: "{}", size: (Fill, Fit), overflow: Wrap),
+                                                                ],
+                                                            ),
+                                                            (
+                                                                kind: Rect(),
+                                                                id: "pill_big",
+                                                                color: Some((40, 210, 255, 0)),
+                                                                padding: (3, 1, 3, 1),
+                                                                children: [
+                                                                    (kind: Text, bind: "row_right", text: "{}", color: Some((10, 12, 30, 255))),
+                                                                ],
+                                                            ),
+                                                        ],
+                                                    ),
+                                                    (
+                                                        kind: Stack(dir: Horizontal, align: Center, justify: Center),
+                                                        size: (Fill, Fit),
+                                                        padding: (4, 2, 4, 2),
+                                                        visible_if: "is_reset",
+                                                        children: [
+                                                            (kind: Text, key: "reset_defaults", text: "RESET TO DEFAULTS", color: Some((255, 214, 40, 255)), overflow: Wrap),
+                                                        ],
+                                                    ),
+                                                ],
+                                            ),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                        ],
+                    ),
+                    (
+                        kind: Stack(dir: Horizontal, gap: 4, wrap: true),
+                        id: "footer",
+                        size: (Fill, Fit),
+                        padding: (6, 1, 6, 2),
+                        children: [
+                            (kind: Rect(), id: "hint_a", color: Some((16, 70, 36, 0)), padding: (5, 2, 5, 2), children: [(kind: Text, bind: "btn.a", key: "change", text: "{}: CHANGE")]),
+                            (kind: Rect(), id: "hint_b", color: Some((76, 18, 25, 0)), padding: (5, 2, 5, 2), children: [(kind: Text, bind: "btn.b", key: "back", text: "{}: BACK")]),
+                        ],
+                    ),
+                ],
+            ),
+        ],
+    ),
+)

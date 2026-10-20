@@ -90,7 +90,12 @@ fn solid_eleven_menu_shots() {
             ("confirm", Scene::Confirm),
             ("trophy", Scene::Trophy),
         ];
+        // `TRINO_SE_SHOTS=settings,club` keeps those screens only.
+        let only = std::env::var("TRINO_SE_SHOTS").unwrap_or_default();
         for (name, scene) in scenes {
+            if !only.is_empty() && !only.split(',').any(|o| o == name) {
+                continue;
+            }
             g.scene = scene;
             if scene == Scene::Edit {
                 let (list, _) = g.squad_list(0);
@@ -118,6 +123,11 @@ fn solid_eleven_menu_shots() {
             if profile == SimProfile::N3ds {
                 save_bottom(&r, &dir, &format!("menu_{name}_3ds_bottom"));
             }
+            // At the player's largest text (issue #95).
+            g.access.text_scale = 200;
+            g.render(&mut r);
+            save(&r, &dir, &format!("menu_{name}_{tag}_text200"));
+            g.access.text_scale = 100;
         }
         // The controls page: each tab, with the PC host's labels.
         g.scene = Scene::Controls;
@@ -187,6 +197,7 @@ fn pc_peek() -> solid_eleven::game::app::InputPeek {
         pads: pads.map(|k| font_safe(Some(k))),
         gamepad: 2,
         pad_name: font_safe(Some("Xbox Wireless Controller")),
+        pad_family: Some(trino_core::PadFamily::Xbox),
         capturing: None,
     }
 }

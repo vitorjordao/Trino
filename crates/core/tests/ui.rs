@@ -111,6 +111,7 @@ fn vstack(gap: i16) -> UiNode<'static> {
         gap,
         align: Align::Start,
         justify: Justify::Start,
+        wrap: false,
     })
 }
 
@@ -331,6 +332,7 @@ fn stacks_place_children_in_order_with_gaps_alignment_and_fill() {
             gap: 6,
             align: Align::Center,
             justify: Justify::Start,
+            wrap: false,
         })
     });
     t.leaf(UiNode {
@@ -356,6 +358,7 @@ fn stacks_place_children_in_order_with_gaps_alignment_and_fill() {
             gap: 0,
             align: Align::Stretch,
             justify: Justify::SpaceBetween,
+            wrap: false,
         })
     });
     for id in ["x", "y", "z"] {
@@ -1416,6 +1419,7 @@ fn tuil_round_trips_every_node_kind_and_field() {
             gap: -3,
             align: Align::End,
             justify: Justify::SpaceBetween,
+            wrap: false,
         })
     });
     t.leaf(UiNode {
@@ -1616,12 +1620,12 @@ fn values_keep_ints_bools_texts_per_item_and_refuse_when_full() {
     assert_eq!(ui.get("b"), Some(1));
     ui.set_text(
         "c",
-        "a very long name that does not fit in thirty-two bytes",
+        "a very long name that does not fit in sixty-four bytes, not even close",
     );
     let Some(UiValue::Text(t)) = ui.values().get("c", u16::MAX) else {
         panic!()
     };
-    assert_eq!(t.as_str().len(), 32);
+    assert_eq!(t.as_str().len(), trino_core::ui::TEXT_LEN);
     ui.set_item("d", 2, UiValue::Int(5));
     assert_eq!(ui.values().get("d", 2), Some(UiValue::Int(5)));
     assert_eq!(ui.values().get("d", 3), None);
@@ -1760,4 +1764,409 @@ fn a_languages_font_remap_reaches_layout_and_draw() {
     let mut ui = Ui::<64>::new();
     ui.layout(&screen, &UiEnv::of(&r), &r as &dyn Renderer);
     assert_eq!(rect_of(&ui, &screen, "t").size.x, 12.0);
+}
+
+// ------------------------------------------------- game data (#95) ----
+
+/// A squad far past `MAX_VALUES`, answered by the game on demand.
+struct Squad {
+    names: Vec<String>,
+    lookups: std::cell::Cell<u32>,
+    revision: Option<u32>,
+}
+
+impl trino_core::ui::UiData for Squad {
+    fn value(&self, key: &str, item: u16) -> Option<trino_core::ui::UiValue> {
+        self.lookups.set(self.lookups.get() + 1);
+        match key {
+            "count" => Some(trino_core::ui::UiValue::Int(self.names.len() as i32)),
+            "name" => self
+                .names
+                .get(item as usize)
+                .map(|n| trino_core::ui::text_value(n)),
+            "star" => Some(trino_core::ui::UiValue::Bool(item.is_multiple_of(3))),
+            "title" => Some(trino_core::ui::text_value("SQUAD")),
+            _ => None,
+        }
+    }
+
+    fn revision(&self) -> Option<u32> {
+        self.revision
+    }
+}
+
+fn squad_screen() -> UiScreen<'static> {
+    let mut t = Tree::new();
+    t.open(root());
+    t.open(vstack(0));
+    t.leaf(UiNode {
+        id: "title",
+        bind: "title",
+        ..node(NodeKind::Text)
+    });
+    t.open(UiNode {
+        id: "scroll",
+        size: (Size::Px(100), Size::Px(50)),
+        ..node(NodeKind::Scroll {
+            dir: Dir::Vertical,
+            gap: 0,
+        })
+    });
+    t.open(UiNode {
+        id: "list",
+        bind: "count",
+        ..node(NodeKind::List {
+            dir: Dir::Vertical,
+            gap: 0,
+            max: 0,
+        })
+    });
+    t.open(UiNode {
+        id: "row",
+        bind: "name",
+        action: "pick",
+        size: (Size::Px(80), Size::Px(10)),
+        ..node(NodeKind::Button)
+    });
+    t.leaf(UiNode {
+        id: "star",
+        text: "*",
+        visible_if: "star",
+        anchor: Anchor::Right,
+        ..node(NodeKind::Text)
+    });
+    t.screen()
+}
+
+#[test]
+fn game_data_fills_lists_past_the_value_store_and_the_ui_keeps_precedence() {
+    let s = squad_screen();
+    let names: Vec<String> = (0..40).map(|i| format!("P{i}")).collect();
+    let data = Squad {
+        names: names.clone(),
+        lookups: std::cell::Cell::new(0),
+        revision: None,
+    };
+    let mut r = Rec::sized(320, 240);
+    let mut ui = Ui::<128>::new();
+    let env = env_of(&r).with_data(&data);
+    ui.draw(&mut r, &s, &env);
+    // 40 rows (more than the 24 values a Ui keeps), item values and
+    // per-item `visible_if` from the game; the 50 px box shows five.
+    let rows = ui
+        .slots()
+        .iter()
+        .filter(|sl| sl.item != trino_core::ui::NO_ITEM && s.node(sl.node as usize).id == "row")
+        .count();
+    assert_eq!(rows, 40);
+    let texts: Vec<String> = r.texts().into_iter().map(|t| t.0).collect();
+    assert_eq!(texts, ["SQUAD", "P0", "*", "P1", "P2", "P3", "*", "P4"]);
+    assert_eq!(ui.values().len(), 0, "nothing copied into the Ui");
+    // A value the Ui holds wins over the game's.
+    ui.set_text("title", "MINE");
+    r.calls.clear();
+    ui.draw(&mut r, &s, &env);
+    assert_eq!(r.texts()[0].0, "MINE");
+}
+
+#[test]
+fn game_data_without_a_revision_lays_out_every_draw_and_with_one_only_on_change() {
+    let s = squad_screen();
+    let mut data = Squad {
+        names: vec!["A".into(), "B".into()],
+        lookups: std::cell::Cell::new(0),
+        revision: None,
+    };
+    let mut r = Rec::sized(320, 240);
+    let mut ui = Ui::<64>::new();
+    let base = env_of(&r);
+    ui.draw(&mut r, &s, &base.with_data(&data));
+    // No revision: a change shows on the very next draw.
+    data.names.push("C".into());
+    r.calls.clear();
+    let base = env_of(&r);
+    ui.draw(&mut r, &s, &base.with_data(&data));
+    assert!(r.texts().iter().any(|t| t.0 == "C"));
+    // A revision: no layout (no lookups) while it stays.
+    data.revision = Some(7);
+    let base = env_of(&r);
+    ui.draw(&mut r, &s, &base.with_data(&data));
+    data.lookups.set(0);
+    let before = data.lookups.get();
+    data.names.push("D".into());
+    r.calls.clear();
+    let base = env_of(&r);
+    ui.draw(&mut r, &s, &base.with_data(&data));
+    let layout_lookups = data.lookups.get() - before;
+    assert!(
+        !r.texts().iter().any(|t| t.0 == "D"),
+        "the same revision keeps the layout"
+    );
+    data.revision = Some(8);
+    data.lookups.set(0);
+    r.calls.clear();
+    let base = env_of(&r);
+    ui.draw(&mut r, &s, &base.with_data(&data));
+    assert!(
+        r.texts().iter().any(|t| t.0 == "D"),
+        "a new revision lays out"
+    );
+    assert!(data.lookups.get() > layout_lookups);
+}
+
+#[test]
+fn a_cursor_the_game_keeps_focuses_a_list_row_scrolls_it_in_and_gives_its_rect() {
+    let s = squad_screen();
+    let data = Squad {
+        names: (0..20).map(|i| format!("P{i}")).collect(),
+        lookups: std::cell::Cell::new(0),
+        revision: None,
+    };
+    let mut r = Rec::sized(320, 240);
+    let mut ui = Ui::<128>::new();
+    // Before any layout: the next draw places the focus and reveals it.
+    assert!(ui.set_focus_item(&s, "row", 12));
+    assert!(!ui.set_focus_item(&s, "nope", 0));
+    let env = env_of(&r).with_data(&data);
+    ui.draw(&mut r, &s, &env);
+    assert_eq!(ui.focused(&s), Some(("row", 12)));
+    let texts: Vec<String> = r.texts().into_iter().map(|t| t.0).collect();
+    assert!(texts.contains(&"P12".to_string()), "scrolled in: {texts:?}");
+    assert!(!texts.contains(&"P0".to_string()), "{texts:?}");
+    // Its rect is on screen, inside the scroll box; a hidden row has none.
+    let (on, row) = ui.rect_of_item(&s, "row", 12).expect("visible row");
+    assert_eq!(on, Screen::Top);
+    let view = ui.rect_of(&s, "scroll").unwrap().1;
+    assert!(row.pos.y >= view.pos.y && row.pos.y + row.size.y <= view.pos.y + view.size.y);
+    assert_eq!(ui.rect_of_item(&s, "row", 0), None, "scrolled away");
+    assert!(
+        ui.rect_of_item(&s, "title", 3).is_some(),
+        "outside a list: its one copy"
+    );
+    // Back to the top: the first rows show again on the same draw.
+    ui.set_focus_item(&s, "row", 0);
+    r.calls.clear();
+    ui.draw(&mut r, &s, &env);
+    assert_eq!(r.texts()[1].0, "P0");
+    assert_eq!(ui.scroll_of(3).unwrap().0, 0.0);
+}
+
+#[test]
+fn bound_ints_print_in_decimal_with_their_sign() {
+    let mut t = Tree::new();
+    t.open(root());
+    t.open(vstack(0));
+    for (id, bind) in [("a", "a"), ("b", "b"), ("c", "c")] {
+        t.leaf(UiNode {
+            id,
+            bind,
+            text: "N {}",
+            ..node(NodeKind::Text)
+        });
+    }
+    let s = t.screen();
+    let mut r = Rec::sized(320, 240);
+    let mut ui = Ui::<16>::new();
+    ui.set("a", 0);
+    ui.set("b", -42);
+    ui.set("c", i32::MIN);
+    let env = env_of(&r);
+    ui.draw(&mut r, &s, &env);
+    let texts: Vec<String> = r.texts().into_iter().map(|t| t.0).collect();
+    assert_eq!(texts, ["N 0", "N -42", "N -2147483648"]);
+}
+
+#[test]
+fn a_wrapping_stack_starts_a_new_line_when_the_next_child_does_not_fit() {
+    let mut t = Tree::new();
+    t.open(root());
+    t.open(UiNode {
+        id: "row",
+        size: (Size::Px(200), Size::Fit),
+        ..node(NodeKind::Stack {
+            dir: Dir::Horizontal,
+            gap: 4,
+            align: Align::Start,
+            justify: Justify::Start,
+            wrap: true,
+        })
+    });
+    for id in ["a", "b", "c", "d", "e"] {
+        t.leaf(button(id, id));
+    }
+    let s = t.screen();
+    let r = Rec::sized(320, 240);
+    let ui = laid_out(&s, &r);
+    // 80 px buttons, 4 px apart, in 200 px: two a line, three lines.
+    let at = |id| rect_of(&ui, &s, id);
+    assert_eq!((at("a").pos.x, at("a").pos.y), (0.0, 0.0));
+    assert_eq!((at("b").pos.x, at("b").pos.y), (84.0, 0.0));
+    assert_eq!((at("c").pos.x, at("c").pos.y), (0.0, 20.0), "a new line");
+    assert_eq!((at("d").pos.x, at("d").pos.y), (84.0, 20.0));
+    assert_eq!((at("e").pos.x, at("e").pos.y), (0.0, 40.0));
+    // The stack fits its lines: 16 + 4 + 16 + 4 + 16.
+    assert_eq!(rect_of(&ui, &s, "row").size.y, 56.0);
+    // Wider room: one line holds them all; nothing overflows.
+    assert_eq!(ui.stats().overflow, 0);
+}
+
+#[test]
+fn wrap_survives_the_baked_format_and_old_blobs_do_not_wrap() {
+    let mut t = Tree::new();
+    t.open(root());
+    t.open(UiNode {
+        id: "row",
+        ..node(NodeKind::Stack {
+            dir: Dir::Horizontal,
+            gap: 2,
+            align: Align::Center,
+            justify: Justify::End,
+            wrap: true,
+        })
+    });
+    t.leaf(button("a", "A"));
+    let s = t.screen();
+    let blob = bake(&s);
+    let back = UiScreen::parse(&blob).expect("parses");
+    assert_eq!(back.node(1).kind, s.node(1).kind);
+    // A version-2 blob written before wrap existed has 0 in that byte.
+    let mut old = blob.clone();
+    let rec = HEADER + RECORD; // node 1
+    old[rec + 78 + 3] = 0;
+    let back = UiScreen::parse(&old).expect("parses");
+    assert!(matches!(
+        back.node(1).kind,
+        NodeKind::Stack { wrap: false, .. }
+    ));
+}
+
+#[test]
+fn a_panel_taller_than_its_scroll_box_shows_the_lines_that_fit() {
+    let mut t = Tree::new();
+    t.open(root());
+    t.open(UiNode {
+        id: "scroll",
+        size: (Size::Px(120), Size::Px(50)),
+        ..node(NodeKind::Scroll {
+            dir: Dir::Vertical,
+            gap: 0,
+        })
+    });
+    t.open(UiNode {
+        id: "panel",
+        color: Some(Color::rgb(20, 20, 60)),
+        size: (Size::Fill, Size::Fit),
+        ..node(NodeKind::Rect {
+            border: 0,
+            border_color: Color::TRANSPARENT,
+        })
+    });
+    t.open(vstack(0));
+    for (id, text) in [
+        ("l0", "ONE"),
+        ("l1", "TWO"),
+        ("l2", "THREE"),
+        ("l3", "FOUR"),
+        ("l4", "FIVE"),
+        ("l5", "SIX"),
+    ] {
+        t.leaf(UiNode {
+            id,
+            text,
+            ..node(NodeKind::Text)
+        });
+    }
+    let s = t.screen();
+    let mut r = Rec::sized(320, 240);
+    let mut ui = Ui::<64>::new();
+    let env = env_of(&r);
+    ui.draw(&mut r, &s, &env);
+    // 60 px of lines in a 50 px box: the panel is cut (its fill not drawn),
+    // the five lines that fit show, the sixth waits.
+    let texts: Vec<String> = r.texts().into_iter().map(|t| t.0).collect();
+    assert_eq!(texts, ["ONE", "TWO", "THREE", "FOUR", "FIVE"]);
+    assert_eq!(ui.rect_of_item(&s, "panel", trino_core::ui::NO_ITEM), None);
+    assert!(ui.rect_of_item(&s, "l4", trino_core::ui::NO_ITEM).is_some());
+    assert_eq!(ui.rect_of_item(&s, "l5", trino_core::ui::NO_ITEM), None);
+    // Revealing it shows its top, not its bottom.
+    ui.set_focus_item(&s, "panel", 0);
+    r.calls.clear();
+    ui.draw(&mut r, &s, &env);
+    assert_eq!(r.texts()[0].0, "ONE");
+}
+
+#[test]
+fn snap_scaling_keeps_whole_pixels_near_a_whole_fit_and_follows_the_fit_elsewhere() {
+    let mut t = Tree::new();
+    t.open(root());
+    t.leaf(button("a", "A"));
+    let s = UiScreen {
+        scaling: Scaling::Snap,
+        ..t.screen()
+    };
+    for ((w, h), want) in [
+        ((320, 240), 1.0),
+        ((640, 360), 1.5),
+        ((960, 540), 2.0),
+        ((1280, 720), 3.0),
+        ((1920, 1080), 4.0),
+        ((1000, 600), 2.5),
+    ] {
+        let r = Rec::sized(w, h);
+        let ui = laid_out_n::<64>(&s, &r);
+        assert_eq!(ui.frame(Screen::Top).scale, want, "{w}x{h}");
+    }
+}
+
+/// A game's twice-as-big copy of its font, used from ×2 up.
+struct Twice;
+const BIG: FontId = FontId::from_path("fonts/big");
+impl trino_core::ui::UiStrings for Twice {
+    fn get(&self, _key: &str) -> Option<&str> {
+        None
+    }
+    fn sized(&self, font: FontId, px: f32) -> (FontId, f32) {
+        if px >= 2.0 {
+            (BIG, px * 0.5)
+        } else {
+            (font, px)
+        }
+    }
+}
+
+#[test]
+fn a_game_draws_large_text_with_its_bigger_font_and_the_layout_measures_it() {
+    let mut t = Tree::new();
+    t.open(root());
+    t.leaf(UiNode {
+        id: "t",
+        text: "HELLO",
+        ..node(NodeKind::Text)
+    });
+    let s = t.screen();
+    for (w, h, font, scale) in [(320, 240, Theme::DEFAULT.font, 1.0), (640, 480, BIG, 1.0)] {
+        let mut r = Rec::sized(w, h);
+        // The big font's cells are twice as wide: at half the scale it
+        // covers what the small one would at the full scale.
+        r.wide = Some(BIG);
+        let mut ui = Ui::<16>::new();
+        let env = env_of(&r).with_strings(&Twice);
+        ui.draw(&mut r, &s, &env);
+        assert_eq!(r.fonts.last(), Some(&font), "{w}x{h}");
+        assert_eq!(r.texts()[0].2.scale, scale, "{w}x{h}");
+        let frame = ui.frame(Screen::Top).scale;
+        assert_eq!(rect_of_n(&ui, &s, "t").size.x, 30.0 * frame, "{w}x{h}");
+        assert_eq!(ui.stats().overflow, 0);
+    }
+}
+
+fn laid_out_n<const N: usize>(screen: &UiScreen<'_>, r: &Rec) -> Ui<N> {
+    let mut ui = Ui::<N>::new();
+    let m: &dyn Renderer = r;
+    ui.layout(screen, &env_of(r), m);
+    ui
+}
+
+fn rect_of_n<const N: usize>(ui: &Ui<N>, screen: &UiScreen<'_>, id: &str) -> Rect {
+    ui.rect_of(screen, id).expect(id).1
 }

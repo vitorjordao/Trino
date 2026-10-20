@@ -268,6 +268,18 @@ pub struct ShadowsDef {
     /// strength).
     #[serde(default = "default_shadow_color")]
     pub color: [u8; 4],
+    /// Contact hardening on the map tier: how much wider the soft edge
+    /// grows per meter between caster and receiver (0: an even filter).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub soft_growth: f32,
+    /// How far above its receiver a shadow fades out, meters (0: ADR
+    /// 0025's, a blob over 4 × its radius + 1 m, the map never).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub fade_distance: f32,
+}
+
+fn is_zero(v: &f32) -> bool {
+    *v == 0.0
 }
 
 /// [`trino_core::shadow::ShadowTier`] in files.
@@ -319,6 +331,8 @@ impl Default for ShadowsDef {
             distance: default_shadow_distance(),
             softness: default_shadow_softness(),
             color: default_shadow_color(),
+            soft_growth: 0.0,
+            fade_distance: 0.0,
         }
     }
 }
@@ -333,6 +347,8 @@ impl ShadowsDef {
             distance: self.distance,
             softness: self.softness,
             color: trino_core::Color::rgba(r, g, b, a),
+            soft_growth: self.soft_growth,
+            fade_distance: self.fade_distance,
         }
         .clamped()
     }
@@ -1249,6 +1265,8 @@ mod tests {
             distance: 25.0,
             softness: 90,
             color: [10, 20, 30, 120],
+            soft_growth: 0.15,
+            fade_distance: 3.0,
         });
         let mut floor = Entity::new("floor");
         floor.shadow = Some(ShadowComponent {
@@ -1274,6 +1292,13 @@ mod tests {
         assert_eq!(s.tier_max, trino_core::ShadowTier::Planar);
         assert_eq!((s.map_size, s.distance, s.softness), (1024, 25.0, 90));
         assert_eq!(s.color, trino_core::Color::rgba(10, 20, 30, 120));
+        assert_eq!((s.soft_growth, s.fade_distance), (0.15, 3.0));
+        assert!(text.contains("soft_growth: 0.15") && text.contains("fade_distance: 3.0"));
+        let mut plain = Scene::new("plain");
+        plain.environment.shadows = Some(ShadowsDef::default());
+        let plain = plain.to_ron();
+        assert!(plain.contains("softness") && !plain.contains("soft_growth"));
+        assert!(!plain.contains("fade_distance"), "0 is not written");
         let casts: Vec<_> = tuned
             .entities
             .iter()

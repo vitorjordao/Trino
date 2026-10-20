@@ -1,0 +1,104 @@
+// Solid Eleven's "reset the save?" dialog (issue #95): the question and
+// Cancel / Confirm; the game keeps the choice (`cur.confirm`).
+//   cargo xtask ui export examples/solid-eleven/ui/confirm.ui.ron examples/solid-eleven/src/ui/confirm_gen.rs
+(
+    version: 1,
+    name: "se_confirm",
+    scaling: Snap,
+    on_back: "back",
+    theme: (
+        font: "fonts/se_ui",
+        text: Some((236, 240, 255, 255)),
+        dim: Some((150, 160, 196, 255)),
+        panel: Some((16, 20, 46, 230)),
+        button: Some((16, 20, 46, 230)),
+        button_text: Some((236, 240, 255, 255)),
+        focus: Some((110, 20, 60, 240)),
+        focus_text: Some((236, 240, 255, 255)),
+        accent: Some((240, 60, 150, 255)),
+        pressed: Some((240, 60, 150, 255)),
+    ),
+    preview: {"btn.a": Text("ENTER"), "btn.b": Text("ESC")},
+    root: (
+        children: [
+            (kind: Rect(), anchor: Fill, bleed: true, color: Some((6, 8, 20, 170))),
+            (
+                kind: Stack(gap: 6, align: Stretch),
+                anchor: StretchCenter,
+                size: (Fill, Fill),
+                max: (320, 0),
+                children: [
+                    (
+                        kind: Stack(dir: Horizontal, gap: 4, align: Center, justify: SpaceBetween, wrap: true),
+                        id: "header_row",
+                        size: (Fill, Fit),
+                        min: (200, 22),
+                        padding: (0, 3, 8, 3),
+                        children: [
+                            (
+                                kind: Stack(dir: Horizontal, gap: 4, align: Center),
+                                id: "header",
+                                children: [
+                                    (kind: Button, id: "back", text: "<", on_click: "back", min: (20, 16), color: Some((40, 210, 255, 0)), padding: (4, 1, 4, 1)),
+                                    (kind: Text, key: "exit", text: "RESET SAVE"),
+                                ],
+                            ),
+                        ],
+                    ),
+                    (
+                        kind: Overlay,
+                        size: (Fill, Fill),
+                        children: [
+                            (
+                                kind: Rect(border: 1, border_color: Some((240, 60, 150, 255))),
+                                anchor: Center,
+                                max: (280, 0),
+                                padding: (10, 8, 10, 8),
+                                children: [
+                                    (
+                                        kind: Stack(gap: 8, align: Center),
+                                        children: [
+                                            (kind: Text, key: "exit_sub", text: "START A NEW CAREER?", align: Center, overflow: Wrap, max: (260, 0)),
+                                            (
+                                                kind: Stack(dir: Horizontal, gap: 6),
+                                                children: [
+                                                    (kind: Button, id: "cancel", key: "cancel", text: "CANCEL", on_click: "cancel", min: (70, 20), padding: (6, 3, 6, 3)),
+                                                    (kind: Button, id: "confirm", key: "confirm", text: "CONFIRM", on_click: "confirm", min: (70, 20), padding: (6, 3, 6, 3)),
+                                                ],
+                                            ),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                        ],
+                    ),
+                    (
+                        kind: Stack(dir: Horizontal, gap: 3, wrap: true),
+                        size: (Fill, Fit),
+                        padding: (6, 0, 0, 3),
+                        children: [
+                            (
+                                kind: Stack(dir: Horizontal, gap: 3, align: Center),
+                                id: "hint_a",
+                                padding: (2, 2, 5, 2),
+                                children: [
+                                    (kind: Rect(), color: Some((70, 210, 90, 255)), padding: (3, 0, 3, 0), min: (11, 0), children: [(kind: Text, bind: "btn.a", text: "{}", color: Some((18, 22, 52, 255)), anchor: Center)]),
+                                    (kind: Text, key: "select", text: "SELECT"),
+                                ],
+                            ),
+                            (
+                                kind: Stack(dir: Horizontal, gap: 3, align: Center),
+                                id: "hint_b",
+                                padding: (2, 2, 5, 2),
+                                children: [
+                                    (kind: Rect(), color: Some((230, 50, 70, 255)), padding: (3, 0, 3, 0), min: (11, 0), children: [(kind: Text, bind: "btn.b", text: "{}", color: Some((18, 22, 52, 255)), anchor: Center)]),
+                                    (kind: Text, key: "back", text: "BACK"),
+                                ],
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+        ],
+    ),
+)

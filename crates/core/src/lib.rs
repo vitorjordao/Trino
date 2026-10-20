@@ -38,6 +38,7 @@ pub mod math3d;
 pub mod mem;
 pub mod memo;
 pub mod options;
+pub mod pad;
 pub mod particles;
 pub mod perf;
 pub mod physics;
@@ -81,6 +82,7 @@ pub use light::{
 pub use math::{Color, Rect, Vec2, Vec3};
 pub use math3d::{Mat34, Quat};
 pub use options::{GraphicsOptions, OptionsEvent, OptionsRow, OptionsStyle};
+pub use pad::{GlyphShape, PadFamily, PadGlyph, PadSlot};
 pub use particles::{Effect, Emitter, ParticleSystem};
 pub use physics::{Aabb, Collider, Shape};
 pub use platform::{

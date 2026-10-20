@@ -8,7 +8,7 @@
 //! leave gaps.
 
 use super::node::{Align, AxisAnchor, Dir, ImageFit, Justify, NodeKind, Overflow, Scaling, Size};
-use super::values::NO_ITEM;
+use super::values::{NO_ITEM, lookup};
 use super::{
     Frame, Insets, MAX_DEPTH, MAX_SCROLLS, NONE, ScrollBox, Slot, TextMeasure, Ui, UiEnv, UiNode,
     UiScreen, UiStats, flags,
@@ -23,6 +23,48 @@ pub(super) const TRACK_MIN: f32 = 48.0;
 pub(super) const INNER_GAP: f32 = 4.0;
 /// Longest label, bytes (a bound value substituted in).
 pub(super) const LABEL_LEN: usize = 96;
+
+/// What a layout memo entry was measured for: a node and list item, and
+/// two more words (the room offered, or a wrapped label's width). Compared
+/// whole, so entries never collide; `node == u32::MAX` marks an empty one.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) struct MemoKey {
+    pub node: u32,
+    pub a: u32,
+    pub b: u32,
+}
+
+impl MemoKey {
+    pub(super) const EMPTY: MemoKey = MemoKey {
+        node: u32::MAX,
+        a: 0,
+        b: 0,
+    };
+}
+
+/// `table`'s entry for `key`, or `measure` stored there (direct-mapped:
+/// one 32-bit hash per lookup, cheap on the N64).
+fn memo(
+    table: &[core::cell::Cell<(MemoKey, Vec2)>],
+    key: MemoKey,
+    measure: impl FnOnce() -> Vec2,
+) -> Vec2 {
+    if table.is_empty() {
+        return measure();
+    }
+    let h = (key.node ^ key.a.rotate_left(11) ^ key.b.rotate_left(22)).wrapping_mul(0x9e37_79b1);
+    let slot = &table[(h >> 16) as usize % table.len()];
+    let (k, size) = slot.get();
+    if k == key {
+        return size;
+    }
+    let size = measure();
+    slot.set((key, size));
+    size
+}
+
+/// Most children a wrapping stack places (more are not laid out).
+const MAX_FLOW: usize = 32;
 
 pub(super) fn floor(v: f32) -> f32 {
     let t = v as i32 as f32;
@@ -77,6 +119,7 @@ pub(super) fn frame_for(
     let fit = (px.x / reference.0 as f32).min(px.y / reference.1 as f32) * interface;
     let scale = match scaling {
         Scaling::Integer if fit >= 1.0 => floor(fit),
+        Scaling::Snap if fit >= 1.0 && fit - floor(fit) < fit * 0.15 => floor(fit),
         _ => fit,
     }
     .max(1.0 / 64.0);
@@ -180,6 +223,9 @@ impl<const N: usize> Ui<N> {
             s.max = 0.0;
         }
         self.tracks = [(NONE, 0, Rect::new(0.0, 0.0, 0.0, 0.0)); super::MAX_SLIDERS];
+        for m in self.text_memo.iter().chain(self.size_memo.iter()) {
+            m.set((MemoKey::EMPTY, Vec2::ZERO));
+        }
         if !screen.is_empty() {
             let mut solver = Solver {
                 ui: self,
@@ -187,7 +233,7 @@ impl<const N: usize> Ui<N> {
                 env,
                 measure,
             };
-            let root = screen.node(0);
+            let root = screen.node_at(0);
             if solver.visible(&root, NO_ITEM) {
                 let on = solver.screen_of(&root, Screen::Top);
                 let frame = solver.ui.frames[on.index() as usize];
@@ -228,7 +274,7 @@ impl<const N: usize> Ui<N> {
                 ^ env.access.text_scale.to_bits().rotate_left(13)
                 ^ (env.access.high_contrast as u32) << 31,
             env.strings.revision(),
-            self.values.revision(),
+            self.values.revision() ^ env.data.revision().unwrap_or(0).rotate_left(11),
             scroll,
             (env.safe[0].left as u32) << 24
                 ^ (env.safe[0].top as u32) << 16
@@ -240,6 +286,7 @@ impl<const N: usize> Ui<N> {
     /// Whether [`draw`](Ui::draw) must lay out again.
     pub(super) fn needs_layout(&self, screen: &UiScreen<'_>, env: &UiEnv<'_>) -> bool {
         !self.laid_out
+            || env.data.revision().is_none()
             || self.name != Some(crate::asset::asset_id(screen.name))
             || self.layout_key(screen, env) != self.key
     }
@@ -256,10 +303,7 @@ impl<M: TextMeasure + ?Sized, const N: usize> Solver<'_, '_, '_, M, N> {
     fn visible(&self, n: &UiNode<'_>, item: u16) -> bool {
         n.visible_on.contains(self.env.family)
             && (n.visible_if.is_empty()
-                || self
-                    .ui
-                    .values
-                    .get(n.visible_if, item)
+                || lookup(&self.ui.values, self.env.data, n.visible_if, item)
                     .is_some_and(|v| v.truthy()))
     }
 
@@ -280,10 +324,12 @@ impl<M: TextMeasure + ?Sized, const N: usize> Solver<'_, '_, '_, M, N> {
         } else {
             self.screen.theme.text_scale.max(1)
         };
-        (
-            super::draw::font_of(self.screen, self.env, n),
-            scale as f32 * self.ui.text_mul,
-        )
+        // The game may draw this pixel size with another font (a bigger
+        // bitmap at large scales): measure what will be drawn.
+        let frame = self.ui.frames[0].scale.max(1.0 / 64.0);
+        let virt = scale as f32 * self.ui.text_mul;
+        let (font, px) = super::draw::sized_font(self.screen, self.env, n, virt * frame);
+        (font, px / frame)
     }
 
     fn line_height(&self, n: &UiNode<'_>) -> f32 {
@@ -297,7 +343,26 @@ impl<M: TextMeasure + ?Sized, const N: usize> Solver<'_, '_, '_, M, N> {
     }
 
     /// The node's label, its size, and whether it wraps past `max_w`.
-    fn label_size(&self, n: &UiNode<'_>, item: u16, max_w: f32) -> Vec2 {
+    fn label_size(&self, i: usize, n: &UiNode<'_>, item: u16, max_w: f32) -> Vec2 {
+        // The same node and item at the same (wrapped) width make the same
+        // label: measure it once per layout. The font and scale are the
+        // node's, fixed for the layout.
+        let wrap_w = if n.overflow == Overflow::Wrap {
+            max_w.to_bits()
+        } else {
+            0
+        };
+        let key = MemoKey {
+            node: (i as u32) << 16 | item as u32,
+            a: wrap_w,
+            b: 0,
+        };
+        memo(&self.ui.text_memo, key, || {
+            self.measure_label(n, item, max_w)
+        })
+    }
+
+    fn measure_label(&self, n: &UiNode<'_>, item: u16, max_w: f32) -> Vec2 {
         let mut buf = TextBuf::<LABEL_LEN>::new();
         let text = super::draw::label(self.screen, &self.ui.values, self.env, n, item, &mut buf);
         let lh = self.line_height(n);
@@ -319,10 +384,7 @@ impl<M: TextMeasure + ?Sized, const N: usize> Solver<'_, '_, '_, M, N> {
         let NodeKind::List { max, .. } = n.kind else {
             return 0;
         };
-        let want = self
-            .ui
-            .values
-            .get(n.bind, item)
+        let want = lookup(&self.ui.values, self.env.data, n.bind, item)
             .and_then(|v| v.int())
             .unwrap_or(0)
             .max(0) as usize;
@@ -334,12 +396,24 @@ impl<M: TextMeasure + ?Sized, const N: usize> Solver<'_, '_, '_, M, N> {
     fn kids(&self, i: usize, item: u16) -> impl Iterator<Item = usize> + '_ {
         self.screen
             .children(i)
-            .filter(move |&c| self.visible(&self.screen.node(c), item))
+            .filter(move |&c| self.visible(&self.screen.node_at(c), item))
     }
 
-    /// The node's outer size when its parent offers `avail`.
+    /// The node's outer size when its parent offers `avail` (once per
+    /// layout for the same node, item and room).
     fn outer(&self, i: usize, item: u16, avail: Vec2, depth: usize) -> Vec2 {
-        let n = self.screen.node(i);
+        let key = MemoKey {
+            node: (i as u32) << 16 | item as u32,
+            a: avail.x.to_bits(),
+            b: avail.y.to_bits(),
+        };
+        memo(&self.ui.size_memo, key, || {
+            self.measure_outer(i, item, avail, depth)
+        })
+    }
+
+    fn measure_outer(&self, i: usize, item: u16, avail: Vec2, depth: usize) -> Vec2 {
+        let n = self.screen.node_at(i);
         let pad = Vec2::new(
             (n.padding[0] + n.padding[2]) as f32,
             (n.padding[1] + n.padding[3]) as f32,
@@ -377,36 +451,83 @@ impl<M: TextMeasure + ?Sized, const N: usize> Solver<'_, '_, '_, M, N> {
         if depth >= MAX_DEPTH {
             return Vec2::ZERO;
         }
-        let n = self.screen.node(i);
+        let n = self.screen.node_at(i);
         let avail = Vec2::new(avail.x.max(0.0), avail.y.max(0.0));
         let own = match n.kind {
-            NodeKind::Text | NodeKind::Button => self.label_size(&n, item, avail.x),
+            NodeKind::Text | NodeKind::Button => self.label_size(i, &n, item, avail.x),
             NodeKind::Toggle => {
                 let lh = self.line_height(&n);
-                let l = self.label_size(&n, item, avail.x - lh - INNER_GAP);
+                let l = self.label_size(i, &n, item, avail.x - lh - INNER_GAP);
                 Vec2::new(lh + INNER_GAP + l.x, l.y.max(lh))
             }
             NodeKind::Slider { .. } => {
                 let lh = self.line_height(&n);
-                let l = self.label_size(&n, item, avail.x);
+                let l = self.label_size(i, &n, item, avail.x);
                 let gap = if l.x > 0.0 { INNER_GAP } else { 0.0 };
                 Vec2::new(l.x + gap + TRACK_MIN, l.y.max(lh))
             }
             NodeKind::Image { src, .. } => Vec2::new(src.0.max(1) as f32, src.1.max(1) as f32),
             NodeKind::Model3d { .. } => Vec2::new(48.0, 48.0),
-            NodeKind::Stack { dir, gap, .. } | NodeKind::Scroll { dir, gap } => {
-                let (mut main, mut cross, mut k) = (0.0f32, 0.0f32, 0);
+            NodeKind::Stack {
+                dir,
+                gap,
+                wrap: true,
+                ..
+            } => {
+                // Lines as wide as the room allows; the widest line and
+                // every line's height.
+                let (room, _) = axis(avail, dir);
+                let (mut widest, mut total) = (0.0f32, 0.0f32);
+                let (mut line, mut line_x, mut lines) = (0.0f32, 0.0f32, 0u32);
+                let g = gap as f32;
                 for c in self.kids(i, item) {
-                    let s = self.outer(c, item, avail, depth + 1);
-                    let (m, x) = axis(s, dir);
-                    if axis_size(&self.screen.node(c), dir) != Size::Fill {
-                        main += m;
+                    let (m, x) = axis(self.outer(c, item, avail, depth + 1), dir);
+                    if line > 0.0 && line + g + m > room + 0.01 {
+                        widest = widest.max(line);
+                        total += line_x;
+                        lines += 1;
+                        line = 0.0;
+                        line_x = 0.0;
                     }
-                    cross = cross.max(x);
+                    line += if line > 0.0 { g + m } else { m };
+                    line_x = line_x.max(x);
+                }
+                if line > 0.0 || line_x > 0.0 {
+                    widest = widest.max(line);
+                    total += line_x;
+                    lines += 1;
+                }
+                let cross = total + g * lines.saturating_sub(1) as f32;
+                from_axis(widest, cross, dir)
+            }
+            NodeKind::Stack { dir, gap, .. } | NodeKind::Scroll { dir, gap } => {
+                // The fixed children first; a Fill child is measured in its
+                // share of what they leave, as `stack` will place it (a
+                // wrapped text measured across the whole room would come
+                // out a line short).
+                let (mut main, mut cross, mut k, mut fills) = (0.0f32, 0.0f32, 0, 0u32);
+                for c in self.kids(i, item) {
+                    if axis_size(&self.screen.node_at(c), dir) == Size::Fill {
+                        fills += 1;
+                    } else {
+                        let (m, x) = axis(self.outer(c, item, avail, depth + 1), dir);
+                        main += m;
+                        cross = cross.max(x);
+                    }
                     k += 1;
                 }
                 if k > 1 {
                     main += gap as f32 * (k - 1) as f32;
+                }
+                if fills > 0 {
+                    let (room, across) = axis(avail, dir);
+                    let share = ((room - main) / fills as f32).max(0.0);
+                    for c in self.kids(i, item) {
+                        if axis_size(&self.screen.node_at(c), dir) == Size::Fill {
+                            let s = self.outer(c, item, from_axis(share, across, dir), depth + 1);
+                            cross = cross.max(axis(s, dir).1);
+                        }
+                    }
                 }
                 from_axis(main, cross, dir)
             }
@@ -465,7 +586,7 @@ impl<M: TextMeasure + ?Sized, const N: usize> Solver<'_, '_, '_, M, N> {
         // Anything else lays its children over each other.
         let mut all = own;
         for c in self.kids(i, item) {
-            let cn = self.screen.node(c);
+            let cn = self.screen.node_at(c);
             let s = self.outer(c, item, avail, depth + 1);
             let (ax, ay) = cn.anchor.axes();
             if ax != AxisAnchor::Stretch {
@@ -524,17 +645,25 @@ impl<M: TextMeasure + ?Sized, const N: usize> Solver<'_, '_, '_, M, N> {
         let Some(slot) = self.alloc(i, item, parent, on) else {
             return;
         };
-        let n = self.screen.node(i);
+        let n = self.screen.node_at(i);
         let mut f = 0u8;
-        if clip.is_some_and(|c| !inside(&c, &rect)) {
-            f |= flags::CLIPPED;
+        // A node a scroll box cuts is not drawn, nor what it holds: a row
+        // shows whole or not at all. A list (or a nested scroll box)
+        // without a fill is only the rows' frame, longer than the box by
+        // design: its rows decide one by one (issue #95).
+        let frame =
+            matches!(n.kind, NodeKind::Scroll { .. } | NodeKind::List { .. }) && n.color.is_none();
+        if let Some(c) = clip
+            && !inside(&c, &rect)
+        {
+            // Too tall (or wide) to ever fit: show what of it fits, child
+            // by child; else it waits, whole, to be scrolled in.
+            let never = frame || rect.size.y > c.size.y + 0.01 || rect.size.x > c.size.x + 0.01;
+            f |= if never { flags::CUT } else { flags::CLIPPED };
         }
         if n.kind.is_focusable() {
             let enabled = n.enabled_if.is_empty()
-                || self
-                    .ui
-                    .values
-                    .get(n.enabled_if, item)
+                || lookup(&self.ui.values, self.env.data, n.enabled_if, item)
                     .is_some_and(|v| v.truthy());
             f |= if enabled {
                 flags::FOCUSABLE
@@ -544,7 +673,7 @@ impl<M: TextMeasure + ?Sized, const N: usize> Solver<'_, '_, '_, M, N> {
         }
         let content = super::layout::inset(rect, n.padding);
         if n.kind.has_text() {
-            f |= self.text_fit(&n, item, content);
+            f |= self.text_fit(i, &n, item, content);
             if f & flags::OVERFLOW != 0 {
                 self.ui.stats.overflow = self.ui.stats.overflow.saturating_add(1);
             }
@@ -554,7 +683,7 @@ impl<M: TextMeasure + ?Sized, const N: usize> Solver<'_, '_, '_, M, N> {
         if let NodeKind::Slider { .. } = n.kind
             && let Some(k) = self.ui.tracks.iter().position(|t| t.0 == NONE)
         {
-            let l = self.label_size(&n, item, content.size.x);
+            let l = self.label_size(i, &n, item, content.size.x);
             let gap = if l.x > 0.0 { INNER_GAP } else { 0.0 };
             let x = content.pos.x + l.x + gap;
             let w = (content.size.x - l.x - gap).max(TRACK_MIN.min(content.size.x));
@@ -568,10 +697,17 @@ impl<M: TextMeasure + ?Sized, const N: usize> Solver<'_, '_, '_, M, N> {
                 gap,
                 align,
                 justify,
+                wrap,
             } => {
-                self.stack(
-                    i, item, slot, content, on, depth, clip, dir, gap, align, justify,
-                );
+                if wrap {
+                    self.flow(
+                        i, item, slot, content, on, depth, clip, dir, gap, align, justify,
+                    );
+                } else {
+                    self.stack(
+                        i, item, slot, content, on, depth, clip, dir, gap, align, justify,
+                    );
+                }
             }
             NodeKind::Scroll { dir, gap } => {
                 let at = self.scroll_slot(i as u16, dir == Dir::Vertical);
@@ -632,7 +768,7 @@ impl<M: TextMeasure + ?Sized, const N: usize> Solver<'_, '_, '_, M, N> {
             _ => {
                 let screen = self.screen;
                 for c in screen.children(i) {
-                    let cn = self.screen.node(c);
+                    let cn = self.screen.node_at(c);
                     if !self.visible(&cn, item) {
                         continue;
                     }
@@ -656,7 +792,7 @@ impl<M: TextMeasure + ?Sized, const N: usize> Solver<'_, '_, '_, M, N> {
 
     /// A child's rect inside `room` by its anchor, offset and size.
     fn anchored(&self, c: usize, item: u16, room: Rect, depth: usize) -> Rect {
-        let n = self.screen.node(c);
+        let n = self.screen.node_at(c);
         let (ax, ay) = n.anchor.axes();
         let size = self.outer(c, item, room.size, depth + 1);
         let place = |a: AxisAnchor, start: f32, len: f32, size: f32, off: i16| match a {
@@ -689,7 +825,7 @@ impl<M: TextMeasure + ?Sized, const N: usize> Solver<'_, '_, '_, M, N> {
         let gap = gap as f32;
         let (mut fixed, mut fills, mut k) = (0.0f32, 0u32, 0u32);
         for c in self.kids(i, item) {
-            if axis_size(&self.screen.node(c), dir) == Size::Fill {
+            if axis_size(&self.screen.node_at(c), dir) == Size::Fill {
                 fills += 1;
             } else {
                 fixed += axis(self.outer(c, item, content.size, depth + 1), dir).0;
@@ -719,13 +855,20 @@ impl<M: TextMeasure + ?Sized, const N: usize> Solver<'_, '_, '_, M, N> {
         let start = pos;
         let screen = self.screen;
         for c in screen.children(i) {
-            let cn = self.screen.node(c);
+            let cn = self.screen.node_at(c);
             if !self.visible(&cn, item) {
                 continue;
             }
-            let s = self.outer(c, item, content.size, depth + 1);
+            // A Fill child is sized in its share (as `content` measured it).
+            let fill = axis_size(&cn, dir) == Size::Fill;
+            let room = if fill {
+                from_axis(fill_each, cross_len, dir)
+            } else {
+                content.size
+            };
+            let s = self.outer(c, item, room, depth + 1);
             let (mut m, mut x) = axis(s, dir);
-            if axis_size(&cn, dir) == Size::Fill {
+            if fill {
                 m = fill_each;
             }
             let stretch = align == Align::Stretch || cross_size(&cn, dir) == Size::Fill;
@@ -751,6 +894,89 @@ impl<M: TextMeasure + ?Sized, const N: usize> Solver<'_, '_, '_, M, N> {
         (pos - start - if k > 0 { between } else { 0.0 }).max(0.0)
     }
 
+    /// A wrapping stack: children fill a line until the next one doesn't
+    /// fit, then a new line starts `gap` further along the cross axis. Each
+    /// line is justified on its own; children align within their line.
+    #[allow(clippy::too_many_arguments)]
+    fn flow(
+        &mut self,
+        i: usize,
+        item: u16,
+        slot: u16,
+        content: Rect,
+        on: Screen,
+        depth: usize,
+        clip: Option<Rect>,
+        dir: Dir,
+        gap: i16,
+        align: Align,
+        justify: Justify,
+    ) {
+        let g = gap as f32;
+        let (room, _) = axis(content.size, dir);
+        let (main_pos, cross_pos) = axis(content.pos, dir);
+        let mut cross_at = cross_pos;
+        let screen = self.screen;
+        let kids: [u16; MAX_FLOW] = {
+            let mut a = [NONE; MAX_FLOW];
+            for (k, c) in self.kids(i, item).take(MAX_FLOW).enumerate() {
+                a[k] = c as u16;
+            }
+            a
+        };
+        let count = kids.iter().take_while(|&&c| c != NONE).count();
+        let mut start = 0;
+        while start < count {
+            // The line: as many children as fit (at least one).
+            let (mut used, mut tall, mut end) = (0.0f32, 0.0f32, start);
+            while end < count {
+                let s = self.outer(kids[end] as usize, item, content.size, depth + 1);
+                let (m, x) = axis(s, dir);
+                let add = if end > start { g + m } else { m };
+                if end > start && used + add > room + 0.01 {
+                    break;
+                }
+                used += add;
+                tall = tall.max(x);
+                end += 1;
+            }
+            let free = (room - used).max(0.0);
+            let n = (end - start) as f32;
+            let (mut pos, between) = match justify {
+                Justify::Start => (main_pos, g),
+                Justify::Center => (main_pos + free * 0.5, g),
+                Justify::End => (main_pos + free, g),
+                Justify::SpaceBetween if n > 1.0 => (main_pos, g + free / (n - 1.0)),
+                Justify::SpaceBetween => (main_pos, g),
+            };
+            for &c in &kids[start..end] {
+                let c = c as usize;
+                let cn = screen.node_at(c);
+                let (m, mut x) = axis(self.outer(c, item, content.size, depth + 1), dir);
+                let stretch = align == Align::Stretch || cross_size(&cn, dir) == Size::Fill;
+                if stretch {
+                    x = tall;
+                }
+                let xp = match align {
+                    _ if stretch => cross_at,
+                    Align::Start | Align::Stretch => cross_at,
+                    Align::Center => cross_at + (tall - x) * 0.5,
+                    Align::End => cross_at + tall - x,
+                };
+                let off = Vec2::new(cn.offset.0 as f32, cn.offset.1 as f32);
+                let r = match dir {
+                    Dir::Horizontal => Rect::new(pos + off.x, xp + off.y, m, x),
+                    Dir::Vertical => Rect::new(xp + off.x, pos + off.y, x, m),
+                };
+                let c_on = self.screen_of(&cn, on);
+                self.place(c, item, slot, r, c_on, depth + 1, clip);
+                pos += m + between;
+            }
+            cross_at += tall + g;
+            start = end;
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn grid(
         &mut self,
@@ -771,14 +997,14 @@ impl<M: TextMeasure + ?Sized, const N: usize> Solver<'_, '_, '_, M, N> {
         let mut row = [0u16; 32];
         let mut y = content.pos.y;
         let screen = self.screen;
-        let end = screen.node(i).end as usize;
+        let end = screen.node_at(i).end as usize;
         let mut next = i + 1;
         loop {
             let mut k = 0;
             while k < cols && next < end {
                 let c = next;
-                next = (screen.node(c).end as usize).max(c + 1);
-                if self.visible(&screen.node(c), item) {
+                next = (screen.node_at(c).end as usize).max(c + 1);
+                if self.visible(&screen.node_at(c), item) {
                     row[k] = c as u16;
                     k += 1;
                 }
@@ -792,7 +1018,7 @@ impl<M: TextMeasure + ?Sized, const N: usize> Solver<'_, '_, '_, M, N> {
                 .fold(0.0f32, f32::max);
             for (col, &c) in row[..k].iter().enumerate() {
                 let c = c as usize;
-                let cn = screen.node(c);
+                let cn = screen.node_at(c);
                 let mut s = self.outer(c, item, cell, depth + 1);
                 if cn.size.0 == Size::Fill {
                     s.x = cell_w;
@@ -839,13 +1065,17 @@ impl<M: TextMeasure + ?Sized, const N: usize> Solver<'_, '_, '_, M, N> {
     }
 
     /// Overflow flags of a text-bearing node in `content`.
-    fn text_fit(&self, n: &UiNode<'_>, item: u16, content: Rect) -> u8 {
+    fn text_fit(&self, i: usize, n: &UiNode<'_>, item: u16, content: Rect) -> u8 {
+        // No label at all (a row's backdrop button): nothing to overflow.
+        if n.text.is_empty() && n.key.is_empty() && n.bind.is_empty() {
+            return 0;
+        }
         let room = match n.kind {
             NodeKind::Toggle => content.size.x - self.line_height(n) - INNER_GAP,
             NodeKind::Slider { .. } => content.size.x - TRACK_MIN - INNER_GAP,
             _ => content.size.x,
         };
-        let need = self.label_size(n, item, room.max(0.0));
+        let need = self.label_size(i, n, item, room.max(0.0));
         let wide = need.x > room + 0.5;
         let tall = need.y > content.size.y + 0.5;
         match n.overflow {

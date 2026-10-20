@@ -532,6 +532,7 @@ impl WebHost {
             capturing: None,
         });
         self.platform.pad_name = self.input.gamepad_name();
+        self.platform.pad_family = self.input.gamepad_family();
         // What the game sees, for the harness (and anyone debugging input
         // in devtools: `__trino.info.input`).
         let held: Vec<String> = trino_core::Button::ALL

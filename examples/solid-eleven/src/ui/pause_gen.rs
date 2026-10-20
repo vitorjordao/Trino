@@ -38,7 +38,7 @@ pub static NODES: [UiNode<'static>; 8] = [
     },
     // 3: Stack
     UiNode {
-        kind: NodeKind::Stack { dir: Dir::Vertical, gap: 6, align: Align::Center, justify: Justify::Start },
+        kind: NodeKind::Stack { dir: Dir::Vertical, gap: 6, align: Align::Center, justify: Justify::Start, wrap: false },
         parent: 2,
         end: 8,
         ..UiNode::DEFAULT
@@ -100,7 +100,7 @@ pub static NODES: [UiNode<'static>; 8] = [
 pub static SCREEN: UiScreen<'static> = UiScreen {
     name: "se_pause",
     reference: (320, 240),
-    scaling: Scaling::Integer,
+    scaling: Scaling::Snap,
     wrap: false,
     focus: 5,
     on_back: "resume",

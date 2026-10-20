@@ -71,22 +71,19 @@ shipping a 3D game first**, then by cost:
 - **Accessibility follow-ups (#60, ADR 0027)** (S–M each).
   - The PC/Web correction filter (daltonization) for content without semantic palettes:
     #64's post stack (the simulation view is review-only).
-  - Text scale for text a game draws itself (`draw_text` HUDs: castle64's counters,
-    Solid Eleven's hand-drawn menus and match HUD); the UI system (Solid Eleven's
-    pause menu) and the captions scale today. Measured on Solid Eleven's 320×240
-    menus: 57 % of the texts have no room in their box for even 125 %, 11 % for
-    200 %, so growing them in place would mix sizes on one screen; the fix is those
-    menus as UI-system screens (the #58 follow-up below), where Fit boxes grow.
+  - ~~Text scale for text a game draws itself (`draw_text` HUDs: castle64's counters,
+    Solid Eleven's hand-drawn menus and match HUD)~~: **done** (#95, #86 item 8): all 18
+    Solid Eleven menus and the 3DS touch screen are now UI-system screens (`examples/solid-eleven/ui/*.ui.ron`),
+    and both Solid Eleven's match HUD and castle64's HUD counters scale up to 200 % text.
   - The Inspector's palette slots by semantic name (`ModelParams::palette` in authored
     content is P2 #13); the Accessibility tab edits the palettes today.
-  - Plan & Party's status colors and the rest of Solid Eleven's menus on semantic
-    palettes and screens; speaker names and colors for dialogue captions; caption fonts
-    per language with #59.
+  - Plan & Party's status colors and Solid Eleven's menus on semantic palettes; speaker
+    names and colors for dialogue captions; caption fonts per language with #59.
   - A ready-made Accessibility page in the core (like `GraphicsOptions`) for games that
     don't use the starter screen.
 - **UI system follow-ups (#58, ADR 0024)** (S–M each).
-  - The rest of Solid Eleven's menus and Plan & Party's as screens (the pause menu is the
-    first); each one moved deletes hand-placed coordinates and hit boxes.
+  - ~~The rest of Solid Eleven's menus as screens~~: **done** (#95, #86 item 8). Plan &
+    Party's menus remain in its own repository.
   - Text entry (a name, a save slot): an on-screen keyboard screen for the consoles.
   - Transitions and animated focus (a slide, a fade) — today a screen changes in one frame.
   - ~~Localization beyond plain strings (#59)~~: **done** (ADR 0026). ~~Text scale with
@@ -342,7 +339,7 @@ shadow command) and 5 (baked static shadows) were evaluated and left as follow-u
 | Focus by the D-pad, the sticks and the C buttons with overrides and wrap; A/B, Enter/Escape; mouse hover and click; touch taps; toggles, sliders, lists, scroll; `Ui::unreachable` | the same file's input tests; the `ui layout` self-test step (pad, A, a tap on the touch screen) |
 | `ui/*.ui.ron` (unknown fields are errors) → `TUIL` blobs `ui/<name>` and `assets/i18n/*.ron` → `TSTR` blobs on every target; `ScreenBlob`/`StringsBlob` follow live edits; static Rust export | `crates/scene/tests/ui.rs` (12 tests), `crates/asset-pipeline/tests/ui_bake.rs` (2 tests), `baked_blobs_are_parsed_once_and_again_when_the_platform_swaps_them` |
 | `cargo xtask ui check\|shot\|export\|list --json`, one fixture per problem | `xtask/tests/ui_cli.rs` (6 tests), `xtask/tests/ui_fixtures/` |
-| `Caps::max_ui_nodes`/`max_ui_draws` (N64 64/384, 3DS 128/2048, PC and Web 512/16384), strict mode | `crates/platform-pc/tests/ui.rs` (3 tests), the audit's budget errors |
+| `Caps::max_ui_nodes`/`max_ui_draws` (N64 128/384 since #95, 3DS 128/2048, PC and Web 512/16384), strict mode | `crates/platform-pc/tests/ui.rs` (3 tests), the audit's budget errors |
 | Web safe areas (CSS `env(safe-area-inset-*)` past the letterbox); the PC's `DisplaySettings::ui_scale` as the interface scale | `window_insets_become_picture_insets_past_the_letterbox`, `the_display_ui_scale_is_the_interface_scale` |
 | Starter `title`, `pause`, `options` and `controls` screens in every new project, the template game's menus (music and effects volumes, the Graphics page, key rebinding) | `ui_goldens` (N64, 3DS and PC goldens; 1080p, 4K, 21:9), `standalone_project_builds_tests_and_runs`, `scaffolds_blank_and_demo_projects` |
 | Editor: the UI tab (targets, hierarchy, inspector, focus order, languages, overflow, two-way file sync) | see TESTING.md › Editor |

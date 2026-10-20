@@ -1,0 +1,274 @@
+// Solid Eleven's substitutions (issue #95): the eleven on the pitch (number
+// and position, name, a yellow card and stamina drawn into `meta`), the
+// bench (with overall), and the substitutions left. The game keeps the
+// cursor (`cur.sub_pane`, `sub_pitch`, `sub_bench`) and the player picked to
+// go off (`sub_selected_pitch`, highlighted under his row). At 150 % text
+// and up only the pane with the cursor shows, full width (`_big` ids).
+//   cargo xtask ui export examples/solid-eleven/ui/substitutions.ui.ron examples/solid-eleven/src/ui/substitutions_gen.rs
+(
+    version: 1,
+    name: "se_substitutions",
+    scaling: Snap,
+    on_back: "back",
+    theme: (
+        font: "fonts/se_ui",
+        text: Some((236, 240, 255, 255)),
+        dim: Some((150, 160, 196, 255)),
+        panel: Some((16, 20, 46, 230)),
+        button: Some((16, 20, 46, 230)),
+        button_text: Some((236, 240, 255, 255)),
+        focus: Some((30, 60, 130, 235)),
+        focus_text: Some((236, 240, 255, 255)),
+        accent: Some((40, 210, 255, 255)),
+        pressed: Some((50, 110, 240, 255)),
+    ),
+    preview: {
+    "small": Bool(true),
+    "pitch_n": Int(11),
+    "p_num": Text("10 MEI"),
+    "p_name": Text("RODRIGUES"),
+    "bench_n": Int(5),
+    "b_num": Text("18 GOL"),
+    "b_name": Text("WILLIAMSON"),
+    "b_ovr": Int(74),
+    "left": Text("SUBSTITUIÇÕES: 3/3"),
+    "subs_ok": Bool(true),
+    "btn.a": Text("ENTER"),
+    "btn.b": Text("ESC"),
+    },
+    root: (
+        children: [
+            (kind: Rect(), anchor: Fill, bleed: true, color: Some((8, 10, 24, 235))),
+            (
+                kind: Stack(gap: 4, align: Stretch),
+                anchor: StretchCenter,
+                size: (Fill, Fill),
+                max: (320, 0),
+                children: [
+                    (
+                        kind: Stack(dir: Horizontal, gap: 4, align: Center, justify: SpaceBetween, wrap: true),
+                        id: "header_row",
+                        size: (Fill, Fit),
+                        min: (200, 22),
+                        padding: (0, 3, 8, 3),
+                        children: [
+                            (
+                                kind: Stack(dir: Horizontal, gap: 4, align: Center),
+                                id: "header",
+                                children: [
+                                    (kind: Button, id: "back", text: "<", on_click: "back", min: (20, 16), color: Some((40, 210, 255, 0)), padding: (4, 1, 4, 1)),
+                                    (kind: Text, key: "pause.substitute", text: "SUBSTITUTE"),
+                                ],
+                            ),
+                            (
+                                kind: Stack(dir: Horizontal, gap: 4, align: Center),
+                                id: "header_side",
+                                children: [
+                                    (kind: Text, bind: "left", text: "{}", color: Some((40, 210, 255, 255)), visible_if: "subs_ok"),
+                                    (kind: Text, bind: "left", text: "{}", color: Some((230, 50, 70, 255)), visible_if: "subs_out"),
+                                ],
+                            ),
+                        ],
+                    ),
+                    (
+                        kind: Stack(dir: Horizontal, gap: 8),
+                        size: (Fill, Fill),
+                        visible_if: "small",
+                        padding: (4, 0, 4, 0),
+                        children: [
+                            (
+                                kind: Stack(gap: 1, align: Stretch),
+                                size: (Fill, Fill),
+                                children: [
+                                    (kind: Text, key: "on_pitch", text: "ON PITCH", color: Some((255, 214, 40, 255))),
+                                    (
+                                        kind: Scroll(gap: 0),
+                                        size: (Fill, Fill),
+                                        children: [
+                                            (
+                                                kind: List(gap: 1, max: 11),
+                                                bind: "pitch_n",
+                                                size: (Fill, Fit),
+                                                children: [
+                                                    (
+                                                        kind: Overlay,
+                                                        size: (Fill, Fit),
+                                                        children: [
+                                                            (kind: Button, id: "pitch", on_click: "pitch", anchor: Fill, size: (Fill, Fill), color: Some((0, 0, 0, 0))),
+                                                            (
+                                                                kind: Stack(dir: Horizontal, gap: 4, align: Center),
+                                                                size: (Fill, Fit),
+                                                                min: (0, 14),
+                                                                padding: (3, 1, 3, 1),
+                                                                children: [
+                                                                    (kind: Text, bind: "p_num", text: "{}", color: Some((40, 210, 255, 255)), min: (34, 0)),
+                                                                    (kind: Text, bind: "p_name", text: "{}", size: (Fill, Fit), overflow: Ellipsis),
+                                                                    (kind: Overlay, id: "meta", min: (30, 7)),
+                                                                ],
+                                                            ),
+                                                        ],
+                                                    ),
+                                                ],
+                                            ),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                            (
+                                kind: Stack(gap: 1, align: Stretch),
+                                size: (Fill, Fill),
+                                children: [
+                                    (kind: Text, key: "bench", text: "BENCH", color: Some((255, 214, 40, 255))),
+                                    (kind: Text, key: "no_subs_left", text: "NO SUBSTITUTES", color: Some((150, 160, 196, 255)), visible_if: "no_bench", align: Center),
+                                    (
+                                        kind: Scroll(gap: 0),
+                                        size: (Fill, Fill),
+                                        children: [
+                                            (
+                                                kind: List(gap: 1, max: 7),
+                                                bind: "bench_n",
+                                                size: (Fill, Fit),
+                                                children: [
+                                                    (
+                                                        kind: Overlay,
+                                                        size: (Fill, Fit),
+                                                        children: [
+                                                            (kind: Button, id: "bench", on_click: "bench", anchor: Fill, size: (Fill, Fill), color: Some((0, 0, 0, 0))),
+                                                            (
+                                                                kind: Stack(dir: Horizontal, gap: 4, align: Center),
+                                                                size: (Fill, Fit),
+                                                                min: (0, 15),
+                                                                padding: (3, 1, 3, 1),
+                                                                children: [
+                                                                    (kind: Text, bind: "b_num", text: "{}", color: Some((40, 210, 255, 255)), min: (34, 0)),
+                                                                    (kind: Text, bind: "b_name", text: "{}", size: (Fill, Fit), overflow: Ellipsis),
+                                                                    (kind: Text, bind: "b_ovr", text: "{}", color: Some((255, 214, 40, 255))),
+                                                                ],
+                                                            ),
+                                                        ],
+                                                    ),
+                                                ],
+                                            ),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                        ],
+                    ),
+                    (
+                        kind: Overlay,
+                        size: (Fill, Fill),
+                        visible_if: "big",
+                        padding: (6, 0, 6, 0),
+                        children: [
+                            (
+                                kind: Stack(gap: 1, align: Stretch),
+                                size: (Fill, Fill),
+                                visible_if: "pane_pitch",
+                                children: [
+                                    (kind: Text, key: "on_pitch", text: "ON PITCH", color: Some((255, 214, 40, 255))),
+                                    (
+                                        kind: Scroll(gap: 0),
+                                        size: (Fill, Fill),
+                                        children: [
+                                            (
+                                                kind: List(gap: 1, max: 11),
+                                                bind: "pitch_n",
+                                                size: (Fill, Fit),
+                                                children: [
+                                                    (
+                                                        kind: Overlay,
+                                                        size: (Fill, Fit),
+                                                        children: [
+                                                            (kind: Button, id: "pitch_big", on_click: "pitch", anchor: Fill, size: (Fill, Fill), color: Some((0, 0, 0, 0))),
+                                                            (
+                                                                kind: Stack(dir: Horizontal, gap: 4, align: Center),
+                                                                size: (Fill, Fit),
+                                                                min: (0, 14),
+                                                                padding: (3, 1, 3, 1),
+                                                                children: [
+                                                                    (kind: Text, bind: "p_num", text: "{}", color: Some((40, 210, 255, 255)), min: (34, 0)),
+                                                                    (kind: Text, bind: "p_name", text: "{}", size: (Fill, Fit), overflow: Ellipsis),
+                                                                    (kind: Overlay, id: "meta_big", min: (30, 7)),
+                                                                ],
+                                                            ),
+                                                        ],
+                                                    ),
+                                                ],
+                                            ),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                            (
+                                kind: Stack(gap: 1, align: Stretch),
+                                size: (Fill, Fill),
+                                visible_if: "pane_bench",
+                                children: [
+                                    (kind: Text, key: "bench", text: "BENCH", color: Some((255, 214, 40, 255))),
+                                    (kind: Text, key: "no_subs_left", text: "NO SUBSTITUTES", color: Some((150, 160, 196, 255)), visible_if: "no_bench", align: Center),
+                                    (
+                                        kind: Scroll(gap: 0),
+                                        size: (Fill, Fill),
+                                        children: [
+                                            (
+                                                kind: List(gap: 1, max: 7),
+                                                bind: "bench_n",
+                                                size: (Fill, Fit),
+                                                children: [
+                                                    (
+                                                        kind: Overlay,
+                                                        size: (Fill, Fit),
+                                                        children: [
+                                                            (kind: Button, id: "bench_big", on_click: "bench", anchor: Fill, size: (Fill, Fill), color: Some((0, 0, 0, 0))),
+                                                            (
+                                                                kind: Stack(dir: Horizontal, gap: 4, align: Center),
+                                                                size: (Fill, Fit),
+                                                                min: (0, 15),
+                                                                padding: (3, 1, 3, 1),
+                                                                children: [
+                                                                    (kind: Text, bind: "b_num", text: "{}", color: Some((40, 210, 255, 255)), min: (34, 0)),
+                                                                    (kind: Text, bind: "b_name", text: "{}", size: (Fill, Fit), overflow: Ellipsis),
+                                                                    (kind: Text, bind: "b_ovr", text: "{}", color: Some((255, 214, 40, 255))),
+                                                                ],
+                                                            ),
+                                                        ],
+                                                    ),
+                                                ],
+                                            ),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                        ],
+                    ),
+                    (
+                        kind: Stack(dir: Horizontal, gap: 3, wrap: true),
+                        size: (Fill, Fit),
+                        padding: (6, 0, 0, 3),
+                        children: [
+                            (
+                                kind: Stack(dir: Horizontal, gap: 3, align: Center),
+                                id: "hint_a",
+                                padding: (2, 2, 5, 2),
+                                children: [
+                                    (kind: Rect(), color: Some((70, 210, 90, 255)), padding: (3, 0, 3, 0), min: (11, 0), children: [(kind: Text, bind: "btn.a", text: "{}", color: Some((18, 22, 52, 255)), anchor: Center)]),
+                                    (kind: Text, bind: "a_label", text: "{}"),
+                                ],
+                            ),
+                            (
+                                kind: Stack(dir: Horizontal, gap: 3, align: Center),
+                                id: "hint_b",
+                                padding: (2, 2, 5, 2),
+                                children: [
+                                    (kind: Rect(), color: Some((230, 50, 70, 255)), padding: (3, 0, 3, 0), min: (11, 0), children: [(kind: Text, bind: "btn.b", text: "{}", color: Some((18, 22, 52, 255)), anchor: Center)]),
+                                    (kind: Text, bind: "b_label", text: "{}"),
+                                ],
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+        ],
+    ),
+)

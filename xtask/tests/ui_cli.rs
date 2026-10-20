@@ -88,8 +88,8 @@ fn ui_check_accepts_the_shipped_screens() {
         .iter()
         .find(|t| t["platform"] == "n64")
         .unwrap();
-    assert_eq!(n64["max_nodes"], 64);
-    assert!(n64["nodes"].as_u64().unwrap() <= 64);
+    assert_eq!(n64["max_nodes"], 128);
+    assert!(n64["nodes"].as_u64().unwrap() <= 128);
     // Every new project's starter screens, in its own language and fonts
     // (the template folder holds `ui/` and `assets/manifest.toml`), and
     // Solid Eleven's pause menu against Solid Eleven's assets and its two
@@ -138,7 +138,7 @@ fn ui_check_reports_each_fixture_with_its_platform_and_level() {
             "budget",
             "n64",
             "error",
-            "over the target's 64 (Caps::max_ui_nodes)",
+            "over the target's 128 (Caps::max_ui_nodes)",
         ),
         ("overflow", "n64", "warning", "text overflows its 12×10 box"),
         ("broken", "", "error", "duplicate id \"ok\""),
@@ -194,7 +194,7 @@ fn ui_check_reports_each_fixture_with_its_platform_and_level() {
     let o = xtask(&["ui", "check", &fixture("budget"), "--platform", "pc"]);
     assert!(o.status.success(), "{}", text(&o.stdout));
     assert!(
-        text(&o.stdout).contains("102/512 nodes"),
+        text(&o.stdout).contains("202/512 nodes"),
         "{}",
         text(&o.stdout)
     );
@@ -312,13 +312,38 @@ fn ui_export_writes_static_code_and_the_committed_exports_are_fresh() {
     let fresh = std::fs::read_to_string(&out).unwrap();
     assert_eq!(r["bytes"], fresh.len());
     assert!(fresh.contains("pub static SCREEN"), "{fresh}");
-    let committed =
-        std::fs::read_to_string(root().join("examples/solid-eleven/src/ui/pause_gen.rs")).unwrap();
-    assert!(
-        committed == fresh,
-        "examples/solid-eleven/src/ui/pause_gen.rs is stale: run `cargo xtask ui export \
-         examples/solid-eleven/ui/pause.ui.ron examples/solid-eleven/src/ui/pause_gen.rs`"
-    );
+    // Every Solid Eleven screen (issue #95) ships as `src/ui/<name>_gen.rs`:
+    // none may be stale.
+    let mut screens = 0;
+    for entry in std::fs::read_dir(root().join("examples/solid-eleven/ui")).unwrap() {
+        let path = entry.unwrap().path();
+        let Some(name) = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .and_then(|n| n.strip_suffix(".ui.ron"))
+        else {
+            continue;
+        };
+        let out = tmp.path().join(format!("{name}_gen.rs"));
+        let o = xtask(&[
+            "ui",
+            "export",
+            path.to_str().unwrap(),
+            out.to_str().unwrap(),
+        ]);
+        assert!(o.status.success(), "{name}: {}", text(&o.stderr));
+        let fresh = std::fs::read_to_string(&out).unwrap();
+        let gen_path = format!("examples/solid-eleven/src/ui/{name}_gen.rs");
+        let committed = std::fs::read_to_string(root().join(&gen_path))
+            .unwrap_or_else(|_| panic!("{gen_path} is missing"));
+        assert!(
+            committed == fresh,
+            "{gen_path} is stale: run `cargo xtask ui export \
+             examples/solid-eleven/ui/{name}.ui.ron {gen_path}`"
+        );
+        screens += 1;
+    }
+    assert!(screens >= 3, "{screens} Solid Eleven screens");
     // A broken screen exports nothing.
     let bad = tmp.path().join("bad.rs");
     let o = xtask(&["ui", "export", &fixture("broken"), bad.to_str().unwrap()]);

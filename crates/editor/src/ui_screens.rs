@@ -19,7 +19,7 @@ use trino_core::{Button, Color, Family, InputState, Renderer, Screen, Ui, UiEnv,
 use trino_platform_pc::{PcRenderer, SimProfile};
 use trino_scene::ui::{
     Align, Anchor, Dir, Flat, Fonts, Issue, Justify, Kind, Langs, NodeDef, ScreenDef, Size, Target,
-    apply_preview, audit, screen_name, validate,
+    apply_access_preview, apply_preview, audit, screen_name, validate,
 };
 
 use crate::project::Project;
@@ -579,6 +579,7 @@ fn starter(name: &str) -> ScreenDef {
                         gap: 6,
                         align: Align::Center,
                         justify: Justify::Start,
+                        wrap: false,
                     })
                 },
             ],
@@ -913,6 +914,7 @@ impl UiPreview {
         // preview values.
         *ui = Ui::new();
         apply_preview(ui, def);
+        apply_access_preview(ui, def, self.access);
         let idle = InputState::default();
         r.set_cvd_view(self.simulate);
         for frame in 0..2 {

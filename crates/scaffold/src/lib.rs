@@ -402,6 +402,9 @@ fn copy_demo(engine: &Path, dest: &Path, demo: Demo, names: &Names) -> Result<()
         // Replace the starter manifest with the demo's, keep the starter
         // masters next to its own.
         copy_tree(&src.join("assets"), &dest.join("assets"), &mut |_, b| b)?;
+        if src.join("ui").is_dir() {
+            copy_tree(&src.join("ui"), &dest.join("ui"), &mut |_, b| b)?;
+        }
         // The starter UI screens (`ui/`) draw with the engine's font.
         let manifest = dest.join("assets/manifest.toml");
         let text = read(&manifest)?;

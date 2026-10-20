@@ -1,0 +1,167 @@
+// Solid Eleven's league table (issue #95): position, crest, club, played,
+// won, drawn, lost, goal difference and points. At 150 % text and up
+// (`big`) a row takes two lines: the club and its points, then the record.
+// The game draws each crest into its `crest` box and the player's club's
+// highlight under its row (and the panel's fill under both); up/down
+// scroll the table.
+//   cargo xtask ui export examples/solid-eleven/ui/table.ui.ron examples/solid-eleven/src/ui/table_gen.rs
+(
+    version: 1,
+    name: "se_table",
+    scaling: Snap,
+    on_back: "back",
+    theme: (
+        font: "fonts/se_ui",
+        text: Some((236, 240, 255, 255)),
+        dim: Some((150, 160, 196, 255)),
+        panel: Some((16, 20, 46, 230)),
+        button: Some((16, 20, 46, 230)),
+        button_text: Some((236, 240, 255, 255)),
+        focus: Some((30, 70, 140, 220)),
+        focus_text: Some((236, 240, 255, 255)),
+        accent: Some((40, 210, 255, 255)),
+        pressed: Some((50, 110, 240, 255)),
+    ),
+    preview: {
+        "rows": Int(10),
+        "small": Bool(true),
+        "pos": Int(10),
+        "name": Text("VIOLET WANDERERS"),
+        "p": Int(18), "w": Int(12), "d": Int(4), "l": Int(2), "gd": Text("+21"), "pts": Int(40),
+        "record": Text("P 18  W 12  D 4  L 2  GD +21"),
+        "btn.b": Text("ESC"),
+    },
+    root: (
+        children: [
+            (kind: Rect(), anchor: Fill, bleed: true, color: Some((6, 8, 20, 160))),
+            (
+                kind: Stack(gap: 6, align: Stretch),
+                anchor: StretchCenter,
+                size: (Fill, Fill),
+                max: (320, 0),
+                children: [
+                    (
+                        kind: Stack(dir: Horizontal, gap: 4, align: Center, justify: SpaceBetween, wrap: true),
+                        id: "header_row",
+                        size: (Fill, Fit),
+                        min: (200, 22),
+                        padding: (0, 3, 8, 3),
+                        children: [
+                            (
+                                kind: Stack(dir: Horizontal, gap: 4, align: Center),
+                                id: "header",
+                                children: [
+                                    (kind: Button, id: "back", text: "<", on_click: "back", min: (20, 16), color: Some((40, 210, 255, 0)), padding: (4, 1, 4, 1)),
+                                    (kind: Text, key: "table", text: "TABLE"),
+                                ],
+                            ),
+                        ],
+                    ),
+                    (
+                        kind: Rect(border: 1, border_color: Some((40, 210, 255, 255))),
+                        id: "panel",
+                        color: Some((0, 0, 0, 0)),
+                        size: (Fill, Fill),
+                        padding: (4, 3, 4, 3),
+                        children: [
+                            (
+                                kind: Stack(gap: 3, align: Stretch),
+                                size: (Fill, Fill),
+                                children: [
+                                    (
+                                        kind: Stack(dir: Horizontal, align: Center),
+                                        size: (Fill, Fit),
+                                        visible_if: "small",
+                                        children: [
+                                            (kind: Overlay, size: (Fill, Fit)),
+                                            (kind: Text, text: "P", min: (20, 0), align: Center, color: Some((150, 160, 196, 255))),
+                                            (kind: Text, text: "W", min: (20, 0), align: Center, color: Some((150, 160, 196, 255))),
+                                            (kind: Text, text: "D", min: (20, 0), align: Center, color: Some((150, 160, 196, 255))),
+                                            (kind: Text, text: "L", min: (20, 0), align: Center, color: Some((150, 160, 196, 255))),
+                                            (kind: Text, text: "GD", min: (20, 0), align: Center, color: Some((150, 160, 196, 255))),
+                                            (kind: Text, key: "pts", text: "PTS", min: (26, 0), align: Right, color: Some((150, 160, 196, 255))),
+                                        ],
+                                    ),
+                                    (
+                                        kind: Scroll(gap: 1),
+                                        id: "list",
+                                        size: (Fill, Fill),
+                                        children: [
+                                            (
+                                                kind: List(gap: 0, max: 16),
+                                                bind: "rows",
+                                                size: (Fill, Fit),
+                                                visible_if: "small",
+                                                children: [
+                                                    (
+                                                        kind: Stack(dir: Horizontal, align: Center),
+                                                        id: "row",
+                                                        size: (Fill, Fit),
+                                                        min: (0, 14),
+                                                        children: [
+                                                            (kind: Text, bind: "pos", text: "{}", min: (16, 0), align: Center, color: Some((150, 160, 196, 255))),
+                                                            (kind: Overlay, id: "crest", min: (14, 10)),
+                                                            (kind: Text, bind: "name", text: "{}", size: (Fill, Fit), overflow: Ellipsis),
+                                                            (kind: Text, bind: "p", text: "{}", min: (20, 0), align: Center),
+                                                            (kind: Text, bind: "w", text: "{}", min: (20, 0), align: Center),
+                                                            (kind: Text, bind: "d", text: "{}", min: (20, 0), align: Center),
+                                                            (kind: Text, bind: "l", text: "{}", min: (20, 0), align: Center),
+                                                            (kind: Text, bind: "gd", text: "{}", min: (20, 0), align: Center),
+                                                            (kind: Text, bind: "pts", text: "{}", min: (26, 0), align: Right, color: Some((255, 214, 40, 255))),
+                                                        ],
+                                                    ),
+                                                ],
+                                            ),
+                                            (
+                                                kind: List(gap: 2, max: 16),
+                                                bind: "rows",
+                                                size: (Fill, Fit),
+                                                visible_if: "big",
+                                                children: [
+                                                    (
+                                                        kind: Stack(gap: 0, align: Stretch),
+                                                        id: "row_big",
+                                                        size: (Fill, Fit),
+                                                        children: [
+                                                            (
+                                                                kind: Stack(dir: Horizontal, align: Center, gap: 2),
+                                                                size: (Fill, Fit),
+                                                                children: [
+                                                                    (kind: Text, bind: "pos", text: "{}", min: (20, 0), align: Center, color: Some((150, 160, 196, 255))),
+                                                                    (kind: Overlay, id: "crest_big", min: (14, 10)),
+                                                                    (kind: Text, bind: "name", text: "{}", size: (Fill, Fit), overflow: Ellipsis),
+                                                                    (kind: Text, bind: "pts", text: "{}", align: Right, color: Some((255, 214, 40, 255))),
+                                                                ],
+                                                            ),
+                                                            (kind: Text, bind: "record", text: "{}", color: Some((150, 160, 196, 255)), padding: (36, 0, 0, 0), overflow: Wrap),
+                                                        ],
+                                                    ),
+                                                ],
+                                            ),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                        ],
+                    ),
+                    (
+                        kind: Stack(dir: Horizontal, gap: 3, wrap: true),
+                        size: (Fill, Fit),
+                        padding: (6, 0, 0, 3),
+                        children: [
+                            (
+                                kind: Stack(dir: Horizontal, gap: 3, align: Center),
+                                id: "hint_b",
+                                padding: (2, 2, 5, 2),
+                                children: [
+                                    (kind: Rect(), color: Some((230, 50, 70, 255)), padding: (3, 0, 3, 0), min: (11, 0), children: [(kind: Text, bind: "btn.b", text: "{}", color: Some((18, 22, 52, 255)), anchor: Center)]),
+                                    (kind: Text, key: "back", text: "BACK"),
+                                ],
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+        ],
+    ),
+)

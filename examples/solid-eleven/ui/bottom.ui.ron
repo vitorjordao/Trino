@@ -1,0 +1,271 @@
+// Solid Eleven's 3DS touch screen (issue #95). In a match: the radar (art),
+// the human side's formation (tap it to change), the score and clock, and
+// the eleven stamina tiles (tap one to control him); elsewhere the name and
+// "press start". Laid out at the player's text scale like every menu. The
+// game fills the screen and the tiles under it.
+//   cargo xtask ui export examples/solid-eleven/ui/bottom.ui.ron examples/solid-eleven/src/ui/bottom_gen.rs
+(
+    version: 1,
+    name: "se_bottom",
+    scaling: Snap,
+    theme: (
+        font: "fonts/se_ui",
+        text: Some((236, 240, 255, 255)),
+        dim: Some((150, 160, 196, 255)),
+        panel: Some((16, 20, 46, 230)),
+        button: Some((16, 20, 46, 230)),
+        button_text: Some((236, 240, 255, 255)),
+        focus: Some((30, 60, 130, 235)),
+        focus_text: Some((236, 240, 255, 255)),
+        accent: Some((40, 210, 255, 255)),
+        pressed: Some((50, 110, 240, 255)),
+    ),
+    preview: {"match": Bool(true), "formation": Text("4-3-3"), "score": Text("ROU 1 - 0 AZU"), "clock": Text("12:34"), "num0": Int(10)},
+    root: (
+        screen: Bottom,
+        visible_on: [N3ds],
+        children: [
+            (
+                kind: Stack(gap: 4, align: Stretch),
+                anchor: Fill,
+                padding: (4, 4, 4, 4),
+                visible_if: "match",
+                children: [
+                    (
+                        kind: Stack(dir: Horizontal, gap: 6),
+                        size: (Fill, Fit),
+                        children: [
+                            (kind: Overlay, id: "radar", min: (200, 130)),
+                            (
+                                kind: Stack(gap: 4, align: Stretch),
+                                size: (Fill, Fit),
+                                children: [
+                                    (
+                                        kind: Overlay,
+                                        size: (Fill, Fit),
+                                        children: [
+                                            (kind: Button, id: "formation", on_click: "formation", anchor: Fill, size: (Fill, Fill)),
+                                            (
+                                                kind: Stack(gap: 0, align: Center),
+                                                size: (Fill, Fit),
+                                                padding: (2, 1, 2, 2),
+                                                children: [
+                                                    (kind: Text, key: "formation", text: "FORMATION", color: Some((150, 160, 196, 255)), overflow: Wrap),
+                                                    (kind: Text, bind: "formation", text: "{}", color: Some((255, 214, 40, 255))),
+                                                ],
+                                            ),
+                                        ],
+                                    ),
+                                    (kind: Text, bind: "score", text: "{}", align: Center, overflow: Wrap),
+                                    (kind: Text, bind: "clock", text: "{}", color: Some((40, 210, 255, 255)), align: Center),
+                                ],
+                            ),
+                        ],
+                    ),
+                    (
+                        kind: Grid(cols: 6, gap: (3, 4)),
+                        size: (Fill, Fit),
+                        children: [
+                            (
+                                kind: Overlay,
+                                size: (Fill, Fit),
+                                children: [
+                                    (kind: Button, id: "tile0", on_click: "tile", anchor: Fill, size: (Fill, Fill), color: Some((0, 0, 0, 0))),
+                                    (
+                                        kind: Stack(gap: 4, align: Stretch),
+                                        size: (Fill, Fit),
+                                        min: (0, 44),
+                                        padding: (4, 3, 4, 3),
+                                        children: [
+                                            (kind: Text, bind: "num0", text: "{}", align: Center),
+                                            (kind: Overlay, id: "stamina0", size: (Fill, Px(5))),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                            (
+                                kind: Overlay,
+                                size: (Fill, Fit),
+                                children: [
+                                    (kind: Button, id: "tile1", on_click: "tile", anchor: Fill, size: (Fill, Fill), color: Some((0, 0, 0, 0))),
+                                    (
+                                        kind: Stack(gap: 4, align: Stretch),
+                                        size: (Fill, Fit),
+                                        min: (0, 44),
+                                        padding: (4, 3, 4, 3),
+                                        children: [
+                                            (kind: Text, bind: "num1", text: "{}", align: Center),
+                                            (kind: Overlay, id: "stamina1", size: (Fill, Px(5))),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                            (
+                                kind: Overlay,
+                                size: (Fill, Fit),
+                                children: [
+                                    (kind: Button, id: "tile2", on_click: "tile", anchor: Fill, size: (Fill, Fill), color: Some((0, 0, 0, 0))),
+                                    (
+                                        kind: Stack(gap: 4, align: Stretch),
+                                        size: (Fill, Fit),
+                                        min: (0, 44),
+                                        padding: (4, 3, 4, 3),
+                                        children: [
+                                            (kind: Text, bind: "num2", text: "{}", align: Center),
+                                            (kind: Overlay, id: "stamina2", size: (Fill, Px(5))),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                            (
+                                kind: Overlay,
+                                size: (Fill, Fit),
+                                children: [
+                                    (kind: Button, id: "tile3", on_click: "tile", anchor: Fill, size: (Fill, Fill), color: Some((0, 0, 0, 0))),
+                                    (
+                                        kind: Stack(gap: 4, align: Stretch),
+                                        size: (Fill, Fit),
+                                        min: (0, 44),
+                                        padding: (4, 3, 4, 3),
+                                        children: [
+                                            (kind: Text, bind: "num3", text: "{}", align: Center),
+                                            (kind: Overlay, id: "stamina3", size: (Fill, Px(5))),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                            (
+                                kind: Overlay,
+                                size: (Fill, Fit),
+                                children: [
+                                    (kind: Button, id: "tile4", on_click: "tile", anchor: Fill, size: (Fill, Fill), color: Some((0, 0, 0, 0))),
+                                    (
+                                        kind: Stack(gap: 4, align: Stretch),
+                                        size: (Fill, Fit),
+                                        min: (0, 44),
+                                        padding: (4, 3, 4, 3),
+                                        children: [
+                                            (kind: Text, bind: "num4", text: "{}", align: Center),
+                                            (kind: Overlay, id: "stamina4", size: (Fill, Px(5))),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                            (
+                                kind: Overlay,
+                                size: (Fill, Fit),
+                                children: [
+                                    (kind: Button, id: "tile5", on_click: "tile", anchor: Fill, size: (Fill, Fill), color: Some((0, 0, 0, 0))),
+                                    (
+                                        kind: Stack(gap: 4, align: Stretch),
+                                        size: (Fill, Fit),
+                                        min: (0, 44),
+                                        padding: (4, 3, 4, 3),
+                                        children: [
+                                            (kind: Text, bind: "num5", text: "{}", align: Center),
+                                            (kind: Overlay, id: "stamina5", size: (Fill, Px(5))),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                            (
+                                kind: Overlay,
+                                size: (Fill, Fit),
+                                children: [
+                                    (kind: Button, id: "tile6", on_click: "tile", anchor: Fill, size: (Fill, Fill), color: Some((0, 0, 0, 0))),
+                                    (
+                                        kind: Stack(gap: 4, align: Stretch),
+                                        size: (Fill, Fit),
+                                        min: (0, 44),
+                                        padding: (4, 3, 4, 3),
+                                        children: [
+                                            (kind: Text, bind: "num6", text: "{}", align: Center),
+                                            (kind: Overlay, id: "stamina6", size: (Fill, Px(5))),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                            (
+                                kind: Overlay,
+                                size: (Fill, Fit),
+                                children: [
+                                    (kind: Button, id: "tile7", on_click: "tile", anchor: Fill, size: (Fill, Fill), color: Some((0, 0, 0, 0))),
+                                    (
+                                        kind: Stack(gap: 4, align: Stretch),
+                                        size: (Fill, Fit),
+                                        min: (0, 44),
+                                        padding: (4, 3, 4, 3),
+                                        children: [
+                                            (kind: Text, bind: "num7", text: "{}", align: Center),
+                                            (kind: Overlay, id: "stamina7", size: (Fill, Px(5))),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                            (
+                                kind: Overlay,
+                                size: (Fill, Fit),
+                                children: [
+                                    (kind: Button, id: "tile8", on_click: "tile", anchor: Fill, size: (Fill, Fill), color: Some((0, 0, 0, 0))),
+                                    (
+                                        kind: Stack(gap: 4, align: Stretch),
+                                        size: (Fill, Fit),
+                                        min: (0, 44),
+                                        padding: (4, 3, 4, 3),
+                                        children: [
+                                            (kind: Text, bind: "num8", text: "{}", align: Center),
+                                            (kind: Overlay, id: "stamina8", size: (Fill, Px(5))),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                            (
+                                kind: Overlay,
+                                size: (Fill, Fit),
+                                children: [
+                                    (kind: Button, id: "tile9", on_click: "tile", anchor: Fill, size: (Fill, Fill), color: Some((0, 0, 0, 0))),
+                                    (
+                                        kind: Stack(gap: 4, align: Stretch),
+                                        size: (Fill, Fit),
+                                        min: (0, 44),
+                                        padding: (4, 3, 4, 3),
+                                        children: [
+                                            (kind: Text, bind: "num9", text: "{}", align: Center),
+                                            (kind: Overlay, id: "stamina9", size: (Fill, Px(5))),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                            (
+                                kind: Overlay,
+                                size: (Fill, Fit),
+                                children: [
+                                    (kind: Button, id: "tile10", on_click: "tile", anchor: Fill, size: (Fill, Fill), color: Some((0, 0, 0, 0))),
+                                    (
+                                        kind: Stack(gap: 4, align: Stretch),
+                                        size: (Fill, Fit),
+                                        min: (0, 44),
+                                        padding: (4, 3, 4, 3),
+                                        children: [
+                                            (kind: Text, bind: "num10", text: "{}", align: Center),
+                                            (kind: Overlay, id: "stamina10", size: (Fill, Px(5))),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+            (
+                kind: Stack(gap: 10, align: Center),
+                anchor: Center,
+                visible_if: "menu",
+                children: [
+                    (kind: Text, text: "SOLID ELEVEN", font: "fonts/se_big", align: Center),
+                    (kind: Text, key: "press_start", text: "PRESS START", color: Some((40, 210, 255, 255)), align: Center, overflow: Wrap),
+                ],
+            ),
+        ],
+    ),
+)

@@ -330,6 +330,21 @@ impl trino_core::ui::UiStrings for UiTr {
     fn revision(&self) -> u32 {
         self.0 as u32 + 1
     }
+
+    /// The same face baked at 11, 22 and 44 px: from ×1.5 the screens draw
+    /// the 22 px one at half the scale and from ×4 the 44 px one at a
+    /// quarter, so a 1080p window's text is crisp, not an 11 px font blown up.
+    fn sized(&self, font: trino_core::FontId, px: f32) -> (trino_core::FontId, f32) {
+        use super::{F_BIG, F_HUGE, F_UI};
+        match font {
+            // The 44 px face only at its own size or above: shrunk, its
+            // accents and overhangs reach past the boxes the layout gives.
+            f if f == F_UI && px >= 4.0 => (F_HUGE, px * 0.25),
+            f if f == F_UI && px >= 1.5 => (F_BIG, px * 0.5),
+            f if f == F_BIG && px >= 2.0 => (F_HUGE, px * 0.5),
+            f => (f, px),
+        }
+    }
 }
 
 #[cfg(test)]

@@ -708,8 +708,17 @@ fn tapping_a_hair_swatch_picks_that_color() {
     };
     for k in [3u8, 0, 4] {
         d.g.render(&mut r);
-        // The swatch's center on the 320x240 canvas (the screen here).
-        let at = Vec2::new(221.0 + k as f32 * 17.5 + 7.5, 194.0);
+        let id = (crate::game::app::EDIT_ROWS + k as usize) as u8;
+        let swatch =
+            d.g.hits
+                .iter()
+                .find(|h| h.id == id)
+                .expect("the hair swatch is a tap target")
+                .rect;
+        let at = Vec2::new(
+            swatch.pos.x + swatch.size.x * 0.5,
+            swatch.pos.y + swatch.size.y * 0.5,
+        );
         let mut down = InputState::default();
         down.pointer = Some(at);
         down.set_pointer_button(PointerButton::Primary, true);
@@ -737,9 +746,19 @@ fn tapping_back_button_in_header_navigates_back() {
     };
     d.g.render(&mut r);
 
-    // Tap on the '<' back button at the top-left (e.g. x: 10, y: 12)
+    // Tap the middle of the header's '<' (where the screen laid it out).
+    let back =
+        d.g.hits
+            .iter()
+            .find(|h| h.id == crate::ui::screens::HIT_BACK)
+            .expect("the header's back arrow is a tap target")
+            .rect;
+    assert!(back.pos.y < 40.0, "in the header: {back:?}");
     let mut tap = InputState::default();
-    tap.pointer = Some(Vec2::new(10.0, 12.0));
+    tap.pointer = Some(Vec2::new(
+        back.pos.x + back.size.x * 0.5,
+        back.pos.y + back.size.y * 0.5,
+    ));
     tap.set_pointer_button(PointerButton::Primary, true);
     d.frame(&tap);
     d.idle(1);

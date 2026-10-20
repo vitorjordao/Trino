@@ -450,6 +450,43 @@ mod n64 {
         }
     }
 
+    /// A menu's cost at the UI budget on the console's clock (issue #95):
+    /// a 126-node screen laid out (a new data revision each time) and
+    /// drawn, mean of 16. Reported as `TRINO_UI_COST:`, never gated.
+    #[inline(never)]
+    fn ui_cost(renderer: &mut N64Renderer) {
+        use castle64::selftest::{UI_COST_SCREEN, UiCostData};
+        use trino_core::{Renderer, UiEnv};
+        const RUNS: u32 = 16;
+        runtime::log("TRINO_STEP:ui cost\n");
+        let mut ui = alloc::boxed::Box::new(trino_core::Ui::<128>::new());
+        let (mut layout_us, mut draw_us) = (0u32, 0u32);
+        for k in 0..RUNS + 1 {
+            let data = UiCostData { revision: k };
+            let env = UiEnv::of(renderer).with_data(&data);
+            renderer.begin_frame(trino_core::Color::BLACK);
+            let t0 = runtime::now_us();
+            ui.prepare(renderer, &UI_COST_SCREEN, &env);
+            let t1 = runtime::now_us();
+            ui.draw(renderer, &UI_COST_SCREEN, &env);
+            let t2 = runtime::now_us();
+            renderer.end_frame();
+            // The first run warms the caches.
+            if k > 0 {
+                layout_us += t1.wrapping_sub(t0);
+                draw_us += t2.wrapping_sub(t1);
+            }
+        }
+        let s = ui.stats();
+        runtime::log(&format!(
+            "TRINO_UI_COST: nodes={} draws={} layout_us={} draw_us={}\n",
+            s.nodes,
+            s.draws,
+            layout_us / RUNS,
+            draw_us / RUNS
+        ));
+    }
+
     /// The audio's cost on the console's clock (issue #53, the audio terms
     /// of `N64_COST`): `poll` timed with nothing playing, the theme
     /// (VADPCM, 44.1 kHz) alone, with two more VADPCM loops (22.05 kHz), and
@@ -552,6 +589,7 @@ mod n64 {
         }
         audio_codecs(renderer, audio);
         audio_cost(renderer, audio);
+        ui_cost(renderer);
         runtime::log("TRINO_STEP:input\n");
         if let Err(e) = castle64::selftest::idle_input_checks(&mut N64Input) {
             runtime::log(&format!("TRINO_TEST_FAIL:{e}\n"));

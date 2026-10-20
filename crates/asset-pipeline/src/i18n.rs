@@ -169,7 +169,12 @@ pub fn screen_texts(project_root: &Path) -> BTreeSet<char> {
     for path in crate::ui::screen_files(project_root) {
         if let Ok(def) = trino_scene::ui::ScreenDef::load(&path) {
             for (_, n) in def.nodes() {
-                set.extend(n.text.chars().filter(|c| *c != '\n'));
+                let (before, after) =
+                    match (!n.bind.is_empty()).then(|| n.text.find("{}")).flatten() {
+                        Some(at) => (&n.text[..at], &n.text[at + 2..]),
+                        None => (n.text.as_str(), ""),
+                    };
+                set.extend(before.chars().chain(after.chars()).filter(|c| *c != '\n'));
             }
         }
     }

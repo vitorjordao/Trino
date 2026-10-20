@@ -63,7 +63,7 @@ pub use node::{
     Scaling, Size, Targets, Theme, UiNode, UiScreen, VAlign,
 };
 pub use strings::{Fallback, NoStrings, StringTable, StringsError, UiStrings};
-pub use values::{NO_ITEM, TEXT_LEN, UiValue, UiValues, text_value};
+pub use values::{NO_ITEM, NoData, TEXT_LEN, UiData, UiValue, UiValues, text_value};
 
 use crate::caps::{Caps, Family};
 use crate::math::{Rect, Vec2};
@@ -150,6 +150,8 @@ pub struct UiEnv<'a> {
     /// 1 elsewhere).
     pub interface_scale: f32,
     pub strings: &'a dyn UiStrings,
+    /// Values the game answers on demand ([`with_data`](Self::with_data)).
+    pub data: &'a dyn UiData,
     /// The player's accessibility settings the screen honors
     /// ([`with_access`](Self::with_access)).
     pub access: UiAccess,
@@ -198,7 +200,9 @@ impl UiAccess {
         if t == 1.0 {
             return 1.0;
         }
-        if scaling == Scaling::Integer && frame_scale >= 1.0 {
+        let whole = frame_scale >= 1.0 && (frame_scale as i32) as f32 == frame_scale;
+        if (scaling == Scaling::Integer || scaling == Scaling::Snap && whole) && frame_scale >= 1.0
+        {
             // Whole glyph pixels: `base × mul × frame_scale` is a whole
             // number for any whole `base`.
             let px = ((t * frame_scale) + 0.5) as i32 as f32;
@@ -232,6 +236,7 @@ impl UiEnv<'static> {
             ],
             interface_scale: 1.0,
             strings: &NoStrings,
+            data: &NoData,
             access: UiAccess::NONE,
         }
     }
@@ -249,6 +254,7 @@ impl UiEnv<'static> {
             ],
             interface_scale: 1.0,
             strings: &NoStrings,
+            data: &NoData,
             access: UiAccess::NONE,
         }
     }
@@ -292,6 +298,15 @@ impl<'a> UiEnv<'a> {
         UiEnv { strings, ..self }
     }
 
+    /// The same with the game's values ([`UiData`]): lists and texts as
+    /// long as the game's data, nothing copied into the [`Ui`].
+    pub fn with_data<'b>(self, data: &'b dyn UiData) -> UiEnv<'b>
+    where
+        'a: 'b,
+    {
+        UiEnv { data, ..self }
+    }
+
     /// The same at an interface scale: the PC's
     /// `platform.display().map_or(1.0, |d| d.settings.interface_scale())`.
     pub fn with_interface_scale(self, scale: f32) -> UiEnv<'a> {
@@ -314,6 +329,10 @@ pub mod flags {
     pub const DISABLED: u8 = 8;
     /// Takes the focus (a control, enabled).
     pub const FOCUSABLE: u8 = 16;
+    /// Bigger than its scroll box, so it could never show whole: not drawn
+    /// itself, its children shown or cut one by one (issue #95: a panel
+    /// taller than a small screen at large text shows the lines that fit).
+    pub const CUT: u8 = 32;
 }
 
 /// One laid-out node: a node of the screen, once per list item it is in.
@@ -499,6 +518,19 @@ pub struct Ui<const N: usize = 64> {
     last_env: Option<EnvHint>,
     /// Text sizes times this ([`UiAccess::text_mul`] at the last layout).
     text_mul: f32,
+    /// The focus was set from outside: scroll it into view at the next
+    /// draw.
+    reveal: bool,
+    /// Label sizes measured by the current layout, by node and list item
+    /// (issue #95): a fit size asks a text at every level of its tree, and
+    /// building a label (a value, a format) is the expensive part on the
+    /// N64. Cleared at each layout.
+    text_memo: [core::cell::Cell<(layout::MemoKey, Vec2)>; N],
+    /// Outer sizes measured by the current layout, by node, item and the
+    /// room offered: a fit size measures its content once for its width
+    /// and once for its height, so nested fit containers would measure
+    /// their subtrees 2^depth times.
+    size_memo: [core::cell::Cell<(layout::MemoKey, Vec2)>; N],
 }
 
 /// A [`UiEnv`] without its string table, kept across frames.
@@ -544,6 +576,7 @@ impl EnvHint {
             safe: self.safe,
             interface_scale: self.interface_scale,
             strings: &NoStrings,
+            data: &NoData,
             access: self.access,
         }
     }
@@ -600,6 +633,9 @@ impl<const N: usize> Ui<N> {
             },
             last_env: None,
             text_mul: 1.0,
+            reveal: false,
+            text_memo: [const { core::cell::Cell::new((layout::MemoKey::EMPTY, Vec2::ZERO)) }; N],
+            size_memo: [const { core::cell::Cell::new((layout::MemoKey::EMPTY, Vec2::ZERO)) }; N],
         }
     }
 
@@ -694,10 +730,73 @@ impl<const N: usize> Ui<N> {
         match self.find(screen, id) {
             Some(i) if self.slots[i].has(flags::FOCUSABLE) => {
                 self.focus = Some((self.slots[i].node, self.slots[i].item));
+                self.reveal = true;
                 true
             }
             _ => false,
         }
+    }
+
+    /// Focus item `item` of the node named `id` (a row of a `List`; 0 or
+    /// [`NO_ITEM`] outside one) and scroll it into view at the next draw:
+    /// a game that keeps its own cursor shows it through the screen (issue
+    /// #95). Works before the node is laid out (the next layout places the
+    /// focus); `false` when the screen has no such node.
+    pub fn set_focus_item(&mut self, screen: &UiScreen<'_>, id: &str, item: u16) -> bool {
+        let Some(node) = screen.find(id) else {
+            return false;
+        };
+        // The screen's first layout must keep this focus (a new screen
+        // starts over at its layout, see `layout`).
+        let name = crate::asset::asset_id(screen.name);
+        if self.name != Some(name) {
+            self.reset();
+            self.name = Some(name);
+        }
+        let item = self.item_of(screen, node as usize, item);
+        if self.focus != Some((node, item)) {
+            self.focus = Some((node, item));
+            self.reveal = true;
+        }
+        true
+    }
+
+    /// The slot item of node `i`'s copy `item`: itself inside a `List`'s
+    /// repeated child, [`NO_ITEM`] elsewhere (one copy).
+    fn item_of(&self, screen: &UiScreen<'_>, i: usize, item: u16) -> u16 {
+        let mut at = screen.node(i).parent;
+        while at != NONE {
+            if matches!(screen.node(at as usize).kind, NodeKind::List { .. }) {
+                return item;
+            }
+            at = screen.node(at as usize).parent;
+        }
+        NO_ITEM
+    }
+
+    /// Where item `item` of the node named `id` is ([`NO_ITEM`] outside a
+    /// list): its screen and pixel rect, `None` when it isn't laid out or
+    /// a scroll box hides it (hit boxes and a game's own drawing go only
+    /// where the player sees the node).
+    pub fn rect_of_item(
+        &self,
+        screen: &UiScreen<'_>,
+        id: &str,
+        item: u16,
+    ) -> Option<(Screen, Rect)> {
+        let node = screen.find(id)?;
+        let item = self.item_of(screen, node as usize, item);
+        let i = self
+            .slots()
+            .iter()
+            .position(|s| s.node == node && s.item == item)?;
+        (!self.hidden(i)).then_some((self.slots[i].on, self.rects[i]))
+    }
+
+    /// No focus: nothing highlighted (a game whose cursor is on something
+    /// the screen doesn't show).
+    pub fn clear_focus(&mut self) {
+        self.focus = None;
     }
 
     /// Forget the focus, presses and scroll (a screen opened again starts
@@ -720,7 +819,14 @@ impl<const N: usize> Ui<N> {
     }
 
     /// Not drawn: clipped by a scroll box (or inside one that is).
+    pub fn is_hidden(&self, slot: usize) -> bool {
+        slot >= self.count || self.hidden(slot)
+    }
+
     pub(super) fn hidden(&self, i: usize) -> bool {
+        if self.slots[i].has(flags::CUT) {
+            return true;
+        }
         let mut at = i;
         loop {
             let s = self.slots[at];

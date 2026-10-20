@@ -1,0 +1,153 @@
+// Solid Eleven's title (issue #95): the logo, the six menu items (each with
+// its color's subtitle, left out on the N64, whose safe area has room for
+// six one-line items only) and the club card. The game keeps the cursor
+// (`cur.title`) and draws the logo, the items' slanted bars and the card's
+// crest into their boxes (the slanted bar is the focus: the theme's focus
+// fill and ring are clear). At 150 % text and up the card is a line under
+// the logo and the menu takes the width.
+//   cargo xtask ui export examples/solid-eleven/ui/title.ui.ron examples/solid-eleven/src/ui/title_gen.rs
+(
+    version: 1,
+    name: "se_title",
+    on_back: "back",
+    theme: (
+        font: "fonts/se_ui",
+        text: Some((236, 240, 255, 255)),
+        dim: Some((150, 160, 196, 255)),
+        panel: Some((16, 20, 46, 230)),
+        button: Some((16, 20, 46, 230)),
+        button_text: Some((236, 240, 255, 255)),
+        focus: Some((0, 0, 0, 0)),
+        focus_text: Some((236, 240, 255, 255)),
+        accent: Some((0, 0, 0, 0)),
+        pressed: Some((50, 110, 240, 255)),
+    ),
+    preview: {
+    "small": Bool(true),
+    "items": Int(6),
+    "main": Text("JOGO RÁPIDO"),
+    "sub": Text("GERENCIAR SEU CLUBE"),
+    "c1": Bool(true),
+    "card_title": Text("PARTIDA RÁPIDA"),
+    "club": Text("VIOLET WANDERERS"),
+    "coins": Text("19.020 MOEDAS"),
+    "btn.a": Text("ENTER"),
+    },
+    root: (
+        children: [
+            (
+                kind: Stack(gap: 4, align: Stretch),
+                anchor: StretchCenter,
+                size: (Fill, Fill),
+                max: (320, 0),
+                children: [
+                    (kind: Overlay, min: (0, 0)),
+                    (
+                        kind: Stack(dir: Horizontal, gap: 6, align: End, wrap: true),
+                        size: (Fill, Fit),
+                        padding: (8, 6, 0, 0),
+                        children: [
+                            (kind: Overlay, id: "logo", min: (78, 58)),
+                            (kind: Text, text: "LOW POLY FOOTBALL", color: Some((150, 160, 196, 255)), padding: (0, 0, 0, 6)),
+                        ],
+                    ),
+                    (kind: Text, bind: "summary", text: "{}", color: Some((255, 214, 40, 255)), visible_if: "big", padding: (8, 0, 8, 0), overflow: Wrap),
+                    (
+                        kind: Overlay,
+                        size: (Fill, Fill),
+                        padding: (8, 0, 6, 0),
+                        children: [
+                            (
+                                kind: Scroll(gap: 0),
+                                size: (Fill, Fill),
+                                max: (170, 0),
+                                children: [
+                                    (
+                                        kind: List(gap: 2, max: 6),
+                                        bind: "items",
+                                        size: (Fill, Fit),
+                                        children: [
+                                            (
+                                                kind: Overlay,
+                                                size: (Fill, Fit),
+                                                children: [
+                                                    (kind: Button, id: "item", on_click: "item", anchor: Fill, size: (Fill, Fill), color: Some((0, 0, 0, 0))),
+                                                    (
+                                                        kind: Stack(gap: 0, align: Stretch),
+                                                        size: (Fill, Fit),
+                                                        min: (0, 18),
+                                                        padding: (8, 1, 6, 1),
+                                                        children: [
+                                                            (kind: Text, bind: "main", text: "{}", overflow: Wrap),
+                                                            (kind: Text, bind: "sub", text: "{}", color: Some((40, 210, 255, 255)), visible_if: "c0", visible_on: [Pc, Web, N3ds], overflow: Wrap),
+                                                            (kind: Text, bind: "sub", text: "{}", color: Some((230, 50, 70, 255)), visible_if: "c1", visible_on: [Pc, Web, N3ds], overflow: Wrap),
+                                                            (kind: Text, bind: "sub", text: "{}", color: Some((255, 214, 40, 255)), visible_if: "c2", visible_on: [Pc, Web, N3ds], overflow: Wrap),
+                                                            (kind: Text, bind: "sub", text: "{}", color: Some((70, 210, 90, 255)), visible_if: "c3", visible_on: [Pc, Web, N3ds], overflow: Wrap),
+                                                            (kind: Text, bind: "sub", text: "{}", color: Some((50, 110, 240, 255)), visible_if: "c4", visible_on: [Pc, Web, N3ds], overflow: Wrap),
+                                                            (kind: Text, bind: "sub", text: "{}", color: Some((240, 60, 150, 255)), visible_if: "c5", visible_on: [Pc, Web, N3ds], overflow: Wrap),
+                                                        ],
+                                                    ),
+                                                ],
+                                            ),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                            (
+                                kind: Rect(border: 1, border_color: Some((40, 210, 255, 255))),
+                                id: "card",
+                                anchor: BottomRight,
+                                min: (110, 0),
+                                max: (110, 0),
+                                visible_if: "small",
+                                children: [
+                                    (
+                                        kind: Stack(gap: 2, align: Stretch),
+                                        size: (Fill, Fit),
+                                        padding: (0, 0, 0, 3),
+                                        children: [
+                                            (kind: Text, id: "card_title", bind: "card_title", text: "{}", color: Some((40, 210, 255, 255)), align: Center, size: (Fill, Fit)),
+                                            (
+                                                kind: Stack(dir: Horizontal, gap: 4),
+                                                size: (Fill, Fit),
+                                                padding: (5, 0, 4, 0),
+                                                children: [
+                                                    (kind: Overlay, id: "card_crest", min: (22, 26)),
+                                                    (
+                                                        kind: Stack(gap: 1),
+                                                        size: (Fill, Fit),
+                                                        children: [
+                                                            (kind: Text, bind: "club", text: "{}", size: (Fill, Fit), overflow: Wrap),
+                                                            (kind: Text, bind: "coins", text: "{}", color: Some((255, 214, 40, 255))),
+                                                        ],
+                                                    ),
+                                                ],
+                                            ),
+                                            (kind: Text, bind: "round", text: "{}", color: Some((150, 160, 196, 255)), visible_if: "career", padding: (5, 0, 0, 0)),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                        ],
+                    ),
+                    (
+                        kind: Stack(dir: Horizontal, gap: 3, wrap: true),
+                        size: (Fill, Fit),
+                        padding: (6, 0, 0, 3),
+                        children: [
+                            (
+                                kind: Stack(dir: Horizontal, gap: 3, align: Center),
+                                id: "hint_a",
+                                padding: (2, 2, 5, 2),
+                                children: [
+                                    (kind: Rect(), color: Some((70, 210, 90, 255)), padding: (3, 0, 3, 0), min: (11, 0), children: [(kind: Text, bind: "btn.a", text: "{}", color: Some((18, 22, 52, 255)), anchor: Center)]),
+                                    (kind: Text, key: "select", text: "SELECT"),
+                                ],
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+        ],
+    ),
+)

@@ -248,3 +248,48 @@ pub fn assert_near(got: [u8; 4], want: [u8; 3], tol: u8, what: &str) {
         );
     }
 }
+
+/// How a frame drawn under dynamic resolution (the 3D in the top-left
+/// corner of targets kept for the range's top) compares with the same
+/// scale drawn in targets of its own size: the largest channel difference
+/// and the pixels with a channel more than 1/255 apart.
+pub fn corner_diff(corner: &[u8], own: &[u8]) -> (u8, usize) {
+    assert_eq!(corner.len(), own.len());
+    let mut max = 0;
+    let mut far = 0;
+    for (a, b) in corner.as_chunks::<4>().0.iter().zip(own.as_chunks::<4>().0) {
+        let d = (0..3).map(|c| a[c].abs_diff(b[c])).max().unwrap();
+        max = max.max(d);
+        far += usize::from(d > 1);
+    }
+    (max, far)
+}
+
+/// The largest difference [`corner_diff`] may report (GitHub #93).
+///
+/// Without 4× MSAA both frames are the same to the bit on every driver: the
+/// corner's UVs land on the own-size targets' texels. With it, AMD's RADV
+/// resolves a partly covered pixel 1/255 differently in a 240×136 or
+/// 288×164 target than in a 480×272 one (implementation-defined averaging;
+/// not its DCC, FMASK or HiZ compression: `RADV_DEBUG=nodcc,nofmask,nohiz`
+/// changes nothing), on geometry edges only. Lavapipe resolves both the
+/// same. The upscale's contrast-adaptive sharpening then pushes a pixel
+/// away from its four neighbours by up to `4k` (`k` = 1/8 at sharpen 0, 1/5
+/// at 1, as in `upscale.wgsl`), so a 1/255 input difference leaves up to
+/// `(1 + 4k) / (1 - 4k)` of it in the output.
+pub fn corner_tolerance(msaa: u8, sharpen: f32) -> u8 {
+    if msaa <= 1 {
+        return 0;
+    }
+    if sharpen <= 0.0 {
+        return 1;
+    }
+    let k = 1.0 / (8.0 + (5.0 - 8.0) * sharpen.clamp(0.0, 1.0));
+    ((1.0 + 4.0 * k) / (1.0 - 4.0 * k)).ceil() as u8
+}
+
+/// The resolve differences are edge pixels: fewer than 0.5 % of the picture
+/// (the GPU T&L oracle's share, ADR 0016).
+pub fn corner_far_limit(pixels: usize) -> usize {
+    pixels / 200
+}

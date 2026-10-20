@@ -1,0 +1,292 @@
+// Solid Eleven's player editor (issue #95): six attributes within the
+// player's point budget, the skin tone, the overall, the radar, the points
+// left, the hair style and color. The game keeps the cursor (`cur.edit_attr`:
+// 0..=5 the attributes, 6 skin, 7 hair style, 8 hair color) and draws the
+// bars, swatches and radar into their boxes. At 150 % text and up it's one
+// scrolling column under a summary line (`_big` ids).
+//   cargo xtask ui export examples/solid-eleven/ui/edit.ui.ron examples/solid-eleven/src/ui/edit_gen.rs
+(
+    version: 1,
+    name: "se_edit",
+    scaling: Snap,
+    on_back: "back",
+    theme: (
+        font: "fonts/se_ui",
+        text: Some((236, 240, 255, 255)),
+        dim: Some((150, 160, 196, 255)),
+        panel: Some((16, 20, 46, 230)),
+        button: Some((16, 20, 46, 230)),
+        button_text: Some((236, 240, 255, 255)),
+        focus: Some((30, 60, 130, 235)),
+        focus_text: Some((236, 240, 255, 255)),
+        accent: Some((40, 210, 255, 255)),
+        pressed: Some((50, 110, 240, 255)),
+    ),
+    preview: {
+    "small": Bool(true),
+    "attrs": Int(6),
+    "label": Text("VELOCIDADE"),
+    "value": Text("< 74 >"),
+    "ovr": Int(78),
+    "points": Int(4),
+    "points_left": Bool(true),
+    "style": Text("MOICANO"),
+    "name": Text("RODRIGUES"),
+    "btn.a": Text("ENTER"),
+    "btn.b": Text("ESC"),
+    "btn.x": Text("C"),
+    },
+    root: (
+        children: [
+            (kind: Rect(), anchor: Fill, bleed: true, color: Some((6, 8, 20, 0))),
+            (
+                kind: Stack(gap: 4, align: Stretch),
+                anchor: StretchCenter,
+                size: (Fill, Fill),
+                max: (320, 0),
+                children: [
+                    (
+                        kind: Stack(dir: Horizontal, gap: 4, align: Center, justify: SpaceBetween, wrap: true),
+                        id: "header_row",
+                        size: (Fill, Fit),
+                        min: (200, 22),
+                        padding: (0, 3, 8, 3),
+                        children: [
+                            (
+                                kind: Stack(dir: Horizontal, gap: 4, align: Center),
+                                id: "header",
+                                children: [
+                                    (kind: Button, id: "back", text: "<", on_click: "back", min: (20, 16), color: Some((40, 210, 255, 0)), padding: (4, 1, 4, 1)),
+                                    (kind: Text, key: "player_edit", text: "PLAYER EDIT"),
+                                ],
+                            ),
+                            (
+                                kind: Stack(dir: Horizontal, gap: 4, align: Center),
+                                id: "header_side",
+                                children: [
+                                    (kind: Text, bind: "name", text: "{}"),
+                                ],
+                            ),
+                        ],
+                    ),
+                    (
+                        kind: Stack(dir: Horizontal, gap: 4),
+                        size: (Fill, Fill),
+                        visible_if: "small",
+                        padding: (2, 0, 2, 0),
+                        children: [
+                            (
+                                kind: Rect(border: 1, border_color: Some((40, 210, 255, 255))),
+                                id: "left",
+                                color: Some((0, 0, 0, 0)),
+                                min: (110, 0),
+                                max: (110, 0),
+                                size: (Fit, Fill),
+                                padding: (2, 3, 2, 2),
+                                children: [
+                                    (
+                                        kind: Stack(gap: 2, align: Stretch),
+                                        size: (Fill, Fit),
+                                        children: [
+                                            (
+                                                kind: List(gap: 2, max: 6),
+                                                bind: "attrs",
+                                                size: (Fill, Fit),
+                                                children: [
+                                                    (
+                                                        kind: Overlay,
+                                                        size: (Fill, Fit),
+                                                        children: [
+                                                            (kind: Button, id: "attr", on_click: "attr", anchor: Fill, size: (Fill, Fill)),
+                                                            (
+                                                                kind: Stack(gap: 1, align: Stretch),
+                                                                size: (Fill, Fit),
+                                                                padding: (4, 1, 4, 2),
+                                                                children: [
+                                                                    (
+                                                                        kind: Stack(dir: Horizontal, justify: SpaceBetween, wrap: true),
+                                                                        size: (Fill, Fit),
+                                                                        children: [
+                                                                            (kind: Text, bind: "label", text: "{}"),
+                                                                            (kind: Text, bind: "value", text: "{}", color: Some((255, 214, 40, 255))),
+                                                                        ],
+                                                                    ),
+                                                                    (kind: Overlay, id: "abar", size: (Fill, Px(4))),
+                                                                ],
+                                                            ),
+                                                        ],
+                                                    ),
+                                                ],
+                                            ),
+                                            (
+                                                kind: Overlay,
+                                                size: (Fill, Fit),
+                                                children: [
+                                                    (kind: Button, id: "skin", on_click: "skin", anchor: Fill, size: (Fill, Fill)),
+                                                    (kind: Overlay, id: "skins", min: (102, 16), anchor: Center, offset: (0, 0), padding: (0, 5, 0, 5)),
+                                                ],
+                                            ),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                            (kind: Overlay, size: (Fill, Fill)),
+                            (
+                                kind: Rect(border: 1, border_color: Some((40, 210, 255, 255))),
+                                id: "right",
+                                color: Some((0, 0, 0, 0)),
+                                min: (100, 0),
+                                max: (100, 0),
+                                size: (Fit, Fill),
+                                padding: (4, 2, 4, 2),
+                                children: [
+                                    (
+                                        kind: Stack(gap: 1, align: Stretch),
+                                        size: (Fill, Fit),
+                                        children: [
+                                            (kind: Text, key: "ovr", text: "OVR", color: Some((150, 160, 196, 255))),
+                                            (kind: Text, bind: "ovr", text: "{}", font: "fonts/se_big"),
+                                            (kind: Overlay, id: "radar", size: (Fill, Px(52))),
+                                            (kind: Text, key: "points_left", text: "POINTS LEFT", color: Some((150, 160, 196, 255)), align: Center, overflow: Wrap),
+                                            (kind: Text, bind: "points", text: "{}", font: "fonts/se_big", align: Center, color: Some((255, 214, 40, 255)), visible_if: "points_left"),
+                                            (kind: Text, bind: "points", text: "{}", font: "fonts/se_big", align: Center, color: Some((150, 160, 196, 255)), visible_if: "no_points"),
+                                            (
+                                                kind: Overlay,
+                                                size: (Fill, Fit),
+                                                children: [
+                                                    (kind: Button, id: "style", on_click: "style", anchor: Fill, size: (Fill, Fill)),
+                                                    (
+                                                        kind: Stack(gap: 2, align: Center),
+                                                        size: (Fill, Fit),
+                                                        padding: (4, 2, 4, 4),
+                                                        children: [
+                                                            (kind: Text, key: "hair", text: "HAIR", color: Some((150, 160, 196, 255))),
+                                                            (kind: Text, bind: "style", text: "{}", color: Some((255, 214, 40, 255)), overflow: Wrap),
+                                                        ],
+                                                    ),
+                                                ],
+                                            ),
+                                            (
+                                                kind: Overlay,
+                                                size: (Fill, Fit),
+                                                children: [
+                                                    (kind: Button, id: "hair", on_click: "hair", anchor: Fill, size: (Fill, Fill)),
+                                                    (kind: Overlay, id: "swatches", min: (88, 16), anchor: Center, padding: (0, 4, 0, 4)),
+                                                ],
+                                            ),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                        ],
+                    ),
+                    (kind: Text, id: "summary", bind: "summary", text: "{}", visible_if: "big", padding: (6, 0, 6, 0), overflow: Wrap),
+                    (
+                        kind: Scroll(gap: 3),
+                        size: (Fill, Fill),
+                        visible_if: "big",
+                        padding: (6, 0, 6, 0),
+                        children: [
+                            (
+                                kind: List(gap: 2, max: 6),
+                                bind: "attrs",
+                                size: (Fill, Fit),
+                                children: [
+                                    (
+                                        kind: Overlay,
+                                        size: (Fill, Fit),
+                                        children: [
+                                            (kind: Button, id: "attr_big", on_click: "attr", anchor: Fill, size: (Fill, Fill)),
+                                            (
+                                                kind: Stack(gap: 1, align: Stretch),
+                                                size: (Fill, Fit),
+                                                padding: (4, 1, 4, 2),
+                                                children: [
+                                                    (
+                                                        kind: Stack(dir: Horizontal, justify: SpaceBetween, wrap: true),
+                                                        size: (Fill, Fit),
+                                                        children: [
+                                                            (kind: Text, bind: "label", text: "{}"),
+                                                            (kind: Text, bind: "value", text: "{}", color: Some((255, 214, 40, 255))),
+                                                        ],
+                                                    ),
+                                                    (kind: Overlay, id: "abar_big", size: (Fill, Px(4))),
+                                                ],
+                                            ),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                            (
+                                kind: Overlay,
+                                size: (Fill, Fit),
+                                children: [
+                                    (kind: Button, id: "skin_big", on_click: "skin", anchor: Fill, size: (Fill, Fill)),
+                                    (kind: Overlay, id: "skins_big", min: (102, 16), anchor: Center, offset: (0, 0), padding: (0, 5, 0, 5)),
+                                ],
+                            ),
+                            (
+                                kind: Overlay,
+                                size: (Fill, Fit),
+                                children: [
+                                    (kind: Button, id: "style_big", on_click: "style", anchor: Fill, size: (Fill, Fill)),
+                                    (
+                                        kind: Stack(gap: 2, align: Center),
+                                        size: (Fill, Fit),
+                                        padding: (4, 2, 4, 4),
+                                        children: [
+                                            (kind: Text, key: "hair", text: "HAIR", color: Some((150, 160, 196, 255))),
+                                            (kind: Text, bind: "style", text: "{}", color: Some((255, 214, 40, 255)), overflow: Wrap),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                            (
+                                kind: Overlay,
+                                size: (Fill, Fit),
+                                children: [
+                                    (kind: Button, id: "hair_big", on_click: "hair", anchor: Fill, size: (Fill, Fill)),
+                                    (kind: Overlay, id: "swatches_big", min: (88, 16), anchor: Center, padding: (0, 4, 0, 4)),
+                                ],
+                            ),
+                        ],
+                    ),
+                    (
+                        kind: Stack(dir: Horizontal, gap: 3, wrap: true),
+                        size: (Fill, Fit),
+                        padding: (6, 0, 0, 3),
+                        children: [
+                            (
+                                kind: Stack(dir: Horizontal, gap: 3, align: Center),
+                                id: "hint_a",
+                                padding: (2, 2, 5, 2),
+                                children: [
+                                    (kind: Rect(), color: Some((70, 210, 90, 255)), padding: (3, 0, 3, 0), min: (11, 0), children: [(kind: Text, bind: "btn.a", text: "{}", color: Some((18, 22, 52, 255)), anchor: Center)]),
+                                    (kind: Text, key: "save_action", text: "SAVE"),
+                                ],
+                            ),
+                            (
+                                kind: Stack(dir: Horizontal, gap: 3, align: Center),
+                                id: "hint_b",
+                                padding: (2, 2, 5, 2),
+                                children: [
+                                    (kind: Rect(), color: Some((230, 50, 70, 255)), padding: (3, 0, 3, 0), min: (11, 0), children: [(kind: Text, bind: "btn.b", text: "{}", color: Some((18, 22, 52, 255)), anchor: Center)]),
+                                    (kind: Text, key: "cancel", text: "CANCEL"),
+                                ],
+                            ),
+                            (
+                                kind: Stack(dir: Horizontal, gap: 3, align: Center),
+                                id: "hint_x",
+                                padding: (2, 2, 5, 2),
+                                children: [
+                                    (kind: Rect(), color: Some((50, 110, 240, 255)), padding: (3, 0, 3, 0), min: (11, 0), children: [(kind: Text, bind: "btn.x", text: "{}", color: Some((18, 22, 52, 255)), anchor: Center)]),
+                                    (kind: Text, key: "random", text: "RANDOM"),
+                                ],
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+        ],
+    ),
+)

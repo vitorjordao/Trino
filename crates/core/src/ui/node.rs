@@ -220,6 +220,12 @@ pub enum Scaling {
     Integer,
     /// Exactly the fit (text may land between pixels).
     Fractional,
+    /// Whole pixels when the fit is within 15 % of a whole number, else
+    /// exactly the fit (issue #95): a 640×360 window draws at 1.5 instead
+    /// of shrinking to 1, a 960×540 one at a crisp 2. Pair it with
+    /// [`UiStrings::sized`](super::UiStrings::sized) so text between
+    /// pixels takes a bigger bitmap font.
+    Snap,
 }
 
 /// What a node is. Containers place their children; leaves draw. Any node
@@ -229,12 +235,16 @@ pub enum Scaling {
 pub enum NodeKind {
     /// Children placed by their anchors.
     Overlay,
-    /// Children one after the other.
+    /// Children one after the other. With `wrap`, a child that doesn't fit
+    /// the rest of the line starts a new one, `gap` apart (issue #95): a
+    /// row of hints or chips that grows with the text takes two lines
+    /// instead of running off the screen.
     Stack {
         dir: Dir,
         gap: i16,
         align: Align,
         justify: Justify,
+        wrap: bool,
     },
     /// Children in rows of `cols` equal columns.
     Grid { cols: u8, gap: (i16, i16) },
@@ -536,6 +546,18 @@ impl<'a> UiScreen<'a> {
         }
     }
 
+    /// Node `i` by reference where the screen is static Rust (a decoded
+    /// copy for a baked blob): the layout reads nodes many times per node,
+    /// and copying a ~200-byte node each time was most of a menu's layout
+    /// on the N64 (issue #95).
+    #[inline]
+    pub fn node_at(&self, i: usize) -> NodeRef<'_, 'a> {
+        match self.nodes {
+            Nodes::Slice(s) => NodeRef::Ref(&s[i]),
+            Nodes::Baked(r) => NodeRef::Own(r.node(i)),
+        }
+    }
+
     /// The first node named `id`.
     pub fn find(&self, id: &str) -> Option<u16> {
         (0..self.len())
@@ -583,7 +605,26 @@ impl<'a> UiScreen<'a> {
         Children {
             screen: self,
             next: i + 1,
-            end: self.node(i).end as usize,
+            end: self.node_at(i).end as usize,
+        }
+    }
+}
+
+/// A node read by [`UiScreen::node_at`]: borrowed from a static screen,
+/// decoded from a baked one.
+pub enum NodeRef<'s, 'a> {
+    Ref(&'s UiNode<'a>),
+    Own(UiNode<'a>),
+}
+
+impl<'a> core::ops::Deref for NodeRef<'_, 'a> {
+    type Target = UiNode<'a>;
+
+    #[inline]
+    fn deref(&self) -> &UiNode<'a> {
+        match self {
+            NodeRef::Ref(n) => n,
+            NodeRef::Own(n) => n,
         }
     }
 }
@@ -604,7 +645,7 @@ impl Iterator for Children<'_, '_> {
         }
         let i = self.next;
         // A malformed end can't loop: subtrees always move forward.
-        self.next = (self.screen.node(i).end as usize).max(i + 1);
+        self.next = (self.screen.node_at(i).end as usize).max(i + 1);
         Some(i)
     }
 }

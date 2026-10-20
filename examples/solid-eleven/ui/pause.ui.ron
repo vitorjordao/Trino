@@ -5,6 +5,7 @@
 (
     version: 1,
     name: "se_pause",
+    scaling: Snap,
     focus: "resume",
     on_back: "resume",
     theme: (

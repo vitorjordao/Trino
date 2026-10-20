@@ -670,6 +670,12 @@ overlay, and a measurement on real hardware (ares doesn't time the RDP).
     golden frame` and `shadow cost` (ares); PC goldens `tests/golden/pc/shadows_*.png`.
     castle64's player and Solid Eleven's players and ball use it; the hand-made discs
     are gone.
+  - **Contact hardening and height fade (2026-10-19, #86 item 9, ADR 0025 §12):**
+    `ShadowSettings::{soft_growth, fade_distance}` (0 and 0 by default: every golden
+    unchanged). On the map a blocker search widens the PCF with the caster's distance
+    along the light and fades the shadow (WebGL2 reads the map through a second float
+    binding); blobs fade over `fade_distance` when set. Solid Eleven opts in. Not in
+    TSCN v5.
 - **Accessibility (2026-10-19, ADR 0027, GitHub #60, `docs/ACCESSIBILITY.md`):** the
   player's settings and what honors them on every target.
   - **Core (`trino_core::access`, `no_std`):** `AccessSettings` (`cvd`, `text_scale`
@@ -695,14 +701,16 @@ overlay, and a measurement on real hardware (ares doesn't time the RDP).
     with a second unlit draw just behind them (no backend code; castle64's player and
     boars, Solid Eleven's ball).
   - **Tools:** `cargo xtask access check|shot --json` (every screen at 200 % on each
-    target and language: overflow, safe area, budgets); the PC simulation view
+    target and language: overflow, safe area, budgets; `trino_scene::ui::apply_access_preview`
+    flips `"small"`/`"big"` preview flags when `text_scale >= 1.5`); the PC simulation view
     (`PcRenderer::set_cvd_view`, `TRINO_CVD`); the editor's Accessibility tab (simulation
     in every view, palettes, checklist; `TRINO_EDITOR_ACCESS`); the starter
-    `ui/accessibility.ui.ron`. Adopters: castle64's doors and captions, Solid Eleven's kits
-    (`dress_for`) and captions; Solid Eleven's texts checked against their boxes at
-    100 % and 200 % in every language (`solid_eleven_menus`), its pause menu at the
-    player's text scale. Self-test step `accessibility`; goldens
-    `tests/golden/pc/access_*.png`.
+    `ui/accessibility.ui.ron`. Adopters: castle64's doors, captions and 200 % HUD counters,
+    Solid Eleven's kits (`dress_for`), captions, 200 % match HUD (`render::hud::draw_scaled`)
+    and all 18 menus as `.ui.ron` screens (`examples/solid-eleven/ui/*.ui.ron`, with
+    `visible_if: "small"` / `"big"` 200 % reflows); `solid_eleven_menus` audits 1,716 menu
+    states (27,456 pictures) across 100 % and 200 % text in every language and gamepad
+    family. Self-test step `accessibility`; goldens `tests/golden/pc/access_*.png`.
 - **UI system (2026-10-18, ADR 0024, GitHub #58):** menus, HUDs and dialogs as data.
   - **Core (`trino_core::ui`, `no_std`, no allocation):** `UiScreen` (a static slice or a
     `TUIL` blob view), `Ui<N>` (slots, focus, scroll, 24 values, events), containers
@@ -867,6 +875,16 @@ overlay, and a measurement on real hardware (ares doesn't time the RDP).
     base) self-test a scripted match. The sim hash equals the PC's
     (`TRINO_SE_HASH`), and the template is checked against a frame budget and
     goldens in CI. `TRINO_GAME=solid-eleven cargo run -p trino-app-pc` plays it.
+
+- **Gamepad families (2026-10-19, #86 item 7, ADR 0028):** `trino_core::pad` —
+  `PadFamily { Xbox, PlayStation, Nintendo, EightBitDo, Generic }` detected from USB ids
+  then the name (`PadFamily::detect`; the PC's gilrs glue copies them through
+  `PcInput::note_pad`, the Web parses `Gamepad.id` in `keys::parse_pad_id`),
+  `PadSlot::standard(Button)` (positional: `A` is the bottom face button) and
+  `PadFamily::glyph`/`button_glyph` (Xbox colored letters, PlayStation symbols,
+  Nintendo's swapped letters, ASCII labels). `Platform::gamepad_family` (default
+  `None`: consoles, no pad). Solid Eleven's `ui/glyphs.rs` holds its badge colors,
+  PlayStation symbol spans and per-family diagrams.
 
 PC keyboard mapping: A/B = Z/X, X/Y = C/V, L/R = Q/E, Start = Enter,
 Select = Right Shift, D-pad = arrows, stick = WASD; L2/R2/L3/R3 have no default key
@@ -1133,10 +1151,20 @@ cargo test --workspace
   branch's `trino_core` rlib and the branch then fails with "no `access` in
   `trino_core`" until its sources are touched. Give a comparison worktree its own target
   (on a real disk), or touch `crates/*/src/lib.rs` afterwards.
-- **Parallel GPU tests can crash inside `libvulkan`** (`set_debug_utils_object_name` while
-  several devices are created at once, seen 2026-10-19 on this machine): a SIGSEGV of a
-  whole test binary, not a test failure. Rerun with `--test-threads=1` to tell the two
-  apart (GitHub #94).
+- **Headless renderers give the driver no debug names** (GitHub #94). On RADV,
+  `vkSetDebugUtilsObjectNameEXT` from one test thread while another created its device
+  crashed whole test binaries inside `libvulkan` (9 runs in 12 of `engine_checks`; 0 in
+  20 without the names). `PcRenderer::new_headless` uses `renderer::headless_flags()`
+  (the build's flags minus `DEBUG`); `WGPU_DEBUG=1` brings the names back for a capture.
+  A test that builds its own `wgpu::Instance` takes the same flags: while
+  `render_e2e`'s shared-device check still named its objects, a parallel test read back
+  the previous frame's pixels (2 runs in 25); with names nowhere, 0 in 85 (RADV) and 0
+  in 60 (lavapipe) parallel runs.
+- **4× MSAA resolves are not bit-exact across target sizes on RADV** (GitHub #93): a
+  partly covered pixel resolves 1/255 apart in a 240×136 and a 480×272 target, and the
+  CAS sharpening amplifies it to 2–3/255. Lavapipe (CI) is exact, so a GPU test that
+  compares two MSAA frames from different allocations uses
+  `common::corner_tolerance` (exact at 1×), never `== 0`.
 
 - **Shadows land only on receivers on the blob and planar tiers.** A caster with no
   `set_shadow_receivers` plane under its bounding-sphere center draws nothing on the
@@ -1376,6 +1404,11 @@ cargo test --workspace
 - **The PC `gamepad` feature links libudev on Linux** (`libudev-dev`). Keep it opt-in
   for Linux builds.
 
+- **PC strict mode counts an offscreen draw as an N64 CPU draw** (`RspReject::Offscreen`
+  in `n64_estimate`). A test that asserts "no CPU draws in the worst frame"
+  (`solid_eleven_render`) then fails when a moved match changes which frame is worst.
+  Cull markers and guides by the frustum like the bodies (Solid Eleven's
+  `draw_guides`, issue #86).
 - **egui: a truncating `ComboBox` sizes its text to the space available, not to its
   `.width()`.** A long name pushed the button after it out of the Inspector. Wrap it in
   `theme::fixed_width` (the layout audit catches the next one).
@@ -1428,6 +1461,10 @@ cargo test --workspace
   the PC evaluates them per pixel.
 - **WGSL:** a `ptr<uniform, T>` can't be a function parameter without an extension
   (pass the index), and `set` is a reserved word.
+- **`TRINO_BLESS=1` on `solid_eleven_render` rewrites every frame of the test**, the
+  console looks too, and those differ by a few pixels of driver noise between machines.
+  Restore the goldens your change doesn't touch (`git checkout tests/golden/pc/...`)
+  before committing.
 - **`cargo test --workspace` stops at the first failing test binary.** Use
   `--no-fail-fast` to see every failure at once.
 - **A host without `libasound2-dev` or `libopengl0` can still build and run the
@@ -1465,6 +1502,11 @@ cargo test --workspace
   through a nearest *sampler* (`depth_as_float` adds one), and check new WebGL2 shaders with
   `webgl2_shaders_translate_to_glsl_es_300` (naga can't `textureLoad` a `texture_depth_2d`
   to GLSL at all).
+- **A shader that reads the shadow map's raw depth needs the WebGL2 rewrite too**
+  (`shadow_map::map_read_as_float`): the map is a `texture_depth_2d` with a comparison
+  sampler, and naga refuses a depth `textureLoad` for GLSL. Bind the same view again as
+  unfilterable float with a nearest sampler, and keep the map spelled `SHADOWMAP` in the
+  source so the MSAA and `depth_as_float` rewrites leave it alone.
 - **WebGL2 can't copy a depth texture** (`glCopyTexSubImage2D` on a depth attachment: "Depth
   stencil texture in color attachment"); draw it over (`renderer/depth_blit.rs`).
 - **`std::time::Instant` panics on wasm32-unknown-unknown.** Shared code uses

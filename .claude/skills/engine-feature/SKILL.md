@@ -144,6 +144,21 @@ A feature is done only when **PC, N64 and 3DS** all run it and an emulator has s
 - **A new `ModelParams` field costs `EntityStore` capacity times its size** in every
   game struct. Measure the N64 self-test's stack (`check_stack`) after one.
 
+- **An upgrade of an existing look ships off by default, behind plain-`f32` settings
+  whose 0 runs the old arithmetic** (contact shadows, #86: `soft_growth`,
+  `fade_distance`). Guard the new shader work with a uniform branch and make the old
+  path's operations identical (same tap count, same spacing, a `× 1.0`), then prove it:
+  write the frames (`TRINO_SHADOW_SHOTS`) from this branch and from the base commit in
+  a separate worktree with its own `target/`, on the same GPU, and compare bytes. Not
+  against the goldens: they were blessed elsewhere and differ by driver noise. And not
+  with PIL's `getbbox` of an RGBA difference, which reads only alpha. Opt the one game
+  that wants it in, and re-bless only that game's native golden.
+- **Something the host identifies (a pad's family, #86) is a pure core function over
+  what the host copies out** (`PadFamily::detect(name, usb)`), fed by the PC's glue
+  (`PcInput::note_pad`) and a non-wasm parser on the Web (`keys::parse_pad_id`), exposed
+  as a defaulted `Platform` method (`gamepad_family`, `None` on consoles). The tests then
+  need no device: a table of real id strings per browser and per OS.
+
 ## 2. Backends, in matched pairs
 
 - The FFI goes through the shims only: `crates/platform-n64/shim/trino_shim.c` with
@@ -167,6 +182,13 @@ A feature is done only when **PC, N64 and 3DS** all run it and an emulator has s
   there), and `cargo test -p trino-render-wgpu webgl2` translates every shader to GLSL ES
   3.00. A new `Platform`/`Audio`/`Input` method needs its `crates/platform-web` side (the
   self-test runs in browsers: `cargo xtask test web`).
+- **A shader that reads a depth texture raw breaks only on WebGL2**, at translation (naga
+  has no GLSL for a depth `textureLoad`) or silently (a sampler-less read returns 0). Bind
+  the view again as unfilterable float with a nearest sampler (`depth_as_float`,
+  `shadow_map::map_read_as_float`), add the shader to
+  `webgl2_shaders_translate_to_glsl_es_300`, and when the feature is off in every web
+  golden, opt castle64 in for one local `cargo xtask test web --browsers chromium` and
+  compare the WebGL2 and WebGPU frames in `target/web-test/` (then revert).
 - **A setting only the PC and the Web can change** (quality presets, #55, ADR 0023): a
   default `Platform` method that returns the console's fixed value (no-op setters,
   `None` info), and one host-side struct in `crates/render-wgpu` that both `PcPlatform`
@@ -196,6 +218,23 @@ A feature is done only when **PC, N64 and 3DS** all run it and an emulator has s
   with `--test-threads=1`, as the editor UI tests do, or don't touch global state.
 - Tests that spawn `cargo` should reuse this workspace's `target/`
   (`CARGO_TARGET_DIR`), or they rebuild the world.
+
+### Tuning a deterministic game sim (Solid Eleven, issue #86)
+
+- Fixed-seed statistical tests (`sim/balance.rs`, the AI sample) sit near their
+  limits: any sim change reshuffles every seed. Measure on bigger tuning samples
+  first (`cargo test -p solid-eleven --release print_big_metrics print_press_duel
+  print_side_bias -- --ignored --nocapture`, 60 to 400 matches, seconds in release),
+  then pick constants that pass *every* fixed-seed test at once.
+- Measure a one-sided behavior (pressing, a keeper's rush) as a duel: one side
+  with it, the same clubs without, sides swapped every other match
+  (`press_duel`, the test-only `Match::urgency_test`). Shares that alternate by
+  construction (possessions won) stay at 50 %; use territory, possession, fouls.
+- Prove a "no teleport" change with a whole-match per-tick step bound and run that
+  test on the old code once (a scratch `git worktree` with its own `target/`): it
+  must fail there.
+- Evidence for motion: a top-down trace (one dot per tick per player) shows a
+  jump as a gap; `xtask/tests/solid_eleven_gameplay_shots.rs` writes them.
 
 ## 4. Verify on every platform
 

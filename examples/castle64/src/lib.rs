@@ -1016,17 +1016,25 @@ impl Game for Castle64Game {
 
         // ---- HUD (sprites por cima do 3D) ----
         // Counters as bitmap text (no allocator: fixed TextBuf + write!).
+        let text_k = self.access.clamped().text_factor();
+        let hud_scale = (2.0 * text_k).min(3.0);
         let hud = TextParams {
-            scale: 2.0,
+            scale: hud_scale,
             ..TextParams::DEFAULT
         };
         let mut buf = TextBuf::<8>::new();
         let _ = write!(buf, "x{:02}", self.total_coins().min(99));
         renderer.draw_sprite(S_COIN, Vec2::new(6.0, 6.0), &SpriteParams::default());
         renderer.draw_text(F_HUD, Vec2::new(26.0, 6.0), buf.as_str(), &hud);
+        let star_w = renderer.measure_text(F_HUD, "x99", hud_scale).x;
+        let star_text_x = if text_k <= 1.01 {
+            self.screen.x - 50.0
+        } else {
+            self.screen.x - star_w.max(44.0) - 6.0
+        };
         renderer.draw_sprite(
             S_STAR,
-            Vec2::new(self.screen.x - 70.0, 6.0),
+            Vec2::new(star_text_x - 20.0, 6.0),
             &SpriteParams {
                 scale: Vec2::new(2.0, 2.0),
                 ..Default::default()
@@ -1034,12 +1042,7 @@ impl Game for Castle64Game {
         );
         buf.clear();
         let _ = write!(buf, "x{:02}", self.star_count().min(99));
-        renderer.draw_text(
-            F_HUD,
-            Vec2::new(self.screen.x - 50.0, 6.0),
-            buf.as_str(),
-            &hud,
-        );
+        renderer.draw_text(F_HUD, Vec2::new(star_text_x, 6.0), buf.as_str(), &hud);
 
         // Star get: estrela grande no centro da tela + legenda.
         if matches!(self.state, State::StarGet(_)) {
@@ -1056,7 +1059,7 @@ impl Game for Castle64Game {
                 Vec2::new(self.screen.x * 0.5, self.screen.y * 0.5 + 24.0),
                 "STAR GET!",
                 &TextParams {
-                    scale: 2.0,
+                    scale: hud_scale,
                     tint: Color::rgb(255, 230, 90),
                     align: TextAlign::Center,
                 },
@@ -1854,6 +1857,54 @@ mod tests {
                 }
                 assert_ne!(g.pos, at, "and plays again once it closes");
             }
+        }
+    }
+
+    #[test]
+    fn hud_counters_scale_and_stay_on_screen_at_200_percent() {
+        use trino_core::Caps;
+        struct HudRec {
+            texts: Vec<(Rect, String, f32)>,
+        }
+        impl Renderer for HudRec {
+            fn caps(&self) -> &Caps {
+                &Caps::N64
+            }
+            fn begin_frame(&mut self, _: Color) {}
+            fn draw_sprite(&mut self, _: SpriteId, _: Vec2, _: &SpriteParams) {}
+            fn set_camera(&mut self, _: &Camera3) {}
+            fn draw_model(&mut self, _: ModelId, _: &Transform3, _: Material, _: &ModelParams) {}
+            fn end_frame(&mut self) {}
+            fn measure_text(&self, _: FontId, text: &str, scale: f32) -> Vec2 {
+                Vec2::new(text.chars().count() as f32 * 7.0 * scale, 10.0 * scale)
+            }
+            fn draw_text(&mut self, f: FontId, pos: Vec2, text: &str, p: &TextParams) {
+                let sz = self.measure_text(f, text, p.scale);
+                let x = match p.align {
+                    TextAlign::Left => pos.x,
+                    TextAlign::Center => pos.x - sz.x * 0.5,
+                    TextAlign::Right => pos.x - sz.x,
+                };
+                self.texts
+                    .push((Rect::new(x, pos.y, sz.x, sz.y), text.into(), p.scale));
+            }
+        }
+        let mut g = game();
+        let mut r100 = HudRec { texts: Vec::new() };
+        g.render(&mut r100);
+        g.access.text_scale = 200;
+        let mut r200 = HudRec { texts: Vec::new() };
+        g.render(&mut r200);
+        assert!(r200.texts[0].2 > r100.texts[0].2, "HUD text must scale up");
+        for (rc, txt, _) in &r200.texts {
+            assert!(
+                rc.pos.x >= 0.0
+                    && rc.pos.y >= 0.0
+                    && rc.pos.x + rc.size.x <= g.screen.x
+                    && rc.pos.y + rc.size.y <= g.screen.y,
+                "{txt:?} at {rc:?} off screen {:?}",
+                g.screen
+            );
         }
     }
 }

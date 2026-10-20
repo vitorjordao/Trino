@@ -54,10 +54,8 @@ pub(super) fn label<'b, const V: usize>(
     if !template.is_empty() && !template.contains("{}") {
         let _ = buf.write_str(" ");
     }
-    match values.get(n.bind, item) {
-        Some(UiValue::Int(v)) => {
-            let _ = write!(buf, "{v}");
-        }
+    match super::values::lookup(values, env.data, n.bind, item) {
+        Some(UiValue::Int(v)) => push_int(buf, v),
         Some(UiValue::Bool(b)) => {
             let _ = buf.write_str(if b { "On" } else { "Off" });
         }
@@ -68,6 +66,28 @@ pub(super) fn label<'b, const V: usize>(
     }
     let _ = buf.write_str(after);
     buf.as_str()
+}
+
+/// `v` in decimal, without `core::fmt` (its machinery costs tens of
+/// microseconds a call on the N64, and a layout builds every label).
+fn push_int<const L: usize>(buf: &mut TextBuf<L>, v: i32) {
+    let mut digits = [0u8; 11];
+    let mut at = digits.len();
+    let mut n = v.unsigned_abs();
+    loop {
+        at -= 1;
+        digits[at] = b'0' + (n % 10) as u8;
+        n /= 10;
+        if n == 0 {
+            break;
+        }
+    }
+    if v < 0 {
+        at -= 1;
+        digits[at] = b'-';
+    }
+    // ASCII digits are always UTF-8.
+    let _ = buf.write_str(core::str::from_utf8(&digits[at..]).unwrap_or(""));
 }
 
 /// Most lines a wrapped text draws.
@@ -114,10 +134,24 @@ impl<const N: usize> Ui<N> {
         renderer.ui_stats(self.stats);
     }
 
-    fn prepare(&mut self, renderer: &mut dyn Renderer, screen: &UiScreen<'_>, env: &UiEnv<'_>) {
+    /// Lay `screen` out when anything changed and scroll a focus set from
+    /// outside ([`set_focus_item`](Self::set_focus_item)) into view,
+    /// without drawing: a game reads [`rect_of_item`](Self::rect_of_item)
+    /// to draw its own art under the screen, then [`draw`](Self::draw)
+    /// (which lays out nothing more while the inputs stay the same).
+    pub fn prepare(&mut self, renderer: &mut dyn Renderer, screen: &UiScreen<'_>, env: &UiEnv<'_>) {
+        let measure: &dyn Renderer = renderer;
         if self.needs_layout(screen, env) {
-            let measure: &dyn Renderer = renderer;
             self.layout(screen, env, measure);
+        }
+        // A focus set from outside scrolls into view now, not a frame late.
+        if core::mem::take(&mut self.reveal)
+            && let Some(at) = self.focus_slot()
+        {
+            self.scroll_into_view(at);
+            if self.needs_layout(screen, env) {
+                self.layout(screen, env, measure);
+            }
         }
     }
 
@@ -197,13 +231,13 @@ impl<const N: usize> Ui<N> {
                         self.outline(r, rect, round(scale).max(1.0), screen.theme.text);
                     }
                     let content = inset_px(rect, &n, scale);
-                    let lh = r
-                        .measure_text(
-                            font_of(screen, env, &n),
-                            "",
-                            text_scale(screen, &n) * scale * self.text_mul,
-                        )
-                        .y;
+                    let (f, px) = sized_font(
+                        screen,
+                        env,
+                        &n,
+                        text_scale(screen, &n) * scale * self.text_mul,
+                    );
+                    let lh = r.measure_text(f, "", px).y;
                     let side = lh.min(content.size.y).max(scale);
                     let bx = Rect::new(
                         content.pos.x,
@@ -214,9 +248,7 @@ impl<const N: usize> Ui<N> {
                     self.fill(r, bx, look.text);
                     let s1 = scale.max(1.0);
                     self.fill(r, shrink(bx, s1), Color::rgb(16, 18, 26));
-                    let on = self
-                        .values
-                        .get(n.bind, slot.item)
+                    let on = super::values::lookup(&self.values, env.data, n.bind, slot.item)
                         .is_some_and(|v| v.truthy());
                     if on {
                         self.fill(r, shrink(bx, 2.0 * s1), screen.theme.accent);
@@ -242,13 +274,13 @@ impl<const N: usize> Ui<N> {
                     let content = inset_px(rect, &n, scale);
                     let mut buf = TextBuf::<LABEL_LEN>::new();
                     let text = label(screen, &self.values, env, &n, slot.item, &mut buf);
-                    let lw = r
-                        .measure_text(
-                            font_of(screen, env, &n),
-                            text,
-                            text_scale(screen, &n) * scale * self.text_mul,
-                        )
-                        .x;
+                    let (f, px) = sized_font(
+                        screen,
+                        env,
+                        &n,
+                        text_scale(screen, &n) * scale * self.text_mul,
+                    );
+                    let lw = r.measure_text(f, text, px).x;
                     let gap = if lw > 0.0 {
                         super::layout::INNER_GAP * scale
                     } else {
@@ -259,9 +291,7 @@ impl<const N: usize> Ui<N> {
                     let track = self
                         .track(slot.node, slot.item)
                         .unwrap_or_else(|| self.slider_track(rect, &n, lw + gap, scale));
-                    let value = self
-                        .values
-                        .get(n.bind, slot.item)
+                    let value = super::values::lookup(&self.values, env.data, n.bind, slot.item)
                         .and_then(|v| v.int())
                         .unwrap_or(min);
                     let t = if max > min {
@@ -470,8 +500,12 @@ impl<const N: usize> Ui<N> {
         if text.is_empty() {
             return;
         }
-        let font = font_of(screen, env, n);
-        let px = text_scale(screen, n) * scale * self.text_mul;
+        let (font, px) = sized_font(
+            screen,
+            env,
+            n,
+            text_scale(screen, n) * scale * self.text_mul,
+        );
         let measure: &dyn Renderer = r;
         let width = |s: &str| measure.measure_text(font, s, px).x;
         let lh = measure.measure_text(font, "", px).y;
@@ -507,7 +541,10 @@ impl<const N: usize> Ui<N> {
         let mut count = 0;
         if single.is_none() {
             let base = text.as_ptr() as usize;
-            wrap(text, content.size.x, &width, &mut |line| {
+            // A pixel of slack: rects are rounded to whole pixels, so at a
+            // fractional scale a line the layout fit can come out a hair
+            // too wide here and wrap into a line the box has no room for.
+            wrap(text, content.size.x + 1.0, &width, &mut |line| {
                 if count < MAX_LINES {
                     let at = line.as_ptr() as usize - base;
                     lines[count] = (at as u16, (at + line.len()) as u16);
@@ -620,15 +657,19 @@ fn inset_px(rect: Rect, n: &UiNode<'_>, scale: f32) -> Rect {
     )
 }
 
-/// The font a node's text measures and draws with: its own or the
-/// theme's, through the language's remap (a per-language atlas, #59). The
-/// layout calls it too, so the two never disagree.
-pub(super) fn font_of(
+/// The font and pixel scale node `n` draws its text with at `px` pixels
+/// per font pixel: the language's font ([`UiStrings::font`]), maybe swapped
+/// by the game for this size ([`UiStrings::sized`]).
+///
+/// [`UiStrings::font`]: super::UiStrings::font
+/// [`UiStrings::sized`]: super::UiStrings::sized
+pub(super) fn sized_font(
     screen: &UiScreen<'_>,
     env: &UiEnv<'_>,
     n: &UiNode<'_>,
-) -> crate::render::FontId {
-    env.strings.font(n.font.unwrap_or(screen.theme.font))
+    px: f32,
+) -> (crate::render::FontId, f32) {
+    env.strings.sized(n.font.unwrap_or(screen.theme.font), px)
 }
 
 fn text_scale(screen: &UiScreen<'_>, n: &UiNode<'_>) -> f32 {

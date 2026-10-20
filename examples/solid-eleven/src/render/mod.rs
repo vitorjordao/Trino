@@ -83,6 +83,8 @@ pub const M_FOREARM: ModelId = model("models/se_forearm");
 pub const M_THIGH: ModelId = model("models/se_thigh");
 pub const M_SHIN: ModelId = model("models/se_shin");
 pub const M_FLAG_HAND: ModelId = model("models/se_flag_hand");
+/// The referee's card (white: tinted yellow or red).
+pub const M_CARD: ModelId = model("models/se_card");
 pub const M_RING: ModelId = model("models/se_ring");
 pub const M_RING_SMALL: ModelId = model("models/se_ring_small");
 pub const M_ARROW: ModelId = model("models/se_arrow");
@@ -430,9 +432,14 @@ const AO: trino_core::AmbientOcclusion = trino_core::AmbientOcclusion {
 /// body part and the ball in the shadow map, which covers the pitch the
 /// camera sees; on the consoles a blob under each near player and the
 /// ball (the N64's and the 3DS's: 22 projected bodies would cost the 3DS
-/// more than the match).
+/// more than the match). On the PC a shadow is sharp and dark where a foot
+/// or the ball touches the turf and softer and fainter the higher its
+/// caster is, gone 7 m up (contact hardening, #86): the ball in the air
+/// reads its height from its shadow. Consoles' blobs keep their own fade.
 const SHADOWS: ShadowSettings = ShadowSettings {
     distance: 70.0 * WORLD,
+    soft_growth: 0.12,
+    fade_distance: 7.0 * WORLD,
     ..ShadowSettings::DEFAULT
 };
 /// A near player's blob, under the pelvis (the old disc's width).
@@ -706,7 +713,7 @@ pub fn draw_match(r: &mut dyn Renderer, m: &Match, v: &MatchView, aspect: f32) {
     draw_stadium(r, &fr, hifi, env, v.stadium);
     draw_people(r, m, v, &fr, hifi);
     draw_ball(r, m, v, &fr, hifi);
-    draw_guides(r, m, v);
+    draw_guides(r, m, v, &fr);
     if hifi {
         draw_effects(r, v);
     }
@@ -930,8 +937,11 @@ fn draw_people(r: &mut dyn Renderer, m: &Match, v: &MatchView, fr: &Frustum, hif
         if !fr.sees(pos + Vec3::new(0.0, 0.9, 0.0), 1.3) {
             continue;
         }
-        // Officials face the ball.
-        let b = m.ball.pos.ground();
+        // Officials face the ball (the referee faces the man he books).
+        let b = match m.booking {
+            Some(bk) if k == 0 => m.players[bk.player as usize].pos,
+            _ => m.ball.pos.ground(),
+        };
         let d = (b - o).norm();
         let (fx, fz) = if d.x.0 == 0 && d.y.0 == 0 {
             (0.0, 1.0)
@@ -939,11 +949,13 @@ fn draw_people(r: &mut dyn Renderer, m: &Match, v: &MatchView, fr: &Frustum, hif
             (d.x.to_f32(), d.y.to_f32())
         };
         let body = body_matrix(pos, fx, fz, WORLD);
-        // The referee goes far like a player; a linesman keeps his arms
-        // (his flag is in his hand).
+        // The referee goes far like a player (but keeps his arms while he
+        // holds a card up); a linesman keeps his arms (his flag is in his
+        // hand).
+        let card = if k == 0 { shown_card(m) } else { None };
         let detail = if hifi {
             Detail::Full
-        } else if k == 0 && fr.depth(pos) > FAR_DEPTH {
+        } else if k == 0 && card.is_none() && fr.depth(pos) > FAR_DEPTH {
             Detail::Far
         } else {
             Detail::Near
@@ -963,7 +975,7 @@ fn draw_people(r: &mut dyn Renderer, m: &Match, v: &MatchView, fr: &Frustum, hif
             detail,
             v.sky.tint(),
         );
-        if k > 0 {
+        if k > 0 || card.is_some() {
             let hand = if hifi {
                 joints[joint::FOREARM_R].mul(&Mat34::from_trs(
                     Vec3::new(0.0, -0.3, 0.0),
@@ -977,14 +989,35 @@ fn draw_people(r: &mut dyn Renderer, m: &Match, v: &MatchView, fr: &Frustum, hif
                     Vec3::ONE,
                 ))
             };
-            r.draw_model_matrix(
-                M_FLAG_HAND,
-                &hand,
-                Material::VertexLit,
-                &plain(Color::WHITE),
-            );
+            match card {
+                Some(red) => {
+                    let c = if red {
+                        Color::rgb(220, 30, 30)
+                    } else {
+                        Color::rgb(250, 215, 30)
+                    };
+                    r.draw_model_matrix(M_CARD, &hand, Material::VertexLit, &plain(c));
+                }
+                None => r.draw_model_matrix(
+                    M_FLAG_HAND,
+                    &hand,
+                    Material::VertexLit,
+                    &plain(Color::WHITE),
+                ),
+            }
         }
     }
+}
+
+/// The card the referee holds up now, if any: `Some(true)` for a red
+/// (a second yellow included).
+pub fn shown_card(m: &Match) -> Option<bool> {
+    let b = m.booking?;
+    if b.shown == 0 {
+        return None;
+    }
+    let red = b.card == crate::sim::rules::Card::Red || m.players[b.player as usize].yellow >= 2;
+    Some(red)
 }
 
 /// Draw a posed body: the parts of `detail`'s tier, each casting its
@@ -1116,7 +1149,7 @@ fn draw_ball(r: &mut dyn Renderer, m: &Match, v: &MatchView, fr: &Frustum, hifi:
 }
 
 /// The 3D markers: active cursor, switch target, P1 arrow, pass lane, shot arc.
-fn draw_guides(r: &mut dyn Renderer, m: &Match, v: &MatchView) {
+fn draw_guides(r: &mut dyn Renderer, m: &Match, v: &MatchView, fr: &Frustum) {
     let g = &v.guides;
     let pulse = 1.0 + 0.08 * trino_core::math3d::sin(v.time * 6.0);
     if let Some(a) = g.active {
@@ -1140,12 +1173,16 @@ fn draw_guides(r: &mut dyn Renderer, m: &Match, v: &MatchView) {
     if let Some(n) = g.next {
         let p = &m.players[n as usize];
         let pos = Vec3::new(p.pos.x.to_f32(), 0.04, p.pos.y.to_f32());
-        r.draw_model_matrix(
-            M_RING_SMALL,
-            &place(pos, 0.0, 1.0, 1.0),
-            Material::VertexLit,
-            &unlit(Color::rgb(120, 230, 90)),
-        );
+        // Only what the camera sees (an offscreen draw costs the N64 a
+        // CPU transform before its cull).
+        if fr.sees(pos, 0.6) {
+            r.draw_model_matrix(
+                M_RING_SMALL,
+                &place(pos, 0.0, 1.0, 1.0),
+                Material::VertexLit,
+                &unlit(Color::rgb(120, 230, 90)),
+            );
+        }
     }
     if let Some((from, to)) = g.pass_lane {
         let d = to - from;
@@ -1156,6 +1193,11 @@ fn draw_guides(r: &mut dyn Renderer, m: &Match, v: &MatchView) {
             for k in 1..n {
                 let t = k as f32 / n as f32;
                 let at = Vec3::new(from.x + d.x * t, 0.05, from.z + d.z * t);
+                // The dash runs a meter from `at`: its middle, half a meter.
+                let mid = Vec3::new(at.x + fx * 0.5, at.y, at.z + fz * 0.5);
+                if !fr.sees(mid, 0.55) {
+                    continue;
+                }
                 r.draw_model_matrix(
                     M_DASH,
                     &place(at, fx, fz, 1.0),
@@ -1168,6 +1210,9 @@ fn draw_guides(r: &mut dyn Renderer, m: &Match, v: &MatchView) {
     for k in 0..g.arc_len as usize {
         let t = k as f32 / 10.0;
         let c = Color::rgb(255, (230.0 - 170.0 * t) as u8, (60.0 - 40.0 * t) as u8);
+        if !fr.sees(g.arc[k], 0.2) {
+            continue;
+        }
         r.draw_model_matrix(
             M_DOT,
             &place(g.arc[k], 0.0, 1.0, 1.0),
@@ -1322,8 +1367,12 @@ pub fn pick_official_clip(m: &Match, k: usize, prev: (f32, f32), dt: f32, st: &m
     let raw = dist / dt.max(1e-3);
     st.speed += (raw - st.speed) * (dt / 0.4).min(1.0);
     let speed = st.speed;
-    // Officials face the ball. Check if the referee is backing away from play.
-    let b = m.ball.pos.ground();
+    // Officials face the ball (the referee the man he books). Check if the
+    // referee is backing away from play.
+    let b = match m.booking {
+        Some(bk) if k == 0 => m.players[bk.player as usize].pos,
+        _ => m.ball.pos.ground(),
+    };
     let d = (b - o).norm();
     let (fx, fz) = (d.x.to_f32(), d.y.to_f32());
     let dot = if dist > 1e-4 {
@@ -1332,15 +1381,16 @@ pub fn pick_official_clip(m: &Match, k: usize, prev: (f32, f32), dt: f32, st: &m
         1.0
     };
     let backing = k == 0 && dot < -0.15;
-    // The referee shows a card for two seconds after one, and points the
-    // restart after a foul while the ball is dead.
+    // The referee shows a card once he has reached the offender, and
+    // points the restart after a foul while the ball is dead.
     let recent = |kinds: &[EventKind], within: u32| {
         m.events_since(m.event_seq.saturating_sub(4))
             .any(|(_, e)| kinds.contains(&e.kind) && m.tick.saturating_sub(e.tick) < within)
     };
     let clip = if k > 0 && m.flag.0 as usize == k && m.flag.1 > 0 {
         ClipName::FlagUp
-    } else if k == 0 && recent(&[EventKind::Yellow, EventKind::Red], 120) {
+    } else if k == 0 && shown_card(m).is_some() {
+        // He has walked up to the offender: the card goes up there.
         ClipName::RefCard
     } else if k == 0
         && matches!(m.phase, Phase::Dead { .. } | Phase::Setup { .. })

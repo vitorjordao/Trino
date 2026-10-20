@@ -36,6 +36,7 @@ pub struct PcPlatform {
     /// until a host publishes it (no remapping then).
     input: Option<InputInfo>,
     pad_name: Option<String>,
+    pad_family: Option<trino_core::PadFamily>,
     /// Binding labels, [`BINDABLE`] order: keyboard, gamepad.
     labels: [[Option<String>; 2]; BINDINGS],
     /// The game's last rebind/cancel/reset, for the host to apply.
@@ -79,6 +80,7 @@ impl PcPlatform {
             second_screen: None,
             input: None,
             pad_name: None,
+            pad_family: None,
             labels: Default::default(),
             input_request: None,
             hw_tier: caps.hw_tier,
@@ -137,6 +139,7 @@ impl PcPlatform {
     pub fn publish_input(&mut self, input: &PcInput) {
         self.input = Some(input.info());
         self.pad_name = input.gamepad_name();
+        self.pad_family = input.gamepad_family();
         for (i, b) in BINDABLE.iter().enumerate() {
             self.labels[i] = [
                 input.bindings().label(*b, BindDevice::Keyboard),
@@ -363,6 +366,10 @@ impl Platform for PcPlatform {
 
     fn gamepad_name(&self) -> Option<&str> {
         self.pad_name.as_deref()
+    }
+
+    fn gamepad_family(&self) -> Option<trino_core::PadFamily> {
+        self.pad_family
     }
 
     fn binding_label(&self, button: Button, device: BindDevice) -> Option<&str> {

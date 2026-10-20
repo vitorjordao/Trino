@@ -1097,6 +1097,7 @@ fn kind_settings(ui: &mut egui::Ui, kind: &mut Kind, choices: &Choices) {
             gap,
             align,
             justify,
+            wrap,
         } => {
             theme::prop(ui, "dir", |ui| combo(ui, "Stack dir", dir, &dirs));
             theme::prop(ui, "gap", |ui| num(ui, "Stack gap", gap, -512..=512));
@@ -1110,6 +1111,9 @@ fn kind_settings(ui: &mut egui::Ui, kind: &mut Kind, choices: &Choices) {
                     justify,
                     &labels(Justify::ALL, Justify::label),
                 )
+            });
+            theme::prop(ui, "wrap", |ui| {
+                check(ui, "Stack wrap", wrap, "next line when full")
             });
         }
         Kind::Grid { cols, gap } => {

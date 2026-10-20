@@ -20,6 +20,40 @@ const MAP_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 /// sampler at [`super::NEAREST_DEPTH_BINDING`]'s 3).
 const SAMPLER_BINDING: u32 = 4;
 
+/// WebGL2 only: the map again as an unfilterable float texture, and the
+/// nearest sampler that reads it, for the blocker search (#86). A
+/// sampler-less read of a depth texture reads 0 there (wgpu's GL backend
+/// leaves its filter mipmapped), and naga can't translate a `textureLoad`
+/// of a `texture_depth_2d` to GLSL at all.
+const MAP_FLOAT_BINDING: u32 = 5;
+const MAP_NEAREST_BINDING: u32 = 6;
+
+/// The blocker search's map read, as written in shadow_map.wgsl.
+const MAP_READ: &str = "return textureLoad(t_shadow, q, 0);";
+
+/// shadow_map.wgsl for WebGL2's map: the blocker search reads the float
+/// binding through the nearest sampler (the `depth_as_float` pattern).
+pub(super) fn map_read_as_float(source: &str) -> String {
+    assert!(
+        source.contains(MAP_READ),
+        "shadow_map.wgsl's map read moved"
+    );
+    source
+        .replace(
+            MAP_READ,
+            "return textureSampleLevel(t_shadow_f, s_shadow_f, (vec2<f32>(q) + vec2<f32>(0.5)) \
+             / vec2<f32>(textureDimensions(t_shadow_f)), 0.0).r;",
+        )
+        .replace("textureDimensions(t_shadow)", "textureDimensions(t_shadow_f)")
+        .replace(
+            "var t_shadow: SHADOWMAP;",
+            &format!(
+                "var t_shadow: SHADOWMAP;\n@group(0) @binding({MAP_FLOAT_BINDING}) var t_shadow_f: \
+                 texture_2d<f32>;\n@group(0) @binding({MAP_NEAREST_BINDING}) var s_shadow_f: sampler;"
+            ),
+        )
+}
+
 /// The map's texels per side: the game's, or the quality preset's (1024 on
 /// Low, 2048 above), within what the device takes.
 pub fn map_size(game: u16, quality: Option<ShadowSetting>, max: u32) -> u32 {
@@ -62,6 +96,11 @@ pub struct MapUniform {
     pub distance: f32,
     pub map_size: u32,
     pub taps: u32,
+    /// [`trino_core::ShadowSettings::soft_growth`] and
+    /// [`fade_distance`](trino_core::ShadowSettings::fade_distance): 0 and
+    /// 0 skip the blocker search (ADR 0025's composite, bit for bit).
+    pub soft_growth: f32,
+    pub fade_distance: f32,
 }
 
 impl MapUniform {
@@ -99,7 +138,16 @@ impl MapUniform {
         // A texel along the normal, and the depth of one more in the map.
         f.extend([texel, texel / self.fit.depth, spacing, self.distance]);
         let mut words: Vec<u32> = f.iter().map(|x| x.to_bits()).collect();
-        words.extend([self.taps, 0, 0, 0]);
+        // The soft edge (twice the filter radius) widens by `soft_growth`
+        // per world unit of blocker distance; the map's uv spans twice its
+        // half width.
+        let growth = self.soft_growth * 0.25 / self.fit.radius;
+        words.extend([
+            self.taps,
+            growth.to_bits(),
+            self.fade_distance.to_bits(),
+            self.fit.depth.to_bits(),
+        ]);
         let mut b = [0u8; 192];
         for (i, w) in words.iter().enumerate() {
             b[i * 4..i * 4 + 4].copy_from_slice(&w.to_le_bytes());
@@ -226,6 +274,11 @@ impl MapPass {
         } else {
             source.to_string()
         };
+        let source = if webgl2 {
+            map_read_as_float(&source)
+        } else {
+            source
+        };
         let source = source.replace("SHADOWMAP", "texture_depth_2d");
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("trino-shadow-map"),
@@ -262,6 +315,17 @@ impl MapPass {
         ];
         if webgl2 {
             entries.push(super::nearest_sampler_entry(super::NEAREST_DEPTH_BINDING.1));
+            entries.push(wgpu::BindGroupLayoutEntry {
+                binding: MAP_FLOAT_BINDING,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            });
+            entries.push(super::nearest_sampler_entry(MAP_NEAREST_BINDING));
         }
         let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("trino-shadow-map-bgl"),
@@ -410,6 +474,14 @@ impl MapPass {
                     binding: super::NEAREST_DEPTH_BINDING.1,
                     resource: wgpu::BindingResource::Sampler(s),
                 });
+                entries.push(wgpu::BindGroupEntry {
+                    binding: MAP_FLOAT_BINDING,
+                    resource: wgpu::BindingResource::TextureView(map),
+                });
+                entries.push(wgpu::BindGroupEntry {
+                    binding: MAP_NEAREST_BINDING,
+                    resource: wgpu::BindingResource::Sampler(s),
+                });
             }
             self.group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("trino-shadow-map-bg"),
@@ -534,6 +606,8 @@ mod tests {
             distance: 40.0,
             map_size: 2048,
             taps: 3,
+            soft_growth: 0.0,
+            fade_distance: 0.0,
         };
         let b = u.bytes();
         let f = |i: usize| f32::from_le_bytes(b[i * 4..i * 4 + 4].try_into().unwrap());
@@ -548,5 +622,32 @@ mod tests {
         assert_eq!(f(42), 1.0 / 2048.0, "a texel apart at softness 0");
         assert_eq!(f(43), 40.0);
         assert_eq!(u32::from_le_bytes(b[176..180].try_into().unwrap()), 3);
+        // Contact hardening off: growth and fade 0 (the shader skips the
+        // blocker search); the depth range always there.
+        assert_eq!((f(45), f(46)), (0.0, 0.0));
+        assert_eq!(f(47), fit.depth);
+        let on = MapUniform {
+            soft_growth: 0.2,
+            fade_distance: 3.0,
+            ..u
+        }
+        .bytes();
+        let g = |i: usize| f32::from_le_bytes(on[i * 4..i * 4 + 4].try_into().unwrap());
+        assert!(
+            (g(45) - 0.2 * 0.25 / fit.radius).abs() < 1e-9,
+            "uv per world unit"
+        );
+        assert_eq!(g(46), 3.0);
+        assert_eq!(on[..180], b[..180], "the rest unchanged");
+    }
+
+    #[test]
+    fn webgl2_reads_the_map_through_a_float_binding() {
+        let src = map_read_as_float(include_str!("shadow_map.wgsl"));
+        assert!(!src.contains(MAP_READ));
+        assert!(!src.contains("textureDimensions(t_shadow)"));
+        assert!(src.contains("@group(0) @binding(5) var t_shadow_f: texture_2d<f32>;"));
+        assert!(src.contains("@group(0) @binding(6) var s_shadow_f: sampler;"));
+        assert!(src.contains("textureSampleLevel(t_shadow_f, s_shadow_f"));
     }
 }

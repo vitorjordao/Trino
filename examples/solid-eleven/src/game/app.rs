@@ -114,7 +114,7 @@ impl Settings {
 }
 
 /// The quick-match choices.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct QuickCfg {
     pub home: u8,
     pub away: u8,
@@ -148,12 +148,17 @@ pub struct Toast {
 }
 
 /// Menu cursors.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
 pub struct Cursors {
     pub title: usize,
     pub quick: usize,
     pub pick: usize,
     pub club: usize,
+    /// The table row the view follows (scrolling at large text).
+    pub table: usize,
+    /// The match report's part the view follows (scrolling at large
+    /// text): the score, six stats, the scorers, the income.
+    pub results: usize,
     /// The club shown in Teams.
     pub team_club: u8,
     pub squad: usize,
@@ -210,6 +215,7 @@ pub struct InputPeek {
     /// 0 = no gamepad support, 1 = none connected, 2 = connected.
     pub gamepad: u8,
     pub pad_name: TextBuf<28>,
+    pub pad_family: Option<trino_core::PadFamily>,
     /// A rebind waiting for its key or pad button.
     pub capturing: Option<(Button, BindDevice)>,
 }
@@ -292,6 +298,18 @@ pub struct SolidElevenGame {
     sub_asked: bool,
     /// The pause menu's focus (a UI screen, `ui/pause.ui.ron`).
     pub pause_ui: trino_core::Ui<16>,
+    /// The menu screen up (one at a time): laid out by the engine
+    /// (`ui/*.ui.ron`, issue #95), showing the game's cursors.
+    pub menu_ui: crate::ui::scr::MenuUi,
+    /// Part of the menu screens' data revision (with each screen's own
+    /// state, `ui::scr::rev`): moves on a scene change or a toast, and
+    /// every 30 frames (a timer's text).
+    pub menu_frame: u32,
+    menu_ticks: u32,
+    /// The toast over the menus (`ui/toast.ui.ron`).
+    pub toast_ui: trino_core::Ui<8>,
+    /// The 3DS touch screen (`ui/bottom.ui.ron`).
+    pub bottom_ui: trino_core::Ui<80>,
     /// The PC host's bindings (the controls page).
     pub peek: InputPeek,
     /// For the host after this frame.
@@ -355,6 +373,11 @@ impl SolidElevenGame {
             spin: 0.0,
             hits: Hits::default(),
             pause_ui: trino_core::Ui::new(),
+            menu_ui: trino_core::Ui::new(),
+            menu_frame: 0,
+            menu_ticks: 0,
+            toast_ui: trino_core::Ui::new(),
+            bottom_ui: trino_core::Ui::new(),
             repeat: Repeat::default(),
             prev: InputState::default(),
             save_dirty: false,
@@ -505,6 +528,12 @@ impl SolidElevenGame {
         }
         let mut nav = self.repeat.nav(input, &prev, dt);
         let mut tap = self.hits.tapped(input, &prev);
+        let scene_before = self.scene;
+        let toast_before = self.toast.map(|t| t.text);
+        self.menu_ticks = self.menu_ticks.wrapping_add(1);
+        if self.menu_ticks.is_multiple_of(30) {
+            self.menu_frame = self.menu_frame.wrapping_add(1);
+        }
         if tap == Some(crate::ui::screens::HIT_BACK) {
             nav.back = true;
             tap = None;
@@ -538,6 +567,11 @@ impl SolidElevenGame {
             }
             Scene::Controls => self.controls_frame(input, &prev, &nav, tap, audio, dt),
             _ => self.menu_frame(&nav, tap, audio),
+        }
+        // What the frame changed without a press (a scene opened by the
+        // game, a toast) shows at once.
+        if self.scene != scene_before || self.toast.map(|t| t.text) != toast_before {
+            self.menu_frame = self.menu_frame.wrapping_add(1);
         }
     }
 
@@ -835,6 +869,8 @@ impl SolidElevenGame {
             Scene::PickClub { then } => self.pick_club(nav, tap, then),
             Scene::Club => self.club(nav, tap),
             Scene::Table => {
+                // Up and down scroll it (it shows whole at 100 % text).
+                menu::step(&mut self.cur.table, TEAMS, nav);
                 if nav.back || nav.confirm || nav.y || tap.is_some() {
                     self.scene = Scene::Club;
                 }
@@ -863,6 +899,8 @@ impl SolidElevenGame {
                 }
             }
             Scene::Results => {
+                // Up and down scroll it (it shows whole at 100 % text).
+                menu::step(&mut self.cur.results, 9, nav);
                 if nav.confirm || nav.back || tap.is_some() {
                     let career = self.report.is_some_and(|r| r.career);
                     // The last round: the champion's ceremony first.
@@ -995,8 +1033,18 @@ impl SolidElevenGame {
     }
 
     fn club(&mut self, nav: &Nav, tap: Option<u8>) {
-        // 0 play, 1 simulate, 2 squad, 3 market, 4 table.
-        menu::step(&mut self.cur.club, 5, nav);
+        // 0 play, 1 simulate, 2 squad, 3 market, 4 table. At large text the
+        // panels above them take the cursor too (5 finances, 6 players, 7
+        // matches): a small screen shows one at a time, and the pad must
+        // reach each.
+        let order: &[usize] = if self.big_text() {
+            &[5, 6, 7, 0, 1, 2, 3, 4]
+        } else {
+            &[0, 1, 2, 3, 4]
+        };
+        let mut at = order.iter().position(|&k| k == self.cur.club).unwrap_or(3);
+        menu::step(&mut at, order.len(), nav);
+        self.cur.club = order[at];
         if let Some(id) = tap {
             self.cur.club = id as usize;
         }
@@ -1053,8 +1101,25 @@ impl SolidElevenGame {
                 self.scene = Scene::Teams;
             }
             3 => self.scene = Scene::Market,
-            _ => self.scene = Scene::Table,
+            4 => self.scene = Scene::Table,
+            // A panel: nothing to pick.
+            _ => {}
         }
+    }
+
+    /// Players the market shows at once (fewer, taller ones at large text).
+    pub fn market_rows(&self) -> usize {
+        if self.big_text() { 3 } else { 5 }
+    }
+
+    /// Squad rows Teams shows at once (fewer, taller ones at large text).
+    pub fn squad_rows(&self) -> usize {
+        if self.big_text() { 3 } else { 6 }
+    }
+
+    /// The player reads at 150 % or more: menus lay out for large text.
+    pub fn big_text(&self) -> bool {
+        self.access.clamped().text_factor() >= 1.5
     }
 
     /// The squad list Teams and the editor show (database indices).
@@ -1082,7 +1147,8 @@ impl SolidElevenGame {
         if let Some(id) = tap {
             self.cur.squad = id as usize;
         }
-        menu::scroll(&mut self.cur.squad_top, self.cur.squad, 6);
+        let rows = self.squad_rows();
+        menu::scroll(&mut self.cur.squad_top, self.cur.squad, rows);
         // L/R: another club (outside a career, any club can be edited).
         if (nav.l || nav.r) && !self.career_on {
             let d = if nav.r { 1 } else { TEAMS as u8 - 1 };
@@ -1206,7 +1272,8 @@ impl SolidElevenGame {
         if let Some(id) = tap {
             self.cur.market = id as usize;
         }
-        menu::scroll(&mut self.cur.market_top, self.cur.market, 5);
+        let rows = self.market_rows();
+        menu::scroll(&mut self.cur.market_top, self.cur.market, rows);
         if nav.x {
             self.cur.market_sort = (self.cur.market_sort + 1) % 4;
             self.cur.market = 0;
@@ -1455,7 +1522,10 @@ impl SolidElevenGame {
     /// Copy the host's binding labels and rebind state (the PC's).
     fn peek_input(&mut self, platform: &dyn Platform) {
         let Some(info) = platform.input_info() else {
-            self.peek = InputPeek::default();
+            self.peek = InputPeek {
+                pad_family: platform.gamepad_family(),
+                ..InputPeek::default()
+            };
             return;
         };
         let mut p = InputPeek {
@@ -1466,6 +1536,7 @@ impl SolidElevenGame {
                 GamepadStatus::Disconnected => 1,
                 GamepadStatus::Connected => 2,
             },
+            pad_family: platform.gamepad_family(),
             ..InputPeek::default()
         };
         for (k, b) in Button::ALL.into_iter().enumerate() {

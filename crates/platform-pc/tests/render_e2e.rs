@@ -546,7 +546,9 @@ fn internal_size_shared_device_and_tooling_accessors() {
 
     // A renderer built on a caller's device (the editor's path) renders
     // like the headless one.
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+    desc.flags = trino_platform_pc::renderer::headless_flags();
+    let instance = wgpu::Instance::new(desc);
     let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         required_limits: wgpu::Limits::downlevel_defaults(),

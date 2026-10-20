@@ -512,6 +512,9 @@ impl BakedScene {
                 distance: rd_f32(d, e + 4),
                 softness: d[e + 8],
                 color: rd_rgba(d, e + 12),
+                // TSCN v5 predates contact hardening (#86): a baked scene
+                // gets ADR 0025's look; a game sets them over it.
+                ..ShadowSettings::DEFAULT
             }
             .clamped(),
         )

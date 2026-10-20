@@ -215,6 +215,7 @@ pub struct InputPeek {
     /// 0 = no gamepad support, 1 = none connected, 2 = connected.
     pub gamepad: u8,
     pub pad_name: TextBuf<28>,
+    pub pad_family: Option<trino_core::PadFamily>,
     /// A rebind waiting for its key or pad button.
     pub capturing: Option<(Button, BindDevice)>,
 }
@@ -307,6 +308,8 @@ pub struct SolidElevenGame {
     menu_ticks: u32,
     /// The toast over the menus (`ui/toast.ui.ron`).
     pub toast_ui: trino_core::Ui<8>,
+    /// The 3DS touch screen (`ui/bottom.ui.ron`).
+    pub bottom_ui: trino_core::Ui<80>,
     /// The PC host's bindings (the controls page).
     pub peek: InputPeek,
     /// For the host after this frame.
@@ -374,6 +377,7 @@ impl SolidElevenGame {
             menu_frame: 0,
             menu_ticks: 0,
             toast_ui: trino_core::Ui::new(),
+            bottom_ui: trino_core::Ui::new(),
             repeat: Repeat::default(),
             prev: InputState::default(),
             save_dirty: false,
@@ -1518,7 +1522,10 @@ impl SolidElevenGame {
     /// Copy the host's binding labels and rebind state (the PC's).
     fn peek_input(&mut self, platform: &dyn Platform) {
         let Some(info) = platform.input_info() else {
-            self.peek = InputPeek::default();
+            self.peek = InputPeek {
+                pad_family: platform.gamepad_family(),
+                ..InputPeek::default()
+            };
             return;
         };
         let mut p = InputPeek {
@@ -1529,6 +1536,7 @@ impl SolidElevenGame {
                 GamepadStatus::Disconnected => 1,
                 GamepadStatus::Connected => 2,
             },
+            pad_family: platform.gamepad_family(),
             ..InputPeek::default()
         };
         for (k, b) in Button::ALL.into_iter().enumerate() {

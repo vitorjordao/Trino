@@ -701,14 +701,16 @@ overlay, and a measurement on real hardware (ares doesn't time the RDP).
     with a second unlit draw just behind them (no backend code; castle64's player and
     boars, Solid Eleven's ball).
   - **Tools:** `cargo xtask access check|shot --json` (every screen at 200 % on each
-    target and language: overflow, safe area, budgets); the PC simulation view
+    target and language: overflow, safe area, budgets; `trino_scene::ui::apply_access_preview`
+    flips `"small"`/`"big"` preview flags when `text_scale >= 1.5`); the PC simulation view
     (`PcRenderer::set_cvd_view`, `TRINO_CVD`); the editor's Accessibility tab (simulation
     in every view, palettes, checklist; `TRINO_EDITOR_ACCESS`); the starter
-    `ui/accessibility.ui.ron`. Adopters: castle64's doors and captions, Solid Eleven's kits
-    (`dress_for`) and captions; Solid Eleven's texts checked against their boxes at
-    100 % and 200 % in every language (`solid_eleven_menus`), its pause menu at the
-    player's text scale. Self-test step `accessibility`; goldens
-    `tests/golden/pc/access_*.png`.
+    `ui/accessibility.ui.ron`. Adopters: castle64's doors, captions and 200 % HUD counters,
+    Solid Eleven's kits (`dress_for`), captions, 200 % match HUD (`render::hud::draw_scaled`)
+    and all 18 menus as `.ui.ron` screens (`examples/solid-eleven/ui/*.ui.ron`, with
+    `visible_if: "small"` / `"big"` 200 % reflows); `solid_eleven_menus` audits 1,716 menu
+    states (27,456 pictures) across 100 % and 200 % text in every language and gamepad
+    family. Self-test step `accessibility`; goldens `tests/golden/pc/access_*.png`.
 - **UI system (2026-10-18, ADR 0024, GitHub #58):** menus, HUDs and dialogs as data.
   - **Core (`trino_core::ui`, `no_std`, no allocation):** `UiScreen` (a static slice or a
     `TUIL` blob view), `Ui<N>` (slots, focus, scroll, 24 values, events), containers

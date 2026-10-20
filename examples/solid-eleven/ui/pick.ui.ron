@@ -22,6 +22,7 @@
         pressed: Some((50, 110, 240, 255)),
     ),
     preview: {
+    "small": Bool(true),
     "short0": Text("ROU"),
     "name": Text("VIOLET WANDERERS"),
     "facts": Text("4-3-3  GER 78  SALDO 15.200"),

@@ -194,23 +194,22 @@ from the same `check_project` the CLI runs. A kittest flow and the layout audit 
 
 - castle64: the stage doors' open tints come from `palettes.ron` per mode; the coin, star
   and hurt sounds have captions (the star and the hurt are important); in high contrast
-  the player is ringed in yellow and the boars in red-orange.
+  the player is ringed in yellow and the boars in red-orange; the HUD coin and star
+  counters scale with `AccessSettings::text_scale` while staying on screen (#95).
 - Solid Eleven: `dress_for(clubs, people, cvd)` compares kits as the player sees them and
   changes the visitors' (then the hosts') kit until every pair keeps ΔE 20 in every mode —
   the clubs' own kits, no new colors, no draw off the RSP. Its whistle (important),
   cheers, "ooh" and post have captions in English and Portuguese; in high contrast the
   ball is ringed in yellow.
-- Solid Eleven's texts are checked against their boxes: its menu crawler
-  (`solid_eleven_menus`) finds the box each text is printed on (the innermost panel,
-  button or row drawn before it, at least as thick as the text) and fails on ink outside
-  it, in every language, at four picture sizes and at 100 % and 200 % text, with every
-  club's names. It found and fixed the Portuguese club buttons, the longest club names on
-  two cards (they wrap now) and the Controls chips at 1080p. The pause menu (a UI-system
-  screen) takes the player's text scale; the hand-drawn menus don't, and the crawler holds
-  them to that. Measured at 320×240, 57 % of their texts have no room in their box for
-  even 125 % and 11 % for 200 %: growing them in place would mix sizes on one screen. The
-  fix is moving them to UI-system screens (the #58 follow-up). Its pause menu and the
-  starter screens grow with their text (`min` sizes instead of fixed ones).
+- Every Solid Eleven menu and touch screen is now an engine UI screen (`examples/solid-eleven/ui/*.ui.ron`,
+  18 screens, #95 and #86 item 8), and the match HUD (`render::hud`) scales its scoreboard,
+  player tag and banners up to 200 % text without overlapping the minimap. Two-column
+  menus switch at `>= 150 %` text (`visible_if: "small"` / `"big"`) to stacked/scrolling
+  variants; the menu crawler (`solid_eleven_menus`) verifies that all 1,716 menu states
+  across N64, 3DS, PC 360p and PC 1080p in both languages and at 100 % and 200 % text
+  scale grow with the text scale while keeping every glyph's ink inside its box and on
+  screen. `cargo xtask access check examples/solid-eleven` audits all 18 screens at 200 %
+  text on `n64`, `3ds`, `pc` and `web` with 0 errors and 0 warnings.
 - New projects get an Accessibility screen (`ui/accessibility.ui.ron`) reached from
   Options; its rows scroll when 200 % text makes them taller than the N64's safe area.
 

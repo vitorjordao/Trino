@@ -197,6 +197,7 @@ fn pc_peek() -> solid_eleven::game::app::InputPeek {
         pads: pads.map(|k| font_safe(Some(k))),
         gamepad: 2,
         pad_name: font_safe(Some("Xbox Wireless Controller")),
+        pad_family: Some(trino_core::PadFamily::Xbox),
         capturing: None,
     }
 }

@@ -447,9 +447,12 @@ fn check(g: &SolidElevenGame, fonts: &Fonts, path: &str, report: &mut Report) {
             let toast_text = g
                 .toast
                 .map(|t| solid_eleven::ui::i18n::tr(lang, t.text).to_string());
+            // (The 3DS touch screen is a UI screen in every scene: only the
+            // top screen can be hand-drawn.)
             let texts: Vec<(String, Rect)> = r
                 .texts
                 .iter()
+                .filter(|t| t.screen == 0)
                 .filter(|t| toast_text.as_deref() != Some(t.text.as_str()))
                 .map(|t| (t.text.clone(), t.rect))
                 .collect();
@@ -602,26 +605,10 @@ fn scene_name(s: Scene) -> String {
     format!("{s:?}").split(' ').next().unwrap().to_string()
 }
 
-/// The screens drawn by the engine's UI system (issue #95): they must grow
-/// with the text scale, and the box check holds them at 200 %.
-fn ui_screen(g: &SolidElevenGame) -> bool {
-    matches!(
-        g.scene,
-        Scene::Pause
-            | Scene::Settings
-            | Scene::Table
-            | Scene::Confirm
-            | Scene::Quick
-            | Scene::Results
-            | Scene::Club
-            | Scene::PickClub { .. }
-            | Scene::Teams
-            | Scene::Edit
-            | Scene::Market
-            | Scene::HalfTime
-            | Scene::Title
-            | Scene::Substitutions { .. }
-    )
+/// Every screen and the match HUD now scale with the text scale (issue #95)
+/// while keeping every text inside its box and on screen at 200 %.
+fn ui_screen(_g: &SolidElevenGame) -> bool {
+    true
 }
 
 #[derive(Default)]
@@ -805,6 +792,27 @@ fn every_menu_state_draws_cleanly_in_every_language_and_size() {
             }
         }
     }
+    // Every gamepad family in the controls screen (match tab and gamepad
+    // tab) and the title screen (PlayStation symbol spans, Nintendo swapped
+    // letters, 8BitDo, Xbox, Generic).
+    let mut ctl = g.clone();
+    ctl.scene = Scene::Controls;
+    ctl.using_pad = true;
+    ctl.peek.rebindable = true;
+    ctl.peek.gamepad = 2;
+    for fam in trino_core::PadFamily::ALL {
+        ctl.peek.pad_family = Some(fam);
+        for tab in [0u8, 2] {
+            ctl.cur.ctl_tab = tab;
+            report.states += 1;
+            check(
+                &ctl,
+                fonts,
+                &format!("controls: {fam:?} tab {tab}"),
+                &mut report,
+            );
+        }
+    }
     println!(
         "{} menu states, {} pictures checked; screens reached: {:?}",
         report.states,
@@ -822,6 +830,7 @@ fn every_menu_state_draws_cleanly_in_every_language_and_size() {
     for want in [
         "Pause",
         "Settings",
+        "Controls",
         "Table",
         "Confirm",
         "Quick",
@@ -834,6 +843,8 @@ fn every_menu_state_draws_cleanly_in_every_language_and_size() {
         "HalfTime",
         "Substitutions",
         "Title",
+        "Trophy",
+        "Match",
     ] {
         assert!(
             report.grew.contains(want),

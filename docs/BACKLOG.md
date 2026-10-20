@@ -71,22 +71,19 @@ shipping a 3D game first**, then by cost:
 - **Accessibility follow-ups (#60, ADR 0027)** (S–M each).
   - The PC/Web correction filter (daltonization) for content without semantic palettes:
     #64's post stack (the simulation view is review-only).
-  - Text scale for text a game draws itself (`draw_text` HUDs: castle64's counters,
-    Solid Eleven's hand-drawn menus and match HUD); the UI system (Solid Eleven's
-    pause menu) and the captions scale today. Measured on Solid Eleven's 320×240
-    menus: 57 % of the texts have no room in their box for even 125 %, 11 % for
-    200 %, so growing them in place would mix sizes on one screen; the fix is those
-    menus as UI-system screens (the #58 follow-up below), where Fit boxes grow.
+  - ~~Text scale for text a game draws itself (`draw_text` HUDs: castle64's counters,
+    Solid Eleven's hand-drawn menus and match HUD)~~: **done** (#95, #86 item 8): all 18
+    Solid Eleven menus and the 3DS touch screen are now UI-system screens (`examples/solid-eleven/ui/*.ui.ron`),
+    and both Solid Eleven's match HUD and castle64's HUD counters scale up to 200 % text.
   - The Inspector's palette slots by semantic name (`ModelParams::palette` in authored
     content is P2 #13); the Accessibility tab edits the palettes today.
-  - Plan & Party's status colors and the rest of Solid Eleven's menus on semantic
-    palettes and screens; speaker names and colors for dialogue captions; caption fonts
-    per language with #59.
+  - Plan & Party's status colors and Solid Eleven's menus on semantic palettes; speaker
+    names and colors for dialogue captions; caption fonts per language with #59.
   - A ready-made Accessibility page in the core (like `GraphicsOptions`) for games that
     don't use the starter screen.
 - **UI system follow-ups (#58, ADR 0024)** (S–M each).
-  - The rest of Solid Eleven's menus and Plan & Party's as screens (the pause menu is the
-    first); each one moved deletes hand-placed coordinates and hit boxes.
+  - ~~The rest of Solid Eleven's menus as screens~~: **done** (#95, #86 item 8). Plan &
+    Party's menus remain in its own repository.
   - Text entry (a name, a save slot): an on-screen keyboard screen for the consoles.
   - Transitions and animated focus (a slide, a fade) — today a screen changes in one frame.
   - ~~Localization beyond plain strings (#59)~~: **done** (ADR 0026). ~~Text scale with

@@ -819,6 +819,10 @@ impl<const N: usize> Ui<N> {
     }
 
     /// Not drawn: clipped by a scroll box (or inside one that is).
+    pub fn is_hidden(&self, slot: usize) -> bool {
+        slot >= self.count || self.hidden(slot)
+    }
+
     pub(super) fn hidden(&self, i: usize) -> bool {
         if self.slots[i].has(flags::CUT) {
             return true;

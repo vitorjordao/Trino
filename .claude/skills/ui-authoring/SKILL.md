@@ -47,11 +47,22 @@ skill's (`cargo xtask i18n check` audits every screen in every language too).
   `Volume 7` (the bound value is appended; `{}` places it).
 - `preview: {"volume": Int(7), "music": Bool(true), "rows": Int(3)}` is what tools show;
   the game sets the real values.
-- **Screens grow with the player's text (issue #60, `accessibility` skill):** give
+- **Screens grow with the player's text (issues #60 and #95, `accessibility` skill):** give
   controls `min: (w, h)` and `padding`, not fixed `size: (Px(w), Px(h))` — the same
   picture at 100 % (the starter screens kept their goldens) and room at 200 % — and put
-  long lists in `Scroll(..)` with `max: (0, h)`. `cargo xtask access check` lays every
-  screen out at 200 % and fails overflow and nodes past the N64's safe area.
+  long lists in `Scroll(..)` with `max: (0, h)`. When a dense broadcast screen cannot simply
+  stretch at 200 %, use `visible_if: "small"` for the 100 % branch and `visible_if: "big"`
+  for the reflowed 200 % branch (with `"small": Bool(true), "big": Bool(false)` in
+  `preview`): `trino_scene::ui::apply_access_preview` toggles those keys automatically when
+  `text_scale >= 1.5` in `access check`, `ui shot` and the editor. `cargo xtask access check`
+  lays every screen out at 200 % and fails overflow and nodes past the N64's safe area
+  (children clipped inside a `Scroll`/`List` are excluded via `Ui::is_hidden`).
+- **Controller families (`PadFamily`, issue #86, ADR 0028):** `Platform::gamepad_family()`
+  returns `Option<PadFamily>` (`N64`, `N3ds`, `Xbox`, `PlayStation`, `Nintendo`,
+  `EightBitDo`, `Generic`), overridable via `TRINO_PAD=ps|switch|8bitdo|xbox|n64|3ds` on PC
+  and `?pad=` on the Web. Use `pad.glyph(btn)` and `pad.swap_ab_xy()` so footer prompts and
+  controller diagrams show PlayStation symbols (`× ○ □ △`) or Nintendo/8BitDo swapped
+  `B/A/Y/X` labels while keeping positional physical bindings.
 - `cvd_icon: "sprites/x"` on a node shows that sprite at its right end while the
   player's color-vision mode is on (a pattern for a colored marker).
 - Draw with the player's settings: `UiEnv::of(r).with_access(&platform.access())`

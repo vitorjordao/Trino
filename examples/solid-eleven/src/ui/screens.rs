@@ -14,9 +14,7 @@ use crate::render::hud::upper;
 use crate::render::{self, Hair, HairStyle, Look, SKIN_TONES, rgb};
 use crate::sim::engine::{N, SIDE, side_of};
 use crate::sim::league::ROUNDS;
-use crate::sim::team::{
-    self, ATTRS, Appearance, CLUBS, Crest, FORMATIONS, PlayerRec, SURNAMES, TEAMS,
-};
+use crate::sim::team::{self, ATTRS, Appearance, CLUBS, FORMATIONS, PlayerRec, SURNAMES, TEAMS};
 use crate::ui::i18n::{Lang, S, pos_short, tr, tr_fmt};
 use crate::ui::{Size, Ui, pal};
 use trino_core::i18n::Arg;
@@ -99,8 +97,6 @@ fn crest_of(ui: &mut Ui, x: f32, y: f32, w: f32, c: u8, label: bool) {
     );
 }
 
-use crate::game::menu::Hits;
-
 pub const HIT_BACK: u8 = 254;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -129,33 +125,6 @@ pub(crate) fn btn_prompt(pad: bool, b: Btn) -> (&'static str, Color) {
     }
 }
 
-/// The slanted screen header ("SELEÇÃO DO TIME").
-fn header(ui: &mut Ui, hits: &mut Hits, title: &str, back: bool) {
-    ui.slant(Rect::new(-4.0, 6.0, 200.0, 22.0), pal::NAVY, 6.0);
-    if back {
-        let r = Rect::new(-4.0, 6.0, 24.0, 22.0);
-        ui.slant(r, pal::CYAN, 6.0);
-        ui.text(8.0, 10.0, "<", pal::NAVY, Size::Small, TextAlign::Center);
-        let hit = ui.rect(Rect::new(0.0, 4.0, 26.0, 26.0));
-        hits.add(hit, Screen::Top, HIT_BACK);
-    }
-    ui.text_shadow(24.0, 9.0, title, pal::INK, Size::Small, TextAlign::Left);
-}
-
-/// The footer of button hints, after the reference.
-fn footer(ui: &mut Ui, hits: &mut Hits, pad: bool, lang: Lang, hints: &[(Btn, S)]) {
-    let mut x = 6.0;
-    for (btn, s) in hints {
-        let (letter, c) = btn_prompt(pad, *btn);
-        let w = ui.hint(x, 224.0, letter, c, tr(lang, *s));
-        if *btn == Btn::B {
-            let hit = ui.rect(Rect::new(x, 222.0, w, 18.0));
-            hits.add(hit, Screen::Top, HIT_BACK);
-        }
-        x += w + 4.0;
-    }
-}
-
 /// Draw the current screen (top) and the 3DS's touch screen.
 pub fn draw(g: &mut SolidElevenGame, r: &mut dyn Renderer) {
     g.hits.clear();
@@ -164,8 +133,9 @@ pub fn draw(g: &mut SolidElevenGame, r: &mut dyn Renderer) {
     let lang = g.settings.lang;
     match g.scene {
         Scene::Match | Scene::Pause | Scene::HalfTime | Scene::Substitutions { .. } => {
+            let text_scale = g.access.clamped().text_factor();
             if let Some(s) = &g.session {
-                s.render(r, screen, lang);
+                s.render_scaled(r, screen, lang, text_scale);
             }
             match g.scene {
                 Scene::Pause => pause(g, r),
@@ -181,7 +151,7 @@ pub fn draw(g: &mut SolidElevenGame, r: &mut dyn Renderer) {
             title_backdrop(g, r, aspect);
             title(g, r, screen);
         }
-        Scene::Trophy => trophy(g, r, screen, aspect),
+        Scene::Trophy => trophy(g, r, aspect),
         Scene::Quick => {
             title_backdrop(g, r, aspect);
             quick(g, r, screen);
@@ -257,22 +227,7 @@ pub fn draw(g: &mut SolidElevenGame, r: &mut dyn Renderer) {
         }
         Scene::Controls => {
             title_backdrop(g, r, aspect);
-            let lang = g.settings.lang;
-            let pad = g.pad_layout();
-            let mut ui = Ui::new(r, screen);
-            ui.fill(
-                Rect::new(-200.0, 0.0, 720.0, 240.0),
-                Color::rgba(6, 8, 20, 200),
-            );
-            header(&mut ui, &mut g.hits, tr(lang, S::Controls), true);
-            crate::ui::controls::draw(g, &mut ui);
-            footer(
-                &mut ui,
-                &mut g.hits,
-                pad,
-                lang,
-                &[(Btn::A, S::Change), (Btn::B, S::Back)],
-            );
+            crate::ui::controls::draw(g, r);
         }
         Scene::Results => {
             title_backdrop(g, r, aspect);
@@ -404,8 +359,7 @@ fn title_backdrop(g: &SolidElevenGame, r: &mut dyn Renderer, aspect: f32) {
 
 /// The season's end: the champion's captain lifts the trophy; the banner
 /// names the champion and how the user's club finished.
-fn trophy(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2, aspect: f32) {
-    let lang = g.settings.lang;
+fn trophy(g: &mut SolidElevenGame, r: &mut dyn Renderer, aspect: f32) {
     let order = g.world.standings();
     let champ = order[0];
     // Off the halfway line: seen along it, the line ran up behind the
@@ -428,55 +382,57 @@ fn trophy(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2, aspect: f
         g.time,
         g.settings.graphics == 1,
     );
-    let mut ui = Ui::new(r, screen);
-    let club = &CLUBS[champ as usize];
-    ui.slant(Rect::new(40.0, 10.0, 240.0, 46.0), pal::NAVY, 6.0);
-    ui.slant_border(Rect::new(40.0, 10.0, 240.0, 46.0), pal::YELLOW, 6.0, 1.0);
-    crest_of(&mut ui, 50.0, 15.0, 28.0, champ, false);
-    ui.text_shadow(
-        176.0,
-        14.0,
-        tr(lang, S::Champion),
-        pal::YELLOW,
-        Size::Big,
-        TextAlign::Center,
-    );
-    let name: TextBuf<20> = upper(club.name);
-    let mut b = buf();
-    let _ = write!(
-        b,
-        "{}  {} {}",
-        name.as_str(),
-        tr(lang, S::Season),
-        g.world.year
-    );
-    ui.text(
-        176.0,
-        40.0,
-        b.as_str(),
-        pal::INK,
-        Size::Small,
-        TextAlign::Center,
-    );
+    let screen = &super::trophy_gen::SCREEN;
     let user = g.world.user;
     let place = order.iter().position(|&c| c == user).unwrap_or(0) + 1;
-    b.clear();
-    if place == 1 {
-        let _ = write!(b, "{}", tr(lang, S::LeagueWon));
-    } else {
-        let _ = write!(b, "{} {}/{}", tr(lang, S::FinishedAt), place, order.len());
-    }
-    let w = ui.measure(b.as_str(), Size::Small) + 24.0;
-    ui.slant(
-        Rect::new(160.0 - w * 0.5, 176.0, w, 16.0),
-        Color::rgba(10, 12, 30, 235),
-        4.0,
+    super::scr::show(
+        g,
+        r,
+        screen,
+        None,
+        super::scr::rev(&(champ, place, g.world.year)),
+        |g, key, _| {
+            use super::scr::{flag, txt};
+            let lang = g.settings.lang;
+            let mut b = buf();
+            match key {
+                "season" => {
+                    let name: TextBuf<20> = upper(CLUBS[champ as usize].name);
+                    let _ = write!(
+                        b,
+                        "{}  {} {}",
+                        name.as_str(),
+                        tr(lang, S::Season),
+                        g.world.year
+                    );
+                }
+                "won" => return flag(place == 1),
+                "lost" => return flag(place != 1),
+                "place" => {
+                    if place == 1 {
+                        let _ = write!(b, "{}", tr(lang, S::LeagueWon));
+                    } else {
+                        let _ = write!(b, "{} {}/{}", tr(lang, S::FinishedAt), place, order.len());
+                    }
+                }
+                _ => return None,
+            }
+            txt(b.as_str())
+        },
+        |_, ui, r| {
+            super::scr::chrome(ui, screen, r);
+            if let Some((mut a, size)) = super::scr::art(r, ui, screen, "banner", NO_ITEM) {
+                let rect = Rect::new(0.0, 0.0, size.x, size.y);
+                a.slant(rect, pal::NAVY, 6.0);
+                a.slant_border(rect, pal::YELLOW, 6.0, 1.0);
+            }
+        },
     );
-    let c = if place == 1 { pal::LIME } else { pal::CYAN };
-    ui.slant_border(Rect::new(160.0 - w * 0.5, 176.0, w, 16.0), c, 4.0, 1.0);
-    ui.text(160.0, 178.0, b.as_str(), c, Size::Small, TextAlign::Center);
-    let pad = g.pad_layout();
-    footer(&mut ui, &mut g.hits, pad, lang, &[(Btn::A, S::Continue)]);
+    let ui = core::mem::take(&mut g.menu_ui);
+    if let Some((mut a, size)) = super::scr::art(r, &ui, screen, "crest", NO_ITEM) {
+        crest_of(&mut a, 0.0, 0.0, size.x, champ, false);
+    }
+    g.menu_ui = ui;
 }
 
 // ------------------------------------------------------------------ title
@@ -2157,162 +2113,178 @@ fn substitutions(
 /// human side's stamina tiles (tap one to control him); elsewhere the
 /// current screen's controls.
 fn bottom(g: &mut SolidElevenGame, r: &mut dyn Renderer) {
-    let lang = g.settings.lang;
-    let size = r
-        .screen_size(Screen::Bottom)
-        .unwrap_or(Vec2::new(320.0, 240.0));
-    let mut ui = Ui::new(r, size);
-    ui.fill_screen(pal::NAVY);
-    let Some(s) = (if matches!(
+    use super::scr::{art, flag, txt};
+    const TILES: [&str; SIDE] = [
+        "tile0", "tile1", "tile2", "tile3", "tile4", "tile5", "tile6", "tile7", "tile8", "tile9",
+        "tile10",
+    ];
+    const BARS: [&str; SIDE] = [
+        "stamina0",
+        "stamina1",
+        "stamina2",
+        "stamina3",
+        "stamina4",
+        "stamina5",
+        "stamina6",
+        "stamina7",
+        "stamina8",
+        "stamina9",
+        "stamina10",
+    ];
+    let screen = &super::bottom_gen::SCREEN;
+    let session = if matches!(
         g.scene,
         Scene::Match | Scene::Pause | Scene::HalfTime | Scene::Substitutions { .. }
     ) {
         g.session.as_ref()
     } else {
         None
-    }) else {
-        ui.text(
-            160.0,
-            100.0,
-            "SOLID ELEVEN",
-            pal::INK,
-            Size::Big,
-            TextAlign::Center,
-        );
-        ui.text(
-            160.0,
-            130.0,
-            tr(lang, S::PressStart),
-            pal::CYAN,
-            Size::Small,
-            TextAlign::Center,
-        );
-        return;
     };
-    let m = &s.m;
-    // Radar.
-    let map = Rect::new(4.0, 4.0, 200.0, 130.0);
-    ui.fill(map, Color::rgb(36, 110, 50));
-    ui.border(map, Color::rgb(220, 235, 220), 1.0);
-    ui.fill(Rect::new(104.0, 4.0, 1.0, 130.0), Color::rgb(220, 235, 220));
-    for i in 0..N {
-        let p = &m.players[i];
-        if p.off {
-            continue;
+    struct Bottom<'a> {
+        s: Option<&'a crate::game::session::Session>,
+        lang: Lang,
+    }
+    impl trino_core::ui::UiData for Bottom<'_> {
+        fn value(&self, key: &str, _: u16) -> Option<trino_core::ui::UiValue> {
+            let mut b = buf();
+            match key {
+                "match" => return flag(self.s.is_some()),
+                "menu" => return flag(self.s.is_none()),
+                _ => {}
+            }
+            let s = self.s?;
+            let m = &s.m;
+            let side = s.human.unwrap_or(0);
+            match key {
+                "formation" => {
+                    return txt(
+                        FORMATIONS[m.tactics[side].formation as usize % FORMATIONS.len()].name,
+                    );
+                }
+                "score" => {
+                    let _ = write!(
+                        b,
+                        "{} {} - {} {}",
+                        CLUBS[m.clubs[0] as usize].short,
+                        m.score[0],
+                        m.score[1],
+                        CLUBS[m.clubs[1] as usize].short
+                    );
+                }
+                "clock" => {
+                    let _ = write!(b, "{:02}:{:02}", m.minute(), m.second());
+                }
+                _ => {
+                    let k = key.strip_prefix("num")?.parse::<usize>().ok()?;
+                    let _ = write!(b, "{}", m.players[side * SIDE + k.min(SIDE - 1)].number);
+                }
+            }
+            let _ = self.lang;
+            txt(b.as_str())
         }
-        let x = 104.0 + p.pos.x.to_f32() / 52.5 * 100.0;
-        let y = 69.0 + p.pos.y.to_f32() / 34.0 * 65.0;
-        ui.fill(
-            Rect::new(x - 2.0, y - 2.0, 4.0, 4.0),
-            s.colors.shirt[side_of(i)],
-        );
+
+        fn revision(&self) -> Option<u32> {
+            let s = self.s?;
+            let m = &s.m;
+            Some(super::scr::rev(&(
+                m.score,
+                m.minute(),
+                m.second(),
+                m.tactics[s.human.unwrap_or(0)].formation,
+                self.lang,
+            )))
+        }
     }
-    let bx = 104.0 + m.ball.pos.x.to_f32() / 52.5 * 100.0;
-    let by = 69.0 + m.ball.pos.z.to_f32() / 34.0 * 65.0;
-    ui.fill(Rect::new(bx - 1.5, by - 1.5, 3.0, 3.0), Color::WHITE);
-    // Formation of the human side (tap to change it).
-    let side = s.human.unwrap_or(0);
-    let f = FORMATIONS[m.tactics[side].formation as usize % FORMATIONS.len()];
-    let rr = Rect::new(210.0, 4.0, 106.0, 30.0);
-    ui.panel(rr, pal::CYAN);
-    ui.text(
-        263.0,
-        6.0,
-        tr(lang, S::Formation),
-        pal::DIM,
-        Size::Small,
-        TextAlign::Center,
-    );
-    ui.text(
-        263.0,
-        18.0,
-        f.name,
-        pal::YELLOW,
-        Size::Small,
-        TextAlign::Center,
-    );
-    g.hits.add(rr, Screen::Bottom, 100);
-    let mut b = buf();
-    let _ = write!(
-        b,
-        "{} {} - {} {}",
-        CLUBS[m.clubs[0] as usize].short, m.score[0], m.score[1], CLUBS[m.clubs[1] as usize].short
-    );
-    ui.text(
-        263.0,
-        44.0,
-        b.as_str(),
-        pal::INK,
-        Size::Small,
-        TextAlign::Center,
-    );
-    b.clear();
-    let _ = write!(b, "{:02}:{:02}", m.minute(), m.second());
-    ui.text(
-        263.0,
-        58.0,
-        b.as_str(),
-        pal::CYAN,
-        Size::Small,
-        TextAlign::Center,
-    );
-    // Stamina tiles.
-    for k in 0..SIDE {
-        let i = side * SIDE + k;
-        let p = &m.players[i];
-        let (col, row) = (k % 6, k / 6);
-        let tile = Rect::new(
-            4.0 + col as f32 * 52.0,
-            140.0 + row as f32 * 48.0,
-            49.0,
-            44.0,
-        );
-        let active = s.view.guides.active == Some(i as u8);
-        ui.fill(
-            tile,
-            if active {
-                Color::rgb(30, 90, 150)
-            } else {
-                pal::NAVY_2
-            },
-        );
-        ui.border(
-            tile,
-            if p.off {
-                pal::RED
-            } else if active {
-                pal::CYAN
-            } else {
-                Color::rgb(60, 70, 120)
-            },
-            1.0,
-        );
-        let mut nb = buf();
-        let _ = write!(nb, "{}", p.number);
-        ui.text(
-            tile.pos.x + 24.5,
-            tile.pos.y + 4.0,
-            nb.as_str(),
-            pal::INK,
-            Size::Small,
-            TextAlign::Center,
-        );
-        let st = p.stamina.to_f32();
-        let c = if st > 0.6 {
-            pal::GREEN
-        } else if st > 0.35 {
-            pal::YELLOW
-        } else {
-            pal::RED
-        };
-        ui.bar(
-            Rect::new(tile.pos.x + 4.0, tile.pos.y + 30.0, 41.0, 5.0),
-            st,
-            c,
-        );
-        g.hits.add(tile, Screen::Bottom, k as u8);
+    let data = Bottom {
+        s: session,
+        lang: g.settings.lang,
+    };
+    let strings = super::i18n::UiTr(g.settings.lang);
+    let env = trino_core::UiEnv::of(r)
+        .with_strings(&strings)
+        .with_access(&g.access)
+        .with_data(&data);
+    let mut ui = core::mem::take(&mut g.bottom_ui);
+    let size = r
+        .screen_size(Screen::Bottom)
+        .unwrap_or(Vec2::new(320.0, 240.0));
+    r.fill_rect(Rect::new(0.0, 0.0, size.x, size.y), pal::NAVY);
+    ui.prepare(r, screen, &env);
+    // The tiles' fills: the controlled player's in blue, sent-off in red.
+    if let Some(s) = session {
+        let side = s.human.unwrap_or(0);
+        for k in 0..SIDE {
+            if let Some((mut a, size)) = art(r, &ui, screen, TILES[k], NO_ITEM) {
+                let i = side * SIDE + k;
+                let active = s.view.guides.active == Some(i as u8);
+                let rect = Rect::new(0.0, 0.0, size.x, size.y);
+                a.fill(
+                    rect,
+                    if active {
+                        Color::rgb(30, 90, 150)
+                    } else {
+                        pal::NAVY_2
+                    },
+                );
+                let rim = if s.m.players[i].off {
+                    pal::RED
+                } else if active {
+                    pal::CYAN
+                } else {
+                    Color::rgb(60, 70, 120)
+                };
+                a.border(rect, rim, 1.0);
+            }
+        }
     }
-    let _ = (Crest::Shield, PlayerRec::value as fn(&PlayerRec) -> u32);
+    ui.draw(r, screen, &env);
+    if let Some(s) = session {
+        let m = &s.m;
+        let side = s.human.unwrap_or(0);
+        // The radar: everyone and the ball, top down.
+        if let Some((mut a, size)) = art(r, &ui, screen, "radar", NO_ITEM) {
+            let map = Rect::new(0.0, 0.0, size.x, size.y);
+            let (mx, my) = (size.x * 0.5, size.y * 0.5);
+            a.fill(map, Color::rgb(36, 110, 50));
+            a.border(map, Color::rgb(220, 235, 220), 1.0);
+            a.fill(Rect::new(mx, 0.0, 1.0, size.y), Color::rgb(220, 235, 220));
+            for i in 0..N {
+                let p = &m.players[i];
+                if p.off {
+                    continue;
+                }
+                let x = mx + p.pos.x.to_f32() / 52.5 * (mx - 0.0);
+                let y = my + p.pos.y.to_f32() / 34.0 * (my - 0.0);
+                a.fill(
+                    Rect::new(x - 2.0, y - 2.0, 4.0, 4.0),
+                    s.colors.shirt[side_of(i)],
+                );
+            }
+            let bx = mx + m.ball.pos.x.to_f32() / 52.5 * mx;
+            let by = my + m.ball.pos.z.to_f32() / 34.0 * my;
+            a.fill(Rect::new(bx - 1.5, by - 1.5, 3.0, 3.0), Color::WHITE);
+        }
+        for k in 0..SIDE {
+            if let Some((mut a, size)) = art(r, &ui, screen, BARS[k], NO_ITEM) {
+                let st = m.players[side * SIDE + k].stamina.to_f32();
+                let c = if st > 0.6 {
+                    pal::GREEN
+                } else if st > 0.35 {
+                    pal::YELLOW
+                } else {
+                    pal::RED
+                };
+                a.bar(Rect::new(0.0, 0.0, size.x, size.y), st, c);
+            }
+            if let Some((on, rect)) = ui.rect_of_item(screen, TILES[k], NO_ITEM) {
+                g.hits.add(rect, on, k as u8);
+            }
+        }
+        if let Some((on, rect)) = ui.rect_of_item(screen, "formation", NO_ITEM) {
+            g.hits.add(rect, on, 100);
+        }
+    }
+    g.bottom_ui = ui;
 }
 
 #[cfg(test)]

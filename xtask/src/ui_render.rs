@@ -9,7 +9,7 @@ use trino_core::{
     Color, Family, FontId, InputState, ModelId, Renderer, SpriteId, Ui, UiEnv, UiStats,
 };
 use trino_render_wgpu::{PcRenderer, SimProfile};
-use trino_scene::ui::{Flat, Kind, Langs, ScreenDef, apply_preview};
+use trino_scene::ui::{Flat, Kind, Langs, ScreenDef, apply_access_preview, apply_preview};
 
 /// What to render.
 pub struct ShotOptions<'a> {
@@ -138,6 +138,7 @@ pub fn render(
     let strings = opts.lang.map(|l| langs.strings(l));
     let mut ui: Box<Ui<1024>> = Box::new(Ui::new());
     apply_preview(&mut ui, def);
+    apply_access_preview(&mut ui, def, opts.access);
     let idle = InputState::default();
     for frame in 0..3 {
         let env = UiEnv {

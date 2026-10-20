@@ -11,6 +11,7 @@
 //! crests, slants) are drawn as horizontal spans.
 
 pub mod controls;
+pub mod glyphs;
 pub mod i18n;
 /// The pause menu, exported from `ui/pause.ui.ron` (`cargo xtask ui export`;
 /// included, so rustfmt leaves the generated text as it is).
@@ -23,6 +24,10 @@ pub mod screens;
 pub mod settings_gen {
     include!("settings_gen.rs");
 }
+/// The 3DS touch screen (`ui/bottom.ui.ron`).
+pub mod bottom_gen {
+    include!("bottom_gen.rs");
+}
 /// The club hub (`ui/club.ui.ron`).
 pub mod club_gen {
     include!("club_gen.rs");
@@ -30,6 +35,10 @@ pub mod club_gen {
 /// The "reset the save?" dialog (`ui/confirm.ui.ron`).
 pub mod confirm_gen {
     include!("confirm_gen.rs");
+}
+/// The controls screen (`ui/controls.ui.ron`).
+pub mod controls_gen {
+    include!("controls_gen.rs");
 }
 /// The player editor (`ui/edit.ui.ron`).
 pub mod edit_gen {
@@ -66,6 +75,10 @@ pub mod substitutions_gen {
 /// Team selection (`ui/teams.ui.ron`).
 pub mod teams_gen {
     include!("teams_gen.rs");
+}
+/// The season's end (`ui/trophy.ui.ron`).
+pub mod trophy_gen {
+    include!("trophy_gen.rs");
 }
 /// The title (`ui/title.ui.ron`).
 pub mod title_gen {
@@ -249,7 +262,23 @@ impl<'a> Ui<'a> {
     /// Text in design units. Small text at 2x scale uses the big font, so
     /// the PC's interface stays crisp.
     pub fn text(&mut self, x: f32, y: f32, s: &str, c: Color, size: Size, align: TextAlign) {
-        let (font, k) = self.font_for(size);
+        self.text_scaled(x, y, s, c, size, 1.0, align);
+    }
+
+    /// Text in design units scaled by `mul` (for HUD elements that grow
+    /// with `AccessSettings::text_scale`).
+    #[allow(clippy::too_many_arguments)]
+    pub fn text_scaled(
+        &mut self,
+        x: f32,
+        y: f32,
+        s: &str,
+        c: Color,
+        size: Size,
+        mul: f32,
+        align: TextAlign,
+    ) {
+        let (font, k) = self.font_for_scaled(size, mul);
         let p = self.px(x, y);
         self.r.draw_text(
             font,
@@ -265,23 +294,42 @@ impl<'a> Ui<'a> {
 
     /// Text with a 1-unit drop shadow (over the 3D picture).
     pub fn text_shadow(&mut self, x: f32, y: f32, s: &str, c: Color, size: Size, align: TextAlign) {
-        self.text(x + 1.0, y + 1.0, s, pal::SHADE, size, align);
-        self.text(x, y, s, c, size, align);
+        self.text_shadow_scaled(x, y, s, c, size, 1.0, align);
     }
 
-    fn font_for(&self, size: Size) -> (FontId, f32) {
+    #[allow(clippy::too_many_arguments)]
+    pub fn text_shadow_scaled(
+        &mut self,
+        x: f32,
+        y: f32,
+        s: &str,
+        c: Color,
+        size: Size,
+        mul: f32,
+        align: TextAlign,
+    ) {
+        self.text_scaled(x + 1.0, y + 1.0, s, pal::SHADE, size, mul, align);
+        self.text_scaled(x, y, s, c, size, mul, align);
+    }
+
+    fn font_for_scaled(&self, size: Size, mul: f32) -> (FontId, f32) {
+        let s = self.scale * mul;
         match size {
-            Size::Small if self.scale >= 3.0 => (F_HUGE, self.scale * 0.25),
-            Size::Small if self.scale >= 1.5 => (F_BIG, self.scale * 0.5),
-            Size::Small => (F_UI, self.scale),
-            Size::Big if self.scale >= 2.0 => (F_HUGE, self.scale * 0.5),
-            Size::Big => (F_BIG, self.scale),
+            Size::Small if s >= 3.0 => (F_HUGE, s * 0.25),
+            Size::Small if s >= 1.5 => (F_BIG, s * 0.5),
+            Size::Small => (F_UI, s),
+            Size::Big if s >= 2.0 => (F_HUGE, s * 0.5),
+            Size::Big => (F_BIG, s),
         }
     }
 
     /// Width of `s` in design units.
     pub fn measure(&self, s: &str, size: Size) -> f32 {
-        let (font, k) = self.font_for(size);
+        self.measure_scaled(s, size, 1.0)
+    }
+
+    pub fn measure_scaled(&self, s: &str, size: Size, mul: f32) -> f32 {
+        let (font, k) = self.font_for_scaled(size, mul);
         self.r.measure_text(font, s, k).x / self.scale
     }
 

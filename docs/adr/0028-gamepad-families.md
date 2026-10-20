@@ -1,7 +1,7 @@
 # ADR 0028: Gamepad families and button glyphs
 
-Status: accepted (October 2026, GitHub #86 item 7). The engine side and Solid Eleven's
-glyph data are implemented; wiring Solid Eleven's menus to them is the game's follow-up.
+Status: accepted (October 2026, GitHub #86 item 7). Implemented in `trino-core`,
+`trino-platform-pc`, `trino-platform-web` and Solid Eleven's menus and controls screen.
 
 ## Context
 
@@ -95,5 +95,4 @@ changes nothing the dylib boundary carries (`crates/game-api/src/lib.rs`).
   of #86). It has not been tried with physical pads on the development machine.
 - Follow-ups:
   - `binding_slot` for glyphs of rebound buttons;
-  - Solid Eleven's controls page drawing the chassis;
   - Generic pads with numbered buttons (DirectInput's 1–4) if a game asks.

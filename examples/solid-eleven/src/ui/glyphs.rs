@@ -195,14 +195,14 @@ pub struct Chassis {
 
 /// Offset sticks (left stick high, D-pad low): Xbox and the Switch Pro.
 const OFFSET: Chassis = Chassis {
-    face: (0.74, 0.36),
+    face: (0.76, 0.38),
     face_gap: 0.075,
     dpad: (0.37, 0.62),
     left_stick: (0.26, 0.36),
     right_stick: (0.63, 0.62),
-    select: (0.42, 0.36),
-    start: (0.58, 0.36),
-    home: (0.5, 0.2),
+    select: (0.40, 0.22),
+    start: (0.56, 0.22),
+    home: (0.5, 0.1),
     l1: (0.24, 0.1),
     r1: (0.76, 0.1),
     l2: (0.24, 0.0),
@@ -231,9 +231,9 @@ const SN30: Chassis = Chassis {
     dpad: (0.21, 0.4),
     left_stick: (0.38, 0.7),
     right_stick: (0.62, 0.7),
-    select: (0.43, 0.46),
-    start: (0.57, 0.46),
-    home: (0.5, 0.3),
+    select: (0.33, 0.22),
+    start: (0.57, 0.22),
+    home: (0.5, 0.56),
     ..SYMMETRIC
 };
 

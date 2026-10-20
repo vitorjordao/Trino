@@ -654,12 +654,11 @@ impl<M: TextMeasure + ?Sized, const N: usize> Solver<'_, '_, '_, M, N> {
         let frame =
             matches!(n.kind, NodeKind::Scroll { .. } | NodeKind::List { .. }) && n.color.is_none();
         if let Some(c) = clip
-            && !frame
             && !inside(&c, &rect)
         {
             // Too tall (or wide) to ever fit: show what of it fits, child
             // by child; else it waits, whole, to be scrolled in.
-            let never = rect.size.y > c.size.y + 0.01 || rect.size.x > c.size.x + 0.01;
+            let never = frame || rect.size.y > c.size.y + 0.01 || rect.size.x > c.size.x + 0.01;
             f |= if never { flags::CUT } else { flags::CLIPPED };
         }
         if n.kind.is_focusable() {

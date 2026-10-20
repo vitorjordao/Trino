@@ -1290,6 +1290,7 @@ pub fn audit(flat: &Flat<'_>, target: Target<'_>, fonts: &Fonts, langs: &Langs) 
     let strings = target.lang.map(|l| langs.strings(l));
     let mut ui: Box<Ui<1024>> = Box::new(Ui::new());
     apply_preview(&mut ui, flat.def);
+    apply_access_preview(&mut ui, flat.def, target.access);
     let env = UiEnv {
         access: target.access,
         ..UiEnv::of(&probe).with_interface_scale(target.interface_scale)
@@ -1348,7 +1349,7 @@ pub fn audit(flat: &Flat<'_>, target: Target<'_>, fonts: &Fonts, langs: &Langs) 
         };
         let mut seen = HashSet::new();
         for (k, sl) in slots.iter().enumerate() {
-            if sl.flags & core_ui::flags::CLIPPED != 0 || in_bleed(k) {
+            if ui.is_hidden(k) || in_bleed(k) {
                 continue;
             }
             let f = ui.frame(sl.on);
@@ -1372,10 +1373,7 @@ pub fn audit(flat: &Flat<'_>, target: Target<'_>, fonts: &Fonts, langs: &Langs) 
     // (list rows count once: the same node twice is a pair of rows).
     let slots = ui.slots();
     let controls: Vec<usize> = (0..slots.len())
-        .filter(|&k| {
-            slots[k].flags & core_ui::flags::FOCUSABLE != 0
-                && slots[k].flags & core_ui::flags::CLIPPED == 0
-        })
+        .filter(|&k| slots[k].flags & core_ui::flags::FOCUSABLE != 0 && !ui.is_hidden(k))
         .collect();
     let mut pairs = HashSet::new();
     for (n, &a) in controls.iter().enumerate() {
@@ -1519,6 +1517,24 @@ pub fn apply_preview<const N: usize>(ui: &mut Ui<N>, def: &ScreenDef) {
             });
             ui.set(&n.bind, count as i32);
         }
+    }
+}
+
+/// Switches `"small"` / `"big"` preview flags with `access.text_scale` on
+/// screens that branch on them at 150 % text.
+pub fn apply_access_preview<const N: usize>(
+    ui: &mut Ui<N>,
+    def: &ScreenDef,
+    access: core_ui::UiAccess,
+) {
+    if def
+        .nodes()
+        .iter()
+        .any(|(_, n)| n.visible_if == "big" || n.visible_if == "small")
+    {
+        let big = access.text_scale >= 1.5;
+        ui.set_bool("big", big);
+        ui.set_bool("small", !big);
     }
 }
 

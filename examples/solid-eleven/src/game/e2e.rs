@@ -708,8 +708,17 @@ fn tapping_a_hair_swatch_picks_that_color() {
     };
     for k in [3u8, 0, 4] {
         d.g.render(&mut r);
-        // The swatch's center on the 320x240 canvas (the screen here).
-        let at = Vec2::new(221.0 + k as f32 * 17.5 + 7.5, 194.0);
+        let id = (crate::game::app::EDIT_ROWS + k as usize) as u8;
+        let swatch =
+            d.g.hits
+                .iter()
+                .find(|h| h.id == id)
+                .expect("the hair swatch is a tap target")
+                .rect;
+        let at = Vec2::new(
+            swatch.pos.x + swatch.size.x * 0.5,
+            swatch.pos.y + swatch.size.y * 0.5,
+        );
         let mut down = InputState::default();
         down.pointer = Some(at);
         down.set_pointer_button(PointerButton::Primary, true);

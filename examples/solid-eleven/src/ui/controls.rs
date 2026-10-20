@@ -1,16 +1,21 @@
-//! The settings' controls page: a tab for the match's buttons (every
-//! target) and, on the PC, tabs for the keyboard's keys and the gamepad's
-//! buttons. The list on the left changes a binding; the right draws the
-//! device itself with each action on its button, so the layout reads at a
-//! glance — the N64 pad, the 3DS, a PC gamepad or a keyboard.
+//! The settings' controls page (`ui/controls.ui.ron`, issue #95 and issue #86
+//! item 7): a tab for the match's buttons (every target) and, on the PC,
+//! tabs for the keyboard's keys and the gamepad's buttons. The list on the
+//! left changes a binding; the right draws the device itself with each
+//! action on its button, so the layout reads at a glance — the N64 pad, the
+//! 3DS, a PC gamepad (in its family's chassis and glyphs) or a keyboard.
 
 use core::fmt::Write as _;
 
 use crate::game::app::{CONTROL_ROWS_SHOWN, Device, InputPeek, SolidElevenGame};
 use crate::game::input::{ACTIONS, Action, Bindings};
 use crate::ui::i18n::{Lang, S, tr};
+use crate::ui::scr::{art, flag, int, rev, show, txt};
 use crate::ui::{Size, Ui, pal};
-use trino_core::{BindDevice, Button, Color, Rect, Screen, TextAlign, TextBuf, Vec2};
+use trino_core::ui::{NO_ITEM, UiValue};
+use trino_core::{BindDevice, Button, Color, PadFamily, Rect, Renderer, TextAlign, TextBuf, Vec2};
+
+const DIGITS: [&str; ACTIONS] = ["1", "2", "3", "4", "5", "6", "7"];
 
 /// An action's long name (the list) and short one (the diagram).
 pub fn action_names(a: Action) -> (S, S) {
@@ -40,7 +45,6 @@ pub fn action_color(a: Action) -> Color {
 }
 
 fn badge(ui: &mut Ui, x: f32, y: f32, a: Action) {
-    const DIGITS: [&str; ACTIONS] = ["1", "2", "3", "4", "5", "6", "7"];
     ui.fill(Rect::new(x, y, 9.0, 9.0), action_color(a));
     // At the top: the PC's big font inks a pixel lower than the 11 px one.
     ui.text(
@@ -162,203 +166,10 @@ const KEY_ROWS: [&[&str]; 5] = [
     &["LALT", "SPACE", "ENTER", "RSHIFT"],
 ];
 
-fn panel_row(ui: &mut Ui, r: Rect, sel: bool, rim: Color) {
-    ui.fill(
-        r,
-        if sel {
-            Color::rgba(30, 60, 130, 235)
-        } else {
-            pal::PANEL
-        },
-    );
-    ui.border(r, if sel { rim } else { Color::rgb(50, 60, 100) }, 1.0);
-}
-
-/// A small key cap / button pill with `text`.
-fn pill(ui: &mut Ui, x: f32, y: f32, text: &str, c: Color) -> f32 {
-    let w = ui.measure(text, Size::Small) + 6.0;
-    ui.fill(Rect::new(x, y, w, 10.0), c);
-    ui.text(
-        x + w * 0.5,
-        y + 1.0,
-        text,
-        pal::NAVY,
-        Size::Small,
-        TextAlign::Center,
-    );
-    w
-}
-
-/// The page.
-pub fn draw(g: &mut SolidElevenGame, ui: &mut Ui) {
+fn status_of(g: &SolidElevenGame) -> Option<(&str, Color)> {
     let lang = g.settings.lang;
-    let tabs = g.control_tabs();
-    let device = g.device;
-    // Tabs.
-    let names = [S::TabMatch, S::TabKeyboard, S::TabPad];
-    let mut x = 8.0;
-    for t in 0..tabs {
-        let label = tr(lang, names[t as usize]);
-        let w = ui.measure(label, Size::Small) + 16.0;
-        let r = Rect::new(x, 32.0, w, 13.0);
-        let sel = g.cur.ctl_tab == t;
-        ui.slant(
-            r,
-            if sel {
-                Color::rgba(30, 60, 130, 240)
-            } else {
-                pal::PANEL
-            },
-            3.0,
-        );
-        if sel {
-            ui.slant_border(r, pal::CYAN, 3.0, 1.0);
-        }
-        ui.text(
-            x + w * 0.5,
-            34.0,
-            label,
-            pal::INK,
-            Size::Small,
-            TextAlign::Center,
-        );
-        let hit = ui.rect(r);
-        g.hits.add(hit, Screen::Top, 200 + t);
-        x += w + 4.0;
-    }
-    if tabs > 1 {
-        let mut b = TextBuf::<24>::new();
-        let switch_hint = if !g.using_pad && g.device == Device::Pc {
-            "Q / E"
-        } else {
-            "L / R"
-        };
-        let _ = write!(b, "{}: {}", switch_hint, tr(lang, S::TabsHint));
-        ui.text(
-            312.0,
-            34.0,
-            b.as_str(),
-            pal::DIM,
-            Size::Small,
-            TextAlign::Right,
-        );
-    }
-    // The list.
     let bind = g.settings.bindings;
-    let rows = g.control_rows();
-    let top = g.cur.ctl_top;
-    if top > 0 {
-        ui.polygon(
-            &[
-                Vec2::new(76.0, 46.0),
-                Vec2::new(86.0, 46.0),
-                Vec2::new(81.0, 41.0),
-            ],
-            pal::CYAN,
-        );
-    }
-    if top + CONTROL_ROWS_SHOWN < rows {
-        ui.polygon(
-            &[
-                Vec2::new(76.0, 203.0),
-                Vec2::new(86.0, 203.0),
-                Vec2::new(81.0, 208.0),
-            ],
-            pal::CYAN,
-        );
-    }
-    for k in top..rows.min(top + CONTROL_ROWS_SHOWN) {
-        let y = 50.0 + (k - top) as f32 * 17.0;
-        let r = Rect::new(6.0, y, 150.0, 15.0);
-        let sel = g.cur.ctl_row == k;
-        panel_row(ui, r, sel, pal::CYAN);
-        let hit = ui.rect(r);
-        g.hits.add(hit, Screen::Top, k as u8);
-        if k + 1 == rows {
-            ui.text(
-                81.0,
-                y + 3.0,
-                tr(lang, S::ResetDefaults),
-                pal::YELLOW,
-                Size::Small,
-                TextAlign::Center,
-            );
-            continue;
-        }
-        if g.cur.ctl_tab == 0 {
-            let a = Action::ALL[k];
-            badge(ui, 9.0, y + 3.0, a);
-            ui.text(
-                21.0,
-                y + 3.0,
-                tr(lang, action_names(a).0),
-                pal::INK,
-                Size::Small,
-                TextAlign::Left,
-            );
-            let b = bind.of(a);
-            let (label, c) = match button_name(device, b) {
-                Some(n) => (n, pal::CYAN),
-                None => ("?", pal::RED),
-            };
-            let w = ui.measure(label, Size::Small) + 6.0;
-            pill(ui, 152.0 - w, y + 2.5, label, c);
-        } else {
-            let b = Button::ALL[k];
-            let keys = if g.cur.ctl_tab == 1 {
-                &g.peek.keys
-            } else {
-                &g.peek.pads
-            };
-            let name = button_name(Device::Pc, b).unwrap_or("?");
-            ui.text(10.0, y + 3.0, name, pal::DIM, Size::Small, TextAlign::Left);
-            match action_on(&bind, b) {
-                Some(a) => {
-                    badge(ui, 44.0, y + 3.0, a);
-                    ui.text(
-                        56.0,
-                        y + 3.0,
-                        tr(lang, action_names(a).1),
-                        pal::INK,
-                        Size::Small,
-                        TextAlign::Left,
-                    );
-                }
-                None => ui.text(56.0, y + 3.0, "-", pal::DIM, Size::Small, TextAlign::Left),
-            }
-            let key = keys[k].as_str();
-            let label = if key.is_empty() { "-" } else { key };
-            let w = ui.measure(label, Size::Small) + 6.0;
-            pill(ui, 152.0 - w, y + 2.5, label, pal::YELLOW);
-        }
-    }
-    // The device, with each action on its button.
-    let at = Vec2::new(164.0, 45.0);
-    ui.panel(
-        Rect::new(at.x - 4.0, at.y - 2.0, 156.0, 122.0),
-        Color::rgb(60, 70, 120),
-    );
-    match (g.cur.ctl_tab, device) {
-        (1, _) => keyboard(ui, at, &g.peek, &bind, lang),
-        (0, Device::N64) => diagram(ui, at, &N64, Device::N64, &bind, None, lang),
-        (0, Device::N3ds) => diagram(ui, at, &N3DS, Device::N3ds, &bind, None, lang),
-        _ => diagram(ui, at, &PAD, Device::Pc, &bind, Some(&g.peek), lang),
-    }
-    // What moves the player, and the state line.
-    let mv = if device == Device::Pc && g.cur.ctl_tab == 1 {
-        S::MoveKeys
-    } else {
-        S::MoveStick
-    };
-    ui.text(
-        238.0,
-        154.0,
-        tr(lang, mv),
-        pal::DIM,
-        Size::Small,
-        TextAlign::Center,
-    );
-    let status: Option<(&str, Color)> = if g.capture.is_some() {
+    if g.capture.is_some() {
         Some((tr(lang, S::PressButton), pal::LIME))
     } else if let Some((_, d)) = g.peek.capturing {
         Some((
@@ -389,22 +200,231 @@ pub fn draw(g: &mut SolidElevenGame, ui: &mut Ui) {
     } else if g.cur.ctl_tab == 0
         && Action::ALL
             .iter()
-            .any(|&a| button_name(device, bind.of(a)).is_none())
+            .any(|&a| button_name(g.device, bind.of(a)).is_none())
     {
         Some((tr(lang, S::NotOnPad), pal::RED))
     } else {
         None
-    };
-    if let Some((text, c)) = status {
-        let w = ui.measure(text, Size::Small) + 16.0;
-        let r = Rect::new(238.0 - w * 0.5, 172.0, w, 14.0);
-        ui.slant(r, Color::rgba(10, 12, 30, 235), 3.0);
-        ui.slant_border(r, c, 3.0, 1.0);
-        ui.text(238.0, 174.0, text, c, Size::Small, TextAlign::Center);
-        if let Some(cap) = g.capture {
-            // The time left to press it.
-            let k = (cap.left / crate::game::app::CAPTURE_SECS).clamp(0.0, 1.0);
-            ui.fill(Rect::new(r.pos.x + 2.0, 184.0, (w - 4.0) * k, 2.0), c);
+    }
+}
+
+/// The controls screen (`ui/controls.ui.ron`).
+pub fn draw(g: &mut SolidElevenGame, r: &mut dyn Renderer) {
+    const TABS: [&str; 3] = ["tab0", "tab1", "tab2"];
+    let screen = &super::controls_gen::SCREEN;
+    let big = g.access.clamped().text_factor() >= 1.5;
+    let tabs = g.control_tabs();
+    let rows = g.control_rows();
+    let shown = rows.min(if big { 3 } else { CONTROL_ROWS_SHOWN });
+    let top = g
+        .cur
+        .ctl_row
+        .saturating_sub(shown - 1)
+        .max(g.cur.ctl_top.min(g.cur.ctl_row))
+        .min(rows.saturating_sub(shown));
+    let row_id = if big { "row_big" } else { "row" };
+    let badge_id = if big { "badge_big" } else { "badge" };
+    let pill_id = if big { "pill_big" } else { "pill" };
+    let status_id = if big { "status_big" } else { "status_box" };
+    let state = rev(&(
+        g.cur.ctl_tab,
+        top,
+        g.device as u8,
+        g.settings.bindings.to_bytes(),
+        g.peek.rebindable,
+        g.peek.gamepad,
+        g.peek.pad_family,
+        g.peek.pad_name.as_str(),
+        g.peek.capturing.map(|(b, d)| (b as u8, d as u8)),
+        g.capture.map(|c| c.action as u8),
+    ));
+    show(
+        g,
+        r,
+        screen,
+        Some((row_id, (g.cur.ctl_row - top) as u16)),
+        state,
+        |g, key, item| value(g, top, shown, rows, tabs, key, item),
+        |g, ui, r| {
+            super::scr::chrome(ui, screen, r);
+            let tab_id = TABS[g.cur.ctl_tab as usize % 3];
+            if let Some((mut a, size)) = art(r, ui, screen, tab_id, NO_ITEM) {
+                let rect = Rect::new(0.0, 0.0, size.x, size.y);
+                a.fill(rect, Color::rgba(30, 60, 130, 240));
+                a.border(rect, pal::CYAN, 1.0);
+            }
+            for item in 0..shown {
+                let k = top + item;
+                if k + 1 >= rows {
+                    continue;
+                }
+                let act = if g.cur.ctl_tab == 0 {
+                    Some(Action::ALL[k])
+                } else {
+                    action_on(&g.settings.bindings, Button::ALL[k])
+                };
+                if let Some(act) = act
+                    && let Some((mut a, size)) = art(r, ui, screen, badge_id, item as u16)
+                {
+                    a.fill(Rect::new(0.0, 0.0, size.x, size.y), action_color(act));
+                }
+                if let Some((mut a, size)) = art(r, ui, screen, pill_id, item as u16) {
+                    let c = if g.cur.ctl_tab == 0 {
+                        let b = g.settings.bindings.of(Action::ALL[k]);
+                        if button_name(g.device, b).is_some() {
+                            pal::CYAN
+                        } else {
+                            pal::RED
+                        }
+                    } else {
+                        pal::YELLOW
+                    };
+                    a.fill(Rect::new(0.0, 0.0, size.x, size.y), c);
+                }
+            }
+            if let Some((_, c)) = status_of(g)
+                && let Some((mut a, size)) = art(r, ui, screen, status_id, NO_ITEM)
+            {
+                a.border(Rect::new(0.0, 0.0, size.x, size.y), c, 1.0);
+                if let Some(cap) = g.capture {
+                    let f = (cap.left / crate::game::app::CAPTURE_SECS).clamp(0.0, 1.0);
+                    a.fill(Rect::new(2.0, size.y - 2.0, (size.x - 4.0) * f, 2.0), c);
+                }
+            }
+            if let Some((mut a, size)) = art(r, ui, screen, "diagram", NO_ITEM) {
+                a.border(
+                    Rect::new(0.0, 0.0, size.x, size.y),
+                    Color::rgb(60, 70, 120),
+                    1.0,
+                );
+            }
+        },
+    );
+    let ui = core::mem::take(&mut g.menu_ui);
+    if let Some((mut a, size)) = art(r, &ui, screen, "diagram", NO_ITEM) {
+        let at = Vec2::new(((size.x - 148.0) * 0.5).max(0.0), 2.0);
+        let bind = g.settings.bindings;
+        let lang = g.settings.lang;
+        match (g.cur.ctl_tab, g.device) {
+            (1, _) => keyboard(&mut a, at, &g.peek, &bind, lang),
+            (0, Device::N64) => diagram(&mut a, at, &N64, Device::N64, &bind, None, lang),
+            (0, Device::N3ds) => diagram(&mut a, at, &N3DS, Device::N3ds, &bind, None, lang),
+            _ => match g.peek.pad_family {
+                Some(fam) => family_diagram(&mut a, at, fam, &bind, Some(&g.peek)),
+                None => diagram(&mut a, at, &PAD, Device::Pc, &bind, Some(&g.peek), lang),
+            },
+        }
+    }
+    g.menu_ui = ui;
+    for (t, id) in TABS.iter().enumerate().take(tabs as usize) {
+        super::scr::hit(g, screen, id, NO_ITEM, 200 + t as u8);
+    }
+    for k in 0..shown {
+        super::scr::hit(g, screen, row_id, k as u16, (top + k) as u8);
+    }
+    super::scr::back_hits(g, screen);
+}
+
+fn value(
+    g: &SolidElevenGame,
+    top: usize,
+    shown: usize,
+    rows: usize,
+    tabs: u8,
+    key: &str,
+    item: u16,
+) -> Option<UiValue> {
+    let lang = g.settings.lang;
+    let bind = g.settings.bindings;
+    match key {
+        "pc_tabs" => return flag(tabs > 1),
+        "tabs_hint" => {
+            let switch_hint = if !g.using_pad && g.device == Device::Pc {
+                "Q / E"
+            } else {
+                "L / R"
+            };
+            let mut b = TextBuf::<48>::new();
+            let _ = write!(b, "{}: {}", switch_hint, tr(lang, S::TabsHint));
+            return txt(b.as_str());
+        }
+        "rows" => return int(shown as i32),
+        "move_hint" => {
+            let mv = if g.device == Device::Pc && g.cur.ctl_tab == 1 {
+                S::MoveKeys
+            } else {
+                S::MoveStick
+            };
+            return txt(tr(lang, mv));
+        }
+        "has_status" => return flag(status_of(g).is_some()),
+        "status" => return txt(status_of(g).map_or("", |(s, _)| s)),
+        _ => {}
+    }
+    let k = top + item as usize;
+    if k >= rows {
+        return None;
+    }
+    match key {
+        "is_reset" => return flag(k + 1 == rows),
+        "is_bind" => return flag(k + 1 < rows),
+        _ if k + 1 == rows => return None,
+        _ => {}
+    }
+    if g.cur.ctl_tab == 0 {
+        let a = Action::ALL[k];
+        match key {
+            "has_badge" => flag(true),
+            "badge_num" => txt(DIGITS[a as usize]),
+            "row_left" => txt(tr(lang, action_names(a).0)),
+            "row_right" => {
+                let b = bind.of(a);
+                let label = if g.device == Device::Pc
+                    && let Some(fam) = g.peek.pad_family
+                {
+                    Some(super::glyphs::label(fam, b))
+                } else {
+                    button_name(g.device, b)
+                };
+                txt(label.unwrap_or("?"))
+            }
+            _ => None,
+        }
+    } else {
+        let b = Button::ALL[k];
+        let act = action_on(&bind, b);
+        match key {
+            "has_badge" => flag(act.is_some()),
+            "badge_num" => txt(act.map_or("", |a| DIGITS[a as usize])),
+            "row_left" => {
+                let name = if g.cur.ctl_tab == 2
+                    && let Some(fam) = g.peek.pad_family
+                {
+                    super::glyphs::label(fam, b)
+                } else {
+                    button_name(Device::Pc, b).unwrap_or("?")
+                };
+                let mut t = TextBuf::<48>::new();
+                match act {
+                    Some(a) => {
+                        let _ = write!(t, "{}  {}", name, tr(lang, action_names(a).1));
+                    }
+                    None => {
+                        let _ = write!(t, "{name}  -");
+                    }
+                }
+                txt(t.as_str())
+            }
+            "row_right" => {
+                let keys = if g.cur.ctl_tab == 1 {
+                    &g.peek.keys
+                } else {
+                    &g.peek.pads
+                };
+                let s = keys[k].as_str();
+                txt(if s.is_empty() { "-" } else { s })
+            }
+            _ => None,
         }
     }
 }
@@ -436,6 +456,117 @@ fn action_at(
         }
     }
     alias
+}
+
+/// A PC/Web gamepad drawn from its [`PadFamily`]'s [`super::glyphs::Chassis`]
+/// and [`super::glyphs::glyph`] table (PlayStation symbols, Nintendo swapped
+/// face letters, 8BitDo SN30 body, Xbox/Generic).
+fn family_diagram(
+    ui: &mut Ui,
+    at: Vec2,
+    family: PadFamily,
+    bind: &Bindings,
+    peek: Option<&InputPeek>,
+) {
+    const BUTTONS: [Button; 12] = [
+        Button::L2,
+        Button::L,
+        Button::R2,
+        Button::R,
+        Button::Select,
+        Button::Start,
+        Button::L3,
+        Button::R3,
+        Button::Y,
+        Button::X,
+        Button::B,
+        Button::A,
+    ];
+    let o = Vec2::new(at.x + 2.0, at.y + 6.0);
+    let (w_box, h_box) = (136.0, 84.0);
+    let body = Color::rgb(70, 78, 110);
+    let dark = Color::rgb(40, 46, 72);
+    let ch = super::glyphs::chassis(family);
+    if family == PadFamily::EightBitDo {
+        ui.fill(Rect::new(o.x + 8.0, o.y + 18.0, 128.0, 62.0), body);
+    } else {
+        ui.polygon(
+            &[
+                Vec2::new(o.x + 14.0, o.y + 20.0),
+                Vec2::new(o.x + 130.0, o.y + 20.0),
+                Vec2::new(o.x + 144.0, o.y + 54.0),
+                Vec2::new(o.x + 132.0, o.y + 84.0),
+                Vec2::new(o.x + 112.0, o.y + 74.0),
+                Vec2::new(o.x + 32.0, o.y + 74.0),
+                Vec2::new(o.x + 12.0, o.y + 84.0),
+                Vec2::new(o.x, o.y + 54.0),
+            ],
+            body,
+        );
+    }
+    let (dx, dy) = (o.x + ch.dpad.0 * w_box, o.y + ch.dpad.1 * h_box);
+    ui.fill(Rect::new(dx - 2.0, dy - 7.0, 4.0, 14.0), dark);
+    ui.fill(Rect::new(dx - 7.0, dy - 2.0, 14.0, 4.0), dark);
+    for (sx, sy) in [ch.left_stick, ch.right_stick] {
+        ui.fill(
+            Rect::new(o.x + sx * w_box - 6.5, o.y + sy * h_box - 6.5, 13.0, 13.0),
+            dark,
+        );
+    }
+    let _ = ch.home;
+    for b in BUTTONS {
+        let (nx, ny) = super::glyphs::spot(family, b);
+        let p = Vec2::new(o.x + nx * w_box, o.y + ny * h_box + 4.0);
+        let gl = super::glyphs::glyph(family, b);
+        let xbox_name = button_name(Device::Pc, b).unwrap_or("?");
+        let action = action_at(xbox_name, Device::Pc, bind, peek);
+        let right = nx >= 0.5;
+        let w = if gl.shape.is_symbol() {
+            9.0
+        } else {
+            let _ = (gl.name, gl.fill);
+            let w = ui.measure(gl.label, Size::Small) + 4.0;
+            let c = if action.is_some() {
+                Color::rgb(210, 216, 236)
+            } else {
+                Color::rgb(120, 128, 160)
+            };
+            ui.fill(Rect::new(p.x - w * 0.5, p.y - 4.0, w, 9.0), c);
+            ui.text(
+                p.x,
+                p.y - 4.0,
+                gl.label,
+                pal::NAVY,
+                Size::Small,
+                TextAlign::Center,
+            );
+            w
+        };
+        if gl.shape.is_symbol() {
+            ui.fill(Rect::new(p.x - 4.5, p.y - 4.0, 9.0, 9.0), gl.fill);
+            for row in 0..7u8 {
+                for (x0, x1) in super::glyphs::spans(gl.shape, 7, row).into_iter().flatten() {
+                    ui.fill(
+                        Rect::new(
+                            p.x - 3.5 + x0 as f32,
+                            p.y - 3.0 + row as f32,
+                            (x1 - x0) as f32,
+                            1.0,
+                        ),
+                        gl.ink,
+                    );
+                }
+            }
+        }
+        if let Some(a) = action {
+            let bx = if right {
+                p.x + w * 0.5 + 1.0
+            } else {
+                p.x - w * 0.5 - 10.0
+            };
+            badge(ui, bx, p.y - 4.0, a);
+        }
+    }
 }
 
 /// A controller drawn as a few shapes, every button as a small cap with
@@ -528,7 +659,7 @@ fn diagram(
             TextAlign::Center,
         );
         if let Some(a) = action {
-            let bx = if s.right {
+            let bx = if s.right && p.x + w * 0.5 + 10.0 <= o.x + 144.0 {
                 p.x + w * 0.5 + 1.0
             } else {
                 p.x - w * 0.5 - 10.0

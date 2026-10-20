@@ -2,6 +2,11 @@
 //! scoreboard with both clubs' colors and the clock, the minimap, the
 //! controlled player's name and stamina, the kick charge, and event
 //! banners (goal, offside, cards, restarts).
+//!
+//! At `AccessSettings::text_scale` above 100 % (`draw_scaled`, issue #95),
+//! the scoreboard, the controlled player's tag and the banners grow up to
+//! 200 % while staying inside the 320×240 design canvas and clear of the
+//! minimap; at 100 % the layout is pixel-identical to the console goldens.
 
 use core::fmt::Write as _;
 
@@ -41,7 +46,8 @@ pub fn upper<const N: usize>(s: &str) -> TextBuf<N> {
     b
 }
 
-/// The overlay. `db_names[i]` is player `i`'s surname index.
+/// The overlay at 100 % text scale. `db_names[i]` is player `i`'s surname index.
+#[allow(clippy::too_many_arguments)]
 pub fn draw(
     ui: &mut Ui,
     m: &Match,
@@ -52,69 +58,93 @@ pub fn draw(
     lang: Lang,
     names: &[u8; N],
 ) {
-    scoreboard(ui, m, colors);
+    draw_scaled(ui, m, colors, active, charge, banner, lang, names, 1.0);
+}
+
+/// The overlay at `text_scale` (1.0 ..= 2.0, from `AccessSettings::text_factor`).
+#[allow(clippy::too_many_arguments)]
+pub fn draw_scaled(
+    ui: &mut Ui,
+    m: &Match,
+    colors: &SideColors,
+    active: Option<u8>,
+    charge: f32,
+    banner: Option<&Banner>,
+    lang: Lang,
+    names: &[u8; N],
+    text_scale: f32,
+) {
+    let k = text_scale.clamp(1.0, 2.0);
+    scoreboard(ui, m, colors, k);
     minimap(ui, m, colors);
     if let Some(a) = active {
-        player_tag(ui, m, a as usize, names[a as usize], charge);
+        player_tag(ui, m, a as usize, names[a as usize], charge, k);
     }
     if let Some(b) = banner {
-        draw_banner(ui, b, colors, lang);
+        draw_banner(ui, b, colors, lang, k);
     }
 }
 
-fn scoreboard(ui: &mut Ui, m: &Match, c: &SideColors) {
+fn scoreboard(ui: &mut Ui, m: &Match, c: &SideColors, k: f32) {
     let (x, y) = (6.0, 6.0);
+    let wc = 34.0 * k;
+    let ws = 34.0 * k;
+    let w_clk = 38.0 * k;
+    let h = 13.0 * k;
+    let trim_h = 2.0 * k;
+    let ty = y + k;
     // Home: color block with the club's short name.
-    ui.slant(Rect::new(x, y, 34.0, 13.0), c.shirt[0], 0.0);
-    ui.fill(Rect::new(x, y + 11.0, 34.0, 2.0), c.trim[0]);
-    ui.text_shadow(
-        x + 17.0,
-        y + 1.0,
+    ui.slant(Rect::new(x, y, wc, h), c.shirt[0], 0.0);
+    ui.fill(Rect::new(x, y + h - trim_h, wc, trim_h), c.trim[0]);
+    ui.text_shadow_scaled(
+        x + wc * 0.5,
+        ty,
         CLUBS[m.clubs[0] as usize].short,
         pal::INK,
         Size::Small,
+        k,
         TextAlign::Center,
     );
     // Score.
-    ui.fill(
-        Rect::new(x + 34.0, y, 34.0, 13.0),
-        Color::rgba(14, 16, 30, 235),
-    );
+    let xs = x + wc;
+    ui.fill(Rect::new(xs, y, ws, h), Color::rgba(14, 16, 30, 235));
     let mut b = TextBuf::<12>::new();
     let _ = write!(b, "{} - {}", m.score[0], m.score[1]);
-    ui.text(
-        x + 51.0,
-        y + 1.0,
+    ui.text_scaled(
+        xs + ws * 0.5,
+        ty,
         b.as_str(),
         pal::INK,
         Size::Small,
+        k,
         TextAlign::Center,
     );
     // Away.
-    ui.slant(Rect::new(x + 68.0, y, 34.0, 13.0), c.shirt[1], 0.0);
-    ui.fill(Rect::new(x + 68.0, y + 11.0, 34.0, 2.0), c.trim[1]);
-    ui.text_shadow(
-        x + 85.0,
-        y + 1.0,
+    let xa = xs + ws;
+    ui.slant(Rect::new(xa, y, wc, h), c.shirt[1], 0.0);
+    ui.fill(Rect::new(xa, y + h - trim_h, wc, trim_h), c.trim[1]);
+    ui.text_shadow_scaled(
+        xa + wc * 0.5,
+        ty,
         CLUBS[m.clubs[1] as usize].short,
         pal::INK,
         Size::Small,
+        k,
         TextAlign::Center,
     );
     // Clock, with a cyan edge like the reference.
-    ui.fill(
-        Rect::new(x + 104.0, y, 38.0, 13.0),
-        Color::rgba(14, 16, 30, 235),
-    );
-    ui.fill(Rect::new(x + 104.0, y, 2.0, 13.0), pal::CYAN);
+    let xk = xa + wc + 2.0 * k;
+    ui.fill(Rect::new(xk, y, w_clk, h), Color::rgba(14, 16, 30, 235));
+    ui.fill(Rect::new(xk, y, 2.0 * k, h), pal::CYAN);
     b.clear();
     let _ = write!(b, "{:02}:{:02}", m.minute().min(99), m.second());
-    ui.text(
-        x + 124.0,
-        y + 1.0,
+    ui.text_scaled(
+        xk + w_clk * 0.5 + k,
+        ty,
         b.as_str(),
         pal::INK,
         Size::Small,
+        k,
         TextAlign::Center,
     );
 }
@@ -163,30 +193,42 @@ fn minimap(ui: &mut Ui, m: &Match, c: &SideColors) {
     let _ = SIDE;
 }
 
-fn player_tag(ui: &mut Ui, m: &Match, i: usize, surname: u8, charge: f32) {
+fn player_tag(ui: &mut Ui, m: &Match, i: usize, surname: u8, charge: f32, k: f32) {
     let p = &m.players[i];
-    let (x, y) = (6.0, 240.0 - 30.0);
-    ui.slant(
-        Rect::new(x, y, 92.0, 24.0),
-        Color::rgba(14, 16, 34, 220),
-        4.0,
-    );
-    ui.fill(Rect::new(x, y, 3.0, 24.0), pal::CYAN);
     let mut b = TextBuf::<24>::new();
     let _ = write!(b, "{} ", p.number);
     let name: TextBuf<16> = upper(SURNAMES[surname as usize % SURNAMES.len()]);
     let _ = b.write_str(name.as_str());
-    ui.text(
+    let tw = ui.measure_scaled(b.as_str(), Size::Small, k);
+    let w = if k <= 1.01 {
+        92.0
+    } else {
+        (tw + 14.0).clamp(92.0, 308.0)
+    };
+    let h = if k <= 1.01 { 24.0 } else { 13.0 + 11.0 * k };
+    let x = 6.0;
+    // Stay clear of the minimap (x = 122..198, y = 184..234) when a scaled
+    // tag grows wider than the bottom-left corner.
+    let y = if x + w > 118.0 {
+        184.0 - h - 2.0
+    } else {
+        240.0 - h - 6.0
+    };
+    ui.slant(Rect::new(x, y, w, h), Color::rgba(14, 16, 34, 220), 4.0);
+    ui.fill(Rect::new(x, y, 3.0, h), pal::CYAN);
+    ui.text_scaled(
         x + 7.0,
         y + 2.0,
         b.as_str(),
         pal::INK,
         Size::Small,
+        k,
         TextAlign::Left,
     );
+    let bar_y = y + h - 9.0;
     // Stamina.
     ui.bar(
-        Rect::new(x + 7.0, y + 15.0, 60.0, 3.0),
+        Rect::new(x + 7.0, bar_y, 60.0, 3.0),
         p.stamina.to_f32(),
         pal::LIME,
     );
@@ -199,25 +241,26 @@ fn player_tag(ui: &mut Ui, m: &Match, i: usize, surname: u8, charge: f32) {
         } else {
             pal::RED
         };
-        ui.bar(Rect::new(x + 7.0, y + 19.0, 80.0, 3.0), charge, col);
+        ui.bar(Rect::new(x + 7.0, bar_y + 4.0, 80.0, 3.0), charge, col);
     }
 }
 
-fn draw_banner(ui: &mut Ui, b: &Banner, c: &SideColors, lang: Lang) {
+fn draw_banner(ui: &mut Ui, b: &Banner, c: &SideColors, lang: Lang, k: f32) {
     let t = tr(lang, b.text);
     let big = matches!(
         b.text,
         S::Goal | S::HalfTime | S::FullTime | S::Penalty | S::RedCard
     );
     let size = if big { Size::Big } else { Size::Small };
-    let tw = ui.measure(t, size);
-    let w = (tw + 36.0).max(100.0);
-    let h = if big { 30.0 } else { 18.0 };
+    let tk = if big { 1.0 } else { k };
+    let tw = ui.measure_scaled(t, size, tk);
+    let w = (tw + 36.0).clamp(100.0, 304.0);
+    let h = if big { 30.0 } else { 7.0 + 11.0 * tk };
     let x = 160.0 - w * 0.5;
     let y = 64.0;
     // Slide in over the first quarter second.
-    let k = ((BANNER_SECS - b.left) / 0.25).min(1.0);
-    let x = x - (1.0 - k) * 80.0;
+    let anim = ((BANNER_SECS - b.left) / 0.25).min(1.0);
+    let x = x - (1.0 - anim) * 80.0;
     let stripe = match b.side {
         Some(s) => c.shirt[s as usize],
         None => pal::CYAN,
@@ -235,12 +278,121 @@ fn draw_banner(ui: &mut Ui, b: &Banner, c: &SideColors, lang: Lang) {
     } else {
         pal::INK
     };
-    ui.text_shadow(
-        160.0 - (1.0 - k) * 80.0 + 3.0,
-        y + (h - if big { 22.0 } else { 11.0 }) * 0.5,
+    ui.text_shadow_scaled(
+        160.0 - (1.0 - anim) * 80.0 + 3.0,
+        y + (h - if big { 22.0 } else { 11.0 * tk }) * 0.5,
         t,
         col,
         size,
+        tk,
         TextAlign::Center,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use trino_core::{
+        Caps, FontId, Material, ModelId, ModelParams, Renderer, SpriteId, SpriteParams, TextParams,
+        Transform3, Vec2,
+    };
+
+    struct HudProbe {
+        texts: Vec<(Rect, String)>,
+        fills: Vec<Rect>,
+    }
+
+    impl Renderer for HudProbe {
+        fn caps(&self) -> &Caps {
+            &Caps::N64
+        }
+        fn begin_frame(&mut self, _: Color) {}
+        fn draw_sprite(&mut self, _: SpriteId, _: Vec2, _: &SpriteParams) {}
+        fn draw_model(&mut self, _: ModelId, _: &Transform3, _: Material, _: &ModelParams) {}
+        fn end_frame(&mut self) {}
+        fn fill_rect(&mut self, r: Rect, _: Color) {
+            self.fills.push(r);
+        }
+        fn measure_text(&self, font: FontId, text: &str, scale: f32) -> Vec2 {
+            let cell = if font == crate::ui::F_BIG {
+                Vec2::new(10.0, 22.0)
+            } else if font == crate::ui::F_HUGE {
+                Vec2::new(20.0, 44.0)
+            } else {
+                Vec2::new(5.0, 11.0)
+            };
+            Vec2::new(text.chars().count() as f32 * cell.x * scale, cell.y * scale)
+        }
+        fn draw_text(&mut self, font: FontId, pos: Vec2, text: &str, p: &TextParams) {
+            let sz = self.measure_text(font, text, p.scale);
+            let x = match p.align {
+                TextAlign::Left => pos.x,
+                TextAlign::Center => pos.x - sz.x * 0.5,
+                TextAlign::Right => pos.x - sz.x,
+            };
+            self.texts
+                .push((Rect::new(x, pos.y, sz.x, sz.y), text.into()));
+        }
+    }
+
+    #[test]
+    fn hud_fits_at_100_and_200_percent_text_in_both_languages() {
+        let (setup, names, _) = crate::quick_setup(0, 1, 1, 180, [true, false]);
+        let m = Match::new(&setup);
+        let colors = SideColors {
+            shirt: [pal::RED, pal::BLUE],
+            trim: [Color::WHITE, Color::WHITE],
+        };
+        let banners = [
+            S::Goal,
+            S::HalfTime,
+            S::FullTime,
+            S::Offside,
+            S::YellowCard,
+            S::RedCard,
+            S::Penalty,
+            S::Corner,
+            S::ThrowIn,
+            S::GoalKick,
+            S::FreeKick,
+            S::Save,
+            S::Post,
+        ];
+        for lang in Lang::ALL {
+            for k in [1.0f32, 2.0] {
+                for &b_txt in &banners {
+                    let banner = Banner {
+                        text: b_txt,
+                        side: Some(0),
+                        left: 1.0,
+                    };
+                    let mut probe = HudProbe {
+                        texts: Vec::new(),
+                        fills: Vec::new(),
+                    };
+                    let mut ui = Ui::new(&mut probe, Vec2::new(320.0, 240.0));
+                    draw_scaled(
+                        &mut ui,
+                        &m,
+                        &colors,
+                        Some(9),
+                        0.75,
+                        Some(&banner),
+                        lang,
+                        &names,
+                        k,
+                    );
+                    for (r, txt) in &probe.texts {
+                        assert!(
+                            r.pos.x >= 0.0
+                                && r.pos.y >= 0.0
+                                && r.pos.x + r.size.x <= 320.0
+                                && r.pos.y + r.size.y <= 240.0,
+                            "{txt:?} at {r:?} off 320x240 at scale {k} ({lang:?})"
+                        );
+                    }
+                }
+            }
+        }
+    }
 }

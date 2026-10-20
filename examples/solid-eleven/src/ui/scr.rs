@@ -57,12 +57,27 @@ pub fn flag(b: bool) -> Option<UiValue> {
 ///   stacks its label over its value / puts them side by side).
 fn common(g: &SolidElevenGame, key: &str) -> Option<UiValue> {
     let pad = g.pad_layout();
-    let btn = |b| txt(btn_prompt(pad, b).0);
+    let fam = g
+        .peek
+        .pad_family
+        .filter(|_| pad && g.device == crate::game::app::Device::Pc);
+    let btn = |b: Btn, eb: trino_core::Button| {
+        if let Some(f) = fam {
+            let gl = crate::ui::glyphs::glyph(f, eb);
+            if gl.shape.is_symbol() {
+                txt("  ")
+            } else {
+                txt(gl.label)
+            }
+        } else {
+            txt(btn_prompt(pad, b).0)
+        }
+    };
     match key {
-        "btn.a" => btn(Btn::A),
-        "btn.b" => btn(Btn::B),
-        "btn.x" => btn(Btn::X),
-        "btn.y" => btn(Btn::Y),
+        "btn.a" => btn(Btn::A, trino_core::Button::A),
+        "btn.b" => btn(Btn::B, trino_core::Button::B),
+        "btn.x" => btn(Btn::X, trino_core::Button::X),
+        "btn.y" => btn(Btn::Y, trino_core::Button::Y),
         "big" => flag(g.access.clamped().text_factor() >= 1.5),
         "small" => flag(g.access.clamped().text_factor() < 1.5),
         _ => None,
@@ -88,7 +103,11 @@ impl<F: Fn(&str, u16) -> Option<UiValue>> UiData for Values<'_, F> {
 
     fn revision(&self) -> Option<u32> {
         let g = self.g;
-        let common = rev(&(g.pad_layout(), g.access.clamped().text_factor() >= 1.5));
+        let common = rev(&(
+            g.pad_layout(),
+            g.peek.pad_family,
+            g.access.clamped().text_factor() >= 1.5,
+        ));
         Some(self.rev ^ common.rotate_left(7) ^ g.menu_frame.rotate_left(17))
     }
 }
@@ -155,6 +174,36 @@ pub fn show<F>(
         ui.prepare(r, screen, &env);
         under(g, &ui, r);
         ui.draw(r, screen, &env);
+        if let Some(fam) = g
+            .peek
+            .pad_family
+            .filter(|_| g.pad_layout() && g.device == crate::game::app::Device::Pc)
+        {
+            for (id, eb) in [
+                ("hint_a", trino_core::Button::A),
+                ("hint_b", trino_core::Button::B),
+                ("hint_x", trino_core::Button::X),
+                ("hint_y", trino_core::Button::Y),
+            ] {
+                let gl = crate::ui::glyphs::glyph(fam, eb);
+                if gl.shape.is_symbol()
+                    && let Some((mut a, size)) = art(r, &ui, screen, id, NO_ITEM)
+                {
+                    let y0 = ((size.y - 7.0) * 0.5).max(1.0);
+                    for row in 0..7u8 {
+                        for (x0, x1) in crate::ui::glyphs::spans(gl.shape, 7, row)
+                            .into_iter()
+                            .flatten()
+                        {
+                            a.fill(
+                                Rect::new(4.0 + x0 as f32, y0 + row as f32, (x1 - x0) as f32, 1.0),
+                                gl.ink,
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
     g.menu_ui = ui;
 }
@@ -163,9 +212,9 @@ pub fn show<F>(
 /// [`NO_ITEM`]): design units from the node's top-left at the layout's
 /// scale, so art keeps its proportions inside the box the screen gave it.
 /// `None` when the node isn't shown (a hidden variant, scrolled away).
-pub fn art<'r>(
+pub fn art<'r, const N: usize>(
     r: &'r mut dyn Renderer,
-    ui: &MenuUi,
+    ui: &trino_core::Ui<N>,
     screen: &UiScreen<'_>,
     id: &str,
     item: u16,

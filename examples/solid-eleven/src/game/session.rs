@@ -465,12 +465,16 @@ impl Session {
     }
 
     pub fn render(&self, r: &mut dyn Renderer, screen: Vec2, lang: Lang) {
+        self.render_scaled(r, screen, lang, 1.0);
+    }
+
+    pub fn render_scaled(&self, r: &mut dyn Renderer, screen: Vec2, lang: Lang, text_scale: f32) {
         render::draw_match(r, &self.m, &self.view, screen.x / screen.y.max(1.0));
         if render::hifi(r, self.view.retro) {
             self.turf.draw(r);
         }
         let mut ui = Ui::new(r, screen);
-        crate::render::hud::draw(
+        crate::render::hud::draw_scaled(
             &mut ui,
             &self.m,
             &self.colors,
@@ -479,6 +483,7 @@ impl Session {
             self.banner.as_ref(),
             lang,
             &self.names,
+            text_scale,
         );
     }
 }

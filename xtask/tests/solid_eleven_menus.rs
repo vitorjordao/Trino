@@ -619,6 +619,7 @@ fn ui_screen(g: &SolidElevenGame) -> bool {
             | Scene::Edit
             | Scene::Market
             | Scene::HalfTime
+            | Scene::Title
             | Scene::Substitutions { .. }
     )
 }
@@ -832,6 +833,7 @@ fn every_menu_state_draws_cleanly_in_every_language_and_size() {
         "Market",
         "HalfTime",
         "Substitutions",
+        "Title",
     ] {
         assert!(
             report.grew.contains(want),

@@ -481,73 +481,9 @@ fn trophy(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2, aspect: f
 
 // ------------------------------------------------------------------ title
 
-fn title(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
-    let lang = g.settings.lang;
-    let mut ui = Ui::new(r, screen);
-    // Logo: a shield with the name over it.
-    ui.polygon(
-        &[
-            Vec2::new(10.0, 8.0),
-            Vec2::new(78.0, 8.0),
-            Vec2::new(78.0, 40.0),
-            Vec2::new(44.0, 62.0),
-            Vec2::new(10.0, 40.0),
-        ],
-        pal::RED,
-    );
-    ui.polygon(
-        &[
-            Vec2::new(13.0, 11.0),
-            Vec2::new(75.0, 11.0),
-            Vec2::new(75.0, 39.0),
-            Vec2::new(44.0, 58.0),
-            Vec2::new(13.0, 39.0),
-        ],
-        Color::rgb(30, 70, 190),
-    );
-    // The ball over the shield's corner.
-    ui.polygon(
-        &[
-            Vec2::new(74.0, 6.0),
-            Vec2::new(82.0, 9.0),
-            Vec2::new(85.0, 17.0),
-            Vec2::new(82.0, 25.0),
-            Vec2::new(74.0, 28.0),
-            Vec2::new(66.0, 25.0),
-            Vec2::new(63.0, 17.0),
-            Vec2::new(66.0, 9.0),
-        ],
-        Color::rgb(245, 245, 250),
-    );
-    ui.fill(Rect::new(71.0, 14.0, 6.0, 6.0), Color::rgb(30, 30, 40));
-    ui.text(
-        18.0 + 1.5,
-        13.0 + 1.5,
-        "SOLID",
-        Color::rgb(20, 30, 90),
-        Size::Big,
-        TextAlign::Left,
-    );
-    ui.text(18.0, 13.0, "SOLID", pal::INK, Size::Big, TextAlign::Left);
-    ui.text(
-        16.0 + 1.5,
-        37.0 + 1.5,
-        "ELEVEN",
-        Color::rgb(90, 10, 30),
-        Size::Big,
-        TextAlign::Left,
-    );
-    ui.text(16.0, 37.0, "ELEVEN", pal::INK, Size::Big, TextAlign::Left);
-    ui.text_shadow(
-        88.0,
-        50.0,
-        "LOW POLY FOOTBALL",
-        pal::DIM,
-        Size::Small,
-        TextAlign::Left,
-    );
-
-    let items = [
+fn title(g: &mut SolidElevenGame, r: &mut dyn Renderer, _screen: Vec2) {
+    use super::scr::{art, flag, int, txt};
+    const ITEMS: [(S, S, Color); 6] = [
         (S::PlayNow, S::QuickMatch, pal::CYAN),
         (S::Career, S::ManageClub, pal::RED),
         (S::Customize, S::CustomizeSub, pal::YELLOW),
@@ -555,125 +491,170 @@ fn title(g: &mut SolidElevenGame, r: &mut dyn Renderer, screen: Vec2) {
         (S::Settings, S::SettingsSub, pal::BLUE),
         (S::Exit, S::ExitSub, pal::PINK),
     ];
-    for (k, (main, sub, c)) in items.iter().enumerate() {
-        let y = 68.0 + k as f32 * 25.0;
-        let sel = g.cur.title == k;
-        let w = if sel { 160.0 } else { 150.0 };
-        let r = Rect::new(10.0, y, w, 22.0);
-        ui.slant(
-            r,
-            if sel {
-                Color::rgba(20, 40, 90, 245)
-            } else {
-                pal::PANEL
-            },
-            5.0,
-        );
-        ui.slant(Rect::new(10.0, y, 3.0, 22.0), *c, 5.0);
-        if sel {
-            ui.slant_border(r, *c, 5.0, 1.0);
-        }
-        ui.text(
-            18.0,
-            y + 1.0,
-            tr(lang, *main),
-            pal::INK,
-            Size::Small,
-            TextAlign::Left,
-        );
-        ui.text(
-            18.0,
-            y + 11.0,
-            tr(lang, *sub),
-            *c,
-            Size::Small,
-            TextAlign::Left,
-        );
-        let hit = ui.rect(r);
-        g.hits.add(hit, Screen::Top, k as u8);
-    }
-    // Profile card (the reference's bottom right).
-    let (x, y) = (204.0, 150.0);
-    ui.panel(Rect::new(x, y, 110.0, 64.0), pal::CYAN);
-    ui.fill(Rect::new(x, y, 110.0, 12.0), Color::rgba(30, 60, 120, 240));
-    ui.text(
-        x + 55.0,
-        y + 1.0,
-        if g.career_on {
-            tr(lang, S::Club)
-        } else {
-            tr(lang, S::QuickMatch)
-        },
-        pal::CYAN,
-        Size::Small,
-        TextAlign::Center,
-    );
-    let c = if g.career_on {
+    let screen = &super::title_gen::SCREEN;
+    let club = if g.career_on {
         g.world.user
     } else {
         g.quick.home
     };
-    crest_of(&mut ui, x + 6.0, y + 16.0, 22.0, c, false);
-    // The name on two lines when it is too long for one (VIOLET WANDERERS).
-    let name: TextBuf<20> = upper(CLUBS[c as usize].name);
-    let (first, second) = ui.wrap2(name.as_str(), Size::Small, 110.0 - 33.0 - 3.0);
-    ui.text(
-        x + 33.0,
-        y + 16.0,
-        first,
-        pal::INK,
-        Size::Small,
-        TextAlign::Left,
+    super::scr::show(
+        g,
+        r,
+        screen,
+        Some(("item", g.cur.title.min(5) as u16)),
+        super::scr::rev(&(
+            club,
+            g.career_on,
+            g.world.round,
+            g.world.year,
+            g.world.clubs[club as usize].budget,
+        )),
+        |g, key, item| {
+            let lang = g.settings.lang;
+            let mut b = buf();
+            match key {
+                "items" => return int(ITEMS.len() as i32),
+                "main" => return txt(tr(lang, ITEMS.get(item as usize)?.0)),
+                "sub" => return txt(tr(lang, ITEMS.get(item as usize)?.1)),
+                "career" => return flag(g.career_on),
+                "card_title" => {
+                    return txt(tr(lang, if g.career_on { S::Club } else { S::QuickMatch }));
+                }
+                "club" => return txt(upper::<20>(CLUBS[club as usize].name).as_str()),
+                "coins" => {
+                    let _ = write!(
+                        b,
+                        "{} {}",
+                        coins(g.world.clubs[club as usize].budget).as_str(),
+                        tr(lang, S::Coins)
+                    );
+                }
+                "round" => {
+                    let _ = write!(
+                        b,
+                        "{} {}/{}  {}",
+                        tr(lang, S::Round),
+                        (g.world.round as usize + 1).min(ROUNDS),
+                        ROUNDS,
+                        g.world.year
+                    );
+                }
+                "summary" => {
+                    let _ = write!(
+                        b,
+                        "{}  {} {}",
+                        upper::<20>(CLUBS[club as usize].name).as_str(),
+                        coins(g.world.clubs[club as usize].budget).as_str(),
+                        tr(lang, S::Coins)
+                    );
+                }
+                _ => {
+                    // `c0`..`c5`: the item's color picks its subtitle's.
+                    let k = key.strip_prefix('c')?.parse::<u16>().ok()?;
+                    return flag(k == item);
+                }
+            }
+            txt(b.as_str())
+        },
+        |g, ui, r| {
+            super::scr::chrome(ui, screen, r);
+            // The items' slanted bars: the selected one longer, rimmed in
+            // its color.
+            for (k, (_, _, c)) in ITEMS.iter().enumerate() {
+                if let Some((mut a, size)) = art(r, ui, screen, "item", k as u16) {
+                    let sel = g.cur.title == k;
+                    let w = if sel { size.x } else { size.x - 10.0 };
+                    let bar = Rect::new(0.0, 0.0, w, size.y);
+                    a.slant(
+                        bar,
+                        if sel {
+                            Color::rgba(20, 40, 90, 245)
+                        } else {
+                            pal::PANEL
+                        },
+                        5.0,
+                    );
+                    a.slant(Rect::new(0.0, 0.0, 3.0, size.y), *c, 5.0);
+                    if sel {
+                        a.slant_border(bar, *c, 5.0, 1.0);
+                    }
+                }
+            }
+            if let Some((mut a, size)) = art(r, ui, screen, "card", NO_ITEM) {
+                a.fill(Rect::new(0.0, 0.0, size.x, size.y), pal::PANEL);
+            }
+            if let Some((mut a, size)) = art(r, ui, screen, "card_title", NO_ITEM) {
+                a.fill(
+                    Rect::new(0.0, 0.0, size.x, size.y),
+                    Color::rgba(30, 60, 120, 240),
+                );
+            }
+        },
     );
-    let below = if second.is_empty() {
-        0.0
-    } else {
-        ui.text(
-            x + 33.0,
-            y + 26.0,
-            second,
-            pal::INK,
-            Size::Small,
-            TextAlign::Left,
-        );
-        10.0
-    };
-    let mut b = buf();
-    let _ = write!(
-        b,
-        "{} {}",
-        coins(g.world.clubs[c as usize].budget).as_str(),
-        tr(lang, S::Coins)
-    );
-    ui.text(
-        x + 33.0,
-        y + 27.0 + below,
-        b.as_str(),
-        pal::YELLOW,
-        Size::Small,
-        TextAlign::Left,
-    );
-    if g.career_on {
-        b.clear();
-        let _ = write!(
-            b,
-            "{} {}/{}  {}",
-            tr(lang, S::Round),
-            (g.world.round as usize + 1).min(ROUNDS),
-            ROUNDS,
-            g.world.year
-        );
-        ui.text(
-            x + 6.0,
-            y + 48.0,
-            b.as_str(),
-            pal::DIM,
-            Size::Small,
-            TextAlign::Left,
-        );
+    let ui = core::mem::take(&mut g.menu_ui);
+    if let Some((mut a, size)) = art(r, &ui, screen, "card_crest", NO_ITEM) {
+        crest_of(&mut a, 0.0, 0.0, size.x, club, false);
     }
-    let pad = g.pad_layout();
-    footer(&mut ui, &mut g.hits, pad, lang, &[(Btn::A, S::Select)]);
+    // The logo: a shield, the ball over its corner, the name.
+    if let Some((mut a, _)) = art(r, &ui, screen, "logo", NO_ITEM) {
+        let p = |x: f32, y: f32| Vec2::new(x - 10.0, y - 6.0);
+        a.polygon(
+            &[
+                p(10.0, 8.0),
+                p(78.0, 8.0),
+                p(78.0, 40.0),
+                p(44.0, 62.0),
+                p(10.0, 40.0),
+            ],
+            pal::RED,
+        );
+        a.polygon(
+            &[
+                p(13.0, 11.0),
+                p(75.0, 11.0),
+                p(75.0, 39.0),
+                p(44.0, 58.0),
+                p(13.0, 39.0),
+            ],
+            Color::rgb(30, 70, 190),
+        );
+        a.polygon(
+            &[
+                p(74.0, 6.0),
+                p(82.0, 9.0),
+                p(85.0, 17.0),
+                p(82.0, 25.0),
+                p(74.0, 28.0),
+                p(66.0, 25.0),
+                p(63.0, 17.0),
+                p(66.0, 9.0),
+            ],
+            Color::rgb(245, 245, 250),
+        );
+        a.fill(Rect::new(61.0, 8.0, 6.0, 6.0), Color::rgb(30, 30, 40));
+        a.text(
+            9.5,
+            8.5,
+            "SOLID",
+            Color::rgb(20, 30, 90),
+            Size::Big,
+            TextAlign::Left,
+        );
+        a.text(8.0, 7.0, "SOLID", pal::INK, Size::Big, TextAlign::Left);
+        a.text(
+            7.5,
+            32.5,
+            "ELEVEN",
+            Color::rgb(90, 10, 30),
+            Size::Big,
+            TextAlign::Left,
+        );
+        a.text(6.0, 31.0, "ELEVEN", pal::INK, Size::Big, TextAlign::Left);
+    }
+    g.menu_ui = ui;
+    for k in 0..ITEMS.len() {
+        super::scr::hit(g, screen, "item", k as u16, k as u8);
+    }
 }
 
 // ------------------------------------------------------------ quick match

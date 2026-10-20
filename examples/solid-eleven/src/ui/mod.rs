@@ -67,6 +67,10 @@ pub mod substitutions_gen {
 pub mod teams_gen {
     include!("teams_gen.rs");
 }
+/// The title (`ui/title.ui.ron`).
+pub mod title_gen {
+    include!("title_gen.rs");
+}
 /// The toast over the menus (`ui/toast.ui.ron`).
 pub mod toast_gen {
     include!("toast_gen.rs");

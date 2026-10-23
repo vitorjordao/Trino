@@ -17,6 +17,8 @@ trino-core = { workspace = true }
 trino-scene = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }
+# `ship`: trino.toml's packaging keys edited in place (comments kept).
+toml_edit = "0.25"
 png = { workspace = true }
 hound = { workspace = true }
 gltf = { workspace = true }

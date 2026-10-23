@@ -1251,6 +1251,8 @@ pub struct Report {
     /// the target's safe area or off the screen: `access check` fails them
     /// at 200 % text (issue #60). `ui check` leaves them to the designer.
     pub outside_safe: Vec<usize>,
+    /// The smallest line of text drawn, output pixels ([`Probe::min_text_px`]).
+    pub min_text_px: Option<f32>,
 }
 
 /// A target's screen: `caps`, the interface scale, a language.
@@ -1311,6 +1313,7 @@ pub fn audit(flat: &Flat<'_>, target: Target<'_>, fonts: &Fonts, langs: &Langs) 
     let at = |i: usize| Some((i, nodes[i].1));
     let mut report = Report {
         stats,
+        min_text_px: probe.min_text_px,
         ..Report::default()
     };
     let mut seen = HashSet::new();
@@ -1548,6 +1551,10 @@ pub struct Probe<'f> {
     /// (font id, character) pairs the fonts lack.
     pub missing: std::collections::BTreeSet<(u32, char)>,
     pub unknown_fonts: std::collections::BTreeSet<u32>,
+    /// The smallest line of text drawn, in output pixels (the font's line
+    /// height times the draw's scale): Steam Deck's legibility check
+    /// (`cargo xtask deck check`, issue #61).
+    pub min_text_px: Option<f32>,
 }
 
 impl<'f> Probe<'f> {
@@ -1559,6 +1566,7 @@ impl<'f> Probe<'f> {
             stats: None,
             missing: Default::default(),
             unknown_fonts: Default::default(),
+            min_text_px: None,
         }
     }
 }
@@ -1572,7 +1580,13 @@ impl Renderer for Probe<'_> {
     fn set_camera(&mut self, _camera: &Camera3) {}
     fn draw_model(&mut self, _m: ModelId, _t: &Transform3, _mat: Material, _p: &ModelParams) {}
     fn end_frame(&mut self) {}
-    fn draw_text(&mut self, font: FontId, _pos: Vec2, text: &str, _params: &TextParams) {
+    fn draw_text(&mut self, font: FontId, _pos: Vec2, text: &str, params: &TextParams) {
+        if !text.trim().is_empty() {
+            let h = self.fonts.measure(font, "A", params.scale).y;
+            if h > 0.0 {
+                self.min_text_px = Some(self.min_text_px.map_or(h, |m: f32| m.min(h)));
+            }
+        }
         if !self.fonts.knows(font) {
             self.unknown_fonts.insert(font.0);
         } else if let Some(f) = self.fonts.get(font) {

@@ -15,6 +15,13 @@ heap-stats = []
 watch = ["trino-asset-pipeline/watch"]
 # Gamepads through gilrs (Linux: needs libudev-dev at build time).
 gamepad = ["trino-platform-pc/gamepad"]
+# Steam (issue #61): achievements, stats, Cloud, rich presence, Steam Input
+# and the overlay through the Steamworks SDK (`steamworks`, which links
+# libsteam_api dynamically; `cargo xtask package pc --steam` ships it).
+steam = ["dep:steamworks"]
+# Send crash reports to an https:// endpoint (`[pc] crash_upload`; plain
+# http:// to a local collector needs nothing). Only with the player's yes.
+crash-upload = ["dep:ureq"]
 
 [dependencies]
 trino-core = { workspace = true }
@@ -22,8 +29,11 @@ trino-platform-pc = { workspace = true }
 trino-asset-pipeline = { workspace = true }
 winit = { workspace = true }
 pollster = { workspace = true }
+# `raw-bindings` exposes `steamworks::sys` (Steam Input's handle types).
+steamworks = { version = "0.13.1", optional = true, features = ["raw-bindings"] }
+ureq = { version = "3", optional = true }
+# `TRINO_SCREENSHOT`: the last smoke frame as a PNG.
+png = { workspace = true }
 
 [dev-dependencies]
-# Integration tests bake a synthetic project (the PC backend's fixture).
-png = { workspace = true }
 tempfile = { workspace = true }

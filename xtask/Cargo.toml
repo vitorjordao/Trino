@@ -18,6 +18,8 @@ showcase = { workspace = true }
 notify = { workspace = true }
 notify-debouncer-full = { workspace = true }
 png = { workspace = true }
+# `package`: the zips (deflate, CRC-32).
+flate2 = { workspace = true }
 hound = { workspace = true }
 # `blender smoke` parses the toolkit's JSON report.
 serde_json = { workspace = true }

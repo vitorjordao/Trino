@@ -684,6 +684,7 @@ mod tests {
                 "ui/controls.ui.ron",
                 "ui/accessibility.ui.ron",
                 "ui/about.ui.ron",
+                "ui/crash.ui.ron",
                 "assets/achievements.ron",
             ] {
                 assert!(dest.join(f).is_file(), "{}: {f}", template.key());

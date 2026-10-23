@@ -20,7 +20,6 @@ use std::process::ExitCode;
 
 use serde_json::json;
 use trino_scene::services::{self as svc, AchievementsDef};
-use trino_scene::steam;
 use trino_scene::ui::Level;
 
 use crate::project::Project;
@@ -32,7 +31,7 @@ const USAGE: &str = "xtask: usage:\n  \
     cargo xtask services export steam [dir] [--out <dir>] [--json]";
 
 /// Where `export steam` writes unless `--out` says otherwise.
-pub const STEAM_CONFIG_DIR: &str = "dist/steam-config";
+pub const STEAM_CONFIG_DIR: &str = trino_asset_pipeline::services::STEAM_CONFIG_DIR;
 
 pub fn run(project: &Project, args: &[&str]) -> ExitCode {
     let mut args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
@@ -224,51 +223,28 @@ pub fn text_files(
     def: &AchievementsDef,
     langs: &trino_scene::i18n::Langs,
 ) -> Vec<(String, String)> {
-    let app = project.steam_app_id.unwrap_or(0);
-    let mut files = vec![
-        (
-            "achievements.csv".to_string(),
-            steam::achievements_csv(def, langs),
-        ),
-        (
-            "achievements_loc.vdf".to_string(),
-            steam::achievements_loc_vdf(def, langs),
-        ),
-        (
-            format!("game_actions_{app}.vdf"),
-            steam::input_manifest_vdf(&project.title),
-        ),
-    ];
-    if !def.presence.is_empty() {
-        for (lang, text) in steam::presence_vdf(def, langs) {
-            files.push((format!("rich_presence/{lang}.vdf"), text));
-        }
-    }
-    files
+    trino_asset_pipeline::services::steam_text_files(
+        def,
+        langs,
+        project.steam_app_id,
+        &project.title,
+    )
 }
 
-/// Write the Steam files into `out`; returns them.
+/// Write the Steam files into `out` (the editor's Export button calls the
+/// same function); returns them.
 pub fn export_steam(
     project: &Project,
     root: &Path,
     out: &Path,
     json: bool,
 ) -> Result<Vec<PathBuf>, String> {
-    let def = load(root)?;
-    let manifest = crate::ui::manifest(root)?;
-    let langs = trino_asset_pipeline::ui::langs(root)?;
-    let mut written = Vec::new();
-    for (rel, text) in text_files(project, &def, &langs) {
-        let p = out.join(&rel);
-        if let Some(d) = p.parent() {
-            std::fs::create_dir_all(d).map_err(|e| format!("{}: {e}", d.display()))?;
-        }
-        std::fs::write(&p, text).map_err(|e| format!("{}: {e}", p.display()))?;
-        written.push(p);
-    }
-    written.extend(trino_asset_pipeline::services::steam_icons(
-        root, &manifest, &def, out,
-    )?);
+    let written = trino_asset_pipeline::services::export_steam(
+        root,
+        project.steam_app_id,
+        &project.title,
+        out,
+    )?;
     if json {
         println!(
             "{}",

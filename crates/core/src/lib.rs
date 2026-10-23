@@ -107,7 +107,8 @@ pub use render3d::{
 pub use scene::{BakedScene, LodLevel, LodPick, Lods, SceneNode, Tags};
 pub use services::{
     AchievementId, AchievementInfo, AchievementList, AchievementState, AchievementTable,
-    AchievementToast, HostedServices, OverlayStyle, Presence, ServiceBackend, ServicesInfo, StatId,
+    AchievementToast, CrashConsent, CrashReports, HostedServices, OverlayStyle, Presence,
+    ServiceBackend, ServicesInfo, StatId,
 };
 pub use shadow::{
     MAX_SHADOW_PLANES, ShadowCast, ShadowFrame, ShadowPlane, ShadowSettings, ShadowStats,

@@ -430,7 +430,7 @@ fn assets_pc_bakes_the_repo_manifest() {
     // like any other blob.
     assert_eq!(
         kind("blob"),
-        declared(&["blobs", "scenes", "particles"]) + ui + access
+        declared(&["blobs", "scenes", "particles"]) + ui + access + services
     );
 }
 

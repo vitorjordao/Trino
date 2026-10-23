@@ -12,6 +12,8 @@ repository = "https://github.com/vitorjordao/Trino"
 rust-version = "1.93"
 
 [workspace.dependencies]
+# `xtask package`: deflate for the zips it writes (already in the tree via png).
+flate2 = "1.1"
 trino-core = { path = "crates/core" }
 trino-game-api = { path = "crates/game-api" }
 trino-platform-pc = { path = "crates/platform-pc" }

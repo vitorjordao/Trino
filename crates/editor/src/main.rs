@@ -20,7 +20,8 @@
 //! Dev hooks: `TRINO_EDITOR_SMOKE_FRAMES=N` closes after N frames;
 //! `TRINO_EDITOR_SCREENSHOT=out.png` (+ `TRINO_EDITOR_SCREENSHOT_FRAME=N`)
 //! saves a screenshot of the whole window and exits (the launcher too);
-//! `TRINO_EDITOR_TAB=level` opens with the Level tab focused (`mixer`,
+//! `TRINO_EDITOR_TAB=level` opens with the Level tab focused (`project`:
+//! the Project tab, `TRINO_EDITOR_PROJECT_PAGE=packaging` its second page; `mixer`,
 //! `quality`, `memory`, `ui`: the Mixer, the Quality, the Memory, the UI
 //! tab); `TRINO_EDITOR_UI=<screen>[,<platform>[,<lang>[,<node id>]]]` opens
 //! the UI tab on a screen (`pause,3ds,en-US,resume`);
@@ -52,6 +53,7 @@ mod preview;
 mod project;
 mod quality;
 mod recent;
+mod shipping;
 mod textures;
 mod theme;
 mod ui_screens;

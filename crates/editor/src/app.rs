@@ -51,6 +51,9 @@ pub enum Tab {
     Accessibility,
     /// The string tables (`assets/i18n/*.ron`, issue #59).
     Localization,
+    /// Shipping (issue #61): achievements (`assets/achievements.ron`) and
+    /// packaging (`trino.toml`).
+    Project,
 }
 
 impl Tab {
@@ -70,6 +73,7 @@ impl Tab {
             Tab::Ui => (icon::LAYOUT, "UI"),
             Tab::Accessibility => (icon::EYE, "Accessibility"),
             Tab::Localization => (icon::TRANSLATE, "Localization"),
+            Tab::Project => (icon::TROPHY, "Project"),
         };
         format!("{glyph}  {name}")
     }
@@ -317,6 +321,10 @@ pub struct App {
     pub ui_screens: crate::ui_screens::UiScreens,
     /// The Localization tab: the string tables, the preview language.
     pub localization: crate::localization::Localization,
+    /// The Project tab (issue #61): achievements and packaging.
+    pub shipping: crate::shipping::ShippingState,
+    /// Its overlay preview (the engine's list and popup).
+    pub shipping_preview: Option<crate::preview::Preview>,
     /// The scene's frame from its camera on every target (variants, LOD and
     /// impostors applied; `budget::BUDGET_TARGETS`), with the content key
     /// it is for.
@@ -576,6 +584,13 @@ impl App {
                 log.warn(format!("cannot watch {dir}: {e}"));
             }
         }
+        // trino.toml (the Project tab's Packaging page, issue #61).
+        let toml = Path::new("trino.toml");
+        if toml.is_file()
+            && let Err(e) = file_watcher.watch(toml, RecursiveMode::NonRecursive)
+        {
+            log.warn(format!("cannot watch {}: {e}", toml.display()));
+        }
         // The UI's string tables, where the project has them.
         let i18n = Path::new("assets/i18n");
         if i18n.is_dir()
@@ -650,6 +665,7 @@ impl App {
                 Ok("ui") => Some(Tab::Ui),
                 Ok("accessibility") => Some(Tab::Accessibility),
                 Ok("localization") => Some(Tab::Localization),
+                Ok("project") => Some(Tab::Project),
                 _ if std::env::var_os("TRINO_EDITOR_UI").is_some() => Some(Tab::Ui),
                 _ => None,
             },
@@ -714,6 +730,8 @@ impl App {
             mixer: crate::audio::MixState::load(&root.join("assets")),
             quality: crate::quality::QualityState::load(&root),
             access: crate::access::AccessState::load(&root),
+            shipping: crate::shipping::ShippingState::load(&root),
+            shipping_preview: None,
             // Dev hook: TRINO_EDITOR_UI=<screen>[,<platform>[,<lang>[,<node
             // id>]]] opens the UI tab on that screen.
             ui_screens: {
@@ -835,6 +853,46 @@ impl App {
 
     // ------------------------------------------------------------ files --
 
+    /// Set a packaging key of `trino.toml` (what `cargo xtask package
+    /// config set` does) and read the file back.
+    pub fn write_ship_key(&mut self, key: &str, value: &str) -> Result<(), String> {
+        let path = trino_asset_pipeline::ship::path(&self.project.root);
+        let text =
+            std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let out = trino_asset_pipeline::ship::set(&text, key, value)?;
+        self.write_echo(path, out)?;
+        self.shipping.reload_ship(&self.project.root);
+        Ok(())
+    }
+
+    /// Run `cargo xtask <args> --project <this project>` in the background
+    /// (its output in the terminal the editor started from; the Project
+    /// tab shows the result line).
+    pub fn run_xtask_job(&mut self, args: &[&str], what: &'static str) {
+        if self.shipping.job.is_some() {
+            return;
+        }
+        let engine = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+        let mut all: Vec<String> = vec![
+            "run".into(),
+            "--manifest-path".into(),
+            engine.join("Cargo.toml").display().to_string(),
+            "-p".into(),
+            "xtask".into(),
+            "--".into(),
+        ];
+        all.extend(args.iter().map(|a| a.to_string()));
+        if self.project.root.join("trino.toml").is_file() {
+            all.extend(["--project".into(), self.project.root.display().to_string()]);
+        }
+        self.log.info(format!("$ cargo {}", all.join(" ")));
+        match Command::new(cargo).args(&all).spawn() {
+            Ok(child) => self.shipping.job = Some((child, what)),
+            Err(e) => self.log.toast(Level::Error, format!("{what} failed: {e}")),
+        }
+    }
+
     pub(crate) fn write_echo(&mut self, path: PathBuf, text: String) -> Result<(), String> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -949,6 +1007,25 @@ impl App {
                         format!("{} {} reloaded", icon::ARROWS_CLOCKWISE, p.display()),
                     ),
                 }
+            } else if p == crate::shipping::ShippingState::path(&self.project.root) {
+                // The achievements, edited outside (an agent, `cargo xtask
+                // services`): the Project tab follows.
+                if text.is_none() && !self.shipping.exists {
+                    continue;
+                }
+                self.shipping.reload(text.as_deref());
+                match &self.shipping.error {
+                    Some(e) => self.log.toast(Level::Error, e.clone()),
+                    None => self.log.toast(
+                        Level::Ok,
+                        format!("{} {} reloaded", icon::ARROWS_CLOCKWISE, p.display()),
+                    ),
+                }
+            } else if p == trino_scene::services::lock_path(&self.project.root) {
+                self.shipping.reload_lock(&self.project.root);
+            } else if p == trino_asset_pipeline::ship::path(&self.project.root) {
+                // trino.toml (`cargo xtask package config set`, a text editor).
+                self.shipping.reload_ship(&self.project.root);
             } else if p == self.quality.path(&self.project.root) {
                 // The quality presets, edited outside (`cargo xtask quality
                 // set`, an agent, a text editor).
@@ -1764,6 +1841,17 @@ impl App {
                 Err(e) => self.log.toast(Level::Error, e),
             }
         }
+        if std::mem::take(&mut self.shipping.dirty) {
+            let path = crate::shipping::ShippingState::path(&self.project.root);
+            let text = self.shipping.to_text();
+            match self.write_echo(path, text) {
+                Ok(()) => {
+                    self.shipping.exists = true;
+                    self.shipping.error = None;
+                }
+                Err(e) => self.log.toast(Level::Error, e),
+            }
+        }
         if std::mem::take(&mut self.quality.dirty) {
             match self.quality.to_text() {
                 Ok(text) => {
@@ -2452,6 +2540,7 @@ impl App {
             (Tab::Accessibility, "Accessibility"),
             (Tab::Console, "Console"),
             (Tab::Ui, "UI"),
+            (Tab::Project, "Project"),
         ] {
             add(format!("Go to {name} view"), "View", Cmd::FocusTab(tab));
         }
@@ -3214,6 +3303,24 @@ impl eframe::App for App {
             self.log.info(format!("game exited: {status}"));
             self.play = None;
         }
+        if let Some((child, what)) = &mut self.shipping.job
+            && let Ok(Some(status)) = child.try_wait()
+        {
+            let line = format!("{what}: {status}");
+            if status.success() {
+                self.log.toast(
+                    Level::Ok,
+                    format!("{} {what} done: see the Console", icon::PACKAGE),
+                );
+            } else {
+                self.log.toast(
+                    Level::Error,
+                    format!("{what} failed ({status}): see the Console"),
+                );
+            }
+            self.shipping.last_job = Some(line);
+            self.shipping.job = None;
+        }
         if let Some((child, out)) = &mut self.export
             && let Ok(Some(status)) = child.try_wait()
         {
@@ -3391,6 +3498,7 @@ fn default_dock(width: f32) -> egui_dock::DockState<Tab> {
             Tab::Animation,
             Tab::Ui,
             Tab::Localization,
+            Tab::Project,
         ],
         Ok("game") => vec![
             Tab::Game,
@@ -3399,6 +3507,7 @@ fn default_dock(width: f32) -> egui_dock::DockState<Tab> {
             Tab::Animation,
             Tab::Ui,
             Tab::Localization,
+            Tab::Project,
         ],
         Ok("animation") => vec![
             Tab::Animation,
@@ -3407,6 +3516,7 @@ fn default_dock(width: f32) -> egui_dock::DockState<Tab> {
             Tab::Level,
             Tab::Ui,
             Tab::Localization,
+            Tab::Project,
         ],
         _ => vec![
             Tab::Scene,
@@ -3415,6 +3525,7 @@ fn default_dock(width: f32) -> egui_dock::DockState<Tab> {
             Tab::Animation,
             Tab::Ui,
             Tab::Localization,
+            Tab::Project,
         ],
     };
     let mut dock = egui_dock::DockState::new(tabs);
@@ -3478,7 +3589,8 @@ impl egui_dock::TabViewer for TabView<'_> {
             | Tab::Level
             | Tab::Animation
             | Tab::Ui
-            | Tab::Localization => [false, false],
+            | Tab::Localization
+            | Tab::Project => [false, false],
             _ => [false, true],
         }
     }
@@ -3601,6 +3713,7 @@ impl egui_dock::TabViewer for TabView<'_> {
             Tab::Console => app.log.ui(ui),
             Tab::Ui => crate::panels::ui_screens::ui(app, ui),
             Tab::Localization => crate::panels::localization::ui(app, ui),
+            Tab::Project => crate::panels::shipping::ui(app, ui),
         }
     }
 }

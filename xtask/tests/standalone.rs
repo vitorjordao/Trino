@@ -14,7 +14,11 @@ use std::process::Command;
 #[test]
 fn standalone_project_builds_tests_and_runs() {
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
-    let tmp = tempfile::tempdir().unwrap();
+    // Under target/test-projects/, never the system temp dir (a RAM disk on
+    // some machines: AGENTS.md › Pitfalls).
+    let base = repo.join("target/test-projects");
+    std::fs::create_dir_all(&base).unwrap();
+    let tmp = tempfile::tempdir_in(&base).unwrap();
     let dir = tmp.path().join("orbit-cat");
 
     let out = Command::new(env!("CARGO_BIN_EXE_xtask"))

@@ -72,12 +72,17 @@ pub enum Mode {
     Achievements { from_pause: bool },
     /// The game's version and the engine credit, from the title.
     About,
+    /// "Send the crash report?", once, before the title (PC packages with
+    /// an endpoint).
+    CrashAsk,
 }
 
 /// What a menu asks of the platform; `update_with` (which has it) applies it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Ask {
     Graphics,
+    /// The crash question's answer.
+    Crash(trino_core::CrashConsent),
     Rebind(Button),
     ResetBindings,
 }
@@ -87,6 +92,8 @@ pub fn ask_for(action: &str) -> Option<Ask> {
     match action {
         "graphics" => Some(Ask::Graphics),
         "reset" => Some(Ask::ResetBindings),
+        "yes" => Some(Ask::Crash(trino_core::CrashConsent::Allow)),
+        "no" => Some(Ask::Crash(trino_core::CrashConsent::Deny)),
         _ => CONTROLS
             .iter()
             .find(|(a, ..)| *a == action)
@@ -105,6 +112,7 @@ pub struct {{name_camel}}Game {
     controls: ScreenBlob,
     access: ScreenBlob,
     about: ScreenBlob,
+    crash: ScreenBlob,
     strings: StringsBlob,
     /// The player's accessibility settings: read from the platform, changed
     /// by the Accessibility screen, sent back (`dirty`) after the frame.
@@ -156,6 +164,7 @@ impl {{name_camel}}Game {
             controls: ScreenBlob::new("controls"),
             access: ScreenBlob::new("accessibility"),
             about: ScreenBlob::new("about"),
+            crash: ScreenBlob::new("crash"),
             strings: StringsBlob::new("en-US"),
             settings: AccessSettings::DEFAULT,
             dirty: false,
@@ -197,6 +206,7 @@ impl {{name_camel}}Game {
             }),
             (Mode::Title, "about") => Some(Mode::About),
             (Mode::About, "back") => Some(Mode::Title),
+            (Mode::CrashAsk, "yes" | "no") => Some(Mode::Title),
             (Mode::Options { from_pause }, "controls") => Some(Mode::Controls { from_pause }),
             (Mode::Options { from_pause }, "accessibility") => Some(Mode::Access { from_pause }),
             (Mode::Controls { from_pause } | Mode::Access { from_pause }, "back") => {
@@ -217,6 +227,7 @@ impl {{name_camel}}Game {
             Mode::Controls { .. } => &self.controls,
             Mode::Access { .. } => &self.access,
             Mode::About => &self.about,
+            Mode::CrashAsk => &self.crash,
             Mode::Play | Mode::Achievements { .. } => return,
         };
         if self.waiting {
@@ -258,7 +269,13 @@ impl {{name_camel}}Game {
                     audio.play_sound(BEEP);
                     None
                 }
-                UiEvent::Back { action } => self.action(action),
+                UiEvent::Back { action } => {
+                    // Backing out of the crash question answers "no".
+                    if self.mode == Mode::CrashAsk {
+                        self.ask = self.ask.or(ask_for(action));
+                    }
+                    self.action(action)
+                }
                 UiEvent::Moved { .. } => None,
             };
             next = next.or(to);
@@ -315,6 +332,9 @@ impl {{name_camel}}Game {
     fn services(&mut self, platform: &mut dyn Platform) {
         if !self.loaded {
             self.loaded = true;
+            if platform.crash_reports().is_some_and(|c| c.should_ask()) && self.mode == Mode::Title {
+                self.go(Mode::CrashAsk);
+            }
             let mut buf = [0u8; 128];
             if let Ok(n) = platform.save_read(&mut buf)
                 && let Ok((saved, _)) = AchievementState::unpack(&buf[..n])
@@ -390,6 +410,7 @@ impl Game for {{name_camel}}Game {
         self.controls.get(platform);
         self.access.get(platform);
         self.about.get(platform);
+        self.crash.get(platform);
         self.services(platform);
         self.strings.get(platform);
         // The host's settings, unless the screen just changed them.
@@ -432,6 +453,7 @@ impl Game for {{name_camel}}Game {
             Some(Ask::Graphics) => self.graphics.open(),
             Some(Ask::Rebind(button)) => platform.rebind(button, BindDevice::Keyboard),
             Some(Ask::ResetBindings) => platform.reset_bindings(),
+            Some(Ask::Crash(c)) => platform.set_crash_consent(c),
             None => {}
         }
     }
@@ -503,6 +525,7 @@ impl Game for {{name_camel}}Game {
             Mode::Controls { .. } => Some(&self.controls),
             Mode::Access { .. } => Some(&self.access),
             Mode::About => Some(&self.about),
+            Mode::CrashAsk => Some(&self.crash),
             Mode::Achievements { .. } => None,
         };
         if self.mode != Mode::Title {
@@ -678,6 +701,7 @@ mod tests {
         table: &'static [u8],
         services: trino_core::HostedServices,
         save: Vec<u8>,
+        crash: Option<trino_core::CrashReports>,
     }
 
     impl Platform for Console {
@@ -704,6 +728,14 @@ mod tests {
         fn save_write(&mut self, data: &[u8]) -> Result<(), trino_core::SaveError> {
             self.save = data.to_vec();
             Ok(())
+        }
+        fn crash_reports(&self) -> Option<trino_core::CrashReports> {
+            self.crash
+        }
+        fn set_crash_consent(&mut self, c: trino_core::CrashConsent) {
+            if let Some(r) = &mut self.crash {
+                r.consent = c;
+            }
         }
     }
 
@@ -734,6 +766,7 @@ mod tests {
             table: Box::leak(blob.into_boxed_slice()),
             services: trino_core::HostedServices::new(trino_core::ServiceBackend::Session),
             save,
+            crash: None,
         }
     }
 
@@ -770,6 +803,31 @@ mod tests {
         again.update_with(&mut next, &b, &mut NullAudio, 0.1);
         assert_eq!(again.mode, Mode::Title);
         assert_eq!(again.action("about"), Some(Mode::About));
+    }
+
+    /// A report waiting with an endpoint and no answer: the question comes
+    /// first; its buttons answer through the platform and lead to the title.
+    #[test]
+    fn the_crash_question_comes_first_and_answers() {
+        use trino_core::{CrashConsent, CrashReports};
+        let mut game = {{name_camel}}Game::new(Vec2::new(320.0, 240.0));
+        let mut host = console(Vec::new());
+        host.crash = Some(CrashReports {
+            pending: 1,
+            consent: CrashConsent::Ask,
+            upload: true,
+        });
+        game.update_with(&mut host, &InputState::default(), &mut NullAudio, 0.1);
+        assert_eq!(game.mode, Mode::CrashAsk);
+        assert_eq!(ask_for("yes"), Some(Ask::Crash(CrashConsent::Allow)));
+        assert_eq!(game.action("no"), Some(Mode::Title));
+        game.ask = ask_for("yes");
+        game.update_with(&mut host, &InputState::default(), &mut NullAudio, 0.1);
+        assert_eq!(host.crash.unwrap().consent, CrashConsent::Allow);
+        // Answered (or no endpoint): never asked again.
+        let mut next = {{name_camel}}Game::new(Vec2::new(320.0, 240.0));
+        next.update_with(&mut host, &InputState::default(), &mut NullAudio, 0.1);
+        assert_eq!(next.mode, Mode::Title);
     }
 
     #[test]

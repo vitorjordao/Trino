@@ -569,15 +569,28 @@ fn pack_3dsx(p: &Project, dkp: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Shim, assets, Rust and `.3dsx`: what `build 3ds` runs (and
+/// `package 3ds --cia` before `makerom`).
+pub fn build_steps(p: &Project, test_mode: bool) -> Result<(), String> {
+    let dkp = devkitpro()?;
+    compile_shim(&p.engine, &dkp)?;
+    bake_assets(p, test_mode)?;
+    cargo_build(p, &dkp)?;
+    pack_3dsx(p, &dkp)?;
+    Ok(())
+}
+
+/// What `test 3ds` boots: `TRINO_3DS_APP` (the `.cxi` of `package 3ds
+/// --cia --selftest`: the installable title's NCCH), else the `.3dsx`.
+fn test_app(p: &Project) -> PathBuf {
+    std::env::var_os("TRINO_3DS_APP")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| p.app_3dsx())
+}
+
 pub fn build(p: &Project, test_mode: bool) -> ExitCode {
-    let steps = || -> Result<(), String> {
-        let dkp = devkitpro()?;
-        compile_shim(&p.engine, &dkp)?;
-        bake_assets(p, test_mode)?;
-        cargo_build(p, &dkp)?;
-        pack_3dsx(p, &dkp)?;
-        Ok(())
-    };
+    let steps = || build_steps(p, test_mode);
     match steps() {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
@@ -1132,10 +1145,11 @@ fn boot_test(
     speedup: Option<bool>,
 ) -> ExitCode {
     let root = &p.root;
-    if !p.app_3dsx().exists() {
+    let app = test_app(p);
+    if !app.exists() {
         eprintln!(
             "[3ds] {} missing (cargo xtask build 3ds --selftest)",
-            p.app_3dsx().display()
+            app.display()
         );
         return ExitCode::FAILURE;
     }
@@ -1176,7 +1190,7 @@ fn boot_test(
     println!(
         "[3ds] booting test app in Azahar as {kind} ({timeout}s timeout, {idle}s idle limit)..."
     );
-    let mut child = match Command::new(&azahar).arg(p.app_3dsx()).spawn() {
+    let mut child = match Command::new(&azahar).arg(&app).spawn() {
         Ok(c) => c,
         Err(e) => {
             eprintln!("[3ds] failed to launch Azahar: {e}");

@@ -1,0 +1,36 @@
+// "Send the crash report?" (Trino crash reports, docs/SHIPPING.md): shown
+// once, at start, when an earlier run crashed, the package names an
+// endpoint (`[pc] crash_upload`) and the player hasn't answered. The game
+// answers with `platform.set_crash_consent(..)`; nothing is sent before.
+(
+    version: 1,
+    name: "crash",
+    focus: "no",
+    on_back: "no",
+    root: (
+        children: [
+            (kind: Rect(), anchor: Fill, bleed: true, color: Some((0, 0, 0, 220))),
+            (
+                kind: Rect(border: 1, border_color: Some((255, 244, 200, 255))),
+                anchor: Center,
+                padding: (12, 10, 12, 12),
+                children: [
+                    (
+                        kind: Stack(gap: 6, align: Center),
+                        children: [
+                            (kind: Text, key: "crash.title", text: "The game crashed last time", align: Center, size: (Px(260), Fit), overflow: Wrap),
+                            (kind: Text, key: "crash.body", text: "Send the report to its developers?", align: Center, size: (Px(260), Fit), overflow: Wrap, color: Some((170, 178, 200, 255))),
+                            (
+                                kind: Stack(dir: Horizontal, gap: 6),
+                                children: [
+                                    (kind: Button, id: "yes", key: "crash.yes", text: "Send", on_click: "yes", min: (90, 18), padding: (6, 3, 6, 3)),
+                                    (kind: Button, id: "no", key: "crash.no", text: "Don't send", on_click: "no", min: (90, 18), padding: (6, 3, 6, 3)),
+                                ],
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+        ],
+    ),
+)

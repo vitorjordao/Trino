@@ -445,6 +445,19 @@ pub trait Platform {
         }
     }
 
+    /// Crash reports (issue #61): how many earlier runs left one, the
+    /// player's consent to send them, whether the package names somewhere to
+    /// send them. A game asks once ([`CrashReports::should_ask`](crate::CrashReports::should_ask))
+    /// and answers with [`set_crash_consent`](Self::set_crash_consent).
+    /// `None` on the consoles and the Web (no reports) — the default.
+    fn crash_reports(&self) -> Option<crate::CrashReports> {
+        None
+    }
+
+    /// The player's answer (the PC persists it; `Allow` sends the reports
+    /// waiting and later ones). A no-op where there are no reports.
+    fn set_crash_consent(&mut self, _consent: crate::CrashConsent) {}
+
     /// The memory this hardware has and what holds it ([`crate::MemoryReport`]):
     /// heap used/peak/total and the resident assets by category. Zeros where
     /// the backend doesn't count.

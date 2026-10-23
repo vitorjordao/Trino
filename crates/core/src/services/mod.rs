@@ -226,6 +226,8 @@ pub struct ServicesInfo {
     pub cloud: bool,
     /// Rich presence reaches someone.
     pub presence: bool,
+    /// The store's overlay is open now (Steam's Shift+Tab): pause the game.
+    pub overlay_open: bool,
 }
 
 impl ServicesInfo {
@@ -234,7 +236,57 @@ impl ServicesInfo {
         store_toasts: false,
         cloud: false,
         presence: false,
+        overlay_open: false,
     };
+}
+
+/// May the game send its crash reports? The player's answer, kept by the
+/// host (`<save>.crash` on the PC).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CrashConsent {
+    /// Not asked yet: a game with an upload endpoint asks once.
+    Ask,
+    Allow,
+    Deny,
+}
+
+impl CrashConsent {
+    pub const fn key(self) -> &'static str {
+        match self {
+            CrashConsent::Ask => "ask",
+            CrashConsent::Allow => "yes",
+            CrashConsent::Deny => "no",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<CrashConsent> {
+        match s.trim() {
+            "ask" => Some(CrashConsent::Ask),
+            "yes" | "allow" => Some(CrashConsent::Allow),
+            "no" | "deny" => Some(CrashConsent::Deny),
+            _ => None,
+        }
+    }
+}
+
+/// Crash reporting as the host has it ([`Platform::crash_reports`]):
+/// `None` on the consoles and the Web, which write no reports.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct CrashReports {
+    /// Reports from earlier runs not sent (or not to be sent).
+    pub pending: u16,
+    pub consent: CrashConsent,
+    /// The package names an upload endpoint (`[pc] crash_upload`); without
+    /// one reports stay on disk and there is nothing to ask.
+    pub upload: bool,
+}
+
+impl CrashReports {
+    /// Show the "send the report?" question now: reports wait, an endpoint
+    /// takes them and the player hasn't answered.
+    pub fn should_ask(&self) -> bool {
+        self.pending > 0 && self.upload && self.consent == CrashConsent::Ask
+    }
 }
 
 /// What a game shows its friends ([`Platform::set_presence`]): a

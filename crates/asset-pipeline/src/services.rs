@@ -23,6 +23,71 @@ pub fn bake(root: &Path) -> Result<Option<Vec<u8>>, String> {
     }
 }
 
+/// Where `services export steam` (and the editor) write by default.
+pub const STEAM_CONFIG_DIR: &str = "dist/steam-config";
+
+/// The text files of a Steam export (relative path, contents): the
+/// achievements CSV and localization VDF, the Steam Input action manifest
+/// (`game_actions_<app>.vdf`, 0 without an app id) and a rich-presence file
+/// per language.
+pub fn steam_text_files(
+    def: &trino_scene::services::AchievementsDef,
+    langs: &trino_scene::i18n::Langs,
+    app_id: Option<u32>,
+    title: &str,
+) -> Vec<(String, String)> {
+    use trino_scene::steam;
+    let mut files = vec![
+        (
+            "achievements.csv".to_string(),
+            steam::achievements_csv(def, langs),
+        ),
+        (
+            "achievements_loc.vdf".to_string(),
+            steam::achievements_loc_vdf(def, langs),
+        ),
+        (
+            format!("game_actions_{}.vdf", app_id.unwrap_or(0)),
+            steam::input_manifest_vdf(title),
+        ),
+    ];
+    if !def.presence.is_empty() {
+        for (lang, text) in steam::presence_vdf(def, langs) {
+            files.push((format!("rich_presence/{lang}.vdf"), text));
+        }
+    }
+    files
+}
+
+/// Write a project's Steam export into `out`: [`steam_text_files`] and the
+/// icons ([`steam_icons`]). Returns the files written.
+pub fn export_steam(
+    root: &Path,
+    app_id: Option<u32>,
+    title: &str,
+    out: &Path,
+) -> Result<Vec<std::path::PathBuf>, String> {
+    let def = trino_scene::services::load(root)?.ok_or_else(|| {
+        format!(
+            "{}: no achievements to export",
+            trino_scene::services::path(root).display()
+        )
+    })?;
+    let manifest = crate::Manifest::load(&root.join("assets/manifest.toml"))?;
+    let langs = crate::ui::langs(root)?;
+    let mut written = Vec::new();
+    for (rel, text) in steam_text_files(&def, &langs, app_id, title) {
+        let p = out.join(&rel);
+        if let Some(d) = p.parent() {
+            std::fs::create_dir_all(d).map_err(|e| format!("{}: {e}", d.display()))?;
+        }
+        std::fs::write(&p, text).map_err(|e| format!("{}: {e}", p.display()))?;
+        written.push(p);
+    }
+    written.extend(steam_icons(root, &manifest, &def, out)?);
+    Ok(written)
+}
+
 /// Steam's achievement icon size.
 pub const STEAM_ICON: u32 = 64;
 

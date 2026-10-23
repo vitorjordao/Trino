@@ -1090,8 +1090,108 @@ fn editor_layout_is_clean_at_minimum_and_default_sizes() {
         h.run_steps(4);
         assert!(h.query_by_label("Preview language").is_some());
         crate::layout_audit::assert_clean(&h, size, true, &what("Localization tab"));
+        // The Project tab (issue #61): both pages.
+        h.state_mut().cmds.push(Cmd::FocusTab(Tab::Project));
+        h.run_steps(4);
+        crate::layout_audit::assert_clean(&h, size, true, &what("Project › Achievements"));
+        h.state_mut().shipping.page = crate::shipping::Page::Packaging;
+        h.run_steps(3);
+        crate::layout_audit::assert_clean(&h, size, true, &what("Project › Packaging"));
         leave_temp_project(&repo);
     }
+}
+
+/// The Project tab (issue #61), both ways: Add achievement and its fields
+/// write `assets/achievements.ron` (what `cargo xtask services` reads);
+/// the checks follow; a locked row can't be removed; an edit on disk shows
+/// live; the Packaging page writes `trino.toml`'s keys in place (what
+/// `cargo xtask package config set` writes) and refuses a bad one.
+#[test]
+#[ignore = "changes cwd/env: run alone with --ignored --test-threads=1"]
+fn project_tab_edits_achievements_and_packaging_as_text() {
+    use crate::app::{Cmd, Tab};
+    use egui::accesskit::Role;
+    let Some((mut h, _tmp, repo)) = temp_project_app_with(egui::vec2(1600.0, 1000.0), |_, p| {
+        std::fs::write(
+            p.join("trino.toml"),
+            "# Test project\n[project]\nname = \"t\"\ntitle = \"T\"\nplatforms = [\"pc\"]\n\n[pc]\npackage = \"t-pc\"\n",
+        )
+        .unwrap();
+    }) else {
+        return;
+    };
+    const FILE: &str = "assets/achievements.ron";
+    let read = || {
+        trino_scene::services::AchievementsDef::from_ron(&std::fs::read_to_string(FILE).unwrap())
+            .unwrap()
+    };
+    h.state_mut().cmds.push(Cmd::FocusTab(Tab::Project));
+    h.run_steps(4);
+    assert!(h.query_by_label_contains("services check").is_some());
+    assert_eq!(h.state().shipping.def.achievements.len(), 5, "castle64's");
+    press(&mut h, Role::Button, "Add achievement");
+    wait_for(&mut h, "the new achievement to be written", |a| {
+        !a.shipping.dirty
+    });
+    let def = read();
+    assert_eq!(def.achievements.len(), 6);
+    assert_eq!(def.achievements[5].id, "ACHIEVEMENT_6");
+    // Its keys are in no table yet: the check says so.
+    assert!(
+        h.state()
+            .shipping
+            .findings
+            .iter()
+            .any(|f| f.subject == "ach.achievement_6.name"),
+        "{:?}",
+        h.state().shipping.findings
+    );
+    press(&mut h, Role::CheckBox, "Hidden until unlocked");
+    wait_for(&mut h, "hidden to be written", |a| !a.shipping.dirty);
+    assert!(read().achievements[5].hidden);
+    // A locked row stays (castle64's five are locked).
+    h.state_mut().shipping.selected = Some(0);
+    h.run_steps(3);
+    press(&mut h, Role::Button, "Remove");
+    h.run_steps(3);
+    assert_eq!(read().achievements.len(), 6);
+    // Edited outside: the tab follows.
+    let mut outside = read();
+    outside.achievements[5].id = "FROM_AN_AGENT".into();
+    std::fs::write(FILE, outside.to_ron()).unwrap();
+    wait_for(&mut h, "the outside edit", |a| {
+        a.shipping
+            .def
+            .achievements
+            .get(5)
+            .is_some_and(|x| x.id == "FROM_AN_AGENT")
+    });
+    // The preview's test unlock.
+    h.state_mut().shipping.selected = Some(5);
+    h.run_steps(3);
+    press(&mut h, Role::Button, "Test unlock");
+    assert_eq!(h.state().shipping.toast.current(), Some(5));
+    // Packaging: a key written in place, a bad one refused.
+    h.state_mut().shipping.page = crate::shipping::Page::Packaging;
+    h.run_steps(3);
+    h.state_mut()
+        .write_ship_key("pc.identifier", "com.example.t")
+        .unwrap();
+    h.state_mut().write_ship_key("steam.app_id", "480").unwrap();
+    let toml = std::fs::read_to_string("trino.toml").unwrap();
+    assert!(toml.starts_with("# Test project\n"), "{toml}");
+    assert!(
+        toml.contains("package = \"t-pc\"\nidentifier = \"com.example.t\""),
+        "{toml}"
+    );
+    assert!(toml.contains("[steam]\napp_id = 480"), "{toml}");
+    assert_eq!(h.state().shipping.ship.steam_app_id, Some(480));
+    assert!(
+        h.state_mut()
+            .write_ship_key("pc.profile", "gameboy")
+            .is_err()
+    );
+    leave_temp_project(&repo);
 }
 
 /// Asset groups in the editor (issue #56), both ways: a model tile dropped
@@ -2957,8 +3057,11 @@ fn ui_tab_edits_screens_and_follows_their_files() {
             if name == "pause" {
                 // A fixed box for Quit, so pt-BR's longer text overflows it
                 // (the starter screens grow with their text since #60).
+                // The menu as this test was written against: Resume, Options,
+                // Quit (the Achievements button, #61, left out).
                 text = text
                     .lines()
+                    .filter(|l| !l.contains("id: \"achievements\""))
                     .map(|l| {
                         if l.contains("id: \"quit\"") {
                             l.replace(

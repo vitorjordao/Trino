@@ -1095,13 +1095,20 @@ fn ui_access(root: &Path, s: &trino_core::AccessSettings) -> trino_core::ui::UiA
 mod tests {
     use super::*;
 
+    /// The starter pause menu as these tests were written against: title,
+    /// resume, options, quit (its Achievements button, #61, taken out so the
+    /// paths below stay the tree edits' own).
     fn pause() -> ScreenDef {
         let text = std::fs::read_to_string(
             Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../../templates/standalone/ui/pause.ui.ron"),
         )
         .unwrap();
-        ScreenDef::from_ron(&text).unwrap()
+        let mut def = ScreenDef::from_ron(&text).unwrap();
+        def.root.children[1].children[0]
+            .children
+            .retain(|c| c.id != "achievements");
+        def
     }
 
     fn ids(def: &ScreenDef, path: &[usize]) -> Vec<String> {

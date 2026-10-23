@@ -65,6 +65,10 @@ pub struct PcPlatform {
     /// Achievements, stats, presence (issue #61): the host loads and
     /// persists them (`<save>.achievements`) and forwards them to a store.
     services: trino_core::HostedServices,
+    /// Crash reports waiting and the player's consent to send them (the
+    /// host publishes them; `None`: no crash reporting).
+    crash: Option<trino_core::CrashReports>,
+    crash_consent_change: Option<trino_core::CrashConsent>,
     /// The system language, read once ([`crate::language`]).
     language: Option<trino_core::LangTag>,
 }
@@ -97,6 +101,8 @@ impl PcPlatform {
             heap: None,
             access: trino_core::HostedAccess::new(),
             services: trino_core::HostedServices::new(trino_core::ServiceBackend::Local),
+            crash: None,
+            crash_consent_change: None,
             language: crate::language::detect(),
         }
     }
@@ -120,6 +126,16 @@ impl PcPlatform {
     /// A store took over: say what it does.
     pub fn set_services_info(&mut self, info: trino_core::ServicesInfo) {
         self.services.set_info(info);
+    }
+
+    /// The host's crash reporting: reports waiting, consent, an endpoint.
+    pub fn set_crash_reports(&mut self, reports: Option<trino_core::CrashReports>) {
+        self.crash = reports;
+    }
+
+    /// The consent the game set since the last call (the host persists it).
+    pub fn take_crash_consent(&mut self) -> Option<trino_core::CrashConsent> {
+        self.crash_consent_change.take()
     }
 
     /// Replace the system language (tests, a host that knows better).
@@ -170,6 +186,14 @@ impl PcPlatform {
                 input.bindings().label(*b, BindDevice::Keyboard),
                 input.bindings().label(*b, BindDevice::Gamepad),
             ];
+        }
+    }
+
+    /// Replace the gamepad label of `button` (a store's controller names its
+    /// own: Steam Input's origins).
+    pub fn set_gamepad_label(&mut self, button: trino_core::Button, label: Option<String>) {
+        if let Some(i) = BINDABLE.iter().position(|b| *b == button) {
+            self.labels[i][1] = label;
         }
     }
 
@@ -282,6 +306,20 @@ impl Platform for PcPlatform {
 
     fn log(&self, message: &str) {
         println!("{message}");
+        remember_log(message);
+    }
+
+    fn crash_reports(&self) -> Option<trino_core::CrashReports> {
+        self.crash
+    }
+
+    fn set_crash_consent(&mut self, consent: trino_core::CrashConsent) {
+        if let Some(c) = &mut self.crash
+            && c.consent != consent
+        {
+            c.consent = consent;
+            self.crash_consent_change = Some(consent);
+        }
     }
 
     fn blob(&self, id: BlobId) -> Option<&'static [u8]> {
@@ -524,6 +562,31 @@ pub fn services_from_text(
         }
     }
     state
+}
+
+/// Lines of `Platform::log` a crash report carries.
+pub const LOG_LINES: usize = 200;
+
+static LOG: std::sync::Mutex<std::collections::VecDeque<String>> =
+    std::sync::Mutex::new(std::collections::VecDeque::new());
+
+/// Keep `message`'s lines among the last [`LOG_LINES`] (what a crash report
+/// shows).
+pub fn remember_log(message: &str) {
+    let Ok(mut log) = LOG.lock() else { return };
+    for line in message.lines().filter(|l| !l.is_empty()) {
+        if log.len() == LOG_LINES {
+            log.pop_front();
+        }
+        log.push_back(line.chars().take(400).collect());
+    }
+}
+
+/// The last [`LOG_LINES`] lines logged, oldest first.
+pub fn recent_log() -> Vec<String> {
+    LOG.lock()
+        .map(|l| l.iter().cloned().collect())
+        .unwrap_or_default()
 }
 
 #[cfg(test)]

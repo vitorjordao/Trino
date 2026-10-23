@@ -40,6 +40,8 @@ pub mod material;
 pub mod platform;
 pub mod prefab;
 pub mod resolve;
+pub mod services;
+pub mod steam;
 pub mod ui;
 
 pub use library::{Library, ModelBounds};

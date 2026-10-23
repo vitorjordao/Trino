@@ -30,7 +30,9 @@
                 offset: (0, 24),
                 children: [
                     (kind: Button, id: "play", key: "title.play", text: "Play", on_click: "play", min: (112, 18), padding: (6, 3, 6, 3)),
+                    (kind: Button, id: "achievements", key: "title.achievements", text: "Achievements", on_click: "achievements", min: (112, 18), padding: (6, 3, 6, 3)),
                     (kind: Button, id: "options", key: "title.options", text: "Options", on_click: "options", min: (112, 18), padding: (6, 3, 6, 3)),
+                    (kind: Button, id: "about", key: "title.about", text: "About", on_click: "about", min: (112, 18), padding: (6, 3, 6, 3)),
                 ],
             ),
             (

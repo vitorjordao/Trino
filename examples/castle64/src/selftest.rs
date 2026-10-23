@@ -115,6 +115,10 @@ pub fn engine_checks(
         platform
             .log("TRINO_STEP:accessibility probed palette swap, outline, captions and contrast\n");
     }
+    platform.log("TRINO_STEP:services\n");
+    if services(renderer, platform)? {
+        platform.log("TRINO_STEP:services probed list and toast\n");
+    }
     platform.log("TRINO_STEP:hw tier\n");
     let tier = hw_tier(renderer, platform)?;
     log_tier(platform, &tier);
@@ -123,6 +127,184 @@ pub fn engine_checks(
     log_quality(platform, &q);
     platform.log("TRINO_STEP:engine ok\n");
     Ok(())
+}
+
+/// Achievements, stats and presence (issue #61) through the `Platform`
+/// defaults every backend serves with its `HostedServices`: castle64's
+/// baked table (`assets/achievements.ron`), an unlock and its popup queue,
+/// an increment-only stat reaching a threshold, the packed state written to
+/// the real save medium and restored quietly (what a console game does),
+/// presence kept as text, then the overlay's list and popup probed by
+/// pixel. The platform's state is put back at the end. `Ok(false)` where
+/// `read_pixel` is unsupported (after the non-pixel checks).
+pub fn services(
+    renderer: &mut dyn Renderer,
+    platform: &mut dyn Platform,
+) -> Result<bool, &'static str> {
+    use trino_core::services::{AchievementTable, Presence};
+    use trino_core::ui::NoStrings;
+    use trino_core::{
+        AchievementId, AchievementList, AchievementState, AchievementToast, Arg, OverlayStyle,
+        StatId, StrKey,
+    };
+
+    // 1. The baked table.
+    let table = AchievementTable::from_platform(platform)
+        .ok_or("services: blob services/achievements missing or broken")?;
+    let first = AchievementId::new("FIRST_COIN");
+    if table.len() != 5
+        || table.stat_count() != 2
+        || table.index(first) != Some(0)
+        || table
+            .find(AchievementId::new("COINS_25"))
+            .and_then(|a| a.stat)
+            != Some(0)
+        || !table
+            .find(AchievementId::new("BOAR_STOMP"))
+            .is_some_and(|a| a.hidden)
+        || table.presence_key(StrKey::new("presence.stage")) != Some("presence.stage")
+    {
+        return Err("services: the baked table differs from assets/achievements.ron");
+    }
+    if platform.services().is_none() {
+        return Err("services: the platform holds no services");
+    }
+    let saved = platform.achievements();
+    platform.reset_achievements();
+    while platform.next_unlock().is_some() {}
+
+    // 2. Unlock once, one popup.
+    platform.unlock(first);
+    platform.unlock(first);
+    platform.unlock(AchievementId::new("NOT_IN_THE_TABLE"));
+    if !platform.is_unlocked(first)
+        || platform.next_unlock() != Some(0)
+        || platform.next_unlock().is_some()
+    {
+        return Err("services: an unlock is not kept once with one popup");
+    }
+
+    // 3. An increment-only stat and its threshold (COINS_25 at 25).
+    let coins = StatId::new("COINS");
+    platform.set_stat(coins, 24);
+    platform.set_stat(coins, 10);
+    if platform.stat(coins) != 24 || platform.is_unlocked(AchievementId::new("COINS_25")) {
+        return Err("services: an increment-only stat went down or unlocked early");
+    }
+    platform.set_stat(coins, 25);
+    if !platform.is_unlocked(AchievementId::new("COINS_25")) || platform.next_unlock() != Some(1) {
+        return Err("services: a stat threshold did not unlock its achievement");
+    }
+
+    // 4. The save form through the real medium, restored quietly.
+    let state = platform.achievements();
+    let mut packed = [0u8; 32];
+    let n = state.pack_for(&table, &mut packed);
+    if n != AchievementState::packed_len(5, 2) {
+        return Err("services: the packed state has the wrong size");
+    }
+    if platform.save_capacity() >= n {
+        platform
+            .save_write(&packed[..n])
+            .map_err(|_| "services: save write")?;
+        let mut back = [0u8; 32];
+        let m = platform
+            .save_read(&mut back)
+            .map_err(|_| "services: save read")?;
+        if m != n || back[..n] != packed[..n] {
+            return Err("services: the save medium did not keep the packed state");
+        }
+    }
+    let (read, _) = AchievementState::unpack(&packed[..n])
+        .map_err(|_| "services: the packed state does not read back")?;
+    platform.reset_achievements();
+    platform.restore_achievements(&read);
+    if platform.achievements() != state || platform.next_unlock().is_some() {
+        return Err("services: a restored state differs or shows popups");
+    }
+
+    // 5. Presence, kept as text for a store.
+    platform.set_presence(StrKey::new("presence.stage"), &[Arg::int("stage", 2)]);
+    let want = Presence::new(StrKey::new("presence.stage"), &[Arg::int("stage", 2)]);
+    if platform.services().map(|s| *s.presence()) != Some(want) {
+        return Err("services: presence was not kept");
+    }
+
+    // 6. The overlay: the list over a magenta frame, then the popup.
+    let style = OverlayStyle::DEFAULT;
+    let mut list = AchievementList::new();
+    for _ in 0..3 {
+        renderer.begin_frame(Color::rgb(255, 0, 255));
+        list.draw(renderer, &NoStrings, &table, &state, &style);
+        renderer.end_frame();
+    }
+    let size = renderer
+        .screen_size(Screen::Top)
+        .ok_or("services: no screen size")?;
+    let px = style.text_px(size.y);
+    let safe = renderer.safe_area(Screen::Top);
+    let inner = Vec2::new(
+        size.x - (safe.left + safe.right) as f32,
+        size.y - (safe.top + safe.bottom) as f32,
+    );
+    let (_, row) = AchievementList::rows(inner, px);
+    let top = safe.top as f32 + 8.0 * px + 6.0 * px;
+    // Row 0's panel at 70 % of its width, and the dimmed frame below the
+    // last row (5 rows fit every target).
+    let panel_at = (
+        (safe.left as f32 + inner.x * 0.7) as u32,
+        (top + row * 0.5) as u32,
+    );
+    let below = (
+        (size.x * 0.5) as u32,
+        (top + 5.5 * row).min(size.y - 2.0) as u32,
+    );
+    let (Some(panel), Some(dim)) = (
+        renderer.read_pixel(panel_at.0, panel_at.1),
+        renderer.read_pixel(below.0, below.1),
+    ) else {
+        // Restore before returning: no read-back on this backend.
+        platform.reset_achievements();
+        platform.restore_achievements(&saved);
+        while platform.next_unlock().is_some() {}
+        return Ok(false);
+    };
+    // Dimmed magenta: (51, 0, 51); the panel over it: about (30, 28, 45).
+    if dim.g > 16 || dim.r < 25 || dim.r > 90 || dim.b < 25 {
+        return Err("services: the list's background is not drawn");
+    }
+    if panel.g < 16 || panel.r > 60 || panel.b < 25 {
+        return Err("services: the list's rows are not drawn");
+    }
+    let mut toast = AchievementToast::new();
+    toast.push(0);
+    toast.advance(1.0);
+    let (r, shown) = toast.rect(size, px, &style);
+    if shown != 1.0 {
+        return Err("services: the popup did not slide in");
+    }
+    for _ in 0..3 {
+        renderer.begin_frame(Color::BLACK);
+        toast.draw(renderer, &NoStrings, &table, &style);
+        renderer.end_frame();
+    }
+    let inside = renderer.read_pixel(
+        (r.pos.x + r.size.x * 0.85) as u32,
+        (r.pos.y + r.size.y * 0.3) as u32,
+    );
+    let outside = renderer.read_pixel(
+        (r.pos.x + r.size.x * 0.5) as u32,
+        (r.pos.y + r.size.y + 6.0 * px) as u32,
+    );
+    match (inside, outside) {
+        (Some(i), Some(o)) if i.b > 25 && i.g > 16 && o.r < 12 && o.g < 12 && o.b < 12 => {}
+        _ => return Err("services: the popup is not drawn where it says"),
+    }
+
+    platform.reset_achievements();
+    platform.restore_achievements(&saved);
+    while platform.next_unlock().is_some() {}
+    Ok(true)
 }
 
 /// The quadrants in 16-bit color (no palette: they share TMEM with a

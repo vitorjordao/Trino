@@ -27,6 +27,7 @@ mod project;
 mod quality;
 mod river_assets;
 mod scene;
+mod services;
 mod showcase_assets;
 mod standalone;
 mod texture;
@@ -145,6 +146,15 @@ commands:
       [--lang <lang>] [--out <file.png>] [--json]
                        render a screen or scene as a player with those
                        settings gets it, seen through the CVD simulation
+  services check [dir] [--json]
+                       achievements (assets/achievements.ron): ids, stats,
+                       icons, strings in every language, the shipped bit
+                       order (assets/achievements.lock), a stale Steam export
+  services lock [dir] | list [dir] [--json]
+                       freeze the bit order before shipping | the table
+  services export steam [dir] [--out <dir>] [--json]
+                       Steamworks files: achievements CSV + localization VDF,
+                       rich presence, Steam Input action manifest, 64 px icons
   i18n check [--platform p] [--strict] [--dir <project>] [--json]
                        string tables: missing/extra/unused keys, placeholders,
                        plural forms, missing glyphs, UI overflow per language
@@ -484,6 +494,15 @@ fn main() -> ExitCode {
             }
             let rest: Vec<&str> = rest.iter().map(String::as_str).collect();
             access::run(&project, &rest)
+        }
+        (Some("services"), _) => {
+            let mut rest: Vec<String> = args.iter().skip(1).cloned().collect();
+            // `--out` was taken with the Web's options above.
+            if let Some(out) = &web_build.out {
+                rest.extend(["--out".to_string(), out.display().to_string()]);
+            }
+            let rest: Vec<&str> = rest.iter().map(String::as_str).collect();
+            services::run(&project, &rest)
         }
         (Some("i18n"), _) => {
             let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();

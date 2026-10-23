@@ -48,10 +48,12 @@ pub mod render;
 pub mod render3d;
 pub mod save;
 pub mod scene;
+pub mod services;
 pub mod shadow;
 pub mod text;
 pub mod tilemap;
 pub mod ui;
+pub mod version;
 pub mod vis;
 pub mod water;
 
@@ -103,6 +105,10 @@ pub use render3d::{
     TnlStats, tessellate, tessellate_surface, tessellate_with,
 };
 pub use scene::{BakedScene, LodLevel, LodPick, Lods, SceneNode, Tags};
+pub use services::{
+    AchievementId, AchievementInfo, AchievementList, AchievementState, AchievementTable,
+    AchievementToast, HostedServices, OverlayStyle, Presence, ServiceBackend, ServicesInfo, StatId,
+};
 pub use shadow::{
     MAX_SHADOW_PLANES, ShadowCast, ShadowFrame, ShadowPlane, ShadowSettings, ShadowStats,
     ShadowTier,
@@ -110,5 +116,6 @@ pub use shadow::{
 pub use text::{BitmapFont, GlyphIndex, TextBuf};
 pub use tilemap::{TILE_SIZE, Tilemap, TilemapError};
 pub use ui::{Insets, Ui, UiEnv, UiEvent, UiEvents, UiScreen, UiStats};
+pub use version::BuildInfo;
 pub use vis::{CellGroups, Cells, MAX_CELLS, NO_CELL, Portal, VisVolume};
 pub use water::{MAX_RIPPLES, Ripple, RippleBuffer, Water, WaterState, WaterTier};

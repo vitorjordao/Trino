@@ -229,6 +229,10 @@ fn used_keys(root: &Path) -> BTreeSet<String> {
             used.extend(c.caption);
         }
     }
+    // Achievements' names and descriptions, presence keys (issue #61).
+    if let Ok(Some(def)) = trino_scene::services::load(root) {
+        used.extend(def.keys());
+    }
     for path in trino_asset_pipeline::ui::screen_files(root) {
         if let Ok(def) = ScreenDef::load(&path) {
             for (_, n) in def.nodes() {

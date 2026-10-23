@@ -61,8 +61,8 @@ fn access_check_passes_on_the_projects_the_repo_ships() {
     let o = xtask(&["access", "check", "templates/standalone", "--json"]);
     let r = json(&o);
     assert_eq!(
-        r["screens"], 5,
-        "title, pause, options, controls, accessibility"
+        r["screens"], 6,
+        "title, pause, options, controls, accessibility, about"
     );
 }
 

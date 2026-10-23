@@ -4,6 +4,23 @@ Strings(
     lang: "en-US",
     name: "English",
     entries: {
+        // castle64's achievements and presence (issue #61).
+        "ach.title": "Achievements",
+        "ach.unlocked": "Achievement unlocked",
+        "ach.hidden": "???",
+        "ach.hidden_desc": "Hidden achievement",
+        "ach.first_coin.name": "First coin",
+        "ach.first_coin.desc": "Pick up a coin.",
+        "ach.coins_25.name": "Coin collector",
+        "ach.coins_25.desc": "Collect 25 coins.",
+        "ach.first_star.name": "Star struck",
+        "ach.first_star.desc": "Win your first star.",
+        "ach.all_stars.name": "Castle master",
+        "ach.all_stars.desc": "Collect all 4 stars.",
+        "ach.boar_stomp.name": "Boar stomper",
+        "ach.boar_stomp.desc": "Stomp a boar.",
+        "presence.hub": "In the castle hub",
+        "presence.stage": "Playing stage {stage}",
         // castle64's captions (issue #60): `caption = ".."` on a sound.
         "cap.coin": "[coin chimes]",
         "cap.hurt": "[ouch]",

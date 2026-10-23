@@ -62,6 +62,9 @@ pub struct PcPlatform {
     /// The player's accessibility settings ([`Platform::access`]); the host
     /// loads and persists them (`<save>.access`).
     access: trino_core::HostedAccess,
+    /// Achievements, stats, presence (issue #61): the host loads and
+    /// persists them (`<save>.achievements`) and forwards them to a store.
+    services: trino_core::HostedServices,
     /// The system language, read once ([`crate::language`]).
     language: Option<trino_core::LangTag>,
 }
@@ -93,8 +96,30 @@ impl PcPlatform {
             },
             heap: None,
             access: trino_core::HostedAccess::new(),
+            services: trino_core::HostedServices::new(trino_core::ServiceBackend::Local),
             language: crate::language::detect(),
         }
+    }
+
+    /// The host's saved achievements and stats, at start-up (not a change
+    /// to persist).
+    pub fn load_services(&mut self, state: trino_core::AchievementState) {
+        self.services.load(state);
+    }
+
+    /// The state to persist, once per change.
+    pub fn take_services_change(&mut self) -> Option<trino_core::AchievementState> {
+        self.services.take_change()
+    }
+
+    /// What a store (Steam) must hear about, once.
+    pub fn take_store_events(&mut self) -> trino_core::services::StoreEvents {
+        self.services.take_store_events()
+    }
+
+    /// A store took over: say what it does.
+    pub fn set_services_info(&mut self, info: trino_core::ServicesInfo) {
+        self.services.set_info(info);
     }
 
     /// Replace the system language (tests, a host that knows better).
@@ -336,6 +361,14 @@ impl Platform for PcPlatform {
         self.access.get()
     }
 
+    fn services(&self) -> Option<&trino_core::HostedServices> {
+        Some(&self.services)
+    }
+
+    fn services_mut(&mut self) -> Option<&mut trino_core::HostedServices> {
+        Some(&mut self.services)
+    }
+
     fn set_access(&mut self, settings: trino_core::AccessSettings) {
         self.access.set(settings);
     }
@@ -446,6 +479,53 @@ pub fn display_settings_from_text(text: &str) -> DisplaySettings {
     s
 }
 
+/// The achievements and stats as text (`<save>.achievements`): unlocked
+/// ones by API name, stats as `stat.<NAME>=<value>`, so an edited table
+/// (a new achievement in the middle before shipping) still reads right.
+pub fn services_to_text(
+    state: &trino_core::AchievementState,
+    table: &trino_core::AchievementTable<'_>,
+) -> String {
+    let mut out = String::from("# Trino achievements and stats (issue #61)\n");
+    let unlocked: Vec<&str> = table
+        .iter()
+        .filter(|a| state.is_unlocked(a.index))
+        .map(|a| a.api)
+        .collect();
+    out.push_str(&format!("unlocked={}\n", unlocked.join(",")));
+    for s in table.stats() {
+        out.push_str(&format!("stat.{}={}\n", s.api, state.stat(s.index)));
+    }
+    out
+}
+
+/// Parse [`services_to_text`] against `table`; unknown names and broken
+/// lines are skipped.
+pub fn services_from_text(
+    text: &str,
+    table: &trino_core::AchievementTable<'_>,
+) -> trino_core::AchievementState {
+    let mut state = trino_core::AchievementState::EMPTY;
+    for line in text.lines() {
+        let Some((k, v)) = line.trim().split_once('=') else {
+            continue;
+        };
+        if k == "unlocked" {
+            for name in v.split(',').map(str::trim).filter(|n| !n.is_empty()) {
+                if let Some(i) = table.index(trino_core::AchievementId::new(name)) {
+                    state.set_unlocked(i, true);
+                }
+            }
+        } else if let Some(name) = k.strip_prefix("stat.")
+            && let Some(i) = table.stat_index(trino_core::StatId::new(name))
+            && let Ok(v) = v.trim().parse::<i32>()
+        {
+            state.set_stat(i, v);
+        }
+    }
+    state
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -534,6 +614,62 @@ mod tests {
         pc.detect_quality();
         assert_eq!(pc.take_quality_request(), Some(QualityRequest::Detect));
         assert_eq!(pc.take_quality_request(), None);
+    }
+
+    /// `<save>.achievements` keeps names, so it survives a table that
+    /// grew; the platform's defaults unlock through the baked table.
+    #[test]
+    fn services_text_round_trip_and_platform_defaults() {
+        use trino_core::services::table::{self, AchievementRecord, StatRecord};
+        use trino_core::{AchievementId, AchievementTable, StatId};
+        let ach = [
+            AchievementRecord {
+                api: "A",
+                name: "a",
+                description: "a",
+                icon: 0,
+                hidden: false,
+                stat: None,
+            },
+            AchievementRecord {
+                api: "B",
+                name: "b",
+                description: "b",
+                icon: 0,
+                hidden: false,
+                stat: Some((0, 5)),
+            },
+        ];
+        let stats = [StatRecord {
+            api: "N",
+            min: 0,
+            max: 10,
+            increment_only: false,
+        }];
+        let mut blob = vec![0u8; table::encoded_len(&ach, &stats, &[])];
+        table::encode(&ach, &stats, &[], &mut blob).unwrap();
+        let mut p = PcPlatform::new(&Caps::PC);
+        p.insert_blob(table::BLOB, blob.clone());
+        let t = AchievementTable::parse(&blob).unwrap();
+        p.unlock(AchievementId::new("A"));
+        assert!(p.is_unlocked(AchievementId::new("A")));
+        p.set_stat(StatId::new("N"), 7);
+        assert!(
+            p.is_unlocked(AchievementId::new("B")),
+            "threshold 5 reached"
+        );
+        assert_eq!(p.stat(StatId::new("N")), 7);
+        assert_eq!(p.next_unlock(), Some(0));
+        let state = p.take_services_change().unwrap();
+        let text = services_to_text(&state, &t);
+        assert!(
+            text.contains("unlocked=A,B") && text.contains("stat.N=7"),
+            "{text}"
+        );
+        assert_eq!(services_from_text(&text, &t), state);
+        // Unknown names are skipped.
+        let other = services_from_text("unlocked=Z,B\nstat.Q=3\nnoise", &t);
+        assert!(other.is_unlocked(1) && !other.is_unlocked(0));
     }
 
     #[test]

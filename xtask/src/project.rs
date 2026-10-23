@@ -53,6 +53,7 @@
 //! (`build all`, `assets all`, `test all`) skip it. The `[n64]` / `[3ds]`
 //! sections are only required for the platforms the project lists.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
@@ -135,11 +136,61 @@ pub struct Project {
     pub web_title: String,
     pub test: TestConfig,
     pub watch: Vec<String>,
+    /// How `cargo xtask package pc` ships the desktop game (`[pc]`'s
+    /// packaging keys, issue #61).
+    #[allow(dead_code)] // read by `package` (next commit)
+    pub ship: PcShip,
+    /// `[steam] app_id` (issue #61): the Steam backend, `services export
+    /// steam`, `package pc --steam`'s SteamPipe scripts.
+    pub steam_app_id: Option<u32>,
+    /// `[steam] depots`: `windows`, `linux`, `macos` → depot id (default
+    /// app id + 1, + 2, + 3).
+    #[allow(dead_code)] // read by `package` (next commit)
+    pub steam_depots: BTreeMap<String, u32>,
+    /// `[itch] target` (`user/game`): `package pc --itch`'s butler channels.
+    #[allow(dead_code)] // read by `package` (next commit)
+    pub itch_target: Option<String>,
+    /// `[3ds]`'s `.cia` keys (`package 3ds --cia`).
+    #[allow(dead_code)] // read by `package` (next commit)
+    pub cia: CiaConfig,
     /// Rust toolchain for the console builds (`cargo +<nightly>`):
     /// `$TRINO_NIGHTLY`, else `[toolchain] nightly`, else `nightly`.
     /// Pin it: N64 frame times move with code layout, so two nightlies
     /// give two different emulated timings for the same source.
     pub nightly: String,
+}
+
+/// The desktop package's metadata (`[pc]`: `icon`, `identifier`,
+/// `publisher`, `version`, `features`, `crash_upload`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PcShip {
+    /// A square PNG (256 × 256 or bigger): the window, the `.exe`, the
+    /// `.app` and the AppImage's icon.
+    pub icon: Option<PathBuf>,
+    /// Reverse-DNS id (`com.example.game`): macOS's bundle id, Linux's app
+    /// id. Default `org.trino.<name>`.
+    pub identifier: String,
+    /// The company in the `.exe`'s version info and the user data folder
+    /// (default `[project] author`, else the title).
+    pub publisher: String,
+    /// The version stamped in (default the PC crate's).
+    pub version: Option<String>,
+    /// Cargo features of the PC crate in a package build (default
+    /// `["gamepad"]` when the crate has the feature).
+    pub features: Option<Vec<String>>,
+    /// Where a player's crash reports go once they agreed (`https://…`;
+    /// none: reports stay on disk).
+    pub crash_upload: Option<String>,
+}
+
+/// The 3DS `.cia` keys (`[3ds] product_code`, `unique_id`, `banner`,
+/// `banner_audio`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CiaConfig {
+    pub product_code: Option<String>,
+    pub unique_id: Option<String>,
+    pub banner: Option<PathBuf>,
+    pub banner_audio: Option<PathBuf>,
 }
 
 /// `[toolchain]`: the nightly the console builds use.
@@ -190,6 +241,26 @@ struct File {
     test: TestConfig,
     #[serde(default)]
     toolchain: ToolchainSection,
+    #[serde(default)]
+    steam: Option<SteamSection>,
+    #[serde(default)]
+    itch: Option<ItchSection>,
+}
+
+/// `[steam]` (issue #61).
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SteamSection {
+    app_id: u32,
+    #[serde(default)]
+    depots: BTreeMap<String, u32>,
+}
+
+/// `[itch]` (issue #61).
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ItchSection {
+    target: String,
 }
 
 #[derive(Deserialize)]
@@ -217,6 +288,18 @@ struct PcSection {
     #[serde(default)]
     #[allow(dead_code)]
     quality: Option<PcQuality>,
+    #[serde(default)]
+    icon: Option<String>,
+    #[serde(default)]
+    identifier: Option<String>,
+    #[serde(default)]
+    publisher: Option<String>,
+    #[serde(default)]
+    version: Option<String>,
+    #[serde(default)]
+    features: Option<Vec<String>>,
+    #[serde(default)]
+    crash_upload: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -246,6 +329,14 @@ struct N3dsSection {
     icon: Option<String>,
     #[serde(default = "default_speedup")]
     speedup: bool,
+    #[serde(default)]
+    product_code: Option<String>,
+    #[serde(default)]
+    unique_id: Option<String>,
+    #[serde(default)]
+    banner: Option<String>,
+    #[serde(default)]
+    banner_audio: Option<String>,
 }
 
 fn default_speedup() -> bool {
@@ -346,6 +437,15 @@ impl Project {
             web_canvas_id: DEFAULT_CANVAS_ID.into(),
             web_title: "Trino".into(),
             test: TestConfig::default(),
+            ship: PcShip {
+                identifier: "org.trino.castle64".into(),
+                publisher: "Trino".into(),
+                ..PcShip::default()
+            },
+            steam_app_id: None,
+            steam_depots: BTreeMap::new(),
+            itch_target: None,
+            cia: CiaConfig::default(),
             watch: [
                 "examples",
                 "assets",
@@ -421,6 +521,10 @@ impl Project {
             bin: String::new(),
             icon: None,
             speedup: true,
+            product_code: None,
+            unique_id: None,
+            banner: None,
+            banner_audio: None,
         });
         let web = f.web.unwrap_or_default();
         let web_package = web
@@ -435,14 +539,87 @@ impl Project {
                 .map(|d| d.to_string())
                 .collect()
         });
+        let pc = f.pc.unwrap_or(PcSection {
+            package: None,
+            quality: None,
+            icon: None,
+            identifier: None,
+            publisher: None,
+            version: None,
+            features: None,
+            crash_upload: None,
+        });
+        if let Some(id) = &pc.identifier
+            && (id.split('.').count() < 2
+                || !id
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-'))
+        {
+            return Err(format!(
+                "[pc] identifier `{id}`: a reverse-DNS id like com.example.game"
+            ));
+        }
+        if let Some(u) = &pc.crash_upload
+            && !u.starts_with("https://")
+            && !u.starts_with("http://127.0.0.1")
+            && !u.starts_with("http://localhost")
+        {
+            return Err(format!(
+                "[pc] crash_upload `{u}`: use https:// (plain http only to localhost)"
+            ));
+        }
+        let ship = PcShip {
+            icon: pc.icon.map(|i| root.join(i)),
+            identifier: pc
+                .identifier
+                .unwrap_or_else(|| format!("org.trino.{}", f.project.name.replace('_', "-"))),
+            publisher: pc
+                .publisher
+                .or_else(|| Some(f.project.author.clone()).filter(|a| !a.is_empty()))
+                .unwrap_or_else(|| f.project.title.clone()),
+            version: pc.version,
+            features: pc.features,
+            crash_upload: pc.crash_upload,
+        };
+        let steam_app_id = f.steam.as_ref().map(|s| s.app_id);
+        let mut steam_depots = BTreeMap::new();
+        if let Some(st) = &f.steam {
+            for (k, os) in ["windows", "linux", "macos"].iter().enumerate() {
+                let id = st
+                    .depots
+                    .get(*os)
+                    .copied()
+                    .unwrap_or(st.app_id + 1 + k as u32);
+                steam_depots.insert(os.to_string(), id);
+            }
+            if let Some(bad) = st
+                .depots
+                .keys()
+                .find(|k| !["windows", "linux", "macos"].contains(&k.as_str()))
+            {
+                return Err(format!(
+                    "[steam] depots: unknown OS `{bad}` (windows, linux, macos)"
+                ));
+            }
+        }
+        let cia = CiaConfig {
+            product_code: n3ds.product_code,
+            unique_id: n3ds.unique_id,
+            banner: n3ds.banner.map(|b| root.join(b)),
+            banner_audio: n3ds.banner_audio.map(|b| root.join(b)),
+        };
         Ok(Project {
             n3ds_icon: n3ds.icon.map(|i| root.join(i)),
             is_engine: root == engine,
             engine,
-            pc_package: f
-                .pc
-                .and_then(|pc| pc.package)
+            pc_package: pc
+                .package
                 .unwrap_or_else(|| format!("{}-pc", f.project.name)),
+            ship,
+            steam_app_id,
+            steam_depots,
+            itch_target: f.itch.map(|i| i.target),
+            cia,
             name: f.project.name,
             title: f.project.title,
             description: f.project.description,

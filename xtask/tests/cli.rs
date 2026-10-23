@@ -410,9 +410,11 @@ fn assets_pc_bakes_the_repo_manifest() {
     // The accessibility data (palettes, captions, icons; issue #60) is one
     // more generated blob, `access/data`.
     let access = root().join("assets/palettes.ron").exists() as usize;
+    // The achievements table (issue #61), `services/achievements`.
+    let services = root().join("assets/achievements.ron").exists() as usize;
     assert_eq!(
         count,
-        all + fonts + mix + ui + access,
+        all + fonts + mix + ui + access + services,
         "every manifest entry is baked"
     );
     let index = std::fs::read_to_string(root().join("target/assets/pc/index.toml")).unwrap();

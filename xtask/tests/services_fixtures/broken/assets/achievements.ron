@@ -1,0 +1,11 @@
+// One problem of each kind for `services check` (xtask/tests/services_cli.rs).
+(
+    version: 1,
+    achievements: [
+        (id: "MOVED", name: "a.name", description: "a.desc", icon: "sprites/missing"),
+        (id: "FIRST", name: "b.name", description: "b.desc", stat: "SCORE", threshold: 500),
+        (id: "bad id", name: "c.name", description: "c.desc", stat: "NOPE"),
+    ],
+    stats: [(id: "SCORE", min: 0, max: 100)],
+    presence: ["presence.none"],
+)

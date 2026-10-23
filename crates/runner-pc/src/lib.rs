@@ -51,8 +51,10 @@
 //! `TRINO_FRAME:` line ends with the 1% lows and the quality in effect.
 //! See [`quality::QualityHost`].
 
+pub mod package;
 pub mod quality;
 
+pub use package::PackageInfo;
 pub use quality::QualityHost;
 
 use std::path::{Path, PathBuf};
@@ -102,6 +104,12 @@ pub struct RunConfig {
     pub target: PathBuf,
     pub save_name: String,
     pub default_profile: Option<SimProfile>,
+    /// Where saves and settings go (`None`: `<target>/save`). A package
+    /// sets the user's data folder; `TRINO_SAVE_DIR` overrides either.
+    pub save_dir: Option<PathBuf>,
+    /// The package this executable is part of ([`package::detect`]): its
+    /// assets are pre-baked beside it.
+    pub package: Option<PackageInfo>,
 }
 
 impl RunConfig {
@@ -113,7 +121,37 @@ impl RunConfig {
             root,
             save_name: "game".into(),
             default_profile: None,
+            save_dir: None,
+            package: None,
         }
+    }
+
+    /// Run as `package` says (what [`run`] does when the executable sits in
+    /// a package): its title, its baked assets, its profile, the user's
+    /// data folder for saves (`TRINO_SAVE_DIR` wins).
+    pub fn with_package(mut self, package: PackageInfo) -> Self {
+        if !package.title.is_empty() {
+            self.title = package.title.clone();
+        }
+        self.default_profile = package.profile().or(Some(SimProfile::Native));
+        self.save_dir =
+            package::user_data_dir(&package.save_dir).or_else(|| Some(package.dir.join("save")));
+        self.package = Some(package);
+        self.with_env_save_dir()
+    }
+
+    fn with_env_save_dir(mut self) -> Self {
+        if let Some(d) = std::env::var_os("TRINO_SAVE_DIR").filter(|d| !d.is_empty()) {
+            self.save_dir = Some(PathBuf::from(d));
+        }
+        self
+    }
+
+    /// The folder saves, settings, achievements and crash reports go to.
+    pub fn save_dir(&self) -> PathBuf {
+        self.save_dir
+            .clone()
+            .unwrap_or_else(|| self.target.join("save"))
     }
 
     pub fn assets_dir(&self) -> PathBuf {
@@ -121,13 +159,14 @@ impl RunConfig {
     }
 
     pub fn baked_dir(&self) -> PathBuf {
-        self.target.join("assets/pc")
+        match &self.package {
+            Some(p) => p.assets_dir(),
+            None => self.target.join("assets/pc"),
+        }
     }
 
     pub fn save_file(&self) -> PathBuf {
-        self.target
-            .join("save")
-            .join(format!("{}.sav", self.save_name))
+        self.save_dir().join(format!("{}.sav", self.save_name))
     }
 
     /// Display settings, next to the save.
@@ -157,6 +196,12 @@ impl RunConfig {
     /// text, `key=value` lines: `trino_platform_pc::system::access_settings_to_text`).
     pub fn access_file(&self) -> PathBuf {
         self.save_file().with_extension("access")
+    }
+
+    /// Achievements and stats (`<save_name>.achievements`, plain text:
+    /// `trino_platform_pc::system::services_to_text`; issue #61).
+    pub fn services_file(&self) -> PathBuf {
+        self.save_file().with_extension("achievements")
     }
 }
 
@@ -404,6 +449,41 @@ pub fn save_access_settings(platform: &mut PcPlatform, file: &Path, persist: boo
     let _ = std::fs::write(file, trino_platform_pc::system::access_settings_to_text(&s));
 }
 
+/// Load the achievements and stats into `platform` (after the assets: the
+/// names resolve through the baked table). Returns whether changes may be
+/// persisted: not on smoke runs.
+pub fn load_services(platform: &mut PcPlatform, file: &Path, smoke: bool) -> bool {
+    if smoke {
+        return false;
+    }
+    let table = trino_core::AchievementTable::from_platform(platform);
+    if let (Ok(text), Some(table)) = (std::fs::read_to_string(file), table) {
+        let state = trino_platform_pc::system::services_from_text(&text, &table);
+        platform.load_services(state);
+    }
+    true
+}
+
+/// Persist the achievements and stats when they changed (and `persist`).
+pub fn save_services(platform: &mut PcPlatform, file: &Path, persist: bool) {
+    let Some(state) = platform.take_services_change() else {
+        return;
+    };
+    if !persist {
+        return;
+    }
+    let Some(table) = trino_core::AchievementTable::from_platform(platform) else {
+        return;
+    };
+    if let Some(dir) = file.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = std::fs::write(
+        file,
+        trino_platform_pc::system::services_to_text(&state, &table),
+    );
+}
+
 /// `TRINO_SIM`, defaulting to the N64 look.
 pub fn profile_from_env() -> SimProfile {
     std::env::var("TRINO_SIM")
@@ -424,6 +504,10 @@ pub fn tier_from_env() -> trino_core::HwTier {
 /// Open a window and run the game made by `make(screen)` until closed.
 /// Panics with a readable message on setup errors (bad assets, no GPU).
 pub fn run<G: Game + 'static>(config: RunConfig, make: impl FnOnce(Vec2) -> G + 'static) {
+    let config = match package::detect() {
+        Some(p) => config.with_package(p),
+        None => config.with_env_save_dir(),
+    };
     let smoke_frames = std::env::var("TRINO_SMOKE_FRAMES")
         .ok()
         .and_then(|v| v.parse().ok());
@@ -457,6 +541,8 @@ struct Ctx {
     audio_saved: trino_core::BusSettings,
     /// Whether accessibility changes go to `<save_name>.access`.
     access_persist: bool,
+    /// Whether achievements go to `<save_name>.achievements`.
+    services_persist: bool,
     input: PcInput,
     platform: PcPlatform,
     /// The `native` profile's quality (the consoles' is fixed).
@@ -520,12 +606,15 @@ impl Host {
         if let Some(h) = heap() {
             platform.set_heap(h);
         }
-        trino_asset_pipeline::bake_all(
-            &cfg.assets_dir(),
-            trino_asset_pipeline::Platform::Pc,
-            &cfg.baked_dir(),
-        )
-        .unwrap_or_else(|e| panic!("asset bake failed: {e}"));
+        // A package ships its assets baked; a development run bakes them.
+        if cfg.package.is_none() {
+            trino_asset_pipeline::bake_all(
+                &cfg.assets_dir(),
+                trino_asset_pipeline::Platform::Pc,
+                &cfg.baked_dir(),
+            )
+            .unwrap_or_else(|e| panic!("asset bake failed: {e}"));
+        }
         upload_assets(
             &cfg.baked_dir(),
             &mut renderer,
@@ -535,7 +624,9 @@ impl Host {
         )
         .unwrap_or_else(|e| panic!("failed to load baked assets: {e}"));
         let mut groups = GroupLoader::new(&cfg.baked_dir(), &renderer, &mut platform);
-        if let Some(plan) = GroupLoader::strict_plan(&cfg.assets_dir(), &renderer) {
+        if cfg.package.is_none()
+            && let Some(plan) = GroupLoader::strict_plan(&cfg.assets_dir(), &renderer)
+        {
             groups = groups.with_plan(plan);
             groups.check_boot();
         }
@@ -545,20 +636,32 @@ impl Host {
             &cfg.access_file(),
             self.smoke_frames.is_some(),
         );
+        let services_persist = load_services(
+            &mut platform,
+            &cfg.services_file(),
+            self.smoke_frames.is_some(),
+        );
 
         #[cfg(feature = "watch")]
         let (asset_events, watcher) = {
             let (tx, rx) = std::sync::mpsc::channel();
-            let watcher = trino_asset_pipeline::watch::watch(
-                cfg.assets_dir(),
-                trino_asset_pipeline::Platform::Pc,
-                cfg.baked_dir(),
-                move |changed| {
-                    let _ = tx.send(changed);
-                },
-            )
-            .expect("failed to start asset watcher");
-            (rx, Box::new(watcher) as Box<dyn std::any::Any>)
+            // A package has no masters to watch.
+            let watcher: Box<dyn std::any::Any> = if cfg.package.is_some() {
+                Box::new(())
+            } else {
+                Box::new(
+                    trino_asset_pipeline::watch::watch(
+                        cfg.assets_dir(),
+                        trino_asset_pipeline::Platform::Pc,
+                        cfg.baked_dir(),
+                        move |changed| {
+                            let _ = tx.send(changed);
+                        },
+                    )
+                    .expect("failed to start asset watcher"),
+                )
+            };
+            (rx, watcher)
         };
 
         // The picture for the window as created (fullscreen may differ
@@ -597,6 +700,7 @@ impl Host {
             audio,
             audio_saved,
             access_persist,
+            services_persist,
             input,
             platform,
             quality,
@@ -741,6 +845,11 @@ impl ApplicationHandler for Host {
                     &mut ctx.platform,
                     &self.config.access_file(),
                     ctx.access_persist,
+                );
+                save_services(
+                    &mut ctx.platform,
+                    &self.config.services_file(),
+                    ctx.services_persist,
                 );
                 if let Some(q) = &mut ctx.quality {
                     q.end_frame(&mut ctx.renderer, &mut ctx.platform);

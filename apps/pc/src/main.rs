@@ -106,6 +106,8 @@ struct Ctx {
     showcase: Option<showcase::ShowcaseGame>,
     /// Whether accessibility changes go to `target/save/castle64.access`.
     access_persist: bool,
+    /// Whether achievements go to `target/save/castle64.achievements`.
+    services_persist: bool,
     last_frame: Instant,
     #[cfg(feature = "reload")]
     asset_events: std::sync::mpsc::Receiver<Vec<u32>>,
@@ -226,6 +228,11 @@ impl App {
             &access_file(),
             self.smoke_frames.is_some(),
         );
+        let services_persist = trino_runner_pc::load_services(
+            &mut platform,
+            &access_file().with_extension("achievements"),
+            self.smoke_frames.is_some(),
+        );
 
         window.request_redraw();
         Ctx {
@@ -240,6 +247,7 @@ impl App {
             player,
             showcase,
             access_persist,
+            services_persist,
             last_frame: Instant::now(),
             #[cfg(feature = "reload")]
             asset_events,
@@ -333,6 +341,11 @@ impl ApplicationHandler for App {
                     &mut ctx.platform,
                     &access_file(),
                     ctx.access_persist,
+                );
+                trino_runner_pc::save_services(
+                    &mut ctx.platform,
+                    &access_file().with_extension("achievements"),
+                    ctx.services_persist,
                 );
                 if let Some(q) = &mut ctx.quality {
                     q.end_frame(&mut ctx.renderer, &mut ctx.platform);

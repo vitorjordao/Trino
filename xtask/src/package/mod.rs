@@ -993,7 +993,7 @@ fn steam_layout(
         ),
     )?;
     for d in &depots {
-        // Paths in a depot script are relative to ContentRoot (`../content`).
+        // A depot's LocalPath is relative to ContentRoot (`../content`).
         write(
             &scripts.join(format!("depot_build_{}.vdf", d.id)),
             trino_scene::steam::depot_build_vdf(d),
@@ -1007,7 +1007,7 @@ fn steam_layout(
     let readme = format!(
         "SteamPipe layout for {title} {version} ({commit}).\n\n\
          Upload: steamcmd +login <builder> +run_app_build \"$PWD/scripts/app_build_{app}.vdf\" +quit\n\
-         (run it from this folder; the scripts read content/<os>).\n\n\
+         (an absolute path to the script; it reads ../content/<os> relative to itself).\n\n\
          Launch option for {os}: {launch}\n\n\
          Steam Auto-Cloud (Steamworks > Application > Steam Cloud): one root per OS, all with\n\
          subdirectory \"{save}\" and patterns *.sav and *.achievements:\n\

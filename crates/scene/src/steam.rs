@@ -326,12 +326,14 @@ pub struct Depot {
     pub os: &'static str,
 }
 
-/// `app_build_<app id>.vdf`: builds every depot from `content/<os>`.
+/// `app_build_<app id>.vdf`, written in `steam/scripts/`: builds every depot
+/// from `steam/content/<os>`. SteamPipe resolves `ContentRoot` and
+/// `BuildOutput` against the script file, hence `../`.
 pub fn app_build_vdf(app_id: u32, description: &str, depots: &[Depot]) -> String {
     let mut out = String::new();
     let _ = writeln!(
         out,
-        "\"AppBuild\"\n{{\n\t\"AppID\"\t\"{app_id}\"\n\t\"Desc\"\t{}\n\t\"ContentRoot\"\t\"content\"\n\t\"BuildOutput\"\t\"output\"\n\t\"Depots\"\n\t{{",
+        "\"AppBuild\"\n{{\n\t\"AppID\"\t\"{app_id}\"\n\t\"Desc\"\t{}\n\t\"ContentRoot\"\t\"../content\"\n\t\"BuildOutput\"\t\"../output\"\n\t\"Depots\"\n\t{{",
         vdf_str(description)
     );
     for d in depots {
@@ -451,6 +453,9 @@ mod tests {
         ];
         let app = app_build_vdf(480, "v1", &depots);
         assert!(app.contains("\"481\"\t\"depot_build_481.vdf\""));
+        // Relative to the script in steam/scripts/ (SteamPipe's rule).
+        assert!(app.contains("\"ContentRoot\"\t\"../content\""), "{app}");
+        assert!(app.contains("\"BuildOutput\"\t\"../output\""), "{app}");
         assert!(depot_build_vdf(&depots[1]).contains("\"LocalPath\"\t\"linux/*\""));
     }
 }

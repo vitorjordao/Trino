@@ -115,6 +115,21 @@ not in the repo. Rebuild them from the job definitions when needed.
 
 ## Status to keep current
 
+The  job (issue #61) was first green on all three OSes on 2026-10-23 (run 39951765032,
+PR #98): about 17 min on Ubuntu, 8 on Windows, 7 on macOS, most of it the football
+template's fat-LTO build. The  step and its  boot in  were
+green in the same run. A step's AGENTS.md
+CLAUDE.md
+CODE_OF_CONDUCT.md
+CONTRIBUTING.md
+Cargo.lock
+Cargo.toml
+GEMINI.md
+LICENSE-APACHE
+LICENSE-MIT
+PLANO_ENGINE_TRINO.md fails under the runner's 
+("Broken pipe", exit 2): list without truncating.
+
 The emulator jobs (`n64` ares step, `n3ds-emulator`) were first verified in local
 replica containers on 2026-10-12. The perf gates and the 3DS golden (2026-10-13)
 were verified the same way: `TRINO_ARES=docker` gives µs identical to native ares,

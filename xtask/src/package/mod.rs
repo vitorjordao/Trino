@@ -815,21 +815,28 @@ fn write_bundle(
     )
 }
 
+/// The `.dmg` (`hdiutil`), tried twice: hosted Macs fail it now and then
+/// with "Resource busy".
 fn dmg(plan: &Plan, folder: &Path) -> Result<PathBuf, String> {
     let out = plan.out.join(format!("{}.dmg", plan.stem()));
-    let _ = std::fs::remove_file(&out);
-    let ok = Command::new("hdiutil")
-        .args(["create", "-volname", &plan.title, "-srcfolder"])
-        .arg(folder)
-        .args(["-ov", "-format", "UDZO"])
-        .arg(&out)
-        .stdout(std::io::stderr())
-        .status()
-        .is_ok_and(|s| s.success());
-    if !ok {
-        return Err("hdiutil create failed".into());
+    for attempt in 0..2 {
+        let _ = std::fs::remove_file(&out);
+        let ok = Command::new("hdiutil")
+            .args(["create", "-volname", &plan.title, "-srcfolder"])
+            .arg(folder)
+            .args(["-ov", "-format", "UDZO"])
+            .arg(&out)
+            .stdout(std::io::stderr())
+            .status()
+            .is_ok_and(|s| s.success());
+        if ok {
+            return Ok(out);
+        }
+        if attempt == 0 {
+            std::thread::sleep(std::time::Duration::from_secs(5));
+        }
     }
-    Ok(out)
+    Err("hdiutil create failed twice".into())
 }
 
 /// The `.desktop` entry an AppImage carries.

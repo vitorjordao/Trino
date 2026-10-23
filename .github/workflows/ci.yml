@@ -175,8 +175,9 @@ jobs:
       - name: SteamPipe and butler layouts
         shell: bash
         run: |
-          ls -R target/test-projects/ci-ship/dist/steam/scripts target/test-projects/ci-ship/dist/itch | head -40
+          find target/test-projects/ci-ship/dist/steam/scripts target/test-projects/ci-ship/dist/itch -maxdepth 2 | sort
           test -f target/test-projects/ci-ship/dist/steam/scripts/app_build_480.vdf
+          test -f target/test-projects/ci-ship/dist/itch/*/.itch.toml
       - uses: actions/upload-artifact@v4
         with:
           name: ci-ship-${{ runner.os }}

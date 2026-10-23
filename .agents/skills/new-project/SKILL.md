@@ -130,6 +130,14 @@ cargo xtask editor                                           # the editor's laun
 
 ## Maintaining the templates
 
+- Since #61 the standalone base ships `assets/achievements.ron` (three achievements, a
+  stat, two presence keys), `ui/about.ui.ron` (the `build_info!()` stamp) and
+  `ui/crash.ui.ron` (the consent question), and its PC crate has `gamepad` and `steam`
+  features; its `trino.toml` documents the packaging keys. The demo templates copy the
+  engine's assets (castle64's achievements): `copy_demo` merges the engine's `ach.*` /
+  `presence.*` English lines into the starter's table. The scaffold test lists every
+  file it expects (`crates/scaffold/src/lib.rs`).
+
 - **Manifests are `Cargo.toml.tmpl`.** A file named `Cargo.toml` anywhere in this
   repository, placeholders included, breaks every user of the engine as a git
   dependency: cargo scans the whole checkout and fails on the bad manifest.

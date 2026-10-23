@@ -159,6 +159,13 @@ A feature is done only when **PC, N64 and 3DS** all run it and an emulator has s
   as a defaulted `Platform` method (`gamepad_family`, `None` on consoles). The tests then
   need no device: a table of real id strings per browser and per OS.
 
+- **A service a store may back (achievements, #61, ADR 0029):** the core holds the
+  logic in a `Hosted*` struct every backend owns, the `Platform` methods are defaults
+  over two accessors (`services()`/`services_mut()`), and the store lives in the PC
+  runner behind a trait with a mock (`StoreApi`/`MockStore`). On the consoles, state the
+  player earns goes into **the game's** save (`pack_for`/`restore_*`), never a region the
+  engine carves out of the EEPROM (it would move the save layout of every game).
+
 ## 2. Backends, in matched pairs
 
 - The FFI goes through the shims only: `crates/platform-n64/shim/trino_shim.c` with

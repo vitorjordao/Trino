@@ -69,6 +69,13 @@ Coverage: `TRINO_REQUIRE_GPU=1 cargo llvm-cov --workspace --summary-only
 
 ## Also worth running
 
+- The runner's opt-in features (issue #61), as the `lint` job does:
+  `cargo clippy -p trino-runner-pc --features steam,crash-upload,gamepad --all-targets -- -D warnings`
+  and `cargo test -p trino-runner-pc --features steam store`.
+- `cargo xtask services check` and `cargo xtask deck check` (castle64's achievements and
+  the Deck checklist); `cargo test -p xtask --test package_cli -- --ignored` packages a
+  scaffolded project end to end (minutes: fat LTO).
+
 - Content: `cargo xtask scene check` (scenes/prefabs/materials resolve cleanly).
 - Console type-check without the toolchains (catches `no_std`/target breakage in
   `crates/platform-{n64,3ds}` and game crates, which are cfg-gated on the host):

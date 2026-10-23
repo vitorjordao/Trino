@@ -315,6 +315,15 @@ they need (`requires`) and portal cells the groups of their rooms, which
 `trino_core::CellGroups` streams as the camera moves. `trino_core::mem` gives `no_std`
 arenas (per frame, per level) for data that dies together, so it never fragments the heap.
 
+## Platform services (ADR 0029)
+
+Achievements, stats, rich presence and the cloud hint are one `Platform` API with
+defaults over a `HostedServices` every backend holds (`trino_core::services`); the core
+applies stat thresholds, so every target agrees. Stores stay out of the core: the PC
+runner forwards each frame's changes to a `StoreApi` (Steam behind a feature), merging
+both ways at start. Consoles keep the state for the session and the game's save holds
+it. The popup and the list are core code drawn with 2D calls.
+
 ## Authored content
 
 Scenes, prefabs, materials, particle effects and fake objects are versioned RON files

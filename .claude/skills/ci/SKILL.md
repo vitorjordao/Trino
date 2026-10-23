@@ -9,12 +9,13 @@ description: Understand, change, debug or locally replicate Trino's GitHub Actio
 
 | Job | Runs on | What it proves |
 |---|---|---|
-| `lint` | ubuntu | fmt, clippy `-D warnings`, the dependency graph |
+| `lint` | ubuntu | fmt, clippy `-D warnings`, the dependency graph; clippy of `trino-runner-pc` with `steam,crash-upload,gamepad` and its `store` tests with `steam` (links `libsteam_api` from cargo's path); `services check`, `deck check` |
+| `package` | Linux, Windows, macOS | scaffolds the football template with `[steam] app_id = 480`, then `package pc --steam --itch --smoke --json`: the fat-LTO build, the OS's package, run outside the repo for 30 frames and crashed on purpose (the report must exist); Windows reads the `.exe`'s version info back (PowerShell); uploads the AppImage/zip/dmg and the smoke frame (#61) |
 | `desktop` | Linux, Windows, macOS | `cargo test --workspace`, with GPU goldens required on Linux. Linux also runs `cargo test -p trino-platform-pc` with `TRINO_PC_TNL=cpu` (the PC's old CPU T&L path, #51) and headless smokes: game, the game at each quality preset + `auto` (`TRINO_SIM=native`, then `quality check` and `quality bench --json`, #55), scene player, exported scene, editor, editor UI tests (`--ignored --test-threads=1`), Play here, standalone project |
 | `hot-reload` | ubuntu | the dylib swap end to end |
 | `n64` | ubuntu-24.04 | builds the ROM in `trino-n64`, then runs `test n64` in the `trino-ares` image (self-test, the pixel-exact golden, and the perf gates: T&L counters equal `tests/perf/castle64_work.toml`, emulated times under `tests/perf/castle64_n64.toml`). On failure it uploads `tests/golden/n64/actual/` |
-| `n3ds` | `devkitpro/devkitarm` container | builds the `.3dsx`, then `build 3ds --selftest`, and uploads the result as an artifact |
-| `n3ds-emulator` | ubuntu-24.04 | downloads that artifact, runs `emulators setup azahar`, then `xvfb-run … test 3ds --no-build` (self-test + the castle64 hub golden within a tolerance; on failure uploads `tests/golden/3ds/actual/` as `n3ds-golden-actual`) |
+| `n3ds` | `devkitpro/devkitarm` container | builds the `.3dsx`, then `build 3ds --selftest`, and uploads the result as an artifact; then `package 3ds --cia --selftest` (installs `unzip`; makerom/bannertool/ctrtool fetched pinned) and uploads the `.cia` + `.cxi` (`trino-3ds-cia`) |
+| `n3ds-emulator` | ubuntu-24.04 | downloads that artifact, runs `emulators setup azahar`, then `xvfb-run … test 3ds --no-build` (self-test + the castle64 hub golden within a tolerance; on failure uploads `tests/golden/3ds/actual/` as `n3ds-golden-actual`); then the same harness on the `.cia`'s NCCH (`TRINO_3DS_APP=…/trino.cxi`) |
 | `web` | ubuntu-24.04 | wasm32 clippy of the Web crates, `build web --release` once, then `test web --no-build`: the browser self-test in Chromium (WebGL2, and WebGPU on SwiftShader's Vulkan), Firefox and WebKit through Playwright, each against `tests/golden/web/` (and a save surviving a reload, audio unlocking on a click, keys reaching the game); then a scaffolded castle64 project built for the Web and smoke-run in Chromium. Uploads `target/web-test/` (every run's console log and frames) and `tests/golden/web/actual/` |
 
 The `n64` job also scaffolds the football template (`ci-football`) and runs

@@ -45,6 +45,17 @@ shipping a 3D game first**, then by cost:
 
 ### P1 — the next quality and reach jump
 
+- **Shipping follow-ups (#61, ADR 0029)** (S–M each).
+  - Minidumps behind a feature (`minidumper` + `crash-handler`: an out-of-process
+    monitor) for crashes that aren't Rust panics (a driver, `abort`).
+  - The input-replay tail in crash reports once #67 records input.
+  - A first real Steam submission: the manual checklist (app 480: unlock, stats, Cloud
+    round trip on two machines, rich presence, the Deck) on a machine with a client.
+  - The `.cia` on a real 3DS (FBI); a `[3ds]` exheader option for apps that need more
+    services or memory.
+  - Epic/GOG backends behind `StoreApi`; itch.io/Newgrounds adapters for the Web.
+  - A Flatpak beside the AppImage; a Windows installer (MSI/Inno) if a store asks.
+
 - **Web target follow-ups (#47, ADR 0019)** (S–M each).
   - ~~Opus/Vorbis sounds in the packs (#53)~~: **done** (ADR 0021): Vorbis `TSN2` in
     pack v2; Solid Eleven's pack 3.07 → 2.18 MB (gzip 1.09 → 0.50 MB).
@@ -264,6 +275,33 @@ shipping a 3D game first**, then by cost:
   time) and bless `tests/perf/` on purpose. Host benches stay as regression guards only.
 
 ---
+
+## Done — shipping games: achievements, stats, presence and cloud on every target; PC packages, Steam, crash reports, the 3DS `.cia` (2026-10-23, branch `feat/61-shipping-pc`, GitHub #61, ADR 0029)
+
+| Item | Evidence |
+|---|---|
+| `trino_core::services` (`no_std`): `AchievementId`/`StatId`, the `TACH` table (`services/achievements` from `assets/achievements.ron`, baked on every target), `AchievementState` (+ `pack`: 3 + ⌈n/8⌉ + 4 × stats bytes), `HostedServices`; `Platform::unlock`, `set_stat`, `achievements`, `restore_achievements`, `set_presence`, `cloud_sync_hint`, … as defaults (no `GAME_API_VERSION` bump) | `round_trip`, `refuses_broken_blobs`, `pack_round_trips_within_the_eeprom_budget`, `unlock_stats_thresholds_and_toasts`, `restore_merges_and_shows_no_popup`, `presence_keeps_arguments_as_text` |
+| Every backend: PC `<save>.achievements` (by API name), Web `localStorage`, N64 and 3DS for the session (the game's save holds the packed state) | `services_text_round_trip_and_platform_defaults`; the `services` self-test step on PC, ares, Azahar, Chromium (WebGL2, WebGPU) and Firefox: the packed state through the real EEPROM / SD save |
+| The overlay: `AchievementToast`, `AchievementList` (2D calls only); castle64 unlocks on coins, stars and stomps, Y opens the list | `toast_queues_slides_and_expires`, `list_rows_fit_and_focus_moves`, `a_coin_unlocks_an_achievement_and_y_opens_the_list`, goldens `services_{list,toast}_{n64,3ds,pc}.png`; the step's pixel probes (a mutation that drops the rows fails it) |
+| `cargo xtask services check\|lock\|list\|export steam` (`--json`): ids, stats, icons, strings in every language, the shipped bit order; Steam's CSV, localization VDF, rich presence, Steam Input manifest, 64 px icons | `services_cli.rs` (4 tests, a fixture with one problem of each kind), `check_reports_each_problem`, `exports_every_language_steam_knows` |
+| Steam backend (`trino-runner-pc` feature `steam`): `StoreSync` over `StoreApi` (merge both ways, forward, `StoreStats` pacing, overlay flag, Steam Input, labels); `steamworks` glue | `start_merges_both_ways_without_popups`, `pump_forwards_unlocks_stats_presence_reset_and_overlay`, `a_store_pad_folds_into_the_frame` (mock); compiled in CI (`--features steam`); a package with `--steam` starts without a client in CI |
+| `cargo xtask package pc` (fat LTO, the version stamped, assets baked in, packaged mode in the runner: the user data folder): AppImage + zip (Linux), zip with the `.exe`'s icon and version info (Windows), `.app` + `.dmg` (macOS); SteamPipe and butler layouts; signing hooks | `package_cli.rs` (the E2E runs in CI's `package` job on all three OSes: smoke run outside the repo, its frame, a deliberate crash's report; Windows reads the version back), `res_holds_icons_group_and_version`, `round_trips_names_modes_and_bytes`, `icns_lists_png_entries_with_big_endian_lengths`, `marker_round_trips_and_defaults`, `user_data_dirs_per_os` |
+| `trino_core::build_info!()`; the starter's About screen | `stamps_the_calling_crate`, `ui_about_*` goldens |
+| Crash reports: panic hook (identity, OS, GPU, backtrace, the last 200 log lines), consent, upload | `a_panic_writes_a_report_with_the_log` (a child process), `uploads_to_a_local_collector`, `consent_round_trips_and_gates_the_upload`; the starter's crash question (`ui_crash_*` goldens, `the_crash_question_comes_first_and_answers`) |
+| `cargo xtask deck check` (controller, glyphs, Steam Input, text ≥ 9 px at 1280 × 800, profile, defaults, launcher, suspend) | `deck_check_passes_on_castle64` |
+| `cargo xtask package 3ds --cia` (+ the `.cxi`): bannertool, makerom, ctrtool pinned | the CI `n3ds` job builds it; `n3ds-emulator` boots the `.cxi` through `test 3ds` (`TRINO_3DS_APP`): the whole self-test and the 3DS goldens pass on the installable title (checked locally too) |
+| `trino.toml` `[pc]` packaging keys, `[steam]`, `[itch]`, `[3ds]` cia keys; `cargo xtask package config [set]` | `shipping_keys_parse_with_defaults_and_checks`, `set_keeps_comments_and_reads_back`, `set_refuses_what_package_would` |
+| Editor: the Project tab (Achievements: the table, fields, stats, presence, checks, lock, Steam export, the overlay preview with a test unlock; Packaging: `trino.toml` keys, Package and Deck check) | `project_tab_edits_achievements_and_packaging_as_text`, `edits_respect_the_lock_and_round_trip`, the layout audit at 960×600 and 1600×940 |
+
+Deviations (ADR 0029): the issue's `[pc.package]` table would collide with `[pc]
+package` (the crate's name), so the packaging keys are in `[pc]`; consoles keep
+achievements in the game's save (a reserved EEPROM region would move the save layout);
+the editor's two pages are one **Project** tab (the dock's bars have no room for two
+more); the "test-unlock in Play mode" is a test unlock in the tab's overlay preview (Play
+runs the game in its own process); Steam is verified against a mock in CI, and by hand
+against app 480 only where a Steam client runs (not on the machine that built this);
+macOS and Windows packages are built and run by CI only; no minidumps (follow-up), no
+input-replay tail (#67 doesn't exist yet), no Flatpak.
 
 ## Done — accessibility on every target: color vision through palettes, captions, text scale and high contrast, motion and flash guards (2026-10-19, branch `feat/60-accessibility`, GitHub #60, ADR 0027)
 

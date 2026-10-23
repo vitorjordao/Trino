@@ -164,6 +164,16 @@ step probes for that.
   renderer's grave for `GRAVE_FRAMES` (2) frames: the GPU may still read them.
 - Boot logs `TRINO_MEM:` like the N64; the `asset groups` step logs `worker=<core>`.
 
+## The installable title (`.cia`, issue #61)
+
+`cargo xtask package 3ds --cia [--selftest]` (`xtask/src/n3ds_cia.rs`): `build_steps`,
+then `bannertool makebanner` and `makerom -f cia` (+ `-f cxi`) with a generated RSF
+(homebrew unique id 0xF8000–0xFFFFF from the name unless `[3ds] unique_id`; 804 MHz, L2,
+`CanAccessCore2`). The same ELF and RomFS as the `.3dsx`: libctru's `romfsInit` mounts
+the title's RomFS. Verify with `TRINO_3DS_APP=$PWD/dist/<name>.cxi cargo xtask test 3ds
+--no-build` (the whole self-test passed on it, 2026-10-23). `ctrtool -i` reads the `.cia`
+back; `ctrtool --contents=<dir>/c x.cia` extracts the NCCH.
+
 ## The shim rule
 
 Unlike the N64 there is no ABI hazard (both sides are ARM EABI-hf), but the

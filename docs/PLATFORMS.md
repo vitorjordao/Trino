@@ -129,6 +129,15 @@ engine's ready-made **Graphics page**, `trino_core::GraphicsOptions` (castle64: 
 The editor has its own guide in the [editor](../.agents/skills/editor/SKILL.md) skill,
 including hooks that let a script or an agent screenshot the window.
 
+### Shipping (ADR 0029)
+
+`cargo xtask package pc` turns a project into what players download: an AppImage, a
+zip with an `.exe` that carries its icon and version, or an `.app`/`.dmg`, each with the
+assets baked in. `trino-runner-pc` then runs in packaged mode (no bake; saves, settings,
+achievements and crash reports in the player's data folder). Achievements live in
+`<save>.achievements`, or Steam with the `steam` feature; crash reports in
+`crashes/`. See [SHIPPING.md](SHIPPING.md).
+
 ## Nintendo 64
 
 **Toolchain:** Docker. `cargo xtask build n64` builds the pinned `trino-n64` image the first
@@ -275,6 +284,13 @@ Things to know:
   screen); the pad reaches both screens. The budget is 128 nodes and 2048 2D draws.
 - Troubleshooting: the [build-3ds](../.agents/skills/build-3ds/SKILL.md) and
   [run-emulator](../.agents/skills/run-emulator/SKILL.md) skills.
+
+### The 3DS as a `.cia`
+
+`cargo xtask package 3ds --cia` makes the installable title (makerom, bannertool, a
+generated RSF) and the same NCCH as a `.cxi`, which Azahar boots:
+`TRINO_3DS_APP=dist/<name>.cxi cargo xtask test 3ds --no-build` runs the self-test on it.
+On consoles, achievements live in the game's own save (`AchievementState::pack_for`).
 
 ## Web (WebGPU / WebGL2)
 

@@ -1,0 +1,6 @@
+api_name,token,name_english,description_english,name_spanish,description_spanish,name_brazilian,description_brazilian,hidden,icon,icon_locked,stat,threshold
+FIRST_COIN,NEW_ACHIEVEMENT_1_0,First coin,Pick up a coin.,Primera moneda,Recoge una moneda.,Primeira moeda,Pegue uma moeda.,0,icons/FIRST_COIN.png,icons/FIRST_COIN_locked.png,,
+COINS_25,NEW_ACHIEVEMENT_1_1,Coin collector,Collect 25 coins.,Coleccionista,Junta 25 monedas.,Colecionador,Junte 25 moedas.,0,icons/COINS_25.png,icons/COINS_25_locked.png,COINS,25
+FIRST_STAR,NEW_ACHIEVEMENT_1_2,Star struck,Win your first star.,Estrellado,Gana tu primera estrella.,Estrelado,Ganhe sua primeira estrela.,0,icons/FIRST_STAR.png,icons/FIRST_STAR_locked.png,,
+ALL_STARS,NEW_ACHIEVEMENT_1_3,Castle master,Collect all 4 stars.,Amo del castillo,Junta las 4 estrellas.,Mestre do castelo,Junte as 4 estrelas.,0,icons/ALL_STARS.png,icons/ALL_STARS_locked.png,STARS,4
+BOAR_STOMP,NEW_ACHIEVEMENT_1_4,Boar stomper,Stomp a boar.,Pisajabalíes,Pisa a un jabalí.,Pisa-javali,Pise em um javali.,1,icons/BOAR_STOMP.png,icons/BOAR_STOMP_locked.png,,

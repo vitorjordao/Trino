@@ -1,0 +1,9 @@
+"lang"
+{
+	"Language"	"brazilian"
+	"Tokens"
+	{
+		"#presence_hub"	"No castelo"
+		"#presence_stage"	"Jogando a fase %stage%"
+	}
+}

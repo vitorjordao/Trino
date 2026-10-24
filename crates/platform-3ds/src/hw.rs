@@ -15,11 +15,14 @@ use trino_core::{Caps, HwTier};
 pub const NO_SPEEDUP_FILE: &str = "/no_speedup";
 
 /// What the boot found (`trino_hw_probe`'s word: bit 0 New 3DS, bit 1
-/// speedup on, bits 8.. the application memory region in MiB).
+/// speedup on, bit 2 no stereo screen (an old 2DS or a New 2DS XL, issue
+/// #63), bits 8.. the application memory region in MiB).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct Probe {
     pub new3ds: bool,
     pub speedup: bool,
+    /// A 3D (stereoscopic) top screen: not on an old 2DS or a New 2DS XL.
+    pub stereo: bool,
     /// The application memory region the app got, MiB.
     pub app_mib: u32,
 }
@@ -29,6 +32,7 @@ impl Probe {
         Probe {
             new3ds: word & 1 != 0,
             speedup: word & 2 != 0,
+            stereo: word & 4 == 0,
             app_mib: word >> 8,
         }
     }
@@ -42,7 +46,10 @@ impl Probe {
     }
 
     pub fn caps(self) -> Caps {
-        Caps::N3DS.with_tier(self.tier())
+        Caps {
+            stereo: self.stereo,
+            ..Caps::N3DS.with_tier(self.tier())
+        }
     }
 }
 
@@ -58,6 +65,7 @@ mod tests {
             Probe {
                 new3ds: true,
                 speedup: true,
+                stereo: true,
                 app_mib: 64
             }
         );
@@ -69,5 +77,13 @@ mod tests {
             assert_eq!((p.tier(), p.caps()), (HwTier::Base, Caps::N3DS));
             assert!(!p.speedup);
         }
+    }
+
+    #[test]
+    fn a_2ds_has_no_stereo_screen() {
+        let p = Probe::decode(4 | (64 << 8));
+        assert!(!p.stereo && !p.caps().stereo);
+        assert_eq!(p.app_mib, 64);
+        assert!(Probe::decode(64 << 8).caps().stereo);
     }
 }

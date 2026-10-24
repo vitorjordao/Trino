@@ -37,7 +37,8 @@ pub struct TrinoBlit {
 
 unsafe extern "C" {
     /// The New 3DS check and its speedup (bit 0 New 3DS, bit 1 speedup
-    /// on, bits 8.. application memory MiB; `crate::hw::Probe`).
+    /// on, bit 2 no stereo screen, bits 8.. application memory MiB;
+    /// `crate::hw::Probe`).
     pub fn trino_hw_probe(want_speedup: u32) -> u32;
     /// The system language (`CFG_Language`: 0 Japanese … 11 traditional
     /// Chinese), or -1 when CFGU can't be read (`crate::language`).
@@ -164,12 +165,22 @@ unsafe extern "C" {
     /// 0 = heap bytes in use (malloc + linear), 1 = both heaps' size.
     pub fn trino_heap_stat(which: u32) -> u32;
 
-    /// Test hook: RGBA8888 of the top screen (`bottom` = 0) or the touch
-    /// screen (1) at (x, y); 0 = unavailable.
-    pub fn trino_debug_pixel(x: u32, y: u32, bottom: u32) -> u32;
-    /// Test hook: print the top screen as `TRINO_FBR:` rows (RGBA5551) and
-    /// a `TRINO_FB_END:` hash line — the N64 dump format.
-    pub fn trino_debug_fb_dump(bottom: u32);
+    /// Test hook: RGBA8888 of the top screen (`screen` = 0, its left eye),
+    /// the touch screen (1) or the top screen's right eye (2) at (x, y);
+    /// 0 = unavailable.
+    pub fn trino_debug_pixel(x: u32, y: u32, screen: u32) -> u32;
+    /// Test hook: print a screen (the numbers of `trino_debug_pixel`) as
+    /// `TRINO_FBR:` rows (RGBA5551) and a `TRINO_FB_END:` hash line — the
+    /// N64 dump format.
+    pub fn trino_debug_fb_dump(screen: u32);
+
+    /// Stereoscopic 3D (issue #63): the 3D slider, 16.16 fixed point 0..1.
+    pub fn trino_stereo_slider() -> u32;
+    /// Whether the frame being drawn shows two eyes (gfxSet3D on a change).
+    pub fn trino_stereo_mode(on: u32);
+    /// Later top-screen draws go to the right eye (1, cleared to
+    /// `rgba8888` first) or the left one (0). 0 = no right-eye target.
+    pub fn trino_stereo_eye(eye: u32, rgba8888: u32) -> u32;
 
     /// Save file on the SD card: returns its size (0 = none, -1 = error),
     /// copying up to `cap` bytes into `dest`.

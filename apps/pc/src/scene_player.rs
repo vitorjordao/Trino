@@ -163,6 +163,9 @@ impl ScenePlayer {
         let env = &self.scene.environment;
         let c = env.clear;
         r.begin_frame(Color::rgb(c[0], c[1], c[2]));
+        // Stereo 3D (the 3DS profile's preview, TRINO_STEREO): before any
+        // top-screen draw.
+        r.set_stereo(env.core_stereo().as_ref());
         let cp = self.pitch.cos();
         let camera = Camera3 {
             eye: self.target

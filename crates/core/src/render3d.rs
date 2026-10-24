@@ -2417,6 +2417,26 @@ impl TnlContext {
         self
     }
 
+    /// This context seen from one eye of a stereo pair ([`crate::stereo`],
+    /// issue #63): the eye `shift` world units right of the camera (left
+    /// when negative), the picture's center moved so that a point
+    /// `convergence` deep keeps its mono pixel (an off-axis frustum, no
+    /// toe-in). Apply it before [`with_local_lights`](Self::with_local_lights),
+    /// which works in view space. A zero shift returns the context as it is.
+    #[inline(never)]
+    pub fn with_eye(mut self, shift: f32, convergence: f32) -> TnlContext {
+        if shift == 0.0 || convergence <= 0.0 {
+            return self;
+        }
+        let v = &self.view.m;
+        let right = Vec3::new(v[0][0], v[0][1], v[0][2]);
+        self.view.m[0][3] -= shift;
+        self.camera.eye += right * shift;
+        self.camera.target += right * shift;
+        self.center.x += shift * self.focal / convergence;
+        self
+    }
+
     /// The water state of [`TnlContext::with_water`].
     pub fn water(&self) -> &crate::water::WaterState {
         &self.water

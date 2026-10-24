@@ -6,7 +6,7 @@ use trino_core::{
     AmbientOcclusion, AoQuality, Camera3, ClipId, Collider, Color, DetailTexture, Fog, Impostor,
     Light, LodLevel, Lods, Mat34, ModelId, ModelParams, NO_CELL, SceneNode, ShadowCast,
     ShadowPlane, ShadowSettings, ShadowTier, Shading, Shape, SoundId, SoundSource, SpriteId,
-    Tags, TexFilter, Vec2, Vec3, VisVolume, Water,
+    StereoPolicy, StereoSettings, Tags, TexFilter, Vec2, Vec3, VisVolume, Water,
 };
 
 pub const CLEAR: Color = Color::rgb(132, 178, 226);
@@ -26,6 +26,8 @@ pub const LIGHT: Light = Light {
 pub const AO: Option<AmbientOcclusion> = None;
 
 pub const SHADOWS: Option<ShadowSettings> = None;
+
+pub const STEREO: Option<StereoSettings> = None;
 
 /// Where blob and planar shadows land (receivers' tops).
 pub const RECEIVERS: &[ShadowPlane] = &[

@@ -481,3 +481,37 @@ fn tiny_font() -> Vec<u8> {
     out.extend_from_slice(&[5, 8, 0, 6]); // w, h, x offset, advance
     out
 }
+
+/// Stereo depth per node (issue #63): written only when set, baked into
+/// TUIL v3, exported as Rust, read back by the runtime.
+#[test]
+fn node_depths_round_trip_through_ron_tuil_and_rust() {
+    let text = r#"(
+        version: 1,
+        name: "hud",
+        root: (
+            children: [
+                (kind: Stack(), depth: 12, children: [(kind: Text, text: "LIVES")]),
+                (kind: Text, text: "FLAT"),
+            ],
+        ),
+    )"#;
+    let def = ScreenDef::from_ron(text).unwrap();
+    assert_eq!(def.root.children[0].depth, 12);
+    let saved = def.to_ron();
+    assert_eq!(
+        saved.matches("depth:").count(),
+        1,
+        "0 is not written: {saved}"
+    );
+    assert_eq!(ScreenDef::from_ron(&saved).unwrap(), def);
+    let flat = Flat::new(&def, &no_sprites);
+    let blob = to_tuil(&flat).unwrap();
+    let screen = UiScreen::parse(&blob).unwrap();
+    let depths: Vec<i8> = (0..screen.len()).map(|i| screen.node(i).depth).collect();
+    assert_eq!(depths, [0, 12, 0, 0]);
+    let code = to_rust(&flat);
+    assert_eq!(code.matches("depth: 12,").count(), 1, "{code}");
+    let out = ScreenDef::from_ron(&text.replace("depth: 12", "depth: 300"));
+    assert!(out.is_err(), "an i8 holds the parallax");
+}

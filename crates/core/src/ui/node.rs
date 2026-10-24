@@ -380,6 +380,11 @@ pub struct UiNode<'a> {
     /// on ([`UiEnv::with_access`](super::UiEnv::with_access)), so a
     /// colored marker, kit or status still reads without its hue.
     pub cvd_icon: Option<CvdIcon>,
+    /// Its stereo depth ([`crate::stereo::LayerDepth`], issue #63): pixels
+    /// of parallax at the full 3D slider, positive out of the screen; 0
+    /// floats with the parent (the screen's plane at the root). Only the
+    /// 3DS top screen (and the PC's preview of it) shows it.
+    pub depth: i8,
 }
 
 /// A [`UiNode::cvd_icon`]: a sprite and its size in pixels (drawn at the
@@ -421,6 +426,7 @@ impl UiNode<'static> {
         enabled_if: "",
         nav: [NONE; 4],
         cvd_icon: None,
+        depth: 0,
     };
 }
 

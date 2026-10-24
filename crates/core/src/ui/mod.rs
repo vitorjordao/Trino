@@ -346,6 +346,9 @@ pub struct Slot {
     /// Where it is drawn (the main screen on one-screen targets).
     pub on: Screen,
     pub flags: u8,
+    /// Its stereo layer depth ([`UiNode::depth`], inherited from the
+    /// parent when the node has none).
+    pub depth: i8,
 }
 
 impl Slot {
@@ -355,6 +358,7 @@ impl Slot {
         parent: NONE,
         on: Screen::Top,
         flags: 0,
+        depth: 0,
     };
 
     pub fn has(&self, flag: u8) -> bool {

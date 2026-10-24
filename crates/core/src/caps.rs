@@ -159,6 +159,11 @@ pub struct Caps {
     /// N64, planar projections on the 3DS, a shadow map on the PC and the
     /// Web.
     pub shadow_tier: crate::shadow::ShadowTier,
+    /// A stereoscopic screen ([`crate::stereo`], issue #63): the 3DS top
+    /// screen draws one picture per eye while the 3D slider is up. False on
+    /// the N64, the PC and the Web (the PC's 3DS profile previews it), and
+    /// on an old 2DS or a New 2DS XL (the 3DS backend clears it at boot).
+    pub stereo: bool,
     /// [`crate::ShadowCast::Mesh`] casters a frame projects below the
     /// Planar tier (the N64's: each is a CPU T&L draw); 255 = every one.
     pub max_planar_shadows: u8,
@@ -222,6 +227,7 @@ impl Caps {
         particle_percent: 100,
         load_budget_us: 4_000,
         shadow_tier: crate::shadow::ShadowTier::Blob,
+        stereo: false,
         max_planar_shadows: 2,
         // The RDP's z: 18 bits, stored compressed (3-bit exponent, 11-bit
         // mantissa).
@@ -270,6 +276,7 @@ impl Caps {
         particle_percent: 100,
         load_budget_us: 6_000,
         shadow_tier: crate::shadow::ShadowTier::Planar,
+        stereo: true,
         max_planar_shadows: 255,
         // DEPTH24_STENCIL8, the 3D in its band (35%) of citro2d's range.
         depth_bits: 22,
@@ -319,6 +326,7 @@ impl Caps {
         particle_percent: 100,
         load_budget_us: 8_000,
         shadow_tier: crate::shadow::ShadowTier::Map,
+        stereo: false,
         max_planar_shadows: 255,
         // Depth32Float: z near 1 keeps 24 bits; two for the rasterizer's
         // interpolation.
@@ -360,6 +368,7 @@ impl Caps {
         particle_percent: 100,
         load_budget_us: 8_000,
         shadow_tier: crate::shadow::ShadowTier::Map,
+        stereo: false,
         max_planar_shadows: 255,
         // Depth32Float: z near 1 keeps 24 bits; two for the rasterizer's
         // interpolation.

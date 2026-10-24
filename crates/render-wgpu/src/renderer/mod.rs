@@ -23,6 +23,8 @@ mod precompile;
 pub use precompile::Hold as PrecompileHold;
 mod shadow;
 mod shadow_map;
+mod stereo;
+pub use stereo::StereoView;
 mod upscale;
 mod water;
 
@@ -465,6 +467,16 @@ pub struct PcRenderer {
     cvd_view: trino_core::CvdMode,
     /// Its pass, built on first use.
     cvd: Option<cvd::CvdPass>,
+    /// Stereoscopic 3D (issue #63, the 3DS profile): this frame's
+    /// recording and eye, the state each eye's replay starts from, how the
+    /// eyes are shown and the simulated 3D slider
+    /// ([`PcRenderer::set_stereo_view`], `TRINO_STEREO`), and the pass that
+    /// keeps the eyes and composes the preview (built on first use).
+    stereo: stereo::Stereo,
+    stereo_start: Box<TopState>,
+    stereo_view: StereoView,
+    stereo_slider: f32,
+    stereo_pass: Option<stereo::StereoPass>,
     /// The brightest full-screen fill this frame (relative luminance ×
     /// alpha × coverage), for the strobe check (issue #60).
     flash_level: f32,
@@ -1515,6 +1527,15 @@ impl PcRenderer {
         {
             r.set_ao_view(view);
         }
+        // And TRINO_STEREO=anaglyph|side-by-side|left|right|flip[:slider]
+        // (the 3DS profile's stereo preview, issue #63).
+        if let Some((view, slider)) = std::env::var("TRINO_STEREO")
+            .ok()
+            .and_then(|v| StereoView::parse_with_slider(&v))
+        {
+            r.set_stereo_view(view);
+            r.set_stereo_slider(slider);
+        }
         // And TRINO_CVD=protanopia|deuteranopia|tritanopia|grayscale.
         if let Some(mode) = std::env::var("TRINO_CVD")
             .ok()
@@ -2264,6 +2285,20 @@ impl PcRenderer {
             vi_dedither: true,
             cvd_view: trino_core::CvdMode::Off,
             cvd: None,
+            stereo: stereo::Stereo::new(),
+            stereo_start: Box::new(TopState {
+                camera: Camera3::default(),
+                light: DEFAULT_LIGHT,
+                locals: LightList::EMPTY,
+                game_filter: TexFilter::Default,
+                wetness: 0.0,
+                water: WaterState::NONE,
+                shadow_game: None,
+                shadows: ShadowFrame::OFF,
+            }),
+            stereo_view: StereoView::Off,
+            stereo_slider: 1.0,
+            stereo_pass: None,
             flash_level: 0.0,
             flash_monitor: trino_core::FlashMonitor::new(),
             flash_frames: 0,
@@ -2554,6 +2589,15 @@ impl PcRenderer {
                 jobs.push(J::Cvd(m));
             }
         }
+        // The stereo preview's composites (the 3DS profile, issue #63).
+        if self.caps.stereo {
+            for view in [StereoView::Anaglyph, StereoView::SideBySide] {
+                let wanted = all || self.stereo_view == view;
+                if wanted && !self.stereo_pass.as_ref().is_some_and(|p| p.has(view)) {
+                    jobs.push(J::Stereo(view));
+                }
+            }
+        }
         if self.gpu_tnl_active() {
             match &self.gpu {
                 None => jobs.push(J::GpuTnl),
@@ -2576,6 +2620,11 @@ impl PcRenderer {
             .get_or_insert_with(|| cvd::CvdPass::new(&self.device))
             .layout()
             .clone();
+        let stereo_layout = self
+            .stereo_pass
+            .get_or_insert_with(|| stereo::StereoPass::new(&self.device))
+            .layout()
+            .clone();
         precompile::Inputs {
             entry: self.pipe_entry.clone(),
             hold: self.warm_hold.take(),
@@ -2586,6 +2635,7 @@ impl PcRenderer {
             gpu_ms: want_ms,
             gpu_ms_source: self.gpu.as_ref().map(|g| g.ms_source()),
             cvd_layout,
+            stereo_layout,
             water_groups: self.water.groups.clone(),
         }
     }
@@ -2626,6 +2676,10 @@ impl PcRenderer {
                 .cvd
                 .get_or_insert_with(|| cvd::CvdPass::new(&self.device))
                 .install(mode, p),
+            B::Stereo(view, p) => self
+                .stereo_pass
+                .get_or_insert_with(|| stereo::StereoPass::new(&self.device))
+                .install(view, p),
             B::GpuTnl(g) => {
                 self.gpu.get_or_insert(*g);
             }
@@ -3133,6 +3187,167 @@ impl PcRenderer {
 
     pub fn vi_dedither(&self) -> bool {
         self.vi_dedither
+    }
+
+    /// How a stereo frame shows on this window (the 3DS profile only,
+    /// issue #63): a preview mode, or `Off` (the simulated 3D slider down:
+    /// frames are mono). A review tool for the editor, `cargo xtask ui shot
+    /// --stereo` and `TRINO_STEREO`; the eyes themselves are the console's.
+    pub fn set_stereo_view(&mut self, view: StereoView) {
+        self.stereo_view = view;
+    }
+
+    pub fn stereo_view(&self) -> StereoView {
+        self.stereo_view
+    }
+
+    /// The simulated 3D slider (0..=1, 1 by default) under a preview mode.
+    pub fn set_stereo_slider(&mut self, slider: f32) {
+        self.stereo_slider = if slider.is_nan() {
+            0.0
+        } else {
+            slider.clamp(0.0, 1.0)
+        };
+    }
+
+    pub fn stereo_slider(&self) -> f32 {
+        self.stereo_slider
+    }
+
+    /// The last frame's eye (RGBA8, the main target's size): `None` unless
+    /// it drew two.
+    pub fn read_eye(&self, eye: trino_core::Eye) -> Option<Vec<u8>> {
+        if self.last_stats.stereo.eyes != 2 || eye == trino_core::Eye::Mono {
+            return None;
+        }
+        let tex = self.stereo_pass.as_ref()?.eye_texture(eye)?;
+        self.try_read_texture(tex, self.internal_size)
+    }
+
+    /// The stereo eye the T&L projects for now: its shift and the
+    /// convergence (`(0, _)` outside a replay).
+    fn eye_view(&self) -> (f32, f32) {
+        let f = &self.stereo.frame;
+        (f.eye_shift(self.stereo.eye), f.convergence)
+    }
+
+    /// The recording, when this top-screen call is to be recorded (a stereo
+    /// frame before its replay); else marks the top screen drawn.
+    fn recording(&mut self) -> Option<&mut stereo::Recording> {
+        if self.screen != 0 {
+            return None;
+        }
+        if self.stereo.recording {
+            return Some(&mut self.stereo.rec);
+        }
+        self.stereo.top_drawn = true;
+        None
+    }
+
+    /// Like [`recording`](Self::recording) for a state change.
+    fn recording_state(&mut self) -> Option<&mut stereo::Recording> {
+        (self.screen == 0 && self.stereo.recording).then_some(&mut self.stereo.rec)
+    }
+
+    fn top_state(&self) -> TopState {
+        TopState {
+            camera: self.camera,
+            light: self.light,
+            locals: self.locals,
+            game_filter: self.game_filter,
+            wetness: self.wetness,
+            water: self.water_state,
+            shadow_game: self.shadow_game,
+            shadows: self.shadows,
+        }
+    }
+
+    /// Back to `start`, with empty draw lists: one eye's replay begins.
+    fn restart_top(&mut self, start: &TopState) {
+        self.camera = start.camera;
+        self.light = start.light;
+        self.locals = start.locals;
+        self.game_filter = start.game_filter;
+        self.tex_filter = self.resolve_filter(start.game_filter);
+        self.wetness = start.wetness;
+        self.water_state = start.water;
+        self.shadow_game = start.shadow_game;
+        let stats = self.shadows.stats;
+        self.shadows = start.shadows;
+        self.shadows.stats = stats;
+        self.clear_top_lists();
+        self.tnl_ctx = None;
+    }
+
+    /// The top screen's recorded draws (what `draw_commands` renders).
+    fn clear_top_lists(&mut self) {
+        self.commands.clear();
+        self.tri_verts.clear();
+        self.pending_tris.clear();
+        self.pending_tex.clear();
+        self.pending_surf.clear();
+        self.light_sets.clear();
+        self.water_sets.clear();
+        self.pending_shadow.clear();
+        self.map_casters.clear();
+        self.cpu_jobs.clear();
+        self.job_ctxs.clear();
+    }
+
+    /// Draw the recorded top screen once per eye, as the 3DS does: each
+    /// eye replayed from the state recording began with into the main
+    /// target, kept in its texture, then the preview composed into the
+    /// main target. Leaves the state the recording ended with, mono.
+    fn replay_eyes(&mut self) {
+        self.stereo.recording = false;
+        let rec = std::mem::take(&mut self.stereo.rec);
+        let start = *self.stereo_start;
+        let size = self.internal_size;
+        let (mut cmds, mut tris) = (0, 0);
+        for eye in [trino_core::Eye::Left, trino_core::Eye::Right] {
+            self.restart_top(&start);
+            self.stereo.eye = eye;
+            self.stereo.depth = trino_core::LayerDepth::SCREEN;
+            trino_core::stereo::replay(self, &rec.cmds, &rec.data());
+            self.flush_model_batch();
+            cmds += self.commands.len() as u32;
+            tris += (self.tri_verts.len() / 3) as u32;
+            self.draw_commands(false);
+            let mut encoder = self
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+            self.stereo_pass
+                .get_or_insert_with(|| stereo::StereoPass::new(&self.device))
+                .store_eye(&self.device, &mut encoder, &self.offscreen_tex, size, eye);
+            self.queue.submit([encoder.finish()]);
+        }
+        let view = self.stereo_view;
+        if view.composes() {
+            self.warm_wait(precompile::JobKind::Stereo(view));
+        }
+        {
+            let _pipes = pipes::scope(&self.pipe_entry);
+            let mut encoder = self
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+            self.stereo_pass
+                .get_or_insert_with(|| stereo::StereoPass::new(&self.device))
+                .compose(
+                    &self.device,
+                    &mut encoder,
+                    &self.offscreen_tex,
+                    &self.offscreen_view,
+                    size,
+                    view,
+                    self.flash_frames as u32,
+                );
+            self.queue.submit([encoder.finish()]);
+        }
+        self.clear_top_lists();
+        self.tnl_ctx = None;
+        (self.main_cmds, self.main_tris) = (cmds, tris);
+        self.stereo.eye = trino_core::Eye::Mono;
+        self.stereo.rec = rec;
     }
 
     /// What the screen-space AO shows ([`AoView`]): as the game sets it
@@ -3935,7 +4150,15 @@ impl PcRenderer {
             return;
         }
         let screen = self.current_screen_size();
-        let ctx = tnl_context(&mut self.tnl_ctx, &self.camera, &self.light, screen, &[]);
+        let eye = self.eye_view();
+        let ctx = tnl_context(
+            &mut self.tnl_ctx,
+            &self.camera,
+            &self.light,
+            screen,
+            &[],
+            eye,
+        );
         let Some((tmdl, layout)) = self.meshes.get(&model.0) else {
             return;
         };
@@ -4965,7 +5188,15 @@ impl PcRenderer {
             );
         }
         let screen = self.current_screen_size();
-        let ctx = tnl_context(&mut self.tnl_ctx, &self.camera, &self.light, screen, &[]);
+        let eye = self.eye_view();
+        let ctx = tnl_context(
+            &mut self.tnl_ctx,
+            &self.camera,
+            &self.light,
+            screen,
+            &[],
+            eye,
+        );
         let _pipes = pipes::scope(&self.pipe_entry);
         let gpu = self.gpu.get_or_insert_with(|| {
             gpu_tnl::GpuTnl::new(&self.device, [&self.globals_bgl, &self.tex3d_bgl])
@@ -5195,22 +5426,48 @@ fn texture_budget(r: TextureBudget<'_>, t: SpriteId, tiled: bool) {
     }
 }
 
+/// The renderer state a stereo frame's top-screen calls change: what each
+/// eye's replay starts from (issue #63).
+#[derive(Clone, Copy)]
+struct TopState {
+    camera: Camera3,
+    light: Light,
+    locals: LightList,
+    game_filter: TexFilter,
+    wetness: f32,
+    water: WaterState,
+    shadow_game: Option<ShadowSettings>,
+    shadows: ShadowFrame,
+}
+
 /// The T&L constants for `camera`, `light`, `screen` and the per-vertex
 /// local lights (empty on the per-pixel tier), cached in `slot` with the
 /// lights they were built for (rebuilt only when one of them changed).
+///
+/// `eye` is a stereo eye's shift and convergence (issue #63; `(0, _)` the
+/// mono picture): the context projects off axis for it, and the cache knows
+/// it by the eye's camera.
 fn tnl_context(
     slot: &mut Option<(TnlContext, LightList)>,
     camera: &Camera3,
     light: &Light,
     screen: Vec2,
     locals: &[LocalLight],
+    eye: (f32, f32),
 ) -> TnlContext {
+    let seen = if eye.0 == 0.0 {
+        *camera
+    } else {
+        trino_core::stereo::eye_camera(camera, eye.0)
+    };
     match slot {
-        Some((c, l)) if c.matches(camera, light, screen) && l.as_slice() == locals => *c,
+        Some((c, l)) if c.matches(&seen, light, screen) && l.as_slice() == locals => *c,
         _ => {
             let mut list = LightList::EMPTY;
             list.set(locals, trino_core::MAX_LOCAL_LIGHTS as u8);
-            let c = TnlContext::new(camera, light, screen).with_local_lights(locals);
+            let c = TnlContext::new(camera, light, screen)
+                .with_eye(eye.0, eye.1)
+                .with_local_lights(locals);
             *slot = Some((c, list));
             c
         }
@@ -5225,6 +5482,7 @@ impl Renderer for PcRenderer {
     fn begin_frame(&mut self, clear: Color) {
         self.warm_poll();
         self.clear = clear;
+        self.stereo.begin();
         self.screen = 0;
         self.main_cmds = 0;
         self.main_tris = 0;
@@ -5257,6 +5515,15 @@ impl Renderer for PcRenderer {
     }
 
     fn draw_sprite(&mut self, sprite: SpriteId, pos: Vec2, params: &SpriteParams) {
+        if let Some(r) = self.recording() {
+            r.cmds.push(trino_core::stereo::StereoCmd::Sprite {
+                sprite,
+                pos,
+                params: *params,
+            });
+            return;
+        }
+        let pos = Vec2::new(pos.x + self.stereo.shift_2d(), pos.y);
         self.flush_model_batch();
         let Some(entry) = self.sprites.get(&sprite.0) else {
             // Unknown handle or not loaded (its group is not ready): skip,
@@ -5303,6 +5570,15 @@ impl Renderer for PcRenderer {
     }
 
     fn fill_rect(&mut self, rect: trino_core::Rect, color: Color) {
+        if let Some(r) = self.recording() {
+            r.cmds
+                .push(trino_core::stereo::StereoCmd::Rect { rect, color });
+            return;
+        }
+        let rect = trino_core::Rect {
+            pos: Vec2::new(rect.pos.x + self.stereo.shift_2d(), rect.pos.y),
+            size: rect.size,
+        };
         // A built-in 1×1 white texel through the sprite path.
         if !self.sprites.contains_key(&FILL_SPRITE.0) {
             self.upload_sprite(FILL_SPRITE, 1, 1, &[255, 255, 255, 255]);
@@ -5333,23 +5609,40 @@ impl Renderer for PcRenderer {
     }
 
     fn set_camera(&mut self, camera: &Camera3) {
+        if let Some(r) = self.recording_state() {
+            r.cmds.push(trino_core::stereo::StereoCmd::Camera(*camera));
+            return;
+        }
         self.flush_model_batch();
         self.camera = *camera;
     }
 
     fn set_light(&mut self, light: &Light) {
+        if let Some(r) = self.recording_state() {
+            r.cmds.push(trino_core::stereo::StereoCmd::Light(*light));
+            return;
+        }
         // Lighting is resolved into vertex colors at tessellation time, so
         // a change needs no batch flush.
         self.light = *light;
     }
 
     fn set_local_lights(&mut self, lights: &[LocalLight]) {
+        if let Some(r) = self.recording_state() {
+            let s = r.lights(lights);
+            r.cmds.push(trino_core::stereo::StereoCmd::LocalLights(s));
+            return;
+        }
         // Per vertex they are resolved at tessellation; per pixel each lit
         // vertex names its light set. No flush either way.
         self.locals.set(lights, self.caps.max_local_lights);
     }
 
     fn set_texture_filter(&mut self, filter: TexFilter) {
+        if let Some(r) = self.recording_state() {
+            r.cmds.push(trino_core::stereo::StereoCmd::Filter(filter));
+            return;
+        }
         self.game_filter = filter;
         self.tex_filter = self.resolve_filter(filter);
     }
@@ -5363,19 +5656,39 @@ impl Renderer for PcRenderer {
     }
 
     fn set_wetness(&mut self, wetness: f32) {
+        if let Some(r) = self.recording_state() {
+            r.cmds.push(trino_core::stereo::StereoCmd::Wetness(wetness));
+            return;
+        }
         self.wetness = wetness.clamp(0.0, 1.0);
     }
 
     fn set_shadows(&mut self, shadows: Option<&ShadowSettings>) {
+        if let Some(r) = self.recording_state() {
+            r.cmds
+                .push(trino_core::stereo::StereoCmd::Shadows(shadows.copied()));
+            return;
+        }
         self.shadow_game = shadows.copied();
         self.apply_shadow_view();
     }
 
     fn set_shadow_receivers(&mut self, receivers: &[ShadowPlane]) {
+        if let Some(r) = self.recording_state() {
+            let s = r.planes(receivers);
+            r.cmds.push(trino_core::stereo::StereoCmd::Receivers(s));
+            return;
+        }
         self.shadows.set_receivers(receivers);
     }
 
     fn set_water(&mut self, time: f32, ripples: &[Ripple]) {
+        if let Some(r) = self.recording_state() {
+            let s = r.ripples(ripples);
+            r.cmds
+                .push(trino_core::stereo::StereoCmd::Water { time, ripples: s });
+            return;
+        }
         let cap = self.caps.max_ripples;
         if self.strict {
             let live = ripples.iter().filter(|r| r.alive()).count();
@@ -5407,9 +5720,18 @@ impl Renderer for PcRenderer {
         &mut self,
         model: ModelId,
         matrix: &Mat34,
-        _material: Material,
+        material: Material,
         params: &ModelParams,
     ) {
+        if let Some(r) = self.recording() {
+            r.cmds.push(trino_core::stereo::StereoCmd::Model {
+                model,
+                matrix: *matrix,
+                material,
+                params: *params,
+            });
+            return;
+        }
         trino_core::zone!("draw");
         if self.gpu.is_none() && self.gpu_tnl_active() {
             self.warm_wait(precompile::JobKind::GpuTnl);
@@ -5471,8 +5793,16 @@ impl Renderer for PcRenderer {
             // Water (ADR 0015): displaced and shaded by the core's water
             // T&L; the per-pixel tier also takes each vertex's surface.
             let before = self.pending_tris.len();
-            let ctx = tnl_context(&mut self.tnl_ctx, &self.camera, &self.light, screen, &[])
-                .with_water(&self.water_state);
+            let eye = self.eye_view();
+            let ctx = tnl_context(
+                &mut self.tnl_ctx,
+                &self.camera,
+                &self.light,
+                screen,
+                &[],
+                eye,
+            )
+            .with_water(&self.water_state);
             let set = self.water_sets.index(water::SetKey {
                 water: w,
                 state: self.water_state,
@@ -5552,6 +5882,7 @@ impl Renderer for PcRenderer {
         }
         let before = self.pending_tris.len();
         let per_pixel = self.caps.light_tier == LightTier::PerPixel;
+        let eye = self.eye_view();
         let ctx = tnl_context(
             &mut self.tnl_ctx,
             &self.camera,
@@ -5562,6 +5893,7 @@ impl Renderer for PcRenderer {
             } else {
                 self.locals.as_slice()
             },
+            eye,
         );
         // Only the draws a local light reaches (or glossy or wet ones) go
         // through the lit pipeline, and each names the lights that reach it:
@@ -5723,7 +6055,7 @@ impl Renderer for PcRenderer {
         if !self.meshes.contains_key(&model.0) {
             return;
         }
-        if !self.gpu_tnl_active() {
+        if !self.gpu_tnl_active() || (self.screen == 0 && self.stereo.recording) {
             // The trait's loop, counted (the CPU path and the console
             // profiles).
             for i in instances {
@@ -5747,7 +6079,15 @@ impl Renderer for PcRenderer {
             };
             let mesh = Mesh::from_layout(tmdl, layout);
             let screen = self.current_screen_size();
-            let ctx = tnl_context(&mut self.tnl_ctx, &self.camera, &self.light, screen, &[]);
+            let eye = self.eye_view();
+            let ctx = tnl_context(
+                &mut self.tnl_ctx,
+                &self.camera,
+                &self.light,
+                screen,
+                &[],
+                eye,
+            );
             let per_pixel = self.caps.light_tier == LightTier::PerPixel;
             for i in instances {
                 let p = i.params(params, palettes);
@@ -5800,6 +6140,14 @@ impl Renderer for PcRenderer {
         pos: trino_core::Vec3,
         params: &trino_core::BillboardParams,
     ) {
+        if let Some(r) = self.recording() {
+            r.cmds.push(trino_core::stereo::StereoCmd::Billboard {
+                sprite,
+                pos,
+                params: *params,
+            });
+            return;
+        }
         let Some(entry) = self.sprites.get(&sprite.0) else {
             self.frame_stats.not_loaded += 1;
             return;
@@ -5822,7 +6170,15 @@ impl Renderer for PcRenderer {
             LightTier::PerPixel => &[],
             LightTier::PerVertex => self.locals.as_slice(),
         };
-        let ctx = tnl_context(&mut self.tnl_ctx, &self.camera, &self.light, screen, locals);
+        let eye = self.eye_view();
+        let ctx = tnl_context(
+            &mut self.tnl_ctx,
+            &self.camera,
+            &self.light,
+            screen,
+            locals,
+            eye,
+        );
         let Some(tris) = trino_core::render3d::billboard_with(&ctx, pos, params, uv) else {
             return;
         };
@@ -5855,13 +6211,17 @@ impl Renderer for PcRenderer {
     fn set_screen(&mut self, screen: u8) {
         // Main screen first, then the second (once per frame).
         if screen == 1 && self.screen == 0 && self.second.is_some() {
-            self.flush_model_batch();
-            let (cmds, tris) = (
-                self.commands.len() as u32,
-                (self.tri_verts.len() / 3) as u32,
-            );
-            self.draw_commands(false);
-            (self.main_cmds, self.main_tris) = (cmds, tris);
+            if self.stereo.recording {
+                self.replay_eyes();
+            } else {
+                self.flush_model_batch();
+                let (cmds, tris) = (
+                    self.commands.len() as u32,
+                    (self.tri_verts.len() / 3) as u32,
+                );
+                self.draw_commands(false);
+                (self.main_cmds, self.main_tris) = (cmds, tris);
+            }
             self.screen = 1;
         }
     }
@@ -5945,8 +6305,15 @@ impl Renderer for PcRenderer {
     }
 
     fn end_frame(&mut self) {
+        // A stereo frame still on the top screen: both eyes now, then only
+        // the second screen is left to render.
+        let top_done = self.stereo.recording;
+        if top_done {
+            self.replay_eyes();
+        }
         self.flush_model_batch();
         self.frame_stats.shadows = self.shadows.stats;
+        self.frame_stats.stereo = self.stereo.frame.stats(self.stereo.rec.cmds.len());
         self.frame_stats.tris =
             self.main_tris + (self.tri_verts.len() / 3) as u32 + self.frame_stats.tnl.pc_gpu_tris;
         self.last_stats = self.frame_stats;
@@ -5972,6 +6339,9 @@ impl Renderer for PcRenderer {
         }
         let t0 = Instant::now();
         trino_core::zone!("end");
+        if top_done {
+            self.screen = 1;
+        }
         self.flush();
         self.times.submit_us += micros(t0);
         let built = self
@@ -5984,6 +6354,16 @@ impl Renderer for PcRenderer {
     }
 
     fn draw_text(&mut self, font: FontId, pos: Vec2, text: &str, params: &TextParams) {
+        if let Some(r) = self.recording_state() {
+            let s = r.text(text);
+            r.cmds.push(trino_core::stereo::StereoCmd::Text {
+                font,
+                pos,
+                text: s,
+                params: *params,
+            });
+            return;
+        }
         let Some(entry) = self.fonts.get(&font.0).cloned() else {
             self.frame_stats.not_loaded += 1;
             return;
@@ -6017,6 +6397,70 @@ impl Renderer for PcRenderer {
         // None where the backend can't wait for the GPU (a browser's
         // WebGPU): the self-test reports its probes as skipped there.
         let rgba = self.try_read_offscreen()?;
+        let at = ((y * w + x) * 4) as usize;
+        Some(Color::rgba(
+            rgba[at],
+            rgba[at + 1],
+            rgba[at + 2],
+            rgba[at + 3],
+        ))
+    }
+
+    fn set_stereo(&mut self, settings: Option<&trino_core::StereoSettings>) {
+        use trino_core::stereo::{StereoFrame, StereoMono};
+        if self.screen != 0 || self.stereo.recording {
+            return;
+        }
+        // The simulated slider is up only under a preview mode.
+        let hw = match self.stereo_view {
+            StereoView::Off => 0.0,
+            _ => self.stereo_slider,
+        };
+        // The PC's frame time is not the console's: the preview never drops
+        // an eye for the budget.
+        let mut f = StereoFrame::resolve(settings, self.caps.stereo, hw, true);
+        if f.is_stereo() && self.stereo.top_drawn {
+            if self.strict {
+                panic!(
+                    "strict mode: set_stereo came after this frame's first top-screen \
+                     draw, so the frame stays mono. Call it right after begin_frame \
+                     (issue #63)."
+                );
+            }
+            f = StereoFrame::mono(StereoMono::Late);
+        }
+        self.stereo.frame = f;
+        if f.is_stereo() {
+            self.flush_model_batch();
+            self.stereo.recording = true;
+            *self.stereo_start = self.top_state();
+        }
+    }
+
+    fn stereo_eye(&self) -> trino_core::Eye {
+        self.stereo.eye
+    }
+
+    fn set_layer_depth(&mut self, depth: trino_core::LayerDepth) {
+        if let Some(r) = self.recording_state() {
+            r.cmds.push(trino_core::stereo::StereoCmd::Depth(depth));
+            return;
+        }
+        self.stereo.depth = depth;
+    }
+
+    fn read_eye_pixel(&mut self, eye: trino_core::Eye, x: u32, y: u32) -> Option<Color> {
+        if eye == trino_core::Eye::Mono || self.last_stats.stereo.eyes != 2 {
+            return match eye {
+                trino_core::Eye::Right => None,
+                _ => self.read_pixel(x, y),
+            };
+        }
+        let (w, h) = self.internal_size;
+        if x >= w || y >= h {
+            return None;
+        }
+        let rgba = self.read_eye(eye)?;
         let at = ((y * w + x) * 4) as usize;
         Some(Color::rgba(
             rgba[at],

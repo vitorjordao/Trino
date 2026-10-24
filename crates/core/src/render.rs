@@ -198,6 +198,10 @@ pub struct FrameStats {
     pub not_loaded: u32,
     /// The shadows drawn ([`crate::shadow::ShadowStats`]).
     pub shadows: crate::shadow::ShadowStats,
+    /// How many pictures the top screen got and why
+    /// ([`crate::stereo::StereoStats`], issue #63). The other counters sum
+    /// both eyes' work.
+    pub stereo: crate::stereo::StereoStats,
 }
 
 /// How a 3D surface reacts to light. Evaluated per vertex by the engine's
@@ -585,6 +589,29 @@ pub trait Renderer {
     /// before the draws that cast.
     fn set_shadow_receivers(&mut self, _receivers: &[crate::shadow::ShadowPlane]) {}
 
+    /// Stereoscopic 3D for this frame ([`crate::stereo`], issue #63): on a
+    /// target with a stereo screen ([`Caps::stereo`]: the 3DS top screen,
+    /// the PC's 3DS profile as a preview) the top screen is drawn once per
+    /// eye while the 3D slider is up. `None` (or `enabled: false`) is one
+    /// picture. **Cleared at `begin_frame`**, like the shadows: call it
+    /// every frame **before the first top-screen draw** (a later call keeps
+    /// the frame mono, [`crate::stereo::StereoMono::Late`]). A no-op on
+    /// every other target (N64, PC native, the Web).
+    fn set_stereo(&mut self, _stereo: Option<&crate::stereo::StereoSettings>) {}
+
+    /// The eye being drawn. Games draw a frame once (the backend replays it
+    /// per eye), so game code always sees [`crate::stereo::Eye::Mono`];
+    /// a backend's own code sees `Left` / `Right` while it replays.
+    fn stereo_eye(&self) -> crate::stereo::Eye {
+        crate::stereo::Eye::Mono
+    }
+
+    /// The screen-plane depth of the 2D drawn next (`draw_sprite`,
+    /// `fill_rect`, `draw_text`; persists until changed, reset to the
+    /// screen's plane at `begin_frame`): a HUD that floats over the scene
+    /// in stereo ([`crate::stereo::LayerDepth`]). A no-op without stereo.
+    fn set_layer_depth(&mut self, _depth: crate::stereo::LayerDepth) {}
+
     /// The multiplier of LOD start distances this renderer draws with
     /// ([`crate::QualitySettings::lod_bias`]): `draw_nodes_in` and
     /// `EntityStore::draw_in` pick their levels with it; code that picks
@@ -826,6 +853,18 @@ pub trait Renderer {
         match screen {
             Screen::Top => self.read_pixel(x, y),
             Screen::Bottom => None,
+        }
+    }
+
+    /// **Test hook**, like [`read_pixel`](Self::read_pixel) for one eye of
+    /// the last top-screen picture: `Mono` and `Left` read the top screen
+    /// (a mono frame's only picture is the left eye's), `Right` the right
+    /// eye's, `None` where the last frame had one picture or the target
+    /// can't read it back.
+    fn read_eye_pixel(&mut self, eye: crate::stereo::Eye, x: u32, y: u32) -> Option<Color> {
+        match eye {
+            crate::stereo::Eye::Right => None,
+            _ => self.read_pixel(x, y),
         }
     }
 }

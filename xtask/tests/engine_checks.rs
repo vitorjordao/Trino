@@ -326,6 +326,37 @@ fn the_shadows_step_passes_at_every_tier() {
     }
 }
 
+/// The `stereo` step (issue #63) reads both eyes on the PC's 3DS profile
+/// and finds one picture, the mono one, on the profiles without a stereo
+/// screen. The stats name each frame's eyes and why.
+#[test]
+fn the_stereo_step_reads_both_eyes_on_the_3ds_profile() {
+    use castle64::selftest::StereoProbe;
+    use trino_core::{Renderer, StereoMono};
+    let save_dir = tempfile::tempdir().unwrap();
+    for (profile, want) in [
+        (SimProfile::N3ds, StereoProbe::Eyes),
+        (SimProfile::N64, StereoProbe::Mono),
+        (SimProfile::Native, StereoProbe::Mono),
+    ] {
+        let Some((mut renderer, _)) = pc_target(profile, save_dir.path()) else {
+            return;
+        };
+        assert_eq!(
+            castle64::selftest::stereo(&mut renderer),
+            Ok(want),
+            "{profile:?}"
+        );
+        // The step's last frame is the slider-at-0 one.
+        let s = renderer.stats().stereo;
+        let why = match want {
+            StereoProbe::Eyes => StereoMono::Slider,
+            _ => StereoMono::NoScreen,
+        };
+        assert_eq!((s.eyes, s.mono), (1, why), "{profile:?}");
+    }
+}
+
 /// Evidence for issue #51: the `instancing` step's frame on the native
 /// profile as separate draws, as one call, and their difference (black =
 /// identical), side by side in `target/evidence/instancing/instancing.png`.

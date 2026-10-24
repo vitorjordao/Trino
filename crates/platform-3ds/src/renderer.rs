@@ -14,6 +14,7 @@ use trino_core::render3d::{
     gpu_water, painter_index, painter_key,
 };
 use trino_core::shadow::{self as sh, BLOB_TEXTURE_SIZE, PlanarDraw, SHADOW_Z_STEPS, ShadowPlan};
+use trino_core::stereo::{Eye, LayerDepth, StereoCmd, StereoFrame, StereoMono, StereoSettings};
 use trino_core::text::{BitmapFont, GlyphIndex};
 use trino_core::{
     BillboardParams, Caps, Color, FontId, FrameStats, LightList, LocalLight, Mat34, Material,
@@ -22,6 +23,7 @@ use trino_core::{
 };
 
 use crate::ffi;
+use crate::stereo::Stereo;
 
 /// The top screen: the game's picture (what the T&L projects to there).
 const SCREEN: Vec2 = Vec2::new(400.0, 240.0);
@@ -138,6 +140,23 @@ pub struct N3dsRenderer {
     pending_shadow: Vec<(ScreenTri, bool)>,
     pending_gpu_shadow: Vec<GpuShadow>,
     blob_softness: Option<u8>,
+    /// Stereoscopic 3D (issue #63): the recording of a stereo frame's top
+    /// screen, and the state its replays start from (boxed: the shadows'
+    /// receivers are ~1.3 KB).
+    stereo: Stereo,
+    stereo_start: Box<TopState>,
+}
+
+/// The renderer state a stereo frame's top-screen calls change: what each
+/// eye's replay starts from.
+#[derive(Clone, Copy)]
+struct TopState {
+    camera: Camera3,
+    light: Light,
+    locals: LightList,
+    tex_filter: TexFilter,
+    water: WaterState,
+    shadows: ShadowFrame,
 }
 
 /// A planar shadow the GPU T&L draws: the caster's mesh flattened by its
@@ -218,6 +237,15 @@ impl N3dsRenderer {
             pending_shadow: Vec::new(),
             pending_gpu_shadow: Vec::new(),
             blob_softness: None,
+            stereo: Stereo::new(),
+            stereo_start: Box::new(TopState {
+                camera: Camera3::default(),
+                light: DEFAULT_LIGHT,
+                locals: LightList::EMPTY,
+                tex_filter: TexFilter::Bilinear,
+                water: WaterState::NONE,
+                shadows: ShadowFrame::OFF,
+            }),
         }
     }
 
@@ -282,8 +310,76 @@ impl N3dsRenderer {
     /// Rebuild the T&L constants for the camera, light, local lights and
     /// current screen.
     fn rebuild_tnl(&mut self) {
+        let f = &self.stereo.frame;
         self.tnl_ctx = TnlContext::new(&self.camera, &self.light, self.screen_px())
+            .with_eye(f.eye_shift(self.stereo.eye), f.convergence)
             .with_local_lights(self.locals.as_slice());
+    }
+
+    /// The recording, when this top-screen call is to be recorded (a
+    /// stereo frame before its replay); else marks the top screen drawn.
+    fn recording(&mut self) -> Option<&mut crate::stereo::Recording> {
+        if self.screen != 0 {
+            return None;
+        }
+        if self.stereo.recording {
+            return Some(&mut self.stereo.rec);
+        }
+        self.stereo.top_drawn = true;
+        None
+    }
+
+    /// Like [`recording`](Self::recording) for a state change (no draw).
+    fn recording_state(&mut self) -> Option<&mut crate::stereo::Recording> {
+        (self.screen == 0 && self.stereo.recording).then_some(&mut self.stereo.rec)
+    }
+
+    /// The state the top screen's replays start from.
+    fn top_state(&self) -> TopState {
+        TopState {
+            camera: self.camera,
+            light: self.light,
+            locals: self.locals,
+            tex_filter: self.tex_filter,
+            water: self.water_state,
+            shadows: *self.shadows,
+        }
+    }
+
+    /// Draw the recorded top screen once per eye: the left eye into the top
+    /// screen's target, the right one into its own (the shim clears it),
+    /// each from the state recording began with. The renderer is left in
+    /// the state the recording ended with, seen by no eye.
+    fn replay_eyes(&mut self) {
+        self.stereo.recording = false;
+        let rec = core::mem::take(&mut self.stereo.rec);
+        let start = *self.stereo_start;
+        for eye in [Eye::Left, Eye::Right] {
+            if eye == Eye::Right
+                && unsafe { ffi::trino_stereo_eye(1, pack_color(self.stereo.clear)) } == 0
+            {
+                // No VRAM for the right eye: this frame stays one picture.
+                self.stereo.frame = StereoFrame::mono(StereoMono::NoScreen);
+                break;
+            }
+            self.camera = start.camera;
+            self.light = start.light;
+            self.locals = start.locals;
+            self.tex_filter = start.tex_filter;
+            self.water_state = start.water;
+            let stats = self.shadows.stats;
+            *self.shadows = start.shadows;
+            self.shadows.stats = stats;
+            self.sprite_depth = SPRITE_DEPTH_BG;
+            self.stereo.depth = LayerDepth::SCREEN;
+            self.stereo.eye = eye;
+            self.rebuild_tnl();
+            trino_core::stereo::replay(self, &rec.cmds, &rec.data());
+            self.flush_model_batch();
+        }
+        self.stereo.eye = Eye::Mono;
+        self.stereo.rec = rec;
+        self.rebuild_tnl();
     }
 
     /// Depth-sort (painter tie-break) and rasterize the pending model batch.
@@ -906,6 +1002,10 @@ impl Renderer for N3dsRenderer {
     }
 
     fn begin_frame(&mut self, clear: Color) {
+        let now = crate::runtime::now_us();
+        let interval = self.stereo.last_begin.map(|t| now.wrapping_sub(t));
+        self.stereo.last_begin = Some(now);
+        self.stereo.begin(clear, interval);
         self.sprite_depth = SPRITE_DEPTH_BG;
         self.frame_stats = FrameStats::default();
         self.shadows.clear();
@@ -941,6 +1041,9 @@ impl Renderer for N3dsRenderer {
         // The top screen first, then the touch screen, once per frame
         // (like the PC backend, which renders the top on the switch).
         if screen == 1 && self.screen == 0 {
+            if self.stereo.recording {
+                self.replay_eyes();
+            }
             self.flush_model_batch();
             self.screen = 1;
             // A fresh scene: 2D depth starts over on the other screen, and
@@ -960,11 +1063,16 @@ impl Renderer for N3dsRenderer {
     }
 
     fn fill_rect(&mut self, rect: trino_core::Rect, color: Color) {
+        if let Some(r) = self.recording() {
+            r.push(StereoCmd::Rect { rect, color });
+            return;
+        }
+        let dx = self.stereo.shift_2d();
         self.flush_model_batch();
         trino_core::zone!("2d");
         self.frame_stats.sprites += 1;
         let f = ffi::TrinoFill {
-            x: rect.pos.x,
+            x: rect.pos.x + dx,
             y: rect.pos.y,
             w: rect.size.x,
             h: rect.size.y,
@@ -975,6 +1083,15 @@ impl Renderer for N3dsRenderer {
     }
 
     fn draw_sprite(&mut self, sprite: SpriteId, pos: Vec2, params: &SpriteParams) {
+        if let Some(r) = self.recording() {
+            r.push(StereoCmd::Sprite {
+                sprite,
+                pos,
+                params: *params,
+            });
+            return;
+        }
+        let pos = Vec2::new(pos.x + self.stereo.shift_2d(), pos.y);
         self.flush_model_batch();
         trino_core::zone!("2d");
         let Some(entry) = self.sprites.get(&sprite.0) else {
@@ -1010,12 +1127,20 @@ impl Renderer for N3dsRenderer {
     }
 
     fn set_camera(&mut self, camera: &Camera3) {
+        if let Some(r) = self.recording_state() {
+            r.push(StereoCmd::Camera(*camera));
+            return;
+        }
         self.flush_model_batch();
         self.camera = *camera;
         self.rebuild_tnl();
     }
 
     fn set_light(&mut self, light: &Light) {
+        if let Some(r) = self.recording_state() {
+            r.push(StereoCmd::Light(*light));
+            return;
+        }
         // Lighting is resolved into vertex colors at tessellation time, so
         // a change needs no batch flush.
         self.light = *light;
@@ -1023,6 +1148,10 @@ impl Renderer for N3dsRenderer {
     }
 
     fn set_texture_filter(&mut self, filter: TexFilter) {
+        if let Some(r) = self.recording_state() {
+            r.push(StereoCmd::Filter(filter));
+            return;
+        }
         self.tex_filter = match filter {
             TexFilter::Default => TexFilter::Bilinear,
             f => f,
@@ -1030,6 +1159,11 @@ impl Renderer for N3dsRenderer {
     }
 
     fn set_local_lights(&mut self, lights: &[LocalLight]) {
+        if let Some(r) = self.recording_state() {
+            let s = r.lights(lights);
+            r.push(StereoCmd::LocalLights(s));
+            return;
+        }
         // Per vertex, like the global light: no flush.
         if self.locals.set(lights, self.caps.max_local_lights) {
             self.rebuild_tnl();
@@ -1037,14 +1171,28 @@ impl Renderer for N3dsRenderer {
     }
 
     fn set_water(&mut self, time: f32, ripples: &[Ripple]) {
+        if let Some(r) = self.recording_state() {
+            let s = r.ripples(ripples);
+            r.push(StereoCmd::Water { time, ripples: s });
+            return;
+        }
         self.water_state = WaterState::new(time, ripples, self.caps.max_ripples);
     }
 
     fn set_shadows(&mut self, settings: Option<&ShadowSettings>) {
+        if let Some(r) = self.recording_state() {
+            r.push(StereoCmd::Shadows(settings.copied()));
+            return;
+        }
         self.shadows.set(settings, &self.caps, ShadowTier::Map);
     }
 
     fn set_shadow_receivers(&mut self, planes: &[ShadowPlane]) {
+        if let Some(r) = self.recording_state() {
+            let s = r.planes(planes);
+            r.push(StereoCmd::Receivers(s));
+            return;
+        }
         self.shadows.set_receivers(planes);
     }
 
@@ -1062,9 +1210,18 @@ impl Renderer for N3dsRenderer {
         &mut self,
         model: ModelId,
         matrix: &Mat34,
-        _material: Material,
+        material: Material,
         params: &ModelParams,
     ) {
+        if let Some(r) = self.recording() {
+            r.push(StereoCmd::Model {
+                model,
+                matrix: *matrix,
+                material,
+                params: *params,
+            });
+            return;
+        }
         trino_core::zone!("draw");
         if params.shadow.casts() {
             self.cast_shadow(model, matrix, params);
@@ -1198,6 +1355,14 @@ impl Renderer for N3dsRenderer {
     }
 
     fn draw_billboard(&mut self, sprite: SpriteId, pos: Vec3, params: &BillboardParams) {
+        if let Some(r) = self.recording() {
+            r.push(StereoCmd::Billboard {
+                sprite,
+                pos,
+                params: *params,
+            });
+            return;
+        }
         let Some(entry) = self.sprites.get(&sprite.0) else {
             self.frame_stats.not_loaded += 1;
             return;
@@ -1220,8 +1385,17 @@ impl Renderer for N3dsRenderer {
     }
 
     fn end_frame(&mut self) {
+        if self.stereo.recording {
+            self.replay_eyes();
+        }
         self.flush_model_batch();
         self.frame_stats.shadows = self.shadows.stats;
+        self.frame_stats.stereo = self.stereo.frame.stats(self.stereo.rec.cmds.len());
+        let two = self.stereo.frame.is_stereo();
+        if two != self.stereo.shown {
+            self.stereo.shown = two;
+            unsafe { ffi::trino_stereo_mode(two as u32) }
+        }
         self.last_stats = self.frame_stats;
         self.last_gpu_rejects = core::mem::take(&mut self.gpu_rejects);
         if trino_core::trace::ENABLED {
@@ -1232,6 +1406,16 @@ impl Renderer for N3dsRenderer {
     }
 
     fn draw_text(&mut self, font: FontId, pos: Vec2, text: &str, params: &TextParams) {
+        if let Some(r) = self.recording_state() {
+            let s = r.text(text);
+            r.push(StereoCmd::Text {
+                font,
+                pos,
+                text: s,
+                params: *params,
+            });
+            return;
+        }
         let Some(entry) = self.fonts.get(&font.0).cloned() else {
             self.frame_stats.not_loaded += 1;
             return;
@@ -1264,9 +1448,63 @@ impl Renderer for N3dsRenderer {
     }
 
     fn read_screen_pixel(&mut self, screen: Screen, x: u32, y: u32) -> Option<Color> {
-        let c = unsafe { ffi::trino_debug_pixel(x, y, screen.index() as u32) };
-        (c != 0).then(|| Color::rgba((c >> 24) as u8, (c >> 16) as u8, (c >> 8) as u8, c as u8))
+        debug_pixel(x, y, screen.index() as u32)
     }
+
+    fn set_stereo(&mut self, stereo: Option<&StereoSettings>) {
+        if let Some(s) = stereo.filter(|s| s.enabled) {
+            self.stereo.budget_us = s.budget_us;
+        }
+        if self.screen != 0 || self.stereo.recording {
+            // On the touch screen the top is drawn already; a second call
+            // while recording keeps the frame as it began.
+            return;
+        }
+        let wants = stereo.is_some_and(|s| s.enabled && s.slider.is_none()) && self.caps.stereo;
+        let hw = if wants {
+            (unsafe { ffi::trino_stereo_slider() }) as f32 / 65536.0
+        } else {
+            0.0
+        };
+        let mut f =
+            StereoFrame::resolve(stereo, self.caps.stereo, hw, self.stereo.governor.allows());
+        if f.is_stereo() && self.stereo.top_drawn {
+            f = StereoFrame::mono(StereoMono::Late);
+        }
+        self.stereo.frame = f;
+        if f.is_stereo() {
+            self.flush_model_batch();
+            self.stereo.recording = true;
+            *self.stereo_start = self.top_state();
+        }
+    }
+
+    fn stereo_eye(&self) -> Eye {
+        self.stereo.eye
+    }
+
+    fn set_layer_depth(&mut self, depth: LayerDepth) {
+        if let Some(r) = self.recording_state() {
+            r.push(StereoCmd::Depth(depth));
+            return;
+        }
+        self.stereo.depth = depth;
+    }
+
+    fn read_eye_pixel(&mut self, eye: Eye, x: u32, y: u32) -> Option<Color> {
+        match eye {
+            Eye::Right if self.last_stats.stereo.eyes == 2 => debug_pixel(x, y, 2),
+            Eye::Right => None,
+            _ => debug_pixel(x, y, 0),
+        }
+    }
+}
+
+/// The shim's read-back of a screen pixel (0 top/left eye, 1 touch, 2 the
+/// top screen's right eye).
+fn debug_pixel(x: u32, y: u32, screen: u32) -> Option<Color> {
+    let c = unsafe { ffi::trino_debug_pixel(x, y, screen) };
+    (c != 0).then(|| Color::rgba((c >> 24) as u8, (c >> 16) as u8, (c >> 8) as u8, c as u8))
 }
 
 /// A frame's counters on the trace (issue #62; `--trace` builds only).

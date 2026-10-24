@@ -162,6 +162,14 @@ pub struct Manifest {
     /// `particles/<name>`.
     #[serde(default)]
     pub particles: BTreeMap<String, BlobDecl>,
+    /// Color-grading LUTs (issue #64, `crate::lut`): a strip `.png` (n²×n)
+    /// or a `.cube`, relative to `assets/shared/` (or an override), baked
+    /// to `TLUT` blobs for the PC and the Web (`trino_core::post::Lut`;
+    /// `PostSettings::grading`). The consoles get none: the assets that
+    /// name one (`grading = "luts/<name>"`) are graded by their bake.
+    /// Logical paths are `luts/<name>`.
+    #[serde(default)]
+    pub luts: BTreeMap<String, BlobDecl>,
     /// Asset groups (issue #56, `crate::groups`): `[groups.level1]` with an
     /// optional per-platform `compression`. `boot` needs no table.
     #[serde(default)]
@@ -185,6 +193,11 @@ pub struct BlobDecl {
     /// The asset groups it is in (`crate::groups`); default `["boot"]`.
     #[serde(default)]
     pub groups: Vec<String>,
+    /// `[scenes.*]` only: the consoles' bake grades the scene's clear,
+    /// light, ambient and fog colors through its `post.grading` LUT (issue
+    /// #64), the mood a PC or Web build gets from the post stack.
+    #[serde(default)]
+    pub bake_grading: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -226,6 +239,12 @@ pub struct ModelDecl {
     /// The asset groups it is in (`crate::groups`); default `["boot"]`.
     #[serde(default)]
     pub groups: Vec<String>,
+    /// A LUT (`luts/<name>`) the consoles' bake grades its vertex colors
+    /// through (issue #64): the console's color grading, at no run-time
+    /// cost. The PC and the Web bake it ungraded (their post stack grades
+    /// the frame) plus a graded twin the PC's console profiles draw.
+    #[serde(default)]
+    pub grading: Option<String>,
 }
 
 impl ModelDecl {
@@ -281,6 +300,10 @@ pub struct SpriteDecl {
     /// (`AccessData::icon`).
     #[serde(default)]
     pub cvd_icon: Option<String>,
+    /// A LUT (`luts/<name>`) the consoles' bake grades its pixels through
+    /// (issue #64), like a model's `grading`.
+    #[serde(default)]
+    pub grading: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -484,6 +507,9 @@ impl Manifest {
             }
         }
         manifest
+            .check_grading()
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        manifest
             .check_groups()
             .and_then(|_| manifest.check_memory())
             .map_err(|e| format!("{}: {e}", path.display()))?;
@@ -499,6 +525,78 @@ impl Manifest {
             }
         }
         Ok(manifest)
+    }
+}
+
+impl Manifest {
+    /// Every `grading` names a declared LUT; `bake_grading` is on scenes
+    /// only.
+    fn check_grading(&self) -> Result<(), String> {
+        let named = self
+            .models
+            .iter()
+            .map(|(n, d)| (format!("models/{n}"), &d.grading))
+            .chain(
+                self.sprites
+                    .iter()
+                    .map(|(n, d)| (format!("sprites/{n}"), &d.grading)),
+            );
+        for (logical, grading) in named {
+            if let Some(g) = grading
+                && !g
+                    .strip_prefix("luts/")
+                    .is_some_and(|n| self.luts.contains_key(n))
+            {
+                return Err(format!(
+                    "`{logical}`: grading `{g}` is not a LUT of the manifest (`luts/<name>`)"
+                ));
+            }
+        }
+        let others = [
+            ("blobs", &self.blobs),
+            ("particles", &self.particles),
+            ("luts", &self.luts),
+        ];
+        for (section, map) in others {
+            if let Some(name) = map.iter().find(|(_, d)| d.bake_grading).map(|(n, _)| n) {
+                return Err(format!(
+                    "`{section}/{name}`: bake_grading is a `[scenes.*]` option"
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// The `TLUT` blob of the LUT `logical` (`luts/<name>`), from its master
+    /// as `platform` resolves it.
+    pub fn lut_blob(
+        &self,
+        assets_root: &Path,
+        platform: Platform,
+        logical: &str,
+    ) -> Result<Vec<u8>, String> {
+        let decl = logical
+            .strip_prefix("luts/")
+            .and_then(|n| self.luts.get(n))
+            .ok_or_else(|| format!("`{logical}` is not a LUT of the manifest"))?;
+        let source = crate::resolve_source(assets_root, platform, &decl.file)?;
+        crate::lut::bake(&source).map_err(|e| format!("`{logical}`: {e}"))
+    }
+
+    /// The LUT a console bake grades `grading` through, or `None` (no
+    /// grading, or a platform that grades at run time).
+    pub fn console_grading(
+        &self,
+        assets_root: &Path,
+        platform: Platform,
+        grading: Option<&str>,
+    ) -> Result<Option<Vec<u8>>, String> {
+        match grading {
+            Some(g) if matches!(platform, Platform::N64 | Platform::N3ds) => {
+                self.lut_blob(assets_root, platform, g).map(Some)
+            }
+            _ => Ok(None),
+        }
     }
 }
 

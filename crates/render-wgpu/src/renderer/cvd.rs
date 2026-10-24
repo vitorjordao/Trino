@@ -8,18 +8,41 @@
 //!
 //! The pass copies the frame into a scratch texture and draws it back
 //! through the matrix, so every consumer (the window blit, the editor's
-//! texture, a read-back) sees the simulated picture. The correction filter
-//! players would use on content without semantic palettes (daltonization)
-//! is #64's.
+//! texture, a read-back) sees the simulated picture.
+//!
+//! The same pass draws the players' **correction filter** (daltonization,
+//! issue #64: [`CvdKind::Correct`]) through `access::color::correction`'s
+//! matrix: the error a viewer misses moved to the channels they see. That
+//! one is a player setting (`AccessSettings::cvd_filter`), drawn before the
+//! simulation view, so the simulation shows a corrected frame as its viewer
+//! sees it.
 
 use trino_core::CvdMode;
-use trino_core::access::color::matrix;
+use trino_core::access::color::{correction, matrix};
+
+/// Which matrix the pass draws through.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) enum CvdKind {
+    /// How a viewer with the mode sees the frame (a review view).
+    Simulate,
+    /// The frame daltonized for that viewer (a player's filter).
+    Correct,
+}
 
 use super::OFFSCREEN_FORMAT;
 
-/// The shader for `mode`: its matrix written in as constants.
+/// The simulation shader for `mode`: its matrix written in as constants.
+#[cfg(test)]
 pub(super) fn shader(mode: CvdMode) -> String {
-    let m = matrix(mode);
+    shader_for(mode, CvdKind::Simulate)
+}
+
+/// The shader for `mode` and `kind`.
+pub(super) fn shader_for(mode: CvdMode, kind: CvdKind) -> String {
+    let m = match kind {
+        CvdKind::Simulate => *matrix(mode),
+        CvdKind::Correct => correction(mode),
+    };
     // WGSL's mat3x3 takes columns.
     let col = |c: usize| format!("vec3<f32>({:?}, {:?}, {:?})", m[0][c], m[1][c], m[2][c]);
     format!(
@@ -74,7 +97,8 @@ struct Scratch {
 pub(super) struct CvdPass {
     bgl: wgpu::BindGroupLayout,
     layout: wgpu::PipelineLayout,
-    pipelines: [Option<wgpu::RenderPipeline>; 5],
+    /// Per [`CvdKind`] (simulate, correct), per mode.
+    pipelines: [[Option<wgpu::RenderPipeline>; 5]; 2],
     /// The main screen's and the second screen's.
     scratch: [Option<Scratch>; 2],
 }
@@ -102,14 +126,20 @@ impl CvdPass {
         CvdPass {
             bgl,
             layout,
-            pipelines: [None, None, None, None, None],
+            pipelines: Default::default(),
             scratch: [None, None],
         }
     }
 
-    fn pipeline(&mut self, device: &wgpu::Device, mode: CvdMode) -> &wgpu::RenderPipeline {
+    fn pipeline(
+        &mut self,
+        device: &wgpu::Device,
+        mode: CvdMode,
+        kind: CvdKind,
+    ) -> &wgpu::RenderPipeline {
         let layout = &self.layout;
-        self.pipelines[mode as usize].get_or_insert_with(|| build_pipeline(device, layout, mode))
+        self.pipelines[kind as usize][mode as usize]
+            .get_or_insert_with(|| build_pipeline_for(device, layout, mode, kind))
     }
 
     /// The pipeline layout every mode's pipeline is built on (precompile
@@ -118,18 +148,18 @@ impl CvdPass {
         &self.layout
     }
 
-    pub fn has(&self, mode: CvdMode) -> bool {
-        self.pipelines[mode as usize].is_some()
+    pub fn has(&self, mode: CvdMode, kind: CvdKind) -> bool {
+        self.pipelines[kind as usize][mode as usize].is_some()
     }
 
     /// A pipeline a precompile job built (kept if one is already there).
-    pub fn install(&mut self, mode: CvdMode, pipeline: wgpu::RenderPipeline) {
-        self.pipelines[mode as usize].get_or_insert(pipeline);
+    pub fn install(&mut self, mode: CvdMode, kind: CvdKind, pipeline: wgpu::RenderPipeline) {
+        self.pipelines[kind as usize][mode as usize].get_or_insert(pipeline);
     }
 
-    /// Simulate `mode` over `target` (`size`, a `COPY_SRC` render target):
-    /// copy it aside, draw it back through the matrix. `slot` 0 is the main
-    /// screen, 1 the second.
+    /// Simulate (or correct for) `mode` over `target` (`size`, a
+    /// `COPY_SRC` render target): copy it aside, draw it back through the
+    /// matrix. `slot` 0 is the main screen, 1 the second.
     #[allow(clippy::too_many_arguments)]
     pub fn encode(
         &mut self,
@@ -139,6 +169,7 @@ impl CvdPass {
         target_view: &wgpu::TextureView,
         size: (u32, u32),
         mode: CvdMode,
+        kind: CvdKind,
         slot: usize,
     ) {
         if mode == CvdMode::Off || size.0 == 0 || size.1 == 0 {
@@ -186,7 +217,7 @@ impl CvdPass {
             extent,
         );
         let bind_group = scratch.bind_group.clone();
-        let pipeline = self.pipeline(device, mode).clone();
+        let pipeline = self.pipeline(device, mode, kind).clone();
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("trino-cvd-pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -209,15 +240,16 @@ impl CvdPass {
     }
 }
 
-/// The simulation pipeline of `mode` (not `Off`) on `layout`.
-pub(super) fn build_pipeline(
+/// The `kind` pipeline of `mode` (not `Off`) on `layout`.
+pub(super) fn build_pipeline_for(
     device: &wgpu::Device,
     layout: &wgpu::PipelineLayout,
     mode: CvdMode,
+    kind: CvdKind,
 ) -> wgpu::RenderPipeline {
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("trino-cvd"),
-        source: wgpu::ShaderSource::Wgsl(shader(mode).into()),
+        source: wgpu::ShaderSource::Wgsl(shader_for(mode, kind).into()),
     });
     crate::renderer::pipes::render(
         device,

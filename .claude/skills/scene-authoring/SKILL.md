@@ -194,6 +194,18 @@ rules in mind:
 
 See `scenes/interior.scene.ron` for a working portal example.
 
+### Post-processing and glow (issue #64, ADR 0033)
+
+- `environment.post: Some((exposure: 1.0, tonemap: AgX, bloom: Some(()), grading:
+  Some("luts/dusk"), vignette: 0.2, grain: 0.0))` — every field defaults; `Some(())` is
+  the neutral stack. An `Option` field: `Some((...))`, never a bare `(...)` ("Expected
+  option" at parse). Codegen writes `POST`; TSCN carries none.
+- An entity's `glow: Some((radius: 0.5, color: (255, 220, 160, 200)))` draws a halo of
+  `sprites/glow` where the target has no bloom (`mode: Always` for every target);
+  codegen and TSCN v6 carry it, `draw_nodes` and `EntityStore::draw` draw it.
+- For the consoles: `bake_grading = true` on the scene's manifest entry and `grading` on
+  its models; `cargo xtask scene export --platform n64 --bake-grading` for code.
+
 ## Prefab
 
 ```ron

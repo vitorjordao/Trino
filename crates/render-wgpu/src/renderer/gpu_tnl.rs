@@ -237,6 +237,9 @@ pub struct GpuTnl {
     /// multisampled.
     pipelines: [wgpu::RenderPipeline; 2],
     ms_pipelines: Option<[wgpu::RenderPipeline; 2]>,
+    /// The same into the post stack's HDR target (issue #64): single
+    /// sampled, then multisampled; built when post first runs.
+    hdr_pipelines: [Option<[wgpu::RenderPipeline; 2]>; 2],
     meshes: HashMap<u32, GpuMesh>,
     /// Bytes between two context / joint blocks (the device's uniform
     /// offset alignment).
@@ -297,7 +300,7 @@ impl GpuTnl {
             immediate_size: 0,
         });
         let shader = device.create_shader_module(wgpu::include_wgsl!("shaders_tnl.wgsl"));
-        let pipelines = pipelines(device, &layout, &shader, 1);
+        let pipelines = pipelines(device, &layout, &shader, 1, OFFSCREEN_FORMAT);
         let a = device.limits().min_uniform_buffer_offset_alignment as u64;
         let (ctx_stride, joint_stride) = (align(ctx_size, a), align(joint_size, a));
         let ctx_buf = uniform(device, "trino-tnl-ctx", ctx_stride * 16);
@@ -315,6 +318,7 @@ impl GpuTnl {
             shader,
             pipelines,
             ms_pipelines: None,
+            hdr_pipelines: [None, None],
             meshes: HashMap::new(),
             ctx_stride,
             joint_stride,
@@ -336,7 +340,13 @@ impl GpuTnl {
     /// The multisampled pipelines (`PcRenderer::set_msaa`).
     pub fn ensure_ms(&mut self, device: &wgpu::Device, samples: u32) {
         if self.ms_pipelines.is_none() {
-            self.ms_pipelines = Some(pipelines(device, &self.layout, &self.shader, samples));
+            self.ms_pipelines = Some(pipelines(
+                device,
+                &self.layout,
+                &self.shader,
+                samples,
+                OFFSCREEN_FORMAT,
+            ));
         }
     }
 
@@ -353,6 +363,16 @@ impl GpuTnl {
     /// Multisampled pipelines a precompile job built (kept if already set).
     pub fn install_ms(&mut self, pipes: [wgpu::RenderPipeline; 2]) {
         self.ms_pipelines.get_or_insert(pipes);
+    }
+
+    /// Whether the HDR pipelines (`ms`: multisampled) exist.
+    pub fn has_hdr(&self, ms: bool) -> bool {
+        self.hdr_pipelines[ms as usize].is_some()
+    }
+
+    /// HDR pipelines (kept if already set).
+    pub fn install_hdr(&mut self, ms: bool, pipes: [wgpu::RenderPipeline; 2]) {
+        self.hdr_pipelines[ms as usize].get_or_insert(pipes);
     }
 
     /// Upload (or replace) the resident vertex stream of mesh `model`.
@@ -564,10 +584,17 @@ impl GpuTnl {
         pass: &mut wgpu::RenderPass<'_>,
         range: Range<u32>,
         ms: bool,
+        hdr: bool,
         texture: &dyn Fn(Option<TexKey>) -> &'a wgpu::BindGroup,
     ) -> u32 {
-        let pipes = match (&self.ms_pipelines, ms) {
-            (Some(p), true) => p,
+        let pipes = match (
+            &self.ms_pipelines,
+            ms,
+            &self.hdr_pipelines[ms as usize],
+            hdr,
+        ) {
+            (_, _, Some(p), true) => p,
+            (Some(p), true, _, false) => p,
             _ => &self.pipelines,
         };
         let mut calls = 0;
@@ -694,6 +721,7 @@ pub(super) fn pipelines(
     layout: &wgpu::PipelineLayout,
     shader: &wgpu::ShaderModule,
     samples: u32,
+    format: wgpu::TextureFormat,
 ) -> [wgpu::RenderPipeline; 2] {
     let vertex_attrs = wgpu::vertex_attr_array![
         0 => Float32x3,
@@ -742,7 +770,7 @@ pub(super) fn pipelines(
                     entry_point: Some("fs_mesh"),
                     compilation_options: Default::default(),
                     targets: &[Some(wgpu::ColorTargetState {
-                        format: OFFSCREEN_FORMAT,
+                        format,
                         blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                         write_mask: wgpu::ColorWrites::ALL,
                     })],

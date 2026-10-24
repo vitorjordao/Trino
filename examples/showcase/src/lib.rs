@@ -82,7 +82,7 @@ pub use scene_n64::NODES as NODES_N64;
 /// The exported scene's camera, light, ambient occlusion, stereo and
 /// clear color.
 pub mod scene_consts {
-    pub use super::scene::{AO, CAMERA, CLEAR, LIGHT, STEREO};
+    pub use super::scene::{AO, CAMERA, CLEAR, LIGHT, POST, STEREO};
 }
 
 /// Live entities: the whole exported scene fits with room to spare.
@@ -222,6 +222,9 @@ pub struct ShowcaseGame {
     /// Stereo 3D (the 3DS top screen; the exported scene's `STEREO`, none
     /// from a baked scene unless the host sets it: TSCN carries none).
     pub stereo: Option<trino_core::StereoSettings>,
+    /// Post-processing (the PC and the Web; the exported scene's `POST`,
+    /// none from a baked scene unless the host sets it: TSCN carries none).
+    pub post: Option<trino_core::PostSettings>,
     /// The scene's shadows and the first [`MAX_RECEIVERS`] receivers
     /// (ADR 0025: `SHADOWS`/`RECEIVERS`, or the baked scene's).
     pub shadows: Option<ShadowSettings>,
@@ -301,6 +304,7 @@ impl ShowcaseGame {
         );
         game.ao = scene::AO;
         game.stereo = scene::STEREO;
+        game.post = scene::POST;
         game.set_shadows(scene::SHADOWS, scene::RECEIVERS.iter().copied());
         game
     }
@@ -374,6 +378,7 @@ impl ShowcaseGame {
             clear: Color::BLACK,
             ao: None,
             stereo: None,
+            post: None,
             shadows: None,
             receivers: [ShadowPlane::ground(0.0); MAX_RECEIVERS],
             n_receivers: 0,
@@ -428,6 +433,7 @@ impl ShowcaseGame {
         );
         self.ao = scene::AO;
         self.stereo = scene::STEREO;
+        self.post = scene::POST;
         self.set_shadows(scene::SHADOWS, scene::RECEIVERS.iter().copied());
     }
 
@@ -466,6 +472,7 @@ impl ShowcaseGame {
             clear: clr,
             ao,
             stereo,
+            post,
             shadows,
             receivers: _,
             n_receivers,
@@ -518,6 +525,7 @@ impl ShowcaseGame {
         *clr = clear;
         *ao = None;
         *stereo = None;
+        *post = None;
         *shadows = None;
         *n_receivers = 0;
         *sparks = ParticleSystem::new(SPARKS, 0x5EED);
@@ -980,6 +988,7 @@ impl Game for ShowcaseGame {
         r.set_texture_filter(self.look.filter);
         // The scene's screen-space AO (PC native; cleared every frame).
         r.set_ambient_occlusion(self.ao.as_ref());
+        r.set_post(self.post.as_ref());
         // The scene's shadows and receivers (cleared every frame).
         r.set_shadows(self.shadows.as_ref());
         r.set_shadow_receivers(&self.receivers[..self.n_receivers as usize]);

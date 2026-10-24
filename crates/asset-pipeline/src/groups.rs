@@ -161,6 +161,7 @@ impl Manifest {
             "blobs" => self.blobs.get(name).map(|d| &d.groups),
             "scenes" => self.scenes.get(name).map(|d| &d.groups),
             "particles" => self.particles.get(name).map(|d| &d.groups),
+            "luts" => self.luts.get(name).map(|d| &d.groups),
             _ => None,
         };
         list.map_or(&[], |v| v.as_slice())
@@ -192,6 +193,7 @@ impl Manifest {
         add("blobs", self.blobs.keys().collect());
         add("particles", self.particles.keys().collect());
         add("scenes", self.scenes.keys().collect());
+        add("luts", self.luts.keys().collect());
         out
     }
 

@@ -18,7 +18,7 @@
 
 use trino_core::{Color, SpriteId};
 
-use super::{OFFSCREEN_FORMAT, SceneSources, TRI_VERTEX_STRIDE, tri_attributes};
+use super::{SceneSources, TRI_VERTEX_STRIDE, tri_attributes};
 
 /// The blob texture's handle (the PC's sprite table; never a game asset's:
 /// game handles are path hashes).
@@ -44,7 +44,12 @@ pub(crate) struct ShadowPipes {
 }
 
 impl ShadowPipes {
-    pub fn new(device: &wgpu::Device, src: &SceneSources, samples: u32) -> ShadowPipes {
+    pub fn new(
+        device: &wgpu::Device,
+        src: &SceneSources,
+        samples: u32,
+        format: wgpu::TextureFormat,
+    ) -> ShadowPipes {
         let attrs = tri_attributes();
         let make = |label: &str, fragment: &str, blend: wgpu::BlendState, mask| {
             crate::renderer::pipes::render(
@@ -67,7 +72,7 @@ impl ShadowPipes {
                         entry_point: Some(fragment),
                         compilation_options: Default::default(),
                         targets: &[Some(wgpu::ColorTargetState {
-                            format: OFFSCREEN_FORMAT,
+                            format,
                             blend: Some(blend),
                             write_mask: mask,
                         })],

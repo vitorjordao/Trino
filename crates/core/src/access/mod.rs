@@ -215,6 +215,11 @@ pub struct AccessSettings {
     pub flash_guard: bool,
     /// A held action becomes a toggle ([`HoldToggle`]).
     pub hold_to_toggle: bool,
+    /// The PC and the Web daltonize the whole picture for `cvd` (issue
+    /// #64: a correction filter for content without semantic palettes).
+    /// Off by default, opt-in: a game that already swaps palettes for `cvd`
+    /// would be corrected twice. The consoles ignore it.
+    pub cvd_filter: bool,
 }
 
 /// The smallest text scale, percent.
@@ -234,6 +239,7 @@ impl AccessSettings {
         reduce_motion: false,
         flash_guard: true,
         hold_to_toggle: false,
+        cvd_filter: false,
     };
 
     /// The same, the text scale within its range.
@@ -259,7 +265,7 @@ impl AccessSettings {
     /// Three bytes for a console save (the N64 EEPROM has 512 B or 2 KB):
     /// byte 0 = color vision (bits 0–2), captions (3–4), high contrast (5),
     /// reduce motion (6), flash guard (7); byte 1 = text scale %; byte 2 =
-    /// hold-to-toggle (bit 0), the rest zero.
+    /// hold-to-toggle (bit 0), the correction filter (bit 1), the rest zero.
     pub const fn pack(&self) -> [u8; PACKED_LEN] {
         let s = self.clamped();
         [
@@ -269,7 +275,7 @@ impl AccessSettings {
                 | (s.reduce_motion as u8) << 6
                 | (s.flash_guard as u8) << 7,
             s.text_scale,
-            s.hold_to_toggle as u8,
+            s.hold_to_toggle as u8 | (s.cvd_filter as u8) << 1,
         ]
     }
 
@@ -282,7 +288,7 @@ impl AccessSettings {
         let Some(captions) = CaptionMode::from_index((b[0] >> 3) & 3) else {
             return None;
         };
-        if b[1] < TEXT_SCALE_MIN || b[1] > TEXT_SCALE_MAX || b[2] & !1 != 0 {
+        if b[1] < TEXT_SCALE_MIN || b[1] > TEXT_SCALE_MAX || b[2] & !3 != 0 {
             return None;
         }
         Some(AccessSettings {
@@ -293,6 +299,7 @@ impl AccessSettings {
             reduce_motion: b[0] & (1 << 6) != 0,
             flash_guard: b[0] & (1 << 7) != 0,
             hold_to_toggle: b[2] & 1 != 0,
+            cvd_filter: b[2] & 2 != 0,
         })
     }
 
@@ -306,7 +313,8 @@ impl AccessSettings {
         writeln!(out, "captions={}", self.captions.key())?;
         writeln!(out, "reduce_motion={}", on(self.reduce_motion))?;
         writeln!(out, "flash_guard={}", on(self.flash_guard))?;
-        writeln!(out, "hold_to_toggle={}", on(self.hold_to_toggle))
+        writeln!(out, "hold_to_toggle={}", on(self.hold_to_toggle))?;
+        writeln!(out, "cvd_filter={}", on(self.cvd_filter))
     }
 
     /// Apply one `key=value` pair; `false` when the key is unknown or the
@@ -340,6 +348,7 @@ impl AccessSettings {
             "reduce_motion" => flag(v).map(|b| self.reduce_motion = b).is_some(),
             "flash_guard" => flag(v).map(|b| self.flash_guard = b).is_some(),
             "hold_to_toggle" => flag(v).map(|b| self.hold_to_toggle = b).is_some(),
+            "cvd_filter" | "daltonize" => flag(v).map(|b| self.cvd_filter = b).is_some(),
             _ => false,
         }
     }
@@ -423,15 +432,16 @@ mod tests {
     fn pack_round_trips_every_mode_and_refuses_blank_bytes() {
         for cvd in CvdMode::ALL {
             for captions in CaptionMode::ALL {
-                for bits in 0..16u8 {
+                for bits in 0..32u8 {
                     let s = AccessSettings {
                         cvd,
                         captions,
-                        text_scale: 100 + bits * 6,
+                        text_scale: 100 + bits * 3,
                         high_contrast: bits & 1 != 0,
                         reduce_motion: bits & 2 != 0,
                         flash_guard: bits & 4 != 0,
                         hold_to_toggle: bits & 8 != 0,
+                        cvd_filter: bits & 16 != 0,
                     };
                     assert_eq!(AccessSettings::unpack(s.pack()), Some(s));
                 }
@@ -441,7 +451,12 @@ mod tests {
         assert_eq!(AccessSettings::unpack([0xff, 0xff, 0xff]), None);
         assert_eq!(AccessSettings::unpack([5, 100, 0]), None, "cvd 5");
         assert_eq!(AccessSettings::unpack([3 << 3, 100, 0]), None, "captions 3");
-        assert_eq!(AccessSettings::unpack([0, 150, 2]), None, "reserved bit");
+        assert_eq!(AccessSettings::unpack([0, 150, 4]), None, "reserved bit");
+        // Saves from before the correction filter (bit 1 clear) still load.
+        assert_eq!(
+            AccessSettings::unpack([0, 100, 1]).map(|s| (s.hold_to_toggle, s.cvd_filter)),
+            Some((true, false))
+        );
     }
 
     #[test]
@@ -454,6 +469,7 @@ mod tests {
             reduce_motion: true,
             flash_guard: false,
             hold_to_toggle: true,
+            cvd_filter: true,
         };
         let mut text = crate::text::TextBuf::<256>::new();
         s.write_text(&mut text).unwrap();

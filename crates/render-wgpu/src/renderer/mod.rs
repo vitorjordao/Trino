@@ -18,6 +18,8 @@ mod gpu_tnl;
 mod gpu_zones;
 mod lights;
 pub(crate) mod pipes;
+mod post;
+pub use post::PostView;
 mod precompile;
 #[doc(hidden)]
 pub use precompile::Hold as PrecompileHold;
@@ -51,6 +53,7 @@ use batch::{
     make_command,
 };
 pub use bench::{Bench, Calibration};
+use cvd::CvdKind;
 pub use shadow::ShadowView;
 
 const OFFSCREEN_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -165,6 +168,9 @@ struct BackendLimits {
     /// wgpu's GL backend in a browser: WebGL2's downlevel limits and no
     /// multisampled depth sampling (no MSAA).
     webgl2: bool,
+    /// The adapter can't render or blend `Rgba16Float` (WebGL2 without
+    /// `EXT_color_buffer_float`): the post stack runs over an 8-bit scene.
+    no_float_targets: bool,
 }
 
 /// The graphics API a browser renderer asks for ([`PcRenderer::new_canvas`]).
@@ -255,6 +261,10 @@ pub struct PcFrameTimes {
     /// Shadow map passes run (0 or 1: the light pass and its composite,
     /// the frame's 3D, once).
     pub shadow_maps: u32,
+    /// Post-processing passes run (0 or 1: the frame's 3D through the
+    /// post stack, issue #64), and the levels of its bloom chain.
+    pub post_passes: u32,
+    pub bloom_levels: u32,
     /// Render pipelines the render thread compiled during this frame
     /// (lazy first uses; 0 once a full [`PcRenderer::precompile`] ran:
     /// `TRINO_FRAME`'s `pipes=`, issue #101).
@@ -467,6 +477,28 @@ pub struct PcRenderer {
     cvd_view: trino_core::CvdMode,
     /// Its pass, built on first use.
     cvd: Option<cvd::CvdPass>,
+    /// The player's daltonization filter (issue #64): the mode the whole
+    /// picture is corrected for on the native profile and the Web
+    /// ([`PcRenderer::set_cvd_filter`]; the host passes
+    /// `AccessSettings::cvd` when `cvd_filter` is on).
+    cvd_filter: trino_core::CvdMode,
+    /// The post stack (issue #64): this frame's settings
+    /// (`Renderer::set_post`, cleared at `begin_frame`), what shows of them
+    /// ([`PcRenderer::set_post_view`], `TRINO_POST`), whether the scene
+    /// targets exist for it, the HDR twins of the scene pipelines (single,
+    /// multisampled), the bloom + composite pass (all built on first use),
+    /// the grading LUTs uploaded, whether a frame used it (precompile) and
+    /// the grain's frame counter.
+    post: Option<trino_core::PostSettings>,
+    post_view: PostView,
+    post_targets: bool,
+    hdr_sets: [Option<Box<post::HdrSet>>; 2],
+    post_pass: Option<post::PostPass>,
+    luts: HashMap<trino_core::LutId, post::LutTex>,
+    post_used: bool,
+    post_seed: u32,
+    /// The adapter renders and blends `Rgba16Float`.
+    hdr_ok: bool,
     /// Stereoscopic 3D (issue #63, the 3DS profile): this frame's
     /// recording and eye, the state each eye's replay starts from, how the
     /// eyes are shown and the simulated 3D slider
@@ -581,6 +613,8 @@ struct QualityState {
     ao: Option<AoSetting>,
     /// The shadows' level (`None`: never applied, the full Map tier).
     shadows: Option<ShadowSetting>,
+    /// The post stack's level (`None`: never applied, High).
+    post: Option<trino_core::PostSetting>,
     lod_bias: f32,
     sharpen: f32,
     anisotropy: u8,
@@ -596,6 +630,7 @@ impl QualityState {
         scale: 1.0,
         ao: None,
         shadows: None,
+        post: None,
         lod_bias: 1.0,
         sharpen: 0.0,
         anisotropy: 1,
@@ -763,6 +798,7 @@ fn water_pipelines(
     shader: &wgpu::ShaderModule,
     groups: [&wgpu::BindGroupLayout; 4],
     samples: u32,
+    format: wgpu::TextureFormat,
 ) -> [wgpu::RenderPipeline; 2] {
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("trino-water-layout"),
@@ -791,7 +827,7 @@ fn water_pipelines(
                     entry_point: Some(fragment),
                     compilation_options: Default::default(),
                     targets: &[Some(wgpu::ColorTargetState {
-                        format: OFFSCREEN_FORMAT,
+                        format,
                         blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
@@ -894,7 +930,13 @@ impl WaterGpu {
         });
         let bgl = water_bgl(device, true, false);
         let [g0, g1, g2] = groups;
-        let pipes = water_pipelines(device, &shader, [g0, g1, g2, &bgl], MSAA_SAMPLES);
+        let pipes = water_pipelines(
+            device,
+            &shader,
+            [g0, g1, g2, &bgl],
+            MSAA_SAMPLES,
+            OFFSCREEN_FORMAT,
+        );
         (bgl, pipes)
     }
 
@@ -1115,6 +1157,7 @@ fn scene_pipelines(
     device: &wgpu::Device,
     src: &SceneSources,
     samples: u32,
+    format: wgpu::TextureFormat,
 ) -> [wgpu::RenderPipeline; 4] {
     let SceneSources {
         shader,
@@ -1176,7 +1219,7 @@ fn scene_pipelines(
                     entry_point: Some("fs_sprite"),
                     compilation_options: Default::default(),
                     targets: &[Some(wgpu::ColorTargetState {
-                        format: OFFSCREEN_FORMAT,
+                        format,
                         blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
@@ -1225,7 +1268,7 @@ fn scene_pipelines(
                     entry_point: Some(fragment),
                     compilation_options: Default::default(),
                     targets: &[Some(wgpu::ColorTargetState {
-                        format: OFFSCREEN_FORMAT,
+                        format,
                         blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
@@ -1271,7 +1314,7 @@ fn scene_pipelines(
                     entry_point: Some("fs_tri_lit"),
                     compilation_options: Default::default(),
                     targets: &[Some(wgpu::ColorTargetState {
-                        format: OFFSCREEN_FORMAT,
+                        format,
                         blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
@@ -1318,13 +1361,19 @@ enum MsPass {
 /// The multisampled color and depth of the scene pass (resolved into the
 /// offscreen target).
 struct MsaaTargets {
+    /// The color's format: the picture's, or the post stack's HDR one.
+    format: wgpu::TextureFormat,
     color: wgpu::TextureView,
     depth: wgpu::TextureView,
     /// The depth texture itself: the per-pixel water copies it.
     depth_tex: wgpu::Texture,
 }
 
-fn create_msaa_targets(device: &wgpu::Device, size: (u32, u32)) -> MsaaTargets {
+fn create_msaa_targets(
+    device: &wgpu::Device,
+    size: (u32, u32),
+    format: wgpu::TextureFormat,
+) -> MsaaTargets {
     let extent = wgpu::Extent3d {
         width: size.0,
         height: size.1,
@@ -1344,7 +1393,7 @@ fn create_msaa_targets(device: &wgpu::Device, size: (u32, u32)) -> MsaaTargets {
     };
     let target = wgpu::TextureUsages::RENDER_ATTACHMENT;
     let view = |t: &wgpu::Texture| t.create_view(&wgpu::TextureViewDescriptor::default());
-    let color = make("trino-msaa-color", OFFSCREEN_FORMAT, target);
+    let color = make("trino-msaa-color", format, target);
     // The SSAO pass reads it; the per-pixel water copies it.
     let depth_tex = make(
         "trino-msaa-depth",
@@ -1352,6 +1401,7 @@ fn create_msaa_targets(device: &wgpu::Device, size: (u32, u32)) -> MsaaTargets {
         target | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
     );
     MsaaTargets {
+        format,
         color: view(&color),
         depth: view(&depth_tex),
         depth_tex,
@@ -1657,8 +1707,15 @@ impl PcRenderer {
         // WebGL2 (wgpu's GL backend in a browser) has the downlevel WebGL2
         // limits: no storage buffers, 16 KB uniform blocks, no sampling of
         // multisampled depth.
+        let float = adapter.get_texture_format_features(post::HDR_FORMAT);
         let limits = BackendLimits {
             webgl2: cfg!(target_arch = "wasm32") && info.backend == wgpu::Backend::Gl,
+            no_float_targets: !float
+                .allowed_usages
+                .contains(wgpu::TextureUsages::RENDER_ATTACHMENT)
+                || !float
+                    .flags
+                    .contains(wgpu::TextureFormatFeatureFlags::BLENDABLE),
         };
 
         // Compressed textures where the adapter samples them: BC on every
@@ -1993,7 +2050,7 @@ impl PcRenderer {
             tri_pipeline,
             tri_clamp_pipeline,
             lit_pipeline,
-        ] = scene_pipelines(&device, &sources, 1);
+        ] = scene_pipelines(&device, &sources, 1, OFFSCREEN_FORMAT);
 
         // Water: the lit vertices, groups 0..2 as the lit pipeline (the
         // light sets stay bound) and the water sets + the scene's depth in
@@ -2010,6 +2067,7 @@ impl PcRenderer {
             &sources.shader,
             [&globals_bgl, &tex3d_bgl, &lights_bgl, &water_bgl],
             1,
+            OFFSCREEN_FORMAT,
         );
         let water_depth = WaterGpu::depth_copy(&device, internal_size, 1);
         let water_nearest = limits.webgl2.then(|| nearest_sampler(&device));
@@ -2285,6 +2343,19 @@ impl PcRenderer {
             vi_dedither: true,
             cvd_view: trino_core::CvdMode::Off,
             cvd: None,
+            cvd_filter: trino_core::CvdMode::Off,
+            post: None,
+            post_view: std::env::var("TRINO_POST")
+                .ok()
+                .and_then(|v| PostView::parse(&v))
+                .unwrap_or_default(),
+            post_targets: false,
+            hdr_sets: [None, None],
+            post_pass: None,
+            luts: HashMap::new(),
+            post_used: false,
+            post_seed: 0,
+            hdr_ok: !limits.no_float_targets,
             stereo: stereo::Stereo::new(),
             stereo_start: Box::new(TopState {
                 camera: Camera3::default(),
@@ -2585,8 +2656,62 @@ impl PcRenderer {
             &[]
         };
         for &m in modes {
-            if !self.cvd.as_ref().is_some_and(|c| c.has(m)) {
-                jobs.push(J::Cvd(m));
+            if !self
+                .cvd
+                .as_ref()
+                .is_some_and(|c| c.has(m, CvdKind::Simulate))
+            {
+                jobs.push(J::Cvd(m, CvdKind::Simulate));
+            }
+        }
+        // The post stack (issue #64): the Full tier, every pass when `all`,
+        // else what a frame already drew with.
+        let full = self.caps.post_tier == trino_core::PostTier::Full;
+        if full && (all || self.post_used || self.post_view != PostView::Game) {
+            if self.post_pass.is_none() {
+                jobs.push(J::Post);
+            }
+            if self.hdr_ok {
+                if self.hdr_sets[0].is_none() {
+                    jobs.push(J::Hdr(false));
+                }
+                if want_ms && self.hdr_sets[1].is_none() {
+                    jobs.push(J::Hdr(true));
+                }
+                if let Some(g) = &self.gpu
+                    && self.gpu_tnl_active()
+                {
+                    if !g.has_hdr(false) {
+                        jobs.push(J::HdrGpu(false));
+                    }
+                    if want_ms && !g.has_hdr(true) {
+                        jobs.push(J::HdrGpu(true));
+                    }
+                }
+            }
+        }
+        // The correction filter: the three modes it corrects, or the one
+        // the player asked for.
+        let fixes: &[trino_core::CvdMode] = if !full {
+            &[]
+        } else if all {
+            &[
+                trino_core::CvdMode::Protanopia,
+                trino_core::CvdMode::Deuteranopia,
+                trino_core::CvdMode::Tritanopia,
+            ]
+        } else if self.frame_cvd_filter() != trino_core::CvdMode::Off {
+            core::slice::from_ref(&self.cvd_filter)
+        } else {
+            &[]
+        };
+        for &m in fixes {
+            if !self
+                .cvd
+                .as_ref()
+                .is_some_and(|c| c.has(m, CvdKind::Correct))
+            {
+                jobs.push(J::Cvd(m, CvdKind::Correct));
             }
         }
         // The stereo preview's composites (the 3DS profile, issue #63).
@@ -2637,6 +2762,8 @@ impl PcRenderer {
             cvd_layout,
             stereo_layout,
             water_groups: self.water.groups.clone(),
+            water_bgl: self.water.bgl.clone(),
+            hdr: self.hdr_ok,
         }
     }
 
@@ -2672,10 +2799,21 @@ impl PcRenderer {
             B::DepthBlit(p) => {
                 self.depth_blit.get_or_insert(*p);
             }
-            B::Cvd(mode, p) => self
+            B::Cvd(mode, kind, p) => self
                 .cvd
                 .get_or_insert_with(|| cvd::CvdPass::new(&self.device))
-                .install(mode, p),
+                .install(mode, kind, p),
+            B::Hdr(ms, set) => {
+                self.hdr_sets[ms as usize].get_or_insert(set);
+            }
+            B::HdrGpu(ms, p) => {
+                if let Some(g) = &mut self.gpu {
+                    g.install_hdr(ms, p);
+                }
+            }
+            B::Post(p) => {
+                self.post_pass.get_or_insert(*p);
+            }
             B::Stereo(view, p) => self
                 .stereo_pass
                 .get_or_insert_with(|| stereo::StereoPass::new(&self.device))
@@ -2882,7 +3020,12 @@ impl PcRenderer {
             }
         }
         if samples > 1 && self.ms_pipelines.is_none() {
-            self.ms_pipelines = Some(scene_pipelines(&self.device, &self.sources, samples));
+            self.ms_pipelines = Some(scene_pipelines(
+                &self.device,
+                &self.sources,
+                samples,
+                OFFSCREEN_FORMAT,
+            ));
         }
         if samples > 1 {
             self.water.ensure_ms(&self.device, self.scene_extent());
@@ -2890,8 +3033,8 @@ impl PcRenderer {
                 gpu.ensure_ms(&self.device, samples);
             }
         }
-        self.msaa_targets =
-            (samples > 1).then(|| create_msaa_targets(&self.device, self.scene_extent()));
+        self.msaa_targets = (samples > 1)
+            .then(|| create_msaa_targets(&self.device, self.scene_extent(), self.msaa_format()));
         if let Some(ao) = &mut self.ao_pass_ms {
             ao.invalidate();
         }
@@ -2922,6 +3065,7 @@ impl PcRenderer {
         self.set_msaa(q.msaa > 1);
         self.quality.ao = Some(q.ao);
         self.quality.shadows = Some(q.shadows);
+        self.quality.post = Some(q.post);
         self.quality.lod_bias = q.lod_bias;
         self.quality.sharpen = q.sharpen;
         self.quality.frame_limit = q.frame_limit;
@@ -3117,21 +3261,30 @@ impl PcRenderer {
             (e.0.max(size.0), e.1.max(size.1))
         });
         let scaled = range.is_some() || size != self.internal_size;
+        // The post stack draws the 3D into its own targets at any scale,
+        // in HDR where the adapter can.
+        let post = native && self.post_targets;
+        let need = scaled || post;
+        let format = if post && self.hdr_ok {
+            post::HDR_FORMAT
+        } else {
+            OFFSCREEN_FORMAT
+        };
         if !force {
             match &mut self.scene {
-                Some(t) if scaled && t.extent == extent => {
+                Some(t) if need && t.extent == extent && t.format == format => {
                     t.size = size;
                     return;
                 }
-                None if !scaled => return,
+                None if !need => return,
                 _ => {}
             }
         }
-        self.scene = scaled.then(|| upscale::SceneTargets::new(&self.device, extent, size));
+        self.scene = need.then(|| upscale::SceneTargets::new(&self.device, extent, size, format));
         let alloc = self.scene_extent();
         self.water.resize(&self.device, alloc);
         if self.msaa > 1 {
-            self.msaa_targets = Some(create_msaa_targets(&self.device, alloc));
+            self.msaa_targets = Some(create_msaa_targets(&self.device, alloc, self.msaa_format()));
         }
         for ao in [&mut self.ao_pass, &mut self.ao_pass_ms]
             .into_iter()
@@ -3144,6 +3297,10 @@ impl PcRenderer {
             .flatten()
         {
             m.invalidate();
+        }
+        for set in self.hdr_sets.iter_mut().flatten() {
+            set.ao.invalidate();
+            set.map.invalidate();
         }
     }
 
@@ -3374,6 +3531,130 @@ impl PcRenderer {
     /// each; `trino_core::ScreenFlash` under `flash_guard` never makes one.
     pub fn flash_strobes(&self) -> u32 {
         self.flash_monitor.strobes
+    }
+
+    /// What the post stack shows (issue #64): as the game sets it, never,
+    /// always ([`trino_core::PostSettings::FILMIC`] when the game sets
+    /// none) or the bloom alone — the editor's Scene view toggle and
+    /// `TRINO_POST=off|on|bloom`. Only the native profile (and the Web)
+    /// runs the stack ([`trino_core::Caps::post_tier`]).
+    pub fn set_post_view(&mut self, view: PostView) {
+        self.post_view = view;
+    }
+
+    pub fn post_view(&self) -> PostView {
+        self.post_view
+    }
+
+    /// The adapter renders the post stack's scene in `Rgba16Float` (else
+    /// 8-bit: no range past 1, the rest of the stack the same).
+    pub fn post_hdr(&self) -> bool {
+        self.hdr_ok
+    }
+
+    /// Register a baked grading LUT (`TLUT`, a `[luts.*]` asset's blob)
+    /// under its handle; a re-upload replaces it (live reload). Hosts call
+    /// it for every blob that starts with `TLUT`
+    /// ([`trino_core::post::TLUT_MAGIC`]). Returns the GPU bytes.
+    pub fn upload_lut(
+        &mut self,
+        id: trino_core::LutId,
+        bytes: &[u8],
+    ) -> Result<u64, trino_core::LutError> {
+        let lut = trino_core::Lut::parse(bytes)?;
+        let tex = post::LutTex::new(&self.device, &self.queue, &lut);
+        self.luts.insert(id, tex);
+        Ok(post::LutTex::bytes(lut.size()))
+    }
+
+    /// A baked blob the host loads: when it is a grading LUT (`TLUT`
+    /// magic), also upload it as one (its handle is the blob's). Returns
+    /// whether it was a LUT; a broken one is logged and skipped.
+    pub fn take_lut_blob(&mut self, id: u32, bytes: &[u8]) -> bool {
+        if !bytes.starts_with(&trino_core::post::TLUT_MAGIC) {
+            return false;
+        }
+        if let Err(e) = self.upload_lut(trino_core::LutId(id), bytes) {
+            eprintln!("[trino] LUT {id:08x}: {e:?}");
+        }
+        true
+    }
+
+    /// The player's accessibility settings the renderer honors itself:
+    /// the daltonization filter (`cvd_filter` on: `cvd`'s correction).
+    /// Hosts call it every frame with `Platform::access()`.
+    pub fn apply_access(&mut self, access: &trino_core::AccessSettings) {
+        self.set_cvd_filter(if access.cvd_filter {
+            access.cvd
+        } else {
+            trino_core::CvdMode::Off
+        });
+    }
+
+    /// Forget a LUT (its group unloaded); returns the bytes freed.
+    pub fn remove_lut(&mut self, id: trino_core::LutId) -> u64 {
+        self.luts
+            .remove(&id)
+            .map_or(0, |t| post::LutTex::bytes(t.size))
+    }
+
+    pub fn has_lut(&self, id: trino_core::LutId) -> bool {
+        self.luts.contains_key(&id)
+    }
+
+    /// The player's daltonization filter (issue #64): every frame of the
+    /// native profile and the Web is corrected for `mode` (Fidaner 2005
+    /// over the Machado 2009 simulation, `trino_core::access::color::
+    /// correction`), the HUD included, before the simulation view. `Off`
+    /// and `Grayscale` draw nothing. Hosts pass `AccessSettings::cvd` while
+    /// `cvd_filter` is on; the console profiles ignore it (the consoles'
+    /// answer is the semantic palettes).
+    pub fn set_cvd_filter(&mut self, mode: trino_core::CvdMode) {
+        self.cvd_filter = mode;
+    }
+
+    pub fn cvd_filter(&self) -> trino_core::CvdMode {
+        self.cvd_filter
+    }
+
+    /// The filter's mode this frame (`Off` where it doesn't run).
+    fn frame_cvd_filter(&self) -> trino_core::CvdMode {
+        use trino_core::CvdMode as M;
+        match self.cvd_filter {
+            M::Off | M::Grayscale => M::Off,
+            _ if self.caps.post_tier != trino_core::PostTier::Full => M::Off,
+            m => m,
+        }
+    }
+
+    /// The post settings this frame runs with and whether it shows the
+    /// bloom alone: the game's (or the view's), on the Full tier only, the
+    /// quality preset's level applied (Off keeps the tonemap and the
+    /// grading and drops the bloom, vignette and grain).
+    fn frame_post(&self) -> Option<(trino_core::PostSettings, bool)> {
+        if self.caps.post_tier != trino_core::PostTier::Full {
+            return None;
+        }
+        let (mut p, mask) = self.post_view.resolve(self.post)?;
+        if self.quality.post == Some(trino_core::PostSetting::Off) && !mask {
+            p.bloom = None;
+            p.vignette = 0.0;
+            p.grain = 0.0;
+        }
+        Some((p, mask))
+    }
+
+    /// The preset's bloom: its most levels and whether the chain starts at
+    /// half the picture's size (`None`: no bloom). High when never applied
+    /// (smoke runs and goldens pin High).
+    fn bloom_cap(&self) -> Option<(u32, bool)> {
+        use trino_core::PostSetting as P;
+        match self.quality.post.unwrap_or(P::High) {
+            P::Off => None,
+            P::Low => Some((3, false)),
+            P::Medium => Some((4, true)),
+            P::High => Some((post::MAX_LEVELS, true)),
+        }
     }
 
     pub fn set_ao_view(&mut self, view: AoView) {
@@ -4357,13 +4638,19 @@ impl PcRenderer {
             self.warm_wait(precompile::JobKind::ShadowPipes(self.msaa));
         }
         if self.shadow_pipes.is_none() {
-            self.shadow_pipes = Some(shadow::ShadowPipes::new(&self.device, &self.sources, 1));
+            self.shadow_pipes = Some(shadow::ShadowPipes::new(
+                &self.device,
+                &self.sources,
+                1,
+                OFFSCREEN_FORMAT,
+            ));
         }
         if self.msaa > 1 && self.shadow_pipes_ms.is_none() {
             self.shadow_pipes_ms = Some(shadow::ShadowPipes::new(
                 &self.device,
                 &self.sources,
                 self.msaa,
+                OFFSCREEN_FORMAT,
             ));
         }
     }
@@ -4425,10 +4712,88 @@ impl PcRenderer {
 
     /// Render the recorded commands into the main target, or (`second`)
     /// into the second screen's, and submit.
+    /// The multisampled color's format: HDR while the post stack draws.
+    fn msaa_format(&self) -> wgpu::TextureFormat {
+        if self.post_targets && self.hdr_ok {
+            post::HDR_FORMAT
+        } else {
+            OFFSCREEN_FORMAT
+        }
+    }
+
+    /// Before a main-screen frame: the scene targets, the multisampled
+    /// color and the pipelines the post stack draws with (`on`), or back
+    /// to the plain frame once it stops.
+    fn prepare_post(&mut self, on: bool) {
+        use precompile::JobKind as J;
+        if on != self.post_targets {
+            self.post_targets = on;
+            self.rebuild_scene_targets(false);
+        }
+        let want = self.msaa_format();
+        if self.msaa_targets.as_ref().is_some_and(|t| t.format != want) {
+            self.msaa_targets = Some(create_msaa_targets(&self.device, self.scene_extent(), want));
+            if let Some(ao) = &mut self.ao_pass_ms {
+                ao.invalidate();
+            }
+            if let Some(m) = &mut self.shadow_map_ms {
+                m.invalidate();
+            }
+            if let Some(h) = &mut self.hdr_sets[1] {
+                h.ao.invalidate();
+                h.map.invalidate();
+            }
+        }
+        if !on {
+            return;
+        }
+        self.post_used = true;
+        if self.hdr_ok {
+            let ms = self.msaa_targets.is_some() && self.ms_pipelines.is_some();
+            let i = ms as usize;
+            if self.hdr_sets[i].is_none() {
+                self.warm_wait(J::Hdr(ms));
+            }
+            if self.hdr_sets[i].is_none() {
+                if ms {
+                    self.water.ensure_ms(&self.device, self.scene_extent());
+                }
+                self.hdr_sets[i] = Some(Box::new(post::build_hdr_set(
+                    &self.device,
+                    &self.sources,
+                    (&self.water.groups, &self.water.bgl),
+                    ms,
+                    self.webgl2,
+                )));
+            }
+            if self.gpu.as_ref().is_some_and(|g| !g.has_hdr(ms)) {
+                self.warm_wait(J::HdrGpu(ms));
+            }
+            if let Some(g) = &mut self.gpu
+                && !g.has_hdr(ms)
+            {
+                let (layout, shader) = g.ms_source();
+                let samples = if ms { MSAA_SAMPLES } else { 1 };
+                let p =
+                    gpu_tnl::pipelines(&self.device, &layout, &shader, samples, post::HDR_FORMAT);
+                g.install_hdr(ms, p);
+            }
+        }
+        if self.post_pass.is_none() {
+            self.warm_wait(J::Post);
+        }
+    }
+
     fn draw_commands(&mut self, second: bool) {
         trino_core::zone!("encode");
         let _pipes = pipes::scope(&self.pipe_entry);
         self.ensure_shadow_pipes();
+        // The post stack (issue #64): this frame's settings, then its scene
+        // targets and pipelines (or their removal once it stops).
+        let post_frame = if second { None } else { self.frame_post() };
+        if !second {
+            self.prepare_post(post_frame.is_some());
+        }
         if self.strict {
             // With two screens, the main screen's counts are in `main_*`:
             // the budgets are per frame, both screens together.
@@ -4625,7 +4990,7 @@ impl PcRenderer {
             };
             self.shadow_map_frame(size)
         };
-        let split = if ao.is_some() || scaled || map.is_some() {
+        let split = if ao.is_some() || scaled || map.is_some() || post_frame.is_some() {
             segments
                 .iter()
                 .rposition(|s| matches!(s, Segment::Tris { .. } | Segment::Meshes { .. }))
@@ -4657,7 +5022,7 @@ impl PcRenderer {
                 self.warm_wait(J::Upscale);
             }
             if self.cvd_view != trino_core::CvdMode::Off {
-                self.warm_wait(J::Cvd(self.cvd_view));
+                self.warm_wait(J::Cvd(self.cvd_view, CvdKind::Simulate));
             }
         }
 
@@ -4759,13 +5124,26 @@ impl PcRenderer {
                 * params.size.1 as f32
                 * 0.5;
             // With MSAA the composite reads the multisampled depth (its
-            // first sample), as the AO does.
+            // first sample), as the AO does; into an HDR scene, its twin.
+            let hdr = scene_pass
+                && self
+                    .scene
+                    .as_ref()
+                    .is_some_and(|t| t.format == post::HDR_FORMAT);
             let (pass, depth) = match (&self.msaa_targets, ms) {
+                (Some(t), true) if hdr => (
+                    &mut self.hdr_sets[1].as_mut().expect("prepare_post").map,
+                    &t.depth,
+                ),
                 (Some(t), true) => (
                     self.shadow_map_ms.get_or_insert_with(|| {
                         shadow_map::MapPass::new(&self.device, OFFSCREEN_FORMAT, true, false)
                     }),
                     &t.depth,
+                ),
+                _ if hdr => (
+                    &mut self.hdr_sets[0].as_mut().expect("prepare_post").map,
+                    scene_depth,
                 ),
                 _ => (
                     self.shadow_map.get_or_insert_with(|| {
@@ -4816,7 +5194,21 @@ impl PcRenderer {
             };
             // With MSAA the occlusion reads the multisampled depth (its
             // first sample); its own pass, as its bind groups hold the view.
+            // Into an HDR scene, its twin.
+            let hdr = scene_pass
+                && self
+                    .scene
+                    .as_ref()
+                    .is_some_and(|t| t.format == post::HDR_FORMAT);
             let (pass, depth) = match (&self.msaa_targets, ms) {
+                (Some(t), true) if hdr => (
+                    &mut self.hdr_sets[1].as_mut().expect("prepare_post").ao,
+                    &t.depth,
+                ),
+                _ if hdr => (
+                    &mut self.hdr_sets[0].as_mut().expect("prepare_post").ao,
+                    scene_depth,
+                ),
                 (Some(t), true) => (
                     self.ao_pass_ms.get_or_insert_with(|| {
                         ao::AoPass::new(&self.device, OFFSCREEN_FORMAT, true, false)
@@ -4840,7 +5232,39 @@ impl PcRenderer {
             );
             self.times.ao_passes += 1;
         }
-        if scene_pass {
+        if let (true, Some((settings, bloom_only))) = (scene_pass, post_frame) {
+            if let Some(z) = &mut zones {
+                z.mark(&mut encoder, "post");
+            }
+            // The post stack: bloom, then the composite onto the picture
+            // (it upscales a scaled scene too).
+            let bloom_cap = self.bloom_cap();
+            let lut = settings.grading.and_then(|id| self.luts.get(&id));
+            let pass = self
+                .post_pass
+                .get_or_insert_with(|| post::PostPass::new(&self.device, self.hdr_ok));
+            if let Some(scene) = &self.scene {
+                let work = pass.encode(
+                    &self.device,
+                    &self.queue,
+                    &mut encoder,
+                    &post::PostFrame {
+                        scene,
+                        dst: (&self.offscreen_view, self.internal_size),
+                        settings: &settings,
+                        bloom_only,
+                        bloom_cap,
+                        lut,
+                        sharpen: self.quality.sharpen,
+                        seed: self.post_seed,
+                    },
+                );
+                self.post_seed = self.post_seed.wrapping_add(1);
+                self.times.post_passes += 1;
+                self.times.bloom_levels = work.bloom_levels;
+                self.times.upload_bytes += work.upload;
+            }
+        } else if scene_pass {
             if let Some(z) = &mut zones {
                 z.mark(&mut encoder, "upscale");
             }
@@ -4925,6 +5349,31 @@ impl PcRenderer {
                 },
             );
         }
+        // The players' correction filter (issue #64), over the whole
+        // picture (the HUD too), before the simulation view.
+        let fix = if second {
+            trino_core::CvdMode::Off
+        } else {
+            self.frame_cvd_filter()
+        };
+        if fix != trino_core::CvdMode::Off {
+            if let Some(z) = &mut zones {
+                z.mark(&mut encoder, "cvd filter");
+            }
+            self.warm_wait(precompile::JobKind::Cvd(fix, CvdKind::Correct));
+            self.cvd
+                .get_or_insert_with(|| cvd::CvdPass::new(&self.device))
+                .encode(
+                    &self.device,
+                    &mut encoder,
+                    &self.offscreen_tex,
+                    &self.offscreen_view,
+                    self.internal_size,
+                    fix,
+                    CvdKind::Correct,
+                    0,
+                );
+        }
         // The color-vision simulation view, last: what the frame looks like
         // to the viewer it simulates.
         if self.cvd_view != trino_core::CvdMode::Off {
@@ -4948,6 +5397,7 @@ impl PcRenderer {
                     view,
                     size,
                     self.cvd_view,
+                    CvdKind::Simulate,
                     second as usize,
                 );
         }
@@ -5020,13 +5470,27 @@ impl PcRenderer {
                 wgpu::StoreOp::Store,
             ),
         };
-        let shadow_pipes = match ms {
-            Some(_) => self.shadow_pipes_ms.as_ref(),
-            None => self.shadow_pipes.as_ref(),
+        // The post stack's HDR scene: every pipeline's twin (issue #64).
+        let hdr = !second
+            && scene
+            && self
+                .scene
+                .as_ref()
+                .is_some_and(|t| t.format == post::HDR_FORMAT);
+        let hdr_set = if hdr {
+            self.hdr_sets[ms.is_some() as usize].as_deref()
+        } else {
+            None
         };
-        let pipes = match ms {
-            Some((_, p, _)) => [&p[0], &p[1], &p[2], &p[3]],
-            None => [
+        let shadow_pipes = match (hdr_set, ms) {
+            (Some(h), _) => Some(&h.shadow),
+            (None, Some(_)) => self.shadow_pipes_ms.as_ref(),
+            (None, None) => self.shadow_pipes.as_ref(),
+        };
+        let pipes = match (hdr_set, ms) {
+            (Some(h), _) => [&h.scene[0], &h.scene[1], &h.scene[2], &h.scene[3]],
+            (None, Some((_, p, _))) => [&p[0], &p[1], &p[2], &p[3]],
+            (None, None) => [
                 &self.sprite_pipeline,
                 &self.tri_pipeline,
                 &self.tri_clamp_pipeline,
@@ -5094,10 +5558,16 @@ impl PcRenderer {
                     let (pipeline, k) = match kind {
                         TriKind::Water => {
                             pass.set_bind_group(2, &self.lights_bg, &[]);
-                            let (bg, per_pixel, vertex) = match (&self.water.ms, ms.is_some()) {
-                                (Some(w), true) => (&w.bg, &w.per_pixel, &w.vertex),
-                                _ => (&self.water.bg, &self.water.per_pixel, &self.water.vertex),
-                            };
+                            let (bg, mut per_pixel, mut vertex) =
+                                match (&self.water.ms, ms.is_some()) {
+                                    (Some(w), true) => (&w.bg, &w.per_pixel, &w.vertex),
+                                    _ => {
+                                        (&self.water.bg, &self.water.per_pixel, &self.water.vertex)
+                                    }
+                                };
+                            if let Some(h) = hdr_set {
+                                (per_pixel, vertex) = (&h.water[0], &h.water[1]);
+                            }
                             pass.set_bind_group(3, bg, &[]);
                             // The second screen (3DS profile) is never the
                             // per-pixel tier.
@@ -5142,7 +5612,13 @@ impl PcRenderer {
                             t.and_then(|t| self.tex3d.get(&t)).unwrap_or(&self.white_bg)
                         };
                         bind(5);
-                        draws += g.record(&mut pass, *first..first + count, ms.is_some(), &texture);
+                        draws += g.record(
+                            &mut pass,
+                            *first..first + count,
+                            ms.is_some(),
+                            hdr,
+                            &texture,
+                        );
                     }
                 }
             }
@@ -5494,6 +5970,7 @@ impl Renderer for PcRenderer {
         self.locals = LightList::EMPTY;
         self.wetness = 0.0;
         self.ao = None;
+        self.post = None;
         self.light_sets.clear();
         self.water_state = WaterState::NONE;
         self.water_sets.clear();
@@ -5649,6 +6126,12 @@ impl Renderer for PcRenderer {
 
     fn lod_bias(&self) -> f32 {
         self.quality.lod_bias
+    }
+
+    fn set_post(&mut self, post: Option<&trino_core::PostSettings>) {
+        // Like the AO, never recorded for stereo: only the Full tier (no
+        // stereo screen) reads it.
+        self.post = post.map(|p| p.clamped());
     }
 
     fn set_ambient_occlusion(&mut self, ao: Option<&AmbientOcclusion>) {
@@ -6849,6 +7332,11 @@ mod webgl2_tests {
                 &cvd::shader(trino_core::CvdMode::Deuteranopia),
             ),
             ("stereo compose", stereo::SHADER),
+            ("post.wgsl", post::SHADER),
+            (
+                "cvd filter (tritanopia)",
+                &cvd::shader_for(trino_core::CvdMode::Tritanopia, CvdKind::Correct),
+            ),
         ] {
             let n = glsl_es_300(&depth_as_float(source)).unwrap_or_else(|e| panic!("{name}: {e}"));
             assert!(n > 0, "{name}");

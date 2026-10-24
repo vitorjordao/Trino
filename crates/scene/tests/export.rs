@@ -399,3 +399,80 @@ fn shadows_reach_the_tscn_and_the_generated_code() {
     let baked = BakedScene::parse(leak(bake::to_tscn(&scene, &lib).0)).unwrap();
     assert_eq!(baked.shadows(), None);
 }
+
+/// Post-processing and glows (issue #64, TSCN v6): `environment.post`
+/// becomes the `POST` const (not in TSCN, like the AO), a Glow component
+/// reaches both game-side forms (codegen's `glow`, the baked node's), and a
+/// console export with `to_rust_graded` grades the environment's colors.
+#[test]
+fn codegen_and_tscn_carry_post_and_glows() {
+    let (mut scene, lib) = (common::scene(), common::library());
+    let (code, _) = codegen::to_rust(&scene, &lib);
+    assert!(code.contains("pub const POST: Option<PostSettings> = None;"));
+    assert!(code.contains("glow: None,"));
+    let plain = bake::to_tscn(&scene, &lib).0;
+    scene.environment.post = Some(trino_scene::PostDef {
+        exposure: 1.25,
+        tonemap: trino_scene::TonemapDef::Aces,
+        bloom: Some(trino_scene::BloomDef::default()),
+        grading: Some("luts/dusk".into()),
+        vignette: 0.25,
+        grain: 0.0,
+        enabled: true,
+    });
+    let (code, _) = codegen::to_rust(&scene, &lib);
+    assert!(
+        code.contains(&format!(
+            "pub const POST: Option<PostSettings> = Some(PostSettings {{\n    exposure: 1.25,\n    \
+             tonemap: Tonemap::Aces,\n    bloom: Some(Bloom {{ threshold: 0.8, intensity: 0.6, \
+             radius: 0.6 }}),\n    grading: Some(LutId({:#010x})),\n    vignette: 0.25,\n    \
+             grain: 0.0,\n}});",
+            trino_core::asset_id("luts/dusk")
+        )),
+        "{code}"
+    );
+    assert_eq!(plain, bake::to_tscn(&scene, &lib).0, "post is not in TSCN");
+
+    // A glow on the first entity.
+    scene.entities[0].glow = Some(trino_scene::GlowComponent {
+        radius: 0.4,
+        color: [255, 200, 120, 180],
+        sprite: None,
+        mode: trino_scene::GlowModeDef::Always,
+    });
+    let (code, _) = codegen::to_rust(&scene, &lib);
+    assert!(
+        code.contains(&format!(
+            "glow: Some(Glow {{ sprite: SpriteId({:#010x}), radius: 0.4, color: Color::rgba(255, \
+             200, 120, 180), mode: GlowMode::Always }}),",
+            trino_core::Glow::SPRITE.0
+        )),
+        "{code}"
+    );
+    let blob = bake::to_tscn(&scene, &lib).0;
+    let baked = trino_core::BakedScene::parse(Box::leak(blob.into_boxed_slice())).unwrap();
+    let glows: Vec<_> = baked.nodes().filter_map(|n| n.glow).collect();
+    assert_eq!(
+        glows,
+        vec![trino_core::Glow {
+            sprite: trino_core::Glow::SPRITE,
+            radius: 0.4,
+            color: trino_core::Color::rgba(255, 200, 120, 180),
+            mode: trino_core::GlowMode::Always,
+        }]
+    );
+
+    // A console export graded through a channel-rotating LUT.
+    let mut lut = trino_core::Lut::header(2).to_vec();
+    for i in 0..8u32 {
+        let (r, g, b) = (i & 1, (i >> 1) & 1, (i >> 2) & 1);
+        lut.extend([255 * g as u8, 255 * b as u8, 255 * r as u8]);
+    }
+    let lut = trino_core::Lut::parse(&lut).unwrap();
+    scene.environment.clear = [255, 0, 0];
+    let (code, _) = codegen::to_rust_graded(&scene, &lib, trino_scene::Target::N64, Some(&lut));
+    assert!(
+        code.contains("pub const CLEAR: Color = Color::rgb(0, 0, 255);"),
+        "{code}"
+    );
+}

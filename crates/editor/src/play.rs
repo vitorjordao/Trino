@@ -56,6 +56,7 @@ impl PlaySession {
         // TSCN carries no AO (consoles bake theirs): the scene's own.
         game.ao = scene.environment.core_ao();
         game.stereo = scene.environment.core_stereo();
+        game.post = scene.environment.core_post();
         Ok(PlaySession {
             game,
             last: Instant::now(),

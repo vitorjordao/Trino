@@ -36,6 +36,28 @@ pub fn to_rust(scene: &Scene, lib: &Library) -> (String, Vec<String>) {
 /// [`to_rust`] with `target`'s platform variants applied (`cargo xtask scene
 /// export --platform n64`).
 pub fn to_rust_for(scene: &Scene, lib: &Library, target: Target) -> (String, Vec<String>) {
+    to_rust_graded(scene, lib, target, None)
+}
+
+/// [`to_rust_for`] with the environment's colors graded through `lut` (a
+/// console export of a scene with `bake_grading`, issue #64: `cargo xtask
+/// scene export --platform n64 --bake-grading`).
+pub fn to_rust_graded(
+    scene: &Scene,
+    lib: &Library,
+    target: Target,
+    lut: Option<&trino_core::Lut<'_>>,
+) -> (String, Vec<String>) {
+    let graded;
+    let scene = match lut {
+        Some(l) => {
+            let mut s = scene.clone();
+            s.environment = s.environment.graded(l);
+            graded = s;
+            &graded
+        }
+        None => scene,
+    };
     let resolved = resolve_for(scene, lib, 0.0, target);
     let mut out = String::new();
     let platform = match target {
@@ -50,7 +72,7 @@ pub fn to_rust_for(scene: &Scene, lib: &Library, target: Target) -> (String, Vec
     );
     let _ = writeln!(
         out,
-        "#[allow(unused_imports)]\nuse trino_core::{{\n    AmbientOcclusion, AoQuality, Camera3, ClipId, Collider, Color, DetailTexture, Fog, Impostor,\n    Light, LodLevel, Lods, Mat34, ModelId, ModelParams, NO_CELL, SceneNode, ShadowCast,\n    ShadowPlane, ShadowSettings, ShadowTier, Shading, Shape, SoundId, SoundSource, SpriteId,\n    StereoPolicy, StereoSettings, Tags, TexFilter, Vec2, Vec3, VisVolume, Water,\n}};\n"
+        "#[allow(unused_imports)]\nuse trino_core::{{\n    AmbientOcclusion, AoQuality, Camera3, ClipId, Collider, Color, DetailTexture, Fog, Impostor,\n    Light, LodLevel, Lods, Mat34, ModelId, ModelParams, NO_CELL, SceneNode, ShadowCast,\n    ShadowPlane, ShadowSettings, ShadowTier, Shading, Shape, SoundId, SoundSource, SpriteId,\n    StereoPolicy, StereoSettings, Tags, TexFilter, Vec2, Vec3, VisVolume, Water, Glow, GlowMode,\n    PostSettings, Tonemap, Bloom, LutId,\n}};\n"
     );
     let env = &scene.environment;
     let cam = env.core_camera();
@@ -137,6 +159,32 @@ pub fn to_rust_for(scene: &Scene, lib: &Library, target: Target) -> (String, Vec
         out,
         "pub const STEREO: Option<StereoSettings> = {stereo};\n"
     );
+    // Post-processing (issue #64): `Renderer::set_post(POST.as_ref())`
+    // every frame (the PC and the Web run it; the consoles ignore it).
+    let post = match env.core_post() {
+        Some(p) => format!(
+            "Some(PostSettings {{\n    exposure: {},\n    tonemap: Tonemap::{:?},\n    bloom: {},\n    grading: {},\n    vignette: {},\n    grain: {},\n}})",
+            f(p.exposure),
+            p.tonemap,
+            match p.bloom {
+                Some(b) => format!(
+                    "Some(Bloom {{ threshold: {}, intensity: {}, radius: {} }})",
+                    f(b.threshold),
+                    f(b.intensity),
+                    f(b.radius)
+                ),
+                None => "None".into(),
+            },
+            match p.grading {
+                Some(l) => format!("Some(LutId({:#010x}))", l.0),
+                None => "None".into(),
+            },
+            f(p.vignette),
+            f(p.grain)
+        ),
+        None => "None".into(),
+    };
+    let _ = writeln!(out, "pub const POST: Option<PostSettings> = {post};\n");
     let receivers: Vec<String> = resolved
         .receivers()
         .iter()
@@ -276,7 +324,7 @@ pub fn to_rust_for(scene: &Scene, lib: &Library, target: Target) -> (String, Vec
             .collect();
         let _ = writeln!(
             out,
-            "    SceneNode {{\n        name: \"{}\",\n        tags: Tags::List(&[{}]),\n        matrix: Mat34 {{\n            m: [{}],\n        }},\n        model: {},\n        params: ModelParams {{\n            tint: {},\n            emissive: {},\n            shading: Shading::{},\n            double_sided: {},\n            anim: None,\n            texture: {},\n            palette: None,\n            gloss: {},\n            filter: TexFilter::{:?},\n            detail: {},\n            water: {},\n            shadow: {},\n        }},\n        anim: {},\n        collider: {},\n        lod: {},\n        sound: {},\n        cell: {},\n        vis: {},\n    }},",
+            "    SceneNode {{\n        name: \"{}\",\n        tags: Tags::List(&[{}]),\n        matrix: Mat34 {{\n            m: [{}],\n        }},\n        model: {},\n        params: ModelParams {{\n            tint: {},\n            emissive: {},\n            shading: Shading::{},\n            double_sided: {},\n            anim: None,\n            texture: {},\n            palette: None,\n            gloss: {},\n            filter: TexFilter::{:?},\n            detail: {},\n            water: {},\n            shadow: {},\n        }},\n        anim: {},\n        collider: {},\n        lod: {},\n        sound: {},\n        cell: {},\n        vis: {},\n        glow: {},\n    }},",
             esc(&item.name),
             tags.join(", "),
             rows.join(", "),
@@ -336,6 +384,16 @@ pub fn to_rust_for(scene: &Scene, lib: &Library, target: Target) -> (String, Vec
                 Some(trino_core::VisVolume::Portal { half, a, b }) => format!(
                     "Some(VisVolume::Portal {{ half: {}, a: {a}, b: {b} }})",
                     v3(half)
+                ),
+                None => "None".into(),
+            },
+            match item.glow {
+                Some(g) => format!(
+                    "Some(Glow {{ sprite: SpriteId({:#010x}), radius: {}, color: {}, mode: GlowMode::{:?} }})",
+                    g.sprite.0,
+                    f(g.radius),
+                    color(g.color),
+                    g.mode
                 ),
                 None => "None".into(),
             }

@@ -113,6 +113,7 @@ fn node(lod: &'static [LodLevel]) -> SceneNode {
         sound: None,
         cell: NO_CELL,
         vis: None,
+        glow: None,
     }
 }
 

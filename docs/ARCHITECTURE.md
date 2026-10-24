@@ -221,6 +221,20 @@ stereo screen, and the defaults are no-ops there. The PC's 3DS profile replays t
 way and composes a preview (anaglyph, side by side, one eye, a flip). Details in
 [ADR 0032](adr/0032-stereoscopic-3d.md).
 
+### Post-processing per tier (issue #64)
+
+`Renderer::set_post` (cleared at `begin_frame`, a no-op by default) asks for exposure, a
+tonemap (none, Reinhard, ACES, AgX), bloom, a grading LUT, vignette and grain. On the
+`PostTier::Full` tier (the PC's native profile, the Web) the 3D up to the frame's last 3D
+draw goes into an `Rgba16Float` scene target with an HDR twin of every scene pipeline;
+bloom (a dual-filter chain) and one composite write the picture the HUD draws on. On the
+`Baked` tier (N64, 3DS, the PC's console profiles) nothing runs at frame time: the bake
+grades the colors of the assets that name a LUT (`grading`) and a scene's environment
+(`bake_grading`), and `Glow` billboards stand in for bloom. The CPU math in
+`trino_core::post` is the shader's reference. The same CVD pass also draws the players'
+daltonization filter (`AccessSettings::cvd_filter`). Details in
+[ADR 0033](adr/0033-post-processing-stack.md).
+
 ### 2D in the same pipeline
 
 2D is not a separate engine path. The same `Renderer` draws it in the same frame as the

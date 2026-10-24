@@ -26,6 +26,8 @@ mod n64;
 mod package;
 mod particles;
 mod perf;
+mod post;
+mod post_assets;
 mod project;
 mod quality;
 mod river_assets;
@@ -130,8 +132,19 @@ commands:
   new                  the same, asking for name, folder and template
   gen-assets           regenerate the sample master assets (dev utility)
   scene check [file..] validate scenes/prefabs/materials (text-first loop)
-  scene export [--platform pc|n64|3ds] <scene.ron> <out.rs>
+  scene export [--platform pc|n64|3ds] [--bake-grading] <scene.ron> <out.rs>
                        bake a scene into no_std Rust data for games
+                       (--bake-grading: its colors through post.grading)
+  scene shot <scene.ron> [--platform pc|n64|3ds|web] [--post game|on|off|bloom]
+      [--size WxH] [--out <file.png>] [--json]
+                       render a scene headless: post stack before/after,
+                       the consoles' baked grading and glows
+  lut neutral [--size 2..64] [--out <file.png>] [--json]
+                       the identity grading LUT as a strip PNG to edit
+  lut inspect <file.png|file.cube|luts/name> [--json]
+                       a LUT's size and how far it moves colors
+  post check [--json]  LUTs bake, scenes name declared LUTs, graded scenes
+                       draw models graded the same on the consoles
   ui check [screen..] [--platform n64|3ds|pc|web] [--lang <lang>] [--json]
                        validate ui/*.ui.ron and lay each out per target and
                        language: overflowing text, controls the pad cannot
@@ -524,8 +537,25 @@ fn main() -> ExitCode {
             model::run(&project.root, &rest)
         }
         (Some("scene"), _) => {
-            let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
+            let mut rest: Vec<String> = args.iter().skip(1).cloned().collect();
+            // `--out` was taken with the Web's options above (`scene shot`).
+            if let Some(out) = &web_build.out {
+                rest.extend(["--out".to_string(), out.display().to_string()]);
+            }
+            let rest: Vec<&str> = rest.iter().map(String::as_str).collect();
             scene::run(&repo_root(), &rest)
+        }
+        (Some("lut"), _) => {
+            let mut rest: Vec<String> = args.iter().skip(1).cloned().collect();
+            if let Some(out) = &web_build.out {
+                rest.extend(["--out".to_string(), out.display().to_string()]);
+            }
+            let rest: Vec<&str> = rest.iter().map(String::as_str).collect();
+            post::run_lut(&project.root, &rest)
+        }
+        (Some("post"), _) => {
+            let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
+            post::run_post(&project.root, &rest)
         }
         (Some("particles"), _) => {
             let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
@@ -992,6 +1022,8 @@ fn gen_assets_into(root: &Path) {
     river_assets::gen_all(root, &|path, w, h, rgba| write_png(path, w, h, rgba));
     // trino5x7: the default pixel font (bitmap text on every target).
     font_assets::gen_all(root, &|path, w, h, rgba| write_png(path, w, h, rgba));
+    // The post stack (issue #64): the halo sprite and the LUTs.
+    post_assets::gen_all(root, &|path, w, h, rgba| write_png(path, w, h, rgba));
 }
 
 /// glTF `COLOR_0` is linear: display (sRGB) color bytes -> little-endian

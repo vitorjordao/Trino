@@ -185,6 +185,16 @@ A feature is done only when **PC, N64 and 3DS** all run it and an emulator has s
   `if trino_core::trace::ENABLED` into an `#[inline(never)]` function, so the release
   build's code doesn't change (`build n64` checks the hot symbols).
 
+- **A full-screen pass that needs a float scene (post-processing, issue #64, ADR 0033)**
+  reuses the render scale's split and scene targets (`SceneTargets` has a format) and an
+  `Rgba16Float` twin of every pipeline writing the scene's color (`post::HdrSet`, built
+  on first use or by a precompile job). Off, nothing is allocated: prove it with "a frame
+  after a post frame equals one before it" (`post_off_is_the_old_frame_byte_for_byte`).
+  Hold the shader to a no_std CPU reference per mode (`trino_core::post::tone`, both T&L
+  paths), and give the consoles a Baked tier (bake-time data plus a cheap run-time
+  stand-in, `Glow`) checked by the same self-test step on every target, with mutations
+  for each tier's half (no LUT, an ungraded mesh, no halo sprite).
+
 ## 2. Backends, in matched pairs
 
 - The FFI goes through the shims only: `crates/platform-n64/shim/trino_shim.c` with

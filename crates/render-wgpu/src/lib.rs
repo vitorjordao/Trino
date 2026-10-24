@@ -24,6 +24,7 @@ pub mod tracy;
 pub use frame_report::{FrameMeter, QualityNote};
 pub use renderer::{
     AoView, Bench, Calibration, CompressedFormat, MSAA_SAMPLES, N64Estimate, PcFrameTimes,
-    PcRenderer, PendingRead, RendererError, ShadowView, SpriteMemory, StereoView, WebBackend,
+    PcRenderer, PendingRead, PostView, RendererError, ShadowView, SpriteMemory, StereoView,
+    WebBackend,
 };
 pub use sim::SimProfile;

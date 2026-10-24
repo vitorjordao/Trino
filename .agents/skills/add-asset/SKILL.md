@@ -340,6 +340,20 @@ groups = ["level1"]              # default ["boot"]: loaded at boot, always resi
   `ui/themes/high_contrast.ron`; all of it bakes into the `access/data` blob with the UI
   blobs. Check with `cargo xtask access check` (the `accessibility` skill).
 
+## Grading LUTs and console grading (issue #64, ADR 0033)
+
+- `cargo xtask lut neutral --size 32` writes `assets/shared/luts/neutral.png` (a strip:
+  `n` slices of blue side by side, red along x, green down y). Grade it in any image tool
+  (or export a `.cube`) and declare `[luts.dusk] file = "luts/dusk.png"`.
+- PC/Web: baked to a `TLUT` blob; a game passes `PostSettings { grading:
+  Some(LutId::of("luts/dusk")), .. }` to `Renderer::set_post`.
+- Consoles: `grading = "luts/dusk"` on the `[models.*]` (and `[sprites.*]`) the scene
+  draws, `bake_grading = true` on its `[scenes.*]`. `cargo xtask post check` warns when a
+  graded scene draws an ungraded model; `cargo xtask scene shot <scene> --platform n64`
+  shows the result. Unlit colors match the PC exactly; lit ones are graded before the
+  light (close, not equal).
+- `lut inspect <file|luts/x>` says how far a LUT moves colors (`identity` for a neutral).
+
 ## Verify
 
 1. `cargo xtask assets pc` (and `cargo xtask build n64|3ds` when toolchains exist) — format

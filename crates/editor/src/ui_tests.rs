@@ -2482,6 +2482,104 @@ fn stereo_section_game_view_preview_and_convergence_plane() {
     leave_temp_project(&repo);
 }
 
+/// Post-processing from the editor (issue #64): Scene settings ›
+/// Post-processing (on, a tonemap, a grading LUT; saved to the file,
+/// undoable), the Scene view running it and its View › Post-processing view
+/// modes (off, the bloom mask), an entity's Glow component from Add
+/// component, the Game view on the N64 drawing the console's graded
+/// models instead of a post pass, and the Accessibility tab's Daltonize
+/// preview reaching both views' renderers.
+#[test]
+#[ignore = "changes cwd/env: run alone with --ignored --test-threads=1"]
+fn post_section_view_modes_glow_and_the_correction_preview() {
+    use crate::app::{Cmd, Tab};
+    use trino_platform_pc::{PostView, SimProfile};
+    let Some((mut h, _tmp, repo)) = temp_project_app(egui::vec2(1600.0, 1000.0)) else {
+        return;
+    };
+    assert_eq!(h.state().doc.scene.environment.post, None);
+    h.state_mut().cmds.push(Cmd::Select(None));
+    h.run_steps(3);
+    click(&mut h, "Post stack (PC and Web)");
+    h.run_steps(3);
+    assert_eq!(
+        h.state().doc.scene.environment.post,
+        Some(trino_scene::PostDef::default())
+    );
+    pick(&mut h, "Post tonemap", "AgX");
+    pick(&mut h, "Post grading", "luts/dusk");
+    set_value(&mut h, "Post exposure", 1.5);
+    h.run_steps(4);
+    let post = h.state().doc.scene.environment.post.clone().unwrap();
+    assert_eq!(post.tonemap, trino_scene::TonemapDef::AgX);
+    assert_eq!(post.grading.as_deref(), Some("luts/dusk"));
+    assert_eq!(post.exposure, 1.5);
+    h.state_mut().cmds.push(Cmd::FocusTab(Tab::Scene));
+    h.run_steps(4);
+    assert!(
+        h.state().scene_view.stats.post,
+        "the Scene view runs the stack"
+    );
+    h.state_mut().cmds.push(Cmd::Save);
+    h.run_steps(3);
+    let text = std::fs::read_to_string("scenes/showcase.scene.ron").unwrap();
+    assert!(text.contains("post: Some("), "{text}");
+    assert!(text.contains("grading: Some(\"luts/dusk\")"), "{text}");
+
+    // View › Post-processing view: off, then the bloom alone.
+    click(&mut h, "View");
+    click(&mut h, "Post-processing view");
+    click(&mut h, "Post: off");
+    h.run_steps(4);
+    assert_eq!(h.state().scene_view.post_view, PostView::Off);
+    assert!(!h.state().scene_view.stats.post);
+    h.state_mut().scene_view.post_view = PostView::Bloom;
+    h.run_steps(4);
+    assert!(h.state().scene_view.stats.post);
+    h.state_mut().scene_view.post_view = PostView::Game;
+
+    // A Glow component from Add component.
+    h.state_mut().cmds.push(Cmd::Select(Some(vec![0])));
+    h.run_steps(3);
+    click(&mut h, "Add component");
+    click(&mut h, "Glow");
+    h.run_steps(3);
+    let glow = h.state().doc.scene.entities[0].glow.clone();
+    assert_eq!(glow, Some(trino_scene::GlowComponent::default()));
+
+    // The N64's Game view: no post pass (the console bakes its grading).
+    {
+        let app = h.state_mut();
+        app.game_view
+            .set_profile_tier(SimProfile::N64, trino_core::HwTier::Base, &app.project);
+    }
+    h.state_mut().cmds.push(Cmd::FocusTab(Tab::Game));
+    h.run_steps(4);
+    assert!(!h.state().game_view.stats.post);
+
+    // Undo back to no post block.
+    for _ in 0..8 {
+        h.state_mut().cmds.push(Cmd::Undo);
+        h.run_steps(2);
+    }
+    assert_eq!(h.state().doc.scene.environment.post, None, "undo");
+
+    // Accessibility › Correction filter: Daltonize reaches both views.
+    h.state_mut().access.preview.cvd = trino_core::CvdMode::Deuteranopia;
+    h.state_mut().cmds.push(Cmd::FocusTab(Tab::Accessibility));
+    h.run_steps(3);
+    click(&mut h, "Daltonize");
+    h.run_steps(4);
+    assert!(h.state().access.preview.cvd_filter);
+    h.state_mut().cmds.push(Cmd::FocusTab(Tab::Scene));
+    h.run_steps(4);
+    assert_eq!(
+        h.state().scene_view.renderer_cvd_filter(),
+        trino_core::CvdMode::Deuteranopia
+    );
+    leave_temp_project(&repo);
+}
+
 /// Shadows from the editor (ADR 0025): the scene's Shadows section (on,
 /// saved to the file, undoable), an entity's Shadow component from Add
 /// component (a model casts, a bare collider receives), the Scene view

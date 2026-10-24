@@ -29,6 +29,7 @@ pub mod groups;
 pub mod i18n;
 pub mod impostor;
 pub mod loader;
+pub mod lut;
 pub mod lz4;
 pub mod manifest;
 pub mod memory;

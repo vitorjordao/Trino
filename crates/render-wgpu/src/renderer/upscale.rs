@@ -20,6 +20,8 @@ use super::OFFSCREEN_FORMAT;
 pub(super) struct SceneTargets {
     pub size: (u32, u32),
     pub extent: (u32, u32),
+    /// The color's format: the picture's, or the post stack's HDR one.
+    pub format: wgpu::TextureFormat,
     pub color_view: wgpu::TextureView,
     pub depth_tex: wgpu::Texture,
     pub depth_view: wgpu::TextureView,
@@ -28,7 +30,12 @@ pub(super) struct SceneTargets {
 }
 
 impl SceneTargets {
-    pub fn new(device: &wgpu::Device, extent: (u32, u32), size: (u32, u32)) -> SceneTargets {
+    pub fn new(
+        device: &wgpu::Device,
+        extent: (u32, u32),
+        size: (u32, u32),
+        format: wgpu::TextureFormat,
+    ) -> SceneTargets {
         let alloc = extent;
         let extent = wgpu::Extent3d {
             width: alloc.0,
@@ -41,7 +48,7 @@ impl SceneTargets {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: OFFSCREEN_FORMAT,
+            format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
@@ -62,6 +69,7 @@ impl SceneTargets {
         SceneTargets {
             size,
             extent: alloc,
+            format,
             color_view: view(&color_tex),
             depth_view: view(&depth_tex),
             depth_tex,

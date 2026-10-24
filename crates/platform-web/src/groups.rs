@@ -291,7 +291,10 @@ fn step(cur: &mut Cursor, tier: HwTier) -> Result<Option<Asset>, String> {
         let mut ktx2 = None;
         while cur.next < b.len() {
             let e = b.entry(cur.next);
-            if !matches!(e.kind, K::SpritePreview3ds | K::SpriteBc | K::SpriteKtx2) {
+            if !matches!(
+                e.kind,
+                K::SpritePreview3ds | K::SpriteBc | K::SpriteKtx2 | K::ModelGraded
+            ) {
                 break;
             }
             cur.next += 1;
@@ -360,6 +363,7 @@ fn hold(
         }
         _ => {
             let n = asset.bytes.len() as u32;
+            renderer.take_lut_blob(id, &asset.bytes);
             groups.blobs.insert(id, asset.bytes);
             n
         }
@@ -399,6 +403,7 @@ fn release(g: GroupId, renderer: &mut PcRenderer, audio: &mut WebAudio, groups: 
                 renderer.remove_font(FontId(id));
             }
             _ => {
+                renderer.remove_lut(trino_core::LutId(id));
                 groups.blobs.remove(&id);
             }
         }

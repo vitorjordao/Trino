@@ -193,8 +193,11 @@ level_enum!(
     ShadowSetting
 );
 level_enum!(
-    /// Post-processing quality. Stored, persisted and authored today; the
-    /// post stack of issue #64 consumes it. No renderer reads it yet.
+    /// The post stack's level on the native profile and the Web (issue
+    /// #64, ADR 0033): `Off` keeps the tonemap and the grading and drops
+    /// bloom, vignette and grain; `Low` blooms from a quarter of the
+    /// picture over at most 3 levels, `Medium` from half over 4, `High`
+    /// from half over 6. Consoles ignore it (their grading is baked).
     PostSetting
 );
 

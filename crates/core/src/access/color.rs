@@ -96,6 +96,52 @@ fn apply(m: &[[f32; 3]; 3], l: Linear) -> Linear {
     [row(&m[0]), row(&m[1]), row(&m[2])]
 }
 
+/// Where daltonization moves the error a viewer with `mode` can't see
+/// (Fidaner, Lin and Ozguven 2005, in linear RGB): a red-green loss goes
+/// into green and blue, a blue-yellow loss into red and green. No color at
+/// all has nowhere to go (zeros: grayscale and `Off` stay as they are).
+pub const fn error_shift(mode: CvdMode) -> [[f32; 3]; 3] {
+    match mode {
+        CvdMode::Protanopia | CvdMode::Deuteranopia => {
+            [[0.0, 0.0, 0.0], [0.7, 1.0, 0.0], [0.7, 0.0, 1.0]]
+        }
+        CvdMode::Tritanopia => [[1.0, 0.0, 0.7], [0.0, 1.0, 0.7], [0.0, 0.0, 0.0]],
+        CvdMode::Off | CvdMode::Grayscale => [[0.0; 3]; 3],
+    }
+}
+
+/// The daltonization matrix for `mode` (issue #64), linear RGB:
+/// `C = I + E·(I − S)`, the color plus the error the viewer misses
+/// ([`matrix`]'s `S`) moved to the channels they see ([`error_shift`]'s
+/// `E`). Grays stay gray (`S` keeps them, so the error is zero); `Off` and
+/// `Grayscale` are the identity.
+pub fn correction(mode: CvdMode) -> [[f32; 3]; 3] {
+    let s = matrix(mode);
+    let e = error_shift(mode);
+    let mut out = IDENTITY;
+    for (r, row) in out.iter_mut().enumerate() {
+        for (c, v) in row.iter_mut().enumerate() {
+            // (E · (I − S))[r][c]
+            let mut sum = 0.0;
+            for (k, ek) in e[r].iter().enumerate() {
+                let i_minus_s = if k == c { 1.0 } else { 0.0 } - s[k][c];
+                sum += ek * i_minus_s;
+            }
+            *v += sum;
+        }
+    }
+    out
+}
+
+/// `c` daltonized for `mode` (alpha kept): what the PC's correction filter
+/// draws, the CPU reference its shader is held to.
+pub fn correct(mode: CvdMode, c: Color) -> Color {
+    if matches!(mode, CvdMode::Off | CvdMode::Grayscale) {
+        return c;
+    }
+    from_linear(apply(&correction(mode), linear(c)), c.a)
+}
+
 /// How a viewer with `mode` sees `c` (alpha kept). `Off` returns `c`.
 pub fn simulate(mode: CvdMode, c: Color) -> Color {
     if mode == CvdMode::Off {
@@ -765,6 +811,36 @@ mod tests {
         for x in [1e-6f32, 0.008, 0.5, 1.0, 8.0, 1000.0] {
             let c = cbrt(x);
             assert!((c * c * c - x).abs() / x < 1e-5, "{x}");
+        }
+    }
+
+    #[test]
+    fn daltonization_keeps_grays_and_pulls_confused_pairs_apart() {
+        for mode in CvdMode::ALL {
+            for v in [0u8, 64, 128, 200, 255] {
+                let g = Color::rgba(v, v, v, 9);
+                let c = correct(mode, g);
+                assert!(c.r.abs_diff(v) <= 1 && c.g.abs_diff(v) <= 1 && c.b.abs_diff(v) <= 1);
+                assert_eq!(c.a, 9);
+            }
+        }
+        assert_eq!(correction(CvdMode::Off), IDENTITY);
+        assert_eq!(correction(CvdMode::Grayscale), IDENTITY);
+        // The pairs each viewer confuses, corrected, look farther apart to
+        // that same viewer.
+        let pairs = [
+            (CvdMode::Protanopia, RED, GREEN),
+            (CvdMode::Deuteranopia, RED, GREEN),
+            (
+                CvdMode::Tritanopia,
+                Color::rgb(40, 90, 230),
+                Color::rgb(40, 170, 120),
+            ),
+        ];
+        for (mode, a, b) in pairs {
+            let before = delta_e_seen(mode, a, b);
+            let after = delta_e_seen(mode, correct(mode, a), correct(mode, b));
+            assert!(after > before * 1.3, "{mode:?}: {before} -> {after}");
         }
     }
 }

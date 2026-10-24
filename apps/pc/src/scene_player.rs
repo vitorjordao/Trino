@@ -178,6 +178,9 @@ impl ScenePlayer {
         r.set_light(&env.core_light());
         r.set_ambient_occlusion(env.core_ao().as_ref());
         let resolved = resolve_for(&self.scene, &self.lib, self.time, self.platform);
+        // Post-processing (issue #64): the PC runs the stack, the console
+        // profiles draw their bake's grading and the glows.
+        r.set_post(resolved.post.as_ref());
         // Shadows (ADR 0025): the target's tier, onto the scene's receivers.
         r.set_shadows(resolved.shadows.as_ref());
         r.set_shadow_receivers(&resolved.receivers());
@@ -191,6 +194,9 @@ impl ScenePlayer {
             // The quality preset's LOD bias (#55) moves the LOD starts.
             if let Some(id) = item.lod_from_biased(camera.eye, r.lod_bias()).model() {
                 r.draw_model_matrix(id, &item.matrix, Material::VertexLit, &item.params);
+            }
+            if let Some(g) = &item.glow {
+                trino_core::draw_glow(r, g, item.matrix.transform_point(Vec3::ZERO));
             }
         }
         for item in &resolved.items {

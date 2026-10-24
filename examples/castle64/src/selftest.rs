@@ -101,6 +101,10 @@ pub fn engine_checks(
     if ambient_occlusion(renderer)? {
         platform.log("TRINO_STEP:ambient occlusion probed\n");
     }
+    platform.log("TRINO_STEP:post\n");
+    if post(renderer)? {
+        platform.log("TRINO_STEP:post probed grading and glow\n");
+    }
     platform.log("TRINO_STEP:shadows\n");
     if shadows(renderer, platform)? {
         platform.log("TRINO_STEP:shadows probed\n");
@@ -2406,6 +2410,133 @@ pub fn ambient_occlusion(renderer: &mut dyn Renderer) -> Result<bool, &'static s
     Ok(true)
 }
 
+/// The post step's card (`[models.selftest_post]`): orange (200, 60, 20),
+/// its colors graded through [`POST_LUT`] by the consoles' bake.
+pub const POST_CARD: ModelId = ModelId::from_path("models/selftest_post");
+/// `luts/selftest`: a channel rotation, `(r, g, b) → (g, b, r)`.
+pub const POST_LUT: trino_core::LutId = trino_core::LutId::of("luts/selftest");
+/// The card as it should look graded, on every target.
+pub const POST_GRADED: Color = Color::rgb(60, 20, 200);
+
+/// Post-processing (issue #64, ADR 0033), each target at its tier
+/// (`Caps::post_tier`):
+///
+/// 1. **Grading.** The orange card drawn unlit with `set_post(grading:
+///    luts/selftest)` is blue (60, 20, 200) on every target: the PC and the
+///    Web grade the frame through the LUT, the consoles (and the PC's
+///    console profiles) draw what their bake graded into its vertex colors.
+///    Orange there means the grading never happened.
+/// 2. **Bloom or glow.** Beside a small card, the frame is brighter with
+///    `set_post(bloom)` plus a [`trino_core::Glow`] halo than without: the
+///    Full tier blooms (the halo, `GlowMode::Baked`, draws nothing there),
+///    the Baked tier draws the halo.
+///
+/// `Ok(false)` where `read_pixel` is unsupported (after drawing both).
+#[inline(never)]
+pub fn post(renderer: &mut dyn Renderer) -> Result<bool, &'static str> {
+    use trino_core::{Bloom, Glow, PostSettings, PostTier};
+    let caps = *renderer.caps();
+    let screen = Vec2::new(caps.screen_width as f32, caps.screen_height as f32);
+    let camera = Camera3 {
+        eye: Vec3::new(0.0, 0.0, -1.5),
+        target: Vec3::ZERO,
+        fov_y: 60.0 * core::f32::consts::PI / 180.0,
+    };
+    let view = camera.view();
+    let half = camera.fov_y * 0.5;
+    let focal = cos(half) / sin(half) * screen.y * 0.5;
+    let at = |p: Vec3| {
+        let v = view.transform_point(p);
+        (
+            (screen.x * 0.5 + v.x * focal / v.z) as u32,
+            (screen.y * 0.5 - v.y * focal / v.z) as u32,
+        )
+    };
+    let unlit = ModelParams {
+        shading: Shading::Unlit,
+        double_sided: true,
+        ..ModelParams::DEFAULT
+    };
+    let grade = PostSettings {
+        grading: Some(POST_LUT),
+        ..PostSettings::DEFAULT
+    };
+    // 1. The graded card, filling the middle.
+    for _ in 0..3 {
+        renderer.begin_frame(Color::BLACK);
+        renderer.set_camera(&camera);
+        renderer.set_light(&DEFAULT_LIGHT);
+        renderer.set_post(Some(&grade));
+        renderer.draw_model(
+            POST_CARD,
+            &Transform3::default(),
+            Material::VertexLit,
+            &unlit,
+        );
+        renderer.end_frame();
+    }
+    let (cx, cy) = at(Vec3::ZERO);
+    let graded = renderer.read_pixel(cx, cy);
+    // 2. A small card, with and without bloom + its halo.
+    let small = Transform3 {
+        scale: Vec3::new(0.3, 0.3, 0.3),
+        ..Transform3::default()
+    };
+    let bloom = PostSettings {
+        bloom: Some(Bloom {
+            threshold: 0.2,
+            intensity: 2.0,
+            radius: 0.8,
+        }),
+        ..grade
+    };
+    let glow = Glow::new(0.6, Color::WHITE);
+    let beside = at(Vec3::new(0.2, 0.0, 0.0));
+    let mut seen = [None; 2];
+    for (k, on) in [false, true].into_iter().enumerate() {
+        for _ in 0..3 {
+            renderer.begin_frame(Color::BLACK);
+            renderer.set_camera(&camera);
+            renderer.set_light(&DEFAULT_LIGHT);
+            renderer.set_post(Some(if on { &bloom } else { &grade }));
+            renderer.draw_model(POST_CARD, &small, Material::VertexLit, &unlit);
+            if on {
+                trino_core::draw_glow(renderer, &glow, Vec3::new(0.0, 0.0, -0.01));
+            }
+            renderer.end_frame();
+        }
+        seen[k] = renderer.read_pixel(beside.0, beside.1);
+    }
+    renderer.begin_frame(Color::BLACK);
+    renderer.end_frame();
+    let (Some(c), [Some(dark), Some(lit)]) = (graded, seen) else {
+        return Ok(false);
+    };
+    let near = |a: Color, b: Color, tol: u8| {
+        a.r.abs_diff(b.r) <= tol && a.g.abs_diff(b.g) <= tol && a.b.abs_diff(b.b) <= tol
+    };
+    if near(c, Color::rgb(200, 60, 20), 40) {
+        return Err(if caps.post_tier == PostTier::Full {
+            "post: the card is not graded (the post stack ran no LUT)"
+        } else {
+            "post: the card is not graded (the console bake ignored `grading`)"
+        });
+    }
+    if !near(c, POST_GRADED, 28) {
+        return Err("post: the graded card has the wrong color");
+    }
+    // The card is blue once graded: weigh the channels alike.
+    let level = |c: Color| (c.r as i32 + c.g as i32 + c.b as i32) / 3;
+    if level(lit) < level(dark) + 12 {
+        return Err(if caps.post_tier == PostTier::Full {
+            "post: no bloom beside the card"
+        } else {
+            "post: no glow beside the card"
+        });
+    }
+    Ok(true)
+}
+
 /// The shadows step's floor, post and ball (`[models.selftest_shadow_*]`).
 pub const SHADOW_FLOOR: ModelId = ModelId::from_path("models/selftest_shadow_floor");
 pub const SHADOW_POST: ModelId = ModelId::from_path("models/selftest_shadow_post");
@@ -3683,6 +3814,7 @@ pub fn accessibility(
         reduce_motion: true,
         flash_guard: true,
         hold_to_toggle: true,
+        cvd_filter: true,
     };
     if AccessSettings::unpack(want.pack()) != Some(want) {
         return Err("accessibility: the packed settings do not round-trip");

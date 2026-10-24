@@ -45,6 +45,10 @@ pub struct FrameMeter {
     /// profile's preview, issue #63).
     stereo_frames: u64,
     stereo: trino_core::StereoStats,
+    /// Frames the post stack drew (issue #64) and the last one's bloom
+    /// levels.
+    post_frames: u64,
+    bloom_levels: u32,
 }
 
 /// The quality a host reports on the line ([`FrameMeter::set_quality`]).
@@ -84,6 +88,8 @@ impl FrameMeter {
             pipes: 0,
             stereo_frames: 0,
             stereo: trino_core::StereoStats::default(),
+            post_frames: 0,
+            bloom_levels: 0,
         }
     }
 
@@ -121,6 +127,16 @@ impl FrameMeter {
     /// (`PcFrameTimes::pipelines`): the line's `pipes=`, a total.
     pub fn record_pipes(&mut self, n: u32) {
         self.pipes += n as u64;
+    }
+
+    /// A frame's post stack (`PcFrameTimes::post_passes`,
+    /// `bloom_levels`): the line's `post_frames=` and `bloom=`, shown once
+    /// a frame used it.
+    pub fn record_post(&mut self, passes: u32, bloom_levels: u32) {
+        if passes > 0 {
+            self.post_frames += 1;
+            self.bloom_levels = bloom_levels;
+        }
     }
 
     /// The heap after a frame (`Platform::memory`): the line's `heap=`.
@@ -193,6 +209,10 @@ impl FrameMeter {
             }
             _ => String::new(),
         };
+        let post = match self.post_frames {
+            0 => String::new(),
+            n => format!(" post_frames={n} bloom={}", self.bloom_levels),
+        };
         let low1 = self.low1_us();
         let low1_fps = 1_000_000u64.checked_div(low1).unwrap_or(0);
         let quality = match self.quality {
@@ -209,7 +229,7 @@ impl FrameMeter {
         format!(
             "TRINO_FRAME:{scene} profile={profile} avg_us={avg} max_us={} frames={} fps={fps} \
              draws={} tris={} pc_gpu_draws={} pc_gpu_tris={} instanced={} off_pc_gpu={off} {} \
-             low1_us={low1} low1_fps={low1_fps} pipes={}{quality}{stereo}",
+             low1_us={low1} low1_fps={low1_fps} pipes={}{quality}{stereo}{post}",
             self.max_us,
             self.frames,
             per(self.models),
@@ -245,6 +265,20 @@ mod tests {
         assert!(line.ends_with(" stereo_frames=1 stereo=slider0"), "{line}");
         let native = FrameMeter::new(SimProfile::Native).line("hub");
         assert!(!native.contains("stereo"), "{native}");
+    }
+
+    #[test]
+    fn the_post_stack_shows_once_a_frame_used_it() {
+        let mut m = FrameMeter::new(SimProfile::Native);
+        m.record_post(0, 0);
+        assert!(!m.line("hub").contains("post"));
+        m.record_post(1, 5);
+        m.record_post(1, 4);
+        assert!(
+            m.line("hub").ends_with(" post_frames=2 bloom=4"),
+            "{}",
+            m.line("hub")
+        );
     }
 
     #[test]

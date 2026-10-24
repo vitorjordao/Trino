@@ -32,6 +32,7 @@ const fn node(name: &'static str, tags: &'static [&'static str], x: f32, z: f32)
         sound: None,
         cell: NO_CELL,
         vis: None,
+        glow: None,
     }
 }
 
@@ -407,8 +408,8 @@ fn baked_scene_rejects_bad_blobs() {
         SceneError::BadMagic
     );
     // v1 (8-byte LOD records), v2 (no surface), v3 (no water), v4 (no
-    // shadows) and future versions need a rebake.
-    for v in [1u8, 2, 3, 4, 6] {
+    // shadows), v5 (no glow) and future versions need a rebake.
+    for v in [1u8, 2, 3, 4, 5, 7] {
         let mut other = good.to_vec();
         other[4] = v;
         assert_eq!(

@@ -557,6 +557,9 @@ pub struct ModelOptions {
     pub smooth: bool,
     /// Bake ambient occlusion into the vertex colors ([`crate::ao`]).
     pub ao: Option<crate::ao::AoBake>,
+    /// Grade the vertex colors through this `TLUT` blob (the consoles'
+    /// color grading, [`crate::lut`]), after the AO.
+    pub grading: Option<Vec<u8>>,
 }
 
 impl Default for ModelOptions {
@@ -567,6 +570,7 @@ impl Default for ModelOptions {
             texture: None,
             smooth: false,
             ao: None,
+            grading: None,
         }
     }
 }
@@ -593,6 +597,10 @@ pub fn bake_model(path: &Path, opts: &ModelOptions) -> Result<Vec<u8>, String> {
     };
     if let Some(ao) = &opts.ao {
         crate::ao::bake_vertex_ao(&mut data, ao);
+    }
+    if let Some(blob) = &opts.grading {
+        let lut = trino_core::Lut::parse(blob).map_err(|e| err(&format!("grading: {e:?}")))?;
+        crate::lut::grade_mesh(&mut data, &lut);
     }
     data.texture = opts.texture.as_deref().map(trino_core::asset_id);
     if data.texture.is_none() {
@@ -1161,6 +1169,65 @@ pub fn bake_scene_with_bounds(
         return Err(format!("scene `{file}`: {w}"));
     }
     Ok(blob)
+}
+
+/// [`bake_scene_for`] as a console bake does it (issue #64): with
+/// `bake_grading` on the scene's manifest entry, its environment's colors
+/// graded through the LUT its `post.grading` names.
+pub fn bake_console_scene(
+    assets_root: &Path,
+    manifest: &crate::Manifest,
+    decl: &crate::manifest::BlobDecl,
+    platform: crate::Platform,
+    target: impl Into<trino_scene::Target>,
+) -> Result<Vec<u8>, String> {
+    let Some(lut) = scene_grading(assets_root, manifest, decl, platform)? else {
+        return bake_scene_for(assets_root, &decl.file, target);
+    };
+    let lut = trino_core::Lut::parse(&lut).map_err(|e| format!("{}: {e:?}", decl.file))?;
+    let project = assets_root.parent().unwrap_or(Path::new(""));
+    let mut scene = trino_scene::Scene::load(&project.join(&decl.file))?;
+    scene.environment = scene.environment.graded(&lut);
+    let mut lib = trino_scene::Library::load(project);
+    if let Some(e) = lib.errors.first() {
+        return Err(format!("scene `{}`: library error: {e}", decl.file));
+    }
+    lib.model_bounds = manifest_model_bounds(assets_root);
+    lib.impostors = crate::impostor::baked(assets_root);
+    let (blob, warnings) = trino_scene::bake::to_tscn_for(&scene, &lib, target.into());
+    let file = &decl.file;
+    if let Some(w) = warnings.first() {
+        return Err(format!("scene `{file}`: {w}"));
+    }
+    Ok(blob)
+}
+
+/// The LUT a console bake grades scene `decl` through: `bake_grading` on,
+/// a console, and the scene's `post.grading` (an error when it names
+/// none).
+pub fn scene_grading(
+    assets_root: &Path,
+    manifest: &crate::Manifest,
+    decl: &crate::manifest::BlobDecl,
+    platform: crate::Platform,
+) -> Result<Option<Vec<u8>>, String> {
+    if !decl.bake_grading || !matches!(platform, crate::Platform::N64 | crate::Platform::N3ds) {
+        return Ok(None);
+    }
+    let project = assets_root.parent().unwrap_or(Path::new(""));
+    let scene = trino_scene::Scene::load(&project.join(&decl.file))?;
+    let grading = scene
+        .environment
+        .post
+        .as_ref()
+        .and_then(|p| p.grading.clone())
+        .ok_or_else(|| {
+            format!(
+                "scene `{}`: bake_grading needs `environment.post.grading` (a `luts/<name>`)",
+                decl.file
+            )
+        })?;
+    manifest.lut_blob(assets_root, platform, &grading).map(Some)
 }
 
 /// Bind-pose AABB of a baked TMDL blob.

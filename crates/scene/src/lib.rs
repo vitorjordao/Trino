@@ -117,6 +117,13 @@ pub struct Environment {
     /// other target ignores it (the PC's 3DS profile previews it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stereo: Option<StereoDef>,
+    /// Post-processing (`trino_core::post`, issue #64): exposure, tonemap,
+    /// bloom, a grading LUT, vignette, grain on the PC and the Web; the
+    /// consoles get the LUT baked into their colors (`bake_grading` on the
+    /// scene's manifest entry, `grading` on its models) and `glow` halos for
+    /// bloom.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post: Option<PostDef>,
 }
 
 fn default_clear() -> [u8; 3] {
@@ -133,6 +140,198 @@ impl Default for Environment {
             ao: None,
             shadows: None,
             stereo: None,
+            post: None,
+        }
+    }
+}
+
+/// A scene's post-processing ([`trino_core::PostSettings`]). Every field
+/// has a default (the neutral stack), so `post: ()` is a valid start;
+/// `enabled: false` keeps the tuning while turning it off.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct PostDef {
+    #[serde(default = "yes")]
+    pub enabled: bool,
+    /// Multiplies linear light before the tonemap (1 = none).
+    #[serde(default = "one")]
+    pub exposure: f32,
+    #[serde(default)]
+    pub tonemap: TonemapDef,
+    /// Light spilling around the brightest pixels.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bloom: Option<BloomDef>,
+    /// A LUT (`luts/<name>`, a `[luts.*]` asset) graded through after the
+    /// tonemap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grading: Option<String>,
+    /// Darkens the corners, 0..=1.
+    #[serde(default)]
+    pub vignette: f32,
+    /// Film grain, 0..=1.
+    #[serde(default)]
+    pub grain: f32,
+}
+
+impl Default for PostDef {
+    fn default() -> Self {
+        PostDef {
+            enabled: true,
+            exposure: 1.0,
+            tonemap: TonemapDef::None,
+            bloom: None,
+            grading: None,
+            vignette: 0.0,
+            grain: 0.0,
+        }
+    }
+}
+
+impl PostDef {
+    /// The engine settings, enabled or not (clamped).
+    pub fn core(&self) -> trino_core::PostSettings {
+        trino_core::PostSettings {
+            exposure: self.exposure,
+            tonemap: self.tonemap.core(),
+            bloom: self.bloom.map(|b| b.core()),
+            grading: self.grading.as_deref().map(trino_core::LutId::of),
+            vignette: self.vignette,
+            grain: self.grain,
+        }
+        .clamped()
+    }
+}
+
+/// [`trino_core::Tonemap`] in files.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum TonemapDef {
+    #[default]
+    None,
+    Reinhard,
+    Aces,
+    AgX,
+}
+
+impl TonemapDef {
+    pub const ALL: [TonemapDef; 4] = [
+        TonemapDef::None,
+        TonemapDef::Reinhard,
+        TonemapDef::Aces,
+        TonemapDef::AgX,
+    ];
+
+    pub fn core(self) -> trino_core::Tonemap {
+        match self {
+            TonemapDef::None => trino_core::Tonemap::None,
+            TonemapDef::Reinhard => trino_core::Tonemap::Reinhard,
+            TonemapDef::Aces => trino_core::Tonemap::Aces,
+            TonemapDef::AgX => trino_core::Tonemap::AgX,
+        }
+    }
+}
+
+/// [`trino_core::Bloom`] in files; `bloom: ()` takes the defaults.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct BloomDef {
+    #[serde(default = "default_bloom_threshold")]
+    pub threshold: f32,
+    #[serde(default = "default_bloom_intensity")]
+    pub intensity: f32,
+    #[serde(default = "default_bloom_radius")]
+    pub radius: f32,
+}
+
+fn default_bloom_threshold() -> f32 {
+    trino_core::Bloom::DEFAULT.threshold
+}
+fn default_bloom_intensity() -> f32 {
+    trino_core::Bloom::DEFAULT.intensity
+}
+fn default_bloom_radius() -> f32 {
+    trino_core::Bloom::DEFAULT.radius
+}
+
+impl Default for BloomDef {
+    fn default() -> Self {
+        BloomDef {
+            threshold: default_bloom_threshold(),
+            intensity: default_bloom_intensity(),
+            radius: default_bloom_radius(),
+        }
+    }
+}
+
+impl BloomDef {
+    pub fn core(&self) -> trino_core::Bloom {
+        trino_core::Bloom {
+            threshold: self.threshold,
+            intensity: self.intensity,
+            radius: self.radius,
+        }
+    }
+}
+
+/// A halo around an entity ([`trino_core::Glow`], issue #64): the
+/// consoles' bloom, a soft billboard at the entity's position. `glow: ()`
+/// is a white 0.5 m halo of the engine's `sprites/glow`.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct GlowComponent {
+    /// Half the halo's side, world units.
+    #[serde(default = "default_glow_radius")]
+    pub radius: f32,
+    /// Multiplies the sprite; alpha is the strength.
+    #[serde(default = "white")]
+    pub color: [u8; 4],
+    /// The halo's sprite (default: the engine's `sprites/glow`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sprite: Option<String>,
+    /// `Baked`: only where the target has no bloom (the consoles and the
+    /// PC's console profiles); `Always`: everywhere.
+    #[serde(default)]
+    pub mode: GlowModeDef,
+}
+
+fn default_glow_radius() -> f32 {
+    0.5
+}
+
+impl Default for GlowComponent {
+    fn default() -> Self {
+        GlowComponent {
+            radius: default_glow_radius(),
+            color: white(),
+            sprite: None,
+            mode: GlowModeDef::Baked,
+        }
+    }
+}
+
+/// [`trino_core::GlowMode`] in files.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum GlowModeDef {
+    #[default]
+    Baked,
+    Always,
+}
+
+impl GlowComponent {
+    pub fn core(&self) -> trino_core::Glow {
+        let c = self.color;
+        trino_core::Glow {
+            sprite: self
+                .sprite
+                .as_deref()
+                .map_or(trino_core::Glow::SPRITE, |s| {
+                    trino_core::SpriteId(trino_core::asset_id(s))
+                }),
+            radius: self.radius.max(0.0),
+            color: trino_core::Color::rgba(c[0], c[1], c[2], c[3]),
+            mode: match self.mode {
+                GlowModeDef::Baked => trino_core::GlowMode::Baked,
+                GlowModeDef::Always => trino_core::GlowMode::Always,
+            },
         }
     }
 }
@@ -527,6 +726,29 @@ impl Environment {
         self.stereo.filter(|s| s.enabled).map(|s| s.core())
     }
 
+    /// What `Renderer::set_post` takes: `None` without a `post` block or
+    /// with `enabled: false`.
+    pub fn core_post(&self) -> Option<trino_core::PostSettings> {
+        self.post.as_ref().filter(|p| p.enabled).map(|p| p.core())
+    }
+
+    /// The environment as a console's bake grades it through `lut` (issue
+    /// #64, `bake_grading`): the clear, light, ambient and fog colors.
+    pub fn graded(&self, lut: &trino_core::Lut<'_>) -> Environment {
+        let g = |c: [u8; 3]| {
+            let o = lut.apply_color(trino_core::Color::rgb(c[0], c[1], c[2]));
+            [o.r, o.g, o.b]
+        };
+        let mut e = self.clone();
+        e.clear = g(e.clear);
+        e.light.color = g(e.light.color);
+        e.light.ambient_color = g(e.light.ambient_color);
+        if let Some(f) = &mut e.fog {
+            f.color = g(f.color);
+        }
+        e
+    }
+
     pub fn core_camera(&self) -> trino_core::Camera3 {
         let c = &self.camera;
         trino_core::Camera3 {
@@ -593,6 +815,9 @@ pub struct Entity {
     /// while `environment.shadows` is on).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shadow: Option<ShadowComponent>,
+    /// A halo at its position (issue #64): the consoles' bloom.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub glow: Option<GlowComponent>,
     /// What changes on PC, N64 and 3DS (model, material, scale,
     /// visibility, or not there at all) — see [`platform`].
     #[serde(default, skip_serializing_if = "PlatformVariants::is_empty")]
@@ -623,6 +848,7 @@ impl Entity {
             sound: None,
             vis: None,
             shadow: None,
+            glow: None,
             platforms: PlatformVariants::default(),
             children: Vec::new(),
         }
@@ -1321,6 +1547,61 @@ mod tests {
         assert_eq!(ao.radius, 1.25);
         assert_eq!(ao.quality, trino_core::AoQuality::High);
         assert_eq!(ao.quality.samples(), 32);
+    }
+
+    #[test]
+    fn post_and_glow_are_optional_defaulted_and_round_trip() {
+        let plain = Scene::new("plain");
+        assert!(!plain.to_ron().contains("post") && !plain.to_ron().contains("glow"));
+        assert_eq!(plain.environment.core_post(), None);
+        // The issue's own line parses.
+        let text = "(version: 7, name: \"a\", environment: (post: Some((exposure: 1.0, \
+                    tonemap: AgX, bloom: Some((threshold: 1.0, intensity: 0.6)), \
+                    grading: Some(\"luts/dusk\"), vignette: 0.2))), \
+                    entities: [(name: \"lamp\", glow: Some(()))])";
+        let scene = Scene::from_ron(text).unwrap();
+        let p = scene.environment.core_post().unwrap();
+        assert_eq!(p.tonemap, trino_core::Tonemap::AgX);
+        assert_eq!(p.bloom.unwrap().threshold, 1.0);
+        assert_eq!(p.bloom.unwrap().radius, trino_core::Bloom::DEFAULT.radius);
+        assert_eq!(p.grading, Some(trino_core::LutId::of("luts/dusk")));
+        assert_eq!(p.vignette, 0.2);
+        let g = scene.entities[0].glow.as_ref().unwrap().core();
+        assert_eq!(g, trino_core::Glow::new(0.5, trino_core::Color::WHITE));
+        assert_eq!(Scene::from_ron(&scene.to_ron()).unwrap(), scene);
+        // Off keeps the tuning; unknown fields are errors.
+        let mut off = scene.clone();
+        off.environment.post.as_mut().unwrap().enabled = false;
+        assert_eq!(off.environment.core_post(), None);
+        assert!(
+            Scene::from_ron("(version: 7, name: \"a\", environment: (post: Some((bloon: 1.0))))")
+                .is_err()
+        );
+        // The consoles' bake grades the environment's colors.
+        let mut lut = trino_core::Lut::header(2).to_vec();
+        for i in 0..8u32 {
+            let (r, g, b) = (i & 1, (i >> 1) & 1, (i >> 2) & 1);
+            lut.extend([
+                255 * (1 - r) as u8,
+                255 * (1 - g) as u8,
+                255 * (1 - b) as u8,
+            ]);
+        }
+        let lut = trino_core::Lut::parse(&lut).unwrap();
+        let mut env = Environment {
+            clear: [255, 0, 0],
+            fog: Some(FogDef {
+                color: [0, 255, 0],
+                near: 1.0,
+                far: 2.0,
+            }),
+            ..Environment::default()
+        };
+        env.light.color = [255, 255, 255];
+        let g = env.graded(&lut);
+        assert_eq!(g.clear, [0, 255, 255]);
+        assert_eq!(g.fog.unwrap().color, [255, 0, 255]);
+        assert_eq!(g.light.color, [0, 0, 0]);
     }
 
     #[test]

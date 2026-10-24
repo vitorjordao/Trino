@@ -225,7 +225,20 @@ pub fn bake_assets(p: &Project, test_mode: bool) -> Result<(), String> {
         let source = resolve_source(&root.join("assets"), Platform::N64, &decl.file)?;
         // A declared format, or `auto`'s pick among the formats whose
         // result is known (and `min_psnr`, when set).
-        let (w, h, rgba) = trino_asset_pipeline::decode_png(&source)?;
+        let (w, h, mut rgba) = trino_asset_pipeline::decode_png(&source)?;
+        // A `grading` LUT is baked into the pixels (issue #64).
+        let graded = match manifest.console_grading(
+            &root.join("assets"),
+            Platform::N64,
+            decl.grading.as_deref(),
+        )? {
+            Some(blob) => {
+                let lut = trino_core::Lut::parse(&blob).map_err(|e| format!("{logical}: {e:?}"))?;
+                trino_asset_pipeline::lut::grade_rgba(&mut rgba, &lut);
+                true
+            }
+            None => false,
+        };
         let format = trino_asset_pipeline::texture::choose(
             Platform::N64,
             &logical,
@@ -254,6 +267,10 @@ pub fn bake_assets(p: &Project, test_mode: bool) -> Result<(), String> {
         }) {
             Some(std::borrow::Cow::Owned(staged)) => {
                 let png = trino_asset_pipeline::font::encode_png(w, h, &staged)?;
+                std::fs::write(&staged_png, png).map_err(|e| e.to_string())?;
+            }
+            _ if graded => {
+                let png = trino_asset_pipeline::font::encode_png(w, h, &rgba)?;
                 std::fs::write(&staged_png, png).map_err(|e| e.to_string())?;
             }
             _ => {
@@ -351,8 +368,15 @@ pub fn bake_assets(p: &Project, test_mode: bool) -> Result<(), String> {
         let logical = format!("models/{name}");
         let id = trino_core::asset_id(&logical);
         let source = resolve_source(&root.join("assets"), Platform::N64, &decl.file)?;
-        // TMDL is portable: same blob on every platform, no container tool.
-        let blob = trino_asset_pipeline::bake_model(&source, &decl.options())?;
+        // TMDL is portable: same blob on every platform, no container tool;
+        // a `grading` LUT is baked into its colors here (issue #64).
+        let mut opts = decl.options();
+        opts.grading = manifest.console_grading(
+            &root.join("assets"),
+            Platform::N64,
+            decl.grading.as_deref(),
+        )?;
+        let blob = trino_asset_pipeline::bake_model(&source, &opts)?;
         let file = format!("{id:08x}.tmdl");
         std::fs::write(fsdir.join(&file), blob).map_err(|e| e.to_string())?;
         let line = trino_asset_pipeline::tier::index_line(id, "model", &file, tier);
@@ -446,7 +470,13 @@ pub fn bake_assets(p: &Project, test_mode: bool) -> Result<(), String> {
         // TSCN is portable; the variants resolve per hardware tier (a
         // `base` and an `expanded` copy when they differ, issue #54).
         let twins = trino_asset_pipeline::tier_twins(Platform::N64, |t| {
-            trino_asset_pipeline::bake_scene_for(&root.join("assets"), &decl.file, t)
+            trino_asset_pipeline::model::bake_console_scene(
+                &root.join("assets"),
+                &manifest,
+                decl,
+                Platform::N64,
+                t,
+            )
         })?;
         for twin in twins {
             std::fs::write(fsdir.join(twin.file(id, "blob")), &twin.bytes)

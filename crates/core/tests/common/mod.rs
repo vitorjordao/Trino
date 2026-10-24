@@ -927,6 +927,8 @@ pub fn tscn(env: &TscnEnv, nodes: &[TscnNode]) -> &'static [u8] {
         b.extend_from_slice(&[cast, u8::from(n.receiver.is_some()), 0, 0]);
         let (c, hx, hz) = n.receiver.unwrap_or((Vec3::ZERO, 0.0, 0.0));
         f32s(&mut b, &[radius, c.x, c.y, c.z, hx, hz]);
+        // Glow (v6, flag bit7 off).
+        b.extend_from_slice(&[0; trino_core::scene::TSCN_GLOW_BYTES]);
         assert_eq!(b.len() - start, TSCN_NODE_BYTES);
     }
     b.extend_from_slice(&data);

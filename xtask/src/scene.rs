@@ -20,7 +20,9 @@ use trino_scene::{Library, Scene, Target, codegen, resolve_for};
 
 const USAGE: &str = "xtask: usage:\n  cargo xtask scene check [scene.ron ...]\n  \
                      cargo xtask scene export [--platform pc|n64|3ds|web|n64_expanded|n3ds_new] \
-                     <scene.ron> <out.rs>\n  \
+                     [--bake-grading] <scene.ron> <out.rs>\n  \
+                     cargo xtask scene shot <scene.ron> [--platform pc|n64|3ds|web] \
+                     [--post game|on|off|bloom] [--size WxH] [--out <file.png>] [--json]\n  \
                      cargo xtask scene budget <scene.ron> \
                      [--platform pc|n64|3ds|web|n64_expanded|n3ds_new] [--stereo] [--json]";
 
@@ -31,12 +33,16 @@ pub fn run(root: &Path, args: &[&str]) -> ExitCode {
     match args {
         ["check", files @ ..] => check(root, files),
         ["budget", rest @ ..] => budget(root, rest),
+        ["shot", rest @ ..] => crate::post::scene_shot_cmd(root, rest),
         ["export", rest @ ..] => {
             let mut target = Target::Pc;
             let mut files = Vec::new();
+            let mut grade = false;
             let mut it = rest.iter();
             while let Some(a) = it.next() {
-                if *a == "--platform" {
+                if *a == "--bake-grading" {
+                    grade = true;
+                } else if *a == "--platform" {
                     match it.next().and_then(|v| Target::parse(v)) {
                         Some(t) => target = t,
                         None => {
@@ -49,7 +55,7 @@ pub fn run(root: &Path, args: &[&str]) -> ExitCode {
                 }
             }
             match files.as_slice() {
-                [input, output] => export(root, Path::new(input), Path::new(output), target),
+                [input, output] => export(root, Path::new(input), Path::new(output), target, grade),
                 _ => {
                     eprintln!("{USAGE}");
                     ExitCode::FAILURE
@@ -191,7 +197,7 @@ fn check(root: &Path, files: &[&str]) -> ExitCode {
     }
 }
 
-fn export(root: &Path, input: &Path, output: &Path, target: Target) -> ExitCode {
+fn export(root: &Path, input: &Path, output: &Path, target: Target, grade: bool) -> ExitCode {
     let scene = match Scene::load(&root.join(input)) {
         Ok(s) => s,
         Err(e) => {
@@ -200,7 +206,25 @@ fn export(root: &Path, input: &Path, output: &Path, target: Target) -> ExitCode 
         }
     };
     let lib = load_library(root);
-    let (code, warnings) = codegen::to_rust_for(&scene, &lib, target);
+    // `--bake-grading` (issue #64): a console's export grades the scene's
+    // colors through its `post.grading`, as its TSCN bake does.
+    let lut = match grade.then(|| export_grading(root, &scene, target)) {
+        Some(Err(e)) => {
+            eprintln!("xtask: {e}");
+            return ExitCode::FAILURE;
+        }
+        Some(Ok(l)) => l,
+        None => None,
+    };
+    let parsed = match lut.as_deref().map(trino_core::Lut::parse) {
+        Some(Err(e)) => {
+            eprintln!("xtask: grading LUT: {e:?}");
+            return ExitCode::FAILURE;
+        }
+        Some(Ok(l)) => Some(l),
+        None => None,
+    };
+    let (code, warnings) = codegen::to_rust_graded(&scene, &lib, target, parsed.as_ref());
     for w in &warnings {
         eprintln!("warning: {w}");
     }
@@ -214,6 +238,26 @@ fn export(root: &Path, input: &Path, output: &Path, target: Target) -> ExitCode 
             ExitCode::FAILURE
         }
     }
+}
+
+/// The LUT a console export grades `scene` through (`None` on the PC and
+/// the Web, which grade at run time).
+fn export_grading(root: &Path, scene: &Scene, target: Target) -> Result<Option<Vec<u8>>, String> {
+    let platform = match target {
+        Target::N64 | Target::N64Expanded => trino_asset_pipeline::Platform::N64,
+        Target::N3ds | Target::N3dsNew => trino_asset_pipeline::Platform::N3ds,
+        Target::Pc | Target::Web => return Ok(None),
+    };
+    let grading = scene
+        .environment
+        .post
+        .as_ref()
+        .and_then(|p| p.grading.clone())
+        .ok_or("--bake-grading needs `environment.post.grading` in the scene")?;
+    let manifest = trino_asset_pipeline::Manifest::load(&root.join("assets/manifest.toml"))?;
+    manifest
+        .lut_blob(&root.join("assets"), platform, &grading)
+        .map(Some)
 }
 
 /// `scene budget <scene.ron> [--platform p] [--json]`: what the scene costs

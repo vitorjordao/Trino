@@ -41,6 +41,8 @@ pub struct DrawItem {
     /// The top of its box, when shadows land on it (`shadow(receive:
     /// true)`, ADR 0025).
     pub receiver: Option<ShadowPlane>,
+    /// Its halo (`glow`, issue #64): the consoles' bloom.
+    pub glow: Option<trino_core::Glow>,
     /// True for parts that come from a prefab (not editable in place).
     pub from_prefab: bool,
 }
@@ -49,7 +51,7 @@ impl DrawItem {
     /// Whether this item becomes a game-side `SceneNode` (codegen, TSCN):
     /// 2D-only sprites stay in the editor.
     pub fn exported(&self) -> bool {
-        self.sprite.is_none() || self.model.is_some() || self.vis.is_some()
+        self.sprite.is_none() || self.model.is_some() || self.vis.is_some() || self.glow.is_some()
     }
 
     /// Model to draw for a camera at `eye` (LOD applied; `None` for an
@@ -158,6 +160,9 @@ pub struct Resolved {
     pub shadows: Option<trino_core::ShadowSettings>,
     /// The scene's stereo 3D (`environment.stereo`, `None` when off).
     pub stereo: Option<trino_core::StereoSettings>,
+    /// The scene's post-processing (`environment.post`, `None` when off;
+    /// issue #64).
+    pub post: Option<trino_core::PostSettings>,
 }
 
 impl Resolved {
@@ -246,6 +251,7 @@ pub fn resolve_for(scene: &Scene, lib: &Library, time: f32, target: Target) -> R
         out: Resolved {
             shadows: scene.environment.core_shadows(),
             stereo: scene.environment.core_stereo(),
+            post: scene.environment.core_post(),
             ..Resolved::default()
         },
         stack: Vec::new(),
@@ -500,6 +506,7 @@ fn visit(
         cell: ctx.cell,
         vis,
         receiver,
+        glow: e.glow.as_ref().map(|g| g.core()),
         from_prefab,
     });
 

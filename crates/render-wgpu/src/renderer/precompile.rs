@@ -14,10 +14,11 @@ use std::sync::{Arc, Mutex};
 
 use trino_core::CvdMode;
 
+use super::cvd::CvdKind;
 use super::{MSAA_SAMPLES, WaterGpu, scene_pipelines, upscale};
 use super::{
-    OFFSCREEN_FORMAT, SceneSources, StereoView, ao, cvd, depth_blit, gpu_tnl, shadow, shadow_map,
-    stereo,
+    OFFSCREEN_FORMAT, SceneSources, StereoView, ao, cvd, depth_blit, gpu_tnl, post, shadow,
+    shadow_map, stereo,
 };
 use web_time::Instant;
 
@@ -36,8 +37,15 @@ pub(crate) enum JobKind {
     Upscale,
     /// WebGL2's depth copy by drawing.
     DepthBlit,
-    /// A color-vision simulation view.
-    Cvd(CvdMode),
+    /// A color-vision simulation view, or the players' correction filter.
+    Cvd(CvdMode, CvdKind),
+    /// The post stack's HDR twins of the scene's pipelines (`true`: at 4×
+    /// MSAA; issue #64).
+    Hdr(bool),
+    /// The GPU T&L path's HDR twin, the path already built.
+    HdrGpu(bool),
+    /// The post stack's bloom chain and composite.
+    Post,
     /// A composing stereo preview (the 3DS profile, issue #63).
     Stereo(StereoView),
     /// The GPU T&L path (with its MSAA twin when [`Inputs::gpu_ms`]).
@@ -56,7 +64,10 @@ pub(crate) enum Built {
     ShadowMap(bool, Box<shadow_map::MapPass>),
     Upscale(Box<upscale::Upscale>),
     DepthBlit(Box<depth_blit::DepthBlit>),
-    Cvd(CvdMode, wgpu::RenderPipeline),
+    Cvd(CvdMode, CvdKind, wgpu::RenderPipeline),
+    Hdr(bool, Box<post::HdrSet>),
+    HdrGpu(bool, [wgpu::RenderPipeline; 2]),
+    Post(Box<post::PostPass>),
     Stereo(StereoView, wgpu::RenderPipeline),
     GpuTnl(Box<gpu_tnl::GpuTnl>),
     GpuTnlMs([wgpu::RenderPipeline; 2]),
@@ -85,18 +96,27 @@ pub(crate) struct Inputs {
     pub cvd_layout: wgpu::PipelineLayout,
     /// The stereo preview pass's layout (made before its jobs run).
     pub stereo_layout: wgpu::PipelineLayout,
-    /// Groups 0..2 of the water layout.
+    /// Groups 0..2 of the water layout, and its single-sampled group 3.
     pub water_groups: [wgpu::BindGroupLayout; 3],
+    pub water_bgl: wgpu::BindGroupLayout,
+    /// The adapter renders `Rgba16Float` (the post stack's chain format).
+    pub hdr: bool,
 }
 
 /// Build one pass. Runs on a worker (native) or the render thread (Web).
 pub(crate) fn build(kind: JobKind, i: &Inputs) -> Built {
     let d = &i.device;
     match kind {
-        JobKind::MsScene => Built::MsScene(Box::new(scene_pipelines(d, &i.sources, MSAA_SAMPLES))),
-        JobKind::ShadowPipes(n) => {
-            Built::ShadowPipes(n, Box::new(shadow::ShadowPipes::new(d, &i.sources, n)))
-        }
+        JobKind::MsScene => Built::MsScene(Box::new(scene_pipelines(
+            d,
+            &i.sources,
+            MSAA_SAMPLES,
+            OFFSCREEN_FORMAT,
+        ))),
+        JobKind::ShadowPipes(n) => Built::ShadowPipes(
+            n,
+            Box::new(shadow::ShadowPipes::new(d, &i.sources, n, OFFSCREEN_FORMAT)),
+        ),
         JobKind::Ao(ms) => Built::Ao(
             ms,
             Box::new(ao::AoPass::new(d, OFFSCREEN_FORMAT, ms, i.webgl2 && !ms)),
@@ -112,7 +132,33 @@ pub(crate) fn build(kind: JobKind, i: &Inputs) -> Built {
         ),
         JobKind::Upscale => Built::Upscale(Box::new(upscale::Upscale::new(d))),
         JobKind::DepthBlit => Built::DepthBlit(Box::new(depth_blit::DepthBlit::new(d))),
-        JobKind::Cvd(mode) => Built::Cvd(mode, cvd::build_pipeline(d, &i.cvd_layout, mode)),
+        JobKind::Cvd(mode, kind) => Built::Cvd(
+            mode,
+            kind,
+            cvd::build_pipeline_for(d, &i.cvd_layout, mode, kind),
+        ),
+        JobKind::Hdr(ms) => Built::Hdr(
+            ms,
+            Box::new(post::build_hdr_set(
+                d,
+                &i.sources,
+                (&i.water_groups, &i.water_bgl),
+                ms,
+                i.webgl2,
+            )),
+        ),
+        JobKind::HdrGpu(ms) => {
+            let (layout, shader) = i
+                .gpu_ms_source
+                .as_ref()
+                .expect("planned only with the GPU T&L path built");
+            let samples = if ms { MSAA_SAMPLES } else { 1 };
+            Built::HdrGpu(
+                ms,
+                gpu_tnl::pipelines(d, layout, shader, samples, post::HDR_FORMAT),
+            )
+        }
+        JobKind::Post => Built::Post(Box::new(post::PostPass::new(d, i.hdr))),
         JobKind::Stereo(view) => {
             Built::Stereo(view, stereo::build_pipeline(d, &i.stereo_layout, view))
         }
@@ -129,7 +175,13 @@ pub(crate) fn build(kind: JobKind, i: &Inputs) -> Built {
                 .gpu_ms_source
                 .as_ref()
                 .expect("planned only with the GPU T&L path built");
-            Built::GpuTnlMs(gpu_tnl::pipelines(d, layout, shader, MSAA_SAMPLES))
+            Built::GpuTnlMs(gpu_tnl::pipelines(
+                d,
+                layout,
+                shader,
+                MSAA_SAMPLES,
+                OFFSCREEN_FORMAT,
+            ))
         }
         JobKind::WaterMs => {
             let (bgl, pipes) = WaterGpu::ms_pipelines(d, &i.water_groups);

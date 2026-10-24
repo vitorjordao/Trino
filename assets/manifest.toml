@@ -668,6 +668,14 @@ ao = { strength = 0.9, distance = 0.5 }
 [models.selftest_ao_raw]
 file = "models/proxies/selftest-ao.gltf"
 
+# The post step (selftest::post, issue #64): an orange card whose colors
+# the consoles' bake grades through `luts/selftest` (a channel rotation),
+# what the PC's post stack does at run time. The same graded color on
+# every target is the baked tier matching the PC's.
+[models.selftest_post]
+file = "models/proxies/selftest-post.prim.ron"
+grading = "luts/selftest"
+
 # The shadows step (selftest::shadows, ADR 0025): a floor, a post that
 # casts its shape and a ball held up that casts by tier.
 [models.selftest_shadow_floor]
@@ -698,3 +706,25 @@ file = "particles/selftest-sparks.particles.ron"
 # Capped 4, 6 on the expanded tiers (selftest::hw_tier, issue #54).
 [particles.selftest-tier-sparks]
 file = "particles/selftest-tier-sparks.particles.ron"
+
+# The post stack (issue #64, ADR 0033). The engine's halo: glows
+# (`trino_core::Glow`) are the consoles' bloom.
+[sprites.glow]
+file = "sprites/glow.png"
+formats = { n64 = "I4" }
+
+# Grading LUTs: `TLUT` blobs on the PC and the Web (the post stack grades
+# the frame), baked into the colors of the assets that name them on the
+# consoles. `selftest` rotates the channels (selftest::post); `dusk` is a
+# warm evening grade for demos.
+[luts.selftest]
+file = "luts/selftest.png"
+
+[luts.dusk]
+file = "luts/dusk.png"
+
+# The post stack's reference scene: the consoles' bake grades its colors
+# (`bake_grading`), the PC's post stack the frame (xtask/tests/post_cli.rs).
+[scenes.post-reference]
+file = "scenes/post-reference.scene.ron"
+bake_grading = true

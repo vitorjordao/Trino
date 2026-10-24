@@ -36,6 +36,7 @@ const fn at(name: &'static str, tags: &'static [&'static str], x: f32) -> SceneN
         sound: None,
         cell: NO_CELL,
         vis: None,
+        glow: None,
     }
 }
 

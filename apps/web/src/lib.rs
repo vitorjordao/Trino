@@ -101,6 +101,8 @@ mod web {
             let input = host.poll_input();
             host.pump_groups();
             game.update_with(&mut host.platform, &input, &mut host.audio, dt);
+            host.renderer
+                .apply_access(&trino_core::Platform::access(&host.platform));
             game.render(&mut host.renderer);
             host.end_frame();
             frames += 1;

@@ -25,6 +25,10 @@ pub struct AccessState {
     /// The views' simulation: the color vision they show, the UI tab's text
     /// size and high contrast. Not the game's settings: a review tool.
     pub preview: AccessSettings,
+    /// Show the views as the previewed viewer sees them (the simulation);
+    /// off, they show the picture as drawn (the correction filter alone,
+    /// `preview.cvd_filter`, issue #64).
+    pub simulate: bool,
     /// The last checklist and the revision it ran at.
     pub report: Option<Result<AccessReport, String>>,
     pub report_rev: u64,
@@ -39,6 +43,7 @@ impl AccessState {
             dirty: false,
             rev: 1,
             preview: AccessSettings::DEFAULT,
+            simulate: true,
             report: None,
             report_rev: 0,
         };

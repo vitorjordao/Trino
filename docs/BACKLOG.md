@@ -84,14 +84,15 @@ shipping a 3D game first**, then by cost:
   - A temporal upscaler (FSR 2-style) once the renderer has motion vectors and jitter.
   - A bench scene from the game (a project-chosen scene) for games much heavier than
     the engine's.
-  - The post level takes effect with #64 (shadows read theirs since #57, ADR 0025).
+  - ~~The post level takes effect with #64~~: **done** (#64, ADR 0033: bloom levels and
+    resolution per preset; Off keeps the tonemap and grading).
   - A run on a real Steam Deck and a phone GPU (measured so far: llvmpipe, SwiftShader,
     an AMD Radeon iGPU and an RX 7800 XT on Windows).
   - Dynamic resolution's full-size clear and MSAA resolve (1–3 ms on llvmpipe with 4×
     MSAA at half scale): a partial resolve if a preset with MSAA ever turns it on.
 - **Accessibility follow-ups (#60, ADR 0027)** (S–M each).
-  - The PC/Web correction filter (daltonization) for content without semantic palettes:
-    #64's post stack (the simulation view is review-only).
+  - ~~The PC/Web correction filter (daltonization) for content without semantic
+    palettes~~: **done** (#64, ADR 0033 §6: `AccessSettings::cvd_filter`).
   - ~~Text scale for text a game draws itself (`draw_text` HUDs: castle64's counters,
     Solid Eleven's hand-drawn menus and match HUD)~~: **done** (#95, #86 item 8): all 18
     Solid Eleven menus and the 3DS touch screen are now UI-system screens (`examples/solid-eleven/ui/*.ui.ron`),
@@ -285,6 +286,25 @@ shipping a 3D game first**, then by cost:
   time) and bless `tests/perf/` on purpose. Host benches stay as regression guards only.
 
 ---
+
+## Done — post-processing per tier and the daltonization filter (2026-10-24, branch `feat/64-post-stack`, GitHub #64, ADR 0033)
+
+| Item | Evidence |
+|---|---|
+| `trino_core::post` (`no_std`): `PostSettings`, `Tonemap` (None, Reinhard, ACES, AgX), `Bloom`, `LutId`/`Lut` (`TLUT`), `Glow`/`draw_glow`, `Caps::post_tier`, `Renderer::set_post` (a default: no `GAME_API_VERSION` bump) | 9 unit tests in `post.rs` (tonemap references, the neutral LUT within one step, the default stack within half a step), `post_tiers_follow_the_hardware`, `crates/core/tests/post.rs` |
+| PC/Web: `Rgba16Float` scene + HDR twins, dual-filter bloom, composite (exposure, tonemap, LUT, vignette, grain, the upscale), presets' `post` level, `PostView`/`TRINO_POST`, precompile jobs, `TRINO_FRAME post_frames=` | `crates/platform-pc/tests/post.rs` (11 tests: off = the old frame byte for byte, the shader within 2/255 of the CPU per tonemap on both T&L paths, HDR highlights kept, MSAA + render scale + AO + shadow map, golden `post_native`); every existing golden unchanged; `a_full_warm_up_leaves_nothing_to_compile_in_frames` with post; Chromium WebGL2 and WebGPU self-tests |
+| Consoles: `[luts.*]`, `grading` on models/sprites in the N64/3DS bakes, the PC bake's graded twin for the console profiles, `bake_grading` scenes, `Glow` (TSCN v6, codegen, `draw_nodes`, entities) | the `post` self-test step in ares (with and without the Pak) and Azahar (New and old 3DS); `the_post_step_grades_and_glows_on_every_profile_and_catches_its_breakages` (3 mutations); `the_reference_scene_grades_alike_on_the_pc_and_the_consoles` (unlit within 14/255); N64 hot symbol 16 216 bytes and perf gates unchanged |
+| Daltonization (`access::color::correction`, `AccessSettings::cvd_filter`, `PcRenderer::apply_access`) | `daltonization_keeps_grays_and_pulls_confused_pairs_apart`, `the_correction_filter_matches_its_cpu_reference_per_mode` (goldens `cvd_filter_*`) |
+| Authoring and tools: `environment.post`, `glow`, `lut neutral\|inspect`, `post check`, `scene shot --post`, `scene export --bake-grading`; editor Inspector, Glow, View › Post-processing view, Daltonize preview, `TRINO_EDITOR_POST` | `post_cli.rs` (4), `codegen_and_tscn_carry_post_and_glows`, `post_and_glow_are_optional_defaulted_and_round_trip`, `post_section_view_modes_glow_and_the_correction_preview` |
+| Cost per preset (castle64 hub, 4× MSAA + SSAO, AMD Renoir iGPU, paired blocks) | 1080p: +1.7 ms (Off level: tonemap + LUT only), +2.3–2.5 Low, +3.0 Medium, +2.9–4.0 High; 4K: +9–14 ms (`post_bench`) |
+
+Deviations (ADR 0033): scenes stay v7 (optional fields); no 3DS TexEnv tint (the bake grades fog
+and light colors); LUT size is the asset's, presets change bloom only; the PC's console profiles
+don't show graded sprite previews; no chromatic aberration.
+
+Follow-ups: measure on a discrete GPU and a phone; a half-float MSAA target is most of the cost on
+an iGPU (an option to resolve MSAA to 8-bit and tonemap a separate HDR highlight buffer); graded
+`.3ds.sprite` previews; TSCN could carry `post` at its next bump.
 
 ## Done — stereoscopic 3D on the 3DS top screen: per-eye replay, floating HUD and UI, the Auto policy, previews on the PC and in the editor (2026-10-24, branch `feat/63-stereo`, GitHub #63, ADR 0032)
 

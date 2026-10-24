@@ -22,18 +22,18 @@ fn self_test(
     host.report_frames("match", &report);
     host.log(&alloc::format!("TRINO_SE_HASH:{:08x}\n", selftest::hash(game)));
     selftest::check(game).map_err(alloc::string::String::from)?;
-    // The match on in stereo (issue #63): the slider fixed at full, both
-    // eyes per frame, reported only (`stereo=` says if the Auto policy
-    // dropped an eye). Then back to the console's slider for the goldens.
-    host.renderer.set_stereo_slider_override(Some(1.0));
-    let stereo = host.measure(game, selftest::FRAMES, selftest::DT, selftest::input);
-    host.report_frames("match-stereo", &stereo);
-    host.renderer.set_stereo_slider_override(None);
     // The LCDs are double-buffered: present the same frame a few times.
     for _ in 0..3 {
         host.step(game, &trino_core::InputState::default(), 0.0);
     }
     host.dump_framebuffer();
     host.dump_framebuffer_bottom();
+    // The match on in stereo (issue #63), after the goldens (it plays on):
+    // the slider fixed at full, both eyes per frame, reported only
+    // (`stereo=` says if the Auto policy dropped an eye).
+    host.renderer.set_stereo_slider_override(Some(1.0));
+    let stereo = host.measure(game, selftest::FRAMES, selftest::DT, selftest::input);
+    host.report_frames("match-stereo", &stereo);
+    host.renderer.set_stereo_slider_override(None);
     Ok(())
 }

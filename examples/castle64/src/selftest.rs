@@ -79,7 +79,7 @@ pub fn engine_checks(
     }
     platform.log("TRINO_STEP:stereo\n");
     match stereo(renderer)? {
-        StereoProbe::Eyes => platform.log("TRINO_STEP:stereo probed both eyes and mono\n"),
+        StereoProbe::Eyes { gpu_draws } => platform.log(alloc_free_line(gpu_draws).as_str()),
         StereoProbe::Mono => platform.log("TRINO_STEP:stereo mono target (no stereo screen)\n"),
         StereoProbe::Skipped => platform.log("TRINO_STEP:stereo skipped (no read_pixel)\n"),
     }
@@ -979,11 +979,23 @@ pub fn fill_rect(renderer: &mut dyn Renderer) -> Result<bool, &'static str> {
     Ok(true)
 }
 
+/// The `stereo` step's probed line (no allocation: a fixed buffer).
+fn alloc_free_line(gpu_draws: u32) -> TextBuf<80> {
+    let mut b = TextBuf::<80>::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut b,
+        format_args!("TRINO_STEP:stereo probed both eyes and mono gpu_draws={gpu_draws}\n"),
+    );
+    b
+}
+
 /// What the `stereo` step could check.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum StereoProbe {
-    /// Both eyes and the mono frame read back and checked.
-    Eyes,
+    /// Both eyes and the mono frame read back and checked; `gpu_draws`:
+    /// the stereo frame's draws on the hardware T&L path (the 3DS's
+    /// PICA200, both eyes).
+    Eyes { gpu_draws: u32 },
     /// A target without a stereo screen: one picture, the mono one.
     Mono,
     /// No pixel read-back here; only the counters were checked.
@@ -1062,6 +1074,7 @@ pub fn stereo(renderer: &mut dyn Renderer) -> Result<StereoProbe, &'static str> 
         Ok(r.stats().stereo)
     };
     let stats = draw(renderer, 1.0)?;
+    let gpu_draws = renderer.stats().tnl.gpu_draws;
     let two = stats.eyes == 2;
     if caps.stereo != two {
         return Err("stereo: Caps::stereo and the eyes drawn disagree");
@@ -1171,7 +1184,7 @@ pub fn stereo(renderer: &mut dyn Renderer) -> Result<StereoProbe, &'static str> 
         }
     }
     Ok(match (two, read) {
-        (true, 10) => StereoProbe::Eyes,
+        (true, 10) => StereoProbe::Eyes { gpu_draws },
         (true, _) => StereoProbe::Skipped,
         (false, _) => StereoProbe::Mono,
     })

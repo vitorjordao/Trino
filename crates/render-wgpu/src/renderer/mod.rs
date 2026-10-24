@@ -6848,6 +6848,7 @@ mod webgl2_tests {
                 "cvd (deuteranopia)",
                 &cvd::shader(trino_core::CvdMode::Deuteranopia),
             ),
+            ("stereo compose", stereo::SHADER),
         ] {
             let n = glsl_es_300(&depth_as_float(source)).unwrap_or_else(|e| panic!("{name}: {e}"));
             assert!(n > 0, "{name}");

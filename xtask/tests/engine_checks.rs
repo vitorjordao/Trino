@@ -335,7 +335,7 @@ fn the_stereo_step_reads_both_eyes_on_the_3ds_profile() {
     use trino_core::{Renderer, StereoMono};
     let save_dir = tempfile::tempdir().unwrap();
     for (profile, want) in [
-        (SimProfile::N3ds, StereoProbe::Eyes),
+        (SimProfile::N3ds, StereoProbe::Eyes { gpu_draws: 0 }),
         (SimProfile::N64, StereoProbe::Mono),
         (SimProfile::Native, StereoProbe::Mono),
     ] {
@@ -350,7 +350,7 @@ fn the_stereo_step_reads_both_eyes_on_the_3ds_profile() {
         // The step's last frame is the slider-at-0 one.
         let s = renderer.stats().stereo;
         let why = match want {
-            StereoProbe::Eyes => StereoMono::Slider,
+            StereoProbe::Eyes { .. } => StereoMono::Slider,
             _ => StereoMono::NoScreen,
         };
         assert_eq!((s.eyes, s.mono), (1, why), "{profile:?}");

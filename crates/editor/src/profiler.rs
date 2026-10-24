@@ -242,8 +242,19 @@ impl Loaded {
 pub struct Measured {
     pub file: PathBuf,
     pub session: String,
+    /// Mark to mark, the vsync wait included.
     pub frame_mean_us: f64,
+    /// The `begin` zone per frame: waiting for a framebuffer (vsync, the RDP).
+    pub wait_us: f64,
     pub frames: u64,
+}
+
+impl Measured {
+    /// The frame's work: what `N64_COST` estimates and `test n64` gates
+    /// (`frame_us` = update + render − begin).
+    pub fn work_us(&self) -> f64 {
+        (self.frame_mean_us - self.wait_us).max(0.0)
+    }
 }
 
 /// (A's generation, A's session, B's generation and session, the files).
@@ -551,6 +562,9 @@ impl ProfilerState {
                         file: p.clone(),
                         session: s.name.clone(),
                         frame_mean_us: st.frames.mean_us,
+                        wait_us: st
+                            .zone("begin", trino_core::trace::track::CPU)
+                            .map_or(0.0, |z| z.per_frame_us),
                         frames: st.frames.count,
                     })
                 });

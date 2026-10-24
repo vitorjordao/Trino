@@ -253,6 +253,8 @@ mod n64 {
         }
         let mut times = trino_core::perf::FrameTimes::default();
         let v0 = runtime::vblanks();
+        // `--trace` builds: each measured scene is a session (issue #62).
+        trino_core::trace::restart();
         renderer.start_profile();
         for _ in 0..showcase::perf::MEASURE_FRAMES {
             let t0 = runtime::now_us();
@@ -269,6 +271,9 @@ mod n64 {
             let _ = p.write_report(showcase::perf::MICRO_RIVER, &times, &mut report);
             runtime::log(&report);
         }
+        if trino_core::trace::is_on() {
+            runtime::trace_flush(&format!("n64-{}", showcase::perf::MICRO_RIVER), &mut 0);
+        }
         showcase::perf::river_scene(&mut g, Vec2::new(320.0, 240.0), audio);
         for _ in 0..showcase::perf::WARM_FRAMES {
             g.render(renderer);
@@ -276,6 +281,7 @@ mod n64 {
         let idle = InputState::default();
         let mut times = trino_core::perf::FrameTimes::default();
         let v0 = runtime::vblanks();
+        trino_core::trace::restart();
         renderer.start_profile();
         for _ in 0..showcase::perf::MEASURE_FRAMES {
             let t0 = runtime::now_us();
@@ -292,6 +298,9 @@ mod n64 {
             let mut report = alloc::string::String::new();
             let _ = p.write_report(showcase::perf::NAME, &times, &mut report);
             runtime::log(&report);
+        }
+        if trino_core::trace::is_on() {
+            runtime::trace_flush(&format!("n64-{}", showcase::perf::NAME), &mut 0);
         }
         // The third emulator golden: the river under the scene camera
         // (`tests/golden/n64/showcase_river.png`).

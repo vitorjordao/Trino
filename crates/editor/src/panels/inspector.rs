@@ -2662,7 +2662,7 @@ fn budget_section(
                     egui::Label::new(
                         RichText::new(format!(
                             "N64 measured {:.1} ms ({}, {} frames)",
-                            m.frame_mean_us / 1000.0,
+                            m.work_us() / 1000.0,
                             m.session,
                             m.frames
                         ))
@@ -2672,9 +2672,13 @@ fn budget_section(
                     .truncate(),
                 )
                 .on_hover_text(format!(
-                    "The frame mean of {} in {} (ares, emulated time)",
+                    "The frame's work in {} ({}; ares, emulated time): {:.1} ms a frame \
+                     less {:.1} ms waiting for vsync (`begin`), as the estimate and \
+                     `test n64`'s frame_us count it",
                     m.session,
-                    m.file.display()
+                    m.file.display(),
+                    m.frame_mean_us / 1000.0,
+                    m.wait_us / 1000.0
                 ));
             });
             if ui

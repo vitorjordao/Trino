@@ -406,7 +406,10 @@ the modes too: a kittest click on "Deuteranopia" must pick the first match.
   (session, n frames)" under "N64 ≈" when a `target/traces/n64*.json` holds an `n64-*`
   session of that scene with two frame marks (`n64-<scene>`, else `n64-<scene>-…`; never
   another scene's: the showcase once read the castle64 hub's 20 ms beside its own 25.8 ms
-  estimate; newest file first; re-read when the files change). Its **Profiler** button opens that trace
+  estimate; newest file first; re-read when the files change). It shows the frame's
+  work, mark to mark less the `begin` zone (the vsync wait), as `N64_COST` and
+  `test n64`'s `frame_us` count it; a `--trace` ROM's zones and its audio poll still
+  make it read a few ms above the gated number. Its **Profiler** button opens that trace
   and session here. Not in the Game view HUD (painted; kittest can't see it).
 - Tests: `ui_tests::profiler_tab_reads_compares_and_follows_traces` (A as Chrome JSON, B
   as a log, a live reload, the measured line and its button), the layout audit's

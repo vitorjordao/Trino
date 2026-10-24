@@ -408,6 +408,10 @@ pub fn marker(project: &Project, plan: &Plan, assets: &str) -> String {
     if let Some(u) = &project.ship.crash_upload {
         kv("crash_upload", u);
     }
+    // `[threads] runtime` (issue #101): the runner's precompile workers.
+    let mut threads = String::new();
+    let _ = project.runtime_threads.write(&mut threads);
+    kv("threads", &threads);
     out
 }
 

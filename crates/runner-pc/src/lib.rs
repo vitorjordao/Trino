@@ -117,6 +117,64 @@ pub struct RunConfig {
     /// The game's build (`trino_core::build_info!()` in its host's `main`):
     /// crash reports name it (a package's marker wins).
     pub build: Option<trino_core::BuildInfo>,
+    /// When the renderer warms its pipelines (issue #101): `Background`
+    /// by default (workers compile while the first frames present);
+    /// `TRINO_PRECOMPILE=background|blocking|off` overrides it.
+    pub precompile: PrecompileAtBoot,
+    /// The precompile workers (`None`: `TRINO_THREADS`, else all CPUs but
+    /// one, at least one).
+    pub threads: Option<trino_core::ThreadSetting>,
+}
+
+/// Start the boot warm-up (issue #101): `default` unless
+/// `TRINO_PRECOMPILE=background|blocking|off` says otherwise. A blocking
+/// one prints `TRINO_PRECOMPILE:` and saves the pipeline cache.
+pub fn boot_precompile(renderer: &mut PcRenderer, default: PrecompileAtBoot) {
+    let mode = std::env::var("TRINO_PRECOMPILE")
+        .ok()
+        .and_then(|v| PrecompileAtBoot::parse(&v))
+        .unwrap_or(default);
+    let request = trino_core::PrecompileRequest::EVERYTHING;
+    match mode {
+        PrecompileAtBoot::Background => {
+            renderer.precompile(&request);
+        }
+        PrecompileAtBoot::Blocking => {
+            let s = renderer.precompile(&request.blocking());
+            println!(
+                "TRINO_PRECOMPILE: {} passes in {} ms on {} threads",
+                s.total,
+                s.elapsed_us / 1000,
+                s.threads
+            );
+            if let Err(e) = renderer.save_pipeline_cache() {
+                eprintln!("[trino] pipeline cache: {e}");
+            }
+        }
+        PrecompileAtBoot::Off => {}
+    }
+}
+
+/// [`RunConfig::precompile`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PrecompileAtBoot {
+    #[default]
+    Background,
+    /// Before the first frame (a longer start, never a hitch).
+    Blocking,
+    /// Only what the game asks for (`Renderer::precompile`).
+    Off,
+}
+
+impl PrecompileAtBoot {
+    pub fn parse(s: &str) -> Option<PrecompileAtBoot> {
+        match s.trim() {
+            "background" | "auto" => Some(PrecompileAtBoot::Background),
+            "blocking" | "boot" => Some(PrecompileAtBoot::Blocking),
+            "off" | "0" | "manual" => Some(PrecompileAtBoot::Off),
+            _ => None,
+        }
+    }
 }
 
 impl RunConfig {
@@ -131,6 +189,8 @@ impl RunConfig {
             save_dir: None,
             package: None,
             build: None,
+            precompile: PrecompileAtBoot::default(),
+            threads: None,
         }
     }
 
@@ -188,6 +248,7 @@ impl RunConfig {
             self.title = package.title.clone();
         }
         self.default_profile = package.profile().or(Some(SimProfile::Native));
+        self.threads = package.threads.or(self.threads);
         self.save_dir =
             package::user_data_dir(&package.save_dir).or_else(|| Some(package.dir.join("save")));
         self.package = Some(package);
@@ -732,9 +793,25 @@ impl Host {
                 .create_window(attrs)
                 .expect("failed to create window"),
         );
-        let mut renderer =
-            pollster::block_on(PcRenderer::new_windowed(window.clone(), self.profile))
-                .expect("failed to initialize wgpu renderer");
+        // The pipeline cache lives with the player's files (a package's
+        // user data folder), never in the build tree.
+        let options = trino_platform_pc::renderer::RendererOptions {
+            pipeline_cache_dir: Some(cfg.save_dir().join("shaders")),
+        };
+        let mut renderer = pollster::block_on(PcRenderer::new_windowed_with(
+            window.clone(),
+            self.profile,
+            &options,
+        ))
+        .expect("failed to initialize wgpu renderer");
+        // `TRINO_THREADS` (read by the renderer) beats the project's value.
+        if let Some(t) = cfg
+            .threads
+            .filter(|_| std::env::var_os("TRINO_THREADS").is_none())
+        {
+            renderer
+                .set_precompile_threads(t.resolve(trino_platform_pc::renderer::available_cpus()));
+        }
         let tier = tier_from_env();
         renderer.set_hw_tier(tier);
         let mut audio = PcAudio::new();
@@ -761,6 +838,7 @@ impl Host {
             None,
         )
         .unwrap_or_else(|e| panic!("failed to load baked assets: {e}"));
+        boot_precompile(&mut renderer, cfg.precompile);
         let mut groups = GroupLoader::new(&cfg.baked_dir(), &renderer, &mut platform);
         if cfg.package.is_none()
             && let Some(plan) = GroupLoader::strict_plan(&cfg.assets_dir(), &renderer)
@@ -957,6 +1035,15 @@ fn apply_input(ctx: &mut Ctx, file: &Path) {
 }
 
 impl ApplicationHandler for Host {
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        // What this run compiled starts the next one warm (Vulkan).
+        if let Some(ctx) = &self.ctx
+            && let Err(e) = ctx.renderer.save_pipeline_cache()
+        {
+            eprintln!("[trino] pipeline cache: {e}");
+        }
+    }
+
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.ctx.is_none() {
             self.ctx = Some(self.init(event_loop));
@@ -1061,6 +1148,8 @@ impl ApplicationHandler for Host {
                 );
                 self.meter
                     .record_memory(&trino_core::Platform::memory(&ctx.platform));
+                self.meter
+                    .record_pipes(ctx.renderer.frame_times().pipelines);
                 if let Some(max) = self.smoke_frames
                     && self.frames >= max
                 {

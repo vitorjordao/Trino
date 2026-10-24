@@ -190,6 +190,8 @@ pub struct WebHost {
     services_key: String,
     /// The quality presets (#55): start, calibration, cap, requests.
     quality: crate::quality::WebQuality,
+    /// The boot warm-up (#101) is still to be reported.
+    warm_pending: bool,
     _observer: Option<Observer>,
 }
 
@@ -255,6 +257,9 @@ impl WebHost {
         .await
         .map_err(|e| format!("renderer: {e}"))?;
         renderer.set_msaa(config.msaa);
+        // The lazily built pipelines, one per frame from the first one
+        // (issue #101: no threads here, a WebGL2 link stalls the page).
+        renderer.precompile(&trino_core::PrecompileRequest::EVERYTHING);
         crate::js::trino_info("adapter", &renderer.adapter_info());
         crate::js::log(&format!(
             "TRINO_WEB: adapter=\"{}\" profile={:?} canvas={}x{} dpr={dpr} msaa={}",
@@ -332,6 +337,7 @@ impl WebHost {
             input,
             platform,
             meter: FrameMeter::new(config.profile),
+            warm_pending: true,
             canvas,
             config,
             observed,
@@ -628,6 +634,19 @@ impl WebHost {
         self.platform.groups.sample();
         self.meter
             .record_memory(&trino_core::Platform::memory(&self.platform));
+        self.meter
+            .record_pipes(self.renderer.frame_times().pipelines);
+        // The boot warm-up, one pass a frame: say once what it built.
+        let warm = self.renderer.precompile_status();
+        if self.warm_pending && warm.is_done() {
+            self.warm_pending = false;
+            crate::js::log(&format!(
+                "TRINO_PRECOMPILE: {} passes by frame {} ({} ms)",
+                warm.total,
+                self.frames,
+                warm.elapsed_us / 1000
+            ));
+        }
     }
 }
 

@@ -95,6 +95,23 @@ pub fn bake_all(
     platform: Platform,
     out_dir: &Path,
 ) -> Result<BakeReport, BakeError> {
+    bake_all_with(
+        assets_root,
+        platform,
+        out_dir,
+        crate::par::default_threads(),
+    )
+}
+
+/// [`bake_all`] on `threads` workers (issue #101): sprites, sounds and
+/// models bake in parallel; the files, the report and the errors are the
+/// same, in the same order, for any count.
+pub fn bake_all_with(
+    assets_root: &Path,
+    platform: Platform,
+    out_dir: &Path,
+    threads: u32,
+) -> Result<BakeReport, BakeError> {
     let manifest =
         Manifest::load(&assets_root.join("manifest.toml")).map_err(|e| BakeError(vec![e]))?;
 
@@ -109,6 +126,9 @@ pub fn bake_all(
         )]));
     }
 
+    // Handles are checked in manifest order first (serial), then the
+    // assets bake on the workers.
+    let mut sprites = Vec::new();
     for (name, decl) in &manifest.sprites {
         let logical = format!("sprites/{name}");
         let id = asset_id(&logical);
@@ -116,7 +136,11 @@ pub fn bake_all(
             errors.push(format!("hash collision between `{other}` and `{logical}`"));
             continue;
         }
-        let result = (|| -> Result<BakedEntry, String> {
+        sprites.push((logical, id, decl));
+    }
+    let baked = crate::par::map_ordered(threads, &sprites, |(logical, id, decl)| {
+        let (logical, id) = (logical.clone(), *id);
+        (|| -> Result<BakedEntry, String> {
             let source = resolve_source(assets_root, platform, &decl.file)?;
             let (w, h, rgba) = decode_png(&source)?;
             // The PC keeps the master (tools and the console profiles draw
@@ -146,7 +170,9 @@ pub fn bake_all(
                 changed: changed || t.changed,
                 groups: Vec::new(),
             })
-        })();
+        })()
+    });
+    for result in baked {
         match result {
             Ok(entry) => report.entries.push(entry),
             Err(e) => errors.push(e),
@@ -161,6 +187,7 @@ pub fn bake_all(
         ("sounds", "sound", false, &manifest.sounds),
         ("music", "music", true, &manifest.music),
     ];
+    let mut sounds = Vec::new();
     for (prefix, kind, music, section) in audio_sections {
         for (name, decl) in section {
             let logical = format!("{prefix}/{name}");
@@ -169,56 +196,62 @@ pub fn bake_all(
                 errors.push(format!("hash collision between `{other}` and `{logical}`"));
                 continue;
             }
-            let result = (|| -> Result<BakedEntry, String> {
-                let source = resolve_source(assets_root, platform, &decl.file)?;
-                let settings = decl
-                    .audio_settings(music, platform)
-                    .map_err(|e| format!("`{logical}`: {e}"))?;
-                let master = decode_master(&source)?;
-                let enc = crate::audio::encode(platform, &settings, &master, id)
-                    .map_err(|e| format!("`{logical}`: {e}"))?;
-                let (blob, format) = match enc.blob {
-                    Some(blob) if matches!(platform, Platform::Pc | Platform::Web) => {
-                        (blob, settings.codec.label().to_uppercase())
-                    }
-                    _ => {
-                        // N64 Opus has no host decode: the master at its rate.
-                        let played = enc.decoded.clone().unwrap_or_else(|| {
-                            crate::audio::resample(&master.samples, master.rate, enc.rate)
-                        });
-                        let pcm: Vec<u8> = crate::audio::to_pcm16(&played)
-                            .iter()
-                            .flat_map(|s| s.to_le_bytes())
-                            .collect();
-                        let blob = crate::audio::sound_blob(
-                            trino_core::SoundCodec::Pcm16,
-                            &settings,
-                            enc.rate,
-                            played.len(),
-                            &pcm,
-                        );
-                        (blob, format!("PCM16 ({})", settings.codec.label()))
-                    }
-                };
-                let file = format!("{id:08x}.sound");
-                let changed = write_if_changed(&out_dir.join(&file), &blob)?;
-                Ok(BakedEntry {
-                    logical: logical.clone(),
-                    id,
-                    kind,
-                    file,
-                    format,
-                    preview_3ds: None,
-                    compressed: None,
-                    ktx2: None,
-                    changed,
-                    groups: Vec::new(),
-                })
-            })();
-            match result {
-                Ok(entry) => report.entries.push(entry),
-                Err(e) => errors.push(e),
-            }
+            sounds.push((logical, id, kind, music, decl));
+        }
+    }
+    let baked = crate::par::map_ordered(threads, &sounds, |(logical, id, kind, music, decl)| {
+        let (logical, id, kind, music) = (logical.clone(), *id, *kind, *music);
+        (|| -> Result<BakedEntry, String> {
+            let source = resolve_source(assets_root, platform, &decl.file)?;
+            let settings = decl
+                .audio_settings(music, platform)
+                .map_err(|e| format!("`{logical}`: {e}"))?;
+            let master = decode_master(&source)?;
+            let enc = crate::audio::encode(platform, &settings, &master, id)
+                .map_err(|e| format!("`{logical}`: {e}"))?;
+            let (blob, format) = match enc.blob {
+                Some(blob) if matches!(platform, Platform::Pc | Platform::Web) => {
+                    (blob, settings.codec.label().to_uppercase())
+                }
+                _ => {
+                    // N64 Opus has no host decode: the master at its rate.
+                    let played = enc.decoded.clone().unwrap_or_else(|| {
+                        crate::audio::resample(&master.samples, master.rate, enc.rate)
+                    });
+                    let pcm: Vec<u8> = crate::audio::to_pcm16(&played)
+                        .iter()
+                        .flat_map(|s| s.to_le_bytes())
+                        .collect();
+                    let blob = crate::audio::sound_blob(
+                        trino_core::SoundCodec::Pcm16,
+                        &settings,
+                        enc.rate,
+                        played.len(),
+                        &pcm,
+                    );
+                    (blob, format!("PCM16 ({})", settings.codec.label()))
+                }
+            };
+            let file = format!("{id:08x}.sound");
+            let changed = write_if_changed(&out_dir.join(&file), &blob)?;
+            Ok(BakedEntry {
+                logical: logical.clone(),
+                id,
+                kind,
+                file,
+                format,
+                preview_3ds: None,
+                compressed: None,
+                ktx2: None,
+                changed,
+                groups: Vec::new(),
+            })
+        })()
+    });
+    for result in baked {
+        match result {
+            Ok(entry) => report.entries.push(entry),
+            Err(e) => errors.push(e),
         }
     }
 
@@ -336,6 +369,7 @@ pub fn bake_all(
     // Model bounds for baked scenes' `Auto` colliders, collected as models
     // bake (no second bake per scene).
     let mut model_bounds = BTreeMap::new();
+    let mut models = Vec::new();
     for (name, decl) in &manifest.models {
         let logical = format!("models/{name}");
         let id = asset_id(&logical);
@@ -346,12 +380,15 @@ pub fn bake_all(
         if !decl.bakes_for(platform) {
             continue;
         }
+        models.push((logical, id, decl));
+    }
+    let baked = crate::par::map_ordered(threads, &models, |(logical, id, decl)| {
+        let (logical, id) = (logical.clone(), *id);
+        let mut bounds = None;
         let result = (|| -> Result<BakedEntry, String> {
             let source = resolve_source(assets_root, platform, &decl.file)?;
             let blob = crate::model::bake_model(&source, &decl.options())?;
-            if let Some(b) = crate::model::tmdl_bounds(&blob) {
-                model_bounds.insert(logical.clone(), b);
-            }
+            bounds = crate::model::tmdl_bounds(&blob).map(|b| (logical.clone(), b));
             let file = format!("{id:08x}.model");
             let changed = write_if_changed(&out_dir.join(&file), &blob)?;
             Ok(BakedEntry {
@@ -367,6 +404,12 @@ pub fn bake_all(
                 groups: Vec::new(),
             })
         })();
+        (result, bounds)
+    });
+    for (result, bounds) in baked {
+        if let Some((logical, b)) = bounds {
+            model_bounds.insert(logical, b);
+        }
         match result {
             Ok(entry) => report.entries.push(entry),
             Err(e) => errors.push(e),

@@ -148,6 +148,27 @@ fn engine_checks_pass_on_the_simulated_expanded_tiers() {
     }
 }
 
+/// The `shader precompile` step (issue #101) on the PC's profiles: each
+/// warms its lazy passes on workers while frames keep coming (the console
+/// profiles still draw with wgpu pipelines: shadows, color-vision views),
+/// and a second request finds nothing. The real N64 and 3DS answer 0
+/// passes (their shaders are assembled at build time) in ares and Azahar.
+#[test]
+fn the_shader_precompile_step_warms_the_pc_and_skips_the_consoles() {
+    use castle64::selftest::shader_precompile;
+    let save_dir = tempfile::tempdir().unwrap();
+    for profile in [SimProfile::Native, SimProfile::N64, SimProfile::N3ds] {
+        let Some((mut renderer, _platform)) = pc_target(profile, save_dir.path()) else {
+            return;
+        };
+        let r = shader_precompile(&mut renderer).unwrap();
+        // The PC's console profiles still draw with wgpu pipelines (their
+        // shadow and color-vision passes): they warm too, just fewer.
+        assert!(r.passes > 0, "{profile:?}: {r:?}");
+        assert!(r.threads >= 1, "{profile:?}: {r:?}");
+    }
+}
+
 /// The `quality` step (issue #55) on each simulated console: a fixed
 /// preset (Low on the N64 with or without the Pak and on the 3DS, Medium on
 /// the New 3DS), LOD bias 1, the baked particle caps.

@@ -43,6 +43,7 @@ pub mod particles;
 pub mod perf;
 pub mod physics;
 pub mod platform;
+pub mod precompile;
 pub mod quality;
 pub mod render;
 pub mod render3d;
@@ -51,6 +52,7 @@ pub mod scene;
 pub mod services;
 pub mod shadow;
 pub mod text;
+pub mod threads;
 pub mod tilemap;
 pub mod trace;
 pub mod ui;
@@ -91,6 +93,7 @@ pub use physics::{Aabb, Collider, Shape};
 pub use platform::{
     BindDevice, BlobId, DisplayInfo, DisplaySettings, GamepadStatus, InputInfo, Platform, SaveError,
 };
+pub use precompile::{PrecompileMode, PrecompileRequest, PrecompileStatus};
 pub use quality::{
     AoSetting, DynRes, FrameLimit, GpuClass, PostSetting, PresetTable, QualityInfo, QualityPreset,
     QualitySettings, QualitySource, ShadowSetting,
@@ -116,6 +119,7 @@ pub use shadow::{
     ShadowTier,
 };
 pub use text::{BitmapFont, GlyphIndex, TextBuf};
+pub use threads::ThreadSetting;
 pub use tilemap::{TILE_SIZE, Tilemap, TilemapError};
 pub use ui::{Insets, Ui, UiEnv, UiEvent, UiEvents, UiScreen, UiStats};
 pub use version::BuildInfo;

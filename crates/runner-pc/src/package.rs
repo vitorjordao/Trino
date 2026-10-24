@@ -28,6 +28,7 @@
 //! profile=native
 //! steam_app_id=480
 //! crash_upload=https://crash.example.com/report
+//! threads=auto
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -55,6 +56,9 @@ pub struct PackageInfo {
     pub profile: String,
     pub steam_app_id: Option<u32>,
     pub crash_upload: Option<String>,
+    /// `trino.toml [threads] runtime` (issue #101): the precompile and
+    /// load workers; `TRINO_THREADS` still wins.
+    pub threads: Option<trino_core::ThreadSetting>,
 }
 
 impl PackageInfo {
@@ -87,6 +91,7 @@ impl PackageInfo {
                 "profile" => p.profile = v,
                 "steam_app_id" => p.steam_app_id = v.parse().ok(),
                 "crash_upload" => p.crash_upload = Some(v).filter(|v| !v.is_empty()),
+                "threads" => p.threads = trino_core::ThreadSetting::parse(&v),
                 _ => {}
             }
         }
@@ -123,6 +128,11 @@ impl PackageInfo {
         }
         if let Some(u) = &self.crash_upload {
             kv("crash_upload", u);
+        }
+        if let Some(t) = self.threads {
+            let mut s = String::new();
+            let _ = t.write(&mut s);
+            kv("threads", &s);
         }
         out
     }
@@ -211,6 +221,7 @@ mod tests {
             profile: "native".into(),
             steam_app_id: Some(480),
             crash_upload: Some("https://x.example/r".into()),
+            threads: Some(trino_core::ThreadSetting::AllBut(2)),
         };
         assert_eq!(PackageInfo::parse(&p.to_text(), Path::new("/pkg")), p);
         let bare = PackageInfo::parse("name=g\n# comment\nnoise\n", Path::new("/d"));
@@ -218,6 +229,7 @@ mod tests {
         assert_eq!(bare.assets_dir(), PathBuf::from("/d/assets/pc"));
         assert_eq!(bare.profile(), Some(trino_platform_pc::SimProfile::Native));
         assert_eq!(bare.steam_app_id, None);
+        assert_eq!(bare.threads, None);
     }
 
     #[test]

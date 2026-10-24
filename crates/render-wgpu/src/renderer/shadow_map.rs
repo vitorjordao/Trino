@@ -231,38 +231,41 @@ impl MapPass {
             bind_group_layouts: &[Some(&light_bgl)],
             immediate_size: 0,
         });
-        let light = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("trino-shadow-light"),
-            layout: Some(&light_layout),
-            vertex: wgpu::VertexState {
-                module: &light_shader,
-                entry_point: Some("vs_light"),
-                compilation_options: Default::default(),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: 12,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x3],
-                }],
-            },
-            fragment: None,
-            // Both sides: a one-sided sheet (a leaf, a flag) casts too.
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: MAP_FORMAT,
-                depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::Less),
-                stencil: wgpu::StencilState::default(),
-                // Steep faces' depth grows fastest across a texel.
-                bias: wgpu::DepthBiasState {
-                    constant: 0,
-                    slope_scale: 1.5,
-                    clamp: 0.0,
+        let light = crate::renderer::pipes::render(
+            device,
+            wgpu::RenderPipelineDescriptor {
+                label: Some("trino-shadow-light"),
+                layout: Some(&light_layout),
+                vertex: wgpu::VertexState {
+                    module: &light_shader,
+                    entry_point: Some("vs_light"),
+                    compilation_options: Default::default(),
+                    buffers: &[wgpu::VertexBufferLayout {
+                        array_stride: 12,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &wgpu::vertex_attr_array![0 => Float32x3],
+                    }],
                 },
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+                fragment: None,
+                // Both sides: a one-sided sheet (a leaf, a flag) casts too.
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: MAP_FORMAT,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(wgpu::CompareFunction::Less),
+                    stencil: wgpu::StencilState::default(),
+                    // Steep faces' depth grows fastest across a texel.
+                    bias: wgpu::DepthBiasState {
+                        constant: 0,
+                        slope_scale: 1.5,
+                        clamp: 0.0,
+                    },
+                }),
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            },
+        );
 
         // The composite: the scene depth's type per variant (ao.rs), then
         // the map's.
@@ -350,31 +353,34 @@ impl MapPass {
                 operation: wgpu::BlendOperation::Add,
             },
         };
-        let composite = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("trino-shadow-map"),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_full"),
-                compilation_options: Default::default(),
-                buffers: &[],
+        let composite = crate::renderer::pipes::render(
+            device,
+            wgpu::RenderPipelineDescriptor {
+                label: Some("trino-shadow-map"),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_full"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_shadow_map"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: color_format,
+                        blend: Some(blend),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
             },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_shadow_map"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: color_format,
-                    blend: Some(blend),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+        );
         MapPass {
             light_params,
             light_group,

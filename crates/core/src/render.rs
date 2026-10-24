@@ -790,6 +790,26 @@ pub trait Renderer {
     /// on the consoles.
     fn ui_stats(&mut self, _stats: crate::ui::UiStats) {}
 
+    /// Build ahead the pipelines this renderer would otherwise compile the
+    /// first time a frame needs them (issue #101, [`crate::precompile`]):
+    /// call it at a loading screen, at boot or after the options page
+    /// changes a preset, then draw [`precompile_status`](Self::precompile_status)
+    /// until it is done. A new request replaces an unfinished one's plan
+    /// (finished work is kept). Nothing compiles at run time on the N64 and
+    /// the 3DS (shaders are assembled by the build): they answer
+    /// [`PrecompileStatus::DONE`](crate::PrecompileStatus::DONE).
+    fn precompile(
+        &mut self,
+        _request: &crate::precompile::PrecompileRequest,
+    ) -> crate::precompile::PrecompileStatus {
+        crate::precompile::PrecompileStatus::DONE
+    }
+
+    /// Progress of the last [`precompile`](Self::precompile).
+    fn precompile_status(&self) -> crate::precompile::PrecompileStatus {
+        crate::precompile::PrecompileStatus::DONE
+    }
+
     /// **Test hook** (slow, never per frame): color of the last finished
     /// frame at internal pixel `(x, y)`, or `None` if this backend cannot
     /// read back. Lets self-tests check rendering on the real targets (PC

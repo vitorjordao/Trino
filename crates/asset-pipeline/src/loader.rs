@@ -409,55 +409,85 @@ impl BundleLoad {
     /// Decode the next asset (a sprite with its preview, BCn and KTX2
     /// entries) into `out`. Entries of another tier are skipped.
     pub fn step(&mut self, out: &mut LoadedAssets) -> Result<(), String> {
+        self.step_many(1, out)
+    }
+
+    /// Decode the next `threads` assets at once, one per worker (issue
+    /// #101: decompression and hashing are the load's CPU work), into
+    /// `out` in bundle order: the same assets, in the same order, as
+    /// `threads` calls to [`step`](Self::step).
+    pub fn step_many(&mut self, threads: u32, out: &mut LoadedAssets) -> Result<(), String> {
         use trino_core::bundle::EntryKind as K;
         let b = trino_core::bundle::Bundle::parse(&self.bytes).expect("checked by open");
-        while self.next < b.len() {
-            let first = b.entry(self.next);
+        // Plan the next assets: each one's entry and its variants' (slot
+        // 0 = 3DS preview, 1 = BCn, 2 = KTX2).
+        let mut plans: Vec<(usize, Vec<(usize, usize)>)> = Vec::new();
+        while self.next < b.len() && plans.len() < threads.max(1) as usize {
+            let at = self.next;
+            let first = b.entry(at);
             self.next += 1;
             if !first.loads_on(self.tier) {
                 continue;
             }
-            let decode = |e: &trino_core::bundle::Entry| -> Result<Vec<u8>, String> {
-                let stored = b
-                    .stored(e)
-                    .ok_or_else(|| format!("{}: external entry", self.name))?;
-                let mut raw = vec![0u8; e.raw as usize];
-                trino_core::bundle::decode(e, stored, &mut raw)
-                    .map_err(|err| format!("{}: entry {:08x}: {}", self.name, e.id, err.label()))?;
-                if trino_core::bundle::hash(&raw) != e.hash {
-                    return Err(format!("{}: entry {:08x}: hash mismatch", self.name, e.id));
-                }
-                Ok(raw)
-            };
-            let bytes = decode(&first)?;
-            self.done += first.read_bytes() as u64;
-            let mut variants = Variants::default();
+            let mut variants = Vec::new();
             while self.next < b.len() {
                 let e = b.entry(self.next);
                 let slot = match e.kind {
-                    K::SpritePreview3ds => &mut variants.preview_3ds,
-                    K::SpriteBc => &mut variants.compressed,
-                    K::SpriteKtx2 => &mut variants.ktx2,
+                    K::SpritePreview3ds => 0,
+                    K::SpriteBc => 1,
+                    K::SpriteKtx2 => 2,
                     _ => break,
                 };
                 self.next += 1;
-                if e.id != first.id || !e.loads_on(self.tier) {
-                    continue;
+                if e.id == first.id && e.loads_on(self.tier) {
+                    variants.push((slot, self.next - 1));
                 }
-                *slot = Some(decode(&e)?);
-                self.done += e.read_bytes() as u64;
             }
+            plans.push((at, variants));
+        }
+        let name = &self.name;
+        let decode = |e: &trino_core::bundle::Entry| -> Result<Vec<u8>, String> {
+            let stored = b
+                .stored(e)
+                .ok_or_else(|| format!("{name}: external entry"))?;
+            let mut raw = vec![0u8; e.raw as usize];
+            trino_core::bundle::decode(e, stored, &mut raw)
+                .map_err(|err| format!("{name}: entry {:08x}: {}", e.id, err.label()))?;
+            if trino_core::bundle::hash(&raw) != e.hash {
+                return Err(format!("{name}: entry {:08x}: hash mismatch", e.id));
+            }
+            Ok(raw)
+        };
+        let decoded = crate::par::map_ordered(threads, &plans, |(at, slots)| {
+            let first = b.entry(*at);
+            let bytes = decode(&first)?;
+            let mut read = first.read_bytes() as u64;
+            let mut variants = Variants::default();
+            for &(slot, i) in slots {
+                let e = b.entry(i);
+                let v = Some(decode(&e)?);
+                match slot {
+                    0 => variants.preview_3ds = v,
+                    1 => variants.compressed = v,
+                    _ => variants.ktx2 = v,
+                }
+                read += e.read_bytes() as u64;
+            }
+            Ok::<_, String>((first.kind, first.id, bytes, variants, read))
+        });
+        for d in decoded {
+            let (kind, id, bytes, variants, read) = d?;
+            self.done += read;
             let name = self.name.clone();
-            let id = first.id;
-            return push_entry(
+            push_entry(
                 out,
-                first.kind.label(),
+                kind.label(),
                 format!("{id:08x}"),
                 id,
                 bytes,
                 variants,
                 &|| format!("{name}: entry {id:08x}"),
-            );
+            )?;
         }
         Ok(())
     }

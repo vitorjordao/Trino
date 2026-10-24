@@ -58,6 +58,9 @@ pub struct GroupLoader {
     /// Group handle → name (bundle file, messages).
     names: HashMap<GroupId, String>,
     current: Option<(GroupId, BundleLoad)>,
+    /// Workers that decode a bundle's entries (the renderer's precompile
+    /// budget: `TRINO_THREADS`, else all CPUs but one).
+    threads: u32,
     /// What each loaded or loading group uploaded.
     held_by: HashMap<GroupId, Vec<(Kind, u32)>>,
     held: HashMap<(Kind, u32), Held>,
@@ -90,6 +93,7 @@ impl GroupLoader {
             target: crate::sprite_platform(renderer),
             names,
             current: None,
+            threads: renderer.precompile_threads(),
             held_by: HashMap::new(),
             held: HashMap::new(),
             plan: None,
@@ -177,7 +181,8 @@ impl GroupLoader {
                 continue;
             }
             let mut out = LoadedAssets::default();
-            let step = bundle.step(&mut out);
+            // The runtime thread budget decodes several entries at once (#101).
+            let step = bundle.step_many(self.threads, &mut out);
             let (done, total) = bundle.progress();
             if let Err(e) = step.and_then(|()| self.install(g, out, renderer, audio, platform)) {
                 eprintln!("[trino] asset group `{}`: {e}", self.name(g));

@@ -209,6 +209,35 @@ A feature is done only when **PC, N64 and 3DS** all run it and an emulator has s
   runs, `?frames` and the self-test pin a deterministic value (High), never the
   machine's: goldens must not depend on a bench.
 
+- **A new render pipeline on the PC/Web** (issue #101, ADR 0031):
+  - **Create it through `renderer::pipes::render(device, desc)`**, never
+    `device.create_render_pipeline`. That hands it the persistent pipeline cache and
+    counts it (`PcFrameTimes::pipelines`, `TRINO_FRAME`'s `pipes=`). Build it under the
+    renderer's `pipes::scope(&self.pipe_entry)`; an unscoped build counts as
+    `unscoped`, which the precompile test holds at 0. Never key renderer state on
+    `wgpu::Device ==`: the id repeats across instances.
+  - **If the pass is built lazily** (on first use inside a frame), give it a
+    `precompile::JobKind`, a line in `precompile_plan` and `warm_install`, and a
+    `self.warm_wait(kind)` before its lazy site. Otherwise
+    `precompile.rs::a_full_warm_up_leaves_nothing_to_compile_in_frames` catches the
+    hitch: add the new toggle to its `toggle_everything`.
+  - **Never build it eagerly in `PcRenderer::new`**: eager creation crashed parallel
+    headless tests on RADV (#94).
+  - **A job builds from cloned handles (`Inputs`)**, and the render thread installs the
+    result. A pass whose bind groups must match a layout creates that layout on the
+    render thread first (the CVD pass).
+- **Work spread over CPUs** (bakes, loads, console shader assembly; #101):
+  - use the one budget (`trino_core::ThreadSetting`, `auto` = all − 1, at least 1);
+  - use `asset_pipeline::par::map_ordered` (results in input order), so N threads give
+    the bytes, report and errors of 1. The tests compare 1 against N.
+  - GPU and audio uploads stay on the render thread, in order (`BundleLoad::step_many`
+    decodes; the loader installs).
+  - The per-frame CPU T&L pool is a separate knob (`TRINO_PC_TNL_THREADS`).
+- **Measure shader compile time with the driver's disk cache off**
+  (`MESA_SHADER_CACHE_DISABLE=true`, `__GL_SHADER_DISK_CACHE=0`), or a second run
+  measures Mesa's or NVIDIA's cache (`precompile_bench`). Report naga's time apart from
+  the driver's: a pipeline cache only removes the driver's.
+
 ## 3. Tests: every layer, one feature
 
 | Layer | Where | Notes |

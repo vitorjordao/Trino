@@ -76,6 +76,10 @@ fn provided_renderer_methods_are_harmless_defaults() {
     assert_eq!(dyn_r.read_pixel(0, 0), None);
     // No quality preset biases LODs unless the backend applies one (#55).
     assert_eq!(dyn_r.lod_bias(), 1.0);
+    // Nothing compiles at run time by default (the N64 and the 3DS, #101).
+    let warm = dyn_r.precompile(&trino_core::PrecompileRequest::EVERYTHING);
+    assert_eq!(warm, trino_core::PrecompileStatus::DONE);
+    assert!(dyn_r.precompile_status().is_done());
     // The caps' safe area (none on the 3DS) and no UI budget check (#58).
     assert_eq!(dyn_r.safe_area(Screen::Top), trino_core::Insets::ZERO);
     assert_eq!(dyn_r.safe_area(Screen::Bottom), trino_core::Insets::ZERO);

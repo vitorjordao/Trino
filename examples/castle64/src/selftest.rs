@@ -7,6 +7,7 @@
 //! bake, loader) end to end.
 
 use trino_core::HwTier;
+use trino_core::PrecompileRequest;
 use trino_core::math3d::{cos, sin};
 use trino_core::{
     BakedScene, BillboardParams, BlobId, Camera3, Cells, Color, DEFAULT_LIGHT, DetailTexture,
@@ -128,6 +129,9 @@ pub fn engine_checks(
     platform.log("TRINO_STEP:trace\n");
     let events = trace(renderer, platform)?;
     log_trace(platform, events);
+    platform.log("TRINO_STEP:shader precompile\n");
+    let warm = shader_precompile(renderer)?;
+    log_precompile(platform, &warm);
     platform.log("TRINO_STEP:engine ok\n");
     Ok(())
 }
@@ -344,6 +348,67 @@ pub fn log_trace(platform: &dyn Platform, events: u32) {
             trino_core::trace::ENABLED as u8
         ),
     );
+    platform.log(line.as_str());
+}
+
+/// What the `shader precompile` step saw.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PrecompileReport {
+    /// Passes the warm-up built (0: nothing compiles at run time).
+    pub passes: u32,
+    pub threads: u32,
+    /// Frames drawn while it ran (a loading screen's).
+    pub frames: u32,
+}
+
+/// Pipeline precompilation (issue #101): a background
+/// `precompile(EVERYTHING)` finishes while frames keep coming (a loading
+/// screen), and a second request finds nothing left. The N64 and the 3DS
+/// assemble their shaders at build time: 0 passes, done at once. The PC
+/// builds its lazily created passes on worker threads, the Web one a frame.
+pub fn shader_precompile(renderer: &mut dyn Renderer) -> Result<PrecompileReport, &'static str> {
+    let start = renderer.precompile(&PrecompileRequest::EVERYTHING);
+    let mut frames = 0;
+    while !renderer.precompile_status().is_done() {
+        renderer.begin_frame(Color::rgb(0, 0, 0));
+        renderer.end_frame();
+        frames += 1;
+        if frames > 600 {
+            return Err("shader precompile: still running after 600 frames");
+        }
+    }
+    let done = renderer.precompile_status();
+    if done.done != done.total || done.total != start.total {
+        return Err("shader precompile: the plan changed while it ran");
+    }
+    if done.total > 0 && done.threads == 0 {
+        return Err("shader precompile: work without a worker");
+    }
+    if renderer.precompile(&PrecompileRequest::EVERYTHING).total != 0 {
+        return Err("shader precompile: a second request found work left");
+    }
+    Ok(PrecompileReport {
+        passes: done.total,
+        threads: done.threads,
+        frames,
+    })
+}
+
+/// `TRINO_STEP:shader precompile passes=14 threads=7 frames=3`, or
+/// `... built ahead` where nothing compiles at run time.
+pub fn log_precompile(platform: &mut dyn Platform, r: &PrecompileReport) {
+    let mut line: TextBuf<96> = TextBuf::new();
+    let _ = if r.passes == 0 {
+        core::fmt::Write::write_str(&mut line, "TRINO_STEP:shader precompile built ahead\n")
+    } else {
+        core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                "TRINO_STEP:shader precompile passes={} threads={} frames={}\n",
+                r.passes, r.threads, r.frames
+            ),
+        )
+    };
     platform.log(line.as_str());
 }
 

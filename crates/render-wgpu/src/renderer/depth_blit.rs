@@ -63,33 +63,36 @@ impl DepthBlit {
             bind_group_layouts: &[Some(&bgl)],
             immediate_size: 0,
         });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("trino-depth-blit"),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_full"),
-                compilation_options: Default::default(),
-                buffers: &[],
+        let pipeline = crate::renderer::pipes::render(
+            device,
+            wgpu::RenderPipelineDescriptor {
+                label: Some("trino-depth-blit"),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_full"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_copy"),
+                    compilation_options: Default::default(),
+                    targets: &[],
+                }),
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth32Float,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(wgpu::CompareFunction::Always),
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
             },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_copy"),
-                compilation_options: Default::default(),
-                targets: &[],
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::Always),
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+        );
         DepthBlit {
             bgl,
             nearest: super::nearest_sampler(device),

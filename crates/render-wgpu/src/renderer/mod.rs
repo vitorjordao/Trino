@@ -17,6 +17,10 @@ mod gpu_timer;
 mod gpu_tnl;
 mod gpu_zones;
 mod lights;
+pub(crate) mod pipes;
+mod precompile;
+#[doc(hidden)]
+pub use precompile::Hold as PrecompileHold;
 mod shadow;
 mod shadow_map;
 mod upscale;
@@ -249,6 +253,42 @@ pub struct PcFrameTimes {
     /// Shadow map passes run (0 or 1: the light pass and its composite,
     /// the frame's 3D, once).
     pub shadow_maps: u32,
+    /// Render pipelines the render thread compiled during this frame
+    /// (lazy first uses; 0 once a full [`PcRenderer::precompile`] ran:
+    /// `TRINO_FRAME`'s `pipes=`, issue #101).
+    pub pipelines: u32,
+}
+
+/// Where the renderer keeps what outlives a run (issue #101).
+#[derive(Clone, Debug, Default)]
+pub struct RendererOptions {
+    /// The folder of the persistent pipeline cache
+    /// (`<dir>/<wgpu::util::pipeline_cache_key>.bin`): the player's save
+    /// folder, never a build-tree path. `None`: no cache file. Only Vulkan
+    /// adapters with `PIPELINE_CACHE` use it; other drivers keep their own.
+    pub pipeline_cache_dir: Option<std::path::PathBuf>,
+}
+
+/// Pipelines created so far on this renderer's device
+/// ([`PcRenderer::pipeline_counts`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PipelineCounts {
+    /// On the render thread (startup and lazy first uses).
+    pub render_thread: u32,
+    /// By precompile workers.
+    pub precompiled: u32,
+    /// On the render thread during the last frame (since the frame
+    /// before ended: what `update` built counts).
+    pub last_frame: u32,
+    /// Built outside any renderer's scope, process-wide (a lazy site that
+    /// lost its scope: always 0).
+    pub unscoped: u32,
+}
+
+/// The pipeline cache a renderer was created with, and its file.
+struct CacheFile {
+    cache: wgpu::PipelineCache,
+    path: std::path::PathBuf,
 }
 
 /// Microseconds since `t0`.
@@ -459,6 +499,23 @@ pub struct PcRenderer {
     /// pipelines and resident meshes, built on the first GPU draw.
     hw_tnl: bool,
     gpu: Option<gpu_tnl::GpuTnl>,
+    /// This device's pipeline cache and counters ([`pipes`]).
+    pipe_entry: Arc<pipes::DeviceEntry>,
+    /// The file the pipeline cache saves to.
+    cache_file: Option<std::path::PathBuf>,
+    /// The warm-up of the last [`PcRenderer::precompile`].
+    warm: precompile::Warmup,
+    /// Its threads ([`trino_core::ThreadSetting`], `TRINO_THREADS`).
+    precompile_threads: u32,
+    /// A warm-up ran since the pipeline cache was last saved.
+    cache_unsaved: bool,
+    /// Tests: the next warm-up's jobs wait at this gate
+    /// ([`PcRenderer::hold_precompile`]).
+    warm_hold: Option<Arc<precompile::Hold>>,
+    /// The render thread's pipeline count at the last `end_frame`: a frame
+    /// counts what was built since (between frames too: `set_msaa`, a
+    /// preset applied in `update`).
+    pipes_at_begin: u32,
     /// Group 0's layout (the GPU T&L pipelines share it).
     globals_bgl: wgpu::BindGroupLayout,
     /// The native profile's CPU draws of the current batch (tessellated at
@@ -702,44 +759,47 @@ fn water_pipelines(
     });
     let attrs = lit_attributes();
     let make = |fragment: &str| {
-        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("trino-water-pipeline"),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: shader,
-                entry_point: Some("vs_tri_lit"),
-                compilation_options: Default::default(),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: TRI_VERTEX_STRIDE,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &attrs,
-                }],
+        crate::renderer::pipes::render(
+            device,
+            wgpu::RenderPipelineDescriptor {
+                label: Some("trino-water-pipeline"),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: shader,
+                    entry_point: Some("vs_tri_lit"),
+                    compilation_options: Default::default(),
+                    buffers: &[wgpu::VertexBufferLayout {
+                        array_stride: TRI_VERTEX_STRIDE,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &attrs,
+                    }],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: shader,
+                    entry_point: Some(fragment),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: OFFSCREEN_FORMAT,
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth32Float,
+                    depth_write_enabled: Some(false),
+                    depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+                multisample: wgpu::MultisampleState {
+                    count: samples,
+                    ..Default::default()
+                },
+                multiview_mask: None,
+                cache: None,
             },
-            fragment: Some(wgpu::FragmentState {
-                module: shader,
-                entry_point: Some(fragment),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: OFFSCREEN_FORMAT,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: Some(false),
-                depth_compare: Some(wgpu::CompareFunction::LessEqual),
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState {
-                count: samples,
-                ..Default::default()
-            },
-            multiview_mask: None,
-            cache: None,
-        })
+        )
     };
     [make("fs_water"), make("fs_water_vertex")]
 }
@@ -804,6 +864,16 @@ impl WaterGpu {
         if self.ms.is_some() {
             return;
         }
+        let built = Self::ms_pipelines(device, &self.groups);
+        self.install_ms(device, size, built);
+    }
+
+    /// The multisampled set's layout and pipelines: the part of
+    /// [`ensure_ms`](Self::ensure_ms) a precompile job runs on a worker.
+    fn ms_pipelines(
+        device: &wgpu::Device,
+        groups: &[wgpu::BindGroupLayout; 3],
+    ) -> (wgpu::BindGroupLayout, [wgpu::RenderPipeline; 2]) {
         let source = include_str!("shaders.wgsl")
             .replace("texture_depth_2d", "texture_depth_multisampled_2d");
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -811,9 +881,22 @@ impl WaterGpu {
             source: wgpu::ShaderSource::Wgsl(source.into()),
         });
         let bgl = water_bgl(device, true, false);
-        let [g0, g1, g2] = &self.groups;
-        let [per_pixel, vertex] =
-            water_pipelines(device, &shader, [g0, g1, g2, &bgl], MSAA_SAMPLES);
+        let [g0, g1, g2] = groups;
+        let pipes = water_pipelines(device, &shader, [g0, g1, g2, &bgl], MSAA_SAMPLES);
+        (bgl, pipes)
+    }
+
+    /// Finish the multisampled set from built pipelines (its depth copy and
+    /// bind group); kept if it already exists.
+    fn install_ms(
+        &mut self,
+        device: &wgpu::Device,
+        size: (u32, u32),
+        (bgl, [per_pixel, vertex]): (wgpu::BindGroupLayout, [wgpu::RenderPipeline; 2]),
+    ) {
+        if self.ms.is_some() {
+            return;
+        }
         let depth_copy = Self::depth_copy(device, size, MSAA_SAMPLES);
         let bg = Self::bind_group(device, &bgl, &self.buf, &depth_copy, None);
         self.ms = Some(WaterMs {
@@ -946,6 +1029,7 @@ fn create_targets(
 pub const MSAA_SAMPLES: u32 = 4;
 /// The shader and layouts the scene pipelines are built from, kept so the
 /// multisampled set ([`PcRenderer::set_msaa`]) is only built when asked for.
+#[derive(Clone)]
 struct SceneSources {
     shader: wgpu::ShaderModule,
     sprite_layout: wgpu::PipelineLayout,
@@ -1060,133 +1144,142 @@ fn scene_pipelines(
     ];
 
     let make_sprite_pipeline = |samples: u32| {
-        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("trino-sprite-pipeline"),
-            layout: Some(sprite_layout),
-            vertex: wgpu::VertexState {
-                module: shader,
-                entry_point: Some("vs_sprite"),
-                compilation_options: Default::default(),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: INSTANCE_STRIDE,
-                    step_mode: wgpu::VertexStepMode::Instance,
-                    attributes: &instance_attrs,
-                }],
+        crate::renderer::pipes::render(
+            device,
+            wgpu::RenderPipelineDescriptor {
+                label: Some("trino-sprite-pipeline"),
+                layout: Some(sprite_layout),
+                vertex: wgpu::VertexState {
+                    module: shader,
+                    entry_point: Some("vs_sprite"),
+                    compilation_options: Default::default(),
+                    buffers: &[wgpu::VertexBufferLayout {
+                        array_stride: INSTANCE_STRIDE,
+                        step_mode: wgpu::VertexStepMode::Instance,
+                        attributes: &instance_attrs,
+                    }],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: shader,
+                    entry_point: Some("fs_sprite"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: OFFSCREEN_FORMAT,
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleStrip,
+                    ..Default::default()
+                },
+                // Sprites are 2D overlay: draw in submission order, never test
+                // or write depth (matches the N64's rdpq sprite path).
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth32Float,
+                    depth_write_enabled: Some(false),
+                    depth_compare: Some(wgpu::CompareFunction::Always),
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+                multisample: wgpu::MultisampleState {
+                    count: samples,
+                    ..Default::default()
+                },
+                multiview_mask: None,
+                cache: None,
             },
-            fragment: Some(wgpu::FragmentState {
-                module: shader,
-                entry_point: Some("fs_sprite"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: OFFSCREEN_FORMAT,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleStrip,
-                ..Default::default()
-            },
-            // Sprites are 2D overlay: draw in submission order, never test
-            // or write depth (matches the N64's rdpq sprite path).
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: Some(false),
-                depth_compare: Some(wgpu::CompareFunction::Always),
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState {
-                count: samples,
-                ..Default::default()
-            },
-            multiview_mask: None,
-            cache: None,
-        })
+        )
     };
     let tri_attrs = tri_attributes();
     let make_tri_pipeline = |fragment: &str, samples: u32| {
-        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("trino-tri-pipeline"),
-            layout: Some(tri_layout),
-            vertex: wgpu::VertexState {
-                module: shader,
-                entry_point: Some("vs_tri"),
-                compilation_options: Default::default(),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: TRI_VERTEX_STRIDE,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &tri_attrs,
-                }],
+        crate::renderer::pipes::render(
+            device,
+            wgpu::RenderPipelineDescriptor {
+                label: Some("trino-tri-pipeline"),
+                layout: Some(tri_layout),
+                vertex: wgpu::VertexState {
+                    module: shader,
+                    entry_point: Some("vs_tri"),
+                    compilation_options: Default::default(),
+                    buffers: &[wgpu::VertexBufferLayout {
+                        array_stride: TRI_VERTEX_STRIDE,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &tri_attrs,
+                    }],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: shader,
+                    entry_point: Some(fragment),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: OFFSCREEN_FORMAT,
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: wgpu::PrimitiveState::default(),
+                // Real per-pixel occlusion: interpenetrating meshes (a cap
+                // through a head) resolve correctly, which no painter sort can.
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth32Float,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+                multisample: wgpu::MultisampleState {
+                    count: samples,
+                    ..Default::default()
+                },
+                multiview_mask: None,
+                cache: None,
             },
-            fragment: Some(wgpu::FragmentState {
-                module: shader,
-                entry_point: Some(fragment),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: OFFSCREEN_FORMAT,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            // Real per-pixel occlusion: interpenetrating meshes (a cap
-            // through a head) resolve correctly, which no painter sort can.
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::LessEqual),
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState {
-                count: samples,
-                ..Default::default()
-            },
-            multiview_mask: None,
-            cache: None,
-        })
+        )
     };
     let lit_attrs = lit_attributes();
     let make_lit_pipeline = |samples: u32| {
-        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("trino-lit-pipeline"),
-            layout: Some(lit_layout),
-            vertex: wgpu::VertexState {
-                module: shader,
-                entry_point: Some("vs_tri_lit"),
-                compilation_options: Default::default(),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: TRI_VERTEX_STRIDE,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &lit_attrs,
-                }],
+        crate::renderer::pipes::render(
+            device,
+            wgpu::RenderPipelineDescriptor {
+                label: Some("trino-lit-pipeline"),
+                layout: Some(lit_layout),
+                vertex: wgpu::VertexState {
+                    module: shader,
+                    entry_point: Some("vs_tri_lit"),
+                    compilation_options: Default::default(),
+                    buffers: &[wgpu::VertexBufferLayout {
+                        array_stride: TRI_VERTEX_STRIDE,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &lit_attrs,
+                    }],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: shader,
+                    entry_point: Some("fs_tri_lit"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: OFFSCREEN_FORMAT,
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth32Float,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+                multisample: wgpu::MultisampleState {
+                    count: samples,
+                    ..Default::default()
+                },
+                multiview_mask: None,
+                cache: None,
             },
-            fragment: Some(wgpu::FragmentState {
-                module: shader,
-                entry_point: Some("fs_tri_lit"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: OFFSCREEN_FORMAT,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::LessEqual),
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState {
-                count: samples,
-                ..Default::default()
-            },
-            multiview_mask: None,
-            cache: None,
-        })
+        )
     };
     [
         make_sprite_pipeline(samples),
@@ -1327,6 +1420,48 @@ fn pc_tnl_setting(value: Option<&str>) -> bool {
 
 /// `TRINO_PC_TNL_THREADS`: workers of the native profile's CPU T&L (1 =
 /// the calling thread only). Default: the machine's parallelism, at most 8.
+/// The precompile workers: `TRINO_THREADS` (`auto`, `N`, `-N`), else all
+/// logical CPUs but one, at least one ([`trino_core::ThreadSetting`]).
+fn precompile_threads_from_env() -> u32 {
+    let setting = std::env::var("TRINO_THREADS")
+        .ok()
+        .and_then(|v| trino_core::ThreadSetting::parse(&v))
+        .unwrap_or_default();
+    setting.resolve(available_cpus())
+}
+
+/// Logical CPUs (1 when the OS won't say; 1 on the Web).
+pub fn available_cpus() -> u32 {
+    std::thread::available_parallelism().map_or(1, |n| n.get() as u32)
+}
+
+/// The cache file of `info`'s adapter in `dir`, opened into a
+/// [`wgpu::PipelineCache`] (`None` without `PIPELINE_CACHE` or a key).
+/// A missing, foreign or corrupt file starts an empty cache (`fallback`).
+fn open_pipeline_cache(
+    device: &wgpu::Device,
+    info: &wgpu::AdapterInfo,
+    dir: &std::path::Path,
+) -> Option<CacheFile> {
+    if !device.features().contains(wgpu::Features::PIPELINE_CACHE) {
+        return None;
+    }
+    let key = wgpu::util::pipeline_cache_key(info)?;
+    let path = dir.join(format!("{key}.bin"));
+    let data = std::fs::read(&path).ok();
+    // SAFETY: the data is what `PipelineCache::get_data` wrote for an
+    // adapter with this key; wgpu and the driver validate its header and
+    // `fallback` starts empty when they reject it.
+    let cache = unsafe {
+        device.create_pipeline_cache(&wgpu::PipelineCacheDescriptor {
+            label: Some("trino-pipeline-cache"),
+            data: data.as_deref(),
+            fallback: true,
+        })
+    };
+    Some(CacheFile { cache, path })
+}
+
 fn tnl_threads_from_env() -> usize {
     std::env::var("TRINO_PC_TNL_THREADS")
         .ok()
@@ -1347,6 +1482,17 @@ impl PcRenderer {
         window: Arc<winit::window::Window>,
         profile: SimProfile,
     ) -> Result<Self, RendererError> {
+        Self::new_windowed_with(window, profile, &RendererOptions::default()).await
+    }
+
+    /// [`new_windowed`](Self::new_windowed) with [`RendererOptions`] (the
+    /// runner's pipeline cache folder).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub async fn new_windowed_with(
+        window: Arc<winit::window::Window>,
+        profile: SimProfile,
+        options: &RendererOptions,
+    ) -> Result<Self, RendererError> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle(
             Box::new(window.clone()),
         ));
@@ -1358,6 +1504,7 @@ impl PcRenderer {
             instance,
             Some((surface, size.width.max(1), size.height.max(1))),
             profile,
+            options,
         )
         .await?;
         // A game window honors TRINO_AO=off|on|mask (headless renderers,
@@ -1429,6 +1576,7 @@ impl PcRenderer {
             instance,
             Some((surface, width.max(1), height.max(1))),
             profile,
+            &RendererOptions::default(),
         )
         .await
     }
@@ -1440,10 +1588,19 @@ impl PcRenderer {
     /// crashed RADV's Vulkan loader (GitHub #94). `WGPU_DEBUG=1` turns the
     /// names back on for a debugger or a capture tool.
     pub async fn new_headless(profile: SimProfile) -> Result<Self, RendererError> {
+        Self::new_headless_with(profile, &RendererOptions::default()).await
+    }
+
+    /// [`new_headless`](Self::new_headless) with [`RendererOptions`] (tests
+    /// of the pipeline cache file).
+    pub async fn new_headless_with(
+        profile: SimProfile,
+        options: &RendererOptions,
+    ) -> Result<Self, RendererError> {
         let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
         desc.flags = headless_flags();
         let instance = wgpu::Instance::new(desc);
-        Self::init(instance, None, profile).await
+        Self::init(instance, None, profile, options).await
     }
 
     /// Offscreen renderer on an existing device — the editor viewport path:
@@ -1457,6 +1614,7 @@ impl PcRenderer {
             profile,
             "editor device".into(),
             BackendLimits::default(),
+            None,
         )
     }
 
@@ -1464,6 +1622,7 @@ impl PcRenderer {
         instance: wgpu::Instance,
         surface: Option<(wgpu::Surface<'static>, u32, u32)>,
         profile: SimProfile,
+        options: &RendererOptions,
     ) -> Result<Self, RendererError> {
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -1490,6 +1649,11 @@ impl PcRenderer {
         let mut wanted = wgpu::Features::TEXTURE_COMPRESSION_ETC2
             | wgpu::Features::TEXTURE_COMPRESSION_ASTC
             | wgpu::Features::TIMESTAMP_QUERY;
+        // A persistent pipeline cache where the driver offers one (Vulkan,
+        // issue #101), only when the host gives it a folder.
+        if options.pipeline_cache_dir.is_some() {
+            wanted |= wgpu::Features::PIPELINE_CACHE;
+        }
         if !bc_off {
             wanted |= wgpu::Features::TEXTURE_COMPRESSION_BC;
         }
@@ -1560,7 +1724,11 @@ impl PcRenderer {
             &info.name
         };
         let name = format!("{shown} ({:?})", info.backend);
-        let mut r = Self::build(device, queue, surface, profile, name, limits);
+        let cache = options
+            .pipeline_cache_dir
+            .as_deref()
+            .and_then(|dir| open_pipeline_cache(&device, &info, dir));
+        let mut r = Self::build(device, queue, surface, profile, name, limits, cache);
         r.gpu_class = bench::classify_adapter(&info);
         Ok(r)
     }
@@ -1572,7 +1740,14 @@ impl PcRenderer {
         profile: SimProfile,
         adapter_name: String,
         limits: BackendLimits,
+        cache: Option<CacheFile>,
     ) -> Self {
+        let (cache, cache_file) = match cache {
+            Some(c) => (Some(c.cache), Some(c.path)),
+            None => (None, None),
+        };
+        let pipe_entry = pipes::DeviceEntry::new(cache);
+        let _pipes = pipes::scope(&pipe_entry);
         let device_bc = device
             .features()
             .contains(wgpu::Features::TEXTURE_COMPRESSION_BC);
@@ -1844,31 +2019,34 @@ impl PcRenderer {
             .as_ref()
             .map(|s| s.config.format)
             .unwrap_or(OFFSCREEN_FORMAT);
-        let blit_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("trino-blit-pipeline"),
-            layout: Some(&blit_layout),
-            vertex: wgpu::VertexState {
-                module: &sources.shader,
-                entry_point: Some("vs_blit"),
-                compilation_options: Default::default(),
-                buffers: &[],
+        let blit_pipeline = crate::renderer::pipes::render(
+            &device,
+            wgpu::RenderPipelineDescriptor {
+                label: Some("trino-blit-pipeline"),
+                layout: Some(&blit_layout),
+                vertex: wgpu::VertexState {
+                    module: &sources.shader,
+                    entry_point: Some("vs_blit"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &sources.shader,
+                    entry_point: Some("fs_blit"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: blit_format,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
             },
-            fragment: Some(wgpu::FragmentState {
-                module: &sources.shader,
-                entry_point: Some("fs_blit"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: blit_format,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+        );
 
         let blit_bind_group =
             create_blit_bind_group(&device, &texture_bgl, &offscreen_view, &blit_sampler);
@@ -1903,31 +2081,34 @@ impl PcRenderer {
         });
         // VI pass: reads the offscreen target (through the blit bind group)
         // into a scratch texture of the same format.
-        let vi_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("trino-vi-pipeline"),
-            layout: Some(&blit_layout),
-            vertex: wgpu::VertexState {
-                module: &sources.shader,
-                entry_point: Some("vs_blit"),
-                compilation_options: Default::default(),
-                buffers: &[],
+        let vi_pipeline = crate::renderer::pipes::render(
+            &device,
+            wgpu::RenderPipelineDescriptor {
+                label: Some("trino-vi-pipeline"),
+                layout: Some(&blit_layout),
+                vertex: wgpu::VertexState {
+                    module: &sources.shader,
+                    entry_point: Some("vs_blit"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &sources.shader,
+                    entry_point: Some("fs_vi_dedither"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: OFFSCREEN_FORMAT,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
             },
-            fragment: Some(wgpu::FragmentState {
-                module: &sources.shader,
-                entry_point: Some("fs_vi_dedither"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: OFFSCREEN_FORMAT,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+        );
         let vi_tex = create_vi_target(&device, internal_size);
 
         let white_tex = device.create_texture(&wgpu::TextureDescriptor {
@@ -1987,6 +2168,10 @@ impl PcRenderer {
             mapped_at_creation: false,
         });
 
+        // What the constructor built is not the first frame's.
+        let pipes_at_start = pipe_entry
+            .render_thread
+            .load(std::sync::atomic::Ordering::Relaxed);
         PcRenderer {
             device,
             queue,
@@ -2096,6 +2281,13 @@ impl PcRenderer {
             adapter_name,
             hw_tnl: hw_tnl_from_env(),
             gpu: None,
+            pipe_entry,
+            cache_file,
+            warm: precompile::Warmup::default(),
+            precompile_threads: precompile_threads_from_env(),
+            pipes_at_begin: pipes_at_start,
+            cache_unsaved: false,
+            warm_hold: None,
             globals_bgl,
             cpu_jobs: Vec::new(),
             job_ctxs: Vec::new(),
@@ -2188,12 +2380,294 @@ impl PcRenderer {
 
     /// Build the GPU T&L path's pipelines and buffers (on first use).
     fn ensure_gpu_tnl(&mut self) {
+        let _pipes = pipes::scope(&self.pipe_entry);
+        self.warm_wait(precompile::JobKind::GpuTnl);
+        if self.msaa > 1 {
+            self.warm_wait(precompile::JobKind::GpuTnlMs);
+        }
         let samples = self.msaa;
+        if self.gpu.is_none() {
+            self.warm_wait(precompile::JobKind::GpuTnl);
+        }
+        let _pipes = pipes::scope(&self.pipe_entry);
         let gpu = self.gpu.get_or_insert_with(|| {
             gpu_tnl::GpuTnl::new(&self.device, [&self.globals_bgl, &self.tex3d_bgl])
         });
         if samples > 1 {
             gpu.ensure_ms(&self.device, samples);
+        }
+    }
+
+    /// Build ahead the passes this renderer would otherwise compile the
+    /// first time a frame needs them (issue #101, ADR 0031). `Background`
+    /// runs them on [`precompile_threads`](Self::precompile_threads)
+    /// workers (one per frame on the Web) while frames keep presenting;
+    /// `Blocking` returns when they are built. A new request first finishes
+    /// the last one. Never run by the constructors: eager pipelines in every
+    /// renderer made parallel headless tests crash on RADV (#94).
+    pub fn precompile(
+        &mut self,
+        request: &trino_core::PrecompileRequest,
+    ) -> trino_core::PrecompileStatus {
+        for b in self.warm.finish() {
+            self.warm_install(b);
+        }
+        let jobs = self.precompile_plan(request.all_settings);
+        if jobs.is_empty() {
+            // Nothing left: this request's status says so (0 jobs).
+            self.warm = precompile::Warmup::default();
+        } else {
+            let inputs = self.precompile_inputs(request.all_settings);
+            self.warm.start(jobs, inputs, self.precompile_threads);
+            self.cache_unsaved = true;
+            if request.mode == trino_core::PrecompileMode::Blocking {
+                for b in self.warm.finish() {
+                    self.warm_install(b);
+                }
+            }
+        }
+        self.warm.status()
+    }
+
+    /// Progress of the last [`precompile`](Self::precompile).
+    pub fn precompile_status(&self) -> trino_core::PrecompileStatus {
+        self.warm.status()
+    }
+
+    /// **Test hook:** the next [`precompile`](Self::precompile)'s workers
+    /// take a job each and wait, the job in flight, until the returned
+    /// gate's `release()`; a frame that needs one of those passes waits.
+    #[doc(hidden)]
+    pub fn hold_precompile(&mut self) -> Arc<precompile::Hold> {
+        let h = Arc::new(precompile::Hold::default());
+        self.warm_hold = Some(h.clone());
+        h
+    }
+
+    /// **Test hook:** jobs a precompile worker holds right now.
+    #[doc(hidden)]
+    pub fn precompile_in_flight(&self) -> u32 {
+        self.warm.running()
+    }
+
+    /// Workers a [`precompile`](Self::precompile) uses (at least 1).
+    pub fn set_precompile_threads(&mut self, threads: u32) {
+        self.precompile_threads = threads.max(1);
+    }
+
+    /// See [`set_precompile_threads`](Self::set_precompile_threads):
+    /// `TRINO_THREADS`, else all CPUs but one.
+    pub fn precompile_threads(&self) -> u32 {
+        self.precompile_threads
+    }
+
+    /// Pipelines created on this renderer's device so far.
+    pub fn pipeline_counts(&self) -> PipelineCounts {
+        use std::sync::atomic::Ordering::Relaxed;
+        PipelineCounts {
+            render_thread: self.pipe_entry.render_thread.load(Relaxed),
+            precompiled: self.pipe_entry.warm.load(Relaxed),
+            last_frame: self.last_times.pipelines,
+            unscoped: pipes::unscoped(),
+        }
+    }
+
+    /// The persistent pipeline cache is in use (a Vulkan adapter with
+    /// `PIPELINE_CACHE` and a [`RendererOptions::pipeline_cache_dir`]).
+    pub fn has_pipeline_cache(&self) -> bool {
+        self.pipe_entry.cache.is_some() && self.cache_file.is_some()
+    }
+
+    /// Write the pipeline cache to its file (atomically: a temporary file
+    /// renamed over it). `Ok(None)` without a cache; the bytes written
+    /// otherwise. Hosts call it once a warm-up finished and at exit.
+    pub fn save_pipeline_cache(&self) -> std::io::Result<Option<u64>> {
+        let (Some(cache), Some(path)) = (&self.pipe_entry.cache, &self.cache_file) else {
+            return Ok(None);
+        };
+        let Some(data) = cache.get_data() else {
+            return Ok(None);
+        };
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let tmp = path.with_extension("bin.tmp");
+        std::fs::write(&tmp, &data)?;
+        std::fs::rename(&tmp, path)?;
+        Ok(Some(data.len() as u64))
+    }
+
+    /// What a request builds: every lazily built pass the profile can
+    /// reach (`all`), or those the current settings draw with, minus the
+    /// ones already built.
+    fn precompile_plan(&self, all: bool) -> Vec<precompile::JobKind> {
+        use precompile::JobKind as J;
+        let mut jobs = Vec::new();
+        let native = self.profile.is_native();
+        let want_ms = native && !self.webgl2 && (all || self.msaa > 1);
+        if want_ms && self.ms_pipelines.is_none() {
+            jobs.push(J::MsScene);
+        }
+        if self.shadow_pipes.is_none() {
+            jobs.push(J::ShadowPipes(1));
+        }
+        if want_ms && self.shadow_pipes_ms.is_none() {
+            jobs.push(J::ShadowPipes(MSAA_SAMPLES));
+        }
+        if self.caps.ao_tier == trino_core::AoTier::ScreenSpace {
+            if self.ao_pass.is_none() {
+                jobs.push(J::Ao(false));
+            }
+            if want_ms && self.ao_pass_ms.is_none() {
+                jobs.push(J::Ao(true));
+            }
+        }
+        if self.caps.shadow_tier == ShadowTier::Map {
+            if self.shadow_map.is_none() {
+                jobs.push(J::ShadowMap(false));
+            }
+            if want_ms && self.shadow_map_ms.is_none() {
+                jobs.push(J::ShadowMap(true));
+            }
+        }
+        let scaled = self.render_scale() != 1.0 || self.dynres.is_some();
+        if native && (all || scaled) && self.upscale.is_none() {
+            jobs.push(J::Upscale);
+        }
+        if self.webgl2 && self.depth_blit.is_none() {
+            jobs.push(J::DepthBlit);
+        }
+        let modes: &[trino_core::CvdMode] = if all {
+            &[
+                trino_core::CvdMode::Protanopia,
+                trino_core::CvdMode::Deuteranopia,
+                trino_core::CvdMode::Tritanopia,
+                trino_core::CvdMode::Grayscale,
+            ]
+        } else if self.cvd_view != trino_core::CvdMode::Off {
+            core::slice::from_ref(&self.cvd_view)
+        } else {
+            &[]
+        };
+        for &m in modes {
+            if !self.cvd.as_ref().is_some_and(|c| c.has(m)) {
+                jobs.push(J::Cvd(m));
+            }
+        }
+        if self.gpu_tnl_active() {
+            match &self.gpu {
+                None => jobs.push(J::GpuTnl),
+                Some(g) if want_ms && !g.has_ms() => jobs.push(J::GpuTnlMs),
+                Some(_) => {}
+            }
+        }
+        if want_ms && self.water.ms.is_none() {
+            jobs.push(J::WaterMs);
+        }
+        jobs
+    }
+
+    fn precompile_inputs(&mut self, all: bool) -> precompile::Inputs {
+        let want_ms = self.profile.is_native() && !self.webgl2 && (all || self.msaa > 1);
+        // The color-vision pass's layout must be the one its bind groups
+        // use: the pass exists before its pipelines are built.
+        let cvd_layout = self
+            .cvd
+            .get_or_insert_with(|| cvd::CvdPass::new(&self.device))
+            .layout()
+            .clone();
+        precompile::Inputs {
+            entry: self.pipe_entry.clone(),
+            hold: self.warm_hold.take(),
+            device: self.device.clone(),
+            sources: self.sources.clone(),
+            webgl2: self.webgl2,
+            tnl_groups: [self.globals_bgl.clone(), self.tex3d_bgl.clone()],
+            gpu_ms: want_ms,
+            gpu_ms_source: self.gpu.as_ref().map(|g| g.ms_source()),
+            cvd_layout,
+            water_groups: self.water.groups.clone(),
+        }
+    }
+
+    /// Put a built pass where the lazy code looks for it (an existing one
+    /// stays: the frame built it first).
+    fn warm_install(&mut self, built: precompile::Built) {
+        use precompile::Built as B;
+        match built {
+            B::MsScene(p) => {
+                self.ms_pipelines.get_or_insert(*p);
+            }
+            B::ShadowPipes(1, p) => {
+                self.shadow_pipes.get_or_insert(*p);
+            }
+            B::ShadowPipes(_, p) => {
+                self.shadow_pipes_ms.get_or_insert(*p);
+            }
+            B::Ao(false, p) => {
+                self.ao_pass.get_or_insert(*p);
+            }
+            B::Ao(true, p) => {
+                self.ao_pass_ms.get_or_insert(*p);
+            }
+            B::ShadowMap(false, p) => {
+                self.shadow_map.get_or_insert(*p);
+            }
+            B::ShadowMap(true, p) => {
+                self.shadow_map_ms.get_or_insert(*p);
+            }
+            B::Upscale(p) => {
+                self.upscale.get_or_insert(*p);
+            }
+            B::DepthBlit(p) => {
+                self.depth_blit.get_or_insert(*p);
+            }
+            B::Cvd(mode, p) => self
+                .cvd
+                .get_or_insert_with(|| cvd::CvdPass::new(&self.device))
+                .install(mode, p),
+            B::GpuTnl(g) => {
+                self.gpu.get_or_insert(*g);
+            }
+            B::GpuTnlMs(p) => {
+                if let Some(g) = &mut self.gpu {
+                    g.install_ms(p);
+                }
+            }
+            B::WaterMs(bgl, p) => {
+                let size = self.scene_extent();
+                self.water.install_ms(&self.device, size, (bgl, p));
+            }
+        }
+    }
+
+    /// The render thread is about to build `kind` lazily: take it from the
+    /// warm-up (wait for it when a worker is on it).
+    fn warm_wait(&mut self, kind: precompile::JobKind) {
+        if self.warm.is_idle() {
+            return;
+        }
+        for b in self.warm.wait_for(kind) {
+            self.warm_install(b);
+        }
+    }
+
+    /// Install what the warm-up finished (each `begin_frame`; the Web
+    /// builds one job here).
+    fn warm_poll(&mut self) {
+        if !self.warm.is_idle() {
+            let built = self.warm.poll();
+            for b in built {
+                self.warm_install(b);
+            }
+        }
+        // Once per warm-up, however it ended (a frame may have taken its
+        // last job): what it compiled starts the next launch warm.
+        if self.warm.is_idle() && self.cache_unsaved {
+            self.cache_unsaved = false;
+            if let Err(e) = self.save_pipeline_cache() {
+                eprintln!("[trino] pipeline cache: {e}");
+            }
         }
     }
 
@@ -2337,6 +2811,7 @@ impl PcRenderer {
     /// it). The console profiles ignore it — their look is the console's.
     /// Off by default (goldens are single-sampled).
     pub fn set_msaa(&mut self, on: bool) {
+        let _pipes = pipes::scope(&self.pipe_entry);
         let samples = if on && self.profile.is_native() && !self.webgl2 {
             MSAA_SAMPLES
         } else {
@@ -2346,6 +2821,12 @@ impl PcRenderer {
             return;
         }
         self.msaa = samples;
+        if samples > 1 {
+            use precompile::JobKind as J;
+            for kind in [J::MsScene, J::WaterMs, J::GpuTnl, J::GpuTnlMs] {
+                self.warm_wait(kind);
+            }
+        }
         if samples > 1 && self.ms_pipelines.is_none() {
             self.ms_pipelines = Some(scene_pipelines(&self.device, &self.sources, samples));
         }
@@ -3635,6 +4116,7 @@ impl PcRenderer {
     /// Build the shadow pipelines a frame's commands use (the MSAA set
     /// when the scene is multisampled).
     fn ensure_shadow_pipes(&mut self) {
+        let _pipes = pipes::scope(&self.pipe_entry);
         let used = self.commands.iter().any(|c| {
             matches!(
                 c,
@@ -3646,6 +4128,10 @@ impl PcRenderer {
         });
         if !used {
             return;
+        }
+        self.warm_wait(precompile::JobKind::ShadowPipes(1));
+        if self.msaa > 1 {
+            self.warm_wait(precompile::JobKind::ShadowPipes(self.msaa));
         }
         if self.shadow_pipes.is_none() {
             self.shadow_pipes = Some(shadow::ShadowPipes::new(&self.device, &self.sources, 1));
@@ -3718,6 +4204,7 @@ impl PcRenderer {
     /// into the second screen's, and submit.
     fn draw_commands(&mut self, second: bool) {
         trino_core::zone!("encode");
+        let _pipes = pipes::scope(&self.pipe_entry);
         self.ensure_shadow_pipes();
         if self.strict {
             // With two screens, the main screen's counts are in `main_*`:
@@ -3926,6 +4413,30 @@ impl PcRenderer {
         // A scaled frame without 3D (a menu) draws on the picture alone.
         let scene_pass = scaled && split.is_some();
         let (first_part, rest) = segments.split_at(split.unwrap_or(segments.len()));
+        // The passes this frame builds lazily below: take them from a
+        // running warm-up first (a worker may be compiling one).
+        if !self.warm.is_idle() {
+            use precompile::JobKind as J;
+            let ms = !second
+                && self.msaa_targets.is_some()
+                && self.ms_pipelines.is_some()
+                && (!scaled || scene_pass);
+            if depth_copy_at.is_some() && self.webgl2 {
+                self.warm_wait(J::DepthBlit);
+            }
+            if map.is_some() && split.is_some() {
+                self.warm_wait(J::ShadowMap(ms));
+            }
+            if ao.is_some() && split.is_some() {
+                self.warm_wait(J::Ao(ms));
+            }
+            if scene_pass {
+                self.warm_wait(J::Upscale);
+            }
+            if self.cvd_view != trino_core::CvdMode::Off {
+                self.warm_wait(J::Cvd(self.cvd_view));
+            }
+        }
 
         let mut encoder = self
             .device
@@ -4425,6 +4936,9 @@ impl PcRenderer {
         params: &ModelParams,
         accepted: &[GpuInstanceOf],
     ) {
+        if self.gpu.is_none() && self.gpu_tnl_active() {
+            self.warm_wait(precompile::JobKind::GpuTnl);
+        }
         let Some((tmdl, layout)) = self.meshes.get(&model.0) else {
             return;
         };
@@ -4452,6 +4966,7 @@ impl PcRenderer {
         }
         let screen = self.current_screen_size();
         let ctx = tnl_context(&mut self.tnl_ctx, &self.camera, &self.light, screen, &[]);
+        let _pipes = pipes::scope(&self.pipe_entry);
         let gpu = self.gpu.get_or_insert_with(|| {
             gpu_tnl::GpuTnl::new(&self.device, [&self.globals_bgl, &self.tex3d_bgl])
         });
@@ -4708,6 +5223,7 @@ impl Renderer for PcRenderer {
     }
 
     fn begin_frame(&mut self, clear: Color) {
+        self.warm_poll();
         self.clear = clear;
         self.screen = 0;
         self.main_cmds = 0;
@@ -4895,6 +5411,9 @@ impl Renderer for PcRenderer {
         params: &ModelParams,
     ) {
         trino_core::zone!("draw");
+        if self.gpu.is_none() && self.gpu_tnl_active() {
+            self.warm_wait(precompile::JobKind::GpuTnl);
+        }
         if params.shadow.casts() {
             self.cast_shadow(model, matrix, params);
         }
@@ -5072,6 +5591,7 @@ impl Renderer for PcRenderer {
                     !trino_core::render3d::split_policy(&ctx, &mesh, params),
                     detail,
                 );
+                let _pipes = pipes::scope(&self.pipe_entry);
                 let gpu = self.gpu.get_or_insert_with(|| {
                     gpu_tnl::GpuTnl::new(&self.device, [&self.globals_bgl, &self.tex3d_bgl])
                 });
@@ -5391,6 +5911,17 @@ impl Renderer for PcRenderer {
         }
     }
 
+    fn precompile(
+        &mut self,
+        request: &trino_core::PrecompileRequest,
+    ) -> trino_core::PrecompileStatus {
+        PcRenderer::precompile(self, request)
+    }
+
+    fn precompile_status(&self) -> trino_core::PrecompileStatus {
+        PcRenderer::precompile_status(self)
+    }
+
     fn ui_stats(&mut self, stats: trino_core::UiStats) {
         self.ui_stats = Some(stats);
         if self.strict {
@@ -5443,6 +5974,12 @@ impl Renderer for PcRenderer {
         trino_core::zone!("end");
         self.flush();
         self.times.submit_us += micros(t0);
+        let built = self
+            .pipe_entry
+            .render_thread
+            .load(std::sync::atomic::Ordering::Relaxed);
+        self.times.pipelines = built.wrapping_sub(self.pipes_at_begin);
+        self.pipes_at_begin = built;
         self.last_times = self.times;
     }
 
@@ -5509,6 +6046,13 @@ impl Renderer for PcRenderer {
 }
 
 /// A framebuffer read under way ([`PcRenderer::start_read_offscreen`]).
+impl Drop for PcRenderer {
+    fn drop(&mut self) {
+        // Workers first: they hold the device and the entry.
+        self.warm = precompile::Warmup::default();
+    }
+}
+
 pub struct PendingRead {
     buffer: wgpu::Buffer,
     padded: u32,

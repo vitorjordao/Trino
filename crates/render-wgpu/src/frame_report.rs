@@ -39,6 +39,8 @@ pub struct FrameMeter {
     /// Every timed frame's µs (the 1% lows).
     samples: Vec<u32>,
     quality: Option<QualityNote>,
+    /// Pipelines compiled inside frames (issue #101): hitches.
+    pipes: u64,
 }
 
 /// The quality a host reports on the line ([`FrameMeter::set_quality`]).
@@ -75,6 +77,7 @@ impl FrameMeter {
             heap: (0, 0),
             samples: Vec::new(),
             quality: None,
+            pipes: 0,
         }
     }
 
@@ -106,6 +109,12 @@ impl FrameMeter {
         s.sort_unstable_by(|a, b| b.cmp(a));
         let n = s.len().div_ceil(100);
         s[..n].iter().map(|v| *v as u64).sum::<u64>() / n as u64
+    }
+
+    /// The pipelines a frame compiled on the render thread
+    /// (`PcFrameTimes::pipelines`): the line's `pipes=`, a total.
+    pub fn record_pipes(&mut self, n: u32) {
+        self.pipes += n as u64;
     }
 
     /// The heap after a frame (`Platform::memory`): the line's `heap=`.
@@ -182,7 +191,7 @@ impl FrameMeter {
         format!(
             "TRINO_FRAME:{scene} profile={profile} avg_us={avg} max_us={} frames={} fps={fps} \
              draws={} tris={} pc_gpu_draws={} pc_gpu_tris={} instanced={} off_pc_gpu={off} {} \
-             low1_us={low1} low1_fps={low1_fps}{quality}",
+             low1_us={low1} low1_fps={low1_fps} pipes={}{quality}",
             self.max_us,
             self.frames,
             per(self.models),
@@ -191,6 +200,7 @@ impl FrameMeter {
             per(self.pc_gpu_tris),
             per(self.instanced),
             trino_core::group::HeapField(self.heap.0, self.heap.1),
+            self.pipes,
         )
     }
 }
@@ -236,7 +246,7 @@ mod tests {
         let empty = FrameMeter::new(SimProfile::N64).line("x");
         assert!(
             empty.contains("profile=n64")
-                && empty.ends_with("off_pc_gpu=- heap=0/0 low1_us=0 low1_fps=0"),
+                && empty.ends_with("off_pc_gpu=- heap=0/0 low1_us=0 low1_fps=0 pipes=0"),
             "{empty}"
         );
     }
@@ -260,7 +270,7 @@ mod tests {
         });
         let line = m.line("hub");
         assert!(
-            line.contains("low1_us=36666 low1_fps=27 quality=medium scale=0.80 quality_from=detected detected=medium gpu_us=12345"),
+            line.contains("low1_us=36666 low1_fps=27 pipes=0 quality=medium scale=0.80 quality_from=detected detected=medium gpu_us=12345"),
             "{line}"
         );
     }

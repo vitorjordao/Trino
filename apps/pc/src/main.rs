@@ -162,9 +162,17 @@ impl App {
                 .expect("failed to create window"),
         );
 
-        let mut renderer =
-            pollster::block_on(PcRenderer::new_windowed(window.clone(), self.profile))
-                .expect("failed to initialize wgpu renderer");
+        let options = trino_platform_pc::renderer::RendererOptions {
+            pipeline_cache_dir: Some(PathBuf::from("target/save/shaders")),
+        };
+        let mut renderer = pollster::block_on(PcRenderer::new_windowed_with(
+            window.clone(),
+            self.profile,
+            &options,
+        ))
+        .expect("failed to initialize wgpu renderer");
+        // Warm the lazily built pipelines while the game starts (#101).
+        trino_runner_pc::boot_precompile(&mut renderer, Default::default());
         // `TRINO_SIM=n64x|3dsnew`: the console's expanded tier (#54).
         let tier = trino_runner_pc::tier_from_env();
         renderer.set_hw_tier(tier);
@@ -261,6 +269,15 @@ impl App {
 }
 
 impl ApplicationHandler for App {
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        // What this run compiled starts the next one warm (Vulkan, #101).
+        if let Some(ctx) = &self.ctx
+            && let Err(e) = ctx.renderer.save_pipeline_cache()
+        {
+            eprintln!("[trino] pipeline cache: {e}");
+        }
+    }
+
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.ctx.is_none() {
             self.ctx = Some(self.init(event_loop));
@@ -371,6 +388,8 @@ impl ApplicationHandler for App {
                 );
                 self.meter
                     .record_memory(&trino_core::Platform::memory(&ctx.platform));
+                self.meter
+                    .record_pipes(ctx.renderer.frame_times().pipelines);
                 if let Some(max) = self.smoke_frames
                     && self.frames >= max
                 {

@@ -276,8 +276,13 @@ fn scene_shot(
     let baked = root
         .join("target/assets")
         .join(format!("access-{}", family.key()));
-    trino_asset_pipeline::bake_all(&root.join("assets"), platform, &baked)
-        .map_err(|e| e.to_string())?;
+    trino_asset_pipeline::bake_all_with(
+        &root.join("assets"),
+        platform,
+        &baked,
+        crate::threads::build(),
+    )
+    .map_err(|e| e.to_string())?;
     let assets = trino_asset_pipeline::load_dir(&baked, None)?;
     let mut r = pollster::block_on(PcRenderer::new_headless(ui_render::profile(family)))
         .map_err(|e| format!("no GPU renderer: {e}"))?;

@@ -47,46 +47,49 @@ impl ShadowPipes {
     pub fn new(device: &wgpu::Device, src: &SceneSources, samples: u32) -> ShadowPipes {
         let attrs = tri_attributes();
         let make = |label: &str, fragment: &str, blend: wgpu::BlendState, mask| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(label),
-                layout: Some(&src.tri_layout),
-                vertex: wgpu::VertexState {
-                    module: &src.shader,
-                    entry_point: Some("vs_tri"),
-                    compilation_options: Default::default(),
-                    buffers: &[wgpu::VertexBufferLayout {
-                        array_stride: TRI_VERTEX_STRIDE,
-                        step_mode: wgpu::VertexStepMode::Vertex,
-                        attributes: &attrs,
-                    }],
+            crate::renderer::pipes::render(
+                device,
+                wgpu::RenderPipelineDescriptor {
+                    label: Some(label),
+                    layout: Some(&src.tri_layout),
+                    vertex: wgpu::VertexState {
+                        module: &src.shader,
+                        entry_point: Some("vs_tri"),
+                        compilation_options: Default::default(),
+                        buffers: &[wgpu::VertexBufferLayout {
+                            array_stride: TRI_VERTEX_STRIDE,
+                            step_mode: wgpu::VertexStepMode::Vertex,
+                            attributes: &attrs,
+                        }],
+                    },
+                    fragment: Some(wgpu::FragmentState {
+                        module: &src.shader,
+                        entry_point: Some(fragment),
+                        compilation_options: Default::default(),
+                        targets: &[Some(wgpu::ColorTargetState {
+                            format: OFFSCREEN_FORMAT,
+                            blend: Some(blend),
+                            write_mask: mask,
+                        })],
+                    }),
+                    primitive: wgpu::PrimitiveState::default(),
+                    // On the receiver, in front of it by the core's depth
+                    // offset: tested, never written.
+                    depth_stencil: Some(wgpu::DepthStencilState {
+                        format: wgpu::TextureFormat::Depth32Float,
+                        depth_write_enabled: Some(false),
+                        depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                        stencil: wgpu::StencilState::default(),
+                        bias: wgpu::DepthBiasState::default(),
+                    }),
+                    multisample: wgpu::MultisampleState {
+                        count: samples,
+                        ..Default::default()
+                    },
+                    multiview_mask: None,
+                    cache: None,
                 },
-                fragment: Some(wgpu::FragmentState {
-                    module: &src.shader,
-                    entry_point: Some(fragment),
-                    compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: OFFSCREEN_FORMAT,
-                        blend: Some(blend),
-                        write_mask: mask,
-                    })],
-                }),
-                primitive: wgpu::PrimitiveState::default(),
-                // On the receiver, in front of it by the core's depth
-                // offset: tested, never written.
-                depth_stencil: Some(wgpu::DepthStencilState {
-                    format: wgpu::TextureFormat::Depth32Float,
-                    depth_write_enabled: Some(false),
-                    depth_compare: Some(wgpu::CompareFunction::LessEqual),
-                    stencil: wgpu::StencilState::default(),
-                    bias: wgpu::DepthBiasState::default(),
-                }),
-                multisample: wgpu::MultisampleState {
-                    count: samples,
-                    ..Default::default()
-                },
-                multiview_mask: None,
-                cache: None,
-            })
+            )
         };
         let keep = wgpu::BlendComponent {
             src_factor: wgpu::BlendFactor::One,

@@ -33,6 +33,7 @@ pub mod lz4;
 pub mod manifest;
 pub mod memory;
 pub mod model;
+pub mod par;
 pub mod particles;
 pub mod primitive;
 pub mod quality;
@@ -46,7 +47,7 @@ pub mod ui;
 pub mod watch;
 
 pub use ao::{AoBake, AoDecl, bake_vertex_ao};
-pub use bake::{BakeError, BakeReport, bake_all};
+pub use bake::{BakeError, BakeReport, bake_all, bake_all_with};
 pub use bake::{decode_master, decode_png};
 pub use font::{BakedFont, FontDecl, bake_font};
 pub use groups::{BundleBuilder, Compression, GroupDecl};

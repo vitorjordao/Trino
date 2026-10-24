@@ -41,6 +41,10 @@
 //! canvas_id = "trino-canvas"
 //! page_title = "My Game"  # the page's <title> (default: title)
 //!
+//! [threads]             # optional (issue #101): `auto` = all CPUs − 1, `N`, `-N`
+//! build = "auto"          # bakes, cargo jobs, RSP/picasso assembly (`--threads`)
+//! runtime = "auto"        # PC: shader precompile workers, group decoding
+//!
 //! [test]
 //! n64_goldens = ["level"]         # TRINO_FB dumps compared in order
 //! n3ds_goldens = ["level"]        # (tests/golden/<n64|3ds>/<name>.png)
@@ -158,6 +162,12 @@ pub struct Project {
     /// Pin it: N64 frame times move with code layout, so two nightlies
     /// give two different emulated timings for the same source.
     pub nightly: String,
+    /// `[threads] build` (issue #101): the build's worker budget, before
+    /// `--threads` and `$TRINO_THREADS` ([`crate::threads`]).
+    pub build_threads: trino_core::ThreadSetting,
+    /// `[threads] runtime`: the PC host's precompile and load workers
+    /// (written into a package's marker; `TRINO_THREADS` overrides it).
+    pub runtime_threads: trino_core::ThreadSetting,
 }
 
 /// The desktop package's metadata (`[pc]`: `icon`, `identifier`,
@@ -248,6 +258,29 @@ struct File {
     steam: Option<SteamSection>,
     #[serde(default)]
     itch: Option<ItchSection>,
+    #[serde(default)]
+    threads: ThreadsSection,
+}
+
+/// `[threads]` (issue #101): `auto`, `N` or `-N` each.
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct ThreadsSection {
+    #[serde(default)]
+    build: Option<String>,
+    #[serde(default)]
+    runtime: Option<String>,
+}
+
+fn thread_setting(key: &str, v: Option<&str>) -> Result<trino_core::ThreadSetting, String> {
+    match v {
+        None => Ok(trino_core::ThreadSetting::Auto),
+        Some(s) => trino_core::ThreadSetting::parse(s).ok_or_else(|| {
+            format!(
+                "[threads] {key} = \"{s}\": use \"auto\", a count (\"4\") or all but N (\"-2\")"
+            )
+        }),
+    }
 }
 
 /// `[steam]` (issue #61).
@@ -474,6 +507,8 @@ impl Project {
             .map(String::from)
             .to_vec(),
             nightly: nightly_from(std::env::var("TRINO_NIGHTLY").ok(), None),
+            build_threads: trino_core::ThreadSetting::Auto,
+            runtime_threads: trino_core::ThreadSetting::Auto,
         }
     }
 
@@ -514,6 +549,8 @@ impl Project {
             ));
         }
         let platforms = parse_platforms(f.project.platforms.as_deref())?;
+        let build_threads = thread_setting("build", f.threads.build.as_deref())?;
+        let runtime_threads = thread_setting("runtime", f.threads.runtime.as_deref())?;
         let wants = |t: Target| platforms.contains(&t);
         if wants(Target::N64) && f.n64.is_none() {
             return Err(
@@ -650,6 +687,8 @@ impl Project {
             watch,
             root,
             nightly: nightly_from(std::env::var("TRINO_NIGHTLY").ok(), f.toolchain.nightly),
+            build_threads,
+            runtime_threads,
         })
     }
 
@@ -781,6 +820,24 @@ watch = ["game"]
         assert_eq!(p.test.n64_max_frame_us, Some(33333));
         assert_eq!(p.watch, ["game"]);
         assert!(p.n3ds_speedup, "the New 3DS speedup is on unless opted out");
+    }
+
+    /// `[threads]` (issue #101): `auto` by default, counts and `-N`
+    /// parsed, a typo named.
+    #[test]
+    fn thread_budgets_parse_with_auto_by_default() {
+        use trino_core::ThreadSetting as T;
+        let p = Project::parse(SAMPLE, "/g".into(), "/e".into()).unwrap();
+        assert_eq!((p.build_threads, p.runtime_threads), (T::Auto, T::Auto));
+        let full = format!("{SAMPLE}\n[threads]\nbuild = \"6\"\nruntime = \"-2\"\n");
+        let p = Project::parse(&full, "/g".into(), "/e".into()).unwrap();
+        assert_eq!(
+            (p.build_threads, p.runtime_threads),
+            (T::Count(6), T::AllBut(2))
+        );
+        let bad = format!("{SAMPLE}\n[threads]\nbuild = \"lots\"\n");
+        let e = Project::parse(&bad, "/g".into(), "/e".into()).unwrap_err();
+        assert!(e.contains("[threads] build") && e.contains("lots"), "{e}");
     }
 
     /// The shipping keys (issue #61): `[pc]`'s packaging, `[steam]`,

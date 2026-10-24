@@ -34,6 +34,7 @@ mod services;
 mod showcase_assets;
 mod standalone;
 mod texture;
+mod threads;
 mod trace;
 mod ui;
 mod ui_render;
@@ -43,7 +44,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 use project::Target;
-use trino_asset_pipeline::{Platform, bake_all};
+use trino_asset_pipeline::Platform;
 
 const HELP: &str = "\
 cargo xtask <command> [platform] [-- extra args]
@@ -284,6 +285,13 @@ fn main() -> ExitCode {
     };
     // Console builds package the engine's demo or an external project
     // (`--project <dir>`, $TRINO_PROJECT, or a trino.toml in the cwd).
+    let threads_flag = match threads::take_flag(&mut args) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
     let mut project = match project::Project::select(&mut args) {
         Ok(p) => p,
         Err(e) => {
@@ -305,6 +313,17 @@ fn main() -> ExitCode {
         project.trace = true;
     }
     let project = project;
+    // The build's thread budget (issue #101): bakes, console shader
+    // assembly, and cargo's jobs unless CARGO_BUILD_JOBS is already set.
+    let build_threads = threads::set(threads::choose(
+        threads_flag,
+        std::env::var("TRINO_THREADS").ok().as_deref(),
+        project.build_threads,
+    ));
+    if std::env::var_os("CARGO_BUILD_JOBS").is_none() {
+        // SAFETY: still single-threaded here (no worker or child started).
+        unsafe { std::env::set_var("CARGO_BUILD_JOBS", build_threads.to_string()) };
+    }
     // Real hardware (`run n64 --device sc64`, `run --target n64 ...`), parsed
     // after `--project <dir>` is gone so it may come first.
     let device = match hardware::parse(&mut args) {
@@ -794,7 +813,12 @@ fn editor(project: &project::Project, dir: Option<&str>) -> ExitCode {
 
 fn assets(root: &Path, platform: Platform) -> ExitCode {
     let out = root.join("target/assets").join(platform.key());
-    match bake_all(&root.join("assets"), platform, &out) {
+    match trino_asset_pipeline::bake_all_with(
+        &root.join("assets"),
+        platform,
+        &out,
+        threads::build(),
+    ) {
         Ok(report) => {
             println!(
                 "baked {} asset(s) for {} into {}",

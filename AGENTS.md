@@ -939,6 +939,24 @@ overlay, and a measurement on real hardware (ares doesn't time the RDP).
   - **Editor:** the Profiler tab (timeline per track with zoom, per-frame flame view, zone
     table, compare two traces or sessions, follows a growing file; `TRINO_EDITOR_TAB=profiler`,
     `TRINO_EDITOR_TRACE`, `TRINO_EDITOR_TRACE_B`). Skill: `profiling`.
+- **Shader precompilation and the thread budget (2026-10-24, ADR 0031, GitHub #101):**
+  nothing compiles at run time on the N64 (RSP overlays assembled by the build) or the 3DS
+  (picasso). On the PC and the Web, `Renderer::precompile(&PrecompileRequest::EVERYTHING)`
+  builds the renderer's lazily built passes ahead, and `precompile_status()` draws a
+  loading bar:
+  - **Where it runs:** on worker threads, or one pass a frame on the Web.
+  - **Frames during it:** a frame waits only for a pass in flight.
+  - **Who starts it:** the runner at boot (`RunConfig::precompile`,
+    `TRINO_PRECOMPILE=background|blocking|off`), or a game where it decides.
+  - **The pipeline cache:** every pipeline goes through `renderer::pipes::render`, which
+    counts it (`TRINO_FRAME` `pipes=`) and hands it the persistent Vulkan cache
+    (`RendererOptions::pipeline_cache_dir`, the save folder's `shaders/`).
+  - **One thread budget:** `ThreadSetting`, `auto` = all CPUs − 1, at least 1, set by
+    `--threads`, `TRINO_THREADS` or `trino.toml [threads] build|runtime`. It drives the
+    parallel bakes (`bake_all_with`, byte-identical), bundle decoding
+    (`BundleLoad::step_many`), `CARGO_BUILD_JOBS`, and the N64/3DS shader assembly.
+  - **Bench:** `cargo test --release -p trino-platform-pc --test precompile_bench --
+    --ignored --nocapture`.
 
 PC keyboard mapping: A/B = Z/X, X/Y = C/V, L/R = Q/E, Start = Enter,
 Select = Right Shift, D-pad = arrows, stick = WASD; L2/R2/L3/R3 have no default key
@@ -1100,6 +1118,8 @@ cargo xtask trace diff <a> <b> [--session a=b] [--json]     # B against A per zo
 cargo xtask test n64|3ds|web --trace                        # the engine's zones compiled in; per-scene sessions -> target/traces/<platform>-trace.json
 cargo xtask run pc --trace                                  # target/traces/pc.log while it runs, pc-trace.json at exit
 cargo run -p trino-app-pc --features tracy                  # Tracy (connect the Tracy 0.14 viewer)
+cargo xtask build n64 --threads 4                # the build's thread budget (auto = all CPUs - 1; also TRINO_THREADS, trino.toml [threads])
+TRINO_PRECOMPILE=blocking cargo run -p trino-app-pc   # warm every pipeline before the first frame (background by default)
 cargo xtask agents sync   # mirror .agents/skills/ into .claude/skills/ (check: agents check)
 cargo test -p xtask --test water_shots -- --ignored   # water evidence: tiers, ripples, crate, bridge (target/evidence/water)
 cargo xtask new <name> --standalone <dir> [--git <url> --rev <r>]   # project outside this repo
@@ -1207,6 +1227,17 @@ cargo test --workspace
   worktree) commits it as an embedded repository. Exclude the folder
   (`.git/info/exclude`) or add paths by name.
 
+- **A lazily built render pass hitches the frame that first needs it.** Build pipelines
+  through `renderer::pipes::render`, give a lazy pass a `precompile::JobKind` (plan,
+  install, `warm_wait`), and extend `precompile.rs`'s `toggle_everything`. Never warm
+  in `PcRenderer::new` (RADV, #94). Benchmark shader compiles with
+  `MESA_SHADER_CACHE_DISABLE=true`, or you measure Mesa's disk cache.
+- **A warm-up's wait is bounded by time, never by frames.** On Windows CI's WARP (a
+  software adapter) the `shader precompile` step's 600 empty frames ran out in
+  milliseconds while 14 passes were still compiling; it now waits on `now_micros`.
+- **Never key state on `wgpu::Device` equality.** It compares only an id, which repeats
+  across `wgpu::Instance`s: two live renderers (tests, the editor beside a game) collide.
+  Per-renderer state rides the renderer or a `pipes::Scope`.
 - **A packaged game must not use build-tree paths.** `env!("CARGO_MANIFEST_DIR")` is the
   build machine's; `trino-runner-pc` switches to packaged mode when `trino-package.txt`
   sits beside the exe, and every per-player file goes through `RunConfig::save_dir()`.

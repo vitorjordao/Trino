@@ -286,6 +286,20 @@ shipping a 3D game first**, then by cost:
 
 ---
 
+## Done — shader precompilation and the CPU thread budget (2026-10-24, branch `feat/101-shader-precompile`, GitHub #101, ADR 0031)
+
+| Item | Evidence |
+|---|---|
+| PC/Web warm-up of every lazily built pass (`Renderer::precompile`, background workers or one pass a frame on the Web; frames wait only for a pass in flight) | `crates/platform-pc/tests/precompile.rs`: 0 pipelines in frames after `EVERYTHING` while MSAA, SSAO, the shadow map, CVD views and the render scale toggle; same pixels |
+| Persistent Vulkan pipeline cache in the player's save folder | `the_pipeline_cache_round_trips_through_its_file`; heavy-shader bench: 1 110 → 14 ms on the next launch |
+| Thread budget `auto` = all CPUs − 1 (≥ 1): `--threads`, `TRINO_THREADS`, `trino.toml [threads]`, the package marker | `trino_core::threads`, `xtask::threads`, `project.rs` tests |
+| Parallel bakes, bundle decoding, RSP overlay and picasso assembly | `parallel_bake.rs` (byte-identical on 1/2/8 threads) |
+| Consoles: nothing compiles at run time (documented, `shader precompile` self-test step answers 0 passes) | ares / Azahar self-test |
+
+Follow-ups: `VK_EXT_graphics_pipeline_library` once wgpu exposes it; a measured
+`precompile` on DX12/Metal (their own driver caches); a `TRINO_FRAME` gate on `pipes=0`
+for the shipped games' smoke runs.
+
 ## Done — a unified profiler: one trace format from PC, ares, Azahar and the Web, Perfetto JSON, Tracy on the PC, the editor's Profiler (2026-10-24, branch `feat/62-unified-profiler`, GitHub #62, ADR 0030)
 
 | Item | Evidence |

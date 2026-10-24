@@ -149,19 +149,16 @@ fn compile_shim(p: &Project) -> Result<(), String> {
         || !up_to_date(&root.join("target/n64/opus.o"), &[opus_src])
     {
         println!("[n64] compiling C shim + RSP overlay...");
-        let script = "set -e\n\
-            mkdir -p target/n64/rsp\n\
-            mips64-elf-gcc -c -std=gnu17 -march=vr4300 -mtune=vr4300 -mabi=o64 -O2 -G0 \
-            -ffunction-sections -fdata-sections -DN64 \
-            -I$N64_INST/mips64-elf/include \
-            crates/platform-n64/shim/trino_shim.c -o target/n64/shim.o\n\
-            mips64-elf-gcc -c -std=gnu17 -march=vr4300 -mtune=vr4300 -mabi=o64 -O2 -G0 \
-            -ffunction-sections -fdata-sections -DN64 \
-            -I$N64_INST/mips64-elf/include \
-            crates/platform-n64/shim/trino_opus.c -o target/n64/opus.o\n\
-            cd target/n64/rsp\n\
-            for u in rsp_trino rsp_trino_color rsp_trino_tex rsp_trino_water; do\n\
-            def=; [ $u = rsp_trino_color ] && def=-DTRINO_COLORED\n\
+        // The two C files and the four overlays build at the same time,
+        // up to the build's thread budget (issue #101): `run` starts a job
+        // in the background and waits for the batch once `$J` are running.
+        let script = format!(
+            "set -e\n\
+            J={jobs}; pids=; n=0\n\
+            run() {{ \"$@\" & pids=\"$pids $!\"; n=$((n+1)); \
+              if [ $n -ge $J ]; then drain; fi; }}\n\
+            drain() {{ for p in $pids; do wait $p || exit 1; done; pids=; n=0; }}\n\
+            overlay() {{ u=$1; def=; [ $u = rsp_trino_color ] && def=-DTRINO_COLORED\n\
             [ $u = rsp_trino_tex ] && def='-DTRINO_COLORED -DTRINO_TEXTURED'\n\
             [ $u = rsp_trino_water ] && def='-DTRINO_COLORED -DTRINO_TEXTURED -DTRINO_WATER'\n\
             mips64-elf-gcc -march=mips1 -mabi=32 -Wa,--fatal-warnings $def \
@@ -172,17 +169,30 @@ fn compile_shim(p: &Project) -> Result<(), String> {
             mips64-elf-objcopy -O binary -j .text $u.elf $u.text.bin\n\
             mips64-elf-objcopy -O binary -j .data $u.elf $u.data.bin\n\
             for s in text data; do mips64-elf-objcopy -I binary -O elf32-bigmips -B mips4300 \
-              --redefine-sym _binary_${u}_${s}_bin_start=${u}_${s}_start \
-              --redefine-sym _binary_${u}_${s}_bin_end=${u}_${s}_end \
-              --redefine-sym _binary_${u}_${s}_bin_size=${u}_${s}_size \
+              --redefine-sym _binary_${{u}}_${{s}}_bin_start=${{u}}_${{s}}_start \
+              --redefine-sym _binary_${{u}}_${{s}}_bin_end=${{u}}_${{s}}_end \
+              --redefine-sym _binary_${{u}}_${{s}}_bin_size=${{u}}_${{s}}_size \
               --set-section-alignment .data=8 --rename-section .text=.data \
-              $u.${s}.bin $u.${s}.o; done\n\
-            done\n\
+              $u.${{s}}.bin $u.${{s}}.o || return 1; done; }}\n\
+            mkdir -p target/n64/rsp\n\
+            run mips64-elf-gcc -c -std=gnu17 -march=vr4300 -mtune=vr4300 -mabi=o64 -O2 -G0 \
+            -ffunction-sections -fdata-sections -DN64 \
+            -I$N64_INST/mips64-elf/include \
+            crates/platform-n64/shim/trino_shim.c -o target/n64/shim.o\n\
+            run mips64-elf-gcc -c -std=gnu17 -march=vr4300 -mtune=vr4300 -mabi=o64 -O2 -G0 \
+            -ffunction-sections -fdata-sections -DN64 \
+            -I$N64_INST/mips64-elf/include \
+            crates/platform-n64/shim/trino_opus.c -o target/n64/opus.o\n\
+            cd target/n64/rsp\n\
+            for u in rsp_trino rsp_trino_color rsp_trino_tex rsp_trino_water; do run overlay $u; done\n\
+            drain\n\
             mips64-elf-ld -relocatable rsp_trino.text.o rsp_trino.data.o \
               rsp_trino_color.text.o rsp_trino_color.data.o \
               rsp_trino_tex.text.o rsp_trino_tex.data.o \
-              rsp_trino_water.text.o rsp_trino_water.data.o -o ../rsp_trino.o";
-        let status = docker_sh(p, false, script).map_err(|e| format!("docker: {e}"))?;
+              rsp_trino_water.text.o rsp_trino_water.data.o -o ../rsp_trino.o",
+            jobs = crate::threads::build(),
+        );
+        let status = docker_sh(p, false, &script).map_err(|e| format!("docker: {e}"))?;
         if !status.success() {
             return Err("shim / RSP overlay compilation failed".into());
         }

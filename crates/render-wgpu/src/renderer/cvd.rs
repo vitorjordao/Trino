@@ -109,37 +109,22 @@ impl CvdPass {
 
     fn pipeline(&mut self, device: &wgpu::Device, mode: CvdMode) -> &wgpu::RenderPipeline {
         let layout = &self.layout;
-        self.pipelines[mode as usize].get_or_insert_with(|| {
-            let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("trino-cvd"),
-                source: wgpu::ShaderSource::Wgsl(shader(mode).into()),
-            });
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("trino-cvd-pipeline"),
-                layout: Some(layout),
-                vertex: wgpu::VertexState {
-                    module: &module,
-                    entry_point: Some("vs_cvd"),
-                    compilation_options: Default::default(),
-                    buffers: &[],
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &module,
-                    entry_point: Some("fs_cvd"),
-                    compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: OFFSCREEN_FORMAT,
-                        blend: None,
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                }),
-                primitive: wgpu::PrimitiveState::default(),
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState::default(),
-                multiview_mask: None,
-                cache: None,
-            })
-        })
+        self.pipelines[mode as usize].get_or_insert_with(|| build_pipeline(device, layout, mode))
+    }
+
+    /// The pipeline layout every mode's pipeline is built on (precompile
+    /// jobs build them on workers: [`build_pipeline`]).
+    pub fn layout(&self) -> &wgpu::PipelineLayout {
+        &self.layout
+    }
+
+    pub fn has(&self, mode: CvdMode) -> bool {
+        self.pipelines[mode as usize].is_some()
+    }
+
+    /// A pipeline a precompile job built (kept if one is already there).
+    pub fn install(&mut self, mode: CvdMode, pipeline: wgpu::RenderPipeline) {
+        self.pipelines[mode as usize].get_or_insert(pipeline);
     }
 
     /// Simulate `mode` over `target` (`size`, a `COPY_SRC` render target):
@@ -222,4 +207,44 @@ impl CvdPass {
         pass.set_bind_group(0, &bind_group, &[]);
         pass.draw(0..3, 0..1);
     }
+}
+
+/// The simulation pipeline of `mode` (not `Off`) on `layout`.
+pub(super) fn build_pipeline(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+    mode: CvdMode,
+) -> wgpu::RenderPipeline {
+    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("trino-cvd"),
+        source: wgpu::ShaderSource::Wgsl(shader(mode).into()),
+    });
+    crate::renderer::pipes::render(
+        device,
+        wgpu::RenderPipelineDescriptor {
+            label: Some("trino-cvd-pipeline"),
+            layout: Some(layout),
+            vertex: wgpu::VertexState {
+                module: &module,
+                entry_point: Some("vs_cvd"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &module,
+                entry_point: Some("fs_cvd"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: OFFSCREEN_FORMAT,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        },
+    )
 }

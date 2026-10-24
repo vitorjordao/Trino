@@ -340,6 +340,21 @@ impl GpuTnl {
         }
     }
 
+    pub fn has_ms(&self) -> bool {
+        self.ms_pipelines.is_some()
+    }
+
+    /// What a precompile job needs to build the multisampled pipelines on
+    /// a worker ([`pipelines`]).
+    pub fn ms_source(&self) -> (wgpu::PipelineLayout, wgpu::ShaderModule) {
+        (self.layout.clone(), self.shader.clone())
+    }
+
+    /// Multisampled pipelines a precompile job built (kept if already set).
+    pub fn install_ms(&mut self, pipes: [wgpu::RenderPipeline; 2]) {
+        self.ms_pipelines.get_or_insert(pipes);
+    }
+
     /// Upload (or replace) the resident vertex stream of mesh `model`.
     ///
     /// Written through the queue, not mapped at creation: Chromium's WebGPU
@@ -674,7 +689,7 @@ fn bind_group(
 }
 
 /// The two pipelines (back faces culled, double-sided) for `samples`.
-fn pipelines(
+pub(super) fn pipelines(
     device: &wgpu::Device,
     layout: &wgpu::PipelineLayout,
     shader: &wgpu::ShaderModule,
@@ -700,58 +715,61 @@ fn pipelines(
         14 => Uint32x4,
     ];
     let make = |cull: Option<wgpu::Face>| {
-        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("trino-tnl-pipeline"),
-            layout: Some(layout),
-            vertex: wgpu::VertexState {
-                module: shader,
-                entry_point: Some("vs_mesh"),
-                compilation_options: Default::default(),
-                buffers: &[
-                    wgpu::VertexBufferLayout {
-                        array_stride: MESH_VERTEX_STRIDE,
-                        step_mode: wgpu::VertexStepMode::Vertex,
-                        attributes: &vertex_attrs,
-                    },
-                    wgpu::VertexBufferLayout {
-                        array_stride: INSTANCE_STRIDE,
-                        step_mode: wgpu::VertexStepMode::Instance,
-                        attributes: &instance_attrs,
-                    },
-                ],
+        crate::renderer::pipes::render(
+            device,
+            wgpu::RenderPipelineDescriptor {
+                label: Some("trino-tnl-pipeline"),
+                layout: Some(layout),
+                vertex: wgpu::VertexState {
+                    module: shader,
+                    entry_point: Some("vs_mesh"),
+                    compilation_options: Default::default(),
+                    buffers: &[
+                        wgpu::VertexBufferLayout {
+                            array_stride: MESH_VERTEX_STRIDE,
+                            step_mode: wgpu::VertexStepMode::Vertex,
+                            attributes: &vertex_attrs,
+                        },
+                        wgpu::VertexBufferLayout {
+                            array_stride: INSTANCE_STRIDE,
+                            step_mode: wgpu::VertexStepMode::Instance,
+                            attributes: &instance_attrs,
+                        },
+                    ],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: shader,
+                    entry_point: Some("fs_mesh"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: OFFSCREEN_FORMAT,
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                // Front faces are counter-clockwise in the engine's Y-down
+                // screen space (`tessellate_with`'s positive area), which is
+                // clockwise in Y-up clip space.
+                primitive: wgpu::PrimitiveState {
+                    front_face: wgpu::FrontFace::Cw,
+                    cull_mode: cull,
+                    ..Default::default()
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth32Float,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+                multisample: wgpu::MultisampleState {
+                    count: samples,
+                    ..Default::default()
+                },
+                multiview_mask: None,
+                cache: None,
             },
-            fragment: Some(wgpu::FragmentState {
-                module: shader,
-                entry_point: Some("fs_mesh"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: OFFSCREEN_FORMAT,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            // Front faces are counter-clockwise in the engine's Y-down
-            // screen space (`tessellate_with`'s positive area), which is
-            // clockwise in Y-up clip space.
-            primitive: wgpu::PrimitiveState {
-                front_face: wgpu::FrontFace::Cw,
-                cull_mode: cull,
-                ..Default::default()
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::LessEqual),
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState {
-                count: samples,
-                ..Default::default()
-            },
-            multiview_mask: None,
-            cache: None,
-        })
+        )
     };
     [make(Some(wgpu::Face::Back)), make(None)]
 }

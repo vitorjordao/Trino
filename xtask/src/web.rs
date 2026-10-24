@@ -28,7 +28,7 @@ use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
-use trino_asset_pipeline::{Platform, bake_all};
+use trino_asset_pipeline::Platform;
 use trino_platform_web::pack::{self, Kind};
 
 use crate::project::Project;
@@ -200,7 +200,8 @@ pub fn ktx2_fixtures() -> Result<Vec<(Kind, u32, Vec<u8>)>, String> {
 /// KTX2 fixtures when `fixtures`), each asset group's bundle beside it
 /// (`pack::bundle_url`, issue #56). Returns the pack's size.
 pub fn pack_assets(assets: &Path, baked: &Path, pak: &Path, fixtures: bool) -> Result<u64, String> {
-    bake_all(assets, Platform::Web, baked).map_err(|e| e.to_string())?;
+    trino_asset_pipeline::bake_all_with(assets, Platform::Web, baked, crate::threads::build())
+        .map_err(|e| e.to_string())?;
     let entries = pack_entries(baked)?;
     let mut entries = entries;
     if fixtures {

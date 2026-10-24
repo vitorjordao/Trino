@@ -1,0 +1,26 @@
+TRINO_HW 3ds new=1 speedup=1 app_ram=96M tier=expanded stereo=1
+TRINO_STEP:stereo
+TRINO_STEP:stereo probed both eyes and mono
+TRINO_FRAME:hub avg_us=16716 max_us=16784 frames=30 fps=59 cpu_us=3100 heap=7171728/7171728 stereo=slider0
+TRINO_FRAME:green-hills avg_us=16717 max_us=16784 frames=30 fps=59 cpu_us=2613 heap=7171728/7171728 stereo=slider0
+TRINO_FRAME:lava-land avg_us=16716 max_us=16784 frames=30 fps=59 cpu_us=2768 heap=7171728/7171728 stereo=slider0
+TRINO_FRAME:sky-tower avg_us=16717 max_us=16784 frames=30 fps=59 cpu_us=2550 heap=7171728/7171728 stereo=slider0
+TRINO_FRAME:throne avg_us=16717 max_us=16784 frames=30 fps=59 cpu_us=3668 heap=7171728/7171728 stereo=slider0
+TRINO_FRAME:hub-stereo avg_us=16715 max_us=16788 frames=30 fps=59 cpu_us=5700 heap=7181560/7181560 stereo=on@100%
+TRINO_FRAME:green-hills-stereo avg_us=16718 max_us=16783 frames=30 fps=59 cpu_us=4707 heap=7181560/7181560 stereo=on@100%
+TRINO_FRAME:lava-land-stereo avg_us=16718 max_us=16767 frames=30 fps=59 cpu_us=5014 heap=7181560/7181560 stereo=on@100%
+TRINO_FRAME:sky-tower-stereo avg_us=16718 max_us=16784 frames=30 fps=59 cpu_us=4577 heap=7181560/7181560 stereo=on@100%
+TRINO_FRAME:throne-stereo avg_us=16719 max_us=16784 frames=30 fps=59 cpu_us=6682 heap=7181760/7181760 stereo=on@100%
+TRINO_HW 3ds new=0 speedup=0 app_ram=96M tier=base stereo=1
+TRINO_STEP:stereo
+TRINO_STEP:stereo probed both eyes and mono
+TRINO_FRAME:hub avg_us=16719 max_us=16786 frames=30 fps=59 cpu_us=3101 heap=7168080/7168080 stereo=slider0
+TRINO_FRAME:green-hills avg_us=16720 max_us=16784 frames=30 fps=59 cpu_us=2615 heap=7168080/7168080 stereo=slider0
+TRINO_FRAME:lava-land avg_us=16718 max_us=16784 frames=30 fps=59 cpu_us=2770 heap=7168080/7168080 stereo=slider0
+TRINO_FRAME:sky-tower avg_us=16718 max_us=16784 frames=30 fps=59 cpu_us=2550 heap=7168080/7168080 stereo=slider0
+TRINO_FRAME:throne avg_us=16716 max_us=16783 frames=30 fps=59 cpu_us=3668 heap=7168080/7168080 stereo=slider0
+TRINO_FRAME:hub-stereo avg_us=16714 max_us=16788 frames=30 fps=59 cpu_us=5699 heap=7177912/7177912 stereo=on@100%
+TRINO_FRAME:green-hills-stereo avg_us=16718 max_us=16783 frames=30 fps=59 cpu_us=4707 heap=7177912/7177912 stereo=on@100%
+TRINO_FRAME:lava-land-stereo avg_us=16718 max_us=16767 frames=30 fps=59 cpu_us=5014 heap=7177912/7177912 stereo=on@100%
+TRINO_FRAME:sky-tower-stereo avg_us=16718 max_us=16784 frames=30 fps=59 cpu_us=4575 heap=7177912/7177912 stereo=on@100%
+TRINO_FRAME:throne-stereo avg_us=16717 max_us=16784 frames=30 fps=59 cpu_us=6685 heap=7178112/7178112 stereo=on@100%

@@ -507,6 +507,16 @@ impl App {
                 };
             }
         }
+        // Dev hook: TRINO_EDITOR_STEREO=<view>[:slider] (anaglyph,
+        // side-by-side, left, right, flip): the Game view's stereo preview
+        // on the 3DS (issue #63).
+        if let Some((view, slider)) = std::env::var("TRINO_EDITOR_STEREO")
+            .ok()
+            .and_then(|v| trino_platform_pc::StereoView::parse_with_slider(&v))
+        {
+            game_view.stereo_view = view;
+            game_view.stereo_slider = slider;
+        }
         // Dev hook: TRINO_EDITOR_AO=game|on|off|mask, the Scene view's
         // ambient occlusion mode.
         if let Some(view) = std::env::var("TRINO_EDITOR_AO")
@@ -525,6 +535,15 @@ impl App {
         }
         let cam = doc.scene.environment.core_camera();
         scene_view.cam.look_from(cam.eye, cam.target);
+        // Dev hook: TRINO_EDITOR_SCENE_EYE=x,y,z puts the Scene view's eye
+        // there, looking at the game camera's target (screenshots of what
+        // sits by the game camera: its convergence plane, issue #63).
+        if let Some(eye) = std::env::var("TRINO_EDITOR_SCENE_EYE").ok().and_then(|v| {
+            let p: Vec<f32> = v.split(',').filter_map(|t| t.trim().parse().ok()).collect();
+            (p.len() == 3).then(|| trino_core::Vec3::new(p[0], p[1], p[2]))
+        }) {
+            scene_view.cam.look_from(eye, cam.target);
+        }
         let thumbs = Thumbnailer::new(
             wgpu::Device::clone(&render_state.device),
             wgpu::Queue::clone(&render_state.queue),
@@ -777,6 +796,7 @@ impl App {
             audio: self.audio.totals.as_ref().map(|(_, t)| t),
             quality: Some(&self.quality.table),
             memory: self.groups.ready_plans(),
+            stereo_preview: self.game_view.stereo_view != trino_platform_pc::StereoView::Off,
         }
     }
 
@@ -2108,6 +2128,11 @@ impl App {
                 ui.menu_button("Shadow view", |ui| {
                     crate::viewport::shadow_menu(ui, &mut self.scene_view.shadow_view);
                 });
+                ui.checkbox(&mut self.scene_view.show_convergence, "Convergence plane")
+                    .on_hover_text(
+                        "The stereo 3D's zero-parallax plane in front of the game camera \
+                         (scenes with environment.stereo, or the Game view's preview on)",
+                    );
                 ui.menu_button("Accessibility simulation", |ui| {
                     crate::panels::access::simulation_menu(ui, &mut self.access.preview);
                 });
@@ -3655,6 +3680,7 @@ impl egui_dock::TabViewer for TabView<'_> {
                     audio: app.audio.totals.as_ref().map(|(_, t)| t),
                     quality: Some(&app.quality.table),
                     memory: app.groups.ready_plans(),
+                    stereo_preview: app.game_view.stereo_view != trino_platform_pc::StereoView::Off,
                 };
                 if kind == ViewKind::Game {
                     // The previewed preset, as the Quality tab defines it.

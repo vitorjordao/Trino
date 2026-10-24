@@ -296,7 +296,7 @@ shipping a 3D game first**, then by cost:
 | PC 3DS profile: the same replay, eye textures, `StereoView` previews (anaglyph, side by side, left, right, flip), `TRINO_STEREO`, warmed composites | `crates/platform-pc/tests/stereo.rs` (4 tests; goldens `stereo_left`, `stereo_right`, `stereo_anaglyph`; the slider down is the mono frame byte for byte), `the_stereo_step_reads_both_eyes_on_the_3ds_profile` (4 mutations fail it) |
 | Scenes `environment.stereo` (codegen `STEREO`, no TSCN), UI `depth` (TUIL v3), `scene budget --stereo`, `ui shot --stereo`, `TRINO_FRAME stereo=` | `stereo_is_optional_defaulted_and_round_trips`, `codegen_exports_the_scene_stereo`, `node_depths_round_trip_through_ron_tuil_and_rust`, `tuil_v3_carries_depths_and_v2_still_loads`, `the_stereo_budget_is_two_eyes_of_the_3ds_frame`, `ui_shot_previews_node_depths_in_stereo`, `the_3ds_profile_reports_its_stereo_frames` |
 | castle64 and Solid Eleven opt in (convergence on the player / the ball, HUD 6 px out) | their goldens unchanged; the football template's 3DS self-test times `match-stereo` |
-| Editor: Game view stereo preview + 3D slider (3DS), Inspector › Stereo 3D, the Scene view's convergence plane | see the PR |
+| Editor: Game view stereo preview + 3D slider (3DS) with a stereo HUD line, Inspector › Stereo 3D, the Scene view's convergence plane, `TRINO_EDITOR_STEREO`, `TRINO_EDITOR_SCENE_EYE` | `stereo_section_game_view_preview_and_convergence_plane`, the layout audit at 960×600 and 1600×940 |
 
 Deviations: scenes stay v7 (an optional field, not the issue's "v4"); `LayerDepth` is a
 renderer state (`set_layer_depth`), not a parameter of every 2D call; the Auto policy

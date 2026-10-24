@@ -921,10 +921,22 @@ fn editor_layout_is_clean_at_minimum_and_default_sizes() {
             let label = h.state().game_view.target_label();
             crate::layout_audit::assert_clean(&h, size, true, &what(&format!("{label} Game view")));
         }
+        // The 3DS stereo preview (issue #63): its menu and 3D slider in the
+        // Game view's toolbar, on the New 3DS left from the loop.
+        h.state_mut().game_view.stereo_view = trino_platform_pc::StereoView::Anaglyph;
+        h.run_steps(3);
+        crate::layout_audit::assert_clean(&h, size, true, &what("stereo preview"));
+        h.state_mut().game_view.stereo_view = trino_platform_pc::StereoView::Off;
         h.state_mut().cmds.push(Cmd::Select(None));
         h.state_mut().inspect_focus = Some("budget".into());
         h.run_steps(4);
         crate::layout_audit::assert_clean(&h, size, true, &what("tier budgets"));
+        // The scene's Stereo 3D section, on (issue #63).
+        h.state_mut().doc.scene.environment.stereo = Some(trino_scene::StereoDef::default());
+        h.state_mut().inspect_focus = Some("stereo".into());
+        h.run_steps(4);
+        crate::layout_audit::assert_clean(&h, size, true, &what("stereo section"));
+        h.state_mut().doc.scene.environment.stereo = None;
         h.state_mut().inspect_focus = None;
         h.state_mut().cmds.push(Cmd::Select(Some(rock.clone())));
         h.run_steps(3);
@@ -2380,6 +2392,93 @@ fn ambient_occlusion_panel_view_modes_and_baking() {
         .unwrap();
     assert!(!table.contains("ao ="), "{table}");
     assert!(h.state().project.models["models/crate"].ao.is_none());
+    leave_temp_project(&repo);
+}
+
+/// Stereo 3D from the editor (issue #63): the scene's Stereo 3D section
+/// (on, tuned, saved to the file, undoable), the Game view's Stereo menu
+/// and 3D slider on the 3DS reaching its renderer (two eyes drawn, the
+/// HUD's stereo line), and View › Convergence plane.
+#[test]
+#[ignore = "changes cwd/env: run alone with --ignored --test-threads=1"]
+fn stereo_section_game_view_preview_and_convergence_plane() {
+    use crate::app::{Cmd, Tab};
+    use trino_platform_pc::{SimProfile, StereoView};
+    let Some((mut h, _tmp, repo)) = temp_project_app(egui::vec2(1600.0, 1000.0)) else {
+        return;
+    };
+    assert_eq!(h.state().doc.scene.environment.stereo, None);
+    h.state_mut().cmds.push(Cmd::Select(None));
+    h.run_steps(3);
+    click(&mut h, "Stereo 3D (3DS top screen)");
+    h.run_steps(3);
+    assert_eq!(
+        h.state().doc.scene.environment.stereo,
+        Some(trino_scene::StereoDef::default())
+    );
+    assert!(h.query_by_label_contains("Convergence").is_some());
+    set_value(&mut h, "Stereo convergence", 7.5);
+    assert_eq!(
+        h.state().doc.scene.environment.stereo.unwrap().convergence,
+        7.5
+    );
+    h.state_mut().cmds.push(Cmd::Save);
+    h.run_steps(3);
+    let text = std::fs::read_to_string("scenes/showcase.scene.ron").unwrap();
+    assert!(text.contains("stereo: Some("), "{text}");
+    assert!(text.contains("convergence: 7.5"), "{text}");
+    // Undo back to no stereo block.
+    h.state_mut().cmds.push(Cmd::Undo);
+    h.run_steps(3);
+    h.state_mut().cmds.push(Cmd::Undo);
+    h.run_steps(3);
+    assert_eq!(h.state().doc.scene.environment.stereo, None, "undo");
+
+    // The Game view on the 3DS: the preview menu and the slider.
+    {
+        let app = h.state_mut();
+        app.game_view
+            .set_profile_tier(SimProfile::N3ds, trino_core::HwTier::Base, &app.project);
+    }
+    h.state_mut().cmds.push(Cmd::FocusTab(Tab::Game));
+    h.run_steps(3);
+    assert_eq!(h.state().game_view.stats.frame.stereo.eyes, 1, "off: mono");
+    pick(&mut h, "Game view stereo", StereoView::Anaglyph.label());
+    h.run_steps(4);
+    let gv = &h.state().game_view;
+    assert_eq!(gv.stereo_view, StereoView::Anaglyph);
+    assert_eq!(gv.renderer_stereo_view(), StereoView::Anaglyph);
+    assert_eq!(
+        gv.stats.frame.stereo.eyes, 2,
+        "no stereo block: the preview's default one"
+    );
+    set_value(&mut h, "Game view 3D slider", 0.0);
+    h.run_steps(4);
+    assert_eq!(h.state().game_view.stereo_slider, 0.0);
+    assert_eq!(
+        h.state().game_view.stats.frame.stereo.eyes,
+        1,
+        "slider down"
+    );
+    set_value(&mut h, "Game view 3D slider", 0.5);
+    h.run_steps(4);
+    assert_eq!(h.state().game_view.stats.frame.stereo.slider_pct, 50);
+    wait_for(&mut h, "the budgets", |a| a.budgets.is_some());
+    h.run_steps(3);
+    let line = {
+        let app = h.state();
+        app.game_view
+            .stereo_hud_line(&app.budgets.as_ref().unwrap().1)
+            .unwrap()
+    };
+    assert!(line.starts_with("stereo ×2: "), "{line}");
+
+    // View › Convergence plane toggles the Scene view's.
+    assert!(h.state().scene_view.show_convergence);
+    click(&mut h, "View");
+    click(&mut h, "Convergence plane");
+    h.run_steps(3);
+    assert!(!h.state().scene_view.show_convergence);
     leave_temp_project(&repo);
 }
 

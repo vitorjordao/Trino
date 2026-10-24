@@ -421,6 +421,29 @@ the modes too: a kittest click on "Deuteranopia" must pick the first match.
 - `section_title` upper-cases its text: query "DIFF (B", not "Diff (B". `query_by_label`
   panics on two matches (a zone name is in both tables): use `query_all_by_label`.
 
+## Stereo 3D (issue #63, ADR 0032)
+
+- **Game view on the 3DS (and New 3DS):**
+  - The stereo dropdown lists `StereoView::ALL` (Off by default). A 3D slider (0..1)
+    shows while a view is on, and both are pushed to the renderer every frame.
+  - `render()` calls `set_stereo` right after `begin_frame`, from
+    `Viewport::stereo_for(scene)`: the scene's `environment.stereo`, else
+    `StereoDef::default()` while a preview is on, so authors tune before writing the
+    block.
+  - The budget HUD adds `stereo ×2: … tris · … GPU passes · … CPU draws`
+    (`Viewport::stereo_hud_line`).
+  - Hook: `TRINO_EDITOR_STEREO=<view>[:slider]`.
+- **Inspector › Stereo 3D:** writes `environment.stereo` through the environment edit
+  path, so it saves to RON and undoes like Shadows and AO.
+- **Scene view › View › Convergence plane:** a 400:240 grid at `convergence` in front
+  of the scene's game camera, shown while the scene has stereo or the preview is on.
+  `TRINO_EDITOR_SCENE_EYE=x,y,z` moves the Scene view's eye: it opens at the game
+  camera, where overlays anchored to that camera fill the view.
+- **Test:** the kittest `stereo_section_game_view_preview_and_convergence_plane`. The
+  HUD is painted text that kittest can't find, so test a HUD line through a `Viewport`
+  method. A `theme::prop` label doesn't name the DragValue or Slider beside it: use
+  `panels::audio::name_slider` so `set_value` finds it.
+
 ## Rules when changing the editor
 
 - Keep everything text-backed: a UI action must end in a file an agent could also write.

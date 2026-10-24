@@ -17,6 +17,9 @@ pub mod pacing;
 pub mod quality;
 pub mod renderer;
 pub mod sim;
+pub mod trace_host;
+#[cfg(all(feature = "tracy", not(target_arch = "wasm32")))]
+pub mod tracy;
 
 pub use frame_report::{FrameMeter, QualityNote};
 pub use renderer::{

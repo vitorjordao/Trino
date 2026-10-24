@@ -244,6 +244,24 @@ pub fn check(work: &str, n64: Option<&str>, scenes: &[SceneLine]) -> Result<Stri
     }
 }
 
+/// The scenes' timings without any gate (a `--trace` ROM, issue #62: the
+/// instrumented code is not what the ceilings describe).
+pub fn report_only(scenes: &[SceneLine]) -> Result<String, String> {
+    if scenes.is_empty() {
+        return Err("no TRINO_PERF_SCENE lines".into());
+    }
+    let mut table = String::from("scene         frame_us   tnl_us  sort_us  submit_us\n");
+    for s in scenes {
+        let t = s.timings();
+        let _ = writeln!(
+            table,
+            "{:<13} {:>8} {:>8} {:>8} {:>10}",
+            s.name, t[0].1, t[1].1, t[2].1, t[3].1
+        );
+    }
+    Ok(table)
+}
+
 /// The `test n64` step: check (or, with `bless`, rewrite the ceilings).
 pub fn gate(root: &Path, scenes: &[SceneLine], bless: bool) -> Result<String, String> {
     let work =

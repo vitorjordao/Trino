@@ -28,6 +28,8 @@
 //! `TRINO_EDITOR_QUALITY=low[,dynres]` previews a quality preset in the Game
 //! view's PC and Web profiles; `TRINO_EDITOR_OPEN=audio:music/theme@n64` opens the
 //! Audio inspector on a sound, its waveform over that platform's decode;
+//! `TRINO_EDITOR_TRACE=<file>[@session]` (+ `TRINO_EDITOR_TRACE_B`) opens
+//! traces in the Profiler tab (`TRINO_EDITOR_TAB=profiler`);
 //! `TRINO_EDITOR_RECENT=<file>` keeps the recent projects there.
 
 mod access;
@@ -50,6 +52,7 @@ mod palette;
 mod panels;
 mod play;
 mod preview;
+mod profiler;
 mod project;
 mod quality;
 mod recent;
@@ -99,6 +102,8 @@ pub const EDITOR_HOOKS: &[&str] = &[
     "TRINO_EDITOR_UI",
     "TRINO_EDITOR_ACCESS",
     "TRINO_EDITOR_LANG",
+    "TRINO_EDITOR_TRACE",
+    "TRINO_EDITOR_TRACE_B",
 ];
 
 /// What the editor opens on start.

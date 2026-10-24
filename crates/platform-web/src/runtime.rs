@@ -660,6 +660,10 @@ pub enum Flow {
 /// [`Flow::Stop`]. The quality's calibration and frame cap take some
 /// frames ([`WebHost::frame_due`]).
 pub fn run(host: WebHost, mut frame: impl FnMut(&mut WebHost, f32) -> Flow + 'static) {
+    // `build web --trace` (issue #62): the engine's zones as TRINO_TRACE
+    // lines on the console (every 120 frames) and as `performance.measure`
+    // entries the browser's profiler shows.
+    let mut trace = trace::start();
     let host = Rc::new(RefCell::new(host));
     let last = Rc::new(Cell::new(None::<f64>));
     let tick: Rc<RefCell<Option<FrameCallback>>> = Rc::new(RefCell::new(None));
@@ -672,7 +676,14 @@ pub fn run(host: WebHost, mut frame: impl FnMut(&mut WebHost, f32) -> Flow + 'st
                 .map_or(1.0 / 60.0, |t| ((now - t) / 1000.0) as f32)
                 .clamp(0.0, 0.1);
             last.set(Some(now));
-            frame(&mut h, dt)
+            let flow = frame(&mut h, dt);
+            if let Some(t) = &mut trace {
+                t.frame();
+                if flow == Flow::Stop {
+                    t.flush();
+                }
+            }
+            flow
         } else {
             Flow::Continue
         };
@@ -741,4 +752,47 @@ pub fn fail(e: &str) {
     crate::js::log(&format!("TRINO_TEST_FAIL:{e}"));
     crate::js::trino_error_overlay(e);
     crate::js::trino_finish(false, Some(e.to_string()));
+}
+
+/// The Web's trace host (issue #62).
+mod trace {
+    use trino_core::trace::{self, Hooks, TracePlatform};
+    use trino_render_wgpu::trace_host::{TraceHost, clock};
+    use wasm_bindgen::JsValue;
+
+    /// Record when the build has `trino-core/trace`: lines on the console,
+    /// zones as `performance.measure` entries.
+    pub fn start() -> Option<TraceHost> {
+        let host = TraceHost::start(
+            TracePlatform::Web,
+            "web",
+            Box::new(|l: &str| crate::js::log(l)),
+        )?
+        .flush_every(120);
+        trace::set_hooks(Some(Hooks {
+            begin: |_, _| {},
+            end: measure,
+            counter: |_, _| {},
+            frame: |_| {},
+        }));
+        Some(host)
+    }
+
+    /// `performance.measure(name, { start, end })`, the zone's times moved
+    /// from the trace clock onto `performance.now()`'s.
+    fn measure(_track: u8, name: &'static str, start_us: u32, end_us: u32) {
+        let Some(perf) = web_sys::window().and_then(|w| w.performance()) else {
+            return;
+        };
+        let now_ms = perf.now();
+        let back = |us: u32| now_ms - clock().wrapping_sub(us) as f64 / 1000.0;
+        let opts = js_sys::Object::new();
+        let _ = js_sys::Reflect::set(&opts, &"start".into(), &JsValue::from(back(start_us)));
+        let _ = js_sys::Reflect::set(&opts, &"end".into(), &JsValue::from(back(end_us)));
+        if let Ok(f) = js_sys::Reflect::get(&perf, &"measure".into())
+            && let Ok(f) = wasm_bindgen::JsCast::dyn_into::<js_sys::Function>(f)
+        {
+            let _ = f.call2(&perf, &JsValue::from_str(name), &opts);
+        }
+    }
 }

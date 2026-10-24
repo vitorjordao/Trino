@@ -50,6 +50,8 @@ mod n3ds {
         }
 
         let mut last = runtime::now_us();
+        // `run 3ds --trace`: the play loop's zones every 60 frames.
+        let mut trace = runtime::TraceLoop::start("3ds-castle64");
         while runtime::running() {
             let now = runtime::now_us();
             let dt = (now.wrapping_sub(last) as f32 / 1_000_000.0).min(0.1);
@@ -59,10 +61,17 @@ mod n3ds {
             // it unloaded is freed, before its update.
             N3dsAssets::pump(&mut renderer, &mut audio, &mut platform);
             let state = input.poll();
+            let zone = trino_core::trace::Zone::begin("update");
             game.update_with(&mut platform, &state, &mut audio, dt);
+            zone.end();
+            let zone = trino_core::trace::Zone::begin("render");
             game.render(&mut renderer);
+            zone.end();
+            let zone = trino_core::trace::Zone::begin("audio");
             audio.poll();
+            zone.end();
             platform.sample_heap();
+            trace.frame();
         }
     }
 
@@ -226,14 +235,22 @@ mod n3ds {
         ));
         g.render(renderer);
         let _ = renderer.take_wait_us();
+        // `--trace` builds: the scene's frames as a session (issue #62).
+        let tracing = runtime::trace_start();
+        trino_core::trace::restart();
         let (mut total, mut cpu, mut max) = (0u32, 0u32, 0u32);
         for _ in 0..FRAMES {
             let t0 = runtime::now_us();
+            let zone = trino_core::trace::Zone::begin("render");
             g.render(renderer);
+            zone.end();
             let us = runtime::now_us().wrapping_sub(t0);
             total += us;
             cpu += us.saturating_sub(renderer.take_wait_us());
             max = max.max(us);
+        }
+        if tracing {
+            runtime::trace_flush(&format!("3ds-{}", scene.name), &mut 0);
         }
         let avg = total / FRAMES;
         platform.sample_heap();

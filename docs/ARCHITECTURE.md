@@ -324,6 +324,18 @@ runner forwards each frame's changes to a `StoreApi` (Steam behind a feature), m
 both ways at start. Consoles keep the state for the session and the game's save holds
 it. The popup and the list are core code drawn with 2D calls.
 
+## Timeline traces (ADR 0030)
+
+`trino_core::trace` records zones (`zone!`), counters and frame marks into a ring the host
+installs, timed by the host's microsecond clock; the instrumentation compiles out unless
+`trino-core/trace` is on, so a release build is the same code. Each target prints the
+ring as `TRINO_TRACE:` lines (`TTRC` packets in base64, numbered and checked) over the
+debug channel it already has; the host crate `trino-trace` turns any log of them into
+Chrome/Perfetto JSON, statistics and diffs, for `cargo xtask trace` and the editor's
+Profiler tab. The renderers mark their stages (N64, 3DS, wgpu) and the wgpu renderer adds
+GPU pass zones from timestamp queries; the PC can also feed Tracy (`tracy` feature), the
+Web `performance.measure`. The `profiling` skill is the how-to.
+
 ## Authored content
 
 Scenes, prefabs, materials, particle effects and fake objects are versioned RON files

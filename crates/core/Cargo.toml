@@ -9,3 +9,8 @@ repository.workspace = true
 # INVARIANT: this crate must never gain a dependency.
 # Enforced by xtask/tests/dep_graph.rs, which fails CI if one is added.
 [dependencies]
+
+[features]
+# The `zone!`/`counter`/`frame_mark` instrumentation (trace module, issue
+# #62). Off by default: release builds are the same machine code.
+trace = []

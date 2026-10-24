@@ -66,6 +66,76 @@ pub fn now_us() -> u32 {
     unsafe { ffi::trino_ticks_us() }
 }
 
+/// Start recording the engine's zones into a static ring, timed by
+/// [`now_us`] (issue #62). `false` (and no ring linked) unless the build has
+/// `trino-core/trace` (`cargo xtask test 3ds --trace`).
+pub fn trace_start() -> bool {
+    use trino_core::trace::{self, GlobalRing, TracePlatform};
+    if !trace::ENABLED {
+        return false;
+    }
+    if trace::is_on() {
+        return true;
+    }
+    static mut RING: GlobalRing = GlobalRing::new();
+    // SAFETY: the only reference, handed over once (`is_on` above).
+    trace::install(
+        unsafe { &mut *core::ptr::addr_of_mut!(RING) },
+        now_us,
+        TracePlatform::N3ds,
+    )
+}
+
+/// Print what the ring holds as `TRINO_TRACE:` lines of `session` through
+/// `svcOutputDebugString` (and stdout under 3dslink), numbered from `*seq`.
+pub fn trace_flush(session: &str, seq: &mut u32) -> bool {
+    trino_core::trace::flush(session, seq, &mut |l| log(l))
+}
+
+/// The play loop's trace (`run 3ds --trace`, issue #62): the engine's
+/// zones flushed as `session` every 60 frames. No code at all without
+/// `trino-core/trace`.
+pub struct TraceLoop {
+    on: bool,
+    seq: u32,
+    frames: u32,
+    session: &'static str,
+}
+
+impl TraceLoop {
+    pub fn start(session: &'static str) -> TraceLoop {
+        TraceLoop {
+            on: trino_core::trace::ENABLED && trace_start(),
+            seq: 0,
+            frames: 0,
+            session,
+        }
+    }
+
+    /// After each frame.
+    pub fn frame(&mut self) {
+        if !trino_core::trace::ENABLED || !self.on {
+            return;
+        }
+        self.frames += 1;
+        if self.frames.is_multiple_of(60) {
+            // Printing is slow (ISViewer: ~0.1 s for 60 frames' events): the
+            // flush shows on the timeline as its own zone, so its frame's
+            // spike reads as the trace's, not the game's.
+            let t0 = trino_core::trace::now();
+            trace_flush(self.session, &mut self.seq);
+            let t1 = trino_core::trace::now();
+            trino_core::trace::record_zone(
+                "trace flush",
+                trino_core::trace::track::CPU,
+                0,
+                t0,
+                t1.wrapping_sub(t0),
+            );
+        }
+    }
+}
+
 /// False when the applet manager wants the app to quit (HOME / power) —
 /// the main loop must return so the shim can tear down cleanly.
 pub fn running() -> bool {

@@ -553,6 +553,56 @@ pub fn write_png(path: &Path, w: u32, h: u32, rgba: &[u8]) -> Result<(), String>
 }
 
 /// `TRINO_SIM`, defaulting to the N64 look.
+/// `TRINO_TRACE` (issue #62): record the engine's zones as `session`
+/// (`pc-castle64`) when the build has `trino-core/trace` (`cargo xtask run
+/// pc --trace`). `stdout` (or `1`) prints the `TRINO_TRACE:` lines; anything
+/// else is a file written from scratch. `None` when unset or the build has
+/// no zones (said once on stderr).
+pub fn trace_from_env(session: &str) -> Option<trino_platform_pc::trace_host::TraceHost> {
+    use std::io::Write as _;
+    // The `tracy` feature: Tracy always listens (on demand: nothing is sent
+    // until a viewer connects), with or without TRINO_TRACE.
+    #[cfg(feature = "tracy")]
+    if trino_platform_pc::tracy::start() {
+        eprintln!("TRINO_TRACY: listening (connect the Tracy profiler)");
+    }
+    let target = std::env::var("TRINO_TRACE").ok()?;
+    if !trino_core::trace::ENABLED {
+        eprintln!(
+            "TRINO_TRACE: this build has no zones (build with --features trino-core/trace, \
+             or `cargo xtask run pc --trace`)"
+        );
+        return None;
+    }
+    let out: Box<dyn FnMut(&str)> = if target == "stdout" || target == "1" {
+        Box::new(|l: &str| print!("{l}"))
+    } else {
+        let path = PathBuf::from(&target);
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        match std::fs::File::create(&path) {
+            Ok(f) => {
+                let mut w = std::io::LineWriter::new(f);
+                Box::new(move |l: &str| {
+                    let _ = w.write_all(l.as_bytes());
+                })
+            }
+            Err(e) => {
+                eprintln!("TRINO_TRACE {}: {e}", path.display());
+                return None;
+            }
+        }
+    };
+    let host = trino_platform_pc::trace_host::TraceHost::start(
+        trino_core::trace::TracePlatform::Pc,
+        session,
+        out,
+    )?;
+    eprintln!("TRINO_TRACE: recording {session} into {target}");
+    Some(host)
+}
+
 pub fn profile_from_env() -> SimProfile {
     std::env::var("TRINO_SIM")
         .ok()
@@ -594,8 +644,13 @@ pub fn run<G: Game + 'static>(config: RunConfig, make: impl FnOnce(Vec2) -> G + 
         frames: 0,
         smoke_frames,
         meter: trino_platform_pc::FrameMeter::new(profile),
+        trace: None,
     };
+    host.trace = trace_from_env(&format!("pc-{}", host.config.save_name));
     event_loop.run_app(&mut host).expect("event loop error");
+    if let Some(t) = host.trace.take() {
+        t.finish();
+    }
 }
 
 type MakeGame = Box<dyn FnOnce(Vec2) -> Box<dyn Game>>;
@@ -641,6 +696,8 @@ struct Host {
     /// Frame time and the 3D split per frame (`TRINO_FRAME:` at the end
     /// of a smoke run).
     meter: trino_platform_pc::FrameMeter,
+    /// `TRINO_TRACE`: the engine's zones (issue #62).
+    trace: Option<trino_platform_pc::trace_host::TraceHost>,
 }
 
 impl Host {
@@ -941,11 +998,20 @@ impl ApplicationHandler for Host {
                 if let Some(s) = &mut ctx.store {
                     s.input(&mut input, &mut ctx.platform);
                 }
+                let zone = trino_core::trace::Zone::begin("groups");
                 ctx.groups
                     .pump(&mut ctx.renderer, &mut ctx.audio, &mut ctx.platform);
+                zone.end();
+                let zone = trino_core::trace::Zone::begin("update");
                 ctx.game
                     .update_with(&mut ctx.platform, &input, &mut ctx.audio, dt);
+                zone.end();
+                let zone = trino_core::trace::Zone::begin("render");
                 ctx.game.render(&mut ctx.renderer);
+                zone.end();
+                if let Some(t) = &mut self.trace {
+                    t.frame();
+                }
                 if let Some(s) = ctx.platform.take_display_request() {
                     apply_display(ctx, self.profile, &self.config.display_file(), s);
                 }

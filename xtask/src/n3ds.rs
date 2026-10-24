@@ -518,6 +518,7 @@ fn cargo_build(p: &Project, dkp: &Path) -> Result<(), String> {
             "-p",
             &p.n3ds_package,
         ])
+        .args(p.trace_features())
         .current_dir(&p.root)
         .env("PATH", path)
         .env("RUSTFLAGS", rustflags)
@@ -1202,6 +1203,7 @@ fn boot_test(
     let mut seen = 0usize;
     let mut fb = crate::fbgolden::FbCapture::default();
     let mut frames: Vec<crate::fbgolden::FbCapture> = Vec::new();
+    let mut traces = crate::trace::Capture::default();
     let mut gpu_timing = None;
     let mut is_new = None;
     let mut hw_line = None;
@@ -1232,6 +1234,10 @@ fn boot_test(
                 if fb.done() {
                     frames.push(std::mem::take(&mut fb));
                 }
+                continue;
+            }
+            // Trace lines are collected, not echoed (issue #62).
+            if traces.feed(line) {
                 continue;
             }
             if line.contains("TRINO_") {
@@ -1293,6 +1299,14 @@ fn boot_test(
             let q = crate::hwtier::check_quality(quality_step.as_deref(), want)?;
             println!("[3ds] quality: {q}");
         }
+        Ok(())
+    });
+    // The run's trace (the self-test's `trace` step; with --trace each
+    // timed scene) into target/traces/ (issue #62).
+    let verdict = verdict.and_then(|()| {
+        let name = format!("3ds{}", if p.trace { "-trace" } else { "" });
+        let msg = traces.finish(&p.engine, &name, p.is_engine)?;
+        println!("[3ds] trace: {msg}");
         Ok(())
     });
     // An Azahar that ignored the override would time the frames without it.

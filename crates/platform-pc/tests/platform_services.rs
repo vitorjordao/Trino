@@ -624,3 +624,16 @@ fn the_pads_family_reaches_the_game() {
     p.publish_input(&input);
     assert_eq!(p.gamepad_family(), None, "unplugged");
 }
+
+/// The PC names itself in a trace (issue #62), whatever console look it
+/// simulates: a trace of the N64 profile is still a PC trace.
+#[test]
+fn the_trace_names_the_pc_whatever_profile_it_simulates() {
+    for caps in [Caps::PC, Caps::N64, Caps::N3DS] {
+        let p = PcPlatform::new(&caps);
+        assert_eq!(
+            trino_core::Platform::trace_platform(&p),
+            trino_core::trace::TracePlatform::Pc
+        );
+    }
+}

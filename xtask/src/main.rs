@@ -34,6 +34,7 @@ mod services;
 mod showcase_assets;
 mod standalone;
 mod texture;
+mod trace;
 mod ui;
 mod ui_render;
 mod web;
@@ -224,6 +225,17 @@ commands:
                        rebuild a demo's Blender-authored models with their
                        triangle gates (castle64: doors, player parts, boar;
                        solid-eleven: pitch, stadium, players, rig + clips)
+  trace collect <log..> [--out <file.json>] [--json]
+                       TRINO_TRACE: lines (any target's log) -> Chrome Trace
+                       Event / Perfetto JSON (default target/traces/)
+  trace report <trace> [--session s] [--json]
+                       per zone: count, mean, p95, max, time per frame
+  trace diff <a> <b> [--session a=b] [--json]
+                       B against A per zone (mean/p95 deltas): perf evidence
+  run pc --trace | build|run|test n64|3ds|web --trace
+                       an instrumented build (the engine's zones compiled
+                       in); its run lands in target/traces/<platform>.json
+                       (consoles: perf numbers reported, never gated)
   agents <sync|check>  mirror .agents/skills/ into tool-specific folders
                        (.claude/skills/) / verify the mirrors are in sync
 ";
@@ -238,6 +250,10 @@ fn main() -> ExitCode {
     args.retain(|a| a != "--selftest");
     let no_build = args.iter().any(|a| a == "--no-build");
     args.retain(|a| a != "--no-build");
+    // `--trace` (issue #62): an instrumented build whose run is collected
+    // into target/traces/ (build|run|test on a platform).
+    let trace_flag = args.iter().any(|a| a == "--trace");
+    args.retain(|a| a != "--trace");
     // Azahar's "Simulate 3DS GPU timings" for this session (or
     // TRINO_AZAHAR_GPU_TIMING=1).
     let accurate_flag = args.iter().any(|a| a == "--accurate-timing");
@@ -277,6 +293,16 @@ fn main() -> ExitCode {
     };
     if let Some(on) = hw.speedup {
         project.n3ds_speedup = on;
+    }
+    if trace_flag {
+        if let Err(e) = trace_invocation(
+            args.first().map(String::as_str),
+            args.get(1).map(String::as_str),
+        ) {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+        project.trace = true;
     }
     let project = project;
     // Real hardware (`run n64 --device sc64`, `run --target n64 ...`), parsed
@@ -409,13 +435,25 @@ fn main() -> ExitCode {
         (Some("test"), Some("web")) => web::test(&project, &web_test),
         (Some("assets"), Some("web")) => assets_for(&project, Target::Web),
         (Some("run"), Some("pc")) => {
-            let extra: Vec<&str> = it.collect();
-            let envs: Vec<(&str, &str)> = pc_quality
+            let mut extra: Vec<&str> = it.collect();
+            let mut envs: Vec<(&str, &str)> = pc_quality
                 .as_deref()
                 .map(|q| ("TRINO_QUALITY", q))
                 .into_iter()
                 .collect();
-            build_pc_with(&project, "run", &extra, &envs)
+            // `--trace` (issue #62): the zones compiled in, the run's lines
+            // into a log, collected into Perfetto JSON when the game exits.
+            let log = project.root.join("target/traces/pc.log");
+            let log_text = log.display().to_string();
+            if project.trace {
+                extra.splice(0..0, ["--features", "trino-core/trace"]);
+                envs.push(("TRINO_TRACE", &log_text));
+            }
+            let code = build_pc_with(&project, "run", &extra, &envs);
+            if project.trace {
+                trace::collect_run(&log, &project.root.join("target/traces/pc-trace.json"));
+            }
+            code
         }
         (Some("test"), None | Some("pc")) => test_pc(&project, bless),
         // Batch commands: every platform `[project] platforms` lists, in
@@ -538,6 +576,15 @@ fn main() -> ExitCode {
             let rest: Vec<&str> = rest.iter().map(String::as_str).collect();
             services::run(&project, &rest)
         }
+        (Some("trace"), _) => {
+            let mut rest: Vec<String> = args.iter().skip(1).cloned().collect();
+            // `--out` was taken with the Web's options above.
+            if let Some(out) = &web_build.out {
+                rest.extend(["--out".to_string(), out.display().to_string()]);
+            }
+            let rest: Vec<&str> = rest.iter().map(String::as_str).collect();
+            trace::run(&project.root, &rest)
+        }
         (Some("i18n"), _) => {
             let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
             i18n::run(&project, &rest)
@@ -612,6 +659,20 @@ pub fn real_change(events: &[notify_debouncer_full::DebouncedEvent]) -> bool {
 fn repo_root() -> PathBuf {
     // xtask always runs from the workspace via `cargo xtask`.
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..")
+}
+
+/// `--trace` goes with a platform command that builds what it runs:
+/// `build|run|test` on `pc` (run only), `n64`, `3ds` or `web`.
+fn trace_invocation(cmd: Option<&str>, platform: Option<&str>) -> Result<(), String> {
+    match (cmd, platform) {
+        (Some("run"), Some("pc"))
+        | (Some("build" | "run" | "test"), Some("n64" | "3ds" | "n3ds" | "web")) => Ok(()),
+        _ => Err(
+            "xtask: --trace goes with `run pc` or `build|run|test n64|3ds|web` \
+                  (an instrumented build; `trace collect` reads any log)"
+                .into(),
+        ),
+    }
 }
 
 /// Fails when `args` (`<command> <platform> ...`) runs a platform command

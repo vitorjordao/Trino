@@ -121,6 +121,24 @@ tests follow the same pattern: add a step to `castle64::selftest` so the PC suit
   - Visual debugging without a window: `renderer.read_pixel` in a TEMP step and
     `runtime::log` the values (that is how the light leak below was found).
 
+## Traces (issue #62, ADR 0030)
+
+- Every boot prints the `trace` step's `TRINO_TRACE:selftest …` lines; `test n64|3ds`
+  collect them (not echoed, like `TRINO_FBR` rows) into `target/traces/<n64|3ds>.json`
+  and the raw `.log`, and fail the engine's run when the session is missing or lacks the
+  step's names.
+- `--trace` builds the engine's zones in (`trino-core/trace`) and traces each perf scene
+  (N64: `n64-<scene>`, `n64-cpu-<scene>`, the micro scenes; 3DS: the 30 timed frames of
+  `3ds-<scene>`) into `target/traces/<console>-trace.json`. Perf gates and goldens are
+  skipped on that ROM (another binary); `--bless` must never come with it.
+- `run n64|3ds --trace`: the play loop flushes `n64-castle64` / `3ds-castle64` (a
+  project's `N64Host`/`N3dsHost::run`: `n64-game` / `3ds-game`) every 60 frames. Docker
+  ares without the harness, for a quick look:
+  `timeout 60 docker run --rm --init -v $PWD/target/n64:/rom:ro trino-ares --no-file-prompt
+  --setting Video/Quality=SD --setting Audio/Driver=None --setting Paths/Saves=/tmp/
+  /rom/trino.z64 > play.log; cargo xtask trace report play.log` (verified 2026-10-24).
+- A 3DS `--trace` boot prints ~2 500 lines (20 000 events); Azahar's log keeps up.
+
 ## Hardware tiers (issue #54, ADR 0020)
 
 Both consoles have a base and an expanded variant, and one ROM / app runs on both. The

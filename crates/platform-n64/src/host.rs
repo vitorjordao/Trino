@@ -248,11 +248,13 @@ impl N64Host {
     /// The real-time loop. Never returns.
     pub fn run(&mut self, game: &mut dyn Game) -> ! {
         let mut last = runtime::now_us();
+        let mut trace = runtime::TraceLoop::start("n64-game");
         loop {
             let now = runtime::now_us();
             let dt = (now.wrapping_sub(last) as f32 / 1_000_000.0).min(0.1);
             last = now;
             self.frame(game, dt);
+            trace.frame();
         }
     }
 

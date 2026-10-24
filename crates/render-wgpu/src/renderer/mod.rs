@@ -15,6 +15,7 @@ mod cvd;
 mod depth_blit;
 mod gpu_timer;
 mod gpu_tnl;
+mod gpu_zones;
 mod lights;
 mod shadow;
 mod shadow_map;
@@ -481,6 +482,10 @@ pub struct PcRenderer {
     dynres: Option<crate::dynres::DynResController>,
     gpu_timer: Option<gpu_timer::GpuTimer>,
     gpu_timer_tried: bool,
+    /// The trace's GPU zones (issue #62): built on the first frame a trace
+    /// records, on adapters with timestamps.
+    gpu_zones: Option<gpu_zones::GpuZones>,
+    gpu_zones_tried: bool,
     host_frame_us: Option<u32>,
     last_gpu_us: u32,
     /// Bilinear 3D textures' sampler with the quality's anisotropy (`None`
@@ -2102,6 +2107,8 @@ impl PcRenderer {
             dynres: None,
             gpu_timer: None,
             gpu_timer_tried: false,
+            gpu_zones: None,
+            gpu_zones_tried: false,
             host_frame_us: None,
             last_gpu_us: 0,
             tex3d_aniso: None,
@@ -2608,6 +2615,9 @@ impl PcRenderer {
     /// After a frame: read the GPU timer (or take the host's interval) and
     /// let dynamic resolution move the scale.
     fn after_frame(&mut self) {
+        if let Some(z) = &mut self.gpu_zones {
+            z.read(&self.device);
+        }
         let measured = match &mut self.gpu_timer {
             Some(t) => t.read(&self.device),
             None => self.host_frame_us.take(),
@@ -3176,6 +3186,7 @@ impl PcRenderer {
         {
             return;
         }
+        trino_core::zone!("batch");
         self.run_cpu_jobs();
         let t0 = Instant::now();
         if let Some(g) = self.gpu.as_mut().filter(|g| g.has_pending()) {
@@ -3198,6 +3209,7 @@ impl PcRenderer {
         if self.cpu_jobs.is_empty() {
             return;
         }
+        trino_core::zone!("cpu tnl");
         let t0 = Instant::now();
         let jobs = std::mem::take(&mut self.cpu_jobs);
         let chunks = cpu_tnl::run(
@@ -3705,6 +3717,7 @@ impl PcRenderer {
     /// Render the recorded commands into the main target, or (`second`)
     /// into the second screen's, and submit.
     fn draw_commands(&mut self, second: bool) {
+        trino_core::zone!("encode");
         self.ensure_shadow_pipes();
         if self.strict {
             // With two screens, the main screen's counts are in `main_*`:
@@ -3926,6 +3939,16 @@ impl PcRenderer {
         if let (true, Some(t)) = (timed, &mut self.gpu_timer) {
             t.begin(&mut encoder);
         }
+        // The trace's GPU zones (issue #62): the main screen's passes.
+        let zoned = !second && (trino_core::trace::is_on() || trino_core::trace::hooked());
+        if zoned && !self.gpu_zones_tried {
+            self.gpu_zones_tried = true;
+            self.gpu_zones = gpu_zones::GpuZones::new(&self.device, &self.queue);
+        }
+        let mut zones = if zoned { self.gpu_zones.take() } else { None };
+        if let Some(z) = &mut zones {
+            z.begin(&mut encoder, "scene");
+        }
         // Multisampled (the main screen only): the 3D draws into the MSAA
         // targets and resolves into the offscreen one (the scaled scene's
         // when scaled) at the end of the pass. The MSAA targets have the
@@ -3984,6 +4007,9 @@ impl PcRenderer {
             self.record_segments(&mut encoder, second, scene_pass, first_part, load, end);
         self.times.draw_calls += draws;
         self.times.pipeline_switches += switches;
+        if let (Some(z), Some(_), Some(_)) = (&mut zones, map, split) {
+            z.mark(&mut encoder, "shadow map");
+        }
         if let (Some(mut params), Some(_)) = (map, split) {
             let (color, scene_depth) = match (&self.scene, scene_pass) {
                 (Some(t), true) => (&t.color_view, &t.depth_view),
@@ -4026,6 +4052,9 @@ impl PcRenderer {
             self.times.shadow_maps += 1;
         }
         if let (Some((settings, mask)), Some(_)) = (ao, split) {
+            if let Some(z) = &mut zones {
+                z.mark(&mut encoder, "ao");
+            }
             let (w, h) = if scene_pass {
                 self.scene_size()
             } else {
@@ -4078,6 +4107,9 @@ impl PcRenderer {
             self.times.ao_passes += 1;
         }
         if scene_pass {
+            if let Some(z) = &mut zones {
+                z.mark(&mut encoder, "upscale");
+            }
             // The scaled 3D onto the picture: bilinear, sharpened below 1.
             let up = self
                 .upscale
@@ -4095,6 +4127,9 @@ impl PcRenderer {
             }
         }
         if split.is_some() && !rest.is_empty() {
+            if let Some(z) = &mut zones {
+                z.mark(&mut encoder, "2d");
+            }
             // The rest is 2D (no depth test): with MSAA it draws
             // single-sampled over the resolved, occluded frame, and a
             // scaled frame's picture has no depth of its own yet.
@@ -4119,6 +4154,9 @@ impl PcRenderer {
         // it back where every consumer (window blit, editor, readback)
         // reads it.
         if self.n64_look && self.vi_dedither && !second {
+            if let Some(z) = &mut zones {
+                z.mark(&mut encoder, "vi");
+            }
             let vi_view = self
                 .vi_tex
                 .create_view(&wgpu::TextureViewDescriptor::default());
@@ -4156,6 +4194,9 @@ impl PcRenderer {
         // The color-vision simulation view, last: what the frame looks like
         // to the viewer it simulates.
         if self.cvd_view != trino_core::CvdMode::Off {
+            if let Some(z) = &mut zones {
+                z.mark(&mut encoder, "cvd view");
+            }
             let (tex, view, size) = match (second, &self.second) {
                 (true, Some(s)) => (&s.tex, &s.view, s.size),
                 _ => (
@@ -4179,9 +4220,18 @@ impl PcRenderer {
         if let (true, Some(t)) = (timed, &mut self.gpu_timer) {
             t.end(&mut encoder);
         }
+        if let Some(z) = &mut zones {
+            z.end(&mut encoder);
+        }
+        let submit = trino_core::trace::Zone::begin("queue submit");
         self.queue.submit([encoder.finish()]);
+        submit.end();
         if let (true, Some(t)) = (timed, &mut self.gpu_timer) {
             t.submitted();
+        }
+        if let Some(mut z) = zones {
+            z.submitted();
+            self.gpu_zones = Some(z);
         }
     }
 
@@ -4446,6 +4496,7 @@ impl PcRenderer {
 
     /// Blit the finished frame(s) to the window, if there is one.
     fn present(&mut self) {
+        trino_core::zone!("present");
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
@@ -4686,6 +4737,7 @@ impl Renderer for PcRenderer {
         if let Some(gpu) = &mut self.gpu {
             gpu.begin_frame();
         }
+        trino_core::trace::frame_mark(self.flash_frames as u32);
     }
 
     fn draw_sprite(&mut self, sprite: SpriteId, pos: Vec2, params: &SpriteParams) {
@@ -4842,6 +4894,7 @@ impl Renderer for PcRenderer {
         _material: Material,
         params: &ModelParams,
     ) {
+        trino_core::zone!("draw");
         if params.shadow.casts() {
             self.cast_shadow(model, matrix, params);
         }
@@ -5380,7 +5433,14 @@ impl Renderer for PcRenderer {
                 self.flash_frames
             );
         }
+        if trino_core::trace::is_on() {
+            let s = &self.frame_stats;
+            trino_core::trace::counter("draws", s.models);
+            trino_core::trace::counter("tris", s.tris);
+            trino_core::trace::counter("pc_gpu_draws", s.tnl.pc_gpu_draws);
+        }
         let t0 = Instant::now();
+        trino_core::zone!("end");
         self.flush();
         self.times.submit_us += micros(t0);
         self.last_times = self.times;

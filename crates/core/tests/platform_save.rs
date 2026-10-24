@@ -33,6 +33,11 @@ fn platform_defaults_report_no_services() {
     assert_eq!(p.second_screen(), None);
     // Base hardware unless a backend detects an expanded tier (ADR 0020).
     assert_eq!(p.hw_tier(), trino_core::HwTier::Base);
+    // A backend that doesn't say what it is (issue #62).
+    assert_eq!(
+        p.trace_platform(),
+        trino_core::trace::TracePlatform::Unknown
+    );
     assert_eq!(p.display(), None);
     p.set_display(DisplaySettings {
         fullscreen: false,

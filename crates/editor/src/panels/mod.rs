@@ -12,6 +12,7 @@ pub mod memory;
 pub mod mixer;
 pub mod particles;
 pub mod platforms;
+pub mod profiler;
 pub mod quality;
 pub mod shipping;
 pub mod texture;

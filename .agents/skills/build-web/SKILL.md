@@ -83,6 +83,16 @@ start is the saved `localStorage` `trino-quality:<save>`, then a phone or tablet
 animation frames). The console's `TRINO_QUALITY: preset=… source=… gpu=… mobile=…` line
 says what was picked; WebGPU reports `gpu=unknown` (browsers hide the adapter's name).
 
+## Traces (issue #62)
+
+Every browser run's `trace` self-test step prints `TRINO_TRACE:selftest …` on the console;
+`test web` reads `target/web-test/<run>/console.log` into
+`target/traces/web-<run>.json`. `build|run|test web --trace` builds the zones in: the page
+prints the lines every 120 frames (session `web`) and each zone becomes a
+`performance.measure` entry (DevTools › Performance shows them under Timings).
+`TraceHost` is the same struct the PC uses (`trino_render_wgpu::trace_host`). GPU pass
+zones need `TIMESTAMP_QUERY`: none on WebGL2.
+
 ## Traps (all hit while building it)
 
 - **WebGL2 depth:** naga's GLSL can't `textureLoad` a `texture_depth_2d`, and wgpu's GL

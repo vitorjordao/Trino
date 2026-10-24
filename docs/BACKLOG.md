@@ -45,6 +45,16 @@ shipping a 3D game first**, then by cost:
 
 ### P1 — the next quality and reach jump
 
+- **Profiler follow-ups (#62, ADR 0030; #79)** (S–M each).
+  - A trace from a real N64 (SummerCart64) and a real 3DS (3dslink), and the hardware's
+    ISViewer/USB print cost per flush.
+  - Zones on other threads (the PC's T&L workers, the audio stream, the 3DS worker core)
+    with a track per thread instead of the shared ring's try-lock.
+  - The rest of #79: named scopes inside the N64 renderer's hot paths with an A/B over
+    layouts (`perf ab`), backend counters (memo hits, rspq words), the RSP cost report.
+  - The trace flush on the N64 costs ~115 ms per 60 frames over ISViewer: a binary
+    channel (USB on a flashcart) or a smaller flush per frame.
+
 - **Shipping follow-ups (#61, ADR 0029)** (S–M each).
   - Minidumps behind a feature (`minidumper` + `crash-handler`: an out-of-process
     monitor) for crashes that aren't Rust panics (a driver, `abort`).
@@ -139,8 +149,8 @@ shipping a 3D game first**, then by cost:
      already set in the shim would then antialias edges and run the divot filter.
    - The PC look would need coverage, for example from MSAA resolve.
    - Then extend the ares golden and the `n64_parity` bound to cover it.
-7. **3DS performance numbers** (M). The 3DS renderer has no stage profile, and
-   Azahar is not cycle-accurate. The work counters are identical to the N64 anyway
+7. **3DS performance numbers** (M). The 3DS renderer's stages are traced since #62
+   (`test 3ds --trace`), but Azahar is not cycle-accurate. The work counters are identical to the N64 anyway
    (`tests/perf/castle64_work.toml`). Add a profile only once there is a timing
    source worth trusting (hardware, or Azahar's CPU clock scaled).
 8. **Run the new CI jobs on GitHub** (S). The emulator jobs were verified in local
@@ -275,6 +285,35 @@ shipping a 3D game first**, then by cost:
   time) and bless `tests/perf/` on purpose. Host benches stay as regression guards only.
 
 ---
+
+## Done — a unified profiler: one trace format from PC, ares, Azahar and the Web, Perfetto JSON, Tracy on the PC, the editor's Profiler (2026-10-24, branch `feat/62-unified-profiler`, GitHub #62, ADR 0030)
+
+| Item | Evidence |
+|---|---|
+| `trino_core::trace` (`no_std`): `zone!`, `counter`, `frame_mark`, tracks, the ring (wraparound counted), `TTRC` packets, `TRINO_TRACE:` lines with sequence and check; compiled out without `trino-core/trace` (zero-sized `Zone`, no `Drop`); `Platform::trace_platform` (a default) | 13 unit tests in `trace.rs` (both feature states; CI lint runs the global ring's), `platform_defaults_report_no_services`, `the_trace_names_the_pc_whatever_profile_it_simulates` |
+| Zones at every renderer's stage sites (N64, 3DS, wgpu) and the hosts' loops; counters per frame; the PC's GPU passes from timestamp queries | `a_traced_pc_frame_records_cpu_and_gpu_zones` (CPU + GPU on RADV), `passes_nest_in_their_frame_and_queued_frames_never_overlap`; real runs: ares (11 sessions, 1 707 events), Azahar (6 sessions, 20 185 events), the PC (240 frames, 10 560 events, cpu + gpu tracks), the N64 play loop (60 s, 1 740 frames) |
+| The `trace` self-test step (nested zones around real work, a counter, frame marks, every line read back, a ring overflowing) | `the_trace_step_lines_collect_on_the_host` (a depth mutation in the encoder fails it); `TRINO_STEP:trace` + the `selftest` session decoded by `test n64`, `test 3ds` and `test web` (Chromium WebGL2/WebGPU, Firefox) |
+| `trino-trace` and `cargo xtask trace collect\|report\|diff [--json]`; `test n64\|3ds\|web` write `target/traces/`; `--trace` on `run pc`, `build\|run\|test n64\|3ds\|web` | `trace_cli.rs` (5 tests, the golden Perfetto JSON of an ares log), `end_to_end.rs`, `trino-trace`'s unit tests |
+| Tracy (`tracy` feature: spans, plots, frames, a GPU context) | `cargo clippy -p trino-app-pc --features tracy` in CI; captured with `tracy-capture` 0.14.1 from a 600-frame run (zones `game`, `render`, `end`, `present`, `encode`, `draw`, …, see the PR) |
+| Web: the lines on the console, `performance.measure` per zone | wasm32 clippy with `trino-core/trace`; the browsers' `selftest` sessions |
+| N64 hot-symbol guard (`tessellate_joints::<false, false>` ≤ 16 KB, no recorder without `--trace`) | `hot_symbols_fit_the_icache_and_zones_compile_out`; every `build n64` |
+| Editor: the Profiler tab (timeline, frame flame, zones, diff, live reload), the measured N64 line in the Inspector | `profiler_tab_reads_compares_and_follows_traces`, the layout audit at 960×600 and 1600×940, 7 unit tests in `crates/editor/src/profiler.rs` |
+
+Release builds unchanged: the 143 functions of the N64 renderer and `render3d` have the same
+sizes as on `main`, `tessellate_joints::<false, false>` is 16 216 B on both, and the scene
+table over the same 8 `TRINO_N64_TEXT_PAD` layouts (frame_us, mean (min–max), main → branch):
+hub 12 201 (11 948–12 502) → 12 275 (11 950–12 998); green-hills 7 337 → 7 410;
+lava-land 7 880 → 8 023; sky-tower 7 103 → 7 133; throne 18 244 → 18 070; micro-river
+1 788 → 1 790; showcase-river 25 242 (24 866–25 854) → 25 878 (25 075–26 389): every range
+overlaps (layout, the self-test's new step); no ceiling or golden moved.
+
+Deviations (ADR 0030): the self-test ROM is not instrumented by default (the issue asked
+for it): its perf scenes are the gate, so the zones go in a separate `--trace` ROM, and
+every default boot checks the format through the `trace` step instead. Hardware traces are
+`trace collect` on a saved terminal log, not verified on a console yet. The "estimated vs
+measured" link is in the Inspector's platform budget, not the painted Game view HUD.
+Zones are main-thread only (another thread's event is dropped and counted). Game zones
+record nothing under hot reload (the dylib's own core).
 
 ## Done — shipping games: achievements, stats, presence and cloud on every target; PC packages, Steam, crash reports, the 3DS `.cia` (2026-10-23, branch `feat/61-shipping-pc`, GitHub #61, ADR 0029)
 

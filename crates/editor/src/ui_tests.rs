@@ -1097,6 +1097,18 @@ fn editor_layout_is_clean_at_minimum_and_default_sizes() {
         h.state_mut().shipping.page = crate::shipping::Page::Packaging;
         h.run_steps(3);
         crate::layout_audit::assert_clean(&h, size, true, &what("Project › Packaging"));
+        // The Profiler tab (issue #62): empty, then A and B compared.
+        h.state_mut().cmds.push(Cmd::FocusTab(Tab::Profiler));
+        h.run_steps(4);
+        crate::layout_audit::assert_clean(&h, size, true, &what("Profiler (empty)"));
+        let root = std::env::current_dir().unwrap();
+        profiler_fixtures(&root, false);
+        let p = &mut h.state_mut().profiler;
+        p.open_a(&root.join("target/traces/a.json"), None);
+        p.open_b(&root.join("target/traces/b.log"), None);
+        h.run_steps(4);
+        assert!(h.query_by_label_contains("DIFF (B").is_some());
+        crate::layout_audit::assert_clean(&h, size, true, &what("Profiler A vs B"));
         leave_temp_project(&repo);
     }
 }
@@ -3404,6 +3416,160 @@ fn localization_tab_edits_the_tables_and_follows_their_files() {
     assert!(
         f.iter().any(|r| r.lang == "pt-BR" && r.n64_bytes.is_some()),
         "{f:?}"
+    );
+    leave_temp_project(&repo);
+}
+
+/// The Profiler tab's fixtures (issue #62): trace A as Chrome JSON
+/// (`chrome::write`), trace B as a log of `TRINO_TRACE:` lines (what `cargo
+/// xtask run pc --trace` writes), so both loaders run. B's `tnl` is 50 µs
+/// slower and it adds an RSP zone; `extra` adds a zone to A (a live
+/// reload). `n64-test.json` is an N64 run of the open scene (the budget's
+/// "measured" line).
+fn profiler_fixtures(project: &std::path::Path, extra: bool) {
+    use trino_core::trace::{TracePlatform, TraceRing, track};
+    let dir = project.join("target/traces");
+    std::fs::create_dir_all(&dir).unwrap();
+    let ring = |tnl: u32, rsp: bool, late: bool| {
+        let mut r = TraceRing::<256>::new();
+        for f in 0..4u32 {
+            let t = f * 1000;
+            r.frame(t, f);
+            r.zone("tnl", track::CPU, t + 10, t + 10 + tnl);
+            r.zone("sort", track::CPU, t + 300, t + 310);
+            if rsp {
+                r.zone("rsp wait", track::RSP, t + 400, t + 440);
+            }
+            if late {
+                r.zone("late zone", track::CPU, t + 500, t + 520);
+            }
+        }
+        r
+    };
+    let mut text = String::new();
+    ring(100, false, extra)
+        .write_lines(TracePlatform::Pc, "pc-test", &mut 0, &mut text)
+        .unwrap();
+    let a = trino_trace::collect(&text).unwrap();
+    std::fs::write(
+        dir.join("a.json"),
+        trino_trace::chrome::write(&a).to_string(),
+    )
+    .unwrap();
+    let mut log = String::from("[game] boot\n");
+    ring(150, true, false)
+        .write_lines(TracePlatform::Pc, "pc-test", &mut 0, &mut log)
+        .unwrap();
+    std::fs::write(dir.join("b.log"), log).unwrap();
+    let mut n64 = String::new();
+    ring(100, false, false)
+        .write_lines(TracePlatform::N64, "n64-showcase", &mut 0, &mut n64)
+        .unwrap();
+    let t = trino_trace::collect(&n64).unwrap();
+    std::fs::write(
+        dir.join("n64-test.json"),
+        trino_trace::chrome::write(&t).to_string(),
+    )
+    .unwrap();
+}
+
+/// The Profiler tab (issue #62): pick trace A in the file combo, its zones
+/// show in the table; pick B (a log), the diff shows B − A; A rewritten on
+/// disk reloads live; the scene settings' platform budget shows the N64
+/// frame a trace measured, and its button opens that trace here.
+#[test]
+#[ignore = "changes cwd/env: run alone with --ignored --test-threads=1"]
+fn profiler_tab_reads_compares_and_follows_traces() {
+    use crate::app::{Cmd, Tab};
+    use egui::accesskit::Role;
+    let Some((mut h, _tmp, repo)) = temp_project_app_with(egui::vec2(1600.0, 1000.0), |_, p| {
+        profiler_fixtures(p, false)
+    }) else {
+        return;
+    };
+    h.state_mut().cmds.push(Cmd::FocusTab(Tab::Profiler));
+    h.run_steps(4);
+    assert!(
+        h.query_all_by_label_contains("No trace open")
+            .next()
+            .is_some()
+    );
+    let names: Vec<String> = h
+        .state()
+        .profiler
+        .files
+        .iter()
+        .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names, ["a.json", "b.log", "n64-test.json"]);
+    pick(&mut h, "Trace A", "a.json");
+    assert_eq!(h.state().profiler.session().unwrap().name, "pc-test");
+    assert!(h.query_all_by_label("Timeline").next().is_some());
+    assert!(h.query_all_by_label("Frame flame graph").next().is_some());
+    for zone in ["tnl", "sort"] {
+        assert!(
+            h.query_all_by_label(zone).next().is_some(),
+            "zone row {zone}"
+        );
+    }
+    assert!(
+        h.query_all_by_label("100 µs").next().is_some(),
+        "tnl's mean"
+    );
+    assert!(h.query_all_by_label_contains("DIFF (B").next().is_none());
+    // B: the log, paired with A's session by name.
+    pick(&mut h, "Trace B", "b.log");
+    assert!(
+        h.state().profiler.b.is_some(),
+        "B: {:?}",
+        h.state().profiler.error
+    );
+    assert_eq!(h.state().profiler.session_b().unwrap().name, "pc-test");
+    assert!(h.query_all_by_label_contains("DIFF (B").next().is_some());
+    assert!(
+        h.query_all_by_label("+50 µs").next().is_some(),
+        "tnl's mean delta"
+    );
+    assert!(h.query_all_by_label("+50%").next().is_some());
+    assert!(
+        h.query_all_by_label("rsp wait").next().is_some(),
+        "B's new zone"
+    );
+    assert!(h.query_all_by_label("new").next().is_some());
+    // A changes on disk: the tab follows it.
+    let root = std::env::current_dir().unwrap();
+    profiler_fixtures(&root, true);
+    wait_for(&mut h, "trace A to reload", |a| {
+        a.profiler
+            .session()
+            .is_some_and(|s| s.names.iter().any(|n| n == "late zone"))
+    });
+    assert!(h.query_all_by_label("late zone").next().is_some());
+    // Estimated vs measured: the scene settings' platform budget.
+    h.state_mut().cmds.push(Cmd::Select(None));
+    h.state_mut().cmds.push(Cmd::FocusTab(Tab::Scene));
+    let start = std::time::Instant::now();
+    while h
+        .query_all_by_label_contains("N64 measured")
+        .next()
+        .is_none()
+    {
+        assert!(start.elapsed().as_secs() < 60, "no measured N64 line");
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(30));
+    }
+    assert!(
+        h.query_by_label_contains("N64 measured 1.0 ms (n64-showcase, 3 frames)")
+            .is_some()
+    );
+    press(&mut h, Role::Button, "Profiler");
+    let p = &h.state().profiler;
+    assert_eq!(p.session().unwrap().name, "n64-showcase");
+    assert!(
+        p.a.as_ref()
+            .unwrap()
+            .path
+            .ends_with("target/traces/n64-test.json")
     );
     leave_temp_project(&repo);
 }

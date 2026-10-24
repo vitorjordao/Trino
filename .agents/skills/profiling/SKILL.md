@@ -1,0 +1,97 @@
+---
+name: profiling
+description: Record and read timeline traces of a Trino game on every target — zones, counters and frame marks (`trino_core::trace`), `--trace` builds on PC, N64 (ares/hardware), 3DS (Azahar/3dslink) and the Web, `cargo xtask trace collect|report|diff`, Perfetto/Chrome JSON, Tracy on the PC, GPU pass zones, the editor's Profiler tab — and turn them into the evidence a perf PR quotes. Use for "profile", "trace", "timeline", "where does the frame go", "spike", "stall", "Tracy", "Perfetto", "compare PC and N64", or before/after numbers of an optimization.
+---
+
+# profiling: one trace format from every target
+
+ADR 0030 (GitHub #62). The summaries (`TRINO_PERF_SCENE`, `TRINO_FRAME`) stay the gates;
+a trace says **when** things happened: which stage stalled, frame-to-frame variance, spikes.
+
+## Record
+
+| Target | Command | Output |
+|---|---|---|
+| N64 (ares) | `TRINO_ARES=docker cargo xtask test n64 --trace` | `target/traces/n64-trace.json` (+ `.log`): one session per perf scene (`n64-hub`, `n64-cpu-hub`, `n64-micro-…`) |
+| 3DS (Azahar) | `cargo xtask test 3ds --trace` | `target/traces/3ds-trace.json`: `3ds-<scene>`, 30 frames each |
+| PC | `cargo xtask run pc --trace` (or `TRINO_TRACE=<file>\|stdout` on any `--features trino-core/trace` build) | `target/traces/pc.log` while it runs, `pc-trace.json` at exit; CPU zones + GPU passes |
+| Web | `cargo xtask test web --trace` / `run web --trace` | lines on the console every 120 frames (`target/web-test/<run>/console.log` → `target/traces/web-<run>-trace.json`), `performance.measure` entries in the browser's profiler |
+| Hardware | `run n64 --device sc64 --trace`, `run 3ds --device network --trace` | the lines arrive on the terminal: save it (`script -q log.txt …`) and `trace collect log.txt`. Never pipe the loaders (AGENTS pitfall). Not yet verified on a console |
+| Every boot without `--trace` | `test n64\|3ds\|web` | the self-test's `selftest` session (format check) in `target/traces/<platform>.json` |
+
+`--trace` is a **separate build** (`--features trino-core/trace`). On the consoles its perf
+table is printed but never gated or blessed; the goldens are skipped.
+
+**Writing the trace costs time on the consoles:** the N64's ISViewer prints 60 frames of
+events in ~115 ms (measured in ares, 2026-10-24). The play loops flush every 60 frames and
+record the flush as a `trace flush` zone, so that frame's spike is labelled; the
+self-test flushes after each measured scene, outside its frames. Judge frame times on
+the frames between flushes.
+
+## Read
+
+```
+cargo xtask trace report target/traces/n64-trace.json --session n64-hub   # per zone: count mean p95 max per_frame
+cargo xtask trace diff target/traces/pc-trace.json target/traces/n64-trace.json --session pc-castle64=n64-hub --json
+cargo xtask trace collect saved-terminal.log --out target/traces/sc64.json
+```
+
+- Open any `.json` in <https://ui.perfetto.dev> (drag the file) or `chrome://tracing`: one
+  process per session, one thread per track (`cpu`, `gpu`, `rsp`, …), counters as tracks.
+- The editor: **Profiler** tab (`TRINO_EDITOR_TAB=profiler`, `TRINO_EDITOR_TRACE=<file>`,
+  `TRINO_EDITOR_TRACE_B=<file>` to compare). It follows a growing `pc.log` (attach to a
+  running `run pc --trace`).
+- `diff` pairs sessions by name, else by the name past the platform prefix (`pc-hub` ↔
+  `n64-hub`), else the only session of each; `--session a=b` otherwise.
+
+What the N64 zones mean: `begin` = waiting for a framebuffer (vsync/RDP: never judge on it),
+`draw` = one `draw_model*` call (RSP draws included: their CPU side), `sort`, `submit` (CPU
+triangles to the RDP), `rsp queue` (RSP commands queued), `2d`, `end` (frame end; the
+profiled drain is in it), host `update`/`render`/`audio`. Counters: `draws`, `tris`,
+`rsp_draws`, `rsp_tris`.
+
+## Tracy (PC)
+
+`cargo run -p trino-app-pc --features tracy` (or `trino-runner-pc`'s `tracy` feature in a
+project), then connect the Tracy **0.14** viewer (`tracy-client` 0.19 = Tracy 0.14.x; a
+mismatched viewer refuses the connection). Headless capture, verified 2026-10-24:
+
+```
+git clone --depth 1 --branch v0.14.1 https://github.com/wolfpld/tracy.git && cd tracy
+cmake -S capture -B capture/build -DCMAKE_BUILD_TYPE=Release -DNO_ISA_EXTENSIONS=ON && cmake --build capture/build -j8
+cmake -S csvexport -B csvexport/build -DCMAKE_BUILD_TYPE=Release -DNO_ISA_EXTENSIONS=ON && cmake --build csvexport/build -j8
+capture/build/tracy-capture -o run.tracy -a 127.0.0.1 -f &   # then start the game
+csvexport/build/tracy-csvexport run.tracy                    # zone names, counts, mean ns
+```
+
+## Instrument
+
+- `trino_core::zone!("name");` times the rest of the block; `let z =
+  trace::Zone::begin("x"); …; z.end();` for a span inside a function;
+  `zone!(trace::track::AUDIO, "mix")` on another track; `trace::counter("name", v)`;
+  `trace::frame_mark(n)` (the renderers already mark frames at `begin_frame`).
+- Names are `&'static str` literals (interned, ≤ 128 per ring).
+- Put zones at stage boundaries and per draw call, **never inside the T&L** (the N64
+  I-cache: `build n64` fails if `tessellate_joints::<false, false>` passes 16 KB or a build
+  without `--trace` links the recorder).
+- Out-of-line work only when tracing: `if trino_core::trace::ENABLED { out_of_line() }`
+  with the callee `#[inline(never)]` (the N64 renderer's `trace_counters`).
+- Main thread only; another thread that finds the ring busy loses its event (counted in
+  `dropped`, shown by `report`).
+- Game zones under `watch pc` (hot reload) record nothing: the dylib's own core copy.
+
+## Evidence for a perf PR
+
+1. The gate stays the scene table over 8 paddings (`n64-performance`).
+2. Add `trace diff --json` of the scene before/after (`--trace` builds of both commits,
+   each in its own worktree and `target/`) and a Perfetto screenshot of the changed frame.
+3. Quote zones' mean and p95 per frame, not a single frame.
+
+## Code map
+
+`crates/core/src/trace.rs` (ring, packet, lines, global recorder, hooks);
+`crates/trace/` (`collect`, `chrome`, `stats`); `xtask/src/trace.rs` (CLI, `Capture` for
+the emulator runs); `crates/render-wgpu/src/{trace_host.rs, tracy.rs,
+renderer/gpu_zones.rs}`; `crates/platform-{n64,3ds}/src/runtime.rs` (`trace_start`,
+`trace_flush`); the renderers' zones; `crates/platform-web/src/runtime.rs` (`mod trace`);
+`examples/castle64/src/selftest.rs::trace` (the step); `crates/editor/src/profiler.rs`.

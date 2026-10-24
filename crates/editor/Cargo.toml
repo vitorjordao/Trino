@@ -18,6 +18,8 @@ trino-platform-pc = { workspace = true }
 showcase = { workspace = true }
 # Project launcher: "Create new project" (same scaffolder as `xtask new`).
 trino-scaffold = { workspace = true }
+# The Profiler tab (issue #62): the same trace loader and statistics as `cargo xtask trace`.
+trino-trace = { workspace = true }
 trino-asset-pipeline = { workspace = true, features = ["watch"] }
 eframe = { workspace = true }
 egui_dock = { workspace = true }

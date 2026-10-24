@@ -43,6 +43,7 @@ platforms, hardware): `docs/README.md`. Historical plans the engine was first bu
 | `n64-performance` | per-stage/per-model N64 frame cost (emulated, ares), perf gates, the calibrated cost model, before/after workflow, what worked |
 | `ci` | the GitHub Actions jobs, why they're shaped that way, replicating a job locally, debugging red runs |
 | `new-project` | `cargo xtask new` (in-repo or `--standalone`), maintaining the templates and `trino-runner-pc` |
+| `profiling` | timeline traces on every target: `zone!`/counters/frame marks, `--trace` builds, `trace collect/report/diff`, Perfetto, Tracy, the editor's Profiler; perf evidence for PRs |
 | `shipping` | achievements/stats/presence/cloud (`assets/achievements.ron`, `services check\|export steam`), `package pc` per OS, Steam, crash reports, `deck check`, the 3DS `.cia` |
 
 **Knowledge loop:** before reporting a task done, write what it taught you into the
@@ -911,6 +912,34 @@ overlay, and a measurement on real hardware (ares doesn't time the RDP).
     Azahar job), `package config [set]`, the editor's Project tab, the starter's About and
     crash-question screens.
 
+- **Unified profiler (2026-10-24, ADR 0030, GitHub #62):** one trace format from every
+  target, viewable in Perfetto, Tracy on the PC, an editor Profiler tab.
+  - **Core (`trino_core::trace`, `no_std`):** `zone!("name")`, `trace::counter`,
+    `trace::frame_mark`, tracks (`cpu`, `gpu`, `rsp`, `audio`, `worker`); a global ring the
+    host installs (`install`, `GlobalRing` = 4096 × 12-byte events); `TTRC` packets in
+    `TRINO_TRACE:<session> <seq> <check> <base64>` lines. **Compiled out unless
+    `trino-core/trace`:** `Zone` is zero-sized, a release build is the same code. The ring,
+    encoder and decoder are always there: the `trace` self-test step checks the format on
+    PC, ares, Azahar and the browsers. `Platform::trace_platform` (default `Unknown`).
+  - **Zones:** the N64, 3DS and PC renderers' stage sites (begin, draw, sort, submit,
+    `rsp queue`, 2D, end, present, encode, queue submit) and the hosts' update/render/audio;
+    counters per frame (draws, tris, RSP/GPU draws); the PC's GPU passes from timestamp
+    queries (`renderer/gpu_zones.rs`: scene, shadow map, AO, upscale, 2D, VI, CVD).
+  - **Tools:** the host crate `trino-trace` (collect, Chrome/Perfetto JSON both ways,
+    `SessionStats`, `Diff`); `cargo xtask trace collect|report|diff [--json]`; `test
+    n64|3ds|web` write `target/traces/<platform>.json` (+ `.log`); `--trace` on `run pc`
+    and `build|run|test n64|3ds|web` builds the zones in (a console `--trace` ROM's perf
+    table is reported, never gated). `TRINO_TRACE=<file>|stdout` on the PC hosts.
+  - **PC/Web extras:** `trino-render-wgpu` feature `tracy` (forwarded by `trino-platform-pc`,
+    `trino-runner-pc`, `trino-app-pc`): spans, plots, frames and a GPU context in Tracy 0.14
+    (on demand); the Web prints the lines on the console and adds `performance.measure` per
+    zone.
+  - **Guard:** `build n64` fails when `tessellate_joints::<false, false>` passes the 16 KB
+    I-cache or a build without `--trace` links the recorder (`check_hot_symbols`).
+  - **Editor:** the Profiler tab (timeline per track with zoom, per-frame flame view, zone
+    table, compare two traces or sessions, follows a growing file; `TRINO_EDITOR_TAB=profiler`,
+    `TRINO_EDITOR_TRACE`, `TRINO_EDITOR_TRACE_B`). Skill: `profiling`.
+
 PC keyboard mapping: A/B = Z/X, X/Y = C/V, L/R = Q/E, Start = Enter,
 Select = Right Shift, D-pad = arrows, stick = WASD; L2/R2/L3/R3 have no default key
 (see `crates/platform-pc/src/input.rs`). Gamepads (gilrs): A/B/X/Y, L = LB+LT, R = RB+RT,
@@ -948,6 +977,7 @@ Super, which the OS takes) are not bindable, so one press never does two things.
 | `crates/editor` | egui editor (see the `editor` skill for its file map) |
 | `crates/scene` | Scenes, prefabs, materials (RON), resolve → draw list, codegen |
 | `crates/runner-pc` | Ready-made PC host (window, renderer, audio, asset bake) for standalone projects |
+| `crates/trace` | Host-side trace tools (`trino-trace`): `TRINO_TRACE` logs → Perfetto/Chrome JSON, per-zone statistics and diffs (xtask and the editor) |
 | `crates/asset-pipeline` | Asset baking (sprites, audio, glTF → TMDL + skeleton, fake objects) + watching |
 | `apps/{pc,n64,3ds,web}` | Thin glue binaries; `apps/pc` also plays editor scenes (`TRINO_SCENE`); `apps/web` is the wasm module, its page (`index.html`) and the browser self-test, plus the vendored KTX2 transcoder |
 | `tools/web-test` | The Playwright harness `cargo xtask test web` drives (Chromium, Firefox, WebKit) |
@@ -1064,6 +1094,12 @@ cargo xtask package pc [--target os] [--steam] [--itch] [--smoke] [--json] --pro
 cargo xtask package config [set key=value ..]      # trino.toml's packaging keys, edited in place
 cargo xtask package 3ds --cia [--selftest]         # the installable 3DS title (+ its .cxi for Azahar)
 cargo xtask deck check [--json]                    # the Steam Deck Verified checklist
+cargo xtask trace collect <log..> [--out x.json] [--json]   # TRINO_TRACE lines (any target) -> Perfetto JSON (target/traces/)
+cargo xtask trace report <trace> [--session s] [--json]     # per zone: count, mean, p95, max, per frame; frames; counters
+cargo xtask trace diff <a> <b> [--session a=b] [--json]     # B against A per zone: the perf PR's evidence
+cargo xtask test n64|3ds|web --trace                        # the engine's zones compiled in; per-scene sessions -> target/traces/<platform>-trace.json
+cargo xtask run pc --trace                                  # target/traces/pc.log while it runs, pc-trace.json at exit
+cargo run -p trino-app-pc --features tracy                  # Tracy (connect the Tracy 0.14 viewer)
 cargo xtask agents sync   # mirror .agents/skills/ into .claude/skills/ (check: agents check)
 cargo test -p xtask --test water_shots -- --ignored   # water evidence: tiers, ripples, crate, bridge (target/evidence/water)
 cargo xtask new <name> --standalone <dir> [--git <url> --rev <r>]   # project outside this repo
@@ -1151,6 +1187,25 @@ cargo test --workspace
   beyond Rust.
 
 ## Pitfalls
+
+- **A trace log line can start with `[`** (`[ares] TRINO_TRACE:...`): never tell a log
+  from JSON by its first character. `trino_trace::chrome::parse` tries JSON first.
+- **Zones in a hot-reloaded game dylib go nowhere.** The dylib links its own `trino-core`,
+  whose global ring nobody installed; only the host's and the engine's zones record under
+  `watch pc`. Trace a statically linked build (`run pc --trace`).
+- **A `--trace` console build is another binary:** its perf table is reported, never gated
+  or blessed, and its N64 symbols include the recorder (`check_hot_symbols` expects it).
+  Bless ceilings only from a build without `--trace`.
+- **The Tracy client runs from the process's start** (its C++ static initializer):
+  `Client::running()` is already true before anything starts it, so code that "starts Tracy
+  once" keeps its own flag (`trino_render_wgpu::tracy::start`).
+- **Feature-only code rots unseen:** `trino-core/trace` and `tracy` are off in the default
+  gates, so CI's lint job builds the workspace with the zones in and the app with Tracy.
+  A new instrumented path needs `cargo clippy --workspace --all-targets --features
+  trino-core/trace` locally.
+- **`git add -A` in a tree that holds `.claude/worktrees/`** (an agent's isolated
+  worktree) commits it as an embedded repository. Exclude the folder
+  (`.git/info/exclude`) or add paths by name.
 
 - **A packaged game must not use build-tree paths.** `env!("CARGO_MANIFEST_DIR")` is the
   build machine's; `trino-runner-pc` switches to packaged mode when `trino-package.txt`

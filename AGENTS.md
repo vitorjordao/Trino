@@ -1232,6 +1232,9 @@ cargo test --workspace
   install, `warm_wait`), and extend `precompile.rs`'s `toggle_everything`. Never warm
   in `PcRenderer::new` (RADV, #94). Benchmark shader compiles with
   `MESA_SHADER_CACHE_DISABLE=true`, or you measure Mesa's disk cache.
+- **A warm-up's wait is bounded by time, never by frames.** On Windows CI's WARP (a
+  software adapter) the `shader precompile` step's 600 empty frames ran out in
+  milliseconds while 14 passes were still compiling; it now waits on `now_micros`.
 - **Never key state on `wgpu::Device` equality.** It compares only an id, which repeats
   across `wgpu::Instance`s: two live renderers (tests, the editor beside a game) collide.
   Per-renderer state rides the renderer or a `pipes::Scope`.

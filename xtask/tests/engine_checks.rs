@@ -158,10 +158,10 @@ fn the_shader_precompile_step_warms_the_pc_and_skips_the_consoles() {
     use castle64::selftest::shader_precompile;
     let save_dir = tempfile::tempdir().unwrap();
     for profile in [SimProfile::Native, SimProfile::N64, SimProfile::N3ds] {
-        let Some((mut renderer, _platform)) = pc_target(profile, save_dir.path()) else {
+        let Some((mut renderer, mut platform)) = pc_target(profile, save_dir.path()) else {
             return;
         };
-        let r = shader_precompile(&mut renderer).unwrap();
+        let r = shader_precompile(&mut renderer, &mut platform).unwrap();
         // The PC's console profiles still draw with wgpu pipelines (their
         // shadow and color-vision passes): they warm too, just fewer.
         assert!(r.passes > 0, "{profile:?}: {r:?}");

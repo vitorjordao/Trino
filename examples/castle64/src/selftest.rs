@@ -130,7 +130,7 @@ pub fn engine_checks(
     let events = trace(renderer, platform)?;
     log_trace(platform, events);
     platform.log("TRINO_STEP:shader precompile\n");
-    let warm = shader_precompile(renderer)?;
+    let warm = shader_precompile(renderer, platform)?;
     log_precompile(platform, &warm);
     platform.log("TRINO_STEP:engine ok\n");
     Ok(())
@@ -366,15 +366,23 @@ pub struct PrecompileReport {
 /// screen), and a second request finds nothing left. The N64 and the 3DS
 /// assemble their shaders at build time: 0 passes, done at once. The PC
 /// builds its lazily created passes on worker threads, the Web one a frame.
-pub fn shader_precompile(renderer: &mut dyn Renderer) -> Result<PrecompileReport, &'static str> {
+/// The wait is bounded by the platform's clock, never a frame count: a
+/// software adapter (CI's WARP) compiles for seconds while empty frames
+/// take microseconds.
+pub fn shader_precompile(
+    renderer: &mut dyn Renderer,
+    platform: &mut dyn Platform,
+) -> Result<PrecompileReport, &'static str> {
+    const LIMIT_US: u64 = 300_000_000;
     let start = renderer.precompile(&PrecompileRequest::EVERYTHING);
+    let t0 = platform.now_micros();
     let mut frames = 0;
     while !renderer.precompile_status().is_done() {
         renderer.begin_frame(Color::rgb(0, 0, 0));
         renderer.end_frame();
         frames += 1;
-        if frames > 600 {
-            return Err("shader precompile: still running after 600 frames");
+        if platform.now_micros().saturating_sub(t0) > LIMIT_US {
+            return Err("shader precompile: still running after 300 s");
         }
     }
     let done = renderer.precompile_status();

@@ -211,12 +211,15 @@ fn a_background_warm_up_keeps_frames_coming_and_ends() {
     let start = r.precompile(&PrecompileRequest::EVERYTHING);
     assert!(start.total > 0, "{start:?}");
     let mut frames = 0;
+    let t0 = std::time::Instant::now();
     while !r.precompile_status().is_done() {
         // The loading screen: frames present while the workers compile
         // (one that needs a pass in flight waits for that job only).
         frame(&mut r, frames % 2 == 1);
         frames += 1;
-        assert!(frames < 10_000, "{:?}", r.precompile_status());
+        // Bounded by time, not frames: a software adapter (WARP, lavapipe)
+        // compiles for seconds.
+        assert!(t0.elapsed().as_secs() < 300, "{:?}", r.precompile_status());
     }
     let done = r.precompile_status();
     assert_eq!(done.done, done.total);

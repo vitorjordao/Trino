@@ -227,6 +227,7 @@ fn shot(project: &Project, what: &str, opts: &Opts, json: bool) -> Result<bool, 
                 focus: None,
                 access: opts.ui_access(contrast),
                 simulate: opts.simulate(),
+                stereo: None,
             },
         )?;
         (shot.width, shot.height, shot.rgba, def.name.clone())

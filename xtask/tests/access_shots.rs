@@ -289,6 +289,7 @@ fn starter_screens_at_each_text_scale_and_contrast() {
                         focus: None,
                         access,
                         simulate: None,
+                        stereo: None,
                     },
                 )
                 .unwrap();

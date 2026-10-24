@@ -51,6 +51,10 @@ pub struct FrameReport {
     /// Per frame: why the CPU draws stayed off the GPU
     /// ([`GpuReject::index`]; `Offscreen` ones are culled, not drawn).
     pub off_gpu: [u32; GpuReject::COUNT],
+    /// Frames that drew two eyes (issue #63), and the last frame's stereo
+    /// (`stereo=on@N%` or why it was mono).
+    pub stereo_frames: u32,
+    pub stereo: trino_core::StereoStats,
 }
 
 impl N3dsHost {
@@ -116,6 +120,7 @@ impl N3dsHost {
         let (mut gpu_draws, mut gpu_tris, mut cpu_draws, mut cpu_tris) = (0u64, 0u64, 0u64, 0u64);
         let mut off = [0u64; GpuReject::COUNT];
         let mut max = 0u32;
+        let (mut stereo_frames, mut stereo) = (0u32, trino_core::StereoStats::default());
         let _ = self.renderer.take_wait_us();
         for i in 0..frames {
             let state = input(i);
@@ -126,6 +131,8 @@ impl N3dsHost {
             cpu += us.saturating_sub(self.renderer.take_wait_us()) as u64;
             let stats = trino_core::Renderer::stats(&self.renderer);
             let tnl = stats.tnl;
+            stereo = stats.stereo;
+            stereo_frames += (stereo.eyes == 2) as u32;
             gpu_draws += tnl.gpu_draws as u64;
             gpu_tris += tnl.gpu_tris as u64;
             cpu_draws += stats.models.saturating_sub(tnl.gpu_draws) as u64;
@@ -147,6 +154,8 @@ impl N3dsHost {
             cpu_tris: per(cpu_tris),
             // Rounded up: a reason seen at all shows.
             off_gpu: off.map(|n| n.div_ceil(frames.max(1) as u64) as u32),
+            stereo_frames,
+            stereo,
         }
     }
 
@@ -156,7 +165,7 @@ impl N3dsHost {
     pub fn report_frames(&self, scene: &str, r: &FrameReport) {
         runtime::log(&format!(
             "TRINO_FRAME:{scene} avg_us={} max_us={} frames={} fps={} cpu_us={} gpu_draws={} \
-             gpu_tris={} cpu_draws={} cpu_tris={} off_gpu={} {}\n",
+             gpu_tris={} cpu_draws={} cpu_tris={} off_gpu={} {} stereo_frames={} {}\n",
             r.avg_us,
             r.max_us,
             r.frames,
@@ -167,7 +176,9 @@ impl N3dsHost {
             r.cpu_draws,
             r.cpu_tris,
             off_gpu_list(&r.off_gpu),
-            trino_core::Platform::memory(&self.platform).heap_field()
+            trino_core::Platform::memory(&self.platform).heap_field(),
+            r.stereo_frames,
+            stereo_field(&r.stereo)
         ));
     }
 
@@ -247,4 +258,11 @@ pub fn off_gpu_list(off: &[u32; GpuReject::COUNT]) -> String {
 #[inline(never)]
 fn boxed<G>(make: impl FnOnce(Vec2) -> G) -> Box<G> {
     Box::new(make(N3dsHost::SCREEN))
+}
+
+/// The `stereo=` field of a `TRINO_FRAME` line.
+fn stereo_field(s: &trino_core::StereoStats) -> alloc::string::String {
+    let mut out = alloc::string::String::new();
+    let _ = s.write(&mut out);
+    out
 }

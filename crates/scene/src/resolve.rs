@@ -156,6 +156,8 @@ pub struct Resolved {
     pub cell_groups: Vec<Vec<String>>,
     /// The scene's shadows (`environment.shadows`, `None` when off).
     pub shadows: Option<trino_core::ShadowSettings>,
+    /// The scene's stereo 3D (`environment.stereo`, `None` when off).
+    pub stereo: Option<trino_core::StereoSettings>,
 }
 
 impl Resolved {
@@ -243,6 +245,7 @@ pub fn resolve_for(scene: &Scene, lib: &Library, time: f32, target: Target) -> R
         time,
         out: Resolved {
             shadows: scene.environment.core_shadows(),
+            stereo: scene.environment.core_stereo(),
             ..Resolved::default()
         },
         stack: Vec::new(),

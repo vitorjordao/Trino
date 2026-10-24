@@ -27,6 +27,9 @@ pub struct ShotOptions<'a> {
     /// Show the picture as a viewer with this color vision sees it (the
     /// renderer's simulation view).
     pub simulate: Option<trino_core::CvdMode>,
+    /// The 3DS top screen in stereo (issue #63): a preview view and the
+    /// simulated 3D slider (`ui shot --stereo anaglyph[:slider]`).
+    pub stereo: Option<(trino_render_wgpu::StereoView, f32)>,
 }
 
 /// A rendered screen: RGBA8, the 3DS's two screens stacked (top above,
@@ -132,6 +135,13 @@ pub fn render(
     if let Some(mode) = opts.simulate {
         r.set_cvd_view(mode);
     }
+    if let Some((view, slider)) = opts.stereo {
+        r.set_stereo_view(view);
+        r.set_stereo_slider(slider);
+    }
+    // A screen is drawn as a game draws it: stereo asked for first thing,
+    // so its nodes' depths float where the preview shows two eyes.
+    let stereo = trino_core::StereoSettings::new(0.06, 4.0);
     let sizes = |s: &str| trino_asset_pipeline::ui::sprite_size(root, manifest, platform, s);
     let flat = Flat::new(def, &sizes);
     let screen = flat.screen();
@@ -150,6 +160,9 @@ pub fn render(
             None => env,
         };
         r.begin_frame(CLEAR);
+        if opts.stereo.is_some() {
+            r.set_stereo(Some(&stereo));
+        }
         ui.draw(&mut r, &screen, &env);
         r.end_frame();
         if frame == 0 {

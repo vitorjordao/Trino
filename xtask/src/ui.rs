@@ -8,8 +8,9 @@
 //!   lack, keys a language lacks and the node and draw budgets
 //!   (`Caps::max_ui_nodes` / `max_ui_draws`). Non-zero exit on any issue.
 //! - `ui shot <screen> [--platform p] [--size WxH] [--lang l] [--scale s]
-//!   [--focus id] [--out x.png] [--json]` renders the screen headless as
-//!   the target shows it (the 3DS's two screens stacked).
+//!   [--focus id] [--stereo view[:slider]] [--out x.png] [--json]` renders
+//!   the screen headless as the target shows it (the 3DS's two screens
+//!   stacked; `--stereo` its top screen's stereo preview, issue #63).
 //! - `ui export <screen> <out.rs> [--platform p] [--json]` writes it as
 //!   `no_std` Rust (`pub static SCREEN: UiScreen<'static>`).
 //! - `ui list [--json]` lists the screens and the languages.
@@ -32,7 +33,8 @@ use crate::ui_render::{self, ShotOptions};
 const USAGE: &str = "xtask: usage:\n  \
     cargo xtask ui check [screen..] [--platform n64|3ds|pc|web] [--lang <lang>] [--json]\n  \
     cargo xtask ui shot <screen> [--platform n64|3ds|pc|web] [--size WxH] [--lang <lang>] \
-    [--scale S] [--focus <id>] [--out <file.png>] [--json]\n  \
+    [--scale S] [--focus <id>] [--stereo anaglyph|side-by-side|left|right|flip[:slider]] \
+    [--out <file.png>] [--json]\n  \
     cargo xtask ui export <screen> <out.rs> [--platform n64|3ds|pc|web] [--json]\n  \
     cargo xtask ui list [--json]";
 
@@ -76,6 +78,8 @@ struct Opts {
     scale: Option<f32>,
     focus: Option<String>,
     out: Option<PathBuf>,
+    /// `--stereo <view>[:slider]` (the 3DS top screen's stereo preview).
+    stereo: Option<(trino_render_wgpu::StereoView, f32)>,
 }
 
 impl Opts {
@@ -107,7 +111,17 @@ impl Opts {
             ),
             None => None,
         };
+        let stereo = match crate::web::take_value(args, "--stereo")? {
+            Some(s) => Some(trino_render_wgpu::StereoView::parse_with_slider(&s).ok_or(
+                format!(
+                    "--stereo {s}: needs anaglyph, side-by-side, left, right or flip, \
+                 with an optional :slider (0..1)"
+                ),
+            )?),
+            None => None,
+        };
         Ok(Opts {
+            stereo,
             platform,
             size,
             lang: crate::web::take_value(args, "--lang")?,
@@ -388,6 +402,9 @@ fn shot(project: &Project, screen: &str, opts: &Opts, json: bool) -> Result<bool
         return Err(format!("--lang {l}: no assets/i18n/{l}.ron"));
     }
     let family = opts.platform.unwrap_or(Family::Pc);
+    if opts.stereo.is_some() && family != Family::N3ds {
+        return Err("--stereo: only the 3DS has a stereo screen (add --platform 3ds)".into());
+    }
     let shot = ui_render::render(
         root,
         &manifest,
@@ -401,6 +418,7 @@ fn shot(project: &Project, screen: &str, opts: &Opts, json: bool) -> Result<bool
             focus: opts.focus.as_deref(),
             access: trino_core::ui::UiAccess::NONE,
             simulate: None,
+            stereo: opts.stereo,
         },
     )?;
     let out = opts.out.clone().unwrap_or_else(|| {

@@ -22,7 +22,7 @@ const USAGE: &str = "xtask: usage:\n  cargo xtask scene check [scene.ron ...]\n 
                      cargo xtask scene export [--platform pc|n64|3ds|web|n64_expanded|n3ds_new] \
                      <scene.ron> <out.rs>\n  \
                      cargo xtask scene budget <scene.ron> \
-                     [--platform pc|n64|3ds|web|n64_expanded|n3ds_new] [--json]";
+                     [--platform pc|n64|3ds|web|n64_expanded|n3ds_new] [--stereo] [--json]";
 
 /// `--platform`'s values, for its error.
 const PLATFORMS: &str = "pc, n64, 3ds, web, n64_expanded or n3ds_new";
@@ -225,11 +225,13 @@ fn export(root: &Path, input: &Path, output: &Path, target: Target) -> ExitCode 
 fn budget(root: &Path, args: &[&str]) -> ExitCode {
     let mut targets = Target::ALL.to_vec();
     let mut json = false;
+    let mut stereo = false;
     let mut file = None;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match *a {
             "--json" => json = true,
+            "--stereo" => stereo = true,
             "--platform" => match it.next().and_then(|v| Target::parse(v)) {
                 Some(t) => targets = vec![t],
                 None => {
@@ -285,7 +287,7 @@ fn budget(root: &Path, args: &[&str]) -> ExitCode {
             .collect();
         let resolved = resolve_for(&scene, &lib, 0.0, target);
         let screen = trino_scene::budget::screen_of(target, trino_core::Vec2::new(640.0, 480.0));
-        let b = trino_scene::budget::estimate(
+        let mut b = trino_scene::budget::estimate(
             &resolved,
             &|id| meshes.get(&id.0).map(Vec::as_slice),
             &camera,
@@ -293,6 +295,12 @@ fn budget(root: &Path, args: &[&str]) -> ExitCode {
             screen,
             target,
         );
+        // `--stereo` asks for the stereo frame even where the scene sets
+        // none (the default separation and convergence).
+        if stereo && b.stereo.is_none() {
+            let def = trino_scene::StereoDef::default().core();
+            b.stereo = trino_scene::budget::stereo_of(&b, Some(&def));
+        }
         rows.push(b);
     }
     if json {
@@ -355,6 +363,19 @@ fn budget(root: &Path, args: &[&str]) -> ExitCode {
                 } else {
                     caps.ram_bytes.to_string()
                 };
+                let stereo = match b.stereo {
+                    Some(s) => format!(
+                        "{{\"eyes\":{},\"tris\":{},\"gpu_vertex_passes\":{},\"cpu_draws\":{},\"cpu_verts\":{},\"separation\":{},\"convergence\":{}}}",
+                        s.eyes,
+                        s.tris,
+                        s.gpu_vertex_passes,
+                        s.cpu_draws,
+                        s.cpu_verts,
+                        s.separation,
+                        s.convergence
+                    ),
+                    None => "null".into(),
+                };
                 let s = &b.shadows;
                 let shadows = format!(
                     "{{\"tier\":\"{}\",\"casters\":{},\"blobs\":{},\"planar\":{},\"mapped\":{},\"over_budget\":{},\"receivers\":{}}}",
@@ -367,7 +388,7 @@ fn budget(root: &Path, args: &[&str]) -> ExitCode {
                     s.receivers
                 );
                 format!(
-                    "{{\"platform\":\"{}\",\"tier\":\"{}\",\"ram_bytes\":{ram},\"model_bytes\":{},\"cpu_cores\":{},\"cpu_mhz\":{},\"crowd_scale\":{},\"particle_scale\":{},\"draws\":{},\"tris\":{},\"verts\":{},\"culled\":{},\"billboards\":{},\"lod\":{:?},\"rsp_draws\":{},\"rsp_tris\":{},\"cpu_draws\":{},\"off_rsp\":[{}],\"gpu_draws\":{},\"gpu_tris\":{},\"off_gpu\":[{}],\"pc_gpu_draws\":{},\"pc_gpu_tris\":{},\"off_pc_gpu\":[{}],\"wasted\":[{}],\"water\":[{}],\"paths\":[{}],\"web_calls\":{},\"web_pipelines\":{},\"web_switches\":{},\"web_warnings\":[{}],\"shadows\":{shadows},\"n64_cpu_us\":{},\"n64_rsp_us\":{},\"n64_frame_us\":{}}}",
+                    "{{\"platform\":\"{}\",\"tier\":\"{}\",\"ram_bytes\":{ram},\"model_bytes\":{},\"cpu_cores\":{},\"cpu_mhz\":{},\"crowd_scale\":{},\"particle_scale\":{},\"draws\":{},\"tris\":{},\"verts\":{},\"culled\":{},\"billboards\":{},\"lod\":{:?},\"rsp_draws\":{},\"rsp_tris\":{},\"cpu_draws\":{},\"off_rsp\":[{}],\"gpu_draws\":{},\"gpu_tris\":{},\"off_gpu\":[{}],\"pc_gpu_draws\":{},\"pc_gpu_tris\":{},\"off_pc_gpu\":[{}],\"wasted\":[{}],\"water\":[{}],\"paths\":[{}],\"web_calls\":{},\"web_pipelines\":{},\"web_switches\":{},\"web_warnings\":[{}],\"shadows\":{shadows},\"stereo\":{stereo},\"n64_cpu_us\":{},\"n64_rsp_us\":{},\"n64_frame_us\":{}}}",
                     b.target.key(),
                     b.target.hw_tier().key(),
                     b.model_bytes,
@@ -436,6 +457,9 @@ fn budget(root: &Path, args: &[&str]) -> ExitCode {
             println!("       {line}");
         }
         if let Some(line) = trino_scene::budget::shadow_line(b) {
+            println!("       {line}");
+        }
+        if let Some(line) = trino_scene::budget::stereo_line(b) {
             println!("       {line}");
         }
         if b.target.base() == Target::N64 {

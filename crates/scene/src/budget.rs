@@ -82,6 +82,69 @@ pub struct FrameBudget {
     pub model_bytes: u32,
     /// The frame's shadows on this platform.
     pub shadows: ShadowBudget,
+    /// Stereo 3D where the platform has a stereo screen and the scene asks
+    /// for it (`environment.stereo`, issue #63): the frame at the full 3D
+    /// slider, both eyes.
+    pub stereo: Option<StereoBudget>,
+}
+
+/// A stereo frame's cost ([`stereo_of`]): the top screen drawn once per
+/// eye, so each eye pays the mono frame's work — the PICA200 runs each
+/// GPU T&L draw's vertex program twice, the CPU T&L transforms each of its
+/// draws twice, the 2D is drawn twice.
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct StereoBudget {
+    /// Pictures on the top screen.
+    pub eyes: u8,
+    /// Triangles rasterized, both eyes.
+    pub tris: u32,
+    /// GPU T&L vertex-program passes (draws × eyes).
+    pub gpu_vertex_passes: u32,
+    /// CPU T&L draws and vertices, both eyes.
+    pub cpu_draws: u32,
+    pub cpu_verts: u32,
+    /// The eyes' distance at the full slider and the convergence depth.
+    pub separation: f32,
+    pub convergence: f32,
+}
+
+/// The stereo frame of `b` under `settings` (`None`: the platform has no
+/// stereo screen, or no stereo is asked for).
+pub fn stereo_of(
+    b: &FrameBudget,
+    settings: Option<&trino_core::StereoSettings>,
+) -> Option<StereoBudget> {
+    let s = settings.filter(|s| s.enabled)?;
+    if !caps_of(b.target).stereo {
+        return None;
+    }
+    let eyes = 2;
+    Some(StereoBudget {
+        eyes,
+        tris: b.tris() * eyes as u32,
+        gpu_vertex_passes: b.gpu_draws * eyes as u32,
+        cpu_draws: b.cpu_draws * eyes as u32,
+        cpu_verts: b.cpu_tnl.verts * eyes as u32,
+        separation: s.max_separation,
+        convergence: s.convergence,
+    })
+}
+
+/// "stereo: 2 eyes — 1840 tris, 30 GPU vertex passes, 4 CPU T&L draws ..."
+pub fn stereo_line(b: &FrameBudget) -> Option<String> {
+    let s = b.stereo?;
+    Some(format!(
+        "stereo: {} eyes at the full slider — {} tris ({} per eye), {} GPU T&L vertex passes, \
+         {} CPU T&L draws ({} vertices); separation {} converging at {}",
+        s.eyes,
+        s.tris,
+        b.tris(),
+        s.gpu_vertex_passes,
+        s.cpu_draws,
+        s.cpu_verts,
+        s.separation,
+        s.convergence
+    ))
 }
 
 /// A platform's shadows ([`trino_core::shadow`]): its tier and what each
@@ -655,6 +718,7 @@ pub fn estimate<'m>(
             switches: calls.saturating_sub(1),
         };
     }
+    b.stereo = stereo_of(&b, resolved.stereo.as_ref());
     b
 }
 

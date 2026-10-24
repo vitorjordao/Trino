@@ -1,0 +1,1 @@
+{"cpus": 16, "auto": 15, "bake_ms": {"1": 1042, "auto": 530}, "decode": {"assets": 154, "bundle_bytes": 323272, "1": 1.6, "auto": 1.5}, "decode_big": {"assets": 48, "bundle_bytes": 72707384, "1": 453.5, "auto": 128.5}, "loading_gif": {"frames": 24, "ms": 204}, "n64_shim": {"1": 8814.0, "auto": 5934.5}, "n3ds_picasso": {"1": 13072.5, "auto": 4596.5}}

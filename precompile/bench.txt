@@ -1,0 +1,9 @@
+adapter: AMD Radeon Graphics (RADV RENOIR) (Vulkan, Mesa 26.0.8-1ubuntu0.3)  cpus: 16  threads (auto = all - 1): 15
+48 heavy fragment shaders x 96 unrolled noise taps (915 KB of WGSL)
+
+naga (create_shader_module, all 48):     330.3 ms
+driver compile, 1 thread:                  2667.8 ms
+driver compile, 15 threads:                 924.4 ms  (2.9x)
+pipeline cache: filling    939.2 ms, next launch     13.1 ms (71.6x, 1469 KB on disk)
+engine precompile(EVERYTHING): 14 passes, 35 pipelines,   196.8 ms on 1 thread(s)
+engine precompile(EVERYTHING): 14 passes, 35 pipelines,    40.2 ms on 14 thread(s)

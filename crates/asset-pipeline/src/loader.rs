@@ -346,6 +346,10 @@ fn push_entry(
     Ok(())
 }
 
+/// Decoded bytes a [`BundleLoad::step_many`] worker must get to be worth
+/// its thread.
+pub const MIN_BYTES_PER_WORKER: u64 = 512 * 1024;
+
 /// One asset group's bundle (`groups/<name>.tbnd`, issue #56) read a step at
 /// a time: what a PC host's `load_group` runs within its frame budget.
 pub struct BundleLoad {
@@ -458,7 +462,21 @@ impl BundleLoad {
             }
             Ok(raw)
         };
-        let decoded = crate::par::map_ordered(threads, &plans, |(at, slots)| {
+        // Threads only where the bytes pay for them: spawning workers costs
+        // more than decoding a step of small entries (a 315 KB group took
+        // 1.6 ms on one thread and 4.0 ms on 15).
+        let bytes: u64 = plans
+            .iter()
+            .map(|(at, slots)| {
+                b.entry(*at).raw as u64
+                    + slots
+                        .iter()
+                        .map(|&(_, i)| b.entry(i).raw as u64)
+                        .sum::<u64>()
+            })
+            .sum();
+        let workers = threads.min((bytes / MIN_BYTES_PER_WORKER).max(1) as u32);
+        let decoded = crate::par::map_ordered(workers, &plans, |(at, slots)| {
             let first = b.entry(*at);
             let bytes = decode(&first)?;
             let mut read = first.read_bytes() as u64;

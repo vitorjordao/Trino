@@ -177,6 +177,34 @@ unrolled noise taps (915 KB of WGSL), every variant distinct.
 - **The warm-up.** It moves the engine's ~10 hitches (up to ~40 ms each on this iGPU)
   out of gameplay.
 
+### In the game, and for the other budgets
+
+From `cargo test --release -p xtask --test precompile_shots -- --ignored --nocapture`,
+same machine, castle64's hub at 960×540 on the native profile. MSAA, the four
+color-vision views and a render scale of 0.5 switch on and off over 140 frames:
+
+| What | Before | After |
+|---|---|---|
+| worst frame (the one MSAA turns on) | 119.7 ms | 6.1 ms |
+| pipelines compiled inside frames | 20 | 0 |
+| warm-up before frame 0 (a loading screen) | none | 35.9 ms |
+| pixels of the compared frames | — | identical (518 400 of 518 400, 4 steps) |
+| asset bake of the engine's assets, 1 → 15 threads | 1 042 ms | 530 ms |
+| decode of a 315 KB group (154 assets), 1 → 15 threads | 1.6 ms | 1.5 ms |
+| decode of a 69 MB group (48 textures), 1 → 15 threads | 453.5 ms | 128.5 ms |
+| N64 rebuild after a shader edit, `--threads 1` → `auto` | 8.8 s | 5.9 s |
+| 3DS rebuild after a shader edit (picasso, shim, cargo jobs) | 13.1 s | 4.6 s |
+
+**Small groups.** The first version of `step_many` spawned a worker per asset of a step,
+and the small group took **4.0 ms on 15 threads against 1.6 ms on one**: thread start-up
+cost more than the decoding. A step now uses
+`min(threads, bytes / MIN_BYTES_PER_WORKER)` workers (512 KB each), so a small group stays
+on one thread and a large one spreads.
+
+The charts and pictures are drawn by `tools/evidence/precompile_charts.py` from the
+JSON the two tests write. The `loading.gif` is a loading screen whose bar is
+`precompile_status()`, with one tick per pass.
+
 ## Consequences
 
 - `TRINO_FRAME` gains `pipes=`. Older parsers ignore unknown keys.

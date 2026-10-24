@@ -191,6 +191,7 @@ fn heavy_shaders_cold_threaded_and_cached() {
 
     // The pipeline cache: fill it on one device, start a second from its
     // data (what the next launch does).
+    let mut cache_ms = (f64::NAN, f64::NAN);
     if dev.features().contains(wgpu::Features::PIPELINE_CACHE) {
         let fresh = |d: &wgpu::Device, data: Option<&[u8]>| unsafe {
             d.create_pipeline_cache(&wgpu::PipelineCacheDescriptor {
@@ -208,6 +209,7 @@ fn heavy_shaders_cold_threaded_and_cached() {
         let warm = fresh(&dw, Some(&data));
         let (m, _) = modules(&dw, &sources);
         let from_cache = compile(&dw, &m, n, Some(&warm));
+        cache_ms = (filling, from_cache);
         let _ = writeln!(
             out,
             "pipeline cache: filling {filling:8.1} ms, next launch {from_cache:8.1} ms \
@@ -223,6 +225,7 @@ fn heavy_shaders_cold_threaded_and_cached() {
     }
 
     // The engine's own warm-up, cold.
+    let mut engine = Vec::new();
     for threads in [1, n as u32] {
         let mut r = pollster::block_on(PcRenderer::new_headless(SimProfile::Native)).unwrap();
         r.set_hw_tnl(true);
@@ -236,10 +239,28 @@ fn heavy_shaders_cold_threaded_and_cached() {
             s.elapsed_us as f64 / 1e3,
             s.threads
         );
+        engine.push((s.elapsed_us as f64 / 1e3, s.threads, s.total));
     }
     println!("{out}");
     let dir =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/evidence/precompile");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("bench.txt"), &out).unwrap();
+    // For `tools/evidence/precompile_charts.py`.
+    let json = format!(
+        "{{\"adapter\":\"{} ({:?})\",\"shaders\":{VARIANTS},\"wgsl_kb\":{},\"threads\":{n},\
+         \"naga_ms\":{naga1:.1},\"compile_1\":{serial:.1},\"compile_n\":{parallel:.1},\
+         \"cache_fill\":{:.1},\"cache_next\":{:.1},\"passes\":{},\"engine_1\":{:.1},\
+         \"engine_n\":{:.1},\"engine_threads\":{}}}",
+        info.name,
+        info.backend,
+        sources.iter().map(String::len).sum::<usize>() / 1024,
+        cache_ms.0,
+        cache_ms.1,
+        engine[0].2,
+        engine[0].0,
+        engine[1].0,
+        engine[1].1,
+    );
+    std::fs::write(dir.join("bench.json"), json).unwrap();
 }

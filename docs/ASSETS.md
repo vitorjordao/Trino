@@ -485,6 +485,15 @@ A UI node takes `cvd_icon: "sprites/x"` too (TUIL version 2). Caption keys live 
 same `assets/i18n/<lang>.ron` tables as the screens' keys. `cargo xtask access check`
 validates all of it and lays every screen out at 200 % text;
 [ACCESSIBILITY.md](ACCESSIBILITY.md) shows the game side.
+## Achievements (ADR 0029)
+
+`assets/achievements.ron` (achievements, stats, rich-presence keys; the editor's Project
+› Achievements page) bakes to the `services/achievements` blob (`TACH`) on every target,
+with no manifest entry, beside the UI blobs. An achievement's bit in a save is its place
+in the file, frozen by `assets/achievements.lock` (`cargo xtask services lock`). Names and
+descriptions are string keys; icons are sprites. `cargo xtask services check` validates,
+`services export steam` writes Steamworks' files. See [SHIPPING.md](SHIPPING.md).
+
 ## Localization
 
 One file per language, `assets/i18n/<lang>.ron`, named after its `lang` ([ADR

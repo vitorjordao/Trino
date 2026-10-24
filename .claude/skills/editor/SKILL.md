@@ -69,7 +69,8 @@ TRINO_EDITOR_SCREENSHOT=target/launcher.png TRINO_EDITOR_SCREENSHOT_FRAME=10 car
 | `TRINO_EDITOR_SCREENSHOT=out.png` | save a PNG of the whole window, then exit |
 | `TRINO_EDITOR_SCREENSHOT_FRAME=N` | …after N frames (default 30; use ~60 so thumbnails finish) |
 | `TRINO_EDITOR_SELECT=<name>[,<name>…]` | start with those entities selected (the first is active; gizmo + inspector visible) |
-| `TRINO_EDITOR_TAB=scene\|game\|level\|animation\|mixer\|quality\|memory\|accessibility\|ui\|localization` | focused center tab (`mixer`, `quality`, `memory`, `accessibility`: the bottom dock's Mixer, Quality or Memory tab) |
+| `TRINO_EDITOR_TAB=scene\|game\|level\|animation\|mixer\|quality\|memory\|accessibility\|ui\|localization\|project` | focused center tab (`mixer`, `quality`, `memory`, `accessibility`: the bottom dock's Mixer, Quality or Memory tab; `project`: the Project tab) |
+| `TRINO_EDITOR_PROJECT_PAGE=packaging` | the Project tab opens on Packaging (default Achievements) |
 | `TRINO_EDITOR_LANG=<tag>` | the editor-wide preview language (issue #59): the Localization tab's, the UI tab's (unless `TRINO_EDITOR_UI` names one) and Play's `TRINO_LANG` |
 | `TRINO_EDITOR_ACCESS=cvd=deuteranopia,text=200,contrast=on` | the Accessibility tab's simulation at start: the Scene, Game and UI views through that color vision, the UI tab at that text size and contrast (`AccessSettings::parse_text` keys) |
 | `TRINO_EDITOR_UI=<screen>[,n64\|3ds\|pc\|4k\|wide\|web[,<lang>\|default[,<node id>]]]` | open the UI tab on `ui/<screen>.ui.ron` for that target and language with that node selected, e.g. `TRINO_EDITOR_UI=pause,3ds,pt-BR,quit` |
@@ -351,6 +352,22 @@ the watcher reloads outside edits and marks it stale on any `assets/` or `ui/` c
 viewport re-renders when it changes (`cvd_rendered`). The UI tab takes the same
 settings (`UiScreens::access`, part of its render key). The colors table's header names
 the modes too: a kittest click on "Deuteranopia" must pick the first match.
+
+## Project tab (issue #61, ADR 0029)
+
+- `shipping.rs` (state) + `panels/shipping.rs` (UI): **Achievements** edits
+  `assets/achievements.ron` (written when the user settles, like the Quality tab; outside
+  edits reload through the watcher), runs `trino_scene::services::check` every frame,
+  writes the lock and Steam's files (`trino_asset_pipeline::services::export_steam`, the
+  CLI's function), and previews the engine's list and popup in a `Preview` on the N64
+  look (Test unlock pushes a popup there). **Packaging** sets `trino.toml` keys through
+  `App::write_ship_key` → `trino_asset_pipeline::ship::set` (comments kept, refused
+  values rejected) and runs `cargo xtask package pc|deck check` as a job
+  (`App::run_xtask_job`, `shipping.job` polled in `ui`).
+- One tab with two pages, in the center dock: two more tabs didn't fit the bars at
+  960×600. `trino.toml` is watched when it exists.
+- Tests: `project_tab_edits_achievements_and_packaging_as_text`, the layout audit visits
+  both pages.
 
 ## Rules when changing the editor
 

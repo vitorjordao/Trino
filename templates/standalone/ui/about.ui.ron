@@ -1,0 +1,33 @@
+// About (`about.title` names it in a language menu): the game's title, its version and build (the game sets `version`
+// and `build` from `trino_core::build_info!()`: `cargo trino package`
+// stamps the commit and the date) and the engine credit. `preview` holds
+// what the editor and `ui shot` show.
+(
+    version: 1,
+    name: "about",
+    focus: "back",
+    on_back: "back",
+    preview: {"version": Text("1.0.0"), "build": Text("3f2a9c1e0b, 2026-10-23")},
+    root: (
+        children: [
+            (kind: Rect(), anchor: Fill, bleed: true, color: Some((0, 0, 0, 200))),
+            (
+                kind: Rect(border: 1, border_color: Some((255, 244, 200, 255))),
+                anchor: Center,
+                padding: (12, 10, 12, 12),
+                children: [
+                    (
+                        kind: Stack(gap: 4, align: Center),
+                        children: [
+                            (kind: Text, text: "{{name}}", text_scale: 2, color: Some((255, 214, 90, 255))),
+                            (kind: Text, key: "about.version", text: "Version", bind: "version"),
+                            (kind: Text, key: "about.build", text: "Build", bind: "build", size: (Px(150), Fit), align: Center, overflow: Wrap, color: Some((130, 140, 165, 255))),
+                            (kind: Text, key: "about.made_with", text: "Made with Trino", color: Some((130, 140, 165, 255))),
+                            (kind: Button, id: "back", key: "about.back", text: "Back", on_click: "back", min: (128, 18), padding: (6, 3, 6, 3)),
+                        ],
+                    ),
+                ],
+            ),
+        ],
+    ),
+)

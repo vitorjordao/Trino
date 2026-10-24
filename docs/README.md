@@ -13,6 +13,7 @@ explain the engine by topic and link the detailed material instead of repeating 
 | [ASSETS.md](ASSETS.md) | The manifest, masters and per-platform overrides, glTF to TMDL, fake objects, Blender, materials, impostors, particles, baked scenes, UI screens and string tables, validation commands |
 | [PLATFORMS.md](PLATFORMS.md) | PC (console looks, strict mode, live reload), Web (wasm, WebGPU/WebGL2, the browser self-test), N64 (Docker toolchain, ares), 3DS (devkitPro, Azahar), external projects |
 | [HARDWARE.md](HARDWARE.md) | Deploying to a real N64 (SummerCart64, EverDrive 64) or 3DS (3dslink), the debug log in the terminal, Luma3DS gdb |
+| [SHIPPING.md](SHIPPING.md) | Shipping a game: achievements, stats, presence and cloud saves on every target; PC packages (AppImage, .exe, .app), Steam and itch.io, signing, crash reports, the version stamp, `deck check`, the 3DS `.cia` |
 | [ACCESSIBILITY.md](ACCESSIBILITY.md) | The player's accessibility settings on every target: color vision through semantic palettes and icons, text scale and high contrast, captions, reduced motion, the flash guard, hold-to-toggle; `access check` and the editor's simulation |
 | [TESTING.md](TESTING.md) | The kinds of tests, coverage, and the feature-to-test matrix that a guard test keeps current |
 | [BACKLOG.md](BACKLOG.md) | The ranked roadmap and the record of what each pass delivered |
@@ -36,6 +37,7 @@ they read just as well for people. Each one is the most detailed source for its 
 | [hardware](../.agents/skills/hardware/SKILL.md) | Real-console deploys and how they are wired |
 | [n64-performance](../.agents/skills/n64-performance/SKILL.md) | Measuring the N64 frame, the perf gates, the cost model |
 | [engine-feature](../.agents/skills/engine-feature/SKILL.md) | Adding an engine service end to end on all three backends |
+| [shipping](../.agents/skills/shipping/SKILL.md) | Achievements and stats, `package pc`, Steam, crash reports, `deck check`, the `.cia` |
 | [new-project](../.agents/skills/new-project/SKILL.md) | `cargo xtask new`, standalone projects, `trino.toml` |
 | [test-all](../.agents/skills/test-all/SKILL.md), [ci](../.agents/skills/ci/SKILL.md) | The local gates and the GitHub Actions jobs |
 

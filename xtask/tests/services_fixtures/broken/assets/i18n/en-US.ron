@@ -1,0 +1,10 @@
+Strings(
+    lang: "en-US",
+    entries: {
+        "a.name": "A",
+        "a.desc": "A",
+        "b.name": "B",
+        "b.desc": "B",
+        "c.name": "C",
+    },
+)

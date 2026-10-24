@@ -13,10 +13,22 @@
 //! and the Controls screen (key rebinding). The Accessibility screen sets
 //! the player's settings (`Platform::set_access`): every screen draws with
 //! their text size, high contrast and color-vision icons.
+//!
+//! Achievements (`assets/achievements.ron`, docs/SHIPPING.md): moving
+//! unlocks `FIRST_STEPS`, the `STEPS` stat unlocks `WANDERER` at 100, a
+//! screen corner the hidden `CORNER`; the engine's popup shows each and
+//! the title's and pause menu's Achievements button opens the engine's
+//! list. The state also goes into the save (`save_begin`), which is where
+//! the N64 and the 3DS keep it; the PC and the Web keep their own copy too
+//! (Steam's, on a Steam build). About shows the stamped version.
 
 #![cfg_attr(any(target_os = "none", target_os = "horizon"), no_std)]
 
-use trino_core::ui::{ScreenBlob, StringsBlob, UiEvent};
+use trino_core::ui::{ScreenBlob, StringsBlob, UiEvent, UiStrings};
+use trino_core::{
+    AchievementId, AchievementList, AchievementState, AchievementTable, AchievementToast,
+    BuildInfo, OverlayStyle, StatId, StrKey,
+};
 use trino_core::{
     AccessSettings, Audio, BindDevice, CaptionMode, CvdMode, Bus, Button, Color, FontId, Game, GraphicsOptions, InputState,
     OptionsStyle, Platform, Renderer, SoundId, SpriteId, SpriteParams, Ui, UiEnv, Vec2,
@@ -27,6 +39,14 @@ pub const BEEP: SoundId = SoundId::from_path("sounds/beep");
 const SPEED: f32 = 120.0; // pixels per second
 /// The font the screens and the Graphics page use.
 const UI_FONT: FontId = FontId::from_path("fonts/trino5x7");
+/// This build: the About screen shows it (`cargo trino package` stamps it).
+pub const BUILD: BuildInfo = trino_core::build_info!();
+/// The achievements (`assets/achievements.ron`).
+pub const FIRST_STEPS: AchievementId = AchievementId::new("FIRST_STEPS");
+pub const CORNER: AchievementId = AchievementId::new("CORNER");
+pub const STEPS: StatId = StatId::new("STEPS");
+/// A step: this many pixels walked.
+const STEP_PX: f32 = 16.0;
 
 /// The Controls screen's rows: its action, the button it rebinds and the
 /// value that shows the key.
@@ -48,12 +68,21 @@ pub enum Mode {
     Controls { from_pause: bool },
     /// The player's accessibility settings, opened from Options.
     Access { from_pause: bool },
+    /// The engine's achievements list, from the title or the pause menu.
+    Achievements { from_pause: bool },
+    /// The game's version and the engine credit, from the title.
+    About,
+    /// "Send the crash report?", once, before the title (PC packages with
+    /// an endpoint).
+    CrashAsk,
 }
 
 /// What a menu asks of the platform; `update_with` (which has it) applies it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Ask {
     Graphics,
+    /// The crash question's answer.
+    Crash(trino_core::CrashConsent),
     Rebind(Button),
     ResetBindings,
 }
@@ -63,6 +92,8 @@ pub fn ask_for(action: &str) -> Option<Ask> {
     match action {
         "graphics" => Some(Ask::Graphics),
         "reset" => Some(Ask::ResetBindings),
+        "yes" => Some(Ask::Crash(trino_core::CrashConsent::Allow)),
+        "no" => Some(Ask::Crash(trino_core::CrashConsent::Deny)),
         _ => CONTROLS
             .iter()
             .find(|(a, ..)| *a == action)
@@ -80,6 +111,8 @@ pub struct {{name_camel}}Game {
     options: ScreenBlob,
     controls: ScreenBlob,
     access: ScreenBlob,
+    about: ScreenBlob,
+    crash: ScreenBlob,
     strings: StringsBlob,
     /// The player's accessibility settings: read from the platform, changed
     /// by the Accessibility screen, sent back (`dirty`) after the frame.
@@ -100,6 +133,21 @@ pub struct {{name_camel}}Game {
     interface_scale: f32,
     /// The menus' state: the focus, and the values they show and edit.
     pub ui: Ui<32>,
+    /// The unlock popup and the list screen (the engine's overlay), with the
+    /// table and state as of the last update.
+    pub toast: AchievementToast,
+    pub list: AchievementList,
+    table: AchievementTable<'static>,
+    achievements: AchievementState,
+    /// Pixels walked toward the next step; the steps reported.
+    walked: f32,
+    steps: i32,
+    /// The save was read (once, at the first update).
+    loaded: bool,
+    /// A save is being written (`save_step` each frame).
+    saving: bool,
+    /// What presence says (title or playing).
+    presence: Option<bool>,
 }
 
 impl {{name_camel}}Game {
@@ -115,6 +163,8 @@ impl {{name_camel}}Game {
             options: ScreenBlob::new("options"),
             controls: ScreenBlob::new("controls"),
             access: ScreenBlob::new("accessibility"),
+            about: ScreenBlob::new("about"),
+            crash: ScreenBlob::new("crash"),
             strings: StringsBlob::new("en-US"),
             settings: AccessSettings::DEFAULT,
             dirty: false,
@@ -126,6 +176,15 @@ impl {{name_camel}}Game {
             volumes_read: false,
             interface_scale: 1.0,
             ui: Ui::new(),
+            toast: AchievementToast::new(),
+            list: AchievementList::new(),
+            table: AchievementTable::EMPTY,
+            achievements: AchievementState::EMPTY,
+            walked: 0.0,
+            steps: 0,
+            loaded: false,
+            saving: false,
+            presence: None,
         }
     }
 
@@ -142,6 +201,12 @@ impl {{name_camel}}Game {
             (Mode::Title | Mode::Paused, "options") => Some(Mode::Options {
                 from_pause: self.mode == Mode::Paused,
             }),
+            (Mode::Title | Mode::Paused, "achievements") => Some(Mode::Achievements {
+                from_pause: self.mode == Mode::Paused,
+            }),
+            (Mode::Title, "about") => Some(Mode::About),
+            (Mode::About, "back") => Some(Mode::Title),
+            (Mode::CrashAsk, "yes" | "no") => Some(Mode::Title),
             (Mode::Options { from_pause }, "controls") => Some(Mode::Controls { from_pause }),
             (Mode::Options { from_pause }, "accessibility") => Some(Mode::Access { from_pause }),
             (Mode::Controls { from_pause } | Mode::Access { from_pause }, "back") => {
@@ -161,7 +226,9 @@ impl {{name_camel}}Game {
             Mode::Options { .. } => &self.options,
             Mode::Controls { .. } => &self.controls,
             Mode::Access { .. } => &self.access,
-            Mode::Play => return,
+            Mode::About => &self.about,
+            Mode::CrashAsk => &self.crash,
+            Mode::Play | Mode::Achievements { .. } => return,
         };
         if self.waiting {
             self.hold = true;
@@ -202,7 +269,13 @@ impl {{name_camel}}Game {
                     audio.play_sound(BEEP);
                     None
                 }
-                UiEvent::Back { action } => self.action(action),
+                UiEvent::Back { action } => {
+                    // Backing out of the crash question answers "no".
+                    if self.mode == Mode::CrashAsk {
+                        self.ask = self.ask.or(ask_for(action));
+                    }
+                    self.action(action)
+                }
                 UiEvent::Moved { .. } => None,
             };
             next = next.or(to);
@@ -252,6 +325,75 @@ impl {{name_camel}}Game {
     }
 }
 
+impl {{name_camel}}Game {
+    /// The save, once: the achievements stored in it go back to the
+    /// platform (where the N64 and the 3DS keep them). Then a save being
+    /// written goes on a step per frame, and the About screen's texts.
+    fn services(&mut self, platform: &mut dyn Platform) {
+        if !self.loaded {
+            self.loaded = true;
+            if platform.crash_reports().is_some_and(|c| c.should_ask()) && self.mode == Mode::Title {
+                self.go(Mode::CrashAsk);
+            }
+            let mut buf = [0u8; 128];
+            if let Ok(n) = platform.save_read(&mut buf)
+                && let Ok((saved, _)) = AchievementState::unpack(&buf[..n])
+            {
+                platform.restore_achievements(&saved);
+            }
+            let mut version = trino_core::TextBuf::<32>::new();
+            let _ = core::fmt::Write::write_str(&mut version, BUILD.version);
+            self.ui.set_text("version", version.as_str());
+            let mut build = trino_core::TextBuf::<48>::new();
+            let _ = core::fmt::Write::write_str(&mut build, BUILD.commit);
+            if !BUILD.date.is_empty() {
+                let _ = core::fmt::Write::write_fmt(&mut build, format_args!(", {}", BUILD.date));
+            }
+            self.ui.set_text("build", build.as_str());
+        }
+        if self.saving && platform.save_step(2000).unwrap_or(true) {
+            self.saving = false;
+            platform.cloud_sync_hint();
+        }
+        if let Some(t) = AchievementTable::from_platform(platform) {
+            self.table = t;
+        }
+        self.achievements = platform.achievements();
+    }
+
+    /// Tell the platform what this frame changed: steps (the `STEPS` stat
+    /// unlocks `WANDERER`), the first move, a corner, presence. A new
+    /// unlock saves.
+    fn report(&mut self, platform: &mut dyn Platform, (steps, pos): (i32, Vec2)) {
+        let playing = self.mode == Mode::Play;
+        if self.presence != Some(playing) {
+            self.presence = Some(playing);
+            let key = if playing { "presence.playing" } else { "presence.title" };
+            platform.set_presence(StrKey::new(key), &[]);
+        }
+        if self.steps == steps && self.pos == pos {
+            return;
+        }
+        let unlocked = platform.achievements().unlocked_count();
+        platform.unlock(FIRST_STEPS);
+        if self.steps != steps {
+            platform.set_stat(STEPS, self.steps);
+        }
+        let max = self.bounds - Vec2::new(16.0, 16.0);
+        let edge = |v: f32, hi: f32| v <= 0.0 || v >= hi;
+        if edge(self.pos.x, max.x) && edge(self.pos.y, max.y) {
+            platform.unlock(CORNER);
+        }
+        if platform.achievements().unlocked_count() != unlocked
+            && let Some(t) = AchievementTable::from_platform(platform)
+        {
+            let mut buf = [0u8; 128];
+            let n = platform.achievements().pack_for(&t, &mut buf);
+            self.saving = n > 0 && platform.save_begin(&buf[..n]).is_ok();
+        }
+    }
+}
+
 impl Game for {{name_camel}}Game {
     fn update_with(
         &mut self,
@@ -267,6 +409,9 @@ impl Game for {{name_camel}}Game {
         self.options.get(platform);
         self.controls.get(platform);
         self.access.get(platform);
+        self.about.get(platform);
+        self.crash.get(platform);
+        self.services(platform);
         self.strings.get(platform);
         // The host's settings, unless the screen just changed them.
         if !self.dirty && (platform.access() != self.settings || !self.shown) {
@@ -297,7 +442,10 @@ impl Game for {{name_camel}}Game {
                 self.ui.set_text(key, label.unwrap_or("-"));
             }
         }
+        let before = (self.steps, self.pos);
         self.update(input, audio, dt);
+        self.report(platform, before);
+        self.toast.update(platform, dt);
         if core::mem::take(&mut self.dirty) {
             platform.set_access(self.settings);
         }
@@ -305,6 +453,7 @@ impl Game for {{name_camel}}Game {
             Some(Ask::Graphics) => self.graphics.open(),
             Some(Ask::Rebind(button)) => platform.rebind(button, BindDevice::Keyboard),
             Some(Ask::ResetBindings) => platform.reset_bindings(),
+            Some(Ask::Crash(c)) => platform.set_crash_consent(c),
             None => {}
         }
     }
@@ -315,6 +464,18 @@ impl Game for {{name_camel}}Game {
             for (key, bus) in [("music", Bus::Music), ("sfx", Bus::Sfx)] {
                 self.ui.set(key, (audio.bus_volume(bus) * 10.0 + 0.5) as i32);
             }
+        }
+        if let Mode::Achievements { from_pause } = self.mode {
+            // B or Escape goes back where it came from.
+            if input.just_pressed(&self.prev, Button::B)
+                || input.key_pressed(&self.prev, trino_core::Key::Escape)
+            {
+                self.go(if from_pause { Mode::Paused } else { Mode::Title });
+            } else {
+                self.list.update(input, &self.table);
+            }
+            self.prev = *input;
+            return;
         }
         if self.mode != Mode::Play {
             self.menu(input, audio, dt);
@@ -335,8 +496,15 @@ impl Game for {{name_camel}}Game {
             dir.y = -1.0;
         }
         // Stick is Y-up; screen is Y-down.
+        let from = self.pos;
         self.pos.x = (self.pos.x + dir.x * SPEED * dt).clamp(0.0, self.bounds.x - 16.0);
         self.pos.y = (self.pos.y - dir.y * SPEED * dt).clamp(0.0, self.bounds.y - 16.0);
+        let d = self.pos - from;
+        self.walked += d.x.abs() + d.y.abs();
+        while self.walked >= STEP_PX {
+            self.walked -= STEP_PX;
+            self.steps += 1;
+        }
 
         if input.just_pressed(&self.prev, Button::A) {
             audio.play_sound(BEEP);
@@ -356,6 +524,9 @@ impl Game for {{name_camel}}Game {
             Mode::Options { .. } => Some(&self.options),
             Mode::Controls { .. } => Some(&self.controls),
             Mode::Access { .. } => Some(&self.access),
+            Mode::About => Some(&self.about),
+            Mode::CrashAsk => Some(&self.crash),
+            Mode::Achievements { .. } => None,
         };
         if self.mode != Mode::Title {
             renderer.draw_sprite(PLAYER, self.pos, &SpriteParams::default());
@@ -369,6 +540,19 @@ impl Game for {{name_camel}}Game {
                 None => self.ui.draw(renderer, screen, &env),
             }
         }
+        let strings: &dyn UiStrings = match self.strings.table() {
+            Some(t) => t,
+            None => &trino_core::ui::NoStrings,
+        };
+        let style = OverlayStyle {
+            font: UI_FONT,
+            ..OverlayStyle::DEFAULT.with_access(&self.settings)
+        };
+        if let Mode::Achievements { .. } = self.mode {
+            self.list
+                .draw(renderer, strings, &self.table, &self.achievements, &style);
+        }
+        self.toast.draw(renderer, strings, &self.table, &style);
         if self.graphics.is_open() {
             let style = OptionsStyle::DEFAULT;
             let at = (self.bounds - self.graphics.size(&style)) * 0.5;
@@ -509,6 +693,141 @@ mod tests {
         let x0 = game.pos.x;
         game.update(&input, &mut NullAudio, 0.5);
         assert!(game.pos.x > x0);
+    }
+
+    /// A console-like platform: the achievements table, the services every
+    /// backend holds, and a save in memory.
+    struct Console {
+        table: &'static [u8],
+        services: trino_core::HostedServices,
+        save: Vec<u8>,
+        crash: Option<trino_core::CrashReports>,
+    }
+
+    impl Platform for Console {
+        fn now_micros(&self) -> u64 {
+            0
+        }
+        fn log(&self, _: &str) {}
+        fn blob(&self, id: trino_core::BlobId) -> Option<&'static [u8]> {
+            (id == trino_core::services::table::BLOB).then_some(self.table)
+        }
+        fn services(&self) -> Option<&trino_core::HostedServices> {
+            Some(&self.services)
+        }
+        fn services_mut(&mut self) -> Option<&mut trino_core::HostedServices> {
+            Some(&mut self.services)
+        }
+        fn save_capacity(&self) -> usize {
+            2032
+        }
+        fn save_read(&mut self, buf: &mut [u8]) -> Result<usize, trino_core::SaveError> {
+            buf[..self.save.len()].copy_from_slice(&self.save);
+            Ok(self.save.len())
+        }
+        fn save_write(&mut self, data: &[u8]) -> Result<(), trino_core::SaveError> {
+            self.save = data.to_vec();
+            Ok(())
+        }
+        fn crash_reports(&self) -> Option<trino_core::CrashReports> {
+            self.crash
+        }
+        fn set_crash_consent(&mut self, c: trino_core::CrashConsent) {
+            if let Some(r) = &mut self.crash {
+                r.consent = c;
+            }
+        }
+    }
+
+    fn console(save: Vec<u8>) -> Console {
+        use trino_core::services::table::{self, AchievementRecord, StatRecord};
+        let a = |api, stat, hidden| AchievementRecord {
+            api,
+            name: "n",
+            description: "d",
+            icon: 0,
+            hidden,
+            stat,
+        };
+        let ach = [
+            a("FIRST_STEPS", None, false),
+            a("WANDERER", Some((0, 100)), false),
+            a("CORNER", None, true),
+        ];
+        let stats = [StatRecord {
+            api: "STEPS",
+            min: 0,
+            max: 1_000_000,
+            increment_only: true,
+        }];
+        let mut blob = vec![0u8; table::encoded_len(&ach, &stats, &[])];
+        table::encode(&ach, &stats, &[], &mut blob).unwrap();
+        Console {
+            table: Box::leak(blob.into_boxed_slice()),
+            services: trino_core::HostedServices::new(trino_core::ServiceBackend::Session),
+            save,
+            crash: None,
+        }
+    }
+
+    /// Moving unlocks FIRST_STEPS (a popup) and saves the achievements; a
+    /// new boot on the same save restores them, as an N64 or a 3DS does.
+    #[test]
+    fn moving_unlocks_an_achievement_that_the_save_keeps() {
+        let mut game = {{name_camel}}Game::new(Vec2::new(320.0, 240.0));
+        let mut host = console(Vec::new());
+        game.mode = Mode::Play;
+        let mut input = InputState::default();
+        input.set(Button::DpadRight, true);
+        for _ in 0..4 {
+            game.update_with(&mut host, &input, &mut NullAudio, 0.1);
+        }
+        assert!(host.is_unlocked(FIRST_STEPS));
+        assert!(host.stat(STEPS) > 0);
+        assert_eq!(game.toast.current(), Some(0));
+        assert!(!host.save.is_empty(), "the unlock saved");
+        let mut again = {{name_camel}}Game::new(Vec2::new(320.0, 240.0));
+        let mut next = console(host.save.clone());
+        again.update_with(&mut next, &InputState::default(), &mut NullAudio, 0.1);
+        assert!(next.is_unlocked(FIRST_STEPS), "restored from the save");
+        assert_eq!(again.toast.current(), None, "no popup for a restored one");
+        // The list opens from the title and B goes back.
+        again.mode = Mode::Title;
+        assert_eq!(
+            again.action("achievements"),
+            Some(Mode::Achievements { from_pause: false })
+        );
+        again.go(Mode::Achievements { from_pause: false });
+        let mut b = InputState::default();
+        b.set(Button::B, true);
+        again.update_with(&mut next, &b, &mut NullAudio, 0.1);
+        assert_eq!(again.mode, Mode::Title);
+        assert_eq!(again.action("about"), Some(Mode::About));
+    }
+
+    /// A report waiting with an endpoint and no answer: the question comes
+    /// first; its buttons answer through the platform and lead to the title.
+    #[test]
+    fn the_crash_question_comes_first_and_answers() {
+        use trino_core::{CrashConsent, CrashReports};
+        let mut game = {{name_camel}}Game::new(Vec2::new(320.0, 240.0));
+        let mut host = console(Vec::new());
+        host.crash = Some(CrashReports {
+            pending: 1,
+            consent: CrashConsent::Ask,
+            upload: true,
+        });
+        game.update_with(&mut host, &InputState::default(), &mut NullAudio, 0.1);
+        assert_eq!(game.mode, Mode::CrashAsk);
+        assert_eq!(ask_for("yes"), Some(Ask::Crash(CrashConsent::Allow)));
+        assert_eq!(game.action("no"), Some(Mode::Title));
+        game.ask = ask_for("yes");
+        game.update_with(&mut host, &InputState::default(), &mut NullAudio, 0.1);
+        assert_eq!(host.crash.unwrap().consent, CrashConsent::Allow);
+        // Answered (or no endpoint): never asked again.
+        let mut next = {{name_camel}}Game::new(Vec2::new(320.0, 240.0));
+        next.update_with(&mut host, &InputState::default(), &mut NullAudio, 0.1);
+        assert_eq!(next.mode, Mode::Title);
     }
 
     #[test]

@@ -32,6 +32,9 @@ pub struct N64Platform {
     pub(crate) groups: crate::assets::Groups,
     /// Accessibility settings, for the session (`Platform::access`).
     access: trino_core::HostedAccess,
+    /// Achievements and stats for the session (issue #61): the game's save
+    /// holds them (`AchievementState::pack_for`, `restore_achievements`).
+    services: trino_core::HostedServices,
 }
 
 /// An unfinished save: the planned body, how much of it is on the EEPROM,
@@ -71,6 +74,7 @@ impl N64Platform {
             tier: runtime::hw_tier(),
             groups: crate::assets::Groups::new(),
             access: trino_core::HostedAccess::new(),
+            services: trino_core::HostedServices::new(trino_core::ServiceBackend::Session),
         }
     }
 
@@ -187,6 +191,14 @@ impl Platform for N64Platform {
 
     fn set_access(&mut self, settings: trino_core::AccessSettings) {
         self.access.set(settings);
+    }
+
+    fn services(&self) -> Option<&trino_core::HostedServices> {
+        Some(&self.services)
+    }
+
+    fn services_mut(&mut self) -> Option<&mut trino_core::HostedServices> {
+        Some(&mut self.services)
     }
 
     /// The N64 has no language setting (issue #59): `None`, so the game

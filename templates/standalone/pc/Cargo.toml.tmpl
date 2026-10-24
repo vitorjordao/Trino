@@ -14,6 +14,12 @@ path = "src/main.rs"
 default = ["watch"]
 # Rebake + re-upload assets live when a master changes.
 watch = ["trino-runner-pc/watch"]
+# Gamepads (gilrs; Linux builds need libudev-dev). `cargo trino package pc`
+# turns it on.
+gamepad = ["trino-runner-pc/gamepad"]
+# Steam achievements, stats, Cloud, rich presence, Steam Input and the
+# overlay (`[steam] app_id` in trino.toml; `cargo trino package pc --steam`).
+steam = ["trino-runner-pc/steam"]
 
 [dependencies]
 {{name}} = { workspace = true }

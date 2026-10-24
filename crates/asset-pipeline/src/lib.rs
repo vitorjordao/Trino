@@ -37,6 +37,8 @@ pub mod particles;
 pub mod primitive;
 pub mod quality;
 pub mod resolve;
+pub mod services;
+pub mod ship;
 pub mod texture;
 pub mod tier;
 pub mod ui;

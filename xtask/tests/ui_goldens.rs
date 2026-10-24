@@ -64,7 +64,7 @@ fn starter_screens_match_their_goldens_on_every_profile() {
     let golden = root.join("tests/golden/pc");
     let bless = std::env::var("TRINO_BLESS").is_ok();
     let mut failures = Vec::new();
-    for screen in ["title", "pause", "options", "controls"] {
+    for screen in ["title", "pause", "options", "controls", "about", "crash"] {
         let def = starter(screen);
         for family in [Family::N64, Family::N3ds, Family::Pc] {
             let opts = ShotOptions {
@@ -152,10 +152,10 @@ fn starter_screens_fill_wide_and_4k_pictures() {
         assert_eq!(shot.stats.overflow, 0, "{w}x{h}");
         // The focused Play button: focus yellow at the center column, at
         // the button's place for this scale (centered stack, 24 units below
-        // the middle: rows of 18 with a gap of 6 → Play starts 12 units
+        // the middle: four rows of 18 with gaps of 6 → Play starts 45 units
         // above the stack's own center).
         let x = w / 2 - 40 * scale;
-        let y = h / 2 + (24 - 21 + 9) * scale;
+        let y = h / 2 - (45 - 24 - 9) * scale;
         let at = ((y * w + x) * 4) as usize;
         let px = &shot.rgba[at..at + 3];
         assert!(

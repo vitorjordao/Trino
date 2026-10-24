@@ -1,0 +1,7 @@
+# The bit order a shipped build used (`cargo xtask services lock`).
+# Append achievements; never reorder or remove a line: saves store bits.
+FIRST_COIN
+COINS_25
+FIRST_STAR
+ALL_STARS
+BOAR_STOMP

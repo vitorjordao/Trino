@@ -57,6 +57,9 @@ pub struct WebConfig {
     /// (`trino-access:<name>`; not in a self-test, a smoke run or under
     /// `?access`).
     pub keep_access: bool,
+    /// Read and store the achievements in `localStorage`
+    /// (`trino-services:<name>`; not in a self-test or a smoke run).
+    pub keep_services: bool,
     /// The color-vision simulation view (`?cvd=deuteranopia`, a review
     /// tool like the PC's `TRINO_CVD`).
     pub cvd: trino_core::CvdMode,
@@ -94,6 +97,7 @@ impl WebConfig {
             keep_quality: !deterministic,
             access: query.get("access"),
             keep_access: !deterministic && query.get("access").is_none(),
+            keep_services: !deterministic,
             cvd: query
                 .get("cvd")
                 .and_then(|m| trino_core::CvdMode::parse(&m))
@@ -181,6 +185,9 @@ pub struct WebHost {
     /// The accessibility settings' `localStorage` key
     /// (`trino-access:<save_name>`, the PC's `<save_name>.access`).
     access_key: String,
+    /// The achievements' `localStorage` key (`trino-services:<save_name>`,
+    /// the PC's `<save_name>.achievements`).
+    services_key: String,
     /// The quality presets (#55): start, calibration, cap, requests.
     quality: crate::quality::WebQuality,
     _observer: Option<Observer>,
@@ -303,6 +310,16 @@ impl WebHost {
             access = trino_core::AccessSettings::parse_text(access, forced);
         }
         platform.access.load(access);
+        // Achievements and stats (issue #61): the packed state, every bit
+        // and stat, base64 (the table isn't loaded yet; its indices are).
+        let services_key = format!("trino-services:{}", config.save_name);
+        if config.keep_services
+            && let Some(t) = local_storage().and_then(|s| s.get_item(&services_key).ok().flatten())
+            && let Some(bytes) = crate::b64::decode(&t)
+            && let Ok((state, _)) = trino_core::AchievementState::unpack(&bytes)
+        {
+            platform.services.load(state);
+        }
         let quality = crate::quality::WebQuality::new(
             &config.save_name,
             config.quality.clone(),
@@ -327,6 +344,7 @@ impl WebHost {
             audio_key,
             audio_saved: trino_core::BusSettings::default(),
             access_key,
+            services_key,
             quality,
         };
         host.renderer.set_cvd_view(host.config.cvd);
@@ -577,6 +595,18 @@ impl WebHost {
             let mut text = String::new();
             let _ = a.write_text(&mut text);
             let _ = s.set_item(&self.access_key, &text);
+        }
+        // Achievements or stats changed: store them (not in a self-test or a
+        // smoke run, like the accessibility settings).
+        if let Some(state) = self.platform.services.take_change()
+            && self.config.keep_services
+            && let Some(s) = local_storage()
+        {
+            use trino_core::services::{MAX_ACHIEVEMENTS, MAX_STATS};
+            let mut buf =
+                [0u8; trino_core::AchievementState::packed_len(MAX_ACHIEVEMENTS, MAX_STATS)];
+            let n = state.pack(MAX_ACHIEVEMENTS, MAX_STATS, &mut buf);
+            let _ = s.set_item(&self.services_key, &crate::b64::encode(&buf[..n]));
         }
         let running = self.audio.running();
         if self.last_audio != Some(running) {

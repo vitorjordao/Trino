@@ -153,6 +153,16 @@ pub fn bake(root: &Path, manifest: &Manifest, platform: Platform) -> Result<Vec<
         Ok(None) => {}
         Err(e) => errors.push(e),
     }
+    // The achievements table (issue #61), resident: the overlay and the
+    // platform's services read it any time.
+    match crate::services::bake(root) {
+        Ok(Some(bytes)) => out.push(UiBlob {
+            logical: crate::services::LOGICAL.to_string(),
+            bytes,
+        }),
+        Ok(None) => {}
+        Err(e) => errors.push(e),
+    }
     if errors.is_empty() {
         Ok(out)
     } else {

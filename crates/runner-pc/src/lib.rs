@@ -51,8 +51,14 @@
 //! `TRINO_FRAME:` line ends with the 1% lows and the quality in effect.
 //! See [`quality::QualityHost`].
 
+pub mod crash;
+pub mod package;
 pub mod quality;
+#[cfg(feature = "steam")]
+pub mod steam;
+pub mod store;
 
+pub use package::PackageInfo;
 pub use quality::QualityHost;
 
 use std::path::{Path, PathBuf};
@@ -102,6 +108,15 @@ pub struct RunConfig {
     pub target: PathBuf,
     pub save_name: String,
     pub default_profile: Option<SimProfile>,
+    /// Where saves and settings go (`None`: `<target>/save`). A package
+    /// sets the user's data folder; `TRINO_SAVE_DIR` overrides either.
+    pub save_dir: Option<PathBuf>,
+    /// The package this executable is part of ([`package::detect`]): its
+    /// assets are pre-baked beside it.
+    pub package: Option<PackageInfo>,
+    /// The game's build (`trino_core::build_info!()` in its host's `main`):
+    /// crash reports name it (a package's marker wins).
+    pub build: Option<trino_core::BuildInfo>,
 }
 
 impl RunConfig {
@@ -113,7 +128,84 @@ impl RunConfig {
             root,
             save_name: "game".into(),
             default_profile: None,
+            save_dir: None,
+            package: None,
+            build: None,
         }
+    }
+
+    /// Who a crash report names: the package's marker, else the build.
+    pub fn crash_info(&self) -> crash::CrashInfo {
+        let profile = self
+            .default_profile
+            .map(|p| format!("{p:?}").to_lowercase())
+            .unwrap_or_else(|| "n64".into());
+        match (&self.package, &self.build) {
+            (Some(p), _) => crash::CrashInfo {
+                game: p.name.clone(),
+                version: p.version.clone(),
+                commit: p.commit.clone(),
+                date: p.date.clone(),
+                profile,
+            },
+            (None, Some(b)) => crash::CrashInfo {
+                game: b.name.into(),
+                version: b.version.into(),
+                commit: b.commit.into(),
+                date: b.date.into(),
+                profile,
+            },
+            (None, None) => crash::CrashInfo {
+                game: self.save_name.clone(),
+                version: "?".into(),
+                commit: "dev".into(),
+                date: String::new(),
+                profile,
+            },
+        }
+    }
+
+    /// Where crash reports may be sent: the package's `crash_upload`, else
+    /// `TRINO_CRASH_UPLOAD` (a local collector while developing).
+    pub fn crash_endpoint(&self) -> Option<String> {
+        self.package
+            .as_ref()
+            .and_then(|p| p.crash_upload.clone())
+            .or_else(|| std::env::var("TRINO_CRASH_UPLOAD").ok())
+            .filter(|u| !u.is_empty())
+    }
+
+    /// The player's answer to "send crash reports?" (`<save_name>.crash`).
+    pub fn crash_file(&self) -> PathBuf {
+        self.save_file().with_extension("crash")
+    }
+
+    /// Run as `package` says (what [`run`] does when the executable sits in
+    /// a package): its title, its baked assets, its profile, the user's
+    /// data folder for saves (`TRINO_SAVE_DIR` wins).
+    pub fn with_package(mut self, package: PackageInfo) -> Self {
+        if !package.title.is_empty() {
+            self.title = package.title.clone();
+        }
+        self.default_profile = package.profile().or(Some(SimProfile::Native));
+        self.save_dir =
+            package::user_data_dir(&package.save_dir).or_else(|| Some(package.dir.join("save")));
+        self.package = Some(package);
+        self.with_env_save_dir()
+    }
+
+    fn with_env_save_dir(mut self) -> Self {
+        if let Some(d) = std::env::var_os("TRINO_SAVE_DIR").filter(|d| !d.is_empty()) {
+            self.save_dir = Some(PathBuf::from(d));
+        }
+        self
+    }
+
+    /// The folder saves, settings, achievements and crash reports go to.
+    pub fn save_dir(&self) -> PathBuf {
+        self.save_dir
+            .clone()
+            .unwrap_or_else(|| self.target.join("save"))
     }
 
     pub fn assets_dir(&self) -> PathBuf {
@@ -121,13 +213,14 @@ impl RunConfig {
     }
 
     pub fn baked_dir(&self) -> PathBuf {
-        self.target.join("assets/pc")
+        match &self.package {
+            Some(p) => p.assets_dir(),
+            None => self.target.join("assets/pc"),
+        }
     }
 
     pub fn save_file(&self) -> PathBuf {
-        self.target
-            .join("save")
-            .join(format!("{}.sav", self.save_name))
+        self.save_dir().join(format!("{}.sav", self.save_name))
     }
 
     /// Display settings, next to the save.
@@ -157,6 +250,12 @@ impl RunConfig {
     /// text, `key=value` lines: `trino_platform_pc::system::access_settings_to_text`).
     pub fn access_file(&self) -> PathBuf {
         self.save_file().with_extension("access")
+    }
+
+    /// Achievements and stats (`<save_name>.achievements`, plain text:
+    /// `trino_platform_pc::system::services_to_text`; issue #61).
+    pub fn services_file(&self) -> PathBuf {
+        self.save_file().with_extension("achievements")
     }
 }
 
@@ -404,6 +503,55 @@ pub fn save_access_settings(platform: &mut PcPlatform, file: &Path, persist: boo
     let _ = std::fs::write(file, trino_platform_pc::system::access_settings_to_text(&s));
 }
 
+/// Load the achievements and stats into `platform` (after the assets: the
+/// names resolve through the baked table). Returns whether changes may be
+/// persisted: not on smoke runs.
+pub fn load_services(platform: &mut PcPlatform, file: &Path, smoke: bool) -> bool {
+    if smoke {
+        return false;
+    }
+    let table = trino_core::AchievementTable::from_platform(platform);
+    if let (Ok(text), Some(table)) = (std::fs::read_to_string(file), table) {
+        let state = trino_platform_pc::system::services_from_text(&text, &table);
+        platform.load_services(state);
+    }
+    true
+}
+
+/// Persist the achievements and stats when they changed (and `persist`).
+pub fn save_services(platform: &mut PcPlatform, file: &Path, persist: bool) {
+    let Some(state) = platform.take_services_change() else {
+        return;
+    };
+    if !persist {
+        return;
+    }
+    let Some(table) = trino_core::AchievementTable::from_platform(platform) else {
+        return;
+    };
+    if let Some(dir) = file.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = std::fs::write(
+        file,
+        trino_platform_pc::system::services_to_text(&state, &table),
+    );
+}
+
+/// An RGBA image as a PNG (the smoke run's `TRINO_SCREENSHOT`).
+pub fn write_png(path: &Path, w: u32, h: u32, rgba: &[u8]) -> Result<(), String> {
+    if let Some(d) = path.parent() {
+        let _ = std::fs::create_dir_all(d);
+    }
+    let f = std::fs::File::create(path).map_err(|e| e.to_string())?;
+    let mut e = png::Encoder::new(std::io::BufWriter::new(f), w, h);
+    e.set_color(png::ColorType::Rgba);
+    e.set_depth(png::BitDepth::Eight);
+    e.write_header()
+        .and_then(|mut w| w.write_image_data(rgba))
+        .map_err(|e| e.to_string())
+}
+
 /// `TRINO_SIM`, defaulting to the N64 look.
 pub fn profile_from_env() -> SimProfile {
     std::env::var("TRINO_SIM")
@@ -424,6 +572,11 @@ pub fn tier_from_env() -> trino_core::HwTier {
 /// Open a window and run the game made by `make(screen)` until closed.
 /// Panics with a readable message on setup errors (bad assets, no GPU).
 pub fn run<G: Game + 'static>(config: RunConfig, make: impl FnOnce(Vec2) -> G + 'static) {
+    let config = match package::detect() {
+        Some(p) => config.with_package(p),
+        None => config.with_env_save_dir(),
+    };
+    crash::install(config.crash_info(), &config.save_dir());
     let smoke_frames = std::env::var("TRINO_SMOKE_FRAMES")
         .ok()
         .and_then(|v| v.parse().ok());
@@ -457,6 +610,13 @@ struct Ctx {
     audio_saved: trino_core::BusSettings,
     /// Whether accessibility changes go to `<save_name>.access`.
     access_persist: bool,
+    /// Whether achievements go to `<save_name>.achievements`.
+    services_persist: bool,
+    /// A store's services (Steam), when this run has one.
+    store: Option<Box<dyn store::Store>>,
+    /// Where crash reports go and may be sent.
+    crash_dir: PathBuf,
+    crash_endpoint: Option<String>,
     input: PcInput,
     platform: PcPlatform,
     /// The `native` profile's quality (the consoles' is fixed).
@@ -503,6 +663,13 @@ impl Host {
         if settings.fullscreen {
             attrs = attrs.with_fullscreen(Some(Fullscreen::Borderless(None)));
         }
+        // A package's icon (`icon.png` beside its marker) on the window.
+        if let Some(p) = &cfg.package
+            && let Ok((w, h, rgba)) = trino_asset_pipeline::decode_png(&p.dir.join("icon.png"))
+            && let Ok(icon) = winit::window::Icon::from_rgba(rgba, w, h)
+        {
+            attrs = attrs.with_window_icon(Some(icon));
+        }
         let window = Arc::new(
             event_loop
                 .create_window(attrs)
@@ -520,12 +687,15 @@ impl Host {
         if let Some(h) = heap() {
             platform.set_heap(h);
         }
-        trino_asset_pipeline::bake_all(
-            &cfg.assets_dir(),
-            trino_asset_pipeline::Platform::Pc,
-            &cfg.baked_dir(),
-        )
-        .unwrap_or_else(|e| panic!("asset bake failed: {e}"));
+        // A package ships its assets baked; a development run bakes them.
+        if cfg.package.is_none() {
+            trino_asset_pipeline::bake_all(
+                &cfg.assets_dir(),
+                trino_asset_pipeline::Platform::Pc,
+                &cfg.baked_dir(),
+            )
+            .unwrap_or_else(|e| panic!("asset bake failed: {e}"));
+        }
         upload_assets(
             &cfg.baked_dir(),
             &mut renderer,
@@ -535,7 +705,9 @@ impl Host {
         )
         .unwrap_or_else(|e| panic!("failed to load baked assets: {e}"));
         let mut groups = GroupLoader::new(&cfg.baked_dir(), &renderer, &mut platform);
-        if let Some(plan) = GroupLoader::strict_plan(&cfg.assets_dir(), &renderer) {
+        if cfg.package.is_none()
+            && let Some(plan) = GroupLoader::strict_plan(&cfg.assets_dir(), &renderer)
+        {
             groups = groups.with_plan(plan);
             groups.check_boot();
         }
@@ -545,20 +717,55 @@ impl Host {
             &cfg.access_file(),
             self.smoke_frames.is_some(),
         );
+        let services_persist = load_services(
+            &mut platform,
+            &cfg.services_file(),
+            self.smoke_frames.is_some(),
+        );
+        let steam_app = cfg.package.as_ref().and_then(|p| p.steam_app_id);
+        let manifest = cfg.package.as_ref().and_then(|p| {
+            let m = p.dir.join(format!("game_actions_{}.vdf", p.steam_app_id?));
+            m.is_file().then_some(m)
+        });
+        let store = store::connect(steam_app, manifest.as_deref(), &mut platform);
+        // Crash reports: the GPU for the next one, what earlier runs left,
+        // sent now if the player said yes.
+        crash::set_gpu(&renderer.adapter_info());
+        let crash_dir = crash::dir(&cfg.save_dir());
+        let crash_endpoint = cfg.crash_endpoint();
+        let consent = crash::load_consent(&cfg.crash_file());
+        platform.set_crash_reports(Some(crash::status(
+            &crash_dir,
+            consent,
+            crash_endpoint.as_deref(),
+        )));
+        if let Some(url) = crash_endpoint.clone()
+            && self.smoke_frames.is_none()
+        {
+            let dir = crash_dir.clone();
+            std::thread::spawn(move || crash::upload_pending(&dir, &url, consent));
+        }
 
         #[cfg(feature = "watch")]
         let (asset_events, watcher) = {
             let (tx, rx) = std::sync::mpsc::channel();
-            let watcher = trino_asset_pipeline::watch::watch(
-                cfg.assets_dir(),
-                trino_asset_pipeline::Platform::Pc,
-                cfg.baked_dir(),
-                move |changed| {
-                    let _ = tx.send(changed);
-                },
-            )
-            .expect("failed to start asset watcher");
-            (rx, Box::new(watcher) as Box<dyn std::any::Any>)
+            // A package has no masters to watch.
+            let watcher: Box<dyn std::any::Any> = if cfg.package.is_some() {
+                Box::new(())
+            } else {
+                Box::new(
+                    trino_asset_pipeline::watch::watch(
+                        cfg.assets_dir(),
+                        trino_asset_pipeline::Platform::Pc,
+                        cfg.baked_dir(),
+                        move |changed| {
+                            let _ = tx.send(changed);
+                        },
+                    )
+                    .expect("failed to start asset watcher"),
+                )
+            };
+            (rx, watcher)
         };
 
         // The picture for the window as created (fullscreen may differ
@@ -597,6 +804,10 @@ impl Host {
             audio,
             audio_saved,
             access_persist,
+            services_persist,
+            store,
+            crash_dir,
+            crash_endpoint,
             input,
             platform,
             quality,
@@ -726,7 +937,10 @@ impl ApplicationHandler for Host {
                 // Clamp dt: pauses and window drags must not teleport.
                 let dt = (now - ctx.last_frame).as_secs_f32().min(0.1);
                 ctx.last_frame = now;
-                let input = ctx.input.poll();
+                let mut input = ctx.input.poll();
+                if let Some(s) = &mut ctx.store {
+                    s.input(&mut input, &mut ctx.platform);
+                }
                 ctx.groups
                     .pump(&mut ctx.renderer, &mut ctx.audio, &mut ctx.platform);
                 ctx.game
@@ -741,6 +955,33 @@ impl ApplicationHandler for Host {
                     &mut ctx.platform,
                     &self.config.access_file(),
                     ctx.access_persist,
+                );
+                if let Some(s) = &mut ctx.store {
+                    s.pump(&mut ctx.platform);
+                }
+                if let Some(c) = ctx.platform.take_crash_consent() {
+                    crash::save_consent(&self.config.crash_file(), c);
+                    if let Some(url) = ctx.crash_endpoint.clone() {
+                        let dir = ctx.crash_dir.clone();
+                        std::thread::spawn(move || crash::upload_pending(&dir, &url, c));
+                    }
+                }
+                // `TRINO_CRASH_AFTER=N`: a deliberate panic at frame N (the
+                // crash report's end-to-end check).
+                if let Some(n) = std::env::var("TRINO_CRASH_AFTER")
+                    .ok()
+                    .and_then(|v| v.parse::<u64>().ok())
+                    && self.frames + 1 >= n
+                {
+                    panic!(
+                        "TRINO_CRASH_AFTER: deliberate crash at frame {}",
+                        self.frames + 1
+                    );
+                }
+                save_services(
+                    &mut ctx.platform,
+                    &self.config.services_file(),
+                    ctx.services_persist,
                 );
                 if let Some(q) = &mut ctx.quality {
                     q.end_frame(&mut ctx.renderer, &mut ctx.platform);
@@ -760,6 +1001,14 @@ impl ApplicationHandler for Host {
                     println!("{}", self.meter.line(&self.config.save_name));
                     println!("{}", texture_line(&ctx.renderer));
                     println!("{}", audio_line(&ctx.audio));
+                    if let Ok(path) = std::env::var("TRINO_SCREENSHOT") {
+                        let (w, h) = ctx.renderer.internal_size();
+                        let rgba = ctx.renderer.read_offscreen();
+                        match write_png(Path::new(&path), w, h, &rgba) {
+                            Ok(()) => println!("TRINO_SCREENSHOT: {path}"),
+                            Err(e) => eprintln!("TRINO_SCREENSHOT {path}: {e}"),
+                        }
+                    }
                     println!("TRINO_RUN_OK frames={}", self.frames);
                     event_loop.exit();
                     return;

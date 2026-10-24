@@ -1,0 +1,46 @@
+// castle64's achievements (issue #61): the services self-test step and the
+// game's overlay read them (`services/achievements`). An achievement's bit
+// is its place here: append, never reorder (assets/achievements.lock).
+(
+    version: 1,
+    achievements: [
+        (
+            id: "FIRST_COIN",
+            name: "ach.first_coin.name",
+            description: "ach.first_coin.desc",
+            icon: "sprites/coin",
+        ),
+        (
+            id: "COINS_25",
+            name: "ach.coins_25.name",
+            description: "ach.coins_25.desc",
+            icon: "sprites/coin",
+            stat: "COINS",
+            threshold: 25,
+        ),
+        (
+            id: "FIRST_STAR",
+            name: "ach.first_star.name",
+            description: "ach.first_star.desc",
+            icon: "sprites/c64_star",
+        ),
+        (
+            id: "ALL_STARS",
+            name: "ach.all_stars.name",
+            description: "ach.all_stars.desc",
+            stat: "STARS",
+            threshold: 4,
+        ),
+        (
+            id: "BOAR_STOMP",
+            name: "ach.boar_stomp.name",
+            description: "ach.boar_stomp.desc",
+            hidden: true,
+        ),
+    ],
+    stats: [
+        (id: "COINS", min: 0, max: 9999, increment_only: true),
+        (id: "STARS", min: 0, max: 4, increment_only: true),
+    ],
+    presence: ["presence.hub", "presence.stage"],
+)

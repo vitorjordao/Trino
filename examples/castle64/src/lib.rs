@@ -45,6 +45,10 @@ use trino_core::{
     PointerButton, Rect, Renderer, Screen, Shading, SoundId, SpriteId, SpriteParams, TextAlign,
     TextBuf, TextParams, Transform3, Vec2, Vec3, ground_pool,
 };
+use trino_core::{
+    AchievementId, AchievementList, AchievementState, AchievementTable, AchievementToast,
+    OverlayStyle, StatId,
+};
 
 // ------------------------------------------------------------ handles ----
 
@@ -211,7 +215,23 @@ pub struct Castle64Game {
     pub captions: Captions,
     /// The captions' texts (`assets/i18n/en-US.ron`).
     strings: trino_core::ui::StringsBlob,
+    /// Achievements (issue #61): the unlock popup, the list (Y opens it),
+    /// the table and state as of the last update, and what the platform
+    /// last heard (coins, stars, stomps, the level for presence).
+    pub toast: AchievementToast,
+    pub achievement_list: Option<AchievementList>,
+    ach_table: AchievementTable<'static>,
+    ach_state: AchievementState,
+    reported: (u32, u32, u32, usize),
+    stomps: u32,
 }
+
+/// castle64's achievements (`assets/achievements.ron`).
+pub const ACH_FIRST_COIN: AchievementId = AchievementId::new("FIRST_COIN");
+pub const ACH_FIRST_STAR: AchievementId = AchievementId::new("FIRST_STAR");
+pub const ACH_BOAR_STOMP: AchievementId = AchievementId::new("BOAR_STOMP");
+pub const STAT_COINS: StatId = StatId::new("COINS");
+pub const STAT_STARS: StatId = StatId::new("STARS");
 
 /// Onda triangular 0..1 com período 1.
 fn tri_wave(t: f32) -> f32 {
@@ -252,6 +272,12 @@ impl Castle64Game {
             access_data: AccessBlob::new(),
             captions: Captions::new(),
             strings: trino_core::ui::StringsBlob::new("en-US"),
+            toast: AchievementToast::new(),
+            achievement_list: None,
+            ach_table: AchievementTable::EMPTY,
+            ach_state: AchievementState::EMPTY,
+            reported: (0, 0, 0, usize::MAX),
+            stomps: 0,
         };
         game.goto_level(0);
         game
@@ -344,6 +370,55 @@ impl Castle64Game {
         n
     }
 
+    /// Tell the platform what changed since the last frame: the coin and
+    /// star stats (their thresholds unlock `COINS_25` and `ALL_STARS`), the
+    /// first coin, star and stomp, the level for presence. Nothing when
+    /// nothing changed, so a frame costs one comparison.
+    fn report_services(&mut self, platform: &mut dyn Platform) {
+        let now = (
+            self.total_coins(),
+            self.star_count(),
+            self.stomps,
+            self.level,
+        );
+        if now == self.reported {
+            return;
+        }
+        let (coins, stars, stomps, level) = now;
+        if coins != self.reported.0 && coins > 0 {
+            platform.set_stat(STAT_COINS, coins as i32);
+            platform.unlock(ACH_FIRST_COIN);
+        }
+        if stars != self.reported.1 && stars > 0 {
+            platform.set_stat(STAT_STARS, stars as i32);
+            platform.unlock(ACH_FIRST_STAR);
+        }
+        if stomps != self.reported.2 && stomps > 0 {
+            platform.unlock(ACH_BOAR_STOMP);
+        }
+        if level != self.reported.3 {
+            match level {
+                0 => platform.set_presence(trino_core::StrKey::new("presence.hub"), &[]),
+                n => platform.set_presence(
+                    trino_core::StrKey::new("presence.stage"),
+                    &[trino_core::Arg::int("stage", n as i64)],
+                ),
+            }
+        }
+        if let Some(t) = AchievementTable::from_platform(platform) {
+            self.ach_table = t;
+        }
+        self.ach_state = platform.achievements();
+        self.reported = now;
+    }
+
+    fn overlay_style(&self) -> OverlayStyle {
+        OverlayStyle {
+            font: F_HUD,
+            ..OverlayStyle::DEFAULT.with_access(&self.access)
+        }
+    }
+
     fn respawn(&mut self, audio: &mut dyn Audio) {
         audio.play_sound(SND_HURT);
         self.goto_level(self.level);
@@ -371,6 +446,28 @@ impl Game for Castle64Game {
             self.prev = *input;
             return;
         }
+        // Y opens the achievements list; Y or B closes it. The game waits.
+        if input.just_pressed(&self.prev, Button::Y) {
+            self.achievement_list = match self.achievement_list {
+                Some(_) => None,
+                None => Some(AchievementList::new()),
+            };
+            if let Some(t) = AchievementTable::from_platform(platform) {
+                self.ach_table = t;
+            }
+            self.ach_state = platform.achievements();
+            self.prev = *input;
+            return;
+        }
+        if let Some(list) = &mut self.achievement_list {
+            if input.just_pressed(&self.prev, Button::B) {
+                self.achievement_list = None;
+            } else {
+                list.update(input, &self.ach_table);
+            }
+            self.prev = *input;
+            return;
+        }
         self.access = platform.access();
         self.captions
             .configure(self.access_data.get(platform), &self.access);
@@ -380,6 +477,8 @@ impl Game for Castle64Game {
         captions.update(dt);
         self.update(input, &mut captions.wrap(audio), dt);
         self.captions = captions;
+        self.report_services(platform);
+        self.toast.update(platform, dt);
     }
 
     fn update(&mut self, input: &InputState, audio: &mut dyn Audio, dt: f32) {
@@ -599,6 +698,7 @@ impl Game for Castle64Game {
                 let player_feet_y = self.pos.y - PLAYER_HALF.y;
                 if self.vel.y < -1.0 && player_feet_y > e.pos.y + 0.1 {
                     e.alive = false;
+                    self.stomps += 1;
                     self.vel.y = STOMP_BOUNCE;
                     audio.play_sound(SND_COIN);
                 } else {
@@ -1080,6 +1180,17 @@ impl Game for Castle64Game {
                 .draw(renderer, F_HUD, (self.screen - size) * 0.5, &style);
         }
 
+        // Achievements: the list (Y) over everything, the unlock popup.
+        let style = self.overlay_style();
+        let strings: &dyn trino_core::ui::UiStrings = match self.strings.table() {
+            Some(t) => t,
+            None => &trino_core::ui::NoStrings,
+        };
+        if let Some(list) = &mut self.achievement_list {
+            list.draw(renderer, strings, &self.ach_table, &self.ach_state, &style);
+        }
+        self.toast.draw(renderer, strings, &self.ach_table, &style);
+
         // Captions over the top screen, last (nothing while none is up).
         match self.strings.table() {
             Some(t) => self.captions.draw(renderer, t, &self.caption_style()),
@@ -1402,6 +1513,95 @@ mod tests {
             }
         }
         assert_eq!(g.total_coins(), 1);
+    }
+
+    /// A platform with castle64's achievements table (as the bake writes it
+    /// from `assets/achievements.ron`) and the services every backend holds.
+    struct ServicesHost {
+        blob: &'static [u8],
+        services: trino_core::HostedServices,
+    }
+
+    impl Platform for ServicesHost {
+        fn now_micros(&self) -> u64 {
+            0
+        }
+        fn log(&self, _: &str) {}
+        fn blob(&self, id: trino_core::BlobId) -> Option<&'static [u8]> {
+            (id == trino_core::services::table::BLOB).then_some(self.blob)
+        }
+        fn services(&self) -> Option<&trino_core::HostedServices> {
+            Some(&self.services)
+        }
+        fn services_mut(&mut self) -> Option<&mut trino_core::HostedServices> {
+            Some(&mut self.services)
+        }
+    }
+
+    fn services_host() -> ServicesHost {
+        use trino_core::services::table::{self, AchievementRecord, StatRecord};
+        let a = |api, stat| AchievementRecord {
+            api,
+            name: "n",
+            description: "d",
+            icon: 0,
+            hidden: false,
+            stat,
+        };
+        let ach = [
+            a("FIRST_COIN", None),
+            a("COINS_25", Some((0, 25))),
+            a("FIRST_STAR", None),
+            a("ALL_STARS", Some((1, 4))),
+            a("BOAR_STOMP", None),
+        ];
+        let s = |api, max| StatRecord {
+            api,
+            min: 0,
+            max,
+            increment_only: true,
+        };
+        let stats = [s("COINS", 9999), s("STARS", 4)];
+        let mut blob = vec![0u8; table::encoded_len(&ach, &stats, &[])];
+        table::encode(&ach, &stats, &[], &mut blob).unwrap();
+        ServicesHost {
+            blob: Box::leak(blob.into_boxed_slice()),
+            services: trino_core::HostedServices::new(trino_core::ServiceBackend::Session),
+        }
+    }
+
+    /// A coin reports the stat and unlocks FIRST_COIN once, with one popup;
+    /// Y opens the list (the game waits), B closes it.
+    #[test]
+    fn a_coin_unlocks_an_achievement_and_y_opens_the_list() {
+        let mut g = game();
+        let mut a = audio();
+        let mut host = services_host();
+        settle(&mut g, &mut a);
+        for _ in 0..240 {
+            g.update_with(&mut host, &held(Button::DpadUp), &mut a, DT);
+            if g.total_coins() > 0 {
+                break;
+            }
+        }
+        assert!(host.is_unlocked(ACH_FIRST_COIN));
+        assert_eq!(host.stat(STAT_COINS), 1);
+        assert_eq!(g.toast.current(), Some(0), "the popup shows it");
+        assert!(!host.is_unlocked(ACH_FIRST_STAR));
+        let press = |b: Button| {
+            let mut s = InputState::default();
+            s.set(b, true);
+            s
+        };
+        g.update_with(&mut host, &InputState::default(), &mut a, DT);
+        g.update_with(&mut host, &press(Button::Y), &mut a, DT);
+        assert!(g.achievement_list.is_some());
+        let pos = g.pos;
+        g.update_with(&mut host, &held(Button::DpadUp), &mut a, DT);
+        assert_eq!(g.pos, pos, "the game waits under the list");
+        g.update_with(&mut host, &InputState::default(), &mut a, DT);
+        g.update_with(&mut host, &press(Button::B), &mut a, DT);
+        assert!(g.achievement_list.is_none());
     }
 
     #[test]

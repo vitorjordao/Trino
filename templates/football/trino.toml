@@ -8,6 +8,29 @@ description = "A low-poly football game made with Trino"
 author = ""
 platforms = ["pc", "n64", "3ds", "web"]
 
+# Shipping on PC (docs/SHIPPING.md): `cargo trino package pc` builds the
+# game as players get it — AppImage (Linux), zip with an .exe carrying the
+# icon and version (Windows), .app/.dmg (macOS) — with the assets baked in
+# and saves in the player's data folder. Every key is optional.
+# [pc]
+# icon = "assets/platform/pc/icon.png"   # square PNG, 256 x 256 or bigger
+# identifier = "com.example.{{name}}"     # macOS bundle id / Linux app id
+# publisher = "Example Games"            # default [project] author
+# version = "1.0.0"                      # default the pc crate's version
+# features = ["gamepad"]                 # the pc crate's features in a package
+# profile = "native"                     # or n64 / 3ds: the look it starts in
+# crash_upload = "https://crash.example.com/report"   # only with the player's yes
+
+# Steam (`cargo trino package pc --steam`, `cargo trino services export steam`,
+# the pc crate's `steam` feature): achievements, stats, Cloud, rich presence.
+# [steam]
+# app_id = 480                            # 480 = Spacewar, Valve's test app
+# depots = { windows = 481, linux = 482, macos = 483 }
+
+# itch.io (`cargo trino package pc --itch`): butler's channels.
+# [itch]
+# target = "user/{{name}}"
+
 [n64]
 package = "{{name}}-n64"
 save = "eeprom16k"

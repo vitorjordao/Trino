@@ -1,0 +1,33 @@
+// The game's achievements, stats and rich-presence keys (Trino services:
+// docs/SHIPPING.md). Names and descriptions are string keys
+// (assets/i18n/*.ron). An achievement's bit in a save is its place here:
+// append new ones, never reorder; `cargo trino services lock` freezes the
+// order before you ship. Check with `cargo trino services check`, export
+// Steam's files with `cargo trino services export steam`.
+(
+    version: 1,
+    achievements: [
+        (
+            id: "FIRST_STEPS",
+            name: "ach.first_steps.name",
+            description: "ach.first_steps.desc",
+        ),
+        (
+            id: "WANDERER",
+            name: "ach.wanderer.name",
+            description: "ach.wanderer.desc",
+            stat: "STEPS",
+            threshold: 100,
+        ),
+        (
+            id: "CORNER",
+            name: "ach.corner.name",
+            description: "ach.corner.desc",
+            hidden: true,
+        ),
+    ],
+    stats: [
+        (id: "STEPS", min: 0, max: 1000000, increment_only: true),
+    ],
+    presence: ["presence.title", "presence.playing"],
+)

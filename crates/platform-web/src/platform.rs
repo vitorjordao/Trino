@@ -31,6 +31,9 @@ pub struct WebPlatform {
     /// The player's accessibility settings (`localStorage`
     /// `trino-access:<name>`, loaded and stored by the runtime).
     pub(crate) access: trino_core::HostedAccess,
+    /// Achievements and stats (`localStorage` `trino-services:<name>`,
+    /// loaded and stored by the runtime; issue #61).
+    pub(crate) services: trino_core::HostedServices,
     /// `?lang=`, else `navigator.language` (`crate::language`).
     language: Option<trino_core::LangTag>,
 }
@@ -52,6 +55,7 @@ impl WebPlatform {
             quality: HostedQuality::new(caps),
             groups: crate::groups::Groups::new(caps.ram_bytes),
             access: trino_core::HostedAccess::new(),
+            services: trino_core::HostedServices::new(trino_core::ServiceBackend::Local),
             language: crate::language::detect(),
         }
     }
@@ -183,6 +187,14 @@ impl Platform for WebPlatform {
 
     fn access(&self) -> trino_core::AccessSettings {
         self.access.get()
+    }
+
+    fn services(&self) -> Option<&trino_core::HostedServices> {
+        Some(&self.services)
+    }
+
+    fn services_mut(&mut self) -> Option<&mut trino_core::HostedServices> {
+        Some(&mut self.services)
     }
 
     fn set_access(&mut self, settings: trino_core::AccessSettings) {

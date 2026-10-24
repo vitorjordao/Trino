@@ -22,6 +22,9 @@ pub struct N3dsPlatform {
     pub(crate) groups: crate::assets::Groups,
     /// Accessibility settings, for the session (`Platform::access`).
     access: trino_core::HostedAccess,
+    /// Achievements and stats for the session (issue #61): the game's save
+    /// holds them (`AchievementState::pack_for`, `restore_achievements`).
+    services: trino_core::HostedServices,
 }
 
 impl N3dsPlatform {
@@ -32,6 +35,7 @@ impl N3dsPlatform {
             high: Cell::new(0),
             groups: crate::assets::Groups::new(),
             access: trino_core::HostedAccess::new(),
+            services: trino_core::HostedServices::new(trino_core::ServiceBackend::Session),
         }
     }
 
@@ -106,6 +110,14 @@ impl Platform for N3dsPlatform {
 
     fn set_access(&mut self, settings: trino_core::AccessSettings) {
         self.access.set(settings);
+    }
+
+    fn services(&self) -> Option<&trino_core::HostedServices> {
+        Some(&self.services)
+    }
+
+    fn services_mut(&mut self) -> Option<&mut trino_core::HostedServices> {
+        Some(&mut self.services)
     }
 
     /// The system setting, read at boot: a bare language (`pt`, `en`).

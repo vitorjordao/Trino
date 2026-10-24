@@ -430,6 +430,29 @@ fn copy_demo(engine: &Path, dest: &Path, demo: Demo, names: &Names) -> Result<()
         &i18n,
         &mut |_, b| b,
     )?;
+    // The demo's achievements (`assets/achievements.ron`, issue #61) keep
+    // their English names: the engine's `ach.*`/`presence.*` lines join
+    // the starter's table where it lacks them.
+    let en = i18n.join("en-US.ron");
+    if let (Ok(engine_en), Ok(mut starter)) =
+        (read(&engine.join("assets/i18n/en-US.ron")), read(&en))
+    {
+        let lines: String = engine_en
+            .lines()
+            .filter(|l| {
+                let t = l.trim_start();
+                (t.starts_with("\"ach.") || t.starts_with("\"presence."))
+                    && t.split('"')
+                        .nth(1)
+                        .is_some_and(|k| !starter.contains(&format!("\"{k}\"")))
+            })
+            .map(|l| format!("{l}\n"))
+            .collect();
+        if let Some(at) = starter.rfind("    },") {
+            starter.insert_str(at, &lines);
+            write(&en, &starter)?;
+        }
+    }
     Ok(())
 }
 
@@ -660,6 +683,9 @@ mod tests {
                 "ui/options.ui.ron",
                 "ui/controls.ui.ron",
                 "ui/accessibility.ui.ron",
+                "ui/about.ui.ron",
+                "ui/crash.ui.ron",
+                "assets/achievements.ron",
             ] {
                 assert!(dest.join(f).is_file(), "{}: {f}", template.key());
             }
@@ -729,6 +755,14 @@ mod tests {
         let en = std::fs::read_to_string(c64.join("assets/i18n/en-US.ron")).unwrap();
         assert!(en.contains("\"title.play\""), "{en}");
         assert!(!c64.join("assets/i18n/pt-BR.ron").exists());
+        // castle64's achievements keep their names; the starter's labels
+        // are not repeated.
+        assert!(
+            en.contains("\"ach.first_coin.name\": \"First coin\""),
+            "{en}"
+        );
+        assert!(en.contains("\"presence.stage\""), "{en}");
+        assert_eq!(en.matches("\"ach.title\"").count(), 1, "{en}");
         let show = tmp.path().join("showcase");
         assert!(show.join("game/src/showcase_gen.rs").is_file());
         let game = std::fs::read_to_string(show.join("game/Cargo.toml")).unwrap();

@@ -337,6 +337,127 @@ pub trait Platform {
         self.blob(id)
     }
 
+    /// The services' state this backend holds ([`crate::services`], issue
+    /// #61): every backend returns its [`HostedServices`](crate::HostedServices)
+    /// and the methods below work through it. `None` (the default): a
+    /// platform without services, where they are no-ops.
+    fn services(&self) -> Option<&crate::HostedServices> {
+        None
+    }
+
+    fn services_mut(&mut self) -> Option<&mut crate::HostedServices> {
+        None
+    }
+
+    /// What this platform's services do: where achievements live, whether
+    /// the store draws its own popups, syncs saves, shows presence.
+    fn services_info(&self) -> crate::ServicesInfo {
+        self.services()
+            .map_or(crate::ServicesInfo::NONE, |s| s.info())
+    }
+
+    /// Unlock an achievement of `assets/achievements.ron` (once; unknown
+    /// ids are ignored). The PC and the Web persist it after the frame; a
+    /// Steam launch also unlocks it on Steam. The N64 and the 3DS keep it
+    /// for the session: the game's save holds it
+    /// ([`achievements`](Self::achievements)`().pack_for(..)`).
+    fn unlock(&mut self, achievement: crate::AchievementId) {
+        let table = crate::services::table_of(self);
+        if let Some(s) = self.services_mut() {
+            s.unlock(&table, achievement);
+        }
+    }
+
+    /// Is `achievement` unlocked?
+    fn is_unlocked(&self, achievement: crate::AchievementId) -> bool {
+        let table = crate::services::table_of(self);
+        table
+            .index(achievement)
+            .is_some_and(|i| self.achievements().is_unlocked(i))
+    }
+
+    /// Set a stat (clamped to its range; an increment-only stat keeps its
+    /// highest value) and unlock the achievements whose threshold it
+    /// reaches.
+    fn set_stat(&mut self, stat: crate::StatId, value: i32) {
+        let table = crate::services::table_of(self);
+        if let Some(s) = self.services_mut() {
+            s.set_stat(&table, stat, value);
+        }
+    }
+
+    /// A stat's value (0 when unknown).
+    fn stat(&self, stat: crate::StatId) -> i32 {
+        let table = crate::services::table_of(self);
+        table
+            .stat_index(stat)
+            .map_or(0, |i| self.achievements().stat(i))
+    }
+
+    /// Every achievement's bit and every stat, by table index: what an
+    /// in-game list draws ([`crate::AchievementList`]) and what a console
+    /// save stores ([`AchievementState::pack_for`](crate::AchievementState::pack_for)).
+    fn achievements(&self) -> crate::AchievementState {
+        self.services()
+            .map_or(crate::AchievementState::EMPTY, |s| *s.state())
+    }
+
+    /// Give back a saved state (the game's console save after loading it):
+    /// unlocked bits add up, increment-only stats keep the higher value,
+    /// no popups. Harmless where the platform keeps its own copy (it
+    /// merges).
+    fn restore_achievements(&mut self, saved: &crate::AchievementState) {
+        let table = crate::services::table_of(self);
+        if let Some(s) = self.services_mut() {
+            s.restore(&table, saved);
+        }
+    }
+
+    /// Lock every achievement and zero the stats (tests, a debug menu, the
+    /// editor's Play mode). On Steam it resets the account's too.
+    fn reset_achievements(&mut self) {
+        if let Some(s) = self.services_mut() {
+            s.reset();
+        }
+    }
+
+    /// The oldest unlock not shown yet, by table index
+    /// ([`crate::AchievementToast::update`] takes them).
+    fn next_unlock(&mut self) -> Option<usize> {
+        self.services_mut().and_then(|s| s.next_unlock())
+    }
+
+    /// What friends see the player doing: a key of the table's `presence`
+    /// list and its arguments (Steam rich presence; a documented no-op
+    /// elsewhere, kept for [`services`](Self::services) readers).
+    fn set_presence(&mut self, key: crate::StrKey, args: &[crate::Arg<'_>]) {
+        if let Some(s) = self.services_mut() {
+            s.set_presence(crate::Presence::new(key, args));
+        }
+    }
+
+    /// The game just saved: a store with cloud saves may sync now (Steam
+    /// Cloud uploads the save directory when the game exits; the hint
+    /// commits the stats and the files sooner). A no-op elsewhere.
+    fn cloud_sync_hint(&mut self) {
+        if let Some(s) = self.services_mut() {
+            s.cloud_sync_hint();
+        }
+    }
+
+    /// Crash reports (issue #61): how many earlier runs left one, the
+    /// player's consent to send them, whether the package names somewhere to
+    /// send them. A game asks once ([`CrashReports::should_ask`](crate::CrashReports::should_ask))
+    /// and answers with [`set_crash_consent`](Self::set_crash_consent).
+    /// `None` on the consoles and the Web (no reports) — the default.
+    fn crash_reports(&self) -> Option<crate::CrashReports> {
+        None
+    }
+
+    /// The player's answer (the PC persists it; `Allow` sends the reports
+    /// waiting and later ones). A no-op where there are no reports.
+    fn set_crash_consent(&mut self, _consent: crate::CrashConsent) {}
+
     /// The memory this hardware has and what holds it ([`crate::MemoryReport`]):
     /// heap used/peak/total and the resident assets by category. Zeros where
     /// the backend doesn't count.

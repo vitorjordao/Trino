@@ -43,6 +43,7 @@ platforms, hardware): `docs/README.md`. Historical plans the engine was first bu
 | `n64-performance` | per-stage/per-model N64 frame cost (emulated, ares), perf gates, the calibrated cost model, before/after workflow, what worked |
 | `ci` | the GitHub Actions jobs, why they're shaped that way, replicating a job locally, debugging red runs |
 | `new-project` | `cargo xtask new` (in-repo or `--standalone`), maintaining the templates and `trino-runner-pc` |
+| `shipping` | achievements/stats/presence/cloud (`assets/achievements.ron`, `services check\|export steam`), `package pc` per OS, Steam, crash reports, `deck check`, the 3DS `.cia` |
 
 **Knowledge loop:** before reporting a task done, write what it taught you into the
 skill that owns that kind of work. A trap also gets a line under Pitfalls below. Create a
@@ -886,6 +887,30 @@ overlay, and a measurement on real hardware (ares doesn't time the RDP).
   `None`: consoles, no pad). Solid Eleven's `ui/glyphs.rs` holds its badge colors,
   PlayStation symbol spans and per-family diagrams.
 
+- **Shipping games (2026-10-23, ADR 0029, GitHub #61, `docs/SHIPPING.md`):**
+  - **Services (`trino_core::services`):** `assets/achievements.ron` → the
+    `services/achievements` (`TACH`) blob on every target; `Platform::unlock`, `set_stat`,
+    `achievements`, `restore_achievements`, `set_presence`, `cloud_sync_hint`,
+    `next_unlock`, … are defaults over each backend's `HostedServices` (no
+    `GAME_API_VERSION` bump). PC `<save>.achievements`, Web `localStorage`, N64/3DS for the
+    session (the game's save holds `AchievementState::pack_for`, 3 + ⌈n/8⌉ + 4 × stats
+    bytes). `AchievementToast`/`AchievementList` draw the popup and the list on every
+    backend. castle64 unlocks five (Y opens the list); `services` self-test step on PC,
+    ares, Azahar and the browsers; goldens `services_*`.
+  - **Steam (`trino-runner-pc` feature `steam`):** `store::StoreSync` over `StoreApi`
+    (merge, forward, `StoreStats` pacing, the overlay flag, Steam Input), tested with
+    `MockStore`; `services export steam` writes the partner-site files.
+  - **Packages (`cargo xtask package pc`):** fat LTO, `build_info!()` stamp, assets baked
+    in, the runner's packaged mode (`trino-package.txt`; saves in the user data folder);
+    AppImage/zip, the `.exe`'s icon and version, `.app`/`.dmg`; SteamPipe and butler
+    layouts; signing when its secrets are set; `--smoke` runs it outside the repo and
+    crash-checks it. CI's `package` job does it for the football template on all three OSes.
+  - **Crash reports:** a panic hook in the runner (`crashes/crash-*.txt`: identity, GPU,
+    backtrace, the last 200 log lines); upload only with `Platform::set_crash_consent`.
+  - **Also:** `cargo xtask deck check`, `package 3ds --cia` (+ `.cxi`, booted by CI's
+    Azahar job), `package config [set]`, the editor's Project tab, the starter's About and
+    crash-question screens.
+
 PC keyboard mapping: A/B = Z/X, X/Y = C/V, L/R = Q/E, Start = Enter,
 Select = Right Shift, D-pad = arrows, stick = WASD; L2/R2/L3/R3 have no default key
 (see `crates/platform-pc/src/input.rs`). Gamepads (gilrs): A/B/X/Y, L = LB+LT, R = RB+RT,
@@ -1033,6 +1058,12 @@ cargo xtask i18n pseudo [--from en-US] [--expand 40]                # assets/i18
 cargo xtask i18n export --csv f.csv | import --csv f.csv            # translators' round trip
 cargo xtask i18n export --rust <out.rs> [--dir <project>]           # static StringTable code (Solid Eleven)
 cargo xtask i18n stats | fonts [--platform n64] | list [--json]     # words per language; every atlas's glyphs and TMEM
+cargo xtask services check|lock|list [--json]      # achievements: ids, stats, icons, strings, the shipped bit order
+cargo xtask services export steam [--out dir]      # Steamworks files: CSV, loc VDF, rich presence, Steam Input, icons
+cargo xtask package pc [--target os] [--steam] [--itch] [--smoke] [--json] --project <dir>   # a game as players get it
+cargo xtask package config [set key=value ..]      # trino.toml's packaging keys, edited in place
+cargo xtask package 3ds --cia [--selftest]         # the installable 3DS title (+ its .cxi for Azahar)
+cargo xtask deck check [--json]                    # the Steam Deck Verified checklist
 cargo xtask agents sync   # mirror .agents/skills/ into .claude/skills/ (check: agents check)
 cargo test -p xtask --test water_shots -- --ignored   # water evidence: tiers, ripples, crate, bridge (target/evidence/water)
 cargo xtask new <name> --standalone <dir> [--git <url> --rev <r>]   # project outside this repo
@@ -1120,6 +1151,19 @@ cargo test --workspace
   beyond Rust.
 
 ## Pitfalls
+
+- **A packaged game must not use build-tree paths.** `env!("CARGO_MANIFEST_DIR")` is the
+  build machine's; `trino-runner-pc` switches to packaged mode when `trino-package.txt`
+  sits beside the exe, and every per-player file goes through `RunConfig::save_dir()`.
+  Prove a package by running it from another folder (`package pc --smoke` does).
+- **xtask parses some flags globally** (`--selftest`, `--out`, `--target <platform>`,
+  `--project`): a subcommand that needs one gets it handed back in `main.rs`
+  (`package 3ds --cia --selftest` once built a non-test CIA).
+- **`--json` output must be JSON only:** route child processes' stdout to stderr
+  (`mksquashfs`'s progress bar broke `package pc --json`).
+- **Consoles keep achievements in the game's save, not an engine region:** reserving
+  EEPROM would move the two-slot layout and shrink every game's capacity. Store
+  `AchievementState::pack_for` and call `restore_achievements` after loading.
 
 - **A new accessibility default must take the old code path.** `UiAccess::NONE` keeps the
   text multiplier at exactly 1 and the screen's theme, so every golden stayed

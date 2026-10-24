@@ -360,7 +360,7 @@ pub struct Span {
 }
 
 impl Span {
-    fn of<'a, T>(self, items: &'a [T]) -> &'a [T] {
+    fn of<T>(self, items: &[T]) -> &[T] {
         let (s, e) = (self.start as usize, (self.start + self.len) as usize);
         items.get(s..e).unwrap_or(&[])
     }

@@ -957,6 +957,38 @@ overlay, and a measurement on real hardware (ares doesn't time the RDP).
     (`BundleLoad::step_many`), `CARGO_BUILD_JOBS`, and the N64/3DS shader assembly.
   - **Bench:** `cargo test --release -p trino-platform-pc --test precompile_bench --
     --ignored --nocapture`.
+- **Stereoscopic 3D on the 3DS (2026-10-24, ADR 0032, GitHub #63):** the top screen
+  drawn once per eye while the 3D slider is up; the game still draws its frame once.
+  - **Core (`trino_core::stereo`):** `StereoSettings` (separation at the full slider,
+    convergence, `StereoPolicy::Auto|Always`, `budget_us`, a fixed `slider` for tests),
+    `Renderer::set_stereo` (cleared at `begin_frame`, **before the first top-screen
+    draw**, else `StereoMono::Late`), `set_layer_depth(LayerDepth)` for floating 2D,
+    `stereo_eye` (games always see `Mono`), `read_eye_pixel`, `Caps::stereo`,
+    `FrameStats::stereo` (`StereoStats`, `TRINO_FRAME stereo=on@N%|slider0|budget|…`).
+    `TnlContext::with_eye` is the off-axis eye (zero parallax at the convergence depth;
+    a zero shift returns the mono context). `StereoCmd` + `replay` and `StereoGovernor`
+    (Auto: three slow stereo frames → 120 mono frames). All defaults: no
+    `GAME_API_VERSION` bump; the N64 and the Web are mono no-ops.
+  - **3DS:** records the top screen and replays it per eye at `on_screen(Bottom)` or
+    `end_frame`; the shim's right-eye target, `gfxSet3D` on a change, the slider as
+    16.16, screen 2 = the right eye in `trino_debug_pixel`/`fb_dump`; the 2DS family
+    clears `Caps::stereo` (`TRINO_HW … stereo=`); `set_stereo_slider_override` (test
+    hook). The self-test prints `TRINO_FRAME:<level>-stereo` lines: with Azahar's GPU
+    timing every castle64 level stays at 60 fps (hub CPU 3.1 → 5.7 ms).
+  - **PC 3DS profile:** the same record and replay, the eyes in textures (`read_eye`),
+    the preview `StereoView` (off, anaglyph, side by side, left, right, flip),
+    `set_stereo_view`/`set_stereo_slider`, `TRINO_STEREO=<view>[:slider]`; composites
+    warmed by the precompile (`JobKind::Stereo`); goldens `stereo_{left,right,anaglyph}`.
+  - **Authoring:** scenes' `environment.stereo` (optional, no version bump; codegen
+    `STEREO`; not in TSCN), UI nodes' `depth` (inherited; TUIL v3), `scene budget
+    --stereo` (`StereoBudget`: per-eye cost), `ui shot --platform 3ds --stereo
+    anaglyph[:slider]`, the editor's Game-view stereo preview with a 3D slider,
+    Inspector › Stereo 3D and the Scene view's convergence plane.
+  - **Adopters:** castle64 converges on the player (separation = distance / 20, HUD 6 px
+    out), Solid Eleven on the ball's focus; their goldens are unchanged (slider down).
+  - **Tests:** the `stereo` self-test step on PC (`engine_checks`), in Azahar (both eyes
+    read back) and as a mono target in ares and the browsers;
+    `crates/platform-pc/tests/stereo.rs`; `crates/core/tests/stereo.rs`.
 
 PC keyboard mapping: A/B = Z/X, X/Y = C/V, L/R = Q/E, Start = Enter,
 Select = Right Shift, D-pad = arrows, stick = WASD; L2/R2/L3/R3 have no default key
@@ -1075,7 +1107,7 @@ cargo xtask run 3ds --device network --ip <IP>     # real 3DS via 3dslink (--gdb
 cargo xtask new <name>    # scaffold a game crate under examples/
 cargo xtask scene check   # validate scenes/prefabs/materials (text-first loop)
 cargo xtask scene export [--platform pc|n64|3ds|web|n64_expanded|n3ds_new] <scene.ron> <out.rs>   # scene -> no_std Rust data (that platform's variants)
-cargo xtask scene budget <scene.ron> [--platform pc|n64|3ds|web|n64_expanded|n3ds_new] [--json]   # per-console frame: draws, tris, N64 CPU/RSP, off-RSP reasons, PC GPU split, unseen draws, a tier's RAM/cores
+cargo xtask scene budget <scene.ron> [--platform pc|n64|3ds|web|n64_expanded|n3ds_new] [--stereo] [--json]   # per-console frame: draws, tris, N64 CPU/RSP, off-RSP reasons, PC GPU split, unseen draws, a tier's RAM/cores; --stereo: the 3DS's two eyes
 cargo xtask model inspect <file> [--json]       # bake a model like the engine; art gate
 cargo xtask texture inspect <sprites/x> [--platform pc|n64|3ds] [--json]   # format (auto: why), candidates, bytes, PSNR, memory share
 cargo xtask texture report [--platform pc|n64|3ds] [--json]                # every texture, biggest first, totals vs RGBA8
@@ -1096,7 +1128,8 @@ cargo xtask quality set low render_scale=0.6 frame_limit=30 [--json] # change a 
 cargo xtask quality bench [--json]                                   # this machine's first-launch calibration (opens a window)
 cargo xtask run pc --quality low|medium|high|ultra|auto              # TRINO_QUALITY for one run (never saved); the Web: ?quality=
 cargo xtask ui check [screen..] [--platform n64|3ds|pc|web] [--lang l] [--json]   # every screen × target × language: reach, overlaps, budgets, overflow, glyphs, keys, assets
-cargo xtask ui shot <screen> [--platform p] [--size WxH] [--lang l] [--scale S] [--focus id] [--out x.png] [--json]  # headless render (3DS: both screens)
+cargo xtask ui shot <screen> [--platform p] [--size WxH] [--lang l] [--scale S] [--focus id] [--stereo anaglyph|side-by-side|left|right|flip[:slider]] [--out x.png] [--json]  # headless render (3DS: both screens; --stereo: the top screen's eyes)
+TRINO_STEREO=anaglyph[:0.5] TRINO_SIM=3ds cargo run -p trino-app-pc   # the 3DS profile's stereo preview (side-by-side|left|right|flip)
 cargo xtask ui export <screen> <out.rs> [--json]                    # static Rust for include! (a game without blobs)
 cargo xtask ui list [--json]                                        # screens and languages
 cargo xtask access check [dir] [--platform p] [--json]              # palettes apart/readable per color-vision mode, theme 7:1, captions per language, every screen at 200 %
@@ -1794,6 +1827,20 @@ cargo test --workspace
   coverage:** llvm-cov reports it under `tests/../src/x.rs`, which the default filter
   drops. Put such tests in the module itself.
 
+- **Stereo needs `set_stereo` before the first top-screen draw, every frame** (issue #63):
+  the backend records the top screen from that call, so a draw made earlier is already
+  on the left eye only, and the frame stays mono (`StereoMono::Late`; PC strict mode
+  panics). Renderer state a replay must see (camera, light, local lights, water,
+  shadows) is recorded too: a new state call on the 3DS or the PC backend needs its
+  `StereoCmd` and a branch in `recording_state()`, or the second eye draws with the
+  first eye's last value.
+- **A stereo frame doubles the 3DS's per-frame buffers.** The CPU T&L vertex buffer
+  (`TRI3D_MAX_VERTS`) and citro3d's command buffer are shared by both eyes: a scene near
+  either limit in mono overflows in stereo. Read `scene budget --platform 3ds --stereo`.
+- **Azahar times the ARM11 the same as a New 3DS and an old one** (`cpu_us` matched to
+  the microsecond on both for the stereo frames too, 2026-10-24; GitHub #82); only
+  "Simulate 3DS GPU timings" is modelled. Real-hardware CPU numbers for a stereo frame
+  need a console.
 - **citro3d's `C3D_Tex::fmt` is a signed 4-bit bitfield** (`GPU_TEXCOLOR fmt : 4`):
   GPU_A8 (8) and every format above 7 read back negative, so `tex->fmt == GPU_A8` is
   always false. Compare `(unsigned)tex->fmt & 15` (`tex_is_mask` in the 3DS shim).

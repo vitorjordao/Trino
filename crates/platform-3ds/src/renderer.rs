@@ -769,6 +769,13 @@ impl N3dsRenderer {
         self.meshes.insert(id, (tmdl, layout));
     }
 
+    /// **Test hook**: the 3D slider at `slider` (0..=1) in place of the
+    /// hardware's, for games that leave it to the player (`None`: the
+    /// hardware's again). The self-test times castle64 in stereo with it.
+    pub fn set_stereo_slider_override(&mut self, slider: Option<f32>) {
+        self.stereo.slider_override = slider.map(|s| s.clamp(0.0, 1.0));
+    }
+
     /// The time `begin_frame` waited (GPU and vsync) since the last call:
     /// frame time minus it is the ARM11's own work.
     pub fn take_wait_us(&mut self) -> u32 {
@@ -1461,10 +1468,10 @@ impl Renderer for N3dsRenderer {
             return;
         }
         let wants = stereo.is_some_and(|s| s.enabled && s.slider.is_none()) && self.caps.stereo;
-        let hw = if wants {
-            (unsafe { ffi::trino_stereo_slider() }) as f32 / 65536.0
-        } else {
-            0.0
+        let hw = match (wants, self.stereo.slider_override) {
+            (false, _) => 0.0,
+            (true, Some(s)) => s,
+            (true, None) => (unsafe { ffi::trino_stereo_slider() }) as f32 / 65536.0,
         };
         let mut f =
             StereoFrame::resolve(stereo, self.caps.stereo, hw, self.stereo.governor.allows());

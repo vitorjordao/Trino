@@ -282,6 +282,26 @@ Things to know:
 - **UI** ([ADR 0024](adr/0024-ui-system.md)): nodes with `screen: Bottom` go to the
   320×240 touch screen and a tap clicks them (on a one-screen target they join the main
   screen); the pad reaches both screens. The budget is 128 nodes and 2048 2D draws.
+- **Stereoscopic 3D** ([ADR 0032](adr/0032-stereoscopic-3d.md)):
+  - **How a game asks for it:** `Renderer::set_stereo(Some(&StereoSettings::new(separation,
+    convergence)))` right after `begin_frame`, every frame. While the 3D slider is up, the
+    top screen is recorded and drawn once per eye through an off-axis projection, the
+    eyes `slider × separation` apart. The game draws once.
+  - **Floating 2D:** `set_layer_depth(LayerDepth(n))` floats the 2D drawn after it by
+    `n` pixels of parallax at the full slider (a UI node's `depth` does the same).
+  - **The slider at 0, or an old 2DS or New 2DS XL** (`Caps::stereo` false,
+    `TRINO_HW … stereo=0`): the mono frame at the mono cost.
+  - **Cost:** each eye pays the top screen again. A GPU T&L draw runs its vertex program
+    twice, a CPU T&L draw is transformed twice.
+  - **Auto policy:** `StereoPolicy::Auto` drops to one eye for 120 frames after three
+    stereo frames past the budget.
+  - **Reporting:** `TRINO_FRAME … stereo=on@100%|slider0|budget|…`.
+  - **Measured** in Azahar with "Simulate 3DS GPU timings", the self-test's `*-stereo`
+    lines: every castle64 level stays at 60 fps on a New 3DS (hub CPU 3.1 → 5.7 ms a
+    frame).
+  - **The touch screen** is never stereo.
+  - **Tests:** the `stereo` self-test step reads both eyes back in Azahar, which renders
+    the right eye even with its own 3D factor at 0.
 - Troubleshooting: the [build-3ds](../.agents/skills/build-3ds/SKILL.md) and
   [run-emulator](../.agents/skills/run-emulator/SKILL.md) skills.
 

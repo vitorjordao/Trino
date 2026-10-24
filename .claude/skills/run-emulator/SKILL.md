@@ -166,6 +166,17 @@ cargo xtask run n64 --expansion-pak off       # run/watch: on|off, else ares's o
   New 3DS, `core=1` on an old one.
 - `--no-build` (CI's split): the app's own speedup setting is taken from its
   `TRINO_HW` line; the rest is still checked.
+- **Stereo in Azahar (issue #63):**
+  - **The right eye reads back:** Azahar renders it into its own framebuffer even with
+    its 3D factor (`[Renderer] factor_3d`) at 0, the default. The `stereo` step reads
+    `GFX_RIGHT` through `trino_debug_pixel(…, 2)` with the slider fixed by the game
+    (`StereoSettings::with_slider`).
+  - **No config needed:** the harness doesn't touch `factor_3d`. The slider the
+    emulated app reads stays 0, so games run mono and every 3DS golden stays the mono
+    frame.
+  - **Clock speed isn't timed:** Azahar times the CPU the same as a New 3DS and an old
+    one (`cpu_us` identical on both, 2026-10-24). Only `--accurate-timing`'s GPU is
+    modelled.
 - **One Azahar at a time on a machine.** Its log and config are the user's, not the
   worktree's: two runs at once read each other's lines (a failure in a step your branch
   doesn't have) and flip each other's `is_new_3ds`.

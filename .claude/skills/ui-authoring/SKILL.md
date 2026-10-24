@@ -63,6 +63,12 @@ skill's (`cargo xtask i18n check` audits every screen in every language too).
   and `?pad=` on the Web. Use `pad.glyph(btn)` and `pad.swap_ab_xy()` so footer prompts and
   controller diagrams show PlayStation symbols (`× ○ □ △`) or Nintendo/8BitDo swapped
   `B/A/Y/X` labels while keeping positional physical bindings.
+- **Stereo depth (issue #63):** `depth: 6` floats a node and its children 6 px of
+  parallax out of the 3DS top screen at the full 3D slider (negative sinks them; 0
+  inherits the parent's). Only the 3DS top screen shows it; the touch screen and every
+  other target draw it flat. See it with `cargo xtask ui shot <screen> --platform 3ds
+  --stereo anaglyph` (red fringe right of a floating node, cyan left). Keep a HUD's
+  depth small (4–8 px): big parallax on text tires the eyes. TUIL v3 carries it.
 - `cvd_icon: "sprites/x"` on a node shows that sprite at its right end while the
   player's color-vision mode is on (a pattern for a colored marker).
 - Draw with the player's settings: `UiEnv::of(r).with_access(&platform.access())`

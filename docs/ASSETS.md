@@ -399,6 +399,15 @@ a camera can see, so the CC0 KayKit doorway went from 1068 to 75 triangles.
   surface blob and planar shadows land on. Older files load with no shadows. The bake
   writes them into the TSCN (`BakedScene::shadows`, `receivers`), and `scene export` into
   `SHADOWS` and `RECEIVERS`; a game hands both to the renderer each frame.
+- **Stereo 3D** ([ADR 0032](adr/0032-stereoscopic-3d.md)):
+  - **The block:** `environment.stereo: Some((enabled: true, max_separation: 0.06,
+    convergence: 4.0, policy: Auto, budget_us: 16667))`. Every field defaults, and
+    `stereo: Some(())` is a valid start.
+  - **Where it applies:** the 3DS top screen draws one picture per eye while its slider
+    is up. Every other target ignores the block.
+  - **Code and bakes:** `scene export` writes `STEREO`, which the game passes to
+    `Renderer::set_stereo` right after `begin_frame`. TSCN carries none.
+  - **Cost:** `scene budget --stereo` prints the cost per eye.
 
 ## UI screens
 
@@ -440,6 +449,9 @@ target that does not exist fails the bake). Every new project starts with `title
   `Fill`), `offset`, `padding`, `min`/`max`, in virtual units against `reference` (320×240
   by default; whole-pixel scaling). `bleed: true` ignores the safe area; `screen: Bottom`
   is the 3DS touch screen (the main screen elsewhere); `visible_on: [N64, N3ds, Pc, Web]`.
+- **Stereo depth:** `depth: 6` floats a node and its children 6 px of parallax out of
+  the 3DS top screen at the full 3D slider; negative values sink it. It is TUIL v3, and
+  `ui shot --platform 3ds --stereo anaglyph` shows it.
 - **Data:** `text` (`{}` takes the bound value), `key` (a string table entry, `text` is
   the default), `bind` (a value the game sets: `ui.set("volume", 7)`), `visible_if` and
   `enabled_if` (a bound value), `overflow: Visible | Clip | Ellipsis | Wrap`, `nav: (down:

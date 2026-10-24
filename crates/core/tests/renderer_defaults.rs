@@ -88,6 +88,16 @@ fn provided_renderer_methods_are_harmless_defaults() {
         draws: u16::MAX,
         ..Default::default()
     });
+    // Stereo (#63): a no-op without a stereo backend; always mono, no
+    // right eye to read.
+    dyn_r.set_stereo(Some(
+        &trino_core::StereoSettings::new(0.1, 4.0).with_slider(1.0),
+    ));
+    dyn_r.set_layer_depth(trino_core::LayerDepth(8));
+    assert_eq!(dyn_r.stereo_eye(), trino_core::Eye::Mono);
+    assert_eq!(dyn_r.read_eye_pixel(trino_core::Eye::Right, 0, 0), None);
+    assert_eq!(dyn_r.read_eye_pixel(trino_core::Eye::Left, 0, 0), None);
+    assert_eq!(dyn_r.stats().stereo, trino_core::StereoStats::default());
     // None of the defaults draws through the required methods.
     assert!(r.sprites.is_empty() && r.models.is_empty());
     assert_eq!(r.frames, 1);

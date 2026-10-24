@@ -91,6 +91,9 @@ pub(crate) struct Stereo {
     pub last_begin: Option<u32>,
     /// What the shim's `gfxSet3D` is set to.
     pub shown: bool,
+    /// A slider position in place of the hardware's (the self-test's
+    /// stereo timings; `N3dsRenderer::set_stereo_slider_override`).
+    pub slider_override: Option<f32>,
 }
 
 impl Stereo {
@@ -107,6 +110,7 @@ impl Stereo {
             budget_us: StereoSettings::OFF.budget_us,
             last_begin: None,
             shown: false,
+            slider_override: None,
         }
     }
 

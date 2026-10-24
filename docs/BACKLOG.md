@@ -286,6 +286,25 @@ shipping a 3D game first**, then by cost:
 
 ---
 
+## Done — stereoscopic 3D on the 3DS top screen: per-eye replay, floating HUD and UI, the Auto policy, previews on the PC and in the editor (2026-10-24, branch `feat/63-stereo`, GitHub #63, ADR 0032)
+
+| Item | Evidence |
+|---|---|
+| `trino_core::stereo` (`no_std`): `StereoSettings`/`StereoPolicy`, `Eye`, `LayerDepth`, `StereoFrame::resolve`, `StereoGovernor`, `StereoStats`, `StereoCmd` + `replay`; `TnlContext::with_eye` (off-axis: zero parallax at the convergence, no vertical parallax, a zero shift is the mono context); `Renderer::set_stereo`/`stereo_eye`/`set_layer_depth`/`read_eye_pixel` and `Caps::stereo` as defaults (no `GAME_API_VERSION` bump) | 11 unit tests in `stereo.rs`, `crates/core/tests/stereo.rs` (4), `provided_renderer_methods_are_harmless_defaults` |
+| 3DS: record the top screen, replay per eye; right-eye target, `gfxSet3D`, the slider, screen 2 read-back; the 2DS family has no stereo (`TRINO_HW … stereo=`) | the `stereo` self-test step in Azahar as a New 3DS and an old one (both eyes read back); `a_2ds_has_no_stereo_screen`; every 3DS golden unchanged |
+| The Auto policy and per-eye cost | `the_governor_drops_after_three_slow_frames_and_retries`; Azahar with "Simulate 3DS GPU timings", every castle64 level at 60 fps in stereo, CPU per frame mono → stereo: hub 3.10 → 5.70 ms, green-hills 2.61 → 4.71, lava-land 2.77 → 5.01, sky-tower 2.55 → 4.58, throne 3.67 → 6.68 (`TRINO_FRAME:<level>-stereo`, New 3DS; Azahar times the old 3DS's CPU the same) |
+| PC 3DS profile: the same replay, eye textures, `StereoView` previews (anaglyph, side by side, left, right, flip), `TRINO_STEREO`, warmed composites | `crates/platform-pc/tests/stereo.rs` (4 tests; goldens `stereo_left`, `stereo_right`, `stereo_anaglyph`; the slider down is the mono frame byte for byte), `the_stereo_step_reads_both_eyes_on_the_3ds_profile` (4 mutations fail it) |
+| Scenes `environment.stereo` (codegen `STEREO`, no TSCN), UI `depth` (TUIL v3), `scene budget --stereo`, `ui shot --stereo`, `TRINO_FRAME stereo=` | `stereo_is_optional_defaulted_and_round_trips`, `codegen_exports_the_scene_stereo`, `node_depths_round_trip_through_ron_tuil_and_rust`, `tuil_v3_carries_depths_and_v2_still_loads`, `the_stereo_budget_is_two_eyes_of_the_3ds_frame`, `ui_shot_previews_node_depths_in_stereo`, `the_3ds_profile_reports_its_stereo_frames` |
+| castle64 and Solid Eleven opt in (convergence on the player / the ball, HUD 6 px out) | their goldens unchanged; the football template's 3DS self-test times `match-stereo` |
+| Editor: Game view stereo preview + 3D slider (3DS), Inspector › Stereo 3D, the Scene view's convergence plane | see the PR |
+
+Deviations: scenes stay v7 (an optional field, not the issue's "v4"); `LayerDepth` is a
+renderer state (`set_layer_depth`), not a parameter of every 2D call; the Auto policy
+drops to mono but doesn't reduce the separation (a smaller separation costs the same).
+
+Follow-ups: measure a stereo frame on a real New 3DS and an old 3DS (Azahar doesn't
+time the clock); TSCN could carry `stereo` at its next version bump.
+
 ## Done — shader precompilation and the CPU thread budget (2026-10-24, branch `feat/101-shader-precompile`, GitHub #101, ADR 0031)
 
 | Item | Evidence |

@@ -202,9 +202,11 @@ fn the_eyes_and_the_anaglyph_match_their_goldens() {
     // The anaglyph is exactly its eyes: red from the left, the rest from
     // the right.
     for ((a, l), rt) in anaglyph
-        .chunks_exact(4)
-        .zip(left.chunks_exact(4))
-        .zip(right.chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(left.as_chunks::<4>().0)
+        .zip(right.as_chunks::<4>().0)
     {
         assert_eq!([a[0], a[1], a[2]], [l[0], rt[1], rt[2]]);
     }

@@ -223,6 +223,7 @@ mod n3ds {
     /// its peak since boot (issue #56).
     fn time_scene(
         scene: &castle64::perf::PerfScene,
+        label: &str,
         renderer: &mut N3dsRenderer,
         audio: &mut N3dsAudio,
         platform: &mut N3dsPlatform,
@@ -254,8 +255,12 @@ mod n3ds {
         }
         let avg = total / FRAMES;
         platform.sample_heap();
+        let mut stereo = alloc::string::String::new();
+        let _ = trino_core::Renderer::stats(renderer)
+            .stereo
+            .write(&mut stereo);
         runtime::log(&format!(
-            "TRINO_FRAME:{} avg_us={avg} max_us={max} frames={FRAMES} fps={} cpu_us={} {}\n",
+            "TRINO_FRAME:{}{label} avg_us={avg} max_us={max} frames={FRAMES} fps={} cpu_us={} {} {stereo}\n",
             scene.name,
             1_000_000 / avg.max(1),
             cpu / FRAMES,
@@ -566,8 +571,16 @@ mod n3ds {
                     // only: the New 3DS's speedup against the old clock,
                     // issue #54; `--accurate-timing` for the GPU's share).
                     for scene in castle64::perf::SCENES {
-                        time_scene(scene, renderer, audio, platform);
+                        time_scene(scene, "", renderer, audio, platform);
                     }
+                    // The same levels in stereo (issue #63): the slider
+                    // fixed at full, both eyes per frame (`stereo=on@100%`,
+                    // or `budget` where the Auto policy dropped an eye).
+                    renderer.set_stereo_slider_override(Some(1.0));
+                    for scene in castle64::perf::SCENES {
+                        time_scene(scene, "-stereo", renderer, audio, platform);
+                    }
+                    renderer.set_stereo_slider_override(None);
                     // 6) The showcase's touch panel (metrics + look
                     // toggles) read back: button fills by state and edges,
                     // a top-screen click ignored, two FOG taps through

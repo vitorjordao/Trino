@@ -416,7 +416,7 @@ fn ui_shot_previews_node_depths_in_stereo() {
         let info = decoder.next_frame(&mut buf).unwrap();
         let px = &buf[..(info.width * 240 * 4) as usize];
         let (mut red, mut cyan) = (0, 0);
-        for p in px.chunks_exact(4) {
+        for p in px.as_chunks::<4>().0 {
             red += (p[0] > 200 && p[1] < 100 && p[2] < 100) as usize;
             cyan += (p[0] < 100 && p[1] > 200 && p[2] > 200) as usize;
         }

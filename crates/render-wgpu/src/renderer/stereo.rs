@@ -104,7 +104,7 @@ impl StereoView {
         match self {
             StereoView::Off | StereoView::Left => Some(Eye::Left),
             StereoView::Right => Some(Eye::Right),
-            StereoView::Flip if (n / FLIP_FRAMES) % 2 == 0 => Some(Eye::Left),
+            StereoView::Flip if (n / FLIP_FRAMES).is_multiple_of(2) => Some(Eye::Left),
             StereoView::Flip => Some(Eye::Right),
             StereoView::Anaglyph | StereoView::SideBySide => None,
         }

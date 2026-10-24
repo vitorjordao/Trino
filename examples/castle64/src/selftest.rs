@@ -125,8 +125,226 @@ pub fn engine_checks(
     platform.log("TRINO_STEP:quality\n");
     let q = quality(renderer, platform)?;
     log_quality(platform, &q);
+    platform.log("TRINO_STEP:trace\n");
+    let events = trace(renderer, platform)?;
+    log_trace(platform, events);
     platform.log("TRINO_STEP:engine ok\n");
     Ok(())
+}
+
+/// The session name of the `trace` step's lines (`cargo xtask test`
+/// collects it into `target/traces/<platform>-selftest.json`).
+pub const TRACE_SESSION: &str = "selftest";
+
+/// Zone and counter names the `trace` step records, which the hosts' tools
+/// check in the collected trace.
+pub const TRACE_NAMES: [&str; 6] = ["frame", "update", "physics", "render", "draws", "present"];
+
+/// The timeline trace (issue #62, ADR 0030) in its exported form: a local
+/// ring (not the global one a `--trace` build installs) records two frame
+/// marks, nested zones timed by the platform's clock around real work (a
+/// physics sweep, a rendered frame and its present), a counter from the
+/// renderer's stats; its packet goes out as `TRINO_TRACE:` lines over
+/// `platform.log` (the debug channel) and every line is read back as it is
+/// written: sequence, check, base64, then the packet itself (names,
+/// nesting, times in order, the platform tag). A second, tiny ring
+/// overflows on purpose: it keeps the newest events and counts the rest.
+/// Returns the events the packet carried.
+#[inline(never)]
+pub fn trace(
+    renderer: &mut dyn Renderer,
+    platform: &mut dyn Platform,
+) -> Result<u32, &'static str> {
+    use trino_core::trace::{EventKind, LINE_BYTES, Packet, TraceLine, TraceRing, track};
+
+    // Wraparound: 6 events in a ring of 4.
+    let mut small = TraceRing::<4>::new();
+    for i in 0..6 {
+        small.counter("n", track::CPU, i, i);
+    }
+    if small.len() != 4 || small.dropped() != 2 || small.events().next().map(|e| e.value) != Some(2)
+    {
+        return Err("trace: a full ring doesn't keep the newest events");
+    }
+
+    let clock = |p: &dyn Platform| p.now_micros() as u32;
+    let mut ring = TraceRing::<32>::new();
+    let t_frame = clock(platform);
+    ring.frame(t_frame, 1);
+    let t_update = clock(platform);
+    ring.open(track::CPU);
+    let t_physics = clock(platform);
+    // Real work for the zone.
+    let mut acc = 0.0f32;
+    for i in 0..256 {
+        acc += sin(i as f32 * 0.01) * cos(i as f32 * 0.02);
+    }
+    if !acc.is_finite() {
+        return Err("trace: the timed work went wrong");
+    }
+    let t_physics_end = clock(platform);
+    ring.zone("physics", track::CPU, t_physics, t_physics_end);
+    ring.close(track::CPU);
+    ring.zone("update", track::CPU, t_update, clock(platform));
+    let t_render = clock(platform);
+    renderer.begin_frame(Color::BLACK);
+    renderer.set_camera(&Camera3 {
+        eye: Vec3::new(0.0, 0.0, -1.2),
+        target: Vec3::ZERO,
+        fov_y: 60.0 * core::f32::consts::PI / 180.0,
+    });
+    renderer.set_light(&DEFAULT_LIGHT);
+    renderer.draw_model(
+        CARD,
+        &Transform3::default(),
+        Material::VertexLit,
+        &ModelParams::DEFAULT,
+    );
+    ring.open(track::CPU);
+    let t_present = clock(platform);
+    renderer.end_frame();
+    ring.zone("present", track::CPU, t_present, clock(platform));
+    ring.close(track::CPU);
+    // The finished frame's counters.
+    let draws = renderer.stats().models;
+    if draws != 1 {
+        return Err("trace: the traced frame didn't draw its model");
+    }
+    ring.zone("render", track::CPU, t_render, clock(platform));
+    ring.counter("draws", track::CPU, clock(platform), draws);
+    ring.frame(clock(platform), 2);
+
+    // Out over the debug channel, each line read back as written.
+    struct Lines<'a> {
+        platform: &'a dyn Platform,
+        line: [u8; 192],
+        len: usize,
+        bytes: [u8; 1024],
+        at: usize,
+        next_seq: u32,
+        err: Option<&'static str>,
+    }
+    impl core::fmt::Write for Lines<'_> {
+        fn write_str(&mut self, s: &str) -> core::fmt::Result {
+            for &b in s.as_bytes() {
+                if self.len == self.line.len() {
+                    self.err = Some("trace: a line is too long");
+                    return Err(core::fmt::Error);
+                }
+                self.line[self.len] = b;
+                self.len += 1;
+                if b != b'\n' {
+                    continue;
+                }
+                let text = core::str::from_utf8(&self.line[..self.len]).unwrap_or("");
+                self.platform.log(text);
+                let mut chunk = [0u8; LINE_BYTES];
+                let decoded = TraceLine::parse(text)
+                    .filter(|l| l.session == TRACE_SESSION && l.seq == self.next_seq)
+                    .map(|l| l.decode(&mut chunk));
+                match decoded {
+                    Some(Ok(n)) if self.at + n <= self.bytes.len() => {
+                        self.bytes[self.at..self.at + n].copy_from_slice(&chunk[..n]);
+                        self.at += n;
+                    }
+                    _ => {
+                        self.err = Some("trace: a line doesn't read back");
+                        return Err(core::fmt::Error);
+                    }
+                }
+                self.next_seq += 1;
+                self.len = 0;
+            }
+            Ok(())
+        }
+    }
+    let mut lines = Lines {
+        platform: &*platform,
+        line: [0; 192],
+        len: 0,
+        bytes: [0; 1024],
+        at: 0,
+        next_seq: 0,
+        err: None,
+    };
+    let held = ring.len();
+    let want = ring.packet_len();
+    let mut seq = 0;
+    let target = platform.trace_platform();
+    if ring
+        .write_lines(target, TRACE_SESSION, &mut seq, &mut lines)
+        .is_err()
+    {
+        return Err(lines.err.unwrap_or("trace: writing the lines failed"));
+    }
+    if lines.at != want || seq != lines.next_seq || seq as usize != want.div_ceil(LINE_BYTES) {
+        return Err("trace: the lines don't carry the whole packet");
+    }
+
+    let (p, len) = Packet::parse(&lines.bytes[..lines.at]).map_err(|_| "trace: packet")?;
+    if len != want || p.platform != target || p.dropped != 0 || p.event_count as usize != held {
+        return Err("trace: the packet's header is wrong");
+    }
+    let mut names = [""; 8];
+    for (i, n) in p.names().enumerate().take(8) {
+        names[i] = n;
+    }
+    if p.name_count as usize != TRACE_NAMES.len() || TRACE_NAMES.iter().any(|n| !names.contains(n))
+    {
+        return Err("trace: the packet's names are wrong");
+    }
+    let find = |name: &str| {
+        p.events()
+            .find(|e| names[e.name as usize] == name && e.kind == EventKind::Zone as u8)
+    };
+    let (Some(update), Some(physics), Some(render), Some(present)) = (
+        find("update"),
+        find("physics"),
+        find("render"),
+        find("present"),
+    ) else {
+        return Err("trace: a zone is missing");
+    };
+    let inside = |inner: &trino_core::trace::TraceEvent, outer: &trino_core::trace::TraceEvent| {
+        inner.ts >= outer.ts
+            && inner.ts.wrapping_add(inner.value) <= outer.ts.wrapping_add(outer.value)
+            && inner.depth == outer.depth + 1
+    };
+    if !inside(&physics, &update) || !inside(&present, &render) || render.ts < update.ts {
+        return Err("trace: zones don't nest or follow each other");
+    }
+    let frames: [u32; 2] = {
+        let mut f = p.events().filter(|e| e.kind == EventKind::Frame as u8);
+        match (f.next(), f.next()) {
+            (Some(a), Some(b)) if (a.value, b.value) == (1, 2) && b.ts >= a.ts => [a.ts, b.ts],
+            _ => return Err("trace: the frame marks are wrong"),
+        }
+    };
+    if render.ts.wrapping_add(render.value) > frames[1] {
+        return Err("trace: the frame ends before its render");
+    }
+    let counter = p
+        .events()
+        .find(|e| e.kind == EventKind::Counter as u8)
+        .ok_or("trace: no counter")?;
+    if names[counter.name as usize] != "draws" || counter.value != draws {
+        return Err("trace: the counter's value is wrong");
+    }
+    Ok(held as u32)
+}
+
+/// `TRINO_STEP:trace events=<n> instrumented=<0|1>` (whether this build
+/// compiled the global zones in: `--trace`).
+pub fn log_trace(platform: &dyn Platform, events: u32) {
+    let mut line = TextBuf::<80>::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut line,
+        format_args!(
+            "TRINO_STEP:trace events={events} instrumented={}\n",
+            trino_core::trace::ENABLED as u8
+        ),
+    );
+    platform.log(line.as_str());
 }
 
 /// Achievements, stats and presence (issue #61) through the `Platform`

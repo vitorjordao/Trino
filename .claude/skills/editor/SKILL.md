@@ -21,7 +21,8 @@ folder, which becomes the working directory.
 - **When it shows:** with no project argument. A hook that acts on an open scene
   skips it and opens the working directory as before. The hooks are
   `TRINO_EDITOR_SCENE`, `SELECT`, `TAB`, `OPEN`, `PLAY`, `INSPECT`, `ANIM`,
-  `ANIM_VIEW`, `PALETTE`, `GAME`, `LOD_PREVIEW` and `UI` (`main.rs::EDITOR_HOOKS`).
+  `ANIM_VIEW`, `PALETTE`, `GAME`, `LOD_PREVIEW`, `UI`, `TRACE` and `TRACE_B`, among
+  others (`main.rs::EDITOR_HOOKS` is the list).
   `--launcher` or `TRINO_EDITOR_LAUNCHER=1` always show it. The rule is
   `main.rs::start`, unit-tested.
 - **Recent projects:** each row shows the name, the path (elided at the start), the
@@ -69,7 +70,9 @@ TRINO_EDITOR_SCREENSHOT=target/launcher.png TRINO_EDITOR_SCREENSHOT_FRAME=10 car
 | `TRINO_EDITOR_SCREENSHOT=out.png` | save a PNG of the whole window, then exit |
 | `TRINO_EDITOR_SCREENSHOT_FRAME=N` | …after N frames (default 30; use ~60 so thumbnails finish) |
 | `TRINO_EDITOR_SELECT=<name>[,<name>…]` | start with those entities selected (the first is active; gizmo + inspector visible) |
-| `TRINO_EDITOR_TAB=scene\|game\|level\|animation\|mixer\|quality\|memory\|accessibility\|ui\|localization\|project` | focused center tab (`mixer`, `quality`, `memory`, `accessibility`: the bottom dock's Mixer, Quality or Memory tab; `project`: the Project tab) |
+| `TRINO_EDITOR_TAB=scene\|game\|level\|animation\|mixer\|quality\|memory\|accessibility\|ui\|localization\|project\|profiler` | focused center tab (`mixer`, `quality`, `memory`, `accessibility`: the bottom dock's Mixer, Quality or Memory tab; `project`: the Project tab; `profiler`: the Profiler tab) |
+| `TRINO_EDITOR_TRACE=<file>[@session]` | the Profiler tab opens that trace (relative to the project, e.g. `target/traces/n64-trace.json@n64-hub`) as trace A on that session, and comes to front |
+| `TRINO_EDITOR_TRACE_B=<file>[@session]` | …and that one as trace B (compare); without `@session` B pairs with A's session (`pair_sessions`) |
 | `TRINO_EDITOR_PROJECT_PAGE=packaging` | the Project tab opens on Packaging (default Achievements) |
 | `TRINO_EDITOR_LANG=<tag>` | the editor-wide preview language (issue #59): the Localization tab's, the UI tab's (unless `TRINO_EDITOR_UI` names one) and Play's `TRINO_LANG` |
 | `TRINO_EDITOR_ACCESS=cvd=deuteranopia,text=200,contrast=on` | the Accessibility tab's simulation at start: the Scene, Game and UI views through that color vision, the UI tab at that text size and contrast (`AccessSettings::parse_text` keys) |
@@ -188,6 +191,7 @@ Live-edit check: start the editor with `TRINO_EDITOR_ECHO_LOG=1` in the backgrou
 | `panels/audio.rs` | Assets › Audio inspector: waveform + codec noise, Play per platform, bake settings, the Platforms grid; the budget lines; `name_slider` |
 | `panels/mixer.rs` | the Mixer tab: bus volumes and preview mutes, duck rules; writes `assets/audio.toml` |
 | `ui_screens.rs`, `panels/ui_screens.rs` | the UI tab (issue #58): edits `ui/*.ui.ron` live — tree (add/duplicate/delete/drag), inspector, preview through the real renderer profile per target (3DS: both screens) and language, focus-order/selection/overflow overlays, issues from `validate` + `audit`; saves when the pointer and keyboard are idle, keeping the leading comments; outside edits reload. Tests: `ui_tests.rs::ui_tab_edits_screens_and_follows_their_files` (GPU, `--ignored --test-threads=1`) |
+| `profiler.rs`, `panels/profiler.rs` | the Profiler tab (issue #62): traces A/B from `target/traces/` through `trino-trace`, timeline, frame flame graph, zone and diff tables, live reload, the budget's measured N64 line (see "Profiler tab") |
 | `localization.rs`, `panels/localization.rs` | the Localization tab (issue #59): keys × languages from `assets/i18n/*.ron` (default first, pseudo-locales last), cells marked own / fallback (amber) / missing (red), edits written through `write_echo` (comments are not kept), add or remove keys and languages, a pseudo-locale, CSV at `assets/i18n/strings.csv`, `check()` issues with click-to-select, glyph coverage and N64 TMEM per checked font and language measured on a worker; the preview language is editor-wide (UI tab, Play's `TRINO_LANG`). Wide tables page sideways (‹ ›) so the layout audit stays clean. Tests: `ui_tests.rs::localization_tab_edits_the_tables_and_follows_their_files` (GPU, `--ignored --test-threads=1`) |
 
 ## Water (ADR 0015)
@@ -368,6 +372,51 @@ the modes too: a kittest click on "Deuteranopia" must pick the first match.
   960×600. `trino.toml` is watched when it exists.
 - Tests: `project_tab_edits_achievements_and_packaging_as_text`, the layout audit visits
   both pages.
+
+## Profiler tab (issue #62, ADR 0030)
+
+- `profiler.rs` (state, pure and unit-tested: `TimeView` zoom/pan, `lanes`, `visible`,
+  `measured_session`, `list_traces`, `parse_hook`, `load`) + `panels/profiler.rs` (UI).
+  Everything goes through `trino-trace`, the crate `cargo xtask trace report|diff` uses:
+  the tab and an agent read the same numbers.
+- Lists `target/traces/*.json|*.log` of the project (Refresh button, re-listed every
+  poll). Trace A (file + session combos, accessible names "Trace A", "Session A") drives
+  the timeline, the frame view and the Zones table; trace B ("Trace B", "none" closes it)
+  adds the Diff (B − A) table: Δ mean, %, Δ p95 (+ A/B means and Δ/frame when wide), red
+  when B is slower, green faster, faint within 2 %; `new`/`gone` for zones on one side.
+  B's session follows A's through `pair_sessions` until one is picked.
+- Timeline: painted (`paint_tracks`), a row per track and depth, frame marks, a ruler;
+  wheel (or pinch/Ctrl+wheel) zooms around the cursor, drag pans, double-click or Fit
+  shows everything. It sits outside the tab's scroll area and zeroes
+  `smooth_scroll_delta` when hovered, so the wheel never also scrolls the tables. Its
+  accessible names: "Timeline", "Frame flame graph". Hover text: name, track, duration,
+  start, depth. Zones under ~1.5 px on a row merge with their neighbour (the PC's 1 MB
+  trace stays fast).
+- The frame view: ‹ slider › over `frames`, that frame's `frame_range` as a flame graph.
+- Tables are rows of fixed-width cells (no horizontal scroll: the layout audit). Above
+  1000 px with B open, Diff and Zones sit side by side.
+- Live: both files are polled once a second (`ProfilerState::poll`, `(mtime, len)`), the
+  panel asks for a repaint after `POLL`. A reload that fails (a log caught mid-write)
+  keeps the last good trace, says so faintly, and retries on every poll. Following
+  `pc.log` while `cargo xtask run pc --trace` runs is the live view of a Play run.
+- Files load through `trino_trace::chrome::load`, which tries JSON first and then
+  `TRINO_TRACE:` lines (logs start with `[ares]`/`[game]`: the first character can't
+  tell them apart).
+- Estimated vs measured: the scene settings' Platform budget has "N64 measured X ms
+  (session, n frames)" under "N64 ≈" when a `target/traces/n64*.json` holds an `n64-*`
+  session of that scene with two frame marks (`n64-<scene>`, else `n64-<scene>-…`; never
+  another scene's: the showcase once read the castle64 hub's 20 ms beside its own 25.8 ms
+  estimate; newest file first; re-read when the files change). Its **Profiler** button opens that trace
+  and session here. Not in the Game view HUD (painted; kittest can't see it).
+- Tests: `ui_tests::profiler_tab_reads_compares_and_follows_traces` (A as Chrome JSON, B
+  as a log, a live reload, the measured line and its button), the layout audit's
+  "Profiler (empty)" and "Profiler A vs B" steps, unit tests in `profiler.rs`.
+- Screenshots:
+  `TRINO_EDITOR_TRACE=target/traces/n64-trace.json@n64-hub
+  TRINO_EDITOR_TRACE_B=target/traces/n64-trace.json@n64-cpu-hub
+  TRINO_EDITOR_SCREENSHOT=p.png cargo xtask editor .`
+- `section_title` upper-cases its text: query "DIFF (B", not "Diff (B". `query_by_label`
+  panics on two matches (a zone name is in both tables): use `query_all_by_label`.
 
 ## Rules when changing the editor
 

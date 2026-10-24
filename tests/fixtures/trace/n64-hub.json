@@ -1,0 +1,2328 @@
+{
+  "displayTimeUnit": "ms",
+  "otherData": {
+    "format": "trino-trace",
+    "sessions": [
+      {
+        "dropped": 0,
+        "name": "n64-hub",
+        "names": [
+          "update",
+          "frame",
+          "begin",
+          "draw",
+          "sort",
+          "submit",
+          "rsp queue",
+          "2d",
+          "draws",
+          "tris",
+          "rsp_draws",
+          "rsp_tris",
+          "end",
+          "render",
+          "audio"
+        ],
+        "platform": "n64"
+      }
+    ],
+    "version": 1
+  },
+  "traceEvents": [
+    {
+      "args": {
+        "name": "n64-hub"
+      },
+      "name": "process_name",
+      "ph": "M",
+      "pid": 1,
+      "tid": 1000
+    },
+    {
+      "args": {
+        "sort_index": 1
+      },
+      "name": "process_sort_index",
+      "ph": "M",
+      "pid": 1,
+      "tid": 1000
+    },
+    {
+      "args": {
+        "name": "cpu"
+      },
+      "name": "thread_name",
+      "ph": "M",
+      "pid": 1,
+      "tid": 1000
+    },
+    {
+      "args": {
+        "depth": 0
+      },
+      "cat": "cpu",
+      "dur": 275,
+      "name": "update",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 0
+    },
+    {
+      "args": {
+        "depth": 0
+      },
+      "cat": "cpu",
+      "dur": 15124,
+      "name": "render",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 319
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 106,
+      "name": "begin",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 438
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 1088,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 1055
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 326,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 2210
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 256,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 2583
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 259,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 2907
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 237,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 3188
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 239,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 3473
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 239,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 3760
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 264,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 4047
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 250,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 4334
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 251,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 4629
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 240,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 4929
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 254,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 5216
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 276,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 5493
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 258,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 5791
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 284,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 6150
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 262,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 6484
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 267,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 6791
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 291,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 7103
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 325,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 7755
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 290,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 8128
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 359,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 8554
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 282,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 8943
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 235,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 9293
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 270,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 9596
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 251,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 9894
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 91,
+      "name": "sort",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 10235
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 1120,
+      "name": "submit",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 10326
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 231,
+      "name": "rsp queue",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 11468
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 135,
+      "name": "2d",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 12309
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 0,
+      "name": "2d",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 12533
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 112,
+      "name": "2d",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 12603
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 111,
+      "name": "2d",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 12738
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 111,
+      "name": "2d",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 12871
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 90,
+      "name": "2d",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 13050
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 21,
+      "name": "2d",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 13209
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 133,
+      "name": "2d",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 13254
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 111,
+      "name": "2d",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 13410
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 112,
+      "name": "2d",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 13543
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 1652,
+      "name": "end",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 13769
+    },
+    {
+      "args": {
+        "depth": 0
+      },
+      "cat": "cpu",
+      "dur": 2935,
+      "name": "audio",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 15465
+    },
+    {
+      "args": {
+        "depth": 0
+      },
+      "cat": "cpu",
+      "dur": 338,
+      "name": "update",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 18447
+    },
+    {
+      "args": {
+        "depth": 0
+      },
+      "cat": "cpu",
+      "dur": 24497,
+      "name": "render",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 18785
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 12393,
+      "name": "begin",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 18900
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 1083,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 31632
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 101,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 32781
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 70,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 32945
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 319,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 33060
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 226,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 33427
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 258,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 33700
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 254,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 33981
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 70,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 34281
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 68,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 34395
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 68,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 34486
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 70,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 34601
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 72,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 34693
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 46,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 34809
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 48,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 34904
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 89,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 35043
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 90,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 35155
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 69,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 35268
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 92,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 35382
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 310,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 35827
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 292,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 36182
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 160,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 36612
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 272,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 36802
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 230,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 37142
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 271,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 37439
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 251,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 37738
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 89,
+      "name": "sort",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 38078
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 1115,
+      "name": "submit",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 38167
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 601,
+      "name": "rsp queue",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 39304
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 134,
+      "name": "2d",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 40320
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 23,
+      "name": "2d",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 40523
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 133,
+      "name": "2d",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 40594
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 111,
+      "name": "2d",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 40750
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 111,
+      "name": "2d",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 40884
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 88,
+      "name": "2d",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 41064
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 22,
+      "name": "2d",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 41218
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 133,
+      "name": "2d",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 41263
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 111,
+      "name": "2d",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 41418
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 112,
+      "name": "2d",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 41551
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 1503,
+      "name": "end",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 41757
+    },
+    {
+      "args": {
+        "depth": 0
+      },
+      "cat": "cpu",
+      "dur": 2657,
+      "name": "audio",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 43307
+    },
+    {
+      "args": {
+        "depth": 0
+      },
+      "cat": "cpu",
+      "dur": 343,
+      "name": "update",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 46009
+    },
+    {
+      "args": {
+        "depth": 0
+      },
+      "cat": "cpu",
+      "dur": 13713,
+      "name": "render",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 46352
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 1555,
+      "name": "begin",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 46466
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 1067,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 48367
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 113,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 49502
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 92,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 49678
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 325,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 49792
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 227,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 50164
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 258,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 50437
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 254,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 50718
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 69,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 51018
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 68,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 51131
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 72,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 51222
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 67,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 51339
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 69,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 51428
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 46,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 51541
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 48,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 51637
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 90,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 51776
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 68,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 51889
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 67,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 52001
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 91,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 52113
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 330,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 52553
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 289,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 52927
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 166,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 53356
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 271,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 53552
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 231,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 53891
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 271,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 54188
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 251,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 54487
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 90,
+      "name": "sort",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 54827
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 1112,
+      "name": "submit",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 54917
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 518,
+      "name": "rsp queue",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 56052
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 134,
+      "name": "2d",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 56974
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 23,
+      "name": "2d",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 57178
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 133,
+      "name": "2d",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 57249
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 111,
+      "name": "2d",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 57405
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 111,
+      "name": "2d",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 57539
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 88,
+      "name": "2d",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 57717
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 22,
+      "name": "2d",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 57871
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 133,
+      "name": "2d",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 57917
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 111,
+      "name": "2d",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 58072
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 112,
+      "name": "2d",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 58205
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 1635,
+      "name": "end",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 58408
+    },
+    {
+      "args": {
+        "depth": 0
+      },
+      "cat": "cpu",
+      "dur": 152,
+      "name": "audio",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 60088
+    },
+    {
+      "args": {
+        "depth": 0
+      },
+      "cat": "cpu",
+      "dur": 354,
+      "name": "update",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 60262
+    },
+    {
+      "args": {
+        "depth": 0
+      },
+      "cat": "cpu",
+      "dur": 16227,
+      "name": "render",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 60616
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 4009,
+      "name": "begin",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 60735
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 1074,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 65087
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 100,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 66228
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 70,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 66397
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 320,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 66513
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 239,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 66856
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 262,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 67143
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 250,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 67428
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 72,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 67726
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 68,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 67843
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 72,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 67934
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 67,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 68051
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 68,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 68141
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 46,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 68254
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 66,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 68344
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 73,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 68500
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 72,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 68617
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 72,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 68734
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 93,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 68829
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 301,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 69270
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 299,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 69641
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 137,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 70085
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 307,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 70272
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 246,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 70647
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 273,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 70961
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 252,
+      "name": "draw",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 71262
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 88,
+      "name": "sort",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 71605
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 1095,
+      "name": "submit",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 71715
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 382,
+      "name": "rsp queue",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 72832
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 134,
+      "name": "2d",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 73629
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 23,
+      "name": "2d",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 73833
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 135,
+      "name": "2d",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 73904
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 110,
+      "name": "2d",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 74061
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 112,
+      "name": "2d",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 74193
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 89,
+      "name": "2d",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 74374
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 22,
+      "name": "2d",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 74532
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 135,
+      "name": "2d",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 74578
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 113,
+      "name": "2d",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 74735
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 111,
+      "name": "2d",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 74871
+    },
+    {
+      "args": {
+        "depth": 1
+      },
+      "cat": "cpu",
+      "dur": 1727,
+      "name": "end",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 75094
+    },
+    {
+      "args": {
+        "depth": 0
+      },
+      "cat": "cpu",
+      "dur": 2388,
+      "name": "audio",
+      "ph": "X",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 76866
+    },
+    {
+      "args": {
+        "draws": 25
+      },
+      "name": "draws",
+      "ph": "C",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 13702
+    },
+    {
+      "args": {
+        "tris": 19
+      },
+      "name": "tris",
+      "ph": "C",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 13725
+    },
+    {
+      "args": {
+        "rsp_draws": 24
+      },
+      "name": "rsp_draws",
+      "ph": "C",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 13747
+    },
+    {
+      "args": {
+        "rsp_tris": 581
+      },
+      "name": "rsp_tris",
+      "ph": "C",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 13747
+    },
+    {
+      "args": {
+        "draws": 25
+      },
+      "name": "draws",
+      "ph": "C",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 41712
+    },
+    {
+      "args": {
+        "tris": 19
+      },
+      "name": "tris",
+      "ph": "C",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 41734
+    },
+    {
+      "args": {
+        "rsp_draws": 24
+      },
+      "name": "rsp_draws",
+      "ph": "C",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 41734
+    },
+    {
+      "args": {
+        "rsp_tris": 581
+      },
+      "name": "rsp_tris",
+      "ph": "C",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 41757
+    },
+    {
+      "args": {
+        "draws": 25
+      },
+      "name": "draws",
+      "ph": "C",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 58364
+    },
+    {
+      "args": {
+        "tris": 19
+      },
+      "name": "tris",
+      "ph": "C",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 58386
+    },
+    {
+      "args": {
+        "rsp_draws": 24
+      },
+      "name": "rsp_draws",
+      "ph": "C",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 58386
+    },
+    {
+      "args": {
+        "rsp_tris": 581
+      },
+      "name": "rsp_tris",
+      "ph": "C",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 58408
+    },
+    {
+      "args": {
+        "draws": 25
+      },
+      "name": "draws",
+      "ph": "C",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 75049
+    },
+    {
+      "args": {
+        "tris": 19
+      },
+      "name": "tris",
+      "ph": "C",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 75049
+    },
+    {
+      "args": {
+        "rsp_draws": 24
+      },
+      "name": "rsp_draws",
+      "ph": "C",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 75072
+    },
+    {
+      "args": {
+        "rsp_tris": 581
+      },
+      "name": "rsp_tris",
+      "ph": "C",
+      "pid": 1,
+      "tid": 1000,
+      "ts": 75072
+    },
+    {
+      "args": {
+        "frame": 1885
+      },
+      "name": "frame",
+      "ph": "i",
+      "pid": 1,
+      "s": "p",
+      "tid": 1000,
+      "ts": 416
+    },
+    {
+      "args": {
+        "frame": 1886
+      },
+      "name": "frame",
+      "ph": "i",
+      "pid": 1,
+      "s": "p",
+      "tid": 1000,
+      "ts": 18877
+    },
+    {
+      "args": {
+        "frame": 1887
+      },
+      "name": "frame",
+      "ph": "i",
+      "pid": 1,
+      "s": "p",
+      "tid": 1000,
+      "ts": 46443
+    },
+    {
+      "args": {
+        "frame": 1888
+      },
+      "name": "frame",
+      "ph": "i",
+      "pid": 1,
+      "s": "p",
+      "tid": 1000,
+      "ts": 60713
+    }
+  ]
+}

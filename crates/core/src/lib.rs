@@ -52,6 +52,7 @@ pub mod services;
 pub mod shadow;
 pub mod text;
 pub mod tilemap;
+pub mod trace;
 pub mod ui;
 pub mod version;
 pub mod vis;

@@ -27,8 +27,12 @@ gilrs = { version = "0.11", optional = true }
 [features]
 default = []
 gamepad = ["dep:gilrs"]
+# Tracy (issue #62): the engine's zones live in the Tracy profiler.
+tracy = ["trino-render-wgpu/tracy"]
 
 [dev-dependencies]
+# The trace test reads its own lines back (issue #62).
+trino-trace = { workspace = true }
 png = { workspace = true }
 # Golden tests of the real showcase game + baked 3D models (dev-only: the
 # dep-graph rule about platform crates concerns normal dependencies).

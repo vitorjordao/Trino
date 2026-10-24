@@ -101,6 +101,10 @@ impl Platform for N3dsPlatform {
         runtime::hw_tier()
     }
 
+    fn trace_platform(&self) -> trino_core::trace::TracePlatform {
+        trino_core::trace::TracePlatform::N3ds
+    }
+
     /// The player's accessibility settings for this session (issue #60):
     /// RAM only; a game keeps them across power cycles by storing
     /// `AccessSettings::pack` in its own save.

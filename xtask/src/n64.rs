@@ -538,6 +538,7 @@ fn cargo_build(p: &Project) -> Result<(), String> {
         ])
         .arg(&target)
         .args(["-p", &p.n64_package])
+        .args(p.trace_features())
         .current_dir(&p.root)
         .env_remove("CARGO")
         .env_remove("RUSTC")
@@ -615,6 +616,7 @@ fn pack_rom(p: &Project) -> Result<(), String> {
          -Wl,--wrap -Wl,__do_global_ctors \
          -Wl,-Map=target/n64/{name}.map\n\
          mips64-elf-size -G target/n64/{name}.elf\n\
+         mips64-elf-nm -S -C target/n64/{name}.elf > target/n64/{name}.syms\n\
          cd target/n64\n\
          n64sym {name}.elf {name}.elf.sym\n\
          cp {name}.elf {name}.elf.stripped\n\
@@ -633,8 +635,62 @@ fn pack_rom(p: &Project) -> Result<(), String> {
     let map =
         std::fs::read_to_string(&map_path).map_err(|e| format!("{}: {e}", map_path.display()))?;
     check_mem_symbols(&map)?;
+    let syms_path = p.root.join(format!("target/n64/{name}.syms"));
+    let syms =
+        std::fs::read_to_string(&syms_path).map_err(|e| format!("{}: {e}", syms_path.display()))?;
+    println!("[n64] {}", check_hot_symbols(&syms, p.trace)?);
     println!("[n64] ROM: {}", p.rom().display());
     Ok(())
+}
+
+/// The N64's direct-mapped I-cache is 16 KB: the unlit, unskinned T&L body
+/// (`tessellate_joints::<false, false>`, the one most CPU draws run) must
+/// fit in it (AGENTS.md pitfall: 15.6 → 18.0 KB made every unlit draw
+/// 10–35 % slower).
+pub const TNL_ICACHE_BYTES: u64 = 16 * 1024;
+
+/// The ROM's symbols (`mips64-elf-nm -S -C`): the hot T&L body within the
+/// I-cache, and — unless the build is `--trace` — none of the trace
+/// recorder (`trino_core::trace::global`, the zones, a host's ring): zones
+/// compile out completely (issue #62).
+pub fn check_hot_symbols(syms: &str, trace: bool) -> Result<String, String> {
+    let size_of = |name: &str| {
+        syms.lines().find_map(|l| {
+            let mut f = l.splitn(4, ' ');
+            let (_, size, _, sym) = (f.next()?, f.next()?, f.next()?, f.next()?);
+            (sym == name).then(|| u64::from_str_radix(size, 16).ok())?
+        })
+    };
+    let tnl = "trino_core::render3d::tessellate_joints::<false, false>";
+    let size = size_of(tnl).ok_or(format!("{tnl}: not in the ROM's symbols"))?;
+    if size > TNL_ICACHE_BYTES {
+        return Err(format!(
+            "{tnl} is {size} bytes, past the N64's {TNL_ICACHE_BYTES}-byte I-cache \
+             (keep new per-vertex work out of it: AGENTS.md pitfalls)"
+        ));
+    }
+    let recorder: Vec<&str> = syms
+        .lines()
+        .filter(|l| {
+            l.contains("trino_core::trace::global")
+                || l.contains("trino_core::trace::Zone")
+                || l.contains("trace_start::RING")
+        })
+        .collect();
+    if !trace && !recorder.is_empty() {
+        return Err(format!(
+            "the trace recorder is linked into a build without --trace (zones must compile \
+             out): {}",
+            recorder.join("; ")
+        ));
+    }
+    if trace && recorder.is_empty() {
+        return Err("a --trace build without the trace recorder (trino-core/trace off?)".into());
+    }
+    Ok(format!(
+        "hot code: {tnl} {size} bytes (I-cache {TNL_ICACHE_BYTES}); trace recorder {}",
+        if trace { "linked (--trace)" } else { "absent" }
+    ))
 }
 
 /// The linker map must place `memcpy`/`memset`/`memmove`/`memcmp` from
@@ -933,6 +989,7 @@ fn boot_test(p: &Project, bless: bool, pak: bool) -> ExitCode {
 
     let mut watchdog = crate::emulators::Watchdog::new();
     let mut fb = crate::fbgolden::FbCapture::default();
+    let mut traces = crate::trace::Capture::default();
     let mut frames: Vec<crate::fbgolden::FbCapture> = Vec::new();
     let mut perf_scenes = Vec::new();
     let mut micro_scenes = Vec::new();
@@ -954,6 +1011,10 @@ fn boot_test(p: &Project, bless: bool, pak: bool) -> ExitCode {
                     if fb.done() {
                         frames.push(std::mem::take(&mut fb));
                     }
+                    continue;
+                }
+                // Trace lines are collected, not echoed (issue #62).
+                if traces.feed(&line) {
                     continue;
                 }
                 println!("[ares] {line}");
@@ -1015,7 +1076,23 @@ fn boot_test(p: &Project, bless: bool, pak: bool) -> ExitCode {
         }
         Ok(())
     });
-    let verdict = if p.is_engine {
+    // The run's trace (the self-test's `trace` step; with --trace the
+    // engine's zones too) into target/traces/ (issue #62).
+    let verdict = verdict.and_then(|()| {
+        let name = format!("n64{}", if p.trace { "-trace" } else { "" });
+        let msg = traces.finish(&p.engine, &name, p.is_engine)?;
+        println!("[n64] trace: {msg}");
+        Ok(())
+    });
+    let verdict = if p.is_engine && p.trace {
+        // An instrumented ROM is not the gated one: report, never gate.
+        verdict.map(|()| {
+            println!("[n64] --trace build: perf gates and goldens skipped (instrumented code)");
+            if let Ok(t) = crate::perf::report_only(&perf_scenes) {
+                println!("[n64] perf with the zones in (emulated us per frame):\n{t}");
+            }
+        })
+    } else if p.is_engine {
         verdict.and_then(|()| engine_gates(root, &frames, &perf_scenes, &micro_scenes, bless))
     } else {
         verdict.and_then(|()| {
@@ -1162,6 +1239,30 @@ fn frame_gate(lines: &[(String, u32, u32)], max_frame_us: Option<u32>) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hot_symbols_fit_the_icache_and_zones_compile_out() {
+        let tnl = "800fda88 00003f58 t trino_core::render3d::tessellate_joints::<false, false>\n\
+                   80105d20 00004098 t trino_core::render3d::tessellate_joints::<true, false>\n";
+        let ring = "801ad608 0000c41c D trino_platform_n64::runtime::trace_start::RING\n";
+        let global = "80050000 00000040 t trino_core::trace::global::begin\n";
+        let ok = check_hot_symbols(tnl, false).unwrap();
+        assert!(ok.contains("16216 bytes"), "{ok}");
+        assert!(check_hot_symbols(&format!("{tnl}{ring}"), false).is_err());
+        assert!(check_hot_symbols(&format!("{tnl}{global}"), false).is_err());
+        assert!(check_hot_symbols(&format!("{tnl}{ring}{global}"), true).is_ok());
+        assert!(
+            check_hot_symbols(tnl, true).is_err(),
+            "--trace must link the recorder"
+        );
+        let big = tnl.replace("00003f58", "00004100");
+        assert!(
+            check_hot_symbols(&big, false)
+                .unwrap_err()
+                .contains("I-cache")
+        );
+        assert!(check_hot_symbols("", false).is_err());
+    }
 
     #[test]
     fn the_text_pad_is_whole_instructions_before_the_rust_code() {

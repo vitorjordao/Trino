@@ -17,6 +17,9 @@ default = ["gamepad"]
 reload = ["dep:hot-lib-reloader", "trino-asset-pipeline/watch"]
 # Gamepads through gilrs
 gamepad = ["trino-runner-pc/gamepad", "trino-platform-pc/gamepad"]
+# Tracy (issue #62): `cargo run -p trino-app-pc --features tracy`, then
+# connect the Tracy viewer.
+tracy = ["trino-runner-pc/tracy"]
 
 [dependencies]
 trino-core = { workspace = true }

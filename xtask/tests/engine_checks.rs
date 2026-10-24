@@ -463,3 +463,50 @@ fn the_accessibility_step_passes_on_every_profile() {
         );
     }
 }
+
+/// The `trace` step's lines (issue #62) read on the host as the emulator
+/// harnesses read them: a platform that records `log` around the PC's, the
+/// lines collected by `trino-trace`, the step's names and nesting there.
+#[test]
+fn the_trace_step_lines_collect_on_the_host() {
+    use std::cell::RefCell;
+    struct Capture {
+        inner: PcPlatform,
+        log: RefCell<String>,
+    }
+    impl trino_core::Platform for Capture {
+        fn now_micros(&self) -> u64 {
+            self.inner.now_micros()
+        }
+        fn log(&self, message: &str) {
+            self.log.borrow_mut().push_str(message);
+        }
+        fn trace_platform(&self) -> trino_core::trace::TracePlatform {
+            self.inner.trace_platform()
+        }
+    }
+    let save_dir = tempfile::tempdir().unwrap();
+    let Some((mut renderer, platform)) = pc_target(SimProfile::N64, save_dir.path()) else {
+        return;
+    };
+    let mut p = Capture {
+        inner: platform,
+        log: RefCell::new(String::new()),
+    };
+    let events = castle64::selftest::trace(&mut renderer, &mut p).unwrap();
+    assert_eq!(events, 7);
+    let t = trino_trace::collect(&p.log.borrow()).unwrap();
+    let s = t.session(castle64::selftest::TRACE_SESSION).unwrap();
+    assert_eq!(s.platform, "pc");
+    for n in castle64::selftest::TRACE_NAMES {
+        assert!(s.names.iter().any(|x| x == n), "{n}");
+    }
+    let depth = |n: &str| {
+        s.zones
+            .iter()
+            .find(|z| s.name_of(z.name) == n)
+            .map(|z| z.depth)
+    };
+    assert_eq!((depth("update"), depth("physics")), (Some(0), Some(1)));
+    assert_eq!((depth("render"), depth("present")), (Some(0), Some(1)));
+}

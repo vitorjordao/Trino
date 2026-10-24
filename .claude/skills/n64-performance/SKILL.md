@@ -551,6 +551,23 @@ How the last 9 ms came off `micro-river`, and what the tools could and couldn't 
   don't sample the layout inside the Rust code (ADR 0013 §4). Before calling a change a
   regression, try that.
 
+## Traces: the timeline behind the table (issue #62, ADR 0030)
+
+The scene table is the gate; a trace says where inside the frame the time went and how
+it varies frame to frame. `TRINO_ARES=docker cargo xtask test n64 --trace` builds the
+zones in and writes one session per perf scene to `target/traces/n64-trace.json`
+(`trace report … --session n64-hub`, Perfetto). A `--trace` ROM is another binary: its
+table is printed, never gated or blessed. `build n64` also guards the I-cache:
+`tessellate_joints::<false, false>` ≤ 16 KB (0x3f58 = 16 216 B on 2026-10-24) and no
+recorder symbol without `--trace` (`check_hot_symbols`). The `profiling` skill has the
+rest (PC/3DS/Web, Tracy, the editor's Profiler).
+
+Measured with the zones on (ares, castle64 hub, 4 frames, 2026-10-24): `render`
+17.5 ms/frame of which `draw` 5.5 ms over 25 calls (221 µs mean, 1.1 ms max), `begin`
+4.8 ms (vsync wait), `end` 1.6 ms, `submit` 1.1 ms, `rsp queue` 0.43 ms, `2d` 0.94 ms over
+10 calls, `audio` 1.3 ms. The play loop (`run n64 --trace`, 60 s of ares): 18.6 ms mean
+frame, p95 19.0 ms, one 132 ms spike on the first frame.
+
 ## Workflow for a perf change
 
 1. Baseline on the base commit in a `git worktree` (never `git stash`), over a few
@@ -562,3 +579,6 @@ How the last 9 ms came off `micro-river`, and what the tools could and couldn't 
 4. Judge on the scene table (all five), on identical code apart from the change.
 5. Bless both baselines, quote before/after in the commit and BACKLOG, update the
    "where the time goes" section and the table above.
+6. Add the trace evidence: `test n64 --trace` on both commits (each in its own
+   worktree), `cargo xtask trace diff base.json branch.json --session n64-hub --json`, and
+   a Perfetto screenshot of the scene that moved (`profiling` skill).

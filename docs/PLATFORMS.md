@@ -407,6 +407,19 @@ letterbox's bars do not already cover. Touch taps controls like the mouse clicks
 
 Troubleshooting: the [build-web](../.agents/skills/build-web/SKILL.md) skill.
 
+## Traces on each platform (ADR 0030)
+
+| Target | Clock | Channel | Record with |
+|---|---|---|---|
+| PC | `Instant` | a file or stdout (`TRINO_TRACE`), Tracy (`--features tracy`) | `cargo xtask run pc --trace` |
+| N64 | CPU count register (`trino_ticks_us`) | ISViewer; the flashcart's USB log | `cargo xtask test n64 --trace`, `run n64 --trace` |
+| 3DS | `svcGetSystemTick` | `svcOutputDebugString`; stdout under 3dslink | `cargo xtask test 3ds --trace`, `run 3ds --trace` |
+| Web | `performance.now()` | the console (every 120 frames), `performance.measure` | `cargo xtask test web --trace` (also build, run) |
+
+GPU pass zones need timestamp queries (the PC's Vulkan/Metal/DX12 adapters, WebGPU where
+the browser exposes them); WebGL2 and the consoles have none (the N64's RSP and RDP time
+shows as the CPU's wait in `end`).
+
 ## External projects
 
 A game in its own repository builds for the consoles with the same commands

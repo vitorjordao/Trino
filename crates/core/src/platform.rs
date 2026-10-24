@@ -188,6 +188,13 @@ pub trait Platform {
         crate::HwTier::Base
     }
 
+    /// The target this platform is, as a trace names it ([`crate::trace`],
+    /// issue #62): `Pc` on the PC whatever console look it simulates, `N64`,
+    /// `N3ds`, `Web`. `Unknown` for a backend that doesn't say (tests).
+    fn trace_platform(&self) -> crate::trace::TracePlatform {
+        crate::trace::TracePlatform::Unknown
+    }
+
     /// The language the system is set to ([`crate::i18n`], issue #59): the
     /// OS locale on the PC (`TRINO_LANG` overrides it), `navigator.language`
     /// on the Web, the system setting on the 3DS (a bare language, `pt`,

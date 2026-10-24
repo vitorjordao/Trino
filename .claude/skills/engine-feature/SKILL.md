@@ -166,6 +166,12 @@ A feature is done only when **PC, N64 and 3DS** all run it and an emulator has s
   player earns goes into **the game's** save (`pack_for`/`restore_*`), never a region the
   engine carves out of the EEPROM (it would move the save layout of every game).
 
+- **Instrument a new stage with the trace** (issue #62, the `profiling` skill):
+  `trino_core::zone!("name")` at its boundary (never inside the T&L), a counter per frame
+  for its work. Out-of-line code that only a `--trace` build needs goes behind
+  `if trino_core::trace::ENABLED` into an `#[inline(never)]` function, so the release
+  build's code doesn't change (`build n64` checks the hot symbols).
+
 ## 2. Backends, in matched pairs
 
 - The FFI goes through the shims only: `crates/platform-n64/shim/trino_shim.c` with

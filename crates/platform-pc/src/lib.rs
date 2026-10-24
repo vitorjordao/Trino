@@ -17,10 +17,12 @@ pub mod language;
 pub mod system;
 pub mod tnl_oracle;
 
+#[cfg(feature = "tracy")]
+pub use trino_render_wgpu::tracy;
 /// The wgpu renderer (`trino-render-wgpu`), at its historical paths:
 /// `trino_platform_pc::renderer::…` and `trino_platform_pc::sim::…` (plus
 /// the quality's `dynres`, `pacing` and `quality`, issue #55).
-pub use trino_render_wgpu::{dynres, frame_report, pacing, quality, renderer, sim};
+pub use trino_render_wgpu::{dynres, frame_report, pacing, quality, renderer, sim, trace_host};
 
 pub use audio::PcAudio;
 pub use frame_report::FrameMeter;

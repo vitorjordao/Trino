@@ -300,6 +300,10 @@ impl Platform for PcPlatform {
         self.hw_tier
     }
 
+    fn trace_platform(&self) -> trino_core::trace::TracePlatform {
+        trino_core::trace::TracePlatform::Pc
+    }
+
     fn system_language(&self) -> Option<trino_core::LangTag> {
         self.language
     }

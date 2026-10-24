@@ -1,0 +1,11 @@
+[package]
+name = "trino-trace"
+description = "Host-side trace tools (issue #62): TRINO_TRACE log lines -> Chrome Trace Event / Perfetto JSON, per-zone statistics and diffs. Shared by xtask and the editor's Profiler."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+trino-core = { workspace = true }
+serde_json = { workspace = true }

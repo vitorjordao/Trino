@@ -33,6 +33,8 @@ trino-platform-web = { workspace = true }
 # renderer alone: no audio, so no ALSA for the console jobs).
 trino-render-wgpu = { workspace = true }
 pollster = { workspace = true }
+# `trace collect|report|diff` and the test runs' trace capture (issue #62).
+trino-trace = { workspace = true }
 
 [dev-dependencies]
 libloading = { workspace = true }

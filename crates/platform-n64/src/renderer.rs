@@ -316,6 +316,7 @@ impl N64Renderer {
         self.flush_cpu_batch();
         if !self.pending_rsp.is_empty() {
             let t0 = self.tick();
+            trino_core::zone!("rsp queue");
             self.submit_rsp();
             self.charge(t0, |s| &mut s.submit);
         }
@@ -584,6 +585,7 @@ impl N64Renderer {
         self.frame_stats.tris += self.pending_tris.len() as u32;
         let textured = self.pending_tex.iter().any(Option::is_some);
         let t0 = self.tick();
+        let zone = trino_core::trace::Zone::begin("sort");
         // Painter order as 8-byte keys (texture group, depth, submission
         // index) — never move the 88-byte triangles themselves.
         self.order.clear();
@@ -596,7 +598,9 @@ impl N64Renderer {
         }
         self.order.sort_unstable();
         self.charge(t0, |s| &mut s.sort);
+        zone.end();
         let t1 = self.tick();
+        trino_core::zone!("submit");
         if !textured {
             unsafe { ffi::trino_3d_begin() }
             for &(_, key) in &self.order {
@@ -1013,6 +1017,23 @@ fn submit_textured(
     }
 }
 
+/// A frame's counters on the trace (issue #62): no code at all without the
+/// `trace` feature (a constant branch), an out-of-line call with it.
+#[inline(always)]
+fn trace_counters(stats: &FrameStats) {
+    if trino_core::trace::ENABLED {
+        trace_counters_out(stats);
+    }
+}
+
+#[inline(never)]
+fn trace_counters_out(stats: &FrameStats) {
+    trino_core::trace::counter("draws", stats.models);
+    trino_core::trace::counter("tris", stats.tris);
+    trino_core::trace::counter("rsp_draws", stats.tnl.rsp_draws);
+    trino_core::trace::counter("rsp_tris", stats.tnl.rsp_tris);
+}
+
 /// Microseconds the profiled frames waited for the RSP and RDP at
 /// `end_frame` (`trino_drain`), since the last [`take_drain_us`]. A static,
 /// not a renderer or profile field: growing those structs moved hot data
@@ -1171,8 +1192,11 @@ impl Renderer for N64Renderer {
         if self.locals.set(&[], 0) {
             self.rebuild_tnl();
         }
+        trino_core::trace::frame_mark(self.water_frame_no);
         let t0 = self.tick();
+        let zone = trino_core::trace::Zone::begin("begin");
         unsafe { ffi::trino_frame_begin(pack_color(clear)) }
+        zone.end();
         self.charge(t0, |s| &mut s.begin);
         if let Some(p) = &mut self.profile {
             p.frames += 1;
@@ -1181,6 +1205,7 @@ impl Renderer for N64Renderer {
 
     fn draw_sprite(&mut self, sprite: SpriteId, pos: Vec2, params: &SpriteParams) {
         self.flush_model_batch();
+        trino_core::zone!("2d");
         let t0 = self.tick();
         self.blit(sprite, pos, params);
         self.charge(t0, |s| &mut s.sprites);
@@ -1276,6 +1301,7 @@ impl Renderer for N64Renderer {
         _material: Material,
         params: &ModelParams,
     ) {
+        trino_core::zone!("draw");
         if params.water.is_some() {
             self.draw_water(model, matrix, params);
             return;
@@ -1553,7 +1579,9 @@ impl Renderer for N64Renderer {
         self.flush_model_batch();
         self.frame_stats.shadows = self.shadows.stats;
         self.last_stats = self.frame_stats;
+        trace_counters(&self.frame_stats);
         let t0 = self.tick();
+        trino_core::zone!("end");
         unsafe { ffi::trino_frame_end() }
         // Profiling: charge the RSP/RDP work this frame queued to the frame
         // itself (with RSP T&L it is no longer CPU time).
@@ -1573,6 +1601,7 @@ impl Renderer for N64Renderer {
 
     fn fill_rect(&mut self, rect: trino_core::Rect, color: Color) {
         self.flush_model_batch();
+        trino_core::zone!("2d");
         let t0 = self.tick();
         let pack = |a: f32, b: f32| {
             (((a + 0.5) as i32 as u32 & 0xFFFF) << 16) | ((b + 0.5) as i32 as u32 & 0xFFFF)
@@ -1608,6 +1637,7 @@ impl Renderer for N64Renderer {
         {
             let ptr = entry.ptr;
             self.flush_model_batch();
+            trino_core::zone!("2d");
             let t0 = self.tick();
             if unsafe { ffi::trino_text_begin(ptr, pack_color(params.tint)) } == 1 {
                 // Glyphs go to the shim in runs (one call per run, not per

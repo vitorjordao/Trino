@@ -27,6 +27,12 @@ jobs:
       # libsteam_api at run time only) and the https crash upload.
       - run: cargo clippy -p trino-runner-pc --features steam,crash-upload,gamepad --all-targets -- -D warnings
       - run: cargo test -p trino-runner-pc --features steam store
+      # The timeline trace (issue #62) is compiled out by default, so no gate
+      # above builds the zones: the whole workspace with them in, the core's
+      # global ring, and Tracy (its C++ client) on the PC.
+      - run: cargo clippy --workspace --all-targets --features trino-core/trace -- -D warnings
+      - run: cargo test -p trino-core --features trace --lib trace
+      - run: cargo clippy -p trino-app-pc --features tracy --all-targets -- -D warnings
       # Achievements: castle64's table checks out, the Deck checklist passes.
       - run: cargo xtask services check
       - run: cargo xtask deck check
@@ -78,6 +84,19 @@ jobs:
       - name: Smoke run (Linux, headless)
         if: runner.os == 'Linux'
         run: TRINO_SMOKE_FRAMES=60 xvfb-run -a cargo run -p trino-app-pc
+      # Issue #62: the PC's trace end to end (zones, GPU passes where the
+      # adapter has timestamps), then a smoke run with the zones in whose
+      # lines `trace report` reads back.
+      - name: Trace (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cargo test -p trino-platform-pc --features trino-core/trace --test trace_zones
+          TRINO_TRACE=target/traces/smoke.log TRINO_SMOKE_FRAMES=60 xvfb-run -a cargo run -p trino-app-pc --features trino-core/trace
+          cargo xtask trace collect target/traces/smoke.log --out target/traces/smoke.json
+          cargo xtask trace report target/traces/smoke.json --json > target/traces/report.json
+          grep -q '"session":"pc-castle64"' target/traces/report.json
+        env:
+          TRINO_REQUIRE_GPU: "1"
       # The quality presets (issue #55) on the native profile: a run at each
       # preset (TRINO_FRAME says it), the first launch's calibration (auto),
       # then the CLI's check and bench.

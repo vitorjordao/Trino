@@ -1957,6 +1957,19 @@ fn scene_settings(app: &mut App, ui: &mut egui::Ui) {
             }
         },
     );
+    // The N64 frame a trace measured (issue #62), beside the estimate.
+    let scene_name = app
+        .doc
+        .path
+        .file_name()
+        .map(|n| {
+            n.to_string_lossy()
+                .trim_end_matches(".scene.ron")
+                .to_string()
+        })
+        .unwrap_or_default();
+    let measured = app.profiler.measured(&scene_name).cloned();
+    let mut open_profiler = false;
     if let Some((_, budgets)) = &app.budgets {
         if std::mem::take(&mut app.scroll_to_budget)
             || app.inspect_focus.as_deref() == Some("budget")
@@ -1975,7 +1988,15 @@ fn scene_settings(app: &mut App, ui: &mut egui::Ui) {
             |ui| {
                 let open = app.inspect_focus.as_deref() == Some("budget");
                 let game = app.game_view.target();
-                let picked = budget_section(ui, budgets, &app.project.tmem, open, game);
+                let picked = budget_section(
+                    ui,
+                    budgets,
+                    &app.project.tmem,
+                    open,
+                    game,
+                    measured.as_ref(),
+                    &mut open_profiler,
+                );
                 texture_memory(ui, &mut app.textures, &app.project);
                 crate::panels::audio::budget(ui, &mut app.audio, &app.project);
                 picked
@@ -1983,6 +2004,10 @@ fn scene_settings(app: &mut App, ui: &mut egui::Ui) {
         )
         .flatten();
         // An unseen draw's line, or an entity under a reason, selects it.
+        if open_profiler && let Some(m) = &measured {
+            app.profiler.open_a(&m.file, Some(&m.session));
+            app.cmds.push(Cmd::FocusTab(crate::app::Tab::Profiler));
+        }
         if let Some(name) = picked {
             let mut found = app.doc.scene.find_draw_name(&name);
             app.doc.scene.walk(|p, e| {
@@ -2605,6 +2630,8 @@ fn budget_section(
     tmem: &std::collections::BTreeMap<u32, Option<u32>>,
     open: bool,
     game: Target,
+    measured: Option<&crate::profiler::Measured>,
+    open_profiler: &mut bool,
 ) -> Option<String> {
     let line = |ui: &mut egui::Ui, text: String, color: egui::Color32| {
         ui.add(egui::Label::new(RichText::new(text).size(12.0).color(color)).truncate());
@@ -2626,6 +2653,39 @@ fn budget_section(
             c::OK
         },
     );
+    // Estimated vs measured (issue #62): the frame an N64 trace timed.
+    if let Some(m) = measured {
+        ui.horizontal(|ui| {
+            let w = (ui.available_width() - 92.0).max(60.0);
+            theme::fixed_width(ui, w, |ui| {
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(format!(
+                            "N64 measured {:.1} ms ({}, {} frames)",
+                            m.frame_mean_us / 1000.0,
+                            m.session,
+                            m.frames
+                        ))
+                        .size(12.0)
+                        .color(c::PREFAB),
+                    )
+                    .truncate(),
+                )
+                .on_hover_text(format!(
+                    "The frame mean of {} in {} (ares, emulated time)",
+                    m.session,
+                    m.file.display()
+                ));
+            });
+            if ui
+                .small_button(format!("{} Profiler", icon::PULSE))
+                .on_hover_text("Open this trace in the Profiler tab")
+                .clicked()
+            {
+                *open_profiler = true;
+            }
+        });
+    }
     line(
         ui,
         format!(

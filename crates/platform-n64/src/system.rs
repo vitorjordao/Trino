@@ -182,6 +182,10 @@ impl Platform for N64Platform {
         self.tier
     }
 
+    fn trace_platform(&self) -> trino_core::trace::TracePlatform {
+        trino_core::trace::TracePlatform::N64
+    }
+
     /// The player's accessibility settings for this session (issue #60):
     /// RAM only; a game keeps them across power cycles by storing
     /// `AccessSettings::pack` in its own save.

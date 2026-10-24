@@ -350,6 +350,7 @@ fn build_inner(project: &Project, opts: &BuildOptions) -> Result<PathBuf, String
     if opts.release {
         cmd.arg("--release");
     }
+    cmd.args(project.trace_features());
     let ok = cmd.status().is_ok_and(|s| s.success());
     if !ok {
         return Err(format!(
@@ -653,6 +654,19 @@ fn test_inner(project: &Project, opts: &TestOptions) -> Result<(), String> {
         }
         if opts.bless {
             blessed = true;
+        }
+        // The run's trace (issue #62): the self-test's `trace` step, and
+        // with --trace the engine's zones, from the page's console.
+        let console =
+            std::fs::read_to_string(out.join(&name).join("console.log")).unwrap_or_default();
+        let mut traces = crate::trace::Capture::default();
+        for line in console.lines() {
+            traces.feed(line);
+        }
+        let file = format!("web-{name}{}", if project.trace { "-trace" } else { "" });
+        match traces.finish(&project.engine, &file, project.is_engine) {
+            Ok(msg) => println!("[web] {name}: trace: {msg}"),
+            Err(e) => failures.push(format!("{name}: {e}")),
         }
     }
     if runs.is_empty() {

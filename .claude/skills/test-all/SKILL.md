@@ -84,6 +84,12 @@ Coverage: `TRINO_REQUIRE_GPU=1 cargo llvm-cov --workspace --summary-only
   cargo +nightly check -Zbuild-std=core,alloc -Zjson-target-spec --target platforms/n64/mips-nintendo64-none.json -p trino-app-n64 --release
   cargo +nightly check -Zbuild-std=core,alloc --target armv6k-nintendo-3ds -p trino-platform-3ds -p castle64 -p showcase --release
   ```
+- The timeline trace's features (issue #62; no default gate compiles them; CI's lint job
+  does): `cargo clippy --workspace --all-targets --features trino-core/trace -- -D
+  warnings`, `cargo test -p trino-core --features trace --lib trace`,
+  `cargo test -p trino-platform-pc --features trino-core/trace --test trace_zones` (GPU),
+  `cargo clippy -p trino-app-pc --features tracy --all-targets -- -D warnings` (builds
+  Tracy's C++ client). Console type-checks with `--features trino-core/trace` too.
 - The PC `gamepad` feature (no default gate compiles it):
   `cargo clippy -p trino-platform-pc --features gamepad --all-targets -- -D warnings`
   and `cargo test -p trino-platform-pc --features gamepad --lib --test input_audio`.

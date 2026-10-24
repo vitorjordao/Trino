@@ -98,6 +98,10 @@ impl Platform for WebPlatform {
             .map_or(0, |p| (p.now() * 1000.0) as u64)
     }
 
+    fn trace_platform(&self) -> trino_core::trace::TracePlatform {
+        trino_core::trace::TracePlatform::Web
+    }
+
     fn log(&self, message: &str) {
         crate::js::log(message);
     }

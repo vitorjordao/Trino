@@ -185,11 +185,13 @@ impl N3dsHost {
     /// The real-time loop, until the applet manager asks to quit.
     pub fn run(&mut self, game: &mut dyn Game) {
         let mut last = runtime::now_us();
+        let mut trace = runtime::TraceLoop::start("3ds-game");
         while runtime::running() {
             let now = runtime::now_us();
             let dt = (now.wrapping_sub(last) as f32 / 1_000_000.0).min(0.1);
             last = now;
             self.frame(game, dt);
+            trace.frame();
         }
     }
 

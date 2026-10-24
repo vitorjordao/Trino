@@ -129,6 +129,10 @@ pub struct Project {
     /// `false` puts a `no_speedup` file in the RomFS; `--speedup on|off`
     /// overrides it for one command.
     pub n3ds_speedup: bool,
+    /// `--trace` (issue #62): console builds compile the engine's zones in
+    /// (`trino-core/trace`) and the test runs collect them; a separate build
+    /// from the gated one, whose perf numbers are reported, never gated.
+    pub trace: bool,
     /// The Web host crate (`[web] package`, default `<name>-web`), the
     /// page's canvas id and title (`[web] canvas_id`, `page_title`).
     pub web_package: String,
@@ -414,6 +418,16 @@ fn strip_verbatim(p: PathBuf) -> PathBuf {
 }
 
 impl Project {
+    /// The cargo arguments of a `--trace` build: the engine's zones compiled
+    /// in through `trino-core`'s feature (every game and host links it).
+    pub fn trace_features(&self) -> Vec<String> {
+        if self.trace {
+            vec!["--features".into(), "trino-core/trace".into()]
+        } else {
+            Vec::new()
+        }
+    }
+
     /// The engine's own demo: castle64 through `apps/n64` and `apps/3ds`.
     pub fn engine() -> Self {
         let engine = engine_root();
@@ -434,6 +448,7 @@ impl Project {
             n3ds_bin: "trino-3ds".into(),
             n3ds_icon: None,
             n3ds_speedup: true,
+            trace: false,
             web_package: "trino-app-web".into(),
             web_canvas_id: DEFAULT_CANVAS_ID.into(),
             web_title: "Trino".into(),
@@ -627,6 +642,7 @@ impl Project {
             n3ds_package: n3ds.package,
             n3ds_bin: n3ds.bin,
             n3ds_speedup: n3ds.speedup,
+            trace: false,
             web_package,
             web_canvas_id,
             web_title,

@@ -123,6 +123,9 @@ struct App {
     /// Frame time and the 3D split per frame, printed as a `TRINO_FRAME:`
     /// line when a smoke run ends.
     meter: trino_platform_pc::FrameMeter,
+    /// `TRINO_TRACE`: the engine's zones (issue #62, `cargo xtask run pc
+    /// --trace`).
+    trace: Option<trino_platform_pc::trace_host::TraceHost>,
 }
 
 /// Upload (or re-upload) baked assets by handle (shared with standalone
@@ -301,8 +304,11 @@ impl ApplicationHandler for App {
                 ctx.last_frame = now;
 
                 let input = ctx.input.poll();
+                let zone = trino_core::trace::Zone::begin("groups");
                 ctx.groups
                     .pump(&mut ctx.renderer, &mut ctx.audio, &mut ctx.platform);
+                zone.end();
+                let zone = trino_core::trace::Zone::begin("game");
 
                 if let Some(player) = &mut ctx.player {
                     player.update(&input, dt);
@@ -331,10 +337,17 @@ impl ApplicationHandler for App {
                     }
                     #[cfg(not(feature = "reload"))]
                     {
+                        let update = trino_core::trace::Zone::begin("update");
                         ctx.game
                             .update_with(&mut ctx.platform, &input, &mut ctx.audio, dt);
+                        update.end();
+                        trino_core::zone!("render");
                         ctx.game.render(&mut ctx.renderer);
                     }
+                }
+                zone.end();
+                if let Some(t) = &mut self.trace {
+                    t.frame();
                 }
 
                 trino_runner_pc::save_access_settings(
@@ -403,6 +416,10 @@ fn main() {
         frames: 0,
         smoke_frames,
         meter: trino_platform_pc::FrameMeter::new(profile),
+        trace: trino_runner_pc::trace_from_env(&format!("pc-{}", run_label())),
     };
     event_loop.run_app(&mut app).expect("event loop error");
+    if let Some(t) = app.trace.take() {
+        t.finish();
+    }
 }

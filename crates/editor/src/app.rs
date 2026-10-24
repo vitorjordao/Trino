@@ -54,6 +54,9 @@ pub enum Tab {
     /// Shipping (issue #61): achievements (`assets/achievements.ron`) and
     /// packaging (`trino.toml`).
     Project,
+    /// Timeline traces (`target/traces/*.json|*.log`, issue #62): zones per
+    /// track, a frame's flame graph, per-zone statistics and an A/B diff.
+    Profiler,
 }
 
 impl Tab {
@@ -74,6 +77,7 @@ impl Tab {
             Tab::Accessibility => (icon::EYE, "Accessibility"),
             Tab::Localization => (icon::TRANSLATE, "Localization"),
             Tab::Project => (icon::TROPHY, "Project"),
+            Tab::Profiler => (icon::PULSE, "Profiler"),
         };
         format!("{glyph}  {name}")
     }
@@ -323,6 +327,8 @@ pub struct App {
     pub localization: crate::localization::Localization,
     /// The Project tab (issue #61): achievements and packaging.
     pub shipping: crate::shipping::ShippingState,
+    /// The Profiler tab (issue #62): traces A and B, the view.
+    pub profiler: crate::profiler::ProfilerState,
     /// Its overlay preview (the engine's list and popup).
     pub shipping_preview: Option<crate::preview::Preview>,
     /// The scene's frame from its camera on every target (variants, LOD and
@@ -666,7 +672,9 @@ impl App {
                 Ok("accessibility") => Some(Tab::Accessibility),
                 Ok("localization") => Some(Tab::Localization),
                 Ok("project") => Some(Tab::Project),
+                Ok("profiler") => Some(Tab::Profiler),
                 _ if std::env::var_os("TRINO_EDITOR_UI").is_some() => Some(Tab::Ui),
+                _ if std::env::var_os("TRINO_EDITOR_TRACE").is_some() => Some(Tab::Profiler),
                 _ => None,
             },
             open_docs: Vec::new(),
@@ -731,6 +739,7 @@ impl App {
             quality: crate::quality::QualityState::load(&root),
             access: crate::access::AccessState::load(&root),
             shipping: crate::shipping::ShippingState::load(&root),
+            profiler: crate::profiler::ProfilerState::new(&root),
             shipping_preview: None,
             // Dev hook: TRINO_EDITOR_UI=<screen>[,<platform>[,<lang>[,<node
             // id>]]] opens the UI tab on that screen.
@@ -2541,6 +2550,7 @@ impl App {
             (Tab::Console, "Console"),
             (Tab::Ui, "UI"),
             (Tab::Project, "Project"),
+            (Tab::Profiler, "Profiler"),
         ] {
             add(format!("Go to {name} view"), "View", Cmd::FocusTab(tab));
         }
@@ -3499,6 +3509,7 @@ fn default_dock(width: f32) -> egui_dock::DockState<Tab> {
             Tab::Ui,
             Tab::Localization,
             Tab::Project,
+            Tab::Profiler,
         ],
         Ok("game") => vec![
             Tab::Game,
@@ -3508,6 +3519,7 @@ fn default_dock(width: f32) -> egui_dock::DockState<Tab> {
             Tab::Ui,
             Tab::Localization,
             Tab::Project,
+            Tab::Profiler,
         ],
         Ok("animation") => vec![
             Tab::Animation,
@@ -3517,6 +3529,7 @@ fn default_dock(width: f32) -> egui_dock::DockState<Tab> {
             Tab::Ui,
             Tab::Localization,
             Tab::Project,
+            Tab::Profiler,
         ],
         _ => vec![
             Tab::Scene,
@@ -3526,6 +3539,7 @@ fn default_dock(width: f32) -> egui_dock::DockState<Tab> {
             Tab::Ui,
             Tab::Localization,
             Tab::Project,
+            Tab::Profiler,
         ],
     };
     let mut dock = egui_dock::DockState::new(tabs);
@@ -3590,7 +3604,8 @@ impl egui_dock::TabViewer for TabView<'_> {
             | Tab::Animation
             | Tab::Ui
             | Tab::Localization
-            | Tab::Project => [false, false],
+            | Tab::Project
+            | Tab::Profiler => [false, false],
             _ => [false, true],
         }
     }
@@ -3714,6 +3729,7 @@ impl egui_dock::TabViewer for TabView<'_> {
             Tab::Ui => crate::panels::ui_screens::ui(app, ui),
             Tab::Localization => crate::panels::localization::ui(app, ui),
             Tab::Project => crate::panels::shipping::ui(app, ui),
+            Tab::Profiler => crate::panels::profiler::ui(app, ui),
         }
     }
 }

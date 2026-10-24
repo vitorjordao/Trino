@@ -293,6 +293,7 @@ impl N3dsRenderer {
     /// Triangles are grouped by texture (painter order within a group), one
     /// `trino_3d_draw` per run.
     fn flush_model_batch(&mut self) {
+        trino_core::zone!("batch");
         self.flush_cpu_batch();
         self.flush_shadows();
         self.flush_gpu_water();
@@ -540,6 +541,7 @@ impl N3dsRenderer {
             self.order.push((group, painter_key(tri.depth, i)));
         }
         self.order.sort_unstable();
+        trino_core::zone!("submit");
         let mut run: Option<TexBind> = None;
         self.verts.clear();
         for k in 0..self.order.len() {
@@ -918,7 +920,9 @@ impl Renderer for N3dsRenderer {
         if was_bottom || had_lights {
             self.rebuild_tnl();
         }
+        trino_core::trace::frame_mark(self.frame_no.wrapping_add(1));
         let t0 = crate::runtime::now_us();
+        trino_core::zone!("begin");
         unsafe { ffi::trino_frame_begin(pack_color(clear)) }
         self.wait_us = self
             .wait_us
@@ -957,6 +961,7 @@ impl Renderer for N3dsRenderer {
 
     fn fill_rect(&mut self, rect: trino_core::Rect, color: Color) {
         self.flush_model_batch();
+        trino_core::zone!("2d");
         self.frame_stats.sprites += 1;
         let f = ffi::TrinoFill {
             x: rect.pos.x,
@@ -971,6 +976,7 @@ impl Renderer for N3dsRenderer {
 
     fn draw_sprite(&mut self, sprite: SpriteId, pos: Vec2, params: &SpriteParams) {
         self.flush_model_batch();
+        trino_core::zone!("2d");
         let Some(entry) = self.sprites.get(&sprite.0) else {
             self.frame_stats.not_loaded += 1;
             return;
@@ -1059,6 +1065,7 @@ impl Renderer for N3dsRenderer {
         _material: Material,
         params: &ModelParams,
     ) {
+        trino_core::zone!("draw");
         if params.shadow.casts() {
             self.cast_shadow(model, matrix, params);
         }
@@ -1217,6 +1224,10 @@ impl Renderer for N3dsRenderer {
         self.frame_stats.shadows = self.shadows.stats;
         self.last_stats = self.frame_stats;
         self.last_gpu_rejects = core::mem::take(&mut self.gpu_rejects);
+        if trino_core::trace::ENABLED {
+            trace_counters(&self.frame_stats);
+        }
+        trino_core::zone!("end");
         unsafe { ffi::trino_frame_end() }
     }
 
@@ -1256,4 +1267,12 @@ impl Renderer for N3dsRenderer {
         let c = unsafe { ffi::trino_debug_pixel(x, y, screen.index() as u32) };
         (c != 0).then(|| Color::rgba((c >> 24) as u8, (c >> 16) as u8, (c >> 8) as u8, c as u8))
     }
+}
+
+/// A frame's counters on the trace (issue #62; `--trace` builds only).
+#[inline(never)]
+fn trace_counters(stats: &FrameStats) {
+    trino_core::trace::counter("draws", stats.models);
+    trino_core::trace::counter("tris", stats.tris);
+    trino_core::trace::counter("gpu_draws", stats.tnl.gpu_draws);
 }

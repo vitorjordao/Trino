@@ -22,6 +22,9 @@ steam = ["dep:steamworks"]
 # Send crash reports to an https:// endpoint (`[pc] crash_upload`; plain
 # http:// to a local collector needs nothing). Only with the player's yes.
 crash-upload = ["dep:ureq"]
+# Tracy (issue #62): the engine's zones, counters, frames and GPU passes in
+# the Tracy profiler (on demand: connect a Tracy viewer to the running game).
+tracy = ["trino-platform-pc/tracy"]
 
 [dependencies]
 trino-core = { workspace = true }

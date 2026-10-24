@@ -41,6 +41,8 @@ mod n64 {
         }
 
         let mut last = runtime::now_us();
+        // `run n64 --trace`: the play loop's zones every 60 frames.
+        let mut trace = runtime::TraceLoop::start("n64-castle64");
         loop {
             let now = runtime::now_us();
             let dt = (now.wrapping_sub(last) as f32 / 1_000_000.0).min(0.1);
@@ -48,10 +50,17 @@ mod n64 {
 
             let state = input.poll();
             N64Assets::pump(&mut renderer, &mut audio, &mut platform);
+            let zone = trino_core::trace::Zone::begin("update");
             game.update_with(&mut platform, &state, &mut audio, dt);
+            zone.end();
+            let zone = trino_core::trace::Zone::begin("render");
             game.render(&mut renderer);
+            zone.end();
+            let zone = trino_core::trace::Zone::begin("audio");
             audio.poll();
+            zone.end();
             platform.sample_heap();
+            trace.frame();
         }
     }
 
@@ -626,16 +635,21 @@ mod n64 {
                          audio: &mut N64Audio,
                          input: &InputState| {
             let t0 = runtime::now_us();
+            let zone = trino_core::trace::Zone::begin("update");
             game.update(input, audio, DT);
+            zone.end();
             let t1 = runtime::now_us();
             if force_render.get() || frame_no % 4 == 0 {
+                trino_core::zone!("render");
                 game.render(renderer);
             }
             let t2 = runtime::now_us();
             last_update_us.set(t1.wrapping_sub(t0));
             last_render_us.set(t2.wrapping_sub(t1));
             frame_no += 1;
+            let zone = trino_core::trace::Zone::begin("audio");
             audio.poll();
+            zone.end();
             // The heap's peak for `check_heap`, every 8th frame (outside the
             // timed part: `mallinfo` walks the free lists).
             if frame_no % 8 == 0 {
@@ -718,6 +732,9 @@ mod n64 {
                     // (`castle64::perf`), per stage and per model. xtask
                     // compares the lines with tests/perf/n64.toml.
                     force_render.set(true);
+                    // `--trace` builds: each scene's frames as a trace
+                    // session (`n64-<scene>`, issue #62).
+                    let tracing = runtime::trace_start();
                     // RSP T&L on (the default, gated), then the same scenes
                     // on the CPU path as `cpu-<scene>` (same ROM, ungated):
                     // the A/B without code-layout noise.
@@ -731,6 +748,7 @@ mod n64 {
                             ));
                             let mut times = trino_core::perf::FrameTimes::default();
                             let v0 = runtime::vblanks();
+                            trino_core::trace::restart();
                             renderer.start_profile();
                             for _ in 0..castle64::perf::MEASURE_FRAMES {
                                 frame(&mut *g, renderer, audio, &idle);
@@ -738,6 +756,10 @@ mod n64 {
                                 times.render += last_render_us.get();
                             }
                             times.vblanks = runtime::vblanks().wrapping_sub(v0);
+                            if tracing {
+                                let session = format!("n64-{prefix}{}", scene.name);
+                                runtime::trace_flush(&session, &mut 0);
+                            }
                             if let Some(p) = renderer.take_profile() {
                                 let mut report = alloc::string::String::new();
                                 let name = format!("{prefix}{}", scene.name);

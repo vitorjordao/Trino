@@ -48,6 +48,8 @@ mod renderer;
 #[cfg(target_os = "horizon")]
 pub mod runtime;
 #[cfg(target_os = "horizon")]
+mod stereo;
+#[cfg(target_os = "horizon")]
 mod system;
 #[cfg(any(target_os = "horizon", test))]
 pub mod worker;

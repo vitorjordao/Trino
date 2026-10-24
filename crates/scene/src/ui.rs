@@ -485,8 +485,17 @@ pub struct NodeDef {
     /// channel for a color (issue #60). Its size comes from the manifest.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub cvd_icon: String,
+    /// Stereo depth on the 3DS top screen (issue #63): pixels of parallax
+    /// at the full 3D slider, positive out of the screen (a HUD that floats
+    /// over the scene), negative into it. 0 floats with the parent.
+    #[serde(skip_serializing_if = "is_zero_i8")]
+    pub depth: i8,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<NodeDef>,
+}
+
+fn is_zero_i8(v: &i8) -> bool {
+    *v == 0
 }
 
 impl NodeDef {
@@ -976,6 +985,7 @@ impl<'a> Flat<'a> {
                 sprite: SpriteId::from_path(&n.cvd_icon),
                 size: sprites(&n.cvd_icon).unwrap_or((8, 8)),
             }),
+            depth: n.depth,
         });
         self.paths.push(path.clone());
         for (i, c) in n.children.iter().enumerate() {
@@ -1705,6 +1715,9 @@ pub fn to_rust(flat: &Flat<'_>) -> String {
         }
         if n.text_scale != 0 {
             field("text_scale", n.text_scale.to_string());
+        }
+        if n.depth != 0 {
+            field("depth", n.depth.to_string());
         }
         if n.align != d.align {
             field("align", format!("TextAlign::{:?}", n.align));

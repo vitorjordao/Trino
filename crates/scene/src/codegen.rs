@@ -50,7 +50,7 @@ pub fn to_rust_for(scene: &Scene, lib: &Library, target: Target) -> (String, Vec
     );
     let _ = writeln!(
         out,
-        "#[allow(unused_imports)]\nuse trino_core::{{\n    AmbientOcclusion, AoQuality, Camera3, ClipId, Collider, Color, DetailTexture, Fog, Impostor,\n    Light, LodLevel, Lods, Mat34, ModelId, ModelParams, NO_CELL, SceneNode, ShadowCast,\n    ShadowPlane, ShadowSettings, ShadowTier, Shading, Shape, SoundId, SoundSource, SpriteId,\n    Tags, TexFilter, Vec2, Vec3, VisVolume, Water,\n}};\n"
+        "#[allow(unused_imports)]\nuse trino_core::{{\n    AmbientOcclusion, AoQuality, Camera3, ClipId, Collider, Color, DetailTexture, Fog, Impostor,\n    Light, LodLevel, Lods, Mat34, ModelId, ModelParams, NO_CELL, SceneNode, ShadowCast,\n    ShadowPlane, ShadowSettings, ShadowTier, Shading, Shape, SoundId, SoundSource, SpriteId,\n    StereoPolicy, StereoSettings, Tags, TexFilter, Vec2, Vec3, VisVolume, Water,\n}};\n"
     );
     let env = &scene.environment;
     let cam = env.core_camera();
@@ -120,6 +120,22 @@ pub fn to_rust_for(scene: &Scene, lib: &Library, target: Target) -> (String, Vec
     let _ = writeln!(
         out,
         "pub const SHADOWS: Option<ShadowSettings> = {shadows};\n"
+    );
+    // Stereo 3D (issue #63): `Renderer::set_stereo(STEREO.as_ref())` right
+    // after `begin_frame`, every frame (the 3DS draws two eyes from it).
+    let stereo = match env.core_stereo() {
+        Some(s) => format!(
+            "Some(StereoSettings {{\n    enabled: true,\n    max_separation: {},\n    convergence: {},\n    policy: StereoPolicy::{:?},\n    budget_us: {},\n    slider: None,\n}})",
+            f(s.max_separation),
+            f(s.convergence),
+            s.policy,
+            s.budget_us
+        ),
+        None => "None".into(),
+    };
+    let _ = writeln!(
+        out,
+        "pub const STEREO: Option<StereoSettings> = {stereo};\n"
     );
     let receivers: Vec<String> = resolved
         .receivers()

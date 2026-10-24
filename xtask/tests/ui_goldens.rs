@@ -75,6 +75,7 @@ fn starter_screens_match_their_goldens_on_every_profile() {
                 focus: None,
                 access: trino_core::ui::UiAccess::NONE,
                 simulate: None,
+                stereo: None,
             };
             let shot = match ui_render::render(&root, &manifest, &langs, &def, &opts) {
                 Ok(s) => s,
@@ -139,6 +140,7 @@ fn starter_screens_fill_wide_and_4k_pictures() {
             focus: None,
             access: trino_core::ui::UiAccess::NONE,
             simulate: None,
+            stereo: None,
         };
         let shot = match ui_render::render(&root, &manifest, &langs, &def, &opts) {
             Ok(s) => s,

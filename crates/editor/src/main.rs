@@ -30,7 +30,11 @@
 //! Audio inspector on a sound, its waveform over that platform's decode;
 //! `TRINO_EDITOR_TRACE=<file>[@session]` (+ `TRINO_EDITOR_TRACE_B`) opens
 //! traces in the Profiler tab (`TRINO_EDITOR_TAB=profiler`);
-//! `TRINO_EDITOR_RECENT=<file>` keeps the recent projects there.
+//! `TRINO_EDITOR_RECENT=<file>` keeps the recent projects there;
+//! `TRINO_EDITOR_STEREO=anaglyph[:0.8]` turns the Game view's 3DS stereo
+//! preview on (`side-by-side`, `left`, `right`, `flip`), with
+//! `TRINO_EDITOR_GAME=3ds`; `TRINO_EDITOR_SCENE_EYE=x,y,z` puts the Scene
+//! view's eye there, looking at the game camera's target.
 
 mod access;
 mod anim_panel;
@@ -104,6 +108,8 @@ pub const EDITOR_HOOKS: &[&str] = &[
     "TRINO_EDITOR_LANG",
     "TRINO_EDITOR_TRACE",
     "TRINO_EDITOR_TRACE_B",
+    "TRINO_EDITOR_STEREO",
+    "TRINO_EDITOR_SCENE_EYE",
 ];
 
 /// What the editor opens on start.

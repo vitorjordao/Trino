@@ -696,10 +696,25 @@ const SOUTH: (f32, f32) = (0.0, -1.0);
 const WEST: (f32, f32) = (1.0, 0.0);
 const EAST: (f32, f32) = (-1.0, 0.0);
 
+/// The match in stereo on the 3DS top screen (issue #63): the ball's
+/// focus on the screen's plane, the eyes 1/20 of the camera's distance
+/// apart at the full 3D slider (the far stand about 10 px behind it).
+pub fn match_stereo(cam: &CamState) -> trino_core::StereoSettings {
+    let c = cam.camera();
+    let d = c.eye - c.target;
+    let dist = trino_core::math3d::sqrt(d.dot(d));
+    trino_core::StereoSettings::new(dist * 0.05, dist)
+}
+
+/// The match HUD's stereo depth: out of the screen, over the pitch.
+pub const HUD_DEPTH: trino_core::LayerDepth = trino_core::LayerDepth(6);
+
 /// Draw the match (top screen). `aspect` is the picture's width / height.
 pub fn draw_match(r: &mut dyn Renderer, m: &Match, v: &MatchView, aspect: f32) {
     let hifi = hifi(r, v.retro);
     r.begin_frame(v.sky.clear());
+    // Before any draw: the 3DS draws the top screen once per eye.
+    r.set_stereo(Some(&match_stereo(&v.cam)));
     r.set_camera(&v.cam.camera());
     // Declared every frame: renderer state outlives frames (AGENTS.md).
     r.set_light(&v.sky.light());

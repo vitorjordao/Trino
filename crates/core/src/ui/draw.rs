@@ -173,10 +173,17 @@ impl<const N: usize> Ui<N> {
         };
         let screen = if hc { &themed } else { screen };
         let icons = env.access.cvd != crate::access::CvdMode::Off;
+        // Stereo layer depth (issue #63): set only where it changes, so a
+        // screen without depths makes no extra call.
+        let mut depth = 0i8;
         for i in 0..self.count {
             let slot = self.slots[i];
             if slot.on != which || self.hidden(i) {
                 continue;
+            }
+            if slot.depth != depth {
+                depth = slot.depth;
+                r.set_layer_depth(crate::stereo::LayerDepth(depth));
             }
             let mut n = screen.node(slot.node as usize);
             if hc && !matches!(n.kind, NodeKind::Image { .. } | NodeKind::Model3d { .. }) {
@@ -376,6 +383,9 @@ impl<const N: usize> Ui<N> {
             if icons && let Some(icon) = n.cvd_icon {
                 self.cvd_icon(r, rect, icon, scale);
             }
+        }
+        if depth != 0 {
+            r.set_layer_depth(crate::stereo::LayerDepth::SCREEN);
         }
     }
 

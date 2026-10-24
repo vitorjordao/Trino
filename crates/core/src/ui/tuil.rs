@@ -2,17 +2,18 @@
 //! target). Zero-copy: [`UiScreen::parse`] checks the header, the tree and
 //! the string pool once, then nodes decode on demand.
 //!
-//! Layout (little-endian), version 2 (version 1 still loads: its records
-//! are 94 bytes and have no `cvd_icon`):
+//! Layout (little-endian), version 3 (versions 1 and 2 still load: their
+//! records are 94 and 102 bytes, version 1 has no `cvd_icon`, neither has a
+//! `depth`):
 //!
 //! | Offset | Size | Field |
 //! |---|---|---|
 //! | 0 | 4 | magic `TUIL` |
-//! | 4 | 2 | version (2) |
+//! | 4 | 2 | version (3) |
 //! | 6 | 2 | flags: bit 0 fractional scaling, bit 1 wrap focus |
 //! | 8 | 4 | reference width, height (u16 each) |
 //! | 12 | 2 | node count |
-//! | 14 | 2 | record size (≥ 102, ≥ 94 in version 1; longer records are read by their prefix) |
+//! | 14 | 2 | record size (≥ 104; ≥ 102 in version 2, ≥ 94 in version 1; longer records are read by their prefix) |
 //! | 16 | 2 | first focus node (`0xffff` = none) |
 //! | 18 | 2 | reserved |
 //! | 20 | 8 | name, on_back (string refs) |
@@ -28,8 +29,9 @@
 //! visible_on, offset, size (kind + value per axis), min, max, padding,
 //! text scale, align, valign, overflow, color, font, four focus overrides,
 //! seven string refs (id, text, key, bind, action, visible_if, enabled_if),
-//! a 16-byte payload per kind (see [`encode_record`]) and, from version 2,
-//! the `cvd_icon` (sprite id, width and height as u16; sprite 0 = none).
+//! a 16-byte payload per kind (see [`encode_record`]), from version 2 the
+//! `cvd_icon` (sprite id, width and height as u16; sprite 0 = none) and,
+//! from version 3, the stereo `depth` (i8) and a reserved byte.
 
 use super::UiError;
 use super::node::{
@@ -40,11 +42,13 @@ use crate::math::Color;
 use crate::render::{FontId, ModelId, Screen, SpriteId, TextAlign};
 
 pub const MAGIC: &[u8; 4] = b"TUIL";
-pub const VERSION: u16 = 2;
+pub const VERSION: u16 = 3;
 /// Header bytes.
 pub const HEADER: usize = 84;
-/// Node record bytes (version 2).
-pub const RECORD: usize = 102;
+/// Node record bytes (version 3).
+pub const RECORD: usize = 104;
+/// Node record bytes in version 2 (no `depth`).
+pub const RECORD_V2: usize = 102;
 /// Node record bytes in version 1 (no `cvd_icon`).
 pub const RECORD_V1: usize = 94;
 
@@ -55,8 +59,10 @@ pub struct Records<'a> {
     size: usize,
     count: usize,
     pool: &'a str,
-    /// Whether the records carry a `cvd_icon` (version 2).
+    /// Whether the records carry a `cvd_icon` (version 2) and a `depth`
+    /// (version 3).
     icons: bool,
+    depths: bool,
 }
 
 impl<'a> Records<'a> {
@@ -132,6 +138,7 @@ impl<'a> Records<'a> {
             } else {
                 None
             },
+            depth: if self.depths { b[102] as i8 } else { 0 },
         }
     }
 }
@@ -146,7 +153,7 @@ impl<'a> UiScreen<'a> {
             return Err(UiError::BadMagic);
         }
         let version = rd16(bytes, 4);
-        if version != VERSION && version != 1 {
+        if !(1..=VERSION).contains(&version) {
             return Err(UiError::UnsupportedVersion(version));
         }
         let count = rd16(bytes, 12) as usize;
@@ -154,7 +161,12 @@ impl<'a> UiScreen<'a> {
         let at = rd32(bytes, 28) as usize;
         let pool_at = rd32(bytes, 32) as usize;
         let pool_len = rd32(bytes, 36) as usize;
-        if size < if version == 1 { RECORD_V1 } else { RECORD } {
+        let least = match version {
+            1 => RECORD_V1,
+            2 => RECORD_V2,
+            _ => RECORD,
+        };
+        if size < least {
             return Err(UiError::Truncated);
         }
         let records = at
@@ -172,6 +184,7 @@ impl<'a> UiScreen<'a> {
             count,
             pool,
             icons: version >= 2,
+            depths: version >= 3,
         };
         // Every string ref must land on characters of the pool.
         for i in 0..count {
@@ -356,6 +369,7 @@ pub fn encode_record(
         wr16(&mut b, 98, icon.size.0);
         wr16(&mut b, 100, icon.size.1);
     }
+    b[102] = node.depth as u8;
     b
 }
 

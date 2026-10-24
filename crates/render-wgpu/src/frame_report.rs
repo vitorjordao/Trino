@@ -41,6 +41,10 @@ pub struct FrameMeter {
     quality: Option<QualityNote>,
     /// Pipelines compiled inside frames (issue #101): hitches.
     pipes: u64,
+    /// Frames that drew two eyes and the last frame's stereo (the 3DS
+    /// profile's preview, issue #63).
+    stereo_frames: u64,
+    stereo: trino_core::StereoStats,
 }
 
 /// The quality a host reports on the line ([`FrameMeter::set_quality`]).
@@ -78,6 +82,8 @@ impl FrameMeter {
             samples: Vec::new(),
             quality: None,
             pipes: 0,
+            stereo_frames: 0,
+            stereo: trino_core::StereoStats::default(),
         }
     }
 
@@ -142,6 +148,8 @@ impl FrameMeter {
         self.pc_gpu_draws += stats.tnl.pc_gpu_draws as u64;
         self.pc_gpu_tris += stats.tnl.pc_gpu_tris as u64;
         self.instanced += stats.tnl.instanced as u64;
+        self.stereo = stats.stereo;
+        self.stereo_frames += (stats.stereo.eyes == 2) as u64;
         for (o, n) in self.off.iter_mut().zip(off) {
             *o += *n as u64;
         }
@@ -175,6 +183,16 @@ impl FrameMeter {
             SimProfile::N3ds => "3ds",
             SimProfile::Web => "web",
         };
+        // The 3DS profile says how many frames drew two eyes, and why the
+        // last one did or didn't (TRINO_STEREO previews them).
+        let stereo = match self.profile {
+            SimProfile::N3ds => {
+                let mut f = String::new();
+                let _ = self.stereo.write(&mut f);
+                format!(" stereo_frames={} {f}", self.stereo_frames)
+            }
+            _ => String::new(),
+        };
         let low1 = self.low1_us();
         let low1_fps = 1_000_000u64.checked_div(low1).unwrap_or(0);
         let quality = match self.quality {
@@ -191,7 +209,7 @@ impl FrameMeter {
         format!(
             "TRINO_FRAME:{scene} profile={profile} avg_us={avg} max_us={} frames={} fps={fps} \
              draws={} tris={} pc_gpu_draws={} pc_gpu_tris={} instanced={} off_pc_gpu={off} {} \
-             low1_us={low1} low1_fps={low1_fps} pipes={}{quality}",
+             low1_us={low1} low1_fps={low1_fps} pipes={}{quality}{stereo}",
             self.max_us,
             self.frames,
             per(self.models),
@@ -208,6 +226,26 @@ impl FrameMeter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_3ds_profile_reports_its_stereo_frames() {
+        let mut m = FrameMeter::new(SimProfile::N3ds);
+        let mut stats = FrameStats::default();
+        stats.stereo = trino_core::StereoFrame::resolve(
+            Some(&trino_core::StereoSettings::new(0.1, 4.0).with_slider(0.5)),
+            true,
+            0.0,
+            true,
+        )
+        .stats(3);
+        m.add(&stats, &[0; PcGpuReject::COUNT]);
+        stats.stereo = trino_core::StereoFrame::mono(trino_core::StereoMono::Slider).stats(0);
+        m.add(&stats, &[0; PcGpuReject::COUNT]);
+        let line = m.line("hub");
+        assert!(line.ends_with(" stereo_frames=1 stereo=slider0"), "{line}");
+        let native = FrameMeter::new(SimProfile::Native).line("hub");
+        assert!(!native.contains("stereo"), "{native}");
+    }
 
     #[test]
     fn the_line_averages_per_frame_and_sorts_the_reasons() {

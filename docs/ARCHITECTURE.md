@@ -207,6 +207,20 @@ z-fight. Scenes carry the settings and per-entity casters and receivers, the bud
 counts them per platform, and the editor previews every tier. Details in
 [ADR 0025](adr/0025-shadows-per-tier.md) and [PLATFORMS.md](PLATFORMS.md#shadows).
 
+### Stereoscopic 3D (issue #63)
+
+The 3DS top screen shows a picture per eye. The game still draws its frame once:
+`Renderer::set_stereo` (before the first top-screen draw) makes a backend with a stereo
+screen (`Caps::stereo`) record the top screen's calls (`trino_core::stereo::StereoCmd`)
+and replay them per eye when the frame moves to the bottom screen or ends. Each eye's
+3D projects through `TnlContext::with_eye`: an off-axis eye with zero parallax at the
+convergence depth. The CPU T&L, the PICA200 path, water, shadows and billboards all read
+that context, so no backend shader changed. 2D floats by `set_layer_depth` and UI nodes'
+`depth`. The slider at 0 is the mono path at the mono cost. The N64 and the Web have no
+stereo screen, and the defaults are no-ops there. The PC's 3DS profile replays the same
+way and composes a preview (anaglyph, side by side, one eye, a flip). Details in
+[ADR 0032](adr/0032-stereoscopic-3d.md).
+
 ### 2D in the same pipeline
 
 2D is not a separate engine path. The same `Renderer` draws it in the same frame as the

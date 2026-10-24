@@ -79,9 +79,10 @@ mod scene_n64 {
 pub use scene::NODES;
 pub use scene_n64::NODES as NODES_N64;
 
-/// The exported scene's camera, light, ambient occlusion and clear color.
+/// The exported scene's camera, light, ambient occlusion, stereo and
+/// clear color.
 pub mod scene_consts {
-    pub use super::scene::{AO, CAMERA, CLEAR, LIGHT};
+    pub use super::scene::{AO, CAMERA, CLEAR, LIGHT, STEREO};
 }
 
 /// Live entities: the whole exported scene fits with room to spare.
@@ -218,6 +219,9 @@ pub struct ShowcaseGame {
     /// Screen-space ambient occlusion (PC native only; the exported
     /// scene's `AO`, none from a baked scene unless the host sets it).
     pub ao: Option<AmbientOcclusion>,
+    /// Stereo 3D (the 3DS top screen; the exported scene's `STEREO`, none
+    /// from a baked scene unless the host sets it: TSCN carries none).
+    pub stereo: Option<trino_core::StereoSettings>,
     /// The scene's shadows and the first [`MAX_RECEIVERS`] receivers
     /// (ADR 0025: `SHADOWS`/`RECEIVERS`, or the baked scene's).
     pub shadows: Option<ShadowSettings>,
@@ -296,6 +300,7 @@ impl ShowcaseGame {
             screen,
         );
         game.ao = scene::AO;
+        game.stereo = scene::STEREO;
         game.set_shadows(scene::SHADOWS, scene::RECEIVERS.iter().copied());
         game
     }
@@ -368,6 +373,7 @@ impl ShowcaseGame {
             light: trino_core::DEFAULT_LIGHT,
             clear: Color::BLACK,
             ao: None,
+            stereo: None,
             shadows: None,
             receivers: [ShadowPlane::ground(0.0); MAX_RECEIVERS],
             n_receivers: 0,
@@ -421,6 +427,7 @@ impl ShowcaseGame {
             screen,
         );
         self.ao = scene::AO;
+        self.stereo = scene::STEREO;
         self.set_shadows(scene::SHADOWS, scene::RECEIVERS.iter().copied());
     }
 
@@ -458,6 +465,7 @@ impl ShowcaseGame {
             light: lgt,
             clear: clr,
             ao,
+            stereo,
             shadows,
             receivers: _,
             n_receivers,
@@ -509,6 +517,7 @@ impl ShowcaseGame {
         *lgt = light;
         *clr = clear;
         *ao = None;
+        *stereo = None;
         *shadows = None;
         *n_receivers = 0;
         *sparks = ParticleSystem::new(SPARKS, 0x5EED);
@@ -961,6 +970,8 @@ impl Game for ShowcaseGame {
         }
         let camera = self.camera();
         r.begin_frame(self.clear);
+        // Stereo first, before any top-screen draw (cleared every frame).
+        r.set_stereo(self.stereo.as_ref());
         r.set_camera(&camera);
         // The scene's light as authored unless the panel switched it; the
         // filter every frame (it persists in the renderer: `Default` hands

@@ -164,6 +164,32 @@ step probes for that.
   renderer's grave for `GRAVE_FRAMES` (2) frames: the GPU may still read them.
 - Boot logs `TRINO_MEM:` like the N64; the `asset groups` step logs `worker=<core>`.
 
+## Stereoscopic 3D (issue #63, ADR 0032)
+
+- **The renderer records, then replays per eye:** `N3dsRenderer` records the top
+  screen's calls from `set_stereo` (`crate::stereo::Recording`, a `StereoCmd` per call)
+  and replays them once per eye at `set_screen(1)` or `end_frame` (`replay_eyes`). Each
+  eye starts from `TopState` (camera, light, locals, filter, water, shadows).
+  `rebuild_tnl` applies the eye (`TnlContext::with_eye`) before the local lights.
+- **A new top-screen call needs a recording branch.** A new `Renderer` method that draws
+  or changes state on the top screen gets a `StereoCmd` and the `recording()` (draws) or
+  `recording_state()` (state) guard at its top. Without it, the call happens once,
+  outside both eyes.
+- **The shim, all with ≤ 2 integer arguments:**
+  - `trino_stereo_slider()` returns 16.16.
+  - `trino_stereo_mode(on)` calls `gfxSet3D` only on a change.
+  - `trino_stereo_eye(eye, rgba)` makes the right eye's target on first use (the top's
+    depth/stencil format, output `GFX_TOP`/`GFX_RIGHT`), clears it and begins the
+    scene on it. It returns 0 without VRAM, and the frame stays mono.
+  - `trino_debug_pixel` / `trino_debug_fb_dump` take screen 2 for the right eye.
+- **The 2DS family:** `trino_hw_probe` bit 2 marks an old 2DS or New 2DS XL
+  (`CFGU_GetSystemModel` 3 or 5), and `Probe::caps()` clears `Caps::stereo`.
+- **Test hook:** `N3dsRenderer::set_stereo_slider_override(Some(1.0))` stands in for
+  the hardware slider. The self-test times every castle64 level with it
+  (`TRINO_FRAME:<level>-stereo … stereo=on@100%`).
+- **Cost:** both eyes share the frame's CPU T&L vertex buffer (`TRI3D_MAX_VERTS`) and
+  citro3d's command buffer. A scene near either limit in mono overflows in stereo.
+
 ## The installable title (`.cia`, issue #61)
 
 `cargo xtask package 3ds --cia [--selftest]` (`xtask/src/n3ds_cia.rs`): `build_steps`,

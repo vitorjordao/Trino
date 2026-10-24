@@ -157,6 +157,12 @@ static void trino_tex3d_init(void)
 // Boot + logging
 
 static C3D_RenderTarget* s_top = NULL;
+// The top screen's right eye (issue #63, ADR 0032): made on the first
+// stereo frame, drawn only by stereo frames (citro3d transfers a target to
+// the LCD only in the frames that used it).
+static C3D_RenderTarget* s_top_right = NULL;
+// gfxSet3D's state (trino_stereo_mode).
+static int s_stereo_on = 0;
 // The touch screen (320x240), 2D and 3D (trino_set_screen).
 static C3D_RenderTarget* s_bottom = NULL;
 
@@ -285,7 +291,17 @@ uint32_t trino_hw_probe(uint32_t want_speedup)
         speedup = 1;
     }
     uint32_t app_mib = (uint32_t)(osGetMemRegionSize(MEMREGION_APPLICATION) >> 20);
-    return (is_new ? 1u : 0u) | (speedup << 1) | (app_mib << 8);
+    // An old 2DS or a New 2DS XL has no stereo screen (issue #63).
+    uint32_t flat = 0;
+    if (R_SUCCEEDED(cfguInit())) {
+        u8 model = 0;
+        if (R_SUCCEEDED(CFGU_GetSystemModel(&model)) &&
+            (model == CFG_MODEL_2DS || model == CFG_MODEL_N2DSXL)) {
+            flat = 1;
+        }
+        cfguExit();
+    }
+    return (is_new ? 1u : 0u) | (speedup << 1) | (flat << 2) | (app_mib << 8);
 }
 
 // The system language (issue #59): CFG_Language (0 Japanese, 1 English, ...
@@ -508,6 +524,63 @@ void trino_set_screen(uint32_t bottom)
     trino_tnl_leave();
     C2D_SceneBegin(bottom ? s_bottom : s_top);
     s_proj = bottom ? &s_proj_bottom : &s_proj_top;
+}
+
+// ---------------------------------------------------------------------------
+// Stereoscopic 3D (issue #63, ADR 0032). The Rust side records the top
+// screen's draws and replays them once per eye: the left eye into s_top,
+// then trino_stereo_eye(1, clear) moves the draws to the right eye's
+// target. trino_stereo_mode follows whether the frame drew two eyes, so a
+// mono frame never shows a stale right eye.
+
+// The 3D slider, 16.16 fixed point 0..1 (0 on a 2DS, whose slider state
+// stays 0).
+uint32_t trino_stereo_slider(void)
+{
+    float s = osGet3DSliderState();
+    if (!(s > 0.0f)) return 0;
+    if (s > 1.0f) s = 1.0f;
+    return (uint32_t)(s * 65536.0f);
+}
+
+// 1 = the frame being drawn shows two eyes, 0 = one. Call before
+// trino_frame_end; only a change touches the display (gfxSet3D).
+void trino_stereo_mode(uint32_t on)
+{
+    on = on ? 1 : 0;
+    if (on != (uint32_t)s_stereo_on) {
+        s_stereo_on = (int)on;
+        gfxSet3D(on != 0);
+    }
+}
+
+// Later top-screen draws go to the right eye (eye = 1, cleared to `rgba`
+// first) or the left one (0). Returns 0 when the right eye's target can't
+// be made (no VRAM): the caller then keeps the frame mono.
+uint32_t trino_stereo_eye(uint32_t eye, uint32_t rgba8888)
+{
+    trino_tnl_leave();
+    if (!eye) {
+        C2D_SceneBegin(s_top);
+        s_proj = &s_proj_top;
+        return 1;
+    }
+    if (!s_top_right) {
+        s_top_right = C3D_RenderTargetCreate(GSP_SCREEN_WIDTH, GSP_SCREEN_HEIGHT_TOP,
+                                             GPU_RB_RGBA8, GPU_RB_DEPTH24_STENCIL8);
+        if (!s_top_right) return 0;
+        C3D_RenderTargetSetOutput(
+            s_top_right, GFX_TOP, GFX_RIGHT,
+            GX_TRANSFER_FLIP_VERT(0) | GX_TRANSFER_OUT_TILED(0) | GX_TRANSFER_RAW_COPY(0) |
+                GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGBA8) |
+                GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB8) |
+                GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO));
+    }
+    C2D_TargetClear(s_top_right, C2D_Color32((rgba8888 >> 24) & 0xFF, (rgba8888 >> 16) & 0xFF,
+                                             (rgba8888 >> 8) & 0xFF, 0xFF));
+    C2D_SceneBegin(s_top_right);
+    s_proj = &s_proj_top;
+    return 1;
 }
 
 // A frame ended since the debug readback last waited for the display
@@ -1193,14 +1266,17 @@ static void trino_debug_landed(void)
 // the wait, see trino_debug_landed); callers draw the probed frame several
 // times so both LCD buffers hold it. The LCD buffer is column-major,
 // bottom-up.
-uint32_t trino_debug_pixel(uint32_t x, uint32_t y, uint32_t bottom)
+uint32_t trino_debug_pixel(uint32_t x, uint32_t y, uint32_t screen)
 {
     trino_tnl_leave();
+    // 0 the top screen (its left eye), 1 the touch screen, 2 the top
+    // screen's right eye (issue #63).
+    uint32_t bottom = screen == 1;
     if (x >= (bottom ? 320u : 400u) || y >= 240) return 0;
     trino_debug_landed();
     u16 w = 0, h = 0;
     gfxScreen_t scr = bottom ? GFX_BOTTOM : GFX_TOP;
-    const u8* fb = gfxGetFramebuffer(scr, GFX_LEFT, &w, &h);
+    const u8* fb = gfxGetFramebuffer(scr, screen == 2 ? GFX_RIGHT : GFX_LEFT, &w, &h);
     if (!fb || w != 240) return 0;
     GSPGPU_FramebufferFormat fmt = gfxGetScreenFormat(scr);
     u32 bpp = fmt == GSP_RGBA8_OES ? 4 : (fmt == GSP_BGR8_OES ? 3 : 0);
@@ -1220,14 +1296,16 @@ uint32_t trino_debug_pixel(uint32_t x, uint32_t y, uint32_t bottom)
 // the N64 dump format, so `cargo xtask test 3ds` rebuilds the image with the
 // same code (5-bit channels: enough for a tolerance check). Same buffer
 // rules as trino_debug_pixel.
-void trino_debug_fb_dump(uint32_t bottom)
+void trino_debug_fb_dump(uint32_t screen)
 {
     trino_tnl_leave();
     trino_debug_landed();
+    // The screens of trino_debug_pixel (2 = the top screen's right eye).
+    uint32_t bottom = screen == 1;
     u16 w = 0, h = 0;
     gfxScreen_t scr = bottom ? GFX_BOTTOM : GFX_TOP;
     const uint32_t width = bottom ? 320 : 400;
-    const u8* fb = gfxGetFramebuffer(scr, GFX_LEFT, &w, &h);
+    const u8* fb = gfxGetFramebuffer(scr, screen == 2 ? GFX_RIGHT : GFX_LEFT, &w, &h);
     if (!fb || w != 240) return;
     GSPGPU_FramebufferFormat fmt = gfxGetScreenFormat(scr);
     u32 bpp = fmt == GSP_RGBA8_OES ? 4 : (fmt == GSP_BGR8_OES ? 3 : 0);

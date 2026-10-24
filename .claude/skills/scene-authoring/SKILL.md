@@ -33,6 +33,10 @@ editor (and a running `TRINO_SCENE` player) reloads them live. Formats are docum
         // Shadows on every target (scene v7, ADR 0025): blobs on the N64, planar on the
         // 3DS, a map on the PC/Web. Every field defaults: `shadows: Some(())` works.
         shadows: Some((tier_max: Map, distance: 40.0, softness: 160, color: (0, 0, 0, 140), map_size: 0)),
+        // Stereo 3D on the 3DS top screen (ADR 0032; no version bump). Every field
+        // defaults: `stereo: Some(())` works. Convergence = the view depth on the
+        // screen's plane (put it on the player); separation ≈ convergence / 20.
+        stereo: Some((enabled: true, max_separation: 0.06, convergence: 4.0, policy: Auto, budget_us: 16667)),
     ),
     entities: [
         (
@@ -62,6 +66,11 @@ editor (and a running `TRINO_SCENE` player) reloads them live. Formats are docum
 - Entities with no model/sprite/prefab are **markers** (spawn points, triggers, waypoints):
   game code finds them by name or tag.
 - v2 files load and save as v3 (v3 added `platforms`). Prefabs are v2 (v1 loads).
+- **Stereo (issue #63):** `environment.stereo` reaches the game as codegen's `STEREO`
+  (pass it to `set_stereo` right after `begin_frame`). TSCN carries none, so a baked
+  scene's host sets it. `cargo xtask scene budget <scene> --platform 3ds --stereo`
+  prints both eyes' cost. The editor's Game view (3DS) previews it as an anaglyph or
+  side by side with a simulated 3D slider.
 - **Asset groups (scene v6, issue #56, ADR 0022):** `requires: ["boot", "level1"]` (the
   default is `["boot"]`, omitted when so) names the groups the scene needs loaded, and a
   cell can stream its own: `vis: Some(Cell(size: (8.0, 4.0, 8.0), groups: ["cellar"]))`.

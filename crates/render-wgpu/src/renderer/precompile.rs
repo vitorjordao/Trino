@@ -15,7 +15,10 @@ use std::sync::{Arc, Mutex};
 use trino_core::CvdMode;
 
 use super::{MSAA_SAMPLES, WaterGpu, scene_pipelines, upscale};
-use super::{OFFSCREEN_FORMAT, SceneSources, ao, cvd, depth_blit, gpu_tnl, shadow, shadow_map};
+use super::{
+    OFFSCREEN_FORMAT, SceneSources, StereoView, ao, cvd, depth_blit, gpu_tnl, shadow, shadow_map,
+    stereo,
+};
 use web_time::Instant;
 
 /// One lazily built pass.
@@ -35,6 +38,8 @@ pub(crate) enum JobKind {
     DepthBlit,
     /// A color-vision simulation view.
     Cvd(CvdMode),
+    /// A composing stereo preview (the 3DS profile, issue #63).
+    Stereo(StereoView),
     /// The GPU T&L path (with its MSAA twin when [`Inputs::gpu_ms`]).
     GpuTnl,
     /// The GPU T&L path's MSAA twin, the path already built.
@@ -52,6 +57,7 @@ pub(crate) enum Built {
     Upscale(Box<upscale::Upscale>),
     DepthBlit(Box<depth_blit::DepthBlit>),
     Cvd(CvdMode, wgpu::RenderPipeline),
+    Stereo(StereoView, wgpu::RenderPipeline),
     GpuTnl(Box<gpu_tnl::GpuTnl>),
     GpuTnlMs([wgpu::RenderPipeline; 2]),
     WaterMs(wgpu::BindGroupLayout, [wgpu::RenderPipeline; 2]),
@@ -77,6 +83,8 @@ pub(crate) struct Inputs {
     pub gpu_ms_source: Option<(wgpu::PipelineLayout, wgpu::ShaderModule)>,
     /// The color-vision pass's layout (the pass exists before its jobs run).
     pub cvd_layout: wgpu::PipelineLayout,
+    /// The stereo preview pass's layout (made before its jobs run).
+    pub stereo_layout: wgpu::PipelineLayout,
     /// Groups 0..2 of the water layout.
     pub water_groups: [wgpu::BindGroupLayout; 3],
 }
@@ -105,6 +113,9 @@ pub(crate) fn build(kind: JobKind, i: &Inputs) -> Built {
         JobKind::Upscale => Built::Upscale(Box::new(upscale::Upscale::new(d))),
         JobKind::DepthBlit => Built::DepthBlit(Box::new(depth_blit::DepthBlit::new(d))),
         JobKind::Cvd(mode) => Built::Cvd(mode, cvd::build_pipeline(d, &i.cvd_layout, mode)),
+        JobKind::Stereo(view) => {
+            Built::Stereo(view, stereo::build_pipeline(d, &i.stereo_layout, view))
+        }
         JobKind::GpuTnl => {
             let [g0, g1] = &i.tnl_groups;
             let mut gpu = gpu_tnl::GpuTnl::new(d, [g0, g1]);

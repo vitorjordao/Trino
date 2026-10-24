@@ -326,6 +326,37 @@ fn the_shadows_step_passes_at_every_tier() {
     }
 }
 
+/// The `stereo` step (issue #63) reads both eyes on the PC's 3DS profile
+/// and finds one picture, the mono one, on the profiles without a stereo
+/// screen. The stats name each frame's eyes and why.
+#[test]
+fn the_stereo_step_reads_both_eyes_on_the_3ds_profile() {
+    use castle64::selftest::StereoProbe;
+    use trino_core::{Renderer, StereoMono};
+    let save_dir = tempfile::tempdir().unwrap();
+    for (profile, want) in [
+        (SimProfile::N3ds, StereoProbe::Eyes { gpu_draws: 0 }),
+        (SimProfile::N64, StereoProbe::Mono),
+        (SimProfile::Native, StereoProbe::Mono),
+    ] {
+        let Some((mut renderer, _)) = pc_target(profile, save_dir.path()) else {
+            return;
+        };
+        assert_eq!(
+            castle64::selftest::stereo(&mut renderer),
+            Ok(want),
+            "{profile:?}"
+        );
+        // The step's last frame is the slider-at-0 one.
+        let s = renderer.stats().stereo;
+        let why = match want {
+            StereoProbe::Eyes { .. } => StereoMono::Slider,
+            _ => StereoMono::NoScreen,
+        };
+        assert_eq!((s.eyes, s.mono), (1, why), "{profile:?}");
+    }
+}
+
 /// Evidence for issue #51: the `instancing` step's frame on the native
 /// profile as separate draws, as one call, and their difference (black =
 /// identical), side by side in `target/evidence/instancing/instancing.png`.
@@ -530,4 +561,74 @@ fn the_trace_step_lines_collect_on_the_host() {
     };
     assert_eq!((depth("update"), depth("physics")), (Some(0), Some(1)));
     assert_eq!((depth("render"), depth("present")), (Some(0), Some(1)));
+}
+
+/// Evidence for issue #63: castle64's hub on the PC's 3DS profile in every
+/// stereo view (the game's own `set_stereo`: convergence on the player, the
+/// HUD 6 px out), each eye, and the touch screen under the anaglyph, in
+/// `target/evidence/stereo/`.
+#[test]
+#[ignore = "writes evidence PNGs: run with --ignored"]
+fn stereo_evidence() {
+    use trino_core::{Eye, Game, Renderer};
+    use trino_platform_pc::StereoView;
+    let save_dir = tempfile::tempdir().unwrap();
+    let Some((mut r, _)) = pc_target(SimProfile::N3ds, save_dir.path()) else {
+        return;
+    };
+    struct Mute;
+    impl trino_core::Audio for Mute {
+        fn play_sound(&mut self, _: trino_core::SoundId) {}
+        fn play_music(&mut self, _: trino_core::MusicId, _: bool) {}
+        fn stop_music(&mut self) {}
+        fn set_master_volume(&mut self, _: f32) {}
+    }
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../target/evidence/stereo");
+    std::fs::create_dir_all(&dir).unwrap();
+    let (w, h) = r.internal_size();
+    let save = |name: &str, w: u32, h: u32, rgba: &[u8]| {
+        let file = std::fs::File::create(dir.join(format!("{name}.png"))).unwrap();
+        let mut e = png::Encoder::new(std::io::BufWriter::new(file), w, h);
+        e.set_color(png::ColorType::Rgba);
+        e.set_depth(png::BitDepth::Eight);
+        e.write_header().unwrap().write_image_data(rgba).unwrap();
+    };
+    for scene in castle64::perf::SCENES {
+        let mut game =
+            castle64::perf::scene_game(scene, trino_core::Vec2::new(w as f32, h as f32), &mut Mute);
+        for view in StereoView::ALL {
+            r.set_stereo_view(view);
+            for _ in 0..2 {
+                game.render(&mut r);
+            }
+            save(
+                &format!("{}_{}", scene.name, view.key()),
+                w,
+                h,
+                &r.read_offscreen(),
+            );
+            if view == StereoView::Anaglyph {
+                assert_eq!(r.stats().stereo.eyes, 2, "{}", scene.name);
+                save(
+                    &format!("{}_eye_left", scene.name),
+                    w,
+                    h,
+                    &r.read_eye(Eye::Left).unwrap(),
+                );
+                save(
+                    &format!("{}_eye_right", scene.name),
+                    w,
+                    h,
+                    &r.read_eye(Eye::Right).unwrap(),
+                );
+                let (bw, bh) = r.second_screen().map(|s| (s.x as u32, s.y as u32)).unwrap();
+                save(
+                    &format!("{}_bottom", scene.name),
+                    bw,
+                    bh,
+                    &r.read_second_screen(),
+                );
+            }
+        }
+    }
 }

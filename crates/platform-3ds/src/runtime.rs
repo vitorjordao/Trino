@@ -19,11 +19,12 @@ pub fn init() {
     PROBE.store(word, core::sync::atomic::Ordering::Relaxed);
     let p = hw();
     log(&alloc::format!(
-        "TRINO_HW 3ds new={} speedup={} app_ram={}M tier={}\n",
+        "TRINO_HW 3ds new={} speedup={} app_ram={}M tier={} stereo={}\n",
         p.new3ds as u8,
         p.speedup as u8,
         p.app_mib,
-        p.tier().key()
+        p.tier().key(),
+        p.stereo as u8
     ));
     let lang = unsafe { ffi::trino_system_language() };
     LANGUAGE.store(lang, core::sync::atomic::Ordering::Relaxed);

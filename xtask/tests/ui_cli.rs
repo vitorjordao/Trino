@@ -372,3 +372,67 @@ fn ui_list_names_the_screens() {
     let o = xtask(&["ui", "list"]);
     assert!(text(&o.stdout).contains("selftest"), "{}", text(&o.stdout));
 }
+
+/// `ui shot --platform 3ds --stereo anaglyph` (issue #63): a node with a
+/// depth floats — its left eye's copy right of the right eye's — so the
+/// anaglyph shows a red fringe on one side and a cyan one on the other;
+/// `--stereo off` (the slider down) shows none, and only the 3DS takes it.
+#[test]
+fn ui_shot_previews_node_depths_in_stereo() {
+    let tmp = tempfile::tempdir().unwrap();
+    let screen = tmp.path().join("float.ui.ron");
+    std::fs::write(
+        &screen,
+        r#"(version: 1, name: "float", root: (children: [
+            (kind: Rect(), anchor: Center, size: (Px(120), Px(60)), color: Some((255, 255, 255, 255)), depth: 16),
+        ]))"#,
+    )
+    .unwrap();
+    let screen = screen.to_str().unwrap();
+    // (red fringe, cyan fringe) pixels of the top screen's picture.
+    let fringes = |view: &str| -> Option<(usize, usize)> {
+        let png = tmp.path().join(format!("{view}.png"));
+        let o = xtask(&[
+            "ui",
+            "shot",
+            screen,
+            "--platform",
+            "3ds",
+            "--stereo",
+            view,
+            "--out",
+            png.to_str().unwrap(),
+            "--json",
+        ]);
+        if gpu_missing(&o) {
+            return None;
+        }
+        assert!(o.status.success(), "{view}: {}", text(&o.stderr));
+        let mut decoder =
+            png::Decoder::new(std::io::BufReader::new(std::fs::File::open(&png).unwrap()))
+                .read_info()
+                .unwrap();
+        let mut buf = vec![0; decoder.output_buffer_size().unwrap()];
+        let info = decoder.next_frame(&mut buf).unwrap();
+        let px = &buf[..(info.width * 240 * 4) as usize];
+        let (mut red, mut cyan) = (0, 0);
+        for p in px.as_chunks::<4>().0 {
+            red += (p[0] > 200 && p[1] < 100 && p[2] < 100) as usize;
+            cyan += (p[0] < 100 && p[1] > 200 && p[2] > 200) as usize;
+        }
+        Some((red, cyan))
+    };
+    let Some((red, cyan)) = fringes("anaglyph") else {
+        return;
+    };
+    // 8 px each side over the rectangle's 60 rows (at the 3DS's 1x scale).
+    assert!(red >= 8 * 60 && cyan >= 8 * 60, "red {red}, cyan {cyan}");
+    assert_eq!(fringes("off"), Some((0, 0)), "the slider down: mono");
+    let o = xtask(&["ui", "shot", screen, "--stereo", "anaglyph"]);
+    assert!(!o.status.success());
+    assert!(
+        text(&o.stderr).contains("--platform 3ds"),
+        "{}",
+        text(&o.stderr)
+    );
+}

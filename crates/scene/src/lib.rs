@@ -112,6 +112,11 @@ pub struct Environment {
     /// receive through their `shadow` component.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shadows: Option<ShadowsDef>,
+    /// Stereoscopic 3D (`trino_core::stereo`, issue #63): the 3DS top
+    /// screen draws one picture per eye while its 3D slider is up; every
+    /// other target ignores it (the PC's 3DS profile previews it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stereo: Option<StereoDef>,
 }
 
 fn default_clear() -> [u8; 3] {
@@ -127,6 +132,80 @@ impl Default for Environment {
             fog: None,
             ao: None,
             shadows: None,
+            stereo: None,
+        }
+    }
+}
+
+/// A scene's stereo 3D ([`trino_core::StereoSettings`]). Every field has a
+/// default, so `stereo: ()` is a valid start; `enabled: false` keeps the
+/// tuning while turning it off.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct StereoDef {
+    #[serde(default = "yes")]
+    pub enabled: bool,
+    /// Distance between the eyes at the full 3D slider, world units
+    /// (meters: 0.06 is a person's).
+    #[serde(default = "default_stereo_separation")]
+    pub max_separation: f32,
+    /// The view depth with zero parallax (the screen's plane), world units:
+    /// nearer pops out, farther sinks in.
+    #[serde(default = "default_stereo_convergence")]
+    pub convergence: f32,
+    /// `Auto` drops to one eye for the frames that miss `budget_us`;
+    /// `Always` keeps two.
+    #[serde(default)]
+    pub policy: StereoPolicyDef,
+    /// The frame time `Auto` holds stereo frames to, microseconds.
+    #[serde(default = "default_stereo_budget")]
+    pub budget_us: u32,
+}
+
+/// [`trino_core::StereoPolicy`] in files.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum StereoPolicyDef {
+    #[default]
+    Auto,
+    Always,
+}
+
+fn default_stereo_separation() -> f32 {
+    0.06
+}
+fn default_stereo_convergence() -> f32 {
+    4.0
+}
+fn default_stereo_budget() -> u32 {
+    trino_core::StereoSettings::OFF.budget_us
+}
+
+impl Default for StereoDef {
+    fn default() -> Self {
+        StereoDef {
+            enabled: true,
+            max_separation: default_stereo_separation(),
+            convergence: default_stereo_convergence(),
+            policy: StereoPolicyDef::Auto,
+            budget_us: default_stereo_budget(),
+        }
+    }
+}
+
+impl StereoDef {
+    /// The engine settings, enabled or not (separation and convergence
+    /// kept positive).
+    pub fn core(&self) -> trino_core::StereoSettings {
+        trino_core::StereoSettings {
+            enabled: self.enabled,
+            max_separation: self.max_separation.max(0.0),
+            convergence: self.convergence.max(0.01),
+            policy: match self.policy {
+                StereoPolicyDef::Auto => trino_core::StereoPolicy::Auto,
+                StereoPolicyDef::Always => trino_core::StereoPolicy::Always,
+            },
+            budget_us: self.budget_us.max(1),
+            slider: None,
         }
     }
 }
@@ -440,6 +519,12 @@ impl Environment {
     /// block or with `enabled: false`.
     pub fn core_shadows(&self) -> Option<trino_core::shadow::ShadowSettings> {
         self.shadows.filter(|s| s.enabled).map(|s| s.core())
+    }
+
+    /// What `Renderer::set_stereo` takes: `None` without a `stereo` block
+    /// or with `enabled: false`.
+    pub fn core_stereo(&self) -> Option<trino_core::StereoSettings> {
+        self.stereo.filter(|s| s.enabled).map(|s| s.core())
     }
 
     pub fn core_camera(&self) -> trino_core::Camera3 {
@@ -1236,6 +1321,44 @@ mod tests {
         assert_eq!(ao.radius, 1.25);
         assert_eq!(ao.quality, trino_core::AoQuality::High);
         assert_eq!(ao.quality.samples(), 32);
+    }
+
+    #[test]
+    fn stereo_is_optional_defaulted_and_round_trips() {
+        let plain = Scene::new("plain");
+        assert!(!plain.to_ron().contains("stereo"));
+        assert_eq!(plain.environment.core_stereo(), None);
+        let text = "(version: 7, name: \"a\", environment: (stereo: Some(())))";
+        let scene = Scene::from_ron(text).unwrap();
+        assert_eq!(scene.environment.stereo, Some(StereoDef::default()));
+        let s = scene.environment.core_stereo().unwrap();
+        assert!(s.enabled && s.slider.is_none());
+        assert_eq!((s.max_separation, s.convergence), (0.06, 4.0));
+        assert_eq!(s.policy, trino_core::StereoPolicy::Auto);
+        // The issue's own line parses.
+        let text = "(version: 7, name: \"a\", environment: (stereo: Some((enabled: true, \
+                    max_separation: 0.06, convergence: 4.0))))";
+        assert!(
+            Scene::from_ron(text)
+                .unwrap()
+                .environment
+                .core_stereo()
+                .is_some()
+        );
+        let mut tuned = Scene::new("tuned");
+        tuned.environment.stereo = Some(StereoDef {
+            enabled: false,
+            max_separation: 0.1,
+            convergence: 6.5,
+            policy: StereoPolicyDef::Always,
+            budget_us: 33_333,
+        });
+        let back = Scene::from_ron(&tuned.to_ron()).unwrap();
+        assert_eq!(back, tuned);
+        assert_eq!(back.environment.core_stereo(), None, "off keeps the tuning");
+        // A misspelt field is an error, not a silent default.
+        let bad = "(version: 7, name: \"a\", environment: (stereo: Some((convergance: 3.0))))";
+        assert!(Scene::from_ron(bad).is_err());
     }
 
     #[test]

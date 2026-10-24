@@ -23,7 +23,7 @@ use trino_core::{
     Color, Fog, HwTier, Light, LodPick, Material, ModelId, ModelParams, QualityPreset,
     QualitySettings, Renderer, Shading, SpriteId, SpriteParams, Vec2 as TVec2, Vec3,
 };
-use trino_platform_pc::{AoView, PcRenderer, ShadowView, SimProfile};
+use trino_platform_pc::{AoView, PcRenderer, ShadowView, SimProfile, StereoView};
 use trino_scene::{Resolved, Scene, Target, Transform};
 
 use crate::gizmo::{self, AxisEvent, Drag, Gizmo, GizmoMode, OrbitCam, Proj, RenderCam};
@@ -126,6 +126,9 @@ pub struct ViewInput<'a> {
     /// The asset memory plans per console tier (the HUD's assets RAM line,
     /// issue #56).
     pub memory: Option<&'a [trino_asset_pipeline::memory::MemoryPlan]>,
+    /// The Game view previews stereo (issue #63): the Scene view shows the
+    /// convergence plane even when the scene sets no stereo of its own.
+    pub stereo_preview: bool,
 }
 
 pub enum ViewAction {
@@ -195,6 +198,16 @@ pub struct Viewport {
     /// vision sees it (the Accessibility tab's simulation, issue #60).
     pub cvd_view: trino_core::CvdMode,
     cvd_rendered: trino_core::CvdMode,
+    /// Game view on the 3DS: the stereo preview (issue #63, Off = the
+    /// simulated 3D slider down) and the slider under it
+    /// (`TRINO_EDITOR_STEREO=<view>[:slider]`).
+    pub stereo_view: StereoView,
+    pub stereo_slider: f32,
+    stereo_rendered: (StereoView, f32),
+    /// Scene view: the stereo convergence plane in front of the game
+    /// camera, where the scene (or the Game view's preview) has stereo
+    /// (View › Convergence plane).
+    pub show_convergence: bool,
     /// Game view: the console budget overlay (tris / sprites / texture vs
     /// the selected profile's Caps).
     pub show_budget: bool,
@@ -270,6 +283,10 @@ impl Viewport {
             shadow_rendered: ShadowView::Game,
             cvd_view: trino_core::CvdMode::Off,
             cvd_rendered: trino_core::CvdMode::Off,
+            stereo_view: StereoView::Off,
+            stereo_slider: 1.0,
+            stereo_rendered: (StereoView::Off, 1.0),
+            show_convergence: true,
             show_budget: true,
             web_canvas: std::env::var("TRINO_EDITOR_WEB_CANVAS")
                 .ok()
@@ -398,6 +415,22 @@ impl Viewport {
         self.target().label()
     }
 
+    /// The stereo the Game view draws a scene with (issue #63): the scene's
+    /// own `environment.stereo`, else — while a preview is on, so an author
+    /// can tune before writing the block — the default one
+    /// (`StereoDef::default()`). `None`: mono.
+    pub fn stereo_for(&self, scene: &Scene) -> Option<trino_core::StereoSettings> {
+        scene.environment.core_stereo().or_else(|| {
+            (self.stereo_view != StereoView::Off).then(|| trino_scene::StereoDef::default().core())
+        })
+    }
+
+    /// The stereo preview the renderer last drew with (tests).
+    #[cfg(test)]
+    pub fn renderer_stereo_view(&self) -> StereoView {
+        self.renderer.stereo_view()
+    }
+
     /// Re-upload changed assets (live reload).
     pub fn upload(&mut self, project: &Project, changed: &[String]) {
         project.upload_some(&mut self.renderer, changed);
@@ -437,8 +470,15 @@ impl Viewport {
         }
         let env = &input.scene.environment;
         let clear = env.clear;
+        let stereo = match self.kind {
+            ViewKind::Game => self.stereo_for(input.scene),
+            ViewKind::Scene => None,
+        };
         let r = &mut self.renderer;
         r.begin_frame(Color::rgb(clear[0], clear[1], clear[2]));
+        // Stereo before any draw (the 3DS profile records the top screen
+        // and replays it per eye; every other profile ignores it).
+        r.set_stereo(stereo.as_ref());
         // The Scene view may draw near-orthographic: a far camera over a
         // scaled-down world (`RenderCam`); LOD still measures from the
         // orbit eye.
@@ -690,6 +730,15 @@ impl Viewport {
         let dynres_live = self
             .quality_settings()
             .is_some_and(|q| q.dynamic_resolution.is_some());
+        // The stereo preview (the Game view on the 3DS); Flip alternates
+        // the eyes every few frames, so it keeps drawing.
+        if self.kind == ViewKind::Game {
+            self.renderer.set_stereo_view(self.stereo_view);
+            self.renderer.set_stereo_slider(self.stereo_slider);
+        }
+        let flipping = self.kind == ViewKind::Game
+            && self.profile == SimProfile::N3ds
+            && self.stereo_view == StereoView::Flip;
         if let Some(session) = self.play.as_mut() {
             // Playing: the game updates and draws every frame, fed by the
             // keyboard (unless a text field has focus).
@@ -722,11 +771,14 @@ impl Viewport {
             || self.ao_rendered != self.ao_view
             || self.shadow_rendered != self.shadow_view
             || self.cvd_rendered != self.cvd_view
+            || self.stereo_rendered != (self.stereo_view, self.stereo_slider)
             || dynres_live
+            || flipping
         {
             self.ao_rendered = self.ao_view;
             self.shadow_rendered = self.shadow_view;
             self.cvd_rendered = self.cvd_view;
+            self.stereo_rendered = (self.stereo_view, self.stereo_slider);
             self.render(input, internal);
             if size_changed {
                 self.reregister();
@@ -740,7 +792,7 @@ impl Viewport {
                 ui.ctx().request_repaint();
             }
         }
-        if flashing || cam_moving {
+        if flashing || cam_moving || flipping {
             ui.ctx().request_repaint();
         }
 
@@ -944,6 +996,9 @@ impl Viewport {
         }
         if self.kind == ViewKind::Scene && self.shadow_view == ShadowView::Debug && !playing {
             shadow_debug(&painter, &proj, input);
+        }
+        if self.kind == ViewKind::Scene && self.show_convergence && !playing {
+            convergence_plane(&painter, &proj, input);
         }
         if let Some(h) = &self.hover
             && Some(h.as_slice()) != input.selected
@@ -1239,10 +1294,14 @@ impl Viewport {
                 crate::budget::Level::Ok,
             )
         });
+        let stereo = budgets
+            .and_then(|b| self.stereo_hud_line(b))
+            .map(|t| (t, crate::budget::Level::Ok));
         let platform_lines = measured
             .into_iter()
             .chain(quality)
             .chain(audio)
+            .chain(stereo)
             .chain(
                 budgets
                     .map(|b| crate::budget::platform_lines_on(b, &tmem, self.target()))
@@ -1622,6 +1681,9 @@ impl Viewport {
                                     self.rendered = None;
                                 }
                             }
+                            if self.profile == SimProfile::N3ds {
+                                self.stereo_controls(ui);
+                            }
                             if self.profile.is_native() {
                                 let mut preset = self.quality;
                                 let r = egui::ComboBox::from_id_salt("game-quality")
@@ -1710,6 +1772,128 @@ impl Viewport {
                     }
                 });
             });
+    }
+}
+
+impl Viewport {
+    /// The Game view HUD's stereo line on the 3DS (issue #63): both eyes'
+    /// work at the full slider, where the scene has stereo or the preview
+    /// is on (then with the default stereo).
+    pub fn stereo_hud_line(&self, budgets: &crate::budget::Budgets) -> Option<String> {
+        let target = self.target();
+        if target.base() != Target::N3ds {
+            return None;
+        }
+        let fb = crate::budget::budget_of(budgets, target);
+        let s = fb.stereo.or_else(|| {
+            (self.stereo_view != StereoView::Off).then(|| {
+                trino_scene::budget::stereo_of(fb, Some(&trino_scene::StereoDef::default().core()))
+            })?
+        })?;
+        Some(format!(
+            "stereo ×{}: {} tris · {} GPU passes · {} CPU draws",
+            s.eyes, s.tris, s.gpu_vertex_passes, s.cpu_draws
+        ))
+    }
+
+    /// The Game view's stereo preview on the 3DS (issue #63): the view and,
+    /// while one is on, the simulated 3D slider.
+    fn stereo_controls(&mut self, ui: &mut egui::Ui) {
+        let mut view = self.stereo_view;
+        let r = egui::ComboBox::from_id_salt("game-stereo")
+            .selected_text(match view {
+                StereoView::Off => "3D off",
+                v => v.key(),
+            })
+            .width(78.0)
+            .show_ui(ui, |ui| {
+                for v in StereoView::ALL {
+                    ui.selectable_value(&mut view, v, v.label());
+                }
+            })
+            .response
+            .on_hover_text(
+                "Stereo preview: the 3DS top screen drawn once per eye, as the console \
+                 does with its 3D slider up (the scene's environment.stereo, else the \
+                 default separation and convergence)",
+            );
+        r.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, "Game view stereo")
+        });
+        if view != self.stereo_view {
+            self.stereo_view = view;
+        }
+        if self.stereo_view != StereoView::Off {
+            let mut k = self.stereo_slider;
+            let r = ui
+                .add_sized(
+                    [56.0, 18.0],
+                    egui::Slider::new(&mut k, 0.0..=1.0)
+                        .show_value(false)
+                        .clamping(egui::SliderClamping::Always),
+                )
+                .on_hover_text(format!("The 3D slider: {:.0} %", k * 100.0));
+            crate::panels::audio::name_slider(&r, "Game view 3D slider");
+            if k != self.stereo_slider {
+                self.stereo_slider = k;
+            }
+        }
+    }
+}
+
+/// Scene view: the stereo convergence plane (issue #63) — the rectangle
+/// the 3DS's top screen covers at the convergence depth in front of the
+/// scene's game camera, where points have zero parallax. Shown when the
+/// scene has stereo, or the Game view previews it (then at the default
+/// convergence).
+fn convergence_plane(painter: &egui::Painter, proj: &Proj, input: &ViewInput) {
+    let env = &input.scene.environment;
+    let conv = match env.core_stereo() {
+        Some(s) => s.convergence,
+        None if input.stereo_preview => trino_scene::StereoDef::default().convergence,
+        None => return,
+    };
+    let cam = env.core_camera();
+    let v = cam.view();
+    let row = |i: usize| Vec3::new(v.m[i][0], v.m[i][1], v.m[i][2]);
+    let (right, up, fwd) = (row(0), row(1), row(2));
+    let half_h = conv * (cam.fov_y * 0.5).tan();
+    // The 3DS top screen's 400 × 240.
+    let half_w = half_h * (400.0 / 240.0);
+    let center = cam.eye + fwd * conv;
+    let at = |x: f32, y: f32| center + right * (x * half_w) + up * (y * half_h);
+    let color = c::ACCENT.gamma_multiply(0.85);
+    let line = |a: Vec3, b: Vec3, width: f32| {
+        if let (Some(a), Some(b)) = (proj.project(a), proj.project(b)) {
+            painter.line_segment([a, b], Stroke::new(width, color));
+        }
+    };
+    // A faint fill, so the plane reads as a surface.
+    let corners: Option<Vec<Pos2>> = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)]
+        .into_iter()
+        .map(|(x, y)| proj.project(at(x, y)))
+        .collect();
+    if let Some(pts) = corners {
+        painter.add(egui::Shape::convex_polygon(
+            pts,
+            c::ACCENT.gamma_multiply(0.12),
+            Stroke::NONE,
+        ));
+    }
+    for i in 0..=4 {
+        let t = -1.0 + i as f32 * 0.5;
+        let w = if i == 0 || i == 4 { 1.4 } else { 0.6 };
+        line(at(t, -1.0), at(t, 1.0), w);
+        line(at(-1.0, t), at(1.0, t), w);
+    }
+    if let Some(p) = proj.project(at(-1.0, 1.0)) {
+        painter.text(
+            p + Vec2::new(4.0, -4.0),
+            egui::Align2::LEFT_BOTTOM,
+            format!("convergence {conv:.2} m (zero parallax)"),
+            egui::FontId::proportional(11.0),
+            color,
+        );
     }
 }
 

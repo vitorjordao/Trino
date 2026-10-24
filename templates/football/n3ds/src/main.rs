@@ -28,5 +28,12 @@ fn self_test(
     }
     host.dump_framebuffer();
     host.dump_framebuffer_bottom();
+    // The match on in stereo (issue #63), after the goldens (it plays on):
+    // the slider fixed at full, both eyes per frame, reported only
+    // (`stereo=` says if the Auto policy dropped an eye).
+    host.renderer.set_stereo_slider_override(Some(1.0));
+    let stereo = host.measure(game, selftest::FRAMES, selftest::DT, selftest::input);
+    host.report_frames("match-stereo", &stereo);
+    host.renderer.set_stereo_slider_override(None);
     Ok(())
 }

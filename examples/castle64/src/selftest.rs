@@ -77,6 +77,12 @@ pub fn engine_checks(
     } else if renderer.screen_size(Screen::Bottom).is_none() {
         platform.log("TRINO_STEP:dual screen single screen (collapsed)\n");
     }
+    platform.log("TRINO_STEP:stereo\n");
+    match stereo(renderer)? {
+        StereoProbe::Eyes { gpu_draws } => platform.log(alloc_free_line(gpu_draws).as_str()),
+        StereoProbe::Mono => platform.log("TRINO_STEP:stereo mono target (no stereo screen)\n"),
+        StereoProbe::Skipped => platform.log("TRINO_STEP:stereo skipped (no read_pixel)\n"),
+    }
     platform.log("TRINO_STEP:smooth skin\n");
     smooth_skin(renderer)?;
     platform.log("TRINO_STEP:palette\n");
@@ -971,6 +977,217 @@ pub fn fill_rect(renderer: &mut dyn Renderer) -> Result<bool, &'static str> {
         }
     }
     Ok(true)
+}
+
+/// The `stereo` step's probed line (no allocation: a fixed buffer).
+fn alloc_free_line(gpu_draws: u32) -> TextBuf<80> {
+    let mut b = TextBuf::<80>::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut b,
+        format_args!("TRINO_STEP:stereo probed both eyes and mono gpu_draws={gpu_draws}\n"),
+    );
+    b
+}
+
+/// What the `stereo` step could check.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum StereoProbe {
+    /// Both eyes and the mono frame read back and checked; `gpu_draws`:
+    /// the stereo frame's draws on the hardware T&L path (the 3DS's
+    /// PICA200, both eyes).
+    Eyes { gpu_draws: u32 },
+    /// A target without a stereo screen: one picture, the mono one.
+    Mono,
+    /// No pixel read-back here; only the counters were checked.
+    Skipped,
+}
+
+/// The stereo scene's separation and convergence (world units).
+pub const STEREO_SEPARATION: f32 = 0.4;
+pub const STEREO_CONVERGENCE: f32 = 4.0;
+
+/// Stereoscopic 3D (issue #63): the top screen once per eye, the 3D through
+/// an off-axis projection, the 2D floated by its layer depth.
+///
+/// One frame with three things in it: a cyan square at the convergence
+/// depth (zero parallax: the same pixels in both eyes), a magenta square
+/// nearer (crossed parallax: the left eye's copy right of the right eye's,
+/// by the closed form's amount), and a yellow HUD rectangle at
+/// `LayerDepth(16)` (8 px apart each way). The slider is fixed at 1
+/// ([`StereoSettings::with_slider`]), so the step never depends on the
+/// console's slider. Then the same frame with the slider at 0: one picture,
+/// the mono one, and no right eye. Where both eyes read back (the 3DS, the
+/// PC's 3DS profile) every probe is checked; on a target without a stereo
+/// screen the picture must be the mono one ([`StereoProbe::Mono`]).
+pub fn stereo(renderer: &mut dyn Renderer) -> Result<StereoProbe, &'static str> {
+    use trino_core::stereo::{Eye, LayerDepth, StereoMono, StereoSettings, project_eye};
+    let caps = *renderer.caps();
+    let screen = Vec2::new(caps.screen_width as f32, caps.screen_height as f32);
+    let camera = Camera3 {
+        eye: Vec3::new(0.0, 0.0, -STEREO_CONVERGENCE),
+        target: Vec3::ZERO,
+        fov_y: 60.0 * core::f32::consts::PI / 180.0,
+    };
+    let flat = |c: Color| ModelParams {
+        shading: Shading::Unlit,
+        tint: c,
+        emissive: c,
+        ..ModelParams::DEFAULT
+    };
+    let (cyan, magenta, yellow) = (
+        Color::rgba(0, 255, 255, 255),
+        Color::rgba(255, 0, 255, 255),
+        Color::rgba(255, 255, 0, 255),
+    );
+    // Squares facing the camera: (center x, view depth, half size, color).
+    let far = (-0.9f32, STEREO_CONVERGENCE, 0.5f32, cyan);
+    let near = (0.55f32, 2.0f32, 0.3f32, magenta);
+    let hud = Rect::new(screen.x * 0.75, 12.0, 40.0, 16.0);
+    let settings = StereoSettings::new(STEREO_SEPARATION, STEREO_CONVERGENCE);
+    let draw = |r: &mut dyn Renderer, slider: f32| {
+        // Several identical frames: the 3DS LCD is double-buffered.
+        for _ in 0..3 {
+            r.begin_frame(Color::BLACK);
+            r.set_stereo(Some(&settings.with_slider(slider)));
+            r.set_camera(&camera);
+            r.set_light(&DEFAULT_LIGHT);
+            for (x, z, half, c) in [far, near] {
+                r.draw_model(
+                    BLOCK,
+                    &Transform3 {
+                        position: Vec3::new(x, 0.0, z - STEREO_CONVERGENCE),
+                        rotation: Vec3::ZERO,
+                        scale: Vec3::new(half * 2.0, half * 2.0, 0.02),
+                    },
+                    Material::VertexLit,
+                    &flat(c),
+                );
+            }
+            r.set_layer_depth(LayerDepth(16));
+            r.fill_rect(hud, yellow);
+            r.set_layer_depth(LayerDepth::SCREEN);
+            if r.stereo_eye() != Eye::Mono {
+                return Err("stereo: game code saw an eye (draws are replayed per eye)");
+            }
+            r.end_frame();
+        }
+        Ok(r.stats().stereo)
+    };
+    let stats = draw(renderer, 1.0)?;
+    let gpu_draws = renderer.stats().tnl.gpu_draws;
+    let two = stats.eyes == 2;
+    if caps.stereo != two {
+        return Err("stereo: Caps::stereo and the eyes drawn disagree");
+    }
+    // Where a square's edges land in one eye (front face, z - 0.01).
+    let ctx = trino_core::TnlContext::new(&camera, &DEFAULT_LIGHT, screen);
+    let shift = |eye: Eye| eye.sign() * STEREO_SEPARATION * 0.5;
+    let edges = |sq: (f32, f32, f32, Color), eye: Eye| {
+        let z = sq.1 - 0.01;
+        let x0 = project_eye(
+            Vec3::new(sq.0 - sq.2, 0.0, z),
+            ctx.focal(),
+            ctx.center(),
+            shift(eye),
+            STEREO_CONVERGENCE,
+        )
+        .x;
+        let x1 = project_eye(
+            Vec3::new(sq.0 + sq.2, 0.0, z),
+            ctx.focal(),
+            ctx.center(),
+            shift(eye),
+            STEREO_CONVERGENCE,
+        )
+        .x;
+        (x0, x1)
+    };
+    let cy = (screen.y * 0.5) as u32;
+    let close = |a: Color, b: Color| {
+        let d = |x: u8, y: u8| (x as i32 - y as i32).abs() <= 60;
+        d(a.r, b.r) && d(a.g, b.g) && d(a.b, b.b)
+    };
+    // (eye, x, y, want)
+    let mut probes: [(Eye, f32, u32, Color); 10] = [(Eye::Mono, 0.0, 0, Color::BLACK); 10];
+    let hy = (hud.pos.y + hud.size.y * 0.5) as u32;
+    if two {
+        let (fl, fr) = edges(far, Eye::Left);
+        let (nl0, nl1) = edges(near, Eye::Left);
+        let (nr0, nr1) = edges(near, Eye::Right);
+        let want = trino_core::stereo::parallax_px(
+            near.1 - 0.01,
+            STEREO_SEPARATION,
+            ctx.focal(),
+            STEREO_CONVERGENCE,
+        );
+        if !(want < -8.0 && ((nr0 - nl0) - want).abs() < 0.5) {
+            return Err("stereo: the near square's parallax is not the closed form's");
+        }
+        let (h0, h1) = (hud.pos.x, hud.pos.x + hud.size.x);
+        probes = [
+            // Zero parallax: the far square's edges in both eyes.
+            (Eye::Left, fl + 3.0, cy, cyan),
+            (Eye::Right, fl + 3.0, cy, cyan),
+            (Eye::Left, fr + 3.0, cy, Color::BLACK),
+            (Eye::Right, fr + 3.0, cy, Color::BLACK),
+            // Crossed: inside the right eye's copy, left of the left one's.
+            (Eye::Right, nr0 + 3.0, cy, magenta),
+            (Eye::Left, nr0 + 3.0, cy, Color::BLACK),
+            (Eye::Left, nl1 - 3.0, cy, magenta),
+            (Eye::Right, nl1 - 3.0, cy, Color::BLACK),
+            // The HUD: the left eye's 8 px right, the right eye's 8 px left.
+            (Eye::Right, h0 - 4.0, hy, yellow),
+            (Eye::Left, h1 + 4.0, hy, yellow),
+        ];
+        let _ = nr1;
+    }
+    let mut read = 0;
+    for (eye, x, y, want) in probes.iter().filter(|_| two) {
+        let Some(got) = renderer.read_eye_pixel(*eye, *x as u32, *y) else {
+            break;
+        };
+        read += 1;
+        if !close(got, *want) {
+            return Err(match (eye, *want == Color::BLACK) {
+                (Eye::Left, false) => "stereo: the left eye is missing a shape it should show",
+                (Eye::Left, true) => "stereo: the left eye shows a shape where it shouldn't",
+                (_, false) => "stereo: the right eye is missing a shape it should show",
+                (_, true) => "stereo: the right eye shows a shape where it shouldn't",
+            });
+        }
+    }
+    // The slider at 0: one picture, the mono one, no extra eye.
+    let mono = draw(renderer, 0.0)?;
+    if mono.eyes > 1 || (caps.stereo && mono.mono != StereoMono::Slider) {
+        return Err("stereo: the slider at 0 still drew two eyes");
+    }
+    if renderer.read_eye_pixel(Eye::Right, 0, 0).is_some() {
+        return Err("stereo: a mono frame has a right eye");
+    }
+    let (ml0, ml1) = edges(near, Eye::Mono);
+    let (fm0, _) = edges(far, Eye::Mono);
+    let mono_probes = [
+        (ml0 + 3.0, cy, magenta),
+        (ml0 - 3.0, cy, Color::BLACK),
+        (ml1 - 3.0, cy, magenta),
+        (ml1 + 3.0, cy, Color::BLACK),
+        (fm0 + 3.0, cy, cyan),
+        (hud.pos.x + 3.0, hy, yellow),
+        (hud.pos.x - 3.0, hy, Color::BLACK),
+    ];
+    for (x, y, want) in mono_probes {
+        let Some(got) = renderer.read_eye_pixel(Eye::Mono, x as u32, y) else {
+            return Ok(StereoProbe::Skipped);
+        };
+        if !close(got, want) {
+            return Err("stereo: the mono frame is not the mono picture");
+        }
+    }
+    Ok(match (two, read) {
+        (true, 10) => StereoProbe::Eyes { gpu_draws },
+        (true, _) => StereoProbe::Skipped,
+        (false, _) => StereoProbe::Mono,
+    })
 }
 
 /// Two screens: `Renderer::on_screen` / `screen_size` /

@@ -51,6 +51,7 @@ pub mod save;
 pub mod scene;
 pub mod services;
 pub mod shadow;
+pub mod stereo;
 pub mod text;
 pub mod threads;
 pub mod tilemap;
@@ -117,6 +118,10 @@ pub use services::{
 pub use shadow::{
     MAX_SHADOW_PLANES, ShadowCast, ShadowFrame, ShadowPlane, ShadowSettings, ShadowStats,
     ShadowTier,
+};
+pub use stereo::{
+    Eye, LayerDepth, StereoFrame, StereoGovernor, StereoMono, StereoPolicy, StereoSettings,
+    StereoStats,
 };
 pub use text::{BitmapFont, GlyphIndex, TextBuf};
 pub use threads::ThreadSetting;

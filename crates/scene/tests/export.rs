@@ -240,6 +240,37 @@ fn codegen_exports_the_scene_ambient_occlusion() {
     assert_eq!(with, bake::to_tscn(&scene, &lib).0);
 }
 
+/// Stereo 3D (issue #63): `environment.stereo` becomes the exported
+/// `STEREO` const (what a console game hands `Renderer::set_stereo`); TSCN
+/// carries none (a baked scene's host sets it), so the blob is unchanged.
+#[test]
+fn codegen_exports_the_scene_stereo() {
+    let (mut scene, lib) = (common::scene(), common::library());
+    let (code, _) = codegen::to_rust(&scene, &lib);
+    assert!(code.contains("pub const STEREO: Option<StereoSettings> = None;"));
+    let plain = bake::to_tscn(&scene, &lib).0;
+    scene.environment.stereo = Some(trino_scene::StereoDef {
+        max_separation: 0.08,
+        convergence: 5.5,
+        policy: trino_scene::StereoPolicyDef::Always,
+        budget_us: 33_333,
+        ..Default::default()
+    });
+    let (code, _) = codegen::to_rust(&scene, &lib);
+    assert!(
+        code.contains(
+            "pub const STEREO: Option<StereoSettings> = Some(StereoSettings {\n    enabled: true,\n    \
+             max_separation: 0.08,\n    convergence: 5.5,\n    policy: StereoPolicy::Always,\n    \
+             budget_us: 33333,\n    slider: None,\n});"
+        ),
+        "{code}"
+    );
+    assert_eq!(plain, bake::to_tscn(&scene, &lib).0);
+    scene.environment.stereo.as_mut().unwrap().enabled = false;
+    let (code, _) = codegen::to_rust(&scene, &lib);
+    assert!(code.contains("pub const STEREO: Option<StereoSettings> = None;"));
+}
+
 /// Shadows (ADR 0025, scene v7, TSCN v5): the scene's settings and each
 /// entity's Shadow component reach both game-side forms: the receivers'
 /// tops (a collider's box, else the model's bounds as drawn), each draw's

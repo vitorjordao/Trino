@@ -606,12 +606,19 @@ impl<M: TextMeasure + ?Sized, const N: usize> Solver<'_, '_, '_, M, N> {
         }
         let i = self.ui.count;
         self.ui.count += 1;
+        // A node without a depth of its own floats with its parent.
+        let own = self.screen.node(node).depth;
+        let depth = match (own, self.ui.slots.get(parent as usize)) {
+            (0, Some(p)) if parent != NONE => p.depth,
+            _ => own,
+        };
         self.ui.slots[i] = Slot {
             node: node as u16,
             item,
             parent,
             on,
             flags: 0,
+            depth,
         };
         Some(i)
     }

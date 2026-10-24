@@ -1933,6 +1933,21 @@ fn scene_settings(app: &mut App, ui: &mut egui::Ui) {
             Some(egui::Align::TOP),
         );
     }
+    let stereo_top = ui.cursor().min;
+    theme::component(
+        ui,
+        "env-stereo",
+        icon::EYEGLASSES,
+        c::TEXT_WEAK,
+        "Stereo 3D",
+        |ui| scene_stereo(ui, &mut env.stereo, budgets),
+    );
+    if app.inspect_focus.as_deref() == Some("stereo") {
+        ui.scroll_to_rect(
+            egui::Rect::from_min_size(stereo_top, Vec2::new(1.0, 1.0)),
+            Some(egui::Align::TOP),
+        );
+    }
     theme::component(
         ui,
         "env-cam",
@@ -2488,6 +2503,101 @@ fn scene_shadows(
                 RichText::new(format!("{label} {line}"))
                     .size(12.0)
                     .color(color),
+            )
+            .wrap(),
+        );
+    }
+}
+
+/// Scene settings › Stereo 3D (issue #63): the 3DS top screen drawn once
+/// per eye while its 3D slider is up (`environment.stereo`); every other
+/// platform draws one picture. The Game view previews it on the 3DS (its
+/// Stereo menu), the Scene view shows the convergence plane, and the line
+/// under it is the 3DS frame with both eyes.
+fn scene_stereo(
+    ui: &mut egui::Ui,
+    stereo: &mut Option<trino_scene::StereoDef>,
+    budgets: Option<&crate::budget::Budgets>,
+) {
+    use trino_scene::StereoPolicyDef;
+    let mut on = stereo.is_some_and(|s| s.enabled);
+    if ui
+        .checkbox(&mut on, "Stereo 3D (3DS top screen)")
+        .on_hover_text(
+            "The 3DS draws the top screen once per eye while its 3D slider is up, \
+             through an off-axis projection; every other platform is mono. The \
+             Game view's Stereo menu previews it on the 3DS.",
+        )
+        .changed()
+    {
+        // Keep the tuning when turning it off.
+        match stereo {
+            Some(s) => s.enabled = on,
+            None => *stereo = Some(trino_scene::StereoDef::default()),
+        }
+    }
+    let Some(s) = stereo.as_mut().filter(|s| s.enabled) else {
+        return;
+    };
+    theme::prop(ui, "Separation", |ui| {
+        ui.add(
+            egui::DragValue::new(&mut s.max_separation)
+                .speed(0.005)
+                .range(0.0..=10.0)
+                .suffix(" m"),
+        )
+        .on_hover_text("The eyes' distance at the full 3D slider (the slider scales it)");
+    });
+    theme::prop(ui, "Convergence", |ui| {
+        let r = ui.add(
+            egui::DragValue::new(&mut s.convergence)
+                .speed(0.05)
+                .range(0.05..=1000.0)
+                .suffix(" m"),
+        );
+        crate::panels::audio::name_slider(&r, "Stereo convergence");
+        r.on_hover_text(
+            "The depth with zero parallax (the screen's plane, the Scene view's \
+             convergence plane): nearer pops out, farther sinks in",
+        );
+    });
+    theme::prop(ui, "Policy", |ui| {
+        let name = |p: StereoPolicyDef| match p {
+            StereoPolicyDef::Auto => "Auto (one eye past the budget)",
+            StereoPolicyDef::Always => "Always two eyes",
+        };
+        egui::ComboBox::from_id_salt("stereo-policy")
+            .selected_text(name(s.policy))
+            .show_ui(ui, |ui| {
+                for p in [StereoPolicyDef::Auto, StereoPolicyDef::Always] {
+                    ui.selectable_value(&mut s.policy, p, name(p));
+                }
+            });
+    });
+    if s.policy == StereoPolicyDef::Auto {
+        theme::prop(ui, "Budget", |ui| {
+            ui.add(
+                egui::DragValue::new(&mut s.budget_us)
+                    .speed(100.0)
+                    .range(1_000..=100_000)
+                    .suffix(" µs"),
+            )
+            .on_hover_text("The frame time stereo frames hold to (16 667 = 60 fps)");
+        });
+    }
+    if ui.small_button("Reset to defaults").clicked() {
+        *s = trino_scene::StereoDef::default();
+    }
+    let Some(budgets) = budgets else {
+        return;
+    };
+    let [_, n3ds, ..] = budgets;
+    if let Some(line) = trino_scene::budget::stereo_line(n3ds) {
+        ui.add(
+            egui::Label::new(
+                RichText::new(format!("3DS {line}"))
+                    .size(12.0)
+                    .color(c::TEXT_WEAK),
             )
             .wrap(),
         );

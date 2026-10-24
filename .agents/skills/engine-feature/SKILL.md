@@ -166,6 +166,19 @@ A feature is done only when **PC, N64 and 3DS** all run it and an emulator has s
   player earns goes into **the game's** save (`pack_for`/`restore_*`), never a region the
   engine carves out of the EEPROM (it would move the save layout of every game).
 
+- **A per-frame effect that redraws the frame (stereo, issue #63, ADR 0032):** record
+  the `Renderer` calls, not their triangles, and replay them (`trino_core::stereo::
+  StereoCmd` + `replay`). The core owns the command type and the replay, with slices as
+  `Span`s into arenas; the backends own the `Vec`s, because the core has no `alloc`.
+  - **Every top-screen method records at its top**, and replays start from a snapshot
+    of the state the recording began with.
+  - **A projection change belongs in `TnlContext`** (`with_eye`: out of line, no new
+    field, a zero shift returns the context unchanged). Then the CPU T&L, the PICA200's
+    `gpu_screen_matrix`, water, billboards and shadows all follow with no shader edit.
+  - **Prove the default path byte for byte:** compare the frame with the call against
+    the frame without it (`the_slider_down_is_the_mono_frame_byte_for_byte`). Prove the
+    effect by mutation: a flipped center sign, no eye move, no layer shift and a right
+    eye equal to the left each fail the `stereo` step.
 - **Instrument a new stage with the trace** (issue #62, the `profiling` skill):
   `trino_core::zone!("name")` at its boundary (never inside the T&L), a counter per frame
   for its work. Out-of-line code that only a `--trace` build needs goes behind

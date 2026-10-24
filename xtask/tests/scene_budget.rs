@@ -705,3 +705,108 @@ fn shadow_casters_are_counted_per_tier_like_the_renderer() {
     assert!(text.contains(&line), "{text}");
     std::fs::remove_file(&file).unwrap();
 }
+
+/// Stereo 3D (issue #63): on the 3DS each eye pays the mono frame again;
+/// the estimate says so where the scene asks for stereo (or under
+/// `--stereo`), the PC renderer's 3DS profile draws the same work with the
+/// slider up, and the targets without a stereo screen report none.
+#[test]
+fn the_stereo_budget_is_two_eyes_of_the_3ds_frame() {
+    let (meshes, lib) = assets();
+    let mut scene = Scene::load(&root().join("scenes/showcase.scene.ron")).unwrap();
+    assert!(scene.environment.stereo.is_none());
+    assert_eq!(estimate(&scene, &lib, &meshes, Target::N3ds).stereo, None);
+    scene.environment.stereo = Some(trino_scene::StereoDef::default());
+    let b = estimate(&scene, &lib, &meshes, Target::N3ds);
+    let s = b.stereo.expect("the 3DS has a stereo screen");
+    assert_eq!(s.eyes, 2);
+    assert!(b.tris() > 0 && b.gpu_draws > 0);
+    assert_eq!(s.tris, 2 * b.tris());
+    assert_eq!(s.gpu_vertex_passes, 2 * b.gpu_draws);
+    assert_eq!(
+        (s.cpu_draws, s.cpu_verts),
+        (2 * b.cpu_draws, 2 * b.cpu_tnl.verts)
+    );
+    let line = budget::stereo_line(&b).unwrap();
+    assert!(
+        line.starts_with("stereo: 2 eyes at the full slider"),
+        "{line}"
+    );
+    for t in [Target::N64, Target::Pc, Target::Web] {
+        assert_eq!(estimate(&scene, &lib, &meshes, t).stereo, None, "{t:?}");
+    }
+    assert!(
+        estimate(&scene, &lib, &meshes, Target::N3dsNew)
+            .stereo
+            .is_some()
+    );
+
+    // The PC's 3DS profile with the slider up draws both eyes' work.
+    if let Ok(mut r) = pollster::block_on(PcRenderer::new_headless(SimProfile::N3ds)) {
+        for (id, blob) in &meshes {
+            r.upload_mesh(trino_core::ModelId(*id), blob.clone());
+        }
+        r.set_stereo_view(trino_platform_pc::StereoView::Anaglyph);
+        let env = &scene.environment;
+        let camera = env.core_camera();
+        let resolved = resolve_for(&scene, &lib, 0.0, Target::N3ds);
+        let visible = resolved.visible_cells(&camera, Vec2::new(400.0, 240.0));
+        r.begin_frame(trino_core::Color::BLACK);
+        r.set_stereo(resolved.stereo.as_ref());
+        r.set_camera(&camera);
+        r.set_light(&env.core_light());
+        for item in &resolved.items {
+            if !trino_core::vis::in_view(item.cell, visible) {
+                continue;
+            }
+            if let LodPick::Model(id) = item.lod_from(camera.eye) {
+                r.draw_model_matrix(id, &item.matrix, Material::VertexLit, &item.params);
+            }
+        }
+        r.end_frame();
+        let got = r.stats();
+        assert_eq!(got.stereo.eyes, 2);
+        assert_eq!(got.models, 2 * b.draws, "each eye draws every model");
+    }
+
+    // The CLI: `--stereo` asks for it on a scene without its own.
+    let out = Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .args([
+            "scene",
+            "budget",
+            "scenes/showcase.scene.ron",
+            "--stereo",
+            "--json",
+        ])
+        .current_dir(root())
+        .env_remove("TRINO_PROJECT")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let rows = v.as_array().unwrap();
+    let n3ds = rows.iter().find(|r| r["platform"] == "3ds").unwrap();
+    assert_eq!(n3ds["stereo"]["eyes"], 2);
+    assert_eq!(n3ds["stereo"]["gpu_vertex_passes"], 2 * b.gpu_draws);
+    let n64 = rows.iter().find(|r| r["platform"] == "n64").unwrap();
+    assert!(n64["stereo"].is_null());
+    let text = Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .args([
+            "scene",
+            "budget",
+            "scenes/showcase.scene.ron",
+            "--platform",
+            "n3ds",
+            "--stereo",
+        ])
+        .current_dir(root())
+        .env_remove("TRINO_PROJECT")
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&text.stdout);
+    assert!(text.contains("stereo: 2 eyes"), "{text}");
+}

@@ -1,0 +1,44 @@
+// The post stack's reference scene (issue #64, ADR 0033): the PC grades the
+// frame through `luts/selftest` at run time, the consoles' bake grades the
+// same colors (`grading` on `models/selftest_post`, `bake_grading` on
+// `[scenes.post-reference]`). `cargo xtask scene shot` on each platform
+// compares them (`xtask/tests/post_cli.rs`): the unlit cards and the
+// background match within a few steps, the lit card within the shading's
+// order (graded before the light on the consoles, after it on the PC). The
+// lamp's glow is the consoles' bloom.
+(
+    version: 7,
+    name: "post-reference",
+    environment: (
+        clear: (40, 60, 110),
+        camera: (eye: (0.0, 0.4, -3.6), target: (0.0, 0.3, 0.0), fov: 55.0),
+        light: (dir: (0.3, -0.7, 0.6), color: (255, 240, 220), ambient: 0.45, ambient_color: (200, 210, 255)),
+        post: Some((
+            grading: Some("luts/selftest"),
+            bloom: Some(()),
+        )),
+    ),
+    entities: [
+        (
+            name: "card-left",
+            transform: (pos: (-1.1, 0.3, 0.0), rot: (0.0, 0.0, 0.0), scale: (0.8, 0.8, 0.8)),
+            model: Some((path: "models/selftest_post", material: Some("materials/unlit"))),
+        ),
+        (
+            name: "card-lit",
+            transform: (pos: (0.0, 0.3, 0.0), rot: (0.0, 25.0, 0.0), scale: (0.8, 0.8, 0.8)),
+            model: Some((path: "models/selftest_post")),
+        ),
+        (
+            name: "card-right",
+            transform: (pos: (1.1, 0.3, 0.0), rot: (0.0, 0.0, 0.0), scale: (0.8, 0.8, 0.8)),
+            model: Some((path: "models/selftest_post", material: Some("materials/unlit"))),
+        ),
+        (
+            name: "lamp",
+            transform: (pos: (0.0, 1.2, -0.3), rot: (0.0, 0.0, 0.0), scale: (0.15, 0.15, 0.15)),
+            model: Some((path: "models/selftest_post", material: Some("materials/unlit"))),
+            glow: Some((radius: 0.35, color: (255, 255, 255, 200))),
+        ),
+    ],
+)

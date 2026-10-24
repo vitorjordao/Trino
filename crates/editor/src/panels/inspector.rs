@@ -681,6 +681,17 @@ fn entity(app: &mut App, ui: &mut egui::Ui, path: &[usize]) {
         e.shadow = None;
     }
 
+    // Glow (issue #64).
+    let mut remove_glow = false;
+    if let Some(g) = &mut e.glow {
+        theme::component(ui, "c-glow", icon::SUN, c::TEXT_WEAK, "Glow", |ui| {
+            remove_glow = glow_component(ui, g)
+        });
+    }
+    if remove_glow {
+        e.glow = None;
+    }
+
     // Sound source.
     let mut remove_sound = false;
     if let Some(snd) = &mut e.sound {
@@ -907,6 +918,9 @@ fn entity(app: &mut App, ui: &mut egui::Ui, path: &[usize]) {
                             ..Default::default()
                         }
                     });
+                }
+                if e.glow.is_none() && ui.button(format!("{}  Glow", icon::SUN)).clicked() {
+                    e.glow = Some(trino_scene::GlowComponent::default());
                 }
                 if e.sound.is_none()
                     && ui
@@ -1413,6 +1427,7 @@ fn model_asset(app: &mut App, ui: &mut egui::Ui, logical: &str) {
     ];
     let mut proxy = m.proxy.clone();
     let baked_ao = m.ao.clone();
+    let grading = m.grading.clone();
 
     card().show(ui, |ui| {
         egui::Grid::new("model-stats")
@@ -1429,6 +1444,10 @@ fn model_asset(app: &mut App, ui: &mut egui::Ui, logical: &str) {
                         format!("{:.2} × {:.2} × {:.2}", size[0], size[1], size[2]),
                     ),
                     ("Joints", joints.to_string()),
+                    (
+                        "Console grading",
+                        grading.clone().unwrap_or_else(|| "—".into()),
+                    ),
                     (
                         "Clips",
                         if clips.is_empty() {
@@ -1945,6 +1964,22 @@ fn scene_settings(app: &mut App, ui: &mut egui::Ui) {
     if app.inspect_focus.as_deref() == Some("stereo") {
         ui.scroll_to_rect(
             egui::Rect::from_min_size(stereo_top, Vec2::new(1.0, 1.0)),
+            Some(egui::Align::TOP),
+        );
+    }
+    let post_top = ui.cursor().min;
+    let luts: Vec<String> = app.project.luts.keys().cloned().collect();
+    theme::component(
+        ui,
+        "env-post",
+        icon::APERTURE,
+        c::TEXT_WEAK,
+        "Post-processing",
+        |ui| scene_post(ui, &mut env.post, &luts),
+    );
+    if app.inspect_focus.as_deref() == Some("post") {
+        ui.scroll_to_rect(
+            egui::Rect::from_min_size(post_top, Vec2::new(1.0, 1.0)),
             Some(egui::Align::TOP),
         );
     }
@@ -2602,6 +2637,156 @@ fn scene_stereo(
             .wrap(),
         );
     }
+}
+
+/// Scene settings › Post-processing (issue #64): exposure, the tonemap,
+/// bloom, a grading LUT, vignette and grain (`environment.post`). The PC
+/// and the Web run the stack; the consoles get the LUT baked into their
+/// colors (`bake_grading` on the scene's manifest entry, `grading` on its
+/// models) and Glow components for bloom. The Scene view's View ›
+/// Post-processing shows it off, forced on or the bloom alone; the Game
+/// view on a console shows the baked grading.
+fn scene_post(ui: &mut egui::Ui, post: &mut Option<trino_scene::PostDef>, luts: &[String]) {
+    use trino_scene::{BloomDef, TonemapDef};
+    let mut on = post.as_ref().is_some_and(|p| p.enabled);
+    if ui
+        .checkbox(&mut on, "Post stack (PC and Web)")
+        .on_hover_text(
+            "The 3D drawn in HDR, then exposure, a tonemap, bloom, a grading LUT, \
+             vignette and grain; the HUD after the last 3D draw is untouched. The \
+             consoles bake the grading into their colors and draw Glow halos.",
+        )
+        .changed()
+    {
+        match post {
+            Some(p) => p.enabled = on,
+            None => *post = Some(trino_scene::PostDef::default()),
+        }
+    }
+    let Some(p) = post.as_mut().filter(|p| p.enabled) else {
+        return;
+    };
+    theme::prop(ui, "Exposure", |ui| {
+        let r = ui.add(
+            egui::DragValue::new(&mut p.exposure)
+                .speed(0.02)
+                .range(0.01..=16.0)
+                .suffix("×"),
+        );
+        crate::panels::audio::name_slider(&r, "Post exposure");
+        r.on_hover_text("Multiplies linear light before the tonemap (2 = one stop brighter)");
+    });
+    theme::prop(ui, "Tonemap", |ui| {
+        let name = |t: TonemapDef| match t {
+            TonemapDef::None => "None (clamp)",
+            TonemapDef::Reinhard => "Reinhard",
+            TonemapDef::Aces => "ACES (filmic)",
+            TonemapDef::AgX => "AgX",
+        };
+        egui::ComboBox::from_id_salt("post-tonemap")
+            .selected_text(name(p.tonemap))
+            .show_ui(ui, |ui| {
+                for t in TonemapDef::ALL {
+                    ui.selectable_value(&mut p.tonemap, t, name(t));
+                }
+            })
+            .response
+            .widget_info(|| {
+                egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, "Post tonemap")
+            });
+    });
+    let mut bloom = p.bloom.is_some();
+    if ui
+        .checkbox(&mut bloom, "Bloom")
+        .on_hover_text("Light spilling around the brightest pixels (Glow halos on the consoles)")
+        .changed()
+    {
+        p.bloom = bloom.then(BloomDef::default);
+    }
+    if let Some(b) = &mut p.bloom {
+        theme::prop(ui, "Threshold", |ui| {
+            ui.add(egui::Slider::new(&mut b.threshold, 0.0..=4.0))
+                .on_hover_text(
+                    "Linear brightness where it reaches full strength (0.8: an unlit white glows)",
+                );
+        });
+        theme::prop(ui, "Intensity", |ui| {
+            ui.add(egui::Slider::new(&mut b.intensity, 0.0..=4.0));
+        });
+        theme::prop(ui, "Radius", |ui| {
+            ui.add(egui::Slider::new(&mut b.radius, 0.0..=1.0));
+        });
+    }
+    theme::prop(ui, "Grading", |ui| {
+        let current = p.grading.clone().unwrap_or_else(|| "None".into());
+        egui::ComboBox::from_id_salt("post-grading")
+            .selected_text(&current)
+            .show_ui(ui, |ui| {
+                if ui.selectable_label(p.grading.is_none(), "None").clicked() {
+                    p.grading = None;
+                }
+                for l in luts {
+                    if ui
+                        .selectable_label(p.grading.as_ref() == Some(l), l)
+                        .clicked()
+                    {
+                        p.grading = Some(l.clone());
+                    }
+                }
+            })
+            .response
+            .on_hover_text(
+                "A `[luts.*]` asset (a strip PNG or a .cube; `cargo xtask lut neutral` \
+                 writes one to edit). Name it in models' `grading` and the scene's \
+                 `bake_grading` for the consoles.",
+            )
+            .widget_info(|| {
+                egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, "Post grading")
+            });
+    });
+    theme::prop(ui, "Vignette", |ui| {
+        ui.add(egui::Slider::new(&mut p.vignette, 0.0..=1.0));
+    });
+    theme::prop(ui, "Grain", |ui| {
+        ui.add(egui::Slider::new(&mut p.grain, 0.0..=1.0));
+    });
+    if ui.small_button("Reset to defaults").clicked() {
+        *p = trino_scene::PostDef::default();
+    }
+}
+
+/// An entity's Glow component (issue #64): a halo at its position, the
+/// consoles' bloom. Returns true to remove it.
+fn glow_component(ui: &mut egui::Ui, g: &mut trino_scene::GlowComponent) -> bool {
+    use trino_scene::GlowModeDef;
+    theme::prop(ui, "Radius", |ui| {
+        ui.add(
+            egui::DragValue::new(&mut g.radius)
+                .speed(0.02)
+                .range(0.0..=100.0)
+                .suffix(" m"),
+        );
+    });
+    theme::prop(ui, "Color", |ui| theme::color_rgba(ui, &mut g.color));
+    theme::prop(ui, "Draws", |ui| {
+        let name = |m: GlowModeDef| match m {
+            GlowModeDef::Baked => "Where there is no bloom",
+            GlowModeDef::Always => "Everywhere",
+        };
+        egui::ComboBox::from_id_salt("glow-mode")
+            .selected_text(name(g.mode))
+            .show_ui(ui, |ui| {
+                for m in [GlowModeDef::Baked, GlowModeDef::Always] {
+                    ui.selectable_value(&mut g.mode, m, name(m));
+                }
+            })
+            .response
+            .on_hover_text(
+                "Where there is no bloom: the N64, the 3DS and the PC's console \
+                 profiles (the PC and the Web bloom instead).",
+            );
+    });
+    ui.small_button(format!("{} Remove", icon::TRASH)).clicked()
 }
 
 /// An entity's Shadow component: what its model casts on each tier and

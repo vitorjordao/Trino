@@ -167,6 +167,7 @@ pub(crate) fn load(
                 r.fonts += 1;
             }
             Kind::Blob => {
+                renderer.take_lut_blob(e.id, e.bytes);
                 platform.insert_blob(BlobId(e.id), e.bytes.to_vec());
                 platform
                     .groups

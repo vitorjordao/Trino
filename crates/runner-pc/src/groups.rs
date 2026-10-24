@@ -271,10 +271,12 @@ impl GroupLoader {
         for m in assets.models {
             let key = (Kind::Model, m.id);
             if self.hold(g, key) {
-                trino_core::render3d::Mesh::from_tmdl(&m.tmdl)
-                    .map_err(|e| format!("model {:08x}: {e:?}", m.id))?;
-                let bytes = clamp(m.tmdl.len());
-                renderer.upload_mesh(ModelId(m.id), m.tmdl);
+                let id = m.id;
+                let tmdl = crate::model_for(renderer, m);
+                trino_core::render3d::Mesh::from_tmdl(&tmdl)
+                    .map_err(|e| format!("model {id:08x}: {e:?}"))?;
+                let bytes = clamp(tmdl.len());
+                renderer.upload_mesh(ModelId(id), tmdl);
                 self.uploaded(key, bytes, platform);
             }
         }
@@ -292,6 +294,7 @@ impl GroupLoader {
             let key = (Kind::Blob, b.id);
             if self.hold(g, key) {
                 let bytes = clamp(b.bytes.len());
+                renderer.take_lut_blob(b.id, &b.bytes);
                 platform.insert_group_blob(BlobId(b.id), b.bytes);
                 self.uploaded(key, bytes, platform);
             }
@@ -352,6 +355,7 @@ impl GroupLoader {
                     renderer.remove_font(FontId(id));
                 }
                 Kind::Blob => {
+                    renderer.remove_lut(trino_core::LutId(id));
                     platform.remove_group_blob(BlobId(id));
                 }
             }

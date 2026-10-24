@@ -91,6 +91,7 @@ TRINO_EDITOR_SCREENSHOT=target/launcher.png TRINO_EDITOR_SCREENSHOT_FRAME=10 car
 | `TRINO_EDITOR_ASSET_GROUP=<group>[@models\|sprites\|audio\|particles]` | the Assets panel opens filtered by that group's chip (on that tab) |
 | `TRINO_EDITOR_TEXTURE=sprites/x\|fonts/x[@pc\|n64\|3ds\|web[,zoom]]` | open the texture inspector on that sprite or font, its preview tab on that platform at that zoom (1–8); with `TRINO_EDITOR_INSPECT=texture` its formats scroll into view |
 | `TRINO_EDITOR_AO=game\|on\|off\|mask` | the Scene view's ambient occlusion mode (as the scene sets it, forced on, off, the occlusion alone) |
+| `TRINO_EDITOR_POST=game\|on\|off\|bloom` | the Scene view's post-processing mode (issue #64: as the scene sets it, forced on, off, the bloom alone); `TRINO_EDITOR_INSPECT=post` scrolls to Scene settings › Post-processing |
 | `TRINO_EDITOR_SHADOWS=tier\|off\|debug` | the Scene view's shadow mode (as the tier draws them, none, debug: magenta shadows with every receiver and caster outlined) |
 | `TRINO_EDITOR_RIPPLE=1` | keep a ripple ringing on the selected entity's water surface: one drops once the scene resolved, and another whenever it has faded (the inspector's "Drop a ripple"; screenshots of ripple rings) |
 | `TRINO_EDITOR_LOD_PREVIEW=<m>` | preview the selected entity's LOD at that distance (both views) |
@@ -443,6 +444,21 @@ the modes too: a kittest click on "Deuteranopia" must pick the first match.
   HUD is painted text that kittest can't find, so test a HUD line through a `Viewport`
   method. A `theme::prop` label doesn't name the DragValue or Slider beside it: use
   `panels::audio::name_slider` so `set_value` finds it.
+
+## Post-processing (issue #64, ADR 0033)
+
+- Inspector › Post-processing (scene settings) writes `environment.post`; the combos
+  are named `Post tonemap` and `Post grading` for kittest, the exposure `Post exposure`.
+  `TRINO_EDITOR_INSPECT=post` scrolls to it.
+- View › Post-processing view sets the Scene view's `PostView` (game, on, off, bloom);
+  `TRINO_EDITOR_POST=game|on|off|bloom`. The Game view always shows the game's.
+- A console's Game view uploads the models' graded twins (`ModelAsset::tmdl_for`) and,
+  when the manifest bakes the scene with `bake_grading`, grades its environment
+  (`Viewport::console_grading`).
+- Add component › Glow; glows draw in both views where the profile has no bloom.
+- The Accessibility tab's Daltonize sets `preview.cvd_filter`, copied to both views'
+  `cvd_filter` each frame (`TRINO_EDITOR_ACCESS=cvd=deuteranopia,cvd_filter=on`).
+- Kittest: `post_section_view_modes_glow_and_the_correction_preview`.
 
 ## Rules when changing the editor
 

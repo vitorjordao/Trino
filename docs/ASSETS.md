@@ -409,6 +409,37 @@ a camera can see, so the CC0 KayKit doorway went from 1068 to 75 triangles.
     `Renderer::set_stereo` right after `begin_frame`. TSCN carries none.
   - **Cost:** `scene budget --stereo` prints the cost per eye.
 
+- **Post-processing** ([ADR 0033](adr/0033-post-processing-stack.md)):
+  - **The block:** `environment.post: Some((exposure: 1.0, tonemap: AgX, bloom:
+    Some((threshold: 0.8, intensity: 0.6, radius: 0.6)), grading: Some("luts/dusk"),
+    vignette: 0.2, grain: 0.0))`. Every field defaults (`post: Some(())` is the
+    neutral stack) and `enabled: false` keeps the tuning.
+  - **Code and bakes:** `scene export` writes `POST` for `Renderer::set_post`; TSCN
+    carries none. `scene export --platform n64 --bake-grading` grades the scene's
+    colors; `bake_grading = true` on `[scenes.*]` does it for the consoles' TSCN.
+  - **Glow:** an entity's `glow: Some((radius: 0.5, color: (255, 255, 255, 255),
+    sprite: None, mode: Baked))` draws a halo of `sprites/glow` where the target has
+    no bloom (`Always`: everywhere); TSCN v6 and codegen carry it.
+  - **Before/after:** `cargo xtask scene shot <scene.ron> --platform pc|n64|3ds|web
+    --post game|on|off|bloom`; `cargo xtask post check` validates the references.
+
+## Grading LUTs
+
+`[luts.<name>]` (issue #64): `file = "luts/dusk.png"` is a strip PNG `n²×n` — `n`
+slices of blue side by side, red along x inside a slice, green down y, 2..=64 texels
+per axis — or an Adobe/Resolve `.cube`. `cargo xtask lut neutral [--size 32]` writes
+the identity to edit in any image tool, `cargo xtask lut inspect <file|luts/x>` says
+how far one moves colors.
+
+- **PC and Web:** baked to a `TLUT` blob (logical `luts/<name>`, the blob and
+  `LutId` share the hash); hosts upload it to the renderer; `PostSettings::grading`
+  names it.
+- **Consoles:** no LUT at run time. `grading = "luts/<name>"` on a `[models.*]` entry
+  grades its vertex colors in the N64 and 3DS bakes (on a `[sprites.*]` entry, its
+  pixels); the PC bake keeps the model as authored and adds a graded twin that the
+  PC's console profiles draw. Unlit colors match the PC's run-time grading exactly;
+  lit ones differ by the order (graded before the light).
+
 ## UI screens
 
 A screen is a RON file in the project's `ui/` folder (ADR 0024); the bake turns it into the

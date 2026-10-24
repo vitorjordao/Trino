@@ -43,6 +43,7 @@ pub mod particles;
 pub mod perf;
 pub mod physics;
 pub mod platform;
+pub mod post;
 pub mod precompile;
 pub mod quality;
 pub mod render;
@@ -93,6 +94,9 @@ pub use particles::{Effect, Emitter, ParticleSystem};
 pub use physics::{Aabb, Collider, Shape};
 pub use platform::{
     BindDevice, BlobId, DisplayInfo, DisplaySettings, GamepadStatus, InputInfo, Platform, SaveError,
+};
+pub use post::{
+    Bloom, Glow, GlowMode, Lut, LutError, LutId, PostSettings, PostTier, Tonemap, draw_glow,
 };
 pub use precompile::{PrecompileMode, PrecompileRequest, PrecompileStatus};
 pub use quality::{

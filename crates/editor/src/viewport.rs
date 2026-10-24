@@ -23,7 +23,7 @@ use trino_core::{
     Color, Fog, HwTier, Light, LodPick, Material, ModelId, ModelParams, QualityPreset,
     QualitySettings, Renderer, Shading, SpriteId, SpriteParams, Vec2 as TVec2, Vec3,
 };
-use trino_platform_pc::{AoView, PcRenderer, ShadowView, SimProfile, StereoView};
+use trino_platform_pc::{AoView, PcRenderer, PostView, ShadowView, SimProfile, StereoView};
 use trino_scene::{Resolved, Scene, Target, Transform};
 
 use crate::gizmo::{self, AxisEvent, Drag, Gizmo, GizmoMode, OrbitCam, Proj, RenderCam};
@@ -129,6 +129,9 @@ pub struct ViewInput<'a> {
     /// The Game view previews stereo (issue #63): the Scene view shows the
     /// convergence plane even when the scene sets no stereo of its own.
     pub stereo_preview: bool,
+    /// The scene's file (the consoles' bake grades it when the manifest
+    /// says `bake_grading`: the Game view previews that, issue #64).
+    pub scene_path: &'a std::path::Path,
 }
 
 pub enum ViewAction {
@@ -156,6 +159,8 @@ pub struct Stats {
     pub lod: crate::budget::LodCounts,
     /// The screen-space AO ran on the last frame.
     pub ao: bool,
+    /// The post stack ran on the last frame (issue #64).
+    pub post: bool,
     /// The tier the last frame's shadows drew at (`frame.shadows` counts
     /// them).
     pub shadow_tier: trino_core::ShadowTier,
@@ -198,6 +203,15 @@ pub struct Viewport {
     /// vision sees it (the Accessibility tab's simulation, issue #60).
     pub cvd_view: trino_core::CvdMode,
     cvd_rendered: trino_core::CvdMode,
+    /// Scene and Game views: the players' correction filter for this mode
+    /// (the Accessibility tab's preview, issue #64; the native profile and
+    /// the Web only).
+    pub cvd_filter: trino_core::CvdMode,
+    cvd_filter_rendered: trino_core::CvdMode,
+    /// Scene view: the post stack as the scene sets it, off, always on or
+    /// the bloom alone (issue #64; `TRINO_EDITOR_POST`).
+    pub post_view: PostView,
+    post_rendered: PostView,
     /// Game view on the 3DS: the stereo preview (issue #63, Off = the
     /// simulated 3D slider down) and the slider under it
     /// (`TRINO_EDITOR_STEREO=<view>[:slider]`).
@@ -283,6 +297,10 @@ impl Viewport {
             shadow_rendered: ShadowView::Game,
             cvd_view: trino_core::CvdMode::Off,
             cvd_rendered: trino_core::CvdMode::Off,
+            cvd_filter: trino_core::CvdMode::Off,
+            cvd_filter_rendered: trino_core::CvdMode::Off,
+            post_view: PostView::Game,
+            post_rendered: PostView::Game,
             stereo_view: StereoView::Off,
             stereo_slider: 1.0,
             stereo_rendered: (StereoView::Off, 1.0),
@@ -309,6 +327,7 @@ impl Viewport {
                 frame: trino_core::FrameStats::default(),
                 lod: crate::budget::LodCounts::default(),
                 ao: false,
+                post: false,
                 shadow_tier: trino_core::ShadowTier::None,
             },
             hover: None,
@@ -431,11 +450,40 @@ impl Viewport {
         self.renderer.stereo_view()
     }
 
+    /// The correction filter this view's renderer draws (tests).
+    #[cfg(test)]
+    pub fn renderer_cvd_filter(&self) -> trino_core::CvdMode {
+        self.renderer.cvd_filter()
+    }
+
     /// Re-upload changed assets (live reload).
     pub fn upload(&mut self, project: &Project, changed: &[String]) {
         project.upload_some(&mut self.renderer, changed);
         project.upload_platform_sprites(&mut self.renderer, target_of(self.profile));
         self.rendered = None;
+    }
+
+    /// The scene's environment as this view's console bakes it: graded
+    /// through its `post.grading` when the manifest bakes the scene with
+    /// `bake_grading` and this is a console's Game view (`None` otherwise).
+    fn console_grading(&self, input: &ViewInput) -> Option<trino_scene::Environment> {
+        if self.kind != ViewKind::Game
+            || !matches!(self.profile, SimProfile::N64 | SimProfile::N3ds)
+        {
+            return None;
+        }
+        let rel = input
+            .scene_path
+            .strip_prefix(&input.project.root)
+            .unwrap_or(input.scene_path);
+        let baked = input
+            .project
+            .bake_grading
+            .iter()
+            .any(|f| std::path::Path::new(f) == rel);
+        let grading = input.scene.environment.post.as_ref()?.grading.as_deref()?;
+        let lut = input.project.lut(grading).filter(|_| baked)?;
+        Some(input.scene.environment.graded(&lut))
     }
 
     /// Internal resolution of this view's renderer.
@@ -468,7 +516,10 @@ impl Viewport {
         if self.kind == ViewKind::Scene {
             self.renderer.set_internal_size(size.0, size.1);
         }
-        let env = &input.scene.environment;
+        // A console's Game view shows the scene's colors as that console's
+        // bake grades them (`bake_grading`, issue #64).
+        let graded = self.console_grading(input);
+        let env = graded.as_ref().unwrap_or(&input.scene.environment);
         let clear = env.clear;
         let stereo = match self.kind {
             ViewKind::Game => self.stereo_for(input.scene),
@@ -542,6 +593,14 @@ impl Viewport {
         });
         r.set_shadows(env.core_shadows().as_ref());
         r.set_cvd_view(self.cvd_view);
+        r.set_cvd_filter(self.cvd_filter);
+        // The post stack (issue #64): the native profile and the Web run it,
+        // the console profiles draw their bake's grading.
+        r.set_post_view(match self.kind {
+            ViewKind::Scene => self.post_view,
+            ViewKind::Game => PostView::Game,
+        });
+        r.set_post(env.core_post().as_ref());
         r.set_shadow_receivers(&input.resolved.receivers());
         // Water surfaces flow with the preview clock; ripples dropped from
         // the material inspector ring out.
@@ -619,6 +678,19 @@ impl Viewport {
             }
             r.draw_model_matrix(*id, &place(&item.matrix), Material::VertexLit, &params);
         }
+        // Glows (issue #64): halos where the previewed target has no bloom.
+        for item in &input.resolved.items {
+            if let Some(g) = &item.glow
+                && trino_core::vis::in_view(item.cell, visible)
+            {
+                let p = place(&item.matrix).transform_point(trino_core::Vec3::ZERO);
+                let g = trino_core::Glow {
+                    radius: g.radius * rc.scale,
+                    ..*g
+                };
+                trino_core::draw_glow(r, &g, p);
+            }
+        }
         if self.kind == ViewKind::Game {
             for item in &input.resolved.items {
                 if let Some(s) = &item.sprite {
@@ -646,6 +718,7 @@ impl Viewport {
             frame: r.stats(),
             lod,
             ao: r.frame_times().ao_passes > 0,
+            post: r.frame_times().post_passes > 0,
             shadow_tier: r.shadow_tier(),
         };
     }
@@ -758,6 +831,7 @@ impl Viewport {
                 frame: self.renderer.stats(),
                 lod: crate::budget::LodCounts::default(),
                 ao: self.renderer.frame_times().ao_passes > 0,
+                post: self.renderer.frame_times().post_passes > 0,
                 shadow_tier: self.renderer.shadow_tier(),
             };
             if dynres_live {
@@ -771,6 +845,8 @@ impl Viewport {
             || self.ao_rendered != self.ao_view
             || self.shadow_rendered != self.shadow_view
             || self.cvd_rendered != self.cvd_view
+            || self.cvd_filter_rendered != self.cvd_filter
+            || self.post_rendered != self.post_view
             || self.stereo_rendered != (self.stereo_view, self.stereo_slider)
             || dynres_live
             || flipping
@@ -778,6 +854,8 @@ impl Viewport {
             self.ao_rendered = self.ao_view;
             self.shadow_rendered = self.shadow_view;
             self.cvd_rendered = self.cvd_view;
+            self.cvd_filter_rendered = self.cvd_filter;
+            self.post_rendered = self.post_view;
             self.stereo_rendered = (self.stereo_view, self.stereo_slider);
             self.render(input, internal);
             if size_changed {
@@ -1926,6 +2004,27 @@ pub fn ao_menu(ui: &mut egui::Ui, view: &mut AoView) -> bool {
         }
     }
     *view != before
+}
+
+/// The Scene view's post-processing modes (issue #64), as radio buttons
+/// (View menu). Returns true when the mode changed.
+pub fn post_menu(ui: &mut egui::Ui, view: &mut PostView) -> bool {
+    let before = *view;
+    for v in [PostView::Game, PostView::On, PostView::Off, PostView::Bloom] {
+        if ui.radio_value(view, v, post_view_label(v)).clicked() {
+            ui.close();
+        }
+    }
+    *view != before
+}
+
+pub fn post_view_label(view: PostView) -> &'static str {
+    match view {
+        PostView::Game => "Post: as the scene sets it",
+        PostView::On => "Post: always on (filmic preview)",
+        PostView::Off => "Post: off",
+        PostView::Bloom => "Post: bloom only (mask)",
+    }
 }
 
 /// The Scene view's shadow modes, as radio buttons (toolbar and View

@@ -52,10 +52,16 @@ fn pc_target_on(
     for f in assets.fonts {
         renderer.upload_font(trino_core::FontId(f.id), f.table);
     }
+    // The console profiles draw what the consoles' bake grades (issue #64).
     for m in assets.models {
-        renderer.upload_mesh(trino_core::ModelId(m.id), m.tmdl);
+        let tmdl = match (profile, m.graded) {
+            (SimProfile::N64 | SimProfile::N3ds, Some(g)) => g,
+            _ => m.tmdl,
+        };
+        renderer.upload_mesh(trino_core::ModelId(m.id), tmdl);
     }
     for b in assets.blobs {
+        renderer.take_lut_blob(b.id, &b.bytes);
         platform.insert_blob(trino_core::BlobId(b.id), b.bytes);
     }
     Some((renderer, platform))
@@ -166,6 +172,50 @@ fn the_shader_precompile_step_warms_the_pc_and_skips_the_consoles() {
         // shadow and color-vision passes): they warm too, just fewer.
         assert!(r.passes > 0, "{profile:?}: {r:?}");
         assert!(r.threads >= 1, "{profile:?}: {r:?}");
+    }
+}
+
+/// The `post` step (issue #64) on the native profile and each console
+/// profile: the card is graded alike (the PC's LUT at run time, the
+/// consoles' graded bake) and blooms or glows. Breaking each tier's half
+/// fails it: no LUT on the native profile, the ungraded mesh or no halo
+/// sprite on a console profile.
+#[test]
+fn the_post_step_grades_and_glows_on_every_profile_and_catches_its_breakages() {
+    use castle64::selftest::{POST_CARD, POST_LUT, post};
+    let save_dir = tempfile::tempdir().unwrap();
+    for profile in [SimProfile::Native, SimProfile::N64, SimProfile::N3ds] {
+        let Some((mut renderer, _)) = pc_target(profile, save_dir.path()) else {
+            return;
+        };
+        assert_eq!(post(&mut renderer), Ok(true), "{profile:?}");
+        if profile == SimProfile::Native {
+            renderer.remove_lut(POST_LUT);
+            assert!(post(&mut renderer).unwrap_err().contains("not graded"));
+        } else {
+            // The ungraded mesh: what a console bake that ignored
+            // `grading` would draw.
+            let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+            let raw = trino_asset_pipeline::bake_model(
+                &root.join("assets/shared/models/proxies/selftest-post.prim.ron"),
+                &Default::default(),
+            )
+            .unwrap();
+            renderer.upload_mesh(POST_CARD, raw);
+            assert!(
+                post(&mut renderer).unwrap_err().contains("not graded"),
+                "{profile:?}"
+            );
+            let Some((mut renderer, _)) = pc_target(profile, save_dir.path()) else {
+                return;
+            };
+            renderer.remove_sprite(trino_core::Glow::SPRITE);
+            assert_eq!(
+                post(&mut renderer),
+                Err("post: no glow beside the card"),
+                "{profile:?}"
+            );
+        }
     }
 }
 

@@ -23,6 +23,8 @@ struct IndexEntry {
     compressed: Option<String>,
     #[serde(default)]
     ktx2: Option<String>,
+    #[serde(default)]
+    graded: Option<String>,
     /// The non-boot groups it is in (issue #56); empty = `boot`.
     #[serde(default)]
     groups: Vec<String>,
@@ -111,6 +113,9 @@ pub struct LoadedModel {
     pub id: u32,
     /// The whole TMDL blob (parsed lazily by `trino_core::render3d::Mesh`).
     pub tmdl: Vec<u8>,
+    /// Its console-graded twin (PC bakes of a model with `grading`, issue
+    /// #64): what the PC's console profiles draw.
+    pub graded: Option<Vec<u8>>,
 }
 
 /// A font's glyph table (`TFNT`); its atlas arrives as a sprite with the
@@ -197,6 +202,7 @@ fn load_where(out_dir: &Path, keep: impl Fn(&IndexEntry) -> bool) -> Result<Load
             preview_3ds: entry.preview_3ds.as_deref().map(read).transpose()?,
             compressed: entry.compressed.as_deref().map(read).transpose()?,
             ktx2: entry.ktx2.as_deref().map(read).transpose()?,
+            graded: entry.graded.as_deref().map(read).transpose()?,
         };
         let path = out_dir.join(&entry.file);
         push_entry(
@@ -212,12 +218,14 @@ fn load_where(out_dir: &Path, keep: impl Fn(&IndexEntry) -> bool) -> Result<Load
     Ok(out)
 }
 
-/// A sprite's extra files (`preview_3ds`, `compressed`, `ktx2`).
+/// A sprite's extra files (`preview_3ds`, `compressed`, `ktx2`), a
+/// model's (`graded`).
 #[derive(Default)]
 struct Variants {
     preview_3ds: Option<Vec<u8>>,
     compressed: Option<Vec<u8>>,
     ktx2: Option<Vec<u8>>,
+    graded: Option<Vec<u8>>,
 }
 
 /// Parse one baked asset into `out`; `what` names it in errors.
@@ -324,10 +332,18 @@ fn push_entry(
             if !bytes.starts_with(b"TMDL") {
                 return Err(format!("{}: bad model blob", what()));
             }
+            if variants
+                .graded
+                .as_ref()
+                .is_some_and(|g| !g.starts_with(b"TMDL"))
+            {
+                return Err(format!("{}: bad graded model blob", what()));
+            }
             out.models.push(LoadedModel {
                 logical,
                 id,
                 tmdl: bytes,
+                graded: variants.graded,
             });
         }
         "font" => {
@@ -424,7 +440,7 @@ impl BundleLoad {
         use trino_core::bundle::EntryKind as K;
         let b = trino_core::bundle::Bundle::parse(&self.bytes).expect("checked by open");
         // Plan the next assets: each one's entry and its variants' (slot
-        // 0 = 3DS preview, 1 = BCn, 2 = KTX2).
+        // 0 = 3DS preview, 1 = BCn, 2 = KTX2, 3 = a graded model).
         let mut plans: Vec<(usize, Vec<(usize, usize)>)> = Vec::new();
         while self.next < b.len() && plans.len() < threads.max(1) as usize {
             let at = self.next;
@@ -440,6 +456,7 @@ impl BundleLoad {
                     K::SpritePreview3ds => 0,
                     K::SpriteBc => 1,
                     K::SpriteKtx2 => 2,
+                    K::ModelGraded => 3,
                     _ => break,
                 };
                 self.next += 1;
@@ -487,7 +504,8 @@ impl BundleLoad {
                 match slot {
                     0 => variants.preview_3ds = v,
                     1 => variants.compressed = v,
-                    _ => variants.ktx2 = v,
+                    2 => variants.ktx2 = v,
+                    _ => variants.graded = v,
                 }
                 read += e.read_bytes() as u64;
             }

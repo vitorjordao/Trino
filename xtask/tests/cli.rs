@@ -383,6 +383,8 @@ fn assets_pc_bakes_the_repo_manifest() {
         "blobs",
         "scenes",
         "particles",
+        // Grading LUTs (issue #64): `TLUT` blobs on the PC.
+        "luts",
     ]) - not_pc;
     // A font bakes twice under one handle: atlas sprite + glyph table; the
     // project mix (`assets/audio.toml`) is one more asset, `audio/mixer`.
@@ -426,12 +428,18 @@ fn assets_pc_bakes_the_repo_manifest() {
     assert_eq!(kind("font"), fonts);
     assert_eq!(kind("mixer"), mix);
     assert_eq!(kind("sprite"), declared(&["sprites"]) + fonts);
-    // Baked scenes (TSCN) and particle effects (TPFX) are blobs, served
-    // like any other blob.
+    // Baked scenes (TSCN), particle effects (TPFX) and grading LUTs (TLUT)
+    // are blobs, served like any other blob.
     assert_eq!(
         kind("blob"),
-        declared(&["blobs", "scenes", "particles"]) + ui + access + services
+        declared(&["blobs", "scenes", "particles", "luts"]) + ui + access + services
     );
+    assert_eq!(
+        index.matches("format = \"TLUT\"").count(),
+        declared(&["luts"])
+    );
+    // Models with `grading` carry their console-graded twin.
+    assert!(index.contains(".graded.model"));
 }
 
 #[test]

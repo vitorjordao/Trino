@@ -134,7 +134,7 @@ fn scene_without_a_subcommand_prints_the_usage() {
         assert!(!o.status.success(), "{args:?}");
         assert!(
             text(&o.stderr)
-                .contains("cargo xtask scene export [--platform pc|n64|3ds|web|n64_expanded|n3ds_new] <scene.ron> <out.rs>"),
+                .contains("cargo xtask scene export [--platform pc|n64|3ds|web|n64_expanded|n3ds_new] [--bake-grading] <scene.ron> <out.rs>"),
             "{args:?}: {}",
             text(&o.stderr)
         );

@@ -87,6 +87,21 @@ so a PC run or the editor's Game view shows what the console shows. Blob and pla
 shadows land only on the receivers the game sets (`set_shadow_receivers`); the map
 ignores them.
 
+### Post-processing
+
+[ADR 0033](adr/0033-post-processing-stack.md). The native profile and the Web run the
+whole stack (`Caps::post_tier` = `Full`): with `Renderer::set_post` the 3D before the
+frame's last 3D draw goes into an `Rgba16Float` target (8-bit where the adapter can't
+render float: the range past 1 is lost, nothing else), then bloom and one composite
+(exposure, tonemap, the LUT, vignette, grain) draw the picture; the HUD after it is
+untouched. The console profiles run no pass: they draw the consoles' graded models and,
+in scene playback, the glows. `TRINO_POST=off|on|bloom` overrides what shows (`on`:
+`PostSettings::FILMIC` when the game sets none); the preset's `post` level picks the
+bloom chain (Off: no bloom, vignette or grain; Low: a quarter, 3 levels; Medium: half,
+4; High: half, 6). `TRINO_FRAME` adds `post_frames= bloom=`. The players' daltonization
+filter (`AccessSettings::cvd_filter`, `cvd_filter=on` in `TRINO_ACCESS`) corrects the
+whole picture for their mode. Measured costs are in the ADR.
+
 ### Quality presets
 
 On the native profile (`TRINO_SIM=native`, a standalone project's PC build) the game runs
@@ -209,6 +224,11 @@ Things to know:
   stick and the C buttons move the focus).
 - Troubleshooting: the [build-n64](../.agents/skills/build-n64/SKILL.md) and
   [run-emulator](../.agents/skills/run-emulator/SKILL.md) skills.
+- **Post-processing** ([ADR 0033](adr/0033-post-processing-stack.md)): the Baked tier.
+  `set_post` is ignored; a model's or sprite's `grading` LUT is baked into its colors
+  and a `bake_grading` scene's environment colors into its TSCN, at no run-time cost.
+  Bloom is a `Glow` halo: one billboard of the I4 `sprites/glow`. The `post` self-test
+  step probes both in ares.
 
 ## Nintendo 3DS
 
@@ -304,6 +324,9 @@ Things to know:
     the right eye even with its own 3D factor at 0.
 - Troubleshooting: the [build-3ds](../.agents/skills/build-3ds/SKILL.md) and
   [run-emulator](../.agents/skills/run-emulator/SKILL.md) skills.
+- **Post-processing** ([ADR 0033](adr/0033-post-processing-stack.md)): the Baked tier,
+  as on the N64 (graded colors in the bake, `Glow` billboards for bloom); the `post`
+  self-test step probes both in Azahar.
 
 ### The 3DS as a `.cia`
 

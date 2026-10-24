@@ -164,6 +164,11 @@ pub struct Caps {
     /// the N64, the PC and the Web (the PC's 3DS profile previews it), and
     /// on an old 2DS or a New 2DS XL (the 3DS backend clears it at boot).
     pub stereo: bool,
+    /// How the finished 3D is post-processed ([`crate::post`], issue #64):
+    /// the whole stack (HDR, tonemap, bloom, LUT, vignette, grain) on the PC
+    /// and the Web, grading baked into colors and glow billboards on the
+    /// consoles.
+    pub post_tier: crate::post::PostTier,
     /// [`crate::ShadowCast::Mesh`] casters a frame projects below the
     /// Planar tier (the N64's: each is a CPU T&L draw); 255 = every one.
     pub max_planar_shadows: u8,
@@ -228,6 +233,7 @@ impl Caps {
         load_budget_us: 4_000,
         shadow_tier: crate::shadow::ShadowTier::Blob,
         stereo: false,
+        post_tier: crate::post::PostTier::Baked,
         max_planar_shadows: 2,
         // The RDP's z: 18 bits, stored compressed (3-bit exponent, 11-bit
         // mantissa).
@@ -277,6 +283,7 @@ impl Caps {
         load_budget_us: 6_000,
         shadow_tier: crate::shadow::ShadowTier::Planar,
         stereo: true,
+        post_tier: crate::post::PostTier::Baked,
         max_planar_shadows: 255,
         // DEPTH24_STENCIL8, the 3D in its band (35%) of citro2d's range.
         depth_bits: 22,
@@ -327,6 +334,7 @@ impl Caps {
         load_budget_us: 8_000,
         shadow_tier: crate::shadow::ShadowTier::Map,
         stereo: false,
+        post_tier: crate::post::PostTier::Full,
         max_planar_shadows: 255,
         // Depth32Float: z near 1 keeps 24 bits; two for the rasterizer's
         // interpolation.
@@ -369,6 +377,7 @@ impl Caps {
         load_budget_us: 8_000,
         shadow_tier: crate::shadow::ShadowTier::Map,
         stereo: false,
+        post_tier: crate::post::PostTier::Full,
         max_planar_shadows: 255,
         // Depth32Float: z near 1 keeps 24 bits; two for the rasterizer's
         // interpolation.
@@ -529,6 +538,17 @@ mod tests {
             Err(CapsError::TextureTooLarge { max_dim: 4096, .. })
         ));
         assert!(web.save_bytes >= Caps::N3DS.save_bytes);
+    }
+
+    #[test]
+    fn post_tiers_follow_the_hardware() {
+        use crate::post::PostTier;
+        assert_eq!(Caps::N64.post_tier, PostTier::Baked);
+        assert_eq!(Caps::N64_EXPANDED.post_tier, PostTier::Baked);
+        assert_eq!(Caps::N3DS.post_tier, PostTier::Baked);
+        assert_eq!(Caps::N3DS_NEW.post_tier, PostTier::Baked);
+        assert_eq!(Caps::PC.post_tier, PostTier::Full);
+        assert_eq!(Caps::WEB.post_tier, PostTier::Full);
     }
 
     #[test]

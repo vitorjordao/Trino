@@ -128,6 +128,7 @@ impl FontDecl {
             min_psnr: self.min_psnr,
             groups: self.groups.clone(),
             cvd_icon: None,
+            grading: None,
         }
     }
 }

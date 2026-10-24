@@ -47,6 +47,7 @@ impostors) is part of the same pipeline, drawn by the same renderer in the same 
 | Local point and spot lights | per pixel, up to 8 | per vertex, up to 2 | per vertex, up to 4 |
 | Ambient occlusion | screen-space (SSAO), plus baked | baked into vertex colors (`ao` in the manifest) | baked into vertex colors |
 | Shadows (`ModelParams::shadow`, scene receivers) | a shadow map with PCF on every surface (and the Web) | a soft blob per caster on the surface under it; two projected shapes a frame | the caster's shape projected onto the surface under it, stencil-merged |
+| Post-processing (`Renderer::set_post`): tonemap, bloom, LUT grading, vignette, grain | HDR stack with bloom (and the Web) | the LUT baked into colors, glow halos for bloom | the LUT baked into colors, glow halos for bloom |
 | Water surfaces: flowing layers, swell, ripples, Fresnel, glint | per pixel, with shore foam | per vertex, RDP 2-cycle layer blend | PICA200 vertex program, TexEnv layer blend |
 | Billboards, particles, impostors, distance LOD, portal/cell visibility | yes | yes | yes |
 | 2D: sprites, `fill_rect`, bitmap text | yes | yes | yes |
@@ -93,6 +94,7 @@ tables that strict mode and the tools check content against.
 | Ambient occlusion tier | screen-space | screen-space | baked | baked |
 | Shadow tier | map | map | blob (2 planar a frame) | planar |
 | Quality presets | Low…Ultra, auto-detected | Low…Ultra (phones Low) | fixed Low | fixed Low (New 3DS Medium) |
+| Post tier | full (HDR) | full (HDR) | baked | baked |
 | Water tier | per pixel | per pixel | per vertex | vertex program |
 | Ripples per frame | 4 | 4 | 4 | 4 |
 | UI nodes / 2D draws per frame | 512 / 16384 | 512 / 16384 | 64 / 384 | 128 / 2048 |

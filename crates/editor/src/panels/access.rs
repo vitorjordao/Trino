@@ -28,6 +28,7 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
             header(app, ui);
             ui.add_space(4.0);
             simulation(ui, &mut app.access.preview);
+            correction(ui, &mut app.access.preview, &mut app.access.simulate);
             ui.add_space(6.0);
             colors(app, ui);
             ui.add_space(6.0);
@@ -82,6 +83,29 @@ pub fn simulation(ui: &mut egui::Ui, s: &mut AccessSettings) -> bool {
         ui.checkbox(&mut s.high_contrast, "High contrast");
     });
     *s != before
+}
+
+/// The players' correction filter (issue #64, `AccessSettings::cvd_filter`):
+/// the PC and the Web daltonize every frame for the player's mode. Here it
+/// previews in the Scene and Game views (the native profile and the Web;
+/// the consoles answer with semantic palettes); with the simulation on, the
+/// views show the corrected picture as that viewer sees it.
+pub fn correction(ui: &mut egui::Ui, s: &mut AccessSettings, simulate: &mut bool) -> bool {
+    let before = (*s, *simulate);
+    theme::section_title(ui, icon::MAGIC_WAND, "Correction filter (PC and Web)");
+    ui.horizontal_wrapped(|ui| {
+        let can = matches!(
+            s.cvd,
+            CvdMode::Protanopia | CvdMode::Deuteranopia | CvdMode::Tritanopia
+        );
+        ui.add_enabled(can, egui::Checkbox::new(&mut s.cvd_filter, "Daltonize"))
+            .on_hover_text(
+                "The player's setting (cvd_filter): the error the viewer can't see moves                  into the channels they see (Fidaner 2005 over Machado 2009). Off by default;                  a game whose semantic palettes already answer for the mode leaves it off.",
+            )
+            .on_disabled_hover_text("Pick a red-green or blue-yellow mode first");
+        ui.checkbox(simulate, "Show as that viewer sees it");
+    });
+    (*s, *simulate) != before
 }
 
 /// View › Accessibility simulation: the same as the tab's first section.

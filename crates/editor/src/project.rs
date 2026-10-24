@@ -58,10 +58,24 @@ pub struct ModelAsset {
     /// Ambient occlusion baked into its vertex colors (the manifest's
     /// `ao`).
     pub ao: Option<pipeline::AoBake>,
+    /// The LUT the consoles' bake grades its colors through (the manifest's
+    /// `grading`, issue #64), and that graded twin: what the Game view's
+    /// console profiles draw.
+    pub grading: Option<String>,
+    pub graded: Option<Vec<u8>>,
     pub thumb: Option<egui::TextureHandle>,
 }
 
 impl ModelAsset {
+    /// The mesh `r`'s profile draws: the console-graded twin on the
+    /// console profiles, else the model as baked.
+    pub fn tmdl_for(&self, r: &PcRenderer) -> Vec<u8> {
+        match (r.profile(), &self.graded) {
+            (SimProfile::N64 | SimProfile::N3ds, Some(g)) => g.clone(),
+            _ => self.tmdl.clone(),
+        }
+    }
+
     pub fn is_proxy(&self) -> bool {
         self.proxy.is_some()
     }
@@ -80,6 +94,10 @@ pub struct Project {
     /// manifest `n64` format (`None`: a palette, which can't share TMEM).
     /// The budget HUD's water lines read it.
     pub tmem: BTreeMap<u32, Option<u32>>,
+    /// The grading LUTs (`luts/x` -> (id, TLUT), issue #64), and the scene
+    /// files the consoles' bake grades (`bake_grading` on `[scenes.*]`).
+    pub luts: BTreeMap<String, (u32, Vec<u8>)>,
+    pub bake_grading: Vec<String>,
     /// Bumped whenever asset content changes (viewports re-upload, caches
     /// invalidate).
     pub generation: u64,
@@ -95,6 +113,8 @@ impl Project {
             music: Vec::new(),
             fonts: BTreeMap::new(),
             tmem: BTreeMap::new(),
+            luts: BTreeMap::new(),
+            bake_grading: Vec::new(),
             generation: 0,
         }
     }
@@ -168,6 +188,7 @@ impl Project {
             let decl = manifest.as_ref().and_then(|man| man.models.get(&name));
             let source = decl.map(|d| d.file.clone()).unwrap_or_default();
             let ao = decl.and_then(|d| d.options().ao);
+            let grading = decl.and_then(|d| d.grading.clone());
             let src_path = self.resolve_source(&source);
             let proxy = if source.ends_with(".prim.ron") {
                 src_path.as_ref().and_then(|p| Primitive::load(p).ok())
@@ -209,6 +230,8 @@ impl Project {
                 source,
                 proxy,
                 ao,
+                grading,
+                graded: m.graded,
                 thumb: None,
                 tmdl: m.tmdl,
             };
@@ -217,6 +240,20 @@ impl Project {
         for f in assets.fonts {
             n += 1;
             self.fonts.insert(f.logical, (f.id, f.table));
+        }
+        for b in assets.blobs {
+            if b.bytes.starts_with(&trino_core::post::TLUT_MAGIC) {
+                n += 1;
+                self.luts.insert(b.logical, (b.id, b.bytes));
+            }
+        }
+        if let Some(m) = &manifest {
+            self.bake_grading = m
+                .scenes
+                .values()
+                .filter(|d| d.bake_grading)
+                .map(|d| d.file.clone())
+                .collect();
         }
         if ids.is_none() {
             self.sounds = assets.sounds.into_iter().map(|s| s.logical).collect();
@@ -239,11 +276,21 @@ impl Project {
             r.upload_sprite(trino_core::SpriteId(s.id), s.width, s.height, &s.rgba);
         }
         for m in self.models.values() {
-            r.upload_mesh(ModelId(m.id), m.tmdl.clone());
+            r.upload_mesh(ModelId(m.id), m.tmdl_for(r));
         }
         for (id, table) in self.fonts.values() {
             r.upload_font(trino_core::FontId(*id), table.clone());
         }
+        for (id, lut) in self.luts.values() {
+            r.take_lut_blob(*id, lut);
+        }
+    }
+
+    /// The `TLUT` blob of `logical` (`luts/x`), when the bake has it.
+    pub fn lut(&self, logical: &str) -> Option<trino_core::Lut<'_>> {
+        self.luts
+            .get(logical)
+            .and_then(|(_, b)| trino_core::Lut::parse(b).ok())
     }
 
     /// Sprites a console bakes from its own override file — the impostor
@@ -290,10 +337,13 @@ impl Project {
                 r.upload_sprite(trino_core::SpriteId(s.id), s.width, s.height, &s.rgba);
             }
             if let Some(m) = self.models.get(l) {
-                r.upload_mesh(ModelId(m.id), m.tmdl.clone());
+                r.upload_mesh(ModelId(m.id), m.tmdl_for(r));
             }
             if let Some((id, table)) = self.fonts.get(l) {
                 r.upload_font(trino_core::FontId(*id), table.clone());
+            }
+            if let Some((id, lut)) = self.luts.get(l) {
+                r.take_lut_blob(*id, lut);
             }
         }
     }
@@ -310,6 +360,12 @@ impl Project {
                 .values()
                 .filter(|m| ids.contains(&m.id))
                 .map(|m| m.logical.clone()),
+        );
+        out.extend(
+            self.luts
+                .iter()
+                .filter(|(_, (id, _))| ids.contains(id))
+                .map(|(l, _)| l.clone()),
         );
         out
     }

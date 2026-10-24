@@ -57,10 +57,13 @@ pub enum EntryKind {
     Font = 7,
     /// A blob, a baked scene or a particle effect.
     Blob = 8,
+    /// The PC's console-graded twin of the previous model entry (`TMDL`,
+    /// issue #64): what the PC's console profiles draw.
+    ModelGraded = 9,
 }
 
 impl EntryKind {
-    pub const ALL: [EntryKind; 9] = [
+    pub const ALL: [EntryKind; 10] = [
         EntryKind::Sprite,
         EntryKind::SpritePreview3ds,
         EntryKind::SpriteBc,
@@ -70,6 +73,7 @@ impl EntryKind {
         EntryKind::Model,
         EntryKind::Font,
         EntryKind::Blob,
+        EntryKind::ModelGraded,
     ];
 
     pub const fn from_u8(v: u8) -> Option<EntryKind> {
@@ -83,6 +87,7 @@ impl EntryKind {
             6 => Some(EntryKind::Model),
             7 => Some(EntryKind::Font),
             8 => Some(EntryKind::Blob),
+            9 => Some(EntryKind::ModelGraded),
             _ => None,
         }
     }
@@ -99,6 +104,7 @@ impl EntryKind {
             EntryKind::Model => "model",
             EntryKind::Font => "font",
             EntryKind::Blob => "blob",
+            EntryKind::ModelGraded => "model_graded",
         }
     }
 
@@ -114,7 +120,7 @@ impl EntryKind {
             | EntryKind::SpriteBc
             | EntryKind::SpriteKtx2 => MemoryCategory::Textures,
             EntryKind::Sound | EntryKind::Music => MemoryCategory::Audio,
-            EntryKind::Model => MemoryCategory::Meshes,
+            EntryKind::Model | EntryKind::ModelGraded => MemoryCategory::Meshes,
             EntryKind::Font | EntryKind::Blob => MemoryCategory::Data,
         }
     }

@@ -326,6 +326,8 @@ impl ApplicationHandler for App {
                     .pump(&mut ctx.renderer, &mut ctx.audio, &mut ctx.platform);
                 zone.end();
                 let zone = trino_core::trace::Zone::begin("game");
+                ctx.renderer
+                    .apply_access(&trino_core::Platform::access(&ctx.platform));
 
                 if let Some(player) = &mut ctx.player {
                     player.update(&input, dt);
@@ -390,6 +392,10 @@ impl ApplicationHandler for App {
                     .record_memory(&trino_core::Platform::memory(&ctx.platform));
                 self.meter
                     .record_pipes(ctx.renderer.frame_times().pipelines);
+                self.meter.record_post(
+                    ctx.renderer.frame_times().post_passes,
+                    ctx.renderer.frame_times().bloom_levels,
+                );
                 if let Some(max) = self.smoke_frames
                     && self.frames >= max
                 {

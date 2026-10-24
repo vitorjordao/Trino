@@ -63,6 +63,15 @@ and the Web run the same thing. The guide with code is `docs/ACCESSIBILITY.md`.
 - PC runs: `TRINO_ACCESS=...` forces settings (nothing saved), `TRINO_CVD=...` shows a
   window through the simulation; the Web: `?access=...`.
 
+### The correction filter (daltonization, issue #64)
+
+`AccessSettings::cvd_filter` (`cvd_filter=on` in `TRINO_ACCESS`, `?access=`) makes the
+PC and the Web correct every frame for `cvd` (`access::color::correction`: Fidaner 2005
+over Machado 2009), the HUD included. It is opt-in: a game whose semantic palettes already
+answer for `cvd` would be corrected twice. Hosts call `PcRenderer::apply_access` each
+frame; the consoles ignore it. Preview: the Accessibility tab's Daltonize (with or
+without "Show as that viewer sees it").
+
 ## Traps (verified)
 
 - The defaults must draw exactly what they drew before: `UiAccess::NONE` multiplies by

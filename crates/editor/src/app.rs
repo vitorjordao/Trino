@@ -525,6 +525,14 @@ impl App {
         {
             scene_view.ao_view = view;
         }
+        // Dev hook: TRINO_EDITOR_POST=game|on|off|bloom, the Scene view's
+        // post-processing mode (issue #64).
+        if let Some(view) = std::env::var("TRINO_EDITOR_POST")
+            .ok()
+            .and_then(|v| trino_platform_pc::PostView::parse(&v))
+        {
+            scene_view.post_view = view;
+        }
         // Dev hook: TRINO_EDITOR_SHADOWS=tier|off|debug, the Scene view's
         // shadow mode (ADR 0025).
         if let Some(view) = std::env::var("TRINO_EDITOR_SHADOWS")
@@ -797,6 +805,7 @@ impl App {
             quality: Some(&self.quality.table),
             memory: self.groups.ready_plans(),
             stereo_preview: self.game_view.stereo_view != trino_platform_pc::StereoView::Off,
+            scene_path: &self.doc.path,
         }
     }
 
@@ -2127,6 +2136,17 @@ impl App {
                 });
                 ui.menu_button("Shadow view", |ui| {
                     crate::viewport::shadow_menu(ui, &mut self.scene_view.shadow_view);
+                });
+                ui.menu_button("Post-processing view", |ui| {
+                    crate::viewport::post_menu(ui, &mut self.scene_view.post_view);
+                    ui.label(
+                        RichText::new(if self.scene_view.stats.post {
+                            "Drawn in the Scene view"
+                        } else {
+                            "Not drawn: the scene has none, it is off, or the profile bakes it"
+                        })
+                        .size(11.0),
+                    );
                 });
                 ui.checkbox(&mut self.scene_view.show_convergence, "Convergence plane")
                     .on_hover_text(
@@ -3638,8 +3658,23 @@ impl egui_dock::TabViewer for TabView<'_> {
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Tab) {
         let app = &mut *self.app;
         // The Accessibility tab's simulation, in every view.
-        app.scene_view.cvd_view = app.access.preview.cvd;
-        app.game_view.cvd_view = app.access.preview.cvd;
+        let p = app.access.preview;
+        let seen = if app.access.simulate {
+            p.cvd
+        } else {
+            trino_core::CvdMode::Off
+        };
+        app.scene_view.cvd_view = seen;
+        app.game_view.cvd_view = seen;
+        // And the players' correction filter (issue #64): the PC and the
+        // Web daltonize for the mode, the simulation then shows the result.
+        let fix = if p.cvd_filter {
+            p.cvd
+        } else {
+            trino_core::CvdMode::Off
+        };
+        app.scene_view.cvd_filter = fix;
+        app.game_view.cvd_filter = fix;
         match tab {
             Tab::Scene | Tab::Game => {
                 let kind = if *tab == Tab::Scene {
@@ -3681,6 +3716,7 @@ impl egui_dock::TabViewer for TabView<'_> {
                     quality: Some(&app.quality.table),
                     memory: app.groups.ready_plans(),
                     stereo_preview: app.game_view.stereo_view != trino_platform_pc::StereoView::Off,
+                    scene_path: &app.doc.path,
                 };
                 if kind == ViewKind::Game {
                     // The previewed preset, as the Quality tab defines it.

@@ -67,6 +67,9 @@ pub struct BakedEntry {
     /// A sprite's KTX2 file (Web bakes only, when its Web format is
     /// `KTX2-ETC1S` or `KTX2-UASTC`).
     pub ktx2: Option<String>,
+    /// A model's console-graded twin (PC bakes only, when it names a
+    /// `grading` LUT): what the PC's console profiles draw (issue #64).
+    pub graded: Option<String>,
     /// True if this bake changed the output bytes on disk.
     pub changed: bool,
     /// The groups whose bundles hold it (issue #56); empty = `boot`.
@@ -167,6 +170,7 @@ pub fn bake_all_with(
                 preview_3ds: t.preview_3ds,
                 compressed: t.compressed,
                 ktx2: t.ktx2,
+                graded: None,
                 changed: changed || t.changed,
                 groups: Vec::new(),
             })
@@ -243,6 +247,7 @@ pub fn bake_all_with(
                 preview_3ds: None,
                 compressed: None,
                 ktx2: None,
+                graded: None,
                 changed,
                 groups: Vec::new(),
             })
@@ -280,6 +285,7 @@ pub fn bake_all_with(
                 preview_3ds: None,
                 compressed: None,
                 ktx2: None,
+                graded: None,
                 changed,
                 groups: Vec::new(),
             })
@@ -316,6 +322,7 @@ pub fn bake_all_with(
                 preview_3ds: None,
                 compressed: None,
                 ktx2: None,
+                graded: None,
                 changed,
                 groups: Vec::new(),
             }))
@@ -355,6 +362,7 @@ pub fn bake_all_with(
                             preview_3ds: None,
                             compressed: None,
                             ktx2: None,
+                            graded: None,
                             changed,
                             groups: Vec::new(),
                         }),
@@ -387,10 +395,27 @@ pub fn bake_all_with(
         let mut bounds = None;
         let result = (|| -> Result<BakedEntry, String> {
             let source = resolve_source(assets_root, platform, &decl.file)?;
-            let blob = crate::model::bake_model(&source, &decl.options())?;
+            // A console's bake here (tools) grades like the console's own.
+            let mut opts = decl.options();
+            opts.grading =
+                manifest.console_grading(assets_root, platform, decl.grading.as_deref())?;
+            let blob = crate::model::bake_model(&source, &opts)?;
             bounds = crate::model::tmdl_bounds(&blob).map(|b| (logical.clone(), b));
             let file = format!("{id:08x}.model");
-            let changed = write_if_changed(&out_dir.join(&file), &blob)?;
+            let mut changed = write_if_changed(&out_dir.join(&file), &blob)?;
+            // The consoles' graded colors, for the PC's console profiles
+            // (issue #64); the PC itself grades the frame.
+            let graded = match (&decl.grading, platform) {
+                (Some(g), Platform::Pc) => {
+                    let mut opts = decl.options();
+                    opts.grading = Some(manifest.lut_blob(assets_root, Platform::N64, g)?);
+                    let twin = crate::model::bake_model(&source, &opts)?;
+                    let file = format!("{id:08x}.graded.model");
+                    changed |= write_if_changed(&out_dir.join(&file), &twin)?;
+                    Some(file)
+                }
+                _ => None,
+            };
             Ok(BakedEntry {
                 logical: logical.clone(),
                 id,
@@ -400,6 +425,7 @@ pub fn bake_all_with(
                 preview_3ds: None,
                 compressed: None,
                 ktx2: None,
+                graded,
                 changed,
                 groups: Vec::new(),
             })
@@ -453,6 +479,7 @@ pub fn bake_all_with(
                     preview_3ds: t.preview_3ds,
                     compressed: t.compressed,
                     ktx2: t.ktx2,
+                    graded: None,
                     changed: sprite_changed || t.changed,
                     groups: Vec::new(),
                 },
@@ -465,6 +492,7 @@ pub fn bake_all_with(
                     preview_3ds: None,
                     compressed: None,
                     ktx2: None,
+                    graded: None,
                     changed: table_changed,
                     groups: Vec::new(),
                 },
@@ -497,6 +525,7 @@ pub fn bake_all_with(
                 preview_3ds: None,
                 compressed: None,
                 ktx2: None,
+                graded: None,
                 changed,
                 groups: Vec::new(),
             })
@@ -529,6 +558,7 @@ pub fn bake_all_with(
                 preview_3ds: None,
                 compressed: None,
                 ktx2: None,
+                graded: None,
                 changed,
                 groups: Vec::new(),
             })
@@ -536,6 +566,43 @@ pub fn bake_all_with(
         match result {
             Ok(entry) => report.entries.push(entry),
             Err(e) => errors.push(e),
+        }
+    }
+
+    // Grading LUTs (issue #64): `TLUT` blobs for the PC and the Web, which
+    // grade at run time; the consoles' assets are graded by their bake.
+    if matches!(platform, Platform::Pc | Platform::Web) {
+        for name in manifest.luts.keys() {
+            let logical = format!("luts/{name}");
+            let id = asset_id(&logical);
+            if let Some(other) = by_id.insert(id, logical.clone()) {
+                errors.push(format!("hash collision between `{other}` and `{logical}`"));
+                continue;
+            }
+            let result = (|| -> Result<BakedEntry, String> {
+                let blob = manifest.lut_blob(assets_root, platform, &logical)?;
+                let file = format!("{id:08x}.blob");
+                let changed = write_if_changed(&out_dir.join(&file), &blob)?;
+                // A LUT is a blob to every loader; hosts upload it to the
+                // renderer by its magic (`PcRenderer::take_lut_blob`).
+                Ok(BakedEntry {
+                    logical: logical.clone(),
+                    id,
+                    kind: "blob",
+                    file,
+                    format: "TLUT".into(),
+                    preview_3ds: None,
+                    compressed: None,
+                    ktx2: None,
+                    graded: None,
+                    changed,
+                    groups: Vec::new(),
+                })
+            })();
+            match result {
+                Ok(entry) => report.entries.push(entry),
+                Err(e) => errors.push(e),
+            }
         }
     }
 
@@ -565,6 +632,7 @@ pub fn bake_all_with(
                 preview_3ds: None,
                 compressed: None,
                 ktx2: None,
+                graded: None,
                 changed,
                 groups: Vec::new(),
             })
@@ -599,6 +667,9 @@ pub fn bake_all_with(
         }
         if let Some(k) = &e.ktx2 {
             index.push_str(&format!("ktx2 = \"{k}\"\n"));
+        }
+        if let Some(g) = &e.graded {
+            index.push_str(&format!("graded = \"{g}\"\n"));
         }
         if !e.groups.is_empty() {
             let names: Vec<String> = e.groups.iter().map(|g| format!("\"{g}\"")).collect();
@@ -638,6 +709,7 @@ fn write_bundles(
                 (K::SpritePreview3ds, &e.preview_3ds),
                 (K::SpriteBc, &e.compressed),
                 (K::SpriteKtx2, &e.ktx2),
+                (K::ModelGraded, &e.graded),
             ];
             for (kind, file) in variants {
                 if let Some(f) = file {

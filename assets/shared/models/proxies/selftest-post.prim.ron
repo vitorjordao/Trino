@@ -1,0 +1,10 @@
+// Trino placeholder model ("fake object"). Edit and save: it hot-reloads.
+// The post self-test's panel (selftest::post, issue #64): a flat orange
+// card drawn unlit. `grading = "luts/selftest"` in the manifest: the
+// consoles' bake rotates its color to (60, 20, 200), the PC's post stack
+// does the same at run time.
+(
+    shape: Box(size: (1.0, 1.0, 0.05)),
+    color: (200, 60, 20, 255),
+    pivot: Center,
+)

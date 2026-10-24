@@ -243,6 +243,9 @@ pub struct SceneNode {
     pub cell: u8,
     /// Cell or portal volume (see [`crate::vis`]).
     pub vis: Option<VisVolume>,
+    /// A halo around it ([`crate::post::Glow`], issue #64): the consoles'
+    /// bloom, drawn by [`draw_nodes`] where its mode says.
+    pub glow: Option<crate::post::Glow>,
 }
 
 impl SceneNode {
@@ -324,6 +327,8 @@ impl SceneNode {
 ///   shadow (v5): u8 cast (0 none, 1 blob, 2 mesh, 3 auto), u8 receiver,
 ///   u16 reserved, f32 blob radius, receiver top f32*3 center and f32*2
 ///   half sizes (x, z)
+///   glow (v6, flag bit7): u32 sprite, f32 radius, color rgba, u8 mode
+///   (0 baked, 1 always), u8 reserved*3
 /// data table: UTF-8 strings and LOD records, to the end of the blob: UTF-8 bytes to the end of the blob
 /// ```
 ///
@@ -334,9 +339,10 @@ pub const TSCN_MAGIC: &[u8; 4] = b"TSCN";
 /// levels). v3: nodes end with the surface's gloss, texture filter and
 /// detail layer (8 bytes). v4: then a water surface (28 bytes, ADR 0015).
 /// v5: the environment ends with the shadows (16 bytes) and nodes with
-/// what they cast and the receiver they are (28 bytes, ADR 0025).
+/// what they cast and the receiver they are (28 bytes, ADR 0025). v6:
+/// nodes end with their glow (16 bytes, issue #64).
 /// Older blobs are refused: rebake the scene.
-pub const TSCN_VERSION: u16 = 5;
+pub const TSCN_VERSION: u16 = 6;
 pub const TSCN_HEADER: usize = 12;
 pub const TSCN_ENV_BYTES: usize = 68 + TSCN_ENV_SHADOW_BYTES;
 /// The shadows block at the end of the environment (v5).
@@ -357,11 +363,16 @@ pub const TSCN_NODE_BYTES: usize = 16
     + 16
     + 8
     + TSCN_WATER_BYTES
-    + TSCN_SHADOW_BYTES;
+    + TSCN_SHADOW_BYTES
+    + TSCN_GLOW_BYTES;
 /// The water block at the end of a node (v4).
 pub const TSCN_WATER_BYTES: usize = 28;
-/// The shadow block at the end of a node (v5).
+/// The shadow block near the end of a node (v5).
 pub const TSCN_SHADOW_BYTES: usize = 28;
+/// The glow block at the end of a node (v6).
+pub const TSCN_GLOW_BYTES: usize = 16;
+/// Where a node's shadow block starts.
+const SHADOW_AT: usize = TSCN_NODE_BYTES - TSCN_GLOW_BYTES - TSCN_SHADOW_BYTES;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SceneError {
@@ -522,7 +533,7 @@ impl BakedScene {
 
     /// The top of node `i`'s box, when shadows land on it.
     pub fn receiver(&self, i: usize) -> Option<ShadowPlane> {
-        let s = self.node_at(i) + TSCN_NODE_BYTES - TSCN_SHADOW_BYTES;
+        let s = self.node_at(i) + SHADOW_AT;
         let d = self.bytes;
         (d[s + 1] != 0).then(|| {
             ShadowPlane::horizontal(rd_vec3(d, s + 8), rd_f32(d, s + 20), rd_f32(d, s + 24))
@@ -588,7 +599,7 @@ impl BakedScene {
                 }
             }),
             shadow: {
-                let s = at + TSCN_NODE_BYTES - TSCN_SHADOW_BYTES;
+                let s = at + SHADOW_AT;
                 let radius = rd_f32(d, s + 4);
                 match d[s] {
                     1 => ShadowCast::Blob { radius },
@@ -636,9 +647,21 @@ impl BakedScene {
             }),
             _ => None,
         };
+        let g = at + TSCN_NODE_BYTES - TSCN_GLOW_BYTES;
+        let glow = (flags & 128 != 0).then(|| crate::post::Glow {
+            sprite: crate::render::SpriteId(rd_u32(d, g)),
+            radius: rd_f32(d, g + 4),
+            color: rd_rgba(d, g + 8),
+            mode: if d[g + 12] == 1 {
+                crate::post::GlowMode::Always
+            } else {
+                crate::post::GlowMode::Baked
+            },
+        });
         SceneNode {
             name,
             tags: Tags::Packed(tags),
+            glow,
             cell: d[v],
             vis,
             lod: Lods::Packed(lod),
@@ -719,14 +742,22 @@ pub fn draw_nodes_in(
             continue;
         }
         let pick = node.lod_from_biased(eye, bias);
-        if pick == LodPick::None {
+        // Culled by distance; a marker without a model may still glow.
+        if pick == LodPick::None && (node.model.is_some() || node.glow.is_none()) {
             continue;
         }
         let mut params = node.params;
         if let Some((clip, speed)) = node.anim {
             params.anim = Some(AnimRef::new(clip, time * speed));
         }
-        pick.draw(renderer, &root.mul(&node.matrix), &params, eye);
+        let matrix = root.mul(&node.matrix);
+        if pick != LodPick::None {
+            pick.draw(renderer, &matrix, &params, eye);
+        }
+        if let Some(glow) = &node.glow {
+            let at = Vec3::new(matrix.m[0][3], matrix.m[1][3], matrix.m[2][3]);
+            crate::post::draw_glow(renderer, glow, at);
+        }
     }
 }
 
@@ -758,6 +789,7 @@ mod tests {
             sound: None,
             cell: NO_CELL,
             vis: None,
+            glow: None,
         },
         SceneNode {
             name: "spawn",
@@ -777,6 +809,7 @@ mod tests {
             sound: None,
             cell: NO_CELL,
             vis: None,
+            glow: None,
         },
     ];
 
@@ -867,6 +900,8 @@ mod tests {
         // Casts a 0.4 m blob (auto), receives: a 2 x 1 top at (3, 1, -2).
         b.extend_from_slice(&[3, 1, 0, 0]);
         f(&mut b, &[0.4, 3.0, 1.0, -2.0, 1.0, 0.5]);
+        // Glow (v6, flag bit7 off).
+        b.extend_from_slice(&[0; TSCN_GLOW_BYTES]);
         b.extend_from_slice(b"a/doordoor\nx");
         f(&mut b, &[30.0]);
         b.extend_from_slice(&0u32.to_le_bytes()); // culled beyond 30

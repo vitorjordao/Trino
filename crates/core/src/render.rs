@@ -574,6 +574,17 @@ pub trait Renderer {
     /// lights: set it every frame.
     fn set_ambient_occlusion(&mut self, _ao: Option<&crate::ao::AmbientOcclusion>) {}
 
+    /// Post-processing for this frame ([`crate::post`], issue #64): on the
+    /// [`crate::post::PostTier::Full`] tier (PC native, the Web) the 3D
+    /// draws into an HDR target, and exposure, the tonemap, bloom, the
+    /// grading LUT, vignette and grain run after the frame's last 3D draw;
+    /// 2D drawn after it (the HUD) is untouched. The PC's console profiles
+    /// grade with the LUT alone (the preview of the console bake); the
+    /// consoles ignore it (their grading is baked, their bloom is
+    /// [`crate::post::Glow`]). `None` turns it off. **Cleared at
+    /// `begin_frame`**, like the AO: set it every frame.
+    fn set_post(&mut self, _post: Option<&crate::post::PostSettings>) {}
+
     /// Shadows for this frame ([`crate::shadow`], ADR 0025): the draws
     /// whose [`ModelParams::shadow`] casts one get it at the tier
     /// [`Caps::shadow_tier`] gives (capped by `tier_max` and, on the PC, the

@@ -830,6 +830,7 @@ fn settings_pack_into_three_bytes_for_a_console_save() {
         reduce_motion: true,
         flash_guard: false,
         hold_to_toggle: true,
+        cvd_filter: false,
     };
     let b = s.pack();
     assert_eq!(b.len(), trino_core::access::PACKED_LEN);

@@ -114,6 +114,9 @@ pub fn to_tscn_for(scene: &Scene, lib: &Library, target: Target) -> (Vec<u8>, Ve
         if p.detail.is_some() {
             flags |= 32;
         }
+        if item.glow.is_some() {
+            flags |= 128;
+        }
         flags |= match p.shading {
             Shading::Gouraud => 0,
             Shading::Flat => 1,
@@ -210,6 +213,15 @@ pub fn to_tscn_for(scene: &Scene, lib: &Library, target: Target) -> (Vec<u8>, Ve
             &mut out,
             &[radius, r.point.x, r.point.y, r.point.z, r.half.x, r.half.y],
         );
+        // Glow (v6, issue #64): the halo the consoles draw for bloom.
+        let g = item
+            .glow
+            .unwrap_or(trino_core::Glow::new(0.0, trino_core::Color::WHITE));
+        out.extend_from_slice(&g.sprite.0.to_le_bytes());
+        f32s(&mut out, &[g.radius]);
+        out.extend_from_slice(&[g.color.r, g.color.g, g.color.b, g.color.a]);
+        let mode = (g.mode == trino_core::GlowMode::Always) as u8;
+        out.extend_from_slice(&[mode, 0, 0, 0]);
         debug_assert_eq!(out.len() - start, TSCN_NODE_BYTES);
     }
     out.extend_from_slice(&strings);

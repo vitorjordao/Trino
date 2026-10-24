@@ -809,6 +809,31 @@ overlay, and a measurement on real hardware (ares doesn't time the RDP).
     `GraphicsOptions` page (`trino_core::options`), opened by castle64 on Select. The
     self-test's `quality` step (fixed preset on ares/Azahar, hosted on PC/Web) and, in
     the browser, `quality bench`. CI smoke-runs the PC at every preset and `auto`.
+- **Post-processing per tier (2026-10-24, ADR 0033, GitHub #64):** off by default, the old
+  frame byte for byte without it.
+  - **Core (`trino_core::post`, `no_std`):** `PostSettings` (exposure, `Tonemap::{None,
+    Reinhard, Aces, AgX}`, `Bloom`, `grading: Option<LutId>`, vignette, grain), `Caps::
+    post_tier` (`Full` PC/Web, `Baked` consoles), `Renderer::set_post` (a default, cleared
+    at `begin_frame`), the CPU reference (`tonemap`, `tone`, `Lut::apply`, own
+    `log2`/`exp2`/`pow`), `TLUT` LUT blobs, `Glow` + `draw_glow` (the consoles' bloom; on
+    `SceneNode`, `Entity`, TSCN v6).
+  - **PC/Web:** the 3D into an `Rgba16Float` scene target (8-bit where the adapter can't),
+    HDR twins of every scene pipeline (`renderer/post.rs::HdrSet`, the GPU T&L's in
+    `GpuTnl`), a dual-filter bloom, one composite (`post.wgsl`) that also does the render
+    scale's upscale; the HUD after the last 3D draw untouched. `PostView`/`TRINO_POST`,
+    presets' `post` level, `TRINO_FRAME … post_frames= bloom=`, precompile jobs.
+  - **Consoles:** `[luts.*]` (strip PNG or `.cube`), `grading = "luts/x"` on models and
+    sprites (the N64/3DS bakes grade the colors; the PC bake adds a graded twin its
+    console profiles draw), `bake_grading = true` on `[scenes.*]` (environment colors).
+  - **Daltonization (from #60):** `access::color::correction`, `AccessSettings::
+    cvd_filter` (opt-in, packed bit), drawn by the CVD pass over the whole picture; hosts
+    call `PcRenderer::apply_access`.
+  - **Tools:** `cargo xtask lut neutral|inspect`, `post check`, `scene shot --post`,
+    `scene export --bake-grading`; editor Inspector › Post-processing, Add component ›
+    Glow, View › Post-processing view, the Accessibility tab's Daltonize, `TRINO_EDITOR_POST`.
+  - **Tests:** `crates/platform-pc/tests/post.rs` (goldens `post_native`, `cvd_filter_*`),
+    the `post` self-test step (graded card + bloom or glow) on PC, ares, Azahar and the
+    browsers, the reference scene `scenes/post-reference.scene.ron` (PC vs N64/3DS).
 - **Console hardware paths and N64 timing (2026-10-16, ADR 0012, part of #31):**
   the 3DS transforms and lights static meshes on the PICA200 (`render3d::gpu_check`,
   `tnl3d.v.pica`, `gpu tnl` self-test step, `castle64_work_3ds.toml`); text goes to the
@@ -1153,6 +1178,10 @@ cargo xtask run pc --trace                                  # target/traces/pc.l
 cargo run -p trino-app-pc --features tracy                  # Tracy (connect the Tracy 0.14 viewer)
 cargo xtask build n64 --threads 4                # the build's thread budget (auto = all CPUs - 1; also TRINO_THREADS, trino.toml [threads])
 TRINO_PRECOMPILE=blocking cargo run -p trino-app-pc   # warm every pipeline before the first frame (background by default)
+cargo xtask lut neutral [--size 32] [--out x.png] | inspect <file|luts/x> [--json]   # grading LUTs (issue #64)
+cargo xtask post check [--json]                     # LUTs bake, scenes name declared LUTs, graded scenes draw graded models
+cargo xtask scene shot <scene.ron> [--platform pc|n64|3ds|web] [--post game|on|off|bloom] [--size WxH] [--out x.png] [--json]
+cargo xtask scene export --platform n64 --bake-grading <scene.ron> <out.rs>   # the scene's colors graded for a console
 cargo xtask agents sync   # mirror .agents/skills/ into .claude/skills/ (check: agents check)
 cargo test -p xtask --test water_shots -- --ignored   # water evidence: tiers, ripples, crate, bridge (target/evidence/water)
 cargo xtask new <name> --standalone <dir> [--git <url> --rev <r>]   # project outside this repo
@@ -1329,6 +1358,20 @@ cargo test --workspace
   compares two MSAA frames from different allocations uses
   `common::corner_tolerance` (exact at 1×), never `== 0`.
 
+- **A pipeline that writes the scene's color needs an HDR twin** (issue #64): a post frame
+  draws the 3D into `Rgba16Float`, and a pipeline built for `Rgba8Unorm` fails wgpu
+  validation there. Add the twin to `renderer/post.rs::HdrSet` (or `GpuTnl::install_hdr`)
+  and pick it in `record_segments` when the scene target's format is HDR.
+- **Trino's vertex colors are 8-bit, so "HDR" is only per-pixel light** (local lights,
+  highlights, the wet floor, issue #64): bloom thresholds in linear light with a soft
+  knee and defaults to 0.8 so an unlit white glows; a threshold of 1.0 blooms almost
+  nothing from vertex-lit content.
+- **Grading baked into vertex colors is exact for unlit colors only**: the consoles grade
+  before the light, the PC's post stack after it. Probe unlit surfaces when comparing
+  tiers (`selftest::post`, the reference scene); lit ones differ by the order.
+- **The console profiles draw a model's graded twin, not the model** when it has
+  `grading` (`runner_pc::model_for`): a host or test that uploads `LoadedModel::tmdl`
+  directly on an N64/3DS profile shows ungraded colors (the engine checks once did).
 - **Shadows land only on receivers on the blob and planar tiers.** A caster with no
   `set_shadow_receivers` plane under its bounding-sphere center draws nothing on the
   N64 and the 3DS (the PC map shades everything). Pass the floor's top

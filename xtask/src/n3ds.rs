@@ -237,7 +237,20 @@ pub fn bake_assets(p: &Project, test_mode: bool) -> Result<(), String> {
         let source = resolve_source(&root.join("assets"), Platform::N3ds, &decl.file)?;
         // `auto` (the default) measures the master: the same choice as the
         // PC bake's 3DS preview.
-        let (w, h, rgba) = trino_asset_pipeline::decode_png(&source)?;
+        let (w, h, mut rgba) = trino_asset_pipeline::decode_png(&source)?;
+        // A `grading` LUT is baked into the pixels (issue #64).
+        let graded = match manifest.console_grading(
+            &root.join("assets"),
+            Platform::N3ds,
+            decl.grading.as_deref(),
+        )? {
+            Some(blob) => {
+                let lut = trino_core::Lut::parse(&blob).map_err(|e| format!("{logical}: {e:?}"))?;
+                trino_asset_pipeline::lut::grade_rgba(&mut rgba, &lut);
+                true
+            }
+            None => false,
+        };
         let choice = trino_asset_pipeline::texture::choose(
             Platform::N3ds,
             &logical,
@@ -252,7 +265,12 @@ pub fn bake_assets(p: &Project, test_mode: bool) -> Result<(), String> {
         // lowercase-compact.
         let tex3ds_format = tex3ds_format(&logical, &choice.format)?;
         let staged = stage.join(format!("{id:08x}.png"));
-        std::fs::copy(&source, &staged).map_err(|e| e.to_string())?;
+        if graded {
+            let png = trino_asset_pipeline::font::encode_png(w, h, &rgba)?;
+            std::fs::write(&staged, png).map_err(|e| e.to_string())?;
+        } else {
+            std::fs::copy(&source, &staged).map_err(|e| e.to_string())?;
+        }
         let out = romfs.join(format!("{id:08x}.t3x"));
         let status = Command::new(&tex3ds)
             .arg("-f")
@@ -329,8 +347,15 @@ pub fn bake_assets(p: &Project, test_mode: bool) -> Result<(), String> {
         let logical = format!("models/{name}");
         let id = trino_core::asset_id(&logical);
         let source = resolve_source(&root.join("assets"), Platform::N3ds, &decl.file)?;
-        // TMDL is portable: same blob on every platform, no container tool.
-        let blob = trino_asset_pipeline::bake_model(&source, &decl.options())?;
+        // TMDL is portable: same blob on every platform, no container tool;
+        // a `grading` LUT is baked into its colors here (issue #64).
+        let mut opts = decl.options();
+        opts.grading = manifest.console_grading(
+            &root.join("assets"),
+            Platform::N3ds,
+            decl.grading.as_deref(),
+        )?;
+        let blob = trino_asset_pipeline::bake_model(&source, &opts)?;
         let file = format!("{id:08x}.tmdl");
         std::fs::write(romfs.join(&file), blob).map_err(|e| e.to_string())?;
         groups.route(
@@ -422,7 +447,13 @@ pub fn bake_assets(p: &Project, test_mode: bool) -> Result<(), String> {
         // TSCN is portable; the variants resolve per hardware tier (a
         // `base` and an `expanded` copy when they differ, issue #54).
         let twins = trino_asset_pipeline::tier_twins(Platform::N3ds, |t| {
-            trino_asset_pipeline::bake_scene_for(&root.join("assets"), &decl.file, t)
+            trino_asset_pipeline::model::bake_console_scene(
+                &root.join("assets"),
+                &manifest,
+                decl,
+                Platform::N3ds,
+                t,
+            )
         })?;
         for twin in twins {
             std::fs::write(romfs.join(twin.file(id, "blob")), &twin.bytes)

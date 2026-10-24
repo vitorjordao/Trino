@@ -49,6 +49,9 @@ pub struct Entity {
     /// Interior cell (see [`crate::vis`]); [`crate::vis::NO_CELL`] = none.
     pub cell: u8,
     pub visible: bool,
+    /// A halo at its position ([`crate::post::Glow`], issue #64): the
+    /// consoles' bloom, drawn with it.
+    pub glow: Option<crate::post::Glow>,
     /// Game-defined payload.
     pub user: u32,
 }
@@ -66,6 +69,7 @@ impl Entity {
         sound: None,
         cell: crate::vis::NO_CELL,
         visible: true,
+        glow: None,
         user: 0,
     };
 
@@ -81,6 +85,7 @@ impl Entity {
             collider: node.collider,
             lod: node.lod,
             sound: node.sound,
+            glow: node.glow,
             cell: node.cell,
             visible: true,
             user: 0,
@@ -378,14 +383,22 @@ impl<const N: usize> EntityStore<N> {
                 continue;
             }
             let pick = e.lod_from_biased(eye, bias);
-            if !e.visible || pick == LodPick::None {
+            // Culled by distance; a marker without a model may still glow.
+            if !e.visible || (pick == LodPick::None && (e.model.is_some() || e.glow.is_none())) {
                 continue;
             }
             let mut params = e.params;
             if let Some((clip, speed)) = e.anim {
                 params.anim = Some(AnimRef::new(clip, time * speed));
             }
-            pick.draw(renderer, &root.mul(&e.matrix), &params, eye);
+            let matrix = root.mul(&e.matrix);
+            if pick != LodPick::None {
+                pick.draw(renderer, &matrix, &params, eye);
+            }
+            if let Some(glow) = &e.glow {
+                let at = Vec3::new(matrix.m[0][3], matrix.m[1][3], matrix.m[2][3]);
+                crate::post::draw_glow(renderer, glow, at);
+            }
         }
     }
 }
@@ -410,6 +423,7 @@ mod tests {
             sound: None,
             cell: crate::vis::NO_CELL,
             vis: None,
+            glow: None,
         }
     }
 

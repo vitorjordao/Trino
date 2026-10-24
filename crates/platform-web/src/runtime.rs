@@ -636,6 +636,10 @@ impl WebHost {
             .record_memory(&trino_core::Platform::memory(&self.platform));
         self.meter
             .record_pipes(self.renderer.frame_times().pipelines);
+        self.meter.record_post(
+            self.renderer.frame_times().post_passes,
+            self.renderer.frame_times().bloom_levels,
+        );
         // The boot warm-up, one pass a frame: say once what it built.
         let warm = self.renderer.precompile_status();
         if self.warm_pending && warm.is_done() {
@@ -752,6 +756,8 @@ pub fn run_game<G: Game + 'static>(
             let input = host.poll_input();
             host.pump_groups();
             game.update_with(&mut host.platform, &input, &mut host.audio, dt);
+            host.renderer
+                .apply_access(&trino_core::Platform::access(&host.platform));
             game.render(&mut host.renderer);
             host.end_frame();
             frames += 1;

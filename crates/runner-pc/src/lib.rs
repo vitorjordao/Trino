@@ -398,8 +398,9 @@ pub fn upload_assets(
     for model in assets.models {
         let id = trino_core::ModelId(model.id);
         let before = renderer.mesh_bytes(id) as u64;
-        let after = model.tmdl.len() as u64;
-        renderer.upload_mesh(id, model.tmdl);
+        let tmdl = model_for(renderer, model);
+        let after = tmdl.len() as u64;
+        renderer.upload_mesh(id, tmdl);
         count(platform, C::Meshes, before, after);
     }
     for font in assets.fonts {
@@ -413,6 +414,7 @@ pub fn upload_assets(
         let id = trino_core::BlobId(blob.id);
         let before = trino_core::Platform::blob(platform, id).map_or(0, |b| b.len() as u64);
         let after = blob.bytes.len() as u64;
+        renderer.take_lut_blob(blob.id, &blob.bytes);
         platform.insert_blob(id, blob.bytes);
         count(platform, C::Data, before, after);
     }
@@ -474,6 +476,16 @@ pub fn sprite_platform(renderer: &PcRenderer) -> trino_asset_pipeline::Platform 
         trino_asset_pipeline::Platform::N3ds
     } else {
         trino_asset_pipeline::Platform::Pc
+    }
+}
+
+/// The mesh a profile draws of a baked model: its console-graded twin on
+/// the console profiles (the consoles' bake grades its colors, issue #64),
+/// else the model as baked.
+pub fn model_for(renderer: &PcRenderer, model: trino_asset_pipeline::LoadedModel) -> Vec<u8> {
+    match (renderer.profile(), model.graded) {
+        (SimProfile::N64 | SimProfile::N3ds, Some(graded)) => graded,
+        _ => model.tmdl,
     }
 }
 
@@ -1094,6 +1106,8 @@ impl ApplicationHandler for Host {
                     .update_with(&mut ctx.platform, &input, &mut ctx.audio, dt);
                 zone.end();
                 let zone = trino_core::trace::Zone::begin("render");
+                ctx.renderer
+                    .apply_access(&trino_core::Platform::access(&ctx.platform));
                 ctx.game.render(&mut ctx.renderer);
                 zone.end();
                 if let Some(t) = &mut self.trace {
@@ -1150,6 +1164,10 @@ impl ApplicationHandler for Host {
                     .record_memory(&trino_core::Platform::memory(&ctx.platform));
                 self.meter
                     .record_pipes(ctx.renderer.frame_times().pipelines);
+                self.meter.record_post(
+                    ctx.renderer.frame_times().post_passes,
+                    ctx.renderer.frame_times().bloom_levels,
+                );
                 if let Some(max) = self.smoke_frames
                     && self.frames >= max
                 {

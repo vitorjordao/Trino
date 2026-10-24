@@ -1,7 +1,8 @@
 //! Pipeline precompilation (issue #101, ADR 0031) through the public API:
 //! after `precompile(EVERYTHING)` no frame compiles a pipeline while every
 //! lazily built pass is switched on (MSAA, ambient occlusion, the shadow
-//! map, each color-vision view, a render scale, the GPU T&L), where the
+//! map, each color-vision view and correction filter, the post stack with
+//! its HDR twins, a render scale, the GPU T&L), where the
 //! same toggles without a warm-up do compile; a background warm-up keeps
 //! frames coming and ends; the frames are the same with and without it;
 //! a frame waits for a pass a worker is compiling; the Vulkan pipeline
@@ -11,8 +12,8 @@
 use trino_asset_pipeline::primitive::{Pivot, Primitive, Shape};
 use trino_core::render3d::{Camera3, DEFAULT_LIGHT};
 use trino_core::{
-    AmbientOcclusion, Color, CvdMode, Material, ModelId, ModelParams, PrecompileRequest, Renderer,
-    ShadowCast, ShadowPlane, ShadowSettings, Transform3, Vec3,
+    AmbientOcclusion, Color, CvdMode, Material, ModelId, ModelParams, PostSettings,
+    PrecompileRequest, Renderer, ShadowCast, ShadowPlane, ShadowSettings, Transform3, Vec3,
 };
 use trino_platform_pc::renderer::RendererOptions;
 use trino_platform_pc::{PcRenderer, SimProfile};
@@ -81,7 +82,13 @@ fn prim(shape: Shape) -> Vec<u8> {
 /// A frame with shadows (the native profile's map), SSAO when `ao`, and
 /// two models; returns the pipelines the render thread compiled in it.
 fn frame(r: &mut PcRenderer, ao: bool) -> u32 {
+    frame_with(r, ao, None)
+}
+
+/// [`frame`] with the post stack (issue #64).
+fn frame_with(r: &mut PcRenderer, ao: bool, post: Option<PostSettings>) -> u32 {
     r.begin_frame(Color::rgb(60, 80, 110));
+    r.set_post(post.as_ref());
     r.set_camera(&Camera3 {
         eye: Vec3::new(0.0, 3.0, -6.0),
         target: Vec3::new(0.0, 0.4, 0.0),
@@ -122,10 +129,22 @@ fn frame(r: &mut PcRenderer, ao: bool) -> u32 {
 /// Every lazily built pass, one after the other; the pipelines each step's
 /// frame compiled.
 fn toggle_everything(r: &mut PcRenderer) -> Vec<(&'static str, u32)> {
+    let post = Some(PostSettings::FILMIC);
     let mut out = vec![("plain", frame(r, false))];
     out.push(("ssao", frame(r, true)));
+    out.push(("post", frame_with(r, true, post)));
     r.set_msaa(true);
     out.push(("msaa", frame(r, true)));
+    out.push(("msaa post", frame_with(r, true, post)));
+    for mode in [
+        CvdMode::Protanopia,
+        CvdMode::Deuteranopia,
+        CvdMode::Tritanopia,
+    ] {
+        r.set_cvd_filter(mode);
+        out.push((mode.key(), frame(r, true)));
+    }
+    r.set_cvd_filter(CvdMode::Off);
     for mode in [
         CvdMode::Protanopia,
         CvdMode::Deuteranopia,
@@ -138,8 +157,10 @@ fn toggle_everything(r: &mut PcRenderer) -> Vec<(&'static str, u32)> {
     r.set_cvd_view(CvdMode::Off);
     r.set_render_scale(0.5);
     out.push(("render scale", frame(r, true)));
+    out.push(("render scale post", frame_with(r, true, post)));
     r.set_msaa(false);
     out.push(("msaa off, scaled", frame(r, true)));
+    out.push(("msaa off, scaled post", frame_with(r, true, post)));
     out
 }
 

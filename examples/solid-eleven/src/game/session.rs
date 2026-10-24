@@ -473,6 +473,7 @@ impl Session {
         if render::hifi(r, self.view.retro) {
             self.turf.draw(r);
         }
+        r.set_layer_depth(render::HUD_DEPTH);
         let mut ui = Ui::new(r, screen);
         crate::render::hud::draw_scaled(
             &mut ui,
@@ -485,6 +486,7 @@ impl Session {
             &self.names,
             text_scale,
         );
+        r.set_layer_depth(trino_core::LayerDepth::SCREEN);
     }
 }
 

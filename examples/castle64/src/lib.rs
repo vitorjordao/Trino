@@ -49,6 +49,7 @@ use trino_core::{
     AchievementId, AchievementList, AchievementState, AchievementTable, AchievementToast,
     OverlayStyle, StatId,
 };
+use trino_core::{LayerDepth, StereoSettings};
 
 // ------------------------------------------------------------ handles ----
 
@@ -137,6 +138,17 @@ const STAR_GET_SECS: f32 = 2.5;
 
 /// Distância mínima da câmera quando o raycast a encosta numa parede.
 const CAM_MIN_DIST: f32 = 2.0;
+/// Stereo 3D on the 3DS top screen (issue #63): the eyes this fraction of
+/// the camera's distance apart at the full 3D slider, converging on the
+/// player — the horizon sits about 10 px behind the screen whatever the
+/// camera's distance — and the HUD 6 px out of it.
+const STEREO_SEPARATION: f32 = 0.05;
+const HUD_DEPTH: LayerDepth = LayerDepth(6);
+
+/// The stereo frame with the camera `cam_dist` from the player.
+pub fn stereo_at(cam_dist: f32) -> StereoSettings {
+    StereoSettings::new(cam_dist * STEREO_SEPARATION, cam_dist)
+}
 const MAX_SOLIDS: usize = 40;
 const MAX_ENEMIES: usize = 4;
 const CULL_FAR: f32 = 60.0;
@@ -741,6 +753,9 @@ impl Game for Castle64Game {
             target,
             ..Camera3::default()
         };
+        // Stereo before the first draw: the player on the screen's plane
+        // (the 3DS draws two eyes while its slider is up; elsewhere a no-op).
+        renderer.set_stereo(Some(&stereo_at(cam_dist)));
         renderer.set_camera(&camera);
         // Light is renderer state and outlives a frame: declare it every
         // frame, or the game inherits whatever drew before (on consoles the
@@ -1115,6 +1130,8 @@ impl Game for Castle64Game {
         }
 
         // ---- HUD (sprites por cima do 3D) ----
+        // Out of the screen in stereo, in front of the world.
+        renderer.set_layer_depth(HUD_DEPTH);
         // Counters as bitmap text (no allocator: fixed TextBuf + write!).
         let text_k = self.access.clamped().text_factor();
         let hud_scale = (2.0 * text_k).min(3.0);
@@ -1198,6 +1215,8 @@ impl Game for Castle64Game {
                 .captions
                 .draw(renderer, &trino_core::ui::NoStrings, &self.caption_style()),
         }
+
+        renderer.set_layer_depth(LayerDepth::SCREEN);
 
         // ---- Bottom screen (3DS touch screen / PC 3DS profile) ----
         // Single-screen targets refuse it: no extra work there.

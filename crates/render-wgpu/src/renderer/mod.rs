@@ -24,7 +24,7 @@ pub use precompile::Hold as PrecompileHold;
 mod shadow;
 mod shadow_map;
 mod stereo;
-pub use stereo::StereoView;
+pub use stereo::{FLIP_FRAMES as STEREO_FLIP_FRAMES, StereoView};
 mod upscale;
 mod water;
 

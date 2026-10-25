@@ -1,0 +1,73 @@
+{
+  "layers": [],
+  "ok": true,
+  "scenes": [
+    {
+      "budget": [
+        {
+          "collision_tris": 28,
+          "fits": true,
+          "max_collision_tris": 4096,
+          "platform": "n64"
+        },
+        {
+          "collision_tris": 28,
+          "fits": true,
+          "max_collision_tris": 16384,
+          "platform": "3ds"
+        },
+        {
+          "collision_tris": 28,
+          "fits": true,
+          "max_collision_tris": 1000000,
+          "platform": "pc"
+        },
+        {
+          "collision_tris": 28,
+          "fits": true,
+          "max_collision_tris": 1000000,
+          "platform": "web"
+        }
+      ],
+      "characters": [
+        {
+          "at": [
+            1.5,
+            0.0,
+            4.0
+          ],
+          "entity": "hero",
+          "height": 1.7000000476837158,
+          "max_slope_deg": 45.0,
+          "radius": 0.30000001192092896,
+          "step_height": 0.30000001192092896
+        }
+      ],
+      "grid": {
+        "bytes": 106,
+        "cells": 16,
+        "refs": 36
+      },
+      "issues": [
+        {
+          "level": "info",
+          "message": "ramp `ramp-50` is 50.0°: steeper than any character's limit (45°), so it is a wall and a slide"
+        }
+      ],
+      "meshes": [
+        {
+          "entity": "dome",
+          "model": "models/rock",
+          "triangles": 28
+        }
+      ],
+      "one_way": 1,
+      "ramps": 2,
+      "scene": "scenes/physics_playground.scene.ron",
+      "solids": 9,
+      "triggers": [
+        "goal-zone"
+      ]
+    }
+  ]
+}

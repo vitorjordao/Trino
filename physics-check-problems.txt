@@ -1,0 +1,5 @@
+xtask/tests/physics_fixtures/problems.scene.ron: 3 solid(s), 0 one-way, 0 ramp(s), 1 mesh collider(s) (0 triangles), 1 trigger(s), 0 character(s); grid 4 cells, 6 refs (22 B)
+  error: wrong-layer: no collision layer `ghosts` in assets/physics.ron (layers: world, player, enemy, pickup) — using the default
+  warning: solids `floor` and `sunk-crate` overlap (0.500 m³)
+  error: no-collision-mesh: mesh collider `models/crate` has no baked collision (add `collision = "visual"`, `"auto-hull"` or a file to [models.crate] in the manifest)
+  error: trigger `Entity 3` has no name of its own: game code finds triggers by name or tag

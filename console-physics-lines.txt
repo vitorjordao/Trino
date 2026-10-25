@@ -1,0 +1,14 @@
+TRINO_STEP:physics course hash=ba581be1 fx=ffa322c7
+TRINO_PHYSICS_COST: solids=500 rays=64 rays_scan_us=20375 rays_grid_us=1089 steps=16 steps_scan_us=1112 steps_grid_us=389 hub_solids=17 hub_scan_us=30 hub_grid_us=25
+[3ds] TEST PASS (as a New 3DS)
+TRINO_STEP:physics course hash=ba581be1 fx=ffa322c7
+TRINO_PHYSICS_COST: solids=500 rays=64 rays_scan_us=20310 rays_grid_us=1089 steps=16 steps_scan_us=1112 steps_grid_us=389 hub_solids=17 hub_scan_us=30 hub_grid_us=25
+[3ds] TEST PASS (as an old 3DS)
+[ares] TRINO_STEP:physics course hash=ba581be1 fx=ffa322c7
+[ares] TRINO_PHYSICS_COST: solids=500 rays=64 rays_scan_us=116021 rays_grid_us=6024 steps=16 steps_scan_us=11984 steps_grid_us=2445 hub_solids=17 hub_scan_us=169 hub_grid_us=183
+[ares] TRINO_HEAP:2135696/6491344 peak=2135696 after the bot and the perf scenes
+[n64] TEST PASS (with the Expansion Pak)
+[ares] TRINO_STEP:physics course hash=ba581be1 fx=ffa322c7
+[ares] TRINO_PHYSICS_COST: solids=500 rays=64 rays_scan_us=116067 rays_grid_us=5989 steps=16 steps_scan_us=12002 steps_grid_us=2444 hub_solids=17 hub_scan_us=169 hub_grid_us=184
+[ares] TRINO_HEAP:2133992/2297040 peak=2133992 after the bot and the perf scenes
+[n64] TEST PASS (without the Expansion Pak)

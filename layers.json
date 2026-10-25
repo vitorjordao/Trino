@@ -1,0 +1,53 @@
+{
+  "file": "assets/physics.ron",
+  "ignore": [
+    [
+      "enemy",
+      "pickup"
+    ]
+  ],
+  "layers": [
+    {
+      "bit": 1,
+      "collides_with": [
+        "world",
+        "player",
+        "enemy",
+        "pickup"
+      ],
+      "mask": 15,
+      "name": "world"
+    },
+    {
+      "bit": 2,
+      "collides_with": [
+        "world",
+        "player",
+        "enemy",
+        "pickup"
+      ],
+      "mask": 15,
+      "name": "player"
+    },
+    {
+      "bit": 4,
+      "collides_with": [
+        "world",
+        "player",
+        "enemy"
+      ],
+      "mask": 7,
+      "name": "enemy"
+    },
+    {
+      "bit": 8,
+      "collides_with": [
+        "world",
+        "player",
+        "pickup"
+      ],
+      "mask": 11,
+      "name": "pickup"
+    }
+  ]
+}

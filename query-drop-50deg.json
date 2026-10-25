@@ -1,0 +1,19 @@
+{
+  "feet": [
+    -1.0,
+    0.0,
+    -3.163496255874634
+  ],
+  "ground": {
+    "entity": "ground",
+    "kind": "solid"
+  },
+  "normal": [
+    0.0,
+    1.0,
+    0.0
+  ],
+  "on_ground": true,
+  "query": "drop",
+  "sliding": false
+}

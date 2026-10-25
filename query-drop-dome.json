@@ -1,0 +1,20 @@
+{
+  "feet": [
+    -6.0,
+    0.8400000929832458,
+    6.5
+  ],
+  "ground": {
+    "entity": "dome",
+    "kind": "mesh",
+    "triangle": 7
+  },
+  "normal": [
+    -0.19024299085140228,
+    0.9523134827613831,
+    -0.2385573387145996
+  ],
+  "on_ground": true,
+  "query": "drop",
+  "sliding": false
+}

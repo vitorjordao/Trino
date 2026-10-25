@@ -43,6 +43,9 @@ pub struct DrawItem {
     pub receiver: Option<ShadowPlane>,
     /// Its halo (`glow`, issue #64): the consoles' bloom.
     pub glow: Option<trino_core::Glow>,
+    /// The animation graph it plays (`anim_graph`, issue #65): a player
+    /// keeps its instance and sets `params.anim` every frame.
+    pub anim_graph: Option<crate::AnimGraphComponent>,
     /// True for parts that come from a prefab (not editable in place).
     pub from_prefab: bool,
 }
@@ -487,6 +490,7 @@ fn visit(
         }
         None => None,
     };
+    let anim_graph = e.anim_graph.clone().filter(|_| model.is_some());
     ctx.out.items.push(DrawItem {
         owner: owner.to_vec(),
         name: name.clone(),
@@ -507,6 +511,7 @@ fn visit(
         vis,
         receiver,
         glow: e.glow.as_ref().map(|g| g.core()),
+        anim_graph,
         from_prefab,
     });
 

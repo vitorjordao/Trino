@@ -176,6 +176,11 @@ fn check(root: &Path, files: &[&str]) -> ExitCode {
                         .into_iter()
                         .map(|w| format!("{}: {w}", path.display())),
                 );
+                problems.extend(
+                    trino_scene::anim::scene_problems(root, &r.items)
+                        .into_iter()
+                        .map(|w| format!("{}: {w}", path.display())),
+                );
                 println!("ok  {} ({} draw items)", path.display(), r.items.len());
             }
             Err(e) => problems.push(e),

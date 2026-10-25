@@ -682,3 +682,26 @@ fn stereo_evidence() {
         }
     }
 }
+
+/// The `anim graph` step's pose hash is pinned (`ANIM_GRAPH_HASH`): ares and
+/// Azahar compare theirs with the PC's. A change to the graph runtime, the
+/// strider's clips or its graph moves it on purpose: put the printed value
+/// in `castle64::selftest::ANIM_GRAPH_HASH`.
+#[test]
+fn the_anim_graph_hash_is_pinned() {
+    let save_dir = tempfile::tempdir().unwrap();
+    let Some((mut renderer, mut platform)) = pc_target(SimProfile::Native, save_dir.path()) else {
+        return;
+    };
+    let r = castle64::selftest::anim_graph(&mut renderer, &mut platform).unwrap();
+    assert!(r.probed, "the posed strider is read back on the PC");
+    assert_eq!(
+        r.hash,
+        castle64::selftest::ANIM_GRAPH_HASH,
+        "set ANIM_GRAPH_HASH to {:#010x} (transitions {}, events {}, root {} mm)",
+        r.hash,
+        r.transitions,
+        r.events,
+        r.root_mm
+    );
+}

@@ -210,6 +210,19 @@ pub enum Cmd {
         time: f32,
         name: String,
     },
+    /// A clip's timeline events (Animation › Events; the manifest's
+    /// `events.<clip>`).
+    SetClipEvents {
+        model: String,
+        clip: String,
+        events: Vec<(f32, String)>,
+    },
+    /// The clips whose root motion the bake extracts (Animation › Root
+    /// motion; the manifest's `root_motion`).
+    SetRootMotion {
+        model: String,
+        clips: Vec<String>,
+    },
 }
 
 pub struct App {
@@ -284,6 +297,10 @@ pub struct App {
     focus_tab: Option<Tab>,
     /// Dev hook `TRINO_EDITOR_PLAY=here`: start Play here on the first frame.
     play_here_on_start: bool,
+    /// The scene entities' animation graphs (posed in place) and the clock
+    /// they last advanced to.
+    graph_play: trino_asset_pipeline::anim_graph::GraphPlayback,
+    graph_clock: f32,
     /// Dev hook `TRINO_EDITOR_RIPPLE=1`: drop a ripple on the selected
     /// water surface once the scene has resolved (screenshots).
     ripple_hook: bool,
@@ -708,6 +725,12 @@ impl App {
             // Dev hook: TRINO_EDITOR_PALETTE=<query> opens the palette.
             palette: std::env::var("TRINO_EDITOR_PALETTE").ok(),
             play_here_on_start: std::env::var("TRINO_EDITOR_PLAY").as_deref() == Ok("here"),
+            graph_play: {
+                let mut g = trino_asset_pipeline::anim_graph::GraphPlayback::new(&root);
+                g.carry = false;
+                g
+            },
+            graph_clock: 0.0,
             ripple_hook: std::env::var_os("TRINO_EDITOR_RIPPLE").is_some(),
             inspect_focus: std::env::var("TRINO_EDITOR_INSPECT").ok(),
             scroll_to_budget: false,
@@ -1686,6 +1709,35 @@ impl App {
                     ),
                 );
                 self.log.info(format!("wrote assets/{}", e.file));
+            }
+            Cmd::SetClipEvents {
+                model,
+                clip,
+                events,
+            } => {
+                self.project.set_clip_events(&model, &clip, &events)?;
+                // Shown at once; the watcher's rebake brings the blob.
+                if let Some(m) = self.project.models.get_mut(&model) {
+                    if events.is_empty() {
+                        m.events.remove(&clip);
+                    } else {
+                        m.events.insert(clip.clone(), events.clone());
+                    }
+                }
+                self.log.info(format!(
+                    "{model}: clip `{clip}` has {} event(s) (manifest events.{clip})",
+                    events.len()
+                ));
+            }
+            Cmd::SetRootMotion { model, clips } => {
+                self.project.set_root_motion(&model, &clips)?;
+                if let Some(m) = self.project.models.get_mut(&model) {
+                    m.root_motion = clips.clone();
+                }
+                self.log.info(format!(
+                    "{model}: root motion on [{}] (manifest root_motion)",
+                    clips.join(", ")
+                ));
             }
             Cmd::RetargetModel(name, file) => {
                 self.project.retarget_model(&name, &file)?;
@@ -3405,9 +3457,18 @@ impl eframe::App for App {
         // Resolve once per frame; bump the revision when content changed.
         let time = self.time();
         self.resolved = resolve(&self.doc.scene, &self.lib, time);
+        // Entities with an animation graph play it in place (issue #65; Play
+        // carries them by its root motion).
+        let dt = (time - self.graph_clock).clamp(0.0, 0.25);
+        self.graph_clock = time;
+        let _ = self.graph_play.step(&mut self.resolved.items, dt);
         self.resolved_game = match self.game_view.target() {
             trino_scene::Target::Pc => self.resolved.clone(),
-            t => trino_scene::resolve_for(&self.doc.scene, &self.lib, time, t),
+            t => {
+                let mut r = trino_scene::resolve_for(&self.doc.scene, &self.lib, time, t);
+                self.graph_play.apply(&mut r.items);
+                r
+            }
         };
         if self.rev_scene.as_ref() != Some(&self.doc.scene) || self.lib_rev != self.seen_lib_rev {
             self.rev += 1;

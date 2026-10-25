@@ -68,6 +68,10 @@ pub struct CostModel {
     /// four corners projected outside the T&L and two textured triangles
     /// submitted by the CPU after the batch's opaque draws.
     pub us_per_blob: f32,
+    /// The extra CPU of one draw whose pose solves foot IK (two legs and
+    /// the pelvis, [`crate::anim::ik`]): off on the N64 unless a game
+    /// forces it (`Caps::anim_ik`).
+    pub us_per_ik_draw: f32,
 }
 
 /// The N64's RSP work in a frame ([`CostModel::split_us`]): every RSP draw
@@ -134,7 +138,15 @@ pub const N64_COST: CostModel = CostModel {
     // same frame without them, per blob: 109 µs with the Expansion Pak and
     // 113 without on one build, 105 and 103 on the next (code layout).
     us_per_blob: BLOB_US,
+    // ares, 2026-10-24 (issue #65, the self-test's `foot ik` step,
+    // `TRINO_IK_COST:` lines): 16 strider draws, one a frame, with both legs
+    // solved less the same draws without, per draw: 525–650 µs over four
+    // runs (both tiers; batched draws measured 125–300, the RSP overlapping).
+    us_per_ik_draw: IK_US,
 };
+
+/// [`N64_COST`]'s foot IK term, µs per draw.
+const IK_US: f32 = 550.0;
 
 /// [`N64_COST`]'s blob term, µs per blob.
 const BLOB_US: f32 = 111.0;

@@ -236,11 +236,21 @@ impl ClipId {
 /// popping): each joint's translation/rotation/scale is interpolated
 /// between the two sampled poses by `weight` before the hierarchy is
 /// composed — two extra sample reads per joint, no extra vertex work.
+///
+/// `over` (issue #65) mixes a third clip over the first two's result: an
+/// animation graph fading out of a blend space ([`crate::anim`]). The
+/// pose is `lerp(lerp(clip, blend, blend.weight), over, over.weight)`;
+/// weight 0 ([`AnimBlend::NONE`]) is off. Not an `Option`: its floats are
+/// always initialized, so no N64 code path can read a denormal payload.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct AnimRef {
     pub clip: ClipId,
     pub time: f32,
     pub blend: Option<AnimBlend>,
+    pub over: AnimBlend,
+    /// Foot IK (issue #65, [`crate::anim::FootIk`]): the ground under each
+    /// foot; [`IkPose::NONE`](crate::anim::IkPose::NONE) is the clip's pose.
+    pub ik: crate::anim::IkPose,
 }
 
 /// Second clip of a crossfade (see [`AnimRef::blend`]).
@@ -252,6 +262,15 @@ pub struct AnimBlend {
     pub weight: f32,
 }
 
+impl AnimBlend {
+    /// No clip (`AnimRef::over` off).
+    pub const NONE: AnimBlend = AnimBlend {
+        clip: ClipId(0),
+        time: 0.0,
+        weight: 0.0,
+    };
+}
+
 impl AnimRef {
     /// Play `clip` at `time` seconds.
     pub const fn new(clip: ClipId, time: f32) -> Self {
@@ -259,7 +278,14 @@ impl AnimRef {
             clip,
             time,
             blend: None,
+            over: AnimBlend::NONE,
+            ik: crate::anim::IkPose::NONE,
         }
+    }
+
+    /// With foot IK ([`crate::anim::FootIk::pose`]).
+    pub const fn with_ik(self, ik: crate::anim::IkPose) -> Self {
+        AnimRef { ik, ..self }
     }
 
     /// Crossfade toward `clip` (at its own `time`) by `weight` (0..1).

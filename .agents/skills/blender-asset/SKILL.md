@@ -221,6 +221,15 @@ per draw (`ModelParams::palette`).
 - Seen on the engine's sample robot: its walk swings both legs like a pendulum, so the
   "planted" foot travels back and then forward again on the floor (15 cm slide) and dips
   3.6 cm under it — the measurement is right; the art needs a real stance phase.
+- **Root motion** (issue #65): a walk that moves its root (the hips) forward with the
+  feet planted bakes with `root_motion = ["walk"]`; `model inspect models/x --anim` then
+  reports the slide carried by the track (0 for planted feet) beside the constant-speed
+  one. Give the root a non-constant speed only if the gait has one; a constant-speed walk
+  needs no root motion. The generated `models/strider` (`xtask/src/showcase_assets.rs::
+  strider`) solves its legs per key by the law of cosines — the recipe for planted feet.
+- **Foot IK**: name the leg joints so the manifest can list them (`ik = { pelvis = "hips",
+  left = ["thigh_l", "shin_l", "foot_l"], right = [..] }`, glTF node names); each leg must
+  descend hip → knee → foot, and the ankle is the foot joint's origin.
 - A console that should skip the skeleton: `cargo xtask model pose models/x --clip walk
   --time 0.3 --name x-pose` (or Animation › Console pose) bakes a static glTF of that
   pose and declares it; point the entity's N64 variant at it (`platforms`).
@@ -258,7 +267,11 @@ about the origin.
    file = "models/robot.glb"
    anim_fps = 20          # optional (default 15)
    once = ["wave"]        # optional: clips that play once
+   anim_compression = true            # optional: ANMC tracks, far less console RAM
+   events.walk = [{ at = 0.0, name = "foot_l" }]   # optional: timeline events
    ```
+   Clip logic (which clip when, crossfades, blend by speed) is an animation graph:
+   `cargo xtask anim new robot --model models/robot`, then the `animation` skill.
    Replacing a fake object: change only its `file` (or use the editor's *Replace with real
    art* on the model) — the logical path, every scene entity, material and line of code stay.
 2. Editor: the model appears in **Assets › Models** with a thumbnail; drag it into the Scene

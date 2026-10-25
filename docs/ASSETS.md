@@ -324,8 +324,9 @@ cell's groups in the inspector.
 
 TMDL is the engine's portable mesh format: positions, normals, vertex colors, and
 optional sections for UVs and a texture (`TXUV`, `TXID`), bounds (`BNDS`), a skeleton
-(`SKEL`), clips (`ANIM`), smooth-skin weights (`SKW2`) and color slots (`SLOT`). New data
-goes into new sections; unknown tags are skipped.
+(`SKEL`), clips (`ANIM`, or compressed `ANMC`), smooth-skin weights (`SKW2`), color slots
+(`SLOT`), foot IK chains (`IKCH`), root motion (`ROOT`) and timeline events (`AEVT`). New
+data goes into new sections; unknown tags are skipped.
 
 - Color is baked into the vertices by default (from `COLOR_0`, else the base-color
   texture at the vertex UV, else the base-color factor). `COLOR_0` is linear and the bake
@@ -337,8 +338,23 @@ goes into new sections; unknown tags are skipped.
   sampled at `anim_fps`.
 - Color slots (`_SLOT` in glTF) let one model be recolored per draw with
   `ModelParams::palette`.
+- Clip data (issue #65, [ADR 0034](adr/0034-animation-graphs-and-clip-data.md), the
+  `animation` skill): `events.<clip> = [{ at = 0.25, name = "foot_l" }]` (`sfx:x` carries
+  `sounds/x`), `root_motion = ["walk"]` (the root's ground motion leaves the clip for a
+  track the game moves the entity by), `anim_compression = true` (error-bounded keyframe
+  tracks: the strider's clips 42 → 6 KB), `ik = { pelvis = "hips", left = [hip, knee,
+  foot], right = [...] }` (joint names, for foot IK).
 
-**The gate:** `cargo xtask model inspect <file> [--anim] [--json]` bakes a model exactly
+## Animation graphs
+
+`assets/anim/<name>.anim.ron` (no manifest entry) bakes to the blob `anim/<name>` on every
+platform whose bake has the graph's model: states (a clip, or a 1D blend space over a
+float parameter), parameters (floats, bools, triggers) and transitions with conditions.
+`cargo xtask anim check` validates it against the model's clips on each platform; `anim
+simulate --script` plays it headless. Format and semantics: ADR 0034, the `animation`
+skill.
+
+**The gate:** `cargo xtask model inspect <file|models/x> [--anim] [--compressed] [--json]` bakes a model exactly
 like the engine and reports triangles, joints, clips, bounds and the estimated N64 cost
 per draw. On the N64 the budget is CPU and RSP time, not a triangle count.
 

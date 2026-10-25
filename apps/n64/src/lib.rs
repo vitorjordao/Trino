@@ -112,6 +112,23 @@ mod n64 {
         }
     }
 
+    /// The animation steps with the strider's group (issue #65).
+    #[inline(never)]
+    fn anim_steps(renderer: &mut N64Renderer, audio: &mut N64Audio, platform: &mut N64Platform) {
+        let mut host = GroupHost {
+            renderer,
+            audio,
+            platform,
+        };
+        if let Err(e) = castle64::selftest::anim_steps(&mut host) {
+            runtime::log(&format!("TRINO_TEST_FAIL:{e}\n"));
+            loop {
+                trino_core::Renderer::begin_frame(host.renderer, trino_core::Color::BLACK);
+                trino_core::Renderer::end_frame(host.renderer);
+            }
+        }
+    }
+
     /// The heap's high-water mark (issue #56), like [`check_stack`]: the
     /// peak since boot must leave [`HEAP_MARGIN`] of libdragon's heap free —
     /// what a game's next allocation (a level, a display list) needs to
@@ -805,6 +822,9 @@ mod n64 {
                     // a blob costs (ungated, the `N64_COST` blob term).
                     shadows_golden(renderer);
                     shadow_cost(renderer);
+                    // 9) Animation (issue #65): last, its group loaded and
+                    // unloaded where nothing big allocates after it.
+                    anim_steps(renderer, audio, platform);
                     // High-water marks of the whole run (bot, perf scenes).
                     if check_stack("the bot and the perf scenes")
                         && check_heap("the bot and the perf scenes", platform, heap_peak.get())

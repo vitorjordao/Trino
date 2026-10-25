@@ -747,12 +747,14 @@ fn rigged_triangle() -> MeshData {
                     vec![Trs::IDENTITY, Trs::IDENTITY],
                     vec![Trs::IDENTITY, trs_at(3.0)],
                 ],
+                ..Default::default()
             }],
         }),
         uvs: vec![[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]],
         texture: Some(trino_core::asset_id("sprites/skin")),
         blend: vec![[0, 0], [0, 0], [0, 128]],
         slots: vec![0, 2, 4],
+        ..Default::default()
     }
 }
 

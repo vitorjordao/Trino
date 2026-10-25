@@ -1,0 +1,66 @@
+// Animation graphs in a scene (issue #65): three striders playing
+// `assets/anim/strider.anim.ron` with no game code — the scene player
+// (`TRINO_SCENE=scenes/striders.scene.ron cargo run -p trino-app-pc`) and
+// the editor's Play run each one's graph. The walker is carried by its
+// walk's root motion; the runner plays in place (root_motion: false); the
+// third stands in the blend space's idle.
+(
+    version: 7,
+    name: "striders",
+    requires: ["boot", "strider"],
+    environment: (
+        clear: (120, 160, 210),
+        camera: (
+            eye: (4.5, 2.6, -4.5),
+            target: (0.0, 0.9, 1.5),
+            fov: 55.0,
+        ),
+        light: (
+            dir: (0.4, -0.8, 0.45),
+            color: (255, 244, 225),
+            ambient: 0.45,
+            ambient_color: (170, 185, 220),
+        ),
+    ),
+    entities: [
+(
+    name: "ground",
+    transform: (
+        pos: (0.0, -0.1, 4.0),
+        rot: (0.0, 0.0, 0.0),
+        scale: (12.0, 0.2, 16.0),
+    ),
+    model: Some((path: "models/wall", tint: Some((120, 170, 110, 255)))),
+),
+(
+    name: "walker",
+    transform: (
+        pos: (-1.5, 0.0, -2.0),
+        rot: (0.0, 0.0, 0.0),
+        scale: (1.0, 1.0, 1.0),
+    ),
+    model: Some((path: "models/strider")),
+    anim_graph: Some((graph: "anim/strider", params: {"speed": 0.8})),
+),
+(
+    name: "runner",
+    transform: (
+        pos: (0.0, 0.0, 0.0),
+        rot: (0.0, 0.0, 0.0),
+        scale: (1.0, 1.0, 1.0),
+    ),
+    model: Some((path: "models/strider", tint: Some((255, 210, 200, 255)))),
+    anim_graph: Some((graph: "anim/strider", params: {"speed": 2.0}, root_motion: false)),
+),
+(
+    name: "idler",
+    transform: (
+        pos: (1.5, 0.0, 0.5),
+        rot: (0.0, -30.0, 0.0),
+        scale: (1.0, 1.0, 1.0),
+    ),
+    model: Some((path: "models/strider", tint: Some((210, 230, 255, 255)))),
+    anim_graph: Some((graph: "anim/strider")),
+),
+    ],
+)

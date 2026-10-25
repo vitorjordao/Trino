@@ -163,6 +163,16 @@ pub fn bake(root: &Path, manifest: &Manifest, platform: Platform) -> Result<Vec<
         Ok(None) => {}
         Err(e) => errors.push(e),
     }
+    // Animation graphs (issue #65): `anim/<name>` per graph whose model is
+    // on this platform, resident like the screens.
+    match crate::anim_graph::bake_all(root, manifest, platform) {
+        Ok(graphs) => out.extend(
+            graphs
+                .into_iter()
+                .map(|(logical, bytes)| UiBlob { logical, bytes }),
+        ),
+        Err(e) => errors.push(e),
+    }
     if errors.is_empty() {
         Ok(out)
     } else {

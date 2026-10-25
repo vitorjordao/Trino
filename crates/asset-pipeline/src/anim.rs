@@ -61,6 +61,19 @@ pub struct ClipMetrics {
     pub lowest: f32,
     /// Joints that touch the floor at some frame (the feet).
     pub feet: Vec<usize>,
+    /// The bake took this clip's root motion out (`root_motion`, issue
+    /// #65): it plays in place and the game moves the entity by the track.
+    pub root_motion: bool,
+    /// Ground the root track covers in one cycle (m; 0 without root motion).
+    pub root_distance: f32,
+    /// With root motion: the worst frame-to-frame slide of a planted foot
+    /// in the world when the entity moves by the track (m). `foot_slide`
+    /// is the same foot against a constant speed, what a game that ignores
+    /// the track gets.
+    pub root_foot_slide: Option<f32>,
+    /// Timeline events: (seconds, event name hash). Names are in the
+    /// manifest; tools that have it map them back.
+    pub events: Vec<(f32, u32)>,
     pub bounds: Vec<FrameBounds>,
     /// Limits the clip breaks, in words.
     pub warnings: Vec<String>,
@@ -158,6 +171,39 @@ pub fn clip_metrics(tmdl: &[u8], name: &str, limits: Limits) -> Result<ClipMetri
             .fold(0.0f32, f32::max);
         (mean.dot(mean).sqrt() / dt, slide)
     };
+    let meta = trino_core::anim::ClipMeta::from_tmdl(tmdl).unwrap_or_default();
+    let root = meta.roots.root_of(id);
+    let events_track = meta.events.events_of(id);
+    let events = (0..events_track.len())
+        .map(|i| {
+            let (t, e, _) = events_track.get(i);
+            (t, e.0)
+        })
+        .collect();
+    let (root_distance, root_foot_slide) = match root {
+        None => (0.0, None),
+        Some(track) => {
+            // Each frame's vertex in the world: the in-place pose carried by
+            // the root's ground pose at that frame.
+            let world = |f: usize, i: usize| {
+                let p = poses[f][i];
+                let g = track.at(f as f32 * dt);
+                let (s, c) = (g.yaw.sin(), g.yaw.cos());
+                Vec3::new(g.x + p.x * c + p.z * s, p.y, g.z - p.x * s + p.z * c)
+            };
+            let mut worst = 0.0f32;
+            for j in 0..joints {
+                for f in 0..pairs {
+                    if let (Some(i), Some(_)) = (planted(f, j), planted(f + 1, j)) {
+                        let d = world(f + 1, i) - world(f, i);
+                        worst = worst.max((d.x * d.x + d.z * d.z).sqrt());
+                    }
+                }
+            }
+            let end = track.at(clip.duration());
+            ((end.x * end.x + end.z * end.z).sqrt(), Some(worst))
+        }
+    };
     let bounds = poses
         .iter()
         .enumerate()
@@ -178,10 +224,12 @@ pub fn clip_metrics(tmdl: &[u8], name: &str, limits: Limits) -> Result<ClipMetri
         })
         .collect();
     let mut warnings = Vec::new();
-    if foot_slide > limits.slide {
+    // A root-motion clip is judged as it plays: carried by its track.
+    let slide = root_foot_slide.unwrap_or(foot_slide);
+    if slide > limits.slide {
         warnings.push(format!(
             "a planted foot slides {:.1} cm in one frame (limit {:.1} cm)",
-            foot_slide * 100.0,
+            slide * 100.0,
             limits.slide * 100.0
         ));
     }
@@ -202,6 +250,10 @@ pub fn clip_metrics(tmdl: &[u8], name: &str, limits: Limits) -> Result<ClipMetri
         foot_slide,
         lowest,
         feet,
+        root_motion: root.is_some(),
+        root_distance,
+        root_foot_slide,
+        events,
         bounds,
         warnings,
     })

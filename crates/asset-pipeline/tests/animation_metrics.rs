@@ -83,6 +83,7 @@ fn walker(clips: &[(&str, Feet)]) -> Vec<u8> {
                     .iter()
                     .map(|(l, r)| vec![Trs::IDENTITY, at(*l), at(*r)])
                     .collect(),
+                ..Default::default()
             })
             .collect(),
     });
@@ -311,4 +312,163 @@ fn export_pose_writes_a_model_and_its_manifest_entry() {
     assert!(!again.manifest_changed);
     assert!(anim::export_pose(&assets, "models/robot", Some("nope"), 0.0, "x").is_err());
     assert!(anim::export_pose(&assets, "models/ghost", None, 0.0, "x").is_err());
+}
+
+/// A walker whose root carries it (issue #65): the body (joint 0, the root)
+/// moves forward with a surge, and each foot (a child) stays planted where
+/// it touched down. `surge` = 0 is the constant-speed control.
+fn strider(surge: f32, root_motion: bool) -> Vec<u8> {
+    let mut d = MeshData::default();
+    let mut joint = Vec::new();
+    cuboid(&mut d, &mut joint, 0, [-0.2, 0.4, -0.1], [0.2, 1.0, 0.1]);
+    for j in [1, 2] {
+        cuboid(
+            &mut d,
+            &mut joint,
+            j,
+            [-0.05, 0.0, -0.05],
+            [0.05, 0.05, 0.05],
+        );
+    }
+    let joint_at = |parent: i32| JointData {
+        parent,
+        inverse_bind: ID,
+        rest: Trs::IDENTITY,
+    };
+    // The root's z per frame: 5 cm a frame plus a surge, back on the
+    // grid every 4 frames (where a foot touches down).
+    let r = |f: usize| 0.05 * f as f32 + surge * (std::f32::consts::FRAC_PI_2 * f as f32).sin();
+    let frames = (0..9)
+        .map(|f| {
+            let z = r(f);
+            // Left planted 0..=4 at world z 0.1, right 4..=8 at 0.3 (and,
+            // from the previous cycle, at -0.1 on frame 0).
+            let left = if f <= 4 {
+                [-0.15, 0.0, 0.1 - z]
+            } else {
+                [-0.15, 0.1, 0.1 + 0.4 * (f - 4) as f32 / 4.0 - z]
+            };
+            let right = if f == 0 || f >= 4 {
+                [0.15, 0.0, if f == 0 { -0.1 } else { 0.3 } - z]
+            } else {
+                [0.15, 0.1, -0.1 + 0.4 * f as f32 / 4.0 - z]
+            };
+            vec![at([0.0, 0.0, z]), at(left), at(right)]
+        })
+        .collect();
+    d.skeleton = Some(SkeletonData {
+        joint_of_vertex: joint,
+        joints: vec![joint_at(-1), joint_at(0), joint_at(0)],
+        clips: vec![ClipData {
+            name: "stride".into(),
+            fps: 8.0,
+            looping: true,
+            frames,
+            ..Default::default()
+        }],
+    });
+    let mut opts = trino_asset_pipeline::model::ModelOptions::default();
+    if root_motion {
+        opts.root_motion = vec!["stride".into()];
+    }
+    opts.events.insert(
+        "stride".into(),
+        vec![
+            (0.0, "foot_l".into()),
+            (0.5, "sfx:step".into()),
+            (1.0, "loop_end".into()),
+        ],
+    );
+    trino_asset_pipeline::model::apply_clip_meta(&mut d, &opts).unwrap();
+    d.encode().unwrap()
+}
+
+#[test]
+fn root_motion_removes_the_foot_slide_of_a_surging_walk() {
+    // Without the track, a game moves the walker at the clip's mean speed
+    // and the planted foot slides with the surge.
+    let rm = anim::clip_metrics(&strider(0.03, true), "stride", Limits::default()).unwrap();
+    assert!(rm.root_motion);
+    assert!(
+        (rm.root_distance - 0.4).abs() < 1e-5,
+        "{}",
+        rm.root_distance
+    );
+    assert!(
+        rm.foot_slide > 0.03,
+        "constant speed slides: {}",
+        rm.foot_slide
+    );
+    // Carried by its own track, the foot stays put.
+    let slide = rm.root_foot_slide.unwrap();
+    assert!(slide < 1e-5, "root motion slide {slide}");
+    assert!(rm.warnings.is_empty(), "{:?}", rm.warnings);
+
+    // The control: a constant-speed walk slides at neither, so the surging
+    // one above is what root motion fixes.
+    let flat = anim::clip_metrics(&strider(0.0, true), "stride", Limits::default()).unwrap();
+    assert!(flat.foot_slide < 1e-5, "{}", flat.foot_slide);
+    // And a surging walk baked without root motion keeps its root moving:
+    // its foot is planted in model space, there is no track to follow.
+    let kept = anim::clip_metrics(&strider(0.03, false), "stride", Limits::default()).unwrap();
+    assert!(!kept.root_motion && kept.root_foot_slide.is_none());
+}
+
+#[test]
+fn the_bake_keeps_the_root_in_place_and_writes_the_track_and_events() {
+    let tmdl = strider(0.03, true);
+    let mesh = Mesh::from_tmdl(&tmdl).unwrap();
+    let id = ClipId::from_name("stride");
+    // Every frame poses the root where frame 0 had it.
+    let first = anim::posed(&mesh, Some(AnimRef::new(id, 0.0)));
+    for f in 1..9 {
+        let p = anim::posed(&mesh, Some(AnimRef::new(id, f as f32 / 8.0)));
+        assert!((p[0].z - first[0].z).abs() < 1e-6, "frame {f}: {:?}", p[0]);
+    }
+    let meta = trino_core::anim::ClipMeta::from_tmdl(&tmdl).unwrap();
+    let track = meta.roots.root_of(id).unwrap();
+    assert_eq!(track.frames(), 9);
+    assert!((track.at(0.5).z - 0.2).abs() < 1e-6);
+    // Events sorted, the loop's end folded onto its start, `sfx:` carries
+    // the sound.
+    let ev = meta.events.events_of(id);
+    assert_eq!(ev.len(), 3);
+    let (t0, a, s0) = ev.get(0);
+    let (t2, _, s2) = ev.get(2);
+    assert_eq!((t0, t2), (0.0, 0.5));
+    assert!(s0.is_none());
+    assert_eq!(s2, Some(trino_core::SoundId::from_path("sounds/step")));
+    assert!(
+        a == trino_core::anim::EventId::from_name("foot_l")
+            || a == trino_core::anim::EventId::from_name("loop_end")
+    );
+    // An event past the end is a bake error naming the clip.
+    let mut d = MeshData {
+        skeleton: Mesh::from_tmdl(&tmdl).ok().map(|_| SkeletonData {
+            joint_of_vertex: vec![],
+            joints: vec![JointData {
+                parent: -1,
+                inverse_bind: ID,
+                rest: Trs::IDENTITY,
+            }],
+            clips: vec![ClipData {
+                name: "c".into(),
+                fps: 8.0,
+                frames: vec![vec![Trs::IDENTITY]; 9],
+                ..Default::default()
+            }],
+        }),
+        ..Default::default()
+    };
+    let mut opts = trino_asset_pipeline::model::ModelOptions::default();
+    opts.events.insert("c".into(), vec![(1.5, "late".into())]);
+    let err = trino_asset_pipeline::model::apply_clip_meta(&mut d, &opts).unwrap_err();
+    assert!(err.contains("past the end of clip `c`"), "{err}");
+    opts.events.clear();
+    opts.root_motion = vec!["nope".into()];
+    let err = trino_asset_pipeline::model::apply_clip_meta(&mut d, &opts).unwrap_err();
+    assert!(
+        err.contains("clip `nope` is not in this model (clips: c)"),
+        "{err}"
+    );
 }

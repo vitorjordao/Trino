@@ -85,6 +85,12 @@ fn entity(app: &mut App, ui: &mut egui::Ui, path: &[usize]) {
     });
 
     let impostor_names: Vec<String> = app.lib.impostors.keys().cloned().collect();
+    // Animation graphs (issue #65): name, model, states and parameters.
+    let graphs: Vec<(String, trino_scene::anim::AnimGraphDef)> =
+        trino_scene::anim::graph_files(&app.project.root)
+            .into_iter()
+            .filter_map(|(n, p)| Some((n, trino_scene::anim::AnimGraphDef::load(&p).ok()?)))
+            .collect();
     let App {
         doc,
         project,
@@ -681,6 +687,23 @@ fn entity(app: &mut App, ui: &mut egui::Ui, path: &[usize]) {
         e.shadow = None;
     }
 
+    // Animation graph (issue #65).
+    let mut remove_graph = false;
+    let entity_model = e.model.as_ref().map(|m| m.path.clone());
+    if let Some(gc) = &mut e.anim_graph {
+        theme::component(
+            ui,
+            "c-anim-graph",
+            icon::TREE_STRUCTURE,
+            c::MODEL,
+            "Animation graph",
+            |ui| remove_graph = anim_graph_component(ui, gc, &graphs, entity_model.as_deref()),
+        );
+    }
+    if remove_graph {
+        e.anim_graph = None;
+    }
+
     // Glow (issue #64).
     let mut remove_glow = false;
     if let Some(g) = &mut e.glow {
@@ -921,6 +944,25 @@ fn entity(app: &mut App, ui: &mut egui::Ui, path: &[usize]) {
                 }
                 if e.glow.is_none() && ui.button(format!("{}  Glow", icon::SUN)).clicked() {
                     e.glow = Some(trino_scene::GlowComponent::default());
+                }
+                // A graph for its model (the first that animates it).
+                let model_path = e.model.as_ref().map(|m| m.path.clone());
+                if let Some(mp) = model_path
+                    && e.anim_graph.is_none()
+                    && let Some((name, _)) = graphs.iter().find(|(_, d)| d.model_path() == mp)
+                    && ui
+                        .button(format!("{}  Animation graph", icon::TREE_STRUCTURE))
+                        .on_hover_text(
+                            "Play an animation graph (assets/anim) on this model, no code",
+                        )
+                        .clicked()
+                {
+                    e.anim_graph = Some(trino_scene::AnimGraphComponent {
+                        graph: trino_scene::anim::blob_path(name),
+                        state: None,
+                        params: Default::default(),
+                        root_motion: true,
+                    });
                 }
                 if e.sound.is_none()
                     && ui
@@ -2753,6 +2795,118 @@ fn scene_post(ui: &mut egui::Ui, post: &mut Option<trino_scene::PostDef>, luts: 
     if ui.small_button("Reset to defaults").clicked() {
         *p = trino_scene::PostDef::default();
     }
+}
+
+/// An entity's Animation graph component (issue #65): which graph, its
+/// start state, the parameters it starts with, root motion. Returns true
+/// to remove it.
+fn anim_graph_component(
+    ui: &mut egui::Ui,
+    gc: &mut trino_scene::AnimGraphComponent,
+    graphs: &[(String, trino_scene::anim::AnimGraphDef)],
+    model: Option<&str>,
+) -> bool {
+    use trino_scene::anim::ParamDef;
+    let def = graphs
+        .iter()
+        .find(|(n, _)| trino_scene::anim::blob_path(n) == gc.graph)
+        .map(|(_, d)| d.clone());
+    theme::prop(ui, "Graph", |ui| {
+        let w = ui.available_width();
+        theme::fixed_width(ui, w, |ui| {
+            egui::ComboBox::from_id_salt("anim-graph-graph")
+                .selected_text(&gc.graph)
+                .width(w)
+                .truncate()
+                .show_ui(ui, |ui| {
+                    for (n, d) in graphs {
+                        let path = trino_scene::anim::blob_path(n);
+                        let fits = model.is_none_or(|m| d.model_path() == m);
+                        if ui
+                            .add_enabled(fits, egui::Button::selectable(gc.graph == path, &path))
+                            .clicked()
+                        {
+                            gc.graph = path;
+                            gc.state = None;
+                            gc.params.clear();
+                        }
+                    }
+                })
+                .response
+                .widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, "Entity graph")
+                });
+        });
+    });
+    let Some(def) = def else {
+        ui.label(
+            RichText::new(format!("{} no such graph under assets/anim", icon::WARNING))
+                .color(c::WARN),
+        );
+        return ui.small_button(format!("{} Remove", icon::TRASH)).clicked();
+    };
+    if model.is_some_and(|m| m != def.model_path()) {
+        ui.label(
+            RichText::new(format!(
+                "{} it animates {}",
+                icon::WARNING,
+                def.model_path()
+            ))
+            .color(c::WARN),
+        );
+    }
+    theme::prop(ui, "Start", |ui| {
+        let w = ui.available_width();
+        let shown = gc.state.clone().unwrap_or_else(|| "the graph's".into());
+        theme::fixed_width(ui, w, |ui| {
+            egui::ComboBox::from_id_salt("anim-graph-state")
+                .selected_text(shown)
+                .width(w)
+                .truncate()
+                .show_ui(ui, |ui| {
+                    if ui
+                        .selectable_label(gc.state.is_none(), "the graph's")
+                        .clicked()
+                    {
+                        gc.state = None;
+                    }
+                    for (n, _) in &def.states {
+                        if ui
+                            .selectable_label(gc.state.as_deref() == Some(n), n)
+                            .clicked()
+                        {
+                            gc.state = Some(n.clone());
+                        }
+                    }
+                })
+                .response
+                .widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, "Start state")
+                });
+        });
+    });
+    for (name, p) in &def.params {
+        match p {
+            ParamDef::Float(d) => {
+                let mut v = gc.params.get(name).copied().unwrap_or(*d);
+                theme::prop(ui, name, |ui| {
+                    if ui.add(egui::DragValue::new(&mut v).speed(0.01)).changed() {
+                        gc.params.insert(name.clone(), v);
+                    }
+                });
+            }
+            ParamDef::Bool(d) => {
+                let mut on = gc.params.get(name).map_or(*d, |v| *v != 0.0);
+                if ui.checkbox(&mut on, name.as_str()).changed() {
+                    gc.params.insert(name.clone(), on as u8 as f32);
+                }
+            }
+            ParamDef::Trigger => {}
+        }
+    }
+    ui.checkbox(&mut gc.root_motion, "Root motion moves it")
+        .on_hover_text("Play (the scene player) carries it by the graph's root motion");
+    ui.small_button(format!("{} Remove", icon::TRASH)).clicked()
 }
 
 /// An entity's Glow component (issue #64): a halo at its position, the

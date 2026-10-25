@@ -1,4 +1,4 @@
-//! `cargo xtask model inspect <file> [--fps N] [--once a,b] [--smooth] [--json]` —
+//! `cargo xtask model inspect <file|models/name> [--fps N] [--once a,b] [--smooth] [--json]` —
 //! bake a model master exactly like the asset pipeline does and report what
 //! the engine will see: triangles, vertices, joints, clips, bounds and the
 //! N64 budget. The deterministic acceptance gate for art coming out of
@@ -12,7 +12,8 @@ use trino_core::Mesh;
 use trino_core::perf::FRAME_30FPS_US;
 
 const USAGE: &str = "xtask: usage:
-  cargo xtask model inspect <file.glb|.gltf|.prim.ron> [--fps N] [--once clip,clip] [--smooth] [--anim] [--json]
+  cargo xtask model inspect <file.glb|.gltf|.prim.ron|models/name> [--fps N] [--once clip,clip] [--smooth] [--anim] [--compressed] [--json]
+    (models/name: the manifest's file and options — root_motion, events, anim_fps, once)
   cargo xtask model pose <models/name> [--clip C] [--time S] --name <new-model>";
 
 pub fn run(root: &Path, args: &[&str]) -> ExitCode {
@@ -23,14 +24,20 @@ pub fn run(root: &Path, args: &[&str]) -> ExitCode {
         eprintln!("{USAGE}");
         return ExitCode::FAILURE;
     };
-    let mut opts = ModelOptions::default();
+    // `models/<name>`: the manifest's master and bake options.
+    let declared = declared_model(root, file);
+    let mut opts = declared
+        .as_ref()
+        .map_or_else(ModelOptions::default, |(_, o)| o.clone());
     let mut json = false;
     let mut anim = false;
+    let mut compressed = false;
     let mut it = rest.iter();
     while let Some(a) = it.next() {
         match *a {
             "--json" => json = true,
             "--anim" => anim = true,
+            "--compressed" => compressed = true,
             "--smooth" => opts.smooth = true,
             "--fps" => match it.next().and_then(|v| v.parse().ok()) {
                 Some(v) => opts.anim_fps = v,
@@ -51,7 +58,9 @@ pub fn run(root: &Path, args: &[&str]) -> ExitCode {
             }
         }
     }
-    let path = if Path::new(file).is_absolute() {
+    let path = if let Some((p, _)) = &declared {
+        p.clone()
+    } else if Path::new(file).is_absolute() {
         Path::new(file).to_path_buf()
     } else {
         std::env::current_dir()
@@ -61,6 +70,9 @@ pub fn run(root: &Path, args: &[&str]) -> ExitCode {
     match inspect(&path, &opts).map(|mut r| {
         if anim {
             r.add_anim_metrics(&path, &opts);
+        }
+        if compressed {
+            r.add_compression(&path, &opts);
         }
         r
     }) {
@@ -87,6 +99,24 @@ pub fn run(root: &Path, args: &[&str]) -> ExitCode {
     }
 }
 
+/// `models/<name>` → its master (PC source) and the manifest's options.
+fn declared_model(root: &Path, file: &str) -> Option<(std::path::PathBuf, ModelOptions)> {
+    let short = file.strip_prefix("models/")?;
+    if Path::new(file).exists() {
+        return None;
+    }
+    let assets = root.join("assets");
+    let manifest = trino_asset_pipeline::Manifest::load(&assets.join("manifest.toml")).ok()?;
+    let decl = manifest.models.get(short)?;
+    let source = trino_asset_pipeline::resolve_source(
+        &assets,
+        trino_asset_pipeline::Platform::Pc,
+        &decl.file,
+    )
+    .ok()?;
+    Some((source, decl.options()))
+}
+
 pub struct Report {
     pub file: String,
     pub bytes: usize,
@@ -106,6 +136,11 @@ pub struct Report {
     pub errors: Vec<String>,
     /// Per-clip measurements (`--anim`).
     pub anim: Option<Vec<trino_asset_pipeline::anim::ClipMetrics>>,
+    /// Per-clip keyframe compression (`--compressed`): what `ANMC` costs
+    /// and errs, at the manifest's bounds or the default ones.
+    pub compression: Option<Vec<trino_asset_pipeline::anim_compress::ClipReport>>,
+    /// The baked clips are `ANMC` (the manifest asks for it).
+    pub anmc: bool,
 }
 
 /// `model pose <models/x> [--clip C] [--time S] --name <new>`: bake a pose
@@ -169,6 +204,15 @@ fn pose(root: &Path, model: &str, rest: &[&str]) -> ExitCode {
 }
 
 impl Report {
+    /// `--compressed`: every clip as `ANMC` would be (bytes, keys, worst error).
+    pub fn add_compression(&mut self, path: &Path, opts: &ModelOptions) {
+        let bounds = opts.anim_compression.unwrap_or_default();
+        match trino_asset_pipeline::compression_report(path, opts, &bounds) {
+            Ok(r) => self.compression = Some(r),
+            Err(e) => self.warnings.push(format!("compression: {e}")),
+        }
+    }
+
     /// Measure every clip (`--anim`): their warnings join the report's.
     pub fn add_anim_metrics(&mut self, path: &Path, opts: &ModelOptions) {
         let Ok(blob) = bake_model(path, opts) else {
@@ -222,24 +266,54 @@ impl Report {
                 "[{}]",
                 m.iter()
                     .map(|c| format!(
-                        "{{\"name\":{},\"speed\":{},\"distance_per_cycle\":{},\"foot_slide\":{},\"lowest\":{},\"feet\":{:?},\"warnings\":[{}]}}",
+                        "{{\"name\":{},\"speed\":{},\"distance_per_cycle\":{},\"foot_slide\":{},\"lowest\":{},\"feet\":{:?},\"root_motion\":{},\"root_distance\":{},\"root_foot_slide\":{},\"events\":[{}],\"warnings\":[{}]}}",
                         quote(&c.name),
                         c.speed,
                         c.distance_per_cycle,
                         c.foot_slide,
                         c.lowest,
                         c.feet,
+                        c.root_motion,
+                        c.root_distance,
+                        c.root_foot_slide.map_or("null".into(), |v| v.to_string()),
+                        c.events
+                            .iter()
+                            .map(|(t, id)| format!("{{\"at\":{t},\"id\":{id}}}"))
+                            .collect::<Vec<_>>()
+                            .join(","),
                         list(&c.warnings)
                     ))
                     .collect::<Vec<_>>()
                     .join(",")
             ),
         };
+        let compression = match &self.compression {
+            None => "null".to_string(),
+            Some(c) => format!(
+                "[{}]",
+                c.iter()
+                    .map(|r| format!(
+                        "{{\"name\":{},\"frames\":{},\"raw_bytes\":{},\"bytes\":{},\"keys\":{},\"constants\":{},\"max_rotation_deg\":{},\"max_translation\":{},\"max_scale\":{}}}",
+                        quote(&r.name),
+                        r.frames,
+                        r.raw_bytes,
+                        r.bytes,
+                        r.keys,
+                        r.constants,
+                        r.max_rotation_deg,
+                        r.max_translation,
+                        r.max_scale
+                    ))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ),
+        };
         format!(
-            "{{\"ok\":{},\"file\":{},\"bytes\":{},\"vertices\":{},\"triangles\":{},\"joints\":{},\"blended_vertices\":{},\"slot_vertices\":{},\"clips\":[{}],\"size\":[{},{},{}],\"min\":[{},{},{}],\"radius\":{},\"n64_draw_us\":{},\"n64_frame_percent\":{:.1},\"anim\":{anim},\"warnings\":[{}],\"errors\":[{}]}}",
+            "{{\"ok\":{},\"file\":{},\"bytes\":{},\"anmc\":{},\"compression\":{compression},\"vertices\":{},\"triangles\":{},\"joints\":{},\"blended_vertices\":{},\"slot_vertices\":{},\"clips\":[{}],\"size\":[{},{},{}],\"min\":[{},{},{}],\"radius\":{},\"n64_draw_us\":{},\"n64_frame_percent\":{:.1},\"anim\":{anim},\"warnings\":[{}],\"errors\":[{}]}}",
             self.errors.is_empty(),
             quote(&self.file),
             self.bytes,
+            self.anmc,
             self.verts,
             self.tris,
             self.joints,
@@ -310,6 +384,46 @@ impl Report {
                 c.foot_slide * 100.0,
                 c.lowest,
                 c.feet
+            );
+            if let Some(slide) = c.root_foot_slide {
+                s += &format!(
+                    "  clip `{}`: root motion {:.2} m per cycle; carried by it the foot slides \
+                     {:.1} cm\n",
+                    c.name,
+                    c.root_distance,
+                    slide * 100.0
+                );
+            }
+            if !c.events.is_empty() {
+                let at: Vec<String> = c.events.iter().map(|(t, _)| format!("{t:.2} s")).collect();
+                s += &format!("  clip `{}`: events at {}\n", c.name, at.join(", "));
+            }
+        }
+        if let Some(c) = &self.compression {
+            let (raw, packed) = c
+                .iter()
+                .fold((0, 0), |a, r| (a.0 + r.raw_bytes, a.1 + r.bytes));
+            for r in c {
+                s += &format!(
+                    "  clip `{}` compressed: {} -> {} bytes ({} keys, {} constant tracks), worst {:.3} deg, {:.2} mm, scale {:.4}\n",
+                    r.name,
+                    r.raw_bytes,
+                    r.bytes,
+                    r.keys,
+                    r.constants,
+                    r.max_rotation_deg,
+                    r.max_translation * 1000.0,
+                    r.max_scale
+                );
+            }
+            s += &format!(
+                "  clips: {raw} -> {packed} bytes ({:.0}%){}\n",
+                100.0 * packed as f32 / raw.max(1) as f32,
+                if self.anmc {
+                    " — baked compressed (manifest anim_compression)"
+                } else {
+                    " — not baked so (manifest: anim_compression = true)"
+                }
             );
         }
         for w in &self.warnings {
@@ -400,5 +514,7 @@ pub fn inspect(path: &Path, opts: &ModelOptions) -> Result<Report, String> {
         warnings,
         errors,
         anim: None,
+        compression: None,
+        anmc: mesh.compressed_clips(),
     })
 }

@@ -1,0 +1,22 @@
+// The strider's graph (issue #65): a blend space from idle to walk to run
+// by speed, a hop on a trigger while grounded, back when it lands.
+// `cargo xtask anim check strider`; the Animation tab's graph view edits it.
+AnimGraph(
+    model: "models/strider",
+    params: {
+        "speed": Float(0.0),
+        "grounded": Bool(true),
+        "hop": Trigger,
+    },
+    states: {
+        "locomotion": Blend1D(
+            param: "speed",
+            points: [(0.0, "idle"), (0.8, "walk"), (2.0, "run")],
+        ),
+        "hop": Clip(clip: "hop", root_motion: false, events: [(0.1, "crouch")]),
+    },
+    transitions: [
+        (from: "locomotion", to: "hop", when: And([Trigger("hop"), Param("grounded")]), blend: 0.08),
+        (from: "hop", to: "locomotion", when: Finished, blend: 0.2),
+    ],
+)

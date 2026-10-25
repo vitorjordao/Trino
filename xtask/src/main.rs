@@ -6,6 +6,7 @@
 
 mod access;
 mod agents;
+mod anim;
 mod assets_cmd;
 mod audio;
 mod blender;
@@ -556,6 +557,15 @@ fn main() -> ExitCode {
         (Some("post"), _) => {
             let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
             post::run_post(&project.root, &rest)
+        }
+        (Some("anim"), _) => {
+            let mut rest: Vec<String> = args.iter().skip(1).cloned().collect();
+            // `--out` was taken with the Web's options above (`anim simulate`).
+            if let Some(out) = &web_build.out {
+                rest.extend(["--out".to_string(), out.display().to_string()]);
+            }
+            let rest: Vec<&str> = rest.iter().map(String::as_str).collect();
+            anim::run(&project.root, &rest)
         }
         (Some("particles"), _) => {
             let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();

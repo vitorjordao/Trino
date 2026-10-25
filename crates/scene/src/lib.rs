@@ -31,6 +31,7 @@
 //!   and adds a migration. Adding an optional field with a default does not.
 
 pub mod access;
+pub mod anim;
 pub mod bake;
 pub mod budget;
 pub mod codegen;
@@ -818,6 +819,11 @@ pub struct Entity {
     /// A halo at its position (issue #64): the consoles' bloom.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub glow: Option<GlowComponent>,
+    /// An animation graph that animates its model (issue #65): Play and
+    /// the scene player run it with no game code. Not in TSCN or the
+    /// exported code yet: a console game drives its graph itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anim_graph: Option<AnimGraphComponent>,
     /// What changes on PC, N64 and 3DS (model, material, scale,
     /// visibility, or not there at all) — see [`platform`].
     #[serde(default, skip_serializing_if = "PlatformVariants::is_empty")]
@@ -849,6 +855,7 @@ impl Entity {
             vis: None,
             shadow: None,
             glow: None,
+            anim_graph: None,
             platforms: PlatformVariants::default(),
             children: Vec::new(),
         }
@@ -1175,6 +1182,28 @@ pub enum ShapeDef {
         radius: f32,
         height: f32,
     },
+}
+
+/// The graph an entity plays (`anim_graph: Some((graph: "anim/strider",
+/// state: "locomotion", params: {"speed": 0.8}))`): its start state (the
+/// graph's when omitted) and parameter values set once at the start.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct AnimGraphComponent {
+    /// The graph's blob path (`anim/<name>`, from `assets/anim/<name>.anim.ron`).
+    pub graph: String,
+    #[serde(
+        default,
+        deserialize_with = "crate::anim::bare",
+        serialize_with = "crate::anim::bare_ser",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub state: Option<String>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub params: std::collections::BTreeMap<String, f32>,
+    /// Move the entity by the graph's root motion (default: yes).
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub root_motion: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]

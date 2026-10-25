@@ -37,6 +37,7 @@
 //! view's eye there, looking at the game camera's target.
 
 mod access;
+mod anim_graph_panel;
 mod anim_panel;
 mod app;
 mod audio;

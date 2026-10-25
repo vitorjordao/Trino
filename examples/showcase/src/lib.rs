@@ -46,6 +46,7 @@
 #![cfg_attr(any(target_os = "none", target_os = "horizon"), no_std)]
 
 use core::fmt::Write as _;
+use trino_core::anim::{AnimGraph, AnimGraphInstance, GraphBlob, StateId};
 use trino_core::math3d::{atan2, cos, sin, sqrt};
 use trino_core::physics::{Aabb, move_aabb};
 use trino_core::scene::{BakedScene, SceneNode};
@@ -270,7 +271,17 @@ pub struct ShowcaseGame {
     /// Play the N64's variant of the scene ([`NODES_N64`]): the N64
     /// build's default, and the host's N64 predictions.
     n64: bool,
+    /// The robots' animation graph (issue #65, `assets/anim/robot.anim.ron`)
+    /// and each animated robot's instance, started in the state named like
+    /// its scene clip. Without the blob (a host with no assets) the robots
+    /// play their clip at [`Self::time`] as before; with it they play the
+    /// same pose through the graph.
+    robot_graph: GraphBlob,
+    robots: [Option<(EntityId, AnimGraphInstance)>; ROBOTS],
 }
+
+/// Robots the graph animates (the walker and the greeter).
+const ROBOTS: usize = 2;
 
 impl ShowcaseGame {
     pub fn new() -> Self {
@@ -287,16 +298,26 @@ impl ShowcaseGame {
     }
 
     /// The exported scene this game plays: [`NODES`], or [`NODES_N64`].
+    /// The N64 build names only its own table: a runtime choice linked the
+    /// PC's too, ~40 KB of the base console's RAM for nothing.
     pub fn nodes(&self) -> &'static [SceneNode] {
+        #[cfg(target_os = "none")]
+        {
+            NODES_N64
+        }
+        #[cfg(not(target_os = "none"))]
         if self.n64 { NODES_N64 } else { NODES }
     }
 
     /// The level from the exported code (`showcase_gen.rs`, or on the N64
     /// `showcase_gen_n64.rs`).
     pub fn with_screen(screen: Vec2) -> Self {
-        let n64 = cfg!(target_os = "none");
+        #[cfg(target_os = "none")]
+        let nodes = NODES_N64;
+        #[cfg(not(target_os = "none"))]
+        let nodes = NODES;
         let mut game = Self::from_scene(
-            (if n64 { NODES_N64 } else { NODES }).iter().copied(),
+            nodes.iter().copied(),
             scene::CAMERA,
             scene::LIGHT,
             scene::CLEAR,
@@ -417,6 +438,8 @@ impl ShowcaseGame {
             },
             scene_yaw: 0.0,
             n64: cfg!(target_os = "none"),
+            robot_graph: GraphBlob::from_id(trino_core::BlobId::from_path("anim/robot")),
+            robots: [None; ROBOTS],
         }
     }
 
@@ -499,7 +522,11 @@ impl ShowcaseGame {
             scene_yaw,
             // Which scene the game plays: kept by a reset.
             n64: _,
+            // The blob cache stays; the instances start at the next update.
+            robot_graph: _,
+            robots,
         } = self;
+        *robots = [None; ROBOTS];
         world.clear();
         world.spawn_iter(nodes);
         *hero = world.with_tag("player").next();
@@ -583,7 +610,7 @@ impl ShowcaseGame {
 
     /// Draw one entity seen from `eye` (its LOD, its clip at the game's
     /// clock; coins spin and bob).
-    fn draw_entity(&self, r: &mut dyn Renderer, e: &trino_core::Entity, eye: Vec3) {
+    fn draw_entity(&self, r: &mut dyn Renderer, id: EntityId, e: &trino_core::Entity, eye: Vec3) {
         // LOD from the scene: far trees swap to cheaper fake objects.
         let Some(model) = e.model_from(eye).filter(|_| e.visible) else {
             return;
@@ -591,15 +618,30 @@ impl ShowcaseGame {
         // A copy of the surface only for a clip's pose: every entity's copy
         // was a hundred bytes per draw on the N64.
         let posed;
-        let params = match e.anim {
-            Some((clip, speed)) => {
+        let graph = self.robot_graph.graph();
+        let robot = self
+            .robots
+            .iter()
+            .flatten()
+            .find(|(r, _)| *r == id)
+            .zip(graph)
+            .map(|((_, inst), g)| inst.anim(&g));
+        let params = match (robot, e.anim) {
+            (Some(a), _) => {
+                posed = ModelParams {
+                    anim: Some(a),
+                    ..e.params
+                };
+                &posed
+            }
+            (None, Some((clip, speed))) => {
                 posed = ModelParams {
                     anim: Some(trino_core::AnimRef::new(clip, self.time * speed)),
                     ..e.params
                 };
                 &posed
             }
-            None => &e.params,
+            (None, None) => &e.params,
         };
         let m = if e.has_tag("coin") {
             let p = e.position();
@@ -735,6 +777,36 @@ impl ShowcaseGame {
             }
             Contact::Wade(at) => self.ripples.spawn(Vec2::new(at.x, at.z), RIPPLE_WADE),
         }
+    }
+
+    /// Give every robot that plays a clip at speed 1 a graph instance, in
+    /// the state named like its clip (`walk`, `wave`); the walker is moving.
+    fn start_robots(&mut self, graph: &AnimGraph) {
+        let robot = trino_core::ModelId(trino_core::asset_id("models/robot"));
+        let moving = graph.param_named("moving");
+        let mut n = 0;
+        for (id, e) in self.world.iter() {
+            let Some((clip, speed)) = e.anim else {
+                continue;
+            };
+            if e.model != Some(robot) || speed != 1.0 || n == ROBOTS {
+                continue;
+            }
+            let Some(state) = graph.state_index(StateId(clip.0)) else {
+                continue;
+            };
+            let mut inst = AnimGraphInstance::new_in(graph, state);
+            if let Some(m) = moving {
+                inst.set_bool(m, Some(id) == self.walker);
+            }
+            self.robots[n] = Some((id, inst));
+            n += 1;
+        }
+    }
+
+    /// The robots' graph instances (tests read them).
+    pub fn robot_instances(&self) -> impl Iterator<Item = &(EntityId, AnimGraphInstance)> {
+        self.robots.iter().flatten()
     }
 
     /// The patrolling robot walks to the far bank and back, through the
@@ -877,6 +949,27 @@ impl Default for ShowcaseGame {
 }
 
 impl Game for ShowcaseGame {
+    fn update_with(
+        &mut self,
+        platform: &mut dyn Platform,
+        input: &InputState,
+        audio: &mut dyn Audio,
+        dt: f32,
+    ) {
+        let (graph, changed) = self.robot_graph.get(platform);
+        if changed {
+            self.robots = [None; ROBOTS];
+        }
+        // Started with the scene's clock, so a state's seconds are `time`.
+        if let Some(g) = graph
+            && self.time == 0.0
+            && self.robots.iter().all(Option::is_none)
+        {
+            self.start_robots(&g);
+        }
+        self.update(input, audio, dt);
+    }
+
     fn update(&mut self, input: &InputState, audio: &mut dyn Audio, dt: f32) {
         // Look toggles: a pad button, or a tap on the bottom-screen panel
         // (fresh presses only: held does not repeat).
@@ -889,6 +982,13 @@ impl Game for ShowcaseGame {
         self.dt_since_render += dt;
         if !self.look.paused {
             self.time += dt;
+        }
+        // The robots' graph clocks take the same steps as `time`.
+        if let Some(g) = self.robot_graph.graph() {
+            let step = if self.look.paused { 0.0 } else { dt };
+            for (_, inst) in self.robots.iter_mut().flatten() {
+                inst.update(&g, step);
+            }
         }
         let mut dx = input.stick.x;
         let mut dy = input.stick.y;
@@ -998,9 +1098,9 @@ impl Game for ShowcaseGame {
         // spinning and bobbing on top — game logic driven by tags. Water
         // last: it is translucent, so what lies under it must be drawn.
         for water in [false, true] {
-            for (_, e) in self.world.iter() {
+            for (id, e) in self.world.iter() {
                 if e.has_tag("water") == water {
-                    self.draw_entity(r, e, camera.eye);
+                    self.draw_entity(r, id, e, camera.eye);
                 }
             }
         }
@@ -1129,8 +1229,8 @@ pub mod perf {
         r.set_light(&game.look.light(&game.light));
         r.set_texture_filter(game.look.filter);
         r.set_water(game.time, game.ripples.as_slice());
-        for e in ids.iter().filter_map(|&id| game.world.get(id)) {
-            game.draw_entity(r, e, camera.eye);
+        for (&id, e) in ids.iter().filter_map(|id| Some((id, game.world.get(*id)?))) {
+            game.draw_entity(r, id, e, camera.eye);
         }
         r.end_frame();
     }

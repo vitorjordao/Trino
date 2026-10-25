@@ -245,6 +245,34 @@ pub struct ModelDecl {
     /// the frame) plus a graded twin the PC's console profiles draw.
     #[serde(default)]
     pub grading: Option<String>,
+    /// Clips whose root motion the bake extracts into a track (issue #65):
+    /// the clip plays in place and the game moves the entity by it.
+    #[serde(default)]
+    pub root_motion: Vec<String>,
+    /// Timeline events per clip: `events = { walk = [{ at = 0.25, name =
+    /// "foot_l" }, { at = 0.75, name = "sfx:step" }] }` (seconds; `sfx:x`
+    /// carries the sound `sounds/x`).
+    #[serde(default)]
+    pub events: BTreeMap<String, Vec<EventDecl>>,
+    /// Compress the clips (TMDL `ANMC`, issue #65): `true` (0.5°, 2 mm,
+    /// 0.001 of scale) or `{ rotation = 0.5, translation = 0.002, scale =
+    /// 0.001 }`. Less RAM; every frame within the bounds.
+    #[serde(default)]
+    pub anim_compression: Option<crate::anim_compress::CompressionDecl>,
+    /// Foot IK chains (TMDL `IKCH`, issue #65): `ik = { pelvis = "hips",
+    /// left = ["thigh_l", "shin_l", "foot_l"], right = [...] }` by joint
+    /// (glTF node) name.
+    #[serde(default)]
+    pub ik: Option<crate::model::IkDecl>,
+}
+
+/// One timeline event of a clip (`[models.*] events`).
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct EventDecl {
+    /// Seconds into the clip.
+    pub at: f32,
+    pub name: String,
 }
 
 impl ModelDecl {
@@ -271,6 +299,19 @@ impl ModelDecl {
         opts.texture = self.texture.clone();
         opts.smooth = self.skinning.as_deref() == Some("smooth");
         opts.ao = self.ao.as_ref().and_then(|a| a.bake());
+        opts.root_motion = self.root_motion.clone();
+        opts.anim_compression = self.anim_compression.and_then(|c| c.bounds());
+        opts.ik = self.ik.clone();
+        opts.events = self
+            .events
+            .iter()
+            .map(|(clip, list)| {
+                (
+                    clip.clone(),
+                    list.iter().map(|e| (e.at, e.name.clone())).collect(),
+                )
+            })
+            .collect();
         opts
     }
 }
@@ -739,6 +780,67 @@ pub mod edit {
         set_key(text, "models", name, "ao", value)
     }
 
+    /// Set the timeline events of one clip of `[models.<name>]` (issue #65):
+    /// its `events.<clip>` line, removed when `events` is empty. Times in
+    /// seconds; what the editor's Animation tab writes.
+    pub fn set_model_events(
+        text: &str,
+        name: &str,
+        clip: &str,
+        events: &[(f32, String)],
+    ) -> Result<String, String> {
+        let key = format!("events.{}", toml_key(clip));
+        let value = (!events.is_empty()).then(|| {
+            let list: Vec<String> = events
+                .iter()
+                .map(|(t, n)| format!("{{ at = {}, name = {} }}", toml_f32(*t), toml_str(n)))
+                .collect();
+            format!("[{}]", list.join(", "))
+        });
+        set_key(text, "models", name, &key, value.as_deref())
+    }
+
+    /// Set the clips of `[models.<name>]` whose root motion the bake
+    /// extracts (`root_motion`, removed when empty).
+    pub fn set_model_root_motion(
+        text: &str,
+        name: &str,
+        clips: &[String],
+    ) -> Result<String, String> {
+        let value = (!clips.is_empty()).then(|| {
+            let list: Vec<String> = clips.iter().map(|c| toml_str(c)).collect();
+            format!("[{}]", list.join(", "))
+        });
+        set_key(text, "models", name, "root_motion", value.as_deref())
+    }
+
+    /// A TOML key, quoted unless bare.
+    fn toml_key(k: &str) -> String {
+        if !k.is_empty()
+            && k.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        {
+            k.to_string()
+        } else {
+            toml_str(k)
+        }
+    }
+
+    fn toml_str(s: &str) -> String {
+        format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+    }
+
+    /// Seconds as TOML: always a float, at most 4 decimals.
+    fn toml_f32(v: f32) -> String {
+        let s = format!("{:.4}", v);
+        let s = s.trim_end_matches('0');
+        if s.ends_with('.') {
+            format!("{s}0")
+        } else {
+            s.to_string()
+        }
+    }
+
     /// Set or remove (`None`) one platform's entry of the `formats` table
     /// of `[sprites.<name>]` or `[fonts.<name>]` (`kind`): `"auto"`, `"ETC1"`,
     /// ... — what the editor's texture inspector writes. An empty table
@@ -1053,6 +1155,33 @@ pub mod edit {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[test]
+        fn clip_metadata_edits_round_trip_through_the_parser() {
+            let text = "version = 1\n\n[models.strider]\nfile = \"models/s.glb\"\n\n[models.rock]\nfile = \"r.glb\"\n";
+            let ev = vec![
+                (0.25f32, "foot_l".to_string()),
+                (0.5, "sfx:step".to_string()),
+            ];
+            let a = set_model_events(text, "strider", "walk", &ev).unwrap();
+            let a = set_model_events(&a, "strider", "my clip", &[(1.0, "x\"y".into())]).unwrap();
+            let a = set_model_root_motion(&a, "strider", &["walk".into()]).unwrap();
+            assert!(a.contains("events.walk = [{ at = 0.25, name = \"foot_l\" }, { at = 0.5, name = \"sfx:step\" }]"), "{a}");
+            let decl: toml::Value = toml::from_str(&a).unwrap();
+            let m = &decl["models"]["strider"];
+            assert_eq!(m["events"]["my clip"][0]["name"].as_str(), Some("x\"y"));
+            assert_eq!(m["root_motion"][0].as_str(), Some("walk"));
+            assert!(decl["models"]["rock"].get("events").is_none());
+            // Through the real declaration type too.
+            let parsed: crate::manifest::ModelDecl =
+                toml::from_str(&toml::to_string(m).unwrap()).unwrap();
+            assert_eq!(parsed.options().events["walk"], ev);
+            // Empty lists remove the lines again.
+            let b = set_model_events(&a, "strider", "walk", &[]).unwrap();
+            let b = set_model_events(&b, "strider", "my clip", &[]).unwrap();
+            let b = set_model_root_motion(&b, "strider", &[]).unwrap();
+            assert_eq!(b, text);
+        }
 
         #[test]
         fn group_edits_declare_groups_and_parse_back() {

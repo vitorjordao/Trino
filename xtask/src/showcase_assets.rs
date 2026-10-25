@@ -97,11 +97,13 @@ struct Node {
     children: Vec<usize>,
 }
 
-/// Rotation keyframes for one node: (times, quaternions xyzw).
+/// Keyframes for one node: (times, quaternions xyzw), or translations when
+/// `translations` is set (then `rotations` is empty).
 struct Track {
     node: usize,
     times: Vec<f32>,
     rotations: Vec<[f32; 4]>,
+    translations: Vec<[f32; 3]>,
 }
 
 struct Clip {
@@ -123,6 +125,7 @@ fn track(node: usize, axis: Vec3, dur: f32, n: usize, f: impl Fn(f32) -> f32) ->
         node,
         times,
         rotations,
+        translations: Vec::new(),
     }
 }
 
@@ -211,7 +214,12 @@ fn write_glb(path: &Path, nodes: &[Node], roots: &[usize], clips: &[Clip]) {
         let mut channels = Vec::new();
         for (k, tr) in clip.tracks.iter().enumerate() {
             let tv = push_view(&mut bin, &f32s(&tr.times));
-            let flat: Vec<f32> = tr.rotations.iter().flatten().copied().collect();
+            let moves = !tr.translations.is_empty();
+            let flat: Vec<f32> = if moves {
+                tr.translations.iter().flatten().copied().collect()
+            } else {
+                tr.rotations.iter().flatten().copied().collect()
+            };
             let rv = push_view(&mut bin, &f32s(&flat));
             let a = accessors.len();
             let tmax = tr.times.last().copied().unwrap_or(0.0);
@@ -219,17 +227,25 @@ fn write_glb(path: &Path, nodes: &[Node], roots: &[usize], clips: &[Clip]) {
                 r#"{{"bufferView":{tv},"componentType":5126,"count":{},"type":"SCALAR","min":[0],"max":[{tmax}]}}"#,
                 tr.times.len()
             ));
-            accessors.push(format!(
-                r#"{{"bufferView":{rv},"componentType":5126,"count":{},"type":"VEC4"}}"#,
-                tr.rotations.len()
-            ));
+            accessors.push(if moves {
+                format!(
+                    r#"{{"bufferView":{rv},"componentType":5126,"count":{},"type":"VEC3"}}"#,
+                    tr.translations.len()
+                )
+            } else {
+                format!(
+                    r#"{{"bufferView":{rv},"componentType":5126,"count":{},"type":"VEC4"}}"#,
+                    tr.rotations.len()
+                )
+            });
             samplers.push(format!(
                 r#"{{"input":{a},"output":{},"interpolation":"LINEAR"}}"#,
                 a + 1
             ));
             channels.push(format!(
-                r#"{{"sampler":{k},"target":{{"node":{},"path":"rotation"}}}}"#,
-                tr.node
+                r#"{{"sampler":{k},"target":{{"node":{},"path":"{}"}}}}"#,
+                tr.node,
+                if moves { "translation" } else { "rotation" }
             ));
         }
         anims.push(format!(
@@ -381,6 +397,242 @@ fn robot(dir: &Path) {
     write_glb(&dir.join("robot.glb"), &nodes, &[0], &clips);
 }
 
+/// The strider (issue #65): a biped whose root carries it — the
+/// reference for root motion, timeline events, the animation graph's blend
+/// space and (with its thigh → shin → foot chains) foot IK.
+///
+/// Its walk and run move the hips forward with a surge (faster mid-step,
+/// slower at contact) while each planted foot stays where it touched down:
+/// the legs are solved per key by the same two-bone law of cosines the
+/// engine's IK uses. Played in place at a constant speed its feet slide
+/// with the surge; carried by its root track they don't.
+fn strider(dir: &Path) {
+    let skin = [214, 196, 160, 255];
+    let cloth = [60, 120, 190, 255];
+    let dark = [52, 58, 74, 255];
+    let accent = [235, 90, 70, 255];
+    const THIGH: f32 = 0.45;
+    const SHIN: f32 = 0.45;
+    const ANKLE: f32 = 0.05;
+    const HIP_X: f32 = 0.12;
+    let leg = || -> (Part, Part, Part) {
+        (
+            Part::default().boxc(v3(0.0, -THIGH * 0.5, 0.0), v3(0.16, THIGH, 0.16), cloth),
+            // Short of the ankle, so a turning shin never touches the floor.
+            Part::default().boxc(
+                v3(0.0, -(SHIN - 0.06) * 0.5, 0.0),
+                v3(0.13, SHIN - 0.06, 0.13),
+                dark,
+            ),
+            Part::default().boxc(v3(0.0, -ANKLE * 0.5, 0.05), v3(0.15, ANKLE, 0.27), accent),
+        )
+    };
+    let (thigh_l, shin_l, foot_l) = leg();
+    let (thigh_r, shin_r, foot_r) = leg();
+    // Indices: 0 hips (root), 1 torso, 2 head, 3 arm_l, 4 arm_r,
+    // 5 thigh_l, 6 shin_l, 7 foot_l, 8 thigh_r, 9 shin_r, 10 foot_r.
+    let node = |name, part, t: Vec3, children: Vec<usize>| Node {
+        name,
+        part: Some(part),
+        translation: t,
+        children,
+    };
+    let nodes = vec![
+        node(
+            "hips",
+            Part::default().boxc(v3(0.0, 0.0, 0.0), v3(0.36, 0.16, 0.22), cloth),
+            v3(0.0, THIGH + SHIN + ANKLE, 0.0),
+            vec![1, 5, 8],
+        ),
+        node(
+            "torso",
+            Part::default()
+                .boxc(v3(0.0, 0.27, 0.0), v3(0.48, 0.46, 0.28), cloth)
+                .boxc(v3(0.0, 0.3, 0.145), v3(0.2, 0.12, 0.02), accent),
+            v3(0.0, 0.06, 0.0),
+            vec![2, 3, 4],
+        ),
+        node(
+            "head",
+            Part::default()
+                .boxc(v3(0.0, 0.15, 0.0), v3(0.3, 0.3, 0.3), skin)
+                .boxc(v3(0.0, 0.18, 0.155), v3(0.2, 0.05, 0.02), dark),
+            v3(0.0, 0.52, 0.0),
+            vec![],
+        ),
+        node(
+            "arm_l",
+            Part::default().boxc(v3(0.0, -0.24, 0.0), v3(0.11, 0.48, 0.11), skin),
+            v3(0.31, 0.46, 0.0),
+            vec![],
+        ),
+        node(
+            "arm_r",
+            Part::default().boxc(v3(0.0, -0.24, 0.0), v3(0.11, 0.48, 0.11), skin),
+            v3(-0.31, 0.46, 0.0),
+            vec![],
+        ),
+        node("thigh_l", thigh_l, v3(HIP_X, 0.0, 0.0), vec![6]),
+        node("shin_l", shin_l, v3(0.0, -THIGH, 0.0), vec![7]),
+        node("foot_l", foot_l, v3(0.0, -SHIN, 0.0), vec![]),
+        node("thigh_r", thigh_r, v3(-HIP_X, 0.0, 0.0), vec![9]),
+        node("shin_r", shin_r, v3(0.0, -THIGH, 0.0), vec![10]),
+        node("foot_r", foot_r, v3(0.0, -SHIN, 0.0), vec![]),
+    ];
+
+    /// One pose: the hips' position, a pitch per segment (radians about +X,
+    /// positive swings the bottom backward) and the torso's lean.
+    #[derive(Clone, Copy, Default)]
+    struct Pose {
+        hips: [f32; 3],
+        torso: f32,
+        arm_l: f32,
+        arm_r: f32,
+        legs: [[f32; 3]; 2],
+    }
+    // Pitches that put the ankle at `ankle` (hip-relative y, z): the
+    // two-bone law of cosines, the knee bending forward, the foot flat.
+    let solve = |dy: f32, dz: f32| -> [f32; 3] {
+        let d = (dy * dy + dz * dz).sqrt().clamp(0.05, THIGH + SHIN - 1e-4);
+        let phi = dz.atan2(-dy); // forward of straight down
+        let alpha = ((THIGH * THIGH + d * d - SHIN * SHIN) / (2.0 * THIGH * d))
+            .clamp(-1.0, 1.0)
+            .acos();
+        let knee = ((THIGH * THIGH + SHIN * SHIN - d * d) / (2.0 * THIGH * SHIN))
+            .clamp(-1.0, 1.0)
+            .acos();
+        let beta = std::f32::consts::PI - knee;
+        let thigh = -(phi + alpha);
+        let shin = beta;
+        [thigh, shin, -(thigh + shin)]
+    };
+    let smooth = |u: f32| u * u * (3.0 - 2.0 * u);
+    // A gait: `stride` per cycle, each foot planted half the cycle (left
+    // from phase 0, right from 0.5), the hips surging and bobbing.
+    struct Gait {
+        stride: f32,
+        surge: f32,
+        hip: f32,
+        bob: f32,
+        lift: f32,
+        lean: f32,
+        arms: f32,
+    }
+    let gait = |g: &Gait, u: f32| -> Pose {
+        let tau = std::f32::consts::TAU;
+        let z = g.stride * u + g.surge * (2.0 * tau * u).sin();
+        let y = g.hip - g.bob * (2.0 * tau * u).cos();
+        // A foot planted for the first half of its phase at `at`, then
+        // swinging a stride forward.
+        let foot = |u: f32, at: f32| -> (f32, f32) {
+            if u <= 0.5 {
+                (ANKLE, at)
+            } else {
+                let s = (u - 0.5) / 0.5;
+                (
+                    ANKLE + g.lift * (std::f32::consts::PI * s).sin(),
+                    at + g.stride * smooth(s),
+                )
+            }
+        };
+        let half = g.stride * 0.25;
+        let (ly, lz) = foot(u, half);
+        // The right foot is half a cycle behind (planted at 0.5).
+        let (ry, rz) = foot((u + 0.5) % 1.0, half - g.stride * 0.5);
+        let rz = if u >= 0.5 { rz + g.stride } else { rz };
+        Pose {
+            hips: [0.0, y, z],
+            torso: g.lean,
+            arm_l: g.arms * (tau * u).cos(),
+            arm_r: -g.arms * (tau * u).cos(),
+            legs: [solve(ly - y, lz - z), solve(ry - y, rz - z)],
+        }
+    };
+    let walk = Gait {
+        stride: 0.8,
+        surge: 0.05,
+        hip: 0.88,
+        bob: 0.02,
+        lift: 0.12,
+        lean: 0.04,
+        arms: 0.45,
+    };
+    let run = Gait {
+        stride: 1.2,
+        surge: 0.05,
+        hip: 0.82,
+        bob: 0.03,
+        lift: 0.18,
+        lean: 0.16,
+        arms: 0.8,
+    };
+    let idle = |u: f32| -> Pose {
+        let y = 0.88 + 0.01 * (std::f32::consts::TAU * u).sin();
+        let leg = solve(ANKLE - y, 0.0);
+        Pose {
+            hips: [0.0, y, 0.0],
+            torso: 0.02 * (std::f32::consts::TAU * u).sin(),
+            arm_l: 0.05,
+            arm_r: 0.05,
+            legs: [leg, leg],
+        }
+    };
+    // A hop in place: crouch, leave the ground, tuck, land, stand.
+    let hop = |u: f32| -> Pose {
+        let k = |a: f32, b: f32| ((u - a) / (b - a)).clamp(0.0, 1.0);
+        let y = 0.88 - 0.18 * smooth(k(0.0, 0.3))
+            + 0.18 * smooth(k(0.3, 0.4))
+            + 0.55 * (std::f32::consts::PI * k(0.4, 0.7)).sin()
+            - 0.18 * smooth(k(0.7, 0.8))
+            + 0.18 * smooth(k(0.8, 1.0));
+        let y = y.max(0.70);
+        let foot_y = (y - 0.82).max(ANKLE);
+        let leg = solve(foot_y - y, 0.03);
+        Pose {
+            hips: [0.0, y, 0.0],
+            torso: 0.25 * smooth(k(0.0, 0.3)) * (1.0 - smooth(k(0.4, 0.6))),
+            arm_l: -1.2 * smooth(k(0.3, 0.45)) * (1.0 - smooth(k(0.7, 1.0))),
+            arm_r: -1.2 * smooth(k(0.3, 0.45)) * (1.0 - smooth(k(0.7, 1.0))),
+            legs: [leg, leg],
+        }
+    };
+    // 60 keys a second, so the bake's 20 fps frames land on keys.
+    let clip = |name: &'static str, dur: f32, pose: &dyn Fn(f32) -> Pose| -> Clip {
+        let n = (dur * 60.0).round() as usize;
+        let times: Vec<f32> = (0..=n).map(|i| i as f32 / 60.0).collect();
+        let poses: Vec<Pose> = (0..=n).map(|i| pose(i as f32 / n as f32)).collect();
+        let x = v3(1.0, 0.0, 0.0);
+        let rot = |node: usize, f: &dyn Fn(&Pose) -> f32| Track {
+            node,
+            times: times.clone(),
+            rotations: poses.iter().map(|p| quat(x, f(p).to_degrees())).collect(),
+            translations: Vec::new(),
+        };
+        let mut tracks = vec![Track {
+            node: 0,
+            times: times.clone(),
+            rotations: Vec::new(),
+            translations: poses.iter().map(|p| p.hips).collect(),
+        }];
+        tracks.push(rot(1, &|p| p.torso));
+        tracks.push(rot(3, &|p| p.arm_l));
+        tracks.push(rot(4, &|p| p.arm_r));
+        for (side, base) in [(0usize, 5usize), (1, 8)] {
+            for seg in 0..3 {
+                tracks.push(rot(base + seg, &move |p: &Pose| p.legs[side][seg]));
+            }
+        }
+        Clip { name, tracks }
+    };
+    let clips = vec![
+        clip("idle", 2.0, &idle),
+        clip("walk", 1.0, &|u| gait(&walk, u)),
+        clip("run", 0.6, &|u| gait(&run, u)),
+        clip("hop", 1.0, &hop),
+    ];
+    write_glb(&dir.join("strider.glb"), &nodes, &[0], &clips);
+}
+
 fn windmill(dir: &Path) {
     let wall = [235, 226, 205, 255];
     let roof = [196, 72, 58, 255];
@@ -521,6 +773,7 @@ pub fn gen_all(repo_root: &Path, write_png: crate::castle64_assets::PngWriter) {
     std::fs::create_dir_all(&dir).unwrap();
     robot(&dir);
     windmill(&dir);
+    strider(&dir);
     let tex = repo_root.join("assets/shared/sprites/textures");
     std::fs::create_dir_all(&tex).unwrap();
     textures(&tex, write_png);

@@ -6977,6 +6977,11 @@ impl Drop for PcRenderer {
     fn drop(&mut self) {
         // Workers first: they hold the device and the entry.
         self.warm = precompile::Warmup::default();
+        // Then the GPU: wgpu-core's queue gives the last submission about
+        // 6 s at drop and panics past it, which a software adapter (WARP on
+        // Windows CI) still rendering a burst of frames can exceed.
+        #[cfg(not(target_arch = "wasm32"))]
+        let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
     }
 }
 

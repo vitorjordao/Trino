@@ -9,7 +9,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        run: [1, 2]
+        run: [1, 2, 3]
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@v4
@@ -26,29 +26,5 @@ jobs:
             cargo test -q -p trino-platform-pc --test precompile -- --nocapture > out.txt 2>&1
             code=$?
             echo "RESULT all $i exit=$code"
-            grep -B5 -A25 "panicked" out.txt | head -60
-          done
-  diag-editor:
-    name: diag editor ui (${{ matrix.run }})
-    strategy:
-      fail-fast: false
-      matrix:
-        run: [1, 2, 3]
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: |
-          sudo apt-get update
-          sudo apt-get install -y libasound2-dev libudev-dev mesa-vulkan-drivers xvfb libxkbcommon-x11-0
-      - name: editor ui three times
-        env:
-          TRINO_REQUIRE_GPU: "1"
-        run: |
-          set +e
-          for i in 1 2 3; do
-            xvfb-run -a cargo test -p trino-editor ui_tests -- --ignored --test-threads=1 > out.txt 2>&1
-            echo "RESULT $i exit=$?"
-            grep -E "FAILED|panicked" -A40 out.txt | head -80
+            grep -B5 -A25 "panicked" out.txt | head -60 || true
           done

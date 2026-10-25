@@ -2110,9 +2110,10 @@ fn launcher_lists_recent_projects_opens_and_creates() {
     let made = tmp.path().join("new-game");
     match &h.state().screen {
         Screen::Editor(app) => {
+            let log: Vec<&str> = app.log.entries.iter().map(|e| e.text.as_str()).collect();
             assert!(
                 app.project.models.contains_key("models/robot"),
-                "the demo's assets baked"
+                "the demo's assets baked: {log:#?}"
             );
             assert!(!app.doc.scene.entities.is_empty(), "the demo scene opened");
         }
